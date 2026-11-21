@@ -11,17 +11,22 @@
  * - open=false renders nothing;
  * - bidirectional manifest locking is covered by sdk-contract.test.ts.
  */
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
-GlobalRegistrator.register()
-;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
-
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import React, { act } from 'react'
-import { renderToString } from 'react-dom/server'
-import * as ReactDOMClient from 'react-dom/client'
-import { DetailDrawer } from '../src/ui/DetailDrawer.js'
-import { HelmxIcon } from '../src/icons.js'
+import React from 'react'
+import { GlobalRegistrator } from '@happy-dom/global-registrator'
+
+// Ordering constraint: happy-dom must be registered before react-dom is
+// loaded, otherwise react-dom 19 caches native addEventListener refs and the
+// synthetic event delegation misses dispatched events.
+GlobalRegistrator.register()
+Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
+
+const { act } = await import('react')
+const { renderToString } = await import('react-dom/server')
+const { createRoot } = await import('react-dom/client')
+const { DetailDrawer } = await import('../src/ui/DetailDrawer.js')
+const { HelmxIcon } = await import('../src/icons.js')
 
 const e = React.createElement
 
@@ -92,7 +97,7 @@ test('DetailDrawer SSR: open=false renders nothing', { timeout: 60_000 }, () => 
 test('DetailDrawer DOM interaction: header close button funnels into onClose exactly once', { timeout: 60_000 }, async () => {
   const container = document.createElement('div')
   document.body.appendChild(container)
-  const root = ReactDOMClient.createRoot(container)
+  const root = createRoot(container)
 
   let closeCalls = 0
   function TestApp() {
@@ -122,7 +127,7 @@ test('DetailDrawer DOM interaction: header close button funnels into onClose exa
 test('DetailDrawer DOM interaction: Escape on the dialog content funnels into onClose (Radix chain)', { timeout: 60_000 }, async () => {
   const container = document.createElement('div')
   document.body.appendChild(container)
-  const root = ReactDOMClient.createRoot(container)
+  const root = createRoot(container)
 
   let closeCalls = 0
   function TestApp() {
