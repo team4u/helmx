@@ -48,11 +48,11 @@ function mount(element: React.ReactElement): void {
 
 afterEach(() => {
   globalThis.fetch = originalFetch
-  resetPluginClientCache()
   if (root !== undefined) {
     act(() => root?.unmount())
     root = undefined
   }
+  resetPluginClientCache()
   host?.remove()
   host = undefined
 })
