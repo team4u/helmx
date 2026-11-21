@@ -1,6 +1,7 @@
-/* 会话总览（只读宿主视图 #/overview）：全屏一级主舞台卡片网格。
- * 卡片 = 一棵根会话树的真实事实聚合（复用态势模型口径）；后代会话以状态
- * 芯片直达（复用既有会话抽屉）；移动端筛选折行、网格单列化。 */
+/* 会话总览（只读宿主视图 #/overview）：全屏一级主舞台分层态势分组视图。
+ * 卡片 = 一棵根会话树的真实事实聚合（复用态势模型口径）；按状态/角色/节点
+ * 纵向分节可折叠，活跃卡饱满展示态势与后代芯片，安静卡降权收拢后代以消除
+ * 网格参差；移动端筛选折行、网格单列化。 */
 
 /* 工具栏统一 10px 单一间距节奏（组间=组内）；筛选下拉用默认档（27px 高、
  * 12.5px 字、7px 圆角）与分段器（28px）同量级，宽度由内容决定（104px
@@ -30,6 +31,126 @@
   flex-direction: column;
 }
 
+.overview-sections {
+  flex: 1 0 auto;
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  box-sizing: border-box;
+}
+
+.overview-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.overview-section .overview-grid {
+  padding: 0;
+}
+
+.overview-section-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.overview-section-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 3px 8px 3px 4px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg);
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.3;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.overview-section-toggle:hover {
+  background: var(--bg-hover);
+}
+
+.overview-section-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.overview-section-chevron {
+  flex-shrink: 0;
+  color: var(--fg-muted);
+}
+
+.overview-section-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.overview-section-dot-needs_attention {
+  background: var(--warn);
+}
+
+.overview-section-dot-running {
+  background: var(--accent);
+}
+
+.overview-section-dot-unread_done {
+  background: var(--ok);
+}
+
+.overview-section-dot-quiet {
+  background: var(--fg-subtle);
+}
+
+.overview-section-icon {
+  flex-shrink: 0;
+  color: var(--fg-muted);
+}
+
+.overview-section-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.overview-section-quiet .overview-section-title {
+  color: var(--fg-secondary);
+}
+
+.overview-section-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--bg-muted);
+  color: var(--fg-muted);
+  font-size: 11px;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.overview-section-rule {
+  flex: 1;
+  height: 1px;
+  background: var(--line-2);
+  min-width: 12px;
+}
+
 .overview-grid {
   flex: 1 0 auto;
   padding: 16px 20px;
@@ -51,7 +172,7 @@
   min-width: 0;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  background: var(--bg-subtle);
+  background: var(--bg-elevated);
   cursor: pointer;
   transition: border-color 120ms ease, background 120ms ease;
 }
@@ -68,6 +189,24 @@
 
 .overview-card-needs_attention:hover {
   border-color: color-mix(in srgb, var(--warn) 60%, var(--border-strong));
+}
+
+.overview-card-running {
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
+}
+
+.overview-card-running:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border-strong));
+}
+
+/* 动静密度分层：安静卡底色退回 subtle、线框降权、标题降半档字重，突出上方活跃态势。 */
+.overview-card-quiet {
+  background: var(--bg-subtle);
+  border-color: var(--line-2);
+}
+
+.overview-card-quiet .overview-card-title {
+  font-weight: 500;
 }
 
 .overview-card-attention {
@@ -270,6 +409,11 @@
   outline-offset: 1px;
 }
 
+.overview-chip-quiet-summary {
+  border-style: solid;
+  background: var(--bg);
+}
+
 /* 工具栏搜索框：复用通用 .search-box 原语，仅收敛到筛选控件同量级
  * （27px 高、12.5px 字），宽度弹性限幅不挤占分段器。 */
 .overview-search-box {
@@ -317,6 +461,10 @@
   padding-top: 0;
 }
 
+.overview-batch-bar-wrap + .overview-sections {
+  padding-top: 0;
+}
+
 .overview-batch-bar {
   /* 壳结构/中性底色复用公共 .batch-bar 原语；总览外间距由 .overview-batch-bar-wrap 统一承载 */
 }
@@ -332,10 +480,19 @@
 }
 
 @media (max-width: 680px) {
+  .overview-sections {
+    padding: 12px;
+    gap: 14px;
+  }
+
   .overview-grid {
     grid-template-columns: minmax(0, 1fr);
     padding: 12px;
     gap: 10px;
+  }
+
+  .overview-section .overview-grid {
+    padding: 0;
   }
 
   .overview-toolbar {
@@ -356,7 +513,8 @@
     padding: 10px 12px;
   }
 
-  .overview-batch-bar-wrap + .overview-grid {
+  .overview-batch-bar-wrap + .overview-grid,
+  .overview-batch-bar-wrap + .overview-sections {
     padding-top: 0;
   }
 }

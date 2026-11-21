@@ -4,6 +4,11 @@
  * - 复用态势模型的唯一树聚合口径：一张卡片 = 一棵根会话树（含安静树），
  *   卡面只呈现真实事实（根会话状态 + 树级后台在途的灯位、lastError /
  *   doing / 后台摘要 / 后代运行计数），绝不编造进度；
+ * - 分层态势分组（Grouped Triage Stage）：默认按状态分为「需处理 → 进行中 →
+ *   未读完成 → 近期安静」四节纵向排列（空节零占位），并支持切换按角色 /
+ *   按节点分组及分节折叠；当筛选把分组维度收敛为单一值时自动去套娃平铺，
+ *   搜索激活时自动临时展开分节防藏匿；活跃卡片展示最多 5 枚后代芯片，
+ *   安静树默认收拢后代为单枚「N 个子会话」展开胶囊以消除网格高矮参差；
  * - 直进语义：卡片主体 / 后代芯片点击直达主屏会话（树内有等待人类的会话
  *   时直达最新审批现场），与会话列表点击完全一致；「抽屉速览」与「右分屏
  *   打开」收进卡片 `...` 菜单（prependItems 通用前置动作），托管/受保护卡
@@ -63,15 +68,18 @@ import { useGlobalAttention } from '../shell/use-attention-indicator.js'
 import {
   buildOverviewCards,
   filterOverviewCards,
+  groupOverviewCards,
   overviewBucketCounts,
   overviewFilterParamsRepair,
   overviewNodeOptions,
   overviewProfileOptions,
+  overviewShouldShowSectionHeaders,
   parseOverviewFilterParams,
   OVERVIEW_DESCENDANT_LIMIT,
   type OverviewBucketFilter,
   type OverviewCard,
   type OverviewFilterParamKey,
+  type OverviewGroupBy,
   type OverviewSourceFilter,
 } from './overview-model.js'
 
@@ -82,6 +90,7 @@ export interface ConversationOverviewProps {
 
 type BucketFilterValue = OverviewBucketFilter
 type SourceFilterValue = OverviewSourceFilter
+const EMPTY_COLLAPSED_KEYS: ReadonlySet<string> = new Set()
 
 /** 单卡：根会话树聚合卡（只读）；卡面/芯片直进主屏会话。
  * 可访问性结构：外层 div 仅承载鼠标整卡点击便利（不挂交互 ARIA 角色，
@@ -159,7 +168,22 @@ function OverviewCardView({
   // 普通模式不覆写 aria-label——可访问名称直接由内容组成（状态灯可读标签 +
   // 标题 + #id），异常/等待人类事实原样进入读屏。
   const buttonLabel = batchMode ? `${cardTitleText} · ${t('shell.overview.batchToggleCard')}` : openLabel
-  const shownDescendants = expanded ? card.descendants : card.descendants.slice(0, OVERVIEW_DESCENDANT_LIMIT)
+  const collapseDescendantsByDefault = card.bucket === 'quiet'
+  const shownDescendants = expanded
+    ? card.descendants
+    : collapseDescendantsByDefault
+      ? []
+      : card.descendants.slice(0, OVERVIEW_DESCENDANT_LIMIT)
+  const showDescendantToggle = collapseDescendantsByDefault
+    ? card.descendants.length > 0
+    : card.hiddenDescendantCount > 0
+  const descendantToggleLabel = expanded
+    ? t('shell.overview.collapseDescendants')
+    : collapseDescendantsByDefault
+      ? card.descendants.length === 1
+        ? t('shell.overview.quietDescendantOne')
+        : t('shell.overview.quietDescendants', { count: card.descendants.length })
+      : t('shell.overview.moreDescendants', { count: card.hiddenDescendantCount })
   return (
     <article
       className={`overview-card overview-card-${card.bucket}${selected ? ' is-selected' : ''}`}
@@ -288,20 +312,20 @@ function OverviewCardView({
               </span>
             </button>
           ))}
-          {/* 「+N / 还有 N 个」是真实入口：点击卡内展开剩余后代（同一
-              确定性排序补齐，不重排、不另建树模型），再点收起。 */}
-          {card.hiddenDescendantCount > 0 && (
+          {/* 安静卡默认折叠全部后代为「N 个子会话」，活跃卡超过上限折叠为「还有 N 个」，
+              点击均就地按同序展开补齐剩余后代，再点收起。 */}
+          {showDescendantToggle && (
             <button
               type="button"
-              className="overview-chip-more tabular-nums"
+              className={`overview-chip-more tabular-nums${collapseDescendantsByDefault && !expanded ? ' overview-chip-quiet-summary' : ''}`}
               aria-expanded={expanded}
-              title={expanded ? t('shell.overview.collapseDescendants') : t('shell.overview.moreDescendants', { count: card.hiddenDescendantCount })}
+              title={descendantToggleLabel}
               onClick={(e) => {
                 e.stopPropagation()
                 onToggleExpanded?.(card.root.id)
               }}
             >
-              {expanded ? t('shell.overview.collapseDescendants') : t('shell.overview.moreDescendants', { count: card.hiddenDescendantCount })}
+              {descendantToggleLabel}
             </button>
           )}
         </div>
@@ -330,15 +354,21 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
   const [batchMode, setBatchMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [expandedCardIds, setExpandedCardIds] = useState<Set<number>>(new Set())
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
+  const [searchCollapseState, setSearchCollapseState] = useState<{ query: string; keys: Set<string> }>({
+    query: '',
+    keys: new Set(),
+  })
   const [archiving, setArchiving] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [batchDeleteIds, setBatchDeleteIds] = useState<ReadonlySet<number> | null>(null)
+  const sectionIdPrefix = useId()
 
-  // 筛选状态接入唯一 URL Hash 导航模型：总览目标在 sp. / ssp. 命名空间携带
-  // bucket/profile/node/source/q 路由参数（主屏 sp.、分屏 ssp.），经
-  // store.setScreenParams 写入——仅参数变化默认 replace 不污染后退栈，
+  // 筛选与分组状态接入唯一 URL Hash 导航模型：总览目标在 sp. / ssp. 命名
+  // 空间携带 bucket/profile/node/source/q/group 路由参数（主屏 sp.、分屏 ssp.），
+  // 经 store.setScreenParams 写入——仅参数变化默认 replace 不污染后退栈，
   // 刷新/前进/后退/深链恢复全由地址栏唯一事实源驱动；切换主屏目标时
-  // 命名空间参数随之丢弃（重新进入总览即回到未筛选态）。
+  // 命名空间参数随之丢弃（重新进入总览即回到默认态）。
   const routeTarget = isSplit ? splitTarget : primaryTarget
   const overviewParams = routeTarget !== null && routeTarget.kind === 'overview' ? routeTarget.params : undefined
   const filter = parseOverviewFilterParams(overviewParams)
@@ -347,6 +377,7 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
   const nodeFilter = filter.nodeId
   const sourceFilter = filter.source
   const queryFilter = filter.query
+  const groupBy = filter.groupBy
   const applyFilterParam = (patch: Partial<Record<OverviewFilterParamKey, string | undefined>>): void => {
     setScreenParams(patch, { split: isSplit === true })
   }
@@ -378,6 +409,42 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
       }),
     [cards, bucketFilter, profileFilter, nodeFilter, sourceFilter, queryFilter],
   )
+  const showSectionHeaders = overviewShouldShowSectionHeaders(filter)
+  const cardGroups = useMemo(
+    () => (showSectionHeaders ? groupOverviewCards(visibleCards, groupBy, t) : []),
+    [showSectionHeaders, visibleCards, groupBy, t],
+  )
+  const normalizedQuery = queryFilter.trim()
+  const searchActive = normalizedQuery !== ''
+  // 搜索防藏匿：搜索词非空时自动临时展开所有命中分节，避免匹配项被先前的
+  // 折叠遮蔽；搜索期间仍可手动收起，清空搜索后无损恢复原 collapsedGroups。
+  const activeCollapsedKeys = useMemo<ReadonlySet<string>>(() => {
+    if (searchActive) {
+      return searchCollapseState.query === normalizedQuery ? searchCollapseState.keys : EMPTY_COLLAPSED_KEYS
+    }
+    return collapsedGroups
+  }, [searchActive, searchCollapseState, normalizedQuery, collapsedGroups])
+  const toggleGroupCollapsed = (groupKey: string): void => {
+    if (searchActive) {
+      setSearchCollapseState((prev) => {
+        const nextKeys = prev.query === normalizedQuery ? new Set(prev.keys) : new Set<string>()
+        if (nextKeys.has(groupKey)) nextKeys.delete(groupKey)
+        else nextKeys.add(groupKey)
+        return { query: normalizedQuery, keys: nextKeys }
+      })
+      return
+    }
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev)
+      if (next.has(groupKey)) next.delete(groupKey)
+      else next.add(groupKey)
+      return next
+    })
+  }
+  const renderedCards = useMemo(() => {
+    if (!showSectionHeaders) return visibleCards
+    return cardGroups.flatMap((group) => (activeCollapsedKeys.has(group.key) ? [] : group.cards))
+  }, [showSectionHeaders, visibleCards, cardGroups, activeCollapsedKeys])
   const dataReady = conversations.length > 0 || (assetsLoaded && sseConnected)
   const profileOptions = useMemo(() => overviewProfileOptions(cards), [cards])
   const nodeOptions = useMemo(() => overviewNodeOptions(cards), [cards])
@@ -406,14 +473,15 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
 
   // 批量管理口径与侧栏批量模式同界：仅人类自有、未被插件 sidebarSection
   // 接管的根会话可勾选（isConversationArchivable ⇒ 可归档且可删除）；托管
-  // 与 bot 会话不参与批量，保护语义与侧栏勾选框一致。
+  // 与 bot 会话不参与批量，保护语义与侧栏勾选框一致。且收起分节内的卡片
+  // 不可见，不得进入可勾选与有效选择集。
   const isCardSelectable = useMemo(
     () => (conv: ConversationSummary) => isConversationArchivable(conv, sectionTags),
     [sectionTags],
   )
   const selectableCardIds = useMemo(
-    () => visibleCards.filter((card) => isCardSelectable(card.root)).map((card) => card.root.id),
-    [visibleCards, isCardSelectable],
+    () => renderedCards.filter((card) => isCardSelectable(card.root)).map((card) => card.root.id),
+    [renderedCards, isCardSelectable],
   )
   // 批量选择边界：选择集合始终收敛为「当前可见且可勾选」卡片的子集——
   // 筛选变化、实时会话变化（归档/被接管/离开总览）后，不可见对象立即
@@ -741,6 +809,22 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
               }
             />
           )}
+          <Select<OverviewGroupBy>
+            className="overview-filter-select overview-group-select"
+            prefixIcon="layers"
+            aria-label={t('shell.overview.groupByLabel')}
+            options={[
+              { value: 'status', label: t('shell.overview.groupByStatus') },
+              { value: 'profile', label: t('shell.overview.groupByProfile') },
+              { value: 'node', label: t('shell.overview.groupByNode') },
+            ]}
+            value={groupBy}
+            onChange={(event) =>
+              applyFilterParam({
+                group: event.target.value === 'status' ? undefined : (event.target.value as OverviewGroupBy),
+              })
+            }
+          />
         </div>
         <Tooltip content={batchMode ? t('shell.agents.exitBulk') : t('shell.agents.manageBulk')} side="top">
           <button
@@ -809,11 +893,13 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
           </div>
         )}
 
-        <div className="overview-grid">
-          {dataReady === false ? (
+        {dataReady === false ? (
+          <div className="overview-grid">
             <div className="overview-empty overview-loading" role="status">{t('shell.overview.loading')}</div>
-          ) : visibleCards.length === 0 ? (
-            cards.length === 0 ? (
+          </div>
+        ) : visibleCards.length === 0 ? (
+          <div className="overview-grid">
+            {cards.length === 0 ? (
               <div className="overview-empty">{t('shell.overview.emptySystem')}</div>
             ) : (
               <div className="overview-empty">
@@ -828,9 +914,85 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
                   {t('shell.overview.clearFilters')}
                 </button>
               </div>
-            )
-          ) : (
-            visibleCards.map((card) => (
+            )}
+          </div>
+        ) : showSectionHeaders ? (
+          <div className="overview-sections">
+            {cardGroups.map((group) => {
+              const collapsed = activeCollapsedKeys.has(group.key)
+              const headingId = `${sectionIdPrefix}-${group.key}`
+              return (
+                <section
+                  key={group.key}
+                  className={`overview-section overview-section-${group.kind}${group.bucket ? ` overview-section-${group.bucket}` : ''}`}
+                  data-group-key={group.key}
+                  aria-labelledby={headingId}
+                >
+                  <div className="overview-section-head">
+                    <button
+                      type="button"
+                      id={headingId}
+                      className="overview-section-toggle"
+                      aria-expanded={!collapsed}
+                      onClick={() => toggleGroupCollapsed(group.key)}
+                    >
+                      <HelmxIcon
+                        name={collapsed ? 'chevron-right' : 'chevron-down'}
+                        size={13}
+                        className="overview-section-chevron"
+                      />
+                      {group.kind === 'bucket' && group.bucket !== undefined && (
+                        <span
+                          className={`overview-section-dot overview-section-dot-${group.bucket}`}
+                          aria-hidden="true"
+                        />
+                      )}
+                      {group.kind === 'profile' && (
+                        <HelmxIcon name="bot" size={12} className="overview-section-icon" />
+                      )}
+                      {group.kind === 'node' && (
+                        <HelmxIcon
+                          name={group.nodeId === 'local' ? 'laptop' : 'server'}
+                          size={12}
+                          className="overview-section-icon"
+                        />
+                      )}
+                      <span
+                        className={`overview-section-title${group.kind === 'node' && group.nodeId !== 'local' ? ' mono' : ''}`}
+                      >
+                        {group.label}
+                      </span>
+                      <span className="overview-section-count tabular-nums">{group.cards.length}</span>
+                    </button>
+                    <span className="overview-section-rule" aria-hidden="true" />
+                  </div>
+                  {!collapsed && (
+                    <div className="overview-grid">
+                      {group.cards.map((card) => (
+                        <OverviewCardView
+                          key={card.root.id}
+                          card={card}
+                          onOpenConversation={openConversation}
+                          onDrawerPeek={drawerPeek}
+                          onOpenSplit={openSplit}
+                          viewedConversationIds={viewedConversationIds}
+                          batchMode={batchMode}
+                          selectable={isCardSelectable(card.root)}
+                          selected={effectiveSelectedIds.has(card.root.id)}
+                          expanded={expandedCardIds.has(card.root.id)}
+                          onToggleSelect={toggleCardSelect}
+                          onToggleExpanded={toggleCardExpanded}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </section>
+              )
+            })}
+          </div>
+        ) : (
+          <div className="overview-grid">
+            {visibleCards.map((card) => (
               <OverviewCardView
                 key={card.root.id}
                 card={card}
@@ -845,9 +1007,9 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
                 onToggleSelect={toggleCardSelect}
                 onToggleExpanded={toggleCardExpanded}
               />
-            ))
-          )}
-        </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <ConfirmDialog

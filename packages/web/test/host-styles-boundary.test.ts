@@ -278,7 +278,7 @@ test('样式边界：统一批量操作栏 .batch-bar 族与 .btn-danger-sm 完�
     }
   }
   const overview = readFileSync(join(STYLES_DIR, 'overview.css'), 'utf8')
-  for (const selector of ['.overview-scroll', '.overview-batch-bar-wrap', '.overview-batch-bar-wrap + .overview-grid']) {
+  for (const selector of ['.overview-scroll', '.overview-batch-bar-wrap', '.overview-batch-bar-wrap + .overview-grid', '.overview-batch-bar-wrap + .overview-sections']) {
     assert.ok(ownsRule(overview, selector), `overview.css 应定义总览批量栏同域滚动与对齐规则 ${selector}`)
   }
   // 旧词汇不得回流（sidebar/overview 私有 header/actions/count/spacer 已收口）
