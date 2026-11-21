@@ -1,0 +1,92 @@
+/* builtin:tiers plugin-specific layout classes (.tiers-* prefix only; reuses host primitives). */
+
+.tiers-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.tiers-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+}
+
+.tiers-card-top {
+  display: grid;
+  grid-template-columns: minmax(140px, 180px) minmax(200px, 1fr) minmax(130px, 160px) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.tiers-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.tiers-field-label {
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+.tiers-id-wrap {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.tiers-id-prefix {
+  font-size: 12px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+
+.tiers-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.tiers-template-form {
+  display: grid;
+  grid-template-columns: minmax(140px, 180px) minmax(160px, 220px) minmax(180px, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+  margin-bottom: 14px;
+}
+
+.tiers-roster-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tiers-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tiers-settings-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+@media (max-width: 680px) {
+  .tiers-card-top,
+  .tiers-template-form {
+    grid-template-columns: 1fr;
+  }
+
+  .tiers-card-actions {
+    justify-content: flex-start;
+  }
+}

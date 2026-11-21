@@ -507,6 +507,46 @@ export function wrapHostApi(
       return deps.listUi();
     },
     refreshModels: (options) => tracked('host.refreshModels', () => backend.refreshModels(options)),
+    listModels: () => {
+      guard('host.listModels');
+      const port = backend.listModels;
+      if (port === undefined) {
+        throw new HelmxError(
+          'not_supported',
+          'Current host has not wired model catalog reading (host.listModels)',
+          501,
+        );
+      }
+      return deps.tracker.withTask(pluginId, 'host.listModels', () => Promise.resolve(port()));
+    },
+    registerModelTiers: (getTiers) => {
+      guard('host.registerModelTiers');
+      const port = backend.registerModelTiers;
+      if (port === undefined) {
+        throw new HelmxError(
+          'not_supported',
+          'Current host has not wired model tier registration (host.registerModelTiers)',
+          501,
+        );
+      }
+      const handle = port(pluginId, getTiers);
+      const release = idempotentRelease(() => {
+        handle.release();
+      });
+      state.hostReleases.add(release);
+      return {
+        notifyChanged: () => {
+          guard('host.registerModelTiers.notifyChanged');
+          return deps.tracker.withTask(pluginId, 'host.registerModelTiers.notifyChanged', () =>
+            Promise.resolve(handle.notifyChanged()),
+          );
+        },
+        release: () => {
+          state.hostReleases.delete(release);
+          release();
+        },
+      };
+    },
 
     // 6. environment & file mutations
     withFileLock: <T,>(path: string, fn: () => Promise<T>, opts?: { signal?: AbortSignal }) => {

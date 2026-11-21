@@ -553,7 +553,11 @@ export async function completeConversationTextHelper(
   deps: {
     store: HelmxStore
     conversations: { resolveEffectiveModel(modelOverride?: string, profileId?: string): Promise<string | undefined> }
-    modelsRegistry: { models: Models; isModelDisabled(providerId: string, modelId: string): boolean }
+    modelsRegistry: {
+      models: Models
+      isModelDisabled(providerId: string, modelId: string): boolean
+      resolveModelRef?(ref: string): { provider: string; modelId: string; canonicalRef: string; tierThinkingLevel?: string }
+    }
     stash: { redact(text: string): string }
   },
   input: {
@@ -578,7 +582,9 @@ export async function completeConversationTextHelper(
   if (effective === undefined || effective === '') {
     throw new HelmxError('model_not_configured', `Conversation ${input.conversationId} has no effective model resolved; cannot run text completion`, 409, { conversationId: input.conversationId })
   }
-  const ref = requireModelRef(effective)
+  const ref = deps.modelsRegistry.resolveModelRef !== undefined
+    ? deps.modelsRegistry.resolveModelRef(effective)
+    : requireModelRef(effective)
   const model = deps.modelsRegistry.models.getModel(ref.provider, ref.modelId)
   if (model === undefined) {
     throw new HelmxError('model_not_found', `Effective model '${effective}' is not in the current model set (may have been removed on hot reload)`, 409, { model: effective })

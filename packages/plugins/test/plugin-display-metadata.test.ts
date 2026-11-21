@@ -32,6 +32,7 @@ import { createHerdrPlugin } from '../src/herdr.js'
 import { createSuperAgentPlugin } from '../src/superagent.js'
 import { createMagpiePlugin } from '../src/magpie.js'
 import { createTokenSpeedPlugin } from '../src/token-speed.js'
+import { createTiersPlugin } from '../src/tiers.js'
 
 const timeout = { timeout: 60_000 } as const
 
@@ -50,6 +51,7 @@ const FACTORIES: ReadonlyArray<() => PluginDefinition> = [
   createSuperAgentPlugin,
   createMagpiePlugin,
   createTokenSpeedPlugin,
+  createTiersPlugin,
 ]
 
 interface RecordedAction {
@@ -160,7 +162,7 @@ function assertEnglishSchemaDescriptions(where: string, node: unknown): void {
 
 test('显示元数据：全部内置插件 name/description 与 UI/configSchema 文案为 en+zh-CN 双语资源', timeout, () => {
   const registrations = recordAllPlugins()
-  assert.equal(registrations.length, 13, '内置插件工厂数量')
+  assert.equal(registrations.length, 14, '内置插件工厂数量')
   for (const { definition, ui, configSchema } of registrations) {
     assertFullyLocalized(`${definition.id} definition.name`, definition.name)
     assertFullyLocalized(`${definition.id} definition.description`, definition.description)

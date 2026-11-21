@@ -281,6 +281,18 @@ export class PluginHostBackendFixtureBase implements PluginHostBackend {
     unsupported('host.refreshModels')
   }
 
+  listModels(...args: Parameters<NonNullable<Port<'listModels'>>>): ReturnType<NonNullable<Port<'listModels'>>> {
+    void args
+    unsupported('host.listModels')
+  }
+
+  registerModelTiers(
+    ...args: Parameters<NonNullable<Port<'registerModelTiers'>>>
+  ): ReturnType<NonNullable<Port<'registerModelTiers'>>> {
+    void args
+    unsupported('host.registerModelTiers')
+  }
+
   createAsk(...args: Parameters<Port<'createAsk'>>): ReturnType<Port<'createAsk'>> {
     void args
     unsupported('host.createAsk')
@@ -388,6 +400,8 @@ export function createPluginHostBackendFixture(): PluginHostBackend {
     listActiveSpawnExecutions: f(d.listActiveSpawnExecutions),
     inspectNodePathUsage: f(d.inspectNodePathUsage),
     refreshModels: f(d.refreshModels),
+    listModels: f(d.listModels),
+    registerModelTiers: f(d.registerModelTiers),
     createAsk: f(d.createAsk),
     cancelAsk: f(d.cancelAsk),
     registerAskSeqResolver: f(d.registerAskSeqResolver),

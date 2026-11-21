@@ -309,6 +309,8 @@ export function clampThinkingLevelForModel(
 export interface CompactionModelResolution {
   model: string | undefined
   thinkingLevel?: string | undefined
+  /** Optional model-reference resolver (dereferences `tier/<id>` into concrete `{ provider, modelId, tierThinkingLevel }`). */
+  resolveModelRef?: (ref: string) => { provider: string; modelId: string; tierThinkingLevel?: string }
   /** Per-model thinking default lookup (`config.json.modelThinkingLevels`); used only when no explicit compaction level is set. */
   modelThinkingLevel?: (providerId: string, modelId: string) => string | undefined
   isDisabled: (providerId: string, modelId: string) => boolean
@@ -378,16 +380,23 @@ export function wrapModelsForCompaction(
           context: Parameters<Models['completeSimple']>[1],
           options?: Parameters<Models['completeSimple']>[2],
         ): Promise<AssistantMessage> => {
-          const { model: compactionRef, thinkingLevel: compactionThinkingLevel, modelThinkingLevel, isDisabled } = resolveCompaction()
+          const { model: compactionRef, thinkingLevel: compactionThinkingLevel, resolveModelRef, modelThinkingLevel, isDisabled } = resolveCompaction()
           if ((!compactionRef && !compactionThinkingLevel) || !isCompactionSummarizationCall(context, options)) {
             return target.completeSimple(model, context, options)
           }
           let targetModel = model
+          let tierThinkingLevel: string | undefined
           let perModelDefault: string | undefined
           if (compactionRef) {
             let ref: ModelRefParts
             try {
-              ref = parseModelRef(compactionRef)
+              if (resolveModelRef !== undefined) {
+                const resolvedRef = resolveModelRef(compactionRef)
+                ref = { provider: resolvedRef.provider, modelId: resolvedRef.modelId }
+                tierThinkingLevel = resolvedRef.tierThinkingLevel
+              } else {
+                ref = parseModelRef(compactionRef)
+              }
             } catch (err) {
               return compactionErrorMessage(
                 model,
@@ -414,7 +423,7 @@ export function wrapModelsForCompaction(
               )
             }
             targetModel = resolved
-            // Without an explicit compaction level, the compaction model's own per-model default wins
+            // Without an explicit compaction level, the compaction tier or target model's own per-model default wins
             // over the conversation-level reasoning carried in by the caller.
             if (compactionThinkingLevel === undefined) {
               perModelDefault = modelThinkingLevel?.(ref.provider, ref.modelId)
@@ -424,7 +433,7 @@ export function wrapModelsForCompaction(
           if (compactionRef && targetModel.maxTokens > 0 && next.maxTokens !== undefined) {
             next.maxTokens = Math.min(next.maxTokens, targetModel.maxTokens)
           }
-          const desiredThinking = compactionThinkingLevel ?? perModelDefault ?? next.reasoning
+          const desiredThinking = compactionThinkingLevel ?? tierThinkingLevel ?? perModelDefault ?? next.reasoning
           if (desiredThinking !== undefined) {
             const clamped = clampToModelLevels(targetModel, desiredThinking as ModelThinkingLevel)
             if (clamped === 'off') {

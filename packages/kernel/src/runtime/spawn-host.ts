@@ -12,6 +12,7 @@ import type { AgentSpawnRequest, ConversationAttachmentRef, ConversationPatch, C
 import { HelmxError } from '@helmx/protocol'
 import type { Profile } from '../services/index.js'
 import { requireModelRef, type ModelRefParts } from './models.js'
+import type { ResolvedModelRef } from './model-registry.js'
 import type { HelmxToolDeps } from './tool-deps.js'
 import type { NativeSpawnDeps, ResolvedProfile } from './spawn.js'
 import type { StructuredOutputSession } from './structured-output.js'
@@ -40,6 +41,8 @@ interface SpawnHostSource {
   }
   readonly defaultModel: string | undefined
   readonly defaultThinkingLevel: string | undefined
+  /** Optional model-reference resolver (`ModelRegistry.resolveModelRef`; dereferences `tier/<id>`). */
+  readonly resolveModelRef?: (ref: string) => ResolvedModelRef
   /** Per-model thinking default lookup (`config.json.modelThinkingLevels`); ranks above the Profile level. */
   readonly modelThinkingLevelOf?: (model: ModelRefParts) => string | undefined
   /** Current `Models` catalog (used to clamp Profile reasoning effort; no clamping if omitted). */
@@ -123,7 +126,15 @@ export function buildSpawnHost(options: SpawnHostOptions): SpawnHost {
     ...source.toolDeps,
     harness: source.harness,
     getLastAssistantText: (id) => source.tracker.getLastAssistantText(id),
-    resolveModel: () => requireModelRef(source.defaultModel),
+    resolveModel: () => {
+      if (source.defaultModel !== undefined && source.defaultModel.trim() !== '' && source.resolveModelRef !== undefined) {
+        return source.resolveModelRef(source.defaultModel.trim())
+      }
+      return requireModelRef(source.defaultModel)
+    },
+    ...(source.resolveModelRef !== undefined
+      ? { resolveModelRef: (ref: string) => source.resolveModelRef!(ref) }
+      : {}),
     ...(source.assertModelEnabled !== undefined
       ? { assertModelEnabled: (provider: string, modelId: string) => source.assertModelEnabled!(provider, modelId) }
       : {}),

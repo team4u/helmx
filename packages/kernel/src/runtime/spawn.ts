@@ -23,10 +23,11 @@ import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { AgentChange, Extension } from '@earendil-works/pi-durable'
 import type { ModelThinkingLevel } from '@earendil-works/pi-ai'
 import type { AgentSpawnRequest, ConversationPatch, ConversationSummary } from '@helmx/protocol'
-import { HelmxError, sanitizeAgentNamespacedMeta } from '@helmx/protocol'
+import { HelmxError, parseModelTierRef, sanitizeAgentNamespacedMeta } from '@helmx/protocol'
 import type { Harness } from '@earendil-works/pi-durable'
 import type { Models } from '@earendil-works/pi-ai'
 import { parseModelRef, type ModelRefParts } from './models.js'
+import type { ResolvedModelRef } from './model-registry.js'
 import { normalizeSessionCwd, trustedPlatformFromEnvFabric } from './target-cwd.js'
 import { resolveSpawnTargetChain } from './spawn-target.js'
 import {
@@ -117,8 +118,10 @@ export interface NativeSpawnDeps extends HelmxToolDeps {
   harness: Harness
   /** `conversationId ->` latest assistant text (maintained by tracker). */
   getLastAssistantText(conversationId: number): string | undefined
-  /** Global default model `'provider/model'` (throws `HelmxError` when unconfigured). */
-  resolveModel(): { provider: string; modelId: string }
+  /** Global default model `'provider/model'` (throws `HelmxError` when unconfigured; carries `tierThinkingLevel` when resolved from a tier). */
+  resolveModel(): { provider: string; modelId: string; tierThinkingLevel?: string }
+  /** Optional model-reference resolver (`ModelRegistry.resolveModelRef`) to dereference `tier/<id>` into concrete `{ provider, modelId, tierThinkingLevel }`. */
+  resolveModelRef?(ref: string): ResolvedModelRef
   /**
    * Current `Models` catalog (used to clamp `thinkingLevel` capabilities; host injects `ModelRegistry.models`).
    * Unset skips clamping (unknown capabilities never break contracts).
@@ -584,8 +587,12 @@ async function applyResumeConfiguration(
   }
   // Only rewrite `cwd` when explicitly given; default strictly preserves original conversation cwd (never resets to Profile/Hub).
   if (request.cwd !== undefined && request.cwd !== existing.cwd) patch.cwd = request.cwd
-  // Only rewrite `model` when explicitly changed (`'provider/model'` override, or `''` to clear via `updateConversation`).
-  if (request.model !== undefined && request.model !== deps.getModelOverride(childId)) {
+  // Only rewrite `model` when explicitly changed (`'provider/model'` or `'tier/<id>'` override, or `''` to clear via `updateConversation`).
+  // Tier refs always route through `updateConversation` so both concrete model and preset tier effort apply cleanly.
+  if (
+    request.model !== undefined &&
+    (parseModelTierRef(request.model) !== undefined || request.model !== deps.getModelOverride(childId))
+  ) {
     patch.model = request.model
   }
   if (request.effort !== undefined) patch.thinkingLevel = request.effort
@@ -668,6 +675,7 @@ async function createChildConversation(
     profile,
     parentSummary,
     defaultModel: deps.resolveModel,
+    resolveModelRef: deps.resolveModelRef,
     defaultThinkingLevel: deps.resolveThinkingLevel,
     modelThinkingLevelOf: deps.modelThinkingLevelOf,
     modelsForClamp: deps.modelsForClamp?.(),

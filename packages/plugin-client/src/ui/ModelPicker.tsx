@@ -1,4 +1,5 @@
 import { useContext, useEffect, useRef, useState } from 'react'
+import { MODEL_TIER_PREFIX } from '@helmx/protocol/browser'
 import { HelmxIcon } from '../icons.js'
 import { Popover, PopoverContent, PopoverPortal, PopoverTrigger } from './Popover.js'
 import { PluginClientHostHandlesContext } from '../host-port.js'
@@ -55,6 +56,8 @@ export interface ModelPickerControlProps {
   enableShortcut?: boolean
   /** Hide inline thinking-level chips (plain model-id config fields, e.g. plugin config format:'model'). */
   showThinkingLevels?: boolean
+  /** Include mounted runtime model tiers (`tier/<id>`) at the top of the picker (default `true`; pass `false` when selecting concrete models only). */
+  allowTiers?: boolean
   disabled?: boolean
   pending?: boolean
   /**
@@ -83,6 +86,7 @@ export function ModelPickerControl({
   popoverSide = 'top',
   enableShortcut = true,
   showThinkingLevels = true,
+  allowTiers = true,
   disabled = false,
   pending = false,
   onNotice,
@@ -120,10 +124,26 @@ export function ModelPickerControl({
     fallbackPanel,
   )
 
+  const queryLower = query.toLowerCase()
+  const rawTiers = allowTiers ? (catalog?.modelTiers ?? []) : []
+  const filteredTiers = rawTiers.filter((tier) => {
+    if (!tier.available || tier.disabled === true) return false
+    if (queryLower === '') return true
+    const tierRef = `${MODEL_TIER_PREFIX}/${tier.id}`
+    return (
+      tierRef.toLowerCase().includes(queryLower) ||
+      tier.model.toLowerCase().includes(queryLower) ||
+      (tier.description?.toLowerCase().includes(queryLower) ?? false)
+    )
+  })
   const filteredModels = models.filter(
-    (model) => model.available && model.disabled !== true && model.id.toLowerCase().includes(query.toLowerCase()),
+    (model) => model.available && model.disabled !== true && model.id.toLowerCase().includes(queryLower),
   )
-  const filteredKeys = filteredModels.map((model) => model.id).join('|')
+  const navItems: Array<{ id: string }> = [
+    ...filteredTiers.map((tier) => ({ id: `${MODEL_TIER_PREFIX}/${tier.id}` })),
+    ...filteredModels.map((model) => ({ id: model.id })),
+  ]
+  const filteredKeys = navItems.map((item) => item.id).join('|')
   const [activeIndex, setActiveIndex] = useState(-1)
 
   useEffect(() => {
@@ -136,7 +156,7 @@ export function ModelPickerControl({
       setActiveIndex(-1)
       return
     }
-    setActiveIndex(initialModelActiveIndex(filteredModels, query))
+    setActiveIndex(initialModelActiveIndex(navItems, query))
     // filteredKeys precisely expresses changes of the filtered result set
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, query, filteredKeys])
@@ -184,13 +204,20 @@ export function ModelPickerControl({
   const rawShortName = formatModelShortName(effectiveModel)
   const shortName = rawShortName !== '' ? rawShortName : (placeholderLabel ?? copy.defaultLabel)
   const currentModel = effectiveModel !== undefined && effectiveModel !== '' ? models.find((model) => model.id === effectiveModel) : undefined
-  const currentLevels = currentModel?.thinkingLevels ?? ['off']
+  const currentTier =
+    effectiveModel !== undefined && effectiveModel.startsWith(`${MODEL_TIER_PREFIX}/`)
+      ? (catalog?.modelTiers ?? []).find((tier) => `${MODEL_TIER_PREFIX}/${tier.id}` === effectiveModel)
+      : undefined
+  const currentLevels = currentModel?.thinkingLevels ?? currentTier?.thinkingLevels ?? ['off']
   const supportsThinking = showThinkingLevels && currentLevels.some((level) => level !== 'off')
   // Effective level display: prefer the actually effective level; when it is
   // not in the model's supported list, fall back to off or the first supported.
   const effectiveLevel = resolveEffectiveThinkingLevel(currentLevels, activeThinkingLevel)
   const showLevel = supportsThinking && effectiveLevel !== '' && effectiveLevel !== 'off'
-  const allUnavailable = models.length > 0 && models.every((model) => !model.available || model.disabled === true)
+  const allUnavailable =
+    models.length > 0 &&
+    models.every((model) => !model.available || model.disabled === true) &&
+    filteredTiers.length === 0
   const canRefresh = handles?.refreshModels !== undefined
 
   return (
@@ -265,12 +292,12 @@ export function ModelPickerControl({
                     if (event.nativeEvent.isComposing) return
                     if (event.key === 'ArrowDown') {
                       event.preventDefault()
-                      setActiveIndex((prev) => stepActiveIndex(prev, filteredModels.length, 1))
+                      setActiveIndex((prev) => stepActiveIndex(prev, navItems.length, 1))
                     } else if (event.key === 'ArrowUp') {
                       event.preventDefault()
-                      setActiveIndex((prev) => stepActiveIndex(prev, filteredModels.length, -1))
+                      setActiveIndex((prev) => stepActiveIndex(prev, navItems.length, -1))
                     } else if (event.key === 'Enter') {
-                      const chosen = filteredModels[activeIndex]
+                      const chosen = navItems[activeIndex]
                       if (chosen !== undefined) {
                         event.preventDefault()
                         event.stopPropagation()
@@ -297,11 +324,58 @@ export function ModelPickerControl({
               ) : null}
             </div>
             <div className="composer-model-scroll" onMouseLeave={() => setActiveIndex(-1)}>
+              {filteredTiers.length > 0 ? (
+                <>
+                  <div className="popover-header">
+                    <span>{copy.tiersHeader}</span>
+                    <span className="kbd-hint popover-kbd-hint">{copy.navHint}</span>
+                  </div>
+                  {filteredTiers.map((tier, idx) => {
+                    const tierRef = `${MODEL_TIER_PREFIX}/${tier.id}`
+                    const isCurrent = tierRef === effectiveModel
+                    const targetShort = formatModelShortName(tier.model)
+                    return (
+                      <div
+                        key={tierRef}
+                        ref={(node) => {
+                          itemRefs.current[idx] = node
+                        }}
+                        className={`popover-item composer-model-row${idx === activeIndex ? ' popover-item-active' : ''}`}
+                        onMouseEnter={() => setActiveIndex(idx)}
+                      >
+                        <button
+                          type="button"
+                          className="composer-model-row-main"
+                          title={formatModelPickerCopy(copy.tierRowTitle, { tier: tierRef, model: tier.model })}
+                          disabled={disabled}
+                          aria-current={isCurrent ? 'true' : undefined}
+                          onClick={() => applySelection(tierRef, null)}
+                        >
+                          <span className="composer-model-row-name-line">
+                            <span className="mono composer-model-row-name">{tierRef}</span>
+                            <span className="popover-item-meta">· {targetShort}</span>
+                            {isCurrent ? <HelmxIcon name="check" size={12} className="composer-model-row-check" /> : null}
+                          </span>
+                          <span className="popover-item-meta composer-model-row-source">
+                            {tier.description || tier.model}
+                          </span>
+                        </button>
+                        {tier.thinkingLevel !== undefined && tier.thinkingLevel !== '' ? (
+                          <span className="badge badge-neutral">{tier.thinkingLevel}</span>
+                        ) : null}
+                      </div>
+                    )
+                  })}
+                </>
+              ) : null}
               <div className="popover-header">
                 <span>{copy.listHeader}</span>
-                <span className="kbd-hint popover-kbd-hint">{copy.navHint}</span>
+                {filteredTiers.length === 0 ? (
+                  <span className="kbd-hint popover-kbd-hint">{copy.navHint}</span>
+                ) : null}
               </div>
-              {filteredModels.map((m, idx) => {
+              {filteredModels.map((m, modelIdx) => {
+                const idx = filteredTiers.length + modelIdx
                 const levels = m.thinkingLevels ?? ['off']
                 const rowSupportsThinking = showThinkingLevels && levels.some((level) => level !== 'off')
                 const isCurrent = m.id === effectiveModel
@@ -356,7 +430,7 @@ export function ModelPickerControl({
                 <div className="popover-item composer-model-empty">{copy.catalogUnavailable}</div>
               ) : allUnavailable ? (
                 <div className="popover-item composer-model-empty">{copy.emptyCatalog}</div>
-              ) : filteredModels.length === 0 ? (
+              ) : navItems.length === 0 ? (
                 <div className="popover-item composer-model-empty">{copy.noMatches}</div>
               ) : null}
             </div>

@@ -13,7 +13,10 @@ import type {
   HookName,
   PluginBuildProvider,
   MaybePromise,
+  ModelCatalog,
   ModelProvidersRefreshResult,
+  ModelTierRegistration,
+  ModelTierSpec,
   NodePathUsage,
   PluginConfigFieldSchema,
   PluginDefinition,
@@ -153,6 +156,13 @@ export interface PluginHostBackend
   ): Promise<{ taskId: number; conversation: ConversationSummary }>
   /** Claims exclusive management over conversation `id` for `pluginId`; returns release function. */
   manageConversation(id: number, pluginId: string): () => void
+  /** Optional: read current model catalog snapshot (501 when unwired). */
+  listModels?(): Promise<ModelCatalog>
+  /** Optional: mount a runtime model-tier table owned by `pluginId` (501 when unwired). */
+  registerModelTiers?(
+    pluginId: string,
+    getTiers: () => Readonly<Record<string, ModelTierSpec>>,
+  ): ModelTierRegistration
 }
 
 export interface PluginHostOptions {

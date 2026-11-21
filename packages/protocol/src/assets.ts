@@ -96,6 +96,53 @@ export function isSkillAvailable(
     (profile.skills === undefined || profile.skills.includes(skill.id))
 }
 
+/** Reserved provider prefix for semantic model tiers (`tier/<id>`). Kernel rejects custom/runtime providers using this ID. */
+export const MODEL_TIER_PREFIX = 'tier' as const
+
+/** Allowed model tier identifier pattern (lowercase slug, 1..63 chars). */
+export const MODEL_TIER_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,62}$/
+
+/** Maximum Unicode code-point / char length of a tier routing description. */
+export const MODEL_TIER_DESCRIPTION_MAX_LENGTH = 240
+
+/** Whether `id` is a valid model tier identifier. */
+export function isValidModelTierId(id: string): boolean {
+  return MODEL_TIER_ID_PATTERN.test(id)
+}
+
+/**
+ * Parse a `tier/<id>` model reference; returns the raw `<id>` segment (non-empty)
+ * when `ref` targets the reserved `tier` namespace, or `undefined` otherwise.
+ */
+export function parseModelTierRef(ref: string): string | undefined {
+  const prefix = `${MODEL_TIER_PREFIX}/`
+  if (!ref.startsWith(prefix)) return undefined
+  const id = ref.slice(prefix.length)
+  return id.length > 0 ? id : undefined
+}
+
+/** One model tier binding registered into the kernel ModelRegistry at runtime. */
+export interface ModelTierSpec {
+  /** Concrete target model reference in `'provider/modelId'` format (must not point to `'tier/*'`). */
+  model: string
+  /** Optional default thinking level (off/minimal/low/medium/high/xhigh/max). */
+  thinkingLevel?: string
+  /** Optional concise routing description for humans and agents (<= 240 chars). */
+  description?: string
+}
+
+/** Public model tier entry exposed in `GET /api/models` (`ModelCatalog.modelTiers`). */
+export interface ModelTierCatalogEntry extends ModelTierSpec {
+  /** Tier identifier (addressed as `tier/<id>`). */
+  id: string
+  /** True iff the target model exists in the current catalog, has valid auth (available), and is not disabled. */
+  available: boolean
+  /** True iff the target model is explicitly disabled in config.json.disabledModels. */
+  disabled?: boolean
+  /** Supported thinking levels of the target model (omitted when target model is absent from catalog). */
+  thinkingLevels?: string[]
+}
+
 /** Public model catalog entry of `GET /api/models`. */
 export interface ModelCatalogEntry {
   provider: string
@@ -122,6 +169,8 @@ export interface ModelCatalog {
   defaultCompactionModel?: string
   /** Global compaction thinking level (config.json.compactionThinkingLevel; omitted when unset). */
   defaultCompactionThinkingLevel?: string
+  /** Active runtime model tiers mounted by plugins (e.g. builtin:tiers); omitted when none are registered. */
+  modelTiers?: ModelTierCatalogEntry[]
 }
 
 /** Public catalog of PI built-in providers, plugin dynamic providers and enabled custom gateways; contains no credentials or private request headers. */

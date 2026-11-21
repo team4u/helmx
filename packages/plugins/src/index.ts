@@ -34,4 +34,15 @@ export { createMagpiePlugin, MAGPIE_PLUGIN_ID } from './magpie.js';
 export { MAGPIE_PROVIDER_ID, type MagpiePluginConfig, type MagpieStatusDoc } from './magpie/contracts.js';
 export { createTokenSpeedPlugin, TOKEN_SPEED_PLUGIN_ID } from './token-speed.js';
 export { TOKEN_SPEED_DOC, type TokenSpeedStatus } from './token-speed/contracts.js';
+export {
+  createTiersPlugin,
+  TIERS_PLUGIN_ID,
+  TIERS_STATE_DOC,
+  TIERS_SCREEN_ID,
+  MODEL_TIERS_SKILL_ID,
+  TIER_THINKING_LEVELS,
+  type TierTemplate,
+  type TiersStateDoc,
+  type TiersPluginConfig,
+} from './tiers.js';
 export type { HerdrPluginDependencies, HerdrTransport, HerdrTarget, HerdrEvent } from './herdr/contracts.js';

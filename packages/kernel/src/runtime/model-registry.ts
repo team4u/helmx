@@ -11,10 +11,28 @@ import type { AssistantMessageEventStream } from '@earendil-works/pi-ai/utils/ev
 import { builtinProviders } from '@earendil-works/pi-ai/providers/all'
 import type { Models, Provider } from '@earendil-works/pi-ai/models'
 import type { ModelsStore } from '@earendil-works/pi-ai'
-import type { ModelCatalog, ModelProvidersRefreshResult } from '@helmx/protocol'
-import { HelmxError } from '@helmx/protocol'
+import type {
+  ModelCatalog,
+  ModelProvidersRefreshResult,
+  ModelTierCatalogEntry,
+  ModelTierRegistration,
+  ModelTierSpec,
+} from '@helmx/protocol'
+import { HelmxError, MODEL_TIER_PREFIX, isValidModelTierId } from '@helmx/protocol'
 import type { ConfigService, CredentialService, ProviderService, SecretStash } from '../services/index.js'
 import { listModelCatalog, listModelProviders, buildModels } from './models.js'
+
+/** Resolved model reference returned by `ModelRegistry.resolveModelRef`. */
+export interface ResolvedModelRef {
+  provider: string
+  modelId: string
+  /** Concrete canonical `'provider/modelId'` string. */
+  canonicalRef: string
+  /** Present when the input reference targeted `tier/<id>`. */
+  tierId?: string
+  /** Preset thinking level carried by the resolved tier (if configured). */
+  tierThinkingLevel?: string
+}
 
 /** Built-in PI provider ID set (lazily built once for registration conflict preflight without hardcoding lists). */
 const builtinProviderIds = new Set(builtinProviders().map((p) => p.id))
@@ -140,6 +158,8 @@ export class ModelRegistry {
   modelPlaceholder = 'unconfigured'
   /** Explicitly disabled models (`providerId -> modelId[]`; from `config.json.disabledModels`). */
   private disabledModels: Record<string, string[]> = {}
+  /** Runtime model-tier table sources mounted by plugins (e.g. `builtin:tiers`); auto-unmounted on plugin disable. */
+  private readonly tierSources = new Map<symbol, { pluginId: string; getTiers: () => Readonly<Record<string, ModelTierSpec>> }>()
 
   constructor(
     options: ModelRegistryOptions,
@@ -183,7 +203,7 @@ export class ModelRegistry {
   }
 
   async listModels(): Promise<ModelCatalog> {
-    return listModelCatalog(this.modelsCurrent, {
+    const catalog = await listModelCatalog(this.modelsCurrent, {
       model: this.defaultModel,
       thinkingLevel: this.defaultThinkingLevel,
       modelThinkingLevels: this.modelThinkingLevels,
@@ -191,6 +211,158 @@ export class ModelRegistry {
       compactionThinkingLevel: this.defaultCompactionThinkingLevel,
       disabledModels: this.disabledModels,
     })
+    const tiers = this.getRegisteredTiers()
+    const tierEntries = Object.entries(tiers)
+    if (tierEntries.length > 0) {
+      const modelMap = new Map<string, (typeof catalog.models)[number]>(
+        catalog.models.map((m) => [`${m.provider}/${m.modelId}`, m]),
+      )
+      const modelTiers: ModelTierCatalogEntry[] = []
+      for (const [id, spec] of tierEntries) {
+        const slash = spec.model.indexOf('/')
+        const targetProvider = slash > 0 ? spec.model.slice(0, slash) : ''
+        const targetModelId = slash > 0 ? spec.model.slice(slash + 1) : ''
+        const disabled = targetProvider !== '' && targetModelId !== ''
+          ? this.isModelDisabled(targetProvider, targetModelId)
+          : false
+        const targetEntry = modelMap.get(spec.model)
+        const available = targetEntry !== undefined && targetEntry.available === true && !disabled
+        const thinkingLevels = catalog.thinkingLevels[spec.model]
+        modelTiers.push({
+          id,
+          model: spec.model,
+          ...(spec.thinkingLevel !== undefined && spec.thinkingLevel !== '' ? { thinkingLevel: spec.thinkingLevel } : {}),
+          ...(spec.description !== undefined && spec.description !== '' ? { description: spec.description } : {}),
+          available,
+          ...(disabled ? { disabled: true } : {}),
+          ...(thinkingLevels !== undefined ? { thinkingLevels } : {}),
+        })
+      }
+      catalog.modelTiers = modelTiers
+    }
+    return catalog
+  }
+
+  /**
+   * Mount a live model-tier table owned by a plugin (`ctx.host.registerModelTiers`).
+   * Kernel validates target syntax / non-recursiveness at resolution time and rejects conflicting
+   * tier IDs across active sources; `release()` is idempotent and automatically invoked on plugin disable.
+   */
+  registerModelTiers(
+    pluginId: string,
+    getTiers: () => Readonly<Record<string, ModelTierSpec>>,
+  ): ModelTierRegistration {
+    const token = Symbol(`tiers:${pluginId}`)
+    const initial = getTiers()
+    this.assertNoTierIdConflicts(token, initial)
+    this.tierSources.set(token, { pluginId, getTiers })
+    let released = false
+    return {
+      notifyChanged: async () => {
+        if (released || !this.tierSources.has(token)) return
+        this.assertNoTierIdConflicts(token, getTiers())
+        this.events.publish('models.changed', { providers: [] })
+        await this.alignAllConversations()
+      },
+      release: () => {
+        if (released) return
+        released = true
+        if (!this.tierSources.delete(token)) return
+        this.events.publish('models.changed', { providers: [] })
+        void this.alignAllConversations().catch(() => {})
+      },
+    }
+  }
+
+  private assertNoTierIdConflicts(
+    selfToken: symbol,
+    incoming: Readonly<Record<string, ModelTierSpec>>,
+  ): void {
+    const incomingIds = Object.keys(incoming)
+    if (incomingIds.length === 0) return
+    for (const [token, source] of this.tierSources) {
+      if (token === selfToken) continue
+      const existing = source.getTiers()
+      for (const id of incomingIds) {
+        if (Object.prototype.hasOwnProperty.call(existing, id)) {
+          throw new HelmxError(
+            'model_tier_conflict',
+            `Model tier '${MODEL_TIER_PREFIX}/${id}' is already registered by plugin '${source.pluginId}'`,
+            409,
+            { tierId: id, owner: source.pluginId },
+          )
+        }
+      }
+    }
+  }
+
+  /** Collect active runtime model tiers from all mounted plugin sources (preserving declaration order). */
+  getRegisteredTiers(): Record<string, ModelTierSpec> {
+    const result: Record<string, ModelTierSpec> = {}
+    for (const source of this.tierSources.values()) {
+      const map = source.getTiers()
+      if (map === null || typeof map !== 'object') continue
+      for (const [id, spec] of Object.entries(map)) {
+        if (!isValidModelTierId(id) || spec === null || typeof spec !== 'object' || typeof spec.model !== 'string') {
+          continue
+        }
+        result[id] = {
+          model: spec.model,
+          ...(typeof spec.thinkingLevel === 'string' && spec.thinkingLevel !== ''
+            ? { thinkingLevel: spec.thinkingLevel }
+            : {}),
+          ...(typeof spec.description === 'string' && spec.description !== ''
+            ? { description: spec.description }
+            : {}),
+        }
+      }
+    }
+    return result
+  }
+
+  /**
+   * Single authoritative model-reference resolver:
+   * - Concrete `'provider/modelId'` passes through unchanged;
+   * - `'tier/<id>'` resolves against mounted runtime tiers, failing explicitly with `404 model_tier_not_found`
+   *   when unconfigured/disabled (never silently falling back to global defaultModel) and rejecting nested
+   *   `tier -> tier` chains with `400 validation_error`.
+   */
+  resolveModelRef(ref: string): ResolvedModelRef {
+    const parsed = this.parseModelRefOrThrow(ref)
+    if (parsed.provider !== MODEL_TIER_PREFIX) {
+      return {
+        provider: parsed.provider,
+        modelId: parsed.modelId,
+        canonicalRef: `${parsed.provider}/${parsed.modelId}`,
+      }
+    }
+    const tier = this.getRegisteredTiers()[parsed.modelId]
+    if (tier === undefined) {
+      throw new HelmxError(
+        'model_tier_not_found',
+        `Model tier '${ref}' is not registered (configure it in Model Tiers or enable builtin:tiers)`,
+        404,
+        { tierId: parsed.modelId, ref },
+      )
+    }
+    const target = this.parseModelRefOrThrow(tier.model)
+    if (target.provider === MODEL_TIER_PREFIX) {
+      throw new HelmxError(
+        'validation_error',
+        `Model tier '${ref}' cannot target another model tier '${tier.model}'`,
+        400,
+        { tierId: parsed.modelId, target: tier.model },
+      )
+    }
+    return {
+      provider: target.provider,
+      modelId: target.modelId,
+      canonicalRef: `${target.provider}/${target.modelId}`,
+      tierId: parsed.modelId,
+      ...(tier.thinkingLevel !== undefined && tier.thinkingLevel !== ''
+        ? { tierThinkingLevel: tier.thinkingLevel }
+        : {}),
+    }
   }
 
   listModelProviders() {
@@ -263,12 +435,12 @@ export class ModelRegistry {
   ): Promise<void> {
     const trimmed = model?.trim()
     if (trimmed !== undefined && trimmed !== '') {
-      const ref = this.parseModelRefOrThrow(trimmed)
+      const ref = this.resolveModelRef(trimmed)
       this.assertModelEnabled(ref.provider, ref.modelId)
     }
     const trimmedCompaction = compactionModel?.trim()
     if (trimmedCompaction !== undefined && trimmedCompaction !== '') {
-      const ref = this.parseModelRefOrThrow(trimmedCompaction)
+      const ref = this.resolveModelRef(trimmedCompaction)
       this.assertModelEnabled(ref.provider, ref.modelId)
     }
     const normalizeLevel = (rawLevel: string | undefined): string | undefined => {
@@ -349,7 +521,10 @@ export class ModelRegistry {
       if (!/^[^/\s]+\/[^\s]+$/.test(model)) {
         throw new HelmxError('validation_error', `modelThinkingLevels key must be a 'provider/model' reference: ${model}`, 400)
       }
-      this.parseModelRefOrThrow(model)
+      const parsed = this.parseModelRefOrThrow(model)
+      if (parsed.provider === MODEL_TIER_PREFIX) {
+        throw new HelmxError('validation_error', `modelThinkingLevels applies to concrete models only (configure thinkingLevel directly on tier '${model}')`, 400)
+      }
       if (typeof rawLevel !== 'string' || rawLevel.trim() === '') {
         throw new HelmxError('validation_error', `modelThinkingLevels['${model}'] must be a non-empty thinking level`, 400)
       }
@@ -367,7 +542,10 @@ export class ModelRegistry {
     if (!/^[^/\s]+\/[^\s]+$/.test(update.model)) {
       throw new HelmxError('validation_error', `modelThinking key must be a 'provider/model' reference: ${update.model}`, 400)
     }
-    this.parseModelRefOrThrow(update.model)
+    const parsed = this.parseModelRefOrThrow(update.model)
+    if (parsed.provider === MODEL_TIER_PREFIX) {
+      throw new HelmxError('validation_error', `modelThinking applies to concrete models only (configure thinkingLevel directly on tier '${update.model}')`, 400)
+    }
     const level = update.level.trim()
     if (level !== '') validateThinkingLevel(level)
     return { model: update.model, level }
@@ -403,6 +581,13 @@ export class ModelRegistry {
       throw new HelmxError('validation_error', 'Per-model thinking default requires a model reference', 400)
     }
     const ref = this.parseModelRefOrThrow(trimmedModel)
+    if (ref.provider === MODEL_TIER_PREFIX) {
+      throw new HelmxError(
+        'validation_error',
+        `Per-model thinking defaults apply to concrete models only (configure thinkingLevel directly on tier '${trimmedModel}')`,
+        400,
+      )
+    }
     this.assertModelEnabled(ref.provider, ref.modelId)
     const trimmedLevel = level.trim()
     if (trimmedLevel !== '') validateThinkingLevel(trimmedLevel)
@@ -424,14 +609,23 @@ export class ModelRegistry {
     return this.disabledModels[providerId]?.includes(modelId) === true
   }
 
-  /** Reject explicitly when a model is disabled (`409 model_disabled`), reused across explicit selection paths. */
+  /** Reject explicitly when a model is disabled (`409 model_disabled`), reused across explicit selection paths.
+   * When given the reserved `tier` prefix, dereferences the tier first (throwing `404 model_tier_not_found` if unconfigured)
+   * and verifies the underlying concrete model is enabled. */
   assertModelEnabled(providerId: string, modelId: string): void {
-    if (this.isModelDisabled(providerId, modelId)) {
+    let targetProvider = providerId
+    let targetModelId = modelId
+    if (providerId === MODEL_TIER_PREFIX) {
+      const resolved = this.resolveModelRef(`${MODEL_TIER_PREFIX}/${modelId}`)
+      targetProvider = resolved.provider
+      targetModelId = resolved.modelId
+    }
+    if (this.isModelDisabled(targetProvider, targetModelId)) {
       throw new HelmxError(
         'model_disabled',
-        `Model ${providerId}/${modelId} is disabled; re-enable it in Settings -> Models or via 'helmx models filter' before selecting it`,
+        `Model ${targetProvider}/${targetModelId} is disabled; re-enable it in Settings -> Models or via 'helmx models filter' before selecting it`,
         409,
-        { provider: providerId, modelId },
+        { provider: targetProvider, modelId: targetModelId },
       )
     }
   }
@@ -442,6 +636,13 @@ export class ModelRegistry {
    * Backend stores strings verbatim without verifying model existence (catalog flags match catalog entries only).
    */
   async setDisabledModels(provider: string | undefined, modelIds: string[]): Promise<ModelCatalog> {
+    if (provider === MODEL_TIER_PREFIX) {
+      throw new HelmxError(
+        'validation_error',
+        `Provider '${MODEL_TIER_PREFIX}' is reserved for model tiers and cannot be filtered via disabledModels (disable the underlying concrete model or edit the tier)`,
+        400,
+      )
+    }
     if (provider === undefined || provider === '') {
       if (modelIds.length > 0) {
         throw new HelmxError('validation_error', 'Clearing disabled models without specifying a provider requires an empty disabledModels array', 400)
@@ -567,8 +768,11 @@ export class ModelRegistry {
     }
   }
 
-  /** Conflict detection: returns error message if conflicting (`undefined` = no conflict) across built-in/custom gateways/runtime owners. */
+  /** Conflict detection: returns error message if conflicting (`undefined` = no conflict) across reserved namespaces, built-in/custom gateways, and runtime owners. */
   private async findRuntimeProviderConflict(providerId: string): Promise<string | undefined> {
+    if (providerId === MODEL_TIER_PREFIX) {
+      return `Provider ID '${MODEL_TIER_PREFIX}' is reserved for model tiers; cannot register a provider with this ID`
+    }
     const existing = this.runtimeProviders.get(providerId)
     if (existing !== undefined) {
       const owner = this.runtimeProviderOwners.get(providerId)

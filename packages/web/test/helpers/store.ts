@@ -56,7 +56,9 @@ export type TestStoreOverrides = Omit<
   | 'dismissNotice'
   | 'pushNotice'
   | 'invokePluginAction'
->
+> & {
+  modelDefaults?: CatalogSlice['modelDefaults']
+}
 
 /** HelmxExternalStore 的内部补丁面（仅测试水合使用）。 */
 interface StoreHydrationSurface {
@@ -84,7 +86,7 @@ export function makeTestStore(overrides: TestStoreOverrides = {}): HelmxExternal
     conversations, conversationDetails, conversationLives, pendingAsks, resolvedAsksByConv,
     plugins, uiContributions, pluginDocs, nodes,
     conversationArtifacts, loadErrors,
-    profiles, profilesLoaded, assetsLoaded, models, providers, credentials, skills, actions,
+    profiles, profilesLoaded, assetsLoaded, models, modelDefaults, providers, credentials, skills, actions,
     primaryTarget, splitTarget, focusedPanel, sidebarCollapsed, pendingEscAbortConversationId,
     workbenchOpen, workbenchTab, activeModal, highlightedEntry,
     notices,
@@ -120,6 +122,7 @@ export function makeTestStore(overrides: TestStoreOverrides = {}): HelmxExternal
     profilesLoaded: profilesLoaded ?? true,
     assetsLoaded: assetsLoaded ?? true,
     models: models ?? [],
+    ...(modelDefaults !== undefined ? { modelDefaults } : {}),
     providers: providers ?? [],
     credentials: credentials ?? [],
     skills: skills ?? [],

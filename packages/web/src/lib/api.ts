@@ -19,6 +19,7 @@ import type {
   ModelCatalogEntry,
   ModelProviderSummary,
   ModelProvidersRefreshResult,
+  ModelTierCatalogEntry,
   NodeHealthSnapshot,
   NodeInfo,
   NodeIssuedToken,
@@ -401,6 +402,8 @@ export interface ModelCatalogDefaults {
   defaultCompactionModel?: string
   /** 全局压缩思考档位（未配置省略）。 */
   defaultCompactionThinkingLevel?: string
+  /** 当前已挂载的运行时模型档位（未配置省略）。 */
+  modelTiers?: ModelTierCatalogEntry[]
 }
 
 export interface ModelCatalogInfo extends ModelCatalogDefaults {
@@ -420,6 +423,7 @@ export function normalizeModelCatalogInfo(raw: unknown): ModelCatalogInfo {
     modelThinkingLevels?: unknown
     defaultCompactionModel?: unknown
     defaultCompactionThinkingLevel?: unknown
+    modelTiers?: unknown
   }
   const modelThinkingLevelsRaw =
     body.modelThinkingLevels && typeof body.modelThinkingLevels === 'object' && !Array.isArray(body.modelThinkingLevels)
@@ -461,6 +465,37 @@ export function normalizeModelCatalogInfo(raw: unknown): ModelCatalogInfo {
       thinkingLevels: Array.isArray(levels) && levels.every((level) => typeof level === 'string') && levels.length > 0 ? levels as string[] : ['off'],
     }
   })
+  const modelTiers: ModelTierCatalogEntry[] = []
+  if (Array.isArray(body.modelTiers)) {
+    for (const item of body.modelTiers) {
+      if (item === null || typeof item !== 'object') throw new Error('Invalid model tier entry format')
+      const entry = item as Partial<ModelTierCatalogEntry>
+      if (
+        typeof entry.id !== 'string' ||
+        entry.id === '' ||
+        typeof entry.model !== 'string' ||
+        entry.model === '' ||
+        typeof entry.available !== 'boolean'
+      ) {
+        throw new Error('Invalid model tier entry format')
+      }
+      modelTiers.push({
+        id: entry.id,
+        model: entry.model,
+        available: entry.available,
+        ...(entry.disabled === true ? { disabled: true } : {}),
+        ...(typeof entry.thinkingLevel === 'string' && entry.thinkingLevel !== ''
+          ? { thinkingLevel: entry.thinkingLevel }
+          : {}),
+        ...(typeof entry.description === 'string' && entry.description !== ''
+          ? { description: entry.description }
+          : {}),
+        ...(Array.isArray(entry.thinkingLevels) && entry.thinkingLevels.every((l) => typeof l === 'string')
+          ? { thinkingLevels: entry.thinkingLevels }
+          : {}),
+      })
+    }
+  }
   return {
     models,
     ...(typeof body.defaultModel === 'string' && body.defaultModel !== '' ? { defaultModel: body.defaultModel } : {}),
@@ -470,6 +505,7 @@ export function normalizeModelCatalogInfo(raw: unknown): ModelCatalogInfo {
     ...(typeof body.defaultCompactionThinkingLevel === 'string' && body.defaultCompactionThinkingLevel !== ''
       ? { defaultCompactionThinkingLevel: body.defaultCompactionThinkingLevel }
       : {}),
+    ...(modelTiers.length > 0 ? { modelTiers } : {}),
   }
 }
 

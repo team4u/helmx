@@ -244,6 +244,7 @@ export function GlobalDefaultsPanel({
                 resetTitle={t('models.defaults.perModelClear')}
                 popoverSide="bottom"
                 enableShortcut={false}
+                allowTiers={false}
                 disabled={saving}
                 copy={copy}
                 onNotice={onNotice}

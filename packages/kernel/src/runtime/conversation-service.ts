@@ -37,6 +37,7 @@ import {
 } from './runtime-helpers.js'
 import { toConversationEntry } from './entries.js'
 import { clampThinkingLevelForModel } from './models.js'
+import type { ResolvedModelRef } from './model-registry.js'
 import { THINKING_LEVELS } from './spawn.js'
 import type { HelmxStore } from './store.js'
 import { ConversationAttachments } from './conversation-attachments.js'
@@ -92,6 +93,8 @@ interface ConversationServiceOptions {
   /** Current Models collection (used to clamp thinking levels to model capabilities). */
   readonly models: () => Models
   readonly parseModelRefOrThrow: (ref: string) => { provider: string; modelId: string }
+  /** Optional model-reference resolver (`ModelRegistry.resolveModelRef`); dereferences `tier/<id>` into concrete model + tier preset thinking level. */
+  readonly resolveModelRef?: (ref: string) => ResolvedModelRef
   /** Disabled-model preflight check (ModelRegistry.assertModelEnabled; rejects selection and submission of disabled models). */
   readonly assertModelEnabled: (provider: string, modelId: string) => void
   /**
@@ -207,6 +210,7 @@ export class ConversationService {
       defaultThinkingLevel: this.o.defaultThinkingLevel,
       modelThinkingLevelOf: this.o.modelThinkingLevelOf,
       parseModelRefOrThrow: this.o.parseModelRefOrThrow,
+      resolveModelRef: this.o.resolveModelRef,
       summaryWithOwnership: (id) => this.summaryWithOwnership(id),
       // Context window and thresholds may change after model/Profile alignment: trigger context usage recalculation.
       scheduleContextUsageRefresh: (id) => this.tracker.scheduleContextUsageRefresh(id),
@@ -524,12 +528,21 @@ export class ConversationService {
     this.assertWritable()
     const profileId = await this.resolveProfileForCreate(init)
     const profile = await this.readProfile(profileId)
+    let frozenModelOverride: string | undefined
+    let initTierThinking: string | undefined
     if (init.model !== undefined && init.model !== '') {
-      const ref = this.o.parseModelRefOrThrow(init.model)
-      this.o.assertModelEnabled(ref.provider, ref.modelId)
+      const resolvedInit = this.profileAlignment.resolveRef(init.model)
+      this.o.assertModelEnabled(resolvedInit.provider, resolvedInit.modelId)
+      // Freeze concrete `'provider/modelId'` on the conversation so later tier edits or plugin
+      // disables never break in-flight conversations or bust their prompt cache.
+      frozenModelOverride = resolvedInit.canonicalRef
+      initTierThinking = resolvedInit.tierThinkingLevel
     }
-    const effectiveModel = await this.resolveEffectiveModel(init.model, profileId)
-    const effectiveRef = effectiveModel ? this.o.parseModelRefOrThrow(effectiveModel) : undefined
+    const effectiveDetails = await this.profileAlignment.resolveEffectiveModelDetails(frozenModelOverride, profileId)
+    const effectiveModel = effectiveDetails?.canonicalRef
+    const effectiveRef = effectiveDetails
+      ? { provider: effectiveDetails.provider, modelId: effectiveDetails.modelId }
+      : undefined
     const parentMeta =
       init.parentConversationId !== undefined ? this.store.getConv(init.parentConversationId) : undefined
     const nodeId =
@@ -553,7 +566,16 @@ export class ConversationService {
         { nodeId },
       )
     }
-    const effectiveThinking = await this.resolveEffectiveThinkingLevel(undefined, profileId, effectiveRef)
+    const clampedTierThinkingOverride =
+      initTierThinking !== undefined
+        ? clampThinkingLevelForModel(this.o.models(), effectiveRef, initTierThinking)
+        : undefined
+    const effectiveThinking = await this.profileAlignment.resolveEffectiveThinkingLevel(
+      clampedTierThinkingOverride,
+      profileId,
+      effectiveRef,
+      initTierThinking ?? effectiveDetails?.tierThinkingLevel,
+    )
     const conv = await this.harness.createConversation(
       {
         ownership: { kind: 'ownerless' },
@@ -577,7 +599,10 @@ export class ConversationService {
       cwd: effectiveCwd,
       model: effectiveModel ?? '',
       thinkingLevel: effectiveThinking ?? '',
-      ...(init.model !== undefined && init.model !== '' ? { modelOverride: init.model } : {}),
+      ...(frozenModelOverride !== undefined ? { modelOverride: frozenModelOverride } : {}),
+      ...(clampedTierThinkingOverride !== undefined && clampedTierThinkingOverride !== ''
+        ? { thinkingLevelOverride: clampedTierThinkingOverride }
+        : {}),
       unread: false,
       pinned: false,
       stateChangeSeq: 1,
@@ -605,22 +630,30 @@ export class ConversationService {
       }
     }
     let nextOverride: string | undefined
+    let patchTierThinking: string | undefined
     if (patch.model === undefined) {
       nextOverride = meta.modelOverride
     } else if (patch.model !== '') {
-      const ref = this.o.parseModelRefOrThrow(patch.model)
-      this.o.assertModelEnabled(ref.provider, ref.modelId)
-      nextOverride = patch.model
+      const resolvedPatch = this.profileAlignment.resolveRef(patch.model)
+      this.o.assertModelEnabled(resolvedPatch.provider, resolvedPatch.modelId)
+      nextOverride = resolvedPatch.canonicalRef
+      patchTierThinking = resolvedPatch.tierThinkingLevel
     }
     const nextProfileId = patch.profileId ?? meta.profileId
-    const effectiveModel = await this.resolveEffectiveModel(nextOverride, nextProfileId)
+    const effectiveDetails = await this.profileAlignment.resolveEffectiveModelDetails(nextOverride, nextProfileId)
+    const effectiveModel = effectiveDetails?.canonicalRef
     // A model switch without a simultaneous explicit thinking change clears the stale conversation override:
     // the override was chosen for the previous model and must not shadow the new model's own default chain
-    // (per-model default > Profile > global). Re-selecting the same effective model keeps the override.
+    // (tier preset > per-model default > Profile > global). Re-selecting the same effective model keeps the override,
+    // unless a tier carrying its own preset thinking level was explicitly chosen.
     const modelSwitched = patch.model !== undefined && (effectiveModel ?? '') !== meta.model
     let nextThinkingOverride: string | undefined
     if (patch.thinkingLevel === undefined) {
-      nextThinkingOverride = modelSwitched ? undefined : meta.thinkingLevelOverride
+      if (patchTierThinking !== undefined) {
+        nextThinkingOverride = patchTierThinking
+      } else {
+        nextThinkingOverride = modelSwitched ? undefined : meta.thinkingLevelOverride
+      }
     } else {
       const level = patch.thinkingLevel.trim()
       if (level !== '' && !THINKING_LEVELS.has(level)) {
@@ -632,13 +665,20 @@ export class ConversationService {
       }
       nextThinkingOverride = level || undefined
     }
-    const effectiveRef = effectiveModel ? this.o.parseModelRefOrThrow(effectiveModel) : undefined
+    const effectiveRef = effectiveDetails
+      ? { provider: effectiveDetails.provider, modelId: effectiveDetails.modelId }
+      : undefined
     // After model/Profile changes, clamp any explicit thinking override to what the target model supports
     // (single clampThinkingLevelForModel helper; unknown capabilities pass through to keep the contract intact).
     const clampedOverride = effectiveRef
       ? clampThinkingLevelForModel(this.o.models(), effectiveRef, nextThinkingOverride)
       : nextThinkingOverride
-    const nextThinking = await this.resolveEffectiveThinkingLevel(clampedOverride, nextProfileId, effectiveRef)
+    const nextThinking = await this.profileAlignment.resolveEffectiveThinkingLevel(
+      clampedOverride,
+      nextProfileId,
+      effectiveRef,
+      patchTierThinking ?? effectiveDetails?.tierThinkingLevel,
+    )
     // Explicit cwd, or existing cwd when migrating nodeId, is normalized for the target node platform before SDK
     // configure and mirror persistence; invalid POSIX roots are rejected explicitly.
     const nextNodeId = patch.nodeId ?? meta.nodeId

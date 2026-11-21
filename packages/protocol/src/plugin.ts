@@ -23,7 +23,7 @@ import type {
   WhenBusy,
 } from './conversation.js'
 import type { ArtifactMetadata } from './artifact.js'
-import type { Profile, SkillSummary, ModelProvidersRefreshResult } from './assets.js'
+import type { Profile, SkillSummary, ModelCatalog, ModelProvidersRefreshResult, ModelTierSpec } from './assets.js'
 import type {
   EnvExecRequest,
   EnvExecResponse,
@@ -569,6 +569,14 @@ export interface HelmxHostPluginsPort {
   disable(pluginId: string, options?: { force?: boolean }): Promise<PluginSummary>
 }
 
+/** Registration handle returned by `ctx.host.registerModelTiers`. */
+export interface ModelTierRegistration {
+  /** Notify kernel that the mounted tier table changed (emits `models.changed` and aligns inheriting conversations). */
+  notifyChanged(): Promise<void>
+  /** Unmount this plugin's tier table from kernel (idempotent; auto-released on plugin disable/stop). */
+  release(): void
+}
+
 /** ctx.host：插件可调用的宿主内核能力（插件拿到的实现已绑定其 pluginId，不可伪造他人身份）。 */
 export interface HelmxHostApi {
   /** 宿主关闭状态（get）：true 后拒绝新回合/新后台任务，插件据此停投递。 */
@@ -916,6 +924,19 @@ export interface HelmxHostApi {
     allowNetwork?: boolean
     force?: boolean
   }): Promise<ModelProvidersRefreshResult>
+  /**
+   * 读取当前模型目录快照（可用模型、思考档位、全局默认链与已挂载档位）。
+   * 与 GET /api/models 同源；宿主未接线时显式抛 501 not_supported。
+   */
+  listModels(): Promise<ModelCatalog>
+  /**
+   * 向内核 ModelRegistry 挂载本插件持有的运行时模型档位表（`tier/<id> -> ModelTierSpec`）。
+   * 返回幂等句柄（插件停用/停止时宿主自动调用 release 卸载）；档位变更后调 notifyChanged()
+   * 广播 models.changed 并对齐继承档位的会话。
+   */
+  registerModelTiers(
+    getTiers: () => Readonly<Record<string, ModelTierSpec>>,
+  ): ModelTierRegistration
   /**
    * 创建 AskDoc 并等待终态：正常三态（answered/cancelled/superseded）均 resolve，
    * 只有验证/I/O/宿主失败才 reject。secret 字段答案为 stash 引用。

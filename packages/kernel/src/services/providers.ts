@@ -4,7 +4,7 @@
  * credentials.json via CredentialService. Structural validation happens at the boundary, and secret fields are explicitly stripped/rejected.
  * ProviderConfig shape conforms to @helmx/protocol.
  */
-import { isJsonObject, type ProviderConfig } from '@helmx/protocol'
+import { isJsonObject, MODEL_TIER_PREFIX, type ProviderConfig } from '@helmx/protocol'
 
 export type { ProviderConfig }
 import { join } from 'node:path'
@@ -12,10 +12,13 @@ import { atomicWriteJson, readJsonFileOptional } from './atomic-file.js'
 
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 
-/** Provider ID boundary validation: must start with an alphanumeric character to prevent path traversal across directories. */
+/** Provider ID boundary validation: must start with an alphanumeric character and must not use the reserved tier namespace. */
 function assertProviderId(id: string): void {
   if (typeof id !== 'string' || !ID_PATTERN.test(id)) {
     throw new Error(`illegal provider id: ${id}`)
+  }
+  if (id === MODEL_TIER_PREFIX) {
+    throw new Error(`provider id '${MODEL_TIER_PREFIX}' is reserved for model tiers`)
   }
 }
 

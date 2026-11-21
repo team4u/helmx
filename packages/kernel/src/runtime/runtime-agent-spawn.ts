@@ -391,6 +391,7 @@ export class RuntimeAgentSpawn {
             tracker: { getLastAssistantText: (id) => this.deps.tracker.getLastAssistantText(id) },
             defaultModel: this.deps.modelsRegistry.defaultModel,
             defaultThinkingLevel: this.deps.modelsRegistry.defaultThinkingLevel,
+            resolveModelRef: (ref) => this.deps.modelsRegistry.resolveModelRef(ref),
             modelThinkingLevelOf: (ref) => this.deps.modelsRegistry.modelThinkingLevelOf(ref),
             models: () => this.deps.modelsRegistry.models,
             assertModelEnabled: (provider, modelId) => this.deps.modelsRegistry.assertModelEnabled(provider, modelId),
@@ -413,8 +414,13 @@ export class RuntimeAgentSpawn {
               const profile = await this.deps.conversations.readProfile(profileId)
               const parentMeta = this.deps.store.getConv(parentId)
               const { forkSameProfile } = resolveForkMode(profileId, finalRequest.fork, parentMeta?.profileId)
+              // Freeze concrete model override at spawn creation time: explicit `tier/<id>` resolves to its
+              // concrete `provider/modelId` (`modelMirror`) so later tier edits or plugin disables never bust
+              // the child conversation's prompt cache or break resume/reattach.
+              const explicitModelOverride =
+                finalRequest.model !== undefined && finalRequest.model !== '' ? modelMirror : undefined
               const inheritedModelOverride = resolveInheritedModelOverride(
-                finalRequest.model,
+                explicitModelOverride,
                 forkSameProfile,
                 parentMeta?.modelOverride,
               )

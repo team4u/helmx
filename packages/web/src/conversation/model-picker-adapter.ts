@@ -20,6 +20,8 @@ export function buildModelPickerControlCopy(t: WebMessageTranslator): ModelPicke
     searchAria: t('composer.model.searchAria'),
     searchPlaceholder: t('composer.model.searchPlaceholder'),
     refreshCatalog: t('composer.model.refreshCatalog'),
+    tiersHeader: t('composer.model.tiersHeader'),
+    tierRowTitle: t('composer.model.tierRowTitle'),
     listHeader: t('composer.model.listHeader'),
     navHint: t('composer.kbd.navConfirm'),
     emptyCatalog: t('composer.model.emptyCatalog'),

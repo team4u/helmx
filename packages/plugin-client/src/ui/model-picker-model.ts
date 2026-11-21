@@ -5,6 +5,7 @@
  * app re-exports instead of keeping a private copy.
  */
 import { useEffect, useRef } from 'react'
+import { MODEL_TIER_PREFIX } from '@helmx/protocol/browser'
 
 /** Host composer/standby panel identity (the `data-helmx-panel` DOM convention). */
 export type HelmxPanel = 'primary' | 'split'
@@ -22,11 +23,14 @@ export interface HelmxShortcutEventDetail {
   panel: HelmxPanel
 }
 
-/** Short model name for picker trigger buttons (last path segment of the canonical id). */
+/** Short model name for picker trigger buttons (keeps `tier/<id>` explicit; concrete models show the last path segment). */
 export function formatModelShortName(modelId: string | undefined): string {
   if (modelId === undefined) return ''
   const trimmed = modelId.trim()
   if (trimmed === '') return ''
+  if (trimmed.startsWith(`${MODEL_TIER_PREFIX}/`) && trimmed.length > MODEL_TIER_PREFIX.length + 1) {
+    return trimmed
+  }
   const slashIdx = trimmed.lastIndexOf('/')
   if (slashIdx >= 0 && slashIdx < trimmed.length - 1) {
     return trimmed.slice(slashIdx + 1)
@@ -157,6 +161,10 @@ export interface ModelPickerControlCopy {
   searchAria: string
   searchPlaceholder: string
   refreshCatalog: string
+  /** Optional header for the model tiers section above the model list. */
+  tiersHeader: string
+  /** Tier row tooltip template ({tier}/{model}). */
+  tierRowTitle: string
   listHeader: string
   /** Keyboard hint shown in the popover header. */
   navHint: string
@@ -185,6 +193,8 @@ export const DEFAULT_MODEL_PICKER_COPY: Readonly<ModelPickerControlCopy> = Objec
   searchAria: 'Search models',
   searchPlaceholder: 'Search models…',
   refreshCatalog: 'Refresh dynamic model catalog',
+  tiersHeader: 'Model tiers',
+  tierRowTitle: 'Use {tier} ({model})',
   listHeader: 'Model list',
   navHint: '↑↓ select · Enter confirm',
   emptyCatalog: 'No models available; configure a provider key in Models & credentials first',

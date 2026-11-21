@@ -150,6 +150,8 @@ export function createPluginHostBackend(runtime: KernelRuntime): PluginHostBacke
     getArtifact: (artifactId, conversationId) => runtime.resolveAuthorizedAttachment(conversationId, artifactId),
     redact: (text) => runtime.stash.redact(text),
     refreshModels: (options) => runtime.refreshModels(options),
+    listModels: () => runtime.listModels(),
+    registerModelTiers: (pluginId, getTiers) => runtime.registerModelTiers(pluginId, getTiers),
     withFileLock: <T>(path: string, fn: () => Promise<T>, opts?: { signal?: AbortSignal }) =>
       withFileLock(path, async () => {
         opts?.signal?.throwIfAborted()

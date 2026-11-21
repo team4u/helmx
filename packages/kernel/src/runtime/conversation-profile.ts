@@ -16,6 +16,7 @@ import type { ConversationSummary } from '@helmx/protocol'
 import { HelmxError, assertProfileId } from '@helmx/protocol'
 import { type Profile, type ProfileService } from '../services/index.js'
 import { clampThinkingLevelForModel } from './models.js'
+import type { ResolvedModelRef } from './model-registry.js'
 import type { EventHub } from './events.js'
 import type { HelmxStore } from './store.js'
 
@@ -31,6 +32,8 @@ interface ConversationProfileHost {
   /** Per-model thinking defaults lookup (`config.json.modelThinkingLevels`, keyed by full `'provider/modelId'`). */
   readonly modelThinkingLevelOf: (ref: { provider: string; modelId: string }) => string | undefined
   readonly parseModelRefOrThrow: (ref: string) => { provider: string; modelId: string }
+  /** Optional model-reference resolver (`ModelRegistry.resolveModelRef`); dereferences `tier/<id>` into concrete model + tier preset thinking level. */
+  readonly resolveModelRef?: (ref: string) => ResolvedModelRef
   readonly summaryWithOwnership: (id: number) => ConversationSummary
   /** Schedule context usage recalculation after model/thinking alignment (window/threshold may change); omitted skips. */
   readonly scheduleContextUsageRefresh?: (id: number) => void
@@ -61,29 +64,51 @@ export class ConversationProfileService {
     }
   }
 
-  /** Conversation override > Profile.model > global default; Profile files are read live on each lookup. */
-  async resolveEffectiveModel(
+  /** Resolve a raw `'provider/model'` or `'tier/<id>'` reference into concrete parts + optional tier preset thinking level. */
+  resolveRef(ref: string): ResolvedModelRef {
+    if (this.host.resolveModelRef !== undefined) return this.host.resolveModelRef(ref)
+    const parts = this.host.parseModelRefOrThrow(ref)
+    return { ...parts, canonicalRef: `${parts.provider}/${parts.modelId}` }
+  }
+
+  /** Conversation override > Profile.model > global default, dereferencing any `tier/<id>` into concrete model + tier preset thinking level. */
+  async resolveEffectiveModelDetails(
     override: string | undefined,
     profileId: string,
-  ): Promise<string | undefined> {
+  ): Promise<ResolvedModelRef | undefined> {
     const profile = await this.readProfile(profileId)
     if (profile === undefined) {
       throw new HelmxError('profile_not_found', `Profile referenced by conversation does not exist: ${profileId}`, 404, { profileId })
     }
-    return override || profile.model || this.host.defaultModel()
+    const raw = override || profile.model || this.host.defaultModel()
+    if (!raw) return undefined
+    return this.resolveRef(raw)
+  }
+
+  /** Conversation override > Profile.model > global default (concrete `'provider/modelId'`); Profile files are read live on each lookup. */
+  async resolveEffectiveModel(
+    override: string | undefined,
+    profileId: string,
+  ): Promise<string | undefined> {
+    return (await this.resolveEffectiveModelDetails(override, profileId))?.canonicalRef
   }
 
   /**
-   * Thinking level inheritance: conversation override > per-model default for the effective model >
+   * Thinking level inheritance: conversation override > resolved tier preset > per-model default for the effective model >
    * Profile.thinkingLevel > global fallback; then clamped to levels supported by the effective model
    * (nearest supported level if unsupported).
    * Unconfigured values (undefined / empty string) are returned unchanged rather than coerced into explicit 'off'.
    */
-  async resolveEffectiveThinkingLevel(override: string | undefined, profileId: string, modelRef?: { provider: string; modelId: string }): Promise<string | undefined> {
+  async resolveEffectiveThinkingLevel(
+    override: string | undefined,
+    profileId: string,
+    modelRef?: { provider: string; modelId: string },
+    tierThinkingLevel?: string,
+  ): Promise<string | undefined> {
     const profile = await this.readProfile(profileId)
     if (!profile) throw new HelmxError('profile_not_found', `Profile referenced by conversation does not exist: ${profileId}`, 404, { profileId })
     const perModel = modelRef !== undefined ? this.host.modelThinkingLevelOf(modelRef) : undefined
-    const inherited = override || perModel || profile.thinkingLevel || this.host.defaultThinkingLevel()
+    const inherited = override || tierThinkingLevel || perModel || profile.thinkingLevel || this.host.defaultThinkingLevel()
     return clampThinkingLevelForModel(this.host.models(), modelRef, inherited)
   }
 
@@ -103,12 +128,13 @@ export class ConversationProfileService {
     await this.withConversationChange(id, async () => {
       const meta = this.host.store.getConv(id)
       if (!meta) return
-      const effective = await this.resolveEffectiveModel(meta.modelOverride, meta.profileId)
-      const ref = effective ? this.host.parseModelRefOrThrow(effective) : undefined
+      const resolved = await this.resolveEffectiveModelDetails(meta.modelOverride, meta.profileId)
+      const effective = resolved?.canonicalRef
+      const ref = resolved ? { provider: resolved.provider, modelId: resolved.modelId } : undefined
       // Also persist the clamped result of an explicit override; otherwise SDK/summary converge while the mirror keeps
       // the raw override, causing the next alignment pass to still see "effective != override".
       const clampedOverride = clampThinkingLevelForModel(this.host.models(), ref, meta.thinkingLevelOverride)
-      const thinking = await this.resolveEffectiveThinkingLevel(clampedOverride, meta.profileId, ref)
+      const thinking = await this.resolveEffectiveThinkingLevel(clampedOverride, meta.profileId, ref, resolved?.tierThinkingLevel)
       const conversation = await this.host.harness.conversation(id as never, BACKGROUND_CONTEXT)
       if (!conversation) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
       const agent = await conversation.agent(BACKGROUND_CONTEXT)

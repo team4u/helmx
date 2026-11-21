@@ -11,7 +11,7 @@ import {
 } from '../lib/commands-model.js'
 import { formatBytes } from '../lib/format.js'
 import { errorText } from '../lib/error-text.js'
-import { HelmxIcon, ModelPickerControl, Select, type SelectOption } from '@helmx/plugin-client'
+import { HelmxIcon, ModelPickerControl, Select, useHostModels, type SelectOption } from '@helmx/plugin-client'
 import { isSameResolvedTarget, type ResolvedTarget } from '../lib/types.js'
 import {
   useConversations,
@@ -817,6 +817,7 @@ function StandbyModelPicker({
   onCatalogRefreshed: () => Promise<void>
 }) {
   const models = useModels()
+  const hostModels = useHostModels()
   const { t } = useWebLocale()
   const { copy, onNotice } = useModelPickerControlAdapter()
   const lockedNote = t('composer.model.lockedNote')
@@ -826,15 +827,20 @@ function StandbyModelPicker({
     profile.model,
     defaultModelInfo?.defaultModel,
   )
-  const currentModel = effectiveModel !== undefined
-    ? models.find((model) => model.id === effectiveModel)
+  const activeTier =
+    effectiveModel !== undefined && effectiveModel.startsWith('tier/')
+      ? hostModels?.modelTiers?.find((tier) => `tier/${tier.id}` === effectiveModel)
+      : undefined
+  const resolvedConcreteModel = activeTier?.model ?? effectiveModel
+  const currentModel = resolvedConcreteModel !== undefined
+    ? models.find((model) => model.id === resolvedConcreteModel)
     : undefined
-  const currentLevels = currentModel?.thinkingLevels ?? ['off']
+  const currentLevels = currentModel?.thinkingLevels ?? activeTier?.thinkingLevels ?? ['off']
   const supportsThinking = currentLevels.some((level) => level !== 'off')
   const effectiveThinkingLevel = resolveStandbyThinkingLevel(
     currentLevels,
-    draft.thinkingLevel,
-    effectiveModel !== undefined ? defaultModelInfo?.modelThinkingLevels?.[effectiveModel] : undefined,
+    draft.thinkingLevel ?? activeTier?.thinkingLevel,
+    resolvedConcreteModel !== undefined ? defaultModelInfo?.modelThinkingLevels?.[resolvedConcreteModel] : undefined,
     profile.thinkingLevel,
     defaultModelInfo?.defaultThinkingLevel,
   )

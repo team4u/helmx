@@ -34,6 +34,8 @@ import {
   type MaybePromise,
   type ModelCatalog,
   type ModelProvidersRefreshResult,
+  type ModelTierRegistration,
+  type ModelTierSpec,
   type NodeInfo,
   type NodeIssuedToken,
   type NodeUpgradeCheckInput,
@@ -253,6 +255,7 @@ export class KernelRuntime {
     this.init.setCompactionModelResolver(() => ({
       model: this.modelsRegistry.defaultCompactionModel,
       thinkingLevel: this.modelsRegistry.defaultCompactionThinkingLevel,
+      resolveModelRef: (ref) => this.modelsRegistry.resolveModelRef(ref),
       modelThinkingLevel: (providerId, modelId) =>
         this.modelsRegistry.modelThinkingLevelOf({ provider: providerId, modelId }),
       isDisabled: (providerId, modelId) => this.modelsRegistry.isModelDisabled(providerId, modelId),
@@ -945,6 +948,14 @@ export class KernelRuntime {
 
   async listModels(): Promise<ModelCatalog> {
     return this.modelsRegistry.listModels()
+  }
+
+  /** Mount a plugin-owned runtime model-tier table into `ModelRegistry`. */
+  registerModelTiers(
+    pluginId: string,
+    getTiers: () => Readonly<Record<string, ModelTierSpec>>,
+  ): ModelTierRegistration {
+    return this.modelsRegistry.registerModelTiers(pluginId, getTiers)
   }
 
   /** Set disabled models (`PUT /api/models/filter`): clears all when `provider` is undefined. */

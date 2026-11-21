@@ -21,6 +21,7 @@
 | `builtin:superagent` | SuperAgent 中枢 | 双层中枢（总控路由 + 驻留 Worker）与两层巡检看门狗 | 停用 | 否 |
 | `builtin:magpie` | Magpie 网关 | 动态模型网关接入：目录、配额与路由组诊断 | 启用 | 否 |
 | `builtin:token-speed` | Token 速率 | 输入区状态行实时解码速率（只读展示，内核零速率计算） | 启用 | 否 |
+| `builtin:tiers` | 模型档位 | 语义模型档位（`tier/<id>`）、自定义多套模板与 `model-tiers` 受管技能 | 启用 | 否 |
 
 内核包自身不注册任何插件；同一注册点还会调用 `loadExternalPlugins` 从 `<dataDir>/plugins/` 目录加载用户放入的外部插件（默认停用）。各插件的深度文档见文末「相关文档」。
 
@@ -121,7 +122,7 @@
 
 ## 相关文档
 
-- 各内置插件深度文档：[workflow](workflow.md) · [worktree](worktree.md) · [swarm](swarm.md) · [profile](profile.md) · [memory](memory.md) · [apps](apps.md) · [herdr](herdr.md) · [superagent](superagent.md) · [triggers](triggers.md) · [magpie](magpie.md) · [json-render](json-render.md) · [mermaid](mermaid.md) · [token-speed](token-speed.md)
+- 各内置插件深度文档：[workflow](workflow.md) · [worktree](worktree.md) · [swarm](swarm.md) · [profile](profile.md) · [memory](memory.md) · [apps](apps.md) · [herdr](herdr.md) · [superagent](superagent.md) · [triggers](triggers.md) · [magpie](magpie.md) · [json-render](json-render.md) · [mermaid](mermaid.md) · [token-speed](token-speed.md) · [tiers](tiers.md)
 - [插件开发实战](plugin-development.md)：从 `helmx plugins init` 到 doctor / rescan / enable / reload 的完整闭环
 - [生命周期 Hook 与全界面扩展点](../architecture/extension-points.md)：7 个 Hook 与 16 个 UI surface 的逐项契约
 - [微内核架构总览](../architecture/overview.md)：内核四块机制与包依赖方向

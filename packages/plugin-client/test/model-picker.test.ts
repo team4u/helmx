@@ -107,6 +107,7 @@ test('model picker symbols are in the protocol manifest and really exported (bid
 test('formatModelShortName / formatModelRowDisplay: nested route prefixes move to the source line', { timeout: 60_000 }, () => {
   assert.equal(formatModelShortName('anthropic/claude-3-7-sonnet'), 'claude-3-7-sonnet')
   assert.equal(formatModelShortName('magpie/auto/glm-5.3'), 'glm-5.3')
+  assert.equal(formatModelShortName('tier/architect'), 'tier/architect')
   assert.equal(formatModelShortName('plain-model'), 'plain-model')
   assert.equal(formatModelShortName(undefined), '')
   assert.equal(formatModelShortName('  '), '')

@@ -81,6 +81,14 @@
     "./token-speed/contracts": {
       "types": "./dist/token-speed/contracts.d.ts",
       "import": "./dist/token-speed/contracts.js"
+    },
+    "./tiers": {
+      "types": "./dist/tiers.d.ts",
+      "import": "./dist/tiers.js"
+    },
+    "./tiers/contracts": {
+      "types": "./dist/tiers/contracts.d.ts",
+      "import": "./dist/tiers/contracts.js"
     }
   },
   "scripts": {
