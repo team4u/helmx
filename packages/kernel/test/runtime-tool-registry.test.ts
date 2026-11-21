@@ -2,6 +2,8 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import type { Extension } from '@earendil-works/pi-durable'
 import {
+  ARTIFACT_READ_META_SCHEMA,
+  ARTIFACT_REGISTER_META_SCHEMA,
   HelmxError,
   TOOL_PRESENTATION_META_MAX_BYTES,
   TOOL_PRESENTATION_META_MAX_DEPTH,
@@ -729,6 +731,8 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
     })
     assert.ok(registryModule.getToolSchemas('edit')?.presentationMetaSchema !== undefined)
     assert.ok(registryModule.getToolSchemas('read')?.presentationMetaSchema !== undefined)
+    assert.equal(registryModule.getToolSchemas('register_artifact')?.presentationMetaSchema, ARTIFACT_REGISTER_META_SCHEMA)
+    assert.equal(registryModule.getToolSchemas('read_artifact')?.presentationMetaSchema, ARTIFACT_READ_META_SCHEMA)
 
     // Gap C fixed: naked business object with output/isError/structuredOutput/presentationMeta/details keys succeeds.
     const res = await derivedTool.execute({ tag: 'run' }, { conversationId: 1, callId: 'c1' } as never, {} as never)
@@ -879,6 +883,11 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
       return cur
     })()
     const tooManyNodes = { items: Array.from({ length: TOOL_PRESENTATION_META_MAX_NODES }, (_, i) => i) }
+    const nonEnumMeta: Record<string, unknown> = { badge: 'ok' }
+    Object.defineProperty(nonEnumMeta, 'hidden', { value: 'SECRET', enumerable: false })
+    const symbolMeta: Record<PropertyKey, unknown> = { badge: 'ok', [Symbol('k')]: 'v' }
+    const arrWithExtra = [1] as unknown[] & { extra?: string }
+    arrWithExtra.extra = 'dropped'
     const badCases: Array<{ label: string; toolName: string; outcome: unknown; pattern: RegExp }> = [
       {
         label: 'transform legacy details field rejected',
@@ -933,6 +942,24 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
         toolName: 'guarded_tool',
         outcome: { action: 'handled', result: { output: 'ok', presentationMeta: { badge: 'ok', bad: Number.NaN } } },
         pattern: /non-finite/,
+      },
+      {
+        label: 'presentationMeta non-enumerable own property rejected (not silently dropped)',
+        toolName: 'guarded_tool',
+        outcome: { action: 'handled', result: { output: 'ok', presentationMeta: nonEnumMeta } },
+        pattern: /non-enumerable/,
+      },
+      {
+        label: 'presentationMeta symbol own key rejected (not silently dropped)',
+        toolName: 'guarded_tool',
+        outcome: { action: 'handled', result: { output: 'ok', presentationMeta: symbolMeta } },
+        pattern: /symbol key/,
+      },
+      {
+        label: 'presentationMeta array extra own property rejected (not silently dropped)',
+        toolName: 'guarded_tool',
+        outcome: { action: 'handled', result: { output: 'ok', presentationMeta: { badge: 'ok', items: arrWithExtra } } },
+        pattern: /extra own property/,
       },
       {
         label: 'structuredOutput violating schema rejected',

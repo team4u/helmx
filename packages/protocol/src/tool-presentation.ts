@@ -36,9 +36,11 @@ export interface PresentationMetaBoundsOptions {
 /**
  * Validate, optionally redact, and deep-clone tool `presentationMeta` at the persistence boundary.
  *
- * Enforces all structural & resource invariants without silent truncation:
+ * Enforces all structural & resource invariants without silent truncation or field dropping:
  * - top-level value must be a plain JSON object (rejects null, primitives, arrays, class instances);
- * - rejects prototype keys (`__proto__`, `constructor`, `prototype`) at every nesting level;
+ * - inspects `Reflect.ownKeys` on every object and array: rejects symbol own keys, non-enumerable own
+ *   properties, extra own properties on arrays, non-plain array subclasses, and prototype keys
+ *   (`__proto__`, `constructor`, `prototype`, both before and after redaction);
  * - rejects circular references, sparse arrays, `undefined`, non-finite numbers, and non-JSON values;
  * - enforces container depth <= `maxDepth` (root object = depth 1; primitive leaves do not consume depth),
  *   total visited nodes <= `maxNodes`, and serialized UTF-8 JSON byte length <= `maxBytes`;
@@ -123,9 +125,28 @@ export function assertBoundedPresentationMeta(
     visiting.add(current)
     try {
       if (Array.isArray(current)) {
+        if (Object.getPrototypeOf(current) !== Array.prototype) {
+          throw new HelmxError(
+            code,
+            `${label} presentationMeta contains a non-plain array at ${path}`,
+            status,
+            { path },
+          )
+        }
+        for (const forbidden of FORBIDDEN_META_KEYS) {
+          if (Object.hasOwn(current, forbidden)) {
+            throw new HelmxError(
+              code,
+              `${label} presentationMeta contains forbidden prototype key "${forbidden}" at ${path}`,
+              status,
+              { path, key: forbidden },
+            )
+          }
+        }
         const out: unknown[] = []
         for (let i = 0; i < current.length; i += 1) {
-          if (!Object.hasOwn(current, i)) {
+          const desc = Object.getOwnPropertyDescriptor(current, i)
+          if (desc === undefined) {
             throw new HelmxError(
               code,
               `${label} presentationMeta contains a sparse array hole at ${path}[${i}]`,
@@ -133,7 +154,47 @@ export function assertBoundedPresentationMeta(
               { path: `${path}[${i}]` },
             )
           }
+          if (!desc.enumerable) {
+            throw new HelmxError(
+              code,
+              `${label} presentationMeta contains a non-enumerable array element at ${path}[${i}]`,
+              status,
+              { path: `${path}[${i}]` },
+            )
+          }
           out.push(visit(current[i], `${path}[${i}]`, depth + 1))
+        }
+        // Inspect all own keys (`Reflect.ownKeys`) to reject symbols, prototype keys, or extra named properties
+        // on arrays that index loops / JSON.stringify would silently drop.
+        for (const rawKey of Reflect.ownKeys(current)) {
+          if (rawKey === 'length') continue
+          if (typeof rawKey !== 'string') {
+            const safeSym = redact ? redact(String(rawKey)) : String(rawKey)
+            throw new HelmxError(
+              code,
+              `${label} presentationMeta contains a symbol key (${safeSym}) on array at ${path}`,
+              status,
+              { path },
+            )
+          }
+          if (FORBIDDEN_META_KEY_SET.has(rawKey)) {
+            throw new HelmxError(
+              code,
+              `${label} presentationMeta contains forbidden prototype key "${rawKey}" at ${path}`,
+              status,
+              { path, key: rawKey },
+            )
+          }
+          const idx = Number(rawKey)
+          if (!Number.isInteger(idx) || idx < 0 || idx >= current.length || String(idx) !== rawKey) {
+            const safeKey = redact ? redact(rawKey) : rawKey
+            throw new HelmxError(
+              code,
+              `${label} presentationMeta contains an extra own property "${safeKey}" on array at ${path}`,
+              status,
+              { path, key: safeKey },
+            )
+          }
         }
         return out
       }
@@ -157,7 +218,26 @@ export function assertBoundedPresentationMeta(
       }
       const out: Record<string, unknown> = {}
       const seenKeys = new Set<string>()
-      for (const [rawKey, item] of Object.entries(current)) {
+      for (const rawKey of Reflect.ownKeys(current)) {
+        if (typeof rawKey !== 'string') {
+          const safeSym = redact ? redact(String(rawKey)) : String(rawKey)
+          throw new HelmxError(
+            code,
+            `${label} presentationMeta contains a symbol key (${safeSym}) at ${path}`,
+            status,
+            { path },
+          )
+        }
+        const desc = Object.getOwnPropertyDescriptor(current, rawKey)
+        if (desc === undefined || !desc.enumerable) {
+          const safeKey = redact ? redact(rawKey) : rawKey
+          throw new HelmxError(
+            code,
+            `${label} presentationMeta contains a non-enumerable property "${safeKey}" at ${path}`,
+            status,
+            { path, key: safeKey },
+          )
+        }
         const key = redact ? redact(rawKey) : rawKey
         if (FORBIDDEN_META_KEY_SET.has(key)) {
           throw new HelmxError(
@@ -176,7 +256,7 @@ export function assertBoundedPresentationMeta(
           )
         }
         seenKeys.add(key)
-        out[key] = visit(item, `${path}.${key}`, depth + 1)
+        out[key] = visit(current[rawKey], `${path}.${key}`, depth + 1)
       }
       return out
     } finally {

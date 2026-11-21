@@ -280,6 +280,160 @@ test('assertBoundedPresentationMeta: rejects non-plain objects, prototype keys, 
   )
 })
 
+test('assertBoundedPresentationMeta: inspects Reflect.ownKeys and rejects symbol keys, non-enumerable properties, and array extra fields without silent dropping', { timeout: 60_000 }, () => {
+  const redact = (t: string) => t.replaceAll('SECRET', '[REDACTED]')
+
+  // 1. Symbol own keys on objects (enumerable, non-enumerable, well-known, nested, null-prototype).
+  const enumSym: Record<PropertyKey, unknown> = { ok: true, [Symbol('tag')]: 'v' }
+  const nonEnumSym: Record<PropertyKey, unknown> = { ok: true }
+  Object.defineProperty(nonEnumSym, Symbol('hidden'), { value: 'v', enumerable: false })
+  const wellKnownSym: Record<PropertyKey, unknown> = { ok: true, [Symbol.toStringTag]: 'Custom' }
+  const nullProtoSym = Object.create(null) as Record<PropertyKey, unknown>
+  nullProtoSym['ok'] = true
+  nullProtoSym[Symbol('nullProto')] = 1
+  const nestedSym = { nested: { [Symbol('deep')]: 'x' } }
+
+  for (const bad of [enumSym, nonEnumSym, wellKnownSym, nullProtoSym, nestedSym]) {
+    assert.throws(
+      () => assertBoundedPresentationMeta(bad),
+      (err: unknown) => err instanceof HelmxError && err.code === 'invalid_tool_result' && err.status === 500 && err.message.includes('symbol key'),
+    )
+  }
+
+  // Secret inside Symbol description is redacted in diagnostic message.
+  assert.throws(
+    () => assertBoundedPresentationMeta({ [Symbol('SECRET_TAG')]: 1 }, { redact }),
+    (err: unknown) =>
+      err instanceof HelmxError &&
+      err.code === 'invalid_tool_result' &&
+      !err.message.includes('SECRET') &&
+      err.message.includes('[REDACTED]'),
+  )
+
+  // 2. Non-enumerable own string keys on objects (root, nested, null-prototype, toJSON, non-enumerable getter not invoked).
+  const nonEnumRoot: Record<string, unknown> = { ok: true }
+  Object.defineProperty(nonEnumRoot, 'hidden', { value: 'SECRET', enumerable: false })
+
+  const nonEnumNestedInner: Record<string, unknown> = { a: 1 }
+  Object.defineProperty(nonEnumNestedInner, 'hidden', { value: 2, enumerable: false })
+
+  const nonEnumNullProto = Object.create(null) as Record<string, unknown>
+  nonEnumNullProto['ok'] = true
+  Object.defineProperty(nonEnumNullProto, 'hidden', { value: 3, enumerable: false })
+
+  const nonEnumToJson: Record<string, unknown> = { ok: true }
+  Object.defineProperty(nonEnumToJson, 'toJSON', { value: () => ({ forged: true }), enumerable: false })
+
+  let hiddenGetterCalled = false
+  const nonEnumGetter: Record<string, unknown> = { ok: true }
+  Object.defineProperty(nonEnumGetter, 'lazy', {
+    get() {
+      hiddenGetterCalled = true
+      return 'should-not-run'
+    },
+    enumerable: false,
+  })
+
+  for (const bad of [nonEnumRoot, { inner: nonEnumNestedInner }, nonEnumNullProto, nonEnumToJson, nonEnumGetter]) {
+    assert.throws(
+      () => assertBoundedPresentationMeta(bad),
+      (err: unknown) => err instanceof HelmxError && err.code === 'invalid_tool_result' && err.status === 500 && err.message.includes('non-enumerable'),
+    )
+  }
+  assert.equal(hiddenGetterCalled, false, 'non-enumerable getter must be rejected without invocation')
+
+  // Secret inside non-enumerable key name is redacted in diagnostic message and details.
+  const secretNonEnumKey: Record<string, unknown> = { ok: true }
+  Object.defineProperty(secretNonEnumKey, 'SECRET_FIELD', { value: 'SECRET_VALUE', enumerable: false })
+  assert.throws(
+    () => assertBoundedPresentationMeta(secretNonEnumKey, { redact }),
+    (err: unknown) =>
+      err instanceof HelmxError &&
+      err.code === 'invalid_tool_result' &&
+      !err.message.includes('SECRET') &&
+      !JSON.stringify(err.details ?? {}).includes('SECRET'),
+  )
+
+  // 3. Write-only enumerable setter evaluates to undefined and is rejected (never silently omitted).
+  const writeOnlySetter: Record<string, unknown> = { ok: true }
+  Object.defineProperty(writeOnlySetter, 'dropMe', { set() {}, enumerable: true })
+  assert.throws(
+    () => assertBoundedPresentationMeta(writeOnlySetter),
+    (err: unknown) => err instanceof HelmxError && err.code === 'invalid_tool_result' && err.message.includes('undefined'),
+  )
+
+  // 4. Arrays: extra string/symbol/non-enumerable properties, prototype keys, non-enumerable elements, and Array subclasses.
+  const arrExtra = [1, 2] as unknown[] & { extra?: string }
+  arrExtra.extra = 'SECRET'
+  const arrNonEnumExtra = [1, 2]
+  Object.defineProperty(arrNonEnumExtra, 'hidden', { value: 'SECRET', enumerable: false })
+  const arrLeadingZero = [1, 2]
+  Object.defineProperty(arrLeadingZero, '01', { value: 9, enumerable: true })
+  const arrEmptyExtra = [] as unknown[] & { tag?: string }
+  arrEmptyExtra.tag = 'x'
+  for (const badArr of [arrExtra, arrNonEnumExtra, arrLeadingZero, arrEmptyExtra]) {
+    assert.throws(
+      () => assertBoundedPresentationMeta({ list: badArr }, { redact }),
+      (err: unknown) =>
+        err instanceof HelmxError &&
+        err.code === 'invalid_tool_result' &&
+        err.status === 500 &&
+        err.message.includes('extra own property') &&
+        !err.message.includes('SECRET'),
+    )
+  }
+
+  const arrEnumSym = [1] as unknown[] & Record<symbol, unknown>
+  arrEnumSym[Symbol('arrTag')] = 'x'
+  const arrNonEnumSym = [1]
+  Object.defineProperty(arrNonEnumSym, Symbol('arrHidden'), { value: 'x', enumerable: false })
+  for (const badArr of [arrEnumSym, arrNonEnumSym]) {
+    assert.throws(
+      () => assertBoundedPresentationMeta({ list: badArr }),
+      (err: unknown) => err instanceof HelmxError && err.code === 'invalid_tool_result' && err.message.includes('symbol key'),
+    )
+  }
+
+  const arrProto = [1]
+  Object.defineProperty(arrProto, '__proto__', { value: { polluted: true }, enumerable: false })
+  const arrCtor = [1] as unknown[] & { constructor?: unknown }
+  arrCtor.constructor = { bad: true }
+  for (const badArr of [arrProto, arrCtor]) {
+    assert.throws(
+      () => assertBoundedPresentationMeta({ list: badArr }),
+      (err: unknown) => err instanceof HelmxError && err.code === 'invalid_tool_result' && err.message.includes('prototype key'),
+    )
+  }
+
+  let hiddenElemGetterCalled = false
+  const arrNonEnumElem = [1, 2]
+  Object.defineProperty(arrNonEnumElem, '0', {
+    get() {
+      hiddenElemGetterCalled = true
+      return 1
+    },
+    enumerable: false,
+  })
+  assert.throws(
+    () => assertBoundedPresentationMeta({ list: arrNonEnumElem }),
+    (err: unknown) => err instanceof HelmxError && err.code === 'invalid_tool_result' && err.message.includes('non-enumerable'),
+  )
+  assert.equal(hiddenElemGetterCalled, false, 'non-enumerable array element getter must be rejected without invocation')
+
+  class CustomArray extends Array {}
+  const subArr = new CustomArray(1, 2)
+  assert.throws(
+    () => assertBoundedPresentationMeta({ list: subArr }),
+    (err: unknown) => err instanceof HelmxError && err.code === 'invalid_tool_result' && err.message.includes('non-plain array'),
+  )
+
+  // Valid dense arrays & plain objects with normal string/numeric keys continue to pass cleanly.
+  assert.deepEqual(
+    assertBoundedPresentationMeta({ ok: true, '0': 'zero', list: [1, { nested: 'SECRET' }] }, { redact }),
+    { ok: true, '0': 'zero', list: [1, { nested: '[REDACTED]' }] },
+  )
+})
+
 test('kernel builtin tool presentationMeta schemas compile and enforce strict shapes', { timeout: 60_000 }, () => {
   for (const schema of Object.values(KERNEL_TOOL_PRESENTATION_META_SCHEMAS)) {
     assertSchemaCompilable(schema)
@@ -305,6 +459,15 @@ test('kernel builtin tool presentationMeta schemas compile and enforce strict sh
     { artifactId: 'a1', path: '/f.txt', nodeId: 'local', name: 'f.txt', size: 10, mimeType: 'text/plain' },
     { schema: ARTIFACT_REGISTER_META_SCHEMA },
   )
+  assert.throws(() =>
+    assertBoundedPresentationMeta(
+      { artifactId: 'a1', path: '/f.txt', nodeId: 'local', name: 'f.txt', size: 10, mimeType: 'text/plain', extra: true },
+      { schema: ARTIFACT_REGISTER_META_SCHEMA },
+    ),
+  )
   assertBoundedPresentationMeta({ id: 'a1', offset: 0, nextOffset: 4096, bytes: 4096 }, { schema: ARTIFACT_READ_META_SCHEMA })
   assertBoundedPresentationMeta({ id: 'a1', offset: 4096, bytes: 0 }, { schema: ARTIFACT_READ_META_SCHEMA })
+  assert.throws(() =>
+    assertBoundedPresentationMeta({ id: 'a1', offset: 0, nextOffset: 4096, bytes: 4096, chunk: 'duplicated-body' }, { schema: ARTIFACT_READ_META_SCHEMA }),
+  )
 })

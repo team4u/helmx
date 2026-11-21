@@ -123,7 +123,7 @@ const registerArtifactParameters = obj({
  */
 export function createRegisterArtifactTool(
   deps: HelmxToolDeps,
-): ToolRegistration<typeof registerArtifactParameters, never> {
+): ToolRegistration<typeof registerArtifactParameters> {
   return defineTool({
     name: 'register_artifact',
     description:
@@ -355,6 +355,14 @@ export function createRegisterArtifactTool(
           bytes,
           ...(args.mimeType !== undefined ? { mimeType: args.mimeType } : {}),
         })
+        const registered = {
+          artifactId: meta.id,
+          path: sourcePath,
+          nodeId,
+          name: meta.name,
+          size: meta.size,
+          mimeType: meta.mimeType,
+        }
         return {
           output: [
             {
@@ -364,14 +372,9 @@ export function createRegisterArtifactTool(
                 `register_artifact_ok: source ${sourcePath} (node ${nodeId}, ${meta.size} bytes, ${meta.mimeType})`,
             },
           ],
-          structuredOutput: {
-            artifactId: meta.id,
-            path: sourcePath,
-            nodeId,
-            name: meta.name,
-            size: meta.size,
-            mimeType: meta.mimeType,
-          } as JsonValue,
+          structuredOutput: registered as JsonValue,
+          // Persist lightweight registration metadata to the UI channel (`ARTIFACT_REGISTER_META_SCHEMA`).
+          details: { ...registered } as JsonValue,
         }
       } catch (error) {
         return {
@@ -405,7 +408,7 @@ const readArtifactParameters = obj({
 export function createReadArtifactTool(
   deps: HelmxToolDeps,
   isAuthorized: (conversationId: number, artifactConversationId: number) => boolean,
-): ToolRegistration<typeof readArtifactParameters, never> {
+): ToolRegistration<typeof readArtifactParameters> {
   return defineTool({
     name: 'read_artifact',
     // Pure read-only pagination: safe to replay after interruption.
@@ -477,6 +480,8 @@ export function createReadArtifactTool(
             { type: 'text', text: `[artifact ${id} bytes ${offset}-${offset}/${buffer.length}]\n(EOF reached)` },
           ],
           structuredOutput: { id, offset, chunk: '' } as JsonValue,
+          // Persist lightweight pagination metadata only (`ARTIFACT_READ_META_SCHEMA`); never duplicate chunk text.
+          details: { id, offset, bytes: 0 } as JsonValue,
         }
       }
       // UTF-8 boundary alignment: if `offset` or `end` lands inside a multi-byte sequence, advance `start` to the
@@ -492,16 +497,23 @@ export function createReadArtifactTool(
         safeEnd += 1
         while (safeEnd < buffer.length && (buffer[safeEnd]! & 0xc0) === 0x80) safeEnd += 1
       }
-      const chunk = buffer.subarray(start, safeEnd).toString('utf8')
+      const slice = buffer.subarray(start, safeEnd)
+      const chunk = slice.toString('utf8')
       const hasMore = safeEnd < buffer.length
       const header = `[artifact ${id} bytes ${offset}-${safeEnd}/${buffer.length}${start > offset ? ` (offset ${offset} landed mid-character; started at ${start})` : ''}]`
       const text = hasMore ? `${header}\n${chunk}\n[nextOffset=${safeEnd}]` : `${header}\n${chunk}`
       // Emit `nextOffset` only when more bytes remain so no undefined fields leak (JSON-safe).
       const structured: Record<string, unknown> = { id, offset, chunk }
-      if (hasMore) structured['nextOffset'] = safeEnd
+      // Persist lightweight pagination metadata only (`ARTIFACT_READ_META_SCHEMA`); omit `chunk` already in model output.
+      const details: Record<string, unknown> = { id, offset, bytes: slice.byteLength }
+      if (hasMore) {
+        structured['nextOffset'] = safeEnd
+        details['nextOffset'] = safeEnd
+      }
       return {
         output: [{ type: 'text', text }],
         structuredOutput: structured as JsonValue,
+        details: details as JsonValue,
       }
     },
   })

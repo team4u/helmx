@@ -15,7 +15,14 @@ import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 
 import { join } from 'node:path'
 import { after, before, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import { EDIT_TOOL_RESULT_SCHEMA, validateOrThrow, type EditToolResult } from '@helmx/protocol'
+import {
+  ARTIFACT_READ_META_SCHEMA,
+  ARTIFACT_REGISTER_META_SCHEMA,
+  EDIT_TOOL_RESULT_SCHEMA,
+  assertBoundedPresentationMeta,
+  validateOrThrow,
+  type EditToolResult,
+} from '@helmx/protocol'
 import { KernelRuntime } from '../src/runtime/index.js'
 import {
   ArtifactService,
@@ -596,6 +603,85 @@ describe('read_artifact real ArtifactService behavior', { timeout: 60_000 }, () 
     assert.ok(!('nextOffset' in structured), 'read completely when must not appear undefined  nextOffset field')
     assert.equal(JSON.stringify(structured).includes('undefined'), false)
   })
+
+  it('read_artifact & register_artifact emit schema-valid lightweight details across empty/UTF-8/EOF/error boundaries', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 'ra-meta-bounds')
+    mkdirSync(dir, { recursive: true })
+    const deps = await makeRealDeps(dir)
+    const registerTool = createRegisterArtifactTool(deps)
+    const readTool = createReadArtifactTool(deps, (conv, owner) => conv === owner)
+
+    // 1. register_artifact on normal file & 0-byte empty file + error paths.
+    writeFileSync(join(dir, 'sample.txt'), 'hello-world')
+    writeFileSync(join(dir, 'empty.txt'), '')
+    mkdirSync(join(dir, 'subdir'), { recursive: true })
+
+    const regOk = await registerTool.execute({ path: 'sample.txt' }, makeApi(dir, 1), BACKGROUND_CONTEXT)
+    assert.equal(!!regOk.isError, false)
+    const regDetails = assertBoundedPresentationMeta(regOk.details, { schema: ARTIFACT_REGISTER_META_SCHEMA })
+    assert.deepEqual(regDetails, regOk.structuredOutput)
+    assert.notEqual(regOk.details, regOk.structuredOutput, 'details should not alias structuredOutput reference')
+    assert.equal(regDetails['size'], 11)
+    assert.equal(regDetails['nodeId'], 'local')
+
+    const regEmpty = await registerTool.execute({ path: 'empty.txt' }, makeApi(dir, 1), BACKGROUND_CONTEXT)
+    assert.equal(!!regEmpty.isError, false)
+    const emptyRegDetails = assertBoundedPresentationMeta(regEmpty.details, { schema: ARTIFACT_REGISTER_META_SCHEMA })
+    assert.equal(emptyRegDetails['size'], 0)
+    const emptyArtId = String(emptyRegDetails['artifactId'])
+
+    const regDirErr = await registerTool.execute({ path: 'subdir' }, makeApi(dir, 1), BACKGROUND_CONTEXT)
+    assert.equal(regDirErr.isError, true)
+    assert.equal(regDirErr.details, undefined)
+    const regMissingErr = await registerTool.execute({ path: 'missing.txt' }, makeApi(dir, 1), BACKGROUND_CONTEXT)
+    assert.equal(regMissingErr.isError, true)
+    assert.equal(regMissingErr.details, undefined)
+
+    // 2. read_artifact on 0-byte artifact (EOF at offset 0).
+    const readEmpty = await readTool.execute({ id: emptyArtId, offset: 0 }, makeApi(dir, 1), BACKGROUND_CONTEXT)
+    assert.equal(!!readEmpty.isError, false)
+    const emptyReadDetails = assertBoundedPresentationMeta(readEmpty.details, { schema: ARTIFACT_READ_META_SCHEMA })
+    assert.deepEqual(emptyReadDetails, { id: emptyArtId, offset: 0, bytes: 0 })
+    assert.equal('chunk' in emptyReadDetails, false)
+    assert.equal('nextOffset' in emptyReadDetails, false)
+
+    // 3. read_artifact mid-UTF-8 character offset: '中文a' (7 UTF-8 bytes: 中=0..2, 文=3..5, a=6).
+    const utf8Meta = await deps.artifacts.writeUploaded!(1, {
+      name: 'utf8.txt',
+      bytes: Buffer.from('中文a', 'utf8'),
+      mimeType: 'text/plain',
+    })
+    const midRead = await readTool.execute({ id: utf8Meta.id, offset: 1, limit: 4096 }, makeApi(dir, 1), BACKGROUND_CONTEXT)
+    assert.equal(!!midRead.isError, false)
+    assert.equal((midRead.structuredOutput as { chunk: string }).chunk, '文a')
+    const midDetails = assertBoundedPresentationMeta(midRead.details, { schema: ARTIFACT_READ_META_SCHEMA })
+    assert.deepEqual(midDetails, { id: utf8Meta.id, offset: 1, bytes: 4 })
+    assert.equal('chunk' in midDetails, false)
+
+    // Mid-UTF-8 offset inside final 3-byte char ('中文' = 6 bytes, offset=4 -> start aligns to 6 -> bytes=0).
+    const utf8Tail = await deps.artifacts.writeUploaded!(1, {
+      name: 'utf8-tail.txt',
+      bytes: Buffer.from('中文', 'utf8'),
+      mimeType: 'text/plain',
+    })
+    const tailMidRead = await readTool.execute({ id: utf8Tail.id, offset: 4, limit: 4096 }, makeApi(dir, 1), BACKGROUND_CONTEXT)
+    assert.equal(!!tailMidRead.isError, false)
+    assert.equal((tailMidRead.structuredOutput as { chunk: string }).chunk, '')
+    const tailMidDetails = assertBoundedPresentationMeta(tailMidRead.details, { schema: ARTIFACT_READ_META_SCHEMA })
+    assert.deepEqual(tailMidDetails, { id: utf8Tail.id, offset: 4, bytes: 0 })
+    assert.equal('chunk' in tailMidDetails, false)
+
+    // 4. Error paths omit details completely.
+    const errMissing = await readTool.execute({ id: 'missing-id' }, makeApi(dir, 1), BACKGROUND_CONTEXT)
+    assert.equal(errMissing.isError, true)
+    assert.equal(errMissing.details, undefined)
+    const errForbidden = await readTool.execute({ id: utf8Meta.id }, makeApi(dir, 2), BACKGROUND_CONTEXT)
+    assert.equal(errForbidden.isError, true)
+    assert.equal(errForbidden.details, undefined)
+    const errOob = await readTool.execute({ id: utf8Meta.id, offset: 999 }, makeApi(dir, 1), BACKGROUND_CONTEXT)
+    assert.equal(errOob.isError, true)
+    assert.equal(errOob.details, undefined)
+  })
 })
 
 describe('bash tool (SDK execute direct tune, real service dependency)', { timeout: 60_000 }, () => {
@@ -713,6 +799,232 @@ describe('SDK real link (faux model drive tool invoke)', { timeout: 60_000 }, ()
       assert.equal((editMessage!['details'] as EditToolResult).diff.addedLines, 1)
     } finally {
       await kernel.close()
+    }
+  })
+
+  it('register_artifact & read_artifact persist lightweight schema-valid details across restart without duplicating chunk text, and HookBridge rejects injected chunk/hidden keys', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 'sdk-artifact-meta')
+    mkdirSync(dir, { recursive: true })
+    const secret = 'TOP_SECRET_ART_TOKEN'
+    const fileName = `report-${secret}.txt`
+    const fileBody = `BODY_CHUNK_SENTINEL_${secret}\n`.repeat(220) // > 5 KiB, spans 2 pages at 4096B
+    writeFileSync(join(dir, fileName), fileBody)
+
+    const kernel = await openRuntime(dir)
+    const disposeSecret = kernel.stash.addRedaction(secret)
+    let artifactId = ''
+    let artifactSize = 0
+    try {
+      // Turn 1: register_artifact via real harness.
+      kernel.__faux.setResponses([
+        fauxAssistantMessage(
+          [fauxToolCall('register_artifact', { path: fileName }, { id: 'tc-art-reg' })],
+          { stopReason: 'toolUse' },
+        ),
+        fauxAssistantMessage('registered'),
+      ])
+      await kernel.submitInput(1, 'register report artifact')
+      await kernel.waitForIdle(1)
+
+      const artifacts = await kernel.services.artifacts.list(1)
+      assert.equal(artifacts.length, 1)
+      artifactId = artifacts[0]!.id
+      artifactSize = artifacts[0]!.size
+      assert.ok(artifactSize > 4096, `expected multi-page artifact (>4096 bytes), got ${artifactSize}`)
+
+      // Turn 2: read_artifact intermediate page, final page, EOF page, and missing-artifact error.
+      kernel.__faux.setResponses([
+        fauxAssistantMessage(
+          [
+            fauxToolCall('read_artifact', { id: artifactId, offset: 0, limit: 4096 }, { id: 'tc-art-read-p1' }),
+            fauxToolCall('read_artifact', { id: artifactId, offset: 4096, limit: 4096 }, { id: 'tc-art-read-last' }),
+            fauxToolCall('read_artifact', { id: artifactId, offset: artifactSize }, { id: 'tc-art-read-eof' }),
+            fauxToolCall('read_artifact', { id: 'no-such-artifact-id' }, { id: 'tc-art-read-err' }),
+          ],
+          { stopReason: 'toolUse' },
+        ),
+        fauxAssistantMessage('read complete'),
+      ])
+      await kernel.submitInput(1, 'read report artifact pages')
+      await kernel.waitForIdle(1)
+
+      // Turn 3: boundary guard — plugin tool_result hooks attempting to smuggle `chunk` into read_artifact
+      // presentationMeta or attach non-enumerable/symbol keys must fail explicitly without persisting details.
+      let tamperMode: 'none' | 'inject_chunk' | 'hidden_key' | 'symbol_key' = 'none'
+      await kernel.plugins.register({
+        id: 'test:artifact-meta-guard',
+        definePlugin(ctx) {
+          ctx.hook.onToolResult((payload) => {
+            if (tamperMode === 'inject_chunk' && payload.toolName === 'read_artifact') {
+              return {
+                action: 'transform',
+                value: {
+                  ...payload,
+                  result: {
+                    ...payload.result,
+                    presentationMeta: {
+                      ...(payload.result.presentationMeta ?? {}),
+                      chunk: 'smuggled-body-text',
+                    },
+                  },
+                },
+              }
+            }
+            if (tamperMode === 'hidden_key' && payload.toolName === 'register_artifact') {
+              const badMeta: Record<string, unknown> = { ...(payload.result.presentationMeta ?? {}) }
+              Object.defineProperty(badMeta, 'hiddenSecret', { value: secret, enumerable: false })
+              return {
+                action: 'transform',
+                value: {
+                  ...payload,
+                  result: { ...payload.result, presentationMeta: badMeta },
+                },
+              }
+            }
+            if (tamperMode === 'symbol_key' && payload.toolName === 'register_artifact') {
+              const badMeta: Record<PropertyKey, unknown> = {
+                ...(payload.result.presentationMeta ?? {}),
+                [Symbol('hiddenSym')]: 'x',
+              }
+              return {
+                action: 'transform',
+                value: {
+                  ...payload,
+                  result: { ...payload.result, presentationMeta: badMeta as Record<string, unknown> },
+                },
+              }
+            }
+            return { action: 'continue' }
+          })
+        },
+      })
+
+      tamperMode = 'inject_chunk'
+      kernel.__faux.setResponses([
+        fauxAssistantMessage(
+          [fauxToolCall('read_artifact', { id: artifactId, offset: 0, limit: 64 }, { id: 'tc-art-bad-chunk' })],
+          { stopReason: 'toolUse' },
+        ),
+        fauxAssistantMessage('bad chunk handled'),
+      ])
+      await kernel.submitInput(1, 'tamper read_artifact chunk')
+      await kernel.waitForIdle(1)
+
+      tamperMode = 'hidden_key'
+      kernel.__faux.setResponses([
+        fauxAssistantMessage(
+          [fauxToolCall('register_artifact', { path: fileName }, { id: 'tc-art-bad-hidden' })],
+          { stopReason: 'toolUse' },
+        ),
+        fauxAssistantMessage('bad hidden handled'),
+      ])
+      await kernel.submitInput(1, 'tamper register_artifact hidden key')
+      await kernel.waitForIdle(1)
+
+      tamperMode = 'symbol_key'
+      kernel.__faux.setResponses([
+        fauxAssistantMessage(
+          [fauxToolCall('register_artifact', { path: fileName }, { id: 'tc-art-bad-sym' })],
+          { stopReason: 'toolUse' },
+        ),
+        fauxAssistantMessage('bad sym handled'),
+      ])
+      await kernel.submitInput(1, 'tamper register_artifact symbol key')
+      await kernel.waitForIdle(1)
+
+      const assertPersisted = async (rt: Awaited<ReturnType<typeof openRuntime>>) => {
+        const detail = await rt.getConversationDetail(1, { limit: 100 })
+        const byCallId = new Map<
+          string,
+          { isError?: boolean; details?: unknown; content?: Array<{ type?: string; text?: string }> }
+        >()
+        for (const entry of detail.entries) {
+          if (entry.kind !== 'pi.tool-result') continue
+          const msg = (entry.model as Array<Record<string, unknown>> | undefined)?.[0]
+          if (typeof msg?.['toolCallId'] === 'string') {
+            byCallId.set(msg['toolCallId'], msg as { isError?: boolean; details?: unknown; content?: Array<{ type?: string; text?: string }> })
+          }
+        }
+
+        // 1. register_artifact persisted details: matches schema, secret redacted, no structuredOutput on entry.
+        const reg = byCallId.get('tc-art-reg')!
+        assert.equal(reg.isError, false)
+        assert.equal('structuredOutput' in reg, false)
+        const regDetails = assertBoundedPresentationMeta(reg.details, { schema: ARTIFACT_REGISTER_META_SCHEMA })
+        assert.equal(regDetails['artifactId'], artifactId)
+        assert.equal(regDetails['nodeId'], 'local')
+        assert.equal(regDetails['size'], artifactSize)
+        assert.equal(regDetails['mimeType'], 'text/plain')
+        assert.ok(String(regDetails['name']).includes('[REDACTED]'))
+        assert.ok(!JSON.stringify(regDetails).includes(secret))
+
+        // 2. read_artifact intermediate page: matches schema, carries nextOffset & bytes, never duplicates chunk body.
+        const p1 = byCallId.get('tc-art-read-p1')!
+        assert.equal(p1.isError, false)
+        assert.equal('structuredOutput' in p1, false)
+        const p1Details = assertBoundedPresentationMeta(p1.details, { schema: ARTIFACT_READ_META_SCHEMA })
+        assert.equal(p1Details['id'], artifactId)
+        assert.equal(p1Details['offset'], 0)
+        assert.equal(p1Details['nextOffset'], 4096)
+        assert.equal(p1Details['bytes'], 4096)
+        assert.equal('chunk' in p1Details, false)
+        assert.ok(!JSON.stringify(p1Details).includes('BODY_CHUNK_SENTINEL'))
+
+        // 3. read_artifact final page: matches schema, omits nextOffset, never duplicates chunk body.
+        const last = byCallId.get('tc-art-read-last')!
+        assert.equal(last.isError, false)
+        assert.equal('structuredOutput' in last, false)
+        const lastDetails = assertBoundedPresentationMeta(last.details, { schema: ARTIFACT_READ_META_SCHEMA })
+        assert.equal(lastDetails['id'], artifactId)
+        assert.equal(lastDetails['offset'], 4096)
+        assert.equal(lastDetails['bytes'], artifactSize - 4096)
+        assert.equal('nextOffset' in lastDetails, false)
+        assert.equal('chunk' in lastDetails, false)
+        assert.ok(!JSON.stringify(lastDetails).includes('BODY_CHUNK_SENTINEL'))
+
+        // 4. read_artifact EOF page: bytes = 0, no nextOffset, no chunk.
+        const eof = byCallId.get('tc-art-read-eof')!
+        assert.equal(eof.isError, false)
+        const eofDetails = assertBoundedPresentationMeta(eof.details, { schema: ARTIFACT_READ_META_SCHEMA })
+        assert.deepEqual(eofDetails, { id: artifactId, offset: artifactSize, bytes: 0 })
+
+        // 5. Error call & tampered hook calls: explicit isError and NO persisted details.
+        for (const errId of ['tc-art-read-err', 'tc-art-bad-chunk', 'tc-art-bad-hidden', 'tc-art-bad-sym']) {
+          const rec = byCallId.get(errId)!
+          assert.equal(rec.isError, true, `${errId} should be persisted as error`)
+          assert.equal(rec.details, undefined, `${errId} must not persist invalid details`)
+        }
+        assert.match(byCallId.get('tc-art-bad-chunk')!.content?.[0]?.text ?? '', /tool_result_failed/)
+        assert.match(byCallId.get('tc-art-bad-hidden')!.content?.[0]?.text ?? '', /non-enumerable/)
+        assert.match(byCallId.get('tc-art-bad-sym')!.content?.[0]?.text ?? '', /symbol key/)
+      }
+
+      await assertPersisted(kernel)
+    } finally {
+      disposeSecret()
+      await kernel.close()
+    }
+
+    // Reopen fresh KernelRuntime on the same dataDir to verify persisted details survive SQLite restart.
+    const reopened = await openRuntime(dir)
+    try {
+      const detail = await reopened.getConversationDetail(1, { limit: 100 })
+      const byCallId = new Map<string, { isError?: boolean; details?: unknown }>()
+      for (const entry of detail.entries) {
+        if (entry.kind !== 'pi.tool-result') continue
+        const msg = (entry.model as Array<Record<string, unknown>> | undefined)?.[0]
+        if (typeof msg?.['toolCallId'] === 'string') {
+          byCallId.set(msg['toolCallId'], msg as { isError?: boolean; details?: unknown })
+        }
+      }
+      const regAfter = assertBoundedPresentationMeta(byCallId.get('tc-art-reg')!.details, { schema: ARTIFACT_REGISTER_META_SCHEMA })
+      assert.equal(regAfter['artifactId'], artifactId)
+      const p1After = assertBoundedPresentationMeta(byCallId.get('tc-art-read-p1')!.details, { schema: ARTIFACT_READ_META_SCHEMA })
+      assert.deepEqual(p1After, { id: artifactId, offset: 0, nextOffset: 4096, bytes: 4096 })
+      const eofAfter = assertBoundedPresentationMeta(byCallId.get('tc-art-read-eof')!.details, { schema: ARTIFACT_READ_META_SCHEMA })
+      assert.deepEqual(eofAfter, { id: artifactId, offset: artifactSize, bytes: 0 })
+    } finally {
+      await reopened.close()
     }
   })
 
