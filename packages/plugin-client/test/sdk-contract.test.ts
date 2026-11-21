@@ -236,28 +236,30 @@ test('useHostModels: throws explicitly without the handles context; empty handle
     /useHostModels must be called inside <PluginClientHostHandlesContext\.Provider>/,
     'useHostModels outside the handles context throws explicitly (never silently degraded)',
   )
-  let seen: ReadonlyArray<SDK.HostModelEntry> | undefined = 'unset' as unknown as ReadonlyArray<SDK.HostModelEntry>
+  const seen: { slice?: SDK.HostModelsSlice } = {}
+  const readSlice = (): SDK.HostModelsSlice | undefined => seen.slice
   function HandlesProbe(): React.ReactNode {
-    seen = SDK.useHostModels()
+    seen.slice = SDK.useHostModels()
     return null
   }
   const { root } = mount(
     e(SDK.PluginClientHostContext.Provider, { value: makePort(log) },
       e(SDK.PluginClientHostHandlesContext.Provider, { value: {} }, e(HandlesProbe))),
   )
-  assert.equal(seen, undefined, 'a host that injects no model capability reports unknown (undefined), never an empty catalog')
+  assert.ok(readSlice() === undefined, 'a host that injects no model capability reports unknown (undefined), never an empty catalog')
   act(() => { void root.unmount() })
 })
 
 test('useHostModels: isolated from main port value churn; catalog revisions re-render exactly once; three-state semantics honest', { timeout: 60_000 }, () => {
   const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
-  const loading: ReadonlyArray<SDK.HostModelEntry> = [
+  const entries: ReadonlyArray<SDK.HostModelEntry> = [
     { id: 'openai/gpt-4o', provider: 'openai', modelId: 'gpt-4o', available: true, thinkingLevels: ['off', 'high'] },
     { id: 'anthropic/claude', provider: 'anthropic', modelId: 'claude', available: false, disabled: true, label: 'Claude', thinkingLevels: ['off'] },
   ]
-  const loaded: ReadonlyArray<SDK.HostModelEntry> = [...loading]
-  const empty: ReadonlyArray<SDK.HostModelEntry> = []
-  let current: ReadonlyArray<SDK.HostModelEntry> | undefined
+  const loading: SDK.HostModelsSlice = { models: entries, defaultModel: 'openai/gpt-4o' }
+  const loaded: SDK.HostModelsSlice = { models: [...entries], defaultModel: 'openai/gpt-4o', defaultThinkingLevel: 'off' }
+  const empty: SDK.HostModelsSlice = { models: [] }
+  let current: SDK.HostModelsSlice | undefined
   const listeners = new Set<() => void>()
   const handles: SDK.PluginClientHostHandles = {
     getModels: () => current,
@@ -267,10 +269,11 @@ test('useHostModels: isolated from main port value churn; catalog revisions re-r
     },
   }
   let renders = 0
-  let lastValue: ReadonlyArray<SDK.HostModelEntry> | undefined | 'unset' = 'unset'
+  const seen: { slice?: SDK.HostModelsSlice } = {}
+  const readSlice = (): SDK.HostModelsSlice | undefined => seen.slice
   const Probe = React.memo(function ModelsProbe(): React.ReactNode {
     renders += 1
-    lastValue = SDK.useHostModels()
+    seen.slice = SDK.useHostModels()
     return null
   })
   const { root } = mount(
@@ -278,7 +281,7 @@ test('useHostModels: isolated from main port value churn; catalog revisions re-r
       e(SDK.PluginClientHostHandlesContext.Provider, { value: handles }, e(Probe))),
   )
   assert.equal(renders, 1, 'initial mount renders once')
-  assert.equal(lastValue, undefined, 'pre-first-load snapshot is unknown (undefined), never an empty array')
+  assert.ok(readSlice() === undefined, 'pre-first-load snapshot is unknown (undefined), never an empty catalog')
 
   // P0.2: unrelated main port value revisions (streaming frames rebuild the port object) must not re-render the probe.
   for (let i = 0; i < 3; i += 1) {
@@ -290,24 +293,102 @@ test('useHostModels: isolated from main port value churn; catalog revisions re-r
     })
   }
   assert.equal(renders, 1, 'main port value churn never re-renders useHostModels consumers (isolation contract)')
-  assert.equal(lastValue, undefined, 'value stays unknown across unrelated port revisions')
+  assert.ok(readSlice() === undefined, 'value stays unknown across unrelated port revisions')
 
   // Same-reference notification: useSyncExternalStore re-checks the snapshot and skips re-rendering.
   current = loading
   assert.ok(handles.getModels?.() === loading && handles.getModels?.() === loading, 'repeated getModels calls return the same reference for the same underlying state')
   act(() => { for (const listener of [...listeners]) listener() })
   assert.equal(renders, 2, 'a catalog revision with a new reference re-renders exactly once')
-  assert.ok(lastValue === loading, 'the revision forwards the new array reference verbatim')
+  assert.ok(readSlice() === loading, 'the revision forwards the new slice reference verbatim')
+  assert.deepEqual(readSlice()?.defaultModel, 'openai/gpt-4o', 'the default chain rides the slice (faithful GET /api/models view)')
   act(() => { for (const listener of [...listeners]) listener() })
   assert.equal(renders, 2, 'a repeated notification without a reference change does not re-render')
 
   current = loaded
   act(() => { for (const listener of [...listeners]) listener() })
   assert.equal(renders, 3)
-  assert.ok(lastValue === loaded, 'a new revision reference propagates')
+  assert.ok(readSlice() === loaded, 'a new revision reference propagates')
   current = empty
   act(() => { for (const listener of [...listeners]) listener() })
-  assert.ok(lastValue === empty, 'a loaded-but-empty catalog is [] — strictly distinct from the unknown state')
+  const emptyRead = readSlice()
+  assert.ok(emptyRead === empty && emptyRead.models.length === 0, 'a loaded-but-empty catalog is a slice with models: [] — strictly distinct from the unknown state')
+  act(() => { void root.unmount() })
+})
+
+test('useScreenLocation: isolated from main port value churn; structured pane facts are truth (never loading state); absent capability reports undefined', { timeout: 60_000 }, () => {
+  const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
+  const screenOnly: SDK.ScreenLocationSnapshot = { screen: { pluginId: 'builtin:apps', screenId: 'catalog', params: { tab: 'all' } } }
+  const withSplit: SDK.ScreenLocationSnapshot = {
+    screen: { pluginId: 'builtin:apps', screenId: 'catalog', params: {} },
+    split: { pluginId: 'builtin:swarm', screenId: 'board', params: { grp: 'g1' } },
+  }
+  let current: SDK.ScreenLocationSnapshot | undefined
+  const listeners = new Set<() => void>()
+  const handles: SDK.PluginClientHostHandles = {
+    getScreenLocation: () => current,
+    subscribeScreenLocation: (listener) => {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
+  }
+  function LocationProbe(): React.ReactNode {
+    void SDK.useScreenLocation()
+    return null
+  }
+  assert.throws(
+    () => renderToString(e(SDK.PluginClientHostContext.Provider, { value: makePort(log) }, e(LocationProbe))),
+    /useScreenLocation must be called inside <PluginClientHostHandlesContext\.Provider>/,
+    'useScreenLocation outside the handles context throws explicitly',
+  )
+  const absentSeen: { loc?: SDK.ScreenLocationSnapshot } = {}
+  const readAbsentLoc = (): SDK.ScreenLocationSnapshot | undefined => absentSeen.loc
+  function AbsentProbe(): React.ReactNode {
+    absentSeen.loc = SDK.useScreenLocation()
+    return null
+  }
+  const absent = mount(
+    e(SDK.PluginClientHostContext.Provider, { value: makePort(log) },
+      e(SDK.PluginClientHostHandlesContext.Provider, { value: {} }, e(AbsentProbe))),
+  )
+  assert.ok(readAbsentLoc() === undefined, 'a host that has not wired the location capability reports undefined (additive adoption), never a fabricated location')
+  act(() => { void absent.root.unmount() })
+
+  let renders = 0
+  const seen: { loc?: SDK.ScreenLocationSnapshot } = {}
+  const readLoc = (): SDK.ScreenLocationSnapshot | undefined => seen.loc
+  const Probe = React.memo(function LocationRevisionProbe(): React.ReactNode {
+    renders += 1
+    seen.loc = SDK.useScreenLocation()
+    return null
+  })
+  const { root } = mount(
+    e(SDK.PluginClientHostContext.Provider, { value: makePort(log) },
+      e(SDK.PluginClientHostHandlesContext.Provider, { value: handles }, e(Probe))),
+  )
+  assert.equal(renders, 1)
+  assert.ok(readLoc() === undefined, 'pre-wire snapshot is unknown')
+  current = screenOnly
+  act(() => { for (const listener of [...listeners]) listener() })
+  assert.ok(readLoc() === screenOnly, 'the location snapshot forwards verbatim')
+  const onlyRead = readLoc()
+  assert.ok(onlyRead?.split === undefined, 'no split pane open is an honest undefined member, not a fabricated zero-param pane')
+  assert.deepEqual(onlyRead?.screen?.params, { tab: 'all' }, 'primary pane params carry the sp.* truth')
+
+  current = withSplit
+  act(() => { for (const listener of [...listeners]) listener() })
+  const splitRead = readLoc()
+  assert.ok(splitRead === withSplit && splitRead.split?.screenId === 'board', 'split pane facts propagate when a split opens')
+
+  const churnPort = makePort(log, { conversations: [{ id: 99, title: 'c99', tags: [], profileId: 'p' } as unknown as SDK.PluginClientHostPort['conversations'][number]] })
+  act(() => {
+    root.render(
+      e(SDK.PluginClientHostContext.Provider, { value: churnPort },
+        e(SDK.PluginClientHostHandlesContext.Provider, { value: handles }, e(Probe))),
+    )
+  })
+  assert.equal(renders, 3, 'main port value churn never re-renders useScreenLocation consumers (isolation contract)')
+  assert.ok(readLoc() === withSplit, 'the pre-churn snapshot stays intact (no notification, no re-read)')
   act(() => { void root.unmount() })
 })
 

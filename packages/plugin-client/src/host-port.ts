@@ -21,9 +21,11 @@ import type {
   ConversationLive,
   ConversationSummary,
   HelmxLocale,
+  HostModelsSlice,
   LocaleTranslator,
   PluginSlotContributionSpec,
   PluginSummary,
+  ScreenLocationSnapshot,
   ScreenSpec,
   WhenBusy,
 } from '@helmx/protocol/browser'
@@ -91,39 +93,15 @@ export interface CodeBlockViewProps {
 }
 
 /**
- * Normalized per-model view of the host model catalog: the exact shape the
- * host derives from `GET /api/models` (single implementation of the
- * normalization stays in the host; the SDK forwards the same reference, never
- * a copy or a mock). Contract single source of this shape — web may alias its
- * legacy descriptor to it, parallel field sets are forbidden.
- */
-export interface HostModelEntry {
-  /** Full `'provider/modelId'` reference (the value stored in configs / overrides). */
-  id: string
-  provider: string
-  modelId: string
-  /** false = listed in the catalog but currently unusable (render dimmed), not "removed". */
-  available: boolean
-  /** Host-side model disable-filter annotation (independent from `available`). */
-  disabled?: boolean
-  /** Display label (defaults to modelId). */
-  label?: string
-  /** Capability table of thinking levels in display order; carries no profile-effective values. */
-  thinkingLevels: readonly string[]
-  /** Real known model context window (tokens); omitted when unknown. */
-  contextWindow?: number
-}
-
-/**
  * The complete capability port injected by the host. Data slices are reactive
  * snapshots (reference changes drive re-renders, at the same cadence as the
  * host store); every method is a real host implementation, no mocks.
  *
  * Streaming-churning slices (conversations / details / lives) live here by
- * legacy design; new low-frequency catalog capabilities must instead expose
- * stable handle members (see Model catalog above) and be read reactively
- * through PluginClientHostHandlesContext, so unrelated host port revisions
- * never re-render their consumers.
+ * legacy design; new low-frequency capability facts (model catalog, navigation
+ * location) must instead expose stable handle members (see the sections below)
+ * and be read reactively through PluginClientHostHandlesContext, so unrelated
+ * host port revisions never re-render their consumers.
  */
 export interface PluginClientHostPort {
   /** Passed authentication (decides whether public docs may issue the first GET). */
@@ -166,15 +144,16 @@ export interface PluginClientHostPort {
 
   // ---- Model catalog (optional capability; implementers must keep all three members reference-stable across renders) ----
   /**
-   * One-shot read of the normalized host model catalog. `undefined` = the
-   * capability is not injected OR the catalog has not finished its first load
-   * (the host must gate on its loaded flag — a pre-load empty array must never
-   * leak out as "no models" truth); `[]` = loaded and genuinely empty. For
+   * One-shot read of the host model catalog slice (normalized entries plus
+   * the global default chain). `undefined` = the capability is not injected
+   * OR the catalog has not finished its first load (the host must gate on its
+   * loaded flag — a pre-load empty array must never leak out as "no models"
+   * truth); a slice with `models: []` = loaded and genuinely empty. For
    * reactive reads use the useHostModels shared hook (stable-handle context,
    * isolated from host port value churn); these port members also serve
    * imperative calls inside event callbacks.
    */
-  getModels?(): ReadonlyArray<HostModelEntry> | undefined
+  getModels?(): HostModelsSlice | undefined
   /** Subscribe to catalog revisions (listener fired after getModels() would return a new reference). */
   subscribeModels?(listener: () => void): () => void
   /**
@@ -183,6 +162,18 @@ export interface PluginClientHostPort {
    * refresh; per-provider refresh errors surface verbatim in `errors`.
    */
   refreshModels?(): Promise<{ errors?: Record<string, string> }>
+
+  // ---- Navigation location (optional capability; same stable-handle isolation as the model catalog) ----
+  /**
+   * One-shot read of the host navigation location (URL hash single source of
+   * truth; primary/split pane as structured screen facts — undefined members
+   * are truth, not loading state). `undefined` = the host has not wired the
+   * capability. Reactive reads go through the useScreenLocation shared hook;
+   * writing params stays with ScreenProps.setParams of the owning screen.
+   */
+  getScreenLocation?(): ScreenLocationSnapshot | undefined
+  /** Subscribe to location revisions (listener fired after getScreenLocation() would return a new reference). */
+  subscribeScreenLocation?(listener: () => void): () => void
 
   // ---- Plugin docs ----
   /** key: `${pluginId}/${docName}`. */
@@ -249,9 +240,14 @@ export function usePluginClientHost(): PluginClientHostPort {
  * with the main interface — no second signature to maintain). The host mounts
  * it as a second, churn-free context whose value is built once per store
  * (never rebuilt on streaming frames), so handle-driven hooks such as
- * useHostModels stay isolated from unrelated host port value revisions.
+ * useHostModels / useScreenLocation stay isolated from unrelated host port
+ * value revisions. Hosts adopt the members additively; a missing member
+ * simply reads as an unknown capability, never as fabricated data.
  */
-export type PluginClientHostHandles = Pick<PluginClientHostPort, 'getModels' | 'subscribeModels' | 'refreshModels'>
+export type PluginClientHostHandles = Pick<
+  PluginClientHostPort,
+  'getModels' | 'subscribeModels' | 'refreshModels' | 'getScreenLocation' | 'subscribeScreenLocation'
+>
 
 /** Stable host capability handles context (null outside the host Provider, same honesty rule as the main port). */
 export const PluginClientHostHandlesContext = createContext<PluginClientHostHandles | null>(null)
