@@ -1,32 +1,51 @@
 /**
- * Unit tests for scripts/lib/prune-dist.mjs and scripts/lib/test-sharding.mjs.
+ * Unit tests for scripts/lib/prune-dist.mjs, scripts/lib/test-sharding.mjs,
+ * scripts/lib/test-timings.mjs, scripts/lib/test-concurrency.mjs, and scripts/lib/shard-worker.mjs.
  *
  * Covers incremental pruneDist (preserving valid artifacts, trimming stale files and
  * empty directories, mirroring/trimming plugin client assets), full cleanup on --force /
- * HELMX_CLEAN_DIST=1 with tsbuildinfo removal, AST purity checks (type-import exemption,
- * parenthesized globalThis, process.env[] writes, aliased fs imports, cycle-safe recursive
- * helper tracing), extraArgs fallback, and LPT shard balancing.
+ * HELMX_CLEAN_DIST=1 with tsbuildinfo removal, 4-pool AST classification (pure / dom-shared /
+ * node-shared / isolated, pragma opt-out, scoped unhandledRejection, process.kill(pid, 0) probe,
+ * regex .exec exemption), mtime/size + helper-fingerprint AST disk cache, auto-recorded timing
+ * EMA store and unified-ms LPT weighting, concurrent 4-pool scheduling with zero serial pure
+ * barrier, and persistent shard-worker per-file hook isolation.
  *
  * Runner: node:test; every test sets an explicit timeout: 60_000.
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import * as ts from 'typescript'
 import { pruneDist, resolveTsBuildInfoFile, runCleanDistCli } from '../../../scripts/lib/prune-dist.mjs'
 import {
   analyzeTestFilePurity,
   analyzeTestSourcePurity,
+  classifyTestFilePool,
+  loadPurityCache,
   partitionFilesForSharding,
+  planFourPoolSchedule,
+  savePurityCache,
   shouldDisableSharding,
 } from '../../../scripts/lib/test-sharding.mjs'
+import {
+  createTestWeightFn,
+  emptyTestTimingsStore,
+  estimateFallbackDurationMs,
+  loadTestTimings,
+  mergeTestTimings,
+  saveTestTimings,
+} from '../../../scripts/lib/test-timings.mjs'
 import {
   explicitTestConcurrency,
   resolveTestConcurrency,
   withDefaultTestConcurrency,
 } from '../../../scripts/lib/test-concurrency.mjs'
+
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 
 function touch(root: string, rel: string, content = ''): string {
   const abs = path.join(root, rel)
@@ -256,6 +275,9 @@ test('test-sharding: recursive helper tracing (with cycle guard), flag fallback 
     assert.equal(shouldDisableSharding(['--test-isolation=none']), true)
     assert.equal(shouldDisableSharding(['--test-reporter=tap']), true)
     assert.equal(shouldDisableSharding(['--test-name-pattern=foo']), true)
+    assert.equal(shouldDisableSharding(['--test-skip-pattern=foo']), true)
+    assert.equal(shouldDisableSharding(['--test-timeout=5000']), true)
+    assert.equal(shouldDisableSharding(['--experimental-test-coverage']), true)
     assert.equal(shouldDisableSharding(['-t', 'foo']), true)
 
     // partitionFilesForSharding distributes files evenly with LPT without duplicates or omissions
@@ -282,5 +304,384 @@ test('test-sharding: recursive helper tracing (with cycle guard), flag fallback 
     assert.equal(new Set(flattened).size, 18)
   } finally {
     rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('test-sharding: 4-pool classifier separates pure, dom-shared, node-shared, and isolated accurately', { timeout: 60_000 }, () => {
+  // pure: read-only fs, env reads, RegExp variable .exec(), domain .fork()/.open(), read-only globalThis.fetch
+  const pureRes = analyzeTestSourcePurity(
+    ts,
+    'pure.test.ts',
+    `import test from 'node:test'
+import { readFileSync } from 'node:fs'
+const tagRe = /foo/g
+const api = { fork: () => 1, open: () => 2 }
+const f = globalThis.fetch
+test('ok', { timeout: 60_000 }, () => {
+  void tagRe.exec('foo')
+  void api.fork()
+  void api.open()
+  void readFileSync
+  void f
+})`,
+  )
+  assert.equal(pureRes.pool, 'pure', `expected pure, got ${pureRes.pool} (${pureRes.reasons.join(', ')})`)
+  assert.equal(pureRes.pure, true)
+
+  // dom-shared: happy-dom, React DOM, Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT }), client compile, scoped unhandledRejection
+  const domCases: Array<[string, string]> = [
+    ['happy-dom register + document', `import { GlobalRegistrator } from '@happy-dom/global-registrator'\nGlobalRegistrator.register()\ndocument.createElement('div')`],
+    ['React SSR globalThis.React', `import * as React from 'react'\nObject.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })`],
+    ['dom + plugin-build client compile + scoped unhandledRejection', `import { GlobalRegistrator } from '@happy-dom/global-registrator'\nimport { compilePluginClientModule } from '@helmx/plugin-build'\nimport { mkdirSync } from 'node:fs'\nGlobalRegistrator.register()\nmkdirSync('/tmp/x')\nconst fn = () => {}\nprocess.on('unhandledRejection', fn)\nprocess.off('unhandledRejection', fn)\nvoid compilePluginClientModule`],
+  ]
+  for (const [label, code] of domCases) {
+    const r = analyzeTestSourcePurity(ts, 'dom.test.tsx', code)
+    assert.equal(r.pool, 'dom-shared', `${label}: expected dom-shared, got ${r.pool} (${r.reasons.join(', ')})`)
+    assert.equal(r.pure, false)
+  }
+
+  // node-shared: temp dirs, SQLite, HTTP/net, subprocess, createHelmx, KernelRuntime, env.exec(), process.kill(pid, 0), scoped unhandledRejection
+  const nodeCases: Array<[string, string]> = [
+    ['fs temp dir writes', `import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'\nconst d = mkdtempSync('x')\nwriteFileSync(d, '1')\nrmSync(d)`],
+    ['SQLite + HTTP + createHelmx', `import { DatabaseSync } from 'node:sqlite'\nimport http from 'node:http'\nnew DatabaseSync(':memory:')\nhttp.createServer().listen(0)\ncreateHelmx({})`],
+    ['env.exec + read-only liveness probe', `async function run(env: { exec: (c: string) => void }, pid: number) { env.exec('echo hi'); process.kill(pid, 0) }`],
+    ['scoped unhandledRejection cleanup + fs', `import { mkdirSync } from 'node:fs'\nmkdirSync('x')\nconst onU = () => {}\nprocess.on('unhandledRejection', onU)\ntry {} finally { process.off('unhandledRejection', onU) }`],
+  ]
+  for (const [label, code] of nodeCases) {
+    const r = analyzeTestSourcePurity(ts, 'node.test.ts', code)
+    assert.equal(r.pool, 'node-shared', `${label}: expected node-shared, got ${r.pool} (${r.reasons.join(', ')})`)
+    assert.equal(r.pure, false)
+  }
+
+  // isolated: pragma override, process.env/chdir/stdin/stderr/kill(SIGKILL), unpaired process.on, unregister, mock.timers/method, worker_threads, DOM+backend mix, non-DOM globalThis write
+  const isoCases: Array<[string, string]> = [
+    ['pragma opt-out', `// @test-isolation: process\nimport test from 'node:test'\ntest('x', { timeout: 60_000 }, () => {})`],
+    ['process.env write', `process.env.FOO = 'bar'`],
+    ['non-zero process.kill', `process.kill(1234, 'SIGKILL')`],
+    ['unpaired process.on', `process.on('SIGTERM', () => {})`],
+    ['unpaired process.on unhandledRejection', `process.on('unhandledRejection', () => {})`],
+    ['GlobalRegistrator.unregister', `import { GlobalRegistrator } from '@happy-dom/global-registrator'\nGlobalRegistrator.register()\nGlobalRegistrator.unregister()`],
+    ['mock.timers', `test('x', { timeout: 60_000 }, (t) => { t.mock.timers.enable() })`],
+    ['mock.method', `import { mock } from 'node:test'\nmock.method(console, 'log', () => {})`],
+    ['worker_threads', `import { Worker } from 'node:worker_threads'\nnew Worker('')`],
+    ['DOM mixed with createHelmx', `import { GlobalRegistrator } from '@happy-dom/global-registrator'\nGlobalRegistrator.register()\ncreateHelmx({})`],
+    ['delete globalThis.window', `delete (globalThis as Record<string, unknown>).window`],
+    ['non-DOM globalThis write', `(globalThis as Record<string, unknown>).myGlobal = 42`],
+    ['imported binding mutation', `import { timings } from '../src/t.js'\nObject.assign(timings, { ms: 1 })`],
+  ]
+  for (const [label, code] of isoCases) {
+    const r = analyzeTestSourcePurity(ts, 'iso.test.ts', code)
+    assert.equal(r.pool, 'isolated', `${label}: expected isolated, got ${r.pool} (${r.reasons.join(', ')})`)
+    assert.equal(r.pure, false)
+  }
+})
+
+test('test-sharding: AST cache skips TypeScript on warm hit and invalidates when test file or helper changes', { timeout: 60_000 }, () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'helmx-ast-cache-'))
+  try {
+    const helperPath = touch(root, 'packages/a/test/helpers/h.ts', `export const noop = () => 1\n`)
+    const testPath = touch(
+      root,
+      'packages/a/test/sample.test.ts',
+      `import test from 'node:test'\nimport { noop } from './helpers/h.js'\ntest('ok', { timeout: 60_000 }, () => { void noop })\n`,
+    )
+    const cachePath = path.join(root, 'node_modules', '.cache', 'purity.json')
+
+    // 1. Cold miss populates cache
+    const cache1 = loadPurityCache(cachePath)
+    let tsLoads = 0
+    const getTs = () => {
+      tsLoads += 1
+      return ts
+    }
+    const r1 = classifyTestFilePool(null, testPath, { repoRoot: root, cache: cache1, getTs })
+    assert.equal(r1.pool, 'pure')
+    assert.equal(r1.cacheHit, false)
+    assert.equal(tsLoads, 1)
+    assert.equal(savePurityCache(cachePath, cache1), true)
+
+    // 2. Warm hit never invokes getTs
+    const cache2 = loadPurityCache(cachePath)
+    const r2 = classifyTestFilePool(null, testPath, {
+      repoRoot: root,
+      cache: cache2,
+      getTs: () => {
+        throw new Error('getTs must not be invoked on warm AST cache hit')
+      },
+    })
+    assert.equal(r2.pool, 'pure')
+    assert.equal(r2.cacheHit, true)
+
+    // 3. Modifying the relative helper invalidates cache even when test file mtime/size is unchanged
+    writeFileSync(helperPath, `import { mkdtempSync } from 'node:fs'\nexport const noop = () => mkdtempSync('x')\n`)
+    const bump = new Date(Date.now() + 5000)
+    utimesSync(helperPath, bump, bump)
+    const r3 = classifyTestFilePool(null, testPath, { repoRoot: root, cache: cache2, getTs })
+    assert.equal(r3.cacheHit, false, 'helper edit must invalidate cached classification')
+    assert.equal(r3.pool, 'node-shared')
+
+    // 4. Adding pragma to test file invalidates cache and moves it to isolated
+    writeFileSync(
+      testPath,
+      `// @test-isolation: process\nimport test from 'node:test'\nimport { noop } from './helpers/h.js'\ntest('ok', { timeout: 60_000 }, () => { void noop })\n`,
+    )
+    const bump2 = new Date(Date.now() + 10_000)
+    utimesSync(testPath, bump2, bump2)
+    const r4 = classifyTestFilePool(null, testPath, { repoRoot: root, cache: cache2, getTs })
+    assert.equal(r4.cacheHit, false)
+    assert.equal(r4.pool, 'isolated')
+
+    // 5. Corrupt or wrong-schema cache falls back safely
+    writeFileSync(cachePath, '{not-json')
+    assert.deepEqual(loadPurityCache(cachePath).entries, {})
+    writeFileSync(cachePath, JSON.stringify({ schemaVersion: 999, entries: { a: {} } }))
+    assert.deepEqual(loadPurityCache(cachePath).entries, {})
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('test-timings: loads, merges EMA durations, persists atomically, and shares unified ms scale with fallback', { timeout: 60_000 }, () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'helmx-timings-'))
+  try {
+    const cachePath = path.join(root, 'node_modules', '.cache', 'timings.json')
+    assert.deepEqual(loadTestTimings(cachePath), emptyTestTimingsStore())
+
+    const s1 = mergeTestTimings(
+      emptyTestTimingsStore(),
+      {
+        'packages/a/test/fast.test.ts': 40,
+        'packages/a/test/slow.test.ts': 10_000,
+        'packages/a/test/bad.test.ts': -5,
+        'packages/a/test/nan.test.ts': Number.NaN,
+      },
+      { now: 1000 },
+    )
+    assert.equal(s1.files['packages/a/test/fast.test.ts']?.durationMs, 40)
+    assert.equal(s1.files['packages/a/test/slow.test.ts']?.durationMs, 10_000)
+    assert.equal(s1.files['packages/a/test/bad.test.ts'], undefined)
+    assert.equal(s1.files['packages/a/test/nan.test.ts'], undefined)
+
+    // Second observation blends via EMA (alpha = 0.65 -> round(10000*0.35 + 20000*0.65) = 16500)
+    const s2 = mergeTestTimings(s1, { 'packages/a/test/slow.test.ts': 20_000 }, { alpha: 0.65, now: 2000 })
+    assert.equal(s2.files['packages/a/test/slow.test.ts']?.durationMs, 16_500)
+    assert.equal(s2.files['packages/a/test/slow.test.ts']?.runs, 2)
+
+    assert.equal(saveTestTimings(cachePath, s2), true)
+    const loaded = loadTestTimings(cachePath)
+    assert.equal(loaded.files['packages/a/test/slow.test.ts']?.durationMs, 16_500)
+
+    const swarmFile = touch(root, 'packages/plugins/test/swarm.integration.test.ts', 'x'.repeat(4000))
+    const smallFile = touch(root, 'packages/protocol/test/tiny.test.ts', 'x'.repeat(400))
+    const { weightFn, recordedCount } = createTestWeightFn({ repoRoot: root, timings: loaded })
+    assert.equal(weightFn('packages/a/test/slow.test.ts'), 16_500)
+    assert.ok(
+      estimateFallbackDurationMs(root, path.relative(root, swarmFile)) >
+        estimateFallbackDurationMs(root, path.relative(root, smallFile)),
+      'fallback ms heuristic must rank swarm above tiny files on the same ms scale',
+    )
+    assert.equal(recordedCount(['packages/a/test/slow.test.ts', path.relative(root, smallFile)]), 1)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('planFourPoolSchedule: creates concurrent permits=1 shards across all 4 pools with zero serial pure barrier', { timeout: 60_000 }, () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'helmx-4pool-plan-'))
+  try {
+    const files: string[] = []
+    const weights = new Map<string, number>()
+
+    for (let i = 0; i < 10; i += 1) {
+      const rel = `packages/protocol/test/p${i}.test.ts`
+      touch(root, rel, `import test from 'node:test'\ntest('p${i}', { timeout: 60_000 }, () => {})`)
+      files.push(rel)
+      weights.set(rel, 100)
+    }
+    for (let i = 0; i < 6; i += 1) {
+      const rel = `packages/web/test/d${i}.test.tsx`
+      touch(root, rel, `import { GlobalRegistrator } from '@happy-dom/global-registrator'\nGlobalRegistrator.register()\ndocument.createElement('div')`)
+      files.push(rel)
+      weights.set(rel, i === 0 ? 11_000 : 800)
+    }
+    for (let i = 0; i < 6; i += 1) {
+      const rel = `packages/kernel/test/n${i}.test.ts`
+      touch(root, rel, `import { mkdtempSync } from 'node:fs'\nmkdtempSync('k')`)
+      files.push(rel)
+      weights.set(rel, i === 0 ? 18_000 : 1_200)
+    }
+    for (let i = 0; i < 3; i += 1) {
+      const rel = `packages/kernel/test/i${i}.test.ts`
+      touch(root, rel, `process.env.TEST_ISO = '1'`)
+      files.push(rel)
+      weights.set(rel, i === 0 ? 25_000 : 2_000)
+    }
+
+    const cachePath = path.join(root, 'node_modules', '.cache', 'purity.json')
+    const schedule = planFourPoolSchedule({
+      ts,
+      repoRoot: root,
+      files,
+      workerBudget: 8,
+      weightFn: (rel) => weights.get(rel) ?? 100,
+      cachePath,
+      useCache: true,
+    })
+
+    assert.equal(schedule.pools.pure.length, 10)
+    assert.equal(schedule.pools['dom-shared'].length, 6)
+    assert.equal(schedule.pools['node-shared'].length, 6)
+    assert.equal(schedule.pools.isolated.length, 3)
+
+    // Every file appears exactly once across all plans
+    const allPlanned = schedule.plans.flatMap((p) => p.files)
+    assert.equal(allPlanned.length, files.length)
+    assert.equal(new Set(allPlanned).size, files.length)
+
+    // Zero serial pure barrier: every plan has permits=1 and heaviest shard runs first at index 0
+    assert.ok(schedule.plans.every((p) => p.permits === 1), 'every shard must cost 1 permit for concurrent multi-pool execution')
+    assert.equal(schedule.plans[0]?.files[0], 'packages/kernel/test/i0.test.ts')
+    assert.ok(schedule.plans.some((p) => p.pool === 'pure' && p.mode === 'shard-worker'))
+    assert.ok(schedule.plans.some((p) => p.pool === 'dom-shared' && p.mode === 'shard-worker'))
+    assert.ok(schedule.plans.some((p) => p.pool === 'node-shared' && p.mode === 'shard-worker'))
+    assert.ok(schedule.plans.some((p) => p.pool === 'isolated' && p.mode === 'isolated'))
+
+    // Second call hits AST cache 100% without touching TypeScript
+    const warm = planFourPoolSchedule({
+      getTs: () => {
+        throw new Error('must not load TypeScript on warm AST cache hit')
+      },
+      repoRoot: root,
+      files,
+      workerBudget: 8,
+      weightFn: (rel) => weights.get(rel) ?? 100,
+      cachePath,
+      useCache: true,
+    })
+    assert.equal(warm.cacheStats.hits, files.length)
+    assert.equal(warm.cacheStats.misses, 0)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('shard-worker: isolates bare top-level before/after/afterEach per file and records per-file timings', { timeout: 60_000 }, () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'helmx-shard-worker-'))
+  try {
+    writeFileSync(path.join(dir, 'package.json'), '{"type":"module"}')
+    const orderFile = path.join(dir, 'order.log')
+    const fileA = path.join(dir, 'a.test.ts')
+    const fileB = path.join(dir, 'b.test.ts')
+    const manifestPath = path.join(dir, 'manifest.json')
+    const timingPath = path.join(dir, 'timings.json')
+
+    writeFileSync(
+      fileA,
+      `import test, { before, after, afterEach } from 'node:test'
+import assert from 'node:assert/strict'
+import { appendFileSync } from 'node:fs'
+const log = (s: string) => appendFileSync(${JSON.stringify(orderFile)}, s + '\\n')
+before(() => log('A:before'))
+afterEach(() => log('A:afterEach'))
+after(() => log('A:after'))
+test('A1', { timeout: 60_000 }, () => { log('A:test1'); assert.ok(true) })
+`,
+    )
+    writeFileSync(
+      fileB,
+      `import test, { before, after, afterEach } from 'node:test'
+import assert from 'node:assert/strict'
+import { appendFileSync } from 'node:fs'
+const log = (s: string) => appendFileSync(${JSON.stringify(orderFile)}, s + '\\n')
+before(() => log('B:before'))
+afterEach(() => log('B:afterEach'))
+after(() => log('B:after'))
+test('B1', { timeout: 60_000 }, () => { log('B:test1'); assert.ok(true) })
+`,
+    )
+    writeFileSync(
+      manifestPath,
+      JSON.stringify({
+        pool: 'node-shared',
+        repoRoot: dir,
+        files: ['a.test.ts', 'b.test.ts'],
+        timingOutputPath: timingPath,
+        testTimeoutMs: 20_000,
+      }),
+    )
+
+    const env = { ...process.env }
+    delete env.NODE_TEST_CONTEXT
+    const res = spawnSync(
+      process.execPath,
+      [path.join(repoRoot, 'scripts', 'run-tests.mjs'), '--shard-worker', manifestPath],
+      { cwd: repoRoot, env, encoding: 'utf8', timeout: 60_000 },
+    )
+    assert.equal(res.status, 0, `shard-worker failed: stderr=${res.stderr}\nstdout=${res.stdout}`)
+
+    const order = readFileSync(orderFile, 'utf8').trim().split('\n')
+    assert.deepEqual(order, [
+      'A:before',
+      'A:test1',
+      'A:afterEach',
+      'A:after',
+      'B:before',
+      'B:test1',
+      'B:afterEach',
+      'B:after',
+    ])
+
+    const recorded = JSON.parse(readFileSync(timingPath, 'utf8')) as {
+      counts: { tests: number; passed: number; failed: number }
+      files: Record<string, number>
+      success: boolean
+    }
+    assert.equal(recorded.success, true)
+    assert.equal(recorded.counts.tests, 2)
+    assert.equal(recorded.counts.passed, 2)
+    assert.equal(recorded.counts.failed, 0)
+    assert.ok((recorded.files['a.test.ts'] ?? 0) >= 1)
+    assert.ok((recorded.files['b.test.ts'] ?? 0) >= 1)
+
+    // Verify failure propagation: a failing first file exits 1 while still executing the second file
+    const fileFail = path.join(dir, 'fail.test.ts')
+    const failManifest = path.join(dir, 'manifest-fail.json')
+    const failTiming = path.join(dir, 'timings-fail.json')
+    writeFileSync(
+      fileFail,
+      `import test from 'node:test'
+import assert from 'node:assert/strict'
+test('F1', { timeout: 60_000 }, () => { assert.equal(1, 2) })
+`,
+    )
+    writeFileSync(
+      failManifest,
+      JSON.stringify({
+        pool: 'pure',
+        repoRoot: dir,
+        files: ['fail.test.ts', 'b.test.ts'],
+        timingOutputPath: failTiming,
+        testTimeoutMs: 20_000,
+      }),
+    )
+    const failRes = spawnSync(
+      process.execPath,
+      [path.join(repoRoot, 'scripts', 'run-tests.mjs'), '--shard-worker', failManifest],
+      { cwd: repoRoot, env, encoding: 'utf8', timeout: 60_000 },
+    )
+    assert.equal(failRes.status, 1, 'shard-worker must exit 1 when any file fails')
+    const failRecorded = JSON.parse(readFileSync(failTiming, 'utf8')) as {
+      counts: { tests: number; passed: number; failed: number }
+      files: Record<string, number>
+      success: boolean
+    }
+    assert.equal(failRecorded.success, false)
+    assert.equal(failRecorded.counts.tests, 2)
+    assert.equal(failRecorded.counts.passed, 1)
+    assert.equal(failRecorded.counts.failed, 1)
+    assert.equal(failRecorded.files['fail.test.ts'], undefined, 'failed file durations must not pollute timing cache')
+    assert.ok((failRecorded.files['b.test.ts'] ?? 0) >= 1, 'subsequent passing files still execute and record timings')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
   }
 })

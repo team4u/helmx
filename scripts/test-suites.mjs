@@ -25,11 +25,11 @@
  * subdirectory's files enter exactly one suite via its path entry.
  *
  * Implementation: Node fs enumerates *.test.ts(x) under <root>/packages/<pkg>/test/ (or the
- * entry subdirectory itself), and the test-sharding.mjs static analysis splits strictly pure
- * in-memory tests into a bounded `--test-isolation=none` shard; the rest keep process
- * isolation and are handed to scripts/run-tests.mjs under a per-worktree worker budget
- * (default 16, capped by available CPUs) in LPT order. Set TEST_CONCURRENCY to override that budget for a deliberate
- * single-worktree run.
+ * entry subdirectory itself). Cached AST classification (`scripts/lib/test-sharding.mjs`)
+ * partitions files into 4 pools (`pure`, `dom-shared`, `node-shared`, `isolated`), balanced
+ * by auto-recorded millisecond timings (`scripts/lib/test-timings.mjs`) via LPT into
+ * `permits: 1` shards launched concurrently across `workerBudget` (default 16, capped by
+ * available CPUs; override via `TEST_CONCURRENCY`) with zero serial pure barrier.
  *
  * Invariants (defensive assertions; any failure exits 2 rather than silently running the
  * wrong set):
@@ -44,14 +44,30 @@
  *
  * Usage: node scripts/test-suites.mjs <unit|integration|all> [extra args passed through to the node test runner]
  */
-import { readdirSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
-import { partitionFilesForSharding, shouldDisableSharding } from './lib/test-sharding.mjs';
-import { explicitTestConcurrency, resolveTestConcurrency, withDefaultTestConcurrency } from './lib/test-concurrency.mjs';
+import {
+  DEFAULT_PURITY_CACHE_REL,
+  planFourPoolSchedule,
+  shouldDisableSharding,
+} from './lib/test-sharding.mjs';
+import {
+  createTestWeightFn,
+  DEFAULT_TIMINGS_CACHE_REL,
+  loadTestTimings,
+  mergeTestTimings,
+  normalizeTimingKey,
+  saveTestTimings,
+} from './lib/test-timings.mjs';
+import {
+  explicitTestConcurrency,
+  resolveTestConcurrency,
+  withDefaultTestConcurrency,
+} from './lib/test-concurrency.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const packagesDir = path.join(repoRoot, 'packages');
@@ -156,101 +172,6 @@ const label = suiteName === 'all' ? 'all(unit+integration)' : suiteName;
 const breakdown = ALL_PACKAGES.map((p) => `${p}=${testFilesOf(p).length}`).join(' ');
 console.error(`[test-suites] suite ${label}: ${files.length} file(s) (${breakdown})`);
 
-// Deterministic LPT (longest first) ordering: extremely slow tests first (20M), then known
-// slow tests (10M), then descending file size, with lexicographic path order as the final
-// tiebreaker — eliminating multicore tail idle time.
-const ULTRA_SLOW_TEST_PREFIXES = [
-  'payload',
-  'node-path-usage-rpc',
-  'workflow.test',
-  'workflow-goal',
-  'workflow-metadata',
-  'core.integration',
-  'worktree-runtime',
-  'runtime.test.ts',
-  'plugins-contract.test.ts',
-  'herdr',
-  'superagent',
-  'background-restart',
-  'native-worktree',
-  'node-upgrade',
-  'agent-standby',
-  'check-changed',
-  'quiet-notifier',
-  'use-version-watcher',
-  'cli.test.ts',
-  'build-runner',
-  'conversation-outline',
-  'skill-center',
-];
-
-const SLOW_TEST_PREFIXES = [
-  'cli-nodes-env',
-  'cli-credentials',
-  'cli-dynamic-actions',
-  'cli-plugin-dx',
-  'node-cli-review',
-  'node-rpc-review',
-  'node-forward-http',
-  'node-daemon.test.ts',
-  'ownership-events.test.ts',
-  'plugin-client.test.ts',
-  'plugin-client-runtime',
-  'icons.test.ts',
-  'sidebar-spaces',
-  'composer-thinking-badge',
-  'conversation-archive-menu',
-  'helmx-store',
-  'tool-activity',
-  'ask-dock',
-  'select.test.ts',
-  'thinking-',
-  'workflow',
-  'updater',
-  'supervisor',
-  'env-app',
-  'app-workflow',
-  'external-plugin',
-  'subagent-depth',
-  'tracker-cleanup',
-  'secret-lifecycle',
-  'sse-',
-  'unread-visibility',
-  'timeline-outline-calibration',
-  'markdown-codeblock-plugins',
-  'node-tunnel',
-  'tools.test.ts',
-  'worktree-process-usage',
-  'node-fetch-body-cleanup',
-  'restart-graceful-recovery',
-  'plugin-dx-loop',
-  'token-speed.integration',
-  'profile-collaboration',
-  'test-kit.test.ts',
-];
-
-function matchesPrefix(base, list) {
-  return list.some((p) => base.startsWith(p) || base === p);
-}
-
-const ULTRA_SLOW_TIER_WEIGHT = 20_000_000;
-
-function lptWeight(relPath) {
-  const base = path.basename(relPath);
-  let tier = 0;
-  if (matchesPrefix(base, ULTRA_SLOW_TEST_PREFIXES)) tier = ULTRA_SLOW_TIER_WEIGHT;
-  else if (matchesPrefix(base, SLOW_TEST_PREFIXES)) tier = 10_000_000;
-  let size = 0;
-  try {
-    size = statSync(path.join(repoRoot, relPath)).size;
-  } catch {
-    size = 0;
-  }
-  return tier + size;
-}
-
-const requireFromRoot = createRequire(path.join(repoRoot, 'package.json'));
-const ts = requireFromRoot('typescript');
 let workerBudget;
 try {
   workerBudget = resolveTestConcurrency(process.env.TEST_CONCURRENCY, os.availableParallelism());
@@ -259,7 +180,6 @@ try {
   process.exit(2);
 }
 
-const sortedAllFiles = [...files].sort((a, b) => lptWeight(b) - lptWeight(a) || a.localeCompare(b));
 let workerBudgetOverride;
 try {
   workerBudgetOverride = explicitTestConcurrency(extraArgs);
@@ -270,59 +190,109 @@ try {
 if (workerBudgetOverride !== undefined) workerBudget = workerBudgetOverride;
 const shardingDisabled = shouldDisableSharding(extraArgs) || workerBudgetOverride !== undefined;
 
-/** @type {Array<{ label: string, args: string[], permits: number }>} */
+const timingsCachePath = path.join(repoRoot, DEFAULT_TIMINGS_CACHE_REL);
+const purityCachePath = path.join(repoRoot, DEFAULT_PURITY_CACHE_REL);
+const timingsStore = loadTestTimings(timingsCachePath);
+const { weightFn, recordedCount } = createTestWeightFn({ repoRoot, timings: timingsStore });
+
+const sortedAllFiles = [...files].sort((a, b) => weightFn(b) - weightFn(a) || a.localeCompare(b));
+
+const requireFromRoot = createRequire(path.join(repoRoot, 'package.json'));
+let cachedTs = null;
+const getTs = () => {
+  if (!cachedTs) cachedTs = requireFromRoot('typescript');
+  return cachedTs;
+};
+
+const timingReporterUrl = pathToFileURL(path.join(repoRoot, 'scripts', 'lib', 'timing-reporter.mjs')).href;
+const runTempDir = path.join(
+  repoRoot,
+  'node_modules',
+  '.cache',
+  'helmx-test-runs',
+  `run-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+);
+
+/** @type {Array<{ label: string, args: string[], permits: number, timingOutputPath: string | null }>} */
 const plans = [];
 
 if (!shardingDisabled) {
-  const { pureFiles, isolatedFiles, shards } = partitionFilesForSharding({
-    ts,
+  const classifyStartMs = performance.now();
+  const schedule = planFourPoolSchedule({
+    getTs,
     repoRoot,
     files,
-    cpus: workerBudget,
-    // Share module initialization by running the pure files in one process.
-    filesPerShard: Math.max(8, files.length),
-    weightFn: lptWeight,
+    workerBudget,
+    weightFn,
+    cachePath: purityCachePath,
+    useCache: true,
   });
-  const usePureShards = pureFiles.length >= 4 && shards.length > 0;
-  if (usePureShards) {
-    const pureShardCount = shards.length;
-    // Node fixes file concurrency when its runner starts. Run the pure shard first so
-    // the isolated pool can use every permit throughout the much longer phase.
-    console.error(
-      `[test-suites] schedule: pure=${pureFiles.length} (${pureShardCount} shard, --test-isolation=none), then ` +
-        `isolated=${isolatedFiles.length} (--test-concurrency=${workerBudget}, worktree cap ${workerBudget})`,
-    );
-    shards.forEach((shard, idx) => {
+  const classifyMs = Math.round(performance.now() - classifyStartMs);
+  const timingHits = recordedCount(files);
+  console.error(
+    `[test-suites] schedule (${classifyMs}ms, astCache=${schedule.cacheStats.hits}/${files.length}, timings=${timingHits}/${files.length}, budget=${workerBudget}): ` +
+      `pure=${schedule.pools.pure.length}(${schedule.shardCounts.pure}) ` +
+      `dom-shared=${schedule.pools['dom-shared'].length}(${schedule.shardCounts['dom-shared']}) ` +
+      `node-shared=${schedule.pools['node-shared'].length}(${schedule.shardCounts['node-shared']}) ` +
+      `isolated=${schedule.pools.isolated.length}(${schedule.shardCounts.isolated}) -> ${schedule.plans.length} concurrent shards`,
+  );
+
+  mkdirSync(runTempDir, { recursive: true });
+  schedule.plans.forEach((plan, index) => {
+    const timingOutputPath = path.join(runTempDir, `timings-${index}.json`);
+    if (plan.mode === 'shard-worker') {
+      const manifestPath = path.join(runTempDir, `manifest-${index}.json`);
+      writeFileSync(
+        manifestPath,
+        JSON.stringify({
+          pool: plan.pool,
+          repoRoot,
+          files: plan.files,
+          timingOutputPath,
+          testTimeoutMs: 20_000,
+        }),
+        'utf8',
+      );
+      const args = [];
+      if (plan.pool === 'dom-shared') args.push('--dom-preload');
+      args.push('--shard-worker', manifestPath);
       plans.push({
-        label: `pure-shard-${idx + 1}/${pureShardCount}`,
-        args: ['--test-isolation=none', '--test-concurrency=1', ...extraArgs, ...shard],
-        permits: 1,
+        label: plan.label,
+        args,
+        permits: plan.permits,
+        timingOutputPath,
       });
-    });
-    if (isolatedFiles.length > 0) {
+    } else {
+      // Isolated shards use native process isolation with dual reporters so spec stays
+      // on stdout while per-file durations land in timingOutputPath.
+      const args = [
+        '--test-concurrency=1',
+        '--test-reporter=spec',
+        '--test-reporter-destination=stdout',
+        `--test-reporter=${timingReporterUrl}`,
+        `--test-reporter-destination=${timingOutputPath}`,
+        ...extraArgs,
+        ...plan.files,
+      ];
       plans.push({
-        label: 'isolated',
-        args: withDefaultTestConcurrency(extraArgs, workerBudget).concat(isolatedFiles),
-        permits: workerBudget,
+        label: plan.label,
+        args,
+        permits: plan.permits,
+        timingOutputPath,
       });
     }
-  } else {
-    plans.push({
-      label: 'isolated',
-      args: withDefaultTestConcurrency(extraArgs, workerBudget).concat(sortedAllFiles),
-      permits: workerBudget,
-    });
-  }
+  });
 } else {
   plans.push({
     label: 'single',
     args: withDefaultTestConcurrency(extraArgs, workerBudget).concat(sortedAllFiles),
     permits: workerBudget,
+    timingOutputPath: null,
   });
 }
 
 // Reuse run-tests.mjs: cross-platform tsx spawn, per-test/total timeouts, and process-tree
-// cleanup all live there. The permit pool starts the isolated phase once the pure shard releases its permit.
+// cleanup all live there. All 4 pools run concurrently under the permit cap with zero serial barrier.
 const runTestsPath = path.join(repoRoot, 'scripts', 'run-tests.mjs');
 const suiteStartMs = Date.now();
 /** @type {Set<import('node:child_process').ChildProcess>} */
@@ -343,7 +313,7 @@ for (const signal of ['SIGHUP', 'SIGINT', 'SIGQUIT', 'SIGTERM']) {
 /**
  * Schedule queued test plans under the concurrency permit cap, keeping active test
  * processes <= maxPermits at any moment.
- * @param {Array<{ label: string, args: string[], permits: number }>} queue
+ * @param {Array<{ label: string, args: string[], permits: number, timingOutputPath: string | null }>} queue
  * @param {number} maxPermits
  * @returns {Promise<number[]>}
  */
@@ -407,7 +377,45 @@ function runPlanPool(queue, maxPermits) {
   });
 }
 
-const exitCodes = await runPlanPool(plans, workerBudget);
+let exitCodes = [];
+try {
+  exitCodes = await runPlanPool(plans, workerBudget);
+
+  if (!receivedSignal && !shardingDisabled) {
+    /** @type {Record<string, number>} */
+    const observed = {};
+    for (let i = 0; i < plans.length; i += 1) {
+      if (exitCodes[i] !== 0) continue;
+      const outPath = plans[i].timingOutputPath;
+      if (!outPath || !existsSync(outPath)) continue;
+      try {
+        const parsed = JSON.parse(readFileSync(outPath, 'utf8'));
+        const fileMap = parsed?.files;
+        if (fileMap && typeof fileMap === 'object') {
+          for (const [rawPath, dur] of Object.entries(fileMap)) {
+            if (typeof dur === 'number' && Number.isFinite(dur) && dur > 0) {
+              observed[normalizeTimingKey(repoRoot, rawPath)] = dur;
+            }
+          }
+        }
+      } catch {
+        // Ignore malformed per-shard timing output
+      }
+    }
+    if (Object.keys(observed).length > 0) {
+      const updated = mergeTestTimings(timingsStore, observed);
+      saveTestTimings(timingsCachePath, updated);
+    }
+  }
+} finally {
+  if (existsSync(runTempDir)) {
+    try {
+      rmSync(runTempDir, { recursive: true, force: true });
+    } catch {
+      // Best-effort cleanup of per-run manifest/timing scratch dir
+    }
+  }
+}
 
 const elapsed = ((Date.now() - suiteStartMs) / 1000).toFixed(1);
 let finalCode = 0;
