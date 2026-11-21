@@ -515,27 +515,8 @@
 }
 
 .sidebar-batch-bar {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 8px 10px;
+  /* 壳结构/中性底色复用公共 .batch-bar 原语；侧栏仅保留与列表的间距 */
   margin-bottom: 6px;
-  background: var(--bg-hover, rgba(255, 255, 255, 0.04));
-  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
-  border-radius: var(--radius-sm, 6px);
-  font-size: 12px;
-}
-
-.sidebar-batch-bar-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.sidebar-batch-bar-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
 }
 
 .sidebar-batch-checkbox {

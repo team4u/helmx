@@ -265,3 +265,21 @@ test('样式边界：SDK 组件字面 className 词元 ⊆ 宿主 CSS 类名集 
     assert.ok(tokens.has(name), `语义类 .${name} 已不被 SDK 引用，应移出登记表`)
   }
 })
+
+test('样式边界：统一批量操作栏 .batch-bar 族完整归属 primitives.css（sidebar/overview 分片仅留布局微调）', { timeout: 60_000 }, () => {
+  const shards = readdirSync(STYLES_DIR)
+    .filter((name) => name.endsWith('.css') && name !== 'primitives.css')
+    .map((name) => ({ name, css: readFileSync(join(STYLES_DIR, name), 'utf8') }))
+  for (const selector of ['.batch-bar', '.batch-bar-header', '.batch-bar-count', '.batch-bar-actions']) {
+    assert.ok(ownsRule(primitives, selector), `primitives.css 应定义公共批量栏规则 ${selector}`)
+    for (const { name, css } of shards) {
+      assert.ok(!ownsRule(css, selector), `分片 ${name} 不得重新定义公共批量栏壳 ${selector}`)
+    }
+  }
+  // 旧词汇不得回流（sidebar/overview 私有 header/actions/count/spacer 已收口）
+  for (const { name, css } of shards) {
+    for (const stale of ['.sidebar-batch-bar-header', '.sidebar-batch-bar-actions', '.overview-batch-bar-count', '.overview-batch-bar-spacer', '.overview-batch-bar-actions']) {
+      assert.ok(!css.includes(stale), `分片 ${name} 不得回流出已收口的旧批量栏类 ${stale}`)
+    }
+  }
+})

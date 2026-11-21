@@ -760,12 +760,16 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
       </div>
 
       {batchMode && (
-        <div className="overview-batch-bar">
-          <span className="overview-batch-bar-count tabular-nums">
-            {t('shell.batch.selected', { count: effectiveSelectedIds.size })}
-          </span>
-          <span className="overview-batch-bar-spacer" />
-          <div className="overview-batch-bar-actions">
+        <div className="batch-bar overview-batch-bar">
+          <div className="batch-bar-header">
+            <span className="batch-bar-count tabular-nums">
+              {t('shell.batch.selected', { count: effectiveSelectedIds.size })}
+            </span>
+            <button type="button" className="btn btn-ghost btn-sm" disabled={deleting || archiving} onClick={exitBatchMode}>
+              {t('shell.batch.exit')}
+            </button>
+          </div>
+          <div className="batch-bar-actions">
             <button
               type="button"
               className="btn btn-ghost btn-sm"
@@ -797,9 +801,6 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
               onClick={() => setBatchDeleteIds(effectiveSelectedIds)}
             >
               {deleting ? t('shell.batch.deleting') : t('shell.batch.deleteCount', { count: effectiveSelectedIds.size })}
-            </button>
-            <button type="button" className="btn btn-ghost btn-sm" disabled={deleting || archiving} onClick={exitBatchMode}>
-              {t('shell.batch.exit')}
             </button>
           </div>
         </div>

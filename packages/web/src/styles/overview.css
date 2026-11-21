@@ -298,31 +298,7 @@
 /* 批量操作条：横贯工具栏下方，仅批量模式渲染；按钮沿用通用 btn 词汇，
  * 删除按钮走 btn-danger-sm（与侧栏批量条同语义）。 */
 .overview-batch-bar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  padding: 8px 12px;
-  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--accent) 5%, var(--bg-subtle));
-}
-
-.overview-batch-bar-count {
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--fg-secondary);
-}
-
-.overview-batch-bar-spacer {
-  flex: 1;
-}
-
-.overview-batch-bar-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
+  /* 壳结构/中性底色复用公共 .batch-bar 原语；总览无额外桌面覆写（窄屏微调见下方媒体查询） */
 }
 
 /* 工具栏右缘的批量管理开关（勾选方块图标，激活态 accent）。 */

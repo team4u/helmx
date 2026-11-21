@@ -464,6 +464,36 @@
   align-items: center;
 }
 
+/* 统一批量操作栏原语（两行结构：首行 = 已选计数 + 退出，次行 = 批量动作）。
+ * 中性底色（不携带 accent 染色）；sidebar / overview 消费方仅在各自分片
+ * 保留间距等布局微调，壳结构一律复用本词汇，不再各画一套。 */
+.batch-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+  font-size: 12px;
+}
+.batch-bar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.batch-bar-count {
+  font-weight: 500;
+  color: var(--fg-secondary);
+}
+.batch-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 /* 统一空状态原语 */
 .empty-state {
   display: flex;
