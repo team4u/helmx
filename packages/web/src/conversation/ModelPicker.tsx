@@ -5,6 +5,7 @@ import { ModelPickerControl, resolveEffectiveThinkingLevel } from '@helmx/plugin
 import { useModels, useStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { COMPOSER_SHORTCUTS } from './keybindings-model.js'
+import { useModelPickerControlAdapter } from './model-picker-adapter.js'
 
 // ---------------------------------------------------------------------------
 // ModelPicker (conversation mode): thin host adapter over the shared SDK
@@ -18,6 +19,7 @@ export function ModelPicker({ conversation }: { conversation: ConversationSummar
   const models = useModels()
   const { pushNotice } = useStoreActions()
   const { t } = useWebLocale()
+  const { copy, onNotice } = useModelPickerControlAdapter(conversation.id)
   const [pending, setPending] = useState(false)
 
   const apply = async (model: string, level: string | null): Promise<void> => {
@@ -81,7 +83,8 @@ export function ModelPicker({ conversation }: { conversation: ConversationSummar
         shortcut: COMPOSER_SHORTCUTS.toggleModelPicker,
       })}
       pending={pending}
-      conversationId={conversation.id}
+      copy={copy}
+      onNotice={onNotice}
       onApply={apply}
       onResetDefault={resetToProfileDefault}
     />

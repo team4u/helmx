@@ -41,6 +41,7 @@ import {
   COMPOSER_SHORTCUTS,
   isComposerSubmitEnterEvent,
 } from './keybindings-model.js'
+import { useModelPickerControlAdapter } from './model-picker-adapter.js'
 import {
   admitStandbyFiles,
   currentStandbyDraftEpoch,
@@ -802,6 +803,7 @@ function StandbyModelPicker({
 }) {
   const models = useModels()
   const { t } = useWebLocale()
+  const { copy, onNotice } = useModelPickerControlAdapter()
   const lockedNote = t('composer.model.lockedNote')
 
   const effectiveModel = resolveStandbyEffectiveModel(
@@ -853,6 +855,8 @@ function StandbyModelPicker({
             : t('composer.model.followsDefaultTitle', { thinking: thinkingSuffix, shortcut: COMPOSER_SHORTCUTS.toggleModelPicker })
       }
       disabled={disabled}
+      copy={copy}
+      onNotice={onNotice}
       onApply={applySelection}
       onResetDefault={resetToDefault}
       onCatalogRefreshed={onCatalogRefreshed}

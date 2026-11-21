@@ -960,6 +960,9 @@ test('ModelPickerControl filters unavailable and disabled models at runtime; the
           resetLabel="跟随默认"
           resetTitle="Restore defaults"
           buttonTitle="Switch model"
+          onNotice={(message, tone) => {
+            store.actions.pushNotice({ type: 'notification', level: tone, title: message })
+          }}
           onApply={() => {}}
           onResetDefault={() => {}}
         />
@@ -986,12 +989,7 @@ test('ModelPickerControl filters unavailable and disabled models at runtime; the
     assert.equal(refreshPostCount, 1, 'clicking refresh triggers POST /api/models/refresh')
     await waitForCondition(() => modelsRefCount > 0)
     assert.equal(modelsRefCount > 0, true, 'refreshAssets follows the completed refresh (catalog re-listed via /api/models)')
-    // The shared control routes refresh notices through the port notification
-    // channel: title and per-provider detail fold into one message line.
-    assert.equal(
-      store.getNotices().some((n) => n.title.includes('Model catalog refreshed') && n.title.includes('models available')),
-      true,
-    )
+    assert.equal(store.getNotices().some((n) => n.title === 'Model catalog refreshed'), true)
   } finally {
     globalThis.fetch = originalFetch
   }

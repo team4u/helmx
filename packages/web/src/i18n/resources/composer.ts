@@ -111,6 +111,31 @@ export const composerMessages = {
   'composer.sendControls.insertLabel': { en: 'Insert', 'zh-CN': '插话' },
 
   // ---- Model picker (shared by conversation & standby) ----
+  'composer.model.buttonAria': { en: 'Model and thinking level: {model}{level}', 'zh-CN': '模型与思考档位：{model}{level}' },
+  'composer.model.levelSuffix': { en: ' · {level}', 'zh-CN': ' · {level}' },
+  'composer.model.defaultLabel': { en: 'Default model', 'zh-CN': '默认模型' },
+  'composer.model.catalogUnavailable': { en: 'Model catalog unavailable', 'zh-CN': '模型目录不可用' },
+  'composer.model.searchAria': { en: 'Search models', 'zh-CN': '搜索模型' },
+  'composer.model.searchPlaceholder': { en: 'Search models…', 'zh-CN': '搜索模型…' },
+  'composer.model.refreshCatalog': { en: 'Refresh dynamic model catalog', 'zh-CN': '刷新动态模型目录' },
+  'composer.model.listHeader': { en: 'Model list', 'zh-CN': '模型列表' },
+  'composer.model.emptyCatalog': {
+    en: 'No models available; configure a provider key in Models & credentials first',
+    'zh-CN': '暂无可用模型；请先在「模型与凭据」配置供应商密钥',
+  },
+  'composer.model.noMatches': { en: 'No matching models', 'zh-CN': '没有匹配的模型' },
+  'composer.model.thinkingHeader': { en: 'Thinking level', 'zh-CN': '思考档位' },
+  'composer.model.rowDefaultTitle': {
+    en: 'Use {model} (thinking level follows the default)',
+    'zh-CN': '使用 {model}（思考档位跟随默认）',
+  },
+  'composer.model.levelChipTitle': {
+    en: 'Use {model} · thinking {level}',
+    'zh-CN': '使用 {model} · 思考 {level}',
+  },
+  'composer.model.catalogPartialFailure': { en: 'Some provider catalog refreshes failed', 'zh-CN': '部分供应商目录刷新失败' },
+  'composer.model.catalogRefreshed': { en: 'Model catalog refreshed', 'zh-CN': '已刷新模型目录' },
+  'composer.model.catalogRefreshFailed': { en: 'Failed to refresh model catalog', 'zh-CN': '刷新模型目录失败' },
   'composer.model.currentTitle': { en: 'Current model: {model}{thinking} ({shortcut})', 'zh-CN': '当前模型：{model}{thinking} ({shortcut})' },
   'composer.model.followsDefaultTitle': { en: 'Follows profile/global default model{thinking} ({shortcut})', 'zh-CN': '跟随角色/全局默认模型{thinking} ({shortcut})' },
   'composer.model.thinkingSuffix': { en: ' · thinking {level}', 'zh-CN': ' · 思考 {level}' },
@@ -255,6 +280,7 @@ export const composerMessages = {
 
   // ---- Keyboard hints ----
   'composer.kbd.navConfirmClose': { en: '↑↓ select · Enter confirm · Esc close', 'zh-CN': '↑↓ 选择 · Enter 确认 · Esc 关闭' },
+  'composer.kbd.navConfirm': { en: '↑↓ select · Enter confirm', 'zh-CN': '↑↓ 选择 · Enter 确认' },
 
   // ---- Context usage readout ----
   'composer.context.compactingStatus': { en: 'Compacting…', 'zh-CN': '精简中…' },

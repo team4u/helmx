@@ -1,40 +1,34 @@
-import { useEffect, useRef, useState } from 'react'
-import type { LocalizedText, LocaleTranslator } from '@helmx/protocol/browser'
+import { useContext, useEffect, useRef, useState } from 'react'
 import { HelmxIcon } from '../icons.js'
 import { Popover, PopoverContent, PopoverPortal, PopoverTrigger } from './Popover.js'
-import { usePluginClientDataHandles, usePluginClientHost } from '../host-port.js'
-import { useModels } from '../conversation-hooks.js'
-import { usePluginTranslator } from '../i18n.js'
-import { modelPickerCopy, uiCopy } from '../ui-copy.js'
+import { PluginClientHostHandlesContext } from '../host-port.js'
+import { useHostModels } from '../conversation-hooks.js'
 import {
+  DEFAULT_MODEL_PICKER_COPY,
   formatModelRowDisplay,
   formatModelShortName,
+  formatModelPickerCopy,
   initialModelActiveIndex,
   resolveEffectiveThinkingLevel,
   stepActiveIndex,
   usePanelShortcut,
   type HelmxPanel,
+  type ModelPickerControlCopy,
 } from './model-picker-model.js'
-
-/** LocaleTranslator has no interpolation; shared control copy interpolates `{key}` locally. */
-function tr(t: LocaleTranslator, text: LocalizedText, params: Record<string, string | number>): string {
-  let out = t(text)
-  for (const [key, value] of Object.entries(params)) {
-    out = out.replaceAll(`{${key}}`, String(value))
-  }
-  return out
-}
 
 // ---------------------------------------------------------------------------
 // ModelPickerControl (shared by the host composer / standby / config forms and
-// plugin clients): model and thinking-level picking in a Radix Popover over the
-// host model catalog slice. Each model row carries its thinking levels inline
-// on the right: one click on a level chip applies model + level together in a
-// single commit; clicking the row body (or Enter in the search) applies the
-// model alone so the level follows the default chain (server-authoritative).
-// Only the effective model's row shows an active level chip (the default chain
-// for other models resolves server-side, so pre-highlighting one would be
-// dishonest).
+// plugin clients): model and thinking-level picking in a Radix Popover over
+// the host model catalog slice (useHostModels stable-handle read, isolated
+// from host port value churn). Each model row carries its thinking levels
+// inline on the right: one click on a level chip applies model + level
+// together in a single commit; clicking the row body (or Enter in the search)
+// applies the model alone so the level follows the default chain
+// (server-authoritative). Only the effective model's row shows an active
+// level chip (the default chain for other models resolves server-side, so
+// pre-highlighting one would be dishonest). The control reads no churning
+// context: display copy arrives via the `copy` prop (English SDK defaults)
+// and refresh notices via the `onNotice` callback.
 // ---------------------------------------------------------------------------
 
 export interface ModelPickerControlProps {
@@ -53,6 +47,8 @@ export interface ModelPickerControlProps {
   buttonId?: string
   buttonAriaLabel?: string
   placeholderLabel?: string
+  /** Control-internal display copy (defaults to English; hosts pass localized strings). */
+  copy?: Partial<ModelPickerControlCopy>
   /** Popover placement side. */
   popoverSide?: 'top' | 'bottom'
   /** Enable the host Ctrl+L panel shortcut toggle. */
@@ -61,8 +57,12 @@ export interface ModelPickerControlProps {
   showThinkingLevels?: boolean
   disabled?: boolean
   pending?: boolean
-  /** Owning conversation id (refresh notices; omit outside conversations). */
-  conversationId?: number
+  /**
+   * Notice channel for catalog refresh outcomes. Absent = no toast (the
+   * refresh action itself still runs and surfaces nothing silently fake);
+   * hosts pass their notification pipeline here.
+   */
+  onNotice?: (message: string, tone: 'info' | 'warning' | 'error') => void
   /** Apply the candidate model; thinkingLevel null = follow the default chain. */
   onApply: (model: string, thinkingLevel: string | null) => void | Promise<void>
   onResetDefault: () => void | Promise<void>
@@ -79,20 +79,25 @@ export function ModelPickerControl({
   buttonId,
   buttonAriaLabel,
   placeholderLabel,
+  copy: copyOverride,
   popoverSide = 'top',
   enableShortcut = true,
   showThinkingLevels = true,
   disabled = false,
   pending = false,
-  conversationId,
+  onNotice,
   onApply,
   onResetDefault,
   onCatalogRefreshed,
 }: ModelPickerControlProps) {
-  const { unknown: catalogUnknown, models } = useModels()
-  const handles = usePluginClientDataHandles()
-  const port = usePluginClientHost()
-  const t = usePluginTranslator()
+  // Catalog slice via the stable-handle context: undefined = capability not
+  // injected or first load in flight (explicit unknown state, never a
+  // fabricated empty catalog); models: [] = loaded and genuinely empty.
+  const catalog = useHostModels()
+  const handles = useContext(PluginClientHostHandlesContext)
+  const copy: ModelPickerControlCopy = { ...DEFAULT_MODEL_PICKER_COPY, ...copyOverride }
+  const models = catalog?.models ?? []
+  const catalogUnknown = catalog === undefined
   const [open, setOpen] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [query, setQuery] = useState('')
@@ -141,10 +146,8 @@ export function ModelPickerControl({
     itemRefs.current[activeIndex]?.scrollIntoView?.({ block: 'nearest' })
   }, [open, activeIndex])
 
-  const notify = (title: string, tone: 'info' | 'warning' | 'error', body?: string): void => {
-    // The port notification channel carries a single message; fold title/body
-    // into one line so the diagnostic detail never silently disappears.
-    port.notify(body !== undefined && body !== '' ? `${title} — ${body}` : title, tone, conversationId)
+  const notify = (message: string, tone: 'info' | 'warning' | 'error'): void => {
+    onNotice?.(message, tone)
   }
 
   const refreshCatalog = async (): Promise<void> => {
@@ -154,18 +157,14 @@ export function ModelPickerControl({
     try {
       const res = await refreshModels()
       await onCatalogRefreshed?.()
-      const errors = Object.entries(res.errors ?? {})
+      const errors = Object.entries(res?.errors ?? {})
       if (errors.length > 0) {
-        notify(t(modelPickerCopy.catalogPartialFailure), 'warning', errors.map(([p, err]) => `${p}: ${err}`).join('; '))
+        notify(`${copy.catalogPartialFailure} — ${errors.map(([p, err]) => `${p}: ${err}`).join('; ')}`, 'warning')
       } else {
-        notify(
-          t(modelPickerCopy.catalogRefreshed),
-          'info',
-          tr(t, modelPickerCopy.catalogCount, { count: res.modelCount }),
-        )
+        notify(copy.catalogRefreshed, 'info')
       }
     } catch (err) {
-      notify(t(modelPickerCopy.catalogRefreshFailed), 'error', err instanceof Error ? err.message : String(err))
+      notify(`${copy.catalogRefreshFailed} — ${err instanceof Error ? err.message : String(err)}`, 'error')
     } finally {
       setRefreshing(false)
     }
@@ -183,7 +182,7 @@ export function ModelPickerControl({
   }
 
   const rawShortName = formatModelShortName(effectiveModel)
-  const shortName = rawShortName !== '' ? rawShortName : (placeholderLabel ?? t(modelPickerCopy.defaultLabel))
+  const shortName = rawShortName !== '' ? rawShortName : (placeholderLabel ?? copy.defaultLabel)
   const currentModel = effectiveModel !== undefined && effectiveModel !== '' ? models.find((model) => model.id === effectiveModel) : undefined
   const currentLevels = currentModel?.thinkingLevels ?? ['off']
   const supportsThinking = showThinkingLevels && currentLevels.some((level) => level !== 'off')
@@ -206,9 +205,9 @@ export function ModelPickerControl({
             aria-expanded={open}
             aria-label={
               buttonAriaLabel ??
-              tr(t, modelPickerCopy.buttonAria, {
+              formatModelPickerCopy(copy.buttonAria, {
                 model: shortName,
-                level: showLevel ? tr(t, modelPickerCopy.levelSuffix, { level: effectiveLevel }) : '',
+                level: showLevel ? formatModelPickerCopy(copy.levelSuffix, { level: effectiveLevel }) : '',
               })
             }
             title={buttonTitle}
@@ -221,7 +220,6 @@ export function ModelPickerControl({
         </PopoverTrigger>
         <PopoverPortal>
           <PopoverContent
-
             side={popoverSide}
             align="start"
             sideOffset={8}
@@ -259,8 +257,8 @@ export function ModelPickerControl({
                 <HelmxIcon name="search" size={13} />
                 <input
                   ref={searchInputRef}
-                  aria-label={t(modelPickerCopy.searchAria)}
-                  placeholder={t(modelPickerCopy.searchPlaceholder)}
+                  aria-label={copy.searchAria}
+                  placeholder={copy.searchPlaceholder}
                   value={query}
                   onChange={(event) => setQuery(event.target.value)}
                   onKeyDown={(event) => {
@@ -287,8 +285,8 @@ export function ModelPickerControl({
                   type="button"
                   className="btn btn-ghost btn-icon-sm composer-model-refresh-btn"
                   disabled={refreshing}
-                  title={t(modelPickerCopy.refreshCatalog)}
-                  aria-label={t(modelPickerCopy.refreshCatalog)}
+                  title={copy.refreshCatalog}
+                  aria-label={copy.refreshCatalog}
                   onClick={(e) => {
                     e.stopPropagation()
                     void refreshCatalog()
@@ -300,8 +298,8 @@ export function ModelPickerControl({
             </div>
             <div className="composer-model-scroll" onMouseLeave={() => setActiveIndex(-1)}>
               <div className="popover-header">
-                <span>{t(modelPickerCopy.listHeader)}</span>
-                <span className="kbd-hint popover-kbd-hint">{t(modelPickerCopy.navHint)}</span>
+                <span>{copy.listHeader}</span>
+                <span className="kbd-hint popover-kbd-hint">{copy.navHint}</span>
               </div>
               {filteredModels.map((m, idx) => {
                 const levels = m.thinkingLevels ?? ['off']
@@ -323,7 +321,7 @@ export function ModelPickerControl({
                     <button
                       type="button"
                       className="composer-model-row-main"
-                      title={tr(t, modelPickerCopy.rowDefaultTitle, { model: m.id })}
+                      title={formatModelPickerCopy(copy.rowDefaultTitle, { model: m.id })}
                       disabled={disabled}
                       aria-current={isCurrent ? 'true' : undefined}
                       onClick={() => applySelection(m.id, null)}
@@ -335,7 +333,7 @@ export function ModelPickerControl({
                       <span className="popover-item-meta composer-model-row-source">{display.source}</span>
                     </button>
                     {rowSupportsThinking ? (
-                      <span className="segmented-control composer-model-row-levels" role="group" aria-label={t(modelPickerCopy.thinkingHeader)}>
+                      <span className="segmented-control composer-model-row-levels" role="group" aria-label={copy.thinkingHeader}>
                         {levels.map((level) => (
                           <button
                             key={level}
@@ -343,7 +341,7 @@ export function ModelPickerControl({
                             className="segmented-control-btn composer-model-level-chip"
                             disabled={disabled}
                             aria-pressed={m.id === effectiveModel && level === activeRowLevel ? 'true' : undefined}
-                            title={tr(t, modelPickerCopy.levelChipTitle, { model: m.id, level })}
+                            title={formatModelPickerCopy(copy.levelChipTitle, { model: m.id, level })}
                             onClick={() => applySelection(m.id, level)}
                           >
                             {level}
@@ -355,11 +353,11 @@ export function ModelPickerControl({
                 )
               })}
               {catalogUnknown ? (
-                <div className="popover-item composer-model-empty">{t(uiCopy.modelCatalogUnavailable)}</div>
+                <div className="popover-item composer-model-empty">{copy.catalogUnavailable}</div>
               ) : allUnavailable ? (
-                <div className="popover-item composer-model-empty">{t(modelPickerCopy.emptyCatalog)}</div>
+                <div className="popover-item composer-model-empty">{copy.emptyCatalog}</div>
               ) : filteredModels.length === 0 ? (
-                <div className="popover-item composer-model-empty">{t(modelPickerCopy.noMatches)}</div>
+                <div className="popover-item composer-model-empty">{copy.noMatches}</div>
               ) : null}
             </div>
           </PopoverContent>

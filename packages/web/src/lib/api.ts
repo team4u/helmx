@@ -15,10 +15,10 @@ import type {
   ConversationSummary,
   CredentialSummary,
   InputOrigin,
+  HostModelEntry,
   ModelCatalogEntry,
   ModelProviderSummary,
   ModelProvidersRefreshResult,
-  ModelSummary,
   NodeHealthSnapshot,
   NodeInfo,
   NodeIssuedToken,
@@ -384,21 +384,27 @@ export const asksApi = {
 
 /**
  * Flattened model catalog view (id = 'provider/modelId'; thinking levels
- * inlined). Shape is owned by @helmx/protocol (ModelSummary) — the host web
+ * inlined). Shape is owned by @helmx/protocol (HostModelEntry) — the host web
  * app consumes the shared contract instead of keeping a private duplicate.
  */
-export type ModelDescriptor = ModelSummary
+export type ModelDescriptor = HostModelEntry
 
-export interface ModelCatalogInfo {
-  models: ModelDescriptor[]
+/** GET /api/models 顶层全局默认链（HostModelsSlice 除 models 外的部分）。 */
+export interface ModelCatalogDefaults {
   /** 全局默认模型（未配置省略）。 */
   defaultModel?: string
   /** 全局默认思考档位（未配置省略）。 */
   defaultThinkingLevel?: string
+  /** 逐模型思考默认（'provider/modelId' -> level；未配置省略）。 */
+  modelThinkingLevels?: Record<string, string>
   /** 全局压缩模型（未配置省略）。 */
   defaultCompactionModel?: string
   /** 全局压缩思考档位（未配置省略）。 */
   defaultCompactionThinkingLevel?: string
+}
+
+export interface ModelCatalogInfo extends ModelCatalogDefaults {
+  models: ModelDescriptor[]
 }
 
 /** 解析 GET /api/models：新版 { models, thinkingLevels, defaultModel } 形状。 */
@@ -411,8 +417,17 @@ export function normalizeModelCatalogInfo(raw: unknown): ModelCatalogInfo {
     thinkingLevels?: unknown
     defaultModel?: unknown
     defaultThinkingLevel?: unknown
+    modelThinkingLevels?: unknown
     defaultCompactionModel?: unknown
     defaultCompactionThinkingLevel?: unknown
+  }
+  const modelThinkingLevelsRaw =
+    body.modelThinkingLevels && typeof body.modelThinkingLevels === 'object' && !Array.isArray(body.modelThinkingLevels)
+      ? (body.modelThinkingLevels as Record<string, unknown>)
+      : {}
+  const modelThinkingLevels: Record<string, string> = {}
+  for (const [key, level] of Object.entries(modelThinkingLevelsRaw)) {
+    if (typeof level === 'string' && level !== '') modelThinkingLevels[key] = level
   }
   const levelsRaw = body.thinkingLevels && typeof body.thinkingLevels === 'object' && !Array.isArray(body.thinkingLevels)
     ? body.thinkingLevels as Record<string, unknown>
@@ -450,6 +465,7 @@ export function normalizeModelCatalogInfo(raw: unknown): ModelCatalogInfo {
     models,
     ...(typeof body.defaultModel === 'string' && body.defaultModel !== '' ? { defaultModel: body.defaultModel } : {}),
     ...(typeof body.defaultThinkingLevel === 'string' && body.defaultThinkingLevel !== '' ? { defaultThinkingLevel: body.defaultThinkingLevel } : {}),
+    ...(Object.keys(modelThinkingLevels).length > 0 ? { modelThinkingLevels } : {}),
     ...(typeof body.defaultCompactionModel === 'string' && body.defaultCompactionModel !== '' ? { defaultCompactionModel: body.defaultCompactionModel } : {}),
     ...(typeof body.defaultCompactionThinkingLevel === 'string' && body.defaultCompactionThinkingLevel !== ''
       ? { defaultCompactionThinkingLevel: body.defaultCompactionThinkingLevel }
@@ -478,7 +494,7 @@ export const assetsApi = {
     apiRequest<{ ok: boolean }>('DELETE', `/api/credentials/${encodeURIComponent(id)}`),
 
   listModels: async (opts?: { signal?: AbortSignal }) =>
-    normalizeModelCatalogInfo(await apiRequest<unknown>('GET', '/api/models', undefined, opts?.signal)).models,
+    normalizeModelCatalogInfo(await apiRequest<unknown>('GET', '/api/models', undefined, opts?.signal)),
   getDefaultModel: (opts?: { signal?: AbortSignal }) =>
     apiRequest<{
       defaultModel: string

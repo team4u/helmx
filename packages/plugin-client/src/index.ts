@@ -56,8 +56,10 @@ export type { ToolActivityRegistry } from './tool-activity.js'
 export { ModelPickerControl } from './ui/ModelPicker.js'
 export type { ModelPickerControlProps } from './ui/ModelPicker.js'
 export {
+  DEFAULT_MODEL_PICKER_COPY,
   formatModelRowDisplay,
   formatModelShortName,
+  formatModelPickerCopy,
   initialModelActiveIndex,
   resolveEffectiveThinkingLevel,
   stepActiveIndex,
@@ -66,7 +68,7 @@ export {
   isShortcutPanelMatch,
   usePanelShortcut,
 } from './ui/model-picker-model.js'
-export type { ModelRowDisplay, HelmxPanel, HelmxShortcutEventDetail } from './ui/model-picker-model.js'
+export type { ModelRowDisplay, HelmxPanel, HelmxShortcutEventDetail, ModelPickerControlCopy } from './ui/model-picker-model.js'
 
 // ---- Accessibility base components (Radix wrappers) ----
 export { Switch } from './ui/Switch.js'

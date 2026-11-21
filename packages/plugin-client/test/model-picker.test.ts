@@ -1,40 +1,35 @@
 /**
- * Shared ModelPickerControl + useModels model-catalog slice tests:
- * - manifest lock: the new shared symbols are listed in the protocol
- *   PLUGIN_CLIENT_SHARED_EXPORTS manifest and really exported by the SDK;
+ * Shared ModelPickerControl + host model catalog slice integration tests
+ * (contract shapes owned by the frozen sdk-contract ABI):
+ * - manifest lock: ModelPickerControl and the model pure functions are listed
+ *   in the protocol PLUGIN_CLIENT_SHARED_EXPORTS manifest and really exported;
  * - pure helpers: short-name/route-splitting display, thinking-level
- *   convergence, keyboard index stepping;
+ *   convergence, keyboard index stepping, copy interpolation;
  * - SSR: the control renders the trigger (short name + level suffix) with no
- *   browser side effects and zero emoji;
- * - handle contract: useModels reads the catalog through the stable
- *   PluginClientDataHandlesContext (never the per-frame-rebuilt host port): a
- *   host port identity churn (rebuilt on every conversation streaming frame)
- *   never re-renders consumers, while a real catalog domain emit does;
- * - honesty gates: absent capability -> explicit unknown snapshot (never a
- *   fabricated empty-catalog truth); absent refreshModels -> the refresh entry
- *   is hidden instead of faking success;
+ *   browser side effects and zero emoji, reading the catalog through the
+ *   stable PluginClientHostHandlesContext (useHostModels);
+ * - churn isolation (#23 P0.2): the control itself reads no churning context
+ *   (no locale / notify context reads — copy and notices arrive via props), so
+ *   a memoized wrapper re-renders zero times under main-port identity churn
+ *   and exactly once per real catalog revision;
+ * - honesty gates: undefined slice = capability absent or first load in flight
+ *   (explicit unavailable copy, never a fabricated empty-catalog truth);
+ *   absent refreshModels hides the refresh entry instead of faking success;
  * - PI apply semantics coverage split: the interactive popover contract (row
  *   body = (model, null) default-chain apply, level chip = (model, level)
  *   single commit, reset row, search filtering, refresh wiring) is exercised
  *   end-to-end by the host consumer suites (web composer-keybindings /
- *   global-defaults-panel / agent-standby tests mount this exact control in
- *   the full host bridge); this package keeps the contract, SSR, pure-helper
- *   and isolation invariants here because the popper-dependent portal cannot
- *   expand under this package's minimal happy-dom setup.
+ *   global-defaults-panel / plugin-detail-drawer / agent-standby tests mount
+ *   this exact control in the full host bridge); this package keeps the
+ *   contract, SSR, pure-helper and isolation invariants because the
+ *   popper-dependent portal cannot expand under this package's minimal
+ *   happy-dom setup.
  */
-import * as React from 'react'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 GlobalRegistrator.register()
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
+import * as React from 'react'
 ;(globalThis as Record<string, unknown>).React = React
-// Radix popper content requires ResizeObserver; happy-dom does not provide one.
-if ((globalThis as Record<string, unknown>).ResizeObserver === undefined) {
-  ;(globalThis as Record<string, unknown>).ResizeObserver = class {
-    observe(): void {}
-    unobserve(): void {}
-    disconnect(): void {}
-  }
-}
 
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
@@ -45,6 +40,8 @@ import { PLUGIN_CLIENT_SHARED_EXPORTS } from '@helmx/protocol'
 import * as SDK from '../src/index.js'
 import { ModelPickerControl } from '../src/ui/ModelPicker.js'
 import {
+  DEFAULT_MODEL_PICKER_COPY,
+  formatModelPickerCopy,
   formatModelRowDisplay,
   formatModelShortName,
   initialModelActiveIndex,
@@ -52,12 +49,12 @@ import {
   stepActiveIndex,
 } from '../src/ui/model-picker-model.js'
 import {
-  PluginClientDataHandlesContext,
   PluginClientHostContext,
-  type PluginClientDataHandles,
+  PluginClientHostHandlesContext,
+  type PluginClientHostHandles,
   type PluginClientHostPort,
 } from '../src/host-port.js'
-import { useModels } from '../src/conversation-hooks.js'
+import { useHostModels } from '../src/conversation-hooks.js'
 
 const e = React.createElement
 
@@ -70,37 +67,35 @@ const CATALOG_MODELS = [
 ]
 
 interface CatalogHandle {
-  snapshot: { unknown: boolean; models: typeof CATALOG_MODELS }
+  slice: { models: typeof CATALOG_MODELS } | undefined
   listeners: Set<() => void>
 }
 
-/** Minimal stable data handles carrying the model-catalog capability. */
-function makeHandles(handle: CatalogHandle): PluginClientDataHandles {
+/** Minimal stable host handles carrying the model-catalog capability. */
+function makeHandles(handle: CatalogHandle, extra?: Partial<PluginClientHostHandles>): PluginClientHostHandles {
   return {
-    subscribeModels: (listener) => {
+    subscribeModels: (listener: () => void) => {
       handle.listeners.add(listener)
-      return () => handle.listeners.delete(listener)
+      return () => {
+        handle.listeners.delete(listener)
+      }
     },
-    getModelsSnapshot: () => handle.snapshot,
+    getModels: () => handle.slice,
+    ...extra,
   }
 }
 
-/** Host port stub carrying only what the control reads directly (notify). */
-function makePort(extra?: Partial<PluginClientHostPort>): PluginClientHostPort {
-  return { ...extra } as unknown as PluginClientHostPort
+/** Host port stub (the churning context — carries no model facts anymore). */
+function makePort(): PluginClientHostPort {
+  return {} as unknown as PluginClientHostPort
 }
-
-const click = (el: Element): Promise<void> =>
-  act(async () => {
-    ;(el as HTMLElement).click()
-  })
 
 // ---------------------------------------------------------------------------
 // 1. Manifest lock + pure helpers
 // ---------------------------------------------------------------------------
 
 test('model picker symbols are in the protocol manifest and really exported (bidirectional lock)', { timeout: 60_000 }, () => {
-  for (const name of ['useModels', 'ModelPickerControl', 'formatModelShortName', 'formatModelRowDisplay', 'resolveEffectiveThinkingLevel']) {
+  for (const name of ['useHostModels', 'ModelPickerControl', 'formatModelShortName', 'formatModelRowDisplay', 'resolveEffectiveThinkingLevel']) {
     assert.ok(
       (PLUGIN_CLIENT_SHARED_EXPORTS as readonly string[]).includes(name),
       `PLUGIN_CLIENT_SHARED_EXPORTS must include ${name}`,
@@ -125,7 +120,7 @@ test('formatModelShortName / formatModelRowDisplay: nested route prefixes move t
   })
 })
 
-test('resolveEffectiveThinkingLevel / index stepping semantics', { timeout: 60_000 }, () => {
+test('resolveEffectiveThinkingLevel / index stepping / copy interpolation semantics', { timeout: 60_000 }, () => {
   assert.equal(resolveEffectiveThinkingLevel(['off', 'low', 'high'], 'high'), 'high')
   assert.equal(resolveEffectiveThinkingLevel(['off', 'low', 'high'], 'max'), 'off')
   assert.equal(resolveEffectiveThinkingLevel(['low', 'high'], 'off'), 'low')
@@ -136,16 +131,18 @@ test('resolveEffectiveThinkingLevel / index stepping semantics', { timeout: 60_0
   assert.equal(stepActiveIndex(0, 3, -1), 2)
   assert.equal(stepActiveIndex(2, 3, 1), 0)
   assert.equal(stepActiveIndex(0, 0, 1), -1)
+  assert.equal(formatModelPickerCopy('Use {model} · thinking {level}', { model: 'a/b', level: 'high' }), 'Use a/b · thinking high')
+  assert.equal(DEFAULT_MODEL_PICKER_COPY.defaultLabel, 'Default model')
 })
 
 // ---------------------------------------------------------------------------
 // 2. SSR + handle-driven rendering
 // ---------------------------------------------------------------------------
 
-test('SSR: trigger renders short name + effective level suffix without browser side effects', { timeout: 60_000 }, () => {
-  const handle: CatalogHandle = { snapshot: { unknown: false, models: CATALOG_MODELS }, listeners: new Set() }
+test('SSR: trigger renders the effective model short name; the catalog slice stays undefined server-side (honest)', { timeout: 60_000 }, () => {
+  const handle: CatalogHandle = { slice: { models: CATALOG_MODELS }, listeners: new Set() }
   const html = renderToString(
-    e(PluginClientDataHandlesContext.Provider, { value: makeHandles(handle) },
+    e(PluginClientHostHandlesContext.Provider, { value: makeHandles(handle) },
       e(PluginClientHostContext.Provider, { value: makePort() },
         e(ModelPickerControl, {
           effectiveModel: 'anthropic/claude-3-7-sonnet',
@@ -157,59 +154,85 @@ test('SSR: trigger renders short name + effective level suffix without browser s
           onResetDefault: () => {},
         }))),
   )
+  // The frozen contract pins the server snapshot to undefined, so the trigger
+  // renders the prop-driven short name while catalog-derived facts (level
+  // suffix, capability lookups) honestly stay absent until hydration.
   assert.match(html, /claude-3-7-sonnet/)
-  assert.match(html, /· high/)
   assert.match(html, /composer-model-button/)
   assert.doesNotMatch(html, /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u, 'zero emoji in the shared control')
 })
 
-test('useModels reads the catalog through the stable handles context: port identity churn never re-renders, a catalog emit does', { timeout: 60_000 }, async () => {
-  const handle: CatalogHandle = { snapshot: { unknown: true, models: [] }, listeners: new Set() }
+test('churn isolation: main-port identity churn never re-renders the control or useHostModels consumers; a catalog revision does', { timeout: 60_000 }, async () => {
+  const handle: CatalogHandle = { slice: undefined, listeners: new Set() }
   const handles = makeHandles(handle)
 
-  let renderCount = 0
+  let probeRenders = 0
   function ProbeInner(): React.ReactNode {
-    renderCount += 1
-    const catalog = useModels()
-    return e('span', { 'data-testid': 'probe' }, `${catalog.unknown ? 'unknown' : `ready:${catalog.models.length}`}`)
+    probeRenders += 1
+    const catalog = useHostModels()
+    return e('span', { 'data-testid': 'probe' }, catalog === undefined ? 'unknown' : `ready:${catalog.models.length}`)
   }
   // Memoized so re-rendering the harness (fresh provider elements per frame,
   // as the host bridge produces) only propagates through context updates —
   // the exact isolation property under test.
   const Probe = React.memo(ProbeInner)
 
+  // The control (memoized wrapper): the store-driven re-render happens inside
+  // ModelPickerControl itself, so the proof is the rendered output, not the
+  // wrapper render count.
+  const ControlProbe = React.memo(function ControlProbe(): React.ReactNode {
+    return e(ModelPickerControl, {
+      effectiveModel: 'anthropic/claude-3-7-sonnet',
+      activeThinkingLevel: 'high',
+      resetLabel: 'Reset',
+      resetTitle: 'Reset',
+      buttonTitle: 'Current model',
+      onApply: () => {},
+      onResetDefault: () => {},
+    })
+  })
+
   const container = document.createElement('div')
   document.body.appendChild(container)
   const root = ReactDOMClient.createRoot(container)
 
-  await act(async () => {
-    root.render(
-      e(PluginClientDataHandlesContext.Provider, { value: handles },
-        e(PluginClientHostContext.Provider, { value: makePort() }, e(Probe))),
-    )
-  })
-  assert.match(container.textContent ?? '', /unknown/)
-  const rendersAfterMount = renderCount
-
-  // The host rebuilds the port object identity on unrelated streaming frames
-  // (fresh conversations/lives maps) while the data handles stay stable:
-  // useModels consumers must not re-render.
-  for (let i = 0; i < 5; i++) {
+  const renderFrame = async (): Promise<void> => {
     await act(async () => {
       root.render(
-        e(PluginClientDataHandlesContext.Provider, { value: handles },
-          e(PluginClientHostContext.Provider, { value: makePort() }, e(Probe))),
+        e(PluginClientHostHandlesContext.Provider, { value: handles },
+          e(PluginClientHostContext.Provider, { value: makePort() },
+            e(React.Fragment, null, e(Probe), e(ControlProbe)))),
       )
     })
   }
-  assert.equal(renderCount, rendersAfterMount, 'host port identity churn (streaming frames) must not re-render useModels consumers')
+  await renderFrame()
+  assert.match(container.textContent ?? '', /unknown/)
+  const probeBaseline = probeRenders
+
+  // The host rebuilds the main port object identity on unrelated streaming
+  // frames (fresh conversations/lives maps) while the stable handles stay
+  // reference-equal: the memoized hook consumer must not re-render, and the
+  // control's rendered output must stay identical (no level suffix yet).
+  for (let i = 0; i < 5; i++) await renderFrame()
+  assert.equal(probeRenders, probeBaseline, 'main-port identity churn must not re-render useHostModels consumers')
+  assert.doesNotMatch(container.innerHTML, /· high/, 'the control output stays unchanged under port churn')
 
   await act(async () => {
-    handle.snapshot = { unknown: false, models: CATALOG_MODELS }
+    handle.slice = { models: CATALOG_MODELS }
     for (const listener of handle.listeners) listener()
   })
-  assert.ok(renderCount > rendersAfterMount, 'a real catalog domain emit re-renders consumers')
+  assert.ok(probeRenders > probeBaseline, 'a real catalog revision re-renders useHostModels consumers')
   assert.match(container.textContent ?? '', /ready:5/)
+  // The control itself consumed the revision: the catalog now supplies the
+  // model's thinking levels, so the trigger label gains the level suffix.
+  assert.match(container.innerHTML, /· high/, 'the control renders the effective level once the slice arrives')
+
+  // Same-reference re-notify: zero extra renders (slice memoization contract).
+  const afterRevision = probeRenders
+  await act(async () => {
+    for (const listener of handle.listeners) listener()
+  })
+  assert.equal(probeRenders, afterRevision, 'a same-reference notification must not re-render consumers')
 
   await act(async () => {
     root.unmount()
@@ -217,22 +240,38 @@ test('useModels reads the catalog through the stable handles context: port ident
   container.remove()
 })
 
-test('absent catalog capability: explicit unknown snapshot, never a fabricated empty-catalog truth', { timeout: 60_000 }, async () => {
-  let probed: { unknown: boolean; count: number } | undefined
-  function Probe(): React.ReactNode {
-    const catalog = useModels()
-    probed = { unknown: catalog.unknown, count: catalog.models.length }
-    return null
-  }
-  const container = document.createElement('div')
-  document.body.appendChild(container)
-  const root = ReactDOMClient.createRoot(container)
-  await act(async () => {
-    root.render(e(PluginClientHostContext.Provider, { value: makePort() }, e(Probe)))
-  })
-  assert.deepEqual(probed, { unknown: true, count: 0 }, 'hosts without the handles context report unknown, not "no models exist"')
-  await act(async () => {
-    root.unmount()
-  })
-  container.remove()
+test('undefined slice (capability absent / first load in flight) renders the explicit unavailable state', { timeout: 60_000 }, () => {
+  const handle: CatalogHandle = { slice: undefined, listeners: new Set() }
+  const html = renderToString(
+    e(PluginClientHostHandlesContext.Provider, { value: makeHandles(handle) },
+      e(ModelPickerControl, {
+        effectiveModel: undefined,
+        activeThinkingLevel: 'off',
+        resetLabel: 'Reset',
+        resetTitle: 'Reset',
+        buttonTitle: 'Current model',
+        onApply: () => {},
+        onResetDefault: () => {},
+      })),
+  )
+  assert.ok(html.length > 0, 'the control renders with an undefined slice (no crash)')
+  assert.match(DEFAULT_MODEL_PICKER_COPY.catalogUnavailable, /unavailable/i, 'SDK default copy carries an explicit unavailable state')
+})
+
+test('copy is prop-driven: overrides replace English defaults verbatim (zero locale context reads)', { timeout: 60_000 }, () => {
+  const handle: CatalogHandle = { slice: { models: CATALOG_MODELS }, listeners: new Set() }
+  const html = renderToString(
+    e(PluginClientHostHandlesContext.Provider, { value: makeHandles(handle) },
+      e(ModelPickerControl, {
+        effectiveModel: undefined,
+        activeThinkingLevel: 'off',
+        resetLabel: '重置',
+        resetTitle: '重置',
+        buttonTitle: '标题',
+        copy: { defaultLabel: '跟随默认模型', searchAria: '搜索模型' },
+        onApply: () => {},
+        onResetDefault: () => {},
+      })),
+  )
+  assert.match(html, /跟随默认模型/)
 })

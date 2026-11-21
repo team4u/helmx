@@ -141,3 +141,68 @@ export function usePanelShortcut(
     return () => window.removeEventListener(HELMX_SHORTCUT_EVENT, onShortcut)
   }, [rootRef, action, fallback])
 }
+
+/**
+ * Control-internal display copy for ModelPickerControl. The control reads no
+ * locale context (stable-render discipline): English SDK defaults live here,
+ * and hosts pass their own localized strings via the `copy` prop.
+ */
+export interface ModelPickerControlCopy {
+  /** Trigger aria-label template ({model}/{level}). */
+  buttonAria: string
+  /** Level suffix inside the trigger aria-label ({level}). */
+  levelSuffix: string
+  /** Trigger label when no model is effective and no placeholder was provided. */
+  defaultLabel: string
+  searchAria: string
+  searchPlaceholder: string
+  refreshCatalog: string
+  listHeader: string
+  /** Keyboard hint shown in the popover header. */
+  navHint: string
+  /** Loaded catalog with zero usable models. */
+  emptyCatalog: string
+  /** Search matched nothing. */
+  noMatches: string
+  /** Level-chip group aria-label. */
+  thinkingHeader: string
+  /** Row body title ({model}). */
+  rowDefaultTitle: string
+  /** Level chip title ({model}/{level}). */
+  levelChipTitle: string
+  /** Catalog facts unknowable (capability absent or first load in flight). */
+  catalogUnavailable: string
+  catalogPartialFailure: string
+  catalogRefreshed: string
+  catalogRefreshFailed: string
+}
+
+/** English SDK defaults (hosts localize via the copy prop). */
+export const DEFAULT_MODEL_PICKER_COPY: Readonly<ModelPickerControlCopy> = Object.freeze({
+  buttonAria: 'Model and thinking level: {model}{level}',
+  levelSuffix: ' · {level}',
+  defaultLabel: 'Default model',
+  searchAria: 'Search models',
+  searchPlaceholder: 'Search models…',
+  refreshCatalog: 'Refresh dynamic model catalog',
+  listHeader: 'Model list',
+  navHint: '↑↓ select · Enter confirm',
+  emptyCatalog: 'No models available; configure a provider key in Models & credentials first',
+  noMatches: 'No matching models',
+  thinkingHeader: 'Thinking level',
+  rowDefaultTitle: 'Use {model} (thinking level follows the default)',
+  levelChipTitle: 'Use {model} · thinking {level}',
+  catalogUnavailable: 'Model catalog unavailable',
+  catalogPartialFailure: 'Some provider catalog refreshes failed',
+  catalogRefreshed: 'Model catalog refreshed',
+  catalogRefreshFailed: 'Failed to refresh model catalog',
+})
+
+/** Interpolate `{key}` placeholders in a copy string. */
+export function formatModelPickerCopy(text: string, params: Record<string, string | number>): string {
+  let out = text
+  for (const [key, value] of Object.entries(params)) {
+    out = out.replaceAll(`{${key}}`, String(value))
+  }
+  return out
+}

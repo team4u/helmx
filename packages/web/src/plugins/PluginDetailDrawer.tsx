@@ -22,6 +22,7 @@ import {
   AlertDialogTitle,
 } from '../ui/AlertDialog.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
+import { buildModelPickerControlCopy, useModelPickerControlAdapter } from '../conversation/model-picker-adapter.js'
 import {
   formatInstalledAt,
   pluginPackageErrorText,
@@ -92,6 +93,8 @@ export function PluginConfigForm({
 }: PluginConfigFormProps): React.JSX.Element {
   const t = useMemo(() => createWebTranslator(locale), [locale])
   const entries = Object.entries(config.schema ?? {})
+  const { onNotice } = useModelPickerControlAdapter()
+  const pickerCopy = useMemo(() => buildModelPickerControlCopy(t), [t])
   const [values, setValues] = useState<Record<string, ConfigValue>>(() => initialFormValues(config))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -205,6 +208,8 @@ export function PluginConfigForm({
                     enableShortcut={false}
                     showThinkingLevels={false}
                     disabled={saving}
+                    copy={pickerCopy}
+                    onNotice={onNotice}
                     onApply={(id) => setValues((prev) => ({ ...prev, [key]: id }))}
                     onResetDefault={() => setValues((prev) => ({ ...prev, [key]: '' }))}
                   />

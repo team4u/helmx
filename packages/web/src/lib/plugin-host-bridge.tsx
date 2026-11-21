@@ -5,9 +5,9 @@
  * （那会破坏受控输入的事件委托）；生产 HelmxStoreProvider 与测试共用同一实现。
  */
 import { useCallback, useMemo, useRef, useSyncExternalStore } from 'react'
-import type { ModelCatalogRefreshOutcome, ModelCatalogSnapshot } from '@helmx/protocol/browser'
-import type { PluginClientHostPort } from '@helmx/plugin-client'
-import { PluginClientDataHandlesContext, PluginClientHostContext } from '@helmx/plugin-client'
+import type { HostModelsSlice } from '@helmx/protocol/browser'
+import type { PluginClientHostHandles, PluginClientHostPort } from '@helmx/plugin-client'
+import { PluginClientHostContext, PluginClientHostHandlesContext } from '@helmx/plugin-client'
 import { createLocaleTranslator } from '@helmx/protocol/browser'
 import type { HelmxExternalStore } from './helmx-store.js'
 import { assetsApi } from './api.js'
@@ -22,10 +22,13 @@ export function PluginClientHostBridge({ store, children }: { store: HelmxExtern
   const subscribe = useCallback((listener: () => void) => store.subscribeDomain('pluginHostPort', listener), [store])
   const slice = useSyncExternalStore(subscribe, store.getPluginHostPortSlice, store.getPluginHostPortSlice)
 
-  // ---- 模型目录切片（#23 P0.2：稳定订阅句柄走独立 Context，值不随流式帧换引用，
-  // useModels 消费方仅在真实目录域 emit 时重渲染；不进会每帧重建的主 port 对象）----
+  // ---- 稳定能力句柄（#35/#54 契约）：PluginClientHostHandlesContext 的值只在
+  // [store] 变化时重建（实际恒定），useHostModels/useScreenLocation 消费方与
+  // 主 port 每帧换引用完全隔离；不进会随流式帧重建的主 port 对象。----
   const subscribeModels = useCallback(
     (listener: () => void) => {
+      // 'models' 域承载目录数组与全局默认链；'profiles' 域承载 assetsLoaded
+      // 装载位（切片从 undefined -> 已加载的翻转点）。
       const offModels = store.subscribeDomain('models', listener)
       const offProfiles = store.subscribeDomain('profiles', listener)
       return () => {
@@ -35,24 +38,28 @@ export function PluginClientHostBridge({ store, children }: { store: HelmxExtern
     },
     [store],
   )
-  const modelsSnapshotRef = useRef<ModelCatalogSnapshot>({ unknown: true, models: [] })
-  const getModelsSnapshot = useCallback((): ModelCatalogSnapshot => {
+  // 切片备忘化：同一 (assetsLoaded, models, modelDefaults) 身份下恒返回同引用
+  // （useSyncExternalStore 引用相等即零重渲染）；首载完成前恒 undefined——
+  // store 初始 models:[] 绝不泄漏为「无模型」真相（三态红线）。
+  const modelsSliceRef = useRef<{ loaded: boolean; models: readonly unknown[]; defaults: unknown; slice: HostModelsSlice | undefined }>({ loaded: false, models: [], defaults: null, slice: undefined })
+  const getModels = useCallback((): HostModelsSlice | undefined => {
+    const loaded = store.getProfilesSlice().assetsLoaded
     const models = store.getModels()
-    const unknown = !store.getProfilesSlice().assetsLoaded
-    const prev = modelsSnapshotRef.current
-    if (prev.unknown === unknown && prev.models === models) return prev
-    const next: ModelCatalogSnapshot = { unknown, models }
-    modelsSnapshotRef.current = next
-    return next
+    const defaults = store.getModelDefaults()
+    const prev = modelsSliceRef.current
+    if (prev.loaded === loaded && prev.models === models && prev.defaults === defaults) return prev.slice
+    const slice = loaded ? { models, ...defaults } : undefined
+    modelsSliceRef.current = { loaded, models, defaults, slice }
+    return slice
   }, [store])
-  const refreshModels = useCallback(async (): Promise<ModelCatalogRefreshOutcome> => {
+  const refreshModels = useCallback(async (): Promise<{ errors?: Record<string, string> }> => {
     const res = await assetsApi.refreshModels()
     await store.actions.refreshAssets()
-    return { errors: res.errors ?? {}, modelCount: res.models.length }
+    return { errors: res.errors ?? {} }
   }, [store])
-  const dataHandles = useMemo(
-    () => ({ subscribeModels, getModelsSnapshot, refreshModels }),
-    [subscribeModels, getModelsSnapshot, refreshModels],
+  const hostHandles = useMemo<PluginClientHostHandles>(
+    () => ({ getModels, subscribeModels, refreshModels }),
+    [getModels, subscribeModels, refreshModels],
   )
 
   const port = useMemo<PluginClientHostPort>(
@@ -99,8 +106,8 @@ export function PluginClientHostBridge({ store, children }: { store: HelmxExtern
     [slice, store],
   )
   return (
-    <PluginClientDataHandlesContext.Provider value={dataHandles}>
+    <PluginClientHostHandlesContext.Provider value={hostHandles}>
       <PluginClientHostContext.Provider value={port}>{children}</PluginClientHostContext.Provider>
-    </PluginClientDataHandlesContext.Provider>
+    </PluginClientHostHandlesContext.Provider>
   )
 }

@@ -17,6 +17,7 @@ import { summarizeSingleLine } from '../lib/format.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { nodeOptionLabel } from '../modals/nodes-modal-model.js'
 import { ConfirmDialog } from '../ui/AlertDialog.js'
+import { useModelPickerControlAdapter } from '../conversation/model-picker-adapter.js'
 import { PROFILE_DETAIL_SECTION_SLOT, PROFILE_STARTERS_MAX_ITEMS } from '@helmx/protocol/browser'
 
 export interface ProfileDetailDrawerProps {
@@ -102,6 +103,7 @@ export function ProfileDetailDrawer({
 }: ProfileDetailDrawerProps): React.JSX.Element {
   const nodes = useNodes()
   const skills = useSkills()
+  const pickerAdapter = useModelPickerControlAdapter()
   const { t } = useWebLocale()
   const [form, setForm] = useState<FormState>(() => createInitialForm(profile, isNew))
   const [baseline, setBaseline] = useState<FormState>(() => createInitialForm(profile, isNew))
@@ -481,6 +483,7 @@ export function ProfileDetailDrawer({
                     popoverSide={inline ? 'bottom' : 'top'}
                     enableShortcut={false}
                     disabled={isSaving || isDeleting}
+                    {...pickerAdapter}
                     onApply={(model, level) =>
                       setForm((prev) => ({ ...prev, model, thinkingLevel: level ?? '' }))
                     }
