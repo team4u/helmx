@@ -107,8 +107,8 @@ test('DetailDrawer SSR: migration slots (titleClassName/metaClassName/belowTitle
         closeButtonClassName: 'btn btn-ghost btn-sm',
         closeIcon: e('span', { 'aria-hidden': 'true' }, 'X'),
         aux: e('div', { className: 'nested-confirm' }, 'aux content'),
+        children: 'body',
       },
-      'body',
     ),
   )
   assert.ok(html.includes('primary-drawer-title break-word'), 'title extension classes append')
