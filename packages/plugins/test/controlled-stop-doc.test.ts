@@ -23,7 +23,7 @@ import { HelmxError, type ConversationSummary, type EnvExecResponse, type Plugin
 import { PluginHost, type PluginDocStore } from '../../kernel/src/plugins/index.js'
 import { PluginHostBackendFixtureBase } from '../../kernel/test/helpers/plugin-host-backend.js'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
-import { makeConversationSummary } from './helpers/plugin-test-env.js'
+import { makeConversationSummary } from '@helmx/test-kit'
 
 /** 初始会话 id（SDK 保留 #1 承载；普通会话语义，无产品级特权）。 */
 const ROOT_CONVERSATION_ID = 1 as const

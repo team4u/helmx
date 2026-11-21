@@ -34,7 +34,7 @@ import { HelmxError, type PluginDefinition } from '@helmx/protocol'
 import { createHelmx } from '../../hub/src/app.js'
 import { startHub } from '../../kernel/src/http/index.js'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
-import { makeFauxProvider, type FauxProviderHandle } from './helpers/plugin-test-env.js'
+import { deferred, makeFauxProvider, type FauxProviderHandle } from './helpers/plugin-test-env.js'
 
 import assert from 'node:assert/strict'
 
@@ -233,9 +233,8 @@ test('工作流2: action() 经 PluginHost 动作总线共享 Schema 校验——
 // ---------------------------------------------------------------------------
 
 test('工作流3: turn_settled 钩子收集 completed/failed/aborted 三态各一次，inputs origin 精确记录', { timeout: 60_000 }, async () => {
-  // aborted 场景需要真实在途流：慢速 token 流（1 tok/s）确保 abort 时回合仍在流式中。
   const dataDir = mkdtempSync(join(tmpdir(), 'helmx-wf-e2e-'))
-  const faux = makeFauxProvider({ tokensPerSecond: 1, tokenSize: { min: 1, max: 1 } })
+  const faux = makeFauxProvider()
   const app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider] })
   try {
     const settled: Array<{ outcome: string; origins: string[]; conversationId: number; error?: string }> = []
@@ -282,10 +281,24 @@ test('工作流3: turn_settled 钩子收集 completed/failed/aborted 三态各�
     assert.ok(childSettled[0]!.error !== undefined, 'failed 结算应携带错误摘要')
     assert.deepEqual(childSettled[0]!.origins, ['human'])
 
-    // --- aborted：慢速流式（1 tok/s）中提交后立即 abort，回合在途被取消
+    // --- aborted：确定性挂起在途生成后立即 abort，回合在途被取消
     const child2 = await kernel.createConversation({ title: '中止会话' })
-    faux.setResponses([fauxAssistantMessage('这是一段被慢速流式输出的长文本确保 abort 时仍在流式中')])
+    const abortEntered = deferred<void>()
+    faux.setResponses([
+      async (_ctx, opts) => {
+        abortEntered.resolve()
+        await new Promise<void>((resolve) => {
+          if (opts?.signal?.aborted) {
+            resolve()
+            return
+          }
+          opts?.signal?.addEventListener('abort', () => resolve(), { once: true })
+        })
+        return fauxAssistantMessage('这是一段在途被取消的输出内容')
+      },
+    ])
     await kernel.submitInput(child2.id, '会被中止的问题')
+    await abortEntered.promise
     await kernel.abortConversation(child2.id)
     await kernel.waitForIdle(child2.id)
     const child2Settled = settled.filter((s) => s.conversationId === child2.id)

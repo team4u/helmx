@@ -34,10 +34,8 @@ import {
   type WorkflowServiceHost,
   type WorkflowStateStore,
 } from '../src/workflow/engine/service.js'
-import {
-  makeConversationSummary as baseConversationSummary,
-  useTempDir as createTempDir,
-} from './helpers/plugin-test-env.js'
+import { makeConversationSummary as baseConversationSummary } from '@helmx/test-kit'
+import { useTempDir as createTempDir } from '@helmx/test-kit/node'
 
 const timeout = { timeout: 60_000 } as const
 

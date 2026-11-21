@@ -66,9 +66,25 @@ export interface WorkflowClientStubOptions {
 
 let stub: WorkflowClientStubOptions = {}
 let currentHookMode: 'stub' | 'real' = 'stub'
+let mountGen = 0
+
+function syncSharedPluginGlobals(realHooks: boolean): void {
+  currentHookMode = realHooks ? 'real' : 'stub'
+  const g = globalThis as Record<string, unknown>
+  g.React = React
+  g.IS_REACT_ACT_ENVIRONMENT = true
+  g[CLIENT_SHARED_GLOBALS['react']!] = React
+  g[CLIENT_SHARED_GLOBALS['react-dom']!] = ReactDOM
+  g[CLIENT_SHARED_GLOBALS['react-dom/client']!] = ReactDOMClient
+  g[CLIENT_SHARED_GLOBALS['react/jsx-runtime']!] = ReactJsxRuntime
+  g[CLIENT_SHARED_GLOBALS['lucide-react']!] = LucideReact
+  g[CLIENT_SHARED_GLOBALS['@helmx/plugin-client']!] =
+    realHooks ? SDK : stubPluginClientNamespace
+}
 
 export function setWorkflowClientStub(options: WorkflowClientStubOptions = {}): void {
   stub = options
+  syncSharedPluginGlobals(false)
 }
 
 const stubPluginClientNamespace = {
@@ -88,27 +104,23 @@ const stubPluginClientNamespace = {
 }
 
 export function mountSharedPluginNamespaces(options: { realHooks?: boolean } = {}): void {
-  currentHookMode = options.realHooks === true ? 'real' : 'stub'
-  const g = globalThis as Record<string, unknown>
-  g.React = React
-  g.IS_REACT_ACT_ENVIRONMENT = true
-  g[CLIENT_SHARED_GLOBALS['react']!] = React
-  g[CLIENT_SHARED_GLOBALS['react-dom']!] = ReactDOM
-  g[CLIENT_SHARED_GLOBALS['react-dom/client']!] = ReactDOMClient
-  g[CLIENT_SHARED_GLOBALS['react/jsx-runtime']!] = ReactJsxRuntime
-  g[CLIENT_SHARED_GLOBALS['lucide-react']!] = LucideReact
-  g[CLIENT_SHARED_GLOBALS['@helmx/plugin-client']!] =
-    options.realHooks === true ? SDK : stubPluginClientNamespace
+  mountGen += 1
+  syncSharedPluginGlobals(options.realHooks === true)
 }
 
 export async function importWorkflowClientModule(
   moduleRef = 'index.tsx',
   cacheDir = WORKFLOW_CLIENT_CACHE_DIR,
+  options?: { realHooks?: boolean; scope?: string },
 ): Promise<Record<string, unknown>> {
+  const mode: 'real' | 'stub' =
+    options?.realHooks !== undefined ? (options.realHooks ? 'real' : 'stub') : currentHookMode
+  syncSharedPluginGlobals(mode === 'real')
   const { code } = await compilePluginClientModule('builtin:workflow', WORKFLOW_CLIENT_ROOT, moduleRef, cacheDir)
-  // Keep #stub and #real module instances distinct in Node's ESM cache because
-  // compiled bundles destructure @helmx/plugin-client hooks at module load time.
-  return (await import(`data:text/javascript;base64,${Buffer.from(code, 'utf8').toString('base64')}#${currentHookMode}`)) as Record<
+  const fragment = options?.scope ? `${mode}-${mountGen}-${options.scope}` : `${mode}-${mountGen}`
+  // Keep #stub and #real (and per-file mountGen / scoped) module instances distinct in Node's ESM cache because
+  // compiled bundles destructure @helmx/plugin-client hooks and hold workbench-focus state at module load time.
+  return (await import(`data:text/javascript;base64,${Buffer.from(code, 'utf8').toString('base64')}#${fragment}`)) as Record<
     string,
     unknown
   >

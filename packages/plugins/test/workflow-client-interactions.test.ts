@@ -14,10 +14,15 @@ import {
   SDK,
   act,
   createRoot,
-  importWorkflowClientModule,
+  importWorkflowClientModule as baseImportWorkflowClientModule,
   mountSharedPluginNamespaces,
   setWorkflowClientStub,
 } from './helpers/workflow-client-harness.js'
+
+// Isolate this file's bundled workbench-focus singleton from other workflow DOM test files
+// when running in shared DOM shard workers (`--test-isolation=none`).
+const importWorkflowClientModule = (moduleRef = 'index.tsx') =>
+  baseImportWorkflowClientModule(moduleRef, undefined, { realHooks: false, scope: 'interactions' })
 
 const e = React.createElement
 const { PluginClientContext, resolveLocalizedText } = SDK

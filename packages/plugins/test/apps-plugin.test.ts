@@ -47,14 +47,6 @@ import {
   type AppCatalogEntry,
   type AppsCatalogDoc,
 } from '../src/apps.js'
-import { appDescriptionFromViews } from '../src/apps/client/copy.js'
-import {
-  filterAppItems,
-  mergeAppItems,
-  resolveAppDescription,
-  resolveAppName,
-  resolveAppScreenLabel,
-} from '../src/apps/client/models.js'
 import { MemoryDocStore, makeConversationSummary } from './helpers/plugin-test-env.js'
 
 // ---------------------------------------------------------------------------
@@ -764,6 +756,18 @@ test('builtin:apps 插件行为', { timeout: 60_000 }, async (t) => {
 })
 
 test('apps client：双语 LocalizedText 插件摘要与 ScreenSpec.label 的模型检索及 React 渲染', { timeout: 60_000 }, async (t) => {
+  // Register happy-dom BEFORE importing any module that touches @helmx/plugin-client / Radix,
+  // so Radix's module-level `useLayoutEffect` check sees a real browser DOM in shared workers.
+  if (typeof globalThis.document === 'undefined') GlobalRegistrator.register()
+  const { appDescriptionFromViews } = await import('../src/apps/client/copy.js')
+  const {
+    filterAppItems,
+    mergeAppItems,
+    resolveAppDescription,
+    resolveAppName,
+    resolveAppScreenLabel,
+  } = await import('../src/apps/client/models.js')
+
   const bilingualPlugins: PluginSummary[] = [
     {
       id: 'task-board',
@@ -828,7 +832,6 @@ test('apps client：双语 LocalizedText 插件摘要与 ScreenSpec.label 的模
   )
 
   // 真实编译 apps/client/index.tsx 并挂载 React，校验卡片与详情抽屉在 en / zh-CN 下正常渲染
-  if (typeof globalThis.document === 'undefined') GlobalRegistrator.register()
   const req = createRequire(new URL('../../plugin-client/package.json', import.meta.url))
   const React = req('react') as typeof import('react')
   const ReactDOM = req('react-dom') as unknown

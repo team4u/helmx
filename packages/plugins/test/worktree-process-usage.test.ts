@@ -30,7 +30,7 @@ import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { createEnvFabric } from '../../kernel/src/env/fabric.js'
 import { WorktreeAllocator } from '../src/worktree/worktree.js'
-import { createGitTemplate, type GitTemplate } from './helpers/plugin-test-env.js'
+import { createGitTemplate, type GitTemplate } from '@helmx/test-kit/git'
 
 let rootDir: string
 let gitTemplate: GitTemplate

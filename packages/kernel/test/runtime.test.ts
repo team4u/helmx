@@ -160,7 +160,7 @@ describe('KernelRuntime basic lifecycle', { timeout: 60_000 }, () => {
         },
       })
       void kernel.submitInput(1, 'question to abort').catch(() => {})
-      await new Promise((r) => setTimeout(r, 150))
+      await waitFor(() => kernel.getConversation(1).status === 'working', { timeoutMs: 5_000, intervalMs: 10 })
       assert.equal(kernel.getConversation(1).status, 'working')
       await kernel.abortConversation(1)
       await kernel.waitForIdle(1).catch(() => {})
@@ -267,7 +267,7 @@ describe('SSE snapshot + seq race', { timeout: 60_000 }, () => {
         }
         return true
       })
-      await new Promise((r) => setTimeout(r, 100))
+      await waitFor(() => frames.some((f) => 'event' in f), { timeoutMs: 5_000, intervalMs: 5 })
       const snapshot = frames[0]
       assert.ok(snapshot && 'conversations' in snapshot)
       const eventFrames = frames.filter((f) => 'event' in f) as HelmxEventFrame[]
@@ -428,7 +428,7 @@ describe('real tool execution', { timeout: 60_000 }, () => {
             parentConversationId: 1,
             prompt: 'work',
             gate: 'sleep 30',
-            gateTimeoutMs: 800,
+            gateTimeoutMs: 400,
             onGateResult: (result) => reported.push({ ...result }),
           }),
         (err: unknown) => {

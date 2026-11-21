@@ -31,6 +31,7 @@ import { HerdrExecutor, type ExecutorHost } from '../../plugins/src/herdr/execut
 import { MetadataProjector } from '../../plugins/src/herdr/metadata.js'
 import { EMPTY_MANAGED_DOC, PaneRegistry, type ManagedDoc } from '../../plugins/src/herdr/panes.js'
 import { agentJournalKey } from '../../plugins/src/workflow/engine/journal.js'
+import { deferred } from '@helmx/test-kit'
 import { createHubTestApp, openHubTestEnv, useTempDir, waitFor } from './helpers/hub-test-env.js'
 
 function fakeClockStash(): { stash: SecretStash; now: { ms: number } } {
@@ -433,7 +434,6 @@ test('Herdr 窗格与 Gate 机密最小授权、轮换重取、TTL 过期拒跑�
 test('createHelmx 真实回合结算（completed/failed/aborted + late hook）与原生 spawn 非空 secretNames 诚实拒绝', { timeout: 60_000 }, async () => {
   const env = await openHubTestEnv({
     prefix: 'helmx-secret-turnsettle-',
-    fauxOptions: { tokensPerSecond: 1, tokenSize: { min: 4, max: 4 } },
   })
   try {
     const { kernel, faux } = env
@@ -484,8 +484,22 @@ test('createHelmx 真实回合结算（completed/failed/aborted + late hook）�
 
     const abortedConv = await kernel.createConversation({ title: 'abort turn' })
     stash.put(abortedConv.id, 'ABORT_TURN', 'abort-secret', { scope: 'turn' })
-    faux.setResponses([fauxAssistantMessage('long streaming text to ensure abort happens while turn is still streaming in flight')])
+    const abortEntered = deferred<void>()
+    faux.setResponses([
+      async (_ctx, opts) => {
+        abortEntered.resolve()
+        await new Promise<void>((resolve) => {
+          if (opts?.signal?.aborted) {
+            resolve()
+            return
+          }
+          opts?.signal?.addEventListener('abort', () => resolve(), { once: true })
+        })
+        return fauxAssistantMessage('long streaming text to ensure abort happens while turn is still streaming in flight')
+      },
+    ])
     await kernel.submitInput(abortedConv.id, 'abort')
+    await abortEntered.promise
     await kernel.abortConversation(abortedConv.id)
     await kernel.waitForIdle(abortedConv.id)
     await waitFor(() => outcomes.includes('aborted'), { timeoutMs: 8_000, intervalMs: 15 })

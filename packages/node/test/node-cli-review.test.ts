@@ -1,3 +1,4 @@
+// @test-isolation: process
 /**
  * Acceptance review tests for `helmx-node` CLI background control (portable control IPC contract).
  *

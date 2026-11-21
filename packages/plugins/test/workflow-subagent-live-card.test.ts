@@ -1010,7 +1010,7 @@ test('working 卡 SSR 首帧：无客户端时钟时省略动态总耗时，不�
 })
 
 test('ExecutionChildrenRows：真实 run/runNode 边界的行显示总耗时，运行行 SSR 首帧省略', { timeout: 60_000 }, async () => {
-  const subagentModule = await importWorkflowClientModule('SubagentCard.tsx')
+  const subagentModule = await importWorkflowClientModule('SubagentCard.tsx', undefined, { realHooks: true })
   const Rows = subagentModule['ExecutionChildrenRows'] as React.ComponentType<{ nodes: ExecutionNode[] }>
   const parent = summary(1, 'working')
   const run: WorkflowRunSummary = {

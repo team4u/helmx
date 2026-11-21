@@ -33,8 +33,8 @@ let model: Model
 let BackgroundReportCard: (props: TimelineRendererProps) => React.ReactElement
 
 before(async () => {
-  model = (await importWorkflowClientModule('model-background-report.ts')) as unknown as Model
-  const client = await importWorkflowClientModule()
+  model = (await importWorkflowClientModule('model-background-report.ts', undefined, { realHooks: true })) as unknown as Model
+  const client = await importWorkflowClientModule('index.tsx', undefined, { realHooks: true })
   BackgroundReportCard = client['BackgroundReportCard'] as typeof BackgroundReportCard
 }, { timeout: 60_000 })
 
