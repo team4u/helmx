@@ -227,11 +227,28 @@ test('summarizePlugins: 正确统计 failed 数量（status 与 error 双入口�
       enabled: false,
       error: { code: 'plugin_enable_failed', message: '服务启动失败', stage: 'enable' },
     }),
+    makePlugin({
+      id: 'bad-dep',
+      enabled: true,
+      status: 'failed',
+      error: { code: 'plugin_dependency_not_enabled', message: '依赖被强停', stage: 'enable' },
+    }),
   ])
-  assert.equal(stats.total, 4)
-  assert.equal(stats.enabled, 1)
+  assert.equal(stats.total, 5)
+  assert.equal(stats.enabled, 2)
   assert.equal(stats.disabled, 3)
-  assert.equal(stats.failed, 2)
+  assert.equal(stats.failed, 3)
+  assert.equal(
+    isPluginFailed(
+      makePlugin({
+        id: 'dep-failed-enabled',
+        enabled: true,
+        status: 'failed',
+        error: { code: 'plugin_dependency_not_enabled', message: '依赖被强停', stage: 'enable' },
+      }),
+    ),
+    true,
+  )
 })
 
 test('pluginStatusTabLabel: en 与 zh-CN 状态筛选标签映射', { timeout: 60_000 }, () => {

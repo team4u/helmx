@@ -15,7 +15,9 @@
  */
 import test, { beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
-import { HelmxError, type PluginDefinition } from '@helmx/protocol'
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { HelmxError, type PluginDefinition, type PluginSummary, type PluginUiContribution } from '@helmx/protocol'
 import {
   PluginHost,
   type PluginHostBackend,
@@ -286,6 +288,137 @@ test('forced disable succeeds and explicitly marks dependents (status=failed + p
   await assertRejectsCode(() => host.unregister('base'), 'plugin_in_use', 409)
   await host.disable('user')
   await host.unregister('base')
+  await host.dispose()
+})
+
+test('failed-while-enabled dependent clears clientHashes, ui, capabilities, and public docs until recovered', { timeout: 60_000 }, async () => {
+  const clientRoot = join(dataDir, 'dep-client')
+  mkdirSync(clientRoot, { recursive: true })
+  writeFileSync(join(clientRoot, 'index.tsx'), 'export function DepScreen() { return "dep-ok"; }\n')
+
+  const configs = new Map<string, Record<string, unknown>>()
+  const host = new PluginHost({
+    buildProvider: createPluginBuildProvider(),
+    dataDir,
+    host: {
+      ...makeBackend(),
+      setPluginConfig: async (pluginId, value) => {
+        configs.set(pluginId, { ...value })
+      },
+    },
+    docs,
+    config: {
+      get: (pluginId) => ({ ...(configs.get(pluginId) ?? {}) }),
+      set: (pluginId, value) => {
+        configs.set(pluginId, { ...value })
+      },
+    },
+  })
+
+  await host.register(def('base'), { enabled: true })
+  await host.register({
+    id: 'user',
+    dependencies: ['base'],
+    clientRoot,
+    definePlugin: (ctx) => {
+      ctx.configSchema({ refreshMs: { type: 'number', default: 1_000 } })
+      ctx.doc('state', { ok: true }, { public: true })
+      ctx.ui.screen({ id: 'main', label: 'Dep Main', client: { module: 'index.tsx', export: 'DepScreen' } })
+      ctx.action({
+        id: 'ping',
+        description: 'ping dep',
+        inputSchema: { type: 'object', additionalProperties: false },
+        outputSchema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'], additionalProperties: false },
+        handler: () => ({ ok: true }),
+      })
+      ctx.tool({
+        name: 'dep_tool',
+        description: 'dep tool',
+        inputSchema: { type: 'object', additionalProperties: false },
+        execute: () => ({ content: [{ type: 'text', text: 'ok' }] }),
+      })
+      ctx.route({ method: 'GET', path: '/health', handler: () => new Response('ok') })
+      ctx.hook.onTrigger(() => ({ action: 'continue' }))
+    },
+  }, { enabled: true })
+
+  // Pre-check: active dependent exposes clientHashes, ui, tools, actions, hooks, routes, public docs, and client bundle.
+  const activeSummary = host.get('user')!
+  assert.equal(activeSummary.status, 'active')
+  assert.ok(activeSummary.clientHashes?.['index.tsx'])
+  assert.deepEqual(activeSummary.hooks, ['trigger'])
+  assert.deepEqual(activeSummary.actions, ['ping'])
+  assert.deepEqual(activeSummary.tools, ['dep_tool'])
+  assert.equal(host.listUi().filter((u) => u.pluginId === 'user').length, 1)
+  assert.equal(host.listTools().filter((t) => t.sourcePluginId === 'user').length, 1)
+  assert.equal(host.listActions().filter((a) => a.pluginId === 'user').length, 1)
+  assert.equal(host.listRoutes().filter((r) => r.pluginId === 'user').length, 1)
+  assert.equal(host.listPublicDocs().filter((d) => d.pluginId === 'user').length, 1)
+  assert.deepEqual(host.getPublicDoc('user', 'state').value, { ok: true })
+  assert.ok((await host.getClientModule('user', 'index.tsx')).contentHash)
+
+  // Force-disable base -> dependent stays enabled=true but status=failed (must never expose clientHashes or executable UI/capabilities).
+  events.length = 0
+  await host.disable('base', { force: true })
+
+  const failedGet = host.get('user')!
+  const failedList = host.list().find((p) => p.id === 'user')!
+  const failedChanged = events
+    .filter((e) => e.type === 'plugin.changed')
+    .map((e) => e.payload as { plugin: PluginSummary; ui: PluginUiContribution[] })
+    .find((e) => e.plugin.id === 'user')!
+  assert.ok(failedChanged, 'markDependentsBroken must emit plugin.changed for dependent')
+
+  for (const summary of [failedGet, failedList, failedChanged.plugin]) {
+    assert.equal(summary.enabled, true)
+    assert.equal(summary.status, 'failed')
+    assert.equal(summary.error?.code, 'plugin_dependency_not_enabled')
+    assert.equal(summary.clientHashes, undefined, 'failed plugin summary must not carry clientHashes')
+    assert.deepEqual(summary.hooks, [])
+    assert.deepEqual(summary.actions, [])
+    assert.deepEqual(summary.tools, [])
+    assert.deepEqual(summary.publicConfig, { refreshMs: 1_000 })
+  }
+  assert.deepEqual(failedChanged.ui, [], 'plugin.changed for failed plugin must emit ui: []')
+  assert.deepEqual(host.listUi().filter((u) => u.pluginId === 'user'), [])
+  assert.deepEqual(host.listTools().filter((t) => t.sourcePluginId === 'user'), [])
+  assert.deepEqual(host.listActions().filter((a) => a.pluginId === 'user'), [])
+  assert.deepEqual(host.listRoutes().filter((r) => r.pluginId === 'user'), [])
+  assert.deepEqual(host.listPublicDocs().filter((d) => d.pluginId === 'user'), [])
+  await assertRejectsCode(() => Promise.resolve().then(() => host.getPublicDoc('user', 'state')), 'plugin_doc_not_found', 404)
+  await assertRejectsCode(() => host.getClientModule('user', 'index.tsx'), 'plugin_client_unavailable', 409)
+  await assertRejectsCode(() => host.invokeAction('user', 'ping', {}), 'plugin_disabled', 409)
+  await assertRejectsCode(() => Promise.resolve().then(() => host.prepareAction('user', 'ping', {})), 'plugin_disabled', 409)
+  await assertRejectsCode(() => host.executeTool('dep_tool', {}, { conversationId: 1 }), 'plugin_disabled', 409)
+
+  // Updating config while failed still emits failed summary without clientHashes or ui.
+  events.length = 0
+  await host.setConfig('user', { refreshMs: 2_500 })
+  const cfgChanged = events
+    .filter((e) => e.type === 'plugin.changed')
+    .map((e) => e.payload as { plugin: PluginSummary; ui: PluginUiContribution[] })
+    .at(-1)!
+  assert.equal(cfgChanged.plugin.id, 'user')
+  assert.equal(cfgChanged.plugin.status, 'failed')
+  assert.equal(cfgChanged.plugin.clientHashes, undefined)
+  assert.deepEqual(cfgChanged.plugin.publicConfig, { refreshMs: 2_500 })
+  assert.deepEqual(cfgChanged.ui, [])
+
+  // Recovery: disable dependent -> enable base -> re-enable dependent restores active capabilities and clientHashes.
+  await host.disable('user')
+  await host.enable('base')
+  await host.enable('user')
+  const recovered = host.get('user')!
+  assert.equal(recovered.status, 'active')
+  assert.equal(recovered.error, undefined)
+  assert.ok(recovered.clientHashes?.['index.tsx'])
+  assert.deepEqual(recovered.hooks, ['trigger'])
+  assert.deepEqual(recovered.actions, ['ping'])
+  assert.deepEqual(recovered.tools, ['dep_tool'])
+  assert.equal(host.listUi().filter((u) => u.pluginId === 'user').length, 1)
+  assert.equal(host.listPublicDocs().filter((d) => d.pluginId === 'user').length, 1)
+  assert.ok((await host.getClientModule('user', 'index.tsx')).contentHash)
+
   await host.dispose()
 })
 

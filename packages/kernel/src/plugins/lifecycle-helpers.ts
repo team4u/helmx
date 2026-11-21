@@ -197,13 +197,30 @@ export function assertNotLocked(state: PluginState): void {
   }
 }
 
-/** Active for external callers = enabled and idle (not in `defining` or `deactivating` transitions). */
+/** Active for external callers = enabled, idle, and error-free (not transitioning or failed). */
+export function isPluginStateActive(state: PluginState): boolean {
+  return state.enabled && state.phase === 'idle' && state.lastError === undefined;
+}
+
+/** Active for external callers = enabled, idle, and error-free (not in `defining`, `deactivating`, or `failed` state). */
 export function assertActive(state: PluginState): void {
   if (!state.enabled || state.phase !== 'idle') {
     throw new HelmxError('plugin_disabled', `Plugin ${state.definition.id} is disabled or transitioning`, 409, {
       pluginId: state.definition.id,
       phase: state.phase,
     });
+  }
+  if (state.lastError !== undefined) {
+    throw new HelmxError(
+      'plugin_disabled',
+      `Plugin ${state.definition.id} is in failed state (${state.lastError.code})`,
+      409,
+      {
+        pluginId: state.definition.id,
+        status: 'failed',
+        error: state.lastError,
+      },
+    );
   }
 }
 
@@ -440,7 +457,7 @@ export function pluginSummaryOf(
   publicConfig?: Record<string, unknown>,
 ): PluginSummary {
   const failed = state.lastError !== undefined;
-  const active = state.enabled && state.phase === 'idle';
+  const active = isPluginStateActive(state);
   const clientHashes = active ? uiRegistry?.getClientHashes(state.definition.id) : undefined;
   return {
     id: state.definition.id,
@@ -451,11 +468,11 @@ export function pluginSummaryOf(
     ...(state.dependencies.length > 0 ? { dependencies: [...state.dependencies] } : {}),
     locked: state.definition.locked === true,
     enabled: state.enabled,
-    status: failed ? 'failed' : state.enabled ? 'active' : 'disabled',
+    status: failed ? 'failed' : active ? 'active' : 'disabled',
     ...(failed ? { error: state.lastError } : {}),
-    hooks: state.enabled ? [...state.hooks] : [],
-    actions: state.enabled ? capabilityRegistry.getActionIds(state.definition.id) : [],
-    tools: state.enabled ? capabilityRegistry.getToolNames(state.definition.id) : [],
+    hooks: active ? [...state.hooks] : [],
+    actions: active ? capabilityRegistry.getActionIds(state.definition.id) : [],
+    tools: active ? capabilityRegistry.getToolNames(state.definition.id) : [],
     ...(clientHashes !== undefined ? { clientHashes } : {}),
     ...(publicConfig !== undefined ? { publicConfig } : {}),
   };
@@ -464,9 +481,10 @@ export function pluginSummaryOf(
 export function getActiveEnabledPluginIds(plugins: Map<string, PluginState>): string[] {
   const ids: string[] = [];
   for (const [id, s] of plugins) {
-    // External catalog visibility requires enabled + idle: during disable teardown (`phase === 'deactivating'`
-    // before `clearRegistrations`), plugins leave tool/action/route/UI lists immediately.
-    if (s.enabled && s.phase === 'idle') ids.push(id);
+    // External catalog visibility requires enabled + idle + error-free: during disable teardown
+    // (`phase === 'deactivating'` before `clearRegistrations`) or failed state (`lastError !== undefined`),
+    // plugins leave tool/action/route/UI lists immediately.
+    if (isPluginStateActive(s)) ids.push(id);
   }
   return ids;
 }
@@ -474,7 +492,7 @@ export function getActiveEnabledPluginIds(plugins: Map<string, PluginState>): st
 export function getIdleActivePluginIds(plugins: Map<string, PluginState>): string[] {
   const ids: string[] = [];
   for (const [id, s] of plugins) {
-    if (s.enabled && s.phase === 'idle') ids.push(id);
+    if (isPluginStateActive(s)) ids.push(id);
   }
   return ids;
 }

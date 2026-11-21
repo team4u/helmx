@@ -2533,6 +2533,63 @@ test('clientHashes: precompile failure preserves explicit error and isolated fai
   assert.equal(rolledBack?.clientHashes, undefined);
 });
 
+test('pluginSummaryOf / emitPluginChanged: deactivating window and enabled+lastError never leak active status, clientHashes, or UI', { timeout: 60_000 }, async (t) => {
+  const host = makeHost();
+  t.after(() => host.dispose());
+
+  const clientRoot = join(dataDir, 'deactivating-client');
+  mkdirSync(clientRoot, { recursive: true });
+  writeFileSync(join(clientRoot, 'index.tsx'), 'export function Main() { return "ok"; }\n');
+
+  const stopEntered = deferred<void>();
+  const stopRelease = deferred<void>();
+  await host.register({
+    id: 'p:deactivating-window',
+    clientRoot,
+    definePlugin: (ctx) => {
+      ctx.ui.screen({ id: 'main', label: 'Main', client: { module: 'index.tsx', export: 'Main' } });
+      ctx.action({
+        id: 'ping',
+        description: 'ping',
+        inputSchema: { type: 'object', additionalProperties: false },
+        outputSchema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'], additionalProperties: false },
+        handler: () => ({ ok: true }),
+      });
+      ctx.service({
+        id: 'svc',
+        start() {},
+        async stop() {
+          stopEntered.resolve();
+          await stopRelease.promise;
+        },
+      });
+    },
+  });
+
+  const active = host.get('p:deactivating-window')!;
+  assert.equal(active.status, 'active');
+  assert.ok(active.clientHashes?.['index.tsx']);
+  assert.deepEqual(active.actions, ['ping']);
+
+  const disabling = host.disable('p:deactivating-window');
+  await stopEntered.promise;
+  try {
+    const midDisable = host.get('p:deactivating-window')!;
+    assert.notEqual(midDisable.status, 'active', 'deactivating plugin must not be reported as active');
+    assert.equal(midDisable.clientHashes, undefined, 'deactivating plugin must not expose clientHashes');
+    assert.deepEqual(midDisable.actions, []);
+    assert.deepEqual(host.listUi().filter((u) => u.pluginId === 'p:deactivating-window'), []);
+  } finally {
+    stopRelease.resolve();
+    await disabling;
+  }
+
+  const afterDisable = host.get('p:deactivating-window')!;
+  assert.equal(afterDisable.enabled, false);
+  assert.equal(afterDisable.status, 'disabled');
+  assert.equal(afterDisable.clientHashes, undefined);
+});
+
 test('clientHashes: reloadExternalPlugin recompiles and emits updated clientHashes immediately', { timeout: 60_000 }, async (t) => {
   const host = makeHost();
   t.after(() => host.dispose());

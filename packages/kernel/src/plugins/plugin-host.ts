@@ -63,6 +63,7 @@ import {
   disposePlugins,
   getActiveEnabledPluginIds,
   getIdleActivePluginIds,
+  isPluginStateActive,
 } from './lifecycle-helpers.js';
 import { PluginHostGate } from './plugin-host-gate.js';
 import { enabledStatesInDependencyOrder } from './plugin-host-deps.js';
@@ -338,7 +339,7 @@ export class PluginHost {
     if (!s) return undefined;
     return {
       identity: s,
-      enabled: s.enabled,
+      enabled: s.enabled && s.lastError === undefined,
       phase: s.phase,
       epoch: s.epoch,
       clientRoot: s.definition.clientRoot,
@@ -365,13 +366,13 @@ export class PluginHost {
   getPublicDoc(pluginId: string, name: string): PublicPluginDoc {
     this.assertNotDisposed();
     const state = this.plugins.get(pluginId);
-    return this.docRegistry.getPublicDoc(pluginId, name, !!state && state.enabled && state.phase === 'idle');
+    return this.docRegistry.getPublicDoc(pluginId, name, state !== undefined && isPluginStateActive(state));
   }
 
   getPublicSessionDoc(pluginId: string, name: string, conversationId: number): PublicPluginSessionDoc {
     this.assertNotDisposed();
     const state = this.plugins.get(pluginId);
-    return this.docRegistry.getPublicSessionDoc(pluginId, name, conversationId, !!state && state.enabled && state.phase === 'idle');
+    return this.docRegistry.getPublicSessionDoc(pluginId, name, conversationId, state !== undefined && isPluginStateActive(state));
   }
 
   listPublicDocs(): PublicPluginDoc[] {
@@ -674,7 +675,7 @@ export class PluginHost {
     this.options.host.emitEvent('plugin.changed', {
       type: 'plugin.changed',
       plugin: this.summaryOf(state),
-      ui: state.enabled && state.phase === 'idle' ? this.uiRegistry.getUiByPlugin(state.definition.id) : [],
+      ui: isPluginStateActive(state) ? this.uiRegistry.getUiByPlugin(state.definition.id) : [],
     });
   }
 

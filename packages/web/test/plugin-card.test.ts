@@ -461,6 +461,59 @@ test('PluginCard：enable/define 阶段失败不禁用快捷开关（模块已�
   container.remove()
 })
 
+test('PluginCard：enabled === true 且 status === failed（强停依赖故障）时仍展示异常灯与错误摘要，并允许开关停用', { timeout: 60_000 }, () => {
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = ReactDOMClient.createRoot(container)
+
+  const plugin = makePlugin({
+    id: 'ext:dep-broken',
+    name: '依赖故障插件',
+    enabled: true,
+    status: 'failed',
+    hooks: [],
+    actions: [],
+    tools: [],
+    error: {
+      code: 'plugin_dependency_not_enabled',
+      message: 'Dependency base was force-disabled',
+      stage: 'enable',
+    },
+  })
+
+  let toggled: boolean | null = null
+  act(() => {
+    root.render(
+      e(PluginCard, {
+        plugin,
+        selected: false,
+        onSelect: () => {},
+        onToggle: (enabled: boolean) => {
+          toggled = enabled
+        },
+      }),
+    )
+  })
+
+  assert.ok(container.querySelector('.plugin-card.is-failed'), '卡片应带 is-failed 故障样式')
+  assert.ok(container.querySelector('.helmx-status-light-failed'), '卡片应渲染异常状态灯')
+  assert.match(container.textContent ?? '', /Dependency base was force-disabled/)
+
+  const switchBtn = container.querySelector('[role="switch"]') as HTMLButtonElement
+  assert.equal(switchBtn.getAttribute('aria-checked'), 'true')
+  assert.equal(switchBtn.disabled, false, 'enable 阶段依赖故障允许先切换停用以恢复')
+
+  act(() => {
+    switchBtn.click()
+  })
+  assert.equal(toggled, false, '点击开关应触发停用 onToggle(false)')
+
+  act(() => {
+    root.unmount()
+  })
+  container.remove()
+})
+
 test('resolvePluginIcon：纯属性驱动零硬编码推测——自声明 icon 优先，未提供统一回退默认占位（puzzle）', { timeout: 60_000 }, () => {
   assert.equal(DEFAULT_PLUGIN_ICON, 'puzzle')
 
