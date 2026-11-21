@@ -7,8 +7,7 @@ import { useMemo } from 'react'
 import type { ReactNode, RefObject } from 'react'
 import type { ToolViewProps } from '@helmx/protocol'
 import type { WorkflowRunSummary } from '../../contracts.js'
-import { useConversation, usePluginContext, usePluginLocale, formatDurationMs, resolveLocalizedText } from '@helmx/plugin-client'
-import { ToolCallDetailsInline } from './ToolCallDetailsInline.tsx'
+import { ToolCallDetails, useConversation, usePluginContext, usePluginLocale, formatDurationMs, resolveLocalizedText } from '@helmx/plugin-client'
 import { ExecutionCard } from './ExecutionCard.tsx'
 import { ExecutionChildrenRows } from './ExecutionChildrenRows.tsx'
 import { Icon } from './WorkflowIcon.tsx'
@@ -260,7 +259,7 @@ export function SubagentLiveCard(props: {
       (props.callDetails !== undefined
         ? props.callDetails.input !== undefined || props.callDetails.result !== undefined || props.callDetails.artifactRef !== undefined
         : toolSummary?.prompt !== undefined || toolSummary?.resultText !== undefined) ? (
-        <ToolCallDetailsInline
+        <ToolCallDetails
           input={props.callDetails !== undefined ? props.callDetails.input : toolSummary?.prompt}
           result={props.callDetails !== undefined ? props.callDetails.result : toolSummary?.resultText}
           artifactRef={props.callDetails?.artifactRef}

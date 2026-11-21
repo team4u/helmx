@@ -710,7 +710,7 @@ describe('Workflow 三区零重复与无损呈现', () => {
       handleMount.unmount()
     }
 
-    // 3. 未落库前置失败：可原地展开 ToolCallDetailsInline
+    // 3. 未落库前置失败：可原地展开 ToolCallDetails（共享 SDK 原语）
     const errorMount = harness.mountNode(
       e(mod.SubagentToolView, {
         callId: 'call_err',

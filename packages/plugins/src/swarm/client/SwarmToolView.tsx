@@ -17,6 +17,7 @@ import type { ToolViewProps } from '@helmx/protocol'
 import {
   HelmxIcon,
   StatusLight,
+  ToolCallDetails,
   formatDurationMs,
   resolveLocalizedText,
   usePluginContext,
@@ -32,7 +33,6 @@ import {
   resolveSwarmToolFacts,
   type SwarmToolFacts,
 } from './model-tool-view.ts'
-import { ToolCallDetailsInline } from './ToolCallDetailsInline.tsx'
 import { useElapsedNowMs } from './hooks.ts'
 import { SWARM_WORKBENCH_PANEL_TARGET } from './models.ts'
 import {
@@ -296,7 +296,7 @@ export function SwarmToolView(props: ToolViewProps): ReactNode {
       {clickTarget === undefined ? (
         <div id={detailsId} hidden={!detailsOpen}>
           {detailsOpen ? (
-            <ToolCallDetailsInline input={props.input} result={props.result} artifactRef={props.artifactRef} />
+            <ToolCallDetails input={props.input} result={props.result} artifactRef={props.artifactRef} />
           ) : null}
         </div>
       ) : null}

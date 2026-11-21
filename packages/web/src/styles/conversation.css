@@ -1129,6 +1129,18 @@ pre {
   overflow-wrap: anywhere;
 }
 
+/* 内嵌工具调用详情块（共享 SDK 原语 @helmx/plugin-client ToolCallDetails，
+   宿主公共 trace 词汇；原先散落在 workflow 插件私有样式、swarm 侧无样式）。 */
+.tool-call-details {
+  min-width: 0;
+  padding: 4px 8px;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+.tool-call-details > summary { cursor: pointer; }
+.tool-call-details .code-block-pre { max-height: 220px; overflow: auto; }
+
 .trace-toolview {
   margin: 2px 0;
 }

@@ -83,10 +83,6 @@ export const TRACE_CLOSE_GROUP = L('Close swarm group', '结单协同编组')
 export const TRACE_UNKNOWN_TOOL = L('Swarm tool', '协同工具')
 export const TRACE_EXPAND_DETAILS = L('Show raw details', '查看原始详情')
 export const TRACE_COLLAPSE_DETAILS = L('Hide raw details', '收起原始详情')
-export const TRACE_DETAILS_SUMMARY = L('Raw tool data', '原始工具数据')
-export const TRACE_DETAILS_INPUT = L('Input', '输入')
-export const TRACE_DETAILS_OUTPUT = L('Output', '输出')
-
 export function traceOpenMemberLabel(name: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
   return resolveLocalizedText(L(`Open @${name} conversation drawer`, `打开 @${name} 会话抽屉`), locale)
 }
