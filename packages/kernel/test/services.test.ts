@@ -327,7 +327,19 @@ test('helmx-cli skill assets stay synchronized with UI extensions and runtime ca
     )
   }
 
-  for (const api of ['ctx.sessionDoc', 'composer', 'ctx.host.forkConversation(id, { entryId?, title? })', 'fork_empty_history']) {
+  for (const api of [
+    'ctx.sessionDoc',
+    'composer',
+    'ctx.host.forkConversation(id, { entryId?, title? })',
+    'fork_empty_history',
+    'useTimelineToolCalls',
+    'TimelineToolCallSummary',
+    'PluginToolResultEnvelope',
+    'structuredOutputSchema',
+    'presentationMeta',
+    'presentationMetaSchema',
+    'projectPresentationMeta',
+  ]) {
     assert.ok(HELMX_CLI_SKILL_AND_PLUGIN_DEV_MD.includes(api), `plugin-dev reference must include ${api}`)
   }
   assert.ok(
