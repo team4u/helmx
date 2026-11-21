@@ -58,6 +58,7 @@ export function herdrActionFailed(message: string, locale: HelmxLocale): string 
 // ---------------------------------------------------------------------------
 
 /** Accessible names for the three filter selects. */
+export const HDR_FILTERS_LABEL: LocalizedText = { en: 'Pane filters', 'zh-CN': '终端筛选' }
 export const HDR_FILTER_NODE_ARIA: LocalizedText = { en: 'Filter by node', 'zh-CN': '节点筛选' }
 export const HDR_FILTER_OWNER_ARIA: LocalizedText = { en: 'Filter by ownership', 'zh-CN': '归属筛选' }
 export const HDR_FILTER_STATUS_ARIA: LocalizedText = { en: 'Filter by status', 'zh-CN': '状态筛选' }

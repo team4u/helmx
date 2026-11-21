@@ -29,6 +29,7 @@ import {
   DialogTitle,
   StatusLight,
   formatCompactTimestamp,
+  ScreenToolbar,
   Select,
   usePluginContext,
   usePluginDoc,
@@ -69,6 +70,7 @@ import {
   HDR_COL_OWNER,
   HDR_COL_PANE,
   HDR_COL_STATUS,
+  HDR_FILTERS_LABEL,
   HDR_FILTER_NODE_ARIA,
   HDR_FILTER_OWNER_ARIA,
   HDR_FILTER_STATUS_ARIA,
@@ -323,7 +325,7 @@ export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
         </div>
       )}
 
-      <div className="herdr-overview-filters">
+      <ScreenToolbar className="herdr-overview-filters" label={t(HDR_FILTERS_LABEL)}>
         <FilterSelect
           value={filters.node}
           options={nodeFilterOptions}
@@ -345,7 +347,7 @@ export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
         <span className="text-subtle tabular-nums herdr-metric-label">
           {herdrRowCount(filtered.length, panes.length, locale)}
         </span>
-      </div>
+      </ScreenToolbar>
 
       <div className="herdr-overview-content">
         <div className="herdr-content-inner">

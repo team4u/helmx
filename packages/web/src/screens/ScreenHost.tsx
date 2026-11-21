@@ -5,8 +5,8 @@
  */
 import * as React from 'react'
 import { useMemo } from 'react'
-import { HelmxIcon } from '@helmx/plugin-client'
-import { resolveLocalizedText, type ScreenSpec } from '@helmx/protocol/browser'
+import { HelmxIcon, ScreenParamsContext } from '@helmx/plugin-client'
+import { resolveLocalizedText, type ScreenParamsScope, type ScreenSpec } from '@helmx/protocol/browser'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { useGroupedUi, useLocationTargets, useStoreActions } from '../lib/store-context.js'
 import type { ResolvedTarget } from '../lib/types.js'
@@ -29,22 +29,26 @@ export function ScreenHost({ pluginId, screenId, isSplit, onCloseSplit }: Screen
     (s) => s.pluginId === pluginId && (s.spec as { id?: string }).id === screenId,
   )
 
-  // 参数取自当前屏（主/分屏各自独立），setParams 同样绑定到当前屏的 store 方法。
+  // 参数取自当前屏（主/分屏各自独立），setParams 同样绑定到当前屏的 store 方法；
+  // 单一派生同时供协议 ScreenProps（slotProps）与 useScreenParams 的
+  // ScreenParamsContext（屏内嵌套组件免 prop-drilling），URL hash 仍是唯一真相。
   const target: ResolvedTarget | null = isSplit ? splitTarget : primaryTarget
-  const slotProps = useMemo<Record<string, unknown>>(() => {
+  const screenScope = useMemo<ScreenParamsScope>(() => {
     const params =
       target !== null && target.kind === 'screen' && target.pluginId === pluginId && target.screenId === screenId
         ? target.params ?? {}
         : {}
     return {
-      pluginId,
-      screenId,
       isSplit: isSplit === true,
       params,
       setParams: (patch: Record<string, string | undefined>, options?: { push?: boolean }) =>
         setScreenParams(patch, { split: isSplit === true, push: options?.push }),
     }
   }, [pluginId, screenId, isSplit, target, setScreenParams])
+  const slotProps = useMemo<Record<string, unknown>>(
+    () => ({ pluginId, screenId, ...screenScope }),
+    [pluginId, screenId, screenScope],
+  )
 
   const toggleSplit = () => {
     if (isSplit) {
@@ -122,12 +126,14 @@ export function ScreenHost({ pluginId, screenId, isSplit, onCloseSplit }: Screen
       </div>
       <div className="timeline-scroll">
         <div className="timeline-inner screen-host-stage" data-screen-host="true">
-          <PluginUiView
-            pluginId={pluginId}
-            spec={spec}
-            slotProps={slotProps}
-            label={t('shell.screen.viewLabel', { id: screenId })}
-          />
+          <ScreenParamsContext.Provider value={screenScope}>
+            <PluginUiView
+              pluginId={pluginId}
+              spec={spec}
+              slotProps={slotProps}
+              label={t('shell.screen.viewLabel', { id: screenId })}
+            />
+          </ScreenParamsContext.Provider>
         </div>
       </div>
     </div>

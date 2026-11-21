@@ -44,13 +44,10 @@
   margin: 10px 16px 0;
 }
 
+/* 工具栏骨架已迁移到共享 ScreenToolbar（.screen-toolbar 公共原语），
+   此处仅保留 herdr 专有的筛选行内边距（含窄屏收窄）；flex/gap/wrap 由公共类承担 */
 .herdr-overview-filters {
   padding: 10px 16px 0;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  justify-content: flex-start;
 }
 
 .herdr-filter-select {

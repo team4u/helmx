@@ -1,8 +1,8 @@
 /**
  * Lightweight layout primitives shared by plugins (composable, stateless, SSR safe):
  * - All of them reuse the generic design-system classes from the host styles.css
- *   (.screen-container / .screen-header / .helmx-table-wrap / .helmx-table /
- *   .table-empty / .loading-state / .kv-grid, etc.). No new CSS theme is
+ *   (.screen-container / .screen-header / .screen-toolbar / .helmx-table-wrap /
+ *   .helmx-table / .table-empty / .loading-state / .kv-grid, etc.). No new CSS theme is
  *   introduced and there is no opaque columns/data table — structure and cells
  *   are still expressed as JSX;
  * - No Portal, no document / window access, renderToString works directly;
@@ -89,6 +89,37 @@ export function ScreenSection(props: ScreenSectionProps): ReactNode {
       )}
       {children}
     </section>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// ScreenToolbar: header-to-content toolbar row
+// ---------------------------------------------------------------------------
+
+export interface ScreenToolbarProps {
+  /** Main area (search box, filter selects, category pills…); children compose freely. */
+  children?: ReactNode
+  /** Right-aligned action cluster (buttons etc.); omitted renders nothing. */
+  actions?: ReactNode
+  /** Toolbar semantic description (accessibility: aria-label). */
+  label?: string
+  /** Extra class name (extension point for custom layouts). */
+  className?: string
+}
+
+/**
+ * Standard toolbar row between the page header and content: one flex-wrap row
+ * (.screen-toolbar) with the main area on the left and the optional actions
+ * cluster pushed right (.screen-toolbar-actions). Reuses the host public CSS
+ * vocabulary — plugins stop re-rolling per-plugin toolbar flex rules.
+ */
+export function ScreenToolbar(props: ScreenToolbarProps): ReactNode {
+  const { children, actions, label, className } = props
+  return (
+    <div className={joinClass('screen-toolbar', className)} aria-label={label}>
+      {children}
+      {actions !== undefined && <div className="screen-toolbar-actions">{actions}</div>}
+    </div>
   )
 }
 
