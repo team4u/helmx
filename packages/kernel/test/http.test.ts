@@ -256,7 +256,7 @@ function makeKernel(): KernelRuntimeLike {
       asks.delete(id)
     },
     async search(q) {
-      return [{ conversationId: 1, snippet: `hit:${q}` }]
+      return [{ conversationId: 1, entryId: 'entry:1', title: 'Sample', snippet: `hit:${q}`, highlights: [{ start: 4, end: 4 + q.length }] }]
     },
     listModels: () => ({ models: [{ provider: 'faux', modelId: 'model', available: true }], thinkingLevels: {} }),
     listModelProviders: () => [{ id: 'faux', name: 'Faux', modelCount: 1, authMethods: [{ type: 'api_key', label: 'API Key' }] }],
@@ -1731,6 +1731,9 @@ test('search?q= passes through; empty q returns 400', { timeout: 60_000 }, async
   const res = await call(handler, 'GET', '/api/search?q=hello')
   assert.equal(res.status, 200)
   assert.ok(Array.isArray(res.body))
+  assert.deepEqual(res.body, [
+    { conversationId: 1, entryId: 'entry:1', title: 'Sample', snippet: 'hit:hello', highlights: [{ start: 4, end: 9 }] },
+  ])
   const empty = await call(handler, 'GET', '/api/search?q=')
   assert.equal(empty.status, 400)
 })

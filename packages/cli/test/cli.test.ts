@@ -491,7 +491,20 @@ test('search,models,plugins,actions list,status', { timeout: 60_000 }, async (t)
   const dir = useTempDir(t, 'helmx-cli-test-')
   const hub = await startMockHub(
     {
-      'GET /api/search?q=hello%20world': () => ({ body: [{ id: 1 }] }),
+      'GET /api/search?q=hello%20world': () => ({
+        body: [
+          {
+            conversationId: 1,
+            entryId: 'entry:2',
+            title: 'Greeting',
+            snippet: 'hello world snippet',
+            highlights: [
+              { start: 0, end: 5 },
+              { start: 6, end: 11 },
+            ],
+          },
+        ],
+      }),
       'GET /api/models': () => ({ body: { models: [{ provider: 'openai', modelId: 'gpt', available: true }, { provider: 'anthropic', modelId: 'sonnet', available: true }], thinkingLevels: {} } }),
       'GET /api/models/providers': () => ({ body: [{ id: 'deepseek', name: 'DeepSeek', modelCount: 2, authMethods: [{ type: 'api_key', label: 'API Key' }] }] }),
       'POST /api/models/refresh': (body) => ({
@@ -522,6 +535,15 @@ test('search,models,plugins,actions list,status', { timeout: 60_000 }, async (t)
   const s = await runCliCaptured(['search', 'hello', 'world', '--json'], env)
   assert.equal(s.code, 0, s.err)
   assert.equal(hub.recorded.hits.at(-1)?.path, '/api/search?q=hello%20world')
+  assert.deepEqual(JSON.parse(s.out)[0]?.highlights, [
+    { start: 0, end: 5 },
+    { start: 6, end: 11 },
+  ])
+
+  const sHuman = await runCliCaptured(['search', 'hello', 'world'], env)
+  assert.equal(sHuman.code, 0, sHuman.err)
+  assert.ok(sHuman.out.includes('Greeting') && sHuman.out.includes('hello world snippet'))
+  assert.ok(!sHuman.out.includes('highlights'), 'human search table should omit raw UTF-16 offset arrays')
 
   const m = await runCliCaptured(['models', 'list', '--json'], env)
   assert.equal(m.code, 0, m.err)

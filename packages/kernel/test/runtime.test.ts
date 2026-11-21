@@ -15,8 +15,11 @@ import {
 import { HelmxError, type TurnSettledPayload } from '@helmx/protocol'
 import { writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { after, before, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
+import { FTS_SCHEMA_VERSION, FTS_SCHEMA_VERSION_KEY, openHelmxDatabase } from '../src/runtime/sqlite.js'
+import { HelmxStore } from '../src/runtime/store.js'
 import { KernelRuntime } from '../src/runtime/index.js'
 import { assertSpawnRequestTitle, normalizeSpawnTitle } from '../src/runtime/spawn.js'
 import { buildToolEnv } from '../src/runtime/tools.js'
@@ -2074,6 +2077,121 @@ describe('KernelRuntime start and close concurrency', { timeout: 60_000 }, () =>
       assert.deepEqual(order, ['start-begin', 'start-end', 'stop'], 'teardown must wait for start to finish before stopping services')
     } finally {
       await kernel.close().catch(() => {})
+    }
+  })
+
+  it('startup auto-rebuilds FTS once when legacy unicode61 DDL is detected and skips rebuild on steady-state restarts', { timeout: 60_000 }, async () => {
+    const dir = join(root, 'fts-startup-migrate')
+    // 1. Create real conversations with Chinese messages and close cleanly.
+    const k1 = await openRuntime(dir)
+    let convId = 0
+    try {
+      const conv = await k1.createConversation({ title: '数据库排障指南' })
+      convId = conv.id
+      k1.__faux.setResponses([
+        fauxAssistantMessage('排查确认是数据库连接池超时导致登录失败，建议调大上限。'),
+      ])
+      await k1.submitInput(convId, '帮我定位数据库连接池和登录报错原因')
+      await k1.waitForIdle(convId)
+    } finally {
+      await k1.close()
+    }
+
+    // 2. Downgrade only helmx_conversation_fts to legacy unicode61 DDL (leaving pi_* tables untouched).
+    const dbPath = join(dir, 'state.sqlite')
+    const raw = new DatabaseSync(dbPath)
+    raw.exec('DROP TABLE helmx_conversation_fts')
+    raw.exec(
+      'CREATE VIRTUAL TABLE helmx_conversation_fts USING fts5(conversation_id UNINDEXED, entry_id UNINDEXED, title, body)',
+    )
+    raw.exec(`DELETE FROM helmx_seq WHERE key = '${FTS_SCHEMA_VERSION_KEY}'`)
+    raw.close()
+
+    // 3. Reopen KernelRuntime: must detect DDL mismatch, recreate trigram table, and rebuild FTS once from pi history.
+    const k2 = await openRuntime(dir)
+    try {
+      const triHits = await k2.search('连接池')
+      assert.ok(triHits.some((h) => h.conversationId === convId), 'rebuilt trigram index must match 3+ char Chinese substring')
+      const firstHit = triHits.find((h) => h.conversationId === convId)!
+      assert.equal(firstHit.title, '数据库排障指南')
+      assert.ok(Array.isArray(firstHit.highlights) && firstHit.highlights.length >= 1)
+      assert.equal(firstHit.snippet.slice(firstHit.highlights[0]!.start, firstHit.highlights[0]!.end), '连接池')
+
+      const shortHits = await k2.search('登录')
+      assert.ok(shortHits.some((h) => h.conversationId === convId), '2-char Chinese query must match after startup rebuild')
+
+      const mixedHits = await k2.search('数据库 登录')
+      assert.ok(mixedHits.some((h) => h.conversationId === convId), 'mixed 3-char + 2-char AND query must match')
+      assert.equal((await k2.search('数据库 绝无')).length, 0, 'mixed AND must reject absent 2-char term')
+
+      // Internal pi.system prompts must never be indexed by rebuildFts.
+      const inspectDb = new DatabaseSync(dbPath, { readOnly: true })
+      try {
+        const ver = inspectDb
+          .prepare(`SELECT value FROM helmx_seq WHERE key = '${FTS_SCHEMA_VERSION_KEY}'`)
+          .get() as { value: number } | undefined
+        assert.equal(ver?.value, FTS_SCHEMA_VERSION)
+        const ddl = inspectDb
+          .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'helmx_conversation_fts'")
+          .get() as { sql: string } | undefined
+        assert.match(ddl?.sql ?? '', /tokenize\s*=\s*['"]?trigram/i)
+        const ftsRows = inspectDb
+          .prepare('SELECT entry_id, body FROM helmx_conversation_fts WHERE conversation_id = ?')
+          .all(convId) as Array<{ entry_id: string; body: string }>
+        assert.equal(ftsRows.length, 2, 'rebuilt FTS must contain only the user input and assistant reply (no pi.system)')
+        assert.ok(ftsRows.some((r) => r.entry_id.startsWith('input:') && r.body.includes('连接池')))
+        assert.ok(ftsRows.some((r) => r.entry_id.startsWith('entry:') && r.body.includes('登录失败')))
+      } finally {
+        inspectDb.close()
+      }
+    } finally {
+      await k2.close()
+    }
+
+    // 4. Plant a probe sentinel in helmx_conversation_fts before a steady-state restart: if startup skipped
+    // redundant rebuildFts() as required, the sentinel row remains intact after reopening.
+    const probeDb = new DatabaseSync(dbPath)
+    probeDb
+      .prepare('INSERT INTO helmx_conversation_fts (conversation_id, entry_id, title, body) VALUES (?, ?, ?, ?)')
+      .run(convId, 'probe:no-rebuild', 'probe', 'sentinel_no_repeat_rebuild_marker')
+    probeDb.close()
+
+    const k3 = await openRuntime(dir)
+    try {
+      const probeHits = await k3.search('sentinel_no_repeat_rebuild_marker')
+      assert.equal(probeHits.length, 1, 'steady-state restart must NOT redundantly wipe and rebuild FTS')
+    } finally {
+      await k3.close()
+    }
+
+    // 5. Missing FTS table + empty helmx_conversations + existing pi history: MUST mark needsFtsRebuild = true
+    // (never treat as a fresh empty DB), survive a crash before rebuild finishes, and rebuild on next startup.
+    const piOnlyRaw = new DatabaseSync(dbPath)
+    piOnlyRaw.exec('DROP TABLE helmx_conversation_fts')
+    piOnlyRaw.exec('DELETE FROM helmx_conversations')
+    piOnlyRaw.exec('DELETE FROM helmx_seq')
+    piOnlyRaw.close()
+
+    const preCrashDb = await openHelmxDatabase(dir)
+    const preCrashStore = new HelmxStore(preCrashDb)
+    try {
+      await preCrashStore.load()
+      assert.equal(
+        preCrashStore.needsFtsRebuild,
+        true,
+        'missing FTS table with existing pi history must stay marked needsFtsRebuild (never stamped v2 as fresh DB)',
+      )
+    } finally {
+      await preCrashStore.close()
+      await preCrashDb.close()
+    }
+
+    const k4 = await openRuntime(dir)
+    try {
+      const recoveredHits = await k4.search('连接池')
+      assert.ok(recoveredHits.some((h) => h.conversationId === convId), 'startup must rebuild FTS from existing pi history')
+    } finally {
+      await k4.close()
     }
   })
 })

@@ -6,14 +6,17 @@
  * resurrection on restart, sequence monotonicity, JSON corruption errors.
  */
 
-import { HelmxError } from '@helmx/protocol'
+import { HelmxError, type SearchHit } from '@helmx/protocol'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { after, before, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import { openHelmxDatabase, type HelmxDatabase } from '../src/runtime/sqlite.js'
+import { FTS_SCHEMA_VERSION, FTS_SCHEMA_VERSION_KEY, openHelmxDatabase, type HelmxDatabase } from '../src/runtime/sqlite.js'
 import { HelmxStore, convStatusOf, type ConvMeta } from '../src/runtime/store.js'
+import { buildSearchSnippet } from '../src/runtime/fts-search.js'
+import { deferred } from './helpers.js'
 
 async function openStore(): Promise<{ store: HelmxStore; database: HelmxDatabase; dir: string }> {
   const dir = await mkdtemp(join(tmpdir(), 'helmx-store-test-'))
@@ -570,7 +573,362 @@ describe('HelmxStore durability layer (real SQLite)', { timeout: 60_000 }, () =>
     await dbReopen.close()
     await rm(base, { recursive: true, force: true })
   })
+
+  it('FTS Chinese trigram, <3-char short queries, mixed AND, cross-column AND, and injection safety', { timeout: 60_000 }, async () => {
+    const base = await mkdtemp(join(dir, 'fts-cn-'))
+    const { store, database } = await openStoreAt(base)
+    try {
+      store.upsertConv(conv(1, { title: '数据库架构设计' }))
+      store.upsertConv(conv(2, { title: '前端排障记录' }))
+      store.upsertConv(conv(3, { title: 'AI 鉴权笔记' }))
+      store.upsertConv(conv(4, { title: 'Special Punctuation' }))
+
+      store.indexFts(1, 'entry:1', '数据库架构设计', '我们使用 SQLite WAL 模式与数据库连接池配置来优化查询。')
+      store.indexFts(1, 'entry:2', '数据库架构设计', '登录接口在数据库连接异常时会触发重试。')
+      store.indexFts(2, 'entry:1', '前端排障记录', '登录页面偶发白屏，排查缓存刷新与路由焦点。')
+      store.indexFts(3, 'entry:1', 'AI 鉴权笔记', '确认 API 令牌走 SecretStash，不落库。')
+      store.indexFts(
+        4,
+        'entry:1',
+        'Special Punctuation',
+        'Check foo_bar 100% "quoted" a*b [REDACTED] and NOT OR title:foo literally.',
+      )
+
+      // 3+ char Chinese substring match via trigram MATCH (fails under legacy unicode61).
+      const connPoolHits = await store.search('连接池')
+      assert.equal(connPoolHits.length, 1)
+      assert.equal(connPoolHits[0]?.conversationId, 1)
+      assert.equal(connPoolHits[0]?.title, '数据库架构设计')
+      assertValidHighlights(connPoolHits[0]!, ['连接池'])
+
+      // 2-char & 1-char Chinese / ASCII short queries via honest instr(lower(...)) scan.
+      const loginHits = await store.search('登录')
+      assert.equal(loginHits.length, 2)
+      for (const hit of loginHits) assertValidHighlights(hit, ['登录'])
+
+      const singleCn = await store.search('白')
+      assert.equal(singleCn.length, 1)
+      assert.equal(singleCn[0]?.conversationId, 2)
+      assertValidHighlights(singleCn[0]!, ['白'])
+
+      const shortEn = await store.search('ai')
+      assert.equal(shortEn.length, 1)
+      assert.equal(shortEn[0]?.conversationId, 3)
+      assert.equal(shortEn[0]?.title, 'AI 鉴权笔记')
+      // Match is only in title, not in body -> omit entryId (conversation-level nav) and return explicit [].
+      assert.equal(shortEn[0]?.entryId, undefined)
+      assert.deepEqual(shortEn[0]?.highlights, [])
+
+      // Mixed query (>=3 char + <3 char): MUST enforce the <3 term (regression: trigram MATCH silently ignores <3 phrases).
+      const mixedMatch = await store.search('数据库 登录')
+      assert.equal(mixedMatch.length, 1)
+      assert.equal(mixedMatch[0]?.conversationId, 1)
+      assert.equal(mixedMatch[0]?.entryId, 'entry:2')
+      assertValidHighlights(mixedMatch[0]!, ['数据库', '登录'])
+
+      const mixedMiss = await store.search('数据库 绝无')
+      assert.equal(mixedMiss.length, 0, 'absent 2-char term in mixed query must not be silently ignored')
+
+      // Multi-word AND semantics: entries matching only one word must be excluded.
+      const multiAnd = await store.search('连接池 白屏')
+      assert.equal(multiAnd.length, 0)
+
+      // Cross-column AND: first term in title + second term in body.
+      const crossCol = await store.search('架构 重试')
+      assert.equal(crossCol.length, 1)
+      assert.equal(crossCol[0]?.conversationId, 1)
+      assert.equal(crossCol[0]?.entryId, 'entry:2')
+      assertValidHighlights(crossCol[0]!, ['重试'])
+
+      // Special FTS5 syntax characters, LIKE wildcards, and NUL bytes must never throw or inject.
+      for (const q of ['foo_bar', '100%', '"quoted"', 'a*b', '[REDACTED]', 'NOT', 'title:foo']) {
+        const hits = await store.search(q)
+        assert.equal(hits.length, 1, `literal query ${q} should match entry 4`)
+        assert.equal(hits[0]?.conversationId, 4)
+        assertValidHighlights(hits[0]!, [q])
+      }
+      assert.deepEqual(await store.search('   \u0000  '), [])
+      const nulSplit = await store.search('foo_bar\u0000100%')
+      assert.equal(nulSplit.length, 1)
+      assert.equal(nulSplit[0]?.conversationId, 4)
+    } finally {
+      await store.close()
+      await database.close()
+      await rm(base, { recursive: true, force: true })
+    }
+  })
+
+  it('FTS relevance ranking, per-conversation cap, title return, and safe highlight invariants', { timeout: 60_000 }, async () => {
+    const base = await mkdtemp(join(dir, 'fts-rank-'))
+    const { store, database } = await openStoreAt(base)
+    try {
+      // 1. Title-weighted bm25 relevance (3+ char) and per-conversation cap (default max 2 per conversation).
+      store.upsertConv(conv(1, { title: 'Kubernetes Deployment Guide' }))
+      store.upsertConv(conv(2, { title: 'Misc Notes' }))
+      store.upsertConv(conv(3, { title: 'Cluster Ops' }))
+
+      for (let i = 1; i <= 5; i += 1) {
+        store.indexFts(1, `entry:${i}`, 'Kubernetes Deployment Guide', `Kubernetes cluster step ${i} for kubernetes rollout.`)
+      }
+      store.indexFts(2, 'entry:1', 'Misc Notes', 'Mentioned kubernetes once while reviewing logs.')
+      store.indexFts(3, 'entry:1', 'Cluster Ops', 'Upgrading kubernetes control plane nodes.')
+
+      const hits = await store.search('kubernetes')
+      // Conv #1 has 5 matches but default cap limits it to 2, allowing conv #2 and #3 to surface.
+      assert.equal(hits.filter((h) => h.conversationId === 1).length, 2, 'default per-conversation cap must limit conv #1 to 2 hits')
+      assert.equal(hits.length, 4)
+      assert.equal(hits[0]?.conversationId, 1, 'title + dense body match must rank first')
+      assert.equal(hits[0]?.title, 'Kubernetes Deployment Guide')
+      assert.ok(hits.some((h) => h.conversationId === 2))
+      assert.ok(hits.some((h) => h.conversationId === 3))
+      for (const hit of hits) {
+        assert.ok(!hit.snippet.includes('kubernetes...'), 'old broken close-tag ellipsis bug must not recur')
+        assertValidHighlights(hit, ['kubernetes'])
+      }
+
+      // Custom cap / limit options.
+      const singlePerConv = await store.search('kubernetes', { limit: 10, maxPerConversation: 1 })
+      assert.equal(singlePerConv.length, 3)
+      assert.equal(new Set(singlePerConv.map((h) => h.conversationId)).size, 3)
+
+      // 2. Short-query (<3 char) ranking puts title hits ahead of body-only hits; title-only hits omit entryId and collapse to 1/conv.
+      store.upsertConv(conv(10, { title: '日常杂记' }))
+      store.upsertConv(conv(11, { title: '配置中心' }))
+      store.indexFts(10, 'entry:1', '日常杂记', '今天调整了一下系统配置。')
+      store.indexFts(11, 'entry:1', '配置中心', '查看默认参数列表。')
+      store.indexFts(11, 'entry:2', '配置中心', '好的收到。')
+      store.indexFts(11, 'entry:3', '配置中心', 'ok')
+      const shortRanked = await store.search('配置')
+      assert.equal(shortRanked.length, 2, 'multiple title-only messages in conv 11 must collapse to one conversation-level hit')
+      assert.equal(shortRanked[0]?.conversationId, 11, 'short-query title hit must rank ahead of body-only hit')
+      assert.equal(shortRanked[0]?.entryId, undefined, 'title-only hit must omit entryId rather than pointing at an unrelated message')
+      assert.deepEqual(shortRanked[0]?.highlights, [], 'title-only hit must return explicit [] highlights')
+      assert.equal(shortRanked[1]?.conversationId, 10)
+      assert.equal(shortRanked[1]?.entryId, 'entry:1')
+      assertValidHighlights(shortRanked[1]!, ['配置'])
+
+      // 2b. Trigram title-only vs body+title within same conversation: body match must win over short "ok" messages,
+      // and a pure title-only conversation collapses to 1 hit without entryId.
+      store.upsertConv(conv(13, { title: '专属架构专题' }))
+      store.indexFts(13, 'entry:1', '专属架构专题', 'ok')
+      store.indexFts(13, 'entry:2', '专属架构专题', '收到')
+      store.indexFts(13, 'entry:3', '专属架构专题', '好的')
+      store.indexFts(
+        13,
+        'entry:4',
+        '专属架构专题',
+        `${'无关填充背景说明文字 '.repeat(40)} 这里详细记录了专属架构专题的落地细节。${'补充内容 '.repeat(40)}`,
+      )
+      store.upsertConv(conv(14, { title: '专属架构专题纯标题' }))
+      store.indexFts(14, 'entry:1', '专属架构专题纯标题', '纯闲聊消息一')
+      store.indexFts(14, 'entry:2', '专属架构专题纯标题', '纯闲聊消息二')
+      const titleVsBody = await store.search('专属架构专题')
+      const c13Hits = titleVsBody.filter((h) => h.conversationId === 13)
+      assert.equal(c13Hits.length, 1, 'conv 13 should keep only its real body hit and drop redundant title-only rows')
+      assert.equal(c13Hits[0]?.entryId, 'entry:4', 'long body hit must beat shorter title-only "ok" rows in same conversation')
+      assertValidHighlights(c13Hits[0]!, ['专属架构专题'])
+      const c14Hits = titleVsBody.filter((h) => h.conversationId === 14)
+      assert.equal(c14Hits.length, 1, 'pure title-only conv 14 must collapse to one hit')
+      assert.equal(c14Hits[0]?.entryId, undefined, 'pure title-only trigram hit must omit entryId')
+      assert.deepEqual(c14Hits[0]?.highlights, [])
+
+      // 3. XSS / HTML safety: plain text preserved verbatim, zero injected tags, exact UTF-16 highlights.
+      store.upsertConv(conv(12, { title: '' }))
+      store.indexFts(12, 'entry:1', '', 'Use <script>alert(1)</script> and <mark>数据库</mark> safely.')
+      const xssHits = await store.search('数据库')
+      assert.equal(xssHits.length, 1)
+      assert.equal(xssHits[0]?.title, undefined, 'empty title must be omitted rather than empty string')
+      assert.equal(xssHits[0]?.snippet, 'Use <script>alert(1)</script> and <mark>数据库</mark> safely.')
+      assertValidHighlights(xssHits[0]!, ['数据库'])
+
+      // 4. Long text windowing: cluster selection, surrogate-pair safety, and synthetic '...' never highlighted.
+      const filler = '背景填充文字🚀用于测试窗口裁剪与代理对安全边界。'.repeat(12)
+      const longBody = `${filler} 第一次提及数据库在这里。${filler} 核心诊断是数据库连接池与配置冲突导致超时，详见 ... 说明。 ${filler}`
+      const built = buildSearchSnippet(longBody, ['数据库', '配置'])
+      assert.ok(built.snippet.startsWith('...') && built.snippet.endsWith('...'))
+      assert.ok(built.snippet.includes('数据库') && built.snippet.includes('配置'), 'window should center on multi-term cluster')
+      assert.equal(hasUnpairedSurrogate(built.snippet), false, 'snippet truncation must never split UTF-16 surrogate pairs')
+      assertValidHighlights({ conversationId: 1, snippet: built.snippet, highlights: built.highlights }, ['数据库', '配置'])
+
+      const ellipsisBuilt = buildSearchSnippet(longBody, ['...'])
+      assert.ok(ellipsisBuilt.snippet.startsWith('...') && ellipsisBuilt.snippet.endsWith('...'))
+      assert.ok(ellipsisBuilt.highlights.length >= 1)
+      for (const r of ellipsisBuilt.highlights) {
+        assert.ok(r.start >= 3, 'synthetic leading ellipsis must never be highlighted')
+        assert.ok(r.end <= ellipsisBuilt.snippet.length - 3, 'synthetic trailing ellipsis must never be highlighted')
+      }
+    } finally {
+      await store.close()
+      await database.close()
+      await rm(base, { recursive: true, force: true })
+    }
+  })
+
+  it('FTS DDL upgrade detection, crash-safe pending rebuild flag, and steady-state zero-rebuild', { timeout: 60_000 }, async () => {
+    const base = await mkdtemp(join(dir, 'fts-ddl-'))
+    try {
+      // Fresh DB starts at latest FTS version with trigram DDL and needsFtsRebuild = false.
+      const fresh = await openStoreAt(base)
+      assert.equal(fresh.store.needsFtsRebuild, false)
+      fresh.store.upsertConv(conv(1, { title: '旧会话' }))
+      fresh.store.indexFts(1, 'entry:1', '旧会话', '数据库连接池')
+      await fresh.store.close()
+      await fresh.database.close()
+
+      // Simulate a legacy pre-trigram database (unicode61 FTS DDL, no fts_schema_version row).
+      const raw = new DatabaseSync(join(base, 'state.sqlite'))
+      raw.exec('DROP TABLE helmx_conversation_fts')
+      raw.exec(
+        'CREATE VIRTUAL TABLE helmx_conversation_fts USING fts5(conversation_id UNINDEXED, entry_id UNINDEXED, title, body)',
+      )
+      raw.exec(`DELETE FROM helmx_seq WHERE key = '${FTS_SCHEMA_VERSION_KEY}'`)
+      raw.close()
+
+      // First reopen upgrades DDL to trigram and persists pending version 0 -> needsFtsRebuild = true.
+      const upgraded = await openStoreAt(base)
+      assert.equal(upgraded.store.needsFtsRebuild, true)
+      const ddlRow = await upgraded.database.db.get<{ sql: string }>(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'helmx_conversation_fts'",
+      )
+      assert.match(ddlRow?.sql ?? '', /tokenize\s*=\s*['"]?trigram/i)
+      // Simulate process crash BEFORE rebuildFts completes: close without rebuilding.
+      await upgraded.store.close()
+      await upgraded.database.close()
+
+      // Next boot MUST still know rebuild is pending even though DDL is already trigram.
+      const crashedRetry = await openStoreAt(base)
+      assert.equal(crashedRetry.store.needsFtsRebuild, true, 'pending rebuild must survive crash after DDL recreate')
+      await crashedRetry.store.rebuildFts(async (index) => {
+        index(1, 'entry:1', '旧会话', '数据库连接池')
+      })
+      assert.equal(crashedRetry.store.needsFtsRebuild, false)
+      const verRow = await crashedRetry.database.db.get<{ value: number }>(
+        'SELECT value FROM helmx_seq WHERE key = ?',
+        FTS_SCHEMA_VERSION_KEY,
+      )
+      assert.equal(verRow?.value, FTS_SCHEMA_VERSION)
+      await crashedRetry.store.close()
+      await crashedRetry.database.close()
+
+      // Steady-state reopen: needsFtsRebuild is false (no redundant rebuild).
+      const steady = await openStoreAt(base)
+      assert.equal(steady.store.needsFtsRebuild, false)
+      const hits = await steady.store.search('连接池')
+      assert.equal(hits.length, 1)
+      await steady.store.close()
+      await steady.database.close()
+    } finally {
+      await rm(base, { recursive: true, force: true })
+    }
+  })
+
+  it('FTS rebuildFts preserves concurrent writes, title updates, deletions, and serializes overlapping calls', { timeout: 60_000 }, async () => {
+    const base = await mkdtemp(join(dir, 'fts-race-'))
+    const { store, database } = await openStoreAt(base)
+    try {
+      store.upsertConv(conv(20, { title: 't20' }))
+      store.upsertConv(conv(21, { title: 'old-21' }))
+      store.upsertConv(conv(22, { title: 'to-delete-22' }))
+      store.upsertConv(conv(23, { title: 'rewind-23' }))
+      await store.flushPublic()
+
+      const replayEntered = deferred()
+      const replayRelease = deferred()
+
+      const rebuild1 = store.rebuildFts(async (index) => {
+        // Historical snapshot includes conv 21 (old title), conv 22 (about to be deleted), conv 23 (entry about to be removed).
+        index(21, 'entry:1', 'old-21', 'alpha history entry')
+        index(22, 'entry:1', 'to-delete-22', 'ghostconv should vanish')
+        index(23, 'entry:1', 'rewind-23', 'rewoundentry should vanish')
+        index(23, 'entry:2', 'rewind-23', 'keptentry survives')
+        replayEntered.resolve()
+        await replayRelease.promise
+      })
+
+      await replayEntered.promise
+
+      // Live mutations arrive while async replay is in flight:
+      store.indexFts(20, 'entry:new', 't20', 'concurrent live write 中文增量')
+      store.upsertConv(conv(21, { title: 'renamed-during-rebuild', updatedAt: 5000 }))
+      store.deleteConv(22)
+      store.removeFtsEntries(23, ['entry:1'])
+
+      replayRelease.resolve()
+      await rebuild1
+
+      const liveHits = await store.search('中文增量')
+      assert.equal(liveHits.length, 1, 'concurrent indexFts during replay must not be lost')
+      assert.equal(liveHits[0]?.conversationId, 20)
+
+      const renamedHits = await store.search('alpha')
+      assert.equal(renamedHits.length, 1)
+      assert.equal(renamedHits[0]?.title, 'renamed-during-rebuild', 'concurrent title update must be reflected')
+
+      assert.equal((await store.search('ghostconv')).length, 0, 'deleted conversation must never be resurrected by rebuild')
+      assert.equal((await store.search('rewoundentry')).length, 0, 'removed entry must never be resurrected by rebuild')
+      assert.equal((await store.search('keptentry')).length, 1)
+
+      // Overlapping rebuild calls serialize strictly rather than interleaving overlays.
+      const order: string[] = []
+      const gate1 = deferred()
+      const entered1 = deferred()
+      const first = store.rebuildFts(async (index) => {
+        order.push('r1-start')
+        index(20, 'entry:new', 't20', 'firstpass token')
+        entered1.resolve()
+        await gate1.promise
+        order.push('r1-end')
+      })
+      await entered1.promise
+      const second = store.rebuildFts(async (index) => {
+        order.push('r2-start')
+        index(20, 'entry:new', 't20', 'secondpass token')
+        order.push('r2-end')
+      })
+      gate1.resolve()
+      await Promise.all([first, second])
+      assert.deepEqual(order, ['r1-start', 'r1-end', 'r2-start', 'r2-end'])
+      assert.equal((await store.search('secondpass')).length, 1)
+      assert.equal((await store.search('firstpass')).length, 0)
+    } finally {
+      await store.close()
+      await database.close()
+      await rm(base, { recursive: true, force: true })
+    }
+  })
 })
+
+function assertValidHighlights(hit: SearchHit, expectedTerms: readonly string[]): void {
+  assert.ok(Array.isArray(hit.highlights), 'highlights must always be an array')
+  assert.ok(hit.highlights.length >= 1, `expected at least one highlight range in snippet: ${hit.snippet}`)
+  const loweredTerms = expectedTerms.map((t) => t.toLowerCase())
+  let prevEnd = -1
+  for (const r of hit.highlights) {
+    assert.ok(Number.isInteger(r.start) && Number.isInteger(r.end), 'highlight bounds must be integers')
+    assert.ok(r.start >= 0 && r.start < r.end && r.end <= hit.snippet.length, `range [${r.start}, ${r.end}) out of bounds for length ${hit.snippet.length}`)
+    assert.ok(r.start > prevEnd, `ranges must be strictly ascending and non-overlapping: prevEnd=${prevEnd}, start=${r.start}`)
+    const slice = hit.snippet.slice(r.start, r.end).toLowerCase()
+    assert.ok(
+      loweredTerms.some((t) => slice.includes(t)),
+      `highlighted slice "${slice}" must correspond to one of [${expectedTerms.join(', ')}]`,
+    )
+    prevEnd = r.end
+  }
+}
+
+function hasUnpairedSurrogate(text: string): boolean {
+  for (let i = 0; i < text.length; i += 1) {
+    const code = text.charCodeAt(i)
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = i + 1 < text.length ? text.charCodeAt(i + 1) : 0
+      if (next < 0xdc00 || next > 0xdfff) return true
+      i += 1
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      return true
+    }
+  }
+  return false
+}
 
 // ---- test fixture helpers ----
 

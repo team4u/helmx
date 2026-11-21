@@ -11,11 +11,17 @@
  * - `close()` awaits full drain of in-flight flushes and returns the first persistence error to callers.
  */
 
-import type { ArtifactKind, ConversationStatus, ConversationSummary } from '@helmx/protocol'
+import type { ArtifactKind, ConversationStatus, ConversationSummary, SearchHit } from '@helmx/protocol'
 import { HelmxError, isArtifactKind } from '@helmx/protocol'
 import type { NodeSqliteDatabase } from '@earendil-works/chord/sqlite/node'
 import { emitDiagnostic, type KernelDiagnosticSink } from './diagnostics.js'
-import type { HelmxDatabase } from './sqlite.js'
+import {
+  buildFtsSearchSql,
+  buildSearchSnippet,
+  parseSearchTerms,
+  type SearchOptions,
+} from './fts-search.js'
+import { FTS_SCHEMA_VERSION, FTS_SCHEMA_VERSION_KEY, type HelmxDatabase } from './sqlite.js'
 
 export interface ConvMeta {
   id: number
@@ -71,6 +77,12 @@ interface ArtifactRow {
 
 type Deferred = () => Promise<void>
 
+type FtsRebuildOverlayOp =
+  | { op: 'upsert'; conversationId: number; entryId: string; title: string; body: string }
+  | { op: 'removeEntries'; conversationId: number; entryIds: readonly string[] }
+  | { op: 'deleteConv'; conversationId: number }
+  | { op: 'updateTitle'; conversationId: number; title: string }
+
 interface HelmxStoreOptions {
   /** Instance-level persistence failure callback (e.g., `KernelRuntime` fatal storage closure hook); falls back to diagnostic channel. */
   readonly onError?: (error: unknown) => void
@@ -102,6 +114,11 @@ export class HelmxStore {
   /** First persistence error; once set, the store enters failed state and rejects subsequent writes. */
   private firstError: unknown = undefined
   private eventSeq = 0
+  private ftsSchemaVersion = 0
+  /** Serializes concurrent `rebuildFts` invocations so overlays and swaps never interleave. */
+  private ftsRebuildChain: Promise<void> = Promise.resolve()
+  /** Active write-delta log capturing live FTS/title/delete mutations during async `rebuildFts` replay. */
+  private ftsRebuildOverlay: FtsRebuildOverlayOp[] | null = null
   /** Text redaction hook for FTS indexing (runtime injects `stash.redact`). */
   ftsRedact: (text: string) => string = (t) => t
 
@@ -243,9 +260,19 @@ export class HelmxStore {
       "SELECT value FROM helmx_seq WHERE key = 'events'",
     )
     this.eventSeq = seqRow?.value ?? 0
+    const ftsVerRow = await this.db.get<{ value: number }>(
+      'SELECT value FROM helmx_seq WHERE key = ?',
+      FTS_SCHEMA_VERSION_KEY,
+    )
+    this.ftsSchemaVersion = ftsVerRow?.value ?? 0
     for (const row of await this.db.all<{ id: number }>('SELECT id FROM helmx_tombstones')) {
       this.tombstones.add(row.id)
     }
+  }
+
+  /** True when the derived FTS5 table was newly migrated/recreated or a prior rebuild did not finish committing. */
+  get needsFtsRebuild(): boolean {
+    return this.ftsSchemaVersion !== FTS_SCHEMA_VERSION
   }
 
   isDeleted(id: number): boolean {
@@ -312,6 +339,13 @@ export class HelmxStore {
       snap.lastEntryId = prev.lastEntryId
     }
     this.convs.set(snap.id, snap)
+    if (titleChanged && this.ftsRebuildOverlay !== null) {
+      this.ftsRebuildOverlay.push({
+        op: 'updateTitle',
+        conversationId: snap.id,
+        title: this.ftsRedact(snap.title),
+      })
+    }
     this.enqueue(async () => {
       await this.db.run(
         `INSERT INTO helmx_conversations (id, title, profile_id, tags, parent_conversation_id, node_id, cwd, model, model_override, thinking_level, thinking_level_override, unread, pinned, state_change_seq, completion_seq, created_at, updated_at)
@@ -369,6 +403,9 @@ export class HelmxStore {
     this.assertWritable()
     this.convs.delete(id)
     this.tombstones.add(id)
+    if (this.ftsRebuildOverlay !== null) {
+      this.ftsRebuildOverlay.push({ op: 'deleteConv', conversationId: id })
+    }
     for (const [askId, row] of this.asks) {
       if (row.conversationId === id) this.asks.delete(askId)
     }
@@ -621,6 +658,15 @@ export class HelmxStore {
     this.assertWritable()
     const safeTitle = this.ftsRedact(title)
     const safeBody = this.ftsRedact(body)
+    if (this.ftsRebuildOverlay !== null) {
+      this.ftsRebuildOverlay.push({
+        op: 'upsert',
+        conversationId,
+        entryId,
+        title: safeTitle,
+        body: safeBody,
+      })
+    }
     this.enqueue(() =>
       this.db.transaction(async (tx) => {
         await tx.run(
@@ -640,30 +686,64 @@ export class HelmxStore {
   }
 
   /** Full-text search index (rebuildable derived index; never touches `pi_` table semantics). */
-  async search(
-    query: string,
-    limit = 20,
-  ): Promise<Array<{ conversationId: number; entryId: string; snippet: string }>> {
+  async search(query: string, options?: SearchOptions): Promise<SearchHit[]> {
     // Wait for queued writes to drain completely (throws on errors) so queries observe persisted latest state.
     await this.flushPublic()
+    const parsed = parseSearchTerms(query)
+    const sqlQuery = buildFtsSearchSql(parsed, options)
+    if (sqlQuery === undefined) return []
     const rows = await this.db.all<{
       conversation_id: number
       entry_id: string
-      snippet: string
-    }>(
-      `SELECT conversation_id, entry_id, snippet(helmx_conversation_fts, 3, '', '...', ' ', 24) AS snippet
-       FROM helmx_conversation_fts WHERE helmx_conversation_fts MATCH ? LIMIT ?`,
-      ftsMatchExpr(query),
-      limit,
-    )
-    // Defensive deduplication: return at most one entry per `(conversation_id, entry_id)`.
+      title: string
+      body: string
+    }>(sqlQuery.sql, ...sqlQuery.params)
+    // Defensive deduplication: at most one entry per `(conversation_id, entry_id)`, skip tombstones,
+    // and collapse title-only hits (zero body matches) to at most one conversation-level hit without `entryId`.
     const seen = new Set<string>()
-    const out: Array<{ conversationId: number; entryId: string; snippet: string }> = []
+    const bodyMatchedConvs = new Set<number>()
+    const titleOnlyConvs = new Set<number>()
+    const candidates: Array<{ hit: SearchHit; isBodyMatch: boolean }> = []
     for (const r of rows) {
+      if (this.tombstones.has(r.conversation_id)) continue
       const key = `${r.conversation_id}\0${r.entry_id}`
       if (seen.has(key)) continue
       seen.add(key)
-      out.push({ conversationId: r.conversation_id, entryId: r.entry_id, snippet: r.snippet })
+      const rawTitle = this.convs.get(r.conversation_id)?.title ?? r.title
+      const title = this.ftsRedact(rawTitle)
+      const safeBody = this.ftsRedact(r.body)
+      const { snippet, highlights } = buildSearchSnippet(safeBody, parsed.terms)
+      if (highlights.length > 0) {
+        bodyMatchedConvs.add(r.conversation_id)
+        candidates.push({
+          isBodyMatch: true,
+          hit: {
+            conversationId: r.conversation_id,
+            entryId: r.entry_id,
+            ...(title !== '' ? { title } : {}),
+            snippet,
+            highlights,
+          },
+        })
+      } else {
+        if (titleOnlyConvs.has(r.conversation_id) || bodyMatchedConvs.has(r.conversation_id)) continue
+        titleOnlyConvs.add(r.conversation_id)
+        candidates.push({
+          isBodyMatch: false,
+          hit: {
+            conversationId: r.conversation_id,
+            ...(title !== '' ? { title } : {}),
+            snippet,
+            highlights,
+          },
+        })
+      }
+    }
+    const out: SearchHit[] = []
+    for (const candidate of candidates) {
+      if (!candidate.isBodyMatch && bodyMatchedConvs.has(candidate.hit.conversationId)) continue
+      out.push(candidate.hit)
+      if (out.length >= sqlQuery.limit) break
     }
     return out
   }
@@ -676,6 +756,9 @@ export class HelmxStore {
     if (entryIds.length === 0) return
     this.assertWritable()
     const ids = [...entryIds]
+    if (this.ftsRebuildOverlay !== null) {
+      this.ftsRebuildOverlay.push({ op: 'removeEntries', conversationId, entryIds: ids })
+    }
     this.enqueue(() =>
       this.db.transaction(async (tx) => {
         for (const entryId of ids) {
@@ -690,31 +773,101 @@ export class HelmxStore {
   }
 
   /**
-   * FTS is a rebuildable derived index: clearing + replaying all conversation text runs inside **the same transaction**,
-   * rolling back atomically on failure (preserving the previous index rather than dropping it and faking success).
+   * FTS is a rebuildable derived index: clearing + replaying all conversation text + stamping `fts_schema_version`
+   * run inside **the same transaction**, rolling back atomically on failure (preserving the previous index rather
+   * than dropping it and faking success). Concurrent rebuilds are serialized and live mutations during async replay
+   * are captured in an overlay and folded atomically before swap so no writes are lost and no deleted conversations resurrect.
    */
   async rebuildFts(
     replay: (
       index: (conversationId: number, entryId: string, title: string, body: string) => void,
     ) => Promise<void>,
   ): Promise<void> {
+    this.assertWritable()
+    const run = this.ftsRebuildChain.then(() => this.runRebuildFts(replay))
+    this.ftsRebuildChain = run.then(
+      () => undefined,
+      () => undefined,
+    )
+    return run
+  }
+
+  private async runRebuildFts(
+    replay: (
+      index: (conversationId: number, entryId: string, title: string, body: string) => void,
+    ) => Promise<void>,
+  ): Promise<void> {
+    this.assertWritable()
     await this.flushPublic()
+    const overlay: FtsRebuildOverlayOp[] = []
+    this.ftsRebuildOverlay = overlay
     const batch = new Map<string, [number, string, string, string]>()
-    await replay((conversationId, entryId, title, body) => {
-      batch.set(`${conversationId}\0${entryId}`, [conversationId, entryId, title, body])
-    })
-    await this.db.transaction(async (tx) => {
-      await tx.exec('DELETE FROM helmx_conversation_fts')
-      for (const [conversationId, entryId, title, body] of batch.values()) {
-        await tx.run(
-          'INSERT INTO helmx_conversation_fts (conversation_id, entry_id, title, body) VALUES (?, ?, ?, ?)',
+    try {
+      await replay((conversationId, entryId, title, body) => {
+        batch.set(`${conversationId}\0${entryId}`, [
           conversationId,
           entryId,
           this.ftsRedact(title),
           this.ftsRedact(body),
-        )
+        ])
+      })
+      // Drain every persistence write queued during async replay until the tail chain is completely quiescent.
+      for (;;) {
+        const snapshotTail = this.tail
+        await this.flushPublic()
+        if (this.tail === snapshotTail) break
       }
-    })
+      this.assertWritable()
+      for (const op of overlay) {
+        if (op.op === 'upsert') {
+          batch.set(`${op.conversationId}\0${op.entryId}`, [op.conversationId, op.entryId, op.title, op.body])
+        } else if (op.op === 'removeEntries') {
+          for (const entryId of op.entryIds) batch.delete(`${op.conversationId}\0${entryId}`)
+        } else if (op.op === 'deleteConv') {
+          const prefix = `${op.conversationId}\0`
+          for (const key of [...batch.keys()]) {
+            if (key.startsWith(prefix)) batch.delete(key)
+          }
+        } else if (op.op === 'updateTitle') {
+          const prefix = `${op.conversationId}\0`
+          for (const [key, row] of batch) {
+            if (key.startsWith(prefix)) row[2] = op.title
+          }
+        }
+      }
+      for (const [key, row] of [...batch.entries()]) {
+        if (this.tombstones.has(row[0])) {
+          batch.delete(key)
+          continue
+        }
+        const liveConv = this.convs.get(row[0])
+        if (liveConv !== undefined) row[2] = this.ftsRedact(liveConv.title)
+      }
+      this.ftsRebuildOverlay = null
+
+      await this.db.transaction(async (tx) => {
+        await tx.exec('DELETE FROM helmx_conversation_fts')
+        for (const [conversationId, entryId, title, body] of batch.values()) {
+          await tx.run(
+            'INSERT INTO helmx_conversation_fts (conversation_id, entry_id, title, body) VALUES (?, ?, ?, ?)',
+            conversationId,
+            entryId,
+            title,
+            body,
+          )
+        }
+        await tx.run(
+          'INSERT INTO helmx_seq (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
+          FTS_SCHEMA_VERSION_KEY,
+          FTS_SCHEMA_VERSION,
+        )
+      })
+      this.ftsSchemaVersion = FTS_SCHEMA_VERSION
+    } finally {
+      if (this.ftsRebuildOverlay === overlay) {
+        this.ftsRebuildOverlay = null
+      }
+    }
   }
 
   // ---------------- flush ----------------
@@ -788,8 +941,9 @@ export class HelmxStore {
     if (this.firstError === undefined) this.firstError = error
   }
 
-  /** Await full completion of in-flight flushes before exit; returns the first persistence error (honest reporting, never swallowed). */
+  /** Await full completion of in-flight flushes and FTS rebuilds before exit; returns the first persistence error (honest reporting, never swallowed). */
   async close(): Promise<unknown> {
+    await this.ftsRebuildChain
     await this.tail
     this.closed = true
     return this.firstError
@@ -812,16 +966,6 @@ function parseStoredJson<T>(what: string, raw: string): T {
       { what, raw: raw.slice(0, 200), cause: String(cause) },
     )
   }
-}
-
-function ftsMatchExpr(query: string): string {
-  // Convert user query into an FTS5 prefix OR query, quoting each token to prevent syntax injection.
-  const tokens = query
-    .split(/\s+/)
-    .map((t) => t.replace(/["*]/g, ''))
-    .filter((t) => t.length > 0)
-    .map((t) => `"${t}"*`)
-  return tokens.join(' OR ') || '""'
 }
 
 export function convStatusOf(

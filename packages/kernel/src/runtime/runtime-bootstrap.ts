@@ -307,8 +307,10 @@ export async function recoverExistingConversations(deps: {
   harness: Harness
   store: HelmxStore
   defaultCwd: string
-}): Promise<void> {
+}): Promise<number> {
+  let recoveredCount = 0
   await deps.conversations.recover(async (id, parentConversationId) => {
+    recoveredCount += 1
     const now = Date.now()
     const conversation = await deps.harness.conversation(id as never, BACKGROUND_CONTEXT)
     const agent = conversation ? await conversation.agent(BACKGROUND_CONTEXT).catch(() => undefined) : undefined
@@ -333,6 +335,7 @@ export async function recoverExistingConversations(deps: {
       updatedAt: now,
     })
   })
+  return recoveredCount
 }
 
 /**

@@ -97,7 +97,15 @@ CREATE TABLE IF NOT EXISTS helmx_tombstones (
 `
 
 /**
- * Separate FTS5 table creation: tokenizer config is outside schema versioning; see `HelmxStore.rebuildFts` for rebuilds.
+ * Derived FTS5 schema version persisted under `helmx_seq.key = 'fts_schema_version'`.
+ * Bump whenever the FTS5 tokenizer or indexed column shape changes so startup detects
+ * the mismatch (and recovers from mid-rebuild crashes) and rebuilds the derived index once.
+ */
+export const FTS_SCHEMA_VERSION = 2
+export const FTS_SCHEMA_VERSION_KEY = 'fts_schema_version'
+
+/**
+ * Separate FTS5 table creation: `trigram` enables CJK/substring full-text indexing across `title` and `body`.
  * The `body` column stores redacted plain text (secret values are never persisted).
  */
 const FTS_SCHEMA = `
@@ -105,9 +113,52 @@ CREATE VIRTUAL TABLE IF NOT EXISTS helmx_conversation_fts USING fts5(
   conversation_id UNINDEXED,
   entry_id UNINDEXED,
   title,
-  body
+  body,
+  tokenize='trigram'
 );
 `
+
+function hasExpectedFtsTokenizer(sql: string): boolean {
+  return /\btokenize\s*=\s*['"]?trigram\b/i.test(sql)
+}
+
+/**
+ * Ensure `helmx_conversation_fts` matches the current FTS5 tokenizer DDL inside one atomic transaction.
+ * - Brand-new empty DB (both `helmx_conversations` and authoritative `pi_` history are empty):
+ *   creates the trigram table and marks `fts_schema_version = FTS_SCHEMA_VERSION` (no rebuild needed).
+ * - Missing FTS table when `helmx_conversations` or `pi_` history already has conversations:
+ *   creates the trigram table and persists `fts_schema_version = 0` so startup rebuilds (even across crashes).
+ * - Legacy / mismatched tokenizer DDL: drops and recreates the derived virtual table and persists `fts_schema_version = 0`
+ *   in the same transaction so a crash before `rebuildFts()` finishes still triggers a rebuild on next boot.
+ * - Already upgraded DB: leaves table and version untouched so steady-state restarts never re-scan conversation history.
+ */
+async function ensureFtsSchema(db: NodeSqliteDatabase, hasPiHistory: boolean): Promise<void> {
+  await db.transaction(async (tx) => {
+    const existing = await tx.get<{ sql: string | null }>(
+      "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'helmx_conversation_fts'",
+    )
+    if (existing === undefined) {
+      await tx.exec(FTS_SCHEMA)
+      const hasConvs = await tx.get<{ present: number }>('SELECT 1 AS present FROM helmx_conversations LIMIT 1')
+      const initialVersion = !hasPiHistory && hasConvs === undefined ? FTS_SCHEMA_VERSION : 0
+      await tx.run(
+        'INSERT INTO helmx_seq (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
+        FTS_SCHEMA_VERSION_KEY,
+        initialVersion,
+      )
+      return
+    }
+    if (!hasExpectedFtsTokenizer(existing.sql ?? '')) {
+      await tx.exec('DROP TABLE helmx_conversation_fts')
+      await tx.exec(FTS_SCHEMA)
+      await tx.run(
+        'INSERT INTO helmx_seq (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
+        FTS_SCHEMA_VERSION_KEY,
+        0,
+      )
+    }
+  })
+}
 
 /**
  * Open (or create) the single `state.sqlite`; pi tables and helmx tables share one connection and transaction queue.
@@ -134,7 +185,10 @@ export async function openHelmxDatabase(dataDir: string): Promise<HelmxDatabase>
     storage = await SqliteStorage.open(storageDb, { prefix: 'pi_' })
     // Run helmx table DDL through the adapter queue as well to avoid racing pi initialization. Use latest schema directly during dev.
     await db.exec(HELMX_SCHEMA)
-    await db.exec(FTS_SCHEMA)
+    // Read-only probe via official SqliteStorage API (never touching pi_* tables directly): if pi history already
+    // exists while helmx_conversation_fts is absent, we must leave fts_schema_version = 0 so startup rebuilds it.
+    const piProbe = await storage.scanConversations({} as never, 1, undefined, BACKGROUND_CONTEXT)
+    await ensureFtsSchema(db, piProbe.items.length > 0)
   } catch (error) {
     await db.close().catch(() => {})
     throw error

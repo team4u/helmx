@@ -43,6 +43,7 @@ import {
   type NodeUpgradeResult,
   type PluginSkillAsset,
   type HubActivityCounts,
+  type SearchHit,
 } from '@helmx/protocol'
 import type { ConversationOwnership } from './runtime-ownership.js'
 import type { Harness, Registry, ToolRegistration } from '@earendil-works/pi-durable'
@@ -322,12 +323,15 @@ export class KernelRuntime {
       cwd: this.init.cwd,
     })
     this.svc.asks.reportOrphans()
-    await recoverExistingConversations({
+    const recoveredConvs = await recoverExistingConversations({
       conversations: this.conversations,
       harness: this.harness,
       store: this.store,
       defaultCwd: this.svc.toolDeps.defaultCwd,
     })
+    if (this.store.needsFtsRebuild || recoveredConvs > 0) {
+      await this.rebuildFts()
+    }
     this.svc.assetReloader.start()
     if (this.init.autoResume) await this.start()
   }
@@ -828,7 +832,7 @@ export class KernelRuntime {
     return this.conversations.getLastAssistantText(id)
   }
 
-  async search(query: string): Promise<Array<{ conversationId: number; entryId: string; snippet: string }>> {
+  async search(query: string): Promise<SearchHit[]> {
     return this.conversations.search(query)
   }
 

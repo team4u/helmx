@@ -24,6 +24,7 @@ import type {
   GuardedMutationExpectation,
   HubActivityCounts,
   InputOrigin,
+  SearchHit,
   WhenBusy,
 } from '@helmx/protocol'
 import { HelmxError } from '@helmx/protocol'
@@ -1133,7 +1134,7 @@ export class ConversationService {
     return this.tracker.getLastAssistantText(id) ?? ''
   }
 
-  async search(query: string): Promise<Array<{ conversationId: number; entryId: string; snippet: string }>> {
+  async search(query: string): Promise<SearchHit[]> {
     return this.store.search(query)
   }
 

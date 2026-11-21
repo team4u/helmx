@@ -55,12 +55,30 @@ export interface ConversationWithdrawResponse {
   entryId?: number
 }
 
+/** Half-open UTF-16 highlight span `[start, end)` within `SearchHit.snippet`. */
+export interface SearchHighlightRange {
+  /** Inclusive UTF-16 start offset. */
+  start: number
+  /** Exclusive UTF-16 end offset (`end > start`). */
+  end: number
+}
+
 /** Hit entry of `GET /api/search?q=...`. */
 export interface SearchHit {
   conversationId: number
+  /**
+   * Locatable message entry reference (`entry:<id>` or `input:<requestId>`) when the query matched the entry body.
+   * Omitted for title-only matches so clients perform conversation-level navigation instead of jumping to an unrelated message.
+   */
   entryId?: string
   snippet: string
   title?: string
+  /**
+   * Sorted, non-overlapping UTF-16 `[start, end)` highlight spans inside `snippet` (plain text, zero HTML).
+   * Always populated by the kernel search engine (`[]` when only `title` matched so clients do not fabricate snippet highlights);
+   * may be omitted by minimal stubs.
+   */
+  highlights?: SearchHighlightRange[]
 }
 
 /** Single source of truth for static core CLI command paths (bidirectionally locked with @helmx/cli coreCommands() and the built-in skill SKILL.md). */

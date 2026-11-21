@@ -14,6 +14,7 @@ import type { SecretStash } from '../services/index.js'
 import { toConversationEntry } from './entries.js'
 import { projectDetailEntry, stripEntrySignatures } from './entry-projection.js'
 import {
+  assistantTextOfModel,
   coveredByRewind,
   entryModelText,
   rewindIntervalOf,
@@ -239,7 +240,7 @@ export class ConversationDetailService {
     return shape.cursor
   }
 
-  /** FTS rebuild (delegated by host rebuildFts; entries hidden by rewind are never re-indexed). */
+  /** FTS rebuild (delegated by host rebuildFts; internal records and entries hidden by rewind are never re-indexed). */
   async rebuildFts(listConversationIds: () => Array<{ id: number; title: string }>): Promise<void> {
     await this.host.store.rebuildFts(async (index) => {
       for (const conv of listConversationIds()) {
@@ -248,7 +249,7 @@ export class ConversationDetailService {
         // Filter covered entries across all closed helmx.rewind [from, through] intervals after full scan so superseded
         // entries are never re-indexed (shares identical interval rules with collectRewindIntervals and detail projection).
         const rewindCuts: RewindInterval[] = []
-        const indexed: Array<{ id: number; text: string }> = []
+        const indexed: Array<{ id: number; entryKey: string; text: string }> = []
         let cursor: unknown = undefined
         for (;;) {
           const page = await conversation.entries(
@@ -258,21 +259,53 @@ export class ConversationDetailService {
             BACKGROUND_CONTEXT,
           )
           for (const entry of page.items) {
-            const record = entry as { id: number; kind: string; data?: unknown }
+            const record = entry as {
+              id: number
+              kind: string
+              data?: unknown
+              model?: readonly unknown[]
+            }
             if (record.kind === 'helmx.rewind') {
               const interval = rewindIntervalOf(record)
               if (interval !== undefined) rewindCuts.push(interval)
               continue
             }
-            const text = entryModelText(entry as never)
-            if (text) indexed.push({ id: Number(record.id), text })
+            if (
+              record.kind === 'pi.system' ||
+              record.kind === 'pi.tool-result' ||
+              record.kind === 'pi.compaction' ||
+              record.kind === 'pi.reset'
+            ) {
+              continue
+            }
+            if (record.kind === 'helmx.input') {
+              const data =
+                record.data !== null && typeof record.data === 'object' && !Array.isArray(record.data)
+                  ? (record.data as { id?: unknown; text?: unknown })
+                  : undefined
+              const text =
+                typeof data?.text === 'string' && data.text !== ''
+                  ? data.text
+                  : entryModelText(record as never)
+              const entryKey =
+                typeof data?.id === 'string' && data.id !== ''
+                  ? `input:${data.id}`
+                  : `entry:${record.id}`
+              if (text) indexed.push({ id: Number(record.id), entryKey, text })
+              continue
+            }
+            const text =
+              record.kind === 'pi.assistant'
+                ? assistantTextOfModel(record.model as unknown[] | undefined) || entryModelText(record as never)
+                : entryModelText(record as never)
+            if (text) indexed.push({ id: Number(record.id), entryKey: `entry:${record.id}`, text })
           }
           if (!page.next) break
           cursor = page.next
         }
         for (const item of indexed) {
           if (coveredByRewind(item.id, rewindCuts)) continue
-          index(conv.id, `entry:${item.id}`, conv.title, this.host.stash.redact(item.text))
+          index(conv.id, item.entryKey, conv.title, this.host.stash.redact(item.text))
         }
       }
     })

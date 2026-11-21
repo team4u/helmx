@@ -64,7 +64,7 @@ stateDiagram-v2
 
 ### FTS5：纯可重建的派生索引
 
-`helmx_conversation_fts(conversation_id UNINDEXED, entry_id UNINDEXED, title, body)` 是**可重建的派生索引**，不是权威数据：`body` 只索引脱敏后的纯文本（secret 值永不入库），结构变更时经 `rebuildFts()` 全量重建即可恢复，绝不允许向其写入 `pi_*` 表语义。全文检索入口为 `GET /api/search?q=` 与 `pnpm helmx search <query>`（用户输入转成 FTS5 前缀 OR 查询，引号包裹每个 token 防语法注入）。
+`helmx_conversation_fts(conversation_id UNINDEXED, entry_id UNINDEXED, title, body, tokenize='trigram')` 是**可重建的派生索引**，不是权威数据：`body` 只索引脱敏后的纯文本（secret 值永不入库），启动期检测 `sqlite_master` DDL 与 `helmx_seq('fts_schema_version')` 版本水位，仅在分词器 DDL 变更或上次重建中断时自动执行一次原子重建，常态重启不重复全表扫描，绝不允许向其写入 `pi_*` 表语义。全文检索入口为 `GET /api/search?q=` 与 `pnpm helmx search <query>`：多词按空格拆分执行 **AND** 语义（引号转义防语法注入）；>= 3 码点词项走 FTS5 `trigram` 倒排索引与 `bm25`（标题加权）排序，< 3 码点短词（如两字中文与短英文词）诚实走 `instr(lower(...))` 精确子串过滤并在混合查询中叠加于 `trigram` 候选集之上；结果按每会话上限（默认 2 条，同会话内正文命中优先于纯标题命中）去重截断，返回纯文本 `snippet`、会话 `title` 与 UTF-16 安全偏移 `highlights`（零 HTML / 控制哨兵泄露；纯标题命中省略 `entryId` 且每会话折叠为一条会话级导航，避免定位到不含查询词的无关消息）。
 
 ## SecretStash：纯内存机密隔离
 
