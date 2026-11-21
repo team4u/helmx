@@ -496,12 +496,24 @@ export class ConversationService {
     return this.profileAlignment.readProfile(profileId)
   }
 
+  async resolveEffectiveModelDetails(
+    override: string | undefined,
+    profileId: string,
+  ): Promise<ResolvedModelRef | undefined> {
+    return this.profileAlignment.resolveEffectiveModelDetails(override, profileId)
+  }
+
   async resolveEffectiveModel(override: string | undefined, profileId: string): Promise<string | undefined> {
     return this.profileAlignment.resolveEffectiveModel(override, profileId)
   }
 
-  async resolveEffectiveThinkingLevel(override: string | undefined, profileId: string, modelRef?: { provider: string; modelId: string }): Promise<string | undefined> {
-    return this.profileAlignment.resolveEffectiveThinkingLevel(override, profileId, modelRef)
+  async resolveEffectiveThinkingLevel(
+    override: string | undefined,
+    profileId: string,
+    modelRef?: { provider: string; modelId: string },
+    tierThinkingLevel?: string,
+  ): Promise<string | undefined> {
+    return this.profileAlignment.resolveEffectiveThinkingLevel(override, profileId, modelRef, tierThinkingLevel)
   }
 
   async alignConversationModel(id: number, emitEvent = false): Promise<void> {
@@ -1154,7 +1166,15 @@ export class ConversationService {
           const parent = (record as { parent?: { conversationId?: number } }).parent?.conversationId
           await onMissingMirror(id, parent)
         }
-        await this.alignConversationModel(id)
+        try {
+          await this.alignConversationModel(id)
+        } catch (err) {
+          // Cold boot runs recovery before plugins register/prepare (e.g. `builtin:tiers` mounts
+          // `tier/*` in `prepare()`), and force-disabled tiers may leave dangling defaults.
+          // Defer unresolved tiers to `KernelRuntime.start()` post-plugin alignment; active
+          // submissions still fail loudly with 404 model_tier_not_found.
+          if (!(err instanceof HelmxError && err.code === 'model_tier_not_found')) throw err
+        }
         await this.tracker.observe(id)
       }
       if (!page.next) break

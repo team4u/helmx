@@ -202,6 +202,11 @@ export class ModelRegistry {
     await this.modelsChain
   }
 
+  /** Re-align all conversations with current defaults, mounted runtime providers, and model tiers. */
+  async alignConversations(): Promise<void> {
+    await this.alignAllConversations()
+  }
+
   async listModels(): Promise<ModelCatalog> {
     const catalog = await listModelCatalog(this.modelsCurrent, {
       model: this.defaultModel,

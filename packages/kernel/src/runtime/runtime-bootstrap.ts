@@ -24,6 +24,7 @@ import { buildModels, wrapModelsForCompaction, type CompactionModelResolution } 
 import { createFileModelsStore } from './models-store.js'
 import { assertModelsStoreHealthyAtBoot } from './runtime-helpers.js'
 import { openHelmxDatabase, type HelmxDatabase } from './sqlite.js'
+import type { ResolvedModelRef } from './model-registry.js'
 import { HelmxStore } from './store.js'
 import type { ConversationTracker } from './conversations.js'
 
@@ -257,17 +258,33 @@ export async function ensureInitialConversation(deps: {
   store: HelmxStore
   tracker: ConversationTracker
   conversations: {
-    resolveEffectiveThinkingLevel(levelOverride?: string, profileId?: string, modelRef?: { provider: string; modelId: string }): Promise<string | undefined>
-    resolveEffectiveModel(modelOverride?: string, profileId?: string): Promise<string | undefined>
-  }
-  modelsRegistry: {
-    parseModelRefOrThrow(ref: string): { provider: string; modelId: string }
+    resolveEffectiveThinkingLevel(
+      levelOverride?: string,
+      profileId?: string,
+      modelRef?: { provider: string; modelId: string },
+      tierThinkingLevel?: string,
+    ): Promise<string | undefined>
+    resolveEffectiveModelDetails(modelOverride?: string, profileId?: string): Promise<ResolvedModelRef | undefined>
   }
   cwd: string
 }): Promise<void> {
-  const effective = await deps.conversations.resolveEffectiveModel(undefined, 'assistant')
-  const modelRef = effective ? deps.modelsRegistry.parseModelRefOrThrow(effective) : undefined
-  const thinking = await deps.conversations.resolveEffectiveThinkingLevel(undefined, 'assistant', modelRef)
+  let resolved: ResolvedModelRef | undefined
+  try {
+    resolved = await deps.conversations.resolveEffectiveModelDetails(undefined, 'assistant')
+  } catch (err) {
+    // Cold boot runs before plugins register/prepare (e.g. `builtin:tiers` mounts `tier/*` in `prepare()`),
+    // and force-disabled tiers may leave dangling defaults. Defer unresolved tiers to `KernelRuntime.start()`
+    // post-plugin alignment so boot never crash-loops; active submissions still reject with 404.
+    if (!(err instanceof HelmxError && err.code === 'model_tier_not_found')) throw err
+  }
+  const effective = resolved?.canonicalRef
+  const modelRef = resolved ? { provider: resolved.provider, modelId: resolved.modelId } : undefined
+  const thinking = await deps.conversations.resolveEffectiveThinkingLevel(
+    undefined,
+    'assistant',
+    modelRef,
+    resolved?.tierThinkingLevel,
+  )
   const root = await deps.harness.root(BACKGROUND_CONTEXT, {
     agent: {
       ...(modelRef ? { model: { provider: modelRef.provider, modelId: modelRef.modelId } } : {}),

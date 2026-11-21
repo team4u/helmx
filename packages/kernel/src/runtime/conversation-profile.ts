@@ -172,7 +172,15 @@ export class ConversationProfileService {
   /** Immediate inheritance cascade after saving a Profile (explicit overrides stay protected by each resolution chain). */
   async alignProfileConversations(profileId: string): Promise<void> {
     for (const meta of this.host.store.listConvs()) {
-      if (meta.profileId === profileId) await this.alignConversationModel(meta.id, true)
+      if (meta.profileId !== profileId) continue
+      try {
+        await this.alignConversationModel(meta.id, true)
+      } catch (err) {
+        // Match `alignAllConversations`: skip conversations whose inherited `tier/<id>` is currently
+        // unmounted so unrelated Profile metadata edits are not blocked; active submissions still fail with 404.
+        if (err instanceof HelmxError && err.code === 'model_tier_not_found') continue
+        throw err
+      }
     }
   }
 }

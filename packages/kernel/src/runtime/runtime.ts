@@ -319,7 +319,6 @@ export class KernelRuntime {
       store: this.store,
       tracker: this.svc.tracker,
       conversations: this.conversations,
-      modelsRegistry: this.modelsRegistry,
       cwd: this.init.cwd,
     })
     this.svc.asks.reportOrphans()
@@ -511,6 +510,10 @@ export class KernelRuntime {
         })
       }
       if (this.pluginHost) await this.pluginHost.start()
+      // Converge recovered / initial conversations once all plugins have mounted runtime providers
+      // and model tiers (covers cold-boot deferred `tier/*` resolution and provider thinking-level clamps)
+      // before resuming the durable scheduler; already-aligned conversations are an idempotent no-op.
+      await this.modelsRegistry.alignConversations()
       this.harness.resume()
       // Flipped synchronously right after resume (zero awaits in between): whenever `isStarted()` is true,
       // the scheduler has already left its paused state.

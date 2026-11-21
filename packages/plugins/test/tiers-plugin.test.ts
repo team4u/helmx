@@ -16,6 +16,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import { HelmxError, type ModelCatalog, type Profile } from '@helmx/protocol'
+import { KernelRuntime } from '@helmx/kernel'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { createHelmx } from '../../hub/src/app.js'
 import { wrapModelsForCompaction } from '../../kernel/src/runtime/models.js'
@@ -477,6 +478,195 @@ test('integration: freeze-on-create, thinking precedence, symbolic inheritance, 
     assert.equal(kernel.getConversation(worker.id).model, 'faux/flagship')
   } finally {
     await env.close()
+  }
+})
+
+test('integration: two-phase cold restart with defaultModel/compactionModel/Profile.model targeting tier/* recovers cleanly (live #1, tombstoned #1, and force-disabled builtin:tiers)', { timeout: 60_000 }, async () => {
+  const dataDir = await makeTempDir('helmx-tiers-cold-boot-')
+  const waitTurnSettle = async (
+    kernel: Awaited<ReturnType<typeof createHelmx>>['kernel'],
+    cid: number,
+    prevSeq: number,
+  ) => {
+    const deadline = Date.now() + 10_000
+    while (Date.now() < deadline) {
+      const snap = kernel.getConversation(cid)
+      if (snap.completionSeq > prevSeq && snap.status !== 'working') return
+      await new Promise((r) => setTimeout(r, 20))
+    }
+    throw new Error(`timed out waiting for conv ${cid}`)
+  }
+
+  let inheritedGlobalId = 0
+  let inheritedProfileId = 0
+  let frozenExplicitId = 0
+  let app: Awaited<ReturnType<typeof createHelmx>> | undefined
+
+  try {
+    // Phase 1: Configure tiers, set global default/compaction & Profile.model to `tier/*`, create conversations.
+    const faux1 = makeMultiModelFaux()
+    app = await createHelmx({
+      buildProvider: createPluginBuildProvider(),
+      dataDir,
+      cwd: dataDir,
+      providers: [faux1.provider],
+    })
+    await app.kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'replace', {
+      tiers: {
+        scout: { model: 'faux/fast', thinkingLevel: 'low', description: 'Fast scouting' },
+        coder: { model: 'faux/workhorse', thinkingLevel: 'medium', description: 'Mainline coding' },
+        architect: { model: 'faux/flagship', thinkingLevel: 'high', description: 'Architecture' },
+      },
+    })
+    await app.kernel.setDefaultModel('tier/scout', undefined, 'tier/scout')
+    await app.kernel.profiles.save({
+      id: 'specialist',
+      name: 'Specialist',
+      model: 'tier/coder',
+    })
+    const inheritedGlobal = await app.kernel.createConversation({ title: 'inherits-global-tier' })
+    const inheritedProfile = await app.kernel.createConversation({
+      title: 'inherits-profile-tier',
+      profileId: 'specialist',
+    })
+    const frozenExplicit = await app.kernel.createConversation({
+      title: 'frozen-explicit-tier',
+      model: 'tier/architect',
+    })
+    inheritedGlobalId = inheritedGlobal.id
+    inheritedProfileId = inheritedProfile.id
+    frozenExplicitId = frozenExplicit.id
+    assert.equal(app.kernel.getConversation(1).model, 'faux/fast')
+    assert.equal(app.kernel.getConversation(1).thinkingLevel, 'low')
+    assert.equal(inheritedGlobal.model, 'faux/fast')
+    assert.equal(inheritedProfile.model, 'faux/workhorse')
+    assert.equal(frozenExplicit.model, 'faux/flagship')
+    await app.close()
+    app = undefined
+
+    // Phase 2: Two-phase cold restart (`autoStart: false` -> `kernel.start()`, matching `hub/src/main.ts` / Docker).
+    // Deliberately omit `model` option so `config.json.model = "tier/scout"` is loaded from disk before plugins register.
+    const faux2 = makeMultiModelFaux()
+    app = await createHelmx({
+      buildProvider: createPluginBuildProvider(),
+      dataDir,
+      cwd: dataDir,
+      providers: [faux2.provider],
+      autoStart: false,
+    })
+    await app.kernel.start()
+    assert.equal(app.kernel.getConversation(1).model, 'faux/fast')
+    assert.equal(app.kernel.getConversation(1).thinkingLevel, 'low')
+    assert.equal(app.kernel.getConversation(inheritedGlobalId).model, 'faux/fast')
+    assert.equal(app.kernel.getConversation(inheritedGlobalId).thinkingLevel, 'low')
+    assert.equal(app.kernel.getConversation(inheritedProfileId).model, 'faux/workhorse')
+    assert.equal(app.kernel.getConversation(inheritedProfileId).thinkingLevel, 'medium')
+    assert.equal(app.kernel.getConversation(frozenExplicitId).model, 'faux/flagship')
+    assert.equal(app.kernel.getConversation(frozenExplicitId).thinkingLevel, 'high')
+
+    const seq2 = app.kernel.getConversation(inheritedGlobalId).completionSeq
+    faux2.setResponses([fauxAssistantMessage('recovered-via-tier')])
+    await app.kernel.submitInput(inheritedGlobalId, 'ping after cold restart')
+    await waitTurnSettle(app.kernel, inheritedGlobalId, seq2)
+
+    // Delete #1 (tombstone) before next cold restart, matching production Docker state.
+    await app.kernel.deleteConversation(1)
+    await app.close()
+    app = undefined
+
+    // Phase 3: Cold restart with tombstoned #1 and `config.json.model = "tier/scout"`.
+    const faux3 = makeMultiModelFaux()
+    app = await createHelmx({
+      buildProvider: createPluginBuildProvider(),
+      dataDir,
+      cwd: dataDir,
+      providers: [faux3.provider],
+      autoStart: false,
+    })
+    await app.kernel.start()
+    assert.equal(
+      app.kernel.listConversations().some((c) => c.id === 1),
+      false,
+      'tombstoned #1 must not resurrect after cold restart',
+    )
+    assert.equal(app.kernel.getConversation(inheritedGlobalId).model, 'faux/fast')
+    assert.equal(app.kernel.getConversation(inheritedProfileId).model, 'faux/workhorse')
+
+    // Force-disable builtin:tiers while global defaultModel and Profile.model still reference `tier/*`.
+    await app.kernel.plugins.disable(TIERS_PLUGIN_ID, { force: true })
+    await app.close()
+    app = undefined
+
+    // Phase 4: Cold restart with `builtin:tiers` disabled & dangling `tier/*` references must NOT crash-loop Hub.
+    const faux4 = makeMultiModelFaux()
+    app = await createHelmx({
+      buildProvider: createPluginBuildProvider(),
+      dataDir,
+      cwd: dataDir,
+      providers: [faux4.provider],
+      autoStart: false,
+    })
+    await app.kernel.start()
+
+    // Editing unrelated metadata on a Profile inheriting dangling `tier/scout` must not fail alignment.
+    const assistantProfile = await app.kernel.profiles.get('assistant')
+    assert.ok(assistantProfile)
+    await app.kernel.profiles.save({ ...assistantProfile, description: 'updated while tiers disabled' })
+    await app.kernel.alignProfileConversations('assistant')
+
+    // Frozen conversation still executes cleanly without builtin:tiers.
+    const frozenSeq = app.kernel.getConversation(frozenExplicitId).completionSeq
+    faux4.setResponses([fauxAssistantMessage('frozen-still-works')])
+    await app.kernel.submitInput(frozenExplicitId, 'still works')
+    await waitTurnSettle(app.kernel, frozenExplicitId, frozenSeq)
+
+    // Active submission on a conversation inheriting unmounted `tier/scout` still fails honestly with 404.
+    await assertRejectsCode(
+      () => app!.kernel.submitInput(inheritedGlobalId, 'should fail honestly'),
+      'model_tier_not_found',
+    )
+  } finally {
+    await app?.close().catch(() => {})
+    await cleanupDir(dataDir)
+  }
+})
+
+test('integration: KernelRuntime.start() aligns initial & recovered tier conversations even when a custom tier plugin mounts in prepare() without notifyChanged()', { timeout: 60_000 }, async () => {
+  const dataDir = await makeTempDir('helmx-tiers-custom-prepare-')
+  const faux = makeMultiModelFaux()
+  let kernel: KernelRuntime | undefined
+  try {
+    kernel = await KernelRuntime.open({
+      dataDir,
+      cwd: dataDir,
+      model: 'tier/custom',
+      providers: [faux.provider],
+      autoResume: false,
+    })
+    await kernel.plugins.register({
+      id: 'test:silent-tiers',
+      definePlugin(ctx) {
+        ctx.service({
+          id: 'mount-only',
+          prepare() {
+            ctx.host.registerModelTiers(() => ({
+              custom: { model: 'faux/fast', thinkingLevel: 'low' },
+            }))
+          },
+          start() {
+            // Deliberately does NOT call notifyChanged(); kernel.start() must converge deferred boot alignment itself.
+          },
+          stop() {},
+        })
+      },
+    })
+    await kernel.start()
+    const root = kernel.getConversation(1)
+    assert.equal(root.model, 'faux/fast')
+    assert.equal(root.thinkingLevel, 'low')
+  } finally {
+    await kernel?.close().catch(() => {})
+    await cleanupDir(dataDir)
   }
 })
 
