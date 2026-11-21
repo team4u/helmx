@@ -595,12 +595,19 @@ export interface PluginClientContext {
  *   model catalog, navigation location; isolation contract pinned by @helmx/plugin-client tests —
  *   unrelated host port revisions must not re-render consumers);
  * - accessibility base components: Switch / Select / MultiSelect / Checkbox / Tabs family /
- *   SegmentedControl / HelmxIcon / ViewBoundary / Callout;
+ *   SegmentedControl / HelmxIcon / ViewBoundary / Callout / Dialog family / AlertDialog family
+ *   (confirm dialogs) / ConfirmDialog (minimal double-confirm composition) / ThinkingLevelControl
+ *   (plain-level segmented picker over Tabs, no model semantics);
+ * - unified light patterns: SearchBox (container-class search input with the single clear button,
+ *   always type="text" per the shared search-box spec) / EmptyState (host .empty-state vocabulary
+ *   with optional icon/title/hint/compact);
  * - StatusLight: unified status light (visually dot-only; the localized label
  *   becomes the screen-reader accessible name, never visible status text) for
  *   card main status slots, reusing the host .status-dot vocabulary;
  * - lightweight layout primitives: Screen (page container + header) / ScreenSection (sectioning) /
- *   DataTable (composable table with unified loading/empty) / KvGrid (key-value overview);
+ *   DataTable (composable table with unified loading/empty) / KvGrid (key-value overview) /
+ *   DetailDrawer (right-side detail drawer shell over the host .primary-drawer-* vocabulary; the
+ *   header/meta/body/footer stay composable JSX, state and data belong to the caller);
  * - content display: MarkdownView (standard markdown rendering) / CodeBlockView
  *   (syntax-highlighted code block) / CopyButton (copy button);
  * - formatting pure functions: formatTime (compact MM-DD HH:mm) / formatCompactTimestamp
@@ -760,6 +767,7 @@ export const PLUGIN_CLIENT_SHARED_EXPORTS = [
   'HelmxIcon',
   'MarkdownView',
   'CodeBlockView',
+  'ToolCallDetails',
   'CopyButton',
   'ViewBoundary',
   'Callout',
@@ -773,10 +781,24 @@ export const PLUGIN_CLIENT_SHARED_EXPORTS = [
   'DialogDescription',
   'DialogClose',
   'DialogTrigger',
+  'AlertDialog',
+  'AlertDialogPortal',
+  'AlertDialogOverlay',
+  'AlertDialogContent',
+  'AlertDialogTitle',
+  'AlertDialogDescription',
+  'AlertDialogAction',
+  'AlertDialogCancel',
+  'AlertDialogTrigger',
+  'ConfirmDialog',
+  'SearchBox',
+  'EmptyState',
+  'ThinkingLevelControl',
   'Screen',
   'ScreenSection',
   'DataTable',
   'KvGrid',
+  'DetailDrawer',
   'formatTime',
   'formatCompactTimestamp',
   'formatDurationMs',
