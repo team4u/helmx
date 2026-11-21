@@ -397,34 +397,40 @@ test('pluginToolResult：无信封字段的业务对象走文本通道；output 
   )
 })
 
-test('pluginToolResult：合法信封（output+structuredOutput+isError）按 schema 保留结构化输出并同步 details 持久通道', { timeout: 60_000 }, () => {
+test('pluginToolResult：合法信封（output+structuredOutput+presentationMeta+isError）分离结构化输出与有界 UI details', { timeout: 60_000 }, () => {
   const identity = (text: string) => text
   const envelope = {
     output: [{ type: 'text', text: 'summary' }],
-    structuredOutput: { ok: true, value: 7 },
+    structuredOutput: { ok: true, value: 7, payload: 'full' },
+    presentationMeta: { ok: true, value: 7 },
     isError: false,
   }
   const result = pluginToolResult(envelope, identity, {
     structuredOutputSchema: { type: 'object' },
+    presentationMetaSchema: {
+      type: 'object',
+      properties: { ok: { type: 'boolean' }, value: { type: 'number' } },
+      additionalProperties: false,
+    },
     toolName: 'subagent',
     callId: 'call-9',
   })
   assert.deepEqual(result.output, [{ type: 'text', text: 'summary' }])
-  assert.deepEqual(result.structuredOutput, { ok: true, value: 7 })
-  assert.deepEqual(result.details, { ok: true, value: 7 }, '对象型 structuredOutput 必须镜像到 details 供 transcript 持久化')
+  assert.deepEqual(result.structuredOutput, { ok: true, value: 7, payload: 'full' })
+  assert.deepEqual(result.details, { ok: true, value: 7 }, '仅显式 presentationMeta 写入 details 供 transcript 持久化')
   assert.equal(result.isError, undefined, 'isError:false 不置错误位')
 
-  // 非对象（数组/标量）structuredOutput 不写入 details（details 仅接受 plain object）。
-  const arrayResult = pluginToolResult(
+  // 仅返回 structuredOutput（无 presentationMeta）时不自动镜像进 details（方案 I）。
+  const structuredOnly = pluginToolResult(
     { output: 'ok', structuredOutput: [1, 2, 3] },
     identity,
     { structuredOutputSchema: { type: 'array' } },
   )
-  assert.deepEqual(arrayResult.structuredOutput, [1, 2, 3])
-  assert.equal(arrayResult.details, undefined)
+  assert.deepEqual(structuredOnly.structuredOutput, [1, 2, 3])
+  assert.equal(structuredOnly.details, undefined)
 })
 
-test('pluginToolResult：未声明 schema 却返回 structuredOutput 显式拒绝（不静默丢数据）', { timeout: 60_000 }, () => {
+test('pluginToolResult：未声明 schema 却返回 structuredOutput / presentationMeta 或误传 details 显式拒绝（不静默丢数据）', { timeout: 60_000 }, () => {
   const identity = (text: string) => text
   assert.throws(
     () =>
@@ -438,6 +444,31 @@ test('pluginToolResult：未声明 schema 却返回 structuredOutput 显式拒�
       err.code === 'invalid_tool_result' &&
       err.message.includes('callId=call-42') &&
       err.message.includes('structuredOutputSchema'),
+  )
+  assert.throws(
+    () =>
+      pluginToolResult(
+        { output: 'text', presentationMeta: { ok: true } },
+        identity,
+        { toolName: 'subagent', callId: 'call-43' },
+      ),
+    (err: unknown) =>
+      err instanceof HelmxError &&
+      err.code === 'invalid_tool_result' &&
+      err.message.includes('callId=call-43') &&
+      err.message.includes('presentationMetaSchema'),
+  )
+  assert.throws(
+    () =>
+      pluginToolResult(
+        { output: 'text', details: { ok: true } },
+        identity,
+        { toolName: 'subagent' },
+      ),
+    (err: unknown) =>
+      err instanceof HelmxError &&
+      err.code === 'invalid_tool_result' &&
+      err.message.includes('presentationMeta'),
   )
 })
 
@@ -453,16 +484,20 @@ test('pluginToolResult：isError 非 boolean 显式拒绝（不静默忽略）',
   )
 })
 
-test('pluginToolResult：结构化输出值级脱敏（structuredOutput 与 details 同值脱敏）', { timeout: 60_000 }, () => {
+test('pluginToolResult：structuredOutput 与 presentationMeta 均执行值级脱敏', { timeout: 60_000 }, () => {
   const redact = (text: string) => text.replaceAll('SECRET', '***')
   const result = pluginToolResult(
-    { output: '含 SECRET 文本', structuredOutput: { token: 'SECRET', nested: { key: 'SECRET' } } },
+    {
+      output: '含 SECRET 文本',
+      structuredOutput: { token: 'SECRET', nested: { key: 'SECRET' } },
+      presentationMeta: { label: 'SECRET-run' },
+    },
     redact,
-    { structuredOutputSchema: { type: 'object' } },
+    { structuredOutputSchema: { type: 'object' }, presentationMetaSchema: { type: 'object' } },
   )
   assert.deepEqual(result.output, [{ type: 'text', text: '含 *** 文本' }])
   assert.deepEqual(result.structuredOutput, { token: '***', nested: { key: '***' } })
-  assert.deepEqual(result.details, { token: '***', nested: { key: '***' } })
+  assert.deepEqual(result.details, { label: '***-run' })
 })
 
 // ---------------------------------------------------------------------------

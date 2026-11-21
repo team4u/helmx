@@ -9,9 +9,13 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { ConversationSummary } from '@helmx/protocol'
+import { CLIENT_SHARED_GLOBALS, compilePluginClientModule } from '@helmx/plugin-build'
 import type { WorkflowRunSummary } from '../src/contracts.js'
 import {
   React,
+  SDK,
+  WORKFLOW_CLIENT_CACHE_DIR,
+  WORKFLOW_CLIENT_ROOT,
   act,
   createWorkflowHostHarness,
   importWorkflowClientModule,
@@ -49,8 +53,8 @@ test('真实共享 hooks 消费 runs 会话文档增量：父工具已返回仍�
     callId: 'call-bg',
     toolName: 'subagent',
     input: { prompt: '跑后台测试' },
-    result: JSON.stringify({ execution: { conversationId: 11 } }),
-    structuredOutput: { execution: { conversationId: 11 } },
+    result: '已提交',
+    presentationMeta: { ok: true, execution: { conversationId: 11 } },
     status: 'done',
     conversationId: 1,
     siblingCalls: [],
@@ -212,16 +216,16 @@ test('resume 仅最新调用报告活动；旧卡由活跃转历史或卸载不�
     toolName: 'subagent',
     status: 'done' as const,
     input: {},
-    result: JSON.stringify(exec11),
-    structuredOutput: exec11,
+    result: '已提交',
+    presentationMeta: exec11,
   }
   const newCallSummary = {
     callId: 'new-call',
     toolName: 'subagent',
     status: 'done' as const,
     input: { resume: 11, prompt: '继续任务' },
-    result: JSON.stringify(exec11),
-    structuredOutput: exec11,
+    result: '已提交',
+    presentationMeta: exec11,
   }
 
   const h = createWorkflowHostHarness({
@@ -294,8 +298,8 @@ test('外部 executionId 续接仅最新调用上报活动，不能编造 native
     toolName: 'subagent',
     status: 'done' as const,
     input: {},
-    result: JSON.stringify({ execution: { executionId: 'pane-42' } }),
-    structuredOutput: { execution: { executionId: 'pane-42' } },
+    result: '已提交',
+    presentationMeta: { ok: true, execution: { executionId: 'pane-42' } },
   }
   const newCall = {
     callId: 'ext-new',
@@ -326,5 +330,89 @@ test('外部 executionId 续接仅最新调用上报活动，不能编造 native
     assert.deepEqual([...h.log.activeToolCallIds], [], '旧外部 run.running 不能让已续接完成的旧调用重新 busy')
   } finally {
     ui.unmount()
+  }
+})
+
+test('当宿主注入 useTimelineToolCalls 时 SubagentToolView 直接消费分片（无需 siblingCalls）', { timeout: 60_000 }, async () => {
+  const parent = makeConvSummary(1)
+  const child = makeConvSummary(11, { status: 'working', parentConversationId: 1, parentToolCallId: 'new-call' })
+  const callsSlice = [
+    {
+      callId: 'old-call',
+      toolName: 'subagent',
+      index: 0,
+      status: 'done' as const,
+      input: { prompt: '首轮' },
+      presentationMeta: { ok: true, execution: { conversationId: 11 } },
+    },
+    {
+      callId: 'new-call',
+      toolName: 'subagent',
+      index: 1,
+      status: 'done' as const,
+      input: { resume: 11, prompt: '续接' },
+      presentationMeta: { ok: true, execution: { conversationId: 11 } },
+    },
+  ]
+  const g = globalThis as Record<string, unknown>
+  const prevSdk = g[CLIENT_SHARED_GLOBALS['@helmx/plugin-client']!]
+  const requestedToolNames: string[] = []
+  g[CLIENT_SHARED_GLOBALS['@helmx/plugin-client']!] = {
+    ...SDK,
+    useTimelineToolCalls: (toolName: string) => {
+      requestedToolNames.push(toolName)
+      return toolName === 'subagent' ? callsSlice : []
+    },
+  }
+  try {
+    const { code } = await compilePluginClientModule(
+      'builtin:workflow',
+      WORKFLOW_CLIENT_ROOT,
+      'index.tsx',
+      WORKFLOW_CLIENT_CACHE_DIR,
+    )
+    const hookMod = (await import(
+      `data:text/javascript;base64,${Buffer.from(code, 'utf8').toString('base64')}#timeline-hook`
+    )) as Record<string, unknown>
+    const HookSubagentToolView = hookMod['SubagentToolView'] as React.ComponentType<Record<string, unknown>>
+    const h = createWorkflowHostHarness({
+      conversationId: 1,
+      conversations: [parent, child],
+      runsByConversation: { 1: [] },
+    })
+    const ui = h.mountNode(
+      e(
+        React.Fragment,
+        null,
+        e(HookSubagentToolView, {
+          callId: 'old-call',
+          toolName: 'subagent',
+          status: 'done',
+          input: { prompt: '首轮' },
+          presentationMeta: { ok: true, execution: { conversationId: 11 } },
+          conversationId: 1,
+        }),
+        e(HookSubagentToolView, {
+          callId: 'new-call',
+          toolName: 'subagent',
+          status: 'done',
+          input: { resume: 11, prompt: '续接' },
+          presentationMeta: { ok: true, execution: { conversationId: 11 } },
+          conversationId: 1,
+        }),
+      ),
+    )
+    try {
+      assert.ok(requestedToolNames.includes('subagent'), 'SubagentToolView 应订阅 subagent 分片')
+      const rows = ui.container.querySelectorAll('button.workflow-trace-row-btn')
+      assert.equal(rows.length, 2)
+      assert.match(rows[0]!.textContent ?? '', /Resumed below/)
+      assert.doesNotMatch(rows[1]!.textContent ?? '', /Resumed below/)
+      assert.deepEqual([...h.log.activeToolCallIds], ['new-call'])
+    } finally {
+      ui.unmount()
+    }
+  } finally {
+    g[CLIENT_SHARED_GLOBALS['@helmx/plugin-client']!] = prevSdk
   }
 })

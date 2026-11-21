@@ -25,13 +25,22 @@ export {
 
 // Subagent runtime association (model-subagent-link.ts)
 export {
+  buildSubagentLatestCallIndex,
+  readToolPresentationMeta,
   parseSubagentExecutionInfo,
   resolveSubagentConversationId,
   resolveSubagentExecutionMeta,
   isLatestSubagentCallForTarget,
   parentToolSummaryOf,
 } from './model-subagent-link.ts'
-export type { SubagentExecutionInfo, SubagentExecutionMeta, SubagentParentToolSummary } from './model-subagent-link.ts'
+export type {
+  SubagentExecutionInfo,
+  SubagentExecutionMeta,
+  SubagentLatestCallIndex,
+  SubagentParentToolSummary,
+  SubagentTimelineCallLike,
+  ToolViewPresentationProps,
+} from './model-subagent-link.ts'
 
 // Tool line semantic summaries and the subagent live stream (model-subagent-stream.ts)
 export {

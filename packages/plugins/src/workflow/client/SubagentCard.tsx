@@ -99,7 +99,7 @@ export function SubagentLiveCard(props: {
     startedAt?: number
     durationMs?: number
     resultText?: string
-    structuredOutput?: unknown
+    presentationMeta?: unknown
     isError?: boolean
   }
   startedAt?: number

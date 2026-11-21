@@ -1,9 +1,10 @@
 /**
  * builtin:workflow subagent / SubagentWorkflow 运行期关联与实时流模型测试：
- * - resolveSubagentConversationId（structuredOutput.execution > callId/parentToolCallId > numeric resume，绝不正则刮取 [subagent ...] 尾行）；
- * - resolveWorkflowRunForTool（parentToolCallId + structuredOutput.summary.id / runId 精确命中，绝不猜测最新）；
- * - resolveSubagentExecutionMeta（run 节点 worktree 优先于 structuredOutput，跨父会话不串卡）；
- * - isLatestSubagentCallForTarget（siblingCalls 读取 structuredOutput.execution）；
+ * - resolveSubagentConversationId（presentationMeta.execution > callId/parentToolCallId > numeric resume，绝不 JSON.parse(result) 或正则刮取）；
+ * - resolveWorkflowRunForTool（parentToolCallId + presentationMeta.runId 精确命中，绝不 JSON.parse(result) 或猜测最新）；
+ * - resolveSubagentExecutionMeta（run 节点 worktree 优先于 presentationMeta，跨父会话不串卡）；
+ * - buildSubagentLatestCallIndex & isLatestSubagentCallForTarget（O(K+M) 单遍索引 + WeakMap 缓存，读取 presentationMeta.execution）；
+ * - isBackgroundWorkflowResultHandle & resolveWorkflowToolFallbackLabel（presentationMeta 通道）；
  * - buildSubagentStreamLines（剥离 structured_output_contract 样板并合并 ConversationLive）。
  */
 import assert from 'node:assert/strict'
@@ -80,7 +81,7 @@ function toolCallBlock(callId: string, name: string, input: Record<string, unkno
   return { type: 'toolCall', id: callId, name, arguments: input }
 }
 
-test('resolveSubagentConversationId：structuredOutput.execution 优先，其次 callId/parentToolCallId；绝不正则刮取 [subagent ...] 文本', { timeout: 60_000 }, () => {
+test('resolveSubagentConversationId：presentationMeta.execution 优先，其次 callId/parentToolCallId；绝不 JSON.parse(result) 或正则刮取', { timeout: 60_000 }, () => {
   const conversations = [
     convSummary(10, 1),
     convSummary(11, 1, 'call-abc'),
@@ -92,14 +93,13 @@ test('resolveSubagentConversationId：structuredOutput.execution 优先，其次
   }
   assert.equal(m.resolveSubagentConversationId(running, 1, conversations), 11)
 
-  // structuredOutput.execution.conversationId 优先（即使 result 为普通非 JSON 文本）
+  // presentationMeta.execution.conversationId 优先
   assert.equal(
     m.resolveSubagentConversationId(
       {
         callId: 'call-none',
         input: { prompt: '任务' },
-        structuredOutput: { ok: true, result: 'conversationId=99', execution: { conversationId: 11, executionId: 'herdr:1' } },
-        result: '纯文本摘要（非 JSON）',
+        presentationMeta: { ok: true, execution: { conversationId: 11, executionId: 'herdr:1' } },
       },
       1,
       conversations,
@@ -107,19 +107,18 @@ test('resolveSubagentConversationId：structuredOutput.execution 优先，其次
     11,
   )
 
-  // 正文或旧式 [subagent ...] 文本均不做正则刮取（无 callId/structuredOutput/resume 时返回 undefined）
+  // 正文或旧式 [subagent ...] 文本均不做正则刮取（无 callId/presentationMeta/resume 时返回 undefined）
   assert.equal(
     m.resolveSubagentConversationId(
       {
         callId: 'call-none',
         input: {},
-        result: '任务完成\n[subagent conversationId=11]',
       },
       1,
       conversations,
     ),
     undefined,
-    '不得通过正则刮取 [subagent ...] 尾行关联子会话',
+    '无 presentationMeta/callId/resume 时不得伪造关联',
   )
 
   // 非法正整数 conversationId 不采纳
@@ -128,7 +127,7 @@ test('resolveSubagentConversationId：structuredOutput.execution 优先，其次
       {
         callId: 'call-none',
         input: {},
-        structuredOutput: { ok: true, execution: { conversationId: 0 } },
+        presentationMeta: { ok: true, execution: { conversationId: 0 } },
       },
       1,
       conversations,
@@ -137,28 +136,28 @@ test('resolveSubagentConversationId：structuredOutput.execution 优先，其次
   )
 })
 
-test('resolveSubagentConversationId：顶层 JSON result 兑底与嵌套业务字段防伪造', { timeout: 60_000 }, () => {
+test('resolveSubagentConversationId：不依赖 result JSON.parse 兜底，外部 executionId 不虚构子会话', { timeout: 60_000 }, () => {
   const conversations = [convSummary(668, 1, 'call-json')]
-  // 顶层 JSON 信封（无 structuredOutput 时兑底）
+  // 删除 props.result JSON.parse 兜底：无 presentationMeta / callId 时不解析 result 字符串
   assert.equal(
     m.resolveSubagentConversationId(
       {
         callId: 'call-none',
         input: {},
-        result: '{"ok":true,"result":"正文提到 conversationId=999","execution":{"nodeId":"local","conversationId":668}}',
+        presentationMeta: undefined,
       },
       1,
       conversations,
     ),
-    668,
+    undefined,
   )
-  // 业务 result 内嵌套 conversationId 不读取；无 callId 关联则返回 undefined
+  // 若误传 JSON 字符串作 presentationMeta（非普通对象），同样显式忽略不 JSON.parse
   assert.equal(
     m.resolveSubagentConversationId(
       {
-        callId: 'call-other',
+        callId: 'call-none',
         input: {},
-        result: '{"ok":true,"result":{"note":"conversationId=888","inner":{"conversationId":888}}}',
+        presentationMeta: '{"ok":true,"execution":{"conversationId":668}}',
       },
       1,
       conversations,
@@ -171,7 +170,7 @@ test('resolveSubagentConversationId：顶层 JSON result 兑底与嵌套业务�
       {
         callId: 'call-none',
         input: {},
-        structuredOutput: { ok: true, runId: 'wf_abc123', execution: { executionId: 'pane-9' } },
+        presentationMeta: { ok: true, runId: 'wf_abc123', execution: { executionId: 'pane-9' } },
       },
       1,
       conversations,
@@ -200,34 +199,43 @@ test('resolveSubagentConversationId：resume 数字与字符串 ref 匹配同父
   }
 })
 
-test('isLatestSubagentCallForTarget：通过 siblingCalls[].structuredOutput 精确识别后续 resume（无 footer 刮取）', { timeout: 60_000 }, () => {
+test('isLatestSubagentCallForTarget & buildSubagentLatestCallIndex：通过 timelineCalls[].presentationMeta 精确识别后续 resume 与 WeakMap 缓存', { timeout: 60_000 }, () => {
   const conversations = [convSummary(42, 1)]
-  const siblingCalls = [
+  const timelineCalls = [
+    {
+      callId: 'other_tool',
+      toolName: 'bash',
+      input: { command: 'ls' },
+      status: 'done' as const,
+    },
     {
       callId: 'call_1',
       toolName: 'subagent',
       input: { prompt: '首轮' },
       status: 'done' as const,
-      result: '首轮完成文本（无 footer）',
-      structuredOutput: { ok: true, result: '首轮完成', execution: { conversationId: 42 } },
+      presentationMeta: { ok: true, execution: { conversationId: 42 } },
     },
     {
       callId: 'call_2',
       toolName: 'subagent',
       input: { prompt: '续接', resume: 42 },
       status: 'done' as const,
-      result: '二轮完成',
-      structuredOutput: { ok: true, result: '二轮完成', execution: { conversationId: 42 } },
+      presentationMeta: { ok: true, execution: { conversationId: 42 } },
     },
   ]
+  const indexA = m.buildSubagentLatestCallIndex(timelineCalls, 1, conversations)
+  const indexB = m.buildSubagentLatestCallIndex(timelineCalls, 1, conversations)
+  assert.ok(indexA === indexB, '同引用输入应命中 WeakMap 缓存返回同一索引实例')
+  assert.equal(indexA.knownCallIds.has('other_tool'), false, '非 subagent 工具不得进入索引')
+  assert.equal(indexA.latestByTarget.get('conv:42'), 'call_2')
+
   assert.equal(
     m.isLatestSubagentCallForTarget(
       {
         callId: 'call_1',
-        input: siblingCalls[0]!.input,
-        result: siblingCalls[0]!.result,
-        structuredOutput: siblingCalls[0]!.structuredOutput,
-        siblingCalls,
+        input: timelineCalls[1]!.input,
+        presentationMeta: timelineCalls[1]!.presentationMeta,
+        timelineCalls,
         conversationId: 1,
       },
       42,
@@ -240,10 +248,9 @@ test('isLatestSubagentCallForTarget：通过 siblingCalls[].structuredOutput 精
     m.isLatestSubagentCallForTarget(
       {
         callId: 'call_2',
-        input: siblingCalls[1]!.input,
-        result: siblingCalls[1]!.result,
-        structuredOutput: siblingCalls[1]!.structuredOutput,
-        siblingCalls,
+        input: timelineCalls[2]!.input,
+        presentationMeta: timelineCalls[2]!.presentationMeta,
+        timelineCalls,
         conversationId: 1,
       },
       42,
@@ -251,16 +258,29 @@ test('isLatestSubagentCallForTarget：通过 siblingCalls[].structuredOutput 精
     ),
     true,
   )
+  assert.equal(
+    m.isLatestSubagentCallForTarget(
+      {
+        callId: 'unlisted_call',
+        input: {},
+        timelineCalls,
+        conversationId: 1,
+      },
+      42,
+      conversations,
+    ),
+    true,
+    '未在 timelineCalls 中出现的调用保持 true',
+  )
 
-  // 外部 executionId 同样通过 siblingCalls[].structuredOutput.execution.executionId 判定最新调用
-  const extSiblings = [
+  // 外部 executionId 同样通过 timelineCalls[].presentationMeta.execution.executionId 判定最新调用
+  const extCalls = [
     {
       callId: 'ext_1',
       toolName: 'subagent',
       input: { prompt: '外部首轮' },
       status: 'done' as const,
-      result: '无 footer 文本',
-      structuredOutput: { ok: true, execution: { executionId: 'pane-42' } },
+      presentationMeta: { ok: true, execution: { executionId: 'pane-42' } },
     },
     {
       callId: 'ext_2',
@@ -273,10 +293,9 @@ test('isLatestSubagentCallForTarget：通过 siblingCalls[].structuredOutput 精
     m.isLatestSubagentCallForTarget(
       {
         callId: 'ext_1',
-        input: extSiblings[0]!.input,
-        result: extSiblings[0]!.result,
-        structuredOutput: extSiblings[0]!.structuredOutput,
-        siblingCalls: extSiblings,
+        input: extCalls[0]!.input,
+        presentationMeta: extCalls[0]!.presentationMeta,
+        timelineCalls: extCalls,
         conversationId: 1,
       },
       undefined,
@@ -287,7 +306,7 @@ test('isLatestSubagentCallForTarget：通过 siblingCalls[].structuredOutput 精
   )
 })
 
-test('resolveWorkflowRunForTool：按 parentToolCallId 精确命中，完成后从 structuredOutput / JSON 信封精确提取 id', { timeout: 60_000 }, () => {
+test('resolveWorkflowRunForTool / isBackgroundWorkflowResultHandle / resolveWorkflowToolFallbackLabel：基于 presentationMeta，绝不 JSON.parse(result)', { timeout: 60_000 }, () => {
   const dualRunning = [
     workflowRun('run-a', 1, 'running', 5, 'call-wf'),
     workflowRun('run-b', 1, 'running', 9, 'call-other'),
@@ -306,7 +325,7 @@ test('resolveWorkflowRunForTool：按 parentToolCallId 精确命中，完成后�
     undefined,
   )
 
-  // structuredOutput.summary.id 精确命中（即使 result 文本为空或非 JSON）
+  // presentationMeta.runId 精确命中
   const history = [
     workflowRun('run-legacy', 1, 'completed', 1),
     workflowRun('run-newer', 1, 'completed', 8),
@@ -314,40 +333,44 @@ test('resolveWorkflowRunForTool：按 parentToolCallId 精确命中，完成后�
   ]
   assert.equal(
     m.resolveWorkflowRunForTool(
-      { callId: 'call-missing', structuredOutput: { ok: true, summary: { id: 'run-legacy', status: 'completed' } } },
+      { callId: 'call-missing', presentationMeta: { ok: true, runId: 'run-legacy', status: 'completed' } },
       1,
       history,
     )?.id,
     'run-legacy',
   )
-  // JSON 字符串兜底
+  // 非对象（如误传 JSON 字符串）不解析
   assert.equal(
     m.resolveWorkflowRunForTool(
-      { callId: 'call-missing', result: '{"id":"run-legacy","status":"completed","result":42}' },
-      1,
-      history,
-    )?.id,
-    'run-legacy',
-  )
-  // 前缀陷阱 / 非 JSON 正文提及 id：绝不正则刮取
-  assert.equal(
-    m.resolveWorkflowRunForTool(
-      { callId: 'call-missing', result: '引用了历史 run-old 的输出 {"id":"run-old"}' },
+      { callId: 'call-missing', presentationMeta: '{"runId":"run-legacy"}' },
       1,
       history,
     ),
     undefined,
   )
-  // 错误但 callId 关联存在：仍命中真实失败 run
+  // callId 关联存在：仍命中真实失败 run
   assert.equal(
-    m.resolveWorkflowRunForTool({ callId: 'call-wf', result: 'workflow_failed: 引擎内部错误' }, 1, dualRunning)?.id,
+    m.resolveWorkflowRunForTool({ callId: 'call-wf' }, 1, dualRunning)?.id,
     'run-a',
   )
-  // 无 callId + 无结构化 id：undefined
+  // 无 callId + 无 presentationMeta.runId：undefined
   assert.equal(m.resolveWorkflowRunForTool({ callId: undefined }, 1, dualRunning), undefined)
+
+  // isBackgroundWorkflowResultHandle & resolveWorkflowToolFallbackLabel
+  assert.equal(m.isBackgroundWorkflowResultHandle({ ok: true, background: true, runId: 'wf_1' }), true)
+  assert.equal(m.isBackgroundWorkflowResultHandle({ ok: true, runId: 'wf_1' }), false)
+  assert.equal(m.isBackgroundWorkflowResultHandle('{"background":true}'), false)
+  assert.equal(
+    m.resolveWorkflowToolFallbackLabel({ resumeFromRunId: 'wf_1' }, 'en', { ok: true, runId: 'wf_2', label: 'Daily Audit' }),
+    'Daily Audit',
+  )
+  assert.equal(
+    m.resolveWorkflowToolFallbackLabel({ resumeFromRunId: 'wf_1' }, 'en', { ok: true, runId: 'wf_2', label: 'wf_2' }),
+    'Resume wf_1',
+  )
 })
 
-test('resolveSubagentExecutionMeta：parentToolCallId 与 structuredOutput 精确提取；run 节点 worktree 优先；零 footer 刮取', { timeout: 60_000 }, () => {
+test('resolveSubagentExecutionMeta：parentToolCallId 与 presentationMeta 精确提取；run 节点 worktree 优先；零 JSON.parse/footer 刮取', { timeout: 60_000 }, () => {
   const run = workflowRun('wf_link', 1, 'running', 3, 'call-bg')
   run.nodes = [{ id: 'n1', kind: 'agent', status: 'running', worktree: { path: '/wt/link', branch: 'helmx/bg-link' } }]
   const meta = m.resolveSubagentExecutionMeta({ callId: 'call-bg' }, 1, [run])
@@ -355,12 +378,12 @@ test('resolveSubagentExecutionMeta：parentToolCallId 与 structuredOutput 精�
   assert.deepEqual(meta.worktree, { path: '/wt/link', branch: 'helmx/bg-link' })
   assert.deepEqual(m.resolveSubagentExecutionMeta({ callId: 'call-bg' }, 2, [run]), {})
 
-  // structuredOutput 携带完整 execution + runId（含空格路径）
+  // presentationMeta 携带完整 execution + runId（含空格路径）
   const runs = [workflowRun('wf_abc123', 1, 'running'), workflowRun('wf_other', 1, 'completed')]
   const structuredMeta = m.resolveSubagentExecutionMeta(
     {
       callId: 'call-x',
-      structuredOutput: {
+      presentationMeta: {
         ok: true,
         runId: 'wf_abc123',
         execution: {
@@ -380,25 +403,25 @@ test('resolveSubagentExecutionMeta：parentToolCallId 与 structuredOutput 精�
   assert.equal(structuredMeta.nodeId, 'node-a')
   assert.equal(structuredMeta.effectiveCwd, '/wt dir/sub')
 
-  // run 节点 worktree 优先于 structuredOutput
+  // run 节点 worktree 优先于 presentationMeta
   const prefRun = workflowRun('wf_pref', 1, 'running', 3, 'call-p')
   prefRun.nodes = [{ id: 'n1', kind: 'agent', status: 'running', worktree: { path: '/wt/from-run', branch: 'helmx/from-run' } }]
   const prefMeta = m.resolveSubagentExecutionMeta(
     {
       callId: 'call-p',
-      structuredOutput: { ok: true, runId: 'wf_pref', execution: { worktree: { path: '/wt/from-json', branch: 'helmx/from-json' } } },
+      presentationMeta: { ok: true, runId: 'wf_pref', execution: { worktree: { path: '/wt/from-json', branch: 'helmx/from-json' } } },
     },
     1,
     [prefRun],
   )
   assert.deepEqual(prefMeta.worktree, { path: '/wt/from-run', branch: 'helmx/from-run' })
 
-  // 旧式 [subagent ...] 尾行或普通正文文本：绝不刮取
+  // 字符串非对象不解析
   assert.deepEqual(
     m.resolveSubagentExecutionMeta(
       {
         callId: 'call-none',
-        result: '已转入后台\n[subagent background runId=wf_abc123 worktree=/srv/wt/helmx-42@helmx/wf-run-1]',
+        presentationMeta: '{"ok":true,"runId":"wf_abc123"}',
       },
       1,
       runs,

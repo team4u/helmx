@@ -240,13 +240,12 @@ test('历史续接行不展开详情，点击统一打开子会话抽屉', { tim
   const spy = makeSpyCtx()
   const mod = await importWorkflowClientModule()
   const Tool = mod['SubagentToolView'] as React.ComponentType<Record<string, unknown>>
-  const oldOutput = { execution: { conversationId: 11 } }
-  const oldResult = JSON.stringify(oldOutput)
+  const oldOutput = { ok: false, execution: { conversationId: 11 } }
   const { host, unmount } = await mountClient(spy, e(Tool, {
     callId: 'old-call', toolName: 'subagent', status: 'error', isError: true, conversationId: 1,
-    input: { prompt: '首次任务' }, result: oldResult, structuredOutput: oldOutput,
+    input: { prompt: '首次任务' }, result: 'subagent_failed: error', presentationMeta: oldOutput,
     siblingCalls: [
-      { callId: 'old-call', toolName: 'subagent', status: 'error', result: oldResult, structuredOutput: oldOutput },
+      { callId: 'old-call', toolName: 'subagent', status: 'error', presentationMeta: oldOutput },
       { callId: 'new-call', toolName: 'subagent', status: 'running', input: { resume: '11' } },
     ],
   }))
@@ -285,10 +284,10 @@ test('外部子代理在工作台渲染摘要（无原生子会话且不虚构�
   const mod = await importWorkflowClientModule()
   const Tool = mod['SubagentToolView'] as React.ComponentType<Record<string, unknown>>
   const Panel = mod['WorkflowWorkbenchPanel'] as React.ComponentType<Record<string, unknown>>
-  const extOut = { execution: { executionId: 'pane-42' } }
+  const extOut = { ok: true, execution: { executionId: 'pane-42' } }
   const { host, rerender, unmount } = await mountClient(spy, e(Tool, {
     callId: 'external-call', toolName: 'subagent', status: 'done', conversationId: 1,
-    input: { prompt: '外部任务' }, result: JSON.stringify(extOut), structuredOutput: extOut,
+    input: { prompt: '外部任务' }, result: 'done', presentationMeta: extOut,
   }))
   try {
     const row = host.querySelector('button.workflow-trace-row-btn') as HTMLElement | null
@@ -915,7 +914,8 @@ test('SubagentToolView：.trace-tool-name 主显任务名、次显 #id 与 @prof
       toolName: 'subagent',
       input: { prompt: '修复测试超时' },
       status: 'done',
-      result: JSON.stringify({ ok: true, execution: { conversationId: 11, nodeId: 'remote-node' } }),
+      result: 'done',
+      presentationMeta: { ok: true, execution: { conversationId: 11, nodeId: 'remote-node' } },
       conversationId: 1,
       siblingCalls: [],
     }),
@@ -932,7 +932,8 @@ test('SubagentToolView：.trace-tool-name 主显任务名、次显 #id 与 @prof
         toolName: 'subagent',
         input: {},
         status: 'done',
-        result: JSON.stringify({ ok: true, execution: { conversationId: 12 } }),
+        result: 'done',
+        presentationMeta: { ok: true, execution: { conversationId: 12 } },
         conversationId: 1,
         siblingCalls: [],
       }),

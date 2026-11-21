@@ -1,8 +1,8 @@
 /**
  * Pure logic for the builtin:workflow client: SubagentWorkflow tool call ↔
- * run precise association (structuredOutput + parentToolCallId, zero regex
- * scraping), workflow run card phase grouping / log beacons / node summaries /
- * action availability and node stats (zero React/DOM dependencies).
+ * run precise association (presentationMeta + parentToolCallId, zero JSON.parse
+ * fallback or regex scraping), workflow run card phase grouping / log beacons /
+ * node summaries / action availability and node stats (zero React/DOM dependencies).
  */
 import { DEFAULT_HELMX_LOCALE, resolveLocalizedText, type HelmxLocale } from '@helmx/plugin-client'
 import type { ConversationSummary } from '@helmx/protocol'
@@ -19,39 +19,23 @@ import {
   traceResumeFallbackLabel,
 } from './copy.ts'
 
-function parseJsonObject(source: unknown): Record<string, unknown> | undefined {
-  if (source !== null && typeof source === 'object' && !Array.isArray(source)) {
-    return source as Record<string, unknown>
-  }
-  if (typeof source !== 'string') return undefined
-  const trimmed = source.trim()
-  if (!trimmed.startsWith('{')) return undefined
-  try {
-    const parsed: unknown = JSON.parse(trimmed)
-    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : undefined
-  } catch {
-    return undefined
-  }
+function asPlainObject(source: unknown): Record<string, unknown> | undefined {
+  return source !== null && typeof source === 'object' && !Array.isArray(source)
+    ? (source as Record<string, unknown>)
+    : undefined
 }
 
 function extractWorkflowRunIdFromPayload(source: unknown): string | undefined {
-  const obj = parseJsonObject(source)
+  const obj = asPlainObject(source)
   if (obj === undefined) return undefined
-  const summary = obj['summary']
-  if (summary !== null && typeof summary === 'object' && !Array.isArray(summary)) {
-    const summaryId = (summary as Record<string, unknown>)['id']
-    if (typeof summaryId === 'string' && summaryId !== '') return summaryId
-  }
-  if (typeof obj['id'] === 'string' && obj['id'] !== '') return obj['id']
   if (typeof obj['runId'] === 'string' && obj['runId'] !== '') return obj['runId']
+  if (typeof obj['id'] === 'string' && obj['id'] !== '') return obj['id']
   return undefined
 }
 
 /** Resolve the workflow run linked to a SubagentWorkflow tool call (precise association, never guess "latest"). */
 export function resolveWorkflowRunForTool(
-  input: { callId: string | undefined; structuredOutput?: unknown; result?: unknown },
+  input: { callId: string | undefined; presentationMeta?: unknown },
   parentConversationId: number,
   workflowRuns: ReadonlyArray<WorkflowRunSummary>,
 ): WorkflowRunSummary | undefined {
@@ -61,9 +45,7 @@ export function resolveWorkflowRunForTool(
     )
     if (byCallId !== undefined) return byCallId
   }
-  const runId =
-    extractWorkflowRunIdFromPayload(input.structuredOutput) ??
-    extractWorkflowRunIdFromPayload(input.result)
+  const runId = extractWorkflowRunIdFromPayload(input.presentationMeta)
   if (runId !== undefined) {
     return workflowRuns.find((r) => r.conversationId === parentConversationId && r.id === runId)
   }
@@ -72,13 +54,9 @@ export function resolveWorkflowRunForTool(
 
 /** Whether a SubagentWorkflow tool output is a background dispatch handle (not the final settlement). */
 export function isBackgroundWorkflowResultHandle(
-  structuredOutput: unknown,
-  fallbackResult?: unknown,
+  presentationMeta: unknown,
 ): boolean {
-  const record =
-    parseJsonObject(structuredOutput) ??
-    (fallbackResult !== undefined ? parseJsonObject(fallbackResult) : undefined)
-  return record?.['background'] === true
+  return asPlainObject(presentationMeta)?.['background'] === true
 }
 
 /** Readable display name for a workflow run: non-placeholder name > first line of description > run.id. */
@@ -94,12 +72,22 @@ export function resolveWorkflowRunDisplayName(
   return run.id
 }
 
-/** Extract a readable title from the tool input when no run record is linked, avoiding blank space. */
-export function resolveWorkflowToolFallbackLabel(input: unknown, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+/** Extract a readable title from the tool input / presentationMeta when no run record is linked, avoiding blank space. */
+export function resolveWorkflowToolFallbackLabel(
+  input: unknown,
+  locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
+  presentationMeta?: unknown,
+): string {
   const label = inputString(input, 'label')
   if (label !== undefined) return firstLineOf(label, 60)
   const name = inputString(input, 'name')
   if (name !== undefined) return firstLineOf(name, 60)
+  const metaObj = asPlainObject(presentationMeta)
+  const metaLabel = typeof metaObj?.['label'] === 'string' ? metaObj['label'].trim() : ''
+  const metaRunId = typeof metaObj?.['runId'] === 'string' ? metaObj['runId'] : ''
+  if (metaLabel !== '' && !isPlaceholderRunName(metaLabel, metaRunId)) {
+    return firstLineOf(metaLabel, 60)
+  }
   const scriptPath = inputString(input, 'scriptPath')
   if (scriptPath !== undefined) return firstLineOf(scriptPath, 60)
   const resumeFromRunId = inputString(input, 'resumeFromRunId')

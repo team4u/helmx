@@ -250,7 +250,8 @@ export function resolveSubagentElapsedMs(input: {
     const elapsed = nodeDuration ?? input.backgroundRun.updatedAt - input.backgroundRun.createdAt
     return elapsed !== undefined && Number.isFinite(elapsed) && elapsed >= 0 ? elapsed : undefined
   }
-  if (parseSubagentExecutionInfo(input.toolSummary?.structuredOutput, input.toolSummary?.resultText)?.runId !== undefined) {
+  const execInfo = parseSubagentExecutionInfo(input.toolSummary?.presentationMeta)
+  if (execInfo?.runId !== undefined && (execInfo.background === true || execInfo.status === 'running')) {
     return undefined
   }
   const elapsed = input.toolSummary?.durationMs
@@ -302,9 +303,9 @@ export function extractSubagentResultPreview(
 
 function errorTextFromToolSummary(toolSummary: SubagentParentToolSummary | undefined): string | undefined {
   if (toolSummary === undefined) return undefined
-  const structured = toolSummary.structuredOutput
-  if (structured !== undefined && structured !== null && typeof structured === 'object' && !Array.isArray(structured)) {
-    const record = structured as Record<string, unknown>
+  const meta = toolSummary.presentationMeta
+  if (meta !== undefined && meta !== null && typeof meta === 'object' && !Array.isArray(meta)) {
+    const record = meta as Record<string, unknown>
     const errField = record['error'] ?? (record['ok'] === false ? record['result'] : undefined)
     if (typeof errField === 'string' && errField.trim() !== '') {
       return firstLineOf(errField, 100)
@@ -472,7 +473,7 @@ export function resolveSubagentHeaderSnippet(
     if (fromEntries !== undefined) return { kind: 'done', text: fromEntries }
     const fromTool =
       input.backgroundRun === undefined
-        ? extractSubagentResultPreview(input.toolSummary?.resultText, input.toolSummary?.structuredOutput)
+        ? extractSubagentResultPreview(input.toolSummary?.resultText)
         : undefined
     if (fromTool !== undefined) return { kind: 'done', text: fromTool }
     return undefined

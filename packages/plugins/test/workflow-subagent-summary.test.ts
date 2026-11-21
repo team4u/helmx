@@ -30,10 +30,16 @@ const run: WorkflowRunSummary = {
 test('后台完成结果与耗时来自 run，不来自父工具返回启动句柄的结果和耗时', { timeout: 60_000 }, () => {
   const toolSummary = {
     durationMs: 12,
-    structuredOutput: { ok: true, runId: run.id, status: 'running' },
+    presentationMeta: { ok: true, runId: run.id, status: 'running' },
     resultText: JSON.stringify({ ok: true, runId: run.id, status: 'running' }),
   }
   assert.equal(m.resolveSubagentElapsedMs({ backgroundRun: run, toolSummary }), 8000)
+  assert.equal(
+    m.resolveSubagentElapsedMs({
+      toolSummary: { durationMs: 34, presentationMeta: { ok: true, background: true, runId: run.id, status: 'running' } },
+    }),
+    undefined,
+  )
   assert.deepEqual(m.resolveSubagentHeaderSnippet({ badgeStatus: 'done', backgroundRun: run, toolSummary }), { kind: 'done', text: '本轮测试通过' })
   assert.equal(m.resolveSubagentHeaderSnippet({ badgeStatus: 'done', backgroundRun: { ...run, nodes: [] }, toolSummary }), undefined)
 })

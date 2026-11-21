@@ -420,9 +420,8 @@ test('无 worktree 且无后台 run：不渲染空徽章与错误行', { timeout
 
 test('同步外部子代理无原生子会话：完成后停止显示执行中（时间线单行与工作台摘要同致）', { timeout: 60_000 }, () => {
   const conversation = summary(1, 'idle')
-  const structuredOutput = {
+  const presentationMeta = {
     ok: true,
-    result: 'done',
     execution: {
       nodeId: 'local',
       executionId: 'pane-9',
@@ -435,8 +434,8 @@ test('同步外部子代理无原生子会话：完成后停止显示执行中�
       callId: 'ext-1',
       toolName: 'subagent',
       input: { prompt: '执行任务', agentType: 'herdr:pi' },
-      result: JSON.stringify(structuredOutput),
-      structuredOutput,
+      result: 'done',
+      presentationMeta,
       status: 'done',
       isError: false,
       conversationId: 1,
@@ -476,8 +475,8 @@ test('resume 正在运行时：历史失败调用保留异常状态，只有最�
     status: 'error' as const,
     isError: true,
     input: { prompt: '首次派生' },
-    result: JSON.stringify(oldOutput),
-    structuredOutput: oldOutput,
+    result: 'subagent_failed: timeout',
+    presentationMeta: oldOutput,
   }
   const newCall = {
     callId: 'call_new',
@@ -530,7 +529,7 @@ test('同一子会话 #12 被首次派生 + resume 续接：SubagentToolView 收
     status: 'done' as const,
     input: { prompt: '首次派生' },
     result: '首轮完成',
-    structuredOutput: out12,
+    presentationMeta: out12,
   }
   const call2 = {
     callId: 'call_2',
@@ -538,7 +537,7 @@ test('同一子会话 #12 被首次派生 + resume 续接：SubagentToolView 收
     status: 'done' as const,
     input: { prompt: '继续', resume: 12 },
     result: '第二轮完成',
-    structuredOutput: out12,
+    presentationMeta: out12,
   }
   const siblings = [call1, call2]
   const h = createWorkflowHostHarness({ conversationId: 1, conversations: [parent, child12] })
@@ -556,6 +555,51 @@ test('同一子会话 #12 被首次派生 + resume 续接：SubagentToolView 收
   assert.match(rowButtons[0]!, /首次派生[\s\S]*?#12[\s\S]*?Resumed below/, '前序行应主显任务名、次显 #12 并标注续接标识')
   assert.doesNotMatch(rowButtons[1]!, /Resumed below/, '最新调用行不得带续接标识')
   assert.match(rowButtons[1]!, /继续[\s\S]*?#12[\s\S]*?Done/, '最新调用行主显任务名、次显 #12 与终态')
+})
+
+test('SubagentToolView：仅读取 props.presentationMeta，删除 props.result JSON.parse 兜底', { timeout: 60_000 }, () => {
+  const parent = summary(1, 'idle')
+  const h = createWorkflowHostHarness({ conversationId: 1, conversations: [parent] })
+  const withMeta = h.renderSsr(
+    e(SubagentToolView, {
+      callId: 'call_meta_only',
+      toolName: 'subagent',
+      input: { prompt: '查看节点' },
+      status: 'done',
+      result: 'plain-text-only',
+      presentationMeta: {
+        ok: true,
+        execution: {
+          nodeId: 'remote-box',
+          conversationId: 88,
+          worktree: { path: '/wt/88', branch: 'feat/meta-only' },
+        },
+      },
+      conversationId: 1,
+    }),
+  )
+  assert.ok(withMeta.includes('#88'), '应从 presentationMeta.execution.conversationId 渲染 #88')
+  assert.ok(withMeta.includes('remote-box'), '应从 presentationMeta.execution.nodeId 渲染 nodeId')
+  assert.ok(withMeta.includes('feat/meta-only'), '应从 presentationMeta.execution.worktree 渲染分支徽章')
+
+  const noFallback = h.renderSsr(
+    e(SubagentToolView, {
+      callId: 'call_json_result_only',
+      toolName: 'subagent',
+      input: { prompt: '无 meta' },
+      status: 'done',
+      result: JSON.stringify({
+        ok: true,
+        background: true,
+        runId: 'wf_fake',
+        execution: { nodeId: 'should-not-parse', conversationId: 99, worktree: { path: '/x', branch: 'fake-branch' } },
+      }),
+      conversationId: 1,
+    }),
+  )
+  assert.ok(!noFallback.includes('#99'), '无 presentationMeta 时绝不 JSON.parse(props.result) 解析子会话 ID')
+  assert.ok(!noFallback.includes('should-not-parse'), '无 presentationMeta 时绝不 JSON.parse(props.result) 解析 nodeId')
+  assert.ok(!noFallback.includes('fake-branch'), '无 presentationMeta 时绝不 JSON.parse(props.result) 解析 worktree')
 })
 
 test('工作台独立子会话（runs 驱动）：紧凑卡无实时流，保留副栏且 working 排在 idle 前面', { timeout: 60_000 }, () => {
@@ -853,7 +897,7 @@ test('resolveSubagentHeaderSnippet：error 优先后台 run 失败，其次父�
     { kind: 'error', tag: 'Background run failed', text: 'Background run failed' },
   )
   assert.deepEqual(
-    resolveSubagentHeaderSnippet({ badgeStatus: 'error', toolSummary: { structuredOutput: { ok: false, error: '结构化超时' } } }),
+    resolveSubagentHeaderSnippet({ badgeStatus: 'error', toolSummary: { presentationMeta: { ok: false, error: '结构化超时' } } }),
     { kind: 'error', tag: 'Failed', text: '结构化超时' },
   )
   assert.deepEqual(

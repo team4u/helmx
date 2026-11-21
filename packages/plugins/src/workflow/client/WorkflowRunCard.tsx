@@ -47,6 +47,7 @@ import {
   resolveWorkflowToolFallbackLabel,
 } from './model-run.ts'
 import type { DetachViewerScope } from './model-run.ts'
+import { readToolPresentationMeta } from './model-subagent-link.ts'
 import { aggregateExecutionNodes, buildExecutionTree, buildLeafNodesForRun } from './model-execution-tree.ts'
 import type { ExecutionNode } from './model-execution-tree.ts'
 import { collectExecutionApprovals } from './model-execution-view.ts'
@@ -221,6 +222,7 @@ export function WorkflowToolView(props: ToolViewProps): ReactNode {
   const [detailsOpen, setDetailsOpen] = useState(false)
   const detailsId = useId()
 
+  const presentationMeta = useMemo(() => readToolPresentationMeta(props), [props])
   const runs = runsDoc?.runs ?? []
   const run = useMemo(
     () =>
@@ -228,14 +230,13 @@ export function WorkflowToolView(props: ToolViewProps): ReactNode {
         ? resolveWorkflowRunForTool(
             {
               callId: props.callId,
-              structuredOutput: props.structuredOutput,
-              result: typeof props.result === 'string' ? props.result : undefined,
+              presentationMeta,
             },
             viewerConversationId,
             runs,
           )
         : undefined,
-    [props.callId, props.structuredOutput, props.result, viewerConversationId, runs],
+    [props.callId, presentationMeta, viewerConversationId, runs],
   )
 
   const hasChildConversations = useMemo(
@@ -269,7 +270,7 @@ export function WorkflowToolView(props: ToolViewProps): ReactNode {
   useToolActivity(props.callId, toolActive)
   const nowMs = useElapsedNowMs(toolActive)
   const resultText = typeof props.result === 'string' ? props.result : undefined
-  const isBgHandle = run === undefined && isBackgroundWorkflowResultHandle(props.structuredOutput, resultText)
+  const isBgHandle = run === undefined && isBackgroundWorkflowResultHandle(presentationMeta)
 
   const elapsedMs = useMemo(() => {
     if (run !== undefined) return resolveRunElapsedMs(run, nowMs)
@@ -279,7 +280,7 @@ export function WorkflowToolView(props: ToolViewProps): ReactNode {
   }, [run, nowMs, isBgHandle, props.status, props.startedAt, props.durationMs])
 
   if (run === undefined) {
-    const fallbackLabel = resolveWorkflowToolFallbackLabel(props.input, locale)
+    const fallbackLabel = resolveWorkflowToolFallbackLabel(props.input, locale, presentationMeta)
     const isError = props.status === 'error'
     const lightStatus = isError ? 'failed' : isBgHandle || props.status === 'running' ? 'running' : 'completed'
     const badgeText = isError
