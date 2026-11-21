@@ -586,7 +586,7 @@ test('超时（TimeoutError）保留 pane：working 时 resume 显式拒绝不�
     env.transport.waitAbort = waitBreak.signal
     const controller = new AbortController()
     const spawned = spawnDirect(env, { agentType: 'herdr:agy', agentId: 'wf_to:a', signal: controller.signal })
-    await waitFor(() => env.transport.calls.some((c) => c.method === 'agent.prompt'))
+    await waitFor(() => env.transport.calls.some((c) => c.method === 'agent.wait'))
     // 回合超时（AbortSignal.timeout 同源语义：reason 为 TimeoutError）。
     controller.abort(new DOMException('turn timed out', 'TimeoutError'))
     let timedOut: unknown = undefined

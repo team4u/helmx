@@ -16,8 +16,11 @@ export const PLUGIN_CLIENT_CACHE_DIR = fileURLToPath(
 )
 mkdirSync(PLUGIN_CLIENT_CACHE_DIR, { recursive: true })
 
+let mountGen = 0
+
 /** 将宿主共享 React / Lucide / @helmx/plugin-client 命名空间挂载到 globalThis。 */
 export function mountPluginNamespaceGlobals(pluginClientNamespace: Record<string, unknown>): void {
+  mountGen += 1
   Object.assign(globalThis, {
     __helmx_shared_react: React,
     __helmx_shared_react_dom: ReactDom,
@@ -36,7 +39,9 @@ export async function importCompiledPluginClient(
   cacheDir = PLUGIN_CLIENT_CACHE_DIR,
 ): Promise<Record<string, unknown>> {
   const { code } = await compilePluginClientModule(pluginId, root, moduleRef, cacheDir)
-  return (await import(`data:text/javascript;base64,${Buffer.from(code, 'utf8').toString('base64')}`)) as Record<
+  // Keep each mountPluginNamespaceGlobals() epoch distinct in Node's ESM module cache so
+  // shared `dom-shared` shards never reuse a bundle evaluated against another file's namespace.
+  return (await import(`data:text/javascript;base64,${Buffer.from(code, 'utf8').toString('base64')}#web-ns-${mountGen}`)) as Record<
     string,
     unknown
   >

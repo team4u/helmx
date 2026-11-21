@@ -56,7 +56,7 @@ const sharedPluginClientNamespace = {
 
 export function mountSharedPluginNamespaces(options: { realHooks?: boolean } = {}): void {
   realHooks = options.realHooks === true
-  mountPluginNamespaceGlobals(sharedPluginClientNamespace)
+  mountPluginNamespaceGlobals({ ...sharedPluginClientNamespace })
 }
 
 const CLIENT_ROOTS: Record<string, string> = {

@@ -876,7 +876,7 @@ test('apps client：双语 LocalizedText 插件摘要与 ScreenSpec.label 的模
 
   const appsClientDir = resolve(dirname(fileURLToPath(import.meta.url)), '../src/apps/client')
   const bundle = await compilePluginClientModule(APPS_PLUGIN_ID, appsClientDir, 'index.tsx', buildDir)
-  const mod = (await import(`data:text/javascript;base64,${Buffer.from(bundle.code, 'utf8').toString('base64')}`)) as {
+  const mod = (await import(`data:text/javascript;base64,${Buffer.from(bundle.code, 'utf8').toString('base64')}#apps-plugin-real`)) as {
     AppCenterScreen: React.ComponentType<Record<string, unknown>>
   }
 
