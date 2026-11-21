@@ -30,6 +30,7 @@ import {
   nodesApi,
   pluginsApi,
   setStoredToken,
+  type ModelCatalogDefaults,
   type ModelDescriptor,
 } from './api.js'
 import { requestBrowserNotificationPermission } from './browser-notification.js'
@@ -145,6 +146,8 @@ export interface CatalogSlice {
   profilesLoaded: boolean
   assetsLoaded: boolean
   models: ModelDescriptor[]
+  /** GET /api/models 顶层全局默认链（HostModelsSlice 除 models 外的部分；首载前为空对象，由 assetsLoaded 门控读取）。 */
+  modelDefaults: ModelCatalogDefaults
   providers: ProviderConfig[]
   credentials: CredentialSummary[]
   skills: SkillSummary[]
@@ -420,6 +423,7 @@ export class HelmxExternalStore {
     profilesLoaded: false,
     assetsLoaded: false,
     models: [],
+    modelDefaults: {},
     providers: [],
     credentials: [],
     skills: [],
@@ -641,6 +645,7 @@ export class HelmxExternalStore {
   getCatalogSlice = (): CatalogSlice => this.catalogState
   getProfilesSlice = (): ProfilesSlice => this.profilesSlice
   getModels = (): ModelDescriptor[] => this.catalogState.models
+  getModelDefaults = (): ModelCatalogDefaults => this.catalogState.modelDefaults
   getProviders = (): ProviderConfig[] => this.catalogState.providers
   getCredentials = (): CredentialSummary[] => this.catalogState.credentials
   getSkills = (): SkillSummary[] => this.catalogState.skills
@@ -877,7 +882,7 @@ export class HelmxExternalStore {
       plan.domains.add('profiles')
       changed = true
     }
-    if (next.models !== prev.models) { plan.domains.add('models'); changed = true }
+    if (next.models !== prev.models || next.modelDefaults !== prev.modelDefaults) { plan.domains.add('models'); changed = true }
     if (next.providers !== prev.providers) { plan.domains.add('providers'); changed = true }
     if (next.credentials !== prev.credentials) { plan.domains.add('credentials'); changed = true }
     if (next.skills !== prev.skills) { plan.domains.add('skills'); changed = true }
@@ -1255,6 +1260,7 @@ export class HelmxExternalStore {
         assetsLoaded: false,
         profiles: [],
         models: [],
+        modelDefaults: {},
         providers: [],
         credentials: [],
         skills: [],
@@ -1312,7 +1318,12 @@ export class HelmxExternalStore {
     ]).then((results) => {
       if (isStale()) return
       const patch: Partial<CatalogSlice> = {}
-      if (results[0].status === 'fulfilled') patch.models = results[0].value
+      if (results[0].status === 'fulfilled') {
+        const catalog = results[0].value
+        const { models, ...modelDefaults } = catalog
+        patch.models = models
+        patch.modelDefaults = modelDefaults
+      }
       if (results[1].status === 'fulfilled') patch.providers = results[1].value
       if (results[2].status === 'fulfilled') patch.credentials = results[2].value
       if (results[3].status === 'fulfilled') patch.skills = results[3].value

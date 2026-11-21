@@ -330,6 +330,7 @@ export const pluginsMessages = {
   'plugins.config.resetDefaultTitle': { en: 'Reset to default', 'zh-CN': '重置为默认值' },
   'plugins.config.clear': { en: 'Clear', 'zh-CN': '清除' },
   'plugins.config.reset': { en: 'Reset', 'zh-CN': '重置' },
+  'plugins.config.modelUnset': { en: 'No model selected', 'zh-CN': '未选择模型' },
   'plugins.config.saved': { en: 'Saved', 'zh-CN': '已保存' },
   'plugins.config.save': { en: 'Save configuration', 'zh-CN': '保存配置' },
 } satisfies MessageTable

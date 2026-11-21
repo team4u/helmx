@@ -390,6 +390,25 @@ export interface ScreenProps {
   setParams(patch: Record<string, string | undefined>, options?: { push?: boolean }): void
 }
 
+/**
+ * Screen params scope exposed by useScreenParams() inside a full-screen screen
+ * component tree: the host ScreenHost establishes it around the mounted view
+ * (main and split panes each bind their own scope; the URL hash stays the
+ * single source of truth — params are the pane target's sp. / ssp. namespace
+ * values, setParams is the very same implementation ScreenProps carries, no
+ * second write path). Returns null outside a full-screen screen (e.g. a
+ * component reused inside settings.panel) — honest absence, never a
+ * fabricated no-op.
+ */
+export interface ScreenParamsScope {
+  /** Deep-link params of the pane this component tree is mounted in (sp.* / ssp.* namespace). */
+  readonly params: Readonly<Record<string, string>>
+  /** Same contract as ScreenProps.setParams (bound to the owning pane). */
+  setParams(patch: Record<string, string | undefined>, options?: { push?: boolean }): void
+  /** Whether this component tree is mounted in the right split pane. */
+  readonly isSplit: boolean
+}
+
 /** timeline.renderer: takes over rendering of a single timeline entry. */
 export interface TimelineRendererProps {
   entry: ConversationEntry
@@ -591,9 +610,14 @@ export interface PluginClientContext {
  * The single source of truth of exported symbols is PLUGIN_CLIENT_SHARED_EXPORTS:
  * - hooks: usePluginContext / usePluginLocale / usePluginTranslator / usePluginDoc / usePluginSessionDoc /
  *   useToolActivity / useConversations / useConversation / useConversationBackground / usePlugins /
+ *   useScreenParams (screen-local params scope provided by the host ScreenHost) /
  *   usePluginConfig / useHostModels / useScreenLocation (stable-handle reads of host capability slices:
  *   model catalog, navigation location; isolation contract pinned by @helmx/plugin-client tests —
  *   unrelated host port revisions must not re-render consumers);
+ * - ModelPickerControl: shared model + thinking-level picker (reads the catalog via the useHostModels
+ *   stable-handle slice; apply/reset callbacks keep the PI follow-default semantics);
+ * - model formatting pure functions: formatModelShortName / formatModelRowDisplay /
+ *   resolveEffectiveThinkingLevel;
  * - accessibility base components: Switch / Select / MultiSelect / Checkbox / Tabs family /
  *   SegmentedControl / HelmxIcon / ViewBoundary / Callout / Dialog family / AlertDialog family
  *   (confirm dialogs) / ConfirmDialog (minimal double-confirm composition) / ThinkingLevelControl
@@ -605,9 +629,10 @@ export interface PluginClientContext {
  *   becomes the screen-reader accessible name, never visible status text) for
  *   card main status slots, reusing the host .status-dot vocabulary;
  * - lightweight layout primitives: Screen (page container + header) / ScreenSection (sectioning) /
- *   DataTable (composable table with unified loading/empty) / KvGrid (key-value overview) /
- *   DetailDrawer (right-side detail drawer shell over the host .primary-drawer-* vocabulary; the
- *   header/meta/body/footer stay composable JSX, state and data belong to the caller);
+ *   ScreenToolbar (header-to-content toolbar row) / DataTable (composable table with unified
+ *   loading/empty) / KvGrid (key-value overview) / DetailDrawer (right-side detail drawer shell
+ *   over the host .primary-drawer-* vocabulary; the header/meta/body/footer stay composable JSX,
+ *   state and data belong to the caller);
  * - content display: MarkdownView (standard markdown rendering) / CodeBlockView
  *   (syntax-highlighted code block) / CopyButton (copy button);
  * - formatting pure functions: formatTime (compact MM-DD HH:mm) / formatCompactTimestamp
@@ -624,6 +649,7 @@ export interface UsePluginsResult {
   /** Screen contribution list registered by currently enabled plugins (with owning pluginId). */
   screens: Array<{ pluginId: string; spec: ScreenSpec }>
 }
+
 
 // ---------------------------------------------------------------------------
 // Host capability slices: read-only host facts shared with plugin views
@@ -651,11 +677,13 @@ export interface HostModelEntry {
   label?: string
   /** Capability table of thinking levels in display order; carries no profile-effective values. */
   thinkingLevels: readonly string[]
+
   /** Real known model context window (tokens); omitted when unknown. */
   contextWindow?: number
 }
 
 /**
+
  * useHostModels(): reactive read-only model catalog slice — normalized
  * entries plus the global default chain (the top-level fields of
  * `ModelCatalog`; per-model thinking levels are already embedded in each
@@ -698,6 +726,7 @@ export interface ScreenLocationSnapshot {
   screen?: ScreenLocationPane
   /** Split pane when a split view is open; undefined when none is. */
   split?: ScreenLocationPane
+
 }
 
 /** GET /api/plugins/:id/client.mjs response metadata (HTTP error envelope on failure, never JS). */
@@ -752,8 +781,13 @@ export const PLUGIN_CLIENT_SHARED_EXPORTS = [
   'useConversationBackground',
   'usePlugins',
   'usePluginConfig',
+  'useScreenParams',
   'useHostModels',
   'useScreenLocation',
+  'ModelPickerControl',
+  'formatModelShortName',
+  'formatModelRowDisplay',
+  'resolveEffectiveThinkingLevel',
   'PluginSlot',
   'Switch',
   'Select',
@@ -796,6 +830,7 @@ export const PLUGIN_CLIENT_SHARED_EXPORTS = [
   'ThinkingLevelControl',
   'Screen',
   'ScreenSection',
+  'ScreenToolbar',
   'DataTable',
   'KvGrid',
   'DetailDrawer',

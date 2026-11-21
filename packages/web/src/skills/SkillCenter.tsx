@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { HelmxIcon, Select } from '@helmx/plugin-client'
+import { HelmxIcon, SearchBox, Select } from '@helmx/plugin-client'
 import type { SelectOption } from '@helmx/plugin-client'
 import {
   useConversations,
@@ -268,27 +268,15 @@ export function SkillCenter({
           />
         </div>
 
-        <div className="primary-search-box">
-          <HelmxIcon name="search" size={14} />
-          <input
-            type="text"
-            placeholder={t('skills.center.searchPlaceholder')}
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            aria-label={t('skills.center.searchLabel')}
-          />
-          {query && (
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm primary-search-clear"
-              title={t('skills.center.clearSearch')}
-              aria-label={t('skills.center.clearSearch')}
-              onClick={() => setQuery('')}
-            >
-              <HelmxIcon name="x" size={12} />
-            </button>
-          )}
-        </div>
+        <SearchBox
+          className="primary-search-box"
+          clearButtonClassName="btn btn-ghost btn-sm primary-search-clear"
+          value={query}
+          onChange={setQuery}
+          placeholder={t('skills.center.searchPlaceholder')}
+          ariaLabel={t('skills.center.searchLabel')}
+          clearLabel={t('skills.center.clearSearch')}
+        />
 
         <div className="primary-category-pills" role="tablist" aria-label={t('skills.center.filterLabel')}>
           {CATEGORY_TABS.map((tabKey) => {

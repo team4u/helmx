@@ -94,8 +94,16 @@ test('ScreenHost 双重头部去重容器、ScreenProps 注入与缺失视图 wa
   assert.ok(warnBox, '缺失插件视图时应渲染 .callout.callout-warn')
 
   // 2) 已注册 client screen 渲染时，内层 Screen 包裹于 .screen-host-stage[data-screen-host="true"]，
-  // 且主/分屏分别从 primaryTarget / splitTarget 注入标准 ScreenProps 并把 setParams 路由到对应面板。
+  // 且主/分屏分别从 primaryTarget / splitTarget 注入标准 ScreenProps 并把 setParams 路由到对应面板；
+  // 嵌套子组件（不经 slotProps）经 useScreenParams 读取宿主建立的同一 scope。
+  const { useScreenParams } = await import('@helmx/plugin-client')
   const receivedProps: Array<Record<string, unknown>> = []
+  const receivedScopes: Array<{ hasScope: boolean; params: unknown; isSplit: boolean | undefined }> = []
+  function NestedScopeProbe(): React.JSX.Element {
+    const scope = useScreenParams()
+    receivedScopes.push({ hasScope: scope !== null, params: scope?.params, isSplit: scope?.isSplit })
+    return <div data-nested-scope={scope !== null ? 'yes' : 'no'}>nested</div>
+  }
   seedPluginClientModule(
     'ext-demo',
     'index.tsx',
@@ -105,6 +113,7 @@ test('ScreenHost 双重头部去重容器、ScreenProps 注入与缺失视图 wa
         return (
           <Screen title="插件看板" subtitle="副标题说明" actions={<button type="button">刷新</button>}>
             <div>正文内容</div>
+            <NestedScopeProbe />
           </Screen>
         )
       },
@@ -150,6 +159,11 @@ test('ScreenHost 双重头部去重容器、ScreenProps 注入与缺失视图 wa
   assert.ok(stage.querySelector('.screen-header .screen-heading .screen-title'), '内层 Screen 存在标准 .screen-header > .screen-heading > .screen-title 供 CSS 去重')
   assert.ok(stage.querySelector('.screen-subtitle'), '副标题应保留')
   assert.ok(stage.querySelector('button'), '右侧动作按钮应保留')
+  assert.ok(stage.querySelector('[data-nested-scope="yes"]'), '嵌套子组件经 useScreenParams 读到宿主建立的屏内 scope')
+  const primaryScope = receivedScopes[receivedScopes.length - 1]!
+  assert.equal(primaryScope.hasScope, true)
+  assert.deepEqual(primaryScope.params, { view: 'main' })
+  assert.equal(primaryScope.isSplit, false)
 
   assert.ok(receivedProps.length >= 1)
   const primaryProps = receivedProps[receivedProps.length - 1]!
@@ -171,6 +185,9 @@ test('ScreenHost 双重头部去重容器、ScreenProps 注入与缺失视图 wa
   const splitProps = receivedProps[receivedProps.length - 1]!
   assert.equal(splitProps.isSplit, true)
   assert.deepEqual(splitProps.params, { view: 'right' })
+  const splitScope = receivedScopes[receivedScopes.length - 1]!
+  assert.deepEqual(splitScope.params, { view: 'right' }, '分屏嵌套组件读到 ssp.* 侧的独立 scope')
+  assert.equal(splitScope.isSplit, true)
   ;(splitProps.setParams as (patch: Record<string, string | undefined>, options?: { push?: boolean }) => void)(
     { tab: 'logs' },
     { push: false },

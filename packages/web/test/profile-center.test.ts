@@ -9,7 +9,6 @@ import type { Profile, SkillSummary } from '@helmx/protocol'
 import { ensureHappyDom } from './helpers/dom-harness.js'
 import {
   buildProfileCategoryCounts,
-  buildProfileModelOptions,
   filterProfiles,
   formatProfileLocation,
   formatShortModelName,
@@ -247,110 +246,6 @@ test('profile-center-model: profileIdValid rule validation', { timeout: 60_000 }
   assert.equal(profileIdValid('with space'), false)
 })
 
-test('profile-center-model: buildProfileModelOptions lists only configured models; unconfigured ones never appear', { timeout: 60_000 }, () => {
-  const testModels: ModelDescriptor[] = [
-    {
-      id: 'openai/gpt-4o',
-      provider: 'openai',
-      modelId: 'gpt-4o',
-      available: true,
-      label: 'GPT-4o',
-      thinkingLevels: ['off'],
-    },
-    {
-      id: 'anthropic/claude-3-5-sonnet',
-      provider: 'anthropic',
-      modelId: 'claude-3-5-sonnet',
-      available: false,
-      label: 'Claude 3.5 Sonnet',
-      thinkingLevels: ['off'],
-    },
-    {
-      id: 'google/gemini-2.5-pro',
-      provider: 'google',
-      modelId: 'gemini-2.5-pro',
-      available: true,
-      thinkingLevels: ['off'],
-    },
-    {
-      id: 'meta/llama-3.3-70b',
-      provider: 'meta',
-      modelId: 'llama-3.3-70b',
-      available: false,
-      thinkingLevels: ['off'],
-    },
-  ]
-
-  // 1. No current binding: only the system-default entry plus configured available models; unconfigured models must never appear
-  const options1 = buildProfileModelOptions(testModels)
-  assert.deepEqual(options1, [
-    { value: '', label: 'Follow system default' },
-    { value: 'openai/gpt-4o', label: 'GPT-4o (openai/gpt-4o)' },
-    { value: 'google/gemini-2.5-pro', label: 'google/gemini-2.5-pro' },
-  ])
-  assert.equal(options1.some((o) => o.value.includes('claude')), false, 'unconfigured models must not appear in options')
-  assert.equal(options1.some((o) => o.value.includes('llama')), false, 'unconfigured models must not appear in options')
-
-  // 2. Currently bound to an available model: highlight it normally, no duplicate append
-  const options2 = buildProfileModelOptions(testModels, 'openai/gpt-4o')
-  assert.deepEqual(options2, [
-    { value: '', label: 'Follow system default' },
-    { value: 'openai/gpt-4o', label: 'GPT-4o (openai/gpt-4o)' },
-    { value: 'google/gemini-2.5-pro', label: 'google/gemini-2.5-pro' },
-  ])
-
-  // 3. Currently bound to a stale/unconfigured model: keep it annotated as not configured without pulling in other unconfigured models
-  const options3 = buildProfileModelOptions(testModels, 'anthropic/claude-3-5-sonnet')
-  assert.deepEqual(options3, [
-    { value: '', label: 'Follow system default' },
-    { value: 'openai/gpt-4o', label: 'GPT-4o (openai/gpt-4o)' },
-    { value: 'google/gemini-2.5-pro', label: 'google/gemini-2.5-pro' },
-    { value: 'anthropic/claude-3-5-sonnet', label: 'anthropic/claude-3-5-sonnet (not configured)' },
-  ])
-  assert.equal(options3.some((o) => o.value.includes('llama')), false, 'other unconfigured models must not leak in just because the current one is unconfigured')
-})
-
-test('profile-center-model: buildProfileModelOptions skips disabled models; a bound disabled model is kept and annotated', { timeout: 60_000 }, () => {
-  const testModels: ModelDescriptor[] = [
-    {
-      id: 'faux/faux-1',
-      provider: 'faux',
-      modelId: 'faux-1',
-      available: true,
-      thinkingLevels: ['off'],
-    },
-    {
-      id: 'faux/faux-2',
-      provider: 'faux',
-      modelId: 'faux-2',
-      available: true,
-      disabled: true,
-      thinkingLevels: ['off'],
-    },
-    {
-      id: 'faux/faux-3',
-      provider: 'faux',
-      modelId: 'faux-3',
-      available: false,
-      disabled: true,
-      thinkingLevels: ['off'],
-    },
-  ]
-
-  // 1. Disabled models never appear as normal options (regardless of credential availability).
-  const options1 = buildProfileModelOptions(testModels)
-  assert.deepEqual(options1, [
-    { value: '', label: 'Follow system default' },
-    { value: 'faux/faux-1', label: 'faux/faux-1' },
-  ])
-
-  // 2. Currently bound model is disabled: keep it as the current entry (never dropped silently), annotated, no duplicates.
-  const options2 = buildProfileModelOptions(testModels, 'faux/faux-2')
-  const hits = options2.filter((o) => o.value === 'faux/faux-2')
-  assert.equal(hits.length, 1, 'the disabled model must be kept exactly once, never duplicated')
-  assert.equal(hits[0]?.label, 'faux/faux-2 (disabled)')
-})
-
 // ---------------------------------------------------------------------------
 // 2. ProfileCard SSR rendering and zero-emoji assertions
 // ---------------------------------------------------------------------------
@@ -484,8 +379,10 @@ test('ProfileDetailDrawer: create-new mode with editable ID rendering', { timeou
   assert.doesNotMatch(html, EMOJI_REGEX, 'create-new drawer output must contain no emoji')
 })
 
-test('ProfileDetailDrawer: thinking levels render as the shared segmented control for the selected model', { timeout: 60_000 }, () => {
-  // Explicitly bound to claude-3-7-sonnet (thinkingLevels: off/low/medium/high)
+test('ProfileDetailDrawer: model binding renders the shared SDK ModelPickerControl (no private thinking row)', { timeout: 60_000 }, () => {
+  // Explicitly bound to claude-3-7-sonnet (thinkingLevels: off/low/medium/high):
+  // the unified shared picker trigger carries the model (and effective level);
+  // thinking chips live inside the picker popover, not a separate segmented row.
   const store = makeTestStore({ models: mockModels, skills: mockSkills })
   const html = renderToStaticMarkup(
     e(
@@ -500,16 +397,15 @@ test('ProfileDetailDrawer: thinking levels render as the shared segmented contro
       }),
     ),
   )
-  assert.match(html, /Thinking level/)
-  // Reuses the composer segmented control (.composer-thinking-row primitive)
-  assert.match(html, /composer-thinking-row/)
-  assert.match(html, /segmented-control-btn/)
-  // The first entry is always the default (follow the global default); levels come from the model catalog
-  assert.match(html, /Default/)
-  assert.match(html, /medium/)
+  const trigger = /<button[^>]*id="profile-form-model"[^>]*>[\s\S]*?<\/button>/.exec(html)?.[0] ?? ''
+  assert.ok(trigger !== '', 'the shared ModelPickerControl trigger button renders (id=profile-form-model)')
+  assert.match(trigger, /claude-3-7-sonnet/)
+  // The private ThinkingLevelControl segmented row is gone (single shared implementation)
+  assert.doesNotMatch(html, /composer-thinking-row/)
+  assert.doesNotMatch(html, /segmented-control-btn/)
   assert.doesNotMatch(html, EMOJI_REGEX)
 
-  // Unbound model form: follows the global default and renders no level buttons
+  // Unbound model form: the trigger falls back to the follow-system-default copy
   const unbound = renderToStaticMarkup(
     e(
       HostStoreProviders,
@@ -523,7 +419,7 @@ test('ProfileDetailDrawer: thinking levels render as the shared segmented contro
       }),
     ),
   )
-  assert.match(unbound, /Follows the global default thinking level when no model is bound/)
+  assert.match(unbound, /Follow system default/)
   assert.doesNotMatch(unbound, /segmented-control-btn/)
 })
 
@@ -1029,7 +925,9 @@ test('ProfileDetailDrawer: close button uses .btn-icon-sm; source carries no leg
     ),
   )
   assert.match(html, /btn btn-ghost btn-icon-sm/, 'the close button must use the fixed-size .btn-icon-sm')
-  assert.match(html, /callout callout-warn/, 'the unsupported thinking level hint must use the unified .callout-warn')
+  // 思考档位不再有独立提示行：统一进共享 ModelPickerControl（不支持档位由选择器收敛，无 callout）
+  assert.doesNotMatch(html, /callout callout-warn/, 'the private thinking-level hint row is gone (unified picker)')
+  assert.match(html, /composer-model-button/, 'the shared ModelPickerControl trigger renders')
 })
 
 test('ProfileDetailDrawer: restrict-to-cwd switch renders with localized label and hint', { timeout: 60_000 }, () => {

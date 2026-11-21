@@ -32,7 +32,7 @@ import { HubUpgradedNotice } from './HubUpgradedNotice.js'
 import { useEffect, useId, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ConversationSummary } from '@helmx/protocol/browser'
-import { HelmxIcon, Checkbox, PluginSlot, SegmentedControl, Select } from '@helmx/plugin-client'
+import { HelmxIcon, Checkbox, PluginSlot, SearchBox, SegmentedControl, Select } from '@helmx/plugin-client'
 import { OVERVIEW_CARD_META_SLOT } from '@helmx/protocol/browser'
 import {
   useAuthConnection,
@@ -687,29 +687,20 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
           ]}
         />
         <div className="overview-filter-selects">
-          <div className="search-box overview-search-box">
-            <HelmxIcon name="search" size={13} />
-            <input
-              type="text"
-              value={queryFilter}
-              placeholder={t('shell.overview.searchPlaceholder')}
-              aria-label={t('shell.overview.searchLabel')}
-              onChange={(event) =>
-                applyFilterParam({ q: event.target.value.trim() === '' ? undefined : event.target.value })
-              }
-            />
-            {queryFilter !== '' && (
-              <button
-                type="button"
-                className="btn btn-ghost btn-icon-xs overview-search-clear"
-                title={t('shell.overview.clearSearch')}
-                aria-label={t('shell.overview.clearSearch')}
-                onClick={() => applyFilterParam({ q: undefined })}
-              >
-                <HelmxIcon name="x" size={12} />
-              </button>
-            )}
-          </div>
+          <SearchBox
+            className="search-box overview-search-box"
+            clearButtonClassName="btn btn-ghost btn-icon-xs overview-search-clear"
+            icon={<HelmxIcon name="search" size={13} />}
+            clearIcon={<HelmxIcon name="x" size={12} />}
+            value={queryFilter}
+            onChange={(next) =>
+              applyFilterParam({ q: next.trim() === '' ? undefined : next })
+            }
+            onCleared={() => applyFilterParam({ q: undefined })}
+            placeholder={t('shell.overview.searchPlaceholder')}
+            ariaLabel={t('shell.overview.searchLabel')}
+            clearLabel={t('shell.overview.clearSearch')}
+          />
           <Select
             className="overview-filter-select"
             aria-label={t('shell.overview.profileFilterLabel')}
@@ -769,12 +760,16 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
       </div>
 
       {batchMode && (
-        <div className="overview-batch-bar">
-          <span className="overview-batch-bar-count tabular-nums">
-            {t('shell.batch.selected', { count: effectiveSelectedIds.size })}
-          </span>
-          <span className="overview-batch-bar-spacer" />
-          <div className="overview-batch-bar-actions">
+        <div className="batch-bar overview-batch-bar">
+          <div className="batch-bar-header">
+            <span className="batch-bar-count tabular-nums">
+              {t('shell.batch.selected', { count: effectiveSelectedIds.size })}
+            </span>
+            <button type="button" className="btn btn-ghost btn-sm" disabled={deleting || archiving} onClick={exitBatchMode}>
+              {t('shell.batch.exit')}
+            </button>
+          </div>
+          <div className="batch-bar-actions">
             <button
               type="button"
               className="btn btn-ghost btn-sm"
@@ -806,9 +801,6 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
               onClick={() => setBatchDeleteIds(effectiveSelectedIds)}
             >
               {deleting ? t('shell.batch.deleting') : t('shell.batch.deleteCount', { count: effectiveSelectedIds.size })}
-            </button>
-            <button type="button" className="btn btn-ghost btn-sm" disabled={deleting || archiving} onClick={exitBatchMode}>
-              {t('shell.batch.exit')}
             </button>
           </div>
         </div>

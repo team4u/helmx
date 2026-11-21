@@ -464,6 +464,36 @@
   align-items: center;
 }
 
+/* 统一批量操作栏原语（两行结构：首行 = 已选计数 + 退出，次行 = 批量动作）。
+ * 中性底色（不携带 accent 染色）；sidebar / overview 消费方仅在各自分片
+ * 保留间距等布局微调，壳结构一律复用本词汇，不再各画一套。 */
+.batch-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+  font-size: 12px;
+}
+.batch-bar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.batch-bar-count {
+  font-weight: 500;
+  color: var(--fg-secondary);
+}
+.batch-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 /* 统一空状态原语 */
 .empty-state {
   display: flex;
@@ -654,10 +684,10 @@
 }
 
 /* ScreenHost 已渲染顶栏 .pane-topbar 时抑制内层重复大标题，保留副标题与右侧动作栏；
-   If an inner page header has only a title without subtitle/actions, the whole bar collapses to zero to avoid double headers. */
+   If an inner page header has only a title without subtitle/actions, the whole bar collapses to zero to avoid double headers.
+   仅匹配公共壳类（.screen-header 等），宿主样式绝不点名插件私有类名（host-styles-boundary 门禁锁定）。 */
 .screen-host-stage .screen-header .screen-title,
-.screen-host-stage .screen-header > .screen-section-title,
-.screen-host-stage .apps-center-topbar .apps-center-title {
+.screen-host-stage .screen-header > .screen-section-title {
   display: none;
 }
 
@@ -703,6 +733,30 @@
   font-size: 13.5px;
   font-weight: 600;
   color: var(--fg);
+}
+
+/* 全屏视图标准工具栏行（页头与正文之间的搜索/筛选/动作行）：
+   宿主与插件共用（@helmx/plugin-client ScreenToolbar）；主区居左、
+   .screen-toolbar-actions 右贴（margin-left:auto），窄屏自然换行不溢出。
+   工具栏内的 .search-box 获得标准伸展权重（替代各插件自立门户的 flex 规则）。 */
+.screen-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px 12px;
+  flex-wrap: wrap;
+}
+
+.screen-toolbar-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+
+.screen-toolbar .search-box {
+  flex: 1 1 200px;
+  min-width: 0;
 }
 
 /* ==========================================================================

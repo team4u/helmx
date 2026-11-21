@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } fr
 import { conversationsApi } from '../lib/api.js'
 import type { ConversationSummary } from '@helmx/protocol/browser'
 import { archiveBatchNotice, patchConversationsArchived } from './archive-ops.js'
-import { HelmxIcon, Checkbox } from '@helmx/plugin-client'
+import { HelmxIcon, Checkbox, SearchBox } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { Tooltip } from '../ui/Tooltip.js'
 import { ConversationRowActionsMenu } from '../ui/ConversationRowActionsMenu.js'
@@ -597,44 +597,34 @@ export function AgentStandingsGroup({
         </div>
       </div>
       {filterOpen && (
-        <div className="sidebar-search">
-          <HelmxIcon name="search" size={12} />
-          <input
-            ref={searchInputRef}
-            type="text"
-            className="sidebar-search-input"
-            value={search}
-            placeholder={t('shell.agents.filterPlaceholder')}
-            aria-label={t('shell.agents.filter')}
-            onChange={(e) => setSearch(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Escape') {
-                e.preventDefault()
-                if (search !== '') setSearch('')
-                else setSearchOpen(false)
-              }
-            }}
-          />
-          {search !== '' && (
-            <button
-              type="button"
-              className="btn btn-ghost btn-icon-xs sidebar-search-clear"
-              title={t('shell.agents.clearFilter')}
-              aria-label={t('shell.agents.clearFilter')}
-              onClick={() => {
-                setSearch('')
-                searchInputRef.current?.focus()
-              }}
-            >
-              <HelmxIcon name="x" size={11} />
-            </button>
-          )}
-        </div>
+        <SearchBox
+          className="sidebar-search"
+          inputClassName="sidebar-search-input"
+          clearButtonClassName="btn btn-ghost btn-icon-xs sidebar-search-clear"
+          icon={<HelmxIcon name="search" size={12} />}
+          clearIcon={<HelmxIcon name="x" size={11} />}
+          inputRef={searchInputRef}
+          value={search}
+          onChange={setSearch}
+          placeholder={t('shell.agents.filterPlaceholder')}
+          ariaLabel={t('shell.agents.filter')}
+          clearLabel={t('shell.agents.clearFilter')}
+          onCleared={() => {
+            searchInputRef.current?.focus()
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') {
+              e.preventDefault()
+              if (search !== '') setSearch('')
+              else setSearchOpen(false)
+            }
+          }}
+        />
       )}
       {batchMode && (
-        <div className="sidebar-batch-bar">
-          <div className="sidebar-batch-bar-header">
-            <span style={{ fontWeight: 500, color: 'var(--fg-secondary)' }}>
+        <div className="batch-bar sidebar-batch-bar">
+          <div className="batch-bar-header">
+            <span className="batch-bar-count tabular-nums">
               {t('shell.batch.selected', { count: selectedIds.size })}
             </span>
             <button
@@ -649,7 +639,7 @@ export function AgentStandingsGroup({
               {t('shell.batch.exit')}
             </button>
           </div>
-          <div className="sidebar-batch-bar-actions">
+          <div className="batch-bar-actions">
             <button
               type="button"
               className="btn btn-ghost btn-sm"

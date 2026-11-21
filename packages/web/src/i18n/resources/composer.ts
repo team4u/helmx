@@ -111,26 +111,10 @@ export const composerMessages = {
   'composer.sendControls.insertLabel': { en: 'Insert', 'zh-CN': '插话' },
 
   // ---- Model picker (shared by conversation & standby) ----
-  'composer.model.currentTitle': { en: 'Current model: {model}{thinking} ({shortcut})', 'zh-CN': '当前模型：{model}{thinking} ({shortcut})' },
-  'composer.model.followsDefaultTitle': { en: 'Follows profile/global default model{thinking} ({shortcut})', 'zh-CN': '跟随角色/全局默认模型{thinking} ({shortcut})' },
-  'composer.model.thinkingSuffix': { en: ' · thinking {level}', 'zh-CN': ' · 思考 {level}' },
-  'composer.model.lockedNote': {
-    en: 'Locked with the conversation (or sending); retry reuses this configuration',
-    'zh-CN': '已随会话锁定（或发送中），重试复用当前配置',
-  },
-  'composer.model.followProfileDefault': { en: 'Follow profile default', 'zh-CN': '跟随角色默认' },
-  'composer.model.followProfileDefaultModel': { en: 'Follow profile default ({model})', 'zh-CN': '跟随角色默认（{model}）' },
-  'composer.model.standbyResetTitle': {
-    en: 'No model specified on creation; the server resolves it from the profile/global default',
-    'zh-CN': '创建会话时不指定模型，由服务器按角色/全局默认解析',
-  },
-  'composer.model.clearOverride': {
-    en: 'Clear the explicit override and recompute the Profile/global inheritance chain',
-    'zh-CN': '清除显式覆盖，重算 Profile/全局继承链',
-  },
   'composer.model.buttonAria': { en: 'Model and thinking level: {model}{level}', 'zh-CN': '模型与思考档位：{model}{level}' },
   'composer.model.levelSuffix': { en: ' · {level}', 'zh-CN': ' · {level}' },
   'composer.model.defaultLabel': { en: 'Default model', 'zh-CN': '默认模型' },
+  'composer.model.catalogUnavailable': { en: 'Model catalog unavailable', 'zh-CN': '模型目录不可用' },
   'composer.model.searchAria': { en: 'Search models', 'zh-CN': '搜索模型' },
   'composer.model.searchPlaceholder': { en: 'Search models…', 'zh-CN': '搜索模型…' },
   'composer.model.refreshCatalog': { en: 'Refresh dynamic model catalog', 'zh-CN': '刷新动态模型目录' },
@@ -151,8 +135,24 @@ export const composerMessages = {
   },
   'composer.model.catalogPartialFailure': { en: 'Some provider catalog refreshes failed', 'zh-CN': '部分供应商目录刷新失败' },
   'composer.model.catalogRefreshed': { en: 'Model catalog refreshed', 'zh-CN': '已刷新模型目录' },
-  'composer.model.catalogCount': { en: '{count} models available', 'zh-CN': '共 {count} 个可用模型' },
   'composer.model.catalogRefreshFailed': { en: 'Failed to refresh model catalog', 'zh-CN': '刷新模型目录失败' },
+  'composer.model.currentTitle': { en: 'Current model: {model}{thinking} ({shortcut})', 'zh-CN': '当前模型：{model}{thinking} ({shortcut})' },
+  'composer.model.followsDefaultTitle': { en: 'Follows profile/global default model{thinking} ({shortcut})', 'zh-CN': '跟随角色/全局默认模型{thinking} ({shortcut})' },
+  'composer.model.thinkingSuffix': { en: ' · thinking {level}', 'zh-CN': ' · 思考 {level}' },
+  'composer.model.lockedNote': {
+    en: 'Locked with the conversation (or sending); retry reuses this configuration',
+    'zh-CN': '已随会话锁定（或发送中），重试复用当前配置',
+  },
+  'composer.model.followProfileDefault': { en: 'Follow profile default', 'zh-CN': '跟随角色默认' },
+  'composer.model.followProfileDefaultModel': { en: 'Follow profile default ({model})', 'zh-CN': '跟随角色默认（{model}）' },
+  'composer.model.standbyResetTitle': {
+    en: 'No model specified on creation; the server resolves it from the profile/global default',
+    'zh-CN': '创建会话时不指定模型，由服务器按角色/全局默认解析',
+  },
+  'composer.model.clearOverride': {
+    en: 'Clear the explicit override and recompute the Profile/global inheritance chain',
+    'zh-CN': '清除显式覆盖，重算 Profile/全局继承链',
+  },
   'composer.model.switchFailed': { en: 'Failed to switch model', 'zh-CN': '切换模型失败' },
   'composer.model.thinkingSwitchFailed': { en: 'Failed to switch thinking level', 'zh-CN': '切换思考等级失败' },
   'composer.model.restoreFailed': { en: 'Failed to restore default configuration', 'zh-CN': '恢复默认配置失败' },

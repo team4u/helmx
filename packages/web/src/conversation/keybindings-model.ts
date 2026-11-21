@@ -1,11 +1,10 @@
 /**
- * Pure keyboard-flow logic and panel shortcut event bridging for the Composer
- * / standby pane (single-key muscle memory, zero multi-key aliases).
+ * Pure keyboard-flow logic for the Composer / standby pane (single-key muscle
+ * memory, zero multi-key aliases). The Ctrl+L model-picker toggle bridge
+ * (helmx:shortcut panel events) lives in @helmx/plugin-client's shared
+ * model-picker module together with ModelPickerControl.
  *
  * Strictly one function per shortcut:
- * - Ctrl+L: dispatched globally through the host HelmxStoreProvider as a
- *   helmx:shortcut (toggle-model-picker) event; matches data-helmx-panel and
- *   toggles the corresponding panel's ModelPicker;
  * - ↑: with an empty draft on the first line, prefer withdrawing the newest
  *   human queued input of this conversation; only fall back to history editing
  *   when the queue is empty (no Alt+Up alias);
@@ -15,22 +14,10 @@
  *   from aborting by accident) -> cancel history-edit mode -> let the outer
  *   double-Esc abort.
  *
- * This module exports only pure constants, pure functions and one host-event
- * hook (no components), honoring the .tsx Fast Refresh rule.
+ * This module exports only pure constants and pure functions (no components),
+ * honoring the .tsx Fast Refresh rule.
  */
-import { useEffect, useRef } from 'react'
 import type { QueuedConversationInput } from '@helmx/protocol/browser'
-
-export type HelmxPanel = 'primary' | 'split'
-
-export const HELMX_SHORTCUT_EVENT = 'helmx:shortcut' as const
-
-export type HelmxShortcutAction = 'toggle-model-picker' | 'toggle-process-groups'
-
-export interface HelmxShortcutEventDetail {
-  action: HelmxShortcutAction | string
-  panel: HelmxPanel
-}
 
 /** Display labels for the one-shortcut-per-function map (for desktop .kbd-hint
  * and tooltips; multi-key aliases are forbidden). */
@@ -110,83 +97,4 @@ export function latestHumanQueuedInput(
     }
   }
   return latest
-}
-
-/** Resolve the effective thinking level against the model's capability list
- * (falling back to off or the first supported level by default). */
-export function resolveEffectiveThinkingLevel(levels: ReadonlyArray<string>, activeLevel: string): string {
-  const fallback = levels.includes('off') ? 'off' : (levels[0] ?? '')
-  return levels.includes(activeLevel) ? activeLevel : fallback
-}
-
-/** When the ModelPicker opens with no search filter, leave activeIndex at -1
- * so no row carries a forced hover/focus highlight by default; once the user
- * types a search query, pre-highlight the first match for instant Enter. */
-export function initialModelActiveIndex(
-  models: ReadonlyArray<{ id: string }>,
-  query = '',
-): number {
-  if (models.length === 0) return -1
-  return query.trim() !== '' ? 0 : -1
-}
-
-/** Step the ModelPicker highlight index cyclically with up/down arrows. */
-export function stepActiveIndex(current: number, length: number, delta: 1 | -1): number {
-  if (length <= 0) return -1
-  if (current < 0 || current >= length) return delta > 0 ? 0 : length - 1
-  return (current + delta + length) % length
-}
-
-/** Read the owning panel from a DOM ancestor `[data-helmx-panel]`, falling back
- * to `fallback` (default `'primary'`). */
-export function resolveElementPanel(
-  el: Element | null | undefined,
-  fallback: HelmxPanel = 'primary',
-): HelmxPanel {
-  const attr = el?.closest?.('[data-helmx-panel]')?.getAttribute('data-helmx-panel')
-  if (attr === 'primary' || attr === 'split') return attr
-  return fallback
-}
-
-/** Whether the current component should answer a `helmx:shortcut` event for the
- * target panel (a child-conversation drawer must not mis-answer main-panel
- * shortcuts). */
-export function isShortcutPanelMatch(
-  el: Element | null | undefined,
-  targetPanel: unknown,
-  fallback: HelmxPanel = 'primary',
-): boolean {
-  if (targetPanel !== 'primary' && targetPanel !== 'split') return false
-  if (el?.closest?.('.conversation-drawer') && !el?.closest?.('[data-helmx-panel]')) {
-    return false
-  }
-  return resolveElementPanel(el, fallback) === targetPanel
-}
-
-/**
- * Listen for window `helmx:shortcut` custom events; the callback fires only
- * when `detail.action` matches and the current DOM's `[data-helmx-panel]` panel
- * matches the event (split views never mis-trigger each other, and nothing is
- * intercepted twice).
- */
-export function usePanelShortcut(
-  rootRef: { current: Element | null },
-  action: HelmxShortcutAction | string,
-  handler: () => void,
-  fallback: HelmxPanel = 'primary',
-): void {
-  const handlerRef = useRef(handler)
-  handlerRef.current = handler
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    const onShortcut = (event: Event): void => {
-      const detail = (event as CustomEvent<Partial<HelmxShortcutEventDetail> | undefined>).detail
-      if (detail === undefined || detail === null || detail.action !== action) return
-      if (!isShortcutPanelMatch(rootRef.current, detail.panel, fallback)) return
-      handlerRef.current()
-    }
-    window.addEventListener(HELMX_SHORTCUT_EVENT, onShortcut)
-    return () => window.removeEventListener(HELMX_SHORTCUT_EVENT, onShortcut)
-  }, [rootRef, action, fallback])
 }

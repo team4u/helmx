@@ -9,7 +9,7 @@ import {
 } from './profile-center-model.js'
 import { ProfileCard } from './ProfileCard.js'
 import { ProfileDetailDrawer } from './ProfileDetailDrawer.js'
-import { HelmxIcon } from '@helmx/plugin-client'
+import { HelmxIcon, SearchBox } from '@helmx/plugin-client'
 import { assetsApi } from '../lib/api.js'
 import {
   useAuthenticated,
@@ -199,27 +199,15 @@ export function ProfileCenter({
 
       {/* Toolbar: search and category tabs */}
       <div className="primary-center-toolbar">
-        <div className="primary-search-box">
-          <HelmxIcon name="search" size={14} />
-          <input
-            type="text"
-            placeholder={t('profiles.center.searchPlaceholder')}
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            aria-label={t('profiles.center.searchLabel')}
-          />
-          {query && (
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm primary-search-clear"
-              title={t('profiles.center.clearSearch')}
-              aria-label={t('profiles.center.clearSearch')}
-              onClick={() => setQuery('')}
-            >
-              <HelmxIcon name="x" size={12} />
-            </button>
-          )}
-        </div>
+        <SearchBox
+          className="primary-search-box"
+          clearButtonClassName="btn btn-ghost btn-sm primary-search-clear"
+          value={query}
+          onChange={setQuery}
+          placeholder={t('profiles.center.searchPlaceholder')}
+          ariaLabel={t('profiles.center.searchLabel')}
+          clearLabel={t('profiles.center.clearSearch')}
+        />
 
         <div
           className="primary-category-pills"

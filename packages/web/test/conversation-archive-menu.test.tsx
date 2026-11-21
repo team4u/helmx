@@ -352,7 +352,7 @@ test('归档分组全选后批量删除：确认后逐会话 DELETE，列表随 
   await act(async () => { batchToggle!.click() })
   await settle()
 
-  const barButtons = () => [...document.querySelectorAll<HTMLButtonElement>('.sidebar-batch-bar-actions .btn')]
+  const barButtons = () => [...document.querySelectorAll<HTMLButtonElement>('.sidebar-batch-bar .batch-bar-actions .btn')]
   const deleteBtn = barButtons().find((b) => b.textContent?.startsWith('Delete'))
   assert.ok(deleteBtn, '批量栏应渲染删除按钮')
   assert.equal(deleteBtn!.disabled, true, '未选择时删除按钮应禁用')

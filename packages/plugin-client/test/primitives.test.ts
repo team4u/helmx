@@ -19,7 +19,7 @@ import { Fragment } from 'react'
 import { renderToString } from 'react-dom/server'
 import { PLUGIN_CLIENT_SHARED_EXPORTS } from '@helmx/protocol'
 import * as HelmxPluginClient from '../src/index.js'
-import { Screen, ScreenSection, DataTable, KvGrid } from '../src/primitives.js'
+import { Screen, ScreenSection, ScreenToolbar, DataTable, KvGrid } from '../src/primitives.js'
 import { StatusLight } from '../src/ui/StatusLight.js'
 import { normalizeStatusLightTone, statusLightDotClass } from '../src/ui/status-light-model.js'
 
@@ -27,7 +27,7 @@ const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React
 
 test('layout primitives are in the shared SDK and the protocol manifest, and every manifest symbol is really exported (bidirectional locking)', { timeout: 60_000 }, () => {
-  for (const name of ['Screen', 'ScreenSection', 'DataTable', 'KvGrid']) {
+  for (const name of ['Screen', 'ScreenSection', 'ScreenToolbar', 'DataTable', 'KvGrid']) {
     assert.ok(
       (PLUGIN_CLIENT_SHARED_EXPORTS as readonly string[]).includes(name),
       `PLUGIN_CLIENT_SHARED_EXPORTS must include ${name}`,
@@ -120,6 +120,25 @@ test('ScreenSection: an optional title renders screen-section / screen-section-t
   const noTitle = renderToString(e(ScreenSection, null, e('div', null, 'x')))
   assert.doesNotMatch(noTitle, /screen-section-title/)
 })
+
+test('ScreenToolbar: main area and right-aligned actions cluster render on one .screen-toolbar row (SSR)', { timeout: 60_000 }, () => {
+  const html = renderToString(
+    e(
+      ScreenToolbar,
+      { label: 'Pane filters', className: 'demo-filters', actions: e(Button, null, 'Reload') },
+      e('div', { className: 'search-box' }, 'search'),
+    ),
+  )
+  assert.match(html, /screen-toolbar demo-filters/, 'host public toolbar class plus the scoping extension class')
+  assert.match(html, /screen-toolbar-actions/, 'the actions cluster renders inside .screen-toolbar-actions')
+  assert.match(html, /aria-label="Pane filters"/, 'label becomes the aria-label')
+  const noActions = renderToString(e(ScreenToolbar, null, e('div', { className: 'search-box' }, 'search')))
+  assert.doesNotMatch(noActions, /screen-toolbar-actions/, 'omitted actions render no empty cluster')
+})
+
+function Button(props: { children?: React.ReactNode }): React.ReactNode {
+  return e('button', { type: 'button' }, props.children)
+}
 
 test('DataTable: the loading state renders the unified loading row (role=status) and not children', { timeout: 60_000 }, () => {
   const html = renderToString(

@@ -126,6 +126,24 @@ test('SearchBox DOM: typing emits unwrapped values and the clear button resets t
 // EmptyState
 // ---------------------------------------------------------------------------
 
+test('SearchBox SSR: clearable=false hides the clear button; style lands on the container', { timeout: 60_000 }, () => {
+  const html = renderToString(
+    e(SearchBox, {
+      value: 'query',
+      onChange: () => {},
+      clearable: false,
+      style: { flex: '1 1 0%' },
+    }),
+  )
+  assert.ok(!html.includes('<button'), 'clearable=false renders no clear button even for a non-empty value')
+  assert.ok(/style="[^"]*flex[^"]*"/.test(html), 'container style passthrough lands')
+
+  const cleared = renderToString(
+    e(SearchBox, { value: 'x', onChange: () => {}, onCleared: () => {} }),
+  )
+  assert.ok(cleared.includes('<button'), 'default clearable keeps the single clear button')
+})
+
 test('EmptyState SSR: host vocabulary with optional icon/title/hint and compact density', { timeout: 60_000 }, () => {
   const html = renderToString(
     e(

@@ -13,8 +13,6 @@ export const profilesMessages = {
 
   // Model binding select options (profile editor / detail drawer).
   'profiles.modelOption.followSystemDefault': { en: 'Follow system default', 'zh-CN': '跟随系统默认' },
-  'profiles.modelOption.notConfigured': { en: '{model} (not configured)', 'zh-CN': '{model}（未配置）' },
-  'profiles.modelOption.disabled': { en: '{model} (disabled)', 'zh-CN': '{model}（已禁用）' },
 
   // Starter draft validation errors (form display copy).
   'profiles.starter.error.titleEmpty': {
@@ -142,18 +140,9 @@ export const profilesMessages = {
     'zh-CN': '简要描述该角色的职责、背景与能力专长...',
   },
   'profiles.drawer.field.defaultModel': { en: 'Default model', 'zh-CN': '默认模型' },
-  'profiles.drawer.field.thinkingLevel': { en: 'Thinking level', 'zh-CN': '思考档位' },
-  'profiles.drawer.thinking.unbound': {
-    en: 'Follows the global default thinking level when no model is bound.',
-    'zh-CN': '未绑定模型时跟随全局缺省思考档位。',
-  },
-  'profiles.drawer.thinking.unsupportedModel': {
-    en: 'The selected model does not support thinking levels.',
-    'zh-CN': '所选模型不支持思考档位。',
-  },
-  'profiles.drawer.thinking.unsupportedLevel': {
-    en: 'Current level {level} is not supported by the selected model; adjust before saving.',
-    'zh-CN': '当前档位 {level} 不在所选模型支持列表，保存前请调整。',
+  'profiles.drawer.modelHint': {
+    en: 'Unset follows the global default; a level chip commits model and thinking level together',
+    'zh-CN': '不设置即跟随全局默认；点击档位将同时提交模型与思考档位',
   },
   'profiles.drawer.field.defaultNode': { en: 'Default node', 'zh-CN': '默认节点' },
   'profiles.drawer.field.cwd': { en: 'Working directory', 'zh-CN': '工作目录' },

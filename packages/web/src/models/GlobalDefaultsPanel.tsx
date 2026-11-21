@@ -1,9 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react'
+import { HelmxIcon, ModelPickerControl } from '@helmx/plugin-client'
 import { assetsApi } from '../lib/api.js'
-import { HelmxIcon } from '@helmx/plugin-client'
 import { useOptionalStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
-import { ModelPickerControl } from '../conversation/ModelPicker.js'
+import { useModelPickerControlAdapter } from '../conversation/model-picker-adapter.js'
 import {
   modelThinkingLevelsFromRows,
   reviewModelThinkingRows,
@@ -44,6 +44,7 @@ export function GlobalDefaultsPanel({
 }: GlobalDefaultsPanelProps): React.JSX.Element {
   const actions = useOptionalStoreActions()
   const { t } = useWebLocale()
+  const { copy, onNotice } = useModelPickerControlAdapter()
 
   const [formModel, setFormModel] = useState(() => defaultModelInfo?.defaultModel ?? '')
   const [formLevel, setFormLevel] = useState(() => defaultModelInfo?.defaultThinkingLevel ?? '')
@@ -168,6 +169,8 @@ export function GlobalDefaultsPanel({
               popoverSide="bottom"
               enableShortcut={false}
               disabled={saving}
+              copy={copy}
+              onNotice={onNotice}
               onApply={(id, lvl) => {
                 setFormModel(id)
                 setFormLevel(lvl ?? '')
@@ -196,6 +199,8 @@ export function GlobalDefaultsPanel({
               popoverSide="bottom"
               enableShortcut={false}
               disabled={saving}
+              copy={copy}
+              onNotice={onNotice}
               onApply={(id, lvl) => {
                 setFormCompactionModel(id)
                 setFormCompactionLevel(lvl ?? '')
@@ -240,6 +245,8 @@ export function GlobalDefaultsPanel({
                 popoverSide="bottom"
                 enableShortcut={false}
                 disabled={saving}
+                copy={copy}
+                onNotice={onNotice}
                 onApply={(id, lvl) =>
                   setPerModelRows((rows) =>
                     rows.map((existing, i) => (i === index ? { model: id, level: lvl ?? '' } : existing)),

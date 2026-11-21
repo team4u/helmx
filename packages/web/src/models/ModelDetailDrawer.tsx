@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { assetsApi, type ModelDescriptor } from '../lib/api.js'
-import { HelmxIcon, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle } from '@helmx/plugin-client'
+import { DetailDrawer, HelmxIcon } from '@helmx/plugin-client'
 import { useOptionalModels, useOptionalStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { ConfirmDialog } from '../ui/AlertDialog.js'
@@ -319,56 +319,57 @@ export function ModelDetailDrawer({
 
   return (
     <>
-      <Dialog
+      <DetailDrawer
         open={open}
         inline={inline}
-        onOpenChange={(isOpen) => {
-          if (!isOpen) onClose()
-        }}
-      >
-        <DialogPortal inline={inline}>
-          <DialogOverlay className="modal-backdrop primary-drawer-backdrop" />
-          <DialogContent
-            className="primary-drawer-content"
-            role="dialog"
-            aria-label={
-              provider
-                ? t('models.drawer.ariaSelected', { name: provider.name })
-                : t('models.drawer.ariaDefault')
-            }
-          >
-            {/* Header metadata */}
-            <div className="primary-drawer-header">
-              <div className="primary-drawer-header-left">
-                <div className="primary-drawer-title-col">
-                  <div className="primary-drawer-title-row">
-                    <DialogTitle className="primary-drawer-title break-word">
-                      {provider?.name || t('models.drawer.titleFallback')}
-                    </DialogTitle>
-                    {provider?.configured ? (
-                      <span className="badge badge-ok">{t('models.configured')}</span>
-                    ) : (
-                      <span className="badge badge-neutral">{t('models.notConfigured')}</span>
-                    )}
-                    {provider?.dynamic && <span className="badge badge-neutral">{t('models.dynamicSyncBadge')}</span>}
-                  </div>
-                  <div className="text-subtle mono break-word">{provider?.id}</div>
+        onClose={onClose}
+        title={provider?.name || t('models.drawer.titleFallback')}
+        titleClassName="break-word"
+        titleExtra={
+          <>
+            {provider?.configured ? (
+              <span className="badge badge-ok">{t('models.configured')}</span>
+            ) : (
+              <span className="badge badge-neutral">{t('models.notConfigured')}</span>
+            )}
+            {provider?.dynamic && <span className="badge badge-neutral">{t('models.dynamicSyncBadge')}</span>}
+          </>
+        }
+        meta={provider?.id}
+        metaClassName="text-subtle break-word"
+        aria-label={
+          provider
+            ? t('models.drawer.ariaSelected', { name: provider.name })
+            : t('models.drawer.ariaDefault')
+        }
+        closeLabel={t('common.close')}
+        footer={
+          <div className="flex-row-between">
+            <div className="flex-1">
+              {saveSuccess && (
+                <span className="text-subtle" role="status">
+                  {t('models.saveSuccess')}
+                </span>
+              )}
+              {saveError && (
+                <div className="callout callout-error" role="alert">
+                  <HelmxIcon name="alert-circle" size={13} />
+                  <span className="callout-text">{saveError}</span>
                 </div>
-              </div>
-              <DialogClose asChild>
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-icon-sm"
-                  aria-label={t('common.close')}
-                  title={t('common.close')}
-                >
-                  <HelmxIcon name="x" size={14} />
-                </button>
-              </DialogClose>
+              )}
             </div>
-
-            {/* Drawer body */}
-            <div className="primary-drawer-body">
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={handleSaveProvider}
+              disabled={saving || !provider}
+            >
+              <HelmxIcon name="check" size={14} />
+              <span>{saving ? t('models.saving') : t('models.saveConfig')}</span>
+            </button>
+          </div>
+        }
+      >
               {!provider ? (
                 <div className="primary-center-empty">
                   <div className="primary-center-empty-text">{t('models.drawer.noSelection')}</div>
@@ -635,36 +636,7 @@ export function ModelDetailDrawer({
                   </div>
                 </>
               )}
-            </div>
-
-            {/* Drawer footer actions */}
-            <div className="primary-drawer-footer flex-row-between">
-              <div className="flex-1">
-                {saveSuccess && (
-                  <span className="text-subtle" role="status">
-                    {t('models.saveSuccess')}
-                  </span>
-                )}
-                {saveError && (
-                  <div className="callout callout-error" role="alert">
-                    <HelmxIcon name="alert-circle" size={13} />
-                    <span className="callout-text">{saveError}</span>
-                  </div>
-                )}
-              </div>
-              <button
-                type="button"
-                className="btn btn-primary"
-                onClick={handleSaveProvider}
-                disabled={saving || !provider}
-              >
-                <HelmxIcon name="check" size={14} />
-                <span>{saving ? t('models.saving') : t('models.saveConfig')}</span>
-              </button>
-            </div>
-          </DialogContent>
-        </DialogPortal>
-      </Dialog>
+      </DetailDrawer>
 
       {/* Delete credentials confirmation dialog */}
       <ConfirmDialog

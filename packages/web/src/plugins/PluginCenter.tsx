@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react'
 import type { PluginSummary } from '@helmx/protocol/browser'
 import { resolveLocalizedText } from '@helmx/protocol/browser'
 import { ApiClientError, pluginsApi } from '../lib/api.js'
-import { HelmxIcon } from '@helmx/plugin-client'
+import { HelmxIcon, SearchBox } from '@helmx/plugin-client'
 import { useLocationTargets, usePlugins, useStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { PluginCard } from './PluginCard.js'
@@ -217,27 +217,15 @@ export function PluginCenter({
 
       {/* Search toolbar */}
       <div className="plugin-center-toolbar">
-        <div className="plugin-search-box">
-          <HelmxIcon name="search" size={14} />
-          <input
-            type="text"
-            placeholder={t('plugins.center.searchPlaceholder')}
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            aria-label={t('plugins.center.searchAria')}
-          />
-          {query && (
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm plugin-search-clear"
-              title={t('plugins.center.clearSearch')}
-              aria-label={t('plugins.center.clearSearch')}
-              onClick={() => setQuery('')}
-            >
-              <HelmxIcon name="x" size={12} />
-            </button>
-          )}
-        </div>
+        <SearchBox
+          className="plugin-search-box"
+          clearButtonClassName="btn btn-ghost btn-sm plugin-search-clear"
+          value={query}
+          onChange={setQuery}
+          placeholder={t('plugins.center.searchPlaceholder')}
+          ariaLabel={t('plugins.center.searchAria')}
+          clearLabel={t('plugins.center.clearSearch')}
+        />
 
         <div
           className="primary-category-pills"

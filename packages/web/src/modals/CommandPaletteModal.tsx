@@ -3,7 +3,7 @@ import type { ConversationSummary, SearchHit } from '@helmx/protocol/browser'
 import { searchApi } from '../lib/api.js'
 import { commandActionPluginId, commandHint, commandsForConversation } from '../lib/commands-model.js'
 import { resolveLocalizedText } from '@helmx/protocol/browser'
-import { HelmxIcon, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle } from '@helmx/plugin-client'
+import { HelmxIcon, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle, SearchBox } from '@helmx/plugin-client'
 import {
   useAuthConnection,
   useConversations,
@@ -568,16 +568,17 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
           >
             <DialogTitle style={{ display: 'none' }}>{t('modals.palette.dialogTitle')}</DialogTitle>
             <div className="modal-header" style={{ padding: '8px 12px', display: 'flex', alignItems: 'center', gap: 8 }}>
-              <div className="search-box" style={{ flex: 1, minWidth: 0 }}>
-                <HelmxIcon name="search" size={15} />
-                <input
-                  ref={inputRef}
-                  aria-label={t('modals.palette.searchAria')}
-                  placeholder={t('modals.palette.searchPlaceholder')}
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                />
-              </div>
+              <SearchBox
+                className="search-box"
+                style={{ flex: 1, minWidth: 0 }}
+                icon={<HelmxIcon name="search" size={15} />}
+                clearable={false}
+                inputRef={inputRef}
+                ariaLabel={t('modals.palette.searchAria')}
+                placeholder={t('modals.palette.searchPlaceholder')}
+                value={query}
+                onChange={setQuery}
+              />
               {searching && (
                 <span className="badge badge-neutral" style={{ height: 22, padding: '0 6px', flexShrink: 0 }}>
                   <HelmxIcon name="loader" size={12} className="spin-slow" />

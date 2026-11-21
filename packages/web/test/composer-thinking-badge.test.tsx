@@ -23,7 +23,7 @@ const { makeTestStore } = await import('./helpers/store.js')
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
 const { createRoot } = await import('react-dom/client')
 const { Composer } = await import('../src/conversation/Composer.js')
-const { formatModelRowDisplay, formatModelShortName } = await import('../src/conversation/model-picker-model.js')
+const { formatModelRowDisplay, formatModelShortName } = await import('@helmx/plugin-client')
 
 const e = React.createElement
 

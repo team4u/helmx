@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { copyToClipboard, CopyButton, HelmxIcon, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle, PluginSlot } from '@helmx/plugin-client'
+import { copyToClipboard, CopyButton, DetailDrawer, HelmxIcon, PluginSlot } from '@helmx/plugin-client'
 import { nodesApi } from '../lib/api.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import {
@@ -171,68 +171,43 @@ export function NodeDetailDrawer({
       : ['bash', 'read', 'write', 'edit']
 
   return (
-    <Dialog
+    <DetailDrawer
       open={open}
       inline={inline}
-      onOpenChange={(isOpen) => {
-        if (!isOpen) onClose()
-      }}
+      onClose={onClose}
+      title={displayName}
+      titleClassName="break-word"
+      titleExtra={
+        <>
+          {!isNew && (
+            <span
+              className={`badge ${isOnline ? 'badge-ok' : 'badge-neutral'}`}
+            >
+              <HelmxIcon name={isOnline ? 'check' : 'circle'} size={10} />
+              <span>{isOnline ? t('common.online') : t('common.offline')}</span>
+            </span>
+          )}
+          {isLocal && (
+            <span className="badge badge-neutral">{t('nodes.local')}</span>
+          )}
+          {node?.version && (
+            <span className="badge badge-neutral mono">
+              {node.version.startsWith('v') ? node.version : `v${node.version}`}
+            </span>
+          )}
+        </>
+      }
+      meta={!isNew && node?.id ? node.id : undefined}
+      metaClassName="text-subtle break-word"
+      icon={<HelmxIcon name={iconName} size={22} />}
+      aria-label={displayName}
+      closeLabel={t('common.close')}
+      footer={
+        <button type="button" className="btn btn-sm" onClick={onClose}>
+          {t('common.close')}
+        </button>
+      }
     >
-      <DialogPortal inline={inline}>
-        <DialogOverlay className="modal-backdrop primary-drawer-backdrop" />
-        <DialogContent
-          className="primary-drawer-content"
-          role="dialog"
-          aria-label={displayName}
-        >
-          {/* Header metadata */}
-          <div className="primary-drawer-header">
-            <div className="primary-drawer-header-left">
-              <div className="primary-drawer-icon-wrap">
-                <HelmxIcon name={iconName} size={22} />
-              </div>
-              <div className="primary-drawer-title-col">
-                <div className="primary-drawer-title-row">
-                  <DialogTitle className="primary-drawer-title break-word">
-                    {displayName}
-                  </DialogTitle>
-                  {!isNew && (
-                    <span
-                      className={`badge ${isOnline ? 'badge-ok' : 'badge-neutral'}`}
-                    >
-                      <HelmxIcon name={isOnline ? 'check' : 'circle'} size={10} />
-                      <span>{isOnline ? t('common.online') : t('common.offline')}</span>
-                    </span>
-                  )}
-                  {isLocal && (
-                    <span className="badge badge-neutral">{t('nodes.local')}</span>
-                  )}
-                  {node?.version && (
-                    <span className="badge badge-neutral mono">
-                      {node.version.startsWith('v') ? node.version : `v${node.version}`}
-                    </span>
-                  )}
-                </div>
-                {!isNew && node?.id && (
-                  <div className="mono text-subtle break-word">{node.id}</div>
-                )}
-              </div>
-            </div>
-            <DialogClose asChild>
-              <button
-                type="button"
-                className="btn btn-ghost btn-icon-sm"
-                aria-label={t('common.close')}
-                title={t('common.close')}
-                onClick={onClose}
-              >
-                <HelmxIcon name="x" size={14} />
-              </button>
-            </DialogClose>
-          </div>
-
-          {/* Drawer body */}
-          <div className="primary-drawer-body">
             {!node && !isNew ? (
               <div className="primary-center-empty">{t('nodes.drawer.noSelection')}</div>
             ) : (
@@ -500,16 +475,7 @@ export function NodeDetailDrawer({
                 )}
               </>
             )}
-          </div>
 
-          {/* Drawer footer */}
-          <div className="primary-drawer-footer">
-            <button type="button" className="btn btn-sm" onClick={onClose}>
-              {t('common.close')}
-            </button>
-          </div>
-        </DialogContent>
-      </DialogPortal>
-    </Dialog>
+    </DetailDrawer>
   )
 }

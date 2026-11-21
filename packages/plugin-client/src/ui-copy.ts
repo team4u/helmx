@@ -12,7 +12,7 @@ export const uiCopy = {
   loading: { en: 'Loading…', 'zh-CN': '加载中…' },
   noData: { en: 'No data', 'zh-CN': '暂无数据' },
   close: { en: 'Close', 'zh-CN': '关闭' },
-  confirm: { en: 'Confirm', 'zh-CN': '确认' },
+  confirm: { en: 'Confirm', 'zh-CN': '确定' },
   cancel: { en: 'Cancel', 'zh-CN': '取消' },
   thinkingLevel: { en: 'Thinking level', 'zh-CN': '思考档位' },
   select: { en: 'Select…', 'zh-CN': '请选择…' },

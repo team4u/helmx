@@ -31,6 +31,8 @@ export type { HostModelEntry, HostModelsSlice, ScreenLocationPane, ScreenLocatio
 
 // ---- Plugin context (usePluginContext) and factory ----
 export { PluginClientContext, createPluginClientContext, usePluginContext } from './plugin-context.js'
+export { ScreenParamsContext, useScreenParams } from './screen-params.js'
+export type { ScreenParamsScope } from '@helmx/protocol/browser'
 
 // ---- i18n: locale & translation (plugin-consumable hooks + locale essentials) ----
 export { usePluginLocale, usePluginTranslator } from './i18n.js'
@@ -51,6 +53,24 @@ export type { ConversationHookOptions, ConversationHookResult } from './conversa
 export { useConversation, useConversationBackground, useConversations, useHostModels, usePluginConfig, usePlugins, useScreenLocation, useSharedNowMs } from './conversation-hooks.js'
 export { ToolActivityContext, useToolActivity } from './tool-activity.js'
 export type { ToolActivityRegistry } from './tool-activity.js'
+
+// ---- Model picker (shared host/plugin model + thinking-level control) ----
+export { ModelPickerControl } from './ui/ModelPicker.js'
+export type { ModelPickerControlProps } from './ui/ModelPicker.js'
+export {
+  DEFAULT_MODEL_PICKER_COPY,
+  formatModelRowDisplay,
+  formatModelShortName,
+  formatModelPickerCopy,
+  initialModelActiveIndex,
+  resolveEffectiveThinkingLevel,
+  stepActiveIndex,
+  HELMX_SHORTCUT_EVENT,
+  resolveElementPanel,
+  isShortcutPanelMatch,
+  usePanelShortcut,
+} from './ui/model-picker-model.js'
+export type { ModelRowDisplay, HelmxPanel, HelmxShortcutEventDetail, ModelPickerControlCopy } from './ui/model-picker-model.js'
 
 // ---- Accessibility base components (Radix wrappers) ----
 export { Switch } from './ui/Switch.js'
@@ -95,8 +115,8 @@ export type {
 export { ConfirmDialog } from './ui/AlertDialog.js'
 
 // ---- Lightweight layout primitives and hints ----
-export { Screen, ScreenSection, DataTable, KvGrid } from './primitives.js'
-export type { ScreenProps, ScreenSectionProps, DataTableProps, KvGridProps } from './primitives.js'
+export { Screen, ScreenSection, ScreenToolbar, DataTable, KvGrid } from './primitives.js'
+export type { ScreenProps, ScreenSectionProps, ScreenToolbarProps, DataTableProps, KvGridProps } from './primitives.js'
 export { Callout } from './callout.js'
 export type { CalloutProps } from './callout.js'
 export { DetailDrawer } from './ui/DetailDrawer.js'

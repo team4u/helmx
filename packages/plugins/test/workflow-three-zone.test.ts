@@ -1033,8 +1033,8 @@ describe('Workflow 三区零重复与无损呈现', () => {
       }),
     )
     try {
-      const searchSvg = libMount.container.querySelector('.workflow-lib-search svg')
-      assert.ok(searchSvg !== null, '工作流库搜索栏应渲染 Lucide 图标')
+      const searchSvg = libMount.container.querySelector('.screen-toolbar .search-box svg')
+      assert.ok(searchSvg !== null, '工作流库搜索栏应渲染 Lucide 图标（共享 ScreenToolbar + .search-box 公共原语）')
       assert.equal(searchSvg.classList.contains('lucide-circle'), false, 'search 图标不得回退到 circle 占位')
     } finally {
       libMount.unmount()

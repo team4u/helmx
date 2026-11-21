@@ -295,9 +295,9 @@ export function ArchivedConversationsGroup({
         )}
       </div>
       {open && batchMode && (
-        <div className="sidebar-batch-bar">
-          <div className="sidebar-batch-bar-header">
-            <span style={{ fontWeight: 500, color: 'var(--fg-secondary)' }}>
+        <div className="batch-bar sidebar-batch-bar">
+          <div className="batch-bar-header">
+            <span className="batch-bar-count tabular-nums">
               {t('shell.batch.selected', { count: selectedIds.size })}
             </span>
             <button
@@ -312,7 +312,7 @@ export function ArchivedConversationsGroup({
               {t('shell.batch.exit')}
             </button>
           </div>
-          <div className="sidebar-batch-bar-actions">
+          <div className="batch-bar-actions">
             <button
               type="button"
               className="btn btn-ghost btn-sm"

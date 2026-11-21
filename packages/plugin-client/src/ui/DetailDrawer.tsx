@@ -41,6 +41,12 @@ export interface DetailDrawerProps {
   icon?: ReactNode
   /** Secondary mono line below the title (entity id / file path). */
   meta?: ReactNode
+  /** Extra consumer-styled line(s) below the meta line inside the title column. */
+  belowTitle?: ReactNode
+  /** Extra classes appended to the title (.primary-drawer-title), e.g. break-word. */
+  titleClassName?: string
+  /** Extra classes appended to the meta line (.primary-drawer-id mono), e.g. text-subtle break-word. */
+  metaClassName?: string
   /** Explicit accessible name; omit to fall back to the DialogTitle association. */
   'aria-label'?: string
   /** Accessible name of the header close button (defaults to the shared UI locale). */
@@ -49,12 +55,22 @@ export interface DetailDrawerProps {
   footer?: ReactNode
   /** Extra classes appended to .primary-drawer-content (screen-specific layout tweaks). */
   className?: string
+  /** Extra classes appended to the backdrop overlay (.modal-backdrop .primary-drawer-backdrop). */
+  overlayClassName?: string
   /** Extra classes appended to .primary-drawer-body. */
   bodyClassName?: string
   /** Close button classes (defaults to the icon-size ghost button used by host centers). */
   closeButtonClassName?: string
+  /** Close button glyph (defaults to the shared HelmxIcon x). */
+  closeIcon?: ReactNode
   /** Drawer body content (business JSX; empty / loading states belong to the caller). */
   children: ReactNode
+  /**
+   * Auxiliary overlay content rendered inside the Dialog root after the drawer
+   * portal (e.g. nested confirm dialogs) so it shares the same overlay layer
+   * stack; state and data belong to the caller.
+   */
+  aux?: ReactNode
 }
 
 /**
@@ -73,13 +89,19 @@ export function DetailDrawer(props: DetailDrawerProps): ReactNode {
     titleExtra,
     icon,
     meta,
+    belowTitle,
+    titleClassName,
+    metaClassName,
     'aria-label': ariaLabel,
     closeLabel = t(uiCopy.close),
     footer,
     className,
+    overlayClassName,
     bodyClassName,
     closeButtonClassName = 'btn btn-ghost btn-icon-sm',
+    closeIcon = <HelmxIcon name="x" size={14} />,
     children,
+    aux,
   } = props
   return (
     <Dialog
@@ -90,7 +112,7 @@ export function DetailDrawer(props: DetailDrawerProps): ReactNode {
       }}
     >
       <DialogPortal inline={inline}>
-        <DialogOverlay className="modal-backdrop primary-drawer-backdrop" />
+        <DialogOverlay className={joinClass('modal-backdrop', 'primary-drawer-backdrop', overlayClassName)} />
         <DialogContent
           className={joinClass('primary-drawer-content', className)}
           aria-label={ariaLabel}
@@ -101,10 +123,11 @@ export function DetailDrawer(props: DetailDrawerProps): ReactNode {
               {icon !== undefined && <div className="primary-drawer-icon-wrap">{icon}</div>}
               <div className="primary-drawer-title-col">
                 <div className="primary-drawer-title-row">
-                  <DialogTitle className="primary-drawer-title">{title}</DialogTitle>
+                  <DialogTitle className={joinClass('primary-drawer-title', titleClassName)}>{title}</DialogTitle>
                   {titleExtra}
                 </div>
-                {meta !== undefined && <div className="primary-drawer-id mono">{meta}</div>}
+                {meta !== undefined && <div className={joinClass('primary-drawer-id', 'mono', metaClassName)}>{meta}</div>}
+                {belowTitle}
               </div>
             </div>
             <DialogClose asChild>
@@ -117,7 +140,7 @@ export function DetailDrawer(props: DetailDrawerProps): ReactNode {
                 aria-label={closeLabel}
                 title={closeLabel}
               >
-                <HelmxIcon name="x" size={14} />
+                {closeIcon}
               </button>
             </DialogClose>
           </div>
@@ -125,6 +148,7 @@ export function DetailDrawer(props: DetailDrawerProps): ReactNode {
           {footer !== undefined && <div className="primary-drawer-footer">{footer}</div>}
         </DialogContent>
       </DialogPortal>
+      {aux}
     </Dialog>
   )
 }
