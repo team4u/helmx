@@ -16,14 +16,13 @@
  * - isPageActive：仅在存在 document、!document.hidden 且 document.hasFocus()
  *   为 true 时返回 true。
  */
+import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import vm from 'node:vm'
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
 
-GlobalRegistrator.register()
 
 const {
   isPageActive,

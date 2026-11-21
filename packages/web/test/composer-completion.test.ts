@@ -9,14 +9,13 @@
  *   visible candidates (>12), IME never submits by accident, caret replacement,
  *   prefill.onlyIfEmpty draft protection, and the '/' slash regression.
  */
+import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import * as React from 'react'
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { HostStoreProviders } from './helpers/host-store.js'
 import { makeTestStore } from './helpers/store.js'
 
-GlobalRegistrator.register()
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
 
 const { act } = await import('react')

@@ -262,7 +262,13 @@ function HelmxStoreEffects({ store, boot }: { store: HelmxExternalStore; boot: S
   )
 }
 
-export function HelmxStoreProvider({ children }: { children: React.ReactNode }) {
+export function HelmxStoreProvider({
+  children,
+  escAbortWindowMs,
+}: {
+  children: React.ReactNode
+  escAbortWindowMs?: number
+}) {
   const [boot] = useState<StoreBootLocation>(() => {
     const rawHash = typeof window !== 'undefined' ? window.location.hash : ''
     const parsed = parseLocationHash(rawHash)
@@ -274,7 +280,10 @@ export function HelmxStoreProvider({ children }: { children: React.ReactNode }) 
 
   const storeRef = useRef<HelmxExternalStore | null>(null)
   if (storeRef.current === null) {
-    storeRef.current = new HelmxExternalStore(boot.location)
+    storeRef.current = new HelmxExternalStore(
+      boot.location,
+      escAbortWindowMs !== undefined ? { escAbortWindowMs } : undefined,
+    )
   }
   const store = storeRef.current
 

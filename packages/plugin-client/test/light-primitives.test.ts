@@ -14,17 +14,15 @@
  * - ConfirmDialog composes the alert-dialog family with danger variant and
  *   locale-default confirm/cancel copy.
  */
+import './helpers/register-happy-dom.js'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import React from 'react'
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
 
-// Ordering constraint: happy-dom must be registered before react-dom (and any
-// portal-carrying component module) is loaded, otherwise react-dom 19 caches
-// native addEventListener refs and the synthetic event delegation misses
-// dispatched input events (onChange breaks).
-GlobalRegistrator.register()
-Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
+// Ordering constraint: happy-dom is registered by the side-effect import above
+// before react-dom (and any portal-carrying component module) is loaded,
+// otherwise react-dom 19 caches native addEventListener refs and synthetic
+// event delegation misses dispatched input events (onChange breaks).
 
 const { act } = await import('react')
 const { renderToString } = await import('react-dom/server')

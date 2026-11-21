@@ -7,6 +7,7 @@
  * 全部走真实 React hooks 执行路径（renderToString），不 mock hook 本身，
  * 仅以最小 store 注入数据（store 本身是测试替身，行为断言真实）。
  */
+import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import * as React from 'react'
@@ -33,8 +34,6 @@ const e = React.createElement
 // 真实 DOM 宿主（happy-dom GlobalRegistrator）：react-dom/client createRoot 需要
 // 真实元素与事件监听表面，Node 无 document；用完整 DOM 实现而非手写桩，
 // 保证 effects / 事件 / 卸载路径都是 react-dom 真实执行。
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
-GlobalRegistrator.register()
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 
 function summary(id: number, status: ConversationSummary['status']): ConversationSummary {

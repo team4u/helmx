@@ -9,10 +9,10 @@
  *   取回全文后才启用；read 的 details 通道内容不受截断约束可正常复制；
  * - 无截断标记时既有展示与复制行为不变。
  */
+import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import * as React from 'react'
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import type { ConversationEntry } from '@helmx/protocol'
@@ -23,7 +23,6 @@ import { ToolExpandedBody } from '../src/conversation/ToolExpandedBody.js'
 
 const e = React.createElement
 
-GlobalRegistrator.register()
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 ;(globalThis as Record<string, unknown>).React = React
 

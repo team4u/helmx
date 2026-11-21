@@ -6,6 +6,7 @@
  * - 切产物竞态：旧 blob/text/name 不混入新产物 + ObjectURL 及时回收；
  * - 文本超 1MiB：text=null 且显式超限说明；深链元数据异步到达后命中扩展名。
  */
+import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import * as React from 'react'
@@ -23,8 +24,6 @@ import { readHostStyles } from './helpers/host-styles.js'
 const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React
 
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
-GlobalRegistrator.register()
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 
 // ---------------------------------------------------------------------------
@@ -506,6 +505,7 @@ test('ArtifactPreviewModal switches UI copy between en and zh-CN', { timeout: 60
   assert.match(document.body.textContent ?? '', /Rich text/)
 
   act(() => { root.unmount() })
+  localStorage.removeItem('helmx:locale')
   resetBody()
 })
 

@@ -18,6 +18,8 @@ export interface ServerClock {
   offsetMs(): number
   /** 服务端时钟域下的「现在」。 */
   now(): number
+  /** 清空全部样本（仅用于测试隔离复位）。 */
+  reset(): void
 }
 
 /** 纯工厂：注入时钟便于测试；窗口有界，样本永不跨实例泄漏。 */
@@ -35,6 +37,9 @@ export function createServerClock(nowMs: () => number = Date.now): ServerClock {
     now(): number {
       return nowMs() - this.offsetMs()
     },
+    reset(): void {
+      samples.length = 0
+    },
   }
 }
 
@@ -51,4 +56,8 @@ export function serverClockOffsetMs(): number {
 
 export function serverNow(): number {
   return serverClock.now()
+}
+
+export function resetServerClock(): void {
+  serverClock.reset()
 }

@@ -25,11 +25,8 @@
  *   popper-dependent portal cannot expand under this package's minimal
  *   happy-dom setup.
  */
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
-GlobalRegistrator.register()
-;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
+import './helpers/register-happy-dom.js'
 import * as React from 'react'
-;(globalThis as Record<string, unknown>).React = React
 
 import assert from 'node:assert/strict'
 import { test } from 'node:test'

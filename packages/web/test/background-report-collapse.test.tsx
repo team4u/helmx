@@ -3,10 +3,10 @@
  * - timeline.renderer 按 matchMeta.renderer 精确接管 helmx.input，未标记输入不受影响；
  * - queuedAgentTextCollapse / HumanMessage 对 agent 长文的折叠、展开/收起与统一灰色胶囊样式。
  */
+import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import * as React from 'react'
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import type {
@@ -24,7 +24,6 @@ import { readHostStyles } from './helpers/host-styles.js'
 
 const e = React.createElement
 
-GlobalRegistrator.register()
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 ;(globalThis as Record<string, unknown>).React = React
 

@@ -12,11 +12,11 @@
  * - rate metrics are not rendered built-in by the host (policy belongs to the optional
  *   builtin:token-speed plugin, contributed via the COMPOSER_STATUS_SLOT).
  */
+import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { readFileSync } from 'node:fs'
 import * as React from 'react'
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { act } from 'react'
 import type { ComposerScopeProps, ComposerStatusSlotProps, ConversationSummary } from '@helmx/protocol'
 import { COMPOSER_STATUS_SLOT } from '@helmx/protocol'
@@ -27,7 +27,6 @@ import { seedPluginClientModule } from '../src/lib/plugin-client.js'
 import { groupUiContributions } from '../src/lib/types.js'
 import type { HelmxStoreValue } from '../src/lib/types.js'
 
-GlobalRegistrator.register()
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
 const { createRoot } = await import('react-dom/client')
 const { renderToStaticMarkup } = await import('react-dom/server')
@@ -384,6 +383,7 @@ test('Composer localizes input aria, upload button, placeholder and compacting s
     assert.ok(host.querySelector('button[aria-label="Uploaded attachment"]') !== null)
     assert.equal(statusSpan(host)?.textContent, 'Compacting…')
   } finally {
+    localStorage.removeItem('helmx:locale')
     act(() => root.unmount())
     host.remove()
   }
@@ -447,6 +447,7 @@ test('AgentStandbyPane mounts COMPOSER_STATUS_SLOT below .composer-box with effe
     assert.equal(received?.profileId, 'assistant')
     assert.equal(received?.conversation, undefined)
   } finally {
+    localStorage.removeItem('helmx:locale')
     act(() => root.unmount())
     host.remove()
   }

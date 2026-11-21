@@ -6,8 +6,9 @@
  * 同入口跨页防环）、卸载后 listener/timer 清理，以及 HelmxStoreProvider 对
  * kernelBootId 的快照暴露。
  */
+import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
-import { afterEach, test } from 'node:test'
+import { describe, afterEach, test } from 'node:test'
 import * as React from 'react'
 import { act } from 'react'
 import type { Root } from 'react-dom/client'
@@ -196,977 +197,480 @@ function withTimings<T>(patch: Partial<typeof versionWatchTimings>, fn: () => Pr
 
 let harness: Harness | undefined
 let entryCleanup: (() => void) | undefined
+describe("use-version-watcher", () => {
 
-afterEach(() => {
-  harness?.unmount()
-  harness = undefined
-  entryCleanup?.()
-  entryCleanup = undefined
-  resetStandbyDrafts()
-  setComposerDirty('watch-test-composer', CLEAN_COMPOSER)
-  clearComposerDirty('watch-composer-instance')
-  try {
-    sessionStorage.removeItem(PRELOAD_RELOAD_GUARD_KEY)
-    sessionStorage.removeItem(FINGERPRINT_RELOAD_GUARD_KEY)
-  } catch {
-    /* happy-dom 环境恒可用；防御性兜底 */
-  }
-  ;(document.activeElement as HTMLElement | null)?.blur?.()
-  document.body.innerHTML = ''
-  document.head.innerHTML = ''
-  setVisible(true)
-})
 
-// ---------------------------------------------------------------------------
-// bootId 触发与 clean 刷新
-// ---------------------------------------------------------------------------
-
-test('bootId 首次快照只建基线不探测；之后变化立即探测且指纹未变不刷新', { timeout: 60_000 }, async () => {
-  entryCleanup = installProductionEntry(CURRENT_ENTRY)
-  harness = mountWatcher()
-  const h = harness
-  await flush()
-  assert.equal(h.fetchCalls.length, 0, '挂载本身不探测')
-
-  h.renderStore('boot-1')
-  await flush()
-  assert.equal(h.fetchCalls.length, 0, '首次 snapshot 不视为更新，不触发探测')
-
-  h.renderStore('boot-2')
-  await flush()
-  assert.equal(h.fetchCalls.length, 1)
-  assert.match(h.fetchCalls[0]!.url, /^\/index\.html\?helmxv=/, '探测 URL 携带防缓存唯一参数')
-  assert.equal(h.fetchCalls[0]!.init.cache, 'no-store')
-  assert.equal(h.view().updateAvailable, false, '入口指纹未变不算新版本')
-  assert.equal(h.reloads(), 0)
-})
-
-test('bootId 变化后探测到新入口：clean 状态自动 reload 一次，后续探测不重复刷新', { timeout: 60_000 }, async () => {
-  entryCleanup = installProductionEntry(CURRENT_ENTRY)
-  harness = mountWatcher()
-  const h = harness
-  h.renderStore('boot-1')
-  await flush()
-
-  h.respond(() => new Response(builtIndexHtml(NEW_ENTRY), { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } }))
-  h.renderStore('boot-2')
-  await flush()
-  assert.equal(h.view().updateAvailable, true)
-  assert.equal(h.reloads(), 1, 'clean 检测到新版本立即 reload')
-
-  h.renderStore('boot-3')
-  await flush()
-  assert.equal(h.fetchCalls.length, 2)
-  assert.equal(h.reloads(), 1, 'reload 已触发过，不重复')
-})
-
-test('dev 入口（无 /assets/ module script）整体休眠：任何触发都不探测不刷新', { timeout: 60_000 }, async () => {
-  harness = mountWatcher()
-  const h = harness
-  h.renderStore('boot-1')
-  await flush()
-  h.renderStore('boot-2')
-  await flush()
-  act(() => {
-    dispatchVisibility(true)
-    window.dispatchEvent(new Event('focus'))
-    window.dispatchEvent(new Event('vite:preloadError'))
-  })
-  await flush()
-  assert.equal(h.fetchCalls.length, 0)
-  assert.equal(h.view().updateAvailable, false)
-  assert.equal(h.reloads(), 0)
-})
-
-// ---------------------------------------------------------------------------
-// dirty 挂起与 clean 补刷
-// ---------------------------------------------------------------------------
-
-test('会话 Composer 有本地草稿时不自动 reload：挂起提示 + 立即刷新动作；dirty 转清后自动补刷一次', { timeout: 60_000 }, async () => {
-  entryCleanup = installProductionEntry(CURRENT_ENTRY)
-  harness = mountWatcher()
-  const h = harness
-  act(() => {
-    setComposerDirty('watch-test-composer', { ...CLEAN_COMPOSER, hasDraftText: true })
-  })
-  h.renderStore('boot-1')
-  await flush()
-
-  h.respond(() => new Response(builtIndexHtml(NEW_ENTRY), { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } }))
-  h.renderStore('boot-2')
-  await flush()
-  assert.equal(h.view().updateAvailable, true, '新版本已探测到')
-  assert.equal(h.view().deferReason, 'draft', '本地草稿挂起')
-  assert.equal(h.reloads(), 0, 'dirty 时不自动 reload')
-
-  // dirty 快照翻转（仍在输入）不重复触发刷新，也不堆积提示状态
-  act(() => {
-    setComposerDirty('watch-test-composer', { ...CLEAN_COMPOSER, hasDraftText: true, editingEntry: true })
-  })
-  await flush()
-  assert.equal(h.reloads(), 0)
-
-  act(() => {
+  afterEach(() => {
+    harness?.unmount()
+    harness = undefined
+    entryCleanup?.()
+    entryCleanup = undefined
+    resetStandbyDrafts()
     setComposerDirty('watch-test-composer', CLEAN_COMPOSER)
-  })
-  await flush()
-  assert.equal(h.reloads(), 1, 'dirty 转清自动补刷')
-})
-
-test('待命草稿（任意坐标非空正文）挂起，并区分当前可见与后台草稿；草稿清空后补刷', { timeout: 60_000 }, async () => {
-  entryCleanup = installProductionEntry(CURRENT_ENTRY)
-  harness = mountWatcher()
-  const h = harness
-  const key = standbyDraftKey({ panel: 'primary', profileId: 'p1' })
-  act(() => {
-    updateStandbyDraft(key, { text: '未发送的首条消息' })
-  })
-  h.renderStore('boot-1')
-  await flush()
-
-  h.respond(() => new Response(builtIndexHtml(NEW_ENTRY), { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } }))
-  h.renderStore('boot-2')
-  await flush()
-  assert.equal(h.view().deferReason, 'background-draft', '当前在其他页面时标识为后台草稿')
-  assert.equal(h.reloads(), 0)
-
-  act(() => {
-    h.store().openTarget({ kind: 'agent', profileId: 'p1' })
-  })
-  await flush()
-  assert.equal(h.view().deferReason, 'draft', '切到该待命页后标识为当前输入内容')
-  assert.equal(h.reloads(), 0)
-
-  act(() => {
-    clearStandbyDraft(key)
-  })
-  await flush()
-  assert.equal(h.reloads(), 1)
-})
-
-test('探测失败不误判：dirty 现场保持原状，不产生待刷新提示', { timeout: 60_000 }, async () => {
-  entryCleanup = installProductionEntry(CURRENT_ENTRY)
-  harness = mountWatcher()
-  const h = harness
-  h.renderStore('boot-1')
-  await flush()
-
-  h.respond(() => new Response('server error', { status: 500 }))
-  h.renderStore('boot-2')
-  await flush()
-  assert.equal(h.fetchCalls.length, 1)
-  assert.equal(h.view().updateAvailable, false, 'HTTP 错误不当作版本变更')
-  assert.equal(h.reloads(), 0)
-})
-
-// ---------------------------------------------------------------------------
-// 异步探测竞态与卸载守卫
-// ---------------------------------------------------------------------------
-
-/** 受控延迟响应：测试持有 release 决定第一次探测何时返回。 */
-function deferredResponse(): { promise: Promise<Response>; release: (response: Response) => void } {
-  let release!: (response: Response) => void
-  const promise = new Promise<Response>((resolve) => {
-    release = resolve
-  })
-  return { promise, release }
-}
-
-const htmlOf = (entry: string): Response =>
-  new Response(builtIndexHtml(entry), { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } })
-
-test('在途探测期间 bootId 变化不吞快速触发：完成后立刻补探并采用最新结果', { timeout: 60_000 }, async () => {
-  entryCleanup = installProductionEntry(CURRENT_ENTRY)
-  harness = mountWatcher()
-  const h = harness
-  h.renderStore('boot-1')
-  await flush()
-
-  const first = deferredResponse()
-  let call = 0
-  h.respond(() => (call++ === 0 ? first.promise : Promise.resolve(htmlOf(NEW_ENTRY))))
-  await withTimings({ visibilityThrottleMs: 0, pollIntervalMs: 60_000 }, async () => {
-    act(() => {
-      dispatchVisibility(true)
-    })
-    await flush()
-    assert.equal(h.fetchCalls.length, 1, '第一次探测在途')
-
-    // 在途期间内核换代：快速触发进入补探队列，而不是被丢弃
-    h.renderStore('boot-2')
-    await flush()
-    assert.equal(h.fetchCalls.length, 1, '在途期间不并发探测')
-
-    act(() => {
-      first.release(htmlOf(CURRENT_ENTRY))
-    })
-    await flush()
-    assert.equal(h.fetchCalls.length, 2, '在途完成后立刻补探')
-    assert.equal(h.view().updateAvailable, true, '补探采用最新入口')
-    assert.equal(h.reloads(), 1, 'clean 检测到新版本补刷')
-  })
-})
-
-test('卸载时在途探测回包被丢弃：不推进状态、不触发 reload', { timeout: 60_000 }, async () => {
-  entryCleanup = installProductionEntry(CURRENT_ENTRY)
-  harness = mountWatcher()
-  const h = harness
-  const first = deferredResponse()
-  h.respond(() => first.promise)
-  await withTimings({ visibilityThrottleMs: 0, pollIntervalMs: 60_000 }, async () => {
-    act(() => {
-      dispatchVisibility(true)
-    })
-    await flush()
-    assert.equal(h.fetchCalls.length, 1, '探测在途')
-
-    h.unmount()
-    act(() => {
-      first.release(htmlOf(NEW_ENTRY))
-    })
-    await flush()
-    assert.equal(h.reloads(), 0, '卸载后的回包不触发 reload')
-    assert.equal(h.view().updateAvailable, false, '卸载后不推进状态')
-  })
-})
-
-// ---------------------------------------------------------------------------
-// 弹窗与焦点保护（保守挂起条件）
-// ---------------------------------------------------------------------------
-
-test('任意 activeModal（含只读 artifact-preview）挂起自动刷新；关闭后自动补刷', { timeout: 60_000 }, async () => {
-  entryCleanup = installProductionEntry(CURRENT_ENTRY)
-  harness = mountWatcher()
-  const h = harness
-  h.renderStore('boot-1')
-  await flush()
-  h.respond(() => htmlOf(NEW_ENTRY))
-
-  h.renderStore('boot-2', { activeModal: { kind: 'artifact-preview', artifactId: 'art-1', conversationId: 1 } })
-  await flush()
-  assert.equal(h.view().updateAvailable, true)
-  assert.equal(h.view().deferReason, 'modal', '只读弹窗同样保守挂起')
-  assert.equal(h.reloads(), 0)
-
-  // 同 bootId 仅关闭弹窗：不靠新探测，挂起解除即补刷
-  h.renderStore('boot-2', { activeModal: null })
-  await flush()
-  assert.equal(h.view().deferReason, null)
-  assert.equal(h.reloads(), 1, '弹窗关闭自动补刷')
-})
-
-test('草稿 + 弹窗同时在场：deferReason 如实组合，两者都解除后才补刷', { timeout: 60_000 }, async () => {
-  entryCleanup = installProductionEntry(CURRENT_ENTRY)
-  harness = mountWatcher()
-  const h = harness
-  act(() => {
-    setComposerDirty('watch-test-composer', { ...CLEAN_COMPOSER, hasDraftText: true })
-  })
-  h.renderStore('boot-1')
-  await flush()
-  h.respond(() => htmlOf(NEW_ENTRY))
-
-  h.renderStore('boot-2', { activeModal: { kind: 'command-palette' } })
-  await flush()
-  assert.equal(h.view().deferReason, 'draft-and-modal')
-  assert.equal(h.reloads(), 0)
-
-  // 先关弹窗：仍有草稿，不刷
-  h.renderStore('boot-2', { activeModal: null })
-  await flush()
-  assert.equal(h.view().deferReason, 'draft')
-  assert.equal(h.reloads(), 0)
-
-  // 再清草稿：补刷
-  act(() => {
-    setComposerDirty('watch-test-composer', CLEAN_COMPOSER)
-  })
-  await flush()
-  assert.equal(h.reloads(), 1)
-})
-
-test('空输入框或未改动预填值聚焦不误拦；实际编辑挂起，删回原值或失焦后自动补刷', { timeout: 60_000 }, async () => {
-  entryCleanup = installProductionEntry(CURRENT_ENTRY)
-  harness = mountWatcher()
-  const h = harness
-  const input = document.createElement('input')
-  input.value = 'preset'
-  document.body.appendChild(input)
-  h.renderStore('boot-1')
-  await flush()
-  h.respond(() => htmlOf(NEW_ENTRY))
-
-  // 仅聚焦未改字（含已有默认值的表单字段）：不误判为未提交输入
-  act(() => {
-    input.focus()
-  })
-  await flush()
-  assert.equal(h.view().deferReason, null, '聚焦但未修改值不挂起')
-
-  // 用户实际修改内容：立即进入 draft 挂起，发版不强刷
-  act(() => {
-    input.value = 'preset edited'
-    input.dispatchEvent(new Event('input', { bubbles: true }))
-  })
-  await flush()
-  assert.equal(h.view().deferReason, 'draft', '实际修改输入内容后挂起')
-
-  h.renderStore('boot-2')
-  await flush()
-  assert.equal(h.view().updateAvailable, true)
-  assert.equal(h.reloads(), 0, '编辑过程中不自动刷新')
-
-  // 删回原值后恢复干净，立即补刷
-  act(() => {
-    input.value = 'preset'
-    input.dispatchEvent(new Event('input', { bubbles: true }))
-  })
-  await flush()
-  assert.equal(h.view().deferReason, null)
-  assert.equal(h.reloads(), 1, '改回原值后恢复干净并自动补刷')
-  input.remove()
-})
-
-test('聚焦中的脏输入框被直接卸载或 display:none 隐藏时，无 focusout 也自愈并补刷', { timeout: 60_000 }, async () => {
-  entryCleanup = installProductionEntry(CURRENT_ENTRY)
-  harness = mountWatcher()
-  const h = harness
-  const wrap = document.createElement('div')
-  const input = document.createElement('input')
-  wrap.appendChild(input)
-  document.body.appendChild(wrap)
-  h.renderStore('boot-1')
-  await flush()
-  h.respond(() => htmlOf(NEW_ENTRY))
-
-  act(() => {
-    input.focus()
-    input.value = 'unsaved'
-    input.dispatchEvent(new Event('input', { bubbles: true }))
-  })
-  await flush()
-  h.renderStore('boot-2')
-  await flush()
-  assert.equal(h.view().deferReason, 'draft')
-  assert.equal(h.reloads(), 0)
-
-  // 场景 A：父容器变为 display:none（如 <Activity mode="hidden">），浏览器不触发 focusout
-  act(() => {
-    wrap.style.display = 'none'
-  })
-  await waitForCondition(() => h.view().deferReason === null)
-  assert.equal(h.reloads(), 1, '容器隐藏后自愈解除挂起并补刷')
-  wrap.remove()
-})
-
-test('聚焦中的脏输入框从 DOM 移除（如 AuthGate/重命名卸载）时自动自愈补刷', { timeout: 60_000 }, async () => {
-  entryCleanup = installProductionEntry(CURRENT_ENTRY)
-  harness = mountWatcher()
-  const h = harness
-  const input = document.createElement('input')
-  document.body.appendChild(input)
-  h.renderStore('boot-1')
-  await flush()
-  h.respond(() => htmlOf(NEW_ENTRY))
-
-  act(() => {
-    input.focus()
-    input.value = 'secret'
-    input.dispatchEvent(new Event('input', { bubbles: true }))
-  })
-  await flush()
-  h.renderStore('boot-2')
-  await flush()
-  assert.equal(h.reloads(), 0)
-
-  act(() => {
-    input.remove()
-  })
-  await waitForCondition(() => h.view().deferReason === null)
-  assert.equal(h.reloads(), 1, 'DOM 移除后自动解除挂起并补刷')
-})
-
-test('受管 Composer 空 textarea 聚焦不误拦，仅 IME 组合输入期间保护', { timeout: 60_000 }, async () => {
-  entryCleanup = installProductionEntry(CURRENT_ENTRY)
-  harness = mountWatcher()
-  const h = harness
-  const textarea = document.createElement('textarea')
-  textarea.setAttribute('data-composer-draft-managed', 'true')
-  document.body.appendChild(textarea)
-  h.renderStore('boot-1')
-  await flush()
-  h.respond(() => htmlOf(NEW_ENTRY))
-
-  act(() => {
-    textarea.focus()
-  })
-  await flush()
-  assert.equal(h.view().deferReason, null, '发完消息光标留在空受管框内不拦截自动刷新')
-
-  act(() => {
-    textarea.dispatchEvent(new Event('compositionstart', { bubbles: true }))
-  })
-  await flush()
-  assert.equal(h.view().deferReason, 'draft', 'IME 组合输入期间受保护')
-
-  h.renderStore('boot-2')
-  await flush()
-  assert.equal(h.reloads(), 0)
-
-  act(() => {
-    textarea.dispatchEvent(new Event('compositionend', { bubbles: true }))
-  })
-  await flush()
-  assert.equal(h.view().deferReason, null)
-  assert.equal(h.reloads(), 1, 'IME 结束且草稿为空后自动补刷')
-  textarea.remove()
-})
-
-test('分屏与抽屉内的会话草稿计为当前可见，其余隐藏会话计为后台草稿', { timeout: 60_000 }, async () => {
-  entryCleanup = installProductionEntry(CURRENT_ENTRY)
-  harness = mountWatcher()
-  const h = harness
-  act(() => {
-    setComposerDirty('watch-composer-instance', { ...CLEAN_COMPOSER, hasDraftText: true }, 9)
-  })
-  h.renderStore('boot-1')
-  await flush()
-  h.respond(() => htmlOf(NEW_ENTRY))
-  h.renderStore('boot-2', { activeModal: { kind: 'command-palette' } })
-  await flush()
-  assert.equal(h.view().deferReason, 'background-draft-and-modal', '后台草稿 + 打开窗口精确组合')
-
-  // 若在 conversation-drawer 中打开了会话 9，则视为当前可见草稿
-  h.renderStore('boot-2', { activeModal: { kind: 'conversation-drawer', conversationId: 9 } })
-  await flush()
-  assert.equal(h.view().deferReason, 'draft-and-modal', '抽屉内会话草稿属于当前可见现场')
-
-  // 关掉抽屉但分屏打开会话 9，仍属于当前可见草稿
-  act(() => {
-    h.store().openTarget({ kind: 'conversation', conversationId: 9 }, { split: true })
-  })
-  h.renderStore('boot-2', { activeModal: null })
-  await flush()
-  assert.equal(h.view().deferReason, 'draft', '分屏内会话草稿属于当前可见现场')
-
-  act(() => {
     clearComposerDirty('watch-composer-instance')
+    try {
+      sessionStorage.removeItem(PRELOAD_RELOAD_GUARD_KEY)
+      sessionStorage.removeItem(FINGERPRINT_RELOAD_GUARD_KEY)
+    } catch {
+      /* happy-dom 环境恒可用；防御性兜底 */
+    }
+    ;(document.activeElement as HTMLElement | null)?.blur?.()
+    document.body.innerHTML = ''
+    document.head.innerHTML = ''
+    setVisible(true)
   })
-  await flush()
-  assert.equal(h.reloads(), 1)
-})
 
-// ---------------------------------------------------------------------------
-// Composer 实例脏状态上报生命周期（桥接端到端）
-// ---------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
+  // bootId 触发与 clean 刷新
+  // ---------------------------------------------------------------------------
 
-const HOST_CONVERSATION: ConversationSummary = {
-  id: 7,
-  title: '桥接测试会话',
-  profileId: 'assistant',
-  tags: [],
-  cwd: '/tmp',
-  model: 'faux/faux-1',
-  thinkingLevel: 'off',
-  status: 'idle',
-  stateChangeSeq: 1,
-  completionSeq: 0,
-  unread: false,
-  pinned: false,
-  pendingAskCount: 0,
-  createdAt: 1,
-  updatedAt: 1,
-}
-
-test('Composer 实例上报与卸载清报：旧实例残留不阻塞刷新', { timeout: 60_000 }, async () => {
-  entryCleanup = installProductionEntry(CURRENT_ENTRY)
-  harness = mountWatcher()
-  const h = harness
-
-  // 独立渲染一个真实 useComposerSend 宿主（与 watcher 共享模块级桥接 store）
-  let sendApi: ComposerSendApi | null = null
-  const ComposerSendHost = (): React.ReactNode => {
-    const textareaRef = React.useRef<HTMLTextAreaElement | null>(null)
-    sendApi = useComposerSend({
-      conversation: HOST_CONVERSATION,
-      prefill: null,
-      textareaRef,
-      slashPluginCommands: [],
-      envConfigurable: false,
-      working: false,
-      dirtyKey: 'watch-composer-instance',
-    })
-    return null
-  }
-  const composerHost = document.createElement('div')
-  document.body.appendChild(composerHost)
-  const composerRoot = createRoot(composerHost)
-  act(() => {
-    composerRoot.render(
-      <HelmxExternalStoreContext.Provider value={makeTestStore({})}>
-        <ComposerSendHost />
-      </HelmxExternalStoreContext.Provider>,
-    )
-  })
-  assert.equal(h.view().deferReason, null, '空草稿不挂起')
-
-  act(() => {
-    sendApi!.setDraftState('未发送的草稿')
-  })
-  await flush()
-  assert.equal(h.view().deferReason, 'background-draft', '当前看会话 1 时，会话 7 上报为后台草稿')
-
-  act(() => {
-    h.store().openTarget({ kind: 'conversation', conversationId: HOST_CONVERSATION.id })
-  })
-  await flush()
-  assert.equal(h.view().deferReason, 'draft', '切到会话 7 后识别为当前输入内容')
-
-  h.renderStore('boot-1')
-  await flush()
-  h.respond(() => htmlOf(NEW_ENTRY))
-  h.renderStore('boot-2')
-  await flush()
-  assert.equal(h.view().updateAvailable, true)
-  assert.equal(h.reloads(), 0, '草稿在场不刷新')
-
-  // 卸载 Composer 实例：上报随 effect cleanup 清除，聚合转清自动补刷
-  act(() => {
-    composerRoot.unmount()
-  })
-  await flush()
-  assert.equal(h.reloads(), 1, '实例卸载清报后补刷，不残留阻塞')
-  composerHost.remove()
-})
-
-// ---------------------------------------------------------------------------
-// visibility / focus 节流与轮询
-// ---------------------------------------------------------------------------
-
-test('visibilitychange 变 visible 与 focus 立即探测，5s 节流窗口内不重复', { timeout: 60_000 }, async () => {
-  entryCleanup = installProductionEntry(CURRENT_ENTRY)
-  harness = mountWatcher()
-  const h = harness
-  await withTimings({ visibilityThrottleMs: 30, pollIntervalMs: 60_000 }, async () => {
-    act(() => {
-      dispatchVisibility(false)
-    })
+  test('bootId 首次快照只建基线不探测；之后变化立即探测且指纹未变不刷新', { timeout: 60_000 }, async () => {
+    entryCleanup = installProductionEntry(CURRENT_ENTRY)
+    harness = mountWatcher()
+    const h = harness
     await flush()
-    assert.equal(h.fetchCalls.length, 0, 'hidden 的 visibilitychange 不探测')
+    assert.equal(h.fetchCalls.length, 0, '挂载本身不探测')
 
-    act(() => {
-      dispatchVisibility(true)
-    })
+    h.renderStore('boot-1')
+    await flush()
+    assert.equal(h.fetchCalls.length, 0, '首次 snapshot 不视为更新，不触发探测')
+
+    h.renderStore('boot-2')
     await flush()
     assert.equal(h.fetchCalls.length, 1)
-
-    act(() => {
-      dispatchVisibility(true)
-      window.dispatchEvent(new Event('focus'))
-    })
-    await flush()
-    assert.equal(h.fetchCalls.length, 1, '节流窗口内 visibility/focus 不重复探测')
-
-    await flush(45)
-    act(() => {
-      window.dispatchEvent(new Event('focus'))
-    })
-    await flush()
-    assert.equal(h.fetchCalls.length, 2, '窗口过后放行')
-  })
-})
-
-test('visible 期间按周期轮询；hidden 暂停；恢复 visible 后继续', { timeout: 60_000 }, async () => {
-  entryCleanup = installProductionEntry(CURRENT_ENTRY)
-  await withTimings({ pollIntervalMs: 15, visibilityThrottleMs: 0 }, async () => {
-    harness = mountWatcher()
-    const h = harness
-    await waitForCondition(() => h.fetchCalls.length >= 2)
-
-    const beforeHidden = h.fetchCalls.length
-    act(() => {
-      dispatchVisibility(false)
-    })
-    await flush(45)
-    assert.equal(h.fetchCalls.length, beforeHidden, 'hidden 期间不轮询')
-
-    act(() => {
-      dispatchVisibility(true)
-    })
-    await waitForCondition(() => h.fetchCalls.length > beforeHidden)
-    assert.ok(h.fetchCalls.length > beforeHidden, '恢复 visible 后继续轮询')
-  })
-})
-
-// ---------------------------------------------------------------------------
-// vite:preloadError 弱网安全守卫
-// ---------------------------------------------------------------------------
-
-test('vite:preloadError：/index.html 指纹未变时不强刷整页，暴露可恢复 preloadError 状态并推送通知', { timeout: 60_000 }, async () => {
-  entryCleanup = installProductionEntry(CURRENT_ENTRY)
-  harness = mountWatcher(builtIndexHtml(CURRENT_ENTRY))
-  const h = harness
-  h.renderStore('boot-1')
-  await flush()
-
-  const event = new Event('vite:preloadError', { cancelable: true })
-  act(() => {
-    window.dispatchEvent(event)
-  })
-  await flush()
-
-  assert.equal(event.defaultPrevented, true, 'handler 恒接管并取消默认重抛')
-  assert.equal(h.fetchCalls.length, 1, '触发 /index.html 入口指纹探测')
-  assert.equal(h.reloads(), 0, '指纹未变时绝不强刷整页导致会话/草稿丢失')
-  assert.equal(h.view().updateAvailable, false, '指纹未变时不误报新版本')
-  assert.equal(h.view().preloadError, true, '暴露可恢复 preloadError 状态供重试')
-  const notices = h.store().getNotices()
-  assert.equal(notices.length, 1)
-  assert.equal(notices[0]?.level, 'warning')
-
-  act(() => {
-    h.view().clearPreloadError()
-  })
-  await flush()
-  assert.equal(h.view().preloadError, false, '重试后可复位 preloadError 状态')
-})
-
-test('vite:preloadError：探测失败（500 / 离线）同样不强刷整页，保留草稿并暴露可恢复状态', { timeout: 60_000 }, async () => {
-  entryCleanup = installProductionEntry(CURRENT_ENTRY)
-  harness = mountWatcher()
-  const h = harness
-  h.respond(() => new Response('offline', { status: 503 }))
-  await flush()
-
-  act(() => {
-    window.dispatchEvent(new Event('vite:preloadError', { cancelable: true }))
-  })
-  await flush()
-
-  assert.equal(h.fetchCalls.length, 1)
-  assert.equal(h.reloads(), 0, '探测失败不盲目强刷整页')
-  assert.equal(h.view().updateAvailable, false)
-  assert.equal(h.view().preloadError, true)
-})
-
-test('vite:preloadError：探测到 /index.html 指纹确已变更时升级重载（clean 立即刷新、dirty 挂起转清补刷）', { timeout: 60_000 }, async () => {
-  entryCleanup = installProductionEntry(CURRENT_ENTRY)
-  harness = mountWatcher(builtIndexHtml(NEW_ENTRY))
-  const h = harness
-  act(() => {
-    setComposerDirty('watch-test-composer', { ...CLEAN_COMPOSER, hasAttachments: true })
-  })
-  await flush()
-
-  act(() => {
-    window.dispatchEvent(new Event('vite:preloadError', { cancelable: true }))
-  })
-  await flush()
-
-  assert.equal(h.fetchCalls.length, 1)
-  assert.equal(h.view().updateAvailable, true, '确认新版本已发布，置 updateAvailable')
-  assert.equal(h.view().deferReason, 'draft', '有草稿时保守挂起不强刷')
-  assert.equal(h.view().preloadError, false, '已确认新版本时不留弱网重试态')
-  assert.equal(h.reloads(), 0)
-
-  act(() => {
-    setComposerDirty('watch-test-composer', CLEAN_COMPOSER)
-  })
-  await flush()
-  assert.equal(h.reloads(), 1, '草稿转清后自动补刷一次')
-
-  // 重复事件不再二次刷新
-  act(() => {
-    window.dispatchEvent(new Event('vite:preloadError', { cancelable: true }))
-  })
-  await flush()
-  assert.equal(h.reloads(), 1, '防重复刷新')
-})
-
-test('vite:preloadError：先弱网失败后服务端发版，再次探测确认指纹变更后升级刷新', { timeout: 60_000 }, async () => {
-  entryCleanup = installProductionEntry(CURRENT_ENTRY)
-  harness = mountWatcher(builtIndexHtml(CURRENT_ENTRY))
-  const h = harness
-  await flush()
-
-  act(() => {
-    window.dispatchEvent(new Event('vite:preloadError', { cancelable: true }))
-  })
-  await flush()
-  assert.equal(h.reloads(), 0)
-  assert.equal(h.view().preloadError, true)
-
-  h.respond(() => htmlOf(NEW_ENTRY))
-  act(() => {
-    window.dispatchEvent(new Event('vite:preloadError', { cancelable: true }))
-  })
-  await flush()
-  assert.equal(h.view().preloadError, false)
-  assert.equal(h.view().updateAvailable, true)
-  assert.equal(h.reloads(), 1, '指纹变化后按版本更新逻辑刷新')
-})
-
-test('vite:preloadError 命中新指纹但 storage 不可用：fail-closed 保留横幅与手动刷新', { timeout: 60_000 }, async () => {
-  entryCleanup = installProductionEntry(CURRENT_ENTRY)
-  harness = mountWatcher(builtIndexHtml(NEW_ENTRY))
-  const h = harness
-  await flush()
-  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'sessionStorage')
-  Object.defineProperty(globalThis, 'sessionStorage', {
-    configurable: true,
-    get() {
-      throw new DOMException('Storage disabled', 'SecurityError')
-    },
-  })
-  try {
-    act(() => {
-      window.dispatchEvent(new Event('vite:preloadError', { cancelable: true }))
-    })
-    await flush()
-    assert.equal(h.reloads(), 0, 'storage 不可用拒绝自动刷新，绝不跨页循环')
-    assert.equal(h.view().updateAvailable, true)
-  } finally {
-    if (descriptor !== undefined) Object.defineProperty(globalThis, 'sessionStorage', descriptor)
-    else delete (globalThis as { sessionStorage?: unknown }).sessionStorage
-  }
-})
-
-// ---------------------------------------------------------------------------
-// WebView-safe 刷新：导航阶梯、手动不短路、升级重试与跨页防环
-// ---------------------------------------------------------------------------
-
-test('手动「立即刷新」不被一次性闸门短路：自动刷新已尝试（页面未真正导航）后仍可再触发', { timeout: 60_000 }, async () => {
-  entryCleanup = installProductionEntry(CURRENT_ENTRY)
-  harness = mountWatcher()
-  const h = harness
-  h.renderStore('boot-1')
-  await flush()
-  h.respond(() => htmlOf(NEW_ENTRY))
-  h.renderStore('boot-2')
-  await flush()
-  assert.equal(h.view().updateAvailable, true)
-  assert.equal(h.reloads(), 1, 'clean 自动刷新已尝试一次（注入 reload 不卸载页面，模拟导航被吞）')
-
-  act(() => {
-    h.view().reloadNow()
-  })
-  await flush()
-  assert.equal(h.reloads(), 2, '再次手动点击必须仍能发起刷新（旧行为被 reloadTriggeredRef 短路）')
-
-  act(() => {
-    h.view().reloadNow()
-  })
-  await flush()
-  assert.equal(h.reloads(), 3, '手动动作可重复触发，不受自动闸门/名额约束')
-})
-
-test('WebView 吞掉同址导航时自动升级 cache-buster：URL 保留 pathname/query/hash 且不累积', { timeout: 60_000 }, async () => {
-  entryCleanup = installProductionEntry(CURRENT_ENTRY)
-  const stub = makeStubLocation({ pathname: '/', search: '?x=1', hash: '#/c/7' })
-  harness = mountWatcher(builtIndexHtml(CURRENT_ENTRY), { location: stub.location })
-  const h = harness
-  h.renderStore('boot-1')
-  await flush()
-  h.respond(() => htmlOf(NEW_ENTRY))
-  await withTimings({ reloadEscalateMs: 20 }, async () => {
-    h.renderStore('boot-2')
-    await flush()
-    assert.equal(h.reloads(), 1, 'clean 自动刷新第一次尝试')
-    assert.deepEqual(h.replaceUrls(), ['/?x=1#/c/7'], '首次是干净同址导航：保留 query/hash、不加任何参数')
-
-    // 替身 replace 不卸载页面 = 导航被容器吞掉：升级重试自动发生
-    await waitForCondition(() => h.reloads() === 2)
-    assert.equal(h.reloads(), 2, '页面仍存活 → 升级为 cache-buster 导航重试一次')
-    const escalated = h.replaceUrls()[1]!
-    assert.match(escalated, new RegExp(`[?]x=1&${RELOAD_CACHE_BUSTER_PARAM}=`), '既有 query 参数保留，buster 追加其后')
-    assert.ok(escalated.endsWith('#/c/7'), 'hash 路由原样保留')
-
-    // 升级重试后不再自动升级（防循环）；手动动作仍可用且直接进入带 buster 的尝试
-    await flush(45)
-    assert.equal(h.reloads(), 2, '自动升级至多一次，不循环')
-    act(() => {
-      h.view().reloadNow()
-    })
-    await flush()
-    assert.equal(h.reloads(), 3, '手动刷新在自动尝试/升级之后仍可发起')
-    const manual = h.replaceUrls()[2]!
-    assert.equal(manual.match(new RegExp(`${RELOAD_CACHE_BUSTER_PARAM}=`, 'g'))?.length, 1, '地址中至多一个 buster（新值替换旧值）')
-    assert.ok(manual.endsWith('#/c/7'), 'hash 保留')
-  })
-})
-
-test('升级 timer 被后续手动导航取代：待决窗口内手动点击只发一次导航，不追加自动升级', { timeout: 60_000 }, async () => {
-  entryCleanup = installProductionEntry(CURRENT_ENTRY)
-  const stub = makeStubLocation({ hash: '#/c/3' })
-  harness = mountWatcher(builtIndexHtml(CURRENT_ENTRY), { location: stub.location })
-  const h = harness
-  h.renderStore('boot-1')
-  await flush()
-  h.respond(() => htmlOf(NEW_ENTRY))
-  await withTimings({ reloadEscalateMs: 40 }, async () => {
-    h.renderStore('boot-2')
-    await flush()
-    assert.equal(h.reloads(), 1, '自动刷新第一次尝试（升级 timer 待决）')
-
-    // 升级窗口内用户手动点击：新导航取代旧尝试，旧 timer 必须作废
-    act(() => {
-      h.view().reloadNow()
-    })
-    await flush()
-    assert.equal(h.reloads(), 2, '手动点击发出一条导航')
-    assert.match(h.replaceUrls()[1]!, new RegExp(`${RELOAD_CACHE_BUSTER_PARAM}=`), '手动点击直接进入带 buster 的尝试')
-
-    // 越过原升级期限后不再有追加的自动导航（旧行为会在这里多发一条）
-    await flush(70)
-    assert.equal(h.reloads(), 2, '一次用户操作只对应一次导航，不追加自动升级')
-    assert.equal(h.view().updateAvailable, true, '页面未卸载（替身不导航）：提示保留')
-  })
-})
-
-test('升级窗口内出现本地输入现场：放弃自动升级；转清后自动路径也不再重复导航，手动仍可用', { timeout: 60_000 }, async () => {
-  entryCleanup = installProductionEntry(CURRENT_ENTRY)
-  const stub = makeStubLocation({ hash: '#/c/9' })
-  harness = mountWatcher(builtIndexHtml(CURRENT_ENTRY), { location: stub.location })
-  const h = harness
-  h.renderStore('boot-1')
-  await flush()
-  h.respond(() => htmlOf(NEW_ENTRY))
-  await withTimings({ reloadEscalateMs: 25 }, async () => {
-    h.renderStore('boot-2')
-    await flush()
-    assert.equal(h.reloads(), 1, '自动刷新第一次尝试')
-
-    // 用户在升级窗口内开始输入：升级重试让位（保守保护未提交内容）
-    act(() => {
-      setComposerDirty('watch-test-composer', { ...CLEAN_COMPOSER, hasDraftText: true })
-    })
-    await flush(50)
-    assert.equal(h.reloads(), 1, '升级窗口内出现草稿：不自动升级')
-
-    act(() => {
-      setComposerDirty('watch-test-composer', CLEAN_COMPOSER)
-    })
-    await flush()
-    assert.equal(h.reloads(), 1, '自动路径一次性闸门：转清补刷不重复自动导航（防循环）')
-
-    act(() => {
-      h.view().reloadNow()
-    })
-    await flush()
-    assert.equal(h.reloads(), 2, '手动「立即刷新」始终可用')
-  })
-})
-
-test('同目标入口的自动刷新跨页仅一次：上一页未落地不再自动刷，横幅与手动动作保留', { timeout: 60_000 }, async () => {
-  entryCleanup = installProductionEntry(CURRENT_ENTRY)
-  // 模拟上一页已对同一新入口自动发起过刷新（WebView 回吐旧缓存、未真正落地）
-  sessionStorage.setItem(FINGERPRINT_RELOAD_GUARD_KEY, NEW_ENTRY)
-  harness = mountWatcher()
-  const h = harness
-  h.renderStore('boot-1')
-  await flush()
-  h.respond(() => htmlOf(NEW_ENTRY))
-  h.renderStore('boot-2')
-  await flush()
-  assert.equal(h.view().updateAvailable, true, '待刷新提示保留')
-  assert.equal(h.reloads(), 0, '同入口自动刷新不再重复发起（跨页防环）')
-
-  act(() => {
-    h.view().reloadNow()
-  })
-  await flush()
-  assert.equal(h.reloads(), 1, '手动刷新不受跨页防环约束')
-})
-
-test('storage 不可用：指纹驱动的自动刷新同样拒绝（fail-closed 防跨页无限刷新），保留横幅与手动', { timeout: 60_000 }, async () => {
-  entryCleanup = installProductionEntry(CURRENT_ENTRY)
-  harness = mountWatcher()
-  const h = harness
-  h.renderStore('boot-1')
-  await flush()
-  h.respond(() => htmlOf(NEW_ENTRY))
-  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'sessionStorage')
-  Object.defineProperty(globalThis, 'sessionStorage', {
-    configurable: true,
-    get() {
-      throw new DOMException('Storage disabled', 'SecurityError')
-    },
-  })
-  try {
-    h.renderStore('boot-2')
-    await flush()
-    assert.equal(h.view().updateAvailable, true, '待刷新提示保留')
-    assert.equal(h.reloads(), 0, 'storage 不可用拒绝自动刷新（禁 storage 的 WebView + 回吐旧缓存 = 无限循环）')
-
-    // 挂起条件反复变化（实际输入并失焦）也不得绕过 fail-closed 自动刷新
-    const input = document.createElement('input')
-    document.body.appendChild(input)
-    act(() => {
-      input.focus()
-      input.value = 'dirty'
-      input.dispatchEvent(new Event('input', { bubbles: true }))
-    })
-    act(() => {
-      input.blur()
-    })
-    await flush()
+    assert.match(h.fetchCalls[0]!.url, /^\/index\.html\?helmxv=/, '探测 URL 携带防缓存唯一参数')
+    assert.equal(h.fetchCalls[0]!.init.cache, 'no-store')
+    assert.equal(h.view().updateAvailable, false, '入口指纹未变不算新版本')
     assert.equal(h.reloads(), 0)
-    input.remove()
+  })
 
-    act(() => {
-      h.view().reloadNow()
-    })
-    await flush()
-    assert.equal(h.reloads(), 1, '手动「立即刷新」不受影响')
-  } finally {
-    if (descriptor !== undefined) Object.defineProperty(globalThis, 'sessionStorage', descriptor)
-    else delete (globalThis as { sessionStorage?: unknown }).sessionStorage
-  }
-})
-
-// ---------------------------------------------------------------------------
-// 卸载清理
-// ---------------------------------------------------------------------------
-
-test('卸载后清理 listener 与轮询 timer：事件不再探测，周期不再触发', { timeout: 60_000 }, async () => {
-  entryCleanup = installProductionEntry(CURRENT_ENTRY)
-  await withTimings({ pollIntervalMs: 15, visibilityThrottleMs: 0 }, async () => {
+  test('bootId 变化后探测到新入口：clean 状态自动 reload 一次，后续探测不重复刷新', { timeout: 60_000 }, async () => {
+    entryCleanup = installProductionEntry(CURRENT_ENTRY)
     harness = mountWatcher()
     const h = harness
-    await waitForCondition(() => h.fetchCalls.length >= 1)
-    assert.ok(h.fetchCalls.length >= 1, '卸载前轮询已产生探测')
-    h.unmount()
+    h.renderStore('boot-1')
+    await flush()
 
-    const frozen = h.fetchCalls.length
-    await flush(45)
+    h.respond(() => new Response(builtIndexHtml(NEW_ENTRY), { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } }))
+    h.renderStore('boot-2')
+    await flush()
+    assert.equal(h.view().updateAvailable, true)
+    assert.equal(h.reloads(), 1, 'clean 检测到新版本立即 reload')
+
+    h.renderStore('boot-3')
+    await flush()
+    assert.equal(h.fetchCalls.length, 2)
+    assert.equal(h.reloads(), 1, 'reload 已触发过，不重复')
+  })
+
+  test('dev 入口（无 /assets/ module script）整体休眠：任何触发都不探测不刷新', { timeout: 60_000 }, async () => {
+    harness = mountWatcher()
+    const h = harness
+    h.renderStore('boot-1')
+    await flush()
+    h.renderStore('boot-2')
+    await flush()
     act(() => {
       dispatchVisibility(true)
       window.dispatchEvent(new Event('focus'))
       window.dispatchEvent(new Event('vite:preloadError'))
     })
-    await flush(25)
-    assert.equal(h.fetchCalls.length, frozen, '卸载后不再探测')
-    assert.equal(h.reloads(), 0, '卸载后 preloadError 不刷新')
+    await flush()
+    assert.equal(h.fetchCalls.length, 0)
+    assert.equal(h.view().updateAvailable, false)
+    assert.equal(h.reloads(), 0)
   })
-})
 
-// ---------------------------------------------------------------------------
-// Provider 集成：SSE snapshot 的 bootId 暴露为 store.kernelBootId
-// ---------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
+  // dirty 挂起与 clean 补刷
+  // ---------------------------------------------------------------------------
 
-test('HelmxStoreProvider：snapshot 把 bootId 暴露到 store.kernelBootId，重连换代后推进', { timeout: 60_000 }, async () => {
-  const { HelmxStoreProvider } = await import('../src/lib/HelmxStoreProvider.js')
-  const { useHelmxStore } = await import('../src/lib/store-context.js')
+  test('会话 Composer 有本地草稿时不自动 reload：挂起提示 + 立即刷新动作；dirty 转清后自动补刷一次', { timeout: 60_000 }, async () => {
+    entryCleanup = installProductionEntry(CURRENT_ENTRY)
+    harness = mountWatcher()
+    const h = harness
+    act(() => {
+      setComposerDirty('watch-test-composer', { ...CLEAN_COMPOSER, hasDraftText: true })
+    })
+    h.renderStore('boot-1')
+    await flush()
 
-  const encoder = new TextEncoder()
-  const conv = (id: number) => ({
-    id,
-    title: `c${id}`,
+    h.respond(() => new Response(builtIndexHtml(NEW_ENTRY), { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } }))
+    h.renderStore('boot-2')
+    await flush()
+    assert.equal(h.view().updateAvailable, true, '新版本已探测到')
+    assert.equal(h.view().deferReason, 'draft', '本地草稿挂起')
+    assert.equal(h.reloads(), 0, 'dirty 时不自动 reload')
+
+    // dirty 快照翻转（仍在输入）不重复触发刷新，也不堆积提示状态
+    act(() => {
+      setComposerDirty('watch-test-composer', { ...CLEAN_COMPOSER, hasDraftText: true, editingEntry: true })
+    })
+    await flush()
+    assert.equal(h.reloads(), 0)
+
+    act(() => {
+      setComposerDirty('watch-test-composer', CLEAN_COMPOSER)
+    })
+    await flush()
+    assert.equal(h.reloads(), 1, 'dirty 转清自动补刷')
+  })
+
+  test('待命草稿（任意坐标非空正文）挂起，并区分当前可见与后台草稿；草稿清空后补刷', { timeout: 60_000 }, async () => {
+    entryCleanup = installProductionEntry(CURRENT_ENTRY)
+    harness = mountWatcher()
+    const h = harness
+    const key = standbyDraftKey({ panel: 'primary', profileId: 'p1' })
+    act(() => {
+      updateStandbyDraft(key, { text: '未发送的首条消息' })
+    })
+    h.renderStore('boot-1')
+    await flush()
+
+    h.respond(() => new Response(builtIndexHtml(NEW_ENTRY), { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } }))
+    h.renderStore('boot-2')
+    await flush()
+    assert.equal(h.view().deferReason, 'background-draft', '当前在其他页面时标识为后台草稿')
+    assert.equal(h.reloads(), 0)
+
+    act(() => {
+      h.store().openTarget({ kind: 'agent', profileId: 'p1' })
+    })
+    await flush()
+    assert.equal(h.view().deferReason, 'draft', '切到该待命页后标识为当前输入内容')
+    assert.equal(h.reloads(), 0)
+
+    act(() => {
+      clearStandbyDraft(key)
+    })
+    await flush()
+    assert.equal(h.reloads(), 1)
+  })
+
+  test('探测失败不误判：dirty 现场保持原状，不产生待刷新提示', { timeout: 60_000 }, async () => {
+    entryCleanup = installProductionEntry(CURRENT_ENTRY)
+    harness = mountWatcher()
+    const h = harness
+    h.renderStore('boot-1')
+    await flush()
+
+    h.respond(() => new Response('server error', { status: 500 }))
+    h.renderStore('boot-2')
+    await flush()
+    assert.equal(h.fetchCalls.length, 1)
+    assert.equal(h.view().updateAvailable, false, 'HTTP 错误不当作版本变更')
+    assert.equal(h.reloads(), 0)
+  })
+
+  // ---------------------------------------------------------------------------
+  // 异步探测竞态与卸载守卫
+  // ---------------------------------------------------------------------------
+
+  /** 受控延迟响应：测试持有 release 决定第一次探测何时返回。 */
+  function deferredResponse(): { promise: Promise<Response>; release: (response: Response) => void } {
+    let release!: (response: Response) => void
+    const promise = new Promise<Response>((resolve) => {
+      release = resolve
+    })
+    return { promise, release }
+  }
+
+  const htmlOf = (entry: string): Response =>
+    new Response(builtIndexHtml(entry), { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } })
+
+  test('在途探测期间 bootId 变化不吞快速触发：完成后立刻补探并采用最新结果', { timeout: 60_000 }, async () => {
+    entryCleanup = installProductionEntry(CURRENT_ENTRY)
+    harness = mountWatcher()
+    const h = harness
+    h.renderStore('boot-1')
+    await flush()
+
+    const first = deferredResponse()
+    let call = 0
+    h.respond(() => (call++ === 0 ? first.promise : Promise.resolve(htmlOf(NEW_ENTRY))))
+    await withTimings({ visibilityThrottleMs: 0, pollIntervalMs: 60_000 }, async () => {
+      act(() => {
+        dispatchVisibility(true)
+      })
+      await flush()
+      assert.equal(h.fetchCalls.length, 1, '第一次探测在途')
+
+      // 在途期间内核换代：快速触发进入补探队列，而不是被丢弃
+      h.renderStore('boot-2')
+      await flush()
+      assert.equal(h.fetchCalls.length, 1, '在途期间不并发探测')
+
+      act(() => {
+        first.release(htmlOf(CURRENT_ENTRY))
+      })
+      await flush()
+      assert.equal(h.fetchCalls.length, 2, '在途完成后立刻补探')
+      assert.equal(h.view().updateAvailable, true, '补探采用最新入口')
+      assert.equal(h.reloads(), 1, 'clean 检测到新版本补刷')
+    })
+  })
+
+  test('卸载时在途探测回包被丢弃：不推进状态、不触发 reload', { timeout: 60_000 }, async () => {
+    entryCleanup = installProductionEntry(CURRENT_ENTRY)
+    harness = mountWatcher()
+    const h = harness
+    const first = deferredResponse()
+    h.respond(() => first.promise)
+    await withTimings({ visibilityThrottleMs: 0, pollIntervalMs: 60_000 }, async () => {
+      act(() => {
+        dispatchVisibility(true)
+      })
+      await flush()
+      assert.equal(h.fetchCalls.length, 1, '探测在途')
+
+      h.unmount()
+      act(() => {
+        first.release(htmlOf(NEW_ENTRY))
+      })
+      await flush()
+      assert.equal(h.reloads(), 0, '卸载后的回包不触发 reload')
+      assert.equal(h.view().updateAvailable, false, '卸载后不推进状态')
+    })
+  })
+
+  // ---------------------------------------------------------------------------
+  // 弹窗与焦点保护（保守挂起条件）
+  // ---------------------------------------------------------------------------
+
+  test('任意 activeModal（含只读 artifact-preview）挂起自动刷新；关闭后自动补刷', { timeout: 60_000 }, async () => {
+    entryCleanup = installProductionEntry(CURRENT_ENTRY)
+    harness = mountWatcher()
+    const h = harness
+    h.renderStore('boot-1')
+    await flush()
+    h.respond(() => htmlOf(NEW_ENTRY))
+
+    h.renderStore('boot-2', { activeModal: { kind: 'artifact-preview', artifactId: 'art-1', conversationId: 1 } })
+    await flush()
+    assert.equal(h.view().updateAvailable, true)
+    assert.equal(h.view().deferReason, 'modal', '只读弹窗同样保守挂起')
+    assert.equal(h.reloads(), 0)
+
+    // 同 bootId 仅关闭弹窗：不靠新探测，挂起解除即补刷
+    h.renderStore('boot-2', { activeModal: null })
+    await flush()
+    assert.equal(h.view().deferReason, null)
+    assert.equal(h.reloads(), 1, '弹窗关闭自动补刷')
+  })
+
+  test('草稿 + 弹窗同时在场：deferReason 如实组合，两者都解除后才补刷', { timeout: 60_000 }, async () => {
+    entryCleanup = installProductionEntry(CURRENT_ENTRY)
+    harness = mountWatcher()
+    const h = harness
+    act(() => {
+      setComposerDirty('watch-test-composer', { ...CLEAN_COMPOSER, hasDraftText: true })
+    })
+    h.renderStore('boot-1')
+    await flush()
+    h.respond(() => htmlOf(NEW_ENTRY))
+
+    h.renderStore('boot-2', { activeModal: { kind: 'command-palette' } })
+    await flush()
+    assert.equal(h.view().deferReason, 'draft-and-modal')
+    assert.equal(h.reloads(), 0)
+
+    // 先关弹窗：仍有草稿，不刷
+    h.renderStore('boot-2', { activeModal: null })
+    await flush()
+    assert.equal(h.view().deferReason, 'draft')
+    assert.equal(h.reloads(), 0)
+
+    // 再清草稿：补刷
+    act(() => {
+      setComposerDirty('watch-test-composer', CLEAN_COMPOSER)
+    })
+    await flush()
+    assert.equal(h.reloads(), 1)
+  })
+
+  test('空输入框或未改动预填值聚焦不误拦；实际编辑挂起，删回原值或失焦后自动补刷', { timeout: 60_000 }, async () => {
+    entryCleanup = installProductionEntry(CURRENT_ENTRY)
+    harness = mountWatcher()
+    const h = harness
+    const input = document.createElement('input')
+    input.value = 'preset'
+    document.body.appendChild(input)
+    h.renderStore('boot-1')
+    await flush()
+    h.respond(() => htmlOf(NEW_ENTRY))
+
+    // 仅聚焦未改字（含已有默认值的表单字段）：不误判为未提交输入
+    act(() => {
+      input.focus()
+    })
+    await flush()
+    assert.equal(h.view().deferReason, null, '聚焦但未修改值不挂起')
+
+    // 用户实际修改内容：立即进入 draft 挂起，发版不强刷
+    act(() => {
+      input.value = 'preset edited'
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await flush()
+    assert.equal(h.view().deferReason, 'draft', '实际修改输入内容后挂起')
+
+    h.renderStore('boot-2')
+    await flush()
+    assert.equal(h.view().updateAvailable, true)
+    assert.equal(h.reloads(), 0, '编辑过程中不自动刷新')
+
+    // 删回原值后恢复干净，立即补刷
+    act(() => {
+      input.value = 'preset'
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await flush()
+    assert.equal(h.view().deferReason, null)
+    assert.equal(h.reloads(), 1, '改回原值后恢复干净并自动补刷')
+    input.remove()
+  })
+
+  test('聚焦中的脏输入框被直接卸载或 display:none 隐藏时，无 focusout 也自愈并补刷', { timeout: 60_000 }, async () => {
+    entryCleanup = installProductionEntry(CURRENT_ENTRY)
+    harness = mountWatcher()
+    const h = harness
+    const wrap = document.createElement('div')
+    const input = document.createElement('input')
+    wrap.appendChild(input)
+    document.body.appendChild(wrap)
+    h.renderStore('boot-1')
+    await flush()
+    h.respond(() => htmlOf(NEW_ENTRY))
+
+    act(() => {
+      input.focus()
+      input.value = 'unsaved'
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await flush()
+    h.renderStore('boot-2')
+    await flush()
+    assert.equal(h.view().deferReason, 'draft')
+    assert.equal(h.reloads(), 0)
+
+    // 场景 A：父容器变为 display:none（如 <Activity mode="hidden">），浏览器不触发 focusout
+    act(() => {
+      wrap.style.display = 'none'
+    })
+    await waitForCondition(() => h.view().deferReason === null)
+    assert.equal(h.reloads(), 1, '容器隐藏后自愈解除挂起并补刷')
+    wrap.remove()
+  })
+
+  test('聚焦中的脏输入框从 DOM 移除（如 AuthGate/重命名卸载）时自动自愈补刷', { timeout: 60_000 }, async () => {
+    entryCleanup = installProductionEntry(CURRENT_ENTRY)
+    harness = mountWatcher()
+    const h = harness
+    const input = document.createElement('input')
+    document.body.appendChild(input)
+    h.renderStore('boot-1')
+    await flush()
+    h.respond(() => htmlOf(NEW_ENTRY))
+
+    act(() => {
+      input.focus()
+      input.value = 'secret'
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await flush()
+    h.renderStore('boot-2')
+    await flush()
+    assert.equal(h.reloads(), 0)
+
+    act(() => {
+      input.remove()
+    })
+    await waitForCondition(() => h.view().deferReason === null)
+    assert.equal(h.reloads(), 1, 'DOM 移除后自动解除挂起并补刷')
+  })
+
+  test('受管 Composer 空 textarea 聚焦不误拦，仅 IME 组合输入期间保护', { timeout: 60_000 }, async () => {
+    entryCleanup = installProductionEntry(CURRENT_ENTRY)
+    harness = mountWatcher()
+    const h = harness
+    const textarea = document.createElement('textarea')
+    textarea.setAttribute('data-composer-draft-managed', 'true')
+    document.body.appendChild(textarea)
+    h.renderStore('boot-1')
+    await flush()
+    h.respond(() => htmlOf(NEW_ENTRY))
+
+    act(() => {
+      textarea.focus()
+    })
+    await flush()
+    assert.equal(h.view().deferReason, null, '发完消息光标留在空受管框内不拦截自动刷新')
+
+    act(() => {
+      textarea.dispatchEvent(new Event('compositionstart', { bubbles: true }))
+    })
+    await flush()
+    assert.equal(h.view().deferReason, 'draft', 'IME 组合输入期间受保护')
+
+    h.renderStore('boot-2')
+    await flush()
+    assert.equal(h.reloads(), 0)
+
+    act(() => {
+      textarea.dispatchEvent(new Event('compositionend', { bubbles: true }))
+    })
+    await flush()
+    assert.equal(h.view().deferReason, null)
+    assert.equal(h.reloads(), 1, 'IME 结束且草稿为空后自动补刷')
+    textarea.remove()
+  })
+
+  test('分屏与抽屉内的会话草稿计为当前可见，其余隐藏会话计为后台草稿', { timeout: 60_000 }, async () => {
+    entryCleanup = installProductionEntry(CURRENT_ENTRY)
+    harness = mountWatcher()
+    const h = harness
+    act(() => {
+      setComposerDirty('watch-composer-instance', { ...CLEAN_COMPOSER, hasDraftText: true }, 9)
+    })
+    h.renderStore('boot-1')
+    await flush()
+    h.respond(() => htmlOf(NEW_ENTRY))
+    h.renderStore('boot-2', { activeModal: { kind: 'command-palette' } })
+    await flush()
+    assert.equal(h.view().deferReason, 'background-draft-and-modal', '后台草稿 + 打开窗口精确组合')
+
+    // 若在 conversation-drawer 中打开了会话 9，则视为当前可见草稿
+    h.renderStore('boot-2', { activeModal: { kind: 'conversation-drawer', conversationId: 9 } })
+    await flush()
+    assert.equal(h.view().deferReason, 'draft-and-modal', '抽屉内会话草稿属于当前可见现场')
+
+    // 关掉抽屉但分屏打开会话 9，仍属于当前可见草稿
+    act(() => {
+      h.store().openTarget({ kind: 'conversation', conversationId: 9 }, { split: true })
+    })
+    h.renderStore('boot-2', { activeModal: null })
+    await flush()
+    assert.equal(h.view().deferReason, 'draft', '分屏内会话草稿属于当前可见现场')
+
+    act(() => {
+      clearComposerDirty('watch-composer-instance')
+    })
+    await flush()
+    assert.equal(h.reloads(), 1)
+  })
+
+  // ---------------------------------------------------------------------------
+  // Composer 实例脏状态上报生命周期（桥接端到端）
+  // ---------------------------------------------------------------------------
+
+  const HOST_CONVERSATION: ConversationSummary = {
+    id: 7,
+    title: '桥接测试会话',
     profileId: 'assistant',
     tags: [],
     cwd: '/tmp',
-    model: 'm',
-    thinkingLevel: '',
+    model: 'faux/faux-1',
+    thinkingLevel: 'off',
     status: 'idle',
     stateChangeSeq: 1,
     completionSeq: 0,
@@ -1175,214 +679,714 @@ test('HelmxStoreProvider：snapshot 把 bootId 暴露到 store.kernelBootId，�
     pendingAskCount: 0,
     createdAt: 1,
     updatedAt: 1,
-  })
-  const snapshotOf = (bootId: string): string =>
-    `event: snapshot\ndata: ${JSON.stringify({ bootId, seq: 1, conversations: [conv(1)], pendingAsks: [], plugins: [], ui: [] })}\n\n`
-
-  interface StreamHandle {
-    stream: ReadableStream<Uint8Array>
-    send: (text: string) => void
-    end: () => void
-  }
-  const makeHandle = (signal?: AbortSignal | null): StreamHandle => {
-    let controller: ReadableStreamDefaultController<Uint8Array> | undefined
-    let ended = false
-    const finish = (): void => {
-      if (ended) return
-      ended = true
-      signal?.removeEventListener('abort', finish)
-      try {
-        controller?.close()
-      } catch {
-        /* 已关/已取消：幂等 */
-      }
-    }
-    signal?.addEventListener('abort', finish, { once: true })
-    const stream = new ReadableStream<Uint8Array>({
-      start(c) {
-        controller = c
-        if (signal?.aborted) finish()
-      },
-      cancel() {
-        finish()
-      },
-    })
-    return {
-      stream,
-      send: (text) => {
-        if (!ended) controller?.enqueue(encoder.encode(text))
-      },
-      end: finish,
-    }
   }
 
-  // 连接请求先到而工厂未注册时挂起（与 sse-resume.test.tsx 同约定的确定性队列）。
-  type StreamFactory = (signal: AbortSignal | null) => StreamHandle
-  const factories: StreamFactory[] = []
-  const waiting: Array<{ signal: AbortSignal | null; resolve: (handle: StreamHandle) => void }> = []
-  const liveHandles: StreamHandle[] = []
-  const takeHandle = (signal: AbortSignal | null): Promise<StreamHandle> => {
-    const factory = factories.shift()
-    if (factory !== undefined) return Promise.resolve(factory(signal))
-    return new Promise((resolve) => {
-      waiting.push({ signal, resolve })
-    })
-  }
-  const nextEvents = (factory: StreamFactory): void => {
-    const pending = waiting.shift()
-    if (pending !== undefined) {
-      pending.resolve(factory(pending.signal))
-      return
-    }
-    factories.push(factory)
-  }
+  test('Composer 实例上报与卸载清报：旧实例残留不阻塞刷新', { timeout: 60_000 }, async () => {
+    entryCleanup = installProductionEntry(CURRENT_ENTRY)
+    harness = mountWatcher()
+    const h = harness
 
-  const originalTimings = { ...sseClientTimings }
-  Object.assign(sseClientTimings, {
-    reconnectBaseMs: 15,
-    reconnectCapMs: 60,
-    reconnectJitterMs: 5,
-  })
-  const originalFetch = globalThis.fetch
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const path = String(input)
-    if (path === '/api/auth/status') {
-      return new Response(JSON.stringify({ configured: true, authenticated: true }), { status: 200, headers: { 'content-type': 'application/json' } })
+    // 独立渲染一个真实 useComposerSend 宿主（与 watcher 共享模块级桥接 store）
+    let sendApi: ComposerSendApi | null = null
+    const ComposerSendHost = (): React.ReactNode => {
+      const textareaRef = React.useRef<HTMLTextAreaElement | null>(null)
+      sendApi = useComposerSend({
+        conversation: HOST_CONVERSATION,
+        prefill: null,
+        textareaRef,
+        slashPluginCommands: [],
+        envConfigurable: false,
+        working: false,
+        dirtyKey: 'watch-composer-instance',
+      })
+      return null
     }
-    if (path === '/api/events' || path.startsWith('/api/events?')) {
-      const handle = await takeHandle(init?.signal ?? null)
-      liveHandles.push(handle)
-      return new Response(handle.stream, { status: 200, headers: { 'content-type': 'text/event-stream' } })
-    }
-    return new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } })
-  }) as typeof fetch
-
-  let observedBootId: string | null = null
-  const Probe = (): React.ReactNode => {
-    const store = useHelmxStore()
-    observedBootId = store.kernelBootId ?? null
-    return null
-  }
-  const host = document.createElement('div')
-  document.body.appendChild(host)
-  const root = createRoot(host)
-  const waitFor = async (expected: string): Promise<void> => {
-    await waitForCondition(() => observedBootId === expected, 15_000, 2)
-  }
-  try {
-    // 第一条连接（先注册工厂再挂载，避免连接先到挂起）：boot-1 快照
-    nextEvents((signal) => {
-      const handle = makeHandle(signal)
-      handle.send(snapshotOf('boot-1'))
-      return handle
-    })
-    await act(async () => {
-      root.render(
-        <HelmxStoreProvider>
-          <Probe />
-        </HelmxStoreProvider>,
+    const composerHost = document.createElement('div')
+    document.body.appendChild(composerHost)
+    const composerRoot = createRoot(composerHost)
+    act(() => {
+      composerRoot.render(
+        <HelmxExternalStoreContext.Provider value={makeTestStore({})}>
+          <ComposerSendHost />
+        </HelmxExternalStoreContext.Provider>,
       )
     })
-    await waitFor('boot-1')
+    assert.equal(h.view().deferReason, null, '空草稿不挂起')
 
-    // 断开第一条连接，重连（指数退避）后 boot-2 快照 → kernelBootId 推进
-    const first = liveHandles[0]
-    assert.ok(first !== undefined)
-    nextEvents((signal) => {
-      const handle = makeHandle(signal)
-      handle.send(snapshotOf('boot-2'))
-      return handle
-    })
-    await act(async () => {
-      first.end()
-    })
-    await waitFor('boot-2')
-  } finally {
-    await act(async () => {
-      root.unmount()
-    })
-    for (const handle of liveHandles) handle.end()
-    Object.assign(sseClientTimings, originalTimings)
-    globalThis.fetch = originalFetch
-    host.remove()
-  }
-})
-
-test('App 版本横幅集成：渲染显式 type=button 立即刷新按钮并直连 reloadNow 触发导航', { timeout: 60_000 }, async () => {
-  const { App } = await import('../src/App.js')
-  entryCleanup = installProductionEntry(CURRENT_ENTRY)
-  const originalFetch = globalThis.fetch
-  const originalReplace = window.location.replace.bind(window.location)
-  const replacedUrls: string[] = []
-  Object.defineProperty(window.location, 'replace', {
-    configurable: true,
-    value: (url: string) => {
-      replacedUrls.push(String(url))
-    },
-  })
-  let indexHtml = builtIndexHtml(CURRENT_ENTRY)
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input)
-    if (url === '/api/auth/status') return jsonResponse({ configured: true, authenticated: true })
-    if (url.startsWith('/index.html')) {
-      return new Response(indexHtml, { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } })
-    }
-    if (url === '/api/events' || url.startsWith('/api/events?')) {
-      return new Response(
-        hangingEventStream((send) => {
-          send(new TextEncoder().encode(
-            `event: snapshot\ndata: ${JSON.stringify({ bootId: 'boot-1', seq: 1, conversations: [], pendingAsks: [], plugins: [], ui: [] })}\n\n`,
-          ))
-        }, { signal: init?.signal }),
-        { status: 200, headers: { 'content-type': 'text/event-stream' } },
-      )
-    }
-    return jsonResponse([])
-  }) as typeof fetch
-
-  const appHost = document.createElement('div')
-  document.body.appendChild(appHost)
-  const appRoot = createRoot(appHost)
-  try {
     act(() => {
-      setComposerDirty('watch-test-composer', { ...CLEAN_COMPOSER, hasDraftText: true })
-    })
-    await act(async () => {
-      appRoot.render(<App />)
-    })
-    await waitForCondition(() => appHost.querySelector('.helmx-shell') !== null)
-    // 弱网失败（指纹未变）：不弹版本横幅、不强刷，改为提示可恢复错误
-    act(() => {
-      window.dispatchEvent(new Event('vite:preloadError', { cancelable: true }))
-    })
-    await waitForCondition(() => appHost.querySelector('.toast-overlay') !== null)
-    assert.ok(appHost.querySelector('.version-banner[role="status"]') === null, '指纹未变不弹 version-banner')
-    assert.equal(replacedUrls.length, 0, '指纹未变不触发刷新')
-
-    // 服务端发版后再次触发：探测到 NEW_ENTRY，渲染 version-banner 并可立即刷新
-    indexHtml = builtIndexHtml(NEW_ENTRY)
-    act(() => {
-      window.dispatchEvent(new Event('vite:preloadError', { cancelable: true }))
-    })
-    await waitForCondition(() => appHost.querySelector('.version-banner[role="status"]') !== null)
-    const banner = appHost.querySelector<HTMLElement>('.version-banner[role="status"]')
-    assert.ok(banner, '挂起更新时渲染 version-banner')
-    const btn = banner!.querySelector<HTMLButtonElement>('button[type="button"]')
-    assert.ok(btn && btn.textContent?.includes('Refresh now'), '「立即刷新」是真实 type=button')
-    act(() => {
-      btn!.click()
+      sendApi!.setDraftState('未发送的草稿')
     })
     await flush()
-    assert.equal(replacedUrls.length, 1, '点击「立即刷新」直连 reloadNow 发起顶层导航')
-  } finally {
-    await act(async () => {
-      appRoot.unmount()
+    assert.equal(h.view().deferReason, 'background-draft', '当前看会话 1 时，会话 7 上报为后台草稿')
+
+    act(() => {
+      h.store().openTarget({ kind: 'conversation', conversationId: HOST_CONVERSATION.id })
     })
+    await flush()
+    assert.equal(h.view().deferReason, 'draft', '切到会话 7 后识别为当前输入内容')
+
+    h.renderStore('boot-1')
+    await flush()
+    h.respond(() => htmlOf(NEW_ENTRY))
+    h.renderStore('boot-2')
+    await flush()
+    assert.equal(h.view().updateAvailable, true)
+    assert.equal(h.reloads(), 0, '草稿在场不刷新')
+
+    // 卸载 Composer 实例：上报随 effect cleanup 清除，聚合转清自动补刷
+    act(() => {
+      composerRoot.unmount()
+    })
+    await flush()
+    assert.equal(h.reloads(), 1, '实例卸载清报后补刷，不残留阻塞')
+    composerHost.remove()
+  })
+
+  // ---------------------------------------------------------------------------
+  // visibility / focus 节流与轮询
+  // ---------------------------------------------------------------------------
+
+  test('visibilitychange 变 visible 与 focus 立即探测，5s 节流窗口内不重复', { timeout: 60_000 }, async () => {
+    entryCleanup = installProductionEntry(CURRENT_ENTRY)
+    harness = mountWatcher()
+    const h = harness
+    await withTimings({ visibilityThrottleMs: 30, pollIntervalMs: 60_000 }, async () => {
+      act(() => {
+        dispatchVisibility(false)
+      })
+      await flush()
+      assert.equal(h.fetchCalls.length, 0, 'hidden 的 visibilitychange 不探测')
+
+      act(() => {
+        dispatchVisibility(true)
+      })
+      await flush()
+      assert.equal(h.fetchCalls.length, 1)
+
+      act(() => {
+        dispatchVisibility(true)
+        window.dispatchEvent(new Event('focus'))
+      })
+      await flush()
+      assert.equal(h.fetchCalls.length, 1, '节流窗口内 visibility/focus 不重复探测')
+
+      await flush(45)
+      act(() => {
+        window.dispatchEvent(new Event('focus'))
+      })
+      await flush()
+      assert.equal(h.fetchCalls.length, 2, '窗口过后放行')
+    })
+  })
+
+  test('visible 期间按周期轮询；hidden 暂停；恢复 visible 后继续', { timeout: 60_000 }, async () => {
+    entryCleanup = installProductionEntry(CURRENT_ENTRY)
+    await withTimings({ pollIntervalMs: 15, visibilityThrottleMs: 0 }, async () => {
+      harness = mountWatcher()
+      const h = harness
+      await waitForCondition(() => h.fetchCalls.length >= 2)
+
+      const beforeHidden = h.fetchCalls.length
+      act(() => {
+        dispatchVisibility(false)
+      })
+      await flush(45)
+      assert.equal(h.fetchCalls.length, beforeHidden, 'hidden 期间不轮询')
+
+      act(() => {
+        dispatchVisibility(true)
+      })
+      await waitForCondition(() => h.fetchCalls.length > beforeHidden)
+      assert.ok(h.fetchCalls.length > beforeHidden, '恢复 visible 后继续轮询')
+    })
+  })
+
+  // ---------------------------------------------------------------------------
+  // vite:preloadError 弱网安全守卫
+  // ---------------------------------------------------------------------------
+
+  test('vite:preloadError：/index.html 指纹未变时不强刷整页，暴露可恢复 preloadError 状态并推送通知', { timeout: 60_000 }, async () => {
+    entryCleanup = installProductionEntry(CURRENT_ENTRY)
+    harness = mountWatcher(builtIndexHtml(CURRENT_ENTRY))
+    const h = harness
+    h.renderStore('boot-1')
+    await flush()
+
+    const event = new Event('vite:preloadError', { cancelable: true })
+    act(() => {
+      window.dispatchEvent(event)
+    })
+    await flush()
+
+    assert.equal(event.defaultPrevented, true, 'handler 恒接管并取消默认重抛')
+    assert.equal(h.fetchCalls.length, 1, '触发 /index.html 入口指纹探测')
+    assert.equal(h.reloads(), 0, '指纹未变时绝不强刷整页导致会话/草稿丢失')
+    assert.equal(h.view().updateAvailable, false, '指纹未变时不误报新版本')
+    assert.equal(h.view().preloadError, true, '暴露可恢复 preloadError 状态供重试')
+    const notices = h.store().getNotices()
+    assert.equal(notices.length, 1)
+    assert.equal(notices[0]?.level, 'warning')
+
+    act(() => {
+      h.view().clearPreloadError()
+    })
+    await flush()
+    assert.equal(h.view().preloadError, false, '重试后可复位 preloadError 状态')
+  })
+
+  test('vite:preloadError：探测失败（500 / 离线）同样不强刷整页，保留草稿并暴露可恢复状态', { timeout: 60_000 }, async () => {
+    entryCleanup = installProductionEntry(CURRENT_ENTRY)
+    harness = mountWatcher()
+    const h = harness
+    h.respond(() => new Response('offline', { status: 503 }))
+    await flush()
+
+    act(() => {
+      window.dispatchEvent(new Event('vite:preloadError', { cancelable: true }))
+    })
+    await flush()
+
+    assert.equal(h.fetchCalls.length, 1)
+    assert.equal(h.reloads(), 0, '探测失败不盲目强刷整页')
+    assert.equal(h.view().updateAvailable, false)
+    assert.equal(h.view().preloadError, true)
+  })
+
+  test('vite:preloadError：探测到 /index.html 指纹确已变更时升级重载（clean 立即刷新、dirty 挂起转清补刷）', { timeout: 60_000 }, async () => {
+    entryCleanup = installProductionEntry(CURRENT_ENTRY)
+    harness = mountWatcher(builtIndexHtml(NEW_ENTRY))
+    const h = harness
+    act(() => {
+      setComposerDirty('watch-test-composer', { ...CLEAN_COMPOSER, hasAttachments: true })
+    })
+    await flush()
+
+    act(() => {
+      window.dispatchEvent(new Event('vite:preloadError', { cancelable: true }))
+    })
+    await flush()
+
+    assert.equal(h.fetchCalls.length, 1)
+    assert.equal(h.view().updateAvailable, true, '确认新版本已发布，置 updateAvailable')
+    assert.equal(h.view().deferReason, 'draft', '有草稿时保守挂起不强刷')
+    assert.equal(h.view().preloadError, false, '已确认新版本时不留弱网重试态')
+    assert.equal(h.reloads(), 0)
+
+    act(() => {
+      setComposerDirty('watch-test-composer', CLEAN_COMPOSER)
+    })
+    await flush()
+    assert.equal(h.reloads(), 1, '草稿转清后自动补刷一次')
+
+    // 重复事件不再二次刷新
+    act(() => {
+      window.dispatchEvent(new Event('vite:preloadError', { cancelable: true }))
+    })
+    await flush()
+    assert.equal(h.reloads(), 1, '防重复刷新')
+  })
+
+  test('vite:preloadError：先弱网失败后服务端发版，再次探测确认指纹变更后升级刷新', { timeout: 60_000 }, async () => {
+    entryCleanup = installProductionEntry(CURRENT_ENTRY)
+    harness = mountWatcher(builtIndexHtml(CURRENT_ENTRY))
+    const h = harness
+    await flush()
+
+    act(() => {
+      window.dispatchEvent(new Event('vite:preloadError', { cancelable: true }))
+    })
+    await flush()
+    assert.equal(h.reloads(), 0)
+    assert.equal(h.view().preloadError, true)
+
+    h.respond(() => htmlOf(NEW_ENTRY))
+    act(() => {
+      window.dispatchEvent(new Event('vite:preloadError', { cancelable: true }))
+    })
+    await flush()
+    assert.equal(h.view().preloadError, false)
+    assert.equal(h.view().updateAvailable, true)
+    assert.equal(h.reloads(), 1, '指纹变化后按版本更新逻辑刷新')
+  })
+
+  test('vite:preloadError 命中新指纹但 storage 不可用：fail-closed 保留横幅与手动刷新', { timeout: 60_000 }, async () => {
+    entryCleanup = installProductionEntry(CURRENT_ENTRY)
+    harness = mountWatcher(builtIndexHtml(NEW_ENTRY))
+    const h = harness
+    await flush()
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'sessionStorage')
+    Object.defineProperty(globalThis, 'sessionStorage', {
+      configurable: true,
+      get() {
+        throw new DOMException('Storage disabled', 'SecurityError')
+      },
+    })
+    try {
+      act(() => {
+        window.dispatchEvent(new Event('vite:preloadError', { cancelable: true }))
+      })
+      await flush()
+      assert.equal(h.reloads(), 0, 'storage 不可用拒绝自动刷新，绝不跨页循环')
+      assert.equal(h.view().updateAvailable, true)
+    } finally {
+      if (descriptor !== undefined) Object.defineProperty(globalThis, 'sessionStorage', descriptor)
+      else delete (globalThis as { sessionStorage?: unknown }).sessionStorage
+    }
+  })
+
+  // ---------------------------------------------------------------------------
+  // WebView-safe 刷新：导航阶梯、手动不短路、升级重试与跨页防环
+  // ---------------------------------------------------------------------------
+
+  test('手动「立即刷新」不被一次性闸门短路：自动刷新已尝试（页面未真正导航）后仍可再触发', { timeout: 60_000 }, async () => {
+    entryCleanup = installProductionEntry(CURRENT_ENTRY)
+    harness = mountWatcher()
+    const h = harness
+    h.renderStore('boot-1')
+    await flush()
+    h.respond(() => htmlOf(NEW_ENTRY))
+    h.renderStore('boot-2')
+    await flush()
+    assert.equal(h.view().updateAvailable, true)
+    assert.equal(h.reloads(), 1, 'clean 自动刷新已尝试一次（注入 reload 不卸载页面，模拟导航被吞）')
+
+    act(() => {
+      h.view().reloadNow()
+    })
+    await flush()
+    assert.equal(h.reloads(), 2, '再次手动点击必须仍能发起刷新（旧行为被 reloadTriggeredRef 短路）')
+
+    act(() => {
+      h.view().reloadNow()
+    })
+    await flush()
+    assert.equal(h.reloads(), 3, '手动动作可重复触发，不受自动闸门/名额约束')
+  })
+
+  test('WebView 吞掉同址导航时自动升级 cache-buster：URL 保留 pathname/query/hash 且不累积', { timeout: 60_000 }, async () => {
+    entryCleanup = installProductionEntry(CURRENT_ENTRY)
+    const stub = makeStubLocation({ pathname: '/', search: '?x=1', hash: '#/c/7' })
+    harness = mountWatcher(builtIndexHtml(CURRENT_ENTRY), { location: stub.location })
+    const h = harness
+    h.renderStore('boot-1')
+    await flush()
+    h.respond(() => htmlOf(NEW_ENTRY))
+    await withTimings({ reloadEscalateMs: 20 }, async () => {
+      h.renderStore('boot-2')
+      await flush()
+      assert.equal(h.reloads(), 1, 'clean 自动刷新第一次尝试')
+      assert.deepEqual(h.replaceUrls(), ['/?x=1#/c/7'], '首次是干净同址导航：保留 query/hash、不加任何参数')
+
+      // 替身 replace 不卸载页面 = 导航被容器吞掉：升级重试自动发生
+      await waitForCondition(() => h.reloads() === 2)
+      assert.equal(h.reloads(), 2, '页面仍存活 → 升级为 cache-buster 导航重试一次')
+      const escalated = h.replaceUrls()[1]!
+      assert.match(escalated, new RegExp(`[?]x=1&${RELOAD_CACHE_BUSTER_PARAM}=`), '既有 query 参数保留，buster 追加其后')
+      assert.ok(escalated.endsWith('#/c/7'), 'hash 路由原样保留')
+
+      // 升级重试后不再自动升级（防循环）；手动动作仍可用且直接进入带 buster 的尝试
+      await flush(45)
+      assert.equal(h.reloads(), 2, '自动升级至多一次，不循环')
+      act(() => {
+        h.view().reloadNow()
+      })
+      await flush()
+      assert.equal(h.reloads(), 3, '手动刷新在自动尝试/升级之后仍可发起')
+      const manual = h.replaceUrls()[2]!
+      assert.equal(manual.match(new RegExp(`${RELOAD_CACHE_BUSTER_PARAM}=`, 'g'))?.length, 1, '地址中至多一个 buster（新值替换旧值）')
+      assert.ok(manual.endsWith('#/c/7'), 'hash 保留')
+    })
+  })
+
+  test('升级 timer 被后续手动导航取代：待决窗口内手动点击只发一次导航，不追加自动升级', { timeout: 60_000 }, async () => {
+    entryCleanup = installProductionEntry(CURRENT_ENTRY)
+    const stub = makeStubLocation({ hash: '#/c/3' })
+    harness = mountWatcher(builtIndexHtml(CURRENT_ENTRY), { location: stub.location })
+    const h = harness
+    h.renderStore('boot-1')
+    await flush()
+    h.respond(() => htmlOf(NEW_ENTRY))
+    await withTimings({ reloadEscalateMs: 40 }, async () => {
+      h.renderStore('boot-2')
+      await flush()
+      assert.equal(h.reloads(), 1, '自动刷新第一次尝试（升级 timer 待决）')
+
+      // 升级窗口内用户手动点击：新导航取代旧尝试，旧 timer 必须作废
+      act(() => {
+        h.view().reloadNow()
+      })
+      await flush()
+      assert.equal(h.reloads(), 2, '手动点击发出一条导航')
+      assert.match(h.replaceUrls()[1]!, new RegExp(`${RELOAD_CACHE_BUSTER_PARAM}=`), '手动点击直接进入带 buster 的尝试')
+
+      // 越过原升级期限后不再有追加的自动导航（旧行为会在这里多发一条）
+      await flush(70)
+      assert.equal(h.reloads(), 2, '一次用户操作只对应一次导航，不追加自动升级')
+      assert.equal(h.view().updateAvailable, true, '页面未卸载（替身不导航）：提示保留')
+    })
+  })
+
+  test('升级窗口内出现本地输入现场：放弃自动升级；转清后自动路径也不再重复导航，手动仍可用', { timeout: 60_000 }, async () => {
+    entryCleanup = installProductionEntry(CURRENT_ENTRY)
+    const stub = makeStubLocation({ hash: '#/c/9' })
+    harness = mountWatcher(builtIndexHtml(CURRENT_ENTRY), { location: stub.location })
+    const h = harness
+    h.renderStore('boot-1')
+    await flush()
+    h.respond(() => htmlOf(NEW_ENTRY))
+    await withTimings({ reloadEscalateMs: 25 }, async () => {
+      h.renderStore('boot-2')
+      await flush()
+      assert.equal(h.reloads(), 1, '自动刷新第一次尝试')
+
+      // 用户在升级窗口内开始输入：升级重试让位（保守保护未提交内容）
+      act(() => {
+        setComposerDirty('watch-test-composer', { ...CLEAN_COMPOSER, hasDraftText: true })
+      })
+      await flush(50)
+      assert.equal(h.reloads(), 1, '升级窗口内出现草稿：不自动升级')
+
+      act(() => {
+        setComposerDirty('watch-test-composer', CLEAN_COMPOSER)
+      })
+      await flush()
+      assert.equal(h.reloads(), 1, '自动路径一次性闸门：转清补刷不重复自动导航（防循环）')
+
+      act(() => {
+        h.view().reloadNow()
+      })
+      await flush()
+      assert.equal(h.reloads(), 2, '手动「立即刷新」始终可用')
+    })
+  })
+
+  test('同目标入口的自动刷新跨页仅一次：上一页未落地不再自动刷，横幅与手动动作保留', { timeout: 60_000 }, async () => {
+    entryCleanup = installProductionEntry(CURRENT_ENTRY)
+    // 模拟上一页已对同一新入口自动发起过刷新（WebView 回吐旧缓存、未真正落地）
+    sessionStorage.setItem(FINGERPRINT_RELOAD_GUARD_KEY, NEW_ENTRY)
+    harness = mountWatcher()
+    const h = harness
+    h.renderStore('boot-1')
+    await flush()
+    h.respond(() => htmlOf(NEW_ENTRY))
+    h.renderStore('boot-2')
+    await flush()
+    assert.equal(h.view().updateAvailable, true, '待刷新提示保留')
+    assert.equal(h.reloads(), 0, '同入口自动刷新不再重复发起（跨页防环）')
+
+    act(() => {
+      h.view().reloadNow()
+    })
+    await flush()
+    assert.equal(h.reloads(), 1, '手动刷新不受跨页防环约束')
+  })
+
+  test('storage 不可用：指纹驱动的自动刷新同样拒绝（fail-closed 防跨页无限刷新），保留横幅与手动', { timeout: 60_000 }, async () => {
+    entryCleanup = installProductionEntry(CURRENT_ENTRY)
+    harness = mountWatcher()
+    const h = harness
+    h.renderStore('boot-1')
+    await flush()
+    h.respond(() => htmlOf(NEW_ENTRY))
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'sessionStorage')
+    Object.defineProperty(globalThis, 'sessionStorage', {
+      configurable: true,
+      get() {
+        throw new DOMException('Storage disabled', 'SecurityError')
+      },
+    })
+    try {
+      h.renderStore('boot-2')
+      await flush()
+      assert.equal(h.view().updateAvailable, true, '待刷新提示保留')
+      assert.equal(h.reloads(), 0, 'storage 不可用拒绝自动刷新（禁 storage 的 WebView + 回吐旧缓存 = 无限循环）')
+
+      // 挂起条件反复变化（实际输入并失焦）也不得绕过 fail-closed 自动刷新
+      const input = document.createElement('input')
+      document.body.appendChild(input)
+      act(() => {
+        input.focus()
+        input.value = 'dirty'
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+      })
+      act(() => {
+        input.blur()
+      })
+      await flush()
+      assert.equal(h.reloads(), 0)
+      input.remove()
+
+      act(() => {
+        h.view().reloadNow()
+      })
+      await flush()
+      assert.equal(h.reloads(), 1, '手动「立即刷新」不受影响')
+    } finally {
+      if (descriptor !== undefined) Object.defineProperty(globalThis, 'sessionStorage', descriptor)
+      else delete (globalThis as { sessionStorage?: unknown }).sessionStorage
+    }
+  })
+
+  // ---------------------------------------------------------------------------
+  // 卸载清理
+  // ---------------------------------------------------------------------------
+
+  test('卸载后清理 listener 与轮询 timer：事件不再探测，周期不再触发', { timeout: 60_000 }, async () => {
+    entryCleanup = installProductionEntry(CURRENT_ENTRY)
+    await withTimings({ pollIntervalMs: 15, visibilityThrottleMs: 0 }, async () => {
+      harness = mountWatcher()
+      const h = harness
+      await waitForCondition(() => h.fetchCalls.length >= 1)
+      assert.ok(h.fetchCalls.length >= 1, '卸载前轮询已产生探测')
+      h.unmount()
+
+      const frozen = h.fetchCalls.length
+      await flush(45)
+      act(() => {
+        dispatchVisibility(true)
+        window.dispatchEvent(new Event('focus'))
+        window.dispatchEvent(new Event('vite:preloadError'))
+      })
+      await flush(25)
+      assert.equal(h.fetchCalls.length, frozen, '卸载后不再探测')
+      assert.equal(h.reloads(), 0, '卸载后 preloadError 不刷新')
+    })
+  })
+
+  // ---------------------------------------------------------------------------
+  // Provider 集成：SSE snapshot 的 bootId 暴露为 store.kernelBootId
+  // ---------------------------------------------------------------------------
+
+  test('HelmxStoreProvider：snapshot 把 bootId 暴露到 store.kernelBootId，重连换代后推进', { timeout: 60_000 }, async () => {
+    const { HelmxStoreProvider } = await import('../src/lib/HelmxStoreProvider.js')
+    const { useHelmxStore } = await import('../src/lib/store-context.js')
+
+    const encoder = new TextEncoder()
+    const conv = (id: number) => ({
+      id,
+      title: `c${id}`,
+      profileId: 'assistant',
+      tags: [],
+      cwd: '/tmp',
+      model: 'm',
+      thinkingLevel: '',
+      status: 'idle',
+      stateChangeSeq: 1,
+      completionSeq: 0,
+      unread: false,
+      pinned: false,
+      pendingAskCount: 0,
+      createdAt: 1,
+      updatedAt: 1,
+    })
+    const snapshotOf = (bootId: string): string =>
+      `event: snapshot\ndata: ${JSON.stringify({ bootId, seq: 1, conversations: [conv(1)], pendingAsks: [], plugins: [], ui: [] })}\n\n`
+
+    interface StreamHandle {
+      stream: ReadableStream<Uint8Array>
+      send: (text: string) => void
+      end: () => void
+    }
+    const makeHandle = (signal?: AbortSignal | null): StreamHandle => {
+      let controller: ReadableStreamDefaultController<Uint8Array> | undefined
+      let ended = false
+      const finish = (): void => {
+        if (ended) return
+        ended = true
+        signal?.removeEventListener('abort', finish)
+        try {
+          controller?.close()
+        } catch {
+          /* 已关/已取消：幂等 */
+        }
+      }
+      signal?.addEventListener('abort', finish, { once: true })
+      const stream = new ReadableStream<Uint8Array>({
+        start(c) {
+          controller = c
+          if (signal?.aborted) finish()
+        },
+        cancel() {
+          finish()
+        },
+      })
+      return {
+        stream,
+        send: (text) => {
+          if (!ended) controller?.enqueue(encoder.encode(text))
+        },
+        end: finish,
+      }
+    }
+
+    // 连接请求先到而工厂未注册时挂起（与 sse-resume.test.tsx 同约定的确定性队列）。
+    type StreamFactory = (signal: AbortSignal | null) => StreamHandle
+    const factories: StreamFactory[] = []
+    const waiting: Array<{ signal: AbortSignal | null; resolve: (handle: StreamHandle) => void }> = []
+    const liveHandles: StreamHandle[] = []
+    const takeHandle = (signal: AbortSignal | null): Promise<StreamHandle> => {
+      const factory = factories.shift()
+      if (factory !== undefined) return Promise.resolve(factory(signal))
+      return new Promise((resolve) => {
+        waiting.push({ signal, resolve })
+      })
+    }
+    const nextEvents = (factory: StreamFactory): void => {
+      const pending = waiting.shift()
+      if (pending !== undefined) {
+        pending.resolve(factory(pending.signal))
+        return
+      }
+      factories.push(factory)
+    }
+
+    const originalTimings = { ...sseClientTimings }
+    Object.assign(sseClientTimings, {
+      reconnectBaseMs: 15,
+      reconnectCapMs: 60,
+      reconnectJitterMs: 5,
+    })
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input)
+      if (path === '/api/auth/status') {
+        return new Response(JSON.stringify({ configured: true, authenticated: true }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      if (path === '/api/events' || path.startsWith('/api/events?')) {
+        const handle = await takeHandle(init?.signal ?? null)
+        liveHandles.push(handle)
+        return new Response(handle.stream, { status: 200, headers: { 'content-type': 'text/event-stream' } })
+      }
+      return new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } })
+    }) as typeof fetch
+
+    let observedBootId: string | null = null
+    const Probe = (): React.ReactNode => {
+      const store = useHelmxStore()
+      observedBootId = store.kernelBootId ?? null
+      return null
+    }
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    const waitFor = async (expected: string): Promise<void> => {
+      await waitForCondition(() => observedBootId === expected, 15_000, 2)
+    }
+    try {
+      // 第一条连接（先注册工厂再挂载，避免连接先到挂起）：boot-1 快照
+      nextEvents((signal) => {
+        const handle = makeHandle(signal)
+        handle.send(snapshotOf('boot-1'))
+        return handle
+      })
+      await act(async () => {
+        root.render(
+          <HelmxStoreProvider>
+            <Probe />
+          </HelmxStoreProvider>,
+        )
+      })
+      await waitFor('boot-1')
+
+      // 断开第一条连接，重连（指数退避）后 boot-2 快照 → kernelBootId 推进
+      const first = liveHandles[0]
+      assert.ok(first !== undefined)
+      nextEvents((signal) => {
+        const handle = makeHandle(signal)
+        handle.send(snapshotOf('boot-2'))
+        return handle
+      })
+      await act(async () => {
+        first.end()
+      })
+      await waitFor('boot-2')
+    } finally {
+      await act(async () => {
+        root.unmount()
+      })
+      for (const handle of liveHandles) handle.end()
+      Object.assign(sseClientTimings, originalTimings)
+      globalThis.fetch = originalFetch
+      host.remove()
+    }
+  })
+
+  test('App 版本横幅集成：渲染显式 type=button 立即刷新按钮并直连 reloadNow 触发导航', { timeout: 60_000 }, async () => {
+    const { App } = await import('../src/App.js')
+    entryCleanup = installProductionEntry(CURRENT_ENTRY)
+    const originalFetch = globalThis.fetch
+    const originalReplace = window.location.replace.bind(window.location)
+    const replacedUrls: string[] = []
     Object.defineProperty(window.location, 'replace', {
       configurable: true,
-      value: originalReplace,
+      value: (url: string) => {
+        replacedUrls.push(String(url))
+      },
     })
-    globalThis.fetch = originalFetch
-    appHost.remove()
-  }
+    let indexHtml = builtIndexHtml(CURRENT_ENTRY)
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === '/api/auth/status') return jsonResponse({ configured: true, authenticated: true })
+      if (url.startsWith('/index.html')) {
+        return new Response(indexHtml, { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } })
+      }
+      if (url === '/api/events' || url.startsWith('/api/events?')) {
+        return new Response(
+          hangingEventStream((send) => {
+            send(new TextEncoder().encode(
+              `event: snapshot\ndata: ${JSON.stringify({ bootId: 'boot-1', seq: 1, conversations: [], pendingAsks: [], plugins: [], ui: [] })}\n\n`,
+            ))
+          }, { signal: init?.signal }),
+          { status: 200, headers: { 'content-type': 'text/event-stream' } },
+        )
+      }
+      return jsonResponse([])
+    }) as typeof fetch
+
+    const appHost = document.createElement('div')
+    document.body.appendChild(appHost)
+    const appRoot = createRoot(appHost)
+    try {
+      act(() => {
+        setComposerDirty('watch-test-composer', { ...CLEAN_COMPOSER, hasDraftText: true })
+      })
+      await act(async () => {
+        appRoot.render(<App />)
+      })
+      await waitForCondition(() => appHost.querySelector('.helmx-shell') !== null)
+      // 弱网失败（指纹未变）：不弹版本横幅、不强刷，改为提示可恢复错误
+      act(() => {
+        window.dispatchEvent(new Event('vite:preloadError', { cancelable: true }))
+      })
+      await waitForCondition(() => appHost.querySelector('.toast-overlay') !== null)
+      assert.ok(appHost.querySelector('.version-banner[role="status"]') === null, '指纹未变不弹 version-banner')
+      assert.equal(replacedUrls.length, 0, '指纹未变不触发刷新')
+
+      // 服务端发版后再次触发：探测到 NEW_ENTRY，渲染 version-banner 并可立即刷新
+      indexHtml = builtIndexHtml(NEW_ENTRY)
+      act(() => {
+        window.dispatchEvent(new Event('vite:preloadError', { cancelable: true }))
+      })
+      await waitForCondition(() => appHost.querySelector('.version-banner[role="status"]') !== null)
+      const banner = appHost.querySelector<HTMLElement>('.version-banner[role="status"]')
+      assert.ok(banner, '挂起更新时渲染 version-banner')
+      const btn = banner!.querySelector<HTMLButtonElement>('button[type="button"]')
+      assert.ok(btn && btn.textContent?.includes('Refresh now'), '「立即刷新」是真实 type=button')
+      act(() => {
+        btn!.click()
+      })
+      await flush()
+      assert.equal(replacedUrls.length, 1, '点击「立即刷新」直连 reloadNow 发起顶层导航')
+    } finally {
+      await act(async () => {
+        appRoot.unmount()
+      })
+      Object.defineProperty(window.location, 'replace', {
+        configurable: true,
+        value: originalReplace,
+      })
+      globalThis.fetch = originalFetch
+      appHost.remove()
+    }
+  })
 })

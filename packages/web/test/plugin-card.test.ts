@@ -1,3 +1,4 @@
+import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import React, { act } from 'react'
@@ -560,6 +561,7 @@ test('PluginCard：插件名与描述按 store locale 解析，切换 en -> zh-C
     assert.equal(store.getPrefsSlice().locale, 'en')
     assert.match(container.textContent, /Glossary/, '切回 en 立即恢复英文展示名')
   } finally {
+    localStorage.removeItem('helmx:locale')
     act(() => {
       root.unmount()
     })

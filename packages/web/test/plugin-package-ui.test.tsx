@@ -9,11 +9,10 @@
  *    内置或未受管插件不展示包管理区块；
  * 3. PluginCenter：安装成功后列表刷新（syncPlugins）与详情抽屉联动。
  */
+import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
 
-GlobalRegistrator.register()
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 
 const React = (await import('react')).default

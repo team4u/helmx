@@ -90,7 +90,13 @@ function HighlightedText({ segments }: { segments: ReadonlyArray<HighlightSegmen
   )
 }
 
-export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
+export function CommandPaletteModal({
+  onClose,
+  searchDebounceMs = 200,
+}: {
+  onClose: () => void
+  searchDebounceMs?: number
+}) {
   const conversations = useConversations()
   const { authenticated } = useAuthConnection()
   const { primaryTarget, splitTarget, focusedPanel } = useLocationTargets()
@@ -229,14 +235,14 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
           setSearchFailed(true)
           setSearching(false)
         })
-    }, 200)
+    }, searchDebounceMs)
 
     return () => {
       clearTimeout(timer)
       searchAbortRef.current?.abort()
       searchAbortRef.current = null
     }
-  }, [query, isComposing])
+  }, [query, isComposing, searchDebounceMs])
 
   const background = useMemo(
     () =>

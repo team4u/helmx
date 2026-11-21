@@ -1,3 +1,4 @@
+import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { ensureHappyDom, flushMacrotask, typeIntoControl } from './helpers/dom-harness.js'
@@ -582,10 +583,7 @@ test('SkillCard: omits the 0-references pill without references; the /skill:<id>
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = ReactDOMClient.createRoot(host)
-  const navWithClipboard = navigator as unknown as {
-    clipboard?: { writeText?: (text: string) => Promise<void> }
-  }
-  const origClipboard = navWithClipboard.clipboard
+  const origClipboardDesc = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
   const copied: string[] = []
   Object.defineProperty(navigator, 'clipboard', {
     configurable: true,
@@ -619,8 +617,10 @@ test('SkillCard: omits the 0-references pill without references; the /skill:<id>
     assert.equal(selectedCount, 0, 'clicking the command pill must stopPropagation instead of opening the detail drawer')
     assert.deepEqual(copied, ['/skill:database-migration'])
   } finally {
-    if (origClipboard !== undefined) {
-      Object.defineProperty(navigator, 'clipboard', { configurable: true, value: origClipboard })
+    if (origClipboardDesc !== undefined) {
+      Object.defineProperty(navigator, 'clipboard', origClipboardDesc)
+    } else {
+      delete (navigator as unknown as Record<string, unknown>).clipboard
     }
     await act(async () => {
       root.unmount()

@@ -4,11 +4,10 @@
  * 2. opts.force === true 时向 /disable 传入 { force: true } 请求体；
  * 3. PluginConfigResponse 类型通道（sources 可选透传，运行时仅校验请求路径）。
  */
+import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
 
-GlobalRegistrator.register()
 
 const { pluginsApi } = await import('../src/lib/api.js')
 

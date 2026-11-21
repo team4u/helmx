@@ -1,12 +1,11 @@
+import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import React from 'react'
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
 
 // Ordering constraint: happy-dom must be registered before react-dom/client,
 // otherwise react-dom 19 caches native addEventListener refs and the synthetic
 // event delegation misses dispatched input/click events (onChange breaks).
-GlobalRegistrator.register()
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
 
 const { act } = await import('react')

@@ -7,18 +7,17 @@
  * - 后台通知偏好开关的权限拒绝 toast 随 locale；
  * - setLocale 持久化 helmx:locale 并同步 <html lang>。
  */
+import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import * as React from 'react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { HelmxStoreProvider } from '../src/lib/HelmxStoreProvider.js'
 import { useHelmxStore } from '../src/lib/store-context.js'
 import type { HelmxStoreValue, ToastNotice } from '../src/lib/types.js'
 import { hangingEventStream } from './helpers/sse-stream.js'
 
-GlobalRegistrator.register()
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 
 const e = React.createElement

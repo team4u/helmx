@@ -9,18 +9,17 @@
  * - setParams 默认 replace、{ push: true } 显式入栈、openTarget 字符串直携参数；
  * - 总览（#/overview）筛选参数复用同一 sp.* 机制（replace 不入栈、后退还原）。
  */
+import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import * as React from 'react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { HelmxStoreProvider } from '../src/lib/HelmxStoreProvider.js'
 import { useHelmxStore } from '../src/lib/store-context.js'
 import { hangingEventStream } from './helpers/sse-stream.js'
 import type { HelmxStoreValue } from '../src/lib/types.js'
 
-GlobalRegistrator.register()
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 
 const e = React.createElement

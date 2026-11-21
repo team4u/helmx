@@ -6,6 +6,7 @@
  * - store 更新（新 store 对象）后重渲染返回新快照（响应式语义）；
  * - 符号进入 @helmx/plugin-client 共享 SDK 导出与 protocol PLUGIN_CLIENT_SHARED_EXPORTS 锁定清单。
  */
+import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import * as React from 'react'
@@ -23,8 +24,6 @@ import { HostStoreProviders } from './helpers/host-store.js'
 const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React
 
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
-GlobalRegistrator.register()
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 
 interface UiContributionLike {

@@ -9,15 +9,14 @@
  * - Provider 级闭环：挂起流 -> idle timeout中止 -> 既有重连路径 -> 重连 fetch 拿
  *   401 必须登出（清 token、authenticated=false，不静默降级、不再无限重连）。
  */
+import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import * as React from 'react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { readSseChunkWithDeadline, sseClientTimings } from '../src/lib/live-state.js'
 
-GlobalRegistrator.register()
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
 
 // ---------------------------------------------------------------------------
@@ -121,10 +120,10 @@ test('挂起流idle timeout中止并重连，重连 401 必须登出且不再无
   const originalTimings = { ...sseClientTimings }
   const originalFetch = globalThis.fetch
   Object.assign(sseClientTimings, {
-    idleTimeoutMs: 250,
-    reconnectBaseMs: 20,
-    reconnectCapMs: 80,
-    reconnectJitterMs: 5,
+    idleTimeoutMs: 80,
+    reconnectBaseMs: 15,
+    reconnectCapMs: 40,
+    reconnectJitterMs: 0,
   })
   localStorage.setItem('helmx:token', 'stale-token')
   let eventsCalls = 0
@@ -160,7 +159,7 @@ test('挂起流idle timeout中止并重连，重连 401 必须登出且不再无
     const deadline = Date.now() + ms
     while (!predicate(observed)) {
       if (Date.now() > deadline) throw new Error(`waitFor 超时：${JSON.stringify(observed)}`)
-      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)) })
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 4)) })
     }
   }
   try {
@@ -179,7 +178,7 @@ test('挂起流idle timeout中止并重连，重连 401 必须登出且不再无
     assert.equal(localStorage.getItem('helmx:token'), null, '登出必须清除存储 token')
     assert.equal(observed.sseConnected, false)
     // 401 登出后连接效应卸载：等待超过一次退避周期，不再有第三次重连。
-    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 150)) })
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 55)) })
     assert.equal(eventsCalls, 2, '401 登出后不得继续重连')
     assert.equal(observed.authenticated, false)
   } finally {
@@ -203,7 +202,7 @@ test('online 与 visibilitychange 秒醒：取消退避立即重连、陈旧流�
 
   Object.assign(sseClientTimings, {
     idleTimeoutMs: 30_000,
-    staleWakeupMs: 80,
+    staleWakeupMs: 40,
     reconnectBaseMs: 10_000,
     reconnectCapMs: 10_000,
     reconnectJitterMs: 0,
@@ -255,7 +254,7 @@ test('online 与 visibilitychange 秒醒：取消退避立即重连、陈旧流�
     const deadline = Date.now() + ms
     while (!pred()) {
       if (Date.now() > deadline) throw new Error(`waitUntil 超时 eventsCalls=${eventsCalls} sseConnected=${sseConnected}`)
-      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 15)) })
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 4)) })
     }
   }
 
@@ -288,8 +287,8 @@ test('online 与 visibilitychange 秒醒：取消退避立即重连、陈旧流�
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)) })
     assert.equal(eventsCalls, 3, '健康连接不得被误杀重建')
 
-    // 4. 超过 staleWakeupMs（80ms）未收任何帧后切回前台：判定陈旧流立即中止重连
-    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 100)) })
+    // 4. 超过 staleWakeupMs（40ms）未收任何帧后切回前台：判定陈旧流立即中止重连
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 55)) })
     await act(async () => { document.dispatchEvent(new Event('visibilitychange')) })
     await waitUntil(() => eventsCalls === 4 && sseConnected === true)
     assert.equal(streams[0]?.abortable, true, '陈旧连接必须被中止')

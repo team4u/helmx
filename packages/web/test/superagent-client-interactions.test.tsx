@@ -5,10 +5,10 @@
  * timelineRenderer 汇报卡 / screen 图谱 / settingsPanel 托管状态。
  * 数据经 stub 的 usePluginDoc 构造；动作与导航经 spy ctx 断言真实调用。
  */
+import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
-import { before, test } from 'node:test'
+import { describe, before, test } from 'node:test'
 import * as React from 'react'
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import type {
@@ -28,9 +28,6 @@ import {
 import { importBuiltinClientModule, mountSharedPluginNamespaces, setBuiltinClientStub } from './helpers/builtin-clients.js'
 
 const e = React.createElement
-
-GlobalRegistrator.register()
-mountSharedPluginNamespaces()
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 
 interface Components {
@@ -43,500 +40,504 @@ interface Components {
 }
 
 let components: Components
+describe("superagent-client-interactions", () => {
 
-before(async () => {
-  const mod = await importBuiltinClientModule('builtin:superagent')
-  components = {
-    SuperAgentComposerWidget: mod['SuperAgentComposerWidget'] as Components['SuperAgentComposerWidget'],
-    SuperAgentRouterModePill: mod['SuperAgentRouterModePill'] as Components['SuperAgentRouterModePill'],
-    SuperAgentDispatchToolView: mod['SuperAgentDispatchToolView'] as Components['SuperAgentDispatchToolView'],
-    SuperAgentWorkerReportCard: mod['SuperAgentWorkerReportCard'] as Components['SuperAgentWorkerReportCard'],
-    SuperAgentRecallScreen: mod['SuperAgentRecallScreen'] as Components['SuperAgentRecallScreen'],
-    SuperAgentSettingsPanel: mod['SuperAgentSettingsPanel'] as Components['SuperAgentSettingsPanel'],
+
+  before(async () => {
+    mountSharedPluginNamespaces()
+    const mod = await importBuiltinClientModule('builtin:superagent')
+    components = {
+      SuperAgentComposerWidget: mod['SuperAgentComposerWidget'] as Components['SuperAgentComposerWidget'],
+      SuperAgentRouterModePill: mod['SuperAgentRouterModePill'] as Components['SuperAgentRouterModePill'],
+      SuperAgentDispatchToolView: mod['SuperAgentDispatchToolView'] as Components['SuperAgentDispatchToolView'],
+      SuperAgentWorkerReportCard: mod['SuperAgentWorkerReportCard'] as Components['SuperAgentWorkerReportCard'],
+      SuperAgentRecallScreen: mod['SuperAgentRecallScreen'] as Components['SuperAgentRecallScreen'],
+      SuperAgentSettingsPanel: mod['SuperAgentSettingsPanel'] as Components['SuperAgentSettingsPanel'],
+    }
+  }, { timeout: 60_000 })
+
+  interface SpyCtx extends PluginClientContextType {
+    screenCalls: string[]
+    splitCalls: string[]
+    actionCalls: Array<{ actionId: string; input: unknown }>
+    artifactCalls: string[]
+    notifyCalls: Array<{ message: string; tone?: string }>
   }
-}, { timeout: 60_000 })
 
-interface SpyCtx extends PluginClientContextType {
-  screenCalls: string[]
-  splitCalls: string[]
-  actionCalls: Array<{ actionId: string; input: unknown }>
-  artifactCalls: string[]
-  notifyCalls: Array<{ message: string; tone?: string }>
-}
-
-function makeSpyCtx(overrides: Partial<SpyCtx> = {}): SpyCtx {
-  const screenCalls: string[] = []
-  const splitCalls: string[] = []
-  const actionCalls: Array<{ actionId: string; input: unknown }> = []
-  const artifactCalls: string[] = []
-  const notifyCalls: Array<{ message: string; tone?: string }> = []
-  const locale = overrides.locale ?? 'en'
-  const base: PluginClientContextType = {
-    pluginId: 'builtin:superagent',
-    callAction: async (actionId, input) => {
-      actionCalls.push({ actionId, input })
-      return {}
-    },
-    submitInput: async () => {},
-    openScreen: (t) => {
-      screenCalls.push(t)
-    },
-    openSplitScreen: (t) => {
-      splitCalls.push(t)
-    },
-    openConversationDrawer: () => {},
-    openArtifact: (id) => {
-      artifactCalls.push(id)
-    },
-    openWorkbench: () => {},
-    closeWorkbench: () => {},
-    notify: (message, tone) => {
-      notifyCalls.push({ message, tone })
-    },
-    getPluginDoc: async () => undefined,
-    getPluginSessionDoc: async () => undefined,
-    conversationId: 1,
-    theme: 'dark',
-    locale,
-    translate: (text) => resolveLocalizedText(text, locale),
+  function makeSpyCtx(overrides: Partial<SpyCtx> = {}): SpyCtx {
+    const screenCalls: string[] = []
+    const splitCalls: string[] = []
+    const actionCalls: Array<{ actionId: string; input: unknown }> = []
+    const artifactCalls: string[] = []
+    const notifyCalls: Array<{ message: string; tone?: string }> = []
+    const locale = overrides.locale ?? 'en'
+    const base: PluginClientContextType = {
+      pluginId: 'builtin:superagent',
+      callAction: async (actionId, input) => {
+        actionCalls.push({ actionId, input })
+        return {}
+      },
+      submitInput: async () => {},
+      openScreen: (t) => {
+        screenCalls.push(t)
+      },
+      openSplitScreen: (t) => {
+        splitCalls.push(t)
+      },
+      openConversationDrawer: () => {},
+      openArtifact: (id) => {
+        artifactCalls.push(id)
+      },
+      openWorkbench: () => {},
+      closeWorkbench: () => {},
+      notify: (message, tone) => {
+        notifyCalls.push({ message, tone })
+      },
+      getPluginDoc: async () => undefined,
+      getPluginSessionDoc: async () => undefined,
+      conversationId: 1,
+      theme: 'dark',
+      locale,
+      translate: (text) => resolveLocalizedText(text, locale),
+    }
+    return Object.assign(base, { screenCalls, splitCalls, actionCalls, artifactCalls, notifyCalls, ...overrides })
   }
-  return Object.assign(base, { screenCalls, splitCalls, actionCalls, artifactCalls, notifyCalls, ...overrides })
-}
 
-function convSummary(id: number, title: string): ConversationSummary {
-  return {
-    id,
-    title,
-    profileId: 'coder',
-    tags: [],
-    cwd: '/tmp',
-    model: '',
-    thinkingLevel: '',
-    status: 'idle',
-    stateChangeSeq: 1,
-    completionSeq: 0,
-    unread: false,
-    pinned: false,
-    pendingAskCount: 0,
-    createdAt: 0,
-    updatedAt: 0,
+  function convSummary(id: number, title: string): ConversationSummary {
+    return {
+      id,
+      title,
+      profileId: 'coder',
+      tags: [],
+      cwd: '/tmp',
+      model: '',
+      thinkingLevel: '',
+      status: 'idle',
+      stateChangeSeq: 1,
+      completionSeq: 0,
+      unread: false,
+      pinned: false,
+      pendingAskCount: 0,
+      createdAt: 0,
+      updatedAt: 0,
+    }
   }
-}
 
-const DEFAULT_CONVERSATIONS: ConversationSummary[] = [
-  convSummary(11, '修复构建与单测'),
-  convSummary(12, 'subagent 12'),
-]
+  const DEFAULT_CONVERSATIONS: ConversationSummary[] = [
+    convSummary(11, '修复构建与单测'),
+    convSummary(12, 'subagent 12'),
+  ]
 
-async function mount(
-  ctx: PluginClientContextType,
-  element: React.ReactElement,
-  conversations: ConversationSummary[] = DEFAULT_CONVERSATIONS,
-): Promise<{ host: HTMLElement; unmount: () => void }> {
-  const host = document.createElement('div')
-  document.body.appendChild(host)
-  const root = createRoot(host)
-  const hostPort = { conversations } as unknown as PluginClientHostPort
-  await act(async () => {
-    root.render(
-      e(
-        PluginClientHostContext.Provider,
-        { value: hostPort },
-        e(PluginClientContext.Provider, { value: ctx }, element),
-      ),
-    )
-  })
-  await act(async () => {})
-  return {
-    host,
-    unmount: () => {
-      act(() => root.unmount())
-      host.remove()
-    },
-  }
-}
-
-function composerProps(): ComposerScopeProps {
-  const conversation = {
-    id: 1, title: '中枢', profileId: 'superagent', tags: [], cwd: '/tmp', model: '', thinkingLevel: '',
-    status: 'idle', stateChangeSeq: 1, completionSeq: 0, unread: false, pinned: false, pendingAskCount: 0,
-    createdAt: 0, updatedAt: 0,
-  } as ConversationSummary
-  return { conversation, composer: { draft: '', attachments: [], sending: false, setDraft: () => {}, insertText: () => {}, submit: async () => {} } }
-}
-
-const INDEX_DOC = {
-  version: 1,
-  routerConversationId: 7,
-  watchdogConversationId: 8,
-  workers: [
-    { conversationId: 11, parentConversationId: 7, profileId: 'coder', createdAt: Date.now() },
-    { conversationId: 12, parentConversationId: 7, profileId: 'writer', createdAt: Date.now() },
-  ],
-}
-
-const SUBSCRIPTIONS_DOC = {
-  version: 1,
-  subscriptions: [{ threadKey: 'ci/main', workerConversationId: 11, createdAt: Date.now() }],
-}
-
-const RECALL_DOC = {
-  version: 1,
-  nodes: [
-    { id: '11:1', conversationId: 11, profileId: 'coder', completionSeq: 1, outcome: 'completed', summary: '修复构建并跑通测试', artifacts: [], keywords: [], createdAt: Date.now() },
-    { id: '12:1', conversationId: 12, profileId: 'writer', completionSeq: 1, outcome: 'failed', summary: '写作失败：模型拒绝', artifacts: [], keywords: [], createdAt: Date.now() },
-  ],
-}
-
-before(() => {
-  setBuiltinClientStub({
-    docs: {
-      index: INDEX_DOC,
-      subscriptions: SUBSCRIPTIONS_DOC,
-      'recall-graph': RECALL_DOC,
-      routing: { version: 1, routerMode: true },
-    },
-  })
-})
-
-test('composerWidget：态势计数、Worker 表与打开导航', { timeout: 60_000 }, async () => {
-  const spy = makeSpyCtx()
-  const { host, unmount } = await mount(spy, e(components.SuperAgentComposerWidget, composerProps()))
-  try {
-    assert.match(host.textContent ?? '', /Hub status/, '标题渲染')
-    assert.match(host.textContent ?? '', /Active workers: 2/, 'Worker 计数')
-    assert.match(host.textContent ?? '', /event subscriptions: 1/, '订阅计数')
-    assert.match(host.textContent ?? '', /#11/, 'Worker 行 11')
-    assert.match(host.textContent ?? '', /#12/, 'Worker 行 12')
-    const open = [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('Open'))
-    assert.ok(open, '行内有打开按钮')
+  async function mount(
+    ctx: PluginClientContextType,
+    element: React.ReactElement,
+    conversations: ConversationSummary[] = DEFAULT_CONVERSATIONS,
+  ): Promise<{ host: HTMLElement; unmount: () => void }> {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    const hostPort = { conversations } as unknown as PluginClientHostPort
     await act(async () => {
-      open!.click()
+      root.render(
+        e(
+          PluginClientHostContext.Provider,
+          { value: hostPort },
+          e(PluginClientContext.Provider, { value: ctx }, element),
+        ),
+      )
     })
-    assert.deepEqual(spy.screenCalls, ['conversation:11'], '打开动作导航到会话')
-  } finally {
-    unmount()
+    await act(async () => {})
+    return {
+      host,
+      unmount: () => {
+        act(() => root.unmount())
+        host.remove()
+      },
+    }
   }
-})
 
-test('composerWidget：doc 未到达时展示加载态而非空白', { timeout: 60_000 }, async () => {
-  setBuiltinClientStub({ docs: { index: undefined, subscriptions: undefined } })
-  try {
+  function composerProps(): ComposerScopeProps {
+    const conversation = {
+      id: 1, title: '中枢', profileId: 'superagent', tags: [], cwd: '/tmp', model: '', thinkingLevel: '',
+      status: 'idle', stateChangeSeq: 1, completionSeq: 0, unread: false, pinned: false, pendingAskCount: 0,
+      createdAt: 0, updatedAt: 0,
+    } as ConversationSummary
+    return { conversation, composer: { draft: '', attachments: [], sending: false, setDraft: () => {}, insertText: () => {}, submit: async () => {} } }
+  }
+
+  const INDEX_DOC = {
+    version: 1,
+    routerConversationId: 7,
+    watchdogConversationId: 8,
+    workers: [
+      { conversationId: 11, parentConversationId: 7, profileId: 'coder', createdAt: Date.now() },
+      { conversationId: 12, parentConversationId: 7, profileId: 'writer', createdAt: Date.now() },
+    ],
+  }
+
+  const SUBSCRIPTIONS_DOC = {
+    version: 1,
+    subscriptions: [{ threadKey: 'ci/main', workerConversationId: 11, createdAt: Date.now() }],
+  }
+
+  const RECALL_DOC = {
+    version: 1,
+    nodes: [
+      { id: '11:1', conversationId: 11, profileId: 'coder', completionSeq: 1, outcome: 'completed', summary: '修复构建并跑通测试', artifacts: [], keywords: [], createdAt: Date.now() },
+      { id: '12:1', conversationId: 12, profileId: 'writer', completionSeq: 1, outcome: 'failed', summary: '写作失败：模型拒绝', artifacts: [], keywords: [], createdAt: Date.now() },
+    ],
+  }
+
+  before(() => {
+    setBuiltinClientStub({
+      docs: {
+        index: INDEX_DOC,
+        subscriptions: SUBSCRIPTIONS_DOC,
+        'recall-graph': RECALL_DOC,
+        routing: { version: 1, routerMode: true },
+      },
+    })
+  })
+
+  test('composerWidget：态势计数、Worker 表与打开导航', { timeout: 60_000 }, async () => {
     const spy = makeSpyCtx()
     const { host, unmount } = await mount(spy, e(components.SuperAgentComposerWidget, composerProps()))
     try {
-      assert.match(host.textContent ?? '', /Loading status…/, '加载态展示')
+      assert.match(host.textContent ?? '', /Hub status/, '标题渲染')
+      assert.match(host.textContent ?? '', /Active workers: 2/, 'Worker 计数')
+      assert.match(host.textContent ?? '', /event subscriptions: 1/, '订阅计数')
+      assert.match(host.textContent ?? '', /#11/, 'Worker 行 11')
+      assert.match(host.textContent ?? '', /#12/, 'Worker 行 12')
+      const open = [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('Open'))
+      assert.ok(open, '行内有打开按钮')
+      await act(async () => {
+        open!.click()
+      })
+      assert.deepEqual(spy.screenCalls, ['conversation:11'], '打开动作导航到会话')
     } finally {
       unmount()
     }
-  } finally {
-    setBuiltinClientStub({
-      docs: { index: INDEX_DOC, subscriptions: SUBSCRIPTIONS_DOC, 'recall-graph': RECALL_DOC, routing: { version: 1, routerMode: true } },
-    })
-  }
-})
+  })
 
-test('composerPill：开关渲染当前值并触发 set_router_mode 动作', { timeout: 60_000 }, async () => {
-  const spy = makeSpyCtx()
-  const { host, unmount } = await mount(spy, e(components.SuperAgentRouterModePill, composerProps()))
-  try {
-    const sw = host.querySelector('[role="switch"]') as HTMLElement | null
-    assert.ok(sw, '渲染 Switch 原语')
-    assert.equal(sw!.getAttribute('aria-checked'), 'true', 'routerMode=true 反映到开关')
-    await act(async () => {
-      sw!.click()
-    })
-    assert.deepEqual(
-      spy.actionCalls.map((c) => ({ actionId: c.actionId, input: c.input })),
-      [{ actionId: 'set_router_mode', input: { enabled: false } }],
-      '点击触发 set_router_mode(false)',
-    )
-  } finally {
-    unmount()
-  }
-})
-
-test('toolView：派工卡为轻量单行回执（状态灯 + 摘要 + worker 会话入口），不再复制 worker 全表', { timeout: 60_000 }, async () => {
-  const spy = makeSpyCtx()
-  const { host, unmount } = await mount(
-    spy,
-    e(components.SuperAgentDispatchToolView, {
-      callId: 'call-1', toolName: 'dispatch_worker',
-      input: { prompt: '去修构建', profileId: 'coder', threadKey: 'ci/main' },
-      status: 'done', result: { workerConversationId: 11 }, structuredOutput: { workerConversationId: 11 },
-      conversationId: 7,
-    }),
-  )
-  try {
-    assert.match(host.textContent ?? '', /Worker dispatch/, '标题')
-    assert.match(host.textContent ?? '', /Dispatched worker #11/, '派工结果主显 worker 会话')
-    assert.match(host.textContent ?? '', /Profile coder/, '输入摘要')
-    assert.ok(host.querySelector('.sa-dispatch-receipt') !== null, '单行回执形态')
-    assert.ok(host.querySelector('.helmx-status-light-done') !== null, '派发成功为完成灯（可访问名称，无可見状态文字）')
-    const receiptLight = host.querySelector('.sa-dispatch-receipt .helmx-status-light') as HTMLElement | null
-    assert.ok(receiptLight !== null && receiptLight.getAttribute('aria-label') === 'Completed', '灯的可访问名称为短状态词（不与可见回执重复）')
-    assert.equal(host.querySelector('.helmx-table') === null, true, '时间线派工卡不再渲染完整 worker 表')
-    const open = [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('Open'))
-    assert.ok(open, 'worker 会话入口保留')
-    await act(async () => {
-      open!.click()
-    })
-    assert.deepEqual(spy.screenCalls, ['conversation:11'], '入口打开 worker 会话')
-  } finally {
-    unmount()
-  }
-})
-
-test('toolView：运行中/失败回执分别为执行中灯与错误灯', { timeout: 60_000 }, async () => {
-  const spy = makeSpyCtx()
-  const running = await mount(
-    spy,
-    e(components.SuperAgentDispatchToolView, {
-      callId: 'call-r', toolName: 'dispatch_worker', input: {}, status: 'running', conversationId: 7,
-    }),
-  )
-  try {
-    assert.ok(running.host.querySelector('.helmx-status-light-working .status-dot-working') !== null, '运行中为执行中灯')
-    assert.equal(running.host.querySelector('.sa-dispatch-receipt .helmx-status-light')?.getAttribute('aria-label'), 'Running', '运行中灯可访问名称为短状态词')
-    assert.equal(running.host.querySelector('.helmx-status-light-label') === null, true, '无可見状态文字')
-  } finally {
-    running.unmount()
-  }
-  const failed = await mount(
-    spy,
-    e(components.SuperAgentDispatchToolView, {
-      callId: 'call-f', toolName: 'dispatch_worker', input: {}, status: 'error', result: 'boom', conversationId: 7,
-    }),
-  )
-  try {
-    assert.ok(failed.host.querySelector('.status-dot-error') !== null, '失败为错误灯')
-  } finally {
-    failed.unmount()
-  }
-})
-
-test('composerWidget 承载 worker 中心：归档能力保留；在途时统一禁用本卡全部行按钮', { timeout: 60_000 }, async () => {
-  const spy = makeSpyCtx()
-  let release: (() => void) | undefined
-  spy.callAction = async (actionId, input) => {
-    spy.actionCalls.push({ actionId, input })
-    await new Promise<void>((resolve) => {
-      release = resolve
-    })
-    return {}
-  }
-  const { host, unmount } = await mount(spy, e(components.SuperAgentComposerWidget, composerProps()))
-  try {
-    const archive = [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('Archive'))
-    assert.ok(archive, '枢纽 widget 归档按钮存在（能力未丢失）')
-    await act(async () => {
-      archive!.click()
-    })
-    assert.deepEqual(
-      spy.actionCalls.map((c) => ({ actionId: c.actionId, input: c.input })),
-      [{ actionId: 'archive_worker', input: { workerConversationId: 11 } }],
-      '归档触发 archive_worker',
-    )
-    // 在途期间：本卡全部行按钮（打开 + 归档）统一 disabled
-    const rowButtons = [...host.querySelectorAll<HTMLButtonElement>('button')].filter(
-      (b) => b.textContent?.includes('Open') || b.textContent?.includes('Archive'),
-    )
-    assert.equal(rowButtons.length, 4, '2 Worker × (打开+归档) = 4 个行按钮')
-    for (const b of rowButtons) {
-      assert.equal(b.disabled, true, `在途时统一禁用：${b.textContent}`)
+  test('composerWidget：doc 未到达时展示加载态而非空白', { timeout: 60_000 }, async () => {
+    setBuiltinClientStub({ docs: { index: undefined, subscriptions: undefined } })
+    try {
+      const spy = makeSpyCtx()
+      const { host, unmount } = await mount(spy, e(components.SuperAgentComposerWidget, composerProps()))
+      try {
+        assert.match(host.textContent ?? '', /Loading status…/, '加载态展示')
+      } finally {
+        unmount()
+      }
+    } finally {
+      setBuiltinClientStub({
+        docs: { index: INDEX_DOC, subscriptions: SUBSCRIPTIONS_DOC, 'recall-graph': RECALL_DOC, routing: { version: 1, routerMode: true } },
+      })
     }
-    await act(async () => {
-      release?.()
-    })
-    for (const b of rowButtons) {
-      assert.equal(b.disabled, false, `完成后恢复可点：${b.textContent}`)
-    }
-  } finally {
-    unmount()
-  }
-})
+  })
 
-test('timelineRenderer：汇报卡展示摘要/终态/产物并支持分屏打开', { timeout: 60_000 }, async () => {
-  const spy = makeSpyCtx()
-  const { host, unmount } = await mount(
-    spy,
-    e(components.SuperAgentWorkerReportCard, {
-      entry: {
-        id: 'entry-1', kind: 'helmx.input',
-        data: {
-          meta: {
-            renderer: 'superagent:worker-report', workerId: 11, profileId: 'coder',
-            outcome: 'completed', completionSeq: 1, summary: '修复完成，全部测试通过',
-            artifacts: [{ id: 'art-1', name: 'report.md', size: 128 }],
+  test('composerPill：开关渲染当前值并触发 set_router_mode 动作', { timeout: 60_000 }, async () => {
+    const spy = makeSpyCtx()
+    const { host, unmount } = await mount(spy, e(components.SuperAgentRouterModePill, composerProps()))
+    try {
+      const sw = host.querySelector('[role="switch"]') as HTMLElement | null
+      assert.ok(sw, '渲染 Switch 原语')
+      assert.equal(sw!.getAttribute('aria-checked'), 'true', 'routerMode=true 反映到开关')
+      await act(async () => {
+        sw!.click()
+      })
+      assert.deepEqual(
+        spy.actionCalls.map((c) => ({ actionId: c.actionId, input: c.input })),
+        [{ actionId: 'set_router_mode', input: { enabled: false } }],
+        '点击触发 set_router_mode(false)',
+      )
+    } finally {
+      unmount()
+    }
+  })
+
+  test('toolView：派工卡为轻量单行回执（状态灯 + 摘要 + worker 会话入口），不再复制 worker 全表', { timeout: 60_000 }, async () => {
+    const spy = makeSpyCtx()
+    const { host, unmount } = await mount(
+      spy,
+      e(components.SuperAgentDispatchToolView, {
+        callId: 'call-1', toolName: 'dispatch_worker',
+        input: { prompt: '去修构建', profileId: 'coder', threadKey: 'ci/main' },
+        status: 'done', result: { workerConversationId: 11 }, structuredOutput: { workerConversationId: 11 },
+        conversationId: 7,
+      }),
+    )
+    try {
+      assert.match(host.textContent ?? '', /Worker dispatch/, '标题')
+      assert.match(host.textContent ?? '', /Dispatched worker #11/, '派工结果主显 worker 会话')
+      assert.match(host.textContent ?? '', /Profile coder/, '输入摘要')
+      assert.ok(host.querySelector('.sa-dispatch-receipt') !== null, '单行回执形态')
+      assert.ok(host.querySelector('.helmx-status-light-done') !== null, '派发成功为完成灯（可访问名称，无可見状态文字）')
+      const receiptLight = host.querySelector('.sa-dispatch-receipt .helmx-status-light') as HTMLElement | null
+      assert.ok(receiptLight !== null && receiptLight.getAttribute('aria-label') === 'Completed', '灯的可访问名称为短状态词（不与可见回执重复）')
+      assert.equal(host.querySelector('.helmx-table') === null, true, '时间线派工卡不再渲染完整 worker 表')
+      const open = [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('Open'))
+      assert.ok(open, 'worker 会话入口保留')
+      await act(async () => {
+        open!.click()
+      })
+      assert.deepEqual(spy.screenCalls, ['conversation:11'], '入口打开 worker 会话')
+    } finally {
+      unmount()
+    }
+  })
+
+  test('toolView：运行中/失败回执分别为执行中灯与错误灯', { timeout: 60_000 }, async () => {
+    const spy = makeSpyCtx()
+    const running = await mount(
+      spy,
+      e(components.SuperAgentDispatchToolView, {
+        callId: 'call-r', toolName: 'dispatch_worker', input: {}, status: 'running', conversationId: 7,
+      }),
+    )
+    try {
+      assert.ok(running.host.querySelector('.helmx-status-light-working .status-dot-working') !== null, '运行中为执行中灯')
+      assert.equal(running.host.querySelector('.sa-dispatch-receipt .helmx-status-light')?.getAttribute('aria-label'), 'Running', '运行中灯可访问名称为短状态词')
+      assert.equal(running.host.querySelector('.helmx-status-light-label') === null, true, '无可見状态文字')
+    } finally {
+      running.unmount()
+    }
+    const failed = await mount(
+      spy,
+      e(components.SuperAgentDispatchToolView, {
+        callId: 'call-f', toolName: 'dispatch_worker', input: {}, status: 'error', result: 'boom', conversationId: 7,
+      }),
+    )
+    try {
+      assert.ok(failed.host.querySelector('.status-dot-error') !== null, '失败为错误灯')
+    } finally {
+      failed.unmount()
+    }
+  })
+
+  test('composerWidget 承载 worker 中心：归档能力保留；在途时统一禁用本卡全部行按钮', { timeout: 60_000 }, async () => {
+    const spy = makeSpyCtx()
+    let release: (() => void) | undefined
+    spy.callAction = async (actionId, input) => {
+      spy.actionCalls.push({ actionId, input })
+      await new Promise<void>((resolve) => {
+        release = resolve
+      })
+      return {}
+    }
+    const { host, unmount } = await mount(spy, e(components.SuperAgentComposerWidget, composerProps()))
+    try {
+      const archive = [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('Archive'))
+      assert.ok(archive, '枢纽 widget 归档按钮存在（能力未丢失）')
+      await act(async () => {
+        archive!.click()
+      })
+      assert.deepEqual(
+        spy.actionCalls.map((c) => ({ actionId: c.actionId, input: c.input })),
+        [{ actionId: 'archive_worker', input: { workerConversationId: 11 } }],
+        '归档触发 archive_worker',
+      )
+      // 在途期间：本卡全部行按钮（打开 + 归档）统一 disabled
+      const rowButtons = [...host.querySelectorAll<HTMLButtonElement>('button')].filter(
+        (b) => b.textContent?.includes('Open') || b.textContent?.includes('Archive'),
+      )
+      assert.equal(rowButtons.length, 4, '2 Worker × (打开+归档) = 4 个行按钮')
+      for (const b of rowButtons) {
+        assert.equal(b.disabled, true, `在途时统一禁用：${b.textContent}`)
+      }
+      await act(async () => {
+        release?.()
+      })
+      for (const b of rowButtons) {
+        assert.equal(b.disabled, false, `完成后恢复可点：${b.textContent}`)
+      }
+    } finally {
+      unmount()
+    }
+  })
+
+  test('timelineRenderer：汇报卡展示摘要/终态/产物并支持分屏打开', { timeout: 60_000 }, async () => {
+    const spy = makeSpyCtx()
+    const { host, unmount } = await mount(
+      spy,
+      e(components.SuperAgentWorkerReportCard, {
+        entry: {
+          id: 'entry-1', kind: 'helmx.input',
+          data: {
+            meta: {
+              renderer: 'superagent:worker-report', workerId: 11, profileId: 'coder',
+              outcome: 'completed', completionSeq: 1, summary: '修复完成，全部测试通过',
+              artifacts: [{ id: 'art-1', name: 'report.md', size: 128 }],
+            },
           },
         },
-      },
-      conversationId: 7,
-    }),
-  )
-  try {
-    assert.match(host.textContent ?? '', /Worker report/, '徽章')
-    assert.match(host.textContent ?? '', /修复完成，全部测试通过/, '摘要文本')
-    assert.match(host.textContent ?? '', /completed/, '终态徽章')
-    const artifactBtn = [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('report.md'))
-    assert.ok(artifactBtn, '产物按钮存在')
-    await act(async () => {
-      artifactBtn!.click()
-    })
-    assert.deepEqual(spy.artifactCalls, ['art-1'], '产物点击打开预览')
-    const splitBtn = [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('Open side-by-side in split view'))
-    assert.ok(splitBtn, '分屏按钮存在')
-    await act(async () => {
-      splitBtn!.click()
-    })
-    assert.deepEqual(spy.splitCalls, ['conversation:11'], '分屏打开 Worker 会话')
-  } finally {
-    unmount()
-  }
-})
+        conversationId: 7,
+      }),
+    )
+    try {
+      assert.match(host.textContent ?? '', /Worker report/, '徽章')
+      assert.match(host.textContent ?? '', /修复完成，全部测试通过/, '摘要文本')
+      assert.match(host.textContent ?? '', /completed/, '终态徽章')
+      const artifactBtn = [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('report.md'))
+      assert.ok(artifactBtn, '产物按钮存在')
+      await act(async () => {
+        artifactBtn!.click()
+      })
+      assert.deepEqual(spy.artifactCalls, ['art-1'], '产物点击打开预览')
+      const splitBtn = [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('Open side-by-side in split view'))
+      assert.ok(splitBtn, '分屏按钮存在')
+      await act(async () => {
+        splitBtn!.click()
+      })
+      assert.deepEqual(spy.splitCalls, ['conversation:11'], '分屏打开 Worker 会话')
+    } finally {
+      unmount()
+    }
+  })
 
-test('screen：图谱视图渲染 recall 节点与事件订阅两张表', { timeout: 60_000 }, async () => {
-  const spy = makeSpyCtx()
-  let setParamsCalls = 0
-  const { host, unmount } = await mount(
-    spy,
-    e(components.SuperAgentRecallScreen, {
-      pluginId: 'builtin:superagent', screenId: 'recall-graph', isSplit: false, params: {},
-      setParams: () => {
-        setParamsCalls += 1
-      },
-    }),
-  )
-  try {
-    assert.match(host.textContent ?? '', /RecallGraph memory graph/, '标题')
-    assert.match(host.textContent ?? '', /修复构建并跑通测试/, 'recall 摘要行')
-    // 表格语义保留：Outcome 列为可见文字徽章（不依赖列标题或颜色解释）。
-    const outcomeBadges = [...host.querySelectorAll('td .badge')] as HTMLElement[]
-    assert.ok(outcomeBadges.some((b) => (b.textContent ?? '') === 'completed'), 'Outcome 列显示可见 outcome 文字')
-    assert.ok(outcomeBadges.some((b) => (b.textContent ?? '') === 'failed'), '失败 outcome 文字可见')
-    assert.match(host.textContent ?? '', /写作失败：模型拒绝/, '第二个节点')
-    assert.match(host.textContent ?? '', /Event subscriptions/, '订阅区块标题')
-    assert.match(host.textContent ?? '', /ci\/main/, 'threadKey 行')
-    assert.match(host.textContent ?? '', /Nodes 2 · Subscriptions 1/, '统计')
-    const openConv = [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('Open conversation'))
-    assert.ok(openConv, '打开会话按钮')
-    await act(async () => {
-      openConv!.click()
-    })
-    assert.deepEqual(spy.screenCalls, ['conversation:11'], '打开 recall 会话')
-    const openWorker = [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('Open worker'))
-    await act(async () => {
-      openWorker!.click()
-    })
-    assert.deepEqual(spy.screenCalls, ['conversation:11', 'conversation:11'], '打开订阅 Worker')
-    assert.equal(setParamsCalls, 0, '纯展示不写屏参数')
-  } finally {
-    unmount()
-  }
-})
+  test('screen：图谱视图渲染 recall 节点与事件订阅两张表', { timeout: 60_000 }, async () => {
+    const spy = makeSpyCtx()
+    let setParamsCalls = 0
+    const { host, unmount } = await mount(
+      spy,
+      e(components.SuperAgentRecallScreen, {
+        pluginId: 'builtin:superagent', screenId: 'recall-graph', isSplit: false, params: {},
+        setParams: () => {
+          setParamsCalls += 1
+        },
+      }),
+    )
+    try {
+      assert.match(host.textContent ?? '', /RecallGraph memory graph/, '标题')
+      assert.match(host.textContent ?? '', /修复构建并跑通测试/, 'recall 摘要行')
+      // 表格语义保留：Outcome 列为可见文字徽章（不依赖列标题或颜色解释）。
+      const outcomeBadges = [...host.querySelectorAll('td .badge')] as HTMLElement[]
+      assert.ok(outcomeBadges.some((b) => (b.textContent ?? '') === 'completed'), 'Outcome 列显示可见 outcome 文字')
+      assert.ok(outcomeBadges.some((b) => (b.textContent ?? '') === 'failed'), '失败 outcome 文字可见')
+      assert.match(host.textContent ?? '', /写作失败：模型拒绝/, '第二个节点')
+      assert.match(host.textContent ?? '', /Event subscriptions/, '订阅区块标题')
+      assert.match(host.textContent ?? '', /ci\/main/, 'threadKey 行')
+      assert.match(host.textContent ?? '', /Nodes 2 · Subscriptions 1/, '统计')
+      const openConv = [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('Open conversation'))
+      assert.ok(openConv, '打开会话按钮')
+      await act(async () => {
+        openConv!.click()
+      })
+      assert.deepEqual(spy.screenCalls, ['conversation:11'], '打开 recall 会话')
+      const openWorker = [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('Open worker'))
+      await act(async () => {
+        openWorker!.click()
+      })
+      assert.deepEqual(spy.screenCalls, ['conversation:11', 'conversation:11'], '打开订阅 Worker')
+      assert.equal(setParamsCalls, 0, '纯展示不写屏参数')
+    } finally {
+      unmount()
+    }
+  })
 
-test('settingsPanel：只读展示中枢/看门狗托管会话', { timeout: 60_000 }, async () => {
-  const spy = makeSpyCtx()
-  const { host, unmount } = await mount(spy, e(components.SuperAgentSettingsPanel, {}))
-  try {
-    assert.match(host.textContent ?? '', /SuperAgent hub/, '标题')
-    assert.match(host.textContent ?? '', /Hub conversation/, 'KV 键')
-    assert.match(host.textContent ?? '', /#7/, '中枢会话值')
-    assert.match(host.textContent ?? '', /Watchdog conversation/, 'KV 键')
-    assert.match(host.textContent ?? '', /#8/, '看门狗会话值')
-    assert.match(host.textContent ?? '', /this panel only shows the managed state read-only/, '配置引导文案')
-    assert.equal(spy.actionCalls.length, 0, '只读面板不触发动作')
-  } finally {
-    unmount()
-  }
-})
+  test('settingsPanel：只读展示中枢/看门狗托管会话', { timeout: 60_000 }, async () => {
+    const spy = makeSpyCtx()
+    const { host, unmount } = await mount(spy, e(components.SuperAgentSettingsPanel, {}))
+    try {
+      assert.match(host.textContent ?? '', /SuperAgent hub/, '标题')
+      assert.match(host.textContent ?? '', /Hub conversation/, 'KV 键')
+      assert.match(host.textContent ?? '', /#7/, '中枢会话值')
+      assert.match(host.textContent ?? '', /Watchdog conversation/, 'KV 键')
+      assert.match(host.textContent ?? '', /#8/, '看门狗会话值')
+      assert.match(host.textContent ?? '', /this panel only shows the managed state read-only/, '配置引导文案')
+      assert.equal(spy.actionCalls.length, 0, '只读面板不触发动作')
+    } finally {
+      unmount()
+    }
+  })
 
-test('zh-CN locale：SuperAgent 组件切换为中文展示文案', { timeout: 60_000 }, async () => {
-  const spy = makeSpyCtx({ locale: 'zh-CN' })
-  const { host: widgetHost, unmount: unmountWidget } = await mount(spy, e(components.SuperAgentComposerWidget, composerProps()))
-  try {
-    assert.match(widgetHost.textContent ?? '', /中枢态势/)
-    assert.match(widgetHost.textContent ?? '', /活跃 Worker 2 个/)
-    assert.match(widgetHost.textContent ?? '', /事件订阅 1 条/)
-  } finally {
-    unmountWidget()
-  }
-  const { host: settingsHost, unmount: unmountSettings } = await mount(spy, e(components.SuperAgentSettingsPanel, {}))
-  try {
-    assert.match(settingsHost.textContent ?? '', /SuperAgent 中枢/)
-    assert.match(settingsHost.textContent ?? '', /中枢会话/)
-    assert.match(settingsHost.textContent ?? '', /看门狗会话/)
-  } finally {
-    unmountSettings()
-  }
-})
+  test('zh-CN locale：SuperAgent 组件切换为中文展示文案', { timeout: 60_000 }, async () => {
+    const spy = makeSpyCtx({ locale: 'zh-CN' })
+    const { host: widgetHost, unmount: unmountWidget } = await mount(spy, e(components.SuperAgentComposerWidget, composerProps()))
+    try {
+      assert.match(widgetHost.textContent ?? '', /中枢态势/)
+      assert.match(widgetHost.textContent ?? '', /活跃 Worker 2 个/)
+      assert.match(widgetHost.textContent ?? '', /事件订阅 1 条/)
+    } finally {
+      unmountWidget()
+    }
+    const { host: settingsHost, unmount: unmountSettings } = await mount(spy, e(components.SuperAgentSettingsPanel, {}))
+    try {
+      assert.match(settingsHost.textContent ?? '', /SuperAgent 中枢/)
+      assert.match(settingsHost.textContent ?? '', /中枢会话/)
+      assert.match(settingsHost.textContent ?? '', /看门狗会话/)
+    } finally {
+      unmountSettings()
+    }
+  })
 
-test('三处会话表格单元格：有标题时显示 title + #id；占位/缺失时仅显示 #id 不伪造名称', { timeout: 60_000 }, async () => {
-  const spy = makeSpyCtx()
-  const liveConvs = [
-    convSummary(11, '修复构建与单测'),
-    // #12 故意缺失（模拟已删除/归档）
-  ]
+  test('三处会话表格单元格：有标题时显示 title + #id；占位/缺失时仅显示 #id 不伪造名称', { timeout: 60_000 }, async () => {
+    const spy = makeSpyCtx()
+    const liveConvs = [
+      convSummary(11, '修复构建与单测'),
+      // #12 故意缺失（模拟已删除/归档）
+    ]
 
-  // 1) Hub Status widget active workers table
-  const widget = await mount(spy, e(components.SuperAgentComposerWidget, composerProps()), liveConvs)
-  try {
-    const cells = [...widget.host.querySelectorAll('tbody tr')].map((tr) => tr.querySelector('td'))
-    assert.equal(cells.length, 2)
-    assert.equal(cells[0]?.querySelector('.sa-conv-name')?.textContent, '修复构建与单测', 'widget 展示 #11 标题')
-    assert.equal(cells[0]?.querySelector('.sa-conv-id')?.textContent, '#11', 'widget 展示 #11 ID')
-    assert.equal(cells[1]?.textContent, '#12', 'widget 对缺失会话仅展示 #12')
-    assert.ok(cells[1]?.querySelector('.sa-conv-name') === null, 'widget 对缺失会话不伪造标题')
-  } finally {
-    widget.unmount()
-  }
+    // 1) Hub Status widget active workers table
+    const widget = await mount(spy, e(components.SuperAgentComposerWidget, composerProps()), liveConvs)
+    try {
+      const cells = [...widget.host.querySelectorAll('tbody tr')].map((tr) => tr.querySelector('td'))
+      assert.equal(cells.length, 2)
+      assert.equal(cells[0]?.querySelector('.sa-conv-name')?.textContent, '修复构建与单测', 'widget 展示 #11 标题')
+      assert.equal(cells[0]?.querySelector('.sa-conv-id')?.textContent, '#11', 'widget 展示 #11 ID')
+      assert.equal(cells[1]?.textContent, '#12', 'widget 对缺失会话仅展示 #12')
+      assert.ok(cells[1]?.querySelector('.sa-conv-name') === null, 'widget 对缺失会话不伪造标题')
+    } finally {
+      widget.unmount()
+    }
 
-  // 2) 派工回执只主显单个 worker 会话（#11），不再复制全表
-  const dispatch = await mount(
-    spy,
-    e(components.SuperAgentDispatchToolView, {
-      callId: 'call-1',
-      toolName: 'dispatch_worker',
-      input: { prompt: '去修构建', profileId: 'coder' },
-      status: 'done',
-      result: { workerConversationId: 11 },
-      structuredOutput: { workerConversationId: 11 },
-      conversationId: 7,
-    }),
-  )
-  try {
-    assert.match(dispatch.host.textContent ?? '', /Dispatched worker #11/, '回执主显派工 worker')
-    assert.equal(dispatch.host.querySelectorAll('tbody tr').length, 0, '派工卡不再有 worker 表行')
-  } finally {
-    dispatch.unmount()
-  }
+    // 2) 派工回执只主显单个 worker 会话（#11），不再复制全表
+    const dispatch = await mount(
+      spy,
+      e(components.SuperAgentDispatchToolView, {
+        callId: 'call-1',
+        toolName: 'dispatch_worker',
+        input: { prompt: '去修构建', profileId: 'coder' },
+        status: 'done',
+        result: { workerConversationId: 11 },
+        structuredOutput: { workerConversationId: 11 },
+        conversationId: 7,
+      }),
+    )
+    try {
+      assert.match(dispatch.host.textContent ?? '', /Dispatched worker #11/, '回执主显派工 worker')
+      assert.equal(dispatch.host.querySelectorAll('tbody tr').length, 0, '派工卡不再有 worker 表行')
+    } finally {
+      dispatch.unmount()
+    }
 
-  // 3) RecallGraph nodes table & 4) Subscriptions table
-  const screen = await mount(
-    spy,
-    e(components.SuperAgentRecallScreen, {
-      pluginId: 'builtin:superagent',
-      screenId: 'recall-graph',
-      isSplit: false,
-      params: {},
-      setParams: () => {},
-    }),
-    [convSummary(11, '修复构建与单测'), convSummary(12, '子会话 12')],
-  )
-  try {
-    const tables = [...screen.host.querySelectorAll('table')]
-    assert.equal(tables.length, 2, 'RecallGraph 页包含两张表')
-    const recallCells = [...tables[0]!.querySelectorAll('tbody tr')].map((tr) => tr.querySelector('td'))
-    assert.equal(recallCells[0]?.querySelector('.sa-conv-name')?.textContent, '修复构建与单测', 'RecallGraph 表展示 #11 标题')
-    assert.equal(recallCells[0]?.querySelector('.sa-conv-id')?.textContent, '#11', 'RecallGraph 表展示 #11 ID')
-    assert.equal(recallCells[1]?.textContent, '#12', 'RecallGraph 表对子会话占位仅展示 #12')
+    // 3) RecallGraph nodes table & 4) Subscriptions table
+    const screen = await mount(
+      spy,
+      e(components.SuperAgentRecallScreen, {
+        pluginId: 'builtin:superagent',
+        screenId: 'recall-graph',
+        isSplit: false,
+        params: {},
+        setParams: () => {},
+      }),
+      [convSummary(11, '修复构建与单测'), convSummary(12, '子会话 12')],
+    )
+    try {
+      const tables = [...screen.host.querySelectorAll('table')]
+      assert.equal(tables.length, 2, 'RecallGraph 页包含两张表')
+      const recallCells = [...tables[0]!.querySelectorAll('tbody tr')].map((tr) => tr.querySelector('td'))
+      assert.equal(recallCells[0]?.querySelector('.sa-conv-name')?.textContent, '修复构建与单测', 'RecallGraph 表展示 #11 标题')
+      assert.equal(recallCells[0]?.querySelector('.sa-conv-id')?.textContent, '#11', 'RecallGraph 表展示 #11 ID')
+      assert.equal(recallCells[1]?.textContent, '#12', 'RecallGraph 表对子会话占位仅展示 #12')
 
-    const subRows = [...tables[1]!.querySelectorAll('tbody tr')]
-    assert.equal(subRows.length, 1)
-    const workerCell = subRows[0]!.querySelectorAll('td')[1]
-    assert.equal(workerCell?.querySelector('.sa-conv-name')?.textContent, '修复构建与单测', 'Subscriptions 表展示 #11 标题')
-    assert.equal(workerCell?.querySelector('.sa-conv-id')?.textContent, '#11', 'Subscriptions 表展示 #11 ID')
-  } finally {
-    screen.unmount()
-  }
+      const subRows = [...tables[1]!.querySelectorAll('tbody tr')]
+      assert.equal(subRows.length, 1)
+      const workerCell = subRows[0]!.querySelectorAll('td')[1]
+      assert.equal(workerCell?.querySelector('.sa-conv-name')?.textContent, '修复构建与单测', 'Subscriptions 表展示 #11 标题')
+      assert.equal(workerCell?.querySelector('.sa-conv-id')?.textContent, '#11', 'Subscriptions 表展示 #11 ID')
+    } finally {
+      screen.unmount()
+    }
+  })
 })
