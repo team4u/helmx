@@ -19,7 +19,7 @@ import {
   createBlockedSnapshotAnalyzer,
   type ConversationTextPort,
 } from '../src/herdr/snapshot-analysis.js'
-import { deferred } from './helpers/plugin-test-env.js'
+import { deferred } from '@helmx/test-kit'
 
 /** 不响应 signal 的端口（挂起直到手动结算）。 */
 function unresponsivePort(

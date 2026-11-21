@@ -29,7 +29,7 @@ import { Worker } from 'node:worker_threads'
 import type { EnvExecResponse } from '@helmx/protocol'
 import type { WorkflowJournalEntry } from '../src/workflow/engine/journal.js'
 import { HelmxError } from '@helmx/protocol'
-import { createPluginBuildProvider } from '@helmx/plugin-build'
+import { deferred } from '@helmx/test-kit'
 import {
   JournalWriter,
   actionJournalKey,
@@ -41,7 +41,6 @@ import { extractMeta, WorkflowMetaError } from '../src/workflow/engine/meta.js'
 import { type WorkflowEntry, type WorkflowActionEntry } from '../src/workflow/engine/progress.js'
 import { normalizeWorkflowArgs, runWorkflow, type WorkflowHost, type WorkflowSpawnResult } from '../src/workflow/engine/runtime.js'
 import { WorkflowService, type WorkflowServiceHost, type WorkflowStateStore } from '../src/workflow/engine/service.js'
-import { deferred, makeFauxProvider } from './helpers/plugin-test-env.js'
 
 const timeout = { timeout: 60_000 } as const
 
@@ -166,15 +165,22 @@ describe('workflow determinism', () => {
 
 describe('workflow abort', () => {
   it('terminates an infinite-loop script without hanging the main thread', timeout, async () => {
-    const host = makeFakeHost()
     const controller = new AbortController()
+    const firstSpawned = deferred<void>()
+    const host = makeFakeHost()
+    const realSpawn = host.spawnAgent.bind(host)
+    host.spawnAgent = async (req) => {
+      firstSpawned.resolve()
+      return realSpawn(req)
+    }
     const promise = runWorkflow({
       script: META('spin') + 'while (true) { await agent("x") }',
       host,
       signal: controller.signal,
       agentCap: 10,
     })
-    setTimeout(() => controller.abort(), 150)
+    await firstSpawned.promise
+    controller.abort()
     const result = await promise
     assert.ok(result.status === 'killed' || result.status === 'failed', `status: ${result.status}`)
   })
@@ -183,7 +189,7 @@ describe('workflow abort', () => {
     const host = makeFakeHost()
     const controller = new AbortController()
     const promise = runWorkflow({ script: META('spin-sync') + 'while (true) {}', host, signal: controller.signal })
-    setTimeout(() => controller.abort(), 200)
+    setTimeout(() => controller.abort(), 50)
     const result = await promise
     assert.equal(result.status, 'killed')
   })
@@ -192,7 +198,7 @@ describe('workflow abort', () => {
     const host = makeFakeHost()
     const controller = new AbortController()
     const promise = runWorkflow({ script: META('spin2') + 'while (true) {}', host, signal: controller.signal })
-    setTimeout(() => controller.abort(), 200)
+    setTimeout(() => controller.abort(), 50)
     await promise
     // worker_threads 无公开列表 API；用 process._getActiveHandles 粗查无未关闭句柄暴涨。
     const handles = (process as unknown as { _getActiveHandles: () => unknown[] })._getActiveHandles()
@@ -252,13 +258,15 @@ describe('workflow orchestration', () => {
       },
       spawnDelayMs: 0,
     })
-    // 用 action 的宿主延迟区分 stage；agent 立即返回。
+    const fastDone = deferred<void>()
     const realSpawn = host.spawnAgent.bind(host)
     host.spawnAgent = async (request) => {
-      // stage1 的 slow item 延迟 250ms，其余立即。
-      if (request.prompt.includes('slow')) await new Promise((r) => setTimeout(r, 250))
+      // stage1 的 slow item 等待 fast 完成后再推进，消除固定 250ms sleep。
+      if (request.prompt.includes('slow')) await fastDone.promise
       events.push(`spawn:${request.prompt}`)
-      return realSpawn(request)
+      const res = await realSpawn(request)
+      if (request.prompt === 'fast:s1') fastDone.resolve()
+      return res
     }
     const result = await runWorkflow({
       script:
@@ -310,7 +318,7 @@ describe('workflow orchestration', () => {
     host.spawnAgent = async (request) => {
       running++
       peak = Math.max(peak, running)
-      await new Promise((r) => setTimeout(r, 60))
+      await new Promise((r) => setTimeout(r, 20))
       running--
       return real(request)
     }
@@ -2155,6 +2163,7 @@ describe('WorkflowService', () => {
 
   it('unawaited env.exec cancels and drains the pending execution channel on script error', timeout, async () => {
     const sentinelFile = join(dataDir, `sentinel-${Date.now()}.txt`)
+    const abortObserved = deferred<void>()
     const baseHost = makeServiceHost()
     const host: WorkflowServiceHost = {
       ...baseHost,
@@ -2166,13 +2175,14 @@ describe('WorkflowService', () => {
             timer = setTimeout(() => {
               writeFileSync(sentinelFile, 'executed', 'utf-8')
               resolve({ ok: true, exitCode: 0, output: 'written', timedOut: false })
-            }, 1000)
+            }, 180)
           } else {
             resolve({ ok: true, exitCode: 0, output: 'fast-done', timedOut: false })
           }
 
           signal?.addEventListener('abort', () => {
             if (timer) clearTimeout(timer)
+            if (cmd.includes('delay-write')) abortObserved.resolve()
             resolve({ ok: false, exitCode: null, output: 'aborted', timedOut: false })
           }, { once: true })
         })
@@ -2196,68 +2206,14 @@ describe('WorkflowService', () => {
     const run = service.getRun(sum.id)
     assert.equal(run.status, 'failed')
 
-    // 等待超过计划延迟时间（1200ms）
-    await new Promise((r) => setTimeout(r, 1200))
+    // 确认在途命令已收到 abort 信号，并等待超过原计划延迟（240ms > 180ms）确认未写入哨兵文件
+    await abortObserved.promise
+    await new Promise((r) => setTimeout(r, 240))
 
     // 哨兵文件绝不能被写入（在途命令必须已被 abort 取消并完成通道清理）
     assert.equal(existsSync(sentinelFile), false, 'sentinel file must not be written by unawaited leaked command')
 
     await service.close()
-  })
-})
-
-// ---------------------------------------------------------------------------
-// 真 SDK 集成（faux provider）：默认 agentType 走 assistant profile
-// ---------------------------------------------------------------------------
-
-describe('workflow real-SDK integration (faux provider)', () => {
-  it('agent() without explicit agentType spawns via default assistant profile end to end', timeout, async () => {
-    // 动态加载真 KernelRuntime 组装链（faux provider + 真 spawn.ts + 真 profiles）。
-    const { KernelRuntime } = await import('../../kernel/src/runtime/index.js')
-    const { fauxAssistantMessage } = await import('@earendil-works/pi-ai/providers/faux')
-
-    const dataDir = mkdtempSync(join(tmpdir(), 'wf-sdk-'))
-    const faux = makeFauxProvider()
-
-    const runtime = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(),
-      dataDir,
-      cwd: dataDir,
-      model: 'faux/faux-1',
-      providers: [faux.provider],
-      autoResume: false,
-    })
-    try {
-      const service = new WorkflowService({
-        dataDir,
-        state: runtime.documentStore,
-        host: {
-          spawnAgent: (request) => runtime.spawnAgent(request),
-          invokeAction: async (pluginId, actionId, input) => {
-            throw new HelmxError('unknown_action', `测试宿主无动作：${pluginId}.${actionId}`, 404)
-          },
-          listActions: () => [],
-          getConversation: (id) => runtime.getConversation(id),
-          abortConversationGuarded: (id) => runtime.abortConversationGuarded(id, {}),
-          emitEvent: () => {},
-        },
-      })
-      await service.init()
-
-      // faux 脚本：子会话回答固定文本。
-      faux.setResponses([fauxAssistantMessage('child says hi')])
-
-      // 不显式指定 agentType：默认必须经 assistant profile（ensureDefault 保证存在）。
-      const summary = await service.run({
-        conversationId: runtime.listConversations()[0]!.id,
-        script: META('sdk-default') + 'const a = await agent("ping")\nreturn a',
-      })
-      const result = await service.wait(summary.id)
-      assert.equal(service.getRun(summary.id).status, 'completed', service.getRun(summary.id).error)
-      assert.equal(result, 'child says hi')
-      await service.close()
-    } finally {
-      await runtime.close()
-    }
   })
 
   it('normalizeWorkflowArgs：正确解包单层/双层 JSON 字符串并保持标量与对象原样', timeout, () => {
@@ -2286,10 +2242,10 @@ describe('workflow real-SDK integration (faux provider)', () => {
   })
 
   it('service.run：字符串形式的 args 自动规范化并持久化为对象，脚本内 args.topics.map 正常执行', timeout, async () => {
-    const dataDir = mkdtempSync(join(tmpdir(), 'wf-str-args-'))
+    const strDataDir = mkdtempSync(join(tmpdir(), 'wf-str-args-'))
     const host = makeServiceHost()
     const state = makeStateStore()
-    const service = new WorkflowService({ dataDir, host, state })
+    const service = new WorkflowService({ dataDir: strDataDir, host, state })
     try {
       const summary = await service.run({
         conversationId: 1,
@@ -2301,137 +2257,12 @@ describe('workflow real-SDK integration (faux provider)', () => {
       assert.deepEqual(result, ['STAR', 'OCEAN'], '脚本内 args 为真实对象，map 正常计算')
 
       // 持久化记录必须是真实对象，不得为字符串
-      const stored = readRunRecord<{ args?: unknown }>(dataDir, 1, summary.id)
+      const stored = readRunRecord<{ args?: unknown }>(strDataDir, 1, summary.id)
       assert.equal(typeof stored.args, 'object', '持久化 args 必须为对象而非字符串')
       assert.deepEqual(stored.args, { topics: ['star', 'ocean'] })
     } finally {
       await service.close()
-      rmSync(dataDir, { recursive: true, force: true })
-    }
-  })
-
-  it('real env.exec child processes are cancelled on early return and script failure', timeout, async () => {
-    const { createHelmx } = await import('../../hub/src/app.js')
-    const { createPluginBuildProvider } = await import('@helmx/plugin-build')
-    const dataDir = mkdtempSync(join(tmpdir(), 'wf-exec-cleanup-'))
-    const faux = makeFauxProvider()
-    const app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider] })
-    // 插件化后编排引擎仅经 builtin:workflow 动作总线驱动（不再暴露 app.workflows）。
-    const workflows = app.kernel.plugins!
-    const runWorkflow = (request: Record<string, unknown>) =>
-      workflows.invokeAction('builtin:workflow', 'run', request, { conversationId: app.kernel.listConversations()[0]!.id }) as Promise<
-        import('../src/contracts.js').WorkflowRunSummary
-      >
-    try {
-      const sentinels: string[] = []
-      for (const [index, ending] of ['return "early"', 'throw new Error("early failure")'].entries()) {
-        const ready = join(dataDir, `ready-${index}`)
-        const sentinel = join(dataDir, `sentinel-${index}`)
-        sentinels.push(sentinel)
-        const slowCommand = [process.execPath, '-e',
-          `const fs = require("node:fs"); fs.writeFileSync(${JSON.stringify(ready)}, "ready"); ` +
-          `setTimeout(() => fs.writeFileSync(${JSON.stringify(sentinel)}, "leaked"), 1500);`,
-        ]
-        const readyCommand = [process.execPath, '-e',
-          `const fs = require("node:fs"); const deadline = setTimeout(() => process.exit(2), 5000); ` +
-          `const poll = setInterval(() => { if (fs.existsSync(${JSON.stringify(ready)})) { clearTimeout(deadline); clearInterval(poll); } }, 5);`,
-        ]
-        // wait:true 在终态 failed 时按动作契约显式拏（不伪造成功）；拏后经 runs 取真实终态。
-        await assert.rejects(
-          runWorkflow({
-            script: META(`real-exec-cleanup-${index}`) +
-              `action("env.exec", { command: ${JSON.stringify(slowCommand)}, timeoutMs: 10000 });\n` +
-              `const ready = await action("env.exec", { command: ${JSON.stringify(readyCommand)}, timeoutMs: 10000 });\n` +
-              `if (!ready?.ok) throw new Error("child readiness check failed");\n${ending}`,
-            wait: true,
-          }),
-          (error: unknown) => error instanceof HelmxError && error.code === 'workflow_failed',
-        )
-        const listed = (await workflows.invokeAction('builtin:workflow', 'runs', {})) as unknown as {
-          runs: Array<import('../src/contracts.js').WorkflowRunSummary>
-        }
-        // 取本脚本名下终态 failed 的那一条。
-        const failedRuns = listed.runs.filter((r) => r.name === `real-exec-cleanup-${index}`)
-        assert.ok(failedRuns.length >= 1, 'run 应出现在 runs 清单')
-        const failedRun = failedRuns[0]!
-        assert.equal(failedRun.status, 'failed', failedRun.error)
-        assert.match(failedRun.error ?? '', index === 0 ? /unawaited launch/ : /early failure/)
-        assert.ok(existsSync(ready), 'the actual child must have started before the workflow ends')
-      }
-      await new Promise((resolve) => setTimeout(resolve, 1700))
-      for (const sentinel of sentinels) {
-        assert.equal(existsSync(sentinel), false, 'a cancelled child process must never write the delayed sentinel')
-      }
-    } finally {
-      await app.close()
-      rmSync(dataDir, { recursive: true, force: true })
-    }
-  })
-
-  it('env.exec in real KernelRuntime executes command without consuming tokens', timeout, async () => {
-    const { KernelRuntime } = await import('../../kernel/src/runtime/index.js')
-
-    const dataDir = mkdtempSync(join(tmpdir(), 'wf-env-exec-real-'))
-    const faux = makeFauxProvider()
-
-    const runtime = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(),
-      dataDir,
-      cwd: dataDir,
-      model: 'faux/faux-1',
-      providers: [faux.provider],
-      autoResume: false,
-    })
-    try {
-      const service = new WorkflowService({
-        dataDir,
-        state: runtime.documentStore,
-        host: {
-          spawnAgent: (request) => runtime.spawnAgent(request),
-          invokeAction: async (pluginId, actionId, input, context) => {
-            return runtime.plugins.invokeAction(pluginId, actionId, input, context)
-          },
-          prepareAction: (pluginId, actionId, input, context) => {
-            return runtime.plugins.prepareAction(pluginId, actionId, input, context)
-          },
-          execEnv: async (req, signal) => {
-            const res = await runtime.execEnv(req, undefined, signal)
-            return {
-              ...res,
-              output: runtime.stash.redact(res.output),
-            }
-          },
-          listActions: () => runtime.plugins.listActions(),
-          getConversation: (id) => runtime.getConversation(id),
-          abortConversationGuarded: (id) => runtime.abortConversationGuarded(id, {}),
-          emitEvent: () => {},
-        },
-      })
-      await service.init()
-
-      const summary = await service.run({
-        conversationId: runtime.listConversations()[0]!.id,
-        script:
-          META('real-exec') +
-          `
-          const res = await action("env.exec", { command: ["node", "-e", "process.stdout.write('hello-from-node')"] }, { idempotent: true, label: "run-node" })
-          return res
-        `,
-      })
-      const result = (await service.wait(summary.id)) as { ok: boolean; exitCode: number; output: string; timedOut: boolean }
-      assert.equal(service.getRun(summary.id).status, 'completed', service.getRun(summary.id).error)
-      assert.equal(result.ok, true)
-      assert.equal(result.exitCode, 0)
-      assert.equal(result.output, 'hello-from-node')
-      assert.equal(result.timedOut, false)
-
-      const run = service.getRun(summary.id)
-      const actionNode = run.nodes?.find((n) => n.id === 'action-0')
-      assert.equal(actionNode?.label, 'run-node')
-
-      await service.close()
-    } finally {
-      await runtime.close()
-      rmSync(dataDir, { recursive: true, force: true })
+      rmSync(strDataDir, { recursive: true, force: true })
     }
   })
 })

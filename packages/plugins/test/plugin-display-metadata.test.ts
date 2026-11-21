@@ -17,7 +17,7 @@ import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseNonEmptyLocalizedText, type LocalizedText, type PluginDefinition } from '@helmx/protocol'
-import { sanitizedHostEnv, useTempDir } from './helpers/plugin-test-env.js'
+import { sanitizedHostEnv, useTempDir } from '@helmx/test-kit/node'
 
 import { createProfilePlugin } from '../src/profile.js'
 import { createWorkflowPlugin } from '../src/workflow.js'

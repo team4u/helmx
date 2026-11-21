@@ -13,7 +13,7 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { updateCliCredentials } from '../src/credentials.js'
 import { CliError } from '../src/errors.js'
-import { useTempDir } from './helpers/cli-harness.js'
+import { useTempDir } from '@helmx/test-kit/node'
 
 /** Construct an ErrnoException (simulating OS failure when a Windows reader holds the target file). */
 function errnoError(code: string): NodeJS.ErrnoException {

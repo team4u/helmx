@@ -19,7 +19,13 @@ import { CLIENT_SHARED_GLOBALS, compilePluginClientModule } from '@helmx/plugin-
 import { PLUGIN_CLIENT_CSS_EXPORT } from '@helmx/protocol'
 import type { OverviewDoc } from '../src/herdr/client/models.js'
 
-GlobalRegistrator.register()
+if (typeof window === 'undefined' || typeof document === 'undefined') {
+  try {
+    GlobalRegistrator.register()
+  } catch {
+    // Already registered in shared DOM shard worker.
+  }
+}
 
 const req = createRequire(new URL('../../plugin-client/package.json', import.meta.url))
 const React = req('react') as typeof import('react')
@@ -55,17 +61,6 @@ interface HerdrClientModule {
 
 let tempDir: string
 let mod: HerdrClientModule
-
-before(async () => {
-  tempDir = await mkdtemp(join(tmpdir(), 'helmx-herdr-client-'))
-  const bundle = await compilePluginClientModule('builtin:herdr', HERDR_CLIENT_DIR, 'index.tsx', tempDir)
-  const url = `data:text/javascript;base64,${Buffer.from(bundle.code, 'utf8').toString('base64')}`
-  mod = (await import(url)) as HerdrClientModule
-})
-
-after(async () => {
-  await rm(tempDir, { recursive: true, force: true })
-})
 
 function mountHerdrOverview(doc: OverviewDoc, locale?: 'en' | 'zh-CN') {
   const actionCalls: Array<{ actionId: string; input: unknown }> = []
@@ -152,6 +147,25 @@ function mountHerdrOverview(doc: OverviewDoc, locale?: 'en' | 'zh-CN') {
 }
 
 describe('HerdrOverviewScreen 双端适配与 human 只读红线', () => {
+  before(async () => {
+    g.React = React
+    g.IS_REACT_ACT_ENVIRONMENT = true
+    g[CLIENT_SHARED_GLOBALS['react']!] = React
+    g[CLIENT_SHARED_GLOBALS['react-dom']!] = ReactDOM
+    g[CLIENT_SHARED_GLOBALS['react-dom/client']!] = ReactDOMClient
+    g[CLIENT_SHARED_GLOBALS['react/jsx-runtime']!] = ReactJsxRuntime
+    g[CLIENT_SHARED_GLOBALS['lucide-react']!] = LucideReact
+    g[CLIENT_SHARED_GLOBALS['@helmx/plugin-client']!] = SDK
+    tempDir = await mkdtemp(join(tmpdir(), 'helmx-herdr-client-'))
+    const bundle = await compilePluginClientModule('builtin:herdr', HERDR_CLIENT_DIR, 'index.tsx', tempDir)
+    const url = `data:text/javascript;base64,${Buffer.from(bundle.code, 'utf8').toString('base64')}#herdr-real`
+    mod = (await import(url)) as HerdrClientModule
+  })
+
+  after(async () => {
+    await rm(tempDir, { recursive: true, force: true })
+  })
+
   test('human 直连窗格在桌面表格与移动卡片均严格只读，零控制按钮；helmx 受管窗格开放合规动作', { timeout: 60_000 }, async () => {
     const doc: OverviewDoc = {
       version: 2,

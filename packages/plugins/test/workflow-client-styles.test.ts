@@ -49,8 +49,9 @@ test('工作流真实编译样式：__helmxClientCss 注入后阶段状态颜色
   const host = document.createElement('div')
   document.body.appendChild(host)
   try {
+    mountSharedPluginNamespaces({ realHooks: true })
     const { code } = await compilePluginClientModule('builtin:workflow', WORKFLOW_CLIENT_ROOT, 'index.tsx', cacheDir)
-    const mod = (await import(`data:text/javascript;base64,${Buffer.from(code, 'utf8').toString('base64')}`)) as Record<string, unknown>
+    const mod = (await import(`data:text/javascript;base64,${Buffer.from(code, 'utf8').toString('base64')}#styles-real`)) as Record<string, unknown>
     const css = mod[PLUGIN_CLIENT_CSS_EXPORT]
     assert.ok(typeof css === 'string' && css.length > 0, '编译产物必须导出插件合并 CSS')
     pluginStyle.textContent = css

@@ -932,12 +932,26 @@ test('SA5: HTTP 动作与真实 CLI 子进程 --json 见同一结果；非法参
     assert.ok(Number.isInteger(workerId) && workerId > 0)
     await kernel.waitForIdle(workerId)
 
-    // ---- 真实 CLI 子进程：动态动作命令（默认路径 helmx superagent <action>）同结果
-    const cliInspect = await runCliChild([
-      'superagent', 'inspect_worker',
-      '--input', JSON.stringify({ workerConversationId: workerId }),
-      '--json',
-    ], cliEnv)
+    // ---- 真实 CLI 子进程与 HTTP Schema 校验并发执行（三路独立只读/拒绝边界，共享同一 Hub）
+    const [cliInspect, cliDoc, badCli, badHttp, badHttp2] = await Promise.all([
+      runCliChild([
+        'superagent', 'inspect_worker',
+        '--input', JSON.stringify({ workerConversationId: workerId }),
+        '--json',
+      ], cliEnv),
+      runCliChild(['plugins', 'doc', SUPERAGENT_ID, DOC_INDEX, '--json'], cliEnv),
+      runCliChild([
+        'superagent', 'dispatch_worker', '--input', '{"prompt":42}', '--json',
+      ], cliEnv),
+      httpCall(base, 'POST', `/api/actions/${SUPERAGENT_ID}/dispatch_worker`, {
+        token,
+        body: { input: {} },
+      }),
+      httpCall(base, 'POST', `/api/actions/${SUPERAGENT_ID}/dispatch_worker`, {
+        token,
+        body: { input: { prompt: 123 } },
+      }),
+    ])
     assert.equal(cliInspect.timedOut, false, 'CLI 子进程不得挂起')
     if (cliInspect.code !== 0) {
       assert.fail(`CLI inspect_worker 失败：${cliInspect.err}`)
@@ -947,30 +961,16 @@ test('SA5: HTTP 动作与真实 CLI 子进程 --json 见同一结果；非法参
       `CLI inspect_worker --json 应看到同一 Worker（${workerId}）：${cliInspect.out}`,
     )
 
-    // CLI plugins doc 读 index（--json）
-    const cliDoc = await runCliChild(['plugins', 'doc', SUPERAGENT_ID, DOC_INDEX, '--json'], cliEnv)
     assert.equal(cliDoc.timedOut, false)
     if (cliDoc.code !== 0) assert.fail(`CLI plugins doc 失败：${cliDoc.err}`)
     const docOut = JSON.parse(cliDoc.out) as { value: IndexDocShape }
     assert.ok(typeof docOut.value.routerConversationId === 'number', 'CLI doc 应读出 routerConversationId')
 
-    // ---- Schema 拒绝（HTTP 与 CLI 同一校验器）
-    const badHttp = await httpCall(base, 'POST', `/api/actions/${SUPERAGENT_ID}/dispatch_worker`, {
-      token,
-      body: { input: {} },
-    })
     assert.equal(badHttp.status, 400)
     assert.equal(JSON.parse(badHttp.body).error.code, 'validation_error', '缺 prompt 应 validation_error')
 
-    const badHttp2 = await httpCall(base, 'POST', `/api/actions/${SUPERAGENT_ID}/dispatch_worker`, {
-      token,
-      body: { input: { prompt: 123 } },
-    })
     assert.equal(badHttp2.status, 400, 'prompt 类型错误应 400')
 
-    const badCli = await runCliChild([
-      'superagent', 'dispatch_worker', '--input', '{"prompt":42}', '--json',
-    ], cliEnv)
     assert.equal(badCli.timedOut, false)
     assert.notEqual(badCli.code, 0, 'CLI 非法入参必须非零退出')
     assert.equal((JSON.parse(badCli.err) as { error: { code: string } }).error.code, 'validation_error')

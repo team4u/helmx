@@ -37,7 +37,13 @@ import {
 } from '@helmx/protocol'
 import type { WorkflowRunSummary } from '../src/contracts.js'
 
-GlobalRegistrator.register()
+if (typeof window === 'undefined' || typeof document === 'undefined') {
+  try {
+    GlobalRegistrator.register()
+  } catch {
+    // Already registered in shared DOM shard worker.
+  }
+}
 
 const req = createRequire(new URL('../../plugin-client/package.json', import.meta.url))
 const React = req('react') as typeof import('react')
@@ -81,17 +87,6 @@ interface WorkflowClientModule {
 
 let tempDir: string
 let mod: WorkflowClientModule
-
-before(async () => {
-  tempDir = await mkdtemp(join(tmpdir(), 'helmx-wf-three-zone-'))
-  const bundle = await compilePluginClientModule('builtin:workflow', WORKFLOW_CLIENT_DIR, 'index.tsx', tempDir)
-  const url = `data:text/javascript;base64,${Buffer.from(bundle.code, 'utf8').toString('base64')}`
-  mod = (await import(url)) as WorkflowClientModule
-})
-
-after(async () => {
-  await rm(tempDir, { recursive: true, force: true })
-})
 
 interface HostStubLog {
   actions: Array<{ pluginId: string; actionId: string; input: unknown }>
@@ -282,6 +277,24 @@ function createHostHarness(init: {
 }
 
 describe('Workflow 三区零重复与无损呈现', () => {
+  before(async () => {
+    g.React = React
+    g.IS_REACT_ACT_ENVIRONMENT = true
+    g[CLIENT_SHARED_GLOBALS['react']!] = React
+    g[CLIENT_SHARED_GLOBALS['react-dom']!] = ReactDOM
+    g[CLIENT_SHARED_GLOBALS['react-dom/client']!] = ReactDOMClient
+    g[CLIENT_SHARED_GLOBALS['react/jsx-runtime']!] = ReactJsxRuntime
+    g[CLIENT_SHARED_GLOBALS['lucide-react']!] = LucideReact
+    g[CLIENT_SHARED_GLOBALS['@helmx/plugin-client']!] = SDK
+    tempDir = await mkdtemp(join(tmpdir(), 'helmx-wf-three-zone-'))
+    const bundle = await compilePluginClientModule('builtin:workflow', WORKFLOW_CLIENT_DIR, 'index.tsx', tempDir)
+    const url = `data:text/javascript;base64,${Buffer.from(bundle.code, 'utf8').toString('base64')}#three-zone-real`
+    mod = (await import(url)) as WorkflowClientModule
+  })
+
+  after(async () => {
+    await rm(tempDir, { recursive: true, force: true })
+  })
   test('WorkflowActiveTray：无在途归零 0px，在途展示 32px HUD 并支持展开动作与收敛消失', { timeout: 60_000 }, async () => {
     const runningWf: WorkflowRunSummary = {
       id: 'wf_tray_1',

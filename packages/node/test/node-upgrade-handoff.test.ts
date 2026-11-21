@@ -1,3 +1,4 @@
+// @test-isolation: process
 /**
  * `helmx-node` upgrade handoff CLI/IPC tests (`stdio activate/activated` protocol acceptance).
  *

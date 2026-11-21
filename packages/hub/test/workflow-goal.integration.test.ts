@@ -214,7 +214,7 @@ describe('T2 goal gate automatic retry (real kernel / faux / WorkflowService / w
       '  objective: "T2-GOAL-OBJECTIVE: in isolated worktree inside complete commit and via gate",\n' +
       '  isolation: "worktree",\n' +
       `  gate: ${JSON.stringify(gateCommand)},\n` +
-      '  gateTimeoutMs: 2000,\n' +
+      '  gateTimeoutMs: 1000,\n' +
       '  maxAttempts: 3,\n' +
       '})\n' +
       'return result\n'
