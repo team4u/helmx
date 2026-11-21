@@ -15,6 +15,7 @@ import type {
   ConversationSummary,
   ModelsChangedEvent,
   PluginBuildProvider,
+  PluginSummary,
   TurnSettledPayload,
 } from '@helmx/protocol'
 import { HelmxError } from '@helmx/protocol'
@@ -102,6 +103,20 @@ export interface AssembledRuntimeServices {
   assetReloader: AssetReloader
 }
 
+/**
+ * Matches `isPluginStateActive` (`enabled && phase === 'idle' && lastError === undefined`) on
+ * `plugin.changed` summaries: disabled (`enabled !== true`), failed (`status === 'failed'` or
+ * `error !== undefined`), and non-idle transitional projections (`status === 'disabled'`) are all
+ * inactive and close dedicated session-doc streams for that plugin.
+ */
+function isPluginSummaryActive(plugin: PluginSummary): boolean {
+  return (
+    plugin.enabled === true &&
+    plugin.error === undefined &&
+    (plugin.status === undefined || plugin.status === 'active')
+  )
+}
+
 export function assembleRuntimeServices(
   runtime: KernelRuntime,
   init: RuntimeServicesInit,
@@ -167,7 +182,7 @@ export function assembleRuntimeServices(
 
   const sessionDocLifecycleRelease = events.subscribe((frame) => {
     const event = frame.event
-    if (event.type === 'plugin.changed' && 'plugin' in event && event.plugin.enabled === false) {
+    if (event.type === 'plugin.changed' && 'plugin' in event && !isPluginSummaryActive(event.plugin)) {
       sessionDocStreams.closeForPlugin(event.plugin.id)
     } else if (event.type === 'conversation.deleted' && 'conversationId' in event) {
       sessionDocStreams.closeForConversation(event.conversationId)
