@@ -132,15 +132,25 @@ function hasExpectedFtsTokenizer(sql: string): boolean {
  *   in the same transaction so a crash before `rebuildFts()` finishes still triggers a rebuild on next boot.
  * - Already upgraded DB: leaves table and version untouched so steady-state restarts never re-scan conversation history.
  */
-async function ensureFtsSchema(db: NodeSqliteDatabase, hasPiHistory: boolean): Promise<void> {
+async function ensureFtsSchema(
+  db: NodeSqliteDatabase,
+  hasPiHistory: () => Promise<boolean>,
+): Promise<void> {
+  // Steady-state fast path: trigram FTS table already exists; skip both write transactions and pi history probes.
+  const existing = await db.get<{ sql: string | null }>(
+    "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'helmx_conversation_fts'",
+  )
+  if (existing !== undefined && hasExpectedFtsTokenizer(existing.sql ?? '')) return
+
+  const piHistoryPresent = existing === undefined ? await hasPiHistory() : false
   await db.transaction(async (tx) => {
-    const existing = await tx.get<{ sql: string | null }>(
+    const current = await tx.get<{ sql: string | null }>(
       "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'helmx_conversation_fts'",
     )
-    if (existing === undefined) {
+    if (current === undefined) {
       await tx.exec(FTS_SCHEMA)
       const hasConvs = await tx.get<{ present: number }>('SELECT 1 AS present FROM helmx_conversations LIMIT 1')
-      const initialVersion = !hasPiHistory && hasConvs === undefined ? FTS_SCHEMA_VERSION : 0
+      const initialVersion = !piHistoryPresent && hasConvs === undefined ? FTS_SCHEMA_VERSION : 0
       await tx.run(
         'INSERT INTO helmx_seq (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
         FTS_SCHEMA_VERSION_KEY,
@@ -148,7 +158,7 @@ async function ensureFtsSchema(db: NodeSqliteDatabase, hasPiHistory: boolean): P
       )
       return
     }
-    if (!hasExpectedFtsTokenizer(existing.sql ?? '')) {
+    if (!hasExpectedFtsTokenizer(current.sql ?? '')) {
       await tx.exec('DROP TABLE helmx_conversation_fts')
       await tx.exec(FTS_SCHEMA)
       await tx.run(
@@ -185,10 +195,12 @@ export async function openHelmxDatabase(dataDir: string): Promise<HelmxDatabase>
     storage = await SqliteStorage.open(storageDb, { prefix: 'pi_' })
     // Run helmx table DDL through the adapter queue as well to avoid racing pi initialization. Use latest schema directly during dev.
     await db.exec(HELMX_SCHEMA)
-    // Read-only probe via official SqliteStorage API (never touching pi_* tables directly): if pi history already
-    // exists while helmx_conversation_fts is absent, we must leave fts_schema_version = 0 so startup rebuilds it.
-    const piProbe = await storage.scanConversations({} as never, 1, undefined, BACKGROUND_CONTEXT)
-    await ensureFtsSchema(db, piProbe.items.length > 0)
+    // Lazy read-only probe via official SqliteStorage API (only invoked when helmx_conversation_fts is absent;
+    // steady-state restarts never touch pi history): if pi history exists, leave fts_schema_version = 0 for rebuild.
+    await ensureFtsSchema(db, async () => {
+      const piProbe = await storage.scanConversations({} as never, 1, undefined, BACKGROUND_CONTEXT)
+      return piProbe.items.length > 0
+    })
   } catch (error) {
     await db.close().catch(() => {})
     throw error

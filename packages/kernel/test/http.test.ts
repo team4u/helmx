@@ -1726,7 +1726,7 @@ test('artifacts permission error is not disguised as missing file (non-ENOENT st
 // Search / Workflows
 // ---------------------------------------------------------------------------
 
-test('search?q= passes through; empty q returns 400', { timeout: 60_000 }, async () => {
+test('search?q= passes through; empty or oversized q returns 400', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   const res = await call(handler, 'GET', '/api/search?q=hello')
   assert.equal(res.status, 200)
@@ -1736,6 +1736,13 @@ test('search?q= passes through; empty q returns 400', { timeout: 60_000 }, async
   ])
   const empty = await call(handler, 'GET', '/api/search?q=')
   assert.equal(empty.status, 400)
+  const tooManyTerms = Array.from({ length: 33 }, (_, i) => `t${i}`).join(' ')
+  const overTerms = await call(handler, 'GET', `/api/search?q=${encodeURIComponent(tooManyTerms)}`)
+  assert.equal(overTerms.status, 400)
+  assert.equal(overTerms.body.error.code, 'validation_error')
+  const overLength = await call(handler, 'GET', `/api/search?q=${'a'.repeat(1001)}`)
+  assert.equal(overLength.status, 400)
+  assert.equal(overLength.body.error.code, 'validation_error')
 })
 
 test('hardcoded workflow/worktree routes removed: all return 404 (orchestration moved to /api/actions)', { timeout: 60_000 }, async () => {

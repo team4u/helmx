@@ -16,16 +16,16 @@
  *   sentinels), guaranteeing sorted, non-overlapping UTF-16 `[start, end)` spans in `0 <= start < end <= snippet.length`.
  */
 
-import type { SearchHighlightRange } from '@helmx/protocol'
+import { HelmxError, type SearchHighlightRange } from '@helmx/protocol'
 
 export const DEFAULT_SEARCH_LIMIT = 20
 export const DEFAULT_MAX_PER_CONVERSATION = 2
-const MAX_SEARCH_TERMS = 12
+export const MAX_SEARCH_TERMS = 32
+export const MAX_SEARCH_QUERY_CHARS = 1000
 const SNIPPET_MAX_CHARS = 140
 const SNIPPET_LEAD_CHARS = 36
 const WORD_SNAP_MAX = 16
 const MAX_ANCHOR_HITS_PER_TERM = 16
-const MAX_OVERSIZED_TERM_WINDOW = 256
 
 export interface SearchOptions {
   /** Maximum total hits returned (positive integer; defaults to 20). */
@@ -58,10 +58,20 @@ export function asciiLower(text: string): string {
 /**
  * Parse a user search query into deduplicated AND terms split by trigram eligibility (>= 3 Unicode code points).
  * Strips NUL bytes (`\0`) which terminate C strings inside SQLite's FTS5 query parser.
+ * Rejects queries exceeding `MAX_SEARCH_QUERY_CHARS` or `MAX_SEARCH_TERMS` explicitly with `400 validation_error`
+ * instead of silently dropping trailing terms (honest multi-term AND semantics).
  */
 export function parseSearchTerms(query: string): ParsedSearchQuery {
   const cleaned = query.replace(/\0/g, ' ').trim()
   if (cleaned.length === 0) return { terms: [], trigramTerms: [], shortTerms: [] }
+  if (cleaned.length > MAX_SEARCH_QUERY_CHARS) {
+    throw new HelmxError(
+      'validation_error',
+      `search query exceeds maximum length of ${MAX_SEARCH_QUERY_CHARS} characters`,
+      400,
+      { maxLength: MAX_SEARCH_QUERY_CHARS, length: cleaned.length },
+    )
+  }
   const seen = new Set<string>()
   const terms: string[] = []
   const trigramTerms: string[] = []
@@ -71,13 +81,20 @@ export function parseSearchTerms(query: string): ParsedSearchQuery {
     const key = raw.toLowerCase()
     if (seen.has(key)) continue
     seen.add(key)
+    if (terms.length >= MAX_SEARCH_TERMS) {
+      throw new HelmxError(
+        'validation_error',
+        `search query exceeds maximum of ${MAX_SEARCH_TERMS} distinct terms`,
+        400,
+        { maxTerms: MAX_SEARCH_TERMS },
+      )
+    }
     terms.push(raw)
     if (Array.from(raw).length >= 3) {
       trigramTerms.push(raw)
     } else {
       shortTerms.push(raw)
     }
-    if (terms.length >= MAX_SEARCH_TERMS) break
   }
   return { terms, trigramTerms, shortTerms }
 }
@@ -260,11 +277,10 @@ export function buildSearchSnippet(
     winStart = 0
     winEnd = SNIPPET_MAX_CHARS
   } else {
-    const windowWidth = Math.max(
-      SNIPPET_MAX_CHARS,
-      Math.min(anchor.end - anchor.start, MAX_OVERSIZED_TERM_WINDOW),
-    )
+    // Always cover the entire matched anchor (bounded by MAX_SEARCH_QUERY_CHARS) plus leading context
+    // so a long single-token body match is never clipped into empty highlights and misclassified as title-only.
     winStart = Math.max(0, anchor.start - SNIPPET_LEAD_CHARS)
+    const windowWidth = Math.max(SNIPPET_MAX_CHARS, anchor.end - winStart)
     winEnd = Math.min(body.length, winStart + windowWidth)
     if (winEnd === body.length) {
       winStart = Math.max(0, winEnd - windowWidth)

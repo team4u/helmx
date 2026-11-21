@@ -15,7 +15,11 @@ import { after, before, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { FTS_SCHEMA_VERSION, FTS_SCHEMA_VERSION_KEY, openHelmxDatabase, type HelmxDatabase } from '../src/runtime/sqlite.js'
 import { HelmxStore, convStatusOf, type ConvMeta } from '../src/runtime/store.js'
-import { buildSearchSnippet } from '../src/runtime/fts-search.js'
+import {
+  MAX_SEARCH_QUERY_CHARS,
+  MAX_SEARCH_TERMS,
+  buildSearchSnippet,
+} from '../src/runtime/fts-search.js'
 import { deferred } from './helpers.js'
 
 async function openStore(): Promise<{ store: HelmxStore; database: HelmxDatabase; dir: string }> {
@@ -651,6 +655,37 @@ describe('HelmxStore durability layer (real SQLite)', { timeout: 60_000 }, () =>
       const nulSplit = await store.search('foo_bar\u0000100%')
       assert.equal(nulSplit.length, 1)
       assert.equal(nulSplit[0]?.conversationId, 4)
+
+      // 15-term query executes ALL terms honestly without silent truncation (previous cap of 12 would have dropped term 13..15).
+      const fifteenTerms = Array.from({ length: 15 }, (_, i) => `tok${String(i).padStart(2, '0')}`)
+      store.upsertConv(conv(5, { title: 'Long Multi-Term' }))
+      store.indexFts(5, 'entry:1', 'Long Multi-Term', fifteenTerms.join(' '))
+      store.indexFts(5, 'entry:2', 'Long Multi-Term', fifteenTerms.slice(0, 14).join(' '))
+      const allFifteenHits = await store.search(fifteenTerms.join(' '))
+      assert.equal(allFifteenHits.length, 1, '15th term must be enforced honestly (entry missing term 15 excluded)')
+      assert.equal(allFifteenHits[0]?.entryId, 'entry:1')
+
+      // Queries exceeding explicit MAX_SEARCH_TERMS or MAX_SEARCH_QUERY_CHARS reject explicitly with 400 validation_error.
+      const tooManyTerms = Array.from({ length: MAX_SEARCH_TERMS + 1 }, (_, i) => `t${i}`).join(' ')
+      await assert.rejects(
+        () => store.search(tooManyTerms),
+        (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
+      )
+      const tooLongQuery = 'a'.repeat(MAX_SEARCH_QUERY_CHARS + 1)
+      await assert.rejects(
+        () => store.search(tooLongQuery),
+        (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
+      )
+
+      // Long single-token (>256 UTF-16) body match must keep full highlight and locatable entryId (never misclassified as title-only).
+      const longToken = `https://example.invalid/${'segment-'.repeat(35)}end`
+      assert.ok(longToken.length > 256 && longToken.length <= MAX_SEARCH_QUERY_CHARS)
+      store.upsertConv(conv(6, { title: 'URL Trace' }))
+      store.indexFts(6, 'entry:url', 'URL Trace', `prefix filler ${'context '.repeat(30)}${longToken} trailing text`)
+      const longTokenHits = await store.search(longToken)
+      assert.equal(longTokenHits.length, 1)
+      assert.equal(longTokenHits[0]?.entryId, 'entry:url', 'long-token body match must retain locatable entryId')
+      assertValidHighlights(longTokenHits[0]!, [longToken])
     } finally {
       await store.close()
       await database.close()

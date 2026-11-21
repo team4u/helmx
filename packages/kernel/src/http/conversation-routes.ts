@@ -23,6 +23,7 @@ import {
 } from './validate.js'
 import { methodNotAllowed, parseOptionalBooleanFlag, parseOptionalJsonObjectBody, type RouteContext } from './route-context.js'
 import { postConversationArtifact } from './asset-routes.js'
+import { parseSearchTerms } from '../runtime/fts-search.js'
 
 export async function handleConversationsDomain(
   ctx: RouteContext,
@@ -178,7 +179,9 @@ export async function handleSearchDomain(
     return errorResponse(redactor, 404, 'not_found', 'route not found')
   }
   const q = ctx.url.searchParams.get('q') ?? ''
-  if (q.trim().length === 0) throw new ValidationError('q cannot be empty')
+  if (q.trim().length === 0 || parseSearchTerms(q).terms.length === 0) {
+    throw new ValidationError('q cannot be empty')
+  }
   return jsonOk(redactor, await kernel.search(q))
 }
 
