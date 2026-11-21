@@ -2,7 +2,7 @@
  * builtin:magpie shared contracts: constants, dependency ports, and the public status-doc shape.
  *
  * Design essentials (honesty discipline in practice):
- * - Gateway config snapshot (MagpieGatewayRef): all model-catalog / quota / routing reads execute
+ * - Gateway config snapshot (MagpieGatewayRef): all model-catalog / quota reads execute
  *   against the "root+token frozen at read time", verifying before publishing that the snapshot is
  *   still the effective config; after a config switch, the old gateway's caches or request results
  *   are never published under the new gateway's name;
@@ -30,17 +30,22 @@ export const MAGPIE_ADDR_ENV = 'MAGPIE_ADDR'
 export const DEFAULT_MAGPIE_REFRESH_INTERVAL_SEC = 5
 export const MAX_MAGPIE_REFRESH_INTERVAL_SEC = 3600
 
+/** Whether quota UI (composer status bar + settings quota table) is shown by default. */
+export const DEFAULT_MAGPIE_SHOW_QUOTA_STATUS = true
+
 /** The plugin config (the effective view after merging config.json + credentials.json secret). */
 export interface MagpiePluginConfig {
   gatewayUrl?: string
   apiKey?: string
   refreshIntervalSec?: number
+  showQuotaStatus?: boolean
 }
 
 /** Public (non-secret) subset of plugin config projected to client.tsx via usePluginConfig(). */
 export interface MagpiePublicConfig {
   gatewayUrl?: string
   refreshIntervalSec?: number
+  showQuotaStatus?: boolean
 }
 
 /**
@@ -84,15 +89,6 @@ export interface MagpieStatusQuota {
   error?: string
 }
 
-/** One routing group's recent-hit trace row. */
-interface MagpieStatusRoute {
-  group: string
-  strategy?: string
-  provider?: string
-  model?: string
-  timestamp?: string
-}
-
 export interface MagpieStatusDoc {
   gatewayUrl: string
   /** Whether explicitly configured by the user rather than the default loopback address. */
@@ -101,7 +97,6 @@ export interface MagpieStatusDoc {
   /** Whether the most recent network catalog refresh succeeded; when false, modelCount is a cached count, not a live result. */
   reachable: boolean
   modelCount: number
-  groupCount: number
   /** The most recent successful network catalog refresh time; advances only on catalog refresh success. */
   lastRefreshedAt?: number
   /** The most recent failure reason (redacted: no token). */
@@ -116,11 +111,8 @@ export interface MagpieStatusDoc {
   summaryText: string
   /** Current gateway catalog modelId -> owning Magpie provider id (used by composer status slot to match quotas to the active model). */
   modelOwners: Record<string, string>
-  /** Known routing-group modelId -> member provider ids (populated from gateway trace / local CLI when available). */
-  groupProviders?: Record<string, string[]>
   quotas: MagpieStatusQuota[]
-  routes: MagpieStatusRoute[]
-  /** Business-side diagnostics (redacted): reasons quotas / routing traces are unavailable etc.; an empty array means none. */
+  /** Business-side diagnostics (redacted): reasons quotas are unavailable etc.; an empty array means none. */
   diagnostics: string[]
 }
 

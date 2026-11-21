@@ -68,7 +68,6 @@ async function gatewayFixture() {
       }
     }
     if (path === '/v1/magpie/quotas') { res.end(JSON.stringify({ data: [] })); return }
-    if (path === '/v1/magpie/trace') { res.end(JSON.stringify({ routes: [] })); return }
     res.writeHead(404).end(JSON.stringify({ error: 'fixture route absent' }))
   })
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
@@ -111,7 +110,7 @@ test('Magpie 默认启用：启动即注册 provider、actions 与 settings.pane
       .filter((action) => action.pluginId === plugin.id)
       .map((action) => action.id)
       .sort()
-    assert.deepEqual(actions, ['group', 'groups', 'quota', 'refresh', 'status'])
+    assert.deepEqual(actions, ['quota', 'refresh', 'status'])
 
     const ui = app.kernel.plugins.listUi().filter((item) => item.pluginId === plugin.id)
     assert.ok(ui.some((item) => item.surface === 'settings.panel'))
@@ -176,6 +175,7 @@ test('Magpie 经真实组合层默认启用→配置切换→刷新/HTTP/CLI→�
     const status = await cli(['magpie', 'status', '--current'])
     assert.equal(status.gatewayUrl, gateway.root)
     assert.equal(status.reachable, true)
+    assert.equal(gateway.requests.includes('/v1/magpie/trace'), false, '不再请求 /v1/magpie/trace')
     await cli(['models', 'refresh', '--provider', 'magpie'])
     const config = await cli(['plugins', 'config', 'builtin:magpie'])
     assert.equal(config.values.apiKey, '******')

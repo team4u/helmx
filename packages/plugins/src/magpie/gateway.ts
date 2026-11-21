@@ -1,5 +1,5 @@
 /**
- * Magpie 网关 HTTP 通道：目录 / 配额 / 路由轨迹读取与网关配置解析。
+ * Magpie 网关 HTTP 通道：目录 / 配额读取与网关配置解析。
  *
  * 诚实性纪律：
  * - 网络失败一律 throw（调用方决定哪些失败值得上报，本层绝不吞错）；
@@ -17,7 +17,6 @@ import {
 } from './contracts.js'
 import type { MagpieModelEntry } from './catalog.js'
 import type { QuotaEntry } from './quota.js'
-import type { TraceRoute } from './routing.js'
 
 // ---------------------------------------------------------------------------
 // 网关配置解析
@@ -108,7 +107,6 @@ export function resolveGateway(
 const modelsUrl = (root: string): string => `${root}/v1/models`
 const quotasUrl = (root: string, kept = false): string =>
   `${root}/v1/magpie/quotas${kept ? '?kept=1' : ''}`
-const traceUrl = (root: string): string => `${root}/v1/magpie/trace`
 
 /** 从错误文本中剥离已知 token（网关错误页可能回显 Authorization 头或 token 本体）。 */
 function stripTokens(text: string, token: string): string {
@@ -174,26 +172,4 @@ export async function fetchQuotas(
   const data = (body as { data?: unknown })?.data
   if (!Array.isArray(data)) throw new Error(`${url} did not answer a quota list`)
   return data as QuotaEntry[]
-}
-
-/**
- * GET /v1/magpie/trace 路由轨迹。unavailable = 网关不能提供（远端拒绝或
- * 版本过旧）：不吞网络错误细节——失败原因如实返回，由调用方决定是否值得报告。
- */
-export async function fetchTrace(
-  root: string,
-  token: string,
-  signal: AbortSignal,
-  fetchImpl: typeof fetch,
-): Promise<{ routes: TraceRoute[] } | { unavailable: string }> {
-  const url = traceUrl(root)
-  let body: unknown
-  try {
-    body = await fetchJson(url, token, signal, fetchImpl)
-  } catch (error) {
-    return { unavailable: error instanceof Error ? error.message : String(error) }
-  }
-  const data = (body as { routes?: unknown })?.routes
-  if (!Array.isArray(data)) return { unavailable: `${url} did not answer a route list` }
-  return { routes: data as TraceRoute[] }
 }

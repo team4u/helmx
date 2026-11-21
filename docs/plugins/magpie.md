@@ -1,6 +1,6 @@
 # Magpie 动态模型网关插件
 
-`builtin:magpie` 解决「把 Magpie 网关的模型目录接入 Helmx 并诊断配额与路由」的问题：经 `ctx.provider` 注册动态目录 Provider，把 `magpie/<model>` 形式的模型接入全局目录，并提供状态快照、目录刷新、配额查询与路由组诊断动作。适合使用 Magpie 多协议模型网关的使用者。本插件只做接入与诊断，不改变内核 Model/Auth 机制。
+`builtin:magpie` 解决「把 Magpie 网关的模型目录接入 Helmx 并展示配额状态」的问题：经 `ctx.provider` 注册动态目录 Provider，把 `magpie/<model>` 形式的模型接入全局目录，并提供状态快照、目录刷新与配额查询动作。适合使用 Magpie 多协议模型网关的使用者。本插件只做接入与配额展示，不改变内核 Model/Auth 机制。
 
 ## 当前状态
 
@@ -16,18 +16,16 @@
 
 | 动作 | CLI | 说明 |
 | :--- | :--- | :--- |
-| `status` | `helmx magpie status` | 状态快照（可达性、模型数、配额、路由轨迹）；配置切换后 doc 指向旧 root 时如实返回新 root 的空结论，不冒充 |
-| `refresh` | `helmx magpie refresh` | 强制刷新目录与配额路由；失败显式抛 `502 magpie_gateway_unreachable` |
+| `status` | `helmx magpie status` | 状态快照（可达性、模型数、配额）；配置切换后 doc 指向旧 root 时如实返回新 root 的空结论，不冒充 |
+| `refresh` | `helmx magpie refresh` | 强制刷新目录与配额；失败显式抛 `502 magpie_gateway_unreachable` |
 | `quota` | `helmx magpie quota [--model <id>]` | 实时查询配额（`GET /v1/magpie/quotas`），可按模型归属 provider 过滤 |
-| `groups` | `helmx magpie groups` | 路由组列表与最近命中；本机默认实例读 magpie CLI + 网关 trace（`source: 'cli+trace'`），其余只用所选网关 trace（`source: 'gateway-trace'`） |
-| `group` | `helmx magpie group <id>` | 单组定义与最近路由决策；无可用信息显式 `404 magpie_group_not_found` |
 
 ### 状态文档、状态栏配额与自动刷新
 
-公开文档 `status` 实时汇总：`gatewayUrl` / `configuredRoot` / `local` / `reachable` / `modelCount` / `groupCount` / `modelOwners`（当前网关目录 `modelId -> provider` 映射）/ `groupProviders`（路由组成员 provider 集合）/ `lastRefreshedAt` / `quotasRefreshedAt` / `quotasUpdatedAt` / `lastError` / `quotasError`（成功后清除不残留）/ `quotas`（保留原始单位、`pool`、`last`、`resetsAt` 与错误原因）/ `routes` / `diagnostics`。驱动设置面板（`magpie-panel`）、命令面板（`magpie-refresh`）与输入框底部状态栏插槽（`COMPOSER_STATUS_SLOT`，同时覆盖已建会话与新建对话待命页）。
+公开文档 `status` 实时汇总：`gatewayUrl` / `configuredRoot` / `local` / `reachable` / `modelCount` / `modelOwners`（当前网关目录 `modelId -> provider` 映射）/ `lastRefreshedAt` / `quotasRefreshedAt` / `quotasUpdatedAt` / `lastError` / `quotasError`（成功后清除不残留）/ `quotas`（保留原始单位、`pool`、`last`、`resetsAt` 与错误原因）/ `diagnostics`。驱动设置面板（`magpie-panel`）、命令面板（`magpie-refresh`）与输入框底部状态栏插槽（`COMPOSER_STATUS_SLOT`，同时覆盖已建会话与新建对话待命页）。
 
-- **当前模型单账号直出 + 多账号按需展开**：状态栏仅针对当前选中的 `magpie/*` 模型（自动解引用 `tier/<id>` 档位）做供应商与模型池（`pool`）双重过滤，剔除无关模型池与非聊天窗口；外层只展示当前生效的单账号额度窗口（多账号存在已耗尽账号时优先展示仍有余量的账号，并附 `+N` 展开角标），点击弹出 Radix `Popover` 列表仅呈现该模型下的相关账号与窗口并支持手动刷新；非 Magpie 模型返回 `null` 自动收起；
-- **前台可配置轮询 + 回合结算刷新**：前台可见且使用 Magpie 模型时按 `refreshIntervalSec`（默认 `5` 秒，`0` 关闭；多窗格/分屏共享单飞锁）自动刷新模型目录与实时配额（目录未变时跳过磁盘落盘与全局 `models.changed` 广播，避免写放大）；`turn_settled` 后继续后台静默刷新配额路由（`?kept=1`，不问供应商、不阻塞回合）。
+- **当前模型单账号直出 + 多账号按需展开**：状态栏仅针对当前选中的 `magpie/*` 模型（自动解引用 `tier/<id>` 档位）按 `modelOwners`（网关 `/v1/models` 的 `owned_by`）与模型池（`pool`）双重过滤，剔除无关模型池与非聊天窗口；外层只展示当前生效的单账号额度窗口（省略泛化的 `Subscription` / `Quota` 标签以节省状态栏空间，多账号存在已耗尽账号时优先展示仍有余量的账号并附 `+N` 展开角标），点击弹出 Radix `Popover` 列表完整呈现该模型下的相关账号与窗口，右上角提供手动刷新与关闭（`X`）按钮；非 Magpie 模型或关闭 `showQuotaStatus` 后返回 `null` 自动收起；
+- **前台可配置轮询 + 回合结算刷新**：开启 `showQuotaStatus`、前台可见且使用 Magpie 模型时按 `refreshIntervalSec`（默认 `5` 秒，`0` 关闭；多窗格/分屏共享单飞锁）自动刷新模型目录与实时配额（目录未变时跳过磁盘落盘与全局 `models.changed` 广播，避免写放大）；`turn_settled` 后继续后台静默刷新配额（`?kept=1`，不问供应商、不阻塞回合）。
 
 ## 配置与数据边界
 
@@ -35,13 +33,13 @@
 | :--- | :--- | :--- | :--- |
 | `gatewayUrl` | string | `http://127.0.0.1:3425` | 网关地址（可填 `http://host:3425`） |
 | `apiKey` | string（secret） | 空 | API Key；本机 loopback 缺省 `magpie`，远端网关填写对应密钥。secret 字段分离至 credentials.json，绝不进 doc / 动作输出 / 错误文本 |
+| `showQuotaStatus` | boolean | `true` | 是否在输入框状态栏与设置面板中显示配额信息；关闭后即时隐藏并停止前台配额轮询 |
 | `refreshIntervalSec` | number（integer，0..3600） | `5` | 前台使用 Magpie 模型时自动刷新模型目录与配额的间隔秒数；设为 `0` 关闭自动刷新，在插件详情配置表单中修改后即时生效 |
 
 诚实性契约（硬约束）：
 
 - **网络失败一律显式**：通用目录刷新（`helmx models refresh`）把失败呈现在 `errors['magpie']`；插件 `service.start` 的后台刷新失败只更新 `reachable: false` / `lastError`，不阻断启用与内核启动；`reachable: false` 时 `modelCount` 是缓存计数，绝不冒充实时刷新成功；
-- **配置快照代数守卫**：所有网关读取以「读取时刻冻结的 root + token 快照」执行，发布前 `sameGateway` 校验快照仍是当前生效配置——fetch 期间切换网关时旧结果不发布到新网关名下；
-- **数据源隔离**：非默认端口本机网关与远端网关不读本机 magpie CLI 数据（无法证明 CLI 指向同一实例），只用所选网关 trace 并如实标注 `source`。
+- **配置快照代数守卫**：所有网关读取以「读取时刻冻结的 root + token 快照」执行，发布前 `sameGateway` 校验快照仍是当前生效配置——fetch 期间切换网关时旧结果不发布到新网关名下。
 
 ## 停用与失败语义
 
@@ -52,9 +50,9 @@
 | 内容 | 位置 |
 | :--- | :--- |
 | 插件入口 | `packages/plugins/src/magpie.ts` |
-| 网关 / 目录 / 配额 / 路由解析 | `packages/plugins/src/magpie/gateway.ts`、`catalog.ts`、`quota.ts`、`routing.ts` |
+| 网关 / 目录 / 配额解析 | `packages/plugins/src/magpie/gateway.ts`、`catalog.ts`、`quota.ts` |
 | Provider 注册 | `packages/plugins/src/magpie/provider.ts` |
-| 前端设置面板 | `packages/plugins/src/magpie/client/` |
+| 前端设置面板与状态栏 | `packages/plugins/src/magpie/client/` |
 | 测试 | `packages/plugins/test/magpie-plugin.test.ts`、`magpie-app.integration.test.ts`、`packages/web/test/magpie-client-interactions.test.tsx` |
 
 ## 相关文档

@@ -1,15 +1,15 @@
 /**
- * builtin:magpie: the Magpie gateway integration plugin (model catalog / quotas / routing groups).
+ * builtin:magpie: the Magpie gateway integration plugin (model catalog / quotas).
  *
  * Responsibilities:
  * - Register the pi-ai dynamic-catalog Provider via ctx.provider (mounted by the host before
  *   service.start, unregistered after service.stop -- never hand-mounted around the host inside the plugin);
  * - The public status doc drives the composer status slot / settings.panel / commandPalette and
- *   the `helmx magpie status` CLI; the action bus provides refresh / quota / groups / group;
- * - After turn_settled, silently refresh quotas and routing in the background (?kept=1; asks no vendor, blocks no turn);
+ *   the `helmx magpie status` CLI; the action bus provides status / refresh / quota;
+ * - After turn_settled, silently refresh quotas in the background (?kept=1; asks no vendor, blocks no turn);
  * - Foreground Composer status slot refreshes models and quotas on the configurable `refreshIntervalSec`
  *   cadence (default 5s, 0 disables; catalog persistence and `models.changed` broadcast only fire when
- *   the catalog actually changed, preventing idle disk/SSE amplification).
+ *   the catalog actually changed, preventing idle disk/SSE amplification), gated by `showQuotaStatus` (default true).
  *
  * Honesty discipline:
  * - All gateway reads execute against a snapshot frozen at read time, and verify the snapshot is
@@ -19,20 +19,17 @@
  *   catalog refreshes); this plugin's service.start background-refresh failures only update
  *   reachable:false / lastError, never blocking enablement or kernel startup; the manual refresh action throws magpie_gateway_unreachable explicitly;
  * - With reachable:false, modelCount is the cached count, never posing as a live refresh success;
- * - Non-loopback gateways never read the local magpie CLI data (that is another instance); only the
- *   chosen gateway's trace is used, with the source labeled; apiKey never enters the doc / action outputs / error text.
- * - Zero-arg factory: catalog refresh goes through ctx.host.refreshModels({ providers: ['magpie'] }),
- *   network reads use global fetch, and the local CLI goes through the public execFile port
- *   (no injection backdoors; tests use PATH fixtures / global fetch mocks).
+ * - apiKey never enters the doc / action outputs / error text.
+ * - Zero-arg factory: catalog refresh goes through ctx.host.refreshModels({ providers: ['magpie'] })
+ *   and network reads use global fetch (no injection backdoors; tests use global fetch mocks).
  */
-import { execFile } from 'node:child_process'
-import { promisify } from 'node:util'
 import { COMPOSER_STATUS_SLOT, HelmxError, type PluginDefinition, type TurnSettledPayload } from '@helmx/protocol'
 import { resolvePluginClientAssets } from './asset-paths.js'
 import { toPiModels, type PiMagpieModel } from './magpie/catalog.js'
 import {
   DEFAULT_MAGPIE_REFRESH_INTERVAL_SEC,
   DEFAULT_MAGPIE_ROOT,
+  DEFAULT_MAGPIE_SHOW_QUOTA_STATUS,
   MAGPIE_PLUGIN_ID,
   MAGPIE_PROVIDER_ID,
   MAGPIE_STATUS_DOC,
@@ -42,16 +39,8 @@ import {
   type MagpiePluginConfig,
   type MagpieStatusDoc,
 } from './magpie/contracts.js'
-import { fetchCatalog, fetchQuotas, fetchTrace, resolveGateway } from './magpie/gateway.js'
+import { fetchCatalog, fetchQuotas, resolveGateway } from './magpie/gateway.js'
 import { quotaRows } from './magpie/quota.js'
-import {
-  latestGroupRouteIn,
-  parseGroupShow,
-  parseGroupsList,
-  traceRouteRows,
-  type GroupListRow,
-  type TraceRoute,
-} from './magpie/routing.js'
 import { createMagpieProvider } from './magpie/provider.js'
 
 export { MAGPIE_PLUGIN_ID }
@@ -64,11 +53,9 @@ const STATUS_OUTPUT_SCHEMA = {
     'local',
     'reachable',
     'modelCount',
-    'groupCount',
     'summaryText',
     'modelOwners',
     'quotas',
-    'routes',
     'diagnostics',
   ],
   properties: {
@@ -77,7 +64,6 @@ const STATUS_OUTPUT_SCHEMA = {
     local: { type: 'boolean' },
     reachable: { type: 'boolean' },
     modelCount: { type: 'number' },
-    groupCount: { type: 'number' },
     lastRefreshedAt: { type: 'number' },
     lastError: { type: 'string' },
     quotasRefreshedAt: { type: 'number' },
@@ -85,12 +71,7 @@ const STATUS_OUTPUT_SCHEMA = {
     quotasError: { type: 'string' },
     summaryText: { type: 'string' },
     modelOwners: { type: 'object', additionalProperties: { type: 'string' } },
-    groupProviders: {
-      type: 'object',
-      additionalProperties: { type: 'array', items: { type: 'string' } },
-    },
     quotas: { type: 'array', items: { type: 'object', additionalProperties: true } },
-    routes: { type: 'array', items: { type: 'object', additionalProperties: true } },
     diagnostics: { type: 'array', items: { type: 'string' } },
   },
   additionalProperties: false,
@@ -109,7 +90,7 @@ const REFRESH_OUTPUT_SCHEMA = {
 } as const
 
 // Note: on refresh-action failure, throw HelmxError explicitly (no degraded result returned); on success,
-// reasons why quotas / traces are unavailable live in the status doc diagnostics, readable via the status action.
+// reasons why quotas are unavailable live in the status doc diagnostics, readable via the status action.
 
 const QUOTA_OUTPUT_SCHEMA = {
   type: 'object',
@@ -122,42 +103,15 @@ const QUOTA_OUTPUT_SCHEMA = {
   additionalProperties: false,
 } as const
 
-const GROUPS_OUTPUT_SCHEMA = {
-  type: 'object',
-  required: ['groups', 'local'],
-  properties: {
-    groups: { type: 'array', items: { type: 'object', additionalProperties: true } },
-    local: { type: 'boolean' },
-    note: { type: 'string' },
-    cliError: { type: 'string' },
-  },
-  additionalProperties: false,
-} as const
-
-const GROUP_OUTPUT_SCHEMA = {
-  type: 'object',
-  required: ['id', 'source'],
-  properties: {
-    id: { type: 'string' },
-    definition: { type: 'object', additionalProperties: true },
-    lastRoute: { type: 'object', additionalProperties: true },
-    source: { type: 'string' },
-    note: { type: 'string' },
-  },
-  additionalProperties: false,
-} as const
-
 const emptyStatus = (gatewayUrl: string): MagpieStatusDoc => ({
   gatewayUrl,
   configuredRoot: false,
   local: true,
   reachable: false,
   modelCount: 0,
-  groupCount: 0,
   summaryText: 'Magpie · not connected',
   modelOwners: {},
   quotas: [],
-  routes: [],
   diagnostics: [],
 })
 
@@ -207,66 +161,6 @@ function catalogFingerprint(models: readonly PiMagpieModel[]): string {
   return JSON.stringify(normalized)
 }
 
-function addGroupProviders(
-  target: Map<string, string[]>,
-  key: string | undefined,
-  providers: readonly (string | undefined)[],
-): void {
-  const normalizedKey = key?.trim()
-  if (!normalizedKey) return
-  let list = target.get(normalizedKey)
-  for (const raw of providers) {
-    const provider = raw?.trim()
-    if (!provider || provider === 'group' || provider === 'auto') continue
-    if (list === undefined) {
-      list = []
-      target.set(normalizedKey, list)
-    }
-    if (!list.includes(provider)) list.push(provider)
-  }
-}
-
-function collectGroupProvidersFromTrace(routes: readonly TraceRoute[]): Record<string, string[]> {
-  const map = new Map<string, string[]>()
-  for (const route of routes) {
-    const memberProviders = [
-      ...(route.group?.members ?? []).map((member) => directProviderOf(member)),
-      route.provider,
-      route.served ? directProviderOf(route.served) : undefined,
-    ]
-    const groupShort = route.group?.id?.trim().replace(/^group\//, '')
-    if (groupShort) addGroupProviders(map, `group/${groupShort}`, memberProviders)
-    if (route.model?.trim()) addGroupProviders(map, route.model.trim(), memberProviders)
-  }
-  return Object.fromEntries(map)
-}
-
-function collectGroupProvidersFromCli(groups: readonly GroupListRow[] | undefined): Record<string, string[]> {
-  if (!groups || groups.length === 0) return {}
-  const map = new Map<string, string[]>()
-  for (const group of groups) {
-    const memberProviders = group.members.map((member) => directProviderOf(member))
-    addGroupProviders(map, group.id, memberProviders)
-  }
-  return Object.fromEntries(map)
-}
-
-function mergeGroupProviders(
-  base: Record<string, string[]> | undefined,
-  incoming: Record<string, string[]>,
-): Record<string, string[]> | undefined {
-  const map = new Map<string, string[]>()
-  if (base) {
-    for (const [key, list] of Object.entries(base)) {
-      addGroupProviders(map, key, list)
-    }
-  }
-  for (const [key, list] of Object.entries(incoming)) {
-    addGroupProviders(map, key, list)
-  }
-  return map.size > 0 ? Object.fromEntries(map) : undefined
-}
-
 /** Semantic comparison excluding volatile timestamps so identical 5s polls do not amplify global SSE traffic. */
 function statusContentEqual(a: MagpieStatusDoc, b: MagpieStatusDoc): boolean {
   const stripTimestamps = (doc: MagpieStatusDoc) => ({
@@ -275,39 +169,14 @@ function statusContentEqual(a: MagpieStatusDoc, b: MagpieStatusDoc): boolean {
     local: doc.local,
     reachable: doc.reachable,
     modelCount: doc.modelCount,
-    groupCount: doc.groupCount,
     lastError: doc.lastError,
     quotasError: doc.quotasError,
     summaryText: doc.summaryText,
     modelOwners: doc.modelOwners,
-    groupProviders: doc.groupProviders,
     quotas: doc.quotas,
-    routes: doc.routes,
     diagnostics: doc.diagnostics,
   })
   return JSON.stringify(stripTimestamps(a)) === JSON.stringify(stripTimestamps(b))
-}
-
-const execFileAsync = promisify(execFile)
-
-/** The local magpie CLI goes through execFile (PATH resolution, no hidden injection).
- * Failures return { ok:false, error }; timeout 10s; error text redacted and length-capped.
- */
-function runMagpieCli(
-  args: readonly string[],
-  options?: { signal?: AbortSignal },
-): Promise<{ ok: boolean; stdout?: string; error?: string }> {
-  return execFileAsync('magpie', [...args], {
-    signal: options?.signal,
-    timeout: 10_000,
-    maxBuffer: 1024 * 1024,
-    encoding: 'utf8',
-  })
-    .then(({ stdout }) => ({ ok: true, stdout }))
-    .catch((error: unknown) => ({
-      ok: false,
-      error: sanitizeErrorText(error instanceof Error ? error : new Error(String(error))),
-    }))
 }
 
 export function createMagpiePlugin(): PluginDefinition {
@@ -317,8 +186,8 @@ export function createMagpiePlugin(): PluginDefinition {
     id: MAGPIE_PLUGIN_ID,
     name: { en: 'Magpie Gateway', 'zh-CN': 'Magpie 网关' },
     description: {
-      en: 'Magpie model gateway integration: dynamic model catalog, quotas, and routing groups, with silent refresh and a status panel.',
-      'zh-CN': 'Magpie 模型网关集成：动态模型目录、配额与路由组，静默刷新与状态面板。',
+      en: 'Magpie model gateway integration: dynamic model catalog and quotas, with silent refresh and a status panel.',
+      'zh-CN': 'Magpie 模型网关集成：动态模型目录与配额，静默刷新与状态面板。',
     },
     icon: 'globe',
     version: '0.1.0',
@@ -346,6 +215,15 @@ export function createMagpiePlugin(): PluginDefinition {
           },
           secret: true,
         },
+        showQuotaStatus: {
+          type: 'boolean',
+          label: { en: 'Show quota information', 'zh-CN': '显示配额信息' },
+          description: {
+            en: 'Display Magpie model quotas in the composer status bar and settings panel (enabled by default; disabling also pauses foreground quota polling)',
+            'zh-CN': '在输入框状态栏与设置面板中展示 Magpie 配额信息（默认开启；关闭后同时停止前台配额轮询）',
+          },
+          default: DEFAULT_MAGPIE_SHOW_QUOTA_STATUS,
+        },
         refreshIntervalSec: {
           type: 'number',
           label: { en: 'Auto-refresh interval (seconds)', 'zh-CN': '自动刷新间隔（秒）' },
@@ -366,6 +244,7 @@ export function createMagpiePlugin(): PluginDefinition {
         return {
           ...(typeof raw.gatewayUrl === 'string' && raw.gatewayUrl.trim() !== '' ? { gatewayUrl: raw.gatewayUrl } : {}),
           ...(typeof raw.apiKey === 'string' && raw.apiKey.trim() !== '' ? { apiKey: raw.apiKey } : {}),
+          ...(typeof raw.showQuotaStatus === 'boolean' ? { showQuotaStatus: raw.showQuotaStatus } : {}),
           ...(typeof raw.refreshIntervalSec === 'number' && Number.isFinite(raw.refreshIntervalSec)
             ? { refreshIntervalSec: raw.refreshIntervalSec }
             : {}),
@@ -458,8 +337,8 @@ export function createMagpiePlugin(): PluginDefinition {
         reachable ? `Magpie · ${modelCount} models` : 'Magpie · not connected'
 
       /**
-       * Read quotas + routing and update the doc (executed on the snapshot; kept=true asks no vendor).
-       * Honesty: quota / trace read failures are not swallowed -- the reason goes into diagnostics
+       * Read quotas and update the doc (executed on the snapshot; kept=true asks no vendor).
+       * Honesty: quota read failures are not swallowed -- the reason goes into diagnostics
        * (for background/startup sync, clears old quotas and records unavailability; for preserveQuotasOnError
        * foreground polling, preserves the last known snapshot alongside quotasError so the status bar
        * discloses staleness rather than vanishing).
@@ -476,7 +355,6 @@ export function createMagpiePlugin(): PluginDefinition {
           const sameRoot = prev.gatewayUrl === snapshot.root
           const diagnostics: string[] = []
           let quotas: MagpieStatusDoc['quotas'] = []
-          let routes: MagpieStatusDoc['routes'] = []
           let quotaOk = false
           let quotaErr: string | undefined
           try {
@@ -489,27 +367,13 @@ export function createMagpiePlugin(): PluginDefinition {
             diagnostics.push(`quotas unavailable: ${quotaErr}`)
           }
           if (stopping || controller.signal.aborted) return
-          const trace = await fetchTrace(snapshot.root, snapshot.token, controller.signal, fetchImpl)
-          if (stopping || controller.signal.aborted) return
-          let traceGroupProviders: Record<string, string[]> = {}
-          if ('routes' in trace) {
-            routes = traceRouteRows(trace.routes)
-            traceGroupProviders = collectGroupProvidersFromTrace(trace.routes)
-          } else {
-            routes = []
-            diagnostics.push(`routing trace unavailable: ${sanitizeErrorText(trace.unavailable)}`)
-          }
           const now = Date.now()
-          const mergedGroupProviders = mergeGroupProviders(sameRoot ? prev.groupProviders : undefined, traceGroupProviders)
           writeStatus(
             snapshot,
             {
               quotas,
-              routes,
-              groupCount: routes.length,
               diagnostics,
               modelOwners: modelOwnersOf(modelsForSnapshot(snapshot)),
-              ...(mergedGroupProviders !== undefined ? { groupProviders: mergedGroupProviders } : {}),
               ...(quotaOk ? { quotasUpdatedAt: now } : {}),
               ...(quotaOk && !kept ? { quotasRefreshedAt: now } : {}),
               ...(quotaErr !== undefined ? { quotasError: quotaErr } : {}),
@@ -618,7 +482,7 @@ export function createMagpiePlugin(): PluginDefinition {
         },
       })
 
-      // ---- turn_settled: background silent quota/routing refresh (never blocking turn settlement) ------------
+      // ---- turn_settled: background silent quota refresh (never blocking turn settlement) ------------
       // Only conversations using magpie models matter: other conversations (other Providers) settling
       // trigger no gateway reads (the conversation's current model is taken live from payload.conversation; no guessing).
       ctx.hook.onTurnSettled((payload: TurnSettledPayload) => {
@@ -638,7 +502,7 @@ export function createMagpiePlugin(): PluginDefinition {
       // ---- Action bus (HTTP / helmx magpie <action> / run_action / Workflow) ----
       ctx.action({
         id: 'status',
-        description: 'Magpie gateway status snapshot (reachability, model count, quotas, routing traces)',
+        description: 'Magpie gateway status snapshot (reachability, model count, quotas)',
         idempotent: true,
         inputSchema: { type: 'object', properties: {}, additionalProperties: false },
         outputSchema: STATUS_OUTPUT_SCHEMA,
@@ -673,7 +537,7 @@ export function createMagpiePlugin(): PluginDefinition {
 
       ctx.action({
         id: 'refresh',
-        description: 'Force-refresh the Magpie model catalog and quota/routing state (failures error explicitly)',
+        description: 'Force-refresh the Magpie model catalog and quota state (failures error explicitly)',
         inputSchema: {
           type: 'object',
           properties: {
@@ -784,11 +648,8 @@ export function createMagpiePlugin(): PluginDefinition {
                 ? input.model.slice(MAGPIE_PROVIDER_ID.length + 1)
                 : input.model
               const owners = modelOwnersOf(modelsForSnapshot(snapshot))
-              const groupProviders = status.get().groupProviders?.[bareModel] ?? []
-              const matched = new Set<string>(groupProviders)
-              const primaryOwner = owners[bareModel]
-              if (primaryOwner) matched.add(primaryOwner)
-              if (matched.size > 0) rows = rows.filter((row) => matched.has(row.provider))
+              const primaryOwner = owners[bareModel] ?? directProviderOf(bareModel)
+              if (primaryOwner) rows = rows.filter((row) => row.provider === primaryOwner)
             }
             return {
               quotas: rows,
@@ -804,148 +665,6 @@ export function createMagpiePlugin(): PluginDefinition {
               502,
               { gatewayUrl: snapshot.root },
             )
-          } finally {
-            done()
-          }
-        },
-      })
-
-      ctx.action({
-        id: 'groups',
-        description: 'Routing group list with recent hits (local reads the magpie CLI + gateway trace; remote uses gateway trace only)',
-        idempotent: true,
-        inputSchema: { type: 'object', properties: {}, additionalProperties: false },
-        outputSchema: GROUPS_OUTPUT_SCHEMA,
-        handler: async () => {
-          const snapshot = gateway()
-          const { controller, done } = beginRequest()
-          try {
-            // Data-source isolation: the CLI describes only the local default instance; when another
-            // loopback port is explicitly configured, the CLI cannot be proven to point at the same
-            // instance (MAGPIE_GW_URL/MAGPIE_ADDR may point elsewhere) -- use only the chosen root's trace; never read other local instances.
-            const cliTrusted = snapshot.root === DEFAULT_MAGPIE_ROOT
-            let cliGroups: GroupListRow[] | undefined
-            let cliError: string | undefined
-            if (cliTrusted) {
-              const run = await runMagpieCli(['groups'], { signal: controller.signal })
-              if (run.ok) cliGroups = parseGroupsList(run.stdout ?? '')
-              else cliError = run.error
-            }
-            const trace = await fetchTrace(snapshot.root, snapshot.token, controller.signal, fetchImpl)
-            const traceRoutes = 'routes' in trace ? trace.routes : []
-            const traceRows = traceRouteRows(traceRoutes)
-            const byKey = new Map(traceRows.map((row) => [row.group, row]))
-            const cliKeys = new Set((cliGroups ?? []).map((row) => row.id.replace(/^group\//, '')))
-            const groups = [
-              ...(cliGroups ?? []).map((row) => {
-                const hit = byKey.get(row.id.replace(/^group\//, ''))
-                return {
-                  id: row.id,
-                  ...(row.name !== undefined ? { name: row.name } : {}),
-                  ...(row.routing !== undefined ? { routing: row.routing } : {}),
-                  ...(row.members.length > 0 ? { members: row.members } : {}),
-                  ...(hit ? { lastRoute: hit } : {}),
-                  source: 'cli+trace' as const,
-                }
-              }),
-              // Groups present in trace but not listed by the CLI (CLI failure or unlisted auto groups)
-              ...traceRows
-                .filter((row) => !cliKeys.has(row.group))
-                .map((row) => ({
-                  id: `group/${row.group}`,
-                  ...(row.strategy !== undefined ? { routing: row.strategy } : {}),
-                  lastRoute: row,
-                  source: 'gateway-trace' as const,
-                })),
-            ]
-            const prev = status.get()
-            const fromTrace = collectGroupProvidersFromTrace(traceRoutes)
-            const fromCli = collectGroupProvidersFromCli(cliGroups)
-            const mergedGroupProviders = mergeGroupProviders(
-              mergeGroupProviders(prev.gatewayUrl === snapshot.root ? prev.groupProviders : undefined, fromTrace),
-              fromCli,
-            )
-            writeStatus(snapshot, {
-              routes: traceRows,
-              groupCount: groups.length,
-              ...(mergedGroupProviders !== undefined ? { groupProviders: mergedGroupProviders } : {}),
-            })
-            const notes: string[] = []
-            if (cliGroups === undefined) notes.push('Only routing traces of requests already seen by the selected gateway are shown; full group definitions are currently unavailable.')
-            if ('unavailable' in trace) notes.push(`routing trace unavailable: ${sanitizeErrorText(trace.unavailable)}`)
-            return {
-              groups,
-              local: snapshot.local,
-              ...(notes.length > 0 ? { note: notes.join(' ') } : {}),
-              ...(cliError !== undefined ? { cliError: sanitizeErrorText(cliError) } : {}),
-            }
-          } finally {
-            done()
-          }
-        },
-      })
-
-      ctx.action({
-        id: 'group',
-        description: 'A single routing group\'s definition and most recent routing decision',
-        idempotent: true,
-        inputSchema: {
-          type: 'object',
-          required: ['id'],
-          properties: { id: { type: 'string', minLength: 1, maxLength: 128 } },
-          additionalProperties: false,
-        },
-        outputSchema: GROUP_OUTPUT_SCHEMA,
-        handler: async (input: { id: string }) => {
-          const snapshot = gateway()
-          const { controller, done } = beginRequest()
-          try {
-            const short = input.id.replace(/^group\//, '')
-            // Definition: only the local default instance's CLI can provide it (another loopback port / a
-            // remote CLI is another instance; without provable identity, do not ask).
-            const cliTrusted = snapshot.root === DEFAULT_MAGPIE_ROOT
-            let definition: ReturnType<typeof parseGroupShow> = undefined
-            let definitionError: string | undefined
-            if (cliTrusted) {
-              const run = await runMagpieCli(['group', short], { signal: controller.signal })
-              if (run.ok) {
-                definition = parseGroupShow(run.stdout ?? '')
-                if (definition === undefined) definitionError = 'magpie CLI output cannot be parsed into a group definition'
-              } else {
-                definitionError = run.error
-              }
-            }
-            const trace = await fetchTrace(snapshot.root, snapshot.token, controller.signal, fetchImpl)
-            const lastRoute = 'routes' in trace ? latestGroupRouteIn(trace.routes, short) : undefined
-            // Honesty: never fabricate when a remote gateway has no definition source -- the source label says so.
-            const source = definition !== undefined ? 'cli+trace' : 'gateway-trace'
-            if (definition === undefined && lastRoute === undefined) {
-              throw new HelmxError(
-                'magpie_group_not_found',
-                `routing group ${input.id} has no available information: ${
-                  cliTrusted
-                    ? definitionError !== undefined
-                      ? `CLI failed (${sanitizeErrorText(definitionError)})`
-                      : 'neither the CLI nor the gateway trace has this group'
-                    : snapshot.local
-                      ? 'local gateway on a non-default port provides trace only, and the trace has no record of this group'
-                      : 'non-local gateway provides trace only, and the trace has no record of this group'
-                }`,
-                404,
-                { id: input.id, gatewayUrl: snapshot.root, local: snapshot.local },
-              )
-            }
-            return {
-              id: input.id,
-              ...(definition !== undefined ? { definition } : {}),
-              ...(lastRoute !== undefined ? { lastRoute } : {}),
-              source,
-              ...(snapshot.local && !cliTrusted
-                ? { note: 'local gateway on a non-default port: definitions need the local default instance\'s magpie CLI; only the selected gateway\'s trace here' }
-                : snapshot.local
-                  ? {}
-                  : { note: 'non-local gateway: definitions need the local magpie CLI; only the gateway trace here' }),
-            }
           } finally {
             done()
           }

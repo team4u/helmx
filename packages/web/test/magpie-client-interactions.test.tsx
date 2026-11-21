@@ -2,9 +2,10 @@
  * builtin:magpie 插件 client 组件测试（真实编译产物 + 共享宿主 SDK + DOM 事件）。
  *
  * 覆盖：
- * - settingsPanel（状态概览 KV、自动刷新间隔、诊断 / 配额 / 路由三表、缓存计数标注、
- *   刷新动作与失败显式错误、加载态与空态）；
- * - MagpieComposerQuotaStatus（单账号直出、多账号单主账号外层 + 点击 Radix Popover 列表、
+ * - settingsPanel（状态概览 KV、自动刷新间隔、诊断 / 配额双表与开关隐藏、缓存计数标注、
+ *   刷新动作与失败显式错误、加载态与空态、无路由追踪区）；
+ * - MagpieComposerQuotaStatus（单账号直出、省略泛化 Subscription/Quota 标签、多账号单主账号外层 +
+ *   点击 Radix Popover 列表与右上角 X 关闭按钮、showQuotaStatus 开关默认开启与关闭停轮询、
  *   当前模型池严格过滤、待命页 tier/<id> 解引用、原始单位与报错诚实展示、前台自动刷新单飞去重）。
  */
 import assert from 'node:assert/strict'
@@ -18,7 +19,14 @@ ensureHappyDom()
 const { createRoot } = await import('react-dom/client')
 const { PluginClientContext, resolveLocalizedText } = await import('@helmx/plugin-client')
 const { importBuiltinClientModule, mountSharedPluginNamespaces, setBuiltinClientStub } = await import('./helpers/builtin-clients.js')
-const { isAccountExhausted, selectModelQuotas, resolveEffectiveMagpieModel, resolveRefreshIntervalSec } = await import('../../plugins/src/magpie/client/quota-model.js')
+const {
+  isAccountExhausted,
+  selectModelQuotas,
+  resolveEffectiveMagpieModel,
+  resolveRefreshIntervalSec,
+  resolveShowQuotaStatus,
+  shouldShowInlineWindowLabel,
+} = await import('../../plugins/src/magpie/client/quota-model.js')
 const { parseStatus } = await import('../../plugins/src/magpie/client/models.js')
 const {
   noteMagpieManualRefresh,
@@ -134,16 +142,12 @@ const STATUS_DOC = {
   local: true,
   reachable: true,
   modelCount: 12,
-  groupCount: 2,
   lastRefreshedAt: 1_800_000_000_000,
   summaryText: 'Magpie · 12 模型',
   modelOwners: {},
   quotas: [
     { provider: 'opencode-go', account: 'team', windowLabel: '5h', remainingPercent: 16, resetText: '3h' },
     { provider: 'moonshot', windowLabel: 'daily', remainingPercent: 60 },
-  ],
-  routes: [
-    { group: 'relay', strategy: 'round-robin', provider: 'opencode-go', model: 'glm-4.7', timestamp: '2026-11-10T12:00:00Z' },
   ],
   diagnostics: [],
 }
@@ -220,7 +224,7 @@ test('前台自动刷新：默认 5s 生效、分屏双实例单飞去重不重�
   }
 })
 
-test('状态概览：KV 网关地址 / 可达 / 模型数 / 路由组数 / 最近刷新', { timeout: 60_000 }, async () => {
+test('状态概览：KV 网关地址 / 可达 / 模型数 / 自动刷新间隔 / 最近刷新（无路由组项）', { timeout: 60_000 }, async () => {
   const spy = makeSpyCtx()
   const { host, unmount } = await mount(spy)
   try {
@@ -229,7 +233,7 @@ test('状态概览：KV 网关地址 / 可达 / 模型数 / 路由组数 / 最�
     assert.match(host.textContent ?? '', /http:\/\/127\.0\.0\.1:3425/, '网关地址')
     assert.match(host.textContent ?? '', /Local loopback/, 'KV 键')
     assert.match(host.textContent ?? '', /Models/, '可达时模型数不带缓存标注')
-    assert.match(host.textContent ?? '', /Route groups/, 'KV 键')
+    assert.doesNotMatch(host.textContent ?? '', /Route groups/, '已移除路由组数 KV 项')
     assert.match(host.textContent ?? '', /Auto-refresh interval/, '自动刷新间隔 KV 键')
     assert.match(host.textContent ?? '', /5s/, '默认 5 秒刷新间隔')
     assert.doesNotMatch(host.textContent ?? '', /Models \(cached\)/, 'reachable=true 不标注缓存')
@@ -239,7 +243,7 @@ test('状态概览：KV 网关地址 / 可达 / 模型数 / 路由组数 / 最�
   }
 })
 
-test('配额与路由轨迹表渲染（窗口 / 剩余 / 重置 / 命中模型）', { timeout: 60_000 }, async () => {
+test('诊断与配额表渲染（窗口 / 剩余 / 重置，不含路由轨迹区）', { timeout: 60_000 }, async () => {
   const spy = makeSpyCtx()
   const { host, unmount } = await mount(spy)
   try {
@@ -250,10 +254,7 @@ test('配额与路由轨迹表渲染（窗口 / 剩余 / 重置 / 命中模型�
     assert.match(host.textContent ?? '', /5h/, '窗口列')
     assert.match(host.textContent ?? '', /3h/, '重置列')
     assert.match(host.textContent ?? '', /moonshot/, '第二行 provider')
-    assert.match(host.textContent ?? '', /Route history/, '路由区块标题')
-    assert.match(host.textContent ?? '', /relay/, '路由组')
-    assert.match(host.textContent ?? '', /round-robin/, '策略')
-    assert.match(host.textContent ?? '', /glm-4\.7/, '命中模型')
+    assert.doesNotMatch(host.textContent ?? '', /Route history/, '已移除路由轨迹区')
   } finally {
     unmount()
   }
@@ -332,12 +333,12 @@ test('doc 未到达展示加载态、空 doc 展示空表', { timeout: 60_000 },
     } finally {
       unmount()
     }
-    setBuiltinClientStub({ docs: { status: { ...STATUS_DOC, quotas: [], routes: [], diagnostics: [], summaryText: '' } } })
+    setBuiltinClientStub({ docs: { status: { ...STATUS_DOC, quotas: [], diagnostics: [], summaryText: '' } } })
     const { host: host2, unmount: unmount2 } = await mount(spy)
     try {
       assert.match(host2.textContent ?? '', /No quota data/, '空配额如实展示')
-      assert.match(host2.textContent ?? '', /No route history/, '空路由如实展示')
       assert.match(host2.textContent ?? '', /No diagnostics/, '空诊断如实展示')
+      assert.doesNotMatch(host2.textContent ?? '', /Route history/, '不渲染路由轨迹区')
       assert.doesNotMatch(host2.textContent ?? '', /Loading gateway status/, '空 doc 不残留加载态')
     } finally {
       unmount2()
@@ -356,9 +357,46 @@ test('zh-CN locale：Magpie 设置面板切为中文表头与 KV 文案', { time
     assert.match(host.textContent ?? '', /自动刷新间隔/)
     assert.match(host.textContent ?? '', /5s/)
     assert.match(host.textContent ?? '', /无诊断信息/)
-    assert.match(host.textContent ?? '', /路由轨迹/)
+    assert.match(host.textContent ?? '', /配额/)
+    assert.doesNotMatch(host.textContent ?? '', /路由轨迹|路由组数/)
   } finally {
     unmount()
+  }
+})
+
+test('showQuotaStatus 配置开关：默认开启；关闭后隐藏状态栏与设置面板配额并停止前台轮询', { timeout: 60_000 }, async () => {
+  assert.equal(resolveShowQuotaStatus(undefined), true, '缺省默认显示配额')
+  assert.equal(resolveShowQuotaStatus({}), true, '未显式配置时默认显示配额')
+  assert.equal(resolveShowQuotaStatus({ showQuotaStatus: true }), true)
+  assert.equal(resolveShowQuotaStatus({ showQuotaStatus: false }), false)
+
+  setBuiltinClientStub({
+    docs: { status: MULTI_ACCOUNT_DOC },
+    config: { showQuotaStatus: false, refreshIntervalSec: 5 },
+  })
+  try {
+    const spy = makeSpyCtx('zh-CN')
+    const composerMount = await mountComposerQuota(spy, {
+      conversation: makeConversation('magpie/auto/gemini-4-carbon'),
+    })
+    try {
+      assert.equal(composerMount.host.textContent, '', '关闭配额开关后状态栏返回 null')
+      assert.equal(spy.actionCalls.length, 0, '关闭配额开关后不启动前台自动刷新轮询')
+    } finally {
+      composerMount.unmount()
+    }
+
+    const panelMount = await mount(spy)
+    try {
+      const text = panelMount.host.textContent ?? ''
+      assert.match(text, /Magpie 网关/)
+      assert.match(text, /已关闭/, '关闭配额展示时状态概览如实标示自动刷新已关闭')
+      assert.doesNotMatch(text, /配额/, '关闭配额开关后设置面板隐藏配额表区块')
+    } finally {
+      panelMount.unmount()
+    }
+  } finally {
+    setBuiltinClientStub({ docs: { status: STATUS_DOC }, config: {} })
   }
 })
 
@@ -459,6 +497,14 @@ test('Composer 状态栏多账号模型：外层仅展示主账号单账号额�
         spy.actionCalls.map((c) => ({ actionId: c.actionId, input: c.input })),
         [{ actionId: 'refresh', input: {} }],
       )
+
+      // 点击右上角 X 关闭按钮可收起 Popover
+      const closeBtn = popover.querySelector<HTMLButtonElement>('button[aria-label="关闭"]')
+      assert.ok(closeBtn !== null, 'Popover 右上角含关闭按钮')
+      await act(async () => {
+        closeBtn.click()
+      })
+      assert.ok(document.body.querySelector('.magpie-quota-popover') === null, '点击关闭按钮后收起 Popover')
     } finally {
       unmount()
     }
@@ -648,10 +694,16 @@ test('Composer 状态栏多账号优先策略：已耗尽账号（含 order 靠�
       conversation: makeConversation('magpie/auto/gpt-6.2-sol'),
     })
     try {
+      assert.equal(shouldShowInlineWindowLabel('Subscription'), false, '状态栏省略泛化 Subscription 标签')
+      assert.equal(shouldShowInlineWindowLabel('Quota'), false, '状态栏省略泛化 Quota 标签')
+      assert.equal(shouldShowInlineWindowLabel('5h'), true, '状态栏保留有区分度的 5h 窗口标签')
+      assert.equal(shouldShowInlineWindowLabel('Credits'), true, '状态栏保留 Credits 窗口标签')
+
       const trigger = newapiMount.host.querySelector<HTMLButtonElement>('button.magpie-quota-trigger')
       assert.ok(trigger !== null)
       const triggerText = trigger.textContent ?? ''
-      assert.match(triggerText, /Subscription.*78%.*\(2h\)/, '折叠时优先显示有额度的 fjay 而非 0% 的 blue')
+      assert.doesNotMatch(triggerText, /Subscription/, '状态栏折叠摘要不显示冗余 Subscription 标签')
+      assert.match(triggerText, /78%.*\(2h\)/, '折叠时优先显示有额度的 fjay 而非 0% 的 blue')
       assert.match(triggerText, /\+1/, '仍显示 +1 多账号角标')
       assert.equal(trigger.classList.contains('magpie-quota-trigger--err'), false, '主展示账号有余量时不染红报警')
 
@@ -660,6 +712,7 @@ test('Composer 状态栏多账号优先策略：已耗尽账号（含 order 靠�
       })
       const popover = document.body.querySelector<HTMLElement>('.magpie-quota-popover')
       assert.ok(popover !== null)
+      assert.match(popover.textContent ?? '', /Subscription/, 'Popover 详情保留完整窗口名称 Subscription')
       const accountNames = [...popover.querySelectorAll('.magpie-quota-account-name')].map((el) => el.textContent)
       assert.deepEqual(accountNames, ['fjay', 'blue'], '展开列表有余量账号排首、已耗尽账号排后保留可见')
     } finally {

@@ -2,13 +2,14 @@
  * builtin:magpie client.tsx components (component exports only, Fast Refresh
  * contract):
  * - MagpieSettingsPanel: settings panel (gateway status / diagnostics /
- *   quotas / route history; live subscription to the 'status' doc; the
- *   refresh action goes through ctx.callAction).
+ *   quotas; live subscription to the 'status' doc; the refresh action goes
+ *   through ctx.callAction).
  * - MagpieComposerQuotaStatus: composer status-row slot contribution
  *   (COMPOSER_STATUS_SLOT) showing ONLY the currently active Magpie model's
  *   single primary account inline, with a click-to-open Radix Popover listing
  *   ONLY that model's related accounts and windows, plus configurable
- *   foreground auto-refresh (default 5s, 0 disables).
+ *   `showQuotaStatus` toggle (default true) and foreground auto-refresh
+ *   (default 5s, 0 disables).
  *
  * Honesty: when reachable=false the model count is labeled as a cached
  * count; lastError and diagnostics are shown verbatim; the apiKey never
@@ -26,6 +27,7 @@ import {
   formatTime,
   HelmxIcon,
   Popover,
+  PopoverClose,
   PopoverContent,
   PopoverTrigger,
   useHostModels,
@@ -47,7 +49,9 @@ import {
   inlineSummaryWindows,
   resolveEffectiveMagpieModel,
   resolveRefreshIntervalSec,
+  resolveShowQuotaStatus,
   selectModelQuotas,
+  shouldShowInlineWindowLabel,
   type FormattedQuotaWindow,
   type ModelQuotaAccount,
 } from './quota-model.ts'
@@ -55,6 +59,7 @@ import { noteMagpieManualRefresh, subscribeMagpieAutoRefresh } from './auto-refr
 import {
   MAGPIE_COL_PROVIDER,
   MAGPIE_COMPOSER_ACTIVE_ACCOUNT,
+  MAGPIE_COMPOSER_CLOSE,
   MAGPIE_COMPOSER_DEFAULT_ACCOUNT,
   MAGPIE_COMPOSER_NO_WINDOW_DATA,
   MAGPIE_COMPOSER_QUOTA_ARIA,
@@ -66,7 +71,6 @@ import {
   MAGPIE_DIAGNOSTICS_SECTION,
   MAGPIE_KV_AUTO_REFRESH,
   MAGPIE_KV_GATEWAY_URL,
-  MAGPIE_KV_GROUPS,
   MAGPIE_KV_LAST_ERROR,
   MAGPIE_KV_LAST_REFRESHED,
   MAGPIE_KV_LOCAL_LOOPBACK,
@@ -82,19 +86,13 @@ import {
   MAGPIE_QUOTA_SECTION,
   MAGPIE_REFRESH,
   MAGPIE_REFRESHING,
-  MAGPIE_ROUTES_COL_GROUP,
-  MAGPIE_ROUTES_COL_MODEL,
-  MAGPIE_ROUTES_COL_STRATEGY,
-  MAGPIE_ROUTES_COL_TIME,
-  MAGPIE_ROUTES_EMPTY,
-  MAGPIE_ROUTES_SECTION,
   MAGPIE_TITLE,
   magpieMoreAccountsTitle,
   magpieRefreshIntervalLabel,
   magpieRelativeAgeLabel,
 } from './copy.ts'
 
-import { Activity, Gauge, Loader2, RefreshCw, Route, Server } from 'lucide-react'
+import { Activity, Gauge, Loader2, RefreshCw, Server } from 'lucide-react'
 
 function DocLoading({ label }: { label: string }): ReactNode {
   return (
@@ -131,8 +129,6 @@ function StatusSummary({ status, refreshIntervalSec }: { status: MagpieStatusVie
       </div>
       <div className="kv-key">{status.reachable ? t(MAGPIE_KV_MODELS) : t(MAGPIE_KV_MODELS_CACHED)}</div>
       <div className="kv-val">{status.modelCount}</div>
-      <div className="kv-key">{t(MAGPIE_KV_GROUPS)}</div>
-      <div className="kv-val">{status.groupCount}</div>
       <div className="kv-key">{t(MAGPIE_KV_AUTO_REFRESH)}</div>
       <div className="kv-val mono tabular-nums">{magpieRefreshIntervalLabel(refreshIntervalSec, locale)}</div>
       <div className="kv-key">{t(MAGPIE_KV_LAST_REFRESHED)}</div>
@@ -219,53 +215,15 @@ function QuotaTable({ quotas }: { quotas: MagpieStatusView['quotas'] }): ReactNo
   )
 }
 
-/** Route history table. */
-function RouteTable({ routes }: { routes: MagpieStatusView['routes'] }): ReactNode {
-  const t = usePluginTranslator()
-  return (
-    <div className="helmx-table-wrap">
-      <table className="helmx-table">
-        <thead>
-          <tr>
-            <th>{t(MAGPIE_ROUTES_COL_GROUP)}</th>
-            <th>{t(MAGPIE_ROUTES_COL_STRATEGY)}</th>
-            <th>{t(MAGPIE_COL_PROVIDER)}</th>
-            <th>{t(MAGPIE_ROUTES_COL_MODEL)}</th>
-            <th>{t(MAGPIE_ROUTES_COL_TIME)}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {routes.length === 0 ? (
-            <tr>
-              <td colSpan={5} className="table-empty">
-                {t(MAGPIE_ROUTES_EMPTY)}
-              </td>
-            </tr>
-          ) : (
-            routes.map((r, i) => (
-              <tr key={`${r.group}:${i}`}>
-                <td>{r.group}</td>
-                <td>{r.strategy ?? '—'}</td>
-                <td>{r.provider ?? '—'}</td>
-                <td>{r.model ?? '—'}</td>
-                <td>{r.timestamp ?? '—'}</td>
-              </tr>
-            ))
-          )}
-        </tbody>
-      </table>
-    </div>
-  )
-}
-
-/** Magpie gateway settings panel (status + diagnostics + quotas + route history + refresh action). */
+/** Magpie gateway settings panel (status + diagnostics + optional quotas + refresh action). */
 export function MagpieSettingsPanel(): ReactNode {
   const ctx = usePluginContext()
   const t = usePluginTranslator()
   const doc = usePluginDoc<MagpieStatusView>('status')
   const config = usePluginConfig()
   const status = parseStatus(doc)
-  const refreshIntervalSec = resolveRefreshIntervalSec(config)
+  const showQuotaStatus = resolveShowQuotaStatus(config)
+  const refreshIntervalSec = showQuotaStatus ? resolveRefreshIntervalSec(config) : 0
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | undefined>(undefined)
 
@@ -312,20 +270,15 @@ export function MagpieSettingsPanel(): ReactNode {
             </div>
             <DiagnosticsTable diagnostics={status.diagnostics} />
           </div>
-          <div className="screen-section">
-            <div className="screen-section-title">
-              <Gauge size={12} strokeWidth={1.75} />
-              <span>{t(MAGPIE_QUOTA_SECTION)}</span>
+          {showQuotaStatus ? (
+            <div className="screen-section">
+              <div className="screen-section-title">
+                <Gauge size={12} strokeWidth={1.75} />
+                <span>{t(MAGPIE_QUOTA_SECTION)}</span>
+              </div>
+              <QuotaTable quotas={status.quotas} />
             </div>
-            <QuotaTable quotas={status.quotas} />
-          </div>
-          <div className="screen-section">
-            <div className="screen-section-title">
-              <Route size={12} strokeWidth={1.75} />
-              <span>{t(MAGPIE_ROUTES_SECTION)}</span>
-            </div>
-            <RouteTable routes={status.routes} />
-          </div>
+          ) : null}
         </>
       )}
     </div>
@@ -348,7 +301,7 @@ function InlineWindowItems({ account }: { account: ModelQuotaAccount }): ReactNo
         <Fragment key={`${win.label}:${index}`}>
           {index > 0 ? <span className="magpie-quota-trigger-sep" aria-hidden="true">·</span> : null}
           <span className="magpie-quota-trigger-item">
-            <span>{win.label}</span>
+            {shouldShowInlineWindowLabel(win.label) ? <span>{win.label}</span> : null}
             <span>{win.valueText}</span>
             {win.resetText ? <span className="magpie-quota-trigger-reset">({win.resetText})</span> : null}
           </span>
@@ -438,10 +391,11 @@ export function MagpieComposerQuotaStatus(props: ComposerStatusSlotProps): React
   const [lastCheckedAt, setLastCheckedAt] = useState<number | undefined>(undefined)
   const [pollError, setPollError] = useState<string | undefined>(undefined)
 
+  const showQuotaStatus = resolveShowQuotaStatus(config)
   const rawModel = props.conversation?.model || props.effectiveModel
   const activeModel = useMemo(
-    () => resolveEffectiveMagpieModel(rawModel, hostModels?.modelTiers),
-    [rawModel, hostModels?.modelTiers],
+    () => (showQuotaStatus ? resolveEffectiveMagpieModel(rawModel, hostModels?.modelTiers) : null),
+    [showQuotaStatus, rawModel, hostModels?.modelTiers],
   )
   const isMagpieActive = activeModel !== null
   const refreshIntervalSec = resolveRefreshIntervalSec(config)
@@ -449,6 +403,10 @@ export function MagpieComposerQuotaStatus(props: ComposerStatusSlotProps): React
 
   const callActionRef = useRef(ctx.callAction)
   callActionRef.current = ctx.callAction
+
+  useEffect(() => {
+    if (!isMagpieActive) setOpen(false)
+  }, [isMagpieActive])
 
   useEffect(() => {
     if (!isMagpieActive || refreshIntervalSec <= 0) return
@@ -565,6 +523,16 @@ export function MagpieComposerQuotaStatus(props: ComposerStatusSlotProps): React
                 className={manualRefreshing ? 'spin-slow' : undefined}
               />
             </button>
+            <PopoverClose asChild>
+              <button
+                type="button"
+                className="btn btn-ghost btn-icon-xs"
+                aria-label={t(MAGPIE_COMPOSER_CLOSE)}
+                title={t(MAGPIE_COMPOSER_CLOSE)}
+              >
+                <HelmxIcon name="x" size={12} />
+              </button>
+            </PopoverClose>
           </div>
         </div>
         {activeError !== undefined ? (

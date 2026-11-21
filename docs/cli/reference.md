@@ -232,7 +232,7 @@ PUT 为整体替换契约：update 走语义化标志时 CLI 先 GET 完整 Prof
 | `helmx herdr list / read / focus` | builtin:herdr | 窗格管理；read 返回 40 行脱敏终端尾部快照，`--node-id` 消歧跨节点同 ID（歧义 409） |
 | `helmx herdr steer` | builtin:herdr | 向受管且由 workflow run 派生的窗格插话（`guardLevel=preflight` 发送前预检）；通常用 `helmx workflows steer <runId> --text` 自动路由 |
 | `helmx superagent <action>` | builtin:superagent | `dispatch_worker / inspect_worker / recall_context / subscribe_thread / archive_worker / set_router_mode` 与 `watchdog_*` |
-| `helmx magpie status / refresh / quota / groups / group <id>` | builtin:magpie | 网关状态、目录刷新、配额查询与路由组 |
+| `helmx magpie status / refresh / quota` | builtin:magpie | 网关状态、目录刷新与配额查询 |
 
 ---
 

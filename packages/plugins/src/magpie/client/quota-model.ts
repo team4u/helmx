@@ -6,8 +6,8 @@
  *
  * Filtering contract (user-confirmed):
  * - Only quotas belonging to the currently selected Magpie model are kept:
- *   1. Match only providers associated with the current model (`modelOwners` +
- *      `groupProviders` + direct `<provider>/<model>` prefix fallback);
+ *   1. Match only the provider associated with the current model (`modelOwners` +
+ *      direct `<provider>/<model>` prefix fallback);
  *   2. Exclude non-chat modality windows (`Image generation`, `Video generation`,
  *      `Audio`) and side tool quotas (`MCP · *`) when primary model windows exist;
  *   3. Match shared/model quota pools (`pool` field or `<Pool> · <Window>` prefix)
@@ -26,6 +26,7 @@ import { quotaRowTone } from './models.ts'
 
 export const DEFAULT_REFRESH_INTERVAL_SEC = 5
 export const MAX_REFRESH_INTERVAL_SEC = 3600
+export const DEFAULT_SHOW_QUOTA_STATUS = true
 
 export interface ResolvedMagpieModel {
   /** Model id after stripping the `magpie/` prefix (e.g. `auto/gemini-4-carbon`, `codex/gpt-5.2`). */
@@ -84,6 +85,12 @@ export function resolveRefreshIntervalSec(config: Record<string, unknown> | unde
   return Math.min(MAX_REFRESH_INTERVAL_SEC, Math.max(1, Math.round(raw)))
 }
 
+/** Resolve whether Magpie quota UI is enabled from public plugin config (defaults to true). */
+export function resolveShowQuotaStatus(config: Record<string, unknown> | undefined): boolean {
+  if (typeof config?.showQuotaStatus === 'boolean') return config.showQuotaStatus
+  return DEFAULT_SHOW_QUOTA_STATUS
+}
+
 /** Resolve raw conversation/standby model reference (`provider/model` or `tier/<id>`) to a Magpie model, or null. */
 export function resolveEffectiveMagpieModel(
   rawModel: string | undefined,
@@ -109,7 +116,7 @@ export function resolveEffectiveMagpieModel(
   return { bareModelId, displayModelName, isRoutingGroup }
 }
 
-/** Resolve owning / member Magpie provider ids for the given bare Magpie model id. */
+/** Resolve owning Magpie provider id for the given bare Magpie model id. */
 export function resolveModelProviders(bareModelId: string, status: MagpieStatusView): string[] {
   const out: string[] = []
   const add = (candidate: string | undefined): void => {
@@ -118,10 +125,6 @@ export function resolveModelProviders(bareModelId: string, status: MagpieStatusV
     if (!out.includes(trimmed)) out.push(trimmed)
   }
   add(status.modelOwners[bareModelId])
-  const groupMembers = status.groupProviders[bareModelId]
-  if (groupMembers) {
-    for (const provider of groupMembers) add(provider)
-  }
   if (out.length === 0) {
     const slash = bareModelId.indexOf('/')
     if (slash > 0) add(bareModelId.slice(0, slash))
@@ -537,6 +540,15 @@ export function selectModelQuotas(
     triggerTone: primary ? primary.tone : status.quotasError ? 'warn' : 'neutral',
     ...(updatedAt !== undefined ? { updatedAt } : {}),
   }
+}
+
+/** Generic window labels that add noise without distinguishing duration or bucket in the tight status row. */
+const INLINE_OMIT_WINDOW_LABEL_RE = /^(?:subscriptions?|订阅|quota)$/i
+
+/** Whether a window label should be rendered inline in the composer status row (Popover always shows full labels). */
+export function shouldShowInlineWindowLabel(label: string): boolean {
+  const trimmed = label.trim()
+  return trimmed.length > 0 && !INLINE_OMIT_WINDOW_LABEL_RE.test(trimmed)
 }
 
 /** Build the compact single-account window items shown inline in the composer status row. */

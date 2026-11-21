@@ -4,8 +4,7 @@
  * 组合纪律：真实 PluginHost + 真实 providers 挂载端口（service.start 前
  * 注册 / stop 后注销，与 runtime 相同生命周期）+ 真实 pi-ai Models
  * （createModels）；零参工厂（无 DI 后门）：网络经 mock.method(globalThis,
- * 'fetch')（结束恢复），本机 CLI 经 PATH 前置真实可执行 fixture（execFile
- * 公开环境端口解析），绝不触真实外网 / 真实 magpie。
+ * 'fetch')（结束恢复），绝不触真实外网 / 真实 magpie。
  *
  * 诚实性重点用例：
  * - provider.refreshModels 网络失败一律 throw → models.refresh errors['magpie']
@@ -14,15 +13,14 @@
  *   sameGateway 发布守卫：fetch 期间切 root 的挂起结果不发布）；
  * - auth.resolve 冻结 root+token 同一快照（env 携带 MAGPIE_GW_URL）；
  * - reachable:false 时 modelCount 保留缓存计数但 summary 不称已连接；
- * - 非 loopback 网关绝不调用本机 magpie CLI（数据源隔离）；
- * - 配额 / 轨迹读取失败不吞：diagnostics 明确记录不可用原因；
+ * - 配额读取失败不吞：diagnostics 明确记录不可用原因；
  * - turn_settled 只对 magpie/ 模型会话触发侧读，不阻塞结算。
  *
  * runner: tsx --test；每项显式 timeout: 60_000 防死锁；命令加总超时。
  */
 import { mock, test, beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -31,7 +29,6 @@ import { createModels } from '@earendil-works/pi-ai/models'
 import type { Provider } from '@earendil-works/pi-ai'
 import { COMPOSER_STATUS_SLOT, HelmxError, redactJsonValue, resolveLocalizedText, type ConversationSummary } from '@helmx/protocol'
 import { quotaRows } from '../src/magpie/quota.js'
-import { parseGroupShow } from '../src/magpie/routing.js'
 import { MAGPIE_COL_PROVIDER } from '../src/magpie/client/copy.js'
 import {
   PluginHost,
@@ -89,36 +86,13 @@ const QUOTAS = {
   ],
 }
 
-const TRACE = {
-  routes: [
-    { time: '2026-11-08T02:00:00Z', model: 'group/relay', provider: 'opencode-go', group: { id: 'relay', routing: 'smart', members: ['opencode-go/mimo', 'moonshot/k2'] }, served: 'opencode-go/mimo', status: 200, tokens: 1234 },
-    { time: '2026-11-08T02:05:00Z', model: 'group/relay', provider: 'moonshot', group: { id: 'relay', routing: 'smart' }, served: 'moonshot/k2-chat', status: 200 },
-  ],
-}
-
-const CLI_GROUPS = [
-  'RELAY      found by magpie  group/relay  smart · stays session   opencode-go/mimo · moonshot/k2',
-  'FAST       我的快组         group/fast   order · stays turn      moonshot/k2-flash',
-].join('\n')
-
-const CLI_GROUP_SHOW = [
-  ' Relay      group/relay  found by magpie',
-  '  used by   pi',
-  '  routing   smart',
-  '  stays     session',
-  '  models    1 opencode-go/mimo  \u25cf  OpenCode Go · MiMo',
-  '  models    2 moonshot/k2          Moonshot K2',
-  '  rules     1 always prefer cheaper',
-].join('\n')
-
 // ---------------------------------------------------------------------------
-// 受控网络（mock.method(globalThis,'fetch')，结束恢复）与真实 CLI fixture
+// 受控网络（mock.method(globalThis,'fetch')，结束恢复）
 // ---------------------------------------------------------------------------
 
 interface FakeBackend {
   models?: unknown
   quotas?: unknown
-  trace?: unknown
   failModels?: string
   failQuotas?: string
   /** 挂起 models 请求（等待 gate 释放）：验证切 root 后旧结果不发布。 */
@@ -144,39 +118,10 @@ function installFetchMock(backends: Map<string, FakeBackend>): { calls: string[]
       if (backend.failQuotas) throw new Error(backend.failQuotas)
       return new Response(JSON.stringify(backend.quotas ?? { data: [] }), { status: 200 })
     }
-    if (path === '/v1/magpie/trace') {
-      if (backend.trace === undefined) return new Response('not found', { status: 404 })
-      return new Response(JSON.stringify(backend.trace), { status: 200 })
-    }
     return new Response('not found', { status: 404 })
   }
   const mocked = mock.method(globalThis, 'fetch', impl)
   return { calls, restore: () => mocked.mock.restore() }
-}
-
-/**
- * PATH 前置真实可执行 magpie fixture：node 脚本回放固定输出并把每次调用
- * 参数追加到日志文件（execFile 经 PATH 解析，与生产同一公开环境端口）。
- */
-function makeCliFixture(binDir: string): { binDir: string; logPath: string } {
-  mkdirSync(binDir, { recursive: true })
-  const logPath = join(binDir, 'cli-invocations.log')
-  const script = [
-    '#!/usr/bin/env node',
-    `const GROUPS = ${JSON.stringify(CLI_GROUPS)}`,
-    `const SHOW = ${JSON.stringify(CLI_GROUP_SHOW)}`,
-    'const args = process.argv.slice(2)',
-    'const log = process.env.HELMX_MAGPIE_CLI_LOG',
-    "if (log) require('node:fs').appendFileSync(log, JSON.stringify(args) + '\\n')",
-    "if (args[0] === 'groups') { process.stdout.write(GROUPS + '\\n'); process.exit(0) }",
-    "if (args[0] === 'group') { process.stdout.write(SHOW + '\\n'); process.exit(0) }",
-    "process.stderr.write('unknown command ' + args.join(' '))",
-    'process.exit(1)',
-  ].join('\n')
-  const bin = join(binDir, 'magpie')
-  writeFileSync(bin, script)
-  chmodSync(bin, 0o755)
-  return { binDir, logPath }
 }
 
 // ---------------------------------------------------------------------------
@@ -232,8 +177,6 @@ interface TestEnv {
   fetchState: { calls: string[] }
   backends: Map<string, FakeBackend>
   refreshCalls: Array<{ providers?: string[]; allowNetwork?: boolean; force?: boolean }>
-  /** 真实 CLI fixture 的调用参数序列（读日志文件）。 */
-  cliRuns: Array<readonly string[]>
   host: PluginHost
   config: MemoryConfigStore
   docs: MemoryDocStore
@@ -250,23 +193,10 @@ async function makeEnv(options: { backendAtDefault?: FakeBackend; hostApi?: Part
   const dataDir = mkdtempSync(join(tmpdir(), 'helmx-magpie-test-'))
   const models = createModels()
   const backends = new Map<string, FakeBackend>([
-    [new URL(DEFAULT_MAGPIE_ROOT).origin, options.backendAtDefault ?? { models: CATALOG, quotas: QUOTAS, trace: TRACE }],
+    [new URL(DEFAULT_MAGPIE_ROOT).origin, options.backendAtDefault ?? { models: CATALOG, quotas: QUOTAS }],
   ])
   const fetchMock = installFetchMock(backends)
   const fetchCalls = fetchMock.calls
-  const { binDir, logPath } = makeCliFixture(join(dataDir, 'bin'))
-  // PATH 前置 fixture bin：execFile('magpie') 解析到受控脚本（公开环境端口，
-  // 无 DI 后门）；调用记录经 HELMX_MAGPIE_CLI_LOG 追加到日志文件。
-  const savedPath = process.env.PATH
-  process.env.PATH = `${binDir}:${process.env.PATH ?? ''}`
-  process.env.HELMX_MAGPIE_CLI_LOG = logPath
-  const readCliRuns = (): Array<readonly string[]> => {
-    try {
-      return readFileSync(logPath, 'utf8').split('\n').filter((l) => l.trim() !== '').map((l) => JSON.parse(l) as string[])
-    } catch {
-      return []
-    }
-  }
   const config = new MemoryConfigStore()
   const docs = new MemoryDocStore()
   const refreshResult: { errors: Record<string, string> } = { errors: {} }
@@ -276,7 +206,6 @@ async function makeEnv(options: { backendAtDefault?: FakeBackend; hostApi?: Part
     backends,
     fetchState: { calls: fetchCalls },
     refreshCalls: [],
-    cliRuns: [],
     config,
     docs,
     setRefreshError(error) {
@@ -284,9 +213,6 @@ async function makeEnv(options: { backendAtDefault?: FakeBackend; hostApi?: Part
     },
     host: undefined as unknown as PluginHost,
   }
-  Object.defineProperty(env, 'cliRuns', {
-    get: () => readCliRuns(),
-  })
   // 宿主 refreshModels 后端端口：真实 models.refresh({ providers:['magpie'] })
   // 同链路（记录调用 + 返回 errors 映射；注入式失败可覆盖）。
   const hostRefreshModels = async (opts?: { providers?: string[]; allowNetwork?: boolean; force?: boolean }) => {
@@ -324,9 +250,6 @@ async function makeEnv(options: { backendAtDefault?: FakeBackend; hostApi?: Part
       await host.dispose()
     } finally {
       fetchMock.restore()
-      if (savedPath === undefined) delete process.env.PATH
-      else process.env.PATH = savedPath
-      delete process.env.HELMX_MAGPIE_CLI_LOG
       rmSync(dataDir, { recursive: true, force: true })
     }
   }
@@ -339,10 +262,10 @@ const waitFor = (predicate: () => boolean | Promise<boolean>, timeoutMs = 5_000)
 
 interface StatusView {
   gatewayUrl: string; configuredRoot: boolean; local: boolean; reachable: boolean
-  modelCount: number; groupCount: number; summaryText: string; lastError?: string; lastRefreshedAt?: number
+  modelCount: number; summaryText: string; lastError?: string; lastRefreshedAt?: number
   quotasRefreshedAt?: number; quotasUpdatedAt?: number; quotasError?: string
-  modelOwners: Record<string, string>; groupProviders?: Record<string, string[]>
-  quotas: Array<Record<string, unknown>>; routes: Array<Record<string, unknown>>; diagnostics: string[]
+  modelOwners: Record<string, string>
+  quotas: Array<Record<string, unknown>>; diagnostics: string[]
 }
 
 const statusDoc = (env: TestEnv): StatusView =>
@@ -517,7 +440,7 @@ test('magpie6: 启用经 providers 端口挂载并拉取目录；停用后注销
     await env.host.setConfig(MAGPIE, {})
 
     const actions = env.host.listActions().filter((a) => a.pluginId === MAGPIE).map((a) => a.id).sort()
-    assert.deepEqual(actions, ['group', 'groups', 'quota', 'refresh', 'status'])
+    assert.deepEqual(actions, ['quota', 'refresh', 'status'])
     const uiItems = env.host.listUi().filter((u) => u.pluginId === MAGPIE)
     const surfaces = uiItems.map((u) => u.surface).sort()
     assert.deepEqual(surfaces, ['commandPalette', 'plugin.slot', 'settings.panel'])
@@ -579,16 +502,20 @@ test('magpie7: 宿主缺 providers 端口时启用显式 501（不静默降级�
 // 4. 动作契约
 // ---------------------------------------------------------------------------
 
-test('magpie8: 动作契约——status / refresh / quota / groups / group', { timeout: 60_000 }, async () => {
+test('magpie8: 动作契约——status / refresh / quota（不含路由追踪动作）', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     await env.host.enable(MAGPIE)
     await waitFor(() => statusDoc(env).reachable === true)
 
+    const actionIds = env.host.listActions().filter((a) => a.pluginId === MAGPIE).map((a) => a.id).sort()
+    assert.deepEqual(actionIds, ['quota', 'refresh', 'status'], '只暴露 status / refresh / quota 三个动作')
+    assert.equal(env.fetchState.calls.some((c) => c.includes('/v1/magpie/trace')), false, '启动与刷新绝不请求 /v1/magpie/trace')
+
     const status = (await env.host.invokeAction(MAGPIE, 'status', {})) as StatusView
     assert.equal(status.reachable, true)
     assert.ok(Array.isArray(status.quotas), '配额随目录刷新加载')
-    assert.deepEqual(status.diagnostics, [], '配额与轨迹均可用时无诊断')
+    assert.deepEqual(status.diagnostics, [], '配额可用时无诊断')
 
     const refreshed = (await env.host.invokeAction(MAGPIE, 'refresh', {})) as { refreshed: boolean; modelCount: number; reachable: boolean }
     assert.deepEqual(refreshed, { refreshed: true, modelCount: 5, reachable: true })
@@ -600,25 +527,8 @@ test('magpie8: 动作契约——status / refresh / quota / groups / group', { t
     assert.equal(quota.quotas[0]!.remainingPercent, 16)
     assert.equal(quota.quotas[1]!.remainingPercent, 60, 'used 40 → remaining 60')
 
-    const groups = (await env.host.invokeAction(MAGPIE, 'groups', {})) as {
-      groups: Array<{ id: string; source: string; lastRoute?: { model?: string } }>
-      local: boolean
-    }
-    assert.equal(groups.local, true)
-    const relay = groups.groups.find((g) => g.id.includes('relay'))
-    assert.ok(relay, 'CLI 组 + trace 命中合并')
-    assert.equal(relay!.source, 'cli+trace')
-    assert.equal(relay!.lastRoute?.model, 'moonshot/k2-chat', 'trace 最近一次命中（后出现的覆盖）')
-
-    const one = (await env.host.invokeAction(MAGPIE, 'group', { id: 'group/relay' })) as {
-      definition: { members: string[]; routing?: string }
-      lastRoute: { provider?: string }
-      source: string
-    }
-    assert.equal(one.source, 'cli+trace')
-    assert.deepEqual(one.definition.members, ['opencode-go/mimo', 'moonshot/k2'])
-    assert.equal(one.definition.routing, 'smart')
-    assert.equal(one.lastRoute.provider, 'moonshot')
+    const filtered = (await env.host.invokeAction(MAGPIE, 'quota', { model: 'magpie/group/relay' })) as { quotas: Array<{ provider: string }> }
+    assert.deepEqual(filtered.quotas.map((q) => q.provider), ['opencode-go'], '按 modelOwners 主归属过滤配额')
   } finally {
     await env.close()
   }
@@ -742,7 +652,7 @@ test('magpie13: fetch 期间切 root——旧网关挂起结果不发布到新�
   // 第二次目录刷新挂起（gate）；发起刷新后切 root，释放 gate：
   // 挂起的旧 root 目录绝不 install / persist / 更新 status。
   let releaseGate: (() => void) | undefined
-  const backend: FakeBackend = { models: CATALOG, quotas: QUOTAS, trace: TRACE }
+  const backend: FakeBackend = { models: CATALOG, quotas: QUOTAS }
   const env = await makeEnv({ backendAtDefault: backend })
   try {
     await env.host.enable(MAGPIE)
@@ -771,7 +681,7 @@ test('magpie13: fetch 期间切 root——旧网关挂起结果不发布到新�
 })
 
 test('magpie14: 可达后失败——reachable:false 时 modelCount 不冒充实时成功', { timeout: 60_000 }, async () => {
-  const backend: FakeBackend = { models: CATALOG, quotas: QUOTAS, trace: TRACE }
+  const backend: FakeBackend = { models: CATALOG, quotas: QUOTAS }
   const env = await makeEnv({ backendAtDefault: backend })
   try {
     await env.host.enable(MAGPIE)
@@ -788,59 +698,6 @@ test('magpie14: 可达后失败——reachable:false 时 modelCount 不冒充实
     assert.equal(doc.summaryText, 'Magpie · not connected')
     assert.equal(doc.modelCount, 5, '缓存计数保留（不是 0），但 reachable:false 明示非实时')
     assert.match(doc.lastError!, /exploded/)
-  } finally {
-    await env.close()
-  }
-})
-
-test('magpie15: 远端网关数据源隔离——CLI 不被调用、groups 只用 trace 且标 source', { timeout: 60_000 }, async () => {
-  const env = await makeEnv()
-  try {
-    await env.config.set(MAGPIE, { gatewayUrl: 'http://10.1.2.3:3425' })
-    await env.host.enable(MAGPIE)
-    await waitFor(() => statusDoc(env).lastError !== undefined)
-
-    // 远端网关（本测试未提供后端 → fetch 失败）：groups 仍成功（trace 不可用是合法态）
-    const groups = (await env.host.invokeAction(MAGPIE, 'groups', {})) as {
-      groups: unknown[]
-      local: boolean
-      note?: string
-    }
-    assert.equal(groups.local, false)
-    assert.deepEqual(groups.groups, [], '远端 trace 不可用 → 空列表，不混入本机数据')
-    assert.ok(groups.note !== undefined)
-    assert.equal(env.cliRuns.length, 0, '非 loopback 网关绝不调用本机 magpie CLI')
-
-    await assert.rejects(
-      () => env.host.invokeAction(MAGPIE, 'group', { id: 'group/relay' }),
-      (err: unknown) => err instanceof HelmxError && err.code === 'magpie_group_not_found' && err.status === 404,
-    )
-    assert.equal(env.cliRuns.length, 0, 'group 动作在远端网关同样不调 CLI')
-  } finally {
-    await env.close()
-  }
-})
-
-test('magpie16: 显式其它 loopback 端口——无法证明 CLI 指向同一实例时只用所选 root trace', { timeout: 60_000 }, async () => {
-  // 另一个 loopback 端口有真实后端：groups 可用 trace，但本机默认 CLI 绝不被混入
-  const altRoot = 'http://127.0.0.1:3525'
-  const env = await makeEnv()
-  try {
-    env.backends.set(new URL(altRoot).origin, { models: CATALOG, quotas: QUOTAS, trace: TRACE })
-    await env.config.set(MAGPIE, { gatewayUrl: altRoot })
-    await env.host.enable(MAGPIE)
-    await waitFor(() => statusDoc(env).reachable === true)
-
-    const groups = (await env.host.invokeAction(MAGPIE, 'groups', {})) as {
-      groups: Array<{ id: string; source: string }>
-      local: boolean
-      note?: string
-    }
-    assert.equal(groups.local, true, 'loopback 但非默认端口')
-    assert.ok(groups.groups.length > 0, '所选 root 的 trace 提供组列表')
-    assert.equal(groups.groups.every((g) => g.source === 'gateway-trace'), true, '只标 gateway-trace，不冒充 cli+trace')
-    assert.equal(env.cliRuns.length, 0, '无法证明 CLI 目标一致 → 不读本机默认实例 CLI')
-    assert.ok(groups.note !== undefined, '输出明确说明 CLI 数据源不可混入的原因')
   } finally {
     await env.close()
   }
@@ -879,18 +736,14 @@ test('magpie17: turn_settled 只刷新 magpie/ 模型会话（kept 读法；不�
     await waitFor(() => env.fetchState.calls.filter((c) => c.includes('quotas')).length > quotaCallsBefore)
     const lastQuota = env.fetchState.calls.filter((c) => c.includes('quotas')).at(-1)!
     assert.match(lastQuota, /kept=1/, 'settled 刷新用 kept=1（不问供应商）')
-
-    await waitFor(() => statusDoc(env).routes.length > 0)
-    const doc = statusDoc(env)
-    assert.equal(doc.routes[0]!.group, 'relay')
-    assert.equal(doc.routes[0]!.model, 'moonshot/k2-chat')
+    assert.equal(env.fetchState.calls.some((c) => c.includes('/v1/magpie/trace')), false, 'settled 侧读不请求 trace')
   } finally {
     await env.close()
   }
 })
 
 test('magpie18: 配额失败不清空成「没有配额」——diagnostics 明确记录原因', { timeout: 60_000 }, async () => {
-  const backend: FakeBackend = { models: CATALOG, quotas: QUOTAS, trace: TRACE }
+  const backend: FakeBackend = { models: CATALOG, quotas: QUOTAS }
   const env = await makeEnv({ backendAtDefault: backend })
   try {
     await env.host.enable(MAGPIE)
@@ -907,14 +760,6 @@ test('magpie18: 配额失败不清空成「没有配额」——diagnostics 明�
     const doc = statusDoc(env)
     assert.deepEqual(doc.quotas, [], '配额区清空（旧数据不冒充当前读数）')
     assert.ok(doc.diagnostics.some((d) => d.includes('quotas unavailable') && d.includes('exploded')), `诊断含原因：${JSON.stringify(doc.diagnostics)}`)
-
-    // trace 同步不可用：诊断同样记录（不是静默空列表）
-    backend.trace = undefined
-    await env.host.runHook('turn_settled', {
-      conversation: makeConversation(1, 'magpie/group/relay'),
-      inputs: [], outcome: 'completed', settledAt: Date.now(),
-    })
-    await waitFor(() => statusDoc(env).diagnostics.some((d) => d.includes('routing trace unavailable')))
   } finally {
     await env.close()
   }
@@ -1176,14 +1021,9 @@ test('magpie23: quotaRows 保留非百分比单位、pool、last、readAt、rese
 
   assert.equal(rows[8]!.remainingPercent, -1)
   assert.equal('windowLabel' in rows[8]!, false)
-
-  // parseGroupShow 遇到空字段行同样不得写入 undefined 自有键
-  const parsedGroup = parseGroupShow('  Relay  group/relay\n  routing  \n  stays  \n  levels  \n  effort  \n  used by  \n')
-  assert.ok(parsedGroup !== undefined)
-  assert.doesNotThrow(() => redactJsonValue(parsedGroup, (s) => s))
 })
 
-test('magpie24: status 暴露 modelOwners / groupProviders；onlyIfChanged 轮询无变更跳过目录落盘、变更时热更新；quota 回写 status', { timeout: 60_000 }, async () => {
+test('magpie24: status 暴露 modelOwners；onlyIfChanged 轮询无变更跳过目录落盘、变更时热更新；quota 回写 status；configSchema 含 showQuotaStatus 与 refreshIntervalSec', { timeout: 60_000 }, async () => {
   const backend: FakeBackend = {
     models: {
       data: [
@@ -1199,7 +1039,6 @@ test('magpie24: status 暴露 modelOwners / groupProviders；onlyIfChanged 轮�
         { provider: 'newapi', user: 'key-balance', balance: '$19.80', windows: [] },
       ],
     },
-    trace: TRACE,
   }
   let hostRefreshCount = 0
   const env = await makeEnv({
@@ -1213,7 +1052,7 @@ test('magpie24: status 暴露 modelOwners / groupProviders；onlyIfChanged 轮�
   })
   try {
     await env.host.enable(MAGPIE)
-    await waitFor(() => statusDoc(env).reachable === true && statusDoc(env).routes.length > 0)
+    await waitFor(() => statusDoc(env).reachable === true && statusDoc(env).quotas.length > 0)
 
     const initial = statusDoc(env)
     assert.deepEqual(initial.modelOwners, {
@@ -1221,7 +1060,6 @@ test('magpie24: status 暴露 modelOwners / groupProviders；onlyIfChanged 轮�
       'group/relay': 'opencode-go',
       'zhipu/glm-5.3': 'zhipu',
     })
-    assert.deepEqual(initial.groupProviders?.['group/relay'], ['opencode-go', 'moonshot'])
     assert.equal(initial.quotasRefreshedAt, undefined, '启动侧读使用 kept=1，不冒充供应商实时刷新')
 
     const refreshBeforePoll = hostRefreshCount
@@ -1269,8 +1107,12 @@ test('magpie24: status 暴露 modelOwners / groupProviders；onlyIfChanged 轮�
     await env.host.invokeAction(MAGPIE, 'quota', {})
     assert.equal(statusDoc(env).quotasError, undefined, '成功后必须清除旧 quotasError')
 
-    // 5) configSchema 声明 refreshIntervalSec（默认 5 秒，整数 0..3600）
-    const intervalField = env.host.getConfigSchema(MAGPIE)['refreshIntervalSec']
+    // 5) configSchema 声明 showQuotaStatus（默认 true）与 refreshIntervalSec（默认 5 秒，整数 0..3600）
+    const schema = env.host.getConfigSchema(MAGPIE)
+    const showField = schema['showQuotaStatus']
+    assert.equal(showField?.type, 'boolean')
+    assert.equal(showField?.default, true)
+    const intervalField = schema['refreshIntervalSec']
     assert.equal(intervalField?.type, 'number')
     assert.equal(intervalField?.default, 5)
     assert.equal(intervalField?.minimum, 0)

@@ -32,7 +32,6 @@ export interface MagpieStatusView {
   local: boolean
   reachable: boolean
   modelCount: number
-  groupCount: number
   lastRefreshedAt?: number
   lastError?: string
   quotasRefreshedAt?: number
@@ -40,9 +39,7 @@ export interface MagpieStatusView {
   quotasError?: string
   summaryText: string
   modelOwners: Record<string, string>
-  groupProviders: Record<string, string[]>
   quotas: MagpieStatusQuotaView[]
-  routes: Array<{ group: string; strategy?: string; provider?: string; model?: string; timestamp?: string }>
   diagnostics: string[]
 }
 
@@ -52,12 +49,9 @@ const EMPTY: MagpieStatusView = {
   local: true,
   reachable: false,
   modelCount: 0,
-  groupCount: 0,
   summaryText: '',
   modelOwners: {},
-  groupProviders: {},
   quotas: [],
-  routes: [],
   diagnostics: [],
 }
 
@@ -66,17 +60,6 @@ function parseModelOwners(raw: unknown): Record<string, string> {
   const out: Record<string, string> = {}
   for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
     if (typeof v === 'string' && v.trim() !== '') out[k] = v.trim()
-  }
-  return out
-}
-
-function parseGroupProviders(raw: unknown): Record<string, string[]> {
-  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return {}
-  const out: Record<string, string[]> = {}
-  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
-    if (!Array.isArray(v)) continue
-    const items = v.filter((item): item is string => typeof item === 'string' && item.trim() !== '').map((item) => item.trim())
-    if (items.length > 0) out[k] = items
   }
   return out
 }
@@ -90,7 +73,6 @@ export function parseStatus(doc: Partial<MagpieStatusView> | undefined): MagpieS
     local: doc.local !== false,
     reachable: doc.reachable === true,
     modelCount: typeof doc.modelCount === 'number' ? doc.modelCount : 0,
-    groupCount: typeof doc.groupCount === 'number' ? doc.groupCount : 0,
     lastRefreshedAt: typeof doc.lastRefreshedAt === 'number' ? doc.lastRefreshedAt : undefined,
     lastError: typeof doc.lastError === 'string' ? doc.lastError : undefined,
     quotasRefreshedAt: typeof doc.quotasRefreshedAt === 'number' ? doc.quotasRefreshedAt : undefined,
@@ -98,9 +80,7 @@ export function parseStatus(doc: Partial<MagpieStatusView> | undefined): MagpieS
     quotasError: typeof doc.quotasError === 'string' ? doc.quotasError : undefined,
     summaryText: typeof doc.summaryText === 'string' ? doc.summaryText : '',
     modelOwners: parseModelOwners(doc.modelOwners),
-    groupProviders: parseGroupProviders(doc.groupProviders),
     quotas: Array.isArray(doc.quotas) ? doc.quotas : [],
-    routes: Array.isArray(doc.routes) ? doc.routes : [],
     diagnostics: Array.isArray(doc.diagnostics) ? doc.diagnostics.filter((d) => typeof d === 'string') : [],
   }
 }

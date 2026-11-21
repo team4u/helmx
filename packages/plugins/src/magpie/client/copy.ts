@@ -24,7 +24,6 @@ export const MAGPIE_KV_LOCAL_LOOPBACK: LocalizedText = { en: 'Local loopback', '
 export const MAGPIE_KV_REACHABLE: LocalizedText = { en: 'Reachable', 'zh-CN': '可达' }
 export const MAGPIE_KV_MODELS: LocalizedText = { en: 'Models', 'zh-CN': '模型数' }
 export const MAGPIE_KV_MODELS_CACHED: LocalizedText = { en: 'Models (cached)', 'zh-CN': '模型数（缓存）' }
-export const MAGPIE_KV_GROUPS: LocalizedText = { en: 'Route groups', 'zh-CN': '路由组数' }
 export const MAGPIE_KV_AUTO_REFRESH: LocalizedText = { en: 'Auto-refresh interval', 'zh-CN': '自动刷新间隔' }
 export const MAGPIE_KV_LAST_REFRESHED: LocalizedText = { en: 'Last refreshed', 'zh-CN': '最近刷新' }
 export const MAGPIE_KV_LAST_ERROR: LocalizedText = { en: 'Last error', 'zh-CN': '最近错误' }
@@ -36,7 +35,7 @@ export const MAGPIE_DIAGNOSTICS_SECTION: LocalizedText = { en: 'Diagnostics', 'z
 export const MAGPIE_DIAGNOSTICS_COL: LocalizedText = { en: 'Unavailable items', 'zh-CN': '不可用项' }
 export const MAGPIE_DIAGNOSTICS_EMPTY: LocalizedText = { en: 'No diagnostics', 'zh-CN': '无诊断信息' }
 
-/** Quota & route tables shared column. */
+/** Quota table provider column. */
 export const MAGPIE_COL_PROVIDER: LocalizedText = { en: 'Provider', 'zh-CN': '供应商' }
 
 /** Quota table. */
@@ -47,17 +46,10 @@ export const MAGPIE_QUOTA_COL_REMAINING: LocalizedText = { en: 'Remaining', 'zh-
 export const MAGPIE_QUOTA_COL_RESET: LocalizedText = { en: 'Reset', 'zh-CN': '重置' }
 export const MAGPIE_QUOTA_EMPTY: LocalizedText = { en: 'No quota data', 'zh-CN': '暂无配额数据' }
 
-/** Route history table. */
-export const MAGPIE_ROUTES_SECTION: LocalizedText = { en: 'Route history', 'zh-CN': '路由轨迹' }
-export const MAGPIE_ROUTES_COL_GROUP: LocalizedText = { en: 'Route group', 'zh-CN': '路由组' }
-export const MAGPIE_ROUTES_COL_STRATEGY: LocalizedText = { en: 'Strategy', 'zh-CN': '策略' }
-export const MAGPIE_ROUTES_COL_MODEL: LocalizedText = { en: 'Hit model', 'zh-CN': '命中模型' }
-export const MAGPIE_ROUTES_COL_TIME: LocalizedText = { en: 'Time', 'zh-CN': '时间' }
-export const MAGPIE_ROUTES_EMPTY: LocalizedText = { en: 'No route history', 'zh-CN': '暂无路由记录' }
-
 /** Composer status bar quota indicator & popover. */
 export const MAGPIE_COMPOSER_QUOTA_ARIA: LocalizedText = { en: 'Current model quota details', 'zh-CN': '当前模型配额详情' }
 export const MAGPIE_COMPOSER_REFRESH_NOW: LocalizedText = { en: 'Refresh now', 'zh-CN': '立即刷新' }
+export const MAGPIE_COMPOSER_CLOSE: LocalizedText = { en: 'Close', 'zh-CN': '关闭' }
 export const MAGPIE_COMPOSER_ACTIVE_ACCOUNT: LocalizedText = { en: 'active', 'zh-CN': '当前' }
 export const MAGPIE_COMPOSER_DEFAULT_ACCOUNT: LocalizedText = { en: 'Default account', 'zh-CN': '默认账号' }
 export const MAGPIE_COMPOSER_QUOTA_UNAVAILABLE: LocalizedText = { en: 'Quota unavailable', 'zh-CN': '配额不可用' }
