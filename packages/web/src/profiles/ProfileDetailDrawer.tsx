@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import type { Profile } from './profile-center-model.js'
 import type { StarterDraft } from './profile-center-model.js'
 import {
-  buildProfileModelOptions,
   isSystemProfile,
   profileIdValid,
   profilesApi,
@@ -12,13 +11,13 @@ import {
   validateStarterDraft,
   validateStarterDrafts,
 } from './profile-center-model.js'
-import { HelmxIcon, Checkbox, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle, PluginSlot, Select, type SelectOption, Switch } from '@helmx/plugin-client'
-import { useModels, useNodes, useSkills } from '../lib/store-context.js'
+import { HelmxIcon, Checkbox, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle, ModelPickerControl, PluginSlot, Select, type SelectOption, Switch } from '@helmx/plugin-client'
+import { useNodes, useSkills } from '../lib/store-context.js'
 import { summarizeSingleLine } from '../lib/format.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { nodeOptionLabel } from '../modals/nodes-modal-model.js'
 import { ConfirmDialog } from '../ui/AlertDialog.js'
-import { ThinkingLevelControl } from '../ui/ThinkingLevelControl.js'
+import { useModelPickerControlAdapter } from '../conversation/model-picker-adapter.js'
 import { PROFILE_DETAIL_SECTION_SLOT, PROFILE_STARTERS_MAX_ITEMS } from '@helmx/protocol/browser'
 
 export interface ProfileDetailDrawerProps {
@@ -102,9 +101,9 @@ export function ProfileDetailDrawer({
   onSaved,
   onDeleted,
 }: ProfileDetailDrawerProps): React.JSX.Element {
-  const models = useModels()
   const nodes = useNodes()
   const skills = useSkills()
+  const pickerAdapter = useModelPickerControlAdapter()
   const { t } = useWebLocale()
   const [form, setForm] = useState<FormState>(() => createInitialForm(profile, isNew))
   const [baseline, setBaseline] = useState<FormState>(() => createInitialForm(profile, isNew))
@@ -216,11 +215,6 @@ export function ProfileDetailDrawer({
     }
   }
 
-  // 模型下拉选项列表（过滤为已配置模型）
-  const modelOptions = useMemo<SelectOption<string>[]>(() => {
-    return buildProfileModelOptions(models ?? [], form.model, t)
-  }, [models, form.model, t])
-
   // 默认节点下拉选项：未绑定项 + nodes 全量；既有值不在节点列表时补「未知节点」回退项
   const nodeOptions = useMemo<SelectOption<string>[]>(() => {
     const list: SelectOption<string>[] = [
@@ -238,16 +232,6 @@ export function ProfileDetailDrawer({
     }
     return list
   }, [nodes, form.nodeId, t])
-
-  // 所选模型支持的思考档位：未绑定模型时无档位（跟随全局缺省）；
-  // 目录缺失（模型未配置/外部）时无档位可选，仅保留既有值提示。
-  const profileThinkingLevels = useMemo(() => {
-    const found = (models ?? []).find((m) => m.id === form.model)
-    return found?.thinkingLevels ?? []
-  }, [models, form.model])
-  const profileThinkingSupported = profileThinkingLevels.some((level) => level !== 'off')
-  const profileThinkingLevelUnsupported =
-    form.thinkingLevel !== '' && !profileThinkingLevels.includes(form.thinkingLevel)
 
   // 可用技能列表
   const availableSkills = skills ?? []
@@ -484,61 +468,30 @@ export function ProfileDetailDrawer({
                   {t('profiles.drawer.field.defaultModel')}
                 </label>
                 <div className="form-grid-value">
-                  <Select
-                    id="profile-form-model"
-                    value={form.model}
-                    options={modelOptions}
-                    popoverClassName="helmx-select-popover-wide"
-                    className="w-full mono"
-                    onChange={(e) =>
-                      setForm((prev) => {
-                        const model = e.target.value
-                        // 切换模型后：当前档位不在新模型支持列表时回落跟随全局缺省（与全局默认面板同法）
-                        if (prev.thinkingLevel !== '') {
-                          const levels = (models ?? []).find((m) => m.id === model)?.thinkingLevels ?? []
-                          if (!levels.includes(prev.thinkingLevel)) {
-                            return { ...prev, model, thinkingLevel: '' }
-                          }
-                        }
-                        return { ...prev, model }
-                      })
+                  {/* 共享模型选择器（与 Composer/全局默认同一实现）：行内思考档位
+                      chips 一并提交 model+level；点击行体仅应用模型，档位回落
+                      跟随默认链（保存时省略 thinkingLevel 键）。 */}
+                  <ModelPickerControl
+                    buttonId="profile-form-model"
+                    buttonAriaLabel={t('profiles.drawer.field.defaultModel')}
+                    buttonTitle={form.model || t('profiles.modelOption.followSystemDefault')}
+                    placeholderLabel={t('profiles.modelOption.followSystemDefault')}
+                    effectiveModel={form.model}
+                    activeThinkingLevel={form.thinkingLevel}
+                    resetLabel={t('profiles.modelOption.followSystemDefault')}
+                    resetTitle={t('profiles.modelOption.followSystemDefault')}
+                    popoverSide={inline ? 'bottom' : 'top'}
+                    enableShortcut={false}
+                    disabled={isSaving || isDeleting}
+                    {...pickerAdapter}
+                    onApply={(model, level) =>
+                      setForm((prev) => ({ ...prev, model, thinkingLevel: level ?? '' }))
                     }
-                    inline={inline}
-                    placeholder={t('profiles.modelOption.followSystemDefault')}
+                    onResetDefault={() =>
+                      setForm((prev) => ({ ...prev, model: '', thinkingLevel: '' }))
+                    }
                   />
-                </div>
-
-                <label className="form-grid-label form-grid-align-start" htmlFor="profile-form-thinking">
-                  {t('profiles.drawer.field.thinkingLevel')}
-                </label>
-                <div className="form-grid-value">
-                  {form.model.trim() === '' ? (
-                    <span className="text-subtle" id="profile-form-thinking">
-                      {t('profiles.drawer.thinking.unbound')}
-                    </span>
-                  ) : profileThinkingSupported ? (
-                    <ThinkingLevelControl
-                      value={form.thinkingLevel}
-                      levels={profileThinkingLevels}
-                      disabled={isSaving || isDeleting}
-                      className="composer-thinking-row profile-thinking-row"
-                      onPick={(level) =>
-                        setForm((prev) => ({ ...prev, thinkingLevel: level }))
-                      }
-                    />
-                  ) : (
-                    <span className="text-subtle" id="profile-form-thinking">
-                      {t('profiles.drawer.thinking.unsupportedModel')}
-                    </span>
-                  )}
-                  {profileThinkingLevelUnsupported && (
-                    <div className="callout callout-warn" role="status">
-                      <HelmxIcon name="alert-triangle" size={13} />
-                      <span className="callout-text">
-                        {t('profiles.drawer.thinking.unsupportedLevel', { level: form.thinkingLevel })}
-                      </span>
-                    </div>
-                  )}
+                  <span className="text-subtle">{t('profiles.drawer.modelHint')}</span>
                 </div>
 
                 <label htmlFor="profile-form-node" className="form-grid-label">

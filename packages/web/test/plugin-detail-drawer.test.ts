@@ -1103,25 +1103,33 @@ test('PluginConfigForm：format="model" 渲染宿主模型目录 Select 下拉�
       )
     })
 
-    // 1. 不再渲染普通文本输入框，而是 Radix Select trigger
+    // 1. 不再渲染普通文本输入框，而是共享 ModelPickerControl 触发按钮（无思考档位 chips）
     assert.ok(container.querySelector('input[type="text"]') === null, 'format="model" 不应渲染普通文本输入')
-    const trigger = container.querySelector('button[aria-haspopup="listbox"]') as HTMLButtonElement | null
-    assert.ok(trigger !== null, '应渲染 Select 触发按钮')
+    const trigger = container.querySelector('button.composer-model-button') as HTMLButtonElement | null
+    assert.ok(trigger !== null, '应渲染共享模型选择器触发按钮')
     assert.equal(trigger.getAttribute('aria-label'), 'Dream 整理模型')
 
-    // 2. 打开下拉检查选项过滤：含“跟随系统默认”与可用模型，不含未配置/禁用模型
+    // 2. 打开选择器检查过滤与纯 model-id 语义：含「未选择模型」重置行与可用模型，
+    //    不含未配置/禁用模型，也不渲染思考档位 chips（showThinkingLevels=false）
     await act(async () => {
       trigger.click()
     })
-    const options = Array.from(container.querySelectorAll('[role="option"]'))
-    const optionTexts = options.map((el) => el.textContent ?? '')
-    assert.ok(optionTexts.some((t) => t.includes('跟随系统默认')), '首项应包含跟随默认选项')
-    assert.ok(optionTexts.some((t) => t.includes('openai/gpt-5')), '应列出可用模型')
+    const popover = document.body.querySelector('.composer-model-popover')
+    assert.ok(popover !== null, '模型选择器浮层展开')
+    assert.ok(popover.querySelector('button.composer-model-level-chip') === null, '纯 model-id 配置不渲染思考档位 chips')
+    const optionTexts = Array.from(popover.querySelectorAll('button.composer-model-row-main')).map(
+      (el) => el.textContent ?? '',
+    )
+    assert.ok(Array.from(popover.querySelectorAll('button.popover-item')).some((b) => (b.textContent ?? '').includes('未选择模型')), '重置行应为未选择模型')
+    const gptRow = optionTexts.find((t) => t.includes('gpt-5'))
+    assert.ok(gptRow !== undefined && gptRow.includes('openai'), '应列出可用模型（名称 gpt-5 + 来源 openai）')
     assert.ok(!optionTexts.some((t) => t.includes('claude-disabled')), '不应列出已禁用模型')
     assert.ok(!optionTexts.some((t) => t.includes('gemini-unconfigured')), '不应列出未配置模型')
 
     // 3. 选择模型并保存：提交选中的 model ID
-    const gptOption = options.find((el) => (el.textContent ?? '').includes('openai/gpt-5')) as HTMLElement | undefined
+    const gptOption = Array.from(popover.querySelectorAll('button.composer-model-row-main')).find(
+      (el) => (el.textContent ?? '').includes('gpt-5'),
+    ) as HTMLElement | undefined
     assert.ok(gptOption !== undefined)
     await act(async () => {
       gptOption.click()

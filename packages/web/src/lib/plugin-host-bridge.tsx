@@ -4,11 +4,13 @@
  * （helpers/host-store.ts）静态引入本模块不会在 happy-dom 注册前加载 react-dom/client
  * （那会破坏受控输入的事件委托）；生产 HelmxStoreProvider 与测试共用同一实现。
  */
-import { useCallback, useMemo, useSyncExternalStore } from 'react'
-import type { PluginClientHostPort } from '@helmx/plugin-client'
-import { PluginClientHostContext } from '@helmx/plugin-client'
+import { useCallback, useMemo, useRef, useSyncExternalStore } from 'react'
+import type { HostModelsSlice } from '@helmx/protocol/browser'
+import type { PluginClientHostHandles, PluginClientHostPort } from '@helmx/plugin-client'
+import { PluginClientHostContext, PluginClientHostHandlesContext } from '@helmx/plugin-client'
 import { createLocaleTranslator } from '@helmx/protocol/browser'
 import type { HelmxExternalStore } from './helmx-store.js'
+import { assetsApi } from './api.js'
 import { createPluginClientHostPort } from './plugin-client-host.js'
 import { createWebTranslator } from '../i18n/catalog.js'
 import {
@@ -19,6 +21,47 @@ import {
 export function PluginClientHostBridge({ store, children }: { store: HelmxExternalStore; children: React.ReactNode }) {
   const subscribe = useCallback((listener: () => void) => store.subscribeDomain('pluginHostPort', listener), [store])
   const slice = useSyncExternalStore(subscribe, store.getPluginHostPortSlice, store.getPluginHostPortSlice)
+
+  // ---- 稳定能力句柄（#35/#54 契约）：PluginClientHostHandlesContext 的值只在
+  // [store] 变化时重建（实际恒定），useHostModels/useScreenLocation 消费方与
+  // 主 port 每帧换引用完全隔离；不进会随流式帧重建的主 port 对象。----
+  const subscribeModels = useCallback(
+    (listener: () => void) => {
+      // 'models' 域承载目录数组与全局默认链；'profiles' 域承载 assetsLoaded
+      // 装载位（切片从 undefined -> 已加载的翻转点）。
+      const offModels = store.subscribeDomain('models', listener)
+      const offProfiles = store.subscribeDomain('profiles', listener)
+      return () => {
+        offModels()
+        offProfiles()
+      }
+    },
+    [store],
+  )
+  // 切片备忘化：同一 (assetsLoaded, models, modelDefaults) 身份下恒返回同引用
+  // （useSyncExternalStore 引用相等即零重渲染）；首载完成前恒 undefined——
+  // store 初始 models:[] 绝不泄漏为「无模型」真相（三态红线）。
+  const modelsSliceRef = useRef<{ loaded: boolean; models: readonly unknown[]; defaults: unknown; slice: HostModelsSlice | undefined }>({ loaded: false, models: [], defaults: null, slice: undefined })
+  const getModels = useCallback((): HostModelsSlice | undefined => {
+    const loaded = store.getProfilesSlice().assetsLoaded
+    const models = store.getModels()
+    const defaults = store.getModelDefaults()
+    const prev = modelsSliceRef.current
+    if (prev.loaded === loaded && prev.models === models && prev.defaults === defaults) return prev.slice
+    const slice = loaded ? { models, ...defaults } : undefined
+    modelsSliceRef.current = { loaded, models, defaults, slice }
+    return slice
+  }, [store])
+  const refreshModels = useCallback(async (): Promise<{ errors?: Record<string, string> }> => {
+    const res = await assetsApi.refreshModels()
+    await store.actions.refreshAssets()
+    return { errors: res.errors ?? {} }
+  }, [store])
+  const hostHandles = useMemo<PluginClientHostHandles>(
+    () => ({ getModels, subscribeModels, refreshModels }),
+    [getModels, subscribeModels, refreshModels],
+  )
+
   const port = useMemo<PluginClientHostPort>(
     () => ({
       ...createPluginClientHostPort({
@@ -62,5 +105,9 @@ export function PluginClientHostBridge({ store, children }: { store: HelmxExtern
     }),
     [slice, store],
   )
-  return <PluginClientHostContext.Provider value={port}>{children}</PluginClientHostContext.Provider>
+  return (
+    <PluginClientHostHandlesContext.Provider value={hostHandles}>
+      <PluginClientHostContext.Provider value={port}>{children}</PluginClientHostContext.Provider>
+    </PluginClientHostHandlesContext.Provider>
+  )
 }

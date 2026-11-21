@@ -11,7 +11,7 @@ import {
 } from '../lib/commands-model.js'
 import { formatBytes } from '../lib/format.js'
 import { errorText } from '../lib/error-text.js'
-import { HelmxIcon, Select, type SelectOption } from '@helmx/plugin-client'
+import { HelmxIcon, ModelPickerControl, Select, type SelectOption } from '@helmx/plugin-client'
 import { isSameResolvedTarget, type ResolvedTarget } from '../lib/types.js'
 import {
   useConversations,
@@ -33,7 +33,6 @@ import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
 import { Tooltip } from '../ui/Tooltip.js'
 import { CommandPopover } from './CommandPopover.js'
 import { CompletionPopover } from './CompletionPopover.js'
-import { ModelPickerControl } from './ModelPicker.js'
 import { focusWithCaret } from './composer-controller.js'
 import { envDraftOnNodeChange, useIsMobile } from './composer-model.js'
 import { standbySkillScope } from '../skills/skill-scope-model.js'
@@ -44,6 +43,7 @@ import {
   COMPOSER_SHORTCUTS,
   isComposerSubmitEnterEvent,
 } from './keybindings-model.js'
+import { useModelPickerControlAdapter } from './model-picker-adapter.js'
 import {
   admitStandbyFiles,
   currentStandbyDraftEpoch,
@@ -818,6 +818,7 @@ function StandbyModelPicker({
 }) {
   const models = useModels()
   const { t } = useWebLocale()
+  const { copy, onNotice } = useModelPickerControlAdapter()
   const lockedNote = t('composer.model.lockedNote')
 
   const effectiveModel = resolveStandbyEffectiveModel(
@@ -869,6 +870,8 @@ function StandbyModelPicker({
             : t('composer.model.followsDefaultTitle', { thinking: thinkingSuffix, shortcut: COMPOSER_SHORTCUTS.toggleModelPicker })
       }
       disabled={disabled}
+      copy={copy}
+      onNotice={onNotice}
       onApply={applySelection}
       onResetDefault={resetToDefault}
       onCatalogRefreshed={onCatalogRefreshed}

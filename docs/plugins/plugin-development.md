@@ -137,8 +137,9 @@ export default {
 
 | 分类 | 符号 |
 | :--- | :--- |
-| Hooks | `usePluginContext`（`callAction / submitInput / openScreen / openSplitScreen / openConversationDrawer / openArtifact / notify / theme / composer` 等）、`usePluginDoc`、`usePluginSessionDoc`、`useConversations`、`useConversation`、`useConversationBackground`（宿主标准按会话后台在途快照 `{ unknown, byConversation }`；`unknown` 为 true 时如实渲染未知，不得当作「无后台任务」）、`usePlugins`、`useToolActivity` |
+| Hooks | `usePluginContext`（`callAction / submitInput / openScreen / openSplitScreen / openConversationDrawer / openArtifact / notify / theme / composer` 等）、`usePluginDoc`、`usePluginSessionDoc`、`useConversations`、`useConversation`、`useConversationBackground`（宿主标准按会话后台在途快照 `{ unknown, byConversation }`；`unknown` 为 true 时如实渲染未知，不得当作「无后台任务」）、`useHostModels`（宿主模型目录只读切片 `HostModelsSlice | undefined`，稳定句柄订阅，仅目录真实变化才重渲染；`undefined`=能力未注入或首载未完成，如实渲染未知并禁选，不得伪造空目录；`models: []` 才是已加载且为空）、`usePlugins`、`useToolActivity` |
 | 无障碍控件 | `Switch`、`Select` / `MultiSelect`、`Checkbox`、`Tabs` / `SegmentedControl`、`Dialog` 系列、`ViewBoundary`、`Callout` |
+| 领域选择器 | `ModelPickerControl`（宿主与插件共享的模型+思考档位选择器：目录经 `useHostModels` 稳定句柄切片读取；行体点击仅应用模型、档位跟随服务端权威默认链；档位 chips 单次提交模型+档位；`showThinkingLevels={false}` 用于纯 model-id 配置字段；控件零 churning context 读取，文案经 `copy` prop 注入、SDK 默认英文，刷新通知经 `onNotice` 回调）、`formatModelShortName` / `formatModelRowDisplay`（模型短名与来源行拆分）、`resolveEffectiveThinkingLevel`（档位按模型支持列表收敛） |
 | 布局原语 | `Screen`、`ScreenSection`、`DataTable`（统一 loading/empty）、`KvGrid` |
 | 内容展示 | `HelmxIcon`、`MarkdownView`、`CodeBlockView`、`CopyButton`、`formatTime` 等格式化纯函数 |
 | 插件间组合 | `PluginSlot` |
