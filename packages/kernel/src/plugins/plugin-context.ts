@@ -56,6 +56,9 @@ interface CreatePluginContextOptions {
   isRegisteredState: (state: PluginState) => boolean;
 }
 
+/** Closed enum of host-rendered semantic controls for configSchema string fields. */
+const CONFIG_FIELD_FORMATS: ReadonlySet<string> = new Set(['model', 'node', 'profile']);
+
 /**
  * Display-copy guard for ctx.configSchema declarations: label / description,
  * when present, must be valid non-blank LocalizedText (supported locale keys
@@ -87,11 +90,15 @@ function assertConfigSchemaDisplayCopy(
         );
       }
     }
-    // Optional host-rendered control marker: only 'model' exists today, string fields only.
-    if (field.format !== undefined && (field.type !== 'string' || field.format !== 'model')) {
+    // Optional host-rendered control marker: closed host enum ('model' | 'node' |
+    // 'profile'), string fields only — rendering rights stay with the host.
+    if (
+      field.format !== undefined &&
+      (field.type !== 'string' || !CONFIG_FIELD_FORMATS.has(field.format))
+    ) {
       throw new HelmxError(
         'invalid_config_schema',
-        `Plugin ${pluginId} config field ${key} format 'model' is only valid on string fields`,
+        `Plugin ${pluginId} config field ${key} format ${JSON.stringify(field.format)} is invalid (string fields only; allowed: model, node, profile)`,
         400,
         { pluginId, field: key },
       );

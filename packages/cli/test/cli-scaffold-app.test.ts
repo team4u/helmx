@@ -101,9 +101,10 @@ test('plugins init --template app: template validation and output file list', { 
   const body = JSON.parse(r.out) as { pluginId: string; dir: string; template: string; files: string[]; nextSteps: string[] }
   assert.equal(body.pluginId, 'desk-app')
   assert.equal(body.template, 'app')
-  for (const f of ['plugin.json', 'index.ts', 'tsconfig.json', 'client/index.tsx', 'client/styles.css', 'README.md']) {
+  for (const f of ['plugin.json', 'index.ts', 'tsconfig.json', 'client/index.tsx', 'README.md']) {
     assert.ok(body.files.includes(f), `output should include ${f}: ${JSON.stringify(body.files)}`)
   }
+  assert.ok(!body.files.includes('client/styles.css'), 'app template must not ship a private stylesheet by default')
   // app template next steps point directly to apps workflow (verifiable locally without publishing)
   assert.ok(body.nextSteps.some((s) => s.startsWith('helmx apps validate ')), JSON.stringify(body.nextSteps))
   assert.ok(body.nextSteps.some((s) => s.startsWith('helmx apps publish ')))
@@ -154,8 +155,11 @@ test('plugins init --template app: backend and frontend content contracts', { ti
   assert.ok(!/\b(font-medium|text-subtle|text-xs)\b/.test(client), 'must not contain pseudo-Tailwind class names')
   assert.ok(client.includes("'items'"), 'frontend subscribes to matching public doc')
 
-  const css = await fsp.readFile(path.join(dir, 'client', 'styles.css'), 'utf8')
-  assert.ok(css.includes('var(--'), 'extra styles should use host CSS variables')
+  // Zero private CSS by default: no stylesheet artifact, host public form control class only
+  await assert.rejects(fsp.access(path.join(dir, 'client', 'styles.css')), 'app template must not generate client/styles.css')
+  assert.ok(!client.includes("import './styles.css'"), 'frontend must not import a private stylesheet')
+  assert.ok(client.includes('className="input"'), 'text input must reuse the host public .input class')
+  assert.ok(!/\bapp-(form|input|done|col-check)\b/.test(client), 'frontend must not use private app-* layout classes')
 
   // Zero-Emoji invariant across all generated files
   for (const f of await scaffoldFiles(dir)) {

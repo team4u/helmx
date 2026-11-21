@@ -10,6 +10,7 @@ import type {
   HelmxLocale,
   NodeInfo,
   PluginSummary,
+  Profile,
   ProviderConfig,
   SkillSummary,
 } from '@helmx/protocol/browser'
@@ -196,6 +197,11 @@ export function useProfilesSlice(): ProfilesSlice {
   return useDomainSlice('profiles', (s) => s.getProfilesSlice())
 }
 
+/** Profile list for surfaces that also render outside the store provider (SSR/plugin config form): undefined = catalog not provided. */
+export function useOptionalProfiles(): Profile[] | undefined {
+  return useDomainSlice('profiles', (s) => s.getProfilesSlice().profiles, () => undefined)
+}
+
 export function useCatalogAssets(): CatalogSlice {
   return useDomainSlice('catalog', (s) => s.getCatalogSlice())
 }
@@ -258,6 +264,11 @@ export function usePluginsUi(): PluginsUiSlice {
 
 export function useNodes(): NodeInfo[] {
   return useDomainSlice('nodes', (s) => s.getNodes())
+}
+
+/** Nodes slice for surfaces that also render outside the store provider (SSR/plugin config form): undefined = catalog not provided. */
+export function useOptionalNodes(): NodeInfo[] | undefined {
+  return useDomainSlice('nodes', (s) => s.getNodes(), () => undefined)
 }
 
 export function useLoadErrorsMap(): Record<string, string> {

@@ -686,6 +686,18 @@ test('ctx.configSchema: label/description display copy validated at declaration 
           default: '',
           label: { en: 'Model', 'zh-CN': '模型' },
         },
+        node: {
+          type: 'string',
+          format: 'node',
+          default: 'local',
+          label: { en: 'Node', 'zh-CN': '节点' },
+        },
+        profile: {
+          type: 'string',
+          format: 'profile',
+          default: '',
+          label: { en: 'Profile', 'zh-CN': 'Profile' },
+        },
       });
     },
   });
@@ -695,15 +707,18 @@ test('ctx.configSchema: label/description display copy validated at declaration 
     description: 'API token for upstream service',
   });
   assert.equal(host.getConfigSchema('p:cfg-copy-ok').model?.format, 'model');
+  assert.equal(host.getConfigSchema('p:cfg-copy-ok').node?.format, 'node');
+  assert.equal(host.getConfigSchema('p:cfg-copy-ok').profile?.format, 'profile');
 
-  // format: 'model' is only valid on string fields; unknown format or non-string rejects explicitly
+  // format is a closed host enum, string fields only; unknown format or non-string rejects explicitly
   for (const badField of [
     { type: 'number', format: 'model' },
+    { type: 'number', format: 'node' },
     { type: 'string', format: 'unknown' },
   ] as unknown as PluginConfigFieldSchema[]) {
     await assert.rejects(
       host.register({
-        id: `p:cfg-format-bad-${badField.type}`,
+        id: `p:cfg-format-bad-${badField.type}-${badField.format}`,
         definePlugin: (ctx) => {
           ctx.configSchema({ target: badField });
         },

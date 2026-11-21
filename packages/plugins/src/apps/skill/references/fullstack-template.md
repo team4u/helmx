@@ -9,7 +9,6 @@ apps/sample-desk/
   plugin.json
   index.ts
   client/index.tsx
-  client/styles.css
 ```
 
 ## plugin.json
@@ -100,7 +99,7 @@ export default {
 } satisfies PluginDefinition
 ```
 
-## client/index.tsx (frontend: reuse `@helmx/plugin-client` layout and control primitives directly)
+## client/index.tsx (frontend: reuse `@helmx/plugin-client` primitives and host public CSS classes; no private stylesheet by default)
 
 ```tsx
 import { useState, type ReactNode } from 'react'
@@ -112,7 +111,6 @@ import {
   DataTable,
   Checkbox,
 } from '@helmx/plugin-client'
-import './styles.css'
 
 interface Item { id: string; title: string; done: boolean; createdAt: number }
 
@@ -141,19 +139,26 @@ export function MainScreen(): ReactNode {
 
   return (
     <Screen title="Sample Desk" subtitle={'Done ' + doneCount + ' / ' + list.length}>
-      <ScreenSection title="Add an item">
-        <div className="sd-form">
-          <input
-            className="sd-input"
-            value={draft}
-            placeholder="Type a todo and press Enter..."
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') void add() }}
-          />
-          <button type="button" className="btn btn-primary" disabled={pending} onClick={() => void add()}>
+      <ScreenSection
+        title="Add an item"
+        titleExtra={
+          <button
+            type="button"
+            className="btn btn-primary btn-sm"
+            disabled={pending || draft.trim() === ''}
+            onClick={() => void add()}
+          >
             Add
           </button>
-        </div>
+        }
+      >
+        <input
+          className="input"
+          value={draft}
+          placeholder="Type a todo and press Enter..."
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') void add() }}
+        />
       </ScreenSection>
 
       <ScreenSection title="Item list">
@@ -167,7 +172,7 @@ export function MainScreen(): ReactNode {
           <tbody>
             {list.map((it) => (
               <tr key={it.id}>
-                <td className="sd-col-check">
+                <td>
                   <Checkbox
                     checked={it.done}
                     onChange={(checked) => {
@@ -177,7 +182,7 @@ export function MainScreen(): ReactNode {
                     }}
                   />
                 </td>
-                <td className={it.done ? 'sd-done' : ''}>{it.title}</td>
+                <td>{it.title}</td>
               </tr>
             ))}
           </tbody>
@@ -188,14 +193,10 @@ export function MainScreen(): ReactNode {
 }
 ```
 
-## client/styles.css
+## Styling rules
 
-```css
-.sd-form { display: flex; gap: 8px; }
-.sd-input { flex: 1; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font-size: 13px; color: var(--fg); }
-.sd-col-check { width: 48px; }
-.sd-done { text-decoration: line-through; color: var(--fg-muted); }
-```
+- Default to zero private CSS: compose layout with SDK primitives (`Screen` header `actions`, `ScreenSection` `titleExtra`, `DataTable`, `KvGrid`) and host public classes (`.input`, `.btn btn-primary`, `.stack-row`, `.loading-state`, `.callout`); never re-declare form controls with custom classes.
+- Add a scoped custom stylesheet only when the host vocabulary is genuinely insufficient, and keep it limited to layout/branding on your own class names with host CSS variables (`var(--fg)`, `var(--border)`, ...).
 
 ## Checklist cross-reference
 
@@ -203,5 +204,6 @@ export function MainScreen(): ReactNode {
 - Backend `ctx.doc('items', ..., { public: true })` + `flush()` after writes;
 - `ctx.action` declares both `inputSchema` and `outputSchema` (the single-point Schema contract; missing ones are rejected at register), with `exposeAsTool: true`;
 - The frontend prefers reusing `@helmx/plugin-client` layout primitives `Screen / ScreenSection / DataTable / KvGrid` and accessible controls (`Checkbox` uses `onChange(checked)`; notifications use `notify(message, tone)`), without introducing undeclared bare npm packages;
+- Zero private stylesheet by default (host public `.input` / `.btn` classes + SDK primitives; add scoped CSS only when the vocabulary is insufficient);
 - `ctx.ui.screen({ id: 'main', client: { module: 'index.tsx', export: 'MainScreen' } })` and the frontend really exports `MainScreen`;
 - No sidebarItem registered (avoiding sidebar bloat; the sidebar entry in the `helmx plugins init --template app` skeleton can be deleted as needed); no Emoji; styling uses host CSS variables.

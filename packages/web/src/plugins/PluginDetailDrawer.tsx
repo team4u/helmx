@@ -8,9 +8,9 @@ import {
 import type { HelmxLocale, PluginSummary } from '@helmx/protocol/browser'
 import { DEFAULT_HELMX_LOCALE, resolveLocalizedText } from '@helmx/protocol/browser'
 import { ApiClientError, pluginsApi, type PluginConfigResponse } from '../lib/api.js'
-import { EmptyState, HelmxIcon, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle, ModelPickerControl, Switch } from '@helmx/plugin-client'
+import { EmptyState, HelmxIcon, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle, ModelPickerControl, Select, Switch } from '@helmx/plugin-client'
 import { createWebTranslator } from '../i18n/catalog.js'
-import { useOptionalGroupedUi, useOptionalLocale, useOptionalStoreActions } from '../lib/store-context.js'
+import { useOptionalGroupedUi, useOptionalLocale, useOptionalNodes, useOptionalProfiles, useOptionalStoreActions } from '../lib/store-context.js'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -30,7 +30,9 @@ import {
   pluginSourceDisplayText,
 } from './plugin-package-model.js'
 import {
+  buildNodeConfigOptions,
   buildPluginConfigPayload,
+  buildProfileConfigOptions,
   buildResetFieldPayload,
   canResetConfigField,
   configFieldInitialValue,
@@ -92,6 +94,8 @@ export function PluginConfigForm({
   inline = false,
 }: PluginConfigFormProps): React.JSX.Element {
   const t = useMemo(() => createWebTranslator(locale), [locale])
+  const nodes = useOptionalNodes() ?? []
+  const profiles = useOptionalProfiles() ?? []
   const entries = Object.entries(config.schema ?? {})
   const { onNotice } = useModelPickerControlAdapter()
   const pickerCopy = useMemo(() => buildModelPickerControlCopy(t), [t])
@@ -212,6 +216,22 @@ export function PluginConfigForm({
                     onNotice={onNotice}
                     onApply={(id) => setValues((prev) => ({ ...prev, [key]: id }))}
                     onResetDefault={() => setValues((prev) => ({ ...prev, [key]: '' }))}
+                  />
+                ) : schema.format === 'node' || schema.format === 'profile' ? (
+                  <Select
+                    id={fieldId}
+                    inline={inline}
+                    popoverClassName="helmx-select-popover-wide"
+                    aria-label={
+                      schema.label !== undefined ? resolveLocalizedText(schema.label, locale) || key : key
+                    }
+                    value={String(values[key] ?? '')}
+                    options={
+                      schema.format === 'node'
+                        ? buildNodeConfigOptions(nodes, String(values[key] ?? ''), t)
+                        : buildProfileConfigOptions(profiles, String(values[key] ?? ''), t)
+                    }
+                    onChange={(event) => setValues((prev) => ({ ...prev, [key]: event.target.value }))}
                   />
                 ) : (
                   <input

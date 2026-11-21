@@ -1149,3 +1149,113 @@ test('PluginConfigForm：format="model" 渲染宿主模型目录 Select 下拉�
     container.remove()
   }
 })
+
+test('PluginConfigForm：format="node"/"profile" 渲染宿主节点与 Profile 目录 Select，离线/缺失引用如实标注并提交所选 ID', { timeout: 60_000 }, async () => {
+  const store = makeTestStore({
+    nodes: [
+      { id: 'local', kind: 'local', online: true },
+      { id: 'remote-1', kind: 'byom', online: false },
+    ],
+    profiles: [
+      { id: 'assistant', name: 'person assist' },
+      { id: 'ops' },
+    ],
+  })
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = ReactDOMClient.createRoot(container)
+
+  const originalSetConfig = pluginsApi.setConfig
+  const savedPayloads: Array<Record<string, unknown>> = []
+  pluginsApi.setConfig = async (_id: string, values: Record<string, unknown>) => {
+    savedPayloads.push(values)
+    return { ok: true }
+  }
+
+  try {
+    await act(async () => {
+      root.render(
+        e(
+          HostStoreProviders,
+          { value: store },
+          e(PluginConfigForm, {
+            pluginId: 'community:relay',
+            locale: 'zh-CN',
+            inline: true,
+            config: {
+              values: { targetNode: 'gone-node', targetProfile: 'assistant' },
+              sources: { targetNode: 'configured', targetProfile: 'configured' },
+              schema: {
+                targetNode: {
+                  type: 'string',
+                  format: 'node',
+                  label: { en: 'Target node', 'zh-CN': '目标节点' },
+                },
+                targetProfile: {
+                  type: 'string',
+                  format: 'profile',
+                  label: { en: 'Target profile', 'zh-CN': '目标 Profile' },
+                },
+              },
+            },
+            onSaved: () => {},
+          }),
+        ),
+      )
+    })
+
+    // 1. 两个语义字段均渲染 Select 触发按钮而非普通文本输入
+    assert.ok(container.querySelector('input[type="text"]') === null, 'format="node"/"profile" 不应渲染普通文本输入')
+    const triggers = Array.from(container.querySelectorAll('button[aria-haspopup="listbox"]'))
+    assert.equal(triggers.length, 2, '应渲染两个 Select 触发按钮')
+    const nodeTrigger = triggers.find((b) => b.getAttribute('aria-label') === '目标节点') as HTMLButtonElement
+    const profileTrigger = triggers.find((b) => b.getAttribute('aria-label') === '目标 Profile') as HTMLButtonElement
+    assert.ok(nodeTrigger !== undefined && profileTrigger !== undefined)
+
+    // 2. 节点下拉：未设置 / 在线节点原样列出 / 离线节点如实标注 / 已配置但缺失的引用不静默消失
+    await act(async () => {
+      nodeTrigger.click()
+    })
+    const nodeOptions = Array.from(container.querySelectorAll('[role="option"]')).map((el) => el.textContent ?? '')
+    assert.ok(nodeOptions.some((t) => t.includes('未设置')), '首项应为未设置')
+    assert.ok(nodeOptions.some((t) => t === 'local'), '应列出在线节点')
+    assert.ok(nodeOptions.some((t) => t.includes('remote-1') && t.includes('离线')), '离线节点应如实标注')
+    assert.ok(nodeOptions.some((t) => t.includes('gone-node') && t.includes('不存在')), '缺失引用应保留为不存在选项')
+    const remoteOption = Array.from(container.querySelectorAll('[role="option"]')).find((el) =>
+      (el.textContent ?? '').includes('remote-1'),
+    ) as HTMLElement
+    await act(async () => {
+      remoteOption.click()
+    })
+
+    // 3. Profile 下拉：未设置 / name (id) 标注 / 无 name 时裸 id
+    await act(async () => {
+      profileTrigger.click()
+    })
+    const profileOptions = Array.from(container.querySelectorAll('[role="option"]')).map((el) => el.textContent ?? '')
+    assert.ok(profileOptions.some((t) => t.includes('未设置')), '首项应为未设置')
+    assert.ok(profileOptions.some((t) => t.includes('person assist (assistant)')), 'Profile 应以 name (id) 标注')
+    assert.ok(profileOptions.some((t) => t === 'ops'), '无 name 的 Profile 应裸 id 列出')
+    const unsetOption = Array.from(container.querySelectorAll('[role="option"]')).find((el) =>
+      (el.textContent ?? '').includes('未设置'),
+    ) as HTMLElement
+    await act(async () => {
+      unsetOption.click()
+    })
+
+    // 4. 保存提交所选 ID：node=remote-1，profile 清空为 ''
+    const saveBtn = Array.from(container.querySelectorAll('button')).find((b) => (b.textContent ?? '').includes('保存配置'))
+    assert.ok(saveBtn !== undefined)
+    await act(async () => {
+      saveBtn.click()
+    })
+    assert.equal(savedPayloads.length, 1)
+    assert.deepEqual(savedPayloads[0], { targetNode: 'remote-1', targetProfile: '' })
+  } finally {
+    pluginsApi.setConfig = originalSetConfig
+    await act(async () => {
+      root.unmount()
+    })
+    container.remove()
+  }
+})
