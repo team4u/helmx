@@ -39,7 +39,7 @@ export interface QuotaEntry {
   user?: string
   alias?: string
   windows?: QuotaWindow[]
-  balance?: string
+  balance?: string | number
   until?: string
   resets?: { count?: number; until?: string }
   error?: string
@@ -47,6 +47,12 @@ export interface QuotaEntry {
   asOf?: string
   last?: boolean
   lastServedAt?: string
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim()
+  return trimmed.length > 0 ? trimmed : undefined
 }
 
 /** 窗口剩余百分比；非百分比窗口或 vendor 未给出时 undefined。 */
@@ -68,7 +74,7 @@ function formatCompactNumber(value: number): string {
 }
 
 function formatBalanceText(balance: number, unit: string | undefined): string {
-  const trimmed = unit?.trim() ?? ''
+  const trimmed = nonEmptyString(unit) ?? ''
   const upper = trimmed.toUpperCase()
   if (trimmed === '$' || upper === 'USD') return `$${balance.toFixed(2)}`
   if (trimmed === '¥' || upper === 'CNY' || upper === 'RMB') return `¥${balance.toFixed(2)}`
@@ -82,8 +88,8 @@ function formatWindowDisplayText(window: QuotaWindow): string | undefined {
   if (typeof window.balance === 'number' && Number.isFinite(window.balance)) {
     return formatBalanceText(window.balance, window.unit)
   }
-  const rawDisplay = window.display?.trim()
-  if (rawDisplay) return rawDisplay
+  const rawDisplay = nonEmptyString(window.display)
+  if (rawDisplay !== undefined) return rawDisplay
   if (
     typeof window.limit === 'number'
     && Number.isFinite(window.limit)
@@ -91,7 +97,7 @@ function formatWindowDisplayText(window: QuotaWindow): string | undefined {
     && typeof window.amount === 'number'
     && Number.isFinite(window.amount)
   ) {
-    const unit = window.unit?.trim()
+    const unit = nonEmptyString(window.unit)
     return `${formatCompactNumber(window.amount)} / ${formatCompactNumber(window.limit)}${unit ? ` ${unit}` : ''}`
   }
   return undefined
@@ -136,14 +142,15 @@ export interface QuotaRow {
   error?: string
 }
 
-/** 全部配额卡片 → 展示行（每窗口一行；无 windows 的卡片输出一行 -1）。 */
+/** 全部配额卡片 → 展示行（每窗口一行；无 windows 的卡片输出一行 -1；绝不输出值为 undefined 的自有键）。 */
 export function quotaRows(entries: readonly QuotaEntry[], now = Date.now()): QuotaRow[] {
   const rows: QuotaRow[] = []
   for (const entry of entries) {
-    const provider = entry.provider?.trim() || entry.name?.trim() || 'provider'
-    const account = entry.alias?.trim() || entry.user?.trim() || entry.plan?.trim() || undefined
-    const readAt = entry.readAt?.trim() || entry.asOf?.trim() || undefined
-    const lastServedAt = entry.lastServedAt?.trim() || undefined
+    if (!entry || typeof entry !== 'object') continue
+    const provider = nonEmptyString(entry.provider) ?? nonEmptyString(entry.name) ?? 'provider'
+    const account = nonEmptyString(entry.alias) ?? nonEmptyString(entry.user) ?? nonEmptyString(entry.plan)
+    const readAt = nonEmptyString(entry.readAt) ?? nonEmptyString(entry.asOf)
+    const lastServedAt = nonEmptyString(entry.lastServedAt)
     const last = entry.last === true ? true : undefined
     const sharedMeta = {
       ...(account !== undefined ? { account } : {}),
@@ -151,10 +158,14 @@ export function quotaRows(entries: readonly QuotaEntry[], now = Date.now()): Quo
       ...(lastServedAt !== undefined ? { lastServedAt } : {}),
       ...(readAt !== undefined ? { readAt } : {}),
     }
-    const windows = entry.windows ?? []
+    const windows = Array.isArray(entry.windows) ? entry.windows : []
     if (windows.length === 0) {
-      const errorText = entry.error?.trim() ? entry.error.trim().slice(0, 120) : undefined
-      const balanceText = entry.balance?.trim() || undefined
+      const errorText = nonEmptyString(entry.error)?.slice(0, 120)
+      const balanceText =
+        nonEmptyString(entry.balance)
+        ?? (typeof entry.balance === 'number' && Number.isFinite(entry.balance)
+          ? formatCompactNumber(entry.balance)
+          : undefined)
       rows.push({
         provider,
         ...sharedMeta,
@@ -162,24 +173,27 @@ export function quotaRows(entries: readonly QuotaEntry[], now = Date.now()): Quo
         ...(errorText !== undefined
           ? { error: errorText, windowLabel: `error: ${errorText}` }
           : balanceText !== undefined
-            ? { displayText: balanceText, windowLabel: entry.kind === 'balance' ? 'Balance' : undefined }
+            ? { displayText: balanceText, windowLabel: 'Balance' }
             : {}),
       })
       continue
     }
     for (const window of windows) {
+      if (!window || typeof window !== 'object') continue
       const remaining = remainingPercent(window)
-      const reset = formatReset(window.resetsAt, now)
-      const resetsAt = window.resetsAt && Number.isFinite(Date.parse(window.resetsAt)) ? window.resetsAt : undefined
+      const rawResetsAt = nonEmptyString(window.resetsAt)
+      const reset = formatReset(rawResetsAt, now)
+      const resetsAt = rawResetsAt !== undefined && Number.isFinite(Date.parse(rawResetsAt)) ? rawResetsAt : undefined
       const displayText = formatWindowDisplayText(window)
-      const pool = window.pool?.trim() || undefined
+      const windowLabel = nonEmptyString(window.name)
+      const pool = nonEmptyString(window.pool)
       rows.push({
         provider,
         ...sharedMeta,
         remainingPercent: remaining === undefined ? -1 : Math.round(remaining),
         ...(reset !== undefined ? { resetText: reset } : {}),
         ...(resetsAt !== undefined ? { resetsAt } : {}),
-        ...(window.name?.trim() ? { windowLabel: window.name.trim() } : {}),
+        ...(windowLabel !== undefined ? { windowLabel } : {}),
         ...(displayText !== undefined ? { displayText } : {}),
         ...(window.unlimited === true ? { unlimited: true } : {}),
         ...(pool !== undefined ? { pool } : {}),

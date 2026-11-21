@@ -119,7 +119,8 @@ export function parseGroupShow(text: string): GroupInfo | undefined {
     const header = new RegExp(`^\\s+(.*?)\\s{2,}(${GROUP_REF})(.*)$`).exec(line)
     if (header && !info.id && header[2]) {
       info.id = header[2]
-      info.name = header[1]?.replace(/\s+found$/, '').trim()
+      const name = header[1]?.replace(/\s+found$/, '').trim()
+      if (name) info.name = name
       info.auto = /found by magpie/.test(header[3] ?? '')
       info.removed = /\bremoved\b/.test(header[3] ?? '')
       continue
@@ -143,12 +144,16 @@ function applyGroupField(info: GroupInfo, key: string, value: string, pickedHere
   const trimmed = value.trim()
   const first = trimmed.split(COLUMN)[0]?.trim() || trimmed
   switch (key) {
-    case 'routing':
-      info.routing = first.split(/\s+/)[0] || undefined
+    case 'routing': {
+      const routing = first.split(/\s+/)[0]
+      if (routing) info.routing = routing
       break
-    case 'stays':
-      info.stays = first.split(/\s+/)[0] || undefined
+    }
+    case 'stays': {
+      const stays = first.split(/\s+/)[0]
+      if (stays) info.stays = stays
       break
+    }
     case 'models':
       addMember(info, trimmed, pickedHere)
       break
@@ -156,16 +161,20 @@ function applyGroupField(info: GroupInfo, key: string, value: string, pickedHere
       info.rules.push(first.replace(/^\d+\s+/, ''))
       break
     case 'levels':
-      info.levels = first || undefined
+      if (first) info.levels = first
       break
-    case 'effort':
-      info.effort = first.split(/\s+/)[0] || undefined
+    case 'effort': {
+      const effort = first.split(/\s+/)[0]
+      if (effort) info.effort = effort
       break
-    case 'classifier':
-      info.classifier = first.split(/\s+/)[0] || undefined
+    }
+    case 'classifier': {
+      const classifier = first.split(/\s+/)[0]
+      if (classifier) info.classifier = classifier
       break
+    }
     case 'used by':
-      info.usedBy = first || undefined
+      if (first) info.usedBy = first
       break
   }
 }
@@ -241,14 +250,21 @@ interface RouteRow {
 export function traceRouteRows(routes: readonly TraceRoute[]): RouteRow[] {
   const latest = new Map<string, RouteRow & { order: number }>()
   for (const route of routes) {
-    const key = groupKey(route.group?.id ?? route.group?.ref)
+    if (!route || typeof route !== 'object') continue
+    const rawGroupId =
+      typeof route.group?.id === 'string'
+        ? route.group.id
+        : typeof route.group?.ref === 'string'
+          ? route.group.ref
+          : undefined
+    const key = groupKey(rawGroupId)
     if (!key) continue
     latest.set(key, {
       group: key,
-      ...(route.group?.routing ? { strategy: route.group.routing } : {}),
-      ...(route.provider ? { provider: route.provider } : {}),
-      ...(route.served ? { model: route.served } : {}),
-      ...(route.time ? { timestamp: route.time } : {}),
+      ...(typeof route.group?.routing === 'string' && route.group.routing ? { strategy: route.group.routing } : {}),
+      ...(typeof route.provider === 'string' && route.provider ? { provider: route.provider } : {}),
+      ...(typeof route.served === 'string' && route.served ? { model: route.served } : {}),
+      ...(typeof route.time === 'string' && route.time ? { timestamp: route.time } : {}),
       order: latest.size,
     })
   }

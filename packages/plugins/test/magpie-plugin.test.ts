@@ -29,8 +29,9 @@ import { fileURLToPath } from 'node:url'
 
 import { createModels } from '@earendil-works/pi-ai/models'
 import type { Provider } from '@earendil-works/pi-ai'
-import { COMPOSER_STATUS_SLOT, HelmxError, resolveLocalizedText, type ConversationSummary } from '@helmx/protocol'
+import { COMPOSER_STATUS_SLOT, HelmxError, redactJsonValue, resolveLocalizedText, type ConversationSummary } from '@helmx/protocol'
 import { quotaRows } from '../src/magpie/quota.js'
+import { parseGroupShow } from '../src/magpie/routing.js'
 import { MAGPIE_COL_PROVIDER } from '../src/magpie/client/copy.js'
 import {
   PluginHost,
@@ -1118,11 +1119,29 @@ test('magpie23: quotaRows 保留非百分比单位、pool、last、readAt、rese
         balance: '$8.40',
         windows: [],
       },
+      {
+        // 无 kind: 'balance' 的余额卡片（如 newapi）：绝不得生成 windowLabel: undefined 导致 jsonClone / redactJsonValue 500
+        provider: 'newapi',
+        user: 'key-3',
+        balance: '$15.00',
+        windows: [],
+      },
+      {
+        provider: 'numeric-wallet',
+        balance: 42.5,
+      },
+      {
+        provider: 'plain-empty',
+        windows: [],
+      },
     ],
     now,
   )
 
-  assert.equal(rows.length, 6)
+  // 严格 JSON 契约校验：所有输出行绝不含 undefined 自有键、NaN 或非 JSON 值
+  assert.doesNotThrow(() => redactJsonValue(rows, (s) => s))
+
+  assert.equal(rows.length, 9)
   assert.equal(rows[0]!.account, 'halt', '优先展示 alias')
   assert.equal(rows[0]!.pool, 'Gemini')
   assert.equal(rows[0]!.last, true)
@@ -1147,6 +1166,21 @@ test('magpie23: quotaRows 保留非百分比单位、pool、last、readAt、rese
 
   assert.equal(rows[5]!.displayText, '$8.40')
   assert.equal(rows[5]!.windowLabel, 'Balance')
+
+  assert.equal(rows[6]!.displayText, '$15.00')
+  assert.equal(rows[6]!.windowLabel, 'Balance')
+  assert.equal(Object.values(rows[6]!).includes(undefined), false)
+
+  assert.equal(rows[7]!.displayText, '42.5')
+  assert.equal(rows[7]!.windowLabel, 'Balance')
+
+  assert.equal(rows[8]!.remainingPercent, -1)
+  assert.equal('windowLabel' in rows[8]!, false)
+
+  // parseGroupShow 遇到空字段行同样不得写入 undefined 自有键
+  const parsedGroup = parseGroupShow('  Relay  group/relay\n  routing  \n  stays  \n  levels  \n  effort  \n  used by  \n')
+  assert.ok(parsedGroup !== undefined)
+  assert.doesNotThrow(() => redactJsonValue(parsedGroup, (s) => s))
 })
 
 test('magpie24: status 暴露 modelOwners / groupProviders；onlyIfChanged 轮询无变更跳过目录落盘、变更时热更新；quota 回写 status', { timeout: 60_000 }, async () => {
@@ -1158,7 +1192,13 @@ test('magpie24: status 暴露 modelOwners / groupProviders；onlyIfChanged 轮�
         { id: 'zhipu/glm-5.3', native_endpoints: [] },
       ],
     },
-    quotas: QUOTAS,
+    quotas: {
+      data: [
+        ...QUOTAS.data,
+        // 无 kind: 'balance' 的余额供应商卡片：验证真实 status.set (jsonClone) 与 quota 动作输出均无 undefined 报错
+        { provider: 'newapi', user: 'key-balance', balance: '$19.80', windows: [] },
+      ],
+    },
     trace: TRACE,
   }
   let hostRefreshCount = 0
