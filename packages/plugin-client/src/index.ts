@@ -77,6 +77,8 @@ export { Screen, ScreenSection, DataTable, KvGrid } from './primitives.js'
 export type { ScreenProps, ScreenSectionProps, DataTableProps, KvGridProps } from './primitives.js'
 export { Callout } from './callout.js'
 export type { CalloutProps } from './callout.js'
+export { DetailDrawer } from './ui/DetailDrawer.js'
+export type { DetailDrawerProps } from './ui/DetailDrawer.js'
 
 // ---- Content display ----
 export { MarkdownText } from './markdown.js'

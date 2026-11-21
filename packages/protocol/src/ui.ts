@@ -596,7 +596,9 @@ export interface PluginClientContext {
  *   becomes the screen-reader accessible name, never visible status text) for
  *   card main status slots, reusing the host .status-dot vocabulary;
  * - lightweight layout primitives: Screen (page container + header) / ScreenSection (sectioning) /
- *   DataTable (composable table with unified loading/empty) / KvGrid (key-value overview);
+ *   DataTable (composable table with unified loading/empty) / KvGrid (key-value overview) /
+ *   DetailDrawer (right-side detail drawer shell over the host .primary-drawer-* vocabulary; the
+ *   header/meta/body/footer stay composable JSX, state and data belong to the caller);
  * - content display: MarkdownView (standard markdown rendering) / CodeBlockView
  *   (syntax-highlighted code block) / CopyButton (copy button);
  * - formatting pure functions: formatTime (compact MM-DD HH:mm) / formatCompactTimestamp
@@ -696,6 +698,7 @@ export const PLUGIN_CLIENT_SHARED_EXPORTS = [
   'ScreenSection',
   'DataTable',
   'KvGrid',
+  'DetailDrawer',
   'formatTime',
   'formatCompactTimestamp',
   'formatDurationMs',
