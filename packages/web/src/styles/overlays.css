@@ -110,7 +110,11 @@
  * ========================================================================== */
 
 /* 高于移动端侧边栏抽屉（.helmx-sidebar: 72 / .sidebar-backdrop: 71）与连接横幅（65），
- * 低于 Toast（90）与 Modal（100），确保从侧栏触发的下拉菜单/气泡/提示不被抽屉遮挡。 */
+ * 低于 Toast（90）与 Modal（100），确保从侧栏触发的下拉菜单/气泡/提示不被抽屉遮挡。
+ * 注意：@radix-ui/react-popper 会读取内容节点的 computed z-index 并内联写入
+ * [data-radix-popper-content-wrapper]，因此内容类本身也必须声明对应 z-index，
+ * 否则内联 z-index: auto 会覆盖此规则，导致 .timeline-container::after (z-index: 2)
+ * 等正层叠元素穿透绘到浮层上方。Dialog 内浮层仍由 useOverlayChildStyle 内联 zIndex 抬高。 */
 [data-radix-popper-content-wrapper] {
   z-index: 80;
 }
@@ -125,6 +129,7 @@
   outline: none;
   box-sizing: border-box;
   max-width: calc(100vw - 16px);
+  z-index: 80;
 }
 
 .helmx-popover-arrow {
@@ -270,6 +275,7 @@
   max-width: var(--radix-select-content-available-width, 360px);
   max-height: var(--radix-select-content-available-height, 240px);
   border-radius: var(--radius-sm, 7px);
+  z-index: 120;
 }
 
 /* 加宽下拉面板：长模型 ID（如 anthropic/claude-…）完整可读，溢出省略并保留 title 提示 */

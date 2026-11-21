@@ -890,18 +890,15 @@ button.attachment-chip:disabled {
 }
 .composer-status-row .composer-context-status-warn { color: var(--warn); }
 .composer-status-row .composer-context-status-high { color: var(--err); }
-/* 宿主状态行插件插槽（上下文用量旁，如 builtin:token-speed 速率贡献）：
- * 不做收缩截断，窄容器下随行流式换行，无子内容时自动折叠。 */
+/* 宿主状态行插件插槽（上下文用量旁，如 builtin:token-speed 速率与 builtin:magpie 配额）：
+ * 用 display: contents 打平插槽容器，让各插件项与 .composer-context-status 作为同级 flex 子项
+ * 逐个参与换行（避免整块插槽因总宽超限把短速率指标一起拖到下一行）；无子内容时自动折叠。 */
 .composer-status-row .composer-status-slot {
-  display: inline-flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 2px 12px;
+  display: contents;
+}
+.composer-status-row .composer-status-slot > * {
   min-width: 0;
   max-width: 100%;
-  line-height: 1.4;
-  font-size: 11.5px;
-  color: var(--fg-muted);
 }
 .composer-status-row .composer-status-slot:empty {
   display: none;

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import React, { act } from 'react'
 import { renderToString } from 'react-dom/server'
@@ -290,4 +291,44 @@ test('Select multiple: 全选时触发器显示已全选摘要文案', { timeout
   )
 
   assert.match(html, /All selected \(2\)/)
+})
+
+test('CSS stacking regression: Popover 内容节点必须声明 z-index: 80，Select 保持 120，Dialog 内联层叠仍可覆盖', { timeout: 60_000 }, () => {
+  // Radix Popper reads getComputedStyle(content).zIndex and mirrors it inline onto
+  // [data-radix-popper-content-wrapper]; if .helmx-popover-content computes to 'auto',
+  // inline z-index: auto overrides the wrapper rule and lets .timeline-container::after (z-index: 2)
+  // paint a horizontal seam straight across the popover.
+  const formsCss = readFileSync(new URL('../src/styles/forms.css', import.meta.url), 'utf8')
+  const overlaysCss = readFileSync(new URL('../src/styles/overlays.css', import.meta.url), 'utf8')
+  const style = document.createElement('style')
+  style.textContent = `${formsCss}\n${overlaysCss}`
+  document.head.appendChild(style)
+
+  const makeWrapped = (className: string, inlineZ?: string): HTMLElement => {
+    const wrapper = document.createElement('div')
+    wrapper.setAttribute('data-radix-popper-content-wrapper', '')
+    const content = document.createElement('div')
+    content.className = className
+    if (inlineZ !== undefined) content.style.zIndex = inlineZ
+    wrapper.appendChild(content)
+    document.body.appendChild(wrapper)
+    return content
+  }
+
+  const plainPopover = makeWrapped('helmx-popover-content magpie-quota-popover')
+  const modelPopover = makeWrapped('helmx-popover-content composer-popover composer-model-popover')
+  const selectPopover = makeWrapped('helmx-popover-content helmx-select-popover dropdown-panel')
+  const nestedDialogPopover = makeWrapped('helmx-popover-content magpie-quota-popover', '1002')
+  try {
+    assert.equal(getComputedStyle(plainPopover).zIndex, '80', '普通 Popover 必须向 Radix Popper 暴露 z-index: 80 而非 auto')
+    assert.equal(getComputedStyle(modelPopover).zIndex, '80', '模型选择器 Popover 统一处于 80 层，不被侧栏或底渐隐层遮挡')
+    assert.equal(getComputedStyle(selectPopover).zIndex, '120', 'MultiSelect 复用 PopoverContent 时仍须维持 120 层高于旧弹窗')
+    assert.equal(getComputedStyle(nestedDialogPopover).zIndex, '1002', 'Dialog 内浮层通过 useOverlayChildStyle 内联抬高层级不被压低')
+  } finally {
+    plainPopover.parentElement?.remove()
+    modelPopover.parentElement?.remove()
+    selectPopover.parentElement?.remove()
+    nestedDialogPopover.parentElement?.remove()
+    style.remove()
+  }
 })

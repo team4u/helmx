@@ -330,6 +330,21 @@ test('composer/status DOM placement & empty collapse: telemetry row sits below .
     const rowWithUsage = host.querySelector<HTMLElement>('.composer-status-row')
     assert.ok(rowWithUsage !== null)
     assert.equal(getComputedStyle(rowWithUsage).display, 'flex', 'telemetry row is visible when contextUsage renders')
+
+    // Multi-contribution flat wrapping regression: .composer-status-slot must use display:contents so
+    // short badges (e.g. token-speed) stay on the first line beside ContextUsageStatus instead of
+    // wrapping as one nested flex block with a wider quota trigger onto line 2.
+    const flatSlot = document.createElement('div')
+    flatSlot.className = 'composer-status-slot'
+    const child = document.createElement('span')
+    child.textContent = '127 tok/s'
+    flatSlot.appendChild(child)
+    rowWithUsage.appendChild(flatSlot)
+    try {
+      assert.equal(getComputedStyle(flatSlot).display, 'contents', 'status slot flattens into the parent flex row for per-item wrapping')
+    } finally {
+      flatSlot.remove()
+    }
   } finally {
     act(() => root.unmount())
     host.remove()

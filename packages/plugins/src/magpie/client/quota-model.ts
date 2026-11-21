@@ -14,8 +14,9 @@
  *      strictly against the current model identity so unrelated pools (e.g.
  *      `Claude & GPT` when a `Gemini` model is active) never leak in;
  *   4. Exclude any account whose windows were all filtered out as unrelated pools;
- * - Status bar always displays ONLY the single primary account (preferring the
- *   gateway's `last` active account, then latest `lastServedAt`, then first order);
+ * - Status bar always displays ONLY the single primary account (preferring accounts
+ *   with remaining quota over exhausted ones, then the gateway's `last` active
+ *   account, then latest `lastServedAt`, then first order);
  * - Clicking opens a Popover listing ONLY the related accounts & windows for the
  *   current model.
  */
@@ -52,6 +53,7 @@ export interface ModelQuotaAccount {
   provider: string
   account?: string
   last: boolean
+  exhausted: boolean
   lastServedAtMs?: number
   readAtMs?: number
   windows: FormattedQuotaWindow[]
@@ -347,6 +349,79 @@ function formatWindow(row: MagpieStatusQuotaView, nowMs: number | undefined): Fo
   }
 }
 
+const TOTAL_CREDIT_WINDOW_RE = /\btotal\b.*\bcredits?\b|\bcredits?\b.*\btotal\b/i
+const EXTRA_CREDIT_WINDOW_RE = /\bextra\b/i
+const BASE_CREDIT_WINDOW_RE = /^credits?$/i
+const PURE_BALANCE_TEXT_RE = /^([+-])?\s*(?:[$¥€£])?\s*([+-])?(\d+(?:\.\d+)?)\s*(?:USD|CNY|RMB|EUR|GBP|credits?)?$/i
+
+/** Parse a pure non-percentage balance string (e.g. "$0.00", "-$1.50", "$32.12"); returns undefined for ratios ("0 / 6900") or free text ("Unknown"). */
+function parsePureBalanceValue(text: string): number | undefined {
+  const trimmed = text.trim()
+  if (!trimmed || trimmed.includes('/') || trimmed.includes('%')) return undefined
+  const match = PURE_BALANCE_TEXT_RE.exec(trimmed)
+  if (!match || !match[3]) return undefined
+  if (match[1] && match[2]) return undefined
+  const sign = match[1] === '-' || match[2] === '-' ? -1 : 1
+  const magnitude = Number(match[3])
+  return Number.isFinite(magnitude) ? sign * magnitude : undefined
+}
+
+function isWindowExhausted(win: FormattedQuotaWindow): boolean {
+  if (win.unlimited) return false
+  if (win.remainingPercent >= 0) return win.remainingPercent <= 0
+  const balance = parsePureBalanceValue(win.valueText)
+  return balance !== undefined && balance <= 0
+}
+
+/**
+ * Determine whether an account's active-model quota is exhausted (0% remaining on a gating
+ * window, or <=0 prepaid balance):
+ * - Unlimited windows are never exhausted;
+ * - Additive credit pools (`Credits` + `Extra credits` / `Total credits`) stay available while
+ *   `Total credits` (or either base/extra credit pool) still has remaining quota;
+ * - Optional `Extra` windows never mark an account exhausted while primary windows still have quota;
+ * - Standard rate-limit / subscription windows (e.g. `5h`, `7d`, `Subscription`) are conjunctive:
+ *   hitting 0% on any gating window makes the account unusable until reset;
+ * - Non-percentage prepaid balance windows (`$0.00`) count as exhausted when <= 0; ratios
+ *   ("0 / 6900") and free text ("Unknown") are never falsely marked exhausted.
+ */
+export function isAccountExhausted(windows: readonly FormattedQuotaWindow[]): boolean {
+  if (windows.length === 0) return false
+
+  const totalCreditWindows: FormattedQuotaWindow[] = []
+  const extraCreditWindows: FormattedQuotaWindow[] = []
+  const baseCreditWindows: FormattedQuotaWindow[] = []
+  const standardWindows: FormattedQuotaWindow[] = []
+
+  for (const win of windows) {
+    if (TOTAL_CREDIT_WINDOW_RE.test(win.label)) {
+      totalCreditWindows.push(win)
+    } else if (EXTRA_CREDIT_WINDOW_RE.test(win.label)) {
+      extraCreditWindows.push(win)
+    } else if (BASE_CREDIT_WINDOW_RE.test(win.label)) {
+      baseCreditWindows.push(win)
+    } else {
+      standardWindows.push(win)
+    }
+  }
+
+  if (standardWindows.some(isWindowExhausted)) return true
+
+  if (totalCreditWindows.length > 0) {
+    return totalCreditWindows.some(isWindowExhausted)
+  }
+  if (baseCreditWindows.length > 0 && extraCreditWindows.length > 0) {
+    return [...baseCreditWindows, ...extraCreditWindows].every(isWindowExhausted)
+  }
+  if (baseCreditWindows.length > 0) {
+    return baseCreditWindows.some(isWindowExhausted)
+  }
+  if (standardWindows.length === 0 && extraCreditWindows.length > 0) {
+    return extraCreditWindows.every(isWindowExhausted)
+  }
+  return false
+}
+
 function worstTone(tones: readonly ('ok' | 'warn' | 'err' | 'neutral')[]): 'ok' | 'warn' | 'err' | 'neutral' {
   if (tones.includes('err')) return 'err'
   if (tones.includes('warn')) return 'warn'
@@ -414,11 +489,14 @@ export function selectModelQuotas(
         ? 'warn'
         : 'neutral'
 
+    const exhausted = isAccountExhausted(windows)
+
     accountsWithOrder.push({
       key,
       provider: bucket.provider,
       ...(bucket.account !== undefined ? { account: bucket.account } : {}),
       last,
+      exhausted,
       ...(lastServedAtMs !== undefined ? { lastServedAtMs } : {}),
       ...(readAtMs !== undefined ? { readAtMs } : {}),
       windows,
@@ -430,13 +508,15 @@ export function selectModelQuotas(
 
   // Primary account priority:
   // 1. Accounts with real quota windows before error/windowless accounts;
-  // 2. Gateway `last: true` (account that served the most recent request);
-  // 3. Most recent `lastServedAtMs`;
-  // 4. Gateway provider/account order.
+  // 2. Accounts with remaining quota before exhausted accounts;
+  // 3. Gateway `last: true` (account that served the most recent request);
+  // 4. Most recent `lastServedAtMs`;
+  // 5. Gateway provider/account order.
   accountsWithOrder.sort((a, b) => {
     const aHasWindows = a.windows.length > 0 ? 0 : 1
     const bHasWindows = b.windows.length > 0 ? 0 : 1
     if (aHasWindows !== bHasWindows) return aHasWindows - bHasWindows
+    if (a.exhausted !== b.exhausted) return a.exhausted ? 1 : -1
     if (a.last !== b.last) return a.last ? -1 : 1
     const aServed = a.lastServedAtMs ?? -1
     const bServed = b.lastServedAtMs ?? -1

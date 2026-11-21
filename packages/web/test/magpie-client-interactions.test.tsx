@@ -18,7 +18,7 @@ ensureHappyDom()
 const { createRoot } = await import('react-dom/client')
 const { PluginClientContext, resolveLocalizedText } = await import('@helmx/plugin-client')
 const { importBuiltinClientModule, mountSharedPluginNamespaces, setBuiltinClientStub } = await import('./helpers/builtin-clients.js')
-const { selectModelQuotas, resolveEffectiveMagpieModel, resolveRefreshIntervalSec } = await import('../../plugins/src/magpie/client/quota-model.js')
+const { isAccountExhausted, selectModelQuotas, resolveEffectiveMagpieModel, resolveRefreshIntervalSec } = await import('../../plugins/src/magpie/client/quota-model.js')
 const { parseStatus } = await import('../../plugins/src/magpie/client/models.js')
 const {
   noteMagpieManualRefresh,
@@ -574,4 +574,178 @@ test('quota-model 与 auto-refresh 纯逻辑：版本专属池优先、刷新间
   } finally {
     resetMagpieAutoRefreshForTest()
   }
+})
+
+test('Composer 状态栏多账号优先策略：已耗尽账号（含 order 靠前或 last: true）让位给仍有余量的账号', { timeout: 60_000 }, async () => {
+  // 1) 真实场景：newapi 首账号 blue 已 0%，次账号 fjay 仍有 78% → 折叠状态栏优先展示 fjay，弹窗将 fjay 排第一并保留 blue
+  const exhaustedFirstDoc = {
+    ...MULTI_ACCOUNT_DOC,
+    modelOwners: {
+      'auto/gpt-6.2-sol': 'newapi',
+      'auto/gemini-4-neon': 'antigravity-bridge',
+    },
+    quotas: [
+      {
+        provider: 'newapi',
+        account: 'blue',
+        windowLabel: 'Subscription',
+        remainingPercent: 0,
+        displayText: '$199.54 / $200.00',
+        resetText: '2h',
+        last: true,
+        lastServedAt: '2026-11-21T14:10:00Z',
+      },
+      {
+        provider: 'newapi',
+        account: 'fjay',
+        windowLabel: 'Subscription',
+        remainingPercent: 78,
+        displayText: '$44.96 / $200.00',
+        resetText: '2h',
+      },
+      // 限流合取窗口：5h 归零（即便 7d 仍有 90% 且 last: true）视为已耗尽，让位给可用账号 randal
+      {
+        provider: 'antigravity-bridge',
+        account: 'halt',
+        windowLabel: 'Gemini · 5 hours',
+        pool: 'Gemini',
+        remainingPercent: 0,
+        resetText: '3h',
+        last: true,
+      },
+      {
+        provider: 'antigravity-bridge',
+        account: 'halt',
+        windowLabel: 'Gemini · 7 days',
+        pool: 'Gemini',
+        remainingPercent: 90,
+        resetText: '2026-11-28',
+        last: true,
+      },
+      {
+        provider: 'antigravity-bridge',
+        account: 'randal',
+        windowLabel: 'Gemini · 5 hours',
+        pool: 'Gemini',
+        remainingPercent: 100,
+        resetText: '5h',
+      },
+      {
+        provider: 'antigravity-bridge',
+        account: 'randal',
+        windowLabel: 'Gemini · 7 days',
+        pool: 'Gemini',
+        remainingPercent: 100,
+        resetText: '2026-11-28',
+      },
+    ],
+  }
+
+  setBuiltinClientStub({ docs: { status: exhaustedFirstDoc }, config: { refreshIntervalSec: 0 } })
+  try {
+    const spy = makeSpyCtx('zh-CN')
+    const newapiMount = await mountComposerQuota(spy, {
+      conversation: makeConversation('magpie/auto/gpt-6.2-sol'),
+    })
+    try {
+      const trigger = newapiMount.host.querySelector<HTMLButtonElement>('button.magpie-quota-trigger')
+      assert.ok(trigger !== null)
+      const triggerText = trigger.textContent ?? ''
+      assert.match(triggerText, /Subscription.*78%.*\(2h\)/, '折叠时优先显示有额度的 fjay 而非 0% 的 blue')
+      assert.match(triggerText, /\+1/, '仍显示 +1 多账号角标')
+      assert.equal(trigger.classList.contains('magpie-quota-trigger--err'), false, '主展示账号有余量时不染红报警')
+
+      await act(async () => {
+        trigger.click()
+      })
+      const popover = document.body.querySelector<HTMLElement>('.magpie-quota-popover')
+      assert.ok(popover !== null)
+      const accountNames = [...popover.querySelectorAll('.magpie-quota-account-name')].map((el) => el.textContent)
+      assert.deepEqual(accountNames, ['fjay', 'blue'], '展开列表有余量账号排首、已耗尽账号排后保留可见')
+    } finally {
+      newapiMount.unmount()
+    }
+
+    const geminiMount = await mountComposerQuota(spy, {
+      conversation: makeConversation('magpie/auto/gemini-4-neon'),
+    })
+    try {
+      const triggerText = geminiMount.host.textContent ?? ''
+      assert.match(triggerText, /5h.*100%/, '5h 限流窗口归零的 last 账号让位给仍有额度的 randal')
+      assert.match(triggerText, /7d.*100%/)
+    } finally {
+      geminiMount.unmount()
+    }
+  } finally {
+    setBuiltinClientStub({ docs: { status: STATUS_DOC } })
+  }
+
+  // 2) 纯逻辑边界：加法积分池、预付余额、全耗尽回退与报错账号对比
+  const wbModel = resolveEffectiveMagpieModel('magpie/workbuddy/wb-1')
+  assert.ok(wbModel !== null)
+  const wbStatus = parseStatus({
+    ...MULTI_ACCOUNT_DOC,
+    quotas: [
+      // 基础 Credits=0%，但 Extra credits=100% / Total credits=94% → 仍有余量，不误判耗尽
+      { provider: 'workbuddy', account: 'primary-with-extra', windowLabel: 'Credits', remainingPercent: 0, last: true },
+      { provider: 'workbuddy', account: 'primary-with-extra', windowLabel: 'Extra credits', remainingPercent: 100, displayText: '0 / 7966' },
+      { provider: 'workbuddy', account: 'primary-with-extra', windowLabel: 'Total credits', remainingPercent: 94 },
+      { provider: 'workbuddy', account: 'backup', windowLabel: 'Credits', remainingPercent: 50 },
+    ],
+  })
+  const wbSummary = selectModelQuotas(wbModel, wbStatus)
+  assert.equal(wbSummary.primary?.account, 'primary-with-extra', 'Total credits 仍有余量时维持主账号不误切')
+  assert.equal(wbSummary.primary?.exhausted, false)
+
+  // 预付余额 $0.00 让位给 $32.12
+  const balanceModel = resolveEffectiveMagpieModel('magpie/sub2api/test')
+  assert.ok(balanceModel !== null)
+  const balanceStatus = parseStatus({
+    ...MULTI_ACCOUNT_DOC,
+    quotas: [
+      { provider: 'sub2api', account: 'empty', windowLabel: 'Balance', remainingPercent: -1, displayText: '$0.00', last: true },
+      { provider: 'sub2api', account: 'funded', windowLabel: 'Balance', remainingPercent: -1, displayText: '$32.12' },
+    ],
+  })
+  const balanceSummary = selectModelQuotas(balanceModel, balanceStatus)
+  assert.equal(balanceSummary.primary?.account, 'funded', '预付余额 $0.00 视为已耗尽，优先显示有余额账号')
+  assert.equal(balanceSummary.accounts[1]?.exhausted, true)
+
+  // 全部账号耗尽：按 last / order 回退，且诚实标红；已耗尽真实读数仍优于无窗口报错账号
+  const allOutModel = resolveEffectiveMagpieModel('magpie/newapi/gpt-6')
+  assert.ok(allOutModel !== null)
+  const allOutStatus = parseStatus({
+    ...MULTI_ACCOUNT_DOC,
+    quotas: [
+      { provider: 'newapi', account: 'broken', remainingPercent: -1, error: 'timeout' },
+      { provider: 'newapi', account: 'first-zero', windowLabel: 'Subscription', remainingPercent: 0 },
+      { provider: 'newapi', account: 'last-zero', windowLabel: 'Subscription', remainingPercent: 0, last: true },
+    ],
+  })
+  const allOutSummary = selectModelQuotas(allOutModel, allOutStatus)
+  assert.equal(allOutSummary.primary?.account, 'last-zero', '全部耗尽时按 last 优先级回退且不落到报错账号')
+  assert.equal(allOutSummary.primary?.exhausted, true)
+  assert.equal(allOutSummary.triggerTone, 'err')
+  assert.equal(allOutSummary.accounts.map((a) => a.account).join(','), 'last-zero,first-zero,broken')
+
+  // 可选 Extra 窗口为 0% 时不误判仍有主窗口额度的账号，非百分比比值 "0 / 6900" 不误判耗尽
+  assert.equal(
+    isAccountExhausted([
+      { label: '5h', valueText: '80%', tone: 'ok', remainingPercent: 80, unlimited: false, sortRank: 300 },
+      { label: 'Extra usage', valueText: '0%', tone: 'err', remainingPercent: 0, unlimited: false, sortRank: 60_000 },
+    ]),
+    false,
+  )
+  assert.equal(
+    isAccountExhausted([
+      { label: 'Extra credits', valueText: '0 / 6900', tone: 'neutral', remainingPercent: -1, unlimited: false, sortRank: 60_000 },
+    ]),
+    false,
+  )
+  assert.equal(
+    isAccountExhausted([
+      { label: '5h', valueText: '∞', tone: 'ok', remainingPercent: -1, unlimited: true, sortRank: 300 },
+    ]),
+    false,
+  )
 })

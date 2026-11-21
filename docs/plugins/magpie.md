@@ -26,7 +26,7 @@
 
 公开文档 `status` 实时汇总：`gatewayUrl` / `configuredRoot` / `local` / `reachable` / `modelCount` / `groupCount` / `modelOwners`（当前网关目录 `modelId -> provider` 映射）/ `groupProviders`（路由组成员 provider 集合）/ `lastRefreshedAt` / `quotasRefreshedAt` / `quotasUpdatedAt` / `lastError` / `quotasError`（成功后清除不残留）/ `quotas`（保留原始单位、`pool`、`last`、`resetsAt` 与错误原因）/ `routes` / `diagnostics`。驱动设置面板（`magpie-panel`）、命令面板（`magpie-refresh`）与输入框底部状态栏插槽（`COMPOSER_STATUS_SLOT`，同时覆盖已建会话与新建对话待命页）。
 
-- **当前模型单账号直出 + 多账号按需展开**：状态栏仅针对当前选中的 `magpie/*` 模型（自动解引用 `tier/<id>` 档位）做供应商与模型池（`pool`）双重过滤，剔除无关模型池与非聊天窗口；外层只展示当前生效的单账号额度窗口（多账号附 `+N` 展开角标），点击弹出 Radix `Popover` 列表仅呈现该模型下的相关账号与窗口并支持手动刷新；非 Magpie 模型返回 `null` 自动收起；
+- **当前模型单账号直出 + 多账号按需展开**：状态栏仅针对当前选中的 `magpie/*` 模型（自动解引用 `tier/<id>` 档位）做供应商与模型池（`pool`）双重过滤，剔除无关模型池与非聊天窗口；外层只展示当前生效的单账号额度窗口（多账号存在已耗尽账号时优先展示仍有余量的账号，并附 `+N` 展开角标），点击弹出 Radix `Popover` 列表仅呈现该模型下的相关账号与窗口并支持手动刷新；非 Magpie 模型返回 `null` 自动收起；
 - **前台可配置轮询 + 回合结算刷新**：前台可见且使用 Magpie 模型时按 `refreshIntervalSec`（默认 `5` 秒，`0` 关闭；多窗格/分屏共享单飞锁）自动刷新模型目录与实时配额（目录未变时跳过磁盘落盘与全局 `models.changed` 广播，避免写放大）；`turn_settled` 后继续后台静默刷新配额路由（`?kept=1`，不问供应商、不阻塞回合）。
 
 ## 配置与数据边界
