@@ -5,6 +5,8 @@
     "moduleResolution": "Bundler",
     "jsx": "react-jsx",
     "noEmit": true,
+    "incremental": true,
+    "tsBuildInfoFile": "../../node_modules/.cache/tsc/plugin-client.tsbuildinfo",
     "declaration": false,
     "sourceMap": false,
     "allowImportingTsExtensions": true

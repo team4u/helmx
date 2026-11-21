@@ -43,6 +43,20 @@ function isExistingFile(filePath) {
   }
 }
 
+function isExistingDir(dirPath) {
+  try {
+    return lstatSync(dirPath).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function isPluginClientAssetPath(posixRel, preserveClients) {
+  if (!preserveClients) return false;
+  const parts = posixRel.split('/');
+  return parts.length >= 3 && (parts[1] === 'client' || parts[1] === 'dist-client');
+}
+
 /** Resolve the absolute tsBuildInfoFile path from a package's tsconfig.json (if configured). */
 export function resolveTsBuildInfoFile(pkgRoot) {
   const tsconfigPath = path.join(pkgRoot, 'tsconfig.json');
@@ -64,12 +78,18 @@ function hasMatchingSource(srcDir, posixRel, preserveClients) {
   if (preserveClients && parts.length >= 3 && parts[1] === 'client') {
     return isExistingFile(path.join(srcDir, ...parts));
   }
+  // packages/plugins: dist/<pluginName>/dist-client/** holds precompiled client bundles managed
+  // by copy-plugin-clients.mjs; keep while src/<pluginName>/client exists so incremental builds
+  // reuse unchanged bundles (pruned when plugin client is deleted, wiped on --force/HELMX_CLEAN_DIST=1).
+  if (preserveClients && parts.length >= 3 && parts[1] === 'dist-client') {
+    return isExistingDir(path.join(srcDir, parts[0], 'client'));
+  }
   for (const spec of TS_OUTPUT_SPECS) {
     if (!posixRel.endsWith(spec.ext)) continue;
     const stem = posixRel.slice(0, -spec.ext.length);
     if (!stem) return false;
-    // With preserveClients on, tsconfig excludes src/*/client; client .ts files must not count as dist JS evidence.
-    if (preserveClients && parts.length >= 3 && parts[1] === 'client') return false;
+    // With preserveClients on, tsconfig excludes src/*/client; client/dist-client files must not count as dist JS evidence.
+    if (preserveClients && parts.length >= 3 && (parts[1] === 'client' || parts[1] === 'dist-client')) return false;
     return spec.sources.some((srcExt) => isExistingFile(path.join(srcDir, `${stem}${srcExt}`)));
   }
   return false;
@@ -139,7 +159,7 @@ export function pruneDist(options) {
         continue;
       }
       if (ent.isFile() && !ent.isSymbolicLink() && hasMatchingSource(srcDir, posixRel, preserveClients)) {
-        if (JS_OUTPUT_SUFFIXES.some((s) => posixRel.endsWith(s))) {
+        if (!isPluginClientAssetPath(posixRel, preserveClients) && JS_OUTPUT_SUFFIXES.some((s) => posixRel.endsWith(s))) {
           keptJsCount += 1;
         }
         continue;
