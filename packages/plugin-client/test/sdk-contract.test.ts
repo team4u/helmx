@@ -14,7 +14,10 @@
  * 4. PluginSlot port contract: short-name qualification, single first item,
  *    fallback, and explicit cycle warning;
  * 5. MarkdownView / CodeBlockView port delegation: renders the host-injected
- *    implementations.
+ *    implementations;
+ * 6. ToolCallDetails: shared inline tool-call details primitive renders the
+ *    raw input/output via host trace classes and forwards the artifact button
+ *    to the host previewer.
  *
  * Note: error-message regexes below pin the exact English messages thrown by
  * host-port.ts / plugin-context.ts so that explicit failure behavior remains
@@ -978,4 +981,63 @@ test('usePluginConfig: throws explicitly when called outside <PluginUiView>', { 
     /usePluginContext/,
     'usePluginConfig throws outside <PluginUiView>',
   )
+})
+
+// ---------------------------------------------------------------------------
+// 6. ToolCallDetails: shared inline tool-call details primitive
+// ---------------------------------------------------------------------------
+
+test('ToolCallDetails: renders raw input/output with host trace classes; the artifact button forwards ctx.openArtifact and labels localize', { timeout: 60_000 }, async () => {
+  const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
+  const port = makePort(log)
+  const tree = (locale: 'en' | 'zh-CN') =>
+    e(SDK.PluginClientHostContext.Provider, { value: { ...port, locale } },
+      e(SDK.PluginClientContext.Provider, { value: SDK.createPluginClientContext({ ...port, locale }, 'p1', 7) },
+        e(SDK.ToolCallDetails, { input: { resume: 11 }, result: 'done text', artifactRef: 'art_full' })))
+  const { host, root } = mount(tree('zh-CN'))
+  try {
+    const details = host.querySelector('details.tool-call-details')
+    assert.ok(details !== null, 'renders a details.tool-call-details (host public trace vocabulary)')
+    assert.equal(details.querySelector('summary')?.textContent, '调用详情')
+    assert.deepEqual(
+      [...details.querySelectorAll('.trace-section-label')].map((n) => n.textContent),
+      ['输入', '输出'],
+    )
+    assert.ok(details.querySelector('.trace-expanded-body')?.classList.contains('selectable') === true)
+    assert.match(details.textContent!, /"resume": 11/, 'object input is pretty-printed as JSON')
+    assert.match(details.textContent!, /done text/, 'string result passes through verbatim')
+    const artifact = details.querySelector('button')
+    assert.ok(artifact !== null, 'artifactRef renders an open-artifact button')
+    assert.match(artifact.textContent!, /打开完整产物 #art_full/)
+    await act(async () => {
+      artifact!.click()
+    })
+    assert.deepEqual(log.artifacts, [{ artifactId: 'art_full', conversationId: 7 }], 'the button forwards to the host artifact previewer via the port (bound to the context conversation)')
+    act(() => root.render(tree('en')))
+    assert.equal(host.querySelector('summary')?.textContent, 'Call details')
+    assert.deepEqual(
+      [...host.querySelectorAll('.trace-section-label')].map((n) => n.textContent),
+      ['Input', 'Output'],
+    )
+  } finally {
+    act(() => root.unmount())
+  }
+})
+
+test('ToolCallDetails: omitted facts render no section and no artifact button (never fabricates empty blocks)', { timeout: 60_000 }, () => {
+  const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
+  const port = makePort(log)
+  const { host, root } = mount(
+    e(SDK.PluginClientHostContext.Provider, { value: port },
+      e(SDK.PluginClientContext.Provider, { value: SDK.createPluginClientContext(port, 'p1', 7) },
+        e(SDK.ToolCallDetails, { result: { ok: true }, artifactRef: '' }))))
+  try {
+    const details = host.querySelector('details.tool-call-details')
+    assert.ok(details !== null)
+    assert.deepEqual([...details.querySelectorAll('.trace-section-label')].map((n) => n.textContent), ['输出'], 'no Input section when input is undefined (makePort locale is zh-CN)')
+    assert.match(details.textContent!, /"ok": true/)
+    assert.equal(details.querySelectorAll('button').length, 0, 'an empty artifactRef renders no button')
+  } finally {
+    act(() => root.unmount())
+  }
 })

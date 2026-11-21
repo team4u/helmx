@@ -210,11 +210,6 @@ export const TOOL_TAG_FIND = L('Find', '查找')
 export const statToolSteps = t1((steps: number) => L(`${steps} tools loaded`, `已载 ${steps} 次工具`))
 export const summarizeJsonMoreSuffix = t1((count: number) => L(` (+${count} more)`, ` 等 ${count} 项`))
 
-export const DETAILS_SUMMARY = L('Call details', '调用详情')
-export const DETAILS_INPUT = L('Input', '入参')
-export const DETAILS_OUTPUT = L('Output', '输出')
-export const detailsOpenArtifactLabel = t1((artifactId: string) => L(`Open full artifact #${artifactId}`, `打开完整产物 #${artifactId}`))
-
 // ---------------------------------------------------------------------------
 // External run summary
 // ---------------------------------------------------------------------------

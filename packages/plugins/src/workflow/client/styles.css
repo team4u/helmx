@@ -276,16 +276,6 @@
   .subagent-live-actions { gap: 2px; }
 }
 
-.tool-call-details {
-  min-width: 0;
-  padding: 4px 8px;
-  font-size: 11px;
-  color: var(--fg-muted);
-}
-
-.tool-call-details > summary { cursor: pointer; }
-.tool-call-details .code-block-pre { max-height: 220px; overflow: auto; }
-
 /* External runtime (no child conversation) background task summary card */
 .subagent-external-body {
   gap: 6px;

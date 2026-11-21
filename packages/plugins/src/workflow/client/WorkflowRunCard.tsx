@@ -12,22 +12,22 @@ import type { ReactNode } from 'react'
 import type { ToolViewProps } from '@helmx/protocol'
 import type { WorkflowRunSummary } from '../../contracts.js'
 import {
+  formatCompactTimestamp,
+  formatDurationMs,
   MarkdownText,
   PopoverClose,
   PopoverContent,
   PopoverRoot,
   PopoverTrigger,
-  StatusLight,
-  formatCompactTimestamp,
-  formatDurationMs,
   resolveLocalizedText,
+  StatusLight,
+  ToolCallDetails,
+  type LocalizedText,
   useConversations,
   usePluginContext,
   usePluginLocale,
   useToolActivity,
-  type LocalizedText,
 } from '@helmx/plugin-client'
-import { ToolCallDetailsInline } from './ToolCallDetailsInline.tsx'
 import { WorkflowNodeCard } from './WorkflowNodeCards.tsx'
 import { useElapsedNowMs, useInspectedRunResult, usePluginSessionDoc } from './hooks.ts'
 import { Icon } from './WorkflowIcon.tsx'
@@ -323,7 +323,7 @@ export function WorkflowToolView(props: ToolViewProps): ReactNode {
         </button>
         <div id={detailsId} hidden={!detailsOpen}>
           {detailsOpen ? (
-            <ToolCallDetailsInline input={props.input} result={props.result} artifactRef={props.artifactRef} />
+            <ToolCallDetails input={props.input} result={props.result} artifactRef={props.artifactRef} />
           ) : null}
         </div>
       </div>
@@ -718,7 +718,7 @@ export function WorkflowRunCardBody(props: {
           </>
         ) : null}
       </div>
-      {toolProps !== undefined ? <ToolCallDetailsInline input={toolProps.input} result={toolProps.result} artifactRef={toolProps.artifactRef} /> : null}
+      {toolProps !== undefined ? <ToolCallDetails input={toolProps.input} result={toolProps.result} artifactRef={toolProps.artifactRef} /> : null}
     </section>
   )
 }

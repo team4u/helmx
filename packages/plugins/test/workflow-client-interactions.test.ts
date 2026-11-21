@@ -448,8 +448,8 @@ test('详情加载失败可重试；内嵌详情、重试与产物操作的点�
 test('工具输出从未返回到对象再到文本时保留 hook 顺序，调用详情始终可用', { timeout: 60_000 }, async () => {
   setWorkflowClientStub()
   const spy = makeSpyCtx()
-  const mod = await importWorkflowClientModule('ToolCallDetailsInline.tsx')
-  const Details = mod['ToolCallDetailsInline'] as React.ComponentType<Record<string, unknown>>
+  // 调用详情原语已上提为共享 SDK 组件（@helmx/plugin-client ToolCallDetails）。
+  const Details = SDK.ToolCallDetails as React.ComponentType<Record<string, unknown>>
   const artifacts: string[] = []
   spy.openArtifact = (id) => { artifacts.push(id) }
   const { host, rerender, unmount } = await mountClient(spy, e(Details, { input: { prompt: '任务' } }))

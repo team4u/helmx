@@ -18,4 +18,8 @@ export const uiCopy = {
   clear: { en: 'Clear', 'zh-CN': '清空' },
   view: { en: 'View', 'zh-CN': '视图' },
   renderAgain: { en: 'Render again', 'zh-CN': '重新渲染' },
+  callDetails: { en: 'Call details', 'zh-CN': '调用详情' },
+  detailsInput: { en: 'Input', 'zh-CN': '输入' },
+  detailsOutput: { en: 'Output', 'zh-CN': '输出' },
+  openFullArtifact: { en: 'Open full artifact', 'zh-CN': '打开完整产物' },
 } as const satisfies Record<string, LocalizedText>

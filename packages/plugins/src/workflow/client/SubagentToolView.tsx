@@ -13,6 +13,7 @@ import type { ToolViewProps } from '@helmx/protocol'
 import type { WorkflowRunSummary } from '../../contracts.js'
 import {
   StatusLight,
+  ToolCallDetails,
   formatDurationMs,
   resolveLocalizedText,
   useConversation,
@@ -23,7 +24,6 @@ import {
 } from '@helmx/plugin-client'
 import { useElapsedNowMs, usePluginSessionDoc } from './hooks.ts'
 import { Icon } from './WorkflowIcon.tsx'
-import { ToolCallDetailsInline } from './ToolCallDetailsInline.tsx'
 import {
   cleanInlineMarkdown,
   isLatestSubagentCallForTarget,
@@ -342,7 +342,7 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
       {!canOpenChildDrawer && !canOpenWorkbenchRun ? (
         <div id={detailsId} hidden={!detailsOpen}>
           {detailsOpen ? (
-            <ToolCallDetailsInline input={props.input} result={props.result} artifactRef={props.artifactRef} />
+            <ToolCallDetails input={props.input} result={props.result} artifactRef={props.artifactRef} />
           ) : null}
         </div>
       ) : null}
