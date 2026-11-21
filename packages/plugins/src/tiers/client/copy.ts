@@ -290,3 +290,24 @@ export function tiersActionFailed(err: unknown, locale: HelmxLocale): string {
   const detail = err instanceof Error ? err.message : String(err)
   return locale === 'zh-CN' ? `操作失败：${detail}` : `Operation failed: ${detail}`
 }
+
+export function buildTiersPickerCopy(locale: HelmxLocale): Record<string, string> {
+  if (locale === 'zh-CN') {
+    return {
+      defaultLabel: '选择具体模型',
+      searchAria: '搜索模型',
+      searchPlaceholder: '搜索模型…',
+      refreshCatalog: '刷新动态模型目录',
+      listHeader: '模型列表',
+      navHint: '↑↓ 选择 · Enter 确认',
+      emptyCatalog: '暂无可用模型，请先在模型与凭据中配置提供商密钥',
+      noMatches: '无匹配模型',
+      rowDefaultTitle: '选择 {model}',
+      catalogUnavailable: '模型目录暂不可用',
+      catalogPartialFailure: '部分模型目录刷新失败',
+      catalogRefreshed: '模型目录已刷新',
+      catalogRefreshFailed: '刷新模型目录失败',
+    }
+  }
+  return {}
+}

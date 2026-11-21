@@ -41,6 +41,7 @@ import {
   tiersRecordToDraftRows,
   validateDraftRows,
   type TierDraftRow,
+  type TierTemplateView,
 } from './models.ts'
 import {
   TIERS_ACTIVE_SECTION,
@@ -98,6 +99,7 @@ import {
   TIERS_TEMPLATE_SAVE_TITLE,
   TIERS_THINKING_DEFAULT,
   TIERS_UNSAVED_BADGE,
+  buildTiersPickerCopy,
   tiersActionFailed,
   tiersTemplateAppliedNotice,
   tiersTemplateSavedNotice,
@@ -112,6 +114,7 @@ export function TiersManagerScreen(_props: ScreenProps): ReactNode {
   const rawDoc = usePluginDoc(TIERS_STATE_DOC)
   const hostModels = useHostModels()
   const parsed = useMemo(() => parseTiersStateDoc(rawDoc), [rawDoc])
+  const pickerCopy = useMemo(() => buildTiersPickerCopy(locale), [locale])
   const models = hostModels?.models ?? []
 
   const [draft, setDraft] = useState<TierDraftRow[]>([])
@@ -222,14 +225,14 @@ export function TiersManagerScreen(_props: ScreenProps): ReactNode {
     }
   }
 
-  const handleApplyTemplate = async (id: string, name: string): Promise<void> => {
+  const handleApplyTemplate = async (tpl: TierTemplateView): Promise<void> => {
     setError(null)
     setNotice(null)
     setBusy(true)
     try {
-      await ctx.callAction('apply_template', { id })
-      dirtyRef.current = false
-      setNotice(tiersTemplateAppliedNotice(name, locale))
+      await ctx.callAction('apply_template', { id: tpl.id })
+      setDraft(tiersRecordToDraftRows(tpl.tiers))
+      setNotice(tiersTemplateAppliedNotice(tpl.name, locale))
     } catch (err) {
       setError(tiersActionFailed(err, locale))
     } finally {
@@ -369,6 +372,8 @@ export function TiersManagerScreen(_props: ScreenProps): ReactNode {
                         showThinkingLevels={false}
                         allowTiers={false}
                         disabled={busy}
+                        copy={pickerCopy}
+                        onNotice={(msg, tone) => ctx.notify(msg, tone)}
                         onApply={(model) => updateRow(row.key, { model })}
                         onResetDefault={() => updateRow(row.key, { model: '' })}
                       />
@@ -514,7 +519,7 @@ export function TiersManagerScreen(_props: ScreenProps): ReactNode {
                             type="button"
                             className="btn btn-secondary btn-sm"
                             disabled={busy}
-                            onClick={() => void handleApplyTemplate(tpl.id, tpl.name)}
+                            onClick={() => void handleApplyTemplate(tpl)}
                           >
                             <span>{t(TIERS_TEMPLATE_APPLY)}</span>
                           </button>

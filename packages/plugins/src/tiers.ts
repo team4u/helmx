@@ -138,7 +138,7 @@ export function createTiersPlugin(): PluginDefinition {
         },
       })
 
-      const stateDoc = ctx.doc<TiersStateDoc>(TIERS_STATE_DOC, createEmptyTiersState())
+      const stateDoc = ctx.doc<TiersStateDoc>(TIERS_STATE_DOC, createEmptyTiersState(), { public: true })
       let registration: ModelTierRegistration | undefined
       let writeChain: Promise<unknown> = Promise.resolve()
 

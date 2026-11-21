@@ -219,11 +219,20 @@ test('TiersManagerScreen: starter draft fill, validation guard, template save/ap
     assert.match(text, /Daily Dev/)
     assert.match(text, /Budget Mode/)
 
-    // Apply first row's template (`budget`, sorted newest first)
+    // Mutate local draft so editor is dirty, then apply first row's template (`budget`, sorted newest first):
+    // draft must immediately replace unsaved rows with the applied template's tiers (`coder` only).
+    await act(async () => {
+      findButton(fullMount.host, 'Add tier').click()
+    })
+    assert.equal(fullMount.host.querySelectorAll('.tiers-id-wrap input').length, 3)
     await act(async () => {
       findButton(fullMount.host, 'Apply').click()
     })
     assert.deepEqual(ctx.actionCalls[0], { actionId: 'apply_template', input: { id: 'budget' } })
+    const afterApplyIds = Array.from(fullMount.host.querySelectorAll('.tiers-id-wrap input')).map(
+      (el) => (el as HTMLInputElement).value,
+    )
+    assert.deepEqual(afterApplyIds, ['coder'], 'applying a template must sync draft rows even when local edits were dirty')
 
     // Delete first row's template (`budget`)
     await act(async () => {

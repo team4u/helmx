@@ -22,6 +22,7 @@ import { wrapModelsForCompaction } from '../../kernel/src/runtime/models.js'
 import {
   MODEL_TIERS_SKILL_ID,
   TIERS_PLUGIN_ID,
+  TIERS_STATE_DOC,
   createTiersPlugin,
 } from '../src/tiers.js'
 import {
@@ -113,6 +114,14 @@ test('integration: default enabled, managed skill, reserved namespace, CRUD acti
     assert.match(clientMod.code, /TiersManagerScreen/)
     assert.match(clientMod.code, /TiersSettingsPanel/)
 
+    // Public doc `state` must be readable immediately (for Web UI usePluginDoc & SSE initial snapshot)
+    const initialDoc = kernel.plugins.getPublicDoc(TIERS_PLUGIN_ID, TIERS_STATE_DOC)
+    assert.deepEqual(initialDoc.value, { tiers: {}, templates: {} })
+    assert.ok(
+      kernel.plugins.listPublicDocs().some((d) => d.pluginId === TIERS_PLUGIN_ID && d.name === TIERS_STATE_DOC),
+      'builtin:tiers/state must appear in listPublicDocs for SSE initial snapshots',
+    )
+
     // 2. Empty roster -> catalog omits modelTiers and before_turn injects nothing
     const emptyCatalog = await kernel.listModels()
     assert.equal(emptyCatalog.modelTiers, undefined)
@@ -184,6 +193,14 @@ test('integration: default enabled, managed skill, reserved namespace, CRUD acti
         { id: 'coder', model: 'faux/fast' },
       ],
     )
+    const afterApplyDoc = kernel.plugins.getPublicDoc(TIERS_PLUGIN_ID, TIERS_STATE_DOC).value as {
+      activeTemplate?: string
+      tiers: Record<string, { model: string }>
+      templates: Record<string, unknown>
+    }
+    assert.equal(afterApplyDoc.activeTemplate, 'budget-2')
+    assert.equal(afterApplyDoc.tiers['coder']?.model, 'faux/fast')
+    assert.ok('flagship-3' in afterApplyDoc.templates && 'budget-2' in afterApplyDoc.templates)
 
     // 6. Switch back to flagship-3 and verify before_turn injects <available_model_tiers>
     await kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'apply_template', { id: 'flagship-3' })
@@ -446,6 +463,11 @@ test('integration: freeze-on-create, thinking precedence, symbolic inheritance, 
     await kernel.plugins.disable(TIERS_PLUGIN_ID)
     const afterDisableCatalog = await kernel.listModels()
     assert.equal(afterDisableCatalog.modelTiers, undefined, 'disabled plugin must unmount tiers from ModelCatalog')
+    assert.throws(
+      () => kernel.plugins.getPublicDoc(TIERS_PLUGIN_ID, TIERS_STATE_DOC),
+      (e: unknown) => e instanceof HelmxError && e.code === 'plugin_doc_not_found' && e.status === 404,
+      'disabled plugin must stop exposing public doc state',
+    )
 
     // Frozen worker conversation still runs without error after plugin disable!
     const afterSeq = kernel.getConversation(worker.id).completionSeq
