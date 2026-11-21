@@ -21,7 +21,11 @@ import type {
   ConversationLive,
   ConversationSummary,
   HelmxLocale,
+  HostModelsSlice,
+  HostNodesSlice,
+  HostProfilesSlice,
   LocaleTranslator,
+  ModelProvidersRefreshResult,
   PluginSlotContributionSpec,
   PluginSummary,
   ScreenSpec,
@@ -133,6 +137,34 @@ export interface PluginClientHostPort {
    * unknown, never fabricated as "no work").
    */
   conversationBackground?: ConversationBackgroundSnapshot
+
+  // ---- Read-only host capability slices (low-frequency catalogs; additive & optional) ----
+  /**
+   * Model catalog slice: normalized per-model entries plus the global default
+   * chain. Absent = unknown (the host has not provided/loaded the catalog) —
+   * consumers must render unknown, never a fabricated empty catalog. The host
+   * forwards one stable reference per catalog revision (no per-consumer
+   * copies), keeping the same cadence as its own SSE `models.changed` state.
+   */
+  models?: HostModelsSlice
+  /**
+   * Compute node registry (SSE snapshot view). Absent = unknown — the host
+   * must pass undefined until its first snapshot arrives: a `local` node
+   * always exists in a booted host, so an early empty array would fabricate
+   * "no nodes" as truth.
+   */
+  nodes?: HostNodesSlice
+  /**
+   * Profile registry (list view of GET /api/profiles; no system prompt /
+   * memory text, no secrets). Absent = unknown (not yet provided/loaded).
+   */
+  profiles?: HostProfilesSlice
+  /**
+   * Dynamic model catalog refresh (POST /api/models/refresh semantics). An
+   * absent method means the host offers no refresh capability — UI hides the
+   * entry and never fakes a successful refresh.
+   */
+  refreshModels?(): Promise<ModelProvidersRefreshResult>
 
   // ---- Plugin docs ----
   /** key: `${pluginId}/${docName}`. */

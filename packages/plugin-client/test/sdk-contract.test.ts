@@ -27,6 +27,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { renderToString } from 'react-dom/server'
 import { PLUGIN_CLIENT_SHARED_EXPORTS, resolveLocalizedText } from '@helmx/protocol'
+import type { HostModelsSlice, HostNodesSlice, HostProfilesSlice, Profile } from '@helmx/protocol'
 import * as SDK from '../src/index.js'
 
 const e = React.createElement
@@ -223,6 +224,66 @@ test('useConversationBackground: port snapshot forwards verbatim; absent host ag
   assert.equal(fromAbsentHost!.size, 0, 'the absent-host fallback index is empty, never fabricated')
   act(() => { void withBackground.root.unmount() })
   act(() => { void withoutBackground.root.unmount() })
+})
+
+test('useModels / useNodes / useProfiles forward port slices by reference; absent slices report unknown (undefined, never fabricated)', { timeout: 60_000 }, () => {
+  const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
+  const models: HostModelsSlice = {
+    models: [
+      { id: 'openai/gpt-4o', provider: 'openai', modelId: 'gpt-4o', available: true, thinkingLevels: ['off', 'high'] },
+      { id: 'anthropic/claude', provider: 'anthropic', modelId: 'claude', available: false, disabled: true, label: 'Claude', thinkingLevels: ['off'] },
+    ],
+    defaultModel: 'openai/gpt-4o',
+    defaultThinkingLevel: 'off',
+  }
+  const nodes: HostNodesSlice = [{ id: 'local', kind: 'local', online: true }]
+  const profiles: HostProfilesSlice = [{ id: 'assistant', humanSelectable: true } as Profile]
+  let seenModels: HostModelsSlice | undefined = 'unset' as unknown as HostModelsSlice
+  let seenNodes: HostNodesSlice | undefined = 'unset' as unknown as HostNodesSlice
+  let seenProfiles: HostProfilesSlice | undefined = 'unset' as unknown as HostProfilesSlice
+  function SliceProbe(): React.ReactNode {
+    seenModels = SDK.useModels()
+    seenNodes = SDK.useNodes()
+    seenProfiles = SDK.useProfiles()
+    return null
+  }
+  const provided = mount(
+    e(SDK.PluginClientHostContext.Provider, { value: makePort(log, { models, nodes, profiles }) }, e(SliceProbe)),
+  )
+  assert.ok(seenModels === models, 'useModels forwards the very same host slice reference (no copy, no mock)')
+  assert.ok(seenNodes === nodes, 'useNodes forwards the very same host slice reference')
+  assert.ok(seenProfiles === profiles, 'useProfiles forwards the very same host slice reference')
+  act(() => { void provided.root.unmount() })
+
+  seenModels = 'unset' as unknown as HostModelsSlice
+  seenNodes = 'unset' as unknown as HostNodesSlice
+  seenProfiles = 'unset' as unknown as HostProfilesSlice
+  const absent = mount(e(SDK.PluginClientHostContext.Provider, { value: makePort(log) }, e(SliceProbe)))
+  assert.equal(seenModels, undefined, 'a host without the model slice reports unknown (undefined), never an empty catalog')
+  assert.equal(seenNodes, undefined, 'a host without the node slice reports unknown (undefined), never an empty registry')
+  assert.equal(seenProfiles, undefined, 'a host without the Profile slice reports unknown (undefined), never an empty registry')
+  act(() => { void absent.root.unmount() })
+})
+
+test('useModels: slice revisions propagate on port value change (reactive passthrough, no polling)', { timeout: 60_000 }, () => {
+  const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
+  const first: HostModelsSlice = { models: [] }
+  const second: HostModelsSlice = {
+    models: [{ id: 'p/m', provider: 'p', modelId: 'm', available: true, thinkingLevels: ['off'] }],
+    defaultModel: 'p/m',
+  }
+  let seen: HostModelsSlice | undefined
+  function Probe(): React.ReactNode {
+    seen = SDK.useModels()
+    return null
+  }
+  const { root } = mount(e(SDK.PluginClientHostContext.Provider, { value: makePort(log, { models: first }) }, e(Probe)))
+  assert.ok(seen === first, 'initial slice forwards verbatim')
+  act(() => {
+    root.render(e(SDK.PluginClientHostContext.Provider, { value: makePort(log, { models: second }) }, e(Probe)))
+  })
+  assert.ok(seen === second, 'a new host slice revision reaches consumers through the changed port value')
+  act(() => { void root.unmount() })
 })
 
 test('usePluginDoc auto-triggers ensurePluginDoc for a missing key (port forwarding)', { timeout: 60_000 }, () => {

@@ -4,7 +4,7 @@
  * No component exports in this file (Fast Refresh friendly).
  */
 import { useCallback, useEffect, useState } from 'react'
-import type { AskSpec, ConversationDetail, ConversationLive, ConversationSummary, UsePluginsResult } from '@helmx/protocol/browser'
+import type { AskSpec, ConversationDetail, ConversationLive, ConversationSummary, HostModelsSlice, HostNodesSlice, HostProfilesSlice, UsePluginsResult } from '@helmx/protocol/browser'
 import { usePluginClientHost } from './host-port.js'
 import type { ConversationBackgroundSnapshot } from './host-port.js'
 import { usePluginContext } from './plugin-context.js'
@@ -34,6 +34,39 @@ const EMPTY_CONVERSATION_BACKGROUND: ConversationBackgroundSnapshot = Object.fre
 export function useConversationBackground(): ConversationBackgroundSnapshot {
   const port = usePluginClientHost()
   return port.conversationBackground ?? EMPTY_CONVERSATION_BACKGROUND
+}
+
+// ---------------------------------------------------------------------------
+// Read-only host capability slices: model catalog / compute nodes / Profiles
+// (absent slice = unknown; the hooks never fabricate empty data)
+// ---------------------------------------------------------------------------
+
+/**
+ * Reactive read-only model catalog slice (normalized entries + global default
+ * chain), updated at the host's SSE `models.changed` cadence — no polling, no
+ * SDK-side refresh. Returns `undefined` while the host has not provided/loaded
+ * the catalog: render an unknown state, never a fabricated empty catalog.
+ */
+export function useModels(): HostModelsSlice | undefined {
+  return usePluginClientHost().models
+}
+
+/**
+ * Reactive read-only compute node registry (SSE snapshot view). Returns
+ * `undefined` while the host has not provided the registry — a `local` node
+ * always exists in a booted host, so "no nodes yet" is unknown, not empty.
+ */
+export function useNodes(): HostNodesSlice | undefined {
+  return usePluginClientHost().nodes
+}
+
+/**
+ * Reactive read-only Profile registry (list view: identity, defaults, tags,
+ * skills; no system prompt / memory text). Returns `undefined` while the host
+ * has not provided the registry.
+ */
+export function useProfiles(): HostProfilesSlice | undefined {
+  return usePluginClientHost().profiles
 }
 
 /**

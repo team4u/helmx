@@ -4,7 +4,9 @@
  * (the host shares the React runtime; this package does not import React types).
  */
 
+import type { ModelCatalog, Profile } from './assets.js'
 import type { ConversationAttachmentRef, ConversationEntry, ConversationScope, ConversationSummary, ToolResultTruncation, WhenBusy } from './conversation.js'
+import type { NodeInfo } from './env-rpc.js'
 import type { HelmxLocale, LocaleTranslator, LocalizedText } from './locale.js'
 import type { PluginSummary } from './plugin-dto.js'
 
@@ -589,7 +591,8 @@ export interface PluginClientContext {
  *
  * The single source of truth of exported symbols is PLUGIN_CLIENT_SHARED_EXPORTS:
  * - hooks: usePluginContext / usePluginLocale / usePluginTranslator / usePluginDoc / usePluginSessionDoc /
- *   useToolActivity / useConversations / useConversation / useConversationBackground / usePlugins;
+ *   useToolActivity / useConversations / useConversation / useConversationBackground / usePlugins /
+ *   usePluginConfig / useModels / useNodes / useProfiles (read-only host capability slices);
  * - accessibility base components: Switch / Select / MultiSelect / Checkbox / Tabs family /
  *   SegmentedControl / HelmxIcon / ViewBoundary / Callout;
  * - StatusLight: unified status light (visually dot-only; the localized label
@@ -613,6 +616,67 @@ export interface UsePluginsResult {
   /** Screen contribution list registered by currently enabled plugins (with owning pluginId). */
   screens: Array<{ pluginId: string; spec: ScreenSpec }>
 }
+
+// ---------------------------------------------------------------------------
+// Host capability slices: read-only host catalogs shared with plugin views
+// (mechanism only — low-frequency catalog facts, never high-frequency
+// streaming state; an absent slice means "unknown", never fabricated data)
+// ---------------------------------------------------------------------------
+
+/**
+ * Normalized per-model view of the host model catalog: the exact shape the
+ * host derives from `GET /api/models` (single implementation of the
+ * normalization stays in the host; the SDK port forwards the same reference,
+ * never a copy or a mock).
+ */
+export interface HostModelEntry {
+  /** Full `'provider/modelId'` reference (the value stored in configs / overrides). */
+  id: string
+  provider: string
+  modelId: string
+  available: boolean
+  /** User explicitly disabled this model (catalog annotation; independent from `available`). */
+  disabled?: boolean
+  /** Display label (defaults to modelId). */
+  label?: string
+  /** Thinking levels this model supports (defaults to `['off']` only). */
+  thinkingLevels: string[]
+  /** Real known model context window (tokens); omitted when unknown. */
+  contextWindow?: number
+}
+
+/**
+ * useModels(): reactive read-only model catalog slice — normalized entries
+ * plus the global default chain (the top-level fields of `ModelCatalog`;
+ * per-model thinking levels are already embedded in each entry, so the
+ * catalog's separate `thinkingLevels` map is not carried). Returns `undefined`
+ * while the host has not provided/loaded the catalog: render an unknown
+ * state, never a fabricated empty catalog. Updates ride the same SSE cadence
+ * as the host (`models.changed`); there is no polling and no SDK-side refresh
+ * (dynamic refresh, when offered, is the port's optional `refreshModels`
+ * action).
+ */
+export interface HostModelsSlice extends Omit<ModelCatalog, 'models' | 'thinkingLevels'> {
+  models: ReadonlyArray<HostModelEntry>
+}
+
+/**
+ * useNodes(): reactive read-only compute node registry (the SSE snapshot view
+ * of `GET /api/nodes`: online flags, hostname/platform, health). Returns
+ * `undefined` while the host has not provided the registry — a `local` node
+ * always exists in a booted host, so "no nodes yet" must render as unknown,
+ * never as an empty cluster.
+ */
+export type HostNodesSlice = ReadonlyArray<NodeInfo>
+
+/**
+ * useProfiles(): reactive read-only Profile registry (the list view of
+ * `GET /api/profiles`: identity, default model / thinking level / node / cwd,
+ * tags, skills; system prompt and memory text are file-carried and never part
+ * of the slice). Returns `undefined` while the host has not provided the
+ * registry.
+ */
+export type HostProfilesSlice = ReadonlyArray<Profile>
 
 /** GET /api/plugins/:id/client.mjs response metadata (HTTP error envelope on failure, never JS). */
 export interface PluginClientModuleInfo {
@@ -666,6 +730,9 @@ export const PLUGIN_CLIENT_SHARED_EXPORTS = [
   'useConversationBackground',
   'usePlugins',
   'usePluginConfig',
+  'useModels',
+  'useNodes',
+  'useProfiles',
   'PluginSlot',
   'Switch',
   'Select',
