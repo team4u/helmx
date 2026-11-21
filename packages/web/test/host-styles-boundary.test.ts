@@ -11,6 +11,7 @@ import { readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
+import ts from 'typescript'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const STYLES_DIR = join(__dirname, '../src/styles')
@@ -94,5 +95,173 @@ test('样式边界：宿主分片零插件私有类名选择器（消除宿主�
         `宿主分片 ${name} 不得选择插件私有类名 .${prefix}*（插件壳结构请复用公共设计系统类）`,
       )
     }
+  }
+})
+
+/**
+ * R3②（SDK → 宿主 CSS 单向词汇边界）：@helmx/plugin-client 组件渲染的全部
+ * 字面 className 词元必须 ⊆ 宿主样式分片类名集 ∪ SDK_SEMANTIC_CLASS_ALLOWLIST。
+ *
+ * 提取用 TypeScript AST 只收「类名句法位置」的字面量（className/class JSX
+ * 属性、joinClass 实参、?? 与三元操作数、模板字面量静态段、*ClassName 形参
+ * 默认值与对象属性），图标名 / 文案等非类名字符串不会误入；动态拼接的运行时
+ * 类名（外部传入的 className 值）不属 SDK 词汇，不在静态面内。
+ *
+ * 「DOM 在用但 CSS 故意不定义」的语义类是合法形态，但必须在此显式登记并
+ * 写明缘由，防止孤儿词汇静默扩散；为登记类补视觉定义时须单独提交并同车移出。
+ */
+const SDK_SRC_DIR = join(__dirname, '../../plugin-client/src')
+
+/** 显式登记的 SDK 语义类（在 DOM 中使用、宿主 CSS 故意不定义；视觉由并列类承担）。 */
+const SDK_SEMANTIC_CLASS_ALLOWLIST: Readonly<Record<string, string>> = {
+  // 架构复审裁决（board #67）：detail drawer 元信息行语义标记，在用三处
+  // （web SkillDetailDrawer / workflow WorkflowLibraryDrawer / apps client），
+  // 视觉由并列的 mono / text-subtle 承担；如需专属视觉，定义单独提交并移出本登记。
+  'primary-drawer-id': 'detail drawer meta-line semantic marker; visuals carried by sibling mono/text-subtle',
+  // 架构复审裁决（board #67）：空态第二行语义标记（swarm workbench 面板与 SDK
+  // EmptyState），继承 .empty-state 的色彩排版，无独立样式诉求。
+  'empty-state-hint': 'empty-state secondary line semantic marker; inherits .empty-state styling',
+  // 门禁首跑发现的同类存量（model-picker 线引入）：ModelPicker 刷新按钮 /
+  // 档位 chip 的语义锚点，视觉由 btn / segmented-control-btn 家族承担。
+  'composer-model-refresh-btn': 'ModelPicker refresh button semantic anchor; visuals carried by btn family',
+  'composer-model-level-chip': 'ModelPicker level chip semantic anchor; visuals carried by segmented-control-btn',
+  // 门禁首跑发现的同类存量（Select 长期存在）：空态提示行字号标记，宿主无
+  // .text-* 工具类体系，色彩由 text-subtle 承担。
+  'text-xs': 'Select empty-hint size marker; no host .text-* utility system, color via text-subtle',
+}
+
+/** 递归收集目录下的 .ts/.tsx 源文件。 */
+function listSourceFiles(dir: string): string[] {
+  const out: string[] = []
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name)
+    if (entry.isDirectory()) out.push(...listSourceFiles(full))
+    else if (/\.(ts|tsx)$/.test(entry.name)) out.push(full)
+  }
+  return out
+}
+
+interface TokenCollector {
+  tokens: Set<string>
+  origins: Map<string, Set<string>>
+  file: string
+}
+
+function pushTokens(collector: TokenCollector, text: string): void {
+  for (const token of text.split(/\s+/)) {
+    if (/^[a-zA-Z][a-zA-Z0-9_-]*$/.test(token)) {
+      collector.tokens.add(token)
+      const origins = collector.origins.get(token) ?? new Set<string>()
+      origins.add(collector.file)
+      collector.origins.set(token, origins)
+    }
+  }
+}
+
+/** 只在「类名句法位置」递归收集字符串字面量。 */
+function collectInClassPosition(expr: ts.Expression | undefined, sourceFile: ts.SourceFile, collector: TokenCollector): void {
+  if (expr === undefined) return
+  if (ts.isStringLiteral(expr) || ts.isNoSubstitutionTemplateLiteral(expr)) {
+    pushTokens(collector, expr.text)
+    return
+  }
+  if (ts.isJsxExpression(expr)) {
+    collectInClassPosition(expr.expression, sourceFile, collector)
+    return
+  }
+  if (ts.isTemplateExpression(expr)) {
+    pushTokens(collector, expr.head.text)
+    for (const span of expr.templateSpans) pushTokens(collector, span.literal.text)
+    return
+  }
+  if (ts.isConditionalExpression(expr)) {
+    collectInClassPosition(expr.whenTrue, sourceFile, collector)
+    collectInClassPosition(expr.whenFalse, sourceFile, collector)
+    return
+  }
+  if (
+    ts.isBinaryExpression(expr) &&
+    (expr.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken || expr.operatorToken.kind === ts.SyntaxKind.BarBarToken)
+  ) {
+    collectInClassPosition(expr.left, sourceFile, collector)
+    collectInClassPosition(expr.right, sourceFile, collector)
+    return
+  }
+  if (ts.isCallExpression(expr)) {
+    // 仅类名拼接助手（joinClass/clsx/cn）的实参属类名位置；其它调用的
+    // 内部字符串（文案、图标名）不收。
+    const callee = expr.expression.getText(sourceFile)
+    if (/^(joinClass|clsx|cn)$/.test(callee)) {
+      for (const arg of expr.arguments) collectInClassPosition(arg as ts.Expression, sourceFile, collector)
+    }
+    return
+  }
+  if (ts.isParenthesizedExpression(expr)) {
+    collectInClassPosition(expr.expression, sourceFile, collector)
+  }
+}
+
+const isClassNameIdentifier = (name: string): boolean => /^(className|class|[a-zA-Z]*ClassName)$/.test(name)
+
+function collectSdkClassTokens(): TokenCollector {
+  const collector: TokenCollector = { tokens: new Set(), origins: new Map(), file: '' }
+  for (const file of listSourceFiles(SDK_SRC_DIR)) {
+    collector.file = file.slice(SDK_SRC_DIR.length + 1)
+    const source = readFileSync(file, 'utf8')
+    const sourceFile = ts.createSourceFile(
+      file,
+      source,
+      ts.ScriptTarget.ES2022,
+      /* setParentNodes */ true,
+      file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+    )
+    const visit = (node: ts.Node): void => {
+      if (ts.isJsxAttribute(node) && isClassNameIdentifier(node.name.getText(sourceFile))) {
+        collectInClassPosition(node.initializer as ts.Expression | undefined, sourceFile, collector)
+      } else if (ts.isPropertyAssignment(node)) {
+        const key = node.name.getText(sourceFile)
+        if (isClassNameIdentifier(key) && (ts.isStringLiteral(node.initializer) || ts.isNoSubstitutionTemplateLiteral(node.initializer))) {
+          pushTokens(collector, node.initializer.text)
+        }
+      } else if (ts.isBindingElement(node) && node.initializer !== undefined) {
+        const name = (node.propertyName ?? node.name).getText(sourceFile)
+        if (isClassNameIdentifier(name) && ts.isStringLiteral(node.initializer) && node.name !== undefined) {
+          pushTokens(collector, node.initializer.text)
+        }
+      }
+      ts.forEachChild(node, visit)
+    }
+    visit(sourceFile)
+  }
+  return collector
+}
+
+test('样式边界：SDK 组件字面 className 词元 ⊆ 宿主 CSS 类名集 ∪ 显式语义类登记（R3②）', { timeout: 60_000 }, () => {
+  const hostClasses = new Set<string>()
+  for (const { css } of readdirSync(STYLES_DIR)
+    .filter((name) => name.endsWith('.css'))
+    .map((name) => ({ name, css: readFileSync(join(STYLES_DIR, name), 'utf8') }))) {
+    for (const match of css.matchAll(/\.([a-zA-Z0-9_-]+)/g)) hostClasses.add(match[1]!)
+  }
+  assert.ok(hostClasses.size > 500, '应能从宿主样式分片解析出类名集')
+
+  const { tokens, origins } = collectSdkClassTokens()
+  assert.ok(tokens.size > 50, `SDK 词元提取异常（仅 ${tokens.size} 个）`)
+
+  const violations: string[] = []
+  for (const token of [...tokens].sort()) {
+    if (hostClasses.has(token)) continue
+    if (token in SDK_SEMANTIC_CLASS_ALLOWLIST) continue
+    violations.push(`.${token} <- ${[...(origins.get(token) ?? [])].join(', ')}`)
+  }
+  assert.ok(
+    violations.length === 0,
+    `SDK 引用了宿主未定义且未登记的类名（需在宿主 CSS 补定义，或在 SDK_SEMANTIC_CLASS_ALLOWLIST 显式登记并写明缘由）：\n${violations.join('\n')}`,
+  )
+
+  // 登记表自身纪律：每个登记项必须仍被 SDK 引用（防僵尸登记），且必须带缘由。
+  for (const [name, reason] of Object.entries(SDK_SEMANTIC_CLASS_ALLOWLIST)) {
+    assert.ok(reason.trim().length > 0, `语义类 .${name} 登记必须写明缘由`)
+    assert.ok(tokens.has(name), `语义类 .${name} 已不被 SDK 引用，应移出登记表`)
   }
 })
