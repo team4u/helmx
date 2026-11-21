@@ -27,7 +27,6 @@ import { parseFlags } from '../args.js'
 import { printValue } from '../output.js'
 import type { HubClient } from '../hub-client.js'
 import {
-  SCAFFOLD_CLIENT_APP_CSS,
   SCAFFOLD_CLIENT_APP_TSX,
   SCAFFOLD_CLIENT_INDEX_TSX,
   SCAFFOLD_INDEX_TS_APP,
@@ -757,8 +756,7 @@ async function runPluginsInit(ctx: CommandContext): Promise<void> {
   if (template === 'app') {
     await fsp.mkdir(path.join(target, 'client'), { recursive: true })
     await fsp.writeFile(path.join(target, 'client', 'index.tsx'), SCAFFOLD_CLIENT_APP_TSX, 'utf8')
-    await fsp.writeFile(path.join(target, 'client', 'styles.css'), SCAFFOLD_CLIENT_APP_CSS, 'utf8')
-    files.push('client/index.tsx', 'client/styles.css')
+    files.push('client/index.tsx')
   }
   await fsp.writeFile(path.join(target, 'README.md'), SCAFFOLD_README(template), 'utf8')
   files.push('README.md')

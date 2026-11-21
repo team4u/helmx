@@ -25,8 +25,7 @@ By default create under the current workspace `<cwd>/apps/<app-id>/`:
 apps/<app-id>/
   plugin.json          # { "id": "<app-id>", "main": "index.ts", "clientRoot": "./client" }
   index.ts             # backend: clientRoot: "./client" + ctx.doc / ctx.action / ctx.ui.screen
-  client/index.tsx     # frontend: main Screen component
-  client/styles.css    # local styles (optional)
+  client/index.tsx     # frontend: main Screen component (zero private stylesheet by default)
 ```
 
 - `app-id` uses kebab-case (e.g. `bill-desk`); the `builtin:` prefix is forbidden;
@@ -49,7 +48,7 @@ Frontend `client/index.tsx` (host shared SDK, import directly without installing
   - **Reactive hooks**: `usePluginContext()` (provides `callAction` / `submitInput` / `openScreen` / `openSplitScreen` / `openConversationDrawer` / `openArtifact` / `openWorkbench` / `notify`), `usePluginDoc(name, pluginId?)`, `usePluginSessionDoc(name, opts?)`, `useConversations()`, `useConversation(id)`, `usePlugins()`, `useToolActivity(callId, active)`;
   - **Page layout primitives (prefer these over hand-rolled page scaffolding)**: `Screen` (fullscreen container + standard page header `title/subtitle/actions`), `ScreenSection` (section container `title/titleExtra`), `DataTable` (composable table shell with unified `loading/empty` placeholders; `thead/tbody` expressed as JSX), `KvGrid` (`items: [{ key, value }]` key-value grid);
   - **Accessible controls and content components**: `HelmxIcon`, `Switch`, `Select`, `MultiSelect`, `Checkbox`, `Tabs / TabsList / TabsTrigger / TabsContent`, `SegmentedControl`, `Dialog / DialogTrigger / DialogContent / DialogTitle / DialogDescription / DialogClose`, `Callout`, `MarkdownView`, `MarkdownText`, `CodeBlockView`, `CopyButton`, `ViewBoundary`, `PluginSlot`;
-- Styling uses host CSS variables (`var(--bg-elevated)`, `var(--border)` etc.) to stay dark/light adaptive; local `.css` files are bundled via `import './styles.css'`; never write the host's styles.css;
+- Styling defaults to zero private CSS: compose layout with SDK primitives (`Screen` header `actions`, `ScreenSection` `titleExtra`, `DataTable`, `KvGrid`) and host public classes (`.input`, `.btn btn-primary`, `.stack-row`, `.loading-state`, `.callout`); add a scoped `client/styles.css` (bundled via `import './styles.css'`) only when the host vocabulary is genuinely insufficient, limit it to your own class names, and keep colors on host CSS variables (`var(--bg-elevated)`, `var(--border)` etc.) to stay dark/light adaptive; never write the host's styles.css;
 - Component files export only components and types (Fast Refresh); the `module` path and named `export` referenced by `client` must match reality (doctor validates compiled artifact exports).
 
 Full runnable template: `load_skill({ skillId: "app-builder", path: "references/fullstack-template.md" })`; for advanced extension points (backend lifecycle hooks, `composerCompleter`, `artifactPreviewer`, workbench panels, etc.), consult `load_skill({ skillId: "helmx-cli", path: "references/skill-and-plugin-dev.md" })` on demand.
