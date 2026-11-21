@@ -12,7 +12,9 @@
  *    the field is only submitted when the user types a new value.
  */
 
-import type { PluginConfigFieldSchema, PluginConfigFieldSource } from '@helmx/protocol/browser'
+import type { NodeInfo, PluginConfigFieldSchema, PluginConfigFieldSource, Profile } from '@helmx/protocol/browser'
+import type { SelectOption } from '@helmx/plugin-client'
+import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 
 export type ConfigValue = string | number | boolean
 
@@ -80,4 +82,61 @@ export function canResetConfigField(
 /** Reset payload for a single field: send { [key]: null } to clear the explicit override and fall back to schema.default. */
 export function buildResetFieldPayload(key: string): Record<string, null> {
   return { [key]: null }
+}
+
+/**
+ * Select options for configSchema `format: 'node'`: the host node registry
+ * snapshot (online nodes labeled by id, offline ones called out honestly).
+ * Empty value = not set; a persisted id missing from the registry stays
+ * selectable as "(not found)" instead of being silently dropped.
+ */
+export function buildNodeConfigOptions(
+  nodes: readonly NodeInfo[],
+  currentNode?: string,
+  t?: WebMessageTranslator,
+): SelectOption<string>[] {
+  const tt = t ?? englishWebTranslator
+  const list: SelectOption<string>[] = [{ value: '', label: tt('plugins.config.unsetOption') }]
+  for (const node of nodes) {
+    list.push({
+      value: node.id,
+      label: node.online ? node.id : tt('plugins.config.nodeOffline', { node: node.id }),
+    })
+  }
+  appendMissingReference(list, currentNode, tt)
+  return list
+}
+
+/**
+ * Select options for configSchema `format: 'profile'`: the host Profile list.
+ * Empty value = not set; a persisted id missing from the list stays selectable
+ * as "(not found)" instead of being silently dropped.
+ */
+export function buildProfileConfigOptions(
+  profiles: readonly Profile[],
+  currentProfile?: string,
+  t?: WebMessageTranslator,
+): SelectOption<string>[] {
+  const tt = t ?? englishWebTranslator
+  const list: SelectOption<string>[] = [{ value: '', label: tt('plugins.config.unsetOption') }]
+  for (const profile of profiles) {
+    list.push({
+      value: profile.id,
+      label: profile.name !== undefined && profile.name !== '' ? `${profile.name} (${profile.id})` : profile.id,
+    })
+  }
+  appendMissingReference(list, currentProfile, tt)
+  return list
+}
+
+/** Keep a configured-but-unlisted reference visible: honest fallback, never silently rewritten. */
+function appendMissingReference(
+  list: SelectOption<string>[],
+  current: string | undefined,
+  tt: WebMessageTranslator,
+): void {
+  const trimmed = current?.trim() ?? ''
+  if (trimmed !== '' && !list.some((o) => o.value === trimmed)) {
+    list.push({ value: trimmed, label: tt('plugins.config.referenceNotFound', { value: trimmed }) })
+  }
 }

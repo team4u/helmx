@@ -32,8 +32,7 @@ full 模板产出 `plugin.json`（含 `clientRoot: "./client"`）、`index.ts`�
 ├── tsconfig.json      # 本地类型检查（编辑器与 CI 用，运行时不依赖）
 ├── package.json       # 可选：npm 依赖声明
 └── client/            # 前端组件源码目录（clientRoot）
-    ├── index.tsx
-    └── styles.css
+    └── index.tsx      # 默认零私有样式表；确需自定义样式时才增加 styles.css（限定自有类名 + 宿主 CSS 变量）
 ```
 
 ```json
@@ -70,10 +69,13 @@ export default {
   name: '示例业务插件',
   version: '1.0.0',
   definePlugin(ctx) {
-    // 1. 配置 Schema（secret: true 自动分离至 credentials.json 并入 SecretStash）
+    // 1. 配置 Schema（secret: true 自动分离至 credentials.json 并入 SecretStash；
+    //    string 字段可用 format 声明宿主标准选择控件：model / node / profile）
     ctx.configSchema({
       apiKey: { type: 'string', secret: true, description: '远端服务认证密钥' },
       retryCount: { type: 'number', default: 3 },
+      model: { type: 'string', format: 'model', label: '执行模型' },
+      nodeId: { type: 'string', format: 'node', label: '目标计算节点' },
     });
 
     // 2. 持久状态文档（紧凑状态；单文档 JSON 上限 2 MiB）
@@ -237,7 +239,7 @@ ctx.service({
 
 ## 配置、数据与错误边界
 
-- **配置**：`ctx.configSchema` 声明字段（`type: string/number/boolean` + `label` / `description` / `default`，`string` 字段支持 `format: 'model'` 渲染宿主可用模型下拉框）；`secret: true` 自动分离至 `credentials.json` `pluginSecrets.<pluginId>` 并入 SecretStash 脱敏。插件中心与 `helmx plugins config <id>` 同权读写。
+- **配置**：`ctx.configSchema` 声明字段（`type: string/number/boolean` + `label` / `description` / `default`，`string` 字段支持 `format: 'model' | 'node' | 'profile'` 由宿主渲染标准选择控件——模型目录 / 计算节点 / Profile，渲染权永远在宿主，插件不自带表单组件；存储值仍是普通字符串 id）；`secret: true` 自动分离至 `credentials.json` `pluginSecrets.<pluginId>` 并入 SecretStash 脱敏。插件中心与 `helmx plugins config <id>` 同权读写。
 - **数据**：专属数据目录 `<dataDir>/plugins/<id>/`；`ctx.doc` / `ctx.sessionDoc` 按 <id> 划分命名空间；单文档超 2 MiB 显式 `413 plugin_doc_too_large`，大体量内容落盘文件资产。
 - **错误边界**：所有外部输入（HTTP body、动作入参、事件载荷）在入口边界 Schema 校验，非法显式拒绝；能力不支持、节点离线（`409 node_offline`）、交接失败必须显式报错附诊断，绝不静默降级、绝不编造 fallback 数据；错误信封统一 `{ error: { code, message, details? } }`。加载/启用失败置 `status: failed` 附结构化 `error`（`stage: scan | load | define | enable`），不拖垮内核。
 

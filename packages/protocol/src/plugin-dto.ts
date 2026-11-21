@@ -202,8 +202,14 @@ export interface PluginInUseItem {
 /** Plugin config field schema; secret: true is automatically split into credentials.json. */
 export interface PluginConfigFieldSchema {
   type: 'string' | 'number' | 'boolean'
-  /** Optional host-rendered semantic control for string fields. */
-  format?: 'model'
+  /**
+   * Optional host-rendered semantic control for string fields. Rendering rights
+   * always stay with the host (no plugin-supplied form components): 'model'
+   * picks from the host model catalog, 'node' from the registered compute
+   * nodes, 'profile' from the host Profiles. Stored values stay plain string
+   * ids; the control only changes how the host renders the field.
+   */
+  format?: 'model' | 'node' | 'profile'
   /** Display copy for the config form field (resolved by the active UI locale). */
   label?: LocalizedText
   /** Display copy describing the field purpose (resolved by the active UI locale). */

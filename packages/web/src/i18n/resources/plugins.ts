@@ -332,4 +332,7 @@ export const pluginsMessages = {
   'plugins.config.reset': { en: 'Reset', 'zh-CN': '重置' },
   'plugins.config.saved': { en: 'Saved', 'zh-CN': '已保存' },
   'plugins.config.save': { en: 'Save configuration', 'zh-CN': '保存配置' },
+  'plugins.config.unsetOption': { en: 'Not set', 'zh-CN': '未设置' },
+  'plugins.config.nodeOffline': { en: '{node} (offline)', 'zh-CN': '{node}（离线）' },
+  'plugins.config.referenceNotFound': { en: '{value} (not found)', 'zh-CN': '{value}（不存在）' },
 } satisfies MessageTable
