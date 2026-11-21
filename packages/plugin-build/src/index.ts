@@ -12,15 +12,19 @@
  *   with `manifest.json`, `.mjs`/`.js` bundles, and `.gz` artifacts;
  * - `transformBackendTs`: synchronously transpiles external plugin backend TypeScript to ESM.
  */
-import type { PluginBuildProvider } from '@helmx/protocol';
+import { HelmxError, type PluginBuildProvider } from '@helmx/protocol';
 import { transformBackendTs } from './backend-ts-transform.js';
-import { compilePluginClientModule } from './client-compiler.js';
+import {
+  compilePluginClientModule,
+  resolveProviderCacheDir,
+} from './client-compiler.js';
 
 export { transformBackendTs } from './backend-ts-transform.js';
 export {
   compilePluginClientModule,
   clearClientCompilerMemoryCache,
   readCachedChunk,
+  resolveDefaultBuiltinClientCacheDir,
   safeDirName,
   safeFileName,
   CLIENT_SHARED_EXTERNALS,
@@ -32,13 +36,39 @@ export { buildPluginClientBundleDir } from './prebuilt-client.js';
 // Test-only utility: installs the Node chunk bridge on `globalThis` when executing split bundles in Node.
 export { installNodeChunkBridge } from './node-chunk-bridge.js';
 
+export interface CreatePluginBuildProviderOptions {
+  /**
+   * Shared disk cache root for built-in plugins (`builtin:*`) in source-compile mode:
+   * - `undefined` (default): automatically uses `<workspaceRoot>/node_modules/.cache/helmx-plugin-clients`
+   *   when running inside a monorepo checkout and `clientRoot` resides under `packages/plugins/src`;
+   * - `string`: explicitly routes `builtin:*` client compilation caches into this directory;
+   * - `false`: disables shared built-in caching (always stores artifacts under `request.cacheDir`).
+   */
+  builtinCacheDir?: string | false;
+}
+
 /** Creates the default plugin build port (client compiler + backend TS transpiler). */
-export function createPluginBuildProvider(): PluginBuildProvider {
+export function createPluginBuildProvider(options?: CreatePluginBuildProviderOptions): PluginBuildProvider {
+  const builtinCacheDir = options?.builtinCacheDir;
+  if (typeof builtinCacheDir === 'string' && builtinCacheDir.trim().length === 0) {
+    throw new HelmxError(
+      'invalid_plugin_definition',
+      'createPluginBuildProvider builtinCacheDir must be a non-empty path or false',
+      400,
+    );
+  }
   return {
-    compileClientModule: (request) =>
-      compilePluginClientModule(request.pluginId, request.clientRoot, request.moduleRef, request.cacheDir, {
+    compileClientModule: (request) => {
+      const effectiveCacheDir = resolveProviderCacheDir(
+        request.pluginId,
+        request.clientRoot,
+        request.cacheDir,
+        builtinCacheDir,
+      );
+      return compilePluginClientModule(request.pluginId, request.clientRoot, request.moduleRef, effectiveCacheDir, {
         ...(request.npmRoots.length > 0 ? { npmRoots: request.npmRoots } : {}),
-      }),
+      });
+    },
     transformBackendTs,
   };
 }

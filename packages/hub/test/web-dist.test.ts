@@ -6,7 +6,7 @@ import { mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import test from 'node:test'
 import { resolveHubWebDistDir, resolveWebDistOption } from '../src/web-dist.js'
-import { useTempDir } from './helpers/hub-test-env.js'
+import { useTempDir } from '@helmx/test-kit/node'
 
 test('payload/repo 布局：hub/dist 与 hub/src 入口均探测同级 web/dist（含 index.html）', { timeout: 60_000 }, (t) => {
   const root = useTempDir(t, 'helmx-webdist-')

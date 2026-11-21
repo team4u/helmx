@@ -22,9 +22,20 @@
  *   0600 + bounded rename retry) and deduplicates concurrent compiles
  *   for the same key. Compilation failures throw explicit `HelmxError`s with diagnostics.
  */
-import { createHash } from 'node:crypto';
-import { mkdirSync, realpathSync, statSync, readFileSync, existsSync, rmSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { basename, isAbsolute, join, dirname, relative, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
 import {
   HelmxError,
@@ -141,11 +152,19 @@ export async function compilePluginClientModule(
   options?: { npmRoots?: ReadonlyArray<ClientNpmRoot> },
 ): Promise<ClientCompileResult> {
   assertModuleRefShape(pluginId, moduleRef);
+  const rootReal = realPathOrThrow(clientRoot, `plugin ${pluginId} clientRoot cannot be accessed: ${clientRoot}`);
+  const resolvedCacheDir = resolve(cacheDir);
   const npmKey = npmRootsKey(options?.npmRoots ?? []);
-  const key = `${pluginId}\0${moduleRef}\0${realPathOrThrow(clientRoot, `plugin ${pluginId} clientRoot cannot be accessed: ${clientRoot}`)}\0${npmKey}`;
+  const key = `${pluginId}\0${moduleRef}\0${rootReal}\0${npmKey}\0${resolvedCacheDir}`;
   const pending = inflight.get(key);
   if (pending) return pending;
-  const run = compileUncached(pluginId, clientRoot, moduleRef, cacheDir, options?.npmRoots ?? []).finally(() => {
+  const run = compileUncached(
+    pluginId,
+    rootReal,
+    moduleRef,
+    resolvedCacheDir,
+    options?.npmRoots ?? [],
+  ).finally(() => {
     inflight.delete(key);
   });
   inflight.set(key, run);
@@ -187,21 +206,17 @@ function npmSpecifiersKey(roots: ReadonlyArray<ClientNpmRoot>): string[] {
 
 async function compileUncached(
   pluginId: string,
-  clientRoot: string,
+  rootReal: string,
   moduleRef: string,
   cacheDir: string,
   npmRoots: ReadonlyArray<ClientNpmRoot> = [],
 ): Promise<ClientCompileResult> {
-  const rootReal = realPathOrThrow(
-    clientRoot,
-    `plugin ${pluginId} clientRoot is missing or inaccessible: ${clientRoot}`,
-  );
   const entryReal = assertEntryInsideRoot(pluginId, rootReal, moduleRef);
 
   // 1. In-memory fast path: check local file mtimes and controlled-npm (mtime, size) fingerprints;
   //    any change falls through to full disk sha256 re-verification before recompiling.
   const npmKey = npmRootsKey(npmRoots);
-  const memKey = `${pluginId}\0${moduleRef}\0${rootReal}\0${npmKey}`;
+  const memKey = `${pluginId}\0${moduleRef}\0${rootReal}\0${npmKey}\0${cacheDir}`;
   const memEntry = memoryCompiledCache.get(memKey);
   if (memEntry && memEntry.root === rootReal) {
     let fresh = true;
@@ -240,14 +255,53 @@ async function compileUncached(
   const stagingDir = join(cacheDir, 'plugin-staging', safeDirName(pluginId));
   const baseName = safeFileName(moduleRef);
   const depsListPath = join(stagingDir, `${baseName}.deps.json`);
+  const tryCacheHit = (): CachedDiskHit | undefined =>
+    readCachedResult(stagingDir, depsListPath, rootReal, moduleRef, pluginId, npmRoots);
 
-  // 2. Disk cache revalidation: reuse artifact only when manifest and every dependency sha256 match.
-  const cached = readCachedResult(stagingDir, depsListPath, rootReal, moduleRef, pluginId, npmRoots);
+  // 2. Lock-free disk cache revalidation: reuse artifact only when manifest and every dependency sha256 match.
+  const cached = tryCacheHit();
   if (cached) {
-    recordMemoryCache(memKey, rootReal, depsListPath, cached);
-    return cached;
+    recordMemoryCache(memKey, rootReal, cached.list, cached.result);
+    return cached.result;
   }
 
+  // 3. Cross-process compile lock: prevent concurrent processes sharing a cold cache from stampeding esbuild/fsync.
+  const lock = await acquireCrossProcessCompileLock(stagingDir, baseName, tryCacheHit);
+  if (lock.kind === 'hit') {
+    recordMemoryCache(memKey, rootReal, lock.hit.list, lock.hit.result);
+    return lock.hit.result;
+  }
+
+  try {
+    return await compileAndPersist(
+      pluginId,
+      rootReal,
+      entryReal,
+      moduleRef,
+      stagingDir,
+      baseName,
+      depsListPath,
+      memKey,
+      npmRoots,
+    );
+  } finally {
+    if (lock.kind === 'acquired') {
+      lock.release();
+    }
+  }
+}
+
+async function compileAndPersist(
+  pluginId: string,
+  rootReal: string,
+  entryReal: string,
+  moduleRef: string,
+  stagingDir: string,
+  baseName: string,
+  depsListPath: string,
+  memKey: string,
+  npmRoots: ReadonlyArray<ClientNpmRoot>,
+): Promise<ClientCompileResult> {
   // Pass 1: in-memory esbuild with code splitting enabled to inspect module graph and CSS.
   let pass1Result: Awaited<ReturnType<typeof build>>;
   try {
@@ -412,7 +466,7 @@ async function compileUncached(
       exports: entryExports,
       chunks: {},
     };
-    recordMemoryCache(memKey, rootReal, depsListPath, finalResult);
+    recordMemoryCache(memKey, rootReal, list, finalResult);
     return finalResult;
   }
 
@@ -604,18 +658,17 @@ async function compileUncached(
     exports: entryExports,
     chunks: chunkOutputs,
   };
-  recordMemoryCache(memKey, rootReal, depsListPath, finalResult);
+  recordMemoryCache(memKey, rootReal, list, finalResult);
   return finalResult;
 }
 
 function recordMemoryCache(
   memKey: string,
   rootReal: string,
-  depsListPath: string,
+  list: DepsListFile,
   result: ClientCompileResult,
 ): void {
   try {
-    const list = JSON.parse(readFileSync(depsListPath, 'utf8')) as DepsListFile;
     const localMtimes = new Map<string, number>();
     for (const dep of list.dependencies) {
       const abs = join(rootReal, dep.path);
@@ -930,6 +983,246 @@ function cssPolicyPlugin(pluginId: string): EsbuildPlugin {
 // Cache revalidation and dependency manifests
 // ---------------------------------------------------------------------------
 
+interface CachedDiskHit {
+  result: ClientCompileResult;
+  list: DepsListFile;
+}
+
+const COMPILE_LOCK_WAIT_MS = 30_000;
+const COMPILE_LOCK_STALE_MS = 60_000;
+const COMPILE_LOCK_INIT_GRACE_MS = 2_000;
+
+interface CompileLockPayload {
+  pid: number;
+  token: string;
+  createdAt: number;
+}
+
+function isPidAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+function releaseLockIfOwned(lockPath: string, token: string): void {
+  try {
+    const raw = readFileSync(lockPath, 'utf8');
+    const parsed = JSON.parse(raw) as Partial<CompileLockPayload>;
+    if (parsed.token === token) {
+      rmSync(lockPath, { force: true });
+    }
+  } catch {
+    /* already removed or unreadable; never mask the primary result or error */
+  }
+}
+
+function tryReclaimStaleLock(lockPath: string): boolean {
+  let st;
+  try {
+    st = statSync(lockPath);
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'ENOENT';
+  }
+  let raw: string;
+  try {
+    raw = readFileSync(lockPath, 'utf8');
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'ENOENT';
+  }
+  try {
+    const parsed = JSON.parse(raw) as Partial<CompileLockPayload>;
+    if (typeof parsed.pid === 'number' && typeof parsed.createdAt === 'number') {
+      const dead = !isPidAlive(parsed.pid);
+      const expired = Date.now() - parsed.createdAt > COMPILE_LOCK_STALE_MS;
+      if (dead || expired) {
+        try {
+          rmSync(lockPath, { force: true });
+        } catch {
+          /* another waiter may have reclaimed it first */
+        }
+        return true;
+      }
+      return false;
+    }
+  } catch {
+    /* empty or partially written lock file; allow short init grace before reclaiming */
+  }
+  if (Date.now() - st.mtimeMs > COMPILE_LOCK_INIT_GRACE_MS) {
+    try {
+      rmSync(lockPath, { force: true });
+    } catch {
+      /* ignore */
+    }
+    return true;
+  }
+  return false;
+}
+
+type CompileLockOutcome =
+  | { kind: 'hit'; hit: CachedDiskHit }
+  | { kind: 'acquired'; release: () => void }
+  | { kind: 'fallback' };
+
+/**
+ * Coordinates cold compiles across concurrent OS processes sharing the same `stagingDir`
+ * so a cold shared cache compiles once instead of stampeding esbuild + fsync across workers.
+ */
+async function acquireCrossProcessCompileLock(
+  stagingDir: string,
+  baseName: string,
+  tryCacheHit: () => CachedDiskHit | undefined,
+): Promise<CompileLockOutcome> {
+  try {
+    mkdirSync(stagingDir, { recursive: true });
+  } catch {
+    return { kind: 'fallback' };
+  }
+  const lockPath = join(stagingDir, `.${baseName}.compile.lock`);
+  const token = randomUUID();
+  const deadline = Date.now() + COMPILE_LOCK_WAIT_MS;
+  let attempt = 0;
+
+  for (;;) {
+    try {
+      const fd = openSync(lockPath, 'wx', 0o600);
+      try {
+        const payload: CompileLockPayload = {
+          pid: process.pid,
+          token,
+          createdAt: Date.now(),
+        };
+        writeFileSync(fd, JSON.stringify(payload));
+      } finally {
+        closeSync(fd);
+      }
+      const hit = tryCacheHit();
+      if (hit !== undefined) {
+        releaseLockIfOwned(lockPath, token);
+        return { kind: 'hit', hit };
+      }
+      return { kind: 'acquired', release: () => releaseLockIfOwned(lockPath, token) };
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT') {
+        try {
+          mkdirSync(stagingDir, { recursive: true });
+          continue;
+        } catch {
+          return { kind: 'fallback' };
+        }
+      }
+      if (code !== 'EEXIST') {
+        return { kind: 'fallback' };
+      }
+    }
+
+    const hitBeforeWait = tryCacheHit();
+    if (hitBeforeWait !== undefined) {
+      return { kind: 'hit', hit: hitBeforeWait };
+    }
+
+    if (tryReclaimStaleLock(lockPath)) {
+      continue;
+    }
+
+    if (Date.now() >= deadline) {
+      return { kind: 'fallback' };
+    }
+
+    const baseDelay = attempt < 4 ? 25 : 50;
+    const jitter = Math.floor(Math.random() * 25);
+    attempt += 1;
+    await new Promise((resolveTimer) => setTimeout(resolveTimer, baseDelay + jitter));
+
+    const hitAfterWait = tryCacheHit();
+    if (hitAfterWait !== undefined) {
+      return { kind: 'hit', hit: hitAfterWait };
+    }
+  }
+}
+
+interface WorkspaceBuiltinCacheTarget {
+  pluginsSrcRoot: string;
+  cacheDir: string;
+}
+
+let cachedWorkspaceBuiltinTarget: WorkspaceBuiltinCacheTarget | null | undefined;
+
+function resolveWorkspaceBuiltinCacheTarget(): WorkspaceBuiltinCacheTarget | undefined {
+  if (cachedWorkspaceBuiltinTarget !== undefined) {
+    return cachedWorkspaceBuiltinTarget ?? undefined;
+  }
+  let dir = dirname(fileURLToPath(import.meta.url));
+  for (let depth = 0; depth < 6; depth += 1) {
+    const workspaceYaml = join(dir, 'pnpm-workspace.yaml');
+    const pluginsPkg = join(dir, 'packages', 'plugins', 'package.json');
+    const pluginsSrc = join(dir, 'packages', 'plugins', 'src');
+    const nodeModules = join(dir, 'node_modules');
+    if (
+      existsSync(workspaceYaml) &&
+      existsSync(pluginsPkg) &&
+      existsSync(pluginsSrc) &&
+      existsSync(nodeModules)
+    ) {
+      const rootReal = realpathOrNull(dir);
+      const pluginsSrcReal = realpathOrNull(pluginsSrc);
+      if (rootReal !== null && pluginsSrcReal !== null) {
+        cachedWorkspaceBuiltinTarget = {
+          pluginsSrcRoot: pluginsSrcReal,
+          cacheDir: join(rootReal, 'node_modules', '.cache', 'helmx-plugin-clients'),
+        };
+        return cachedWorkspaceBuiltinTarget;
+      }
+    }
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  cachedWorkspaceBuiltinTarget = null;
+  return undefined;
+}
+
+/**
+ * Returns the default shared disk cache directory used for workspace built-in plugins (`builtin:*`)
+ * in source-compile mode, or `undefined` outside a monorepo checkout.
+ */
+export function resolveDefaultBuiltinClientCacheDir(): string | undefined {
+  return resolveWorkspaceBuiltinCacheTarget()?.cacheDir;
+}
+
+/**
+ * Resolves the effective disk cache root for a compile request dispatched via `createPluginBuildProvider`.
+ * Only `builtin:*` plugins are eligible for shared caching; auto-detected workspace caching additionally
+ * requires `clientRoot` to reside inside `<workspace>/packages/plugins/src` so synthetic test fixtures
+ * stay isolated inside their own `dataDir`.
+ */
+export function resolveProviderCacheDir(
+  pluginId: string,
+  clientRoot: string,
+  fallbackCacheDir: string,
+  builtinCacheDir?: string | false,
+): string {
+  if (!pluginId.startsWith('builtin:') || builtinCacheDir === false) {
+    return fallbackCacheDir;
+  }
+  if (typeof builtinCacheDir === 'string') {
+    return builtinCacheDir;
+  }
+  const target = resolveWorkspaceBuiltinCacheTarget();
+  if (target === undefined) {
+    return fallbackCacheDir;
+  }
+  const clientRootReal = realpathOrNull(clientRoot);
+  if (clientRootReal !== null && isInside(target.pluginsSrcRoot, clientRootReal)) {
+    return target.cacheDir;
+  }
+  return fallbackCacheDir;
+}
+
 function readCachedResult(
   stagingDir: string,
   depsListPath: string,
@@ -937,7 +1230,7 @@ function readCachedResult(
   moduleRef: string,
   _pluginId: string,
   npmRoots: ReadonlyArray<ClientNpmRoot>,
-): ClientCompileResult | undefined {
+): CachedDiskHit | undefined {
   if (!existsSync(depsListPath)) return undefined;
   let list: DepsListFile;
   try {
@@ -978,6 +1271,13 @@ function readCachedResult(
   const codePath = join(stagingDir, `${baseName}.${list.contentHash}.mjs`);
   const gzPath = join(stagingDir, `${baseName}.${list.contentHash}.mjs.gz`);
   if (!existsSync(codePath)) return undefined;
+  if (Array.isArray(list.chunks) && list.chunks.length > 0) {
+    for (const chunkName of list.chunks) {
+      if (!existsSync(join(stagingDir, `${baseName}.${list.contentHash}.chunk.${chunkName}`))) {
+        return undefined;
+      }
+    }
+  }
   try {
     const code = readFileSync(codePath, 'utf8');
     let gzipped: Uint8Array | undefined;
@@ -1002,7 +1302,10 @@ function readCachedResult(
         });
       }
     }
-    return { code, contentHash: list.contentHash, gzipped, exports: list.exports ?? [], chunks };
+    return {
+      result: { code, contentHash: list.contentHash, gzipped, exports: list.exports ?? [], chunks },
+      list,
+    };
   } catch {
     return undefined;
   }

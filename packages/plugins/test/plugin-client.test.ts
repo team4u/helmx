@@ -8,6 +8,8 @@
  * 注册边界（client 引用无 clientRoot 拒绝；module 形状非法拒绝）。
  */
 import assert from 'node:assert/strict'
+import { spawn } from 'node:child_process'
+import { existsSync, readdirSync } from 'node:fs'
 import { test, before, after } from 'node:test'
 import { mkdtemp, mkdir, writeFile, rm, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -28,9 +30,13 @@ import { createHubHandler } from '../../kernel/src/http/index.js'
 import type { EventHub, KernelRuntimeLike} from '../../kernel/src/http/index.js'
 import {
   buildPluginClientBundleDir,
+  clearClientCompilerMemoryCache,
   compilePluginClientModule,
   createPluginBuildProvider,
   installNodeChunkBridge,
+  resolveDefaultBuiltinClientCacheDir,
+  safeDirName,
+  safeFileName,
 } from '@helmx/plugin-build'
 import {
   HelmxError,
@@ -171,6 +177,12 @@ before(async () => {
     },
   })
   await pluginHost.register(createMermaidPlugin())
+  // Pre-warm the two extra mermaid entrypoints in parallel so cold runs overlap esbuild work
+  // while warm runs reuse the shared content-hash-verified builtin cache.
+  await Promise.all([
+    pluginHost.getClientModule('builtin:mermaid', 'mermaid-loader.ts'),
+    pluginHost.getClientModule('builtin:mermaid', 'MermaidPreviewModal.tsx'),
+  ])
 
   const kernel = makeKernel()
   handler = createHubHandler(kernel)
@@ -870,8 +882,9 @@ test('端到端执行：编译产物在 Node 环境通过 __helmx_import_chunk �
     assert.ok(indexResult.code.length > 0)
     assert.ok(loaderResult.code.length > 0)
 
-    // Node 环境执行产物：显式安装 chunk 桥（生产编译路径不再自动改写 globalThis）
-    installNodeChunkBridge([dataDir])
+    // Node 环境执行产物：显式安装 chunk 桥（生产编译路径不再自动改写 globalThis；内置插件共享缓存与临时 dataDir 一并登记）
+    const builtinCacheDir = resolveDefaultBuiltinClientCacheDir()
+    installNodeChunkBridge(builtinCacheDir !== undefined ? [dataDir, builtinCacheDir] : [dataDir])
     const realImportChunk = g.__helmx_import_chunk as (...args: unknown[]) => Promise<unknown>
     const loadedChunks: string[] = []
     g.__helmx_import_chunk = (...args: unknown[]) => {
@@ -1734,6 +1747,12 @@ test('损坏/缺失/符号链接逃逸的 dist-client 必须显式报错，绝�
       await h1.dispose()
     }
 
+    // Copy prebuilt outDir before step 2 mutates it so step 3 tests symlink escape on the same real bundle
+    // without repeating an identical esbuild pass.
+    const { cp, readFile: readFileP } = await import('node:fs/promises')
+    const outDirSym = join(scratch, 'dist-client-sym')
+    await cp(outDir, outDirSym, { recursive: true })
+
     // 2. Deleted chunk file -> rejects with prebuilt_client_invalid (no fallback to buildProvider).
     const entry = built.manifest.modules['index.tsx']!
     const chunkRel = prebuiltChunkFileName(entry.entryFile, entry.chunks![0]!)
@@ -1758,16 +1777,9 @@ test('损坏/缺失/符号链接逃逸的 dist-client 必须显式报错，绝�
     }
 
     // 3. Symlink escape on entryFile -> rejects with client_module_out_of_root.
-    const outDirSym = join(scratch, 'dist-client-sym')
-    await buildPluginClientBundleDir({
-      pluginId: 'test:strict-sym',
-      clientRoot: srcRoot,
-      outDir: outDirSym,
-      modules: ['index.tsx'],
-    })
     const outsideFile = join(scratch, 'outside-secret.mjs')
     await writeFile(outsideFile, 'export function GoodExport() { return "evil" }\n')
-    const symEntry = JSON.parse(await (await import('node:fs/promises')).readFile(join(outDirSym, PREBUILT_CLIENT_MANIFEST_FILE), 'utf8'))
+    const symEntry = JSON.parse(await readFileP(join(outDirSym, PREBUILT_CLIENT_MANIFEST_FILE), 'utf8'))
     const entryRel = symEntry.modules['index.tsx'].entryFile
     await rm(join(outDirSym, entryRel))
     await symlink(outsideFile, join(outDirSym, entryRel))
@@ -1921,6 +1933,192 @@ test('builtin:mermaid 构建产物在无 node_modules/mermaid、无 client/、�
     } finally {
       await host.dispose()
     }
+  } finally {
+    await rm(scratch, { recursive: true, force: true })
+  }
+})
+
+test('createPluginBuildProvider builtinCacheDir：显式共享、false 关闭、非法空串拒绝、源码修改 sha256 即时失效且隔离临时 builtin 夹具', { timeout: 60_000 }, async () => {
+  assert.throws(
+    () => createPluginBuildProvider({ builtinCacheDir: '   ' }),
+    (err: unknown) => err instanceof HelmxError && err.code === 'invalid_plugin_definition',
+  )
+
+  const scratch = await mkdtemp(join(tmpdir(), 'helmx-builtin-cache-opt-'))
+  try {
+    const srcRoot = join(scratch, 'client-src')
+    const sharedCache = join(scratch, 'shared-cache')
+    const hostA = join(scratch, 'host-a')
+    const hostB = join(scratch, 'host-b')
+    await mkdir(srcRoot, { recursive: true })
+    await writeFile(join(srcRoot, 'index.tsx'), 'export const version = "v1"\n')
+
+    // 1. Explicit builtinCacheDir routes builtin:* into sharedCache while non-builtin stays in request.cacheDir.
+    const provider = createPluginBuildProvider({ builtinCacheDir: sharedCache })
+    const first = await provider.compileClientModule({
+      pluginId: 'builtin:cache-routing-test',
+      clientRoot: srcRoot,
+      moduleRef: 'index.tsx',
+      cacheDir: hostA,
+      npmRoots: [],
+    })
+    const ext = await provider.compileClientModule({
+      pluginId: 'ext:cache-routing-test',
+      clientRoot: srcRoot,
+      moduleRef: 'index.tsx',
+      cacheDir: hostA,
+      npmRoots: [],
+    })
+
+    const baseName = safeFileName('index.tsx')
+    assert.ok(
+      existsSync(join(sharedCache, 'plugin-staging', safeDirName('builtin:cache-routing-test'), `${baseName}.deps.json`)),
+      'builtin:* must populate explicit builtinCacheDir',
+    )
+    assert.equal(
+      existsSync(join(hostA, 'plugin-staging', safeDirName('builtin:cache-routing-test'))),
+      false,
+      'builtin:* must not duplicate staging into per-host dataDir when builtinCacheDir is set',
+    )
+    assert.ok(
+      existsSync(join(hostA, 'plugin-staging', safeDirName('ext:cache-routing-test'), `${baseName}.deps.json`)),
+      'external plugins must remain isolated inside request.cacheDir',
+    )
+    assert.equal(ext.contentHash, first.contentHash)
+
+    // 2. Different host dataDir reuses the shared disk cache after clearing memory cache, and source edits invalidate via sha256.
+    clearClientCompilerMemoryCache()
+    const warmFromHostB = await provider.compileClientModule({
+      pluginId: 'builtin:cache-routing-test',
+      clientRoot: srcRoot,
+      moduleRef: 'index.tsx',
+      cacheDir: hostB,
+      npmRoots: [],
+    })
+    assert.equal(warmFromHostB.contentHash, first.contentHash)
+    assert.equal(warmFromHostB.code, first.code)
+    assert.equal(existsSync(join(hostB, 'plugin-staging')), false)
+
+    await writeFile(join(srcRoot, 'index.tsx'), 'export const version = "v2"\n')
+    clearClientCompilerMemoryCache()
+    const edited = await provider.compileClientModule({
+      pluginId: 'builtin:cache-routing-test',
+      clientRoot: srcRoot,
+      moduleRef: 'index.tsx',
+      cacheDir: hostB,
+      npmRoots: [],
+    })
+    assert.notEqual(edited.contentHash, first.contentHash, 'source edit must invalidate shared disk cache via sha256')
+    assert.match(edited.code, /v2/)
+
+    // 3. builtinCacheDir: false and default workspace provider keep temporary synthetic builtin:* fixtures isolated in request.cacheDir.
+    const defaultCache = resolveDefaultBuiltinClientCacheDir()
+    assert.ok(defaultCache && defaultCache.includes('helmx-plugin-clients'), 'workspace checkout should detect default builtin cache dir')
+    const isolatedDir = join(scratch, 'host-isolated')
+    const disabledDir = join(scratch, 'host-disabled')
+    await createPluginBuildProvider().compileClientModule({
+      pluginId: 'builtin:temp-outside-workspace',
+      clientRoot: srcRoot,
+      moduleRef: 'index.tsx',
+      cacheDir: isolatedDir,
+      npmRoots: [],
+    })
+    assert.ok(
+      existsSync(join(isolatedDir, 'plugin-staging', safeDirName('builtin:temp-outside-workspace'), `${baseName}.deps.json`)),
+      'default provider must not share cache for synthetic builtin:* outside packages/plugins/src',
+    )
+    await createPluginBuildProvider({ builtinCacheDir: false }).compileClientModule({
+      pluginId: 'builtin:disabled-cache',
+      clientRoot: srcRoot,
+      moduleRef: 'index.tsx',
+      cacheDir: disabledDir,
+      npmRoots: [],
+    })
+    assert.ok(
+      existsSync(join(disabledDir, 'plugin-staging', safeDirName('builtin:disabled-cache'), `${baseName}.deps.json`)),
+      'builtinCacheDir: false must write into request.cacheDir',
+    )
+  } finally {
+    await rm(scratch, { recursive: true, force: true })
+  }
+})
+
+test('跨进程并发冷编译共享缓存：自动回收死 PID 残留锁、无竞态碰撞且零锁/临时文件残留', { timeout: 60_000 }, async () => {
+  const scratch = await mkdtemp(join(tmpdir(), 'helmx-multiprocess-cache-'))
+  try {
+    const srcRoot = join(scratch, 'client-src')
+    const sharedCache = join(scratch, 'shared-cache')
+    const pluginId = 'builtin:mp-lock-test'
+    await mkdir(srcRoot, { recursive: true })
+    await writeFile(join(srcRoot, 'lazy.ts'), 'export const lazyValue = () => "mp-chunk-ok"\n')
+    await writeFile(
+      join(srcRoot, 'index.tsx'),
+      'export const load = async () => (await import("./lazy")).lazyValue()\nexport const tag = "mp-ok"\n',
+    )
+
+    // Obtain a genuinely exited child PID to plant a realistic stale lockfile (no guessed PIDs).
+    const deadPid = await new Promise<number>((resolvePid, rejectPid) => {
+      const probe = spawn(process.execPath, ['-e', 'process.exit(0)'], { stdio: 'ignore' })
+      probe.once('error', rejectPid)
+      probe.once('exit', () => resolvePid(probe.pid!))
+    })
+    const stagingDir = join(sharedCache, 'plugin-staging', safeDirName(pluginId))
+    const baseName = safeFileName('index.tsx')
+    await mkdir(stagingDir, { recursive: true })
+    await writeFile(
+      join(stagingDir, `.${baseName}.compile.lock`),
+      JSON.stringify({ pid: deadPid, token: 'stale-dead-holder', createdAt: Date.now() }),
+    )
+
+    const pluginBuildEntry = import.meta.resolve('@helmx/plugin-build')
+    const workerScript = [
+      `import { compilePluginClientModule } from ${JSON.stringify(pluginBuildEntry)};`,
+      `const res = await compilePluginClientModule(${JSON.stringify(pluginId)}, ${JSON.stringify(srcRoot)}, 'index.tsx', ${JSON.stringify(sharedCache)});`,
+      'process.stdout.write(JSON.stringify({ hash: res.contentHash, len: res.code.length, chunks: Object.keys(res.chunks ?? {}).sort() }));',
+    ].join('\n')
+
+    const runWorker = (): Promise<{ hash: string; len: number; chunks: string[] }> =>
+      new Promise((resolveWorker, rejectWorker) => {
+        const child = spawn(process.execPath, ['--input-type=module', '-e', workerScript], {
+          stdio: ['ignore', 'pipe', 'pipe'],
+        })
+        let stdout = ''
+        let stderr = ''
+        child.stdout.on('data', (chunk) => {
+          stdout += String(chunk)
+        })
+        child.stderr.on('data', (chunk) => {
+          stderr += String(chunk)
+        })
+        child.once('error', rejectWorker)
+        child.once('close', (code) => {
+          if (code !== 0) {
+            rejectWorker(new Error(`worker exited ${code}: ${stderr}`))
+            return
+          }
+          try {
+            resolveWorker(JSON.parse(stdout) as { hash: string; len: number; chunks: string[] })
+          } catch (err) {
+            rejectWorker(new Error(`invalid worker output ${stdout}: ${String(err)}`))
+          }
+        })
+      })
+
+    const results = await Promise.all([runWorker(), runWorker(), runWorker(), runWorker()])
+    const first = results[0]!
+    assert.ok(first.hash.length === 24 && first.len > 0 && first.chunks.length > 0)
+    for (const r of results) {
+      assert.equal(r.hash, first.hash)
+      assert.equal(r.len, first.len)
+      assert.deepEqual(r.chunks, first.chunks)
+    }
+
+    const files = readdirSync(stagingDir)
+    assert.ok(
+      !files.some((f) => f.endsWith('.compile.lock') || f.endsWith('.tmp')),
+      `stagingDir must not retain lock or temp files: ${files.join(', ')}`,
+    )
+    assert.ok(existsSync(join(stagingDir, `${baseName}.deps.json`)))
   } finally {
     await rm(scratch, { recursive: true, force: true })
   }
