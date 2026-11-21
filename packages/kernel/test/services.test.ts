@@ -339,6 +339,9 @@ test('helmx-cli skill assets stay synchronized with UI extensions and runtime ca
     'presentationMeta',
     'presentationMetaSchema',
     'projectPresentationMeta',
+    '64 KiB UTF-8',
+    'depth 12',
+    '2000 nodes',
   ]) {
     assert.ok(HELMX_CLI_SKILL_AND_PLUGIN_DEV_MD.includes(api), `plugin-dev reference must include ${api}`)
   }

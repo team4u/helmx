@@ -136,7 +136,6 @@ test('SubagentToolView 与折叠态 SubagentLiveCard 传 includeDetail=false 零
       input: { prompt: '去跑测试' },
       status: 'running',
       conversationId: 1,
-      siblingCalls: [],
     }),
   )
   try {
@@ -439,7 +438,6 @@ test('同步外部子代理无原生子会话：完成后停止显示执行中�
       status: 'done',
       isError: false,
       conversationId: 1,
-      siblingCalls: [],
     }),
   )
   assert.ok(toolHtml.includes('workflow-trace-row-btn'), '时间线使用紧凑单行回执')
@@ -484,14 +482,34 @@ test('resume 正在运行时：历史失败调用保留异常状态，只有最�
     status: 'running' as const,
     input: { prompt: '继续修复', resume: '12' },
   }
-  const siblings = [oldCall, newCall]
-  const h = createWorkflowHostHarness({ conversationId: 1, conversations: [parent, child] })
+  const timelineToolCalls = [
+    {
+      callId: oldCall.callId,
+      toolName: oldCall.toolName,
+      index: 0,
+      status: oldCall.status,
+      input: oldCall.input,
+      presentationMeta: oldCall.presentationMeta,
+    },
+    {
+      callId: newCall.callId,
+      toolName: newCall.toolName,
+      index: 1,
+      status: newCall.status,
+      input: newCall.input,
+    },
+  ]
+  const h = createWorkflowHostHarness({
+    conversationId: 1,
+    conversations: [parent, child],
+    timelineToolCalls,
+  })
   const html = h.renderSsr(
     e(
       React.Fragment,
       null,
-      e(SubagentToolView, { ...oldCall, conversationId: 1, siblingCalls: siblings }),
-      e(SubagentToolView, { ...newCall, conversationId: 1, siblingCalls: siblings }),
+      e(SubagentToolView, { ...oldCall, conversationId: 1 }),
+      e(SubagentToolView, { ...newCall, conversationId: 1 }),
     ),
   )
   assert.equal((html.match(/workflow-trace-row-btn/g) ?? []).length, 2, '前序与最新调用均收口为单行按钮')
@@ -539,14 +557,35 @@ test('同一子会话 #12 被首次派生 + resume 续接：SubagentToolView 收
     result: '第二轮完成',
     presentationMeta: out12,
   }
-  const siblings = [call1, call2]
-  const h = createWorkflowHostHarness({ conversationId: 1, conversations: [parent, child12] })
+  const timelineToolCalls = [
+    {
+      callId: call1.callId,
+      toolName: call1.toolName,
+      index: 0,
+      status: call1.status,
+      input: call1.input,
+      presentationMeta: call1.presentationMeta,
+    },
+    {
+      callId: call2.callId,
+      toolName: call2.toolName,
+      index: 1,
+      status: call2.status,
+      input: call2.input,
+      presentationMeta: call2.presentationMeta,
+    },
+  ]
+  const h = createWorkflowHostHarness({
+    conversationId: 1,
+    conversations: [parent, child12],
+    timelineToolCalls,
+  })
   const html = h.renderSsr(
     e(
       React.Fragment,
       null,
-      e(SubagentToolView, { ...call1, conversationId: 1, siblingCalls: siblings }),
-      e(SubagentToolView, { ...call2, conversationId: 1, siblingCalls: siblings }),
+      e(SubagentToolView, { ...call1, conversationId: 1 }),
+      e(SubagentToolView, { ...call2, conversationId: 1 }),
     ),
   )
   assert.equal((html.match(/class="[^"]*\bsubagent-card-clickable\b/g) ?? []).length, 0, '时间线不渲染工作台大卡')
@@ -1146,7 +1185,6 @@ test('WorkflowToolView 无 runs 首帧：收口单行并默认收起原始调用
       result: '原始工作流返回结果',
       status: 'done',
       conversationId: 1,
-      siblingCalls: [],
     }),
   )
   assert.ok(!html.includes('class="trace-row"'), '不得渲染未命名默认 div.trace-row')
@@ -1285,7 +1323,6 @@ test('清亮化修正：时间线插件行标题带可缩标记（移动端不�
     input: { prompt: '任务' },
     status: 'done',
     conversationId: 1,
-    siblingCalls: [],
   }))
   assert.ok(html.includes('trace-tool-name workflow-trace-name'), '插件行标题带 workflow-trace-name 可缩标记')
 })

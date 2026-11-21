@@ -89,6 +89,19 @@ export type HookName =
 
 `timelineRenderer`、`toolView`、`markdownCodeBlock`、`composerCompleter` 与 `artifactPreviewer` 均支持 `priority`：数值较大者优先，缺省 0，同优先级保持贡献顺序。高优先级插件停用后由剩余候选接管。`command.slash` 不得占用宿主保留词（`new / clear / compact`），也不得与其他启用插件重名。所有 `spec.scope`（`ConversationScope`：conversationIds/tags/profileIds/modelProviders 字段间 AND、字段内 OR）同时约束可见性与执行——scope 是会话策略而非用户鉴权，无 conversationId 的人工 HTTP/CLI 调用不受限。
 
+### 工具结果三通道、`ToolViewProps` 与分片时间线订阅
+
+后端工具执行结果严格分离为三个正交通道，杜绝把大对象塞进模型文本或会话持久重放载荷：
+
+- **`ctx.tool`（`PluginToolResultEnvelope`）**：返回裸字符串默认落入 `output`；返回对象时必须是显式信封 `{ output?, structuredOutput?, presentationMeta?, isError? }`（信封携带裸 `details` 显式拒绝）：
+  - `output`：交付给模型的文本通道（`string | Array<{ type: 'text', text: string }>`，受 32 KiB 溢出落盘门禁约束）；
+  - `structuredOutput`：程序化/嵌套调用方的完整结构化结果（声明 `structuredOutputSchema` 后同步做 SecretStash 脱敏与 Schema 校验；**绝不自动镜像至持久化 `details` 或模型上下文**）；
+  - `presentationMeta`：落盘到 `pi.tool-result.model[0].details` 供前端/时间线重放的有界普通 JSON 对象（不进入模型提示词与上下文用量），须声明 `presentationMetaSchema`，并在边界强制执行 SecretStash 脱敏、Schema 校验与硬上限（**64 KiB UTF-8、最大深度 12、最多 2000 节点**；拒绝原型键、不可枚举/Symbol 自有键、循环引用、稀疏数组、`undefined`、非有限数、函数/BigInt）。
+- **`ctx.action({ exposeAsTool: true })`**：`handler` 仍返回裸业务值并按 `outputSchema` 校验（透传为派生工具的 `structuredOutputSchema`，保持五端映射完全一致）；如需前端展示索引，可选声明 `presentationMetaSchema` 与纯投影函数 `projectPresentationMeta(input, output)`（非 `exposeAsTool` 动作或缺少 Schema 时在注册边界显式拒绝）。
+- **前端 `ToolViewProps` 与 `useTimelineToolCalls(toolName)`**：
+  - `tool.view` 组件收到 `ToolViewProps`（`callId / toolName / input / status / result / presentationMeta / resultTruncation / isError / startedAt / durationMs / artifactRef / conversationId`）；旧字段 `structuredOutput` 与 `siblingCalls`（及 `ToolViewSiblingCall`）已移除，组件直接消费 `props.presentationMeta` 并在缺失时回落 `ToolCallDetails` 或纯文本错误，**严禁 `JSON.parse(props.result)` 兜底**；
+  - 需要感知同时间线同类工具调用（如折叠多次 `subagent` 续接）的组件，通过 `@helmx/plugin-client` 的 `useTimelineToolCalls(toolName)` 订阅由 `ConversationTimeline` 经 `TimelineToolCallsContext` 提供的按 `toolName` 分片外部 store（元素为轻量 `TimelineToolCallSummary`，不含 `result` / `resultTruncation` 大载荷；无关工具或流式正文更新保持数组引用且零通知；脱离 Provider / 空 `toolName` / SSR 返回共享冻结空数组）。
+
 ### 参数化视图与输入区受控句柄
 
 Screen 组件接收 `ScreenProps`：`pluginId / screenId / isSplit / params / setParams`。主屏参数在 URL Hash 中编码为 `sp.<key>`，分屏参数编码为 `ssp.<key>`——两边展示同一 Screen 时参数互相独立。`setParams(patch)` 默认替换历史记录，值为 `undefined` 删除对应键，`{ push: true }` 新增历史记录；组件不得直接操作 `history` 或自建路由。

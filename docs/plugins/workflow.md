@@ -31,7 +31,7 @@
 
 ### 前端贡献
 
-- `toolView`：`subagent-card`（`replaceRow: true`）与 `workflow-card`（`replaceRow: true`，含「保存为工作流」「断点恢复」「重放」入口）；时间线单行与折叠 `SubagentLiveCard` 通过 `includeDetail: false` 跳过子会话全量详情拉取，仅展开态按需加载；子代理结果优先读取宿主 `pluginToolResult` 镜像到 `details` 的结构化 `structuredOutput`（零 `[subagent ...]` 尾注文本刮取），并使用宿主共享 1Hz 时钟 `useSharedNowMs`；
+- `toolView`：`subagent-card`（`replaceRow: true`）与 `workflow-card`（`replaceRow: true`，含「保存为工作流」「断点恢复」「重放」入口）；时间线单行与折叠 `SubagentLiveCard` 通过 `includeDetail: false` 跳过子会话全量详情拉取，仅展开态按需加载；子代理与工作流视图直接消费宿主持久化到 `details` 的有界 `presentationMeta`（配合 `useTimelineToolCalls('subagent')` 按工具名分片订阅续接关系，零 `JSON.parse` / `[subagent ...]` 尾注文本刮取），并使用宿主共享 1Hz 时钟 `useSharedNowMs`；
 - `timelineRenderer` `background-report`：后台结算汇报折叠卡，直接解析入口 `data.meta.report` 结构化载荷；
 - `slot` `active-tray`（Composer 停靠区）与 `workbenchPanel` `tasks`（badge 绑定 `run-badges`，工作台与停靠区统一以 `runs` 为唯一执行树根来源，人类 `fork` 与 SuperAgent 驻留 Worker 不进入工作流树；运行卡折叠仅渲染 `resultPreview`，点击展开才调 `inspect` 按需拉取并缓存完整 `result`）；
 - `sidebarItem` + `screen` `library`：工作流库全屏视图（只读浏览、显式选择目标会话运行、两步确认删除；无编辑器，「让 AI 修改」仅提供可复制请求文本）。

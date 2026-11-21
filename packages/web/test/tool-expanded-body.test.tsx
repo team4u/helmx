@@ -21,6 +21,7 @@ import { resetServerClock } from '../src/lib/server-clock.js'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { makeTestStore } from './helpers/store.js'
+import type { ConversationEntry, ConversationLive } from '@helmx/protocol'
 import type { FoldableStep, ToolTrace } from '../src/conversation/timeline-model.js'
 
 const e = React.createElement
@@ -30,6 +31,8 @@ ensureHappyDom()
 ;(globalThis as Record<string, unknown>).React = React
 const { HostStoreProviders } = await import('./helpers/host-store.js')
 const { resetPluginClientCache, seedPluginClientModule } = await import('../src/lib/plugin-client.js')
+const { useTimelineToolCalls } = await import('@helmx/plugin-client')
+const { ConversationTimeline } = await import('../src/conversation/ConversationTimeline.js')
 const { ToolExpandedBody } = await import('../src/conversation/ToolExpandedBody.js')
 const { TraceRow, StepGroup } = await import('../src/conversation/TimelineRows.js')
 
@@ -940,6 +943,214 @@ test('TraceRow：tool.view 透传 presentationMeta 且不再透传 siblingCalls/
     assert.equal(lastInline.presentationMeta, meta)
     assert.equal('siblingCalls' in lastInline, false)
     assert.equal('structuredOutput' in lastInline, false)
+  } finally {
+    m.unmount()
+    resetPluginClientCache()
+  }
+})
+
+test('ConversationTimeline 端到端装配：toolResult.details 透传至 ToolViewProps.presentationMeta，并通过 TimelineToolCallsContext 按 toolName 分片供给 useTimelineToolCalls（无关工具更新零通知）', { timeout: 60_000 }, async () => {
+  resetPluginClientCache()
+  const receivedProps = new Map<string, Record<string, unknown>>()
+  const observedShards = new Map<string, ReadonlyArray<{ callId: string; status: string; presentationMeta?: Readonly<Record<string, unknown>> }>>()
+  const shardRenders = new Map<string, number>()
+
+  const SubagentShardObserver = React.memo(function SubagentShardObserver({ callId }: { callId: string }) {
+    const subagentCalls = useTimelineToolCalls('subagent')
+    observedShards.set(callId, subagentCalls)
+    shardRenders.set(callId, (shardRenders.get(callId) ?? 0) + 1)
+    const isLatest = subagentCalls.length === 0 || subagentCalls.at(-1)?.callId === callId
+    return e('span', { className: 'subagent-shard-observer', 'data-call-id': callId, 'data-latest': String(isLatest) }, `slice:${subagentCalls.length}`)
+  })
+
+  function SubagentProbe(props: Record<string, unknown>) {
+    const callId = String(props['callId'])
+    receivedProps.set(callId, props)
+    const meta = props['presentationMeta'] as { execution?: { conversationId?: number; executionId?: string } } | undefined
+    const target = meta?.execution?.conversationId !== undefined
+      ? `conv:${meta.execution.conversationId}`
+      : meta?.execution?.executionId !== undefined
+        ? `ext:${meta.execution.executionId}`
+        : 'none'
+    return e(
+      'div',
+      { className: 'subagent-probe' },
+      `${callId}|${target}|`,
+      e(SubagentShardObserver, { callId }),
+    )
+  }
+  seedPluginClientModule('demo:workflow-probe', 'index.tsx', { SubagentProbe }, 'h-tl-1')
+
+  const baseConv = {
+    id: 1,
+    title: '主会话',
+    profileId: 'assistant',
+    tags: [],
+    cwd: '/repo',
+    model: 'faux/m1',
+    thinkingLevel: '',
+    status: 'idle' as const,
+    stateChangeSeq: 1,
+    completionSeq: 0,
+    unread: false,
+    pinned: false,
+    pendingAskCount: 0,
+    createdAt: 1,
+    updatedAt: 1,
+  }
+  const uiContributions = [
+    {
+      pluginId: 'demo:workflow-probe',
+      surface: 'tool.view' as const,
+      spec: {
+        id: 'subagent-probe',
+        toolNames: ['subagent'],
+        replaceRow: true,
+        client: { module: 'index.tsx', export: 'SubagentProbe' },
+      },
+    },
+  ]
+  const plugins = [
+    {
+      id: 'demo:workflow-probe',
+      name: 'Workflow Probe',
+      locked: false,
+      enabled: true,
+      status: 'active' as const,
+      hooks: [],
+      actions: [],
+      tools: [],
+      clientHashes: { 'index.tsx': 'h-tl-1' },
+    },
+  ]
+
+  const metaNative = { ok: true, execution: { conversationId: 42 } }
+  const metaExternal = { ok: true, execution: { executionId: 'pane-99' } }
+  const initialEntries: ConversationEntry[] = [
+    { id: '1', kind: 'helmx.input', data: { text: '执行子任务', origin: 'human' } },
+    {
+      id: '2',
+      kind: 'pi.assistant',
+      model: [
+        {
+          role: 'assistant',
+          content: [
+            { type: 'toolCall', id: 'sub_1', name: 'subagent', arguments: { prompt: '首轮' } },
+            { type: 'toolCall', id: 'ext_1', name: 'subagent', arguments: { prompt: '外部首轮', agentType: 'herdr:codex' } },
+          ],
+        },
+      ],
+    },
+    {
+      id: '3',
+      kind: 'pi.tool-result',
+      model: [{ role: 'toolResult', toolCallId: 'sub_1', toolName: 'subagent', content: [{ type: 'text', text: '首轮完成' }], details: metaNative, isError: false }],
+    },
+    {
+      id: '4',
+      kind: 'pi.tool-result',
+      model: [{ role: 'toolResult', toolCallId: 'ext_1', toolName: 'subagent', content: [{ type: 'text', text: '外部首轮完成' }], details: metaExternal, isError: false }],
+    },
+  ]
+
+  const noopEdit = () => {}
+  const makeTimelineStore = (entries: ConversationEntry[], live?: ConversationLive) =>
+    makeTestStore({
+      conversations: [baseConv],
+      conversationDetails: {
+        1: { ...baseConv, entries },
+      },
+      conversationLives: live !== undefined ? { 1: live } : {},
+      plugins,
+      uiContributions,
+    })
+
+  const m = createMount()
+  try {
+    await m.render(
+      e(
+        HostStoreProviders,
+        { value: makeTimelineStore(initialEntries) },
+        e(ConversationTimeline, { conversation: baseConv, detailEntries: initialEntries, onRequestEdit: noopEdit }),
+      ),
+    )
+    await waitForCondition(() => m.host.querySelectorAll('.subagent-probe').length === 2)
+
+    // 1) m.details flows directly into ToolViewProps.presentationMeta; legacy channels absent.
+    const propsSub1 = receivedProps.get('sub_1')!
+    const propsExt1 = receivedProps.get('ext_1')!
+    assert.deepEqual(propsSub1['presentationMeta'], metaNative)
+    assert.deepEqual(propsExt1['presentationMeta'], metaExternal)
+    assert.equal('structuredOutput' in propsSub1, false)
+    assert.equal('siblingCalls' in propsSub1, false)
+
+    // 2) useTimelineToolCalls('subagent') receives the real chronological shard via TimelineToolCallsContext.Provider.
+    const initialShard = observedShards.get('sub_1')!
+    assert.deepEqual(initialShard.map((c) => c.callId), ['sub_1', 'ext_1'])
+    assert.deepEqual(initialShard[0]?.presentationMeta, metaNative)
+    assert.deepEqual(initialShard[1]?.presentationMeta, metaExternal)
+    assert.equal(observedShards.get('ext_1'), initialShard, '同分片订阅者共享冻结数组引用')
+    const rendersBeforeBash = shardRenders.get('sub_1')!
+
+    // 3) Adding unrelated tool calls (bash) + live streaming text preserves subagent shard reference and triggers zero observer re-renders.
+    const entriesWithBash: ConversationEntry[] = [
+      ...initialEntries,
+      {
+        id: '5',
+        kind: 'pi.assistant',
+        model: [{ role: 'assistant', content: [{ type: 'toolCall', id: 'bash_1', name: 'bash', arguments: { command: 'ls' } }] }],
+      },
+      {
+        id: '6',
+        kind: 'pi.tool-result',
+        model: [{ role: 'toolResult', toolCallId: 'bash_1', toolName: 'bash', content: [{ type: 'text', text: 'ok' }], details: { exitCode: 0 }, isError: false }],
+      },
+    ]
+    const liveWithRead: ConversationLive = {
+      conversationId: 1,
+      updatedAt: 200,
+      text: '正在继续处理…',
+      tools: [{ callId: 'read_live', toolName: 'read', status: 'running', input: { path: 'a.ts' } }],
+    }
+    await m.render(
+      e(
+        HostStoreProviders,
+        { value: makeTimelineStore(entriesWithBash, liveWithRead) },
+        e(ConversationTimeline, {
+          conversation: { ...baseConv, status: 'working' },
+          detailEntries: entriesWithBash,
+          live: liveWithRead,
+          onRequestEdit: noopEdit,
+        }),
+      ),
+    )
+    await waitForCondition(() => m.host.textContent?.includes('正在继续处理…') === true)
+    assert.equal(observedShards.get('sub_1'), initialShard, '新增无关工具与流式文本后 subagent 分片引用保持不变')
+    assert.equal(shardRenders.get('sub_1'), rendersBeforeBash, '无关工具与流式文本更新不得触发 subagent 分片订阅者重渲染')
+
+    // 4) Adding a resume subagent call updates the 'subagent' shard immediately so prior cards see the continuation.
+    const entriesWithResume: ConversationEntry[] = [
+      ...entriesWithBash,
+      {
+        id: '7',
+        kind: 'pi.assistant',
+        model: [{ role: 'assistant', content: [{ type: 'toolCall', id: 'sub_2', name: 'subagent', arguments: { resume: 42, prompt: '续接' } }] }],
+      },
+    ]
+    await m.render(
+      e(
+        HostStoreProviders,
+        { value: makeTimelineStore(entriesWithResume) },
+        e(ConversationTimeline, { conversation: baseConv, detailEntries: entriesWithResume, onRequestEdit: noopEdit }),
+      ),
+    )
+    await waitForCondition(() => m.host.querySelectorAll('.subagent-probe').length === 3)
+    const updatedShard = observedShards.get('sub_1')!
+    assert.notEqual(updatedShard, initialShard)
+    assert.deepEqual(updatedShard.map((c) => c.callId), ['sub_1', 'ext_1', 'sub_2'])
+    assert.equal(updatedShard[0], initialShard[0], '未变更前缀元素保留引用')
+    assert.equal(m.host.querySelector('[data-call-id="sub_1"]')?.getAttribute('data-latest'), 'false')
+    assert.equal(m.host.querySelector('[data-call-id="sub_2"]')?.getAttribute('data-latest'), 'true')
   } finally {
     m.unmount()
     resetPluginClientCache()

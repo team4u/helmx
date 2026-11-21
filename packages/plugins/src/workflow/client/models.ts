@@ -39,7 +39,6 @@ export type {
   SubagentLatestCallIndex,
   SubagentParentToolSummary,
   SubagentTimelineCallLike,
-  ToolViewPresentationProps,
 } from './model-subagent-link.ts'
 
 // Tool line semantic summaries and the subagent live stream (model-subagent-stream.ts)

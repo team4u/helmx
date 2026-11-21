@@ -21,7 +21,9 @@ import type {
   ConversationLive,
   InputOrigin,
   TimelineRendererSpec,
+  TimelineToolCallSummary,
   ToolResultTruncation,
+  ToolViewProps,
   ToolViewSpec,
   WhenBusy,
 } from '@helmx/protocol/browser'
@@ -1291,46 +1293,8 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 }
 
 // ---------------------------------------------------------------------------
-// Per-toolName timeline tool-call index & external store (replaces O(N^2) siblingCalls)
+// Per-toolName timeline tool-call index (feeds @helmx/plugin-client createTimelineToolCallsStore)
 // ---------------------------------------------------------------------------
-
-/**
- * Lightweight per-toolName summary of a timeline tool call (replaces ToolViewProps.siblingCalls).
- * Intentionally excludes large `result` text and `resultTruncation` payloads; carries only
- * correlation/index/status/input/presentationMeta fields needed by tool.view subscribers.
- * Matches `@helmx/protocol` `TimelineToolCallSummary` (commit 0abe8a7db).
- */
-export interface TimelineToolCallSummary {
-  readonly callId: string
-  readonly toolName: string
-  /** 0-based chronological index across all tool calls with a callId in the timeline. */
-  readonly index: number
-  readonly status: 'running' | 'done' | 'error'
-  readonly input?: unknown
-  readonly presentationMeta?: Readonly<Record<string, unknown>>
-}
-
-/**
- * Read/subscribe surface for per-toolName timeline tool call snapshots
- * (structurally aligned with React useSyncExternalStore and
- * `@helmx/plugin-client` `TimelineToolCallsStore` / `TimelineToolCallsContext`).
- */
-export interface TimelineToolCallsStore {
-  /** Subscribe to updates of a single toolName bucket; unrelated toolName updates never notify. */
-  subscribe(toolName: string, listener: () => void): () => void
-  /** Referentially stable snapshot for a single toolName (frozen empty array when absent). */
-  getSnapshot(toolName: string): ReadonlyArray<TimelineToolCallSummary>
-}
-
-export interface TimelineToolCallsStoreController extends TimelineToolCallsStore {
-  /**
-   * Reconcile per-toolName buckets from single-pass collected summaries; preserves array
-   * references and suppresses notifications for unchanged buckets. Returns true if any bucket changed.
-   */
-  update(next: ReadonlyMap<string, ReadonlyArray<TimelineToolCallSummary>>): boolean
-}
-
-export const EMPTY_TIMELINE_TOOL_CALLS: ReadonlyArray<TimelineToolCallSummary> = Object.freeze([])
 
 /**
  * Single-pass O(N) aggregation of lightweight timeline tool call summaries partitioned by toolName.
@@ -1372,108 +1336,6 @@ export function collectToolCallsByName(
     }
   }
   return byName
-}
-
-function sameToolCallSummary(a: TimelineToolCallSummary, b: TimelineToolCallSummary): boolean {
-  return (
-    a === b ||
-    (a.callId === b.callId &&
-      a.toolName === b.toolName &&
-      a.index === b.index &&
-      a.status === b.status &&
-      Object.is(a.input, b.input) &&
-      Object.is(a.presentationMeta, b.presentationMeta))
-  )
-}
-
-function sameToolCallBucket(
-  prev: ReadonlyArray<TimelineToolCallSummary>,
-  next: ReadonlyArray<TimelineToolCallSummary>,
-): boolean {
-  if (prev === next) return true
-  if (prev.length !== next.length) return false
-  for (let i = 0; i < prev.length; i++) {
-    if (!sameToolCallSummary(prev[i]!, next[i]!)) return false
-  }
-  return true
-}
-
-/**
- * Create a per-toolName external store for timeline tool call summaries.
- * Unchanged buckets retain exact frozen array identity and never notify subscribers, keeping
- * streaming text / unrelated tool updates at zero notification cost for tool.view cards.
- * Structurally mirrors `@helmx/plugin-client` `createTimelineToolCallsStore` for drop-in integration.
- */
-export function createTimelineToolCallsStore(
-  initial?: ReadonlyMap<string, ReadonlyArray<TimelineToolCallSummary>>,
-): TimelineToolCallsStoreController {
-  const buckets = new Map<string, ReadonlyArray<TimelineToolCallSummary>>()
-  const listenersByName = new Map<string, Set<() => void>>()
-
-  const update = (next: ReadonlyMap<string, ReadonlyArray<TimelineToolCallSummary>>): boolean => {
-    const changed: string[] = []
-
-    for (const prevName of Array.from(buckets.keys())) {
-      const nextList = next.get(prevName)
-      if (nextList === undefined || nextList.length === 0) {
-        buckets.delete(prevName)
-        changed.push(prevName)
-      }
-    }
-
-    for (const [toolName, nextList] of next) {
-      if (toolName === '' || nextList.length === 0) continue
-      const prevList = buckets.get(toolName)
-      if (prevList !== undefined && sameToolCallBucket(prevList, nextList)) continue
-      const committed = nextList.map((item, i) =>
-        prevList !== undefined && i < prevList.length && sameToolCallSummary(prevList[i]!, item)
-          ? prevList[i]!
-          : item,
-      )
-      buckets.set(toolName, Object.freeze(committed))
-      changed.push(toolName)
-    }
-
-    if (changed.length === 0) return false
-
-    for (const toolName of changed) {
-      const listeners = listenersByName.get(toolName)
-      if (listeners === undefined || listeners.size === 0) continue
-      for (const listener of Array.from(listeners)) {
-        listener()
-      }
-    }
-    return true
-  }
-
-  if (initial !== undefined) {
-    update(initial)
-  }
-
-  return {
-    subscribe(toolName: string, listener: () => void): () => void {
-      if (toolName === '') return () => {}
-      let listeners = listenersByName.get(toolName)
-      if (listeners === undefined) {
-        listeners = new Set()
-        listenersByName.set(toolName, listeners)
-      }
-      listeners.add(listener)
-      return () => {
-        const current = listenersByName.get(toolName)
-        if (current === undefined) return
-        current.delete(listener)
-        if (current.size === 0) listenersByName.delete(toolName)
-      }
-    },
-
-    getSnapshot(toolName: string): ReadonlyArray<TimelineToolCallSummary> {
-      if (toolName === '') return EMPTY_TIMELINE_TOOL_CALLS
-      return buckets.get(toolName) ?? EMPTY_TIMELINE_TOOL_CALLS
-    },
-
-    update,
-  }
 }
 
 /** Latest human input text (for the Composer up-arrow prefill). */
@@ -1591,7 +1453,7 @@ export function toolStatusIcon(tool: ToolTrace): string {
 export function buildToolViewProps(
   tool: ToolTrace,
   conversationId: number,
-): Record<string, unknown> {
+): ToolViewProps {
   return {
     callId: tool.callId ?? '',
     toolName: tool.toolName,

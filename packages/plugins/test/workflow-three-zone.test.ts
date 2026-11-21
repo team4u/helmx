@@ -128,10 +128,12 @@ function createHostHarness(init: {
   pendingAsks?: AskSpec[]
   runsByConversation?: Record<number, WorkflowRunSummary[]>
   pluginDocs?: Record<string, unknown>
+  timelineToolCalls?: import('../../plugin-client/src/index.js').TimelineToolCallsInput
   locale?: import('../../plugin-client/src/index.js').HelmxLocale
   onAction?: (pluginId: string, actionId: string, input: unknown) => Promise<unknown> | unknown
 }) {
   const activeToolCallIds = new Set<string>()
+  const timelineToolCallsStore = SDK.createTimelineToolCallsStore(init.timelineToolCalls)
   const log: HostStubLog = {
     actions: [],
     drawers: [],
@@ -250,7 +252,11 @@ function createHostHarness(init: {
           e(
             SDK.PluginClientContext.Provider,
             { value: ctx },
-            e(SDK.ToolActivityContext.Provider, { value: toolActivityRegistry }, node),
+            e(
+              SDK.ToolActivityContext.Provider,
+              { value: toolActivityRegistry },
+              e(SDK.TimelineToolCallsContext.Provider, { value: timelineToolCallsStore }, node),
+            ),
           ),
         ),
       )
@@ -1251,10 +1257,11 @@ describe('Workflow 三区零重复与无损呈现', () => {
         worktree: { path: '/tmp/wt-50', branch: 'feat/sub-wt' },
       },
     }
-    const siblingCalls = [
+    const timelineToolCalls = [
       {
         callId: 'call_old_50',
         toolName: 'subagent',
+        index: 0,
         input: { prompt: '首次执行' },
         status: 'done' as const,
         presentationMeta: oldMeta,
@@ -1262,6 +1269,7 @@ describe('Workflow 三区零重复与无损呈现', () => {
       {
         callId: 'call_new_50',
         toolName: 'subagent',
+        index: 1,
         input: { resume: 50, prompt: '继续执行' },
         status: 'running' as const,
         presentationMeta: newMeta,
@@ -1273,6 +1281,7 @@ describe('Workflow 三区零重复与无损呈现', () => {
       conversations: [createConv({ id: 1 }), childAskConv],
       pendingAsks: [pendingAsk],
       runsByConversation: { 1: [settledWithLiveChildRun] },
+      timelineToolCalls,
     })
 
     // 1. 历史被续接的旧调用：保持已完成，标「已在下文续接」，绝不注册活动
@@ -1286,7 +1295,6 @@ describe('Workflow 三区零重复与无损呈现', () => {
         presentationMeta: oldMeta,
         durationMs: 1200,
         conversationId: 1,
-        siblingCalls,
       }),
     )
     try {
@@ -1307,7 +1315,6 @@ describe('Workflow 三区零重复与无损呈现', () => {
         status: 'running',
         presentationMeta: newMeta,
         conversationId: 1,
-        siblingCalls,
       }),
     )
     try {

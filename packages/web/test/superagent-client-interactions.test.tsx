@@ -30,15 +30,10 @@ import { importBuiltinClientModule, mountSharedPluginNamespaces, setBuiltinClien
 const e = React.createElement
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 
-// Forward-compatible target type until ToolViewProps adopts presentationMeta (#30/#44 merge).
-type ToolViewPropsWithPresentationMeta = ToolViewProps & {
-  presentationMeta?: Readonly<Record<string, unknown>>
-}
-
 interface Components {
   SuperAgentComposerWidget: (p: ComposerScopeProps) => React.ReactElement
   SuperAgentRouterModePill: (p: ComposerScopeProps) => React.ReactElement
-  SuperAgentDispatchToolView: (p: Partial<ToolViewPropsWithPresentationMeta>) => React.ReactElement
+  SuperAgentDispatchToolView: (p: Partial<ToolViewProps>) => React.ReactElement
   SuperAgentWorkerReportCard: (p: TimelineRendererProps) => React.ReactElement
   SuperAgentRecallScreen: (p: Partial<ScreenProps>) => React.ReactElement
   SuperAgentSettingsPanel: () => React.ReactElement

@@ -30,6 +30,7 @@ export interface PluginManifestTool extends PluginPromptFields {
   description: string
   inputSchema: JsonSchema
   structuredOutputSchema?: JsonSchema
+  presentationMetaSchema?: JsonSchema
   replay?: 'safe' | 'unsafe'
   scope?: ConversationScope
   sourceKind: 'tool' | 'action'
@@ -323,6 +324,7 @@ const ACTION_KEYS = new Set([
   'inputSchema',
   'outputSchema',
   'exposeAsTool',
+  'presentationMetaSchema',
   'exposeToPrompt',
   'idempotent',
   'cli',
@@ -336,6 +338,7 @@ const TOOL_KEYS = new Set([
   'description',
   'inputSchema',
   'structuredOutputSchema',
+  'presentationMetaSchema',
   'replay',
   'scope',
   'promptSnippet',
@@ -406,11 +409,14 @@ export function assertPluginManifestProjection(value: unknown): PluginManifestPr
       throw invalidManifest('manifest status active requires enabled=true and error=undefined')
     }
   } else if (value['status'] === 'disabled') {
-    if (value['enabled'] !== false || value['error'] !== undefined) {
-      throw invalidManifest('manifest status disabled requires enabled=false and error=undefined')
+    if (value['error'] !== undefined) {
+      // During transient activating/deactivating windows `enabled` may be true while `status` is 'disabled'.
+      throw invalidManifest('manifest status disabled requires error=undefined')
     }
-  } else if (value['enabled'] !== false || value['error'] === undefined) {
-    throw invalidManifest('manifest status failed requires enabled=false and error')
+  } else if (value['error'] === undefined) {
+    // status === 'failed' may occur with enabled=false (register/enable failure) or
+    // enabled=true (runtime dependency forced-disable failure), and must always carry `error`.
+    throw invalidManifest('manifest status failed requires error')
   }
 
   for (const arrayField of [
@@ -479,8 +485,16 @@ export function assertPluginManifestProjection(value: unknown): PluginManifestPr
     assertPromptFields(a, label)
     if (a['exposeAsTool'] === true) {
       assertSafeIdentifier(a['toolName'], `${label}.toolName`)
-    } else if (a['toolName'] !== undefined) {
-      throw invalidManifest(`${label}.toolName must be omitted unless exposeAsTool is true`)
+      if (a['presentationMetaSchema'] !== undefined && !isJsonObject(a['presentationMetaSchema'])) {
+        throw invalidManifest(`${label}.presentationMetaSchema must be an object`)
+      }
+    } else {
+      if (a['toolName'] !== undefined) {
+        throw invalidManifest(`${label}.toolName must be omitted unless exposeAsTool is true`)
+      }
+      if (a['presentationMetaSchema'] !== undefined) {
+        throw invalidManifest(`${label}.presentationMetaSchema must be omitted unless exposeAsTool is true`)
+      }
     }
   }
   assertStrictlySortedUnique(
@@ -501,6 +515,9 @@ export function assertPluginManifestProjection(value: unknown): PluginManifestPr
     if (!isJsonObject(t['inputSchema'])) throw invalidManifest(`${label}.inputSchema must be an object`)
     if (t['structuredOutputSchema'] !== undefined && !isJsonObject(t['structuredOutputSchema'])) {
       throw invalidManifest(`${label}.structuredOutputSchema must be an object`)
+    }
+    if (t['presentationMetaSchema'] !== undefined && !isJsonObject(t['presentationMetaSchema'])) {
+      throw invalidManifest(`${label}.presentationMetaSchema must be an object`)
     }
     if (t['replay'] !== undefined && t['replay'] !== 'safe' && t['replay'] !== 'unsafe') {
       throw invalidManifest(`${label}.replay must be safe | unsafe`)

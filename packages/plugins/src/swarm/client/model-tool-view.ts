@@ -11,10 +11,6 @@
 import type { ToolViewProps } from '@helmx/protocol'
 import { isPlainObject, type BoardPostKind } from './board-model.ts'
 
-type ToolViewPropsWithPresentationMeta = ToolViewProps & {
-  presentationMeta?: Readonly<Record<string, unknown>>
-}
-
 function isPosInt(v: unknown): v is number {
   return typeof v === 'number' && Number.isSafeInteger(v) && v > 0
 }
@@ -34,8 +30,7 @@ function asTrimmedString(v: unknown, maxChars: number): string | undefined {
 export function extractSwarmPresentationMeta(
   props: ToolViewProps,
 ): Readonly<Record<string, unknown>> | undefined {
-  const meta = (props as ToolViewPropsWithPresentationMeta).presentationMeta
-  return isPlainObject(meta) ? meta : undefined
+  return isPlainObject(props.presentationMeta) ? props.presentationMeta : undefined
 }
 
 export type SwarmToolTargetKind =

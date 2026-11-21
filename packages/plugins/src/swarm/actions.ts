@@ -71,10 +71,6 @@ export {
   type EnsureCoordinatorGroupInput,
 }
 
-type SwarmToolSpec = PluginToolSpec<never> & {
-  presentationMetaSchema?: JsonSchema
-}
-
 function envelope<T, M extends Record<string, unknown>>(
   output: string,
   structuredOutput: T,
@@ -155,8 +151,8 @@ export function registerSwarmActions(
   const { boardPost, boardRead, boardStatus, completeBoardMembers, completeBoardChannels } =
     createBoardHandlers(ctx, coordinator)
 
-  const registerTool = (spec: SwarmToolSpec): void => {
-    ctx.tool(spec as PluginToolSpec<never>)
+  const registerTool = (spec: PluginToolSpec<never>): void => {
+    ctx.tool(spec)
   }
 
   // ------------------------------------------------------------------

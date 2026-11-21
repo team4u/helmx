@@ -104,13 +104,9 @@ export function dispatchInput(props: ToolViewProps): DispatchToolInput {
   return out
 }
 
-type ToolViewPropsWithPresentationMeta = ToolViewProps & {
-  presentationMeta?: Readonly<Record<string, unknown>>
-}
-
 /** workerConversationId from the dispatch_worker tool presentationMeta (present once done; missing stays undefined). */
 export function dispatchedWorkerId(props: ToolViewProps): number | undefined {
-  const raw = (props as ToolViewPropsWithPresentationMeta).presentationMeta
+  const raw = props.presentationMeta
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined
   const id = raw['workerConversationId']
   return typeof id === 'number' && Number.isInteger(id) && id > 0 ? id : undefined

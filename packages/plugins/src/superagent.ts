@@ -359,16 +359,12 @@ function loadSuperAgentRuntimeModule(): Promise<SuperAgentRuntimeModule> {
   return runtimeModulePromise
 }
 
-type ToolSpecWithPresentationMeta = PluginToolSpec & {
-  presentationMetaSchema?: JsonSchema
-}
-
 function registerDeclarativeCapabilities(
   ctx: HelmxPluginContext,
   ensureRuntime: () => Promise<SuperAgentRuntimeController>,
 ): void {
   for (const spec of TOOL_SPECS) {
-    const toolSpec: ToolSpecWithPresentationMeta = {
+    ctx.tool({
       name: spec.name,
       description: spec.description,
       inputSchema: spec.inputSchema,
@@ -376,8 +372,7 @@ function registerDeclarativeCapabilities(
       ...(spec.presentationMetaSchema !== undefined ? { presentationMetaSchema: spec.presentationMetaSchema } : {}),
       scope: spec.scope,
       execute: async (input, context) => (await ensureRuntime()).executeTool(spec.name, input, context),
-    }
-    ctx.tool(toolSpec as PluginToolSpec)
+    })
   }
   for (const spec of ACTION_SPECS) {
     ctx.action({

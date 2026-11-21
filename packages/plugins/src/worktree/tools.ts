@@ -12,10 +12,6 @@ export interface WorktreeToolDeps {
   isolation: WorktreeIsolation
 }
 
-type WorktreeToolSpec = PluginToolSpec & {
-  presentationMetaSchema?: JsonSchema
-}
-
 /** cleanup 成功分支（removed/worktreeId/path/branch/nodeId/branchDeleted 全为真实值）。 */
 const cleanupSuccessOutputSchema = {
   type: 'object',
@@ -103,7 +99,7 @@ export function registerWorktreeTools(ctx: HelmxPluginContext, deps: WorktreeToo
   const { isolation } = deps
 
   // ---- 模型工具：cleanup_worktree ----
-  const cleanupToolSpec: WorktreeToolSpec = {
+  ctx.tool({
     name: 'cleanup_worktree',
     description:
       "Clean up one managed isolated Git worktree (the workspace of a sub-conversation spawned with isolation: 'worktree'). Locate it by worktreeId (node:path), conversationId, or worktree path (may attach nodeId to disambiguate); refused by default when the workspace has uncommitted changes or unmerged commits (inspect/merge first, or pass force: true; force cannot bypass occupancy/ownership/locked checks); optionally pass deleteBranch: true to also delete the helmx/spawn-* branch (branch deletion failures can be retried). Only worktrees registered by helmx are cleaned; unregistered directories are never touched.",
@@ -184,6 +180,5 @@ export function registerWorktreeTools(ctx: HelmxPluginContext, deps: WorktreeToo
         }
       }
     },
-  }
-  ctx.tool(cleanupToolSpec as PluginToolSpec)
+  })
 }

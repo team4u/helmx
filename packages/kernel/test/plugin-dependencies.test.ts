@@ -391,6 +391,23 @@ test('failed-while-enabled dependent clears clientHashes, ui, capabilities, and 
   await assertRejectsCode(() => Promise.resolve().then(() => host.prepareAction('user', 'ping', {})), 'plugin_disabled', 409)
   await assertRejectsCode(() => host.executeTool('dep_tool', {}, { conversationId: 1 }), 'plugin_disabled', 409)
 
+  // Manifest projection obeys the same active predicate: enabled=true, status=failed exposes zero runtime capabilities/hashes.
+  const failedManifest = host.getManifest('user')
+  assert.equal(failedManifest.enabled, true)
+  assert.equal(failedManifest.status, 'failed')
+  assert.equal(failedManifest.error?.code, 'plugin_dependency_not_enabled')
+  assert.deepEqual(failedManifest.dependencies, ['base'])
+  assert.deepEqual(failedManifest.hooks, [])
+  assert.deepEqual(failedManifest.actions, [])
+  assert.deepEqual(failedManifest.tools, [])
+  assert.deepEqual(failedManifest.ui, [])
+  assert.deepEqual(failedManifest.routes, [])
+  assert.deepEqual(failedManifest.docs, [])
+  assert.deepEqual(failedManifest.providers, [])
+  assert.deepEqual(failedManifest.services, [])
+  assert.deepEqual(failedManifest.clientModules, [])
+  assert.deepEqual(failedManifest.configFields.map((f) => f.key), ['refreshMs'])
+
   // Updating config while failed still emits failed summary without clientHashes or ui.
   events.length = 0
   await host.setConfig('user', { refreshMs: 2_500 })

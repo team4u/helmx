@@ -55,13 +55,8 @@ const { importBuiltinClientModule, mountSharedPluginNamespaces } = await import(
 const e = React.createElement
 const EMOJI_RE = /[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F1E6}-\u{1F1FF}]/u
 
-// Forward-compatible target type until ToolViewProps adopts presentationMeta (#30/#44 merge).
-type ToolViewPropsWithPresentationMeta = ToolViewProps & {
-  presentationMeta?: Readonly<Record<string, unknown>>
-}
-
 interface SwarmClientComponents {
-  SwarmToolView: (p: ToolViewPropsWithPresentationMeta) => React.ReactElement
+  SwarmToolView: (p: ToolViewProps) => React.ReactElement
   SwarmActiveTray: (p: { conversation?: ConversationSummary }) => React.ReactElement
   SwarmWorkbenchPanel: (p: { conversation?: ConversationSummary }) => React.ReactElement
   SwarmBoardReportPill: (p: TimelineRendererProps) => React.ReactElement
@@ -414,7 +409,7 @@ describe("swarm-client-interactions", () => {
     }
   }
 
-  function toolViewProps(overrides: Partial<ToolViewPropsWithPresentationMeta> = {}): ToolViewPropsWithPresentationMeta {
+  function toolViewProps(overrides: Partial<ToolViewProps> = {}): ToolViewProps {
     return {
       callId: 'call-1',
       toolName: 'swarm_board_post',

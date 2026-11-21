@@ -495,18 +495,6 @@ export interface TimelineRendererProps {
   conversationId: number
 }
 
-/** Lightweight summary of all tool calls in the same conversation (for plugins to dedupe themselves, e.g. folding multiple resumes of the same sub-conversation). */
-export interface ToolViewSiblingCall {
-  callId: string
-  toolName: string
-  input?: unknown
-  status: 'running' | 'done' | 'error'
-  result?: unknown
-  structuredOutput?: unknown
-  /** Present when the result is a truncated preview from the detail endpoint; plugins must not treat result as the full original text. */
-  resultTruncation?: ToolResultTruncation
-}
-
 /** tool.view: serializable data of a tool call process and result. */
 export interface ToolViewProps {
   callId: string
@@ -514,7 +502,8 @@ export interface ToolViewProps {
   input?: unknown
   status: 'running' | 'done' | 'error'
   result?: unknown
-  structuredOutput?: unknown
+  /** Bounded UI presentation metadata persisted on toolResult.details (never carries bulky structuredOutput). */
+  presentationMeta?: Readonly<Record<string, unknown>>
   /** Present when the result is a truncated preview from the detail endpoint; plugins must not treat result as the full original text. */
   resultTruncation?: ToolResultTruncation
   isError?: boolean
@@ -522,8 +511,6 @@ export interface ToolViewProps {
   durationMs?: number
   artifactRef?: string
   conversationId: number
-  /** All tool calls in the currently loaded timeline (chronological), for plugins to compute folding/continuation relationships themselves. */
-  siblingCalls?: ReadonlyArray<ToolViewSiblingCall>
 }
 
 export interface ComposerController {

@@ -5,6 +5,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { ConversationEntry, ConversationLive, ConversationSummary } from '@helmx/protocol'
+import { createTimelineToolCallsStore } from '@helmx/plugin-client'
 import { conversationsApi, ApiClientError } from '../src/lib/api.js'
 import { collectSubtreeIds } from '../src/conversation/ancestry-model.js'
 import {
@@ -16,9 +17,7 @@ import { ARCHIVED_TAG } from '../src/shell/sidebar-model.js'
 import {
   buildTimelineItems,
   collectToolCallsByName,
-  createTimelineToolCallsStore,
   detectArtifactRef,
-  EMPTY_TIMELINE_TOOL_CALLS,
   filterRewoundEntries,
   findToolView,
   isFoldableStep,
@@ -1022,10 +1021,12 @@ test('createTimelineToolCallsStore：无关 toolName 与流式文本更新保引
 
   const store = createTimelineToolCallsStore(collectToolCallsByName(buildTimelineItems(baseEntries)))
   const initialSubSnapshot = store.getSnapshot('subagent')
+  const emptySnapshot = store.getSnapshot('bash')
   assert.equal(initialSubSnapshot.length, 1)
   assert.ok(Object.isFrozen(initialSubSnapshot))
-  assert.equal(store.getSnapshot('bash'), EMPTY_TIMELINE_TOOL_CALLS, '未出现的 toolName 返回冻结空数组')
-  assert.ok(Object.isFrozen(EMPTY_TIMELINE_TOOL_CALLS))
+  assert.equal(emptySnapshot.length, 0, '未出现的 toolName 返回冻结空数组')
+  assert.ok(Object.isFrozen(emptySnapshot))
+  assert.equal(store.getSnapshot('read'), emptySnapshot, '所有缺失分片共享同一冻结空数组引用')
 
   let subNotifies = 0
   let bashNotifies = 0
@@ -1114,8 +1115,8 @@ test('createTimelineToolCallsStore：无关 toolName 与流式文本更新保引
 
   // 4) 切空 / rewind 清空：已移除的分片回落冻结空数组并通知订阅者
   assert.equal(store.update(new Map()), true)
-  assert.equal(store.getSnapshot('subagent'), EMPTY_TIMELINE_TOOL_CALLS)
-  assert.equal(store.getSnapshot('bash'), EMPTY_TIMELINE_TOOL_CALLS)
+  assert.equal(store.getSnapshot('subagent'), emptySnapshot)
+  assert.equal(store.getSnapshot('bash'), emptySnapshot)
   assert.equal(subNotifies, 2)
   assert.equal(bashNotifies, 3)
 

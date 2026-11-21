@@ -12,7 +12,6 @@ import { useId, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ToolViewProps } from '@helmx/protocol'
 import type { WorkflowRunSummary } from '../../contracts.js'
-import * as PluginClient from '@helmx/plugin-client'
 import {
   StatusLight,
   ToolCallDetails,
@@ -22,6 +21,7 @@ import {
   useConversations,
   usePluginContext,
   usePluginLocale,
+  useTimelineToolCalls,
   useToolActivity,
 } from '@helmx/plugin-client'
 import { useElapsedNowMs, usePluginSessionDoc } from './hooks.ts'
@@ -40,7 +40,7 @@ import {
   resolveSubagentTaskTitle,
   subagentBadge,
 } from './models.ts'
-import type { SubagentBadge, SubagentTimelineCallLike } from './models.ts'
+import type { SubagentBadge } from './models.ts'
 import { executionLightStatus } from './model-execution-status.ts'
 import { requestWorkbenchRunFocus } from './workbench-focus.ts'
 import {
@@ -56,21 +56,11 @@ import {
   traceOpenWorkbenchRunLabel,
 } from './copy.ts'
 
-type TimelineToolCallsHook = (toolName: string) => ReadonlyArray<SubagentTimelineCallLike>
-const EMPTY_TIMELINE_CALLS: ReadonlyArray<SubagentTimelineCallLike> = []
-
-// Consume @helmx/plugin-client#useTimelineToolCalls (#25) when merged;
-// falls back to a stable empty-array hook in pre-merge worktrees without #25.
-const useSubagentTimelineCalls: TimelineToolCallsHook = (() => {
-  const hook = (PluginClient as Record<string, unknown>)['useTimelineToolCalls']
-  return typeof hook === 'function' ? (hook as TimelineToolCallsHook) : () => EMPTY_TIMELINE_CALLS
-})()
-
 export function SubagentToolView(props: ToolViewProps): ReactNode {
   const ctx = usePluginContext()
   const locale = usePluginLocale()
   const conversations = useConversations()
-  const subagentTimelineCalls = useSubagentTimelineCalls('subagent')
+  const subagentTimelineCalls = useTimelineToolCalls('subagent')
   const viewerConversationId = props.conversationId ?? ctx.conversationId
   const runsDoc = usePluginSessionDoc<{ runs: WorkflowRunSummary[] }>(
     'runs',
@@ -123,11 +113,6 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
     return undefined
   }, [execMeta?.run, execInfo?.runId, runs])
 
-  const legacySiblingCalls = (
-    props as ToolViewProps & { siblingCalls?: ReadonlyArray<SubagentTimelineCallLike> }
-  ).siblingCalls
-  const timelineCalls = subagentTimelineCalls.length > 0 ? subagentTimelineCalls : legacySiblingCalls
-
   const isLatest = useMemo(
     () =>
       viewerConversationId === undefined
@@ -137,7 +122,7 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
               callId: props.callId,
               input: props.input,
               presentationMeta,
-              ...(timelineCalls !== undefined ? { timelineCalls } : {}),
+              timelineCalls: subagentTimelineCalls,
               conversationId: viewerConversationId,
             },
             childId,
@@ -148,7 +133,7 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
       props.callId,
       props.input,
       presentationMeta,
-      timelineCalls,
+      subagentTimelineCalls,
       viewerConversationId,
       childId,
       conversations,

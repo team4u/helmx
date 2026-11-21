@@ -29,15 +29,9 @@ export interface SubagentTimelineCallLike {
   presentationMeta?: unknown
 }
 
-/** ToolViewProps aligned with the #10/#11 presentationMeta channel. */
-export type ToolViewPresentationProps = ToolViewProps & {
-  presentationMeta?: Readonly<Record<string, unknown>>
-}
-
-/** Read plain-object presentationMeta from ToolViewProps without touching legacy channels. */
+/** Read plain-object presentationMeta from ToolViewProps. */
 export function readToolPresentationMeta(props: ToolViewProps): Readonly<Record<string, unknown>> | undefined {
-  const meta = (props as ToolViewPresentationProps).presentationMeta
-  return asPlainRecord(meta)
+  return asPlainRecord(props.presentationMeta)
 }
 
 function asPlainRecord(source: unknown): Record<string, unknown> | undefined {

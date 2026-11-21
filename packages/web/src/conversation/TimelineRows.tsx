@@ -76,8 +76,8 @@ export function TraceRow({
   // 顶层业务卡标记 data-outline-card-id（tool.key）：会话大纲二级锚精确定位。
   const toolView = tool.toolView
   const replaceRow = toolView !== undefined && (toolView.spec as ToolViewSpec).replaceRow === true
-  const toolViewProps = useMemo(
-    () => (toolView !== undefined ? buildToolViewProps(tool, conversationId) : undefined),
+  const toolViewProps = useMemo<Record<string, unknown> | undefined>(
+    () => (toolView !== undefined ? { ...buildToolViewProps(tool, conversationId) } : undefined),
     [toolView, tool, conversationId],
   )
 

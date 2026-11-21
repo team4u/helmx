@@ -3051,6 +3051,8 @@ test('PluginHost.getManifest / listManifests: stably sorted read-only projection
         inputSchema: { type: 'object' },
         outputSchema: { type: 'object' },
         exposeAsTool: true,
+        presentationMetaSchema: { type: 'object', properties: { badge: { type: 'string' } }, additionalProperties: false },
+        projectPresentationMeta: () => ({ badge: 'alpha' }),
         scope: { profileIds: ['assistant'] },
         handler: () => ({ ok: true }),
       });
@@ -3060,6 +3062,7 @@ test('PluginHost.getManifest / listManifests: stably sorted read-only projection
         description: 'Direct tool',
         inputSchema: { type: 'object' },
         structuredOutputSchema: { type: 'object' },
+        presentationMetaSchema: { type: 'object', properties: { count: { type: 'integer' } }, additionalProperties: false },
         replay: 'safe',
         scope: { tags: ['ops'] },
         execute: () => ({ ok: true }),
@@ -3143,7 +3146,19 @@ test('PluginHost.getManifest / listManifests: stably sorted read-only projection
   assert.equal(full.actions[1]!.toolName, undefined);
   assert.deepEqual(full.tools.map((tool) => tool.name), [actionToolAlias('z:full', 'alpha'), 'zebra_tool']);
   assert.deepEqual(full.tools[0]!.scope, { profileIds: ['assistant'] });
+  assert.deepEqual(full.tools[0]!.structuredOutputSchema, { type: 'object' });
+  assert.deepEqual(full.tools[0]!.presentationMetaSchema, {
+    type: 'object',
+    properties: { badge: { type: 'string' } },
+    additionalProperties: false,
+  });
   assert.deepEqual(full.tools[1]!.scope, { tags: ['ops'] });
+  assert.deepEqual(full.tools[1]!.structuredOutputSchema, { type: 'object' });
+  assert.deepEqual(full.tools[1]!.presentationMetaSchema, {
+    type: 'object',
+    properties: { count: { type: 'integer' } },
+    additionalProperties: false,
+  });
   assert.equal(full.tools[1]!.replay, 'safe');
   assert.deepEqual(full.ui.map((u) => `${u.surface}:${u.id}`), ['screen:main', 'workbench.panel:panel-b']);
   assert.deepEqual(full.routes, [

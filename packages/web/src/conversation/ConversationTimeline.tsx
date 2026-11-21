@@ -8,7 +8,12 @@ import type {
   ProfileStarterPrompt,
 } from '@helmx/protocol/browser'
 import { artifactsApi } from '../lib/api.js'
-import { HelmxIcon, CopyButton } from '@helmx/plugin-client'
+import {
+  HelmxIcon,
+  CopyButton,
+  createTimelineToolCallsStore,
+  TimelineToolCallsContext,
+} from '@helmx/plugin-client'
 import {
   useConversationDetail,
   useConversationSummary,
@@ -33,7 +38,6 @@ import {
   buildAssistantModelBoundaries,
   buildTimelineItems,
   collectToolCallsByName,
-  createTimelineToolCallsStore,
   findLatestProcessTurnKey,
   lastEditableHumanInput,
   queuedAgentTextCollapse,
@@ -845,10 +849,6 @@ export function ConversationTimeline({
   // Per-toolName external store replacing O(N^2) siblingCalls prop drilling:
   // initialized synchronously for SSR/first-render parity and synced on commit with
   // shallow-equal bucket reference preservation (unrelated toolName updates notify nobody).
-  // Pending SDK wiring point (aligns 1:1 with timeline-sdk commit 0abe8a7db):
-  // swap `createTimelineToolCallsStore` import to `@helmx/plugin-client` alongside
-  // `TimelineToolCallsContext`, and wrap `.timeline-inner` in
-  // `<TimelineToolCallsContext.Provider value={toolCallsStore}>`.
   const [toolCallsStore] = useState(() => createTimelineToolCallsStore(collectToolCallsByName(items)))
   useIsomorphicLayoutEffect(() => {
     toolCallsStore.update(collectToolCallsByName(items))
@@ -1322,7 +1322,8 @@ export function ConversationTimeline({
           ) : null}
         </div>
       ) : null}
-      <div ref={innerRef} className="timeline-inner">
+      <TimelineToolCallsContext.Provider value={toolCallsStore}>
+        <div ref={innerRef} className="timeline-inner">
         {items.map((item) => {
           // Containment class: only finished historical rows get it (live/queued/latest assistant
           // rows/released targets resolve to an empty string and render normally).
@@ -1410,7 +1411,8 @@ export function ConversationTimeline({
         {conversation.status === 'error' ? (
           <TurnErrorNotice conversation={conversation} detailEntries={detailEntries} onRequestEdit={onRequestEdit} />
         ) : null}
-      </div>
+        </div>
+      </TimelineToolCallsContext.Provider>
       <div ref={bottomRef} className="timeline-scroll-anchor" />
       </div>
       {showScrollBottom ? (

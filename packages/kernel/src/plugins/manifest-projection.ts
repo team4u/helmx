@@ -23,6 +23,7 @@ import {
 import { redactJsonValue } from '../redact.js';
 import { actionToolAlias, type CapabilityRegistry } from './capability-registry.js';
 import type { PluginDocRegistry } from './doc-registry.js';
+import { isPluginStateActive } from './lifecycle-helpers.js';
 import { jsonClone } from './shared.js';
 import type { PluginState } from './types.js';
 import type { UiRegistry } from './ui-registry.js';
@@ -84,9 +85,9 @@ export function buildPluginManifestProjection(
   const { state, capabilityRegistry, uiRegistry, docRegistry, redactText } = options;
   const pluginId = state.definition.id;
   const failed = state.lastError !== undefined;
-  const status: PluginStatus = failed ? 'failed' : state.enabled ? 'active' : 'disabled';
-  const includeRegistrations =
-    options.includeCurrentRegistrations === true || (state.enabled && state.phase === 'idle');
+  const active = isPluginStateActive(state);
+  const status: PluginStatus = failed ? 'failed' : active ? 'active' : 'disabled';
+  const includeRegistrations = options.includeCurrentRegistrations === true || active;
 
   const dependencies = [...state.dependencies].sort(compareCodeUnit);
   const hooks = includeRegistrations
@@ -116,6 +117,9 @@ export function buildPluginManifestProjection(
           inputSchema: jsonClone(spec.inputSchema),
           ...(spec.structuredOutputSchema !== undefined
             ? { structuredOutputSchema: jsonClone(spec.structuredOutputSchema) }
+            : {}),
+          ...(spec.presentationMetaSchema !== undefined
+            ? { presentationMetaSchema: jsonClone(spec.presentationMetaSchema) }
             : {}),
           ...(spec.replay !== undefined ? { replay: spec.replay } : {}),
           ...(spec.scope !== undefined ? { scope: jsonClone(spec.scope) } : {}),
@@ -190,8 +194,7 @@ export function buildPluginManifestProjection(
     ? state.services.map((svc) => svc.id).sort(compareCodeUnit)
     : [];
 
-  const hashes =
-    state.enabled && state.phase === 'idle' ? uiRegistry.getClientHashes(pluginId) : undefined;
+  const hashes = active ? uiRegistry.getClientHashes(pluginId) : undefined;
   const clientModules: PluginManifestClientModule[] = includeRegistrations
     ? uiRegistry
         .getDeclaredClientModules(pluginId)

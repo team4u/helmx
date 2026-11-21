@@ -243,6 +243,39 @@ test('assertPluginManifestProjection enforces strict sorting, JSON safety, and l
   const valid = assertPluginManifestProjection(makeValid())
   assert.equal(valid.id, 'demo:manifest')
 
+  // Runtime dependency forced-disable produces enabled=true with status=failed + error, and empty active capabilities.
+  const failedWhileEnabled = assertPluginManifestProjection({
+    ...makeValid(),
+    enabled: true,
+    status: 'failed',
+    error: { code: 'plugin_dependency_not_enabled', message: 'dep off', stage: 'enable' },
+    hooks: [],
+    actions: [],
+    tools: [],
+    ui: [],
+    routes: [],
+    docs: [],
+    providers: [],
+    services: [],
+    clientModules: [],
+  })
+  assert.equal(failedWhileEnabled.enabled, true)
+  assert.equal(failedWhileEnabled.status, 'failed')
+
+  // Tool and exposeAsTool action presentationMetaSchema are accepted as JSON Schema objects and rejected otherwise.
+  const withPresentationMetaSchema = makeValid()
+  withPresentationMetaSchema.actions[0] = {
+    ...withPresentationMetaSchema.actions[0]!,
+    presentationMetaSchema: { type: 'object', properties: { badge: { type: 'string' } }, additionalProperties: false },
+  }
+  withPresentationMetaSchema.tools[1] = {
+    ...withPresentationMetaSchema.tools[1]!,
+    presentationMetaSchema: { type: 'object', properties: { tag: { type: 'string' } }, additionalProperties: false },
+  }
+  const validatedMeta = assertPluginManifestProjection(withPresentationMetaSchema)
+  assert.ok(validatedMeta.actions[0]!.presentationMetaSchema)
+  assert.ok(validatedMeta.tools[1]!.presentationMetaSchema)
+
   // Unsorted / duplicate / leaky / malformed manifests must throw 400 invalid_plugin_manifest
   const assertInvalid = (mutate: (m: Record<string, unknown>) => void, label: string) => {
     const candidate = makeValid() as unknown as Record<string, unknown>
@@ -261,8 +294,11 @@ test('assertPluginManifestProjection enforces strict sorting, JSON safety, and l
   assertInvalid((m) => { (m['actions'] as Array<Record<string, unknown>>)[0]!['pluginId'] = 'other' }, 'mismatched action pluginId')
   assertInvalid((m) => { delete (m['actions'] as Array<Record<string, unknown>>)[0]!['toolName'] }, 'missing toolName when exposeAsTool=true')
   assertInvalid((m) => { (m['actions'] as Array<Record<string, unknown>>)[1]!['toolName'] = 'extra' }, 'unexpected toolName when exposeAsTool!=true')
+  assertInvalid((m) => { (m['actions'] as Array<Record<string, unknown>>)[1]!['presentationMetaSchema'] = { type: 'object' } }, 'unexpected action presentationMetaSchema when exposeAsTool!=true')
+  assertInvalid((m) => { (m['actions'] as Array<Record<string, unknown>>)[0]!['presentationMetaSchema'] = 'not-an-object' }, 'non-object action presentationMetaSchema')
   assertInvalid((m) => { m['tools'] = [...(m['tools'] as unknown[])].reverse() }, 'unsorted tools')
   assertInvalid((m) => { (m['tools'] as Array<Record<string, unknown>>)[1]!['qualifiedId'] = 'x.y' }, 'qualifiedId on direct tool')
+  assertInvalid((m) => { (m['tools'] as Array<Record<string, unknown>>)[1]!['presentationMetaSchema'] = 'not-an-object' }, 'non-object presentationMetaSchema')
   assertInvalid((m) => { (m['ui'] as Array<Record<string, unknown>>)[0]!['surface'] = 'unknown.surface' }, 'unknown UI surface')
   assertInvalid((m) => { (m['ui'] as Array<Record<string, unknown>>)[0]!['id'] = 'mismatch' }, 'mismatched ui.spec.id')
   assertInvalid((m) => { m['routes'] = [...(m['routes'] as unknown[])].reverse() }, 'unsorted routes')
@@ -279,4 +315,3 @@ test('assertPluginManifestProjection enforces strict sorting, JSON safety, and l
     ;(m['actions'] as Array<Record<string, unknown>>)[0]!['inputSchema'] = cyc
   }, 'circular schema')
 })
-

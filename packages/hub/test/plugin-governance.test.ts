@@ -6,7 +6,12 @@
  * 4. 插件配置分层溯源（sources）、不固化 default、null 重置与 required 校验。
  */
 import { createPluginBuildProvider } from '@helmx/plugin-build'
-import { HelmxError, type ConversationSummary, type Profile } from '@helmx/protocol'
+import {
+  assertPluginManifestProjection,
+  HelmxError,
+  type ConversationSummary,
+  type Profile,
+} from '@helmx/protocol'
 import assert from 'node:assert/strict'
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -431,4 +436,36 @@ test('插件配置分层：磁盘不固化 default、sources 三态溯源、null
   await rejectsCode(store.set('ext:req', { token: null }, reqSchema), 'validation_error', 400)
   await rejectsCode(store.set('ext:req', { nope: 'x' }, reqSchema), 'validation_error', 400)
   await rejectsCode(store.set('ext:req', { token: 42 }, reqSchema), 'validation_error', 400)
+})
+
+test('createHelmx 全部 14 个内置插件的只读契约投影均通过严格校验并完整暴露 presentationMetaSchema', { timeout: 60_000 }, async (t) => {
+  const dataDir = useTempDir(t, 'helmx-hub-manifests-')
+  const { app, kernel } = await createHubTestApp({ dataDir, cwd: dataDir })
+  try {
+    const initial = kernel.plugins.listManifests()
+    assert.equal(initial.length, 14)
+    for (const manifest of initial) {
+      assertPluginManifestProjection(manifest)
+    }
+
+    const wfManifest = kernel.plugins.getManifest('builtin:workflow')
+    assert.ok(wfManifest.tools.some((tool) => tool.name === 'subagent' && tool.presentationMetaSchema !== undefined))
+    assert.ok(wfManifest.tools.some((tool) => tool.name === 'SubagentWorkflow' && tool.presentationMetaSchema !== undefined))
+
+    const swarmManifest = kernel.plugins.getManifest('builtin:swarm')
+    assert.equal(swarmManifest.tools.length, 11)
+    assert.ok(swarmManifest.tools.every((tool) => tool.presentationMetaSchema !== undefined))
+
+    const wtManifest = kernel.plugins.getManifest('builtin:worktree')
+    assert.ok(wtManifest.tools.some((tool) => tool.name === 'cleanup_worktree' && tool.presentationMetaSchema !== undefined))
+
+    // Enabling default-disabled builtin:superagent also yields a strictly valid manifest with presentationMetaSchema.
+    await kernel.plugins.enable('builtin:superagent')
+    const saManifest = kernel.plugins.getManifest('builtin:superagent')
+    assertPluginManifestProjection(saManifest)
+    assert.equal(saManifest.status, 'active')
+    assert.ok(saManifest.tools.some((tool) => tool.name === 'dispatch_worker' && tool.presentationMetaSchema !== undefined))
+  } finally {
+    await app.close()
+  }
 })

@@ -667,7 +667,7 @@ test('SSR：run 主徽章同源有效状态——run 已完成但子任务仍在
     ],
   }
   const toolHtml = await renderWorkflowToolView(
-    { callId: 'call-x', toolName: 'SubagentWorkflow', status: 'done', conversationId: 1, siblingCalls: [] },
+    { callId: 'call-x', toolName: 'SubagentWorkflow', status: 'done', conversationId: 1 },
     doc,
     [conv11, conv21],
   )
@@ -719,7 +719,6 @@ test('SSR：WorkflowToolView 无关联 run 时收口单行并保留折叠详情�
     status: 'running',
     result: '原始工作流返回结果',
     conversationId: 1,
-    siblingCalls: [],
   })
   assert.ok(html.includes('workflow-trace-row-btn'))
   assert.ok(html.includes('aria-expanded="false"'))
@@ -908,10 +907,10 @@ const EMOJI_RE = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}
 
 test('SSR：WorkflowToolView 渲染输出全程无任何 Emoji 或特殊符号字符', { timeout: 60_000 }, async () => {
   const samples: Array<[Record<string, unknown>, unknown]> = [
-    [{ callId: 'w1', toolName: 'SubagentWorkflow', status: 'running', conversationId: 1, siblingCalls: [] }, undefined],
-    [{ callId: 'w2', toolName: 'SubagentWorkflow', status: 'done', conversationId: 1, siblingCalls: [] },
+    [{ callId: 'w1', toolName: 'SubagentWorkflow', status: 'running', conversationId: 1 }, undefined],
+    [{ callId: 'w2', toolName: 'SubagentWorkflow', status: 'done', conversationId: 1 },
       { runs: [run({ status: 'completed', result: { ok: true }, nodes: [node({ id: 'a', status: 'done', output: '完成' })] })] }],
-    [{ callId: 'w3', toolName: 'SubagentWorkflow', status: 'error', conversationId: 1, siblingCalls: [] },
+    [{ callId: 'w3', toolName: 'SubagentWorkflow', status: 'error', conversationId: 1 },
       { runs: [run({ kind: 'subagent', status: 'failed', error: '子代理异常退出', nodes: [node({ id: 'a', status: 'failed', error: 'boom' })] })] }],
   ]
   for (const [props, doc] of samples) {
@@ -1098,7 +1097,7 @@ test('resolveWorkflowRunDisplayName 与 SSR：run.name 为占位/runId 时优先
     nodes: [node({ id: 'a', kind: 'action', status: 'done', label: '步骤一' })],
   })
   const toolHtml = await renderWorkflowToolView(
-    { callId: 'call_fallback', toolName: 'SubagentWorkflow', status: 'done', conversationId: 1, siblingCalls: [] },
+    { callId: 'call_fallback', toolName: 'SubagentWorkflow', status: 'done', conversationId: 1 },
     { runs: [unnamedRun] },
   )
   assert.ok(toolHtml.includes('端到端冒烟验收'), 'WorkflowToolView 应主显 description 首行')

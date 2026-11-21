@@ -377,7 +377,7 @@ export function registerSuperAgentActions(
     presentationMetaSchema?: JsonSchema
     execute: (input: TIn, context: PluginToolContext) => unknown
   }): void => {
-    const toolSpec: PluginToolSpec<never> & { presentationMetaSchema?: JsonSchema } = {
+    ctx.tool({
       name: spec.name,
       description: spec.description,
       inputSchema: spec.inputSchema,
@@ -385,8 +385,7 @@ export function registerSuperAgentActions(
       ...(spec.presentationMetaSchema !== undefined ? { presentationMetaSchema: spec.presentationMetaSchema } : {}),
       scope: ROUTER_TOOL_SCOPE,
       execute: (input: never, context: PluginToolContext) => spec.execute(input as TIn, context),
-    }
-    ctx.tool(toolSpec as PluginToolSpec<never>)
+    })
   }
 
   const dispatchWorkerOutputSchema: Record<string, unknown> = {
