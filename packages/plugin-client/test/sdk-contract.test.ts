@@ -60,6 +60,7 @@ test('host-facing symbols (port / context / factory / explicit-addressing hooks)
     'usePluginSessionDocValue',
     'ToolActivityContext',
     'useToolActivity',
+    'ScreenParamsContext',
   ] as const) {
     assert.ok(name in SDK, `host-facing symbol ${name} must be exported`)
     assert.ok((SDK as Record<string, unknown>)[name] !== undefined, `host-facing symbol ${name} must not be undefined`)
@@ -188,6 +189,46 @@ test('usePluginDoc / useConversations / usePlugins fetch through the port; first
   assert.deepEqual(docValue, { ok: 1 }, 'public doc comes from port pluginDocs')
   assert.equal(conversations?.length, 1, 'conversation summaries come from port conversations')
   assert.deepEqual(screens, [], 'screens come from the port')
+  act(() => { void root.unmount() })
+  void host
+})
+
+// ---------------------------------------------------------------------------
+// 1b. Screen params scope (host ScreenHost bridge)
+// ---------------------------------------------------------------------------
+
+test('useScreenParams: null outside a provided scope; inside it forwards params / isSplit and routes setParams verbatim', { timeout: 60_000 }, () => {
+  const writes: Array<{ patch: Record<string, string | undefined>; options?: { push?: boolean } }> = []
+  const scope: SDK.ScreenParamsScope = {
+    params: { view: 'main', tab: 'all' },
+    isSplit: true,
+    setParams: (patch, options) => {
+      writes.push({ patch, options })
+    },
+  }
+  let outside: SDK.ScreenParamsScope | null | undefined
+  let inside: SDK.ScreenParamsScope | null | undefined
+  function OutsideProbe(): React.ReactNode {
+    outside = SDK.useScreenParams()
+    return e('div', null, 'outside')
+  }
+  function InsideProbe(): React.ReactNode {
+    inside = SDK.useScreenParams()
+    return e('div', null, 'inside')
+  }
+  const { host, root } = mount(
+    e(SDK.ScreenParamsContext.Provider, { value: scope },
+      e(InsideProbe)),
+  )
+  mount(e(OutsideProbe))
+  assert.equal(outside, null, 'outside a fullscreen screen the scope is honestly null, never a fabricated no-op')
+  assert.equal(inside, scope, 'inside the provided scope the hook returns the host-established scope')
+  assert.deepEqual(inside?.params, { view: 'main', tab: 'all' })
+  assert.equal(inside?.isSplit, true)
+  act(() => {
+    inside?.setParams({ view: undefined, tab: 'pinned' }, { push: true })
+  })
+  assert.deepEqual(writes, [{ patch: { view: undefined, tab: 'pinned' }, options: { push: true } }], 'setParams forwards patch and options verbatim (single write path)')
   act(() => { void root.unmount() })
   void host
 })

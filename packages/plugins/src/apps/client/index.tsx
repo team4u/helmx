@@ -33,6 +33,7 @@ import {
   DialogPortal,
   DialogTitle,
   HelmxIcon,
+  ScreenToolbar,
   StatusLight,
   usePluginContext,
   usePluginDoc,
@@ -601,7 +602,7 @@ export function AppCenterScreen(props: AppCenterScreenProps): ReactNode {
         </div>
       </div>
 
-      <div className="apps-center-toolbar">
+      <ScreenToolbar className="apps-center-toolbar">
         <div className="primary-search-box">
           <HelmxIcon name="search" size={14} />
           <input
@@ -645,7 +646,7 @@ export function AppCenterScreen(props: AppCenterScreenProps): ReactNode {
             <span className="badge tabular-nums">{stats.pinned}</span>
           </button>
         </div>
-      </div>
+      </ScreenToolbar>
 
       {filtered.length > 0 ? (
         <div className="apps-grid">

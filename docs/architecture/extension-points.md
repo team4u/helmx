@@ -93,6 +93,8 @@ export type HookName =
 
 Screen 组件接收 `ScreenProps`：`pluginId / screenId / isSplit / params / setParams`。主屏参数在 URL Hash 中编码为 `sp.<key>`，分屏参数编码为 `ssp.<key>`——两边展示同一 Screen 时参数互相独立。`setParams(patch)` 默认替换历史记录，值为 `undefined` 删除对应键，`{ push: true }` 新增历史记录；组件不得直接操作 `history` 或自建路由。
 
+屏内嵌套组件（不接收 slotProps）可从共享 SDK 的 `useScreenParams()` 读取同一 scope：宿主 `ScreenHost` 在挂载的全屏视图外层建立 `ScreenParamsScope`（`params / setParams / isSplit`，与 `ScreenProps` 同一实现、绑定同一 pane，URL Hash 仍是唯一真相）；不在全屏屏内（如 settings.panel 复用嵌入）时返回 `null`——诚实缺席，绝不伪造 no-op scope。全屏页面壳统一复用 `@helmx/plugin-client` 的布局原语：`Screen`（页面容器+页头）、`ScreenSection`（分节）、`ScreenToolbar`（页头与正文之间的搜索/筛选/动作工具栏行，宿主公共类 `.screen-toolbar` / `.screen-toolbar-actions`）、`DataTable`、`KvGrid`；宿主样式绝不点名插件私有类名（`host-styles-boundary` 门禁锁定）。
+
 输入区组件通过 `ComposerScopeProps.composer` 获得受控句柄：
 
 ```typescript

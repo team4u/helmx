@@ -6,7 +6,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ScreenProps } from '@helmx/protocol'
-import { formatBytes, formatTime, resolveLocalizedText, usePluginLocale } from '@helmx/plugin-client'
+import { formatBytes, formatTime, resolveLocalizedText, ScreenToolbar, usePluginLocale } from '@helmx/plugin-client'
 import { useWorkflowLibrary } from './hooks.ts'
 import { Icon } from './WorkflowIcon.tsx'
 import { WorkflowLibraryDrawer } from './WorkflowLibraryDrawer.tsx'
@@ -122,12 +122,11 @@ export function WorkflowLibraryScreen(props: WorkflowLibraryScreenProps): ReactN
       </div>
 
       <div className="screen-section">
-        <div className="workflow-lib-toolbar">
-          <div className="workflow-lib-search">
+        <ScreenToolbar label={resolveLocalizedText(LIB_SEARCH_ARIA, locale)}>
+          <div className="search-box">
             <Icon name="search" size={13} />
             <input
               type="text"
-              className="input"
               placeholder={resolveLocalizedText(LIB_SEARCH_PLACEHOLDER, locale)}
               value={queryDraft}
               onChange={(e) => {
@@ -152,7 +151,7 @@ export function WorkflowLibraryScreen(props: WorkflowLibraryScreenProps): ReactN
               </button>
             ) : null}
           </div>
-        </div>
+        </ScreenToolbar>
 
         {loading && items === undefined ? <div className="workflow-phase-empty">{resolveLocalizedText(LIB_LOADING, locale)}</div> : null}
         {error !== undefined ? (

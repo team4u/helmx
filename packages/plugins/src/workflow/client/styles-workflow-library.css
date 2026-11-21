@@ -103,21 +103,8 @@
   gap: 14px;
 }
 
-.workflow-lib-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin-bottom: 10px;
-}
-
-.workflow-lib-search {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: 1 1 200px;
-  min-width: 0;
-}
+/* 工具栏已迁移到共享 ScreenToolbar + .search-box 公共原语（宿主 primitives.css），
+   此处不再保留私有 toolbar/search flex 规则 */
 
 .workflow-lib-grid {
   display: grid;

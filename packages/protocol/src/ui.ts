@@ -389,6 +389,25 @@ export interface ScreenProps {
   setParams(patch: Record<string, string | undefined>, options?: { push?: boolean }): void
 }
 
+/**
+ * Screen params scope exposed by useScreenParams() inside a full-screen screen
+ * component tree: the host ScreenHost establishes it around the mounted view
+ * (main and split panes each bind their own scope; the URL hash stays the
+ * single source of truth — params are the pane target's sp. / ssp. namespace
+ * values, setParams is the very same implementation ScreenProps carries, no
+ * second write path). Returns null outside a full-screen screen (e.g. a
+ * component reused inside settings.panel) — honest absence, never a
+ * fabricated no-op.
+ */
+export interface ScreenParamsScope {
+  /** Deep-link params of the pane this component tree is mounted in (sp.* / ssp.* namespace). */
+  readonly params: Readonly<Record<string, string>>
+  /** Same contract as ScreenProps.setParams (bound to the owning pane). */
+  setParams(patch: Record<string, string | undefined>, options?: { push?: boolean }): void
+  /** Whether this component tree is mounted in the right split pane. */
+  readonly isSplit: boolean
+}
+
 /** timeline.renderer: takes over rendering of a single timeline entry. */
 export interface TimelineRendererProps {
   entry: ConversationEntry
@@ -589,14 +608,16 @@ export interface PluginClientContext {
  *
  * The single source of truth of exported symbols is PLUGIN_CLIENT_SHARED_EXPORTS:
  * - hooks: usePluginContext / usePluginLocale / usePluginTranslator / usePluginDoc / usePluginSessionDoc /
- *   useToolActivity / useConversations / useConversation / useConversationBackground / usePlugins;
+ *   useToolActivity / useConversations / useConversation / useConversationBackground / usePlugins /
+ *   useScreenParams (screen-local params scope provided by the host ScreenHost);
  * - accessibility base components: Switch / Select / MultiSelect / Checkbox / Tabs family /
  *   SegmentedControl / HelmxIcon / ViewBoundary / Callout;
  * - StatusLight: unified status light (visually dot-only; the localized label
  *   becomes the screen-reader accessible name, never visible status text) for
  *   card main status slots, reusing the host .status-dot vocabulary;
  * - lightweight layout primitives: Screen (page container + header) / ScreenSection (sectioning) /
- *   DataTable (composable table with unified loading/empty) / KvGrid (key-value overview);
+ *   ScreenToolbar (header-to-content toolbar row) / DataTable (composable table with unified
+ *   loading/empty) / KvGrid (key-value overview);
  * - content display: MarkdownView (standard markdown rendering) / CodeBlockView
  *   (syntax-highlighted code block) / CopyButton (copy button);
  * - formatting pure functions: formatTime (compact MM-DD HH:mm) / formatCompactTimestamp
@@ -666,6 +687,7 @@ export const PLUGIN_CLIENT_SHARED_EXPORTS = [
   'useConversationBackground',
   'usePlugins',
   'usePluginConfig',
+  'useScreenParams',
   'PluginSlot',
   'Switch',
   'Select',
@@ -694,6 +716,7 @@ export const PLUGIN_CLIENT_SHARED_EXPORTS = [
   'DialogTrigger',
   'Screen',
   'ScreenSection',
+  'ScreenToolbar',
   'DataTable',
   'KvGrid',
   'formatTime',
