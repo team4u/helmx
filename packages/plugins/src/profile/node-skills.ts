@@ -1,21 +1,24 @@
 /**
- * builtin:profile 节点技能库：会话坐标 (nodeId, cwd) 指向的节点在工作区
- * `<cwd>/.helmx/skills/<id>/SKILL.md` 下提供的只读技能来源（策略归插件层；
- * 内核只提供 executionEnv / nodeIpc / redact 机制端口，本模块零内核改动）。
+ * builtin:profile 节点技能库：目标节点机器级根目录（`~/.helmx/skills`、`~/.agents/skills`）
+ * 与工作区 `<cwd>/.helmx/skills` 下的只读技能来源（策略归插件层；内核只提供
+ * executionEnv / nodeIpc / redact 机制端口，本模块零内核改动）。
  *
  * 契约与诚实性纪律（对齐仓库 AGENTS.md 第 3 节红线与 agents-md.ts 先例）：
  * - 只读发现与加载：节点技能永远留在节点事实来源上，绝不复制进 Hub
- *   SkillService 的 dataDir；每回合 before_turn 重新发现、load_skill 每次都读
- *   节点当前内容（节点技能更新下一回合即生效，不回写历史上下文）；
- * - 同名优先级契约（明确、不依赖 listDir 顺序）：Hub dataDir（含受管技能，
- *   永远最高）> 机器级共享根 ~/.agents/skills > 节点 .helmx/skills。节点技能
- *   只能补充、不能覆盖：同名时 catalog 不收录节点版本，load_skill 无来源
- *   参数、永远解析到高优先级版本，Agent 不面对 namespace skill id；
- * - 工作区无 .helmx/skills（不存在 / 是普通文件）属常态，按空处理；节点
- *   离线、宿主能力未接线、权限或 IO 故障绝不静默降级为「无节点技能」，
- *   显式返回 unavailable 诊断（before_turn 注入显式说明段，load_skill 显式
- *   报错）；单个技能条目内容缺失（无 SKILL.md）或 frontmatter 非法按
- *   第三方常态跳过该条目，与机器级共享根的 skippable 语义一致；
+ *   SkillService 的 dataDir；每回合 before_turn 重新发现、load_skill 与
+ *   skill_read 每次都读节点当前内容（节点技能更新即生效，不回写历史上下文）；
+ * - 同名优先级契约（明确、不依赖 listDir 顺序）：
+ *   1. Hub dataDir（含受管技能，永远最高）
+ *   2. Hub 机器级共享根 ~/.agents/skills
+ *   3. 远端节点机器级根目录 ~/.helmx/skills > ~/.agents/skills（nodeId !== 'local'）
+ *   4. 工作区项目级目录 <cwd>/.helmx/skills（local 与远端节点均在提供 cwd 时叠加）
+ *   节点侧所有根均标 source: 'node'，只能补充、不能覆盖 Hub 版本：同名时
+ *   catalog 不收录节点版本，load_skill / skill_read 无来源参数、永远解析到
+ *   最高优先级版本（若 cwd 恰好是节点主目录，按 canonicalPath 去重免重复扫描）；
+ * - 目录缺失（不存在 / 非目录）属常态，按空处理；节点离线、宿主能力未接线、
+ *   权限或 IO 故障绝不静默降级为「无节点技能」，显式返回 unavailable 诊断
+ *   （before_turn 注入显式说明段，load_skill / skill_read 显式报错）；单个
+ *   技能条目内容缺失（无 SKILL.md）或 frontmatter 非法按第三方常态跳过该条目；
  * - 读取全程使用 ExecutionEnv 安全原语封死 TOCTOU 与无界读取（同
  *   agents-md 口径）：canonicalPath 解析后以 openBinaryReader(realPath,
  *   { noFollow: true }) 打开，kind/size 以同句柄 reader.info 为权威，正文只经
@@ -27,8 +30,8 @@
  *   技能完全同一词汇）：穿越 / 绝对路径 / 反斜杠 / 非法字符一律拒绝；
  * - 节点文件的软链组织是节点本地事实（Windows junction 同理）：发现时
  *   listDir 把软链列为 symlink 而不跟随（技能目录为软链即跳过），读取时
- *   noFollow 拒最终组件软链；模型可请求的路径被相对路径词汇限制在技能
- *   目录树内。本模块不做 OS 沙箱，与 Hub 技能口径一致。
+ *   fileInfo + canonicalPath 包含校验 + noFollow 拒最终组件软链；模型可请求的路径
+ *   被相对路径词汇限制在技能目录树内。本模块不做 OS 沙箱，与 Hub 技能口径一致。
  */
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import {
@@ -46,17 +49,20 @@ import type { ExecutionEnv } from '@earendil-works/pi-durable/env'
 /** 节点技能库在工作区内的相对目录（POSIX 分隔符；路径合成按 cwd 形状选规则）。 */
 export const NODE_SKILLS_RELATIVE_DIR = '.helmx/skills'
 
+/** 远端节点（nodeId !== 'local'）机器级技能根目录（按优先级顺序；经节点端 ~ 展开到节点宿主用户主目录）。 */
+export const DEFAULT_NODE_MACHINE_SKILL_ROOTS = ['~/.helmx/skills', '~/.agents/skills'] as const
+
 /**
  * 节点技能单文件读取前置字节上限（有界保护，与 AGENTS.md 读取同口径）：
- * SKILL.md 与 references 文件超过该字节数即不读正文——发现层令整库显式
- * unavailable（哪个技能超限写进诊断）、load_skill 显式 502 拒绝。
+ * SKILL.md 与 references 文件超过该字节数即不读正文——发现层显式报
+ * unavailable（哪个技能超限写进诊断）、读取层显式 502 拒绝。
  */
 export const MAX_NODE_SKILL_FILE_BYTES = 256 * 1024
 
-/** 单工作区节点技能条目上限：超过按病态目录显式不可用，绝不静默截断。 */
+/** 单根目录节点技能条目上限：超过按病态目录显式不可用，绝不静默截断。 */
 export const MAX_NODE_SKILLS = 256
 
-/** 单个节点技能 references 文件数上限：超过按病态技能跳过，绝不静默截断。 */
+/** 单个节点技能 references 文件数上限：超过按病态技能跳过/报错，绝不静默截断。 */
 export const MAX_NODE_SKILL_REFERENCES = 512
 
 /** 节点技能正文按 UTF-8 解码（非法序列替换为 U+FFFD，与 Hub readTextFile 同口径）。 */
@@ -69,10 +75,15 @@ export interface NodeSkillsHostPort {
   nodeIpc: { isOnline(nodeId: string): boolean }
 }
 
-/** 发现结果：ok=可用技能摘要（按 id 排序，只含未被 Hub 同名覆盖的补充技能）；unavailable=显式诊断（已脱敏、未转义）。 */
+/** 节点技能扫描/读取选项（主要用于测试覆盖机器级根目录）。 */
+export interface NodeSkillScanOptions {
+  machineRoots?: readonly string[]
+}
+
+/** 发现结果：ok=可用技能摘要（按 id 排序）；unavailable=显式诊断（已脱敏、未转义，健康根的技能仍保留）。 */
 export type NodeSkillScan =
   | { kind: 'ok'; skills: SkillSummary[] }
-  | { kind: 'unavailable'; reason: string }
+  | { kind: 'unavailable'; reason: string; skills?: SkillSummary[] }
 
 /** 有界读取结果：absent=常态缺失；refused=显式不可读（已脱敏、未转义）；content=同句柄稳定读到的 UTF-8 正文。 */
 type NodeFileRead =
@@ -93,9 +104,54 @@ function isAbsentFileError(error: { code: string; message: string }): boolean {
   return error.code === 'not_found' || error.code === 'is_directory' || error.message.includes('EISDIR')
 }
 
-/** 工作区路径合成：按 cwd 自身形状选择词法规则（POSIX 与 Windows 靶点均安全，不假设远端 home）。 */
+/** 根目录不存在或路径中存在非目录组件属常态空，其余错误显式不可读。 */
+function isAbsentRootError(error: { code: string; message: string }): boolean {
+  return (
+    error.code === 'not_found' ||
+    error.code === 'not_directory' ||
+    error.message.includes('ENOTDIR') ||
+    error.message.includes('ENOENT')
+  )
+}
+
+/** 工作区路径合成：按目标路径自身形状选择词法规则（POSIX 与 Windows 靶点均安全，不假设远端 home）。 */
 function joinUnderCwd(cwd: string, ...segments: string[]): string {
   return pathRulesForShape(targetPathShape(cwd)).join(cwd, ...segments)
+}
+
+/** 规范化目录去重键（Windows 下按大小写折叠，避免主目录作 cwd 时重复扫描）。 */
+function rootDedupKey(realRoot: string): string {
+  return targetPathShape(realRoot) === 'win32' ? realRoot.toLowerCase() : realRoot
+}
+
+/** 校验 target 词法上位于 root 目录树内（防中间软链越出技能目录）。 */
+function isPathWithin(target: string, root: string): boolean {
+  const shape = targetPathShape(root)
+  const normTarget = shape === 'win32' ? target.toLowerCase() : target
+  const normRoot = shape === 'win32' ? root.toLowerCase() : root
+  const sep = shape === 'win32' ? '\\' : '/'
+  const prefix = normRoot.endsWith(sep) ? normRoot : normRoot + sep
+  return normTarget === normRoot || normTarget.startsWith(prefix)
+}
+
+/**
+ * 解析目标节点的技能发现根目录列表（按优先级从高到低排列）：
+ * - local：Hub 已提供 dataDir + ~/.agents/skills，此处仅在提供 cwd 时扫描工作区 `.helmx/skills`；
+ * - 远端节点：依次扫描机器级 `~/.helmx/skills`、`~/.agents/skills`，以及可选的工作区 `<cwd>/.helmx/skills`。
+ */
+function resolveNodeSkillRoots(
+  nodeId: string,
+  cwd: string,
+  options?: NodeSkillScanOptions,
+): string[] {
+  const roots: string[] = []
+  if (nodeId !== 'local') {
+    roots.push(...(options?.machineRoots ?? DEFAULT_NODE_MACHINE_SKILL_ROOTS))
+  }
+  if (cwd !== '') {
+    roots.push(joinUnderCwd(cwd, ...NODE_SKILLS_RELATIVE_DIR.split('/')))
+  }
+  return roots
 }
 
 /**
@@ -106,6 +162,7 @@ async function readNodeFileBounded(
   env: ExecutionEnv,
   path: string,
   redact: (text: string) => string,
+  withinDir?: string,
 ): Promise<NodeFileRead> {
   const canonical = await env.canonicalPath(path, BACKGROUND_CONTEXT)
   if (!canonical.ok) {
@@ -116,6 +173,12 @@ async function readNodeFileBounded(
     }
   }
   const realPath = canonical.value
+  if (withinDir !== undefined && !isPathWithin(realPath, withinDir)) {
+    return {
+      kind: 'refused',
+      reason: `${path} 解析到技能目录之外，拒绝读取`,
+    }
+  }
 
   const openedR = await env.openBinaryReader(realPath, { noFollow: true }, BACKGROUND_CONTEXT)
   if (!openedR.ok) {
@@ -203,7 +266,7 @@ async function collectNodeReferences(
 }
 
 /**
- * 发现会话靶点工作区（nodeId ?? 'local' + cwd）`.helmx/skills/` 下的技能：
+ * 发现目标节点（机器级根 + 可选工作区 cwd `.helmx/skills/`）下的节点技能：
  * - 目录不存在属常态 → ok([])；
  * - 单条目缺 SKILL.md / frontmatter 非法 / 目录为软链 / id 非法 → 跳过该条目
  *   （第三方内容常态，与共享根 skippable 语义一致）；
@@ -212,15 +275,16 @@ async function collectNodeReferences(
  *   unavailable（绝不静默当作空）；
  * - frontmatter 强制剥离 managedByPlugin：节点文件不得冒充宿主受管插件技能
  *   （与机器级共享根同规则）；
- * - 结果按 id 排序（不依赖 listDir 返回顺序）；name/description 已脱敏。
+ * - 结果按 id 排序（同 id 取更高优先级的节点根目录）；name/description 已脱敏。
  */
 export async function scanNodeSkills(
   host: NodeSkillsHostPort,
   nodeIdInput: string | undefined,
-  cwd: string,
+  cwd = '',
+  options?: NodeSkillScanOptions,
 ): Promise<NodeSkillScan> {
   try {
-    return await scanNodeSkillsInner(host, nodeIdInput, cwd)
+    return await scanNodeSkillsInner(host, nodeIdInput, cwd, options)
   } catch (err) {
     // 意外异常（宿主端口未接线 / 远端连接中途丢失等）同样显式不可用，绝不静默当作空。
     return {
@@ -234,15 +298,17 @@ async function scanNodeSkillsInner(
   host: NodeSkillsHostPort,
   nodeIdInput: string | undefined,
   cwd: string,
+  options?: NodeSkillScanOptions,
 ): Promise<NodeSkillScan> {
-  if (cwd === '') return { kind: 'ok', skills: [] }
   const nodeId = nodeIdInput ?? 'local'
+  const rawRoots = resolveNodeSkillRoots(nodeId, cwd, options)
+  if (rawRoots.length === 0) return { kind: 'ok', skills: [] }
   const redact = (text: string): string => host.redact(text)
 
   if (nodeId !== 'local') {
     try {
       if (!host.nodeIpc.isOnline(nodeId)) {
-        return { kind: 'unavailable', reason: `目标节点 ${nodeId} 当前离线，未能读取其工作区 ${NODE_SKILLS_RELATIVE_DIR} 技能库。` }
+        return { kind: 'unavailable', reason: `目标节点 ${nodeId} 当前离线，未能读取其节点技能库。` }
       }
     } catch (err) {
       return {
@@ -262,81 +328,114 @@ async function scanNodeSkillsInner(
     }
   }
 
-  const skillsRoot = joinUnderCwd(cwd, ...NODE_SKILLS_RELATIVE_DIR.split('/'))
-  let listed: Awaited<ReturnType<ExecutionEnv['listDir']>>
-  try {
-    listed = await env.listDir(skillsRoot, BACKGROUND_CONTEXT)
-  } catch (err) {
-    return {
-      kind: 'unavailable',
-      reason: `列出节点技能目录 ${skillsRoot} 失败（${errorCodeOf(err)}）：${redact(errorMessageOf(err))}`,
+  const seenRoots = new Set<string>()
+  const byId = new Map<string, SkillSummary>()
+  const unavailableReasons: string[] = []
+
+  for (const rawRoot of rawRoots) {
+    let canonical: Awaited<ReturnType<ExecutionEnv['canonicalPath']>>
+    try {
+      canonical = await env.canonicalPath(rawRoot, BACKGROUND_CONTEXT)
+    } catch (err) {
+      unavailableReasons.push(`解析节点技能目录 ${rawRoot} 失败（${errorCodeOf(err)}）：${redact(errorMessageOf(err))}`)
+      continue
     }
-  }
-  if (!listed.ok) {
-    if (listed.error.code === 'not_found') return { kind: 'ok', skills: [] }
-    return {
-      kind: 'unavailable',
-      reason: `列出节点技能目录 ${skillsRoot} 失败（${listed.error.code}）：${redact(listed.error.message)}`,
+    if (!canonical.ok) {
+      if (isAbsentRootError(canonical.error)) continue
+      unavailableReasons.push(`解析节点技能目录 ${rawRoot} 失败（${canonical.error.code}）：${redact(canonical.error.message)}`)
+      continue
     }
-  }
-  const candidates = listed.value.filter(
-    (entry) => entry.kind === 'directory' && !entry.name.startsWith('.'),
-  )
-  if (candidates.length > MAX_NODE_SKILLS) {
-    return {
-      kind: 'unavailable',
-      reason: `节点技能目录 ${skillsRoot} 含 ${candidates.length} 个条目，超过 ${MAX_NODE_SKILLS} 上限，本回合未发现节点技能。`,
+    const realRoot = canonical.value
+    const dedup = rootDedupKey(realRoot)
+    if (seenRoots.has(dedup)) continue
+    seenRoots.add(dedup)
+
+    let listed: Awaited<ReturnType<ExecutionEnv['listDir']>>
+    try {
+      listed = await env.listDir(realRoot, BACKGROUND_CONTEXT)
+    } catch (err) {
+      unavailableReasons.push(`列出节点技能目录 ${rawRoot} 失败（${errorCodeOf(err)}）：${redact(errorMessageOf(err))}`)
+      continue
+    }
+    if (!listed.ok) {
+      if (isAbsentRootError(listed.error)) continue
+      unavailableReasons.push(`列出节点技能目录 ${rawRoot} 失败（${listed.error.code}）：${redact(listed.error.message)}`)
+      continue
+    }
+
+    const candidates = listed.value.filter(
+      (entry) => entry.kind === 'directory' && !entry.name.startsWith('.'),
+    )
+    if (candidates.length > MAX_NODE_SKILLS) {
+      unavailableReasons.push(
+        `节点技能目录 ${rawRoot} 含 ${candidates.length} 个条目，超过 ${MAX_NODE_SKILLS} 上限，未纳入该目录技能。`,
+      )
+      continue
+    }
+
+    for (const entry of candidates.sort((a, b) => a.name.localeCompare(b.name))) {
+      try {
+        assertSkillId(entry.name)
+      } catch {
+        continue // 非法 id 的目录不进目录清单（第三方内容常态）
+      }
+      if (byId.has(entry.name)) continue // 更高优先级节点根已提供同名技能
+
+      const skillDir = joinUnderCwd(realRoot, entry.name)
+      const skillMdR = await readNodeFileBounded(env, joinUnderCwd(skillDir, 'SKILL.md'), redact, skillDir)
+      if (skillMdR.kind === 'absent') continue // 无 SKILL.md：不是技能，常态跳过
+      if (skillMdR.kind === 'refused') {
+        unavailableReasons.push(`节点技能 ${entry.name} 读取失败：${skillMdR.reason}`)
+        break
+      }
+      let frontmatter: ReturnType<typeof parseSkillFrontmatter>
+      try {
+        frontmatter = parseSkillFrontmatter(skillMdR.text)
+      } catch {
+        continue // frontmatter 非法：跳过该条目（第三方内容，与共享根 skippable 语义一致）
+      }
+      let references: string[]
+      try {
+        references = await collectNodeReferences(env, redact, skillDir)
+      } catch (err) {
+        if (err instanceof HelmxError) {
+          unavailableReasons.push(err.message)
+          break
+        }
+        throw err
+      }
+      if (references.length > MAX_NODE_SKILL_REFERENCES) {
+        unavailableReasons.push(
+          `节点技能 ${entry.name} 含 ${references.length} 个 references 文件，超过 ${MAX_NODE_SKILL_REFERENCES} 上限，未纳入该目录技能。`,
+        )
+        break
+      }
+      byId.set(entry.name, {
+        id: entry.name,
+        name: frontmatter.name || entry.name,
+        ...(frontmatter.description !== '' ? { description: redact(frontmatter.description) } : {}),
+        references,
+        // managedByPlugin deliberately stripped: a node may only host normal skills, never host-managed plugin skills.
+        source: 'node',
+      })
     }
   }
 
-  const skills: SkillSummary[] = []
-  for (const entry of candidates.sort((a, b) => a.name.localeCompare(b.name))) {
-    try {
-      assertSkillId(entry.name)
-    } catch {
-      continue // 非法 id 的目录不进目录清单（第三方内容常态）
+  const skills = [...byId.values()].sort((a, b) => a.id.localeCompare(b.id))
+  if (unavailableReasons.length > 0) {
+    return {
+      kind: 'unavailable',
+      reason: unavailableReasons.join('; '),
+      ...(skills.length > 0 ? { skills } : {}),
     }
-    const skillDir = joinUnderCwd(skillsRoot, entry.name)
-    const skillMdR = await readNodeFileBounded(env, joinUnderCwd(skillDir, 'SKILL.md'), redact)
-    if (skillMdR.kind === 'absent') continue // 无 SKILL.md：不是技能，常态跳过
-    if (skillMdR.kind === 'refused') {
-      return { kind: 'unavailable', reason: `节点技能 ${entry.name} 读取失败：${skillMdR.reason}` }
-    }
-    let frontmatter: ReturnType<typeof parseSkillFrontmatter>
-    try {
-      frontmatter = parseSkillFrontmatter(skillMdR.text)
-    } catch {
-      continue // frontmatter 非法：跳过该条目（第三方内容，与共享根 skippable 语义一致）
-    }
-    let references: string[]
-    try {
-      references = await collectNodeReferences(env, redact, skillDir)
-    } catch (err) {
-      if (err instanceof HelmxError) return { kind: 'unavailable', reason: err.message }
-      throw err
-    }
-    if (references.length > MAX_NODE_SKILL_REFERENCES) {
-      return {
-        kind: 'unavailable',
-        reason: `节点技能 ${entry.name} 含 ${references.length} 个 references 文件，超过 ${MAX_NODE_SKILL_REFERENCES} 上限，本回合未发现节点技能。`,
-      }
-    }
-    skills.push({
-      id: entry.name,
-      name: frontmatter.name || entry.name,
-      ...(frontmatter.description !== '' ? { description: redact(frontmatter.description) } : {}),
-      references,
-      // managedByPlugin deliberately stripped: a node may only host normal skills, never host-managed plugin skills.
-      source: 'node',
-    })
   }
   return { kind: 'ok', skills }
 }
 
 /**
- * load_skill 的节点分支：读取节点事实来源上的最新文件内容（无缓存；每回合
- * 发现亦同源重扫）。调用方保证该 skillId 已确认不在 Hub 任一根（同名优先级：
- * Hub 版本永远先被解析，节点版本无法被绕过读到）。
+ * load_skill / skill_read 的节点分支：按优先级依次在节点机器级根与工作区根
+ * 读取最新文件内容（无缓存；每回合发现亦同源重扫）。调用方保证该 skillId 已确认
+ * 不在 Hub 任一根（同名优先级：Hub 版本永远先被解析，节点版本无法被绕过读到）。
  * - 边界校验先行：skill id 与包内相对路径共用 @helmx/protocol 契约；
  * - 节点离线 → 409 node_offline；读取 / 越界 / 超限 / 稳定性复核失败 →
  *   502 node_skill_read_failed（含脱敏诊断）；文件不存在 → 404 not_found。
@@ -347,9 +446,10 @@ export async function readNodeSkillFile(
   cwd: string,
   skillId: string,
   path: string,
+  options?: NodeSkillScanOptions,
 ): Promise<string> {
   try {
-    return await readNodeSkillFileInner(host, nodeIdInput, cwd, skillId, path)
+    return await readNodeSkillFileInner(host, nodeIdInput, cwd, skillId, path, options)
   } catch (err) {
     // HelmxError（校验 / 离线 / not_found / 已显式化的读取失败）原样上抛；
     // 意外异常（宿主端口未接线 / 远端连接中途丢失等）统一显式 502，绝不伪装成功。
@@ -369,6 +469,7 @@ async function readNodeSkillFileInner(
   cwd: string,
   skillId: string,
   path: string,
+  options?: NodeSkillScanOptions,
 ): Promise<string> {
   try {
     assertSkillId(skillId)
@@ -381,10 +482,11 @@ async function readNodeSkillFileInner(
   } catch (err) {
     throw new HelmxError('validation_error', `Invalid skill-relative path: ${err instanceof Error ? err.message : String(err)}`, 400, { skillId, path })
   }
-  if (cwd === '') {
+  const nodeId = nodeIdInput ?? 'local'
+  const rawRoots = resolveNodeSkillRoots(nodeId, cwd, options)
+  if (rawRoots.length === 0) {
     throw new HelmxError('not_found', `skill does not exist: ${skillId}`, 404, { skillId })
   }
-  const nodeId = nodeIdInput ?? 'local'
   const redact = (text: string): string => host.redact(text)
 
   if (nodeId !== 'local') {
@@ -410,25 +512,104 @@ async function readNodeSkillFileInner(
     )
   }
 
-  const target = joinUnderCwd(cwd, ...NODE_SKILLS_RELATIVE_DIR.split('/'), skillId, ...rel.split('/'))
-  const read = await readNodeFileBounded(env, target, redact)
-  if (read.kind === 'absent') {
-    throw new HelmxError('not_found', `skill does not exist: ${skillId}`, 404, { skillId, path: rel })
+  const seenRoots = new Set<string>()
+  for (const rawRoot of rawRoots) {
+    const canonical = await env.canonicalPath(rawRoot, BACKGROUND_CONTEXT)
+    if (!canonical.ok) {
+      if (isAbsentRootError(canonical.error)) continue
+      throw new HelmxError(
+        'node_skill_read_failed',
+        `resolving node skill root '${rawRoot}' failed (${canonical.error.code}): ${redact(canonical.error.message)}`,
+        502,
+        { nodeId, skillId },
+      )
+    }
+    const realRoot = canonical.value
+    const dedup = rootDedupKey(realRoot)
+    if (seenRoots.has(dedup)) continue
+    seenRoots.add(dedup)
+
+    const skillDir = joinUnderCwd(realRoot, skillId)
+    const dirInfoR = await env.fileInfo(skillDir, BACKGROUND_CONTEXT)
+    if (!dirInfoR.ok) {
+      if (isAbsentRootError(dirInfoR.error)) continue
+      throw new HelmxError(
+        'node_skill_read_failed',
+        `inspecting node skill '${skillId}' on node '${nodeId}' failed (${dirInfoR.error.code}): ${redact(dirInfoR.error.message)}`,
+        502,
+        { nodeId, skillId },
+      )
+    }
+    if (dirInfoR.value.kind === 'symlink') {
+      throw new HelmxError(
+        'node_skill_read_failed',
+        `reading node skill '${skillId}' on node '${nodeId}' failed: skill directory is a symlink`,
+        502,
+        { nodeId, skillId },
+      )
+    }
+    if (dirInfoR.value.kind !== 'directory') continue
+
+    const skillRealR = await env.canonicalPath(skillDir, BACKGROUND_CONTEXT)
+    if (!skillRealR.ok) {
+      if (isAbsentRootError(skillRealR.error)) continue
+      throw new HelmxError(
+        'node_skill_read_failed',
+        `resolving node skill '${skillId}' on node '${nodeId}' failed (${skillRealR.error.code}): ${redact(skillRealR.error.message)}`,
+        502,
+        { nodeId, skillId },
+      )
+    }
+    const skillReal = skillRealR.value
+    if (!isPathWithin(skillReal, realRoot)) {
+      throw new HelmxError(
+        'node_skill_read_failed',
+        `reading node skill '${skillId}' on node '${nodeId}' failed: skill directory resolves outside skills root`,
+        502,
+        { nodeId, skillId },
+      )
+    }
+
+    const skillMdRead = await readNodeFileBounded(env, joinUnderCwd(skillReal, 'SKILL.md'), redact, skillReal)
+    if (skillMdRead.kind === 'absent') continue
+    if (skillMdRead.kind === 'refused') {
+      throw new HelmxError('node_skill_read_failed', `reading node skill '${skillId}' (SKILL.md) on node '${nodeId}' failed: ${skillMdRead.reason}`, 502, {
+        nodeId,
+        skillId,
+        path: 'SKILL.md',
+      })
+    }
+    try {
+      parseSkillFrontmatter(skillMdRead.text)
+    } catch {
+      continue // broken frontmatter: same skippable rule as scanNodeSkills
+    }
+    if (rel === 'SKILL.md') return skillMdRead.text
+
+    const target = joinUnderCwd(skillReal, ...rel.split('/'))
+    const read = await readNodeFileBounded(env, target, redact, skillReal)
+    if (read.kind === 'absent') {
+      // This root owns skillId: do not fall through to lower-priority roots.
+      throw new HelmxError('not_found', `skill does not exist: ${skillId}`, 404, { skillId, path: rel })
+    }
+    if (read.kind === 'refused') {
+      throw new HelmxError('node_skill_read_failed', `reading node skill '${skillId}' (${rel}) on node '${nodeId}' failed: ${read.reason}`, 502, {
+        nodeId,
+        skillId,
+        path: rel,
+      })
+    }
+    return read.text
   }
-  if (read.kind === 'refused') {
-    throw new HelmxError('node_skill_read_failed', `reading node skill '${skillId}' (${rel}) on node '${nodeId}' failed: ${read.reason}`, 502, {
-      nodeId,
-      skillId,
-      path: rel,
-    })
-  }
-  return read.text
+
+  throw new HelmxError('not_found', `skill does not exist: ${skillId}`, 404, { skillId, path: rel })
 }
 
 /** before_turn 显式注入段（节点技能库不可用说明；reason 已脱敏，此处统一转义）。 */
 export function nodeSkillsUnavailableSection(nodeId: string | undefined, cwd: string, reason: string): { id: 'profile.node-skills-unavailable'; text: string } {
+  const dir = cwd !== '' ? joinUnderCwd(cwd, ...NODE_SKILLS_RELATIVE_DIR.split('/')) : DEFAULT_NODE_MACHINE_SKILL_ROOTS.join(', ')
   return {
     id: 'profile.node-skills-unavailable',
-    text: `<node_skills_unavailable dir="${escapeXml(joinUnderCwd(cwd, ...NODE_SKILLS_RELATIVE_DIR.split('/')))}" node="${escapeXml(nodeId ?? 'local')}">\n${escapeXml(reason)}\n</node_skills_unavailable>`,
+    text: `<node_skills_unavailable dir="${escapeXml(dir)}" node="${escapeXml(nodeId ?? 'local')}">\n${escapeXml(reason)}\n</node_skills_unavailable>`,
   }
 }

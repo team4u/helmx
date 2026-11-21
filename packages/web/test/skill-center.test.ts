@@ -40,14 +40,14 @@ import {
   readScopedSkillFile,
 } from '../src/skills/skill-scope-api.js'
 import {
-  buildSkillScopeCandidates,
+  HUB_SKILL_NODE_ID,
+  buildSkillNodeOptions,
   conversationSkillScope,
-  parseSkillScopeEnv,
-  skillScopeKey,
-  skillScopeTargetEnv,
+  parseSkillCenterNodeId,
+  skillCenterTarget,
   standbySkillScope,
 } from '../src/skills/skill-scope-model.js'
-import type { ConversationSummary, Profile } from '@helmx/protocol'
+import type { NodeInfo } from '@helmx/protocol'
 
 // The drawer and skill center carry the @radix-ui/react-select dependency
 // graph and must be dynamically loaded after happy-dom
@@ -1393,93 +1393,74 @@ test('SkillCenter: interactive filtering, search and drawer wiring (openTarget)'
 })
 
 // ---------------------------------------------------------------------------
-// 技能作用域（物理坐标 nodeId+cwd）纯函数与 action 边界校验
+// 技能中心节点选择器与 action 边界校验
 // ---------------------------------------------------------------------------
 
-const convSummary = (id: number, overrides: Partial<ConversationSummary> = {}): ConversationSummary => ({
+const nodeEntry = (id: string, online = true, overrides: Partial<NodeInfo> = {}): NodeInfo => ({
   id,
-  title: `会话 ${id}`,
-  profileId: 'assistant',
-  tags: [],
-  cwd: '/tmp',
-  model: 'faux/model',
-  thinkingLevel: '',
-  status: 'idle',
-  stateChangeSeq: 1,
-  completionSeq: 0,
-  unread: false,
-  pinned: false,
-  pendingAskCount: 0,
-  createdAt: id,
-  updatedAt: id,
+  kind: id === 'local' ? 'local' : 'byom',
+  online,
+  hostname: `${id}-host`,
+  platform: 'linux',
   ...overrides,
 })
 
-test('skill-scope-model: buildSkillScopeCandidates 会话在前按 updatedAt 倒序、角色显式 cwd 去重、nodeId 归一 local', { timeout: 60_000 }, () => {
-  const conversations = [
-    convSummary(1, { cwd: '/old/work', updatedAt: 10 }),
-    convSummary(2, { nodeId: 'remote-1', cwd: '/remote/work', updatedAt: 30 }),
-    convSummary(3, { cwd: '/new/work', updatedAt: 20 }),
-    // 与会话 2 同坐标（不同会话）：去重
-    convSummary(4, { nodeId: 'remote-1', cwd: '/remote/work', updatedAt: 5 }),
+test('skill-scope-model: buildSkillNodeOptions 仅列 Hub 与在线节点（排除离线与会话）并如实保留深链离线节点', { timeout: 60_000 }, () => {
+  const nodes: NodeInfo[] = [
+    nodeEntry('local', true, { hostname: 'hub-container' }),
+    nodeEntry('code2', true, { hostname: 'code2', platform: 'linux' }),
+    nodeEntry('lx', true, { hostname: 'fjayblue', platform: 'win32' }),
+    nodeEntry('offline-box', false, { hostname: 'stale-box', platform: 'linux' }),
   ]
-  const profiles: Array<Pick<Profile, 'id' | 'nodeId' | 'cwd' | 'runtime'>> = [
-    { id: 'assistant', nodeId: undefined, cwd: '/tmp', runtime: undefined },          // 显式 cwd，local
-    { id: 'coder', nodeId: 'remote-1', cwd: '/remote/work', runtime: undefined },     // 与会话 2 同坐标：去重
-    { id: 'wanderer', nodeId: 'remote-2', cwd: undefined, runtime: undefined },       // 无显式 cwd：不产候选
-    { id: 'blank', nodeId: '  ', cwd: '   ', runtime: undefined },                    // 空白：不产候选
-    // 外部运行时角色（如 Herdr CLI pane）：不注入 Helmx 技能目录，不产「角色来源」候选
-    { id: 'herdr-runner', nodeId: 'remote-3', cwd: '/external/work', runtime: { kind: 'herdr', agent: 'claude' } },
-  ]
-  const candidates = buildSkillScopeCandidates(conversations, profiles)
+
+  const defaultOptions = buildSkillNodeOptions(nodes, undefined)
   assert.deepEqual(
-    candidates.map((c) => skillScopeKey(c)),
-    [
-      'remote-1\u0000/remote/work', // updatedAt 30 最先
-      'local\u0000/new/work',
-      'local\u0000/old/work',
-      'local\u0000/tmp', // profile 显式 cwd（无重复）
-    ],
+    defaultOptions.map((o) => o.value),
+    [HUB_SKILL_NODE_ID, 'code2', 'lx'],
+    '下拉列表只包含 Hub 与在线节点',
   )
-  assert.deepEqual(
-    candidates.map((c) => c.origin),
-    ['conversation', 'conversation', 'conversation', 'profile'],
-  )
-  // nodeId 缺省归一 local
-  assert.equal(candidates[1]!.nodeId, 'local')
+  assert.equal(defaultOptions[0]!.label, 'Hub (global)')
+  assert.equal(defaultOptions[1]!.label, 'code2')
+  assert.equal(defaultOptions[1]!.meta, 'linux · Online', 'hostname 与 id 相同时不重复显示')
+  assert.equal(defaultOptions[2]!.meta, 'fjayblue · win32 · Online')
+
+  // 深链指向已注册但离线的节点：保留只读可见项，不静默回退 Hub
+  const offlineLinkOptions = buildSkillNodeOptions(nodes, 'offline-box')
+  assert.equal(offlineLinkOptions.length, 4)
+  assert.equal(offlineLinkOptions[3]!.value, 'offline-box')
+  assert.ok(String(offlineLinkOptions[3]!.meta).includes('Offline'))
+
+  // 深链指向未注册节点：同样保留可见项
+  const ghostOptions = buildSkillNodeOptions(nodes, 'ghost-node')
+  assert.equal(ghostOptions[3]!.value, 'ghost-node')
+  assert.equal(ghostOptions[3]!.meta, 'Unregistered or offline')
 })
 
-test('skill-scope-model: parseSkillScopeEnv 成对才构成作用域，半参数显式标记 partial', { timeout: 60_000 }, () => {
-  assert.deepEqual(parseSkillScopeEnv(undefined), { scope: undefined, partial: false })
-  assert.deepEqual(parseSkillScopeEnv({}), { scope: undefined, partial: false })
-  assert.deepEqual(parseSkillScopeEnv({ nodeId: 'remote-1', cwd: '/w' }), {
-    scope: { nodeId: 'remote-1', cwd: '/w' },
-    partial: false,
-  })
-  // 只有一键（或值为空白）：不猜工作区，交由调用方自愈
-  assert.deepEqual(parseSkillScopeEnv({ nodeId: 'remote-1' }), { scope: undefined, partial: true })
-  assert.deepEqual(parseSkillScopeEnv({ cwd: '/w' }), { scope: undefined, partial: true })
-  assert.deepEqual(parseSkillScopeEnv({ nodeId: '  ', cwd: '' }), { scope: undefined, partial: true })
-})
+test('skill-scope-model: parseSkillCenterNodeId 与 skillCenterTarget 的坐标归一', { timeout: 60_000 }, () => {
+  assert.deepEqual(parseSkillCenterNodeId(undefined), { nodeId: undefined, shouldNormalize: false })
+  assert.deepEqual(parseSkillCenterNodeId('code2'), { nodeId: 'code2', shouldNormalize: false })
+  assert.deepEqual(parseSkillCenterNodeId('local'), { nodeId: undefined, shouldNormalize: true })
+  assert.deepEqual(parseSkillCenterNodeId('   '), { nodeId: undefined, shouldNormalize: true })
+  assert.deepEqual(parseSkillCenterNodeId(' code2 '), { nodeId: 'code2', shouldNormalize: true })
 
-test('skill-scope-model: skillScopeTargetEnv 目标形状稳定（Hub 无环境字段、带详情保留 skillId）', { timeout: 60_000 }, () => {
-  assert.deepEqual(skillScopeTargetEnv(undefined), { kind: 'skills' })
-  assert.deepEqual(skillScopeTargetEnv(undefined, { skillId: 'x' }), { kind: 'skills', skillId: 'x' })
-  assert.deepEqual(skillScopeTargetEnv({ nodeId: 'n1', cwd: '/a' }), { kind: 'skills', nodeId: 'n1', cwd: '/a' })
-  assert.deepEqual(skillScopeTargetEnv({ nodeId: 'n1', cwd: '/a' }, { skillId: 'x' }), {
+  assert.deepEqual(skillCenterTarget(undefined), { kind: 'skills' })
+  assert.deepEqual(skillCenterTarget('local'), { kind: 'skills' })
+  assert.deepEqual(skillCenterTarget('local', { skillId: 'x' }), { kind: 'skills', skillId: 'x' })
+  assert.deepEqual(skillCenterTarget('code2'), { kind: 'skills', nodeId: 'code2' })
+  assert.deepEqual(skillCenterTarget('code2', { skillId: 'x' }), {
     kind: 'skills',
     skillId: 'x',
-    nodeId: 'n1',
-    cwd: '/a',
+    nodeId: 'code2',
   })
 })
 
-test('skill-scope-model: conversationSkillScope 与 standbySkillScope 的坐标归一', { timeout: 60_000 }, () => {
+test('skill-scope-model: conversationSkillScope 与 standbySkillScope 的节点/工作区归一', { timeout: 60_000 }, () => {
   assert.deepEqual(conversationSkillScope({ cwd: '/w' }), { nodeId: 'local', cwd: '/w' })
   assert.deepEqual(conversationSkillScope({ nodeId: 'remote', cwd: '/w' }), { nodeId: 'remote', cwd: '/w' })
-  assert.equal(conversationSkillScope({ cwd: '' }), undefined, '无 cwd 的占位会话按 Hub 处理')
+  assert.deepEqual(conversationSkillScope({ nodeId: 'remote', cwd: '' }), { nodeId: 'remote' }, '远端节点无 cwd 仍拉取节点机器级技能')
+  assert.equal(conversationSkillScope({ cwd: '' }), undefined, 'local 且无 cwd 按 Hub 处理')
 
-  // 待命草稿：显式定制优先（nodeId 空白归 local）；未定制回退角色显式 cwd；两处皆无 → Hub
+  // 待命草稿：显式定制优先（nodeId 空白归 local）；未定制回退角色配置；远端无 cwd 亦触发；local 无 cwd → Hub
   assert.deepEqual(
     standbySkillScope({ envCustomized: true, envNodeId: '', envCwd: '/draft' }, { nodeId: 'remote', cwd: '/profile' }),
     { nodeId: 'local', cwd: '/draft' },
@@ -1487,6 +1468,10 @@ test('skill-scope-model: conversationSkillScope 与 standbySkillScope 的坐标�
   assert.deepEqual(
     standbySkillScope({ envCustomized: false }, { nodeId: 'remote', cwd: '/profile' }),
     { nodeId: 'remote', cwd: '/profile' },
+  )
+  assert.deepEqual(
+    standbySkillScope({ envCustomized: false }, { nodeId: 'remote', cwd: undefined }),
+    { nodeId: 'remote' },
   )
   assert.equal(standbySkillScope({ envCustomized: false }, { cwd: undefined }), undefined)
   assert.equal(standbySkillScope({ envCustomized: false }, undefined), undefined)
@@ -1506,13 +1491,13 @@ test('skill-center-model: source=node 技能独立分类（tab、计数、徽章
   assert.equal(badge.label, 'Node')
 })
 
-test('skill-scope-api: parseSkillCatalogResult 边界校验（合法全形状 / 各字段非法显式拒绝）', { timeout: 60_000 }, () => {
+test('skill-scope-api: parseSkillCatalogResult 边界校验（nodeId 必填、cwd 可选、非法输入显式拒绝）', { timeout: 60_000 }, () => {
   const valid = parseSkillCatalogResult({
     nodeId: 'remote-1',
     cwd: '/remote/work',
     skills: [
       { id: 'hub-skill', name: 'Hub', references: ['references/a.md'], managedByPlugin: 'builtin:profile' },
-      { id: 'node-skill', name: '节点', references: [], source: 'node', description: '来自节点工作区' },
+      { id: 'node-skill', name: '节点', references: [], source: 'node', description: '来自节点' },
     ],
     shadowedNodeSkillIds: ['dup'],
     nodeUnavailable: '目标节点 remote-1 当前离线',
@@ -1522,48 +1507,55 @@ test('skill-scope-api: parseSkillCatalogResult 边界校验（合法全形状 / 
   assert.deepEqual(valid.shadowedNodeSkillIds, ['dup'])
   assert.equal(valid.nodeUnavailable, '目标节点 remote-1 当前离线')
 
-  // 可省字段缺省（echo 坐标为 required）
-  const minimal = parseSkillCatalogResult({ nodeId: 'local', cwd: '/w', skills: [] })
-  assert.deepEqual(minimal, { skills: [], shadowedNodeSkillIds: [] })
+  // 节点级目录不携带 cwd
+  const nodeOnly = parseSkillCatalogResult({ nodeId: 'code2', skills: [] })
+  assert.deepEqual(nodeOnly, { skills: [], shadowedNodeSkillIds: [] })
 
   // 非法形状显式拒绝（绝不静默截断/编造）
   assert.throws(() => parseSkillCatalogResult(null), /skill_catalog/)
   assert.throws(() => parseSkillCatalogResult({}), /nodeId/)
   assert.throws(() => parseSkillCatalogResult({ skills: [] }), /nodeId/)
-  assert.throws(() => parseSkillCatalogResult({ nodeId: '  ', cwd: '/w', skills: [] }), /nodeId/)
-  assert.throws(() => parseSkillCatalogResult({ nodeId: 'local', skills: [] }), /cwd/)
+  assert.throws(() => parseSkillCatalogResult({ nodeId: '  ', skills: [] }), /nodeId/)
+  assert.throws(() => parseSkillCatalogResult({ nodeId: 'local', cwd: '  ', skills: [] }), /cwd/)
   assert.throws(() => parseSkillCatalogResult({ nodeId: 'local', cwd: 5, skills: [] }), /cwd/)
-  assert.throws(() => parseSkillCatalogResult({ nodeId: 'local', cwd: '/w' }), /skills/)
-  assert.throws(() => parseSkillCatalogResult({ nodeId: 'local', cwd: '/w', skills: 'x' }), /skills/)
-  assert.throws(() => parseSkillCatalogResult({ nodeId: 'local', cwd: '/w', skills: [{ id: '', name: 'x', references: [] }] }), /id/)
-  assert.throws(() => parseSkillCatalogResult({ nodeId: 'local', cwd: '/w', skills: [{ id: 'a', name: 1, references: [] }] }), /name/)
-  assert.throws(() => parseSkillCatalogResult({ nodeId: 'local', cwd: '/w', skills: [{ id: 'a', name: 'x', references: [1] }] }), /references/)
-  assert.throws(() => parseSkillCatalogResult({ nodeId: 'local', cwd: '/w', skills: [], shadowedNodeSkillIds: [1] }), /shadowedNodeSkillIds/)
-  assert.throws(() => parseSkillCatalogResult({ nodeId: 'local', cwd: '/w', skills: [], nodeUnavailable: 5 }), /nodeUnavailable/)
-  assert.throws(() => parseSkillCatalogResult({ nodeId: 'local', cwd: '/w', skills: [{ id: 'a', name: 'x', references: [], source: 'weird' }] }), /source/)
+  assert.throws(() => parseSkillCatalogResult({ nodeId: 'local' }), /skills/)
+  assert.throws(() => parseSkillCatalogResult({ nodeId: 'local', skills: 'x' }), /skills/)
+  assert.throws(() => parseSkillCatalogResult({ nodeId: 'local', skills: [{ id: '', name: 'x', references: [] }] }), /id/)
+  assert.throws(() => parseSkillCatalogResult({ nodeId: 'local', skills: [{ id: 'a', name: 1, references: [] }] }), /name/)
+  assert.throws(() => parseSkillCatalogResult({ nodeId: 'local', skills: [{ id: 'a', name: 'x', references: [1] }] }), /references/)
+  assert.throws(() => parseSkillCatalogResult({ nodeId: 'local', skills: [], shadowedNodeSkillIds: [1] }), /shadowedNodeSkillIds/)
+  assert.throws(() => parseSkillCatalogResult({ nodeId: 'local', skills: [], nodeUnavailable: 5 }), /nodeUnavailable/)
+  assert.throws(() => parseSkillCatalogResult({ nodeId: 'local', skills: [{ id: 'a', name: 'x', references: [], source: 'weird' }] }), /source/)
 })
 
-test('skill-scope-api: fetch/read 调用形状（pluginId、actionId、input 边界）', { timeout: 60_000 }, async () => {
+test('skill-scope-api: fetch/read 调用形状（nodeId 必填、cwd 可选）', { timeout: 60_000 }, async () => {
   const calls: Array<{ pluginId: string; actionId: string; input: unknown }> = []
   const invoke = async (pluginId: string, actionId: string, input: unknown): Promise<unknown> => {
     calls.push({ pluginId, actionId, input })
-    if (actionId === 'skill_catalog') return { nodeId: 'remote-1', cwd: '/w', skills: [], shadowedNodeSkillIds: [] }
+    if (actionId === 'skill_catalog') return { nodeId: 'remote-1', skills: [], shadowedNodeSkillIds: [] }
     return { text: '# SKILL' }
   }
-  const catalog = await fetchScopedSkillCatalog(invoke, { nodeId: 'remote-1', cwd: '/w' })
+  const catalog = await fetchScopedSkillCatalog(invoke, { nodeId: 'remote-1' })
   assert.deepEqual(catalog, { skills: [], shadowedNodeSkillIds: [] })
   assert.deepEqual(calls[0], {
+    pluginId: 'builtin:profile',
+    actionId: 'skill_catalog',
+    input: { nodeId: 'remote-1' },
+  })
+
+  await fetchScopedSkillCatalog(invoke, { nodeId: 'remote-1', cwd: '/w' })
+  assert.deepEqual(calls[1], {
     pluginId: 'builtin:profile',
     actionId: 'skill_catalog',
     input: { nodeId: 'remote-1', cwd: '/w' },
   })
 
   // 主文件读取不携带 path 键；references 读取原样透传
-  const main = await readScopedSkillFile(invoke, { nodeId: 'local', cwd: '/w' }, 'node-skill')
+  const main = await readScopedSkillFile(invoke, { nodeId: 'remote-1' }, 'node-skill')
   assert.equal(main.text, '# SKILL')
-  assert.deepEqual(calls[1]!.input, { nodeId: 'local', cwd: '/w', skillId: 'node-skill' })
+  assert.deepEqual(calls[2]!.input, { nodeId: 'remote-1', skillId: 'node-skill' })
   await readScopedSkillFile(invoke, { nodeId: 'local', cwd: '/w' }, 'node-skill', 'references/guide.md')
-  assert.deepEqual(calls[2]!.input, {
+  assert.deepEqual(calls[3]!.input, {
     nodeId: 'local',
     cwd: '/w',
     skillId: 'node-skill',
@@ -1577,7 +1569,7 @@ test('skill-scope-api: fetch/read 调用形状（pluginId、actionId、input 边
 })
 
 // ---------------------------------------------------------------------------
-// SkillCenter 作用域组件行为（真实 store + fetch 桩）
+// SkillCenter 节点选择器与合并目录行为（真实 store + fetch 桩）
 // ---------------------------------------------------------------------------
 
 interface CapturedActionCall {
@@ -1603,7 +1595,6 @@ function stubSkillActions(overrides: Partial<Pick<ScopeFetchStub, 'catalogRespon
       overrides.catalogResponse ??
       ((input: Record<string, unknown>) => ({
         nodeId: String(input.nodeId ?? ''),
-        cwd: String(input.cwd ?? ''),
         skills: [],
         shadowedNodeSkillIds: [],
       })),
@@ -1631,7 +1622,7 @@ function stubSkillActions(overrides: Partial<Pick<ScopeFetchStub, 'catalogRespon
 const scopedNodeSkill: SkillSummary = {
   id: 'deploy-runbook',
   name: '部署规程',
-  description: '节点工作区技能',
+  description: '节点共享技能',
   references: ['references/rollout.md'],
   source: 'node',
 }
@@ -1644,19 +1635,38 @@ const scopedHubSkill: SkillSummary = {
   managedByPlugin: 'builtin:profile',
 }
 
-function makeScopedStore(env: { nodeId?: string; cwd?: string } | undefined): HelmxExternalStore {
+function makeScopedStore(nodeId?: string): HelmxExternalStore {
   return makeTestStore({
     skills: [mockSkills[0]!],
     primaryTarget: {
       kind: 'skills',
-      ...(env?.nodeId !== undefined ? { nodeId: env.nodeId } : {}),
-      ...(env?.cwd !== undefined ? { cwd: env.cwd } : {}),
+      ...(nodeId !== undefined ? { nodeId } : {}),
     },
-    conversations: [
-      convSummary(2, { nodeId: 'remote-1', cwd: '/remote/work', updatedAt: 30 }),
-      convSummary(1, { cwd: '/local/work', updatedAt: 10 }),
+    nodes: [
+      nodeEntry('local', true, { hostname: 'hub' }),
+      nodeEntry('code2', true, { hostname: 'code2', platform: 'linux' }),
+      nodeEntry('lx', true, { hostname: 'fjayblue', platform: 'win32' }),
+      nodeEntry('offline-box', false, { hostname: 'offline-box', platform: 'linux' }),
     ],
-    profiles: [{ id: 'assistant', name: '个人助理', cwd: '/tmp' }] satisfies Profile[],
+    conversations: [
+      {
+        id: 2,
+        title: '不要出现在节点下拉里的会话标题',
+        profileId: 'assistant',
+        tags: [],
+        cwd: '/should/not/appear/in/dropdown',
+        model: 'faux/model',
+        thinkingLevel: '',
+        status: 'idle',
+        stateChangeSeq: 1,
+        completionSeq: 0,
+        unread: false,
+        pinned: false,
+        pendingAskCount: 0,
+        createdAt: 1,
+        updatedAt: 30,
+      },
+    ],
   })
 }
 
@@ -1673,21 +1683,77 @@ async function renderSkillCenter(store: HelmxExternalStore): Promise<{ host: HTM
   return { host, root }
 }
 
-test('SkillCenter: 作用域深链渲染合并目录、节点分类与显式诊断（不可用/同名遮蔽）', { timeout: 60_000 }, async () => {
+/** 通过键盘打开节点选择器并选中指定项。 */
+async function chooseScopeNodeOption(host: HTMLElement, optionText: string): Promise<string[]> {
+  const trigger = host.querySelector('.skill-scope-select .helmx-select-trigger') as HTMLElement | null
+  assert.ok(trigger, '节点选择器触发器必须渲染')
+  await act(async () => {
+    trigger.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+  })
+  const options = Array.from(host.querySelectorAll('[role="option"]')) as HTMLElement[]
+  const labels = options.map((el) => el.textContent ?? '')
+  const target = options.find((el) => el.textContent?.includes(optionText))
+  assert.ok(target, `节点下拉项必须包含 ${optionText}，实际为：${JSON.stringify(labels)}`)
+  await act(async () => {
+    target.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+  })
+  return labels
+}
+
+test('SkillCenter: 下拉列表仅显示 Hub 与在线节点（绝不出现会话或离线节点），切换节点实时加载全部可用技能', { timeout: 60_000 }, async () => {
   const stub = stubSkillActions({
     catalogResponse: (input) => {
-      assert.deepEqual(input, { nodeId: 'remote-1', cwd: '/remote/work' }, '目录请求携带物理坐标')
+      assert.deepEqual(input, { nodeId: 'code2' }, '节点目录请求只携带 nodeId')
       return {
-        nodeId: 'remote-1',
-        cwd: '/remote/work',
+        nodeId: 'code2',
         skills: [scopedHubSkill, scopedNodeSkill],
-        shadowedNodeSkillIds: ['code-review'],
-        nodeUnavailable: '目标节点 remote-1 当前离线，未能读取其工作区技能库。',
+        shadowedNodeSkillIds: [],
       }
     },
   })
   try {
-    const store = makeScopedStore({ nodeId: 'remote-1', cwd: '/remote/work' })
+    const store = makeScopedStore(undefined)
+    const { host, root } = await renderSkillCenter(store)
+    assert.equal(stub.calls.length, 0, 'Hub 默认项不走 action')
+
+    const optionTexts = await chooseScopeNodeOption(host, 'code2')
+    assert.ok(optionTexts.some((t) => t.includes('Hub (global)')), '包含 Hub 选项')
+    assert.ok(optionTexts.some((t) => t.includes('code2')), '包含在线节点 code2')
+    assert.ok(optionTexts.some((t) => t.includes('lx')), '包含在线节点 lx')
+    assert.ok(!optionTexts.some((t) => t.includes('offline-box')), '离线节点不进常规可选列表')
+    assert.ok(!optionTexts.some((t) => t.includes('不要出现在节点下拉里的会话标题')), '下拉列表绝不出现会话标题')
+    assert.ok(!optionTexts.some((t) => t.includes('/should/not/appear/in/dropdown')), '下拉列表绝不出现工作区路径')
+
+    await act(async () => {
+      await flushMacrotask()
+    })
+    assert.deepEqual(store.getPrimaryTarget(), { kind: 'skills', nodeId: 'code2' })
+    assert.ok(host.querySelector('[data-skill-id="helmx-cli"]'), '合并展示 Hub 技能')
+    assert.ok(host.querySelector('[data-skill-id="deploy-runbook"]'), '合并展示节点技能')
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  } finally {
+    stub.restore()
+  }
+})
+
+test('SkillCenter: 节点深链渲染合并目录、节点分类与显式诊断（不可用/同名遮蔽）', { timeout: 60_000 }, async () => {
+  const stub = stubSkillActions({
+    catalogResponse: (input) => {
+      assert.deepEqual(input, { nodeId: 'code2' }, '目录请求携带目标 nodeId')
+      return {
+        nodeId: 'code2',
+        skills: [scopedHubSkill, scopedNodeSkill],
+        shadowedNodeSkillIds: ['code-review'],
+        nodeUnavailable: '目标节点 code2 当前离线，未能读取其节点技能库。',
+      }
+    },
+  })
+  try {
+    const store = makeScopedStore('code2')
     const { host, root } = await renderSkillCenter(store)
 
     // 节点分类 pill 计数为 1；卡片渲染节点徽章
@@ -1702,10 +1768,10 @@ test('SkillCenter: 作用域深链渲染合并目录、节点分类与显式诊�
 
     // 显式诊断：不可用 + 同名遮蔽（绝不静默）
     const diagnostics = host.querySelector('.skill-scope-diagnostics')!.textContent ?? ''
-    assert.ok(diagnostics.includes('目标节点 remote-1 当前离线'), 'nodeUnavailable 诊断如实展示')
+    assert.ok(diagnostics.includes('目标节点 code2 当前离线'), 'nodeUnavailable 诊断如实展示')
     assert.ok(diagnostics.includes('code-review'), '同名遮蔽报告被遮蔽的节点技能 id')
 
-    assert.equal(stub.calls.filter((c) => c.actionId === 'skill_catalog').length, 1, 'Hub 之外的目录只经 action 拉取一次')
+    assert.equal(stub.calls.filter((c) => c.actionId === 'skill_catalog').length, 1, '非 Hub 节点目录只经 action 拉取一次')
 
     await act(async () => {
       root.unmount()
@@ -1716,25 +1782,23 @@ test('SkillCenter: 作用域深链渲染合并目录、节点分类与显式诊�
   }
 })
 
-test('SkillCenter: 节点技能详情经 action 读取并展示节点来源；关闭详情保留作用域参数', { timeout: 60_000 }, async () => {
+test('SkillCenter: 节点技能详情经 action 读取并展示节点来源；关闭详情保留 nodeId', { timeout: 60_000 }, async () => {
   const stub = stubSkillActions({
     catalogResponse: () => ({
-      nodeId: 'remote-1',
-      cwd: '/remote/work',
+      nodeId: 'code2',
       skills: [scopedHubSkill, scopedNodeSkill],
       shadowedNodeSkillIds: [],
     }),
     readResponse: (input) => {
       assert.deepEqual(input, {
-        nodeId: 'remote-1',
-        cwd: '/remote/work',
+        nodeId: 'code2',
         skillId: 'deploy-runbook',
       })
-      return { text: '# 部署规程\n\n按节点工作区规程执行。' }
+      return { text: '# 部署规程\n\n按节点共享规程执行。' }
     },
   })
   try {
-    const store = makeScopedStore({ nodeId: 'remote-1', cwd: '/remote/work' })
+    const store = makeScopedStore('code2')
     const { host, root } = await renderSkillCenter(store)
 
     const card = host.querySelector('[data-skill-id="deploy-runbook"]') as HTMLElement
@@ -1745,9 +1809,8 @@ test('SkillCenter: 节点技能详情经 action 读取并展示节点来源；�
     assert.deepEqual(store.getPrimaryTarget(), {
       kind: 'skills',
       skillId: 'deploy-runbook',
-      nodeId: 'remote-1',
-      cwd: '/remote/work',
-    }, '打开详情保留作用域环境')
+      nodeId: 'code2',
+    }, '打开详情保留选中节点')
 
     await act(async () => {
       await flushMacrotask()
@@ -1755,13 +1818,14 @@ test('SkillCenter: 节点技能详情经 action 读取并展示节点来源；�
     // 详情抽屉：节点来源标注 + 经 action 读到的正文
     const drawer = host.querySelector('.skill-drawer-content') as HTMLElement
     assert.ok(drawer, '详情抽屉打开')
-    assert.ok(drawer.textContent?.includes('Node workspace source: remote-1 · /remote/work'), '节点来源坐标如实标注')
-    assert.ok(drawer.textContent?.includes('按节点工作区规程执行'), '正文来自 skill_read action')
+    assert.ok(drawer.textContent?.includes('Node source: code2'), '节点来源如实标注')
+    assert.ok(!drawer.textContent?.includes('undefined'), '不渲染多余的 undefined 路径')
+    assert.ok(drawer.textContent?.includes('按节点共享规程执行'), '正文来自 skill_read action')
     const readCall = stub.calls.find((c) => c.actionId === 'skill_read')
     assert.ok(readCall, '节点技能读取必须经 skill_read action')
     assert.equal(readCall!.input.skillId, 'deploy-runbook')
 
-    // 关闭详情：回到列表但作用域参数仍在（目标上携带）
+    // 关闭详情：回到列表但 nodeId 仍在（目标上携带）
     const closeBtn = drawer.querySelector('button[aria-label="Close"]') as HTMLButtonElement
     assert.ok(closeBtn)
     await act(async () => {
@@ -1769,9 +1833,8 @@ test('SkillCenter: 节点技能详情经 action 读取并展示节点来源；�
     })
     assert.deepEqual(store.getPrimaryTarget(), {
       kind: 'skills',
-      nodeId: 'remote-1',
-      cwd: '/remote/work',
-    }, '关闭详情保留作用域环境')
+      nodeId: 'code2',
+    }, '关闭详情保留节点参数')
 
     await act(async () => {
       root.unmount()
@@ -1782,19 +1845,17 @@ test('SkillCenter: 节点技能详情经 action 读取并展示节点来源；�
   }
 })
 
-test('SkillCenter: 作用域目录加载失败显式报错并可重试；Hub 默认作用域不经 action', { timeout: 60_000 }, async () => {
+test('SkillCenter: 节点目录加载失败显式报错并可重试；离线深链给出离线提示；Hub 默认不经 action', { timeout: 60_000 }, async () => {
   const stub = stubSkillActions({
-    catalogResponse: () => ({ nodeId: 'local', cwd: '/local/work', skills: [], shadowedNodeSkillIds: [] }),
+    catalogResponse: () => ({ nodeId: 'code2', skills: [], shadowedNodeSkillIds: [] }),
   })
-  // 先用失败响应渲染
   const originalCatalog = stub.catalogResponse
   stub.catalogResponse = () => ({
-    nodeId: 'local',
-    cwd: '/local/work',
+    nodeId: 'code2',
     skills: [{ id: 'broken', name: 'x', references: 'not-an-array' }],
   })
   try {
-    const store = makeScopedStore({ nodeId: 'local', cwd: '/local/work' })
+    const store = makeScopedStore('code2')
     const { host, root } = await renderSkillCenter(store)
 
     let diagnostics = host.querySelector('.skill-scope-diagnostics')?.textContent ?? ''
@@ -1821,6 +1882,23 @@ test('SkillCenter: 作用域目录加载失败显式报错并可重试；Hub 默
     stub.restore()
   }
 
+  // 离线深链：节点当前 offline 时展示离线告警
+  const offlineStub = stubSkillActions({
+    catalogResponse: () => ({ nodeId: 'offline-box', skills: [], shadowedNodeSkillIds: [] }),
+  })
+  try {
+    const store = makeScopedStore('offline-box')
+    const { host, root } = await renderSkillCenter(store)
+    const diagnostics = host.querySelector('.skill-scope-diagnostics')?.textContent ?? ''
+    assert.ok(diagnostics.includes('Node offline-box is currently offline'), '离线节点如实提示')
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  } finally {
+    offlineStub.restore()
+  }
+
   // Hub 默认作用域：零 action 调用，直用 store 技能
   const hubStub = stubSkillActions()
   try {
@@ -1838,12 +1916,12 @@ test('SkillCenter: 作用域目录加载失败显式报错并可重试；Hub 默
   }
 })
 
-test('SkillCenter: 切换作用域的代数竞争保护——慢的旧目录不得覆盖新作用域', { timeout: 60_000 }, async () => {
+test('SkillCenter: 切换节点的代数竞争保护——慢的旧目录不得覆盖新节点', { timeout: 60_000 }, async () => {
   const originalFetch = globalThis.fetch
   const gates = new Map<string, { promise: Promise<void>; resolve: () => void }>()
   const catalogSkills: Record<string, SkillSummary[]> = {
-    'remote-1|/remote/work': [{ ...scopedNodeSkill, id: 'remote-skill' }],
-    'local|/local/work': [{ ...scopedNodeSkill, id: 'local-skill' }],
+    code2: [{ ...scopedNodeSkill, id: 'code2-skill' }],
+    lx: [{ ...scopedNodeSkill, id: 'lx-skill' }],
   }
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
@@ -1852,15 +1930,14 @@ test('SkillCenter: 切换作用域的代数竞争保护——慢的旧目录不�
       return new Response(JSON.stringify({ text: '' }), { status: 200 })
     }
     const body = JSON.parse(String(init?.body ?? '{}')) as { input?: Record<string, unknown> }
-    const key = `${String(body.input?.nodeId)}|${String(body.input?.cwd)}`
+    const key = String(body.input?.nodeId)
     let resolve!: () => void
     const promise = new Promise<void>((r) => { resolve = r })
     gates.set(key, { promise, resolve })
     await promise
     return new Response(
       JSON.stringify({
-        nodeId: String(body.input?.nodeId ?? ''),
-        cwd: String(body.input?.cwd ?? ''),
+        nodeId: key,
         skills: catalogSkills[key] ?? [],
         shadowedNodeSkillIds: [],
       }),
@@ -1869,33 +1946,33 @@ test('SkillCenter: 切换作用域的代数竞争保护——慢的旧目录不�
   }) as typeof fetch
 
   try {
-    const store = makeScopedStore({ nodeId: 'remote-1', cwd: '/remote/work' })
+    const store = makeScopedStore('code2')
     const { host, root } = await renderSkillCenter(store)
-    assert.ok(gates.has('remote-1|/remote/work'), '第一个作用域请求已挂起')
+    assert.ok(gates.has('code2'), '第一个节点请求已挂起')
 
-    // 未等第一个返回就切到第二个作用域
+    // 未等第一个返回就切到第二个节点
     await act(async () => {
-      store.openTarget({ kind: 'skills', nodeId: 'local', cwd: '/local/work' })
+      store.openTarget({ kind: 'skills', nodeId: 'lx' })
     })
     await act(async () => {
       await flushMacrotask()
     })
-    assert.ok(gates.has('local|/local/work'), '第二个作用域请求已挂起')
+    assert.ok(gates.has('lx'), '第二个节点请求已挂起')
 
-    // 第二个先返回：界面收敛到 local 目录
+    // 第二个先返回：界面收敛到 lx 目录
     await act(async () => {
-      gates.get('local|/local/work')!.resolve()
+      gates.get('lx')!.resolve()
       await flushMacrotask()
     })
-    assert.ok(host.querySelector('[data-skill-id="local-skill"]'), '新作用域数据渲染')
+    assert.ok(host.querySelector('[data-skill-id="lx-skill"]'), '新节点数据渲染')
 
-    // 第一个（旧作用域）迟到的返回不得反向覆盖
+    // 第一个（旧节点）迟到的返回不得反向覆盖
     await act(async () => {
-      gates.get('remote-1|/remote/work')!.resolve()
+      gates.get('code2')!.resolve()
       await flushMacrotask()
     })
-    assert.ok(host.querySelector('[data-skill-id="local-skill"]'), '迟到旧数据被竞争保护丢弃')
-    assert.ok(host.querySelector('[data-skill-id="remote-skill"]') === null)
+    assert.ok(host.querySelector('[data-skill-id="lx-skill"]'), '迟到旧数据被竞争保护丢弃')
+    assert.ok(host.querySelector('[data-skill-id="code2-skill"]') === null)
 
     await act(async () => {
       root.unmount()
@@ -1906,14 +1983,18 @@ test('SkillCenter: 切换作用域的代数竞争保护——慢的旧目录不�
   }
 })
 
-test('SkillCenter: 半参数自愈——URL 只带 node 或 cwd 时清理为 Hub 并保持详情子项', { timeout: 60_000 }, async () => {
+test('SkillCenter: ?node=local 自愈归一为 Hub 并保持详情子项', { timeout: 60_000 }, async () => {
   const stub = stubSkillActions()
   try {
-    const store = makeScopedStore({ nodeId: 'remote-1' })
+    const store = makeTestStore({
+      skills: [mockSkills[0]!],
+      primaryTarget: { kind: 'skills', skillId: 'helmx-cli', nodeId: 'local' },
+      nodes: [nodeEntry('local', true)],
+    })
     const { host, root } = await renderSkillCenter(store)
 
-    assert.deepEqual(store.getPrimaryTarget(), { kind: 'skills' }, '半参数被自愈清理（replace）')
-    assert.equal(stub.calls.length, 0, '半参数不触发目录请求')
+    assert.deepEqual(store.getPrimaryTarget(), { kind: 'skills', skillId: 'helmx-cli' }, 'node=local 被自愈清理为 Hub 默认且保留详情')
+    assert.equal(stub.calls.length, 0, 'Hub 默认不触发目录请求')
     assert.ok(host.querySelector('.skill-scope-diagnostics') === null)
 
     await act(async () => {

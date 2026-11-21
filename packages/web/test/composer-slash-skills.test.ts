@@ -279,3 +279,47 @@ test('interaction: switching Profile (simulating a store refresh) updates depend
   assert.deepEqual(a, ['review', 'tally'])
   assert.deepEqual(b, ['tally'], 'after switching the bound Profile of the same conversation, the skill set follows profile.skills')
 })
+
+test('interaction: remote node conversation merges node skills into Composer / popover without dropping Hub skills', { timeout: 60_000 }, async () => {
+  const originalFetch = globalThis.fetch
+  const actionInputs: unknown[] = []
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+    if (url.endsWith('/api/actions/builtin%3Aprofile/skill_catalog')) {
+      const parsed = JSON.parse(String(init?.body ?? '{}')) as { input?: unknown }
+      actionInputs.push(parsed.input)
+      return new Response(
+        JSON.stringify({
+          nodeId: 'code2',
+          skills: [
+            ...CATALOG,
+            { id: 'remote-node-skill', name: '节点技能', references: [], source: 'node' },
+          ],
+          shadowedNodeSkillIds: [],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      )
+    }
+    return new Response(JSON.stringify({}), { status: 404 })
+  }) as typeof fetch
+
+  try {
+    const remoteConv: ConversationSummary = { ...conv(5, 'coder'), nodeId: 'code2', cwd: '' }
+    const { typeSlash, unmount } = await mountComposer(remoteConv, { profiles: [{ id: 'coder', tags: [] }] })
+    try {
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 20))
+      })
+      const popover = await typeSlash('/')
+      assert.ok(popover)
+      const text = popover!.textContent ?? ''
+      assert.match(text, /\/skill:review/)
+      assert.match(text, /\/skill:remote-node-skill/)
+      assert.deepEqual(actionInputs, [{ nodeId: 'code2' }], '远端节点无 cwd 时仅传 nodeId 拉取节点机器级技能')
+    } finally {
+      await unmount()
+    }
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})

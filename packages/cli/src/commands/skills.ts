@@ -1,15 +1,15 @@
 /** Skills commands: skills list / read.
  *
- * Scope model (physical coordinates; the action call never carries conversationId):
+ * Scope model (node + optional workspace cwd; the action call never carries conversationId):
  * - No flags: Hub global catalog semantics (GET /api/skills), unchanged.
  * - --current: resolve the conversation id from HELMX_CONVERSATION_ID, read that
  *   conversation's (nodeId, cwd) via GET /api/conversations/:id, then call the
  *   builtin:profile action with explicit coordinates only. The CLI never guesses a
  *   cwd locally, and no conversation context is attached to the action call —
  *   keeping the call shape identical to the explicit --node/--cwd surface.
- * - --node <id> + --cwd <dir>: explicit physical coordinates written into the action
- *   input (trusted CLI surface, same trust level as the explicit --node/--cwd coordinate input); the two flags must
- *   appear together and are mutually exclusive with --current.
+ * - --node <id> [--cwd <dir>]: explicit node (alone = Hub + node machine-level
+ *   skills; optional --cwd also merges workspace <cwd>/.helmx/skills); --cwd
+ *   requires --node and both are mutually exclusive with --current.
  * Scoped calls go through the plugin action endpoints (POST /api/actions/...) so the
  * CLI adds no server contract beyond the standard action mapping; responses are
  * boundary-validated here (external input) and failures surface verbatim.
@@ -29,22 +29,23 @@ const SKILL_READ_ACTION_PATH = `/api/actions/${encodeURIComponent('builtin:profi
 /** Skill scope flags shared by `skills list` and `skills read`. */
 const SKILL_SCOPE_FLAGS = [
   { name: 'current', type: 'boolean' as const, help: 'scope to the current conversation workspace (reads HELMX_CONVERSATION_ID and resolves its nodeId/cwd first)' },
-  { name: 'node', type: 'string' as const, help: 'explicit workspace node id (requires --cwd; mutually exclusive with --current)' },
-  { name: 'cwd', type: 'string' as const, help: 'explicit workspace directory on that node (requires --node; mutually exclusive with --current)' },
+  { name: 'node', type: 'string' as const, help: 'explicit target node id (alone = Hub + node machine skills; optional --cwd adds workspace .helmx/skills; mutually exclusive with --current)' },
+  { name: 'cwd', type: 'string' as const, help: 'optional workspace directory on --node (requires --node; mutually exclusive with --current)' },
 ]
 
-/** Resolved skill scope: explicit physical coordinates (conversation-derived or passed verbatim). */
+/** Resolved skill scope: explicit node with optional workspace cwd. */
 interface SkillScope {
   nodeId: string
-  cwd: string
+  cwd?: string
 }
 
 /**
  * Resolve the skill scope from --current / --node / --cwd:
- * undefined keeps the Hub global semantics; --node and --cwd must appear as a pair;
- * --current never combines with explicit coordinates (one scope per call, never merged).
- * --current reads the conversation's real (nodeId, cwd) from the Hub — the CLI must
- * not invent a local cwd, and a conversation without a bound workspace fails explicitly.
+ * undefined keeps the Hub global semantics; --node works alone or with --cwd
+ * (while --cwd alone without --node is rejected); --current never combines with
+ * explicit coordinates (one scope per call, never merged). --current reads the
+ * conversation's real (nodeId, cwd) from the Hub — the CLI must not invent a
+ * local cwd, and a conversation without a bound workspace fails explicitly.
  */
 async function resolveSkillScope(flags: Map<string, unknown>, env: NodeJS.ProcessEnv, hub: HubClient): Promise<SkillScope | undefined> {
   const current = flags.get('current') === true
@@ -59,8 +60,8 @@ async function resolveSkillScope(flags: Map<string, unknown>, env: NodeJS.Proces
   if (cwd !== undefined && cwd.trim() === '') {
     throw new CliError('--cwd must be a non-empty workspace directory', 'invalid_flag_value')
   }
-  if ((nodeId !== undefined) !== (cwd !== undefined)) {
-    throw new CliError('--node and --cwd must be provided together to select an explicit workspace skill scope', 'missing_required_flag')
+  if (cwd !== undefined && nodeId === undefined) {
+    throw new CliError('--cwd requires --node to identify which node owns that directory', 'missing_required_flag')
   }
   if (current) {
     const conversationId = resolveConversationTarget(flags, undefined, env)
@@ -82,14 +83,16 @@ async function resolveSkillScope(flags: Map<string, unknown>, env: NodeJS.Proces
     }
     return { nodeId: convNodeId !== undefined && convNodeId !== '' ? convNodeId : 'local', cwd: convCwd }
   }
-  if (nodeId !== undefined && cwd !== undefined) return { nodeId, cwd }
+  if (nodeId !== undefined) {
+    return cwd !== undefined ? { nodeId, cwd } : { nodeId }
+  }
   return undefined
 }
 
 /** Boundary-validated skill_catalog action output (external HTTP input: shape-checked before use). */
 interface SkillCatalogResult {
   nodeId: string
-  cwd: string
+  cwd?: string
   skills: SkillSummary[]
   shadowedNodeSkillIds: string[]
   nodeUnavailable?: string
@@ -101,8 +104,11 @@ function parseSkillCatalogResult(raw: unknown): SkillCatalogResult {
     throw new CliError('skill_catalog action returned an invalid response (expected an object)', 'invalid_response')
   }
   const obj = raw as Record<string, unknown>
-  if (typeof obj['nodeId'] !== 'string' || typeof obj['cwd'] !== 'string') {
-    throw new CliError('skill_catalog action returned an invalid response (expected string nodeId/cwd)', 'invalid_response')
+  if (typeof obj['nodeId'] !== 'string' || obj['nodeId'].trim() === '') {
+    throw new CliError('skill_catalog action returned an invalid response (expected a non-empty string nodeId)', 'invalid_response')
+  }
+  if (obj['cwd'] !== undefined && (typeof obj['cwd'] !== 'string' || obj['cwd'].trim() === '')) {
+    throw new CliError('skill_catalog action returned an invalid response (cwd must be a non-empty string when present)', 'invalid_response')
   }
   if (!Array.isArray(obj['skills']) || !obj['skills'].every(isSkillSummaryShape)) {
     throw new CliError('skill_catalog action returned an invalid response (expected a skills array of {id,name,...})', 'invalid_response')
@@ -115,7 +121,7 @@ function parseSkillCatalogResult(raw: unknown): SkillCatalogResult {
   }
   return {
     nodeId: obj['nodeId'],
-    cwd: obj['cwd'],
+    ...(obj['cwd'] !== undefined ? { cwd: obj['cwd'] as string } : {}),
     skills: obj['skills'] as SkillSummary[],
     shadowedNodeSkillIds: obj['shadowedNodeSkillIds'] as string[],
     ...(obj['nodeUnavailable'] !== undefined ? { nodeUnavailable: obj['nodeUnavailable'] as string } : {}),
@@ -134,7 +140,7 @@ export function skillsCommands(): CommandSpec[] {
 
   cmds.push({
     path: ['skills', 'list'],
-    description: 'List available skills: Hub global catalog (GET /api/skills); --current or --node+--cwd scope to a conversation workspace via the builtin:profile skill_catalog action',
+    description: 'List available skills: Hub global catalog (GET /api/skills); --current or --node [--cwd] scope to a node (and optional workspace) via the builtin:profile skill_catalog action',
     flags: SKILL_SCOPE_FLAGS,
     async run(ctx: CommandContext) {
       const parsed = parseFlags(SKILL_SCOPE_FLAGS, ctx.args)
@@ -144,12 +150,14 @@ export function skillsCommands(): CommandSpec[] {
         printResult(ctx, await hub.get<SkillSummary[]>('/api/skills'))
         return
       }
-      const result = parseSkillCatalogResult(await hub.post(SKILL_CATALOG_ACTION_PATH, { input: { nodeId: scope.nodeId, cwd: scope.cwd } }))
+      const input: Record<string, unknown> = { nodeId: scope.nodeId }
+      if (scope.cwd !== undefined) input['cwd'] = scope.cwd
+      const result = parseSkillCatalogResult(await hub.post(SKILL_CATALOG_ACTION_PATH, { input }))
       if (ctx.json) {
         printResult(ctx, result)
         return
       }
-      printText(ctx.io, `scope: node=${result.nodeId} cwd=${result.cwd}`)
+      printText(ctx.io, result.cwd !== undefined ? `scope: node=${result.nodeId} cwd=${result.cwd}` : `scope: node=${result.nodeId}`)
       printResult(ctx, result.skills)
       if (result.shadowedNodeSkillIds.length > 0) {
         printText(ctx.io, `node skills shadowed by same-name Hub/agents versions: ${result.shadowedNodeSkillIds.join(', ')}`)
@@ -162,7 +170,7 @@ export function skillsCommands(): CommandSpec[] {
 
   cmds.push({
     path: ['skills', 'read'],
-    description: 'Read a skill document (GET /api/skills/:id[?path=]; defaults to SKILL.md); --current or --node+--cwd read from a conversation workspace via the builtin:profile skill_read action',
+    description: 'Read a skill document (GET /api/skills/:id[?path=]; defaults to SKILL.md); --current or --node [--cwd] read from a node (and optional workspace) via the builtin:profile skill_read action',
     flags: [
       { name: 'path', type: 'string', help: "relative path to a file within the skill directory, e.g. 'references/xxx.md'" },
       ...SKILL_SCOPE_FLAGS,
@@ -190,7 +198,8 @@ export function skillsCommands(): CommandSpec[] {
         else printPlainText(ctx, res.text)
         return
       }
-      const input: Record<string, unknown> = { nodeId: scope.nodeId, cwd: scope.cwd, skillId: id }
+      const input: Record<string, unknown> = { nodeId: scope.nodeId, skillId: id }
+      if (scope.cwd !== undefined) input['cwd'] = scope.cwd
       if (p !== undefined) input['path'] = p
       const res = await hub.post<{ text: string }>(SKILL_READ_ACTION_PATH, { input })
       if (typeof res?.text !== 'string') {

@@ -28,7 +28,7 @@
 | `#/views/<pluginId>/<screenId>` | 插件全屏视图 |
 | `#/settings/profiles[/<profileId>]` | 角色中心 |
 | `#/settings/models[/<providerId> \| /defaults \| /<providerId>/defaults]` | 模型中心（`defaults` 保留段 = 全局默认 Tab） |
-| `#/settings/skills[/<skillId>]` | 技能中心（可携带顶层 `node=<nodeId>&cwd=<cwd>` 物理作用域参数，遵循 agent 待命先例；无参数即 Hub 全局目录，见下文「技能中心的作用域参数」） |
+| `#/settings/skills[/<skillId>]` | 技能中心（可携带顶层 `node=<nodeId>` 参数，选中在线计算节点；无参数即 Hub 全局目录，见下文「技能中心的节点参数」） |
 | `#/settings/nodes[/<nodeId>]` | 节点中心 |
 | `#/settings/plugins[/<pluginId>]` | 插件中心 |
 
@@ -40,12 +40,12 @@
 - 草稿环境用顶层查询参数 `node=<nodeId>&cwd=<cwd>` 序列化；分屏目标的环境编码在 `split` 值内部（`split=a/<id>?node=…&cwd=…`），两套命名空间互不串扰；
 - **新建对话进待命页、首次发送才落库**：待命草稿不预创建会话；发送时按草稿环境创建真实会话并迁移（`replace` 不污染后退栈）。
 
-### 技能中心的作用域参数
+### 技能中心的节点参数
 
-- `{ kind: 'skills'; skillId?; nodeId?; cwd? }` 表达技能中心目标：`skillId` 是详情抽屉选中项，`(nodeId, cwd)` 是物理作用域坐标（不是 conversationId）；
-- 作用域经顶层查询参数序列化（如 `#/settings/skills/deploy?node=node-a&cwd=/srv/work`，空值不序列化），与 agent 待命草稿环境共用同一套顶层 `node`/`cwd` 命名空间与编解码先例；分屏内技能中心的作用域编码在 `split` 值内部，两套命名空间互不串扰；
-- 无 `node`/`cwd` 参数即 Hub 全局目录（不猜测缺省坐标）；携带参数时经 `builtin:profile` 的 `skill_catalog` / `skill_read` action 按坐标取合并目录与节点技能内容（同名 Hub 版本优先、节点来源只读、离线/未注册显式报错，语义见 [profile 插件](../plugins/profile.md)）；
-- 作用域属于位置的一部分：深链直达、刷新与浏览器前进/后退都可恢复当前作用域与选中详情；目标相等比较包含 `nodeId`/`cwd`，切换作用域不会被误判为「同一目标仅改参数」，关闭详情抽屉保留作用域参数。
+- `{ kind: 'skills'; skillId?; nodeId? }` 表达技能中心目标：`skillId` 是详情抽屉选中项，`nodeId` 是当前选中的计算节点（来自在线节点列表，不携带会话或 `cwd`）；
+- 节点选择经顶层 `node` 查询参数序列化（如 `#/settings/skills/git-commit?node=code2`，空值与 `'local'` 归一回无参 Hub 形态）；分屏内技能中心的节点参数编码在 `split` 值内部，两套命名空间互不串扰；
+- 无 `node` 参数即 Hub 全局目录（消费 `GET /api/skills`）；携带节点时经 `builtin:profile` 的 `skill_catalog` / `skill_read` action 拉取该节点的 Hub + 节点机器级合并目录与节点技能内容（同名 Hub 版本优先、节点来源只读、离线/未注册显式报错，语义见 [profile 插件](../plugins/profile.md)）；
+- 所选节点属于位置的一部分：深链直达、刷新与浏览器前进/后退都可恢复当前节点与选中详情；目标相等比较包含 `nodeId`，切换节点 `push` 入历史栈以便后退返回上一节点，关闭详情抽屉保留节点参数。
 
 ### 历史策略红线
 

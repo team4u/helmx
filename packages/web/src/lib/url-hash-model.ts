@@ -19,7 +19,7 @@ import { isSameResolvedTarget, isPrototypeParamKey, SCREEN_PARAM_KEY_PATTERN, ty
  * - `views/<pluginId>/<screenId>`                                plugin full-screen view
  * - `settings/profiles[/<profileId>]`                            profile center
  * - `settings/models[/<providerId>|/defaults|/<providerId>/defaults]` model center (defaults is the reserved segment = global-default tab)
- * - `settings/skills[/<skillId>]`                                skill center (may carry node/cwd scope env params, agent precedent)
+ * - `settings/skills[/<skillId>]`                                skill center (may carry node=<nodeId> param)
  * - `settings/nodes[/<nodeId>]`                                  node center
  * - `settings/plugins[/<pluginId>]`                              plugin center
  */
@@ -115,11 +115,11 @@ function parseHashLineRange(raw: string | null): { startLine?: number; endLine?:
 export const PRIMARY_SCREEN_PARAM_PREFIX = 'sp.'
 export const SPLIT_SCREEN_PARAM_PREFIX = 'ssp.'
 
-/** Query param names of the target env (agent draft env / skills center scope) in the hash (one set at the top level for the primary screen, one inside the split value; scopes never overlap). */
+/** Query param names of the target env (agent draft env carries node+cwd; skills center carries node only) in the hash. */
 const AGENT_NODE_PARAM = 'node'
 const AGENT_CWD_PARAM = 'cwd'
 
-/** Extract a target env from the query string (only non-empty values apply; empty strings count as unset). */
+/** Extract an agent draft env from the query string (only non-empty values apply; empty strings count as unset). */
 function extractTargetEnv(params: URLSearchParams): { nodeId?: string; cwd?: string } {
   const node = params.get(AGENT_NODE_PARAM)
   const cwd = params.get(AGENT_CWD_PARAM)
@@ -127,6 +127,12 @@ function extractTargetEnv(params: URLSearchParams): { nodeId?: string; cwd?: str
     ...(node !== null && node !== '' ? { nodeId: node } : {}),
     ...(cwd !== null && cwd !== '' ? { cwd } : {}),
   }
+}
+
+/** Extract the skills center node scope from the query string (node only; empty counts as Hub unset). */
+function extractSkillNodeEnv(params: URLSearchParams): { nodeId?: string } {
+  const node = params.get(AGENT_NODE_PARAM)
+  return node !== null && node !== '' ? { nodeId: node } : {}
 }
 
 /** Attach fields only when env params are actually carried, keeping the shape of env-less targets stable. */
@@ -137,9 +143,12 @@ function applyTargetEnv(
   return env.nodeId === undefined && env.cwd === undefined ? target : { ...target, ...env }
 }
 
-/** Serialize the env params of an env-carrying target (agent draft env or the skills center physical scope; stable lexicographic order; escaping handled by URLSearchParams). */
+/** Serialize the env params of an env-carrying target (agent draft env or skills node scope; escaping handled by URLSearchParams). */
 function formatTargetEnvParams(target: ResolvedTarget): Array<[string, string]> {
-  if (target.kind !== 'agent' && target.kind !== 'skills') return []
+  if (target.kind === 'skills') {
+    return target.nodeId !== undefined && target.nodeId !== '' ? [[AGENT_NODE_PARAM, target.nodeId]] : []
+  }
+  if (target.kind !== 'agent') return []
   const pairs: Array<[string, string]> = []
   if (target.nodeId !== undefined && target.nodeId !== '') pairs.push([AGENT_NODE_PARAM, target.nodeId])
   if (target.cwd !== undefined && target.cwd !== '') pairs.push([AGENT_CWD_PARAM, target.cwd])
@@ -312,10 +321,10 @@ function formatTargetValue(target: ResolvedTarget): string {
 /**
  * Parse a split value: shares the same canonical target paths as the primary
  * screen (including settings/views hierarchy and center sub-item segments);
- * agent and skills targets may carry an embedded query `?node=&cwd=` after
- * the path (the agent draft env / the skills center physical scope; center
- * sub-items and tabs are already path segments, screen params always live in
- * the top-level ssp.* namespace — nothing else travels via a split query).
+ * agent targets may carry `?node=&cwd=` and skills targets `?node=` inside the
+ * split value (center sub-items and tabs are already path segments, screen
+ * params always live in the top-level ssp.* namespace — nothing else travels
+ * via a split query).
  */
 function parseSplitTargetValue(raw: string): ResolvedTarget | null {
   const queryIdx = raw.indexOf('?')
@@ -323,9 +332,13 @@ function parseSplitTargetValue(raw: string): ResolvedTarget | null {
   const baseTarget = parseTargetValue(path)
   if (baseTarget === null) return null
   if (queryIdx === -1) return baseTarget
-  if (baseTarget.kind !== 'agent' && baseTarget.kind !== 'skills') return baseTarget
-  const params = new URLSearchParams(raw.slice(queryIdx + 1))
-  return applyTargetEnv(baseTarget, extractTargetEnv(params))
+  if (baseTarget.kind === 'agent') {
+    return applyTargetEnv(baseTarget, extractTargetEnv(new URLSearchParams(raw.slice(queryIdx + 1))))
+  }
+  if (baseTarget.kind === 'skills') {
+    return applyTargetEnv(baseTarget, extractSkillNodeEnv(new URLSearchParams(raw.slice(queryIdx + 1))))
+  }
+  return baseTarget
 }
 
 function formatSplitTarget(target: ResolvedTarget): string {
@@ -404,11 +417,13 @@ export function parseLocationHash(rawHash: string): WorkspaceLocationState {
   const splitRaw = params.get('split')
   const workbenchTab = params.get('wb')
   let primaryTarget = parseTargetValue(path) ?? DEFAULT_PRIMARY
-  // The draft env of an agent standby primary (and the physical scope of a
-  // skills center primary) comes from top-level node/cwd params; env values of
-  // a split target are encoded inside the split value itself.
-  if (primaryTarget.kind === 'agent' || primaryTarget.kind === 'skills') {
+  // The draft env of an agent standby primary comes from top-level node/cwd
+  // params; the node scope of a skills center primary comes from top-level node;
+  // env values of a split target are encoded inside the split value itself.
+  if (primaryTarget.kind === 'agent') {
     primaryTarget = applyTargetEnv(primaryTarget, extractTargetEnv(params))
+  } else if (primaryTarget.kind === 'skills') {
+    primaryTarget = applyTargetEnv(primaryTarget, extractSkillNodeEnv(params))
   }
   const splitTarget = splitRaw === null || splitRaw === '' ? null : parseSplitTargetValue(splitRaw)
 
@@ -535,13 +550,13 @@ const isSameAgentSlot = (a: ResolvedTarget | null, b: ResolvedTarget | null): bo
   return a.profileId === b.profileId
 }
 
-/** Skills center physical-scope switch (nodeId/cwd change): a data-source
+/** Skills center node switch (nodeId change): a data-source
  * change, not a filter keystroke — push so browser back returns to the
- * previous scope instead of leaving the center. Drawer-only skillId changes
+ * previous node instead of leaving the center. Drawer-only skillId changes
  * keep the center-slot replace semantics below. */
 const isSkillsScopeChanged = (a: ResolvedTarget | null, b: ResolvedTarget | null): boolean => {
   if (a === null || b === null || a.kind !== 'skills' || b.kind !== 'skills') return false
-  return (a.nodeId ?? undefined) !== (b.nodeId ?? undefined) || (a.cwd ?? undefined) !== (b.cwd ?? undefined)
+  return (a.nodeId ?? undefined) !== (b.nodeId ?? undefined)
 }
 
 /** The same center coordinate (both kinds being that first-level full-screen center) is the same primary-stage slot; drawer switches or closes are not coordinate-level switches. */

@@ -243,7 +243,7 @@
   margin: 0;
 }
 
-/* 技能中心作用域选择器与诊断横幅（物理坐标 nodeId+cwd 作用域） */
+/* 技能中心节点选择器与诊断横幅 */
 .skill-scope-picker {
   display: flex;
   align-items: center;
@@ -252,7 +252,7 @@
 }
 
 .skill-scope-select {
-  width: min(260px, 60vw);
+  width: min(220px, 60vw);
 }
 
 .skill-scope-select .helmx-select-trigger {

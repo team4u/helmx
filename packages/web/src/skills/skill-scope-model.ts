@@ -1,150 +1,157 @@
 /**
- * 技能作用域纯函数模型：技能中心与 '/' 技能菜单共用的物理坐标
- * (nodeId, cwd) 作用域推导、URL 参数解析与候选去重。
- *
- * 作用域语义（与 builtin:profile 节点技能契约一致）：
- * - Hub 默认作用域用 undefined 表达（消费 /api/skills 的 Hub 目录真源）；
- * - 物理作用域必须同时具备 nodeId 与 cwd；nodeId 缺省归一为 'local'；
- * - URL 侧按 agent 待命目标先例，以 skills 目标自身的顶层 `node` / `cwd`
- *   查询参数携带（主屏顶层、分屏在 split 值内编码）；两键必须成对出现——
- *   半参数按 Hub 处理并由调用方自愈清理，绝不猜测工作区。
+ * 技能作用域纯函数模型：
+ * - 技能中心按节点选择（默认 Hub `'local'`，或任意在线计算节点；URL 仅携带 `?node=<nodeId>`）；
+ * - 会话与待命页 `/` 斜杠菜单按 `(nodeId, cwd?)` 补入节点机器级技能与工作区 `.helmx/skills`。
  *
  * 遵循 Fast Refresh 约定：纯函数与常量只放本模块，不进组件文件。
  */
-import type { ConversationSummary, Profile, SkillSummary } from '@helmx/protocol/browser'
+import type { SelectOption } from '@helmx/plugin-client'
+import type { NodeInfo, SkillSummary } from '@helmx/protocol/browser'
+import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 
-/** 一个物理技能作用域（两者必有值）。 */
+/** 技能目录作用域：节点必有值，cwd 仅会话/待命页补全时附带。 */
 export interface SkillScope {
   nodeId: string
-  cwd: string
+  cwd?: string
 }
 
-/** 作用域候选来源：会话坐标或角色显式 cwd。 */
-export type SkillScopeOrigin = 'conversation' | 'profile'
-
-export interface SkillScopeCandidate extends SkillScope {
-  origin: SkillScopeOrigin
-}
+/** Hub 默认节点 ID（同时用作技能中心 Select 的 Hub 选项值）。 */
+export const HUB_SKILL_NODE_ID = 'local'
 
 /** nodeId 归一：空白/缺省视为 'local'（与内核会话坐标缺省语义一致）。 */
 export function normalizeSkillScopeNodeId(nodeId: string | undefined): string {
   const trimmed = (nodeId ?? '').trim()
-  return trimmed === '' ? 'local' : trimmed
-}
-
-/** 稳定作用域键（组件依赖数组与缓存共用）。 */
-export function skillScopeKey(scope: SkillScope): string {
-  return `${scope.nodeId}\u0000${scope.cwd}`
+  return trimmed === '' ? HUB_SKILL_NODE_ID : trimmed
 }
 
 /**
- * 会话 / 待命草稿环境的物理作用域：cwd 缺失（理论不可达的占位会话）
- * 返回 undefined 按 Hub 处理，绝不编造工作区路径。
+ * 解析技能中心目标的 nodeId：
+ * - 未设置时为 Hub 默认（undefined，无需规范化）；
+ * - 显式写了 `'local'`、空白或含首尾空格时归一并标记 `shouldNormalize`，由调用方 replace 清理地址栏。
+ */
+export function parseSkillCenterNodeId(rawNodeId: string | undefined): {
+  nodeId: string | undefined
+  shouldNormalize: boolean
+} {
+  if (rawNodeId === undefined) return { nodeId: undefined, shouldNormalize: false }
+  const trimmed = rawNodeId.trim()
+  if (trimmed === '' || trimmed === HUB_SKILL_NODE_ID) {
+    return { nodeId: undefined, shouldNormalize: true }
+  }
+  return { nodeId: trimmed, shouldNormalize: trimmed !== rawNodeId }
+}
+
+/** 技能中心目标构造函数（Hub 默认不写 nodeId；非 Hub 节点写 nodeId；可选保留 skillId）。 */
+export function skillCenterTarget(
+  nodeId: string | undefined,
+  keep?: { skillId?: string },
+): { kind: 'skills'; skillId?: string; nodeId?: string } {
+  const normalized = nodeId?.trim() ?? ''
+  const skillId = keep?.skillId !== undefined && keep.skillId !== '' ? keep.skillId : undefined
+  return {
+    kind: 'skills',
+    ...(skillId !== undefined ? { skillId } : {}),
+    ...(normalized !== '' && normalized !== HUB_SKILL_NODE_ID ? { nodeId: normalized } : {}),
+  }
+}
+
+/** 构建节点副标（主机名/平台/状态，不泄露任何会话或路径信息）。 */
+function formatOnlineNodeMeta(node: NodeInfo, statusLabel: string): string {
+  const host = node.hostname !== undefined && node.hostname !== '' && node.hostname !== node.id
+    ? node.hostname
+    : undefined
+  const platform = node.platform !== undefined && node.platform !== '' ? node.platform : undefined
+  return [host, platform, statusLabel].filter(Boolean).join(' · ')
+}
+
+/**
+ * 构建技能中心节点下拉选项：
+ * - 第一项恒为 Hub（local）；
+ * - 后续为所有可用在线节点（`id !== 'local' && online`）；
+ * - 若 URL 深链指向了离线或尚未注册的节点，仍如实保留该选中项（绝不静默回退 Hub）。
+ */
+export function buildSkillNodeOptions(
+  nodes: ReadonlyArray<NodeInfo>,
+  selectedNodeId: string | undefined,
+  t?: WebMessageTranslator,
+): Array<SelectOption<string>> {
+  const tt = t ?? englishWebTranslator
+  const options: Array<SelectOption<string>> = [
+    {
+      value: HUB_SKILL_NODE_ID,
+      label: tt('skills.scope.hub'),
+      icon: 'monitor',
+      meta: tt('skills.scope.hubMeta'),
+    },
+  ]
+  for (const node of nodes) {
+    if (node.id === HUB_SKILL_NODE_ID || !node.online) continue
+    options.push({
+      value: node.id,
+      label: node.id,
+      icon: 'network',
+      meta: formatOnlineNodeMeta(node, tt('common.online')),
+    })
+  }
+  if (
+    selectedNodeId !== undefined &&
+    selectedNodeId !== HUB_SKILL_NODE_ID &&
+    !options.some((option) => option.value === selectedNodeId)
+  ) {
+    const matched = nodes.find((node) => node.id === selectedNodeId)
+    if (matched !== undefined) {
+      options.push({
+        value: matched.id,
+        label: matched.id,
+        icon: 'network',
+        meta: formatOnlineNodeMeta(matched, tt('common.offline')),
+      })
+    } else {
+      options.push({
+        value: selectedNodeId,
+        label: selectedNodeId,
+        icon: 'alert-circle',
+        meta: tt('skills.scope.nodeUnavailableMeta'),
+      })
+    }
+  }
+  return options
+}
+
+/**
+ * 会话的技能目录作用域：
+ * - 有 cwd 时返回 `{ nodeId, cwd }`（叠加该工作区 `.helmx/skills`）；
+ * - 远端节点即使无 cwd 也有节点机器级技能（返回 `{ nodeId }`）；
+ * - local 且无 cwd 时返回 undefined（Hub 目录本身即全部）。
  */
 export function conversationSkillScope(
   conversation: { nodeId?: string; cwd?: string },
 ): SkillScope | undefined {
+  const nodeId = normalizeSkillScopeNodeId(conversation.nodeId)
   const cwd = (conversation.cwd ?? '').trim()
-  if (cwd === '') return undefined
-  return { nodeId: normalizeSkillScopeNodeId(conversation.nodeId), cwd }
+  if (cwd !== '') return { nodeId, cwd }
+  if (nodeId !== HUB_SKILL_NODE_ID) return { nodeId }
+  return undefined
 }
 
 /**
- * 作用域候选去重列表：会话坐标在前（按 updatedAt 倒序，最近使用的最先），
- * 角色显式 cwd（profile.cwd 有值）在后；同一 (nodeId, cwd) 只保留一个候选，
- * 会话来源优先。Hub 默认项不由本函数产出（恒为选择器第一项）。
- *
- * 外部运行时角色（profile.runtime 已设，如 Herdr CLI pane）被排除：其
- * 提示词是原始请求文本，不注入 Helmx 技能目录（含节点合并目录），
- * 「角色来源」候选标注会失真；该类工作区坐标仍可经会话候选或手填
- * 深链浏览（合并目录 action 对任意坐标照常可用）。
+ * 待命草稿的有效环境作用域：显式定制（envCustomized）优先，否则回退角色配置；
+ * 有 cwd 时携带 cwd，远端节点无 cwd 时仍拉取节点机器级技能，local 无 cwd 返回 undefined。
  */
-export function buildSkillScopeCandidates(
-  conversations: ReadonlyArray<Pick<ConversationSummary, 'nodeId' | 'cwd' | 'updatedAt'>>,
-  profiles: ReadonlyArray<Pick<Profile, 'nodeId' | 'cwd' | 'runtime'>>,
-): SkillScopeCandidate[] {
-  const seen = new Set<string>()
-  const out: SkillScopeCandidate[] = []
-  const sortedConversations = [...conversations].sort(
-    (a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0),
-  )
-  for (const conversation of sortedConversations) {
-    const scope = conversationSkillScope(conversation)
-    if (scope === undefined) continue
-    const key = skillScopeKey(scope)
-    if (seen.has(key)) continue
-    seen.add(key)
-    out.push({ ...scope, origin: 'conversation' })
-  }
-  for (const profile of profiles) {
-    if (profile.runtime !== undefined) continue
-    const cwd = (profile.cwd ?? '').trim()
-    if (cwd === '') continue
-    const scope: SkillScope = { nodeId: normalizeSkillScopeNodeId(profile.nodeId), cwd }
-    const key = skillScopeKey(scope)
-    if (seen.has(key)) continue
-    seen.add(key)
-    out.push({ ...scope, origin: 'profile' })
-  }
-  return out
-}
-
-/** skills 目标的作用域环境面（hash 顶层 node/cwd 查询参数的目标侧形状）。 */
-export interface SkillScopeEnv {
-  nodeId?: string
-  cwd?: string
-}
-
-export interface ParsedSkillScopeEnv {
-  /** 完整物理作用域；undefined 表示 Hub 默认。 */
-  scope: SkillScope | undefined
-  /** 目标携带了 node/cwd 但不成对（或全空白）：值不可信，调用方应以 replace 自愈清理。 */
-  partial: boolean
-}
-
-/**
- * 从 skills 目标的环境字段解析作用域：node 与 cwd 都非空才构成物理作用域；
- * 只出现其一（或全空白）标记 partial 交由调用方清理，绝不静默猜测。
- */
-export function parseSkillScopeEnv(env: SkillScopeEnv | undefined): ParsedSkillScopeEnv {
-  const rawNode = env?.nodeId
-  const rawCwd = env?.cwd
-  const node = rawNode?.trim() ?? ''
-  const cwd = rawCwd?.trim() ?? ''
-  if (node !== '' && cwd !== '') {
-    return { scope: { nodeId: node, cwd }, partial: false }
-  }
-  return { scope: undefined, partial: rawNode !== undefined || rawCwd !== undefined }
-}
-
-/** 作用域 → skills 目标环境字段（Hub 为清空两字段；空串不序列化）。 */
-export function skillScopeTargetEnv(
-  scope: SkillScope | undefined,
-  keep?: { skillId?: string },
-): { kind: 'skills'; skillId?: string; nodeId?: string; cwd?: string } {
-  const base = { kind: 'skills' as const, ...(keep?.skillId !== undefined && keep.skillId !== '' ? { skillId: keep.skillId } : {}) }
-  if (scope === undefined) return base
-  return { ...base, nodeId: scope.nodeId, cwd: scope.cwd }
-}
-
-/** 待命草稿的有效环境作用域：显式定制（envCustomized）优先，否则回退角色
- * 显式 cwd；两处都无 cwd 时返回 undefined（Hub 基底）——运行时才决定的
- * 工作区不在 Web 侧猜测。 */
 export function standbySkillScope(
   draft: { envCustomized: boolean; envNodeId?: string; envCwd?: string },
   profile: { nodeId?: string; cwd?: string } | undefined,
 ): SkillScope | undefined {
-  if (draft.envCustomized) {
-    const cwd = (draft.envCwd ?? '').trim()
-    if (cwd === '') return undefined
-    return { nodeId: normalizeSkillScopeNodeId(draft.envNodeId), cwd }
-  }
-  const cwd = (profile?.cwd ?? '').trim()
-  if (cwd === '') return undefined
-  return { nodeId: normalizeSkillScopeNodeId(profile?.nodeId), cwd }
+  const rawNodeId = draft.envCustomized ? draft.envNodeId : profile?.nodeId
+  const rawCwd = draft.envCustomized ? draft.envCwd : profile?.cwd
+  const nodeId = normalizeSkillScopeNodeId(rawNodeId)
+  const cwd = (rawCwd ?? '').trim()
+  if (cwd !== '') return { nodeId, cwd }
+  if (nodeId !== HUB_SKILL_NODE_ID) return { nodeId }
+  return undefined
 }
 
-/** 合并目录里属于节点工作区来源的技能。 */
+/** 合并目录里属于节点来源（节点机器级根目录或工作区 `.helmx/skills`）的技能。 */
 export function isNodeSourceSkill(skill: SkillSummary): boolean {
   return skill.source === 'node'
 }

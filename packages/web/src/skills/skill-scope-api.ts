@@ -1,12 +1,10 @@
 /**
  * builtin:profile 技能目录 / 节点技能读取 action 的 Web 适配层。
  *
- * 契约（与插件后端约定，见黑板 #7）：
- * - `skill_catalog`：input `{ nodeId, cwd }` → `{ skills, shadowedNodeSkillIds,
- *   nodeUnavailable? }`，skills 为 Hub+node 合并目录（节点条目 source:'node'，
- *   同名只保留生效 Hub 版本），shadowedNodeSkillIds 显式报告被 Hub 同名
- *   遮蔽的节点技能 id，nodeUnavailable 为节点离线/IO 的显式诊断；
- * - `skill_read`：input `{ nodeId, cwd, skillId, path? }` → `{ text }`，只用于
+ * 契约：
+ * - `skill_catalog`：input `{ nodeId, cwd? }` → `{ nodeId, cwd?, skills, shadowedNodeSkillIds,
+ *   nodeUnavailable? }`，skills 为 Hub + 节点机器级根目录（及可选工作区）合并目录；
+ * - `skill_read`：input `{ nodeId, cwd?, skillId, path? }` → `{ text }`，只用于
  *   节点源技能（Hub 源技能继续走 /api/skills/:id/read）。
  *
  * Web 经 HTTP action 调用（不带 conversationId）；本模块在消费边界对输出做
@@ -75,18 +73,18 @@ function parseSkillSummaryEntry(raw: unknown, index: number): SkillSummary {
 }
 
 /** 边界校验 skill_catalog 输出（外部输入显式拒绝，绝不静默截断）。
- * outputSchema 中的 required echo 字段 nodeId/cwd 一并校验：它们回显
- * 服务端实际生效的物理坐标，缺失或非字符串即契约破坏，显式拒绝。 */
+ * outputSchema 中的 required echo 字段 nodeId 必须是非空字符串；cwd 可选，
+ * 若存在也必须是非空字符串。 */
 export function parseSkillCatalogResult(raw: unknown): ScopedSkillCatalog {
   if (typeof raw !== 'object' || raw === null) {
     throw catalogError('返回值不是对象')
   }
   const record = raw as Record<string, unknown>
   if (typeof record.nodeId !== 'string' || record.nodeId.trim() === '') {
-    throw catalogError('nodeId 必须是非空字符串（服务端回显的生效坐标）')
+    throw catalogError('nodeId 必须是非空字符串（服务端回显的生效节点）')
   }
-  if (typeof record.cwd !== 'string' || record.cwd.trim() === '') {
-    throw catalogError('cwd 必须是非空字符串（服务端回显的生效坐标）')
+  if (record.cwd !== undefined && (typeof record.cwd !== 'string' || record.cwd.trim() === '')) {
+    throw catalogError('cwd 若存在必须是非空字符串（服务端回显的生效工作目录）')
   }
   if (!Array.isArray(record.skills)) {
     throw catalogError('skills 必须是数组')
@@ -125,14 +123,14 @@ export function parseSkillReadResult(raw: unknown): { text: string } {
   return { text }
 }
 
-/** 拉取物理作用域的合并技能目录（Hub+node）。 */
+/** 拉取节点（及可选工作区）的合并技能目录。 */
 export function fetchScopedSkillCatalog(
   invoke: SkillActionInvoker,
   scope: SkillScope,
 ): Promise<ScopedSkillCatalog> {
   return invoke(SKILLS_PLUGIN_ID, SKILL_CATALOG_ACTION_ID, {
     nodeId: scope.nodeId,
-    cwd: scope.cwd,
+    ...(scope.cwd !== undefined && scope.cwd !== '' ? { cwd: scope.cwd } : {}),
   }).then((raw) => parseSkillCatalogResult(raw))
 }
 
@@ -145,7 +143,7 @@ export function readScopedSkillFile(
 ): Promise<{ text: string }> {
   return invoke(SKILLS_PLUGIN_ID, SKILL_READ_ACTION_ID, {
     nodeId: scope.nodeId,
-    cwd: scope.cwd,
+    ...(scope.cwd !== undefined && scope.cwd !== '' ? { cwd: scope.cwd } : {}),
     skillId,
     ...(path !== undefined && path !== '' ? { path } : {}),
   }).then((raw) => parseSkillReadResult(raw))

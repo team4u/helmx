@@ -163,8 +163,13 @@ export function SkillDetailDrawer({
             <div className="text-subtle">{t('skills.drawer.machineSharedRoot')}</div>
           )}
           {skill?.source === 'node' && nodeScope !== undefined && (
-            <div className="text-subtle break-word" title={`${nodeScope.nodeId} ${nodeScope.cwd}`}>
-              {t('skills.drawer.nodeSource', { node: nodeScope.nodeId, cwd: nodeScope.cwd })}
+            <div
+              className="text-subtle break-word"
+              title={nodeScope.cwd ? `${nodeScope.nodeId} ${nodeScope.cwd}` : nodeScope.nodeId}
+            >
+              {nodeScope.cwd
+                ? t('skills.drawer.nodeWorkspaceSource', { node: nodeScope.nodeId, cwd: nodeScope.cwd })
+                : t('skills.drawer.nodeSource', { node: nodeScope.nodeId })}
             </div>
           )}
         </>

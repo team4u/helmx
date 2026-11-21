@@ -123,15 +123,39 @@ test('skills list --node+--cwd posts explicit coordinates without conversationId
   assert.deepEqual(hit.body, { input: { nodeId: 'node-a', cwd: '/srv/work' } })
 })
 
-test('skills list --node and --cwd must appear as a pair', { timeout: 60_000 }, async (t) => {
+test('skills list --node works standalone without --cwd; --cwd alone without --node fails explicitly', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helmx-cli-skills-')
-  const hub = await startMockHub({ [CATALOG_ROUTE]: () => ({ body: CATALOG_OK }) }, { autoRegisterCleanup: t })
+  const catalogNodeOnly = {
+    nodeId: 'node-a',
+    skills: [{ id: 'node-shared', name: 'Node Shared', references: [], source: 'node' }],
+    shadowedNodeSkillIds: [],
+  }
+  const hub = await startMockHub({ [CATALOG_ROUTE]: () => ({ body: catalogNodeOnly }) }, { autoRegisterCleanup: t })
   const env = makeCliEnv(hub.url, dir)
   const onlyNode = await runCliCaptured(['skills', 'list', '--node', 'node-a', '--json'], env)
-  assert.equal(parseCliError(onlyNode).code, 'missing_required_flag')
+  assert.equal(onlyNode.code, 0, onlyNode.err)
+  const hit = hub.hits.find((h) => h.method === 'POST')!
+  assert.deepEqual(hit.body, { input: { nodeId: 'node-a' } })
+  assert.deepEqual(JSON.parse(onlyNode.out), catalogNodeOnly)
+
+  const humanNode = await runCliCaptured(['skills', 'list', '--node', 'node-a'], env)
+  assert.equal(humanNode.code, 0, humanNode.err)
+  assert.ok(humanNode.out.includes('scope: node=node-a\n'), humanNode.out)
+
   const onlyCwd = await runCliCaptured(['skills', 'list', '--cwd', '/srv/work', '--json'], env)
   assert.equal(parseCliError(onlyCwd).code, 'missing_required_flag')
-  assert.equal(hub.hits.length, 0)
+  assert.equal(hub.hits.length, 2, '--cwd without --node never hits the server')
+})
+
+test('skills read --node works standalone without --cwd', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helmx-cli-skills-')
+  const hub = await startMockHub({ [READ_ROUTE]: () => ({ body: { text: '# node machine manual' } }) }, { autoRegisterCleanup: t })
+  const env = makeCliEnv(hub.url, dir)
+  const r = await runCliCaptured(['skills', 'read', 'node-shared', '--node', 'node-a'], env)
+  assert.equal(r.code, 0, r.err)
+  assert.ok(r.out.startsWith('# node machine manual'))
+  const hit = hub.hits.find((h) => h.method === 'POST')!
+  assert.deepEqual(hit.body, { input: { nodeId: 'node-a', skillId: 'node-shared' } })
 })
 
 test('skills list --current conflicts with explicit --node/--cwd', { timeout: 60_000 }, async (t) => {

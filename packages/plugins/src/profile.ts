@@ -14,11 +14,11 @@
  * - registers the load_skill tool (Profile whitelist + live plugin enablement) and the
  *   idempotent list_mentionable action (the @ completion source, auto-mapped to HTTP / helmx
  *   list_mentionable CLI）；
- * - registers the idempotent coordinate-scoped discovery actions skill_catalog / skill_read
+ * - registers the idempotent node-scoped discovery actions skill_catalog / skill_read
  *   (exposeToPrompt:false + scope:{conversationIds:[]} UI/CLI read paths: every session-context
  *   call -- run_action / workflow / HTTP body.conversationId -- is excluded by the scope ACL,
  *   so the model can never enumerate or read foreign coordinates; context-free human calls
- *   carry an explicit registered (nodeId, cwd) pair validated at the input boundary);
+ *   carry an explicit registered nodeId with optional cwd validated at the input boundary);
  * - the left-sidebar assistant Profile standing navigation (conversation:profile:assistant, not
  *   dependent on any particular conversation existing).
  */
@@ -57,6 +57,7 @@ export {
 } from './profile/agents-md.js'
 export {
   NODE_SKILLS_RELATIVE_DIR,
+  DEFAULT_NODE_MACHINE_SKILL_ROOTS,
   MAX_NODE_SKILL_FILE_BYTES,
   MAX_NODE_SKILLS,
   MAX_NODE_SKILL_REFERENCES,
@@ -64,6 +65,7 @@ export {
   scanNodeSkills,
   readNodeSkillFile,
   type NodeSkillScan,
+  type NodeSkillScanOptions,
   type NodeSkillsHostPort,
 } from './profile/node-skills.js'
 export {
@@ -173,11 +175,12 @@ export function createProfilePlugin(): PluginDefinition {
        * next turn. A missing Profile is a config anomaly and errors explicitly.
        *
        * The merged catalog itself comes from the shared listScopedSkills (the single merge
-       * implementation, shared with the skill_catalog action): node skills (the conversation
-       * target's <cwd>/.helmx/skills) merge in read-only as the lowest-priority source, a
-       * same-name node skill never enters the merged catalog (Hub managed skills can never be
-       * shadowed), and a node scan failure is returned as nodeUnavailable for explicit injection,
-       * never silently treated as "no node skills".
+       * implementation, shared with the skill_catalog action): node skills (remote node machine
+       * roots ~/.helmx/skills, ~/.agents/skills and the conversation target's <cwd>/.helmx/skills)
+       * merge in read-only as lower-priority sources, a same-name node skill never enters the
+       * merged catalog (Hub managed skills can never be shadowed), and a node scan failure is
+       * returned as nodeUnavailable for explicit injection, never silently treated as "no node
+       * skills".
        */
       const listAvailableSkills = async (
         profileId: string,
@@ -428,41 +431,44 @@ export function createProfilePlugin(): PluginDefinition {
 
       /**
        * Input boundary (the single adjudication point shared by both actions; only reachable
-       * context-free thanks to the scope ACL): a full explicit coordinate pair is required --
-       * - nodeId must be a node currently registered on this Hub ('local', the Hub itself,
-       *   is always valid): nodeIpc.isOnline is registration+connection-based, so an unknown id
-       *   and a disconnected one are indistinguishable and both rejected with the same honest
-       *   wording (post-boundary races still surface as nodeUnavailable / 409 node_offline from
-       *   the scan/read layers);
-       * - cwd must be an absolute path in its own shape (POSIX '/', Windows drive/UNC/root
-       *   backslash) and lexically normalize without a '..' escape (absolute roots clamp, so
-       *   this is a guard, not a rewriter -- invalid input is rejected, never silently trimmed).
+       * context-free thanks to the scope ACL):
+       * - nodeId is required and must be a node currently registered on this Hub ('local', the
+       *   Hub itself, is always valid): nodeIpc.isOnline is registration+connection-based, so an
+       *   unknown id and a disconnected one are indistinguishable and both rejected with the same
+       *   honest wording (post-boundary races still surface as nodeUnavailable / 409 node_offline
+       *   from the scan/read layers);
+       * - cwd is optional: omitted means Hub + node machine-level skill roots only; when provided,
+       *   it must be an absolute path in its own shape (POSIX '/', Windows drive/UNC/root
+       *   backslash) and lexically normalize without a '..' escape (invalid input is rejected,
+       *   never silently trimmed).
        */
-      const resolveScopedSkillTarget = (input: { nodeId?: string; cwd?: string }): { nodeId: string; cwd: string } => {
-        if (input.nodeId === undefined || input.cwd === undefined) {
+      const resolveScopedSkillTarget = (input: { nodeId?: string; cwd?: string }): { nodeId: string; cwd?: string } => {
+        if (typeof input.nodeId !== 'string' || input.nodeId.trim() === '' || input.nodeId !== input.nodeId.trim()) {
           throw new HelmxError(
             'validation_error',
-            'missing explicit coordinates: these actions are context-free only, so both nodeId and cwd must be provided as a pair',
+            'missing or invalid explicit nodeId: these actions are context-free only and require a non-empty target nodeId (with optional cwd)',
             400,
           )
         }
         const { nodeId, cwd } = input
-        if (!isAbsoluteTargetPath(cwd)) {
-          throw new HelmxError(
-            'validation_error',
-            `cwd must be an absolute path in the target node's own shape (POSIX '/', Windows drive/UNC): ${cwd}`,
-            400,
-            { nodeId, cwd },
-          )
-        }
-        const normalized = pathRulesForShape(targetPathShape(cwd)).normalize(cwd)
-        if (normalized.split(/[\\/]/).includes('..')) {
-          throw new HelmxError(
-            'validation_error',
-            `cwd must normalize without '..' escapes (got ${cwd} -> ${normalized}); refusing to target an arbitrary coordinate`,
-            400,
-            { nodeId, cwd },
-          )
+        if (cwd !== undefined) {
+          if (!isAbsoluteTargetPath(cwd)) {
+            throw new HelmxError(
+              'validation_error',
+              `cwd must be an absolute path in the target node's own shape (POSIX '/', Windows drive/UNC): ${cwd}`,
+              400,
+              { nodeId, cwd },
+            )
+          }
+          const normalized = pathRulesForShape(targetPathShape(cwd)).normalize(cwd)
+          if (normalized.split(/[\\/]/).includes('..')) {
+            throw new HelmxError(
+              'validation_error',
+              `cwd must normalize without '..' escapes (got ${cwd} -> ${normalized}); refusing to target an arbitrary coordinate`,
+              400,
+              { nodeId, cwd },
+            )
+          }
         }
         if (nodeId !== 'local') {
           let registered: boolean
@@ -485,31 +491,32 @@ export function createProfilePlugin(): PluginDefinition {
             )
           }
         }
-        return { nodeId, cwd }
+        return cwd === undefined ? { nodeId } : { nodeId, cwd }
       }
 
       ctx.action<{ nodeId?: string; cwd?: string }, ScopedSkillCatalog>({
         id: 'skill_catalog',
         description:
-          'List the merged skill catalog at a physical coordinate (nodeId, cwd): Hub skills (dataDir > machine-level shared roots) plus the node workspace read-only skills; same-name node ids are shadowed (reported in shadowedNodeSkillIds) and node scan failures in nodeUnavailable. Context-free only (scope excludes every session-context call): a context-free call must carry the explicit registered coordinate pair',
+          'List the merged skill catalog for a target node (and optional workspace cwd): Hub skills (dataDir > machine-level shared roots) plus the node machine-level roots (~/.helmx/skills, ~/.agents/skills) and optional workspace <cwd>/.helmx/skills; same-name node ids are shadowed (reported in shadowedNodeSkillIds) and node scan failures in nodeUnavailable. Context-free only (scope excludes every session-context call): must carry an explicit registered nodeId',
         inputSchema: {
           type: 'object',
           properties: {
-            nodeId: { type: 'string', minLength: 1, description: 'Target node id (must be currently registered on this Hub; paired with cwd)' },
-            cwd: { type: 'string', minLength: 1, description: 'Absolute working directory on the target node (paired with nodeId)' },
+            nodeId: { type: 'string', minLength: 1, description: 'Target node id (must be currently registered on this Hub)' },
+            cwd: { type: 'string', minLength: 1, description: 'Optional absolute working directory on the target node (adds <cwd>/.helmx/skills)' },
           },
+          required: ['nodeId'],
           additionalProperties: false,
         },
         outputSchema: {
           type: 'object',
           properties: {
             nodeId: { type: 'string', description: 'Effective coordinate node id' },
-            cwd: { type: 'string', description: 'Effective coordinate working directory' },
-            skills: { type: 'array', items: SKILL_SUMMARY_JSON_SCHEMA, description: 'Merged effective catalog (Hub data > agents > node supplements), sorted by id' },
+            cwd: { type: 'string', description: 'Effective coordinate working directory (present when cwd was supplied)' },
+            skills: { type: 'array', items: SKILL_SUMMARY_JSON_SCHEMA, description: 'Merged effective catalog (Hub data > Hub agents > node machine > workspace), sorted by id' },
             shadowedNodeSkillIds: { type: 'array', items: { type: 'string' }, description: 'Node skill ids shadowed by a same-name Hub skill (the Hub version is the effective one)' },
             nodeUnavailable: { type: 'string', description: 'Explicit redacted diagnostic when the node-side scan failed (absent when healthy; never a silent empty list)' },
           },
-          required: ['nodeId', 'cwd', 'skills', 'shadowedNodeSkillIds'],
+          required: ['nodeId', 'skills', 'shadowedNodeSkillIds'],
           additionalProperties: false,
         } satisfies JsonSchema,
         exposeToPrompt: false,
@@ -520,23 +527,23 @@ export function createProfilePlugin(): PluginDefinition {
         scope: { conversationIds: [] },
         async handler(input) {
           const target = resolveScopedSkillTarget(input)
-          return listScopedSkills(skills, ctx.host, target.nodeId, target.cwd)
+          return listScopedSkills(skills, ctx.host, target.nodeId, target.cwd ?? '')
         },
       })
 
       ctx.action<{ skillId: string; path?: string; nodeId?: string; cwd?: string }, { text: string }>({
         id: 'skill_read',
         description:
-          "Read a skill file at a physical coordinate (nodeId, cwd), mirroring load_skill resolution: a Hub catalog hit (dataDir > machine-level shared roots) reads from the Hub, otherwise the node workspace source is read live. Context-free only (scope excludes every session-context call; the Profile.skills whitelist governs the model-facing load_skill tool instead): a context-free call must carry the explicit registered coordinate pair",
+          "Read a skill file on a target node (with optional workspace cwd), mirroring load_skill resolution: a Hub catalog hit (dataDir > machine-level shared roots) reads from the Hub, otherwise the node machine-level / workspace source is read live. Context-free only (scope excludes every session-context call; the Profile.skills whitelist governs the model-facing load_skill tool instead): must carry an explicit registered nodeId",
         inputSchema: {
           type: 'object',
           properties: {
             skillId: { type: 'string', minLength: 1, description: 'Skill id to read' },
             path: { type: 'string', minLength: 1, description: "Skill-relative file path (defaults to 'SKILL.md')" },
-            nodeId: { type: 'string', minLength: 1, description: 'Target node id (must be currently registered on this Hub; paired with cwd)' },
-            cwd: { type: 'string', minLength: 1, description: 'Absolute working directory on the target node (paired with nodeId)' },
+            nodeId: { type: 'string', minLength: 1, description: 'Target node id (must be currently registered on this Hub)' },
+            cwd: { type: 'string', minLength: 1, description: 'Optional absolute working directory on the target node' },
           },
-          required: ['skillId'],
+          required: ['skillId', 'nodeId'],
           additionalProperties: false,
         },
         outputSchema: {
@@ -551,7 +558,7 @@ export function createProfilePlugin(): PluginDefinition {
         idempotent: true,
         // Same ACL as skill_catalog: session-context calls are excluded entirely (a bound read
         // would bypass the Profile.skills whitelist); the CLI resolves --current coordinates
-        // client-side and calls context-free with the explicit pair.
+        // client-side and calls context-free with explicit coordinates.
         scope: { conversationIds: [] },
         async handler(input) {
           const target = resolveScopedSkillTarget(input)
@@ -564,7 +571,7 @@ export function createProfilePlugin(): PluginDefinition {
             return { text: await skills.readFile(input.skillId, input.path ?? 'SKILL.md') }
           }
           return {
-            text: await readNodeSkillFile(ctx.host, target.nodeId, target.cwd, input.skillId, input.path ?? 'SKILL.md'),
+            text: await readNodeSkillFile(ctx.host, target.nodeId, target.cwd ?? '', input.skillId, input.path ?? 'SKILL.md'),
           }
         },
       })

@@ -335,8 +335,8 @@ test('helmx-cli skill assets stay synchronized with UI extensions and runtime ca
     'SKILL.md should document optional --entry-id on helmx conversations fork',
   )
   assert.ok(
-    HELMX_CLI_SKILL_MD.includes('--node <id> --cwd <dir>') && HELMX_CLI_SKILL_MD.includes('same-name priority Hub'),
-    'SKILL.md should document skills workspace scoping (--current / --node+--cwd with the same-name Hub-wins priority)',
+    HELMX_CLI_SKILL_MD.includes('--node <id> [--cwd <dir>]') && HELMX_CLI_SKILL_MD.includes('same-name priority Hub'),
+    'SKILL.md should document skills node/workspace scoping (--current / --node [--cwd] with the same-name Hub-wins priority)',
   )
   assert.ok(HELMX_CLI_SKILL_AND_PLUGIN_DEV_MD.includes('sp.<key>'), 'should document sp./ssp. deep-link namespaces')
 

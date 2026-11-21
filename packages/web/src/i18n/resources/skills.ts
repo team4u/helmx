@@ -14,12 +14,15 @@ export const skillsMessages = {
   'skills.category.node': { en: 'Node', 'zh-CN': '节点' },
   'skills.category.workspace': { en: 'Workspace', 'zh-CN': '工作区' },
 
-  // Skill scope picker (physical nodeId+cwd coordinates; Hub is the default).
-  'skills.scope.label': { en: 'Skill scope', 'zh-CN': '技能作用域' },
+  // Skill node selector (Hub local by default, or any usable online node).
+  'skills.scope.label': { en: 'Skill node', 'zh-CN': '技能节点' },
   'skills.scope.hub': { en: 'Hub (global)', 'zh-CN': 'Hub（全局）' },
   'skills.scope.hubMeta': { en: 'Hub dataDir and shared roots', 'zh-CN': 'Hub 数据目录与共享根' },
-  'skills.scope.conversationMeta': { en: 'Conversation', 'zh-CN': '会话' },
-  'skills.scope.profileMeta': { en: 'Profile', 'zh-CN': '角色' },
+  'skills.scope.nodeUnavailableMeta': { en: 'Unregistered or offline', 'zh-CN': '未注册或离线' },
+  'skills.scope.nodeOfflineWarning': {
+    en: 'Node {node} is currently offline; click Refresh after it reconnects.',
+    'zh-CN': '节点 {node} 当前已离线；重连后点击刷新可重新加载。',
+  },
   'skills.scope.loading': { en: 'Loading merged catalog…', 'zh-CN': '正在加载合并目录…' },
   'skills.scope.loadFailed': {
     en: 'Failed to load the merged skill catalog: {error}',
@@ -34,10 +37,11 @@ export const skillsMessages = {
     en: 'Same-name Hub skills win; node copies not listed: {ids}',
     'zh-CN': '同名 Hub 技能优先生效，节点副本未收录：{ids}',
   },
-  'skills.scope.reloadTitle': { en: 'Reload the scoped skill catalog', 'zh-CN': '重新加载作用域技能目录' },
+  'skills.scope.reloadTitle': { en: 'Reload the node skill catalog', 'zh-CN': '重新加载节点技能目录' },
 
-  // Node-sourced skill detail (scope note under the drawer title).
-  'skills.drawer.nodeSource': { en: 'Node workspace source: {node} · {cwd}', 'zh-CN': '节点工作区来源：{node} · {cwd}' },
+  // Node-sourced skill detail (provenance note under the drawer title).
+  'skills.drawer.nodeSource': { en: 'Node source: {node}', 'zh-CN': '节点来源：{node}' },
+  'skills.drawer.nodeWorkspaceSource': { en: 'Node workspace source: {node} · {cwd}', 'zh-CN': '节点工作区来源：{node} · {cwd}' },
 
   // SkillCard copy.
   'skills.card.noDescription': { en: 'No description', 'zh-CN': '暂无描述' },

@@ -464,10 +464,10 @@ test('overview 筛选参数：sp.* 写入默认 replace 不入栈，跨坐标 pu
 // 导航行为（地址栏、历史栈、参数隔离）的浏览器式交互验收。
 
 // ---------------------------------------------------------------------------
-// skills 作用域环境：物理坐标 (node, cwd) 沿 agent 待命目标的顶层查询参数先例
+// skills 节点选择：顶层 node 查询参数（深链还原、切换 push、后退/前进可恢复）
 // ---------------------------------------------------------------------------
 
-test('skills 作用域环境：深链还原、作用域切换 push、详情开合保留作用域、后退/前进可恢复', { timeout: 60_000 }, async (t) => {
+test('skills 节点选择：深链还原、节点切换 push、详情开合保留节点、后退/前进可恢复', { timeout: 60_000 }, async (t) => {
   stubFetch()
   t.after(() => (globalThis.fetch as unknown as { restore: () => void }).restore())
   snapshotDelayMs = 0
@@ -487,7 +487,7 @@ test('skills 作用域环境：深链还原、作用域切换 push、详情开�
     return e('div', { 'data-skills-probe': 'primary' }, JSON.stringify(store.primaryTarget))
   }
 
-  resetLocation('#/settings/skills?node=remote-1&cwd=%2Fremote%2Fwork')
+  resetLocation('#/settings/skills?node=remote-1')
   const host = document.createElement('div')
   document.body.appendChild(host)
   let root: Root | undefined
@@ -505,21 +505,21 @@ test('skills 作用域环境：深链还原、作用域切换 push、详情开�
     await settle()
     assert.deepEqual(
       probe().primaryTarget,
-      { kind: 'skills', nodeId: 'remote-1', cwd: '/remote/work' },
-      '深链作用域环境从地址栏还原',
+      { kind: 'skills', nodeId: 'remote-1' },
+      '深链节点参数从地址栏还原',
     )
 
-    // 作用域切换（环境变化）是数据源级变化：push 入栈（返回键回上一作用域）
+    // 节点切换是数据源级变化：push 入栈（返回键回上一节点）
     const before = probe()
     await act(async () => {
-      openTargetFn!({ kind: 'skills', nodeId: 'local', cwd: '/root/code/helm' })
+      openTargetFn!({ kind: 'skills', nodeId: 'code2' })
     })
     await settle()
     let current = probe()
-    assert.equal(current.historyLength, before.historyLength + 1, '作用域切换 push 入栈')
-    assert.equal(current.hash, '#/settings/skills?node=local&cwd=%2Froot%2Fcode%2Fhelm')
+    assert.equal(current.historyLength, before.historyLength + 1, '节点切换 push 入栈')
+    assert.equal(current.hash, '#/settings/skills?node=code2')
 
-    // 回 Hub：环境清空同样 push，地址栏收敛回无参形态
+    // 回 Hub：参数清空同样 push，地址栏收敛回无参形态
     await act(async () => {
       openTargetFn!({ kind: 'skills' })
     })
@@ -527,29 +527,29 @@ test('skills 作用域环境：深链还原、作用域切换 push、详情开�
     assert.equal(window.history.length, before.historyLength + 2, '回 Hub 亦 push')
     assert.equal(window.location.hash, '#/settings/skills')
 
-    // 带作用域打开详情（SkillCenter 的 handleSelectSkill 同构入口）push 入栈
+    // 带节点打开详情（SkillCenter 的 handleSelectSkill 同构入口）push 入栈
     await act(async () => {
-      openTargetFn!({ kind: 'skills', skillId: 'deploy-runbook', nodeId: 'remote-1', cwd: '/remote/work' })
+      openTargetFn!({ kind: 'skills', skillId: 'deploy-runbook', nodeId: 'remote-1' })
     })
     await settle()
     current = probe()
-    assert.equal(current.hash, '#/settings/skills/deploy-runbook?node=remote-1&cwd=%2Fremote%2Fwork')
+    assert.equal(current.hash, '#/settings/skills/deploy-runbook?node=remote-1')
     assert.deepEqual(
       current.primaryTarget,
-      { kind: 'skills', skillId: 'deploy-runbook', nodeId: 'remote-1', cwd: '/remote/work' },
+      { kind: 'skills', skillId: 'deploy-runbook', nodeId: 'remote-1' },
     )
-    assert.equal(current.historyLength, before.historyLength + 3, '打开详情 push 入栈（两次作用域切换之后）')
+    assert.equal(current.historyLength, before.historyLength + 3, '打开详情 push 入栈（两次节点切换之后）')
 
-    // 关闭详情（保留作用域环境）后浏览器后退：还原 Hub 列表；前进还原带作用域的列表
+    // 关闭详情（保留节点参数）后浏览器后退：还原 Hub 列表；前进还原带节点的列表
     await act(async () => {
-      openTargetFn!({ kind: 'skills', nodeId: 'remote-1', cwd: '/remote/work' })
+      openTargetFn!({ kind: 'skills', nodeId: 'remote-1' })
     })
     await settle()
     current = probe()
     assert.deepEqual(
       current.primaryTarget,
-      { kind: 'skills', nodeId: 'remote-1', cwd: '/remote/work' },
-      '关闭详情保留作用域环境（同槽 replace）',
+      { kind: 'skills', nodeId: 'remote-1' },
+      '关闭详情保留节点参数（同槽 replace）',
     )
     await act(async () => {
       window.history.back()
@@ -564,8 +564,8 @@ test('skills 作用域环境：深链还原、作用域切换 push、详情开�
     current = probe()
     assert.deepEqual(
       current.primaryTarget,
-      { kind: 'skills', nodeId: 'remote-1', cwd: '/remote/work' },
-      '前进还原带作用域环境的技能中心',
+      { kind: 'skills', nodeId: 'remote-1' },
+      '前进还原带节点参数的技能中心',
     )
   } finally {
     act(() => root?.unmount())

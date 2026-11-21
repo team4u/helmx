@@ -77,6 +77,47 @@ interface BackendOptions {
   /** executionEnv 工厂：缺省真实 NodeExecutionEnv（真文件系统）。 */
   envFor?: (nodeId: string, cwd: string) => ExecutionEnv
   redact?: (text: string) => string
+  /** 测试隔离主目录（把 ~ 展开到独立临时目录，绝不污染或泄漏宿主 /root/.agents/skills）。 */
+  homeDir?: string
+}
+
+function expandTestHome(path: string, homeDir: string): string {
+  if (path === '~') return homeDir
+  if (path.startsWith('~/') || path.startsWith('~\\')) return join(homeDir, path.slice(2))
+  return path
+}
+
+/** 包装 ExecutionEnv，将 `~` 映射到隔离的临时 homeDir，避免单测触及宿主用户主目录。 */
+function withTestHome(env: ExecutionEnv, homeDir: string): ExecutionEnv {
+  return {
+    ...env,
+    id: env.id,
+    cwd: env.cwd,
+    absolutePath: (p, c) => env.absolutePath(expandTestHome(p, homeDir), c),
+    joinPath: (parts, c) => env.joinPath(parts, c),
+    readTextFile: (p, c) => env.readTextFile(expandTestHome(p, homeDir), c),
+    readTextLines: (p, o, c) => env.readTextLines(expandTestHome(p, homeDir), o, c),
+    openTextLineReader: (p, c) => env.openTextLineReader(expandTestHome(p, homeDir), c),
+    readBinaryFile: (p, c) => env.readBinaryFile(expandTestHome(p, homeDir), c),
+    openBinaryReader: (p, o, c) => env.openBinaryReader(expandTestHome(p, homeDir), o, c),
+    writeFile: (p, x, c) => env.writeFile(expandTestHome(p, homeDir), x, c),
+    appendFile: (p, x, c) => env.appendFile(expandTestHome(p, homeDir), x, c),
+    truncateFile: (p, s, c) => env.truncateFile(expandTestHome(p, homeDir), s, c),
+    flushFile: (p, c) => env.flushFile(expandTestHome(p, homeDir), c),
+    renameFile: (s, d, c) => env.renameFile(expandTestHome(s, homeDir), expandTestHome(d, homeDir), c),
+    fileInfo: (p, c) => env.fileInfo(expandTestHome(p, homeDir), c),
+    listDir: (p, c) => env.listDir(expandTestHome(p, homeDir), c),
+    openDirReader: (p, c) => env.openDirReader(expandTestHome(p, homeDir), c),
+    watch: (tg, o, c) => env.watch(tg, o, c),
+    canonicalPath: (p, c) => env.canonicalPath(expandTestHome(p, homeDir), c),
+    exists: (p, c) => env.exists(expandTestHome(p, homeDir), c),
+    createDir: (p, o, c) => env.createDir(expandTestHome(p, homeDir), o, c),
+    remove: (p, o, c) => env.remove(expandTestHome(p, homeDir), o, c),
+    createTempDir: (p, c) => env.createTempDir(p, c),
+    createTempFile: (o, c) => env.createTempFile(o, c),
+    cleanup: (c) => env.cleanup(c),
+    exec: (cmd, o, c) => env.exec(cmd, o, c),
+  }
 }
 
 function makeBackend(opts: BackendOptions = {}): ControlledBackend {
@@ -97,7 +138,8 @@ function makeBackend(opts: BackendOptions = {}): ControlledBackend {
     },
     executionEnv(nodeId: string, cwd: string) {
       envCalls.push({ nodeId, cwd })
-      return opts.envFor ? opts.envFor(nodeId, cwd) : new NodeExecutionEnv({ cwd })
+      const base = opts.envFor ? opts.envFor(nodeId, cwd) : new NodeExecutionEnv({ cwd })
+      return opts.homeDir !== undefined ? withTestHome(base, opts.homeDir) : base
     },
     ...(opts.redact !== undefined ? { redact: opts.redact } : {}),
     async emitEvent() {},
@@ -111,6 +153,7 @@ function makeBackend(opts: BackendOptions = {}): ControlledBackend {
 
 interface Env {
   dataDir: string
+  homeDir: string
   host: PluginHost
   backend: ControlledBackend
   close(): Promise<void>
@@ -118,9 +161,11 @@ interface Env {
 
 async function makeEnv(opts: BackendOptions = {}): Promise<Env> {
   const dataDir = mkdtempSync(join(tmpdir(), 'helmx-node-skills-'))
+  const homeDir = opts.homeDir ?? mkdtempSync(join(tmpdir(), 'helmx-node-home-'))
+  const ownsHome = opts.homeDir === undefined
   const profiles = new ProfileService(dataDir)
   await profiles.ensureDefault()
-  const backend = Object.assign(makeBackend(opts), createProfileFileHost(dataDir, profiles))
+  const backend = Object.assign(makeBackend({ ...opts, homeDir }), createProfileFileHost(dataDir, profiles))
   const host = new PluginHost({
     buildProvider: createPluginBuildProvider(),
     dataDir,
@@ -130,11 +175,13 @@ async function makeEnv(opts: BackendOptions = {}): Promise<Env> {
   await host.register(createProfilePlugin(), { enabled: true })
   return {
     dataDir,
+    homeDir,
     host,
     backend,
     async close() {
       await host.dispose().catch(() => {})
       rmSync(dataDir, { recursive: true, force: true })
+      if (ownsHome) rmSync(homeDir, { recursive: true, force: true })
     },
   }
 }
@@ -233,9 +280,9 @@ test('scanNodeSkills: workspace without .helmx/skills is an ordinary empty (ok, 
   assert.deepEqual((scan as { skills: SkillSummary[] }).skills, [])
 })
 
-test('scanNodeSkills: empty cwd resolves to empty without touching any node', { timeout: 60_000 }, async (t) => {
+test('scanNodeSkills: local with empty cwd resolves to empty without touching executionEnv; remote with empty cwd scans machine roots', { timeout: 60_000 }, async (t) => {
   let envCreated = false
-  const host: NodeSkillsHostPort = {
+  const hostNoCall: NodeSkillsHostPort = {
     executionEnv: () => {
       envCreated = true
       throw new Error('must not be reached')
@@ -243,10 +290,27 @@ test('scanNodeSkills: empty cwd resolves to empty without touching any node', { 
     redact: (text) => text,
     nodeIpc: { isOnline: () => true },
   }
-  const scan = await scanNodeSkills(host, 'remote-1', '')
-  assert.equal(scan.kind, 'ok')
-  assert.deepEqual((scan as { skills: SkillSummary[] }).skills, [])
-  assert.ok(!envCreated)
+  const localScan = await scanNodeSkills(hostNoCall, 'local', '')
+  assert.equal(localScan.kind, 'ok')
+  assert.deepEqual((localScan as { skills: SkillSummary[] }).skills, [])
+  assert.ok(!envCreated, 'local without cwd has no extra roots and never acquires executionEnv')
+
+  const fakeHome = mkdtempSync(join(tmpdir(), 'helmx-node-home-'))
+  t.after(() => rmSync(fakeHome, { recursive: true, force: true }))
+  const remoteSharedDir = join(fakeHome, '.agents', 'skills', 'remote-shared')
+  mkdirSync(remoteSharedDir, { recursive: true })
+  writeFileSync(join(remoteSharedDir, 'SKILL.md'), SKILL_MD('Remote Shared', 'from ~/.agents/skills'))
+  const remoteHost: NodeSkillsHostPort = {
+    executionEnv: (_nodeId, cwd) => withTestHome(new NodeExecutionEnv({ cwd }), fakeHome),
+    redact: (text) => text,
+    nodeIpc: { isOnline: () => true },
+  }
+  const remoteScan = await scanNodeSkills(remoteHost, 'remote-1', '')
+  assert.equal(remoteScan.kind, 'ok')
+  assert.deepEqual(
+    (remoteScan as { skills: SkillSummary[] }).skills.map((s) => s.id),
+    ['remote-shared'],
+  )
 })
 
 // ---------------------------------------------------------------------------
@@ -727,7 +791,7 @@ test('scope ACL: every conversation-carrying call is rejected 403 before the han
   assert.equal(missing.code, 'not_found')
 })
 
-test('skill_catalog: context-free calls require the explicit pair; relative cwd, extra properties and unregistered nodeIds are rejected', { timeout: 60_000 }, async (t) => {
+test('skill_catalog: context-free calls require explicit nodeId (cwd optional); relative cwd, extra properties and unregistered nodeIds are rejected', { timeout: 60_000 }, async (t) => {
   const ws = mkdtempSync(join(tmpdir(), 'helmx-node-skills-ws-'))
   t.after(() => rmSync(ws, { recursive: true, force: true }))
   writeNodeSkill(ws, 'explicit-skill', SKILL_MD('Explicit', 'discovered via explicit coordinates'))
@@ -735,9 +799,9 @@ test('skill_catalog: context-free calls require the explicit pair; relative cwd,
   const env = await makeEnv({ online: () => false })
   t.after(() => env.close())
 
-  for (const input of [{}, { nodeId: 'local' }, { cwd: ws }]) {
+  for (const input of [{}, { cwd: ws }, { nodeId: '  ' }]) {
     const err = await actionErr(env, 'skill_catalog', input)
-    assert.equal(err.code, 'validation_error', `missing half of the pair rejected: ${JSON.stringify(input)}`)
+    assert.equal(err.code, 'validation_error', `missing/invalid nodeId rejected: ${JSON.stringify(input)}`)
   }
   const relative = await actionErr(env, 'skill_catalog', { nodeId: 'local', cwd: 'relative/path' })
   assert.equal(relative.code, 'validation_error')
@@ -750,9 +814,21 @@ test('skill_catalog: context-free calls require the explicit pair; relative cwd,
   assert.ok(ghost.message.includes('not currently registered'), `honest registration diagnostic: ${ghost.message}`)
   assert.deepEqual(env.backend.envCalls, [], 'an unregistered nodeId never reaches executionEnv')
 
+  // local 不传 cwd：返回 Hub 目录且不触发 executionEnv
+  const localOnly = (await env.host.invokeAction('builtin:profile', 'skill_catalog', { nodeId: 'local' })) as {
+    nodeId: string
+    cwd?: string
+    skills: SkillSummary[]
+    shadowedNodeSkillIds: string[]
+  }
+  assert.equal(localOnly.nodeId, 'local')
+  assert.equal(localOnly.cwd, undefined)
+  assert.deepEqual(localOnly.shadowedNodeSkillIds, [])
+  assert.deepEqual(env.backend.envCalls, [])
+
   const catalog = (await env.host.invokeAction('builtin:profile', 'skill_catalog', { nodeId: 'local', cwd: ws })) as {
     nodeId: string
-    cwd: string
+    cwd?: string
     skills: SkillSummary[]
     shadowedNodeSkillIds: string[]
     nodeUnavailable?: string
@@ -894,4 +970,115 @@ test('skill_read: an offline race after the boundary still fails explicitly (409
   const err = await actionErr(env, 'skill_read', { skillId: 'node-tool', nodeId: 'remote-1', cwd: ws })
   assert.equal(err.code, 'node_offline', 'the read layer keeps its explicit offline semantics for races')
   assert.equal(err.status, 409)
+})
+
+test('remote node machine roots (~/.helmx/skills > ~/.agents/skills > <cwd>/.helmx/skills): priority, read isolation, and home-as-cwd dedup', { timeout: 60_000 }, async (t) => {
+  const ws = mkdtempSync(join(tmpdir(), 'helmx-node-skills-ws-'))
+  t.after(() => rmSync(ws, { recursive: true, force: true }))
+  const env = await makeEnv()
+  t.after(() => env.close())
+
+  // Seed Hub, node ~/.helmx/skills, node ~/.agents/skills, and workspace <cwd>/.helmx/skills
+  writeHubSkill(env.dataDir, 'hub-wins', SKILL_MD('Hub Wins', 'from hub'))
+
+  const writeRootSkill = (root: string, id: string, md: string, refs: Record<string, string> = {}) => {
+    const dir = join(root, id)
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'SKILL.md'), md)
+    for (const [rel, body] of Object.entries(refs)) {
+      const full = join(dir, rel)
+      mkdirSync(dirname(full), { recursive: true })
+      writeFileSync(full, body)
+    }
+  }
+
+  const nodeHelmxRoot = join(env.homeDir, '.helmx', 'skills')
+  const nodeAgentsRoot = join(env.homeDir, '.agents', 'skills')
+  writeRootSkill(nodeHelmxRoot, 'hub-wins', SKILL_MD('Node Helmx Shadowed', 'must be shadowed by Hub'))
+  writeRootSkill(nodeHelmxRoot, 'node-helmx-only', SKILL_MD('Node Helmx', 'personal root'))
+  writeRootSkill(nodeHelmxRoot, 'node-override', SKILL_MD('Node Helmx Override', 'wins over node agents'))
+  writeRootSkill(nodeAgentsRoot, 'node-override', SKILL_MD('Node Agents Lower', 'shadowed by node ~/.helmx'), {
+    'references/only-in-agents.md': 'must not leak across roots\n',
+  })
+  writeRootSkill(nodeAgentsRoot, 'node-agents-only', SKILL_MD('Node Agents', 'shared root'), {
+    'references/guide.md': '# agents guide\n',
+  })
+  writeRootSkill(nodeAgentsRoot, 'ws-override', SKILL_MD('Node Agents Higher', 'wins over workspace'))
+  writeNodeSkill(ws, 'ws-override', SKILL_MD('Workspace Lower', 'shadowed by node ~/.agents'))
+  writeNodeSkill(ws, 'ws-only', SKILL_MD('Workspace Only', 'project supplement'))
+
+  // 1. Standalone nodeId (no cwd): merges Hub + ~/.helmx/skills + ~/.agents/skills; Hub shadows 'hub-wins'
+  const nodeOnlyCatalog = (await env.host.invokeAction('builtin:profile', 'skill_catalog', {
+    nodeId: 'remote-1',
+  })) as {
+    nodeId: string
+    cwd?: string
+    skills: SkillSummary[]
+    shadowedNodeSkillIds: string[]
+  }
+  assert.equal(nodeOnlyCatalog.nodeId, 'remote-1')
+  assert.equal(nodeOnlyCatalog.cwd, undefined)
+  assert.deepEqual(nodeOnlyCatalog.shadowedNodeSkillIds, ['hub-wins'])
+  const byId = new Map(nodeOnlyCatalog.skills.map((s) => [s.id, s]))
+  assert.equal(byId.get('hub-wins')?.name, 'Hub Wins')
+  assert.equal(byId.get('node-helmx-only')?.source, 'node')
+  assert.equal(byId.get('node-agents-only')?.source, 'node')
+  assert.equal(byId.get('node-override')?.name, 'Node Helmx Override')
+  assert.equal(byId.has('ws-only'), false, 'workspace-only skill is not included when cwd is omitted')
+
+  // 2. skill_read without cwd reads node machine skills directly; higher-priority root owns skillId (no cross-root reference leak)
+  const agentsRead = (await env.host.invokeAction('builtin:profile', 'skill_read', {
+    nodeId: 'remote-1',
+    skillId: 'node-agents-only',
+    path: 'references/guide.md',
+  })) as { text: string }
+  assert.equal(agentsRead.text, '# agents guide\n')
+  const overrideRead = (await env.host.invokeAction('builtin:profile', 'skill_read', {
+    nodeId: 'remote-1',
+    skillId: 'node-override',
+  })) as { text: string }
+  assert.ok(overrideRead.text.includes('Node Helmx Override'))
+  const crossRootMiss = await actionErr(env, 'skill_read', {
+    nodeId: 'remote-1',
+    skillId: 'node-override',
+    path: 'references/only-in-agents.md',
+  })
+  assert.equal(crossRootMiss.code, 'not_found', 'owning root lacks reference -> 404, never leaks from lower root')
+
+  // 3. With workspace cwd: adds workspace .helmx/skills as lowest node priority; runtime before_turn/load_skill align
+  const fullCatalog = (await env.host.invokeAction('builtin:profile', 'skill_catalog', {
+    nodeId: 'remote-1',
+    cwd: ws,
+  })) as {
+    nodeId: string
+    cwd?: string
+    skills: SkillSummary[]
+    shadowedNodeSkillIds: string[]
+  }
+  assert.equal(fullCatalog.cwd, ws)
+  const fullById = new Map(fullCatalog.skills.map((s) => [s.id, s]))
+  assert.equal(fullById.get('ws-only')?.source, 'node')
+  assert.equal(fullById.get('ws-override')?.name, 'Node Agents Higher')
+
+  const beforeTurnCatalog = skillSection(await runBeforeTurn(env, makeTurn(ws, { nodeId: 'remote-1' })))
+  assert.ok(beforeTurnCatalog?.includes('node-agents-only'))
+  assert.ok(beforeTurnCatalog?.includes('ws-only'))
+  env.backend.conversations.set(99, makeConversation(99, { nodeId: 'remote-1', cwd: ws }))
+  const runtimeRead = await loadSkillOk(env, 99, { skillId: 'node-agents-only', path: 'references/guide.md' })
+  assert.equal(runtimeRead, '# agents guide\n')
+
+  // 4. When cwd === homeDir (e.g. a remote profile defaulting cwd to ~), canonicalPath dedup skips scanning ~/.helmx/skills twice
+  const homeAsCwdCatalog = (await env.host.invokeAction('builtin:profile', 'skill_catalog', {
+    nodeId: 'remote-1',
+    cwd: env.homeDir,
+  })) as {
+    skills: SkillSummary[]
+    shadowedNodeSkillIds: string[]
+  }
+  assert.deepEqual(homeAsCwdCatalog.shadowedNodeSkillIds, ['hub-wins'])
+  assert.equal(
+    homeAsCwdCatalog.skills.filter((s) => s.id === 'node-helmx-only').length,
+    1,
+    'skill in ~/.helmx/skills is never duplicated when cwd equals homeDir',
+  )
 })

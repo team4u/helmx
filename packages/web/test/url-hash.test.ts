@@ -544,55 +544,56 @@ test('screen params: isSameResolvedTarget 浅比较 params，仅 params 变化�
 })
 
 // ---------------------------------------------------------------------------
-// skills 目标作用域环境：物理坐标 (node, cwd) 沿用 agent 待命目标的顶层
-// node/cwd 查询参数先例（主屏顶层、分屏在 split 值内编码）
+// skills 目标节点选择：顶层 node 查询参数（主屏顶层、分屏在 split 值内编码）
 // ---------------------------------------------------------------------------
 
-test('skills scope env: 顶层 node/cwd 归主屏技能中心，split 值内编码归分屏，往返无损', { timeout: 60_000 }, () => {
-  const parsed = parseLocationHash('#/settings/skills?node=remote-1&cwd=%2Fremote%2Fwork')
+test('skills scope env: 顶层 node 归主屏技能中心，split 值内编码归分屏，忽略 cwd 往返无损', { timeout: 60_000 }, () => {
+  const parsed = parseLocationHash('#/settings/skills?node=remote-1')
   assert.deepEqual(parsed.primaryTarget, {
-    kind: 'skills', nodeId: 'remote-1', cwd: '/remote/work',
+    kind: 'skills', nodeId: 'remote-1',
   })
-  // 详情子项与作用域环境共存（打开节点技能详情的深链形态）
-  const withDetail = parseLocationHash('#/settings/skills/deploy-runbook?node=local&cwd=%2Froot%2Fcode%2Fhelm')
+  // 详情子项与节点选择共存（打开节点技能详情的深链形态）
+  const withDetail = parseLocationHash('#/settings/skills/deploy-runbook?node=code2')
   assert.deepEqual(withDetail.primaryTarget, {
-    kind: 'skills', skillId: 'deploy-runbook', nodeId: 'local', cwd: '/root/code/helm',
+    kind: 'skills', skillId: 'deploy-runbook', nodeId: 'code2',
   })
   assert.deepEqual(roundtrip(withDetail), withDetail)
 
-  // 分屏技能中心：环境编码在 split 值内部，与主屏顶层命名空间互不串扰
-  const splitParsed = parseLocationHash('#/settings/skills?node=local&cwd=%2Fa&split=settings%2Fskills%2Fdetail%3Fnode%3Dremote-1%26cwd%3D%2Fb')
-  assert.deepEqual(splitParsed.primaryTarget, { kind: 'skills', nodeId: 'local', cwd: '/a' })
-  assert.deepEqual(splitParsed.splitTarget, { kind: 'skills', skillId: 'detail', nodeId: 'remote-1', cwd: '/b' })
+  // 分屏技能中心：节点参数编码在 split 值内部，与主屏顶层命名空间互不串扰
+  const splitParsed = parseLocationHash('#/settings/skills?node=code2&split=settings%2Fskills%2Fdetail%3Fnode%3Dremote-1')
+  assert.deepEqual(splitParsed.primaryTarget, { kind: 'skills', nodeId: 'code2' })
+  assert.deepEqual(splitParsed.splitTarget, { kind: 'skills', skillId: 'detail', nodeId: 'remote-1' })
   assert.deepEqual(roundtrip(splitParsed), splitParsed)
 
-  // 无环境保持字段稳定；切回会话顶层 node/cwd 无处可挂自然丢弃
+  // 无参数保持字段稳定；skills 不携带 cwd；切回会话顶层 node 无处可挂自然丢弃
   assert.deepEqual(parseLocationHash('#/settings/skills').primaryTarget, { kind: 'skills' })
+  assert.deepEqual(parseLocationHash('#/settings/skills?node=code2&cwd=%2Fignored').primaryTarget, {
+    kind: 'skills', nodeId: 'code2',
+  })
   const away = parseLocationHash('#/c/1?node=local&cwd=%2Fa')
   assert.deepEqual(away.primaryTarget, { kind: 'conversation', conversationId: 1 })
 })
 
-test('skills scope env: 作用域切换 push 入栈（数据源级变化）；isSameResolvedTarget 逐坐标比较', { timeout: 60_000 }, () => {
+test('skills scope env: 节点切换 push 入栈（数据源级变化）；isSameResolvedTarget 比较 nodeId', { timeout: 60_000 }, () => {
   const base = conversation(1)
-  const skillsTarget = (env: { nodeId?: string; cwd?: string }, skillId?: string) => ({
+  const skillsTarget = (nodeId?: string, skillId?: string) => ({
     kind: 'skills' as const,
     ...(skillId !== undefined ? { skillId } : {}),
-    ...(env.nodeId !== undefined ? { nodeId: env.nodeId } : {}),
-    ...(env.cwd !== undefined ? { cwd: env.cwd } : {}),
+    ...(nodeId !== undefined ? { nodeId } : {}),
   })
-  const scoped = { ...base, primaryTarget: skillsTarget({ nodeId: 'local', cwd: '/w' }) }
-  const otherScope = { ...base, primaryTarget: skillsTarget({ nodeId: 'remote', cwd: '/w' }) }
-  const hubScope = { ...base, primaryTarget: skillsTarget({}) }
-  // 作用域环境变化是数据源级切换：push（返回键回上一作用域而非退出技能中心）
+  const scoped = { ...base, primaryTarget: skillsTarget('code2') }
+  const otherScope = { ...base, primaryTarget: skillsTarget('lx') }
+  const hubScope = { ...base, primaryTarget: skillsTarget() }
+  // 节点变化是数据源级切换：push（返回键回上一节点而非退出技能中心）
   assert.equal(shouldPushLocationHistory(scoped, otherScope), true)
   assert.equal(shouldPushLocationHistory(scoped, hubScope), true)
-  // isSameResolvedTarget 感知环境差异
+  // isSameResolvedTarget 感知 nodeId 差异
   assert.equal(isSameResolvedTarget(scoped.primaryTarget, otherScope.primaryTarget), false)
   assert.equal(isSameResolvedTarget(scoped.primaryTarget, hubScope.primaryTarget), false)
-  assert.equal(isSameResolvedTarget(scoped.primaryTarget, skillsTarget({ nodeId: 'local', cwd: '/w' })), true)
-  // 列表开抽屉（无 id -> 有 id）仍 push；带环境开详情再关详情保留作用域
-  assert.equal(shouldPushLocationHistory(hubScope, { ...base, primaryTarget: skillsTarget({}, 'x') }), true)
-  assert.equal(shouldPushLocationHistory(scoped, { ...base, primaryTarget: skillsTarget({ nodeId: 'local', cwd: '/w' }, 'x') }), true)
+  assert.equal(isSameResolvedTarget(scoped.primaryTarget, skillsTarget('code2')), true)
+  // 列表开抽屉（无 id -> 有 id）仍 push；带节点开详情再关详情保留 nodeId
+  assert.equal(shouldPushLocationHistory(hubScope, { ...base, primaryTarget: skillsTarget(undefined, 'x') }), true)
+  assert.equal(shouldPushLocationHistory(scoped, { ...base, primaryTarget: skillsTarget('code2', 'x') }), true)
 })
 
 // ---------------------------------------------------------------------------

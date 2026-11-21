@@ -2,9 +2,8 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { HelmxIcon, SearchBox, Select } from '@helmx/plugin-client'
 import type { SelectOption } from '@helmx/plugin-client'
 import {
-  useConversations,
   useLocationTargets,
-  useProfilesSlice,
+  useNodes,
   useSkills,
   useStoreActions,
 } from '../lib/store-context.js'
@@ -21,11 +20,11 @@ import {
 } from './skill-center-model.js'
 import { readScopedSkillFile } from './skill-scope-api.js'
 import {
-  buildSkillScopeCandidates,
+  HUB_SKILL_NODE_ID,
+  buildSkillNodeOptions,
   isNodeSourceSkill,
-  parseSkillScopeEnv,
-  skillScopeKey,
-  skillScopeTargetEnv,
+  parseSkillCenterNodeId,
+  skillCenterTarget,
 } from './skill-scope-model.js'
 import { useScopedSkillCatalog } from './use-scoped-skills.js'
 
@@ -38,23 +37,17 @@ export interface SkillCenterProps {
 
 const CATEGORY_TABS: SkillCategoryTab[] = ['all', 'builtin', 'plugins', 'agents', 'node', 'workspace']
 
-/** Sentinel value of the scope picker's Hub (default) option (never empty:
- * Radix Select items reject empty-string values; scope keys contain a NUL
- * separator so they can never collide with the sentinel). */
-const HUB_SCOPE_VALUE = '__hub__'
-
 /**
  * Full-screen skill center (primary stage) container:
  * - a system-level full-screen view managing model tool skills, playbooks and
  *   code reference guides;
- * - scope picker: the Hub dataDir catalog by default, or the merged Hub+node
- *   catalog of a physical (nodeId, cwd) workspace (candidates deduped from
- *   conversations and explicit profile cwds); the scope rides the skills
- *   target's own node/cwd query params (the agent standby env precedent:
- *   top-level for the primary, inside the split value for the split pane), so
- *   deep links, refresh and back/forward all restore it, and detail
- *   open/close keeps the scope;
- * - top bar: title, split actions and the refresh action (scoped reload vs
+ * - node selector: Hub ('local') by default, or any usable online compute
+ *   node (from useNodes(), never conversations/cwds); switching nodes rides
+ *   the skills target's `node` query param (top-level for the primary, inside
+ *   the split value for the split pane) and pushes to browser history so
+ *   deep links, refresh and back/forward all restore it, while detail
+ *   open/close preserves the selected node;
+ * - top bar: title, split actions and the refresh action (node reload vs
  *   Hub asset refresh);
  * - search bar: fuzzy search across ID / name / description / reference file
  *   paths, combined with category pill tabs (node-sourced skills form their
@@ -63,7 +56,7 @@ const HUB_SCOPE_VALUE = '__hub__'
  * - responsive card grid: SkillCard cells, zero emoji;
  * - detail & doc reader drawer: SkillDetailDrawer showing SKILL.md and
  *   references/*.md (node-sourced skills read through the builtin:profile
- *   action with the current coordinates);
+ *   action for the selected node);
  * - follows the zero-emoji rule and Fast Refresh conventions strictly.
  */
 export function SkillCenter({
@@ -72,8 +65,7 @@ export function SkillCenter({
   inlineDrawer = false,
 }: SkillCenterProps): React.JSX.Element {
   const hubSkills = useSkills() ?? []
-  const conversations = useConversations()
-  const { profiles } = useProfilesSlice()
+  const nodes = useNodes()
   const { primaryTarget, splitTarget } = useLocationTargets()
   const { openTarget, closeSplit, refreshAssets, invokePluginAction } = useStoreActions()
   const { t } = useWebLocale()
@@ -82,22 +74,14 @@ export function SkillCenter({
   const [reloadSeq, setReloadSeq] = useState(0)
 
   const currentTarget = isSplit ? splitTarget : primaryTarget
-  const targetEnv =
-    currentTarget !== null && currentTarget.kind === 'skills'
-      ? { nodeId: currentTarget.nodeId, cwd: currentTarget.cwd }
-      : undefined
-  // Physical scope from the target env (single source of truth): Hub when
-  // unset; partial node/cwd pairs self-heal away below.
-  const { scope, partial } = useMemo(() => parseSkillScopeEnv(targetEnv), [targetEnv])
-
-  const scopeCandidates = useMemo(
-    () => buildSkillScopeCandidates(conversations, profiles),
-    [conversations, profiles],
-  )
+  const rawNodeId = currentTarget !== null && currentTarget.kind === 'skills' ? currentTarget.nodeId : undefined
+  // Hub default when unset or 'local'; non-canonical ?node=local / whitespace self-heals via replace.
+  const { nodeId, shouldNormalize } = useMemo(() => parseSkillCenterNodeId(rawNodeId), [rawNodeId])
+  const scope = useMemo(() => (nodeId === undefined ? undefined : { nodeId }), [nodeId])
 
   const scopedCatalog = useScopedSkillCatalog(scope, invokePluginAction, reloadSeq)
 
-  // Hub scope consumes the store's /api/skills list; a physical scope consumes
+  // Hub consumes the store's /api/skills list; a selected remote node consumes
   // the merged action catalog (empty while loading — never a phantom Hub list).
   const skills = useMemo(
     () => (scope === undefined ? hubSkills : scopedCatalog.catalog?.skills ?? []),
@@ -123,26 +107,24 @@ export function SkillCenter({
 
   const isDrawerOpen = Boolean(selectedSkillId && selectedSkill)
 
-  // Half env pairs (only node or only cwd) are untrustworthy: self-heal back to
-  // the Hub scope with a replace navigation, keeping the detail selection.
   useEffect(() => {
-    if (!partial) return
-    openTarget(skillScopeTargetEnv(undefined, { skillId: selectedSkillId }), {
+    if (!shouldNormalize) return
+    openTarget(skillCenterTarget(nodeId, { skillId: selectedSkillId }), {
       ...(isSplit ? { split: true } : {}),
       history: 'replace',
     })
-  }, [partial, isSplit, openTarget, selectedSkillId])
+  }, [shouldNormalize, nodeId, isSplit, openTarget, selectedSkillId])
 
-  // Detail open/close keeps the scope coordinates (they ride the target).
+  // Detail open/close keeps the selected node.
   const handleSelectSkill = (skillId: string) => {
     openTarget(
-      skillScopeTargetEnv(scope, { skillId }),
+      skillCenterTarget(nodeId, { skillId }),
       isSplit ? { split: true } : undefined,
     )
   }
 
   const handleCloseDrawer = () => {
-    openTarget(skillScopeTargetEnv(scope), isSplit ? { split: true } : undefined)
+    openTarget(skillCenterTarget(nodeId), isSplit ? { split: true } : undefined)
   }
 
   const toggleSplit = () => {
@@ -154,45 +136,18 @@ export function SkillCenter({
       closeSplit()
       return
     }
-    openTarget(skillScopeTargetEnv(scope, { skillId: selectedSkillId }), { split: true })
+    openTarget(skillCenterTarget(nodeId, { skillId: selectedSkillId }), { split: true })
   }
 
-  // Scope switching is an env-level change of the same skills center slot
-  // (the agent standby draft-env precedent): replace history and drop the
-  // stale detail selection in one navigation write.
-  const scopeOptions: Array<SelectOption<string>> = useMemo(() => {
-    const options: Array<SelectOption<string>> = [
-      { value: HUB_SCOPE_VALUE, label: t('skills.scope.hub'), meta: t('skills.scope.hubMeta') },
-    ]
-    for (const candidate of scopeCandidates) {
-      options.push({
-        value: skillScopeKey(candidate),
-        label: candidate.cwd,
-        meta:
-          candidate.origin === 'conversation'
-            ? `${t('skills.scope.conversationMeta')} · ${candidate.nodeId}`
-            : `${t('skills.scope.profileMeta')} · ${candidate.nodeId}`,
-      })
-    }
-    // A deep-linked coordinate with no matching conversation/profile stays
-    // selectable and honestly visible (never silently swapped for Hub).
-    const currentKey = scope === undefined ? HUB_SCOPE_VALUE : skillScopeKey(scope)
-    if (scope !== undefined && !options.some((option) => option.value === currentKey)) {
-      options.push({ value: currentKey, label: scope.cwd, meta: scope.nodeId })
-    }
-    return options
-  }, [scopeCandidates, scope, t])
+  const scopeOptions: Array<SelectOption<string>> = useMemo(
+    () => buildSkillNodeOptions(nodes, nodeId, t),
+    [nodes, nodeId, t],
+  )
 
   const handleScopeChange = (nextValue: string) => {
-    const nextScope =
-      nextValue === HUB_SCOPE_VALUE
-        ? undefined
-        : scopeCandidates.find((candidate) => skillScopeKey(candidate) === nextValue) ??
-          (scope !== undefined && skillScopeKey(scope) === nextValue ? scope : undefined)
-    openTarget(skillScopeTargetEnv(nextScope), {
-      ...(isSplit ? { split: true } : {}),
-      history: 'replace',
-    })
+    const nextNodeId = nextValue === HUB_SKILL_NODE_ID ? undefined : nextValue
+    // Node switch pushes to browser history (per shouldPushLocationHistory) and drops any stale detail selection.
+    openTarget(skillCenterTarget(nextNodeId), isSplit ? { split: true } : undefined)
   }
 
   const handleRefresh = () => {
@@ -203,8 +158,8 @@ export function SkillCenter({
     void refreshAssets?.()
   }
 
-  // Node-sourced skill files read through the builtin:profile action with the
-  // current coordinates; Hub-sourced files keep the direct asset read.
+  // Node-sourced skill files read through the builtin:profile action for the
+  // selected node; Hub-sourced files keep the direct asset read.
   const drawerReader = useMemo(() => {
     if (scope === undefined) return undefined
     return (skillId: string, path?: string) => {
@@ -216,10 +171,20 @@ export function SkillCenter({
     }
   }, [scope, skills, invokePluginAction])
 
+  const selectedNodeRecord = useMemo(
+    () => (nodeId === undefined ? undefined : nodes.find((n) => n.id === nodeId)),
+    [nodes, nodeId],
+  )
   const shadowedNodeSkillIds = scopedCatalog.catalog?.shadowedNodeSkillIds ?? []
   const nodeUnavailable = scopedCatalog.catalog?.nodeUnavailable
   const scopeLoadError = scopedCatalog.error
   const scopeLoading = scope !== undefined && scopedCatalog.loading
+  const disconnectedNotice =
+    scope !== undefined &&
+    scopeLoadError === null &&
+    nodeUnavailable === undefined &&
+    selectedNodeRecord !== undefined &&
+    !selectedNodeRecord.online
 
   return (
     <div className={`primary-center skill-center${isSplit ? ' is-split' : ''}`} data-view="skill-center">
@@ -253,14 +218,14 @@ export function SkillCenter({
         </div>
       </div>
 
-      {/* Search bar, scope picker and category filter pills */}
+      {/* Search bar, node selector and category filter pills */}
       <div className="primary-center-toolbar">
         <div className="skill-scope-picker">
           <Select
             className="skill-scope-select"
             size="sm"
             inline={inlineDrawer}
-            value={scope === undefined ? HUB_SCOPE_VALUE : skillScopeKey(scope)}
+            value={nodeId ?? HUB_SKILL_NODE_ID}
             options={scopeOptions}
             onChange={(ev) => handleScopeChange(ev.target.value)}
             aria-label={t('skills.scope.label')}
@@ -299,7 +264,7 @@ export function SkillCenter({
         </div>
       </div>
 
-      {/* Scope diagnostics: explicit node-unavailable / shadowing / load errors */}
+      {/* Node diagnostics: explicit load error / node-unavailable / offline / shadowing */}
       {scope !== undefined && (
         <div className="skill-scope-diagnostics">
           {scopeLoadError !== null && (
@@ -316,6 +281,14 @@ export function SkillCenter({
             <div className="callout callout-warn" role="alert">
               <HelmxIcon name="alert-triangle" size={13} />
               <span className="callout-text">{t('skills.scope.nodeUnavailable', { reason: nodeUnavailable })}</span>
+            </div>
+          )}
+          {disconnectedNotice && (
+            <div className="callout callout-warn" role="alert">
+              <HelmxIcon name="alert-triangle" size={13} />
+              <span className="callout-text">
+                {t('skills.scope.nodeOfflineWarning', { node: selectedNodeRecord.id })}
+              </span>
             </div>
           )}
           {scopeLoadError === null && shadowedNodeSkillIds.length > 0 && (

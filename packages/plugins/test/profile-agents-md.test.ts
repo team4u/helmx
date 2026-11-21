@@ -208,6 +208,16 @@ interface FakeEnv extends ExecutionEnv {
   readLengths: number[]
 }
 
+/** 同回合 before_turn 并发运行的 scanNodeSkills 只会探这几类技能根目录；测试桩按常态缺失应答且不混入 AGENTS.md 的调用序列断言。 */
+function isNodeSkillsRootPath(path: string): boolean {
+  return (
+    path === '~/.helmx/skills' ||
+    path === '~/.agents/skills' ||
+    path.endsWith('/.helmx/skills') ||
+    path.endsWith('\\.helmx\\skills')
+  )
+}
+
 /**
  * 受控执行环境：记录 canonicalPath / openBinaryReader / 句柄 info / read /
  * close 全部调用并按脚本应答。未脚本化的 readTextFile / fileInfo 被显式
@@ -227,8 +237,17 @@ function fakeEnv(stages: FakeEnvStages = {}): FakeEnv {
     calls,
     readLengths,
     async canonicalPath(path: string): Promise<Result<string, FileError>> {
+      if (isNodeSkillsRootPath(path)) {
+        return { ok: false, error: new FileError('not_found', 'ENOENT: no such directory', path) }
+      }
       calls.push({ op: 'canonicalPath', path })
       return stages.canonicalPath ? stages.canonicalPath(path) : { ok: true, value: path }
+    },
+    async listDir(path: string): Promise<Result<FileInfo[], FileError>> {
+      if (isNodeSkillsRootPath(path)) {
+        return { ok: false, error: new FileError('not_found', 'ENOENT: no such directory', path) }
+      }
+      throw new Error(`fake listDir 不应参与 AGENTS.md 读取: ${path}`)
     },
     async openBinaryReader(
       path: string,
