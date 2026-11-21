@@ -62,6 +62,17 @@ test('@helmx/protocol/browser: export declarations aligned with the root entry\'
     'createLocaleTranslator',
     'encodeSessionDocSubParam',
     'parseSessionDocSubParam',
+    'TOOL_PRESENTATION_META_MAX_BYTES',
+    'TOOL_PRESENTATION_META_MAX_DEPTH',
+    'TOOL_PRESENTATION_META_MAX_NODES',
+    'assertBoundedPresentationMeta',
+    'EDIT_TOOL_RESULT_SCHEMA',
+    'READ_TOOL_META_SCHEMA',
+    'WRITE_TOOL_META_SCHEMA',
+    'BASH_TOOL_META_SCHEMA',
+    'ARTIFACT_REGISTER_META_SCHEMA',
+    'ARTIFACT_READ_META_SCHEMA',
+    'KERNEL_TOOL_PRESENTATION_META_SCHEMAS',
   ] as const
 
   const browserRecord = browserExports as Record<string, unknown>

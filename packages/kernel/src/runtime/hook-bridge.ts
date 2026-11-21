@@ -21,12 +21,18 @@ import type {
   HookName,
   HookPayloadMap,
   HookResult,
+  JsonSchema,
+  PluginToolResultEnvelope,
+  PluginToolTextBlock,
 } from '@helmx/protocol'
-import { HelmxError, matchesConversationScope } from '@helmx/protocol'
+import {
+  HelmxError,
+  KERNEL_TOOL_PRESENTATION_META_SCHEMAS,
+  matchesConversationScope,
+} from '@helmx/protocol'
 import { randomUUID } from 'node:crypto'
 import { getCurrentTools } from '@earendil-works/pi-ai/utils/transcript'
 import type { PluginHost } from '../plugins/index.js'
-import { redactJsonValue } from '../redact.js'
 import {
   actionCliCommand,
   projectActionPromptSection,
@@ -35,14 +41,23 @@ import {
 } from './action-prompts.js'
 import {
   assertSafeMessageSurgery,
-  normalizeToolResult,
+  guardToolExecutionResult,
+  parseHookToolResult,
   projectToolPromptSections,
   sectionsEqual,
   systemSectionsOf,
   toolResultOf,
   withSections,
   withToolDeclarations,
+  type GuardToolResultOptions,
 } from './runtime-helpers.js'
+import { lookupRegistryToolSchemas, type ToolSchemaEntry } from './tool-registry.js'
+
+const REGISTER_STRUCTURED_OUTPUT_SCHEMA: JsonSchema = {
+  type: 'object',
+  properties: { accepted: { type: 'boolean' } },
+  required: ['accepted'],
+}
 
 type HookDecision =
   | { action: 'continue' }
@@ -53,7 +68,12 @@ type HookDecision =
 /** Cached `tool_call` `handled` takeover entry (consumed by execution-layer wrapper; `conversationId` tracks owner for safety cleanup). */
 export interface HandledToolCallEntry {
   conversationId: number | undefined
-  result: { output: Array<{ type: 'text'; text: string }>; isError: boolean }
+  result: {
+    output: Array<PluginToolTextBlock>
+    isError: boolean
+    structuredOutput?: unknown
+    details?: Record<string, unknown>
+  }
 }
 
 interface HookBridgeOptions {
@@ -63,6 +83,8 @@ interface HookBridgeOptions {
   readonly handledToolCalls: Map<string, HandledToolCallEntry>
   /** Unified outbound tool-result processor (spill boundary + redaction; host implementation). */
   readonly prepareToolResult: (conversationId: number, result: ToolExecutionResult) => Promise<ToolExecutionResult>
+  /** Optional explicit schema resolver (defaults to live pluginHost + registered kernel tools). */
+  readonly getToolSchemas?: (toolName: string) => ToolSchemaEntry | undefined
   /** Safe conversation summary lookup (returns `undefined` if missing/corrupted -> skips `before_turn`). */
   readonly safeSummary: (conversationId: number) => ConversationSummary | undefined
   /** Current turn's input metadata (`before_turn` payload). */
@@ -115,28 +137,61 @@ export class HookBridge {
               }
               return undefined
             },
-            /** All final tool outputs pass through the same redaction and spill boundary before persistence. */
+            /** All final tool outputs pass through the same redaction, schema, budget, and spill boundary before persistence. */
             afterTool: async (call, result, api) => {
               this.options.handledToolCalls.delete(call.id)
               try {
+                const hookResult: PluginToolResultEnvelope = {
+                  ...(result.output !== undefined ? { output: result.output as PluginToolTextBlock[] } : {}),
+                  ...(result.structuredOutput !== undefined ? { structuredOutput: result.structuredOutput } : {}),
+                  ...(result.details !== undefined
+                    ? { presentationMeta: result.details as Record<string, unknown> }
+                    : {}),
+                  ...(result.isError !== undefined ? { isError: result.isError } : {}),
+                }
                 const outcome = await this.runHookChain('tool_result', {
                   conversationId: api.conversationId,
                   callId: call.id,
                   toolName: call.name,
                   input: call.arguments,
-                  result,
+                  result: hookResult,
                 })
                 let effective = result
                 if (outcome?.action === 'transform') {
-                  const transformed = normalizeToolResult(outcome.value.result)
-                  if (!transformed) throw new HelmxError('invalid_hook_result', 'tool_result must return a valid tool result', 500)
-                  effective = transformed as ToolExecutionResult
+                  const parsed = parseHookToolResult(outcome.value.result, 'tool_result transform')
+                  if (!parsed.ok) {
+                    throw new HelmxError(
+                      'invalid_hook_result',
+                      `tool_result must return a valid tool result: ${parsed.reason}`,
+                      500,
+                    )
+                  }
+                  effective = {
+                    ...(result.diagnostics !== undefined ? { diagnostics: result.diagnostics } : {}),
+                    ...(result.usage !== undefined ? { usage: result.usage } : {}),
+                    ...(result.control !== undefined ? { control: result.control } : {}),
+                    ...parsed.result,
+                  } as ToolExecutionResult
                 } else if (outcome?.action === 'handled') {
-                  const handled = normalizeToolResult(outcome.result)
-                  if (!handled) throw new HelmxError('invalid_hook_result', 'tool_result handled payload is not a valid tool result', 500)
-                  effective = handled as ToolExecutionResult
+                  const parsed = parseHookToolResult(outcome.result, 'tool_result handled')
+                  if (!parsed.ok) {
+                    throw new HelmxError(
+                      'invalid_hook_result',
+                      `tool_result handled payload is not a valid tool result: ${parsed.reason}`,
+                      500,
+                    )
+                  }
+                  effective = parsed.result as ToolExecutionResult
                 }
-                return await this.options.prepareToolResult(api.conversationId, effective)
+                const schemas = this.resolveToolSchemas(call.name)
+                const guarded = guardToolExecutionResult(effective, this.options.redact, {
+                  toolName: call.name,
+                  callId: call.id,
+                  structuredOutputSchema: schemas.structuredOutputSchema,
+                  presentationMetaSchema: schemas.presentationMetaSchema,
+                  enforceSchemas: true,
+                })
+                return await this.options.prepareToolResult(api.conversationId, guarded)
               } catch (error) {
                 return {
                   isError: true,
@@ -181,11 +236,20 @@ export class HookBridge {
     const payload: BeforeTurnHookPayload = {
       conversation: summary,
       inputs: this.options.currentRunInputs(conversationId),
-      tools: effectiveTools.map((spec) => ({
-        name: spec.name,
-        description: spec.description,
-        inputSchema: spec.parameters as Record<string, unknown>,
-      })) as unknown as BeforeTurnHookPayload['tools'],
+      tools: effectiveTools.map((spec) => {
+        const schemas = this.resolveToolSchemas(spec.name)
+        return {
+          name: spec.name,
+          description: spec.description,
+          inputSchema: spec.parameters as Record<string, unknown>,
+          ...(schemas.structuredOutputSchema !== undefined
+            ? { structuredOutputSchema: schemas.structuredOutputSchema }
+            : {}),
+          ...(schemas.presentationMetaSchema !== undefined
+            ? { presentationMetaSchema: schemas.presentationMetaSchema }
+            : {}),
+        }
+      }) as unknown as BeforeTurnHookPayload['tools'],
       sections: systemSectionsOf(request.messages),
       messages: original,
     }
@@ -330,6 +394,36 @@ export class HookBridge {
     return result
   }
 
+  /** Resolve declared schemas for a tool from explicit resolver, live plugin tools, or registered kernel tools. */
+  private resolveToolSchemas(toolName: string): ToolSchemaEntry {
+    if (this.options.getToolSchemas !== undefined) {
+      return this.options.getToolSchemas(toolName) ?? {}
+    }
+    const host = this.options.pluginHost()
+    if (host !== undefined) {
+      const pluginSpec = host.listTools().find((t) => t.name === toolName)
+      if (pluginSpec !== undefined) {
+        return {
+          ...(pluginSpec.structuredOutputSchema !== undefined
+            ? { structuredOutputSchema: pluginSpec.structuredOutputSchema }
+            : {}),
+          ...(pluginSpec.presentationMetaSchema !== undefined
+            ? { presentationMetaSchema: pluginSpec.presentationMetaSchema }
+            : {}),
+        }
+      }
+    }
+    const fromRegistry = lookupRegistryToolSchemas(this.options.registry, toolName)
+    if (fromRegistry !== undefined) return fromRegistry
+    if (toolName === 'register_structured_output') {
+      return { structuredOutputSchema: REGISTER_STRUCTURED_OUTPUT_SCHEMA }
+    }
+    if (Object.hasOwn(KERNEL_TOOL_PRESENTATION_META_SCHEMAS, toolName)) {
+      return { presentationMetaSchema: KERNEL_TOOL_PRESENTATION_META_SCHEMAS[toolName] }
+    }
+    return {}
+  }
+
   /**
    * Run an `around` (continuation) hook (`agent_spawn` only): plugins wrap full execution (downstream hooks
    * and default native execution) by controlling `next`; falls through directly to `defaultRun` when no host.
@@ -345,15 +439,15 @@ export class HookBridge {
   }
 }
 
-/** Unified outbound tool-result handling: redaction + spill boundary (truncates oversized payloads to artifacts). */
+/** Unified outbound tool-result handling: bounded presentationMeta/structuredOutput guard + redaction + spill boundary. */
 export async function prepareToolResultWith(
   artifacts: HookBridgeOptions['artifacts'],
   redact: (text: string) => string,
   conversationId: number,
   result: ToolExecutionResult,
+  options?: GuardToolResultOptions,
 ): Promise<ToolExecutionResult> {
-  // SDK result optional properties can be undefined; apply JSON-omission semantics first, then redact every string.
-  const safe = redactJsonValue(JSON.parse(JSON.stringify(result)), redact) as ToolExecutionResult
+  const safe = guardToolExecutionResult(result, redact, options)
   const output = safe.output ?? []
   const text = output.filter((block) => block.type === 'text').map((block) => block.text).join('\n')
   const spill = await artifacts.spill(conversationId, `tool-${randomUUID()}`, text)

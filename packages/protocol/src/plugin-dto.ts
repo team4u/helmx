@@ -336,6 +336,29 @@ export interface PluginManagedMeta {
   installedAt: number
 }
 
+/** Text content block inside a tool result envelope (`output`). */
+export interface PluginToolTextBlock {
+  type: 'text'
+  text: string
+}
+
+/**
+ * Explicit tool result envelope separating the three outbound tool channels:
+ * - `output`: text delivered to the model (32 KiB spill boundary);
+ * - `structuredOutput`: machine-readable value for programmatic/nested callers (validated against
+ *   `structuredOutputSchema`; never auto-mirrored into persisted `details`);
+ * - `presentationMeta`: bounded, redacted plain JSON object persisted to `pi.tool-result.model[0].details`
+ *   for UI/timeline replay (validated against `presentationMetaSchema` + 64 KiB / depth 12 / 2000 nodes;
+ *   never enters model prompt or context usage);
+ * - `isError`: explicit error flag.
+ */
+export interface PluginToolResultEnvelope {
+  output?: string | PluginToolTextBlock[]
+  structuredOutput?: unknown
+  presentationMeta?: Record<string, unknown>
+  isError?: boolean
+}
+
 /** Serializable manifest of a single registered action, consumed by CLI / Web / Workflow. */
 export interface ActionManifest extends PluginPromptFields {
   pluginId: string
@@ -349,6 +372,11 @@ export interface ActionManifest extends PluginPromptFields {
   inputSchema: JsonSchema
   outputSchema: JsonSchema
   exposeAsTool?: boolean
+  /**
+   * Optional bounded UI presentation metadata schema declared when `exposeAsTool: true`
+   * (persisted to `pi.tool-result.model[0].details` for replay; never enters model prompt).
+   */
+  presentationMetaSchema?: JsonSchema
   /**
    * Whether this non-tool action is advertised in the `<available_actions>` prompt catalog (default true).
    * UI-only actions (such as composer completers) set `false` to save system prompt tokens while staying

@@ -52,6 +52,7 @@ import type {
   PluginPromptFields,
   PluginRemoveResult,
   PluginSummary,
+  PluginToolResultEnvelope,
   PluginUpdateResult,
 } from './plugin-dto.js'
 
@@ -90,7 +91,7 @@ export interface ToolResultHookPayload {
   callId: string
   toolName: string
   input: Record<string, unknown>
-  result: unknown
+  result: PluginToolResultEnvelope
 }
 
 /**
@@ -292,6 +293,16 @@ export interface PluginActionSpec<TIn, TOut> extends PluginPromptFields {
   /** true 直接注入模型工具列表；否则经元工具 run_action 按需调用。 */
   exposeAsTool?: boolean
   /**
+   * 可选的有界展示元数据 Schema（仅在 `exposeAsTool: true` 时合法，否则注册期显式拒绝）。
+   * 对应由 `projectPresentationMeta` 投影并写入 `pi.tool-result.model[0].details` 的 UI 重放元数据，绝不进入模型提示词。
+   */
+  presentationMetaSchema?: JsonSchema
+  /**
+   * 可选纯投影函数（仅在 `exposeAsTool: true` 且声明 `presentationMetaSchema` 时合法）：
+   * 保持动作五端返回裸业务对象契约不变，同时为直投模型工具派生有界 UI 展示元数据。
+   */
+  projectPresentationMeta?(input: TIn, output: TOut): Record<string, unknown> | undefined
+  /**
    * 非直暴工具动作是否展示于 `<available_actions>` 系统提示词目录（默认 true）。
    * 仅供 UI 补全等内部界面消费者调用的动作可设为 `false`，保留 HTTP / CLI / invokeAction 入口而不挤占模型上下文。
    */
@@ -329,8 +340,10 @@ export interface PluginToolSpec<TIn = Record<string, unknown>> extends PluginPro
   name: string
   description: string
   inputSchema: JsonSchema
-  /** 可选的结构化输出 Schema（声明后支持返回 { output, structuredOutput, isError }）。 */
+  /** 可选的结构化输出 Schema（面向程序/嵌套调用方；声明后支持返回 `{ output, structuredOutput, isError }`，不再自动镜像到持久化 `details`）。 */
   structuredOutputSchema?: JsonSchema
+  /** 可选的有界展示元数据 Schema（声明后支持返回 `{ output, presentationMeta }`，脱敏与有界+Schema 校验后持久化至 `pi.tool-result.model[0].details`，绝不进入模型上下文）。 */
+  presentationMetaSchema?: JsonSchema
   /** 会话作用域：工具可见性与 executeTool 的双重过滤条件。 */
   scope?: ConversationScope
   /**

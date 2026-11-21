@@ -38,8 +38,12 @@ export interface DerivedToolSpec {
   name: string;
   description: string;
   inputSchema: JsonSchema;
-  /** Structured output schema (forwarded for `ctx.tool`; omitted for `run_action` derived actions). */
+  /** Structured output schema (forwarded from `ctx.tool.structuredOutputSchema` or `exposeAsTool` action's `outputSchema`). */
   structuredOutputSchema?: JsonSchema;
+  /** Bounded UI presentation metadata schema (forwarded from `ctx.tool` or `exposeAsTool` action). */
+  presentationMetaSchema?: JsonSchema;
+  /** Pure projection function forwarded for `exposeAsTool` actions when declared (never serialized). */
+  projectPresentationMeta?: (input: unknown, output: unknown) => Record<string, unknown> | undefined;
   /** Cross-restart tool replay safety (forwarded when declared on ctx.tool; defaults to 'unsafe'). */
   replay?: 'safe' | 'unsafe';
   /** Full tool usage guidance paragraph (projected only for active tools). */
@@ -95,6 +99,8 @@ interface ActionEntry {
   outputSchema: JsonSchema;
   cli?: PluginActionSpec<unknown, unknown>['cli'];
   exposeAsTool: boolean;
+  presentationMetaSchema?: JsonSchema;
+  projectPresentationMeta?: (input: never, output: never) => Record<string, unknown> | undefined;
   exposeToPrompt?: boolean;
   idempotent?: boolean;
   /** Usage guidance paragraph (projected when reachable via `run_action` or direct tool; defensively copied). */
@@ -173,6 +179,7 @@ function toManifest(entry: ActionEntry): ActionManifest {
     inputSchema: entry.inputSchema,
     outputSchema: entry.outputSchema,
     exposeAsTool: entry.exposeAsTool,
+    ...(entry.presentationMetaSchema !== undefined ? { presentationMetaSchema: entry.presentationMetaSchema } : {}),
     ...(entry.exposeToPrompt !== undefined ? { exposeToPrompt: entry.exposeToPrompt } : {}),
     ...(entry.scope !== undefined ? { scope: entry.scope } : {}),
     ...(entry.idempotent !== undefined ? { idempotent: entry.idempotent } : {}),
@@ -346,6 +353,39 @@ export class CapabilityRegistry {
     if (spec.idempotent !== undefined && typeof spec.idempotent !== 'boolean') {
       throw new HelmxError('validation_error', `Plugin ${pluginId} action ${spec.id} idempotent must be a boolean`, 400);
     }
+    if (
+      spec.exposeAsTool !== true &&
+      (spec.presentationMetaSchema !== undefined || spec.projectPresentationMeta !== undefined)
+    ) {
+      throw new HelmxError(
+        'invalid_action_spec',
+        `Plugin ${pluginId} action ${spec.id} may only declare presentationMetaSchema/projectPresentationMeta when exposeAsTool is true`,
+        400,
+      );
+    }
+    if (spec.presentationMetaSchema !== undefined && !isJsonObject(spec.presentationMetaSchema)) {
+      throw new HelmxError(
+        'invalid_action_spec',
+        `Plugin ${pluginId} action ${spec.id} presentationMetaSchema must be a JSON Schema object`,
+        400,
+      );
+    }
+    if (spec.projectPresentationMeta !== undefined) {
+      if (typeof spec.projectPresentationMeta !== 'function') {
+        throw new HelmxError(
+          'invalid_action_spec',
+          `Plugin ${pluginId} action ${spec.id} projectPresentationMeta must be a function`,
+          400,
+        );
+      }
+      if (spec.presentationMetaSchema === undefined) {
+        throw new HelmxError(
+          'invalid_action_spec',
+          `Plugin ${pluginId} action ${spec.id} projectPresentationMeta requires presentationMetaSchema`,
+          400,
+        );
+      }
+    }
     const prompt = validatedPromptFields(`Plugin ${pluginId} action ${spec.id}`, spec, 'invalid_action_spec');
 
     let pluginActions = this.actions.get(pluginId);
@@ -359,6 +399,9 @@ export class CapabilityRegistry {
 
     assertSchemaCompilable(spec.inputSchema);
     assertSchemaCompilable(spec.outputSchema);
+    if (spec.presentationMetaSchema !== undefined) {
+      assertSchemaCompilable(spec.presentationMetaSchema);
+    }
 
     pluginActions.set(spec.id, {
       pluginId,
@@ -368,6 +411,15 @@ export class CapabilityRegistry {
       outputSchema: spec.outputSchema,
       cli: spec.cli,
       exposeAsTool: spec.exposeAsTool === true,
+      ...(spec.presentationMetaSchema !== undefined ? { presentationMetaSchema: spec.presentationMetaSchema } : {}),
+      ...(spec.projectPresentationMeta !== undefined
+        ? {
+            projectPresentationMeta: spec.projectPresentationMeta as (
+              input: never,
+              output: never,
+            ) => Record<string, unknown> | undefined,
+          }
+        : {}),
       ...(spec.exposeToPrompt !== undefined ? { exposeToPrompt: spec.exposeToPrompt } : {}),
       ...(spec.idempotent !== undefined ? { idempotent: spec.idempotent } : {}),
       ...(prompt.promptSnippet !== undefined ? { promptSnippet: prompt.promptSnippet } : {}),
@@ -402,6 +454,16 @@ export class CapabilityRegistry {
         );
       }
       assertSchemaCompilable(spec.structuredOutputSchema);
+    }
+    if (spec.presentationMetaSchema !== undefined) {
+      if (!isJsonObject(spec.presentationMetaSchema)) {
+        throw new HelmxError(
+          'invalid_tool_spec',
+          `Plugin ${pluginId} tool ${spec.name} presentationMetaSchema must be a JSON Schema object`,
+          400,
+        );
+      }
+      assertSchemaCompilable(spec.presentationMetaSchema);
     }
     if (spec.replay !== undefined && spec.replay !== 'safe' && spec.replay !== 'unsafe') {
       throw new HelmxError(
@@ -530,6 +592,9 @@ export class CapabilityRegistry {
             ...(tool.spec.structuredOutputSchema !== undefined
               ? { structuredOutputSchema: tool.spec.structuredOutputSchema }
               : {}),
+            ...(tool.spec.presentationMetaSchema !== undefined
+              ? { presentationMetaSchema: tool.spec.presentationMetaSchema }
+              : {}),
             ...(tool.spec.replay !== undefined ? { replay: tool.spec.replay } : {}),
             ...(tool.spec.promptSnippet !== undefined ? { promptSnippet: tool.spec.promptSnippet } : {}),
             ...(tool.spec.promptGuidelines !== undefined
@@ -549,6 +614,18 @@ export class CapabilityRegistry {
             name: action.toolAlias,
             description: action.description,
             inputSchema: action.inputSchema,
+            structuredOutputSchema: action.outputSchema,
+            ...(action.presentationMetaSchema !== undefined
+              ? { presentationMetaSchema: action.presentationMetaSchema }
+              : {}),
+            ...(action.projectPresentationMeta !== undefined
+              ? {
+                  projectPresentationMeta: action.projectPresentationMeta as (
+                    input: unknown,
+                    output: unknown,
+                  ) => Record<string, unknown> | undefined,
+                }
+              : {}),
             ...(action.promptSnippet !== undefined ? { promptSnippet: action.promptSnippet } : {}),
             ...(action.promptGuidelines !== undefined
               ? { promptGuidelines: [...action.promptGuidelines] }
@@ -681,6 +758,10 @@ export class CapabilityRegistry {
           name: displayName,
           description: action.description,
           inputSchema: action.inputSchema,
+          structuredOutputSchema: action.outputSchema,
+          ...(action.presentationMetaSchema !== undefined
+            ? { presentationMetaSchema: action.presentationMetaSchema }
+            : {}),
           ...(action.scope !== undefined ? { scope: action.scope } : {}),
           execute: (input: unknown, ctx: PluginToolContext) =>
             this.invokeAction(

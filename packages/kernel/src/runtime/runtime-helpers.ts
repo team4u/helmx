@@ -7,9 +7,17 @@
 import { join } from 'node:path'
 import type { JsonValue } from '@earendil-works/chord/json'
 import type { ToolExecutionResult } from '@earendil-works/pi-durable'
-import type { ConversationSummary } from '@helmx/protocol'
+import type { ConversationSummary, JsonSchema, PluginToolTextBlock } from '@helmx/protocol'
 import type { Models } from '@earendil-works/pi-ai'
-import { HelmxError, assertProfileId, escapeXml, safeResultText } from '@helmx/protocol'
+import {
+  HelmxError,
+  assertBoundedPresentationMeta,
+  assertProfileId,
+  escapeXml,
+  isPlainObject,
+  safeResultText,
+  validateOrThrow,
+} from '@helmx/protocol'
 import { redactJsonValue } from '../redact.js'
 import type { ConvMeta } from './store.js'
 import { getCurrentTools } from '@earendil-works/pi-ai/utils/transcript'
@@ -47,54 +55,180 @@ export function requireConv(store: HelmxStore, id: number): NonNullable<ReturnTy
 }
 
 // ---------------------------------------------------------------------------
-// Tool result contract helpers (plugin/hook output -> SDK ToolExecutionResult)
+// Tool result contract helpers (plugin/action/hook output -> SDK ToolExecutionResult)
 // ---------------------------------------------------------------------------
 
+export interface ToolResultSchemaOptions {
+  structuredOutputSchema?: JsonSchema
+  presentationMetaSchema?: JsonSchema
+  toolName?: string
+  callId?: string
+}
+
+export interface ActionToolResultOptions extends ToolResultSchemaOptions {
+  projectPresentationMeta?: (input: unknown, output: unknown) => Record<string, unknown> | undefined
+}
+
+export interface GuardToolResultOptions extends ToolResultSchemaOptions {
+  /**
+   * When true (HookBridge.afterTool), returning `details` or `structuredOutput` without the corresponding
+   * declared schema fails explicitly with `invalid_tool_result`.
+   */
+  enforceSchemas?: boolean
+}
+
+function formatToolWhere(options?: { toolName?: string; callId?: string }): string {
+  return options?.toolName !== undefined
+    ? `tool ${options.toolName}${options?.callId !== undefined ? `(callId=${options.callId})` : ''}`
+    : 'plugin tool'
+}
+
+function validateAndRedactStructuredOutput(
+  raw: unknown,
+  redact: (text: string) => string,
+  options: {
+    structuredOutputSchema?: JsonSchema
+    requireSchema: boolean
+    where: string
+  },
+): unknown {
+  if (options.structuredOutputSchema === undefined) {
+    if (options.requireSchema) {
+      throw new HelmxError(
+        'invalid_tool_result',
+        `${options.where} returned structuredOutput without declaring structuredOutputSchema (forbidden by SDK contract; declare a schema or return plain text in output)`,
+        500,
+      )
+    }
+    return redactJsonValue(raw, redact)
+  }
+  const redacted = redactJsonValue(raw, redact)
+  validateOrThrow(
+    options.structuredOutputSchema,
+    redacted,
+    `${options.where} structuredOutput does not conform to structuredOutputSchema`,
+    'invalid_tool_result',
+    500,
+  )
+  return redacted
+}
+
+function validateAndRedactPresentationMeta(
+  raw: unknown,
+  redact: (text: string) => string,
+  options: {
+    presentationMetaSchema?: JsonSchema
+    requireSchema: boolean
+    where: string
+  },
+): Record<string, unknown> {
+  if (options.presentationMetaSchema === undefined && options.requireSchema) {
+    throw new HelmxError(
+      'invalid_tool_result',
+      `${options.where} returned presentationMeta without declaring presentationMetaSchema`,
+      500,
+    )
+  }
+  return assertBoundedPresentationMeta(raw, {
+    label: options.where,
+    redact,
+    ...(options.presentationMetaSchema !== undefined ? { schema: options.presentationMetaSchema } : {}),
+    code: 'invalid_tool_result',
+    status: 500,
+  })
+}
+
+function normalizeTextBlocks(
+  rawOutput: unknown,
+  where: string,
+  redact?: (text: string) => string,
+): Array<PluginToolTextBlock> {
+  if (typeof rawOutput === 'string') {
+    return [{ type: 'text', text: redact ? redact(rawOutput) : rawOutput }]
+  }
+  if (Array.isArray(rawOutput)) {
+    return rawOutput.map((block) => {
+      if (
+        block === null ||
+        typeof block !== 'object' ||
+        (block as { type?: unknown }).type !== 'text' ||
+        typeof (block as { text?: unknown }).text !== 'string'
+      ) {
+        throw new HelmxError(
+          'invalid_tool_result',
+          `${where} result envelope output array only accepts { type: 'text', text } blocks`,
+          500,
+        )
+      }
+      const text = (block as { text: string }).text
+      return { type: 'text' as const, text: redact ? redact(text) : text }
+    })
+  }
+  if (rawOutput === undefined) return []
+  throw new HelmxError(
+    'invalid_tool_result',
+    `${where} result envelope output must be a string or an array of { type: 'text', text }`,
+    500,
+  )
+}
+
 /**
- * Envelope predicate for structured plugin tool results (prevents business objects containing an `output` field
- * from being misidentified as envelopes): must contain at least one of `output` (string or array),
- * `structuredOutput`, or `isError`, and every present envelope field must have a valid type; malformed envelope
- * fields fail explicitly rather than falling back silently through the plain-text path.
+ * Envelope predicate for structured plugin tool results: must contain at least one of `output`,
+ * `structuredOutput`, `presentationMeta`, or `isError`, and every present envelope field must have a valid type;
+ * malformed envelope fields (or legacy `details` inside an envelope) fail explicitly rather than falling back silently.
  */
 function envelopeProblem(raw: Record<string, unknown>): { isEnvelope: boolean; problem?: string } {
   const hasOutput = raw['output'] !== undefined
   const hasStructured = raw['structuredOutput'] !== undefined
+  const hasPresentationMeta = raw['presentationMeta'] !== undefined
   const hasError = raw['isError'] !== undefined
-  if (!hasOutput && !hasStructured && !hasError) return { isEnvelope: false }
+  if (!hasOutput && !hasStructured && !hasPresentationMeta && !hasError) return { isEnvelope: false }
   if (hasOutput && typeof raw['output'] !== 'string' && !Array.isArray(raw['output'])) {
     return { isEnvelope: true, problem: "output must be a string or an array of { type: 'text', text }" }
   }
   if (hasError && typeof raw['isError'] !== 'boolean') {
     return { isEnvelope: true, problem: 'isError must be a boolean' }
   }
+  if (hasPresentationMeta && !isPlainObject(raw['presentationMeta'])) {
+    return { isEnvelope: true, problem: 'presentationMeta must be a plain JSON object' }
+  }
+  if (raw['details'] !== undefined) {
+    return {
+      isEnvelope: true,
+      problem: 'details is not supported in plugin tool result envelopes; use presentationMeta with presentationMetaSchema',
+    }
+  }
   return { isEnvelope: true }
 }
 
 /**
- * Normalize raw plugin tool return value -> SDK `ToolExecutionResult`:
- * - Structured result envelope `{ output, structuredOutput?, isError? }`: formatted per envelope rules only when all
- *   present envelope fields have valid types (both text and `structuredOutput` are redacted; `structuredOutput` is
- *   forwarded only when the tool declares `structuredOutputSchema`);
- * - Returning `structuredOutput` without declaring `structuredOutputSchema` fails explicitly (`invalid_tool_result`,
- *   never silently dropped so plugin authors see data loss);
- * - Any other value wraps as a single text block (`structuredOutput` omitted unless schema is declared).
+ * Normalize raw plugin `ctx.tool` return value -> SDK `ToolExecutionResult`:
+ * - Explicitly separates the three outbound channels: `output` (model text), `structuredOutput` (programmatic
+ *   result validated synchronously against `structuredOutputSchema`; never auto-mirrored into `details`), and
+ *   `presentationMeta` (redacted, bounded, schema-validated plain object written to `details` for UI replay);
+ * - Returning `structuredOutput` without `structuredOutputSchema`, or `presentationMeta` without
+ *   `presentationMetaSchema`, or violating schema/bounds fails explicitly (`invalid_tool_result`, never truncates);
+ * - Non-envelope plain values serialize via `safeResultText` into a single text block.
  */
 export function pluginToolResult(
   raw: unknown,
   redact: (text: string) => string,
-  options?: { structuredOutputSchema?: unknown; toolName?: string; callId?: string },
+  options?: ToolResultSchemaOptions,
 ): {
-  output: Array<{ type: 'text'; text: string }>
+  output: Array<PluginToolTextBlock>
   structuredOutput?: unknown
   details?: Record<string, unknown>
   isError?: boolean
 } {
-  const where = options?.toolName !== undefined
-    ? `tool ${options.toolName}${options?.callId !== undefined ? `(callId=${options.callId})` : ''}`
-    : 'plugin tool'
-  if (raw !== null && typeof raw === 'object' && !Array.isArray(raw)) {
-    const env = raw as { output?: unknown; structuredOutput?: unknown; isError?: unknown }
-    const verdict = envelopeProblem(raw as Record<string, unknown>)
+  const where = formatToolWhere(options)
+  if (isPlainObject(raw)) {
+    const env = raw as {
+      output?: unknown
+      structuredOutput?: unknown
+      presentationMeta?: unknown
+      isError?: unknown
+    }
+    const verdict = envelopeProblem(raw)
     if (verdict.isEnvelope) {
       if (verdict.problem !== undefined) {
         throw new HelmxError(
@@ -103,99 +237,210 @@ export function pluginToolResult(
           500,
         )
       }
-      // `output`: string wraps into a single text block; array is validated element-by-element.
-      let output: Array<{ type: 'text'; text: string }>
-      if (typeof env.output === 'string') {
-        output = [{ type: 'text', text: redact(env.output) }]
-      } else if (Array.isArray(env.output)) {
-        output = env.output.map((block) => {
-          if (block === null || typeof block !== 'object' || (block as { type?: unknown }).type !== 'text' || typeof (block as { text?: unknown }).text !== 'string') {
-            throw new HelmxError(
-              'invalid_tool_result',
-              `${where} result envelope output array only accepts { type: 'text', text } blocks`,
-              500,
-            )
-          }
-          return { type: 'text' as const, text: redact((block as { text: string }).text) }
-        })
-      } else if (env.output === undefined) {
-        output = []
-      } else {
-        throw new HelmxError(
-          'invalid_tool_result',
-          `${where} result envelope output must be a string or an array of { type: 'text', text }`,
-          500,
-        )
-      }
+      const output = normalizeTextBlocks(env.output, where, redact)
       const result: {
-        output: Array<{ type: 'text'; text: string }>
+        output: Array<PluginToolTextBlock>
         structuredOutput?: unknown
         details?: Record<string, unknown>
         isError?: boolean
-      } = {
-        output,
+      } = { output }
+
+      if (env.structuredOutput !== undefined) {
+        result.structuredOutput = validateAndRedactStructuredOutput(env.structuredOutput, redact, {
+          structuredOutputSchema: options?.structuredOutputSchema,
+          requireSchema: true,
+          where,
+        })
       }
-      // `structuredOutput` is forwarded only when the tool declares a schema (SDK contract); values are redacted.
-      // Returning `structuredOutput` without a schema fails explicitly instead of silently dropping data.
-      if (env.structuredOutput !== undefined && options?.structuredOutputSchema === undefined) {
-        throw new HelmxError(
-          'invalid_tool_result',
-          `${where} returned structuredOutput without declaring structuredOutputSchema (forbidden by SDK contract; declare a schema or return plain text in output)`,
-          500,
-        )
-      }
-      if (env.structuredOutput !== undefined && options?.structuredOutputSchema !== undefined) {
-        const redacted = redactJsonValue(env.structuredOutput, redact)
-        result.structuredOutput = redacted
-        // pi-durable 仅持久化 details 通道至 transcript tool-result.model[0].details（structuredOutput 仅供内存 executeTool 调用方读取）；
-        // 与内置 edit 工具保持一等公民契约一致，对象型结构化输出同步镜像到 details 供 Web Timeline / ToolViewProps.structuredOutput 消费。
-        if (redacted !== null && typeof redacted === 'object' && !Array.isArray(redacted)) {
-          result.details = redacted as Record<string, unknown>
-        }
+      if (env.presentationMeta !== undefined) {
+        result.details = validateAndRedactPresentationMeta(env.presentationMeta, redact, {
+          presentationMetaSchema: options?.presentationMetaSchema,
+          requireSchema: true,
+          where,
+        })
       }
       if (env.isError === true) result.isError = true
       return result
     }
   }
-  // Not an envelope (no envelope fields or fails envelope check): serialize as plain text (without structuredOutput).
+  // Not an envelope: serialize as plain text (without structuredOutput or details).
   return { output: [{ type: 'text', text: safeResultText(raw, redact) }] }
+}
+
+/**
+ * Normalize raw business return value of an `exposeAsTool: true` derived action -> SDK `ToolExecutionResult`.
+ *
+ * Bypasses `envelopeProblem` so business objects carrying `output` / `structuredOutput` / `presentationMeta` /
+ * `details` / `isError` keys are never misidentified as tool envelopes. Redacts JSON values before serializing
+ * model text, validates `structuredOutput` against the action's `outputSchema` (never mirroring into `details`),
+ * and writes `details` only from `projectPresentationMeta` after redaction + boundedness + schema validation.
+ */
+export function actionToolResult(
+  raw: unknown,
+  input: unknown,
+  redact: (text: string) => string,
+  options?: ActionToolResultOptions,
+): {
+  output: Array<PluginToolTextBlock>
+  structuredOutput?: unknown
+  details?: Record<string, unknown>
+} {
+  const where = formatToolWhere(options)
+  const output: Array<PluginToolTextBlock> = [{ type: 'text', text: safeResultText(raw, redact) }]
+  const result: {
+    output: Array<PluginToolTextBlock>
+    structuredOutput?: unknown
+    details?: Record<string, unknown>
+  } = { output }
+
+  if (options?.structuredOutputSchema !== undefined) {
+    result.structuredOutput = validateAndRedactStructuredOutput(raw, redact, {
+      structuredOutputSchema: options.structuredOutputSchema,
+      requireSchema: true,
+      where,
+    })
+  }
+  if (options?.projectPresentationMeta !== undefined) {
+    const rawMeta = options.projectPresentationMeta(input, raw)
+    if (rawMeta !== undefined) {
+      result.details = validateAndRedactPresentationMeta(rawMeta, redact, {
+        presentationMetaSchema: options.presentationMetaSchema,
+        requireSchema: true,
+        where,
+      })
+    }
+  }
+  return result
+}
+
+export interface NormalizedHookToolResult {
+  output: Array<PluginToolTextBlock>
+  structuredOutput?: JsonValue
+  details?: Record<string, unknown>
+  isError?: boolean
+}
+
+/**
+ * Parse a `tool_result` (`transform`/`handled`) or `tool_call` (`handled`) hook return payload into SDK
+ * `ToolExecutionResult` shape, mapping `presentationMeta` -> `details` and rejecting legacy raw `details`.
+ */
+export function parseHookToolResult(
+  value: unknown,
+  where = 'hook tool result',
+): { ok: true; result: NormalizedHookToolResult } | { ok: false; reason: string } {
+  if (!isPlainObject(value)) {
+    return { ok: false, reason: `${where} must be a plain object` }
+  }
+  if (value['details'] !== undefined) {
+    return {
+      ok: false,
+      reason: `${where} must use presentationMeta instead of legacy details`,
+    }
+  }
+  const hasOutput = value['output'] !== undefined
+  const hasStructured = value['structuredOutput'] !== undefined
+  const hasPresentationMeta = value['presentationMeta'] !== undefined
+  const hasError = value['isError'] !== undefined
+  if (!hasOutput && !hasStructured && !hasPresentationMeta && !hasError) {
+    return {
+      ok: false,
+      reason: `${where} must declare at least one of output, structuredOutput, presentationMeta, or isError`,
+    }
+  }
+  if (hasError && typeof value['isError'] !== 'boolean') {
+    return { ok: false, reason: `${where} isError must be a boolean` }
+  }
+  if (hasPresentationMeta && !isPlainObject(value['presentationMeta'])) {
+    return { ok: false, reason: `${where} presentationMeta must be a plain JSON object` }
+  }
+  let output: Array<PluginToolTextBlock>
+  try {
+    output = normalizeTextBlocks(value['output'], where)
+  } catch (err) {
+    return { ok: false, reason: err instanceof Error ? err.message : String(err) }
+  }
+  const result: NormalizedHookToolResult = { output }
+  if (hasStructured) result.structuredOutput = value['structuredOutput'] as JsonValue
+  if (hasPresentationMeta) result.details = value['presentationMeta'] as Record<string, unknown>
+  if (hasError) result.isError = value['isError'] as boolean
+  return { ok: true, result }
 }
 
 /** Convert `tool_call` `handled` takeover payload -> valid `ToolExecutionResult` (invalid shape becomes explicit error result). */
 export function toolResultOf(handled: unknown): {
-  output: Array<{ type: 'text'; text: string }>
+  output: Array<PluginToolTextBlock>
   isError: boolean
+  structuredOutput?: unknown
+  details?: Record<string, unknown>
 } {
-  const normalized = normalizeToolResult(handled)
-  if (normalized !== undefined) {
-    return normalized as { output: Array<{ type: 'text'; text: string }>; isError: boolean }
+  const parsed = parseHookToolResult(handled, 'tool_call handled hook')
+  if (parsed.ok) {
+    return {
+      output: parsed.result.output,
+      isError: parsed.result.isError === true,
+      ...(parsed.result.structuredOutput !== undefined ? { structuredOutput: parsed.result.structuredOutput } : {}),
+      ...(parsed.result.details !== undefined ? { details: parsed.result.details } : {}),
+    }
   }
   return {
-    output: [{ type: 'text', text: 'tool_call handled hook returned an invalid result shape' }],
+    output: [{ type: 'text', text: `tool_call handled hook returned an invalid result shape: ${parsed.reason}` }],
     isError: true,
   }
 }
 
-/** Normalize `tool_result` transform output: must look like `ToolExecutionResult`, else `undefined` (keeps original). */
-export function normalizeToolResult(value: unknown): ToolExecutionResultShape | undefined {
-  if (value === null || typeof value !== 'object') return undefined
-  const candidate = value as ToolExecutionResultShape
-  if (candidate.output === undefined && candidate.structuredOutput === undefined && candidate.isError === undefined) {
-    return undefined
-  }
-  // `output` must be a content block array (wrap string as single text block; SDK contract only accepts arrays).
-  if (typeof candidate.output === 'string') {
-    return { ...candidate, output: [{ type: 'text', text: candidate.output }] }
-  }
-  if (candidate.output !== undefined && !Array.isArray(candidate.output)) return undefined
-  return candidate
+/** Normalize `tool_result` transform/handled output: returns mapped SDK result shape or `undefined` on invalid input. */
+export function normalizeToolResult(value: unknown): NormalizedHookToolResult | undefined {
+  const parsed = parseHookToolResult(value, 'tool_result hook')
+  return parsed.ok ? parsed.result : undefined
 }
 
-interface ToolExecutionResultShape {
-  output?: Array<{ type: string; text?: string }> | string
-  structuredOutput?: JsonValue
-  isError?: boolean
-  details?: JsonValue
+/**
+ * Single outbound guard before tool result persistence (`HookBridge.afterTool` and `prepareToolResultWith`).
+ *
+ * Validates and redacts `details` (`presentationMeta`) and `structuredOutput` BEFORE any `JSON.stringify` so
+ * non-finite numbers, `undefined`, cycles, non-plain objects, and prototype keys can never be silently coerced
+ * or stripped. Enforces bounded `presentationMeta` (64 KiB / depth 12 / 2000 nodes) on every result, and enforces
+ * declared `presentationMetaSchema` / `structuredOutputSchema` when `enforceSchemas: true`.
+ */
+export function guardToolExecutionResult(
+  result: ToolExecutionResult,
+  redact: (text: string) => string,
+  options?: GuardToolResultOptions,
+): ToolExecutionResult {
+  const where = formatToolWhere(options)
+  const requireSchema = options?.enforceSchemas === true
+  const { details: rawDetails, structuredOutput: rawStructured, ...rest } = result
+
+  let safeDetails: Record<string, unknown> | undefined
+  if (rawDetails !== undefined) {
+    safeDetails = validateAndRedactPresentationMeta(rawDetails, redact, {
+      presentationMetaSchema: options?.presentationMetaSchema,
+      requireSchema,
+      where,
+    })
+  }
+
+  let safeStructured: unknown
+  if (rawStructured !== undefined) {
+    safeStructured = validateAndRedactStructuredOutput(rawStructured, redact, {
+      structuredOutputSchema: options?.structuredOutputSchema,
+      requireSchema,
+      where,
+    })
+  }
+
+  // Remaining SDK envelope fields (`output`, `isError`, `diagnostics`, `usage`, `control`):
+  // apply JSON omission semantics for optional undefined keys, then redact every string.
+  const safeRest = redactJsonValue(JSON.parse(JSON.stringify(rest)), redact) as Omit<
+    ToolExecutionResult,
+    'details' | 'structuredOutput'
+  >
+
+  return {
+    ...safeRest,
+    ...(safeStructured !== undefined ? { structuredOutput: safeStructured as JsonValue } : {}),
+    ...(safeDetails !== undefined ? { details: safeDetails as JsonValue } : {}),
+  }
 }
 
 // ---------------------------------------------------------------------------
