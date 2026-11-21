@@ -11,7 +11,7 @@ import {
 } from '../lib/commands-model.js'
 import { formatBytes } from '../lib/format.js'
 import { errorText } from '../lib/error-text.js'
-import { HelmxIcon, Select, type SelectOption } from '@helmx/plugin-client'
+import { HelmxIcon, ModelPickerControl, Select, type SelectOption } from '@helmx/plugin-client'
 import { isSameResolvedTarget, type ResolvedTarget } from '../lib/types.js'
 import {
   useConversations,
@@ -33,7 +33,6 @@ import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
 import { Tooltip } from '../ui/Tooltip.js'
 import { CommandPopover } from './CommandPopover.js'
 import { CompletionPopover } from './CompletionPopover.js'
-import { ModelPickerControl } from './ModelPicker.js'
 import { focusWithCaret } from './composer-controller.js'
 import { envDraftOnNodeChange, useIsMobile } from './composer-model.js'
 import { slashMenuSkills } from './slash-menu-skills.js'

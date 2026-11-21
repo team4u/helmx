@@ -17,7 +17,8 @@
  */
 
 // ---- Host port (injection surface) ----
-export { PluginClientHostContext, usePluginClientHost } from './host-port.js'
+export { PluginClientHostContext, usePluginClientHost, PluginClientDataHandlesContext, usePluginClientDataHandles } from './host-port.js'
+export type { PluginClientDataHandles } from './host-port.js'
 export type {
   PluginClientHostPort,
   PluginSessionDocKey,
@@ -46,9 +47,25 @@ export type { HelmxLocale, LocalizedText, ExecutionText, LocaleTranslator } from
 // ---- hooks: doc subscriptions / conversations / plugin list / tool activity ----
 export { usePluginDoc, usePluginDocValue, usePluginSessionDoc, usePluginSessionDocState, usePluginSessionDocValue } from './docs.js'
 export type { ConversationHookOptions, ConversationHookResult } from './conversation-hooks.js'
-export { useConversation, useConversationBackground, useConversations, usePluginConfig, usePlugins, useSharedNowMs } from './conversation-hooks.js'
+export { useConversation, useConversationBackground, useConversations, useModels, usePluginConfig, usePlugins, useSharedNowMs } from './conversation-hooks.js'
 export { ToolActivityContext, useToolActivity } from './tool-activity.js'
 export type { ToolActivityRegistry } from './tool-activity.js'
+
+// ---- Model picker (shared host/plugin model + thinking-level control) ----
+export { ModelPickerControl } from './ui/ModelPicker.js'
+export type { ModelPickerControlProps } from './ui/ModelPicker.js'
+export {
+  formatModelRowDisplay,
+  formatModelShortName,
+  initialModelActiveIndex,
+  resolveEffectiveThinkingLevel,
+  stepActiveIndex,
+  HELMX_SHORTCUT_EVENT,
+  resolveElementPanel,
+  isShortcutPanelMatch,
+  usePanelShortcut,
+} from './ui/model-picker-model.js'
+export type { ModelRowDisplay, HelmxPanel, HelmxShortcutEventDetail } from './ui/model-picker-model.js'
 
 // ---- Accessibility base components (Radix wrappers) ----
 export { Switch } from './ui/Switch.js'

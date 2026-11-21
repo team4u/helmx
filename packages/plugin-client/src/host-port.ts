@@ -22,6 +22,8 @@ import type {
   ConversationSummary,
   HelmxLocale,
   LocaleTranslator,
+  ModelCatalogRefreshOutcome,
+  ModelCatalogSnapshot,
   PluginSlotContributionSpec,
   PluginSummary,
   ScreenSpec,
@@ -192,4 +194,43 @@ export function usePluginClientHost(): PluginClientHostPort {
     throw new Error('usePluginClientHost must be called inside <PluginClientHostContext.Provider> (injected by the host HelmxStoreProvider)')
   }
   return port
+}
+
+/**
+ * Stable host data subscription handles: read-only reactive slices (model
+ * catalog today; nodes / profiles later) exposed as stable named functions so
+ * SDK hooks subscribe via useSyncExternalStore and re-render ONLY on real
+ * domain emits. The host provides this context with a value whose identity
+ * never churns with unrelated conversation streaming frames (unlike the main
+ * port object, which is rebuilt per SSE frame); carrying the handles there
+ * would force per-frame re-renders on every consumer.
+ */
+export interface PluginClientDataHandles {
+  /** Subscribe to host model catalog changes (stable identity; absent = this host provides no catalog capability). */
+  subscribeModels?(listener: () => void): () => void
+  /**
+   * Current host model catalog snapshot (stable reference, rebuilt only when
+   * the catalog or its load state changes; `unknown: true` while facts are
+   * unknowable — loading or capability absent). Absent = no catalog
+   * capability: consumers must render an explicit unknown state, never a
+   * fabricated empty catalog.
+   */
+  getModelsSnapshot?(): ModelCatalogSnapshot
+  /**
+   * Trigger a dynamic provider catalog refresh (the host re-probes providers
+   * and reloads its catalog). Absent = no refresh capability: UI hides the
+   * refresh entry instead of faking success.
+   */
+  refreshModels?(): Promise<ModelCatalogRefreshOutcome>
+}
+
+export const PluginClientDataHandlesContext = createContext<PluginClientDataHandles | null>(null)
+
+/**
+ * Read the stable data handles; absent context means the host provides no
+ * data-slice capability at all (callers fall back to explicit unknown
+ * snapshots — a capability fact, not a data fact, so no silent degradation).
+ */
+export function usePluginClientDataHandles(): PluginClientDataHandles | null {
+  return useContext(PluginClientDataHandlesContext)
 }

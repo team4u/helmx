@@ -18,6 +18,7 @@ import type {
   ModelCatalogEntry,
   ModelProviderSummary,
   ModelProvidersRefreshResult,
+  ModelSummary,
   NodeHealthSnapshot,
   NodeInfo,
   NodeIssuedToken,
@@ -381,19 +382,12 @@ export const asksApi = {
 // Profiles / Providers / Credentials / Models / Skills
 // ---------------------------------------------------------------------------
 
-export interface ModelDescriptor {
-  id: string
-  provider: string
-  modelId: string
-  available: boolean
-  /** 用户显式禁用（目录标注；available 仍表示凭据可用，两者独立）。 */
-  disabled?: boolean
-  label?: string
-  /** 该模型支持的思考档位（缺省仅 off）。 */
-  thinkingLevels: string[]
-  /** 真实已知的模型上下文窗口（tokens）；未知省略。 */
-  contextWindow?: number
-}
+/**
+ * Flattened model catalog view (id = 'provider/modelId'; thinking levels
+ * inlined). Shape is owned by @helmx/protocol (ModelSummary) — the host web
+ * app consumes the shared contract instead of keeping a private duplicate.
+ */
+export type ModelDescriptor = ModelSummary
 
 export interface ModelCatalogInfo {
   models: ModelDescriptor[]

@@ -10,9 +10,8 @@ import {
   PROFILE_STARTER_LABEL_MAX_LENGTH,
   PROFILE_STARTER_PROMPT_MAX_LENGTH,
 } from '@helmx/protocol/browser'
-import { assetsApi, type ModelDescriptor } from '../lib/api.js'
+import { assetsApi } from '../lib/api.js'
 import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
-import type { SelectOption } from '@helmx/plugin-client'
 
 declare module '@helmx/protocol/browser' {
   interface Profile {
@@ -84,41 +83,6 @@ export function formatShortModelName(model: string | undefined): string | undefi
   if (trimmed === '') return undefined
   const slashIdx = trimmed.lastIndexOf('/')
   return slashIdx >= 0 && slashIdx < trimmed.length - 1 ? trimmed.slice(slashIdx + 1) : trimmed
-}
-
-/**
- * Build the selectable model options for a profile binding:
- * - the first entry is always "Follow system default" (value: '');
- * - only configured and non-disabled models are listed (available and not
- *   disabled); unconfigured/disabled models are not normal options;
- * - if the profile's currently configured model is not selectable (e.g.
- *   credentials gone, external model, or disabled), it is kept and annotated
- *   as "not configured" or "disabled" so existing values never disappear
- *   silently.
- */
-export function buildProfileModelOptions(
-  models: ModelDescriptor[],
-  currentModel?: string,
-  t?: WebMessageTranslator,
-): SelectOption<string>[] {
-  const tt = t ?? englishWebTranslator
-  const list: SelectOption<string>[] = [{ value: '', label: tt('profiles.modelOption.followSystemDefault') }]
-  const trimmedCurrent = currentModel?.trim() ?? ''
-  for (const m of models) {
-    if (!m.available || m.disabled === true) continue
-    const label = m.label ? `${m.label} (${m.id})` : m.id
-    list.push({ value: m.id, label })
-  }
-  if (trimmedCurrent !== '' && !list.some((o) => o.value === trimmedCurrent)) {
-    const disabled = models.some((m) => m.id === trimmedCurrent && m.disabled === true)
-    list.push({
-      value: trimmedCurrent,
-      label: disabled
-        ? tt('profiles.modelOption.disabled', { model: trimmedCurrent })
-        : tt('profiles.modelOption.notConfigured', { model: trimmedCurrent }),
-    })
-  }
-  return list
 }
 
 /** Filter the profile list by search query and category tab. */

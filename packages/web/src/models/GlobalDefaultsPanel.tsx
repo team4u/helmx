@@ -1,9 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react'
+import { HelmxIcon, ModelPickerControl } from '@helmx/plugin-client'
 import { assetsApi } from '../lib/api.js'
-import { HelmxIcon } from '@helmx/plugin-client'
 import { useOptionalStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
-import { ModelPickerControl } from '../conversation/ModelPicker.js'
 import {
   modelThinkingLevelsFromRows,
   reviewModelThinkingRows,

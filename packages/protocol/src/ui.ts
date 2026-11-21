@@ -589,7 +589,12 @@ export interface PluginClientContext {
  *
  * The single source of truth of exported symbols is PLUGIN_CLIENT_SHARED_EXPORTS:
  * - hooks: usePluginContext / usePluginLocale / usePluginTranslator / usePluginDoc / usePluginSessionDoc /
- *   useToolActivity / useConversations / useConversation / useConversationBackground / usePlugins;
+ *   useToolActivity / useConversations / useConversation / useConversationBackground / usePlugins /
+ *   useModels;
+ * - ModelPickerControl: shared model + thinking-level picker (host catalog slice via useModels,
+ *   apply/reset callbacks keep the PI follow-default semantics);
+ * - model formatting pure functions: formatModelShortName / formatModelRowDisplay /
+ *   resolveEffectiveThinkingLevel;
  * - accessibility base components: Switch / Select / MultiSelect / Checkbox / Tabs family /
  *   SegmentedControl / HelmxIcon / ViewBoundary / Callout;
  * - StatusLight: unified status light (visually dot-only; the localized label
@@ -612,6 +617,48 @@ export interface UsePluginsResult {
   plugins: PluginSummary[]
   /** Screen contribution list registered by currently enabled plugins (with owning pluginId). */
   screens: Array<{ pluginId: string; spec: ScreenSpec }>
+}
+
+/**
+ * Flattened host model catalog entry for model pickers (the normalized view of
+ * `GET /api/models` the host model picker itself consumes): `id` is the
+ * canonical `'provider/modelId'` reference written to conversation / profile /
+ * plugin config, with the catalog's per-model thinking levels inlined.
+ */
+export interface ModelSummary {
+  /** Canonical `'provider/modelId'` reference (the value config fields carry). */
+  id: string
+  provider: string
+  modelId: string
+  available: boolean
+  /** User explicitly disabled this model (catalog annotation; available still reflects credential usability — the two are independent). */
+  disabled?: boolean
+  label?: string
+  /** Supported thinking levels (defaults to off only). */
+  thinkingLevels: string[]
+  /** Real known model context window (tokens); omitted when unknown. */
+  contextWindow?: number
+}
+
+/**
+ * Host model catalog snapshot shared with plugins via stable subscription
+ * handles (never a Context-value data member): `unknown === true` means model
+ * facts are not yet knowable (first load still in flight, or the host provides
+ * no catalog capability) — consumers must render an explicit unknown state,
+ * never treat the empty list as "no models exist".
+ */
+export interface ModelCatalogSnapshot {
+  /** true while catalog facts are unknowable (loading / capability absent). */
+  unknown: boolean
+  models: ReadonlyArray<ModelSummary>
+}
+
+/** Outcome of the host model catalog refresh action (minimal facts for picker notices). */
+export interface ModelCatalogRefreshOutcome {
+  /** Per dynamic provider refresh errors (providerId -> message; empty when all succeeded). */
+  errors: Record<string, string>
+  /** Model count of the latest catalog after the refresh. */
+  modelCount: number
 }
 
 /** GET /api/plugins/:id/client.mjs response metadata (HTTP error envelope on failure, never JS). */
@@ -666,6 +713,11 @@ export const PLUGIN_CLIENT_SHARED_EXPORTS = [
   'useConversationBackground',
   'usePlugins',
   'usePluginConfig',
+  'useModels',
+  'ModelPickerControl',
+  'formatModelShortName',
+  'formatModelRowDisplay',
+  'resolveEffectiveThinkingLevel',
   'PluginSlot',
   'Switch',
   'Select',

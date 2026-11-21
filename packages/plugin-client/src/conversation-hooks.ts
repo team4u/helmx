@@ -3,9 +3,16 @@
  * (host-port driven, live-synced over SSE, no polling and no mocks).
  * No component exports in this file (Fast Refresh friendly).
  */
-import { useCallback, useEffect, useState } from 'react'
-import type { AskSpec, ConversationDetail, ConversationLive, ConversationSummary, UsePluginsResult } from '@helmx/protocol/browser'
-import { usePluginClientHost } from './host-port.js'
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
+import type {
+  AskSpec,
+  ConversationDetail,
+  ConversationLive,
+  ConversationSummary,
+  ModelCatalogSnapshot,
+  UsePluginsResult,
+} from '@helmx/protocol/browser'
+import { usePluginClientDataHandles, usePluginClientHost } from './host-port.js'
 import type { ConversationBackgroundSnapshot } from './host-port.js'
 import { usePluginContext } from './plugin-context.js'
 
@@ -52,6 +59,32 @@ export function usePlugins(): UsePluginsResult {
     screens: port.screens,
   }
 }
+
+/**
+ * Host model catalog snapshot (subscription-handle driven; same facts as the
+ * host model center, updated at the host store's catalog cadence — unrelated
+ * conversation streaming frames never re-render consumers). Honest unknown
+ * gate: while `unknown === true` (first load in flight, or the host provides
+ * no catalog capability) model facts are unknowable — render an explicit
+ * unknown state, never "no models exist".
+ */
+export function useModels(): ModelCatalogSnapshot {
+  const handles = usePluginClientDataHandles()
+  const subscribe = handles?.subscribeModels
+  const getSnapshot = handles?.getModelsSnapshot
+  // getServerSnapshot reuses the real getter (same convention as the host's
+  // useDomainSlice): SSR renders read the current snapshot, never a fabricated
+  // unknown truth; the frozen fallback only covers hosts without the slice.
+  const models = useSyncExternalStore(
+    useCallback((listener: () => void) => subscribe?.(listener) ?? (() => {}), [subscribe]),
+    () => getSnapshot?.() ?? UNKNOWN_MODEL_CATALOG,
+    () => getSnapshot?.() ?? UNKNOWN_MODEL_CATALOG,
+  )
+  return models
+}
+
+/** Frozen unknown fallback for hosts without the catalog capability (never a fresh object per read). */
+const UNKNOWN_MODEL_CATALOG: ModelCatalogSnapshot = Object.freeze({ unknown: true, models: [] })
 
 /**
  * Reactive non-secret public configuration of the current plugin, projected

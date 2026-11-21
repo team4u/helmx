@@ -8,10 +8,9 @@ import {
 import type { HelmxLocale, PluginSummary } from '@helmx/protocol/browser'
 import { DEFAULT_HELMX_LOCALE, resolveLocalizedText } from '@helmx/protocol/browser'
 import { ApiClientError, pluginsApi, type PluginConfigResponse } from '../lib/api.js'
-import { HelmxIcon, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle, Select, Switch } from '@helmx/plugin-client'
+import { HelmxIcon, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle, ModelPickerControl, Switch } from '@helmx/plugin-client'
 import { createWebTranslator } from '../i18n/catalog.js'
-import { useOptionalGroupedUi, useOptionalLocale, useOptionalModels, useOptionalStoreActions } from '../lib/store-context.js'
-import { buildProfileModelOptions } from '../profiles/profile-center-model.js'
+import { useOptionalGroupedUi, useOptionalLocale, useOptionalStoreActions } from '../lib/store-context.js'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -92,7 +91,6 @@ export function PluginConfigForm({
   inline = false,
 }: PluginConfigFormProps): React.JSX.Element {
   const t = useMemo(() => createWebTranslator(locale), [locale])
-  const models = useOptionalModels() ?? []
   const entries = Object.entries(config.schema ?? {})
   const [values, setValues] = useState<Record<string, ConfigValue>>(() => initialFormValues(config))
   const [saving, setSaving] = useState(false)
@@ -192,16 +190,23 @@ export function PluginConfigForm({
                     }
                   />
                 ) : schema.format === 'model' ? (
-                  <Select
-                    id={fieldId}
-                    inline={inline}
-                    popoverClassName="helmx-select-popover-wide"
-                    aria-label={
+                  <ModelPickerControl
+                    buttonId={fieldId}
+                    buttonAriaLabel={
                       schema.label !== undefined ? resolveLocalizedText(schema.label, locale) || key : key
                     }
-                    value={String(values[key] ?? '')}
-                    options={buildProfileModelOptions(models, String(values[key] ?? ''), t)}
-                    onChange={(event) => setValues((prev) => ({ ...prev, [key]: event.target.value }))}
+                    buttonTitle={String(values[key] ?? '') || t('plugins.config.modelUnset')}
+                    placeholderLabel={t('plugins.config.modelUnset')}
+                    effectiveModel={String(values[key] ?? '') || undefined}
+                    activeThinkingLevel=""
+                    resetLabel={t('plugins.config.modelUnset')}
+                    resetTitle={t('plugins.config.resetDefaultTitle')}
+                    popoverSide={inline ? 'bottom' : 'top'}
+                    enableShortcut={false}
+                    showThinkingLevels={false}
+                    disabled={saving}
+                    onApply={(id) => setValues((prev) => ({ ...prev, [key]: id }))}
+                    onResetDefault={() => setValues((prev) => ({ ...prev, [key]: '' }))}
                   />
                 ) : (
                   <input

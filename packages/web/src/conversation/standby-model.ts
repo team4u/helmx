@@ -18,7 +18,7 @@ import { useSyncExternalStore } from 'react'
 import type { ArtifactMetadata, ConversationInit, ConversationSummary } from '@helmx/protocol/browser'
 import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 import { envDraftError, parseCompactSlashCommand, type EnvDraft } from './composer-model.js'
-import { resolveEffectiveThinkingLevel } from './keybindings-model.js'
+import { resolveEffectiveThinkingLevel } from '@helmx/plugin-client/pure'
 
 /** Attachments staged locally before sending (no conversation created, nothing uploaded). */
 export interface StandbyLocalFile {

@@ -37,16 +37,10 @@ import { COMPOSER_DOCK_SLOT } from '@helmx/protocol'
 import { groupUiContributions, type HelmxStoreValue } from '../src/lib/types.js'
 import {
   canRecallOnArrowUp,
-  HELMX_SHORTCUT_EVENT,
-  initialModelActiveIndex,
   isCaretAtFirstLine,
   isComposerSubmitEnterEvent,
   isPlainArrowUpEvent,
-  isShortcutPanelMatch,
   latestHumanQueuedInput,
-  resolveEffectiveThinkingLevel,
-  resolveElementPanel,
-  stepActiveIndex,
 } from '../src/conversation/keybindings-model.js'
 import { resolveStandbyEffectiveModel, resolveStandbyThinkingLevel, resetStandbyDrafts } from '../src/conversation/standby-model.js'
 
@@ -57,7 +51,15 @@ const { createRoot } = await import('react-dom/client')
 const { renderToStaticMarkup } = await import('react-dom/server')
 const { conversationsApi, assetsApi } = await import('../src/lib/api.js')
 const { seedPluginClientModule } = await import('../src/lib/plugin-client.js')
-const { usePluginContext } = await import('@helmx/plugin-client')
+const {
+  usePluginContext,
+  HELMX_SHORTCUT_EVENT,
+  initialModelActiveIndex,
+  isShortcutPanelMatch,
+  resolveEffectiveThinkingLevel,
+  resolveElementPanel,
+  stepActiveIndex,
+} = await import('@helmx/plugin-client')
 const { HostStoreProviders } = await import('./helpers/host-store.js')
 const { makeTestStore, HelmxExternalStoreContext } = await import('./helpers/store.js')
 const { Composer } = await import('../src/conversation/Composer.js')
@@ -924,14 +926,14 @@ test('CompletionPopover: Esc closes the completion popover and stopPropagation k
 })
 
 test('ModelPickerControl filters unavailable and disabled models at runtime; the refresh button triggers /api/models/refresh and refreshAssets', { timeout: 60_000 }, async () => {
-  const { ModelPickerControl } = await import('../src/conversation/ModelPicker.js')
+  const { ModelPickerControl } = await import('@helmx/plugin-client')
   const originalFetch = globalThis.fetch
   let refreshPostCount = 0
   let modelsRefCount = 0
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (String(input) === '/api/models/refresh' && init?.method === 'POST') {
       refreshPostCount += 1
-      return jsonResponse({ errors: {} })
+      return jsonResponse({ errors: {}, models: [], providerCatalog: [], providers: [], aborted: false })
     }
     // 真实 refreshAssets 会重拉 /api/models：以此观察刷新后的目录重建
     if (String(input) === '/api/models') {
@@ -984,7 +986,12 @@ test('ModelPickerControl filters unavailable and disabled models at runtime; the
     assert.equal(refreshPostCount, 1, 'clicking refresh triggers POST /api/models/refresh')
     await waitForCondition(() => modelsRefCount > 0)
     assert.equal(modelsRefCount > 0, true, 'refreshAssets follows the completed refresh (catalog re-listed via /api/models)')
-    assert.equal(store.getNotices().some((n) => n.title === 'Model catalog refreshed'), true)
+    // The shared control routes refresh notices through the port notification
+    // channel: title and per-provider detail fold into one message line.
+    assert.equal(
+      store.getNotices().some((n) => n.title.includes('Model catalog refreshed') && n.title.includes('models available')),
+      true,
+    )
   } finally {
     globalThis.fetch = originalFetch
   }

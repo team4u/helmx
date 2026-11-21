@@ -4,11 +4,13 @@
  * （helpers/host-store.ts）静态引入本模块不会在 happy-dom 注册前加载 react-dom/client
  * （那会破坏受控输入的事件委托）；生产 HelmxStoreProvider 与测试共用同一实现。
  */
-import { useCallback, useMemo, useSyncExternalStore } from 'react'
+import { useCallback, useMemo, useRef, useSyncExternalStore } from 'react'
+import type { ModelCatalogRefreshOutcome, ModelCatalogSnapshot } from '@helmx/protocol/browser'
 import type { PluginClientHostPort } from '@helmx/plugin-client'
-import { PluginClientHostContext } from '@helmx/plugin-client'
+import { PluginClientDataHandlesContext, PluginClientHostContext } from '@helmx/plugin-client'
 import { createLocaleTranslator } from '@helmx/protocol/browser'
 import type { HelmxExternalStore } from './helmx-store.js'
+import { assetsApi } from './api.js'
 import { createPluginClientHostPort } from './plugin-client-host.js'
 import { createWebTranslator } from '../i18n/catalog.js'
 import {
@@ -19,6 +21,40 @@ import {
 export function PluginClientHostBridge({ store, children }: { store: HelmxExternalStore; children: React.ReactNode }) {
   const subscribe = useCallback((listener: () => void) => store.subscribeDomain('pluginHostPort', listener), [store])
   const slice = useSyncExternalStore(subscribe, store.getPluginHostPortSlice, store.getPluginHostPortSlice)
+
+  // ---- 模型目录切片（#23 P0.2：稳定订阅句柄走独立 Context，值不随流式帧换引用，
+  // useModels 消费方仅在真实目录域 emit 时重渲染；不进会每帧重建的主 port 对象）----
+  const subscribeModels = useCallback(
+    (listener: () => void) => {
+      const offModels = store.subscribeDomain('models', listener)
+      const offProfiles = store.subscribeDomain('profiles', listener)
+      return () => {
+        offModels()
+        offProfiles()
+      }
+    },
+    [store],
+  )
+  const modelsSnapshotRef = useRef<ModelCatalogSnapshot>({ unknown: true, models: [] })
+  const getModelsSnapshot = useCallback((): ModelCatalogSnapshot => {
+    const models = store.getModels()
+    const unknown = !store.getProfilesSlice().assetsLoaded
+    const prev = modelsSnapshotRef.current
+    if (prev.unknown === unknown && prev.models === models) return prev
+    const next: ModelCatalogSnapshot = { unknown, models }
+    modelsSnapshotRef.current = next
+    return next
+  }, [store])
+  const refreshModels = useCallback(async (): Promise<ModelCatalogRefreshOutcome> => {
+    const res = await assetsApi.refreshModels()
+    await store.actions.refreshAssets()
+    return { errors: res.errors ?? {}, modelCount: res.models.length }
+  }, [store])
+  const dataHandles = useMemo(
+    () => ({ subscribeModels, getModelsSnapshot, refreshModels }),
+    [subscribeModels, getModelsSnapshot, refreshModels],
+  )
+
   const port = useMemo<PluginClientHostPort>(
     () => ({
       ...createPluginClientHostPort({
@@ -62,5 +98,9 @@ export function PluginClientHostBridge({ store, children }: { store: HelmxExtern
     }),
     [slice, store],
   )
-  return <PluginClientHostContext.Provider value={port}>{children}</PluginClientHostContext.Provider>
+  return (
+    <PluginClientDataHandlesContext.Provider value={dataHandles}>
+      <PluginClientHostContext.Provider value={port}>{children}</PluginClientHostContext.Provider>
+    </PluginClientDataHandlesContext.Provider>
+  )
 }

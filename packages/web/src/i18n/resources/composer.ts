@@ -128,31 +128,6 @@ export const composerMessages = {
     en: 'Clear the explicit override and recompute the Profile/global inheritance chain',
     'zh-CN': '清除显式覆盖，重算 Profile/全局继承链',
   },
-  'composer.model.buttonAria': { en: 'Model and thinking level: {model}{level}', 'zh-CN': '模型与思考档位：{model}{level}' },
-  'composer.model.levelSuffix': { en: ' · {level}', 'zh-CN': ' · {level}' },
-  'composer.model.defaultLabel': { en: 'Default model', 'zh-CN': '默认模型' },
-  'composer.model.searchAria': { en: 'Search models', 'zh-CN': '搜索模型' },
-  'composer.model.searchPlaceholder': { en: 'Search models…', 'zh-CN': '搜索模型…' },
-  'composer.model.refreshCatalog': { en: 'Refresh dynamic model catalog', 'zh-CN': '刷新动态模型目录' },
-  'composer.model.listHeader': { en: 'Model list', 'zh-CN': '模型列表' },
-  'composer.model.emptyCatalog': {
-    en: 'No models available; configure a provider key in Models & credentials first',
-    'zh-CN': '暂无可用模型；请先在「模型与凭据」配置供应商密钥',
-  },
-  'composer.model.noMatches': { en: 'No matching models', 'zh-CN': '没有匹配的模型' },
-  'composer.model.thinkingHeader': { en: 'Thinking level', 'zh-CN': '思考档位' },
-  'composer.model.rowDefaultTitle': {
-    en: 'Use {model} (thinking level follows the default)',
-    'zh-CN': '使用 {model}（思考档位跟随默认）',
-  },
-  'composer.model.levelChipTitle': {
-    en: 'Use {model} · thinking {level}',
-    'zh-CN': '使用 {model} · 思考 {level}',
-  },
-  'composer.model.catalogPartialFailure': { en: 'Some provider catalog refreshes failed', 'zh-CN': '部分供应商目录刷新失败' },
-  'composer.model.catalogRefreshed': { en: 'Model catalog refreshed', 'zh-CN': '已刷新模型目录' },
-  'composer.model.catalogCount': { en: '{count} models available', 'zh-CN': '共 {count} 个可用模型' },
-  'composer.model.catalogRefreshFailed': { en: 'Failed to refresh model catalog', 'zh-CN': '刷新模型目录失败' },
   'composer.model.switchFailed': { en: 'Failed to switch model', 'zh-CN': '切换模型失败' },
   'composer.model.thinkingSwitchFailed': { en: 'Failed to switch thinking level', 'zh-CN': '切换思考等级失败' },
   'composer.model.restoreFailed': { en: 'Failed to restore default configuration', 'zh-CN': '恢复默认配置失败' },
@@ -280,7 +255,6 @@ export const composerMessages = {
 
   // ---- Keyboard hints ----
   'composer.kbd.navConfirmClose': { en: '↑↓ select · Enter confirm · Esc close', 'zh-CN': '↑↓ 选择 · Enter 确认 · Esc 关闭' },
-  'composer.kbd.navConfirm': { en: '↑↓ select · Enter confirm', 'zh-CN': '↑↓ 选择 · Enter 确认' },
 
   // ---- Context usage readout ----
   'composer.context.compactingStatus': { en: 'Compacting…', 'zh-CN': '精简中…' },
