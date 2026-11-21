@@ -266,15 +266,19 @@ test('样式边界：SDK 组件字面 className 词元 ⊆ 宿主 CSS 类名集 
   }
 })
 
-test('样式边界：统一批量操作栏 .batch-bar 族完整归属 primitives.css（sidebar/overview 分片仅留布局微调）', { timeout: 60_000 }, () => {
+test('样式边界：统一批量操作栏 .batch-bar 族与 .btn-danger-sm 完整归属 primitives.css（sidebar/overview 分片仅留布局微调）', { timeout: 60_000 }, () => {
   const shards = readdirSync(STYLES_DIR)
     .filter((name) => name.endsWith('.css') && name !== 'primitives.css')
     .map((name) => ({ name, css: readFileSync(join(STYLES_DIR, name), 'utf8') }))
-  for (const selector of ['.batch-bar', '.batch-bar-header', '.batch-bar-count', '.batch-bar-actions']) {
+  for (const selector of ['.batch-bar', '.batch-bar-header', '.batch-bar-count', '.batch-bar-actions', '.btn-danger-sm']) {
     assert.ok(ownsRule(primitives, selector), `primitives.css 应定义公共批量栏规则 ${selector}`)
     for (const { name, css } of shards) {
       assert.ok(!ownsRule(css, selector), `分片 ${name} 不得重新定义公共批量栏壳 ${selector}`)
     }
+  }
+  const overview = readFileSync(join(STYLES_DIR, 'overview.css'), 'utf8')
+  for (const selector of ['.overview-scroll', '.overview-batch-bar-wrap', '.overview-batch-bar-wrap + .overview-grid']) {
+    assert.ok(ownsRule(overview, selector), `overview.css 应定义总览批量栏同域滚动与对齐规则 ${selector}`)
   }
   // 旧词汇不得回流（sidebar/overview 私有 header/actions/count/spacer 已收口）
   for (const { name, css } of shards) {

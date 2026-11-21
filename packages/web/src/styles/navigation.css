@@ -530,16 +530,6 @@
   opacity: 0.4;
 }
 
-.btn-danger-sm {
-  color: #fff;
-  background-color: var(--err, #ef4444);
-  border-color: var(--err, #ef4444);
-}
-
-.btn-danger-sm:hover:not(:disabled) {
-  opacity: 0.9;
-}
-
 /* 系统中心入口已收敛到「设置」空间，sidebar-footer 不再使用（保留类名仅供外部扩展降级）。 */
 .sidebar-theme-toggle,
 .sidebar-locale-toggle,

@@ -629,7 +629,7 @@ export function AgentStandingsGroup({
             </span>
             <button
               type="button"
-              className="btn btn-ghost btn-sm"
+              className="btn btn-ghost btn-xs"
               onClick={() => {
                 setBatchMode(false)
                 setSelectedIds(new Set())
@@ -642,7 +642,7 @@ export function AgentStandingsGroup({
           <div className="batch-bar-actions">
             <button
               type="button"
-              className="btn btn-ghost btn-sm"
+              className="btn btn-sm"
               disabled={allDeletableIds.length === 0 || deleting}
               onClick={() => {
                 if (isAllSelected) {
@@ -656,7 +656,7 @@ export function AgentStandingsGroup({
             </button>
             <button
               type="button"
-              className="btn btn-ghost btn-sm"
+              className="btn btn-sm"
               disabled={selectedIds.size === 0 || deleting || archiving}
               onClick={() => void executeBatchArchive()}
             >

@@ -302,7 +302,7 @@ export function ArchivedConversationsGroup({
             </span>
             <button
               type="button"
-              className="btn btn-ghost btn-sm"
+              className="btn btn-ghost btn-xs"
               onClick={() => {
                 setBatchMode(false)
                 setSelectedIds(new Set())
@@ -315,7 +315,7 @@ export function ArchivedConversationsGroup({
           <div className="batch-bar-actions">
             <button
               type="button"
-              className="btn btn-ghost btn-sm"
+              className="btn btn-sm"
               disabled={items.length === 0 || restoring || deleting}
               onClick={() => {
                 setSelectedIds(isAllSelected ? new Set() : new Set(items.map((item) => item.conv.id)))

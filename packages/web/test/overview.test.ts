@@ -1374,7 +1374,13 @@ test('ConversationOverview batch mode: card click toggles selection, managed/bot
     await act(async () => {
       toggle.click()
     })
-    assert.ok(mount.container.querySelector('.overview-batch-bar') !== null, 'entering batch mode renders the batch bar')
+    const batchBar = mount.container.querySelector('.overview-batch-bar')
+    assert.ok(batchBar !== null, 'entering batch mode renders the batch bar')
+    const scrollContainer = mount.container.querySelector('.overview-scroll')
+    const batchWrap = mount.container.querySelector('.overview-scroll > .overview-batch-bar-wrap')
+    const grid = mount.container.querySelector('.overview-scroll > .overview-grid')
+    assert.ok(scrollContainer !== null && batchWrap !== null && grid !== null, 'batch bar and card grid share the same scroll container')
+    assert.ok(batchBar.parentElement === batchWrap, 'batch bar sits inside .overview-batch-bar-wrap for aligned outer gutters')
 
     const cards = [...mount.container.querySelectorAll<HTMLElement>('.overview-card')]
     assert.equal(cards.length, 4)

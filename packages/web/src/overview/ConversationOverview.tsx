@@ -759,91 +759,95 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
         </Tooltip>
       </div>
 
-      {batchMode && (
-        <div className="batch-bar overview-batch-bar">
-          <div className="batch-bar-header">
-            <span className="batch-bar-count tabular-nums">
-              {t('shell.batch.selected', { count: effectiveSelectedIds.size })}
-            </span>
-            <button type="button" className="btn btn-ghost btn-sm" disabled={deleting || archiving} onClick={exitBatchMode}>
-              {t('shell.batch.exit')}
-            </button>
-          </div>
-          <div className="batch-bar-actions">
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
-              disabled={selectableCardIds.length === 0 || deleting || archiving}
-              onClick={() => {
-                if (isAllSelected) {
-                  setSelectedIds(new Set())
-                } else {
-                  setSelectedIds(new Set(selectableCardIds))
-                }
-              }}
-            >
-              {isAllSelected ? t('shell.batch.clear') : t('shell.batch.selectAll')}
-            </button>
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
-              disabled={effectiveSelectedIds.size === 0 || deleting || archiving}
-              onClick={() => {
-                void executeBatchArchive()
-              }}
-            >
-              {archiving ? t('shell.agents.archiving') : t('shell.agents.archiveCount', { count: effectiveSelectedIds.size })}
-            </button>
-            <button
-              type="button"
-              className="btn btn-sm btn-danger-sm"
-              disabled={effectiveSelectedIds.size === 0 || deleting || archiving}
-              onClick={() => setBatchDeleteIds(effectiveSelectedIds)}
-            >
-              {deleting ? t('shell.batch.deleting') : t('shell.batch.deleteCount', { count: effectiveSelectedIds.size })}
-            </button>
-          </div>
-        </div>
-      )}
-
-      <div className="overview-grid">
-        {dataReady === false ? (
-          <div className="overview-empty overview-loading" role="status">{t('shell.overview.loading')}</div>
-        ) : visibleCards.length === 0 ? (
-          cards.length === 0 ? (
-            <div className="overview-empty">{t('shell.overview.emptySystem')}</div>
-          ) : (
-            <div className="overview-empty">
-              <span>{t('shell.overview.emptyFiltered')}</span>
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm overview-clear-filters"
-                onClick={() =>
-                  applyFilterParam({ bucket: undefined, profile: undefined, node: undefined, source: undefined, q: undefined })
-                }
-              >
-                {t('shell.overview.clearFilters')}
-              </button>
+      <div className="overview-scroll">
+        {batchMode && (
+          <div className="overview-batch-bar-wrap">
+            <div className="batch-bar overview-batch-bar">
+              <div className="batch-bar-header">
+                <span className="batch-bar-count tabular-nums">
+                  {t('shell.batch.selected', { count: effectiveSelectedIds.size })}
+                </span>
+                <button type="button" className="btn btn-ghost btn-xs" disabled={deleting || archiving} onClick={exitBatchMode}>
+                  {t('shell.batch.exit')}
+                </button>
+              </div>
+              <div className="batch-bar-actions">
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={selectableCardIds.length === 0 || deleting || archiving}
+                  onClick={() => {
+                    if (isAllSelected) {
+                      setSelectedIds(new Set())
+                    } else {
+                      setSelectedIds(new Set(selectableCardIds))
+                    }
+                  }}
+                >
+                  {isAllSelected ? t('shell.batch.clear') : t('shell.batch.selectAll')}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={effectiveSelectedIds.size === 0 || deleting || archiving}
+                  onClick={() => {
+                    void executeBatchArchive()
+                  }}
+                >
+                  {archiving ? t('shell.agents.archiving') : t('shell.agents.archiveCount', { count: effectiveSelectedIds.size })}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-danger-sm"
+                  disabled={effectiveSelectedIds.size === 0 || deleting || archiving}
+                  onClick={() => setBatchDeleteIds(effectiveSelectedIds)}
+                >
+                  {deleting ? t('shell.batch.deleting') : t('shell.batch.deleteCount', { count: effectiveSelectedIds.size })}
+                </button>
+              </div>
             </div>
-          )
-        ) : (
-          visibleCards.map((card) => (
-            <OverviewCardView
-              key={card.root.id}
-              card={card}
-              onOpenConversation={openConversation}
-              onDrawerPeek={drawerPeek}
-              onOpenSplit={openSplit}
-              viewedConversationIds={viewedConversationIds}
-              batchMode={batchMode}
-              selectable={isCardSelectable(card.root)}
-              selected={effectiveSelectedIds.has(card.root.id)}
-              expanded={expandedCardIds.has(card.root.id)}
-              onToggleSelect={toggleCardSelect}
-              onToggleExpanded={toggleCardExpanded}
-            />
-          ))
+          </div>
         )}
+
+        <div className="overview-grid">
+          {dataReady === false ? (
+            <div className="overview-empty overview-loading" role="status">{t('shell.overview.loading')}</div>
+          ) : visibleCards.length === 0 ? (
+            cards.length === 0 ? (
+              <div className="overview-empty">{t('shell.overview.emptySystem')}</div>
+            ) : (
+              <div className="overview-empty">
+                <span>{t('shell.overview.emptyFiltered')}</span>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm overview-clear-filters"
+                  onClick={() =>
+                    applyFilterParam({ bucket: undefined, profile: undefined, node: undefined, source: undefined, q: undefined })
+                  }
+                >
+                  {t('shell.overview.clearFilters')}
+                </button>
+              </div>
+            )
+          ) : (
+            visibleCards.map((card) => (
+              <OverviewCardView
+                key={card.root.id}
+                card={card}
+                onOpenConversation={openConversation}
+                onDrawerPeek={drawerPeek}
+                onOpenSplit={openSplit}
+                viewedConversationIds={viewedConversationIds}
+                batchMode={batchMode}
+                selectable={isCardSelectable(card.root)}
+                selected={effectiveSelectedIds.has(card.root.id)}
+                expanded={expandedCardIds.has(card.root.id)}
+                onToggleSelect={toggleCardSelect}
+                onToggleExpanded={toggleCardExpanded}
+              />
+            ))
+          )}
+        </div>
       </div>
 
       <ConfirmDialog

@@ -75,6 +75,19 @@
   border-radius: var(--radius-xs);
 }
 
+/* 实心小型危险按钮（批量操作栏删除动作等）：保留警示底色与可读反色 */
+.btn-danger-sm {
+  color: var(--fg-on-solid, #fff);
+  background-color: var(--err, #ef4444);
+  border-color: var(--err, #ef4444);
+}
+.btn-danger-sm:hover:not(:disabled) {
+  color: var(--fg-on-solid, #fff);
+  background-color: var(--err, #ef4444);
+  border-color: var(--err, #ef4444);
+  filter: brightness(0.95);
+}
+
 /* 紧凑小按钮：胶囊卡头部 / 工作台窄列内联动作 */
 .btn-xs {
   height: 22px;
@@ -470,8 +483,8 @@
 .batch-bar {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 8px 12px;
+  gap: 8px;
+  padding: 10px 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--bg-subtle);
@@ -482,6 +495,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  min-height: 22px;
 }
 .batch-bar-count {
   font-weight: 500;

@@ -22,10 +22,16 @@
   min-width: 104px;
 }
 
-.overview-grid {
+.overview-scroll {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.overview-grid {
+  flex: 1 0 auto;
   padding: 16px 20px;
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(252px, 1fr));
@@ -295,10 +301,24 @@
   display: block;
 }
 
-/* 批量操作条：横贯工具栏下方，仅批量模式渲染；按钮沿用通用 btn 词汇，
- * 删除按钮走 btn-danger-sm（与侧栏批量条同语义）。 */
+/* 批量操作条：置入 .overview-scroll 同域吸顶容器，与下方 .overview-grid
+ * 共享滚动宽度（含滚动条槽）及左右 20px（窄屏 12px）外边距，上下对称
+ * 保持 12px（窄屏 10px）与网格行距一致；壳结构复用公共 .batch-bar 原语。 */
+.overview-batch-bar-wrap {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 12px 20px;
+  background: var(--bg);
+  flex-shrink: 0;
+}
+
+.overview-batch-bar-wrap + .overview-grid {
+  padding-top: 0;
+}
+
 .overview-batch-bar {
-  /* 壳结构/中性底色复用公共 .batch-bar 原语；总览无额外桌面覆写（窄屏微调见下方媒体查询） */
+  /* 壳结构/中性底色复用公共 .batch-bar 原语；总览外间距由 .overview-batch-bar-wrap 统一承载 */
 }
 
 /* 工具栏右缘的批量管理开关（勾选方块图标，激活态 accent）。 */
@@ -332,8 +352,11 @@
     flex: 1 1 100%;
   }
 
-  .overview-batch-bar {
-    padding: 8px 10px;
-    gap: 8px;
+  .overview-batch-bar-wrap {
+    padding: 10px 12px;
+  }
+
+  .overview-batch-bar-wrap + .overview-grid {
+    padding-top: 0;
   }
 }
