@@ -589,6 +589,21 @@ export function wrapHostApi(
     },
     getConversationDetail: (id, options) =>
       tracked('host.getConversationDetail', () => backend.getConversationDetail(id, options)),
+    getConversationSubmission: (id, requestId) => {
+      guard('host.getConversationSubmission');
+      const port = backend.getConversationSubmission;
+      if (port === undefined) {
+        throw new HelmxError(
+          'not_supported',
+          'Current host has not wired durable submission lookup (host.getConversationSubmission)',
+          501,
+          { conversationId: id },
+        );
+      }
+      return deps.tracker.withTask(pluginId, 'host.getConversationSubmission', () =>
+        Promise.resolve(port(id, requestId)),
+      );
+    },
     updateConversation: (id, patch) => tracked('host.updateConversation', () => backend.updateConversation(id, patch)),
     abortConversation: (id) => tracked('host.abortConversation', () => backend.abortConversation(id)),
     abortConversationGuarded: (id, mutationGuard) => {

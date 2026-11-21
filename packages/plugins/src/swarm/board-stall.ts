@@ -199,7 +199,8 @@ export function evaluateGroupQuiescence(
     }
   }
 
-  // 条件 5：主控空闲且无待送达汇报，且最新帖非 done / blocker / stall
+  // 条件 5：主控空闲且无待送达汇报，且最新帖非 blocker / stall，也非已覆盖主控水位的 done
+  // （未寻址主控或 wake=false 的 done 未进入主控待汇报水位，必须照常落入 [stall] 兜底，防全组永久静默卡死）
   if (!coordinatorState.exists) return { shouldEmitStall: false }
   if (coordinatorState.liveState === 'working' || coordinatorState.liveState === 'blocked') {
     return { shouldEmitStall: false }
@@ -207,7 +208,10 @@ export function evaluateGroupQuiescence(
   if (group.coordinatorPendingSeq > group.coordinatorNotifiedSeq) return { shouldEmitStall: false }
   const latestPost = posts[posts.length - 1]
   if (latestPost === undefined) return { shouldEmitStall: false }
-  if (latestPost.kind === 'done' || latestPost.kind === 'blocker' || latestPost.kind === 'stall') {
+  if (latestPost.kind === 'blocker' || latestPost.kind === 'stall') {
+    return { shouldEmitStall: false }
+  }
+  if (latestPost.kind === 'done' && group.coordinatorPendingSeq >= latestPost.seq) {
     return { shouldEmitStall: false }
   }
 

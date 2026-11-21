@@ -29,6 +29,7 @@ import {
   type SwarmCoordinator,
   type WorktreeHandoffSnapshot,
 } from './contracts.js'
+import { shouldFlushCoordinatorReport } from './board-router.js'
 import {
   evaluateGroupQuiescence,
   evaluateSilentExit,
@@ -90,7 +91,7 @@ export interface MemberHealingPorts {
   readonly logDiagnostic: (message: string) => void
   readonly releaseManagedWorker: (conversationId: number) => void
   readonly dispatcher: WakeDispatcher
-  readonly hasOtherWorkingOrSettlingMember: (group: CollabGroupRecord, excludeConvId?: number) => boolean
+  readonly getBusyActiveMemberNames: (group: CollabGroupRecord, excludeConvId?: number) => Set<string>
 }
 
 /** 成员自愈与恢复对账能力（由 group-store 组合根装配后使用）。 */
@@ -369,7 +370,10 @@ export function createMemberHealing(ports: MemberHealingPorts): MemberHealing {
         const inflight = target.inflightWakeup
         if (clearWakeupAction === 'active') {
           target.readCursorSeq = Math.max(target.readCursorSeq, inflight.toSeq)
-          target.lastWakeCompletionSeq = inflight.baseCompletionSeq
+          target.lastWakeCompletionSeq = Math.max(
+            inflight.baseCompletionSeq,
+            summary?.completionSeq ?? inflight.baseCompletionSeq,
+          )
         } else if (clearWakeupAction === 'settled') {
           target.readCursorSeq = Math.max(target.readCursorSeq, inflight.toSeq)
           if (target.lastWakeCompletionSeq === inflight.baseCompletionSeq) {
@@ -386,7 +390,10 @@ export function createMemberHealing(ports: MemberHealingPorts): MemberHealing {
       if (clearNudgeAction !== 'none' && target.inflightNudge !== undefined) {
         const inflight = target.inflightNudge
         if (clearNudgeAction === 'active') {
-          target.lastWakeCompletionSeq = inflight.baseCompletionSeq
+          target.lastWakeCompletionSeq = Math.max(
+            inflight.baseCompletionSeq,
+            summary?.completionSeq ?? inflight.baseCompletionSeq,
+          )
         } else if (clearNudgeAction === 'settled') {
           if (target.lastWakeCompletionSeq === inflight.baseCompletionSeq) {
             delete target.lastWakeCompletionSeq
@@ -435,14 +442,24 @@ export function createMemberHealing(ports: MemberHealingPorts): MemberHealing {
         await ports.mutateGroup(groupId, (draft) => {
           if (draft.inflightReport?.requestId === inflight.requestId) {
             if (reportStatus === 'active' || reportStatus === 'settled') {
-              draft.coordinatorNotifiedSeq = Math.max(draft.coordinatorNotifiedSeq, inflight.toSeq)
+              if (!inflight.requestId.startsWith('swarm-report-idle:')) {
+                draft.coordinatorNotifiedSeq = Math.max(draft.coordinatorNotifiedSeq, inflight.toSeq)
+              }
+              if (inflight.hadActiveWorkers) {
+                draft.lastReportHadActiveWorkers = true
+              } else {
+                delete draft.lastReportHadActiveWorkers
+              }
             }
             delete draft.inflightReport
           }
           return { group: draft, result: undefined }
         })
         if (reportStatus === 'active') {
-          dispatcher.noteCoordReportInflight(groupId, inflight.baseCompletionSeq)
+          dispatcher.noteCoordReportInflight(
+            groupId,
+            Math.max(inflight.baseCompletionSeq, coordSummary?.completionSeq ?? inflight.baseCompletionSeq),
+          )
         }
       }
     }
@@ -496,18 +513,20 @@ export function createMemberHealing(ports: MemberHealingPorts): MemberHealing {
 
     const latestGroup = ports.getGroup(groupId)
     if (latestGroup === undefined || latestGroup.status !== 'active' || latestGroup.coordinatorDetached) return
-    if (latestGroup.coordinatorPendingSeq > latestGroup.coordinatorNotifiedSeq) {
-      const groupPosts = ports.getPosts(latestGroup.id) ?? []
-      const hasUrgentPost = groupPosts.some(
-        (p) =>
-          p.seq > latestGroup.coordinatorNotifiedSeq &&
-          p.seq <= latestGroup.coordinatorPendingSeq &&
-          (p.kind === 'blocker' || p.kind === 'stall'),
-      )
-      if (hasUrgentPost || !ports.hasOtherWorkingOrSettlingMember(latestGroup)) {
-        void dispatcher.scheduleCoordinatorReport(latestGroup.id, 0)
-      }
-    } else if (!dispatcher.hasInflightDeliveriesForGroup(latestGroup.id)) {
+    const groupPosts = ports.getPosts(latestGroup.id) ?? []
+    const shouldFlushPending = shouldFlushCoordinatorReport({
+      group: latestGroup,
+      posts: groupPosts,
+      busyMemberNames: ports.getBusyActiveMemberNames(latestGroup),
+    })
+    const needsCatchup =
+      !shouldFlushPending && dispatcher.shouldSendCoordinatorIdleCatchup(latestGroup)
+    if (shouldFlushPending || needsCatchup) {
+      void dispatcher.scheduleCoordinatorReport(latestGroup.id, 0)
+    } else if (
+      latestGroup.coordinatorPendingSeq <= latestGroup.coordinatorNotifiedSeq &&
+      !dispatcher.hasInflightDeliveriesForGroup(latestGroup.id)
+    ) {
       await checkAndEmitQuiescenceStall(latestGroup.id)
     }
   }
@@ -520,12 +539,18 @@ export function createMemberHealing(ports: MemberHealingPorts): MemberHealing {
     const member = group.members.find((m) => m.name === input.memberName && m.lifecycle === 'active')
     if (member === undefined) return
 
-    const flushReportIfNoOtherWorkersBusy = async (): Promise<void> => {
+    const flushCoordinatorReportIfReady = async (): Promise<void> => {
       const latest = ports.getGroup(input.groupId)
       if (latest === undefined || latest.status !== 'active' || latest.coordinatorDetached) return
-      if (ports.hasOtherWorkingOrSettlingMember(latest, input.conversationId)) return
-      const needsCatchup = dispatcher.shouldSendCoordinatorIdleCatchup(latest, input.conversationId)
-      if (latest.coordinatorPendingSeq > latest.coordinatorNotifiedSeq || needsCatchup) {
+      const groupPosts = ports.getPosts(input.groupId) ?? []
+      const shouldFlushPending = shouldFlushCoordinatorReport({
+        group: latest,
+        posts: groupPosts,
+        busyMemberNames: ports.getBusyActiveMemberNames(latest, input.conversationId),
+      })
+      const needsCatchup =
+        !shouldFlushPending && dispatcher.shouldSendCoordinatorIdleCatchup(latest, input.conversationId)
+      if (shouldFlushPending || needsCatchup) {
         await dispatcher.flushCoordinatorReport(input.groupId, input.conversationId)
       }
     }
@@ -563,7 +588,7 @@ export function createMemberHealing(ports: MemberHealingPorts): MemberHealing {
         await dispatcher.deliverWorkerWakeup(input.groupId, input.memberName, { fromTurnSettled: true })
         return
       }
-      await flushReportIfNoOtherWorkersBusy()
+      await flushCoordinatorReportIfReady()
       return
     }
 
@@ -583,7 +608,7 @@ export function createMemberHealing(ports: MemberHealingPorts): MemberHealing {
         await dispatcher.deliverWorkerWakeup(input.groupId, input.memberName, { fromTurnSettled: true })
         return
       }
-      await flushReportIfNoOtherWorkersBusy()
+      await flushCoordinatorReportIfReady()
       return
     }
 
@@ -596,7 +621,6 @@ export function createMemberHealing(ports: MemberHealingPorts): MemberHealing {
     if (silentAction.kind === 'nudge') {
       const nudgeSummary = coord.readConversationOrUndefined(input.conversationId)
       const baseCompletionSeq = nudgeSummary?.completionSeq ?? input.completionSeq
-      const baseLastEntryId = nudgeSummary?.lastEntryId ?? 0
       const nudgeRequestId = `swarm-nudge:${input.groupId}:${input.memberName}:${silentAction.taskSeq}`
       await ports.mutateGroup(input.groupId, (draft) => {
         const target = draft.members.find((m) => m.name === input.memberName)
@@ -606,7 +630,6 @@ export function createMemberHealing(ports: MemberHealingPorts): MemberHealing {
             requestId: nudgeRequestId,
             taskSeq: silentAction.taskSeq,
             baseCompletionSeq,
-            baseLastEntryId,
           }
         }
         return { group: draft, result: undefined }
@@ -676,11 +699,11 @@ export function createMemberHealing(ports: MemberHealingPorts): MemberHealing {
         refs: [silentAction.taskSeq],
         body: silentAction.body,
       })
-      await flushReportIfNoOtherWorkersBusy()
+      await flushCoordinatorReportIfReady()
       return
     }
 
-    await flushReportIfNoOtherWorkersBusy()
+    await flushCoordinatorReportIfReady()
     await checkAndEmitQuiescenceStall(input.groupId, input.conversationId)
   }
 

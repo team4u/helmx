@@ -54,8 +54,8 @@ export type BoardPostKind = (typeof BOARD_POST_KINDS)[number]
 /** 行动类唤醒类型（计入 lastWakeTaskSeq 用于防哑巴退场检测）。 */
 export const ACTIONABLE_WAKE_KINDS: ReadonlySet<BoardPostKind> = new Set(['brief', 'handoff', 'review'])
 
-/** 无条件上报主控的状态流转类型。 */
-export const COORDINATOR_ESCALATION_KINDS: ReadonlySet<BoardPostKind> = new Set(['blocker', 'done', 'stall'])
+/** 无条件上报主控的故障/静默兜底类型（即便 wake=false 或未显式寻址 coordinator 仍强制上报，防静默吞错）。 */
+export const COORDINATOR_ESCALATION_KINDS: ReadonlySet<BoardPostKind> = new Set(['blocker', 'stall'])
 
 /** 主控汇总微批合并窗口（毫秒）。 */
 export const COORDINATOR_BATCH_WINDOW_MS = 50
@@ -125,14 +125,12 @@ export interface InflightWakeupIntent {
   fromSeq: number
   toSeq: number
   baseCompletionSeq: number
-  baseLastEntryId: number
 }
 
 export interface InflightNudgeIntent {
   requestId: string
   taskSeq: number
   baseCompletionSeq: number
-  baseLastEntryId: number
 }
 
 export interface InflightReportIntent {
@@ -140,7 +138,8 @@ export interface InflightReportIntent {
   fromSeq: number
   toSeq: number
   baseCompletionSeq: number
-  baseLastEntryId: number
+  /** 发送该报告时快照中是否仍存在 activeWorkingMembers（供重启恢复对账回填 lastReportHadActiveWorkers）。 */
+  hadActiveWorkers: boolean
 }
 
 export interface GroupMemberState {
@@ -206,6 +205,8 @@ export interface CollabGroupRecord {
   coordinatorPendingSeq: number
   /** 尚待提交或尚待与内核状态对账的主控在途汇总意图。 */
   inflightReport?: InflightReportIntent
+  /** 最近一次成功送达主控的汇总报告是否仍含 activeWorkingMembers（持久化供重启后补发全员空闲确认）。 */
+  lastReportHadActiveWorkers?: boolean
   lastStallWatermark?: string
   coordinatorDetached?: boolean
   /** keepWorktree: true 结单时固化的待主控合入分支清单。 */
@@ -608,7 +609,6 @@ function assertInflightBase(
   if (!isJsonObject(raw)) throw corrupt(`${label} 必须是对象`)
   if (!isNonEmptyString(raw.requestId)) throw corrupt(`${label}.requestId 非法`)
   if (!isNonNegInt(raw.baseCompletionSeq)) throw corrupt(`${label}.baseCompletionSeq 非法`)
-  if (!isNonNegInt(raw.baseLastEntryId)) throw corrupt(`${label}.baseLastEntryId 非法`)
   return raw
 }
 
@@ -616,11 +616,12 @@ function assertInflightRangeIntent(
   raw: unknown,
   label: string,
   corrupt: (detail: string) => HelmxError,
-): void {
+): Record<string, unknown> {
   const obj = assertInflightBase(raw, label, corrupt)
   if (!isPosIntId(obj.fromSeq) || !isPosIntId(obj.toSeq) || obj.fromSeq > obj.toSeq) {
     throw corrupt(`${label} seq 范围非法`)
   }
+  return obj
 }
 
 export function assertCollabGroupRecord(value: unknown): CollabGroupRecord {
@@ -704,7 +705,13 @@ export function assertCollabGroupRecord(value: unknown): CollabGroupRecord {
   if (!isNonNegInt(value.coordinatorNotifiedSeq)) throw corrupt('coordinatorNotifiedSeq 非法')
   if (!isNonNegInt(value.coordinatorPendingSeq)) throw corrupt('coordinatorPendingSeq 非法')
   if (value.inflightReport !== undefined) {
-    assertInflightRangeIntent(value.inflightReport, 'inflightReport', corrupt)
+    const reportObj = assertInflightRangeIntent(value.inflightReport, 'inflightReport', corrupt)
+    if (typeof reportObj.hadActiveWorkers !== 'boolean') {
+      throw corrupt('inflightReport.hadActiveWorkers 非法')
+    }
+  }
+  if (value.lastReportHadActiveWorkers !== undefined && typeof value.lastReportHadActiveWorkers !== 'boolean') {
+    throw corrupt('lastReportHadActiveWorkers 非法')
   }
   if (value.lastStallWatermark !== undefined && typeof value.lastStallWatermark !== 'string') {
     throw corrupt('lastStallWatermark 非法')

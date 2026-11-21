@@ -2312,7 +2312,6 @@ test('swarm-int10: runtime.started reconciliation wakes uncommitted inflightWake
   let group2Id = ''
   let coordId = 0
   let workerAId = 0
-  let workerALastEntryId = 0
   let workerBId = 0
   let workerCId = 0
 
@@ -2332,7 +2331,6 @@ test('swarm-int10: runtime.started reconciliation wakes uncommitted inflightWake
       tags: [WORKER_TAG],
     })
     workerAId = convA.id
-    workerALastEntryId = convA.lastEntryId ?? 0
 
     const convB = await env1.app.kernel.createConversation({
       title: 'Worker B',
@@ -2440,7 +2438,6 @@ test('swarm-int10: runtime.started reconciliation wakes uncommitted inflightWake
         fromSeq: 1,
         toSeq: 1,
         baseCompletionSeq: 0,
-        baseLastEntryId: workerALastEntryId,
       },
       createdAt: now - 30,
     },
@@ -2689,5 +2686,305 @@ test('swarm-int14: close_group force 出口 —— ignored 产物成员默认即
     )
   } finally {
     await env.close()
+  }
+})
+
+test('swarm-int15: coordinator-only review wakes past long-running worker, unwoken done triggers stall, authoritative inflightReport recovery, and persisted idle catch-up across restart', { timeout: 60_000 }, async (t) => {
+  const root = useTempDir(t, 'helmx-swarm-int15-')
+
+  // ---- Part 1 & 2: Long-running worker + done batching + coordinator-only review immediate wake + unwoken done stall ----
+  const env1 = await openSwarmEnv(root)
+  let groupId = ''
+  let coordId = 0
+  let slowId = 0
+  let fastId = 0
+  try {
+    const { kernel } = env1.app
+    const coord = await kernel.createConversation({ title: 'Tiered Wake Coord', profileId: 'assistant', cwd: env1.repoDir })
+    coordId = coord.id
+    const created = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
+      title: 'Tiered Wake Squad',
+      conversationId: coord.id,
+    })) as { groupId: string }
+    groupId = created.groupId
+
+    const slowEntered = deferred<void>()
+    const slowRelease = deferred<void>()
+    const reviewCoordSeen = deferred<string>()
+    let slowRound = 0
+    let fastRound = 0
+    let reviewerRound = 0
+    try {
+      env1.faux.setResponses(
+        Array.from({ length: 24 }, () => async (ctx: { messages: unknown[] }) => {
+          const meta = captureRequestMeta(ctx.messages as unknown as Record<string, unknown>[])
+          const sec = meta.sectionsById['swarm.active_group'] ?? ''
+          if (sec.includes('name="slow"')) {
+            slowRound += 1
+            if (slowRound === 1) {
+              slowEntered.resolve()
+              await slowRelease.promise
+              return fauxAssistantMessage(
+                [fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'comment', wake: false, body: 'Slow cleanup note.' })],
+                { stopReason: 'toolUse' },
+              )
+            }
+            return fauxAssistantMessage('Slow finished after long run.')
+          }
+          if (sec.includes('name="fast"')) {
+            fastRound += 1
+            if (fastRound === 1) {
+              return fauxAssistantMessage(
+                [fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', body: 'Fast slice done.' })],
+                { stopReason: 'toolUse' },
+              )
+            }
+            return fauxAssistantMessage('Fast settled.')
+          }
+          if (sec.includes('name="reviewer"')) {
+            reviewerRound += 1
+            if (reviewerRound === 1) {
+              return fauxAssistantMessage(
+                [fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'review', body: 'Need coordinator decision now.' })],
+                { stopReason: 'toolUse' },
+              )
+            }
+            return fauxAssistantMessage('Reviewer settled.')
+          }
+          const userTexts = (ctx.messages as Array<{ role?: string; content?: unknown }>)
+            .filter((m) => m.role === 'user')
+            .map((m) =>
+              typeof m.content === 'string'
+                ? m.content
+                : Array.isArray(m.content)
+                  ? m.content
+                      .map((b) => (typeof b === 'object' && b !== null && 'text' in b ? String((b as { text: unknown }).text) : ''))
+                      .join('\n')
+                  : '',
+            )
+            .join('\n')
+          if (userTexts.includes('Need coordinator decision now.')) {
+            reviewCoordSeen.resolve(userTexts)
+          }
+          return fauxAssistantMessage('Coordinator handled board report.')
+        }),
+      )
+
+      const slow = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'dispatch_worker',
+        { prompt: 'Run long background work.', name: 'slow' },
+        { conversationId: coord.id },
+      )) as { workerConversationId: number }
+      slowId = slow.workerConversationId
+      await slowEntered.promise
+
+      // Dispatch fast -> posts done while slow is still working -> must NOT wake coordinator yet
+      const fast = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'dispatch_worker',
+        { prompt: 'Finish fast slice.', name: 'fast' },
+        { conversationId: coord.id },
+      )) as { workerConversationId: number }
+      fastId = fast.workerConversationId
+      await kernel.waitForIdle(fast.workerConversationId)
+      await new Promise((r) => setTimeout(r, 90))
+      const reportsAfterFastDone = (await kernel.getConversationDetail(coord.id, { limit: 30 })).entries.filter(
+        (e) => e.kind === 'helmx.input' && JSON.stringify(e.data ?? '').includes('swarm_board_report'),
+      )
+      assert.equal(reportsAfterFastDone.length, 0, 'done post must remain batched while another worker is still working')
+
+      // Dispatch reviewer -> posts coordinator-only review(wake=true) -> must wake coordinator immediately past slow!
+      const reviewer = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'dispatch_worker',
+        { prompt: 'Review and ask coordinator.', name: 'reviewer' },
+        { conversationId: coord.id },
+      )) as { workerConversationId: number }
+      await kernel.waitForIdle(reviewer.workerConversationId)
+
+      const coordReportText = await reviewCoordSeen.promise
+      await kernel.waitForIdle(coord.id)
+      assert.match(coordReportText, /Fast slice done\./)
+      assert.match(coordReportText, /Need coordinator decision now\./)
+      assert.match(coordReportText, /activeWorkingMembers: @slow\n/)
+
+      // Verify lastReportHadActiveWorkers was persisted to meta.json while slow is still running
+      const metaPath = join(env1.dataDir, 'plugins', 'builtin%3Aswarm', 'groups', groupId, 'meta.json')
+      const midMeta = JSON.parse(readFileSync(metaPath, 'utf8')) as CollabGroupRecord
+      assert.equal(midMeta.lastReportHadActiveWorkers, true, 'lastReportHadActiveWorkers must be persisted to meta.json')
+
+      // Release slow -> finishes with passive comment -> all workers idle -> stall emits since latest non-comment is review (not done)
+      slowRelease.resolve()
+      await kernel.waitForIdle(slow.workerConversationId)
+      await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+      await kernel.waitForIdle(coord.id)
+    } finally {
+      slowRelease.resolve()
+    }
+
+    // Un-woken done (wake: false) in a second group must trigger 0-Token [stall] instead of silent deadlock
+    const coord2 = await kernel.createConversation({ title: 'Unwoken Done Coord', profileId: 'assistant', cwd: env1.repoDir })
+    const g2 = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
+      title: 'Unwoken Done Squad',
+      conversationId: coord2.id,
+    })) as { groupId: string }
+    setSwarmRoleResponses(env1.faux, {
+      solo: [
+        fauxAssistantMessage(
+          [fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', wake: false, body: 'Passive done forgotten.' })],
+          { stopReason: 'toolUse' },
+        ),
+        fauxAssistantMessage('Solo settled.'),
+      ],
+      coordinator: [fauxAssistantMessage('Coordinator noted stall from unwoken done.')],
+    })
+    const solo = (await kernel.plugins.invokeAction(
+      SWARM_PLUGIN_ID,
+      'dispatch_worker',
+      { prompt: 'Finish with passive done.', name: 'solo' },
+      { conversationId: coord2.id },
+    )) as { workerConversationId: number }
+    await waitFor(async () => {
+      const read = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'board_read', { groupId: g2.groupId })) as {
+        posts: BoardPost[]
+      }
+      return read.posts.some((p) => p.from === 'system' && p.kind === 'stall' && p.body.includes('wake=false'))
+    })
+    await kernel.waitForIdle(solo.workerConversationId)
+    await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+    await kernel.waitForIdle(coord2.id)
+
+    // Seed an unrelated turn on coord1 so its completionSeq advances past the pre-crash inflightReport baseCompletionSeq
+    env1.faux.setResponses([fauxAssistantMessage('Unrelated human reply.')])
+    await kernel.submitInput(coordId, 'Unrelated user question before restart', { origin: 'human' })
+    await kernel.waitForIdle(coordId)
+  } finally {
+    await env1.close()
+  }
+
+  // ---- Part 3: Authoritative inflightReport recovery (uncommitted despite advanced completionSeq) ----
+  const metaPath = join(env1.dataDir, 'plugins', 'builtin%3Aswarm', 'groups', groupId, 'meta.json')
+  const boardPath = join(env1.dataDir, 'plugins', 'builtin%3Aswarm', 'groups', groupId, 'board.jsonl')
+  const preRestartMeta = JSON.parse(readFileSync(metaPath, 'utf8')) as CollabGroupRecord
+  const preRestartPosts = readFileSync(boardPath, 'utf8')
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line) as BoardPost)
+  const doneSeq = preRestartMeta.headSeq + 1
+  const newDonePost: BoardPost = {
+    seq: doneSeq,
+    groupId,
+    channel: 'main',
+    from: 'fast',
+    to: ['coordinator'],
+    resolvedTargets: ['coordinator'],
+    wake: true,
+    kind: 'done',
+    refs: [],
+    body: 'Uncommitted report must survive unrelated completionSeq bump.',
+    createdAt: Date.now(),
+  }
+  preRestartPosts.push(newDonePost)
+  writeFileSync(boardPath, `${preRestartPosts.map((p) => JSON.stringify(p)).join('\n')}\n`, 'utf8')
+  preRestartMeta.headSeq = doneSeq
+  preRestartMeta.coordinatorPendingSeq = doneSeq
+  preRestartMeta.coordinatorNotifiedSeq = doneSeq - 1
+  // Simulate crash after writing inflightReport (baseCompletionSeq=0, while coord already completed unrelated turns!)
+  preRestartMeta.inflightReport = {
+    requestId: `swarm-report:${groupId}:${doneSeq}-${doneSeq}`,
+    fromSeq: doneSeq,
+    toSeq: doneSeq,
+    baseCompletionSeq: 0,
+    hadActiveWorkers: false,
+  }
+  delete preRestartMeta.lastReportHadActiveWorkers
+  writeFileSync(metaPath, `${JSON.stringify(preRestartMeta, null, 2)}\n`, 'utf8')
+
+  const recoveredReportSeen = deferred<string>()
+  const faux2 = makeFauxProvider({ models: [{ id: 'faux-1' }] })
+  faux2.setResponses([
+    (ctx) => {
+      recoveredReportSeen.resolve(JSON.stringify(ctx.messages))
+      return fauxAssistantMessage('Coordinator processed recovered uncommitted report.')
+    },
+  ])
+  const app2 = await createHelmx({
+    buildProvider: createPluginBuildProvider(),
+    dataDir: env1.dataDir,
+    cwd: env1.repoDir,
+    model: 'faux/faux-1',
+    providers: [faux2.provider],
+  })
+  try {
+    const recoveredText = await recoveredReportSeen.promise
+    assert.match(recoveredText, /Uncommitted report must survive unrelated completionSeq bump\./)
+    await waitFor(() => app2.kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+    await app2.kernel.waitForIdle(coordId)
+  } finally {
+    await app2.close()
+  }
+
+  // ---- Part 4: Persisted lastReportHadActiveWorkers idle catch-up across restart even with trailing passive comment ----
+  const metaAfterPart3 = JSON.parse(readFileSync(metaPath, 'utf8')) as CollabGroupRecord
+  const postsAfterPart3 = readFileSync(boardPath, 'utf8')
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line) as BoardPost)
+  const commentSeq = metaAfterPart3.headSeq + 1
+  postsAfterPart3.push({
+    seq: commentSeq,
+    groupId,
+    channel: 'main',
+    from: 'slow',
+    to: ['coordinator'],
+    resolvedTargets: ['coordinator'],
+    wake: false,
+    kind: 'comment',
+    refs: [doneSeq],
+    body: 'Trailing passive comment after done.',
+    createdAt: Date.now(),
+  })
+  writeFileSync(boardPath, `${postsAfterPart3.map((p) => JSON.stringify(p)).join('\n')}\n`, 'utf8')
+  metaAfterPart3.headSeq = commentSeq
+  metaAfterPart3.coordinatorPendingSeq = doneSeq
+  metaAfterPart3.coordinatorNotifiedSeq = doneSeq
+  metaAfterPart3.lastReportHadActiveWorkers = true
+  for (const m of metaAfterPart3.members) {
+    if (m.conversationId === slowId || m.conversationId === fastId) {
+      m.readCursorSeq = commentSeq
+      m.pendingWakeupSeq = commentSeq
+      m.lastPostSeq = commentSeq
+    }
+  }
+  writeFileSync(metaPath, `${JSON.stringify(metaAfterPart3, null, 2)}\n`, 'utf8')
+
+  const catchupSeen = deferred<string>()
+  const faux3 = makeFauxProvider({ models: [{ id: 'faux-1' }] })
+  faux3.setResponses([
+    (ctx) => {
+      catchupSeen.resolve(JSON.stringify(ctx.messages))
+      return fauxAssistantMessage('Coordinator received restarted idle catch-up.')
+    },
+  ])
+  const app3 = await createHelmx({
+    buildProvider: createPluginBuildProvider(),
+    dataDir: env1.dataDir,
+    cwd: env1.repoDir,
+    model: 'faux/faux-1',
+    providers: [faux3.provider],
+  })
+  try {
+    const catchupText = await catchupSeen.promise
+    assert.match(catchupText, /Uncommitted report must survive unrelated completionSeq bump\./)
+    assert.match(catchupText, /Trailing passive comment after done\./)
+    assert.match(catchupText, /activeWorkingMembers: \(none\)/)
+    await waitFor(() => app3.kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+    await app3.kernel.waitForIdle(coordId)
+
+    const finalMeta = JSON.parse(readFileSync(metaPath, 'utf8')) as CollabGroupRecord
+    assert.equal(finalMeta.lastReportHadActiveWorkers, undefined, 'lastReportHadActiveWorkers must clear after idle catch-up')
+  } finally {
+    await app3.close()
   }
 })

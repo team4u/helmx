@@ -70,7 +70,7 @@
 | 分组 | 端口 |
 | :--- | :--- |
 | 外部事件 | `dispatchTrigger(envelope)`（统一 defang 防逃逸投递） |
-| 输入与会话 | `submitInput` / `submitInputGuarded`（均支持 `attachments` 产物 ID 列表，按会话或祖先链授权挂载）、`createConversation / forkConversation / listConversations / getConversation / getConversationDetail / updateConversation / abortConversation / abortConversationGuarded`、`resetConversationGuarded / compactConversationGuarded`（插件自动化专用上下文维护：内核串行域内于 SDK reset/compact 前同步复核归属（human 一律拒绝）与可选 CAS 水位；handoff/instructions 过统一脱敏）、`manageConversation`（删除保护）、`markConversationOwnership` |
+| 输入与会话 | `submitInput` / `submitInputGuarded`（均支持 `attachments` 产物 ID 列表，按会话或祖先链授权挂载）、`createConversation / forkConversation / listConversations / getConversation / getConversationDetail / getConversationSubmission / updateConversation / abortConversation / abortConversationGuarded`、`resetConversationGuarded / compactConversationGuarded`（插件自动化专用上下文维护：内核串行域内于 SDK reset/compact 前同步复核归属（human 一律拒绝）与可选 CAS 水位；handoff/instructions 过统一脱敏）、`manageConversation`（删除保护）、`markConversationOwnership` |
 | 人机审批 | `createAsk / cancelAsk / registerAskSeqResolver`（CAS 水位解析器） |
 | 子代理与执行 | `spawnAgent / runGate / execEnv / resolveSpawnTarget / listActiveSpawnExecutions / withFileMutationQueue` |
 | 动作互调与治理 | `prepareAction / invokeAction / listActions / plugins`（受管包生命周期端口） |

@@ -387,6 +387,8 @@ export function createGroupHandlers(ctx: HelmxPluginContext, coordinator: SwarmC
         draft.closedAt = now
         draft.updatedAt = now
         draft.retainedWorktrees = retainedWorktrees
+        delete draft.lastReportHadActiveWorkers
+        delete draft.inflightReport
         if (input.summary !== undefined && input.summary.trim() !== '') {
           draft.closeSummary = input.summary.trim()
         }

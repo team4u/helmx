@@ -16,6 +16,7 @@ import type {
   ConversationListFilter,
   ConversationPatch,
   ConversationScope,
+  ConversationSubmissionInfo,
   ConversationSummary,
   InputOrigin,
   TurnSettledPayload,
@@ -663,6 +664,15 @@ export interface HelmxHostApi {
     id: number,
     options?: { limit?: number; cursor?: string },
   ): Promise<ConversationDetail>
+  /**
+   * 按幂等 requestId 只读查询会话持久提交状态（供插件恢复对账，绝不凭无关回合状态猜测提交是否生效）：
+   * - 未找到该 requestId 的提交返回 undefined；会话不存在抛 404 not_found；非法 requestId 抛 400 validation_error；
+   * - status 为 'queued' | 'placed' 表示已受理且在途，'done' | 'unanswered' 表示已达终态。
+   */
+  getConversationSubmission(
+    id: number,
+    requestId: string,
+  ): Promise<ConversationSubmissionInfo | undefined>
   /** 部分更新会话；返回更新后的摘要。 */
   updateConversation(id: number, patch: ConversationPatch): Promise<ConversationSummary>
   /** 中止指定会话的在途执行。 */

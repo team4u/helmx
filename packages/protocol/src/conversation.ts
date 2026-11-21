@@ -351,6 +351,16 @@ export interface ConversationLiveMessage {
 /** Turn terminal outcome; the turn_settled hook uniformly covers all three. */
 export type TurnOutcome = 'completed' | 'failed' | 'aborted'
 
+/** Durable lifecycle status of one admitted conversation submission (from pi_submissions). */
+export type ConversationSubmissionStatus = 'queued' | 'placed' | 'done' | 'unanswered'
+
+/** Read-only status snapshot of a conversation submission looked up by `(conversationId, requestId)`. */
+export interface ConversationSubmissionInfo {
+  readonly id: string
+  readonly requestId: string
+  readonly status: ConversationSubmissionStatus
+}
+
 /** Turn settlement payload (shared by the turn_settled hook and the turn.settled event). */
 export interface TurnSettledPayload {
   conversation: ConversationSummary

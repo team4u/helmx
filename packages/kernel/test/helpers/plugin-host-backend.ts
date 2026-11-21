@@ -117,6 +117,13 @@ export class PluginHostBackendFixtureBase implements PluginHostBackend {
     unsupported('host.getConversationDetail')
   }
 
+  getConversationSubmission(
+    ...args: Parameters<NonNullable<Port<'getConversationSubmission'>>>
+  ): ReturnType<NonNullable<Port<'getConversationSubmission'>>> {
+    void args
+    unsupported('host.getConversationSubmission')
+  }
+
   updateConversation(
     ...args: Parameters<Port<'updateConversation'>>
   ): ReturnType<Port<'updateConversation'>> {
@@ -348,6 +355,7 @@ export function createPluginHostBackendFixture(): PluginHostBackend {
     listConversations: f(d.listConversations),
     getConversation: f(d.getConversation),
     getConversationDetail: f(d.getConversationDetail),
+    getConversationSubmission: f(d.getConversationSubmission),
     updateConversation: f(d.updateConversation),
     abortConversation: f(d.abortConversation),
     abortConversationGuarded: f(d.abortConversationGuarded),

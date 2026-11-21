@@ -118,6 +118,7 @@ export function createPluginHostBackend(runtime: KernelRuntime): PluginHostBacke
     listConversations: (filter) => runtime.listConversations(filter),
     getConversation: (id) => runtime.getConversation(id),
     getConversationDetail: (id, options) => runtime.getConversationDetail(id, options),
+    getConversationSubmission: (id, requestId) => runtime.getConversationSubmission(id, requestId),
     updateConversation: (id, patch) => runtime.updateConversation(id, patch),
     abortConversation: (id) => runtime.abortConversation(id),
     abortConversationGuarded: (id, guard) => runtime.abortConversationGuarded(id, guard),

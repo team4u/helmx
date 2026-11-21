@@ -82,6 +82,10 @@ function doctorBackend(): PluginHostBackend {
     listConversations: () => unavailable('host.listConversations'),
     getConversation: () => unavailable('host.getConversation'),
     getConversationDetail: () => unavailable('host.getConversationDetail'),
+    getConversationSubmission: () =>
+      unavailable('host.getConversationSubmission') as never as Promise<
+        import('@helmx/protocol').ConversationSubmissionInfo | undefined
+      >,
     updateConversation: () => unavailable('host.updateConversation'),
     abortConversation: () => unavailable('host.abortConversation'),
     abortConversationGuarded: () => unavailable('host.abortConversationGuarded') as never as Promise<void>,
