@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import type { ModelProviderSummary } from '@helmx/protocol/browser'
 import { assetsApi } from '../lib/api.js'
-import { HelmxIcon, Tabs, TabsContent, TabsList, TabsTrigger } from '@helmx/plugin-client'
+import { HelmxIcon, SearchBox, Tabs, TabsContent, TabsList, TabsTrigger } from '@helmx/plugin-client'
 import {
   useCredentials,
   useLocationTargets,
@@ -356,27 +356,15 @@ export function ModelCenter({
         <TabsContent value="providers" className="primary-center-content">
           {/* Toolbar: search box, category pills and catalog refresh */}
           <div className="primary-center-toolbar model-toolbar-inline">
-            <div className="primary-search-box">
-              <HelmxIcon name="search" size={14} />
-              <input
-                type="text"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder={t('models.searchPlaceholder')}
-                aria-label={t('models.searchAria')}
-              />
-              {query && (
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-sm primary-search-clear"
-                  onClick={() => setQuery('')}
-                  aria-label={t('models.searchClear')}
-                  title={t('models.searchClear')}
-                >
-                  <HelmxIcon name="x" size={12} />
-                </button>
-              )}
-            </div>
+            <SearchBox
+              className="primary-search-box"
+              clearButtonClassName="btn btn-ghost btn-sm primary-search-clear"
+              value={query}
+              onChange={setQuery}
+              placeholder={t('models.searchPlaceholder')}
+              ariaLabel={t('models.searchAria')}
+              clearLabel={t('models.searchClear')}
+            />
 
             <div
               className="primary-category-pills"

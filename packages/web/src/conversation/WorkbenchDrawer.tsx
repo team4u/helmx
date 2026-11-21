@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useState } from 'react'
 import type { ArtifactMetadata, ConversationSummary } from '@helmx/protocol/browser'
-import { HelmxIcon, Dialog, DialogContent, DialogOverlay, DialogPortal, DialogTitle, Tabs, TabsList, TabsTrigger } from '@helmx/plugin-client'
+import { EmptyState, HelmxIcon, Dialog, DialogContent, DialogOverlay, DialogPortal, DialogTitle, Tabs, TabsList, TabsTrigger } from '@helmx/plugin-client'
 import {
   useConversationArtifacts,
   useConversationDetail,
@@ -184,9 +184,7 @@ function ArtifactsTab({ conversationId }: { conversationId: number }) {
 
   if (artifacts.length === 0) {
     return (
-      <div className="empty-state empty-state-compact">
-        <p className="empty-state-title">{t('conv.workbench.noArtifacts')}</p>
-      </div>
+      <EmptyState compact title={t('conv.workbench.noArtifacts')} />
     )
   }
 
@@ -329,9 +327,7 @@ export function WorkbenchDrawer(props: WorkbenchDrawerProps) {
         </TabsList>
         <div className="workbench-body">
           {conversationId === undefined ? (
-            <div className="empty-state empty-state-compact">
-              <p className="empty-state-title">{t('conv.workbench.noActiveConversation')}</p>
-            </div>
+            <EmptyState compact title={t('conv.workbench.noActiveConversation')} />
           ) : activeTab === 'artifacts' ? (
             <ArtifactsTab key={conversationId} conversationId={conversationId} />
           ) : activePanel !== undefined && activePanel.spec !== undefined && activePanel.pluginId !== undefined ? (
@@ -345,9 +341,7 @@ export function WorkbenchDrawer(props: WorkbenchDrawerProps) {
               />
             </div>
           ) : (
-            <div className="empty-state empty-state-compact">
-              <p className="empty-state-title">{t('conv.workbench.tabUnavailable')}</p>
-            </div>
+            <EmptyState compact title={t('conv.workbench.tabUnavailable')} />
           )}
         </div>
             </Tabs>

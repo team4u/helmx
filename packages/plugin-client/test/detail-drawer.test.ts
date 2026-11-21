@@ -89,6 +89,37 @@ test('DetailDrawer SSR: no icon / meta / footer slots render nothing extra; clas
   assert.ok(html.includes('btn btn-ghost btn-sm'), 'close button class is overridable')
 })
 
+test('DetailDrawer SSR: migration slots (titleClassName/metaClassName/belowTitle/overlayClassName/aux/closeIcon) compose verbatim', { timeout: 60_000 }, () => {
+  const html = renderToString(
+    e(
+      DetailDrawer,
+      {
+        open: true,
+        inline: true,
+        onClose: () => {},
+        title: 'Drawer title',
+        titleClassName: 'break-word',
+        meta: 'node-1',
+        metaClassName: 'text-subtle break-word',
+        belowTitle: e('div', { className: 'text-subtle' }, 'machine shared'),
+        overlayClassName: 'skill-drawer-backdrop',
+        className: 'skill-drawer-content',
+        closeButtonClassName: 'btn btn-ghost btn-sm',
+        closeIcon: e('span', { 'aria-hidden': 'true' }, 'X'),
+        aux: e('div', { className: 'nested-confirm' }, 'aux content'),
+      },
+      'body',
+    ),
+  )
+  assert.ok(html.includes('primary-drawer-title break-word'), 'title extension classes append')
+  assert.ok(html.includes('primary-drawer-id mono text-subtle break-word'), 'meta keeps base + extensions')
+  assert.ok(html.includes('>machine shared<'), 'belowTitle renders consumer lines verbatim')
+  assert.ok(html.includes('skill-drawer-backdrop') && html.includes('primary-drawer-backdrop'), 'backdrop extension appends')
+  assert.ok(html.includes('primary-drawer-content skill-drawer-content'), 'content extension appends')
+  assert.ok(html.includes('>X<'), 'closeIcon override renders')
+  assert.ok(html.includes('nested-confirm'), 'aux renders inside the dialog root (after the portal)')
+})
+
 test('DetailDrawer SSR: open=false renders nothing', { timeout: 60_000 }, () => {
   const html = renderToString(e(DetailDrawer, { open: false, onClose: () => {}, title: 'Hidden', children: 'body' }))
   assert.ok(html === '', 'closed drawer renders no markup')

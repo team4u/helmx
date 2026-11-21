@@ -16,7 +16,7 @@
  *
  * This file only exports components and TS types (Fast Refresh friendly).
  */
-import type { KeyboardEvent, ReactNode, Ref } from 'react'
+import type { CSSProperties, KeyboardEvent, ReactNode, Ref } from 'react'
 import { HelmxIcon } from '../icons.js'
 import { usePluginTranslator } from '../i18n.js'
 import { uiCopy } from '../ui-copy.js'
@@ -50,6 +50,12 @@ export interface SearchBoxProps {
   /** Escape-to-clear wiring and other keyboard behavior stays with the caller. */
   onKeyDown?: (event: KeyboardEvent<HTMLInputElement>) => void
   disabled?: boolean
+  /** Container inline styles (layout integration such as flex sizing). */
+  style?: CSSProperties
+  /** Whether to render the single clear button (default true; command-palette style surfaces may clear differently). */
+  clearable?: boolean
+  /** Invoked right after a clear click (e.g. restore input focus); state stays with onChange. */
+  onCleared?: () => void
 }
 
 /** Unified search input shell over the host container-class vocabulary; state stays with the caller. */
@@ -69,9 +75,12 @@ export function SearchBox(props: SearchBoxProps): ReactNode {
     inputRef,
     onKeyDown,
     disabled = false,
+    style,
+    clearable = true,
+    onCleared,
   } = props
   return (
-    <div className={className}>
+    <div className={className} style={style}>
       {icon}
       <input
         ref={inputRef}
@@ -88,7 +97,7 @@ export function SearchBox(props: SearchBoxProps): ReactNode {
         }}
         onKeyDown={onKeyDown}
       />
-      {value !== '' && (
+      {clearable && value !== '' && (
         <button
           type="button"
           className={clearButtonClassName}
@@ -97,6 +106,7 @@ export function SearchBox(props: SearchBoxProps): ReactNode {
           disabled={disabled}
           onClick={() => {
             onChange('')
+            onCleared?.()
           }}
         >
           {clearIcon}

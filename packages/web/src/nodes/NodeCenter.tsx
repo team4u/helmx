@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react'
-import { HelmxIcon } from '@helmx/plugin-client'
+import { HelmxIcon, SearchBox } from '@helmx/plugin-client'
 import { useLocationTargets, useNodes, useStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import type { WebMessageKey } from '../i18n/catalog.js'
@@ -138,27 +138,15 @@ export function NodeCenter({
 
       {/* Toolbar: search input and category pills */}
       <div className="primary-center-toolbar">
-        <div className="primary-search-box">
-          <HelmxIcon name="search" size={14} />
-          <input
-            type="text"
-            placeholder={t('nodes.searchPlaceholder')}
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            aria-label={t('nodes.searchAria')}
-          />
-          {query && (
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm primary-search-clear"
-              title={t('nodes.searchClear')}
-              aria-label={t('nodes.searchClear')}
-              onClick={() => setQuery('')}
-            >
-              <HelmxIcon name="x" size={12} />
-            </button>
-          )}
-        </div>
+        <SearchBox
+          className="primary-search-box"
+          clearButtonClassName="btn btn-ghost btn-sm primary-search-clear"
+          value={query}
+          onChange={setQuery}
+          placeholder={t('nodes.searchPlaceholder')}
+          ariaLabel={t('nodes.searchAria')}
+          clearLabel={t('nodes.searchClear')}
+        />
 
         <div className="primary-category-pills" role="tablist" aria-label={t('nodes.filterAria')}>
           {CATEGORY_TABS.map((tab) => {

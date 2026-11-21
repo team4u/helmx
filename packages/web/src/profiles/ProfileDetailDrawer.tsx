@@ -11,7 +11,7 @@ import {
   validateStarterDraft,
   validateStarterDrafts,
 } from './profile-center-model.js'
-import { HelmxIcon, Checkbox, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle, ModelPickerControl, PluginSlot, Select, type SelectOption, Switch } from '@helmx/plugin-client'
+import { DetailDrawer, HelmxIcon, Checkbox, ModelPickerControl, PluginSlot, Select, type SelectOption, Switch } from '@helmx/plugin-client'
 import { useNodes, useSkills } from '../lib/store-context.js'
 import { summarizeSingleLine } from '../lib/format.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
@@ -340,55 +340,99 @@ export function ProfileDetailDrawer({
     : form.name || form.id || profile?.name || profile?.id || t('profiles.drawer.titleFallback')
 
   return (
-    <Dialog
+    <DetailDrawer
       open={open}
       inline={inline}
-      onOpenChange={(nextOpen) => {
-        if (!nextOpen) handleRequestClose()
-      }}
-    >
-      <DialogPortal inline={inline}>
-        <DialogOverlay className="modal-backdrop primary-drawer-backdrop" />
-        <DialogContent
-          className="primary-drawer-content"
-          role="dialog"
-          aria-label={titleText}
-        >
-          {/* Drawer header */}
-          <div className="primary-drawer-header">
-            <div className="primary-drawer-header-left">
-              <div className="primary-drawer-title-col">
-                <div className="primary-drawer-title-row">
-                  <DialogTitle className="primary-drawer-title break-word">
-                    {titleText}
-                  </DialogTitle>
-                  {isSystem && (
-                    <span className="badge badge-warn" title={t('profiles.drawer.systemPillTitle')}>
-                      <HelmxIcon name="lock" size={10} />
-                      <span>{t('profiles.card.systemPill')}</span>
-                    </span>
-                  )}
-                </div>
-                {!isNew && form.id && (
-                  <div className="mono text-subtle break-word">{form.id}</div>
-                )}
-              </div>
-            </div>
-            <DialogClose asChild>
+      onClose={handleRequestClose}
+      title={titleText}
+      titleClassName="break-word"
+      titleExtra={
+        isSystem ? (
+          <span className="badge badge-warn" title={t('profiles.drawer.systemPillTitle')}>
+            <HelmxIcon name="lock" size={10} />
+            <span>{t('profiles.card.systemPill')}</span>
+          </span>
+        ) : undefined
+      }
+      meta={!isNew && form.id ? form.id : undefined}
+      metaClassName="text-subtle break-word"
+      aria-label={titleText}
+      closeLabel={t('common.close')}
+      footer={
+        <div className="flex-row-between">
+          <div>
+            {canDelete && (
               <button
                 type="button"
-                className="btn btn-ghost btn-icon-sm"
-                aria-label={t('profiles.drawer.closeAria')}
-                title={t('common.close')}
-                onClick={handleRequestClose}
+                className="btn btn-ghost btn-sm text-err"
+                disabled={isSaving || isDeleting}
+                onClick={() => setShowDeleteConfirm(true)}
               >
-                <HelmxIcon name="x" size={14} />
+                <HelmxIcon name="trash" size={13} />
+                <span>{t('profiles.drawer.delete')}</span>
               </button>
-            </DialogClose>
+            )}
           </div>
 
-          {/* Drawer body: form sections */}
-          <div className="primary-drawer-body">
+          <div className="flex-row">
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              disabled={isSaving || isDeleting}
+              onClick={handleRequestClose}
+            >
+              {t('common.cancel')}
+            </button>
+
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              disabled={
+                isSaving ||
+                  isDeleting ||
+                  (isNew && !profileIdValid(form.id.trim()))
+              }
+              onClick={() => void handleSave()}
+            >
+              <HelmxIcon name={isSaving ? 'loader' : 'check'} size={13} />
+              <span>{isSaving ? t('profiles.drawer.saving') : t('profiles.drawer.save')}</span>
+            </button>
+          </div>
+        </div>
+      }
+      aux={
+        <>
+          {/* Delete confirmation dialog */}
+          <ConfirmDialog
+            open={showDeleteConfirm}
+            onOpenChange={setShowDiscardConfirm}
+            title={t('profiles.drawer.delete')}
+            description={t('profiles.drawer.deleteConfirm.body', { name: form.name || form.id })}
+            confirmText={isDeleting ? t('profiles.drawer.deleting') : t('profiles.drawer.deleteConfirm.confirm')}
+            cancelText={t('common.cancel')}
+            danger
+            inline={inline}
+            onConfirm={() => void handleConfirmDelete()}
+          />
+
+          {/* Dirty form guard dialog */}
+          <ConfirmDialog
+            open={showDiscardConfirm}
+            onOpenChange={setShowDiscardConfirm}
+            title={t('profiles.drawer.discardConfirm.title')}
+            description={t('profiles.drawer.discardConfirm.body')}
+            confirmText={t('profiles.drawer.discardConfirm.confirm')}
+            cancelText={t('profiles.drawer.discardConfirm.cancel')}
+            danger
+            inline={inline}
+            onConfirm={() => {
+              setShowDiscardConfirm(false)
+              onClose()
+            }}
+          />
+        </>
+      }
+    >
             {error && (
               <div className="callout callout-error" role="alert">
                 <HelmxIcon name="alert-circle" size={14} />
@@ -732,80 +776,6 @@ export function ProfileDetailDrawer({
                 </div>
               )}
             </section>
-          </div>
-
-          {/* Drawer footer actions */}
-          <div className="primary-drawer-footer flex-row-between">
-            <div>
-              {canDelete && (
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-sm text-err"
-                  disabled={isSaving || isDeleting}
-                  onClick={() => setShowDeleteConfirm(true)}
-                >
-                  <HelmxIcon name="trash" size={13} />
-                  <span>{t('profiles.drawer.delete')}</span>
-                </button>
-              )}
-            </div>
-
-            <div className="flex-row">
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm"
-                disabled={isSaving || isDeleting}
-                onClick={handleRequestClose}
-              >
-                {t('common.cancel')}
-              </button>
-
-              <button
-                type="button"
-                className="btn btn-primary btn-sm"
-                disabled={
-                  isSaving ||
-                  isDeleting ||
-                  (isNew && !profileIdValid(form.id.trim()))
-              }
-                onClick={() => void handleSave()}
-              >
-                <HelmxIcon name={isSaving ? 'loader' : 'check'} size={13} />
-                <span>{isSaving ? t('profiles.drawer.saving') : t('profiles.drawer.save')}</span>
-              </button>
-            </div>
-          </div>
-        </DialogContent>
-      </DialogPortal>
-
-      {/* Delete confirmation dialog */}
-      <ConfirmDialog
-        open={showDeleteConfirm}
-        onOpenChange={setShowDeleteConfirm}
-        title={t('profiles.drawer.delete')}
-        description={t('profiles.drawer.deleteConfirm.body', { name: form.name || form.id })}
-        confirmText={isDeleting ? t('profiles.drawer.deleting') : t('profiles.drawer.deleteConfirm.confirm')}
-        cancelText={t('common.cancel')}
-        danger
-        inline={inline}
-        onConfirm={() => void handleConfirmDelete()}
-      />
-
-      {/* Dirty form guard dialog */}
-      <ConfirmDialog
-        open={showDiscardConfirm}
-        onOpenChange={setShowDiscardConfirm}
-        title={t('profiles.drawer.discardConfirm.title')}
-        description={t('profiles.drawer.discardConfirm.body')}
-        confirmText={t('profiles.drawer.discardConfirm.confirm')}
-        cancelText={t('profiles.drawer.discardConfirm.cancel')}
-        danger
-        inline={inline}
-        onConfirm={() => {
-          setShowDiscardConfirm(false)
-          onClose()
-        }}
-      />
-    </Dialog>
+    </DetailDrawer>
   )
 }

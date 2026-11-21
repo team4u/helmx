@@ -8,7 +8,7 @@ import {
 import type { HelmxLocale, PluginSummary } from '@helmx/protocol/browser'
 import { DEFAULT_HELMX_LOCALE, resolveLocalizedText } from '@helmx/protocol/browser'
 import { ApiClientError, pluginsApi, type PluginConfigResponse } from '../lib/api.js'
-import { HelmxIcon, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle, ModelPickerControl, Switch } from '@helmx/plugin-client'
+import { EmptyState, HelmxIcon, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle, ModelPickerControl, Switch } from '@helmx/plugin-client'
 import { createWebTranslator } from '../i18n/catalog.js'
 import { useOptionalGroupedUi, useOptionalLocale, useOptionalStoreActions } from '../lib/store-context.js'
 import {
@@ -529,7 +529,7 @@ export function PluginDetailDrawer({
           {/* Drawer body */}
           <div className="plugin-drawer-body">
             {!plugin ? (
-              <div className="empty-state">{t('plugins.drawer.noSelection')}</div>
+              <EmptyState>{t('plugins.drawer.noSelection')}</EmptyState>
             ) : (
               <>
                 {/* Quick actions and enable/disable bar */}

@@ -6,12 +6,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import {
   CopyButton,
-  Dialog,
-  DialogClose,
-  DialogContent,
-  DialogOverlay,
-  DialogPortal,
-  DialogTitle,
+  DetailDrawer,
   Select,
   formatBytes,
   formatTime,
@@ -176,39 +171,62 @@ export function WorkflowLibraryDrawer(props: {
   )
 
   return (
-    <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
-      <DialogPortal inline={props.inline}>
-        <DialogOverlay className="modal-backdrop primary-drawer-backdrop" />
-        <DialogContent
-          className="primary-drawer-content workflow-lib-drawer"
-          role="dialog"
-          aria-label={libDrawerAria(item.name, locale)}
-        >
-          <div className="primary-drawer-header">
-            <div className="primary-drawer-header-left">
-              <div className="primary-drawer-icon-wrap">
-                <Icon name="terminal" size={18} />
-              </div>
-              <div className="primary-drawer-title-col">
-                <div className="primary-drawer-title-row">
-                  <DialogTitle className="primary-drawer-title">{item.name}</DialogTitle>
-                  <span className="badge badge-neutral tabular-nums" title={libDefinitionFileTitle(item.path ?? '', locale)}>
-                    {formatBytes(item.size)}
-                  </span>
-                  <span className="badge badge-neutral tabular-nums">{formatTime(item.updatedAt)}</span>
-                  {item.metadataError !== undefined ? <span className="badge badge-warn">{resolveLocalizedText(LIB_METADATA_BADGE, locale)}</span> : null}
-                </div>
-                <div className="primary-drawer-id mono">{item.path ?? item.name}</div>
-              </div>
-            </div>
-            <DialogClose asChild>
-              <button type="button" className="btn btn-ghost btn-sm" aria-label={resolveLocalizedText(LIB_CLOSE, locale)} title={resolveLocalizedText(LIB_CLOSE, locale)}>
-                <Icon name="x" size={14} />
-              </button>
-            </DialogClose>
+    <DetailDrawer
+      open
+      inline={props.inline}
+      onClose={onClose}
+      className="workflow-lib-drawer"
+      title={item.name}
+      titleExtra={
+        <>
+          <span className="badge badge-neutral tabular-nums" title={libDefinitionFileTitle(item.path ?? '', locale)}>
+            {formatBytes(item.size)}
+          </span>
+          <span className="badge badge-neutral tabular-nums">{formatTime(item.updatedAt)}</span>
+          {item.metadataError !== undefined ? <span className="badge badge-warn">{resolveLocalizedText(LIB_METADATA_BADGE, locale)}</span> : null}
+        </>
+      }
+      icon={<Icon name="terminal" size={18} />}
+      meta={item.path ?? item.name}
+      aria-label={libDrawerAria(item.name, locale)}
+      closeLabel={resolveLocalizedText(LIB_CLOSE, locale)}
+      closeButtonClassName="btn btn-ghost btn-sm"
+      closeIcon={<Icon name="x" size={14} />}
+      footer={
+        confirmDelete ? (
+          <div className="workflow-lib-delete-confirm">
+            <span className="text-subtle">{libDeleteConfirm(item.name, locale)}</span>
+            <button
+              type="button"
+              className="btn btn-sm btn-ghost"
+              disabled={deleting}
+              onClick={() => setConfirmDelete(false)}
+            >
+              {resolveLocalizedText(LIB_CANCEL, locale)}
+            </button>
+            <button type="button" className="btn btn-sm btn-danger" disabled={deleting} onClick={remove}>
+              <Icon name="x" size={12} />
+              {deleting ? resolveLocalizedText(LIB_DELETING, locale) : resolveLocalizedText(LIB_DELETE_CONFIRM, locale)}
+            </button>
           </div>
-
-          <div className="primary-drawer-body">
+        ) : (
+          <>
+            <button type="button" className="btn btn-sm btn-ghost" onClick={onClose}>
+              {resolveLocalizedText(LIB_CLOSE, locale)}
+            </button>
+            <button
+              type="button"
+              className="btn btn-sm btn-ghost btn-danger"
+              title={resolveLocalizedText(LIB_DELETE_TITLE, locale)}
+              onClick={() => setConfirmDelete(true)}
+            >
+              <Icon name="x" size={12} />
+              {resolveLocalizedText(LIB_DELETE, locale)}
+            </button>
+          </>
+        )
+      }
+    >
             {item.metadataError !== undefined ? (
               <div className="callout callout--warning">{libMetadataError(item.metadataError, locale)}</div>
             ) : null}
@@ -309,48 +327,11 @@ export function WorkflowLibraryDrawer(props: {
               <pre className="code-block-pre workflow-lib-edit-request selectable"><code>{editRequestText}</code></pre>
               <CopyButton text={editRequestText} label={resolveLocalizedText(LIB_COPY_EDIT_REQUEST, locale)} />
             </div>
-          </div>
 
           {deleteError !== undefined ? (
             <div className="callout callout--error workflow-lib-delete-error">{deleteError}</div>
           ) : null}
 
-          <div className="primary-drawer-footer">
-            {confirmDelete ? (
-              <div className="workflow-lib-delete-confirm">
-                <span className="text-subtle">{libDeleteConfirm(item.name, locale)}</span>
-                <button
-                  type="button"
-                  className="btn btn-sm btn-ghost"
-                  disabled={deleting}
-                  onClick={() => setConfirmDelete(false)}
-                >
-                  {resolveLocalizedText(LIB_CANCEL, locale)}
-                </button>
-                <button type="button" className="btn btn-sm btn-danger" disabled={deleting} onClick={remove}>
-                  <Icon name="x" size={12} />
-                  {deleting ? resolveLocalizedText(LIB_DELETING, locale) : resolveLocalizedText(LIB_DELETE_CONFIRM, locale)}
-                </button>
-              </div>
-            ) : (
-              <>
-                <button type="button" className="btn btn-sm btn-ghost" onClick={onClose}>
-                  {resolveLocalizedText(LIB_CLOSE, locale)}
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-sm btn-ghost btn-danger"
-                  title={resolveLocalizedText(LIB_DELETE_TITLE, locale)}
-                  onClick={() => setConfirmDelete(true)}
-                >
-                  <Icon name="x" size={12} />
-                  {resolveLocalizedText(LIB_DELETE, locale)}
-                </button>
-              </>
-            )}
-          </div>
-        </DialogContent>
-      </DialogPortal>
-    </Dialog>
+    </DetailDrawer>
   )
 }

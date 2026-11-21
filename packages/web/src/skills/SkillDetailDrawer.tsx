@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import type { SkillSummary } from '@helmx/protocol/browser'
-import { HelmxIcon, CopyButton, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle, Select } from '@helmx/plugin-client'
+import { DetailDrawer, EmptyState, HelmxIcon, CopyButton, Select } from '@helmx/plugin-client'
 import type { SelectOption } from '@helmx/plugin-client'
 import { CodeBlockView, MarkdownView } from '../conversation/MarkdownView.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
@@ -140,69 +140,44 @@ export function SkillDetailDrawer({
   const lineCount = content === '' ? 0 : content.split('\n').length
 
   return (
-    <Dialog
+    <DetailDrawer
       open={open}
       inline={inline}
-      onOpenChange={(isOpen) => {
-        if (!isOpen) onClose()
-      }}
-    >
-      <DialogPortal inline={inline}>
-        <DialogOverlay className="modal-backdrop primary-drawer-backdrop skill-drawer-backdrop" />
-        <DialogContent
-          className="primary-drawer-content skill-drawer-content"
-          role="dialog"
-          aria-label={
-            skill
-              ? t('skills.drawer.detailsTitle', { name: skill.name || skill.id })
-              : t('skills.drawer.detailsFallback')
-          }
-        >
-          {/* Drawer top header */}
-          <div className="primary-drawer-header">
-            <div className="primary-drawer-header-left">
-              <div className="primary-drawer-title-col">
-                <div className="primary-drawer-title-row">
-                  <DialogTitle className="primary-drawer-title break-word">
-                    {skill?.name || skill?.id || t('skills.drawer.detailsFallback')}
-                  </DialogTitle>
-                  {sourceBadge && (
-                    <span className={badgeClass} title={t('skills.card.sourceTitle', { label: sourceBadge.label })}>
-                      {sourceBadge.label}
-                    </span>
-                  )}
-                </div>
-                {skill && (
-                  <div className="primary-drawer-id mono text-subtle break-word" title={skill.id}>
-                    {skill.id}
-                  </div>
-                )}
-                {skill?.source === 'agents' && (
-                  <div className="text-subtle">{t('skills.drawer.machineSharedRoot')}</div>
-                )}
-                {skill?.source === 'node' && nodeScope !== undefined && (
-                  <div className="text-subtle break-word" title={`${nodeScope.nodeId} ${nodeScope.cwd}`}>
-                    {t('skills.drawer.nodeSource', { node: nodeScope.nodeId, cwd: nodeScope.cwd })}
-                  </div>
-                )}
-              </div>
+      onClose={onClose}
+      overlayClassName="skill-drawer-backdrop"
+      className="skill-drawer-content"
+      title={skill?.name || skill?.id || t('skills.drawer.detailsFallback')}
+      titleClassName="break-word"
+      titleExtra={
+        sourceBadge ? (
+          <span className={badgeClass} title={t('skills.card.sourceTitle', { label: sourceBadge.label })}>
+            {sourceBadge.label}
+          </span>
+        ) : undefined
+      }
+      meta={skill ? skill.id : undefined}
+      metaClassName="text-subtle break-word"
+      belowTitle={
+        <>
+          {skill?.source === 'agents' && (
+            <div className="text-subtle">{t('skills.drawer.machineSharedRoot')}</div>
+          )}
+          {skill?.source === 'node' && nodeScope !== undefined && (
+            <div className="text-subtle break-word" title={`${nodeScope.nodeId} ${nodeScope.cwd}`}>
+              {t('skills.drawer.nodeSource', { node: nodeScope.nodeId, cwd: nodeScope.cwd })}
             </div>
-            <DialogClose asChild>
-              <button
-                type="button"
-                className="btn btn-ghost btn-icon-sm"
-                aria-label={t('common.close')}
-                title={t('common.close')}
-              >
-                <HelmxIcon name="x" size={14} />
-              </button>
-            </DialogClose>
-          </div>
-
-          {/* Drawer body: outer area does not scroll; the reader is the only scroll container */}
-          <div className="primary-drawer-body">
+          )}
+        </>
+      }
+      aria-label={
+        skill
+          ? t('skills.drawer.detailsTitle', { name: skill.name || skill.id })
+          : t('skills.drawer.detailsFallback')
+      }
+      closeLabel={t('common.close')}
+    >
             {!skill ? (
-              <div className="empty-state">{t('skills.drawer.noSkillSelected')}</div>
+              <EmptyState>{t('skills.drawer.noSkillSelected')}</EmptyState>
             ) : (
               <>
                 {/* Compact file reader: single toolbar row + single scrollable reader */}
@@ -313,9 +288,6 @@ export function SkillDetailDrawer({
                 </div>
               </>
             )}
-          </div>
-        </DialogContent>
-      </DialogPortal>
-    </Dialog>
+    </DetailDrawer>
   )
 }
