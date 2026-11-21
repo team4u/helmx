@@ -17,7 +17,8 @@ HELMX_PORT=3202 pnpm dev        # 前后端一起（Web 3201 -> Hub 3202）
 HELMX_PORT=3202 pnpm dev:kernel # 只起内核
 pnpm dev:web                   # 只起前端（需内核已在 3202）
 pnpm link:bins                 # 可选：在 /usr/local/bin 挂载 helmx / helmx-node / helmx-hub 源码命令
-pnpm build && pnpm typecheck && pnpm lint && pnpm check:hygiene && pnpm test:all # 全量验收（增量异常可加 HELMX_CLEAN_DIST=1）
+pnpm verify                    # 一键全量验收（单次构建 + typecheck:only + lint + check:hygiene + test:all:run；增量异常可加 HELMX_CLEAN_DIST=1）
+pnpm build && pnpm typecheck && pnpm lint && pnpm check:hygiene && pnpm test:all # 独立分步验收等价命令
 ```
 
 ## 2. 架构边界与设计原则
@@ -64,13 +65,13 @@ pnpm build && pnpm typecheck && pnpm lint && pnpm check:hygiene && pnpm test:all
 
 ## 5. 测试分层与执行规范
 
-- **入口与卫生门禁**：分档跑 `pnpm test:unit` / `test:integration` / `test:all`（`scripts/test-suites.mjs`，AST 纯单测自动 `--test-isolation=none` 合片，其余进程隔离；默认最多 16 个测试 worker（不超过可用 CPU 数），`TEST_CONCURRENCY` 可覆写）；日常快速反馈优先跑 `pnpm test:unit` 或 `pnpm check:changed`，均不替代合并前 `pnpm test:all`；单跑指定文件用 `node scripts/run-tests.mjs <file...>`（禁裸跑 `node/tsx --test` 绕过超时看门狗与 `safe-test-assert`），不用过滤管道隐藏失败日志，不依赖 Unix `timeout`。`pnpm check:hygiene` AST 门禁强制四条红线：① 每个 `test/it` 显式 `{ timeout: 60_000 }`；② `skip` 必附理由字符串；③ **禁设 `HELMX_TEST_SUITE_TIMEOUT_MS`**（触发 `env-registry-races` 误报）；④ **禁对 DOM 节点 / `Window` 调 `assert.equal` / `deepEqual`**（防 Fiber 树 `util.inspect` OOM，改用 `assert.ok(a === b)` 或断言标量属性）。
+- **入口与卫生门禁**：分档跑 `pnpm test:unit` / `test:integration` / `test:all`（`scripts/test-suites.mjs`，按 AST 缓存分类拆为 `pure` / `dom-shared` / `node-shared` / `isolated` 四池并结合自动记录的毫秒耗时 LPT 并发调度，前三池走常驻 `shard-worker.mjs` 每文件独立 root suite 复用模块图，`dom-shared` 附带幂等 happy-dom preload 与文件间 DOM 复位，确需独立进程的文件标注 `// @test-isolation: process`，透传额外 CLI 参数时自动回退单入口原生 `tsx --test`；默认最多 16 个测试 worker（不超过可用 CPU 数），`TEST_CONCURRENCY` 可覆写）；日常快速反馈优先跑 `pnpm test:unit` 或 `pnpm check:changed`，均不替代合并前 `pnpm test:all` / `pnpm verify`；单跑指定文件用 `node scripts/run-tests.mjs <file...>`（禁裸跑 `node/tsx --test` 绕过超时看门狗与 `safe-test-assert`），不用过滤管道隐藏失败日志，不依赖 Unix `timeout`。`pnpm check:hygiene` AST 门禁强制四条红线：① 每个 `test/it` 显式 `{ timeout: 60_000 }`；② `skip` 必附理由字符串；③ **禁设 `HELMX_TEST_SUITE_TIMEOUT_MS`**（触发 `env-registry-races` 误报）；④ **禁对 DOM 节点 / `Window` 调 `assert.equal` / `deepEqual`**（防 Fiber 树 `util.inspect` OOM，改用 `assert.ok(a === b)` 或断言标量属性）。
 - **分档与执行规则**：
   - `unit` = `protocol + env-io + test-kit + cli + web + plugin-client`（纯内存 / happy-dom，不起真实服务）——改协议、测试基座、CLI、Web 或浏览器 SDK 必跑；
   - `integration` = `kernel + plugins + hub + plugin-build + node + payload`（真实进程、SQLite、Git、WS、构建、`createHelmx`、daemon、launcher 进程生命周期、共享更新引擎与 payload）——改执行、插件、产品或构建包必跑。**路径级例外**：`packages/cli/test/launcher/`（Hub 生命周期面）与 `packages/env-io/test/update/`（共享更新引擎）两组真实进程测试位于 unit 档包内，但以路径级条目固定归属 `integration` 档（`SUITES` 枚举支持子目录）；
   - 跨档变更两档都跑，合并前跑 `test:all`（不变量 `all = unit ∪ integration` 不重不漏）；新测试文件须落在已登记包的 `test/`，新包同步更新 `scripts/test-suites.mjs`（`SUITES`）与 `scripts/lib/workspace-meta.mjs`（`PACKAGE_TIERS`）。
   - **文档例外**：仅修改独立文档（如 `AGENTS.md`、`docs/`、`README.md` 等，不涉及 `packages/` 代码、脚本、构建配置或受测试校验的内置资产）时，跳过构建与测试跑批，避免无效耗时。
-- **共享基座、防抖与防散沙**：复用 `@helmx/test-kit`（仅限 `devDependencies` 与 `test/`，`package-boundaries` 锁死零生产泄漏）及包级 harness（`cli-harness`、`dom-harness`、`plugin-test-env`、`hub-test-env`、`host-backend-stub`）：临时目录用 `useTempDir`，Git 仓库用 `createGitTemplate().cloneTo()`，子进程环境用 `sanitizedHostEnv` / `makeCliEnv`，Web DOM 用 `ensureHappyDom()`。同步等待用 `deferred` / `waitFor` / 可注入计时参数，禁长固定 `sleep` 与无余量的硬编码墙钟上界断言（超时逃逸须拉大阻塞时长与阈值之比以抗高并发抖动）；纯内存单测保持零全局副作用以便 `test-sharding.mjs` 合片。**三禁**：禁已删功能的历史墓碑测试、禁正则扫描 CSS/TSX 源码的脆弱断言（测 DOM 行为、导出模型或结构不变量）、禁按零散问题新建一两行碎片测试文件（并入对应领域测试）。
+- **共享基座、防抖与防散沙**：复用 `@helmx/test-kit`（仅限 `devDependencies` 与 `test/`，`package-boundaries` 锁死零生产泄漏）及包级 harness（`cli-harness`、`dom-harness`、`plugin-test-env`、`hub-test-env`、`host-backend-stub`）：临时目录用 `useTempDir`，Git 仓库用 `createGitTemplate().cloneTo()`，子进程环境用 `sanitizedHostEnv` / `makeCliEnv`，Web/plugin-client DOM 测试首行 `import './helpers/register-happy-dom.js'` 并用 `ensureHappyDom()` / `resetHappyDom()`（禁裸调 `GlobalRegistrator.register()` 或泄漏 `document`/存储/模块单例）。同步等待用 `deferred` / `waitFor` / 可注入计时参数，禁长固定 `sleep` 与无余量的硬编码墙钟上界断言（超时逃逸须拉大阻塞时长与阈值之比以抗高并发抖动）；共享池单测保持零跨文件全局副作用（真实变更进程环境/信号的用例用 `// @test-isolation: process` 显式入 `isolated` 池）。**三禁**：禁已删功能的历史墓碑测试、禁正则扫描 CSS/TSX 源码的脆弱断言（测 DOM 行为、导出模型或结构不变量）、禁按零散问题新建一两行碎片测试文件（并入对应领域测试）。
 - **快速反馈门（补充而非替代）**：`pnpm check:changed` 按变更集（已提交 ∪ 暂存/未暂存 ∪ 未跟踪；`--base <ref>` 优先，默认取 upstream 或 `origin/HEAD` 的 merge-base，均无则报错要求 `--base`，绝不退化 `HEAD~1`；传参如 `pnpm check:changed -- --base main --list`）选反向闭包受影响包（锁文件/根配置/`scripts/**/*.mjs` 触发全档），顺序执行 `pnpm typecheck` → 受影响包测试；配合 `pnpm check:hygiene` 提供增量快速反馈，不替代分档必跑与合并前 `test:all`。
 - **进程 kill 纪律**：只允许终止**自己 spawn 并持有 PID/句柄**的进程（POSIX：独立进程组 `kill(-pid)`，宽限后 SIGKILL；Windows：`taskkill /PID <pid> /T /F` 杀 owned `ChildProcess` 整棵树，参考 `scripts/run-tests.mjs`）；确需按端口清理时，必须先核验监听进程的 cwd 与实际归属再终止。**严禁按模糊名称/路径发信号（如 `pkill -f`、`pgrep | xargs kill`、`taskkill /IM`）**（会误杀他人会话、其他 worktree 的 dev 服务与无关系统进程），严禁猜测 PID。
 
