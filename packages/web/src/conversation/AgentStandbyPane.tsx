@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { ConversationSummary, Profile } from '@helmx/protocol/browser'
+import { COMPOSER_STATUS_SLOT, type ComposerStatusSlotProps, type ConversationSummary, type Profile } from '@helmx/protocol/browser'
 import { assetsApi, conversationsApi } from '../lib/api.js'
 import {
   buildSlashMenuItems,
@@ -11,7 +11,7 @@ import {
 } from '../lib/commands-model.js'
 import { formatBytes } from '../lib/format.js'
 import { errorText } from '../lib/error-text.js'
-import { HelmxIcon, ModelPickerControl, Select, useHostModels, type SelectOption } from '@helmx/plugin-client'
+import { HelmxIcon, ModelPickerControl, PluginSlot, Select, useHostModels, type SelectOption } from '@helmx/plugin-client'
 import { isSameResolvedTarget, type ResolvedTarget } from '../lib/types.js'
 import {
   useConversations,
@@ -529,6 +529,11 @@ function StandbyComposer({
   // Once anchored, every creation-affecting configuration locks: retries skip
   // create, new settings never apply; controls may stay visible but inert.
   const configLocked = busy || anchored
+  const effectiveModel = anchoredConversation?.model || resolveStandbyEffectiveModel(
+    draft.model,
+    profile.model,
+    defaultModelInfo?.defaultModel,
+  )
 
   useLayoutEffect(() => {
     autoGrowTextarea(textareaRef.current)
@@ -788,6 +793,14 @@ function StandbyComposer({
               </button>
             </span>
           </div>
+        </div>
+        <div className="composer-status-row">
+          <PluginSlot
+            ownerPluginId="builtin:composer"
+            name={COMPOSER_STATUS_SLOT}
+            className="composer-status-slot"
+            slotProps={{ effectiveModel, profileId: profile.id } satisfies ComposerStatusSlotProps}
+          />
         </div>
       </div>
     </div>

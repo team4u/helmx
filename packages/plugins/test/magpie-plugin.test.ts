@@ -29,7 +29,8 @@ import { fileURLToPath } from 'node:url'
 
 import { createModels } from '@earendil-works/pi-ai/models'
 import type { Provider } from '@earendil-works/pi-ai'
-import { HelmxError, resolveLocalizedText, type ConversationSummary } from '@helmx/protocol'
+import { COMPOSER_STATUS_SLOT, HelmxError, resolveLocalizedText, type ConversationSummary } from '@helmx/protocol'
+import { quotaRows } from '../src/magpie/quota.js'
 import { MAGPIE_COL_PROVIDER } from '../src/magpie/client/copy.js'
 import {
   PluginHost,
@@ -338,6 +339,8 @@ const waitFor = (predicate: () => boolean | Promise<boolean>, timeoutMs = 5_000)
 interface StatusView {
   gatewayUrl: string; configuredRoot: boolean; local: boolean; reachable: boolean
   modelCount: number; groupCount: number; summaryText: string; lastError?: string; lastRefreshedAt?: number
+  quotasRefreshedAt?: number; quotasUpdatedAt?: number; quotasError?: string
+  modelOwners: Record<string, string>; groupProviders?: Record<string, string[]>
   quotas: Array<Record<string, unknown>>; routes: Array<Record<string, unknown>>; diagnostics: string[]
 }
 
@@ -514,8 +517,11 @@ test('magpie6: 启用经 providers 端口挂载并拉取目录；停用后注销
 
     const actions = env.host.listActions().filter((a) => a.pluginId === MAGPIE).map((a) => a.id).sort()
     assert.deepEqual(actions, ['group', 'groups', 'quota', 'refresh', 'status'])
-    const surfaces = env.host.listUi().filter((u) => u.pluginId === MAGPIE).map((u) => u.surface).sort()
-    assert.deepEqual(surfaces, ['commandPalette', 'settings.panel'])
+    const uiItems = env.host.listUi().filter((u) => u.pluginId === MAGPIE)
+    const surfaces = uiItems.map((u) => u.surface).sort()
+    assert.deepEqual(surfaces, ['commandPalette', 'plugin.slot', 'settings.panel'])
+    const statusSlot = uiItems.find((u) => u.surface === 'plugin.slot')
+    assert.equal((statusSlot?.spec as { target?: string })?.target, COMPOSER_STATUS_SLOT)
 
     await waitFor(() => statusDoc(env).reachable === true)
     const doc = statusDoc(env)
@@ -1075,3 +1081,164 @@ test('magpie22: stop() 取消启动后台刷新任务，停止后不再写 statu
     }
   }
 })
+
+// ---------------------------------------------------------------------------
+// 23-24. 配额投影扩展（单位/池子/主账号）、modelOwners、onlyIfChanged 轮询与 refreshIntervalSec 配置
+// ---------------------------------------------------------------------------
+
+test('magpie23: quotaRows 保留非百分比单位、pool、last、readAt、resetsAt 与错误字段', { timeout: 60_000 }, () => {
+  const now = Date.parse('2026-11-21T12:00:00Z')
+  const resetsAt = '2026-11-21T14:00:00Z'
+  const rows = quotaRows(
+    [
+      {
+        provider: 'antigravity-bridge',
+        alias: 'halt',
+        user: 'halt@example.com',
+        last: true,
+        lastServedAt: '2026-11-21T11:59:00Z',
+        readAt: '2026-11-21T11:58:00Z',
+        windows: [
+          { name: 'Gemini · 5 hours', pool: 'Gemini', remaining: 96, resetsAt, display: '4% used' },
+          { name: 'Unlimited tier', unlimited: true, used: 0 },
+          { name: 'Text reading', text: true, used: 0, display: '0 / 6900' },
+          { name: 'Wallet', balance: 12.5, unit: 'USD', used: 0 },
+        ],
+      },
+      {
+        provider: 'ai-studio',
+        user: 'key-1',
+        error: 'external service exposes no quota API',
+        windows: [],
+      },
+      {
+        provider: 'openrouter',
+        kind: 'balance',
+        user: 'key-2',
+        balance: '$8.40',
+        windows: [],
+      },
+    ],
+    now,
+  )
+
+  assert.equal(rows.length, 6)
+  assert.equal(rows[0]!.account, 'halt', '优先展示 alias')
+  assert.equal(rows[0]!.pool, 'Gemini')
+  assert.equal(rows[0]!.last, true)
+  assert.equal(rows[0]!.resetsAt, resetsAt)
+  assert.equal(rows[0]!.resetText, '2h')
+  assert.equal(rows[0]!.remainingPercent, 96)
+  assert.equal(rows[0]!.displayText, '4% used')
+  assert.equal(rows[0]!.readAt, '2026-11-21T11:58:00Z')
+
+  assert.equal(rows[1]!.remainingPercent, -1, 'unlimited 不得把 used=0 误算成 100%')
+  assert.equal(rows[1]!.unlimited, true)
+  assert.equal(rows[1]!.displayText, '∞')
+
+  assert.equal(rows[2]!.remainingPercent, -1, 'text 窗口不得把 used=0 误算成 100%')
+  assert.equal(rows[2]!.displayText, '0 / 6900')
+
+  assert.equal(rows[3]!.remainingPercent, -1, '预付余额不得把 used=0 误算成 100%')
+  assert.equal(rows[3]!.displayText, '$12.50')
+
+  assert.equal(rows[4]!.error, 'external service exposes no quota API')
+  assert.equal(rows[4]!.remainingPercent, -1)
+
+  assert.equal(rows[5]!.displayText, '$8.40')
+  assert.equal(rows[5]!.windowLabel, 'Balance')
+})
+
+test('magpie24: status 暴露 modelOwners / groupProviders；onlyIfChanged 轮询无变更跳过目录落盘、变更时热更新；quota 回写 status', { timeout: 60_000 }, async () => {
+  const backend: FakeBackend = {
+    models: {
+      data: [
+        { id: 'auto/gemini-4-carbon', native_endpoints: ['/v1/messages'], owned_by: 'antigravity-bridge' },
+        { id: 'group/relay', native_endpoints: [], owned_by: 'opencode-go' },
+        { id: 'zhipu/glm-5.3', native_endpoints: [] },
+      ],
+    },
+    quotas: QUOTAS,
+    trace: TRACE,
+  }
+  let hostRefreshCount = 0
+  const env = await makeEnv({
+    backendAtDefault: backend,
+  })
+  // 包装 refreshModels 以计数（仍委托真实 models.refresh）
+  const origRefresh = env.models.refresh.bind(env.models)
+  const refreshSpy = mock.method(env.models, 'refresh', async (opts?: Parameters<typeof origRefresh>[0]) => {
+    hostRefreshCount += 1
+    return origRefresh(opts)
+  })
+  try {
+    await env.host.enable(MAGPIE)
+    await waitFor(() => statusDoc(env).reachable === true && statusDoc(env).routes.length > 0)
+
+    const initial = statusDoc(env)
+    assert.deepEqual(initial.modelOwners, {
+      'auto/gemini-4-carbon': 'antigravity-bridge',
+      'group/relay': 'opencode-go',
+      'zhipu/glm-5.3': 'zhipu',
+    })
+    assert.deepEqual(initial.groupProviders?.['group/relay'], ['opencode-go', 'moonshot'])
+    assert.equal(initial.quotasRefreshedAt, undefined, '启动侧读使用 kept=1，不冒充供应商实时刷新')
+
+    const refreshBeforePoll = hostRefreshCount
+    // 1) 目录未变化时，onlyIfChanged 跳过 host.refreshModels（零磁盘重写 / 零全站资产风暴），但走实时配额接口
+    const pollRes = (await env.host.invokeAction(MAGPIE, 'refresh', { onlyIfChanged: true })) as {
+      refreshed: boolean
+      modelCount: number
+      reachable: boolean
+    }
+    assert.deepEqual(pollRes, { refreshed: true, modelCount: 3, reachable: true })
+    assert.equal(hostRefreshCount, refreshBeforePoll, '目录未变时不得重复触发 host.refreshModels')
+    assert.ok(typeof statusDoc(env).quotasRefreshedAt === 'number', '实时轮询成功推进 quotasRefreshedAt')
+    const lastQuotaCall = env.fetchState.calls.filter((c) => c.includes('/v1/magpie/quotas')).at(-1)!
+    assert.equal(lastQuotaCall.includes('kept=1'), false, '自动轮询拉取最新配额不带 kept=1')
+
+    // 2) 网关新增模型后，下一次 onlyIfChanged 立刻感知并触发 host.refreshModels 热更新模型目录与 modelOwners
+    backend.models = {
+      data: [
+        { id: 'auto/gemini-4-carbon', native_endpoints: ['/v1/messages'], owned_by: 'antigravity-bridge' },
+        { id: 'group/relay', native_endpoints: [], owned_by: 'opencode-go' },
+        { id: 'zhipu/glm-5.3', native_endpoints: [] },
+        { id: 'auto/gpt-6.2-sol', native_endpoints: ['/v1/responses'], owned_by: 'newapi' },
+      ],
+    }
+    const pollChanged = (await env.host.invokeAction(MAGPIE, 'refresh', { onlyIfChanged: true })) as {
+      refreshed: boolean
+      modelCount: number
+      reachable: boolean
+    }
+    assert.equal(pollChanged.modelCount, 4)
+    assert.equal(hostRefreshCount, refreshBeforePoll + 1, '目录变化时必须触发真实目录刷新')
+    assert.equal(statusDoc(env).modelOwners['auto/gpt-6.2-sol'], 'newapi')
+
+    // 3) quota 动作失败时保留旧 quotas 缓存并如实记录 quotasError，再显式抛出 502
+    backend.failQuotas = 'upstream timeout'
+    await assert.rejects(
+      () => env.host.invokeAction(MAGPIE, 'quota', {}),
+      (err: unknown) => err instanceof HelmxError && err.code === 'magpie_gateway_unreachable' && err.status === 502,
+    )
+    assert.ok(statusDoc(env).quotas.length > 0, '实时配额拉取失败保留旧缓存便于诚实展示过期读数')
+    assert.match(statusDoc(env).quotasError ?? '', /upstream timeout/)
+
+    // 4) 恢复后调用 quota 动作：写回最新配额并清除 quotasError
+    backend.failQuotas = undefined
+    await env.host.invokeAction(MAGPIE, 'quota', {})
+    assert.equal(statusDoc(env).quotasError, undefined, '成功后必须清除旧 quotasError')
+
+    // 5) configSchema 声明 refreshIntervalSec（默认 5 秒，整数 0..3600）
+    const intervalField = env.host.getConfigSchema(MAGPIE)['refreshIntervalSec']
+    assert.equal(intervalField?.type, 'number')
+    assert.equal(intervalField?.default, 5)
+    assert.equal(intervalField?.minimum, 0)
+    assert.equal(intervalField?.maximum, 3600)
+    assert.equal(intervalField?.integer, true)
+  } finally {
+    refreshSpy.mock.restore()
+    await env.close()
+  }
+})
+

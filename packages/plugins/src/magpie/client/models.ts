@@ -9,6 +9,22 @@
 import { DEFAULT_HELMX_LOCALE, type HelmxLocale } from '@helmx/plugin-client'
 import { magpieBoolLabel } from './copy.ts'
 
+export interface MagpieStatusQuotaView {
+  provider: string
+  account?: string
+  windowLabel?: string
+  remainingPercent: number
+  resetText?: string
+  resetsAt?: string
+  displayText?: string
+  unlimited?: boolean
+  pool?: string
+  last?: boolean
+  lastServedAt?: string
+  readAt?: string
+  error?: string
+}
+
 /** Display field subset of MagpieStatusDoc. */
 export interface MagpieStatusView {
   gatewayUrl: string
@@ -19,8 +35,13 @@ export interface MagpieStatusView {
   groupCount: number
   lastRefreshedAt?: number
   lastError?: string
+  quotasRefreshedAt?: number
+  quotasUpdatedAt?: number
+  quotasError?: string
   summaryText: string
-  quotas: Array<{ provider: string; account?: string; windowLabel?: string; remainingPercent: number; resetText?: string }>
+  modelOwners: Record<string, string>
+  groupProviders: Record<string, string[]>
+  quotas: MagpieStatusQuotaView[]
   routes: Array<{ group: string; strategy?: string; provider?: string; model?: string; timestamp?: string }>
   diagnostics: string[]
 }
@@ -33,13 +54,35 @@ const EMPTY: MagpieStatusView = {
   modelCount: 0,
   groupCount: 0,
   summaryText: '',
+  modelOwners: {},
+  groupProviders: {},
   quotas: [],
   routes: [],
   diagnostics: [],
 }
 
+function parseModelOwners(raw: unknown): Record<string, string> {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return {}
+  const out: Record<string, string> = {}
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof v === 'string' && v.trim() !== '') out[k] = v.trim()
+  }
+  return out
+}
+
+function parseGroupProviders(raw: unknown): Record<string, string[]> {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return {}
+  const out: Record<string, string[]> = {}
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (!Array.isArray(v)) continue
+    const items = v.filter((item): item is string => typeof item === 'string' && item.trim() !== '').map((item) => item.trim())
+    if (items.length > 0) out[k] = items
+  }
+  return out
+}
+
 /** Lenient read of the status doc (missing fields fall back to safe defaults). */
-export function parseStatus(doc: MagpieStatusView | undefined): MagpieStatusView {
+export function parseStatus(doc: Partial<MagpieStatusView> | undefined): MagpieStatusView {
   if (doc === undefined || typeof doc !== 'object') return EMPTY
   return {
     gatewayUrl: typeof doc.gatewayUrl === 'string' ? doc.gatewayUrl : '',
@@ -50,7 +93,12 @@ export function parseStatus(doc: MagpieStatusView | undefined): MagpieStatusView
     groupCount: typeof doc.groupCount === 'number' ? doc.groupCount : 0,
     lastRefreshedAt: typeof doc.lastRefreshedAt === 'number' ? doc.lastRefreshedAt : undefined,
     lastError: typeof doc.lastError === 'string' ? doc.lastError : undefined,
+    quotasRefreshedAt: typeof doc.quotasRefreshedAt === 'number' ? doc.quotasRefreshedAt : undefined,
+    quotasUpdatedAt: typeof doc.quotasUpdatedAt === 'number' ? doc.quotasUpdatedAt : undefined,
+    quotasError: typeof doc.quotasError === 'string' ? doc.quotasError : undefined,
     summaryText: typeof doc.summaryText === 'string' ? doc.summaryText : '',
+    modelOwners: parseModelOwners(doc.modelOwners),
+    groupProviders: parseGroupProviders(doc.groupProviders),
     quotas: Array.isArray(doc.quotas) ? doc.quotas : [],
     routes: Array.isArray(doc.routes) ? doc.routes : [],
     diagnostics: Array.isArray(doc.diagnostics) ? doc.diagnostics.filter((d) => typeof d === 'string') : [],
@@ -67,4 +115,20 @@ export function quotaTone(remainingPercent: number): 'ok' | 'warn' | 'err' {
   if (remainingPercent < 5) return 'err'
   if (remainingPercent < 20) return 'warn'
   return 'ok'
+}
+
+/** Display tone for a quota row (distinguishes non-percentage / unlimited / error rows honestly). */
+export function quotaRowTone(row: Pick<MagpieStatusQuotaView, 'remainingPercent' | 'unlimited' | 'error'>): 'ok' | 'warn' | 'err' | 'neutral' {
+  if (row.unlimited) return 'ok'
+  if (row.error) return 'warn'
+  if (row.remainingPercent < 0) return 'neutral'
+  return quotaTone(row.remainingPercent)
+}
+
+/** Settings-table display text for a quota row's remaining column. */
+export function quotaRowRemainingText(row: Pick<MagpieStatusQuotaView, 'remainingPercent' | 'displayText' | 'unlimited' | 'error'>): string {
+  if (row.unlimited) return '∞'
+  if (row.remainingPercent >= 0) return `${row.remainingPercent}%`
+  if (row.displayText) return row.displayText
+  return row.error ? 'n/a' : '—'
 }

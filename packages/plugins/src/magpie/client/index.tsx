@@ -4,6 +4,11 @@
  * - MagpieSettingsPanel: settings panel (gateway status / diagnostics /
  *   quotas / route history; live subscription to the 'status' doc; the
  *   refresh action goes through ctx.callAction).
+ * - MagpieComposerQuotaStatus: composer status-row slot contribution
+ *   (COMPOSER_STATUS_SLOT) showing ONLY the currently active Magpie model's
+ *   single primary account inline, with a click-to-open Radix Popover listing
+ *   ONLY that model's related accounts and windows, plus configurable
+ *   foreground auto-refresh (default 5s, 0 disables).
  *
  * Honesty: when reachable=false the model count is labeled as a cached
  * count; lastError and diagnostics are shown verbatim; the apiKey never
@@ -13,21 +18,53 @@
  * independent language state, no localStorage); backend error messages pass
  * through unchanged.
  */
-import { useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './styles.css'
 import type { ReactNode } from 'react'
-import { formatTime, usePluginContext, usePluginDoc, usePluginLocale, usePluginTranslator } from '@helmx/plugin-client'
+import type { ComposerStatusSlotProps } from '@helmx/protocol/browser'
+import {
+  formatTime,
+  HelmxIcon,
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+  useHostModels,
+  usePluginConfig,
+  usePluginContext,
+  usePluginDoc,
+  usePluginLocale,
+  usePluginTranslator,
+  useSharedNowMs,
+} from '@helmx/plugin-client'
 import {
   boolLabel,
   parseStatus,
-  quotaTone,
+  quotaRowRemainingText,
+  quotaRowTone,
   type MagpieStatusView,
 } from './models.ts'
 import {
+  inlineSummaryWindows,
+  resolveEffectiveMagpieModel,
+  resolveRefreshIntervalSec,
+  selectModelQuotas,
+  type FormattedQuotaWindow,
+  type ModelQuotaAccount,
+} from './quota-model.ts'
+import { noteMagpieManualRefresh, subscribeMagpieAutoRefresh } from './auto-refresh.ts'
+import {
   MAGPIE_COL_PROVIDER,
+  MAGPIE_COMPOSER_ACTIVE_ACCOUNT,
+  MAGPIE_COMPOSER_DEFAULT_ACCOUNT,
+  MAGPIE_COMPOSER_NO_WINDOW_DATA,
+  MAGPIE_COMPOSER_QUOTA_ARIA,
+  MAGPIE_COMPOSER_QUOTA_NA_SHORT,
+  MAGPIE_COMPOSER_REFRESH_NOW,
+  MAGPIE_COMPOSER_ROUTING_GROUP_PREFIX,
   MAGPIE_DIAGNOSTICS_COL,
   MAGPIE_DIAGNOSTICS_EMPTY,
   MAGPIE_DIAGNOSTICS_SECTION,
+  MAGPIE_KV_AUTO_REFRESH,
   MAGPIE_KV_GATEWAY_URL,
   MAGPIE_KV_GROUPS,
   MAGPIE_KV_LAST_ERROR,
@@ -52,6 +89,9 @@ import {
   MAGPIE_ROUTES_EMPTY,
   MAGPIE_ROUTES_SECTION,
   MAGPIE_TITLE,
+  magpieMoreAccountsTitle,
+  magpieRefreshIntervalLabel,
+  magpieRelativeAgeLabel,
 } from './copy.ts'
 
 import { Activity, Gauge, Loader2, RefreshCw, Route, Server } from 'lucide-react'
@@ -74,7 +114,7 @@ function ActionError({ message }: { message: string }): ReactNode {
 }
 
 /** Gateway status overview (KeyValueList-shaped layout). */
-function StatusSummary({ status }: { status: MagpieStatusView }): ReactNode {
+function StatusSummary({ status, refreshIntervalSec }: { status: MagpieStatusView; refreshIntervalSec: number }): ReactNode {
   const locale = usePluginLocale()
   const t = usePluginTranslator()
   return (
@@ -93,6 +133,8 @@ function StatusSummary({ status }: { status: MagpieStatusView }): ReactNode {
       <div className="kv-val">{status.modelCount}</div>
       <div className="kv-key">{t(MAGPIE_KV_GROUPS)}</div>
       <div className="kv-val">{status.groupCount}</div>
+      <div className="kv-key">{t(MAGPIE_KV_AUTO_REFRESH)}</div>
+      <div className="kv-val mono tabular-nums">{magpieRefreshIntervalLabel(refreshIntervalSec, locale)}</div>
       <div className="kv-key">{t(MAGPIE_KV_LAST_REFRESHED)}</div>
       <div className="kv-val">{formatTime(status.lastRefreshedAt) || '—'}</div>
       {status.lastError !== undefined ? (
@@ -134,7 +176,7 @@ function DiagnosticsTable({ diagnostics }: { diagnostics: string[] }): ReactNode
   )
 }
 
-/** Quota table (remaining percent colored by threshold). */
+/** Quota table (remaining percent / raw unit colored by threshold). */
 function QuotaTable({ quotas }: { quotas: MagpieStatusView['quotas'] }): ReactNode {
   const t = usePluginTranslator()
   return (
@@ -163,8 +205,8 @@ function QuotaTable({ quotas }: { quotas: MagpieStatusView['quotas'] }): ReactNo
                 <td>{q.account ?? '—'}</td>
                 <td>{q.windowLabel ?? '—'}</td>
                 <td>
-                  <span className={`badge badge-${quotaTone(q.remainingPercent)}`}>
-                    <span>{q.remainingPercent}</span>
+                  <span className={`badge badge-${quotaRowTone(q)}`}>
+                    <span>{quotaRowRemainingText(q)}</span>
                   </span>
                 </td>
                 <td>{q.resetText ?? '—'}</td>
@@ -221,7 +263,9 @@ export function MagpieSettingsPanel(): ReactNode {
   const ctx = usePluginContext()
   const t = usePluginTranslator()
   const doc = usePluginDoc<MagpieStatusView>('status')
+  const config = usePluginConfig()
   const status = parseStatus(doc)
+  const refreshIntervalSec = resolveRefreshIntervalSec(config)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | undefined>(undefined)
 
@@ -231,6 +275,9 @@ export function MagpieSettingsPanel(): ReactNode {
     setError(undefined)
     void ctx
       .callAction('refresh', {})
+      .then(() => {
+        noteMagpieManualRefresh()
+      })
       .catch((err: unknown) => {
         setError(err instanceof Error ? err.message : String(err))
       })
@@ -257,7 +304,7 @@ export function MagpieSettingsPanel(): ReactNode {
         <DocLoading label={t(MAGPIE_LOADING)} />
       ) : (
         <>
-          <StatusSummary status={status} />
+          <StatusSummary status={status} refreshIntervalSec={refreshIntervalSec} />
           <div className="screen-section">
             <div className="screen-section-title">
               <Activity size={12} strokeWidth={1.75} />
@@ -282,5 +329,264 @@ export function MagpieSettingsPanel(): ReactNode {
         </>
       )}
     </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Composer status-row quota indicator (COMPOSER_STATUS_SLOT)
+// ---------------------------------------------------------------------------
+
+function InlineWindowItems({ account }: { account: ModelQuotaAccount }): ReactNode {
+  const t = usePluginTranslator()
+  if (account.windows.length === 0) {
+    return <span className="magpie-quota-trigger-item">{t(MAGPIE_COMPOSER_QUOTA_NA_SHORT)}</span>
+  }
+  const { visible, hiddenCount } = inlineSummaryWindows(account)
+  return (
+    <span className="magpie-quota-trigger-items mono tabular-nums">
+      {visible.map((win, index) => (
+        <Fragment key={`${win.label}:${index}`}>
+          {index > 0 ? <span className="magpie-quota-trigger-sep" aria-hidden="true">·</span> : null}
+          <span className="magpie-quota-trigger-item">
+            <span>{win.label}</span>
+            <span>{win.valueText}</span>
+            {win.resetText ? <span className="magpie-quota-trigger-reset">({win.resetText})</span> : null}
+          </span>
+        </Fragment>
+      ))}
+      {hiddenCount > 0 ? (
+        <>
+          <span className="magpie-quota-trigger-sep" aria-hidden="true">·</span>
+          <span className="magpie-quota-trigger-item">+{hiddenCount}</span>
+        </>
+      ) : null}
+    </span>
+  )
+}
+
+function PopoverWindowRow({ win }: { win: FormattedQuotaWindow }): ReactNode {
+  const toneClass =
+    win.tone === 'err'
+      ? ' magpie-quota-window-value--err'
+      : win.tone === 'warn'
+        ? ' magpie-quota-window-value--warn'
+        : win.tone === 'ok'
+          ? ' magpie-quota-window-value--ok'
+          : ''
+  return (
+    <div className="magpie-quota-window-row">
+      <span className="magpie-quota-window-label">{win.label}</span>
+      <span className="magpie-quota-window-metrics mono tabular-nums">
+        {win.detailText ? <span className="magpie-quota-window-detail">{win.detailText}</span> : null}
+        <span className={`magpie-quota-window-value${toneClass}`}>{win.valueText}</span>
+        {win.resetText ? <span className="magpie-quota-window-reset">{win.resetText}</span> : null}
+      </span>
+    </div>
+  )
+}
+
+function PopoverAccountSection({
+  account,
+  isPrimary,
+  showActiveBadge,
+}: {
+  account: ModelQuotaAccount
+  isPrimary: boolean
+  showActiveBadge: boolean
+}): ReactNode {
+  const t = usePluginTranslator()
+  const displayName = account.account ?? t(MAGPIE_COMPOSER_DEFAULT_ACCOUNT)
+  return (
+    <div className="magpie-quota-account">
+      <div className="magpie-quota-account-header">
+        <span className="magpie-quota-account-name" title={displayName}>
+          {displayName}
+        </span>
+        {showActiveBadge && isPrimary ? (
+          <span className="magpie-quota-account-badge">{t(MAGPIE_COMPOSER_ACTIVE_ACCOUNT)}</span>
+        ) : null}
+      </div>
+      {account.windows.length > 0 ? (
+        account.windows.map((win, idx) => <PopoverWindowRow key={`${win.label}:${idx}`} win={win} />)
+      ) : (
+        <div className="magpie-quota-window-detail">
+          {account.error ?? t(MAGPIE_COMPOSER_NO_WINDOW_DATA)}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * Current-model Magpie quota indicator contributed into COMPOSER_STATUS_SLOT:
+ * - Renders null for non-Magpie models (zero height, zero polling);
+ * - Inline displays ONLY the single primary account's windows for the active model;
+ * - Click opens a Radix Popover listing ONLY the active model's related accounts and windows,
+ *   plus freshness age and manual refresh;
+ * - Foreground polling refreshes models and quotas at `refreshIntervalSec` (default 5s, 0 off).
+ */
+export function MagpieComposerQuotaStatus(props: ComposerStatusSlotProps): ReactNode {
+  const ctx = usePluginContext()
+  const locale = usePluginLocale()
+  const t = usePluginTranslator()
+  const doc = usePluginDoc<MagpieStatusView>('status')
+  const hostModels = useHostModels()
+  const config = usePluginConfig()
+  const [open, setOpen] = useState(false)
+  const [manualRefreshing, setManualRefreshing] = useState(false)
+  const [manualError, setManualError] = useState<string | undefined>(undefined)
+  const [lastCheckedAt, setLastCheckedAt] = useState<number | undefined>(undefined)
+  const [pollError, setPollError] = useState<string | undefined>(undefined)
+
+  const rawModel = props.conversation?.model || props.effectiveModel
+  const activeModel = useMemo(
+    () => resolveEffectiveMagpieModel(rawModel, hostModels?.modelTiers),
+    [rawModel, hostModels?.modelTiers],
+  )
+  const isMagpieActive = activeModel !== null
+  const refreshIntervalSec = resolveRefreshIntervalSec(config)
+  const nowMs = useSharedNowMs(isMagpieActive, 15_000)
+
+  const callActionRef = useRef(ctx.callAction)
+  callActionRef.current = ctx.callAction
+
+  useEffect(() => {
+    if (!isMagpieActive || refreshIntervalSec <= 0) return
+    return subscribeMagpieAutoRefresh({
+      intervalMs: refreshIntervalSec * 1000,
+      run: async () => {
+        await callActionRef.current('refresh', { onlyIfChanged: true })
+      },
+      onResult: (checkedAt, err) => {
+        setLastCheckedAt(checkedAt)
+        setPollError(err)
+      },
+    })
+  }, [isMagpieActive, refreshIntervalSec])
+
+  const handleManualRefresh = useCallback(() => {
+    if (manualRefreshing) return
+    setManualRefreshing(true)
+    setManualError(undefined)
+    void callActionRef
+      .current('refresh', {})
+      .then(() => {
+        const now = Date.now()
+        noteMagpieManualRefresh(now)
+        setLastCheckedAt(now)
+        setPollError(undefined)
+      })
+      .catch((err: unknown) => {
+        setManualError(err instanceof Error ? err.message : String(err))
+      })
+      .finally(() => {
+        setManualRefreshing(false)
+      })
+  }, [manualRefreshing])
+
+  if (!activeModel) return null
+
+  const status = parseStatus(doc)
+  const summary = selectModelQuotas(activeModel, status, nowMs)
+  const activeError = manualError ?? status.quotasError ?? pollError ?? (status.reachable ? undefined : status.lastError)
+
+  if (summary.primary === null && activeError === undefined) {
+    return null
+  }
+
+  const freshnessAt = lastCheckedAt !== undefined && (summary.updatedAt === undefined || lastCheckedAt > summary.updatedAt)
+    ? lastCheckedAt
+    : summary.updatedAt
+  const ageLabel = magpieRelativeAgeLabel(freshnessAt, nowMs, locale)
+  const triggerToneClass =
+    summary.triggerTone === 'err'
+      ? ' magpie-quota-trigger--err'
+      : summary.triggerTone === 'warn'
+        ? ' magpie-quota-trigger--warn'
+        : ''
+  const hasMultipleAccounts = summary.extraAccountCount > 0
+  const triggerTitle = hasMultipleAccounts
+    ? magpieMoreAccountsTitle(summary.accounts.length, locale)
+    : t(MAGPIE_COMPOSER_QUOTA_ARIA)
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className={`magpie-quota-trigger${triggerToneClass}`}
+          aria-label={triggerTitle}
+          title={triggerTitle}
+          data-magpie-model={activeModel.bareModelId}
+        >
+          {summary.primary !== null ? (
+            <InlineWindowItems account={summary.primary} />
+          ) : (
+            <span className="magpie-quota-trigger-item">{t(MAGPIE_COMPOSER_QUOTA_NA_SHORT)}</span>
+          )}
+          {hasMultipleAccounts ? (
+            <span className="magpie-quota-trigger-more mono tabular-nums">
+              <span>+{summary.extraAccountCount}</span>
+              <HelmxIcon name="chevron-up" size={11} className="magpie-quota-trigger-chevron" />
+            </span>
+          ) : null}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        portalled
+        side="top"
+        align="start"
+        sideOffset={8}
+        collisionPadding={12}
+        className="magpie-quota-popover"
+      >
+        <div className="magpie-quota-popover-header">
+          <div className="magpie-quota-popover-title-wrap">
+            <span className="magpie-quota-popover-title">{activeModel.displayModelName}</span>
+            {activeModel.isRoutingGroup && summary.providers.length > 0 ? (
+              <span className="magpie-quota-popover-subtitle">
+                {t(MAGPIE_COMPOSER_ROUTING_GROUP_PREFIX)} {summary.providers.join(', ')}
+              </span>
+            ) : null}
+          </div>
+          <div className="magpie-quota-popover-actions">
+            {ageLabel ? <span className="magpie-quota-popover-age">{ageLabel}</span> : null}
+            <button
+              type="button"
+              className="btn btn-ghost btn-icon-xs"
+              disabled={manualRefreshing}
+              onClick={handleManualRefresh}
+              aria-label={t(MAGPIE_COMPOSER_REFRESH_NOW)}
+              title={t(MAGPIE_COMPOSER_REFRESH_NOW)}
+            >
+              <HelmxIcon
+                name={manualRefreshing ? 'loader' : 'refresh-cw'}
+                size={12}
+                className={manualRefreshing ? 'spin-slow' : undefined}
+              />
+            </button>
+          </div>
+        </div>
+        {activeError !== undefined ? (
+          <div className="magpie-quota-popover-error" role="alert">
+            {activeError}
+          </div>
+        ) : null}
+        {summary.accounts.length > 0 ? (
+          <div className="magpie-quota-accounts">
+            {summary.accounts.map((account, index) => (
+              <PopoverAccountSection
+                key={account.key}
+                account={account}
+                isPrimary={index === 0}
+                showActiveBadge={summary.accounts.length > 1}
+              />
+            ))}
+          </div>
+        ) : (
+          <div className="magpie-quota-empty">{t(MAGPIE_COMPOSER_NO_WINDOW_DATA)}</div>
+        )}
+      </PopoverContent>
+    </Popover>
   )
 }

@@ -4,9 +4,12 @@
  * Responsibilities:
  * - Register the pi-ai dynamic-catalog Provider via ctx.provider (mounted by the host before
  *   service.start, unregistered after service.stop -- never hand-mounted around the host inside the plugin);
- * - The public status doc drives the settings.panel / commandPalette and the `helmx magpie status`
- *   CLI; the action bus provides refresh / quota / groups / group;
- * - After turn_settled, silently refresh quotas and routing in the background (?kept=1; asks no vendor, blocks no turn).
+ * - The public status doc drives the composer status slot / settings.panel / commandPalette and
+ *   the `helmx magpie status` CLI; the action bus provides refresh / quota / groups / group;
+ * - After turn_settled, silently refresh quotas and routing in the background (?kept=1; asks no vendor, blocks no turn);
+ * - Foreground Composer status slot refreshes models and quotas on the configurable `refreshIntervalSec`
+ *   cadence (default 5s, 0 disables; catalog persistence and `models.changed` broadcast only fire when
+ *   the catalog actually changed, preventing idle disk/SSE amplification).
  *
  * Honesty discipline:
  * - All gateway reads execute against a snapshot frozen at read time, and verify the snapshot is
@@ -24,19 +27,22 @@
  */
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { HelmxError, type PluginDefinition, type TurnSettledPayload } from '@helmx/protocol'
+import { COMPOSER_STATUS_SLOT, HelmxError, type PluginDefinition, type TurnSettledPayload } from '@helmx/protocol'
 import { resolvePluginClientAssets } from './asset-paths.js'
+import { toPiModels, type PiMagpieModel } from './magpie/catalog.js'
 import {
+  DEFAULT_MAGPIE_REFRESH_INTERVAL_SEC,
   DEFAULT_MAGPIE_ROOT,
   MAGPIE_PLUGIN_ID,
   MAGPIE_PROVIDER_ID,
   MAGPIE_STATUS_DOC,
+  MAX_MAGPIE_REFRESH_INTERVAL_SEC,
   sameGateway,
   type MagpieGatewayRef,
   type MagpiePluginConfig,
   type MagpieStatusDoc,
 } from './magpie/contracts.js'
-import { fetchQuotas, fetchTrace, resolveGateway } from './magpie/gateway.js'
+import { fetchCatalog, fetchQuotas, fetchTrace, resolveGateway } from './magpie/gateway.js'
 import { quotaRows } from './magpie/quota.js'
 import {
   latestGroupRouteIn,
@@ -44,6 +50,7 @@ import {
   parseGroupsList,
   traceRouteRows,
   type GroupListRow,
+  type TraceRoute,
 } from './magpie/routing.js'
 import { createMagpieProvider } from './magpie/provider.js'
 
@@ -51,7 +58,19 @@ export { MAGPIE_PLUGIN_ID }
 
 const STATUS_OUTPUT_SCHEMA = {
   type: 'object',
-  required: ['gatewayUrl', 'configuredRoot', 'local', 'reachable', 'modelCount', 'groupCount', 'summaryText', 'quotas', 'routes', 'diagnostics'],
+  required: [
+    'gatewayUrl',
+    'configuredRoot',
+    'local',
+    'reachable',
+    'modelCount',
+    'groupCount',
+    'summaryText',
+    'modelOwners',
+    'quotas',
+    'routes',
+    'diagnostics',
+  ],
   properties: {
     gatewayUrl: { type: 'string' },
     configuredRoot: { type: 'boolean' },
@@ -61,7 +80,15 @@ const STATUS_OUTPUT_SCHEMA = {
     groupCount: { type: 'number' },
     lastRefreshedAt: { type: 'number' },
     lastError: { type: 'string' },
+    quotasRefreshedAt: { type: 'number' },
+    quotasUpdatedAt: { type: 'number' },
+    quotasError: { type: 'string' },
     summaryText: { type: 'string' },
+    modelOwners: { type: 'object', additionalProperties: { type: 'string' } },
+    groupProviders: {
+      type: 'object',
+      additionalProperties: { type: 'array', items: { type: 'string' } },
+    },
     quotas: { type: 'array', items: { type: 'object', additionalProperties: true } },
     routes: { type: 'array', items: { type: 'object', additionalProperties: true } },
     diagnostics: { type: 'array', items: { type: 'string' } },
@@ -128,6 +155,7 @@ const emptyStatus = (gatewayUrl: string): MagpieStatusDoc => ({
   modelCount: 0,
   groupCount: 0,
   summaryText: 'Magpie · not connected',
+  modelOwners: {},
   quotas: [],
   routes: [],
   diagnostics: [],
@@ -137,6 +165,127 @@ const emptyStatus = (gatewayUrl: string): MagpieStatusDoc => ({
 function sanitizeErrorText(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error)
   return message.replace(/Bearer\s+\S+/g, 'Bearer ***').slice(0, 300)
+}
+
+/** Extract provider prefix from a `provider/model` ref, ignoring routing group namespaces (`group/*`, `auto/*`). */
+function directProviderOf(modelId: string): string | undefined {
+  const slash = modelId.indexOf('/')
+  if (slash <= 0) return undefined
+  const prefix = modelId.slice(0, slash).trim()
+  if (!prefix || prefix === 'group' || prefix === 'auto') return undefined
+  return prefix
+}
+
+/** Build `modelId -> owning provider` map for models under the current gateway snapshot. */
+function modelOwnersOf(models: readonly PiMagpieModel[]): Record<string, string> {
+  const owners: Record<string, string> = {}
+  for (const model of models) {
+    const owner = model.magpieOwnedBy?.trim() || directProviderOf(model.id)
+    if (owner) owners[model.id] = owner
+  }
+  return owners
+}
+
+/** Deterministic catalog fingerprint so foreground polling skips redundant persistence and global asset reloads. */
+function catalogFingerprint(models: readonly PiMagpieModel[]): string {
+  const normalized = [...models]
+    .sort((a, b) => a.id.localeCompare(b.id))
+    .map((model) => ({
+      id: model.id,
+      name: model.name,
+      api: model.api,
+      baseUrl: model.baseUrl,
+      reasoning: model.reasoning,
+      input: model.input,
+      contextWindow: model.contextWindow,
+      maxTokens: model.maxTokens,
+      magpieOwnedBy: model.magpieOwnedBy,
+      helmxContextWindowKnown: model.helmxContextWindowKnown,
+      thinkingLevelMap: model.thinkingLevelMap,
+      compat: 'compat' in model ? model.compat : undefined,
+    }))
+  return JSON.stringify(normalized)
+}
+
+function addGroupProviders(
+  target: Map<string, string[]>,
+  key: string | undefined,
+  providers: readonly (string | undefined)[],
+): void {
+  const normalizedKey = key?.trim()
+  if (!normalizedKey) return
+  let list = target.get(normalizedKey)
+  for (const raw of providers) {
+    const provider = raw?.trim()
+    if (!provider || provider === 'group' || provider === 'auto') continue
+    if (list === undefined) {
+      list = []
+      target.set(normalizedKey, list)
+    }
+    if (!list.includes(provider)) list.push(provider)
+  }
+}
+
+function collectGroupProvidersFromTrace(routes: readonly TraceRoute[]): Record<string, string[]> {
+  const map = new Map<string, string[]>()
+  for (const route of routes) {
+    const memberProviders = [
+      ...(route.group?.members ?? []).map((member) => directProviderOf(member)),
+      route.provider,
+      route.served ? directProviderOf(route.served) : undefined,
+    ]
+    const groupShort = route.group?.id?.trim().replace(/^group\//, '')
+    if (groupShort) addGroupProviders(map, `group/${groupShort}`, memberProviders)
+    if (route.model?.trim()) addGroupProviders(map, route.model.trim(), memberProviders)
+  }
+  return Object.fromEntries(map)
+}
+
+function collectGroupProvidersFromCli(groups: readonly GroupListRow[] | undefined): Record<string, string[]> {
+  if (!groups || groups.length === 0) return {}
+  const map = new Map<string, string[]>()
+  for (const group of groups) {
+    const memberProviders = group.members.map((member) => directProviderOf(member))
+    addGroupProviders(map, group.id, memberProviders)
+  }
+  return Object.fromEntries(map)
+}
+
+function mergeGroupProviders(
+  base: Record<string, string[]> | undefined,
+  incoming: Record<string, string[]>,
+): Record<string, string[]> | undefined {
+  const map = new Map<string, string[]>()
+  if (base) {
+    for (const [key, list] of Object.entries(base)) {
+      addGroupProviders(map, key, list)
+    }
+  }
+  for (const [key, list] of Object.entries(incoming)) {
+    addGroupProviders(map, key, list)
+  }
+  return map.size > 0 ? Object.fromEntries(map) : undefined
+}
+
+/** Semantic comparison excluding volatile timestamps so identical 5s polls do not amplify global SSE traffic. */
+function statusContentEqual(a: MagpieStatusDoc, b: MagpieStatusDoc): boolean {
+  const stripTimestamps = (doc: MagpieStatusDoc) => ({
+    gatewayUrl: doc.gatewayUrl,
+    configuredRoot: doc.configuredRoot,
+    local: doc.local,
+    reachable: doc.reachable,
+    modelCount: doc.modelCount,
+    groupCount: doc.groupCount,
+    lastError: doc.lastError,
+    quotasError: doc.quotasError,
+    summaryText: doc.summaryText,
+    modelOwners: doc.modelOwners,
+    groupProviders: doc.groupProviders,
+    quotas: doc.quotas,
+    routes: doc.routes,
+    diagnostics: doc.diagnostics,
+  })
+  return JSON.stringify(stripTimestamps(a)) === JSON.stringify(stripTimestamps(b))
 }
 
 const execFileAsync = promisify(execFile)
@@ -197,6 +346,18 @@ export function createMagpiePlugin(): PluginDefinition {
           },
           secret: true,
         },
+        refreshIntervalSec: {
+          type: 'number',
+          label: { en: 'Auto-refresh interval (seconds)', 'zh-CN': '自动刷新间隔（秒）' },
+          description: {
+            en: 'Interval to refresh Magpie models and quotas while a Magpie model is open in the foreground (0 disables auto-refresh; default 5 seconds)',
+            'zh-CN': '前台使用 Magpie 模型时自动刷新模型目录与配额的间隔秒数（0 表示关闭自动刷新，默认 5 秒）',
+          },
+          default: DEFAULT_MAGPIE_REFRESH_INTERVAL_SEC,
+          minimum: 0,
+          maximum: MAX_MAGPIE_REFRESH_INTERVAL_SEC,
+          integer: true,
+        },
       })
 
       /** The currently effective config (a config-store view; unconfigured fields fall back to gateway-resolution defaults). */
@@ -205,6 +366,9 @@ export function createMagpiePlugin(): PluginDefinition {
         return {
           ...(typeof raw.gatewayUrl === 'string' && raw.gatewayUrl.trim() !== '' ? { gatewayUrl: raw.gatewayUrl } : {}),
           ...(typeof raw.apiKey === 'string' && raw.apiKey.trim() !== '' ? { apiKey: raw.apiKey } : {}),
+          ...(typeof raw.refreshIntervalSec === 'number' && Number.isFinite(raw.refreshIntervalSec)
+            ? { refreshIntervalSec: raw.refreshIntervalSec }
+            : {}),
         }
       }
 
@@ -230,25 +394,64 @@ export function createMagpiePlugin(): PluginDefinition {
         public: true,
       })
 
-      /** Service stop signal: no doc writes after disable. */
+      /** Service stop signal and in-flight abort controllers: no doc writes after disable. */
       let stopping = false
-      let stopController: AbortController | undefined
-      let startupRefreshController: AbortController | undefined
+      const activeControllers = new Set<AbortController>()
+
+      const beginRequest = (): { controller: AbortController; done: () => void } => {
+        const controller = new AbortController()
+        activeControllers.add(controller)
+        return {
+          controller,
+          done: () => {
+            activeControllers.delete(controller)
+          },
+        }
+      }
+
+      const modelsForSnapshot = (snapshot: MagpieGatewayRef): PiMagpieModel[] =>
+        handle.models().filter((model) => model.baseUrl.startsWith(snapshot.root))
 
       /** Pre-publish guard: write into the doc only while the snapshot is still the effective config. */
       const writeStatus = (
         snapshot: MagpieGatewayRef,
         patch: Partial<MagpieStatusDoc>,
-        options?: { clearLastError?: boolean },
+        options?: { clearLastError?: boolean; clearQuotasError?: boolean; skipIfUnchanged?: boolean },
       ): void => {
         if (stopping) return
         const currentGateway = gateway()
         if (!sameGateway(snapshot, currentGateway)) return
-        const current = status.get()
-        if (options?.clearLastError && current.gatewayUrl === snapshot.root && current.lastError !== undefined) {
-          delete current.lastError
+        const prev = status.get()
+        const sameRoot = prev.gatewayUrl === snapshot.root
+        const base: MagpieStatusDoc = sameRoot
+          ? { ...prev }
+          : {
+              ...emptyStatus(currentGateway.root),
+              configuredRoot: currentGateway.configuredRoot,
+              local: currentGateway.local,
+            }
+        if (options?.clearLastError && base.lastError !== undefined) {
+          delete base.lastError
         }
-        status.set({ ...current, ...patch, gatewayUrl: currentGateway.root })
+        if (options?.clearQuotasError && base.quotasError !== undefined) {
+          delete base.quotasError
+        }
+        const next: MagpieStatusDoc = {
+          ...base,
+          ...patch,
+          gatewayUrl: currentGateway.root,
+          configuredRoot: currentGateway.configuredRoot,
+          local: currentGateway.local,
+        }
+        if (
+          options?.skipIfUnchanged
+          && sameRoot
+          && (prev.quotasRefreshedAt !== undefined || next.quotasRefreshedAt === undefined)
+          && statusContentEqual(prev, next)
+        ) {
+          return
+        }
+        status.set(next)
       }
 
       const summaryTextOf = (reachable: boolean, modelCount: number): string =>
@@ -256,44 +459,82 @@ export function createMagpiePlugin(): PluginDefinition {
 
       /**
        * Read quotas + routing and update the doc (executed on the snapshot; kept=true asks no vendor).
-       * Honesty: quota / trace read failures are not swallowed -- the reason goes into diagnostics (clearing
-       * the old quota section and recording the unavailability, never disguising "no quota read" as "quota empty");
-       * an unavailable trace (remote refusal / version too old) is a legal state: empty routing section + diagnostics.
+       * Honesty: quota / trace read failures are not swallowed -- the reason goes into diagnostics
+       * (for background/startup sync, clears old quotas and records unavailability; for preserveQuotasOnError
+       * foreground polling, preserves the last known snapshot alongside quotasError so the status bar
+       * discloses staleness rather than vanishing).
        */
-      const refreshSidecar = async (snapshot: MagpieGatewayRef, kept: boolean): Promise<void> => {
+      const refreshSidecar = async (
+        snapshot: MagpieGatewayRef,
+        kept: boolean,
+        options?: { preserveQuotasOnError?: boolean; skipIfUnchanged?: boolean },
+      ): Promise<void> => {
         if (stopping) return
-        const controller = new AbortController()
-        stopController = controller
+        const { controller, done } = beginRequest()
         try {
+          const prev = status.get()
+          const sameRoot = prev.gatewayUrl === snapshot.root
           const diagnostics: string[] = []
           let quotas: MagpieStatusDoc['quotas'] = []
           let routes: MagpieStatusDoc['routes'] = []
+          let quotaOk = false
+          let quotaErr: string | undefined
           try {
             const entries = await fetchQuotas(snapshot.root, snapshot.token, controller.signal, fetchImpl, { kept })
             quotas = quotaRows(entries).map((row) => ({ ...row }))
+            quotaOk = true
           } catch (error) {
-            quotas = []
-            diagnostics.push(`quotas unavailable: ${sanitizeErrorText(error)}`)
+            quotaErr = sanitizeErrorText(error)
+            quotas = options?.preserveQuotasOnError && sameRoot ? prev.quotas : []
+            diagnostics.push(`quotas unavailable: ${quotaErr}`)
           }
           if (stopping || controller.signal.aborted) return
           const trace = await fetchTrace(snapshot.root, snapshot.token, controller.signal, fetchImpl)
           if (stopping || controller.signal.aborted) return
+          let traceGroupProviders: Record<string, string[]> = {}
           if ('routes' in trace) {
             routes = traceRouteRows(trace.routes)
+            traceGroupProviders = collectGroupProvidersFromTrace(trace.routes)
           } else {
             routes = []
             diagnostics.push(`routing trace unavailable: ${sanitizeErrorText(trace.unavailable)}`)
           }
-          writeStatus(snapshot, { quotas, routes, groupCount: routes.length, diagnostics })
+          const now = Date.now()
+          const mergedGroupProviders = mergeGroupProviders(sameRoot ? prev.groupProviders : undefined, traceGroupProviders)
+          writeStatus(
+            snapshot,
+            {
+              quotas,
+              routes,
+              groupCount: routes.length,
+              diagnostics,
+              modelOwners: modelOwnersOf(modelsForSnapshot(snapshot)),
+              ...(mergedGroupProviders !== undefined ? { groupProviders: mergedGroupProviders } : {}),
+              ...(quotaOk ? { quotasUpdatedAt: now } : {}),
+              ...(quotaOk && !kept ? { quotasRefreshedAt: now } : {}),
+              ...(quotaErr !== undefined ? { quotasError: quotaErr } : {}),
+            },
+            {
+              clearQuotasError: quotaOk,
+              skipIfUnchanged: options?.skipIfUnchanged,
+            },
+          )
         } finally {
-          if (stopController === controller) stopController = undefined
+          done()
         }
       }
 
       /** Status publishing after a catalog refresh (snapshot guard + reachable semantics). */
-      const publishCatalogStatus = (snapshot: MagpieGatewayRef, reachable: boolean, error?: unknown): void => {
+      const publishCatalogStatus = (
+        snapshot: MagpieGatewayRef,
+        reachable: boolean,
+        error?: unknown,
+        options?: { skipIfUnchanged?: boolean },
+      ): void => {
         if (stopping) return
-        const modelCount = handle.models().filter((m) => m.baseUrl.startsWith(snapshot.root)).length
+        const currentModels = modelsForSnapshot(snapshot)
+        const modelCount = currentModels.length
+        const modelOwners = modelOwnersOf(currentModels)
         if (reachable) {
           // Success clears old errors: the previous round's failure conclusion must not linger as the
           // latest state (jsonClone rejects undefined values; delete keys explicitly instead of assigning undefined)
@@ -302,18 +543,24 @@ export function createMagpiePlugin(): PluginDefinition {
             {
               reachable: true,
               modelCount,
+              modelOwners,
               summaryText: summaryTextOf(true, modelCount),
               lastRefreshedAt: Date.now(),
             },
-            { clearLastError: true },
+            { clearLastError: true, skipIfUnchanged: options?.skipIfUnchanged },
           )
         } else {
-          writeStatus(snapshot, {
-            reachable: false,
-            modelCount,
-            summaryText: summaryTextOf(false, modelCount),
-            ...(error !== undefined ? { lastError: sanitizeErrorText(error) } : {}),
-          })
+          writeStatus(
+            snapshot,
+            {
+              reachable: false,
+              modelCount,
+              modelOwners,
+              summaryText: summaryTextOf(false, modelCount),
+              ...(error !== undefined ? { lastError: sanitizeErrorText(error) } : {}),
+            },
+            { skipIfUnchanged: options?.skipIfUnchanged },
+          )
         }
       }
 
@@ -322,18 +569,18 @@ export function createMagpiePlugin(): PluginDefinition {
         id: 'magpie-gateway',
         async start() {
           stopping = false
-          const controller = new AbortController()
-          startupRefreshController = controller
+          const { controller, done } = beginRequest()
           const snapshot = gateway()
           // Initialization: first honestly show the recovered cache (the catalog count restored by
           // refreshModels's first phase), then let the background network refresh advance reachable / lastError.
-          const cachedCount = handle.models().length
+          const cachedModels = modelsForSnapshot(snapshot)
           status.set({
             ...emptyStatus(snapshot.root),
             configuredRoot: snapshot.configuredRoot,
             local: snapshot.local,
-            modelCount: cachedCount,
-            summaryText: summaryTextOf(false, cachedCount),
+            modelCount: cachedModels.length,
+            modelOwners: modelOwnersOf(cachedModels),
+            summaryText: summaryTextOf(false, cachedModels.length),
           })
           // Non-blocking background refresh: failures only update reachable:false / lastError, never
           // blocking enablement or kernel startup (provider.refreshModels itself throws -- that is the
@@ -358,16 +605,16 @@ export function createMagpiePlugin(): PluginDefinition {
               // Composition-layer port exception (not a gateway diagnostic): record honestly, do not block startup
               publishCatalogStatus(gateway(), false, error)
             } finally {
-              if (startupRefreshController === controller) startupRefreshController = undefined
+              done()
             }
           })()
         },
         async stop() {
           stopping = true
-          startupRefreshController?.abort(new Error('magpie plugin stopping'))
-          startupRefreshController = undefined
-          stopController?.abort(new Error('magpie plugin stopping'))
-          stopController = undefined
+          for (const controller of [...activeControllers]) {
+            controller.abort(new Error('magpie plugin stopping'))
+          }
+          activeControllers.clear()
         },
       })
 
@@ -401,6 +648,7 @@ export function createMagpiePlugin(): PluginDefinition {
           // hold only for that root -- the new root has no conclusions yet and none are faked (reachable stays false pending the first refresh).
           const snapshot = gateway()
           const doc = status.get()
+          const currentModels = modelsForSnapshot(snapshot)
           if (doc.gatewayUrl !== snapshot.root) {
             return {
               ...doc,
@@ -409,14 +657,16 @@ export function createMagpiePlugin(): PluginDefinition {
               local: snapshot.local,
               reachable: false,
               modelCount: 0,
+              modelOwners: {},
             }
           }
           return {
             ...doc,
             configuredRoot: snapshot.configuredRoot,
             local: snapshot.local,
-            // The model count counts only the catalog under the current root (old-root caches do not pose)
-            modelCount: handle.models().filter((m) => m.baseUrl.startsWith(snapshot.root)).length,
+            // The model count and owner map count only the catalog under the current root (old-root caches do not pose)
+            modelCount: currentModels.length,
+            modelOwners: modelOwnersOf(currentModels),
           }
         },
       })
@@ -424,10 +674,60 @@ export function createMagpiePlugin(): PluginDefinition {
       ctx.action({
         id: 'refresh',
         description: 'Force-refresh the Magpie model catalog and quota/routing state (failures error explicitly)',
-        inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+        inputSchema: {
+          type: 'object',
+          properties: {
+            onlyIfChanged: {
+              type: 'boolean',
+              description: 'Skip rewriting the persisted catalog and broadcasting models.changed when /v1/models is unchanged (used by periodic foreground polling)',
+            },
+          },
+          additionalProperties: false,
+        },
         outputSchema: REFRESH_OUTPUT_SCHEMA,
-        handler: async () => {
+        handler: async (input?: { onlyIfChanged?: boolean }) => {
           const snapshot = gateway()
+          const onlyIfChanged = input?.onlyIfChanged === true
+          if (onlyIfChanged) {
+            const { controller, done } = beginRequest()
+            let entries
+            try {
+              entries = await fetchCatalog(snapshot.root, snapshot.token, controller.signal, fetchImpl)
+            } catch (error) {
+              const message = sanitizeErrorText(error)
+              publishCatalogStatus(snapshot, false, message, { skipIfUnchanged: true })
+              throw new HelmxError(
+                'magpie_gateway_unreachable',
+                `Magpie gateway ${snapshot.root} refresh failed: ${message}`,
+                502,
+                { gatewayUrl: snapshot.root, configuredRoot: snapshot.configuredRoot },
+              )
+            } finally {
+              done()
+            }
+            const candidate = toPiModels(entries, snapshot.root)
+            const currentModels = modelsForSnapshot(snapshot)
+            const changed = !handle.synced() || catalogFingerprint(candidate) !== catalogFingerprint(currentModels)
+            if (changed) {
+              const result = await ctx.host.refreshModels({ providers: [MAGPIE_PROVIDER_ID], allowNetwork: true, force: true })
+              const error = result.errors['magpie']
+              publishCatalogStatus(snapshot, error === undefined, error)
+              if (error !== undefined) {
+                throw new HelmxError(
+                  'magpie_gateway_unreachable',
+                  `Magpie gateway ${snapshot.root} refresh failed: ${sanitizeErrorText(error)}`,
+                  502,
+                  { gatewayUrl: snapshot.root, configuredRoot: snapshot.configuredRoot },
+                )
+              }
+            } else {
+              publishCatalogStatus(snapshot, true, undefined, { skipIfUnchanged: true })
+            }
+            await refreshSidecar(snapshot, false, { preserveQuotasOnError: true, skipIfUnchanged: true })
+            const doc = status.get()
+            return { refreshed: true, modelCount: doc.modelCount, reachable: true }
+          }
+
           const result = await ctx.host.refreshModels({ providers: [MAGPIE_PROVIDER_ID], allowNetwork: true, force: true })
           const error = result.errors['magpie']
           publishCatalogStatus(snapshot, error === undefined, error)
@@ -439,7 +739,7 @@ export function createMagpiePlugin(): PluginDefinition {
               { gatewayUrl: snapshot.root, configuredRoot: snapshot.configuredRoot },
             )
           }
-          await refreshSidecar(snapshot, true)
+          await refreshSidecar(snapshot, false)
           const doc = status.get()
           return { refreshed: true, modelCount: doc.modelCount, reachable: true }
         },
@@ -457,14 +757,38 @@ export function createMagpiePlugin(): PluginDefinition {
         outputSchema: QUOTA_OUTPUT_SCHEMA,
         handler: async (input: { model?: string }) => {
           const snapshot = gateway()
-          const controller = new AbortController()
-          stopController = controller
+          const { controller, done } = beginRequest()
           try {
             const entries = await fetchQuotas(snapshot.root, snapshot.token, controller.signal, fetchImpl)
-            let rows = quotaRows(entries)
+            const allRows = quotaRows(entries).map((row) => ({ ...row }))
+            const now = Date.now()
+            const prev = status.get()
+            const nextDiagnostics =
+              prev.gatewayUrl === snapshot.root
+                ? prev.diagnostics.filter((item) => !item.startsWith('quotas unavailable:'))
+                : []
+            writeStatus(
+              snapshot,
+              {
+                quotas: allRows,
+                quotasRefreshedAt: now,
+                quotasUpdatedAt: now,
+                diagnostics: nextDiagnostics,
+                modelOwners: modelOwnersOf(modelsForSnapshot(snapshot)),
+              },
+              { clearQuotasError: true },
+            )
+            let rows = allRows
             if (input.model !== undefined && input.model !== '') {
-              const owner = handle.models().find((m) => m.id === input.model)?.magpieOwnedBy
-              if (owner !== undefined) rows = rows.filter((row) => row.provider === owner)
+              const bareModel = input.model.startsWith(`${MAGPIE_PROVIDER_ID}/`)
+                ? input.model.slice(MAGPIE_PROVIDER_ID.length + 1)
+                : input.model
+              const owners = modelOwnersOf(modelsForSnapshot(snapshot))
+              const groupProviders = status.get().groupProviders?.[bareModel] ?? []
+              const matched = new Set<string>(groupProviders)
+              const primaryOwner = owners[bareModel]
+              if (primaryOwner) matched.add(primaryOwner)
+              if (matched.size > 0) rows = rows.filter((row) => matched.has(row.provider))
             }
             return {
               quotas: rows,
@@ -472,14 +796,16 @@ export function createMagpiePlugin(): PluginDefinition {
               ...(snapshot.local ? {} : { note: 'non-local gateway: only quotas reported by that gateway itself are readable' }),
             }
           } catch (error) {
+            const message = sanitizeErrorText(error)
+            writeStatus(snapshot, { quotasError: message })
             throw new HelmxError(
               'magpie_gateway_unreachable',
-              `Magpie gateway ${snapshot.root} quota read failed: ${sanitizeErrorText(error)}`,
+              `Magpie gateway ${snapshot.root} quota read failed: ${message}`,
               502,
               { gatewayUrl: snapshot.root },
             )
           } finally {
-            if (stopController === controller) stopController = undefined
+            done()
           }
         },
       })
@@ -492,8 +818,7 @@ export function createMagpiePlugin(): PluginDefinition {
         outputSchema: GROUPS_OUTPUT_SCHEMA,
         handler: async () => {
           const snapshot = gateway()
-          const controller = new AbortController()
-          stopController = controller
+          const { controller, done } = beginRequest()
           try {
             // Data-source isolation: the CLI describes only the local default instance; when another
             // loopback port is explicitly configured, the CLI cannot be proven to point at the same
@@ -533,7 +858,18 @@ export function createMagpiePlugin(): PluginDefinition {
                   source: 'gateway-trace' as const,
                 })),
             ]
-            writeStatus(snapshot, { routes: traceRows, groupCount: groups.length })
+            const prev = status.get()
+            const fromTrace = collectGroupProvidersFromTrace(traceRoutes)
+            const fromCli = collectGroupProvidersFromCli(cliGroups)
+            const mergedGroupProviders = mergeGroupProviders(
+              mergeGroupProviders(prev.gatewayUrl === snapshot.root ? prev.groupProviders : undefined, fromTrace),
+              fromCli,
+            )
+            writeStatus(snapshot, {
+              routes: traceRows,
+              groupCount: groups.length,
+              ...(mergedGroupProviders !== undefined ? { groupProviders: mergedGroupProviders } : {}),
+            })
             const notes: string[] = []
             if (cliGroups === undefined) notes.push('Only routing traces of requests already seen by the selected gateway are shown; full group definitions are currently unavailable.')
             if ('unavailable' in trace) notes.push(`routing trace unavailable: ${sanitizeErrorText(trace.unavailable)}`)
@@ -544,7 +880,7 @@ export function createMagpiePlugin(): PluginDefinition {
               ...(cliError !== undefined ? { cliError: sanitizeErrorText(cliError) } : {}),
             }
           } finally {
-            if (stopController === controller) stopController = undefined
+            done()
           }
         },
       })
@@ -562,8 +898,7 @@ export function createMagpiePlugin(): PluginDefinition {
         outputSchema: GROUP_OUTPUT_SCHEMA,
         handler: async (input: { id: string }) => {
           const snapshot = gateway()
-          const controller = new AbortController()
-          stopController = controller
+          const { controller, done } = beginRequest()
           try {
             const short = input.id.replace(/^group\//, '')
             // Definition: only the local default instance's CLI can provide it (another loopback port / a
@@ -612,12 +947,19 @@ export function createMagpiePlugin(): PluginDefinition {
                   : { note: 'non-local gateway: definitions need the local magpie CLI; only the gateway trace here' }),
             }
           } finally {
-            if (stopController === controller) stopController = undefined
+            done()
           }
         },
       })
 
       // ---- Declarative UI (client.tsx React track; no Emoji, lucide line icons) --------
+      ctx.ui.slot({
+        id: 'magpie-composer-quota',
+        target: COMPOSER_STATUS_SLOT,
+        order: 20,
+        client: { module: 'index.tsx', export: 'MagpieComposerQuotaStatus' },
+      })
+
       ctx.ui.settingsPanel({
         id: 'magpie-panel',
         label: { en: 'Magpie Gateway', 'zh-CN': 'Magpie 网关' },

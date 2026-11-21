@@ -3,17 +3,26 @@
  * 编译产物（tsx 执行 kernel 编译器源码；浏览器 ESM 经 data: URL 导入，共享宿主
  * React/SDK）。默认只替换数据 hooks 以构造状态；上下文始终读取真实 Provider。
  */
+import { useContext, useSyncExternalStore } from 'react'
 import { fileURLToPath } from 'node:url'
 import * as HelmxPluginClient from '@helmx/plugin-client'
+import type { HostModelsSlice } from '@helmx/protocol/browser'
 import { importCompiledPluginClient, mountPluginNamespaceGlobals } from './plugin-namespace.js'
 
 export interface BuiltinClientStubOptions {
   /** docName → doc 值（usePluginDoc 按 docName 路由返回）。 */
   docs?: Record<string, unknown>
+  /** 非敏感插件配置投影（usePluginConfig 返回值，缺省在无真实宿主时回落空对象）。 */
+  config?: Record<string, unknown>
+  /** 宿主模型目录切片（显式提供时覆盖；缺省优先读真实 PluginClientHostHandlesContext）。 */
+  hostModels?: HostModelsSlice
 }
 
 let stub: BuiltinClientStubOptions = {}
 let realHooks = false
+
+const NOOP_SUBSCRIBE = (): (() => void) => () => {}
+const UNDEFINED_SNAPSHOT = (): undefined => undefined
 
 export function setBuiltinClientStub(options: BuiltinClientStubOptions = {}): void {
   stub = options
@@ -24,6 +33,25 @@ const sharedPluginClientNamespace = {
   usePluginDoc: (name: string) => (realHooks ? HelmxPluginClient.usePluginDoc(name) : stub.docs?.[name]),
   usePluginSessionDoc: (name: string, options?: { conversationId?: number }) =>
     realHooks ? HelmxPluginClient.usePluginSessionDoc(name, options) : undefined,
+  usePluginConfig: () => {
+    const host = useContext(HelmxPluginClient.PluginClientHostContext)
+    const ctx = useContext(HelmxPluginClient.PluginClientContext)
+    if (realHooks || (stub.config === undefined && host !== null && ctx !== null)) {
+      const plugin = host?.plugins.find((item) => item.id === ctx?.pluginId)
+      return (plugin?.publicConfig ?? {}) as Record<string, unknown>
+    }
+    return stub.config ?? {}
+  },
+  useHostModels: () => {
+    const handles = useContext(HelmxPluginClient.PluginClientHostHandlesContext)
+    const live = useSyncExternalStore(
+      handles?.subscribeModels ?? NOOP_SUBSCRIBE,
+      handles?.getModels ?? UNDEFINED_SNAPSHOT,
+      UNDEFINED_SNAPSHOT,
+    )
+    if (realHooks) return live
+    return stub.hostModels !== undefined ? stub.hostModels : live
+  },
 }
 
 export function mountSharedPluginNamespaces(options: { realHooks?: boolean } = {}): void {
