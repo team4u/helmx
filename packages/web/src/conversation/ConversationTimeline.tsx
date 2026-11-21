@@ -21,6 +21,7 @@ import {
 } from '../lib/store-context.js'
 
 const EMPTY_RESOLVED_ASKS: ResolvedAskEntry[] = []
+const useIsomorphicLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect
 import { useStableCallback } from '../lib/use-stable-callback.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import type { WebMessageTranslator } from '../i18n/catalog.js'
@@ -31,7 +32,8 @@ import {
   buildActiveEntryIndex,
   buildAssistantModelBoundaries,
   buildTimelineItems,
-  collectSiblingCalls,
+  collectToolCallsByName,
+  createTimelineToolCallsStore,
   findLatestProcessTurnKey,
   lastEditableHumanInput,
   queuedAgentTextCollapse,
@@ -840,9 +842,17 @@ export function ConversationTimeline({
 
   const hasLiveTurn = items.some((item) => item.kind === 'assistant' && item.live)
 
-  // Lightweight summaries of all tool calls: collected once, passed through to every tool.view
-  // plugin component (siblingCalls let them compute same-target dedupe / resume continuation themselves).
-  const siblingCalls = useMemo(() => collectSiblingCalls(items), [items])
+  // Per-toolName external store replacing O(N^2) siblingCalls prop drilling:
+  // initialized synchronously for SSR/first-render parity and synced on commit with
+  // shallow-equal bucket reference preservation (unrelated toolName updates notify nobody).
+  // Pending SDK wiring point (aligns 1:1 with timeline-sdk commit 0abe8a7db):
+  // swap `createTimelineToolCallsStore` import to `@helmx/plugin-client` alongside
+  // `TimelineToolCallsContext`, and wrap `.timeline-inner` in
+  // `<TimelineToolCallsContext.Provider value={toolCallsStore}>`.
+  const [toolCallsStore] = useState(() => createTimelineToolCallsStore(collectToolCallsByName(items)))
+  useIsomorphicLayoutEffect(() => {
+    toolCallsStore.update(collectToolCallsByName(items))
+  }, [toolCallsStore, items])
 
   // Effective-model boundary index (one pure scan): each assistant turn with a model switch gets
   // its new model identity indexed by key; the renderer only looks the table up.
@@ -1374,7 +1384,6 @@ export function ConversationTimeline({
               <AssistantTurnView
                 turn={item}
                 conversation={conversation}
-                siblingCalls={siblingCalls}
                 anchorEntry={resolveAssistantAnchorEntry(item.entryIds, activeEntriesById)}
                 isLatestTurn={item.key === lastAssistantKey}
                 processShortcut={processToggle?.turnKey === item.key ? processToggle.command : undefined}

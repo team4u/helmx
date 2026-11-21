@@ -42,13 +42,10 @@ export function TraceRow({
   tool,
   conversationId,
   defaultOpen,
-  siblingCalls,
 }: {
   tool: ToolTrace
   conversationId: number
   defaultOpen: boolean
-  /** 当前时间线内全部工具调用轻量摘要（透传给 tool.view 插件组件）。 */
-  siblingCalls: ReadonlyArray<import('@helmx/protocol/browser').ToolViewSiblingCall>
 }) {
   const [open, setOpen] = useState(defaultOpen)
   const { t } = useWebLocale()
@@ -79,6 +76,10 @@ export function TraceRow({
   // 顶层业务卡标记 data-outline-card-id（tool.key）：会话大纲二级锚精确定位。
   const toolView = tool.toolView
   const replaceRow = toolView !== undefined && (toolView.spec as ToolViewSpec).replaceRow === true
+  const toolViewProps = useMemo(
+    () => (toolView !== undefined ? buildToolViewProps(tool, conversationId) : undefined),
+    [toolView, tool, conversationId],
+  )
 
   return (
     <div
@@ -92,7 +93,7 @@ export function TraceRow({
             spec={toolView.spec}
             conversationId={conversationId}
             label={t('conv.tool.viewLabel', { name: tool.toolName })}
-            slotProps={buildToolViewProps(tool, conversationId, siblingCalls)}
+            slotProps={toolViewProps}
           />
         </div>
       ) : (
@@ -142,7 +143,7 @@ export function TraceRow({
                 spec={toolView.spec}
                 conversationId={conversationId}
                 label={t('conv.tool.viewLabel', { name: tool.toolName })}
-                slotProps={buildToolViewProps(tool, conversationId, siblingCalls)}
+                slotProps={toolViewProps}
               />
             </div>
           ) : null}
@@ -163,13 +164,11 @@ export function StepGroup({
   steps,
   active,
   conversationId,
-  siblingCalls,
   shortcutToggle,
 }: {
   steps: FoldableStep[]
   active: boolean
   conversationId: number
-  siblingCalls: ReadonlyArray<import('@helmx/protocol/browser').ToolViewSiblingCall>
   shortcutToggle?: ProcessShortcutCommand
 }) {
   const firstStep = steps[0]
@@ -195,7 +194,6 @@ export function StepGroup({
       steps={steps}
       active={active}
       conversationId={conversationId}
-      siblingCalls={siblingCalls}
       shortcutToggle={shortcutToggle}
     />
   )
@@ -205,13 +203,11 @@ function MultiStepGroup({
   steps,
   active,
   conversationId,
-  siblingCalls,
   shortcutToggle,
 }: {
   steps: FoldableStep[]
   active: boolean
   conversationId: number
-  siblingCalls: ReadonlyArray<import('@helmx/protocol/browser').ToolViewSiblingCall>
   shortcutToggle?: ProcessShortcutCommand
 }) {
   const [userOverride, setUserOverride] = useState<boolean | null>(null)
@@ -304,7 +300,6 @@ function MultiStepGroup({
                 tool={step.tool}
                 conversationId={conversationId}
                 defaultOpen={false}
-                siblingCalls={siblingCalls}
               />
             ),
           )}

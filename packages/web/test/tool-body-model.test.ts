@@ -86,15 +86,15 @@ test('prettyJson：异常输入不抛出', { timeout: 60_000 }, () => {
 
 test('writeBodyData：路径语言与行数来自入参；bytesWritten 仅在成功时取用', { timeout: 60_000 }, () => {
   const input = { path: '/tmp/src/foo.ts', content: 'a\nb\nc' }
-  const structured = { path: '/tmp/src/foo.ts', nodeId: 'local', bytesWritten: 10 }
-  const done = writeBodyData(trace({ toolName: 'write', input, structuredOutput: structured }))
+  const meta = { path: '/tmp/src/foo.ts', nodeId: 'local', bytesWritten: 10 }
+  const done = writeBodyData(trace({ toolName: 'write', input, presentationMeta: meta }))
   assert.equal(done.path, '/tmp/src/foo.ts')
   assert.equal(done.language, 'typescript')
   assert.equal(done.lineCount, 3)
   assert.equal(done.bytesWritten, 10)
   // 失败/运行中不宣称已写字节
   assert.equal(
-    writeBodyData(trace({ toolName: 'write', input, status: 'error', isError: true, structuredOutput: structured })).bytesWritten,
+    writeBodyData(trace({ toolName: 'write', input, status: 'error', isError: true, presentationMeta: meta })).bytesWritten,
     undefined,
   )
   assert.equal(writeBodyData(trace({ toolName: 'write', input, status: 'running' })).bytesWritten, undefined)
@@ -104,17 +104,29 @@ test('writeBodyData：路径语言与行数来自入参；bytesWritten 仅在成
   assert.equal(missing.lineCount, undefined)
 })
 
-test('readBodyData：structuredOutput.content 优先，spill 标记不做源码高亮', { timeout: 60_000 }, () => {
+test('readBodyData：正文始终来自 resultText（不消费 presentationMeta.content），路径优先 presentationMeta.path；spill 标记不做源码高亮', { timeout: 60_000 }, () => {
   const normal = readBodyData(
     trace({
       toolName: 'read',
-      input: { path: 'src/x.py' },
-      structuredOutput: { path: '/abs/src/x.py', nodeId: 'local', content: 'print(1)' },
+      input: { path: 'src/x.txt' },
+      resultText: 'print(1)',
+      presentationMeta: { path: '/abs/src/x.py', nodeId: 'local', content: '不应被读取的 details.content' },
     }),
   )
   assert.equal(normal.content, 'print(1)')
   assert.equal(normal.language, 'python')
   assert.equal(normal.isSpill, false)
+
+  // 无 resultText 时即使 presentationMeta 存在 content 也不采用
+  const metaOnly = readBodyData(
+    trace({
+      toolName: 'read',
+      input: { path: 'src/x.py' },
+      presentationMeta: { path: '/abs/src/x.py', nodeId: 'local', content: 'dead-channel' },
+    }),
+  )
+  assert.equal(metaOnly.content, undefined)
+  assert.equal(metaOnly.language, 'python')
 
   const spilled = readBodyData(
     trace({
@@ -126,7 +138,7 @@ test('readBodyData：structuredOutput.content 优先，spill 标记不做源码�
   )
   assert.ok(spilled.content !== undefined && spilled.content.includes('[Artifact]'))
   assert.equal(spilled.isSpill, true)
-  // resultText 兜底
+  // 无 presentationMeta 时从 input.path 推断语言
   const fallback = readBodyData(trace({ toolName: 'read', input: { path: 'a.md' }, resultText: '# t' }))
   assert.equal(fallback.content, '# t')
   assert.equal(fallback.language, 'markdown')
@@ -136,13 +148,13 @@ test('bashBodyData：命令来自入参；exitCode/timedOut 仅类型收窄', { 
   const data = bashBodyData(
     trace({
       input: { command: 'ls -la' },
-      structuredOutput: { ok: false, exitCode: 2, output: 'boom', timedOut: false },
+      presentationMeta: { ok: false, exitCode: 2, timedOut: false },
     }),
   )
   assert.equal(data.command, 'ls -la')
   assert.equal(data.exitCode, 2)
   assert.equal(data.timedOut, false)
-  const timedOut = bashBodyData(trace({ structuredOutput: { ok: false, exitCode: null, output: '', timedOut: true } }))
+  const timedOut = bashBodyData(trace({ presentationMeta: { ok: false, exitCode: null, timedOut: true } }))
   assert.equal(timedOut.exitCode, null)
   assert.equal(timedOut.timedOut, true)
   const none = bashBodyData(trace({}))
@@ -175,14 +187,14 @@ function validEditMeta(): Record<string, unknown> {
 }
 
 test('toolRowStats：edit 完成且元数据合法才报 +N −N（已应用语义）', { timeout: 60_000 }, () => {
-  const stats = toolRowStats(trace({ toolName: 'edit', structuredOutput: validEditMeta() }))
+  const stats = toolRowStats(trace({ toolName: 'edit', presentationMeta: validEditMeta() }))
   assert.deepEqual(
     { add: stats?.addCount, remove: stats?.removeCount },
     { add: 2, remove: 1 },
   )
   assert.match(stats?.title ?? '', /Applied/)
   // 元数据非法：不给统计（不伪称已应用差异）
-  assert.equal(toolRowStats(trace({ toolName: 'edit', structuredOutput: { path: '/a', replaced: true } })), undefined)
+  assert.equal(toolRowStats(trace({ toolName: 'edit', presentationMeta: { path: '/a', replaced: true } })), undefined)
 })
 
 test('toolRowStats：edit 运行中报待执行片段统计，标题明示未应用', { timeout: 60_000 }, () => {

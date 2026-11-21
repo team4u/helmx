@@ -29,6 +29,7 @@ ensureHappyDom()
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 ;(globalThis as Record<string, unknown>).React = React
 const { HostStoreProviders } = await import('./helpers/host-store.js')
+const { resetPluginClientCache, seedPluginClientModule } = await import('../src/lib/plugin-client.js')
 const { ToolExpandedBody } = await import('../src/conversation/ToolExpandedBody.js')
 const { TraceRow, StepGroup } = await import('../src/conversation/TimelineRows.js')
 
@@ -77,7 +78,7 @@ function rowUi(tool: ToolTrace, defaultOpen = false): React.ReactElement {
   return e(
     HostStoreProviders,
     { value: store },
-    e(TraceRow, { tool, conversationId: 1, defaultOpen, siblingCalls: [] }),
+    e(TraceRow, { tool, conversationId: 1, defaultOpen }),
   )
 }
 
@@ -85,7 +86,7 @@ function stepGroupUi(steps: FoldableStep[], active = false): React.ReactElement 
   return e(
     HostStoreProviders,
     { value: store },
-    e(StepGroup, { steps, active, conversationId: 1, siblingCalls: [] }),
+    e(StepGroup, { steps, active, conversationId: 1 }),
   )
 }
 
@@ -153,7 +154,7 @@ test('edit pending → success：完成且元数据合法后切换为内核真�
           toolName: 'edit',
           status: 'done',
           input,
-          structuredOutput: validEditMeta([
+          presentationMeta: validEditMeta([
             { kind: 'context', oldLine: 9, newLine: 9, text: 'function f() {' },
             { kind: 'remove', oldLine: 10, text: '  const a = 1' },
             { kind: 'add', newLine: 10, text: '  const a = 2' },
@@ -186,7 +187,7 @@ test('edit failure：错误与请求的变更片段（执行失败不判定文�
           isError: true,
           input: { path: '/a.ts', oldText: 'x', newText: 'y' },
           resultText: 'edit_failed: oldText 在 /a.ts 中出现 2 次（需唯一匹配）',
-          structuredOutput: validEditMeta([{ kind: 'add', newLine: 1, text: '伪造' }]),
+          presentationMeta: validEditMeta([{ kind: 'add', newLine: 1, text: '伪造' }]),
         }),
       ),
     )
@@ -208,7 +209,7 @@ test('edit 成功但元数据缺失/非法：显式诊断并默认展开原始�
         trace({
           toolName: 'edit',
           input: { path: '/a.ts', oldText: 'x', newText: 'y' },
-          structuredOutput: { path: '/a.ts', nodeId: 'local', replaced: true },
+          presentationMeta: { path: '/a.ts', nodeId: 'local', replaced: true },
           resultText: 'edit_ok: /a.ts（节点 local）',
         }),
       ),
@@ -247,7 +248,7 @@ test('edit 已应用差异：单删单增行对词级加深', { timeout: 60_000 
         trace({
           toolName: 'edit',
           input: { path: '/a.ts', oldText: 'x', newText: 'y' },
-          structuredOutput: validEditMeta([
+          presentationMeta: validEditMeta([
             { kind: 'remove', oldLine: 10, text: '  const a = 1' },
             { kind: 'add', newLine: 10, text: '  const a = 2' },
           ]),
@@ -278,7 +279,7 @@ test('edit 服务端截断：如实提示不可取回；长差异折叠后可展
         trace({
           toolName: 'edit',
           input: { path: '/a.ts', oldText: 'x', newText: 'y' },
-          structuredOutput: validEditMeta(rows, true),
+          presentationMeta: validEditMeta(rows, true),
         }),
       ),
     )
@@ -390,7 +391,7 @@ test('write：失败显示执行失败与错误详情（不断言未写入）；
         trace({
           toolName: 'write',
           input: { path: '/s/a.ts', content: 'x' },
-          structuredOutput: { path: '/s/a.ts', nodeId: 'local', bytesWritten: 1024 },
+          presentationMeta: { path: '/s/a.ts', nodeId: 'local', bytesWritten: 1024 },
         }),
       ),
     )
@@ -411,7 +412,7 @@ test('read：spill 输出不做源码高亮并保留产物入口；普通结果�
           toolName: 'read',
           input: { path: 'src/big.log' },
           resultText: spillText,
-          structuredOutput: { path: '/abs/src/big.log', nodeId: 'local', content: spillText },
+          presentationMeta: { path: '/abs/src/big.log', nodeId: 'local' },
           artifactRef: 'abc-1',
         }),
       ),
@@ -435,7 +436,8 @@ test('read：spill 输出不做源码高亮并保留产物入口；普通结果�
         trace({
           toolName: 'read',
           input: { path: 'src/x.py' },
-          structuredOutput: { path: '/abs/src/x.py', nodeId: 'local', content: 'print("hi")\n' },
+          resultText: 'print("hi")\n',
+          presentationMeta: { path: '/abs/src/x.py', nodeId: 'local' },
         }),
       ),
     )
@@ -465,7 +467,7 @@ test('bash：命令可复制；输出默认尾 8 行、标注折叠前 N 行、�
           toolName: 'bash',
           input: { command: 'pnpm test --filter @helmx/web' },
           resultText: output,
-          structuredOutput: { ok: false, exitCode: 2, output, timedOut: false },
+          presentationMeta: { ok: false, exitCode: 2, timedOut: false },
         }),
       ),
     )
@@ -520,7 +522,7 @@ test('通用工具：键值展示多行入参；原始数据展开保留完整 J
           toolName: 'gate',
           input: { question: '是否继续部署？', options: ['继续', '终止'], context: 'step1\nstep2' },
           resultText: 'approved',
-          structuredOutput: { decision: '继续' },
+          presentationMeta: { decision: '继续' },
         }),
       ),
     )
@@ -630,7 +632,7 @@ test('TraceRow：单行统计 write 行数与 edit +N −N；无统计不渲染�
       rowUi(
         trace({
           toolName: 'edit',
-          structuredOutput: validEditMeta([
+          presentationMeta: validEditMeta([
             { kind: 'remove', oldLine: 2, text: 'a' },
             { kind: 'add', newLine: 2, text: 'b' },
             { kind: 'add', newLine: 3, text: 'c' },
@@ -767,7 +769,7 @@ test('StepGroup: one total with localized timing details on hover and keyboard f
   ]
   try {
     await m.render(e(HostStoreProviders, { value: localeStore }, e(StepGroup, {
-      steps, active: false, conversationId: 1, siblingCalls: [],
+      steps, active: false, conversationId: 1,
     })))
     const summaryBtn = m.host.querySelector<HTMLButtonElement>('button.trace-group-summary')!
     assert.equal(summaryBtn.querySelector('.trace-group-meta')?.textContent, '13.2s')
@@ -859,5 +861,87 @@ test('StepGroup：进行中（active=true）不显示总耗时，单思考步委
     assert.ok(singleBtn.querySelector('.trace-group-meta') === null)
   } finally {
     m.unmount()
+  }
+})
+
+test('TraceRow：tool.view 透传 presentationMeta 且不再透传 siblingCalls/structuredOutput（inline 与 replaceRow 行为不变）', { timeout: 60_000 }, async () => {
+  const received: Array<Record<string, unknown>> = []
+  seedPluginClientModule('demo:toolview', 'index.tsx', {
+    ProbeToolView: (props: Record<string, unknown>) => {
+      received.push(props)
+      const meta = props.presentationMeta as { workerId?: number } | undefined
+      return e('div', { className: 'probe-tool-view' }, `worker:${meta?.workerId ?? 'none'}`)
+    },
+  }, 'hash-tv-1')
+
+  const tvStore = makeTestStore({
+    plugins: [{
+      id: 'demo:toolview',
+      name: 'Demo ToolView',
+      version: '1.0.0',
+      enabled: true,
+      locked: false,
+      status: 'active',
+      hooks: [],
+      actions: [],
+      tools: [],
+      clientHashes: { 'index.tsx': 'hash-tv-1' },
+    }],
+  })
+  const m = createMount()
+  try {
+    const meta = { workerId: 42 }
+    // 1) replaceRow=true: 插件接管整行，收到 presentationMeta，不含 siblingCalls/structuredOutput
+    await m.render(e(HostStoreProviders, { value: tvStore }, e(TraceRow, {
+      tool: trace({
+        key: 'tool:c-tv-1',
+        callId: 'c-tv-1',
+        toolName: 'dispatch_demo',
+        resultText: 'ok',
+        presentationMeta: meta,
+        toolView: {
+          pluginId: 'demo:toolview',
+          spec: { id: 'demo-tv', toolNames: ['dispatch_demo'], replaceRow: true, client: { module: 'index.tsx', export: 'ProbeToolView' } },
+        },
+      }),
+      conversationId: 7,
+      defaultOpen: false,
+    })))
+    await waitForCondition(() => m.host.querySelector('.probe-tool-view') !== null)
+    assert.ok(m.host.querySelector('.trace-row') === null, 'replaceRow=true 不渲染默认 .trace-row')
+    assert.equal(m.host.querySelector('.probe-tool-view')?.textContent, 'worker:42')
+    const lastReplace = received.at(-1)!
+    assert.equal(lastReplace.callId, 'c-tv-1')
+    assert.equal(lastReplace.conversationId, 7)
+    assert.equal(lastReplace.presentationMeta, meta)
+    assert.equal('siblingCalls' in lastReplace, false)
+    assert.equal('structuredOutput' in lastReplace, false)
+
+    // 2) inline (replaceRow=false): 保留 .trace-row 与 .trace-toolview，展开原始数据可见 presentationMeta
+    received.length = 0
+    await m.render(e(HostStoreProviders, { value: tvStore }, e(TraceRow, {
+      tool: trace({
+        key: 'tool:c-tv-2',
+        callId: 'c-tv-2',
+        toolName: 'dispatch_demo',
+        resultText: 'inline-ok',
+        presentationMeta: meta,
+        toolView: {
+          pluginId: 'demo:toolview',
+          spec: { id: 'demo-tv-inline', toolNames: ['dispatch_demo'], client: { module: 'index.tsx', export: 'ProbeToolView' } },
+        },
+      }),
+      conversationId: 7,
+      defaultOpen: false,
+    })))
+    await waitForCondition(() => m.host.querySelector('.trace-toolview .probe-tool-view') !== null)
+    assert.ok(m.host.querySelector('.trace-row') !== null, 'inline 模式保留 .trace-row')
+    const lastInline = received.at(-1)!
+    assert.equal(lastInline.presentationMeta, meta)
+    assert.equal('siblingCalls' in lastInline, false)
+    assert.equal('structuredOutput' in lastInline, false)
+  } finally {
+    m.unmount()
+    resetPluginClientCache()
   }
 })

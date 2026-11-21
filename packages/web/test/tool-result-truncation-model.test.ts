@@ -3,7 +3,7 @@
  * - readResultTruncation 边界收窄（truncated 必须 true；totalChars/totalLines 非法丢弃）；
  * - buildTimelineItems 把 marker 随 toolResult 消息归一到 ToolTrace（配对与独立行），
  *   并携带 resultEntryId 精确定位；全文条目重建后截断标记自然消失（回填闭环）；
- * - readBodyData.fromResultText 区分原始输出通道与 details 通道；
+ * - readBodyData 始终读取原始 resultText 通道（不消费 presentationMeta.content 死通道）；
  * - truncationPreviewNote 绝不把预览行数冒充全文总量；
  * - conversationsApi.getEntry：数字字符串转正整数入 URL；非法 entryId 显式抛错不发请求。
  */
@@ -103,15 +103,15 @@ test('回填闭环：全文条目（无 marker）重建后截断标记消失、r
   assert.equal(tool.resultText, fullText)
 })
 
-test('readBodyData：structuredOutput.content 优先且不受截断约束；resultText 退回时受约束', { timeout: 60_000 }, () => {
-  const structured = readBodyData({
+test('readBodyData：始终读取 resultText（不消费 presentationMeta.content），path 优先来自 presentationMeta', { timeout: 60_000 }, () => {
+  const withMeta = readBodyData({
     key: 't', toolName: 'read', status: 'done', isError: false,
     resultText: '预览',
     resultTruncation: { truncated: true, totalLines: 99 },
-    structuredOutput: { path: '/a.ts', content: 'details 通道完整内容' },
+    presentationMeta: { path: '/a.ts', nodeId: 'local', content: '不应被读取的 details.content' },
   })
-  assert.equal(structured.content, 'details 通道完整内容')
-  assert.equal(structured.fromResultText, false, 'details 通道完整传回，截断标记不适用于该展示文本')
+  assert.equal(withMeta.content, '预览')
+  assert.equal(withMeta.language, 'typescript')
 
   const raw = readBodyData({
     key: 't', toolName: 'read', status: 'done', isError: false,
@@ -119,7 +119,6 @@ test('readBodyData：structuredOutput.content 优先且不受截断约束；resu
     resultTruncation: { truncated: true, totalLines: 99 },
   })
   assert.equal(raw.content, '预览')
-  assert.equal(raw.fromResultText, true)
 })
 
 test('truncationPreviewNote：总量未知不伪造，绝不把预览行数当全文', { timeout: 60_000 }, () => {
