@@ -1,6 +1,7 @@
 /**
  * Display copy for builtin:tiers client (pure LocalizedText constants + helpers; zero Emoji).
  */
+import type { ModelPickerControlCopy } from '@helmx/plugin-client'
 import type { HelmxLocale, LocalizedText } from '@helmx/protocol/browser'
 
 export const TIERS_SCREEN_TITLE: LocalizedText = {
@@ -84,28 +85,18 @@ export const TIERS_FIELD_ID_PLACEHOLDER: LocalizedText = {
 }
 
 export const TIERS_FIELD_MODEL: LocalizedText = {
-  en: 'Target model',
-  'zh-CN': '目标模型',
+  en: 'Target model & thinking level',
+  'zh-CN': '目标模型与思考档位',
 }
 
 export const TIERS_PICK_MODEL: LocalizedText = {
-  en: 'Select concrete model',
-  'zh-CN': '选择具体模型',
+  en: 'Select model & thinking level',
+  'zh-CN': '选择模型与思考档位',
 }
 
 export const TIERS_CLEAR_MODEL: LocalizedText = {
-  en: 'Clear model',
-  'zh-CN': '清空模型',
-}
-
-export const TIERS_FIELD_THINKING: LocalizedText = {
-  en: 'Thinking level',
-  'zh-CN': '思考强度',
-}
-
-export const TIERS_THINKING_DEFAULT: LocalizedText = {
-  en: 'Follow default',
-  'zh-CN': '跟随模型默认',
+  en: 'Clear model & level',
+  'zh-CN': '清空模型绑定',
 }
 
 export const TIERS_FIELD_DESCRIPTION: LocalizedText = {
@@ -223,11 +214,6 @@ export const TIERS_COL_ACTIONS: LocalizedText = {
   'zh-CN': '操作',
 }
 
-export const TIERS_SETTINGS_SECTION: LocalizedText = {
-  en: 'Model Tiers Overview',
-  'zh-CN': '模型档位概览',
-}
-
 export const TIERS_SETTINGS_KV_ACTIVE: LocalizedText = {
   en: 'Active tiers',
   'zh-CN': '生效档位数',
@@ -278,6 +264,12 @@ export const TIERS_ERR_TEMPLATE_FIELDS: LocalizedText = {
   'zh-CN': '请填写模板 ID 与模板名称。',
 }
 
+export function tiersPickModelWithHint(level: string, locale: HelmxLocale): string {
+  return locale === 'zh-CN'
+    ? `选择模型与思考档位（建议 ${level}）`
+    : `Select model & level (suggested: ${level})`
+}
+
 export function tiersTemplateAppliedNotice(name: string, locale: HelmxLocale): string {
   return locale === 'zh-CN' ? `已切换到模板「${name}」。` : `Applied template "${name}".`
 }
@@ -291,21 +283,27 @@ export function tiersActionFailed(err: unknown, locale: HelmxLocale): string {
   return locale === 'zh-CN' ? `操作失败：${detail}` : `Operation failed: ${detail}`
 }
 
-export function buildTiersPickerCopy(locale: HelmxLocale): Record<string, string> {
+export function buildTiersPickerCopy(locale: HelmxLocale): Partial<ModelPickerControlCopy> {
   if (locale === 'zh-CN') {
     return {
-      defaultLabel: '选择具体模型',
+      buttonAria: '模型与思考档位：{model}{level}',
+      levelSuffix: ' · {level}',
+      defaultLabel: '选择模型与思考档位',
       searchAria: '搜索模型',
       searchPlaceholder: '搜索模型…',
       refreshCatalog: '刷新动态模型目录',
+      tiersHeader: '模型档位',
+      tierRowTitle: '使用 {tier}（{model}）',
       listHeader: '模型列表',
       navHint: '↑↓ 选择 · Enter 确认',
-      emptyCatalog: '暂无可用模型，请先在模型与凭据中配置提供商密钥',
-      noMatches: '无匹配模型',
-      rowDefaultTitle: '选择 {model}',
-      catalogUnavailable: '模型目录暂不可用',
-      catalogPartialFailure: '部分模型目录刷新失败',
-      catalogRefreshed: '模型目录已刷新',
+      emptyCatalog: '暂无可用模型；请先在「模型与凭据」配置供应商密钥',
+      noMatches: '没有匹配的模型',
+      thinkingHeader: '思考档位',
+      rowDefaultTitle: '使用 {model}（思考档位跟随默认）',
+      levelChipTitle: '使用 {model} · 思考 {level}',
+      catalogUnavailable: '模型目录不可用',
+      catalogPartialFailure: '部分供应商目录刷新失败',
+      catalogRefreshed: '已刷新模型目录',
       catalogRefreshFailed: '刷新模型目录失败',
     }
   }

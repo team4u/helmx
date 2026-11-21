@@ -173,6 +173,17 @@ test('TiersManagerScreen: starter draft fill, validation guard, template save/ap
       idInputs.map((i) => i.value),
       ['scout', 'coder', 'senior', 'architect', 'reviewer'],
     )
+    assert.equal(
+      emptyMount.host.querySelectorAll('.helmx-select-trigger, select').length,
+      0,
+      'TiersManagerScreen must reuse integrated ModelPickerControl instead of a separate thinking-level Select',
+    )
+    const starterPickers = Array.from(
+      emptyMount.host.querySelectorAll('button.composer-model-button'),
+    ) as HTMLButtonElement[]
+    assert.equal(starterPickers.length, 5)
+    assert.match(starterPickers[1]?.textContent ?? '', /suggested: high/, 'starter draft should hint suggested thinking level')
+    assert.match(starterPickers[2]?.textContent ?? '', /suggested: xhigh/)
     // Attempt save with blank concrete models -> explicit error, zero action calls
     await act(async () => {
       findButton(emptyMount.host, 'Save tiers').click()
@@ -255,6 +266,77 @@ test('TiersManagerScreen: starter draft fill, validation guard, template save/ap
       actionId: 'save_template',
       input: { id: 'custom-1', name: 'Custom Roster' },
     })
+
+    // Earlier we applied `budget` -> draft has `coder: faux/fast · low`. Verify integrated trigger + inline chips!
+    const pickerBtn = fullMount.host.querySelector('button.composer-model-button') as HTMLButtonElement | null
+    assert.ok(pickerBtn, 'expected integrated ModelPickerControl button')
+    assert.match(pickerBtn.textContent ?? '', /fast/)
+    assert.match(pickerBtn.textContent ?? '', /low/)
+
+    // 1) Click inline thinking chip (`xhigh` on `faux/flagship`) -> updates model + thinkingLevel together and saves
+    await act(async () => {
+      pickerBtn.click()
+    })
+    assert.doesNotMatch(document.body.textContent ?? '', /Model tiers/, 'allowTiers=false must suppress tiers inside tier editor')
+    const flagshipRow = Array.from(document.body.querySelectorAll<HTMLElement>('.composer-model-row')).find((row) =>
+      (row.querySelector('.composer-model-row-main') as HTMLButtonElement | null)?.title.includes('faux/flagship'),
+    )
+    assert.ok(flagshipRow, 'expected faux/flagship row in integrated popover')
+    const xhighChip = Array.from(flagshipRow.querySelectorAll<HTMLButtonElement>('.composer-model-level-chip')).find(
+      (btn) => btn.textContent?.trim() === 'xhigh',
+    )
+    assert.ok(xhighChip, 'expected inline xhigh chip on flagship row')
+    await act(async () => {
+      xhighChip.click()
+    })
+    assert.match(pickerBtn.textContent ?? '', /flagship/)
+    assert.match(pickerBtn.textContent ?? '', /xhigh/)
+    await act(async () => {
+      findButton(fullMount.host, 'Save tiers').click()
+    })
+    assert.deepEqual(ctx.actionCalls[3], {
+      actionId: 'replace',
+      input: {
+        tiers: {
+          coder: { model: 'faux/flagship', thinkingLevel: 'xhigh' },
+        },
+      },
+    })
+
+    // 2) Click model row body (`faux/workhorse`) -> updates model and resets thinkingLevel to follow default chain
+    await act(async () => {
+      pickerBtn.click()
+    })
+    const workhorseRowMain = Array.from(document.body.querySelectorAll<HTMLButtonElement>('.composer-model-row-main')).find(
+      (btn) => btn.title.includes('faux/workhorse'),
+    )
+    assert.ok(workhorseRowMain, 'expected faux/workhorse row body button')
+    await act(async () => {
+      workhorseRowMain.click()
+    })
+    assert.match(pickerBtn.textContent ?? '', /workhorse/)
+    assert.doesNotMatch(pickerBtn.textContent ?? '', /xhigh/)
+    await act(async () => {
+      findButton(fullMount.host, 'Save tiers').click()
+    })
+    assert.deepEqual(ctx.actionCalls[4], {
+      actionId: 'replace',
+      input: {
+        tiers: {
+          coder: { model: 'faux/workhorse' },
+        },
+      },
+    })
+
+    // 3) Click reset item (`Clear model & level`) -> clears both model and thinkingLevel back to Draft
+    await act(async () => {
+      pickerBtn.click()
+    })
+    await act(async () => {
+      findButton(document.body, 'Clear model & level').click()
+    })
+    assert.match(pickerBtn.textContent ?? '', /Select model & thinking level/)
+    assert.match(fullMount.host.textContent ?? '', /Draft/)
   } finally {
     await fullMount.unmount()
   }

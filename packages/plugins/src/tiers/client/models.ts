@@ -7,7 +7,6 @@ import type { HelmxLocale, HostModelEntry, ModelTierSpec } from '@helmx/protocol
 export const TIERS_PLUGIN_ID = 'builtin:tiers' as const
 export const TIERS_STATE_DOC = 'state' as const
 export const TIERS_SCREEN_ID = 'main' as const
-export const TIER_THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
 
 const TIER_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,62}$/
 
@@ -192,16 +191,4 @@ export function resolveTierRowStatus(
   if (entry === undefined) return 'unavailable'
   if (entry.disabled === true) return 'disabled'
   return entry.available ? 'available' : 'unavailable'
-}
-
-/** Supported thinking levels for the chosen concrete model (falls back to full list if model unknown). */
-export function thinkingLevelsForConcreteModel(
-  modelRef: string,
-  models: ReadonlyArray<HostModelEntry>,
-): ReadonlyArray<string> {
-  const entry = models.find((m) => m.id === modelRef.trim())
-  if (entry !== undefined && entry.thinkingLevels.length > 0) {
-    return entry.thinkingLevels
-  }
-  return TIER_THINKING_LEVELS
 }

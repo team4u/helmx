@@ -3,9 +3,9 @@
  * - TiersManagerScreen: full-stage semantic model tiers editor + custom preset template manager;
  * - TiersSettingsPanel: compact overview inside Plugin Detail Drawer with quick open action.
  *
- * Strictly reuses @helmx/plugin-client Radix primitives (`ModelPickerControl` with `allowTiers={false}`,
- * `Select`, `Screen`, `ScreenSection`, `ScreenToolbar`, `KvGrid`, `EmptyState`, `Callout`, `HelmxIcon`),
- * zero native `<select>`, zero Emoji.
+ * Strictly reuses @helmx/plugin-client Radix primitives (`ModelPickerControl` with `allowTiers={false}`
+ * and integrated inline thinking-level chips, `Screen`, `ScreenSection`, `ScreenToolbar`, `KvGrid`,
+ * `EmptyState`, `Callout`, `HelmxIcon`), zero native `<select>`, zero Emoji.
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
@@ -19,7 +19,6 @@ import {
   Screen,
   ScreenSection,
   ScreenToolbar,
-  Select,
   formatModelShortName,
   formatTime,
   useHostModels,
@@ -27,7 +26,6 @@ import {
   usePluginDoc,
   usePluginLocale,
   usePluginTranslator,
-  type SelectOption,
 } from '@helmx/plugin-client'
 import {
   TIERS_PLUGIN_ID,
@@ -37,7 +35,6 @@ import {
   isDraftDirty,
   parseTiersStateDoc,
   resolveTierRowStatus,
-  thinkingLevelsForConcreteModel,
   tiersRecordToDraftRows,
   validateDraftRows,
   type TierDraftRow,
@@ -63,7 +60,6 @@ import {
   TIERS_FIELD_ID,
   TIERS_FIELD_ID_PLACEHOLDER,
   TIERS_FIELD_MODEL,
-  TIERS_FIELD_THINKING,
   TIERS_FILL_STARTER,
   TIERS_LOADING,
   TIERS_PICK_MODEL,
@@ -79,7 +75,6 @@ import {
   TIERS_SETTINGS_KV_TEMPLATES,
   TIERS_SETTINGS_NONE,
   TIERS_SETTINGS_OPEN,
-  TIERS_SETTINGS_SECTION,
   TIERS_STATUS_AVAILABLE,
   TIERS_STATUS_DISABLED,
   TIERS_STATUS_DRAFT,
@@ -97,10 +92,10 @@ import {
   TIERS_TEMPLATE_NAME_PLACEHOLDER,
   TIERS_TEMPLATE_SAVE_BTN,
   TIERS_TEMPLATE_SAVE_TITLE,
-  TIERS_THINKING_DEFAULT,
   TIERS_UNSAVED_BADGE,
   buildTiersPickerCopy,
   tiersActionFailed,
+  tiersPickModelWithHint,
   tiersTemplateAppliedNotice,
   tiersTemplateSavedNotice,
 } from './copy.ts'
@@ -323,14 +318,16 @@ export function TiersManagerScreen(_props: ScreenProps): ReactNode {
           <div className="tiers-list">
             {draft.map((row) => {
               const status = resolveTierRowStatus(row.model, models)
-              const levels = thinkingLevelsForConcreteModel(row.model, models)
-              const thinkingOptions: SelectOption<string>[] = [
-                { value: '', label: t(TIERS_THINKING_DEFAULT) },
-                ...levels.map((lvl) => ({ value: lvl, label: lvl })),
-              ]
-              if (row.thinkingLevel !== '' && !levels.includes(row.thinkingLevel)) {
-                thinkingOptions.push({ value: row.thinkingLevel, label: row.thinkingLevel })
-              }
+              const placeholder =
+                row.model === '' && row.thinkingLevel !== ''
+                  ? tiersPickModelWithHint(row.thinkingLevel, locale)
+                  : t(TIERS_PICK_MODEL)
+              const buttonTitle =
+                row.model !== ''
+                  ? row.thinkingLevel !== ''
+                    ? `${row.model} · ${row.thinkingLevel}`
+                    : row.model
+                  : placeholder
               const statusBadge =
                 status === 'available'
                   ? { tone: 'badge-ok', label: t(TIERS_STATUS_AVAILABLE) }
@@ -361,33 +358,25 @@ export function TiersManagerScreen(_props: ScreenProps): ReactNode {
                     <div className="tiers-field">
                       <span className="tiers-field-label">{t(TIERS_FIELD_MODEL)}</span>
                       <ModelPickerControl
+                        buttonAriaLabel={`${t(TIERS_FIELD_MODEL)}${row.id.trim() !== '' ? ` · tier/${row.id.trim()}` : ''}`}
                         effectiveModel={row.model || undefined}
-                        activeThinkingLevel=""
-                        placeholderLabel={t(TIERS_PICK_MODEL)}
-                        buttonTitle={row.model || t(TIERS_PICK_MODEL)}
+                        activeThinkingLevel={row.thinkingLevel}
+                        placeholderLabel={placeholder}
+                        buttonTitle={buttonTitle}
                         resetLabel={t(TIERS_CLEAR_MODEL)}
                         resetTitle={t(TIERS_CLEAR_MODEL)}
                         popoverSide="bottom"
                         enableShortcut={false}
-                        showThinkingLevels={false}
                         allowTiers={false}
                         disabled={busy}
                         copy={pickerCopy}
                         onNotice={(msg, tone) => ctx.notify(msg, tone)}
-                        onApply={(model) => updateRow(row.key, { model })}
-                        onResetDefault={() => updateRow(row.key, { model: '' })}
-                      />
-                    </div>
-
-                    <div className="tiers-field">
-                      <span className="tiers-field-label">{t(TIERS_FIELD_THINKING)}</span>
-                      <Select
-                        size="sm"
-                        aria-label={t(TIERS_FIELD_THINKING)}
-                        value={row.thinkingLevel}
-                        options={thinkingOptions}
-                        disabled={busy}
-                        onChange={(e) => updateRow(row.key, { thinkingLevel: e.target.value })}
+                        onApply={(model, level) =>
+                          updateRow(row.key, { model, thinkingLevel: level ?? '' })
+                        }
+                        onResetDefault={() =>
+                          updateRow(row.key, { model: '', thinkingLevel: '' })
+                        }
                       />
                     </div>
 
