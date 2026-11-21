@@ -59,6 +59,9 @@ test('host-facing symbols (port / context / factory / explicit-addressing hooks)
     'usePluginSessionDocValue',
     'ToolActivityContext',
     'useToolActivity',
+    'TimelineToolCallsContext',
+    'createTimelineToolCallsStore',
+    'useTimelineToolCalls',
     'ScreenParamsContext',
   ] as const) {
     assert.ok(name in SDK, `host-facing symbol ${name} must be exported`)
@@ -1076,5 +1079,285 @@ test('ToolCallDetails: omitted facts render no section and no artifact button (n
     assert.equal(details.querySelectorAll('button').length, 0, 'an empty artifactRef renders no button')
   } finally {
     act(() => root.unmount())
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 7. TimelineToolCallsContext / useTimelineToolCalls: per-toolName sharded store
+// ---------------------------------------------------------------------------
+
+test('useTimelineToolCalls: returns a referentially stable frozen empty array outside Provider and on SSR', { timeout: 60_000 }, () => {
+  const snapshots: Array<ReadonlyArray<SDK.TimelineToolCallSummary>> = []
+  function OutsideProbe({ toolName }: { toolName: string }): React.ReactNode {
+    const calls = SDK.useTimelineToolCalls(toolName)
+    snapshots.push(calls)
+    return e('div', { 'data-count': calls.length }, String(calls.length))
+  }
+
+  // SSR outside Provider
+  const html = renderToString(e(OutsideProbe, { toolName: 'subagent' }))
+  assert.match(html, /data-count="0"/)
+  assert.equal(snapshots.length, 1)
+  assert.deepEqual(snapshots[0], [])
+  assert.ok(Object.isFrozen(snapshots[0]), 'empty fallback array must be frozen')
+
+  // Client mount + re-render + switching toolName outside Provider
+  const { host, root } = mount(e(OutsideProbe, { toolName: 'subagent' }))
+  try {
+    assert.equal(host.querySelector('[data-count="0"]')?.textContent, '0')
+    act(() => root.render(e(OutsideProbe, { toolName: 'bash' })))
+    act(() => root.render(e(OutsideProbe, { toolName: '' })))
+    assert.ok(snapshots.length >= 4)
+    for (const snap of snapshots) {
+      assert.ok(snap === snapshots[0], 'all outside-Provider snapshots must share the exact same empty array reference')
+    }
+  } finally {
+    act(() => root.unmount())
+  }
+})
+
+test('useTimelineToolCalls: shards by toolName so unrelated tool updates trigger zero re-renders and preserve unchanged references', { timeout: 60_000 }, () => {
+  const inputSub1 = { prompt: 'audit', resume: 11 }
+  const metaSub1 = { runId: 'wf_1', status: 'running' }
+  const inputBash1 = { command: 'ls' }
+  const metaBash1 = { exitCode: 0 }
+  const inputRead1 = { path: 'a.ts' }
+
+  const store = SDK.createTimelineToolCallsStore([
+    { callId: 'c1', toolName: 'subagent', index: 0, status: 'running', input: inputSub1, presentationMeta: metaSub1 },
+    { callId: 'c2', toolName: 'bash', index: 1, status: 'running', input: inputBash1 },
+  ])
+
+  let subagentRenders = 0
+  let bashRenders = 0
+  const subagentSnapshots: Array<ReadonlyArray<SDK.TimelineToolCallSummary>> = []
+  const bashSnapshots: Array<ReadonlyArray<SDK.TimelineToolCallSummary>> = []
+
+  function SubagentProbe(): React.ReactNode {
+    subagentRenders += 1
+    const calls = SDK.useTimelineToolCalls('subagent')
+    subagentSnapshots.push(calls)
+    return e('div', { 'data-subagent': calls.map((c) => `${c.callId}:${c.status}`).join(',') })
+  }
+
+  function BashProbe(): React.ReactNode {
+    bashRenders += 1
+    const calls = SDK.useTimelineToolCalls('bash')
+    bashSnapshots.push(calls)
+    return e('div', { 'data-bash': calls.map((c) => `${c.callId}:${c.status}`).join(',') })
+  }
+
+  const { root } = mount(
+    e(
+      SDK.TimelineToolCallsContext.Provider,
+      { value: store },
+      e(SubagentProbe),
+      e(BashProbe),
+    ),
+  )
+
+  try {
+    assert.equal(subagentRenders, 1)
+    assert.equal(bashRenders, 1)
+    const initialSubagentRef = subagentSnapshots[0]!
+    assert.equal(initialSubagentRef.length, 1)
+    assert.equal(initialSubagentRef[0]!.callId, 'c1')
+    assert.equal(initialSubagentRef[0]!.index, 0)
+    assert.ok(Object.isFrozen(initialSubagentRef))
+    assert.ok(Object.isFrozen(initialSubagentRef[0]))
+
+    // Update bash and add read — subagent summary fields/refs are unchanged (fresh wrapper object).
+    act(() => {
+      const changed = store.update([
+        { callId: 'c1', toolName: 'subagent', index: 0, status: 'running', input: inputSub1, presentationMeta: metaSub1 },
+        { callId: 'c2', toolName: 'bash', index: 1, status: 'done', input: inputBash1, presentationMeta: metaBash1 },
+        { callId: 'c3', toolName: 'read', index: 2, status: 'done', input: inputRead1 },
+      ])
+      assert.equal(changed, true)
+    })
+
+    assert.equal(subagentRenders, 1, 'unrelated toolName updates must NOT re-render subagent subscriber')
+    assert.equal(bashRenders, 2, 'bash status/meta change must re-render bash subscriber')
+    assert.ok(store.getSnapshot('subagent') === initialSubagentRef, 'unchanged shard preserves array reference')
+    assert.equal(bashSnapshots.at(-1)?.[0]?.status, 'done')
+    assert.deepEqual(bashSnapshots.at(-1)?.[0]?.presentationMeta, metaBash1)
+
+    // Identical update (rebuilt wrapper objects, same values/refs) notifies no one.
+    act(() => {
+      const changed = store.update(
+        new Map<string, ReadonlyArray<SDK.TimelineToolCallSummary>>([
+          ['subagent', [{ callId: 'c1', toolName: 'subagent', index: 0, status: 'running', input: inputSub1, presentationMeta: metaSub1 }]],
+          ['bash', [{ callId: 'c2', toolName: 'bash', index: 1, status: 'done', input: inputBash1, presentationMeta: metaBash1 }]],
+          ['read', [{ callId: 'c3', toolName: 'read', index: 2, status: 'done', input: inputRead1 }]],
+        ]),
+      )
+      assert.equal(changed, false)
+    })
+    assert.equal(subagentRenders, 1)
+    assert.equal(bashRenders, 2)
+
+    // Append a second subagent call: subagent re-renders and reuses unchanged prefix element identity.
+    const metaSub2 = { runId: 'wf_2', status: 'done' }
+    act(() => {
+      store.update([
+        { callId: 'c1', toolName: 'subagent', index: 0, status: 'running', input: inputSub1, presentationMeta: metaSub1 },
+        { callId: 'c2', toolName: 'bash', index: 1, status: 'done', input: inputBash1, presentationMeta: metaBash1 },
+        { callId: 'c4', toolName: 'subagent', index: 2, status: 'done', presentationMeta: metaSub2 },
+      ])
+    })
+    assert.equal(subagentRenders, 2)
+    assert.equal(bashRenders, 2, 'removing read / adding subagent must NOT re-render bash subscriber')
+    const nextSubagentRef = subagentSnapshots.at(-1)!
+    assert.equal(nextSubagentRef.length, 2)
+    assert.ok(nextSubagentRef[0] === initialSubagentRef[0], 'unchanged prefix summary keeps element reference')
+    assert.equal(nextSubagentRef[1]!.callId, 'c4')
+    assert.equal(nextSubagentRef[1]!.index, 2)
+
+    // Clear all calls: both shards reset to empty and notify once; subsequent empty update notifies no one.
+    act(() => {
+      assert.equal(store.update([]), true)
+    })
+    assert.equal(subagentRenders, 3)
+    assert.equal(bashRenders, 3)
+    assert.deepEqual(subagentSnapshots.at(-1), [])
+    assert.deepEqual(bashSnapshots.at(-1), [])
+    act(() => {
+      assert.equal(store.update(new Map([['subagent', []]])), false)
+    })
+    assert.equal(subagentRenders, 3)
+    assert.equal(bashRenders, 3)
+  } finally {
+    act(() => root.unmount())
+  }
+})
+
+test('useTimelineToolCalls: dynamic toolName switching, empty toolName, and SSR inside Provider', { timeout: 60_000 }, () => {
+  const store = SDK.createTimelineToolCallsStore([
+    { callId: 's1', toolName: 'subagent', index: 0, status: 'done' },
+    { callId: 'b1', toolName: 'bash', index: 1, status: 'running' },
+  ])
+
+  let latest: ReadonlyArray<SDK.TimelineToolCallSummary> = []
+  let renders = 0
+  function SwitchProbe({ toolName }: { toolName: string }): React.ReactNode {
+    renders += 1
+    latest = SDK.useTimelineToolCalls(toolName)
+    return e('div', { 'data-ids': latest.map((c) => c.callId).join(',') })
+  }
+
+  const ssrHtml = renderToString(
+    e(SDK.TimelineToolCallsContext.Provider, { value: store }, e(SwitchProbe, { toolName: 'subagent' })),
+  )
+  assert.match(ssrHtml, /data-ids="s1"/)
+
+  renders = 0
+  const { root } = mount(
+    e(SDK.TimelineToolCallsContext.Provider, { value: store }, e(SwitchProbe, { toolName: 'subagent' })),
+  )
+  try {
+    assert.deepEqual(latest.map((c) => c.callId), ['s1'])
+
+    // Switch subscribed toolName to 'bash'
+    act(() => {
+      root.render(e(SDK.TimelineToolCallsContext.Provider, { value: store }, e(SwitchProbe, { toolName: 'bash' })))
+    })
+    assert.deepEqual(latest.map((c) => c.callId), ['b1'])
+    const rendersBeforeUnrelated = renders
+
+    // Updates to 'subagent' no longer affect this subscriber after switching to 'bash'
+    act(() => {
+      store.update([
+        { callId: 's1', toolName: 'subagent', index: 0, status: 'error' },
+        { callId: 'b1', toolName: 'bash', index: 1, status: 'running' },
+      ])
+    })
+    assert.equal(renders, rendersBeforeUnrelated)
+
+    // Empty toolName falls back to stable empty array and ignores store updates
+    act(() => {
+      root.render(e(SDK.TimelineToolCallsContext.Provider, { value: store }, e(SwitchProbe, { toolName: '' })))
+    })
+    assert.deepEqual(latest, [])
+    const rendersWhenEmpty = renders
+    act(() => {
+      store.update([])
+    })
+    assert.equal(renders, rendersWhenEmpty)
+  } finally {
+    act(() => root.unmount())
+  }
+})
+
+test('createTimelineToolCallsStore: enforces lightweight summary boundary, prototype safety, and atomic rejection', { timeout: 60_000 }, () => {
+  const initialCall: SDK.TimelineToolCallSummary = {
+    callId: 'keep-1',
+    toolName: 'subagent',
+    index: 0,
+    status: 'done',
+    presentationMeta: { runId: 'wf_keep' },
+  }
+  const store = SDK.createTimelineToolCallsStore([initialCall])
+  let listenerCalls = 0
+  const unsub = store.subscribe('subagent', () => {
+    listenerCalls += 1
+  })
+  // Double unsubscribe must be safe and idempotent when called later
+  const unsubTemp = store.subscribe('bash', () => {})
+  unsubTemp()
+  unsubTemp()
+
+  try {
+    const invalidCases: Array<{ label: string; input: unknown }> = [
+      { label: 'bulky result string', input: [{ callId: 'c1', toolName: 'subagent', index: 0, status: 'done', result: 'huge output' }] },
+      { label: 'bulky resultText', input: [{ callId: 'c1', toolName: 'subagent', index: 0, status: 'done', resultText: 'huge' }] },
+      { label: 'bulky resultTruncation', input: [{ callId: 'c1', toolName: 'subagent', index: 0, status: 'done', resultTruncation: { truncated: true } }] },
+      { label: 'bulky structuredOutput', input: [{ callId: 'c1', toolName: 'subagent', index: 0, status: 'done', structuredOutput: { ok: true } }] },
+      { label: 'empty callId', input: [{ callId: '', toolName: 'subagent', index: 0, status: 'done' }] },
+      { label: 'empty toolName', input: [{ callId: 'c1', toolName: '', index: 0, status: 'done' }] },
+      { label: 'negative index', input: [{ callId: 'c1', toolName: 'subagent', index: -1, status: 'done' }] },
+      { label: 'non-integer index', input: [{ callId: 'c1', toolName: 'subagent', index: 1.5, status: 'done' }] },
+      { label: 'invalid status', input: [{ callId: 'c1', toolName: 'subagent', index: 0, status: 'unknown' }] },
+      { label: 'array presentationMeta', input: [{ callId: 'c1', toolName: 'subagent', index: 0, status: 'done', presentationMeta: ['bad'] }] },
+      { label: 'null presentationMeta', input: [{ callId: 'c1', toolName: 'subagent', index: 0, status: 'done', presentationMeta: null }] },
+      { label: 'mismatched map shard key', input: new Map([['bash', [{ callId: 'c1', toolName: 'subagent', index: 0, status: 'done' }]]]) },
+    ]
+
+    for (const c of invalidCases) {
+      assert.throws(
+        () => store.update(c.input as SDK.TimelineToolCallsInput),
+        TypeError,
+        `${c.label} must be explicitly rejected`,
+      )
+    }
+
+    // Atomic validation failure must leave existing shards untouched and notify nobody
+    assert.equal(listenerCalls, 0)
+    assert.equal(store.getSnapshot('subagent').length, 1)
+    assert.equal(store.getSnapshot('subagent')[0]!.callId, 'keep-1')
+
+    // Unexpected extra own properties are stripped so stored summaries only expose allowed protocol fields
+    store.update([
+      {
+        callId: 'c-clean',
+        toolName: 'subagent',
+        index: 0,
+        status: 'done',
+        extraLeak: 'ignored',
+      } as unknown as SDK.TimelineToolCallSummary,
+    ])
+    const stored = store.getSnapshot('subagent')[0]! as unknown as Record<string, unknown>
+    assert.deepEqual(Object.keys(stored).sort(), ['callId', 'index', 'status', 'toolName'])
+    assert.equal('extraLeak' in stored, false)
+    assert.equal(listenerCalls, 1)
+
+    // Prototype-key tool names do not collide with Object.prototype
+    for (const protoTool of ['__proto__', 'constructor', 'toString']) {
+      assert.deepEqual(store.getSnapshot(protoTool), [])
+      store.update([{ callId: `id-${protoTool}`, toolName: protoTool, index: 0, status: 'done' }])
+      assert.equal(store.getSnapshot(protoTool).length, 1)
+      assert.equal(store.getSnapshot(protoTool)[0]!.toolName, protoTool)
+    }
+  } finally {
+    unsub()
   }
 })

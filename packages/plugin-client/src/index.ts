@@ -53,6 +53,17 @@ export type { ConversationHookOptions, ConversationHookResult } from './conversa
 export { useConversation, useConversationBackground, useConversations, useHostModels, usePluginConfig, usePlugins, useScreenLocation, useSharedNowMs } from './conversation-hooks.js'
 export { ToolActivityContext, useToolActivity } from './tool-activity.js'
 export type { ToolActivityRegistry } from './tool-activity.js'
+export {
+  TimelineToolCallsContext,
+  createTimelineToolCallsStore,
+  useTimelineToolCalls,
+} from './timeline-tool-calls.js'
+export type {
+  TimelineToolCallsStore,
+  TimelineToolCallsStoreController,
+  TimelineToolCallsInput,
+} from './timeline-tool-calls.js'
+export type { TimelineToolCallStatus, TimelineToolCallSummary } from '@helmx/protocol/browser'
 
 // ---- Model picker (shared host/plugin model + thinking-level control) ----
 export { ModelPickerControl } from './ui/ModelPicker.js'

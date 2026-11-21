@@ -620,8 +620,8 @@ export interface PluginClientContext {
  *
  * The single source of truth of exported symbols is PLUGIN_CLIENT_SHARED_EXPORTS:
  * - hooks: usePluginContext / usePluginLocale / usePluginTranslator / usePluginDoc / usePluginSessionDoc /
- *   useToolActivity / useConversations / useConversation / useConversationBackground / usePlugins /
- *   useScreenParams (screen-local params scope provided by the host ScreenHost) /
+ *   useToolActivity / useTimelineToolCalls / useConversations / useConversation / useConversationBackground /
+ *   usePlugins / useScreenParams (screen-local params scope provided by the host ScreenHost) /
  *   usePluginConfig / useHostModels / useScreenLocation (stable-handle reads of host capability slices:
  *   model catalog, navigation location; isolation contract pinned by @helmx/plugin-client tests —
  *   unrelated host port revisions must not re-render consumers);
@@ -740,6 +740,25 @@ export interface ScreenLocationSnapshot {
 
 }
 
+/** Execution status of a timeline tool call summary. */
+export type TimelineToolCallStatus = 'running' | 'done' | 'error'
+
+/**
+ * Lightweight, toolName-sharded summary of one tool call in the active timeline
+ * (returned by `useTimelineToolCalls(toolName)`).
+ * Omits bulky `result` text and truncation payloads; carries only bounded UI metadata.
+ */
+export interface TimelineToolCallSummary {
+  callId: string
+  toolName: string
+  /** Chronological 0-based position of this tool call within the loaded timeline. */
+  index: number
+  status: TimelineToolCallStatus
+  input?: unknown
+  /** Bounded UI metadata persisted on toolResult.details (never carries raw result text). */
+  presentationMeta?: Readonly<Record<string, unknown>>
+}
+
 /** GET /api/plugins/:id/client.mjs response metadata (HTTP error envelope on failure, never JS). */
 export interface PluginClientModuleInfo {
   pluginId: string
@@ -787,6 +806,7 @@ export const PLUGIN_CLIENT_SHARED_EXPORTS = [
   'usePluginDoc',
   'usePluginSessionDoc',
   'useToolActivity',
+  'useTimelineToolCalls',
   'useConversations',
   'useConversation',
   'useConversationBackground',
