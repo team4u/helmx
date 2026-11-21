@@ -10,18 +10,18 @@
  * - 数据就绪前位置被移动（用户点击 / 外部前进后退 / 程序导航）：既有意图优先，取消落地；
  * - 显式主屏目标或弹窗深链入口不触发落地；无任何可用角色时保持解析缺省（角色中心）。
  */
+import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import * as React from 'react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { HelmxStoreProvider } from '../src/lib/HelmxStoreProvider.js'
+import { sseClientTimings } from '../src/lib/live-state.js'
 import { useHelmxStore } from '../src/lib/store-context.js'
 import { hangingEventStream } from './helpers/sse-stream.js'
 import type { ResolvedTarget } from '../src/lib/types.js'
 
-GlobalRegistrator.register()
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 
 const { App } = await import('../src/App.js')
@@ -394,17 +394,24 @@ test('App 空 Hash 且无任何角色/会话时：就绪后揭开 ProfileCenter 
 
 test('App 连接横幅防抖：1500ms 内闪断不出现，断线持续 >=1500ms 才浮现，重连即消', { timeout: 60_000 }, async (t) => {
   const originalFetch = globalThis.fetch
+  const originalTimings = { ...sseClientTimings }
+  Object.assign(sseClientTimings, {
+    reconnectBaseMs: 15,
+    reconnectCapMs: 40,
+    reconnectJitterMs: 0,
+  })
   const encoder = new TextEncoder()
   let sendEventsCount = 0
   let closeStream: (() => void) | undefined
   let releaseSecondConnect: (() => void) | undefined
+  let allowSecondConnect = false
 
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input)
     if (path === '/api/auth/status') return jsonResponse({ configured: true, authenticated: true })
     if (path.startsWith('/api/events')) {
       sendEventsCount += 1
-      if (sendEventsCount === 2 && releaseSecondConnect === undefined) {
+      if (sendEventsCount === 2 && !allowSecondConnect) {
         await new Promise<void>((resolve) => { releaseSecondConnect = resolve })
       }
       return new Response(
@@ -424,7 +431,9 @@ test('App 连接横幅防抖：1500ms 内闪断不出现，断线持续 >=1500ms
     return jsonResponse([])
   }) as typeof fetch
   t.after(() => {
+    allowSecondConnect = true
     releaseSecondConnect?.()
+    Object.assign(sseClientTimings, originalTimings)
     globalThis.fetch = originalFetch
   })
 
@@ -432,40 +441,42 @@ test('App 连接横幅防抖：1500ms 内闪断不出现，断线持续 >=1500ms
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = createRoot(host)
+  const bannerDelayMs = 80
   try {
     await act(async () => {
-      root.render(e(App))
+      root.render(e(App, { connectionBannerDelayMs: bannerDelayMs }))
     })
     const waitReadyDeadline = Date.now() + 10_000
     while (host.querySelector('.agent-standby-pane') === null) {
       if (Date.now() > waitReadyDeadline) throw new Error('等待待命页超时')
-      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 15)) })
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)) })
     }
     assert.ok(host.querySelector('.connection-banner') === null, '首次快速建连不闪现 connection-banner')
 
-    // 触发断线并挂起第 2 次重连：在 1500ms 防抖期前绝不显示横幅
+    // 触发断线并挂起第 2 次重连：在防抖期前绝不显示横幅
     await act(async () => {
       closeStream?.()
-      await new Promise((resolve) => setTimeout(resolve, 250))
+      await new Promise((resolve) => setTimeout(resolve, 25))
     })
-    assert.ok(host.querySelector('.connection-banner') === null, '短断线（<1500ms）不闪现重连横幅')
+    assert.ok(host.querySelector('.connection-banner') === null, '短断线（<防抖窗口）不闪现重连横幅')
 
-    // 越过 1500ms 后横幅浮现
+    // 越过防抖期后横幅浮现
     const bannerDeadline = Date.now() + 5_000
     while (host.querySelector('.connection-banner') === null) {
-      if (Date.now() > bannerDeadline) throw new Error('断线超过 1500ms 未展示 .connection-banner')
-      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)) })
+      if (Date.now() > bannerDeadline) throw new Error('断线超过防抖窗口未展示 .connection-banner')
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 15)) })
     }
     assert.ok(host.querySelector('.connection-banner') !== null)
 
     // 恢复连接后横幅立即消失
     await act(async () => {
+      allowSecondConnect = true
       releaseSecondConnect?.()
     })
     const clearDeadline = Date.now() + 5_000
     while (host.querySelector('.connection-banner') !== null) {
       if (Date.now() > clearDeadline) throw new Error('重连后 .connection-banner 未消失')
-      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)) })
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)) })
     }
     assert.ok(host.querySelector('.connection-banner') === null)
   } finally {

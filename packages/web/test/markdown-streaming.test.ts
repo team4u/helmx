@@ -9,13 +9,13 @@
  *   代码块身份）、流式 append 已完成块不重复解析（插件组件渲染计数）、标题偏移跨块
  *   连续、streaming=false 完成切换零重挂载零重解析、最终 DOM 与整篇逐字节等价。
  */
+import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
-import test, { describe } from 'node:test'
+import test, { after, before, describe } from 'node:test'
 import * as React from 'react'
 import { useEffect } from 'react'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { PluginUiContribution } from '@helmx/protocol'
 import {
   countHeadingsUpToH3,
@@ -23,25 +23,32 @@ import {
   splitStreamingMarkdownBlocks,
 } from '../src/conversation/markdown-model.js'
 import { MarkdownView } from '../src/conversation/MarkdownView.js'
+import { getBaselineFetch } from './helpers/dom-harness.js'
 import { makeTestStore } from './helpers/store.js'
 import { HostStoreProviders } from './helpers/host-store.js'
-import { seedPluginClientModule } from '../src/lib/plugin-client.js'
+import { resetPluginClientCache, seedPluginClientModule } from '../src/lib/plugin-client.js'
 
-GlobalRegistrator.register()
 ;(globalThis as Record<string, unknown>).React = React
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 
-// 插件 client 模块动态加载在测试环境无真实服务：拦截 client.mjs 请求返回种子 hash，
-// 使 loadPluginClientModule 命中 seedPluginClientModule 的缓存条目确定性成功，
-// 避免异步错误态以非确定时序覆盖插件组件。
-const realFetch: typeof globalThis.fetch = globalThis.fetch.bind(globalThis)
-globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-  const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
-  if (url.includes('/client.mjs')) {
-    return new Response('', { status: 200, headers: { 'x-helmx-client-hash': 'seeded' } })
+// 插件 client 模块动态加载在测试环境无真实服务：在组件测试生命周期内拦截 client.mjs 请求
+// 返回种子 hash，使 loadPluginClientModule 命中 seedPluginClientModule 的缓存条目确定性成功，
+// 退出后还原基线 fetch 并清理缓存，不污染同进程其他测试。
+function installSeededClientEnv(): () => void {
+  const realFetch = getBaselineFetch()
+  seedPluginClientModule('builtin:test-stream-counter', 'index.tsx', { CountingCodeBlock })
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+    if (url.includes('/client.mjs')) {
+      return new Response('', { status: 200, headers: { 'x-helmx-client-hash': 'seeded' } })
+    }
+    return realFetch(input, init)
+  }) as typeof globalThis.fetch
+  return () => {
+    globalThis.fetch = realFetch
+    resetPluginClientCache()
   }
-  return realFetch(input, init)
-}) as typeof globalThis.fetch
+}
 
 // ---------------------------------------------------------------------------
 // 种子插件代码块：渲染计数 = 其所在块被重新 parse 的次数；挂载计数 = 实例身份。
@@ -63,8 +70,6 @@ function CountingCodeBlock(props: { language?: string; code?: string }): React.R
     `${props.language ?? ''}:${(props.code ?? '').length}`,
   )
 }
-
-seedPluginClientModule('builtin:test-stream-counter', 'index.tsx', { CountingCodeBlock })
 
 function counterContribution(languages: string[]): PluginUiContribution {
   return {
@@ -384,6 +389,10 @@ describe('countHeadingsUpToH3 与 remarkHeadingIndices', { timeout: 60_000 }, ()
 // ---------------------------------------------------------------------------
 
 describe('MarkdownView 真实浏览器复现 fixture', { timeout: 60_000 }, () => {
+  let restoreClientEnv: (() => void) | undefined
+  before(() => { restoreClientEnv = installSeededClientEnv() })
+  after(() => { restoreClientEnv?.() })
+
   test('多行 label 引用定义：streaming 与整篇 DOM 逐字节等价，链接正确解析', async () => {
     resetPluginStats()
     const streamView = await mountView({ text: multiLineLabelFixture, streaming: true })
@@ -453,6 +462,10 @@ describe('MarkdownView 真实浏览器复现 fixture', { timeout: 60_000 }, () =
 // ---------------------------------------------------------------------------
 
 describe('MarkdownView 流式分块渲染', { timeout: 60_000 }, () => {
+  let restoreClientEnv: (() => void) | undefined
+  before(() => { restoreClientEnv = installSeededClientEnv() })
+  after(() => { restoreClientEnv?.() })
+
   test('append 时已完成代码块不重复解析、不卸载（插件组件渲染/挂载计数）', async () => {
     resetPluginStats()
     const paraTail = longPara('冻结后续段')

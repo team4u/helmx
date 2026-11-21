@@ -6,17 +6,16 @@
  * - 模块缓存就绪后新挂载的代码块首帧即高亮（不闪一下纯文本）；
  * - 高亮 HTML 的 textContent 与源码一致（复制与原文展示同源）。
  */
+import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import * as React from 'react'
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { SyntaxCode } from '../src/conversation/SyntaxCode.js'
 
 const e = React.createElement
 
-GlobalRegistrator.register()
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 ;(globalThis as Record<string, unknown>).React = React
 

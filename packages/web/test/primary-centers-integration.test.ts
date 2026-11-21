@@ -19,6 +19,7 @@
  *    - ProfileCenter, SkillCenter, NodeCenter, ModelCenter rendering, card
  *      grids and drawer interactions.
  */
+import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { ensureHappyDom, flushMacrotask } from './helpers/dom-harness.js'

@@ -11,18 +11,17 @@
  * - 打开 settings 项 / agent / screen 分别更新所在空间的记忆；
  * - 浏览器后退 / 前进经真实 popstate 还原位置。
  */
+import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import * as React from 'react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { HelmxStoreProvider } from '../src/lib/HelmxStoreProvider.js'
 import { useHelmxStore } from '../src/lib/store-context.js'
 import { hangingEventStream } from './helpers/sse-stream.js'
 import type { ResolvedTarget, SidebarSpace } from '../src/lib/types.js'
 
-GlobalRegistrator.register()
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 
 const e = React.createElement

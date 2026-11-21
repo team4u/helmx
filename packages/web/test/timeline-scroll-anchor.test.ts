@@ -1,13 +1,8 @@
+import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { captureTimelineScrollAnchor, restoreTimelineScrollAnchor } from '../src/conversation/timeline-scroll-anchor.js'
 
-try {
-  GlobalRegistrator.register()
-} catch {
-  // Already registered by another test module.
-}
 
 test('captureTimelineScrollAnchor selects the first row intersecting the viewport', { timeout: 60_000 }, () => {
   const scroller = document.createElement('div')

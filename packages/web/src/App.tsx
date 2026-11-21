@@ -188,7 +188,11 @@ function QuietNotifierMount() {
   return null
 }
 
-function HelmxShellInner() {
+function HelmxShellInner({
+  connectionBannerDelayMs = CONNECTION_BANNER_DELAY_MS,
+}: {
+  connectionBannerDelayMs?: number
+}) {
   const { authReady, authError, authenticated, sseConnected, connectionError } = useAuthConnection()
   const { assetsLoaded } = useProfilesSlice()
   const { primaryTarget, splitTarget, focusedPanel } = useLocationTargets()
@@ -249,9 +253,9 @@ function HelmxShellInner() {
     }
     const timer = setTimeout(() => {
       setShowConnectionBanner(true)
-    }, CONNECTION_BANNER_DELAY_MS)
+    }, connectionBannerDelayMs)
     return () => clearTimeout(timer)
-  }, [authenticated, sseConnected])
+  }, [authenticated, sseConnected, connectionBannerDelayMs])
 
   useEffect(() => {
     if (activeModal !== null) {
@@ -529,12 +533,17 @@ function HelmxShellInner() {
   )
 }
 
-export function App() {
+export interface AppProps {
+  connectionBannerDelayMs?: number
+  escAbortWindowMs?: number
+}
+
+export function App({ connectionBannerDelayMs, escAbortWindowMs }: AppProps) {
   return (
-    <HelmxStoreProvider>
+    <HelmxStoreProvider {...(escAbortWindowMs !== undefined ? { escAbortWindowMs } : {})}>
       <TooltipProvider delayDuration={300}>
         <QuietNotifierMount />
-        <HelmxShellInner />
+        <HelmxShellInner {...(connectionBannerDelayMs !== undefined ? { connectionBannerDelayMs } : {})} />
       </TooltipProvider>
     </HelmxStoreProvider>
   )

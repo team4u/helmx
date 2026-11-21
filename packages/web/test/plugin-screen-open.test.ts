@@ -8,6 +8,7 @@
  * 说明：PluginDetailDrawer 完整组件渲染依赖配置读取副作用（happy-dom 下相对路径
  * fetch 永不完成，曾在 act 内挂起 120s）；本测试通过真实按钮交互覆盖导航行为。
  */
+import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import * as React from 'react'
@@ -24,8 +25,6 @@ import type { HelmxExternalStore } from '../src/lib/helmx-store.js'
 const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React
 
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
-GlobalRegistrator.register()
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 
 function makePlugin(partial: Partial<PluginSummary> & { id: string }): PluginSummary {

@@ -1,3 +1,4 @@
+import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import React from 'react'
@@ -798,6 +799,7 @@ test('ModelCenter: GlobalDefaultsPanel reuses ModelPickerControl (model · level
       modelThinkingLevels: {},
     })
   } finally {
+    localStorage.removeItem('helmx:locale')
     globalThis.fetch = originalFetch
     await act(async () => {
       root.unmount()
@@ -946,6 +948,7 @@ test('ModelCenter: custom gateway endpoint save goes through PUT /api/providers 
     assert.equal(untouched?.baseUrl, 'https://other.example.com/v1', 'other gateways baseUrl must not be affected')
     assert.equal(untouched?.protocol, 'anthropic')
   } finally {
+    localStorage.removeItem('helmx:locale')
     globalThis.fetch = originalFetch
     await act(async () => {
       root.unmount()
@@ -1016,6 +1019,7 @@ test('ModelCenter: plugin gateway save triggers zero providers writes (endpoints
       'plugin gateway save must not produce any providers write request',
     )
   } finally {
+    localStorage.removeItem('helmx:locale')
     globalThis.fetch = originalFetch
     await act(async () => {
       root.unmount()
@@ -1123,6 +1127,7 @@ test('ModelCenter: All/Configured filter pills, configured-card first-3 model pr
     assert.match(drawerHtml, /btn btn-ghost btn-icon-sm/)
     assert.ok(!drawerHtml.includes('callout--'), 'ModelDetailDrawer must not keep legacy callout--* classes')
   } finally {
+    localStorage.removeItem('helmx:locale')
     globalThis.fetch = originalFetch
     await act(async () => {
       root.unmount()
@@ -1203,6 +1208,7 @@ test('ModelCenter locale switch: setLocale re-renders en -> zh-CN -> en in place
     })
     assert.match(container.textContent ?? '', /Models & Credentials Center/, 'switching back to en restores English immediately')
   } finally {
+    localStorage.removeItem('helmx:locale')
     globalThis.fetch = originalFetch
     await act(async () => {
       root.unmount()

@@ -1,9 +1,9 @@
+import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
-import { afterEach, test } from 'node:test'
+import { describe, afterEach, test } from 'node:test'
 import * as React from 'react'
 import { act } from 'react'
 import type { Root } from 'react-dom/client'
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { ConversationSummary } from '@helmx/protocol'
 import { hangingEventStream, type SseFrameSender } from './helpers/sse-stream.js'
 import {
@@ -25,7 +25,6 @@ import {
 } from '../src/shell/shortcuts-model.js'
 import type { ActiveModal, HelmxStoreValue, ResolvedTarget } from '../src/lib/types.js'
 
-GlobalRegistrator.register()
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
 
 const { createRoot } = await import('react-dom/client')
@@ -210,7 +209,7 @@ async function settle(ms = 30): Promise<void> {
 
 async function mountProvider(
   hash: string,
-  options: FetchHarnessOptions = {},
+  options: FetchHarnessOptions & { escAbortWindowMs?: number } = {},
 ): Promise<HelmxStoreValue> {
   window.history.replaceState(null, '', hash)
   host = document.createElement('div')
@@ -219,7 +218,7 @@ async function mountProvider(
   await act(async () => {
     root = createRoot(host!)
     root.render(
-      <HelmxStoreProvider>
+      <HelmxStoreProvider {...(options.escAbortWindowMs !== undefined ? { escAbortWindowMs: options.escAbortWindowMs } : {})}>
         <ShortcutHarness />
       </HelmxStoreProvider>,
     )
@@ -247,393 +246,398 @@ function dispatchWindowKey(
 function modInit(key: string): KeyboardEventInit & { key: string } {
   return isApplePlatform() ? { key, metaKey: true } : { key, ctrlKey: true }
 }
+describe("helmx-store-shortcuts", () => {
 
-afterEach(() => {
-  if (root !== undefined) {
-    act(() => root?.unmount())
-  }
-  root = undefined
-  host?.remove()
-  host = undefined
-  document.body.innerHTML = ''
-  globalThis.fetch = originalFetch
-  sendEvent = undefined
-  capturedStore = undefined
-  abortCalls = []
-  artifactRequests = []
-  window.localStorage.removeItem(SIDEBAR_COLLAPSED_STORAGE_KEY)
-})
 
-test('shortcuts-model pure functions: split focus, status checks and local persistence contracts', { timeout: 60_000 }, () => {
-  assert.equal(SIDEBAR_COLLAPSED_STORAGE_KEY, 'helmx:sidebar-collapsed')
-  assert.equal(ESC_ABORT_WINDOW_MS, 1500)
-
-  const primary: ResolvedTarget = { kind: 'conversation', conversationId: 1 }
-  const split: ResolvedTarget = { kind: 'conversation', conversationId: 2 }
-
-  assert.equal(resolveFocusedPanel('split', null), 'primary')
-  assert.equal(resolveFocusedPanel('split', split), 'split')
-  assert.equal(resolveFocusedPanel('primary', split), 'primary')
-
-  assert.deepEqual(activeTargetForPanel(primary, null, 'split'), primary)
-  assert.deepEqual(activeTargetForPanel(primary, split, 'split'), split)
-  assert.deepEqual(activeTargetForPanel(primary, split, 'primary'), primary)
-
-  assert.equal(isConversationAbortable(undefined), false)
-  assert.equal(isConversationAbortable(makeConversation(1, { status: 'idle' })), false)
-  assert.equal(isConversationAbortable(makeConversation(2, { status: 'working' })), true)
-
-  persistSidebarCollapsed(true)
-  assert.equal(window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY), '1')
-  assert.equal(getStoredSidebarCollapsed(), true)
-
-  persistSidebarCollapsed(false)
-  assert.equal(window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY), '0')
-  assert.equal(getStoredSidebarCollapsed(), false)
-
-  window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, 'true')
-  assert.equal(getStoredSidebarCollapsed(), true)
-
-  // Platform modifier formatting carries no multi-key alias separators
-  assert.equal(formatModShortcut('K').includes('/'), false)
-  assert.equal(formatModShortcut('B').endsWith('B'), true)
-
-  // Overlay and inline-input detection
-  assert.equal(hasAnyOpenOverlay({ kind: 'command-palette' }, false), true)
-  assert.equal(hasAnyOpenOverlay(null, true), true)
-  assert.equal(hasAnyOpenOverlay(null, false), false)
-  assert.equal(hasBlockingAlertDialog(), false)
-  assert.equal(hasDialogOpen(), false)
-
-  const dialog = document.createElement('div')
-  dialog.setAttribute('role', 'dialog')
-  document.body.appendChild(dialog)
-  assert.equal(hasDialogOpen(), true)
-  assert.equal(hasNonModelPickerDialogOpen(), true)
-  dialog.remove()
-
-  const modelPopover = document.createElement('div')
-  modelPopover.setAttribute('role', 'dialog')
-  modelPopover.className = 'helmx-popover-content composer-model-popover'
-  document.body.appendChild(modelPopover)
-  assert.equal(hasDialogOpen(), true)
-  assert.equal(hasNonModelPickerDialogOpen(), false)
-  modelPopover.remove()
-
-  const alertDialog = document.createElement('div')
-  alertDialog.setAttribute('role', 'alertdialog')
-  document.body.appendChild(alertDialog)
-  assert.equal(hasBlockingAlertDialog(), true)
-  assert.equal(hasDialogOpen(), true)
-  alertDialog.remove()
-
-  const topbar = document.createElement('div')
-  topbar.className = 'pane-topbar'
-  const inlineInput = document.createElement('input')
-  topbar.appendChild(inlineInput)
-  document.body.appendChild(topbar)
-  assert.equal(isInlineInputEscapeTarget(inlineInput), true)
-  topbar.remove()
-
-  const bareInput = document.createElement('input')
-  assert.equal(isInlineInputEscapeTarget(bareInput), false)
-})
-
-test('HelmxStoreProvider ignores global shortcuts while unauthenticated', { timeout: 60_000 }, async () => {
-  await mountProvider('#/c/1', { authenticated: false })
-
-  const fired: HelmxShortcutDetail[] = []
-  const listener = (ev: Event) => {
-    fired.push((ev as CustomEvent<HelmxShortcutDetail>).detail)
-  }
-  window.addEventListener('helmx:shortcut', listener)
-
-  try {
-    dispatchWindowKey(modInit('k'))
-    dispatchWindowKey(modInit('b'))
-    dispatchWindowKey(modInit('j'))
-    dispatchWindowKey({ key: 'l', ctrlKey: true })
-    dispatchWindowKey({ key: 'o', ctrlKey: true })
-    dispatchWindowKey({ key: 'Escape' })
-    dispatchWindowKey({ key: 'Escape' })
-    await settle(20)
-
-    assert.equal(capturedStore?.activeModal, null)
-    assert.equal(capturedStore?.sidebarCollapsed, false)
-    assert.equal(capturedStore?.workbenchOpen, false)
-    assert.equal(fired.length, 0)
-    assert.equal(abortCalls.length, 0)
-  } finally {
-    window.removeEventListener('helmx:shortcut', listener)
-  }
-})
-
-test('HelmxStoreProvider split-focus routing and global single-key shortcut dispatch (Ctrl+L/O, Mod+K/B/J)', { timeout: 60_000 }, async () => {
-  const store = await mountProvider('#/c/1')
-  assert.equal(store.focusedPanel, 'primary')
-
-  // Open the split, test Pointer/Focus entering split, and closing the split auto-resets to primary
-  await act(async () => {
-    capturedStore?.openTarget({ kind: 'conversation', conversationId: 2 }, { split: true })
+  afterEach(() => {
+    if (root !== undefined) {
+      act(() => root?.unmount())
+    }
+    root = undefined
+    host?.remove()
+    host = undefined
+    document.body.innerHTML = ''
+    window.history.replaceState(null, '', '/')
+    globalThis.fetch = originalFetch
+    sendEvent = undefined
+    capturedStore = undefined
+    abortCalls = []
+    artifactRequests = []
+    window.localStorage.removeItem(SIDEBAR_COLLAPSED_STORAGE_KEY)
   })
-  await settle(20)
-  assert.deepEqual(capturedStore?.splitTarget, { kind: 'conversation', conversationId: 2 })
 
-  const splitInput = document.querySelector<HTMLElement>('[data-testid="split-input"]')
-  const primaryInput = document.querySelector<HTMLElement>('[data-testid="primary-input"]')
-  assert.ok(splitInput && primaryInput)
+  test('shortcuts-model pure functions: split focus, status checks and local persistence contracts', { timeout: 60_000 }, () => {
+    assert.equal(SIDEBAR_COLLAPSED_STORAGE_KEY, 'helmx:sidebar-collapsed')
+    assert.equal(ESC_ABORT_WINDOW_MS, 1500)
 
-  await act(async () => {
-    splitInput.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+    const primary: ResolvedTarget = { kind: 'conversation', conversationId: 1 }
+    const split: ResolvedTarget = { kind: 'conversation', conversationId: 2 }
+
+    assert.equal(resolveFocusedPanel('split', null), 'primary')
+    assert.equal(resolveFocusedPanel('split', split), 'split')
+    assert.equal(resolveFocusedPanel('primary', split), 'primary')
+
+    assert.deepEqual(activeTargetForPanel(primary, null, 'split'), primary)
+    assert.deepEqual(activeTargetForPanel(primary, split, 'split'), split)
+    assert.deepEqual(activeTargetForPanel(primary, split, 'primary'), primary)
+
+    assert.equal(isConversationAbortable(undefined), false)
+    assert.equal(isConversationAbortable(makeConversation(1, { status: 'idle' })), false)
+    assert.equal(isConversationAbortable(makeConversation(2, { status: 'working' })), true)
+
+    persistSidebarCollapsed(true)
+    assert.equal(window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY), '1')
+    assert.equal(getStoredSidebarCollapsed(), true)
+
+    persistSidebarCollapsed(false)
+    assert.equal(window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY), '0')
+    assert.equal(getStoredSidebarCollapsed(), false)
+
+    window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, 'true')
+    assert.equal(getStoredSidebarCollapsed(), true)
+
+    // Platform modifier formatting carries no multi-key alias separators
+    assert.equal(formatModShortcut('K').includes('/'), false)
+    assert.equal(formatModShortcut('B').endsWith('B'), true)
+
+    // Overlay and inline-input detection
+    assert.equal(hasAnyOpenOverlay({ kind: 'command-palette' }, false), true)
+    assert.equal(hasAnyOpenOverlay(null, true), true)
+    assert.equal(hasAnyOpenOverlay(null, false), false)
+    assert.equal(hasBlockingAlertDialog(), false)
+    assert.equal(hasDialogOpen(), false)
+
+    const dialog = document.createElement('div')
+    dialog.setAttribute('role', 'dialog')
+    document.body.appendChild(dialog)
+    assert.equal(hasDialogOpen(), true)
+    assert.equal(hasNonModelPickerDialogOpen(), true)
+    dialog.remove()
+
+    const modelPopover = document.createElement('div')
+    modelPopover.setAttribute('role', 'dialog')
+    modelPopover.className = 'helmx-popover-content composer-model-popover'
+    document.body.appendChild(modelPopover)
+    assert.equal(hasDialogOpen(), true)
+    assert.equal(hasNonModelPickerDialogOpen(), false)
+    modelPopover.remove()
+
+    const alertDialog = document.createElement('div')
+    alertDialog.setAttribute('role', 'alertdialog')
+    document.body.appendChild(alertDialog)
+    assert.equal(hasBlockingAlertDialog(), true)
+    assert.equal(hasDialogOpen(), true)
+    alertDialog.remove()
+
+    const topbar = document.createElement('div')
+    topbar.className = 'pane-topbar'
+    const inlineInput = document.createElement('input')
+    topbar.appendChild(inlineInput)
+    document.body.appendChild(topbar)
+    assert.equal(isInlineInputEscapeTarget(inlineInput), true)
+    topbar.remove()
+
+    const bareInput = document.createElement('input')
+    assert.equal(isInlineInputEscapeTarget(bareInput), false)
   })
-  assert.equal(capturedStore?.focusedPanel, 'split')
 
-  const fired: HelmxShortcutDetail[] = []
-  const onShortcut = (ev: Event) => {
-    fired.push((ev as CustomEvent<HelmxShortcutDetail>).detail)
-  }
-  window.addEventListener('helmx:shortcut', onShortcut)
+  test('HelmxStoreProvider ignores global shortcuts while unauthenticated', { timeout: 60_000 }, async () => {
+    await mountProvider('#/c/1', { authenticated: false })
 
-  try {
-    const evL1 = dispatchWindowKey({ key: 'l', ctrlKey: true })
-    assert.equal(evL1.defaultPrevented, true, 'Ctrl+L must call preventDefault')
+    const fired: HelmxShortcutDetail[] = []
+    const listener = (ev: Event) => {
+      fired.push((ev as CustomEvent<HelmxShortcutDetail>).detail)
+    }
+    window.addEventListener('helmx:shortcut', listener)
 
-    const evO1 = dispatchWindowKey({ key: 'o', ctrlKey: true })
-    assert.equal(evO1.defaultPrevented, true, 'Ctrl+O must call preventDefault')
+    try {
+      dispatchWindowKey(modInit('k'))
+      dispatchWindowKey(modInit('b'))
+      dispatchWindowKey(modInit('j'))
+      dispatchWindowKey({ key: 'l', ctrlKey: true })
+      dispatchWindowKey({ key: 'o', ctrlKey: true })
+      dispatchWindowKey({ key: 'Escape' })
+      dispatchWindowKey({ key: 'Escape' })
+      await settle(20)
 
-    assert.deepEqual(fired, [
-      { action: 'toggle-model-picker', panel: 'split' },
-      { action: 'toggle-process-groups', panel: 'split' },
-    ])
+      assert.equal(capturedStore?.activeModal, null)
+      assert.equal(capturedStore?.sidebarCollapsed, false)
+      assert.equal(capturedStore?.workbenchOpen, false)
+      assert.equal(fired.length, 0)
+      assert.equal(abortCalls.length, 0)
+    } finally {
+      window.removeEventListener('helmx:shortcut', listener)
+    }
+  })
 
-    // Switch back to primary, then to split, and verify closing the split auto-resets to primary
+  test('HelmxStoreProvider split-focus routing and global single-key shortcut dispatch (Ctrl+L/O, Mod+K/B/J)', { timeout: 60_000 }, async () => {
+    const store = await mountProvider('#/c/1')
+    assert.equal(store.focusedPanel, 'primary')
+
+    // Open the split, test Pointer/Focus entering split, and closing the split auto-resets to primary
     await act(async () => {
-      primaryInput.dispatchEvent(new FocusEvent('focusin', { bubbles: true }))
+      capturedStore?.openTarget({ kind: 'conversation', conversationId: 2 }, { split: true })
     })
-    assert.equal(capturedStore?.focusedPanel, 'primary')
+    await settle(20)
+    assert.deepEqual(capturedStore?.splitTarget, { kind: 'conversation', conversationId: 2 })
+
+    const splitInput = document.querySelector<HTMLElement>('[data-testid="split-input"]')
+    const primaryInput = document.querySelector<HTMLElement>('[data-testid="primary-input"]')
+    assert.ok(splitInput && primaryInput)
+
     await act(async () => {
       splitInput.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
     })
     assert.equal(capturedStore?.focusedPanel, 'split')
 
+    const fired: HelmxShortcutDetail[] = []
+    const onShortcut = (ev: Event) => {
+      fired.push((ev as CustomEvent<HelmxShortcutDetail>).detail)
+    }
+    window.addEventListener('helmx:shortcut', onShortcut)
+
+    try {
+      const evL1 = dispatchWindowKey({ key: 'l', ctrlKey: true })
+      assert.equal(evL1.defaultPrevented, true, 'Ctrl+L must call preventDefault')
+
+      const evO1 = dispatchWindowKey({ key: 'o', ctrlKey: true })
+      assert.equal(evO1.defaultPrevented, true, 'Ctrl+O must call preventDefault')
+
+      assert.deepEqual(fired, [
+        { action: 'toggle-model-picker', panel: 'split' },
+        { action: 'toggle-process-groups', panel: 'split' },
+      ])
+
+      // Switch back to primary, then to split, and verify closing the split auto-resets to primary
+      await act(async () => {
+        primaryInput.dispatchEvent(new FocusEvent('focusin', { bubbles: true }))
+      })
+      assert.equal(capturedStore?.focusedPanel, 'primary')
+      await act(async () => {
+        splitInput.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+      })
+      assert.equal(capturedStore?.focusedPanel, 'split')
+
+      await act(async () => {
+        capturedStore?.closeSplit()
+      })
+      assert.equal(capturedStore?.splitTarget, null)
+      assert.equal(capturedStore?.focusedPanel, 'primary')
+
+      const evL2 = dispatchWindowKey({ key: 'l', ctrlKey: true })
+      assert.equal(evL2.defaultPrevented, true)
+      assert.deepEqual(fired[2], { action: 'toggle-model-picker', panel: 'primary' })
+
+      // With the ModelPicker popover open (carrying role="dialog" + .composer-model-popover):
+      // a second Ctrl+L still dispatches toggle-model-picker to close the popover; Ctrl+O stays blocked
+      const modelPopover = document.createElement('div')
+      modelPopover.setAttribute('role', 'dialog')
+      modelPopover.className = 'helmx-popover-content composer-model-popover'
+      document.body.appendChild(modelPopover)
+      const countBeforePopover = fired.length
+      const evLToggleClose = dispatchWindowKey({ key: 'l', ctrlKey: true })
+      assert.equal(evLToggleClose.defaultPrevented, true, 'with ModelPicker open, a second Ctrl+L must still dispatch the close event')
+      const evOBlockedByPopover = dispatchWindowKey({ key: 'o', ctrlKey: true })
+      assert.equal(evOBlockedByPopover.defaultPrevented, false)
+      assert.deepEqual(fired.slice(countBeforePopover), [{ action: 'toggle-model-picker', panel: 'primary' }])
+      modelPopover.remove()
+
+      // With a plain modal/drawer [role="dialog"] open: Ctrl+L must be intercepted and never dispatched
+      const normalDialog = document.createElement('div')
+      normalDialog.setAttribute('role', 'dialog')
+      document.body.appendChild(normalDialog)
+      const countBeforeNormalDialog = fired.length
+      const evLBlocked = dispatchWindowKey({ key: 'l', ctrlKey: true })
+      assert.equal(evLBlocked.defaultPrevented, false)
+      assert.equal(fired.length, countBeforeNormalDialog)
+      normalDialog.remove()
+    } finally {
+      window.removeEventListener('helmx:shortcut', onShortcut)
+    }
+
+    // Mod+K: toggle the CommandPaletteModal
+    dispatchWindowKey(modInit('k'))
+    assert.equal(capturedStore?.activeModal?.kind, 'command-palette')
+    dispatchWindowKey(modInit('k'))
+    assert.equal(capturedStore?.activeModal, null)
+
+    // Mod+J: toggle the WorkbenchDrawer
+    assert.equal(capturedStore?.workbenchOpen, false)
+    dispatchWindowKey(modInit('j'))
+    assert.equal(capturedStore?.workbenchOpen, true)
+    dispatchWindowKey(modInit('j'))
+    assert.equal(capturedStore?.workbenchOpen, false)
+
+    // Mod+J with a conversation drawer open: the drawer is a full conversation
+    // context, so the workbench toggle keeps working (bound to the drawer conv).
     await act(async () => {
-      capturedStore?.closeSplit()
+      capturedStore?.setActiveModal({ kind: 'conversation-drawer', conversationId: 2 })
     })
-    assert.equal(capturedStore?.splitTarget, null)
-    assert.equal(capturedStore?.focusedPanel, 'primary')
+    await settle()
+    // 经由括号表达式读取，规避前文 assert.equal 对 capturedStore?.activeModal 路径的窄化残留
+    const drawerModal: ActiveModal = (capturedStore ?? undefined)?.activeModal ?? null
+    assert.equal(drawerModal?.kind, 'conversation-drawer')
+    dispatchWindowKey(modInit('j'))
+    assert.equal(capturedStore?.workbenchOpen, true, '会话抽屉打开时 Mod+J 仍应开合工作台')
+    dispatchWindowKey(modInit('j'))
+    assert.equal(capturedStore?.workbenchOpen, false)
+    await act(async () => {
+      capturedStore?.setActiveModal(null)
+    })
+    await settle()
 
-    const evL2 = dispatchWindowKey({ key: 'l', ctrlKey: true })
-    assert.equal(evL2.defaultPrevented, true)
-    assert.deepEqual(fired[2], { action: 'toggle-model-picker', panel: 'primary' })
+    // Mod+J stays blocked behind a non-drawer modal (command palette)
+    await act(async () => {
+      capturedStore?.setActiveModal({ kind: 'command-palette' })
+    })
+    await settle()
+    dispatchWindowKey(modInit('j'))
+    assert.equal(capturedStore?.workbenchOpen, false, '命令面板打开时 Mod+J 应保持阻断')
+    await act(async () => {
+      capturedStore?.setActiveModal(null)
+    })
+    await settle()
 
-    // With the ModelPicker popover open (carrying role="dialog" + .composer-model-popover):
-    // a second Ctrl+L still dispatches toggle-model-picker to close the popover; Ctrl+O stays blocked
-    const modelPopover = document.createElement('div')
-    modelPopover.setAttribute('role', 'dialog')
-    modelPopover.className = 'helmx-popover-content composer-model-popover'
-    document.body.appendChild(modelPopover)
-    const countBeforePopover = fired.length
-    const evLToggleClose = dispatchWindowKey({ key: 'l', ctrlKey: true })
-    assert.equal(evLToggleClose.defaultPrevented, true, 'with ModelPicker open, a second Ctrl+L must still dispatch the close event')
-    const evOBlockedByPopover = dispatchWindowKey({ key: 'o', ctrlKey: true })
-    assert.equal(evOBlockedByPopover.defaultPrevented, false)
-    assert.deepEqual(fired.slice(countBeforePopover), [{ action: 'toggle-model-picker', panel: 'primary' }])
-    modelPopover.remove()
+    // Mod+B: toggle the desktop sidebar collapse and persist it to localStorage
+    assert.equal(capturedStore?.sidebarCollapsed, false)
+    dispatchWindowKey(modInit('b'))
+    assert.equal(capturedStore?.sidebarCollapsed, true)
+    assert.equal(window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY), '1')
 
-    // With a plain modal/drawer [role="dialog"] open: Ctrl+L must be intercepted and never dispatched
-    const normalDialog = document.createElement('div')
-    normalDialog.setAttribute('role', 'dialog')
-    document.body.appendChild(normalDialog)
-    const countBeforeNormalDialog = fired.length
-    const evLBlocked = dispatchWindowKey({ key: 'l', ctrlKey: true })
-    assert.equal(evLBlocked.defaultPrevented, false)
-    assert.equal(fired.length, countBeforeNormalDialog)
-    normalDialog.remove()
-  } finally {
-    window.removeEventListener('helmx:shortcut', onShortcut)
-  }
+    // A remount restores the collapsed state from localStorage
+    act(() => root?.unmount())
+    root = undefined
+    host?.remove()
+    host = undefined
 
-  // Mod+K: toggle the CommandPaletteModal
-  dispatchWindowKey(modInit('k'))
-  assert.equal(capturedStore?.activeModal?.kind, 'command-palette')
-  dispatchWindowKey(modInit('k'))
-  assert.equal(capturedStore?.activeModal, null)
+    const remountedStore = await mountProvider('#/c/1')
+    assert.equal(remountedStore.sidebarCollapsed, true)
 
-  // Mod+J: toggle the WorkbenchDrawer
-  assert.equal(capturedStore?.workbenchOpen, false)
-  dispatchWindowKey(modInit('j'))
-  assert.equal(capturedStore?.workbenchOpen, true)
-  dispatchWindowKey(modInit('j'))
-  assert.equal(capturedStore?.workbenchOpen, false)
-
-  // Mod+J with a conversation drawer open: the drawer is a full conversation
-  // context, so the workbench toggle keeps working (bound to the drawer conv).
-  await act(async () => {
-    capturedStore?.setActiveModal({ kind: 'conversation-drawer', conversationId: 2 })
-  })
-  await settle()
-  // 经由括号表达式读取，规避前文 assert.equal 对 capturedStore?.activeModal 路径的窄化残留
-  const drawerModal: ActiveModal = (capturedStore ?? undefined)?.activeModal ?? null
-  assert.equal(drawerModal?.kind, 'conversation-drawer')
-  dispatchWindowKey(modInit('j'))
-  assert.equal(capturedStore?.workbenchOpen, true, '会话抽屉打开时 Mod+J 仍应开合工作台')
-  dispatchWindowKey(modInit('j'))
-  assert.equal(capturedStore?.workbenchOpen, false)
-  await act(async () => {
-    capturedStore?.setActiveModal(null)
-  })
-  await settle()
-
-  // Mod+J stays blocked behind a non-drawer modal (command palette)
-  await act(async () => {
-    capturedStore?.setActiveModal({ kind: 'command-palette' })
-  })
-  await settle()
-  dispatchWindowKey(modInit('j'))
-  assert.equal(capturedStore?.workbenchOpen, false, '命令面板打开时 Mod+J 应保持阻断')
-  await act(async () => {
-    capturedStore?.setActiveModal(null)
-  })
-  await settle()
-
-  // Mod+B: toggle the desktop sidebar collapse and persist it to localStorage
-  assert.equal(capturedStore?.sidebarCollapsed, false)
-  dispatchWindowKey(modInit('b'))
-  assert.equal(capturedStore?.sidebarCollapsed, true)
-  assert.equal(window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY), '1')
-
-  // A remount restores the collapsed state from localStorage
-  act(() => root?.unmount())
-  root = undefined
-  host?.remove()
-  host = undefined
-
-  const remountedStore = await mountProvider('#/c/1')
-  assert.equal(remountedStore.sidebarCollapsed, true)
-
-  dispatchWindowKey(modInit('b'))
-  assert.equal(capturedStore?.sidebarCollapsed, false)
-  assert.equal(window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY), '0')
-})
-
-test('HelmxStoreProvider double-Esc misfire-protection state machine (overlay interception / non-running skip / 1.5s timeout reset / double-tap abort)', { timeout: 60_000 }, async () => {
-  await mountProvider('#/c/1')
-
-  // 1) Pressing Esc on an idle conversation (#1) never arms or aborts
-  dispatchWindowKey({ key: 'Escape' })
-  dispatchWindowKey({ key: 'Escape' })
-  assert.equal(capturedStore?.pendingEscAbortConversationId ?? null, null)
-  assert.equal(abortCalls.length, 0)
-
-  // Open the split (#2 is working) and focus split
-  await act(async () => {
-    capturedStore?.openTarget({ kind: 'conversation', conversationId: 2 }, { split: true })
-  })
-  await settle(20)
-  await act(async () => {
-    capturedStore?.setFocusedPanel?.('split')
+    dispatchWindowKey(modInit('b'))
+    assert.equal(capturedStore?.sidebarCollapsed, false)
+    assert.equal(window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY), '0')
   })
 
-  // 2) If an inner element calls stopPropagation, or the key carries Shift, the armed state is never entered
-  dispatchWindowKey({ key: 'Escape', shiftKey: true })
-  assert.equal(capturedStore?.pendingEscAbortConversationId ?? null, null)
+  test('HelmxStoreProvider double-Esc misfire-protection state machine (overlay interception / non-running skip / 1.5s timeout reset / double-tap abort)', { timeout: 60_000 }, async () => {
+    const escWindowMs = 60
+    await mountProvider('#/c/1', { escAbortWindowMs: escWindowMs })
 
-  const consumerInput = document.querySelector<HTMLElement>('[data-testid="esc-consumer-input"]')
-  assert.ok(consumerInput)
-  dispatchWindowKey({ key: 'Escape' }, consumerInput)
-  assert.equal(capturedStore?.pendingEscAbortConversationId ?? null, null)
+    // 1) Pressing Esc on an idle conversation (#1) never arms or aborts
+    dispatchWindowKey({ key: 'Escape' })
+    dispatchWindowKey({ key: 'Escape' })
+    assert.equal(capturedStore?.pendingEscAbortConversationId ?? null, null)
+    assert.equal(abortCalls.length, 0)
 
-  // 3) With a global modal or [role="dialog"] / workbench open, the Esc abort never triggers
-  await act(async () => {
-    capturedStore?.setActiveModal({ kind: 'command-palette' })
+    // Open the split (#2 is working) and focus split
+    await act(async () => {
+      capturedStore?.openTarget({ kind: 'conversation', conversationId: 2 }, { split: true })
+    })
+    await settle(20)
+    await act(async () => {
+      capturedStore?.setFocusedPanel?.('split')
+    })
+
+    // 2) If an inner element calls stopPropagation, or the key carries Shift, the armed state is never entered
+    dispatchWindowKey({ key: 'Escape', shiftKey: true })
+    assert.equal(capturedStore?.pendingEscAbortConversationId ?? null, null)
+
+    const consumerInput = document.querySelector<HTMLElement>('[data-testid="esc-consumer-input"]')
+    assert.ok(consumerInput)
+    dispatchWindowKey({ key: 'Escape' }, consumerInput)
+    assert.equal(capturedStore?.pendingEscAbortConversationId ?? null, null)
+
+    // 3) With a global modal or [role="dialog"] / workbench open, the Esc abort never triggers
+    await act(async () => {
+      capturedStore?.setActiveModal({ kind: 'command-palette' })
+    })
+    dispatchWindowKey({ key: 'Escape' })
+    assert.equal(capturedStore?.pendingEscAbortConversationId ?? null, null)
+
+    await act(async () => {
+      capturedStore?.setActiveModal(null)
+      capturedStore?.setWorkbenchOpen(true)
+    })
+    dispatchWindowKey({ key: 'Escape' })
+    assert.equal(capturedStore?.pendingEscAbortConversationId ?? null, null)
+
+    await act(async () => {
+      capturedStore?.setWorkbenchOpen(false)
+    })
+
+    const popover = document.createElement('div')
+    popover.setAttribute('role', 'dialog')
+    document.body.appendChild(popover)
+    dispatchWindowKey({ key: 'Escape' })
+    assert.equal(capturedStore?.pendingEscAbortConversationId ?? null, null)
+    popover.remove()
+
+    // 4) The first Esc enters the 1.5s armed notice without aborting immediately
+    dispatchWindowKey({ key: 'Escape' })
+    assert.equal(capturedStore?.pendingEscAbortConversationId, 2)
+    assert.equal(abortCalls.length, 0)
+
+    // 5) Past the armed window it resets automatically
+    await settle(escWindowMs + 40)
+    assert.equal(capturedStore?.pendingEscAbortConversationId ?? null, null)
+    assert.equal(abortCalls.length, 0)
+
+    // 6) Two Esc presses within 1.5s abort the focusedPanel's conversation #2
+    dispatchWindowKey({ key: 'Escape' })
+    assert.equal(capturedStore?.pendingEscAbortConversationId, 2)
+    dispatchWindowKey({ key: 'Escape' })
+    await settle(20)
+    assert.deepEqual(abortCalls, [2])
+    assert.equal(capturedStore?.pendingEscAbortConversationId ?? null, null)
+
+    // 7) Unmounting while armed cleans up the timer properly (no errors/exceptions)
+    dispatchWindowKey({ key: 'Escape' })
+    assert.equal(capturedStore?.pendingEscAbortConversationId, 2)
   })
-  dispatchWindowKey({ key: 'Escape' })
-  assert.equal(capturedStore?.pendingEscAbortConversationId ?? null, null)
 
-  await act(async () => {
-    capturedStore?.setActiveModal(null)
-    capturedStore?.setWorkbenchOpen(true)
+  test('App split containers with data-helmx-panel capture focus and coordinate the WorkbenchDrawer and sidebar-collapsed', { timeout: 60_000 }, async () => {
+    window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, '1')
+    window.history.replaceState(null, '', '#/c/1?split=c/2&wb=artifacts')
+    installFetch()
+
+    host = document.createElement('div')
+    document.body.appendChild(host)
+    await act(async () => {
+      root = createRoot(host!)
+      root.render(<App />)
+    })
+    await settle(60)
+
+    const shell = host.querySelector<HTMLElement>('.helmx-shell')
+    assert.ok(shell, 'App must render .helmx-shell')
+    assert.equal(shell.classList.contains('sidebar-collapsed'), true, 'with the collapsed state saved in localStorage, App must attach .sidebar-collapsed')
+
+    // Press Mod+B to expand the sidebar
+    dispatchWindowKey(modInit('b'))
+    assert.equal(shell.classList.contains('sidebar-collapsed'), false, 'Mod+B must remove .sidebar-collapsed')
+
+    const primaryPane = host.querySelector<HTMLElement>('[data-helmx-panel="primary"]')
+    const splitPane = host.querySelector<HTMLElement>('[data-helmx-panel="split"]')
+    assert.ok(primaryPane, 'the primary pane must carry data-helmx-panel="primary"')
+    assert.ok(splitPane, 'the split pane must carry data-helmx-panel="split"')
+
+    // The WorkbenchDrawer initially points at primary (#1)
+    const workbenchInitial = document.querySelector<HTMLElement>('.helmx-workbench')
+    assert.ok(workbenchInitial, 'with wb=artifacts the .helmx-workbench must be open')
+    assert.equal(artifactRequests.includes(1), true)
+
+    // Pointer/Focus entering the split container -> the WorkbenchDrawer switches to split conversation #2's artifacts
+    await act(async () => {
+      splitPane.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+    })
+    await settle(40)
+    assert.equal(artifactRequests.includes(2), true, 'after focusing split, the WorkbenchDrawer must switch to conversation #2')
+    assert.match(document.querySelector('.helmx-workbench')?.textContent ?? '', /split-artifact\.md/)
+
+    // Switch focus back to primary
+    await act(async () => {
+      primaryPane.dispatchEvent(new FocusEvent('focusin', { bubbles: true }))
+    })
+    await settle(40)
+    assert.match(document.querySelector('.helmx-workbench')?.textContent ?? '', /primary-artifact\.md/)
   })
-  dispatchWindowKey({ key: 'Escape' })
-  assert.equal(capturedStore?.pendingEscAbortConversationId ?? null, null)
-
-  await act(async () => {
-    capturedStore?.setWorkbenchOpen(false)
-  })
-
-  const popover = document.createElement('div')
-  popover.setAttribute('role', 'dialog')
-  document.body.appendChild(popover)
-  dispatchWindowKey({ key: 'Escape' })
-  assert.equal(capturedStore?.pendingEscAbortConversationId ?? null, null)
-  popover.remove()
-
-  // 4) The first Esc enters the 1.5s armed notice without aborting immediately
-  dispatchWindowKey({ key: 'Escape' })
-  assert.equal(capturedStore?.pendingEscAbortConversationId, 2)
-  assert.equal(abortCalls.length, 0)
-
-  // 5) Past 1.5s it resets automatically
-  await settle(ESC_ABORT_WINDOW_MS + 100)
-  assert.equal(capturedStore?.pendingEscAbortConversationId ?? null, null)
-  assert.equal(abortCalls.length, 0)
-
-  // 6) Two Esc presses within 1.5s abort the focusedPanel's conversation #2
-  dispatchWindowKey({ key: 'Escape' })
-  assert.equal(capturedStore?.pendingEscAbortConversationId, 2)
-  dispatchWindowKey({ key: 'Escape' })
-  await settle(20)
-  assert.deepEqual(abortCalls, [2])
-  assert.equal(capturedStore?.pendingEscAbortConversationId ?? null, null)
-
-  // 7) Unmounting while armed cleans up the timer properly (no errors/exceptions)
-  dispatchWindowKey({ key: 'Escape' })
-  assert.equal(capturedStore?.pendingEscAbortConversationId, 2)
-})
-
-test('App split containers with data-helmx-panel capture focus and coordinate the WorkbenchDrawer and sidebar-collapsed', { timeout: 60_000 }, async () => {
-  window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, '1')
-  window.history.replaceState(null, '', '#/c/1?split=c/2&wb=artifacts')
-  installFetch()
-
-  host = document.createElement('div')
-  document.body.appendChild(host)
-  await act(async () => {
-    root = createRoot(host!)
-    root.render(<App />)
-  })
-  await settle(60)
-
-  const shell = host.querySelector<HTMLElement>('.helmx-shell')
-  assert.ok(shell, 'App must render .helmx-shell')
-  assert.equal(shell.classList.contains('sidebar-collapsed'), true, 'with the collapsed state saved in localStorage, App must attach .sidebar-collapsed')
-
-  // Press Mod+B to expand the sidebar
-  dispatchWindowKey(modInit('b'))
-  assert.equal(shell.classList.contains('sidebar-collapsed'), false, 'Mod+B must remove .sidebar-collapsed')
-
-  const primaryPane = host.querySelector<HTMLElement>('[data-helmx-panel="primary"]')
-  const splitPane = host.querySelector<HTMLElement>('[data-helmx-panel="split"]')
-  assert.ok(primaryPane, 'the primary pane must carry data-helmx-panel="primary"')
-  assert.ok(splitPane, 'the split pane must carry data-helmx-panel="split"')
-
-  // The WorkbenchDrawer initially points at primary (#1)
-  const workbenchInitial = document.querySelector<HTMLElement>('.helmx-workbench')
-  assert.ok(workbenchInitial, 'with wb=artifacts the .helmx-workbench must be open')
-  assert.equal(artifactRequests.includes(1), true)
-
-  // Pointer/Focus entering the split container -> the WorkbenchDrawer switches to split conversation #2's artifacts
-  await act(async () => {
-    splitPane.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
-  })
-  await settle(40)
-  assert.equal(artifactRequests.includes(2), true, 'after focusing split, the WorkbenchDrawer must switch to conversation #2')
-  assert.match(document.querySelector('.helmx-workbench')?.textContent ?? '', /split-artifact\.md/)
-
-  // Switch focus back to primary
-  await act(async () => {
-    primaryPane.dispatchEvent(new FocusEvent('focusin', { bubbles: true }))
-  })
-  await settle(40)
-  assert.match(document.querySelector('.helmx-workbench')?.textContent ?? '', /primary-artifact\.md/)
 })

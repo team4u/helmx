@@ -9,6 +9,7 @@
  *   点击一致）、抽屉速览与右分屏收进卡片 `...` 菜单（托管卡也保留）、顶栏
  *   新话题（单候选直进 / 多候选下拉选角）、Rail 总览按钮一键直达与 tone 灯点。
  */
+import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import * as React from 'react'
@@ -39,8 +40,6 @@ import type { HelmxExternalStore } from '../src/lib/helmx-store.js'
 const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React
 
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
-GlobalRegistrator.register()
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 // 受控输入契约：createRoot 须在 happy-dom 注册之后动态加载（react-dom 在
 // import 期绑定事件委托的全局 DOM，先于 register 静态加载会让受控输入的
@@ -614,6 +613,11 @@ test('ConversationOverview renders the card grid with honest facts and directly 
       'drawer peek opens the existing conversation drawer at the card target',
     )
 
+    // 冲刷 Radix DropdownMenu 关闭态的 macrotask 清理，再重新展开菜单
+    await act(async () => {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0))
+    })
+
     // 右分屏打开：splitTarget 直达卡片目标，主屏不动。
     await act(async () => {
       menuTrigger.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, cancelable: true }))
@@ -621,7 +625,7 @@ test('ConversationOverview renders the card grid with honest facts and directly 
     const splitItemAgain = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((el) =>
       el.textContent?.includes('Open in right split'),
     )
-    assert.ok(splitItemAgain !== undefined)
+    assert.ok(splitItemAgain !== undefined, 'reopening the card menu still offers the right-split action')
     await act(async () => {
       splitItemAgain.click()
     })

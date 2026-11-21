@@ -9,6 +9,7 @@
  * Import convention: `ensureHappyDom()` must run before dynamically loading the Radix dependency
  * graph (same as agent-standby / composer tests), otherwise interactive popovers cannot expand.
  */
+import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import * as React from 'react'

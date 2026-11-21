@@ -1,14 +1,13 @@
+import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
-import { afterEach, test } from 'node:test'
+import { describe, afterEach, test } from 'node:test'
 import * as React from 'react'
 import { act } from 'react'
 import type { Root } from 'react-dom/client'
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { ConversationSummary } from '@helmx/protocol'
 import { hangingEventStream, type SseFrameSender } from './helpers/sse-stream.js'
 import type { ResolvedTarget, ActiveModal } from '../src/lib/types.js'
 
-GlobalRegistrator.register()
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
 const { createRoot } = await import('react-dom/client')
 const { ConversationPane } = await import('../src/conversation/ConversationPane.js')
@@ -141,7 +140,8 @@ async function mount(hash: string): Promise<void> {
 }
 
 async function settle(): Promise<void> {
-  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 25)) })
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
 }
 
 async function clickDelete(paneIndex: number): Promise<void> {
@@ -167,7 +167,7 @@ async function finishDelete(): Promise<void> {
   assert.ok(request)
   await act(async () => {
     request!.complete()
-    await new Promise((resolve) => setTimeout(resolve, 25))
+    await new Promise((resolve) => setTimeout(resolve, 0))
   })
   await settle()
 }
@@ -178,6 +178,7 @@ function reset(): void {
   host?.remove()
   host = undefined
   document.body.innerHTML = ''
+  window.history.replaceState(null, '', '/')
   globalThis.fetch = originalFetch
   sendEvent = undefined
   deleteRequest = undefined
@@ -185,95 +186,98 @@ function reset(): void {
   navigateTo = undefined
   historyLog = []
 }
+describe("conversation-delete-navigation", () => {
 
-afterEach(() => {
-  restoreHistorySpies()
-  reset()
-})
 
-let originalPushState: typeof history.pushState | undefined
-let originalReplaceState: typeof history.replaceState | undefined
-
-function spyHistory(): void {
-  originalPushState = history.pushState.bind(history)
-  originalReplaceState = history.replaceState.bind(history)
-  history.pushState = ((data: unknown, unused: string, url?: string | URL | null) => {
-    historyLog.push({ method: 'push', hash: url === undefined ? window.location.hash : String(url) })
-    return originalPushState!(data, unused, url)
-  }) as typeof history.pushState
-  history.replaceState = ((data: unknown, unused: string, url?: string | URL | null) => {
-    historyLog.push({ method: 'replace', hash: url === undefined ? window.location.hash : String(url) })
-    return originalReplaceState!(data, unused, url)
-  }) as typeof history.replaceState
-}
-
-function restoreHistorySpies(): void {
-  if (originalPushState !== undefined) history.pushState = originalPushState
-  if (originalReplaceState !== undefined) history.replaceState = originalReplaceState
-  originalPushState = undefined
-  originalReplaceState = undefined
-}
-
-test('删除分屏会话只关闭分屏，主屏会话保持不变', { timeout: 60_000 }, async () => {
-  await mount('#/c/1?split=c/2')
-  assert.equal(observed?.primary.kind, 'conversation')
-  assert.equal(observed?.split?.kind, 'conversation')
-  await clickDelete(1)
-  assert.equal(deleteRequest?.conversationId, 2)
-  await finishDelete()
-  assert.deepEqual(observed?.primary, { kind: 'conversation', conversationId: 1 })
-  assert.equal(observed?.split, null)
-})
-
-test('删除抽屉会话只关闭对应抽屉', { timeout: 60_000 }, async () => {
-  await mount('#/c/1?modal=drawer&id=2')
-  assert.equal(observed?.modal?.kind, 'conversation-drawer')
-  await clickDelete(1)
-  assert.equal(deleteRequest?.conversationId, 2)
-  await finishDelete()
-  assert.deepEqual(observed?.primary, { kind: 'conversation', conversationId: 1 })
-  assert.equal(observed?.modal, null)
-})
-
-test('删除本机主屏会话 replace 回该智能体待命态（不选其他会话）', { timeout: 60_000 }, async () => {
-  spyHistory()
-  await mount('#/c/1')
-  await clickDelete(0)
-  assert.equal(deleteRequest?.conversationId, 1)
-  await finishDelete()
-  // 本机节点不显式携带（local 是缺省），但工作目录照常继承
-  assert.deepEqual(observed?.primary, { kind: 'agent', profileId: 'assistant', cwd: '/tmp' })
-  // 删除导航强制 replace：不污染前进/后退栈，也不会闪跳到别的历史会话。
-  const last = historyLog[historyLog.length - 1]
-  assert.ok(last, '删除后应有地址栏写回')
-  assert.equal(last.method, 'replace')
-  assert.equal(last.hash, `#/a/assistant?cwd=${encodeURIComponent('/tmp')}`)
-  assert.equal(window.location.hash, `#/a/assistant?cwd=${encodeURIComponent('/tmp')}`)
-})
-
-test('删除远端主屏会话：待命目标继承节点与目录，不悄悄切回本机', { timeout: 60_000 }, async () => {
-  spyHistory()
-  await mount('#/c/3')
-  await clickDelete(0)
-  assert.equal(deleteRequest?.conversationId, 3)
-  await finishDelete()
-  assert.deepEqual(observed?.primary, {
-    kind: 'agent',
-    profileId: 'assistant',
-    nodeId: 'remote-node',
-    cwd: '/remote/work',
+  afterEach(() => {
+    restoreHistorySpies()
+    reset()
   })
-  assert.equal(window.location.hash, `#/a/assistant?node=remote-node&cwd=${encodeURIComponent('/remote/work')}`)
-})
 
-test('删除请求等待期间用户切换会话，迟到的删除事件不覆盖新导航', { timeout: 60_000 }, async () => {
-  await mount('#/c/1')
-  await clickDelete(0)
-  await act(async () => {
-    navigateTo?.({ kind: 'conversation', conversationId: 2 })
+  let originalPushState: typeof history.pushState | undefined
+  let originalReplaceState: typeof history.replaceState | undefined
+
+  function spyHistory(): void {
+    originalPushState = history.pushState.bind(history)
+    originalReplaceState = history.replaceState.bind(history)
+    history.pushState = ((data: unknown, unused: string, url?: string | URL | null) => {
+      historyLog.push({ method: 'push', hash: url === undefined ? window.location.hash : String(url) })
+      return originalPushState!(data, unused, url)
+    }) as typeof history.pushState
+    history.replaceState = ((data: unknown, unused: string, url?: string | URL | null) => {
+      historyLog.push({ method: 'replace', hash: url === undefined ? window.location.hash : String(url) })
+      return originalReplaceState!(data, unused, url)
+    }) as typeof history.replaceState
+  }
+
+  function restoreHistorySpies(): void {
+    if (originalPushState !== undefined) history.pushState = originalPushState
+    if (originalReplaceState !== undefined) history.replaceState = originalReplaceState
+    originalPushState = undefined
+    originalReplaceState = undefined
+  }
+
+  test('删除分屏会话只关闭分屏，主屏会话保持不变', { timeout: 60_000 }, async () => {
+    await mount('#/c/1?split=c/2')
+    assert.equal(observed?.primary.kind, 'conversation')
+    assert.equal(observed?.split?.kind, 'conversation')
+    await clickDelete(1)
+    assert.equal(deleteRequest?.conversationId, 2)
+    await finishDelete()
+    assert.deepEqual(observed?.primary, { kind: 'conversation', conversationId: 1 })
+    assert.equal(observed?.split, null)
   })
-  await settle()
-  assert.deepEqual(observed?.primary, { kind: 'conversation', conversationId: 2 })
-  await finishDelete()
-  assert.deepEqual(observed?.primary, { kind: 'conversation', conversationId: 2 })
+
+  test('删除抽屉会话只关闭对应抽屉', { timeout: 60_000 }, async () => {
+    await mount('#/c/1?modal=drawer&id=2')
+    assert.equal(observed?.modal?.kind, 'conversation-drawer')
+    await clickDelete(1)
+    assert.equal(deleteRequest?.conversationId, 2)
+    await finishDelete()
+    assert.deepEqual(observed?.primary, { kind: 'conversation', conversationId: 1 })
+    assert.equal(observed?.modal, null)
+  })
+
+  test('删除本机主屏会话 replace 回该智能体待命态（不选其他会话）', { timeout: 60_000 }, async () => {
+    spyHistory()
+    await mount('#/c/1')
+    await clickDelete(0)
+    assert.equal(deleteRequest?.conversationId, 1)
+    await finishDelete()
+    // 本机节点不显式携带（local 是缺省），但工作目录照常继承
+    assert.deepEqual(observed?.primary, { kind: 'agent', profileId: 'assistant', cwd: '/tmp' })
+    // 删除导航强制 replace：不污染前进/后退栈，也不会闪跳到别的历史会话。
+    const last = historyLog[historyLog.length - 1]
+    assert.ok(last, '删除后应有地址栏写回')
+    assert.equal(last.method, 'replace')
+    assert.equal(last.hash, `#/a/assistant?cwd=${encodeURIComponent('/tmp')}`)
+    assert.equal(window.location.hash, `#/a/assistant?cwd=${encodeURIComponent('/tmp')}`)
+  })
+
+  test('删除远端主屏会话：待命目标继承节点与目录，不悄悄切回本机', { timeout: 60_000 }, async () => {
+    spyHistory()
+    await mount('#/c/3')
+    await clickDelete(0)
+    assert.equal(deleteRequest?.conversationId, 3)
+    await finishDelete()
+    assert.deepEqual(observed?.primary, {
+      kind: 'agent',
+      profileId: 'assistant',
+      nodeId: 'remote-node',
+      cwd: '/remote/work',
+    })
+    assert.equal(window.location.hash, `#/a/assistant?node=remote-node&cwd=${encodeURIComponent('/remote/work')}`)
+  })
+
+  test('删除请求等待期间用户切换会话，迟到的删除事件不覆盖新导航', { timeout: 60_000 }, async () => {
+    await mount('#/c/1')
+    await clickDelete(0)
+    await act(async () => {
+      navigateTo?.({ kind: 'conversation', conversationId: 2 })
+    })
+    await settle()
+    assert.deepEqual(observed?.primary, { kind: 'conversation', conversationId: 2 })
+    await finishDelete()
+    assert.deepEqual(observed?.primary, { kind: 'conversation', conversationId: 2 })
+  })
 })

@@ -1,15 +1,14 @@
+import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import test, { describe } from 'node:test'
 import * as React from 'react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { ConversationSummary } from '@helmx/protocol'
 import type { ActiveModal } from '../src/lib/types.js'
 import type { HelmxExternalStore } from '../src/lib/helmx-store.js'
 import { setStoredToken } from '../src/lib/api.js'
 
-GlobalRegistrator.register()
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 ;(globalThis as Record<string, unknown>).React = React
 

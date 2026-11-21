@@ -6,6 +6,7 @@
  *    timeline.entry.action）宿主挂载渲染与 Action 触发闭环；
  * 4. timeline.entry.action 真实 entry 锚点（非占位拼合、排除 tool-result/queued/live/rewind）。
  */
+import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type {
@@ -50,13 +51,15 @@ const { pluginsApi } = await import('../src/lib/api.js')
 
 const e = React.createElement
 
-// client 轨组件种子：渲染真实 entry 数据，供锚点断言。
-seedPluginClientModule('p', 'entry-badge.tsx', {
-  EntryBadge: (props: Record<string, unknown>) => {
-    const item = (props['entry'] ?? {}) as { id?: string; kind?: string; data?: { ref?: string } }
-    return e('span', null, `${item.id ?? ''}:${item.kind ?? ''}:${item.data?.ref ?? ''}`)
-  },
-})
+// client 轨组件种子：渲染真实 entry 数据，供锚点断言（按需播种，避免共享进程中前置用例 resetPluginClientCache 后失效）。
+function ensureEntryBadgeSeeded(): void {
+  seedPluginClientModule('p', 'entry-badge.tsx', {
+    EntryBadge: (props: Record<string, unknown>) => {
+      const item = (props['entry'] ?? {}) as { id?: string; kind?: string; data?: { ref?: string } }
+      return e('span', null, `${item.id ?? ''}:${item.kind ?? ''}:${item.data?.ref ?? ''}`)
+    },
+  })
+}
 
 const { ConversationTimeline } = await import('../src/conversation/ConversationTimeline.js')
 const { ConversationRowActionsMenu } = await import('../src/ui/ConversationRowActionsMenu.js')
@@ -96,17 +99,20 @@ function entry(id: string, kind: string, extra: Record<string, unknown> = {}) {
   return { id, kind, ...extra } as Parameters<typeof matchTimelineRenderer>[0]
 }
 
-const entryBadgeAction = (id: string, label: string, extra: Record<string, unknown> = {}): PluginUiContribution => ({
-  pluginId: 'p',
-  surface: 'timeline.entry.action',
-  spec: {
-    id,
-    label,
-    actionId: 'act',
-    client: { module: 'entry-badge.tsx', export: 'EntryBadge' },
-    ...extra,
-  },
-})
+const entryBadgeAction = (id: string, label: string, extra: Record<string, unknown> = {}): PluginUiContribution => {
+  ensureEntryBadgeSeeded()
+  return {
+    pluginId: 'p',
+    surface: 'timeline.entry.action',
+    spec: {
+      id,
+      label,
+      actionId: 'act',
+      client: { module: 'entry-badge.tsx', export: 'EntryBadge' },
+      ...extra,
+    },
+  }
+}
 
 /** 在 actions 包上替换具名动作（挂载前替换；调用契约断言需要捕获入参/受控失败）。 */
 function spyAction<K extends keyof HelmxStoreActionsT>(store: HelmxExternalStoreT, key: K, impl: HelmxStoreActionsT[K]): void {

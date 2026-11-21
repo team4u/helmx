@@ -1,3 +1,4 @@
+import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -625,6 +626,7 @@ test('ProfileCard: locale switches en -> zh-CN -> en immediately via setLocale',
     assert.match(host.textContent ?? '', /2 skills/)
     assert.match(host.textContent ?? '', /System/)
   } finally {
+    localStorage.removeItem('helmx:locale')
     await act(async () => {
       root.unmount()
     })
@@ -859,6 +861,7 @@ test('ProfileCard: inherited model, node and cwd, conversation count, bottom-rig
     assert.equal(selectCalls, 0, 'clicking the conversation button must stopPropagation without selecting the card')
     assert.deepEqual(store.getPrimaryTarget(), { kind: 'agent', profileId: 'remote-dev' })
   } finally {
+    localStorage.removeItem('helmx:locale')
     await act(async () => {
       root.unmount()
     })

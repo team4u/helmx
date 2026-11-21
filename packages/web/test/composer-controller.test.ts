@@ -11,10 +11,10 @@
  * The store is a minimal test double (real data, real behavior assertions); the fetch
  * interception captures real request bodies.
  */
+import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import * as React from 'react'
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { HostStoreProviders } from './helpers/host-store.js'
 import { makeTestStore } from './helpers/store.js'
 
@@ -22,7 +22,6 @@ import { makeTestStore } from './helpers/store.js'
 // requires the happy-dom globals to be registered before importing react-dom/client; otherwise
 // react-dom caches the original addEventListener reference and delegated listeners on the root
 // container never receive dispatched events (onChange never fires; verified by probe).
-GlobalRegistrator.register()
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
 
 // Synthetic onChange of a controlled textarea needs the native value tracker to notice programmatic

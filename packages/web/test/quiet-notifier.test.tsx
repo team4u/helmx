@@ -14,6 +14,7 @@
  * - SSE 断流挂起：完成通道与 blocked 通道均在断流到期时挂起，重连后按最新事实结算；
  * - 门控与清理：页面聚焦、偏好关闭/中途关闭、卸载清理均不误发。
  */
+import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import * as React from 'react'

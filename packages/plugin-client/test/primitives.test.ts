@@ -11,6 +11,7 @@
  * - DataTable unifies the loading / empty placeholders (role=status /
  *   .table-empty); the data state passes children through.
  */
+import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { Window } from 'happy-dom'

@@ -12,10 +12,12 @@
  *    入口，插件视图不被内置体替换；单行统计 +N −N / N 行；运行中行
  *    右侧仅实时耗时秒表（startedAt 锚点，无锚点留空不编造）。
  */
+import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import * as React from 'react'
 import { ensureHappyDom, waitForCondition } from './helpers/dom-harness.js'
+import { resetServerClock } from '../src/lib/server-clock.js'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { makeTestStore } from './helpers/store.js'
@@ -321,15 +323,15 @@ test('edit 大输入超预算：明确提示跳过差异计算，保留原始参
 // write / read / bash
 // ---------------------------------------------------------------------------
 
-let clipboardText = ''
-Object.defineProperty(globalThis.navigator, 'clipboard', {
-  configurable: true,
-  value: { writeText: async (text: string) => {
-    clipboardText = text
-  } },
-})
-
 test('write：默认前 12 行 + 共 N 行 + 展开全部 + 复制完整源码', { timeout: 60_000 }, async () => {
+  let clipboardText = ''
+  const origClipboardDesc = Object.getOwnPropertyDescriptor(globalThis.navigator, 'clipboard')
+  Object.defineProperty(globalThis.navigator, 'clipboard', {
+    configurable: true,
+    value: { writeText: async (text: string) => {
+      clipboardText = text
+    } },
+  })
   const m = createMount()
   try {
     const content = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`).join('\n')
@@ -353,6 +355,11 @@ test('write：默认前 12 行 + 共 N 行 + 展开全部 + 复制完整源码',
     assert.equal(clipboardText, content, '复制的是完整源码')
   } finally {
     m.unmount()
+    if (origClipboardDesc !== undefined) {
+      Object.defineProperty(globalThis.navigator, 'clipboard', origClipboardDesc)
+    } else {
+      delete (globalThis.navigator as unknown as Record<string, unknown>).clipboard
+    }
   }
 })
 
@@ -441,6 +448,14 @@ test('read：spill 输出不做源码高亮并保留产物入口；普通结果�
 })
 
 test('bash：命令可复制；输出默认尾 8 行、标注折叠前 N 行、可展开全部；退出码如实', { timeout: 60_000 }, async () => {
+  let clipboardText = ''
+  const origClipboardDesc = Object.getOwnPropertyDescriptor(globalThis.navigator, 'clipboard')
+  Object.defineProperty(globalThis.navigator, 'clipboard', {
+    configurable: true,
+    value: { writeText: async (text: string) => {
+      clipboardText = text
+    } },
+  })
   const m = createMount()
   try {
     const output = Array.from({ length: 20 }, (_, i) => `out ${i + 1}`).join('\n')
@@ -474,6 +489,11 @@ test('bash：命令可复制；输出默认尾 8 行、标注折叠前 N 行、�
     assert.equal(clipboardText, 'pnpm test --filter @helmx/web', '复制完整命令')
   } finally {
     m.unmount()
+    if (origClipboardDesc !== undefined) {
+      Object.defineProperty(globalThis.navigator, 'clipboard', origClipboardDesc)
+    } else {
+      delete (globalThis.navigator as unknown as Record<string, unknown>).clipboard
+    }
   }
 })
 
@@ -545,6 +565,7 @@ test('TraceRow：无插件接管时点击展开内置展开体，再点击收起
 })
 
 test('TraceRow：运行中行右侧仅显示实时耗时秒表，无锚点留空不编造', { timeout: 60_000 }, async () => {
+  resetServerClock()
   const m = createMount()
   try {
     // 2 分钟锚点：分钟档取整对渲染毫秒级延迟不敏感（120.0s~120.9s 均为 2m0s）
@@ -783,6 +804,7 @@ test('StepGroup: one total with localized timing details on hover and keyboard f
     assert.match(document.querySelector('[role="tooltip"]')?.textContent ?? '', /模型 3\.2s/)
     assert.equal(summaryBtn.getAttribute('aria-expanded'), 'true', 'Keyboard focus must not toggle the steps')
   } finally {
+    localStorage.removeItem('helmx:locale')
     m.unmount()
   }
 })

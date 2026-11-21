@@ -8,12 +8,12 @@
  *   store locale and switch en -> zh-CN -> en immediately on setLocale
  *   (no remount, no storage re-read).
  */
+import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import * as React from 'react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { HelmxLocale } from '@helmx/protocol/browser'
 import { formatMessage, translateMessage, type MessageTable } from '../src/i18n/messages.js'
 import {
@@ -34,7 +34,6 @@ import { skillsMessages } from '../src/i18n/resources/skills.js'
 import { uiMessages } from '../src/i18n/resources/ui.js'
 import { makeTestStore, HelmxExternalStoreContext } from './helpers/store.js'
 
-GlobalRegistrator.register()
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
 
 const DOMAIN_TABLES: Array<[name: string, table: MessageTable]> = [
@@ -127,6 +126,7 @@ test('useWebLocale consumers switch en -> zh-CN -> en immediately via setLocale'
     assert.equal(store.getPrefsSlice().locale, 'en')
     assert.equal(host.querySelector('.split-toggle-btn')!.getAttribute('aria-label'), 'Side-by-side split', 'switching back to en restores English immediately')
   } finally {
+    localStorage.removeItem('helmx:locale')
     await act(async () => { root.unmount() })
     host.remove()
   }

@@ -13,7 +13,7 @@
  * Blob 动态 import；import 语义（模块求值、命名导出解析）完全一致。
  */
 import assert from 'node:assert/strict'
-import { test, before, after } from 'node:test'
+import { describe, test, before, after } from 'node:test'
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -34,96 +34,99 @@ const e = React.createElement
 const g = globalThis as unknown as Record<string, unknown>
 let dataDir: string
 let clientRoot: string
+describe("plugin-client-render", () => {
 
-before(async () => {
-  dataDir = await mkdtemp(join(tmpdir(), 'helmx-web-client-'))
-  clientRoot = join(dataDir, 'src')
-  await mkdir(clientRoot, { recursive: true })
-  await writeFile(
-    join(clientRoot, 'client.tsx'),
-    `
-import { useState } from 'react'
-import { Save } from 'lucide-react'
-import { usePluginContext, usePluginDoc } from '@helmx/plugin-client'
 
-export function ScreenPanel(props: { pluginId: string; screenId: string }) {
-  const [n, setN] = useState(3)
-  return <div className="panel">screen:{props.screenId}:{n}<Save size={12} aria-label="save" /><button onClick={() => setN(n + 1)}>bump</button></div>
-}
+  before(async () => {
+    dataDir = await mkdtemp(join(tmpdir(), 'helmx-web-client-'))
+    clientRoot = join(dataDir, 'src')
+    await mkdir(clientRoot, { recursive: true })
+    await writeFile(
+      join(clientRoot, 'client.tsx'),
+      `
+  import { useState } from 'react'
+  import { Save } from 'lucide-react'
+  import { usePluginContext, usePluginDoc } from '@helmx/plugin-client'
 
-export function ToolCard(props: { toolName: string; status: 'running' | 'done' | 'error'; callId: string }) {
-  return <div className="tool">tool:{props.toolName}:{props.status}:{props.callId}</div>
-}
+  export function ScreenPanel(props: { pluginId: string; screenId: string }) {
+    const [n, setN] = useState(3)
+    return <div className="panel">screen:{props.screenId}:{n}<Save size={12} aria-label="save" /><button onClick={() => setN(n + 1)}>bump</button></div>
+  }
 
-export function WorkbenchInfo(props: { conversation: { id: number; title: string } }) {
-  return <div className="wb">conv:{props.conversation.id}:{props.conversation.title}</div>
-}
+  export function ToolCard(props: { toolName: string; status: 'running' | 'done' | 'error'; callId: string }) {
+    return <div className="tool">tool:{props.toolName}:{props.status}:{props.callId}</div>
+  }
 
-export const sharedReact = { useState }
-export const sharedHooks = { usePluginContext, usePluginDoc }
-`,
-  )
-})
+  export function WorkbenchInfo(props: { conversation: { id: number; title: string } }) {
+    return <div className="wb">conv:{props.conversation.id}:{props.conversation.title}</div>
+  }
 
-after(async () => {
-  await rm(dataDir, { recursive: true, force: true })
-})
+  export const sharedReact = { useState }
+  export const sharedHooks = { usePluginContext, usePluginDoc }
+  `,
+    )
+  })
 
-async function importCompiled(): Promise<Record<string, unknown>> {
-  const { code } = await compilePluginClientModule('test:web-client', clientRoot, 'client.tsx', dataDir)
-  // data: URL 动态 import（与浏览器 Blob URL 动态 import 语义一致）
-  const url = `data:text/javascript;base64,${Buffer.from(code, 'utf8').toString('base64')}`
-  return (await import(url)) as Record<string, unknown>
-}
+  after(async () => {
+    await rm(dataDir, { recursive: true, force: true })
+  })
 
-test('编译产物动态 import：共享依赖经 __helmx_shared_* 命名空间解析', { timeout: 60_000 }, async () => {
-  g.__helmx_shared_react = React
-  g.__helmx_shared_react_jsx_runtime = ReactJsxRuntime
-  g.__helmx_shared_lucide_react = LucideReact
-  g.__helmx_shared_plugin_client = HelmxPluginClient
-  const mod = await importCompiled()
-  assert.equal(typeof mod.ScreenPanel, 'function')
-  assert.equal(typeof mod.ToolCard, 'function')
-})
+  async function importCompiled(): Promise<Record<string, unknown>> {
+    const { code } = await compilePluginClientModule('test:web-client', clientRoot, 'client.tsx', dataDir)
+    // data: URL 动态 import（与浏览器 Blob URL 动态 import 语义一致）
+    const url = `data:text/javascript;base64,${Buffer.from(code, 'utf8').toString('base64')}`
+    return (await import(url)) as Record<string, unknown>
+  }
 
-test('renderToString 真实渲染 Screen 组件（Props: pluginId/screenId；共享 React + lucide）', { timeout: 60_000 }, async () => {
-  const mod = await importCompiled()
-  const ScreenPanel = mod.ScreenPanel as (props: { pluginId: string; screenId: string }) => React.ReactElement
-  const html = renderToString(e(ScreenPanel, { pluginId: 'test:web-client', screenId: 'panel' }))
-  assert.match(html, /screen:.*panel.*3/)
-  assert.match(html, /lucide-save|save/)
-})
+  test('编译产物动态 import：共享依赖经 __helmx_shared_* 命名空间解析', { timeout: 60_000 }, async () => {
+    g.__helmx_shared_react = React
+    g.__helmx_shared_react_jsx_runtime = ReactJsxRuntime
+    g.__helmx_shared_lucide_react = LucideReact
+    g.__helmx_shared_plugin_client = HelmxPluginClient
+    const mod = await importCompiled()
+    assert.equal(typeof mod.ScreenPanel, 'function')
+    assert.equal(typeof mod.ToolCard, 'function')
+  })
 
-test('renderToString 真实渲染 ToolView 与 Workbench 面板组件（协议标准 Props）', { timeout: 60_000 }, async () => {
-  const mod = await importCompiled()
-  const ToolCard = mod.ToolCard as (props: { toolName: string; status: string; callId: string }) => React.ReactElement
-  const html1 = renderToString(e(ToolCard, { toolName: 'bash', status: 'done', callId: 'c-1' }))
-  assert.match(html1, /tool:.*bash.*done.*c-1/)
+  test('renderToString 真实渲染 Screen 组件（Props: pluginId/screenId；共享 React + lucide）', { timeout: 60_000 }, async () => {
+    const mod = await importCompiled()
+    const ScreenPanel = mod.ScreenPanel as (props: { pluginId: string; screenId: string }) => React.ReactElement
+    const html = renderToString(e(ScreenPanel, { pluginId: 'test:web-client', screenId: 'panel' }))
+    assert.match(html, /screen:.*panel.*3/)
+    assert.match(html, /lucide-save|save/)
+  })
 
-  const WorkbenchInfo = mod.WorkbenchInfo as (props: { conversation: { id: number; title: string } }) => React.ReactElement
-  const html2 = renderToString(e(WorkbenchInfo, { conversation: { id: 7, title: '巡检' } }))
-  assert.match(html2, /conv:.*7.*巡检/)
-})
+  test('renderToString 真实渲染 ToolView 与 Workbench 面板组件（协议标准 Props）', { timeout: 60_000 }, async () => {
+    const mod = await importCompiled()
+    const ToolCard = mod.ToolCard as (props: { toolName: string; status: string; callId: string }) => React.ReactElement
+    const html1 = renderToString(e(ToolCard, { toolName: 'bash', status: 'done', callId: 'c-1' }))
+    assert.match(html1, /tool:.*bash.*done.*c-1/)
 
-test('共享 React 断言：插件组件与宿主使用同一 React 实例', { timeout: 60_000 }, async () => {
-  const mod = await importCompiled()
-  const shared = mod.sharedReact as { useState: unknown }
-  assert.equal(shared.useState, React.useState, '插件必须持有宿主的同一个 hook 函数')
-  assert.equal(g.__helmx_shared_react, React)
-  assert.equal(g.__helmx_shared_react_jsx_runtime, ReactJsxRuntime)
-})
+    const WorkbenchInfo = mod.WorkbenchInfo as (props: { conversation: { id: number; title: string } }) => React.ReactElement
+    const html2 = renderToString(e(WorkbenchInfo, { conversation: { id: 7, title: '巡检' } }))
+    assert.match(html2, /conv:.*7.*巡检/)
+  })
 
-test("'@helmx/plugin-client' 共享模块：产物内 hooks 与宿主为同一函数实例（usePluginContext/usePluginDoc）", { timeout: 60_000 }, async () => {
-  const mod = await importCompiled()
-  const hooks = mod.sharedHooks as { usePluginContext: unknown; usePluginDoc: unknown }
-  assert.equal(hooks.usePluginContext, HelmxPluginClient.usePluginContext)
-  assert.equal(hooks.usePluginDoc, HelmxPluginClient.usePluginDoc)
-})
+  test('共享 React 断言：插件组件与宿主使用同一 React 实例', { timeout: 60_000 }, async () => {
+    const mod = await importCompiled()
+    const shared = mod.sharedReact as { useState: unknown }
+    assert.equal(shared.useState, React.useState, '插件必须持有宿主的同一个 hook 函数')
+    assert.equal(g.__helmx_shared_react, React)
+    assert.equal(g.__helmx_shared_react_jsx_runtime, ReactJsxRuntime)
+  })
 
-test('requireClientExport：导出缺失显式报错并列出可用导出', { timeout: 60_000 }, async () => {
-  const mod = await importCompiled()
-  assert.throws(
-    () => requireClientExport('test:web-client', 'client.tsx', 'NotExists', mod),
-    (err: unknown) => err instanceof Error && err.message.includes('NotExists') && err.message.includes('ScreenPanel'),
-  )
+  test("'@helmx/plugin-client' 共享模块：产物内 hooks 与宿主为同一函数实例（usePluginContext/usePluginDoc）", { timeout: 60_000 }, async () => {
+    const mod = await importCompiled()
+    const hooks = mod.sharedHooks as { usePluginContext: unknown; usePluginDoc: unknown }
+    assert.equal(hooks.usePluginContext, HelmxPluginClient.usePluginContext)
+    assert.equal(hooks.usePluginDoc, HelmxPluginClient.usePluginDoc)
+  })
+
+  test('requireClientExport：导出缺失显式报错并列出可用导出', { timeout: 60_000 }, async () => {
+    const mod = await importCompiled()
+    assert.throws(
+      () => requireClientExport('test:web-client', 'client.tsx', 'NotExists', mod),
+      (err: unknown) => err instanceof Error && err.message.includes('NotExists') && err.message.includes('ScreenPanel'),
+    )
+  })
 })

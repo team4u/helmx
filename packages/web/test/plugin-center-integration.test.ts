@@ -8,6 +8,7 @@
  * 4. 全局导航收敛：CommandPaletteModal 点击「打开插件中心」调用 openTarget({ kind: 'plugins' })；
  * 5. 中英文界面内容渲染断言。
  */
+import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { ensureHappyDom, flushMacrotask, typeIntoControl } from './helpers/dom-harness.js'

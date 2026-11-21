@@ -11,18 +11,17 @@
  * - bot/helmx 托管会话与子代理派生会话：菜单不渲染归档项（无归档资格）；
  * - SSE conversation.upsert 推送新 tags 后，菜单动作随最新归档态切换。
  */
+import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
-import { afterEach, test } from 'node:test'
+import { describe, afterEach, test } from 'node:test'
 import * as React from 'react'
 import { act } from 'react'
 import type { Root } from 'react-dom/client'
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { ConversationSummary } from '@helmx/protocol'
 import { hangingEventStream, type SseFrameSender } from './helpers/sse-stream.js'
 import type { ResolvedTarget } from '../src/lib/types.js'
 import { ARCHIVED_TAG } from '../src/conversation/archive-model.js'
 
-GlobalRegistrator.register()
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
 const { createRoot } = await import('react-dom/client')
 const { ConversationPane } = await import('../src/conversation/ConversationPane.js')
@@ -179,7 +178,8 @@ async function mount(hash: string): Promise<void> {
 }
 
 async function settle(): Promise<void> {
-  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 25)) })
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
 }
 
 async function openMenu(paneIndex = 0): Promise<void> {
@@ -202,7 +202,7 @@ async function clickMenuItem(label: string): Promise<void> {
 async function pushConversationEvent(conversation: ConversationSummary): Promise<void> {
   await act(async () => {
     sendEvent?.(eventFrame({ type: 'conversation.upsert', conversation }))
-    await new Promise((resolve) => setTimeout(resolve, 25))
+    await new Promise((resolve) => setTimeout(resolve, 0))
   })
   await settle()
 }
@@ -213,263 +213,267 @@ async function completePendingPatches(): Promise<void> {
   pendingPatches = []
   await act(async () => {
     for (const request of pending) request.complete()
-    await new Promise((resolve) => setTimeout(resolve, 25))
+    await new Promise((resolve) => setTimeout(resolve, 0))
   })
   await settle()
 }
+describe("conversation-archive-menu", () => {
 
-afterEach(() => {
-  restoreHistorySpies()
-  if (root !== undefined) act(() => root?.unmount())
-  root = undefined
-  host?.remove()
-  host = undefined
-  document.body.innerHTML = ''
-  globalThis.fetch = originalFetch
-  sendEvent = undefined
-  observed = undefined
-  navigateTo = undefined
-  patchRequests = []
-  deleteRequests = []
-  holdPatch = false
-  pendingPatches = []
-  historyLog = []
-  eventSeq = 2
-})
 
-let originalPushState: typeof history.pushState | undefined
-let originalReplaceState: typeof history.replaceState | undefined
-
-function spyHistory(): void {
-  originalPushState = history.pushState.bind(history)
-  originalReplaceState = history.replaceState.bind(history)
-  history.pushState = ((data: unknown, unused: string, url?: string | URL | null) => {
-    historyLog.push({ method: 'push', hash: url === undefined ? window.location.hash : String(url) })
-    return originalPushState!(data, unused, url)
-  }) as typeof history.pushState
-  history.replaceState = ((data: unknown, unused: string, url?: string | URL | null) => {
-    historyLog.push({ method: 'replace', hash: url === undefined ? window.location.hash : String(url) })
-    return originalReplaceState!(data, unused, url)
-  }) as typeof history.replaceState
-}
-
-function restoreHistorySpies(): void {
-  if (originalPushState !== undefined) history.pushState = originalPushState
-  if (originalReplaceState !== undefined) history.replaceState = originalReplaceState
-  originalPushState = undefined
-  originalReplaceState = undefined
-}
-
-test('明细菜单归档当前主屏会话：PATCH 追加 helmx:archived，replace 跳到待命页', { timeout: 60_000 }, async () => {
-  spyHistory()
-  conversations = [summary(1, { tags: ['important'] })]
-  await mount('#/c/1')
-  await openMenu()
-  await clickMenuItem('Archive conversation')
-  assert.deepEqual(patchRequests, [
-    { url: '/api/conversations/1', method: 'PATCH', body: { tags: ['important', ARCHIVED_TAG] } },
-  ])
-  // 本机节点不显式携带（local 是缺省），工作目录照常继承
-  assert.deepEqual(observed?.primary, { kind: 'agent', profileId: 'assistant', cwd: '/tmp' }, '归档当前会话应跳到该智能体待命页（新建会话页）')
-  assert.ok(observed?.notices.some((n) => n.title === 'Conversations archived'), '归档成功应有通知')
-  // 归档导航强制 replace：不污染前进/后退栈
-  const last = historyLog[historyLog.length - 1]
-  assert.ok(last, '归档后应有地址栏写回')
-  assert.equal(last.method, 'replace')
-  assert.equal(last.hash, `#/a/assistant?cwd=${encodeURIComponent('/tmp')}`)
-  assert.equal(window.location.hash, `#/a/assistant?cwd=${encodeURIComponent('/tmp')}`)
-  const archivedGroup = document.querySelector<HTMLButtonElement>(
-    '.archived-conversations-group .sidebar-group-header-toggle',
-  )
-  assert.ok(archivedGroup, 'the archived sidebar group should render after the archive')
-  assert.equal(archivedGroup.getAttribute('aria-expanded'), 'false', 'the archived group stays collapsed after navigation')
-})
-
-test('明细菜单归档远端主屏会话：待命目标继承节点与目录，不悄悄切回本机', { timeout: 60_000 }, async () => {
-  spyHistory()
-  conversations = [summary(3, { nodeId: 'remote-node', cwd: '/remote/work' })]
-  await mount('#/c/3')
-  await openMenu()
-  await clickMenuItem('Archive conversation')
-  assert.deepEqual(observed?.primary, {
-    kind: 'agent',
-    profileId: 'assistant',
-    nodeId: 'remote-node',
-    cwd: '/remote/work',
+  afterEach(() => {
+    restoreHistorySpies()
+    if (root !== undefined) act(() => root?.unmount())
+    root = undefined
+    host?.remove()
+    host = undefined
+    document.body.innerHTML = ''
+    window.history.replaceState(null, '', '/')
+    globalThis.fetch = originalFetch
+    sendEvent = undefined
+    observed = undefined
+    navigateTo = undefined
+    patchRequests = []
+    deleteRequests = []
+    holdPatch = false
+    pendingPatches = []
+    historyLog = []
+    eventSeq = 2
   })
-  assert.equal(window.location.hash, `#/a/assistant?node=remote-node&cwd=${encodeURIComponent('/remote/work')}`)
-})
 
-test('归档分屏目标：分屏原地替换为待命页，主屏会话保持不变', { timeout: 60_000 }, async () => {
-  conversations = [summary(1), summary(2)]
-  await mount('#/c/1?split=c/2')
-  await openMenu(1)
-  await clickMenuItem('Archive conversation')
-  assert.equal(patchRequests[0]?.url, '/api/conversations/2')
-  assert.deepEqual(observed?.primary, { kind: 'conversation', conversationId: 1 })
-  assert.deepEqual(observed?.split, { kind: 'agent', profileId: 'assistant', cwd: '/tmp' }, '分屏应原地变为待命页而非收起')
-})
+  let originalPushState: typeof history.pushState | undefined
+  let originalReplaceState: typeof history.replaceState | undefined
 
-test('归档抽屉会话：会话仍可查看，抽屉与主屏均不动', { timeout: 60_000 }, async () => {
-  conversations = [summary(1), summary(2)]
-  await mount('#/c/1?modal=drawer&id=2')
-  await openMenu(1)
-  await clickMenuItem('Archive conversation')
-  assert.equal(patchRequests[0]?.url, '/api/conversations/2')
-  assert.deepEqual(observed?.primary, { kind: 'conversation', conversationId: 1 })
-  // 抽屉保持打开（App 仍渲染 drawer pane 才有第二个菜单按钮可再开）
-  await openMenu(1)
-  const restoreItem = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')]
-    .find((el) => el.textContent?.includes('Restore conversation'))
-  assert.ok(restoreItem, '抽屉内菜单应随 SSE 迁移切换为恢复动作')
-})
+  function spyHistory(): void {
+    originalPushState = history.pushState.bind(history)
+    originalReplaceState = history.replaceState.bind(history)
+    history.pushState = ((data: unknown, unused: string, url?: string | URL | null) => {
+      historyLog.push({ method: 'push', hash: url === undefined ? window.location.hash : String(url) })
+      return originalPushState!(data, unused, url)
+    }) as typeof history.pushState
+    history.replaceState = ((data: unknown, unused: string, url?: string | URL | null) => {
+      historyLog.push({ method: 'replace', hash: url === undefined ? window.location.hash : String(url) })
+      return originalReplaceState!(data, unused, url)
+    }) as typeof history.replaceState
+  }
 
-test('恢复已归档会话不导航：主屏目标保持当前会话', { timeout: 60_000 }, async () => {
-  conversations = [summary(1, { tags: ['important', ARCHIVED_TAG] })]
-  await mount('#/c/1')
-  await openMenu()
-  await clickMenuItem('Restore conversation')
-  assert.deepEqual(patchRequests, [
-    { url: '/api/conversations/1', method: 'PATCH', body: { tags: ['important'] } },
-  ])
-  assert.deepEqual(observed?.primary, { kind: 'conversation', conversationId: 1 }, '恢复不触发任何导航')
-  assert.ok(observed?.notices.some((n) => n.title === 'Conversations restored'), '恢复成功应有通知')
-})
+  function restoreHistorySpies(): void {
+    if (originalPushState !== undefined) history.pushState = originalPushState
+    if (originalReplaceState !== undefined) history.replaceState = originalReplaceState
+    originalPushState = undefined
+    originalReplaceState = undefined
+  }
 
-test('归档分组全选后批量删除：确认后逐会话 DELETE，列表随 conversation.deleted 清空', { timeout: 60_000 }, async () => {
-  conversations = [summary(1), summary(2, { tags: [ARCHIVED_TAG] }), summary(3, { tags: [ARCHIVED_TAG] })]
-  await mount('#/c/1')
-
-  // 展开归档分组 → 进入批量管理
-  const groupToggle = document.querySelector<HTMLButtonElement>('.archived-conversations-group .sidebar-group-header-toggle')
-  assert.ok(groupToggle, '应渲染归档分组头部')
-  await act(async () => { groupToggle!.click() })
-  await settle()
-  const batchToggle = document.querySelector<HTMLButtonElement>(
-    '.archived-conversations-group button[aria-label="Manage archived conversations in bulk"]',
-  )
-  assert.ok(batchToggle, '归档分组应有批量管理入口')
-  await act(async () => { batchToggle!.click() })
-  await settle()
-
-  const barButtons = () => [...document.querySelectorAll<HTMLButtonElement>('.sidebar-batch-bar .batch-bar-actions .btn')]
-  const deleteBtn = barButtons().find((b) => b.textContent?.startsWith('Delete'))
-  assert.ok(deleteBtn, '批量栏应渲染删除按钮')
-  assert.equal(deleteBtn!.disabled, true, '未选择时删除按钮应禁用')
-
-  // 全选仅覆盖归档条目（不含当前主屏未归档会话 1）
-  const selectAll = barButtons().find((b) => b.textContent === 'Select all')
-  assert.ok(selectAll, '批量栏应渲染全选按钮')
-  await act(async () => { selectAll!.click() })
-  await settle()
-  assert.equal(deleteBtn!.disabled, false, '全选后删除按钮应可用')
-  assert.equal(deleteBtn!.textContent, 'Delete (2)')
-
-  // 确认弹窗取消路径：不发起任何 DELETE
-  await act(async () => { deleteBtn!.click() })
-  await settle()
-  const dialog = document.querySelector('[role="alertdialog"]')
-  assert.ok(dialog, '批量删除应先弹确认对话框')
-  assert.ok(dialog!.textContent?.includes('Delete 2 selected conversations?'), '确认文案应带选中数量')
-  const cancel = [...document.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')]
-    .find((b) => b.textContent?.trim() === 'Cancel')
-  await act(async () => { cancel!.click() })
-  await settle()
-  assert.deepEqual(deleteRequests, [], '取消确认不得发起删除请求')
-  assert.ok(document.querySelector('[role="alertdialog"]') === null, '取消后对话框关闭')
-
-  // 确认删除：逐会话 DELETE + SSE 移除，分组清空且不导航
-  await act(async () => { deleteBtn!.click() })
-  await settle()
-  const confirm = [...document.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')]
-    .find((b) => b.textContent?.trim() === 'Delete conversation')
-  assert.ok(confirm, '确认对话框应显示删除会话按钮')
-  await act(async () => { confirm!.click() })
-  await settle()
-
-  assert.deepEqual([...deleteRequests].sort(), ['/api/conversations/2', '/api/conversations/3'], '应对全部选中归档会话发起删除')
-  assert.ok(document.querySelector('.archived-conversations-group') === null, '删除 SSE 后归档分组应清空消失')
-  assert.deepEqual(observed?.primary, { kind: 'conversation', conversationId: 1 }, '删除非当前目标会话不得导航')
-  assert.ok(observed?.notices.some((n) => n.title === 'Bulk delete completed'), '批量删除成功应有通知')
-})
-
-test('SSE 推送归档非当前打开会话：仅列表更新，不导航', { timeout: 60_000 }, async () => {
-  conversations = [summary(1), summary(2)]
-  await mount('#/c/1')
-  await pushConversationEvent(summary(2, { tags: [ARCHIVED_TAG] }))
-  assert.deepEqual(observed?.primary, { kind: 'conversation', conversationId: 1 })
-})
-
-test('无 tags 迁移的常规 upsert（如改标题）不触发归档导航', { timeout: 60_000 }, async () => {
-  conversations = [summary(1)]
-  await mount('#/c/1')
-  await pushConversationEvent(summary(1, { title: '改名后' }))
-  assert.deepEqual(observed?.primary, { kind: 'conversation', conversationId: 1 })
-})
-
-test('归档请求在途时用户切换会话，迟到的迁移事件不覆盖新导航', { timeout: 60_000 }, async () => {
-  conversations = [summary(1), summary(2)]
-  holdPatch = true
-  await mount('#/c/1')
-  await openMenu()
-  await clickMenuItem('Archive conversation')
-  await act(async () => {
-    navigateTo?.({ kind: 'conversation', conversationId: 2 })
+  test('明细菜单归档当前主屏会话：PATCH 追加 helmx:archived，replace 跳到待命页', { timeout: 60_000 }, async () => {
+    spyHistory()
+    conversations = [summary(1, { tags: ['important'] })]
+    await mount('#/c/1')
+    await openMenu()
+    await clickMenuItem('Archive conversation')
+    assert.deepEqual(patchRequests, [
+      { url: '/api/conversations/1', method: 'PATCH', body: { tags: ['important', ARCHIVED_TAG] } },
+    ])
+    // 本机节点不显式携带（local 是缺省），工作目录照常继承
+    assert.deepEqual(observed?.primary, { kind: 'agent', profileId: 'assistant', cwd: '/tmp' }, '归档当前会话应跳到该智能体待命页（新建会话页）')
+    assert.ok(observed?.notices.some((n) => n.title === 'Conversations archived'), '归档成功应有通知')
+    // 归档导航强制 replace：不污染前进/后退栈
+    const last = historyLog[historyLog.length - 1]
+    assert.ok(last, '归档后应有地址栏写回')
+    assert.equal(last.method, 'replace')
+    assert.equal(last.hash, `#/a/assistant?cwd=${encodeURIComponent('/tmp')}`)
+    assert.equal(window.location.hash, `#/a/assistant?cwd=${encodeURIComponent('/tmp')}`)
+    const archivedGroup = document.querySelector<HTMLButtonElement>(
+      '.archived-conversations-group .sidebar-group-header-toggle',
+    )
+    assert.ok(archivedGroup, 'the archived sidebar group should render after the archive')
+    assert.equal(archivedGroup.getAttribute('aria-expanded'), 'false', 'the archived group stays collapsed after navigation')
   })
-  await settle()
-  await completePendingPatches()
-  assert.deepEqual(observed?.primary, { kind: 'conversation', conversationId: 2 }, '迟到迁移不得覆盖用户的新导航')
-})
 
-test('明细菜单归档资格：bot 托管与子代理派生会话不渲染归档项', { timeout: 60_000 }, async () => {
-  conversations = [
-    summary(1, { ownedBy: 'bot' }),
-    summary(2, { parentConversationId: 1 }),
-  ]
-  await mount('#/c/1')
-  await openMenu()
-  const archiveItem = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')]
-    .find((el) => el.textContent?.includes('Archive conversation'))
-  assert.ok(archiveItem === undefined, 'bot 托管会话不得提供归档入口')
-
-  window.history.replaceState(null, '', '#/c/2')
-  await act(async () => {
-    root?.render(e(HelmxStoreProvider, null, e(App)))
+  test('明细菜单归档远端主屏会话：待命目标继承节点与目录，不悄悄切回本机', { timeout: 60_000 }, async () => {
+    spyHistory()
+    conversations = [summary(3, { nodeId: 'remote-node', cwd: '/remote/work' })]
+    await mount('#/c/3')
+    await openMenu()
+    await clickMenuItem('Archive conversation')
+    assert.deepEqual(observed?.primary, {
+      kind: 'agent',
+      profileId: 'assistant',
+      nodeId: 'remote-node',
+      cwd: '/remote/work',
+    })
+    assert.equal(window.location.hash, `#/a/assistant?node=remote-node&cwd=${encodeURIComponent('/remote/work')}`)
   })
-  await settle()
-  await openMenu()
-  const derivedItem = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')]
-    .find((el) => el.textContent?.includes('Archive conversation'))
-  assert.ok(derivedItem === undefined, '子代理派生会话不得提供归档入口')
-})
 
-test('明细「更多操作」菜单为非模态：打开后点击外部会话按钮一次即关闭菜单并切换，且不抢回焦点', { timeout: 60_000 }, async () => {
-  conversations = [summary(1), summary(2)]
-  await mount('#/c/1')
-
-  const outsideBtn = document.createElement('button')
-  outsideBtn.type = 'button'
-  outsideBtn.textContent = '切换到会话 2'
-  let outsideClickCount = 0
-  outsideBtn.addEventListener('click', () => {
-    outsideClickCount += 1
-    outsideBtn.focus()
+  test('归档分屏目标：分屏原地替换为待命页，主屏会话保持不变', { timeout: 60_000 }, async () => {
+    conversations = [summary(1), summary(2)]
+    await mount('#/c/1?split=c/2')
+    await openMenu(1)
+    await clickMenuItem('Archive conversation')
+    assert.equal(patchRequests[0]?.url, '/api/conversations/2')
+    assert.deepEqual(observed?.primary, { kind: 'conversation', conversationId: 1 })
+    assert.deepEqual(observed?.split, { kind: 'agent', profileId: 'assistant', cwd: '/tmp' }, '分屏应原地变为待命页而非收起')
   })
-  document.body.appendChild(outsideBtn)
 
-  await openMenu()
-  assert.ok(document.querySelector('[role="menu"]'), '更多操作菜单已打开')
-  assert.notEqual(document.body.style.pointerEvents, 'none', '不得禁用 body pointer-events 吞掉外部首次点击')
-
-  const menuTrigger = document.querySelector<HTMLButtonElement>('.pane-more-menu button[aria-label="More conversation actions"]')!
-  await act(async () => {
-    outsideBtn.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, cancelable: true }))
-    outsideBtn.click()
+  test('归档抽屉会话：会话仍可查看，抽屉与主屏均不动', { timeout: 60_000 }, async () => {
+    conversations = [summary(1), summary(2)]
+    await mount('#/c/1?modal=drawer&id=2')
+    await openMenu(1)
+    await clickMenuItem('Archive conversation')
+    assert.equal(patchRequests[0]?.url, '/api/conversations/2')
+    assert.deepEqual(observed?.primary, { kind: 'conversation', conversationId: 1 })
+    // 抽屉保持打开（App 仍渲染 drawer pane 才有第二个菜单按钮可再开）
+    await openMenu(1)
+    const restoreItem = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')]
+      .find((el) => el.textContent?.includes('Restore conversation'))
+    assert.ok(restoreItem, '抽屉内菜单应随 SSE 迁移切换为恢复动作')
   })
-  await settle()
 
-  assert.equal(outsideClickCount, 1, '外部按钮首次点击立即生效')
-  assert.ok(document.querySelector('[role="menu"]') === null, '菜单已自动关闭')
-  assert.ok(document.activeElement !== menuTrigger, '外部交互关闭菜单后不得把焦点抢回原触发按钮')
-  outsideBtn.remove()
+  test('恢复已归档会话不导航：主屏目标保持当前会话', { timeout: 60_000 }, async () => {
+    conversations = [summary(1, { tags: ['important', ARCHIVED_TAG] })]
+    await mount('#/c/1')
+    await openMenu()
+    await clickMenuItem('Restore conversation')
+    assert.deepEqual(patchRequests, [
+      { url: '/api/conversations/1', method: 'PATCH', body: { tags: ['important'] } },
+    ])
+    assert.deepEqual(observed?.primary, { kind: 'conversation', conversationId: 1 }, '恢复不触发任何导航')
+    assert.ok(observed?.notices.some((n) => n.title === 'Conversations restored'), '恢复成功应有通知')
+  })
+
+  test('归档分组全选后批量删除：确认后逐会话 DELETE，列表随 conversation.deleted 清空', { timeout: 60_000 }, async () => {
+    conversations = [summary(1), summary(2, { tags: [ARCHIVED_TAG] }), summary(3, { tags: [ARCHIVED_TAG] })]
+    await mount('#/c/1')
+
+    // 展开归档分组 → 进入批量管理
+    const groupToggle = document.querySelector<HTMLButtonElement>('.archived-conversations-group .sidebar-group-header-toggle')
+    assert.ok(groupToggle, '应渲染归档分组头部')
+    await act(async () => { groupToggle!.click() })
+    await settle()
+    const batchToggle = document.querySelector<HTMLButtonElement>(
+      '.archived-conversations-group button[aria-label="Manage archived conversations in bulk"]',
+    )
+    assert.ok(batchToggle, '归档分组应有批量管理入口')
+    await act(async () => { batchToggle!.click() })
+    await settle()
+
+    const barButtons = () => [...document.querySelectorAll<HTMLButtonElement>('.sidebar-batch-bar .batch-bar-actions .btn')]
+    const deleteBtn = barButtons().find((b) => b.textContent?.startsWith('Delete'))
+    assert.ok(deleteBtn, '批量栏应渲染删除按钮')
+    assert.equal(deleteBtn!.disabled, true, '未选择时删除按钮应禁用')
+
+    // 全选仅覆盖归档条目（不含当前主屏未归档会话 1）
+    const selectAll = barButtons().find((b) => b.textContent === 'Select all')
+    assert.ok(selectAll, '批量栏应渲染全选按钮')
+    await act(async () => { selectAll!.click() })
+    await settle()
+    assert.equal(deleteBtn!.disabled, false, '全选后删除按钮应可用')
+    assert.equal(deleteBtn!.textContent, 'Delete (2)')
+
+    // 确认弹窗取消路径：不发起任何 DELETE
+    await act(async () => { deleteBtn!.click() })
+    await settle()
+    const dialog = document.querySelector('[role="alertdialog"]')
+    assert.ok(dialog, '批量删除应先弹确认对话框')
+    assert.ok(dialog!.textContent?.includes('Delete 2 selected conversations?'), '确认文案应带选中数量')
+    const cancel = [...document.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')]
+      .find((b) => b.textContent?.trim() === 'Cancel')
+    await act(async () => { cancel!.click() })
+    await settle()
+    assert.deepEqual(deleteRequests, [], '取消确认不得发起删除请求')
+    assert.ok(document.querySelector('[role="alertdialog"]') === null, '取消后对话框关闭')
+
+    // 确认删除：逐会话 DELETE + SSE 移除，分组清空且不导航
+    await act(async () => { deleteBtn!.click() })
+    await settle()
+    const confirm = [...document.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')]
+      .find((b) => b.textContent?.trim() === 'Delete conversation')
+    assert.ok(confirm, '确认对话框应显示删除会话按钮')
+    await act(async () => { confirm!.click() })
+    await settle()
+
+    assert.deepEqual([...deleteRequests].sort(), ['/api/conversations/2', '/api/conversations/3'], '应对全部选中归档会话发起删除')
+    assert.ok(document.querySelector('.archived-conversations-group') === null, '删除 SSE 后归档分组应清空消失')
+    assert.deepEqual(observed?.primary, { kind: 'conversation', conversationId: 1 }, '删除非当前目标会话不得导航')
+    assert.ok(observed?.notices.some((n) => n.title === 'Bulk delete completed'), '批量删除成功应有通知')
+  })
+
+  test('SSE 推送归档非当前打开会话：仅列表更新，不导航', { timeout: 60_000 }, async () => {
+    conversations = [summary(1), summary(2)]
+    await mount('#/c/1')
+    await pushConversationEvent(summary(2, { tags: [ARCHIVED_TAG] }))
+    assert.deepEqual(observed?.primary, { kind: 'conversation', conversationId: 1 })
+  })
+
+  test('无 tags 迁移的常规 upsert（如改标题）不触发归档导航', { timeout: 60_000 }, async () => {
+    conversations = [summary(1)]
+    await mount('#/c/1')
+    await pushConversationEvent(summary(1, { title: '改名后' }))
+    assert.deepEqual(observed?.primary, { kind: 'conversation', conversationId: 1 })
+  })
+
+  test('归档请求在途时用户切换会话，迟到的迁移事件不覆盖新导航', { timeout: 60_000 }, async () => {
+    conversations = [summary(1), summary(2)]
+    holdPatch = true
+    await mount('#/c/1')
+    await openMenu()
+    await clickMenuItem('Archive conversation')
+    await act(async () => {
+      navigateTo?.({ kind: 'conversation', conversationId: 2 })
+    })
+    await settle()
+    await completePendingPatches()
+    assert.deepEqual(observed?.primary, { kind: 'conversation', conversationId: 2 }, '迟到迁移不得覆盖用户的新导航')
+  })
+
+  test('明细菜单归档资格：bot 托管与子代理派生会话不渲染归档项', { timeout: 60_000 }, async () => {
+    conversations = [
+      summary(1, { ownedBy: 'bot' }),
+      summary(2, { parentConversationId: 1 }),
+    ]
+    await mount('#/c/1')
+    await openMenu()
+    const archiveItem = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')]
+      .find((el) => el.textContent?.includes('Archive conversation'))
+    assert.ok(archiveItem === undefined, 'bot 托管会话不得提供归档入口')
+
+    window.history.replaceState(null, '', '#/c/2')
+    await act(async () => {
+      root?.render(e(HelmxStoreProvider, null, e(App)))
+    })
+    await settle()
+    await openMenu()
+    const derivedItem = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')]
+      .find((el) => el.textContent?.includes('Archive conversation'))
+    assert.ok(derivedItem === undefined, '子代理派生会话不得提供归档入口')
+  })
+
+  test('明细「更多操作」菜单为非模态：打开后点击外部会话按钮一次即关闭菜单并切换，且不抢回焦点', { timeout: 60_000 }, async () => {
+    conversations = [summary(1), summary(2)]
+    await mount('#/c/1')
+
+    const outsideBtn = document.createElement('button')
+    outsideBtn.type = 'button'
+    outsideBtn.textContent = '切换到会话 2'
+    let outsideClickCount = 0
+    outsideBtn.addEventListener('click', () => {
+      outsideClickCount += 1
+      outsideBtn.focus()
+    })
+    document.body.appendChild(outsideBtn)
+
+    await openMenu()
+    assert.ok(document.querySelector('[role="menu"]'), '更多操作菜单已打开')
+    assert.notEqual(document.body.style.pointerEvents, 'none', '不得禁用 body pointer-events 吞掉外部首次点击')
+
+    const menuTrigger = document.querySelector<HTMLButtonElement>('.pane-more-menu button[aria-label="More conversation actions"]')!
+    await act(async () => {
+      outsideBtn.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, cancelable: true }))
+      outsideBtn.click()
+    })
+    await settle()
+
+    assert.equal(outsideClickCount, 1, '外部按钮首次点击立即生效')
+    assert.ok(document.querySelector('[role="menu"]') === null, '菜单已自动关闭')
+    assert.ok(document.activeElement !== menuTrigger, '外部交互关闭菜单后不得把焦点抢回原触发按钮')
+    outsideBtn.remove()
+  })
 })

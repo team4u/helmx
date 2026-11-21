@@ -2,9 +2,10 @@
  * HubUpdateCard：仅在有就绪更新时渲染；apply 走 /api/hub-update/*；hub_busy 展示计数并
  * 提供强制路径；202 后进入切换中并在新版本上线后提示刷新。DOM 行为断言（不锁 CSS）。
  */
+import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { ensureHappyDom } from '../test/helpers/dom-harness.js'
+import { ensureHappyDom, waitForCondition } from '../test/helpers/dom-harness.js'
 ensureHappyDom()
 
 import * as React from 'react'
@@ -39,11 +40,11 @@ function makeEnv(responses: Array<{ match: (log: FetchLog) => boolean; status: n
 
 async function renderCard(): Promise<{ container: HTMLElement; rerender: () => Promise<void>; unmount: () => void }> {
   const { mountDomRoot } = await import('./helpers/dom-harness.js')
-  const element: React.ReactElement = React.createElement(HubUpdateCard, { pollMs: 80 })
+  const element: React.ReactElement = React.createElement(HubUpdateCard, { pollMs: 20 })
   const mounted = await mountDomRoot(element)
   return {
     container: mounted.host,
-    rerender: () => mounted.rerender(React.createElement(HubUpdateCard, { pollMs: 80 })),
+    rerender: () => mounted.rerender(React.createElement(HubUpdateCard, { pollMs: 20 })),
     unmount: mounted.unmount,
   }
 }
@@ -59,7 +60,7 @@ test('HubUpdateCard stays absent without a staged update and renders the ready l
 
     // A staged update appears on the next poll cycle.
     env.replace({ match: (l: FetchLog) => l.path === '/api/hub-update/status', status: 200, body: { active: true, currentVersion: '1.0.0', readyVersion: '1.1.0', lastError: null, blocked: null } })
-    await new Promise((resolve) => setTimeout(resolve, 250))
+    await waitForCondition(() => container.querySelector('.hub-update-card') !== null)
     await rerender()
     const card = container.querySelector('.hub-update-card')
     assert.ok(card !== null, 'card renders when a staged update exists')
@@ -135,7 +136,7 @@ test('HubUpgradedNotice appears once per version and opens the sliced changelog'
     React.createElement(
       HelmxExternalStoreContext.Provider,
       { value: store },
-      React.createElement(HubUpgradedNotice, { pollMs: 80 }),
+      React.createElement(HubUpgradedNotice, { pollMs: 20 }),
     )
   const mounted = await mountDomRoot(element())
   t.after(mounted.unmount)
@@ -156,7 +157,7 @@ test('HubUpgradedNotice appears once per version and opens the sliced changelog'
   assert.ok(mounted.host.querySelector('.hub-upgraded-notice') === null, 'notice stays dismissed for the same version')
 
   statusBody = { currentVersion: '0.1.3', upgradedFrom: '0.1.2', changelogAvailable: false }
-  await new Promise((resolve) => setTimeout(resolve, 250))
+  await waitForCondition(() => mounted.host.querySelector('.hub-upgraded-notice') !== null)
   await mounted.rerender(element())
   const next = mounted.host.querySelector('.hub-upgraded-notice') as HTMLElement | null
   assert.ok(next !== null, 'a newer upgrade shows the notice again')
@@ -200,8 +201,8 @@ test('HubChangelogModal renders sliced sections and honest absent states', { tim
   )
   t.after(mounted.unmount)
   assert.deepEqual(calls, ['/api/hub-update/changelog?from=0.1.1'])
-  await new Promise((resolve) => setTimeout(resolve, 100))
   const host = mounted.host
+  await waitForCondition(() => host.querySelector('.hub-changelog-version') !== null)
   assert.ok(host.querySelector('.hub-changelog-modal') !== null)
   const versions = [...host.querySelectorAll('.hub-changelog-version')].map((el) => el.textContent)
   assert.deepEqual(versions, ['v0.1.2', 'v0.1.1'])
@@ -218,7 +219,7 @@ test('HubChangelogModal renders sliced sections and honest absent states', { tim
     ) satisfies React.ReactElement as React.ReactElement,
   )
   t.after(absentMounted.unmount)
-  await new Promise((resolve) => setTimeout(resolve, 100))
+  await waitForCondition(() => /未随附变更日志|did not ship a changelog/.test(absentMounted.host.textContent ?? ''))
   assert.match(absentMounted.host.textContent ?? '', /未随附变更日志|did not ship a changelog/)
 })
 

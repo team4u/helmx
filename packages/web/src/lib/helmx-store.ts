@@ -451,6 +451,7 @@ export class HelmxExternalStore {
   private noticeSequence = 0
   private spaceMemory: Partial<Record<SidebarSpace, ResolvedTarget>>
   private escAbortTimer: ReturnType<typeof setTimeout> | null = null
+  private readonly escAbortWindowMs: number
   private logoutImpl: (() => void) | null = null
 
   private domainListeners = new Map<StoreDomainKey, Set<StoreListener>>()
@@ -465,7 +466,8 @@ export class HelmxExternalStore {
 
   readonly actions: HelmxStoreActions
 
-  constructor(bootLocation: WorkspaceLocationState) {
+  constructor(bootLocation: WorkspaceLocationState, options?: { escAbortWindowMs?: number }) {
+    this.escAbortWindowMs = options?.escAbortWindowMs ?? ESC_ABORT_WINDOW_MS
     const themePreference = getStoredPreference()
     const localePreference = getStoredLocalePreference()
     const locale = resolveLocale(localePreference)
@@ -1849,7 +1851,7 @@ export class HelmxExternalStore {
     this.escAbortTimer = setTimeout(() => {
       this.escAbortTimer = null
       this.clearEscAbortPrompt()
-    }, ESC_ABORT_WINDOW_MS)
+    }, this.escAbortWindowMs)
   }
 
   confirmOrArmEscAbort = (conversationId: number): void => {

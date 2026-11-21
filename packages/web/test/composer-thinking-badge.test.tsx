@@ -9,15 +9,14 @@
  * - when the effective level is outside the catalog's supported list, it
  *   safely falls back to a valid level (off or the first).
  */
+import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import * as React from 'react'
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { act } from 'react'
 import type { ConversationSummary } from '@helmx/protocol'
 import type { HelmxExternalStore } from '../src/lib/helmx-store.js'
 
-GlobalRegistrator.register()
 const { HostStoreProviders } = await import('./helpers/host-store.js')
 const { makeTestStore } = await import('./helpers/store.js')
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })

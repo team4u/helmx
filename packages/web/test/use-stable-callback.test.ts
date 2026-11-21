@@ -7,12 +7,11 @@
  * - 实例级隔离、卸载后无模块级缓存：旧包装函数只指向该实例最后一次 commit，
  *   不影响后续实例。
  */
+import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import * as React from 'react'
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
 
-GlobalRegistrator.register()
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
 
 const { act } = await import('react')

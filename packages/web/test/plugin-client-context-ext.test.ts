@@ -7,6 +7,7 @@
  *   第二参、getPluginSessionDoc 路径与参数、composer 仅显式提供时存在。
  * 真实 React DOM 渲染路径（createRoot + act），store 为行为真实的最小替身。
  */
+import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import * as React from 'react'
@@ -29,8 +30,6 @@ import type { HelmxExternalStore, HelmxStoreActions } from '../src/lib/helmx-sto
 const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React
 
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
-GlobalRegistrator.register()
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 
 /** 在 actions 包上替换具名动作（快照/端口构建前替换；调用契约断言需捕获入参）。 */

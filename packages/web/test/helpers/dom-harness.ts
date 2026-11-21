@@ -2,12 +2,13 @@
  * 共享 happy-dom 测试宿主原语：
  * - 不静态引入 @helmx/plugin-client / Radix / react-dom/client，确保需要交互展开 Radix 浮层
  *   的测试可在调用 ensureHappyDom() 后再动态 import 相关模块；
- * - 提供幂等 DOM 注册、输入控制、微任务/宏任务冲刷、条件等待与 JSON 响应构造。
+ * - 提供幂等 DOM 注册、跨测试全局/DOM 状态复位、输入控制、微任务/宏任务冲刷、条件等待与 JSON 响应构造。
  */
 import * as React from 'react'
 import { act } from 'react'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { Root } from 'react-dom/client'
+import { resetServerClock } from '../../src/lib/server-clock.js'
 
 let registered = false
 
@@ -17,10 +18,51 @@ class NoopResizeObserver {
   disconnect(): void {}
 }
 
+interface BaselineGlobals {
+  fetch: typeof globalThis.fetch
+  createObjectURL: typeof URL.createObjectURL
+  revokeObjectURL: typeof URL.revokeObjectURL
+  Blob: typeof globalThis.Blob
+  matchMedia: typeof window.matchMedia
+  notificationDesc: PropertyDescriptor | undefined
+  docHiddenDesc: PropertyDescriptor | undefined
+  docVisibilityDesc: PropertyDescriptor | undefined
+  navLanguageDesc: PropertyDescriptor | undefined
+  navLanguagesDesc: PropertyDescriptor | undefined
+  navClipboardDesc: PropertyDescriptor | undefined
+}
+
+let baseline: BaselineGlobals | undefined
+
+function captureBaseline(): void {
+  if (baseline !== undefined) return
+  baseline = {
+    fetch: globalThis.fetch,
+    createObjectURL: URL.createObjectURL,
+    revokeObjectURL: URL.revokeObjectURL,
+    Blob: globalThis.Blob,
+    matchMedia: window.matchMedia,
+    notificationDesc: Object.getOwnPropertyDescriptor(globalThis, 'Notification'),
+    docHiddenDesc: Object.getOwnPropertyDescriptor(document, 'hidden'),
+    docVisibilityDesc: Object.getOwnPropertyDescriptor(document, 'visibilityState'),
+    navLanguageDesc: Object.getOwnPropertyDescriptor(navigator, 'language'),
+    navLanguagesDesc: Object.getOwnPropertyDescriptor(navigator, 'languages'),
+    navClipboardDesc: Object.getOwnPropertyDescriptor(navigator, 'clipboard'),
+  }
+}
+
+function restoreProperty(target: object, key: string, desc: PropertyDescriptor | undefined): void {
+  if (desc !== undefined) {
+    Object.defineProperty(target, key, desc)
+  } else {
+    delete (target as Record<string, unknown>)[key]
+  }
+}
+
 /** 幂等注册 happy-dom 全局宿主并配置 React act 环境与 ResizeObserver 兜底。 */
 export function ensureHappyDom(): void {
   if (!registered) {
-    if (typeof window === 'undefined' || typeof document === 'undefined') {
+    if (!GlobalRegistrator.isRegistered && (typeof window === 'undefined' || typeof document === 'undefined')) {
       try {
         GlobalRegistrator.register()
       } catch {
@@ -29,11 +71,72 @@ export function ensureHappyDom(): void {
     }
     registered = true
   }
+  if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+    captureBaseline()
+  }
   const g = globalThis as Record<string, unknown>
   g.React = React
   g.IS_REACT_ACT_ENVIRONMENT = true
   if (g.ResizeObserver === undefined) {
     g.ResizeObserver = NoopResizeObserver
+  }
+}
+
+/** 获取 happy-dom 初始注册时的基线 fetch，避免共享进程中捕获前序测试的 mock fetch。 */
+export function getBaselineFetch(): typeof globalThis.fetch {
+  ensureHappyDom()
+  return baseline?.fetch ?? globalThis.fetch
+}
+
+/**
+ * 复位共享 happy-dom 与常用浏览器全局状态（不卸载全局 Window 单例，安全支持
+ * `--test-isolation=none` 跨文件复跑）。
+ */
+export function resetHappyDom(): void {
+  ensureHappyDom()
+  if (baseline !== undefined) {
+    globalThis.fetch = baseline.fetch
+    URL.createObjectURL = baseline.createObjectURL
+    URL.revokeObjectURL = baseline.revokeObjectURL
+    globalThis.Blob = baseline.Blob
+    window.matchMedia = baseline.matchMedia
+    restoreProperty(globalThis, 'Notification', baseline.notificationDesc)
+    restoreProperty(document, 'hidden', baseline.docHiddenDesc)
+    restoreProperty(document, 'visibilityState', baseline.docVisibilityDesc)
+    restoreProperty(navigator, 'language', baseline.navLanguageDesc)
+    restoreProperty(navigator, 'languages', baseline.navLanguagesDesc)
+    restoreProperty(navigator, 'clipboard', baseline.navClipboardDesc)
+  }
+  const g = globalThis as Record<string, unknown>
+  g.React = React
+  g.IS_REACT_ACT_ENVIRONMENT = true
+  g.ResizeObserver = NoopResizeObserver
+  resetServerClock()
+
+  ;(document.activeElement as HTMLElement | null)?.blur?.()
+  document.body.innerHTML = ''
+  for (const attr of Array.from(document.body.attributes)) {
+    document.body.removeAttribute(attr.name)
+  }
+  document.head.innerHTML = ''
+  document.title = ''
+  for (const attr of Array.from(document.documentElement.attributes)) {
+    document.documentElement.removeAttribute(attr.name)
+  }
+  try {
+    window.localStorage.clear()
+  } catch {
+    // 合成环境下容忍存储异常
+  }
+  try {
+    window.sessionStorage.clear()
+  } catch {
+    // 合成环境下容忍存储异常
+  }
+  try {
+    window.history.replaceState(null, '', '/')
+  } catch {
+    // 合成环境下容忍 history 异常
   }
 }
 

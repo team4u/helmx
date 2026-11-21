@@ -15,6 +15,7 @@
  *   （移动端合着抽屉也不漏后台任务）；
  * - 命令面板渲染：会话行（最近 + 匹配）行首灯槽对齐展示 ConversationStatusDot。
  */
+import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import * as React from 'react'
@@ -40,8 +41,6 @@ import type { HelmxExternalStore } from '../src/lib/helmx-store.js'
 const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React
 
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
-GlobalRegistrator.register()
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 
 const { Sidebar } = await import('../src/shell/Sidebar.js')

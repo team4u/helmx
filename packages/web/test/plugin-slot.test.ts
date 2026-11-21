@@ -5,6 +5,7 @@
  *   fallback、子项 ctx.pluginId 是贡献者；
  * - 环保护：同一贡献项在渲染链再次出现时显式环告警且不死循环。
  */
+import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { ConversationSummary, PluginUiContribution } from '@helmx/protocol'

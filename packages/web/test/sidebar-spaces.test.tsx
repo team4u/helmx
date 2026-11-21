@@ -4,16 +4,15 @@
  * - 双层导航与单展开：仅当前目标所属智能体展开话题子列表（无折叠钮，
  *   点击智能体名称进入待命态并随之展开），切换目标自动收起原智能体。
  */
+import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import * as React from 'react'
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { ConversationSummary, PluginUiContribution } from '@helmx/protocol'
 import { spaceForTarget, type LocalePreference, type ResolvedTarget, type SidebarSpace } from '../src/lib/types.js'
 import type { LiveState } from '../src/lib/live-state.js'
 import { makeTestStore } from './helpers/store.js'
 import type { HelmxExternalStore, HelmxStoreActions } from '../src/lib/helmx-store.js'
-GlobalRegistrator.register()
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 // happy-dom 全局就绪后再加载 react-dom/client 与 SDK Provider 栈（静态导入会捕获注册前的 Node 全局）
 const { act } = await import('react')

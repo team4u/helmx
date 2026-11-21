@@ -1,3 +1,4 @@
+import './helpers/register-happy-dom.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import React, { act } from 'react'

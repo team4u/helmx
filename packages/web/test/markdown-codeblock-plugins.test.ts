@@ -8,6 +8,7 @@
  *  （含依赖闭包、共享 shim 与受控 npm bundle 边界）；
  * - 加载失败显式诊断 + 源码可复制（诚实性纪律）。
  */
+import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import * as React from 'react'
@@ -16,14 +17,12 @@ import { createRoot } from 'react-dom/client'
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { join, resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { PluginUiContribution } from '@helmx/protocol'
 import * as HelmxPluginClient from '@helmx/plugin-client'
 import { compilePluginClientModule, safeDirName, safeFileName } from '@helmx/plugin-build'
 import { makeTestStore } from './helpers/store.js'
 import { HostStoreProviders } from './helpers/host-store.js'
 
-GlobalRegistrator.register()
 ;(globalThis as Record<string, unknown>).React = React
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 

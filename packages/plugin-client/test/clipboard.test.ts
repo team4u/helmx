@@ -2,13 +2,21 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { copyToClipboard } from '../src/clipboard.js'
 
+function restoreGlobalProperty(key: 'navigator' | 'document', descriptor: PropertyDescriptor | undefined): void {
+  if (descriptor !== undefined) {
+    Object.defineProperty(globalThis, key, descriptor)
+  } else {
+    delete (globalThis as Record<string, unknown>)[key]
+  }
+}
+
 // The copied payloads below intentionally keep non-ASCII (CJK) text: they
 // double as Unicode transport coverage through the clipboard pipeline, so the
 // exact byte-for-byte passthrough can be asserted.
 test('copyToClipboard: prefers navigator.clipboard.writeText when available and returns true', { timeout: 60_000 }, async () => {
   let copiedText = ''
-  const originalNavigator = globalThis.navigator
-  const originalDocument = globalThis.document
+  const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator')
+  const originalDocument = Object.getOwnPropertyDescriptor(globalThis, 'document')
 
   try {
     Object.defineProperty(globalThis, 'navigator', {
@@ -27,22 +35,14 @@ test('copyToClipboard: prefers navigator.clipboard.writeText when available and 
     assert.equal(ok, true)
     assert.equal(copiedText, '测试内容 123')
   } finally {
-    Object.defineProperty(globalThis, 'navigator', {
-      value: originalNavigator,
-      configurable: true,
-      writable: true,
-    })
-    Object.defineProperty(globalThis, 'document', {
-      value: originalDocument,
-      configurable: true,
-      writable: true,
-    })
+    restoreGlobalProperty('navigator', originalNavigator)
+    restoreGlobalProperty('document', originalDocument)
   }
 })
 
 test('copyToClipboard: falls back to execCommand in a non-secure context (navigator.clipboard undefined, e.g. HTTP access)', { timeout: 60_000 }, async () => {
-  const originalNavigator = globalThis.navigator
-  const originalDocument = globalThis.document
+  const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator')
+  const originalDocument = Object.getOwnPropertyDescriptor(globalThis, 'document')
 
   let appendedValue = ''
   let execCommandCalled = false
@@ -95,22 +95,14 @@ test('copyToClipboard: falls back to execCommand in a non-secure context (naviga
     assert.equal(execCommandCalled, true)
     assert.equal(appendedValue, 'HTTP 环境降级复制')
   } finally {
-    Object.defineProperty(globalThis, 'navigator', {
-      value: originalNavigator,
-      configurable: true,
-      writable: true,
-    })
-    Object.defineProperty(globalThis, 'document', {
-      value: originalDocument,
-      configurable: true,
-      writable: true,
-    })
+    restoreGlobalProperty('navigator', originalNavigator)
+    restoreGlobalProperty('document', originalDocument)
   }
 })
 
 test('copyToClipboard: safely returns false without throwing when both the modern API and the fallback fail', { timeout: 60_000 }, async () => {
-  const originalNavigator = globalThis.navigator
-  const originalDocument = globalThis.document
+  const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator')
+  const originalDocument = Object.getOwnPropertyDescriptor(globalThis, 'document')
 
   try {
     Object.defineProperty(globalThis, 'navigator', {
@@ -127,15 +119,7 @@ test('copyToClipboard: safely returns false without throwing when both the moder
     const ok = await copyToClipboard('no environment')
     assert.equal(ok, false)
   } finally {
-    Object.defineProperty(globalThis, 'navigator', {
-      value: originalNavigator,
-      configurable: true,
-      writable: true,
-    })
-    Object.defineProperty(globalThis, 'document', {
-      value: originalDocument,
-      configurable: true,
-      writable: true,
-    })
+    restoreGlobalProperty('navigator', originalNavigator)
+    restoreGlobalProperty('document', originalDocument)
   }
 })

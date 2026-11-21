@@ -19,6 +19,7 @@
  * - mount path: badge docs are loaded on demand via the Sidebar effect calling
  *   ensurePluginDoc (the pure functions have zero side effects).
  */
+import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import * as React from 'react'
@@ -44,8 +45,6 @@ import type { HelmxExternalStore } from '../src/lib/helmx-store.js'
 const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React
 
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
-GlobalRegistrator.register()
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 
 const { Sidebar } = await import('../src/shell/Sidebar.js')
@@ -1218,6 +1217,7 @@ test('AgentStandingsGroup switches copy immediately on setLocale (en -> zh-CN ->
     assert.equal(store.getPrefsSlice().locale, 'en')
     assert.equal(host.querySelector('.sidebar-group-header > span')?.textContent, 'Agents', 'switching back to en restores English immediately')
   } finally {
+    localStorage.removeItem('helmx:locale')
     await act(async () => { root.unmount() })
     host.remove()
   }

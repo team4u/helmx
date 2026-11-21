@@ -1,3 +1,4 @@
+import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -6,7 +7,6 @@ import { test } from 'node:test'
 import * as React from 'react'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { compilePluginClientModule } from '@helmx/plugin-build'
 import { evictPluginClientCache, resetPluginClientCache } from '../src/lib/plugin-client.js'
 import { PluginUiView } from '../src/ui/PluginUiView.js'
@@ -14,11 +14,9 @@ import { makeTestStore } from './helpers/store.js'
 import { HostStoreProviders } from './helpers/host-store.js'
 import { mountSharedPluginNamespaces } from './helpers/builtin-clients.js'
 
-GlobalRegistrator.register()
-Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
-mountSharedPluginNamespaces({ realHooks: true })
-
 test('已挂载插件视图在快照重建后重载模块与样式，无关插件失效不重建视图', { timeout: 60_000 }, async () => {
+  Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
+  mountSharedPluginNamespaces({ realHooks: true })
   const dir = await mkdtemp(join(tmpdir(), 'helmx-client-snapshot-'))
   const originalFetch = globalThis.fetch
   const originalCreateObjectURL = URL.createObjectURL

@@ -12,11 +12,11 @@
  * - slotProps carries exactly the four public protocol NodeDetailSlotProps
  *   fields — never enrollment tokens or other credentials.
  */
+import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { PluginUiContribution } from '@helmx/protocol'
 import { NODE_DETAIL_SECTION_SLOT } from '@helmx/protocol'
 import { NodeDetailDrawer } from '../src/nodes/NodeDetailDrawer.js'
@@ -26,7 +26,6 @@ import { makeTestStore } from './helpers/store.js'
 import type { HelmxExternalStore } from '../src/lib/helmx-store.js'
 import { HostStoreProviders } from './helpers/host-store.js'
 
-GlobalRegistrator.register()
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 ;(globalThis as Record<string, unknown>).React = React
 

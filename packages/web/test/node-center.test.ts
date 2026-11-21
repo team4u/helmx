@@ -1,3 +1,4 @@
+import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import React, { act } from 'react'
@@ -648,6 +649,7 @@ test('NodeCenter locale switch: setLocale re-renders en -> zh-CN -> en in place'
     assert.match(container.textContent ?? '', /Compute Nodes Center/, 'switching back to en restores English immediately')
     assert.match(container.textContent ?? '', /Remote/)
   } finally {
+    localStorage.removeItem('helmx:locale')
     await act(async () => {
       root.unmount()
     })
