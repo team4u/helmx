@@ -58,9 +58,25 @@ export const modalsMessages = {
     'zh-CN': '搜索消息正文、跳转会话或执行命令...',
   },
   'modals.palette.searching': { en: 'Searching', 'zh-CN': '搜索中' },
+  'modals.palette.searchingHint': { en: 'Searching message history…', 'zh-CN': '正在搜索消息记录…' },
+  'modals.palette.searchUnavailable': {
+    en: 'Full-text message search is temporarily unavailable',
+    'zh-CN': '全文消息搜索暂时不可用',
+  },
+  'modals.palette.resultsAria': { en: 'Command and search results', 'zh-CN': '命令与搜索结果' },
+  'modals.palette.clearSearch': { en: 'Clear search query', 'zh-CN': '清空搜索内容' },
   'modals.palette.escToClose': { en: 'Esc to close', 'zh-CN': 'Esc 关闭' },
   'modals.palette.closePreview': { en: 'Close command content preview', 'zh-CN': '关闭命令内容预览' },
   'modals.palette.previewLabel': { en: 'Command {id} content', 'zh-CN': '命令 {id} 内容' },
+  'modals.palette.runAction': { en: 'Run', 'zh-CN': '执行' },
+  'modals.palette.navRowTitle': {
+    en: 'Enter to open · {modEnter} to open in split',
+    'zh-CN': 'Enter 打开 · {modEnter} 在右侧分屏打开',
+  },
+  'modals.palette.group.context': { en: 'Current context', 'zh-CN': '当前上下文' },
+  'modals.palette.group.recent': { en: 'Recent conversations', 'zh-CN': '最近会话' },
+  'modals.palette.group.navigation': { en: 'Navigate', 'zh-CN': '快速跳转' },
+  'modals.palette.group.commands': { en: 'Commands', 'zh-CN': '快捷命令' },
   'modals.palette.noResults': { en: 'No matching results', 'zh-CN': '未找到匹配结果' },
   'modals.palette.emptyHint': {
     en: 'Type keywords to search, or pick a command below',
@@ -72,11 +88,6 @@ export const modalsMessages = {
   'modals.palette.recentSnippet': {
     en: 'Recent conversation #{id} / {profileId}',
     'zh-CN': '最近会话 #{id} / {profileId}',
-  },
-  'modals.palette.pluginTitle': { en: 'Plugin: {name}', 'zh-CN': '插件：{name}' },
-  'modals.palette.pluginHint': {
-    en: 'View and configure {id} in the plugin center',
-    'zh-CN': '在插件中心查看并配置 {id}',
   },
   'modals.palette.cmd.toggleModelPicker': { en: 'Switch current model', 'zh-CN': '切换当前模型' },
   'modals.palette.cmd.toggleProcessGroups': {
@@ -90,7 +101,8 @@ export const modalsMessages = {
   'modals.palette.cmd.closeSplit': { en: 'Close right split view', 'zh-CN': '关闭右侧分屏' },
   'modals.palette.cmd.expandSidebar': { en: 'Expand desktop sidebar', 'zh-CN': '展开桌面侧栏' },
   'modals.palette.cmd.collapseSidebar': { en: 'Collapse desktop sidebar', 'zh-CN': '收起桌面侧栏' },
-  'modals.palette.cmd.gotoAssistant': { en: 'Open personal assistant profile', 'zh-CN': '打开个人助理角色' },
+  'modals.palette.cmd.openOverview': { en: 'Open conversation overview', 'zh-CN': '打开会话总览' },
+  'modals.palette.cmd.openAgent': { en: 'Open agent: {name}', 'zh-CN': '打开智能体：{name}' },
   'modals.palette.cmd.openProfiles': { en: 'Open agent profile center', 'zh-CN': '打开智能体角色中心' },
   'modals.palette.cmd.openModels': {
     en: 'Open models and credentials center',
