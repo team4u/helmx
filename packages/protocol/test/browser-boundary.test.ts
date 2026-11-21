@@ -39,6 +39,8 @@ test('@helmx/protocol/browser: export declarations aligned with the root entry\'
     'COMPOSER_STATUS_SLOT',
     'COMPOSER_DOCK_SLOT',
     'OVERVIEW_CARD_META_SLOT',
+    'HOST_SLOT_TARGETS',
+    'HOST_SLOT_CATALOG',
     'matchesConversationScope',
     'isSkillAvailable',
     'assertSchemaCompilable',

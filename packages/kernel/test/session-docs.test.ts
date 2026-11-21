@@ -12,6 +12,8 @@
  */
 import test, { beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { withTimeout } from '@helmx/test-kit'
 import {
   HelmxError,
@@ -154,9 +156,13 @@ afterEach(async () => {
 // ---------------------------------------------------------------------------
 
 test('profileRuntime/micro-action/slot registration succeeds and validates safe integer priority/order', { timeout: 60_000 }, async () => {
+  const clientRoot = join(dataDir, 'p-ui-client')
+  mkdirSync(clientRoot, { recursive: true })
+  writeFileSync(join(clientRoot, 'index.tsx'), 'export function ToolbarSlot() { return null }\n')
   const host = makeHost()
   await host.register({
     id: 'p:ui',
+    clientRoot,
     definePlugin: (ctx) => {
       ctx.ui.profileRuntime({ id: 'herdr', kind: 'herdr', label: 'Herdr runtime', order: 10 })
       ctx.ui.action({ id: 'a1', target: 'conversation:header', label: 'archive', actionId: 'archive', placement: 'toolbar' })
@@ -169,7 +175,7 @@ test('profileRuntime/micro-action/slot registration succeeds and validates safe 
         kinds: ['user'],
         roles: ['user'],
       })
-      ctx.ui.slot({ id: 's1', target: 'p:other/toolbar', order: 5 })
+      ctx.ui.slot({ id: 's1', target: 'p:other/toolbar', order: 5, client: { module: 'index.tsx', export: 'ToolbarSlot' } })
     },
   })
   const ui = host.listUi()
@@ -184,7 +190,10 @@ test('profileRuntime/micro-action/slot registration succeeds and validates safe 
   ])
 })
 
-test('invalid shapes reject explicitly: non-integer priority, reserved slash, multi-slash slot target, and empty action tracks', { timeout: 60_000 }, async () => {
+test('invalid shapes reject explicitly: non-integer priority, reserved slash, multi-slash slot target, missing slot client, and empty action tracks', { timeout: 60_000 }, async () => {
+  const clientRoot = join(dataDir, 'p-invalid-client')
+  mkdirSync(clientRoot, { recursive: true })
+  writeFileSync(join(clientRoot, 'index.tsx'), 'export function X() { return null }\n')
   const host = makeHost()
   await assert.rejects(
     host.register({
@@ -216,8 +225,19 @@ test('invalid shapes reject explicitly: non-integer priority, reserved slash, mu
   await assert.rejects(
     host.register({
       id: 'p:x4',
+      clientRoot,
       definePlugin: (ctx) => {
-        ctx.ui.slot({ id: 's', target: 'a/b/c' })
+        ctx.ui.slot({ id: 's', target: 'a/b/c', client: { module: 'index.tsx', export: 'X' } })
+      },
+    }),
+    (err: unknown) => err instanceof HelmxError && err.code === 'invalid_ui_spec',
+  )
+  await assert.rejects(
+    host.register({
+      id: 'p:x4-no-client',
+      clientRoot,
+      definePlugin: (ctx) => {
+        ctx.ui.slot({ id: 's', target: 'p:other/toolbar' } as never)
       },
     }),
     (err: unknown) => err instanceof HelmxError && err.code === 'invalid_ui_spec',

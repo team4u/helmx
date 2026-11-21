@@ -8,7 +8,7 @@
  *   and plugin.slot (unified client.tsx track);
  * - Run static declaration-boundary checks (id uniqueness, finite safe integer priority/order,
  *   command slash prefix & reserved names, mutually exclusive UI action target & required action/client track,
- *   markdown.codeBlock language table, slot target shape, artifact.previewer MIME/extension matchers,
+ *   markdown.codeBlock language table, slot target shape & required client, artifact.previewer MIME/extension matchers,
  *   composer.completer exclusion, ConversationScope plain-object validation, JSON-safe fidelity);
  * - Validate client.tsx dynamic component module references (assertModuleRefShape) and clientRoot containment;
  * - Resolve compiled client module artifacts with strict lifecycle & epoch verification (preventing stale artifacts

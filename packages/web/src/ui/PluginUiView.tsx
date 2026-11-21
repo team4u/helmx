@@ -153,7 +153,7 @@ function ClientPluginUiView({
 function MissingTrackError({ pluginId }: { pluginId: string }): ReactNode {
   const { t } = useWebLocale()
   return (
-    <div className="callout callout--warning">
+    <div className="callout callout--warning" role="alert">
       <HelmxIcon name="alert-triangle" size={13} />
       <span>{t('ui.pluginUi.missingClient', { pluginId })}</span>
     </div>

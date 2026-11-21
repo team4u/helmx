@@ -114,7 +114,7 @@ export interface ComposerController {
 
 微操作 `ctx.ui.action({ target, actionId?, client?, ... })` 以 target 区分三类容器：`conversation:header`（顶栏，`placement: 'toolbar' | 'menu'` 直出按钮或收纳菜单）、`conversation:row`（左栏会话行菜单）、`timeline:entry`（消息操作栏，`kinds`/`roles` 过滤）。声明 `actionId` 时由宿主代管按钮、pending 状态与失败通知（`actionPluginId` 可显式指向另一插件）；声明 `client` 时自渲染。`actionId` 与 `client` 二选一，两者皆缺在注册边界拒绝；调用上下文固定为实际会话，`input` 不得覆盖宿主注入的 `conversationId` / `entryId`。
 
-宿主保留五个子插槽常量：`PROFILE_DETAIL_SECTION_SLOT`（`builtin:profile/detail-section`，传 `ProfileDetailSlotProps`：`profileId / isNew / disabled`）、`NODE_DETAIL_SECTION_SLOT`（`builtin:node/detail-section`，仅已有节点挂载，传 `NodeDetailSlotProps`：`nodeId / isLocal / isOnline / isNew: false`）、`COMPOSER_STATUS_SLOT`（`builtin:composer/status`，输入框下方只读遥测状态行上下文用量旁，传 `ComposerScopeProps`；速率类只读指标如 `builtin:token-speed` 的实时解码速率经此插槽贡献）、`COMPOSER_DOCK_SLOT`（`builtin:composer/dock`，Composer 底部在途编排活动区）与 `OVERVIEW_CARD_META_SLOT`（`builtin:overview/card-meta`，会话总览卡片元信息区，传 `OverviewCardMetaSlotProps`：`rootConversation / memberIds`；只读徽标/跳转胶囊经 `ctx.ui.slot` 贡献，重操作留在插件自己的 screen/抽屉）。`builtin:node`、`builtin:composer` 与 `builtin:overview` 是宿主保留命名空间，不代表存在同名插件。插槽不传接入令牌，也不隐式借用当前会话。
+宿主保留五个子插槽常量（单一只读协议目录 `HOST_SLOT_CATALOG` / `HOST_SLOT_TARGETS` 在 `packages/protocol/src/ui.ts`）：`PROFILE_DETAIL_SECTION_SLOT`（`builtin:profile/detail-section`，传 `ProfileDetailSlotProps`：`profileId / isNew / disabled`）、`NODE_DETAIL_SECTION_SLOT`（`builtin:node/detail-section`，仅已有节点挂载，传 `NodeDetailSlotProps`：`nodeId / isLocal / isOnline / isNew: false`）、`COMPOSER_STATUS_SLOT`（`builtin:composer/status`，输入框下方只读遥测状态行上下文用量旁，实会话传 `ComposerScopeProps`，待命草稿传 `ComposerStatusSlotProps`；速率类只读指标如 `builtin:token-speed` 的实时解码速率经此插槽贡献）、`COMPOSER_DOCK_SLOT`（`builtin:composer/dock`，Composer 底部在途编排活动区，传 `ComposerScopeProps`）与 `OVERVIEW_CARD_META_SLOT`（`builtin:overview/card-meta`，会话总览卡片元信息区，传 `OverviewCardMetaSlotProps`：`rootConversation / memberIds`；只读徽标/跳转胶囊经 `ctx.ui.slot` 贡献，重操作留在插件自己的 screen/抽屉）。`builtin:node`、`builtin:composer` 与 `builtin:overview` 是宿主保留命名空间，不代表存在同名插件。插槽不传接入令牌，也不隐式借用当前会话。
 
 `artifactPreviewer` 组件收到 `ArtifactPreviewerProps`：`size` 来自真实 Blob；`name` 未获得元数据时省缺（不用 artifactId 冒充）；`text` 仅提供最多 1 MiB 的解码文本，二进制或超限为 `null`；`blobUrl` 由宿主管理生命周期，插件不得撤销。插件预览保留宿主默认视图与下载；插件失败显示诊断而非改用其他内容冒充。
 
@@ -130,7 +130,7 @@ export interface ComposerController {
 
 ### 插件间组合
 
-插件视图可从 `@helmx/plugin-client` 导入 `<PluginSlot name="cards" />`，其他插件用 `ctx.ui.slot({ id, target: 'owner-plugin/cards', ... })` 注入；短名相对当前插件，全限定名显式指定。`mode="list"` 渲染全部命中贡献（priority 降序、order 升序稳定排列），`mode="single"` 只取第一项；每个子项重新绑定贡献者插件上下文并有独立错误边界；循环引用与过深嵌套显示错误提示，不继续递归。
+插件视图可从 `@helmx/plugin-client` 导入 `<PluginSlot name="cards" />`，其他插件用 `ctx.ui.slot({ id, target: 'owner-plugin/cards', client: { module, export }, ... })` 注入；`client` 为必填项（`plugin.slot` 在注册边界强制校验目标格式与 `client` 引用，不接受无 `client` 声明）。短名相对当前插件，全限定名显式指定；非法目标名、缺少宿主上下文、环检测与超出最大嵌套深度（16）均展示本地化显式告警并中止继续递归。`mode="list"` 渲染全部命中贡献（`priority` 降序、`order` 升序、注册顺序稳定排列），`mode="single"` 只取第一项；无命中时渲染 `fallback`（未传则返回 `null`，不留空容器）。有命中时容器附带 `data-helmx-slot="<ownerPluginId>/<slotName>"` 锚点：未传 `className` 时默认使用 `display: contents` 避免引入额外布局盒（`inline` 渲染 `<span>`），传入 `className` 时保留调用方 CSS 布局控制；每个子项重新绑定贡献者插件上下文并有独立 `ViewBoundary` 错误边界。
 
 ## client.tsx 单轨渲染机制
 

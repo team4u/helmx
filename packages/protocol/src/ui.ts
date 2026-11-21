@@ -299,6 +299,8 @@ export interface UiActionSpec extends UiSpecBase {
 export interface PluginSlotContributionSpec extends UiSpecBase {
   /** <ownerPluginId>/<slotName>, must contain exactly one /. */
   target: string
+  /** Component reference (requires the plugin definition to provide clientRoot or prebuiltClientDir; slots only support the client track). */
+  client: ClientComponentRef
   order?: number
   priority?: number
 }
@@ -328,6 +330,83 @@ export const COMPOSER_DOCK_SLOT = 'builtin:composer/dock' as const
 /** Namespace reserved by the host conversation overview card metadata area; does not imply a builtin:overview plugin exists.
  * Read-only badge/link pills (e.g. task number + column link) are contributed via ctx.ui.slot; heavy actions belong in the plugin's own screen/drawer. */
 export const OVERVIEW_CARD_META_SLOT = 'builtin:overview/card-meta' as const
+
+/** Single source of truth of the 5 host-reserved sub-slot target identifiers. */
+export const HOST_SLOT_TARGETS = [
+  PROFILE_DETAIL_SECTION_SLOT,
+  NODE_DETAIL_SECTION_SLOT,
+  COMPOSER_STATUS_SLOT,
+  COMPOSER_DOCK_SLOT,
+  OVERVIEW_CARD_META_SLOT,
+] as const
+
+export type HostSlotTarget = (typeof HOST_SLOT_TARGETS)[number]
+
+export interface HostSlotCatalogEntry {
+  readonly target: HostSlotTarget
+  readonly ownerPluginId: string
+  readonly slotName: string
+  readonly mode: 'list' | 'single'
+  readonly propsType: string
+  readonly conversationContext: 'none' | 'optional' | 'required'
+  readonly description: string
+}
+
+/** Single read-only protocol catalog of the 5 real host-mounted sub-slots. */
+export const HOST_SLOT_CATALOG = Object.freeze([
+  Object.freeze({
+    target: PROFILE_DETAIL_SECTION_SLOT,
+    ownerPluginId: 'builtin:profile',
+    slotName: 'detail-section',
+    mode: 'list',
+    propsType: 'ProfileDetailSlotProps',
+    conversationContext: 'none',
+    description: 'Profile detail drawer extension section',
+  }),
+  Object.freeze({
+    target: NODE_DETAIL_SECTION_SLOT,
+    ownerPluginId: 'builtin:node',
+    slotName: 'detail-section',
+    mode: 'list',
+    propsType: 'NodeDetailSlotProps',
+    conversationContext: 'none',
+    description: 'Existing node detail drawer extension section',
+  }),
+  Object.freeze({
+    target: COMPOSER_STATUS_SLOT,
+    ownerPluginId: 'builtin:composer',
+    slotName: 'status',
+    mode: 'list',
+    propsType: 'ComposerStatusSlotProps',
+    conversationContext: 'optional',
+    description: 'Read-only telemetry row below composer (persisted conversation or standby draft)',
+  }),
+  Object.freeze({
+    target: COMPOSER_DOCK_SLOT,
+    ownerPluginId: 'builtin:composer',
+    slotName: 'dock',
+    mode: 'list',
+    propsType: 'ComposerScopeProps',
+    conversationContext: 'required',
+    description: 'In-flight activity tray directly above AskDock in the composer',
+  }),
+  Object.freeze({
+    target: OVERVIEW_CARD_META_SLOT,
+    ownerPluginId: 'builtin:overview',
+    slotName: 'card-meta',
+    mode: 'list',
+    propsType: 'OverviewCardMetaSlotProps',
+    conversationContext: 'required',
+    description: 'Read-only metadata pill area on conversation overview cards',
+  }),
+] as const satisfies readonly HostSlotCatalogEntry[])
+
+type _AssertAllHostSlotsCataloged =
+  Exclude<HostSlotTarget, (typeof HOST_SLOT_CATALOG)[number]['target']> extends never
+    ? true
+    : never
+const _assertAllHostSlotsCataloged: _AssertAllHostSlotsCataloged = true
+void _assertAllHostSlotsCataloged
 
 /** Only mounted for existing nodes; contains no node access tokens or other credentials. */
 export interface NodeDetailSlotProps {

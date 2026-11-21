@@ -326,6 +326,14 @@ function validateSlotSpec(spec: Record<string, unknown>, id: string, ctx: UiSpec
       { pluginId, id, target },
     );
   }
+  if (spec['client'] === undefined) {
+    throw new HelmxError(
+      'invalid_ui_spec',
+      `plugin ${pluginId} ui.slot must declare client component reference`,
+      400,
+      { pluginId, id, target },
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------

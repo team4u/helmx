@@ -146,8 +146,16 @@ function makePort(log: PortLog, overrides: Partial<SDK.PluginClientHostPort> = {
       collectItems: (qualifiedName) =>
         qualifiedName === 'owner/zone'
           ? [
-              { pluginId: 'p2', contributionId: 'badge', spec: { id: 'badge', target: 'owner/zone' } },
-              { pluginId: 'p3', contributionId: 'extra', spec: { id: 'extra', target: 'owner/zone' } },
+              {
+                pluginId: 'p2',
+                contributionId: 'badge',
+                spec: { id: 'badge', target: 'owner/zone', client: { module: 'badge.tsx', export: 'Badge' } },
+              },
+              {
+                pluginId: 'p3',
+                contributionId: 'extra',
+                spec: { id: 'extra', target: 'owner/zone', client: { module: 'extra.tsx', export: 'Extra' } },
+              },
             ]
           : [],
       renderItem: slotRender,
@@ -699,8 +707,9 @@ test('ViewBoundary translates its retry UI while preserving the original diagnos
 
 test('PluginSlot: short names qualify, lists render all matches, singles render the first, fallbacks render when empty, and missing owners warn', { timeout: 60_000 }, () => {
   const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
-  const port = makePort(log)
-  const tree = (name: string, extra: Record<string, unknown> = {}, fallback?: React.ReactNode) =>
+  const portEn = makePort(log, { locale: 'en' })
+  const portZh = makePort(log, { locale: 'zh-CN' })
+  const tree = (name: string, extra: Record<string, unknown> = {}, fallback?: React.ReactNode, port = portEn) =>
     e(SDK.PluginClientHostContext.Provider, { value: port },
       e(SDK.PluginClientContext.Provider, { value: SDK.createPluginClientContext(port, 'owner', undefined) },
         e(SDK.PluginSlot, { name, ...extra, ...(fallback !== undefined ? { fallback } : {}) })))
@@ -709,7 +718,24 @@ test('PluginSlot: short names qualify, lists render all matches, singles render 
   assert.equal(all.host.querySelectorAll('[data-slot]').length, 2, 'list mode renders every matched item')
   assert.equal(all.host.querySelector('[data-slot="p2/badge"]')?.getAttribute('data-label'), 'Slot owner/zone/badge', 'the render label carries the fully qualified name')
   assert.equal(all.host.querySelector('[data-slot="p2/badge"]')?.textContent, '{"z":1}', 'slotProps pass through to the host renderer')
+  const defaultAnchor = all.host.querySelector<HTMLElement>('[data-helmx-slot="owner/zone"]')
+  assert.ok(defaultAnchor !== null, 'default slot renders stable data-helmx-slot anchor')
+  assert.equal(defaultAnchor.tagName, 'DIV')
+  assert.equal(defaultAnchor.style.display, 'contents', 'unclassed slot avoids adding an extra CSS layout box')
   act(() => { void all.root.unmount() })
+
+  const classed = mount(tree('zone', { className: 'custom-slot' }))
+  const classedAnchor = classed.host.querySelector<HTMLElement>('[data-helmx-slot="owner/zone"]')
+  assert.ok(classedAnchor !== null && classedAnchor.classList.contains('custom-slot'))
+  assert.equal(classedAnchor.style.display, '', 'classed slot preserves caller CSS display rules')
+  act(() => { void classed.root.unmount() })
+
+  const inlineSlot = mount(tree('zone', { inline: true }))
+  const inlineAnchor = inlineSlot.host.querySelector<HTMLElement>('[data-helmx-slot="owner/zone"]')
+  assert.ok(inlineAnchor !== null)
+  assert.equal(inlineAnchor.tagName, 'SPAN', 'inline slot renders <span>')
+  assert.equal(inlineAnchor.style.display, 'contents')
+  act(() => { void inlineSlot.root.unmount() })
 
   const single = mount(tree('zone', { mode: 'single' }))
   assert.equal(single.host.querySelectorAll('[data-slot]').length, 1, 'single mode renders only the first item')
@@ -717,35 +743,94 @@ test('PluginSlot: short names qualify, lists render all matches, singles render 
 
   const empty = mount(tree('nope', {}, e('div', null, 'fallback-here')))
   assert.equal(empty.host.textContent, 'fallback-here', 'no matches render the fallback')
+  assert.ok(empty.host.querySelector('[data-helmx-slot]') === null, 'empty slot renders no wrapper anchor')
   act(() => { void empty.root.unmount() })
 
-  const noOwner = mount(
-    e(SDK.PluginClientHostContext.Provider, { value: port }, e(SDK.PluginSlot, { name: 'zone' })))
-  assert.match(noOwner.host.textContent ?? '', /no host plugin context/, 'missing owner warns explicitly')
-  act(() => { void noOwner.root.unmount() })
+  const noOwnerEn = mount(
+    e(SDK.PluginClientHostContext.Provider, { value: portEn }, e(SDK.PluginSlot, { name: 'zone' })))
+  assert.match(noOwnerEn.host.textContent ?? '', /no host plugin context/, 'missing owner warns explicitly in English')
+  act(() => { void noOwnerEn.root.unmount() })
+
+  const noOwnerZh = mount(
+    e(SDK.PluginClientHostContext.Provider, { value: portZh }, e(SDK.PluginSlot, { name: 'zone' })))
+  assert.match(noOwnerZh.host.textContent ?? '', /缺少宿主插件上下文/, 'missing owner warns in zh-CN when locale is zh-CN')
+  act(() => { void noOwnerZh.root.unmount() })
+
+  const badTarget = mount(tree('a/b/c', {}, undefined, portZh))
+  assert.match(badTarget.host.textContent ?? '', /非法/, 'invalid slot target warns explicitly in active locale')
+  act(() => { void badTarget.root.unmount() })
 })
 
-test('PluginSlot: reappearing contribution on the render chain warns of a cycle explicitly without infinite recursion', { timeout: 60_000 }, () => {
+test('PluginSlot: reappearing contribution on the render chain warns of a cycle and nesting beyond depth 16 aborts', { timeout: 60_000 }, () => {
   const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
-  const port = makePort(log)
+  const portEn = makePort(log, { locale: 'en' })
+  const portZh = makePort(log, { locale: 'zh-CN' })
   // The host render implementation renders the same slot again (equivalent to
   // a real cycle where the contribution component nests a same-named slot)
-  port.slots = {
-    collectItems: (qualifiedName) =>
-      qualifiedName === 'owner/loop'
-        ? [{ pluginId: 'p2', contributionId: 'cycle', spec: { id: 'cycle', target: 'owner/loop' } }]
-        : [],
-    renderItem: (item) =>
-      e(SDK.PluginClientHostContext.Provider, { value: port },
-        e(SDK.PluginClientContext.Provider, { value: SDK.createPluginClientContext(port, item.pluginId, undefined) },
-          e(SDK.PluginSlot, { name: 'owner/loop' }))),
+  const attachCycleSlot = (port: SDK.PluginClientHostPort) => {
+    port.slots = {
+      collectItems: (qualifiedName) =>
+        qualifiedName === 'owner/loop'
+          ? [
+              {
+                pluginId: 'p2',
+                contributionId: 'cycle',
+                spec: { id: 'cycle', target: 'owner/loop', client: { module: 'cycle.tsx', export: 'Cycle' } },
+              },
+            ]
+          : [],
+      renderItem: (item) =>
+        e(SDK.PluginClientHostContext.Provider, { value: port },
+          e(SDK.PluginClientContext.Provider, { value: SDK.createPluginClientContext(port, item.pluginId, undefined) },
+            e(SDK.PluginSlot, { name: 'owner/loop' }))),
+    }
   }
-  const { host, root } = mount(
-    e(SDK.PluginClientHostContext.Provider, { value: port },
-      e(SDK.PluginClientContext.Provider, { value: SDK.createPluginClientContext(port, 'owner', undefined) },
+  attachCycleSlot(portEn)
+  attachCycleSlot(portZh)
+
+  const cycleEn = mount(
+    e(SDK.PluginClientHostContext.Provider, { value: portEn },
+      e(SDK.PluginClientContext.Provider, { value: SDK.createPluginClientContext(portEn, 'owner', undefined) },
         e(SDK.PluginSlot, { name: 'loop' }))))
-  assert.match(host.textContent ?? '', /cycle detected/, 'a cycle warns explicitly instead of a stack overflow')
-  act(() => { void root.unmount() })
+  assert.match(cycleEn.host.textContent ?? '', /cycle detected/, 'a cycle warns explicitly instead of a stack overflow')
+  act(() => { void cycleEn.root.unmount() })
+
+  const cycleZh = mount(
+    e(SDK.PluginClientHostContext.Provider, { value: portZh },
+      e(SDK.PluginClientContext.Provider, { value: SDK.createPluginClientContext(portZh, 'owner', undefined) },
+        e(SDK.PluginSlot, { name: 'loop' }))))
+  assert.match(cycleZh.host.textContent ?? '', /循环引用/, 'cycle warning localizes to zh-CN')
+  act(() => { void cycleZh.root.unmount() })
+
+  // Distinct contribution IDs along a 17-step chain hit MAX_SLOT_DEPTH=16 cleanly
+  const deepPort = makePort(log, { locale: 'en' })
+  deepPort.slots = {
+    collectItems: (qualifiedName) => {
+      const m = /^owner\/step-(\d+)$/.exec(qualifiedName)
+      if (!m) return []
+      const idx = Number(m[1])
+      return [
+        {
+          pluginId: `p-${idx}`,
+          contributionId: `c-${idx}`,
+          spec: { id: `c-${idx}`, target: qualifiedName, client: { module: 's.tsx', export: 'S' } },
+        },
+      ]
+    },
+    renderItem: (item) => {
+      const m = /^p-(\d+)$/.exec(item.pluginId)
+      const next = Number(m![1]) + 1
+      return e(SDK.PluginClientHostContext.Provider, { value: deepPort },
+        e(SDK.PluginClientContext.Provider, { value: SDK.createPluginClientContext(deepPort, item.pluginId, undefined) },
+          e(SDK.PluginSlot, { name: `owner/step-${next}` })))
+    },
+  }
+  const deep = mount(
+    e(SDK.PluginClientHostContext.Provider, { value: deepPort },
+      e(SDK.PluginClientContext.Provider, { value: SDK.createPluginClientContext(deepPort, 'owner', undefined) },
+        e(SDK.PluginSlot, { name: 'step-0' }))))
+  assert.match(deep.host.textContent ?? '', /exceeded the maximum depth of 16/, 'max depth 16 aborts cleanly')
+  act(() => { void deep.root.unmount() })
 })
 
 // ---------------------------------------------------------------------------
