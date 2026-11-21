@@ -27,7 +27,6 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { renderToString } from 'react-dom/server'
 import { PLUGIN_CLIENT_SHARED_EXPORTS, resolveLocalizedText } from '@helmx/protocol'
-import type { HostModelsSlice, HostNodesSlice, HostProfilesSlice, Profile } from '@helmx/protocol'
 import * as SDK from '../src/index.js'
 
 const e = React.createElement
@@ -226,63 +225,89 @@ test('useConversationBackground: port snapshot forwards verbatim; absent host ag
   act(() => { void withoutBackground.root.unmount() })
 })
 
-test('useModels / useNodes / useProfiles forward port slices by reference; absent slices report unknown (undefined, never fabricated)', { timeout: 60_000 }, () => {
+test('useHostModels: throws explicitly without the handles context; empty handles report unknown (undefined, never fabricated)', { timeout: 60_000 }, () => {
   const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
-  const models: HostModelsSlice = {
-    models: [
-      { id: 'openai/gpt-4o', provider: 'openai', modelId: 'gpt-4o', available: true, thinkingLevels: ['off', 'high'] },
-      { id: 'anthropic/claude', provider: 'anthropic', modelId: 'claude', available: false, disabled: true, label: 'Claude', thinkingLevels: ['off'] },
-    ],
-    defaultModel: 'openai/gpt-4o',
-    defaultThinkingLevel: 'off',
-  }
-  const nodes: HostNodesSlice = [{ id: 'local', kind: 'local', online: true }]
-  const profiles: HostProfilesSlice = [{ id: 'assistant', humanSelectable: true } as Profile]
-  let seenModels: HostModelsSlice | undefined = 'unset' as unknown as HostModelsSlice
-  let seenNodes: HostNodesSlice | undefined = 'unset' as unknown as HostNodesSlice
-  let seenProfiles: HostProfilesSlice | undefined = 'unset' as unknown as HostProfilesSlice
-  function SliceProbe(): React.ReactNode {
-    seenModels = SDK.useModels()
-    seenNodes = SDK.useNodes()
-    seenProfiles = SDK.useProfiles()
+  function Probe(): React.ReactNode {
+    void SDK.useHostModels()
     return null
   }
-  const provided = mount(
-    e(SDK.PluginClientHostContext.Provider, { value: makePort(log, { models, nodes, profiles }) }, e(SliceProbe)),
+  assert.throws(
+    () => renderToString(e(SDK.PluginClientHostContext.Provider, { value: makePort(log) }, e(Probe))),
+    /useHostModels must be called inside <PluginClientHostHandlesContext\.Provider>/,
+    'useHostModels outside the handles context throws explicitly (never silently degraded)',
   )
-  assert.ok(seenModels === models, 'useModels forwards the very same host slice reference (no copy, no mock)')
-  assert.ok(seenNodes === nodes, 'useNodes forwards the very same host slice reference')
-  assert.ok(seenProfiles === profiles, 'useProfiles forwards the very same host slice reference')
-  act(() => { void provided.root.unmount() })
-
-  seenModels = 'unset' as unknown as HostModelsSlice
-  seenNodes = 'unset' as unknown as HostNodesSlice
-  seenProfiles = 'unset' as unknown as HostProfilesSlice
-  const absent = mount(e(SDK.PluginClientHostContext.Provider, { value: makePort(log) }, e(SliceProbe)))
-  assert.equal(seenModels, undefined, 'a host without the model slice reports unknown (undefined), never an empty catalog')
-  assert.equal(seenNodes, undefined, 'a host without the node slice reports unknown (undefined), never an empty registry')
-  assert.equal(seenProfiles, undefined, 'a host without the Profile slice reports unknown (undefined), never an empty registry')
-  act(() => { void absent.root.unmount() })
+  let seen: ReadonlyArray<SDK.HostModelEntry> | undefined = 'unset' as unknown as ReadonlyArray<SDK.HostModelEntry>
+  function HandlesProbe(): React.ReactNode {
+    seen = SDK.useHostModels()
+    return null
+  }
+  const { root } = mount(
+    e(SDK.PluginClientHostContext.Provider, { value: makePort(log) },
+      e(SDK.PluginClientHostHandlesContext.Provider, { value: {} }, e(HandlesProbe))),
+  )
+  assert.equal(seen, undefined, 'a host that injects no model capability reports unknown (undefined), never an empty catalog')
+  act(() => { void root.unmount() })
 })
 
-test('useModels: slice revisions propagate on port value change (reactive passthrough, no polling)', { timeout: 60_000 }, () => {
+test('useHostModels: isolated from main port value churn; catalog revisions re-render exactly once; three-state semantics honest', { timeout: 60_000 }, () => {
   const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
-  const first: HostModelsSlice = { models: [] }
-  const second: HostModelsSlice = {
-    models: [{ id: 'p/m', provider: 'p', modelId: 'm', available: true, thinkingLevels: ['off'] }],
-    defaultModel: 'p/m',
+  const loading: ReadonlyArray<SDK.HostModelEntry> = [
+    { id: 'openai/gpt-4o', provider: 'openai', modelId: 'gpt-4o', available: true, thinkingLevels: ['off', 'high'] },
+    { id: 'anthropic/claude', provider: 'anthropic', modelId: 'claude', available: false, disabled: true, label: 'Claude', thinkingLevels: ['off'] },
+  ]
+  const loaded: ReadonlyArray<SDK.HostModelEntry> = [...loading]
+  const empty: ReadonlyArray<SDK.HostModelEntry> = []
+  let current: ReadonlyArray<SDK.HostModelEntry> | undefined
+  const listeners = new Set<() => void>()
+  const handles: SDK.PluginClientHostHandles = {
+    getModels: () => current,
+    subscribeModels: (listener) => {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
   }
-  let seen: HostModelsSlice | undefined
-  function Probe(): React.ReactNode {
-    seen = SDK.useModels()
+  let renders = 0
+  let lastValue: ReadonlyArray<SDK.HostModelEntry> | undefined | 'unset' = 'unset'
+  const Probe = React.memo(function ModelsProbe(): React.ReactNode {
+    renders += 1
+    lastValue = SDK.useHostModels()
     return null
-  }
-  const { root } = mount(e(SDK.PluginClientHostContext.Provider, { value: makePort(log, { models: first }) }, e(Probe)))
-  assert.ok(seen === first, 'initial slice forwards verbatim')
-  act(() => {
-    root.render(e(SDK.PluginClientHostContext.Provider, { value: makePort(log, { models: second }) }, e(Probe)))
   })
-  assert.ok(seen === second, 'a new host slice revision reaches consumers through the changed port value')
+  const { root } = mount(
+    e(SDK.PluginClientHostContext.Provider, { value: makePort(log) },
+      e(SDK.PluginClientHostHandlesContext.Provider, { value: handles }, e(Probe))),
+  )
+  assert.equal(renders, 1, 'initial mount renders once')
+  assert.equal(lastValue, undefined, 'pre-first-load snapshot is unknown (undefined), never an empty array')
+
+  // P0.2: unrelated main port value revisions (streaming frames rebuild the port object) must not re-render the probe.
+  for (let i = 0; i < 3; i += 1) {
+    act(() => {
+      root.render(
+        e(SDK.PluginClientHostContext.Provider, { value: makePort(log, { conversations: [{ id: i, title: `c${i}`, tags: [], profileId: 'p' } as unknown as SDK.PluginClientHostPort['conversations'][number]] }) },
+          e(SDK.PluginClientHostHandlesContext.Provider, { value: handles }, e(Probe))),
+      )
+    })
+  }
+  assert.equal(renders, 1, 'main port value churn never re-renders useHostModels consumers (isolation contract)')
+  assert.equal(lastValue, undefined, 'value stays unknown across unrelated port revisions')
+
+  // Same-reference notification: useSyncExternalStore re-checks the snapshot and skips re-rendering.
+  current = loading
+  assert.ok(handles.getModels?.() === loading && handles.getModels?.() === loading, 'repeated getModels calls return the same reference for the same underlying state')
+  act(() => { for (const listener of [...listeners]) listener() })
+  assert.equal(renders, 2, 'a catalog revision with a new reference re-renders exactly once')
+  assert.ok(lastValue === loading, 'the revision forwards the new array reference verbatim')
+  act(() => { for (const listener of [...listeners]) listener() })
+  assert.equal(renders, 2, 'a repeated notification without a reference change does not re-render')
+
+  current = loaded
+  act(() => { for (const listener of [...listeners]) listener() })
+  assert.equal(renders, 3)
+  assert.ok(lastValue === loaded, 'a new revision reference propagates')
+  current = empty
+  act(() => { for (const listener of [...listeners]) listener() })
+  assert.ok(lastValue === empty, 'a loaded-but-empty catalog is [] — strictly distinct from the unknown state')
   act(() => { void root.unmount() })
 })
 

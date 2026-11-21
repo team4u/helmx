@@ -3,10 +3,11 @@
  * (host-port driven, live-synced over SSE, no polling and no mocks).
  * No component exports in this file (Fast Refresh friendly).
  */
-import { useCallback, useEffect, useState } from 'react'
-import type { AskSpec, ConversationDetail, ConversationLive, ConversationSummary, HostModelsSlice, HostNodesSlice, HostProfilesSlice, UsePluginsResult } from '@helmx/protocol/browser'
+import { useCallback, useContext, useEffect, useState, useSyncExternalStore } from 'react'
+import type { AskSpec, ConversationDetail, ConversationLive, ConversationSummary, UsePluginsResult } from '@helmx/protocol/browser'
 import { usePluginClientHost } from './host-port.js'
-import type { ConversationBackgroundSnapshot } from './host-port.js'
+import { PluginClientHostHandlesContext } from './host-port.js'
+import type { ConversationBackgroundSnapshot, HostModelEntry } from './host-port.js'
 import { usePluginContext } from './plugin-context.js'
 
 const EMPTY_PLUGIN_CONFIG: Readonly<Record<string, unknown>> = Object.freeze({})
@@ -37,36 +38,33 @@ export function useConversationBackground(): ConversationBackgroundSnapshot {
 }
 
 // ---------------------------------------------------------------------------
-// Read-only host capability slices: model catalog / compute nodes / Profiles
-// (absent slice = unknown; the hooks never fabricate empty data)
+// Stable-handle host capability reads (isolated from host port value churn)
 // ---------------------------------------------------------------------------
 
-/**
- * Reactive read-only model catalog slice (normalized entries + global default
- * chain), updated at the host's SSE `models.changed` cadence — no polling, no
- * SDK-side refresh. Returns `undefined` while the host has not provided/loaded
- * the catalog: render an unknown state, never a fabricated empty catalog.
- */
-export function useModels(): HostModelsSlice | undefined {
-  return usePluginClientHost().models
-}
+/** Stable no-op subscribe for hosts that inject only part of the handle set (returns a no-op unsubscribe). */
+const NOOP_SUBSCRIBE = (_listener: () => void): (() => void) => () => {}
+/** Stable undefined snapshot: a missing getModels capability reads as unknown, never as an empty catalog. */
+const UNDEFINED_SNAPSHOT = (): undefined => undefined
 
 /**
- * Reactive read-only compute node registry (SSE snapshot view). Returns
- * `undefined` while the host has not provided the registry — a `local` node
- * always exists in a booted host, so "no nodes yet" is unknown, not empty.
+ * Reactive read-only host model catalog via the stable-handle context
+ * (never through the churning main port value): `undefined` = capability not
+ * injected or catalog not yet first-loaded (render unknown/loading and disable
+ * selection); `[]` = loaded and genuinely empty ("no models"). The two states
+ * are strictly distinct and must never leak into each other. On the server the
+ * snapshot is always `undefined`; dynamic refresh, when offered, is the
+ * handle's optional refreshModels action (absent = no refresh capability).
  */
-export function useNodes(): HostNodesSlice | undefined {
-  return usePluginClientHost().nodes
-}
-
-/**
- * Reactive read-only Profile registry (list view: identity, defaults, tags,
- * skills; no system prompt / memory text). Returns `undefined` while the host
- * has not provided the registry.
- */
-export function useProfiles(): HostProfilesSlice | undefined {
-  return usePluginClientHost().profiles
+export function useHostModels(): ReadonlyArray<HostModelEntry> | undefined {
+  const handles = useContext(PluginClientHostHandlesContext)
+  if (handles === null) {
+    throw new Error('useHostModels must be called inside <PluginClientHostHandlesContext.Provider> (injected by the host HelmxStoreProvider)')
+  }
+  return useSyncExternalStore(
+    handles.subscribeModels ?? NOOP_SUBSCRIBE,
+    handles.getModels ?? UNDEFINED_SNAPSHOT,
+    UNDEFINED_SNAPSHOT,
+  )
 }
 
 /**
