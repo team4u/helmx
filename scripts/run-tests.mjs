@@ -84,7 +84,26 @@ function suiteTimeoutMs() {
 const startMs = Date.now();
 const tsxCli = resolveTsxCLI();
 const timeoutMs = suiteTimeoutMs();
-const forwardArgs = process.argv.slice(2);
+
+// Internal leading wrapper flags consumed by run-tests.mjs (never injected via HELMX_* env vars):
+// - `--dom-preload`: injects `scripts/lib/dom-shard-preload.mjs` via NODE_OPTIONS (only for `dom-shared` shards)
+// - `--shard-worker`: runs `scripts/lib/shard-worker.mjs` instead of `tsx --test`
+let enableDomPreload = false;
+let shardWorkerMode = false;
+const rawArgs = process.argv.slice(2);
+let argIdx = 0;
+while (argIdx < rawArgs.length) {
+  if (rawArgs[argIdx] === '--dom-preload') {
+    enableDomPreload = true;
+    argIdx += 1;
+  } else if (rawArgs[argIdx] === '--shard-worker') {
+    shardWorkerMode = true;
+    argIdx += 1;
+  } else {
+    break;
+  }
+}
+const forwardArgs = rawArgs.slice(argIdx);
 
 const childEnv = { ...process.env };
 const fallback = pnpmFallbackNodePath();
@@ -101,7 +120,7 @@ if (childEnv.TSX_TSCONFIG_PATH === undefined) {
   childEnv.TSX_TSCONFIG_PATH = path.join(repoRoot, 'tsconfig.dev.json');
 }
 
-// Inject the V8 heap cap and the safe-test-assert preload (never inject any HELMX_* vars).
+// Inject the V8 heap cap, the safe-test-assert preload, and optional dom-shard preload (never inject any HELMX_* vars).
 {
   const preloadUrl = pathToFileURL(path.join(repoRoot, 'scripts', 'lib', 'safe-test-assert.mjs')).href;
   const existing = childEnv.NODE_OPTIONS?.trim() ?? '';
@@ -113,15 +132,19 @@ if (childEnv.TSX_TSCONFIG_PATH === undefined) {
   if (!existing.includes(importFlag)) {
     parts.push(importFlag);
   }
+  if (enableDomPreload) {
+    const domPreloadUrl = pathToFileURL(path.join(repoRoot, 'scripts', 'lib', 'dom-shard-preload.mjs')).href;
+    const domImportFlag = `--import=${domPreloadUrl}`;
+    if (!existing.includes(domImportFlag)) {
+      parts.push(domImportFlag);
+    }
+  }
   childEnv.NODE_OPTIONS = parts.join(' ');
 }
 
-const runnerArgs = [
-  tsxCli,
-  '--test',
-  '--test-timeout=20000',
-  ...forwardArgs,
-];
+const runnerArgs = shardWorkerMode
+  ? [tsxCli, path.join(repoRoot, 'scripts', 'lib', 'shard-worker.mjs'), ...forwardArgs]
+  : [tsxCli, '--test', '--test-timeout=20000', ...forwardArgs];
 
 // No shell involved: arguments pass through one by one, immune to string-concatenation
 // injection; globs are expanded by tsx / the node test runner.
