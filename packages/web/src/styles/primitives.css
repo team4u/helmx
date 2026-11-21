@@ -654,10 +654,10 @@
 }
 
 /* ScreenHost 已渲染顶栏 .pane-topbar 时抑制内层重复大标题，保留副标题与右侧动作栏；
-   If an inner page header has only a title without subtitle/actions, the whole bar collapses to zero to avoid double headers. */
+   If an inner page header has only a title without subtitle/actions, the whole bar collapses to zero to avoid double headers.
+   仅匹配公共壳类（.screen-header 等），宿主样式绝不点名插件私有类名（host-styles-boundary 门禁锁定）。 */
 .screen-host-stage .screen-header .screen-title,
-.screen-host-stage .screen-header > .screen-section-title,
-.screen-host-stage .apps-center-topbar .apps-center-title {
+.screen-host-stage .screen-header > .screen-section-title {
   display: none;
 }
 

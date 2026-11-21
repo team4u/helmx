@@ -582,17 +582,19 @@ export function AppCenterScreen(props: AppCenterScreenProps): ReactNode {
 
   return (
     <div className="apps-center" data-view="app-center">
-      <div className="apps-center-topbar">
-        <div className="apps-center-title-wrap">
-          <div className="apps-center-title">
+      {/* 标准壳 screen-header：宿主 .screen-host-stage 通用规则抑制与顶栏重复的大标题，
+          插件不再依赖宿主点名本插件类名的 CSS 补丁 */}
+      <div className="screen-header">
+        <div className="screen-heading">
+          <div className="screen-title">
             <HelmxIcon name="layout-grid" size={16} />
             <span>{t(APP_CENTER_TITLE)}</span>
           </div>
-          <span className="apps-center-subtitle text-subtle">
+          <span className="screen-subtitle text-subtle">
             {t(APP_CENTER_SUBTITLE)}
           </span>
         </div>
-        <div className="apps-center-topbar-actions">
+        <div className="stack-row">
           <span className="apps-center-stats text-subtle">
             {appCenterStats(stats.total, stats.ready, locale)}
           </span>

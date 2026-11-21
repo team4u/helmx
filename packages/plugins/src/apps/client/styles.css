@@ -6,40 +6,8 @@
   gap: 14px;
 }
 
-.apps-center-topbar {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.apps-center-title-wrap {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
-.apps-center-title {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--fg);
-}
-
-.apps-center-subtitle {
-  font-size: 12px;
-}
-
-.apps-center-topbar-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-}
+/* 顶栏已迁移到标准 .screen-header / .screen-title / .screen-subtitle / .stack-row 壳类；
+   此处仅保留插件私有的统计文本样式 */
 
 .apps-center-stats {
   font-size: 12px;
@@ -275,8 +243,10 @@
 
 /* Narrow-screen wrapping: action buttons never overflow the viewport */
 @media (max-width: 680px) {
-  .apps-center-topbar,
-  .apps-center-topbar-actions,
+  .apps-center .screen-header {
+    width: 100%;
+  }
+
   .apps-center-toolbar,
   .primary-category-pills {
     width: 100%;
