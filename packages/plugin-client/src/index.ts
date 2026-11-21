@@ -71,6 +71,26 @@ export { StatusLight } from './ui/StatusLight.js'
 export type { StatusLightProps } from './ui/StatusLight.js'
 export { normalizeStatusLightTone, statusLightDotClass } from './ui/status-light-model.js'
 export type { StatusLightTone } from './ui/status-light-model.js'
+export { SearchBox } from './ui/SearchBox.js'
+export type { SearchBoxProps } from './ui/SearchBox.js'
+export { EmptyState } from './ui/EmptyState.js'
+export type { EmptyStateProps } from './ui/EmptyState.js'
+export { ThinkingLevelControl } from './ui/ThinkingLevelControl.js'
+export type { ThinkingLevelControlProps } from './ui/ThinkingLevelControl.js'
+export { AlertDialog, AlertDialogPortal, AlertDialogOverlay, AlertDialogContent, AlertDialogTitle, AlertDialogDescription, AlertDialogAction, AlertDialogCancel, AlertDialogTrigger } from './ui/AlertDialog.js'
+export type {
+  AlertDialogProps,
+  AlertDialogPortalProps,
+  AlertDialogOverlayProps,
+  AlertDialogContentProps,
+  AlertDialogTitleProps,
+  AlertDialogDescriptionProps,
+  AlertDialogActionProps,
+  AlertDialogCancelProps,
+  AlertDialogTriggerProps,
+  ConfirmDialogProps,
+} from './ui/AlertDialog.js'
+export { ConfirmDialog } from './ui/AlertDialog.js'
 
 // ---- Lightweight layout primitives and hints ----
 export { Screen, ScreenSection, DataTable, KvGrid } from './primitives.js'

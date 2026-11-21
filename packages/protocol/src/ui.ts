@@ -591,7 +591,12 @@ export interface PluginClientContext {
  * - hooks: usePluginContext / usePluginLocale / usePluginTranslator / usePluginDoc / usePluginSessionDoc /
  *   useToolActivity / useConversations / useConversation / useConversationBackground / usePlugins;
  * - accessibility base components: Switch / Select / MultiSelect / Checkbox / Tabs family /
- *   SegmentedControl / HelmxIcon / ViewBoundary / Callout;
+ *   SegmentedControl / HelmxIcon / ViewBoundary / Callout / Dialog family / AlertDialog family
+ *   (confirm dialogs) / ConfirmDialog (minimal double-confirm composition) / ThinkingLevelControl
+ *   (plain-level segmented picker over Tabs, no model semantics);
+ * - unified light patterns: SearchBox (container-class search input with the single clear button,
+ *   always type="text" per the shared search-box spec) / EmptyState (host .empty-state vocabulary
+ *   with optional icon/title/hint/compact);
  * - StatusLight: unified status light (visually dot-only; the localized label
  *   becomes the screen-reader accessible name, never visible status text) for
  *   card main status slots, reusing the host .status-dot vocabulary;
@@ -694,6 +699,19 @@ export const PLUGIN_CLIENT_SHARED_EXPORTS = [
   'DialogDescription',
   'DialogClose',
   'DialogTrigger',
+  'AlertDialog',
+  'AlertDialogPortal',
+  'AlertDialogOverlay',
+  'AlertDialogContent',
+  'AlertDialogTitle',
+  'AlertDialogDescription',
+  'AlertDialogAction',
+  'AlertDialogCancel',
+  'AlertDialogTrigger',
+  'ConfirmDialog',
+  'SearchBox',
+  'EmptyState',
+  'ThinkingLevelControl',
   'Screen',
   'ScreenSection',
   'DataTable',
