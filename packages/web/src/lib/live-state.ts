@@ -35,6 +35,65 @@ function omit<T>(record: Record<string, T>, key: string): Record<string, T> {
   return Object.fromEntries(Object.entries(record).filter(([name]) => name !== key))
 }
 
+/** 统一插件活跃谓词：仅当 enabled 且 status 非 disabled/failed 时视为活跃。 */
+export function isPluginSummaryActive(plugin: PluginSummary): boolean {
+  return plugin.enabled && (plugin.status === undefined || plugin.status === 'active')
+}
+
+export function sameClientHashes(
+  a: Record<string, string> | undefined,
+  b: Record<string, string> | undefined,
+): boolean {
+  if (a === b) return true
+  if (a === undefined || b === undefined) return false
+  const keysA = Object.keys(a)
+  const keysB = Object.keys(b)
+  if (keysA.length !== keysB.length) return false
+  return keysA.every((key) => Object.hasOwn(b, key) && b[key] === a[key])
+}
+
+export function sameJsonValue(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true
+  if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return false
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false
+    return a.every((item, i) => sameJsonValue(item, b[i]))
+  }
+  const recA = a as Record<string, unknown>
+  const recB = b as Record<string, unknown>
+  const keysA = Object.keys(recA).filter((k) => recA[k] !== undefined)
+  const keysB = Object.keys(recB).filter((k) => recB[k] !== undefined)
+  if (keysA.length !== keysB.length) return false
+  return keysA.every((k) => Object.hasOwn(recB, k) && recB[k] !== undefined && sameJsonValue(recA[k], recB[k]))
+}
+
+function sameNonConfigPluginMetadata(prev: PluginSummary, next: PluginSummary): boolean {
+  const { publicConfig: _prevCfg, status: prevStatus, ...prevRest } = prev
+  const { publicConfig: _nextCfg, status: nextStatus, ...nextRest } = next
+  if ((prevStatus ?? 'active') !== (nextStatus ?? 'active')) return false
+  return sameJsonValue(prevRest, nextRest)
+}
+
+/**
+ * 判定 plugin.changed 是否为纯 publicConfig 配置热更新：
+ * 仅当插件前后均 active、clientHashes / 非配置元数据 / UI 贡献均未改变且 publicConfig
+ * 确实发生变化时才返回 true（其余启停/失败/移除/hash 变化或无配置差异的变更一律按
+ * 完整失效处理，保留重载与迟到结果保护）。
+ */
+export function isConfigOnlyPluginChange(
+  prevPlugin: PluginSummary | undefined,
+  prevUi: readonly PluginUiContribution[],
+  nextPlugin: PluginSummary,
+  nextUi: readonly PluginUiContribution[],
+): boolean {
+  if (prevPlugin === undefined) return false
+  if (!isPluginSummaryActive(prevPlugin) || !isPluginSummaryActive(nextPlugin)) return false
+  if (!sameClientHashes(prevPlugin.clientHashes, nextPlugin.clientHashes)) return false
+  if (!sameNonConfigPluginMetadata(prevPlugin, nextPlugin)) return false
+  if (!sameJsonValue(prevUi, nextUi)) return false
+  return !sameJsonValue(prevPlugin.publicConfig, nextPlugin.publicConfig)
+}
+
 /** ConversationLive 边界形状校验（与内核 conversation.live 事件同一判定）。 */
 function isLiveShape(value: unknown): value is ConversationLive {
   if (value === null || typeof value !== 'object') return false
@@ -83,16 +142,23 @@ export function applySnapshot(previous: LiveState, snapshot: HelmxSnapshot): Liv
       }
     }
   }
+  // 过滤快照中明确处于非 active（disabled / failed）插件的文档与 UI 贡献，防止异常快照残留失效视图。
+  const inactivePluginIds = new Set(
+    snapshot.plugins.filter((p) => !isPluginSummaryActive(p)).map((p) => p.id),
+  )
   // 快照 pluginDocs 直投：免额外拉取，键与 ensurePluginDoc 一致（`${pluginId}/${docName}`）。
   const pluginDocs: Record<string, unknown> = {}
   if (Array.isArray(snapshot.pluginDocs)) {
     for (const doc of snapshot.pluginDocs) {
       if (doc === null || typeof doc !== 'object') throw new Error('Invalid kernel live snapshot format')
       if (typeof doc.pluginId !== 'string' || typeof doc.name !== 'string') throw new Error('Invalid kernel live snapshot format')
-      pluginDocs[`${doc.pluginId}/${doc.name}`] = doc.value
+      if (!inactivePluginIds.has(doc.pluginId)) {
+        pluginDocs[`${doc.pluginId}/${doc.name}`] = doc.value
+      }
     }
   }
-  return { ...emptyLiveState(), seq: snapshot.seq, conversations: sortConversations(snapshot.conversations), conversationDetails, conversationLives, pendingAsks: snapshot.pendingAsks, plugins: snapshot.plugins, uiContributions: snapshot.ui, pluginDocs, nodes: Array.isArray(snapshot.nodes) ? sortNodes(snapshot.nodes) : [], resolvedAsksByConv: previous.resolvedAsksByConv }
+  const uiContributions = snapshot.ui.filter((item) => !inactivePluginIds.has(item.pluginId))
+  return { ...emptyLiveState(), seq: snapshot.seq, conversations: sortConversations(snapshot.conversations), conversationDetails, conversationLives, pendingAsks: snapshot.pendingAsks, plugins: snapshot.plugins, uiContributions, pluginDocs, nodes: Array.isArray(snapshot.nodes) ? sortNodes(snapshot.nodes) : [], resolvedAsksByConv: previous.resolvedAsksByConv }
 }
 
 export function entryMatchesReference(entry: ConversationEntry, reference: string): boolean {
@@ -273,13 +339,32 @@ export function applyEventFrame(state: LiveState, frame: HelmxEventFrame): LiveS
       break
     case 'plugin.changed':
       if ('plugin' in event) {
+        const prevPlugin = state.plugins.find((p) => p.id === event.plugin.id)
+        const prevUi = state.uiContributions.filter((item) => item.pluginId === event.plugin.id)
+        const nextUi = Array.isArray(event.ui) ? event.ui : []
+        const configOnly = isConfigOnlyPluginChange(prevPlugin, prevUi, event.plugin, nextUi)
+        const active = isPluginSummaryActive(event.plugin)
+
         next.plugins = upsert(state.plugins, event.plugin)
-        next.uiContributions = [...state.uiContributions.filter((item) => item.pluginId !== event.plugin.id), ...event.ui]
-        next.pluginDocs = Object.fromEntries(Object.entries(state.pluginDocs).filter(([key]) => !key.startsWith(`${event.plugin.id}/`)))
+        if (!active) {
+          // 非 active（含 disabled 与 enabled=true,status=failed）：强制移除 uiContributions 并清空 pluginDocs。
+          next.uiContributions = state.uiContributions.filter((item) => item.pluginId !== event.plugin.id)
+          next.pluginDocs = Object.fromEntries(
+            Object.entries(state.pluginDocs).filter(([key]) => !key.startsWith(`${event.plugin.id}/`)),
+          )
+        } else if (!configOnly) {
+          next.uiContributions = [...state.uiContributions.filter((item) => item.pluginId !== event.plugin.id), ...nextUi]
+          next.pluginDocs = Object.fromEntries(
+            Object.entries(state.pluginDocs).filter(([key]) => !key.startsWith(`${event.plugin.id}/`)),
+          )
+        }
+        // 纯配置更新保持 uiContributions 引用与 pluginDocs 不变，避免 usePluginDoc 闪烁重拉。
       }
       break
     case 'plugin.doc.updated':
-      if ('doc' in event && state.plugins.some((p) => p.id === event.doc.pluginId && p.enabled)) next.pluginDocs = { ...state.pluginDocs, [`${event.doc.pluginId}/${event.doc.name}`]: event.doc.value }
+      if ('doc' in event && state.plugins.some((p) => p.id === event.doc.pluginId && isPluginSummaryActive(p))) {
+        next.pluginDocs = { ...state.pluginDocs, [`${event.doc.pluginId}/${event.doc.name}`]: event.doc.value }
+      }
       break
     case 'node.changed':
       if ('node' in event) {

@@ -387,3 +387,91 @@ test('回填的全文条目在更早页重合并时保留（current 优先于新
   const merged = mergeConversationDetail(state, pageAgain, true)
   assert.equal(merged.conversationDetails[1]!.entries.find((entry) => entry.id === '2'), full, 'current 中的全文回填优先于新页预览')
 })
+
+test('plugin.changed：纯配置更新保留 pluginDocs 与 uiContributions；failed（含 enabled=true）与 disabled 清理两者并拒收 doc 更新', { timeout: 60_000 }, () => {
+  const uiItem = {
+    pluginId: 'p1',
+    surface: 'plugin.slot' as const,
+    spec: { id: 'badge', target: 'builtin:composer/status', client: { module: 'index.tsx', export: 'Badge' } },
+  }
+  const activePlugin = {
+    id: 'p1',
+    name: 'P1',
+    locked: false,
+    enabled: true,
+    status: 'active' as const,
+    hooks: [],
+    actions: [],
+    tools: [],
+    clientHashes: { 'index.tsx': 'h1' },
+    publicConfig: { refreshSec: 5 },
+  }
+  const otherPlugin = {
+    id: 'p2',
+    name: 'P2',
+    locked: false,
+    enabled: true,
+    status: 'active' as const,
+    hooks: [],
+    actions: [],
+    tools: [],
+  }
+  let state = applySnapshot(emptyLiveState(), {
+    ...snapshot,
+    plugins: [activePlugin, otherPlugin],
+    ui: [uiItem],
+    pluginDocs: [
+      { pluginId: 'p1', name: 'status', value: { ok: true } },
+      { pluginId: 'p2', name: 'other', value: { keep: 1 } },
+    ],
+  })
+  const uiBefore = state.uiContributions
+
+  // 1. config-only：保留 uiContributions 引用与 pluginDocs，同时更新 plugins[].publicConfig
+  state = applyEventFrame(state, {
+    seq: 11,
+    event: {
+      type: 'plugin.changed',
+      plugin: { ...activePlugin, publicConfig: { refreshSec: 15 } },
+      ui: [uiItem],
+    },
+  })
+  assert.equal(state.uiContributions, uiBefore, 'config-only 更新不得重建 uiContributions 引用')
+  assert.deepEqual(state.pluginDocs, { 'p1/status': { ok: true }, 'p2/other': { keep: 1 } }, 'config-only 不得清空 pluginDocs')
+  assert.deepEqual(state.plugins.find((p) => p.id === 'p1')?.publicConfig, { refreshSec: 15 })
+
+  // 2. enabled=true, status='failed'（即使事件仍携带残余 ui）：必须清理 uiContributions 与 pluginDocs
+  state = applyEventFrame(state, {
+    seq: 12,
+    event: {
+      type: 'plugin.changed',
+      plugin: { ...activePlugin, enabled: true, status: 'failed' },
+      ui: [uiItem],
+    },
+  })
+  assert.deepEqual(state.uiContributions, [], 'failed 插件必须回收全部 uiContributions')
+  assert.deepEqual(state.pluginDocs, { 'p2/other': { keep: 1 } }, 'failed 插件必须清理其 pluginDocs 且不误伤其他插件')
+
+  // 3. failed 插件不得再接收 plugin.doc.updated
+  state = applyEventFrame(state, {
+    seq: 13,
+    event: { type: 'plugin.doc.updated', doc: { pluginId: 'p1', name: 'status', value: { stale: true } } },
+  })
+  assert.equal(state.pluginDocs['p1/status'], undefined, '非 active 插件不得写入 plugin.doc.updated')
+
+  // 4. snapshot 中明确为 failed / disabled 的插件，不导入其 ui 与 pluginDocs
+  const snapState = applySnapshot(emptyLiveState(), {
+    ...snapshot,
+    plugins: [
+      { ...activePlugin, enabled: true, status: 'failed' },
+      otherPlugin,
+    ],
+    ui: [uiItem],
+    pluginDocs: [
+      { pluginId: 'p1', name: 'status', value: { bad: true } },
+      { pluginId: 'p2', name: 'other', value: { keep: 2 } },
+    ],
+  })
+  assert.deepEqual(snapState.uiContributions, [])
+  assert.deepEqual(snapState.pluginDocs, { 'p2/other': { keep: 2 } })
+})

@@ -12,7 +12,6 @@ import type {
   HelmxResumedFrame,
   HelmxSnapshot,
   HelmxTransientLiveFrame,
-  PluginSummary,
 } from '@helmx/protocol/browser'
 import { getStoredToken } from './api.js'
 import { errorText } from './error-text.js'
@@ -21,7 +20,10 @@ import {
   applyResumedFrame,
   applySnapshot,
   applyTransientLiveFrame,
+  isConfigOnlyPluginChange,
+  isPluginSummaryActive,
   readSseChunkWithDeadline,
+  sameClientHashes,
   SseParser,
   sseClientTimings,
   type LiveState,
@@ -106,21 +108,6 @@ function computeReconnectBackoffMs(retry: number): number {
   )
 }
 
-const isPluginSummaryActive = (plugin: PluginSummary): boolean =>
-  plugin.enabled && (plugin.status === undefined || plugin.status === 'active')
-
-function sameClientHashes(
-  a: Record<string, string> | undefined,
-  b: Record<string, string> | undefined,
-): boolean {
-  if (a === b) return true
-  if (a === undefined || b === undefined) return false
-  const keysA = Object.keys(a)
-  const keysB = Object.keys(b)
-  if (keysA.length !== keysB.length) return false
-  return keysA.every((key) => Object.hasOwn(b, key) && b[key] === a[key])
-}
-
 function handleSnapshotFrame(payload: unknown, ctx: FrameHandlerContext): void {
   if (ctx.streamState.mode !== null) throw new Error('Live connection received a duplicate snapshot control frame')
   const snap = payload as HelmxSnapshot
@@ -155,13 +142,15 @@ function handleSnapshotFrame(payload: unknown, ctx: FrameHandlerContext): void {
     ) {
       stalePluginIds.add(prevPlugin.id)
     }
-    if (nextPlugin === undefined || !nextPlugin.enabled) {
+    if (nextPlugin === undefined || !isPluginSummaryActive(nextPlugin)) {
       evictSessionDocSubscriptions(prevPlugin.id)
     }
   }
   for (const nextPlugin of snap.plugins) {
-    if (!isPluginSummaryActive(nextPlugin)) stalePluginIds.add(nextPlugin.id)
-    if (!nextPlugin.enabled) evictSessionDocSubscriptions(nextPlugin.id)
+    if (!isPluginSummaryActive(nextPlugin)) {
+      stalePluginIds.add(nextPlugin.id)
+      evictSessionDocSubscriptions(nextPlugin.id)
+    }
   }
   for (const prevId of prevConversationIds) {
     if (!nextConversationIds.has(prevId)) {
@@ -294,24 +283,29 @@ function dispatchFrameSideEffects(
   deletedConversationId: number | undefined,
   deletedSummary: ConversationSummary | undefined,
   archivedSummary: ConversationSummary | undefined,
+  configOnlyPluginChange: boolean,
   ctx: FrameHandlerContext,
 ): void {
   if (event.type === 'notification' && 'title' in event) ctx.pushNotice(event)
   if (event.type === 'plugin.changed' && 'plugin' in event) {
-    ctx.pluginEpoch.current.set(event.plugin.id, (ctx.pluginEpoch.current.get(event.plugin.id) ?? 0) + 1)
-    for (const key of ctx.requests.current.keys()) {
-      if (key.startsWith(`doc:${event.plugin.id}/`)) ctx.requests.current.delete(key)
+    const docPrefix = `doc:${event.plugin.id}/`
+    for (const key of ctx.failedDocs.current) {
+      if (key.startsWith(docPrefix)) ctx.failedDocs.current.delete(key)
     }
-    ctx.failedDocs.current.clear()
-    // 任意 plugin.changed（含 enabled=true 的热重载/升级）都让该插件 client 模块
-    // 缓存失效：loader 只在缓存代变化后才重新拉取比对 contentHash，只处理停用
-    // 会让启用态重载后无限残留旧 UI 代码（续传不 reset 全局缓存时更是如此）。
-    evictPluginClientCache(event.plugin.id)
-    // 插件停用/卸载（ui 贡献移除）时同步释放全部会话文档订阅
-    if (!event.plugin.enabled) {
-      evictSessionDocSubscriptions(event.plugin.id)
+    if (!configOnlyPluginChange) {
+      ctx.pluginEpoch.current.set(event.plugin.id, (ctx.pluginEpoch.current.get(event.plugin.id) ?? 0) + 1)
+      for (const key of ctx.requests.current.keys()) {
+        if (key.startsWith(docPrefix)) ctx.requests.current.delete(key)
+      }
+      // 任意非纯配置 plugin.changed（含启停/失败/移除/clientHashes 或元数据变化）都让该插件
+      // client 模块缓存失效，保证重载代码即时生效并拒绝迟到加载结果。
+      evictPluginClientCache(event.plugin.id)
+      // 插件非 active（停用/失败/卸载）时同步释放全部会话文档订阅
+      if (!isPluginSummaryActive(event.plugin)) {
+        evictSessionDocSubscriptions(event.plugin.id)
+      }
+      void ctx.refreshAssets()
     }
-    void ctx.refreshAssets()
   }
   if (event.type === 'models.changed') void ctx.refreshAssets()
   if (event.type === 'profile.changed') void ctx.refreshAssets()
@@ -401,6 +395,17 @@ function handleEventFrame(payload: unknown, ctx: FrameHandlerContext): void {
       isConversationArchived(upsertEvent.conversation)
     ? upsertEvent.conversation
     : undefined
+  // 在 applyEventFrame 改写插件列表前快照前置摘要与 UI 贡献，用以判定是否纯配置热更新。
+  const pluginChangedEvent = frame.event.type === 'plugin.changed' && 'plugin' in frame.event ? frame.event : undefined
+  const configOnlyPluginChange =
+    pluginChangedEvent !== undefined &&
+    Array.isArray(pluginChangedEvent.ui) &&
+    isConfigOnlyPluginChange(
+      ctx.liveRef.current.plugins.find((p) => p.id === pluginChangedEvent.plugin.id),
+      ctx.liveRef.current.uiContributions.filter((item) => item.pluginId === pluginChangedEvent.plugin.id),
+      pluginChangedEvent.plugin,
+      pluginChangedEvent.ui,
+    )
   ctx.updateLive((state) => applyEventFrame(state, frame))
   // 按帧实际应用推进续传水位（应用失败已在边界作废凭据，绝不提前推进）。
   const applied = ctx.sseCursorRef.current
@@ -411,7 +416,14 @@ function handleEventFrame(payload: unknown, ctx: FrameHandlerContext): void {
     ctx.announceLive()
   }
   if (frame.seq <= oldSeq) return
-  dispatchFrameSideEffects(frame.event, deletedEvent?.conversationId, deletedSummary, archivedSummary, ctx)
+  dispatchFrameSideEffects(
+    frame.event,
+    deletedEvent?.conversationId,
+    deletedSummary,
+    archivedSummary,
+    configOnlyPluginChange,
+    ctx,
+  )
 }
 
 export function useSseEvents(options: UseSseEventsOptions): void {

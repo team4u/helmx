@@ -18,6 +18,7 @@
 import type { ComponentType } from 'react'
 import { PLUGIN_CLIENT_CSS_EXPORT, type PluginSummary } from '@helmx/protocol/browser'
 import { getStoredToken } from './api.js'
+import { isPluginSummaryActive } from './live-state.js'
 
 export interface LoadedClientModule {
   module: Record<string, unknown>
@@ -161,9 +162,6 @@ function applyPluginClientCss(
   existing.setAttribute('data-helmx-plugin-css-hash', contentHash)
   existing.textContent = css
 }
-
-const isPluginSummaryActive = (plugin: PluginSummary): boolean =>
-  plugin.enabled && (plugin.status === undefined || plugin.status === 'active')
 
 function deleteChunksByPrefix(prefix: string): void {
   for (const k of [...chunkPromiseCache.keys()]) {

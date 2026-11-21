@@ -22,8 +22,15 @@ import { describe, after, before, test } from 'node:test'
 import * as React from 'react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { sseClientTimings } from '../src/lib/live-state.js'
-import { getCachedClientComponent, getPluginClientCacheRevision, resetPluginClientCache, seedPluginClientModule } from '../src/lib/plugin-client.js'
+import { isConfigOnlyPluginChange, sseClientTimings } from '../src/lib/live-state.js'
+import {
+  getCachedClientComponent,
+  getPluginClientCacheRevision,
+  loadPluginClientModule,
+  PluginClientError,
+  resetPluginClientCache,
+  seedPluginClientModule,
+} from '../src/lib/plugin-client.js'
 import type { HelmxStoreValue } from '../src/lib/types.js'
 
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
@@ -138,6 +145,7 @@ describe("sse-resume", () => {
 
   interface Harness {
     observed: Observed
+    host: HTMLElement
     eventsUrls: string[]
     fetchedUrls: string[]
     /** Register the SSE stream factory for the next /api/events connection (if the connection arrives first it waits for the registration; deterministic consumption). */
@@ -149,6 +157,7 @@ describe("sse-resume", () => {
 
   async function mountProvider(options?: {
     hash?: string
+    children?: React.ReactNode
     onFetch?: (path: string, init?: RequestInit) => Response | Promise<Response> | undefined
   }): Promise<Harness> {
     window.history.replaceState(null, '', options?.hash ?? '#/')
@@ -211,7 +220,14 @@ describe("sse-resume", () => {
     await act(async () => {
       const r = createRoot(host)
       root = r
-      r.render(React.createElement(HelmxStoreProvider, null, React.createElement(Probe)))
+      r.render(
+        React.createElement(
+          HelmxStoreProvider,
+          null,
+          React.createElement(Probe),
+          options?.children ?? null,
+        ),
+      )
     })
     const waitFor = async (predicate: (observed: Observed) => boolean, ms = 15_000): Promise<void> => {
       const deadline = Date.now() + ms
@@ -224,6 +240,7 @@ describe("sse-resume", () => {
     }
     return {
       observed,
+      host,
       eventsUrls,
       fetchedUrls,
       nextEvents,
@@ -854,6 +871,565 @@ describe("sse-resume", () => {
       assert.equal(detailCalls, 3)
       assert.equal(h.store().conversationDetails[1]?.entries[1]?.id, '11')
       fourth!.end()
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)) })
+    } finally {
+      await h.close()
+    }
+  })
+
+  test('isConfigOnlyPluginChange distinguishes publicConfig-only updates from status, hash, UI, and metadata changes', { timeout: 60_000 }, () => {
+    const basePlugin = {
+      ...pluginSummary('cfg:unit'),
+      status: 'active' as const,
+      clientHashes: { 'index.tsx': 'h1' },
+      publicConfig: { slidingWindowMs: 1_500, nested: { a: 1, b: true } },
+    }
+    const baseUi = [
+      {
+        pluginId: 'cfg:unit',
+        surface: 'plugin.slot' as const,
+        spec: { id: 'badge', target: 'builtin:composer/status', client: { module: 'index.tsx', export: 'Badge' } },
+      },
+    ]
+
+    // Newly seen plugin is never config-only
+    assert.equal(isConfigOnlyPluginChange(undefined, [], basePlugin, baseUi), false)
+
+    // Pure publicConfig update (changed value, added field, cleared config, undefined->'active' status)
+    assert.equal(
+      isConfigOnlyPluginChange(
+        basePlugin,
+        baseUi,
+        { ...basePlugin, publicConfig: { slidingWindowMs: 2_500, nested: { a: 1, b: true } } },
+        baseUi,
+      ),
+      true,
+    )
+    assert.equal(
+      isConfigOnlyPluginChange(
+        { ...pluginSummary('cfg:unit'), clientHashes: { 'index.tsx': 'h1' } },
+        baseUi,
+        { ...basePlugin, publicConfig: { slidingWindowMs: 1_500 } },
+        baseUi,
+      ),
+      true,
+    )
+    assert.equal(
+      isConfigOnlyPluginChange(
+        basePlugin,
+        baseUi,
+        { ...pluginSummary('cfg:unit'), status: 'active', clientHashes: { 'index.tsx': 'h1' } },
+        baseUi,
+      ),
+      true,
+    )
+    assert.equal(
+      isConfigOnlyPluginChange(
+        { ...pluginSummary('cfg:unit'), publicConfig: { slidingWindowMs: 1_500 } },
+        [],
+        { ...pluginSummary('cfg:unit'), publicConfig: { slidingWindowMs: 2_500 } },
+        [],
+      ),
+      true,
+    )
+
+    // Semantically identical publicConfig (including key reordering or both undefined) stays non-config-only
+    assert.equal(
+      isConfigOnlyPluginChange(
+        basePlugin,
+        baseUi,
+        { ...basePlugin, publicConfig: { nested: { b: true, a: 1 }, slidingWindowMs: 1_500 } },
+        baseUi,
+      ),
+      false,
+    )
+    assert.equal(
+      isConfigOnlyPluginChange(pluginSummary('cfg:unit'), [], pluginSummary('cfg:unit'), []),
+      false,
+    )
+
+    // Status / lifecycle transitions must invalidate
+    assert.equal(
+      isConfigOnlyPluginChange(
+        basePlugin,
+        baseUi,
+        { ...basePlugin, enabled: false, status: 'disabled', publicConfig: { slidingWindowMs: 2_500 } },
+        [],
+      ),
+      false,
+    )
+    assert.equal(
+      isConfigOnlyPluginChange(
+        basePlugin,
+        baseUi,
+        { ...basePlugin, status: 'failed', publicConfig: { slidingWindowMs: 2_500 } },
+        baseUi,
+      ),
+      false,
+    )
+    assert.equal(
+      isConfigOnlyPluginChange(
+        { ...basePlugin, enabled: false, status: 'disabled' },
+        [],
+        { ...basePlugin, publicConfig: { slidingWindowMs: 2_500 } },
+        baseUi,
+      ),
+      false,
+    )
+
+    // clientHashes, metadata, or UI changes must invalidate
+    assert.equal(
+      isConfigOnlyPluginChange(
+        basePlugin,
+        baseUi,
+        { ...basePlugin, clientHashes: { 'index.tsx': 'h2' }, publicConfig: { slidingWindowMs: 2_500 } },
+        baseUi,
+      ),
+      false,
+    )
+    assert.equal(
+      isConfigOnlyPluginChange(
+        basePlugin,
+        baseUi,
+        { ...basePlugin, version: '1.0.1', publicConfig: { slidingWindowMs: 2_500 } },
+        baseUi,
+      ),
+      false,
+    )
+    assert.equal(
+      isConfigOnlyPluginChange(
+        basePlugin,
+        baseUi,
+        { ...basePlugin, publicConfig: { slidingWindowMs: 2_500 } },
+        [
+          {
+            pluginId: 'cfg:unit',
+            surface: 'plugin.slot',
+            spec: { id: 'badge2', target: 'builtin:composer/status', client: { module: 'index.tsx', export: 'Badge' } },
+          },
+        ],
+      ),
+      false,
+    )
+  })
+
+  test('plugin.changed config-only update preserves client module, CSS, pluginDocs, and mounted React component state (live & resume-replay)', { timeout: 60_000 }, async () => {
+    localStorage.setItem('helmx:token', 't1')
+    const { PluginSlot, usePluginConfig, usePluginDoc } = await import('@helmx/plugin-client')
+
+    let mountCount = 0
+    function ConfigPanel(): React.ReactNode {
+      const [mountId] = React.useState(() => ++mountCount)
+      const [clicks, setClicks] = React.useState(0)
+      const cfg = usePluginConfig<{ mode?: string; limit?: number }>()
+      const statusDoc = usePluginDoc<{ ready?: boolean }>('status')
+      return React.createElement(
+        'div',
+        { className: 'cfg-live-panel' },
+        React.createElement(
+          'span',
+          { 'data-testid': 'cfg-state' },
+          `mount=${mountId};clicks=${clicks};mode=${cfg.mode ?? 'unset'};limit=${cfg.limit ?? 0};doc=${statusDoc?.ready === true ? 'ready' : 'loading'}`,
+        ),
+        React.createElement(
+          'button',
+          { type: 'button', onClick: () => setClicks((n) => n + 1) },
+          'inc',
+        ),
+      )
+    }
+
+    const originalCreateObjectURL = URL.createObjectURL
+    const originalRevokeObjectURL = URL.revokeObjectURL
+    seedPluginClientModule(
+      'cfg:p',
+      'index.tsx',
+      { Panel: ConfigPanel, __helmxClientCss: '.cfg-live-panel { color: rgb(1, 2, 3); }' },
+      'hash-1',
+    )
+    const revision0 = getPluginClientCacheRevision('cfg:p')
+    const styleNode0 = document.querySelector('style[data-helmx-plugin-css="cfg:p::index.tsx"]')
+    assert.ok(styleNode0 !== null, 'initial plugin style node must be mounted')
+
+    const uiContrib = {
+      pluginId: 'cfg:p',
+      surface: 'plugin.slot' as const,
+      spec: { id: 'panel', target: 'builtin:composer/status', client: { module: 'index.tsx', export: 'Panel' } },
+    }
+    const activeSummary = (publicConfig: Record<string, unknown>, hash = 'hash-1') => ({
+      ...pluginSummary('cfg:p'),
+      status: 'active' as const,
+      clientHashes: { 'index.tsx': hash },
+      publicConfig,
+    })
+    const v2ModuleCode =
+      'export const __helmxClientCss = ".cfg-live-panel { color: rgb(4, 5, 6); }";\n' +
+      'export function Panel() { return globalThis.__helmx_shared_react.createElement("div", { className: "cfg-live-panel" }, "reloaded-v2"); }\n'
+
+    const h = await mountProvider({
+      children: React.createElement(PluginSlot, {
+        ownerPluginId: 'builtin:composer',
+        name: 'status',
+      }),
+      onFetch: (path) => {
+        if (path.startsWith('/api/plugins/cfg%3Ap/client.mjs')) {
+          if (path.includes('hash=hash-2')) {
+            return new Response(v2ModuleCode, { status: 200, headers: { 'x-helmx-client-hash': 'hash-2' } })
+          }
+          return new Response('unexpected fetch for hash-1', { status: 500 })
+        }
+        return undefined
+      },
+    })
+
+    try {
+      let urlSeq = 0
+      URL.createObjectURL = (() => `data:text/javascript;base64,${Buffer.from(v2ModuleCode).toString('base64')}#cfg-v2-${++urlSeq}`) as typeof URL.createObjectURL
+      URL.revokeObjectURL = (() => {}) as typeof URL.revokeObjectURL
+
+      const first = snapshotConnection(h, {
+        bootId: 'b1',
+        seq: 1,
+        conversations: [],
+        pendingAsks: [],
+        plugins: [activeSummary({ mode: 'initial', limit: 1 })],
+        ui: [uiContrib],
+        pluginDocs: [{ pluginId: 'cfg:p', name: 'status', value: { ready: true } }],
+      })
+      await h.waitFor((o) => o.sseConnected === true)
+      await h.waitFor(() => h.host.querySelector('[data-testid="cfg-state"]')?.textContent === 'mount=1;clicks=0;mode=initial;limit=1;doc=ready')
+
+      // Mutate local component state before config update to verify zero remount
+      await act(async () => {
+        h.host.querySelector('button')?.click()
+      })
+      assert.equal(h.host.querySelector('[data-testid="cfg-state"]')?.textContent, 'mount=1;clicks=1;mode=initial;limit=1;doc=ready')
+      const profileFetchesBeforeCfg = h.fetchedUrls.filter((u) => u === '/api/profiles').length
+      const clientFetchesBeforeCfg = h.fetchedUrls.filter((u) => u.startsWith('/api/plugins/cfg%3Ap/client.mjs')).length
+      assert.equal(clientFetchesBeforeCfg, 0)
+
+      // 1. Live config-only plugin.changed: must update usePluginConfig in-place without evicting module/CSS/pluginDocs or remounting
+      first.send(eventFrame(2, {
+        type: 'plugin.changed',
+        plugin: activeSummary({ mode: 'turbo', limit: 42 }),
+        ui: [uiContrib],
+      }))
+      await h.waitFor(() => h.host.querySelector('[data-testid="cfg-state"]')?.textContent === 'mount=1;clicks=1;mode=turbo;limit=42;doc=ready')
+      assert.equal(mountCount, 1, 'config-only update must not remount mounted React component')
+      assert.equal(getPluginClientCacheRevision('cfg:p'), revision0, 'config-only update must not bump cache revision')
+      assert.equal(getCachedClientComponent('cfg:p', 'index.tsx', 'Panel', 'hash-1'), ConfigPanel)
+      assert.ok(document.querySelector('style[data-helmx-plugin-css="cfg:p::index.tsx"]') === styleNode0, 'CSS <style> node must stay intact without flicker')
+      assert.deepEqual(h.store().pluginDocs['cfg:p/status'], { ready: true }, 'config-only must not clear pluginDocs')
+      assert.equal(h.fetchedUrls.filter((u) => u.startsWith('/api/plugins/cfg%3Ap/docs/')).length, 0, 'config-only must not trigger doc refetch')
+      assert.equal(h.fetchedUrls.filter((u) => u.startsWith('/api/plugins/cfg%3Ap/client.mjs')).length, 0)
+      assert.equal(h.fetchedUrls.filter((u) => u === '/api/profiles').length, profileFetchesBeforeCfg, 'config-only update must skip refreshAssets')
+
+      // 2. Resume-replay config-only plugin.changed: still updates in-place with zero eviction/remount
+      let second: ControlledStream | undefined
+      h.nextEvents((_url, signal) => {
+        const c = controlledStream(signal)
+        second = c
+        return c
+      })
+      first.end()
+      await h.waitFor(() => h.eventsUrls.length >= 2 && second !== undefined)
+      second!.send(resumedFrame({ bootId: 'b1', seq: 2, headSeq: 3 }))
+      second!.send(eventFrame(3, {
+        type: 'plugin.changed',
+        plugin: activeSummary({ mode: 'resumed', limit: 99 }),
+        ui: [uiContrib],
+      }))
+      await h.waitFor((o) => o.sseConnected === true && h.host.querySelector('[data-testid="cfg-state"]')?.textContent === 'mount=1;clicks=1;mode=resumed;limit=99;doc=ready')
+      assert.equal(mountCount, 1)
+      assert.equal(getPluginClientCacheRevision('cfg:p'), revision0)
+      assert.ok(document.querySelector('style[data-helmx-plugin-css="cfg:p::index.tsx"]') === styleNode0)
+      assert.deepEqual(h.store().pluginDocs['cfg:p/status'], { ready: true })
+      assert.equal(h.fetchedUrls.filter((u) => u.startsWith('/api/plugins/cfg%3Ap/docs/')).length, 0)
+      assert.equal(h.fetchedUrls.filter((u) => u.startsWith('/api/plugins/cfg%3Ap/client.mjs')).length, 0)
+
+      // 3. Full snapshot reconnect with config-only diff: still keeps component mounted, state intact, and zero client.mjs refetch
+      let third: ControlledStream | undefined
+      h.nextEvents((_url, signal) => {
+        const c = controlledStream(signal)
+        third = c
+        return c
+      })
+      second!.send('event: notification\ndata: {"seq":99,"event":{"type":"notification","level":"info","title":"gap"}}\n\n')
+      await h.waitFor(() => h.eventsUrls.length >= 3 && third !== undefined)
+      third!.send(snapshotFrame({
+        bootId: 'b2',
+        seq: 1,
+        conversations: [],
+        pendingAsks: [],
+        plugins: [activeSummary({ mode: 'snapshot', limit: 77 })],
+        ui: [uiContrib],
+        pluginDocs: [{ pluginId: 'cfg:p', name: 'status', value: { ready: true } }],
+      }))
+      await h.waitFor((o) => o.sseConnected === true && h.host.querySelector('[data-testid="cfg-state"]')?.textContent === 'mount=1;clicks=1;mode=snapshot;limit=77;doc=ready')
+      assert.equal(mountCount, 1)
+      assert.equal(getPluginClientCacheRevision('cfg:p'), revision0)
+      assert.ok(document.querySelector('style[data-helmx-plugin-css="cfg:p::index.tsx"]') === styleNode0)
+      assert.equal(h.fetchedUrls.filter((u) => u.startsWith('/api/plugins/cfg%3Ap/client.mjs')).length, 0)
+
+      // 4. clientHashes change alongside publicConfig change: must evict old module/CSS and fetch hash-2
+      third!.send(eventFrame(2, {
+        type: 'plugin.changed',
+        plugin: activeSummary({ mode: 'reloaded', limit: 100 }, 'hash-2'),
+        ui: [uiContrib],
+      }))
+      await h.waitFor(() => getPluginClientCacheRevision('cfg:p') !== revision0)
+      await h.waitFor(() => h.host.textContent?.includes('reloaded-v2') === true)
+      assert.ok(styleNode0.isConnected === false, 'old CSS node must be evicted on clientHashes change')
+      assert.equal(
+        document.querySelector('style[data-helmx-plugin-css="cfg:p::index.tsx"]')?.getAttribute('data-helmx-plugin-css-hash'),
+        'hash-2',
+      )
+      assert.equal(
+        h.fetchedUrls.filter((u) => u.startsWith('/api/plugins/cfg%3Ap/client.mjs?module=index.tsx&hash=hash-2')).length,
+        1,
+      )
+      third!.end()
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)) })
+    } finally {
+      URL.createObjectURL = originalCreateObjectURL
+      URL.revokeObjectURL = originalRevokeObjectURL
+      await h.close()
+    }
+  })
+
+  test('plugin.changed invalidates cache and rejects late inflight loads on disable, enable, failed, removed, and clientHashes change', { timeout: 60_000 }, async () => {
+    localStorage.setItem('helmx:token', 't1')
+    const fetchResolvers = new Map<string, (res: Response) => void>()
+    const h = await mountProvider({
+      onFetch: (path) => {
+        const match = /^\/api\/plugins\/([^/]+)\/client\.mjs/.exec(path)
+        if (match) {
+          const pluginId = decodeURIComponent(match[1]!)
+          if (pluginId === 'race:p' || pluginId === 'fail:p' || pluginId === 'dis:p') {
+            return new Promise<Response>((resolve) => {
+              fetchResolvers.set(pluginId, resolve)
+            })
+          }
+        }
+        return undefined
+      },
+    })
+
+    try {
+      const active = (id: string, extra?: Record<string, unknown>) => ({
+        ...pluginSummary(id),
+        status: 'active' as const,
+        clientHashes: { 'index.tsx': 'h1' },
+        publicConfig: { v: 1 },
+        ...extra,
+      })
+
+      seedPluginClientModule('dis:p', 'index.tsx', { Panel: () => null, __helmxClientCss: '.dis{}' }, 'h1')
+      seedPluginClientModule('fail:p', 'index.tsx', { Panel: () => null, __helmxClientCss: '.fail{}' }, 'h1')
+      seedPluginClientModule('rem:p', 'index.tsx', { Panel: () => null, __helmxClientCss: '.rem{}' }, 'h1')
+
+      const first = snapshotConnection(h, {
+        bootId: 'b1',
+        seq: 1,
+        conversations: [],
+        pendingAsks: [],
+        plugins: [active('race:p'), active('dis:p'), active('fail:p'), active('rem:p')],
+        ui: [],
+      })
+      await h.waitFor((o) => o.sseConnected === true)
+
+      // 1. Config-only update while inflight load is pending: inflight load must NOT be invalidated
+      const safeInflight = loadPluginClientModule('race:p', 'index.tsx', 'h1')
+      await h.waitFor(() => fetchResolvers.has('race:p'))
+      const raceRev0 = getPluginClientCacheRevision('race:p')
+      first.send(eventFrame(2, { type: 'plugin.changed', plugin: active('race:p', { publicConfig: { v: 2 } }), ui: [] }))
+      await h.waitFor(() => (h.store().plugins.find((p) => p.id === 'race:p')?.publicConfig as { v?: number } | undefined)?.v === 2)
+      assert.equal(getPluginClientCacheRevision('race:p'), raceRev0)
+
+      const resolveSafe = fetchResolvers.get('race:p')!
+      fetchResolvers.delete('race:p')
+      resolveSafe(new Response('export const __helmxClientCss = ".race{}"\nexport function Panel() { return null }\n', {
+        status: 200,
+        headers: { 'x-helmx-client-hash': 'h1' },
+      }))
+      const loaded = await safeInflight
+      assert.equal(loaded.contentHash, 'h1')
+      assert.ok(document.querySelector('style[data-helmx-plugin-css="race:p::index.tsx"]') !== null)
+
+      // 2. Late inflight load invalidated when clientHashes changes (even if publicConfig also changes)
+      const staleByHash = loadPluginClientModule('race:p', 'index.tsx', 'h2-pending')
+      await h.waitFor(() => fetchResolvers.has('race:p'))
+      first.send(eventFrame(3, {
+        type: 'plugin.changed',
+        plugin: active('race:p', { clientHashes: { 'index.tsx': 'h3' }, publicConfig: { v: 3 } }),
+        ui: [],
+      }))
+      await h.waitFor(() => getPluginClientCacheRevision('race:p') !== raceRev0)
+      assert.equal(getCachedClientComponent('race:p', 'index.tsx', 'Panel'), undefined)
+      assert.ok(document.querySelector('style[data-helmx-plugin-css="race:p::index.tsx"]') === null)
+      const resolveStaleHash = fetchResolvers.get('race:p')!
+      fetchResolvers.delete('race:p')
+      resolveStaleHash(new Response('export const __helmxClientCss = ".stale{}"\nexport function Panel() { return null }\n', {
+        status: 200,
+        headers: { 'x-helmx-client-hash': 'h2-pending' },
+      }))
+      await assert.rejects(
+        staleByHash,
+        (err: unknown) => err instanceof PluginClientError && err.code === 'client_module_invalidated',
+      )
+      assert.ok(document.querySelector('style[data-helmx-plugin-css="race:p::index.tsx"]') === null, 'late result must not re-inject CSS')
+
+      // 3. Failed (even with enabled: true as in markDependentsBroken) must evict and reject late loads
+      const failRev0 = getPluginClientCacheRevision('fail:p')
+      const staleByFail = loadPluginClientModule('fail:p', 'index.tsx', 'h2-fail')
+      await h.waitFor(() => fetchResolvers.has('fail:p'))
+      first.send(eventFrame(4, {
+        type: 'plugin.changed',
+        plugin: active('fail:p', { enabled: true, status: 'failed', clientHashes: undefined }),
+        ui: [],
+      }))
+      await h.waitFor(() => getPluginClientCacheRevision('fail:p') !== failRev0)
+      assert.equal(getCachedClientComponent('fail:p', 'index.tsx', 'Panel'), undefined)
+      assert.ok(document.querySelector('style[data-helmx-plugin-css="fail:p::index.tsx"]') === null)
+      const resolveStaleFail = fetchResolvers.get('fail:p')!
+      fetchResolvers.delete('fail:p')
+      resolveStaleFail(new Response('export const __helmxClientCss = ".fail-stale{}"\nexport function Panel() { return null }\n', {
+        status: 200,
+        headers: { 'x-helmx-client-hash': 'h2-fail' },
+      }))
+      await assert.rejects(
+        staleByFail,
+        (err: unknown) => err instanceof PluginClientError && err.code === 'client_module_invalidated',
+      )
+      assert.ok(document.querySelector('style[data-helmx-plugin-css="fail:p::index.tsx"]') === null)
+
+      // 4. Disable -> Enable cycle: disable evicts and rejects late loads, enable advances revision and refreshes assets
+      const disRev0 = getPluginClientCacheRevision('dis:p')
+      const staleByDisable = loadPluginClientModule('dis:p', 'index.tsx', 'h2-dis')
+      await h.waitFor(() => fetchResolvers.has('dis:p'))
+      first.send(eventFrame(5, {
+        type: 'plugin.changed',
+        plugin: active('dis:p', { enabled: false, status: 'disabled', clientHashes: undefined }),
+        ui: [],
+      }))
+      await h.waitFor(() => getPluginClientCacheRevision('dis:p') !== disRev0)
+      const disRev1 = getPluginClientCacheRevision('dis:p')
+      assert.equal(getCachedClientComponent('dis:p', 'index.tsx', 'Panel'), undefined)
+      assert.ok(document.querySelector('style[data-helmx-plugin-css="dis:p::index.tsx"]') === null)
+      const resolveStaleDis = fetchResolvers.get('dis:p')!
+      fetchResolvers.delete('dis:p')
+      resolveStaleDis(new Response('export const __helmxClientCss = ".dis-stale{}"\nexport function Panel() { return null }\n', {
+        status: 200,
+        headers: { 'x-helmx-client-hash': 'h2-dis' },
+      }))
+      await assert.rejects(
+        staleByDisable,
+        (err: unknown) => err instanceof PluginClientError && err.code === 'client_module_invalidated',
+      )
+      assert.ok(document.querySelector('style[data-helmx-plugin-css="dis:p::index.tsx"]') === null)
+
+      const profilesBeforeEnable = h.fetchedUrls.filter((u) => u === '/api/profiles').length
+      first.send(eventFrame(6, {
+        type: 'plugin.changed',
+        plugin: active('dis:p'),
+        ui: [],
+      }))
+      await h.waitFor(() => getPluginClientCacheRevision('dis:p') !== disRev1)
+      await h.waitFor(() => h.fetchedUrls.filter((u) => u === '/api/profiles').length > profilesBeforeEnable)
+
+      // 5. Removed (unregister emits disabled plugin.changed) must evict module and CSS
+      const remRev0 = getPluginClientCacheRevision('rem:p')
+      first.send(eventFrame(7, {
+        type: 'plugin.changed',
+        plugin: { ...pluginSummary('rem:p'), enabled: false, status: 'disabled' },
+        ui: [],
+      }))
+      await h.waitFor(() => getPluginClientCacheRevision('rem:p') !== remRev0)
+      assert.equal(getCachedClientComponent('rem:p', 'index.tsx', 'Panel'), undefined)
+      assert.ok(document.querySelector('style[data-helmx-plugin-css="rem:p::index.tsx"]') === null)
+
+      first.end()
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)) })
+    } finally {
+      await h.close()
+    }
+  })
+
+  test('syncPlugins adopts publicConfig/clientHashes/status updates when enabled stays true, and ensurePluginDoc skips failed plugins', { timeout: 60_000 }, async () => {
+    localStorage.setItem('helmx:token', 't1')
+    let otherDocCalls = 0
+    let failDocCalls = 0
+    const h = await mountProvider({
+      onFetch: (path) => {
+        if (path === '/api/plugins/other%3Ap/docs/missing') {
+          otherDocCalls++
+          return new Response(JSON.stringify({ error: { message: 'missing doc' } }), { status: 404, headers: { 'content-type': 'application/json' } })
+        }
+        if (path === '/api/plugins/fail%3Ap/docs/info') {
+          failDocCalls++
+          return new Response(JSON.stringify({ value: { leaked: true } }), { status: 200, headers: { 'content-type': 'application/json' } })
+        }
+        return undefined
+      },
+    })
+
+    try {
+      const first = snapshotConnection(h, {
+        bootId: 'b1',
+        seq: 1,
+        conversations: [],
+        pendingAsks: [],
+        plugins: [
+          { ...pluginSummary('cfg:sync'), status: 'active', clientHashes: { 'index.tsx': 'h1' }, publicConfig: { k: 'v1' } },
+          { ...pluginSummary('other:p'), status: 'active' },
+          { ...pluginSummary('fail:p'), enabled: true, status: 'failed' },
+        ],
+        ui: [],
+      })
+      await h.waitFor((o) => o.sseConnected === true)
+
+      // Trigger failedDocs for other:p, then send plugin.changed for cfg:sync: other:p failedDocs must stay intact
+      await act(async () => {
+        await h.store().ensurePluginDoc('other:p', 'missing')
+      })
+      assert.equal(otherDocCalls, 1)
+      first.send(eventFrame(2, {
+        type: 'plugin.changed',
+        plugin: { ...pluginSummary('cfg:sync'), status: 'active', clientHashes: { 'index.tsx': 'h1' }, publicConfig: { k: 'v2' } },
+        ui: [],
+      }))
+      await h.waitFor(() => (h.store().plugins.find((p) => p.id === 'cfg:sync')?.publicConfig as { k?: string } | undefined)?.k === 'v2')
+      await act(async () => {
+        await h.store().ensurePluginDoc('other:p', 'missing')
+      })
+      assert.equal(otherDocCalls, 1, 'unrelated plugin failedDocs must not be cleared globally on plugin.changed')
+
+      // ensurePluginDoc must not write pluginDocs when plugin is enabled=true, status='failed'
+      const docVal = await act(async () => h.store().ensurePluginDoc('fail:p', 'info'))
+      assert.equal(failDocCalls, 1)
+      assert.deepEqual(docVal, { leaked: true })
+      assert.equal(h.store().pluginDocs['fail:p/info'], undefined, 'ensurePluginDoc must not populate docs for status=failed plugins')
+
+      // syncPlugins must adopt incoming publicConfig / clientHashes / status changes even when enabled stays true
+      const beforePlugins = h.store().plugins
+      await act(async () => {
+        h.store().syncPlugins(beforePlugins)
+      })
+      assert.equal(h.store().plugins, beforePlugins, 'syncPlugins with identical payloads must preserve plugins reference')
+
+      await act(async () => {
+        h.store().syncPlugins([
+          { ...pluginSummary('cfg:sync'), status: 'active', clientHashes: { 'index.tsx': 'h2' }, publicConfig: { k: 'v3' } },
+          { ...pluginSummary('other:p'), status: 'failed' },
+          { ...pluginSummary('fail:p'), enabled: true, status: 'failed' },
+        ])
+      })
+      const syncedCfg = h.store().plugins.find((p) => p.id === 'cfg:sync')
+      assert.deepEqual(syncedCfg?.publicConfig, { k: 'v3' })
+      assert.deepEqual(syncedCfg?.clientHashes, { 'index.tsx': 'h2' })
+      assert.equal(h.store().plugins.find((p) => p.id === 'other:p')?.status, 'failed')
+
+      first.end()
       await act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)) })
     } finally {
       await h.close()

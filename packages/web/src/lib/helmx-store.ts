@@ -39,7 +39,9 @@ import {
   applyConversationEntry,
   emptyLiveState,
   entryMatchesReference,
+  isPluginSummaryActive,
   mergeConversationDetail,
+  sameJsonValue,
   sortNodes,
   type LiveState,
 } from './live-state.js'
@@ -1355,9 +1357,12 @@ export class HelmxExternalStore {
       const byId = new Map(state.plugins.map((p) => [p.id, p]))
       const merged = next.map((incoming) => {
         const local = byId.get(incoming.id)
-        return local && local.enabled === incoming.enabled ? local : incoming
+        return local !== undefined && sameJsonValue(local, incoming) ? local : incoming
       })
-      return { ...state, plugins: merged }
+      const changed =
+        merged.length !== state.plugins.length ||
+        merged.some((item, index) => item !== state.plugins[index])
+      return changed ? { ...state, plugins: merged } : state
     })
   }
 
@@ -1567,7 +1572,7 @@ export class HelmxExternalStore {
           return undefined
         }
         this.updateLive((state) => {
-          if (Object.hasOwn(state.pluginDocs, docKey) || !state.plugins.some((p) => p.id === pluginId && p.enabled)) {
+          if (Object.hasOwn(state.pluginDocs, docKey) || !state.plugins.some((p) => p.id === pluginId && isPluginSummaryActive(p))) {
             return state
           }
           return { ...state, pluginDocs: { ...state.pluginDocs, [docKey]: doc.value } }
