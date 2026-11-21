@@ -2,7 +2,7 @@
  * builtin:swarm tool-call timeline one-line renderer (26px `.trace-row`):
  * - natural-language summary per swarm tool (dispatch / handoff / review /
  *   delivered / blocked verbs), derived with wide-object guards from the call
- *   input plus the kernel-serialized JSON result text (zero fabricated facts);
+ *   input plus the bounded `presentationMeta` projection (zero fabricated facts);
  * - member-addressing rows open the sub-conversation drawer; group-level
  *   orchestration rows open the swarm workbench panel; rows without a
  *   resolvable target expand the raw tool details instead;
@@ -28,7 +28,7 @@ import {
 import type { SwarmIndexDoc } from './models.ts'
 import { isPlainObject, resolveConversationBoardLink } from './board-model.ts'
 import {
-  parseToolResultRecord,
+  extractSwarmPresentationMeta,
   resolveSwarmToolClickTarget,
   resolveSwarmToolFacts,
   type SwarmToolFacts,
@@ -142,39 +142,22 @@ export function SwarmToolView(props: ToolViewProps): ReactNode {
   const [detailsOpen, setDetailsOpen] = useState(false)
   const detailsId = useId()
 
-  const resultRecord = useMemo(
-    () => parseToolResultRecord(props.structuredOutput) ?? parseToolResultRecord(props.result),
-    [props.structuredOutput, props.result],
-  )
+  const presentationMeta = extractSwarmPresentationMeta(props)
   const facts = useMemo(
-    () => resolveSwarmToolFacts(props.toolName, props.input, resultRecord),
-    [props.toolName, props.input, resultRecord],
+    () => resolveSwarmToolFacts(props.toolName, props.input, presentationMeta),
+    [props.toolName, props.input, presentationMeta],
   )
 
   const viewerConversationId = props.conversationId ?? ctx.conversationId
   const targetGroupId = useMemo(() => {
-    if (typeof resultRecord?.['groupId'] === 'string' && resultRecord['groupId'] !== '') {
-      return resultRecord['groupId']
-    }
-    if (
-      isPlainObject(resultRecord?.['post']) &&
-      typeof resultRecord['post']['groupId'] === 'string' &&
-      resultRecord['post']['groupId'] !== ''
-    ) {
-      return resultRecord['post']['groupId']
-    }
-    if (
-      isPlainObject(resultRecord?.['group']) &&
-      typeof resultRecord['group']['id'] === 'string' &&
-      resultRecord['group']['id'] !== ''
-    ) {
-      return resultRecord['group']['id']
+    if (typeof presentationMeta?.['groupId'] === 'string' && presentationMeta['groupId'] !== '') {
+      return presentationMeta['groupId']
     }
     if (isPlainObject(props.input) && typeof props.input['groupId'] === 'string' && props.input['groupId'] !== '') {
       return props.input['groupId']
     }
     return resolveConversationBoardLink(viewerConversationId, index)?.groupId
-  }, [resultRecord, props.input, viewerConversationId, index])
+  }, [presentationMeta, props.input, viewerConversationId, index])
 
   const memberLookup = useMemo(() => {
     const byName = new Map<string, number>()

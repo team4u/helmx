@@ -1,14 +1,19 @@
 /**
  * builtin:worktree 模型工具注册（自 builtin:workflow/tools.ts 迁出；签名不变）。
  *
- * - cleanup_worktree：清理受管隔离 Git Worktree（错误分支绝不伪造 metadata）；
+ * - cleanup_worktree：清理受管隔离 Git Worktree（错误分支绝不伪造 metadata；
+ *   完整结果留 structuredOutput 供程序消费者，UI details 仅收有界索引 presentationMeta）；
  * - subagent / SubagentWorkflow 工具仍属 builtin:workflow（workflow/tools.ts）。
  */
-import type { HelmxPluginContext } from '@helmx/protocol'
+import type { HelmxPluginContext, JsonSchema, PluginToolSpec } from '@helmx/protocol'
 import type { WorktreeIsolation } from './isolation.js'
 
 export interface WorktreeToolDeps {
   isolation: WorktreeIsolation
+}
+
+type WorktreeToolSpec = PluginToolSpec & {
+  presentationMetaSchema?: JsonSchema
 }
 
 /** cleanup 成功分支（removed/worktreeId/path/branch/nodeId/branchDeleted 全为真实值）。 */
@@ -48,11 +53,57 @@ const cleanupErrorOutputSchema = {
   additionalProperties: false,
 } as const
 
+/** UI 持久化索引成功分支：有界标量/坐标字段，剔除可能冗长的 prune.output 原文。 */
+const cleanupSuccessMetaSchema = {
+  type: 'object',
+  properties: {
+    ok: { type: 'boolean', const: true },
+    removed: { type: 'boolean' },
+    worktreeId: { type: 'string', maxLength: 4096 },
+    path: { type: 'string', maxLength: 4096 },
+    branch: { type: 'string', maxLength: 512 },
+    nodeId: { type: 'string', maxLength: 256 },
+    branchDeleted: { type: 'boolean' },
+    removedReason: { type: 'string', enum: ['directory_missing_forced'] },
+    pruneRan: { type: 'boolean' },
+    pruneOk: { type: 'boolean' },
+  },
+  required: ['ok', 'removed', 'worktreeId', 'path', 'branch', 'nodeId', 'branchDeleted'],
+  additionalProperties: false,
+} as const
+
+/** UI 持久化索引失败分支：仅 ok:false + 有界错误首行摘要。 */
+const cleanupErrorMetaSchema = {
+  type: 'object',
+  properties: {
+    ok: { type: 'boolean', const: false },
+    error: { type: 'string', maxLength: 512 },
+  },
+  required: ['ok', 'error'],
+  additionalProperties: false,
+} as const
+
+export const cleanupPresentationMetaSchema: JsonSchema = {
+  anyOf: [cleanupSuccessMetaSchema, cleanupErrorMetaSchema],
+}
+
+function boundIndexText(value: string, maxChars: number): string {
+  if (value.length <= maxChars) return value
+  return `${value.slice(0, maxChars - 1)}…`
+}
+
+function boundErrorSummary(message: string, maxChars = 512): string {
+  const firstLine = (message.split(/\r?\n/, 1)[0] ?? message).trim()
+  const source = firstLine !== '' ? firstLine : message.trim()
+  if (source.length <= maxChars) return source
+  return `${source.slice(0, maxChars - 1)}…`
+}
+
 export function registerWorktreeTools(ctx: HelmxPluginContext, deps: WorktreeToolDeps): void {
   const { isolation } = deps
 
   // ---- 模型工具：cleanup_worktree ----
-  ctx.tool({
+  const cleanupToolSpec: WorktreeToolSpec = {
     name: 'cleanup_worktree',
     description:
       "Clean up one managed isolated Git worktree (the workspace of a sub-conversation spawned with isolation: 'worktree'). Locate it by worktreeId (node:path), conversationId, or worktree path (may attach nodeId to disambiguate); refused by default when the workspace has uncommitted changes or unmerged commits (inspect/merge first, or pass force: true; force cannot bypass occupancy/ownership/locked checks); optionally pass deleteBranch: true to also delete the helmx/spawn-* branch (branch deletion failures can be retried). Only worktrees registered by helmx are cleaned; unregistered directories are never touched.",
@@ -69,7 +120,8 @@ export function registerWorktreeTools(ctx: HelmxPluginContext, deps: WorktreeToo
       },
       additionalProperties: false,
     },
-    structuredOutputSchema: { anyOf: [cleanupSuccessOutputSchema, cleanupErrorOutputSchema] } as unknown as typeof cleanupSuccessOutputSchema,
+    structuredOutputSchema: { anyOf: [cleanupSuccessOutputSchema, cleanupErrorOutputSchema] } as unknown as JsonSchema,
+    presentationMetaSchema: cleanupPresentationMetaSchema,
     async execute(args, context) {
       const a = args as Record<string, unknown>
       // --current 语义：无任何显式选择器时以当前会话为选择器（子会话自身
@@ -106,6 +158,17 @@ export function registerWorktreeTools(ctx: HelmxPluginContext, deps: WorktreeToo
         return {
           output: [{ type: 'text', text: summary }],
           structuredOutput: { ok: true, ...result },
+          presentationMeta: {
+            ok: true,
+            removed: result.removed,
+            worktreeId: boundIndexText(result.worktreeId, 4096),
+            path: boundIndexText(result.path, 4096),
+            branch: boundIndexText(result.branch, 512),
+            nodeId: boundIndexText(result.nodeId, 256),
+            branchDeleted: result.branchDeleted,
+            ...(result.removedReason !== undefined ? { removedReason: result.removedReason } : {}),
+            ...(result.prune !== undefined ? { pruneRan: result.prune.ran, pruneOk: result.prune.ok } : {}),
+          },
         }
       } catch (error) {
         // 错误分支仅 ok:false + error：绝不伪造空 worktreeId/path/branch/nodeId。
@@ -114,8 +177,13 @@ export function registerWorktreeTools(ctx: HelmxPluginContext, deps: WorktreeToo
           output: [{ type: 'text', text: `cleanup_worktree 失败：${message}` }],
           isError: true,
           structuredOutput: { ok: false, error: message },
+          presentationMeta: {
+            ok: false,
+            error: boundErrorSummary(message),
+          },
         }
       }
     },
-  })
+  }
+  ctx.tool(cleanupToolSpec as PluginToolSpec)
 }

@@ -13,7 +13,9 @@
 import {
   type ConversationScope,
   type HelmxPluginContext,
+  type JsonSchema,
   type PluginDefinition,
+  type PluginToolSpec,
 } from '@helmx/protocol'
 import { resolvePluginClientAssets } from './asset-paths.js'
 import {
@@ -170,10 +172,19 @@ const WATCHDOG_MUTATION_OUTPUT_SCHEMA: Record<string, unknown> = {
   additionalProperties: false,
 }
 
+const DISPATCH_WORKER_OUTPUT_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: { workerConversationId: WORKER_ID_SCHEMA },
+  required: ['workerConversationId'],
+  additionalProperties: false,
+}
+
 interface DeclarativeToolSpec {
   name: string
   description: string
   inputSchema: Record<string, unknown>
+  structuredOutputSchema?: JsonSchema
+  presentationMetaSchema?: JsonSchema
   scope: ConversationScope
 }
 
@@ -192,6 +203,8 @@ const TOOL_SPECS: ReadonlyArray<DeclarativeToolSpec> = [
     description:
       'Spawn a background worker conversation to execute a task without blocking (returns workerConversationId immediately, without waiting for the model turn to finish). Optionally pin an expert Profile via profileId and bind an event subscription via threadKey.',
     inputSchema: DISPATCH_INPUT_SCHEMA,
+    structuredOutputSchema: DISPATCH_WORKER_OUTPUT_SCHEMA,
+    presentationMetaSchema: DISPATCH_WORKER_OUTPUT_SCHEMA,
     scope: ROUTER_TOOL_SCOPE,
   },
   {
@@ -346,18 +359,25 @@ function loadSuperAgentRuntimeModule(): Promise<SuperAgentRuntimeModule> {
   return runtimeModulePromise
 }
 
+type ToolSpecWithPresentationMeta = PluginToolSpec & {
+  presentationMetaSchema?: JsonSchema
+}
+
 function registerDeclarativeCapabilities(
   ctx: HelmxPluginContext,
   ensureRuntime: () => Promise<SuperAgentRuntimeController>,
 ): void {
   for (const spec of TOOL_SPECS) {
-    ctx.tool({
+    const toolSpec: ToolSpecWithPresentationMeta = {
       name: spec.name,
       description: spec.description,
       inputSchema: spec.inputSchema,
+      ...(spec.structuredOutputSchema !== undefined ? { structuredOutputSchema: spec.structuredOutputSchema } : {}),
+      ...(spec.presentationMetaSchema !== undefined ? { presentationMetaSchema: spec.presentationMetaSchema } : {}),
       scope: spec.scope,
       execute: async (input, context) => (await ensureRuntime()).executeTool(spec.name, input, context),
-    })
+    }
+    ctx.tool(toolSpec as PluginToolSpec)
   }
   for (const spec of ACTION_SPECS) {
     ctx.action({

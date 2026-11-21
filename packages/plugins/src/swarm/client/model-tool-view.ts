@@ -3,15 +3,24 @@
  * React/DOM dependencies, Fast Refresh compliant).
  *
  * Inputs are lenient wide-object guarded (the browser never imports server
- * runtime modules): tool `input` is the JSON the model sent, `result` is the
- * kernel-serialized JSON text of the returned object (or the plain error
- * message on failure). Nothing is fabricated — missing facts stay undefined
- * and the row falls back to the inline raw details view.
+ * runtime modules): tool `input` is the JSON the model sent, `presentationMeta`
+ * is the bounded, schema-validated UI projection persisted in `details`.
+ * Nothing is fabricated — missing facts stay undefined and the row falls back
+ * to the inline raw details view.
  */
+import type { ToolViewProps } from '@helmx/protocol'
 import { isPlainObject, type BoardPostKind } from './board-model.ts'
+
+type ToolViewPropsWithPresentationMeta = ToolViewProps & {
+  presentationMeta?: Readonly<Record<string, unknown>>
+}
 
 function isPosInt(v: unknown): v is number {
   return typeof v === 'number' && Number.isSafeInteger(v) && v > 0
+}
+
+function isNonNegInt(v: unknown): v is number {
+  return typeof v === 'number' && Number.isSafeInteger(v) && v >= 0
 }
 
 function asTrimmedString(v: unknown, maxChars: number): string | undefined {
@@ -21,16 +30,12 @@ function asTrimmedString(v: unknown, maxChars: number): string | undefined {
   return trimmed.length > maxChars ? `${trimmed.slice(0, maxChars - 1)}…` : trimmed
 }
 
-/** Leniently parse the tool result text as the JSON object the action returned. */
-export function parseToolResultRecord(result: unknown): Record<string, unknown> | undefined {
-  if (isPlainObject(result)) return result
-  if (typeof result !== 'string' || result.trim() === '') return undefined
-  try {
-    const parsed: unknown = JSON.parse(result)
-    return isPlainObject(parsed) ? parsed : undefined
-  } catch {
-    return undefined
-  }
+/** Extract bounded presentationMeta object from ToolViewProps (never parses result JSON). */
+export function extractSwarmPresentationMeta(
+  props: ToolViewProps,
+): Readonly<Record<string, unknown>> | undefined {
+  const meta = (props as ToolViewPropsWithPresentationMeta).presentationMeta
+  return isPlainObject(meta) ? meta : undefined
 }
 
 export type SwarmToolTargetKind =
@@ -75,15 +80,18 @@ export interface SwarmToolFacts {
   aborted?: boolean
 }
 
-function readMemberName(input: Record<string, unknown>, result: Record<string, unknown> | undefined): string | undefined {
-  return asTrimmedString(input['name'], 32) ?? asTrimmedString(result?.['name'], 32)
+function readMemberName(
+  input: Record<string, unknown>,
+  meta: Readonly<Record<string, unknown>> | undefined,
+): string | undefined {
+  return asTrimmedString(input['name'], 32) ?? asTrimmedString(meta?.['memberName'], 32)
 }
 
 function readWorkerConversationId(
   input: Record<string, unknown>,
-  result: Record<string, unknown> | undefined,
+  meta: Readonly<Record<string, unknown>> | undefined,
 ): number | undefined {
-  const candidates = [input['workerConversationId'], result?.['workerConversationId'], result?.['conversationId']]
+  const candidates = [input['workerConversationId'], meta?.['workerConversationId']]
   for (const c of candidates) {
     if (isPosInt(c)) return c
   }
@@ -97,25 +105,11 @@ function readPostTargets(input: Record<string, unknown>): string[] | undefined {
   return targets.length > 0 ? targets.slice(0, 4) : undefined
 }
 
-function readPostSeq(result: Record<string, unknown> | undefined): number | undefined {
-  const post = result?.['post']
-  if (isPlainObject(post) && isPosInt(post['seq'])) return post['seq']
-  if (isPosInt(result?.['postSeq'])) return result['postSeq']
-  return undefined
-}
-
-function readPostCount(result: Record<string, unknown> | undefined): number | undefined {
-  const posts = result?.['posts']
-  if (Array.isArray(posts)) return posts.length
-  if (isPosInt(result?.['postCount'])) return result['postCount']
-  return undefined
-}
-
 /** Extract display facts for one swarm tool call (wide-object guarded, lenient). */
 export function resolveSwarmToolFacts(
   toolName: string,
   input: unknown,
-  resultRecord: Record<string, unknown> | undefined,
+  meta: Readonly<Record<string, unknown>> | undefined,
 ): SwarmToolFacts {
   const inputRecord = isPlainObject(input) ? input : {}
   const facts: SwarmToolFacts = { toolName }
@@ -123,65 +117,57 @@ export function resolveSwarmToolFacts(
   switch (toolName) {
     case 'swarm_create_group':
     case 'swarm_update_group': {
-      facts.groupTitle = asTrimmedString(inputRecord['title'], 80) ?? asTrimmedString(resultRecord?.['title'], 80)
-      const group = resultRecord?.['group']
-      if (facts.groupTitle === undefined && isPlainObject(group)) {
-        facts.groupTitle = asTrimmedString(group['title'], 80)
-      }
+      facts.groupTitle = asTrimmedString(inputRecord['title'], 80) ?? asTrimmedString(meta?.['groupTitle'], 80)
       break
     }
     case 'swarm_dispatch_worker': {
-      facts.memberName = readMemberName(inputRecord, resultRecord)
+      facts.memberName = readMemberName(inputRecord, meta)
       facts.taskExcerpt = asTrimmedString(inputRecord['prompt'], 96)
-      facts.memberConversationId = readWorkerConversationId(inputRecord, resultRecord)
-      facts.seq = readPostSeq(resultRecord)
+      facts.memberConversationId = readWorkerConversationId(inputRecord, meta)
+      if (isPosInt(meta?.['seq'])) facts.seq = meta['seq']
       break
     }
     case 'swarm_board_post': {
       const kind = inputRecord['kind']
       if (typeof kind === 'string') facts.postKind = kind as BoardPostKind
+      else if (typeof meta?.['postKind'] === 'string') facts.postKind = meta['postKind'] as BoardPostKind
       facts.postTargets = readPostTargets(inputRecord)
       facts.taskExcerpt = asTrimmedString(inputRecord['body'], 96)
-      facts.seq = readPostSeq(resultRecord)
-      const post = resultRecord?.['post']
-      if (facts.postKind === undefined && isPlainObject(post) && typeof post['kind'] === 'string') {
-        facts.postKind = post['kind'] as BoardPostKind
-      }
+      if (isPosInt(meta?.['seq'])) facts.seq = meta['seq']
       break
     }
     case 'swarm_board_read': {
-      facts.postCount = readPostCount(resultRecord)
+      if (isNonNegInt(meta?.['postCount'])) facts.postCount = meta['postCount']
       break
     }
     case 'swarm_board_status': {
       break
     }
     case 'swarm_abort_worker': {
-      facts.memberName = readMemberName(inputRecord, resultRecord)
-      facts.memberConversationId = readWorkerConversationId(inputRecord, resultRecord)
-      facts.aborted = resultRecord?.['aborted'] === true
+      facts.memberName = readMemberName(inputRecord, meta)
+      facts.memberConversationId = readWorkerConversationId(inputRecord, meta)
+      if (typeof meta?.['aborted'] === 'boolean') facts.aborted = meta['aborted']
       break
     }
     case 'swarm_switch_worker_model': {
-      facts.memberName = readMemberName(inputRecord, resultRecord)
-      facts.memberConversationId = readWorkerConversationId(inputRecord, resultRecord)
-      facts.model = asTrimmedString(resultRecord?.['model'], 200) ?? asTrimmedString(inputRecord['model'], 200)
+      facts.memberName = readMemberName(inputRecord, meta)
+      facts.memberConversationId = readWorkerConversationId(inputRecord, meta)
+      facts.model = asTrimmedString(meta?.['model'], 200) ?? asTrimmedString(inputRecord['model'], 200)
       break
     }
     case 'swarm_inspect_worker': {
-      facts.memberName = readMemberName(inputRecord, resultRecord)
-      facts.memberConversationId = readWorkerConversationId(inputRecord, resultRecord)
+      facts.memberName = readMemberName(inputRecord, meta)
+      facts.memberConversationId = readWorkerConversationId(inputRecord, meta)
       break
     }
     case 'swarm_archive_worker': {
-      facts.memberName = readMemberName(inputRecord, resultRecord)
-      facts.memberConversationId = readWorkerConversationId(inputRecord, resultRecord)
-      facts.archived = resultRecord?.['archived'] === true
+      facts.memberName = readMemberName(inputRecord, meta)
+      facts.memberConversationId = readWorkerConversationId(inputRecord, meta)
+      if (typeof meta?.['archived'] === 'boolean') facts.archived = meta['archived']
       break
     }
     case 'swarm_close_group': {
-      const retained = resultRecord?.['retainedWorktrees']
-      if (Array.isArray(retained)) facts.retainedCount = retained.length
+      if (isNonNegInt(meta?.['retainedCount'])) facts.retainedCount = meta['retainedCount']
       break
     }
     default:

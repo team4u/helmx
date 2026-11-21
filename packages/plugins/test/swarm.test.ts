@@ -9,7 +9,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { HelmxError } from '@helmx/protocol'
+import { HelmxError, validateOrThrow } from '@helmx/protocol'
 import {
   ARCHIVED_COORDINATOR_TAG,
   ARCHIVED_WORKER_TAG,
@@ -43,7 +43,12 @@ import {
   type GroupMemberState,
 } from '../src/swarm.js'
 import { checkCoordinatorEligibility } from '../src/swarm/actions.js'
-import { boardPostInputSchema } from '../src/swarm/action-schemas.js'
+import { boardPostInputSchema, swarmToolPresentationMetaSchema } from '../src/swarm/action-schemas.js'
+import {
+  extractSwarmPresentationMeta,
+  resolveSwarmToolClickTarget,
+  resolveSwarmToolFacts,
+} from '../src/swarm/client/model-tool-view.ts'
 import {
   formatCoordinatorReportEnvelope,
   formatWorkerWakeupEnvelope,
@@ -988,5 +993,99 @@ test('swarm-unit9: tiered coordinator flush gating, orthogonal done stall fallba
   assert.equal(
     findIdleCatchupAnchorPost({ ...catchupGroup, coordinatorPendingSeq: 0, coordinatorNotifiedSeq: 0 }, postsWithTrailingComment),
     undefined,
+  )
+})
+
+test('swarm-unit10: swarmToolPresentationMetaSchema bounds UI metadata and model-tool-view reads presentationMeta without JSON.parse(props.result)', { timeout: 60_000 }, () => {
+  // 1) Valid lightweight presentationMeta projections pass schema; heavy nested arrays/bodies fail explicitly
+  const validMetas: Array<Record<string, unknown>> = [
+    { groupId: 'grp_1', groupTitle: 'Auth Squad' },
+    { groupId: 'grp_1', memberName: 'author', workerConversationId: 51, seq: 1 },
+    { groupId: 'grp_1', postKind: 'handoff', seq: 2 },
+    { groupId: 'grp_1', seq: 0, postCount: 0 },
+    { groupId: 'grp_1', groupTitle: 'Auth Squad', seq: 5, postCount: 4 },
+    { workerConversationId: 51, memberName: 'author', aborted: false },
+    { workerConversationId: 51, memberName: 'author', model: 'openai/gpt-5' },
+    { groupId: 'grp_1', workerConversationId: 51, memberName: 'author' },
+    { workerConversationId: 51, archived: true },
+    { groupId: 'grp_1', retainedCount: 0 },
+  ]
+  for (const meta of validMetas) {
+    assert.doesNotThrow(() => validateOrThrow(swarmToolPresentationMetaSchema, meta, 'invalid swarm meta'))
+  }
+  for (const forbidden of [
+    { groupId: 'grp_1', posts: [] },
+    { groupId: 'grp_1', recentEntries: [] },
+    { groupId: 'grp_1', post: { seq: 1 } },
+    { groupId: 'grp_1', retainedWorktrees: [] },
+  ]) {
+    assert.throws(() => validateOrThrow(swarmToolPresentationMetaSchema, forbidden, 'heavy field forbidden'))
+  }
+
+  // 2) extractSwarmPresentationMeta never JSON.parses props.result
+  const jsonOnlyResultProps = {
+    callId: 'c1',
+    toolName: 'swarm_dispatch_worker',
+    status: 'done' as const,
+    conversationId: 1,
+    input: { name: 'author', prompt: 'Work on auth' },
+    result: JSON.stringify({ workerConversationId: 51, groupId: 'grp_1', name: 'author', postSeq: 7 }),
+  }
+  assert.equal(extractSwarmPresentationMeta(jsonOnlyResultProps), undefined)
+  const factsWithoutMeta = resolveSwarmToolFacts(
+    jsonOnlyResultProps.toolName,
+    jsonOnlyResultProps.input,
+    extractSwarmPresentationMeta(jsonOnlyResultProps),
+  )
+  assert.equal(factsWithoutMeta.memberConversationId, undefined)
+  assert.equal(factsWithoutMeta.seq, undefined)
+  assert.equal(resolveSwarmToolClickTarget(factsWithoutMeta), undefined)
+
+  // 3) Direct presentationMeta consumption across all 11 tools (including 0-counts and boolean flags)
+  const dispatchProps = {
+    ...jsonOnlyResultProps,
+    presentationMeta: { groupId: 'grp_1', memberName: 'author', workerConversationId: 51, seq: 7 },
+  } as never
+  const dispatchMeta = extractSwarmPresentationMeta(dispatchProps)
+  const dispatchFacts = resolveSwarmToolFacts('swarm_dispatch_worker', jsonOnlyResultProps.input, dispatchMeta)
+  assert.equal(dispatchFacts.memberConversationId, 51)
+  assert.equal(dispatchFacts.seq, 7)
+  assert.deepEqual(resolveSwarmToolClickTarget(dispatchFacts), { kind: 'member', conversationId: 51 })
+
+  assert.equal(
+    resolveSwarmToolFacts('swarm_create_group', {}, { groupId: 'grp_1', groupTitle: 'Meta Title' }).groupTitle,
+    'Meta Title',
+  )
+  assert.equal(
+    resolveSwarmToolFacts('swarm_board_post', { body: 'Ready' }, { groupId: 'grp_1', postKind: 'handoff', seq: 3 }).postKind,
+    'handoff',
+  )
+  assert.equal(
+    resolveSwarmToolFacts('swarm_board_post', { body: 'Ready' }, { groupId: 'grp_1', postKind: 'handoff', seq: 3 }).seq,
+    3,
+  )
+  assert.equal(
+    resolveSwarmToolFacts('swarm_board_read', {}, { groupId: 'grp_1', seq: 0, postCount: 0 }).postCount,
+    0,
+  )
+  assert.equal(
+    resolveSwarmToolFacts('swarm_abort_worker', {}, { workerConversationId: 51, memberName: 'author', aborted: false }).aborted,
+    false,
+  )
+  assert.equal(
+    resolveSwarmToolFacts('swarm_abort_worker', {}, undefined).aborted,
+    undefined,
+  )
+  assert.equal(
+    resolveSwarmToolFacts('swarm_switch_worker_model', {}, { workerConversationId: 51, memberName: 'author', model: 'anthropic/claude-sonnet-4-5' }).model,
+    'anthropic/claude-sonnet-4-5',
+  )
+  assert.equal(
+    resolveSwarmToolFacts('swarm_archive_worker', {}, { workerConversationId: 51, archived: true }).archived,
+    true,
+  )
+  assert.equal(
+    resolveSwarmToolFacts('swarm_close_group', {}, { groupId: 'grp_1', retainedCount: 2 }).retainedCount,
+    2,
   )
 })
