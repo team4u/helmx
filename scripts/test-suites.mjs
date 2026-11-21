@@ -188,7 +188,11 @@ try {
   process.exit(2);
 }
 if (workerBudgetOverride !== undefined) workerBudget = workerBudgetOverride;
-const shardingDisabled = shouldDisableSharding(extraArgs) || workerBudgetOverride !== undefined;
+// `shard-worker.mjs` drives `node:test`'s programmatic `run()` API rather than `tsx --test` CLI
+// parsing, so any non-empty pass-through CLI arguments fall back to a single native `tsx --test`
+// invocation — ensuring flags like `--test-rerun-failures`, `--test-global-setup`, or invalid
+// flags are never silently dropped on shared-pool files.
+const shardingDisabled = extraArgs.length > 0 || shouldDisableSharding(extraArgs) || workerBudgetOverride !== undefined;
 
 const timingsCachePath = path.join(repoRoot, DEFAULT_TIMINGS_CACHE_REL);
 const purityCachePath = path.join(repoRoot, DEFAULT_PURITY_CACHE_REL);

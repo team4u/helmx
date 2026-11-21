@@ -685,3 +685,18 @@ test('F1', { timeout: 60_000 }, () => { assert.equal(1, 2) })
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('test-suites: any pass-through extraArgs falls back to native tsx --test instead of silently dropping flags in shard-worker', { timeout: 60_000 }, () => {
+  const env = { ...process.env }
+  delete env.NODE_TEST_CONTEXT
+  const res = spawnSync(
+    process.execPath,
+    [path.join(repoRoot, 'scripts', 'test-suites.mjs'), 'unit', '--bogus-unknown-runner-flag'],
+    { cwd: repoRoot, env, encoding: 'utf8', timeout: 60_000 },
+  )
+  assert.notEqual(res.status, 0, 'invalid pass-through CLI flag must fail instead of being dropped')
+  assert.ok(
+    !res.stderr.includes('concurrent shards'),
+    `expected native single-runner fallback when extraArgs is non-empty; stderr=${res.stderr}`,
+  )
+})
