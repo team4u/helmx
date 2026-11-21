@@ -329,6 +329,8 @@ export {
   resolveDefaultWake,
   resolvePostChannel,
   resolveBoardTargets,
+  shouldFlushCoordinatorReport,
+  findIdleCatchupAnchorPost,
   aggregateBoardEdges,
   synthesizeHeadline,
   synthesizeBoardView,

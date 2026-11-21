@@ -3,6 +3,7 @@
  */
 import type {
   BackendPluginsLifecyclePort,
+  ConversationSubmissionInfo,
   ConversationSummary,
   GuardedMutationExpectation,
   HelmxHostApi,
@@ -58,8 +59,8 @@ export interface PluginProviderPort {
  *    (returned release callback is wrapped by `PluginHost` for idempotency);
  * 2. Normalized shape: `isClosing` is a zero-arg function (exposed as a getter on `ctx.host`);
  * 3. Optional connections (when unwired, `ctx.host` rejects explicitly with 501, never silently falling back):
- *    `nodeIpc` / `nodeFetch` / `openTunnel` / `plugins` / `abortConversationGuarded` / `submitInputGuarded`
- *    / `resetConversationGuarded` / `compactConversationGuarded`;
+ *    `nodeIpc` / `nodeFetch` / `openTunnel` / `plugins` / `getConversationSubmission` / `abortConversationGuarded` /
+ *    `submitInputGuarded` / `resetConversationGuarded` / `compactConversationGuarded`;
  * 4. Served directly by `PluginHost` (not forwarded to backend): `listPlugins` / `listUi` /
  *    `listActions` / `invokeAction` / `prepareAction` / `setConfig`.
  */
@@ -124,6 +125,11 @@ export interface PluginHostBackend
   openTunnel?: HelmxHostOpenTunnelPort
   /** Host plugin governance backend (`ctx.host.plugins`; write operations fail with 501 when unwired). */
   plugins?: BackendPluginsLifecyclePort
+  /** Read-only durable submission lookup by `(conversationId, requestId)` (501 when unwired). */
+  getConversationSubmission?(
+    id: number,
+    requestId: string,
+  ): Promise<ConversationSubmissionInfo | undefined>
   /** Guarded input submission port (kernel atomic ownership/seq check; 501 when unwired). */
   submitInputGuarded?(
     conversationId: number,

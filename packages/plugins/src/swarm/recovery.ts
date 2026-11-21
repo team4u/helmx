@@ -9,6 +9,7 @@ import {
   HelmxError,
   isJsonObject,
   type ConversationEntry,
+  type ConversationSubmissionInfo,
   type ConversationSummary,
   type HelmxHostApi,
   type HelmxPluginContext,
@@ -141,47 +142,36 @@ export function inspectBoardWalLines(
 export interface InflightSubmissionMarker {
   requestId: string
   baseCompletionSeq: number
-  baseLastEntryId: number
 }
 
 export type InflightIntentStatus = 'missing_conv' | 'active' | 'settled' | 'uncommitted'
 
 /**
  * 统一对账在途提交意图（唤醒 / 续催 / 主控汇总共用）：
- * - active：会话正在跑（含阻塞待审批），提交已生效；
- * - settled：completionSeq 已推进或时间线已出现同 requestId 的 helmx.input（涵盖 HelmxStore 未及刷盘的强杀窗口）；
- * - uncommitted：尚未进入时间线，可安全释放水位并幂等重投。
+ * 仅以内核持久提交表（pi_submissions）中 (conversationId, requestId) 的权威记录为准，
+ * 绝不凭无关回合的 working/blocked 状态或 completionSeq 推进猜测提交是否生效：
+ * - missing_conv：目标会话不存在；
+ * - active：该 requestId 已被内核受理且处于 queued / placed 在途状态；
+ * - settled：该 requestId 已达 done / unanswered 终态；
+ * - uncommitted：内核未找到该 requestId 提交记录，可安全释放水位并幂等重投。
  */
 export async function classifyInflightIntent(
-  host: Pick<HelmxHostApi, 'getConversationDetail'>,
+  host: Pick<HelmxHostApi, 'getConversationSubmission'>,
   conversationId: number,
   summary: ConversationSummary | undefined,
-  intent: InflightSubmissionMarker,
+  intent: Pick<InflightSubmissionMarker, 'requestId'>,
 ): Promise<InflightIntentStatus> {
   if (summary === undefined) return 'missing_conv'
-  if (summary.status === 'working' || summary.status === 'blocked') return 'active'
-  if (summary.completionSeq > intent.baseCompletionSeq) return 'settled'
-  if ((summary.lastEntryId ?? 0) <= intent.baseLastEntryId) return 'uncommitted'
-
-  let detailEntries: ConversationEntry[]
+  let submission: ConversationSubmissionInfo | undefined
   try {
-    const detail = await host.getConversationDetail(conversationId, { limit: 50 })
-    detailEntries = detail.entries
+    submission = await host.getConversationSubmission(conversationId, intent.requestId)
   } catch (err) {
     if (err instanceof HelmxError && err.code === 'not_found') return 'missing_conv'
     throw err
   }
-  const hasMatchingInput = detailEntries.some(
-    (entry) =>
-      entry.kind === 'helmx.input' &&
-      isJsonObject(entry.data) &&
-      entry.data['id'] === intent.requestId,
-  )
-  if (hasMatchingInput) return 'settled'
-  if (detailEntries.length === 50 && Number(detailEntries[0]?.id ?? 0) > intent.baseLastEntryId) {
-    return 'settled'
-  }
-  return 'uncommitted'
+  if (submission === undefined) return 'uncommitted'
+  if (submission.status === 'queued' || submission.status === 'placed') return 'active'
+  return 'settled'
 }
 
 export type MemberSettledClassification =

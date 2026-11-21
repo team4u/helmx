@@ -22,6 +22,7 @@ import {
   type ConversationInputResult,
   type ConversationListFilter,
   type ConversationPatch,
+  type ConversationSubmissionInfo,
   type ConversationSummary,
   type ConversationWithdrawResponse,
   type ConversationInput,
@@ -691,6 +692,11 @@ export class KernelRuntime {
   /** Fetch a single redacted timeline entry untruncated (`GET /api/conversations/:id/entries/:entryId`). */
   getConversationEntry(id: number, entryId: number): Promise<ConversationEntry> {
     return this.conversations.getConversationEntry(id, entryId)
+  }
+
+  /** Read-only authoritative lookup of a durable submission by `(conversationId, requestId)`. */
+  getConversationSubmission(id: number, requestId: string): Promise<ConversationSubmissionInfo | undefined> {
+    return this.conversations.getConversationSubmission(id, requestId)
   }
 
   /** read a file strictly inside conversation's bound workspace (text files are redacted via SecretStash). */

@@ -316,9 +316,8 @@ const inflightWakeupIntentSchema: Record<string, unknown> = {
     fromSeq: { type: 'number' },
     toSeq: { type: 'number' },
     baseCompletionSeq: { type: 'number' },
-    baseLastEntryId: { type: 'number' },
   },
-  required: ['requestId', 'fromSeq', 'toSeq', 'baseCompletionSeq', 'baseLastEntryId'],
+  required: ['requestId', 'fromSeq', 'toSeq', 'baseCompletionSeq'],
   additionalProperties: false,
 }
 
@@ -328,9 +327,8 @@ const inflightNudgeIntentSchema: Record<string, unknown> = {
     requestId: { type: 'string' },
     taskSeq: { type: 'number' },
     baseCompletionSeq: { type: 'number' },
-    baseLastEntryId: { type: 'number' },
   },
-  required: ['requestId', 'taskSeq', 'baseCompletionSeq', 'baseLastEntryId'],
+  required: ['requestId', 'taskSeq', 'baseCompletionSeq'],
   additionalProperties: false,
 }
 

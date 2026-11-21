@@ -31,10 +31,12 @@ import {
   diagnoseStallRootCause,
   evaluateGroupQuiescence,
   evaluateSilentExit,
+  findIdleCatchupAnchorPost,
   resolveBoardTargets,
   resolveDefaultWake,
   resolvePostChannel,
   resolveSwarmConfig,
+  shouldFlushCoordinatorReport,
   synthesizeBoardView,
   type BoardPost,
   type CollabGroupRecord,
@@ -47,7 +49,11 @@ import {
   formatWorkerWakeupEnvelope,
   selectPostsForMemberWakeup,
 } from '../src/swarm/board-router.js'
-import { classifyMemberDetailOutcome, inspectBoardWalLines } from '../src/swarm/recovery.js'
+import {
+  classifyInflightIntent,
+  classifyMemberDetailOutcome,
+  inspectBoardWalLines,
+} from '../src/swarm/recovery.js'
 import { lastAssistantText } from '../src/entry-text.js'
 
 function makeMember(over: Partial<GroupMemberState> = {}): GroupMemberState {
@@ -660,16 +666,17 @@ test('swarm-unit7: inspectBoardWalLines trims single uncommitted tail or truncat
   )
 })
 
-test('swarm-unit8: recovery metadata validation and classifyMemberDetailOutcome', { timeout: 60_000 }, () => {
+test('swarm-unit8: recovery metadata validation, authoritative classifyInflightIntent, and classifyMemberDetailOutcome', { timeout: 60_000 }, async () => {
   const validWithInflight = makeGroup({
     headSeq: 1,
     createKey: '1:call-create-1',
+    lastReportHadActiveWorkers: true,
     inflightReport: {
       requestId: 'swarm-report:grp_test_1:1-1',
       fromSeq: 1,
       toSeq: 1,
       baseCompletionSeq: 2,
-      baseLastEntryId: 8,
+      hadActiveWorkers: true,
     },
     members: [
       makeMember({
@@ -680,18 +687,17 @@ test('swarm-unit8: recovery metadata validation and classifyMemberDetailOutcome'
           fromSeq: 1,
           toSeq: 1,
           baseCompletionSeq: 0,
-          baseLastEntryId: 0,
         },
         inflightNudge: {
           requestId: 'swarm-nudge:grp_test_1:author:1',
           taskSeq: 1,
           baseCompletionSeq: 1,
-          baseLastEntryId: 5,
         },
       }),
     ],
   })
   assert.equal(assertCollabGroupRecord(validWithInflight).createKey, '1:call-create-1')
+  assert.equal(assertCollabGroupRecord(validWithInflight).lastReportHadActiveWorkers, true)
   assert.equal(assertBoardPost(makePost(1, { idempotencyKey: '1:call-post-1' })).idempotencyKey, '1:call-post-1')
 
   // Reject reversed range in inflightWakeup
@@ -706,13 +712,114 @@ test('swarm-unit8: recovery metadata validation and classifyMemberDetailOutcome'
                 fromSeq: 3,
                 toSeq: 1,
                 baseCompletionSeq: 0,
-                baseLastEntryId: 0,
               },
             }),
           ],
         }),
       ),
     (err: unknown) => err instanceof HelmxError && err.code === 'swarm_doc_corrupt',
+  )
+
+  // Reject invalid inflightReport.hadActiveWorkers / lastReportHadActiveWorkers
+  assert.throws(
+    () =>
+      assertCollabGroupRecord({
+        ...makeGroup({ headSeq: 1 }),
+        inflightReport: {
+          requestId: 'swarm-report:grp_test_1:1-1',
+          fromSeq: 1,
+          toSeq: 1,
+          baseCompletionSeq: 0,
+        },
+      }),
+    (err: unknown) => err instanceof HelmxError && err.code === 'swarm_doc_corrupt',
+  )
+  assert.throws(
+    () =>
+      assertCollabGroupRecord({
+        ...makeGroup({ headSeq: 1 }),
+        lastReportHadActiveWorkers: 'yes',
+      }),
+    (err: unknown) => err instanceof HelmxError && err.code === 'swarm_doc_corrupt',
+  )
+
+  // Authoritative classifyInflightIntent: ignores unrelated working status or advanced completionSeq
+  const workingSummary = {
+    id: 1,
+    title: 'Coord',
+    profileId: 'assistant',
+    nodeId: 'local',
+    cwd: '/tmp',
+    model: 'faux/faux-1',
+    thinkingLevel: 'off' as const,
+    unread: false,
+    pinned: false,
+    pendingAskCount: 0,
+    status: 'working' as const,
+    tags: [],
+    createdAt: 1,
+    updatedAt: 2,
+    stateChangeSeq: 5,
+    completionSeq: 99,
+    lastEntryId: 200,
+  }
+  assert.equal(
+    await classifyInflightIntent(
+      { getConversationSubmission: async () => undefined },
+      1,
+      workingSummary,
+      { requestId: 'swarm-report:grp_test_1:1-3' },
+    ),
+    'uncommitted',
+  )
+  assert.equal(
+    await classifyInflightIntent(
+      { getConversationSubmission: async () => ({ id: '10', requestId: 'swarm-report:grp_test_1:1-3', status: 'queued' }) },
+      1,
+      { ...workingSummary, status: 'idle' },
+      { requestId: 'swarm-report:grp_test_1:1-3' },
+    ),
+    'active',
+  )
+  assert.equal(
+    await classifyInflightIntent(
+      { getConversationSubmission: async () => ({ id: '11', requestId: 'swarm-report:grp_test_1:1-3', status: 'placed' }) },
+      1,
+      workingSummary,
+      { requestId: 'swarm-report:grp_test_1:1-3' },
+    ),
+    'active',
+  )
+  assert.equal(
+    await classifyInflightIntent(
+      { getConversationSubmission: async () => ({ id: '12', requestId: 'swarm-report:grp_test_1:1-3', status: 'done' }) },
+      1,
+      { ...workingSummary, status: 'idle' },
+      { requestId: 'swarm-report:grp_test_1:1-3' },
+    ),
+    'settled',
+  )
+  assert.equal(
+    await classifyInflightIntent(
+      { getConversationSubmission: async () => ({ id: '13', requestId: 'swarm-report:grp_test_1:1-3', status: 'unanswered' }) },
+      1,
+      { ...workingSummary, status: 'idle' },
+      { requestId: 'swarm-report:grp_test_1:1-3' },
+    ),
+    'settled',
+  )
+  assert.equal(
+    await classifyInflightIntent(
+      {
+        getConversationSubmission: async () => {
+          throw new HelmxError('not_found', 'missing', 404)
+        },
+      },
+      1,
+      workingSummary,
+      { requestId: 'swarm-report:grp_test_1:1-3' },
+    ),
+    'missing_conv',
   )
 
   const member = makeMember({ name: 'author', lastWakeTaskSeq: 2, lastWakeCompletionSeq: 1 })
@@ -762,5 +869,121 @@ test('swarm-unit8: recovery metadata validation and classifyMemberDetailOutcome'
       member,
     ),
     { kind: 'pending_queue' },
+  )
+})
+
+test('swarm-unit9: tiered coordinator flush gating, orthogonal done stall fallback, and idle catch-up anchor past comments', { timeout: 60_000 }, () => {
+  const twoMembers = [
+    makeMember({ name: 'fast', conversationId: 11, readCursorSeq: 2, pendingWakeupSeq: 1, lastPostSeq: 2 }),
+    makeMember({ name: 'slow', conversationId: 12, readCursorSeq: 1, pendingWakeupSeq: 1 }),
+  ]
+
+  // 1) done waits for other busy workers (join point avoids coordinator turn storms)
+  const doneGroup = makeGroup({
+    headSeq: 2,
+    coordinatorPendingSeq: 2,
+    coordinatorNotifiedSeq: 0,
+    members: twoMembers,
+  })
+  const donePosts = [
+    makePost(1, { from: 'coordinator', to: ['fast'], resolvedTargets: ['fast'], wake: true, kind: 'brief' }),
+    makePost(2, { from: 'fast', to: ['coordinator'], resolvedTargets: ['coordinator'], wake: true, kind: 'done' }),
+  ]
+  assert.equal(
+    shouldFlushCoordinatorReport({ group: doneGroup, posts: donePosts, busyMemberNames: new Set(['slow']) }),
+    false,
+  )
+  assert.equal(
+    shouldFlushCoordinatorReport({ group: doneGroup, posts: donePosts, busyMemberNames: new Set() }),
+    true,
+  )
+
+  // 2) coordinator-only review/handoff/brief bypasses other busy workers once sender is idle,
+  //    but defers while sender itself is still finishing its turn; multi-target CC waits for peers
+  const reviewPosts = [
+    makePost(1, { from: 'coordinator', to: ['fast'], resolvedTargets: ['fast'], wake: true, kind: 'brief' }),
+    makePost(2, { from: 'fast', to: ['coordinator'], resolvedTargets: ['coordinator'], wake: true, kind: 'review' }),
+  ]
+  assert.equal(
+    shouldFlushCoordinatorReport({ group: doneGroup, posts: reviewPosts, busyMemberNames: new Set(['fast', 'slow']) }),
+    false,
+  )
+  assert.equal(
+    shouldFlushCoordinatorReport({ group: doneGroup, posts: reviewPosts, busyMemberNames: new Set(['slow']) }),
+    true,
+  )
+  const ccPosts = [
+    makePost(1, { from: 'coordinator', to: ['fast'], resolvedTargets: ['fast'], wake: true, kind: 'brief' }),
+    makePost(2, {
+      from: 'fast',
+      to: ['slow', 'coordinator'],
+      resolvedTargets: ['slow', 'coordinator'],
+      wake: true,
+      kind: 'handoff',
+    }),
+  ]
+  assert.equal(
+    shouldFlushCoordinatorReport({ group: doneGroup, posts: ccPosts, busyMemberNames: new Set(['slow']) }),
+    false,
+  )
+
+  // 3) blocker / stall bypass ALL busy workers (even sender)
+  const blockerPosts = [
+    makePost(1, { from: 'coordinator', to: ['fast'], resolvedTargets: ['fast'], wake: true, kind: 'brief' }),
+    makePost(2, { from: 'fast', to: ['coordinator'], resolvedTargets: ['coordinator'], wake: false, kind: 'blocker' }),
+  ]
+  assert.equal(
+    shouldFlushCoordinatorReport({ group: doneGroup, posts: blockerPosts, busyMemberNames: new Set(['fast', 'slow']) }),
+    true,
+  )
+
+  // 4) Un-notified done (wake=false or peer-only) triggers 0-Token [stall] guard instead of deadlocking
+  const unwokenDoneGroup = makeGroup({
+    headSeq: 2,
+    coordinatorPendingSeq: 0,
+    coordinatorNotifiedSeq: 0,
+    members: [makeMember({ name: 'fast', conversationId: 11, readCursorSeq: 2, pendingWakeupSeq: 1, lastPostSeq: 2 })],
+  })
+  const unwokenDonePosts = [
+    makePost(1, { from: 'coordinator', to: ['fast'], resolvedTargets: ['fast'], wake: true, kind: 'brief' }),
+    makePost(2, { from: 'fast', to: ['coordinator'], resolvedTargets: ['coordinator'], wake: false, kind: 'done' }),
+  ]
+  const stallVerdict = evaluateGroupQuiescence({
+    group: unwokenDoneGroup,
+    posts: unwokenDonePosts,
+    hasInflightDeliveries: false,
+    coordinatorState: { exists: true, liveState: 'idle' },
+    memberSnapshots: [{ name: 'fast', liveState: 'idle', completionSeq: 2, isSettling: false }],
+  })
+  assert.equal(stallVerdict.shouldEmitStall, true)
+
+  const notifiedDoneVerdict = evaluateGroupQuiescence({
+    group: { ...unwokenDoneGroup, coordinatorPendingSeq: 2, coordinatorNotifiedSeq: 2 },
+    posts: [
+      unwokenDonePosts[0]!,
+      makePost(2, { from: 'fast', to: ['coordinator'], resolvedTargets: ['coordinator'], wake: true, kind: 'done' }),
+    ],
+    hasInflightDeliveries: false,
+    coordinatorState: { exists: true, liveState: 'idle' },
+    memberSnapshots: [{ name: 'fast', liveState: 'idle', completionSeq: 2, isSettling: false }],
+  })
+  assert.equal(notifiedDoneVerdict.shouldEmitStall, false)
+
+  // 5) findIdleCatchupAnchorPost sees past trailing passive comments, but rejects un-notified done
+  const catchupGroup = makeGroup({
+    headSeq: 3,
+    coordinatorPendingSeq: 2,
+    coordinatorNotifiedSeq: 2,
+    lastReportHadActiveWorkers: true,
+  })
+  const postsWithTrailingComment = [
+    makePost(1, { from: 'coordinator', to: ['fast'], resolvedTargets: ['fast'], wake: true, kind: 'brief' }),
+    makePost(2, { from: 'fast', to: ['coordinator'], resolvedTargets: ['coordinator'], wake: true, kind: 'done' }),
+    makePost(3, { from: 'slow', to: ['coordinator'], resolvedTargets: ['coordinator'], wake: false, kind: 'comment' }),
+  ]
+  assert.equal(findIdleCatchupAnchorPost(catchupGroup, postsWithTrailingComment)?.seq, 2)
+  assert.equal(
+    findIdleCatchupAnchorPost({ ...catchupGroup, coordinatorPendingSeq: 0, coordinatorNotifiedSeq: 0 }, postsWithTrailingComment),
+    undefined,
   )
 })

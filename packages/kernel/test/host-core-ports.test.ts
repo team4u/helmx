@@ -800,6 +800,7 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
         const sawManifest = JSON.stringify(context.messages).includes('[Attached Files]')
         return fauxAssistantMessage(sawManifest ? 'ATTACHMENT_MANIFEST_SEEN' : 'ATTACHMENT_MANIFEST_MISSING')
       },
+      () => fauxAssistantMessage('SUBMISSION_PROBE_DONE'),
     ])
     const runtime = await KernelRuntime.open({
       buildProvider: createPluginBuildProvider(),
@@ -909,6 +910,24 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
       await runtime.deleteConversation(other.id)
       await assert.rejects(
         () => realHost!.createArtifact(other.id, { name: 'late.txt', bytes: new TextEncoder().encode('x') }),
+        (err: unknown) => err instanceof HelmxError && err.status === 404 && err.code === 'not_found',
+      )
+
+      // Durable submission lookup by requestId: uncommitted -> undefined, committed -> done, bad requestId -> 400, missing conv -> 404.
+      const reqId = 'host-core-ports:req-1'
+      assert.equal(await realHost!.getConversationSubmission(conv.id, reqId), undefined)
+      await realHost!.submitInput(conv.id, 'submission probe', { origin: 'agent', requestId: reqId })
+      await runtime.waitForIdle(conv.id)
+      const subInfo = await realHost!.getConversationSubmission(conv.id, reqId)
+      assert.ok(subInfo !== undefined, 'committed requestId must be found in pi_submissions')
+      assert.equal(subInfo.requestId, reqId)
+      assert.equal(subInfo.status, 'done')
+      await assert.rejects(
+        () => realHost!.getConversationSubmission(conv.id, '   '),
+        (err: unknown) => err instanceof HelmxError && err.status === 400 && err.code === 'validation_error',
+      )
+      await assert.rejects(
+        () => realHost!.getConversationSubmission(other.id, reqId),
         (err: unknown) => err instanceof HelmxError && err.status === 404 && err.code === 'not_found',
       )
 

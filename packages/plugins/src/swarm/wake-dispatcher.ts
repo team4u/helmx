@@ -6,8 +6,8 @@
  *    选择帖子并经 submitInputGuarded 投递，失败仅记录诊断不中断调度；
  * 2) 主控汇总：COORDINATOR_BATCH_WINDOW_MS 微批窗口合并上报，同组单飞 + 冲刷期重检循环防丢批，
  *    含全员空闲补发（idle catchup）；
- * 3) 报告水位：lastCoordReportCompletionSeq / coordReportSawActiveWorkers 由本模块独占维护，
- *    供静默守卫与重启恢复对账读取。
+ * 3) 报告水位：lastCoordReportCompletionSeq 由本模块独占维护（供同回合防连发与重启恢复对账）；
+ *    lastReportHadActiveWorkers 持久化在组 meta.json 中，重启后仍可准确补发全员空闲确认。
  *
  * 并发不变量与拆分前逐字等价：inflightWakeups / scheduledReports 覆盖整个微批等待窗口与
  * 实际投递过程（liveTasks 零间隙）；stopAndClear 经 drain() 先 cancel 再 allSettled 排空。
@@ -24,16 +24,18 @@ import {
   type SwarmCoordinator,
 } from './contracts.js'
 import {
+  findIdleCatchupAnchorPost,
   formatCoordinatorReportEnvelope,
   formatWorkerWakeupEnvelope,
   selectPostsForCoordinatorReport,
   selectPostsForMemberWakeup,
+  shouldFlushCoordinatorReport,
   synthesizeBoardView,
 } from './board-router.js'
 
 interface ScheduledReportEntry {
   readonly promise: Promise<void>
-  trigger(delayMs: number): void
+  trigger(delayMs: number, excludeSettlingConvId?: number): void
   cancel(): void
 }
 
@@ -56,7 +58,7 @@ export interface WakeDispatcherPorts {
   readonly reportLockPath: (groupId: string) => string
   readonly wakeupLockPath: (groupId: string, memberName: string) => string
   readonly resolveMemberLive: (conversationId: number) => { liveState: MemberLiveState; model?: string }
-  readonly hasOtherWorkingOrSettlingMember: (group: CollabGroupRecord, excludeConvId?: number) => boolean
+  readonly getBusyActiveMemberNames: (group: CollabGroupRecord, excludeConvId?: number) => Set<string>
 }
 
 /** 对等唤醒投递与主控报告调度能力（由 group-store 组合根装配后使用）。 */
@@ -86,8 +88,6 @@ export function createWakeDispatcher(ports: WakeDispatcherPorts): WakeDispatcher
   const scheduledReports = new Map<string, ScheduledReportEntry>()
   /** 主控最近一次发出的 board-report 对应的发送前 completionSeq（防同回合连发）。 */
   const lastCoordReportCompletionSeq = new Map<string, number>()
-  /** 标记某组最近一次向主控发出的报告时是否仍存在 activeWorkingMembers。 */
-  const coordReportSawActiveWorkers = new Map<string, boolean>()
 
   const hasInflightWakeupsForGroup = (groupId: string): boolean => {
     const prefix = `${groupId}:`
@@ -150,7 +150,6 @@ export function createWakeDispatcher(ports: WakeDispatcherPorts): WakeDispatcher
     })
     const requestId = `swarm-wakeup:${groupId}:${memberName}:${fromSeq}-${toSeq}`
     const baseCompletionSeq = summary.completionSeq
-    const baseLastEntryId = summary.lastEntryId ?? 0
 
     await ports.mutateGroup(groupId, (draft) => {
       const target = draft.members.find((m) => m.name === memberName)
@@ -160,7 +159,6 @@ export function createWakeDispatcher(ports: WakeDispatcherPorts): WakeDispatcher
           fromSeq,
           toSeq,
           baseCompletionSeq,
-          baseLastEntryId,
         }
       }
       return { group: draft, result: undefined }
@@ -269,15 +267,13 @@ export function createWakeDispatcher(ports: WakeDispatcherPorts): WakeDispatcher
     return promise
   }
 
-  /** 判定组是否需要向主控补发全员已空闲汇总（之前上报曾含 activeWorkingMembers，现全员 idle 且最新帖为 done）。 */
+  /** 判定组是否需要向主控补发全员已空闲汇总（持久标记曾含 activeWorkingMembers，现全员 idle 且最新有效非 comment 帖为已通知 done）。 */
   const shouldSendCoordinatorIdleCatchup = (group: CollabGroupRecord, excludeSettlingConvId?: number): boolean => {
-    if (coordReportSawActiveWorkers.get(group.id) !== true) return false
-    if (ports.hasOtherWorkingOrSettlingMember(group, excludeSettlingConvId)) return false
+    if (group.lastReportHadActiveWorkers !== true) return false
+    if (ports.getBusyActiveMemberNames(group, excludeSettlingConvId).size > 0) return false
     if (hasInflightWakeupsForGroup(group.id)) return false
-    if (group.members.some((m) => m.lifecycle === 'active' && m.pendingWakeupSeq > m.readCursorSeq)) return false
     const allPosts = ports.getPosts(group.id) ?? []
-    const latestPost = allPosts[allPosts.length - 1]
-    return latestPost?.kind === 'done'
+    return findIdleCatchupAnchorPost(group, allPosts) !== undefined
   }
 
   /** 执行主控汇总报告组装与投递（在 scheduledReports 单飞保护内执行）。 */
@@ -290,9 +286,17 @@ export function createWakeDispatcher(ports: WakeDispatcherPorts): WakeDispatcher
     const group = ports.getGroup(groupId)
     if (group === undefined || group.status !== 'active' || group.coordinatorDetached === true) return
 
+    const allPosts = ports.getPosts(groupId) ?? []
     const hasPendingPosts = group.coordinatorPendingSeq > group.coordinatorNotifiedSeq
+    const canFlushPending =
+      hasPendingPosts &&
+      shouldFlushCoordinatorReport({
+        group,
+        posts: allPosts,
+        busyMemberNames: ports.getBusyActiveMemberNames(group, excludeSettlingConvId),
+      })
     const isIdleCatchup = !hasPendingPosts && shouldSendCoordinatorIdleCatchup(group, excludeSettlingConvId)
-    if (!hasPendingPosts && !isIdleCatchup) return
+    if (!canFlushPending && !isIdleCatchup) return
 
     const coordSummary = coord.readConversationOrUndefined(group.coordinatorConversationId)
     if (coordSummary === undefined) {
@@ -313,13 +317,12 @@ export function createWakeDispatcher(ports: WakeDispatcherPorts): WakeDispatcher
       return
     }
 
-    const allPosts = ports.getPosts(groupId) ?? []
     let fromSeq: number
     let toSeq: number
     let selected: BoardPost[]
     let requestId: string
 
-    if (hasPendingPosts) {
+    if (canFlushPending) {
       fromSeq = group.coordinatorNotifiedSeq + 1
       toSeq = group.coordinatorPendingSeq
       selected = selectPostsForCoordinatorReport(allPosts, fromSeq, toSeq)
@@ -332,11 +335,12 @@ export function createWakeDispatcher(ports: WakeDispatcherPorts): WakeDispatcher
       }
       requestId = `swarm-report:${groupId}:${fromSeq}-${toSeq}`
     } else {
-      const latestPost = allPosts[allPosts.length - 1]
-      if (latestPost === undefined) return
-      fromSeq = latestPost.seq
+      const anchorPost = findIdleCatchupAnchorPost(group, allPosts)
+      if (anchorPost === undefined) return
+      fromSeq = anchorPost.seq
       toSeq = group.headSeq
-      selected = [latestPost]
+      selected = selectPostsForCoordinatorReport(allPosts, fromSeq, toSeq)
+      if (selected.length === 0) selected = [anchorPost]
       requestId = `swarm-report-idle:${groupId}:${group.headSeq}:${coordSummary.completionSeq}`
     }
 
@@ -354,7 +358,7 @@ export function createWakeDispatcher(ports: WakeDispatcherPorts): WakeDispatcher
       activeWorkingMembers: view.activeWorkingMembers,
     })
     const baseCompletionSeq = coordSummary.completionSeq
-    const baseLastEntryId = coordSummary.lastEntryId ?? 0
+    const hadActiveWorkers = view.activeWorkingMembers.length > 0
     const meta = {
       renderer: BOARD_REPORT_RENDERER,
       groupId,
@@ -370,36 +374,28 @@ export function createWakeDispatcher(ports: WakeDispatcherPorts): WakeDispatcher
         fromSeq,
         toSeq,
         baseCompletionSeq,
-        baseLastEntryId,
+        hadActiveWorkers,
       }
       return { group: draft, result: undefined }
     })
     lastCoordReportCompletionSeq.set(groupId, baseCompletionSeq)
     try {
-      const ownership = ports.ctx.host.getConversationOwnership(group.coordinatorConversationId)
-      if (ownership === 'helmx' || ownership === 'bot') {
-        await ports.ctx.host.submitInputGuarded(
-          group.coordinatorConversationId,
-          envelope,
-          { origin: 'agent', whenBusy: 'followUp', requestId, meta },
-          { expectedOwnership: ownership },
-        )
-      } else {
-        await ports.ctx.host.submitInput(group.coordinatorConversationId, envelope, {
-          origin: 'agent',
-          whenBusy: 'followUp',
-          requestId,
-          meta,
-        })
-      }
-      if (view.activeWorkingMembers.length > 0) {
-        coordReportSawActiveWorkers.set(groupId, true)
-      } else {
-        coordReportSawActiveWorkers.delete(groupId)
-      }
+      // 协作组主控恒为顶层人类会话（建组门禁保证）；汇总属人类显式建组委托的 followUp 回调，
+      // 经 submitInput 排队投递（不打断人类当前回合，不发送终端按键）。
+      await ports.ctx.host.submitInput(group.coordinatorConversationId, envelope, {
+        origin: 'agent',
+        whenBusy: 'followUp',
+        requestId,
+        meta,
+      })
       await ports.mutateGroup(groupId, (draft) => {
-        if (hasPendingPosts) {
+        if (canFlushPending) {
           draft.coordinatorNotifiedSeq = Math.max(draft.coordinatorNotifiedSeq, toSeq)
+        }
+        if (hadActiveWorkers) {
+          draft.lastReportHadActiveWorkers = true
+        } else {
+          delete draft.lastReportHadActiveWorkers
         }
         delete draft.inflightReport
         return { group: draft, result: undefined }
@@ -438,21 +434,26 @@ export function createWakeDispatcher(ports: WakeDispatcherPorts): WakeDispatcher
     }
     const existing = scheduledReports.get(groupId)
     if (existing !== undefined) {
-      existing.trigger(delayMs)
+      existing.trigger(delayMs, excludeSettlingConvId)
       return existing.promise
     }
 
     let state: 'waiting' | 'flushing' | 'cancelled' = delayMs > 0 ? 'waiting' : 'flushing'
     let timer: NodeJS.Timeout | undefined
     let resolveWait: ((mode: 'flush' | 'cancel') => void) | undefined
+    let activeExcludeSettlingConvId: number | undefined = excludeSettlingConvId
     let pendingRescheduleMs: number | undefined
+    let pendingExcludeSettlingConvId: number | undefined
 
     const isCancelled = (): boolean => state === 'cancelled' || ports.isStopping()
     const readState = (): 'waiting' | 'flushing' | 'cancelled' => state
-    const consumePendingReschedule = (): number | undefined => {
-      const value = pendingRescheduleMs
+    const consumePendingReschedule = (): { delayMs: number; excludeSettlingConvId?: number } | undefined => {
+      if (pendingRescheduleMs === undefined) return undefined
+      const delay = pendingRescheduleMs
+      const exclude = pendingExcludeSettlingConvId
       pendingRescheduleMs = undefined
-      return value
+      pendingExcludeSettlingConvId = undefined
+      return { delayMs: delay, ...(exclude !== undefined ? { excludeSettlingConvId: exclude } : {}) }
     }
 
     const wakeWaiter = (mode: 'flush' | 'cancel'): void => {
@@ -491,22 +492,27 @@ export function createWakeDispatcher(ports: WakeDispatcherPorts): WakeDispatcher
             }
             state = 'flushing'
             pendingRescheduleMs = undefined
-            await executeCoordinatorReportFlush(groupId, excludeSettlingConvId)
+            pendingExcludeSettlingConvId = undefined
+            await executeCoordinatorReportFlush(groupId, activeExcludeSettlingConvId)
             if (isCancelled()) return
             const rescheduled = consumePendingReschedule()
             if (rescheduled === undefined) break
             const current = ports.getGroup(groupId)
-            if (
-              current === undefined ||
-              current.status !== 'active' ||
-              current.coordinatorDetached === true ||
-              (current.coordinatorPendingSeq <= current.coordinatorNotifiedSeq &&
-                !shouldSendCoordinatorIdleCatchup(current, excludeSettlingConvId))
-            ) {
+            const currentPosts = ports.getPosts(groupId) ?? []
+            const canFlushMore =
+              current !== undefined &&
+              (shouldFlushCoordinatorReport({
+                group: current,
+                posts: currentPosts,
+                busyMemberNames: ports.getBusyActiveMemberNames(current, rescheduled.excludeSettlingConvId),
+              }) ||
+                shouldSendCoordinatorIdleCatchup(current, rescheduled.excludeSettlingConvId))
+            if (!canFlushMore) {
               break
             }
-            state = rescheduled > 0 ? 'waiting' : 'flushing'
-            nextDelay = rescheduled
+            activeExcludeSettlingConvId = rescheduled.excludeSettlingConvId
+            state = rescheduled.delayMs > 0 ? 'waiting' : 'flushing'
+            nextDelay = rescheduled.delayMs
           }
         }),
       )
@@ -527,9 +533,12 @@ export function createWakeDispatcher(ports: WakeDispatcherPorts): WakeDispatcher
 
     entryRef = {
       promise,
-      trigger: (requestedDelayMs: number) => {
+      trigger: (requestedDelayMs: number, nextExcludeSettlingConvId?: number) => {
         if (state === 'cancelled') return
         if (state === 'waiting') {
+          if (nextExcludeSettlingConvId !== undefined) {
+            activeExcludeSettlingConvId = nextExcludeSettlingConvId
+          }
           if (requestedDelayMs <= 0) {
             state = 'flushing'
             wakeWaiter('flush')
@@ -540,10 +549,14 @@ export function createWakeDispatcher(ports: WakeDispatcherPorts): WakeDispatcher
           pendingRescheduleMs === undefined
             ? requestedDelayMs
             : Math.min(pendingRescheduleMs, requestedDelayMs)
+        if (nextExcludeSettlingConvId !== undefined) {
+          pendingExcludeSettlingConvId = nextExcludeSettlingConvId
+        }
       },
       cancel: () => {
         state = 'cancelled'
         pendingRescheduleMs = undefined
+        pendingExcludeSettlingConvId = undefined
         wakeWaiter('cancel')
       },
     }
@@ -587,13 +600,11 @@ export function createWakeDispatcher(ports: WakeDispatcherPorts): WakeDispatcher
     },
 
     forgetGroupReportState(groupId: string): void {
-      coordReportSawActiveWorkers.delete(groupId)
       lastCoordReportCompletionSeq.delete(groupId)
     },
 
     resetWatermarks(): void {
       lastCoordReportCompletionSeq.clear()
-      coordReportSawActiveWorkers.clear()
     },
 
     async drain(): Promise<void> {
@@ -607,7 +618,6 @@ export function createWakeDispatcher(ports: WakeDispatcherPorts): WakeDispatcher
       scheduledReports.clear()
       inflightWakeups.clear()
       lastCoordReportCompletionSeq.clear()
-      coordReportSawActiveWorkers.clear()
     },
   }
 

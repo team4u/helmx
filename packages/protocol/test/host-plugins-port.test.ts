@@ -23,6 +23,7 @@ import type {
   PluginToolSpec,
   PluginUpdateResult,
   ArtifactMetadata,
+  ConversationSubmissionInfo,
   GuardedMutationExpectation,
 } from '@helmx/protocol'
 
@@ -145,8 +146,12 @@ test('HelmxHostApi.createArtifact and submitInput attachments (compile-time shap
     (conversationId: number, text: string, opts?: { attachments?: string[] } | undefined, guard?: GuardedMutationExpectation | undefined) => Promise<void>
     ? true
     : false
-  const typeLocks: [CreateArtifactOk, SubmitAttachments, GuardedAttachments] = [true, true, true]
-  assert.deepEqual(typeLocks, [true, true, true])
+  type SubmissionLookup = HelmxHostApi['getConversationSubmission'] extends
+    (id: number, requestId: string) => Promise<ConversationSubmissionInfo | undefined>
+    ? true
+    : false
+  const typeLocks: [CreateArtifactOk, SubmitAttachments, GuardedAttachments, SubmissionLookup] = [true, true, true, true]
+  assert.deepEqual(typeLocks, [true, true, true, true])
 
   // Runtime spot check: the shared protocol artifact metadata model rides the created result.
   const sample: ReturnType<CreateArtifact> = Promise.resolve({

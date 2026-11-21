@@ -6,6 +6,8 @@
  */
 import { HelmxError, escapeXml } from '@helmx/protocol'
 import {
+  ACTIONABLE_WAKE_KINDS,
+  COORDINATOR_ESCALATION_KINDS,
   SWARM_PLUGIN_ID,
   toGroupSummary,
   type BoardBadgeEntry,
@@ -227,6 +229,71 @@ export function selectPostsForCoordinatorReport(
   toSeq: number,
 ): BoardPost[] {
   return posts.filter((p) => p.seq >= fromSeq && p.seq <= toSeq && p.from !== 'coordinator')
+}
+
+/**
+ * 主控汇总分级门控纯函数（appendPost / onMemberTurnSettled / onCoordinatorTurnSettled / 重启恢复共用）：
+ * 1) 无忙碌活跃成员（busyMemberNames 为空）：全部待发汇报（含 done 与多目标抄送）合并冲刷；
+ * 2) 待发区间含故障/静默升级帖（blocker / stall）：无视任何忙碌成员立即直投；
+ * 3) 待发区间含定向主控的行动唤醒（brief / handoff / review，wake=true，resolvedTargets 含 coordinator
+ *    且不含任何其他活跃成员）：绕过其他长回合成员直投，仅待发帖成员自身退出忙碌态（防 50ms 尾声文本竞态）；
+ * 4) 其余（done 汇合点及同时唤醒其他活跃成员的抄送帖）：等待全组空闲合并上报，避免主控重复空转。
+ */
+export function shouldFlushCoordinatorReport(input: {
+  group: CollabGroupRecord
+  posts: readonly BoardPost[]
+  busyMemberNames: ReadonlySet<string>
+}): boolean {
+  const { group, posts, busyMemberNames } = input
+  if (group.status !== 'active' || group.coordinatorDetached === true) return false
+  if (group.coordinatorPendingSeq <= group.coordinatorNotifiedSeq) return false
+  if (busyMemberNames.size === 0) return true
+
+  const pendingPosts = selectPostsForCoordinatorReport(
+    posts,
+    group.coordinatorNotifiedSeq + 1,
+    group.coordinatorPendingSeq,
+  )
+  const activeNames = new Set(
+    group.members.filter((m) => m.lifecycle === 'active').map((m) => m.name),
+  )
+
+  for (const post of pendingPosts) {
+    if (COORDINATOR_ESCALATION_KINDS.has(post.kind)) return true
+    if (
+      post.wake &&
+      ACTIONABLE_WAKE_KINDS.has(post.kind) &&
+      post.resolvedTargets.includes('coordinator') &&
+      !post.resolvedTargets.some((t) => t !== 'coordinator' && activeNames.has(t)) &&
+      !busyMemberNames.has(post.from)
+    ) {
+      return true
+    }
+  }
+  return false
+}
+
+/**
+ * 查找全员空闲补发（idle catch-up）锚点帖：
+ * 忽略尾部被动 comment，仅当最后一条非 comment 有效帖为已进入并送达主控水位的 done 时返回该帖。
+ */
+export function findIdleCatchupAnchorPost(
+  group: CollabGroupRecord,
+  posts: readonly BoardPost[],
+): BoardPost | undefined {
+  for (let i = posts.length - 1; i >= 0; i -= 1) {
+    const post = posts[i]!
+    if (post.kind === 'comment') continue
+    if (
+      post.kind === 'done' &&
+      group.coordinatorPendingSeq >= post.seq &&
+      group.coordinatorNotifiedSeq >= post.seq
+    ) {
+      return post
+    }
+    return undefined
+  }
+  return undefined
 }
 
 export function formatCoordinatorReportEnvelope(input: {

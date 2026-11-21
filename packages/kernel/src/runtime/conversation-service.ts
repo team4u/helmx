@@ -18,6 +18,7 @@ import type {
   ConversationInputResult,
   ConversationListFilter,
   ConversationPatch,
+  ConversationSubmissionInfo,
   ConversationSummary,
   ConversationWithdrawResponse,
   GuardedMutationExpectation,
@@ -446,6 +447,30 @@ export class ConversationService {
   /** Fetch a single timeline entry (untruncated, already redacted; rewind visibility matches detail pagination). */
   async getConversationEntry(id: number, entryId: number): Promise<ConversationEntry> {
     return this.detailOps.getConversationEntry(id, entryId)
+  }
+
+  /** Read-only authoritative lookup of a durable submission by `(conversationId, requestId)` from `pi_submissions`. */
+  async getConversationSubmission(
+    id: number,
+    requestId: string,
+  ): Promise<ConversationSubmissionInfo | undefined> {
+    this.contextOps.assertOpen()
+    if (typeof requestId !== 'string' || requestId.trim() === '') {
+      throw new HelmxError('validation_error', 'requestId must be a non-empty string', 400)
+    }
+    requireConv(this.store, id)
+    const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
+    if (!conversation) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
+    const record = await this.harness.commit(
+      (tx) => tx.submissionByRequest(id as never, requestId),
+      BACKGROUND_CONTEXT,
+    )
+    if (record === undefined) return undefined
+    return {
+      id: String(record.id),
+      requestId: record.requestId ?? requestId,
+      status: record.status,
+    }
   }
 
   async collectRewindIntervals(

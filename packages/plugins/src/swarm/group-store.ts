@@ -42,7 +42,7 @@ import {
   type SwarmCoordinator,
   type WorktreeHandoffSnapshot,
 } from './contracts.js'
-import { synthesizeBoardView } from './board-router.js'
+import { shouldFlushCoordinatorReport, synthesizeBoardView } from './board-router.js'
 import {
   reconcileOrphanConversations,
   reconcileOrphanWorktreeHolds,
@@ -120,15 +120,24 @@ export function createCollabGroupRuntime(
     return { liveState: summary.status, model: summary.model }
   }
 
-  const hasOtherWorkingOrSettlingMember = (group: CollabGroupRecord, excludeConvId?: number): boolean => {
+  const getBusyActiveMemberNames = (group: CollabGroupRecord, excludeConvId?: number): Set<string> => {
     const coord = getCoordinator()
+    const busy = new Set<string>()
     for (const m of group.members) {
       if (m.lifecycle !== 'active' || m.conversationId === excludeConvId) continue
-      if (coord.settlingWorkers.has(m.conversationId)) return true
+      if (coord.settlingWorkers.has(m.conversationId)) {
+        busy.add(m.name)
+        continue
+      }
       const s = coord.readConversationOrUndefined(m.conversationId)
-      if (s !== undefined && (s.status === 'working' || s.status === 'blocked')) return true
+      if (
+        s !== undefined &&
+        (s.status === 'working' || s.status === 'blocked' || m.pendingWakeupSeq > m.readCursorSeq)
+      ) {
+        busy.add(m.name)
+      }
     }
-    return false
+    return busy
   }
   const ensureWorkerManaged = (conversationId: number): void => {
     if (stopping || !getCoordinator().isActive() || managedWorkerReleases.has(conversationId)) return
@@ -332,9 +341,14 @@ export function createCollabGroupRuntime(
     }
     if (shouldNotifyCoordinator) {
       const latestGroup = groupsById.get(validId)
-      const isUrgent = createdPost.kind === 'blocker' || createdPost.kind === 'stall'
-      const workersBusy = latestGroup !== undefined && hasOtherWorkingOrSettlingMember(latestGroup)
-      if (isUrgent || !workersBusy) {
+      if (
+        latestGroup !== undefined &&
+        shouldFlushCoordinatorReport({
+          group: latestGroup,
+          posts: postsByGroup.get(validId) ?? [],
+          busyMemberNames: getBusyActiveMemberNames(latestGroup),
+        })
+      ) {
         void dispatcher.scheduleCoordinatorReport(validId, COORDINATOR_BATCH_WINDOW_MS)
       }
     }
@@ -353,7 +367,7 @@ export function createCollabGroupRuntime(
     reportLockPath: reportLockPathOf,
     wakeupLockPath: wakeupLockPathOf,
     resolveMemberLive,
-    hasOtherWorkingOrSettlingMember,
+    getBusyActiveMemberNames,
   })
 
   const projections = createBoardProjections({
@@ -382,7 +396,7 @@ export function createCollabGroupRuntime(
     logDiagnostic,
     releaseManagedWorker,
     dispatcher,
-    hasOtherWorkingOrSettlingMember,
+    getBusyActiveMemberNames,
   })
 
   const findActiveGroupByCoordinator = (conversationId: number): CollabGroupRecord | undefined => {
@@ -848,10 +862,15 @@ export function createCollabGroupRuntime(
       dispatcher.forgetCoordReportCompletion(group.id)
       projections.syncProjections()
 
+      const groupPosts = postsByGroup.get(group.id) ?? []
+      const shouldFlushPending = shouldFlushCoordinatorReport({
+        group,
+        posts: groupPosts,
+        busyMemberNames: getBusyActiveMemberNames(group),
+      })
       if (
         !group.coordinatorDetached &&
-        (group.coordinatorPendingSeq > group.coordinatorNotifiedSeq ||
-          dispatcher.shouldSendCoordinatorIdleCatchup(group))
+        (shouldFlushPending || dispatcher.shouldSendCoordinatorIdleCatchup(group))
       ) {
         await dispatcher.flushCoordinatorReport(group.id)
         return
