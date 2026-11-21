@@ -169,6 +169,8 @@ PUT 为整体替换契约：update 走语义化标志时 CLI 先 GET 完整 Prof
 
 **`helmx plugins list`** — 插件清单（`status: active|disabled|failed`，失败携带结构化 `error`：阶段 `scan|load|define|enable`）。
 
+**`helmx plugins manifest <id>`** — 单个已注册插件的只读扩展契约投影（`GET /api/plugins/:id/manifest`）：稳定排序汇总 `hooks / actions / tools / ui / routes / docs（仅公开描述符）/ configFields（隐藏 secret 默认值与运行期值）/ providers（仅 id/name）/ services / clientModules`。
+
 **`helmx plugins enable <id>` / `helmx plugins disable <id> [--force]`** — 启停。停用预检：locked 插件 `403`；在途任务（自定义任务、执行中 Tool、挂起 `agent_spawn`）`409 plugin_has_live_tasks` 不可 force；持久资源占用（cron 规则、webhook 端点、Profile 运行时绑定）默认 `409 plugin_in_use` 列出占用清单，`--force` 知情越过（磁盘配置保留）。
 
 **`helmx plugins config <id> [--input <json>] [--set <k=v>] [--unset <key>]`** — 无修改标志时查看 `{values, schema, sources}`；`--set`/`--unset` 可重复，值按 JSON boolean/number 解析。secret 字段自动分离至 credentials.json。
@@ -177,7 +179,7 @@ PUT 为整体替换契约：update 走语义化标志时 CLI 先 GET 完整 Prof
 
 **`helmx plugins client <id> [--module <m>] [--chunk <name>] [--output <f>]`** — 获取 client.tsx 编译产物；缺省模块 `client.tsx`；响应携带 `x-helmx-client-hash` 内容哈希。
 
-**`helmx plugins doctor [<id> | <dir>] [--path <dir>] [--id <id>]`** — 外部插件源码静态自检：真实代际导入 + 临时宿主真实注册 + 前端模块真实编译，检查链 `manifest -> backend -> register -> client` 后继依赖前驱。位置参数为绝对路径时视为目录目标。预检失败报告仍完整输出但退出码非零。doctor 是静态自检：`definePlugin` 顶层依赖 `ctx.host.*` 的插件在 register 阶段如实失败。
+**`helmx plugins doctor [<id> | <dir>] [--path <dir>] [--id <id>]`** — 外部插件源码静态自检：真实代际导入 + 临时宿主真实注册 + 前端模块真实编译，检查链 `manifest -> backend -> register -> client` 后继依赖前驱。位置参数为绝对路径时视为目录目标。`register` 通过时报告同步附带只读 `manifest` 契约投影（`--json` 可见）。预检失败报告仍完整输出但退出码非零。doctor 是静态自检：`definePlugin` 顶层依赖 `ctx.host.*` 的插件在 register 阶段如实失败。
 
 **`helmx plugins reload <id>`** — 受控热重载：在途任务预检（409）→ dry-run doctor 预检（失败旧实例保持不动，`422 plugin_reload_preflight_failed`）→ 新代际切换（失败回滚）→ 启用状态保持。内置插件禁止热重载（403）。
 

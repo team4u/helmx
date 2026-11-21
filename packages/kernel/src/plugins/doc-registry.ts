@@ -12,8 +12,10 @@
  */
 import {
   HelmxError,
+  compareCodeUnit,
   type PluginDocHandle,
   type PluginDocOptions,
+  type PluginManifestDoc,
   type PluginSessionDocHandle,
   type PublicPluginDoc,
   type PublicPluginSessionDoc,
@@ -659,6 +661,28 @@ export class PluginDocRegistry {
   /** Returns whether `pluginId` declared a public sessionDoc named `name`. */
   hasPublicSessionDoc(pluginId: string, name: string): boolean {
     return this.sessionDocs.get(pluginId)?.get(name)?.isPublic === true;
+  }
+
+  /**
+   * Lists metadata descriptors for `public: true` docs and sessionDocs declared by `pluginId`,
+   * sorted deterministically by `(kind, name)`. Private documents and runtime values are never exposed.
+   */
+  listPublicDocDescriptors(pluginId: string): PluginManifestDoc[] {
+    const out: PluginManifestDoc[] = [];
+    const globalDocs = this.pluginDocs.get(pluginId);
+    if (globalDocs) {
+      for (const [name, reg] of globalDocs) {
+        if (reg.isPublic) out.push({ name, kind: 'doc', public: true, durable: reg.durable });
+      }
+    }
+    const sessDocs = this.sessionDocs.get(pluginId);
+    if (sessDocs) {
+      for (const [name, reg] of sessDocs) {
+        if (reg.isPublic) out.push({ name, kind: 'sessionDoc', public: true, durable: reg.durable });
+      }
+    }
+    out.sort((a, b) => compareCodeUnit(a.kind, b.kind) || compareCodeUnit(a.name, b.name));
+    return out;
   }
 
   /** Returns whether `pluginId` declared any in-memory transient (`durable: false`) sessionDoc. */

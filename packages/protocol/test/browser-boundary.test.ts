@@ -75,6 +75,8 @@ test('@helmx/protocol/browser: export declarations aligned with the root entry\'
     'ARTIFACT_REGISTER_META_SCHEMA',
     'ARTIFACT_READ_META_SCHEMA',
     'KERNEL_TOOL_PRESENTATION_META_SCHEMAS',
+    'assertPluginManifestProjection',
+    'compareCodeUnit',
   ] as const
 
   const browserRecord = browserExports as Record<string, unknown>

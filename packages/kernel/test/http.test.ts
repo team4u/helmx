@@ -29,7 +29,7 @@ import {
 } from '../src/services/index.js'
 import { PluginHost, type PluginHostBackend } from '../src/plugins/index.js'
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
-import { HelmxError, type ConversationDetail, type ConversationEntry, type ConversationInputResult, type ConversationPatch, type ConversationSummary, type AskSpec, type PluginSummary, type HelmxPluginContext } from '@helmx/protocol'
+import { HelmxError, assertPluginManifestProjection, type ConversationDetail, type ConversationEntry, type ConversationInputResult, type ConversationPatch, type ConversationSummary, type AskSpec, type PluginManifestProjection, type PluginSummary, type HelmxPluginContext } from '@helmx/protocol'
 import { createHubHandler, startHub } from '../src/http/index.js'
 import type { EventHub, KernelRuntimeLike } from '../src/http/index.js'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
@@ -1816,6 +1816,34 @@ test('plugins list; config PUT enforces { values } wrapper', { timeout: 60_000 }
   const badShape = await call(handler, 'PUT', '/api/plugins/builtin:triggers/config', { body: { retries: 3 } })
   assert.equal(badShape.status, 400)
   assert.equal(badShape.body.error.code, 'validation_error')
+})
+
+test('GET /api/plugins/:id/manifest returns validated read-only projection with 401/404/405 guards', { timeout: 60_000 }, async () => {
+  const { handler } = makeHandlers()
+  const res = await call(handler, 'GET', '/api/plugins/builtin%3Atriggers/manifest')
+  assert.equal(res.status, 200)
+  const manifest = assertPluginManifestProjection(res.body) as PluginManifestProjection
+  assert.equal(manifest.id, 'builtin:triggers')
+  assert.equal(manifest.status, 'active')
+  assert.deepEqual(manifest.actions.map((a) => a.id), ['echo'])
+  assert.deepEqual(manifest.routes, [
+    { method: 'GET', path: '/api/plugins/builtin%3Atriggers/routes/status', public: false },
+    { method: 'POST', path: '/api/plugins/builtin%3Atriggers/routes/webhook/:hookId', public: true },
+  ])
+
+  const noAuth = await call(handler, 'GET', '/api/plugins/builtin:triggers/manifest', { auth: false })
+  assert.equal(noAuth.status, 401)
+
+  const missing = await call(handler, 'GET', '/api/plugins/builtin:missing/manifest')
+  assert.equal(missing.status, 404)
+  assert.equal(missing.body.error.code, 'unknown_plugin')
+
+  const postMethod = await call(handler, 'POST', '/api/plugins/builtin:triggers/manifest', { body: {} })
+  assert.equal(postMethod.status, 405)
+  assert.equal(postMethod.body.error.code, 'method_not_allowed')
+
+  const extraSeg = await call(handler, 'GET', '/api/plugins/builtin:triggers/manifest/extra')
+  assert.equal(extraSeg.status, 404)
 })
 
 test('GET /api/plugins/:id/docs/:name returns {pluginId,name,value}; private/undeclared/disabled/unknown return 404', { timeout: 60_000 }, async () => {

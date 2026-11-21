@@ -14,6 +14,7 @@ import {
   type PluginClientNpmRoot,
   type PluginDoctorReport,
   type PluginInstallResult,
+  type PluginManifestProjection,
   type PluginReloadResult,
   type PluginRemoveResult,
   type PluginRescanResult,
@@ -141,6 +142,19 @@ export function pluginsCommands(): CommandSpec[] {
       parseNoFlags(ctx)
       const hub = await ctx.hub()
       printResult(ctx, await hub.get<PluginSummary[]>('/api/plugins'))
+    },
+  })
+
+  cmds.push({
+    path: ['plugins', 'manifest'],
+    description: 'Inspect read-only plugin extension contract projection (GET /api/plugins/:id/manifest)',
+    positional: '<id>',
+    async run(ctx: CommandContext) {
+      const parsed = parseFlags([], ctx.args)
+      const id = requirePositional(parsed.positionals, 0, 'id')
+      assertNoExtraPositionals(parsed.positionals, 1)
+      const hub = await ctx.hub()
+      printResult(ctx, await hub.get<PluginManifestProjection>(`/api/plugins/${encodeURIComponent(id)}/manifest`))
     },
   })
 

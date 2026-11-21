@@ -11,6 +11,7 @@
 import type { ConversationScope } from './conversation.js'
 import type { AgentNamespacedMeta } from './meta.js'
 import type { ExecutionText, LocalizedText } from './locale.js'
+import type { PluginManifestProjection } from './plugin-manifest.js'
 
 /** JSON Schema object; validated uniformly by the host at the boundary. */
 export type JsonSchema = Record<string, unknown>
@@ -433,6 +434,11 @@ export interface PluginDoctorReport {
    * or approximate derivation.
    */
   screens?: string[]
+  /**
+   * Read-only, stably sorted capability manifest captured from the real
+   * registration dry-run before teardown (present when register passes).
+   */
+  manifest?: PluginManifestProjection
 }
 
 /** Controlled hot-reload result (POST /api/plugins/:id/reload). */

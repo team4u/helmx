@@ -122,6 +122,14 @@ export async function handlePluginsDomain(
     }
     return methodNotAllowed(redactor, method)
   }
+  // Read-only plugin extension contract projection: GET /api/plugins/:pluginId/manifest
+  if (third === 'manifest' && fourth === undefined) {
+    if (method !== 'GET') return methodNotAllowed(redactor, method)
+    if (kernel.plugins.getManifest === undefined) {
+      return errorResponse(redactor, 501, 'not_supported', 'Current kernel does not support plugin manifest projection')
+    }
+    return jsonOk(redactor, await kernel.plugins.getManifest(pluginId))
+  }
   // Plugin public document: GET /api/plugins/:pluginId/docs/:name (404 if private, disabled, or missing).
   // ?conversationId=N selects sessionDoc snapshot; `/events` opens the dedicated sessionDoc SSE stream.
   if (third === 'docs' && method === 'GET') {

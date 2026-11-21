@@ -3,7 +3,12 @@
  */
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { HelmxError, type HelmxPluginContext, type PluginDefinition } from '@helmx/protocol';
+import {
+  HelmxError,
+  type HelmxPluginContext,
+  type PluginDefinition,
+  type PluginManifestProjection,
+} from '@helmx/protocol';
 import {
   assertNotLocked,
   getActiveEnabledPluginIds,
@@ -12,6 +17,7 @@ import {
   resolveInitialEnabled,
   settleLifecycleChanged,
 } from './lifecycle-helpers.js';
+import { buildPluginManifestProjection } from './manifest-projection.js';
 import { pluginDataDirName } from './plugin-dir-name.js';
 import { activatePluginServices } from './plugin-host-barrier.js';
 import {
@@ -37,10 +43,21 @@ import { assertNoLiveTasks } from './service-coordinator.js';
 import type { PluginHostBackend, PluginProviderPort, PluginState } from './types.js';
 import type { ClientLifecycleLookup } from './ui-registry.js';
 
+/**
+ * Package-internal sink allowing `doctorPluginDir` to capture a dry-run
+ * `PluginManifestProjection` immediately after `definePlugin` succeeds and
+ * before `enabled: false` teardown clears the host registries.
+ */
+export const dryRunManifestSinks = new WeakMap<
+  PluginDefinition,
+  (manifest: PluginManifestProjection) => void
+>();
+
 export interface PluginLifecycleContext extends PluginTransitionContext {
   host: PluginHostBackend;
   providers?: PluginProviderPort;
   servicesStarted: boolean;
+  redactText?: (text: string) => string;
   createPluginContext: (state: PluginState, epoch: number) => HelmxPluginContext;
   getPluginLifecycle: ClientLifecycleLookup['getPluginLifecycle'];
   ensureTransientSessionDocListener?: (pluginId: string) => void;
@@ -133,6 +150,19 @@ export async function runRegisterTransaction(
 
   try {
     await runDefinition(state, ctx);
+    const dryRunSink = dryRunManifestSinks.get(definition);
+    if (dryRunSink !== undefined) {
+      dryRunSink(
+        buildPluginManifestProjection({
+          state,
+          capabilityRegistry: ctx.capabilityRegistry,
+          uiRegistry: ctx.uiRegistry,
+          docRegistry: ctx.docRegistry,
+          redactText: ctx.redactText,
+          includeCurrentRegistrations: true,
+        }),
+      );
+    }
   } catch (err) {
     await handleRegisterFailure(state, seq, err, { isolate, stage: 'define', stopServices: false }, ctx);
     return;

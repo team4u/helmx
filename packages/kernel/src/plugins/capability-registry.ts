@@ -46,6 +46,8 @@ export interface DerivedToolSpec {
   projectPresentationMeta?: (input: unknown, output: unknown) => Record<string, unknown> | undefined;
   /** Cross-restart tool replay safety (forwarded when declared on ctx.tool; defaults to 'unsafe'). */
   replay?: 'safe' | 'unsafe';
+  /** Conversation scope visibility constraint (forwarded when declared). */
+  scope?: ConversationScope;
   /** Full tool usage guidance paragraph (projected only for active tools). */
   promptSnippet?: string;
   /** Concise single-line guidelines (aggregated into shared `prompt.tools.guidelines`). */
@@ -171,6 +173,15 @@ function validatedPromptFields(
   };
 }
 
+function cloneScope(scope: ConversationScope): ConversationScope {
+  return {
+    ...(scope.conversationIds !== undefined ? { conversationIds: [...scope.conversationIds] } : {}),
+    ...(scope.tags !== undefined ? { tags: [...scope.tags] } : {}),
+    ...(scope.profileIds !== undefined ? { profileIds: [...scope.profileIds] } : {}),
+    ...(scope.modelProviders !== undefined ? { modelProviders: [...scope.modelProviders] } : {}),
+  };
+}
+
 function toManifest(entry: ActionEntry): ActionManifest {
   const manifest: ActionManifest = {
     pluginId: entry.pluginId,
@@ -181,7 +192,7 @@ function toManifest(entry: ActionEntry): ActionManifest {
     exposeAsTool: entry.exposeAsTool,
     ...(entry.presentationMetaSchema !== undefined ? { presentationMetaSchema: entry.presentationMetaSchema } : {}),
     ...(entry.exposeToPrompt !== undefined ? { exposeToPrompt: entry.exposeToPrompt } : {}),
-    ...(entry.scope !== undefined ? { scope: entry.scope } : {}),
+    ...(entry.scope !== undefined ? { scope: cloneScope(entry.scope) } : {}),
     ...(entry.idempotent !== undefined ? { idempotent: entry.idempotent } : {}),
     ...(entry.promptSnippet !== undefined ? { promptSnippet: entry.promptSnippet } : {}),
     ...(entry.promptGuidelines !== undefined
@@ -596,6 +607,7 @@ export class CapabilityRegistry {
               ? { presentationMetaSchema: tool.spec.presentationMetaSchema }
               : {}),
             ...(tool.spec.replay !== undefined ? { replay: tool.spec.replay } : {}),
+            ...(tool.spec.scope !== undefined ? { scope: cloneScope(tool.spec.scope) } : {}),
             ...(tool.spec.promptSnippet !== undefined ? { promptSnippet: tool.spec.promptSnippet } : {}),
             ...(tool.spec.promptGuidelines !== undefined
               ? { promptGuidelines: [...tool.spec.promptGuidelines] }
@@ -626,6 +638,7 @@ export class CapabilityRegistry {
                   ) => Record<string, unknown> | undefined,
                 }
               : {}),
+            ...(action.scope !== undefined ? { scope: cloneScope(action.scope) } : {}),
             ...(action.promptSnippet !== undefined ? { promptSnippet: action.promptSnippet } : {}),
             ...(action.promptGuidelines !== undefined
               ? { promptGuidelines: [...action.promptGuidelines] }

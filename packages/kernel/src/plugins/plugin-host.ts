@@ -10,6 +10,7 @@
  */
 import {
   HelmxError,
+  compareCodeUnit,
   type ActionManifest,
   type ConversationSummary,
   type HookName,
@@ -25,6 +26,7 @@ import {
   type PluginDoctorReport,
   type PluginInstallResult,
   type LocalizedText,
+  type PluginManifestProjection,
   type PluginReloadResult,
   type PluginRemoveResult,
   type PluginRescanResult,
@@ -36,6 +38,7 @@ import {
   type PublicPluginSessionDoc,
 } from '@helmx/protocol';
 import { HOOK_ALLOWED_ACTIONS, HookPipeline } from './hooks.js';
+import { buildPluginManifestProjection } from './manifest-projection.js';
 import { PluginTaskTracker } from './tracking.js';
 import type { PluginPackageManager, PackageManagerHost } from './package-manager.js';
 import type { PluginPackageManagerStore } from './package-store.js';
@@ -247,6 +250,19 @@ export class PluginHost {
     this.assertNotDisposed();
     const s = this.plugins.get(pluginId);
     return s ? this.summaryOf(s) : undefined;
+  }
+
+  getManifest(pluginId: string): PluginManifestProjection {
+    this.assertNotDisposed();
+    const s = requirePlugin(this.plugins, pluginId);
+    return this.manifestOf(s);
+  }
+
+  listManifests(): PluginManifestProjection[] {
+    this.assertNotDisposed();
+    return [...this.plugins.values()]
+      .map((s) => this.manifestOf(s))
+      .sort((a, b) => compareCodeUnit(a.id, b.id));
   }
 
   assertProviderAvailable(pluginId: string): void {
@@ -560,6 +576,7 @@ export class PluginHost {
       host: this.options.host,
       providers: this.options.providers,
       servicesStarted: this.servicesStarted,
+      redactText: (text) => this.redactProjectionText(text),
       emitPluginChanged: (state) => this.emitPluginChanged(state),
       createPluginContext: (state, epoch) => this.createContext(state, epoch),
       getPluginLifecycle: this.getPluginLifecycle,
@@ -638,14 +655,26 @@ export class PluginHost {
     return { ...merged, ...stored };
   }
 
+  private redactProjectionText(text: string): string {
+    const redactedByHost = this.options.host.redact(text);
+    return this.options.redactText ? this.options.redactText(redactedByHost) : redactedByHost;
+  }
+
+  private manifestOf(state: PluginState): PluginManifestProjection {
+    return buildPluginManifestProjection({
+      state,
+      capabilityRegistry: this.capabilityRegistry,
+      uiRegistry: this.uiRegistry,
+      docRegistry: this.docRegistry,
+      redactText: (text) => this.redactProjectionText(text),
+    });
+  }
+
   private summaryOf(state: PluginState): PluginSummary {
     const publicConfig = buildPublicConfig(
       state,
       this.effectiveConfigOf(state),
-      (text) => {
-        const redactedByHost = this.options.host.redact(text);
-        return this.options.redactText ? this.options.redactText(redactedByHost) : redactedByHost;
-      },
+      (text) => this.redactProjectionText(text),
     );
     return summaryWithManagedPackage(
       state,
