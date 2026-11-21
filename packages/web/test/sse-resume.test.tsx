@@ -31,6 +31,11 @@ import {
   resetPluginClientCache,
   seedPluginClientModule,
 } from '../src/lib/plugin-client.js'
+import {
+  getSessionDocState,
+  resetSessionDocSubscriptions,
+  subscribeSessionDoc,
+} from '../src/lib/session-docs.js'
 import type { HelmxStoreValue } from '../src/lib/types.js'
 
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
@@ -1432,6 +1437,496 @@ describe("sse-resume", () => {
       first.end()
       await act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)) })
     } finally {
+      await h.close()
+    }
+  })
+
+  test('config-only plugin.changed preserves same-plugin failedDocs, inflight doc requests, and loadErrors without redundant retries', { timeout: 60_000 }, async () => {
+    localStorage.setItem('helmx:token', 't1')
+    let missingCalls = 0
+    let slowCalls = 0
+    let resolveSlow: ((res: Response) => void) | undefined
+    const h = await mountProvider({
+      onFetch: (path) => {
+        if (path === '/api/plugins/cfg%3Aerr/docs/missing') {
+          missingCalls++
+          return new Response(JSON.stringify({ error: { message: 'doc missing' } }), {
+            status: 404,
+            headers: { 'content-type': 'application/json' },
+          })
+        }
+        if (path === '/api/plugins/cfg%3Aerr/docs/slow') {
+          slowCalls++
+          return new Promise<Response>((resolve) => {
+            resolveSlow = resolve
+          })
+        }
+        return undefined
+      },
+    })
+
+    try {
+      const uiContrib = {
+        pluginId: 'cfg:err',
+        surface: 'plugin.slot' as const,
+        spec: { id: 'panel', target: 'builtin:composer/status', client: { module: 'index.tsx', export: 'Panel' } },
+      }
+      const summary = (v: number) => ({
+        ...pluginSummary('cfg:err'),
+        status: 'active' as const,
+        clientHashes: { 'index.tsx': 'h1' },
+        publicConfig: { v },
+      })
+
+      const first = snapshotConnection(h, {
+        bootId: 'b1',
+        seq: 1,
+        conversations: [],
+        pendingAsks: [],
+        plugins: [summary(1)],
+        ui: [uiContrib],
+      })
+      await h.waitFor((o) => o.sseConnected === true)
+
+      // 1. Trigger a failed doc load AND start an inflight doc load on cfg:err
+      await act(async () => {
+        await h.store().ensurePluginDoc('cfg:err', 'missing')
+      })
+      assert.equal(missingCalls, 1)
+      const missingErrBefore = h.store().loadErrors['doc:cfg:err/missing']
+      assert.ok(missingErrBefore !== undefined, 'failed doc must record loadErrors["doc:cfg:err/missing"]')
+
+      const inflightSlow = h.store().ensurePluginDoc('cfg:err', 'slow')
+      await h.waitFor(() => resolveSlow !== undefined)
+      assert.equal(slowCalls, 1)
+
+      // 2. Deliver a config-only plugin.changed for the SAME plugin cfg:err
+      first.send(eventFrame(2, {
+        type: 'plugin.changed',
+        plugin: summary(2),
+        ui: [uiContrib],
+      }))
+      await h.waitFor(() => (h.store().plugins.find((p) => p.id === 'cfg:err')?.publicConfig as { v?: number } | undefined)?.v === 2)
+
+      // failedDocs + loadErrors must stay intact (calling ensurePluginDoc again must NOT refetch)
+      assert.equal(h.store().loadErrors['doc:cfg:err/missing'], missingErrBefore, 'config-only must preserve loadErrors')
+      await act(async () => {
+        await h.store().ensurePluginDoc('cfg:err', 'missing')
+      })
+      assert.equal(missingCalls, 1, 'same-plugin config-only update must not clear failedDocs or cause redundant doc retry')
+
+      // Inflight request must stay deduplicated and complete cleanly after config-only update
+      const dedupSlow = h.store().ensurePluginDoc('cfg:err', 'slow')
+      assert.equal(slowCalls, 1, 'config-only must not drop inflight doc request from requests map')
+      await act(async () => {
+        resolveSlow!(new Response(JSON.stringify({ value: { loaded: true } }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }))
+        const [val1, val2] = await Promise.all([inflightSlow, dedupSlow])
+        assert.deepEqual(val1, { loaded: true })
+        assert.deepEqual(val2, { loaded: true })
+      })
+      assert.deepEqual(h.store().pluginDocs['cfg:err/slow'], { loaded: true })
+
+      first.end()
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)) })
+    } finally {
+      await h.close()
+    }
+  })
+
+  test('non-config-only plugin.changed clears doc:<pluginId>/ in failedDocs and loadErrors across metadata, hash, failed, and disabled transitions without affecting other plugins', { timeout: 60_000 }, async () => {
+    localStorage.setItem('helmx:token', 't1')
+    let targetCalls = 0
+    let otherCalls = 0
+    let targetShouldSucceed = false
+    const h = await mountProvider({
+      onFetch: (path) => {
+        if (path === '/api/plugins/target%3Ap/docs/info') {
+          targetCalls++
+          if (targetShouldSucceed) {
+            return new Response(JSON.stringify({ value: { ok: targetCalls } }), {
+              status: 200,
+              headers: { 'content-type': 'application/json' },
+            })
+          }
+          return new Response(JSON.stringify({ error: { message: 'target doc failed' } }), {
+            status: 500,
+            headers: { 'content-type': 'application/json' },
+          })
+        }
+        if (path === '/api/plugins/other%3Ap/docs/info') {
+          otherCalls++
+          return new Response(JSON.stringify({ error: { message: 'other doc failed' } }), {
+            status: 500,
+            headers: { 'content-type': 'application/json' },
+          })
+        }
+        return undefined
+      },
+    })
+
+    try {
+      const targetSummary = (extra?: Record<string, unknown>) => ({
+        ...pluginSummary('target:p'),
+        version: '1.0.0',
+        status: 'active' as const,
+        clientHashes: { 'index.tsx': 'h1' },
+        publicConfig: { mode: 'a' },
+        ...extra,
+      })
+      const otherSummary = {
+        ...pluginSummary('other:p'),
+        status: 'active' as const,
+        clientHashes: { 'index.tsx': 'h-other' },
+      }
+
+      const first = snapshotConnection(h, {
+        bootId: 'b1',
+        seq: 1,
+        conversations: [],
+        pendingAsks: [],
+        plugins: [targetSummary(), otherSummary],
+        ui: [],
+      })
+      await h.waitFor((o) => o.sseConnected === true)
+
+      // Seed doc failures on both plugins
+      await act(async () => {
+        await h.store().ensurePluginDoc('target:p', 'info')
+        await h.store().ensurePluginDoc('other:p', 'info')
+      })
+      assert.equal(targetCalls, 1)
+      assert.equal(otherCalls, 1)
+      assert.ok(h.store().loadErrors['doc:target:p/info'] !== undefined)
+      assert.ok(h.store().loadErrors['doc:other:p/info'] !== undefined)
+
+      // 1. Metadata change (version 1.0.0 -> 1.1.0): clears target:p loadErrors & failedDocs, preserves other:p
+      first.send(eventFrame(2, {
+        type: 'plugin.changed',
+        plugin: targetSummary({ version: '1.1.0' }),
+        ui: [],
+      }))
+      await h.waitFor(() => h.store().plugins.find((p) => p.id === 'target:p')?.version === '1.1.0')
+      assert.equal(h.store().loadErrors['doc:target:p/info'], undefined, 'metadata invalidation must clear doc:<id>/ loadErrors')
+      assert.ok(h.store().loadErrors['doc:other:p/info'] !== undefined, 'other plugin loadErrors must remain intact')
+
+      await act(async () => {
+        await h.store().ensurePluginDoc('other:p', 'info')
+        await h.store().ensurePluginDoc('target:p', 'info')
+      })
+      assert.equal(otherCalls, 1, 'other plugin failedDocs suppression must remain intact')
+      assert.equal(targetCalls, 2, 'target plugin failedDocs must be cleared to allow retry')
+      assert.ok(h.store().loadErrors['doc:target:p/info'] !== undefined)
+
+      // 2. clientHashes change (h1 -> h2): clears loadErrors & failedDocs and allows successful retry
+      targetShouldSucceed = true
+      first.send(eventFrame(3, {
+        type: 'plugin.changed',
+        plugin: targetSummary({ version: '1.1.0', clientHashes: { 'index.tsx': 'h2' } }),
+        ui: [],
+      }))
+      await h.waitFor(() => h.store().plugins.find((p) => p.id === 'target:p')?.clientHashes?.['index.tsx'] === 'h2')
+      assert.equal(h.store().loadErrors['doc:target:p/info'], undefined, 'hash change must clear stale loadErrors')
+      await act(async () => {
+        await h.store().ensurePluginDoc('target:p', 'info')
+      })
+      assert.equal(targetCalls, 3)
+      assert.deepEqual(h.store().pluginDocs['target:p/info'], { ok: 3 })
+      assert.equal(h.store().loadErrors['doc:target:p/info'], undefined)
+
+      // 3. Re-fail then transition to enabled=true, status='failed': must clear loadErrors
+      targetShouldSucceed = false
+      first.send(eventFrame(4, {
+        type: 'plugin.changed',
+        plugin: targetSummary({ version: '1.2.0', clientHashes: { 'index.tsx': 'h2' } }),
+        ui: [],
+      }))
+      await h.waitFor(() => h.store().plugins.find((p) => p.id === 'target:p')?.version === '1.2.0')
+      await act(async () => {
+        await h.store().ensurePluginDoc('target:p', 'info')
+      })
+      assert.ok(h.store().loadErrors['doc:target:p/info'] !== undefined)
+
+      first.send(eventFrame(5, {
+        type: 'plugin.changed',
+        plugin: targetSummary({ version: '1.2.0', enabled: true, status: 'failed' }),
+        ui: [],
+      }))
+      await h.waitFor(() => h.store().plugins.find((p) => p.id === 'target:p')?.status === 'failed')
+      assert.equal(h.store().loadErrors['doc:target:p/info'], undefined, 'failed transition must clear doc:<id>/ loadErrors')
+      assert.ok(h.store().loadErrors['doc:other:p/info'] !== undefined)
+
+      // 4. Recover to active, re-fail, then disable: must clear loadErrors
+      first.send(eventFrame(6, {
+        type: 'plugin.changed',
+        plugin: targetSummary({ version: '1.2.0', enabled: true, status: 'active' }),
+        ui: [],
+      }))
+      await h.waitFor(() => h.store().plugins.find((p) => p.id === 'target:p')?.status === 'active')
+      await act(async () => {
+        await h.store().ensurePluginDoc('target:p', 'info')
+      })
+      assert.ok(h.store().loadErrors['doc:target:p/info'] !== undefined)
+
+      first.send(eventFrame(7, {
+        type: 'plugin.changed',
+        plugin: targetSummary({ version: '1.2.0', enabled: false, status: 'disabled' }),
+        ui: [],
+      }))
+      await h.waitFor(() => h.store().plugins.find((p) => p.id === 'target:p')?.enabled === false)
+      assert.equal(h.store().loadErrors['doc:target:p/info'], undefined, 'disabled transition must clear doc:<id>/ loadErrors')
+      assert.ok(h.store().loadErrors['doc:other:p/info'] !== undefined)
+
+      // 5. plugin.doc.updated for active other:p clears its stale loadErrors & failedDocs
+      first.send(eventFrame(8, {
+        type: 'plugin.doc.updated',
+        doc: { pluginId: 'other:p', name: 'info', value: { pushed: true } },
+      }))
+      await h.waitFor(() => h.store().pluginDocs['other:p/info'] !== undefined)
+      assert.deepEqual(h.store().pluginDocs['other:p/info'], { pushed: true })
+      assert.equal(h.store().loadErrors['doc:other:p/info'], undefined, 'plugin.doc.updated must clear stale loadErrors for that doc')
+
+      first.end()
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)) })
+    } finally {
+      await h.close()
+    }
+  })
+
+  test('syncPlugins reconciles client cache, UI contributions, pluginDocs, loadErrors, and sessionDocs when SSE plugin.changed frames are missing', { timeout: 60_000 }, async () => {
+    localStorage.setItem('helmx:token', 't1')
+    resetSessionDocSubscriptions()
+    const { PluginSlot } = await import('@helmx/plugin-client')
+
+    const originalCreateObjectURL = URL.createObjectURL
+    const originalRevokeObjectURL = URL.revokeObjectURL
+    const KeepPanel = () => React.createElement('div', { 'data-testid': 'keep-panel' }, 'keep-v1')
+    const HashPanelV1 = () => React.createElement('div', { 'data-testid': 'hash-panel' }, 'hash-v1')
+    const FailPanel = () => React.createElement('div', { 'data-testid': 'fail-panel' }, 'fail-v1')
+    const DisPanel = () => React.createElement('div', { 'data-testid': 'dis-panel' }, 'dis-v1')
+    const RemPanel = () => React.createElement('div', { 'data-testid': 'rem-panel' }, 'rem-v1')
+
+    seedPluginClientModule('keep:p', 'index.tsx', { Panel: KeepPanel, __helmxClientCss: '.keep{color:#111}' }, 'h-keep')
+    seedPluginClientModule('hash:p', 'index.tsx', { Panel: HashPanelV1, __helmxClientCss: '.hash{color:#222}' }, 'h-old')
+    seedPluginClientModule('fail:p', 'index.tsx', { Panel: FailPanel, __helmxClientCss: '.fail{color:#333}' }, 'h-fail')
+    seedPluginClientModule('dis:p', 'index.tsx', { Panel: DisPanel, __helmxClientCss: '.dis{color:#444}' }, 'h-dis')
+    seedPluginClientModule('rem:p', 'index.tsx', { Panel: RemPanel, __helmxClientCss: '.rem{color:#555}' }, 'h-rem')
+
+    const revKeep0 = getPluginClientCacheRevision('keep:p')
+    const revHash0 = getPluginClientCacheRevision('hash:p')
+    const revFail0 = getPluginClientCacheRevision('fail:p')
+    const revDis0 = getPluginClientCacheRevision('dis:p')
+    const revRem0 = getPluginClientCacheRevision('rem:p')
+
+    const hashV2Code =
+      'export const __helmxClientCss = ".hash{color:#999}";\n' +
+      'export function Panel() { return globalThis.__helmx_shared_react.createElement("div", { "data-testid": "hash-panel" }, "hash-v2"); }\n'
+
+    let hashErrDocCalls = 0
+    let keepErrDocCalls = 0
+    let hashErrShouldSucceed = false
+
+    const h = await mountProvider({
+      children: React.createElement(PluginSlot, {
+        ownerPluginId: 'builtin:composer',
+        name: 'status',
+      }),
+      onFetch: (path) => {
+        if (path === '/api/plugins/hash%3Ap/client.mjs?module=index.tsx&hash=h-new') {
+          return new Response(hashV2Code, { status: 200, headers: { 'x-helmx-client-hash': 'h-new' } })
+        }
+        if (path === '/api/plugins/hash%3Ap/docs/missing') {
+          hashErrDocCalls++
+          if (hashErrShouldSucceed) {
+            return new Response(JSON.stringify({ value: { recovered: true } }), {
+              status: 200,
+              headers: { 'content-type': 'application/json' },
+            })
+          }
+          return new Response(JSON.stringify({ error: { message: 'hash doc missing' } }), {
+            status: 404,
+            headers: { 'content-type': 'application/json' },
+          })
+        }
+        if (path === '/api/plugins/keep%3Ap/docs/missing') {
+          keepErrDocCalls++
+          return new Response(JSON.stringify({ error: { message: 'keep doc missing' } }), {
+            status: 404,
+            headers: { 'content-type': 'application/json' },
+          })
+        }
+        if (path === '/api/plugins/fail%3Ap/docs/missing' || path === '/api/plugins/dis%3Ap/docs/missing' || path === '/api/plugins/rem%3Ap/docs/missing') {
+          return new Response(JSON.stringify({ error: { message: 'doc missing' } }), {
+            status: 404,
+            headers: { 'content-type': 'application/json' },
+          })
+        }
+        return undefined
+      },
+    })
+
+    const offKeepSession = subscribeSessionDoc({ pluginId: 'keep:p', docName: 'runs', conversationId: 1 }, () => {})
+    const offFailSession = subscribeSessionDoc({ pluginId: 'fail:p', docName: 'runs', conversationId: 1 }, () => {})
+    const offDisSession = subscribeSessionDoc({ pluginId: 'dis:p', docName: 'runs', conversationId: 1 }, () => {})
+    const offRemSession = subscribeSessionDoc({ pluginId: 'rem:p', docName: 'runs', conversationId: 1 }, () => {})
+
+    try {
+      URL.createObjectURL = () => `data:text/javascript;base64,${Buffer.from(hashV2Code).toString('base64')}#sync-v2`
+      URL.revokeObjectURL = () => {}
+
+      const makeUi = (id: string) => ({
+        pluginId: id,
+        surface: 'plugin.slot' as const,
+        spec: { id: `${id}-panel`, target: 'builtin:composer/status', client: { module: 'index.tsx', export: 'Panel' } },
+      })
+      const makeSummary = (id: string, hash: string, extra?: Record<string, unknown>) => ({
+        ...pluginSummary(id),
+        status: 'active' as const,
+        clientHashes: { 'index.tsx': hash },
+        publicConfig: { v: 1 },
+        ...extra,
+      })
+
+      const initialPlugins = [
+        makeSummary('keep:p', 'h-keep'),
+        makeSummary('hash:p', 'h-old'),
+        makeSummary('fail:p', 'h-fail'),
+        makeSummary('dis:p', 'h-dis'),
+        makeSummary('rem:p', 'h-rem'),
+      ]
+
+      const first = snapshotConnection(h, {
+        bootId: 'b1',
+        seq: 1,
+        conversations: [],
+        pendingAsks: [],
+        plugins: initialPlugins,
+        ui: ['keep:p', 'hash:p', 'fail:p', 'dis:p', 'rem:p'].map(makeUi),
+        pluginDocs: [
+          { pluginId: 'keep:p', name: 'info', value: { v: 'keep' } },
+          { pluginId: 'hash:p', name: 'info', value: { v: 'hash-old' } },
+          { pluginId: 'fail:p', name: 'info', value: { v: 'fail' } },
+          { pluginId: 'dis:p', name: 'info', value: { v: 'dis' } },
+          { pluginId: 'rem:p', name: 'info', value: { v: 'rem' } },
+        ],
+      })
+      await h.waitFor((o) => o.sseConnected === true && h.host.querySelector('[data-testid="hash-panel"]')?.textContent === 'hash-v1')
+
+      // Populate failedDocs + loadErrors for all five plugins
+      await act(async () => {
+        await Promise.all([
+          h.store().ensurePluginDoc('keep:p', 'missing'),
+          h.store().ensurePluginDoc('hash:p', 'missing'),
+          h.store().ensurePluginDoc('fail:p', 'missing'),
+          h.store().ensurePluginDoc('dis:p', 'missing'),
+          h.store().ensurePluginDoc('rem:p', 'missing'),
+        ])
+      })
+      assert.ok(h.store().loadErrors['doc:keep:p/missing'] !== undefined)
+      assert.ok(h.store().loadErrors['doc:hash:p/missing'] !== undefined)
+      assert.ok(h.store().loadErrors['doc:fail:p/missing'] !== undefined)
+      assert.ok(h.store().loadErrors['doc:dis:p/missing'] !== undefined)
+      assert.ok(h.store().loadErrors['doc:rem:p/missing'] !== undefined)
+
+      // 1. Config-only syncPlugins on keep:p: zero eviction, preserves UI/docs/loadErrors/failedDocs
+      const uiBeforeCfg = h.store().uiContributions
+      const docsBeforeCfg = h.store().pluginDocs
+      const keepStyleBefore = document.querySelector('style[data-helmx-plugin-css="keep:p::index.tsx"]')
+      await act(async () => {
+        h.store().syncPlugins([
+          makeSummary('keep:p', 'h-keep', { publicConfig: { v: 2 } }),
+          ...initialPlugins.slice(1),
+        ])
+      })
+      assert.equal(h.store().uiContributions, uiBeforeCfg, 'config-only syncPlugins must preserve uiContributions ref')
+      assert.equal(h.store().pluginDocs, docsBeforeCfg, 'config-only syncPlugins must preserve pluginDocs ref')
+      assert.equal(getPluginClientCacheRevision('keep:p'), revKeep0)
+      assert.ok(document.querySelector('style[data-helmx-plugin-css="keep:p::index.tsx"]') === keepStyleBefore)
+      assert.ok(h.store().loadErrors['doc:keep:p/missing'] !== undefined)
+      await act(async () => {
+        await h.store().ensurePluginDoc('keep:p', 'missing')
+      })
+      assert.equal(keepErrDocCalls, 1, 'config-only syncPlugins must not clear failedDocs')
+
+      // 2. Full HTTP calibration simulating missed SSE frames:
+      //    - keep:p unchanged
+      //    - hash:p updated to h-new
+      //    - fail:p enabled=true, status='failed' (even with residual clientHashes)
+      //    - dis:p enabled=false, status='disabled'
+      //    - rem:p omitted (removed)
+      hashErrShouldSucceed = true
+      await act(async () => {
+        h.store().syncPlugins([
+          makeSummary('keep:p', 'h-keep', { publicConfig: { v: 2 } }),
+          makeSummary('hash:p', 'h-new'),
+          makeSummary('fail:p', 'h-fail', { enabled: true, status: 'failed' }),
+          makeSummary('dis:p', 'h-dis', { enabled: false, status: 'disabled', clientHashes: undefined }),
+        ])
+      })
+
+      // Wait for mounted PluginUiView for hash:p to automatically reload h-new!
+      await h.waitFor(() => h.host.querySelector('[data-testid="hash-panel"]')?.textContent === 'hash-v2')
+
+      // keep:p completely preserved
+      assert.equal(getPluginClientCacheRevision('keep:p'), revKeep0)
+      assert.equal(getCachedClientComponent('keep:p', 'index.tsx', 'Panel', 'h-keep'), KeepPanel)
+      assert.ok(document.querySelector('style[data-helmx-plugin-css="keep:p::index.tsx"]') === keepStyleBefore)
+      assert.deepEqual(h.store().pluginDocs['keep:p/info'], { v: 'keep' })
+      assert.ok(h.store().loadErrors['doc:keep:p/missing'] !== undefined)
+      assert.equal(getSessionDocState({ pluginId: 'keep:p', docName: 'runs', conversationId: 1 }).error, undefined)
+
+      // hash:p cache/CSS reloaded to h-new, stale docs & doc errors cleared, active UI kept
+      assert.notEqual(getPluginClientCacheRevision('hash:p'), revHash0)
+      assert.equal(
+        document.querySelector('style[data-helmx-plugin-css="hash:p::index.tsx"]')?.getAttribute('data-helmx-plugin-css-hash'),
+        'h-new',
+      )
+      assert.equal(h.store().pluginDocs['hash:p/info'], undefined, 'hash change via syncPlugins must clear stale pluginDocs')
+      assert.equal(h.store().loadErrors['doc:hash:p/missing'], undefined, 'hash change via syncPlugins must clear stale loadErrors')
+      await act(async () => {
+        await h.store().ensurePluginDoc('hash:p', 'missing')
+      })
+      assert.equal(hashErrDocCalls, 2, 'hash change via syncPlugins must clear failedDocs so doc can retry')
+      assert.deepEqual(h.store().pluginDocs['hash:p/missing'], { recovered: true })
+
+      // fail:p, dis:p, rem:p: UI, docs, client cache, CSS, loadErrors, and sessionDocs all converged!
+      assert.deepEqual(
+        h.store().uiContributions.map((u) => u.pluginId),
+        ['keep:p', 'hash:p'],
+        'disabled/failed/removed plugins must be pruned from uiContributions on syncPlugins',
+      )
+      assert.ok(h.host.querySelector('[data-testid="fail-panel"]') === null)
+      assert.ok(h.host.querySelector('[data-testid="dis-panel"]') === null)
+      assert.ok(h.host.querySelector('[data-testid="rem-panel"]') === null)
+
+      for (const [id, rev0] of [
+        ['fail:p', revFail0],
+        ['dis:p', revDis0],
+        ['rem:p', revRem0],
+      ] as const) {
+        assert.notEqual(getPluginClientCacheRevision(id), rev0, `${id} revision must advance on syncPlugins eviction`)
+        assert.equal(getCachedClientComponent(id, 'index.tsx', 'Panel'), undefined, `${id} client cache must be evicted`)
+        assert.ok(document.querySelector(`style[data-helmx-plugin-css="${id}::index.tsx"]`) === null, `${id} CSS must be removed`)
+        assert.equal(h.store().pluginDocs[`${id}/info`], undefined, `${id} pluginDocs must be cleared`)
+        assert.equal(h.store().loadErrors[`doc:${id}/missing`], undefined, `${id} loadErrors must be cleared`)
+        assert.ok(
+          getSessionDocState({ pluginId: id, docName: 'runs', conversationId: 1 }).error !== undefined,
+          `${id} sessionDoc subscription must be terminated`,
+        )
+      }
+
+      first.end()
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)) })
+    } finally {
+      offKeepSession()
+      offFailSession()
+      offDisSession()
+      offRemSession()
+      resetSessionDocSubscriptions()
+      URL.createObjectURL = originalCreateObjectURL
+      URL.revokeObjectURL = originalRevokeObjectURL
       await h.close()
     }
   })

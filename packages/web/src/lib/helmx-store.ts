@@ -41,13 +41,15 @@ import {
   entryMatchesReference,
   isPluginSummaryActive,
   mergeConversationDetail,
-  sameJsonValue,
+  omitPluginDocLoadErrors,
+  reconcilePluginsState,
   sortNodes,
   type LiveState,
 } from './live-state.js'
-import { resetPluginClientCache } from './plugin-client.js'
+import { reconcilePluginClientCache, resetPluginClientCache } from './plugin-client.js'
 import { isAbortError, StoreRequestManager } from './request-manager.js'
 import {
+  evictSessionDocSubscriptions,
   getSessionDocState,
   resetSessionDocSubscriptions,
   retrySessionDoc,
@@ -1351,19 +1353,54 @@ export class HelmxExternalStore {
     this.patchCatalog({ assetsLoaded: true })
   }
 
+  /**
+   * HTTP 全量插件摘要校准（如 PluginCenter 安装/更新/卸载后的 GET /api/plugins）：
+   * - 按 `sameJsonValue` 保留未变更插件引用；
+   * - 立即清理非 active（disabled / enabled=true,status=failed）及已移除插件的 `uiContributions`、
+   *   `pluginDocs`、`sessionDocs` 与 doc 请求/错误；
+   * - 对 active 插件的非纯配置变更（`clientHashes` / 非配置元数据变化）及非 active→active 恢复，
+   *   清理对应 `doc:<pluginId>/` 文档缓存、`failedDocs`、`requests`、`loadErrors` 并递增 `pluginEpoch`；
+   *   纯 `publicConfig` 变更全部保留；
+   * - 按摘要增量对账 `reconcilePluginClientCache`（逐出停用/失败/移除或 hash 变更模块与样式，推进 revision）；
+   * - 架构边界：`GET /api/plugins` 仅返回 `PluginSummary[]` 不含 `PluginUiContribution[]`（内核未暴露 HTTP `listUi`），
+   *   对仍 active 插件保留既有 `uiContributions`，新增或结构变更的 UI 贡献仍由 SSE `plugin.changed` / `snapshot` 收敛。
+   */
   syncPlugins = (next: PluginSummary[]): void => {
     if (!Array.isArray(next)) return
-    this.updateLive((state) => {
-      const byId = new Map(state.plugins.map((p) => [p.id, p]))
-      const merged = next.map((incoming) => {
-        const local = byId.get(incoming.id)
-        return local !== undefined && sameJsonValue(local, incoming) ? local : incoming
-      })
-      const changed =
-        merged.length !== state.plugins.length ||
-        merged.some((item, index) => item !== state.plugins[index])
-      return changed ? { ...state, plugins: merged } : state
-    })
+    const plan = emptyPlan()
+    const reconciled = reconcilePluginsState(this.liveState, next)
+
+    if (reconciled.state !== this.liveState) {
+      this.updateLive(() => reconciled.state, plan, true)
+    }
+
+    if (reconciled.invalidatedDocPluginIds.size > 0) {
+      for (const pluginId of reconciled.invalidatedDocPluginIds) {
+        const docPrefix = `doc:${pluginId}/`
+        this.requests.pluginEpoch.current.set(
+          pluginId,
+          (this.requests.pluginEpoch.current.get(pluginId) ?? 0) + 1,
+        )
+        for (const key of [...this.requests.failedDocs.current]) {
+          if (key.startsWith(docPrefix)) this.requests.failedDocs.current.delete(key)
+        }
+        for (const key of [...this.requests.requests.current.keys()]) {
+          if (key.startsWith(docPrefix)) this.requests.requests.current.delete(key)
+        }
+      }
+      this.setLoadErrors(
+        (prev) => omitPluginDocLoadErrors(prev, reconciled.invalidatedDocPluginIds),
+        plan,
+        true,
+      )
+    }
+
+    reconcilePluginClientCache(reconciled.state.plugins)
+    for (const pluginId of reconciled.inactivePluginIds) {
+      evictSessionDocSubscriptions(pluginId)
+    }
+
+    this.emit(plan)
   }
 
   refreshNodes = async (): Promise<NodeInfo[] | undefined> => {
@@ -1571,12 +1608,27 @@ export class HelmxExternalStore {
         if (epoch !== this.requests.session.current || pluginVersion !== this.requests.pluginEpoch.current.get(pluginId)) {
           return undefined
         }
-        this.updateLive((state) => {
-          if (Object.hasOwn(state.pluginDocs, docKey) || !state.plugins.some((p) => p.id === pluginId && isPluginSummaryActive(p))) {
-            return state
+        if (this.liveState.plugins.some((p) => p.id === pluginId && isPluginSummaryActive(p))) {
+          const plan = emptyPlan()
+          this.requests.failedDocs.current.delete(key)
+          if (!Object.hasOwn(this.liveState.pluginDocs, docKey)) {
+            this.updateLive(
+              (state) =>
+                Object.hasOwn(state.pluginDocs, docKey) ||
+                !state.plugins.some((p) => p.id === pluginId && isPluginSummaryActive(p))
+                  ? state
+                  : { ...state, pluginDocs: { ...state.pluginDocs, [docKey]: doc.value } },
+              plan,
+              true,
+            )
           }
-          return { ...state, pluginDocs: { ...state.pluginDocs, [docKey]: doc.value } }
-        })
+          if (Object.hasOwn(this.loadErrorsState, key)) {
+            const nextErrors = { ...this.loadErrorsState }
+            delete nextErrors[key]
+            this.setLoadErrors(nextErrors, plan, true)
+          }
+          this.emit(plan)
+        }
         return doc.value
       })
       .catch((error: unknown) => {

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { ConversationDetail, ConversationLive, ConversationSummary, HelmxSnapshot } from '@helmx/protocol'
-import { applyConversationEntry, applyEventFrame, applyResumedFrame, applySnapshot, applyTransientLiveFrame, emptyLiveState, entryMatchesReference, mergeConversationDetail, sortNodes, sseClientTimings, SseParser } from '../src/lib/live-state.js'
+import { applyConversationEntry, applyEventFrame, applyResumedFrame, applySnapshot, applyTransientLiveFrame, emptyLiveState, entryMatchesReference, mergeConversationDetail, omitPluginDocLoadErrors, reconcilePluginsState, sortNodes, sseClientTimings, SseParser } from '../src/lib/live-state.js'
 import { normalizeModelCatalogInfo } from '../src/lib/api.js'
 import type { NodeInfo } from '@helmx/protocol'
 
@@ -474,4 +474,104 @@ test('plugin.changed：纯配置更新保留 pluginDocs 与 uiContributions；fa
   })
   assert.deepEqual(snapState.uiContributions, [])
   assert.deepEqual(snapState.pluginDocs, { 'p2/other': { keep: 2 } })
+})
+
+test('omitPluginDocLoadErrors 仅按 doc:<pluginId>/ 前缀清理目标插件错误，保留其他插件与非 doc 错误', { timeout: 60_000 }, () => {
+  const initial: Record<string, string> = {
+    'doc:p1/status': 'err1',
+    'doc:p1/extra': 'err2',
+    'doc:p1-other/status': 'keep-prefix',
+    'doc:p2/status': 'keep-p2',
+    'conversation:1': 'keep-conv',
+  }
+  const unchanged = omitPluginDocLoadErrors(initial, new Set(['missing']))
+  assert.equal(unchanged, initial, '无匹配键时必须原引用返回')
+
+  const pruned = omitPluginDocLoadErrors(initial, new Set(['p1']))
+  assert.deepEqual(pruned, {
+    'doc:p1-other/status': 'keep-prefix',
+    'doc:p2/status': 'keep-p2',
+    'conversation:1': 'keep-conv',
+  })
+})
+
+test('reconcilePluginsState 按摘要对账 plugins/uiContributions/pluginDocs：config-only 保活，disabled/failed/removed 清理，hash/元数据变更清 doc 保活 UI', { timeout: 60_000 }, () => {
+  const makeUi = (pluginId: string) => ({
+    pluginId,
+    surface: 'plugin.slot' as const,
+    spec: { id: `${pluginId}-slot`, target: 'builtin:composer/status', client: { module: 'index.tsx', export: 'Panel' } },
+  })
+  const makePlugin = (id: string, extra?: Record<string, unknown>) => ({
+    id,
+    name: id,
+    locked: false,
+    enabled: true,
+    status: 'active' as const,
+    hooks: [],
+    actions: [],
+    tools: [],
+    clientHashes: { 'index.tsx': `h-${id}` },
+    publicConfig: { v: 1 },
+    ...extra,
+  })
+  const state0 = applySnapshot(emptyLiveState(), {
+    ...snapshot,
+    plugins: [makePlugin('keep'), makePlugin('hash'), makePlugin('fail'), makePlugin('dis'), makePlugin('rem')],
+    ui: [makeUi('keep'), makeUi('hash'), makeUi('fail'), makeUi('dis'), makeUi('rem')],
+    pluginDocs: [
+      { pluginId: 'keep', name: 'd', value: { ok: 'keep' } },
+      { pluginId: 'hash', name: 'd', value: { ok: 'hash' } },
+      { pluginId: 'fail', name: 'd', value: { ok: 'fail' } },
+      { pluginId: 'dis', name: 'd', value: { ok: 'dis' } },
+      { pluginId: 'rem', name: 'd', value: { ok: 'rem' } },
+    ],
+  })
+
+  // 1. 相同摘要：引用全部保留，零失效插件
+  const sameRes = reconcilePluginsState(state0, state0.plugins)
+  assert.equal(sameRes.state, state0)
+  assert.equal(sameRes.inactivePluginIds.size, 0)
+  assert.equal(sameRes.invalidatedDocPluginIds.size, 0)
+
+  // 2. 纯 publicConfig 变更：保留 uiContributions 与 pluginDocs 引用，不进失效集合
+  const cfgRes = reconcilePluginsState(state0, [
+    makePlugin('keep', { publicConfig: { v: 2 } }),
+    ...state0.plugins.slice(1),
+  ])
+  assert.equal(cfgRes.state.uiContributions, state0.uiContributions)
+  assert.equal(cfgRes.state.pluginDocs, state0.pluginDocs)
+  assert.equal(cfgRes.inactivePluginIds.size, 0)
+  assert.equal(cfgRes.invalidatedDocPluginIds.size, 0)
+  assert.deepEqual(cfgRes.state.plugins.find((p) => p.id === 'keep')?.publicConfig, { v: 2 })
+
+  // 3. 混合变更：hash 变更、enabled=true+failed、disabled、移除
+  const mixedRes = reconcilePluginsState(state0, [
+    makePlugin('keep'),
+    makePlugin('hash', { clientHashes: { 'index.tsx': 'h-hash-v2' } }),
+    makePlugin('fail', { enabled: true, status: 'failed' }),
+    makePlugin('dis', { enabled: false, status: 'disabled' }),
+    // rem 已移除
+  ])
+  assert.deepEqual(
+    mixedRes.state.uiContributions.map((u) => u.pluginId),
+    ['keep', 'hash'],
+    '非 active（failed/disabled）及已移除插件的 UI 必须立即清理，仍 active 的插件保留既有 UI',
+  )
+  assert.deepEqual(
+    mixedRes.state.pluginDocs,
+    { 'keep/d': { ok: 'keep' } },
+    '仅保留未变更 active 插件的 pluginDocs；hash 变更及非 active/移除插件的 docs 必须清理',
+  )
+  assert.deepEqual([...mixedRes.inactivePluginIds].sort(), ['dis', 'fail', 'rem'])
+  assert.deepEqual([...mixedRes.invalidatedDocPluginIds].sort(), ['dis', 'fail', 'hash', 'rem'])
+
+  // 4. 非 active -> active 恢复：记录到 invalidatedDocPluginIds 以便清理历史错误
+  const recoverRes = reconcilePluginsState(mixedRes.state, [
+    makePlugin('keep'),
+    makePlugin('hash', { clientHashes: { 'index.tsx': 'h-hash-v2' } }),
+    makePlugin('fail', { enabled: true, status: 'active' }),
+    makePlugin('dis', { enabled: false, status: 'disabled' }),
+  ])
+  assert.equal(recoverRes.inactivePluginIds.has('fail'), false)
+  assert.equal(recoverRes.invalidatedDocPluginIds.has('fail'), true)
 })

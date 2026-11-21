@@ -20,8 +20,10 @@ import {
   applyResumedFrame,
   applySnapshot,
   applyTransientLiveFrame,
+  extractDocErrorPluginId,
   isConfigOnlyPluginChange,
   isPluginSummaryActive,
+  omitPluginDocLoadErrors,
   readSseChunkWithDeadline,
   sameClientHashes,
   SseParser,
@@ -164,10 +166,9 @@ function handleSnapshotFrame(payload: unknown, ctx: FrameHandlerContext): void {
     let changed = false
     const next: Record<string, string> = {}
     for (const [key, value] of Object.entries(prev)) {
-      if (key.startsWith('doc:')) {
-        const slash = key.indexOf('/')
-        const pluginId = slash > 4 ? key.slice(4, slash) : ''
-        if (stalePluginIds.has(pluginId)) {
+      const docPluginId = extractDocErrorPluginId(key)
+      if (docPluginId !== undefined) {
+        if (stalePluginIds.has(docPluginId)) {
           changed = true
           continue
         }
@@ -288,15 +289,16 @@ function dispatchFrameSideEffects(
 ): void {
   if (event.type === 'notification' && 'title' in event) ctx.pushNotice(event)
   if (event.type === 'plugin.changed' && 'plugin' in event) {
-    const docPrefix = `doc:${event.plugin.id}/`
-    for (const key of ctx.failedDocs.current) {
-      if (key.startsWith(docPrefix)) ctx.failedDocs.current.delete(key)
-    }
     if (!configOnlyPluginChange) {
+      const docPrefix = `doc:${event.plugin.id}/`
       ctx.pluginEpoch.current.set(event.plugin.id, (ctx.pluginEpoch.current.get(event.plugin.id) ?? 0) + 1)
-      for (const key of ctx.requests.current.keys()) {
+      for (const key of [...ctx.failedDocs.current]) {
+        if (key.startsWith(docPrefix)) ctx.failedDocs.current.delete(key)
+      }
+      for (const key of [...ctx.requests.current.keys()]) {
         if (key.startsWith(docPrefix)) ctx.requests.current.delete(key)
       }
+      ctx.setLoadErrors((prev) => omitPluginDocLoadErrors(prev, new Set([event.plugin.id])))
       // 任意非纯配置 plugin.changed（含启停/失败/移除/clientHashes 或元数据变化）都让该插件
       // client 模块缓存失效，保证重载代码即时生效并拒绝迟到加载结果。
       evictPluginClientCache(event.plugin.id)
@@ -305,6 +307,18 @@ function dispatchFrameSideEffects(
         evictSessionDocSubscriptions(event.plugin.id)
       }
       void ctx.refreshAssets()
+    }
+  }
+  if (event.type === 'plugin.doc.updated' && 'doc' in event) {
+    if (ctx.liveRef.current.plugins.some((p) => p.id === event.doc.pluginId && isPluginSummaryActive(p))) {
+      const key = `doc:${event.doc.pluginId}/${event.doc.name}`
+      ctx.failedDocs.current.delete(key)
+      ctx.setLoadErrors((prev) => {
+        if (!Object.hasOwn(prev, key)) return prev
+        const next = { ...prev }
+        delete next[key]
+        return next
+      })
     }
   }
   if (event.type === 'models.changed') void ctx.refreshAssets()

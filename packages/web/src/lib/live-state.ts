@@ -94,6 +94,137 @@ export function isConfigOnlyPluginChange(
   return !sameJsonValue(prevPlugin.publicConfig, nextPlugin.publicConfig)
 }
 
+/** 从 `doc:<pluginId>/<name>` 错误键提取 pluginId；非 doc 错误键返回 undefined。 */
+export function extractDocErrorPluginId(key: string): string | undefined {
+  if (!key.startsWith('doc:')) return undefined
+  const slash = key.lastIndexOf('/')
+  return slash > 4 ? key.slice(4, slash) : undefined
+}
+
+/** 按 `doc:<pluginId>/` 前缀集合从 loadErrors 清理过期文档错误（无变化时原引用返回）。 */
+export function omitPluginDocLoadErrors(
+  prev: Record<string, string>,
+  pluginIds: ReadonlySet<string>,
+): Record<string, string> {
+  if (pluginIds.size === 0) return prev
+  let changed = false
+  const next: Record<string, string> = {}
+  for (const [key, value] of Object.entries(prev)) {
+    const pluginId = extractDocErrorPluginId(key)
+    if (pluginId !== undefined && pluginIds.has(pluginId)) {
+      changed = true
+      continue
+    }
+    next[key] = value
+  }
+  return changed ? next : prev
+}
+
+export interface ReconcilePluginsResult {
+  state: LiveState
+  /** 非 active（disabled / failed）或已移除的插件 ID：需关闭 sessionDoc 订阅并逐出缓存。 */
+  inactivePluginIds: Set<string>
+  /** 需清理 `doc:<pluginId>/` 失败抑制、在途请求与 loadErrors 并递增 pluginEpoch 的插件 ID。 */
+  invalidatedDocPluginIds: Set<string>
+}
+
+/**
+ * 按 HTTP 全量插件摘要校准 LiveState：
+ * - 按 `sameJsonValue` 保留未变更插件引用；
+ * - 立即清理非 active（disabled / enabled=true,status=failed）及已移除插件的 `uiContributions` 与 `pluginDocs`；
+ * - 对 active 插件的非纯配置变更（`clientHashes` 或非配置元数据变化）及非 active→active 恢复，
+ *   清理其 `pluginDocs` 并记录到 `invalidatedDocPluginIds`；纯 `publicConfig` 变更保留 `uiContributions`、
+ *   `pluginDocs` 与 doc 请求/错误状态；
+ * - 架构边界：`PluginSummary` 不含 `PluginUiContribution[]`，对仍 active 的插件保留既有 `uiContributions`。
+ */
+export function reconcilePluginsState(
+  state: LiveState,
+  nextPlugins: readonly PluginSummary[],
+): ReconcilePluginsResult {
+  const prevById = new Map(state.plugins.map((p) => [p.id, p]))
+  const nextById = new Map<string, PluginSummary>()
+  const mergedPlugins = nextPlugins.map((incoming) => {
+    const local = prevById.get(incoming.id)
+    const resolved = local !== undefined && sameJsonValue(local, incoming) ? local : incoming
+    nextById.set(resolved.id, resolved)
+    return resolved
+  })
+
+  const activeNextIds = new Set<string>()
+  const inactivePluginIds = new Set<string>()
+  const invalidatedDocPluginIds = new Set<string>()
+
+  for (const plugin of mergedPlugins) {
+    if (isPluginSummaryActive(plugin)) {
+      activeNextIds.add(plugin.id)
+      const prevPlugin = prevById.get(plugin.id)
+      const unchangedOrConfigOnly =
+        prevPlugin !== undefined &&
+        isPluginSummaryActive(prevPlugin) &&
+        (prevPlugin === plugin ||
+          (sameClientHashes(prevPlugin.clientHashes, plugin.clientHashes) &&
+            sameNonConfigPluginMetadata(prevPlugin, plugin)))
+      if (!unchangedOrConfigOnly) {
+        invalidatedDocPluginIds.add(plugin.id)
+      }
+    } else {
+      inactivePluginIds.add(plugin.id)
+      invalidatedDocPluginIds.add(plugin.id)
+    }
+  }
+
+  for (const prevPlugin of state.plugins) {
+    if (!nextById.has(prevPlugin.id)) {
+      inactivePluginIds.add(prevPlugin.id)
+      invalidatedDocPluginIds.add(prevPlugin.id)
+    }
+  }
+
+  const keepUi = state.uiContributions.filter((item) => {
+    if (activeNextIds.has(item.pluginId)) return true
+    inactivePluginIds.add(item.pluginId)
+    invalidatedDocPluginIds.add(item.pluginId)
+    return false
+  })
+  const uiChanged = keepUi.length !== state.uiContributions.length
+
+  let docsChanged = false
+  const nextDocs: Record<string, unknown> = {}
+  for (const [docKey, value] of Object.entries(state.pluginDocs)) {
+    const slash = docKey.lastIndexOf('/')
+    const pluginId = slash > 0 ? docKey.slice(0, slash) : ''
+    if (pluginId === '' || !activeNextIds.has(pluginId)) {
+      if (pluginId !== '') {
+        inactivePluginIds.add(pluginId)
+        invalidatedDocPluginIds.add(pluginId)
+      }
+      docsChanged = true
+      continue
+    }
+    if (invalidatedDocPluginIds.has(pluginId)) {
+      docsChanged = true
+      continue
+    }
+    nextDocs[docKey] = value
+  }
+
+  const pluginsChanged =
+    mergedPlugins.length !== state.plugins.length ||
+    mergedPlugins.some((item, index) => item !== state.plugins[index])
+
+  const nextState =
+    pluginsChanged || uiChanged || docsChanged
+      ? {
+          ...state,
+          ...(pluginsChanged ? { plugins: mergedPlugins } : {}),
+          ...(uiChanged ? { uiContributions: keepUi } : {}),
+          ...(docsChanged ? { pluginDocs: nextDocs } : {}),
+        }
+      : state
+
+  return { state: nextState, inactivePluginIds, invalidatedDocPluginIds }
+}
+
 /** ConversationLive 边界形状校验（与内核 conversation.live 事件同一判定）。 */
 function isLiveShape(value: unknown): value is ConversationLive {
   if (value === null || typeof value !== 'object') return false
@@ -342,7 +473,7 @@ export function applyEventFrame(state: LiveState, frame: HelmxEventFrame): LiveS
         const prevPlugin = state.plugins.find((p) => p.id === event.plugin.id)
         const prevUi = state.uiContributions.filter((item) => item.pluginId === event.plugin.id)
         const nextUi = Array.isArray(event.ui) ? event.ui : []
-        const configOnly = isConfigOnlyPluginChange(prevPlugin, prevUi, event.plugin, nextUi)
+        const configOnly = Array.isArray(event.ui) && isConfigOnlyPluginChange(prevPlugin, prevUi, event.plugin, nextUi)
         const active = isPluginSummaryActive(event.plugin)
 
         next.plugins = upsert(state.plugins, event.plugin)
