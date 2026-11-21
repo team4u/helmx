@@ -4,6 +4,7 @@
  * (the host shares the React runtime; this package does not import React types).
  */
 
+import type { ModelCatalog } from './assets.js'
 import type { ConversationAttachmentRef, ConversationEntry, ConversationScope, ConversationSummary, ToolResultTruncation, WhenBusy } from './conversation.js'
 import type { HelmxLocale, LocaleTranslator, LocalizedText } from './locale.js'
 import type { PluginSummary } from './plugin-dto.js'
@@ -590,9 +591,11 @@ export interface PluginClientContext {
  * The single source of truth of exported symbols is PLUGIN_CLIENT_SHARED_EXPORTS:
  * - hooks: usePluginContext / usePluginLocale / usePluginTranslator / usePluginDoc / usePluginSessionDoc /
  *   useToolActivity / useConversations / useConversation / useConversationBackground / usePlugins /
- *   useModels;
- * - ModelPickerControl: shared model + thinking-level picker (host catalog slice via useModels,
- *   apply/reset callbacks keep the PI follow-default semantics);
+ *   usePluginConfig / useHostModels / useScreenLocation (stable-handle reads of host capability slices:
+ *   model catalog, navigation location; isolation contract pinned by @helmx/plugin-client tests —
+ *   unrelated host port revisions must not re-render consumers);
+ * - ModelPickerControl: shared model + thinking-level picker (reads the catalog via the useHostModels
+ *   stable-handle slice; apply/reset callbacks keep the PI follow-default semantics);
  * - model formatting pure functions: formatModelShortName / formatModelRowDisplay /
  *   resolveEffectiveThinkingLevel;
  * - accessibility base components: Switch / Select / MultiSelect / Checkbox / Tabs family /
@@ -619,46 +622,83 @@ export interface UsePluginsResult {
   screens: Array<{ pluginId: string; spec: ScreenSpec }>
 }
 
+
+// ---------------------------------------------------------------------------
+// Host capability slices: read-only host facts shared with plugin views
+// (reactively read through stable host handles — never as churning Context
+// data members; an absent capability means "unknown", never fabricated data)
+// ---------------------------------------------------------------------------
+
 /**
- * Flattened host model catalog entry for model pickers (the normalized view of
- * `GET /api/models` the host model picker itself consumes): `id` is the
- * canonical `'provider/modelId'` reference written to conversation / profile /
- * plugin config, with the catalog's per-model thinking levels inlined.
+ * Normalized per-model view of the host model catalog: the exact shape the
+ * host derives from `GET /api/models` (single implementation of the
+ * normalization stays in the host; the SDK forwards the same reference, never
+ * a copy or a mock). Contract single source of this shape — web may alias its
+ * legacy descriptor to it, parallel field sets are forbidden.
  */
-export interface ModelSummary {
-  /** Canonical `'provider/modelId'` reference (the value config fields carry). */
+export interface HostModelEntry {
+  /** Full `'provider/modelId'` reference (the value stored in configs / overrides). */
   id: string
   provider: string
   modelId: string
+  /** false = listed in the catalog but currently unusable (render dimmed), not "removed". */
   available: boolean
-  /** User explicitly disabled this model (catalog annotation; available still reflects credential usability — the two are independent). */
+  /** Host-side model disable-filter annotation (independent from `available`). */
   disabled?: boolean
+  /** Display label (defaults to modelId). */
   label?: string
-  /** Supported thinking levels (defaults to off only). */
-  thinkingLevels: string[]
+  /** Capability table of thinking levels in display order; carries no profile-effective values. */
+  thinkingLevels: readonly string[]
+
   /** Real known model context window (tokens); omitted when unknown. */
   contextWindow?: number
 }
 
 /**
- * Host model catalog snapshot shared with plugins via stable subscription
- * handles (never a Context-value data member): `unknown === true` means model
- * facts are not yet knowable (first load still in flight, or the host provides
- * no catalog capability) — consumers must render an explicit unknown state,
- * never treat the empty list as "no models exist".
+
+ * useHostModels(): reactive read-only model catalog slice — normalized
+ * entries plus the global default chain (the top-level fields of
+ * `ModelCatalog`; per-model thinking levels are already embedded in each
+ * entry, so the catalog's separate `thinkingLevels` map is not carried). The
+ * slice is a faithful read-only view of one `GET /api/models` response.
+ * `undefined` = the capability is not injected or the catalog has not
+ * finished its first load (render unknown/loading and disable selection,
+ * never a fabricated empty catalog); a slice with `models: []` = loaded and
+ * genuinely empty — the two states are strictly distinct. Dynamic refresh,
+ * when offered, is the handle's optional refreshModels action.
  */
-export interface ModelCatalogSnapshot {
-  /** true while catalog facts are unknowable (loading / capability absent). */
-  unknown: boolean
-  models: ReadonlyArray<ModelSummary>
+export interface HostModelsSlice extends Omit<ModelCatalog, 'models' | 'thinkingLevels'> {
+  models: ReadonlyArray<HostModelEntry>
 }
 
-/** Outcome of the host model catalog refresh action (minimal facts for picker notices). */
-export interface ModelCatalogRefreshOutcome {
-  /** Per dynamic provider refresh errors (providerId -> message; empty when all succeeded). */
-  errors: Record<string, string>
-  /** Model count of the latest catalog after the refresh. */
-  modelCount: number
+/** One pane of the host navigation location resolved from the URL hash (single source of truth). */
+export interface ScreenLocationPane {
+  /** Owning plugin of the screen currently shown in this pane. */
+  pluginId: string
+  /** Screen ID currently shown in this pane. */
+  screenId: string
+  /** This pane's screen params (sp.* for the primary pane, ssp.* for the split pane). */
+  params: Readonly<Record<string, string>>
+}
+
+/**
+ * useScreenLocation(): reactive read-only snapshot of where the host has
+ * navigated (global location awareness for sidebar widgets / drawer panels;
+ * in-screen param scope stays with ScreenProps / the in-screen useScreenParams
+ * hook). Structured members carry truth, not loading state: `screen`
+ * undefined = the primary pane is not a plugin screen (conversation, overview,
+ * ...), `split` undefined = no split pane open — the hash is a synchronous
+ * truth with no loading state to fake. The hook returns `undefined` only when
+ * the host has not wired the capability (additive adoption). Writing params
+ * stays with ScreenProps.setParams of the owning screen (no second write
+ * path, hash stays the single source of truth).
+ */
+export interface ScreenLocationSnapshot {
+  /** Primary pane when it shows a plugin screen; undefined when it does not. */
+  screen?: ScreenLocationPane
+  /** Split pane when a split view is open; undefined when none is. */
+  split?: ScreenLocationPane
+
 }
 
 /** GET /api/plugins/:id/client.mjs response metadata (HTTP error envelope on failure, never JS). */
@@ -713,7 +753,8 @@ export const PLUGIN_CLIENT_SHARED_EXPORTS = [
   'useConversationBackground',
   'usePlugins',
   'usePluginConfig',
-  'useModels',
+  'useHostModels',
+  'useScreenLocation',
   'ModelPickerControl',
   'formatModelShortName',
   'formatModelRowDisplay',
