@@ -310,11 +310,12 @@ export const PROFILE_DETAIL_SECTION_SLOT = 'builtin:profile/detail-section' as c
 export const NODE_DETAIL_SECTION_SLOT = 'builtin:node/detail-section' as const
 
 /** Namespace reserved by the host composer status row; does not imply a builtin:composer plugin exists.
- * Contribution components receive ComposerScopeProps with the same shape as
- * composer.pill/widget (conversation + composer) and render next to the
- * read-only context usage state; read-only rate metrics (e.g. builtin:token-speed)
- * are contributed through this slot; on mobile they also stay in the toolbar
- * status area (not folded into the more menu). */
+ * Contribution components receive ComposerStatusSlotProps (real conversations
+ * pass ComposerScopeProps with conversation + composer; standby drafts pass
+ * effectiveModel + profileId without a persisted conversation) and render next
+ * to the read-only context usage state; metrics such as builtin:token-speed and
+ * builtin:magpie quota indicators are contributed through this slot; on mobile
+ * they also stay in the toolbar status area (not folded into the more menu). */
 export const COMPOSER_STATUS_SLOT = 'builtin:composer/status' as const
 
 /** Namespace reserved by the host composer top tray; does not imply a builtin:composer plugin exists.
@@ -460,6 +461,16 @@ export interface ComposerController {
 export interface ComposerScopeProps {
   conversation: ConversationSummary
   composer: ComposerController
+}
+
+/** COMPOSER_STATUS_SLOT: real conversations pass ComposerScopeProps; standby drafts pass effectiveModel + profileId. */
+export interface ComposerStatusSlotProps {
+  conversation?: ConversationSummary
+  composer?: ComposerController
+  /** Effective model reference ('provider/model' or 'tier/<id>') on standby drafts before persistence. */
+  effectiveModel?: string
+  /** Profile ID on standby drafts before persistence. */
+  profileId?: string
 }
 
 /** workbench.panel: conversation-aware right-drawer panel. */
@@ -784,6 +795,7 @@ export const PLUGIN_CLIENT_SHARED_EXPORTS = [
   'useScreenParams',
   'useHostModels',
   'useScreenLocation',
+  'useSharedNowMs',
   'ModelPickerControl',
   'formatModelShortName',
   'formatModelRowDisplay',
@@ -815,6 +827,12 @@ export const PLUGIN_CLIENT_SHARED_EXPORTS = [
   'DialogDescription',
   'DialogClose',
   'DialogTrigger',
+  'Popover',
+  'PopoverPortal',
+  'PopoverTrigger',
+  'PopoverContent',
+  'PopoverClose',
+  'PopoverArrow',
   'AlertDialog',
   'AlertDialogPortal',
   'AlertDialogOverlay',

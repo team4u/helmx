@@ -26,10 +26,21 @@ export const DEFAULT_MAGPIE_TOKEN = 'magpie'
 export const MAGPIE_ROOT_ENV = 'MAGPIE_GW_URL'
 export const MAGPIE_ADDR_ENV = 'MAGPIE_ADDR'
 
+/** Default foreground auto-refresh interval in seconds (0 disables auto-refresh). */
+export const DEFAULT_MAGPIE_REFRESH_INTERVAL_SEC = 5
+export const MAX_MAGPIE_REFRESH_INTERVAL_SEC = 3600
+
 /** The plugin config (the effective view after merging config.json + credentials.json secret). */
 export interface MagpiePluginConfig {
   gatewayUrl?: string
   apiKey?: string
+  refreshIntervalSec?: number
+}
+
+/** Public (non-secret) subset of plugin config projected to client.tsx via usePluginConfig(). */
+export interface MagpiePublicConfig {
+  gatewayUrl?: string
+  refreshIntervalSec?: number
 }
 
 /**
@@ -53,16 +64,24 @@ export function sameGateway(a: MagpieGatewayRef, b: MagpieGatewayRef): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// Public status doc (shared by composer.pill / settings.panel / the helmx magpie status CLI)
+// Public status doc (shared by composer status slot / settings.panel / the helmx magpie status CLI)
 // ---------------------------------------------------------------------------
 
-/** One quota display row (one row per window of each subscription/plan/key). remainingPercent -1 means unknown. */
-interface MagpieStatusQuota {
+/** One quota display row (one row per window of each subscription/plan/key). remainingPercent -1 means no percentage reading. */
+export interface MagpieStatusQuota {
   provider: string
   account?: string
   remainingPercent: number
   resetText?: string
+  resetsAt?: string
   windowLabel?: string
+  displayText?: string
+  unlimited?: boolean
+  pool?: string
+  last?: boolean
+  lastServedAt?: string
+  readAt?: string
+  error?: string
 }
 
 /** One routing group's recent-hit trace row. */
@@ -83,12 +102,22 @@ export interface MagpieStatusDoc {
   reachable: boolean
   modelCount: number
   groupCount: number
-  /** The most recent successful network refresh time; advances only on success. */
+  /** The most recent successful network catalog refresh time; advances only on catalog refresh success. */
   lastRefreshedAt?: number
   /** The most recent failure reason (redacted: no token). */
   lastError?: string
-  /** For composer.pill and settings.panel to bind and display directly (no Emoji). */
+  /** The most recent successful live vendor quota refresh time (GET /v1/magpie/quotas without kept=1). */
+  quotasRefreshedAt?: number
+  /** The most recent quota snapshot update time (including silent kept=1 sidecar syncs). */
+  quotasUpdatedAt?: number
+  /** The most recent live quota refresh error (redacted; cleared on the next successful quota read). */
+  quotasError?: string
+  /** For settings.panel and status summaries to bind and display directly (no Emoji). */
   summaryText: string
+  /** Current gateway catalog modelId -> owning Magpie provider id (used by composer status slot to match quotas to the active model). */
+  modelOwners: Record<string, string>
+  /** Known routing-group modelId -> member provider ids (populated from gateway trace / local CLI when available). */
+  groupProviders?: Record<string, string[]>
   quotas: MagpieStatusQuota[]
   routes: MagpieStatusRoute[]
   /** Business-side diagnostics (redacted): reasons quotas / routing traces are unavailable etc.; an empty array means none. */

@@ -21,11 +21,13 @@ import type { ConversationBackgroundIndex } from '../src/shell/background-activi
 import {
   buildOverviewCards,
   filterOverviewCards,
+  groupOverviewCards,
   overviewBucketCounts,
   overviewFilterParamsRepair,
   overviewNodeKey,
   overviewNodeOptions,
   overviewProfileOptions,
+  overviewShouldShowSectionHeaders,
   parseOverviewFilterParams,
   OVERVIEW_DESCENDANT_LIMIT,
 } from '../src/overview/overview-model.js'
@@ -301,28 +303,96 @@ test('parseOverviewFilterParams / overviewFilterParamsRepair: deep-link params p
     nodeId: '',
     source: 'all',
     query: '',
+    groupBy: 'status',
   }, 'no params: pure defaults')
-  assert.deepEqual(parseOverviewFilterParams({ bucket: 'running', profile: 'coder', node: 'local', source: 'managed', q: '调研' }), {
+  assert.deepEqual(parseOverviewFilterParams({ bucket: 'running', profile: 'coder', node: 'local', source: 'managed', q: '调研', group: 'profile' }), {
     bucket: 'running',
     profileId: 'coder',
     nodeId: 'local',
     source: 'managed',
     query: '调研',
+    groupBy: 'profile',
   }, 'every known key parses verbatim')
   assert.equal(parseOverviewFilterParams({ bucket: 'bogus' }).bucket, 'all', 'an invalid bucket value falls back to all (hash-model invalid-segment philosophy)')
   assert.equal(parseOverviewFilterParams({ bucket: 'all' }).bucket, 'all', 'the redundant all value parses as the default')
   assert.equal(parseOverviewFilterParams({ source: 'weird' }).source, 'all', 'an invalid source value falls back to all')
+  assert.equal(parseOverviewFilterParams({ group: 'status' }).groupBy, 'status', 'the redundant status value parses as the default')
+  assert.equal(parseOverviewFilterParams({ group: 'weird' }).groupBy, 'status', 'an invalid group value falls back to status')
+  assert.equal(parseOverviewFilterParams({ group: 'node' }).groupBy, 'node')
   assert.equal(parseOverviewFilterParams({ profile: 'some-stale-id' }).profileId, 'some-stale-id', 'profile/node/q are opaque ids kept verbatim')
 
   assert.equal(overviewFilterParamsRepair(undefined), null, 'no params: nothing to repair')
   assert.equal(
-    overviewFilterParamsRepair({ bucket: 'running', profile: 'coder', q: 'x' }),
+    overviewFilterParamsRepair({ bucket: 'running', profile: 'coder', q: 'x', group: 'node' }),
     null,
     'already-canonical params produce no patch (no write amplification)',
   )
   assert.deepEqual(overviewFilterParamsRepair({ bucket: 'bogus', q: 'x' }), { bucket: undefined }, 'an invalid bucket value is deleted')
-  assert.deepEqual(overviewFilterParamsRepair({ bucket: 'all', source: 'all' }), { bucket: undefined, source: undefined }, 'redundant default enums are deleted')
+  assert.deepEqual(overviewFilterParamsRepair({ bucket: 'all', source: 'all', group: 'status' }), { bucket: undefined, source: undefined, group: undefined }, 'redundant default enums are deleted')
+  assert.deepEqual(overviewFilterParamsRepair({ group: 'invalid' }), { group: undefined }, 'invalid group value is deleted')
   assert.deepEqual(overviewFilterParamsRepair({ tab: 'runs' }), { tab: undefined }, 'unknown keys are deleted (the overview owns its sp. namespace)')
+})
+
+test('groupOverviewCards / overviewShouldShowSectionHeaders: status, profile and node groupings preserve urgency-first order and flatten redundant single-value headers', { timeout: 60_000 }, () => {
+  const cards = buildCards(
+    [
+      conv({ id: 1, title: '卡住了', profileId: 'assistant', status: 'blocked', createdAt: 9000 }),
+      conv({ id: 2, title: '在跑', profileId: 'coder', nodeId: 'remote-1', status: 'working', createdAt: 8000 }),
+      conv({ id: 3, title: '未读完', profileId: 'coder', status: 'done', unread: true, createdAt: 7000 }),
+      conv({ id: 4, title: '安静', profileId: 'assistant', status: 'idle', createdAt: 6000 }),
+    ],
+    new Map(),
+    {
+      profiles: [
+        { id: 'assistant', name: '个人助理' },
+        { id: 'coder', name: '编码专员' },
+      ],
+    },
+  )
+
+  const byStatus = groupOverviewCards(cards, 'status')
+  assert.deepEqual(
+    byStatus.map((g) => [g.key, g.label, g.cards.map((c) => c.root.id)]),
+    [
+      ['bucket:needs_attention', 'Needs attention', [1]],
+      ['bucket:running', 'Running', [2]],
+      ['bucket:unread_done', 'Unread completed', [3]],
+      ['bucket:quiet', 'Quiet', [4]],
+    ],
+  )
+  assert.deepEqual(
+    groupOverviewCards(cards.filter((c) => c.bucket !== 'unread_done'), 'status').map((g) => g.key),
+    ['bucket:needs_attention', 'bucket:running', 'bucket:quiet'],
+    'empty buckets are omitted completely',
+  )
+
+  // profile grouping orders profiles by first appearance (urgency-first) and keeps per-profile bucket/createdAt order
+  const byProfile = groupOverviewCards(cards, 'profile')
+  assert.deepEqual(
+    byProfile.map((g) => [g.key, g.label, g.cards.map((c) => c.root.id)]),
+    [
+      ['profile:assistant', '个人助理', [1, 4]],
+      ['profile:coder', '编码专员', [2, 3]],
+    ],
+  )
+
+  // node grouping normalizes missing nodeId to local and keeps urgency-first node order
+  const byNode = groupOverviewCards(cards, 'node')
+  assert.deepEqual(
+    byNode.map((g) => [g.key, g.label, g.cards.map((c) => c.root.id)]),
+    [
+      ['node:local', 'Local', [1, 3, 4]],
+      ['node:remote-1', 'remote-1', [2]],
+    ],
+  )
+  assert.deepEqual(groupOverviewCards([], 'status'), [])
+
+  assert.equal(overviewShouldShowSectionHeaders({ groupBy: 'status', bucket: 'all', profileId: '', nodeId: '' }), true)
+  assert.equal(overviewShouldShowSectionHeaders({ groupBy: 'status', bucket: 'running', profileId: '', nodeId: '' }), false, 'single bucket under status grouping flattens')
+  assert.equal(overviewShouldShowSectionHeaders({ groupBy: 'profile', bucket: 'running', profileId: '', nodeId: '' }), true, 'single bucket under profile grouping still groups by agent')
+  assert.equal(overviewShouldShowSectionHeaders({ groupBy: 'profile', bucket: 'all', profileId: 'coder', nodeId: '' }), false, 'single profile under profile grouping flattens')
+  assert.equal(overviewShouldShowSectionHeaders({ groupBy: 'node', bucket: 'all', profileId: '', nodeId: 'local' }), false, 'single node under node grouping flattens')
+  assert.equal(overviewShouldShowSectionHeaders({ groupBy: 'status', bucket: 'all', profileId: 'coder', nodeId: '' }), true, 'filtering profile while grouping by status keeps status sections')
 })
 
 // ---------------------------------------------------------------------------
@@ -1378,8 +1448,8 @@ test('ConversationOverview batch mode: card click toggles selection, managed/bot
     assert.ok(batchBar !== null, 'entering batch mode renders the batch bar')
     const scrollContainer = mount.container.querySelector('.overview-scroll')
     const batchWrap = mount.container.querySelector('.overview-scroll > .overview-batch-bar-wrap')
-    const grid = mount.container.querySelector('.overview-scroll > .overview-grid')
-    assert.ok(scrollContainer !== null && batchWrap !== null && grid !== null, 'batch bar and card grid share the same scroll container')
+    const stage = mount.container.querySelector('.overview-scroll > .overview-sections, .overview-scroll > .overview-grid')
+    assert.ok(scrollContainer !== null && batchWrap !== null && stage !== null, 'batch bar and card stage share the same scroll container')
     assert.ok(batchBar.parentElement === batchWrap, 'batch bar sits inside .overview-batch-bar-wrap for aligned outer gutters')
 
     const cards = [...mount.container.querySelectorAll<HTMLElement>('.overview-card')]
@@ -1647,7 +1717,7 @@ test('ConversationOverview empty semantics: filtered no-match offers clear filte
 
 test('ConversationOverview +N more is a real entry: expanding reveals the remaining descendants in the same deterministic order', { timeout: 60_000 }, async () => {
   const conversations = [
-    conv({ id: 1, title: '多子代理任务', profileId: 'assistant', createdAt: 9000, updatedAt: 9000 }),
+    conv({ id: 1, title: '多子代理任务', profileId: 'assistant', status: 'working', createdAt: 9000, updatedAt: 9000 }),
     ...Array.from({ length: 7 }, (_, index) =>
       conv({ id: 11 + index, parentConversationId: 1, title: `子任务 ${index + 1}`, status: 'idle', createdAt: 9100 + index }),
     ),
@@ -1986,5 +2056,210 @@ test('ConversationOverview split instance navigates conversations into the same 
       root?.unmount()
     })
     container.remove()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 交互：分层态势分组舞台（分节、折叠、Group by、安静降噪、搜索防藏匿）
+// ---------------------------------------------------------------------------
+
+test('ConversationOverview quiet cards collapse descendants by default into a single summary pill and expand in-card', { timeout: 60_000 }, async () => {
+  const conversations = [
+    conv({ id: 1, title: '已完成重构', profileId: 'assistant', status: 'idle', createdAt: 9000, updatedAt: 9000 }),
+    ...Array.from({ length: 7 }, (_, index) =>
+      conv({ id: 11 + index, parentConversationId: 1, title: `静默子任务 ${index + 1}`, status: 'idle', createdAt: 9100 + index }),
+    ),
+    conv({ id: 2, title: '单子会话树', profileId: 'assistant', status: 'idle', createdAt: 8000, updatedAt: 8000 }),
+    conv({ id: 21, parentConversationId: 2, title: '唯一子任务', status: 'idle', createdAt: 8100 }),
+  ]
+  const store = overviewStore({ conversations, primaryTarget: { kind: 'overview' } })
+  const mount = await mountOverview(store)
+  try {
+    const multiCard = cardById(mount.container, 1)!
+    const singleCard = cardById(mount.container, 2)!
+    assert.equal(multiCard.querySelectorAll('.overview-chip').length, 0, 'quiet card hides finished descendant chips by default')
+    const toggle = multiCard.querySelector<HTMLButtonElement>('.overview-chip-more')
+    assert.ok(toggle !== null, 'quiet card renders the single descendant summary pill')
+    assert.equal(toggle.getAttribute('aria-expanded'), 'false')
+    assert.equal(toggle.textContent, '7 sub-conversations')
+    assert.equal(
+      singleCard.querySelector('.overview-chip-more')?.textContent,
+      '1 sub-conversation',
+      'singular count avoids plural mismatch',
+    )
+
+    await act(async () => {
+      toggle.click()
+    })
+    const expandedChips = multiCard.querySelectorAll('.overview-chip')
+    assert.equal(expandedChips.length, 7, 'clicking the quiet summary pill expands every descendant in-card')
+    assert.equal(multiCard.querySelector('.overview-chip-more')?.textContent, 'Show less')
+    assert.equal(multiCard.querySelector('.overview-chip-more')?.getAttribute('aria-expanded'), 'true')
+
+    await act(async () => {
+      multiCard.querySelector<HTMLButtonElement>('.overview-chip-more')?.click()
+    })
+    assert.equal(multiCard.querySelectorAll('.overview-chip').length, 0, 'clicking Show less collapses back to the summary pill')
+    assert.equal(multiCard.querySelector('.overview-chip-more')?.textContent, '7 sub-conversations')
+  } finally {
+    await mount.unmount()
+  }
+})
+
+test('ConversationOverview grouped stage renders non-empty status sections, flattens single-bucket view, and supports Group by via sp.group', { timeout: 60_000 }, async () => {
+  const store = overviewStore({
+    conversations: [
+      conv({ id: 1, title: '出错的重构', profileId: 'assistant', status: 'blocked', createdAt: 9000 }),
+      conv({ id: 2, title: '远端调研', profileId: 'coder', nodeId: 'remote-1', status: 'working', createdAt: 8000 }),
+      conv({ id: 3, title: '安静会话', profileId: 'coder', status: 'idle', createdAt: 7000 }),
+    ],
+    primaryTarget: { kind: 'overview' },
+  })
+  const mount = await mountOverview(store)
+  try {
+    // 默认按状态：只渲染非空分节（Unread completed 省略）
+    const sections = [...mount.container.querySelectorAll<HTMLElement>('.overview-section')]
+    assert.deepEqual(
+      sections.map((el) => el.getAttribute('data-group-key')),
+      ['bucket:needs_attention', 'bucket:running', 'bucket:quiet'],
+      'empty buckets render zero section headers',
+    )
+    assert.ok(sections[0]!.textContent?.includes('Needs attention'))
+    assert.ok(sections[1]!.textContent?.includes('Running'))
+    assert.ok(sections[2]!.textContent?.includes('Quiet'))
+
+    // 切到单桶 Running：去套娃，不重复渲染「Running」单节头
+    const runningTab = [...mount.container.querySelectorAll('.segmented-control-btn')].find((btn) =>
+      btn.textContent?.includes('Running'),
+    ) as HTMLElement
+    await act(async () => {
+      runningTab.click()
+    })
+    assert.equal(mount.container.querySelectorAll('.overview-section').length, 0, 'single-bucket status view flattens out redundant section header')
+    assert.equal(mount.container.querySelectorAll('.overview-card').length, 1)
+
+    // 切回 All 并切换 Group by -> By agent（经 Select），写入 sp.group=profile，且不污染筛选统计
+    const allTab = [...mount.container.querySelectorAll('.segmented-control-btn')].find((btn) =>
+      btn.textContent?.startsWith('All'),
+    ) as HTMLElement
+    await act(async () => {
+      allTab.click()
+    })
+    const groupSelect = mount.container.querySelector<HTMLElement>('[aria-label="Group by"]')
+    assert.ok(groupSelect !== null, 'the toolbar renders the Group by select')
+    await act(async () => {
+      groupSelect.click()
+    })
+    const byAgentOption = [...document.body.querySelectorAll('[role="option"]')].find((el) =>
+      el.textContent?.includes('By agent'),
+    ) as HTMLElement | undefined
+    assert.ok(byAgentOption !== undefined)
+    await act(async () => {
+      byAgentOption.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    })
+    assert.deepEqual(store.getNavSlice().primaryTarget, { kind: 'overview', params: { group: 'profile' } })
+    assert.ok(mount.container.textContent?.includes('3 conversation groups'), 'grouping alone never shows filtered count stats')
+    assert.deepEqual(
+      [...mount.container.querySelectorAll<HTMLElement>('.overview-section')].map((el) => el.getAttribute('data-group-key')),
+      ['profile:assistant', 'profile:coder'],
+      'profile grouping orders agents by urgency-first appearance',
+    )
+
+    // 在按角色分组下再切 Running 单桶：保留各角色节头
+    await act(async () => {
+      runningTab.click()
+    })
+    assert.deepEqual(
+      [...mount.container.querySelectorAll<HTMLElement>('.overview-section')].map((el) => el.getAttribute('data-group-key')),
+      ['profile:coder'],
+      'filtering bucket while grouped by agent preserves agent grouping headers',
+    )
+
+    // 深链切换到 node 分组并校验无效 sp.group 自愈
+    await act(async () => {
+      store.applyExternalLocation(parseLocationHash('#/overview?sp.group=node'))
+    })
+    await overviewSettle()
+    assert.deepEqual(
+      [...mount.container.querySelectorAll<HTMLElement>('.overview-section')].map((el) => el.getAttribute('data-group-key')),
+      ['node:local', 'node:remote-1'],
+    )
+    await act(async () => {
+      store.applyExternalLocation(parseLocationHash('#/overview?sp.group=bogus'))
+    })
+    await overviewSettle()
+    assert.deepEqual(store.getNavSlice().primaryTarget, { kind: 'overview' }, 'invalid group param repairs to canonical clean target')
+  } finally {
+    await mount.unmount()
+  }
+})
+
+test('ConversationOverview section collapse hides cards, excludes them from batch selection, and auto-expands during search', { timeout: 60_000 }, async () => {
+  const store = overviewScenarioStore()
+  const mount = await mountOverview(store)
+  try {
+    const quietSection = mount.container.querySelector<HTMLElement>('[data-group-key="bucket:quiet"]')
+    const quietToggle = quietSection?.querySelector<HTMLButtonElement>('.overview-section-toggle')
+    assert.ok(quietToggle !== null && quietToggle !== undefined)
+    assert.equal(quietToggle.getAttribute('aria-expanded'), 'true')
+    assert.equal(mount.container.querySelectorAll('.overview-card').length, 3)
+
+    // 折叠 Quiet 分节：卡片收起；切入批量模式后全选仅覆盖当前可见的 2 张活跃卡
+    await act(async () => {
+      quietToggle.click()
+    })
+    assert.equal(quietToggle.getAttribute('aria-expanded'), 'false')
+    assert.equal(mount.container.querySelectorAll('.overview-card').length, 2, 'collapsed section hides its cards')
+
+    const batchToggle = mount.container.querySelector<HTMLButtonElement>('.overview-batch-toggle')
+    await act(async () => {
+      batchToggle?.click()
+    })
+    const selectAll = [...mount.container.querySelectorAll<HTMLButtonElement>('.overview-batch-bar button')]
+      .find((btn) => btn.textContent === 'Select all')
+    await act(async () => {
+      selectAll?.click()
+    })
+    assert.ok(mount.container.textContent?.includes('2 selected'), 'select-all only picks visible cards from expanded sections')
+
+    // 展开 Quiet 再折叠：若把已选卡收起，隐藏项立即从有效选择集出局
+    await act(async () => {
+      quietToggle.click()
+    })
+    await act(async () => {
+      cardById(mount.container, 3)?.click()
+    })
+    assert.ok(mount.container.textContent?.includes('3 selected'))
+    await act(async () => {
+      quietToggle.click()
+    })
+    assert.ok(mount.container.textContent?.includes('2 selected'), 'collapsing a section drops its hidden cards from batch selection')
+
+    // 搜索防藏匿：命中 Quiet 卡片时自动临时展开；清空搜索后恢复先前折叠态
+    const input = mount.container.querySelector<HTMLInputElement>('.overview-search-box input')
+    assert.ok(input !== null)
+    const valueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
+    await act(async () => {
+      valueSetter?.call(input, '安静')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    assert.equal(mount.container.querySelectorAll('.overview-card').length, 1, 'search expands the matching section so the quiet card is never hidden')
+    assert.equal(
+      mount.container.querySelector<HTMLButtonElement>('[data-group-key="bucket:quiet"] .overview-section-toggle')?.getAttribute('aria-expanded'),
+      'true',
+    )
+
+    const clearBtn = mount.container.querySelector<HTMLButtonElement>('.overview-search-clear')
+    await act(async () => {
+      clearBtn?.click()
+    })
+    assert.equal(
+      mount.container.querySelector<HTMLButtonElement>('[data-group-key="bucket:quiet"] .overview-section-toggle')?.getAttribute('aria-expanded'),
+      'false',
+      'clearing search restores the previous section collapse preference',
+    )
+    assert.equal(mount.container.querySelectorAll('.overview-card').length, 2)
+  } finally {
+    await mount.unmount()
   }
 })

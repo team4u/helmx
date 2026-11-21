@@ -130,12 +130,15 @@ export const boardPostInputSchema: Record<string, unknown> = {
     kind: {
       type: 'string',
       enum: ['brief', 'handoff', 'review', 'comment', 'blocker', 'done'],
+      description:
+        "Message intent: 'brief' (task assignment), 'handoff' (peer delivery), 'review' (verification feedback), 'comment' (passive note, wake defaults false), 'blocker' (escalates to coordinator immediately), 'done' (final completion to coordinator)",
     },
     body: { type: 'string', minLength: 1 },
     channel: channelNameSchema,
     wake: {
       type: 'boolean',
-      description: 'Wake idle target sessions immediately (defaults to false for comment, true otherwise)',
+      description:
+        'Trigger a follow-up turn for target sessions (defaults to false for comment, true otherwise; busy peers receive coalesced wakeups on settle, and done posts to coordinator batch until all active workers are idle)',
     },
     refs: { type: 'array', items: { type: 'integer', minimum: 1 } },
   },

@@ -18,7 +18,7 @@ import { readFileSync } from 'node:fs'
 import * as React from 'react'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { act } from 'react'
-import type { ComposerScopeProps, ConversationSummary } from '@helmx/protocol'
+import type { ComposerScopeProps, ComposerStatusSlotProps, ConversationSummary } from '@helmx/protocol'
 import { COMPOSER_STATUS_SLOT } from '@helmx/protocol'
 import { applySnapshot, emptyLiveState, mergeConversationDetail } from '../src/lib/live-state.js'
 import { makeTestStore } from './helpers/store.js'
@@ -32,6 +32,7 @@ Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
 const { createRoot } = await import('react-dom/client')
 const { renderToStaticMarkup } = await import('react-dom/server')
 const { Composer } = await import('../src/conversation/Composer.js')
+const { AgentStandbyPane } = await import('../src/conversation/AgentStandbyPane.js')
 const { HostStoreProviders } = await import('./helpers/host-store.js')
 
 const e = React.createElement
@@ -372,3 +373,67 @@ test('Composer localizes input aria, upload button, placeholder and compacting s
     host.remove()
   }
 })
+
+test('AgentStandbyPane mounts COMPOSER_STATUS_SLOT below .composer-box with effectiveModel and profileId', { timeout: 60_000 }, async () => {
+  let received: ComposerStatusSlotProps | undefined
+  function StandbyStatusProbe(props: ComposerStatusSlotProps) {
+    received = props
+    return e('span', { className: 'standby-status-probe' }, props.effectiveModel ?? '')
+  }
+  seedPluginClientModule('builtin:standby-status', 'index.tsx', { StandbyStatusProbe })
+
+  const store = makeTestStore({
+    profiles: [
+      {
+        id: 'assistant',
+        name: 'Assistant',
+        model: 'magpie/auto/gemini-4-carbon',
+        thinkingLevel: 'high',
+        cwd: '/tmp',
+        nodeId: 'local',
+      },
+    ],
+    plugins: [
+      {
+        id: 'builtin:standby-status',
+        name: 'standby-status',
+        version: '1.0.0',
+        locked: false,
+        enabled: true,
+        status: 'active',
+        hooks: [],
+        actions: [],
+        tools: [],
+        clientHashes: { 'index.tsx': 'seeded' },
+      },
+    ],
+    uiContributions: [
+      {
+        pluginId: 'builtin:standby-status',
+        surface: 'plugin.slot',
+        spec: {
+          id: 'standby-status',
+          target: COMPOSER_STATUS_SLOT,
+          client: { module: 'index.tsx', export: 'StandbyStatusProbe' },
+        },
+      },
+    ],
+  })
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = createRoot(host)
+  try {
+    await act(async () => {
+      root.render(e(HostStoreProviders, { value: store }, e(AgentStandbyPane, { profileId: 'assistant' })))
+    })
+    const probe = host.querySelector<HTMLElement>('.composer-status-row .standby-status-probe')
+    assert.ok(probe !== null, '待命页应在 .composer-status-row 挂载 COMPOSER_STATUS_SLOT 贡献')
+    assert.equal(received?.effectiveModel, 'magpie/auto/gemini-4-carbon')
+    assert.equal(received?.profileId, 'assistant')
+    assert.equal(received?.conversation, undefined)
+  } finally {
+    act(() => root.unmount())
+    host.remove()
+  }
+})
+

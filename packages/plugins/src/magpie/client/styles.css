@@ -2,5 +2,274 @@
  * builtin:magpie plugin styles.
  *
  * Generic structure reuses host design-system primitives (.screen-container / .helmx-table-wrap /
- * .helmx-table / .kv-list / .callout / .loading-state, etc.); this plugin ships no private generic styles.
+ * .helmx-table / .kv-list / .callout / .loading-state / .helmx-popover-content, etc.).
+ * This stylesheet contains only Magpie composer quota trigger & popover layout rules.
  */
+
+.magpie-quota-trigger {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 5px;
+  max-width: 100%;
+  margin: 0;
+  padding: 1px 4px;
+  border: 0;
+  border-radius: var(--radius-xs, 4px);
+  background: transparent;
+  color: var(--fg-muted);
+  font-family: inherit;
+  font-size: 11.5px;
+  line-height: 1.4;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.magpie-quota-trigger:hover,
+.magpie-quota-trigger:focus-visible,
+.magpie-quota-trigger[data-state='open'] {
+  background: var(--bg-hover);
+  color: var(--fg);
+  outline: none;
+}
+
+.magpie-quota-trigger--warn {
+  color: var(--warn);
+}
+
+.magpie-quota-trigger--err {
+  color: var(--err);
+}
+
+.magpie-quota-trigger-items {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.magpie-quota-trigger-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.magpie-quota-trigger-sep {
+  opacity: 0.45;
+}
+
+.magpie-quota-trigger-reset {
+  opacity: 0.72;
+}
+
+.magpie-quota-trigger-more {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--bg-subtle);
+  color: var(--fg-muted);
+  font-size: 10.5px;
+  line-height: 1.45;
+  flex-shrink: 0;
+}
+
+.magpie-quota-trigger[data-state='open'] .magpie-quota-trigger-chevron {
+  transform: rotate(180deg);
+}
+
+.magpie-quota-trigger-chevron {
+  transition: transform 120ms ease;
+  flex-shrink: 0;
+}
+
+.magpie-quota-popover {
+  width: min(340px, calc(100vw - 24px));
+  max-height: min(360px, 60dvh);
+  overflow-y: auto;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: var(--fg);
+  font-size: 12.5px;
+}
+
+.magpie-quota-popover-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.magpie-quota-popover-title-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.magpie-quota-popover-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.magpie-quota-popover-subtitle {
+  font-size: 11px;
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.magpie-quota-popover-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.magpie-quota-popover-age {
+  font-size: 11px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+
+.magpie-quota-popover-error {
+  padding: 6px 8px;
+  border-radius: var(--radius-xs, 4px);
+  background: var(--err-bg, rgba(239, 68, 68, 0.1));
+  color: var(--err);
+  font-size: 11.5px;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.magpie-quota-accounts {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.magpie-quota-account {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.magpie-quota-account:first-child {
+  padding-top: 6px;
+}
+
+.magpie-quota-account-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.magpie-quota-account-name {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.magpie-quota-account-badge {
+  flex-shrink: 0;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--bg-subtle);
+  color: var(--fg-muted);
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+
+.magpie-quota-window-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.magpie-quota-window-label {
+  color: var(--fg-muted);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.magpie-quota-window-metrics {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.magpie-quota-window-value {
+  font-weight: 500;
+  color: var(--fg);
+}
+
+.magpie-quota-window-value--ok {
+  color: var(--ok, var(--fg));
+}
+
+.magpie-quota-window-value--warn {
+  color: var(--warn);
+}
+
+.magpie-quota-window-value--err {
+  color: var(--err);
+}
+
+.magpie-quota-window-reset {
+  font-size: 11px;
+  color: var(--fg-muted);
+  min-width: 34px;
+  text-align: right;
+}
+
+.magpie-quota-window-detail {
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+.magpie-quota-empty {
+  padding: 6px 0 2px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--fg-muted);
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+@media (max-width: 680px) {
+  .magpie-quota-trigger {
+    padding: 3px 5px;
+  }
+
+  .magpie-quota-popover {
+    width: calc(100vw - 24px);
+  }
+}

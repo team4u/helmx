@@ -538,13 +538,16 @@ test('swarm-unit6: main channel noise isolation, XML escape, schema from removal
     'must include passive main background note (#2) and targeted brief (#4), but omit alpha->coordinator done report (#1) and unsubscribed subchannel (#3)',
   )
 
-  // 2) boardPostInputSchema no longer accepts from
-  const props = boardPostInputSchema['properties'] as Record<string, unknown>
+  // 2) boardPostInputSchema no longer accepts from and documents kind/wake semantics
+  const props = boardPostInputSchema['properties'] as Record<string, Record<string, unknown>>
   assert.equal('from' in props, false)
+  assert.equal(typeof props['kind']?.['description'], 'string')
+  assert.equal(typeof props['wake']?.['description'], 'string')
 
   // 3) activeSwarmGroupCoordinatorSection omits load_skill when skillAvailable=false
   const noSkillSec = activeSwarmGroupCoordinatorSection('grp-sec', { skillAvailable: false })
   assert.equal(noSkillSec.includes('load_skill('), false)
+  assert.match(noSkillSec, /<swarm_board_report>/)
   assert.match(noSkillSec, /merge worktree branches and call swarm_close_group/)
 
   // 4) XML escape in envelopes prevents tag breakout

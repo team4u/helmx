@@ -182,7 +182,7 @@ export function registerSwarmActions(
   ctx.tool({
     name: 'swarm_dispatch_worker',
     description:
-      'Recruit a named peer role into the active swarm collaboration group with optional worktree isolation and clean-anchor conversation forking.',
+      'Recruit a named peer role into the active swarm collaboration group with optional worktree isolation and clean-anchor conversation forking. Starts the worker asynchronously in the background and returns immediately.',
     inputSchema: dispatchInputSchema,
     structuredOutputSchema: dispatchWorkerOutputSchema,
     scope: COORDINATOR_SCOPE,

@@ -22,9 +22,12 @@
 | `groups` | `helmx magpie groups` | 路由组列表与最近命中；本机默认实例读 magpie CLI + 网关 trace（`source: 'cli+trace'`），其余只用所选网关 trace（`source: 'gateway-trace'`） |
 | `group` | `helmx magpie group <id>` | 单组定义与最近路由决策；无可用信息显式 `404 magpie_group_not_found` |
 
-### 状态文档与后台刷新
+### 状态文档、状态栏配额与自动刷新
 
-公开文档 `status` 实时汇总：`gatewayUrl` / `configuredRoot` / `local` / `reachable` / `modelCount` / `groupCount` / `lastRefreshedAt` / `lastError`（成功后清除不残留）/ `quotas` / `routes` / `diagnostics`（配额/轨迹不可用原因如实记录，绝不把「没有配额」伪装成「配额为空」）。驱动设置面板（`magpie-panel`）与命令面板（`magpie-refresh`）。`turn_settled` 后对使用 `magpie/` 前缀模型的会话后台静默刷新配额路由（`?kept=1`，不问供应商、不阻塞回合）。
+公开文档 `status` 实时汇总：`gatewayUrl` / `configuredRoot` / `local` / `reachable` / `modelCount` / `groupCount` / `modelOwners`（当前网关目录 `modelId -> provider` 映射）/ `groupProviders`（路由组成员 provider 集合）/ `lastRefreshedAt` / `quotasRefreshedAt` / `quotasUpdatedAt` / `lastError` / `quotasError`（成功后清除不残留）/ `quotas`（保留原始单位、`pool`、`last`、`resetsAt` 与错误原因）/ `routes` / `diagnostics`。驱动设置面板（`magpie-panel`）、命令面板（`magpie-refresh`）与输入框底部状态栏插槽（`COMPOSER_STATUS_SLOT`，同时覆盖已建会话与新建对话待命页）。
+
+- **当前模型单账号直出 + 多账号按需展开**：状态栏仅针对当前选中的 `magpie/*` 模型（自动解引用 `tier/<id>` 档位）做供应商与模型池（`pool`）双重过滤，剔除无关模型池与非聊天窗口；外层只展示当前生效的单账号额度窗口（多账号附 `+N` 展开角标），点击弹出 Radix `Popover` 列表仅呈现该模型下的相关账号与窗口并支持手动刷新；非 Magpie 模型返回 `null` 自动收起；
+- **前台可配置轮询 + 回合结算刷新**：前台可见且使用 Magpie 模型时按 `refreshIntervalSec`（默认 `5` 秒，`0` 关闭；多窗格/分屏共享单飞锁）自动刷新模型目录与实时配额（目录未变时跳过磁盘落盘与全局 `models.changed` 广播，避免写放大）；`turn_settled` 后继续后台静默刷新配额路由（`?kept=1`，不问供应商、不阻塞回合）。
 
 ## 配置与数据边界
 
@@ -32,6 +35,7 @@
 | :--- | :--- | :--- | :--- |
 | `gatewayUrl` | string | `http://127.0.0.1:3425` | 网关地址（可填 `http://host:3425`） |
 | `apiKey` | string（secret） | 空 | API Key；本机 loopback 缺省 `magpie`，远端网关填写对应密钥。secret 字段分离至 credentials.json，绝不进 doc / 动作输出 / 错误文本 |
+| `refreshIntervalSec` | number（integer，0..3600） | `5` | 前台使用 Magpie 模型时自动刷新模型目录与配额的间隔秒数；设为 `0` 关闭自动刷新，在插件详情配置表单中修改后即时生效 |
 
 诚实性契约（硬约束）：
 

@@ -242,8 +242,21 @@ test('swarm-int1: default-enabled zero-resident boot, idle workflow-disable free
       { conversationId: coord.id },
     )) as { text: string }
     assert.match(loadedSkill.text, /Coordinator Rule: Do Not Do the Work/)
-    assert.match(loadedSkill.text, /swarm_create_group/)
-    assert.match(loadedSkill.text, /swarm_dispatch_worker/)
+    for (const toolName of [
+      'swarm_create_group',
+      'swarm_update_group',
+      'swarm_dispatch_worker',
+      'swarm_board_post',
+      'swarm_board_read',
+      'swarm_board_status',
+      'swarm_inspect_worker',
+      'swarm_abort_worker',
+      'swarm_switch_worker_model',
+      'swarm_archive_worker',
+      'swarm_close_group',
+    ]) {
+      assert.ok(loadedSkill.text.includes(toolName), `swarm SKILL.md should document ${toolName}`)
+    }
     assert.match(loadedSkill.text, /helmx swarm/)
 
     // 4) Before swarm_create_group: #C sees swarm_create_group + subagent/bash/edit/write, NOT swarm_dispatch_worker/swarm_board_*

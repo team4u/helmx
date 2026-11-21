@@ -33,11 +33,44 @@ export type OverviewBucketFilter = 'all' | AttentionBucket
 /** 总览来源筛选值：全部 / 常规对话 / 托管会话（托管 = 插件 sidebarSection 接管）。 */
 export type OverviewSourceFilter = 'all' | 'regular' | 'managed'
 
+/** 总览分组维度：按状态（默认）/ 按角色 / 按节点。 */
+export type OverviewGroupBy = 'status' | 'profile' | 'node'
+
 const CARD_BUCKET_ORDER: Record<OverviewCardBucket, number> = {
   needs_attention: 0,
   running: 1,
   unread_done: 2,
   quiet: 3,
+}
+
+const ORDERED_BUCKETS: readonly OverviewCardBucket[] = [
+  'needs_attention',
+  'running',
+  'unread_done',
+  'quiet',
+]
+
+const BUCKET_SECTION_LABEL_KEYS: Record<
+  OverviewCardBucket,
+  | 'shell.overview.sectionNeeds'
+  | 'shell.overview.sectionRunning'
+  | 'shell.overview.sectionUnread'
+  | 'shell.overview.sectionQuiet'
+> = {
+  needs_attention: 'shell.overview.sectionNeeds',
+  running: 'shell.overview.sectionRunning',
+  unread_done: 'shell.overview.sectionUnread',
+  quiet: 'shell.overview.sectionQuiet',
+}
+
+/** 分组后的总览分节：携带稳定 key（用于折叠态与 React key）、语义标签与同序卡片集。 */
+export interface OverviewCardGroup {
+  key: string
+  kind: 'bucket' | 'profile' | 'node'
+  bucket?: OverviewCardBucket
+  nodeId?: string
+  label: string
+  cards: OverviewCard[]
 }
 
 /** 总览单卡：一棵根会话树的真实事实（只读展示）。 */
@@ -250,21 +283,112 @@ export function overviewNodeOptions(cards: ReadonlyArray<OverviewCard>): string[
   return [...seen]
 }
 
+/**
+ * 将已筛选的总览卡片按指定维度分组为纵向分节：
+ * - status：按 canonical 桶序（needs_attention > running > unread_done > quiet），空桶直接省略；
+ * - profile：按卡片首次出现顺序建组（因卡片已按桶序 + createdAt 倒序排列，含活跃态势的
+ *   角色自然置顶，且流式期间不跳组），组内保持原序；
+ * - node：同上，按节点（'local' 归一本机）建组并保持组内原序。
+ */
+export function groupOverviewCards(
+  cards: ReadonlyArray<OverviewCard>,
+  groupBy: OverviewGroupBy,
+  t: WebMessageTranslator = englishWebTranslator,
+): OverviewCardGroup[] {
+  if (cards.length === 0) return []
+  if (groupBy === 'status') {
+    const byBucket = new Map<OverviewCardBucket, OverviewCard[]>()
+    for (const card of cards) {
+      let list = byBucket.get(card.bucket)
+      if (list === undefined) {
+        list = []
+        byBucket.set(card.bucket, list)
+      }
+      list.push(card)
+    }
+    const groups: OverviewCardGroup[] = []
+    for (const bucket of ORDERED_BUCKETS) {
+      const bucketCards = byBucket.get(bucket)
+      if (bucketCards === undefined || bucketCards.length === 0) continue
+      groups.push({
+        key: `bucket:${bucket}`,
+        kind: 'bucket',
+        bucket,
+        label: t(BUCKET_SECTION_LABEL_KEYS[bucket]),
+        cards: bucketCards,
+      })
+    }
+    return groups
+  }
+
+  if (groupBy === 'profile') {
+    const byProfile = new Map<string, OverviewCardGroup>()
+    for (const card of cards) {
+      const profileId = card.root.profileId
+      let group = byProfile.get(profileId)
+      if (group === undefined) {
+        group = {
+          key: `profile:${profileId}`,
+          kind: 'profile',
+          label: card.profileLabel || profileId,
+          cards: [],
+        }
+        byProfile.set(profileId, group)
+      }
+      group.cards.push(card)
+    }
+    return [...byProfile.values()]
+  }
+
+  const byNode = new Map<string, OverviewCardGroup>()
+  for (const card of cards) {
+    const nodeKey = overviewNodeKey(card.root)
+    let group = byNode.get(nodeKey)
+    if (group === undefined) {
+      group = {
+        key: `node:${nodeKey}`,
+        kind: 'node',
+        nodeId: nodeKey,
+        label: nodeKey === 'local' ? t('shell.overview.localNode') : nodeKey,
+        cards: [],
+      }
+      byNode.set(nodeKey, group)
+    }
+    group.cards.push(card)
+  }
+  return [...byNode.values()]
+}
+
+/**
+ * 是否展示分组节头：当筛选器已经把当前分组维度收敛为单一值（如按状态分组且
+ * 已选中具体单桶，或按角色/节点分组且已选中对应单值）时直接平铺卡片，避免
+ * 重复包一层同义单节头。
+ */
+export function overviewShouldShowSectionHeaders(
+  filter: Pick<OverviewFilterState, 'groupBy' | 'bucket' | 'profileId' | 'nodeId'>,
+): boolean {
+  if (filter.groupBy === 'status' && filter.bucket !== 'all') return false
+  if (filter.groupBy === 'profile' && filter.profileId !== '') return false
+  if (filter.groupBy === 'node' && filter.nodeId !== '') return false
+  return true
+}
+
 // ---------------------------------------------------------------------------
-// 路由参数（#/overview 的 sp. 与 ssp. 目标参数）：<bucket|profile|node|source|q>
+// 路由参数（#/overview 的 sp. 与 ssp. 目标参数）：<bucket|profile|node|source|q|group>
 // ---------------------------------------------------------------------------
 
-/** 总览筛选的目标参数键（接入唯一 URL Hash 导航模型的 sp.* 命名空间）。 */
-export const OVERVIEW_FILTER_PARAM_KEYS = ['bucket', 'profile', 'node', 'source', 'q'] as const
+/** 总览筛选与分组的目标参数键（接入唯一 URL Hash 导航模型的 sp.* 命名空间）。 */
+export const OVERVIEW_FILTER_PARAM_KEYS = ['bucket', 'profile', 'node', 'source', 'q', 'group'] as const
 export type OverviewFilterParamKey = (typeof OVERVIEW_FILTER_PARAM_KEYS)[number]
 
-/** 筛选的规范形态（全部取默认值时不携带任何参数键）。 */
+/** 筛选与分组的规范形态（全部取默认值时不携带任何参数键）。 */
 export interface OverviewFilterState {
   bucket: OverviewBucketFilter
   profileId: string
   nodeId: string
   source: OverviewSourceFilter
   query: string
+  groupBy: OverviewGroupBy
 }
 
 const OVERVIEW_DEFAULT_FILTER: OverviewFilterState = {
@@ -273,16 +397,18 @@ const OVERVIEW_DEFAULT_FILTER: OverviewFilterState = {
   nodeId: '',
   source: 'all',
   query: '',
+  groupBy: 'status',
 }
 
 const VALID_BUCKET_FILTERS = new Set<string>(['needs_attention', 'running', 'unread_done'])
 const VALID_SOURCE_FILTERS = new Set<string>(['regular', 'managed'])
+const VALID_GROUP_BY = new Set<string>(['profile', 'node'])
 
 /**
- * 从 overview 目标参数解析筛选状态（深链/刷新/前进后退恢复的唯一入口）：
- * bucket/source 枚举值非法或取默认值时回退缺省（与 Hash 模型「非法段静默
- * 回退默认」同哲学）；profile/node/q 为任意非空字符串（空值已被 Hash 模型
- * 丢弃），保留原值不私自裁剪。
+ * 从 overview 目标参数解析筛选与分组状态（深链/刷新/前进后退恢复的唯一入口）：
+ * bucket/source/group 枚举值非法或取默认值时回退缺省（与 Hash 模型「非法段
+ * 静默回退默认」同哲学）；profile/node/q 为任意非空字符串（空值已被 Hash
+ * 模型丢弃），保留原值不私自裁剪。
  */
 export function parseOverviewFilterParams(params: Record<string, string> | undefined): OverviewFilterState {
   if (params === undefined) return OVERVIEW_DEFAULT_FILTER
@@ -292,6 +418,7 @@ export function parseOverviewFilterParams(params: Record<string, string> | undef
     nodeId: params.node ?? '',
     source: VALID_SOURCE_FILTERS.has(params.source ?? '') ? (params.source as OverviewSourceFilter) : 'all',
     query: params.q ?? '',
+    groupBy: VALID_GROUP_BY.has(params.group ?? '') ? (params.group as OverviewGroupBy) : 'status',
   }
 }
 
@@ -317,6 +444,10 @@ export function overviewFilterParamsRepair(params: Record<string, string> | unde
     }
     if (key === 'source' && !VALID_SOURCE_FILTERS.has(value)) {
       deletions.source = undefined
+      repairNeeded = true
+    }
+    if (key === 'group' && !VALID_GROUP_BY.has(value)) {
+      deletions.group = undefined
       repairNeeded = true
     }
   }
