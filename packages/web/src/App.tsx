@@ -12,7 +12,7 @@ import {
   type ExoticComponent,
   type ReactNode,
 } from 'react'
-import { HelmxIcon } from '@helmx/plugin-client'
+import { HelmxIcon, TooltipProvider } from '@helmx/plugin-client'
 import { ModalFocusScope } from './shell/ModalFocusScope.js'
 import { ConversationPane } from './conversation/ConversationPane.js'
 import { ConversationWindowStage } from './conversation/ConversationWindowStage.js'
@@ -44,7 +44,6 @@ import { ConversationOverview } from './overview/ConversationOverview.js'
 import { AuthGate } from './shell/AuthGate.js'
 import { Sidebar } from './shell/Sidebar.js'
 import { ToastOverlay } from './shell/ToastOverlay.js'
-import { TooltipProvider } from './ui/Tooltip.js'
 import { useQuietNotifier } from './shell/use-quiet-notifier.js'
 import { useVersionWatcher } from './shell/use-version-watcher.js'
 import { versionDeferHint } from './shell/version-watch-model.js'

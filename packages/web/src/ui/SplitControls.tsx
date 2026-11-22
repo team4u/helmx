@@ -1,7 +1,6 @@
 import * as React from 'react'
-import { HelmxIcon } from '@helmx/plugin-client'
+import { HelmxIcon, Tooltip } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
-import { Tooltip } from './Tooltip.js'
 
 export interface CloseSplitButtonProps {
   onCloseSplit?: () => void

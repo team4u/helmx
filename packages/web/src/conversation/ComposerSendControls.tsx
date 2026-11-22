@@ -1,14 +1,14 @@
 import type { WhenBusy } from '@helmx/protocol/browser'
-import { HelmxIcon } from '@helmx/plugin-client'
-import { useWebLocale } from '../i18n/use-web-locale.js'
 import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuRoot,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from '../ui/DropdownMenu.js'
-import { Tooltip } from '../ui/Tooltip.js'
+  HelmxIcon,
+  Tooltip,
+} from '@helmx/plugin-client'
+import { useWebLocale } from '../i18n/use-web-locale.js'
 import { useIsMobile, type SessionEnvBlocker } from './composer-model.js'
 
 // ---------------------------------------------------------------------------

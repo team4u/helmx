@@ -1,10 +1,9 @@
 import { useState } from 'react'
 import type { AskSpec, ConversationSummary } from '@helmx/protocol/browser'
 import { asksApi } from '../lib/api.js'
-import { HelmxIcon } from '@helmx/plugin-client'
+import { HelmxIcon, Tooltip } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import type { WebMessageTranslator } from '../i18n/catalog.js'
-import { Tooltip } from '../ui/Tooltip.js'
 import type { SidebarStoreView, SidebarTargetPresence } from './sidebar-model.js'
 import {
   backgroundAwareStatusTooltip,

@@ -29,7 +29,7 @@ const { renderToString } = await import('react-dom/server')
 const { createRoot } = await import('react-dom/client')
 const { SearchBox } = await import('../src/ui/SearchBox.js')
 const { LoadingState } = await import('../src/ui/LoadingState.js')
-const { Tooltip } = await import('../src/ui/Tooltip.js')
+const { Tooltip, TooltipProvider } = await import('../src/ui/Tooltip.js')
 const {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -378,6 +378,87 @@ test('Tooltip SSR: renders trigger directly when disabled/empty and stamps data-
     ),
   )
   assert.match(pluginHtml, /data-plugin-id="builtin:demo"/, 'plugin tooltips stamp data-plugin-id on portalled content')
+})
+
+test('Tooltip DOM: reuses ancestor TooltipProvider (inherits delayDuration and shares skipDelayDuration across sibling tooltips)', { timeout: 60_000 }, async () => {
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = createRoot(container)
+
+  const scheduledDelays: number[] = []
+  const origSetTimeout = window.setTimeout
+  window.setTimeout = ((fn: TimerHandler, delay?: number, ...args: unknown[]) => {
+    if (typeof delay === 'number') scheduledDelays.push(delay)
+    return origSetTimeout(fn, delay, ...args)
+  }) as typeof window.setTimeout
+
+  try {
+    await act(async () => {
+      root.render(
+        e(
+          TooltipProvider,
+          {
+            delayDuration: 12_345,
+            skipDelayDuration: 2_000,
+            children: e(
+              React.Fragment,
+              null,
+              e(Tooltip, { content: 'Probe tip', inline: true }, e('button', { type: 'button', 'data-btn': 'probe' }, 'Probe')),
+              e(Tooltip, { content: 'First tip', inline: true }, e('button', { type: 'button', 'data-btn': 'first' }, 'First')),
+              e(Tooltip, { content: 'Second tip', inline: true }, e('button', { type: 'button', 'data-btn': 'second' }, 'Second')),
+            ),
+          },
+        ),
+      )
+    })
+
+    const probeBtn = container.querySelector<HTMLButtonElement>('button[data-btn="probe"]')
+    const firstBtn = container.querySelector<HTMLButtonElement>('button[data-btn="first"]')
+    const secondBtn = container.querySelector<HTMLButtonElement>('button[data-btn="second"]')
+    assert.ok(probeBtn !== null && firstBtn !== null && secondBtn !== null)
+
+    // Before any tooltip opens, hovering a trigger schedules the ancestor delayDuration (not a hardcoded 300ms)
+    await act(async () => {
+      probeBtn.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerType: 'mouse' }))
+    })
+    assert.ok(!container.textContent?.includes('Probe tip'), 'tooltip stays closed before delay elapses')
+    assert.ok(scheduledDelays.includes(12_345), 'Tooltip inherits outer TooltipProvider delayDuration when omitted')
+
+    await act(async () => {
+      probeBtn.dispatchEvent(new PointerEvent('pointerout', { bubbles: true, pointerType: 'mouse', relatedTarget: firstBtn }))
+    })
+
+    // Focus then blur the first trigger so the shared TooltipProvider enters its skip-delay window
+    await act(async () => {
+      firstBtn.focus()
+    })
+    assert.ok(container.textContent?.includes('First tip'), 'focusing first trigger opens its tooltip')
+
+    await act(async () => {
+      firstBtn.blur()
+    })
+    assert.ok(!container.textContent?.includes('First tip'), 'blurring first trigger closes its tooltip')
+
+    // Moving onto the sibling trigger within skipDelayDuration opens synchronously without scheduling delayDuration
+    const delaysBeforeSiblingHover = scheduledDelays.length
+    await act(async () => {
+      secondBtn.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerType: 'mouse' }))
+    })
+    assert.ok(container.textContent?.includes('Second tip'), 'sibling tooltip opens instantaneously via shared outer TooltipProvider')
+    assert.equal(
+      scheduledDelays.slice(delaysBeforeSiblingHover).filter((d) => d === 12_345).length,
+      0,
+      'skip-delay transition must not schedule a fresh delay timer',
+    )
+    const openContent = container.querySelector('.helmx-tooltip-content')
+    assert.equal(openContent?.getAttribute('data-state'), 'instant-open')
+  } finally {
+    window.setTimeout = origSetTimeout
+    await act(async () => {
+      root.unmount()
+    })
+    container.remove()
+  }
 })
 
 test('DropdownMenu SSR: renders host overlay classes and stamps data-plugin-id inside plugin context', { timeout: 60_000 }, () => {

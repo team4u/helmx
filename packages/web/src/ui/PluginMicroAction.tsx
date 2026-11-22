@@ -13,12 +13,11 @@ import { useState } from 'react'
 import type { ReactNode } from 'react'
 import type { UiActionSpec } from '@helmx/protocol/browser'
 import { resolveLocalizedText } from '@helmx/protocol/browser'
-import { HelmxIcon } from '@helmx/plugin-client'
+import { DropdownMenuItem, HelmxIcon } from '@helmx/plugin-client'
 import { useStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import type { QualifiedUiSpec } from '../lib/types.js'
 import { PluginUiView } from './PluginUiView.js'
-import { DropdownMenuItem } from './DropdownMenu.js'
 import { buildMicroActionInput, isActionOnlyActionSpec, microActionPluginId } from '../conversation/action-model.js'
 
 export interface PluginMicroActionProps {

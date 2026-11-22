@@ -1,7 +1,7 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import type { ConversationSummary } from '@helmx/protocol/browser'
 import { resolveLocalizedText } from '@helmx/protocol/browser'
-import { HelmxIcon } from '@helmx/plugin-client'
+import { HelmxIcon, Tooltip } from '@helmx/plugin-client'
 import {
   useAuthConnection,
   useConversations,
@@ -16,7 +16,6 @@ import {
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { LocaleMenuButton } from '../ui/LocaleMenuButton.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
-import { Tooltip } from '../ui/Tooltip.js'
 import { ConversationRowActionsMenu } from '../ui/ConversationRowActionsMenu.js'
 import { isSameResolvedTarget, resolveTargetString, CENTER_TARGETS, spaceForTarget, type SidebarSpace } from '../lib/types.js'
 import { readBrowserNotificationPermission } from '../lib/browser-notification.js'

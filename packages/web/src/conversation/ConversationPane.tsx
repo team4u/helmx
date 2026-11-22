@@ -1,7 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { conversationsApi } from '../lib/api.js'
 import type { ConversationAttachmentRef, ConversationEntry } from '@helmx/protocol/browser'
-import { ConfirmDialog, HelmxIcon, Popover, PopoverContent, PopoverTrigger } from '@helmx/plugin-client'
+import {
+  ConfirmDialog,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuPortal,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+  HelmxIcon,
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+  Tooltip,
+} from '@helmx/plugin-client'
 import { isConversationArchived } from '../conversation/archive-model.js'
 import {
   collectEnabledPluginIds,
@@ -25,8 +38,6 @@ import {
   useWorkbenchState,
 } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuPortal, DropdownMenuSeparator, DropdownMenuTrigger } from '../ui/DropdownMenu.js'
-import { Tooltip } from '../ui/Tooltip.js'
 import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
 import { Composer } from './Composer.js'
 import { formatEnvSubtitle, sendingPendingVisible } from './composer-model.js'

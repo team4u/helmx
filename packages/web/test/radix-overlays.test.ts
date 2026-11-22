@@ -9,8 +9,6 @@ import {
   PopoverPortal,
   PopoverContent,
   PopoverArrow,
-} from '@helmx/plugin-client'
-import {
   DropdownMenu,
   DropdownMenuRoot,
   DropdownMenuTrigger,
@@ -19,8 +17,6 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuLabel,
-} from '../src/ui/DropdownMenu.js'
-import {
   Tooltip,
   TooltipProvider,
   TooltipRoot,
@@ -28,7 +24,7 @@ import {
   TooltipPortal,
   TooltipContent,
   TooltipArrow,
-} from '../src/ui/Tooltip.js'
+} from '@helmx/plugin-client'
 
 test('Popover 原语挂载、数据属性与无障碍属性（SSR）', { timeout: 60_000 }, () => {
   const openHtml = renderToString(

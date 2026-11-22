@@ -1,6 +1,6 @@
 import { useContext, useMemo, useState } from 'react'
 import type { ConversationEntry, ConversationSummary } from '@helmx/protocol/browser'
-import { CopyButton, HelmxIcon, ToolActivityContext } from '@helmx/plugin-client'
+import { CopyButton, HelmxIcon, ToolActivityContext, Tooltip } from '@helmx/plugin-client'
 import { useGroupedUi } from '../lib/store-context.js'
 import { PluginMicroAction } from '../ui/PluginMicroAction.js'
 import { matchTimelineEntryActions, timelineEntryActionContextOf } from './action-model.js'
@@ -10,7 +10,6 @@ import { ToolActivityProvider } from './ToolActivityProvider.js'
 import { isAssistantTurnBusy, assistantModelFullLabel, assistantModelShortLabel, type AssistantModelIdentity, type AssistantTurn, type ProcessShortcutCommand } from './timeline-model.js'
 import { formatDurationMs, formatFullTimestamp, formatMessageTime } from '../lib/format.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
-import { Tooltip } from '../ui/Tooltip.js'
 
 // ---------------------------------------------------------------------------
 // 实际生成模型边界（回看最近 assistant 回合模型不同时，锚定新模型 entry 之前；

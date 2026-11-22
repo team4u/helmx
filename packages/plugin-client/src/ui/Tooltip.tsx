@@ -17,6 +17,10 @@ import { usePluginScopeId } from './plugin-scope.js'
 
 export interface TooltipProviderProps extends TooltipPrimitive.TooltipProviderProps {}
 
+// Tracks whether an ancestor TooltipProvider already wraps this subtree so
+// standalone <Tooltip> only injects a fallback Provider when rendered alone.
+const TooltipProviderPresenceContext = React.createContext(false)
+
 /** Global or scoped TooltipProvider wrapper. */
 export function TooltipProvider({
   delayDuration = 300,
@@ -25,13 +29,15 @@ export function TooltipProvider({
   ...props
 }: TooltipProviderProps) {
   return (
-    <TooltipPrimitive.Provider
-      delayDuration={delayDuration}
-      skipDelayDuration={skipDelayDuration}
-      {...props}
-    >
-      {children}
-    </TooltipPrimitive.Provider>
+    <TooltipProviderPresenceContext.Provider value={true}>
+      <TooltipPrimitive.Provider
+        delayDuration={delayDuration}
+        skipDelayDuration={skipDelayDuration}
+        {...props}
+      >
+        {children}
+      </TooltipPrimitive.Provider>
+    </TooltipProviderPresenceContext.Provider>
   )
 }
 
@@ -115,8 +121,9 @@ export interface TooltipProps {
 
 /**
  * Minimal hover tooltip:
- * - wraps Provider and Portal automatically so it renders safely standalone
- *   even without an outer Provider (SSR/unit-test friendly);
+ * - reuses any ancestor TooltipProvider (preserving global skipDelayDuration
+ *   and inherited delayDuration), falling back to a local TooltipProvider when
+ *   rendered standalone (SSR/unit-test friendly);
  * - the hover tooltip of an icon-only button mirrors its aria-label.
  */
 export function Tooltip({
@@ -128,34 +135,37 @@ export function Tooltip({
   open,
   defaultOpen,
   onOpenChange,
-  delayDuration = 300,
+  delayDuration,
   disabled = false,
   inline = false,
   className = '',
 }: TooltipProps) {
+  const hasOuterProvider = React.useContext(TooltipProviderPresenceContext)
   if (disabled || !content || !children) {
     return children ?? null
   }
-  return (
-    <TooltipPrimitive.Provider delayDuration={delayDuration}>
-      <TooltipPrimitive.Root
-        open={open}
-        defaultOpen={defaultOpen}
-        onOpenChange={onOpenChange}
-        delayDuration={delayDuration}
-      >
-        <TooltipPrimitive.Trigger asChild>
-          {children}
-        </TooltipPrimitive.Trigger>
-        <TooltipPortal inline={inline}>
-          <TooltipContent side={side} align={align} sideOffset={sideOffset} className={className}>
-            {content}
-            <TooltipArrow />
-          </TooltipContent>
-        </TooltipPortal>
-      </TooltipPrimitive.Root>
-    </TooltipPrimitive.Provider>
+  const root = (
+    <TooltipPrimitive.Root
+      open={open}
+      defaultOpen={defaultOpen}
+      onOpenChange={onOpenChange}
+      delayDuration={delayDuration}
+    >
+      <TooltipPrimitive.Trigger asChild>
+        {children}
+      </TooltipPrimitive.Trigger>
+      <TooltipPortal inline={inline}>
+        <TooltipContent side={side} align={align} sideOffset={sideOffset} className={className}>
+          {content}
+          <TooltipArrow />
+        </TooltipContent>
+      </TooltipPortal>
+    </TooltipPrimitive.Root>
   )
+  if (hasOuterProvider) {
+    return root
+  }
+  return <TooltipProvider delayDuration={delayDuration}>{root}</TooltipProvider>
 }
 
 Tooltip.Provider = TooltipProvider
