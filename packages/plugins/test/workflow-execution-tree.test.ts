@@ -189,7 +189,7 @@ test('buildExecutionTree 回归：人类 fork 会话与 SuperAgent 驻留 Worker
       reload: () => {},
     }),
   })
-  const mod = await importWorkflowClientModule('index.tsx')
+  const mod = await importWorkflowClientModule('workbench.tsx')
   const Panel = mod['WorkflowWorkbenchPanel'] as (p: Record<string, unknown>) => React.ReactElement
   const { host, unmount } = await mountClient(makeSpyCtx(), e(Panel, { conversation: conversations[0] }))
   try {
@@ -864,7 +864,7 @@ test('工作台父卡渲染子树徽章 / 前线摘要 / 下一级紧凑子项�
         : { summary: undefined, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} },
   })
   const spy = makeSpyCtx()
-  const mod = await importWorkflowClientModule('index.tsx')
+  const mod = await importWorkflowClientModule('workbench.tsx')
   const Panel = mod['WorkflowWorkbenchPanel'] as (p: Record<string, unknown>) => React.ReactElement
   const { host, unmount } = await mountClient(spy, e(Panel, { conversation: summary(1, 'working') }))
   try {
@@ -929,7 +929,7 @@ test('工作流节点卡内深层子代理同样渲染紧凑子项并可打开�
         : { summary: undefined, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} },
   })
   const spy = makeSpyCtx()
-  const mod = await importWorkflowClientModule('index.tsx')
+  const mod = await importWorkflowClientModule('workbench.tsx')
   const Panel = mod['WorkflowWorkbenchPanel'] as (p: Record<string, unknown>) => React.ReactElement
   const { host, unmount } = await mountClient(
     spy,
@@ -967,7 +967,7 @@ test('无深层后代时紧凑子项与子树徽章不渲染（不造空占位�
         : { summary: undefined, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} },
   })
   const spy = makeSpyCtx()
-  const mod = await importWorkflowClientModule('index.tsx')
+  const mod = await importWorkflowClientModule('workbench.tsx')
   const Panel = mod['WorkflowWorkbenchPanel'] as (p: Record<string, unknown>) => React.ReactElement
   const { host, unmount } = await mountClient(spy, e(Panel, { conversation: summary(1, 'working') }))
   try {
@@ -996,7 +996,7 @@ test('主徽章同源有效状态：父 idle + 后代 blocked/working 不显示�
     conversation: () => ({ summary: undefined, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} }),
   })
   const spy = makeSpyCtx()
-  const mod = await importWorkflowClientModule('index.tsx')
+  const mod = await importWorkflowClientModule('workbench.tsx')
   const Panel = mod['WorkflowWorkbenchPanel'] as (p: Record<string, unknown>) => React.ReactElement
   const { host, unmount } = await mountClient(spy, e(Panel, { conversation: summary(1, 'working') }))
   try {
@@ -1027,7 +1027,7 @@ test('自身 AskDoc 有单即等待审批（pendingAskCount>0，status 仍 worki
         : { summary: undefined, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} },
   })
   const spy = makeSpyCtx()
-  const mod = await importWorkflowClientModule('index.tsx')
+  const mod = await importWorkflowClientModule('workbench.tsx')
   const Panel = mod['WorkflowWorkbenchPanel'] as (p: Record<string, unknown>) => React.ReactElement
   const { host, unmount } = await mountClient(spy, e(Panel, { conversation: summary(1, 'working') }))
   try {
@@ -1073,7 +1073,7 @@ test('紧凑子项：深层 workflow / external run 行原位展开直系子项�
         : { summary: undefined, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} },
   })
   const spy = makeSpyCtx()
-  const mod = await importWorkflowClientModule('index.tsx')
+  const mod = await importWorkflowClientModule('workbench.tsx')
   const Panel = mod['WorkflowWorkbenchPanel'] as (p: Record<string, unknown>) => React.ReactElement
   const { host, unmount } = await mountClient(spy, e(Panel, { conversation: summary(1, 'working') }))
   try {
@@ -1133,7 +1133,7 @@ test('紧凑子项：无自定义标题时回退 Subagent #N 且不重复渲染 
     conversation: () => ({ summary: undefined, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} }),
   })
   const spy = makeSpyCtx()
-  const mod = await importWorkflowClientModule('index.tsx')
+  const mod = await importWorkflowClientModule('workbench.tsx')
   const Panel = mod['WorkflowWorkbenchPanel'] as (p: Record<string, unknown>) => React.ReactElement
   const { host, unmount } = await mountClient(spy, e(Panel, { conversation: summary(1, 'working') }))
   try {

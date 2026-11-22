@@ -1,5 +1,5 @@
 /**
- * builtin:workflow bottom active tray (WorkflowActiveTray) plus timeline single-row trace supplementary styles.
+ * builtin:workflow bottom active tray (WorkflowActiveTray) styles.
  */
 .workflow-active-tray {
   border: 1px solid var(--border);
@@ -182,174 +182,12 @@ button.workflow-active-tray-row-clickable:focus-visible {
   padding: 0 8px 0 0;
 }
 
-/* Timeline single-row trace helper styles (same structure as the host .trace-row 26px) */
-
-/* 宿主 .trace-tool-name 为 flex-shrink:0，长任务名与常驻摘要/状态灯在手机上相互挤压；
-   插件受控覆盖：标题允许收缩并省略，右侧状态/时长簇不再与标题重叠。 */
-.workflow-trace-row-btn .trace-tool-name,
-.workflow-trace-toggle .trace-tool-name {
-  flex-shrink: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.workflow-trace-id {
-  flex-shrink: 0;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--fg-subtle);
-}
-
 .workflow-trace-badge {
   height: 18px;
   line-height: 16px;
   padding: 0 5px;
   font-size: 10.5px;
   flex-shrink: 0;
-}
-
-.workflow-trace-right {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  white-space: nowrap;
-}
-
-.workflow-trace-error {
-  color: var(--err);
-  font-size: 11.5px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-}
-
-.workflow-trace-toggle {
-  background: none;
-  border: none;
-  padding: 0;
-  font: inherit;
-  color: inherit;
-  cursor: pointer;
-  text-align: left;
-  min-width: 0;
-  flex: 1;
-}
-
-.workflow-trace-row-btn {
-  width: 100%;
-  background: transparent;
-  border: none;
-  font: inherit;
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.workflow-trace-row-btn:hover {
-  background: var(--bg-hover);
-}
-
-.workflow-trace-row-btn .trace-row-left {
-  min-width: 0;
-  flex: 1;
-}
-
-.workflow-workbench-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 10px;
-  min-width: 0;
-}
-
-.workflow-workbench-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.workflow-workbench-head-left {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-weight: 600;
-  font-size: 13px;
-  color: var(--fg);
-}
-
-.workflow-workbench-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  min-width: 0;
-}
-
-.workflow-workbench-run-wrap {
-  min-width: 0;
-  border-radius: var(--radius-md);
-}
-
-.workflow-workbench-run-focused {
-  outline: 1.5px solid var(--accent);
-}
-
-.workflow-workbench-empty {
-  padding: 16px 12px;
-  font-size: 12.5px;
-  color: var(--fg-muted);
-  text-align: center;
-}
-
-.workflow-workbench-external {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.workflow-run-meta {
-  margin: 4px 0 8px;
-}
-
-.workflow-run-menu-popover {
-  padding: 4px;
-  min-width: 148px;
-}
-
-.workflow-run-menu {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.workflow-run-menu-item {
-  justify-content: flex-start;
-  width: 100%;
-}
-
-.workflow-lib-delete-error {
-  margin: 0 20px 8px;
-}
-
-.workflow-report-expanded {
-  gap: 8px;
-}
-
-.workflow-report-meta-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.workflow-report-task-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
 }
 
 @media (max-width: 680px) {

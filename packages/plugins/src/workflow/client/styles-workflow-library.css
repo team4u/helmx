@@ -243,6 +243,16 @@
   font-size: 12px;
 }
 
+.workflow-lib-delete-error {
+  margin: 0 20px 8px;
+}
+
+.workflow-phase-empty {
+  font-size: 11px;
+  color: var(--fg-subtle);
+  padding: 2px 0 2px 17px;
+}
+
 @media (max-width: 680px) {
   .workflow-lib-grid {
     grid-template-columns: 1fr;

@@ -240,7 +240,7 @@ test('工作流库 Screen：卡片网格渲染文件事实与元数据诊断；�
     conversation: () => ({ summary: undefined, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} }),
   })
   const ctx = makeRecordingCtx({ list: LIST_RESULT })
-  const mod = await importWorkflowClientModule('index.tsx')
+  const mod = await importWorkflowClientModule('library.tsx')
   const Screen = mod['WorkflowLibraryScreen'] as (p: ScreenProps) => React.ReactElement
   const props = screenProps()
   const { host, unmount } = await mountClient(ctx, e(Screen, props))
@@ -272,7 +272,7 @@ test('工作流库搜索词从 URL 参数恢复', { timeout: 60_000 }, async () 
     conversation: () => ({ summary: undefined, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} }),
   })
   const ctx = makeRecordingCtx({ list: LIST_RESULT })
-  const mod = await importWorkflowClientModule('index.tsx')
+  const mod = await importWorkflowClientModule('library.tsx')
   const Screen = mod['WorkflowLibraryScreen'] as (p: ScreenProps) => React.ReactElement
   const props = screenProps({ q: 'audit' })
   const { host, unmount } = await mountClient(ctx, e(Screen, props))
@@ -292,7 +292,7 @@ test('详情抽屉：深链 wf 参数直开；get 只读源码渲染、无编辑
     conversation: () => ({ summary: undefined, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} }),
   })
   const ctx = makeRecordingCtx({ list: LIST_RESULT, get: GET_RESULT, delete: { deleted: true, name: 'release', path: '/data/workflows/release.js' } })
-  const mod = await importWorkflowClientModule('index.tsx')
+  const mod = await importWorkflowClientModule('library.tsx')
   const Screen = mod['WorkflowLibraryScreen'] as (p: ScreenProps & { inlineDrawer?: boolean }) => React.ReactElement
   const props = screenProps({ wf: 'release' })
   const { host, unmount } = await mountClient(ctx, e(Screen, { ...props, inlineDrawer: true }))
@@ -351,7 +351,7 @@ test('运行卡「保存为工作流」：内联 run 显示并调用 save fromRu
   const ctx = makeRecordingCtx({
     save: { created: true, workflow: { name: 'inline-task', updatedAt: 1, size: 10, description: 'd' } },
   })
-  const mod = await importWorkflowClientModule('index.tsx')
+  const mod = await importWorkflowClientModule('workbench.tsx')
   const Panel = mod['WorkflowWorkbenchPanel'] as (p: WorkbenchPanelProps) => React.ReactElement
   const conversation: ConversationSummary = {
     id: 1,

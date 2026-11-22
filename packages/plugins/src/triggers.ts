@@ -66,13 +66,13 @@ export function createTriggersPlugin(): PluginDefinition {
         id: TRIGGERS_SCREEN_ID,
         label: { en: 'Trigger Manager', 'zh-CN': '触发器管理' },
         icon: 'clock',
-        client: { module: 'index.tsx', export: 'TriggersManagerScreen' },
+        client: { module: 'manager.tsx', export: 'TriggersManagerScreen' },
       })
       ctx.ui.settingsPanel({
         id: 'triggers-settings',
         label: { en: 'Triggers', 'zh-CN': '触发器' },
         order: 40,
-        client: { module: 'index.tsx', export: 'TriggersSettingsPanel' },
+        client: { module: 'settings.tsx', export: 'TriggersSettingsPanel' },
       })
     },
   }

@@ -707,11 +707,11 @@ test('triggers12: UI 贡献——管理视图与设置面板为 client 单轨', 
     const ui = env.app.kernel.plugins.listUi().filter((u) => u.pluginId === TRIGGERS)
     const surfaces = ui.map((u) => u.surface).sort()
     assert.deepEqual(surfaces, ['screen', 'settings.panel', 'sidebar.item'], '三个 UI 贡献面')
-    const expectedClientExports: Record<string, string> = {
-      screen: 'TriggersManagerScreen',
-      'settings.panel': 'TriggersSettingsPanel',
+    const expectedClientRefs: Record<string, { module: string; export: string }> = {
+      screen: { module: 'manager.tsx', export: 'TriggersManagerScreen' },
+      'settings.panel': { module: 'settings.tsx', export: 'TriggersSettingsPanel' },
     }
-    for (const [surface, exportName] of Object.entries(expectedClientExports)) {
+    for (const [surface, expectedRef] of Object.entries(expectedClientRefs)) {
       const spec = ui.find((u) => u.surface === surface)!.spec as {
         json?: unknown
         docs?: unknown
@@ -719,7 +719,7 @@ test('triggers12: UI 贡献——管理视图与设置面板为 client 单轨', 
       }
       assert.equal(spec.json, undefined, `${surface} 不再声明 JSON Spec（单轨 client）`)
       assert.equal(spec.docs, undefined, `${surface} 不再声明 docs（组件 usePluginDoc 自主订阅）`)
-      assert.deepEqual(spec.client, { module: 'index.tsx', export: exportName }, `${surface} client 引用`)
+      assert.deepEqual(spec.client, expectedRef, `${surface} client 引用`)
     }
     const screen = ui.find((u) => u.surface === 'screen')!.spec as { id: string }
     assert.equal(screen.id, 'manager')

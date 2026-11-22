@@ -200,19 +200,6 @@
   white-space: nowrap;
 }
 
-.app-detail-delete-confirm {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  justify-content: flex-end;
-}
-
-.app-detail-delete-confirm span {
-  margin-right: auto;
-  font-size: 12.5px;
-}
-
 .apps-empty {
   display: flex;
   flex-direction: column;

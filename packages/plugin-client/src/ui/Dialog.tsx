@@ -1,6 +1,7 @@
 import React from 'react'
 import * as RadixDialog from '@radix-ui/react-dialog'
 import { OverlayLayerContext, useOverlayLayer } from './overlay-stack.js'
+import { usePluginScopeId } from './plugin-scope.js'
 
 const DialogInlineContext = React.createContext<boolean>(false)
 
@@ -73,12 +74,14 @@ export const DialogOverlay = React.forwardRef<
   DialogOverlayProps
 >(function DialogOverlay({ className, style, ...props }, ref) {
   const layer = React.useContext(OverlayLayerContext)
+  const pluginScopeId = usePluginScopeId()
   const layeredStyle = layer === null
     ? style
     : ({ ...style, zIndex: layer.overlayZIndex, '--dialog-layer-z': layer.overlayZIndex } as React.CSSProperties)
   return (
     <RadixDialog.Overlay
       ref={ref}
+      data-plugin-id={pluginScopeId}
       className={className ?? 'modal-backdrop'}
       style={layeredStyle}
       {...props}
@@ -98,12 +101,14 @@ export const DialogContent = React.forwardRef<
   DialogContentProps
 >(function DialogContent({ className, style, ...props }, ref) {
   const layer = React.useContext(OverlayLayerContext)
+  const pluginScopeId = usePluginScopeId()
   const layeredStyle = layer === null
     ? style
     : ({ ...style, zIndex: layer.contentZIndex, '--dialog-layer-z': layer.contentZIndex } as React.CSSProperties)
   return (
     <RadixDialog.Content
       ref={ref}
+      data-plugin-id={pluginScopeId}
       className={className ?? 'modal'}
       style={layeredStyle}
       {...props}

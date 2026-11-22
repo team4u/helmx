@@ -29,10 +29,13 @@ describe("triggers-client-interactions", () => {
 
   before(async () => {
     mountSharedPluginNamespaces()
-    const mod = await importBuiltinClientModule('builtin:triggers')
+    const [managerMod, settingsMod] = await Promise.all([
+      importBuiltinClientModule('builtin:triggers', 'manager.tsx'),
+      importBuiltinClientModule('builtin:triggers', 'settings.tsx'),
+    ])
     components = {
-      TriggersManagerScreen: mod['TriggersManagerScreen'] as Components['TriggersManagerScreen'],
-      TriggersSettingsPanel: mod['TriggersSettingsPanel'] as Components['TriggersSettingsPanel'],
+      TriggersManagerScreen: managerMod['TriggersManagerScreen'] as Components['TriggersManagerScreen'],
+      TriggersSettingsPanel: settingsMod['TriggersSettingsPanel'] as Components['TriggersSettingsPanel'],
     }
   }, { timeout: 60_000 })
 

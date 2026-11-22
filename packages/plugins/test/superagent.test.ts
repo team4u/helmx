@@ -1070,15 +1070,15 @@ test('superagent16: UI 贡献——侧栏/分组/胶囊挂件/工具卡/时间�
     assert.deepEqual(pill.scope!.profileIds, ['superagent'])
     // 六个视图型扩展点全部单轨 client（不再声明 json/docs；client 引用真实导出；
     // doc 订阅由组件内 usePluginDoc 自主声明）
-    const expectedClientExports: Record<string, string> = {
-      'composer.widget': 'SuperAgentComposerWidget',
-      'composer.pill': 'SuperAgentRouterModePill',
-      'tool.view': 'SuperAgentDispatchToolView',
-      'timeline.renderer': 'SuperAgentWorkerReportCard',
-      screen: 'SuperAgentRecallScreen',
-      'settings.panel': 'SuperAgentSettingsPanel',
+    const expectedClientRefs: Record<string, { module: string; export: string }> = {
+      'composer.widget': { module: 'composer.tsx', export: 'SuperAgentComposerWidget' },
+      'composer.pill': { module: 'composer.tsx', export: 'SuperAgentRouterModePill' },
+      'tool.view': { module: 'timeline.tsx', export: 'SuperAgentDispatchToolView' },
+      'timeline.renderer': { module: 'timeline.tsx', export: 'SuperAgentWorkerReportCard' },
+      screen: { module: 'recall-screen.tsx', export: 'SuperAgentRecallScreen' },
+      'settings.panel': { module: 'settings.tsx', export: 'SuperAgentSettingsPanel' },
     }
-    for (const [surface, exportName] of Object.entries(expectedClientExports)) {
+    for (const [surface, expectedRef] of Object.entries(expectedClientRefs)) {
       const spec = ui.find((u) => u.surface === surface)!.spec as {
         json?: unknown
         docs?: unknown
@@ -1086,7 +1086,7 @@ test('superagent16: UI 贡献——侧栏/分组/胶囊挂件/工具卡/时间�
       }
       assert.equal(spec.json, undefined, `${surface} 不再声明 JSON Spec（单轨 client）`)
       assert.equal(spec.docs, undefined, `${surface} 不再声明 docs（组件 usePluginDoc 自主订阅）`)
-      assert.deepEqual(spec.client, { module: 'index.tsx', export: exportName }, `${surface} client 引用`)
+      assert.deepEqual(spec.client, expectedRef, `${surface} client 引用`)
     }
     // 无 Emoji（设计规范）
     const serialized = JSON.stringify(ui)
@@ -1405,7 +1405,7 @@ test('superagent20: dispatch_worker 工具声明 structuredOutputSchema 并分�
   g[CLIENT_SHARED_GLOBALS['@helmx/plugin-client']!] = SDK
 
   const superagentClientDir = resolve(dirname(fileURLToPath(import.meta.url)), '../src/superagent/client')
-  const bundle = await compilePluginClientModule('builtin:superagent', superagentClientDir, 'index.tsx', buildDir)
+  const bundle = await compilePluginClientModule('builtin:superagent', superagentClientDir, 'timeline.tsx', buildDir)
   const mod = (await import(`data:text/javascript;base64,${Buffer.from(bundle.code, 'utf8').toString('base64')}`)) as {
     SuperAgentDispatchToolView: React.ComponentType<ToolViewProps & { presentationMeta?: Readonly<Record<string, unknown>> }>
   }

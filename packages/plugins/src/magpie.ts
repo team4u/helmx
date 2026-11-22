@@ -676,14 +676,14 @@ export function createMagpiePlugin(): PluginDefinition {
         id: 'magpie-composer-quota',
         target: COMPOSER_STATUS_SLOT,
         order: 20,
-        client: { module: 'index.tsx', export: 'MagpieComposerQuotaStatus' },
+        client: { module: 'composer-quota.tsx', export: 'MagpieComposerQuotaStatus' },
       })
 
       ctx.ui.settingsPanel({
         id: 'magpie-panel',
         label: { en: 'Magpie Gateway', 'zh-CN': 'Magpie 网关' },
         order: 25,
-        client: { module: 'index.tsx', export: 'MagpieSettingsPanel' },
+        client: { module: 'settings.tsx', export: 'MagpieSettingsPanel' },
       })
 
       ctx.ui.command({

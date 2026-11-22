@@ -26,15 +26,14 @@ import './styles.css'
 import type { ReactNode } from 'react'
 import type { ScreenProps } from '@helmx/protocol'
 import {
-  Dialog,
-  DialogClose,
-  DialogContent,
-  DialogOverlay,
-  DialogPortal,
-  DialogTitle,
+  Callout,
+  ConfirmDialog,
+  DetailDrawer,
   HelmxIcon,
   ScreenToolbar,
+  SearchBox,
   StatusLight,
+  usePluginAction,
   usePluginContext,
   usePluginDoc,
   usePluginLocale,
@@ -277,14 +276,12 @@ function AppDetailDrawer({
   const iterateTarget = appScreenTarget(item)
 
   const [confirmDelete, setConfirmDelete] = useState(false)
-  const [deleting, setDeleting] = useState(false)
-  const [deleteError, setDeleteError] = useState<string | null>(null)
+  const removeAction = usePluginAction()
 
   useEffect(() => {
     setConfirmDelete(false)
-    setDeleting(false)
-    setDeleteError(null)
-  }, [plugin.id])
+    removeAction.clearError()
+  }, [plugin.id, removeAction.clearError])
 
   const handleIterate = () => {
     if (originConversationId === undefined || iterateTarget === null) return
@@ -292,19 +289,17 @@ function AppDetailDrawer({
     ctx.openSplitScreen(iterateTarget)
   }
 
-  const handleDelete = async () => {
-    if (deleting) return
-    setDeleting(true)
-    setDeleteError(null)
-    try {
-      await ctx.callAction('remove', { pluginId: plugin.id })
-      setConfirmDelete(false)
-      onClose()
-    } catch (err) {
-      setDeleteError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setDeleting(false)
-    }
+  const handleDelete = () => {
+    void removeAction.run(
+      'remove',
+      { pluginId: plugin.id },
+      {
+        onSuccess: () => {
+          setConfirmDelete(false)
+          onClose()
+        },
+      },
+    )
   }
 
   const versionLabel = plugin.version ? `v${plugin.version.replace(/^v/, '')}` : null
@@ -313,236 +308,207 @@ function AppDetailDrawer({
   const description = resolveAppDescription(plugin, screens, locale)
 
   return (
-    <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
-      <DialogPortal inline={inline}>
-        <DialogOverlay className="modal-backdrop primary-drawer-backdrop" />
-        <DialogContent
-          className="primary-drawer-content app-detail-drawer"
-          role="dialog"
-          aria-label={appDetailDialogLabel(displayName, locale)}
-        >
-          {/* Drawer header: reuses the primary-drawer-header conventions */}
-          <div className="primary-drawer-header">
-            <div className="primary-drawer-header-left">
-              <div className="primary-drawer-icon-wrap">
-                <HelmxIcon name={catalog?.icon ?? 'layout-grid'} size={18} />
-              </div>
-              <div className="primary-drawer-title-col">
-                <div className="primary-drawer-title-row">
-                  <DialogTitle className="primary-drawer-title">
-                    {displayName}
-                  </DialogTitle>
-                  {versionLabel && (
-                    <span className="badge badge-neutral mono" title={appVersionTitle(versionLabel, locale)}>
-                      {versionLabel}
-                    </span>
-                  )}
-                  {catalog?.pinned === true && (
-                    <span className="badge badge-neutral" title={t(APP_PINNED_TITLE)}>
-                      {t(APP_BADGE_PINNED)}
-                    </span>
-                  )}
-                  <StatusLight
-                    status={isAppPluginActive(plugin) ? 'online' : 'idle'}
-                    label={t(isAppPluginActive(plugin) ? APP_STATUS_READY : APP_STATUS_STOPPED)}
-                  />
-                </div>
-                <div className="primary-drawer-id mono">{plugin.id}</div>
-              </div>
-            </div>
-            <DialogClose asChild>
-              <button type="button" className="btn btn-ghost btn-sm" aria-label={t(APP_CLOSE)} title={t(APP_CLOSE)}>
-                <HelmxIcon name="x" size={14} />
-              </button>
-            </DialogClose>
+    <DetailDrawer
+      open
+      inline={inline}
+      onClose={onClose}
+      className="app-detail-drawer"
+      aria-label={appDetailDialogLabel(displayName, locale)}
+      closeLabel={t(APP_CLOSE)}
+      closeButtonClassName="btn btn-ghost btn-sm"
+      icon={<HelmxIcon name={catalog?.icon ?? 'layout-grid'} size={18} />}
+      title={displayName}
+      titleExtra={
+        <>
+          {versionLabel && (
+            <span className="badge badge-neutral mono" title={appVersionTitle(versionLabel, locale)}>
+              {versionLabel}
+            </span>
+          )}
+          {catalog?.pinned === true && (
+            <span className="badge badge-neutral" title={t(APP_PINNED_TITLE)}>
+              {t(APP_BADGE_PINNED)}
+            </span>
+          )}
+          <StatusLight
+            status={isAppPluginActive(plugin) ? 'online' : 'idle'}
+            label={t(isAppPluginActive(plugin) ? APP_STATUS_READY : APP_STATUS_STOPPED)}
+          />
+        </>
+      }
+      meta={plugin.id}
+      footer={
+        <>
+          <button
+            type="button"
+            className="btn btn-sm btn-ghost"
+            onClick={onClose}
+          >
+            <span>{t(APP_CLOSE)}</span>
+          </button>
+          <button
+            type="button"
+            className="btn btn-sm"
+            disabled={originConversationId === undefined || iterateTarget === null || !isAppPluginActive(plugin)}
+            title={
+              originConversationId === undefined
+                ? t(APP_ITERATE_DISABLED_TITLE)
+                : t(APP_ITERATE_TITLE)
+            }
+            onClick={handleIterate}
+          >
+            <HelmxIcon name="message-square" size={12} />
+            <span>{t(APP_ITERATE)}</span>
+          </button>
+          <button
+            type="button"
+            className="btn btn-sm btn-ghost btn-danger"
+            disabled={removeAction.pending}
+            title={t(APP_UNINSTALL_TITLE)}
+            aria-label={t(APP_UNINSTALL_LABEL)}
+            onClick={() => setConfirmDelete(true)}
+          >
+            <HelmxIcon name="trash-2" size={12} />
+            <span>{t(APP_UNINSTALL)}</span>
+          </button>
+        </>
+      }
+      aux={
+        <ConfirmDialog
+          open={confirmDelete}
+          inline={inline}
+          onOpenChange={(nextOpen) => {
+            if (!nextOpen && !removeAction.pending) setConfirmDelete(false)
+          }}
+          title={t(APP_UNINSTALL_LABEL)}
+          description={t(APP_DELETE_CONFIRM)}
+          confirmText={removeAction.pending ? t(APP_DELETING) : t(APP_DELETE_CONFIRM_LABEL)}
+          cancelText={t(APP_CANCEL)}
+          danger
+          pending={removeAction.pending}
+          onConfirm={handleDelete}
+        />
+      }
+    >
+      {removeAction.error !== undefined && (
+        <Callout tone="err">{removeAction.error}</Callout>
+      )}
+
+      {description && (
+        <div className="app-detail-desc text-secondary" style={{ fontSize: '13px', lineHeight: 1.5 }}>
+          {description}
+        </div>
+      )}
+
+      <div className="form-grid">
+        <div className="form-grid-row">
+          <span className="form-grid-label"><span>{t(APP_KV_APP_ID)}</span></span>
+          <span className="form-grid-value mono">{plugin.id}</span>
+        </div>
+        {versionLabel && (
+          <div className="form-grid-row">
+            <span className="form-grid-label"><span>{t(APP_KV_VERSION)}</span></span>
+            <span className="form-grid-value mono">{versionLabel}</span>
           </div>
+        )}
+        <div className="form-grid-row">
+          <span className="form-grid-label"><span>{t(APP_KV_CATEGORY)}</span></span>
+          <span className="badge badge-neutral">{categoryLabel}</span>
+        </div>
+        <div className="form-grid-row">
+          <span className="form-grid-label"><span>{t(APP_KV_PINNED)}</span></span>
+          <span className="form-grid-value">
+            {catalog?.pinned ? t(APP_PINNED_YES) : t(APP_PINNED_NO)}
+          </span>
+        </div>
+        {catalog?.workspaceDir && (
+          <div className="form-grid-row">
+            <span className="form-grid-label"><span>{t(APP_KV_WORKSPACE)}</span></span>
+            <span className="form-grid-value mono" title={catalog.workspaceDir}>
+              {catalog.workspaceDir}
+            </span>
+          </div>
+        )}
+        {plugin.managed?.source && (
+          <div className="form-grid-row">
+            <span className="form-grid-label"><span>{t(APP_KV_INSTALL_SOURCE)}</span></span>
+            <span className="form-grid-value mono" title={plugin.managed.source.raw}>
+              {plugin.managed.source.raw}
+            </span>
+          </div>
+        )}
+        {originConversationId !== undefined && (
+          <div className="form-grid-row">
+            <span className="form-grid-label"><span>{t(APP_KV_ORIGIN_CONVERSATION)}</span></span>
+            <button
+              type="button"
+              className="btn btn-ghost btn-xs mono"
+              title={appOriginJumpTitle(originConversationId, locale)}
+              onClick={() => ctx.openScreen(`conversation:${originConversationId}`)}
+            >
+              <HelmxIcon name="message-square" size={11} />
+              <span>#{originConversationId}</span>
+            </button>
+          </div>
+        )}
+      </div>
 
-          {/* Drawer body: reuses the primary-drawer-body conventions */}
-          <div className="primary-drawer-body">
-            {description && (
-              <div className="app-detail-desc text-secondary" style={{ fontSize: '13px', lineHeight: 1.5 }}>
-                {description}
-              </div>
-            )}
-
-            <div className="form-grid">
-              <div className="form-grid-row">
-                <span className="form-grid-label"><span>{t(APP_KV_APP_ID)}</span></span>
-                <span className="form-grid-value mono">{plugin.id}</span>
-              </div>
-              {versionLabel && (
-                <div className="form-grid-row">
-                  <span className="form-grid-label"><span>{t(APP_KV_VERSION)}</span></span>
-                  <span className="form-grid-value mono">{versionLabel}</span>
-                </div>
-              )}
-              <div className="form-grid-row">
-                <span className="form-grid-label"><span>{t(APP_KV_CATEGORY)}</span></span>
-                <span className="badge badge-neutral">{categoryLabel}</span>
-              </div>
-              <div className="form-grid-row">
-                <span className="form-grid-label"><span>{t(APP_KV_PINNED)}</span></span>
-                <span className="form-grid-value">
-                  {catalog?.pinned ? t(APP_PINNED_YES) : t(APP_PINNED_NO)}
+      {screens.length > 0 && (
+        <div className="app-detail-section">
+          <h4 className="app-detail-section-title">
+            <HelmxIcon name="monitor" size={13} />
+            <span>{appViewsSectionTitle(screens.length, locale)}</span>
+          </h4>
+          {screens.map((screen) => {
+            const target = `screen:${screen.pluginId}/${screen.screenId}`
+            return (
+              <div key={screen.screenId} className="app-detail-screen-row">
+                <span className="app-detail-screen-label" title={`${screen.pluginId}/${screen.screenId}`}>
+                  <HelmxIcon name="layout" size={13} />
+                  <span>{resolveAppScreenLabel(screen, locale)}</span>
                 </span>
-              </div>
-              {catalog?.workspaceDir && (
-                <div className="form-grid-row">
-                  <span className="form-grid-label"><span>{t(APP_KV_WORKSPACE)}</span></span>
-                  <span className="form-grid-value mono" title={catalog.workspaceDir}>
-                    {catalog.workspaceDir}
-                  </span>
-                </div>
-              )}
-              {plugin.managed?.source && (
-                <div className="form-grid-row">
-                  <span className="form-grid-label"><span>{t(APP_KV_INSTALL_SOURCE)}</span></span>
-                  <span className="form-grid-value mono" title={plugin.managed.source.raw}>
-                    {plugin.managed.source.raw}
-                  </span>
-                </div>
-              )}
-              {originConversationId !== undefined && (
-                <div className="form-grid-row">
-                  <span className="form-grid-label"><span>{t(APP_KV_ORIGIN_CONVERSATION)}</span></span>
+                <div className="app-detail-screen-actions">
                   <button
                     type="button"
-                    className="btn btn-ghost btn-xs mono"
-                    title={appOriginJumpTitle(originConversationId, locale)}
-                    onClick={() => ctx.openScreen(`conversation:${originConversationId}`)}
+                    className="btn btn-xs"
+                    title={t(APP_OPEN_VIEW_TITLE)}
+                    onClick={() => ctx.openScreen(target)}
                   >
-                    <HelmxIcon name="message-square" size={11} />
-                    <span>#{originConversationId}</span>
+                    <HelmxIcon name="play" size={11} />
+                    <span>{t(APP_OPEN_VIEW_LABEL)}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-xs btn-icon-xs"
+                    title={t(APP_OPEN_SPLIT_TITLE)}
+                    aria-label={t(APP_OPEN_VIEW_SPLIT_LABEL)}
+                    onClick={() => ctx.openSplitScreen(target)}
+                  >
+                    <HelmxIcon name="columns" size={11} />
                   </button>
                 </div>
-              )}
-            </div>
-
-            {screens.length > 0 && (
-              <div className="app-detail-section">
-                <h4 className="app-detail-section-title">
-                  <HelmxIcon name="monitor" size={13} />
-                  <span>{appViewsSectionTitle(screens.length, locale)}</span>
-                </h4>
-                {screens.map((screen) => {
-                  const target = `screen:${screen.pluginId}/${screen.screenId}`
-                  return (
-                    <div key={screen.screenId} className="app-detail-screen-row">
-                      <span className="app-detail-screen-label" title={`${screen.pluginId}/${screen.screenId}`}>
-                        <HelmxIcon name="layout" size={13} />
-                        <span>{resolveAppScreenLabel(screen, locale)}</span>
-                      </span>
-                      <div className="app-detail-screen-actions">
-                        <button
-                          type="button"
-                          className="btn btn-xs"
-                          title={t(APP_OPEN_VIEW_TITLE)}
-                          onClick={() => ctx.openScreen(target)}
-                        >
-                          <HelmxIcon name="play" size={11} />
-                          <span>{t(APP_OPEN_VIEW_LABEL)}</span>
-                        </button>
-                        <button
-                          type="button"
-                          className="btn btn-xs btn-icon-xs"
-                          title={t(APP_OPEN_SPLIT_TITLE)}
-                          aria-label={t(APP_OPEN_VIEW_SPLIT_LABEL)}
-                          onClick={() => ctx.openSplitScreen(target)}
-                        >
-                          <HelmxIcon name="columns" size={11} />
-                        </button>
-                      </div>
-                    </div>
-                  )
-                })}
               </div>
-            )}
+            )
+          })}
+        </div>
+      )}
 
-            {(plugin.actions?.length ?? 0) > 0 && (
-              <div className="app-detail-section">
-                <h4 className="app-detail-section-title">
-                  <HelmxIcon name="zap" size={13} />
-                  <span>{appActionsSectionTitle(plugin.actions?.length ?? 0, locale)}</span>
-                </h4>
-                <div className="plugin-capability-tags" style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-                  {plugin.actions?.map((act) => (
-                    <span key={act} className="badge badge-neutral mono" title={act}>
-                      {act}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
+      {(plugin.actions?.length ?? 0) > 0 && (
+        <div className="app-detail-section">
+          <h4 className="app-detail-section-title">
+            <HelmxIcon name="zap" size={13} />
+            <span>{appActionsSectionTitle(plugin.actions?.length ?? 0, locale)}</span>
+          </h4>
+          <div className="plugin-capability-tags" style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+            {plugin.actions?.map((act) => (
+              <span key={act} className="badge badge-neutral mono" title={act}>
+                {act}
+              </span>
+            ))}
           </div>
-
-          {deleteError !== null && (
-            <div className="text-danger" style={{ padding: '0 20px 8px', fontSize: '12px' }}>
-              {deleteError}
-            </div>
-          )}
-
-          {/* Drawer footer: reuses the primary-drawer-footer conventions */}
-          <div className="primary-drawer-footer">
-            {confirmDelete ? (
-              <div className="app-detail-delete-confirm">
-                <span className="text-subtle">{t(APP_DELETE_CONFIRM)}</span>
-                <button
-                  type="button"
-                  className="btn btn-sm btn-ghost"
-                  disabled={deleting}
-                  onClick={() => setConfirmDelete(false)}
-                >
-                  <span>{t(APP_CANCEL)}</span>
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-sm btn-danger"
-                  disabled={deleting}
-                  onClick={handleDelete}
-                >
-                  <HelmxIcon name="trash-2" size={12} />
-                  <span>{deleting ? t(APP_DELETING) : t(APP_DELETE_CONFIRM_LABEL)}</span>
-                </button>
-              </div>
-            ) : (
-              <>
-                <button
-                  type="button"
-                  className="btn btn-sm btn-ghost"
-                  onClick={onClose}
-                >
-                  <span>{t(APP_CLOSE)}</span>
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-sm"
-                  disabled={originConversationId === undefined || iterateTarget === null || !isAppPluginActive(plugin)}
-                  title={
-                    originConversationId === undefined
-                      ? t(APP_ITERATE_DISABLED_TITLE)
-                      : t(APP_ITERATE_TITLE)
-                  }
-                  onClick={handleIterate}
-                >
-                  <HelmxIcon name="message-square" size={12} />
-                  <span>{t(APP_ITERATE)}</span>
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-sm btn-ghost btn-danger"
-                  title={t(APP_UNINSTALL_TITLE)}
-                  aria-label={t(APP_UNINSTALL_LABEL)}
-                  onClick={() => setConfirmDelete(true)}
-                >
-                  <HelmxIcon name="trash-2" size={12} />
-                  <span>{t(APP_UNINSTALL)}</span>
-                </button>
-              </>
-            )}
-          </div>
-        </DialogContent>
-      </DialogPortal>
-    </Dialog>
+        </div>
+      )}
+    </DetailDrawer>
   )
 }
 
@@ -605,27 +571,15 @@ export function AppCenterScreen(props: AppCenterScreenProps): ReactNode {
       </div>
 
       <ScreenToolbar className="apps-center-toolbar">
-        <div className="primary-search-box">
-          <HelmxIcon name="search" size={14} />
-          <input
-            type="text"
-            placeholder={t(APP_SEARCH_PLACEHOLDER)}
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            aria-label={t(APP_SEARCH_LABEL)}
-          />
-          {query !== '' && (
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm primary-search-clear"
-              title={t(APP_SEARCH_CLEAR)}
-              aria-label={t(APP_SEARCH_CLEAR)}
-              onClick={() => setQuery('')}
-            >
-              <HelmxIcon name="x" size={12} />
-            </button>
-          )}
-        </div>
+        <SearchBox
+          className="primary-search-box"
+          clearButtonClassName="btn btn-ghost btn-sm primary-search-clear"
+          value={query}
+          onChange={setQuery}
+          placeholder={t(APP_SEARCH_PLACEHOLDER)}
+          ariaLabel={t(APP_SEARCH_LABEL)}
+          clearLabel={t(APP_SEARCH_CLEAR)}
+        />
         <div className="primary-category-pills" role="tablist" aria-label={t(APP_FILTER_LABEL)}>
           <button
             type="button"

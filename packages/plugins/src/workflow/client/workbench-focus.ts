@@ -2,11 +2,10 @@
  * In-plugin workbench run focus bus for the builtin:workflow plugin (pure
  * in-memory state + subscription, zero React/DOM dependencies).
  *
- * After a timeline one-line trace (WorkflowToolView / SubagentToolView
- * external run) or a bottom activity tray click, precisely notifies
- * WorkflowWorkbenchPanel to open and expand the full detail view of a given
- * run.id; if the workbench is not mounted yet the request is cached and
- * consumed on the first mounted frame — compatible with React StrictMode.
+ * State is stored on a shared `Symbol.for(...)` slot on `globalThis` so
+ * separately compiled surface entrypoints (`active-tray.tsx`, `tool-views.tsx`,
+ * `workbench.tsx`) coordinate on the exact same focus bus without bundling a
+ * monolithic single entry.
  */
 
 export interface WorkbenchRunFocusRequest {
@@ -17,37 +16,55 @@ export interface WorkbenchRunFocusRequest {
 
 type FocusListener = (request: WorkbenchRunFocusRequest) => void
 
-let pendingFocus: WorkbenchRunFocusRequest | undefined
-let focusSeq = 0
-const listeners = new Set<FocusListener>()
+interface FocusBusState {
+  pendingFocus: WorkbenchRunFocusRequest | undefined
+  focusSeq: number
+  listeners: Set<FocusListener>
+}
+
+const FOCUS_BUS_KEY = Symbol.for('helmx:builtin:workflow:workbench-focus')
+
+function getBus(): FocusBusState {
+  const g = globalThis as Record<PropertyKey, unknown>
+  let bus = g[FOCUS_BUS_KEY] as FocusBusState | undefined
+  if (bus === undefined) {
+    bus = { pendingFocus: undefined, focusSeq: 0, listeners: new Set() }
+    g[FOCUS_BUS_KEY] = bus
+  }
+  return bus
+}
 
 /** Request the right workbench to focus and expand a run.id of a conversation. */
 export function requestWorkbenchRunFocus(conversationId: number, runId: string): void {
   if (!Number.isSafeInteger(conversationId) || conversationId <= 0 || runId === '') return
-  focusSeq += 1
-  const request: WorkbenchRunFocusRequest = { conversationId, runId, seq: focusSeq }
-  pendingFocus = request
-  for (const listener of [...listeners]) {
+  const bus = getBus()
+  bus.focusSeq += 1
+  const request: WorkbenchRunFocusRequest = { conversationId, runId, seq: bus.focusSeq }
+  bus.pendingFocus = request
+  for (const listener of [...bus.listeners]) {
     listener(request)
   }
 }
 
 /** Non-destructive peek at a pending run focus request for the current conversation (SSR safe). */
 export function peekWorkbenchRunFocus(conversationId: number): WorkbenchRunFocusRequest | undefined {
-  return pendingFocus?.conversationId === conversationId ? pendingFocus : undefined
+  const pending = getBus().pendingFocus
+  return pending?.conversationId === conversationId ? pending : undefined
 }
 
 /** Clear the pending focus request of a conversation (optionally matching runId exactly). */
 export function clearWorkbenchRunFocus(conversationId: number, runId?: string): void {
-  if (pendingFocus === undefined || pendingFocus.conversationId !== conversationId) return
-  if (runId !== undefined && pendingFocus.runId !== runId) return
-  pendingFocus = undefined
+  const bus = getBus()
+  if (bus.pendingFocus === undefined || bus.pendingFocus.conversationId !== conversationId) return
+  if (runId !== undefined && bus.pendingFocus.runId !== runId) return
+  bus.pendingFocus = undefined
 }
 
 /** Subscribe to later focus requests (for a mounted WorkflowWorkbenchPanel to jump live). */
 export function subscribeWorkbenchRunFocus(listener: FocusListener): () => void {
-  listeners.add(listener)
+  const bus = getBus()
+  bus.listeners.add(listener)
   return () => {
-    listeners.delete(listener)
+    bus.listeners.delete(listener)
   }
 }

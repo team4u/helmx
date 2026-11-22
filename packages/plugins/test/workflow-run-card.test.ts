@@ -551,7 +551,7 @@ async function renderWorkflowToolView(
   conversations: unknown[] | undefined = undefined,
 ): Promise<string> {
   setWorkflowClientStub(conversations !== undefined ? { docValue, conversations } : { docValue })
-  const mod = await importWorkflowClientModule('index.tsx')
+  const mod = await importWorkflowClientModule('tool-views.tsx')
   const WorkflowToolView = mod['WorkflowToolView'] as (p: Record<string, unknown>) => React.ReactElement
   return renderToString(
     e(SDK.PluginClientContext.Provider, { value: stubCtx }, e(WorkflowToolView, props)),
@@ -564,7 +564,7 @@ async function renderWorkflowWorkbench(
   viewerConversation: ConversationSummary = summary(1, 'idle'),
 ): Promise<string> {
   setWorkflowClientStub(conversations !== undefined ? { docValue, conversations } : { docValue })
-  const mod = await importWorkflowClientModule('index.tsx')
+  const mod = await importWorkflowClientModule('workbench.tsx')
   const WorkflowWorkbenchPanel = mod['WorkflowWorkbenchPanel'] as (p: WorkbenchPanelProps) => React.ReactElement
   return renderToString(
     e(SDK.PluginClientContext.Provider, { value: stubCtx }, e(WorkflowWorkbenchPanel, { conversation: viewerConversation })),
@@ -852,7 +852,7 @@ test('SSR：前台同步 run 仅在查看会话即发起会话且 human 归属�
 
 test('SSR：WorkflowWorkbenchPanel 空态显示占位文案', { timeout: 60_000 }, async () => {
   setWorkflowClientStub({})
-  const mod = await importWorkflowClientModule('index.tsx')
+  const mod = await importWorkflowClientModule('workbench.tsx')
   const WorkflowWorkbenchPanel = mod['WorkflowWorkbenchPanel'] as (p: WorkbenchPanelProps) => React.ReactElement
   const html = renderToString(
     e(SDK.PluginClientContext.Provider, { value: stubCtx }, e(WorkflowWorkbenchPanel, { conversation: summary(1, 'idle') })),
@@ -872,7 +872,7 @@ test('SSR：WorkflowWorkbenchPanel 列出当前会话工作流与子代理', { t
         ? { summary: child12, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} }
         : { summary: undefined, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} },
   })
-  const mod = await importWorkflowClientModule('index.tsx')
+  const mod = await importWorkflowClientModule('workbench.tsx')
   const WorkflowWorkbenchPanel = mod['WorkflowWorkbenchPanel'] as (p: WorkbenchPanelProps) => React.ReactElement
   const html = renderToString(
     e(SDK.PluginClientContext.Provider, { value: stubCtx }, e(WorkflowWorkbenchPanel, { conversation: summary(1, 'idle') })),
@@ -978,7 +978,7 @@ test('WorkflowRunCard / WorkflowWorkbenchPanel：瘦身 run 展示 resultPreview
         return {}
       },
     })
-    const mod = await importWorkflowClientModule('index.tsx')
+    const mod = await importWorkflowClientModule('workbench.tsx')
     const Panel = mod['WorkflowWorkbenchPanel'] as (p: WorkbenchPanelProps) => React.ReactElement
     const mounted = h.mountNode(e(Panel, { conversation: summary(1, 'idle') }))
     try {
@@ -1056,7 +1056,7 @@ test('WorkflowRunResultBox：inspect 失败时显式展示错误信息（绝不�
         return {}
       },
     })
-    const mod = await importWorkflowClientModule('index.tsx')
+    const mod = await importWorkflowClientModule('workbench.tsx')
     const Panel = mod['WorkflowWorkbenchPanel'] as (p: WorkbenchPanelProps) => React.ReactElement
     const mounted = h.mountNode(e(Panel, { conversation: summary(1, 'idle') }))
     try {

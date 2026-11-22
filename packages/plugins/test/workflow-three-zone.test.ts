@@ -293,9 +293,24 @@ describe('Workflow 三区零重复与无损呈现', () => {
     g[CLIENT_SHARED_GLOBALS['lucide-react']!] = LucideReact
     g[CLIENT_SHARED_GLOBALS['@helmx/plugin-client']!] = SDK
     tempDir = await mkdtemp(join(tmpdir(), 'helmx-wf-three-zone-'))
-    const bundle = await compilePluginClientModule('builtin:workflow', WORKFLOW_CLIENT_DIR, 'index.tsx', tempDir)
-    const url = `data:text/javascript;base64,${Buffer.from(bundle.code, 'utf8').toString('base64')}#three-zone-real`
-    mod = (await import(url)) as WorkflowClientModule
+    const surfaceEntries = [
+      'active-tray.tsx',
+      'background-report.tsx',
+      'tool-views.tsx',
+      'workbench.tsx',
+      'library.tsx',
+    ] as const
+    const bundles = await Promise.all(
+      surfaceEntries.map((entry) =>
+        compilePluginClientModule('builtin:workflow', WORKFLOW_CLIENT_DIR, entry, tempDir),
+      ),
+    )
+    const mods = await Promise.all(
+      bundles.map((bundle, idx) =>
+        import(`data:text/javascript;base64,${Buffer.from(bundle.code, 'utf8').toString('base64')}#three-zone-${idx}`),
+      ),
+    )
+    mod = Object.assign({}, ...mods) as WorkflowClientModule
   })
 
   after(async () => {

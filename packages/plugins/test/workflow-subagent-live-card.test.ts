@@ -34,11 +34,14 @@ const {
 
 const e = React.createElement
 const { act } = React
-const workflowClient = await importWorkflowClientModule()
-const SubagentLiveCard = workflowClient['SubagentLiveCard'] as React.ComponentType<Record<string, unknown>>
-const SubagentToolView = workflowClient['SubagentToolView'] as React.ComponentType<Record<string, unknown>>
-const WorkflowToolView = workflowClient['WorkflowToolView'] as React.ComponentType<Record<string, unknown>>
-const WorkflowWorkbenchPanel = workflowClient['WorkflowWorkbenchPanel'] as React.ComponentType<Record<string, unknown>>
+const [toolViewsMod, workbenchMod] = await Promise.all([
+  importWorkflowClientModule('tool-views.tsx'),
+  importWorkflowClientModule('workbench.tsx'),
+])
+const SubagentLiveCard = toolViewsMod['SubagentLiveCard'] as React.ComponentType<Record<string, unknown>>
+const SubagentToolView = toolViewsMod['SubagentToolView'] as React.ComponentType<Record<string, unknown>>
+const WorkflowToolView = toolViewsMod['WorkflowToolView'] as React.ComponentType<Record<string, unknown>>
+const WorkflowWorkbenchPanel = workbenchMod['WorkflowWorkbenchPanel'] as React.ComponentType<Record<string, unknown>>
 const { ExternalRunSummary } = (await importWorkflowClientModule('ExternalRunSummary.tsx')) as {
   ExternalRunSummary: React.ComponentType<Record<string, unknown>>
 }

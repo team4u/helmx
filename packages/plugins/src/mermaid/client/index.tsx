@@ -15,12 +15,11 @@
  * Display copy resolves from copy.ts against the active host locale (no
  * independent language state, no localStorage).
  */
-import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { HelmxIcon, CopyButton, Callout, usePluginContext, usePluginTranslator } from '@helmx/plugin-client'
+import { useEffect, useRef, useState, type ComponentType, type ReactNode } from 'react'
+import { HelmxIcon, CopyButton, Callout, LoadingState, usePluginContext, usePluginTranslator } from '@helmx/plugin-client'
 import type { MarkdownCodeBlockProps } from '@helmx/protocol'
 import { loadMermaid } from './mermaid-loader.ts'
 import { getMermaidConfig } from './mermaid-theme.ts'
-import { MermaidPreviewModal } from './MermaidPreviewModal.tsx'
 import {
   MERMAID_COPY_SOURCE,
   MERMAID_RENDERING,
@@ -29,6 +28,73 @@ import {
   MERMAID_ZOOM_IN,
 } from './copy.ts'
 import './styles.css'
+
+type MermaidPreviewModalComponent = ComponentType<{
+  code: string
+  svg: string | null
+  onClose: () => void
+}>
+
+let cachedPreviewModal: MermaidPreviewModalComponent | null = null
+
+function LazyMermaidPreviewModal({
+  code,
+  svg,
+  onClose,
+}: {
+  code: string
+  svg: string | null
+  onClose: () => void
+}): ReactNode {
+  const t = usePluginTranslator()
+  const [Modal, setModal] = useState<MermaidPreviewModalComponent | null>(() => cachedPreviewModal)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [attempt, setAttempt] = useState(0)
+
+  useEffect(() => {
+    if (Modal !== null) return
+    let active = true
+    setLoadError(null)
+    void import('./MermaidPreviewModal.tsx')
+      .then((mod) => {
+        if (!active) return
+        const cmp = mod.MermaidPreviewModal as MermaidPreviewModalComponent
+        cachedPreviewModal = cmp
+        setModal(() => cmp)
+      })
+      .catch((err: unknown) => {
+        if (!active) return
+        setLoadError(err instanceof Error ? err.message : String(err))
+      })
+    return () => {
+      active = false
+    }
+  }, [Modal, attempt])
+
+  if (Modal !== null) {
+    return <Modal code={code} svg={svg} onClose={onClose} />
+  }
+  if (loadError !== null) {
+    return (
+      <Callout tone="err" title={t(MERMAID_RENDER_FAILED)}>
+        <div className="mermaid-error-body">
+          <span className="selectable">{loadError}</span>
+          <div className="mermaid-error-actions">
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => setAttempt((n) => n + 1)}
+            >
+              <HelmxIcon name="refresh-cw" size={12} />
+              {t(MERMAID_RETRY)}
+            </button>
+          </div>
+        </div>
+      </Callout>
+    )
+  }
+  return <LoadingState label={t(MERMAID_RENDERING)} />
+}
 
 const MERMAID_CACHE_LIMIT = 200
 const mermaidSvgCache = new Map<string, string>()
@@ -176,7 +242,7 @@ export function MermaidCodeBlock({ code }: MarkdownCodeBlockProps): ReactNode {
           </div>
         )}
       </div>
-      {zoomOpen && <MermaidPreviewModal code={code} svg={svg} onClose={() => setZoomOpen(false)} />}
+      {zoomOpen && <LazyMermaidPreviewModal code={code} svg={svg} onClose={() => setZoomOpen(false)} />}
     </div>
   )
 }
