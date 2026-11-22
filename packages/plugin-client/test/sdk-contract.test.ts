@@ -30,7 +30,17 @@ import * as React from 'react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { renderToString } from 'react-dom/server'
-import { PLUGIN_CLIENT_SHARED_EXPORTS, resolveLocalizedText } from '@helmx/protocol'
+import {
+  PLUGIN_CLIENT_SHARED_EXPORTS,
+  resolveLocalizedText,
+  type AskSpec,
+  type ConversationDetail,
+  type ConversationLive,
+  type ConversationSummary,
+  type PluginSummary,
+  type ScreenSpec,
+  type UsePluginsResult,
+} from '@helmx/protocol'
 import * as SDK from '../src/index.js'
 
 const e = React.createElement
@@ -84,22 +94,149 @@ interface PortLog {
   docs: Array<{ pluginId: string; docName: string; conversationId?: number }>
 }
 
-function makePort(log: PortLog, overrides: Partial<SDK.PluginClientHostPort> = {}): SDK.PluginClientHostPort {
+interface PortStateInit {
+  authenticated?: boolean
+  theme?: 'light' | 'dark'
+  locale?: SDK.HelmxLocale | null
+  translate?: SDK.LocaleTranslator | null
+  conversations?: ConversationSummary[]
+  conversationDetails?: Record<number, ConversationDetail>
+  conversationLives?: Record<number, ConversationLive>
+  pendingAsks?: AskSpec[]
+  loadErrors?: Record<string, string>
+  plugins?: PluginSummary[]
+  screens?: Array<{ pluginId: string; spec: ScreenSpec }>
+  pluginDocs?: Record<string, unknown>
+  conversationBackground?: SDK.ConversationBackgroundSnapshot
+  overrides?: Partial<SDK.PluginClientHostPort>
+}
+
+interface ReactiveTestPort {
+  port: SDK.PluginClientHostPort
+  setAuthenticated: (next: boolean) => void
+  setTheme: (next: 'light' | 'dark') => void
+  setLocale: (next: SDK.HelmxLocale) => void
+  setConversations: (next: ConversationSummary[]) => void
+  setConversationDetail: (id: number, next: ConversationDetail | undefined) => void
+  setConversationLive: (id: number, next: ConversationLive | undefined) => void
+  setPendingAsks: (next: AskSpec[]) => void
+  setLoadError: (key: string, next: string | undefined) => void
+  setPlugins: (next: PluginSummary[], nextScreens?: Array<{ pluginId: string; spec: ScreenSpec }>) => void
+  setPluginDoc: (docKey: string, next: unknown) => void
+  setConversationBackground: (next: SDK.ConversationBackgroundSnapshot) => void
+}
+
+const EMPTY_TEST_ASKS: AskSpec[] = Object.freeze([]) as unknown as AskSpec[]
+
+function createReactivePort(log: PortLog, init: PortStateInit = {}): ReactiveTestPort {
+  let authenticated = init.authenticated ?? true
+  let theme: 'light' | 'dark' = init.theme ?? 'dark'
+  let locale: SDK.HelmxLocale | undefined = init.locale === null ? undefined : (init.locale ?? 'zh-CN')
+  let conversations: ConversationSummary[] =
+    init.conversations ?? [{ id: 7, title: 'c7', tags: [], profileId: 'p' } as unknown as ConversationSummary]
+  const details: Record<number, ConversationDetail | undefined> = { ...(init.conversationDetails ?? {}) }
+  const lives: Record<number, ConversationLive | undefined> = { ...(init.conversationLives ?? {}) }
+  let pendingAsks: AskSpec[] = init.pendingAsks ?? []
+  const pendingAsksByConv = new Map<number, AskSpec[]>()
+  const rebuildPendingAsks = () => {
+    const grouped = new Map<number, AskSpec[]>()
+    for (const ask of pendingAsks) {
+      const list = grouped.get(ask.conversationId)
+      if (list === undefined) grouped.set(ask.conversationId, [ask])
+      else list.push(ask)
+    }
+    const touched = new Set<number>([...pendingAsksByConv.keys(), ...grouped.keys()])
+    pendingAsksByConv.clear()
+    for (const [id, list] of grouped) pendingAsksByConv.set(id, list)
+    return touched
+  }
+  rebuildPendingAsks()
+
+  const loadErrors: Record<string, string | undefined> = { ...(init.loadErrors ?? {}) }
+  let pluginsSnapshot: UsePluginsResult = {
+    plugins: init.plugins ?? [],
+    screens: init.screens ?? [],
+  }
+  const pluginDocs: Record<string, unknown> = {
+    ...(init.pluginDocs ?? { 'p1/state': { ok: 1 } }),
+  }
+  let background = init.conversationBackground
+
+  const authListeners = new Set<() => void>()
+  const prefsListeners = new Set<() => void>()
+  const conversationsListeners = new Set<() => void>()
+  const pluginsListeners = new Set<() => void>()
+  const backgroundListeners = new Set<() => void>()
+  const summaryListeners = new Map<number, Set<() => void>>()
+  const detailListeners = new Map<number, Set<() => void>>()
+  const liveListeners = new Map<number, Set<() => void>>()
+  const askListeners = new Map<number, Set<() => void>>()
+  const errorListeners = new Map<string, Set<() => void>>()
+  const docListeners = new Map<string, Set<() => void>>()
+
+  const subSet = (set: Set<() => void>) => (listener: () => void): (() => void) => {
+    set.add(listener)
+    return () => set.delete(listener)
+  }
+  const subKey = <K>(map: Map<K, Set<() => void>>, key: K, listener: () => void): (() => void) => {
+    let set = map.get(key)
+    if (set === undefined) {
+      set = new Set()
+      map.set(key, set)
+    }
+    set.add(listener)
+    return () => {
+      const cur = map.get(key)
+      if (!cur) return
+      cur.delete(listener)
+      if (cur.size === 0) map.delete(key)
+    }
+  }
+  const notifySet = (set: Set<() => void>) => {
+    for (const fn of [...set]) fn()
+  }
+  const notifyKey = <K>(map: Map<K, Set<() => void>>, key: K) => {
+    const set = map.get(key)
+    if (set !== undefined) notifySet(set)
+  }
+
   const slotRender = (item: SDK.PluginSlotPortItem, options: { slotProps?: Record<string, unknown>; label: string }): React.ReactNode =>
     e('div', { 'data-slot': `${item.pluginId}/${item.contributionId}`, 'data-label': options.label }, JSON.stringify(options.slotProps ?? null))
-  return {
-    authenticated: true,
-    theme: 'dark',
-    locale: 'zh-CN',
-    translate: (text) => resolveLocalizedText(text, 'zh-CN'),
-    conversations: [{ id: 7, title: 'c7', tags: [], profileId: 'p' } as unknown as SDK.PluginClientHostPort['conversations'][number]],
-    conversationDetails: {},
-    conversationLives: {},
-    pendingAsks: [],
-    loadErrors: {},
-    plugins: [],
-    screens: [],
-    pluginDocs: { 'p1/state': { ok: 1 } },
+
+  const port: SDK.PluginClientHostPort = {
+    getAuthenticated: () => authenticated,
+    subscribeAuthenticated: subSet(authListeners),
+    getTheme: () => theme,
+    ...(init.locale === null ? {} : { getLocale: () => locale ?? 'en' }),
+    ...(init.translate === null
+      ? {}
+      : {
+          getTranslate: () =>
+            init.translate ?? ((text) => resolveLocalizedText(text, locale ?? 'en')),
+        }),
+    subscribePrefs: subSet(prefsListeners),
+    getConversations: () => conversations,
+    subscribeConversations: subSet(conversationsListeners),
+    getConversationSummary: (id) => conversations.find((c) => c.id === id),
+    subscribeConversationSummary: (id, listener) => subKey(summaryListeners, id, listener),
+    getConversationDetail: (id) => details[id],
+    subscribeConversationDetail: (id, listener) => subKey(detailListeners, id, listener),
+    getConversationLive: (id) => lives[id],
+    subscribeConversationLive: (id, listener) => subKey(liveListeners, id, listener),
+    getConversationPendingAsks: (id) => pendingAsksByConv.get(id) ?? EMPTY_TEST_ASKS,
+    subscribeConversationPendingAsks: (id, listener) => subKey(askListeners, id, listener),
+    getLoadError: (key) => loadErrors[key],
+    subscribeLoadError: (key, listener) => subKey(errorListeners, key, listener),
+    getPluginsSnapshot: () => pluginsSnapshot,
+    subscribePlugins: subSet(pluginsListeners),
+    ...(background !== undefined
+      ? {
+          getConversationBackground: () => background!,
+          subscribeConversationBackground: subSet(backgroundListeners),
+        }
+      : {}),
+    getPluginDocValue: (docKey) => (Object.hasOwn(pluginDocs, docKey) ? pluginDocs[docKey] : undefined),
+    subscribePluginDoc: (docKey, listener) => subKey(docListeners, docKey, listener),
     ensurePluginDoc: (pluginId, docName) => {
       log.docs.push({ pluginId, docName })
       return Promise.resolve({ ok: 1 })
@@ -164,8 +301,66 @@ function makePort(log: PortLog, overrides: Partial<SDK.PluginClientHostPort> = {
       view: ({ text, workspaceBaseDir }) => e('div', { 'data-md': 'host', 'data-base-dir': workspaceBaseDir ?? '' }, text),
       codeBlock: ({ code, language }) => e('pre', { 'data-code': 'host', 'data-lang': language }, code),
     },
-    ...overrides,
+    ...(init.overrides ?? {}),
   }
+
+  return {
+    port,
+    setAuthenticated: (next) => {
+      authenticated = next
+      notifySet(authListeners)
+    },
+    setTheme: (next) => {
+      theme = next
+      notifySet(prefsListeners)
+    },
+    setLocale: (next) => {
+      locale = next
+      notifySet(prefsListeners)
+    },
+    setConversations: (next) => {
+      const prevIds = new Set(conversations.map((c) => c.id))
+      conversations = next
+      notifySet(conversationsListeners)
+      for (const id of new Set([...prevIds, ...next.map((c) => c.id)])) {
+        notifyKey(summaryListeners, id)
+      }
+    },
+    setConversationDetail: (id, next) => {
+      details[id] = next
+      notifyKey(detailListeners, id)
+    },
+    setConversationLive: (id, next) => {
+      lives[id] = next
+      notifyKey(liveListeners, id)
+    },
+    setPendingAsks: (next) => {
+      pendingAsks = next
+      const touched = rebuildPendingAsks()
+      for (const id of touched) notifyKey(askListeners, id)
+    },
+    setLoadError: (key, next) => {
+      loadErrors[key] = next
+      notifyKey(errorListeners, key)
+    },
+    setPlugins: (next, nextScreens) => {
+      pluginsSnapshot = { plugins: next, screens: nextScreens ?? pluginsSnapshot.screens }
+      notifySet(pluginsListeners)
+    },
+    setPluginDoc: (docKey, next) => {
+      if (next === undefined) delete pluginDocs[docKey]
+      else pluginDocs[docKey] = next
+      notifyKey(docListeners, docKey)
+    },
+    setConversationBackground: (next) => {
+      background = next
+      notifySet(backgroundListeners)
+    },
+  }
+}
+
+function makePort(log: PortLog, init: PortStateInit = {}): SDK.PluginClientHostPort {
+  return createReactivePort(log, init).port
 }
 
 function mount(tree: React.ReactNode): { host: HTMLElement; root: Root } {
@@ -262,8 +457,9 @@ test('useConversationBackground: port snapshot forwards verbatim; absent host ag
     return null
   }
   const port = makePort(log)
+  const portWithBackground = makePort(log, { conversationBackground: { unknown: false, byConversation } })
   const withBackground = mount(
-    e(SDK.PluginClientHostContext.Provider, { value: { ...port, conversationBackground: { unknown: false, byConversation } } },
+    e(SDK.PluginClientHostContext.Provider, { value: portWithBackground },
       e(PortProbe)),
   )
   assert.equal(fromPort!.unknown, false, 'the snapshot forwards the host aggregation as-is')
@@ -338,7 +534,7 @@ test('useHostModels: isolated from main port value churn; catalog revisions re-r
   for (let i = 0; i < 3; i += 1) {
     act(() => {
       root.render(
-        e(SDK.PluginClientHostContext.Provider, { value: makePort(log, { conversations: [{ id: i, title: `c${i}`, tags: [], profileId: 'p' } as unknown as SDK.PluginClientHostPort['conversations'][number]] }) },
+        e(SDK.PluginClientHostContext.Provider, { value: makePort(log, { conversations: [{ id: i, title: `c${i}`, tags: [], profileId: 'p' } as unknown as ConversationSummary] }) },
           e(SDK.PluginClientHostHandlesContext.Provider, { value: handles }, e(Probe))),
       )
     })
@@ -431,7 +627,7 @@ test('useScreenLocation: isolated from main port value churn; structured pane fa
   const splitRead = readLoc()
   assert.ok(splitRead === withSplit && splitRead.split?.screenId === 'board', 'split pane facts propagate when a split opens')
 
-  const churnPort = makePort(log, { conversations: [{ id: 99, title: 'c99', tags: [], profileId: 'p' } as unknown as SDK.PluginClientHostPort['conversations'][number]] })
+  const churnPort = makePort(log, { conversations: [{ id: 99, title: 'c99', tags: [], profileId: 'p' } as unknown as ConversationSummary] })
   act(() => {
     root.render(
       e(SDK.PluginClientHostContext.Provider, { value: churnPort },
@@ -594,9 +790,7 @@ test('createPluginClientContext: submitInput without conversation context reject
 
 test('createPluginClientContext: missing port locale falls back to the default locale and derives a translator', { timeout: 60_000 }, () => {
   const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
-  const port = makePort(log)
-  delete port.locale
-  delete port.translate
+  const port = makePort(log, { locale: null, translate: null })
   const ctx = SDK.createPluginClientContext(port, 'p1', 7)
   assert.equal(ctx.locale, 'en', 'missing port locale falls back to DEFAULT_HELMX_LOCALE')
   assert.equal(ctx.translate({ en: 'Hi', 'zh-CN': '你好' }), 'Hi', 'derived translator resolves using the fallback locale')
@@ -638,23 +832,24 @@ test('usePluginLocale / usePluginTranslator: context takes precedence over port,
 
 test('shared primitives update labels with the host locale without changing selected values', { timeout: 60_000 }, () => {
   const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
-  const port = makePort(log)
+  const reactive = createReactivePort(log, { locale: 'en' })
   const options = Array.from({ length: 5 }, (_, index) => ({ value: `v${index}`, label: `Option ${index}` }))
   const changes: string[][] = []
-  const tree = (locale: 'en' | 'zh-CN') => e(SDK.PluginClientHostContext.Provider, { value: { ...port, locale } },
-    e('div', null,
-      e(SDK.CopyButton, { text: 'user text' }),
-      e(SDK.DataTable, { loading: true, children: null }),
-      e(SDK.DataTable, { empty: true, children: null }),
-      e(SDK.MultiSelect, { options, value: ['v0', 'v1'], open: true, inline: true, onValuesChange: (values: string[]) => changes.push(values) })))
-  const { root, host } = mount(tree('en'))
+  const { root, host } = mount(
+    e(SDK.PluginClientHostContext.Provider, { value: reactive.port },
+      e('div', null,
+        e(SDK.CopyButton, { text: 'user text' }),
+        e(SDK.DataTable, { loading: true, children: null }),
+        e(SDK.DataTable, { empty: true, children: null }),
+        e(SDK.MultiSelect, { options, value: ['v0', 'v1'], open: true, inline: true, onValuesChange: (values: string[]) => changes.push(values) }))),
+  )
   try {
     assert.equal(host.querySelector('button')?.getAttribute('title'), 'Copy')
     assert.equal(host.querySelector('[role="status"]')?.textContent, 'Loading…')
     assert.equal(host.querySelector('.table-empty')?.textContent, 'No data')
     assert.equal(host.querySelector('.helmx-select-label')?.textContent, '2 selected')
     assert.equal(host.querySelector('input')?.getAttribute('placeholder'), 'Search options…')
-    act(() => root.render(tree('zh-CN')))
+    act(() => reactive.setLocale('zh-CN'))
     assert.equal(host.querySelector('button')?.getAttribute('title'), '复制')
     assert.equal(host.querySelector('[role="status"]')?.textContent, '加载中…')
     assert.equal(host.querySelector('.table-empty')?.textContent, '暂无数据')
@@ -662,7 +857,7 @@ test('shared primitives update labels with the host locale without changing sele
     assert.equal(host.querySelector('input')?.getAttribute('placeholder'), '搜索选项…')
     assert.equal(host.querySelectorAll('[role="option"][aria-selected="true"]').length, 2)
     assert.deepEqual(changes, [], 'changing locale never submits a selection change')
-    act(() => root.render(tree('en')))
+    act(() => reactive.setLocale('en'))
     assert.equal(host.querySelector('.helmx-select-label')?.textContent, '2 selected')
     assert.equal(host.querySelector('button')?.getAttribute('title'), 'Copy')
   } finally {
@@ -672,23 +867,24 @@ test('shared primitives update labels with the host locale without changing sele
 
 test('ViewBoundary translates its retry UI while preserving the original diagnostic across locale changes', { timeout: 60_000 }, () => {
   const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
-  const port = makePort(log)
+  const reactive = createReactivePort(log, { locale: 'en' })
   let failing = true
   function Content(): React.ReactNode {
     if (failing) throw new Error('stable render diagnostic')
     return e('span', null, 'restored user content')
   }
-  const tree = (locale: 'en' | 'zh-CN') => e(SDK.PluginClientHostContext.Provider, { value: { ...port, locale } },
-    e(SDK.ViewBoundary, null, e(Content)))
   const previousConsoleError = console.error
   let mounted: ReturnType<typeof mount> | undefined
   try {
     console.error = () => {}
-    mounted = mount(tree('en'))
+    mounted = mount(
+      e(SDK.PluginClientHostContext.Provider, { value: reactive.port },
+        e(SDK.ViewBoundary, null, e(Content))),
+    )
     const { host, root } = mounted
     assert.equal(host.querySelector('strong')?.textContent, 'View failed to render')
     assert.equal(host.querySelector('p')?.textContent, 'stable render diagnostic')
-    act(() => root.render(tree('zh-CN')))
+    act(() => reactive.setLocale('zh-CN'))
     assert.equal(host.querySelector('strong')?.textContent, '视图渲染失败')
     assert.equal(host.querySelector('p')?.textContent, 'stable render diagnostic')
     const retry = host.querySelector<HTMLButtonElement>('button')
@@ -873,18 +1069,20 @@ test('markdownUrlTransform allows artifact:, file:, and Windows drive paths whil
 test('useConversation: includeDetail defaults to true, skips auto-load when false while preserving cached detail and manual reload', { timeout: 60_000 }, () => {
   const loadCalls: Array<{ id: number; force?: boolean }> = []
   const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
-  const cachedDetail = { id: 8, entries: [] } as unknown as SDK.PluginClientHostPort['conversationDetails'][number]
+  const cachedDetail = { id: 8, entries: [] } as unknown as ConversationDetail
   const port = makePort(log, {
     conversations: [
-      { id: 7, title: 'c7', tags: [], profileId: 'p' } as unknown as SDK.PluginClientHostPort['conversations'][number],
-      { id: 8, title: 'c8', tags: [], profileId: 'p' } as unknown as SDK.PluginClientHostPort['conversations'][number],
+      { id: 7, title: 'c7', tags: [], profileId: 'p' } as unknown as ConversationSummary,
+      { id: 8, title: 'c8', tags: [], profileId: 'p' } as unknown as ConversationSummary,
     ],
     conversationDetails: { 8: cachedDetail },
-    conversationLives: { 7: { conversationId: 7, status: 'working' } as unknown as SDK.PluginClientHostPort['conversationLives'][number] },
-    pendingAsks: [{ id: 'ask-7', conversationId: 7 } as unknown as SDK.PluginClientHostPort['pendingAsks'][number]],
-    loadConversationDetail: (id, force) => {
-      loadCalls.push({ id, force })
-      return Promise.resolve(undefined)
+    conversationLives: { 7: { conversationId: 7, status: 'working' } as unknown as ConversationLive },
+    pendingAsks: [{ id: 'ask-7', conversationId: 7 } as unknown as AskSpec],
+    overrides: {
+      loadConversationDetail: (id, force) => {
+        loadCalls.push({ id, force })
+        return Promise.resolve(undefined)
+      },
     },
   })
 
@@ -1018,8 +1216,7 @@ test('useSharedNowMs: SSR returns undefined, 20 concurrent active consumers shar
 
 test('usePluginConfig: returns current plugin publicConfig, falls back to stable empty object when absent, and updates reactively', { timeout: 60_000 }, () => {
   const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
-  const port = makePort(log)
-  port.plugins = [
+  const initialPlugins: PluginSummary[] = [
     {
       id: 'p1',
       name: 'P1',
@@ -1040,54 +1237,55 @@ test('usePluginConfig: returns current plugin publicConfig, falls back to stable
       tools: [],
     },
   ]
+  const reactive = createReactivePort(log, { plugins: initialPlugins })
 
   const p1Seen: Array<{ slidingWindowMs?: number; mode?: string; apiKey?: string }> = []
   const p2Seen: Array<Record<string, unknown>> = []
 
-  function P1Probe(): React.ReactNode {
+  const P1Probe = React.memo(function P1Probe(): React.ReactNode {
     const cfg = SDK.usePluginConfig<{ slidingWindowMs?: number; mode?: string; apiKey?: string }>()
     p1Seen.push(cfg)
     return e('div', null, `${cfg.slidingWindowMs ?? 'none'}:${cfg.apiKey ?? 'no-secret'}`)
-  }
+  })
 
-  function P2Probe(): React.ReactNode {
+  const P2Probe = React.memo(function P2Probe(): React.ReactNode {
     const cfg = SDK.usePluginConfig()
     p2Seen.push(cfg)
     return e('div', null, JSON.stringify(cfg))
-  }
+  })
 
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root: Root = createRoot(host)
-  const renderTree = (activePort: SDK.PluginClientHostPort) =>
-    act(() => {
-      root.render(
-        e(SDK.PluginClientHostContext.Provider, { value: activePort },
-          e(SDK.PluginClientContext.Provider, { value: SDK.createPluginClientContext(activePort, 'p1', undefined) }, e(P1Probe)),
-          e(SDK.PluginClientContext.Provider, { value: SDK.createPluginClientContext(activePort, 'p2', undefined) }, e(P2Probe))),
-      )
-    })
+  const ctx1 = SDK.createPluginClientContext(reactive.port, 'p1', undefined)
+  const ctx2 = SDK.createPluginClientContext(reactive.port, 'p2', undefined)
 
   try {
-    renderTree(port)
+    act(() => {
+      root.render(
+        e(SDK.PluginClientHostContext.Provider, { value: reactive.port },
+          e(SDK.PluginClientContext.Provider, { value: ctx1 }, e(P1Probe)),
+          e(SDK.PluginClientContext.Provider, { value: ctx2 }, e(P2Probe))),
+      )
+    })
     assert.deepEqual(p1Seen.at(-1), { slidingWindowMs: 1500, mode: 'auto' })
     assert.equal(p1Seen.at(-1)?.apiKey, undefined)
     assert.deepEqual(p2Seen.at(-1), {})
     const firstEmptyRef = p2Seen.at(-1)
+    const p2RendersBefore = p2Seen.length
 
-    const updatedPort: SDK.PluginClientHostPort = {
-      ...port,
-      plugins: [
+    act(() => {
+      reactive.setPlugins([
         {
-          ...port.plugins[0]!,
+          ...initialPlugins[0]!,
           publicConfig: { slidingWindowMs: 2500, mode: 'fast' },
         },
-        port.plugins[1]!,
-      ],
-    }
-    renderTree(updatedPort)
+        initialPlugins[1]!,
+      ])
+    })
     assert.deepEqual(p1Seen.at(-1), { slidingWindowMs: 2500, mode: 'fast' })
     assert.ok(p2Seen.at(-1) === firstEmptyRef, 'absent publicConfig reuses a referentially stable empty object')
+    assert.equal(p2Seen.length, p2RendersBefore, 'unchanged plugin config does not re-render unrelated usePluginConfig subscriber')
   } finally {
     act(() => root.unmount())
     host.remove()
@@ -1114,12 +1312,13 @@ test('usePluginConfig: throws explicitly when called outside <PluginUiView>', { 
 
 test('ToolCallDetails: renders raw input/output with host trace classes; the artifact button forwards ctx.openArtifact and labels localize', { timeout: 60_000 }, async () => {
   const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
-  const port = makePort(log)
-  const tree = (locale: 'en' | 'zh-CN') =>
-    e(SDK.PluginClientHostContext.Provider, { value: { ...port, locale } },
-      e(SDK.PluginClientContext.Provider, { value: SDK.createPluginClientContext({ ...port, locale }, 'p1', 7) },
-        e(SDK.ToolCallDetails, { input: { resume: 11 }, result: 'done text', artifactRef: 'art_full' })))
-  const { host, root } = mount(tree('zh-CN'))
+  const reactive = createReactivePort(log, { locale: 'zh-CN' })
+  const ctx = SDK.createPluginClientContext(reactive.port, 'p1', 7)
+  const { host, root } = mount(
+    e(SDK.PluginClientHostContext.Provider, { value: reactive.port },
+      e(SDK.PluginClientContext.Provider, { value: ctx },
+        e(SDK.ToolCallDetails, { input: { resume: 11 }, result: 'done text', artifactRef: 'art_full' }))),
+  )
   try {
     const details = host.querySelector('details.tool-call-details')
     assert.ok(details !== null, 'renders a details.tool-call-details (host public trace vocabulary)')
@@ -1138,12 +1337,170 @@ test('ToolCallDetails: renders raw input/output with host trace classes; the art
       artifact!.click()
     })
     assert.deepEqual(log.artifacts, [{ artifactId: 'art_full', conversationId: 7 }], 'the button forwards to the host artifact previewer via the port (bound to the context conversation)')
-    act(() => root.render(tree('en')))
+    act(() => reactive.setLocale('en'))
     assert.equal(host.querySelector('summary')?.textContent, 'Call details')
     assert.deepEqual(
       [...host.querySelectorAll('.trace-section-label')].map((n) => n.textContent),
       ['Input', 'Output'],
     )
+  } finally {
+    act(() => root.unmount())
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 8. Fine-grained domain & keyed subscription isolation (streaming frames)
+// ---------------------------------------------------------------------------
+
+test('streaming conversationLives frames only re-render the matching useConversation subscriber and never unrelated SDK hooks or controls', { timeout: 60_000 }, () => {
+  const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
+  const reactive = createReactivePort(log, {
+    authenticated: false,
+    theme: 'dark',
+    locale: 'en',
+    conversations: [
+      { id: 1, title: 'c1', tags: [], profileId: 'p' } as unknown as ConversationSummary,
+      { id: 2, title: 'c2', tags: [], profileId: 'p' } as unknown as ConversationSummary,
+    ],
+    conversationDetails: {
+      1: { id: 1, entries: [] } as unknown as ConversationDetail,
+      2: { id: 2, entries: [] } as unknown as ConversationDetail,
+    },
+    pluginDocs: { 'p1/state': { v: 1 }, 'p2/other': { v: 2 } },
+    conversationBackground: { unknown: false, byConversation: new Map() },
+  })
+  const ctx = SDK.createPluginClientContext(reactive.port, 'p1', 1)
+
+  const counts = {
+    conv1: 0,
+    conv2: 0,
+    convsList: 0,
+    plugins: 0,
+    docP1: 0,
+    docMissing: 0,
+    locale: 0,
+    pluginCtx: 0,
+    background: 0,
+    slot: 0,
+    copyBtn: 0,
+  }
+  let observedTheme: 'light' | 'dark' | undefined
+  let observedLocale: SDK.HelmxLocale | undefined
+  let observedConv1Text: string | undefined
+
+  const Conv1Probe = React.memo(function Conv1Probe(): React.ReactNode {
+    counts.conv1 += 1
+    observedConv1Text = SDK.useConversation(1).live?.text
+    return null
+  })
+  const Conv2Probe = React.memo(function Conv2Probe(): React.ReactNode {
+    counts.conv2 += 1
+    void SDK.useConversation(2)
+    return null
+  })
+  const ConvsListProbe = React.memo(function ConvsListProbe(): React.ReactNode {
+    counts.convsList += 1
+    void SDK.useConversations()
+    return null
+  })
+  const PluginsProbe = React.memo(function PluginsProbe(): React.ReactNode {
+    counts.plugins += 1
+    void SDK.usePlugins()
+    return null
+  })
+  const DocP1Probe = React.memo(function DocP1Probe(): React.ReactNode {
+    counts.docP1 += 1
+    void SDK.usePluginDoc('state')
+    return null
+  })
+  const DocMissingProbe = React.memo(function DocMissingProbe(): React.ReactNode {
+    counts.docMissing += 1
+    void SDK.usePluginDoc('lazy')
+    return null
+  })
+  const LocaleProbe = React.memo(function LocaleProbe(): React.ReactNode {
+    counts.locale += 1
+    observedLocale = SDK.usePluginLocale()
+    return null
+  })
+  const PluginCtxProbe = React.memo(function PluginCtxProbe(): React.ReactNode {
+    counts.pluginCtx += 1
+    const c = SDK.usePluginContext()
+    observedTheme = c.theme
+    return null
+  })
+  const BackgroundProbe = React.memo(function BackgroundProbe(): React.ReactNode {
+    counts.background += 1
+    void SDK.useConversationBackground()
+    return null
+  })
+  const SlotProbe = React.memo(function SlotProbe(): React.ReactNode {
+    counts.slot += 1
+    return e(SDK.PluginSlot, { name: 'owner/zone', ownerPluginId: 'owner', conversationId: 1 })
+  })
+  const CopyBtnProbe = React.memo(function CopyBtnProbe(): React.ReactNode {
+    counts.copyBtn += 1
+    return e(SDK.CopyButton, { text: 'hello' })
+  })
+
+  const { root } = mount(
+    e(SDK.PluginClientHostContext.Provider, { value: reactive.port },
+      e(SDK.PluginClientContext.Provider, { value: ctx },
+        e(Conv1Probe),
+        e(Conv2Probe),
+        e(ConvsListProbe),
+        e(PluginsProbe),
+        e(DocP1Probe),
+        e(DocMissingProbe),
+        e(LocaleProbe),
+        e(PluginCtxProbe),
+        e(BackgroundProbe),
+        e(SlotProbe),
+        e(CopyBtnProbe))),
+  )
+  try {
+    // Auth gate: while authenticated=false, missing doc must NOT call ensurePluginDoc.
+    assert.deepEqual(log.docs, [], 'unauthenticated state must not fire ensurePluginDoc')
+    const baseline = { ...counts }
+
+    // Burst 10 streaming token frames for conversation #1.
+    for (let i = 1; i <= 10; i += 1) {
+      act(() => {
+        reactive.setConversationLive(1, { conversationId: 1, text: `tok-${i}`, tools: [], updatedAt: i } as ConversationLive)
+      })
+    }
+    assert.equal(observedConv1Text, 'tok-10', 'conversation #1 live subscriber receives every streaming delta')
+    assert.equal(counts.conv1, baseline.conv1 + 10, 'only conversation #1 subscriber re-rendered per live delta')
+    assert.equal(counts.conv2, baseline.conv2, 'conversation #2 subscriber is isolated from #1 live frames')
+    assert.equal(counts.convsList, baseline.convsList, 'useConversations is isolated from live frames')
+    assert.equal(counts.plugins, baseline.plugins, 'usePlugins is isolated from live frames')
+    assert.equal(counts.docP1, baseline.docP1, 'usePluginDoc is isolated from live frames')
+    assert.equal(counts.locale, baseline.locale, 'usePluginLocale is isolated from live frames')
+    assert.equal(counts.pluginCtx, baseline.pluginCtx, 'usePluginContext is isolated from live frames')
+    assert.equal(counts.background, baseline.background, 'useConversationBackground is isolated from live frames')
+    assert.equal(counts.slot, baseline.slot, 'PluginSlot is isolated from live frames')
+    assert.equal(counts.copyBtn, baseline.copyBtn, 'SDK UI controls (CopyButton) are isolated from live frames')
+
+    // Unrelated plugin doc update never wakes p1/state subscriber.
+    act(() => reactive.setPluginDoc('p2/other', { v: 99 }))
+    assert.equal(counts.docP1, baseline.docP1, 'updating p2/other does not re-render p1/state subscriber')
+
+    // Theme-only change updates usePluginContext().theme without re-rendering usePluginLocale or usePluginDoc.
+    act(() => reactive.setTheme('light'))
+    assert.equal(observedTheme, 'light', 'usePluginContext tracks theme reactively through subscribePrefs')
+    assert.equal(counts.pluginCtx, baseline.pluginCtx + 1)
+    assert.equal(counts.locale, baseline.locale, 'theme-only change does not re-render usePluginLocale')
+    assert.equal(counts.docP1, baseline.docP1, 'theme-only change does not re-render data-only usePluginDoc')
+
+    // Locale change updates usePluginLocale & usePluginContext without waking doc subscribers.
+    act(() => reactive.setLocale('zh-CN'))
+    assert.equal(observedLocale, 'zh-CN')
+    assert.equal(counts.locale, baseline.locale + 1)
+    assert.equal(counts.docP1, baseline.docP1)
+
+    // Flipping authenticated false -> true triggers ensurePluginDoc once for missing doc.
+    act(() => reactive.setAuthenticated(true))
+    assert.deepEqual(log.docs, [{ pluginId: 'p1', docName: 'lazy' }], 'auth transition triggers ensurePluginDoc for missing doc')
   } finally {
     act(() => root.unmount())
   }

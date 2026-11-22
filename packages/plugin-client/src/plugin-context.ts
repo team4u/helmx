@@ -11,23 +11,76 @@
  *
  * No component exports in this file (Fast Refresh friendly).
  */
-import { createContext, useContext } from 'react'
+import { createContext, useCallback, useContext, useMemo, useSyncExternalStore } from 'react'
 import {
   DEFAULT_HELMX_LOCALE,
   createLocaleTranslator,
   type ComposerController,
+  type HelmxLocale,
   type PluginClientContext as PluginClientContextType,
 } from '@helmx/protocol/browser'
 import type { PluginClientHostPort } from './host-port.js'
 
 export const PluginClientContext = createContext<PluginClientContextType | null>(null)
 
-export function usePluginContext(): PluginClientContextType {
+const NOOP_UNSUBSCRIBE = (): void => {}
+const contextHostPorts = new WeakMap<PluginClientContextType, PluginClientHostPort>()
+
+/** Internal SDK helper: returns the stable host port when `ctx` was built via `createPluginClientContext`. */
+export function getContextBoundHostPort(ctx: PluginClientContextType | null): PluginClientHostPort | undefined {
+  return ctx !== null ? contextHostPorts.get(ctx) : undefined
+}
+
+/**
+ * Internal SDK helper: reads the raw PluginClientContext identity/action surface
+ * without subscribing to theme/locale prefs (used by data-only hooks like
+ * `usePluginDoc`, `usePluginSessionDoc`, and `usePluginConfig` that only need
+ * `ctx.pluginId` / `ctx.conversationId`).
+ */
+export function useRequiredPluginContextBase(): PluginClientContextType {
   const ctx = useContext(PluginClientContext)
   if (ctx === null) {
     throw new Error('usePluginContext must be called inside a plugin component rendered by <PluginUiView>')
   }
   return ctx
+}
+
+export function usePluginContext(): PluginClientContextType {
+  const ctx = useContext(PluginClientContext)
+  const boundPort = getContextBoundHostPort(ctx)
+  const subscribePrefs = useCallback(
+    (listener: () => void): (() => void) => (boundPort !== undefined ? boundPort.subscribePrefs(listener) : NOOP_UNSUBSCRIBE),
+    [boundPort],
+  )
+  const getTheme = useCallback(
+    (): 'light' | 'dark' => (boundPort !== undefined ? boundPort.getTheme() : (ctx?.theme ?? 'dark')),
+    [boundPort, ctx],
+  )
+  const getLocale = useCallback(
+    (): HelmxLocale =>
+      boundPort !== undefined
+        ? (boundPort.getLocale?.() ?? DEFAULT_HELMX_LOCALE)
+        : (ctx?.locale ?? DEFAULT_HELMX_LOCALE),
+    [boundPort, ctx],
+  )
+  const theme = useSyncExternalStore(subscribePrefs, getTheme, getTheme)
+  const locale = useSyncExternalStore(subscribePrefs, getLocale, getLocale)
+
+  const resolved = useMemo<PluginClientContextType | null>(() => {
+    if (ctx === null) return null
+    if (boundPort === undefined || (ctx.theme === theme && ctx.locale === locale)) return ctx
+    return {
+      ...ctx,
+      theme,
+      locale,
+      translate: boundPort.getTranslate?.() ?? createLocaleTranslator(locale),
+    }
+  }, [ctx, boundPort, theme, locale])
+
+  if (resolved === null) {
+    throw new Error('usePluginContext must be called inside a plugin component rendered by <PluginUiView>')
+  }
+  return resolved
 }
 
 /** Validates a conversation ID as a positive safe integer (aligned with the kernel boundary); throws an explicit error otherwise. */
@@ -56,8 +109,8 @@ export function createPluginClientContext(
   conversationId: number | undefined,
   composer?: ComposerController,
 ): PluginClientContextType {
-  const locale = port.locale ?? DEFAULT_HELMX_LOCALE
-  return {
+  const locale = port.getLocale?.() ?? DEFAULT_HELMX_LOCALE
+  const ctx: PluginClientContextType = {
     pluginId,
     callAction: (actionId, input, options) => {
       const targetPlugin = options?.pluginId ?? pluginId
@@ -103,8 +156,10 @@ export function createPluginClientContext(
     },
     ...(composer !== undefined ? { composer } : {}),
     ...(conversationId !== undefined ? { conversationId } : {}),
-    theme: port.theme,
+    theme: port.getTheme(),
     locale,
-    translate: port.translate ?? createLocaleTranslator(locale),
+    translate: port.getTranslate?.() ?? createLocaleTranslator(locale),
   }
+  contextHostPorts.set(ctx, port)
+  return ctx
 }

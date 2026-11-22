@@ -1411,18 +1411,32 @@ test('superagent20: dispatch_worker 工具声明 structuredOutputSchema 并分�
   }
 
   const screenCalls: string[] = []
+  const noopUnsub = () => {}
+  const emptyConversations: never[] = []
+  const emptyAsks: never[] = []
+  const pluginsSnapshot = { plugins: [], screens: [] }
   const port: import('@helmx/plugin-client').PluginClientHostPort = {
-    authenticated: true,
-    theme: 'dark',
-    locale: 'en',
-    conversations: [],
-    conversationDetails: {},
-    conversationLives: {},
-    pendingAsks: [],
-    loadErrors: {},
-    plugins: [],
-    screens: [],
-    pluginDocs: {},
+    getAuthenticated: () => true,
+    subscribeAuthenticated: () => noopUnsub,
+    getTheme: () => 'dark',
+    getLocale: () => 'en',
+    subscribePrefs: () => noopUnsub,
+    getConversations: () => emptyConversations,
+    subscribeConversations: () => noopUnsub,
+    getConversationSummary: () => undefined,
+    subscribeConversationSummary: () => noopUnsub,
+    getConversationDetail: () => undefined,
+    subscribeConversationDetail: () => noopUnsub,
+    getConversationLive: () => undefined,
+    subscribeConversationLive: () => noopUnsub,
+    getConversationPendingAsks: () => emptyAsks,
+    subscribeConversationPendingAsks: () => noopUnsub,
+    getLoadError: () => undefined,
+    subscribeLoadError: () => noopUnsub,
+    getPluginsSnapshot: () => pluginsSnapshot,
+    subscribePlugins: () => noopUnsub,
+    getPluginDocValue: () => undefined,
+    subscribePluginDoc: () => noopUnsub,
     ensurePluginDoc: async () => undefined,
     getPluginSessionDoc: async () => undefined,
     subscribeSessionDoc: () => () => {},

@@ -14,13 +14,15 @@
  *
  * This file only exports components and TS types (same Fast Refresh contract).
  */
-import { createContext, useContext } from 'react'
+import { createContext, useCallback, useContext, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
 import type { ComposerController } from '@helmx/protocol/browser'
 import { usePluginTranslator } from './i18n.js'
 import { HelmxIcon } from './icons.js'
 import { usePluginClientHost } from './host-port.js'
 import { PluginClientContext } from './plugin-context.js'
+
+const NOOP_UNSUBSCRIBE = (): void => {}
 
 export interface PluginSlotProps {
   /** Short internal slot name of this plugin (auto-prefixed with ctx.pluginId); containing '/' means an explicit fully qualified name. */
@@ -82,6 +84,35 @@ export function PluginSlot(props: PluginSlotProps): ReactNode {
   const conversationId = explicitConversationId ?? clientCtx?.conversationId
   const composer = explicitComposer ?? clientCtx?.composer
   const ancestry = useContext(SlotAncestryContext)
+
+  // Subscribe to plugin UI revisions and, when scoped to a conversation, that
+  // conversation's summary (falling back to detail only while summary is absent)
+  // so disabling a plugin or changing conversation scope updates the slot while
+  // streaming `conversationLives` token frames never re-render it.
+  useSyncExternalStore(host.subscribePlugins, host.getPluginsSnapshot, host.getPluginsSnapshot)
+  const subscribeSummary = useCallback(
+    (listener: () => void): (() => void) =>
+      conversationId !== undefined ? host.subscribeConversationSummary(conversationId, listener) : NOOP_UNSUBSCRIBE,
+    [host, conversationId],
+  )
+  const getSummary = useCallback(
+    () => (conversationId !== undefined ? host.getConversationSummary(conversationId) : undefined),
+    [host, conversationId],
+  )
+  const summary = useSyncExternalStore(subscribeSummary, getSummary, getSummary)
+  const subscribeDetailFallback = useCallback(
+    (listener: () => void): (() => void) =>
+      conversationId !== undefined && summary === undefined
+        ? host.subscribeConversationDetail(conversationId, listener)
+        : NOOP_UNSUBSCRIBE,
+    [host, conversationId, summary],
+  )
+  const getDetailFallback = useCallback(
+    () =>
+      conversationId !== undefined && summary === undefined ? host.getConversationDetail(conversationId) : undefined,
+    [host, conversationId, summary],
+  )
+  useSyncExternalStore(subscribeDetailFallback, getDetailFallback, getDetailFallback)
 
   if (owner === undefined || owner.trim().length === 0) {
     return (

@@ -3,12 +3,12 @@
  *
  * The SDK package never depends on any host implementation (store / API /
  * navigation / markdown rendering / plugin slot rendering); all host
- * capabilities are injected as a typed port object via
- * <PluginClientHostContext.Provider>. The host (@helmx/web) implements this
- * port with the real store inside HelmxStoreProvider; plugins and the host
- * share the same React / context instance (the compiler virtualizes
- * '@helmx/plugin-client' into the __helmx_shared_plugin_client global
- * namespace).
+ * capabilities are injected as a reference-stable typed port handle via
+ * <PluginClientHostContext.Provider>. The host (@helmx/web) constructs this
+ * handle once per store inside HelmxStoreProvider; reactive SDK hooks subscribe
+ * to fine-grained domain or per-key slices via `useSyncExternalStore`, so
+ * high-frequency streaming frames (`conversationLives` token deltas) never
+ * cascade context re-renders into unrelated plugins or SDK UI controls.
  *
  * Types and context only in this file (no component exports, Fast Refresh friendly).
  */
@@ -24,9 +24,8 @@ import type {
   HostModelsSlice,
   LocaleTranslator,
   PluginSlotContributionSpec,
-  PluginSummary,
   ScreenLocationSnapshot,
-  ScreenSpec,
+  UsePluginsResult,
   WhenBusy,
 } from '@helmx/protocol/browser'
 
@@ -93,65 +92,97 @@ export interface CodeBlockViewProps {
 }
 
 /**
- * The complete capability port injected by the host. Data slices are reactive
- * snapshots (reference changes drive re-renders, at the same cadence as the
- * host store); every method is a real host implementation, no mocks.
+ * Reference-stable capability handle injected by the host.
  *
- * Streaming-churning slices (conversations / details / lives) live here by
- * legacy design; new low-frequency capability facts (model catalog, navigation
- * location) must instead expose stable handle members (see the sections below)
- * and be read reactively through PluginClientHostHandlesContext, so unrelated
- * host port revisions never re-render their consumers.
+ * Every member is a stable function or static capability descriptor (never raw
+ * per-frame state fields): SDK hooks subscribe to domain or keyed slices via
+ * `useSyncExternalStore` so `conversationLives` token frames only notify
+ * subscribers of that exact conversation's live stream, while keeping three-state
+ * `loaded / auth / error` honesty across all slices.
  */
 export interface PluginClientHostPort {
-  /** Passed authentication (decides whether public docs may issue the first GET). */
-  authenticated: boolean
-  theme: 'light' | 'dark'
-  /**
-   * Current host UI locale (normalized via HELMX_LOCALES / normalizeLocaleTag).
-   * Optional so hosts can adopt it additively: when absent, the plugin client
-   * context factory falls back to DEFAULT_HELMX_LOCALE ('en') — a locale always
-   * has a well-defined default, so no silent degradation of data fidelity is
-   * involved.
-   */
-  locale?: HelmxLocale
-  /**
-   * Minimal translator for the current locale (resolves LocalizedText display
-   * copy). Optional for the same additive reason: when absent, the context
-   * factory derives one from locale via createLocaleTranslator. When both are
-   * provided, keep them bound to the same locale.
-   */
-  translate?: LocaleTranslator
+  // ---- Auth & UI preferences (low-frequency domains) ----
+  /** One-shot read of authentication readiness (decides whether public docs may issue the first GET). */
+  getAuthenticated(): boolean
+  /** Subscribe to authentication state transitions. */
+  subscribeAuthenticated(listener: () => void): () => void
 
-  // ---- Conversations & plugin realtime snapshots (SSE driven) ----
-  conversations: ConversationSummary[]
-  conversationDetails: Record<number, ConversationDetail>
-  conversationLives: Record<number, ConversationLive>
-  pendingAsks: AskSpec[]
-  loadErrors: Record<string, string>
-  plugins: PluginSummary[]
-  /** Screen contributions registered by enabled plugins (disabled plugin contributions are removed immediately). */
-  screens: Array<{ pluginId: string; spec: ScreenSpec }>
+  /** One-shot read of the active host UI theme. */
+  getTheme(): 'light' | 'dark'
   /**
-   * Host-standard conversation background in-flight snapshot (the same
-   * aggregation the host sidebar ring consumes: workbench panel per-
-   * conversation badges with tone = 'accent' plus context compaction), shared
-   * so plugin views never re-aggregate the same docs per tree. Optional and
-   * additive: an absent host reports `unknown: true` (background facts are
-   * unknown, never fabricated as "no work").
+   * One-shot read of the active host UI locale (normalized via HELMX_LOCALES / normalizeLocaleTag).
+   * Optional so hosts can adopt it additively: when absent, the SDK falls back to
+   * DEFAULT_HELMX_LOCALE ('en').
    */
-  conversationBackground?: ConversationBackgroundSnapshot
+  getLocale?(): HelmxLocale
+  /**
+   * Minimal translator for the current locale (resolves LocalizedText display copy).
+   * Optional; when absent, derived from getLocale() via createLocaleTranslator.
+   */
+  getTranslate?(): LocaleTranslator
+  /** Subscribe to theme or locale revisions. */
+  subscribePrefs(listener: () => void): () => void
 
-  // ---- Model catalog (optional capability; implementers must keep all three members reference-stable across renders) ----
+  // ---- Conversations & keyed per-conversation slices (SSE driven) ----
+  /** One-shot read of all conversation summaries (referentially stable when unchanged). */
+  getConversations(): ConversationSummary[]
+  /** Subscribe to conversation summary list revisions (never fired on conversationLives token frames). */
+  subscribeConversations(listener: () => void): () => void
+
+  /** Keyed read of one conversation's summary (undefined until SSE pushes it). */
+  getConversationSummary(conversationId: number): ConversationSummary | undefined
+  /** Subscribe to revisions of a single conversation's summary. */
+  subscribeConversationSummary(conversationId: number, listener: () => void): () => void
+
+  /** Keyed read of one conversation's loaded detail (undefined when unloaded). */
+  getConversationDetail(conversationId: number): ConversationDetail | undefined
+  /** Subscribe to revisions of a single conversation's detail. */
+  subscribeConversationDetail(conversationId: number, listener: () => void): () => void
+
+  /** Keyed read of one conversation's streaming live view (undefined when not streaming). */
+  getConversationLive(conversationId: number): ConversationLive | undefined
+  /** Subscribe to streaming live frames of a single conversation (other conversations never notify). */
+  subscribeConversationLive(conversationId: number, listener: () => void): () => void
+
+  /** Keyed read of one conversation's pending approvals (referentially stable array per revision). */
+  getConversationPendingAsks(conversationId: number): AskSpec[]
+  /** Subscribe to pending-approval revisions of a single conversation. */
+  subscribeConversationPendingAsks(conversationId: number, listener: () => void): () => void
+
+  /** Keyed read of a host load error (e.g. `conversation:<id>`; undefined when none). */
+  getLoadError(key: string): string | undefined
+  /** Subscribe to revisions of a single load-error key. */
+  subscribeLoadError(key: string, listener: () => void): () => void
+
+  // ---- Plugin registry & Screen contributions ----
+  /**
+   * One-shot read of the host plugin summaries and enabled Screen contributions
+   * (returns the same UsePluginsResult reference while neither changes; disabled
+   * plugin contributions are removed immediately).
+   */
+  getPluginsSnapshot(): UsePluginsResult
+  /** Subscribe to plugin registry / UI contribution revisions. */
+  subscribePlugins(listener: () => void): () => void
+
+  // ---- Conversation background in-flight activity (optional centralized derived slice) ----
+  /**
+   * One-shot read of the host-standard conversation background in-flight snapshot
+   * (`{ unknown, byConversation }`: workbench panel per-conversation badges with
+   * tone = 'accent' plus context compaction). Absent method or `unknown: true`
+   * while needed badge docs are still loading = background facts are unknown,
+   * never fabricated as "no work".
+   */
+  getConversationBackground?(): ConversationBackgroundSnapshot
+  /** Subscribe to semantic revisions of the conversation background snapshot. */
+  subscribeConversationBackground?(listener: () => void): () => void
+
+  // ---- Model catalog (optional capability; all members reference-stable across renders) ----
   /**
    * One-shot read of the host model catalog slice (normalized entries plus
    * the global default chain). `undefined` = the capability is not injected
-   * OR the catalog has not finished its first load (the host must gate on its
-   * loaded flag — a pre-load empty array must never leak out as "no models"
-   * truth); a slice with `models: []` = loaded and genuinely empty. For
-   * reactive reads use the useHostModels shared hook (stable-handle context,
-   * isolated from host port value churn); these port members also serve
-   * imperative calls inside event callbacks.
+   * OR the catalog has not finished its first load (gated on assetsLoaded — a
+   * pre-load empty array never leaks out as "no models" truth); a slice with
+   * `models: []` = loaded and genuinely empty.
    */
   getModels?(): HostModelsSlice | undefined
   /** Subscribe to catalog revisions (listener fired after getModels() would return a new reference). */
@@ -163,21 +194,23 @@ export interface PluginClientHostPort {
    */
   refreshModels?(): Promise<{ errors?: Record<string, string> }>
 
-  // ---- Navigation location (optional capability; same stable-handle isolation as the model catalog) ----
+  // ---- Navigation location (optional capability; URL hash single source of truth) ----
   /**
-   * One-shot read of the host navigation location (URL hash single source of
-   * truth; primary/split pane as structured screen facts — undefined members
-   * are truth, not loading state). `undefined` = the host has not wired the
-   * capability. Reactive reads go through the useScreenLocation shared hook;
-   * writing params stays with ScreenProps.setParams of the owning screen.
+   * One-shot read of the host navigation location (primary/split pane as
+   * structured screen facts — undefined members are truth, not loading state).
+   * `undefined` = the host has not wired the capability. Reactive reads go
+   * through the useScreenLocation shared hook; writing params stays with
+   * ScreenProps.setParams of the owning screen.
    */
   getScreenLocation?(): ScreenLocationSnapshot | undefined
   /** Subscribe to location revisions (listener fired after getScreenLocation() would return a new reference). */
   subscribeScreenLocation?(listener: () => void): () => void
 
   // ---- Plugin docs ----
-  /** key: `${pluginId}/${docName}`. */
-  pluginDocs: Record<string, unknown>
+  /** Keyed read of a plugin public doc (`${pluginId}/${docName}`; undefined when absent). */
+  getPluginDocValue(docKey: string): unknown
+  /** Subscribe to revisions of a single `${pluginId}/${docName}` public doc. */
+  subscribePluginDoc(docKey: string, listener: () => void): () => void
   ensurePluginDoc(pluginId: string, docName: string): Promise<unknown>
   getPluginSessionDoc(pluginId: string, docName: string, conversationId: number): Promise<unknown>
   subscribeSessionDoc(key: PluginSessionDocKey, listener: () => void): () => void
@@ -236,13 +269,11 @@ export function usePluginClientHost(): PluginClientHostPort {
 }
 
 /**
- * Stable-handle slice of the host port (Pick keeps it automatically in sync
- * with the main interface — no second signature to maintain). The host mounts
- * it as a second, churn-free context whose value is built once per store
- * (never rebuilt on streaming frames), so handle-driven hooks such as
- * useHostModels / useScreenLocation stay isolated from unrelated host port
- * value revisions. Hosts adopt the members additively; a missing member
- * simply reads as an unknown capability, never as fabricated data.
+ * Capability-handle slice of the host port (Pick keeps it automatically in sync
+ * with the main interface — no second signature to maintain). Mounted alongside
+ * the stable host port so handle-only consumers (ModelPickerControl,
+ * useHostModels, useScreenLocation) can also mount in isolated handle-only
+ * environments while adopting capabilities additively.
  */
 export type PluginClientHostHandles = Pick<
   PluginClientHostPort,

@@ -881,18 +881,33 @@ test('apps client：双语 LocalizedText 插件摘要与 ScreenSpec.label 的模
   }
 
   for (const locale of ['en', 'zh-CN'] as const) {
+    const noopUnsub = () => {}
+    const emptyConversations: never[] = []
+    const emptyAsks: never[] = []
+    const pluginsSnapshot = { plugins: bilingualPlugins, screens: bilingualScreens }
+    const pluginDocs: Record<string, unknown> = { [`${APPS_PLUGIN_ID}/catalog`]: { apps: {} } }
     const port: import('../../plugin-client/src/index.js').PluginClientHostPort = {
-      authenticated: true,
-      theme: 'dark',
-      locale,
-      conversations: [],
-      conversationDetails: {},
-      conversationLives: {},
-      pendingAsks: [],
-      loadErrors: {},
-      plugins: bilingualPlugins,
-      screens: bilingualScreens,
-      pluginDocs: { [`${APPS_PLUGIN_ID}/catalog`]: { apps: {} } },
+      getAuthenticated: () => true,
+      subscribeAuthenticated: () => noopUnsub,
+      getTheme: () => 'dark',
+      getLocale: () => locale,
+      subscribePrefs: () => noopUnsub,
+      getConversations: () => emptyConversations,
+      subscribeConversations: () => noopUnsub,
+      getConversationSummary: () => undefined,
+      subscribeConversationSummary: () => noopUnsub,
+      getConversationDetail: () => undefined,
+      subscribeConversationDetail: () => noopUnsub,
+      getConversationLive: () => undefined,
+      subscribeConversationLive: () => noopUnsub,
+      getConversationPendingAsks: () => emptyAsks,
+      subscribeConversationPendingAsks: () => noopUnsub,
+      getLoadError: () => undefined,
+      subscribeLoadError: () => noopUnsub,
+      getPluginsSnapshot: () => pluginsSnapshot,
+      subscribePlugins: () => noopUnsub,
+      getPluginDocValue: (docKey) => (Object.hasOwn(pluginDocs, docKey) ? pluginDocs[docKey] : undefined),
+      subscribePluginDoc: () => noopUnsub,
       ensurePluginDoc: async () => ({ apps: {} }),
       getPluginSessionDoc: async () => undefined,
       subscribeSessionDoc: () => () => {},

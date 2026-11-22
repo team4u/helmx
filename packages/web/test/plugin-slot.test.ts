@@ -100,7 +100,7 @@ test('PluginSlot：短名拼全限定、贡献项渲染、子项 ctx.pluginId �
   }
   seedPluginClientModule('p2', 'zone.tsx', contribModule)
   const store = slotContributionUi([slotContribution('p2', 'badge', 'owner/zone', { client: { module: 'zone.tsx', export: 'ZoneBadge' } })])
-  const ownerCtx = createPluginClientContext(createPluginClientHostPort(store.getSnapshot()), 'owner', undefined)
+  const ownerCtx = createPluginClientContext(createPluginClientHostPort(store), 'owner', undefined)
   const host = document.createElement('div')
   const root = renderToString(host, e(
     HostStoreProviders, { value: store },
@@ -120,7 +120,7 @@ test('PluginSlot：single 取首项、无命中回退 fallback', { timeout: 60_0
     slotContribution('p1', 'a', 'owner/zone', { client: { module: 'a.tsx', export: 'ItemA' } }),
     slotContribution('p2', 'b', 'owner/zone', { client: { module: 'b.tsx', export: 'ItemB' }, priority: 5 }),
   ])
-  const ownerCtx = createPluginClientContext(createPluginClientHostPort(store.getSnapshot()), 'owner', undefined)
+  const ownerCtx = createPluginClientContext(createPluginClientHostPort(store), 'owner', undefined)
   const host = document.createElement('div')
   const root = renderToString(host, e(
     HostStoreProviders, { value: store },
@@ -153,7 +153,7 @@ test('PluginSlot：环检测显式告警且不死循环', { timeout: 60_000 }, (
   }
   seedPluginClientModule('p2', 'cycle.tsx', cycleModule)
   const store = slotContributionUi([slotContribution('p2', 'cycle', 'owner/loop', { client: { module: 'cycle.tsx', export: 'CycleItem' } })])
-  const ownerCtx = createPluginClientContext(createPluginClientHostPort(store.getSnapshot()), 'owner', undefined)
+  const ownerCtx = createPluginClientContext(createPluginClientHostPort(store), 'owner', undefined)
   const host = document.createElement('div')
   const root = renderToString(host, e(
     HostStoreProviders, { value: store },
@@ -209,7 +209,7 @@ test('PluginSlot：DOM 锚点、无 className 零布局盒、inline 与错误隔
     ],
   })
 
-  const ownerCtx = createPluginClientContext(createPluginClientHostPort(store.getSnapshot()), 'owner', undefined)
+  const ownerCtx = createPluginClientContext(createPluginClientHostPort(store), 'owner', undefined)
   const host = document.createElement('div')
   const prevConsoleError = console.error
   let root: Root | undefined
@@ -279,7 +279,7 @@ test('createPluginClientHostPort：slots.collectItems 在 conversations 缺席�
       }),
     ],
   })
-  const port = createPluginClientHostPort(store.getSnapshot())
+  const port = createPluginClientHostPort(store)
   const matched = port.slots.collectItems('owner/detail-scope', 77)
   assert.equal(matched.length, 1)
   assert.equal(matched[0]!.contributionId, 'scoped')

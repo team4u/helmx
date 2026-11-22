@@ -83,18 +83,32 @@ function drawerSpy(): {
   calls: number[]
 } {
   const calls: number[] = []
+  const noopUnsub = () => {}
+  const emptyConversations: never[] = []
+  const emptyAsks: never[] = []
+  const pluginsSnapshot = { plugins: [], screens: [] }
   const port: PluginClientHostPort = {
-    authenticated: true,
-    theme: 'dark',
-    locale: 'en',
-    conversations: [],
-    conversationDetails: {},
-    conversationLives: {},
-    pendingAsks: [],
-    loadErrors: {},
-    plugins: [],
-    screens: [],
-    pluginDocs: {},
+    getAuthenticated: () => true,
+    subscribeAuthenticated: () => noopUnsub,
+    getTheme: () => 'dark',
+    getLocale: () => 'en',
+    subscribePrefs: () => noopUnsub,
+    getConversations: () => emptyConversations,
+    subscribeConversations: () => noopUnsub,
+    getConversationSummary: () => undefined,
+    subscribeConversationSummary: () => noopUnsub,
+    getConversationDetail: () => undefined,
+    subscribeConversationDetail: () => noopUnsub,
+    getConversationLive: () => undefined,
+    subscribeConversationLive: () => noopUnsub,
+    getConversationPendingAsks: () => emptyAsks,
+    subscribeConversationPendingAsks: () => noopUnsub,
+    getLoadError: () => undefined,
+    subscribeLoadError: () => noopUnsub,
+    getPluginsSnapshot: () => pluginsSnapshot,
+    subscribePlugins: () => noopUnsub,
+    getPluginDocValue: () => undefined,
+    subscribePluginDoc: () => noopUnsub,
     ensurePluginDoc: async () => undefined,
     getPluginSessionDoc: async () => undefined,
     subscribeSessionDoc: () => () => {},

@@ -220,18 +220,48 @@ export function createWorkflowHostHarness(init: {
     return cur
   }
 
+  const noopUnsub = () => {}
+  const emptyAsks: AskSpec[] = []
+  const details = init.conversationDetails ?? {}
+  const lives = init.conversationLives ?? {}
+  const loadErrors = init.loadErrors ?? {}
+  const pluginDocs = init.pluginDocs ?? {}
+  const pluginsSnapshot = { plugins: [], screens: [] }
+  const pendingAsksByConv = new Map<number, AskSpec[]>()
+  for (const ask of init.pendingAsks ?? []) {
+    const list = pendingAsksByConv.get(ask.conversationId)
+    if (list === undefined) pendingAsksByConv.set(ask.conversationId, [ask])
+    else list.push(ask)
+  }
+  const subscribeHost = (listener: () => void): (() => void) => {
+    hostListeners.add(listener)
+    return () => {
+      hostListeners.delete(listener)
+    }
+  }
+
   const basePort: SDKTypes.PluginClientHostPort = {
-    authenticated: true,
-    theme: 'dark',
-    locale: init.locale,
-    conversations: currentConversations,
-    conversationDetails: init.conversationDetails ?? {},
-    conversationLives: init.conversationLives ?? {},
-    pendingAsks: init.pendingAsks ?? [],
-    loadErrors: init.loadErrors ?? {},
-    plugins: [],
-    screens: [],
-    pluginDocs: init.pluginDocs ?? {},
+    getAuthenticated: () => true,
+    subscribeAuthenticated: () => noopUnsub,
+    getTheme: () => 'dark',
+    ...(init.locale !== undefined ? { getLocale: () => init.locale! } : {}),
+    subscribePrefs: () => noopUnsub,
+    getConversations: () => currentConversations,
+    subscribeConversations: subscribeHost,
+    getConversationSummary: (id) => currentConversations.find((c) => c.id === id),
+    subscribeConversationSummary: (_id, listener) => subscribeHost(listener),
+    getConversationDetail: (id) => details[id],
+    subscribeConversationDetail: () => noopUnsub,
+    getConversationLive: (id) => lives[id],
+    subscribeConversationLive: () => noopUnsub,
+    getConversationPendingAsks: (id) => pendingAsksByConv.get(id) ?? emptyAsks,
+    subscribeConversationPendingAsks: () => noopUnsub,
+    getLoadError: (key) => loadErrors[key],
+    subscribeLoadError: () => noopUnsub,
+    getPluginsSnapshot: () => pluginsSnapshot,
+    subscribePlugins: () => noopUnsub,
+    getPluginDocValue: (docKey) => (Object.hasOwn(pluginDocs, docKey) ? pluginDocs[docKey] : undefined),
+    subscribePluginDoc: () => noopUnsub,
     ensurePluginDoc: async () => undefined,
     getPluginSessionDoc: async (_p, _d, convId) => ({ runs: sessionRuns.get(convId) ?? emptyRuns }),
     subscribeSessionDoc: (_key, listener) => {
@@ -290,22 +320,9 @@ export function createWorkflowHostHarness(init: {
   }
 
   function HarnessProvider({ children }: { children?: ReactTypes.ReactNode }) {
-    const [, setTick] = React.useState(0)
-    React.useEffect(() => {
-      const fn = () => setTick((t) => t + 1)
-      hostListeners.add(fn)
-      return () => {
-        hostListeners.delete(fn)
-      }
-    }, [])
-    const activePort = React.useMemo(
-      () => ({ ...basePort, conversations: currentConversations }),
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-      [currentConversations],
-    )
     return React.createElement(
       SDK.PluginClientHostContext.Provider,
-      { value: activePort },
+      { value: basePort },
       React.createElement(
         SDK.PluginClientContext.Provider,
         { value: ctx },
@@ -355,7 +372,6 @@ export function createWorkflowHostHarness(init: {
 
   const setConversations = (conversations: ConversationSummary[]) => {
     currentConversations = conversations
-    basePort.conversations = conversations
     act(() => {
       for (const listener of [...hostListeners]) listener()
     })

@@ -14,13 +14,17 @@ import type {
   ConversationSummary,
   CredentialSummary,
   HelmxLocale,
+  HostModelsSlice,
   LocalizedText,
   NodeInfo,
   PluginSummary,
   PluginUiContribution,
   Profile,
   ProviderConfig,
+  ScreenLocationPane,
+  ScreenLocationSnapshot,
   SkillSummary,
+  UsePluginsResult,
 } from '@helmx/protocol/browser'
 import { resolveLocalizedText } from '@helmx/protocol/browser'
 import {
@@ -106,8 +110,19 @@ import {
   resolveFocusedPanel,
 } from '../shell/shortcuts-model.js'
 import { createWebTranslator, type WebMessageKey } from '../i18n/catalog.js'
+import {
+  collectBackgroundBadgeDocs,
+  summarizeConversationBackgroundActivity,
+  type BackgroundBadgeDocRef,
+  type ConversationBackgroundIndex,
+} from '../shell/background-activity-model.js'
 
 const ESC_ABORT_NOTICE_ID = 'esc-abort-confirm'
+const EMPTY_PENDING_ASKS: AskSpec[] = Object.freeze([]) as unknown as AskSpec[]
+const EMPTY_SCREEN_PARAMS: Readonly<Record<string, string>> = Object.freeze({})
+const EMPTY_BADGE_DOCS: ReadonlyArray<BackgroundBadgeDocRef> = Object.freeze([])
+const EMPTY_PENDING_BADGE_DOCS: ReadonlySet<string> = new Set<string>()
+const EMPTY_BACKGROUND_INDEX: ConversationBackgroundIndex = new Map()
 
 const ASSET_LOAD_FAILURE_TITLES: ReadonlyArray<LocalizedText> = [
   { en: 'Profiles failed to load', 'zh-CN': '角色加载失败' },
@@ -187,18 +202,16 @@ export interface NavSlice {
   highlightedEntry: { conversationId: number; entryId: string } | null
 }
 
-export interface PluginHostPortSlice {
-  authenticated: boolean
-  theme: ThemeMode
-  locale: HelmxLocale
-  conversations: ConversationSummary[]
-  conversationDetails: Record<number, ConversationDetail>
-  conversationLives: Record<number, ConversationLive>
-  pendingAsks: AskSpec[]
-  loadErrors: Record<string, string>
-  plugins: PluginSummary[]
-  groupedUi: GroupedUiSpecs
-  pluginDocs: Record<string, unknown>
+export interface ConversationBackgroundSlice {
+  /** Discovered per-conversation workbench badge docs for on-demand ensurePluginDoc. */
+  badgeDocs: ReadonlyArray<BackgroundBadgeDocRef>
+  /** Badge-doc keys (`${pluginId}/${doc}`) not yet present in `pluginDocs` (honest unknown gate). */
+  pendingBadgeDocs: ReadonlySet<string>
+  /** Standard background in-flight snapshot shared by host views and the SDK host port. */
+  snapshot: {
+    unknown: boolean
+    byConversation: ConversationBackgroundIndex
+  }
 }
 
 export type ResolvedAskEntry = HelmxStoreValue['resolvedAsksByConv'][number][number]
@@ -253,6 +266,7 @@ export type StoreDomainKey =
   | 'catalog'
   | 'profiles'
   | 'models'
+  | 'hostModels'
   | 'providers'
   | 'credentials'
   | 'skills'
@@ -280,9 +294,10 @@ export type StoreDomainKey =
   | 'workbench'
   | 'activeModal'
   | 'locationState'
+  | 'screenLocation'
+  | 'conversationBackground'
   | 'highlightedEntry'
   | 'notices'
-  | 'pluginHostPort'
 
 export interface StoreBootLocation {
   location: WorkspaceLocationState
@@ -295,6 +310,7 @@ interface NotifyPlan {
   detailIds: Set<number>
   summaryIds: Set<number>
   artifactIds: Set<number>
+  pendingAskIds: Set<number>
   resolvedAskIds: Set<number>
   highlightIds: Set<number>
   loadErrorKeys: Set<string>
@@ -308,6 +324,7 @@ function emptyPlan(): NotifyPlan {
     detailIds: new Set(),
     summaryIds: new Set(),
     artifactIds: new Set(),
+    pendingAskIds: new Set(),
     resolvedAskIds: new Set(),
     highlightIds: new Set(),
     loadErrorKeys: new Set(),
@@ -396,6 +413,93 @@ function shallowEqualAuth(a: AuthSlice, b: AuthSlice): boolean {
   )
 }
 
+function sameStringRecord(a: Readonly<Record<string, string>>, b: Readonly<Record<string, string>>): boolean {
+  if (a === b) return true
+  const aKeys = Object.keys(a)
+  const bKeys = Object.keys(b)
+  if (aKeys.length !== bKeys.length) return false
+  for (const key of aKeys) {
+    if (!Object.hasOwn(b, key) || a[key] !== b[key]) return false
+  }
+  return true
+}
+
+function toScreenLocationPane(target: ResolvedTarget | null): ScreenLocationPane | undefined {
+  if (target === null || target.kind !== 'screen') return undefined
+  const rawParams = target.params
+  const params =
+    rawParams === undefined || Object.keys(rawParams).length === 0
+      ? EMPTY_SCREEN_PARAMS
+      : Object.freeze({ ...rawParams })
+  return Object.freeze({
+    pluginId: target.pluginId,
+    screenId: target.screenId,
+    params,
+  })
+}
+
+function buildScreenLocationSnapshot(
+  primaryTarget: ResolvedTarget,
+  splitTarget: ResolvedTarget | null,
+): ScreenLocationSnapshot {
+  const screen = toScreenLocationPane(primaryTarget)
+  const split = toScreenLocationPane(splitTarget)
+  const snapshot: ScreenLocationSnapshot = {}
+  if (screen !== undefined) snapshot.screen = screen
+  if (split !== undefined) snapshot.split = split
+  return Object.freeze(snapshot)
+}
+
+function isSameScreenLocationPane(a: ScreenLocationPane | undefined, b: ScreenLocationPane | undefined): boolean {
+  if (a === b) return true
+  if (a === undefined || b === undefined) return false
+  return a.pluginId === b.pluginId && a.screenId === b.screenId && sameStringRecord(a.params, b.params)
+}
+
+function isSameScreenLocationSnapshot(a: ScreenLocationSnapshot, b: ScreenLocationSnapshot): boolean {
+  return isSameScreenLocationPane(a.screen, b.screen) && isSameScreenLocationPane(a.split, b.split)
+}
+
+function isSameAskArray(a: ReadonlyArray<AskSpec>, b: ReadonlyArray<AskSpec>): boolean {
+  if (a === b) return true
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i] !== b[i]) return false
+  }
+  return true
+}
+
+function isSameBadgeDocs(
+  a: ReadonlyArray<BackgroundBadgeDocRef>,
+  b: ReadonlyArray<BackgroundBadgeDocRef>,
+): boolean {
+  if (a === b) return true
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i]!.pluginId !== b[i]!.pluginId || a[i]!.doc !== b[i]!.doc) return false
+  }
+  return true
+}
+
+function isSameStringSet(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
+  if (a === b) return true
+  if (a.size !== b.size) return false
+  for (const key of a) {
+    if (!b.has(key)) return false
+  }
+  return true
+}
+
+function isSameBackgroundIndex(a: ConversationBackgroundIndex, b: ConversationBackgroundIndex): boolean {
+  if (a === b) return true
+  if (a.size !== b.size) return false
+  for (const [id, entry] of a) {
+    const other = b.get(id)
+    if (other === undefined || other.active !== entry.active || other.summary !== entry.summary) return false
+  }
+  return true
+}
+
 export class HelmxExternalStore {
   readonly requests = new StoreRequestManager()
   readonly sseCursorRef: { current: SseCursor | null } = { current: null }
@@ -441,15 +545,24 @@ export class HelmxExternalStore {
   private liveState: LiveState = emptyLiveState()
   private groupedUi: GroupedUiSpecs = groupUiContributions([])
   private pluginsUiSlice: PluginsUiSlice
+  private pluginsSnapshot: UsePluginsResult
+  private hostModelsSlice: HostModelsSlice | undefined = undefined
   private summaryById = new Map<number, ConversationSummary>()
+  private pendingAsksByConv = new Map<number, AskSpec[]>()
   private artifactsState: Record<number, ArtifactMetadata[]> = {}
   private loadErrorsState: Record<string, string> = {}
   private navState: NavSlice
   private locationTargetsSlice: LocationTargetsSlice
   private workbenchSlice: WorkbenchSlice
   private locationStateCache: WorkspaceLocationState
+  private screenLocationSnapshot: ScreenLocationSnapshot
+  private backgroundBadgeDocKeys = new Set<string>()
+  private conversationBackgroundSlice: ConversationBackgroundSlice = {
+    badgeDocs: EMPTY_BADGE_DOCS,
+    pendingBadgeDocs: EMPTY_PENDING_BADGE_DOCS,
+    snapshot: Object.freeze({ unknown: false, byConversation: EMPTY_BACKGROUND_INDEX }),
+  }
   private noticesState: ToastNotice[] = []
-  private pluginHostPortSlice: PluginHostPortSlice
   private fullSnapshotCache: HelmxStoreValue | null = null
 
   private noticeSequence = 0
@@ -463,6 +576,7 @@ export class HelmxExternalStore {
   private detailListeners = new Map<number, Set<StoreListener>>()
   private summaryListeners = new Map<number, Set<StoreListener>>()
   private artifactsListeners = new Map<number, Set<StoreListener>>()
+  private pendingAskListeners = new Map<number, Set<StoreListener>>()
   private resolvedAsksListeners = new Map<number, Set<StoreListener>>()
   private highlightListeners = new Map<number, Set<StoreListener>>()
   private loadErrorListeners = new Map<string, Set<StoreListener>>()
@@ -486,6 +600,10 @@ export class HelmxExternalStore {
       plugins: this.liveState.plugins,
       uiContributions: this.liveState.uiContributions,
       groupedUi: this.groupedUi,
+    }
+    this.pluginsSnapshot = {
+      plugins: this.liveState.plugins,
+      screens: this.groupedUi.screens,
     }
     this.navState = {
       primaryTarget: bootLocation.primaryTarget,
@@ -514,6 +632,10 @@ export class HelmxExternalStore {
       workbenchTab: this.navState.workbenchTab,
       activeModal: this.navState.activeModal,
     }
+    this.screenLocationSnapshot = buildScreenLocationSnapshot(
+      this.navState.primaryTarget,
+      this.navState.splitTarget,
+    )
     this.spaceMemory = {}
     this.rememberSpaceTarget(bootLocation.primaryTarget)
     this.lastSyncedLocation = { current: bootLocation }
@@ -526,7 +648,6 @@ export class HelmxExternalStore {
     }
     this.workbenchOpenRef = { current: this.navState.workbenchOpen }
     this.activeModalRef = { current: this.navState.activeModal }
-    this.pluginHostPortSlice = this.buildPluginHostPortSlice()
 
     this.actions = {
       setTheme: this.setTheme,
@@ -614,6 +735,9 @@ export class HelmxExternalStore {
   subscribeConversationArtifacts = (conversationId: number, listener: StoreListener): (() => void) =>
     this.addListener(this.artifactsListeners, conversationId, listener)
 
+  subscribeConversationPendingAsks = (conversationId: number, listener: StoreListener): (() => void) =>
+    this.addListener(this.pendingAskListeners, conversationId, listener)
+
   subscribeResolvedAsks = (conversationId: number, listener: StoreListener): (() => void) =>
     this.addListener(this.resolvedAsksListeners, conversationId, listener)
 
@@ -647,11 +771,13 @@ export class HelmxExternalStore {
   getAuthenticated = (): boolean => this.authState.authenticated
   getSseConnected = (): boolean => this.authState.sseConnected
   getPrefsSlice = (): PrefsSlice => this.prefsState
+  getTheme = (): ThemeMode => this.prefsState.theme
   getLocale = (): HelmxLocale => this.prefsState.locale
   getCatalogSlice = (): CatalogSlice => this.catalogState
   getProfilesSlice = (): ProfilesSlice => this.profilesSlice
   getModels = (): ModelDescriptor[] => this.catalogState.models
   getModelDefaults = (): ModelCatalogDefaults => this.catalogState.modelDefaults
+  getHostModelsSlice = (): HostModelsSlice | undefined => this.hostModelsSlice
   getProviders = (): ProviderConfig[] => this.catalogState.providers
   getCredentials = (): CredentialSummary[] => this.catalogState.credentials
   getSkills = (): SkillSummary[] => this.catalogState.skills
@@ -666,6 +792,7 @@ export class HelmxExternalStore {
   getPlugins = (): PluginSummary[] => this.liveState.plugins
   getGroupedUi = (): GroupedUiSpecs => this.groupedUi
   getPluginsUiSlice = (): PluginsUiSlice => this.pluginsUiSlice
+  getPluginsSnapshot = (): UsePluginsResult => this.pluginsSnapshot
   getPluginDocsMap = (): Record<string, unknown> => this.liveState.pluginDocs
   getNodes = (): NodeInfo[] => this.liveState.nodes
   getLoadErrorsMap = (): Record<string, string> => this.loadErrorsState
@@ -679,14 +806,16 @@ export class HelmxExternalStore {
   getWorkbenchSlice = (): WorkbenchSlice => this.workbenchSlice
   getActiveModal = (): ActiveModal => this.navState.activeModal
   getLocationState = (): WorkspaceLocationState => this.locationStateCache
+  getScreenLocation = (): ScreenLocationSnapshot => this.screenLocationSnapshot
+  getConversationBackgroundSlice = (): ConversationBackgroundSlice => this.conversationBackgroundSlice
   getHighlightedEntry = (): { conversationId: number; entryId: string } | null => this.navState.highlightedEntry
   getNotices = (): ToastNotice[] => this.noticesState
-  getPluginHostPortSlice = (): PluginHostPortSlice => this.pluginHostPortSlice
 
   getConversationLive = (id: number): ConversationLive | undefined => this.liveState.conversationLives[id]
   getConversationDetail = (id: number): ConversationDetail | undefined => this.liveState.conversationDetails[id]
   getConversationSummary = (id: number): ConversationSummary | undefined => this.summaryById.get(id)
   getConversationArtifacts = (id: number): ArtifactMetadata[] | undefined => this.artifactsState[id]
+  getConversationPendingAsks = (id: number): AskSpec[] => this.pendingAsksByConv.get(id) ?? EMPTY_PENDING_ASKS
   getResolvedAsks = (id: number): ResolvedAskEntry[] | undefined => this.liveState.resolvedAsksByConv[id]
   getHighlightedEntryForConversation = (id: number): { conversationId: number; entryId: string } | null =>
     this.navState.highlightedEntry?.conversationId === id ? this.navState.highlightedEntry : null
@@ -712,20 +841,76 @@ export class HelmxExternalStore {
     return next
   }
 
-  private buildPluginHostPortSlice(): PluginHostPortSlice {
-    return {
-      authenticated: this.authState.authenticated,
-      theme: this.prefsState.theme,
-      locale: this.prefsState.locale,
-      conversations: this.liveState.conversations,
-      conversationDetails: this.liveState.conversationDetails,
-      conversationLives: this.liveState.conversationLives,
-      pendingAsks: this.liveState.pendingAsks,
-      loadErrors: this.loadErrorsState,
-      plugins: this.liveState.plugins,
-      groupedUi: this.groupedUi,
-      pluginDocs: this.liveState.pluginDocs,
+  private recomputeConversationBackground(
+    plan: NotifyPlan,
+    triggers: { panelsOrConversations: boolean; locale: boolean; changedDocKeys?: ReadonlySet<string> },
+  ): void {
+    const prev = this.conversationBackgroundSlice
+    if (!triggers.panelsOrConversations && !triggers.locale) {
+      if (triggers.changedDocKeys === undefined || triggers.changedDocKeys.size === 0) return
+      let touchesBadgeDoc = false
+      for (const key of triggers.changedDocKeys) {
+        if (this.backgroundBadgeDocKeys.has(key)) {
+          touchesBadgeDoc = true
+          break
+        }
+      }
+      if (!touchesBadgeDoc) return
     }
+
+    let nextBadgeDocs = prev.badgeDocs
+    if (triggers.panelsOrConversations) {
+      const collected = collectBackgroundBadgeDocs(
+        this.groupedUi.workbenchPanels,
+        this.liveState.conversations,
+      )
+      if (!isSameBadgeDocs(prev.badgeDocs, collected)) {
+        nextBadgeDocs = collected.length === 0 ? EMPTY_BADGE_DOCS : Object.freeze(collected)
+        this.backgroundBadgeDocKeys = new Set(nextBadgeDocs.map((ref) => `${ref.pluginId}/${ref.doc}`))
+      }
+    }
+
+    const rawPending = new Set<string>()
+    for (const ref of nextBadgeDocs) {
+      const key = `${ref.pluginId}/${ref.doc}`
+      if (!Object.hasOwn(this.liveState.pluginDocs, key)) rawPending.add(key)
+    }
+    const nextPendingBadgeDocs = isSameStringSet(prev.pendingBadgeDocs, rawPending)
+      ? prev.pendingBadgeDocs
+      : rawPending.size === 0
+        ? EMPTY_PENDING_BADGE_DOCS
+        : rawPending
+
+    const nextUnknown = nextPendingBadgeDocs.size > 0
+    const rawByConversation = summarizeConversationBackgroundActivity({
+      panels: this.groupedUi.workbenchPanels,
+      conversations: this.liveState.conversations,
+      pluginDocs: this.liveState.pluginDocs,
+      locale: this.prefsState.locale,
+      t: createWebTranslator(this.prefsState.locale),
+    })
+    const nextSnapshot =
+      prev.snapshot.unknown === nextUnknown &&
+      isSameBackgroundIndex(prev.snapshot.byConversation, rawByConversation)
+        ? prev.snapshot
+        : Object.freeze({
+            unknown: nextUnknown,
+            byConversation: rawByConversation.size === 0 ? EMPTY_BACKGROUND_INDEX : rawByConversation,
+          })
+
+    if (
+      nextBadgeDocs === prev.badgeDocs &&
+      nextPendingBadgeDocs === prev.pendingBadgeDocs &&
+      nextSnapshot === prev.snapshot
+    ) {
+      return
+    }
+    this.conversationBackgroundSlice = {
+      badgeDocs: nextBadgeDocs,
+      pendingBadgeDocs: nextPendingBadgeDocs,
+      snapshot: nextSnapshot,
+    }
+    plan.domains.add('conversationBackground')
   }
 
   // ---- Atomic Commit / Notification Engine ----------------------------------
@@ -737,6 +922,7 @@ export class HelmxExternalStore {
       plan.detailIds.size > 0 ||
       plan.summaryIds.size > 0 ||
       plan.artifactIds.size > 0 ||
+      plan.pendingAskIds.size > 0 ||
       plan.resolvedAskIds.size > 0 ||
       plan.highlightIds.size > 0 ||
       plan.loadErrorKeys.size > 0 ||
@@ -744,9 +930,6 @@ export class HelmxExternalStore {
     if (!anyChanged) return
 
     this.fullSnapshotCache = null
-    if (plan.domains.has('pluginHostPort')) {
-      this.pluginHostPortSlice = this.buildPluginHostPortSlice()
-    }
 
     // Reconcile armed double-Esc abort synchronously on nav / conversation / detail shifts.
     this.reconcileEscAbort(plan)
@@ -764,6 +947,7 @@ export class HelmxExternalStore {
     for (const id of plan.detailIds) collect(this.detailListeners, id)
     for (const id of plan.summaryIds) collect(this.summaryListeners, id)
     for (const id of plan.artifactIds) collect(this.artifactsListeners, id)
+    for (const id of plan.pendingAskIds) collect(this.pendingAskListeners, id)
     for (const id of plan.resolvedAskIds) collect(this.resolvedAsksListeners, id)
     for (const id of plan.highlightIds) collect(this.highlightListeners, id)
     for (const key of plan.loadErrorKeys) collect(this.loadErrorListeners, key)
@@ -807,7 +991,6 @@ export class HelmxExternalStore {
     plan.domains.add('all')
     if (next.authenticated !== prev.authenticated) {
       plan.domains.add('authenticated')
-      plan.domains.add('pluginHostPort')
     }
     if (next.sseConnected !== prev.sseConnected) plan.domains.add('sseConnected')
     if (!deferEmit) this.emit(plan)
@@ -849,8 +1032,8 @@ export class HelmxExternalStore {
     if (next.locale !== prev.locale || next.localePreference !== prev.localePreference) {
       plan.domains.add('locale')
     }
-    if (next.theme !== prev.theme || next.locale !== prev.locale) {
-      plan.domains.add('pluginHostPort')
+    if (next.locale !== prev.locale) {
+      this.recomputeConversationBackground(plan, { panelsOrConversations: false, locale: true })
     }
     if (next.quietNotifyEnabled !== prev.quietNotifyEnabled) {
       plan.domains.add('quietNotify')
@@ -889,6 +1072,16 @@ export class HelmxExternalStore {
       changed = true
     }
     if (next.models !== prev.models || next.modelDefaults !== prev.modelDefaults) { plan.domains.add('models'); changed = true }
+    if (
+      next.assetsLoaded !== prev.assetsLoaded ||
+      (next.assetsLoaded && (next.models !== prev.models || next.modelDefaults !== prev.modelDefaults))
+    ) {
+      this.hostModelsSlice = next.assetsLoaded
+        ? { models: next.models, ...next.modelDefaults }
+        : undefined
+      plan.domains.add('hostModels')
+      changed = true
+    }
     if (next.providers !== prev.providers) { plan.domains.add('providers'); changed = true }
     if (next.credentials !== prev.credentials) { plan.domains.add('credentials'); changed = true }
     if (next.skills !== prev.skills) { plan.domains.add('skills'); changed = true }
@@ -911,7 +1104,6 @@ export class HelmxExternalStore {
       addChangedRecordKeys(prev.conversationLives, next.conversationLives, plan.liveIds)
       if (plan.liveIds.size > 0) {
         plan.domains.add('conversationLivesMap')
-        plan.domains.add('pluginHostPort')
         plan.domains.add('all')
       }
     }
@@ -919,11 +1111,11 @@ export class HelmxExternalStore {
       addChangedRecordKeys(prev.conversationDetails, next.conversationDetails, plan.detailIds)
       if (plan.detailIds.size > 0) {
         plan.domains.add('conversationDetailsMap')
-        plan.domains.add('pluginHostPort')
         plan.domains.add('all')
       }
     }
-    if (next.conversations !== prev.conversations) {
+    const conversationsChanged = next.conversations !== prev.conversations
+    if (conversationsChanged) {
       const nextMap = new Map<number, ConversationSummary>()
       for (const conv of next.conversations) nextMap.set(conv.id, conv)
       for (const [id, prevConv] of this.summaryById) {
@@ -934,13 +1126,33 @@ export class HelmxExternalStore {
       }
       this.summaryById = nextMap
       plan.domains.add('conversations')
-      plan.domains.add('pluginHostPort')
       plan.domains.add('all')
     }
     if (next.pendingAsks !== prev.pendingAsks) {
+      const nextByConv = new Map<number, AskSpec[]>()
+      for (const ask of next.pendingAsks) {
+        const list = nextByConv.get(ask.conversationId)
+        if (list === undefined) nextByConv.set(ask.conversationId, [ask])
+        else list.push(ask)
+      }
+      for (const [convId, prevList] of this.pendingAsksByConv) {
+        const nextList = nextByConv.get(convId)
+        if (nextList === undefined) {
+          plan.pendingAskIds.add(convId)
+        } else if (isSameAskArray(prevList, nextList)) {
+          nextByConv.set(convId, prevList)
+        } else {
+          plan.pendingAskIds.add(convId)
+        }
+      }
+      for (const convId of nextByConv.keys()) {
+        if (!this.pendingAsksByConv.has(convId)) {
+          plan.pendingAskIds.add(convId)
+        }
+      }
+      this.pendingAsksByConv = nextByConv
       plan.domains.add('pendingAsks')
       plan.domains.add('asks')
-      plan.domains.add('pluginHostPort')
       plan.domains.add('all')
     }
     if (next.resolvedAsksByConv !== prev.resolvedAsksByConv) {
@@ -954,30 +1166,39 @@ export class HelmxExternalStore {
     if (next.plugins !== prev.plugins) {
       plan.domains.add('plugins')
       plan.domains.add('pluginsUi')
-      plan.domains.add('pluginHostPort')
       plan.domains.add('all')
     }
-    if (next.uiContributions !== prev.uiContributions) {
+    const uiChanged = next.uiContributions !== prev.uiContributions
+    if (uiChanged) {
       this.groupedUi = groupUiContributions(next.uiContributions)
       plan.domains.add('groupedUi')
       plan.domains.add('pluginsUi')
-      plan.domains.add('pluginHostPort')
       plan.domains.add('all')
     }
-    if (next.plugins !== prev.plugins || next.uiContributions !== prev.uiContributions) {
+    if (next.plugins !== prev.plugins || uiChanged) {
       this.pluginsUiSlice = {
         plugins: next.plugins,
         uiContributions: next.uiContributions,
         groupedUi: this.groupedUi,
+      }
+      this.pluginsSnapshot = {
+        plugins: next.plugins,
+        screens: this.groupedUi.screens,
       }
     }
     if (next.pluginDocs !== prev.pluginDocs) {
       addChangedStringKeys(prev.pluginDocs, next.pluginDocs, plan.pluginDocKeys)
       if (plan.pluginDocKeys.size > 0) {
         plan.domains.add('pluginDocsMap')
-        plan.domains.add('pluginHostPort')
         plan.domains.add('all')
       }
+    }
+    if (conversationsChanged || uiChanged || plan.pluginDocKeys.size > 0) {
+      this.recomputeConversationBackground(plan, {
+        panelsOrConversations: conversationsChanged || uiChanged,
+        locale: false,
+        changedDocKeys: plan.pluginDocKeys,
+      })
     }
     if (next.nodes !== prev.nodes) {
       plan.domains.add('nodes')
@@ -1015,7 +1236,6 @@ export class HelmxExternalStore {
     if (plan.loadErrorKeys.size === 0) return
     this.loadErrorsState = next
     plan.domains.add('loadErrorsMap')
-    plan.domains.add('pluginHostPort')
     plan.domains.add('all')
     if (!deferEmit) this.emit(plan)
   }
@@ -1110,6 +1330,13 @@ export class HelmxExternalStore {
         activeModal: next.activeModal,
       }
       plan.domains.add('locationState')
+    }
+    if (primaryChanged || splitChanged) {
+      const nextScreenLocation = buildScreenLocationSnapshot(next.primaryTarget, next.splitTarget)
+      if (!isSameScreenLocationSnapshot(this.screenLocationSnapshot, nextScreenLocation)) {
+        this.screenLocationSnapshot = nextScreenLocation
+        plan.domains.add('screenLocation')
+      }
     }
     if (highlightChanged) {
       plan.domains.add('highlightedEntry')

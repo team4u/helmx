@@ -31,13 +31,11 @@ import {
 } from '../lib/browser-notification.js'
 import {
   useAuthConnection,
+  useConversationBackgroundSlice,
   useConversations,
-  useGroupedUi,
-  usePluginDocsState,
   useStoreActions,
   useThemePreferencesState,
 } from '../lib/store-context.js'
-import { collectBackgroundBadgeDocs, summarizeConversationBackgroundActivity } from './background-activity-model.js'
 import {
   COMPLETED_NOTIFICATION_TITLE,
   ENDED_NOTIFICATION_TITLE,
@@ -195,12 +193,10 @@ function hasUnacknowledgedBlocked(
 
 export function useQuietNotifier(): void {
   const conversations = useConversations()
-  const pluginDocs = usePluginDocsState()
-  const groupedUi = useGroupedUi()
+  const { badgeDocs, pendingBadgeDocs, snapshot: backgroundSnapshot } = useConversationBackgroundSlice()
   const { authenticated, sseConnected } = useAuthConnection()
   const { locale, quietNotifyEnabled } = useThemePreferencesState()
   const { ensurePluginDoc, openTarget } = useStoreActions()
-  const panels = groupedUi.workbenchPanels
 
   // 语言切换只更新 locale ref，不进任何回调/effect 依赖：badge doc 发现与订阅
   // 不因切换语言重跑，投递时刻（防抖计时器/重连复核回调）读取当前 locale，
@@ -208,28 +204,19 @@ export function useQuietNotifier(): void {
   const localeRef = useRef(locale)
   const translate = useCallback((text: LocalizedText) => resolveLocalizedText(text, localeRef.current), [])
 
-  const background = useMemo(
-    () => summarizeConversationBackgroundActivity({ panels, conversations, pluginDocs }),
-    [panels, conversations, pluginDocs],
-  )
-  const badgeDocs = useMemo(() => collectBackgroundBadgeDocs(panels, conversations), [panels, conversations])
+  const background = backgroundSnapshot.byConversation
 
   // badge doc 自洽发现与按需加载（幂等去重由 ensurePluginDoc 保证）。当前启用
   // 面板所需 doc 只要不在 store 快照中就保持未知，包括插件重载清空后的窗口；
   // ensure 失败时 store 已明示 toast，未知持续到后续状态变化重试，绝不误报已完成。
   useEffect(() => {
     if (!authenticated) return
-    for (const ref of badgeDocs) void ensurePluginDoc(ref.pluginId, ref.doc)
-  }, [badgeDocs, authenticated, ensurePluginDoc, pluginDocs])
-
-  const pendingBadgeDocs = useMemo(() => {
-    const pending = new Set<string>()
     for (const ref of badgeDocs) {
-      const key = `${ref.pluginId}/${ref.doc}`
-      if (!Object.hasOwn(pluginDocs, key)) pending.add(key)
+      if (pendingBadgeDocs.has(`${ref.pluginId}/${ref.doc}`)) {
+        void ensurePluginDoc(ref.pluginId, ref.doc)
+      }
     }
-    return pending
-  }, [badgeDocs, pluginDocs])
+  }, [badgeDocs, pendingBadgeDocs, authenticated, ensurePluginDoc])
 
   const snapshot = useMemo(
     () => resolveActivitySnapshot({ conversations, background, pendingBadgeDocs }),

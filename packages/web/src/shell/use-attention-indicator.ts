@@ -11,20 +11,15 @@ import { useEffect, useMemo } from 'react'
 import {
   useActiveModal,
   useAuthConnection,
+  useConversationBackgroundSlice,
   useConversations,
-  useGroupedUi,
   useLocationTargets,
-  usePluginDocsState,
   usePlugins,
   useProfilesSlice,
   useStoreActions,
 } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
-import {
-  collectBackgroundBadgeDocs,
-  summarizeConversationBackgroundActivity,
-  type ConversationBackgroundIndex,
-} from './background-activity-model.js'
+import type { ConversationBackgroundIndex } from './background-activity-model.js'
 import {
   buildAttentionModel,
   collectViewedConversationIds,
@@ -44,33 +39,22 @@ export function useGlobalAttention(): GlobalAttentionValue {
   const { authenticated } = useAuthConnection()
   const { primaryTarget, splitTarget } = useLocationTargets()
   const activeModal = useActiveModal()
-  const groupedUi = useGroupedUi()
+  const { badgeDocs, pendingBadgeDocs, snapshot: backgroundSnapshot } = useConversationBackgroundSlice()
   const conversations = useConversations()
-  const pluginDocs = usePluginDocsState()
   const plugins = usePlugins()
   const { profiles } = useProfilesSlice()
   const { ensurePluginDoc } = useStoreActions()
-  const { locale, t } = useWebLocale()
+  const { t } = useWebLocale()
 
-  const background = useMemo(
-    () =>
-      summarizeConversationBackgroundActivity({
-        panels: groupedUi.workbenchPanels,
-        conversations,
-        pluginDocs,
-        locale,
-        t,
-      }),
-    [groupedUi.workbenchPanels, conversations, pluginDocs, locale, t],
-  )
-  const badgeDocs = useMemo(
-    () => collectBackgroundBadgeDocs(groupedUi.workbenchPanels, conversations),
-    [groupedUi.workbenchPanels, conversations],
-  )
+  const background = backgroundSnapshot.byConversation
   useEffect(() => {
     if (!authenticated) return
-    for (const ref of badgeDocs) void ensurePluginDoc(ref.pluginId, ref.doc)
-  }, [badgeDocs, authenticated, ensurePluginDoc])
+    for (const ref of badgeDocs) {
+      if (pendingBadgeDocs.has(`${ref.pluginId}/${ref.doc}`)) {
+        void ensurePluginDoc(ref.pluginId, ref.doc)
+      }
+    }
+  }, [badgeDocs, pendingBadgeDocs, authenticated, ensurePluginDoc])
 
   const viewedConversationIds = useMemo(
     () => collectViewedConversationIds({ primaryTarget, splitTarget, activeModal }),

@@ -9,7 +9,9 @@
  *   usePluginDocValue / usePluginSessionDocState / usePluginSessionDocValue —
  *   let host components and debug handles reuse the same implementation.
  *
- * Session-level subscriptions use a dedicated SSE stream keyed by the
+ * Public docs subscribe per `${pluginId}/${docName}` key via `useSyncExternalStore`
+ * (updates to unrelated docs or streaming conversation frames never wake consumers);
+ * session-level subscriptions use a dedicated SSE stream keyed by the
  * (pluginId, docName, conversationId) tuple (ref-count shared; a connection is
  * opened only while a mounted reference exists), with no global events.
  * No component exports in this file (Fast Refresh friendly).
@@ -17,7 +19,7 @@
 import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react'
 import type { PluginSessionDocKey, PluginSessionDocState } from './host-port.js'
 import { usePluginClientHost } from './host-port.js'
-import { usePluginContext } from './plugin-context.js'
+import { useRequiredPluginContextBase } from './plugin-context.js'
 
 // ---------------------------------------------------------------------------
 // Public doc: automatic GET on first access, then live updates via SSE plugin.doc.updated
@@ -26,10 +28,23 @@ import { usePluginContext } from './plugin-context.js'
 /** Subscribe to a plugin's public doc (explicit addressing; use usePluginDoc inside plugin components). */
 export function usePluginDocValue<T = unknown>(pluginId: string, docName: string): T | undefined {
   const port = usePluginClientHost()
-  const key = `${pluginId}/${docName}`
-  const value = port.pluginDocs[key] as T | undefined
+  const docKey = `${pluginId}/${docName}`
+  const subscribeDoc = useCallback(
+    (listener: () => void) => port.subscribePluginDoc(docKey, listener),
+    [port, docKey],
+  )
+  const getDocSnapshot = useCallback(
+    (): T | undefined => port.getPluginDocValue(docKey) as T | undefined,
+    [port, docKey],
+  )
+  const value = useSyncExternalStore(subscribeDoc, getDocSnapshot, getDocSnapshot)
+  const authenticated = useSyncExternalStore(
+    port.subscribeAuthenticated,
+    port.getAuthenticated,
+    port.getAuthenticated,
+  )
 
-  const { ensurePluginDoc, authenticated } = port
+  const { ensurePluginDoc } = port
   useEffect(() => {
     if (value === undefined && authenticated) void ensurePluginDoc(pluginId, docName)
   }, [pluginId, docName, value, authenticated, ensurePluginDoc])
@@ -44,7 +59,7 @@ export function usePluginDocValue<T = unknown>(pluginId: string, docName: string
  * Must be called from plugin components inside <PluginUiView>.
  */
 export function usePluginDoc<T = unknown>(docName: string, pluginId?: string): T | undefined {
-  const ctx = usePluginContext()
+  const ctx = useRequiredPluginContextBase()
   return usePluginDocValue<T>(pluginId ?? ctx.pluginId, docName)
 }
 
@@ -60,10 +75,6 @@ export function usePluginSessionDocState(
   options?: { conversationId?: number; pluginId?: string },
 ): PluginSessionDocState {
   const port = usePluginClientHost()
-  // Depend only on the stable named functions and the key: the port object
-  // swaps references on every host SSE state change; depending on it would
-  // unsubscribe (refcount hitting zero clears the cache) and reopen the stream
-  // on every global event.
   const { subscribeSessionDoc, getSessionDocState } = port
   const pluginId = options?.pluginId
   const conversationId = options?.conversationId
@@ -103,7 +114,7 @@ export function usePluginSessionDoc<T = unknown>(
   docName: string,
   options?: { conversationId?: number; pluginId?: string },
 ): T | undefined {
-  const ctx = usePluginContext()
+  const ctx = useRequiredPluginContextBase()
   return usePluginSessionDocValue<T>(docName, {
     pluginId: options?.pluginId ?? ctx.pluginId,
     conversationId: options?.conversationId ?? ctx.conversationId,
