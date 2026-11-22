@@ -123,6 +123,14 @@ export interface PluginClientHostPort {
   /** Subscribe to theme or locale revisions. */
   subscribePrefs(listener: () => void): () => void
 
+  // ---- Server-aligned wall clock (optional capability) ----
+  /**
+   * One-shot read of the Hub-calibrated wall clock (`Date.now()` adjusted by the clock skew
+   * observed from SSE `snapshot` / `resumed` `serverTime`). Optional so isolated hosts and
+   * standalone tests can omit it; `useSharedNowMs` silently falls back to `Date.now()`.
+   */
+  getServerNow?(): number
+
   // ---- Conversations & keyed per-conversation slices (SSE driven) ----
   /** One-shot read of all conversation summaries (referentially stable when unchanged). */
   getConversations(): ConversationSummary[]

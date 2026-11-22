@@ -14,7 +14,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { after, before, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { FTS_SCHEMA_VERSION, FTS_SCHEMA_VERSION_KEY, openHelmxDatabase, type HelmxDatabase } from '../src/runtime/sqlite.js'
-import { HelmxStore, convStatusOf, type ConvMeta } from '../src/runtime/store.js'
+import { HelmxStore, convStatusOf, summaryOf, type ConvMeta } from '../src/runtime/store.js'
 import {
   MAX_SEARCH_QUERY_CHARS,
   MAX_SEARCH_TERMS,
@@ -100,6 +100,7 @@ function conv(id: number, overrides: Partial<ConvMeta> = {}): ConvMeta {
     pinned: false,
     stateChangeSeq: 1,
     completionSeq: 0,
+    runDurationMs: 0,
     createdAt: 1_000,
     updatedAt: 1_000,
     ...overrides,
@@ -927,6 +928,114 @@ describe('HelmxStore durability layer (real SQLite)', { timeout: 60_000 }, () =>
       assert.equal((await store.search('firstpass')).length, 0)
     } finally {
       await store.close()
+      await database.close()
+      await rm(base, { recursive: true, force: true })
+    }
+  })
+
+  it('persists runDurationMs and runStartedAt across SQLite reload and derives earliestPendingAskCreatedAt in memory', { timeout: 60_000 }, async () => {
+    const base = await mkdtemp(join(dir, 'timing-'))
+    const { store, database } = await openStoreAt(base)
+    try {
+      store.upsertConv(conv(30, { runDurationMs: 12_345, runStartedAt: 9_876_543 }))
+      store.upsertConv(conv(31, { runDurationMs: 0 }))
+      await store.flushPublic()
+
+      // Earliest pending ask derivation: ignores other conversations and settled asks.
+      assert.equal(store.earliestPendingAskCreatedAt(30), undefined)
+      store.putAsk({
+        id: 'ask-other',
+        conversationId: 31,
+        specJson: JSON.stringify({ id: 'ask-other', title: 'other', status: 'pending', fields: [] }),
+        status: 'pending',
+        createdAt: 100,
+      })
+      store.putAsk({
+        id: 'ask-settled',
+        conversationId: 30,
+        specJson: JSON.stringify({ id: 'ask-settled', title: 'done', status: 'answered', fields: [] }),
+        status: 'answered',
+        createdAt: 150,
+        settledAt: 160,
+      })
+      store.putAsk({
+        id: 'ask-late',
+        conversationId: 30,
+        specJson: JSON.stringify({ id: 'ask-late', title: 'late', status: 'pending', fields: [] }),
+        status: 'pending',
+        createdAt: 500,
+      })
+      store.putAsk({
+        id: 'ask-early',
+        conversationId: 30,
+        specJson: JSON.stringify({ id: 'ask-early', title: 'early', status: 'pending', fields: [] }),
+        status: 'pending',
+        createdAt: 300,
+      })
+      assert.equal(store.earliestPendingAskCreatedAt(30), 300)
+
+      const blockedSummary = summaryOf(
+        store.getConv(30)!,
+        'blocked',
+        2,
+        'thinking...',
+        undefined,
+        0,
+        store.earliestPendingAskCreatedAt(30),
+      )
+      assert.equal(blockedSummary.runDurationMs, 12_345)
+      assert.equal(blockedSummary.runStartedAt, 9_876_543)
+      assert.equal(blockedSummary.pendingAskSince, 300)
+
+      // When pendingAskCount === 0, summaryOf must omit pendingAskSince even if passed.
+      const unblockedSummary = summaryOf(store.getConv(30)!, 'working', 0, 'thinking...', undefined, 0, 300)
+      assert.equal('pendingAskSince' in unblockedSummary, false)
+
+      // Settling earliest ask advances earliestPendingAskCreatedAt to the next pending ask.
+      store.putAsk({
+        id: 'ask-early',
+        conversationId: 30,
+        specJson: JSON.stringify({ id: 'ask-early', title: 'early', status: 'answered', fields: [] }),
+        status: 'answered',
+        createdAt: 300,
+        settledAt: 600,
+      })
+      assert.equal(store.earliestPendingAskCreatedAt(30), 500)
+
+      // Clearing runStartedAt persists SQL NULL and omits runStartedAt from summaryOf.
+      await store.flushPublic()
+      await store.close()
+      await database.close()
+
+      const reopened = await openStoreAt(base)
+      try {
+        assert.equal(reopened.store.getConv(30)?.runDurationMs, 12_345)
+        assert.equal(reopened.store.getConv(30)?.runStartedAt, 9_876_543)
+        assert.equal(reopened.store.getConv(31)?.runDurationMs, 0)
+        assert.equal(reopened.store.getConv(31)?.runStartedAt, undefined)
+        assert.equal(reopened.store.earliestPendingAskCreatedAt(30), 500)
+
+        reopened.store.upsertConv({ ...reopened.store.getConv(30)!, runStartedAt: undefined })
+        await reopened.store.flushPublic()
+        await reopened.store.close()
+        await reopened.database.close()
+
+        const reopened2 = await openStoreAt(base)
+        try {
+          const meta30 = reopened2.store.getConv(30)!
+          assert.equal(meta30.runDurationMs, 12_345)
+          assert.equal(meta30.runStartedAt, undefined)
+          const idleSummary = summaryOf(meta30, 'idle', 0)
+          assert.equal(idleSummary.runDurationMs, 12_345)
+          assert.equal('runStartedAt' in idleSummary, false)
+        } finally {
+          await reopened2.store.close()
+          await reopened2.database.close()
+        }
+      } finally {
+        await reopened.database.close()
+      }
+    } finally {
       await database.close()
       await rm(base, { recursive: true, force: true })
     }

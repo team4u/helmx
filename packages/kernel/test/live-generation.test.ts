@@ -310,6 +310,7 @@ describe('ConversationTracker real SDK: live frame generation facts', { timeout:
       pinned: false,
       stateChangeSeq: 1,
       completionSeq: 0,
+      runDurationMs: 0,
       createdAt: Date.now(),
       updatedAt: Date.now(),
     }

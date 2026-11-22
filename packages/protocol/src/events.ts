@@ -43,6 +43,8 @@ export interface HelmxSnapshot {
   conversationLives?: ConversationLive[]
   /** Known compute node list (including local and BYOM nodes). */
   nodes?: NodeInfo[]
+  /** Hub wall-clock `Date.now()` when this snapshot frame was emitted (for client first-frame clock-skew calibration). */
+  serverTime?: number
 }
 
 /**
@@ -225,6 +227,8 @@ export interface HelmxResumedFrame {
    * excluded from the durable replay ring buffer.
    */
   conversationLives?: ConversationLive[]
+  /** Hub wall-clock `Date.now()` when this resumed frame was emitted (for client clock-skew calibration). */
+  serverTime?: number
 }
 
 // ---------------------------------------------------------------------------

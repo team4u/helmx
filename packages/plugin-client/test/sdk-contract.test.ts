@@ -42,6 +42,7 @@ import {
   type UsePluginsResult,
 } from '@helmx/protocol'
 import * as SDK from '../src/index.js'
+import * as PureSDK from '../src/pure.js'
 
 const e = React.createElement
 
@@ -1208,6 +1209,232 @@ test('useSharedNowMs: SSR returns undefined, 20 concurrent active consumers shar
     globalThis.setInterval = origSetInterval
     globalThis.clearInterval = origClearInterval
   }
+})
+
+test('useSharedNowMs: consumes optional host port.getServerNow(), preserves this-binding and shared ticks, and falls back safely without Provider or on error', { timeout: 60_000 }, async () => {
+  const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
+  let fakeServerNow = 1_700_000_000_000
+  let serverNowCalls = 0
+  const basePort = makePort(log)
+  const portWithClock: SDK.PluginClientHostPort = {
+    ...basePort,
+    getServerNow() {
+      // Verify `this` binding is preserved (points to portWithClock).
+      assert.ok(this === portWithClock, 'getServerNow must be invoked with host port as `this`')
+      serverNowCalls += 1
+      return fakeServerNow
+    },
+  }
+
+  // 1. SSR inside Provider still returns undefined and never calls getServerNow().
+  let ssrVal: number | undefined = 999
+  function SsrWithPort(): React.ReactNode {
+    ssrVal = SDK.useSharedNowMs(true, 20)
+    return e('span', null, String(ssrVal))
+  }
+  const ssrHtml = renderToString(e(SDK.PluginClientHostContext.Provider, { value: portWithClock }, e(SsrWithPort)))
+  assert.equal(ssrVal, undefined)
+  assert.equal(ssrHtml, '<span>undefined</span>')
+  assert.equal(serverNowCalls, 0)
+
+  // 2. Multiple consumers under the same Provider share one getServerNow() sample per tick.
+  const seenA: Array<number | undefined> = []
+  const seenB: Array<number | undefined> = []
+  function Consumer({ bucket }: { bucket: Array<number | undefined> }): React.ReactNode {
+    const now = SDK.useSharedNowMs(true, 20)
+    bucket.push(now)
+    return e('span', null, String(now))
+  }
+  const mounted = mount(
+    e(
+      SDK.PluginClientHostContext.Provider,
+      { value: portWithClock },
+      e('div', null, e(Consumer, { bucket: seenA }), e(Consumer, { bucket: seenB })),
+    ),
+  )
+  try {
+    assert.equal(seenA[seenA.length - 1], 1_700_000_000_000)
+    assert.equal(seenB[seenB.length - 1], 1_700_000_000_000)
+    const callsAfterMount = serverNowCalls
+    fakeServerNow = 1_700_000_005_000
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 45))
+    })
+    assert.equal(seenA[seenA.length - 1], 1_700_000_005_000)
+    assert.equal(seenB[seenB.length - 1], 1_700_000_005_000)
+    assert.ok(serverNowCalls > callsAfterMount, 'shared ticker samples getServerNow on interval ticks')
+  } finally {
+    act(() => mounted.root.unmount())
+  }
+
+  // 3. Throwing or non-finite getServerNow silently falls back to Date.now() without crashing.
+  for (const broken of [
+    () => { throw new Error('clock fault') },
+    () => Number.NaN,
+    () => Number.POSITIVE_INFINITY,
+  ]) {
+    const badPort: SDK.PluginClientHostPort = { ...basePort, getServerNow: broken }
+    let observed: number | undefined
+    function BadClockProbe(): React.ReactNode {
+      observed = SDK.useSharedNowMs(true, 50)
+      return e('span', null, String(observed))
+    }
+    const before = Date.now()
+    const m = mount(e(SDK.PluginClientHostContext.Provider, { value: badPort }, e(BadClockProbe)))
+    const after = Date.now()
+    try {
+      assert.ok(typeof observed === 'number' && observed >= before && observed <= after, 'broken getServerNow must fall back to Date.now()')
+    } finally {
+      act(() => m.root.unmount())
+    }
+  }
+})
+
+test('timing formatters (formatStopwatchMs / formatOffsetMs / formatDurationMs) and resolveConversationTiming contract + pure sub-entry exports', { timeout: 60_000 }, () => {
+  // Verify index.ts and pure.ts expose the exact same functions.
+  assert.ok(SDK.formatStopwatchMs === PureSDK.formatStopwatchMs)
+  assert.ok(SDK.formatOffsetMs === PureSDK.formatOffsetMs)
+  assert.ok(SDK.formatDurationMs === PureSDK.formatDurationMs)
+  assert.ok(SDK.resolveConversationTiming === PureSDK.resolveConversationTiming)
+
+  // formatDurationMs existing behavior stays unchanged.
+  assert.equal(SDK.formatDurationMs(undefined), '')
+  assert.equal(SDK.formatDurationMs(-1), '')
+  assert.equal(SDK.formatDurationMs(500), '500ms')
+  assert.equal(SDK.formatDurationMs(1500), '1.5s')
+  assert.equal(SDK.formatDurationMs(59_950), '1m0s')
+  assert.equal(SDK.formatDurationMs(125_000), '2m5s')
+  assert.equal(SDK.formatDurationMs(3_660_000), '1h1m')
+
+  // formatStopwatchMs: monotonic whole-second flooring + 2-digit minor unit padding.
+  for (const bad of [undefined, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, -1, -0.01]) {
+    assert.equal(SDK.formatStopwatchMs(bad), '')
+  }
+  assert.equal(SDK.formatStopwatchMs(0), '0s')
+  assert.equal(SDK.formatStopwatchMs(999), '0s')
+  assert.equal(SDK.formatStopwatchMs(1_000), '1s')
+  assert.equal(SDK.formatStopwatchMs(12_345), '12s')
+  assert.equal(SDK.formatStopwatchMs(59_999), '59s')
+  assert.equal(SDK.formatStopwatchMs(60_000), '1m00s')
+  assert.equal(SDK.formatStopwatchMs(65_999), '1m05s')
+  assert.equal(SDK.formatStopwatchMs(750_000), '12m30s')
+  assert.equal(SDK.formatStopwatchMs(3_599_999), '59m59s')
+  assert.equal(SDK.formatStopwatchMs(3_600_000), '1h00m')
+  assert.equal(SDK.formatStopwatchMs(3_900_000), '1h05m')
+  assert.equal(SDK.formatStopwatchMs(3_959_999), '1h05m')
+  assert.equal(SDK.formatStopwatchMs(36_000_000), '10h00m')
+
+  // formatOffsetMs: relative offset +MM:SS (<1h) and +H:MM:SS (>=1h).
+  for (const bad of [undefined, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, -1, -0.5]) {
+    assert.equal(SDK.formatOffsetMs(bad), '')
+  }
+  assert.equal(SDK.formatOffsetMs(0), '+00:00')
+  assert.equal(SDK.formatOffsetMs(999), '+00:00')
+  assert.equal(SDK.formatOffsetMs(15_000), '+00:15')
+  assert.equal(SDK.formatOffsetMs(15_999), '+00:15')
+  assert.equal(SDK.formatOffsetMs(135_000), '+02:15')
+  assert.equal(SDK.formatOffsetMs(3_599_999), '+59:59')
+  assert.equal(SDK.formatOffsetMs(3_600_000), '+1:00:00')
+  assert.equal(SDK.formatOffsetMs(3_735_000), '+1:02:15')
+  assert.equal(SDK.formatOffsetMs(36_000_000), '+10:00:00')
+
+  // resolveConversationTiming: honest timing across all 5 states and missing/skewed/invalid inputs.
+  // 1. Fresh idle conversation: nowMs ignored, totalRunMs omitted.
+  assert.deepEqual(
+    SDK.resolveConversationTiming({ status: 'idle', runDurationMs: 0, pendingAskCount: 0 }, 50_000),
+    { settledRunMs: 0, isRunning: false, isBlocked: false },
+  )
+
+  // 2. Settled done/error conversation with stale runStartedAt/pendingAskSince: nowMs still ignored.
+  assert.deepEqual(
+    SDK.resolveConversationTiming(
+      { status: 'done', runDurationMs: 4_200, runStartedAt: 10_000, pendingAskSince: 12_000, pendingAskCount: 0 },
+      50_000,
+    ),
+    { settledRunMs: 4_200, totalRunMs: 4_200, isRunning: false, isBlocked: false },
+  )
+  assert.deepEqual(
+    SDK.resolveConversationTiming({ status: 'error', runDurationMs: 1_500, runStartedAt: 10_000 }, 50_000),
+    { settledRunMs: 1_500, totalRunMs: 1_500, isRunning: false, isBlocked: false },
+  )
+
+  // 3. Working with runStartedAt + nowMs: computes currentRunMs and totalRunMs = settled + current.
+  assert.deepEqual(
+    SDK.resolveConversationTiming({ status: 'working', runDurationMs: 3_000, runStartedAt: 10_000 }, 14_500),
+    { settledRunMs: 3_000, currentRunMs: 4_500, totalRunMs: 7_500, isRunning: true, isBlocked: false },
+  )
+  // First-turn working right at t=0: totalRunMs is 0 (live stopwatch can render 0s).
+  assert.deepEqual(
+    SDK.resolveConversationTiming({ status: 'working', runDurationMs: 0, runStartedAt: 10_000 }, 10_000),
+    { settledRunMs: 0, currentRunMs: 0, totalRunMs: 0, isRunning: true, isBlocked: false },
+  )
+  // Slight negative clock skew clamps currentRunMs to 0 (never negative).
+  assert.deepEqual(
+    SDK.resolveConversationTiming({ status: 'working', runDurationMs: 2_000, runStartedAt: 10_500 }, 10_000),
+    { settledRunMs: 2_000, currentRunMs: 0, totalRunMs: 2_000, isRunning: true, isBlocked: false },
+  )
+
+  // 4. Working WITHOUT runStartedAt or WITHOUT nowMs (SSR): never fabricates currentRunMs.
+  assert.deepEqual(
+    SDK.resolveConversationTiming({ status: 'working', runDurationMs: 0 }, 50_000),
+    { settledRunMs: 0, isRunning: true, isBlocked: false },
+  )
+  assert.deepEqual(
+    SDK.resolveConversationTiming({ status: 'working', runDurationMs: 3_000, runStartedAt: 10_000 }, undefined),
+    { settledRunMs: 3_000, totalRunMs: 3_000, isRunning: true, isBlocked: false },
+  )
+
+  // 5. Blocked mid-run (both runStartedAt and pendingAskSince present): both isRunning and isBlocked true.
+  assert.deepEqual(
+    SDK.resolveConversationTiming(
+      {
+        status: 'blocked',
+        runDurationMs: 5_000,
+        runStartedAt: 10_000,
+        pendingAskCount: 1,
+        pendingAskSince: 14_000,
+      },
+      20_000,
+    ),
+    {
+      settledRunMs: 5_000,
+      currentRunMs: 10_000,
+      totalRunMs: 15_000,
+      waitingMs: 6_000,
+      isRunning: true,
+      isBlocked: true,
+    },
+  )
+
+  // 6. Blocked orphan ask without active run: isBlocked=true, isRunning=false, no currentRunMs.
+  assert.deepEqual(
+    SDK.resolveConversationTiming(
+      { status: 'blocked', runDurationMs: 5_000, pendingAskCount: 1, pendingAskSince: 14_000 },
+      20_000,
+    ),
+    {
+      settledRunMs: 5_000,
+      totalRunMs: 5_000,
+      waitingMs: 6_000,
+      isRunning: false,
+      isBlocked: true,
+    },
+  )
+
+  // 7. Blocked with pendingAskCount=0 or missing/invalid fields: never fabricates waitingMs or NaN.
+  assert.deepEqual(
+    SDK.resolveConversationTiming(
+      {
+        status: 'blocked',
+        runDurationMs: -100,
+        runStartedAt: Number.NaN,
+        pendingAskCount: 0,
+        pendingAskSince: 14_000,
+      },
+      20_000,
+    ),
+    { settledRunMs: 0, isRunning: false, isBlocked: true },
+  )
 })
 
 // ---------------------------------------------------------------------------

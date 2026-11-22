@@ -6,8 +6,8 @@
  */
 import { useCallback, useContext, useEffect, useState, useSyncExternalStore } from 'react'
 import type { AskSpec, ConversationDetail, ConversationLive, ConversationSummary, HostModelsSlice, ScreenLocationSnapshot, UsePluginsResult } from '@helmx/protocol/browser'
-import { PluginClientHostHandlesContext, usePluginClientHost } from './host-port.js'
-import type { ConversationBackgroundSnapshot } from './host-port.js'
+import { PluginClientHostContext, PluginClientHostHandlesContext, usePluginClientHost } from './host-port.js'
+import type { ConversationBackgroundSnapshot, PluginClientHostPort } from './host-port.js'
 import { useRequiredPluginContextBase } from './plugin-context.js'
 
 const EMPTY_PLUGIN_CONFIG: Readonly<Record<string, unknown>> = Object.freeze({})
@@ -248,8 +248,14 @@ export function useConversation(
 // Shared module-level wall-clock ticker (`useSharedNowMs`)
 // ---------------------------------------------------------------------------
 
+interface SharedTickerEntry {
+  source: PluginClientHostPort | null
+  getServerNow: (() => number) | undefined
+  notify: (now: number) => void
+}
+
 interface SharedTickerBucket {
-  listeners: Set<(now: number) => void>
+  entries: Set<SharedTickerEntry>
   timer: ReturnType<typeof setInterval> | undefined
 }
 
@@ -260,20 +266,45 @@ function normalizeIntervalMs(intervalMs: number): number {
   return Math.max(1, Math.trunc(intervalMs))
 }
 
-function subscribeSharedNow(intervalMs: number, listener: (now: number) => void): () => void {
+function sampleSharedNow(
+  source: PluginClientHostPort | null,
+  getServerNow: (() => number) | undefined,
+): number {
+  if (getServerNow === undefined) return Date.now()
+  try {
+    const value = getServerNow.call(source)
+    return Number.isFinite(value) ? value : Date.now()
+  } catch {
+    return Date.now()
+  }
+}
+
+function subscribeSharedNow(
+  intervalMs: number,
+  source: PluginClientHostPort | null,
+  getServerNow: (() => number) | undefined,
+  notify: (now: number) => void,
+): () => void {
   let bucket = sharedTickers.get(intervalMs)
   if (!bucket) {
-    const listeners = new Set<(now: number) => void>()
+    const entries = new Set<SharedTickerEntry>()
     const timer = globalThis.setInterval?.(() => {
-      const now = Date.now()
-      for (const fn of [...listeners]) {
-        fn(now)
+      const samples = new Map<PluginClientHostPort | null, number>()
+      for (const entry of [...entries]) {
+        const key = entry.getServerNow !== undefined ? entry.source : null
+        let now = samples.get(key)
+        if (now === undefined) {
+          now = sampleSharedNow(entry.source, entry.getServerNow)
+          samples.set(key, now)
+        }
+        entry.notify(now)
       }
     }, intervalMs)
-    bucket = { listeners, timer }
+    bucket = { entries, timer }
     sharedTickers.set(intervalMs, bucket)
   }
-  bucket.listeners.add(listener)
+  const entry: SharedTickerEntry = { source, getServerNow, notify }
+  bucket.entries.add(entry)
 
   let released = false
   return () => {
@@ -281,8 +312,8 @@ function subscribeSharedNow(intervalMs: number, listener: (now: number) => void)
     released = true
     const current = sharedTickers.get(intervalMs)
     if (!current) return
-    current.listeners.delete(listener)
-    if (current.listeners.size === 0) {
+    current.entries.delete(entry)
+    if (current.entries.size === 0) {
       if (current.timer !== undefined) globalThis.clearInterval?.(current.timer)
       sharedTickers.delete(intervalMs)
     }
@@ -291,11 +322,14 @@ function subscribeSharedNow(intervalMs: number, listener: (now: number) => void)
 
 /**
  * Shared stopwatch clock: returns `undefined` on SSR / initial render and whenever `active` is `false`.
- * On client `useEffect`, when `active` is `true`, immediately samples `Date.now()` and subscribes to a
- * single shared `setInterval` bucket per `intervalMs`, tearing down the timer as soon as the last
- * subscriber unmounts or deactivates.
+ * On client `useEffect`, when `active` is `true`, immediately samples the optional host `getServerNow()`
+ * (safely read from `PluginClientHostContext`, silently falling back to `Date.now()` outside a Provider
+ * or when omitted) and subscribes to a single shared `setInterval` bucket per `intervalMs`, tearing down
+ * the timer as soon as the last subscriber unmounts or deactivates.
  */
 export function useSharedNowMs(active: boolean, intervalMs = 1000): number | undefined {
+  const port = useContext(PluginClientHostContext)
+  const getServerNow = port?.getServerNow
   const [nowMs, setNowMs] = useState<number | undefined>(undefined)
   const effectiveIntervalMs = normalizeIntervalMs(intervalMs)
 
@@ -304,9 +338,10 @@ export function useSharedNowMs(active: boolean, intervalMs = 1000): number | und
       setNowMs(undefined)
       return
     }
-    setNowMs(Date.now())
-    return subscribeSharedNow(effectiveIntervalMs, setNowMs)
-  }, [active, effectiveIntervalMs])
+    const source = getServerNow !== undefined ? port : null
+    setNowMs(sampleSharedNow(source, getServerNow))
+    return subscribeSharedNow(effectiveIntervalMs, source, getServerNow, setNowMs)
+  }, [active, effectiveIntervalMs, port, getServerNow])
 
   return active ? nowMs : undefined
 }

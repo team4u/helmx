@@ -1071,6 +1071,7 @@ export function summaryOfFallback(
   meta: ConvMeta,
   status: ConversationSummary['status'],
   pendingAskCount: number,
+  pendingAskSince?: number,
 ): ConversationSummary {
   return {
     id: meta.id,
@@ -1090,6 +1091,9 @@ export function summaryOfFallback(
     unread: meta.unread,
     pinned: meta.pinned,
     pendingAskCount,
+    runDurationMs: meta.runDurationMs,
+    ...(meta.runStartedAt !== undefined ? { runStartedAt: meta.runStartedAt } : {}),
+    ...(pendingAskCount > 0 && pendingAskSince !== undefined ? { pendingAskSince } : {}),
     createdAt: meta.createdAt,
     updatedAt: meta.updatedAt,
   }

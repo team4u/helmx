@@ -762,6 +762,7 @@ test('HelmxStore session document CRUD + cascade cleanup on conversation deletio
       pinned: false,
       stateChangeSeq: 1,
       completionSeq: 0,
+      runDurationMs: 0,
       createdAt: now,
       updatedAt: now,
     })
@@ -815,6 +816,7 @@ test('HelmxStore restores session documents after restart (real sqlite)', { time
         pinned: false,
         stateChangeSeq: 1,
         completionSeq: 0,
+        runDurationMs: 0,
         createdAt: now,
         updatedAt: now,
       })

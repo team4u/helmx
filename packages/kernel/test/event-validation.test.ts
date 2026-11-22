@@ -13,6 +13,7 @@ import {
   pruneUndefined,
   validateAndRedactConversationLive,
 } from '../src/runtime/event-validation.js'
+import { assertHookPayload } from '../src/plugins/hooks.js'
 
 const identity = (t: string) => t
 
@@ -69,6 +70,72 @@ describe('assembleHelmxEvent', { timeout: 60_000 }, () => {
     assert.equal((zero as { conversation: { lastEntryId?: number } }).conversation.lastEntryId, 0)
     for (const bad of [-1, 1.5, Number.NaN, '42', Number.MAX_SAFE_INTEGER + 1]) {
       assert.throws(() => assembleHelmxEvent('conversation.upsert', { ...base, lastEntryId: bad }, identity), HelmxError)
+    }
+  })
+
+  it('conversation.upsert and hook payload validators check optional timing fields (runDurationMs/runStartedAt/pendingAskSince)', { timeout: 60_000 }, () => {
+    const base = {
+      id: 1,
+      title: 't',
+      profileId: 'assistant',
+      tags: [],
+      cwd: '/tmp',
+      model: 'm',
+      thinkingLevel: '',
+      status: 'working' as const,
+      stateChangeSeq: 1,
+      completionSeq: 0,
+      unread: false,
+      pinned: false,
+      pendingAskCount: 1,
+      createdAt: 1_000,
+      updatedAt: 2_000,
+    }
+    const valid = { ...base, runDurationMs: 3_500, runStartedAt: 1_500, pendingAskSince: 1_800 }
+    const evt = assembleHelmxEvent('conversation.upsert', valid, identity) as {
+      conversation: { runDurationMs?: number; runStartedAt?: number; pendingAskSince?: number }
+    }
+    assert.equal(evt.conversation.runDurationMs, 3_500)
+    assert.equal(evt.conversation.runStartedAt, 1_500)
+    assert.equal(evt.conversation.pendingAskSince, 1_800)
+
+    assert.doesNotThrow(() =>
+      assertHookPayload('before_turn', {
+        conversation: valid,
+        inputs: [],
+        tools: [],
+        sections: [],
+        messages: [],
+      }),
+    )
+    assert.doesNotThrow(() =>
+      assertHookPayload('turn_settled', {
+        conversation: { ...base, status: 'done', pendingAskCount: 0, runDurationMs: 0 },
+        inputs: [],
+        outcome: 'completed',
+        settledAt: 2_500,
+      }),
+    )
+
+    for (const field of ['runDurationMs', 'runStartedAt', 'pendingAskSince'] as const) {
+      for (const bad of [-1, 1.5, Number.NaN, '100', Number.MAX_SAFE_INTEGER + 1]) {
+        assert.throws(
+          () => assembleHelmxEvent('conversation.upsert', { ...base, [field]: bad }, identity),
+          HelmxError,
+          `conversation.upsert must reject invalid ${field}=${String(bad)}`,
+        )
+        assert.throws(
+          () =>
+            assertHookPayload('turn_settled', {
+              conversation: { ...base, [field]: bad },
+              inputs: [],
+              outcome: 'completed',
+              settledAt: 2_500,
+            }),
+          HelmxError,
+          `assertHookPayload must reject invalid ${field}=${String(bad)}`,
+        )
+      }
     }
   })
 
