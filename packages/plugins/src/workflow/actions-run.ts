@@ -21,6 +21,7 @@ export function registerWorkflowRunActions(
   ctx.action({
     id: 'run',
     description: 'Start a workflow run in the specified or current conversation; the CLI passes the current conversation via --current',
+    exposeToPrompt: false,
     inputSchema: {
       type: 'object',
       properties: {
@@ -190,6 +191,7 @@ export function registerWorkflowRunActions(
     id: 'detach',
     description:
       'Move a running foreground-sync run (the subagent / SubagentWorkflow synchronous-wait path) into the background: the blocked tool call immediately returns a background handle, the run keeps executing and reports via a steer follow-up on settle. Only runs marked foreground-sync and running can be moved (background-started and already-detached runs are rejected); the initiating conversation must be human-owned — synchronous waiting is the fixed policy for automated (bot/helmx) conversations, which are refused; within a conversation only the initiating conversation itself or its ancestors may call.',
+    exposeToPrompt: false,
     inputSchema: {
       type: 'object',
       properties: {
@@ -239,6 +241,7 @@ export function registerWorkflowRunActions(
     id: 'resume_failed',
     description:
       'Batch resume recoverable failed workflows and background subagents for a conversation or across all conversations; non-recoverable items (non-failed, missing handle/spec, workflow_action_uncertain, [crash_recovery_limit], secret_grant_expired_on_restart, already superseded by resumedByRunId, or still-active child conversation) are recorded in skipped without fabricating recovery.',
+    exposeToPrompt: false,
     inputSchema: {
       type: 'object',
       properties: {

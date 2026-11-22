@@ -1001,6 +1001,54 @@ describe('workflow 插件 steer 动作（端到端）', () => {
     assert.equal(backend.submitted.length, 0)
     await host.dispose()
   })
+
+  it('before_turn 门控：无在途子代理时省略 steer 工具，有本树在途子代理时保留，无关会话仍省略', timeout, async () => {
+    const backend = new SteerFakeBackend()
+    const host = new PluginHost({
+      buildProvider: createPluginBuildProvider(),
+      dataDir,
+      host: backend,
+      docs: new MemoryDocStore(),
+      sessionDocs: new MemorySessionDocStore(),
+    })
+    const { createWorkflowPlugin } = await import('../src/workflow.js')
+    await host.register(createWorkflowPlugin())
+    const steerAlias = actionToolAlias(WORKFLOW_PLUGIN_ID, 'steer')
+    const baseTools = [
+      { name: 'subagent', description: 'subagent', inputSchema: { type: 'object' }, execute: () => ({}) },
+      { name: steerAlias, description: 'steer', inputSchema: { type: 'object' }, execute: () => ({}) },
+    ]
+    const runBeforeTurn = async (conversationId: number) => {
+      const outcome = await host.runHook('before_turn', {
+        conversation: backend.getConversation(conversationId),
+        inputs: [],
+        tools: baseTools,
+        sections: [],
+        messages: [],
+      })
+      const tools =
+        outcome.action === 'transform'
+          ? (outcome.value as { tools: Array<{ name: string }> }).tools
+          : baseTools
+      return tools.map((t) => t.name)
+    }
+
+    assert.deepEqual(await runBeforeTurn(1), ['subagent'], '无在途子代理时省略 steer 工具')
+
+    const started = (await host.executeTool(
+      'subagent',
+      { prompt: '后台任务', background: true },
+      { conversationId: 1, callId: 'gate-1' },
+    )) as { structuredOutput?: { runId?: string } }
+    const runId = started.structuredOutput!.runId!
+
+    assert.deepEqual(await runBeforeTurn(1), ['subagent', steerAlias], '发起会话在途子代理期间保留 steer 工具')
+    assert.deepEqual(await runBeforeTurn(2), ['subagent'], '无关会话仍省略 steer 工具')
+
+    await host.invokeAction(WORKFLOW_PLUGIN_ID, 'abort', { runId })
+    assert.deepEqual(await runBeforeTurn(1), ['subagent'], '子代理终态后再次省略 steer 工具')
+    await host.dispose()
+  })
 })
 
 it('真实内核：在工具挂起期间纠偏，子代理读到新指令并将最终结果交回后台 run', timeout, async (t) => {

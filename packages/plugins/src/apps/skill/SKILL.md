@@ -29,7 +29,7 @@ apps/<app-id>/
 ```
 
 - `app-id` uses kebab-case (e.g. `bill-desk`); the `builtin:` prefix is forbidden;
-- **clientRoot is required**: when frontend components live in a `client/` subdirectory, `index.ts`'s `PluginDefinition` (or `plugin.json`) must declare `clientRoot: './client'` explicitly -- when undeclared the default root is the plugin directory itself, and `apps_validate` fails with a missing client module because it cannot find `index.tsx`;
+- **clientRoot is required**: when frontend components live in a `client/` subdirectory, `index.ts`'s `PluginDefinition` (or `plugin.json`) must declare `clientRoot: './client'` explicitly -- when undeclared the default root is the plugin directory itself, and `builtin:apps.validate` fails with a missing client module because it cannot find `index.tsx`;
 - UI copy and icons follow the zero-Emoji iron rule; icons use lucide icon names (e.g. layout-grid, list-checks, wallet).
 
 ### 2. Full-stack coding constraints and the shared SDK
@@ -43,7 +43,7 @@ Backend `index.ts` (a standard `PluginDefinition`):
 
 Frontend `client/index.tsx` (host shared SDK, import directly without installing):
 
-- **The only allowed runtime bare imports are host shared modules**: `react`, `react-dom`, `lucide-react`, `@helmx/plugin-client`; types may use `import type ... from '@helmx/protocol'`. For third-party npm packages, declare each one in `plugin.json.clientDependencies` or `package.json.helmx.clientDependencies` first, then state the version range in `package.json.dependencies`; otherwise `apps_validate` fails explicitly on undeclared bare dependencies.
+- **The only allowed runtime bare imports are host shared modules**: `react`, `react-dom`, `lucide-react`, `@helmx/plugin-client`; types may use `import type ... from '@helmx/protocol'`. For third-party npm packages, declare each one in `plugin.json.clientDependencies` or `package.json.helmx.clientDependencies` first, then state the version range in `package.json.dependencies`; otherwise `builtin:apps.validate` fails explicitly on undeclared bare dependencies.
 - **The `@helmx/plugin-client` shared export list**:
   - **Reactive hooks**: `usePluginContext()` (provides `callAction` / `submitInput` / `openScreen` / `openSplitScreen` / `openConversationDrawer` / `openArtifact` / `openWorkbench` / `notify`), `usePluginDoc(name, pluginId?)`, `usePluginSessionDoc(name, opts?)`, `useConversations()`, `useConversation(id)`, `usePlugins()`, `useToolActivity(callId, active)`;
   - **Page layout primitives (prefer these over hand-rolled page scaffolding)**: `Screen` (fullscreen container + standard page header `title/subtitle/actions`), `ScreenSection` (section container `title/titleExtra`), `DataTable` (composable table shell with unified `loading/empty` placeholders; `thead/tbody` expressed as JSX), `KvGrid` (`items: [{ key, value }]` key-value grid);
@@ -55,16 +55,16 @@ Full runnable template: `load_skill({ skillId: "app-builder", path: "references/
 
 ### 3. Mandatory static self-check (Zero-Broken-App)
 
-After writing or modifying code you **must** invoke the `apps_validate` tool (CLI: `helmx apps validate <dir> --json`). It runs the real four-phase checks: manifest / backend TS transpile / real registration assertions / client esbuild compile and export validation, plus the "at least one ctx.ui.screen" check.
+After writing or modifying code you **must** invoke `run_action({ actionId: "builtin:apps.validate", input: { dir: "<absOrRelDir>" } })` (CLI: `helmx apps validate <dir> --json`; inspect existing apps with `run_action({ actionId: "builtin:apps.list", input: {} })` or `helmx apps list --json`). It runs the real four-phase checks: manifest / backend TS transpile / real registration assertions / client esbuild compile and export validation, plus the "at least one ctx.ui.screen" check.
 
 - When it returns `ok: false`, fix item by item per the `checks` report (TS types, schemas, or React export errors on the spot) until `ok: true`;
 - **Never skip the precheck and deliver anyway**; never fabricate check results.
 
 ### 4. Publish or deliver as draft
 
-- When the user wants it directly usable or wants to upgrade an existing app: call `apps_publish` (pass `dir` absolute path, `icon` (lucide name), `category` (productivity/devops/data/finance/automation/other)). On success, output a ```ui delivery card in the reply body with "open the app side-by-side on the right screen" (`{ "type": "helmx:open", "target": "screen:<appId>/main", "split": true }`) and "go to the app center" (`{ "type": "helmx:open", "target": "screen:builtin:apps/center" }`) buttons;
-- When the user wants to review first: only run `apps_validate` and output a ```ui preview card (app structure summary + a "one-click publish to app center" button bound to `{ "type": "helmx:action", "pluginId": "builtin:apps", "actionId": "publish", "input": { "dir": "<absDir>", "category": "..." } }`), then wait for the user's click;
-- Upgrading a published app: edit the same workspace source and run `apps_publish` again (same source takes the update hot-reload path; data is preserved).
+- When the user wants it directly usable or wants to upgrade an existing app: call `run_action({ actionId: "builtin:apps.publish", input: { dir: "<absDir>", icon: "<lucide-name>", category: "<category>" } })` (categories: productivity/devops/data/finance/automation/other; CLI: `helmx apps publish <dir>`). On success, output a ```ui delivery card in the reply body with "open the app side-by-side on the right screen" (`{ "type": "helmx:open", "target": "screen:<appId>/main", "split": true }`) and "go to the app center" (`{ "type": "helmx:open", "target": "screen:builtin:apps/center" }`) buttons;
+- When the user wants to review first: only run `run_action({ actionId: "builtin:apps.validate", input: { dir: "<absDir>" } })` and output a ```ui preview card (app structure summary + a "one-click publish to app center" button bound to `{ "type": "helmx:action", "pluginId": "builtin:apps", "actionId": "publish", "input": { "dir": "<absDir>", "category": "..." } }`), then wait for the user's click;
+- Upgrading a published app: edit the same workspace source and run `run_action({ actionId: "builtin:apps.publish", input: { dir: "<absDir>" } })` again (same source takes the update hot-reload path; data is preserved).
 
 ## Boundary facts (tell the user honestly)
 

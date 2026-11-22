@@ -132,6 +132,23 @@ export function createHerdrPlugin(
       })
 
       // ---- hooks ----
+      ctx.hook.onBeforeTurn((turn) => {
+        if (!turn.tools.some((tool) => tool.name === 'subagent')) return
+        return {
+          action: 'transform',
+          value: {
+            ...turn,
+            sections: [
+              ...turn.sections,
+              {
+                id: 'herdr.subagent-secrets',
+                text: 'External Herdr panes carry no parent conversation secrets by default; grant individual parent stash secret env var names per call via subagent secretNames (granted per call, not carried over by resume; unsupported by native sub-conversations).',
+              },
+            ],
+          },
+        }
+      })
+
       ctx.hook.onAgentSpawn(async (request) => {
         if (runtime === undefined) return { action: 'continue' }
         return runtime.onAgentSpawn(request)

@@ -8,6 +8,8 @@ import {
 } from '@earendil-works/pi-ai/providers/faux'
 import { getCurrentTools } from '@earendil-works/pi-ai/utils/transcript'
 import type { ConversationEntry, PluginDefinition } from '@helmx/protocol'
+import { initGitRepo } from '@helmx/test-kit/git'
+import { useTempDir } from '@helmx/test-kit/node'
 import assert from 'node:assert/strict'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -423,34 +425,33 @@ test('describe 模式：真实 run_action 返回完整嵌套 Schema 且不执行
   }
 })
 
-test('builtin:worktree 内部动作与 builtin:tiers UI 动作不进 <available_actions> 且在 run_action 被 403 硬拦截；cleanup_worktree 直投工具不重复列目录', { timeout: 60_000 }, async () => {
+test('Skill-First 内置插件零默认 <available_actions>；internal/ui 403 硬拦截；cleanup_worktree 按活跃 worktree 条件暴露', { timeout: 60_000 }, async (t) => {
   const conv = await env.kernel.createConversation({ title: 'worktree-actions-directory' })
   requests.length = 0
   env.faux.setResponses([capture()])
   await submitAndWait(conv.id, 'show actions')
   const req = requests[0]!
-  const section = actionsSection(req)!
-  assert.ok(section.includes('<available_actions>'), 'run_action 在场时应渲染动作目录')
-  // internal 动作（worktree.acquire_worktree / release_worktree_hold）与 ui 动作（tiers.replace）绝不进入模型目录。
-  assert.ok(!section.includes('acquire_worktree'), 'acquire_worktree 不得出现在 <available_actions>')
-  assert.ok(!section.includes('release_worktree_hold'), 'release_worktree_hold 不得出现在 <available_actions>')
-  assert.ok(!section.includes('builtin:tiers.replace'), 'tiers.replace (visibility: ui) 不得出现在 <available_actions>')
-  // cleanup_worktree 通过 exposeAsTool 直投精确工具名，不再重复进入 <available_actions>。
-  assert.ok(req.toolNames.includes('cleanup_worktree'), 'cleanup_worktree 应作为精确模型工具直接暴露')
-  assert.ok(!section.includes('builtin:worktree.cleanup_worktree'), 'cleanup_worktree 已直投工具，不得重复出现在 <available_actions>')
-  // 其余公开动作仍保持目录可见。
-  assert.ok(section.includes('builtin:worktree.list_worktrees'))
-  assert.ok(section.includes('builtin:worktree.inspect_worktree'))
+
+  // 1) Skill-First 不变量：仅启用内置插件时，无任何动作常驻 <available_actions>（prompt.actions 缺席）。
+  assert.equal(actionsSection(req), undefined, '仅启用内置插件时不应渲染 <available_actions>')
+  // 状态门控直投工具：无活跃 worktree 时省略 cleanup_worktree，无活跃子代理时省略 workflow_steer_*；apps_* 不再作为直投工具常驻。
+  assert.ok(!req.toolNames.includes('cleanup_worktree'), '0 个活跃 worktree 时 before_turn 应省略 cleanup_worktree')
+  assert.ok(!req.toolNames.some((name) => name.startsWith('workflow_steer_')), '0 个活跃子代理时 before_turn 应省略 workflow_steer')
+  assert.ok(!req.toolNames.some((name) => name.startsWith('apps_')), 'builtin:apps 动作不再作为常驻直投工具暴露')
+  // cleanup_worktree 仍在 PluginHost 工具表中声明为 exposeAsTool。
+  assert.ok(env.kernel.plugins.listTools().some((tool) => tool.name === 'cleanup_worktree'))
   // 全部请求段均不得泄漏内部动作名（防跨段残留）。
   for (const [id, text] of Object.entries(req.sectionsById)) {
-    if (id === 'prompt.actions') continue
     assert.ok(!(text ?? '').includes('acquire_worktree'), `段 ${id} 不得泄漏 acquire_worktree`)
     assert.ok(!(text ?? '').includes('release_worktree_hold'), `段 ${id} 不得泄漏 release_worktree_hold`)
+    assert.ok(!(text ?? '').includes('builtin:tiers.replace'), `段 ${id} 不得泄漏 tiers.replace`)
   }
 
-  // run_action 执行与 describe 均必须硬拒 internal 与 ui 动作（403 action_visibility_forbidden），绝不泄漏 schema 或触发副作用。
+  // 2) Skill-First 隐藏的公开内置动作仍可经 run_action describe 与执行；internal/ui 动作仍硬拒 403 action_visibility_forbidden。
   const guardConv = await env.kernel.createConversation({ title: 'visibility-guard-run-action' })
   env.faux.setResponses([
+    toolCallStep('run_action', { actionId: 'builtin:worktree.list_worktrees', input: {} }),
+    toolCallStep('run_action', { actionId: 'builtin:tiers.list', describe: true }),
     toolCallStep('run_action', { actionId: 'builtin:worktree.acquire_worktree', describe: true }),
     toolCallStep('run_action', {
       actionId: 'builtin:worktree.acquire_worktree',
@@ -461,9 +462,55 @@ test('builtin:worktree 内部动作与 builtin:tiers UI 动作不进 <available_
     toolCallStep('run_action', { actionId: 'builtin:tiers.replace', input: { tiers: {} } }),
     capture(),
   ])
-  await submitAndWait(guardConv.id, 'probe forbidden actions')
+  await submitAndWait(guardConv.id, 'probe public and forbidden actions')
   const resultTexts = toolResultTexts((await env.kernel.getConversationDetail(guardConv.id)).entries)
+  assert.ok(resultTexts.includes('\\"worktrees\\":[]'), `Skill-First 公开动作 list_worktrees 应仍可经 run_action 执行：${resultTexts}`)
+  assert.ok(resultTexts.includes('\\"pluginId\\": \\"builtin:tiers\\"') && resultTexts.includes('\\"id\\": \\"list\\"'), `Skill-First 公开动作 tiers.list 应仍可经 run_action describe：${resultTexts}`)
   assert.ok(resultTexts.includes("visibility 'internal'"), `run_action 应拒绝 internal 动作：${resultTexts}`)
   assert.ok(resultTexts.includes("visibility 'ui'"), `run_action 应拒绝 ui 动作：${resultTexts}`)
   assert.ok(!resultTexts.includes('parentConversationId'), 'describe 拒绝 internal 时不得泄漏 inputSchema')
+
+  // 3) 一旦存在活跃受管 worktree，cleanup_worktree 立即进入回合工具面；清理后再次省略。
+  const repoDir = useTempDir(t, 'helmx-action-discovery-wt-')
+  initGitRepo(repoDir)
+  const wtParent = await env.kernel.createConversation({ title: 'wt-gate-parent', cwd: repoDir })
+  const wtChild = await env.kernel.createConversation({ title: 'wt-gate-child', cwd: repoDir })
+  const pluginCaller = { surface: 'plugin' as const, callerPluginId: 'test:wt-gate' }
+  const acquired = (await env.kernel.plugins.invokeAction(
+    'builtin:worktree',
+    'acquire_worktree',
+    {
+      conversationId: wtChild.id,
+      parentConversationId: wtParent.id,
+      hold: { holdId: 'h1', label: 'gate test' },
+    },
+    {},
+    pluginCaller,
+  )) as { worktreeId: string }
+
+  try {
+    requests.length = 0
+    env.faux.setResponses([capture()])
+    await submitAndWait(wtParent.id, 'active worktree turn')
+    assert.ok(requests[0]!.toolNames.includes('cleanup_worktree'), '存在活跃 worktree 时应暴露 cleanup_worktree')
+    assert.equal(actionsSection(requests[0]!), undefined, 'cleanup_worktree 直投工具后仍不进入 <available_actions>')
+  } finally {
+    await env.kernel.plugins.invokeAction(
+      'builtin:worktree',
+      'release_worktree_hold',
+      { worktreeId: acquired.worktreeId, holdId: 'h1' },
+      {},
+      pluginCaller,
+    )
+    await env.kernel.plugins.invokeAction('builtin:worktree', 'cleanup_worktree', {
+      worktreeId: acquired.worktreeId,
+      deleteBranch: true,
+      force: true,
+    })
+  }
+
+  requests.length = 0
+  env.faux.setResponses([capture()])
+  await submitAndWait(wtParent.id, 'after cleanup turn')
+  assert.ok(!requests[0]!.toolNames.includes('cleanup_worktree'), '清理完最后一个活跃 worktree 后应再次省略 cleanup_worktree')
 })

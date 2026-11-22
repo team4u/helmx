@@ -446,10 +446,8 @@ export function registerWebhook(
   ctx.action({
     id: 'webhook_create',
     description: 'Create a webhook inbound endpoint (HMAC-SHA256 verified); the secret is configurable only via manual HTTP/CLI, rejecting conversation-context calls',
-    promptGuidelines: [
-      'The secret is configured by humans only: have the user run helmx webhook create or call HTTP directly; do not generate, fill in, or echo the secret inside a conversation -- conversation-context calls are rejected by the server (403 webhook_secret_context_forbidden)',
-      'After creation, hand the user the endpoint URL and the signing method: x-helmx-signature: sha256=<hex>, an HMAC-SHA256 signature over the raw body bytes',
-    ],
+    exposeToPrompt: false,
+    scope: { conversationIds: [] },
     cli: { command: ['webhook', 'create'] },
     inputSchema: {
       type: 'object',
@@ -486,6 +484,7 @@ export function registerWebhook(
   ctx.action({
     id: 'webhook_list',
     description: 'List all webhook endpoint metadata (no secrets)',
+    exposeToPrompt: false,
     idempotent: true,
     cli: { command: ['webhook', 'list'] },
     inputSchema: { type: 'object', properties: {}, additionalProperties: false } as never,
@@ -501,6 +500,7 @@ export function registerWebhook(
   ctx.action({
     id: 'webhook_delete',
     description: 'Delete a webhook endpoint (incl. secret cleanup)',
+    exposeToPrompt: false,
     cli: { command: ['webhook', 'delete'] },
     inputSchema: {
       type: 'object',

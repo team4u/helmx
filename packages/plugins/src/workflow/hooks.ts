@@ -10,8 +10,9 @@
  *   diagnostics.collect 追加可安全续跑的后台失败 Run 探针（Watchdog 面）。
  */
 import { HelmxError, type HelmxPluginContext } from '@helmx/protocol'
-import { HARD_MAX_SUBAGENT_DEPTH, parseWorkflowSpawnMeta } from '../contracts.js'
+import { HARD_MAX_SUBAGENT_DEPTH, WORKFLOW_PLUGIN_ID, parseWorkflowSpawnMeta } from '../contracts.js'
 import { DIAGNOSTICS_COLLECT_EVENT, appendProbes, parseCollection } from '../diagnostics.js'
+import { isAncestorOrSelf } from '../lineage.js'
 import type { WorkflowService } from './engine/index.js'
 import type { ManagedSubagentRegistry } from './depth.js'
 import type { RunsProjection } from './projection.js'
@@ -92,15 +93,54 @@ export function registerWorkflowHooks(ctx: HelmxPluginContext, deps: WorkflowHoo
     })
   }, { priority: 300 })
 
-  // ---- before_turn：达到子树上限的受管子代理回合剥离派工工具（防线一） ----
+  // ---- before_turn：达到子树上限的受管子代理剥离派工工具（防线一），无活跃可插话子代理时剥离 steer 工具 ----
   // 一层子代理默认未达上限（depth=1 < 2），保留 subagent / SubagentWorkflow
-  // 可继续派二层；仅叶子（depth ≥ 子树上限）剥离。默认优先级先于 profile
-  // 协作目录钩子（-100）：目录钩子看到的是剥离后的工具清单，叶子回合自然
-  // 不注入协作目录；fork / SuperAgent worker 不在登记表内，不受影响。
+  // 可继续派二层；仅叶子（depth ≥ 子树上限）剥离。无活跃且归属当前会话树内的
+  // 后台 subagent 运行时，省略 workflow_steer 工具声明，避免空闲回合常驻上下文。
+  const hasActiveSteerableSubagent = (callerId: number): boolean => {
+    const active = workflows.listActiveRuns()
+    if (active.length === 0) return false
+    const parentOf = (id: number): number | undefined => {
+      try {
+        return ctx.host.getConversation(id).parentConversationId
+      } catch (error) {
+        if (error instanceof HelmxError && error.code === 'not_found') return undefined
+        throw error
+      }
+    }
+    for (const run of active) {
+      if (run.kind !== 'subagent' || run.status !== 'running') continue
+      if (run.conversationId === callerId || isAncestorOrSelf(run.conversationId, callerId, parentOf)) {
+        return true
+      }
+    }
+    return false
+  }
+
+  const resolveSteerToolName = (): string | undefined =>
+    ctx.host
+      .listActions()
+      .find((action) => action.pluginId === WORKFLOW_PLUGIN_ID && action.id === 'steer')
+      ?.toolName
+
   ctx.hook.onBeforeTurn((turn) => {
+    const drop = new Set<string>()
     const facts = registry.depthFactsOf(turn.conversation.id)
-    if (!facts.managed || facts.depth < facts.maxSubagentDepth) return
-    const tools = turn.tools.filter((t) => t.name !== 'subagent' && t.name !== 'SubagentWorkflow')
+    if (facts.managed && facts.depth >= facts.maxSubagentDepth) {
+      drop.add('subagent')
+      drop.add('SubagentWorkflow')
+    }
+    if (!hasActiveSteerableSubagent(turn.conversation.id)) {
+      const steerToolName = resolveSteerToolName()
+      if (steerToolName !== undefined) drop.add(steerToolName)
+      for (const tool of turn.tools) {
+        if (tool.name === 'builtin:workflow.steer' || /^workflow_steer_[0-9a-f]{8}$/.test(tool.name)) {
+          drop.add(tool.name)
+        }
+      }
+    }
+    if (drop.size === 0) return
+    const tools = turn.tools.filter((t) => !drop.has(t.name))
     if (tools.length === turn.tools.length) return
     return { action: 'transform', value: { ...turn, tools } }
   })

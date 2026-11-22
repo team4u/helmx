@@ -1076,3 +1076,20 @@ test('remote node machine roots (~/.helmx/skills > ~/.agents/skills > <cwd>/.hel
     'skill in ~/.helmx/skills is never duplicated when cwd equals homeDir',
   )
 })
+
+test('before_turn deduplicates profiles.get(profileId) to a single lookup per turn', { timeout: 60_000 }, async (t) => {
+  const ws = mkdtempSync(join(tmpdir(), 'helmx-profile-dedup-'))
+  t.after(() => rmSync(ws, { recursive: true, force: true }))
+  const env = await makeEnv()
+  t.after(() => env.close())
+
+  let getCount = 0
+  const originalGet = env.backend.profiles.get.bind(env.backend.profiles)
+  env.backend.profiles.get = async (id: string) => {
+    getCount += 1
+    return originalGet(id)
+  }
+
+  await runBeforeTurn(env, makeTurn(ws))
+  assert.equal(getCount, 1, 'before_turn must call profiles.get(profileId) exactly once per turn')
+})
