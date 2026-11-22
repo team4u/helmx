@@ -172,7 +172,10 @@ export async function handleAgentCall(ctx: AgentCallContext, callId: number, pay
               ...(payload.phaseTitle !== undefined ? { phaseTitle: payload.phaseTitle } : {}),
               ...(payload.gate !== undefined ? { gate: payload.gate } : {}),
               ...(payload.attachments !== undefined ? { attachments: payload.attachments } : {}),
-              ...(nodeId !== undefined ? { nodeId } : {}),
+              ...(currentReattach.execution.executionId !== undefined &&
+              (currentReattach.execution.nodeId ?? nodeId) !== undefined
+                ? { nodeId: currentReattach.execution.nodeId ?? nodeId }
+                : {}),
               ...(payload.cwd !== undefined ? { cwd: payload.cwd } : {}),
               ...(payload.timeoutMs !== undefined ? { timeoutMs: payload.timeoutMs } : {}),
               ...(payload.gateTimeoutMs !== undefined ? { gateTimeoutMs: payload.gateTimeoutMs } : {}),

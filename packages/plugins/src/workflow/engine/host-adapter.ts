@@ -369,7 +369,9 @@ export async function invokeAgentSpawn(
     ...(request.model !== undefined ? { model: request.model } : {}),
     ...(request.effort !== undefined ? { effort: request.effort } : {}),
     ...(request.isolation !== undefined ? { isolation: request.isolation } : {}),
-    ...(!isResume && !isReattach && request.nodeId !== undefined ? { nodeId: request.nodeId } : {}),
+    ...(!isResume && (!isReattach || request.reattach?.executionId !== undefined) && request.nodeId !== undefined
+      ? { nodeId: request.nodeId }
+      : {}),
     ...(!isResume && !isReattach && request.cwd !== undefined ? { cwd: request.cwd } : {}),
     ...(request.gateTimeoutMs !== undefined ? { gateTimeoutMs: request.gateTimeoutMs } : {}),
     meta: withWorkflowSpawnMeta(undefined, {

@@ -403,4 +403,79 @@ describe('workflow runtime dynamic nodeId pass-through, replay key & host-bounda
     assert.equal(responses[2]?.fatal, true)
     assert.match(responses[2]?.error ?? '', /opts\.resume and opts\.nodeId are mutually exclusive/)
   })
+
+  it('in-place reattach forwards nodeId for external executionId and omits nodeId for native conversationId', timeout, async () => {
+    const { agentJournalKey } = await import('../src/workflow/engine/journal.js')
+    const seen: Array<{ prompt: string; nodeId?: string; reattach?: unknown }> = []
+    const host = baseHost({
+      async spawnAgent(request) {
+        seen.push({ prompt: request.prompt, nodeId: request.nodeId, reattach: request.reattach })
+        request.onResolved?.({
+          nodeId: request.nodeId ?? 'gpu-2',
+          ...(request.reattach?.executionId !== undefined ? { executionId: request.reattach.executionId } : {}),
+          ...(request.reattach?.conversationId !== undefined ? { conversationId: request.reattach.conversationId } : {}),
+        })
+        return { ok: true, text: `reattached:${request.prompt}` }
+      },
+    })
+
+    const extKey = agentJournalKey({ prompt: 'ext-step', label: 'ext', agentType: 'herdr:pi', nodeId: 'gpu-2', cwd: '/srv/work' })
+    const nativeKey = agentJournalKey({ prompt: 'native-step', label: 'nat', nodeId: 'gpu-2', cwd: '/srv/work' })
+    const script =
+      META('reattach-nodeid') +
+      'const a = await agent("ext-step", { label: "ext", agentType: "herdr:pi", nodeId: "gpu-2", cwd: "/srv/work" })\n' +
+      'const b = await agent("native-step", { label: "nat", nodeId: "gpu-2", cwd: "/srv/work" })\n' +
+      'return [a, b]'
+
+    const res = await runWorkflow({
+      runId: 'wf_reattach_node',
+      script,
+      host,
+      journal: {
+        inPlaceResume: true,
+        entries: [
+          {
+            v: 1,
+            seq: 0,
+            type: 'agent_started',
+            index: 0,
+            key: extKey,
+            attempt: 1,
+            invocationIndex: 0,
+            scopePath: 'root',
+            scopeCallIndex: 0,
+            requestId: 'helmx:spawn:wf_reattach_node:root:0:1',
+            execution: { nodeId: 'gpu-2', executionId: 'pane-9', effectiveCwd: '/srv/work' },
+          },
+          {
+            v: 1,
+            seq: 1,
+            type: 'agent_started',
+            index: 1,
+            key: nativeKey,
+            attempt: 1,
+            invocationIndex: 1,
+            scopePath: 'root',
+            scopeCallIndex: 1,
+            requestId: 'helmx:spawn:wf_reattach_node:root:1:1',
+            execution: { nodeId: 'gpu-2', conversationId: 42, effectiveCwd: '/srv/work' },
+          },
+        ],
+      },
+    })
+
+    assert.equal(res.status, 'completed', res.error)
+    assert.deepEqual(res.value, ['reattached:ext-step', 'reattached:native-step'])
+    assert.equal(seen.length, 2)
+    assert.deepEqual(seen[0], {
+      prompt: 'ext-step',
+      nodeId: 'gpu-2',
+      reattach: { executionId: 'pane-9', effectiveCwd: '/srv/work' },
+    })
+    assert.deepEqual(seen[1], {
+      prompt: 'native-step',
+      nodeId: undefined,
+      reattach: { conversationId: 42, effectiveCwd: '/srv/work' },
+    })
+  })
 })

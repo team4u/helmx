@@ -528,6 +528,9 @@ export function reattachBackgroundAgent(
     ...(spec.schema !== undefined ? { schema: spec.schema } : {}),
     ...(hasHandle
       ? {
+          ...(!isNativeReattach && (exec?.nodeId ?? spec.nodeId) !== undefined
+            ? { nodeId: exec?.nodeId ?? spec.nodeId }
+            : {}),
           reattach: {
             ...(exec?.conversationId !== undefined ? { conversationId: exec.conversationId } : {}),
             ...(exec?.executionId !== undefined ? { executionId: exec.executionId } : {}),
