@@ -1086,7 +1086,7 @@ test('swarm-unit10: swarmToolPresentationMetaSchema bounds UI metadata and model
   assert.equal(factsWithoutMeta.seq, undefined)
   assert.equal(resolveSwarmToolClickTarget(factsWithoutMeta), undefined)
 
-  // 3) Direct presentationMeta consumption across all 11 tools (including 0-counts and boolean flags)
+  // 3) Direct presentationMeta consumption across all 12 tools (including 0-counts and boolean flags)
   const dispatchProps = {
     ...jsonOnlyResultProps,
     presentationMeta: { groupId: 'grp_1', memberName: 'author', workerConversationId: 51, seq: 7 },
@@ -1101,6 +1101,15 @@ test('swarm-unit10: swarmToolPresentationMetaSchema bounds UI metadata and model
     resolveSwarmToolFacts('swarm_create_group', {}, { groupId: 'grp_1', groupTitle: 'Meta Title' }).groupTitle,
     'Meta Title',
   )
+  const channelFacts = resolveSwarmToolFacts(
+    'swarm_manage_channel',
+    { op: 'subscribe', channel: 'review', member: 'author' },
+    { groupId: 'grp_1' },
+  )
+  assert.equal(channelFacts.channelOp, 'subscribe')
+  assert.equal(channelFacts.channelName, 'review')
+  assert.equal(channelFacts.memberName, 'author')
+  assert.deepEqual(resolveSwarmToolClickTarget(channelFacts), { kind: 'group' })
   assert.equal(
     resolveSwarmToolFacts('swarm_board_post', { body: 'Ready' }, { groupId: 'grp_1', postKind: 'handoff', seq: 3 }).postKind,
     'handoff',
@@ -1121,10 +1130,13 @@ test('swarm-unit10: swarmToolPresentationMetaSchema bounds UI metadata and model
     resolveSwarmToolFacts('swarm_abort_worker', {}, undefined).aborted,
     undefined,
   )
-  assert.equal(
-    resolveSwarmToolFacts('swarm_switch_worker_model', {}, { workerConversationId: 51, memberName: 'author', model: 'anthropic/claude-sonnet-4-5' }).model,
-    'anthropic/claude-sonnet-4-5',
+  const switchFacts = resolveSwarmToolFacts(
+    'swarm_switch_worker_model',
+    {},
+    { workerConversationId: 51, memberName: 'author', model: 'anthropic/claude-sonnet-4-5', seq: 9 },
   )
+  assert.equal(switchFacts.model, 'anthropic/claude-sonnet-4-5')
+  assert.equal(switchFacts.seq, 9)
   assert.equal(
     resolveSwarmToolFacts('swarm_archive_worker', {}, { workerConversationId: 51, archived: true }).archived,
     true,
