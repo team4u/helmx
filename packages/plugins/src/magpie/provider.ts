@@ -10,9 +10,11 @@
  *   中即为 available（loopback 网关免登录即用）。
  *
  * 诚实性纪律（关键验收）：
- * - refreshModels 网络失败一律 throw（含默认 loopback 未运行）：通用目录刷新
- *   （models.refresh → errors['magpie']）必须把失败显式呈现，绝不静默吞成
- *   errors:{} 弹「刷新成功」；
+ * - 已显式配置网关（configuredRoot=true）或返回非连接类错误（HTTP 4xx/5xx、坏负载、超时等）时
+ *   refreshModels 一律 throw（通用目录刷新 models.refresh → errors['magpie'] 显式呈现失败）；
+ * - 未显式配置且默认本机 loopback 返回连接拒绝/不可达时，按空闲未检测到处理（不污染全局
+ *   models.refresh errors，status 保持 reachable:false 无报错噪音）；显式 magpie.refresh 动作仍
+ *   依据 lastIdleError 诚实抛 502 magpie_gateway_unreachable；
  * - allowNetwork:false 的 cache-only 恢复不触网，永不失败，也不触发
  *   onCatalogChange（cache-only 不是网络成功，绝不伪装）；
  * - 目录恢复与发布按当前 root 过滤（servedByRoot）：fetch 期间配置切换的
@@ -31,7 +33,7 @@ import {
 } from '@earendil-works/pi-ai/compat'
 import { HelmxError } from '@helmx/protocol'
 import { baseUrlFor, servedByRoot, toPiModels, type MagpieModelEntry, type PiMagpieModel } from './catalog.js'
-import { fetchCatalog } from './gateway.js'
+import { fetchCatalog, isLoopbackConnectionError } from './gateway.js'
 import { MAGPIE_PROVIDER_ID, MAGPIE_ROOT_ENV, sameGateway, type MagpieGatewayRef } from './contracts.js'
 
 /**
@@ -41,6 +43,8 @@ import { MAGPIE_PROVIDER_ID, MAGPIE_ROOT_ENV, sameGateway, type MagpieGatewayRef
 interface MagpieCatalogChange {
   gateway: MagpieGatewayRef
   ok: boolean
+  /** True when an unconfigured default loopback gateway is simply not running (idle / not detected). */
+  idle?: boolean
   modelCount: number
   error?: string
 }
@@ -65,6 +69,8 @@ interface MagpieProviderHandle {
   models(): readonly PiMagpieModel[]
   /** 目录是否已成功同步过至少一次（本启用周期内）。 */
   synced(): boolean
+  /** Latest unconfigured loopback idle connection error (cleared on sync or thrown error). */
+  lastIdleError(): { root: string; error: string } | undefined
 }
 
 /**
@@ -118,6 +124,7 @@ export function createMagpieProvider(options: MagpieProviderOptions): MagpieProv
   const { gateway, fetchImpl, onCatalogChange } = options
   let models: PiMagpieModel[] = []
   let syncedOnce = false
+  let lastIdleProbeError: { root: string; error: string } | undefined
 
   const install = (next: PiMagpieModel[]): void => {
     models = next
@@ -165,17 +172,31 @@ export function createMagpieProvider(options: MagpieProviderOptions): MagpieProv
         if (!(await context.publish({ update: () => install([]) }))) return
       }
       if (!context.allowNetwork || context.signal.aborted) return
-      // 2) 网络刷新：失败一律 throw（cache-only 恢复已完成，调用方凭
-      //    errors['magpie'] 显式呈现失败；默认 loopback 未运行同样报错）。
+      // 2) 网络刷新：未显式配置且默认 loopback 拒绝连接时按空闲未检测到处理（不污染全局
+      //    models.refresh errors）；显式配置或非连接错误一律 throw 显式呈现失败。
       let entries: MagpieModelEntry[]
       try {
         entries = await fetchCatalog(gw.root, gw.token, context.signal, fetchImpl)
       } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        const cachedCount = models.filter((model) => servedByRoot(model, gw.root)).length
+        if (!gw.configuredRoot && isLoopbackConnectionError(error)) {
+          lastIdleProbeError = { root: gw.root, error: message }
+          onCatalogChange?.({
+            gateway: gw,
+            ok: false,
+            idle: true,
+            modelCount: cachedCount,
+            error: message,
+          })
+          return
+        }
+        lastIdleProbeError = undefined
         onCatalogChange?.({
           gateway: gw,
           ok: false,
-          modelCount: models.filter((model) => servedByRoot(model, gw.root)).length,
-          error: error instanceof Error ? error.message : String(error),
+          modelCount: cachedCount,
+          error: message,
         })
         throw error
       }
@@ -191,6 +212,7 @@ export function createMagpieProvider(options: MagpieProviderOptions): MagpieProv
         update: () => {
           install(next)
           syncedOnce = true
+          lastIdleProbeError = undefined
         },
       })
       if (!published) return
@@ -210,5 +232,6 @@ export function createMagpieProvider(options: MagpieProviderOptions): MagpieProv
     provider,
     models: () => models.filter((model) => servedByRoot(model, gateway().root)),
     synced: () => syncedOnce,
+    lastIdleError: () => lastIdleProbeError,
   }
 }

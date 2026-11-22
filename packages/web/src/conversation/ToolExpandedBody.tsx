@@ -625,7 +625,10 @@ function GenericToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
       ) : null}
       {slice !== undefined ? (
         <>
-          <div className="trace-section-label">{t('conv.generic.output')}</div>
+          <div className="trace-code-head">
+            <span className="trace-section-label">{t('conv.generic.output')}</span>
+            <ResultCopyGate text={tool.resultText!} label={t('conv.generic.copyOutput')} tool={tool} resultFetch={resultFetch} />
+          </div>
           <pre className="code-block-pre">
             {resultExpanded ? tool.resultText : slice.visible}
           </pre>
@@ -642,7 +645,11 @@ function GenericToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
             </button>
           ) : null}
         </>
-      ) : null}
+      ) : (
+        <span className="trace-tool-note">
+          {tool.status === 'running' ? t('conv.generic.executing') : t('conv.generic.noOutput')}
+        </span>
+      )}
       <RawToolData tool={tool} resultFetch={resultFetch} />
     </>
   )
@@ -683,6 +690,22 @@ export function ToolRawBody({ tool, conversationId }: { tool: ToolTrace; convers
     <RawToolData tool={tool} resultFetch={resultFetch} defaultOpen />
     {tool.artifactRef !== undefined ? <ArtifactEntry tool={tool} conversationId={conversationId} /> : null}
   </>
+}
+
+/**
+ * Host-provided input/output inspector for replaceRow plugin tool.view rows:
+ * always uses the generic key-value + output + raw-data shape so every tool
+ * call (swarm / workflow / subagent / third-party cards) exposes readable I/O
+ * with full-text fetch and copy gates without usurping host edit/bash views.
+ */
+export function ToolIoBody({ tool, conversationId }: { tool: ToolTrace; conversationId: number }): ReactNode {
+  const resultFetch = useToolResultFullText(tool, conversationId)
+  return (
+    <div className="trace-tool-body">
+      <GenericToolBody tool={tool} conversationId={conversationId} resultFetch={resultFetch} />
+      {tool.artifactRef !== undefined ? <ArtifactEntry tool={tool} conversationId={conversationId} /> : null}
+    </div>
+  )
 }
 
 export function ToolExpandedBody({ tool, conversationId }: { tool: ToolTrace; conversationId: number }): ReactNode {

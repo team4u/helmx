@@ -5,6 +5,7 @@
 import type { ConversationStatus, ConversationSummary, ConversationDeletedEvent, ConversationUpsertEvent } from '@helmx/protocol'
 import { CliError } from '../errors.js'
 import { flagValue, parseFlags, type FlagSpec } from '../args.js'
+import { printTableColumns } from '../output.js'
 import type { CommandContext, CommandSpec } from './shared.js'
 import {
   assertNoExtraPositionals,
@@ -130,7 +131,18 @@ export function conversationsCommands(): CommandSpec[] {
       if (tag !== undefined) query.set('tag', tag)
       const qs = query.size > 0 ? `?${query.toString()}` : ''
       const hub = await ctx.hub()
-      printResult(ctx, await hub.get<ConversationSummary[]>(`/api/conversations${qs}`))
+      const list = await hub.get<ConversationSummary[]>(`/api/conversations${qs}`)
+      if (ctx.json || !Array.isArray(list)) {
+        printResult(ctx, list)
+        return
+      }
+      printTableColumns(ctx.io, list, [
+        { label: 'id', value: (c) => String(c.id) },
+        { label: 'status', value: (c) => c.status ?? '' },
+        { label: 'profile', value: (c) => c.profileId ?? '' },
+        { label: 'node', value: (c) => c.nodeId ?? 'local' },
+        { label: 'title', value: (c) => c.title ?? '' },
+      ])
     },
   })
 
@@ -476,6 +488,9 @@ export function conversationsCommands(): CommandSpec[] {
         ctx.args,
       )
       const useCurrent = parsed.flags.get('current') === true
+      if (useCurrent && parsed.positionals.length === 2 && /^\d+$/.test(parsed.positionals[0]!)) {
+        throw new CliError('conversation ID and --current are mutually exclusive', 'conflicting_flags')
+      }
       const id = useCurrent
         ? resolveConversationTarget(parsed.flags, undefined, ctx.env)
         : resolveConversationTarget(parsed.flags, parsed.positionals[0], ctx.env)
@@ -510,9 +525,13 @@ export function conversationsCommands(): CommandSpec[] {
         { body, ...(wait ? { timeoutMs: 0 } : {}) },
       )
       if (wait && !ctx.json) {
-        // Human mode: when --wait succeeds, print the answer text directly (assistant text blocks in entry.model)
-        const answer = assistantTextOfResult(result)
-        printPlainText(ctx, answer !== '' ? answer : JSON.stringify(result))
+        // Human mode: read authoritative redacted `result.text` directly (never reconstruct from entry.model).
+        if (result !== null && typeof result === 'object' && typeof (result as { text?: unknown }).text === 'string') {
+          const answer = (result as { text: string }).text
+          if (answer !== '') printPlainText(ctx, answer)
+          return
+        }
+        printPlainText(ctx, JSON.stringify(result))
         return
       }
       printResult(ctx, result)
@@ -757,34 +776,6 @@ function formatDuration(ms: number): string {
   const minutes = Math.floor(totalSeconds / 60)
   if (minutes < 60) return `${minutes}m${totalSeconds % 60}s`
   return `${Math.floor(minutes / 60)}h${minutes % 60}m`
-}
-
-/** Concatenate assistant reply text blocks from ConversationInputResult.entry.model. */
-function assistantTextOfResult(result: unknown): string {
-  if (result === null || typeof result !== 'object') return ''
-  const entry = (result as { entry?: { model?: unknown } }).entry
-  if (!entry || !Array.isArray(entry.model)) return ''
-  const parts: string[] = []
-  for (const message of entry.model) {
-    if (message === null || typeof message !== 'object') continue
-    const content = (message as { content?: unknown }).content
-    if (typeof content === 'string') {
-      parts.push(content)
-      continue
-    }
-    if (!Array.isArray(content)) continue
-    for (const block of content) {
-      if (
-        block !== null &&
-        typeof block === 'object' &&
-        (block as { type?: string }).type === 'text' &&
-        typeof (block as { text?: unknown }).text === 'string'
-      ) {
-        parts.push((block as { text: string }).text)
-      }
-    }
-  }
-  return parts.join('\n')
 }
 
 /** Single-line human-readable summary of an incremental SSE event. */

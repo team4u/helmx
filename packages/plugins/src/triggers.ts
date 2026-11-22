@@ -19,15 +19,24 @@
  *   doc.flush() really flushes before success; atomic exactly-once is not promised (the restart catch-up policy
  *   is declared in the cron module docs).
  */
-import { HelmxError, type PluginDefinition } from '@helmx/protocol'
-import { resolvePluginClientAssets } from './asset-paths.js'
-import { TRIGGERS_PLUGIN_ID } from './triggers/contracts.js'
+import type { PluginDefinition } from '@helmx/protocol'
+import { loadManagedSkillAsset, resolvePluginClientAssets } from './asset-paths.js'
+import { TRIGGERS_PLUGIN_ID, TRIGGERS_SKILL_ID } from './triggers/contracts.js'
 import { createDeliveryDispatch } from './triggers/delivery.js'
 import { registerWebhook } from './triggers/webhook.js'
 import { registerCron } from './triggers/cron.js'
 
 const TRIGGERS_SCREEN_ID = 'manager'
-export { TRIGGERS_PLUGIN_ID }
+export { TRIGGERS_PLUGIN_ID, TRIGGERS_SKILL_ID }
+
+function readTriggersSkillAsset() {
+  return loadManagedSkillAsset({
+    pluginId: TRIGGERS_PLUGIN_ID,
+    skillId: TRIGGERS_SKILL_ID,
+    relativeDir: 'triggers/skill',
+    missingErrorCode: 'triggers_skill_missing',
+  })
+}
 
 export function createTriggersPlugin(): PluginDefinition {
   return {
@@ -53,6 +62,15 @@ export function createTriggersPlugin(): PluginDefinition {
       registerWebhook(ctx, { dispatch })
 
       registerCron(ctx, { dispatchTrigger: dispatch })
+
+      // ---- Managed skill: triggers (cron/webhook usage & security boundaries) ----
+      ctx.service({
+        id: 'triggers-skill',
+        async start() {
+          await ctx.host.skills.ensureSkill(readTriggersSkillAsset())
+        },
+        async stop() {},
+      })
 
       // ---- Management UI (client.tsx React track; no Emoji) ----
       ctx.ui.sidebarItem({

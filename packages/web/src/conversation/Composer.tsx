@@ -3,7 +3,7 @@ import type { ComposerScopeProps, ConversationSummary } from '@helmx/protocol/br
 import { COMPOSER_DOCK_SLOT, COMPOSER_STATUS_SLOT, resolveLocalizedText } from '@helmx/protocol/browser'
 import { conversationsApi } from '../lib/api.js'
 import { buildSlashMenuItems, pluginSlashCommandsFor } from '../lib/commands-model.js'
-import { HelmxIcon, PluginSlot, Tooltip } from '@helmx/plugin-client'
+import { HelmxIcon, PluginSlot, Popover, PopoverContent, PopoverTrigger, Tooltip } from '@helmx/plugin-client'
 import { matchesUiScope } from '../lib/types.js'
 import {
   useConversationDetail,
@@ -89,9 +89,9 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const composerBoxRef = useRef<HTMLDivElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
-  const extrasRef = useRef<HTMLDetailsElement | null>(null)
   const dragDepthRef = useRef(0)
   const [dragging, setDragging] = useState(false)
+  const [extrasOpen, setExtrasOpen] = useState(false)
   const [widgetsExpanded, setWidgetsExpanded] = useState(false)
   const [slashMenuItems, setSlashMenuItems] = useState<Array<{ id: string; label: string; hint?: string; apply?: string; run?: () => void }>>([])
 
@@ -154,28 +154,6 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
     autoGrowTextarea(textareaRef.current)
   }, [text, isMobile])
   useElementWidthResize(textareaRef, () => autoGrowTextarea(textareaRef.current))
-
-  useEffect(() => {
-    const extras = extrasRef.current
-    if (extras === null) return
-    const onPointerDown = (event: PointerEvent): void => {
-      if (!extras.contains(event.target as Node)) extras.open = false
-    }
-    const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape' && extras.open) {
-        event.preventDefault()
-        event.stopPropagation()
-        extras.open = false
-        extras.querySelector('summary')?.focus()
-      }
-    }
-    document.addEventListener('pointerdown', onPointerDown)
-    document.addEventListener('keydown', onKeyDown)
-    return () => {
-      document.removeEventListener('pointerdown', onPointerDown)
-      document.removeEventListener('keydown', onKeyDown)
-    }
-  }, [isMobile, pills.length, widgets.length])
 
   const {
     slashOpen,
@@ -437,6 +415,7 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
               slashItems={slashMenuItems}
               onPick={applySlashPick}
               onClose={closeSlashPopover}
+              anchorRef={composerBoxRef}
             />
           ) : null}
           <CompletionPopover
@@ -488,11 +467,25 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
                   ))}
                 </span>
               ) : pills.length > 0 || widgets.length > 0 ? (
-                <details className="composer-extras" ref={extrasRef}>
-                  <summary className="btn btn-ghost btn-sm composer-icon-button" aria-label={t('conv.composer.toolsLabel')} title={t('conv.composer.toolsLabel')}>
-                    <HelmxIcon name="more" size={18} />
-                  </summary>
-                  <div className="composer-popover composer-extras-popover">
+                <Popover open={extrasOpen} onOpenChange={setExtrasOpen}>
+                  <PopoverTrigger asChild>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm composer-icon-button composer-extras"
+                      aria-label={t('conv.composer.toolsLabel')}
+                      title={t('conv.composer.toolsLabel')}
+                    >
+                      <HelmxIcon name="more" size={18} />
+                    </button>
+                  </PopoverTrigger>
+                  <PopoverContent
+                    portalled
+                    side="top"
+                    align="start"
+                    sideOffset={8}
+                    className="composer-popover composer-extras-popover"
+                    onEscapeKeyDown={(event) => event.stopPropagation()}
+                  >
                     {pills.map((p) => (
                       <div key={`${p.pluginId}/${p.spec.id}`} className="composer-pill-item">
                         <PluginUiView
@@ -510,9 +503,9 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
                         type="button"
                         className="popover-item"
                         aria-expanded={widgetsExpanded}
-                        onClick={(event) => {
+                        onClick={() => {
                           setWidgetsExpanded((v) => !v)
-                          event.currentTarget.closest('details')?.removeAttribute('open')
+                          setExtrasOpen(false)
                         }}
                       >
                         <HelmxIcon name="layers" size={15} />
@@ -526,8 +519,8 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
                         })()}
                       </button>
                     ) : null}
-                  </div>
-                </details>
+                  </PopoverContent>
+                </Popover>
               ) : null}
             </div>
             <ComposerSendControls

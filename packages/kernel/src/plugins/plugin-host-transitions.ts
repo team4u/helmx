@@ -29,7 +29,7 @@ import { toJsonSafeError, type JsonSafeErrorInfo } from './shared.js';
 import type { PluginTaskTracker } from './tracking.js';
 import type { PluginConfigStore, PluginState } from './types.js';
 import type { UiRegistry } from './ui-registry.js';
-import { assertUiCompleterActionBindings, assertUiDocsRegistered } from './ui-validation.js';
+import { assertUiCompleterActionBindings } from './ui-validation.js';
 
 export interface PluginHostRegistries {
   pipelines: ReadonlyMap<HookName, HookPipeline<HookName>>;
@@ -229,16 +229,10 @@ export function registerFailedPlaceholder(
 export function validateUiDeclarations(
   pluginId: string,
   crossPlugin: boolean,
-  deps: Pick<PluginHostRegistries, 'uiRegistry' | 'docRegistry' | 'capabilityRegistry'> & {
+  deps: Pick<PluginHostRegistries, 'uiRegistry' | 'capabilityRegistry'> & {
     plugins: Map<string, PluginState>;
   },
 ): void {
-  assertUiDocsRegistered(
-    pluginId,
-    deps.uiRegistry,
-    (name) => deps.docRegistry.hasPublicDoc(pluginId, name),
-    (name) => deps.docRegistry.hasPublicSessionDoc(pluginId, name),
-  );
   assertUiCompleterActionBindings(
     pluginId,
     deps.uiRegistry,

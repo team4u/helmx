@@ -98,6 +98,7 @@ const state = {
   actionCalls: [] as Array<{ pluginId: string; actionId: string; body: Record<string, unknown> }>,
   actionResponse: undefined as ((pluginId: string, actionId: string, body: Record<string, unknown>) => unknown) | undefined,
   actionError: undefined as string | undefined,
+  modelsOverride: undefined as { models: unknown[]; thinkingLevels: Record<string, string[]> } | undefined,
 }
 
 function resetState(): void {
@@ -126,6 +127,7 @@ function resetState(): void {
   state.actionCalls = []
   state.actionResponse = undefined
   state.actionError = undefined
+  state.modelsOverride = undefined
 }
 
 const profiles = [
@@ -205,7 +207,7 @@ function installFetch(): void {
       }
       return jsonResponse({ ok: true })
     }
-    if (url === '/api/models' && method === 'GET') return jsonResponse(modelCatalog)
+    if (url === '/api/models' && method === 'GET') return jsonResponse(state.modelsOverride ?? modelCatalog)
     if (url === '/api/nodes' && method === 'GET') {
       return jsonResponse([
         { id: 'local', name: '本机', online: true },
@@ -1242,5 +1244,19 @@ describe("agent-standby", () => {
       input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
     })
     assert.ok(document.querySelector('.composer-completion-popover') === null, 'Escape closes the completion popover')
+  })
+
+  test('zero available models on standby shows onboarding CTA linking to Models Center (#/settings/models)', { timeout: 60_000 }, async () => {
+    state.modelsOverride = { models: [], thinkingLevels: {} }
+    await mount('#/a/assistant')
+    const ctaBanner = document.querySelector('.agent-standby-pane .callout-warn')
+    assert.ok(ctaBanner !== null, 'zero-model standby pane renders onboarding callout')
+    const ctaBtn = ctaBanner.querySelector<HTMLButtonElement>('button')
+    assert.ok(ctaBtn !== null, 'onboarding callout includes clickable button to Models Center')
+    await act(async () => {
+      ctaBtn.click()
+    })
+    await waitForCondition(() => window.location.hash === '#/settings/models')
+    assert.equal(window.location.hash, '#/settings/models')
   })
 })

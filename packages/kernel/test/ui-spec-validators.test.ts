@@ -50,7 +50,7 @@ test('conversation.header.action: valid passes; missing actionId/client or inval
   expectThrow(
     () => validateUiSpecEarly('conversation.header.action', { id: 'a1' }, 'a1', makeCtx('conversation.header.action')),
     'invalid_ui_spec',
-    'must at least provide actionId or client of one',
+    'must provide at least one of actionId or client',
   );
   expectThrow(
     () =>
@@ -76,7 +76,7 @@ test('conversation.row.action: disallows placement; rejects dotted actionId', { 
   expectThrow(
     () => validateUiSpecEarly('conversation.row.action', { id: 'r1', actionId: 'a.b' }, 'r1', makeCtx('conversation.row.action')),
     'invalid_ui_spec',
-    'excludes point number action id',
+    'without dots',
   );
 });
 
@@ -91,7 +91,7 @@ test('timeline.entry.action: valid kinds/roles pass; invalid roles and kinds on 
     () =>
       validateUiSpecEarly('timeline.entry.action', { id: 'e1', actionId: 'act', roles: ['system'] }, 'e1', makeCtx('timeline.entry.action')),
     'invalid_ui_spec',
-    "roles only allows 'user' | 'assistant'",
+    "roles only allows a non-empty array of 'user' | 'assistant'",
   );
   expectThrow(
     () => validateUiSpecEarly('conversation.row.action', { id: 'r1', actionId: 'act', kinds: ['bash'] }, 'r1', makeCtx('conversation.row.action')),
@@ -112,13 +112,13 @@ test('commandPalette: slash+actionId passes; reserved words and intra-plugin dup
   expectThrow(
     () => validateUiSpecEarly('commandPalette', { id: 'c1', slash: 'new', actionId: 'act' }, 'c1', makeCtx('commandPalette')),
     'invalid_ui_spec',
-    'and host keep command conflict',
+    'conflicts with a host reserved command',
   );
   expectThrow(() => validateUiSpecEarly('commandPalette', { id: 'c1', slash: 'chart', actionId: 'act' }, 'c1', ctx), 'duplicate_command_slash');
   expectThrow(
     () => validateUiSpecEarly('commandPalette', { id: 'c1', slash: 'chart' }, 'c1', makeCtx('commandPalette')),
     'invalid_ui_spec',
-    'declaration slash when must bind set actionId',
+    'must bind actionId when declaring slash',
   );
 });
 
@@ -186,7 +186,7 @@ test('markdown.codeBlock: valid languages+client passes; duplicate languages and
   expectThrow(
     () => validateUiSpecLate('markdown.codeBlock', { id: 'm1', languages: ['mermaid'] }, 'm1', makeCtx('markdown.codeBlock')),
     'invalid_ui_spec',
-    'must declaration client component reference',
+    'must declare a client component reference',
   );
 });
 
@@ -245,7 +245,7 @@ test('composer.completer: valid action/doc sources pass; invalid trigger, client
         makeCtx('composer.completer'),
       ),
     'invalid_ui_spec',
-    'disallows declaration client',
+    'disallows declaring client',
   );
   expectThrow(
     () =>
@@ -256,7 +256,7 @@ test('composer.completer: valid action/doc sources pass; invalid trigger, client
         makeCtx('composer.completer'),
       ),
     'invalid_ui_spec',
-    'security top-level key',
+    'safe top-level key',
   );
 });
 

@@ -78,7 +78,7 @@ test('PluginDetailDrawer：SSR 渲染包含抽屉主体、详细元信息、常�
   )
 
   // 1. 抽屉主体类名与 ARIA 语义
-  assert.match(html, /class="[^"]*plugin-drawer-content[^"]*"/)
+  assert.match(html, /class="[^"]*primary-drawer-content[^"]*"/)
   assert.match(html, /role="dialog"/)
 
   // 2. 插件详细元信息：名称、唯一 ID、版本与常驻徽章
@@ -117,7 +117,7 @@ test('PluginDetailDrawer：当 open=false 时不渲染抽屉内容', { timeout: 
     }),
   )
 
-  assert.doesNotMatch(html, /class="[^"]*plugin-drawer-content[^"]*"/)
+  assert.doesNotMatch(html, /class="[^"]*primary-drawer-content[^"]*"/)
   assert.doesNotMatch(html, /工作流引擎/)
 })
 
@@ -935,14 +935,14 @@ test('PluginDetailDrawer：标题与 ID 靠左对齐，零图标渲染，右上�
   // 1. 标题与 ID 渲染
   assert.match(html, /自定义扩展插件/)
   assert.match(html, /custom:unspecified-icon/)
-  assert.match(html, /plugin-drawer-title-col/)
-  assert.match(html, /plugin-drawer-id/)
+  assert.match(html, /primary-drawer-title-col/)
+  assert.match(html, /primary-drawer-id/)
 
   // 2. 右上角关闭按钮
-  assert.match(html, /btn-icon-sm plugin-drawer-close-btn/)
+  assert.match(html, /btn-icon-sm/)
 
   // 3. 杜绝图标容器
-  assert.doesNotMatch(html, /plugin-drawer-icon-wrap/)
+  assert.doesNotMatch(html, /primary-drawer-icon-wrap/)
 })
 
 test('PluginDetailDrawer：「右屏打开」按钮具备窄屏隐藏类且不使用旧 callout--* 类', { timeout: 60_000 }, () => {

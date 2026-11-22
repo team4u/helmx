@@ -14,7 +14,6 @@ import {
   usePluginLocale,
   usePluginTranslator,
 } from '@helmx/plugin-client'
-import { Gauge } from 'lucide-react'
 import {
   boolLabel,
   parseStatus,
@@ -211,7 +210,7 @@ export function MagpieSettingsPanel(): ReactNode {
           {showQuotaStatus ? (
             <div className="screen-section">
               <div className="screen-section-title">
-                <Gauge size={12} strokeWidth={1.75} />
+                <HelmxIcon name="gauge" size={12} />
                 <span>{t(MAGPIE_QUOTA_SECTION)}</span>
               </div>
               <QuotaTable quotas={status.quotas} />

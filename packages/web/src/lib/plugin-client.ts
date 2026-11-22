@@ -390,11 +390,40 @@ export class PluginClientError extends Error {
   }
 }
 
+let sharedLucideModule: Record<string, unknown> | undefined
+let sharedLucidePromise: Promise<Record<string, unknown>> | undefined
+
+async function ensureSharedLucideReact(): Promise<void> {
+  const g = globalThis as Record<string, unknown>
+  if (g.__helmx_shared_lucide_react !== undefined) return
+  if (sharedLucideModule !== undefined) {
+    g.__helmx_shared_lucide_react = sharedLucideModule
+    return
+  }
+  if (sharedLucidePromise === undefined) {
+    sharedLucidePromise = import('lucide-react')
+      .then((mod) => {
+        sharedLucideModule = mod as unknown as Record<string, unknown>
+        return sharedLucideModule
+      })
+      .catch((err) => {
+        sharedLucidePromise = undefined
+        throw err
+      })
+  }
+  g.__helmx_shared_lucide_react = await sharedLucidePromise
+}
+
 /**
  * 模块代码求值：浏览器环境 Blob URL 动态 import（失败即真实错误，绝不回退 data URL
  * 掩盖）；Node/无 Blob 环境用 data URL（测试与 SSR 唯一可行路径）。
+ * 若插件产物引用了 `__helmx_shared_lucide_react`，先按需懒加载完整 lucide-react
+ * 命名空间并挂到 globalThis，避免默认首屏加载 1.1 MB 全量图标包。
  */
 async function evaluateModuleCode(code: string): Promise<Record<string, unknown>> {
+  if (code.includes('__helmx_shared_lucide_react')) {
+    await ensureSharedLucideReact()
+  }
   if (typeof window === 'undefined' || typeof URL.createObjectURL !== 'function') {
     const b64 = typeof Buffer !== 'undefined'
       ? Buffer.from(code, 'utf8').toString('base64')

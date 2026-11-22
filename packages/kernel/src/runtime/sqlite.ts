@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS helmx_conversations (
   profile_id TEXT NOT NULL DEFAULT 'default',
   tags TEXT NOT NULL DEFAULT '[]',
   parent_conversation_id INTEGER,
+  parent_tool_call_id TEXT,
   node_id TEXT NOT NULL DEFAULT 'local',
   cwd TEXT NOT NULL,
   model TEXT NOT NULL DEFAULT '',
@@ -44,10 +45,6 @@ CREATE TABLE IF NOT EXISTS helmx_conversations (
   run_started_at INTEGER,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS helmx_conversation_tool_links (
-  conversation_id INTEGER PRIMARY KEY,
-  parent_tool_call_id TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS helmx_asks (
   id TEXT PRIMARY KEY,
@@ -120,55 +117,37 @@ CREATE VIRTUAL TABLE IF NOT EXISTS helmx_conversation_fts USING fts5(
 );
 `
 
-function hasExpectedFtsTokenizer(sql: string): boolean {
-  return /\btokenize\s*=\s*['"]?trigram\b/i.test(sql)
-}
-
 /**
- * Ensure `helmx_conversation_fts` matches the current FTS5 tokenizer DDL inside one atomic transaction.
+ * Ensure `helmx_conversation_fts` exists inside one atomic transaction:
+ * - Already exists: fast path, skip both write transactions and `pi_` history probes.
  * - Brand-new empty DB (both `helmx_conversations` and authoritative `pi_` history are empty):
  *   creates the trigram table and marks `fts_schema_version = FTS_SCHEMA_VERSION` (no rebuild needed).
- * - Missing FTS table when `helmx_conversations` or `pi_` history already has conversations:
+ * - Missing derived FTS table when `helmx_conversations` or `pi_` history already has conversations:
  *   creates the trigram table and persists `fts_schema_version = 0` so startup rebuilds (even across crashes).
- * - Legacy / mismatched tokenizer DDL: drops and recreates the derived virtual table and persists `fts_schema_version = 0`
- *   in the same transaction so a crash before `rebuildFts()` finishes still triggers a rebuild on next boot.
- * - Already upgraded DB: leaves table and version untouched so steady-state restarts never re-scan conversation history.
  */
 async function ensureFtsSchema(
   db: NodeSqliteDatabase,
   hasPiHistory: () => Promise<boolean>,
 ): Promise<void> {
-  // Steady-state fast path: trigram FTS table already exists; skip both write transactions and pi history probes.
   const existing = await db.get<{ sql: string | null }>(
     "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'helmx_conversation_fts'",
   )
-  if (existing !== undefined && hasExpectedFtsTokenizer(existing.sql ?? '')) return
+  if (existing !== undefined) return
 
-  const piHistoryPresent = existing === undefined ? await hasPiHistory() : false
+  const piHistoryPresent = await hasPiHistory()
   await db.transaction(async (tx) => {
     const current = await tx.get<{ sql: string | null }>(
       "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'helmx_conversation_fts'",
     )
-    if (current === undefined) {
-      await tx.exec(FTS_SCHEMA)
-      const hasConvs = await tx.get<{ present: number }>('SELECT 1 AS present FROM helmx_conversations LIMIT 1')
-      const initialVersion = !piHistoryPresent && hasConvs === undefined ? FTS_SCHEMA_VERSION : 0
-      await tx.run(
-        'INSERT INTO helmx_seq (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
-        FTS_SCHEMA_VERSION_KEY,
-        initialVersion,
-      )
-      return
-    }
-    if (!hasExpectedFtsTokenizer(current.sql ?? '')) {
-      await tx.exec('DROP TABLE helmx_conversation_fts')
-      await tx.exec(FTS_SCHEMA)
-      await tx.run(
-        'INSERT INTO helmx_seq (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
-        FTS_SCHEMA_VERSION_KEY,
-        0,
-      )
-    }
+    if (current !== undefined) return
+    await tx.exec(FTS_SCHEMA)
+    const hasConvs = await tx.get<{ present: number }>('SELECT 1 AS present FROM helmx_conversations LIMIT 1')
+    const initialVersion = !piHistoryPresent && hasConvs === undefined ? FTS_SCHEMA_VERSION : 0
+    await tx.run(
+      'INSERT INTO helmx_seq (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
+      FTS_SCHEMA_VERSION_KEY,
+      initialVersion,
+    )
   })
 }
 

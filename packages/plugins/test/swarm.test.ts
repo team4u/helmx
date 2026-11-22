@@ -398,6 +398,29 @@ test('swarm-unit2: default wake derivation and Fail-Closed target resolution', {
     [],
   )
 
+  // Self-only addressing or 'all' on a 0-member group: fail-closed (409 swarm_no_active_targets) when wake=true, allowed when wake=false
+  assert.throws(
+    () => resolveBoardTargets(group, { role: 'worker', from: 'author' }, ['author'], { wake: true }),
+    (err: unknown) => err instanceof HelmxError && err.code === 'swarm_no_active_targets' && err.status === 409,
+  )
+  assert.throws(
+    () => resolveBoardTargets(group, { role: 'coordinator', from: 'coordinator' }, ['coordinator'], { wake: true }),
+    (err: unknown) => err instanceof HelmxError && err.code === 'swarm_no_active_targets' && err.status === 409,
+  )
+  const emptyMembersGroup = makeGroup({ members: [] })
+  assert.throws(
+    () => resolveBoardTargets(emptyMembersGroup, { role: 'coordinator', from: 'coordinator' }, ['all'], { wake: true }),
+    (err: unknown) => err instanceof HelmxError && err.code === 'swarm_no_active_targets' && err.status === 409,
+  )
+  assert.deepEqual(
+    resolveBoardTargets(emptyMembersGroup, { role: 'coordinator', from: 'coordinator' }, ['all'], { wake: false }).resolvedTargets,
+    [],
+  )
+
+  // dispatchInputSchema omits nodeId (inherited via kernel resolveSpawnTarget)
+  const dispatchProps = dispatchInputSchema['properties'] as Record<string, unknown>
+  assert.equal('nodeId' in dispatchProps, false)
+
   // Archived or unknown member -> 404 swarm_unknown_target
   assert.throws(
     () => resolveBoardTargets(group, { role: 'worker', from: 'author' }, ['retired']),
@@ -435,7 +458,8 @@ test('swarm-unit3: synthesizeBoardView, fingerprint deduplication, and byte-cons
   assert.equal(first.badge.tone, 'accent')
   assert.equal(first.badge.count, 2)
   assert.deepEqual(first.badge.footerText, { en: '1 working', 'zh-CN': '1 项执行中' })
-  assert.equal(first.view.edges.length, 2)
+  assert.equal('edges' in first.view, false)
+  assert.deepEqual(first.localizedHeadline, { en: 'Active: @verifier', 'zh-CN': '执行中：@verifier' })
 
   // State change flips digest and badge tone
   const errored = synthesizeBoardView({
@@ -671,12 +695,13 @@ test('swarm-unit6: main channel noise isolation, XML escape, schema from removal
     makePost(2, { from: 'coordinator', to: ['all'], resolvedTargets: ['alpha', 'beta'], wake: false, kind: 'comment', channel: 'main', body: 'PASSIVE_MAIN_NOTE' }),
     makePost(3, { from: 'alpha', to: ['coordinator'], resolvedTargets: ['coordinator'], wake: true, kind: 'handoff', channel: 'review', body: 'UNSUBSCRIBED_SUBCHANNEL' }),
     makePost(4, { from: 'coordinator', to: ['beta'], resolvedTargets: ['beta'], wake: true, kind: 'brief', channel: 'main', body: 'BETA_TASK' }),
+    makePost(5, { from: 'alpha', to: ['coordinator'], resolvedTargets: ['coordinator'], wake: false, kind: 'comment', channel: 'main', body: 'PRIVATE_ALPHA_NOTE_TO_COORD' }),
   ]
-  const selected = selectPostsForMemberWakeup(group.members[1]!, posts, 1, 4)
+  const selected = selectPostsForMemberWakeup(group.members[1]!, posts, 1, 5)
   assert.deepEqual(
     selected.map((p) => p.seq),
     [2, 4],
-    'must include passive main background note (#2) and targeted brief (#4), but omit alpha->coordinator done report (#1) and unsubscribed subchannel (#3)',
+    'must include passive main broadcast note (#2) and targeted brief (#4), but omit alpha->coordinator done (#1), unsubscribed subchannel (#3), and alpha->coordinator private passive comment (#5)',
   )
 
   // 2) boardPostInputSchema no longer accepts from and documents kind/wake semantics
@@ -1113,7 +1138,8 @@ test('swarm-unit9: tiered coordinator flush gating, orthogonal done stall fallba
   })
   assert.equal(notifiedDoneVerdict.shouldEmitStall, false)
 
-  // 5) findIdleCatchupAnchorPost sees past trailing passive comments, but rejects un-notified done
+  // 5) findIdleCatchupAnchorPost sees past benign trailing passive comments, but rejects un-notified done,
+  //    dangling unwoken peer comments, or passive comments from an active member who never delivered its task
   const catchupGroup = makeGroup({
     headSeq: 3,
     coordinatorPendingSeq: 2,
@@ -1128,6 +1154,40 @@ test('swarm-unit9: tiered coordinator flush gating, orthogonal done stall fallba
   assert.equal(findIdleCatchupAnchorPost(catchupGroup, postsWithTrailingComment)?.seq, 2)
   assert.equal(
     findIdleCatchupAnchorPost({ ...catchupGroup, coordinatorPendingSeq: 0, coordinatorNotifiedSeq: 0 }, postsWithTrailingComment),
+    undefined,
+  )
+  // Active 'slow' had lastWakeTaskSeq=1 and only posted comment #3 (no non-comment outcome) -> must NOT idle catchup
+  const undeliveredSlowGroup = makeGroup({
+    headSeq: 3,
+    coordinatorPendingSeq: 2,
+    coordinatorNotifiedSeq: 2,
+    lastReportHadActiveWorkers: true,
+    members: [
+      makeMember({ name: 'fast', conversationId: 11, readCursorSeq: 2, pendingWakeupSeq: 1, lastWakeTaskSeq: 1, lastPostSeq: 2 }),
+      makeMember({ name: 'slow', conversationId: 12, readCursorSeq: 3, pendingWakeupSeq: 1, lastWakeTaskSeq: 1, lastPostSeq: 3 }),
+    ],
+  })
+  assert.equal(findIdleCatchupAnchorPost(undeliveredSlowGroup, postsWithTrailingComment), undefined)
+  // Trailing passive comment addressed to an unread active peer -> must NOT idle catchup
+  const danglingPeerComment = [
+    postsWithTrailingComment[0]!,
+    postsWithTrailingComment[1]!,
+    makePost(3, { from: 'fast', to: ['slow'], resolvedTargets: ['slow'], wake: false, kind: 'comment' }),
+  ]
+  assert.equal(
+    findIdleCatchupAnchorPost(
+      makeGroup({
+        headSeq: 3,
+        coordinatorPendingSeq: 2,
+        coordinatorNotifiedSeq: 2,
+        lastReportHadActiveWorkers: true,
+        members: [
+          makeMember({ name: 'fast', conversationId: 11, readCursorSeq: 3, pendingWakeupSeq: 1, lastWakeTaskSeq: 1, lastPostSeq: 3 }),
+          makeMember({ name: 'slow', conversationId: 12, readCursorSeq: 1, pendingWakeupSeq: 1 }),
+        ],
+      }),
+      danglingPeerComment,
+    ),
     undefined,
   )
 })

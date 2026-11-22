@@ -12,6 +12,7 @@
 import type { Profile } from '@helmx/protocol'
 import { CliError } from '../errors.js'
 import { flagValue, parseFlags, type FlagSpec } from '../args.js'
+import { printTableColumns } from '../output.js'
 import type { CommandContext, CommandSpec } from './shared.js'
 import type { HubClient } from '../hub-client.js'
 import {
@@ -168,7 +169,18 @@ export function profilesCommands(): CommandSpec[] {
     async run(ctx: CommandContext) {
       parseNoFlags(ctx)
       const hub = await ctx.hub()
-      printResult(ctx, await hub.get<Profile[]>('/api/profiles'))
+      const list = await hub.get<Profile[]>('/api/profiles')
+      if (ctx.json || !Array.isArray(list)) {
+        printResult(ctx, list)
+        return
+      }
+      printTableColumns(ctx.io, list, [
+        { label: 'id', value: (p) => p.id },
+        { label: 'name', value: (p) => p.name ?? '' },
+        { label: 'model', value: (p) => p.model ?? '' },
+        { label: 'node', value: (p) => p.nodeId ?? 'local' },
+        { label: 'cwd', value: (p) => p.cwd ?? '' },
+      ])
     },
   })
 

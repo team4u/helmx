@@ -12,61 +12,18 @@
  * 返回、宿主不 mkdir），写入经 host.atomicWriteFile；插件不 import 内核
  * 私有 services，不做 dataDir ../.. 相对推测。
  */
-import { existsSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { access, mkdir } from 'node:fs/promises'
-import { dirname, join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
-import { HelmxError, type Profile } from '@helmx/protocol'
+import { join } from 'node:path'
+import type { Profile } from '@helmx/protocol'
+import { loadManagedSkillAsset, renderSkillTemplate, resolvePluginAssetDir } from '../asset-paths.js'
 
 /** 托管本插件自举资产的插件 ID（managedByPlugin 标记值）。 */
 const SUPERAGENT_MANAGED_BY = 'builtin:superagent'
 
-/**
- * 技能模板插值引擎（与 profile 插件同语义的私有实现）：{{KEY}} 严格替换；
- * 未定义 key 或替换后残留占位符一律显式抛错（不静默输出半渲染文本）。
- */
-export function renderSkillTemplate(
-  template: string,
-  vars: Readonly<Record<string, string>>,
-): string {
-  const rendered = template.replace(/\{\{\s*([A-Za-z0-9_]+)\s*\}\}/g, (_match, key: string) => {
-    const val = vars[key]
-    if (val === undefined) {
-      throw new HelmxError('unreplaced_skill_placeholder', `技能模板存在未定义占位符: {{${key}}}`, 500, { key })
-    }
-    return val
-  })
-  const remaining = rendered.match(/\{\{[^}]*\}\}/)
-  if (remaining !== null) {
-    throw new HelmxError(
-      'unreplaced_skill_placeholder',
-      `技能模板渲染后仍残留未替换占位符 ${remaining[0]}`,
-      500,
-      { placeholder: remaining[0] },
-    )
-  }
-  return rendered
-}
+export { renderSkillTemplate }
 
-/** 解析 superagent 资产目录（兼容 src 与 dist 运行时）。 */
-function resolveSuperagentAssetsDir(): string {
-  const here = dirname(fileURLToPath(import.meta.url))
-  const candidate1 = join(here, 'assets')
-  if (existsSync(candidate1)) return candidate1
-
-  const pkgRoot = resolve(here, '../..')
-  const candidate2 = join(pkgRoot, 'src', 'superagent', 'assets')
-  if (existsSync(candidate2)) return candidate2
-
-  throw new HelmxError(
-    'superagent_asset_missing',
-    `内置 superagent 资产目录未找到（tried: "${candidate1}", "${candidate2}"）`,
-    500,
-    { paths: [candidate1, candidate2] },
-  )
-}
-
-const assetsDir = resolveSuperagentAssetsDir()
+const assetsDir = resolvePluginAssetDir(SUPERAGENT_MANAGED_BY, 'superagent/assets', 'superagent_asset_missing')
 const superagentVars = {
   MANAGED_BY: SUPERAGENT_MANAGED_BY,
 }
@@ -81,25 +38,19 @@ const WATCHDOG_PROFILE_SYSTEM_MD = renderSkillTemplate(
   superagentVars,
 )
 
-const WATCHDOG_PLAYBOOK_SKILL_MD = renderSkillTemplate(
-  readFileSync(join(assetsDir, 'skill', 'SKILL.md'), 'utf-8'),
-  superagentVars,
-)
+const WATCHDOG_PLAYBOOK_LOADED = loadManagedSkillAsset({
+  pluginId: SUPERAGENT_MANAGED_BY,
+  skillId: 'watchdog-playbooks',
+  relativeDir: 'superagent/assets/skill',
+  missingErrorCode: 'superagent_asset_missing',
+  references: ['herdr-stalled.md', 'ci-failure.md', 'code-hang-loop.md'],
+  transform: (raw) => renderSkillTemplate(raw, superagentVars),
+})
 
-const WATCHDOG_PLAYBOOK_HERDR_STALLED_MD = renderSkillTemplate(
-  readFileSync(join(assetsDir, 'skill', 'references', 'herdr-stalled.md'), 'utf-8'),
-  superagentVars,
-)
-
-const WATCHDOG_PLAYBOOK_CI_FAILURE_MD = renderSkillTemplate(
-  readFileSync(join(assetsDir, 'skill', 'references', 'ci-failure.md'), 'utf-8'),
-  superagentVars,
-)
-
-export const WATCHDOG_PLAYBOOK_CODE_HANG_LOOP_MD = renderSkillTemplate(
-  readFileSync(join(assetsDir, 'skill', 'references', 'code-hang-loop.md'), 'utf-8'),
-  superagentVars,
-)
+const WATCHDOG_PLAYBOOK_SKILL_MD = WATCHDOG_PLAYBOOK_LOADED.skillMd
+const WATCHDOG_PLAYBOOK_HERDR_STALLED_MD = WATCHDOG_PLAYBOOK_LOADED.references!['herdr-stalled.md']!
+const WATCHDOG_PLAYBOOK_CI_FAILURE_MD = WATCHDOG_PLAYBOOK_LOADED.references!['ci-failure.md']!
+export const WATCHDOG_PLAYBOOK_CODE_HANG_LOOP_MD = WATCHDOG_PLAYBOOK_LOADED.references!['code-hang-loop.md']!
 
 /** 读取缺失文件检测：ENOENT → false（缺失）；损坏/权限错误原样抛出。 */
 async function fileExists(path: string): Promise<boolean> {

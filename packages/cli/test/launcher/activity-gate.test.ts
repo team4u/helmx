@@ -9,6 +9,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { test } from 'node:test';
 import { useTempDir } from '@helmx/test-kit/node';
+import { controlEndpoint, createControlServer, HUB_CONTROL_PRODUCT, hubControlRecordPath } from '@helmx/env-io';
 import { readProcessStartTime, type HubPidRecord } from '../../src/launcher/records.js';
 import { describeActivityCounts, readHubActivityGate } from '../../src/launcher/activity.js';
 import { captureIo, cleanupPid, spawnAlienProcess } from './fixtures.js';
@@ -219,4 +220,40 @@ test('a held wrapper can prove the heartbeat launch without /proc', { timeout: 6
   assert.deepEqual(await readHubActivityGate(record, dir, io, held), { kind: 'idle' });
   await writeActivity(dir, { ...heartbeat, launchId: 'previous-launch' });
   assert.equal((await readHubActivityGate(record, dir, io, held)).kind, 'unknown');
+});
+
+test('a detached hub without /proc startTime can verify identity via hub-control.json and still fails closed without it', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helmx-activity-ctrl-');
+  const { io } = captureIo();
+  const pid = process.pid;
+  const record = { ...baseRecord(pid, 0, 3202), startTime: undefined };
+  const heartbeat = {
+    schema: 1, launchId: record.launchId, pid, ppid: process.ppid, port: record.port,
+    startTime: null, updatedAt: Date.now(), counts: idleCounts(),
+  };
+  await writeActivity(dir, heartbeat);
+
+  // Without hub-control.json: fail-closed with start-time proof message.
+  const withoutCtrl = await readHubActivityGate(record, dir, io);
+  assert.equal(withoutCtrl.kind, 'unknown');
+  assert.match(withoutCtrl.detail, /start-time proof/);
+
+  // With verified control server answering for this pid: gate passes.
+  const instanceId = 'inst-verify-123';
+  const endpoint = controlEndpoint(dir, instanceId, HUB_CONTROL_PRODUCT);
+  const server = createControlServer({
+    endpoint,
+    instanceId,
+    onStatus: () => ({ pid, state: 'ready', version: '1.0.0' }),
+    onStop: async () => {},
+  });
+  t.after(async () => {
+    await server.close();
+  });
+  await server.listening;
+  await fsp.writeFile(
+    hubControlRecordPath(dir),
+    `${JSON.stringify({ instanceId, endpoint, pid, version: '1.0.0', port: 3202, startedAt: new Date().toISOString() })}\n`,
+  );
+  assert.deepEqual(await readHubActivityGate(record, dir, io), { kind: 'idle' });
 });

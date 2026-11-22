@@ -26,6 +26,7 @@ export function registerWorkflowActions(ctx: HelmxPluginContext, deps: WorkflowA
   ctx.action({
     id: 'list',
     description: 'List saved workflow definitions',
+    exposeToPrompt: false,
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     outputSchema: {
       type: 'object',
@@ -42,6 +43,7 @@ export function registerWorkflowActions(ctx: HelmxPluginContext, deps: WorkflowA
   ctx.action({
     id: 'get',
     description: 'Read the full definition of a saved workflow (read-only source and metadata; Web/AI are read-only, no editing)',
+    exposeToPrompt: false,
     inputSchema: {
       type: 'object',
       properties: { name: { type: 'string', description: 'Saved workflow name' } },
@@ -75,6 +77,7 @@ export function registerWorkflowActions(ctx: HelmxPluginContext, deps: WorkflowA
   ctx.action({
     id: 'save',
     description: 'Save a workflow definition as a cross-conversation asset (script or fromRunId, exactly one; the default name comes from meta.name; overwriting is refused unless overwrite: true)',
+    exposeToPrompt: false,
     inputSchema: {
       type: 'object',
       properties: {
@@ -113,6 +116,7 @@ export function registerWorkflowActions(ctx: HelmxPluginContext, deps: WorkflowA
   ctx.action({
     id: 'delete',
     description: 'Delete a saved workflow definition file (historical run records are unaffected)',
+    exposeToPrompt: false,
     inputSchema: {
       type: 'object',
       properties: { name: { type: 'string', description: 'Saved workflow name' } },
@@ -143,6 +147,7 @@ export function registerWorkflowActions(ctx: HelmxPluginContext, deps: WorkflowA
   ctx.action({
     id: 'runs',
     description: 'List workflow run records',
+    exposeToPrompt: false,
     inputSchema: {
       type: 'object',
       properties: {
@@ -169,6 +174,7 @@ export function registerWorkflowActions(ctx: HelmxPluginContext, deps: WorkflowA
   ctx.action({
     id: 'inspect',
     description: 'Inspect a single workflow run',
+    exposeToPrompt: false,
     inputSchema: {
       type: 'object',
       properties: { runId: { type: 'string', description: 'Run ID' } },
@@ -202,6 +208,7 @@ export function registerWorkflowActions(ctx: HelmxPluginContext, deps: WorkflowA
   ctx.action({
     id: 'abort',
     description: 'Abort a workflow run',
+    exposeToPrompt: false,
     inputSchema: {
       type: 'object',
       properties: { runId: { type: 'string', description: 'Run ID' } },

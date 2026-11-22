@@ -24,6 +24,18 @@ export const composerMessages = {
     en: 'Send the first message to start a new topic; the conversation is created on first send',
     'zh-CN': '发送第一条消息开始新话题；会话将在首次发送时创建',
   },
+  'composer.standby.noModelsTitle': {
+    en: 'No available models configured yet',
+    'zh-CN': '尚未配置可用模型',
+  },
+  'composer.standby.noModelsHint': {
+    en: 'Configure at least one provider API key or custom gateway before sending your first message.',
+    'zh-CN': '发送首条消息前，请先至少配置一个模型供应商密钥或自定义网关。',
+  },
+  'composer.standby.configureModels': {
+    en: 'Open Models & credentials',
+    'zh-CN': '前往配置模型与凭据',
+  },
   'composer.standby.sentInBackgroundTitle': { en: 'Sent and conversation created', 'zh-CN': '已发送并创建会话' },
   'composer.standby.sentInBackgroundBody': { en: 'First message sent to conversation #{id}', 'zh-CN': '首条消息已发送到会话 #{id}' },
   'composer.standby.attachmentRejectedTitle': { en: 'Attachment cannot be staged: {name}', 'zh-CN': '附件无法暂存：{name}' },
@@ -124,6 +136,10 @@ export const composerMessages = {
   'composer.model.emptyCatalog': {
     en: 'No models available; configure a provider key in Models & credentials first',
     'zh-CN': '暂无可用模型；请先在「模型与凭据」配置供应商密钥',
+  },
+  'composer.model.openModelsCenter': {
+    en: 'Configure models',
+    'zh-CN': '前往配置模型',
   },
   'composer.model.noMatches': { en: 'No matching models', 'zh-CN': '没有匹配的模型' },
   'composer.model.thinkingHeader': { en: 'Thinking level', 'zh-CN': '思考档位' },

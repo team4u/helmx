@@ -6,7 +6,7 @@
  * - Manage unified lifecycle (`open` / `initialize` / `start` / `close`);
  * - Expose a strongly-typed facade API for HTTP routes and CLI consumers;
  * - Delegate complex orchestration and operations to cohesive submodules:
- *   `RuntimeNodeOperations`, `RuntimeTriggerDispatcher`, `RuntimeAgentSpawn`,
+ *   `RuntimeTriggerDispatcher`, `RuntimeAgentSpawn`,
  *   `RuntimeOwnershipManager`, `createPluginHostBackend`, and `RuntimeToolRegistry`.
  */
 
@@ -76,7 +76,6 @@ import {
   profileDirectoryHelper,
   summaryOfFallback,
 } from './runtime-helpers.js'
-import type { RuntimeNodeOperations } from './runtime-nodes.js'
 import {
   createGlobalDocumentStore,
   createPluginHostBackend,
@@ -140,7 +139,6 @@ export class KernelRuntime {
   /** Subagent spawning, target resolution, and occupancy snapshot service (connected directly to host backend without double forwarding). */
   readonly agentSpawn!: RuntimeAgentSpawn
   readonly modelsRegistry: ModelRegistry
-  readonly nodeOps: RuntimeNodeOperations
   private readonly svc: AssembledRuntimeServices
 
   readonly documentStore: {
@@ -226,7 +224,6 @@ export class KernelRuntime {
     this.envFabric = this.svc.envFabric
     this.nodeForward = new NodeForwardService(this.svc.envFabric)
     this.nodes = this.svc.nodes
-    this.nodeOps = this.svc.nodeOps
     this.events = this.svc.events
     this.sessionDocEvents = this.svc.sessionDocStreams
     this.conversations = this.svc.conversations
@@ -238,7 +235,7 @@ export class KernelRuntime {
     // like SDK advance never block; public `emitHostEvent` awaits delivery per contract without double-dispatching.
     this.events.setHostDispatcher((event) => this.dispatchInternalEvent(event.type, event))
 
-    this.nodeOps.bindEvents()
+    this.nodes.bindEvents()
 
     // Managed process token
     const managed = this.svc.authSvc.createProcessToken()
@@ -268,7 +265,7 @@ export class KernelRuntime {
   }
 
   private async initialize(): Promise<void> {
-    await this.nodeOps.initialize()
+    await this.nodes.initialize()
     await this.svc.profilesSvc.ensureDefault()
     this.modelsRegistry.setThinkingLevelValidator(async (level) => {
       if (!THINKING_LEVELS.has(level)) {
@@ -548,30 +545,30 @@ export class KernelRuntime {
   }
 
   // ------------------------------------------------------------------
-  // Node management delegation (RuntimeNodeOperations)
+  // Node management delegation (NodeManager)
   // ------------------------------------------------------------------
 
   async listNodes(): Promise<NodeInfo[]> {
-    return this.nodeOps.listNodes()
+    return this.nodes.listNodes()
   }
 
   async issueNodeToken(nodeId: string): Promise<NodeIssuedToken> {
-    return this.nodeOps.issueNodeToken(nodeId)
+    return this.nodes.issueNodeToken(nodeId)
   }
 
   async removeNode(nodeId: string): Promise<void> {
-    return this.nodeOps.removeNode(nodeId)
+    return this.nodes.removeNode(nodeId)
   }
 
   async checkNodeUpgrade(nodeId: string, input?: NodeUpgradeCheckInput): Promise<NodeUpgradeCheckResult> {
-    return this.nodeOps.checkNodeUpgrade(nodeId, input)
+    return this.nodes.checkNodeUpgrade(nodeId, input)
   }
 
   async upgradeNode(
     nodeId: string,
     input?: { targetVersion?: string; registryUrl?: string; force?: boolean },
   ): Promise<NodeUpgradeResult> {
-    return this.nodeOps.upgradeNode(nodeId, input)
+    return this.nodes.upgradeNode(nodeId, input)
   }
 
   async execEnv(
@@ -579,7 +576,7 @@ export class KernelRuntime {
     onChunk?: (chunk: { stream: 'stdout' | 'stderr'; text: string }) => void,
     signal?: AbortSignal,
   ): Promise<EnvExecResponse> {
-    return this.nodeOps.execEnv(req, onChunk, signal)
+    return this.nodes.execEnv(req, onChunk, signal)
   }
 
   // ------------------------------------------------------------------

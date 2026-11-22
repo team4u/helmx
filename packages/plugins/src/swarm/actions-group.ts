@@ -18,6 +18,7 @@ import {
 import {
   checkMemberWorktree,
   cleanupManagedWorktree,
+  inspectManagedWorktree,
   releaseWorktreeHold,
   type CheckedMemberWorktree,
 } from './worktree-bridge.js'
@@ -136,15 +137,18 @@ export function assertCoordinatorAuthority(
 }
 
 export function isWorkerBusy(
-  coordinator: Pick<SwarmCoordinator, 'readConversationOrUndefined' | 'settlingWorkers'>,
+  coordinator: Pick<SwarmCoordinator, 'readConversationOrUndefined' | 'settlingWorkers' | 'groups'>,
   conversationId: number,
   status?: string,
+  groupId?: string,
+  memberName?: string,
 ): boolean {
   const convStatus = status ?? coordinator.readConversationOrUndefined(conversationId)?.status
   return (
     convStatus === 'working' ||
     convStatus === 'blocked' ||
-    coordinator.settlingWorkers.has(conversationId)
+    coordinator.settlingWorkers.has(conversationId) ||
+    (groupId !== undefined && memberName !== undefined && coordinator.groups.hasInflightWakeup(groupId, memberName))
   )
 }
 
@@ -400,7 +404,7 @@ export function createGroupHandlers(
 
         for (const member of activeMembers) {
           const s = readConversationOrUndefined(member.conversationId)
-          if (s === undefined || !isWorkerBusy(coordinator, member.conversationId, s.status)) continue
+          if (s === undefined || !isWorkerBusy(coordinator, member.conversationId, s.status, freshGroup.id, member.name)) continue
           if (input.abortRunning === true) {
             if (s.status === 'working' || s.status === 'blocked') {
               await ctx.host.abortConversationGuarded(member.conversationId, { expectedOwnership: 'helmx' })
@@ -457,12 +461,36 @@ export function createGroupHandlers(
           }
         }
 
-        const retainedWorktrees: RetainedWorktreeInfo[] = []
+        const retainedByWorktreeId = new Map<string, RetainedWorktreeInfo>()
+        // 保留此前 archive_worker({ keepWorktree: true }) 登记且仍存在未合入/脏改动的工作树
+        for (const prev of freshGroup.retainedWorktrees ?? []) {
+          try {
+            const inspected = await inspectManagedWorktree(ctx, prev.worktreeId, signal)
+            const unmergedCommits = inspected.exists ? (inspected.unmergedCommits ?? inspected.commitsAhead ?? 0) : 0
+            if (inspected.exists && (inspected.dirtyFileCount > 0 || unmergedCommits > 0)) {
+              retainedByWorktreeId.set(prev.worktreeId, {
+                memberName: prev.memberName,
+                worktreeId: prev.worktreeId,
+                branch: inspected.currentBranch ?? inspected.record.branch,
+                path: inspected.record.path,
+                commitsAhead: unmergedCommits,
+              })
+            }
+          } catch (err) {
+            if (
+              err instanceof HelmxError &&
+              (err.code === 'not_found' || err.code === 'plugin_disabled' || err.code === 'unknown_action')
+            ) {
+              continue
+            }
+            throw err
+          }
+        }
         for (const item of worktreeChecks) {
           await releaseWorktreeHold(ctx, freshGroup.id, item.member.name, item.worktreeId, signal)
           if (!item.inspected.exists) continue
           if (keepWorktree && (item.isDirty || item.unmergedCommits > 0)) {
-            retainedWorktrees.push({
+            retainedByWorktreeId.set(item.worktreeId, {
               memberName: item.member.name,
               worktreeId: item.worktreeId,
               branch: item.inspected.currentBranch ?? item.inspected.record.branch,
@@ -473,6 +501,7 @@ export function createGroupHandlers(
             await cleanupManagedWorktree(ctx, item.worktreeId, input.force === true, signal)
           }
         }
+        const retainedWorktrees = [...retainedByWorktreeId.values()]
 
         const now = Date.now()
         await groups.mutateGroup(freshGroup.id, (draft) => {

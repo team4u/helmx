@@ -264,7 +264,12 @@ export function createMagpiePlugin(): PluginDefinition {
         gateway,
         fetchImpl,
         onCatalogChange(change) {
-          publishCatalogStatus(change.gateway, change.ok, change.ok ? undefined : change.error)
+          publishCatalogStatus(
+            change.gateway,
+            change.ok,
+            change.ok || change.idle ? undefined : change.error,
+            { clearLastError: change.idle === true },
+          )
         },
       })
       ctx.provider(handle.provider)
@@ -393,7 +398,7 @@ export function createMagpiePlugin(): PluginDefinition {
         snapshot: MagpieGatewayRef,
         reachable: boolean,
         error?: unknown,
-        options?: { skipIfUnchanged?: boolean },
+        options?: { clearLastError?: boolean; skipIfUnchanged?: boolean },
       ): void => {
         if (stopping) return
         const currentModels = modelsForSnapshot(snapshot)
@@ -423,7 +428,7 @@ export function createMagpiePlugin(): PluginDefinition {
               summaryText: summaryTextOf(false, modelCount),
               ...(error !== undefined ? { lastError: sanitizeErrorText(error) } : {}),
             },
-            { skipIfUnchanged: options?.skipIfUnchanged },
+            { clearLastError: options?.clearLastError, skipIfUnchanged: options?.skipIfUnchanged },
           )
         }
       }
@@ -446,10 +451,8 @@ export function createMagpiePlugin(): PluginDefinition {
             modelOwners: modelOwnersOf(cachedModels),
             summaryText: summaryTextOf(false, cachedModels.length),
           })
-          // Non-blocking background refresh: failures only update reachable:false / lastError, never
-          // blocking enablement or kernel startup (provider.refreshModels itself throws -- that is the
-          // explicit signal for the generic catalog refresh; here we take the errors map from
-          // ctx.host.refreshModels and do not reject).
+          // Non-blocking background refresh: configured failures record reachable:false / lastError;
+          // unconfigured default loopback connection refusal stays idle (reachable:false, no error noise).
           void (async () => {
             try {
               if (stopping || controller.signal.aborted) return
@@ -459,6 +462,11 @@ export function createMagpiePlugin(): PluginDefinition {
               const error = result.errors['magpie']
               if (error !== undefined) {
                 publishCatalogStatus(snapshotInner, false, error)
+                return
+              }
+              const idleError = handle.lastIdleError()
+              if (idleError !== undefined && idleError.root === snapshotInner.root) {
+                publishCatalogStatus(snapshotInner, false, undefined, { clearLastError: true })
                 return
               }
               publishCatalogStatus(snapshotInner, true)
@@ -503,6 +511,7 @@ export function createMagpiePlugin(): PluginDefinition {
       ctx.action({
         id: 'status',
         description: 'Magpie gateway status snapshot (reachability, model count, quotas)',
+        exposeToPrompt: false,
         idempotent: true,
         inputSchema: { type: 'object', properties: {}, additionalProperties: false },
         outputSchema: STATUS_OUTPUT_SCHEMA,
@@ -538,6 +547,7 @@ export function createMagpiePlugin(): PluginDefinition {
       ctx.action({
         id: 'refresh',
         description: 'Force-refresh the Magpie model catalog and quota state (failures error explicitly)',
+        exposeToPrompt: false,
         inputSchema: {
           type: 'object',
           properties: {
@@ -574,7 +584,8 @@ export function createMagpiePlugin(): PluginDefinition {
             const changed = !handle.synced() || catalogFingerprint(candidate) !== catalogFingerprint(currentModels)
             if (changed) {
               const result = await ctx.host.refreshModels({ providers: [MAGPIE_PROVIDER_ID], allowNetwork: true, force: true })
-              const error = result.errors['magpie']
+              const idleError = handle.lastIdleError()
+              const error = result.errors['magpie'] ?? (idleError?.root === snapshot.root ? idleError.error : undefined)
               publishCatalogStatus(snapshot, error === undefined, error)
               if (error !== undefined) {
                 throw new HelmxError(
@@ -593,7 +604,8 @@ export function createMagpiePlugin(): PluginDefinition {
           }
 
           const result = await ctx.host.refreshModels({ providers: [MAGPIE_PROVIDER_ID], allowNetwork: true, force: true })
-          const error = result.errors['magpie']
+          const idleError = handle.lastIdleError()
+          const error = result.errors['magpie'] ?? (idleError?.root === snapshot.root ? idleError.error : undefined)
           publishCatalogStatus(snapshot, error === undefined, error)
           if (error !== undefined) {
             throw new HelmxError(
@@ -612,6 +624,7 @@ export function createMagpiePlugin(): PluginDefinition {
       ctx.action({
         id: 'quota',
         description: 'Query Magpie quotas live (GET /v1/magpie/quotas)',
+        exposeToPrompt: false,
         idempotent: true,
         inputSchema: {
           type: 'object',

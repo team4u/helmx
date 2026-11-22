@@ -7,6 +7,7 @@ import { randomBytes } from 'node:crypto';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
+import { isProcessAlive, waitForPidExit } from '@helmx/env-io';
 
 /** Injectable I/O hooks allowing tests to swap real process spawning and stdio. */
 export interface NodeCliIo {
@@ -52,17 +53,7 @@ export const startLockPath = (dataDir: string): string => path.join(dataDir, 'no
 export const logPathOf = (dataDir: string): string => path.join(dataDir, 'node.log');
 
 export function isAliveOf(io: NodeCliIo): (pid: number) => boolean {
-  return (
-    io.isAlive ??
-    ((pid: number) => {
-      try {
-        process.kill(pid, 0);
-        return true;
-      } catch {
-        return false;
-      }
-    })
-  );
+  return io.isAlive ?? isProcessAlive;
 }
 
 /** PID record persisted on disk (`pid`, `instanceId`, `endpoint`) for cross-platform identity verification without `/proc`. */
@@ -145,11 +136,6 @@ export async function removePidFileIfMatch(dataDir: string, expected: PidRecord 
 }
 
 /** Wait until `pid` is no longer alive, returning `false` on timeout. */
-export async function waitForExit(pid: number, timeoutMs: number, isAlive: (pid: number) => boolean): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (!isAlive(pid)) return true;
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  return !isAlive(pid);
+export function waitForExit(pid: number, timeoutMs: number, isAlive: (pid: number) => boolean): Promise<boolean> {
+  return waitForPidExit(pid, timeoutMs, isAlive);
 }

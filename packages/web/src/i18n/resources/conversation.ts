@@ -62,6 +62,9 @@ export const conversationMessages = {
     'zh-CN': '模型或服务请求未成功，未产生回答。',
   },
   'conv.turnFailed.editLatest': { en: 'Edit and resend the latest message', 'zh-CN': '编辑并重发最近一条消息' },
+  'conv.turnFailed.retryNow': { en: 'Retry', 'zh-CN': '立即重试' },
+  'conv.turnFailed.retryTitle': { en: 'Retry the latest message immediately', 'zh-CN': '立即重发最近一条消息' },
+  'conv.turnFailed.retryFailedTitle': { en: 'Retry failed', 'zh-CN': '重试失败' },
 
   // --- Timeline leading states -------------------------------------------------
   'conv.timeline.loadingHistory': { en: 'Loading history…', 'zh-CN': '正在加载历史…' },
@@ -79,6 +82,10 @@ export const conversationMessages = {
   'conv.tool.statusFailed': { en: 'Failed', 'zh-CN': '失败' },
   'conv.tool.statusCompleted': { en: 'Completed', 'zh-CN': '完成' },
   'conv.tool.viewLabel': { en: 'Tool view {name}', 'zh-CN': '工具视图 {name}' },
+  'conv.tool.showIo': { en: 'Show input & output', 'zh-CN': '查看输入与输出' },
+  'conv.tool.hideIo': { en: 'Hide input & output', 'zh-CN': '收起输入与输出' },
+  'conv.tool.showIoAria': { en: 'Show input & output for {name}', 'zh-CN': '查看 {name} 的输入与输出' },
+  'conv.tool.hideIoAria': { en: 'Hide input & output for {name}', 'zh-CN': '收起 {name} 的输入与输出' },
 
   // --- Thinking / step groups ----------------------------------------------------
   'conv.thinking.stepsActive': { en: 'Thinking ({count} steps)…', 'zh-CN': '正在思考 ({count} 步)…' },
@@ -108,6 +115,7 @@ export const conversationMessages = {
   'conv.turn.completedAt': { en: 'Completed at {time}', 'zh-CN': '完成于 {time}' },
   'conv.turn.took': { en: 'Took {duration}', 'zh-CN': '耗时 {duration}' },
   'conv.turn.forkFromHere': { en: 'Fork a new conversation from here', 'zh-CN': '从此处分叉新会话' },
+  'conv.turn.regenerate': { en: 'Regenerate response', 'zh-CN': '重新生成回复' },
 
   // --- Conversation pane header / errors ---------------------------------------------
   'conv.pane.loadFailed': { en: 'Conversation #{id} failed to load: {error}', 'zh-CN': '会话 #{id} 加载失败：{error}' },
@@ -366,6 +374,9 @@ export const conversationMessages = {
   // --- Generic tool body ------------------------------------------------------------------------------
   'conv.generic.input': { en: 'Input', 'zh-CN': '入参' },
   'conv.generic.output': { en: 'Output', 'zh-CN': '输出' },
+  'conv.generic.copyOutput': { en: 'Copy output', 'zh-CN': '复制输出' },
+  'conv.generic.executing': { en: 'Executing; no output yet.', 'zh-CN': '执行中，暂无输出。' },
+  'conv.generic.noOutput': { en: '(no output)', 'zh-CN': '（无输出）' },
 
   // --- Tool row stats (tool-body-model) ------------------------------------------------------------------
   'conv.stats.appliedDiff': { en: 'Applied diff stats', 'zh-CN': '已应用差异统计' },

@@ -47,7 +47,7 @@ export async function readNodeIdentityStrict(dataDir: string): Promise<{ nodeId:
   const identity = await readNodeIdentity(dataDir);
   if (identity === null) {
     throw new UsageError(
-      `node identity not found (${path.join(dataDir, 'node.json')}); bind one first with helmx-node connect <hubUrl> --token <token>`,
+      `node identity not found (${path.join(dataDir, 'node.json')}); bind one first with helmx-node start -d --hub <hubUrl> --token <token> (or helmx-node connect <hubUrl> --token <token>)`,
       'missing_identity',
     );
   }

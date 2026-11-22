@@ -788,6 +788,8 @@ describe('Workflow 三区零重复与无损呈现', () => {
         btn.click()
       })
       assert.equal(btn.getAttribute('aria-expanded'), 'true', '前置错误行点击后原地展开详情')
+      const details = errorMount.container.querySelector('details.tool-call-details') as HTMLDetailsElement | null
+      assert.ok(details !== null && details.open === true, '点击一次直接展开 ToolCallDetails，无二次折叠')
       assert.ok(errorMount.container.textContent?.includes('Invalid nodeId parameter'))
     } finally {
       errorMount.unmount()

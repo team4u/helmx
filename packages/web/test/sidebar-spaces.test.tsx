@@ -752,3 +752,66 @@ test('Sidebar 会话行全行命中与非模态菜单：点击行外缘/meta 区
   })
   assert.deepEqual(store.getPrimaryTarget(), { kind: 'agent', profileId: 'assistant' }, '点击站位计数徽标直达待命')
 })
+
+test('Sidebar 独立折叠箭头与批量筛选全选安全：箭头折叠不导航，筛选下全选仅选可见项且过滤收窄自动裁剪', { timeout: 60_000 }, async () => {
+  const store = makeStore()
+  render(store, e(LiveSidebar))
+  await act(async () => {})
+
+  // 1) Independent chevron on coder expands its sub-list without changing primaryTarget
+  const coderStanding = [...document.body.querySelectorAll('.agent-standing')].find((el) =>
+    el.querySelector('.agent-standing-row')?.textContent?.includes('编码专员'),
+  )!
+  assert.ok(coderStanding.querySelector('.agent-conversations-list') === null, '初始 coder 子列表收起')
+  const coderToggle = coderStanding.querySelector<HTMLButtonElement>('button.agent-standing-toggle')!
+  assert.ok(coderToggle !== null, '有历史会话的智能体行提供独立折叠箭头按钮')
+  assert.equal(coderToggle.getAttribute('aria-expanded'), 'false')
+  await act(async () => {
+    coderToggle.click()
+  })
+  assert.equal(coderToggle.getAttribute('aria-expanded'), 'true')
+  assert.ok(coderStanding.querySelector('.agent-conversations-list') !== null, '点击折叠箭头展开子列表')
+  assert.deepEqual(store.getPrimaryTarget(), { kind: 'conversation', conversationId: 1 }, '点击折叠箭头不触发导航')
+
+  await act(async () => {
+    coderToggle.click()
+  })
+  assert.equal(coderToggle.getAttribute('aria-expanded'), 'false')
+  assert.ok(coderStanding.querySelector('.agent-conversations-list') === null, '再次点击折叠箭头收起子列表')
+
+  // 2) Filtered batch Select all only selects visible conversations (never hidden ones)
+  const filterBtn = document.body.querySelector<HTMLButtonElement>('button[aria-label="Filter agents and topics"]')!
+  await act(async () => {
+    filterBtn.click()
+  })
+  const searchInput = document.body.querySelector<HTMLInputElement>('.sidebar-search-input')!
+  await act(async () => {
+    setInputValue(searchInput, '重构')
+  })
+  const bulkBtn = document.body.querySelector<HTMLButtonElement>('button[aria-label="Manage conversations in bulk"]')!
+  await act(async () => {
+    bulkBtn.click()
+  })
+  const selectAllBtn = [...document.body.querySelectorAll<HTMLButtonElement>('.sidebar-batch-bar button')].find((b) =>
+    b.textContent?.includes('Select all'),
+  )!
+  assert.ok(selectAllBtn !== undefined)
+  await act(async () => {
+    selectAllBtn.click()
+  })
+  assert.match(
+    document.body.querySelector('.batch-bar-count')?.textContent ?? '',
+    /1 selected/,
+    '筛选态全选仅选中当前可见的 1 条会话（不误选隐藏的 3 条）',
+  )
+
+  // Narrowing filter further prunes hidden selections from selectedIds
+  await act(async () => {
+    setInputValue(searchInput, '周末')
+  })
+  assert.match(
+    document.body.querySelector('.batch-bar-count')?.textContent ?? '',
+    /0 selected/,
+    '筛选条件变化导致已选会话不可见时自动裁剪 selectedIds',
+  )
+})

@@ -568,18 +568,17 @@ function useHighlightScroll(
  * authoritative state source); no new persisted timeline item — when lastError is empty show a clear generic message, never fabricated details. */
 function TurnErrorNotice({
   conversation,
-  detailEntries,
+  editTarget,
   onRequestEdit,
+  onRetryTurn,
 }: {
   conversation: ConversationSummary
-  detailEntries: ReadonlyArray<ConversationEntry>
+  editTarget: EditRequestTarget | undefined
   onRequestEdit: (target: EditRequestTarget) => void
+  onRetryTurn: (target: EditRequestTarget) => Promise<void>
 }) {
-  // Latest editable human input: reuse the same safe resolution as Composer ↑ (validates entryId,
-  // never crosses a reset boundary, reuses existing attachments); without a reliable anchor there is
-  // no quick action — never risk editing the wrong old message.
   const { t } = useWebLocale()
-  const editTarget = useMemo(() => lastEditableHumanInput(detailEntries), [detailEntries])
+  const [retrying, setRetrying] = useState(false)
   return (
     <div className="callout callout--error" role="alert" aria-label={t('conv.turnFailed.label')}>
       <HelmxIcon name="alert-triangle" size={12} />
@@ -590,9 +589,25 @@ function TurnErrorNotice({
             {' '}
             <button
               type="button"
+              className="btn btn-primary btn-xs"
+              title={t('conv.turnFailed.retryTitle')}
+              aria-label={t('conv.turnFailed.retryTitle')}
+              disabled={retrying}
+              onClick={() => {
+                setRetrying(true)
+                void onRetryTurn(editTarget).finally(() => setRetrying(false))
+              }}
+            >
+              <HelmxIcon name={retrying ? 'loader' : 'rotate-cw'} size={12} className={retrying ? 'spin-slow' : undefined} />
+              {t('conv.turnFailed.retryNow')}
+            </button>
+            {' '}
+            <button
+              type="button"
               className="btn btn-ghost btn-sm"
               title={t('conv.turnFailed.editLatest')}
               aria-label={t('conv.turnFailed.editLatest')}
+              disabled={retrying}
               onClick={() => onRequestEdit(editTarget)}
             >
               <HelmxIcon name="edit" size={12} />
@@ -1247,6 +1262,8 @@ export function ConversationTimeline({
     if (detailsReady) beginInitialBottomCalibration()
   }, [contentFingerprint, detailEntries, lastHumanKey, detailsReady, conversation.id, beginInitialBottomCalibration, syncScrollBottomVisibility])
 
+  // Latest editable human input (shared by TurnErrorNotice Retry and latest AssistantTurn Regenerate).
+  const latestRetryTarget = useMemo(() => lastEditableHumanInput(detailEntries), [detailEntries])
   const loading = !detailsReady
 
   const loadEarlierEntries = (): void => {
@@ -1389,6 +1406,11 @@ export function ConversationTimeline({
                 isLatestTurn={item.key === lastAssistantKey}
                 processShortcut={processToggle?.turnKey === item.key ? processToggle.command : undefined}
                 onForkFromHere={entryActions.forkFromHere}
+                onRegenerate={
+                  item.key === lastAssistantKey && !isWorking && !sendingPending && latestRetryTarget !== undefined
+                    ? () => entryActions.retryTurn(latestRetryTarget)
+                    : undefined
+                }
               />
             </div>
           )
@@ -1409,7 +1431,12 @@ export function ConversationTimeline({
           <ResolvedAskRow key={`ask:${ask.id}`} ask={ask} status={status} />
         ))}
         {conversation.status === 'error' ? (
-          <TurnErrorNotice conversation={conversation} detailEntries={detailEntries} onRequestEdit={onRequestEdit} />
+          <TurnErrorNotice
+            conversation={conversation}
+            editTarget={latestRetryTarget}
+            onRequestEdit={onRequestEdit}
+            onRetryTurn={entryActions.retryTurn}
+          />
         ) : null}
         </div>
       </TimelineToolCallsContext.Provider>

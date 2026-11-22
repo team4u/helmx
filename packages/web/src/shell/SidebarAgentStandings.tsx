@@ -99,13 +99,24 @@ function AgentStandingItem({
   selectedIds?: Set<number>
   onToggleSelect?: (id: number) => void
 }) {
+  const { t } = useWebLocale()
   // Batch mode: whenever the agent has conversations (length > 0), expand the
   // sub-list to show conversation rows for checkbox deletion; the bot's main
   // standing row always represents the profile itself and never carries a
   // checkbox, so users cannot accidentally select a bot.
   const hasSubList = agent.conversations.length > 0
   const [expanded, setExpanded] = useState(true)
+  const [manualOpen, setManualOpen] = useState<boolean | null>(null)
   const [showAll, setShowAll] = useState(false)
+
+  const isActiveProfile = activeProfileIds.has(agent.profileId)
+  const prevActiveRef = useRef(isActiveProfile)
+  useEffect(() => {
+    if (isActiveProfile && !prevActiveRef.current) {
+      setManualOpen(null)
+    }
+    prevActiveRef.current = isActiveProfile
+  }, [isActiveProfile])
 
   const standbyPresence = getAgentStandbyPresence(store, agent.profileId)
   const hasActiveChild = agent.conversations.some((c) => {
@@ -123,15 +134,24 @@ function AgentStandingItem({
     () => resolveStandingStatusIndicator(agent.conversations, background),
     [agent.conversations, background],
   )
-  // No fold button: expansion derives from the filter state or the current
-  // main/split targets (supporting collaborative expansion of two split agents).
+  const autoOpen = searching || isActiveProfile
   const isOpen = batchMode
     ? hasSubList && expanded
-    : hasSubList && (searching || activeProfileIds.has(agent.profileId))
+    : hasSubList && (searching ? true : manualOpen !== null ? manualOpen : autoOpen)
   const hasStandingLight =
     !isOpen &&
     standingIndicator !== null &&
     resolveStatusLight(standingIndicator.representative.status, standingIndicator.backgroundActive).dotClass !== null
+
+  const toggleSubList = (e: MouseEvent): void => {
+    e.stopPropagation()
+    if (!hasSubList) return
+    if (batchMode) {
+      setExpanded((v) => !v)
+      return
+    }
+    setManualOpen(!isOpen)
+  }
 
   const openPrimary = (keepDrawerOpen: boolean) => {
     if (batchMode) {
@@ -181,6 +201,28 @@ function AgentStandingItem({
           handleStandingActivate(e)
         }}
       >
+        {hasSubList ? (
+          <button
+            type="button"
+            className="agent-standing-toggle"
+            aria-expanded={isOpen}
+            aria-label={t(isOpen ? 'shell.agents.collapseTopics' : 'shell.agents.expandTopics', { label: agent.label })}
+            title={t(isOpen ? 'shell.agents.collapseTopics' : 'shell.agents.expandTopics', { label: agent.label })}
+            onClick={toggleSubList}
+          >
+            <span className="nav-status-slot">
+              {hasStandingLight && standingIndicator !== null ? (
+                <StandingStatusDot indicator={standingIndicator} />
+              ) : (
+                <HelmxIcon
+                  name={isOpen ? 'chevron-down' : 'chevron-right'}
+                  size={12}
+                  className="agent-standing-chevron"
+                />
+              )}
+            </span>
+          </button>
+        ) : null}
         <button
           type="button"
           className="nav-item-main nav-open"
@@ -188,17 +230,15 @@ function AgentStandingItem({
           disabled={!canOpenStanding}
           aria-current={standbyPresence.active ? 'page' : undefined}
         >
-          <span className="nav-status-slot">
-            {hasStandingLight && standingIndicator !== null ? (
-              <StandingStatusDot indicator={standingIndicator} />
-            ) : (
+          {!hasSubList ? (
+            <span className="nav-status-slot">
               <HelmxIcon
-                name={isOpen ? 'chevron-down' : hasSubList ? 'chevron-right' : 'bot'}
+                name="bot"
                 size={12}
                 className="agent-standing-chevron"
               />
-            )}
-          </span>
+            </span>
+          ) : null}
           <span className="nav-item-label">{agent.label}</span>
         </button>
         <span className="nav-item-meta">
@@ -449,10 +489,26 @@ export function AgentStandingsGroup({
     [store, onNavigate],
   )
 
+  // Derive batch-selectable ids strictly from visibleStandings so filtering
+  // then clicking "Select all" / "Delete" can never wipe hidden conversations.
   const allDeletableIds = useMemo(() => {
-    const allConvs = agentStandings.flatMap((a) => a.conversations)
-    return filterDeletableConversations(allConvs).map((c) => c.id)
-  }, [agentStandings])
+    const visibleConvs = visibleStandings.flatMap((a) => a.conversations)
+    return filterDeletableConversations(visibleConvs).map((c) => c.id)
+  }, [visibleStandings])
+
+  useEffect(() => {
+    const allowed = new Set(allDeletableIds)
+    setSelectedIds((prev) => {
+      if (prev.size === 0) return prev
+      let changed = false
+      const next = new Set<number>()
+      for (const id of prev) {
+        if (allowed.has(id)) next.add(id)
+        else changed = true
+      }
+      return changed ? next : prev
+    })
+  }, [allDeletableIds])
 
   const isAllSelected = allDeletableIds.length > 0 && allDeletableIds.every((id) => selectedIds.has(id))
 

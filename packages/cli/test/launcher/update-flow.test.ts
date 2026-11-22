@@ -14,9 +14,9 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { useTempDir, sanitizedHostEnv } from '@helmx/test-kit/node';
 import { readBlockedRelease, readCurrentRelease, writeBlockedRelease, writeCurrentRelease } from '@helmx/env-io';
+import { stageHubRelease } from '@helmx/env-io/hub-payload';
 import { readPidRecord, readLaunchConfig, writePidRecord } from '../../src/launcher/records.js';
 import { performHubUpdate, checkHubUpgrade, type PerformUpdateOptions } from '../../src/launcher/update.js';
-import { stageHubRelease } from '../../src/launcher/staging.js';
 import { startHub, stopHub } from '../../src/launcher/process.js';
 import { UsageError } from '../../src/launcher/io.js';
 import {

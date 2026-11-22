@@ -3,7 +3,7 @@ import type { CredentialSummary, ProviderConfig } from '@helmx/protocol'
 import { CliError } from '../errors.js'
 import { flagValue, parseFlags } from '../args.js'
 import type { CommandContext, CommandSpec } from './shared.js'
-import { parseNoFlags, printResult, requireJsonInput, requirePositional } from './shared.js'
+import { assertNoExtraPositionals, parseNoFlags, printResult, requireJsonInput, requirePositional, resolveSecretValue } from './shared.js'
 
 export function providersCommands(): CommandSpec[] {
   const cmds: CommandSpec[] = []
@@ -24,10 +24,11 @@ export function providersCommands(): CommandSpec[] {
     flags: [{ name: 'input', type: 'json', required: true, help: 'ProviderConfig[] JSON array' }],
     async run(ctx: CommandContext) {
       const parsed = parseFlags([{ name: 'input', type: 'json', required: true }], ctx.args)
+      assertNoExtraPositionals(parsed.positionals, 0)
       const input = requireJsonInput(parsed.flags)
       if (!Array.isArray(input)) throw new CliError('--input must be a complete JSON array (ProviderConfig[])', 'invalid_flag_value')
       const hub = await ctx.hub()
-      printResult(ctx, await hub.put<ProviderConfig[]>('/api/providers', input))
+      printResult(ctx, await hub.put<ProviderConfig[]>('/api/providers', { providers: input }))
     },
   })
 
@@ -44,13 +45,19 @@ export function providersCommands(): CommandSpec[] {
   cmds.push({
     path: ['credentials', 'set'],
     description: 'Set a server-side credential (PUT /api/credentials/:id; write-only, plaintext cannot be read back)',
-    flags: [{ name: 'value', type: 'string', required: true }],
+    flags: [{ name: 'value', type: 'string', help: 'secret value (prompts masked in a TTY or reads from stdin when omitted)' }],
     positional: '<id>',
     async run(ctx: CommandContext) {
-      const parsed = parseFlags([{ name: 'value', type: 'string', required: true }], ctx.args)
+      const parsed = parseFlags([{ name: 'value', type: 'string' }], ctx.args)
       const id = requirePositional(parsed.positionals, 0, 'id')
+      assertNoExtraPositionals(parsed.positionals, 1)
+      const value = await resolveSecretValue(ctx, flagValue<string>(parsed.flags, 'value'), {
+        flagName: 'value',
+        prompt: `Credential value for ${id}: `,
+        missingCode: 'missing_required_flag',
+      })
       const hub = await ctx.hub()
-      printResult(ctx, await hub.put<unknown>(`/api/credentials/${encodeURIComponent(id)}`, { value: flagValue<string>(parsed.flags, 'value') }))
+      printResult(ctx, await hub.put<unknown>(`/api/credentials/${encodeURIComponent(id)}`, { value }))
     },
   })
 
@@ -61,6 +68,7 @@ export function providersCommands(): CommandSpec[] {
     async run(ctx: CommandContext) {
       const parsed = parseFlags([], ctx.args)
       const id = requirePositional(parsed.positionals, 0, 'id')
+      assertNoExtraPositionals(parsed.positionals, 1)
       const hub = await ctx.hub()
       printResult(ctx, await hub.delete<unknown>(`/api/credentials/${encodeURIComponent(id)}`))
     },

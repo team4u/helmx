@@ -1,4 +1,6 @@
 /** OS startup service management for the local Hub (`launchd` / `systemd --user` / `schtasks`). */
+import { realpathSync } from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { installOsService, uninstallOsService, getOsServiceStatus, type OsServiceProfile, type OsServiceStatus } from '@helmx/env-io'
@@ -9,9 +11,31 @@ import { assertNoExtraPositionals, requirePositional, type CommandSpec } from '.
 const ACTIONS = ['install', 'uninstall', 'status'] as const
 type ServiceAction = (typeof ACTIONS)[number]
 
-/** The `helmx` CLI entrypoint this process runs from (dist/index.js — services need compiled entries). */
-function cliSelfEntry(): string {
-  return fileURLToPath(import.meta.url)
+/**
+ * Resolve the compiled CLI entrypoint (`dist/index.js`, or bundled `index.js`) required by OS
+ * service managers (which invoke `node <entry> start` without `tsx`). Rejects unbuilt `.ts` source
+ * with `missing_build` (mirrors `@helmx/node` `resolveServiceEntry`).
+ */
+export function resolveCliServiceEntry(selfPath: string = fileURLToPath(import.meta.url)): string {
+  const self = path.resolve(selfPath)
+  // Single-file npm deliverable (`.../index.js`) or already `dist/index.js`.
+  if (path.basename(self) === 'index.js') return self
+  const candidates = [
+    path.resolve(path.dirname(self), '..', 'index.js'),
+    path.resolve(path.dirname(self), '..', '..', 'dist', 'index.js'),
+  ]
+  for (const candidate of candidates) {
+    try {
+      return realpathSync(candidate)
+    } catch {
+      // Try next compiled artifact candidate.
+    }
+  }
+  const expected = candidates[candidates.length - 1]!
+  throw new CliError(
+    `service entrypoint must be the compiled artifact (${expected}), which was not found while running from source; run pnpm build in the repository first`,
+    'missing_build',
+  )
 }
 
 /** Hub service identity and invocation: `helmx start` in the foreground under the OS supervisor. */
@@ -27,25 +51,33 @@ function hubServiceProfile(dataDir: string, explicitDataDir?: string): OsService
 }
 
 async function runServiceAction(action: ServiceAction, ctx: Parameters<NonNullable<CommandSpec['run']>>[0], dataDirFlag: string | undefined): Promise<number> {
-  const dataDir = dataDirFlag !== undefined ? path.resolve(ctx.cwd, dataDirFlag) : (ctx.env.HELMX_DATA_DIR && ctx.env.HELMX_DATA_DIR !== '' ? ctx.env.HELMX_DATA_DIR : path.join(await import('node:os').then((os) => os.homedir()), '.helmx'))
-  const entry = cliSelfEntry()
+  const dataDir = dataDirFlag !== undefined
+    ? path.resolve(ctx.cwd, dataDirFlag)
+    : (ctx.env.HELMX_DATA_DIR && ctx.env.HELMX_DATA_DIR !== '' ? ctx.env.HELMX_DATA_DIR : path.join(os.homedir(), '.helmx'))
+  const entry = resolveCliServiceEntry()
   if (action === 'install') {
     const result = await installOsService(entry, dataDir, hubServiceProfile(dataDir, dataDirFlag))
+    if (!result.ok) {
+      throw new CliError(result.message, 'service_error', 1, { action, ...result })
+    }
     if (ctx.json) {
       ctx.io.out(`${JSON.stringify({ action, ...result }, null, 2)}\n`)
     } else {
       ctx.io.out(`${result.message}\nconfig: ${result.configPath}\n${result.targetPath !== undefined ? `active:  ${result.targetPath}\n` : ''}the service runs "helmx start" (foreground); the OS supervisor restarts it on failure and at login\n`)
     }
-    return result.ok ? 0 : 1
+    return 0
   }
   if (action === 'uninstall') {
     const result = await uninstallOsService(entry, dataDir, hubServiceProfile(dataDir))
+    if (!result.ok) {
+      throw new CliError(result.message, 'service_error', 1, { action, ...result })
+    }
     if (ctx.json) {
       ctx.io.out(`${JSON.stringify({ action, ...result }, null, 2)}\n`)
     } else {
       ctx.io.out(`${result.message}\n`)
     }
-    return result.ok ? 0 : 1
+    return 0
   }
   const status: OsServiceStatus = await getOsServiceStatus(entry, dataDir, hubServiceProfile(dataDir))
   if (ctx.json) {

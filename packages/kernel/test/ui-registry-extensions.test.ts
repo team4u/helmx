@@ -68,9 +68,6 @@ test('markdown.codeBlock: validates languages shape, rejects duplicates, require
     () => ui.registerUi('p1', 'markdown.codeBlock', { id: 'bad5', languages: ['a'] }, 'markdownCodeBlock'),
     isHelmxError('invalid_ui_spec'),
   );
-
-  // assertUiDocsRegistered is now a no-op hook without doc-ref checks: never throws for any args
-  ui.assertUiDocsRegistered('p1', () => false, () => false);
 });
 
 test('ui.action: requires actionId or client and enforces field ownership', { timeout: 60_000 }, () => {
@@ -361,9 +358,8 @@ test('clear/remove releases registered names and UI declarations', { timeout: 60
   registerProfileRuntime(ui, 'a', 'worker');
   ui.registerUi('a', 'sidebar.item', { id: 's1', label: 'S', docs: ['d1'] }, 'sidebarItem');
 
-  // clear drops all specs: doc checks are waived and other plugins may claim those names
+  // clear drops all specs: other plugins may claim those names
   ui.clear('a');
-  ui.assertUiDocsRegistered('a', () => false); // passes with zero specs
   assert.equal(ui.getUiByPlugin('a').length, 0);
 
   registerCommand(ui, 'b', 'cmd', 'wf');

@@ -1,7 +1,7 @@
 /**
  * `@helmx/node`: cross-platform managed node daemon package (`helmx-node`).
  *
- * Exports daemon lifecycle (`createNodeDaemon`, `runNodeDaemon`, `runNodeDaemonHandle`),
+ * Exports daemon lifecycle (`createNodeDaemon`, `runNodeDaemonHandle`),
  * the per-connection environment RPC server (`createNodeEnvRpcServer`), upgrade/doctor/service
  * primitives, and the CLI runner (`runNodeCli`).
  */
@@ -17,7 +17,6 @@ export {
   parseJoinToken,
   readNodeIdentity,
   resolveNodeDataDir,
-  runNodeDaemon,
   runNodeDaemonHandle,
   writeNodeIdentity,
   type HubSideFunctions,

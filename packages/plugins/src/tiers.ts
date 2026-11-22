@@ -227,6 +227,7 @@ export function createTiersPlugin(): PluginDefinition {
       ctx.action({
         id: 'list',
         description: 'List configured model tiers (with live availability), saved preset templates, and catalog injection state',
+        exposeToPrompt: false,
         idempotent: true,
         inputSchema: { type: 'object', properties: {}, additionalProperties: false },
         outputSchema: LIST_OUTPUT_SCHEMA,
@@ -236,6 +237,7 @@ export function createTiersPlugin(): PluginDefinition {
       ctx.action({
         id: 'set',
         description: 'Create or update one model tier binding (tier/<id> -> concrete provider/model, optional thinkingLevel and description)',
+        exposeToPrompt: false,
         inputSchema: {
           type: 'object',
           required: ['id', 'model'],
@@ -293,6 +295,7 @@ export function createTiersPlugin(): PluginDefinition {
       ctx.action({
         id: 'remove',
         description: 'Delete a model tier binding (rejects with 409 model_tier_in_use if referenced by defaults or Profiles unless force: true)',
+        exposeToPrompt: false,
         inputSchema: {
           type: 'object',
           required: ['id'],
@@ -378,6 +381,7 @@ export function createTiersPlugin(): PluginDefinition {
       ctx.action({
         id: 'save_template',
         description: 'Save a reusable tier preset template (defaults to snapshotting the currently active tiers when tiers is omitted)',
+        exposeToPrompt: false,
         cli: { command: ['tiers', 'save-template'] },
         inputSchema: {
           type: 'object',
@@ -442,6 +446,7 @@ export function createTiersPlugin(): PluginDefinition {
       ctx.action({
         id: 'apply_template',
         description: 'Switch the active model tiers roster to a saved preset template in one step',
+        exposeToPrompt: false,
         cli: { command: ['tiers', 'apply-template'] },
         inputSchema: {
           type: 'object',
@@ -487,6 +492,7 @@ export function createTiersPlugin(): PluginDefinition {
       ctx.action({
         id: 'delete_template',
         description: 'Delete a saved tier preset template (does not affect currently active tiers)',
+        exposeToPrompt: false,
         cli: { command: ['tiers', 'delete-template'] },
         inputSchema: {
           type: 'object',

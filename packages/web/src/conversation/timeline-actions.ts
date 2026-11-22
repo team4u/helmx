@@ -19,6 +19,8 @@ export interface TimelineEntryActions {
   forkFromHere: (entryId: string) => Promise<void>
   /** 撤回排队输入并转入编辑：按撤回结果选择原地编辑锚点或警告提示（不抛出）。 */
   withdrawQueuedForEdit: (subId: string, target: EditRequestTarget) => Promise<void>
+  /** 一键原地重发最近一条可编辑人类消息（覆盖该条及后续回复，复用附件；失败显式通知）。 */
+  retryTurn: (target: EditRequestTarget) => Promise<void>
 }
 
 export function useTimelineEntryActions(
@@ -78,5 +80,25 @@ export function useTimelineEntryActions(
     }
   })
 
-  return { forkFromHere, withdrawQueuedForEdit }
+  const retryTurn = useStableCallback(async (target: EditRequestTarget): Promise<void> => {
+    try {
+      const attachmentIds = target.attachments?.map((a) => a.id).filter(Boolean)
+      await conversationsApi.submitInput(conversation.id, {
+        text: target.text,
+        origin: 'human',
+        replaceFromEntryId: target.entryId,
+        ...(attachmentIds !== undefined && attachmentIds.length > 0 ? { attachments: attachmentIds } : {}),
+      })
+    } catch (err) {
+      pushNotice({
+        type: 'notification',
+        level: 'error',
+        title: t('conv.turnFailed.retryFailedTitle'),
+        body: err instanceof Error ? err.message : String(err),
+        conversationId: conversation.id,
+      })
+    }
+  })
+
+  return { forkFromHere, withdrawQueuedForEdit, retryTurn }
 }

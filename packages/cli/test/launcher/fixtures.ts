@@ -25,8 +25,8 @@ import fsp from 'node:fs/promises';
 import net from 'node:net';
 import path from 'node:path';
 import { killProcessTree } from '@helmx/env-io';
+import { defaultHubUpdateCore, type HubUpdateCore } from '@helmx/env-io/hub-payload';
 import * as tar from 'tar';
-import { defaultUpdateCore, type UpdateCore } from '../../src/launcher/update-core.js';
 import type { LauncherIo } from '../../src/launcher/io.js';
 
 export type FakePayloadMode =
@@ -367,7 +367,7 @@ export interface FakeCoreOptions {
   failNpm?: Error;
 }
 
-export interface FakeUpdateCore extends UpdateCore {
+export interface FakeUpdateCore extends HubUpdateCore {
   npmCalls: string[][];
   /** dist-tags observed through `fetchLatestVersion` (asserts channel routing). */
   tagsSeen: string[];
@@ -383,7 +383,7 @@ export interface FakeUpdateCore extends UpdateCore {
  */
 export function createFakeCore(options: FakeCoreOptions): FakeUpdateCore {
   const pack = fixtureTarballPacker();
-  const real = defaultUpdateCore();
+  const real = defaultHubUpdateCore();
   const core: FakeUpdateCore = {
     npmCalls: [],
     tagsSeen: [],

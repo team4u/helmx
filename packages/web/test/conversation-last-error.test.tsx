@@ -85,12 +85,13 @@ test('timeline SSR：非 error 状态不渲染失败诊断块', { timeout: 60_00
   assert.doesNotMatch(html, /role="alert"/)
 })
 
-test('timeline SSR：失败卡为最近可编辑 human 输入提供编辑并重发；无可靠锚点时不提供', { timeout: 60_000 }, () => {
-  // 有可靠 human 输入锚点：提供快捷操作。
+test('timeline SSR：失败卡为最近可编辑 human 输入提供一键重试与编辑重发；无可靠锚点时不提供', { timeout: 60_000 }, () => {
+  // 有可靠 human 输入锚点：提供一键重试与编辑并重发快捷操作。
   const withHuman = renderTimelineHtml(
     baseConversation({ status: 'error', lastError: 'model_error: boom' }),
     [{ id: '5', kind: 'helmx.input', data: { text: '想重发的问题', origin: 'human' } }],
   )
+  assert.match(withHuman, /Retry/)
   assert.match(withHuman, /Edit and resend the latest message/)
 
   // 无任何可编辑 human 输入（仅 agent 汇报）：不提供快捷操作，不误编辑旧消息。
@@ -100,6 +101,18 @@ test('timeline SSR：失败卡为最近可编辑 human 输入提供编辑并重�
   )
   assert.doesNotMatch(withoutHuman, /Edit and resend the latest message/)
   assert.match(withoutHuman, /role="alert"/)
+})
+
+test('timeline SSR：最新已完成助手回复展示一键重新生成操作；运行中隐藏', { timeout: 60_000 }, () => {
+  const entries: ConversationEntry[] = [
+    { id: '1', kind: 'helmx.input', data: { text: '帮我总结', origin: 'human' } },
+    { id: '2', kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: '这是回复。' }] }] },
+  ]
+  const idleHtml = renderTimelineHtml(baseConversation({ status: 'done' }), entries)
+  assert.match(idleHtml, /aria-label="Regenerate response"/, 'idle latest assistant turn exposes Regenerate button')
+
+  const workingHtml = renderTimelineHtml(baseConversation({ status: 'working' }), entries)
+  assert.doesNotMatch(workingHtml, /aria-label="Regenerate response"/, 'working conversation hides Regenerate button')
 })
 
 test('conversationStatusTooltip：error 附带 lastError 诊断摘要', { timeout: 60_000 }, () => {

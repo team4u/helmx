@@ -193,9 +193,6 @@ importers:
       '@helmx/protocol':
         specifier: workspace:*
         version: link:../protocol
-      tar:
-        specifier: 7.5.23
-        version: 7.5.23
     devDependencies:
       '@helmx/plugin-build':
         specifier: workspace:*
@@ -203,6 +200,9 @@ importers:
       '@helmx/test-kit':
         specifier: workspace:*
         version: link:../test-kit
+      tar:
+        specifier: 7.5.23
+        version: 7.5.23
 
   packages/env-io:
     dependencies:

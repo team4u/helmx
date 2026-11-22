@@ -13,6 +13,7 @@ import { HelmxError, isJsonObject } from '@helmx/protocol'
 import type { ConversationSummary } from '@helmx/protocol'
 
 export const TRIGGERS_PLUGIN_ID = 'builtin:triggers'
+export const TRIGGERS_SKILL_ID = 'triggers'
 
 /** The webhook secret's key name in credentials.json (inside the pluginSecrets namespace). */
 export function webhookSecretKey(id: string): string {

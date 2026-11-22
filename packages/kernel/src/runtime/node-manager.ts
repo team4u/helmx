@@ -719,6 +719,38 @@ export class NodeManager {
     return { nodeId, cwd }
   }
 
+  /**
+   * Bind underlying node connection change events:
+   * - Node connects/disconnects -> publish node.changed SSE event (real-time Web/CLI awareness);
+   * - When removeNode severs a connection, it clears the index first so the offline callback is skipped;
+   * - If a newly connected node lags behind Hub version and HELMX_AUTO_UPGRADE_NODES=1 is set, trigger auto-upgrade asynchronously.
+   */
+  bindEvents(): void {
+    this.envFabric.registry.onNodeChanged((nodeId, online) => {
+      if (!online && !this.hasNode(nodeId)) return
+      const conn = online ? this.envFabric.registry.get(nodeId) : undefined
+      this.events.publish('node.changed', {
+        type: 'node.changed',
+        node: this.byomNodeInfo(nodeId, conn),
+      })
+      if (online && conn !== undefined) {
+        void this.autoUpgradeIfEligible(nodeId, conn.version)
+      }
+    })
+  }
+
+  /**
+   * Initialize node substrate prerequisites:
+   * 1. Load config.json node token registry;
+   * 2. Generate helmx CLI wrapper script;
+   * 3. Warm up local disk stats cache.
+   */
+  async initialize(): Promise<void> {
+    await this.loadNodeTokens()
+    await this.ensureCliBinDir()
+    await this.ensureLocalDiskStats()
+  }
+
   /** Dispose: clear disk stats timer and await any in-flight refresh. */
   async dispose(): Promise<void> {
     if (this.localDiskRefreshTimer !== undefined) {

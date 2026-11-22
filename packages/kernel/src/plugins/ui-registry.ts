@@ -496,19 +496,6 @@ export class UiRegistry {
   }
 
   /**
-   * Post-`definePlugin` validation hook: declarative `docs`/`sessionDocs` paths have been removed
-   * (JSON Spec migrated out of kernel), so no document references remain to validate here. Retained as a
-   * `PluginHost` lifecycle hook point for future client-track derived validation (such as badges).
-   */
-  assertUiDocsRegistered(
-    _pluginId: string,
-    _hasPublicDoc: (docName: string) => boolean,
-    _hasPublicSessionDoc: (docName: string) => boolean = () => false,
-  ): void {
-    void _pluginId; void _hasPublicDoc; void _hasPublicSessionDoc;
-  }
-
-  /**
    * Final cross-plugin uniqueness check across all enabled plugins (including `pending`):
    * - `profile.runtime` `kind` must be unique (duplicate kinds would make the Profile runtime list ambiguous,
    *   so conflicts reject explicitly instead of being swallowed by registration order);

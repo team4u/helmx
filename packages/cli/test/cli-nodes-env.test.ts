@@ -111,7 +111,8 @@ test('nodes issue: POST /api/nodes/issue {nodeId}; --json prints full object, hu
   const human = await runCliCaptured(['nodes', 'issue', 'dev-1'], env)
   assert.equal(human.code, 0, human.err)
   assert.match(human.out, /dev-1:sec-abc/)
-  assert.match(human.out, /helmx-node connect/)
+  assert.match(human.out, /helmx-node start -d --hub/)
+  assert.match(human.out, /loopback address/i)
 
   // Missing positional argument fails explicitly
   const missing = await runCliCaptured(['nodes', 'issue', '--json'], env)

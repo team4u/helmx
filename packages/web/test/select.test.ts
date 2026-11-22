@@ -9,32 +9,12 @@ import { ensureHappyDom } from './helpers/dom-harness.js'
 
 ensureHappyDom()
 const ReactDOMClient = await import('react-dom/client')
-const { Select, findNextSelectableIndex } = await import('@helmx/plugin-client')
+const { Select } = await import('@helmx/plugin-client')
 
 const e = React.createElement
 
 // ---------------------------------------------------------------------------
-// 1. 纯函数测试：findNextSelectableIndex
-// ---------------------------------------------------------------------------
-
-test('findNextSelectableIndex：正常在可用项间上下移动并跳过禁用项', { timeout: 60_000 }, () => {
-  const options: SelectOption<string>[] = [
-    { value: '1', label: 'Item 1' },
-    { value: '2', label: 'Item 2', disabled: true },
-    { value: '3', label: 'Item 3' },
-  ]
-  // 从 0 向下，跳过 1（disabled），到达 2
-  assert.equal(findNextSelectableIndex(options, 0, 1), 2)
-  // 从 2 向上，跳过 1（disabled），到达 0
-  assert.equal(findNextSelectableIndex(options, 2, -1), 0)
-  // 越界保护：到达顶部再向上保持当前
-  assert.equal(findNextSelectableIndex(options, 0, -1), 0)
-  // 越界保护：到达底部再向下保持当前
-  assert.equal(findNextSelectableIndex(options, 2, 1), 2)
-})
-
-// ---------------------------------------------------------------------------
-// 2. SSR 渲染与 DOM 契约测试
+// 1. SSR 渲染与 DOM 契约测试
 // ---------------------------------------------------------------------------
 
 test('Select：基础触发器渲染符合无障碍与项目极简视觉规范', { timeout: 60_000 }, () => {

@@ -22,7 +22,7 @@ const { makeTestStore } = await import('./helpers/store.js')
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
 const { createRoot } = await import('react-dom/client')
 const { Composer } = await import('../src/conversation/Composer.js')
-const { formatModelRowDisplay, formatModelShortName } = await import('@helmx/plugin-client')
+const { formatModelShortName } = await import('@helmx/plugin-client')
 
 const e = React.createElement
 
@@ -128,28 +128,11 @@ test('DOM: when the catalog rejects the effective level (max), fall back to the 
   }
 })
 
-test('model picker display helpers: split nested route prefixes into source so row name matches short name', { timeout: 60_000 }, () => {
+test('model picker display helper: formatModelShortName extracts short model name cleanly', { timeout: 60_000 }, () => {
   assert.equal(formatModelShortName('magpie/auto/deepseek-v4.1-flash'), 'deepseek-v4.1-flash')
   assert.equal(formatModelShortName('anthropic/claude-3-7-sonnet'), 'claude-3-7-sonnet')
   assert.equal(formatModelShortName(''), '')
   assert.equal(formatModelShortName(undefined), '')
-
-  assert.deepEqual(
-    formatModelRowDisplay({ provider: 'magpie', modelId: 'auto/deepseek-v4.1-flash' }),
-    { name: 'deepseek-v4.1-flash', source: 'magpie/auto' },
-  )
-  assert.deepEqual(
-    formatModelRowDisplay({ provider: 'magpie', modelId: 'antigravity-bridge/gemini-4-neon' }),
-    { name: 'gemini-4-neon', source: 'magpie/antigravity-bridge' },
-  )
-  assert.deepEqual(
-    formatModelRowDisplay({ provider: 'anthropic', modelId: 'claude-3-7-sonnet' }),
-    { name: 'claude-3-7-sonnet', source: 'anthropic' },
-  )
-  assert.deepEqual(
-    formatModelRowDisplay({ provider: 'faux', modelId: 'trailing/' }),
-    { name: 'trailing/', source: 'faux' },
-  )
 })
 
 test('DOM: popover rows display the short model name consistent with the trigger button and keep provider/route in source', { timeout: 60_000 }, async () => {

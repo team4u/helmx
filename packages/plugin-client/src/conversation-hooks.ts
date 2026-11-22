@@ -5,9 +5,8 @@
  * No component exports in this file (Fast Refresh friendly).
  */
 import { useCallback, useContext, useEffect, useState, useSyncExternalStore } from 'react'
-import type { AskSpec, ConversationDetail, ConversationLive, ConversationSummary, HostModelsSlice, ScreenLocationSnapshot, UsePluginsResult } from '@helmx/protocol/browser'
-import { PluginClientHostContext, PluginClientHostHandlesContext, usePluginClientHost } from './host-port.js'
-import type { ConversationBackgroundSnapshot, PluginClientHostPort } from './host-port.js'
+import type { AskSpec, ConversationDetail, ConversationLive, ConversationSummary, HostModelsSlice, UsePluginsResult } from '@helmx/protocol/browser'
+import { PluginClientHostContext, usePluginClientHost, type PluginClientHostPort } from './host-port.js'
 import { useRequiredPluginContextBase } from './plugin-context.js'
 
 const EMPTY_PLUGIN_CONFIG: Readonly<Record<string, unknown>> = Object.freeze({})
@@ -25,75 +24,21 @@ export function useConversations(): ConversationSummary[] {
   return useSyncExternalStore(port.subscribeConversations, port.getConversations, port.getConversations)
 }
 
-/** Stable empty index for the unknown fallback (never a fresh Map per render). */
-const EMPTY_CONVERSATION_BACKGROUND: ConversationBackgroundSnapshot = Object.freeze({
-  unknown: true,
-  byConversation: new Map(),
-}) as ConversationBackgroundSnapshot
-const EMPTY_BACKGROUND_SNAPSHOT = (): ConversationBackgroundSnapshot => EMPTY_CONVERSATION_BACKGROUND
-
 /**
- * Host-standard conversation background in-flight snapshot (workbench badge
- * aggregation + context compaction — the exact facts the host sidebar ring
- * renders), so plugin views (task boards, coordination desks) never
- * re-aggregate the same docs per tree. Honest unknown gate: while
- * `unknown === true` (badge docs still loading, or the host provides no
- * aggregation) background facts are unknowable — render an unknown state,
- * never "no background work".
- */
-export function useConversationBackground(): ConversationBackgroundSnapshot {
-  const port = usePluginClientHost()
-  return useSyncExternalStore(
-    port.subscribeConversationBackground ?? NOOP_SUBSCRIBE,
-    port.getConversationBackground ?? EMPTY_BACKGROUND_SNAPSHOT,
-    port.getConversationBackground ?? EMPTY_BACKGROUND_SNAPSHOT,
-  )
-}
-
-// ---------------------------------------------------------------------------
-// Stable-handle host capability reads (isolated from unrelated domains)
-// ---------------------------------------------------------------------------
-
-/**
- * Reactive read-only host model catalog slice via the stable-handle context:
+ * Reactive read-only host model catalog slice via the stable host port:
  * normalized entries plus the global default chain. `undefined` = capability
  * not injected or catalog not yet first-loaded (render unknown/loading and
  * disable selection); a slice with `models: []` = loaded and genuinely empty
  * ("no models"). The two states are strictly distinct and must never leak into
  * each other. On the server the snapshot is always `undefined`; dynamic
- * refresh, when offered, is the handle's optional refreshModels action (absent
+ * refresh, when offered, is the port's optional refreshModels action (absent
  * = no refresh capability).
  */
 export function useHostModels(): HostModelsSlice | undefined {
-  const handles = useContext(PluginClientHostHandlesContext)
-  if (handles === null) {
-    throw new Error('useHostModels must be called inside <PluginClientHostHandlesContext.Provider> (injected by the host HelmxStoreProvider)')
-  }
+  const port = usePluginClientHost()
   return useSyncExternalStore(
-    handles.subscribeModels ?? NOOP_SUBSCRIBE,
-    handles.getModels ?? UNDEFINED_SNAPSHOT,
-    UNDEFINED_SNAPSHOT,
-  )
-}
-
-/**
- * Reactive read-only host navigation location via the stable-handle context
- * (URL hash single source of truth): structured primary/split screen facts —
- * `screen` undefined = the primary pane is not a plugin screen, `split`
- * undefined = no split pane open (truth, never loading state; no frozen
- * empty params). The hook returns `undefined` only when the host has not
- * wired the capability. On the server the snapshot is always `undefined`.
- * Writing params stays with ScreenProps.setParams of the owning screen (no
- * second write path).
- */
-export function useScreenLocation(): ScreenLocationSnapshot | undefined {
-  const handles = useContext(PluginClientHostHandlesContext)
-  if (handles === null) {
-    throw new Error('useScreenLocation must be called inside <PluginClientHostHandlesContext.Provider> (injected by the host HelmxStoreProvider)')
-  }
-  return useSyncExternalStore(
-    handles.subscribeScreenLocation ?? NOOP_SUBSCRIBE,
-    handles.getScreenLocation ?? UNDEFINED_SNAPSHOT,
+    port.subscribeModels ?? NOOP_SUBSCRIBE,
+    port.getModels ?? UNDEFINED_SNAPSHOT,
     UNDEFINED_SNAPSHOT,
   )
 }

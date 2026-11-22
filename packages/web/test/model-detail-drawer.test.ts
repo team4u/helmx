@@ -522,12 +522,12 @@ test('ModelDetailDrawer zh-CN: renders credentials form, model chips and interpo
     ),
   )
 
-  // Drawer chrome and form labels localized
+  // Drawer chrome and form labels localized (static unprobeable provider omits fake test button)
   assert.match(html, /凭证与连接设置/)
   assert.match(html, /API 密钥/)
   assert.match(html, /已配置（留空保持不变）/)
   assert.match(html, /服务端点/)
-  assert.match(html, /测试连接/)
+  assert.doesNotMatch(html, /测试连接/)
 
   // Model chips section with interpolated count badge (1 of 2 enabled)
   assert.match(html, /模型清单与路由控制/)
@@ -540,4 +540,196 @@ test('ModelDetailDrawer zh-CN: renders credentials form, model chips and interpo
   // Save action and secret hint localized
   assert.match(html, /保存配置/)
   assert.match(html, /密钥密文将安全存储于系统保密箱中/)
+})
+
+test('ModelDetailDrawer: dynamic plugin gateway exposes Test connection and clickable Plugin Center navigation; !filterEligible disables unsavable chips', { timeout: 60_000 }, async () => {
+  const openedTargets: unknown[] = []
+  const store = makeTestStore()
+  ;(store.actions as unknown as { openTarget: (target: unknown) => void }).openTarget = (target) => {
+    openedTargets.push(target)
+  }
+
+  const pluginProvider: ProviderItem = {
+    id: 'magpie',
+    name: 'Magpie',
+    type: 'commercial',
+    configured: true,
+    modelsCount: 1,
+    baseUrl: 'http://127.0.0.1:3425/v1',
+    dynamic: true,
+    pluginId: 'builtin:magpie',
+    models: [{ id: 'glm-4.6', name: 'GLM 4.6', enabled: true }],
+  }
+
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = createRoot(container)
+  try {
+    await act(async () => {
+      root.render(
+        e(
+          HostStoreProviders,
+          { value: store },
+          e(ModelDetailDrawer, {
+            provider: pluginProvider,
+            open: true,
+            inline: true,
+            onClose: () => {},
+            onTestConnection: async () => ({ success: true, message: 'OK' }),
+          }),
+        ),
+      )
+    })
+
+    assert.ok(findButtonByText(container, 'Test connection'), 'dynamic provider renders real Test connection button')
+    const pluginLink = findButtonByText(container, 'Configure plugin builtin:magpie')
+    assert.ok(pluginLink, 'plugin gateway renders clickable link to Plugin Center')
+    await act(async () => {
+      pluginLink.click()
+    })
+    assert.deepEqual(openedTargets, [{ kind: 'plugins', pluginId: 'builtin:magpie' }])
+
+    // Unsavable model toggles when filterEligible=false
+    const staticUnconfigured: ProviderItem = {
+      id: 'openai',
+      name: 'OpenAI',
+      type: 'commercial',
+      configured: false,
+      modelsCount: 1,
+      models: [{ id: 'gpt-4o', name: 'GPT-4o', enabled: true }],
+    }
+    await act(async () => {
+      root.render(
+        e(
+          HostStoreProviders,
+          { value: store },
+          e(ModelDetailDrawer, {
+            provider: staticUnconfigured,
+            open: true,
+            inline: true,
+            availableModels: [],
+            onClose: () => {},
+          }),
+        ),
+      )
+    })
+    const chips = Array.from(container.querySelectorAll<HTMLButtonElement>('button[role="checkbox"]'))
+    assert.equal(chips.length, 1)
+    assert.equal(chips[0]?.disabled, true, 'unsavable model chips must be disabled when !filterEligible')
+    assert.equal(findButtonByText(container, 'Enable all')?.disabled, true)
+    assert.equal(findButtonByText(container, 'Disable all')?.disabled, true)
+    assert.match(container.textContent ?? '', /Save credentials or sync the catalog first/)
+  } finally {
+    await act(async () => {
+      root.unmount()
+    })
+    container.remove()
+  }
+})
+
+test('ModelDetailDrawer: custom gateway create & delete confirm flow', { timeout: 60_000 }, async () => {
+  const created: unknown[] = []
+  const deleted: string[] = []
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = createRoot(container)
+  try {
+    await act(async () => {
+      root.render(
+        e(
+          HostStoreProviders,
+          { value: makeTestStore() },
+          e(ModelDetailDrawer, {
+            provider: null,
+            isNewCustom: true,
+            open: true,
+            inline: true,
+            existingProviderIds: ['openai'],
+            onClose: () => {},
+            onCreateCustomGateway: async (data) => {
+              created.push(data)
+            },
+          }),
+        ),
+      )
+    })
+
+    const idInput = container.querySelector<HTMLInputElement>('#model-drawer-custom-id')!
+    const urlInput = container.querySelector<HTMLInputElement>('#model-drawer-base-url')!
+    const modelsArea = container.querySelector<HTMLTextAreaElement>('#model-drawer-custom-models')!
+    assert.ok(idInput && urlInput && modelsArea, 'custom create form renders id, baseUrl, and models fields')
+
+    await act(async () => {
+      typeIntoInput(idInput, 'local-vllm')
+      typeIntoInput(urlInput, 'http://127.0.0.1:8000/v1')
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set
+      const tracker = (modelsArea as unknown as { _valueTracker?: { getValue(): string; setValue(v: string): void } })._valueTracker
+      const prev = tracker?.getValue() ?? ''
+      setter?.call(modelsArea, 'qwen-72b\nllama-3')
+      tracker?.setValue(prev)
+      modelsArea.dispatchEvent(new Event('input', { bubbles: true }))
+      modelsArea.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+
+    await act(async () => {
+      findButtonByText(container, 'Create gateway')!.click()
+    })
+    assert.equal(created.length, 1)
+    assert.deepEqual(created[0], {
+      id: 'local-vllm',
+      label: undefined,
+      protocol: 'openai',
+      baseUrl: 'http://127.0.0.1:8000/v1',
+      models: ['qwen-72b', 'llama-3'],
+      apiKey: undefined,
+    })
+
+    // Existing custom gateway delete uses ConfirmDialog
+    await act(async () => {
+      root.render(
+        e(
+          HostStoreProviders,
+          { value: makeTestStore() },
+          e(ModelDetailDrawer, {
+            provider: {
+              id: 'local-vllm',
+              name: 'Local vLLM',
+              custom: true,
+              configured: true,
+              protocol: 'openai',
+              baseUrl: 'http://127.0.0.1:8000/v1',
+              gatewayModels: ['qwen-72b'],
+              modelsCount: 1,
+              models: [{ id: 'qwen-72b', name: 'qwen-72b', enabled: true }],
+            },
+            open: true,
+            inline: true,
+            onClose: () => {},
+            onDeleteCustomGateway: async (id) => {
+              deleted.push(id)
+            },
+          }),
+        ),
+      )
+    })
+    await act(async () => {
+      findButtonByText(container, 'Delete gateway')!.click()
+    })
+    assert.equal(deleted.length, 0, 'delete must wait for ConfirmDialog confirmation')
+    const alertDialog = container.querySelector('[role="alertdialog"]')
+    assert.ok(alertDialog !== null, 'Delete gateway opens AlertDialog confirmation')
+    const confirmBtn = Array.from(alertDialog.querySelectorAll('button')).find((b) =>
+      b.className.includes('btn-danger'),
+    )
+    assert.ok(confirmBtn !== undefined)
+    await act(async () => {
+      confirmBtn.click()
+    })
+    assert.deepEqual(deleted, ['local-vllm'])
+  } finally {
+    await act(async () => {
+      root.unmount()
+    })
+    container.remove()
+  }
 })

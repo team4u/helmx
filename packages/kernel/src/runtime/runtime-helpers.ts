@@ -23,7 +23,6 @@ import type { ConvMeta } from './store.js'
 import { getCurrentTools } from '@earendil-works/pi-ai/utils/transcript'
 import type { HelmxStore } from './store.js'
 import { requireModelRef } from './models.js'
-import { assertSkillId } from '../services/index.js'
 
 // ---------------------------------------------------------------------------
 // Common serialization / escaping
@@ -726,12 +725,6 @@ export function toolResultOf(handled: unknown): {
   }
 }
 
-/** Normalize `tool_result` transform/handled output: returns mapped SDK result shape or `undefined` on invalid input. */
-export function normalizeToolResult(value: unknown): NormalizedHookToolResult | undefined {
-  const parsed = parseHookToolResult(value, 'tool_result hook')
-  return parsed.ok ? parsed.result : undefined
-}
-
 /**
  * Single outbound guard before tool result persistence (`HookBridge.afterTool` and `prepareToolResultWith`).
  *
@@ -1318,23 +1311,6 @@ export async function completeConversationTextHelper(
     .map((part) => part.text)
     .join('')
   return deps.stash.redact(text)
-}
-
-/**
- * Helper to resolve the physical directory of a skill.
- */
-export function skillDirectoryHelper(dataDir: string, id: string): string {
-  try {
-    assertSkillId(id)
-  } catch (err) {
-    throw new HelmxError(
-      'validation_error',
-      `Invalid Skill ID: ${err instanceof Error ? err.message : String(err)}`,
-      400,
-      { skillId: id },
-    )
-  }
-  return join(dataDir, 'skills', id)
 }
 
 /**

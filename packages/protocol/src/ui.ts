@@ -744,19 +744,16 @@ export interface PluginClientContext {
  *
  * The single source of truth of exported symbols is PLUGIN_CLIENT_SHARED_EXPORTS:
  * - hooks: usePluginContext / usePluginLocale / usePluginTranslator / usePluginDoc / usePluginSessionDoc /
- *   useToolActivity / useTimelineToolCalls / useConversations / useConversation / useConversationBackground /
+ *   useToolActivity / useTimelineToolCalls / useConversations / useConversation /
  *   usePlugins / useScreenParams (screen-local params scope provided by the host ScreenHost) /
- *   usePluginConfig / useHostModels / useScreenLocation (stable-handle reads of host capability slices:
- *   model catalog, navigation location; isolation contract pinned by @helmx/plugin-client tests —
- *   unrelated host port revisions must not re-render consumers);
+ *   usePluginConfig / useHostModels (stable-handle read of the host model catalog slice; isolation
+ *   contract pinned by @helmx/plugin-client tests — unrelated host port revisions must not re-render consumers);
  * - ModelPickerControl: shared model + thinking-level picker (reads the catalog via the useHostModels
- *   stable-handle slice; apply/reset callbacks keep the PI follow-default semantics);
- * - model formatting pure functions: formatModelShortName / formatModelRowDisplay /
- *   resolveEffectiveThinkingLevel;
+ *   host port slice; apply/reset callbacks keep the PI follow-default semantics);
+ * - model formatting pure functions: formatModelShortName / resolveEffectiveThinkingLevel;
  * - accessibility base components: Switch / Select / MultiSelect / Checkbox / Tabs family /
  *   SegmentedControl / HelmxIcon / ViewBoundary / Callout / Dialog family / AlertDialog family
- *   (confirm dialogs) / ConfirmDialog (minimal double-confirm composition) / ThinkingLevelControl
- *   (plain-level segmented picker over Tabs, no model semantics);
+ *   (confirm dialogs) / ConfirmDialog (minimal double-confirm composition);
  * - unified light patterns: SearchBox (container-class search input with the single clear button,
  *   always type="text" per the shared search-box spec) / EmptyState (host .empty-state vocabulary
  *   with optional icon/title/hint/compact);
@@ -767,7 +764,8 @@ export interface PluginClientContext {
  *   ScreenToolbar (header-to-content toolbar row) / DataTable (composable table with unified
  *   loading/empty) / KvGrid (key-value overview) / DetailDrawer (right-side detail drawer shell
  *   over the host .primary-drawer-* vocabulary; the header/meta/body/footer stay composable JSX,
- *   state and data belong to the caller);
+ *   state and data belong to the caller) / DockTray & DockTrayRow (shared composer-dock in-flight
+ *   HUD tray over the host .dock-tray* vocabulary);
  * - content display: MarkdownView (standard markdown rendering) / CodeBlockView
  *   (syntax-highlighted code block) / CopyButton (copy button);
  * - formatting pure functions: formatTime (compact MM-DD HH:mm) / formatCompactTimestamp
@@ -778,7 +776,6 @@ export interface PluginClientContext {
  *   formatBytes (human-readable bytes, 1024-based);
  * - PluginSlot: inter-plugin sub-slot rendering primitive.
  */
-export const HELMX_PLUGIN_CLIENT_SHARED_MODULE = '@helmx/plugin-client'
 
 /** usePlugins(): reactive snapshot of host plugin list and Screen contributions (SSE driven, no polling). */
 export interface UsePluginsResult {
@@ -936,18 +933,14 @@ export const PLUGIN_CLIENT_SHARED_EXPORTS = [
   'useTimelineToolCalls',
   'useConversations',
   'useConversation',
-  'useConversationBackground',
   'usePlugins',
   'usePluginConfig',
   'useScreenParams',
   'useHostModels',
-  'useScreenLocation',
   'useSharedNowMs',
   'usePluginAction',
-  'usePluginScopeId',
   'ModelPickerControl',
   'formatModelShortName',
-  'formatModelRowDisplay',
   'resolveEffectiveThinkingLevel',
   'PluginSlot',
   'PluginScope',
@@ -969,7 +962,6 @@ export const PLUGIN_CLIENT_SHARED_EXPORTS = [
   'ViewBoundary',
   'Callout',
   'StatusLight',
-  'normalizeStatusLightTone',
   'Dialog',
   'DialogPortal',
   'DialogOverlay',
@@ -979,18 +971,14 @@ export const PLUGIN_CLIENT_SHARED_EXPORTS = [
   'DialogClose',
   'DialogTrigger',
   'Popover',
-  'PopoverPortal',
   'PopoverTrigger',
   'PopoverContent',
   'PopoverClose',
-  'PopoverArrow',
   'Tooltip',
   'TooltipProvider',
   'TooltipRoot',
   'TooltipTrigger',
-  'TooltipPortal',
   'TooltipContent',
-  'TooltipArrow',
   'DropdownMenu',
   'DropdownMenuRoot',
   'DropdownMenuTrigger',
@@ -1000,7 +988,6 @@ export const PLUGIN_CLIENT_SHARED_EXPORTS = [
   'DropdownMenuSeparator',
   'DropdownMenuLabel',
   'DropdownMenuGroup',
-  'DropdownMenuArrow',
   'AlertDialog',
   'AlertDialogPortal',
   'AlertDialogOverlay',
@@ -1014,13 +1001,14 @@ export const PLUGIN_CLIENT_SHARED_EXPORTS = [
   'SearchBox',
   'EmptyState',
   'LoadingState',
-  'ThinkingLevelControl',
   'Screen',
   'ScreenSection',
   'ScreenToolbar',
   'DataTable',
   'KvGrid',
   'DetailDrawer',
+  'DockTray',
+  'DockTrayRow',
   'formatTime',
   'formatCompactTimestamp',
   'formatDurationMs',

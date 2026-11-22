@@ -146,6 +146,7 @@ export class HelmxStore {
       profile_id: string
       tags: string
       parent_conversation_id: number | null
+      parent_tool_call_id: string | null
       node_id: string | null
       cwd: string
       model: string
@@ -161,7 +162,7 @@ export class HelmxStore {
       created_at: number
       updated_at: number
     }>(
-      'SELECT id, title, profile_id, tags, parent_conversation_id, node_id, cwd, model, model_override, thinking_level, thinking_level_override, unread, pinned, state_change_seq, completion_seq, run_duration_ms, run_started_at, created_at, updated_at FROM helmx_conversations',
+      'SELECT id, title, profile_id, tags, parent_conversation_id, parent_tool_call_id, node_id, cwd, model, model_override, thinking_level, thinking_level_override, unread, pinned, state_change_seq, completion_seq, run_duration_ms, run_started_at, created_at, updated_at FROM helmx_conversations',
     )) {
       this.convs.set(row.id, {
         id: row.id,
@@ -169,6 +170,7 @@ export class HelmxStore {
         profileId: row.profile_id,
         tags: parseStoredJson<string[]>(`helmx_conversations#${row.id}.tags`, row.tags),
         parentConversationId: row.parent_conversation_id ?? undefined,
+        parentToolCallId: row.parent_tool_call_id || undefined,
         nodeId: row.node_id || 'local',
         cwd: row.cwd,
         model: row.model,
@@ -184,14 +186,6 @@ export class HelmxStore {
         createdAt: row.created_at,
         updatedAt: row.updated_at,
       })
-    }
-    // Parent tool-call correlation is stored in a separate table (`helmx_conversation_tool_links`): read second
-    // and merge into the mirror so existing `helmx_conversations` schemas require no changes.
-    for (const row of await this.db.all<{ conversation_id: number; parent_tool_call_id: string }>(
-      'SELECT conversation_id, parent_tool_call_id FROM helmx_conversation_tool_links',
-    )) {
-      const meta = this.convs.get(row.conversation_id)
-      if (meta !== undefined) meta.parentToolCallId = row.parent_tool_call_id
     }
     for (const row of await this.db.all<{
       id: string
@@ -356,14 +350,15 @@ export class HelmxStore {
     }
     this.enqueue(async () => {
       await this.db.run(
-        `INSERT INTO helmx_conversations (id, title, profile_id, tags, parent_conversation_id, node_id, cwd, model, model_override, thinking_level, thinking_level_override, unread, pinned, state_change_seq, completion_seq, run_duration_ms, run_started_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET title=excluded.title, profile_id=excluded.profile_id, tags=excluded.tags, parent_conversation_id=excluded.parent_conversation_id, node_id=excluded.node_id, cwd=excluded.cwd, model=excluded.model, model_override=excluded.model_override, thinking_level=excluded.thinking_level, thinking_level_override=excluded.thinking_level_override, unread=excluded.unread, pinned=excluded.pinned, state_change_seq=excluded.state_change_seq, completion_seq=excluded.completion_seq, run_duration_ms=excluded.run_duration_ms, run_started_at=excluded.run_started_at, updated_at=excluded.updated_at`,
+        `INSERT INTO helmx_conversations (id, title, profile_id, tags, parent_conversation_id, parent_tool_call_id, node_id, cwd, model, model_override, thinking_level, thinking_level_override, unread, pinned, state_change_seq, completion_seq, run_duration_ms, run_started_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET title=excluded.title, profile_id=excluded.profile_id, tags=excluded.tags, parent_conversation_id=excluded.parent_conversation_id, parent_tool_call_id=excluded.parent_tool_call_id, node_id=excluded.node_id, cwd=excluded.cwd, model=excluded.model, model_override=excluded.model_override, thinking_level=excluded.thinking_level, thinking_level_override=excluded.thinking_level_override, unread=excluded.unread, pinned=excluded.pinned, state_change_seq=excluded.state_change_seq, completion_seq=excluded.completion_seq, run_duration_ms=excluded.run_duration_ms, run_started_at=excluded.run_started_at, updated_at=excluded.updated_at`,
         snap.id,
         snap.title,
         snap.profileId,
         JSON.stringify(snap.tags),
         snap.parentConversationId ?? null,
+        snap.parentToolCallId !== undefined && snap.parentToolCallId !== '' ? snap.parentToolCallId : null,
         snap.nodeId || 'local',
         snap.cwd,
         snap.model,
@@ -379,20 +374,6 @@ export class HelmxStore {
         snap.createdAt,
         snap.updatedAt,
       )
-      // Separate table for parent tool-call link: upsert when set, delete when unset (prevents orphaned/stale links).
-      if (snap.parentToolCallId !== undefined && snap.parentToolCallId !== '') {
-        await this.db.run(
-          `INSERT INTO helmx_conversation_tool_links (conversation_id, parent_tool_call_id) VALUES (?, ?)
-           ON CONFLICT(conversation_id) DO UPDATE SET parent_tool_call_id=excluded.parent_tool_call_id`,
-          snap.id,
-          snap.parentToolCallId,
-        )
-      } else {
-        await this.db.run(
-          'DELETE FROM helmx_conversation_tool_links WHERE conversation_id = ?',
-          snap.id,
-        )
-      }
       // Title changes must update the title column across every FTS row for this conversation (not just one).
       if (titleChanged) {
         await this.db.run(
@@ -435,7 +416,6 @@ export class HelmxStore {
           Date.now(),
         )
         await tx.run('DELETE FROM helmx_conversations WHERE id = ?', id)
-        await tx.run('DELETE FROM helmx_conversation_tool_links WHERE conversation_id = ?', id)
         await tx.run('DELETE FROM helmx_asks WHERE conversation_id = ?', id)
         await tx.run('DELETE FROM helmx_artifacts WHERE conversation_id = ?', id)
         await tx.run('DELETE FROM helmx_conversation_fts WHERE conversation_id = ?', id)

@@ -453,32 +453,31 @@ describe('HelmxStore durability layer (real SQLite)', { timeout: 60_000 }, () =>
     await rm(base, { recursive: true, force: true })
   })
 
-  it('parentToolCallId link table: auto-created on legacy schema, read/write/clear/delete leave no orphans', {
+  it('parentToolCallId column on helmx_conversations: read/write/clear/delete persist cleanly without separate link table', {
     timeout: 60_000,
   }, async () => {
     const base = await mkdtemp(join(dir, 'link-'))
-    // Simulate a legacy database holding only `helmx_conversations` (no `parent_tool_call_id`) by dropping the link table.
-    const seed = await openHelmxDatabase(base)
-    await seed.db.exec('DROP TABLE helmx_conversation_tool_links')
-    await seed.close()
-
-    // `openHelmxDatabase` creates the new link table automatically without altering existing rows.
     const { store, database } = await openStoreAt(base)
-    // When set: persisted to both mirror and DB
+    const linkTable = await database.db.get(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'helmx_conversation_tool_links'",
+    )
+    assert.equal(linkTable, undefined, 'helmx_conversation_tool_links table must not exist')
+
+    // When set: persisted to both mirror and helmx_conversations.parent_tool_call_id
     store.upsertConv(conv(20, { parentToolCallId: parentToolId }))
     await store.flushPublic()
-    const linkRow = await database.db.get<{ parent_tool_call_id: string }>(
-      'SELECT parent_tool_call_id FROM helmx_conversation_tool_links WHERE conversation_id = 20',
+    const row = await database.db.get<{ parent_tool_call_id: string | null }>(
+      'SELECT parent_tool_call_id FROM helmx_conversations WHERE id = 20',
     )
-    assert.equal(linkRow?.parent_tool_call_id, parentToolId)
-    // Cleared value removes the link row without leaving stale correlations
+    assert.equal(row?.parent_tool_call_id, parentToolId)
+    // Cleared value sets column to NULL without leaving stale correlations
     store.upsertConv(conv(20, { parentToolCallId: undefined }))
     await store.flushPublic()
-    const gone = await database.db.get(
-      'SELECT 1 AS x FROM helmx_conversation_tool_links WHERE conversation_id = 20',
+    const cleared = await database.db.get<{ parent_tool_call_id: string | null }>(
+      'SELECT parent_tool_call_id FROM helmx_conversations WHERE id = 20',
     )
-    assert.equal(gone, undefined, 'cleared value must remove the link row')
-    // Re-writing and reopening merges link cleanly
+    assert.equal(cleared?.parent_tool_call_id, null, 'cleared value must reset parent_tool_call_id to NULL')
+    // Re-writing and reopening restores column cleanly
     store.upsertConv(conv(20, { parentToolCallId: parentToolId }))
     store.upsertConv(conv(21))
     await store.flushPublic()
@@ -488,13 +487,13 @@ describe('HelmxStore durability layer (real SQLite)', { timeout: 60_000 }, () =>
     const reopened = await openStoreAt(base)
     assert.equal(reopened.store.getConv(20)?.parentToolCallId, parentToolId)
     assert.equal(reopened.store.getConv(21)?.parentToolCallId, undefined)
-    // Deleting conversation deletes link row synchronously (no orphans)
+    // Deleting conversation removes the row cleanly
     reopened.store.deleteConv(20)
     await reopened.store.flushPublic()
-    const orphan = await reopened.database.db.get(
-      'SELECT 1 AS x FROM helmx_conversation_tool_links WHERE conversation_id = 20',
+    const gone = await reopened.database.db.get(
+      'SELECT 1 AS x FROM helmx_conversations WHERE id = 20',
     )
-    assert.equal(orphan, undefined, 'deleting conversation must delete its link row')
+    assert.equal(gone, undefined, 'deleting conversation must remove its row')
     await reopened.store.close()
     await reopened.database.close()
     await rm(base, { recursive: true, force: true })
@@ -800,7 +799,7 @@ describe('HelmxStore durability layer (real SQLite)', { timeout: 60_000 }, () =>
     }
   })
 
-  it('FTS DDL upgrade detection, crash-safe pending rebuild flag, and steady-state zero-rebuild', { timeout: 60_000 }, async () => {
+  it('FTS missing derived table recreate, crash-safe pending rebuild flag, and steady-state zero-rebuild', { timeout: 60_000 }, async () => {
     const base = await mkdtemp(join(dir, 'fts-ddl-'))
     try {
       // Fresh DB starts at latest FTS version with trigram DDL and needsFtsRebuild = false.
@@ -811,29 +810,26 @@ describe('HelmxStore durability layer (real SQLite)', { timeout: 60_000 }, () =>
       await fresh.store.close()
       await fresh.database.close()
 
-      // Simulate a legacy pre-trigram database (unicode61 FTS DDL, no fts_schema_version row).
+      // Drop the derived FTS table and clear version marker (simulates missing derived index).
       const raw = new DatabaseSync(join(base, 'state.sqlite'))
       raw.exec('DROP TABLE helmx_conversation_fts')
-      raw.exec(
-        'CREATE VIRTUAL TABLE helmx_conversation_fts USING fts5(conversation_id UNINDEXED, entry_id UNINDEXED, title, body)',
-      )
       raw.exec(`DELETE FROM helmx_seq WHERE key = '${FTS_SCHEMA_VERSION_KEY}'`)
       raw.close()
 
-      // First reopen upgrades DDL to trigram and persists pending version 0 -> needsFtsRebuild = true.
-      const upgraded = await openStoreAt(base)
-      assert.equal(upgraded.store.needsFtsRebuild, true)
-      const ddlRow = await upgraded.database.db.get<{ sql: string }>(
+      // First reopen recreates trigram FTS table and persists pending version 0 -> needsFtsRebuild = true.
+      const recreated = await openStoreAt(base)
+      assert.equal(recreated.store.needsFtsRebuild, true)
+      const ddlRow = await recreated.database.db.get<{ sql: string }>(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'helmx_conversation_fts'",
       )
       assert.match(ddlRow?.sql ?? '', /tokenize\s*=\s*['"]?trigram/i)
       // Simulate process crash BEFORE rebuildFts completes: close without rebuilding.
-      await upgraded.store.close()
-      await upgraded.database.close()
+      await recreated.store.close()
+      await recreated.database.close()
 
-      // Next boot MUST still know rebuild is pending even though DDL is already trigram.
+      // Next boot MUST still know rebuild is pending even though DDL already exists.
       const crashedRetry = await openStoreAt(base)
-      assert.equal(crashedRetry.store.needsFtsRebuild, true, 'pending rebuild must survive crash after DDL recreate')
+      assert.equal(crashedRetry.store.needsFtsRebuild, true, 'pending rebuild must survive crash after table recreate')
       await crashedRetry.store.rebuildFts(async (index) => {
         index(1, 'entry:1', '旧会话', '数据库连接池')
       })

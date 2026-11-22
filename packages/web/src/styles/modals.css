@@ -379,42 +379,6 @@
   cursor: not-allowed;
 }
 
-/* 通用信息提示原语（core 自有；与任何插件样式无关） */
-.callout {
-  padding: 9px 12px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
-  background: var(--bg-subtle);
-  font-size: 12.5px;
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-}
-.callout--flush {
-  border-radius: 0 !important;
-  border-width: 0 !important;
-}
-.callout span,
-.callout-text {
-  word-break: break-all;
-}
-.callout--warning {
-  background: var(--warn-bg);
-  border-color: var(--warn-border);
-  color: var(--warn);
-}
-.callout--error {
-  background: var(--err-bg);
-  border-color: var(--err-border);
-  color: var(--err);
-}
-.callout--success {
-  background: var(--ok-bg);
-  border-color: var(--ok-border);
-  color: var(--ok);
-}
-
-
 /* Hub 变更日志弹窗 */
 .hub-changelog-body {
   display: flex;
