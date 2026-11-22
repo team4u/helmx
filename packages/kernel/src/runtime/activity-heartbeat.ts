@@ -21,23 +21,14 @@
 import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
+import { parseLinuxStartTime } from '@helmx/env-io';
 import { HUB_ACTIVITY_FILENAME, type HubActivityCounts, type HubActivityFile } from '@helmx/protocol';
-
-/** Parse the start-time field (22) out of a `/proc/<pid>/stat` line (`comm` may contain spaces). */
-function parseProcStartTime(statContent: string): number | null {
-  const close = statContent.lastIndexOf(')');
-  if (close === -1) return null;
-  const fields = statContent.slice(close + 2).trim().split(/\s+/);
-  const raw = fields[19]; // fields[0] is state (field 3 overall); start time is field 22 → index 19.
-  if (raw === undefined || !/^\d+$/.test(raw)) return null;
-  return Number(raw);
-}
 
 /** Linux `/proc` start time of a pid (immutable per pid lifetime), or `null` where unavailable. */
 function procStartTimeOf(pid: number): number | null {
   if (process.platform !== 'linux') return null;
   try {
-    return parseProcStartTime(readFileSync(`/proc/${pid}/stat`, 'utf8'));
+    return parseLinuxStartTime(readFileSync(`/proc/${pid}/stat`, 'utf8'));
   } catch {
     return null;
   }

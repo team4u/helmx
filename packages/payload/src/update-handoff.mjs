@@ -94,7 +94,7 @@ function validateEnv() {
 async function stopRunningHub() {
   const control = await readHubControl();
   if (control === null) {
-    fail(`no hub control record in data directory "${DATA_DIR}" — cannot prove ownership of the running hub; refusing to continue`);
+    throw new Error(`no hub control record in data directory "${DATA_DIR}" — cannot prove ownership of the running hub; refusing to continue`);
   }
   const stopTimeoutMs = Number(process.env.HELMX_HANDOFF_TEST_STOP_TIMEOUT_MS ?? '15000');
   const reply = await controlRequest(
@@ -104,11 +104,11 @@ async function stopRunningHub() {
     { instanceId: CONTROL_INSTANCE_ID },
   );
   if (reply === null || reply.ok !== true) {
-    fail(`control-channel stop was not accepted (${reply === null ? 'no reply' : `error: ${reply.error ?? 'unknown'}`}); nothing was committed`);
+    throw new Error(`control-channel stop was not accepted (${reply === null ? 'no reply' : `error: ${reply.error ?? 'unknown'}`}); nothing was committed`);
   }
   const exited = await waitForPidExit(control.pid, stopTimeoutMs);
   if (!exited) {
-    fail(`hub pid ${control.pid} accepted the stop but did not exit within the budget; nothing was committed`);
+    throw new Error(`hub pid ${control.pid} accepted the stop but did not exit within the budget; nothing was committed`);
   }
   log(`stopped hub pid ${control.pid} over the control channel`);
 }
@@ -207,7 +207,7 @@ async function main() {
     LIFECYCLE_LOCK,
     async () => {
       const previous = await readCurrentRelease(ROOT);
-      if (previous === null) fail('no current release to roll back to; the CLI owns bootstrap installs');
+      if (previous === null) throw new Error('no current release to roll back to; the CLI owns bootstrap installs');
 
       await stopRunningHub();
 
@@ -220,7 +220,7 @@ async function main() {
         });
         log(`committed current.json -> ${TARGET}`);
       } catch (error) {
-        fail(`commit failed (${error instanceof Error ? error.message : String(error)}); the hub is stopped and the pointer is untouched — restart manually`);
+        throw new Error(`commit failed (${error instanceof Error ? error.message : String(error)}); the hub is stopped and the pointer is untouched — restart manually`);
       }
 
       try {
@@ -247,7 +247,7 @@ async function main() {
           reason: `handoff: ${reason}; ${rollbackNote}`,
           at: new Date().toISOString(),
         }).catch(() => undefined);
-        fail(`${reason}; ${rollbackNote}`);
+        throw new Error(`${reason}; ${rollbackNote}`);
       }
     },
     {
