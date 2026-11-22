@@ -34,7 +34,7 @@ import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/provid
 import { Harness, createRegistry } from '@earendil-works/pi-durable'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import { MemoryStorage } from '@earendil-works/pi-durable/storage/memory'
-import { HelmxError, type AgentExecutionInfo, type AgentSpawnRequest } from '@helmx/protocol'
+import { HelmxError, validateOrThrow, type AgentExecutionInfo, type AgentSpawnRequest } from '@helmx/protocol'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
@@ -49,6 +49,7 @@ import { extractWorkflowExecutionMeta, extractWorktreeExecutionMeta } from '../s
 import { WorktreeIsolation, type WorktreeIsolationDeps } from '../src/worktree/isolation.js'
 import { createWorkflowPlugin } from '../src/workflow.js'
 import { createWorktreePlugin } from '../src/worktree.js'
+import { cleanupPresentationMetaSchema } from '../src/worktree/tools.js'
 import { PluginHost, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
 import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin-host-backend.js'
 import { ArtifactService, SecretStash } from '../../kernel/src/services/index.js'
@@ -747,7 +748,12 @@ describe('resume 续接绑定 worktree 的子会话', { timeout: 60_000 }, () =>
 async function executeCleanupTool(
   docs: Map<string, unknown>,
   input: Record<string, unknown>,
-): Promise<{ output?: Array<{ type: string; text?: string }>; structuredOutput?: Record<string, unknown>; isError?: boolean }> {
+): Promise<{
+  output?: Array<{ type: string; text?: string }>
+  structuredOutput?: Record<string, unknown>
+  presentationMeta?: Record<string, unknown>
+  isError?: boolean
+}> {
   const dataDir = mkdtempSync(join(tmpdir(), 'helmx-wf-tool-'))
   const localExec = async (
     command: string | readonly string[],
@@ -836,6 +842,7 @@ async function executeCleanupTool(
     const result = (await host.executeTool('cleanup_worktree', input, { conversationId: 1 })) as {
       output?: Array<{ type: string; text?: string }>
       structuredOutput?: Record<string, unknown>
+      presentationMeta?: Record<string, unknown>
       isError?: boolean
     }
     return result
@@ -1032,6 +1039,10 @@ describe('cleanup_worktree', { timeout: 60_000 }, () => {
       assert.equal(dirty.isError, true, '脏工作区应返回错误')
       const dirtyText = (dirty.output as Array<{ text: string }>)[0]!.text
       assert.ok(dirtyText.includes('worktree_dirty') || dirtyText.includes('未提交修改'), `错误应含指引：${dirtyText}`)
+      assert.equal(dirty.structuredOutput?.['ok'], false)
+      validateOrThrow(cleanupPresentationMetaSchema, dirty.presentationMeta, 'cleanup error presentationMeta')
+      assert.equal(dirty.presentationMeta?.['ok'], false)
+      assert.ok(typeof dirty.presentationMeta?.['error'] === 'string' && dirty.presentationMeta['error'].length <= 512)
 
       const ok = await executeCleanupTool(th.docs, {
         conversationId: childId,
@@ -1041,6 +1052,72 @@ describe('cleanup_worktree', { timeout: 60_000 }, () => {
       assert.equal(ok.isError, undefined)
       assert.equal(ok.structuredOutput?.['ok'], true)
       assert.equal(ok.structuredOutput?.['removed'], true)
+      validateOrThrow(cleanupPresentationMetaSchema, ok.presentationMeta, 'cleanup success presentationMeta')
+      assert.deepEqual(ok.presentationMeta, {
+        ok: true,
+        removed: true,
+        worktreeId: record!.id,
+        path: record!.path,
+        branch: record!.branch,
+        nodeId: record!.nodeId,
+        branchDeleted: true,
+      })
+    } finally {
+      await th.close()
+    }
+  })
+
+  it('cleanup_worktree 目录缺失 force 恢复路径：structuredOutput 保留 prune.output，presentationMeta 仅保留有界 pruneRan/pruneOk 索引', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 't6f-meta')
+    const repo = makeGitRepo(join(dir, 'repo'))
+    const th = await openSpawnHarness(repo, join(dir, 'data'))
+    try {
+      let childId = 0
+      th.faux.setResponses([fauxAssistantMessage('完成')])
+      await th.spawnIsolated({
+        parentConversationId: 1,
+        prompt: '任务',
+        isolation: 'worktree',
+        onResolved: (info: AgentExecutionInfo) => {
+          childId = info.conversationId ?? 0
+        },
+      } as never)
+      const record = th.allocator.getForConversation(childId)
+      assert.ok(record)
+      th.markIdle(childId)
+      rmSync(record!.path, { recursive: true, force: true })
+
+      const res = await executeCleanupTool(th.docs, {
+        worktreeId: record!.id,
+        deleteBranch: true,
+        force: true,
+      })
+      assert.equal(res.isError, undefined)
+      assert.equal(res.structuredOutput?.['ok'], true)
+      assert.equal(res.structuredOutput?.['removedReason'], 'directory_missing_forced')
+      assert.ok(typeof res.structuredOutput?.['prune'] === 'object', 'programmatic structuredOutput keeps prune object')
+
+      validateOrThrow(cleanupPresentationMetaSchema, res.presentationMeta, 'cleanup prune meta')
+      assert.equal(res.presentationMeta?.['prune'], undefined, 'presentationMeta must NOT carry raw prune object/output')
+      assert.deepEqual(res.presentationMeta, {
+        ok: true,
+        removed: true,
+        worktreeId: record!.id,
+        path: record!.path,
+        branch: record!.branch,
+        nodeId: record!.nodeId,
+        branchDeleted: true,
+        removedReason: 'directory_missing_forced',
+        pruneRan: true,
+        pruneOk: true,
+      })
+      assert.throws(() =>
+        validateOrThrow(
+          cleanupPresentationMetaSchema,
+          { ...res.presentationMeta, prune: { ran: true, ok: true, output: 'noisy' } },
+          'reject raw prune field',
+        ),
+      )
     } finally {
       await th.close()
     }

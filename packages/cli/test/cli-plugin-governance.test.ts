@@ -208,3 +208,49 @@ test('plugins list: human table resolves LocalizedText display copy; --json keep
   assert.ok(rh.out.includes('仅中文描述'), rh.out)
   assert.ok(!rh.out.includes('"zh-CN"'), `raw localized map must not leak into human table:\n${rh.out}`)
 })
+
+test('plugins manifest: GET /api/plugins/:id/manifest with URI encoding, --json passthrough, and human display copy resolution', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helmx-cli-gov-')
+  const projection = {
+    id: 'builtin:triggers',
+    name: { en: 'Triggers', 'zh-CN': '触发器' },
+    description: { 'zh-CN': '定时与回调' },
+    locked: false,
+    enabled: true,
+    status: 'active',
+    dependencies: [],
+    hooks: ['trigger'],
+    actions: [],
+    tools: [],
+    ui: [],
+    routes: [],
+    docs: [],
+    configFields: [],
+    providers: [],
+    services: [],
+    clientModules: [],
+  }
+  const hub = await startMockHub(
+    {
+      'GET /api/plugins/builtin%3Atriggers/manifest': () => ({ body: projection }),
+    },
+    { autoRegisterCleanup: t },
+  )
+  const env = makeCliEnv(hub.url, dir)
+
+  const rj = await runCliCaptured(['plugins', 'manifest', 'builtin:triggers', '--json'], env)
+  assert.equal(rj.code, 0, rj.err)
+  assert.deepEqual(JSON.parse(rj.out), projection)
+  assert.equal(hub.hits[0]!.path, '/api/plugins/builtin%3Atriggers/manifest')
+
+  const rh = await runCliCaptured(['plugins', 'manifest', 'builtin:triggers'], env)
+  assert.equal(rh.code, 0, rh.err)
+  assert.ok(rh.out.includes('Triggers'), rh.out)
+  assert.ok(rh.out.includes('定时与回调'), rh.out)
+  assert.ok(!rh.out.includes('"zh-CN"'), `raw localized map must not leak into human output:\n${rh.out}`)
+
+  const missing = await runCliCaptured(['plugins', 'manifest', '--json'], env)
+  assert.notEqual(missing.code, 0)
+  const extra = await runCliCaptured(['plugins', 'manifest', 'builtin:triggers', 'extra', '--json'], env)
+  assert.notEqual(extra.code, 0)
+})

@@ -130,6 +130,7 @@ export const CORE_CLI_COMMAND_PATHS = [
   'nodes forward-stop',
   'env exec',
   'plugins list',
+  'plugins manifest',
   'plugins enable',
   'plugins disable',
   'plugins config',

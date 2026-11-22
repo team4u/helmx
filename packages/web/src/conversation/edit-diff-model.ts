@@ -18,13 +18,13 @@ export type EditToolResultCheck =
   | { ok: false; reason: string }
 
 /** 与内核复用同一校验器，避免展示层悄悄接受不同的 Schema 语义。 */
-export function checkEditToolResult(structuredOutput: unknown): EditToolResultCheck {
-  if (structuredOutput === undefined || structuredOutput === null) {
+export function checkEditToolResult(presentationMeta: unknown): EditToolResultCheck {
+  if (presentationMeta === undefined || presentationMeta === null) {
     return { ok: false, reason: 'toolResult message missing details (tool declares no schema or legacy data never stored it)' }
   }
   try {
-    validateOrThrow(EDIT_TOOL_RESULT_SCHEMA, structuredOutput, 'Invalid edit diff result')
-    const value = structuredOutput as EditToolResult
+    validateOrThrow(EDIT_TOOL_RESULT_SCHEMA, presentationMeta, 'Invalid edit diff result')
+    const value = presentationMeta as EditToolResult
     if (value.diff.rows.reduce((sum, row) => sum + row.text.length, 0) > TOOL_DIFF_MAX_TEXT_CHARS) {
       return { ok: false, reason: 'Diff text exceeds the display budget' }
     }

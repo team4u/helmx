@@ -13,16 +13,27 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync, existsSync, chmodSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
+import { fileURLToPath } from 'node:url'
 
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 
-import { HelmxError } from '@helmx/protocol'
+import {
+  HelmxError,
+  validateOrThrow,
+  type PluginClientContext as PluginClientContextType,
+  type ToolViewProps,
+} from '@helmx/protocol'
 import { createHelmx } from '../../hub/src/app.js'
 import { MemoryStore } from '../src/memory/store.js'
-import { createPluginBuildProvider } from '@helmx/plugin-build'
+import {
+  CLIENT_SHARED_GLOBALS,
+  compilePluginClientModule,
+  createPluginBuildProvider,
+} from '@helmx/plugin-build'
 import { makeFauxProvider, useTempDir, waitFor, type FauxProviderHandle } from './helpers/plugin-test-env.js'
 import {
   parseMutedSources,
@@ -1307,5 +1318,189 @@ test('派工自动标题和召回元数据不持久化已登记机密', { timeou
     }
   } finally {
     await env.close()
+  }
+})
+
+test('superagent20: dispatch_worker 工具声明 structuredOutputSchema 并分离 presentationMeta；编译卡片仅读 presentationMeta', { timeout: 60_000 }, async (t) => {
+  const env = await makeEnv()
+  try {
+    await enableSuperAgent(env)
+    const kernel = env.app.kernel
+    const ids = await residentIds(env)
+    const routerId = ids.router!
+
+    const dispatchSpec = kernel.plugins.listTools().find((tool) => tool.name === 'dispatch_worker')
+    assert.ok(dispatchSpec, 'dispatch_worker tool must be registered')
+    assert.ok(dispatchSpec.structuredOutputSchema !== undefined, 'dispatch_worker must declare structuredOutputSchema')
+
+    env.faux.setResponses([
+      fauxAssistantMessage('Worker task done'),
+      fauxAssistantMessage('Router received report'),
+    ])
+    const toolRes = (await kernel.plugins.executeTool(
+      'dispatch_worker',
+      { prompt: 'Check presentationMeta separation', profileId: 'assistant' },
+      { conversationId: routerId },
+    )) as {
+      output: string
+      structuredOutput: { workerConversationId: number }
+      presentationMeta: { workerConversationId: number }
+    }
+
+    assert.equal(typeof toolRes.output, 'string')
+    assert.ok(Number.isInteger(toolRes.structuredOutput.workerConversationId))
+    assert.deepEqual(toolRes.presentationMeta, {
+      workerConversationId: toolRes.structuredOutput.workerConversationId,
+    })
+    validateOrThrow(dispatchSpec.structuredOutputSchema, toolRes.structuredOutput, 'dispatch_worker structuredOutput')
+
+    await kernel.waitForIdle(toolRes.structuredOutput.workerConversationId)
+    await kernel.waitForIdle(routerId)
+  } finally {
+    await env.close()
+  }
+
+  // Compiled SuperAgentDispatchToolView DOM check: reads presentationMeta.workerConversationId directly
+  const { GlobalRegistrator } = await import('@happy-dom/global-registrator')
+  if (typeof globalThis.document === 'undefined') GlobalRegistrator.register()
+  const req = createRequire(new URL('../../plugin-client/package.json', import.meta.url))
+  const React = req('react') as typeof import('react')
+  const ReactDOM = req('react-dom') as unknown
+  const ReactDOMClient = req('react-dom/client') as {
+    createRoot: (container: Element) => { render(node: React.ReactNode): void; unmount(): void }
+  }
+  const ReactJsxRuntime = req('react/jsx-runtime') as Record<string, unknown>
+  const LucideReact = req('lucide-react') as Record<string, unknown>
+  const SDK = await import('@helmx/plugin-client')
+
+  const g = globalThis as Record<string, unknown>
+  const sharedKeys = [
+    'React',
+    'IS_REACT_ACT_ENVIRONMENT',
+    CLIENT_SHARED_GLOBALS['react']!,
+    CLIENT_SHARED_GLOBALS['react-dom']!,
+    CLIENT_SHARED_GLOBALS['react-dom/client']!,
+    CLIENT_SHARED_GLOBALS['react/jsx-runtime']!,
+    CLIENT_SHARED_GLOBALS['lucide-react']!,
+    CLIENT_SHARED_GLOBALS['@helmx/plugin-client']!,
+  ]
+  const prevGlobals = new Map(sharedKeys.map((k) => [k, g[k]]))
+  const buildDir = mkdtempSync(join(tmpdir(), 'helmx-superagent-client-render-'))
+  t.after(() => {
+    for (const key of sharedKeys) {
+      const prev = prevGlobals.get(key)
+      if (prev === undefined) delete g[key]
+      else g[key] = prev
+    }
+    rmSync(buildDir, { recursive: true, force: true })
+  })
+
+  g.React = React
+  g.IS_REACT_ACT_ENVIRONMENT = true
+  g[CLIENT_SHARED_GLOBALS['react']!] = React
+  g[CLIENT_SHARED_GLOBALS['react-dom']!] = ReactDOM
+  g[CLIENT_SHARED_GLOBALS['react-dom/client']!] = ReactDOMClient
+  g[CLIENT_SHARED_GLOBALS['react/jsx-runtime']!] = ReactJsxRuntime
+  g[CLIENT_SHARED_GLOBALS['lucide-react']!] = LucideReact
+  g[CLIENT_SHARED_GLOBALS['@helmx/plugin-client']!] = SDK
+
+  const superagentClientDir = resolve(dirname(fileURLToPath(import.meta.url)), '../src/superagent/client')
+  const bundle = await compilePluginClientModule('builtin:superagent', superagentClientDir, 'index.tsx', buildDir)
+  const mod = (await import(`data:text/javascript;base64,${Buffer.from(bundle.code, 'utf8').toString('base64')}`)) as {
+    SuperAgentDispatchToolView: React.ComponentType<ToolViewProps & { presentationMeta?: Readonly<Record<string, unknown>> }>
+  }
+
+  const screenCalls: string[] = []
+  const port: import('@helmx/plugin-client').PluginClientHostPort = {
+    authenticated: true,
+    theme: 'dark',
+    locale: 'en',
+    conversations: [],
+    conversationDetails: {},
+    conversationLives: {},
+    pendingAsks: [],
+    loadErrors: {},
+    plugins: [],
+    screens: [],
+    pluginDocs: {},
+    ensurePluginDoc: async () => undefined,
+    getPluginSessionDoc: async () => undefined,
+    subscribeSessionDoc: () => () => {},
+    getSessionDocState: () => ({ hasValue: false, deleted: false, connected: false, value: undefined }),
+    invokePluginAction: async () => ({}),
+    submitConversationInput: async () => undefined,
+    openTarget: (target) => { screenCalls.push(target) },
+    openConversationDrawer: () => undefined,
+    openArtifactPreview: () => undefined,
+    setWorkbenchOpen: () => undefined,
+    setWorkbenchTab: () => undefined,
+    notify: () => undefined,
+    loadConversationDetail: () => undefined,
+    slots: { collectItems: () => [], renderItem: () => null },
+    markdown: { view: ({ text }) => React.createElement('div', null, text), codeBlock: ({ code }) => React.createElement('pre', null, code) },
+  }
+  const ctx: PluginClientContextType = SDK.createPluginClientContext(port, 'builtin:superagent', 7)
+
+  const mountCard = async (props: ToolViewProps & { presentationMeta?: Readonly<Record<string, unknown>> }) => {
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = ReactDOMClient.createRoot(container)
+    await React.act(async () => {
+      root.render(
+        React.createElement(
+          SDK.PluginClientHostContext.Provider,
+          { value: port },
+          React.createElement(
+            SDK.PluginClientContext.Provider,
+            { value: ctx },
+            React.createElement(mod.SuperAgentDispatchToolView, props),
+          ),
+        ),
+      )
+    })
+    return {
+      container,
+      unmount: () => {
+        React.act(() => root.unmount())
+        container.remove()
+      },
+    }
+  }
+
+  const withMeta = await mountCard({
+    callId: 'c-meta',
+    toolName: 'dispatch_worker',
+    status: 'done',
+    conversationId: 7,
+    input: { prompt: 'Fix build', profileId: 'coder' },
+    presentationMeta: { workerConversationId: 42 },
+  })
+  try {
+    assert.match(withMeta.container.textContent ?? '', /Dispatched worker #42/)
+    const openBtn = [...withMeta.container.querySelectorAll('button')].find((b) => b.textContent?.includes('Open'))
+    assert.ok(openBtn, 'Open button rendered from presentationMeta.workerConversationId')
+    await React.act(async () => {
+      openBtn!.click()
+    })
+    assert.deepEqual(screenCalls, ['conversation:42'])
+  } finally {
+    withMeta.unmount()
+  }
+
+  const legacyWithoutMeta: Record<string, unknown> = {
+    callId: 'c-no-meta',
+    toolName: 'dispatch_worker',
+    status: 'done',
+    conversationId: 7,
+    input: { prompt: 'Fix build' },
+    result: JSON.stringify({ workerConversationId: 77 }),
+    structuredOutput: { workerConversationId: 77 },
+  }
+  const withoutMeta = await mountCard(legacyWithoutMeta as unknown as ToolViewProps)
+  try {
+    assert.doesNotMatch(withoutMeta.container.textContent ?? '', /#77/, 'must not read workerConversationId from structuredOutput or JSON result')
+    assert.equal(withoutMeta.container.querySelectorAll('button').length, 0)
+  } finally {
+    withoutMeta.unmount()
   }
 })

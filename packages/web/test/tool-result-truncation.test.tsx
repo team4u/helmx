@@ -208,14 +208,16 @@ test('Artifact Spill 原始输出是产物预览，禁用复制并保留full art
   assert.ok(findButton(m.host, 'Open full artifact'), '完整原文仍由 Artifact 入口提供')
 })
 
-test('read：原始输出通道截断时复制内容被门禁；details 通道完整则不受约束', { timeout: 60_000 }, async (t) => {
+test('read：原始输出通道截断时复制内容始终被门禁（即使携带 presentationMeta）', { timeout: 60_000 }, async (t) => {
   const store = makeStore()
   const m = createMount()
   t.after(() => { m.unmount(); restoreFetch() })
 
-  await m.render(bodyUi(store, truncTrace({ toolName: 'read', structuredOutput: { path: '/a.ts', content: 'details 完整内容' } })))
-  assert.doesNotMatch(m.host.textContent ?? '', /server returned a preview/, 'details 通道内容完整，不提示截断')
-  assert.equal(findButton(m.host, 'Copy content')?.disabled, false, 'details 内容可复制')
+  await m.render(bodyUi(store, truncTrace({ toolName: 'read', presentationMeta: { path: '/a.ts', nodeId: 'local', content: 'ignored' } })))
+  assert.match(m.host.textContent ?? '', /server returned a preview/, 'read 正文走 resultText 通道，受服务端截断约束')
+  const metaGate = findButton(m.host, 'Copy content')
+  assert.ok(metaGate, '携带 presentationMeta 时复制入口存在')
+  assert.equal(metaGate!.disabled, true, '截断预览仍禁用复制，不绕过门禁')
 
   await m.render(bodyUi(store, truncTrace({ toolName: 'read' })))
   const gate = findButton(m.host, 'Copy content')

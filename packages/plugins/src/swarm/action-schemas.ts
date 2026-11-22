@@ -2,6 +2,7 @@
  * builtin:swarm 动作与模型工具共享 JSON Schema 定义（全部机器描述固定纯英文）。
  */
 import {
+  BOARD_POST_KINDS,
   CHANNEL_NAME_PATTERN,
   GROUP_ID_PATTERN,
   MEMBER_NAME_PATTERN,
@@ -616,5 +617,23 @@ export const completerOutputSchema: Record<string, unknown> = {
     },
   },
   required: ['items'],
+  additionalProperties: false,
+}
+
+export const swarmToolPresentationMetaSchema: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    groupId: { type: 'string', minLength: 1, maxLength: 64 },
+    groupTitle: { type: 'string', minLength: 1, maxLength: 120 },
+    memberName: { type: 'string', minLength: 1, maxLength: 32 },
+    workerConversationId: { type: 'integer', minimum: 1 },
+    postKind: { type: 'string', enum: [...BOARD_POST_KINDS] },
+    seq: { type: 'integer', minimum: 0 },
+    postCount: { type: 'integer', minimum: 0 },
+    aborted: { type: 'boolean' },
+    model: { type: 'string', minLength: 1, maxLength: 200 },
+    archived: { type: 'boolean' },
+    retainedCount: { type: 'integer', minimum: 0 },
+  },
   additionalProperties: false,
 }

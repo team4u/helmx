@@ -249,7 +249,6 @@ test('StepGroup: a known model duration renders once in the group summary', { ti
         steps: [{ kind: 'thinking', thinking: { key: 'think:1:0:0', text: '决策过程', responseDurationMs: 3200 } }],
         active: false,
         conversationId: 1,
-        siblingCalls: [],
       }),
     ),
   )
@@ -274,7 +273,6 @@ test('StepGroup: model and parallel tool durations contribute to one cumulative 
         ],
         active: false,
         conversationId: 1,
-        siblingCalls: [],
       }),
     ),
   )
@@ -295,7 +293,6 @@ test('折叠组耗时契约：进行中（active）不展示耗时徽标；缺�
         ],
         active: true,
         conversationId: 1,
-        siblingCalls: [],
       }),
     ),
   )
@@ -315,7 +312,6 @@ test('折叠组耗时契约：进行中（active）不展示耗时徽标；缺�
         ],
         active: false,
         conversationId: 1,
-        siblingCalls: [],
       }),
     ),
   )

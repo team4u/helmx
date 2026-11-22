@@ -166,6 +166,62 @@ test('composerCompleter: doc/sessionDoc sources still enforce safe source shape 
 });
 
 // ---------------------------------------------------------------------------
+// UiRegistry boundaries: plugin.slot
+// ---------------------------------------------------------------------------
+
+test('plugin.slot: requires client reference, clientRoot, valid relative module path, and build provider', { timeout: 60_000 }, () => {
+  const ui = new UiRegistry(createPluginBuildProvider());
+
+  ui.registerUi(
+    'p1',
+    'plugin.slot',
+    { id: 'slot-ok', target: 'owner/panel', client: { module: './slot.tsx', export: 'SlotPanel' } },
+    'slot',
+    '/tmp/client-root',
+  );
+  assert.equal(ui.listUi().length, 1);
+
+  assert.throws(
+    () => ui.registerUi('p1', 'plugin.slot', { id: 'no-client', target: 'owner/panel' }, 'slot', '/tmp/client-root'),
+    isHelmxError('invalid_ui_spec'),
+  );
+  assert.throws(
+    () =>
+      ui.registerUi(
+        'p1',
+        'plugin.slot',
+        { id: 'no-root', target: 'owner/panel', client: { module: './slot.tsx', export: 'SlotPanel' } },
+        'slot',
+      ),
+    isHelmxError('invalid_ui_spec'),
+  );
+  assert.throws(
+    () =>
+      ui.registerUi(
+        'p1',
+        'plugin.slot',
+        { id: 'escape', target: 'owner/panel', client: { module: '../escape.tsx', export: 'SlotPanel' } },
+        'slot',
+        '/tmp/client-root',
+      ),
+    isHelmxError('invalid_client_module'),
+  );
+
+  const noBuilderUi = new UiRegistry();
+  assert.throws(
+    () =>
+      noBuilderUi.registerUi(
+        'p1',
+        'plugin.slot',
+        { id: 'no-builder', target: 'owner/panel', client: { module: './slot.tsx', export: 'SlotPanel' } },
+        'slot',
+        '/tmp/client-root',
+      ),
+    isHelmxError('unsupported_client_build'),
+  );
+});
+
+// ---------------------------------------------------------------------------
 // UiRegistry boundaries: display copy fields (LocalizedText)
 // ---------------------------------------------------------------------------
 
@@ -222,7 +278,18 @@ test('display copy fields: one registerUi guard covers label/title/description o
     'profileRuntime',
   );
   ui.registerUi('p1', 'timeline.renderer', { id: 'render', title: { en: 'Custom', 'zh-CN': '自定义' } }, 'timelineRenderer');
-  ui.registerUi('p1', 'plugin.slot', { id: 'slot', target: 'owner/panel', title: { en: 'Extra', 'zh-CN': '扩展' } }, 'slot');
+  ui.registerUi(
+    'p1',
+    'plugin.slot',
+    {
+      id: 'slot',
+      target: 'owner/panel',
+      title: { en: 'Extra', 'zh-CN': '扩展' },
+      client: { module: './slot.tsx', export: 'SlotView' },
+    },
+    'slot',
+    '/tmp/client-root',
+  );
   assert.equal(ui.listUi().length, 9);
 
   // raw localized shape is stored as declared (listUi keeps the map, no locale coercion)

@@ -667,7 +667,7 @@ test('SSR：run 主徽章同源有效状态——run 已完成但子任务仍在
     ],
   }
   const toolHtml = await renderWorkflowToolView(
-    { callId: 'call-x', toolName: 'SubagentWorkflow', status: 'done', conversationId: 1, siblingCalls: [] },
+    { callId: 'call-x', toolName: 'SubagentWorkflow', status: 'done', conversationId: 1 },
     doc,
     [conv11, conv21],
   )
@@ -719,7 +719,6 @@ test('SSR：WorkflowToolView 无关联 run 时收口单行并保留折叠详情�
     status: 'running',
     result: '原始工作流返回结果',
     conversationId: 1,
-    siblingCalls: [],
   })
   assert.ok(html.includes('workflow-trace-row-btn'))
   assert.ok(html.includes('aria-expanded="false"'))
@@ -908,10 +907,10 @@ const EMOJI_RE = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}
 
 test('SSR：WorkflowToolView 渲染输出全程无任何 Emoji 或特殊符号字符', { timeout: 60_000 }, async () => {
   const samples: Array<[Record<string, unknown>, unknown]> = [
-    [{ callId: 'w1', toolName: 'SubagentWorkflow', status: 'running', conversationId: 1, siblingCalls: [] }, undefined],
-    [{ callId: 'w2', toolName: 'SubagentWorkflow', status: 'done', conversationId: 1, siblingCalls: [] },
+    [{ callId: 'w1', toolName: 'SubagentWorkflow', status: 'running', conversationId: 1 }, undefined],
+    [{ callId: 'w2', toolName: 'SubagentWorkflow', status: 'done', conversationId: 1 },
       { runs: [run({ status: 'completed', result: { ok: true }, nodes: [node({ id: 'a', status: 'done', output: '完成' })] })] }],
-    [{ callId: 'w3', toolName: 'SubagentWorkflow', status: 'error', conversationId: 1, siblingCalls: [] },
+    [{ callId: 'w3', toolName: 'SubagentWorkflow', status: 'error', conversationId: 1 },
       { runs: [run({ kind: 'subagent', status: 'failed', error: '子代理异常退出', nodes: [node({ id: 'a', status: 'failed', error: 'boom' })] })] }],
   ]
   for (const [props, doc] of samples) {
@@ -1098,7 +1097,7 @@ test('resolveWorkflowRunDisplayName 与 SSR：run.name 为占位/runId 时优先
     nodes: [node({ id: 'a', kind: 'action', status: 'done', label: '步骤一' })],
   })
   const toolHtml = await renderWorkflowToolView(
-    { callId: 'call_fallback', toolName: 'SubagentWorkflow', status: 'done', conversationId: 1, siblingCalls: [] },
+    { callId: 'call_fallback', toolName: 'SubagentWorkflow', status: 'done', conversationId: 1 },
     { runs: [unnamedRun] },
   )
   assert.ok(toolHtml.includes('端到端冒烟验收'), 'WorkflowToolView 应主显 description 首行')
@@ -1107,4 +1106,52 @@ test('resolveWorkflowRunDisplayName 与 SSR：run.name 为占位/runId 时优先
   const wbHtml = await renderWorkflowWorkbench({ runs: [unnamedRun] })
   assert.match(wbHtml, /<strong class="workflow-run-header-name">端到端冒烟验收<\/strong>/, 'WorkflowRunCardBody 头部应主显 description 首行')
   assert.ok(wbHtml.includes('wf_fallback_desc'), '展开卡片 kv-grid 元数据保留 run.id')
+})
+
+test('SSR：WorkflowToolView 通过 presentationMeta 关联后台句柄与 run，绝不 JSON.parse(props.result)', { timeout: 60_000 }, async () => {
+  const bgHtml = await renderWorkflowToolView({
+    callId: 'call_bg_meta',
+    toolName: 'SubagentWorkflow',
+    input: { script: 'return 1' },
+    result: 'plain-non-json-text',
+    presentationMeta: { ok: true, background: true, runId: 'wf_bg_only', status: 'running', label: '夜间巡检' },
+    status: 'done',
+    conversationId: 1,
+  })
+  assert.ok(bgHtml.includes('夜间巡检'), 'WorkflowToolView 应使用 presentationMeta.label 展示名称')
+  assert.ok(bgHtml.includes('Dispatched to background'), 'WorkflowToolView 应从 presentationMeta.background 识别后台句柄')
+  assert.ok(bgHtml.includes('Running in background'), 'WorkflowToolView 应显示后台运行状态灯文案')
+
+  // 当 callId 不匹配时，WorkflowToolView 应能通过 presentationMeta.runId 精准命中 runs 中的运行记录
+  const linkedRun = run({
+    id: 'wf_by_meta',
+    name: '由 presentationMeta 命中',
+    status: 'completed',
+    parentToolCallId: 'other-call-id',
+    nodes: [node({ id: 'a', kind: 'action', status: 'done', label: '步骤' })],
+  })
+  const linkedHtml = await renderWorkflowToolView(
+    {
+      callId: 'call_mismatch',
+      toolName: 'SubagentWorkflow',
+      input: { script: 'return 1' },
+      result: 'ignored',
+      presentationMeta: { ok: true, runId: 'wf_by_meta', status: 'completed' },
+      status: 'done',
+      conversationId: 1,
+    },
+    { runs: [linkedRun] },
+  )
+  assert.ok(linkedHtml.includes('由 presentationMeta 命中'), 'WorkflowToolView 应通过 presentationMeta.runId 关联到真实 run')
+
+  // 即使 result 含伪造 JSON 字符串，无 presentationMeta 时绝不 JSON.parse
+  const noFallbackHtml = await renderWorkflowToolView({
+    callId: 'call_no_meta',
+    toolName: 'SubagentWorkflow',
+    input: { name: '正常名字' },
+    result: JSON.stringify({ ok: true, background: true, runId: 'wf_fake' }),
+    status: 'done',
+    conversationId: 1,
+  })
+  assert.ok(!noFallbackHtml.includes('Dispatched to background'), '删除 props.result JSON.parse 兜底后不得误认后台句柄')
 })

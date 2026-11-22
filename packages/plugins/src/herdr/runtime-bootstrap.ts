@@ -7,6 +7,7 @@
 
 import {
   HelmxError,
+  isPluginSummaryActive,
   type AgentSpawnRequest,
   type HelmxPluginContext,
   type HookResult,
@@ -405,7 +406,7 @@ export function createHerdrRuntime(options: CreateHerdrRuntimeOptions): HerdrRun
     const registry = registryRef.current!
     const workflowPluginActive = ctx.host
       .listPlugins()
-      .some((plugin) => plugin.id === 'builtin:workflow' && plugin.enabled)
+      .some((plugin) => plugin.id === 'builtin:workflow' && isPluginSummaryActive(plugin))
     const snapshots = new Map<string, ReturnType<typeof parseSessionSnapshot>>([
       [JSON.stringify(frozenLocalTarget), parseSessionSnapshot(await transportOf().call(frozenLocalTarget, 'session.snapshot', {}, { timeoutMs: 5_000 }))],
     ])
@@ -483,7 +484,7 @@ export function createHerdrRuntime(options: CreateHerdrRuntimeOptions): HerdrRun
     if (!registry || !executor) return
     const workflowPluginActive = ctx.host
       .listPlugins()
-      .some((plugin) => plugin.id === 'builtin:workflow' && plugin.enabled)
+      .some((plugin) => plugin.id === 'builtin:workflow' && isPluginSummaryActive(plugin))
     if (!workflowPluginActive) return
     for (const pane of registry.all()) {
       if (stopping || connectionAbort.signal.aborted) return

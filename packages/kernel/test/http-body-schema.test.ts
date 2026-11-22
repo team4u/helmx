@@ -841,6 +841,7 @@ test('routing parity: extra segments and mismatched methods do not cross-route',
     ['GET', '/api/providers/x'],
     ['GET', '/api/plugins/config'],
     ['POST', '/api/plugins/builtin:x/config/extra'],
+    ['GET', '/api/plugins/builtin:x/manifest/extra'],
     ['GET', '/api/nodes/n1/upgrade/check/extra'],
     ['PUT', '/api/nodes/issue'],
     ['GET', '/api/conversations/1/input/x'],
@@ -862,11 +863,15 @@ test('routing parity: extra segments and mismatched methods do not cross-route',
     ['POST', '/api/profiles/assistant'],
     ['POST', '/api/providers'],
     ['POST', '/api/plugins/builtin:x/config'],
+    ['POST', '/api/plugins/builtin:x/manifest'],
   ] as const) {
     const res = await call(kernel, m, p)
     assert.equal(res.status, 405, `${m} ${p} should 405`)
     assert.equal(res.code, 'method_not_allowed')
   }
+  const unwiredManifest = await call(kernel, 'GET', '/api/plugins/builtin:x/manifest')
+  assert.equal(unwiredManifest.status, 501)
+  assert.equal(unwiredManifest.code, 'not_supported')
 })
 
 // ---------------------------------------------------------------------------

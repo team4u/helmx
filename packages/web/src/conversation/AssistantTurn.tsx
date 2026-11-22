@@ -42,7 +42,6 @@ export function AssistantModelBoundary({ model }: { model: AssistantModelIdentit
 export interface AssistantTurnViewProps {
   turn: AssistantTurn
   conversation: ConversationSummary
-  siblingCalls: ReadonlyArray<import('@helmx/protocol/browser').ToolViewSiblingCall>
   isLatestTurn?: boolean
   /** 回合锚点对应的真实持久化 pi.assistant 条目（见 resolveAssistantAnchorEntry）。 */
   anchorEntry?: ConversationEntry
@@ -56,7 +55,7 @@ export function AssistantTurnView(props: AssistantTurnViewProps) {
   return <ToolActivityProvider><AssistantTurnContent {...props} /></ToolActivityProvider>
 }
 
-function AssistantTurnContent({ turn, conversation, siblingCalls, isLatestTurn = false, anchorEntry, processShortcut, onForkFromHere }: AssistantTurnViewProps) {
+function AssistantTurnContent({ turn, conversation, isLatestTurn = false, anchorEntry, processShortcut, onForkFromHere }: AssistantTurnViewProps) {
   const groupedUi = useGroupedUi()
   const { t } = useWebLocale()
   const activeToolCallIds = useContext(ToolActivityContext)?.activeToolCallIds
@@ -141,7 +140,6 @@ function AssistantTurnContent({ turn, conversation, siblingCalls, isLatestTurn =
               steps={seg.steps}
               active={seg.active === true}
               conversationId={conversation.id}
-              siblingCalls={siblingCalls}
               shortcutToggle={processShortcut}
             />
           )
@@ -152,7 +150,6 @@ function AssistantTurnContent({ turn, conversation, siblingCalls, isLatestTurn =
             tool={seg.tool}
             conversationId={conversation.id}
             defaultOpen={false}
-            siblingCalls={siblingCalls}
           />
         )
       })}

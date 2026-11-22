@@ -191,6 +191,12 @@ helmx plugins reload my-plugin
 
 ## 常见进阶模式
 
+### 工具展示元数据与时间线分片订阅
+
+- **三通道结果分离**：`ctx.tool` 返回纯字符串（入 `output`）或 `PluginToolResultEnvelope`（`{ output?, structuredOutput?, presentationMeta?, isError? }`），分别承载模型文本、程序化结果（配合 `structuredOutputSchema`）与有界 UI 重放元数据（配合 `presentationMetaSchema`，硬上限 64 KiB UTF-8 / 深度 12 / 2000 节点，落盘至 `details` 且不进模型上下文）；`ctx.action({ exposeAsTool: true })` 保持裸业务返回值不变，通过可选 `presentationMetaSchema` + `projectPresentationMeta(input, output)` 投影展示元数据。
+- **`toolView` 组件契约**：接收 `ToolViewProps`，直接读取 `props.presentationMeta`（不再提供旧 `structuredOutput` 或 `siblingCalls`），严禁 `JSON.parse(props.result)` 兜底；需要关联同时间线同类工具调用时，调用 `@helmx/plugin-client` 的 `useTimelineToolCalls(toolName)` 读取按工具名分片的 `TimelineToolCallSummary[]`（无关工具与流式文本更新零重渲染）。
+- **只读契约自省**：运行 `helmx plugins manifest <id>`（或 `GET /api/plugins/:id/manifest`）可随时查看任意插件经确定性排序与边界校验的 `PluginManifestProjection`（含 `tools[].structuredOutputSchema` / `presentationMetaSchema`、`actions`、`ui`、`routes`、公开 `docs` 与去默认密码的 `configFields`）；`helmx plugins doctor` 也会在 `register` dry-run 阶段捕获 `report.manifest`。
+
 ### 节点详情子插槽
 
 ```typescript

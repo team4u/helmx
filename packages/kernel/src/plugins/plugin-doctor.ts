@@ -19,9 +19,11 @@ import {
   type PluginDefinition,
   type PluginDoctorCheck,
   type PluginDoctorReport,
+  type PluginManifestProjection,
   type PluginSummary,
 } from '@helmx/protocol';
 import { PluginHost, type PluginHostBackend } from './plugin-host.js';
+import { dryRunManifestSinks } from './plugin-host-lifecycle.js';
 import { nextPluginGeneration, registerPluginTsRoot } from './backend-ts-loader.js';
 import {
   importPluginDefinition,
@@ -207,10 +209,15 @@ async function doctorPluginDirInternal(
   const clientRefs: Array<{ module: string; export: string }> = [];
   const screenIds: string[] = [];
   let summary: PluginSummary | undefined;
+  let manifest: PluginManifestProjection | undefined;
   // Isolate registration and compilation checks inside a temporary scratch dir to avoid mutating host data.
   const registerOk = await withDoctorScratch(async (scratch) =>
     push('register', 'real registration dry-run', async () => {
       let host: PluginHost | undefined;
+      const wrapped = withClientCapture(definition!, clientRefs, screenIds);
+      dryRunManifestSinks.set(wrapped, (projected) => {
+        manifest = projected;
+      });
       try {
         host = new PluginHost({
           dataDir: scratch,
@@ -219,7 +226,7 @@ async function doctorPluginDirInternal(
           deferServices: true,
           buildProvider: options.buildProvider,
         });
-        await host.register(withClientCapture(definition!, clientRefs, screenIds), { enabled: false });
+        await host.register(wrapped, { enabled: false });
         const found = host.list().find((s) => s.id === definition!.id);
         if (!found) {
           throw new HelmxError(
@@ -231,6 +238,7 @@ async function doctorPluginDirInternal(
         }
         summary = found;
       } finally {
+        dryRunManifestSinks.delete(wrapped);
         await host?.dispose().catch(() => {});
       }
     }),
@@ -299,7 +307,7 @@ async function doctorPluginDirInternal(
   );
   void clientOk;
 
-  return report(dir, definition.id, checks, summary, screenIds);
+  return report(dir, definition.id, checks, summary, screenIds, manifest);
 }
 
 function report(
@@ -308,6 +316,7 @@ function report(
   checks: PluginDoctorCheck[],
   summary: PluginSummary | undefined,
   screenIds?: string[],
+  manifest?: PluginManifestProjection,
 ): PluginDoctorReport {
   return {
     dir,
@@ -316,6 +325,7 @@ function report(
     checks,
     ...(summary !== undefined ? { summary } : {}),
     ...(screenIds !== undefined ? { screens: [...screenIds] } : {}),
+    ...(manifest !== undefined ? { manifest } : {}),
   };
 }
 

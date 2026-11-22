@@ -88,6 +88,7 @@
 - **专属数据目录**：每个插件分配 `<dataDir>/plugins/<id>/`，`ctx.doc` / `ctx.sessionDoc` 在 state.sqlite 中按插件划分命名空间。文档是紧凑状态而非数据仓库：单文档 JSON 序列化超过 **2 MiB** 即显式拒绝（`413 plugin_doc_too_large`），大体量内容应落盘为文件资产。
 - **公共与私有文档**：`public: true` 的 `ctx.doc` 进入全局 SSE 首帧 `pluginDocs` 并广播更新；`ctx.sessionDoc` 按会话分片、经专用 SSE 按需订阅（`builtin:workflow` 的 `runs` 与 `builtin:token-speed` 的 `speed` 即此形态）。公共文档禁止包含未脱敏机密。
 - **配置与机密**：`ctx.configSchema` 声明 `secret: true` 的字段自动分离到 `credentials.json` 的 `pluginSecrets.<pluginId>`（恒 0600）并注册 SecretStash 脱敏；插件配置经插件中心或 `helmx plugins config <id>` 同权读写。
+- **只读契约自省（`PluginManifestProjection`）**：宿主直接基于既有 `CapabilityRegistry`、`UiRegistry`、`PluginDocRegistry` 与 `PluginState` 按需投影单一插件的完整能力契约（经 `GET /api/plugins/:id/manifest`、`helmx plugins manifest <id>`，或在 `doctor` `register` dry-run 阶段随 `PluginDoctorReport.manifest` 返回）；按 UTF-16 code unit / 规范 Hook 序确定性排序，在边界处强校验，绝不执行 Provider 或动作处理器、绝不暴露运行期配置值、`secret: true` 默认值或私有文档。
 - **技能与 Profile 资产**：插件可经 `ctx.host.skills.ensureSkill` 自举受管技能（frontmatter `managedByPlugin` 绑定本插件 ID，随启停进出技能目录），经 `ctx.host.profiles` 读写 Profile 资产。
 
 ## 插件间依赖与停用/失败语义

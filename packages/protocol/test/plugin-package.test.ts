@@ -16,11 +16,14 @@ import {
   CORE_CLI_COMMAND_PATHS,
   HelmxError,
   PREBUILT_CLIENT_MANIFEST_VERSION,
+  assertPluginManifestProjection,
   assertPrebuiltChunkName,
   assertPrebuiltClientManifest,
   assertPrebuiltRelativeFile,
+  compareCodeUnit,
   prebuiltChunkFileName,
   type PluginInstallResult,
+  type PluginManifestProjection,
   type PluginPackageRecord,
   type PluginPackageSource,
   type PluginRemoveResult,
@@ -100,9 +103,9 @@ test('PluginSummary.managed is an additive optional field (type guards and struc
   assert.equal(legacy.managed, undefined)
 })
 
-test('CORE_CLI_COMMAND_PATHS includes plugins install/update/remove/build without duplicates', { timeout: 60_000 }, () => {
+test('CORE_CLI_COMMAND_PATHS includes plugins install/update/remove/build/manifest without duplicates', { timeout: 60_000 }, () => {
   const paths = [...CORE_CLI_COMMAND_PATHS]
-  for (const cmd of ['plugins build', 'plugins install', 'plugins update', 'plugins remove']) {
+  for (const cmd of ['plugins manifest', 'plugins build', 'plugins install', 'plugins update', 'plugins remove']) {
     assert.ok(paths.includes(cmd), `should include ${cmd}`)
   }
   assert.equal(new Set(paths).size, paths.length, 'command paths must not repeat')
@@ -150,4 +153,165 @@ test('PrebuiltClientManifest validation and chunk path helpers enforce integrity
   ]) {
     assert.throws(() => assertPrebuiltClientManifest(bad, '/tmp/dist-client'), (e: unknown) => e instanceof HelmxError)
   }
+})
+
+test('assertPluginManifestProjection enforces strict sorting, JSON safety, and leak-free boundaries', { timeout: 60_000 }, () => {
+  assert.equal(compareCodeUnit('a', 'b'), -1)
+  assert.equal(compareCodeUnit('b', 'a'), 1)
+  assert.equal(compareCodeUnit('a', 'a'), 0)
+
+  const makeValid = (): PluginManifestProjection => ({
+    id: 'demo:manifest',
+    name: { en: 'Demo', 'zh-CN': '演示' },
+    description: 'Read-only contract sample',
+    icon: 'puzzle',
+    version: '1.2.3',
+    locked: false,
+    enabled: true,
+    status: 'active',
+    dependencies: ['builtin:profile', 'dep:alpha'],
+    hooks: ['trigger', 'before_turn', 'turn_settled'],
+    actions: [
+      {
+        pluginId: 'demo:manifest',
+        id: 'alpha',
+        description: 'Run alpha',
+        inputSchema: { type: 'object' },
+        outputSchema: { type: 'object' },
+        exposeAsTool: true,
+        toolName: 'demo_manifest_alpha_deadbeef',
+        scope: { profileIds: ['assistant'] },
+      },
+      {
+        pluginId: 'demo:manifest',
+        id: 'zeta',
+        description: 'Run zeta',
+        inputSchema: { type: 'object' },
+        outputSchema: { type: 'object' },
+        idempotent: true,
+        cli: { command: ['demo', 'zeta'], hidden: false },
+      },
+    ],
+    tools: [
+      {
+        name: 'demo_manifest_alpha_deadbeef',
+        description: 'Run alpha',
+        inputSchema: { type: 'object' },
+        scope: { profileIds: ['assistant'] },
+        sourceKind: 'action',
+        qualifiedId: 'demo:manifest.alpha',
+      },
+      {
+        name: 'direct_tool',
+        description: 'Direct tool',
+        inputSchema: { type: 'object' },
+        structuredOutputSchema: { type: 'object' },
+        replay: 'safe',
+        sourceKind: 'tool',
+      },
+    ],
+    ui: [
+      { surface: 'screen', id: 'main', spec: { id: 'main', label: 'Main' } },
+      { surface: 'sidebar.item', id: 'nav', spec: { id: 'nav', label: 'Nav' } },
+    ],
+    routes: [
+      { method: 'GET', path: '/api/plugins/demo%3Amanifest/routes/health', public: true },
+      { method: 'POST', path: '/api/plugins/demo%3Amanifest/routes/items', public: false },
+    ],
+    docs: [
+      { name: 'status', kind: 'doc', public: true, durable: true },
+      { name: 'runs', kind: 'sessionDoc', public: true, durable: false },
+    ],
+    configFields: [
+      { key: 'apiKey', type: 'string', secret: true, required: true },
+      {
+        key: 'retries',
+        type: 'number',
+        secret: false,
+        required: false,
+        default: 3,
+        minimum: 0,
+        maximum: 10,
+        integer: true,
+      },
+    ],
+    providers: [{ id: 'p-1', name: 'Provider One' }],
+    services: ['svc-a', 'svc-b'],
+    clientModules: [{ module: 'index.tsx', contentHash: 'hash1234' }],
+  })
+
+  const valid = assertPluginManifestProjection(makeValid())
+  assert.equal(valid.id, 'demo:manifest')
+
+  // Runtime dependency forced-disable produces enabled=true with status=failed + error, and empty active capabilities.
+  const failedWhileEnabled = assertPluginManifestProjection({
+    ...makeValid(),
+    enabled: true,
+    status: 'failed',
+    error: { code: 'plugin_dependency_not_enabled', message: 'dep off', stage: 'enable' },
+    hooks: [],
+    actions: [],
+    tools: [],
+    ui: [],
+    routes: [],
+    docs: [],
+    providers: [],
+    services: [],
+    clientModules: [],
+  })
+  assert.equal(failedWhileEnabled.enabled, true)
+  assert.equal(failedWhileEnabled.status, 'failed')
+
+  // Tool and exposeAsTool action presentationMetaSchema are accepted as JSON Schema objects and rejected otherwise.
+  const withPresentationMetaSchema = makeValid()
+  withPresentationMetaSchema.actions[0] = {
+    ...withPresentationMetaSchema.actions[0]!,
+    presentationMetaSchema: { type: 'object', properties: { badge: { type: 'string' } }, additionalProperties: false },
+  }
+  withPresentationMetaSchema.tools[1] = {
+    ...withPresentationMetaSchema.tools[1]!,
+    presentationMetaSchema: { type: 'object', properties: { tag: { type: 'string' } }, additionalProperties: false },
+  }
+  const validatedMeta = assertPluginManifestProjection(withPresentationMetaSchema)
+  assert.ok(validatedMeta.actions[0]!.presentationMetaSchema)
+  assert.ok(validatedMeta.tools[1]!.presentationMetaSchema)
+
+  // Unsorted / duplicate / leaky / malformed manifests must throw 400 invalid_plugin_manifest
+  const assertInvalid = (mutate: (m: Record<string, unknown>) => void, label: string) => {
+    const candidate = makeValid() as unknown as Record<string, unknown>
+    mutate(candidate)
+    assert.throws(
+      () => assertPluginManifestProjection(candidate),
+      (err: unknown) => err instanceof HelmxError && err.code === 'invalid_plugin_manifest',
+      `expected invalid_plugin_manifest for: ${label}`,
+    )
+  }
+
+  assertInvalid((m) => { m['dependencies'] = ['dep:alpha', 'builtin:profile'] }, 'unsorted dependencies')
+  assertInvalid((m) => { m['dependencies'] = ['a', 'a'] }, 'duplicate dependencies')
+  assertInvalid((m) => { m['hooks'] = ['turn_settled', 'trigger'] }, 'unsorted hooks')
+  assertInvalid((m) => { m['actions'] = [...(m['actions'] as unknown[])].reverse() }, 'unsorted actions')
+  assertInvalid((m) => { (m['actions'] as Array<Record<string, unknown>>)[0]!['pluginId'] = 'other' }, 'mismatched action pluginId')
+  assertInvalid((m) => { delete (m['actions'] as Array<Record<string, unknown>>)[0]!['toolName'] }, 'missing toolName when exposeAsTool=true')
+  assertInvalid((m) => { (m['actions'] as Array<Record<string, unknown>>)[1]!['toolName'] = 'extra' }, 'unexpected toolName when exposeAsTool!=true')
+  assertInvalid((m) => { (m['actions'] as Array<Record<string, unknown>>)[1]!['presentationMetaSchema'] = { type: 'object' } }, 'unexpected action presentationMetaSchema when exposeAsTool!=true')
+  assertInvalid((m) => { (m['actions'] as Array<Record<string, unknown>>)[0]!['presentationMetaSchema'] = 'not-an-object' }, 'non-object action presentationMetaSchema')
+  assertInvalid((m) => { m['tools'] = [...(m['tools'] as unknown[])].reverse() }, 'unsorted tools')
+  assertInvalid((m) => { (m['tools'] as Array<Record<string, unknown>>)[1]!['qualifiedId'] = 'x.y' }, 'qualifiedId on direct tool')
+  assertInvalid((m) => { (m['tools'] as Array<Record<string, unknown>>)[1]!['presentationMetaSchema'] = 'not-an-object' }, 'non-object presentationMetaSchema')
+  assertInvalid((m) => { (m['ui'] as Array<Record<string, unknown>>)[0]!['surface'] = 'unknown.surface' }, 'unknown UI surface')
+  assertInvalid((m) => { (m['ui'] as Array<Record<string, unknown>>)[0]!['id'] = 'mismatch' }, 'mismatched ui.spec.id')
+  assertInvalid((m) => { m['routes'] = [...(m['routes'] as unknown[])].reverse() }, 'unsorted routes')
+  assertInvalid((m) => { (m['docs'] as Array<Record<string, unknown>>)[0]!['public'] = false }, 'private doc in manifest')
+  assertInvalid((m) => { (m['configFields'] as Array<Record<string, unknown>>)[0]!['default'] = 'leaked-secret' }, 'secret field default')
+  assertInvalid((m) => { (m['configFields'] as Array<Record<string, unknown>>)[1]!['default'] = 'wrong-type' }, 'mismatched default type')
+  assertInvalid((m) => { m['status'] = 'failed' }, 'failed status without error')
+  assertInvalid((m) => { m['error'] = { code: 'x', message: 'y', stage: 'define' } }, 'active status with error')
+  assertInvalid((m) => { m['extra'] = 1 }, 'unexpected root property')
+  assertInvalid((m) => { m['services'] = ['constructor'] }, 'prototype-unsafe identifier')
+  assertInvalid((m) => {
+    const cyc: Record<string, unknown> = {}
+    cyc['self'] = cyc
+    ;(m['actions'] as Array<Record<string, unknown>>)[0]!['inputSchema'] = cyc
+  }, 'circular schema')
 })

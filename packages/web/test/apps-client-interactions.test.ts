@@ -448,6 +448,35 @@ describe("apps-client-interactions", () => {
     }
   })
 
+  test('enabled=true 且 status=failed 的应用不计入就绪态，点击不打开视图', { timeout: 60_000 }, async () => {
+    const failedPlugin = plugin('broken-app', {
+      name: 'Broken App',
+      enabled: true,
+      status: 'failed',
+      error: { code: 'plugin_dependency_not_enabled', message: 'dep off', stage: 'enable' },
+    })
+    stubStore(
+      [plugin('todo-app', { name: 'Todo App' }), failedPlugin],
+      [screen('todo-app', 'main', 'Todo'), screen('broken-app', 'main', 'Broken')],
+    )
+    const ctx = makeSpyCtx('en')
+    const { host, unmount } = await mount(ctx, screenProps())
+    try {
+      assert.match(host.textContent ?? '', /2 apps · 1 ready/)
+      const brokenCard = host.querySelector<HTMLElement>('[data-app-id="broken-app"]')
+      assert.ok(brokenCard)
+      assert.equal(brokenCard.classList.contains('is-disabled'), true)
+      assert.match(brokenCard.textContent ?? '', /Stopped/)
+      await act(async () => {
+        brokenCard.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      })
+      assert.equal(ctx.screenCalls.length, 0, 'failed 应用点击不得打开 Screen')
+      assert.equal(ctx.splitCalls.length, 0, 'failed 应用不得触发分屏打开')
+    } finally {
+      unmount()
+    }
+  })
+
   test('渲染输出零 Emoji', { timeout: 60_000 }, async () => {
     stubStore([plugin('todo-app')], [screen('todo-app', 'main', '待办台')])
     const { host, unmount } = await mount(makeSpyCtx(), screenProps())

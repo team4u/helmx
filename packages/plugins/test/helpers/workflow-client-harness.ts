@@ -176,10 +176,12 @@ export function createWorkflowHostHarness(init: {
   loadErrors?: Record<string, string>
   runsByConversation?: Record<number, WorkflowRunSummary[]>
   pluginDocs?: Record<string, unknown>
+  timelineToolCalls?: SDKTypes.TimelineToolCallsInput
   locale?: SDKTypes.HelmxLocale
   onAction?: (pluginId: string, actionId: string, input: unknown) => Promise<unknown> | unknown
 }) {
   const activeToolCallIds = new Set<string>()
+  const timelineToolCallsStore = SDK.createTimelineToolCallsStore(init.timelineToolCalls)
   const log: WorkflowHostLog = {
     actions: [],
     drawers: [],
@@ -307,7 +309,11 @@ export function createWorkflowHostHarness(init: {
       React.createElement(
         SDK.PluginClientContext.Provider,
         { value: ctx },
-        React.createElement(SDK.ToolActivityContext.Provider, { value: toolActivityRegistry }, children),
+        React.createElement(
+          SDK.ToolActivityContext.Provider,
+          { value: toolActivityRegistry },
+          React.createElement(SDK.TimelineToolCallsContext.Provider, { value: timelineToolCallsStore }, children),
+        ),
       ),
     )
   }
@@ -355,5 +361,21 @@ export function createWorkflowHostHarness(init: {
     })
   }
 
-  return { log, port: basePort, ctx, mountNode, renderSsr, setRuns, setConversations }
+  const setTimelineToolCalls = (next: SDKTypes.TimelineToolCallsInput) => {
+    act(() => {
+      timelineToolCallsStore.update(next)
+    })
+  }
+
+  return {
+    log,
+    port: basePort,
+    ctx,
+    timelineToolCallsStore,
+    mountNode,
+    renderSsr,
+    setRuns,
+    setConversations,
+    setTimelineToolCalls,
+  }
 }

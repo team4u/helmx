@@ -588,6 +588,41 @@ test('PluginDetailDrawer：正常插件不渲染诊断框与异常徽章', { tim
   assert.doesNotMatch(html, /<span>Error<\/span>/)
 })
 
+test('PluginDetailDrawer：enabled === true 且 status === failed 时优先展示异常徽章与诊断，并提供停用按钮恢复路径', { timeout: 60_000 }, () => {
+  const plugin = makePlugin({
+    id: 'ext:dep-broken',
+    name: '依赖故障插件',
+    enabled: true,
+    status: 'failed',
+    hooks: [],
+    actions: [],
+    tools: [],
+    error: {
+      code: 'plugin_dependency_not_enabled',
+      message: 'Dependency base was force-disabled',
+      stage: 'enable',
+    },
+  })
+
+  const html = renderToString(
+    e(PluginDetailDrawer, {
+      plugin,
+      open: true,
+      inline: true,
+      onClose: () => {},
+      onToggleEnabled: async () => {},
+      toggling: false,
+    }),
+  )
+
+  assert.match(html, /badge badge-err/)
+  assert.match(html, /<span>Error<\/span>/)
+  assert.doesNotMatch(html, /badge badge-ok/, 'enabled=true 但 status=failed 不得显示 Enabled 绿标')
+  assert.match(html, /plugin_dependency_not_enabled/)
+  assert.match(html, /Dependency base was force-disabled/)
+  assert.match(html, /Disable plugin/, '仍应提供停用按钮供用户按诊断路径停用后重启用')
+})
+
 // ---------------------------------------------------------------------------
 // 8. 409 plugin_in_use 占用确认与强制停用
 // ---------------------------------------------------------------------------

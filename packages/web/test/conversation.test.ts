@@ -5,6 +5,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { ConversationEntry, ConversationLive, ConversationSummary } from '@helmx/protocol'
+import { createTimelineToolCallsStore } from '@helmx/plugin-client'
 import { conversationsApi, ApiClientError } from '../src/lib/api.js'
 import { collectSubtreeIds } from '../src/conversation/ancestry-model.js'
 import {
@@ -15,7 +16,7 @@ import {
 import { ARCHIVED_TAG } from '../src/shell/sidebar-model.js'
 import {
   buildTimelineItems,
-  collectSiblingCalls,
+  collectToolCallsByName,
   detectArtifactRef,
   filterRewoundEntries,
   findToolView,
@@ -142,7 +143,7 @@ test('toolCall + toolResult 按 callId 配对：状态、isError、耗时、star
   assert.equal(traces[0]!.resultText, '文件内容')
   assert.equal(traces[0]!.durationMs, 120)
   assert.equal(traces[0]!.startedAt, 1_700_000_000_500, 'assistant.timestamp 应传播为 tool.startedAt')
-  assert.equal(traces[0]!.structuredOutput, undefined, '无 details 时不得伪造结构化结果')
+  assert.equal(traces[0]!.presentationMeta, undefined, '无 details 时不得伪造展示元数据')
   assert.equal(traces[1]!.toolName, 'bash')
   assert.equal(traces[1]!.status, 'error')
   assert.equal(traces[1]!.isError, true)
@@ -152,7 +153,7 @@ test('toolCall + toolResult 按 callId 配对：状态、isError、耗时、star
   assert.ok(turn.segments.some((s) => s.kind === 'text' && s.text === '先看文件'))
 })
 
-test('toolResult 消息的 details 映射为结构化结果；非对象值不采纳', { timeout: 60_000 }, () => {
+test('toolResult 消息的 details 映射为 presentationMeta；非对象值不采纳', { timeout: 60_000 }, () => {
   const editMeta = {
     path: '/abs/a.ts',
     nodeId: 'local',
@@ -175,9 +176,9 @@ test('toolResult 消息的 details 映射为结构化结果；非对象值不采
   ])
   const traces = collectToolTraces(items)
   assert.equal(traces.length, 3)
-  assert.deepEqual(traces[0]!.structuredOutput, editMeta, 'details 对象进入 ToolTrace.structuredOutput')
-  assert.equal(traces[1]!.structuredOutput, undefined, '字符串 details 不采纳')
-  assert.equal(traces[2]!.structuredOutput, undefined, '数组 details 不采纳')
+  assert.deepEqual(traces[0]!.presentationMeta, editMeta, 'details 对象进入 ToolTrace.presentationMeta')
+  assert.equal(traces[1]!.presentationMeta, undefined, '字符串 details 不采纳')
+  assert.equal(traces[2]!.presentationMeta, undefined, '数组 details 不采纳')
 })
 
 test('未配对的孤儿 toolResult 生成独立工具行', { timeout: 60_000 }, () => {
@@ -951,46 +952,265 @@ test('withdraw 与 submitInput(replaceFromEntryId)：请求体构造与非法 su
   assert.deepEqual(captured[3]!.body, { text: '普通', origin: 'human' })
 })
 
-test('collectSiblingCalls：收集全部工具调用轻量摘要（callId 顺序 / 状态归一 / details 透传 structuredOutput）', { timeout: 60_000 }, () => {
+test('collectToolCallsByName：单遍按 toolName 分片聚合轻量摘要（全局 index / 状态归一 / presentationMeta / 不复制 result）', { timeout: 60_000 }, () => {
   const items = buildTimelineItems([
     entry('1', 'helmx.input', { data: { text: '开始', origin: 'human' } }),
-    assistantEntry('2', [toolCallBlock('call_1', 'subagent', { prompt: '首次派生' })]),
-    toolResultEntry('3', 'call_1', 'subagent', { text: '首战告捷', details: { execution: { conversationId: 42 } } }),
-    assistantEntry('4', [{ type: 'text', text: '继续深挖' }]),
-    entry('5', 'helmx.input', { data: { text: '续接 42', origin: 'human' } }),
-    assistantEntry('6', [toolCallBlock('call_2', 'subagent', { prompt: '继续', resume: 42 })]),
-    toolResultEntry('7', 'call_2', 'subagent', { text: '第二轮完成', details: { execution: { conversationId: 42 } } }),
-    entry('8', 'helmx.input', { data: { text: '再续接 42 并派生 43', origin: 'human' } }),
-    assistantEntry('9', [
+    assistantEntry('2', [
+      toolCallBlock('call_1', 'subagent', { prompt: '首次派生' }),
+      toolCallBlock('bash_1', 'bash', { command: 'ls' }),
+    ]),
+    toolResultEntry('3', 'call_1', 'subagent', { text: '首战告捷大正文', details: { execution: { conversationId: 42 } } }),
+    toolResultEntry('4', 'bash_1', 'bash', { text: 'file-list', details: { exitCode: 0 } }),
+    assistantEntry('5', [{ type: 'text', text: '继续深挖' }]),
+    entry('6', 'helmx.input', { data: { text: '续接 42', origin: 'human' } }),
+    assistantEntry('7', [toolCallBlock('call_2', 'subagent', { prompt: '继续', resume: 42 })]),
+    toolResultEntry('8', 'call_2', 'subagent', { text: '第二轮完成', details: { execution: { conversationId: 42 } } }),
+    entry('9', 'helmx.input', { data: { text: '再续接 42 并派生 43', origin: 'human' } }),
+    assistantEntry('10', [
       toolCallBlock('call_3', 'subagent', { prompt: '再继续', resume: '42' }),
       toolCallBlock('call_4', 'subagent', { prompt: '新任务' }),
     ]),
-    toolResultEntry('10', 'call_3', 'subagent', { text: '第三轮完成', details: { execution: { conversationId: 42 } } }),
-    toolResultEntry('11', 'call_4', 'subagent', { text: '新会话完成', details: { execution: { conversationId: 43 } } }),
+    toolResultEntry('11', 'call_3', 'subagent', { text: '第三轮完成', details: { execution: { conversationId: 42 } } }),
+    toolResultEntry('12', 'call_4', 'subagent', { text: '新会话完成', details: { execution: { conversationId: 43 } } }),
   ])
-  const calls = collectSiblingCalls(items)
-  assert.equal(calls.length, 4)
-  assert.deepEqual(calls.map((c) => c.callId), ['call_1', 'call_2', 'call_3', 'call_4'])
-  assert.ok(calls.every((c) => c.toolName === 'subagent'))
-  assert.ok(calls.every((c) => c.status === 'done'))
-  assert.deepEqual(calls[0]!.structuredOutput, { execution: { conversationId: 42 } })
-  assert.deepEqual(calls[2]!.structuredOutput, { execution: { conversationId: 42 } })
-  assert.deepEqual(calls[3]!.structuredOutput, { execution: { conversationId: 43 } })
-  assert.deepEqual(calls[1]!.input, { prompt: '继续', resume: 42 })
-  assert.deepEqual(calls[2]!.input, { prompt: '再继续', resume: '42' })
+  const byName = collectToolCallsByName(items)
+  const subagentCalls = byName.get('subagent') ?? []
+  const bashCalls = byName.get('bash') ?? []
+
+  assert.equal(subagentCalls.length, 4)
+  assert.deepEqual(subagentCalls.map((c) => c.callId), ['call_1', 'call_2', 'call_3', 'call_4'])
+  assert.deepEqual(subagentCalls.map((c) => c.index), [0, 2, 3, 4], '跨工具保留全局时间顺序 index')
+  assert.ok(subagentCalls.every((c) => c.toolName === 'subagent' && c.status === 'done'))
+  assert.deepEqual(subagentCalls[0]!.presentationMeta, { execution: { conversationId: 42 } })
+  assert.deepEqual(subagentCalls[2]!.presentationMeta, { execution: { conversationId: 42 } })
+  assert.deepEqual(subagentCalls[3]!.presentationMeta, { execution: { conversationId: 43 } })
+  assert.deepEqual(subagentCalls[1]!.input, { prompt: '继续', resume: 42 })
+  assert.deepEqual(subagentCalls[2]!.input, { prompt: '再继续', resume: '42' })
+  for (const call of [...subagentCalls, ...bashCalls]) {
+    assert.equal('result' in call, false, '摘要不复制 result 大文本')
+    assert.equal('resultTruncation' in call, false)
+  }
+  assert.deepEqual(bashCalls.map((c) => ({ callId: c.callId, index: c.index })), [{ callId: 'bash_1', index: 1 }])
 })
 
-test('collectSiblingCalls：无 callId 的调用跳过，step-group 内工具同样收集', { timeout: 60_000 }, () => {
+test('collectToolCallsByName：无 callId 或空 callId 跳过，step-group 内工具同样按名聚合', { timeout: 60_000 }, () => {
   const items = buildTimelineItems([
     assistantEntry('1', [
+      { type: 'toolCall', name: 'bash', arguments: { command: 'no-id' } },
+      { type: 'toolCall', id: '', name: 'bash', arguments: { command: 'empty-id' } },
       toolCallBlock('c-fold-1', 'bash', { command: 'ls' }),
       toolCallBlock('c-fold-2', 'read', { file_path: '/x' }),
     ]),
     toolResultEntry('2', 'c-fold-1', 'bash', { text: 'ok' }),
     toolResultEntry('3', 'c-fold-2', 'read', { text: '内容' }),
   ])
-  const calls = collectSiblingCalls(items)
-  assert.deepEqual(calls.map((c) => c.callId), ['c-fold-1', 'c-fold-2'])
+  const byName = collectToolCallsByName(items)
+  assert.deepEqual(byName.get('bash')?.map((c) => c.callId), ['c-fold-1'])
+  assert.deepEqual(byName.get('read')?.map((c) => c.callId), ['c-fold-2'])
+  assert.equal(byName.get('read')?.[0]?.index, 1)
+})
+
+test('createTimelineToolCallsStore：无关 toolName 与流式文本更新保引用且零通知；目标变更与清空精确通知', { timeout: 60_000 }, () => {
+  const subMeta = { execution: { conversationId: 42 } }
+  const subInput = { prompt: '派生' }
+  const baseEntries: ConversationEntry[] = [
+    entry('1', 'helmx.input', { data: { text: '开始', origin: 'human' } }),
+    assistantEntry('2', [toolCallBlock('sub_1', 'subagent', subInput)]),
+    toolResultEntry('3', 'sub_1', 'subagent', { text: '完成', details: subMeta }),
+  ]
+
+  const store = createTimelineToolCallsStore(collectToolCallsByName(buildTimelineItems(baseEntries)))
+  const initialSubSnapshot = store.getSnapshot('subagent')
+  const emptySnapshot = store.getSnapshot('bash')
+  assert.equal(initialSubSnapshot.length, 1)
+  assert.ok(Object.isFrozen(initialSubSnapshot))
+  assert.equal(emptySnapshot.length, 0, '未出现的 toolName 返回冻结空数组')
+  assert.ok(Object.isFrozen(emptySnapshot))
+  assert.equal(store.getSnapshot('read'), emptySnapshot, '所有缺失分片共享同一冻结空数组引用')
+
+  let subNotifies = 0
+  let bashNotifies = 0
+  const unsubSub = store.subscribe('subagent', () => { subNotifies += 1 })
+  const unsubBash = store.subscribe('bash', () => { bashNotifies += 1 })
+
+  // 1) 流式文本更新 + 新增无关 bash 工具：subagent 引用保持不变、零通知；仅 bash 收到 1 次通知
+  const withLiveBash = buildTimelineItems(baseEntries, {
+    working: true,
+    live: {
+      conversationId: 1,
+      updatedAt: 100,
+      text: '正在执行命令…',
+      tools: [{ callId: 'bash_1', toolName: 'bash', status: 'running', input: { command: 'ls' } }],
+    },
+  })
+  assert.equal(store.update(collectToolCallsByName(withLiveBash)), true)
+  assert.equal(store.getSnapshot('subagent'), initialSubSnapshot, '无关更新必须保留原数组引用')
+  assert.equal(subNotifies, 0, '无关 toolName 与流式文本更新不得通知 subagent 订阅者')
+  assert.equal(bashNotifies, 1, '新增 bash 工具精确通知 bash 订阅者')
+  assert.equal(store.getSnapshot('bash').length, 1)
+
+  // 2) 仅流式文本继续增量：所有已存在分片都保持引用、零通知
+  const bashBeforeTextTick = store.getSnapshot('bash')
+  const bashInput = { command: 'ls' }
+  const withPersistedBash = [
+    ...baseEntries,
+    assistantEntry('4', [toolCallBlock('bash_1', 'bash', bashInput)]),
+  ]
+  assert.equal(
+    store.update(collectToolCallsByName(buildTimelineItems(withPersistedBash, {
+      working: true,
+      live: {
+        conversationId: 1,
+        updatedAt: 101,
+        text: '增量 1',
+        tools: [{ callId: 'bash_1', toolName: 'bash', status: 'running' }],
+      },
+    }))),
+    true,
+  )
+  const bashAfterPersist = store.getSnapshot('bash')
+  assert.notEqual(bashAfterPersist, bashBeforeTextTick)
+  assert.equal(bashNotifies, 2)
+  assert.equal(subNotifies, 0)
+
+  assert.equal(
+    store.update(collectToolCallsByName(buildTimelineItems(withPersistedBash, {
+      working: true,
+      live: {
+        conversationId: 1,
+        updatedAt: 102,
+        text: '增量 2',
+        tools: [{ callId: 'bash_1', toolName: 'bash', status: 'running' }],
+      },
+    }))),
+    false,
+    '无分片变更时 update 返回 false',
+  )
+  assert.equal(store.getSnapshot('bash'), bashAfterPersist, '流式正文帧不改动持久化工具引用时零通知')
+  assert.equal(bashNotifies, 2)
+  assert.equal(subNotifies, 0)
+
+  // 3) 目标 subagent 新增调用（bash_1 仍保持原 running 状态）：仅通知 subagent，不通知 bash
+  const withSecondSub = [
+    ...withPersistedBash,
+    assistantEntry('5', [toolCallBlock('sub_2', 'subagent', { prompt: '第二轮', resume: 42 })]),
+  ]
+  assert.equal(
+    store.update(collectToolCallsByName(buildTimelineItems(withSecondSub, {
+      working: true,
+      live: {
+        conversationId: 1,
+        updatedAt: 103,
+        text: '增量 2',
+        tools: [{ callId: 'bash_1', toolName: 'bash', status: 'running' }],
+      },
+    }))),
+    true,
+  )
+  assert.equal(subNotifies, 1)
+  assert.equal(bashNotifies, 2)
+  const updatedSub = store.getSnapshot('subagent')
+  assert.deepEqual(updatedSub.map((c) => c.callId), ['sub_1', 'sub_2'])
+  assert.equal(updatedSub[0], initialSubSnapshot[0], '未变更前缀元素同样保持对象引用')
+
+  // 4) 切空 / rewind 清空：已移除的分片回落冻结空数组并通知订阅者
+  assert.equal(store.update(new Map()), true)
+  assert.equal(store.getSnapshot('subagent'), emptySnapshot)
+  assert.equal(store.getSnapshot('bash'), emptySnapshot)
+  assert.equal(subNotifies, 2)
+  assert.equal(bashNotifies, 3)
+
+  // 5) 退订后不再接收通知
+  unsubSub()
+  unsubBash()
+  assert.equal(store.update(collectToolCallsByName(buildTimelineItems(baseEntries))), true)
+  assert.equal(subNotifies, 2)
+  assert.equal(bashNotifies, 3)
+})
+
+test('buildTimelineItems：单回合大量乱序 toolResult 经 Map 配对保持调用顺序、元数据与孤儿结果语义', { timeout: 60_000 }, () => {
+  const count = 80
+  const calls = Array.from({ length: count }, (_, i) =>
+    toolCallBlock(`call_${i}`, i % 2 === 0 ? 'read' : 'bash', { idx: i }),
+  )
+  // 逆序返回所有结果 + 插入 1 条未配对孤儿结果
+  const results: ConversationEntry[] = []
+  for (let i = count - 1; i >= 0; i--) {
+    results.push(
+      toolResultEntry(`res_${i}`, `call_${i}`, i % 2 === 0 ? 'read' : 'bash', {
+        text: `out-${i}`,
+        isError: i === 5,
+        durationMs: i * 10,
+        details: { idx: i },
+      }),
+    )
+  }
+  results.push(toolResultEntry('res_orphan', 'orphan_call', 'bash', { text: 'orphan-out', details: { orphan: true } }))
+
+  const items = buildTimelineItems([assistantEntry('a1', calls), ...results])
+  const traces = collectToolTraces(items)
+  assert.equal(traces.length, count + 1)
+  for (let i = 0; i < count; i++) {
+    const t = traces[i]!
+    assert.equal(t.callId, `call_${i}`, '配对后保持原始 toolCall 顺序')
+    assert.equal(t.resultText, `out-${i}`)
+    assert.equal(t.status, i === 5 ? 'error' : 'done')
+    assert.equal(t.isError, i === 5)
+    assert.equal(t.durationMs, i * 10)
+    assert.deepEqual(t.presentationMeta, { idx: i })
+  }
+  const orphan = traces[count]!
+  assert.equal(orphan.callId, 'orphan_call')
+  assert.equal(orphan.resultText, 'orphan-out')
+  assert.deepEqual(orphan.presentationMeta, { orphan: true })
+})
+
+test('buildTimelineItems：单回合重复 callId 保持倒序结果配对与 live 正向合并语义', { timeout: 60_000 }, () => {
+  const entries: ConversationEntry[] = [
+    assistantEntry('a1', [
+      toolCallBlock('dup', 'bash', { seq: 1 }),
+      toolCallBlock('dup', 'bash', { seq: 2 }),
+      toolCallBlock('live_done', 'bash', { seq: 3 }),
+      toolCallBlock('live_pending', 'bash', { seq: 4 }),
+    ]),
+    // 第一条 dup 结果配对倒数第一个未填充的 dup（seq: 2），第二条配对前面的 dup（seq: 1）
+    toolResultEntry('r1', 'dup', 'bash', { text: 'res-for-second', details: { matched: 2 } }),
+    toolResultEntry('r2', 'dup', 'bash', { text: 'res-for-first', details: { matched: 1 } }),
+    toolResultEntry('r3', 'live_done', 'bash', { text: 'already-done' }),
+  ]
+
+  const items = buildTimelineItems(entries, {
+    working: true,
+    live: {
+      conversationId: 1,
+      text: '',
+      updatedAt: 200,
+      tools: [
+        // 已落定 done 的工具不得被 live 降级为 running
+        { callId: 'live_done', toolName: 'bash', status: 'running', result: 'stale-live' },
+        // 未落定的持久化调用合并 live 运行态与临时输出，但保留持久化 input
+        { callId: 'live_pending', toolName: 'bash', status: 'running', input: { seq: 999 }, result: 'streaming-out' },
+        // 新 live 工具追加在末尾，同 callId 重复条目合并到同一行
+        { callId: 'live_only', toolName: 'read', status: 'running', input: { path: '/a.ts' } },
+        { callId: 'live_only', toolName: 'read', status: 'error', result: 'boom' },
+      ],
+    },
+  })
+
+  const traces = collectToolTraces(items)
+  assert.deepEqual(traces.map((t) => t.callId), ['dup', 'dup', 'live_done', 'live_pending', 'live_only'])
+  assert.equal(traces[0]!.resultText, 'res-for-first')
+  assert.deepEqual(traces[0]!.presentationMeta, { matched: 1 })
+  assert.equal(traces[1]!.resultText, 'res-for-second')
+  assert.deepEqual(traces[1]!.presentationMeta, { matched: 2 })
+  assert.equal(traces[2]!.status, 'done', '已落定工具不被 live running 覆盖')
+  assert.equal(traces[2]!.resultText, 'already-done')
+  assert.equal(traces[3]!.status, 'running')
+  assert.deepEqual(traces[3]!.input, { seq: 4 }, '已有持久化 input 不被 live input 覆盖')
+  assert.equal(traces[3]!.resultText, 'streaming-out')
+  assert.equal(traces[4]!.status, 'error')
+  assert.equal(traces[4]!.isError, true)
+  assert.equal(traces[4]!.resultText, 'boom')
 })
 
 // ---------------------------------------------------------------------------

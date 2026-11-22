@@ -21,8 +21,9 @@ import type {
   ConversationLive,
   InputOrigin,
   TimelineRendererSpec,
+  TimelineToolCallSummary,
   ToolResultTruncation,
-  ToolViewSiblingCall,
+  ToolViewProps,
   ToolViewSpec,
   WhenBusy,
 } from '@helmx/protocol/browser'
@@ -74,8 +75,8 @@ export interface ToolTrace {
   durationMs?: number
   /** Artifact reference detected in the output (kernel Spill marker / art_ prefix), feeding the "open full artifact" button. */
   artifactRef?: string
-  /** Persisted view of the tool structured output (toolResult message details channel; present on success for tools declaring structuredOutputSchema); omitted otherwise. */
-  structuredOutput?: unknown
+  /** Persisted bounded UI presentation metadata (toolResult message details channel; plain object only); omitted otherwise. */
+  presentationMeta?: Readonly<Record<string, unknown>>
   /** Matched a plugin tool.view (e.g. dispatch_worker): exempt from folding, renders a business card. */
   toolView?: QualifiedToolView
 }
@@ -383,6 +384,25 @@ export function sortByPriorityDescStable<T extends { spec: { priority?: number }
     .map((entry) => entry.item)
 }
 
+function matchSortedTimelineRenderer(
+  entry: ConversationEntry,
+  sortedRenderers: ReadonlyArray<QualifiedRenderer> | undefined,
+): QualifiedRenderer | undefined {
+  if (!sortedRenderers || sortedRenderers.length === 0) return undefined
+  const data = isStringRecord(entry.data) ? entry.data : undefined
+  const meta = data && isStringRecord(data.meta) ? data.meta : undefined
+  const metaRenderer = typeof meta?.renderer === 'string' ? meta.renderer : undefined
+  const ownRenderer = typeof data?.renderer === 'string' ? data.renderer : undefined
+  for (const r of sortedRenderers) {
+    const kinds = r.spec.kinds
+    if (kinds !== undefined && (!Array.isArray(kinds) || !kinds.includes(entry.kind))) continue
+    const want = r.spec.matchMeta?.renderer
+    if (want !== undefined && metaRenderer !== want && ownRenderer !== want) continue
+    return r
+  }
+  return undefined
+}
+
 /**
  * timeline.renderer match resolution (stable priority-descending arbitration):
  * - sort by (spec.priority ?? 0) descending, equal priorities keep contribution order (first registered wins);
@@ -394,18 +414,25 @@ export function matchTimelineRenderer(
   renderers: ReadonlyArray<QualifiedRenderer> | undefined,
 ): QualifiedRenderer | undefined {
   if (!renderers || renderers.length === 0) return undefined
-  const data = isStringRecord(entry.data) ? entry.data : undefined
-  const meta = data && isStringRecord(data.meta) ? data.meta : undefined
-  const metaRenderer = typeof meta?.renderer === 'string' ? meta.renderer : undefined
-  const ownRenderer = typeof data?.renderer === 'string' ? data.renderer : undefined
-  for (const r of sortByPriorityDescStable(renderers)) {
-    const kinds = r.spec.kinds
-    if (kinds !== undefined && (!Array.isArray(kinds) || !kinds.includes(entry.kind))) continue
-    const want = r.spec.matchMeta?.renderer
-    if (want !== undefined && metaRenderer !== want && ownRenderer !== want) continue
-    return r
+  return matchSortedTimelineRenderer(entry, sortByPriorityDescStable(renderers))
+}
+
+/**
+ * Precompute a toolName -> highest-priority tool.view lookup map once per timeline build,
+ * preserving the exact stable priority-descending arbitration of `findToolView` in O(1) per call.
+ */
+function buildToolViewIndex(
+  toolViews: ReadonlyArray<QualifiedToolView> | undefined,
+): ReadonlyMap<string, QualifiedToolView> | undefined {
+  if (!toolViews || toolViews.length === 0) return undefined
+  const byToolName = new Map<string, QualifiedToolView>()
+  for (const tv of sortByPriorityDescStable(toolViews)) {
+    if (!Array.isArray(tv.spec.toolNames)) continue
+    for (const toolName of tv.spec.toolNames) {
+      if (!byToolName.has(toolName)) byToolName.set(toolName, tv)
+    }
   }
-  return undefined
+  return byToolName
 }
 
 /**
@@ -571,6 +598,8 @@ interface RawSegment {
 interface TurnAcc {
   entryIds: string[]
   segments: RawSegment[]
+  /** Per-turn callId -> tool trace list (in segment appearance order) for O(1) result pairing and live merge. */
+  toolsByCallId: Map<string, ToolTrace[]>
   /** Display identity core of the turn (provider+model); cleared when an untrusted entry pollutes the turn
    * (unknown content is never attributed to a known model, and current conversation config is never a fallback). */
   model?: { provider: string; model: string }
@@ -589,15 +618,35 @@ interface TurnAcc {
 }
 
 function newTurn(): TurnAcc {
-  return { entryIds: [], segments: [] }
+  return { entryIds: [], segments: [], toolsByCallId: new Map() }
+}
+
+function registerTurnTool(acc: TurnAcc, tool: ToolTrace): void {
+  if (tool.callId === undefined) return
+  const bucket = acc.toolsByCallId.get(tool.callId)
+  if (bucket !== undefined) bucket.push(tool)
+  else acc.toolsByCallId.set(tool.callId, [tool])
 }
 
 function makeToolTrace(
   key: string,
   toolName: string,
-  opts: { callId?: string; input?: unknown; status?: ToolTraceStatus; isError?: boolean; resultText?: string; resultTruncation?: ToolResultTruncation; resultEntryId?: string; structuredOutput?: unknown; startedAt?: number; durationMs?: number; toolViews?: ReadonlyArray<QualifiedToolView> },
+  opts: {
+    callId?: string
+    input?: unknown
+    status?: ToolTraceStatus
+    isError?: boolean
+    resultText?: string
+    resultTruncation?: ToolResultTruncation
+    resultEntryId?: string
+    presentationMeta?: Readonly<Record<string, unknown>>
+    startedAt?: number
+    durationMs?: number
+    toolViewByName?: ReadonlyMap<string, QualifiedToolView>
+  },
 ): ToolTrace {
   const status = opts.status ?? 'unknown'
+  const toolView = opts.toolViewByName?.get(toolName)
   return {
     key,
     toolName,
@@ -608,10 +657,10 @@ function makeToolTrace(
     ...(opts.resultText !== undefined ? { resultText: opts.resultText } : {}),
     ...(opts.resultTruncation !== undefined ? { resultTruncation: opts.resultTruncation } : {}),
     ...(opts.resultEntryId !== undefined ? { resultEntryId: opts.resultEntryId } : {}),
-    ...(opts.structuredOutput !== undefined ? { structuredOutput: opts.structuredOutput } : {}),
+    ...(opts.presentationMeta !== undefined ? { presentationMeta: opts.presentationMeta } : {}),
     ...(opts.durationMs !== undefined ? { durationMs: opts.durationMs } : {}),
     ...(opts.startedAt !== undefined ? { startedAt: opts.startedAt } : {}),
-    ...{ toolView: findToolView(toolName, opts.toolViews) },
+    ...(toolView !== undefined ? { toolView } : {}),
   }
 }
 
@@ -792,7 +841,7 @@ function isEligibleProcessContent(content: unknown): boolean {
 function appendAssistantEntry(
   acc: TurnAcc,
   entry: ConversationEntry,
-  opts: BuildTimelineOptions,
+  toolViewByName: ReadonlyMap<string, QualifiedToolView> | undefined,
   modelIdentity: AssistantModelIdentity | undefined,
 ): void {
   acc.entryIds.push(entry.id)
@@ -896,11 +945,15 @@ function appendAssistantEntry(
           // durationMs 缺失（遗留 / deferred 响应）时不锚定，避免从请求起点起算虚高。
           const callStartedAt =
             msgTimestamp !== undefined && msgDurationMs !== undefined ? msgTimestamp + msgDurationMs : entry.createdAt
-          acc.segments.push({
-            kind: 'tool',
-            key: `tool:${callId ?? key}`,
-            tool: makeToolTrace(`tool:${callId ?? key}`, name, { callId, input, startedAt: callStartedAt, toolViews: opts.toolViews }),
+          const toolKey = `tool:${callId ?? key}`
+          const tool = makeToolTrace(toolKey, name, {
+            callId,
+            input,
+            startedAt: callStartedAt,
+            toolViewByName,
           })
+          acc.segments.push({ kind: 'tool', key: toolKey, tool })
+          registerTurnTool(acc, tool)
         }
       }
     }
@@ -910,8 +963,12 @@ function appendAssistantEntry(
   }
 }
 
-/** Pair pi.tool-result by toolCallId; an unmatched result becomes a standalone tool row. */
-function appendToolResultEntry(acc: TurnAcc, entry: ConversationEntry, opts: BuildTimelineOptions): void {
+/** Pair pi.tool-result by toolCallId via per-turn Map index; an unmatched result becomes a standalone tool row. */
+function appendToolResultEntry(
+  acc: TurnAcc,
+  entry: ConversationEntry,
+  toolViewByName: ReadonlyMap<string, QualifiedToolView> | undefined,
+): void {
   acc.entryIds.push(entry.id)
   const model = entry.model
   if (!Array.isArray(model)) return
@@ -931,58 +988,59 @@ function appendToolResultEntry(acc: TurnAcc, entry: ConversationEntry, opts: Bui
         : undefined
     // Server truncation markers ride on the toolResult message (truncated/totalChars/totalLines).
     const truncation = readResultTruncation(m)
-    // The persisted channel for structured outputs is the toolResult message details (pi-durable
-    // never writes structuredOutput into conversation entries; it only feeds nested callers); non-object values are ignored.
+    // The persisted UI channel is toolResult message details (bounded presentationMeta);
+    // pi-durable never writes structuredOutput into conversation entries. Non-plain-object values are ignored.
     const details = m.details
-    const structuredOutput =
-      details !== null && typeof details === 'object' && !Array.isArray(details) ? details : undefined
+    const presentationMeta = isPlainRecord(details)
+      ? (details as Readonly<Record<string, unknown>>)
+      : undefined
     if (callId !== undefined) {
-      let paired = false
-      for (let i = acc.segments.length - 1; i >= 0; i--) {
-        const seg = acc.segments[i]!
-        if (seg.kind !== 'tool' || seg.tool === undefined) continue
-        if (seg.tool.callId !== callId) continue
-        if (seg.tool.resultText !== undefined || seg.tool.status === 'running') continue
-        seg.tool.status = isError ? 'error' : 'done'
-        seg.tool.isError = isError
-        if (resultText !== '') seg.tool.resultText = resultText
-        if (structuredOutput !== undefined) seg.tool.structuredOutput = structuredOutput
-        if (durationMs !== undefined) seg.tool.durationMs = durationMs
-        seg.tool.artifactRef = detectArtifactRef(seg.tool.resultText)
-        if (truncation !== undefined) {
-          seg.tool.resultTruncation = truncation
-          seg.tool.resultEntryId = entry.id
+      const candidates = acc.toolsByCallId.get(callId)
+      if (candidates !== undefined) {
+        let paired = false
+        for (let i = candidates.length - 1; i >= 0; i--) {
+          const candidate = candidates[i]!
+          if (candidate.resultText !== undefined || candidate.status === 'running') continue
+          candidate.status = isError ? 'error' : 'done'
+          candidate.isError = isError
+          if (resultText !== '') candidate.resultText = resultText
+          if (presentationMeta !== undefined) candidate.presentationMeta = presentationMeta
+          if (durationMs !== undefined) candidate.durationMs = durationMs
+          candidate.artifactRef = detectArtifactRef(candidate.resultText)
+          if (truncation !== undefined) {
+            candidate.resultTruncation = truncation
+            candidate.resultEntryId = entry.id
+          }
+          paired = true
+          break
         }
-        paired = true
-        break
+        if (paired) continue
       }
-      if (paired) continue
     }
     const key = `tool:${callId ?? `${entry.id}:${mi}`}`
-    acc.segments.push({
-      kind: 'tool',
-      key,
-      tool: makeToolTrace(key, toolName, {
-        callId,
-        status: isError ? 'error' : 'done',
-        isError,
-        ...(resultText !== '' ? { resultText } : {}),
-        ...(truncation !== undefined ? { resultTruncation: truncation, resultEntryId: entry.id } : {}),
-        ...(structuredOutput !== undefined ? { structuredOutput } : {}),
-        ...(durationMs !== undefined ? { durationMs } : {}),
-        toolViews: opts.toolViews,
-      }),
+    const tool = makeToolTrace(key, toolName, {
+      callId,
+      status: isError ? 'error' : 'done',
+      isError,
+      ...(resultText !== '' ? { resultText } : {}),
+      ...(truncation !== undefined ? { resultTruncation: truncation, resultEntryId: entry.id } : {}),
+      ...(presentationMeta !== undefined ? { presentationMeta } : {}),
+      ...(durationMs !== undefined ? { durationMs } : {}),
+      toolViewByName,
     })
-    const last = acc.segments[acc.segments.length - 1]!
-    if (last.kind === 'tool' && last.tool !== undefined) {
-      last.tool.artifactRef = detectArtifactRef(last.tool.resultText)
-    }
+    tool.artifactRef = detectArtifactRef(tool.resultText)
+    acc.segments.push({ kind: 'tool', key, tool })
+    registerTurnTool(acc, tool)
   }
 }
 
 /** Live merge: streaming thinking per content block (or the legacy flat snapshot); same callId updates the existing
  * tool row (only pending fields); new calls append a running row; streaming text appends as a text segment. */
-function mergeLiveIntoTurn(acc: TurnAcc, live: ConversationLive, opts: BuildTimelineOptions): void {
+function mergeLiveIntoTurn(
+  acc: TurnAcc,
+  live: ConversationLive,
+  toolViewByName: ReadonlyMap<string, QualifiedToolView> | undefined,
+): void {
   const genContent = live.generation?.message?.content
   if (genContent !== undefined) {
     // 按内容块序合并流式思考。流式期间只渲染思考块：正文走下方 live.text 路径（同一累计串），
@@ -1009,13 +1067,7 @@ function mergeLiveIntoTurn(acc: TurnAcc, live: ConversationLive, opts: BuildTime
   }
   for (const lt of live.tools) {
     if (typeof lt?.callId !== 'string' || typeof lt.toolName !== 'string') continue
-    let existing: ToolTrace | undefined
-    for (const seg of acc.segments) {
-      if (seg.kind === 'tool' && seg.tool !== undefined && seg.tool.callId === lt.callId) {
-        existing = seg.tool
-        break
-      }
-    }
+    const existing = acc.toolsByCallId.get(lt.callId)?.[0]
     if (existing !== undefined) {
       if (existing.status !== 'done' && existing.status !== 'error') {
         existing.status = lt.status
@@ -1032,16 +1084,14 @@ function mergeLiveIntoTurn(acc: TurnAcc, live: ConversationLive, opts: BuildTime
       continue
     }
     const key = `tool:${lt.callId}`
-    acc.segments.push({
-      kind: 'tool',
-      key,
-      tool: makeToolTrace(key, lt.toolName, {
-        callId: lt.callId,
-        ...(lt.input !== undefined ? { input: lt.input } : {}),
-        status: lt.status,
-        toolViews: opts.toolViews,
-      }),
+    const tool = makeToolTrace(key, lt.toolName, {
+      callId: lt.callId,
+      ...(lt.input !== undefined ? { input: lt.input } : {}),
+      status: lt.status,
+      toolViewByName,
     })
+    acc.segments.push({ kind: 'tool', key, tool })
+    registerTurnTool(acc, tool)
   }
   if (typeof live.text === 'string' && live.text.trim() !== '') {
     const persistedText = acc.segments.findLast((segment) => segment.kind === 'text')?.text
@@ -1061,6 +1111,11 @@ export function buildTimelineItems(
 ): TimelineItem[] {
   // Drop entries covered by helmx.rewind first: applies to both initial loads and SSE-increment rewinds.
   const activeEntries = filterRewoundEntries(entries)
+  const sortedRenderers =
+    options.timelineRenderers !== undefined && options.timelineRenderers.length > 0
+      ? sortByPriorityDescStable(options.timelineRenderers)
+      : undefined
+  const toolViewByName = buildToolViewIndex(options.toolViews)
   const items: TimelineItem[] = []
   const seenInputIds = new Set<string>()
   let turn: TurnAcc | null = null
@@ -1091,7 +1146,7 @@ export function buildTimelineItems(
 
   for (const entry of activeEntries) {
     // Plugin timeline.renderer hit: any entry can be taken over (fold-exempt, renders a card directly).
-    const renderer = matchTimelineRenderer(entry, options.timelineRenderers)
+    const renderer = matchSortedTimelineRenderer(entry, sortedRenderers)
     if (renderer !== undefined) {
       if (entry.kind === 'helmx.input') {
         const data = parseHelmxInputData(entry.data)
@@ -1141,12 +1196,12 @@ export function buildTimelineItems(
           turn = newTurn()
         }
         if (turn === null) turn = newTurn()
-        appendAssistantEntry(turn, entry, options, modelIdentity)
+        appendAssistantEntry(turn, entry, toolViewByName, modelIdentity)
         break
       }
       case 'pi.tool-result': {
         if (turn === null) turn = newTurn()
-        appendToolResultEntry(turn, entry, options)
+        appendToolResultEntry(turn, entry, toolViewByName)
         break
       }
       case 'pi.reset': {
@@ -1193,7 +1248,7 @@ export function buildTimelineItems(
   const isLive = options.working ?? (options.live !== undefined)
   if (options.live !== undefined) {
     if (turn === null) turn = newTurn()
-    mergeLiveIntoTurn(turn, options.live, options)
+    mergeLiveIntoTurn(turn, options.live, toolViewByName)
   }
   flushTurn(turn, items, isLive)
 
@@ -1231,38 +1286,56 @@ export function buildTimelineItems(
   return items
 }
 
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false
+  const proto = Object.getPrototypeOf(value)
+  return proto === Object.prototype || proto === null
+}
+
+// ---------------------------------------------------------------------------
+// Per-toolName timeline tool-call index (feeds @helmx/plugin-client createTimelineToolCallsStore)
+// ---------------------------------------------------------------------------
+
 /**
- * Collect lightweight summaries of all tool calls from timeline items (for tool.view plugin components
- * to dedupe/continue, i.e. ToolViewProps.siblingCalls; in timeline order; calls without callId are skipped).
+ * Single-pass O(N) aggregation of lightweight timeline tool call summaries partitioned by toolName.
+ * Chronological order is preserved globally via `index` and within each toolName bucket.
+ * Calls without a non-empty `callId` or `toolName` are skipped; `result` text is never copied.
  */
-export function collectSiblingCalls(items: ReadonlyArray<TimelineItem>): ToolViewSiblingCall[] {
-  const calls: ToolViewSiblingCall[] = []
+export function collectToolCallsByName(
+  items: ReadonlyArray<TimelineItem>,
+): Map<string, TimelineToolCallSummary[]> {
+  const byName = new Map<string, TimelineToolCallSummary[]>()
+  let index = 0
+  const pushTool = (tool: ToolTrace): void => {
+    if (tool.callId === undefined || tool.callId === '' || tool.toolName === '') return
+    const summary: TimelineToolCallSummary = {
+      callId: tool.callId,
+      toolName: tool.toolName,
+      index: index++,
+      status: tool.status === 'running' ? 'running' : tool.status === 'error' ? 'error' : 'done',
+      ...(tool.input !== undefined ? { input: tool.input } : {}),
+      ...(tool.presentationMeta !== undefined ? { presentationMeta: tool.presentationMeta } : {}),
+    }
+    let bucket = byName.get(tool.toolName)
+    if (bucket === undefined) {
+      bucket = []
+      byName.set(tool.toolName, bucket)
+    }
+    bucket.push(summary)
+  }
   for (const item of items) {
     if (item.kind !== 'assistant') continue
     for (const seg of item.segments) {
       if (seg.kind === 'tool') {
-        pushSiblingCall(calls, seg.tool)
+        pushTool(seg.tool)
       } else if (seg.kind === 'step-group') {
         for (const step of seg.steps) {
-          if (step.kind === 'tool') pushSiblingCall(calls, step.tool)
+          if (step.kind === 'tool') pushTool(step.tool)
         }
       }
     }
   }
-  return calls
-}
-
-function pushSiblingCall(calls: ToolViewSiblingCall[], tool: ToolTrace): void {
-  if (tool.callId === undefined) return
-  calls.push({
-    callId: tool.callId,
-    toolName: tool.toolName,
-    ...(tool.input !== undefined ? { input: tool.input } : {}),
-    status: tool.status === 'running' ? 'running' : tool.status === 'error' ? 'error' : 'done',
-    ...(tool.resultText !== undefined ? { result: tool.resultText } : {}),
-    ...(tool.resultTruncation !== undefined ? { resultTruncation: tool.resultTruncation } : {}),
-    ...(tool.structuredOutput !== undefined ? { structuredOutput: tool.structuredOutput } : {}),
-  })
+  return byName
 }
 
 /** Latest human input text (for the Composer up-arrow prefill). */
@@ -1376,12 +1449,11 @@ export function toolStatusIcon(tool: ToolTrace): string {
   return 'circle'
 }
 
-/** Build the full standard tool.view props (including siblingCalls for plugin dedupe/continuation). */
+/** Build the standard tool.view props (presentationMeta from details; siblingCalls removed in favor of per-toolName store subscription). */
 export function buildToolViewProps(
   tool: ToolTrace,
   conversationId: number,
-  siblingCalls: ReadonlyArray<ToolViewSiblingCall>,
-): Record<string, unknown> {
+): ToolViewProps {
   return {
     callId: tool.callId ?? '',
     toolName: tool.toolName,
@@ -1389,13 +1461,12 @@ export function buildToolViewProps(
     status: tool.status === 'running' ? 'running' : tool.status === 'error' ? 'error' : 'done',
     ...(tool.resultText !== undefined ? { result: tool.resultText } : {}),
     ...(tool.resultTruncation !== undefined ? { resultTruncation: tool.resultTruncation } : {}),
-    ...(tool.structuredOutput !== undefined ? { structuredOutput: tool.structuredOutput } : {}),
+    ...(tool.presentationMeta !== undefined ? { presentationMeta: tool.presentationMeta } : {}),
     isError: tool.isError,
     ...(tool.startedAt !== undefined ? { startedAt: tool.startedAt } : {}),
     ...(tool.durationMs !== undefined ? { durationMs: tool.durationMs } : {}),
     ...(tool.artifactRef !== undefined ? { artifactRef: tool.artifactRef } : {}),
     conversationId,
-    siblingCalls,
   }
 }
 

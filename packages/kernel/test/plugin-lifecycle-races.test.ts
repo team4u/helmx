@@ -702,3 +702,210 @@ test('start() single-flight failure clears cached rejection so retries succeed',
     await host.dispose();
   }
 });
+
+// ---------------------------------------------------------------------------
+// 6. Hook activation gate: failed-while-enabled, deactivating window, live-task invariants & recovery
+// ---------------------------------------------------------------------------
+
+function spawnPayload(prompt = 'run task') {
+  return { parentConversationId: 1, prompt };
+}
+
+test('hook gate: failed-while-enabled plugin skips regular and agent_spawn around hooks without affecting active peers, and resumes after recovery', { timeout: 60_000 }, async () => {
+  const host = makeHost();
+  try {
+    const marks: string[] = [];
+    await host.register({ id: 'p:base', definePlugin: () => {} }, { enabled: true });
+    await host.register({
+      id: 'p:dep',
+      dependencies: ['p:base'],
+      definePlugin: (ctx) => {
+        ctx.hook.onTrigger((payload) => {
+          marks.push(`dep:trigger:${payload.id}`);
+          return { action: 'transform', value: { ...payload, text: `${payload.text}+dep` } };
+        });
+        ctx.hook.onInput((payload) => {
+          marks.push(`dep:input:${payload.input.id}`);
+          return { action: 'block', reason: 'dep blocked' };
+        });
+        ctx.hook.onAgentSpawn(async (req, next) => {
+          marks.push(`dep:spawn-before:${req.prompt}`);
+          await next({ ...req, prompt: `${req.prompt}+dep` });
+          marks.push('dep:spawn-after');
+        });
+      },
+    }, { enabled: true });
+    await host.register({
+      id: 'p:other',
+      definePlugin: (ctx) => {
+        ctx.hook.onTrigger((payload) => {
+          marks.push(`other:trigger:${payload.id}`);
+          return { action: 'transform', value: { ...payload, text: `${payload.text}+other` } };
+        });
+        ctx.hook.onAgentSpawn(async (req, next) => {
+          marks.push(`other:spawn-before:${req.prompt}`);
+          await next({ ...req, prompt: `${req.prompt}+other` });
+          marks.push('other:spawn-after');
+        });
+      },
+    }, { enabled: true });
+
+    // Pre-check: active dependent participates in regular and around hooks.
+    const activeTrigger = await host.runHook('trigger', triggerPayload('t1'));
+    assert.equal(activeTrigger.action, 'transform');
+    assert.equal((activeTrigger as { action: 'transform'; value: { text: string } }).value.text, 'x+dep+other');
+    const activeSpawn = await host.runHookAround('agent_spawn', spawnPayload('s1'), async (req) => ({ finalPrompt: req.prompt }));
+    assert.deepEqual(activeSpawn, { finalPrompt: 's1+dep+other' });
+
+    // Force-disable base -> p:dep becomes enabled=true, status=failed (`lastError !== undefined`).
+    await host.disable('p:base', { force: true });
+    const failedSummary = host.get('p:dep')!;
+    assert.equal(failedSummary.enabled, true);
+    assert.equal(failedSummary.status, 'failed');
+    assert.equal(failedSummary.error?.code, 'plugin_dependency_not_enabled');
+
+    // Failed dependent must be skipped across regular hooks (shared and solo) and around hooks.
+    marks.length = 0;
+    const failedTrigger = await host.runHook('trigger', triggerPayload('t2'));
+    assert.equal(failedTrigger.action, 'transform');
+    assert.equal((failedTrigger as { action: 'transform'; value: { text: string } }).value.text, 'x+other');
+    assert.deepEqual(marks, ['other:trigger:t2']);
+
+    const failedInput = await host.runHook('input', {
+      conversationId: 1,
+      input: { id: 'in-1', text: 'hello', origin: 'human', whenBusy: 'steer', createdAt: 1 },
+    });
+    assert.deepEqual(failedInput, { action: 'continue' });
+
+    marks.length = 0;
+    const failedSpawn = await host.runHookAround('agent_spawn', spawnPayload('s2'), async (req) => ({ finalPrompt: req.prompt }));
+    assert.deepEqual(failedSpawn, { finalPrompt: 's2+other' });
+    assert.deepEqual(marks, ['other:spawn-before:s2', 'other:spawn-after']);
+    assert.equal(host.activeTaskCount('p:dep'), 0, 'skipped failed plugin never records live hook tasks');
+
+    // Recovery: disable dep -> enable base -> enable dep restores regular and around hook execution.
+    await host.disable('p:dep');
+    await host.enable('p:base');
+    await host.enable('p:dep');
+    assert.equal(host.get('p:dep')?.status, 'active');
+
+    marks.length = 0;
+    const recoveredTrigger = await host.runHook('trigger', triggerPayload('t3'));
+    assert.equal(recoveredTrigger.action, 'transform');
+    assert.equal((recoveredTrigger as { action: 'transform'; value: { text: string } }).value.text, 'x+other+dep');
+    const recoveredInput = await host.runHook('input', {
+      conversationId: 1,
+      input: { id: 'in-2', text: 'hello', origin: 'human', whenBusy: 'steer', createdAt: 2 },
+    });
+    assert.deepEqual(recoveredInput, { action: 'block', reason: 'dep blocked' });
+    const recoveredSpawn = await host.runHookAround('agent_spawn', spawnPayload('s3'), async (req) => ({ finalPrompt: req.prompt }));
+    assert.deepEqual(recoveredSpawn, { finalPrompt: 's3+other+dep' });
+    assert.ok(marks.includes('dep:trigger:t3'));
+    assert.ok(marks.includes('dep:input:in-2'));
+    assert.ok(marks.includes('dep:spawn-before:s3+other'));
+    assert.ok(marks.includes('dep:spawn-after'));
+  } finally {
+    await host.dispose();
+  }
+});
+
+test('hook gate: in-flight hooks keep owned live-task protection when dependent fails, block new hook dispatches, and deactivating window excludes hooks', { timeout: 60_000 }, async () => {
+  const host = makeHost();
+  try {
+    const triggerEntered = deferred<void>();
+    const triggerRelease = deferred<void>();
+    const spawnEntered = deferred<void>();
+    const spawnRelease = deferred<void>();
+    const stopEntered = deferred<void>();
+    const stopRelease = deferred<void>();
+
+    let holdHooks = true;
+    let holdStop = false;
+    const ran: string[] = [];
+
+    await host.register({ id: 'p:base', definePlugin: () => {} }, { enabled: true });
+    await host.register({
+      id: 'p:dep',
+      dependencies: ['p:base'],
+      definePlugin: (ctx) => {
+        ctx.hook.onTrigger(async (payload) => {
+          ran.push(`trigger:${payload.id}`);
+          if (holdHooks) {
+            triggerEntered.resolve();
+            await triggerRelease.promise;
+          }
+          return { action: 'continue' as const };
+        });
+        ctx.hook.onAgentSpawn(async (req, next) => {
+          ran.push(`spawn:${req.prompt}`);
+          if (holdHooks) {
+            spawnEntered.resolve();
+            await spawnRelease.promise;
+          }
+          await next(req);
+        });
+        ctx.service({
+          id: 'svc',
+          start: () => {},
+          stop: async () => {
+            if (holdStop) {
+              stopEntered.resolve();
+              await stopRelease.promise;
+            }
+          },
+        });
+      },
+    }, { enabled: true });
+
+    // Start two in-flight hooks (regular + around) while active.
+    const inflightTrigger = host.runHook('trigger', triggerPayload('inflight-1'));
+    const inflightSpawn = host.runHookAround('agent_spawn', spawnPayload('inflight-s1'), async (req) => ({ prompt: req.prompt }));
+    await Promise.all([triggerEntered.promise, spawnEntered.promise]);
+    assert.equal(host.activeTaskCount('p:dep'), 2);
+
+    // Force-disable base while dep hooks are in-flight: dep becomes failed, yet owned live-task guard still holds.
+    await host.disable('p:base', { force: true });
+    assert.equal(host.get('p:dep')?.status, 'failed');
+    assert.equal(host.activeTaskCount('p:dep'), 2, 'in-flight hook tasks remain tracked after dependency failure');
+    await assertRejectsCode(() => host.disable('p:dep', { force: true }), 'plugin_has_live_tasks', 409);
+
+    // New hook dispatches while failed must skip p:dep and never add live tasks.
+    const blockedTrigger = await host.runHook('trigger', triggerPayload('after-fail'));
+    assert.deepEqual(blockedTrigger, { action: 'continue' });
+    const blockedSpawn = await host.runHookAround('agent_spawn', spawnPayload('after-fail-s'), async (req) => ({ fallback: req.prompt }));
+    assert.deepEqual(blockedSpawn, { fallback: 'after-fail-s' });
+    assert.deepEqual(ran, ['trigger:inflight-1', 'spawn:inflight-s1']);
+    assert.equal(host.activeTaskCount('p:dep'), 2);
+
+    // Completing in-flight hooks releases tracked tasks cleanly via finally.
+    triggerRelease.resolve();
+    spawnRelease.resolve();
+    await inflightTrigger;
+    assert.deepEqual(await inflightSpawn, { prompt: 'inflight-s1' });
+    assert.equal(host.activeTaskCount('p:dep'), 0);
+
+    // Recover dep, then verify phase === 'deactivating' window also excludes regular and around hooks.
+    holdHooks = false;
+    await host.disable('p:dep');
+    await host.enable('p:base');
+    await host.enable('p:dep');
+
+    ran.length = 0;
+    holdStop = true;
+    const disabling = host.disable('p:dep');
+    await stopEntered.promise;
+    try {
+      const midTrigger = await host.runHook('trigger', triggerPayload('mid-deactivate'));
+      assert.deepEqual(midTrigger, { action: 'continue' });
+      const midSpawn = await host.runHookAround('agent_spawn', spawnPayload('mid-deactivate-s'), async (req) => ({ ok: req.prompt }));
+      assert.deepEqual(midSpawn, { ok: 'mid-deactivate-s' });
+      assert.deepEqual(ran, [], 'hooks must not execute during phase=deactivating');
+      assert.equal(host.activeTaskCount('p:dep'), 0);
+    } finally {
+      stopRelease.resolve();
+      await disabling;
+    }
+  } finally {
+    await host.dispose();
+  }
+});

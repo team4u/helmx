@@ -32,35 +32,39 @@ const e = React.createElement
 const slotContribution = (pluginId: string, id: string, target: string, extra: Record<string, unknown> = {}): PluginUiContribution => ({
   pluginId,
   surface: 'plugin.slot',
-  spec: { id, target, ...extra },
+  spec: { id, target, client: { module: 'x.tsx', export: 'X' }, ...extra },
 })
 
 // ---------------------------------------------------------------------------
 // 纯函数
 // ---------------------------------------------------------------------------
 
-test('isValidSlotTarget：恰一个 / 且两段非空', { timeout: 60_000 }, () => {
+test('isValidSlotTarget：恰一个 / 且两段标识符合法', { timeout: 60_000 }, () => {
   assert.equal(isValidSlotTarget('builtin:herdr/overview-header'), true)
   assert.equal(isValidSlotTarget('a/b/c'), false, '两个 / 非法')
   assert.equal(isValidSlotTarget('/b'), false)
   assert.equal(isValidSlotTarget('a/'), false)
+  assert.equal(isValidSlotTarget('ow ner/panel'), false, 'owner 含空格非法')
+  assert.equal(isValidSlotTarget('owner/panel x'), false, 'slotName 含空格非法')
+  assert.equal(isValidSlotTarget(''), false)
 })
 
 test('collectSlotItems：target 全等 + scope 过滤 + priority 降序 order 升序稳定', { timeout: 60_000 }, () => {
   const items = [
-    { pluginId: 'p1', spec: { id: 'a', target: 'owner/zone' } },               // priority 0, order 100
-    { pluginId: 'p2', spec: { id: 'b', target: 'owner/zone', priority: 10 } }, // 高优先
-    { pluginId: 'p3', spec: { id: 'c', target: 'owner/zone', priority: 10, order: 5 } }, // 高优先 + 小 order
-    { pluginId: 'p4', spec: { id: 'd', target: 'other/zone', priority: 99 } }, // 不同插槽
-    { pluginId: 'p5', spec: { id: 'e', target: 'owner/zone', scope: { tags: ['worker'] } } }, // scope 不命中
+    { pluginId: 'p1', spec: { id: 'a', target: 'owner/zone', client: { module: 'a.tsx', export: 'A' } } },               // priority 0, order 100
+    { pluginId: 'p2', spec: { id: 'b', target: 'owner/zone', client: { module: 'b.tsx', export: 'B' }, priority: 10 } }, // 高优先
+    { pluginId: 'p3', spec: { id: 'c', target: 'owner/zone', client: { module: 'c.tsx', export: 'C' }, priority: 10, order: 5 } }, // 高优先 + 小 order
+    { pluginId: 'p4', spec: { id: 'd', target: 'other/zone', client: { module: 'd.tsx', export: 'D' }, priority: 99 } }, // 不同插槽
+    { pluginId: 'p5', spec: { id: 'e', target: 'owner/zone', client: { module: 'e.tsx', export: 'E' }, scope: { tags: ['worker'] } } }, // scope 不命中
   ]
   const all = (scope?: unknown) => scope === undefined
   const ranked = collectSlotItems(items as never, 'owner/zone', all)
   assert.deepEqual(ranked.map((r) => r.spec.id), ['c', 'b', 'a'], 'priority 降序 -> order 升序 -> 贡献顺序')
+  assert.deepEqual(collectSlotItems(items as never, 'bad/target/name', all), [], '非法 target 直接返回空列表')
   // 同分稳定：全部无 priority/order 时保持原序
   const same = collectSlotItems([
-    { pluginId: 'x', spec: { id: 'x1', target: 'o/z' } },
-    { pluginId: 'y', spec: { id: 'y1', target: 'o/z' } },
+    { pluginId: 'x', spec: { id: 'x1', target: 'o/z', client: { module: 'x.tsx', export: 'X' } } },
+    { pluginId: 'y', spec: { id: 'y1', target: 'o/z', client: { module: 'y.tsx', export: 'Y' } } },
   ] as never, 'o/z', all)
   assert.deepEqual(same.map((s) => s.spec.id), ['x1', 'y1'])
 })
@@ -178,4 +182,106 @@ test('matchesUiScope：按模型供应商、profileId 与 tags 组合过滤（�
   assert.equal(matchesUiScope(scopeConversation, { modelProviders: [] }), false)
   assert.equal(matchesUiScope(undefined, scope), false)
   assert.equal(matchesUiScope(undefined, undefined), true)
+})
+
+test('PluginSlot：DOM 锚点、无 className 零布局盒、inline 与错误隔离降级语义', { timeout: 60_000 }, () => {
+  seedPluginClientModule('p-ok', 'ok.tsx', { OkItem: () => e('span', { 'data-ok': '1' }, 'ok-item') })
+  seedPluginClientModule('p-boom', 'boom.tsx', {
+    BoomItem: () => {
+      throw new Error('slot child crashed')
+    },
+  })
+
+  const store = makeTestStore({
+    uiContributions: [
+      slotContribution('p-boom', 'boom', 'owner/resilient', {
+        priority: 10,
+        client: { module: 'boom.tsx', export: 'BoomItem' },
+      }),
+      {
+        pluginId: 'p-missing',
+        surface: 'plugin.slot',
+        spec: { id: 'missing', target: 'owner/resilient', priority: 5 },
+      },
+      slotContribution('p-ok', 'ok', 'owner/resilient', {
+        client: { module: 'ok.tsx', export: 'OkItem' },
+      }),
+    ],
+  })
+
+  const ownerCtx = createPluginClientContext(createPluginClientHostPort(store.getSnapshot()), 'owner', undefined)
+  const host = document.createElement('div')
+  const prevConsoleError = console.error
+  let root: Root | undefined
+  try {
+    console.error = () => {}
+    root = renderToString(
+      host,
+      e(
+        HostStoreProviders,
+        { value: store },
+        e(
+          PluginClientContext.Provider,
+          { value: ownerCtx },
+          e('div', null,
+            e(PluginSlot, { name: 'resilient' }),
+            e(PluginSlot, { name: 'resilient', className: 'slot-box' }),
+            e(PluginSlot, { name: 'resilient', inline: true }),
+          ),
+        ),
+      ),
+    )
+    const anchors = [...host.querySelectorAll<HTMLElement>('[data-helmx-slot="owner/resilient"]')]
+    assert.equal(anchors.length, 3)
+    assert.equal(anchors[0]!.tagName, 'DIV')
+    assert.equal(anchors[0]!.style.display, 'contents', 'omitting className suppresses extra layout box')
+    assert.ok(anchors[1]!.classList.contains('slot-box'))
+    assert.equal(anchors[1]!.style.display, '', 'explicit className retains CSS layout box control')
+    assert.equal(anchors[2]!.tagName, 'SPAN', 'inline renders a span wrapper')
+    assert.equal(anchors[2]!.style.display, 'contents')
+
+    // Isolated explicit errors: ViewBoundary catches BoomItem, MissingTrackError warns on p-missing, OkItem still renders
+    assert.match(anchors[0]!.textContent ?? '', /slot child crashed/)
+    assert.match(anchors[0]!.textContent ?? '', /declares no client component reference/)
+    assert.ok(anchors[0]!.querySelector('[data-ok="1"]') !== null, 'healthy siblings keep rendering')
+  } finally {
+    console.error = prevConsoleError
+    if (root) act(() => { root!.unmount() })
+  }
+})
+
+test('createPluginClientHostPort：slots.collectItems 在 conversations 缺席时回退 conversationDetails 解析 scope', { timeout: 60_000 }, () => {
+  const conv: ConversationSummary = {
+    id: 77,
+    title: 'Detail-only conv',
+    profileId: 'assistant',
+    tags: ['special'],
+    cwd: '/tmp',
+    model: 'example/m1',
+    thinkingLevel: '',
+    status: 'idle',
+    stateChangeSeq: 1,
+    completionSeq: 0,
+    unread: false,
+    pinned: false,
+    pendingAskCount: 0,
+    createdAt: 1,
+    updatedAt: 1,
+  }
+  const store = makeTestStore({
+    conversations: [],
+    conversationDetails: {
+      77: { ...conv, entries: [] },
+    },
+    uiContributions: [
+      slotContribution('p1', 'scoped', 'owner/detail-scope', {
+        scope: { tags: ['special'] },
+      }),
+    ],
+  })
+  const port = createPluginClientHostPort(store.getSnapshot())
+  const matched = port.slots.collectItems('owner/detail-scope', 77)
+  assert.equal(matched.length, 1)
+  assert.equal(matched[0]!.contributionId, 'scoped')
+  assert.equal(port.slots.collectItems('owner/detail-scope', 999).length, 0)
 })

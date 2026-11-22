@@ -35,25 +35,27 @@ test('toolStatusIcon：运行中 loader、失败 x、完成 check、其他 circl
   assert.equal(toolStatusIcon(trace({ status: 'error', isError: false })), 'circle')
 })
 
-test('buildToolViewProps：状态三值映射，可选字段缺省时键完全不出现', { timeout: 60_000 }, () => {
-  const minimal = buildToolViewProps(trace(), 7, [])
+test('buildToolViewProps：状态三值映射，可选字段缺省时键完全不出现且不透传 siblingCalls/structuredOutput', { timeout: 60_000 }, () => {
+  const minimal = buildToolViewProps(trace(), 7)
   assert.deepEqual(minimal, {
     callId: '',
     toolName: 'bash',
     status: 'done',
     isError: false,
     conversationId: 7,
-    siblingCalls: [],
   })
   assert.ok(!('input' in minimal))
   assert.ok(!('result' in minimal))
   assert.ok(!('durationMs' in minimal))
+  assert.ok(!('presentationMeta' in minimal))
+  assert.ok(!('structuredOutput' in minimal))
+  assert.ok(!('siblingCalls' in minimal))
 })
 
-test('buildToolViewProps：running/error 映射 running/error，可选字段全量携带', { timeout: 60_000 }, () => {
-  assert.equal(buildToolViewProps(trace({ status: 'running' }), 1, []).status, 'running')
-  assert.equal(buildToolViewProps(trace({ status: 'error', isError: true }), 1, []).status, 'error')
-  assert.equal(buildToolViewProps(trace({ status: 'unknown' }), 1, []).status, 'done')
+test('buildToolViewProps：running/error 映射 running/error，可选字段全量携带（含 presentationMeta）', { timeout: 60_000 }, () => {
+  assert.equal(buildToolViewProps(trace({ status: 'running' }), 1).status, 'running')
+  assert.equal(buildToolViewProps(trace({ status: 'error', isError: true }), 1).status, 'error')
+  assert.equal(buildToolViewProps(trace({ status: 'unknown' }), 1).status, 'done')
 
   const full = buildToolViewProps(
     trace({
@@ -61,24 +63,24 @@ test('buildToolViewProps：running/error 映射 running/error，可选字段全�
       input: { cmd: 'ls' },
       resultText: '预览',
       resultTruncation: { truncated: true, totalChars: 9000, totalLines: 300 },
-      structuredOutput: { files: 2 },
+      presentationMeta: { files: 2 },
       startedAt: 123,
       durationMs: 456,
       artifactRef: 'art_x',
     }),
     9,
-    [{ callId: 'call_1', toolName: 'bash', status: 'done' }],
   )
   assert.equal(full.callId, 'call_1')
   assert.deepEqual(full.input, { cmd: 'ls' })
   assert.equal(full.result, '预览')
   assert.deepEqual(full.resultTruncation, { truncated: true, totalChars: 9000, totalLines: 300 })
-  assert.deepEqual(full.structuredOutput, { files: 2 })
+  assert.deepEqual(full.presentationMeta, { files: 2 })
   assert.equal(full.startedAt, 123)
   assert.equal(full.durationMs, 456)
   assert.equal(full.artifactRef, 'art_x')
   assert.equal(full.conversationId, 9)
-  assert.deepEqual(full.siblingCalls, [{ callId: 'call_1', toolName: 'bash', status: 'done' }])
+  assert.ok(!('structuredOutput' in full))
+  assert.ok(!('siblingCalls' in full))
 })
 
 const entry = (id: string, kind: string, extra?: Partial<ConversationEntry>): ConversationEntry => ({

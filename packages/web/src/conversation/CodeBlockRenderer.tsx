@@ -9,6 +9,7 @@ import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react
 import type { ComponentType } from 'react'
 import type { MarkdownCodeBlockProps } from '@helmx/protocol/browser'
 import { CopyButton, createPluginClientContext, HelmxIcon, PluginClientContext, usePluginClientHost, ViewBoundary } from '@helmx/plugin-client'
+import { isPluginSummaryActive } from '../lib/live-state.js'
 import { usePluginsUi } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import {
@@ -59,7 +60,7 @@ export function CodeBlockRenderer({ language, code, conversationId }: { language
   }
   const plugin = plugins.find((p) => p.id === match.pluginId)
   const expectedHash =
-    plugin !== undefined && plugin.enabled && (plugin.status === undefined || plugin.status === 'active')
+    plugin !== undefined && isPluginSummaryActive(plugin)
       ? plugin.clientHashes?.[match.spec.client.module]
       : undefined
   return (

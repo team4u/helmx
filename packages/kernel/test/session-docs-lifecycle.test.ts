@@ -3,6 +3,9 @@
  *
  * Covers:
  * - Plugin disabled while stream open (`plugin.changed` `enabled=false`): server terminates stream via event push;
+ * - Plugin failed while still enabled (`enabled=true, status='failed'` via force-disabled dependency) or non-active
+ *   summary transitions (`status='disabled'` / `error !== undefined`): closes dedicated & multiplexed streams for that
+ *   plugin without closing unrelated active streams or config-only active updates, and re-establishes cleanly after recovery;
  * - Conversation deleted while stream open (`conversation.deleted`): server terminates stream via event push;
  * - `kernel.close()` closes all dedicated sessionDoc streams and releases lifecycle subscriptions.
  */
@@ -66,8 +69,79 @@ async function openApp(): Promise<App> {
   }
 }
 
-function sseUrl(url: string, conversationId: number): string {
-  return `${url}/api/plugins/p%3Alifecycle/docs/metrics/events?conversationId=${conversationId}`
+function sseUrl(url: string, conversationId: number, pluginId = 'p:lifecycle', docName = 'metrics'): string {
+  return `${url}/api/plugins/${encodeURIComponent(pluginId)}/docs/${encodeURIComponent(docName)}/events?conversationId=${conversationId}`
+}
+
+function multiplexSseUrl(url: string, subs: ReadonlyArray<{ pluginId: string; name: string; conversationId: number }>): string {
+  const qs = subs
+    .map((s) => `sub=${encodeURIComponent(s.pluginId)}/${encodeURIComponent(s.name)}/${s.conversationId}`)
+    .join('&')
+  return `${url}/api/session-docs/events?${qs}`
+}
+
+/** Reads chunks from an active SSE reader until `pattern` appears; fails explicitly on premature EOF or timeout. */
+async function readUntilMatch(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  decoder: TextDecoder,
+  buffer: { text: string },
+  pattern: RegExp,
+  timeoutMs = 10_000,
+): Promise<string> {
+  const deadline = Date.now() + timeoutMs
+  while (!pattern.test(buffer.text)) {
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) {
+      throw new Error(`Timed out waiting for SSE pattern ${pattern} (buffer=${JSON.stringify(buffer.text)})`)
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const next = await Promise.race([
+      reader.read(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`Timed out waiting for SSE pattern ${pattern} (buffer=${JSON.stringify(buffer.text)})`)),
+          remaining,
+        )
+      }),
+    ]).finally(() => {
+      if (timer !== undefined) clearTimeout(timer)
+    })
+    if (next.done) {
+      throw new Error(`SSE stream closed before matching ${pattern} (buffer=${JSON.stringify(buffer.text)})`)
+    }
+    buffer.text += decoder.decode(next.value, { stream: true })
+  }
+  return buffer.text
+}
+
+/** Drains an already-open SSE reader until server-initiated EOF (`done`); fails on timeout. */
+async function drainReaderUntilDone(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  decoder: TextDecoder,
+  buffer: { text: string },
+  timeoutMs = 10_000,
+): Promise<string> {
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) {
+      throw new Error(`Timed out waiting for SSE stream EOF (buffer=${JSON.stringify(buffer.text)})`)
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const next = await Promise.race([
+      reader.read(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`Timed out waiting for SSE stream EOF (buffer=${JSON.stringify(buffer.text)})`)),
+          remaining,
+        )
+      }),
+    ]).finally(() => {
+      if (timer !== undefined) clearTimeout(timer)
+    })
+    if (next.done) return buffer.text
+    buffer.text += decoder.decode(next.value, { stream: true })
+  }
 }
 
 /** Reads a stream until completion (`done`) and returns full decoded text; fails on timeout. */
@@ -197,6 +271,219 @@ test('transient sessionDoc (durable: false): HTTP GET + dedicated SSE + conversa
       await db.close()
     }
   } finally {
+    await app.close()
+  }
+})
+
+test('dedicated & multiplexed SSE: failed-while-enabled dependent closes matching streams, preserves active/config updates, and re-establishes after recovery', { timeout: 60_000 }, async () => {
+  const app = await openApp()
+  const otherController = new AbortController()
+  const recoveredDedicatedController = new AbortController()
+  const recoveredMultiplexController = new AbortController()
+  try {
+    let depMetrics!: PluginSessionDocHandle<{ n: number }>
+    let otherMetrics!: PluginSessionDocHandle<{ n: number }>
+
+    await app.kernel.plugins.register({ id: 'p:base', definePlugin: () => {} })
+    await app.kernel.plugins.register({
+      id: 'p:dep',
+      dependencies: ['p:base'],
+      definePlugin: (ctx) => {
+        ctx.configSchema({ refreshMs: { type: 'number', default: 1_000 } })
+        depMetrics = ctx.sessionDoc('metrics', { n: 0 }, { public: true })
+      },
+    })
+    await app.kernel.plugins.register({
+      id: 'p:other',
+      definePlugin: (ctx) => {
+        otherMetrics = ctx.sessionDoc('metrics', { n: 0 }, { public: true })
+      },
+    })
+
+    depMetrics.set(1, { n: 1 })
+    otherMetrics.set(1, { n: 10 })
+
+    // Open dedicated stream for p:dep, multiplexed stream including p:dep + p:other, and unrelated stream for p:other.
+    const depRes = await fetch(sseUrl(app.url, 1, 'p:dep', 'metrics'), {
+      headers: { authorization: `Bearer ${app.token}`, accept: 'text/event-stream' },
+    })
+    const muxRes = await fetch(
+      multiplexSseUrl(app.url, [
+        { pluginId: 'p:dep', name: 'metrics', conversationId: 1 },
+        { pluginId: 'p:other', name: 'metrics', conversationId: 1 },
+      ]),
+      { headers: { authorization: `Bearer ${app.token}`, accept: 'text/event-stream' } },
+    )
+    const otherRes = await fetch(sseUrl(app.url, 1, 'p:other', 'metrics'), {
+      headers: { authorization: `Bearer ${app.token}`, accept: 'text/event-stream' },
+      signal: otherController.signal,
+    })
+    assert.equal(depRes.status, 200)
+    assert.equal(muxRes.status, 200)
+    assert.equal(otherRes.status, 200)
+
+    const depReader = (depRes.body as ReadableStream<Uint8Array>).getReader()
+    const muxReader = (muxRes.body as ReadableStream<Uint8Array>).getReader()
+    const otherReader = (otherRes.body as ReadableStream<Uint8Array>).getReader()
+    const depDecoder = new TextDecoder()
+    const muxDecoder = new TextDecoder()
+    const otherDecoder = new TextDecoder()
+    const depBuf = { text: '' }
+    const muxBuf = { text: '' }
+    const otherBuf = { text: '' }
+
+    await readUntilMatch(depReader, depDecoder, depBuf, /event: snapshot[\s\S]*"n":1/)
+    await readUntilMatch(muxReader, muxDecoder, muxBuf, /"pluginId":"p:dep"[\s\S]*"n":1/)
+    await readUntilMatch(otherReader, otherDecoder, otherBuf, /event: snapshot[\s\S]*"n":10/)
+
+    // Active config-only plugin.changed must keep all streams alive.
+    await app.kernel.plugins.setConfig('p:dep', { refreshMs: 2_500 })
+    depMetrics.set(1, { n: 2 })
+    await readUntilMatch(depReader, depDecoder, depBuf, /event: plugin\.session_doc\.updated[\s\S]*"n":2/)
+    await readUntilMatch(muxReader, muxDecoder, muxBuf, /"action":"updated"[\s\S]*"pluginId":"p:dep"[\s\S]*"n":2/)
+
+    // Force-disable base -> p:dep becomes enabled=true, status=failed -> closeForPlugin terminates p:dep streams immediately.
+    const depClosed = drainReaderUntilDone(depReader, depDecoder, depBuf)
+    const muxClosed = drainReaderUntilDone(muxReader, muxDecoder, muxBuf)
+    await app.kernel.plugins.disable('p:base', { force: true })
+
+    const failedSummary = app.kernel.plugins.get('p:dep')!
+    assert.equal(failedSummary.enabled, true)
+    assert.equal(failedSummary.status, 'failed')
+    assert.equal(failedSummary.error?.code, 'plugin_dependency_not_enabled')
+
+    await Promise.all([depClosed, muxClosed])
+    // Only p:other's dedicated stream remains subscribed and still delivers live updates.
+    assert.equal(app.kernel.sessionDocEvents.subscriberCount, 1)
+    otherMetrics.set(1, { n: 11 })
+    await readUntilMatch(otherReader, otherDecoder, otherBuf, /event: plugin\.session_doc\.updated[\s\S]*"n":11/)
+    otherController.abort()
+    await otherReader.cancel().catch(() => {})
+
+    // Recovery path: disable dep (disabled -> 404 on reconnect) -> enable base -> enable dep.
+    await app.kernel.plugins.disable('p:dep')
+    const disabledRes = await fetch(sseUrl(app.url, 1, 'p:dep', 'metrics'), {
+      headers: { authorization: `Bearer ${app.token}`, accept: 'text/event-stream' },
+    })
+    assert.equal(disabledRes.status, 404)
+    await disabledRes.arrayBuffer()
+
+    await app.kernel.plugins.enable('p:base')
+    await app.kernel.plugins.enable('p:dep')
+    assert.equal(app.kernel.plugins.get('p:dep')?.status, 'active')
+
+    // Re-establishing dedicated and multiplexed streams succeeds with persisted snapshot and live deltas.
+    const recDepRes = await fetch(sseUrl(app.url, 1, 'p:dep', 'metrics'), {
+      headers: { authorization: `Bearer ${app.token}`, accept: 'text/event-stream' },
+      signal: recoveredDedicatedController.signal,
+    })
+    const recMuxRes = await fetch(
+      multiplexSseUrl(app.url, [{ pluginId: 'p:dep', name: 'metrics', conversationId: 1 }]),
+      {
+        headers: { authorization: `Bearer ${app.token}`, accept: 'text/event-stream' },
+        signal: recoveredMultiplexController.signal,
+      },
+    )
+    assert.equal(recDepRes.status, 200)
+    assert.equal(recMuxRes.status, 200)
+
+    const recDepReader = (recDepRes.body as ReadableStream<Uint8Array>).getReader()
+    const recMuxReader = (recMuxRes.body as ReadableStream<Uint8Array>).getReader()
+    const recDepDecoder = new TextDecoder()
+    const recMuxDecoder = new TextDecoder()
+    const recDepBuf = { text: '' }
+    const recMuxBuf = { text: '' }
+
+    await readUntilMatch(recDepReader, recDepDecoder, recDepBuf, /event: snapshot[\s\S]*"n":2/)
+    await readUntilMatch(recMuxReader, recMuxDecoder, recMuxBuf, /"action":"snapshot"[\s\S]*"pluginId":"p:dep"[\s\S]*"n":2/)
+
+    depMetrics.set(1, { n: 3 })
+    await readUntilMatch(recDepReader, recDepDecoder, recDepBuf, /event: plugin\.session_doc\.updated[\s\S]*"n":3/)
+    await readUntilMatch(recMuxReader, recMuxDecoder, recMuxBuf, /"action":"updated"[\s\S]*"pluginId":"p:dep"[\s\S]*"n":3/)
+
+    recoveredDedicatedController.abort()
+    recoveredMultiplexController.abort()
+    await Promise.all([
+      recDepReader.cancel().catch(() => {}),
+      recMuxReader.cancel().catch(() => {}),
+    ])
+  } finally {
+    otherController.abort()
+    recoveredDedicatedController.abort()
+    recoveredMultiplexController.abort()
+    await app.close()
+  }
+})
+
+test('dedicated SSE: non-active plugin.changed summaries (transitional status=disabled and error-carrying failed summary) close streams while active summaries stay open', { timeout: 60_000 }, async () => {
+  const app = await openApp()
+  const activeController = new AbortController()
+  try {
+    app.metrics.set(1, { n: 1 })
+    const baseSummary = app.kernel.plugins.get('p:lifecycle')!
+
+    // 1. Transitional non-idle projection: enabled=true with status='disabled' closes stream immediately.
+    const res1 = await fetch(sseUrl(app.url, 1), {
+      headers: { authorization: `Bearer ${app.token}`, accept: 'text/event-stream' },
+    })
+    assert.equal(res1.status, 200)
+    const r1 = (res1.body as ReadableStream<Uint8Array>).getReader()
+    const d1 = new TextDecoder()
+    const b1 = { text: '' }
+    await readUntilMatch(r1, d1, b1, /event: snapshot[\s\S]*"n":1/)
+    const closed1 = drainReaderUntilDone(r1, d1, b1)
+    app.kernel.events.publish('plugin.changed', {
+      type: 'plugin.changed',
+      plugin: { ...baseSummary, enabled: true, status: 'disabled' },
+      ui: [],
+    })
+    await closed1
+    assert.equal(app.kernel.sessionDocEvents.subscriberCount, 0)
+
+    // 2. Failed summary with error diagnostic (even if status is omitted) closes stream immediately.
+    const res2 = await fetch(sseUrl(app.url, 1), {
+      headers: { authorization: `Bearer ${app.token}`, accept: 'text/event-stream' },
+    })
+    assert.equal(res2.status, 200)
+    const r2 = (res2.body as ReadableStream<Uint8Array>).getReader()
+    const d2 = new TextDecoder()
+    const b2 = { text: '' }
+    await readUntilMatch(r2, d2, b2, /event: snapshot[\s\S]*"n":1/)
+    const closed2 = drainReaderUntilDone(r2, d2, b2)
+    const { status: _omittedStatus, ...withoutStatus } = baseSummary
+    app.kernel.events.publish('plugin.changed', {
+      type: 'plugin.changed',
+      plugin: {
+        ...withoutStatus,
+        enabled: true,
+        error: { code: 'dependency_failed', message: 'dependency broken', stage: 'enable' },
+      },
+      ui: [],
+    })
+    await closed2
+    assert.equal(app.kernel.sessionDocEvents.subscriberCount, 0)
+
+    // 3. Re-established stream stays open across active plugin.changed updates and delivers subsequent writes.
+    const res3 = await fetch(sseUrl(app.url, 1), {
+      headers: { authorization: `Bearer ${app.token}`, accept: 'text/event-stream' },
+      signal: activeController.signal,
+    })
+    assert.equal(res3.status, 200)
+    const r3 = (res3.body as ReadableStream<Uint8Array>).getReader()
+    const d3 = new TextDecoder()
+    const b3 = { text: '' }
+    await readUntilMatch(r3, d3, b3, /event: snapshot[\s\S]*"n":1/)
+    app.kernel.events.publish('plugin.changed', {
+      type: 'plugin.changed',
+      plugin: { ...baseSummary, enabled: true, status: 'active' },
+      ui: [],
+    })
+    app.metrics.set(1, { n: 2 })
+    await readUntilMatch(r3, d3, b3, /event: plugin\.session_doc\.updated[\s\S]*"n":2/)
+    activeController.abort()
+    await r3.cancel().catch(() => {})
+  } finally {
+    activeController.abort()
     await app.close()
   }
 })

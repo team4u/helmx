@@ -9,7 +9,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { HelmxError } from '@helmx/protocol'
+import { HelmxError, validateOrThrow } from '@helmx/protocol'
 import {
   ARCHIVED_COORDINATOR_TAG,
   ARCHIVED_WORKER_TAG,
@@ -43,7 +43,17 @@ import {
   type GroupMemberState,
 } from '../src/swarm.js'
 import { checkCoordinatorEligibility } from '../src/swarm/actions.js'
-import { boardPostInputSchema, boardStatusOutputSchema } from '../src/swarm/action-schemas.js'
+import { registerSwarmHooks } from '../src/swarm/hooks.js'
+import {
+  boardPostInputSchema,
+  boardStatusOutputSchema,
+  swarmToolPresentationMetaSchema,
+} from '../src/swarm/action-schemas.js'
+import {
+  extractSwarmPresentationMeta,
+  resolveSwarmToolClickTarget,
+  resolveSwarmToolFacts,
+} from '../src/swarm/client/model-tool-view.ts'
 import {
   formatCoordinatorReportEnvelope,
   formatWorkerWakeupEnvelope,
@@ -1029,4 +1039,168 @@ test('swarm-unit9: tiered coordinator flush gating, orthogonal done stall fallba
     findIdleCatchupAnchorPost({ ...catchupGroup, coordinatorPendingSeq: 0, coordinatorNotifiedSeq: 0 }, postsWithTrailingComment),
     undefined,
   )
+})
+
+test('swarm-unit10: swarmToolPresentationMetaSchema bounds UI metadata and model-tool-view reads presentationMeta without JSON.parse(props.result)', { timeout: 60_000 }, () => {
+  // 1) Valid lightweight presentationMeta projections pass schema; heavy nested arrays/bodies fail explicitly
+  const validMetas: Array<Record<string, unknown>> = [
+    { groupId: 'grp_1', groupTitle: 'Auth Squad' },
+    { groupId: 'grp_1', memberName: 'author', workerConversationId: 51, seq: 1 },
+    { groupId: 'grp_1', postKind: 'handoff', seq: 2 },
+    { groupId: 'grp_1', seq: 0, postCount: 0 },
+    { groupId: 'grp_1', groupTitle: 'Auth Squad', seq: 5, postCount: 4 },
+    { workerConversationId: 51, memberName: 'author', aborted: false },
+    { workerConversationId: 51, memberName: 'author', model: 'openai/gpt-5' },
+    { groupId: 'grp_1', workerConversationId: 51, memberName: 'author' },
+    { workerConversationId: 51, archived: true },
+    { groupId: 'grp_1', retainedCount: 0 },
+  ]
+  for (const meta of validMetas) {
+    assert.doesNotThrow(() => validateOrThrow(swarmToolPresentationMetaSchema, meta, 'invalid swarm meta'))
+  }
+  for (const forbidden of [
+    { groupId: 'grp_1', posts: [] },
+    { groupId: 'grp_1', recentEntries: [] },
+    { groupId: 'grp_1', post: { seq: 1 } },
+    { groupId: 'grp_1', retainedWorktrees: [] },
+  ]) {
+    assert.throws(() => validateOrThrow(swarmToolPresentationMetaSchema, forbidden, 'heavy field forbidden'))
+  }
+
+  // 2) extractSwarmPresentationMeta never JSON.parses props.result
+  const jsonOnlyResultProps = {
+    callId: 'c1',
+    toolName: 'swarm_dispatch_worker',
+    status: 'done' as const,
+    conversationId: 1,
+    input: { name: 'author', prompt: 'Work on auth' },
+    result: JSON.stringify({ workerConversationId: 51, groupId: 'grp_1', name: 'author', postSeq: 7 }),
+  }
+  assert.equal(extractSwarmPresentationMeta(jsonOnlyResultProps), undefined)
+  const factsWithoutMeta = resolveSwarmToolFacts(
+    jsonOnlyResultProps.toolName,
+    jsonOnlyResultProps.input,
+    extractSwarmPresentationMeta(jsonOnlyResultProps),
+  )
+  assert.equal(factsWithoutMeta.memberConversationId, undefined)
+  assert.equal(factsWithoutMeta.seq, undefined)
+  assert.equal(resolveSwarmToolClickTarget(factsWithoutMeta), undefined)
+
+  // 3) Direct presentationMeta consumption across all 11 tools (including 0-counts and boolean flags)
+  const dispatchProps = {
+    ...jsonOnlyResultProps,
+    presentationMeta: { groupId: 'grp_1', memberName: 'author', workerConversationId: 51, seq: 7 },
+  } as never
+  const dispatchMeta = extractSwarmPresentationMeta(dispatchProps)
+  const dispatchFacts = resolveSwarmToolFacts('swarm_dispatch_worker', jsonOnlyResultProps.input, dispatchMeta)
+  assert.equal(dispatchFacts.memberConversationId, 51)
+  assert.equal(dispatchFacts.seq, 7)
+  assert.deepEqual(resolveSwarmToolClickTarget(dispatchFacts), { kind: 'member', conversationId: 51 })
+
+  assert.equal(
+    resolveSwarmToolFacts('swarm_create_group', {}, { groupId: 'grp_1', groupTitle: 'Meta Title' }).groupTitle,
+    'Meta Title',
+  )
+  assert.equal(
+    resolveSwarmToolFacts('swarm_board_post', { body: 'Ready' }, { groupId: 'grp_1', postKind: 'handoff', seq: 3 }).postKind,
+    'handoff',
+  )
+  assert.equal(
+    resolveSwarmToolFacts('swarm_board_post', { body: 'Ready' }, { groupId: 'grp_1', postKind: 'handoff', seq: 3 }).seq,
+    3,
+  )
+  assert.equal(
+    resolveSwarmToolFacts('swarm_board_read', {}, { groupId: 'grp_1', seq: 0, postCount: 0 }).postCount,
+    0,
+  )
+  assert.equal(
+    resolveSwarmToolFacts('swarm_abort_worker', {}, { workerConversationId: 51, memberName: 'author', aborted: false }).aborted,
+    false,
+  )
+  assert.equal(
+    resolveSwarmToolFacts('swarm_abort_worker', {}, undefined).aborted,
+    undefined,
+  )
+  assert.equal(
+    resolveSwarmToolFacts('swarm_switch_worker_model', {}, { workerConversationId: 51, memberName: 'author', model: 'anthropic/claude-sonnet-4-5' }).model,
+    'anthropic/claude-sonnet-4-5',
+  )
+  assert.equal(
+    resolveSwarmToolFacts('swarm_archive_worker', {}, { workerConversationId: 51, archived: true }).archived,
+    true,
+  )
+  assert.equal(
+    resolveSwarmToolFacts('swarm_close_group', {}, { groupId: 'grp_1', retainedCount: 2 }).retainedCount,
+    2,
+  )
+})
+
+test('swarm hooks：isSwarmSkillAllowed 按统一 active 谓词判定（enabled=true, status=failed 视作不可用）', { timeout: 60_000 }, async () => {
+  type InputFn = (payload: { conversationId: number; input: { text: string; origin?: string } }) => Promise<{ action: string; reason?: string } | undefined>
+  type BeforeTurnFn = (turn: { conversation: { id: number; profileId: string; tags: string[] }; sections: Array<{ id: string; text: string }>; tools: Array<{ name: string }> }) => Promise<{ action: string; value?: { sections: Array<{ id: string; text: string }> } } | undefined>
+  let onInputHandler: InputFn | undefined
+  let onBeforeTurnHandler: BeforeTurnFn | undefined
+  let pluginSummary: { id: string; enabled: boolean; status?: 'active' | 'disabled' | 'failed'; error?: { code: string; message: string; stage: 'enable' } } = {
+    id: SWARM_PLUGIN_ID,
+    enabled: true,
+    status: 'failed',
+    error: { code: 'plugin_dependency_not_enabled', message: 'dep off', stage: 'enable' },
+  }
+
+  const fakeCtx = {
+    hook: {
+      onInput: (fn: InputFn) => { onInputHandler = fn },
+      onBeforeTurn: (fn: BeforeTurnFn) => { onBeforeTurnHandler = fn },
+      onTurnSettled: () => {},
+    },
+    host: {
+      getConversationOwnership: () => 'human',
+      listPlugins: () => [pluginSummary],
+      profiles: {
+        get: async () => ({ id: 'assistant', name: 'Assistant' }),
+      },
+      skills: {
+        list: async () => [{ id: SWARM_SKILL_ID, name: 'swarm', references: [], managedByPlugin: SWARM_PLUGIN_ID }],
+      },
+    },
+  } as never
+
+  const activeGroup = { id: 'grp_active_1', coordinatorConversationId: 1, status: 'active' }
+  const fakeCoordinator = {
+    isActive: () => true,
+    readConversationOrUndefined: (id: number) => ({ id, title: 'T', profileId: 'assistant', tags: [], parentConversationId: undefined }),
+    groups: {
+      findActiveGroupByCoordinator: (id: number) => (id === 1 ? activeGroup : undefined),
+      findGroupByParticipant: () => undefined,
+    },
+    settlingWorkers: new Set<number>(),
+  } as never
+
+  registerSwarmHooks(fakeCtx, fakeCoordinator)
+  assert.ok(onInputHandler && onBeforeTurnHandler)
+
+  // 1. enabled=true, status=failed -> /skill:swarm 被拒绝，且 before_turn 注入无 load_skill 的直连指令
+  const blocked = await onInputHandler({ conversationId: 1, input: { text: '/skill:swarm 协查', origin: 'human' } })
+  assert.equal(blocked?.action, 'block', 'failed-while-enabled 插件托管的 swarm 技能不得放行 /skill:swarm')
+
+  const failedTurn = await onBeforeTurnHandler({
+    conversation: { id: 1, profileId: 'assistant', tags: [] },
+    sections: [],
+    tools: [{ name: 'load_skill' }, { name: 'swarm_create_group' }],
+  })
+  assert.equal(failedTurn?.action, 'transform')
+  const failedSection = failedTurn?.value?.sections.find((s) => s.id === 'swarm.active_group')?.text ?? ''
+  assert.ok(failedSection.includes('directly with swarm_* tools'), 'failed-while-enabled 时应降级为直连 swarm_* 提示')
+  assert.equal(failedSection.includes(`call load_skill({ skillId: "${SWARM_SKILL_ID}" })`), false)
+
+  // 2. 切回 active 后 -> before_turn 正常提示调用 load_skill({ skillId: "swarm" })
+  pluginSummary = { id: SWARM_PLUGIN_ID, enabled: true, status: 'active' }
+  const activeTurn = await onBeforeTurnHandler({
+    conversation: { id: 1, profileId: 'assistant', tags: [] },
+    sections: [],
+    tools: [{ name: 'load_skill' }, { name: 'swarm_create_group' }],
+  })
+  assert.equal(activeTurn?.action, 'transform')
+  const activeSection = activeTurn?.value?.sections.find((s) => s.id === 'swarm.active_group')?.text ?? ''
+  assert.ok(activeSection.includes(`call load_skill({ skillId: "${SWARM_SKILL_ID}" })`), 'active 时应恢复 swarm 技能引导')
 })

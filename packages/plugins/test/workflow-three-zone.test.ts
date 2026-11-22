@@ -128,10 +128,12 @@ function createHostHarness(init: {
   pendingAsks?: AskSpec[]
   runsByConversation?: Record<number, WorkflowRunSummary[]>
   pluginDocs?: Record<string, unknown>
+  timelineToolCalls?: import('../../plugin-client/src/index.js').TimelineToolCallsInput
   locale?: import('../../plugin-client/src/index.js').HelmxLocale
   onAction?: (pluginId: string, actionId: string, input: unknown) => Promise<unknown> | unknown
 }) {
   const activeToolCallIds = new Set<string>()
+  const timelineToolCallsStore = SDK.createTimelineToolCallsStore(init.timelineToolCalls)
   const log: HostStubLog = {
     actions: [],
     drawers: [],
@@ -250,7 +252,11 @@ function createHostHarness(init: {
           e(
             SDK.PluginClientContext.Provider,
             { value: ctx },
-            e(SDK.ToolActivityContext.Provider, { value: toolActivityRegistry }, node),
+            e(
+              SDK.ToolActivityContext.Provider,
+              { value: toolActivityRegistry },
+              e(SDK.TimelineToolCallsContext.Provider, { value: timelineToolCallsStore }, node),
+            ),
           ),
         ),
       )
@@ -679,7 +685,8 @@ describe('Workflow 三区零重复与无损呈现', () => {
         toolName: 'subagent',
         input: { prompt: '排查登录问题' },
         status: 'done',
-        result: JSON.stringify({ conversationId: 21 }),
+        result: 'done',
+        presentationMeta: { ok: true, execution: { conversationId: 21 } },
         durationMs: 4200,
         conversationId: 1,
       }),
@@ -705,7 +712,8 @@ describe('Workflow 三区零重复与无损呈现', () => {
         toolName: 'subagent',
         input: { prompt: '执行后台审计', background: true },
         status: 'done',
-        result: JSON.stringify({ ok: true, background: true, runId: 'wf_bg_handle', status: 'running' }),
+        result: '已转入后台',
+        presentationMeta: { ok: true, background: true, runId: 'wf_bg_handle', status: 'running' },
         durationMs: 34,
         conversationId: 1,
       }),
@@ -845,7 +853,8 @@ describe('Workflow 三区零重复与无损呈现', () => {
         toolName: 'SubagentWorkflow',
         input: { name: '目标多阶段工作流' },
         status: 'done',
-        result: JSON.stringify({ runId: 'wf_target' }),
+        result: 'done',
+        presentationMeta: { ok: true, runId: 'wf_target', status: 'completed' },
         conversationId: 1,
       }),
     )
@@ -1240,28 +1249,30 @@ describe('Workflow 三区零重复与无损呈现', () => {
       status: 'pending',
       createdAt: 1_700_000_205_000,
     }
-    const oldResult = JSON.stringify({ ok: true, execution: { conversationId: 50 } })
-    const newResult = JSON.stringify({
+    const oldMeta = { ok: true, execution: { conversationId: 50 } }
+    const newMeta = {
       ok: true,
       execution: {
         conversationId: 50,
         worktree: { path: '/tmp/wt-50', branch: 'feat/sub-wt' },
       },
-    })
-    const siblingCalls = [
+    }
+    const timelineToolCalls = [
       {
         callId: 'call_old_50',
         toolName: 'subagent',
+        index: 0,
         input: { prompt: '首次执行' },
         status: 'done' as const,
-        result: oldResult,
+        presentationMeta: oldMeta,
       },
       {
         callId: 'call_new_50',
         toolName: 'subagent',
+        index: 1,
         input: { resume: 50, prompt: '继续执行' },
         status: 'running' as const,
-        result: newResult,
+        presentationMeta: newMeta,
       },
     ]
 
@@ -1270,6 +1281,7 @@ describe('Workflow 三区零重复与无损呈现', () => {
       conversations: [createConv({ id: 1 }), childAskConv],
       pendingAsks: [pendingAsk],
       runsByConversation: { 1: [settledWithLiveChildRun] },
+      timelineToolCalls,
     })
 
     // 1. 历史被续接的旧调用：保持已完成，标「已在下文续接」，绝不注册活动
@@ -1279,10 +1291,10 @@ describe('Workflow 三区零重复与无损呈现', () => {
         toolName: 'subagent',
         input: { prompt: '首次执行' },
         status: 'done',
-        result: oldResult,
+        result: 'done',
+        presentationMeta: oldMeta,
         durationMs: 1200,
         conversationId: 1,
-        siblingCalls,
       }),
     )
     try {
@@ -1301,9 +1313,8 @@ describe('Workflow 三区零重复与无损呈现', () => {
         toolName: 'subagent',
         input: { resume: 50, prompt: '继续执行' },
         status: 'running',
-        result: newResult,
+        presentationMeta: newMeta,
         conversationId: 1,
-        siblingCalls,
       }),
     )
     try {
@@ -1324,7 +1335,8 @@ describe('Workflow 三区零重复与无损呈现', () => {
         toolName: 'SubagentWorkflow',
         input: { name: '已结算主流程' },
         status: 'done',
-        result: JSON.stringify({ runId: 'wf_settled_child_live' }),
+        result: 'done',
+        presentationMeta: { ok: true, runId: 'wf_settled_child_live', status: 'completed' },
         conversationId: 1,
       }),
     )
@@ -1399,7 +1411,8 @@ describe('Workflow 三区零重复与无损呈现', () => {
         toolName: 'subagent',
         input: { prompt: '排查登录问题' },
         status: 'done',
-        result: JSON.stringify({ conversationId: 60 }),
+        result: 'done',
+        presentationMeta: { ok: true, execution: { conversationId: 60 } },
         durationMs: 1200,
         conversationId: 1,
       }),

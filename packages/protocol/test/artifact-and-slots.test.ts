@@ -7,10 +7,15 @@ import {
   ARTIFACT_KINDS,
   COMPOSER_DOCK_SLOT,
   COMPOSER_STATUS_SLOT,
+  HOST_SLOT_CATALOG,
+  HOST_SLOT_TARGETS,
+  NODE_DETAIL_SECTION_SLOT,
   OVERVIEW_CARD_META_SLOT,
+  PROFILE_DETAIL_SECTION_SLOT,
   isArtifactKind,
   type ArtifactKind,
   type ArtifactMetadata,
+  type PluginSlotContributionSpec,
 } from '../src/index.js'
 
 test('COMPOSER_DOCK_SLOT and COMPOSER_STATUS_SLOT are exported and follow the builtin:composer/* namespace', { timeout: 60_000 }, () => {
@@ -20,6 +25,46 @@ test('COMPOSER_DOCK_SLOT and COMPOSER_STATUS_SLOT are exported and follow the bu
 
 test('OVERVIEW_CARD_META_SLOT is exported and follows the builtin:overview/* namespace', { timeout: 60_000 }, () => {
   assert.equal(OVERVIEW_CARD_META_SLOT, 'builtin:overview/card-meta')
+})
+
+test('HOST_SLOT_CATALOG: single read-only catalog covers exactly the 5 real host slots', { timeout: 60_000 }, () => {
+  assert.deepEqual(HOST_SLOT_TARGETS, [
+    PROFILE_DETAIL_SECTION_SLOT,
+    NODE_DETAIL_SECTION_SLOT,
+    COMPOSER_STATUS_SLOT,
+    COMPOSER_DOCK_SLOT,
+    OVERVIEW_CARD_META_SLOT,
+  ])
+  assert.equal(HOST_SLOT_CATALOG.length, 5)
+  assert.equal(Object.isFrozen(HOST_SLOT_CATALOG), true)
+  const seen = new Set<string>()
+  for (const entry of HOST_SLOT_CATALOG) {
+    assert.equal(Object.isFrozen(entry), true)
+    assert.equal(seen.has(entry.target), false)
+    seen.add(entry.target)
+    assert.equal(entry.target, `${entry.ownerPluginId}/${entry.slotName}`)
+    assert.equal(entry.mode, 'list')
+    assert.ok(entry.propsType.length > 0)
+    assert.ok(entry.description.length > 0)
+    assert.ok(['none', 'optional', 'required'].includes(entry.conversationContext))
+  }
+  assert.deepEqual([...seen], [...HOST_SLOT_TARGETS])
+})
+
+test('PluginSlotContributionSpec: client component reference is required', { timeout: 60_000 }, () => {
+  const validSpec: PluginSlotContributionSpec = {
+    id: 'slot-ok',
+    target: COMPOSER_STATUS_SLOT,
+    client: { module: 'index.tsx', export: 'StatusBadge' },
+  }
+  assert.equal(validSpec.client.export, 'StatusBadge')
+
+  // @ts-expect-error client is required on PluginSlotContributionSpec
+  const missingClient: PluginSlotContributionSpec = {
+    id: 'slot-missing-client',
+    target: COMPOSER_STATUS_SLOT,
+  }
+  assert.ok(missingClient)
 })
 
 test('ArtifactKind / isArtifactKind / ArtifactMetadata.kind required-field contract', { timeout: 60_000 }, () => {

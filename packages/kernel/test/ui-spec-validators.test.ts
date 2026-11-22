@@ -138,15 +138,21 @@ test('profile.runtime: valid kind/label passes; invalid kind format and intra-pl
   );
 });
 
-test('plugin.slot: valid target passes; extra slashes and invalid segment identifiers reject', { timeout: 60_000 }, () => {
-  validateUiSpecEarly('plugin.slot', { id: 's1', target: 'owner/panel' }, 's1', makeCtx('plugin.slot'));
+test('plugin.slot: valid target+client passes; missing client, extra slashes, and invalid segment identifiers reject', { timeout: 60_000 }, () => {
+  const validClient = { module: 'a.tsx', export: 'X' };
+  validateUiSpecEarly('plugin.slot', { id: 's1', target: 'owner/panel', client: validClient }, 's1', makeCtx('plugin.slot'));
   expectThrow(
-    () => validateUiSpecEarly('plugin.slot', { id: 's1', target: 'a/b/c' }, 's1', makeCtx('plugin.slot')),
+    () => validateUiSpecEarly('plugin.slot', { id: 's1', target: 'owner/panel' }, 's1', makeCtx('plugin.slot')),
+    'invalid_ui_spec',
+    'must declare client component reference',
+  );
+  expectThrow(
+    () => validateUiSpecEarly('plugin.slot', { id: 's1', target: 'a/b/c', client: validClient }, 's1', makeCtx('plugin.slot')),
     'invalid_ui_spec',
     "must exactly contains a '/'",
   );
   expectThrow(
-    () => validateUiSpecEarly('plugin.slot', { id: 's1', target: 'ow ner/panel' }, 's1', makeCtx('plugin.slot')),
+    () => validateUiSpecEarly('plugin.slot', { id: 's1', target: 'ow ner/panel', client: validClient }, 's1', makeCtx('plugin.slot')),
     'invalid_ui_spec',
     'segment identifier illegal',
   );

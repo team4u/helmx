@@ -30,8 +30,8 @@ import {
   fauxAssistantMessage,
   fauxToolCall,
 } from '@earendil-works/pi-ai/providers/faux'
-import type { AgentSpawnRequest } from '@helmx/protocol'
-import { HelmxError } from '@helmx/protocol'
+import type { AgentSpawnRequest, HelmxPluginContext, JsonSchema, PluginToolSpec } from '@helmx/protocol'
+import { HelmxError, validateOrThrow } from '@helmx/protocol'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -40,6 +40,7 @@ import assert from 'node:assert/strict'
 import { createHelmx } from '../../hub/src/app.js'
 import { KernelRuntime } from '../../kernel/src/runtime/index.js'
 import { createWorkflowPlugin } from '../src/workflow.js'
+import { registerWorkflowTools } from '../src/workflow/tools.js'
 import { createWorktreePlugin } from '../src/worktree.js'
 import { buildManagedEnv, runShell } from '../../kernel/src/runtime/tools.js'
 import type { HelmxToolDeps } from '../../kernel/src/runtime/tool-deps.js'
@@ -185,21 +186,25 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
       assert.equal(payload.effort, 'low')
       assert.equal(payload.isolation, undefined, '未传 isolation 时不得凭空出现')
 
-      // 原生执行：真子会话派生；structuredOutput.execution 与纯 JSON 文本回报执行元数据（无 [subagent ...] 尾行）。
+      // 原生执行：真子会话派生；文本 JSON 信封回报业务 result 与 execution，details 保留 execution 索引（无 [subagent ...] 尾行）。
       const detail = await kernel.getConversationDetail(1, { limit: 50 })
       const text = toolResultText(detail, 'subagent')
-      const structured = toolResultDetails(detail, 'subagent')
+      const details = toolResultDetails(detail, 'subagent')
+      const envelope = JSON.parse(text) as Record<string, unknown>
       const child = kernel
         .listConversations()
         .find((c) => c.parentConversationId === 1)
       assert.ok(child, '应派生真子会话')
       assert.equal(child.title, '调研子任务', '子会话应持久保存 label 作为初始标题')
       assert.equal(text.includes('[subagent '), false, `不得追加 [subagent ...] 尾行：${text}`)
-      assert.deepEqual(JSON.parse(text), structured, '文本通道应为纯 JSON 信封')
-      assert.equal(structured['result'], '子代理的回答', '业务结果原样回传')
-      const execution = structured['execution'] as Record<string, unknown>
-      assert.equal(execution['conversationId'], child.id, 'structuredOutput.execution 应含 conversationId')
-      assert.equal(execution['effectiveCwd'], childCwd, `执行元数据应含 effectiveCwd=${childCwd}`)
+      assert.equal(envelope['result'], '子代理的回答', '业务结果原样回传到 structuredOutput/output')
+      const envelopeExec = envelope['execution'] as Record<string, unknown>
+      assert.equal(envelopeExec['conversationId'], child.id, 'envelope.execution 应含 conversationId')
+      assert.equal(envelopeExec['effectiveCwd'], childCwd, `执行元数据应含 effectiveCwd=${childCwd}`)
+      const detailExec = details['execution'] as Record<string, unknown>
+      assert.equal(detailExec['conversationId'], child.id, 'details.execution 应含 conversationId')
+      assert.equal(detailExec['effectiveCwd'], childCwd, `details.execution 应含 effectiveCwd=${childCwd}`)
+      assert.equal('result' in details, false, 'pi.tool-result.details 严禁镜像 final.result')
       assert.equal(await kernel.getLastAssistantText(1), '主回合完成')
     } finally {
       await kernel.close()
@@ -253,10 +258,13 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
 
       const detail = await kernel.getConversationDetail(1, { limit: 50 })
       const text = toolResultText(detail, 'subagent')
-      const structured = toolResultDetails(detail, 'subagent')
+      const details = toolResultDetails(detail, 'subagent')
+      const envelope = JSON.parse(text) as Record<string, unknown>
       assert.equal(text.includes('[subagent '), false)
-      assert.equal((structured['execution'] as Record<string, unknown>)?.['conversationId'], child.id)
-      assert.equal(structured['result'], '续接回答')
+      assert.equal((details['execution'] as Record<string, unknown>)?.['conversationId'], child.id)
+      assert.equal('result' in details, false, 'resume 落盘 details 不得镜像 result')
+      assert.equal((envelope['execution'] as Record<string, unknown>)?.['conversationId'], child.id)
+      assert.equal(envelope['result'], '续接回答')
     } finally {
       await kernel.close()
     }
@@ -361,16 +369,19 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
 
       const detail = await kernel.getConversationDetail(1, { limit: 50 })
       const text = toolResultText(detail, 'subagent')
-      const structured = toolResultDetails(detail, 'subagent')
+      const details = toolResultDetails(detail, 'subagent')
+      const envelope = JSON.parse(text) as Record<string, unknown>
       assert.equal(text.includes('[subagent '), false)
-      assert.deepEqual(JSON.parse(text), structured)
-      assert.deepEqual(structured['result'], { external: 'done', detail: 7 })
-      assert.deepEqual(structured['execution'], {
+      assert.deepEqual(envelope['result'], { external: 'done', detail: 7 })
+      const expectedExec = {
         nodeId: 'local',
         executionId: 'pane-9',
         effectiveCwd: '/srv/wt/helmx-42',
         worktree: { id: 'local:/srv/wt/helmx-42', path: '/srv/wt/helmx-42', branch: 'helmx/wf-run-1' },
-      })
+      }
+      assert.deepEqual(envelope['execution'], expectedExec)
+      assert.deepEqual(details['execution'], expectedExec)
+      assert.equal('result' in details, false, '外部后端落盘 details 不得镜像 result')
       assert.equal(
         kernel.listConversations().filter((c) => c.parentConversationId === 1).length,
         0,
@@ -423,8 +434,15 @@ describe('SubagentWorkflow 工具入参贯通（真实引擎）', { timeout: 60_
 
       const detail = await app.kernel.getConversationDetail(1, { limit: 50 })
       const text = toolResultText(detail, 'SubagentWorkflow')
+      const wfDetails = toolResultDetails(detail, 'SubagentWorkflow')
       const runId = extractRunId(text)
       assert.ok(runId, `工具输出应含 runId：${text.slice(0, 300)}`)
+      assert.deepEqual(wfDetails, {
+        ok: true,
+        runId,
+        status: 'completed',
+        label: '自定义编排',
+      }, 'SubagentWorkflow 落盘 details 仅保留轻量 UI 索引，绝不镜像完整 WorkflowRunSummary')
       const parsedSummary = JSON.parse(text) as { status: string; name?: string; result?: unknown }
       assert.equal(parsedSummary.status, 'completed', 'SubagentWorkflow 工具应等待终态返回')
       assert.equal(parsedSummary.name, '自定义编排', 'label 应覆盖 meta.name 作为 run.name')
@@ -936,4 +954,202 @@ test('外部子代理执行元数据的工具正文与持久结果统一脱敏',
   } finally {
     await kernel.close()
   }
+})
+
+// ---------------------------------------------------------------------------
+// 5. subagent / SubagentWorkflow 工具 presentationMetaSchema 与轻量投影边界
+// ---------------------------------------------------------------------------
+
+describe('subagent / SubagentWorkflow 工具 presentationMeta 轻量投影与 Schema 边界', { timeout: 60_000 }, () => {
+  type RegisteredTool = PluginToolSpec & { presentationMetaSchema?: JsonSchema }
+
+  function captureWorkflowTools(workflowsStub: Record<string, unknown>): Map<string, RegisteredTool> {
+    const tools = new Map<string, RegisteredTool>()
+    const ctx = {
+      tool(spec: RegisteredTool) {
+        tools.set(spec.name, spec)
+      },
+    } as unknown as HelmxPluginContext
+    registerWorkflowTools(ctx, {
+      workflows: workflowsStub as never,
+      assertCanSpawn: () => {},
+      resolveBackground: (_convId, explicit) => ({ ok: true, background: explicit === true }),
+      syncRunsDoc: () => {},
+    })
+    return tools
+  }
+
+  it('subagent：声明 presentationMetaSchema，大 result 与内部 worktree 元字段只进 structuredOutput、不污染 presentationMeta', { timeout: 60_000 }, async () => {
+    const largeResult = 'x'.repeat(40_000)
+    const execution = {
+      nodeId: 'local',
+      conversationId: 21,
+      effectiveCwd: '/wt/sub-21',
+      meta: {
+        'builtin:worktree': {
+          worktree: {
+            id: 'local:/wt/sub-21',
+            path: '/wt/sub-21',
+            branch: 'helmx/sub-21',
+            repoRoot: '/repo',
+            baseCommit: 'abc1234',
+          },
+        },
+      },
+    }
+    const runRecord = {
+      id: 'wf_sub_1',
+      name: 'subagent',
+      conversationId: 1,
+      kind: 'subagent' as const,
+      status: 'completed' as const,
+      createdAt: 1,
+      updatedAt: 2,
+      result: largeResult,
+    }
+    let currentRun = runRecord
+    const tools = captureWorkflowTools({
+      findRunByParentToolCall: () => undefined,
+      startBackgroundAgent: async () => ({ run: currentRun, execution }),
+      getRun: () => currentRun,
+      loadRunRecord: () => ({ id: currentRun.id, subagentMeta: { execution } }),
+      waitForeground: async () => 'settled',
+      isHostClosing: () => false,
+      isAutoRecoverOnRestart: () => false,
+    })
+
+    const subagentTool = tools.get('subagent')!
+    assert.ok(subagentTool.structuredOutputSchema, '应声明 structuredOutputSchema')
+    assert.ok(subagentTool.presentationMetaSchema, '应声明 presentationMetaSchema')
+
+    // 1) 同步终态（含 40KB result）
+    const settled = (await subagentTool.execute(
+      { prompt: '大载荷子代理', background: false },
+      { conversationId: 1, callId: 'call_sa_1' },
+    )) as { structuredOutput: Record<string, unknown>; presentationMeta: Record<string, unknown> }
+    assert.equal(settled.structuredOutput['result'], largeResult, 'structuredOutput 保留完整 result 给程序调用')
+    assert.equal('result' in settled.presentationMeta, false, 'presentationMeta 绝不镜像 final.result')
+    validateOrThrow(subagentTool.presentationMetaSchema!, settled.presentationMeta, 'subagent.presentationMeta')
+    assert.deepEqual(settled.presentationMeta, {
+      ok: true,
+      runId: 'wf_sub_1',
+      status: 'completed',
+      execution: {
+        nodeId: 'local',
+        conversationId: 21,
+        effectiveCwd: '/wt/sub-21',
+        worktree: { id: 'local:/wt/sub-21', path: '/wt/sub-21', branch: 'helmx/sub-21' },
+      },
+    })
+    assert.ok(JSON.stringify(settled.presentationMeta).length < 512)
+
+    // 2) 后台句柄
+    currentRun = { ...runRecord, status: 'running' as never }
+    const bg = (await subagentTool.execute(
+      { prompt: '后台子代理', background: true },
+      { conversationId: 1, callId: 'call_sa_bg' },
+    )) as { structuredOutput: Record<string, unknown>; presentationMeta: Record<string, unknown> }
+    validateOrThrow(subagentTool.presentationMetaSchema!, bg.presentationMeta, 'subagent.bg.presentationMeta')
+    assert.equal(bg.presentationMeta['background'], true)
+    assert.equal('result' in bg.presentationMeta, false)
+
+    // 3) 失败终态 + 参数前置校验错误
+    currentRun = { ...runRecord, status: 'failed' as never, error: largeResult } as never
+    const failed = (await subagentTool.execute(
+      { prompt: '失败子代理', background: false },
+      { conversationId: 1, callId: 'call_sa_fail' },
+    )) as { isError: boolean; structuredOutput: Record<string, unknown>; presentationMeta: Record<string, unknown> }
+    assert.equal(failed.isError, true)
+    assert.equal(failed.structuredOutput['result'], largeResult)
+    assert.equal('result' in failed.presentationMeta, false)
+    validateOrThrow(subagentTool.presentationMetaSchema!, failed.presentationMeta, 'subagent.failed.presentationMeta')
+
+    const badArg = (await subagentTool.execute(
+      { prompt: '坏参数', isolation: 'docker' },
+      { conversationId: 1, callId: 'call_sa_bad' },
+    )) as { isError: boolean; presentationMeta: Record<string, unknown> }
+    assert.equal(badArg.isError, true)
+    assert.deepEqual(badArg.presentationMeta, { ok: false })
+    validateOrThrow(subagentTool.presentationMetaSchema!, badArg.presentationMeta, 'subagent.badArg.presentationMeta')
+  })
+
+  it('SubagentWorkflow：声明 presentationMetaSchema，完整 WorkflowRunSummary 仅进 structuredOutput，presentationMeta 仅存轻量索引', { timeout: 60_000 }, async () => {
+    const hugeRun = {
+      id: 'wf_big_1',
+      name: '全量验收编排',
+      conversationId: 1,
+      status: 'completed' as const,
+      createdAt: 1,
+      updatedAt: 2,
+      result: 'y'.repeat(40_000),
+      nodes: [{ id: 'n1', kind: 'agent', status: 'done', output: 'z'.repeat(20_000) }],
+      progress: [{ at: 1, kind: 'log', message: 'log-entry' }],
+    }
+    let currentRun = hugeRun
+    const tools = captureWorkflowTools({
+      findRunByParentToolCall: () => undefined,
+      run: async () => currentRun,
+      getRun: () => currentRun,
+      waitForeground: async () => 'settled',
+      isHostClosing: () => false,
+      isAutoRecoverOnRestart: () => false,
+    })
+
+    const wfTool = tools.get('SubagentWorkflow')!
+    assert.ok(wfTool.structuredOutputSchema, '应声明 structuredOutputSchema')
+    assert.ok(wfTool.presentationMetaSchema, '应声明 presentationMetaSchema')
+
+    // 1) 同步终态（含 60KB summary）
+    const settled = (await wfTool.execute(
+      { script: 'return 1', background: false },
+      { conversationId: 1, callId: 'call_wf_1' },
+    )) as { structuredOutput: Record<string, unknown>; presentationMeta: Record<string, unknown> }
+    assert.deepEqual(settled.structuredOutput['summary'], hugeRun, 'structuredOutput 保留完整 WorkflowRunSummary')
+    assert.equal('summary' in settled.presentationMeta, false, 'presentationMeta 绝不镜像 WorkflowRunSummary')
+    assert.equal('nodes' in settled.presentationMeta, false)
+    assert.equal('result' in settled.presentationMeta, false)
+    validateOrThrow(wfTool.presentationMetaSchema!, settled.presentationMeta, 'workflow.presentationMeta')
+    assert.deepEqual(settled.presentationMeta, {
+      ok: true,
+      runId: 'wf_big_1',
+      status: 'completed',
+      label: '全量验收编排',
+    })
+    assert.ok(JSON.stringify(settled.presentationMeta).length < 256)
+
+    // 2) 后台调度句柄
+    currentRun = { ...hugeRun, status: 'running' as never }
+    const bg = (await wfTool.execute(
+      { script: 'return 1', background: true },
+      { conversationId: 1, callId: 'call_wf_bg' },
+    )) as { structuredOutput: Record<string, unknown>; presentationMeta: Record<string, unknown> }
+    assert.equal(bg.structuredOutput['background'], true)
+    assert.deepEqual(bg.structuredOutput['summary'], currentRun)
+    validateOrThrow(wfTool.presentationMetaSchema!, bg.presentationMeta, 'workflow.bg.presentationMeta')
+    assert.deepEqual(bg.presentationMeta, {
+      ok: true,
+      background: true,
+      runId: 'wf_big_1',
+      status: 'running',
+      label: '全量验收编排',
+    })
+
+    // 3) 异常捕获失败路径
+    const errTools = captureWorkflowTools({
+      findRunByParentToolCall: () => undefined,
+      run: async () => {
+        throw new Error('boom')
+      },
+      isHostClosing: () => false,
+      isAutoRecoverOnRestart: () => false,
+    })
+    const errRes = (await errTools.get('SubagentWorkflow')!.execute(
+      { script: 'throw 1', background: false },
+      { conversationId: 1, callId: 'call_wf_err' },
+    )) as { isError: boolean; structuredOutput: Record<string, unknown>; presentationMeta: Record<string, unknown> }
+    assert.equal(errRes.isError, true)
+    assert.equal(errRes.structuredOutput['summary'], 'boom')
+    assert.deepEqual(errRes.presentationMeta, { ok: false, status: 'failed' })
+    validateOrThrow(wfTool.presentationMetaSchema!, errRes.presentationMeta, 'workflow.err.presentationMeta')
+  })
 })

@@ -2,7 +2,7 @@
  * Tool expanded-body pure data layer (plain .ts, zero React/DOM deps, unit-testable directly).
  *
  * Responsibilities:
- * - write / read / bash display-data extraction (input and structuredOutput fields are only
+ * - write / read / bash display-data extraction (input and presentationMeta fields are only
  *   type-narrowed; missing stays undefined — never fabricate fields or fake file state);
  * - line slicing (head/tail for source previews and output-tail folding — both operate on
  *   locally complete text, recoverable by expanding, unrelated to server truncation);
@@ -146,7 +146,7 @@ export interface WriteBodyData {
   content: string | undefined
   language: string
   lineCount: number | undefined
-  /** Bytes reported by a successful result (structuredOutput.bytesWritten, type-narrowed only). */
+  /** Bytes reported by a successful result (presentationMeta.bytesWritten, type-narrowed only). */
   bytesWritten: number | undefined
 }
 
@@ -154,8 +154,8 @@ export function writeBodyData(tool: ToolTrace): WriteBodyData {
   const input = asRecord(tool.input)
   const path = stringField(input, 'path')
   const content = stringField(input, 'content')
-  const structured = asRecord(tool.structuredOutput)
-  const bytes = structured?.bytesWritten
+  const meta = asRecord(tool.presentationMeta)
+  const bytes = meta?.bytesWritten
   return {
     path,
     content,
@@ -169,47 +169,41 @@ export function writeBodyData(tool: ToolTrace): WriteBodyData {
 }
 
 export interface ReadBodyData {
-  /** Content to display: structuredOutput.content first, falling back to resultText. */
+  /** Content to display (always comes from the raw tool resultText channel; presentationMeta intentionally omits file content). */
   content: string | undefined
   language: string
   /** Output contains a kernel over-length Spill marker: preview-grade text, no source syntax highlighting. */
   isSpill: boolean
-  /** true = content comes from the raw output text (resultText), subject to server preview truncation;
-   * false = structuredOutput.content (details channel, transferred in full, unaffected by result-text truncation). */
-  fromResultText: boolean
 }
 
 export function readBodyData(tool: ToolTrace): ReadBodyData {
-  const structured = asRecord(tool.structuredOutput)
+  const meta = asRecord(tool.presentationMeta)
   const input = asRecord(tool.input)
-  const path = stringField(structured, 'path') ?? stringField(input, 'path')
-  const structuredContent = stringField(structured, 'content')
-  const content = structuredContent ?? tool.resultText
+  const path = stringField(meta, 'path') ?? stringField(input, 'path')
   return {
-    content,
+    content: tool.resultText,
     language: languageFromFilename(path),
     isSpill: tool.artifactRef !== undefined,
-    fromResultText: structuredContent === undefined && tool.resultText !== undefined,
   }
 }
 
 export interface BashBodyData {
   command: string | undefined
   output: string | undefined
-  /** structuredOutput.exitCode: a number is the real value; null means no exit code (e.g. spawn failure). */
+  /** presentationMeta.exitCode: a number is the real value; null means no exit code (e.g. spawn failure). */
   exitCode: number | null | undefined
   timedOut: boolean
 }
 
 export function bashBodyData(tool: ToolTrace): BashBodyData {
   const input = asRecord(tool.input)
-  const structured = asRecord(tool.structuredOutput)
-  const exit = structured?.exitCode
+  const meta = asRecord(tool.presentationMeta)
+  const exit = meta?.exitCode
   return {
     command: stringField(input, 'command'),
     output: tool.resultText,
     exitCode: typeof exit === 'number' && Number.isSafeInteger(exit) ? exit : exit === null ? null : undefined,
-    timedOut: structured?.timedOut === true,
+    timedOut: meta?.timedOut === true,
   }
 }
 
@@ -232,7 +226,7 @@ export function toolRowStats(tool: ToolTrace, t?: WebMessageTranslator): ToolRow
   if (tool.toolView !== undefined) return undefined
   if (tool.toolName === 'edit') {
     if (tool.status === 'done' && !tool.isError) {
-      const check = checkEditToolResult(tool.structuredOutput)
+      const check = checkEditToolResult(tool.presentationMeta)
       if (check.ok) {
         return {
           addCount: check.value.diff.addedLines,

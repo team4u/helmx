@@ -16,6 +16,7 @@ import { act } from 'react'
 import * as ReactDOMClient from 'react-dom/client'
 import type { PluginSummary } from '@helmx/protocol'
 import { PluginCard } from '../src/plugins/PluginCard.js'
+import { pluginHasOpenableScreen } from '../src/plugins/plugin-card-model.js'
 import { PluginDetailDrawer } from '../src/plugins/PluginDetailDrawer.js'
 import { makeTestStore } from './helpers/store.js'
 import { HostStoreProviders } from './helpers/host-store.js'
@@ -190,6 +191,85 @@ test('PluginDetailDrawer 契约：enabled 插件经 store.openTarget 打开主�
       '主屏与分屏按钮应经真实 openTarget 推进导航目标（主屏 target + splitTarget）',
     )
 
+  } finally {
+    act(() => root.unmount())
+    host.remove()
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('enabled=true 且 status=failed：不暴露可用 Screen（卡片/抽屉/模型均隐藏打开入口），但保留故障样式与停用开关', { timeout: 60_000 }, async () => {
+  const failedEnabledPlugin = makePlugin({
+    id: 'todo-app',
+    name: '待办应用',
+    enabled: true,
+    status: 'failed',
+    error: {
+      code: 'plugin_dependency_not_enabled',
+      message: 'Dependency base was force-disabled',
+      stage: 'enable',
+    },
+  })
+  const store = screenStore([failedEnabledPlugin], SCREEN_UI)
+  assert.equal(pluginHasOpenableScreen(store.getGroupedUi(), failedEnabledPlugin), false)
+
+  const toggled: boolean[] = []
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = (async () =>
+    new Response(JSON.stringify({ pluginId: 'todo-app', schema: {}, values: {} }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })) as typeof fetch
+
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = ReactDOMClient.createRoot(host)
+  try {
+    await act(async () => {
+      root.render(
+        e(HostStoreProviders, { value: store },
+          e(React.Fragment, null,
+            e(PluginCard, {
+              plugin: failedEnabledPlugin,
+              selected: false,
+              onSelect: () => {},
+              onToggle: (next) => { toggled.push(next) },
+            }),
+            e(PluginDetailDrawer, {
+              plugin: failedEnabledPlugin,
+              open: true,
+              inline: true,
+              onClose: () => {},
+              onToggleEnabled: async () => {},
+              toggling: false,
+            }),
+          )),
+      )
+    })
+
+    // 卡片：不显示打开视图按钮，不标 is-enabled，标 is-disabled + is-failed；开关仍保持持久化开启态并可点击停用恢复
+    const card = host.querySelector('.plugin-card')
+    assert.ok(card)
+    assert.equal(card.classList.contains('is-enabled'), false)
+    assert.equal(card.classList.contains('is-disabled'), true)
+    assert.equal(card.classList.contains('is-failed'), true)
+    assert.ok(host.querySelector('.plugin-card-open-btn') === null)
+
+    const sw = host.querySelector<HTMLButtonElement>('[role="switch"]')
+    assert.ok(sw)
+    assert.equal(sw.getAttribute('aria-checked'), 'true')
+    await act(async () => {
+      sw.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    assert.deepEqual(toggled, [false], '点击故障插件开关应触发 disable 恢复路径')
+
+    // 抽屉：无主屏/分屏打开按钮，仍显示 Error 诊断与 Disable plugin 恢复按钮
+    const actionsBar = host.querySelector('.plugin-drawer-screen-actions')
+    assert.ok(actionsBar)
+    assert.ok(actionsBar.querySelector('.plugin-drawer-split-btn') === null)
+    const buttons = Array.from(actionsBar.querySelectorAll('button')).map((b) => b.textContent?.trim())
+    assert.deepEqual(buttons, ['Disable plugin'])
+    assert.ok(host.querySelector('.plugin-drawer-failed-note') !== null)
   } finally {
     act(() => root.unmount())
     host.remove()

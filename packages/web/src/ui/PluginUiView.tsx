@@ -13,6 +13,7 @@ import { useEffect, useState, useSyncExternalStore } from 'react'
 import type { ComponentType, ReactNode } from 'react'
 import type { ClientComponentRef, ComposerController } from '@helmx/protocol/browser'
 import { HelmxIcon, createPluginClientContext, PluginClientContext, usePluginClientHost, ViewBoundary } from '@helmx/plugin-client'
+import { isPluginSummaryActive } from '../lib/live-state.js'
 import { getCachedClientComponent, getPluginClientCacheRevision, loadPluginClientModule, PluginClientError, requireClientExport, subscribePluginClientCacheInvalidation } from '../lib/plugin-client.js'
 import { usePlugins } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
@@ -50,7 +51,7 @@ export function PluginUiView(props: PluginUiViewProps): ReactNode {
   }
   const plugin = plugins.find((p) => p.id === pluginId)
   const expectedHash =
-    plugin !== undefined && plugin.enabled && (plugin.status === undefined || plugin.status === 'active')
+    plugin !== undefined && isPluginSummaryActive(plugin)
       ? plugin.clientHashes?.[clientRef.module]
       : undefined
   // Snapshot rebuilds / per-plugin reconciliation invalidate the cache too:
@@ -153,7 +154,7 @@ function ClientPluginUiView({
 function MissingTrackError({ pluginId }: { pluginId: string }): ReactNode {
   const { t } = useWebLocale()
   return (
-    <div className="callout callout--warning">
+    <div className="callout callout--warning" role="alert">
       <HelmxIcon name="alert-triangle" size={13} />
       <span>{t('ui.pluginUi.missingClient', { pluginId })}</span>
     </div>

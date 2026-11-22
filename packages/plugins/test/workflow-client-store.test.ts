@@ -8,7 +8,7 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import type { ConversationSummary } from '@helmx/protocol'
+import type { TimelineToolCallSummary } from '@helmx/protocol'
 import type { WorkflowRunSummary } from '../src/contracts.js'
 import {
   React,
@@ -49,11 +49,10 @@ test('真实共享 hooks 消费 runs 会话文档增量：父工具已返回仍�
     callId: 'call-bg',
     toolName: 'subagent',
     input: { prompt: '跑后台测试' },
-    result: JSON.stringify({ execution: { conversationId: 11 } }),
-    structuredOutput: { execution: { conversationId: 11 } },
+    result: '已提交',
+    presentationMeta: { ok: true, execution: { conversationId: 11 } },
     status: 'done',
     conversationId: 1,
-    siblingCalls: [],
   })
   const ui = h.mountNode(view)
   try {
@@ -107,7 +106,6 @@ test('真实子会话 working/blocked 独立报告后台活动；静态工具结
         result: '已提交',
         status: 'done',
         conversationId: 1,
-        siblingCalls: [],
       }),
     )
     try {
@@ -135,7 +133,6 @@ test('真实子会话 working/blocked 独立报告后台活动；静态工具结
       result: '{"status":"running"}',
       status: 'done',
       conversationId: 1,
-      siblingCalls: [],
     }),
   )
   try {
@@ -174,7 +171,6 @@ test('WorkflowToolView 与无 nativechild 的外部 subagent 按真实 run.runni
         result: '已提交',
         status: 'done',
         conversationId: 1,
-        siblingCalls: [],
       }),
     )
     try {
@@ -212,28 +208,45 @@ test('resume 仅最新调用报告活动；旧卡由活跃转历史或卸载不�
     toolName: 'subagent',
     status: 'done' as const,
     input: {},
-    result: JSON.stringify(exec11),
-    structuredOutput: exec11,
+    result: '已提交',
+    presentationMeta: exec11,
   }
   const newCallSummary = {
     callId: 'new-call',
     toolName: 'subagent',
     status: 'done' as const,
     input: { resume: 11, prompt: '继续任务' },
-    result: JSON.stringify(exec11),
-    structuredOutput: exec11,
+    result: '已提交',
+    presentationMeta: exec11,
+  }
+
+  const oldTimelineSummary: TimelineToolCallSummary = {
+    callId: 'old-call',
+    toolName: 'subagent',
+    index: 0,
+    status: 'done',
+    input: oldCallSummary.input,
+    presentationMeta: exec11,
+  }
+  const newTimelineSummary: TimelineToolCallSummary = {
+    callId: 'new-call',
+    toolName: 'subagent',
+    index: 1,
+    status: 'done',
+    input: newCallSummary.input,
+    presentationMeta: exec11,
   }
 
   const h = createWorkflowHostHarness({
     conversationId: 1,
     conversations: [parent, child],
     runsByConversation: { 1: [oldRun] },
+    timelineToolCalls: [oldTimelineSummary],
   })
   const ui = h.mountNode(
     e(SubagentToolView, {
       ...oldCallSummary,
       conversationId: 1,
-      siblingCalls: [oldCallSummary],
     }),
   )
   try {
@@ -241,13 +254,13 @@ test('resume 仅最新调用报告活动；旧卡由活跃转历史或卸载不�
 
     // 发生 resume：child 迁往 new-call，oldCall 与 newCall 同屏挂载，保留 oldRun.running 验证不被旧 run 污染。
     h.setConversations([parent, { ...child, status: 'working', parentToolCallId: 'new-call' }])
-    const siblings = [oldCallSummary, newCallSummary]
+    h.setTimelineToolCalls([oldTimelineSummary, newTimelineSummary])
     ui.rerender(
       e(
         React.Fragment,
         null,
-        e(SubagentToolView, { ...oldCallSummary, conversationId: 1, siblingCalls: siblings }),
-        e(SubagentToolView, { ...newCallSummary, conversationId: 1, siblingCalls: siblings }),
+        e(SubagentToolView, { ...oldCallSummary, conversationId: 1 }),
+        e(SubagentToolView, { ...newCallSummary, conversationId: 1 }),
       ),
     )
     assert.deepEqual([...h.log.activeToolCallIds], ['new-call'], '续接后仅最新调用 busy')
@@ -257,7 +270,7 @@ test('resume 仅最新调用报告活动；旧卡由活跃转历史或卸载不�
     assert.doesNotMatch(rows[1]!.textContent ?? '', /Resumed below/)
 
     // 卸载旧卡不能误删最新调用的活动登记。
-    ui.rerender(e(SubagentToolView, { ...newCallSummary, conversationId: 1, siblingCalls: siblings }))
+    ui.rerender(e(SubagentToolView, { ...newCallSummary, conversationId: 1 }))
     assert.deepEqual([...h.log.activeToolCallIds], ['new-call'], '移除旧卡不会误删最新调用的登记')
 
     h.setConversations([parent, { ...child, status: 'blocked', parentToolCallId: 'new-call' }])
@@ -294,8 +307,8 @@ test('外部 executionId 续接仅最新调用上报活动，不能编造 native
     toolName: 'subagent',
     status: 'done' as const,
     input: {},
-    result: JSON.stringify({ execution: { executionId: 'pane-42' } }),
-    structuredOutput: { execution: { executionId: 'pane-42' } },
+    result: '已提交',
+    presentationMeta: { ok: true, execution: { executionId: 'pane-42' } },
   }
   const newCall = {
     callId: 'ext-new',
@@ -304,19 +317,36 @@ test('外部 executionId 续接仅最新调用上报活动，不能编造 native
     input: { resume: 'pane-42' },
     result: '已提交',
   }
-  const siblings = [oldCall, newCall]
+  const timelineCalls: TimelineToolCallSummary[] = [
+    {
+      callId: oldCall.callId,
+      toolName: oldCall.toolName,
+      index: 0,
+      status: oldCall.status,
+      input: oldCall.input,
+      presentationMeta: oldCall.presentationMeta,
+    },
+    {
+      callId: newCall.callId,
+      toolName: newCall.toolName,
+      index: 1,
+      status: newCall.status,
+      input: newCall.input,
+    },
+  ]
 
   const h = createWorkflowHostHarness({
     conversationId: 1,
     conversations: [parent],
     runsByConversation: { 1: [oldRun, newRun] },
+    timelineToolCalls: timelineCalls,
   })
   const ui = h.mountNode(
     e(
       React.Fragment,
       null,
-      e(SubagentToolView, { ...oldCall, conversationId: 1, siblingCalls: siblings }),
-      e(SubagentToolView, { ...newCall, conversationId: 1, siblingCalls: siblings }),
+      e(SubagentToolView, { ...oldCall, conversationId: 1 }),
+      e(SubagentToolView, { ...newCall, conversationId: 1 }),
     ),
   )
   try {
@@ -325,6 +355,92 @@ test('外部 executionId 续接仅最新调用上报活动，不能编造 native
     h.setRuns(1, [oldRun, { ...newRun, status: 'completed' }])
     assert.deepEqual([...h.log.activeToolCallIds], [], '旧外部 run.running 不能让已续接完成的旧调用重新 busy')
   } finally {
+    ui.unmount()
+  }
+})
+
+test('SubagentToolView 通过 TimelineToolCallsContext 消费 subagent 分片且无关工具更新零通知/零重渲染', { timeout: 60_000 }, () => {
+  const parent = makeConvSummary(1)
+  const child = makeConvSummary(11, { status: 'working', parentConversationId: 1, parentToolCallId: 'new-call' })
+  const oldMeta = { ok: true, execution: { conversationId: 11 } }
+  const newMeta = { ok: true, execution: { conversationId: 11 } }
+  const oldInput = { prompt: '首轮' }
+  const newInput = { resume: 11, prompt: '续接' }
+  const initialCalls: TimelineToolCallSummary[] = [
+    {
+      callId: 'old-call',
+      toolName: 'subagent',
+      index: 0,
+      status: 'done',
+      input: oldInput,
+      presentationMeta: oldMeta,
+    },
+    {
+      callId: 'new-call',
+      toolName: 'subagent',
+      index: 1,
+      status: 'done',
+      input: newInput,
+      presentationMeta: newMeta,
+    },
+  ]
+
+  const h = createWorkflowHostHarness({
+    conversationId: 1,
+    conversations: [parent, child],
+    runsByConversation: { 1: [] },
+    timelineToolCalls: initialCalls,
+  })
+  let subagentStoreNotifies = 0
+  const unsub = h.timelineToolCallsStore.subscribe('subagent', () => {
+    subagentStoreNotifies += 1
+  })
+  let renderCount = 0
+  const TrackedSubagentRow = React.memo(function TrackedSubagentRow(props: Record<string, unknown>) {
+    renderCount += 1
+    return e(SubagentToolView, props)
+  })
+
+  const ui = h.mountNode(
+    e(
+      React.Fragment,
+      null,
+      e(TrackedSubagentRow, {
+        callId: 'old-call',
+        toolName: 'subagent',
+        status: 'done',
+        input: oldInput,
+        presentationMeta: oldMeta,
+        conversationId: 1,
+      }),
+      e(TrackedSubagentRow, {
+        callId: 'new-call',
+        toolName: 'subagent',
+        status: 'done',
+        input: newInput,
+        presentationMeta: newMeta,
+        conversationId: 1,
+      }),
+    ),
+  )
+  try {
+    const rendersAfterMount = renderCount
+    const rows = ui.container.querySelectorAll('button.workflow-trace-row-btn')
+    assert.equal(rows.length, 2)
+    assert.match(rows[0]!.textContent ?? '', /Resumed below/)
+    assert.doesNotMatch(rows[1]!.textContent ?? '', /Resumed below/)
+    assert.deepEqual([...h.log.activeToolCallIds], ['new-call'])
+
+    // Unrelated tool call updates must NOT notify the 'subagent' shard or re-render SubagentToolView.
+    h.setTimelineToolCalls([
+      ...initialCalls,
+      { callId: 'bash-1', toolName: 'bash', index: 2, status: 'running', input: { command: 'ls' } },
+      { callId: 'read-1', toolName: 'read', index: 3, status: 'done', input: { path: 'README.md' } },
+    ])
+    assert.equal(subagentStoreNotifies, 0, 'unrelated tool calls must not notify subagent subscribers')
+    assert.equal(renderCount, rendersAfterMount, 'unrelated tool calls must trigger zero SubagentToolView re-renders')
+  } finally {
+    unsub()
     ui.unmount()
   }
 })

@@ -8,10 +8,23 @@
  */
 import { after, describe, test } from 'node:test'
 import assert from 'node:assert/strict'
+import { createRequire } from 'node:module'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 
-import { HelmxError } from '@helmx/protocol'
+import {
+  HelmxError,
+  validateOrThrow,
+  type ConversationSummary,
+  type PluginClientContext as PluginClientContextType,
+  type ToolViewProps,
+} from '@helmx/protocol'
+import {
+  CLIENT_SHARED_GLOBALS,
+  compilePluginClientModule,
+} from '@helmx/plugin-build'
 import { waitFor } from '@helmx/test-kit'
 import { useTempDir } from '@helmx/test-kit/node'
 import { createGitTemplate } from '@helmx/test-kit/git'
@@ -27,9 +40,11 @@ import {
   SWARM_PLUGIN_ID,
   SWARM_SKILL_ID,
   WORKER_TAG,
+  type BoardPost,
   type BoardViewDoc,
   type SwarmIndexDoc,
 } from '../src/swarm.js'
+import { swarmToolPresentationMetaSchema } from '../src/swarm/action-schemas.js'
 
 describe('builtin:swarm lifecycle, activation & index governance', () => {
   const gitTemplate = createGitTemplate()
@@ -668,6 +683,384 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
       await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'close_group', { groupId }, { conversationId: coord.id })
     } finally {
       await env.close()
+    }
+  })
+
+  test('swarm-int16: all 12 swarm_* tools emit bounded presentationMeta alongside full structuredOutput, and compiled SwarmToolView reads presentationMeta directly', { timeout: 60_000 }, async (t) => {
+    const root = useTempDir(t, 'helmx-swarm-int16-')
+    const env = await openSwarmEnv(root, gitTemplate)
+    try {
+      const kernel = env.app.kernel
+      const coord = await kernel.createConversation({ title: 'Meta Coord', profileId: 'assistant', cwd: env.repoDir })
+
+      const created = (await kernel.plugins.executeTool(
+        'swarm_create_group',
+        { title: 'Presentation Squad', objective: 'Separate structuredOutput from UI meta' },
+        { conversationId: coord.id },
+      )) as { output: string; structuredOutput: { groupId: string; group: { title: string } }; presentationMeta: Record<string, unknown> }
+      const groupId = created.structuredOutput.groupId
+      assert.equal(created.structuredOutput.group.title, 'Presentation Squad')
+      validateOrThrow(swarmToolPresentationMetaSchema, created.presentationMeta, 'swarm_create_group meta')
+      assert.deepEqual(created.presentationMeta, { groupId, groupTitle: 'Presentation Squad' })
+
+      const updated = (await kernel.plugins.executeTool(
+        'swarm_update_group',
+        { groupId, title: 'Presentation Squad v2' },
+        { conversationId: coord.id },
+      )) as { structuredOutput: { group: { title: string } }; presentationMeta: Record<string, unknown> }
+      assert.equal(updated.structuredOutput.group.title, 'Presentation Squad v2')
+      validateOrThrow(swarmToolPresentationMetaSchema, updated.presentationMeta, 'swarm_update_group meta')
+      assert.deepEqual(updated.presentationMeta, { groupId, groupTitle: 'Presentation Squad v2' })
+
+      const managedCh = (await kernel.plugins.executeTool(
+        'swarm_manage_channel',
+        { groupId, op: 'create', channel: 'review', topic: 'Review channel' },
+        { conversationId: coord.id },
+      )) as { structuredOutput: { channels: Array<{ name: string }> }; presentationMeta: Record<string, unknown> }
+      assert.ok(managedCh.structuredOutput.channels.some((c) => c.name === 'review'))
+      validateOrThrow(swarmToolPresentationMetaSchema, managedCh.presentationMeta, 'swarm_manage_channel meta')
+      assert.deepEqual(managedCh.presentationMeta, { groupId })
+
+      env.faux.setResponses([
+        fauxAssistantMessage(
+          [fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', body: 'Alpha completed task' })],
+          { stopReason: 'toolUse' },
+        ),
+        fauxAssistantMessage('Worker alpha settled'),
+        fauxAssistantMessage('Coordinator noted'),
+      ])
+      const dispatched = (await kernel.plugins.executeTool(
+        'swarm_dispatch_worker',
+        { groupId, name: 'alpha', prompt: 'Inspect meta separation', isolation: 'inherit' },
+        { conversationId: coord.id },
+      )) as {
+        structuredOutput: { workerConversationId: number; groupId: string; name: string; postSeq: number }
+        presentationMeta: Record<string, unknown>
+      }
+      const workerId = dispatched.structuredOutput.workerConversationId
+      assert.equal(dispatched.structuredOutput.name, 'alpha')
+      validateOrThrow(swarmToolPresentationMetaSchema, dispatched.presentationMeta, 'swarm_dispatch_worker meta')
+      assert.deepEqual(dispatched.presentationMeta, {
+        groupId,
+        memberName: 'alpha',
+        workerConversationId: workerId,
+        seq: dispatched.structuredOutput.postSeq,
+      })
+
+      await kernel.waitForIdle(workerId)
+      await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+      await kernel.waitForIdle(coord.id)
+
+      const longBody = `Detailed handoff payload ${'x'.repeat(2048)}`
+      const posted = (await kernel.plugins.executeTool(
+        'swarm_board_post',
+        { groupId, to: ['alpha'], kind: 'handoff', wake: false, body: longBody },
+        { conversationId: coord.id },
+      )) as { structuredOutput: { post: BoardPost }; presentationMeta: Record<string, unknown> }
+      assert.equal(posted.structuredOutput.post.body, longBody, 'programmatic structuredOutput preserves full post body')
+      validateOrThrow(swarmToolPresentationMetaSchema, posted.presentationMeta, 'swarm_board_post meta')
+      assert.deepEqual(posted.presentationMeta, {
+        groupId,
+        postKind: 'handoff',
+        seq: posted.structuredOutput.post.seq,
+      })
+
+      const readRes = (await kernel.plugins.executeTool(
+        'swarm_board_read',
+        { groupId, limit: 20 },
+        { conversationId: coord.id },
+      )) as { structuredOutput: { posts: BoardPost[]; headSeq: number }; presentationMeta: Record<string, unknown> }
+      assert.ok(readRes.structuredOutput.posts.length >= 2)
+      validateOrThrow(swarmToolPresentationMetaSchema, readRes.presentationMeta, 'swarm_board_read meta')
+      assert.deepEqual(readRes.presentationMeta, {
+        groupId,
+        seq: readRes.structuredOutput.headSeq,
+        postCount: readRes.structuredOutput.posts.length,
+      })
+
+      const statusRes = (await kernel.plugins.executeTool(
+        'swarm_board_status',
+        { groupId },
+        { conversationId: coord.id },
+      )) as { structuredOutput: BoardViewDoc; presentationMeta: Record<string, unknown> }
+      assert.ok(Array.isArray(statusRes.structuredOutput.members) && statusRes.structuredOutput.members.length === 1)
+      assert.ok(Array.isArray(statusRes.structuredOutput.posts))
+      validateOrThrow(swarmToolPresentationMetaSchema, statusRes.presentationMeta, 'swarm_board_status meta')
+      assert.deepEqual(statusRes.presentationMeta, {
+        groupId,
+        groupTitle: 'Presentation Squad v2',
+        seq: statusRes.structuredOutput.group.headSeq,
+        postCount: statusRes.structuredOutput.posts.length,
+      })
+
+      await kernel.waitForIdle(workerId)
+
+      const aborted = (await kernel.plugins.executeTool(
+        'swarm_abort_worker',
+        { workerConversationId: workerId },
+        { conversationId: coord.id },
+      )) as { structuredOutput: { aborted: boolean; workerConversationId: number; name: string }; presentationMeta: Record<string, unknown> }
+      assert.equal(aborted.structuredOutput.aborted, false)
+      validateOrThrow(swarmToolPresentationMetaSchema, aborted.presentationMeta, 'swarm_abort_worker meta')
+      assert.deepEqual(aborted.presentationMeta, {
+        workerConversationId: workerId,
+        memberName: 'alpha',
+        aborted: false,
+      })
+
+      const switched = (await kernel.plugins.executeTool(
+        'swarm_switch_worker_model',
+        { workerConversationId: workerId, model: 'faux/faux-2' },
+        { conversationId: coord.id },
+      )) as { structuredOutput: { workerConversationId: number; model: string; name: string }; presentationMeta: Record<string, unknown> }
+      assert.equal(switched.structuredOutput.model, 'faux/faux-2')
+      validateOrThrow(swarmToolPresentationMetaSchema, switched.presentationMeta, 'swarm_switch_worker_model meta')
+      assert.deepEqual(switched.presentationMeta, {
+        workerConversationId: workerId,
+        memberName: 'alpha',
+        model: 'faux/faux-2',
+      })
+
+      const inspected = (await kernel.plugins.executeTool(
+        'swarm_inspect_worker',
+        { workerConversationId: workerId },
+        { conversationId: coord.id },
+      )) as {
+        structuredOutput: { conversationId: number; recentEntries: unknown[]; artifacts: unknown[] }
+        presentationMeta: Record<string, unknown>
+      }
+      assert.ok(Array.isArray(inspected.structuredOutput.recentEntries))
+      validateOrThrow(swarmToolPresentationMetaSchema, inspected.presentationMeta, 'swarm_inspect_worker meta')
+      assert.deepEqual(inspected.presentationMeta, {
+        groupId,
+        workerConversationId: workerId,
+        memberName: 'alpha',
+      })
+
+      const archived = (await kernel.plugins.executeTool(
+        'swarm_archive_worker',
+        { workerConversationId: workerId },
+        { conversationId: coord.id },
+      )) as { structuredOutput: { archived: boolean; workerConversationId: number }; presentationMeta: Record<string, unknown> }
+      assert.equal(archived.structuredOutput.archived, true)
+      validateOrThrow(swarmToolPresentationMetaSchema, archived.presentationMeta, 'swarm_archive_worker meta')
+      assert.deepEqual(archived.presentationMeta, {
+        workerConversationId: workerId,
+        archived: true,
+      })
+
+      const closed = (await kernel.plugins.executeTool(
+        'swarm_close_group',
+        { groupId },
+        { conversationId: coord.id },
+      )) as { structuredOutput: { closed: boolean; groupId: string; retainedWorktrees: unknown[] }; presentationMeta: Record<string, unknown> }
+      assert.equal(closed.structuredOutput.closed, true)
+      validateOrThrow(swarmToolPresentationMetaSchema, closed.presentationMeta, 'swarm_close_group meta')
+      assert.deepEqual(closed.presentationMeta, {
+        groupId,
+        retainedCount: 0,
+      })
+
+      // Programmatic action still returns the raw BoardViewDoc directly
+      const actionStatus = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'board_status',
+        { groupId },
+        { conversationId: coord.id },
+      )) as BoardViewDoc
+      assert.equal(actionStatus.group.id, groupId)
+      assert.equal(actionStatus.group.status, 'closed')
+    } finally {
+      await env.close()
+    }
+
+    // Compiled SwarmToolView DOM verification with presentationMeta (and without JSON.parse(props.result))
+    const { GlobalRegistrator } = await import('@happy-dom/global-registrator')
+    if (typeof globalThis.document === 'undefined') GlobalRegistrator.register()
+    const req = createRequire(new URL('../../plugin-client/package.json', import.meta.url))
+    const React = req('react') as typeof import('react')
+    const ReactDOM = req('react-dom') as unknown
+    const ReactDOMClient = req('react-dom/client') as {
+      createRoot: (container: Element) => { render(node: React.ReactNode): void; unmount(): void }
+    }
+    const ReactJsxRuntime = req('react/jsx-runtime') as Record<string, unknown>
+    const LucideReact = req('lucide-react') as Record<string, unknown>
+    const SDK = await import('@helmx/plugin-client')
+
+    const g = globalThis as Record<string, unknown>
+    const sharedKeys = [
+      'React',
+      'IS_REACT_ACT_ENVIRONMENT',
+      CLIENT_SHARED_GLOBALS['react']!,
+      CLIENT_SHARED_GLOBALS['react-dom']!,
+      CLIENT_SHARED_GLOBALS['react-dom/client']!,
+      CLIENT_SHARED_GLOBALS['react/jsx-runtime']!,
+      CLIENT_SHARED_GLOBALS['lucide-react']!,
+      CLIENT_SHARED_GLOBALS['@helmx/plugin-client']!,
+    ]
+    const prevGlobals = new Map(sharedKeys.map((k) => [k, g[k]]))
+    const buildDir = useTempDir(t, 'helmx-swarm-client-render-')
+    t.after(() => {
+      for (const key of sharedKeys) {
+        const prev = prevGlobals.get(key)
+        if (prev === undefined) delete g[key]
+        else g[key] = prev
+      }
+    })
+
+    g.React = React
+    g.IS_REACT_ACT_ENVIRONMENT = true
+    g[CLIENT_SHARED_GLOBALS['react']!] = React
+    g[CLIENT_SHARED_GLOBALS['react-dom']!] = ReactDOM
+    g[CLIENT_SHARED_GLOBALS['react-dom/client']!] = ReactDOMClient
+    g[CLIENT_SHARED_GLOBALS['react/jsx-runtime']!] = ReactJsxRuntime
+    g[CLIENT_SHARED_GLOBALS['lucide-react']!] = LucideReact
+    g[CLIENT_SHARED_GLOBALS['@helmx/plugin-client']!] = SDK
+
+    const swarmClientDir = resolve(dirname(fileURLToPath(import.meta.url)), '../src/swarm/client')
+    const bundle = await compilePluginClientModule(SWARM_PLUGIN_ID, swarmClientDir, 'index.tsx', buildDir)
+    const mod = (await import(`data:text/javascript;base64,${Buffer.from(bundle.code, 'utf8').toString('base64')}#swarm-lifecycle-int16`)) as {
+      SwarmToolView: React.ComponentType<ToolViewProps>
+    }
+
+    const drawerCalls: number[] = []
+    const workbenchCalls: Array<string | undefined> = []
+    const port: import('@helmx/plugin-client').PluginClientHostPort = {
+      authenticated: true,
+      theme: 'dark',
+      locale: 'en',
+      conversations: [] as ConversationSummary[],
+      conversationDetails: {},
+      conversationLives: {},
+      pendingAsks: [],
+      loadErrors: {},
+      plugins: [],
+      screens: [],
+      pluginDocs: { [`${SWARM_PLUGIN_ID}/index`]: { workers: [], groups: [] } },
+      ensurePluginDoc: async () => undefined,
+      getPluginSessionDoc: async () => undefined,
+      subscribeSessionDoc: () => () => {},
+      getSessionDocState: () => ({ hasValue: false, deleted: false, connected: false, value: undefined }),
+      invokePluginAction: async () => ({}),
+      submitConversationInput: async () => undefined,
+      openTarget: () => undefined,
+      openConversationDrawer: (id) => { drawerCalls.push(id) },
+      openArtifactPreview: () => undefined,
+      setWorkbenchOpen: () => undefined,
+      setWorkbenchTab: (tab) => { workbenchCalls.push(tab) },
+      notify: () => undefined,
+      loadConversationDetail: () => undefined,
+      slots: { collectItems: () => [], renderItem: () => null },
+      markdown: { view: ({ text }) => React.createElement('div', null, text), codeBlock: ({ code }) => React.createElement('pre', null, code) },
+    }
+    const ctx: PluginClientContextType = SDK.createPluginClientContext(port, SWARM_PLUGIN_ID, 50)
+    ctx.openWorkbench = (panelId?: string) => { workbenchCalls.push(panelId) }
+
+    const mountView = async (props: ToolViewProps) => {
+      const container = document.createElement('div')
+      document.body.appendChild(container)
+      const root = ReactDOMClient.createRoot(container)
+      await React.act(async () => {
+        root.render(
+          React.createElement(
+            SDK.PluginClientHostContext.Provider,
+            { value: port },
+            React.createElement(
+              SDK.PluginClientContext.Provider,
+              { value: ctx },
+              React.createElement(mod.SwarmToolView, props),
+            ),
+          ),
+        )
+      })
+      return {
+        container,
+        unmount: () => {
+          React.act(() => root.unmount())
+          container.remove()
+        },
+      }
+    }
+
+    // A) presentationMeta drives dispatch drawer jump & #seq badge
+    const dispatchView = await mountView({
+      callId: 'c-disp',
+      toolName: 'swarm_dispatch_worker',
+      status: 'done',
+      conversationId: 50,
+      input: { name: 'author', prompt: 'Implement auth' },
+      presentationMeta: { groupId: 'grp-meta', memberName: 'author', workerConversationId: 51, seq: 3 },
+    })
+    try {
+      assert.match(dispatchView.container.textContent ?? '', /@author/)
+      assert.match(dispatchView.container.textContent ?? '', /#3/)
+      await React.act(async () => {
+        dispatchView.container.querySelector<HTMLButtonElement>('.sw-trace-row-btn')!.click()
+      })
+      assert.deepEqual(drawerCalls, [51])
+    } finally {
+      dispatchView.unmount()
+    }
+
+    // B) props.result JSON string is NEVER parsed when presentationMeta is absent
+    const resultOnlyView = await mountView({
+      callId: 'c-json-only',
+      toolName: 'swarm_dispatch_worker',
+      status: 'done',
+      conversationId: 50,
+      input: { name: 'author', prompt: 'Implement auth' },
+      result: JSON.stringify({ workerConversationId: 99, groupId: 'grp-json', name: 'author', postSeq: 8 }),
+    })
+    try {
+      assert.doesNotMatch(resultOnlyView.container.textContent ?? '', /#8/)
+      const btn = resultOnlyView.container.querySelector<HTMLButtonElement>('.sw-trace-row-btn')!
+      assert.equal(btn.getAttribute('aria-expanded'), 'false', 'without presentationMeta, row expands raw details instead of fabricating drawer jump')
+      await React.act(async () => {
+        btn.click()
+      })
+      assert.deepEqual(drawerCalls, [51], 'must not jump to #99 parsed from props.result')
+    } finally {
+      resultOnlyView.unmount()
+    }
+
+    // C) 0-count / boolean / retainedCount from presentationMeta
+    const readZeroView = await mountView({
+      callId: 'c-read0',
+      toolName: 'swarm_board_read',
+      status: 'done',
+      conversationId: 50,
+      presentationMeta: { groupId: 'grp-meta', seq: 0, postCount: 0 },
+    })
+    try {
+      assert.match(readZeroView.container.textContent ?? '', /0 posts/)
+    } finally {
+      readZeroView.unmount()
+    }
+
+    const abortNoopView = await mountView({
+      callId: 'c-abort-noop',
+      toolName: 'swarm_abort_worker',
+      status: 'done',
+      conversationId: 50,
+      presentationMeta: { workerConversationId: 51, memberName: 'author', aborted: false },
+    })
+    try {
+      assert.match(abortNoopView.container.textContent ?? '', /not running/)
+    } finally {
+      abortNoopView.unmount()
+    }
+
+    const closeRetainedView = await mountView({
+      callId: 'c-close',
+      toolName: 'swarm_close_group',
+      status: 'done',
+      conversationId: 50,
+      presentationMeta: { groupId: 'grp-meta', retainedCount: 2 },
+    })
+    try {
+      assert.match(closeRetainedView.container.textContent ?? '', /2 branches kept for merge/)
+    } finally {
+      closeRetainedView.unmount()
     }
   })
 })

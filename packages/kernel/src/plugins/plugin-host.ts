@@ -10,6 +10,7 @@
  */
 import {
   HelmxError,
+  compareCodeUnit,
   type ActionManifest,
   type ConversationSummary,
   type HookName,
@@ -25,6 +26,7 @@ import {
   type PluginDoctorReport,
   type PluginInstallResult,
   type LocalizedText,
+  type PluginManifestProjection,
   type PluginReloadResult,
   type PluginRemoveResult,
   type PluginRescanResult,
@@ -36,6 +38,7 @@ import {
   type PublicPluginSessionDoc,
 } from '@helmx/protocol';
 import { HOOK_ALLOWED_ACTIONS, HookPipeline } from './hooks.js';
+import { buildPluginManifestProjection } from './manifest-projection.js';
 import { PluginTaskTracker } from './tracking.js';
 import type { PluginPackageManager, PackageManagerHost } from './package-manager.js';
 import type { PluginPackageManagerStore } from './package-store.js';
@@ -63,6 +66,7 @@ import {
   disposePlugins,
   getActiveEnabledPluginIds,
   getIdleActivePluginIds,
+  isPluginStateActive,
 } from './lifecycle-helpers.js';
 import { PluginHostGate } from './plugin-host-gate.js';
 import { enabledStatesInDependencyOrder } from './plugin-host-deps.js';
@@ -248,6 +252,19 @@ export class PluginHost {
     return s ? this.summaryOf(s) : undefined;
   }
 
+  getManifest(pluginId: string): PluginManifestProjection {
+    this.assertNotDisposed();
+    const s = requirePlugin(this.plugins, pluginId);
+    return this.manifestOf(s);
+  }
+
+  listManifests(): PluginManifestProjection[] {
+    this.assertNotDisposed();
+    return [...this.plugins.values()]
+      .map((s) => this.manifestOf(s))
+      .sort((a, b) => compareCodeUnit(a.id, b.id));
+  }
+
   assertProviderAvailable(pluginId: string): void {
     assertProviderAvailable(this.plugins.get(pluginId), pluginId);
   }
@@ -338,7 +355,7 @@ export class PluginHost {
     if (!s) return undefined;
     return {
       identity: s,
-      enabled: s.enabled,
+      enabled: isPluginStateActive(s),
       phase: s.phase,
       epoch: s.epoch,
       clientRoot: s.definition.clientRoot,
@@ -365,13 +382,13 @@ export class PluginHost {
   getPublicDoc(pluginId: string, name: string): PublicPluginDoc {
     this.assertNotDisposed();
     const state = this.plugins.get(pluginId);
-    return this.docRegistry.getPublicDoc(pluginId, name, !!state && state.enabled && state.phase === 'idle');
+    return this.docRegistry.getPublicDoc(pluginId, name, state !== undefined && isPluginStateActive(state));
   }
 
   getPublicSessionDoc(pluginId: string, name: string, conversationId: number): PublicPluginSessionDoc {
     this.assertNotDisposed();
     const state = this.plugins.get(pluginId);
-    return this.docRegistry.getPublicSessionDoc(pluginId, name, conversationId, !!state && state.enabled && state.phase === 'idle');
+    return this.docRegistry.getPublicSessionDoc(pluginId, name, conversationId, state !== undefined && isPluginStateActive(state));
   }
 
   listPublicDocs(): PublicPluginDoc[] {
@@ -559,6 +576,7 @@ export class PluginHost {
       host: this.options.host,
       providers: this.options.providers,
       servicesStarted: this.servicesStarted,
+      redactText: (text) => this.redactProjectionText(text),
       emitPluginChanged: (state) => this.emitPluginChanged(state),
       createPluginContext: (state, epoch) => this.createContext(state, epoch),
       getPluginLifecycle: this.getPluginLifecycle,
@@ -637,14 +655,26 @@ export class PluginHost {
     return { ...merged, ...stored };
   }
 
+  private redactProjectionText(text: string): string {
+    const redactedByHost = this.options.host.redact(text);
+    return this.options.redactText ? this.options.redactText(redactedByHost) : redactedByHost;
+  }
+
+  private manifestOf(state: PluginState): PluginManifestProjection {
+    return buildPluginManifestProjection({
+      state,
+      capabilityRegistry: this.capabilityRegistry,
+      uiRegistry: this.uiRegistry,
+      docRegistry: this.docRegistry,
+      redactText: (text) => this.redactProjectionText(text),
+    });
+  }
+
   private summaryOf(state: PluginState): PluginSummary {
     const publicConfig = buildPublicConfig(
       state,
       this.effectiveConfigOf(state),
-      (text) => {
-        const redactedByHost = this.options.host.redact(text);
-        return this.options.redactText ? this.options.redactText(redactedByHost) : redactedByHost;
-      },
+      (text) => this.redactProjectionText(text),
     );
     return summaryWithManagedPackage(
       state,
@@ -674,7 +704,7 @@ export class PluginHost {
     this.options.host.emitEvent('plugin.changed', {
       type: 'plugin.changed',
       plugin: this.summaryOf(state),
-      ui: state.enabled && state.phase === 'idle' ? this.uiRegistry.getUiByPlugin(state.definition.id) : [],
+      ui: isPluginStateActive(state) ? this.uiRegistry.getUiByPlugin(state.definition.id) : [],
     });
   }
 

@@ -22,7 +22,7 @@
  * - the left-sidebar assistant Profile standing navigation (conversation:profile:assistant, not
  *   dependent on any particular conversation existing).
  */
-import { HelmxError, escapeXml, isAbsoluteTargetPath, isSkillAvailable, pathRulesForShape, targetPathShape, type HelmxHostProfilesPort, type JsonSchema, type PluginDefinition, type Profile, type SkillSummary } from '@helmx/protocol';
+import { HelmxError, escapeXml, isAbsoluteTargetPath, isPluginSummaryActive, isSkillAvailable, pathRulesForShape, targetPathShape, type HelmxHostProfilesPort, type JsonSchema, type PluginDefinition, type Profile, type SkillSummary } from '@helmx/protocol';
 import { HELMX_CLI_SKILL_ASSET, PROFILE_MANAGED_BY } from './profile/assets.js';
 import {
   activeRuntimeKinds,
@@ -190,10 +190,10 @@ export function createProfilePlugin(): PluginDefinition {
         if (profile === undefined) {
           throw new HelmxError('profile_not_found', `conversation-bound profile '${profileId}' does not exist (the skill catalog cannot be filtered by Profile)`, 500, { profileId })
         }
-        const enabledPluginIds = new Set(ctx.host.listPlugins().filter((p) => p.enabled).map((p) => p.id))
+        const activePluginIds = new Set(ctx.host.listPlugins().filter(isPluginSummaryActive).map((p) => p.id))
         const scoped = await listScopedSkills(skills, ctx.host, conversation.nodeId, conversation.cwd)
         return {
-          available: scoped.skills.filter((skill) => isSkillAvailable(skill, profile, enabledPluginIds)),
+          available: scoped.skills.filter((skill) => isSkillAvailable(skill, profile, activePluginIds)),
           ...(scoped.nodeUnavailable !== undefined ? { nodeUnavailable: scoped.nodeUnavailable } : {}),
         }
       }
@@ -293,12 +293,12 @@ export function createProfilePlugin(): PluginDefinition {
           ctx.host.listUi(),
         ])
         const dispatchTools = new Set(['subagent', 'SubagentWorkflow'])
-        if (!pluginSummaries.some((plugin) => plugin.enabled && plugin.tools.some((name) => dispatchTools.has(name)))) {
+        if (!pluginSummaries.some((plugin) => isPluginSummaryActive(plugin) && plugin.tools.some((name) => dispatchTools.has(name)))) {
           return []
         }
-        const enabledPluginIds = new Set(pluginSummaries.filter((p) => p.enabled).map((p) => p.id))
+        const activePluginIds = new Set(pluginSummaries.filter(isPluginSummaryActive).map((p) => p.id))
         const runtimeKinds = activeRuntimeKinds(uiContributions)
-        const candidates = allProfiles.filter((p) => isCollaborationCandidate(p, currentProfileId, enabledPluginIds, runtimeKinds))
+        const candidates = allProfiles.filter((p) => isCollaborationCandidate(p, currentProfileId, activePluginIds, runtimeKinds))
         return Promise.all(
           candidates.map(async (profile) => ({
             ...toCatalogEntry(profile),
@@ -614,10 +614,10 @@ export function createProfilePlugin(): PluginDefinition {
           if (profile === undefined) {
             throw new HelmxError('profile_not_found', `conversation-bound profile '${profileId}' does not exist; cannot determine skill availability`, 500, { profileId });
           }
-          const enabledPluginIds = new Set(ctx.host.listPlugins().filter((p) => p.enabled).map((p) => p.id));
+          const activePluginIds = new Set(ctx.host.listPlugins().filter(isPluginSummaryActive).map((p) => p.id));
           const hubSkill = (await skills.list()).find((s) => s.id === input.skillId);
           if (hubSkill !== undefined) {
-            if (!isSkillAvailable(hubSkill, profile, enabledPluginIds)) {
+            if (!isSkillAvailable(hubSkill, profile, activePluginIds)) {
               throw new HelmxError(
                 'skill_not_available',
                 `skill '${input.skillId}' is unavailable for profile '${profileId}' (not whitelisted, or its managing plugin is disabled); adjust the profile skills config to use it`,
@@ -630,7 +630,7 @@ export function createProfilePlugin(): PluginDefinition {
           // Node branch: a pseudo summary without managedByPlugin (node files can never claim host
           // management) keeps the exact same isSkillAvailable rule as the catalog.
           const nodePseudoSkill: SkillSummary = { id: input.skillId, name: input.skillId, references: [], source: 'node' };
-          if (!isSkillAvailable(nodePseudoSkill, profile, enabledPluginIds)) {
+          if (!isSkillAvailable(nodePseudoSkill, profile, activePluginIds)) {
             throw new HelmxError(
               'skill_not_available',
               `skill '${input.skillId}' is unavailable for profile '${profileId}' (not whitelisted, or its managing plugin is disabled); adjust the profile skills config to use it`,

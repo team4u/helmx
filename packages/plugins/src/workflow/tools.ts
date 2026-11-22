@@ -6,7 +6,10 @@
  * - SubagentWorkflow：DSL 确定性编排脚本（内联 / 文件 / 已保存定义）；
  * （cleanup_worktree 已迁至 builtin:worktree 的 worktree/tools.ts。）
  */
-import { safeResultText, type HelmxPluginContext } from '@helmx/protocol'
+import {
+  safeResultText,
+  type HelmxPluginContext,
+} from '@helmx/protocol'
 import type { WorkflowRunSummary } from '../contracts.js'
 import { normalizeWorkflowArgs } from './engine/runtime.js'
 import type { WorkflowService } from './engine/index.js'
@@ -33,17 +36,63 @@ const workflowOutputSchema = {
   required: ['ok'],
 } as const
 
-/** workflow run -> 工具结果信封（failed/aborted 置 isError）。 */
+/** 持久化给 Timeline / ToolView 的轻量有界 UI 索引契约（严禁镜像整棵 WorkflowRunSummary）。 */
+const workflowPresentationMetaSchema = {
+  type: 'object',
+  properties: {
+    ok: { type: 'boolean' },
+    background: { type: 'boolean' },
+    runId: { type: 'string' },
+    status: { type: 'string' },
+    label: { type: 'string' },
+  },
+  required: ['ok'],
+  additionalProperties: false,
+} as const
+
+function workflowPresentationMeta(
+  run: Pick<WorkflowRunSummary, 'id' | 'status' | 'name'>,
+  background = false,
+): Record<string, unknown> {
+  const failed = run.status === 'failed' || run.status === 'aborted'
+  const trimmedName = run.name.trim()
+  const label = trimmedName.length > 200 ? trimmedName.slice(0, 200) : trimmedName
+  return {
+    ok: background ? true : !failed,
+    ...(background ? { background: true } : {}),
+    runId: run.id,
+    status: run.status,
+    ...(label !== '' ? { label } : {}),
+  }
+}
+
+/** workflow run -> 工具结果信封（failed/aborted 置 isError；完整 summary 留给 structuredOutput）。 */
 function workflowResultEnvelope(run: WorkflowRunSummary): {
   output: Array<{ type: 'text'; text: string }>
   isError?: boolean
   structuredOutput: unknown
+  presentationMeta: Record<string, unknown>
 } {
   const failed = run.status === 'failed' || run.status === 'aborted'
   return {
     output: [{ type: 'text', text: safeResultText(run) }],
     ...(failed ? { isError: true } : {}),
     structuredOutput: { ok: !failed, summary: run },
+    presentationMeta: workflowPresentationMeta(run),
+  }
+}
+
+/** workflow 后台调度句柄信封（UI details 仅保留轻量索引字段）。 */
+function workflowBackgroundHandle(run: WorkflowRunSummary): {
+  output: Array<{ type: 'text'; text: string }>
+  structuredOutput: unknown
+  presentationMeta: Record<string, unknown>
+} {
+  const payload = { ok: true, background: true, summary: run }
+  return {
+    output: [{ type: 'text', text: safeResultText(payload) }],
+    structuredOutput: payload,
+    presentationMeta: workflowPresentationMeta(run, true),
   }
 }
 
@@ -82,6 +131,7 @@ export function registerWorkflowTools(ctx: HelmxPluginContext, deps: WorkflowToo
       additionalProperties: false,
     },
     structuredOutputSchema: workflowOutputSchema,
+    presentationMetaSchema: workflowPresentationMetaSchema,
     async execute(args, context) {
       const a = args as Record<string, unknown>
       if (a['label'] !== undefined && (typeof a['label'] !== 'string' || a['label'].trim() === '')) {
@@ -89,6 +139,7 @@ export function registerWorkflowTools(ctx: HelmxPluginContext, deps: WorkflowToo
           output: [{ type: 'text', text: 'workflow_failed: label 必须为非空字符串' }],
           isError: true,
           structuredOutput: { ok: false, summary: 'invalid label: 必须为非空字符串' },
+          presentationMeta: { ok: false },
         }
       }
       if (a['background'] !== undefined && typeof a['background'] !== 'boolean') {
@@ -96,6 +147,7 @@ export function registerWorkflowTools(ctx: HelmxPluginContext, deps: WorkflowToo
           output: [{ type: 'text', text: 'workflow_failed: background 必须为 boolean' }],
           isError: true,
           structuredOutput: { ok: false, summary: 'invalid background: 必须为 boolean' },
+          presentationMeta: { ok: false },
         }
       }
       // background 缺省与显式拒绝（与 subagent 同款权威 ownership 判定）。
@@ -108,6 +160,7 @@ export function registerWorkflowTools(ctx: HelmxPluginContext, deps: WorkflowToo
           output: [{ type: 'text', text: `workflow_failed: ${backgroundChoice.message}` }],
           isError: true,
           structuredOutput: { ok: false, summary: backgroundChoice.reason },
+          presentationMeta: { ok: false },
         }
       }
 
@@ -115,11 +168,7 @@ export function registerWorkflowTools(ctx: HelmxPluginContext, deps: WorkflowToo
         const current = workflows.getRun(runId)
         if (current.detachedAt !== undefined) {
           syncRunsDoc()
-          const payload = { ok: true, background: true, summary: current }
-          return {
-            output: [{ type: 'text', text: safeResultText(payload) }],
-            structuredOutput: payload,
-          }
+          return workflowBackgroundHandle(current)
         }
         if (current.status !== 'running') {
           syncRunsDoc()
@@ -138,11 +187,7 @@ export function registerWorkflowTools(ctx: HelmxPluginContext, deps: WorkflowToo
           })
           if (outcome === 'detached') {
             syncRunsDoc()
-            const payload = { ok: true, background: true, summary: workflows.getRun(runId) }
-            return {
-              output: [{ type: 'text', text: safeResultText(payload) }],
-              structuredOutput: payload,
-            }
+            return workflowBackgroundHandle(workflows.getRun(runId))
           }
           return workflowResultEnvelope(workflows.getRun(runId))
         } finally {
@@ -158,11 +203,7 @@ export function registerWorkflowTools(ctx: HelmxPluginContext, deps: WorkflowToo
           if (existing !== undefined) {
             if (backgroundChoice.background || existing.detachedAt !== undefined) {
               syncRunsDoc()
-              const payload = { ok: true, background: true, summary: workflows.getRun(existing.id) }
-              return {
-                output: [{ type: 'text', text: safeResultText(payload) }],
-                structuredOutput: payload,
-              }
+              return workflowBackgroundHandle(workflows.getRun(existing.id))
             }
             return await waitAndFinishForeground(existing.id)
           }
@@ -193,11 +234,7 @@ export function registerWorkflowTools(ctx: HelmxPluginContext, deps: WorkflowToo
           //（父回合结束不误杀；中止仅经 abort(runId)/级联取消）；完成后经
           // notifyParentOnSettle outbox 向父会话幂等 steer 汇报。
           syncRunsDoc()
-          const payload = { ok: true, background: true, summary: started }
-          return {
-            output: [{ type: 'text', text: safeResultText(payload) }],
-            structuredOutput: payload,
-          }
+          return workflowBackgroundHandle(started)
         }
         return await waitAndFinishForeground(started.id)
       } catch (error) {
@@ -211,6 +248,7 @@ export function registerWorkflowTools(ctx: HelmxPluginContext, deps: WorkflowToo
           output: [{ type: 'text', text: `workflow_failed: ${message}` }],
           isError: true,
           structuredOutput: { ok: false, summary: message },
+          presentationMeta: { ok: false, status: 'failed' },
         }
       }
     },

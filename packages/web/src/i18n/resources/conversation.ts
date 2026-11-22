@@ -302,7 +302,7 @@ export const conversationMessages = {
     en: 'edit succeeded but diff metadata is missing or invalid ({reason}), so the real file diff cannot be shown; the raw input and output are kept below without fabricating file context.',
     'zh-CN': 'edit 成功但差异元数据缺失或非法（{reason}），无法展示真实文件差异；以下保留原始入参与输出，不伪造文件上下文。',
   },
-  'conv.edit.missingStructured': { en: 'missing structuredOutput', 'zh-CN': '缺少 structuredOutput' },
+  'conv.edit.missingStructured': { en: 'missing presentationMeta', 'zh-CN': '缺少 presentationMeta' },
   'conv.edit.resultUnknown': { en: 'Result unknown{path}', 'zh-CN': '结果未知{path}' },
   'conv.edit.noResult': {
     en: 'The tool returned no result (possibly not executed or interrupted); whether the change applied is undetermined; raw input below.',

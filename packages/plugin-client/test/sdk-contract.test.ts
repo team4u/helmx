@@ -59,6 +59,9 @@ test('host-facing symbols (port / context / factory / explicit-addressing hooks)
     'usePluginSessionDocValue',
     'ToolActivityContext',
     'useToolActivity',
+    'TimelineToolCallsContext',
+    'createTimelineToolCallsStore',
+    'useTimelineToolCalls',
     'ScreenParamsContext',
   ] as const) {
     assert.ok(name in SDK, `host-facing symbol ${name} must be exported`)
@@ -143,8 +146,16 @@ function makePort(log: PortLog, overrides: Partial<SDK.PluginClientHostPort> = {
       collectItems: (qualifiedName) =>
         qualifiedName === 'owner/zone'
           ? [
-              { pluginId: 'p2', contributionId: 'badge', spec: { id: 'badge', target: 'owner/zone' } },
-              { pluginId: 'p3', contributionId: 'extra', spec: { id: 'extra', target: 'owner/zone' } },
+              {
+                pluginId: 'p2',
+                contributionId: 'badge',
+                spec: { id: 'badge', target: 'owner/zone', client: { module: 'badge.tsx', export: 'Badge' } },
+              },
+              {
+                pluginId: 'p3',
+                contributionId: 'extra',
+                spec: { id: 'extra', target: 'owner/zone', client: { module: 'extra.tsx', export: 'Extra' } },
+              },
             ]
           : [],
       renderItem: slotRender,
@@ -696,8 +707,9 @@ test('ViewBoundary translates its retry UI while preserving the original diagnos
 
 test('PluginSlot: short names qualify, lists render all matches, singles render the first, fallbacks render when empty, and missing owners warn', { timeout: 60_000 }, () => {
   const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
-  const port = makePort(log)
-  const tree = (name: string, extra: Record<string, unknown> = {}, fallback?: React.ReactNode) =>
+  const portEn = makePort(log, { locale: 'en' })
+  const portZh = makePort(log, { locale: 'zh-CN' })
+  const tree = (name: string, extra: Record<string, unknown> = {}, fallback?: React.ReactNode, port = portEn) =>
     e(SDK.PluginClientHostContext.Provider, { value: port },
       e(SDK.PluginClientContext.Provider, { value: SDK.createPluginClientContext(port, 'owner', undefined) },
         e(SDK.PluginSlot, { name, ...extra, ...(fallback !== undefined ? { fallback } : {}) })))
@@ -706,7 +718,24 @@ test('PluginSlot: short names qualify, lists render all matches, singles render 
   assert.equal(all.host.querySelectorAll('[data-slot]').length, 2, 'list mode renders every matched item')
   assert.equal(all.host.querySelector('[data-slot="p2/badge"]')?.getAttribute('data-label'), 'Slot owner/zone/badge', 'the render label carries the fully qualified name')
   assert.equal(all.host.querySelector('[data-slot="p2/badge"]')?.textContent, '{"z":1}', 'slotProps pass through to the host renderer')
+  const defaultAnchor = all.host.querySelector<HTMLElement>('[data-helmx-slot="owner/zone"]')
+  assert.ok(defaultAnchor !== null, 'default slot renders stable data-helmx-slot anchor')
+  assert.equal(defaultAnchor.tagName, 'DIV')
+  assert.equal(defaultAnchor.style.display, 'contents', 'unclassed slot avoids adding an extra CSS layout box')
   act(() => { void all.root.unmount() })
+
+  const classed = mount(tree('zone', { className: 'custom-slot' }))
+  const classedAnchor = classed.host.querySelector<HTMLElement>('[data-helmx-slot="owner/zone"]')
+  assert.ok(classedAnchor !== null && classedAnchor.classList.contains('custom-slot'))
+  assert.equal(classedAnchor.style.display, '', 'classed slot preserves caller CSS display rules')
+  act(() => { void classed.root.unmount() })
+
+  const inlineSlot = mount(tree('zone', { inline: true }))
+  const inlineAnchor = inlineSlot.host.querySelector<HTMLElement>('[data-helmx-slot="owner/zone"]')
+  assert.ok(inlineAnchor !== null)
+  assert.equal(inlineAnchor.tagName, 'SPAN', 'inline slot renders <span>')
+  assert.equal(inlineAnchor.style.display, 'contents')
+  act(() => { void inlineSlot.root.unmount() })
 
   const single = mount(tree('zone', { mode: 'single' }))
   assert.equal(single.host.querySelectorAll('[data-slot]').length, 1, 'single mode renders only the first item')
@@ -714,35 +743,94 @@ test('PluginSlot: short names qualify, lists render all matches, singles render 
 
   const empty = mount(tree('nope', {}, e('div', null, 'fallback-here')))
   assert.equal(empty.host.textContent, 'fallback-here', 'no matches render the fallback')
+  assert.ok(empty.host.querySelector('[data-helmx-slot]') === null, 'empty slot renders no wrapper anchor')
   act(() => { void empty.root.unmount() })
 
-  const noOwner = mount(
-    e(SDK.PluginClientHostContext.Provider, { value: port }, e(SDK.PluginSlot, { name: 'zone' })))
-  assert.match(noOwner.host.textContent ?? '', /no host plugin context/, 'missing owner warns explicitly')
-  act(() => { void noOwner.root.unmount() })
+  const noOwnerEn = mount(
+    e(SDK.PluginClientHostContext.Provider, { value: portEn }, e(SDK.PluginSlot, { name: 'zone' })))
+  assert.match(noOwnerEn.host.textContent ?? '', /no host plugin context/, 'missing owner warns explicitly in English')
+  act(() => { void noOwnerEn.root.unmount() })
+
+  const noOwnerZh = mount(
+    e(SDK.PluginClientHostContext.Provider, { value: portZh }, e(SDK.PluginSlot, { name: 'zone' })))
+  assert.match(noOwnerZh.host.textContent ?? '', /缺少宿主插件上下文/, 'missing owner warns in zh-CN when locale is zh-CN')
+  act(() => { void noOwnerZh.root.unmount() })
+
+  const badTarget = mount(tree('a/b/c', {}, undefined, portZh))
+  assert.match(badTarget.host.textContent ?? '', /非法/, 'invalid slot target warns explicitly in active locale')
+  act(() => { void badTarget.root.unmount() })
 })
 
-test('PluginSlot: reappearing contribution on the render chain warns of a cycle explicitly without infinite recursion', { timeout: 60_000 }, () => {
+test('PluginSlot: reappearing contribution on the render chain warns of a cycle and nesting beyond depth 16 aborts', { timeout: 60_000 }, () => {
   const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
-  const port = makePort(log)
+  const portEn = makePort(log, { locale: 'en' })
+  const portZh = makePort(log, { locale: 'zh-CN' })
   // The host render implementation renders the same slot again (equivalent to
   // a real cycle where the contribution component nests a same-named slot)
-  port.slots = {
-    collectItems: (qualifiedName) =>
-      qualifiedName === 'owner/loop'
-        ? [{ pluginId: 'p2', contributionId: 'cycle', spec: { id: 'cycle', target: 'owner/loop' } }]
-        : [],
-    renderItem: (item) =>
-      e(SDK.PluginClientHostContext.Provider, { value: port },
-        e(SDK.PluginClientContext.Provider, { value: SDK.createPluginClientContext(port, item.pluginId, undefined) },
-          e(SDK.PluginSlot, { name: 'owner/loop' }))),
+  const attachCycleSlot = (port: SDK.PluginClientHostPort) => {
+    port.slots = {
+      collectItems: (qualifiedName) =>
+        qualifiedName === 'owner/loop'
+          ? [
+              {
+                pluginId: 'p2',
+                contributionId: 'cycle',
+                spec: { id: 'cycle', target: 'owner/loop', client: { module: 'cycle.tsx', export: 'Cycle' } },
+              },
+            ]
+          : [],
+      renderItem: (item) =>
+        e(SDK.PluginClientHostContext.Provider, { value: port },
+          e(SDK.PluginClientContext.Provider, { value: SDK.createPluginClientContext(port, item.pluginId, undefined) },
+            e(SDK.PluginSlot, { name: 'owner/loop' }))),
+    }
   }
-  const { host, root } = mount(
-    e(SDK.PluginClientHostContext.Provider, { value: port },
-      e(SDK.PluginClientContext.Provider, { value: SDK.createPluginClientContext(port, 'owner', undefined) },
+  attachCycleSlot(portEn)
+  attachCycleSlot(portZh)
+
+  const cycleEn = mount(
+    e(SDK.PluginClientHostContext.Provider, { value: portEn },
+      e(SDK.PluginClientContext.Provider, { value: SDK.createPluginClientContext(portEn, 'owner', undefined) },
         e(SDK.PluginSlot, { name: 'loop' }))))
-  assert.match(host.textContent ?? '', /cycle detected/, 'a cycle warns explicitly instead of a stack overflow')
-  act(() => { void root.unmount() })
+  assert.match(cycleEn.host.textContent ?? '', /cycle detected/, 'a cycle warns explicitly instead of a stack overflow')
+  act(() => { void cycleEn.root.unmount() })
+
+  const cycleZh = mount(
+    e(SDK.PluginClientHostContext.Provider, { value: portZh },
+      e(SDK.PluginClientContext.Provider, { value: SDK.createPluginClientContext(portZh, 'owner', undefined) },
+        e(SDK.PluginSlot, { name: 'loop' }))))
+  assert.match(cycleZh.host.textContent ?? '', /循环引用/, 'cycle warning localizes to zh-CN')
+  act(() => { void cycleZh.root.unmount() })
+
+  // Distinct contribution IDs along a 17-step chain hit MAX_SLOT_DEPTH=16 cleanly
+  const deepPort = makePort(log, { locale: 'en' })
+  deepPort.slots = {
+    collectItems: (qualifiedName) => {
+      const m = /^owner\/step-(\d+)$/.exec(qualifiedName)
+      if (!m) return []
+      const idx = Number(m[1])
+      return [
+        {
+          pluginId: `p-${idx}`,
+          contributionId: `c-${idx}`,
+          spec: { id: `c-${idx}`, target: qualifiedName, client: { module: 's.tsx', export: 'S' } },
+        },
+      ]
+    },
+    renderItem: (item) => {
+      const m = /^p-(\d+)$/.exec(item.pluginId)
+      const next = Number(m![1]) + 1
+      return e(SDK.PluginClientHostContext.Provider, { value: deepPort },
+        e(SDK.PluginClientContext.Provider, { value: SDK.createPluginClientContext(deepPort, item.pluginId, undefined) },
+          e(SDK.PluginSlot, { name: `owner/step-${next}` })))
+    },
+  }
+  const deep = mount(
+    e(SDK.PluginClientHostContext.Provider, { value: deepPort },
+      e(SDK.PluginClientContext.Provider, { value: SDK.createPluginClientContext(deepPort, 'owner', undefined) },
+        e(SDK.PluginSlot, { name: 'step-0' }))))
+  assert.match(deep.host.textContent ?? '', /exceeded the maximum depth of 16/, 'max depth 16 aborts cleanly')
+  act(() => { void deep.root.unmount() })
 })
 
 // ---------------------------------------------------------------------------
@@ -1076,5 +1164,285 @@ test('ToolCallDetails: omitted facts render no section and no artifact button (n
     assert.equal(details.querySelectorAll('button').length, 0, 'an empty artifactRef renders no button')
   } finally {
     act(() => root.unmount())
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 7. TimelineToolCallsContext / useTimelineToolCalls: per-toolName sharded store
+// ---------------------------------------------------------------------------
+
+test('useTimelineToolCalls: returns a referentially stable frozen empty array outside Provider and on SSR', { timeout: 60_000 }, () => {
+  const snapshots: Array<ReadonlyArray<SDK.TimelineToolCallSummary>> = []
+  function OutsideProbe({ toolName }: { toolName: string }): React.ReactNode {
+    const calls = SDK.useTimelineToolCalls(toolName)
+    snapshots.push(calls)
+    return e('div', { 'data-count': calls.length }, String(calls.length))
+  }
+
+  // SSR outside Provider
+  const html = renderToString(e(OutsideProbe, { toolName: 'subagent' }))
+  assert.match(html, /data-count="0"/)
+  assert.equal(snapshots.length, 1)
+  assert.deepEqual(snapshots[0], [])
+  assert.ok(Object.isFrozen(snapshots[0]), 'empty fallback array must be frozen')
+
+  // Client mount + re-render + switching toolName outside Provider
+  const { host, root } = mount(e(OutsideProbe, { toolName: 'subagent' }))
+  try {
+    assert.equal(host.querySelector('[data-count="0"]')?.textContent, '0')
+    act(() => root.render(e(OutsideProbe, { toolName: 'bash' })))
+    act(() => root.render(e(OutsideProbe, { toolName: '' })))
+    assert.ok(snapshots.length >= 4)
+    for (const snap of snapshots) {
+      assert.ok(snap === snapshots[0], 'all outside-Provider snapshots must share the exact same empty array reference')
+    }
+  } finally {
+    act(() => root.unmount())
+  }
+})
+
+test('useTimelineToolCalls: shards by toolName so unrelated tool updates trigger zero re-renders and preserve unchanged references', { timeout: 60_000 }, () => {
+  const inputSub1 = { prompt: 'audit', resume: 11 }
+  const metaSub1 = { runId: 'wf_1', status: 'running' }
+  const inputBash1 = { command: 'ls' }
+  const metaBash1 = { exitCode: 0 }
+  const inputRead1 = { path: 'a.ts' }
+
+  const store = SDK.createTimelineToolCallsStore([
+    { callId: 'c1', toolName: 'subagent', index: 0, status: 'running', input: inputSub1, presentationMeta: metaSub1 },
+    { callId: 'c2', toolName: 'bash', index: 1, status: 'running', input: inputBash1 },
+  ])
+
+  let subagentRenders = 0
+  let bashRenders = 0
+  const subagentSnapshots: Array<ReadonlyArray<SDK.TimelineToolCallSummary>> = []
+  const bashSnapshots: Array<ReadonlyArray<SDK.TimelineToolCallSummary>> = []
+
+  function SubagentProbe(): React.ReactNode {
+    subagentRenders += 1
+    const calls = SDK.useTimelineToolCalls('subagent')
+    subagentSnapshots.push(calls)
+    return e('div', { 'data-subagent': calls.map((c) => `${c.callId}:${c.status}`).join(',') })
+  }
+
+  function BashProbe(): React.ReactNode {
+    bashRenders += 1
+    const calls = SDK.useTimelineToolCalls('bash')
+    bashSnapshots.push(calls)
+    return e('div', { 'data-bash': calls.map((c) => `${c.callId}:${c.status}`).join(',') })
+  }
+
+  const { root } = mount(
+    e(
+      SDK.TimelineToolCallsContext.Provider,
+      { value: store },
+      e(SubagentProbe),
+      e(BashProbe),
+    ),
+  )
+
+  try {
+    assert.equal(subagentRenders, 1)
+    assert.equal(bashRenders, 1)
+    const initialSubagentRef = subagentSnapshots[0]!
+    assert.equal(initialSubagentRef.length, 1)
+    assert.equal(initialSubagentRef[0]!.callId, 'c1')
+    assert.equal(initialSubagentRef[0]!.index, 0)
+    assert.ok(Object.isFrozen(initialSubagentRef))
+    assert.ok(Object.isFrozen(initialSubagentRef[0]))
+
+    // Update bash and add read — subagent summary fields/refs are unchanged (fresh wrapper object).
+    act(() => {
+      const changed = store.update([
+        { callId: 'c1', toolName: 'subagent', index: 0, status: 'running', input: inputSub1, presentationMeta: metaSub1 },
+        { callId: 'c2', toolName: 'bash', index: 1, status: 'done', input: inputBash1, presentationMeta: metaBash1 },
+        { callId: 'c3', toolName: 'read', index: 2, status: 'done', input: inputRead1 },
+      ])
+      assert.equal(changed, true)
+    })
+
+    assert.equal(subagentRenders, 1, 'unrelated toolName updates must NOT re-render subagent subscriber')
+    assert.equal(bashRenders, 2, 'bash status/meta change must re-render bash subscriber')
+    assert.ok(store.getSnapshot('subagent') === initialSubagentRef, 'unchanged shard preserves array reference')
+    assert.equal(bashSnapshots.at(-1)?.[0]?.status, 'done')
+    assert.deepEqual(bashSnapshots.at(-1)?.[0]?.presentationMeta, metaBash1)
+
+    // Identical update (rebuilt wrapper objects, same values/refs) notifies no one.
+    act(() => {
+      const changed = store.update(
+        new Map<string, ReadonlyArray<SDK.TimelineToolCallSummary>>([
+          ['subagent', [{ callId: 'c1', toolName: 'subagent', index: 0, status: 'running', input: inputSub1, presentationMeta: metaSub1 }]],
+          ['bash', [{ callId: 'c2', toolName: 'bash', index: 1, status: 'done', input: inputBash1, presentationMeta: metaBash1 }]],
+          ['read', [{ callId: 'c3', toolName: 'read', index: 2, status: 'done', input: inputRead1 }]],
+        ]),
+      )
+      assert.equal(changed, false)
+    })
+    assert.equal(subagentRenders, 1)
+    assert.equal(bashRenders, 2)
+
+    // Append a second subagent call: subagent re-renders and reuses unchanged prefix element identity.
+    const metaSub2 = { runId: 'wf_2', status: 'done' }
+    act(() => {
+      store.update([
+        { callId: 'c1', toolName: 'subagent', index: 0, status: 'running', input: inputSub1, presentationMeta: metaSub1 },
+        { callId: 'c2', toolName: 'bash', index: 1, status: 'done', input: inputBash1, presentationMeta: metaBash1 },
+        { callId: 'c4', toolName: 'subagent', index: 2, status: 'done', presentationMeta: metaSub2 },
+      ])
+    })
+    assert.equal(subagentRenders, 2)
+    assert.equal(bashRenders, 2, 'removing read / adding subagent must NOT re-render bash subscriber')
+    const nextSubagentRef = subagentSnapshots.at(-1)!
+    assert.equal(nextSubagentRef.length, 2)
+    assert.ok(nextSubagentRef[0] === initialSubagentRef[0], 'unchanged prefix summary keeps element reference')
+    assert.equal(nextSubagentRef[1]!.callId, 'c4')
+    assert.equal(nextSubagentRef[1]!.index, 2)
+
+    // Clear all calls: both shards reset to empty and notify once; subsequent empty update notifies no one.
+    act(() => {
+      assert.equal(store.update([]), true)
+    })
+    assert.equal(subagentRenders, 3)
+    assert.equal(bashRenders, 3)
+    assert.deepEqual(subagentSnapshots.at(-1), [])
+    assert.deepEqual(bashSnapshots.at(-1), [])
+    act(() => {
+      assert.equal(store.update(new Map([['subagent', []]])), false)
+    })
+    assert.equal(subagentRenders, 3)
+    assert.equal(bashRenders, 3)
+  } finally {
+    act(() => root.unmount())
+  }
+})
+
+test('useTimelineToolCalls: dynamic toolName switching, empty toolName, and SSR inside Provider', { timeout: 60_000 }, () => {
+  const store = SDK.createTimelineToolCallsStore([
+    { callId: 's1', toolName: 'subagent', index: 0, status: 'done' },
+    { callId: 'b1', toolName: 'bash', index: 1, status: 'running' },
+  ])
+
+  let latest: ReadonlyArray<SDK.TimelineToolCallSummary> = []
+  let renders = 0
+  function SwitchProbe({ toolName }: { toolName: string }): React.ReactNode {
+    renders += 1
+    latest = SDK.useTimelineToolCalls(toolName)
+    return e('div', { 'data-ids': latest.map((c) => c.callId).join(',') })
+  }
+
+  const ssrHtml = renderToString(
+    e(SDK.TimelineToolCallsContext.Provider, { value: store }, e(SwitchProbe, { toolName: 'subagent' })),
+  )
+  assert.match(ssrHtml, /data-ids="s1"/)
+
+  renders = 0
+  const { root } = mount(
+    e(SDK.TimelineToolCallsContext.Provider, { value: store }, e(SwitchProbe, { toolName: 'subagent' })),
+  )
+  try {
+    assert.deepEqual(latest.map((c) => c.callId), ['s1'])
+
+    // Switch subscribed toolName to 'bash'
+    act(() => {
+      root.render(e(SDK.TimelineToolCallsContext.Provider, { value: store }, e(SwitchProbe, { toolName: 'bash' })))
+    })
+    assert.deepEqual(latest.map((c) => c.callId), ['b1'])
+    const rendersBeforeUnrelated = renders
+
+    // Updates to 'subagent' no longer affect this subscriber after switching to 'bash'
+    act(() => {
+      store.update([
+        { callId: 's1', toolName: 'subagent', index: 0, status: 'error' },
+        { callId: 'b1', toolName: 'bash', index: 1, status: 'running' },
+      ])
+    })
+    assert.equal(renders, rendersBeforeUnrelated)
+
+    // Empty toolName falls back to stable empty array and ignores store updates
+    act(() => {
+      root.render(e(SDK.TimelineToolCallsContext.Provider, { value: store }, e(SwitchProbe, { toolName: '' })))
+    })
+    assert.deepEqual(latest, [])
+    const rendersWhenEmpty = renders
+    act(() => {
+      store.update([])
+    })
+    assert.equal(renders, rendersWhenEmpty)
+  } finally {
+    act(() => root.unmount())
+  }
+})
+
+test('createTimelineToolCallsStore: enforces lightweight summary boundary, prototype safety, and atomic rejection', { timeout: 60_000 }, () => {
+  const initialCall: SDK.TimelineToolCallSummary = {
+    callId: 'keep-1',
+    toolName: 'subagent',
+    index: 0,
+    status: 'done',
+    presentationMeta: { runId: 'wf_keep' },
+  }
+  const store = SDK.createTimelineToolCallsStore([initialCall])
+  let listenerCalls = 0
+  const unsub = store.subscribe('subagent', () => {
+    listenerCalls += 1
+  })
+  // Double unsubscribe must be safe and idempotent when called later
+  const unsubTemp = store.subscribe('bash', () => {})
+  unsubTemp()
+  unsubTemp()
+
+  try {
+    const invalidCases: Array<{ label: string; input: unknown }> = [
+      { label: 'bulky result string', input: [{ callId: 'c1', toolName: 'subagent', index: 0, status: 'done', result: 'huge output' }] },
+      { label: 'bulky resultText', input: [{ callId: 'c1', toolName: 'subagent', index: 0, status: 'done', resultText: 'huge' }] },
+      { label: 'bulky resultTruncation', input: [{ callId: 'c1', toolName: 'subagent', index: 0, status: 'done', resultTruncation: { truncated: true } }] },
+      { label: 'bulky structuredOutput', input: [{ callId: 'c1', toolName: 'subagent', index: 0, status: 'done', structuredOutput: { ok: true } }] },
+      { label: 'empty callId', input: [{ callId: '', toolName: 'subagent', index: 0, status: 'done' }] },
+      { label: 'empty toolName', input: [{ callId: 'c1', toolName: '', index: 0, status: 'done' }] },
+      { label: 'negative index', input: [{ callId: 'c1', toolName: 'subagent', index: -1, status: 'done' }] },
+      { label: 'non-integer index', input: [{ callId: 'c1', toolName: 'subagent', index: 1.5, status: 'done' }] },
+      { label: 'invalid status', input: [{ callId: 'c1', toolName: 'subagent', index: 0, status: 'unknown' }] },
+      { label: 'array presentationMeta', input: [{ callId: 'c1', toolName: 'subagent', index: 0, status: 'done', presentationMeta: ['bad'] }] },
+      { label: 'null presentationMeta', input: [{ callId: 'c1', toolName: 'subagent', index: 0, status: 'done', presentationMeta: null }] },
+      { label: 'mismatched map shard key', input: new Map([['bash', [{ callId: 'c1', toolName: 'subagent', index: 0, status: 'done' }]]]) },
+    ]
+
+    for (const c of invalidCases) {
+      assert.throws(
+        () => store.update(c.input as SDK.TimelineToolCallsInput),
+        TypeError,
+        `${c.label} must be explicitly rejected`,
+      )
+    }
+
+    // Atomic validation failure must leave existing shards untouched and notify nobody
+    assert.equal(listenerCalls, 0)
+    assert.equal(store.getSnapshot('subagent').length, 1)
+    assert.equal(store.getSnapshot('subagent')[0]!.callId, 'keep-1')
+
+    // Unexpected extra own properties are stripped so stored summaries only expose allowed protocol fields
+    store.update([
+      {
+        callId: 'c-clean',
+        toolName: 'subagent',
+        index: 0,
+        status: 'done',
+        extraLeak: 'ignored',
+      } as unknown as SDK.TimelineToolCallSummary,
+    ])
+    const stored = store.getSnapshot('subagent')[0]! as unknown as Record<string, unknown>
+    assert.deepEqual(Object.keys(stored).sort(), ['callId', 'index', 'status', 'toolName'])
+    assert.equal('extraLeak' in stored, false)
+    assert.equal(listenerCalls, 1)
+
+    // Prototype-key tool names do not collide with Object.prototype
+    for (const protoTool of ['__proto__', 'constructor', 'toString']) {
+      assert.deepEqual(store.getSnapshot(protoTool), [])
+      store.update([{ callId: `id-${protoTool}`, toolName: protoTool, index: 0, status: 'done' }])
+      assert.equal(store.getSnapshot(protoTool).length, 1)
+      assert.equal(store.getSnapshot(protoTool)[0]!.toolName, protoTool)
+    }
+  } finally {
+    unsub()
   }
 })

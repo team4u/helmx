@@ -83,7 +83,7 @@ export function createPluginClientHostPort(store: PluginClientHostStoreInput): P
     slots: {
       collectItems: (qualifiedName, conversationId) => {
         const conversation = conversationId !== undefined
-          ? store.conversations.find((c) => c.id === conversationId)
+          ? (store.conversations.find((c) => c.id === conversationId) ?? store.conversationDetails[conversationId])
           : undefined
         return collectSlotItems(
           store.groupedUi.pluginSlots,

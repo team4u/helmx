@@ -786,3 +786,107 @@ test('list_mentionable：待命草稿态支持显式 profileId（无会话时校
     await env.close()
   }
 })
+
+test('failed-while-enabled 插件：托管 skill/load_skill、托管 Profile 与派工能力均不得视为 active', { timeout: 60_000 }, async () => {
+  const basePlugin: PluginDefinition = {
+    id: 'dep:base',
+    name: 'Base',
+    definePlugin() {},
+  }
+  const managedDep: PluginDefinition = {
+    id: 'ext:managed-dep',
+    name: 'Managed Dep',
+    dependencies: ['dep:base'],
+    definePlugin() {},
+  }
+  const env = await makeEnv([basePlugin, managedDep, createWorkflowPlugin()], true)
+  try {
+    await env.backend.skills.ensureSkill(
+      {
+        id: 'dep-skill',
+        skillMd: '---\nname: dep-skill\ndescription: managed by ext:managed-dep\nmanagedByPlugin: ext:managed-dep\n---\n# Dep Skill\nBody',
+        references: {},
+      },
+      'ext:managed-dep',
+    )
+    await seedProfile(
+      env.profiles,
+      env.dataDir,
+      { id: 'dep-bot', name: '依赖机器人', managedByPlugin: 'ext:managed-dep' },
+      '# DepBot\n负责专项分析。',
+    )
+    await seedProfile(env.profiles, env.dataDir, { id: 'plain-coder', name: '普通编码' }, '# Coder\n日常开发。')
+
+    const makeTurn = () => ({
+      conversation: makeConversation(1),
+      sections: [],
+      tools: [tool('subagent'), tool('SubagentWorkflow')],
+      inputs: [],
+      messages: [],
+    })
+
+    // 1. 正常 active 时：托管技能、load_skill、托管 Profile 全部可用
+    const beforeFail = await env.host.runHook('before_turn', makeTurn() as never)
+    assert.equal(beforeFail.action, 'transform')
+    const skillsBefore = sectionsOf(beforeFail, makeTurn()).find((s) => s.id === 'profile.skills')
+    const catalogBefore = sectionsOf(beforeFail, makeTurn()).find((s) => s.id === 'profile.catalog')
+    assert.ok(skillsBefore?.text.includes('id="dep-skill"'), '活跃时托管技能应出现在 <available_skills>')
+    assert.ok(catalogBefore?.text.includes('id="dep-bot"'), '活跃时托管 Profile 应出现在 <available_profiles>')
+    const loadedBefore = (await env.host.executeTool('load_skill', { skillId: 'dep-skill' }, { conversationId: 1 })) as { text: string }
+    assert.ok(loadedBefore.text.includes('# Dep Skill'))
+
+    // 2. 强停依赖 dep:base → ext:managed-dep 落入真实 enabled=true, status='failed'
+    await env.host.disable('dep:base', { force: true })
+    const depSummary = env.host.list().find((p) => p.id === 'ext:managed-dep')
+    assert.equal(depSummary?.enabled, true)
+    assert.equal(depSummary?.status, 'failed')
+
+    // 2a. before_turn 不得再注入托管技能与托管 Profile（普通 Profile 仍保留）
+    const afterFail = await env.host.runHook('before_turn', makeTurn() as never)
+    assert.equal(afterFail.action, 'transform')
+    const skillsAfter = sectionsOf(afterFail, makeTurn()).find((s) => s.id === 'profile.skills')
+    const catalogAfter = sectionsOf(afterFail, makeTurn()).find((s) => s.id === 'profile.catalog')
+    assert.ok(!(skillsAfter?.text.includes('id="dep-skill"') ?? false), 'failed-while-enabled 插件托管技能不得注入 <available_skills>')
+    assert.ok(!(catalogAfter?.text.includes('id="dep-bot"') ?? false), 'failed-while-enabled 插件托管 Profile 不得进入 <available_profiles>')
+    assert.ok(catalogAfter?.text.includes('id="plain-coder"'), '普通 Profile 不受影响')
+
+    // 2b. load_skill 显式 403 skill_not_available
+    await assert.rejects(
+      () => env.host.executeTool('load_skill', { skillId: 'dep-skill' }, { conversationId: 1 }),
+      (err: unknown) => err instanceof HelmxError && err.code === 'skill_not_available' && err.status === 403,
+    )
+
+    // 2c. list_mentionable 同样排除 failed-while-enabled 插件托管 Profile
+    const mentionable = (await env.host.invokeAction('builtin:profile', 'list_mentionable', { query: '' }, { conversationId: 1 })) as {
+      items: Array<{ id: string }>
+    }
+    assert.deepEqual(mentionable.items.map((i) => i.id), ['plain-coder'])
+
+    // 3. 派工工具判定同样按 active 谓词：即使某插件摘要仍挂着 tools=['subagent']，只要 enabled=true, status='failed' 即不视为具备派工能力
+    const origList = env.host.list.bind(env.host)
+    env.host.list = () =>
+      origList().map((p) =>
+        p.id === 'builtin:workflow'
+          ? {
+              ...p,
+              enabled: true,
+              status: 'failed' as const,
+              error: { code: 'plugin_dependency_not_enabled', message: 'dep off', stage: 'enable' as const },
+              tools: ['subagent', 'SubagentWorkflow'],
+            }
+          : p,
+      )
+    const mentionWithFailedDispatch = (await env.host.invokeAction(
+      'builtin:profile',
+      'list_mentionable',
+      { query: '' },
+      { conversationId: 1 },
+    )) as { items: Array<{ id: string }> }
+    assert.deepEqual(mentionWithFailedDispatch.items, [], '派工插件为 enabled=true, status=failed 时 list_mentionable 不得暴露协作目录')
+    const turnWithFailedDispatch = await env.host.runHook('before_turn', makeTurn() as never)
+    const catalogWithFailedDispatch = sectionsOf(turnWithFailedDispatch, makeTurn()).find((s) => s.id === 'profile.catalog')
+    assert.equal(catalogWithFailedDispatch, undefined, '派工插件为 enabled=true, status=failed 时 before_turn 不得注入 <available_profiles>')
+  } finally {
+    await env.close()
+  }
+})

@@ -6,7 +6,7 @@
  * Disable double-gate: re-checks plugin enabled status via summary before dispatch (409 if disabled)
  * and tracks handler execution in `liveTasks` (shared with actions/tools for disable blocking).
  */
-import { HelmxError } from '@helmx/protocol'
+import { HelmxError, isPluginSummaryActive } from '@helmx/protocol'
 import type { JsonSchema, PluginConfigFieldSchema, PublicPluginSessionDoc } from '@helmx/protocol'
 import { gzipSync } from 'node:zlib'
 import { errorResponse, jsonOk, readJsonBody, type JsonRedactor } from './http-utils.js'
@@ -121,6 +121,14 @@ export async function handlePluginsDomain(
       return jsonOk(redactor, { ok: true })
     }
     return methodNotAllowed(redactor, method)
+  }
+  // Read-only plugin extension contract projection: GET /api/plugins/:pluginId/manifest
+  if (third === 'manifest' && fourth === undefined) {
+    if (method !== 'GET') return methodNotAllowed(redactor, method)
+    if (kernel.plugins.getManifest === undefined) {
+      return errorResponse(redactor, 501, 'not_supported', 'Current kernel does not support plugin manifest projection')
+    }
+    return jsonOk(redactor, await kernel.plugins.getManifest(pluginId))
   }
   // Plugin public document: GET /api/plugins/:pluginId/docs/:name (404 if private, disabled, or missing).
   // ?conversationId=N selects sessionDoc snapshot; `/events` opens the dedicated sessionDoc SSE stream.
@@ -422,7 +430,7 @@ async function dispatchPluginRoute(
     return errorResponse(redactor, 404, 'route_not_found', `Plugin route not found: ${method} /${rest}`)
   }
   const summary = kernel.plugins.get?.(found.pluginId)
-  if (summary !== undefined && summary.enabled !== true) {
+  if (summary !== undefined && !isPluginSummaryActive(summary)) {
     throw new HelmxError('plugin_disabled', `Plugin ${found.pluginId} is disabled; route unavailable`, 409, {
       pluginId: found.pluginId,
     })

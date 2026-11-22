@@ -5,6 +5,7 @@
 import type { ConversationSummary, Profile } from '@helmx/protocol/browser'
 import { isConversationArchived } from '../conversation/archive-model.js'
 import { collectEnabledPluginIds, isProfileVisible } from '../shell/sidebar-model.js'
+import { isPluginSummaryActive, type PluginActivityLike } from './live-state.js'
 import {
   isPrototypeParamKey,
   resolveTargetString,
@@ -19,7 +20,7 @@ import {
 export interface SpaceTargetInput {
   conversations: ConversationSummary[]
   profiles: Profile[]
-  plugins: ReadonlyArray<{ id: string; enabled: boolean }>
+  plugins: ReadonlyArray<{ id: string } & PluginActivityLike>
   /** Whether static assets finished loading this round (before that, profile existence cannot be falsified; treat as available). */
   assetsLoaded: boolean
   grouped: GroupedUiSpecs
@@ -36,7 +37,7 @@ export interface SpaceTargetInput {
 export function hasVisibleConversationRoots(input: {
   conversations: ReadonlyArray<ConversationSummary>
   profiles: ReadonlyArray<Profile>
-  plugins: ReadonlyArray<{ id: string; enabled: boolean }>
+  plugins: ReadonlyArray<{ id: string } & PluginActivityLike>
 }): boolean {
   const enabledPluginIds = collectEnabledPluginIds(input.plugins)
   return input.conversations.some(
@@ -51,20 +52,25 @@ export function hasVisibleConversationRoots(input: {
 }
 
 /** Whether a space jump-back target is still available: conversations must be
- * in the list; agent standby requires the profile to still exist; screens must
- * still be contributed by an enabled plugin; the system center is a static host
- * target and always available. */
+ * in the list; agent standby requires the profile to still exist and its managing
+ * plugin (if any) to be active; screens must still be contributed by an active
+ * plugin; the system center is a static host target and always available. */
 export function isSpaceTargetAvailable(target: ResolvedTarget, input: SpaceTargetInput): boolean {
   switch (target.kind) {
     case 'conversation':
       return input.conversations.some((conv) => conv.id === target.conversationId)
-    case 'agent':
+    case 'agent': {
       if (!input.assetsLoaded) return true
-      return input.profiles.some((profile) => profile.id === target.profileId)
-    case 'screen':
+      const profile = input.profiles.find((p) => p.id === target.profileId)
+      return profile !== undefined && isProfileVisible(profile, collectEnabledPluginIds(input.plugins))
+    }
+    case 'screen': {
+      const plugin = input.plugins.find((p) => p.id === target.pluginId)
+      if (plugin !== undefined && !isPluginSummaryActive(plugin)) return false
       return input.grouped.screens.some(
         (item) => item.pluginId === target.pluginId && item.spec.id === target.screenId,
       )
+    }
     default:
       return true
   }
@@ -73,21 +79,29 @@ export function isSpaceTargetAvailable(target: ResolvedTarget, input: SpaceTarge
 /** The default target of a space (when the space has no memory yet): settings
  * -> profile center; conversations -> the standby entry of the agent owning the
  * latest root conversation (falling back to the first usable profile when there
- * are none); views -> the first sidebar item resolvable to a screen. Returns
- * null when no usable target exists — the caller notifies explicitly and never
- * fabricates a nonexistent target. */
+ * are none); views -> the first sidebar item resolvable to an active plugin screen.
+ * Returns null when no usable target exists — the caller notifies explicitly and
+ * never fabricates a nonexistent target. */
 export function defaultSpaceTarget(space: SidebarSpace, input: SpaceTargetInput): ResolvedTarget | null {
   if (space === 'settings') return { kind: 'profiles' }
   if (space === 'views') {
     for (const item of input.grouped.sidebarItems) {
       if (!item.spec.target) continue
       const resolved = resolveTargetString(item.spec.target, input.conversations)
-      if (resolved?.kind === 'screen') return resolved
+      if (resolved?.kind === 'screen') {
+        const plugin = input.plugins.find((p) => p.id === resolved.pluginId)
+        if (plugin !== undefined && !isPluginSummaryActive(plugin)) continue
+        return resolved
+      }
     }
     return null
   }
-  const agentUsable = (profileId: string): boolean =>
-    !input.assetsLoaded || input.profiles.some((profile) => profile.id === profileId)
+  const enabledPluginIds = collectEnabledPluginIds(input.plugins)
+  const agentUsable = (profileId: string): boolean => {
+    if (!input.assetsLoaded) return true
+    const profile = input.profiles.find((p) => p.id === profileId)
+    return profile !== undefined && isProfileVisible(profile, enabledPluginIds)
+  }
   const latestRoot = input.conversations
     .filter((conv) => conv.parentConversationId === undefined && !isConversationArchived(conv))
     .reduce<ConversationSummary | null>(
@@ -100,10 +114,7 @@ export function defaultSpaceTarget(space: SidebarSpace, input: SpaceTargetInput)
   if (latestRoot !== null && agentUsable(latestRoot.profileId)) {
     return { kind: 'agent', profileId: latestRoot.profileId }
   }
-  const enabledPluginIds = new Set(input.plugins.filter((p) => p.enabled).map((p) => p.id))
-  const visible = input.profiles.filter(
-    (profile) => profile.managedByPlugin === undefined || enabledPluginIds.has(profile.managedByPlugin),
-  )
+  const visible = input.profiles.filter((profile) => isProfileVisible(profile, enabledPluginIds))
   const preferred = visible.find((profile) => profile.humanSelectable !== false) ?? visible[0]
   return preferred === undefined ? null : { kind: 'agent', profileId: preferred.id }
 }

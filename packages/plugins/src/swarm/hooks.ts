@@ -1,4 +1,4 @@
-import { escapeXml, isSkillAvailable, type HelmxPluginContext } from '@helmx/protocol'
+import { escapeXml, isPluginSummaryActive, isSkillAvailable, type HelmxPluginContext } from '@helmx/protocol'
 import {
   ACTIVE_SWARM_GROUP_SECTION_ID,
   ARCHIVED_WORKER_TAG,
@@ -24,8 +24,8 @@ async function isSwarmSkillAllowed(ctx: HelmxPluginContext, profileId: string): 
   if (profile === undefined) return false
   const skill = allSkills.find((s) => s.id === SWARM_SKILL_ID)
   if (skill === undefined) return false
-  const enabledPluginIds = new Set(ctx.host.listPlugins().filter((p) => p.enabled).map((p) => p.id))
-  return isSkillAvailable(skill, profile, enabledPluginIds)
+  const activePluginIds = new Set(ctx.host.listPlugins().filter(isPluginSummaryActive).map((p) => p.id))
+  return isSkillAvailable(skill, profile, activePluginIds)
 }
 
 /** 100% 字节恒定的协作组主控系统提示词段（仅含创建后永不变更的 groupId 与静态协作铁律，零可变成员列表或状态）。 */

@@ -5,7 +5,12 @@
  * 拒绝、绝不静默丢弃）、background 缺省按权威 ownership 判定、执行元数据
  * （conversationId / executionId / worktree）独立于业务 result 回报。
  */
-import { safeResultText, type AgentExecutionInfo, type AgentSpawnRequest, type HelmxPluginContext } from '@helmx/protocol'
+import {
+  safeResultText,
+  type AgentExecutionInfo,
+  type AgentSpawnRequest,
+  type HelmxPluginContext,
+} from '@helmx/protocol'
 import {
   DEFAULT_MAX_SUBAGENT_DEPTH,
   HARD_MAX_SUBAGENT_DEPTH,
@@ -45,16 +50,71 @@ const subagentOutputSchema = {
   required: ['ok'],
 } as const
 
-/** 工具错误信封：文本 + structuredOutput.ok=false（isError）。 */
+/** 持久化给 Timeline / ToolView 的轻量有界 UI 索引契约（严禁混入大块 result 正文）。 */
+const subagentPresentationMetaSchema = {
+  type: 'object',
+  properties: {
+    ok: { type: 'boolean' },
+    background: { type: 'boolean' },
+    runId: { type: 'string' },
+    status: { type: 'string' },
+    execution: {
+      type: 'object',
+      properties: {
+        nodeId: { type: 'string' },
+        conversationId: { type: 'number' },
+        executionId: { type: 'string' },
+        effectiveCwd: { type: 'string' },
+        worktree: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            path: { type: 'string' },
+            branch: { type: 'string' },
+          },
+          required: ['path', 'branch'],
+          additionalProperties: false,
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  required: ['ok'],
+  additionalProperties: false,
+} as const
+
+/** 提取 UI 渲染所需的轻量 execution 索引，剔除内部多余 worktree 元字段。 */
+function presentationExecutionOf(info: AgentExecutionInfo): Record<string, unknown> | undefined {
+  const full = executionOf(info)
+  const out: Record<string, unknown> = {}
+  if (full['nodeId'] !== undefined) out['nodeId'] = full['nodeId']
+  if (full['conversationId'] !== undefined) out['conversationId'] = full['conversationId']
+  if (full['executionId'] !== undefined) out['executionId'] = full['executionId']
+  if (full['effectiveCwd'] !== undefined) out['effectiveCwd'] = full['effectiveCwd']
+  const wt = full['worktree']
+  if (wt !== null && typeof wt === 'object' && !Array.isArray(wt)) {
+    const wtRec = wt as Record<string, unknown>
+    out['worktree'] = {
+      ...(typeof wtRec['id'] === 'string' && wtRec['id'] !== '' ? { id: wtRec['id'] } : {}),
+      path: wtRec['path'],
+      branch: wtRec['branch'],
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined
+}
+
+/** 工具错误信封：文本 + structuredOutput.ok=false + 轻量 presentationMeta（isError）。 */
 function envelopeError(text: string, result: string): {
   output: Array<{ type: 'text'; text: string }>
   isError: boolean
   structuredOutput: unknown
+  presentationMeta: Record<string, unknown>
 } {
   return {
     output: [{ type: 'text', text }],
     isError: true,
     structuredOutput: { ok: false, result },
+    presentationMeta: { ok: false },
   }
 }
 
@@ -122,6 +182,7 @@ export function registerSubagentTool(
       additionalProperties: false,
     },
     structuredOutputSchema: subagentOutputSchema,
+    presentationMetaSchema: subagentPresentationMetaSchema,
     async execute(args, context) {
       const a = args as Record<string, unknown>
       let label: string | undefined
@@ -191,15 +252,24 @@ export function registerSubagentTool(
           status: summary.status,
           ...(effectiveExec !== undefined ? { execution: executionOf(effectiveExec) } : {}),
         }
+        const execMeta = effectiveExec !== undefined ? presentationExecutionOf(effectiveExec) : undefined
         return {
           output: [{ type: 'text', text: safeResultText(payload) }],
           structuredOutput: payload,
+          presentationMeta: {
+            ok: true,
+            background: true,
+            runId: summary.id,
+            status: summary.status,
+            ...(execMeta !== undefined ? { execution: execMeta } : {}),
+          },
         }
       }
 
       const formatTerminalResult = (runId: string, initialExec?: AgentExecutionInfo) => {
         const final = workflows.getRun(runId)
         const resolvedInfo = resolved ?? initialExec ?? workflows.loadRunRecord(runId).subagentMeta?.execution
+        const execMeta = resolvedInfo !== undefined ? presentationExecutionOf(resolvedInfo) : undefined
         if (final.status === 'completed') {
           const payload = {
             ok: true,
@@ -209,6 +279,12 @@ export function registerSubagentTool(
           return {
             output: [{ type: 'text', text: safeResultText(payload) }],
             structuredOutput: payload,
+            presentationMeta: {
+              ok: true,
+              runId: final.id,
+              status: final.status,
+              ...(execMeta !== undefined ? { execution: execMeta } : {}),
+            },
           }
         }
         const message = final.error ?? `子代理运行 ${runId} 终态为 ${final.status}`
@@ -219,6 +295,12 @@ export function registerSubagentTool(
             ok: false,
             result: message,
             ...(resolvedInfo !== undefined ? { execution: executionOf(resolvedInfo) } : {}),
+          },
+          presentationMeta: {
+            ok: false,
+            runId: final.id,
+            status: final.status,
+            ...(execMeta !== undefined ? { execution: execMeta } : {}),
           },
         }
       }
@@ -328,6 +410,7 @@ export function registerSubagentTool(
           throw error
         }
         const message = error instanceof Error ? error.message : String(error)
+        const execMeta = resolved !== undefined ? presentationExecutionOf(resolved) : undefined
         return {
           output: [{ type: 'text', text: `subagent_failed: ${message}` }],
           isError: true,
@@ -335,6 +418,11 @@ export function registerSubagentTool(
             ok: false,
             result: message,
             ...(resolved !== undefined ? { execution: executionOf(resolved) } : {}),
+          },
+          presentationMeta: {
+            ok: false,
+            status: 'failed',
+            ...(execMeta !== undefined ? { execution: execMeta } : {}),
           },
         }
       } finally {

@@ -261,11 +261,11 @@ function RawToolData({ tool, resultFetch, defaultOpen = false }: { tool: ToolTra
   const { t } = useWebLocale()
   const [open, setOpen] = useState(defaultOpen)
   const inputJson = useMemo(() => (tool.input !== undefined ? prettyJson(tool.input) : undefined), [tool.input])
-  const structuredJson = useMemo(
-    () => (tool.structuredOutput !== undefined ? prettyJson(tool.structuredOutput) : undefined),
-    [tool.structuredOutput],
+  const metaJson = useMemo(
+    () => (tool.presentationMeta !== undefined ? prettyJson(tool.presentationMeta) : undefined),
+    [tool.presentationMeta],
   )
-  if (inputJson === undefined && tool.resultText === undefined && structuredJson === undefined) return null
+  if (inputJson === undefined && tool.resultText === undefined && metaJson === undefined) return null
   return (
     <div className="trace-raw">
       <button type="button" className="trace-inline-btn" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
@@ -290,10 +290,10 @@ function RawToolData({ tool, resultFetch, defaultOpen = false }: { tool: ToolTra
               {tool.resultTruncation !== undefined ? <TruncatedOutputFooter tool={tool} resultFetch={resultFetch} /> : null}
             </div>
           ) : null}
-          {structuredJson !== undefined ? (
+          {metaJson !== undefined ? (
             <div>
-              <div className="trace-code-head"><span className="trace-section-label">{t('conv.raw.structuredJson')}</span><CopyButton text={structuredJson} label={t('conv.raw.copyStructured')} /></div>
-              <pre className="code-block-pre">{structuredJson}</pre>
+              <div className="trace-code-head"><span className="trace-section-label">{t('conv.raw.structuredJson')}</span><CopyButton text={metaJson} label={t('conv.raw.copyStructured')} /></div>
+              <pre className="code-block-pre">{metaJson}</pre>
             </div>
           ) : null}
         </div>
@@ -314,8 +314,8 @@ function EditToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
     [tool.input, tool.status, tool.isError],
   )
   const resultCheck = useMemo(
-    () => (tool.status === 'done' && !tool.isError ? checkEditToolResult(tool.structuredOutput) : undefined),
-    [tool.status, tool.isError, tool.structuredOutput],
+    () => (tool.status === 'done' && !tool.isError ? checkEditToolResult(tool.presentationMeta) : undefined),
+    [tool.status, tool.isError, tool.presentationMeta],
   )
 
   if (tool.status === 'running') {
@@ -445,8 +445,8 @@ function ReadToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
   const data = useMemo(() => readBodyData(tool), [tool])
   const [expanded, setExpanded] = useState(false)
   const failed = tool.status === 'error' || tool.isError
-  // Server truncation constrains only the raw output text channel; structuredOutput.content (details channel) transfers in full and is unaffected.
-  const truncated = data.fromResultText && tool.resultTruncation !== undefined
+  // Read content always comes from tool.resultText (presentationMeta omits file content to avoid double writes), so server truncation applies directly.
+  const truncated = tool.resultTruncation !== undefined
   if (failed) {
     return (
       <>

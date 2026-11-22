@@ -108,19 +108,28 @@ function makeSpyCtx(): SpyCtx {
 async function mountClient(
   ctx: PluginClientContextType,
   element: React.ReactElement,
+  options?: { timelineToolCalls?: import('@helmx/plugin-client').TimelineToolCallsInput },
 ): Promise<{ host: HTMLElement; rerender: (element: React.ReactElement) => Promise<void>; unmount: () => void }> {
   const host = document.createElement('div')
   document.body.appendChild(host)
+  const timelineStore =
+    options?.timelineToolCalls !== undefined ? SDK.createTimelineToolCallsStore(options.timelineToolCalls) : undefined
+  const wrap = (node: React.ReactElement): React.ReactElement => {
+    const withCtx = e(PluginClientContext.Provider, { value: ctx }, node)
+    return timelineStore !== undefined
+      ? e(SDK.TimelineToolCallsContext.Provider, { value: timelineStore }, withCtx)
+      : withCtx
+  }
   let root: ReturnType<typeof createRoot> | undefined
   await act(async () => {
     root = createRoot(host)
-    root.render(e(PluginClientContext.Provider, { value: ctx }, element))
+    root.render(wrap(element))
   })
   await act(async () => {})
   return {
     host,
     rerender: async (next) => {
-      await act(async () => { root?.render(e(PluginClientContext.Provider, { value: ctx }, next)) })
+      await act(async () => { root?.render(wrap(next)) })
     },
     unmount: () => {
       act(() => root?.unmount())
@@ -146,7 +155,7 @@ test('时间线单行与工作台整卡均点击触发 openConversationDrawer（
     spy,
     e(SubagentToolView, {
       callId: 'call-abc', toolName: 'subagent', input: { prompt: '去修构建' },
-      status: 'running', conversationId: 1, siblingCalls: [],
+      status: 'running', conversationId: 1,
     }),
   )
   try {
@@ -240,16 +249,20 @@ test('历史续接行不展开详情，点击统一打开子会话抽屉', { tim
   const spy = makeSpyCtx()
   const mod = await importWorkflowClientModule()
   const Tool = mod['SubagentToolView'] as React.ComponentType<Record<string, unknown>>
-  const oldOutput = { execution: { conversationId: 11 } }
-  const oldResult = JSON.stringify(oldOutput)
-  const { host, unmount } = await mountClient(spy, e(Tool, {
-    callId: 'old-call', toolName: 'subagent', status: 'error', isError: true, conversationId: 1,
-    input: { prompt: '首次任务' }, result: oldResult, structuredOutput: oldOutput,
-    siblingCalls: [
-      { callId: 'old-call', toolName: 'subagent', status: 'error', result: oldResult, structuredOutput: oldOutput },
-      { callId: 'new-call', toolName: 'subagent', status: 'running', input: { resume: '11' } },
-    ],
-  }))
+  const oldOutput = { ok: false, execution: { conversationId: 11 } }
+  const { host, unmount } = await mountClient(
+    spy,
+    e(Tool, {
+      callId: 'old-call', toolName: 'subagent', status: 'error', isError: true, conversationId: 1,
+      input: { prompt: '首次任务' }, result: 'subagent_failed: error', presentationMeta: oldOutput,
+    }),
+    {
+      timelineToolCalls: [
+        { callId: 'old-call', toolName: 'subagent', index: 0, status: 'error', presentationMeta: oldOutput },
+        { callId: 'new-call', toolName: 'subagent', index: 1, status: 'running', input: { resume: '11' } },
+      ],
+    },
+  )
   try {
     const row = host.querySelector('button.trace-row') as HTMLButtonElement
     assert.ok(row !== null)
@@ -285,10 +298,10 @@ test('外部子代理在工作台渲染摘要（无原生子会话且不虚构�
   const mod = await importWorkflowClientModule()
   const Tool = mod['SubagentToolView'] as React.ComponentType<Record<string, unknown>>
   const Panel = mod['WorkflowWorkbenchPanel'] as React.ComponentType<Record<string, unknown>>
-  const extOut = { execution: { executionId: 'pane-42' } }
+  const extOut = { ok: true, execution: { executionId: 'pane-42' } }
   const { host, rerender, unmount } = await mountClient(spy, e(Tool, {
     callId: 'external-call', toolName: 'subagent', status: 'done', conversationId: 1,
-    input: { prompt: '外部任务' }, result: JSON.stringify(extOut), structuredOutput: extOut,
+    input: { prompt: '外部任务' }, result: 'done', presentationMeta: extOut,
   }))
   try {
     const row = host.querySelector('button.workflow-trace-row-btn') as HTMLElement | null
@@ -332,7 +345,7 @@ test('工作流时间线点击定位工作台，工作台节点内嵌子代理�
     spy,
     e(WorkflowToolView, {
       callId: 'wf_call', toolName: 'SubagentWorkflow', input: { script: 'x' },
-      status: 'done', conversationId: 1, siblingCalls: [],
+      status: 'done', conversationId: 1,
     }),
   )
   try {
@@ -915,9 +928,9 @@ test('SubagentToolView：.trace-tool-name 主显任务名、次显 #id 与 @prof
       toolName: 'subagent',
       input: { prompt: '修复测试超时' },
       status: 'done',
-      result: JSON.stringify({ ok: true, execution: { conversationId: 11, nodeId: 'remote-node' } }),
+      result: 'done',
+      presentationMeta: { ok: true, execution: { conversationId: 11, nodeId: 'remote-node' } },
       conversationId: 1,
-      siblingCalls: [],
     }),
   )
   try {
@@ -932,9 +945,9 @@ test('SubagentToolView：.trace-tool-name 主显任务名、次显 #id 与 @prof
         toolName: 'subagent',
         input: {},
         status: 'done',
-        result: JSON.stringify({ ok: true, execution: { conversationId: 12 } }),
+        result: 'done',
+        presentationMeta: { ok: true, execution: { conversationId: 12 } },
         conversationId: 1,
-        siblingCalls: [],
       }),
     )
     assert.equal(host.querySelector('.trace-tool-name')?.textContent, 'Subagent #12', '无任何名称来源时回退 Subagent #12')

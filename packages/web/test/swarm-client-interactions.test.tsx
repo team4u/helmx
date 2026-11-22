@@ -527,13 +527,14 @@ describe("swarm-client-interactions", () => {
   test('SwarmToolView：dispatch 完成态点击打开成员会话抽屉，黑板发布行打开工作台面板，运行中无目标行展开原始详情', { timeout: 60_000 }, async () => {
     const spy = makeSpyCtx({ conversationId: 50 })
 
-    // dispatch_worker done：解析结果 JSON 中的 workerConversationId，点击打开子会话抽屉
+    // dispatch_worker done：读取 presentationMeta 中的 workerConversationId，点击打开子会话抽屉
     const dispatchMount = await mount(
       spy,
       e(components.SwarmToolView, toolViewProps({
         toolName: 'swarm_dispatch_worker',
         input: { name: 'author', prompt: 'Implement token refresh in isolated worktree and post handoff when done' },
-        result: JSON.stringify({ workerConversationId: 51, groupId: 'grp-live', name: 'author', postSeq: 1 }),
+        result: 'Dispatched @author (#51) in group grp-live, brief=#1.',
+        presentationMeta: { workerConversationId: 51, groupId: 'grp-live', memberName: 'author', seq: 1 },
         durationMs: 4200,
       })),
     )
@@ -559,7 +560,8 @@ describe("swarm-client-interactions", () => {
         callId: 'call-2',
         toolName: 'swarm_board_post',
         input: { to: ['verifier'], kind: 'handoff', body: 'Token refresh implemented, ready for review.' },
-        result: JSON.stringify({ post: { seq: 2, groupId: 'grp-live', kind: 'handoff', body: 'Token refresh implemented, ready for review.', from: 'coordinator', to: ['verifier'], resolvedTargets: ['verifier'], wake: true, refs: [], channel: 'main', createdAt: 1500 } }),
+        result: 'Posted #2 [handoff] in #main -> verifier (wake=true).',
+        presentationMeta: { groupId: 'grp-live', postKind: 'handoff', seq: 2 },
       })),
     )
     try {
@@ -1139,7 +1141,7 @@ describe("swarm-client-interactions", () => {
       { done: 1, total: 2 },
     )
 
-    // SwarmToolView scopes @member lookup to current group, renders .trace-row, prefers structuredOutput
+    // SwarmToolView scopes @member lookup to current group, renders .trace-row, reads presentationMeta
     setStubState({
       docs: {
         index: {
@@ -1159,7 +1161,7 @@ describe("swarm-client-interactions", () => {
         toolName: 'swarm_inspect_worker',
         input: { groupId: 'grp-live', name: 'author' },
         result: 'Member @author (#51)',
-        structuredOutput: { groupId: 'grp-live', conversationId: 51, name: 'author' },
+        presentationMeta: { groupId: 'grp-live', workerConversationId: 51, memberName: 'author' },
       })),
     )
     try {
@@ -1171,6 +1173,27 @@ describe("swarm-client-interactions", () => {
       assert.deepEqual(tvSpy.drawerCalls, [51], '按当前组过滤同短名成员，绝不跳到并发他组 #901')
     } finally {
       tvMount.unmount()
+    }
+
+    // Without workerConversationId in presentationMeta, @member lookup stays scoped to targetGroupId
+    const scopedLookupSpy = makeSpyCtx({ conversationId: 50 })
+    const scopedLookupMount = await mount(
+      scopedLookupSpy,
+      e(components.SwarmToolView, toolViewProps({
+        toolName: 'swarm_inspect_worker',
+        input: { groupId: 'grp-live', name: 'author' },
+        status: 'running',
+        presentationMeta: { groupId: 'grp-live', memberName: 'author' },
+      })),
+    )
+    try {
+      const btn = scopedLookupMount.host.querySelector<HTMLButtonElement>('.sw-trace-row-btn')!
+      await act(async () => {
+        btn.click()
+      })
+      assert.deepEqual(scopedLookupSpy.drawerCalls, [51], '省略 workerConversationId 时按当前组查找 #51，不误命中他组 #901')
+    } finally {
+      scopedLookupMount.unmount()
     }
 
     // SwarmActiveTray consumes live.tools / pendingAsks from useConversation(includeDetail: false)
@@ -1245,7 +1268,8 @@ describe("swarm-client-interactions", () => {
         callId: 'call-ch-1',
         toolName: 'swarm_manage_channel',
         input: { op: 'subscribe', channel: 'review', member: 'verifier' },
-        result: JSON.stringify({ groupId: 'grp-live', channels: [{ name: 'main' }, { name: 'review' }] }),
+        result: 'Channel #review (subscribe for @verifier) updated in group grp-live.',
+        presentationMeta: { groupId: 'grp-live' },
       })),
     )
     try {
@@ -1264,7 +1288,8 @@ describe("swarm-client-interactions", () => {
         callId: 'call-sw-1',
         toolName: 'swarm_switch_worker_model',
         input: { name: 'author', model: 'openai/gpt-5', prompt: 'Resume now' },
-        result: JSON.stringify({ workerConversationId: 51, name: 'author', model: 'openai/gpt-5', postSeq: 9 }),
+        result: 'Switched @author (#51) model to openai/gpt-5 and woke with brief #9.',
+        presentationMeta: { workerConversationId: 51, memberName: 'author', model: 'openai/gpt-5', seq: 9 },
       })),
     )
     try {

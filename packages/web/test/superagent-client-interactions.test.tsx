@@ -263,7 +263,7 @@ describe("superagent-client-interactions", () => {
       e(components.SuperAgentDispatchToolView, {
         callId: 'call-1', toolName: 'dispatch_worker',
         input: { prompt: '去修构建', profileId: 'coder', threadKey: 'ci/main' },
-        status: 'done', result: { workerConversationId: 11 }, structuredOutput: { workerConversationId: 11 },
+        status: 'done', result: 'Dispatched background worker #11.', presentationMeta: { workerConversationId: 11 },
         conversationId: 7,
       }),
     )
@@ -499,8 +499,8 @@ describe("superagent-client-interactions", () => {
         toolName: 'dispatch_worker',
         input: { prompt: '去修构建', profileId: 'coder' },
         status: 'done',
-        result: { workerConversationId: 11 },
-        structuredOutput: { workerConversationId: 11 },
+        result: 'Dispatched background worker #11.',
+        presentationMeta: { workerConversationId: 11 },
         conversationId: 7,
       }),
     )

@@ -8,7 +8,12 @@ import type {
   ProfileStarterPrompt,
 } from '@helmx/protocol/browser'
 import { artifactsApi } from '../lib/api.js'
-import { HelmxIcon, CopyButton } from '@helmx/plugin-client'
+import {
+  HelmxIcon,
+  CopyButton,
+  createTimelineToolCallsStore,
+  TimelineToolCallsContext,
+} from '@helmx/plugin-client'
 import {
   useConversationDetail,
   useConversationSummary,
@@ -21,6 +26,7 @@ import {
 } from '../lib/store-context.js'
 
 const EMPTY_RESOLVED_ASKS: ResolvedAskEntry[] = []
+const useIsomorphicLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect
 import { useStableCallback } from '../lib/use-stable-callback.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import type { WebMessageTranslator } from '../i18n/catalog.js'
@@ -31,7 +37,7 @@ import {
   buildActiveEntryIndex,
   buildAssistantModelBoundaries,
   buildTimelineItems,
-  collectSiblingCalls,
+  collectToolCallsByName,
   findLatestProcessTurnKey,
   lastEditableHumanInput,
   queuedAgentTextCollapse,
@@ -840,9 +846,13 @@ export function ConversationTimeline({
 
   const hasLiveTurn = items.some((item) => item.kind === 'assistant' && item.live)
 
-  // Lightweight summaries of all tool calls: collected once, passed through to every tool.view
-  // plugin component (siblingCalls let them compute same-target dedupe / resume continuation themselves).
-  const siblingCalls = useMemo(() => collectSiblingCalls(items), [items])
+  // Per-toolName external store replacing O(N^2) siblingCalls prop drilling:
+  // initialized synchronously for SSR/first-render parity and synced on commit with
+  // shallow-equal bucket reference preservation (unrelated toolName updates notify nobody).
+  const [toolCallsStore] = useState(() => createTimelineToolCallsStore(collectToolCallsByName(items)))
+  useIsomorphicLayoutEffect(() => {
+    toolCallsStore.update(collectToolCallsByName(items))
+  }, [toolCallsStore, items])
 
   // Effective-model boundary index (one pure scan): each assistant turn with a model switch gets
   // its new model identity indexed by key; the renderer only looks the table up.
@@ -1312,7 +1322,8 @@ export function ConversationTimeline({
           ) : null}
         </div>
       ) : null}
-      <div ref={innerRef} className="timeline-inner">
+      <TimelineToolCallsContext.Provider value={toolCallsStore}>
+        <div ref={innerRef} className="timeline-inner">
         {items.map((item) => {
           // Containment class: only finished historical rows get it (live/queued/latest assistant
           // rows/released targets resolve to an empty string and render normally).
@@ -1374,7 +1385,6 @@ export function ConversationTimeline({
               <AssistantTurnView
                 turn={item}
                 conversation={conversation}
-                siblingCalls={siblingCalls}
                 anchorEntry={resolveAssistantAnchorEntry(item.entryIds, activeEntriesById)}
                 isLatestTurn={item.key === lastAssistantKey}
                 processShortcut={processToggle?.turnKey === item.key ? processToggle.command : undefined}
@@ -1401,7 +1411,8 @@ export function ConversationTimeline({
         {conversation.status === 'error' ? (
           <TurnErrorNotice conversation={conversation} detailEntries={detailEntries} onRequestEdit={onRequestEdit} />
         ) : null}
-      </div>
+        </div>
+      </TimelineToolCallsContext.Provider>
       <div ref={bottomRef} className="timeline-scroll-anchor" />
       </div>
       {showScrollBottom ? (

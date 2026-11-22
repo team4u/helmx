@@ -22,12 +22,16 @@ import {
   type ToolExecutionResult,
   type ToolRegistration,
 } from '@earendil-works/pi-durable'
-import { HelmxError, matchesConversationScope } from '@helmx/protocol'
-import type { ConversationSummary } from '@helmx/protocol'
+import {
+  HelmxError,
+  KERNEL_TOOL_PRESENTATION_META_SCHEMAS,
+  matchesConversationScope,
+} from '@helmx/protocol'
+import type { ConversationSummary, JsonSchema } from '@helmx/protocol'
 import type { DerivedToolSpec, PluginHost } from '../plugins/index.js'
 import type { HandledToolCallEntry } from './hook-bridge.js'
 import { createRunActionTool, type KernelToolHost } from './kernel-tools.js'
-import { pluginToolResult } from './runtime-helpers.js'
+import { actionToolResult, pluginToolResult } from './runtime-helpers.js'
 import { throwIfToolAborted, type HelmxToolDeps } from './tool-deps.js'
 import {
   createBashTool,
@@ -96,8 +100,40 @@ function wrapToolRegistration<TParameters extends object, TDetails extends JsonV
   } as unknown as ToolRegistration
 }
 
+export interface ToolSchemaEntry {
+  readonly structuredOutputSchema?: JsonSchema
+  readonly presentationMetaSchema?: JsonSchema
+}
+
+interface RegistryToolSchemaMaps {
+  readonly kernel: Map<string, ToolSchemaEntry>
+  readonly plugin: Map<string, ToolSchemaEntry>
+}
+
+const registryToolSchemas = new WeakMap<object, RegistryToolSchemaMaps>()
+
+/** Lookup registered kernel/plugin tool schemas attached to a shared SDK registry instance. */
+export function lookupRegistryToolSchemas(registry: object, toolName: string): ToolSchemaEntry | undefined {
+  const maps = registryToolSchemas.get(registry)
+  if (!maps) return undefined
+  return maps.plugin.get(toolName) ?? maps.kernel.get(toolName)
+}
+
 export class RuntimeToolRegistry {
-  constructor(private readonly options: RuntimeToolRegistryOptions) {}
+  private readonly kernelToolSchemas = new Map<string, ToolSchemaEntry>()
+  private readonly pluginToolSchemas = new Map<string, ToolSchemaEntry>()
+
+  constructor(private readonly options: RuntimeToolRegistryOptions) {
+    registryToolSchemas.set(options.registry, {
+      kernel: this.kernelToolSchemas,
+      plugin: this.pluginToolSchemas,
+    })
+  }
+
+  /** Lookup declared schemas for an installed kernel or plugin tool by name. */
+  getToolSchemas(toolName: string): ToolSchemaEntry | undefined {
+    return this.pluginToolSchemas.get(toolName) ?? this.kernelToolSchemas.get(toolName)
+  }
 
   /**
    * Install foundational kernel tools (`bash`/`read`/`write`/`edit`/`read_artifact`/`register_artifact` +
@@ -164,6 +200,17 @@ export class RuntimeToolRegistry {
       wrapToolRegistration(handledToolCalls, createRegisterArtifactTool(toolDeps)),
       wrapToolRegistration(handledToolCalls, createRunActionTool(toolHost)),
     ]
+    this.kernelToolSchemas.clear()
+    for (const tool of kernelTools) {
+      const structuredOutputSchema = (tool as { structuredOutputSchema?: JsonSchema }).structuredOutputSchema
+      const presentationMetaSchema = Object.hasOwn(KERNEL_TOOL_PRESENTATION_META_SCHEMAS, tool.name)
+        ? KERNEL_TOOL_PRESENTATION_META_SCHEMAS[tool.name]
+        : undefined
+      this.kernelToolSchemas.set(tool.name, {
+        ...(structuredOutputSchema !== undefined ? { structuredOutputSchema } : {}),
+        ...(presentationMetaSchema !== undefined ? { presentationMetaSchema } : {}),
+      })
+    }
     registry.install(defineExtension({ name: 'helmx-core', tools: kernelTools }))
   }
 
@@ -177,6 +224,13 @@ export class RuntimeToolRegistry {
     const { registry, getPluginHost, redact, handledToolCalls } = this.options
     const host = getPluginHost()
     if (!host) return
+    this.pluginToolSchemas.clear()
+    for (const spec of specs) {
+      this.pluginToolSchemas.set(spec.name, {
+        ...(spec.structuredOutputSchema !== undefined ? { structuredOutputSchema: spec.structuredOutputSchema } : {}),
+        ...(spec.presentationMetaSchema !== undefined ? { presentationMetaSchema: spec.presentationMetaSchema } : {}),
+      })
+    }
     const tools: ToolRegistration[] = specs.map((spec) => {
       const parameters = (spec.inputSchema ?? { type: 'object', properties: {} }) as Record<string, unknown>
       const raw = defineTool({
@@ -214,11 +268,22 @@ export class RuntimeToolRegistry {
                 }
               : {}),
           })
-          // Wrap arbitrary plugin return value into the SDK `ToolExecutionResult` contract.
+          const callId = typeof toolApi.callId === 'string' && toolApi.callId !== '' ? toolApi.callId : undefined
+          if (spec.sourceKind === 'action') {
+            return actionToolResult(result, args, (text) => redact(text), {
+              structuredOutputSchema: spec.structuredOutputSchema,
+              presentationMetaSchema: spec.presentationMetaSchema,
+              projectPresentationMeta: spec.projectPresentationMeta,
+              toolName: spec.name,
+              ...(callId !== undefined ? { callId } : {}),
+            }) as ToolExecutionResult
+          }
+          // Wrap plugin `ctx.tool` return value into the SDK `ToolExecutionResult` contract.
           return pluginToolResult(result, (text) => redact(text), {
             structuredOutputSchema: spec.structuredOutputSchema,
+            presentationMetaSchema: spec.presentationMetaSchema,
             toolName: spec.name,
-            ...(typeof toolApi.callId === 'string' && toolApi.callId !== '' ? { callId: toolApi.callId } : {}),
+            ...(callId !== undefined ? { callId } : {}),
           }) as ToolExecutionResult
         },
       })

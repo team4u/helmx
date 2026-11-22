@@ -12,12 +12,13 @@ import {
   fauxAssistantMessage,
   fauxToolCall,
 } from '@earendil-works/pi-ai/providers/faux'
-import { HelmxError, type TurnSettledPayload } from '@helmx/protocol'
+import { HelmxError, TOOL_PRESENTATION_META_MAX_BYTES, type TurnSettledPayload } from '@helmx/protocol'
 import { writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { after, before, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
+import { actionToolAlias } from '../src/plugins/index.js'
 import { FTS_SCHEMA_VERSION, FTS_SCHEMA_VERSION_KEY, openHelmxDatabase } from '../src/runtime/sqlite.js'
 import { HelmxStore } from '../src/runtime/store.js'
 import { KernelRuntime } from '../src/runtime/index.js'
@@ -1113,6 +1114,248 @@ describe('real PluginHost integration', { timeout: 60_000 }, () => {
       await kernel.waitForIdle(1)
       assert.equal(await kernel.getLastAssistantText(1), 'tool done')
     } finally {
+      await kernel.close()
+    }
+  })
+
+  it('tool presentationMeta end-to-end: separates output/structuredOutput/presentationMeta, fixes exposeAsTool business objects, and guards tool_result hooks in pi-durable persistence', { timeout: 60_000 }, async () => {
+    const dir = join(root, 'p2-presentation-meta')
+    const kernel = await openRuntime(dir)
+    const disposeSecret = kernel.stash.addRedaction('TOP_SECRET_META_TOKEN')
+    try {
+      const seenBeforeTurnTools: Array<{ name: string; structuredOutputSchema?: unknown; presentationMetaSchema?: unknown }> = []
+      let hookMode: 'passthrough' | 'valid_transform' | 'invalid_transform' | 'legacy_details' = 'passthrough'
+
+      const metaSchema = {
+        type: 'object',
+        properties: { badge: { type: 'string' }, count: { type: 'integer' } },
+        required: ['badge'],
+        additionalProperties: false,
+      }
+      const actionOutputSchema = {
+        type: 'object',
+        properties: {
+          output: { type: 'number' },
+          isError: { type: 'string' },
+          structuredOutput: { type: 'string' },
+        },
+        required: ['output', 'isError'],
+      }
+
+      await kernel.plugins.register({
+        id: 'test:tool-contract',
+        definePlugin(ctx) {
+          ctx.tool<{ mode: string }>({
+            name: 'contract_tool',
+            description: 'exercises output/structuredOutput/presentationMeta separation',
+            inputSchema: {
+              type: 'object',
+              properties: { mode: { type: 'string' } },
+              required: ['mode'],
+            },
+            structuredOutputSchema: {
+              type: 'object',
+              properties: { ok: { type: 'boolean' }, fullPayload: { type: 'string' } },
+              required: ['ok', 'fullPayload'],
+            },
+            presentationMetaSchema: metaSchema,
+            execute(input) {
+              if (input.mode === 'structured_only') {
+                return {
+                  output: 'structured only ok',
+                  structuredOutput: { ok: true, fullPayload: 'never-persisted-to-details' },
+                }
+              }
+              if (input.mode === 'oversized_meta') {
+                return {
+                  output: 'oversized',
+                  structuredOutput: { ok: true, fullPayload: 'small' },
+                  presentationMeta: { badge: 'x'.repeat(TOOL_PRESENTATION_META_MAX_BYTES) },
+                }
+              }
+              return {
+                output: 'model text TOP_SECRET_META_TOKEN',
+                structuredOutput: { ok: true, fullPayload: 'full-only TOP_SECRET_META_TOKEN' },
+                presentationMeta: { badge: 'ui TOP_SECRET_META_TOKEN', count: 5 },
+              }
+            },
+          })
+
+          ctx.action<{ label: string }, { output: number; isError: string; structuredOutput: string }>({
+            id: 'biz_echo',
+            description: 'exposeAsTool action returning business object colliding with envelope keys',
+            inputSchema: {
+              type: 'object',
+              properties: { label: { type: 'string' } },
+              required: ['label'],
+            },
+            outputSchema: actionOutputSchema,
+            exposeAsTool: true,
+            presentationMetaSchema: metaSchema,
+            projectPresentationMeta: (input, out) => ({
+              badge: `${input.label}:${out.output}:TOP_SECRET_META_TOKEN`,
+              count: out.output,
+            }),
+            handler: () => ({
+              output: 7,
+              isError: 'business-text',
+              structuredOutput: 'not-an-envelope',
+            }),
+          })
+
+          ctx.hook.onBeforeTurn((payload) => {
+            if (seenBeforeTurnTools.length === 0) {
+              for (const t of payload.tools) {
+                seenBeforeTurnTools.push({
+                  name: t.name,
+                  structuredOutputSchema: t.structuredOutputSchema,
+                  presentationMetaSchema: t.presentationMetaSchema,
+                })
+              }
+            }
+            return { action: 'continue' }
+          })
+
+          ctx.hook.onToolResult((payload) => {
+            if (payload.toolName !== 'contract_tool') return { action: 'continue' }
+            if (hookMode === 'valid_transform') {
+              return {
+                action: 'transform',
+                value: {
+                  ...payload,
+                  result: {
+                    ...payload.result,
+                    presentationMeta: { badge: 'hook-rewritten TOP_SECRET_META_TOKEN', count: 9 },
+                  },
+                },
+              }
+            }
+            if (hookMode === 'invalid_transform') {
+              return {
+                action: 'transform',
+                value: {
+                  ...payload,
+                  result: {
+                    ...payload.result,
+                    presentationMeta: { badge: 'bad', unexpectedField: true },
+                  },
+                },
+              }
+            }
+            if (hookMode === 'legacy_details') {
+              return {
+                action: 'handled',
+                result: { output: 'handled', details: { badge: 'legacy' } },
+              }
+            }
+            return { action: 'continue' }
+          })
+        },
+      })
+      kernel.refreshPluginTools()
+
+      const bizAlias = actionToolAlias('test:tool-contract', 'biz_echo')
+
+      // Turn 1: separated meta + structured_only + oversized_meta + exposeAsTool business object.
+      kernel.__faux.setResponses([
+        fauxAssistantMessage([
+          fauxToolCall('contract_tool', { mode: 'separated' }, { id: 'tc-sep' }),
+          fauxToolCall('contract_tool', { mode: 'structured_only' }, { id: 'tc-struct' }),
+          fauxToolCall('contract_tool', { mode: 'oversized_meta' }, { id: 'tc-over' }),
+          fauxToolCall(bizAlias, { label: 'biz' }, { id: 'tc-biz' }),
+        ], { stopReason: 'toolUse' }),
+        fauxAssistantMessage('turn 1 complete'),
+      ])
+      await kernel.submitInput(1, 'run phase 1 tool contract checks')
+      await kernel.waitForIdle(1)
+
+      // Turn 2: valid tool_result transform -> redacted presentationMeta persisted.
+      hookMode = 'valid_transform'
+      kernel.__faux.setResponses([
+        fauxAssistantMessage([fauxToolCall('contract_tool', { mode: 'separated' }, { id: 'tc-hook-ok' })], { stopReason: 'toolUse' }),
+        fauxAssistantMessage('turn 2 complete'),
+      ])
+      await kernel.submitInput(1, 'run valid transform')
+      await kernel.waitForIdle(1)
+
+      // Turn 3: invalid tool_result transform -> explicit error, details omitted.
+      hookMode = 'invalid_transform'
+      kernel.__faux.setResponses([
+        fauxAssistantMessage([fauxToolCall('contract_tool', { mode: 'separated' }, { id: 'tc-hook-bad' })], { stopReason: 'toolUse' }),
+        fauxAssistantMessage('turn 3 complete'),
+      ])
+      await kernel.submitInput(1, 'run invalid transform')
+      await kernel.waitForIdle(1)
+
+      // Turn 4: tool_result handled with legacy details -> explicit error, details omitted.
+      hookMode = 'legacy_details'
+      kernel.__faux.setResponses([
+        fauxAssistantMessage([fauxToolCall('contract_tool', { mode: 'separated' }, { id: 'tc-hook-legacy' })], { stopReason: 'toolUse' }),
+        fauxAssistantMessage('turn 4 complete'),
+      ])
+      await kernel.submitInput(1, 'run legacy details handled')
+      await kernel.waitForIdle(1)
+
+      // Verify before_turn projected structuredOutputSchema & presentationMetaSchema.
+      const btContract = seenBeforeTurnTools.find((t) => t.name === 'contract_tool')
+      assert.ok(btContract?.structuredOutputSchema !== undefined)
+      assert.deepEqual(btContract?.presentationMetaSchema, metaSchema)
+      const btBiz = seenBeforeTurnTools.find((t) => t.name === bizAlias)
+      assert.deepEqual(btBiz?.structuredOutputSchema, actionOutputSchema)
+      assert.deepEqual(btBiz?.presentationMetaSchema, metaSchema)
+
+      // Inspect persisted pi.tool-result entries via getConversationDetail.
+      const detail = await kernel.getConversationDetail(1, { limit: 100 })
+      const byCallId = new Map<string, { isError?: boolean; details?: unknown; content?: Array<{ type?: string; text?: string }> }>()
+      for (const entry of detail.entries) {
+        if (entry.kind !== 'pi.tool-result') continue
+        const msg = (entry.model as Array<{ toolCallId?: string; isError?: boolean; details?: unknown; content?: Array<{ type?: string; text?: string }> }> | undefined)?.[0]
+        if (msg?.toolCallId !== undefined) byCallId.set(msg.toolCallId, msg)
+      }
+
+      // 1. Separated: details has ONLY redacted presentationMeta (no fullPayload), content has redacted output.
+      const sep = byCallId.get('tc-sep')!
+      assert.equal(sep.isError, false)
+      assert.deepEqual(sep.details, { badge: 'ui [REDACTED]', count: 5 })
+      assert.ok(!(sep.content?.[0]?.text ?? '').includes('TOP_SECRET_META_TOKEN'))
+
+      // 2. structured_only: details is NOT auto-mirrored.
+      const structOnly = byCallId.get('tc-struct')!
+      assert.equal(structOnly.isError, false)
+      assert.equal(structOnly.details, undefined, 'structuredOutput must never auto-mirror into persisted details')
+
+      // 3. oversized_meta: explicit failure, details NOT persisted.
+      const over = byCallId.get('tc-over')!
+      assert.equal(over.isError, true)
+      assert.equal(over.details, undefined)
+
+      // 4. exposeAsTool naked business object: succeeds, details holds redacted projected presentationMeta.
+      const biz = byCallId.get('tc-biz')!
+      assert.equal(biz.isError, false)
+      assert.deepEqual(JSON.parse(biz.content?.[0]?.text ?? '{}'), {
+        output: 7,
+        isError: 'business-text',
+        structuredOutput: 'not-an-envelope',
+      })
+      assert.deepEqual(biz.details, { badge: 'biz:7:[REDACTED]', count: 7 })
+
+      // 5. valid tool_result transform: updated presentationMeta redacted & persisted.
+      const hookOk = byCallId.get('tc-hook-ok')!
+      assert.equal(hookOk.isError, false)
+      assert.deepEqual(hookOk.details, { badge: 'hook-rewritten [REDACTED]', count: 9 })
+
+      // 6. invalid tool_result transform & legacy details handled: explicit failure, details omitted.
+      const hookBad = byCallId.get('tc-hook-bad')!
+      assert.equal(hookBad.isError, true)
+      assert.equal(hookBad.details, undefined)
+      assert.match(hookBad.content?.[0]?.text ?? '', /tool_result_failed/)
+
+      const hookLegacy = byCallId.get('tc-hook-legacy')!
+      assert.equal(hookLegacy.isError, true)
+      assert.equal(hookLegacy.details, undefined)
+      assert.match(hookLegacy.content?.[0]?.text ?? '', /legacy details/)
+    } finally {
+      disposeSecret()
       await kernel.close()
     }
   })

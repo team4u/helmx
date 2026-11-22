@@ -1,6 +1,6 @@
 /**
- * Hook pipeline dispatch coordinator: targets only plugins that are enabled and idle at snapshot time,
- * tracks in-flight tasks, and emits redacted warning notifications for isolated hook failures.
+ * Hook pipeline dispatch coordinator: targets only plugins that are enabled, idle, and error-free at snapshot time
+ * (aligned with `isPluginStateActive`), tracks in-flight tasks, and emits redacted warning notifications for isolated hook failures.
  */
 import {
   HelmxError,
@@ -22,7 +22,8 @@ interface HookDispatchDeps {
 
 function isHookActive(plugins: ReadonlyMap<string, PluginState>, pluginId: string): boolean {
   const s = plugins.get(pluginId);
-  return !!s && s.enabled && s.phase === 'idle';
+  // Mirror `isPluginStateActive`: exclude disabled, transitioning (`defining`/`deactivating`), and failed (`lastError !== undefined`) plugins.
+  return s !== undefined && s.enabled && s.phase === 'idle' && s.lastError === undefined;
 }
 
 function notifyIsolatedHookErrors(

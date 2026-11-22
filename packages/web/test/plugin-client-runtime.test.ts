@@ -296,48 +296,56 @@ describe("plugin-client-runtime", () => {
     }
   })
 
-  test('reconcilePluginClientCache 增量对账：保留未变更启用插件，逐出停用/变更项并精确通知', { timeout: 60_000 }, async () => {
+  test('reconcilePluginClientCache 增量对账：保留未变更启用插件，逐出停用/失败/变更项并精确通知', { timeout: 60_000 }, async () => {
     const PanelA = () => null
     const PanelB = () => null
     const PanelC = () => null
+    const PanelD = () => null
     seedPluginClientModule('keep-p', 'index.tsx', { Panel: PanelA, __helmxClientCss: '.keep{}' }, 'hash-keep')
     seedPluginClientModule('change-p', 'index.tsx', { Panel: PanelB, __helmxClientCss: '.chg{}' }, 'hash-old')
     seedPluginClientModule('disable-p', 'index.tsx', { Panel: PanelC, __helmxClientCss: '.dis{}' }, 'hash-dis')
+    seedPluginClientModule('fail-p', 'index.tsx', { Panel: PanelD, __helmxClientCss: '.fail{}' }, 'hash-fail')
 
     let notifications = 0
     const unsub = subscribePluginClientCacheInvalidation(() => { notifications++ })
     const revKeep0 = getPluginClientCacheRevision('keep-p')
     const revChange0 = getPluginClientCacheRevision('change-p')
     const revDisable0 = getPluginClientCacheRevision('disable-p')
+    const revFail0 = getPluginClientCacheRevision('fail-p')
 
     try {
-      // 1. 全部匹配且启用：0 逐出，不递增 revision，不通知
+      // 1. 全部匹配且启用（含纯 publicConfig 变更）：0 逐出，不递增 revision，不通知
       const zero = reconcilePluginClientCache([
-        { id: 'keep-p', name: 'K', locked: false, enabled: true, status: 'active', hooks: [], actions: [], tools: [], clientHashes: { 'index.tsx': 'hash-keep' } },
+        { id: 'keep-p', name: 'K', locked: false, enabled: true, status: 'active', hooks: [], actions: [], tools: [], clientHashes: { 'index.tsx': 'hash-keep' }, publicConfig: { refreshSec: 30 } },
         { id: 'change-p', name: 'C', locked: false, enabled: true, status: 'active', hooks: [], actions: [], tools: [], clientHashes: { 'index.tsx': 'hash-old' } },
         { id: 'disable-p', name: 'D', locked: false, enabled: true, status: 'active', hooks: [], actions: [], tools: [], clientHashes: { 'index.tsx': 'hash-dis' } },
+        { id: 'fail-p', name: 'F', locked: false, enabled: true, status: 'active', hooks: [], actions: [], tools: [], clientHashes: { 'index.tsx': 'hash-fail' } },
       ])
       assert.equal(zero, 0)
       assert.equal(notifications, 0)
       assert.equal(getPluginClientCacheRevision('keep-p'), revKeep0)
 
-      // 2. keep-p 不变，change-p 换 hash，disable-p 停用：仅逐出后两者
+      // 2. keep-p 不变，change-p 换 hash，disable-p 停用，fail-p 处于 enabled=true+status='failed'：仅逐出后三者
       const evicted = reconcilePluginClientCache([
         { id: 'keep-p', name: 'K', locked: false, enabled: true, status: 'active', hooks: [], actions: [], tools: [], clientHashes: { 'index.tsx': 'hash-keep' } },
         { id: 'change-p', name: 'C', locked: false, enabled: true, status: 'active', hooks: [], actions: [], tools: [], clientHashes: { 'index.tsx': 'hash-new' } },
         { id: 'disable-p', name: 'D', locked: false, enabled: false, status: 'disabled', hooks: [], actions: [], tools: [] },
+        { id: 'fail-p', name: 'F', locked: false, enabled: true, status: 'failed', hooks: [], actions: [], tools: [], clientHashes: { 'index.tsx': 'hash-fail' } },
       ])
-      assert.equal(evicted, 2)
+      assert.equal(evicted, 3)
       assert.equal(notifications, 1)
       assert.equal(getPluginClientCacheRevision('keep-p'), revKeep0, '未变更插件 revision 不变')
       assert.notEqual(getPluginClientCacheRevision('change-p'), revChange0)
       assert.notEqual(getPluginClientCacheRevision('disable-p'), revDisable0)
+      assert.notEqual(getPluginClientCacheRevision('fail-p'), revFail0)
       assert.equal(getCachedClientComponent('keep-p', 'index.tsx', 'Panel', 'hash-keep'), PanelA)
       assert.ok(document.querySelector('style[data-helmx-plugin-css="keep-p::index.tsx"]') !== null)
       assert.equal(getCachedClientComponent('change-p', 'index.tsx', 'Panel'), undefined)
       assert.equal(getCachedClientComponent('disable-p', 'index.tsx', 'Panel'), undefined)
+      assert.equal(getCachedClientComponent('fail-p', 'index.tsx', 'Panel'), undefined)
       assert.ok(document.querySelector('style[data-helmx-plugin-css="change-p::index.tsx"]') === null)
       assert.ok(document.querySelector('style[data-helmx-plugin-css="disable-p::index.tsx"]') === null)
+      assert.ok(document.querySelector('style[data-helmx-plugin-css="fail-p::index.tsx"]') === null)
     } finally {
       unsub()
     }

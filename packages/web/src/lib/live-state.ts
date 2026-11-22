@@ -1,4 +1,21 @@
-import type { AskSpec, ConversationDetail, ConversationEntry, ConversationLive, ConversationSummary, HelmxEventFrame, HelmxResumedFrame, HelmxSnapshot, HelmxTransientLiveFrame, NodeInfo, PluginSummary, PluginUiContribution } from '@helmx/protocol/browser'
+import {
+  isPluginSummaryActive,
+  type AskSpec,
+  type ConversationDetail,
+  type ConversationEntry,
+  type ConversationLive,
+  type ConversationSummary,
+  type HelmxEventFrame,
+  type HelmxResumedFrame,
+  type HelmxSnapshot,
+  type HelmxTransientLiveFrame,
+  type NodeInfo,
+  type PluginActivityLike,
+  type PluginSummary,
+  type PluginUiContribution,
+} from '@helmx/protocol/browser'
+
+export { isPluginSummaryActive, type PluginActivityLike }
 
 export interface LiveState {
   seq: number
@@ -33,6 +50,191 @@ function upsert<T extends { id: string | number }>(list: T[], item: T): T[] {
 
 function omit<T>(record: Record<string, T>, key: string): Record<string, T> {
   return Object.fromEntries(Object.entries(record).filter(([name]) => name !== key))
+}
+
+export function sameClientHashes(
+  a: Record<string, string> | undefined,
+  b: Record<string, string> | undefined,
+): boolean {
+  if (a === b) return true
+  if (a === undefined || b === undefined) return false
+  const keysA = Object.keys(a)
+  const keysB = Object.keys(b)
+  if (keysA.length !== keysB.length) return false
+  return keysA.every((key) => Object.hasOwn(b, key) && b[key] === a[key])
+}
+
+export function sameJsonValue(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true
+  if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return false
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false
+    return a.every((item, i) => sameJsonValue(item, b[i]))
+  }
+  const recA = a as Record<string, unknown>
+  const recB = b as Record<string, unknown>
+  const keysA = Object.keys(recA).filter((k) => recA[k] !== undefined)
+  const keysB = Object.keys(recB).filter((k) => recB[k] !== undefined)
+  if (keysA.length !== keysB.length) return false
+  return keysA.every((k) => Object.hasOwn(recB, k) && recB[k] !== undefined && sameJsonValue(recA[k], recB[k]))
+}
+
+function sameNonConfigPluginMetadata(prev: PluginSummary, next: PluginSummary): boolean {
+  const { publicConfig: _prevCfg, status: prevStatus, ...prevRest } = prev
+  const { publicConfig: _nextCfg, status: nextStatus, ...nextRest } = next
+  if ((prevStatus ?? 'active') !== (nextStatus ?? 'active')) return false
+  return sameJsonValue(prevRest, nextRest)
+}
+
+/**
+ * 判定 plugin.changed 是否为纯 publicConfig 配置热更新：
+ * 仅当插件前后均 active、clientHashes / 非配置元数据 / UI 贡献均未改变且 publicConfig
+ * 确实发生变化时才返回 true（其余启停/失败/移除/hash 变化或无配置差异的变更一律按
+ * 完整失效处理，保留重载与迟到结果保护）。
+ */
+export function isConfigOnlyPluginChange(
+  prevPlugin: PluginSummary | undefined,
+  prevUi: readonly PluginUiContribution[],
+  nextPlugin: PluginSummary,
+  nextUi: readonly PluginUiContribution[],
+): boolean {
+  if (prevPlugin === undefined) return false
+  if (!isPluginSummaryActive(prevPlugin) || !isPluginSummaryActive(nextPlugin)) return false
+  if (!sameClientHashes(prevPlugin.clientHashes, nextPlugin.clientHashes)) return false
+  if (!sameNonConfigPluginMetadata(prevPlugin, nextPlugin)) return false
+  if (!sameJsonValue(prevUi, nextUi)) return false
+  return !sameJsonValue(prevPlugin.publicConfig, nextPlugin.publicConfig)
+}
+
+/** 从 `doc:<pluginId>/<name>` 错误键提取 pluginId；非 doc 错误键返回 undefined。 */
+export function extractDocErrorPluginId(key: string): string | undefined {
+  if (!key.startsWith('doc:')) return undefined
+  const slash = key.lastIndexOf('/')
+  return slash > 4 ? key.slice(4, slash) : undefined
+}
+
+/** 按 `doc:<pluginId>/` 前缀集合从 loadErrors 清理过期文档错误（无变化时原引用返回）。 */
+export function omitPluginDocLoadErrors(
+  prev: Record<string, string>,
+  pluginIds: ReadonlySet<string>,
+): Record<string, string> {
+  if (pluginIds.size === 0) return prev
+  let changed = false
+  const next: Record<string, string> = {}
+  for (const [key, value] of Object.entries(prev)) {
+    const pluginId = extractDocErrorPluginId(key)
+    if (pluginId !== undefined && pluginIds.has(pluginId)) {
+      changed = true
+      continue
+    }
+    next[key] = value
+  }
+  return changed ? next : prev
+}
+
+export interface ReconcilePluginsResult {
+  state: LiveState
+  /** 非 active（disabled / failed）或已移除的插件 ID：需关闭 sessionDoc 订阅并逐出缓存。 */
+  inactivePluginIds: Set<string>
+  /** 需清理 `doc:<pluginId>/` 失败抑制、在途请求与 loadErrors 并递增 pluginEpoch 的插件 ID。 */
+  invalidatedDocPluginIds: Set<string>
+}
+
+/**
+ * 按 HTTP 全量插件摘要校准 LiveState：
+ * - 按 `sameJsonValue` 保留未变更插件引用；
+ * - 立即清理非 active（disabled / enabled=true,status=failed）及已移除插件的 `uiContributions` 与 `pluginDocs`；
+ * - 对 active 插件的非纯配置变更（`clientHashes` 或非配置元数据变化）及非 active→active 恢复，
+ *   清理其 `pluginDocs` 并记录到 `invalidatedDocPluginIds`；纯 `publicConfig` 变更保留 `uiContributions`、
+ *   `pluginDocs` 与 doc 请求/错误状态；
+ * - 架构边界：`PluginSummary` 不含 `PluginUiContribution[]`，对仍 active 的插件保留既有 `uiContributions`。
+ */
+export function reconcilePluginsState(
+  state: LiveState,
+  nextPlugins: readonly PluginSummary[],
+): ReconcilePluginsResult {
+  const prevById = new Map(state.plugins.map((p) => [p.id, p]))
+  const nextById = new Map<string, PluginSummary>()
+  const mergedPlugins = nextPlugins.map((incoming) => {
+    const local = prevById.get(incoming.id)
+    const resolved = local !== undefined && sameJsonValue(local, incoming) ? local : incoming
+    nextById.set(resolved.id, resolved)
+    return resolved
+  })
+
+  const activeNextIds = new Set<string>()
+  const inactivePluginIds = new Set<string>()
+  const invalidatedDocPluginIds = new Set<string>()
+
+  for (const plugin of mergedPlugins) {
+    if (isPluginSummaryActive(plugin)) {
+      activeNextIds.add(plugin.id)
+      const prevPlugin = prevById.get(plugin.id)
+      const unchangedOrConfigOnly =
+        prevPlugin !== undefined &&
+        isPluginSummaryActive(prevPlugin) &&
+        (prevPlugin === plugin ||
+          (sameClientHashes(prevPlugin.clientHashes, plugin.clientHashes) &&
+            sameNonConfigPluginMetadata(prevPlugin, plugin)))
+      if (!unchangedOrConfigOnly) {
+        invalidatedDocPluginIds.add(plugin.id)
+      }
+    } else {
+      inactivePluginIds.add(plugin.id)
+      invalidatedDocPluginIds.add(plugin.id)
+    }
+  }
+
+  for (const prevPlugin of state.plugins) {
+    if (!nextById.has(prevPlugin.id)) {
+      inactivePluginIds.add(prevPlugin.id)
+      invalidatedDocPluginIds.add(prevPlugin.id)
+    }
+  }
+
+  const keepUi = state.uiContributions.filter((item) => {
+    if (activeNextIds.has(item.pluginId)) return true
+    inactivePluginIds.add(item.pluginId)
+    invalidatedDocPluginIds.add(item.pluginId)
+    return false
+  })
+  const uiChanged = keepUi.length !== state.uiContributions.length
+
+  let docsChanged = false
+  const nextDocs: Record<string, unknown> = {}
+  for (const [docKey, value] of Object.entries(state.pluginDocs)) {
+    const slash = docKey.lastIndexOf('/')
+    const pluginId = slash > 0 ? docKey.slice(0, slash) : ''
+    if (pluginId === '' || !activeNextIds.has(pluginId)) {
+      if (pluginId !== '') {
+        inactivePluginIds.add(pluginId)
+        invalidatedDocPluginIds.add(pluginId)
+      }
+      docsChanged = true
+      continue
+    }
+    if (invalidatedDocPluginIds.has(pluginId)) {
+      docsChanged = true
+      continue
+    }
+    nextDocs[docKey] = value
+  }
+
+  const pluginsChanged =
+    mergedPlugins.length !== state.plugins.length ||
+    mergedPlugins.some((item, index) => item !== state.plugins[index])
+
+  const nextState =
+    pluginsChanged || uiChanged || docsChanged
+      ? {
+          ...state,
+          ...(pluginsChanged ? { plugins: mergedPlugins } : {}),
+          ...(uiChanged ? { uiContributions: keepUi } : {}),
+          ...(docsChanged ? { pluginDocs: nextDocs } : {}),
+        }
+      : state
+
+  return { state: nextState, inactivePluginIds, invalidatedDocPluginIds }
 }
 
 /** ConversationLive 边界形状校验（与内核 conversation.live 事件同一判定）。 */
@@ -83,16 +285,23 @@ export function applySnapshot(previous: LiveState, snapshot: HelmxSnapshot): Liv
       }
     }
   }
+  // 过滤快照中明确处于非 active（disabled / failed）插件的文档与 UI 贡献，防止异常快照残留失效视图。
+  const inactivePluginIds = new Set(
+    snapshot.plugins.filter((p) => !isPluginSummaryActive(p)).map((p) => p.id),
+  )
   // 快照 pluginDocs 直投：免额外拉取，键与 ensurePluginDoc 一致（`${pluginId}/${docName}`）。
   const pluginDocs: Record<string, unknown> = {}
   if (Array.isArray(snapshot.pluginDocs)) {
     for (const doc of snapshot.pluginDocs) {
       if (doc === null || typeof doc !== 'object') throw new Error('Invalid kernel live snapshot format')
       if (typeof doc.pluginId !== 'string' || typeof doc.name !== 'string') throw new Error('Invalid kernel live snapshot format')
-      pluginDocs[`${doc.pluginId}/${doc.name}`] = doc.value
+      if (!inactivePluginIds.has(doc.pluginId)) {
+        pluginDocs[`${doc.pluginId}/${doc.name}`] = doc.value
+      }
     }
   }
-  return { ...emptyLiveState(), seq: snapshot.seq, conversations: sortConversations(snapshot.conversations), conversationDetails, conversationLives, pendingAsks: snapshot.pendingAsks, plugins: snapshot.plugins, uiContributions: snapshot.ui, pluginDocs, nodes: Array.isArray(snapshot.nodes) ? sortNodes(snapshot.nodes) : [], resolvedAsksByConv: previous.resolvedAsksByConv }
+  const uiContributions = snapshot.ui.filter((item) => !inactivePluginIds.has(item.pluginId))
+  return { ...emptyLiveState(), seq: snapshot.seq, conversations: sortConversations(snapshot.conversations), conversationDetails, conversationLives, pendingAsks: snapshot.pendingAsks, plugins: snapshot.plugins, uiContributions, pluginDocs, nodes: Array.isArray(snapshot.nodes) ? sortNodes(snapshot.nodes) : [], resolvedAsksByConv: previous.resolvedAsksByConv }
 }
 
 export function entryMatchesReference(entry: ConversationEntry, reference: string): boolean {
@@ -273,13 +482,32 @@ export function applyEventFrame(state: LiveState, frame: HelmxEventFrame): LiveS
       break
     case 'plugin.changed':
       if ('plugin' in event) {
+        const prevPlugin = state.plugins.find((p) => p.id === event.plugin.id)
+        const prevUi = state.uiContributions.filter((item) => item.pluginId === event.plugin.id)
+        const nextUi = Array.isArray(event.ui) ? event.ui : []
+        const configOnly = Array.isArray(event.ui) && isConfigOnlyPluginChange(prevPlugin, prevUi, event.plugin, nextUi)
+        const active = isPluginSummaryActive(event.plugin)
+
         next.plugins = upsert(state.plugins, event.plugin)
-        next.uiContributions = [...state.uiContributions.filter((item) => item.pluginId !== event.plugin.id), ...event.ui]
-        next.pluginDocs = Object.fromEntries(Object.entries(state.pluginDocs).filter(([key]) => !key.startsWith(`${event.plugin.id}/`)))
+        if (!active) {
+          // 非 active（含 disabled 与 enabled=true,status=failed）：强制移除 uiContributions 并清空 pluginDocs。
+          next.uiContributions = state.uiContributions.filter((item) => item.pluginId !== event.plugin.id)
+          next.pluginDocs = Object.fromEntries(
+            Object.entries(state.pluginDocs).filter(([key]) => !key.startsWith(`${event.plugin.id}/`)),
+          )
+        } else if (!configOnly) {
+          next.uiContributions = [...state.uiContributions.filter((item) => item.pluginId !== event.plugin.id), ...nextUi]
+          next.pluginDocs = Object.fromEntries(
+            Object.entries(state.pluginDocs).filter(([key]) => !key.startsWith(`${event.plugin.id}/`)),
+          )
+        }
+        // 纯配置更新保持 uiContributions 引用与 pluginDocs 不变，避免 usePluginDoc 闪烁重拉。
       }
       break
     case 'plugin.doc.updated':
-      if ('doc' in event && state.plugins.some((p) => p.id === event.doc.pluginId && p.enabled)) next.pluginDocs = { ...state.pluginDocs, [`${event.doc.pluginId}/${event.doc.name}`]: event.doc.value }
+      if ('doc' in event && state.plugins.some((p) => p.id === event.doc.pluginId && isPluginSummaryActive(p))) {
+        next.pluginDocs = { ...state.pluginDocs, [`${event.doc.pluginId}/${event.doc.name}`]: event.doc.value }
+      }
       break
     case 'node.changed':
       if ('node' in event) {

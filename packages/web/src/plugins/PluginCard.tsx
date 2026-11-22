@@ -3,6 +3,7 @@ import type { PluginSummary } from '@helmx/protocol/browser'
 import { DEFAULT_HELMX_LOCALE, resolveLocalizedText } from '@helmx/protocol/browser'
 import { HelmxIcon, StatusLight, Switch } from '@helmx/plugin-client'
 import { createWebTranslator } from '../i18n/catalog.js'
+import { isPluginSummaryActive } from '../lib/live-state.js'
 import { useOptionalGroupedUi, useOptionalLocale, useOptionalStoreActions } from '../lib/store-context.js'
 import {
   getPluginDescription,
@@ -43,15 +44,19 @@ export function PluginCard({
   const name = resolveLocalizedText(plugin.name, locale) || plugin.id
   const description = getPluginDescription(plugin, locale, t)
   const isLocked = plugin.locked === true
-  // 已启用且有 Screen 贡献时提供快捷打开（主屏/右屏），经 store.openTarget 唯一导航。
+  const active = isPluginSummaryActive(plugin)
+  const failed = isPluginFailed(plugin)
+  // 仅活跃运行态且有 Screen 贡献时提供快捷打开（enabled=true 但 status=failed 不显示可用 Screen）。
   const primaryScreen =
-    groupedUi !== undefined && plugin.enabled
+    groupedUi !== undefined && active
       ? listPluginScreens(groupedUi, plugin.id)[0] ?? null
       : null
   // 源码/清单加载阶段失败（scan/load）：模块未成功导入，无有效 definition 可重试启用
   const isLoadBroken = plugin.error?.stage === 'scan' || plugin.error?.stage === 'load'
   const isSwitchDisabled = isLocked || toggling || isLoadBroken
 
+  // 启停开关反映持久化期望开关（plugin.enabled）：当 enabled=true 且 status=failed（如依赖被强停）时，
+  // 仍允许点击开关停用插件以重置故障态；运行态样式与可用 Screen 则统一按 active 判定。
   const switchTitle = isLocked
     ? t('plugins.card.switchLockedTitle')
     : isLoadBroken
@@ -74,8 +79,8 @@ export function PluginCard({
   const cardClasses = [
     'plugin-card',
     selected && 'is-selected',
-    plugin.enabled ? 'is-enabled' : 'is-disabled',
-    isPluginFailed(plugin) && 'is-failed',
+    active ? 'is-enabled' : 'is-disabled',
+    failed && 'is-failed',
   ]
     .filter(Boolean)
     .join(' ')

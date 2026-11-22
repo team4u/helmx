@@ -8,6 +8,7 @@ import {
 import type { HelmxLocale, PluginSummary } from '@helmx/protocol/browser'
 import { DEFAULT_HELMX_LOCALE, resolveLocalizedText } from '@helmx/protocol/browser'
 import { ApiClientError, pluginsApi, type PluginConfigResponse } from '../lib/api.js'
+import { isPluginSummaryActive } from '../lib/live-state.js'
 import { EmptyState, HelmxIcon, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle, ModelPickerControl, Select, Switch } from '@helmx/plugin-client'
 import { createWebTranslator } from '../i18n/catalog.js'
 import { useOptionalGroupedUi, useOptionalLocale, useOptionalNodes, useOptionalProfiles, useOptionalStoreActions } from '../lib/store-context.js'
@@ -456,9 +457,9 @@ export function PluginDetailDrawer({
   const versionLabel = plugin?.version ? `v${plugin.version.replace(/^v/, '')}` : null
   const settingsPanels =
     groupedUi?.settingsPanels?.filter((p) => p.pluginId === plugin?.id) ?? []
-  // 已启用且有 Screen 贡献时提供快捷打开（主屏/右屏）；唯一导航机制 openTarget。
+  // 仅活跃运行态且有 Screen 贡献时提供快捷打开（主屏/右屏）；enabled=true 但 status=failed 不显示可用 Screen。
   const pluginScreens =
-    plugin !== null && groupedUi !== undefined && plugin.enabled
+    plugin !== null && groupedUi !== undefined && isPluginSummaryActive(plugin)
       ? listPluginScreens(groupedUi, plugin.id)
       : []
   const primaryScreen = pluginScreens[0] ?? null
@@ -521,7 +522,7 @@ export function PluginDetailDrawer({
                 {plugin && (
                   <div className="plugin-drawer-desc">{getPluginDescription(plugin, locale, t)}</div>
                 )}
-                {plugin?.status === 'failed' && plugin.error && (
+                {plugin && isPluginFailed(plugin) && plugin.error && (
                   <div className="plugin-drawer-failed-note" role="note">
                     <span className="badge badge-err">{t('plugins.drawer.failedToLoad')}</span>
                     <span className="mono selectable">
@@ -561,7 +562,7 @@ export function PluginDetailDrawer({
                         <HelmxIcon name="alert-circle" size={10} />
                         <span>{t('plugins.status.error')}</span>
                       </span>
-                    ) : plugin.enabled ? (
+                    ) : isPluginSummaryActive(plugin) ? (
                       <span className="badge badge-ok">
                         <HelmxIcon name="check" size={10} />
                         <span>{t('common.enabled')}</span>

@@ -136,7 +136,6 @@ test('SubagentToolView 与折叠态 SubagentLiveCard 传 includeDetail=false 零
       input: { prompt: '去跑测试' },
       status: 'running',
       conversationId: 1,
-      siblingCalls: [],
     }),
   )
   try {
@@ -420,9 +419,8 @@ test('无 worktree 且无后台 run：不渲染空徽章与错误行', { timeout
 
 test('同步外部子代理无原生子会话：完成后停止显示执行中（时间线单行与工作台摘要同致）', { timeout: 60_000 }, () => {
   const conversation = summary(1, 'idle')
-  const structuredOutput = {
+  const presentationMeta = {
     ok: true,
-    result: 'done',
     execution: {
       nodeId: 'local',
       executionId: 'pane-9',
@@ -435,12 +433,11 @@ test('同步外部子代理无原生子会话：完成后停止显示执行中�
       callId: 'ext-1',
       toolName: 'subagent',
       input: { prompt: '执行任务', agentType: 'herdr:pi' },
-      result: JSON.stringify(structuredOutput),
-      structuredOutput,
+      result: 'done',
+      presentationMeta,
       status: 'done',
       isError: false,
       conversationId: 1,
-      siblingCalls: [],
     }),
   )
   assert.ok(toolHtml.includes('workflow-trace-row-btn'), '时间线使用紧凑单行回执')
@@ -476,8 +473,8 @@ test('resume 正在运行时：历史失败调用保留异常状态，只有最�
     status: 'error' as const,
     isError: true,
     input: { prompt: '首次派生' },
-    result: JSON.stringify(oldOutput),
-    structuredOutput: oldOutput,
+    result: 'subagent_failed: timeout',
+    presentationMeta: oldOutput,
   }
   const newCall = {
     callId: 'call_new',
@@ -485,14 +482,34 @@ test('resume 正在运行时：历史失败调用保留异常状态，只有最�
     status: 'running' as const,
     input: { prompt: '继续修复', resume: '12' },
   }
-  const siblings = [oldCall, newCall]
-  const h = createWorkflowHostHarness({ conversationId: 1, conversations: [parent, child] })
+  const timelineToolCalls = [
+    {
+      callId: oldCall.callId,
+      toolName: oldCall.toolName,
+      index: 0,
+      status: oldCall.status,
+      input: oldCall.input,
+      presentationMeta: oldCall.presentationMeta,
+    },
+    {
+      callId: newCall.callId,
+      toolName: newCall.toolName,
+      index: 1,
+      status: newCall.status,
+      input: newCall.input,
+    },
+  ]
+  const h = createWorkflowHostHarness({
+    conversationId: 1,
+    conversations: [parent, child],
+    timelineToolCalls,
+  })
   const html = h.renderSsr(
     e(
       React.Fragment,
       null,
-      e(SubagentToolView, { ...oldCall, conversationId: 1, siblingCalls: siblings }),
-      e(SubagentToolView, { ...newCall, conversationId: 1, siblingCalls: siblings }),
+      e(SubagentToolView, { ...oldCall, conversationId: 1 }),
+      e(SubagentToolView, { ...newCall, conversationId: 1 }),
     ),
   )
   assert.equal((html.match(/workflow-trace-row-btn/g) ?? []).length, 2, '前序与最新调用均收口为单行按钮')
@@ -530,7 +547,7 @@ test('同一子会话 #12 被首次派生 + resume 续接：SubagentToolView 收
     status: 'done' as const,
     input: { prompt: '首次派生' },
     result: '首轮完成',
-    structuredOutput: out12,
+    presentationMeta: out12,
   }
   const call2 = {
     callId: 'call_2',
@@ -538,16 +555,37 @@ test('同一子会话 #12 被首次派生 + resume 续接：SubagentToolView 收
     status: 'done' as const,
     input: { prompt: '继续', resume: 12 },
     result: '第二轮完成',
-    structuredOutput: out12,
+    presentationMeta: out12,
   }
-  const siblings = [call1, call2]
-  const h = createWorkflowHostHarness({ conversationId: 1, conversations: [parent, child12] })
+  const timelineToolCalls = [
+    {
+      callId: call1.callId,
+      toolName: call1.toolName,
+      index: 0,
+      status: call1.status,
+      input: call1.input,
+      presentationMeta: call1.presentationMeta,
+    },
+    {
+      callId: call2.callId,
+      toolName: call2.toolName,
+      index: 1,
+      status: call2.status,
+      input: call2.input,
+      presentationMeta: call2.presentationMeta,
+    },
+  ]
+  const h = createWorkflowHostHarness({
+    conversationId: 1,
+    conversations: [parent, child12],
+    timelineToolCalls,
+  })
   const html = h.renderSsr(
     e(
       React.Fragment,
       null,
-      e(SubagentToolView, { ...call1, conversationId: 1, siblingCalls: siblings }),
-      e(SubagentToolView, { ...call2, conversationId: 1, siblingCalls: siblings }),
+      e(SubagentToolView, { ...call1, conversationId: 1 }),
+      e(SubagentToolView, { ...call2, conversationId: 1 }),
     ),
   )
   assert.equal((html.match(/class="[^"]*\bsubagent-card-clickable\b/g) ?? []).length, 0, '时间线不渲染工作台大卡')
@@ -556,6 +594,51 @@ test('同一子会话 #12 被首次派生 + resume 续接：SubagentToolView 收
   assert.match(rowButtons[0]!, /首次派生[\s\S]*?#12[\s\S]*?Resumed below/, '前序行应主显任务名、次显 #12 并标注续接标识')
   assert.doesNotMatch(rowButtons[1]!, /Resumed below/, '最新调用行不得带续接标识')
   assert.match(rowButtons[1]!, /继续[\s\S]*?#12[\s\S]*?Done/, '最新调用行主显任务名、次显 #12 与终态')
+})
+
+test('SubagentToolView：仅读取 props.presentationMeta，删除 props.result JSON.parse 兜底', { timeout: 60_000 }, () => {
+  const parent = summary(1, 'idle')
+  const h = createWorkflowHostHarness({ conversationId: 1, conversations: [parent] })
+  const withMeta = h.renderSsr(
+    e(SubagentToolView, {
+      callId: 'call_meta_only',
+      toolName: 'subagent',
+      input: { prompt: '查看节点' },
+      status: 'done',
+      result: 'plain-text-only',
+      presentationMeta: {
+        ok: true,
+        execution: {
+          nodeId: 'remote-box',
+          conversationId: 88,
+          worktree: { path: '/wt/88', branch: 'feat/meta-only' },
+        },
+      },
+      conversationId: 1,
+    }),
+  )
+  assert.ok(withMeta.includes('#88'), '应从 presentationMeta.execution.conversationId 渲染 #88')
+  assert.ok(withMeta.includes('remote-box'), '应从 presentationMeta.execution.nodeId 渲染 nodeId')
+  assert.ok(withMeta.includes('feat/meta-only'), '应从 presentationMeta.execution.worktree 渲染分支徽章')
+
+  const noFallback = h.renderSsr(
+    e(SubagentToolView, {
+      callId: 'call_json_result_only',
+      toolName: 'subagent',
+      input: { prompt: '无 meta' },
+      status: 'done',
+      result: JSON.stringify({
+        ok: true,
+        background: true,
+        runId: 'wf_fake',
+        execution: { nodeId: 'should-not-parse', conversationId: 99, worktree: { path: '/x', branch: 'fake-branch' } },
+      }),
+      conversationId: 1,
+    }),
+  )
+  assert.ok(!noFallback.includes('#99'), '无 presentationMeta 时绝不 JSON.parse(props.result) 解析子会话 ID')
+  assert.ok(!noFallback.includes('should-not-parse'), '无 presentationMeta 时绝不 JSON.parse(props.result) 解析 nodeId')
+  assert.ok(!noFallback.includes('fake-branch'), '无 presentationMeta 时绝不 JSON.parse(props.result) 解析 worktree')
 })
 
 test('工作台独立子会话（runs 驱动）：紧凑卡无实时流，保留副栏且 working 排在 idle 前面', { timeout: 60_000 }, () => {
@@ -766,17 +849,29 @@ test('formatSemanticToolAction：常见工具语义化（bash / Read / Edit / Wr
   assert.deepEqual(formatSemanticToolAction('no_input_tool', undefined), { tag: 'no_input_tool', text: 'no_input_tool' })
 })
 
-test('extractSubagentResultPreview：structuredOutput / JSON 信封优先，不刮取尾注', { timeout: 60_000 }, () => {
+test('extractSubagentResultPreview：仅消费 presentationMeta 或纯文本预览，严禁对 resultText 做 JSON.parse 兜底', { timeout: 60_000 }, () => {
   assert.equal(extractSubagentResultPreview(undefined), undefined)
   assert.equal(extractSubagentResultPreview('   '), undefined)
   assert.equal(
-    extractSubagentResultPreview('ignored text', { ok: true, result: '来自结构化输出' }),
-    '来自结构化输出',
+    extractSubagentResultPreview('ignored text', { ok: true, result: '来自 presentationMeta' }),
+    '来自 presentationMeta',
   )
-  assert.equal(extractSubagentResultPreview(JSON.stringify({ ok: true, result: '任务完成，共修复 3 处' })), '任务完成，共修复 3 处')
-  assert.equal(extractSubagentResultPreview(JSON.stringify({ output: '产出首行\n第二行' })), '产出首行')
-  assert.equal(extractSubagentResultPreview(JSON.stringify({ summary: '总结' })), '总结')
-  assert.equal(extractSubagentResultPreview(JSON.stringify({ other: 1 })), '{"other":1}')
+  assert.equal(
+    extractSubagentResultPreview('ignored text', { output: '产出首行\n第二行' }),
+    '产出首行',
+  )
+  assert.equal(
+    extractSubagentResultPreview('ignored text', { summary: '总结' }),
+    '总结',
+  )
+  // 仅有执行索引的 presentationMeta 不把 JSON 倾倒到副栏，回落纯文本 resultText
+  assert.equal(
+    extractSubagentResultPreview('纯文本结论', { ok: true, runId: 'wf_1', execution: { conversationId: 11 } }),
+    '纯文本结论',
+  )
+  // JSON 外观的 resultText 不再做旧信封 JSON.parse，严格按纯文本首行预览处理
+  const rawEnvelopeText = JSON.stringify({ ok: true, result: '任务完成，共修复 3 处' })
+  assert.equal(extractSubagentResultPreview(rawEnvelopeText), rawEnvelopeText)
   assert.equal(extractSubagentResultPreview('结论：全部通过\n第二行'), '结论：全部通过')
   assert.equal(extractSubagentResultPreview('纯文本结论'), '纯文本结论')
   // 已彻底废弃 [subagent ...] 尾注语法，按普通文本处理。
@@ -853,12 +948,13 @@ test('resolveSubagentHeaderSnippet：error 优先后台 run 失败，其次父�
     { kind: 'error', tag: 'Background run failed', text: 'Background run failed' },
   )
   assert.deepEqual(
-    resolveSubagentHeaderSnippet({ badgeStatus: 'error', toolSummary: { structuredOutput: { ok: false, error: '结构化超时' } } }),
+    resolveSubagentHeaderSnippet({ badgeStatus: 'error', toolSummary: { presentationMeta: { ok: false, error: '结构化超时' } } }),
     { kind: 'error', tag: 'Failed', text: '结构化超时' },
   )
+  // 不再对 resultText 做旧 JSON 信封解析：未标记 isError 且无 presentationMeta 时回落通用错误文案
   assert.deepEqual(
     resolveSubagentHeaderSnippet({ badgeStatus: 'error', toolSummary: { resultText: JSON.stringify({ ok: false, error: '执行超时' }) } }),
-    { kind: 'error', tag: 'Failed', text: '执行超时' },
+    { kind: 'error', tag: 'Error', text: 'Subagent execution error' },
   )
   assert.deepEqual(
     resolveSubagentHeaderSnippet({ badgeStatus: 'error', toolSummary: { isError: true, resultText: '命令失败：退出码 2\n第二行' } }),
@@ -946,7 +1042,7 @@ test('resolveSubagentHeaderSnippet：working 后台 Gate 验收期与兜底启�
   )
 })
 
-test('resolveSubagentHeaderSnippet：done 取 entries 结论 > structuredOutput/resultText > 后台 run 产出 > undefined', { timeout: 60_000 }, () => {
+test('resolveSubagentHeaderSnippet：done 取后台 run 产出 > entries 结论 > presentationMeta / 纯文本 resultText > undefined', { timeout: 60_000 }, () => {
   const entries = [
     { id: '1', kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: '最终结论：全部通过' }], stopReason: 'stop' }] },
   ]
@@ -955,13 +1051,22 @@ test('resolveSubagentHeaderSnippet：done 取 entries 结论 > structuredOutput/
     { kind: 'done', text: '最终结论：全部通过' },
   )
   assert.deepEqual(
-    resolveSubagentHeaderSnippet({ badgeStatus: 'done', toolSummary: { resultText: JSON.stringify({ ok: true, result: '修复完成' }) } }),
+    resolveSubagentHeaderSnippet({ badgeStatus: 'done', toolSummary: { presentationMeta: { ok: true, summary: '修复完成' } } }),
     { kind: 'done', text: '修复完成' },
+  )
+  assert.deepEqual(
+    resolveSubagentHeaderSnippet({ badgeStatus: 'done', toolSummary: { resultText: '纯文本修复完成' } }),
+    { kind: 'done', text: '纯文本修复完成' },
   )
   const doneRun = bgRun({ status: 'completed', nodes: [{ id: 'n1', kind: 'agent', status: 'done', output: '产出结论文本' }] })
   assert.deepEqual(
     resolveSubagentHeaderSnippet({ badgeStatus: 'done', backgroundRun: doneRun }),
     { kind: 'done', text: '产出结论文本' },
+  )
+  const structuredRun = bgRun({ status: 'completed', result: { summary: '后台结构化产出' } })
+  assert.deepEqual(
+    resolveSubagentHeaderSnippet({ badgeStatus: 'done', backgroundRun: structuredRun }),
+    { kind: 'done', text: '后台结构化产出' },
   )
   assert.equal(resolveSubagentHeaderSnippet({ badgeStatus: 'done' }), undefined)
 })
@@ -991,7 +1096,7 @@ test('toolSummary 注入：折叠态头部显示任务标题、独立总耗时�
     toolSummary: {
       prompt: '修复构建失败',
       durationMs: 95_000,
-      resultText: JSON.stringify({ ok: true, result: '构建已恢复，测试 42 通过' }),
+      resultText: '构建已恢复，测试 42 通过',
     },
   })
   assert.ok(html.includes('修复构建失败'), '折叠态头部应显示任务标题')
@@ -1102,7 +1207,6 @@ test('WorkflowToolView 无 runs 首帧：收口单行并默认收起原始调用
       result: '原始工作流返回结果',
       status: 'done',
       conversationId: 1,
-      siblingCalls: [],
     }),
   )
   assert.ok(!html.includes('class="trace-row"'), '不得渲染未命名默认 div.trace-row')
@@ -1241,7 +1345,6 @@ test('清亮化修正：时间线插件行标题带可缩标记（移动端不�
     input: { prompt: '任务' },
     status: 'done',
     conversationId: 1,
-    siblingCalls: [],
   }))
   assert.ok(html.includes('trace-tool-name workflow-trace-name'), '插件行标题带 workflow-trace-name 可缩标记')
 })

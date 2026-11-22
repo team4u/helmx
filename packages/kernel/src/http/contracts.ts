@@ -37,6 +37,7 @@ import type {
   PluginDoctorReport,
   PluginInstallResult,
   PluginInUseItem,
+  PluginManifestProjection,
   PluginReloadResult,
   PluginRemoveResult,
   PluginRescanResult,
@@ -133,6 +134,11 @@ export interface PluginHost {
    * phase-aware gate.
    */
   get?(pluginId: string): PluginSummary | undefined
+  /**
+   * Read-only, deterministically sorted extension contract projection (`GET /api/plugins/:id/manifest`).
+   * Optional on minimal test doubles (HTTP layer returns 501 `not_supported` when unprovided).
+   */
+  getManifest?(pluginId: string): PluginManifestProjection | Promise<PluginManifestProjection>
   /**
    * In-flight task tracking wrapper (shares PluginTaskTracker with action/tool execution):
    * counts route handler execution toward `liveTasks` so disable's `assertNoLiveTasks` sees in-flight

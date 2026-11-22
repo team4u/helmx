@@ -168,12 +168,20 @@ interface AppCenterStats {
   pinned: number
 }
 
+/**
+ * Mirrors `@helmx/protocol`'s `isPluginSummaryActive` for the isolated plugin-client bundle
+ * (enabled=true with status='failed' or error is NOT active; locked by truth-table test in apps-plugin.test.ts).
+ */
+export function isAppPluginActive(plugin: Pick<PluginSummary, 'enabled' | 'status' | 'error'>): boolean {
+  return plugin.enabled && (plugin.status === undefined || plugin.status === 'active') && plugin.error === undefined
+}
+
 export function summarizeAppItems(items: AppItem[]): AppCenterStats {
   let ready = 0
   let stopped = 0
   let pinned = 0
   for (const item of items) {
-    if (item.plugin.enabled) ready++
+    if (isAppPluginActive(item.plugin)) ready++
     else stopped++
     if (item.catalog?.pinned === true) pinned++
   }

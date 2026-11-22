@@ -3,6 +3,7 @@ import { conversationsApi } from '../lib/api.js'
 import type { ConversationAttachmentRef, ConversationEntry } from '@helmx/protocol/browser'
 import { HelmxIcon, Popover, PopoverContent, PopoverTrigger } from '@helmx/plugin-client'
 import {
+  collectEnabledPluginIds,
   isConversationArchivable,
   isConversationArchived,
   isConversationDeletable,
@@ -241,7 +242,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
 
   const profile = profiles.find((p) => p.id === conversation.profileId)
   const profileStarters = profile !== undefined && profile.starters !== undefined && profile.starters.length > 0 ? profile.starters : undefined
-  const enabledPluginIds = new Set(plugins.filter((p) => p.enabled).map((p) => p.id))
+  const enabledPluginIds = collectEnabledPluginIds(plugins)
   const canCreateThread = profile !== undefined &&
     isHumanSelectableProfile(profile, enabledPluginIds) &&
     (conversation.ownedBy ?? 'human') === 'human'

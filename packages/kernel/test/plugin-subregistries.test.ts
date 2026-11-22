@@ -516,6 +516,148 @@ test('CapabilityRegistry: tool/action declaration, list projection, and scope va
   );
 });
 
+test('CapabilityRegistry: presentationMetaSchema & exposeAsTool structuredOutputSchema validation and projection', { timeout: 60_000 }, () => {
+  const cap = new CapabilityRegistry();
+  const outSchema = {
+    type: 'object',
+    properties: { output: { type: 'number' }, isError: { type: 'string' } },
+    required: ['output'],
+  };
+  const metaSchema = {
+    type: 'object',
+    properties: { badge: { type: 'string' } },
+    required: ['badge'],
+    additionalProperties: false,
+  };
+  const project = (_input: unknown, out: { output: number }) => ({ badge: `#${out.output}` });
+
+  // Non-exposeAsTool action declaring presentationMetaSchema or projectPresentationMeta fails explicitly.
+  assert.throws(
+    () =>
+      cap.registerAction('p1', {
+        id: 'not_exposed_schema',
+        description: 'bad',
+        inputSchema: { type: 'object' },
+        outputSchema: outSchema,
+        presentationMetaSchema: metaSchema,
+        handler: () => ({ output: 1 }),
+      }),
+    (err: unknown) => err instanceof HelmxError && err.code === 'invalid_action_spec' && err.status === 400,
+  );
+  assert.throws(
+    () =>
+      cap.registerAction('p1', {
+        id: 'not_exposed_proj',
+        description: 'bad',
+        inputSchema: { type: 'object' },
+        outputSchema: outSchema,
+        projectPresentationMeta: project,
+        handler: () => ({ output: 1 }),
+      }),
+    (err: unknown) => err instanceof HelmxError && err.code === 'invalid_action_spec' && err.status === 400,
+  );
+
+  // exposeAsTool action declaring projectPresentationMeta without presentationMetaSchema or non-function fails.
+  assert.throws(
+    () =>
+      cap.registerAction('p1', {
+        id: 'missing_meta_schema',
+        description: 'bad',
+        inputSchema: { type: 'object' },
+        outputSchema: outSchema,
+        exposeAsTool: true,
+        projectPresentationMeta: project,
+        handler: () => ({ output: 1 }),
+      }),
+    (err: unknown) => err instanceof HelmxError && err.code === 'invalid_action_spec' && err.status === 400,
+  );
+  assert.throws(
+    () =>
+      cap.registerAction('p1', {
+        id: 'bad_proj_type',
+        description: 'bad',
+        inputSchema: { type: 'object' },
+        outputSchema: outSchema,
+        exposeAsTool: true,
+        presentationMetaSchema: metaSchema,
+        projectPresentationMeta: 'not-a-fn' as never,
+        handler: () => ({ output: 1 }),
+      }),
+    (err: unknown) => err instanceof HelmxError && err.code === 'invalid_action_spec' && err.status === 400,
+  );
+  assert.throws(
+    () =>
+      cap.registerAction('p1', {
+        id: 'async_meta_schema',
+        description: 'bad',
+        inputSchema: { type: 'object' },
+        outputSchema: outSchema,
+        exposeAsTool: true,
+        presentationMetaSchema: { type: 'object', $async: true },
+        handler: () => ({ output: 1 }),
+      }),
+    (err: unknown) => err instanceof HelmxError && err.code === 'invalid_plugin_schema' && err.status === 500,
+  );
+
+  // ctx.tool presentationMetaSchema rejects non-object and $async schemas.
+  assert.throws(
+    () =>
+      cap.registerTool('p1', {
+        name: 'bad_tool_meta',
+        description: 'bad',
+        inputSchema: { type: 'object' },
+        presentationMetaSchema: 'nope' as never,
+        execute: () => ({ output: 'ok' }),
+      }),
+    (err: unknown) => err instanceof HelmxError && err.code === 'invalid_tool_spec' && err.status === 400,
+  );
+  assert.throws(
+    () =>
+      cap.registerTool('p1', {
+        name: 'async_tool_meta',
+        description: 'bad',
+        inputSchema: { type: 'object' },
+        presentationMetaSchema: { type: 'object', $async: true },
+        execute: () => ({ output: 'ok' }),
+      }),
+    (err: unknown) => err instanceof HelmxError && err.code === 'invalid_plugin_schema' && err.status === 500,
+  );
+
+  // Valid registrations forward schemas cleanly in listTools and listActions.
+  cap.registerAction('p1', {
+    id: 'exposed_with_meta',
+    description: 'valid action',
+    inputSchema: { type: 'object' },
+    outputSchema: outSchema,
+    exposeAsTool: true,
+    presentationMetaSchema: metaSchema,
+    projectPresentationMeta: project,
+    handler: () => ({ output: 7 }),
+  });
+  cap.registerTool('p1', {
+    name: 'direct_with_meta',
+    description: 'valid tool',
+    inputSchema: { type: 'object' },
+    structuredOutputSchema: outSchema,
+    presentationMetaSchema: metaSchema,
+    execute: () => ({ output: 'ok' }),
+  });
+
+  const manifests = cap.listActions(['p1']);
+  assert.equal(manifests.length, 1);
+  assert.deepEqual(manifests[0]!.presentationMetaSchema, metaSchema);
+
+  const tools = cap.listTools(['p1']);
+  const derivedAction = tools.find((t) => t.sourceKind === 'action')!;
+  assert.deepEqual(derivedAction.structuredOutputSchema, outSchema);
+  assert.deepEqual(derivedAction.presentationMetaSchema, metaSchema);
+  assert.equal(derivedAction.projectPresentationMeta, project);
+
+  const directTool = tools.find((t) => t.sourceKind === 'tool')!;
+  assert.deepEqual(directTool.structuredOutputSchema, outSchema);
+  assert.deepEqual(directTool.presentationMetaSchema, metaSchema);
+});
+
 test('UiRegistry: extension collection, parameter validation, and dependency checks', { timeout: 60_000 }, async () => {
   const ui = new UiRegistry();
 

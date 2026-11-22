@@ -11,6 +11,7 @@
 import type { ConversationScope } from './conversation.js'
 import type { AgentNamespacedMeta } from './meta.js'
 import type { ExecutionText, LocalizedText } from './locale.js'
+import type { PluginManifestProjection } from './plugin-manifest.js'
 
 /** JSON Schema object; validated uniformly by the host at the boundary. */
 export type JsonSchema = Record<string, unknown>
@@ -324,6 +325,18 @@ export interface PluginSummary {
   publicConfig?: Record<string, unknown>
 }
 
+/** Minimal slice of `PluginSummary` required to judge whether a plugin is actively running. */
+export type PluginActivityLike = Pick<PluginSummary, 'enabled' | 'status' | 'error'>
+
+/**
+ * Unified active-plugin predicate across kernel, plugins, and browser UI:
+ * active iff `enabled === true`, `status` is omitted or `'active'`, and no failure `error` is present.
+ * Notably, `enabled: true` with `status: 'failed'` (e.g. after a dependency is force-disabled) is NOT active.
+ */
+export function isPluginSummaryActive(plugin: PluginActivityLike): boolean {
+  return plugin.enabled && (plugin.status === undefined || plugin.status === 'active') && plugin.error === undefined
+}
+
 /** Managed plugin package metadata (shape of PluginSummary.managed; additive optional field). */
 export interface PluginManagedMeta {
   /** Install source (normalized shape; includes the raw source string for echo). */
@@ -334,6 +347,29 @@ export interface PluginManagedMeta {
   installedVersion: string
   /** Completion time of the most recent install/update (epoch milliseconds). */
   installedAt: number
+}
+
+/** Text content block inside a tool result envelope (`output`). */
+export interface PluginToolTextBlock {
+  type: 'text'
+  text: string
+}
+
+/**
+ * Explicit tool result envelope separating the three outbound tool channels:
+ * - `output`: text delivered to the model (32 KiB spill boundary);
+ * - `structuredOutput`: machine-readable value for programmatic/nested callers (validated against
+ *   `structuredOutputSchema`; never auto-mirrored into persisted `details`);
+ * - `presentationMeta`: bounded, redacted plain JSON object persisted to `pi.tool-result.model[0].details`
+ *   for UI/timeline replay (validated against `presentationMetaSchema` + 64 KiB / depth 12 / 2000 nodes;
+ *   never enters model prompt or context usage);
+ * - `isError`: explicit error flag.
+ */
+export interface PluginToolResultEnvelope {
+  output?: string | PluginToolTextBlock[]
+  structuredOutput?: unknown
+  presentationMeta?: Record<string, unknown>
+  isError?: boolean
 }
 
 /** Serializable manifest of a single registered action, consumed by CLI / Web / Workflow. */
@@ -349,6 +385,11 @@ export interface ActionManifest extends PluginPromptFields {
   inputSchema: JsonSchema
   outputSchema: JsonSchema
   exposeAsTool?: boolean
+  /**
+   * Optional bounded UI presentation metadata schema declared when `exposeAsTool: true`
+   * (persisted to `pi.tool-result.model[0].details` for replay; never enters model prompt).
+   */
+  presentationMetaSchema?: JsonSchema
   /**
    * Whether this non-tool action is advertised in the `<available_actions>` prompt catalog (default true).
    * UI-only actions (such as composer completers) set `false` to save system prompt tokens while staying
@@ -405,6 +446,11 @@ export interface PluginDoctorReport {
    * or approximate derivation.
    */
   screens?: string[]
+  /**
+   * Read-only, stably sorted capability manifest captured from the real
+   * registration dry-run before teardown (present when register passes).
+   */
+  manifest?: PluginManifestProjection
 }
 
 /** Controlled hot-reload result (POST /api/plugins/:id/reload). */

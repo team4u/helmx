@@ -17,7 +17,7 @@ import type {
   PluginBuildProvider,
   TurnSettledPayload,
 } from '@helmx/protocol'
-import { HelmxError } from '@helmx/protocol'
+import { HelmxError, isPluginSummaryActive } from '@helmx/protocol'
 import type { ConversationOwnership } from './runtime-ownership.js'
 import {
   ArtifactService as SvcArtifactService,
@@ -167,7 +167,7 @@ export function assembleRuntimeServices(
 
   const sessionDocLifecycleRelease = events.subscribe((frame) => {
     const event = frame.event
-    if (event.type === 'plugin.changed' && 'plugin' in event && event.plugin.enabled === false) {
+    if (event.type === 'plugin.changed' && 'plugin' in event && !isPluginSummaryActive(event.plugin)) {
       sessionDocStreams.closeForPlugin(event.plugin.id)
     } else if (event.type === 'conversation.deleted' && 'conversationId' in event) {
       sessionDocStreams.closeForConversation(event.conversationId)

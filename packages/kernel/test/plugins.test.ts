@@ -10,16 +10,19 @@ import { SecretStash, AuthService } from '../src/services/index.js';
 import { createHubHandler, type KernelRuntimeLike } from '../src/http/index.js';
 import {
   HelmxError,
+  assertPluginManifestProjection,
   type ExternalTriggerEnvelope,
   type PluginConfigFieldSchema,
   type PluginDefinition,
   type PluginDocHandle,
+  type PluginManifestProjection,
   type PluginSessionDocHandle,
   type PluginSummary,
 } from '@helmx/protocol';
 import {
   PluginHost,
   actionToolAlias,
+  doctorPluginDir,
   validatePluginInput,
   type PluginConfigStore,
   type PluginDocStore,
@@ -2533,6 +2536,63 @@ test('clientHashes: precompile failure preserves explicit error and isolated fai
   assert.equal(rolledBack?.clientHashes, undefined);
 });
 
+test('pluginSummaryOf / emitPluginChanged: deactivating window and enabled+lastError never leak active status, clientHashes, or UI', { timeout: 60_000 }, async (t) => {
+  const host = makeHost();
+  t.after(() => host.dispose());
+
+  const clientRoot = join(dataDir, 'deactivating-client');
+  mkdirSync(clientRoot, { recursive: true });
+  writeFileSync(join(clientRoot, 'index.tsx'), 'export function Main() { return "ok"; }\n');
+
+  const stopEntered = deferred<void>();
+  const stopRelease = deferred<void>();
+  await host.register({
+    id: 'p:deactivating-window',
+    clientRoot,
+    definePlugin: (ctx) => {
+      ctx.ui.screen({ id: 'main', label: 'Main', client: { module: 'index.tsx', export: 'Main' } });
+      ctx.action({
+        id: 'ping',
+        description: 'ping',
+        inputSchema: { type: 'object', additionalProperties: false },
+        outputSchema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'], additionalProperties: false },
+        handler: () => ({ ok: true }),
+      });
+      ctx.service({
+        id: 'svc',
+        start() {},
+        async stop() {
+          stopEntered.resolve();
+          await stopRelease.promise;
+        },
+      });
+    },
+  });
+
+  const active = host.get('p:deactivating-window')!;
+  assert.equal(active.status, 'active');
+  assert.ok(active.clientHashes?.['index.tsx']);
+  assert.deepEqual(active.actions, ['ping']);
+
+  const disabling = host.disable('p:deactivating-window');
+  await stopEntered.promise;
+  try {
+    const midDisable = host.get('p:deactivating-window')!;
+    assert.notEqual(midDisable.status, 'active', 'deactivating plugin must not be reported as active');
+    assert.equal(midDisable.clientHashes, undefined, 'deactivating plugin must not expose clientHashes');
+    assert.deepEqual(midDisable.actions, []);
+    assert.deepEqual(host.listUi().filter((u) => u.pluginId === 'p:deactivating-window'), []);
+  } finally {
+    stopRelease.resolve();
+    await disabling;
+  }
+
+  const afterDisable = host.get('p:deactivating-window')!;
+  assert.equal(afterDisable.enabled, false);
+  assert.equal(afterDisable.status, 'disabled');
+  assert.equal(afterDisable.clientHashes, undefined);
+});
+
 test('clientHashes: reloadExternalPlugin recompiles and emits updated clientHashes immediately', { timeout: 60_000 }, async (t) => {
   const host = makeHost();
   t.after(() => host.dispose());
@@ -2921,4 +2981,324 @@ test('PluginSummary.publicConfig filters secret fields, merges defaults, redacts
   const lastChanged = eventPayloads.filter((e) => e.type === 'plugin.changed').at(-1)!.payload as { plugin: PluginSummary };
   assert.deepEqual(lastChanged.plugin.publicConfig, { windowMs: 4_000, label: 'turbo' });
   assert.equal('apiKey' in (lastChanged.plugin.publicConfig ?? {}), false);
+});
+
+test('PluginHost.getManifest / listManifests: stably sorted read-only projection without provider execution or secret/private leaks', { timeout: 60_000 }, async (t) => {
+  const testDataDir = await makeTempDir('helmx-manifest-host-');
+  t.after(() => cleanupDir(testDataDir));
+  const clientRoot = join(testDataDir, 'client-src');
+  mkdirSync(join(clientRoot, 'panels'), { recursive: true });
+  writeFileSync(join(clientRoot, 'index.tsx'), 'export function MainView() { return "ok"; }\n');
+  writeFileSync(join(clientRoot, 'panels', 'Side.tsx'), 'export function SideView() { return "side"; }\n');
+
+  const cfgStore = new MemoryConfigStore();
+  cfgStore.set('z:full', { apiKey: 'LIVE_SECRET_XYZ', endpoint: 'https://runtime.internal' });
+  const localEvents: string[] = [];
+  const baseBackend = makeHostApi(localEvents);
+
+  let providerCallbackCalls = 0;
+  const host = new PluginHost({
+    buildProvider: createPluginBuildProvider(),
+    dataDir: testDataDir,
+    host: {
+      ...baseBackend,
+      redact: (text) => text.replaceAll('TOP_SECRET_MARKER', '[HOST_REDACTED]'),
+    },
+    docs: new MemoryDocStore(),
+    config: cfgStore,
+    providers: {
+      register: async () => async () => {},
+    },
+    redactText: (text) => text.replaceAll('PLUGIN_SECRET_MARKER', '[REDACTED]'),
+  });
+  t.after(() => host.dispose());
+
+  await host.register({
+    id: 'a:dep',
+    name: 'Dep Plugin',
+    definePlugin: () => {},
+  });
+
+  await host.register({
+    id: 'z:full',
+    name: { en: 'Full Plugin', 'zh-CN': '全量插件' },
+    description: 'Contains TOP_SECRET_MARKER and PLUGIN_SECRET_MARKER',
+    icon: 'layers',
+    version: '2.0.0',
+    dependencies: ['a:dep'],
+    clientRoot,
+    definePlugin: (ctx) => {
+      ctx.configSchema({
+        endpoint: { type: 'string', default: 'https://default.example', label: 'Endpoint' },
+        apiKey: { type: 'string', secret: true, required: true, default: 'hardcoded-secret-default' },
+      });
+      // Register in deliberately non-sorted order to verify deterministic sorting.
+      ctx.hook.onTurnSettled(() => {});
+      ctx.hook.onTrigger(() => {});
+      ctx.hook.onBeforeTurn(() => {});
+
+      ctx.action({
+        id: 'zeta',
+        description: 'Zeta action',
+        inputSchema: { type: 'object' },
+        outputSchema: { type: 'object' },
+        idempotent: true,
+        handler: () => ({ ok: true }),
+      });
+      ctx.action({
+        id: 'alpha',
+        description: 'Alpha exposed action',
+        inputSchema: { type: 'object' },
+        outputSchema: { type: 'object' },
+        exposeAsTool: true,
+        presentationMetaSchema: { type: 'object', properties: { badge: { type: 'string' } }, additionalProperties: false },
+        projectPresentationMeta: () => ({ badge: 'alpha' }),
+        scope: { profileIds: ['assistant'] },
+        handler: () => ({ ok: true }),
+      });
+
+      ctx.tool({
+        name: 'zebra_tool',
+        description: 'Direct tool',
+        inputSchema: { type: 'object' },
+        structuredOutputSchema: { type: 'object' },
+        presentationMetaSchema: { type: 'object', properties: { count: { type: 'integer' } }, additionalProperties: false },
+        replay: 'safe',
+        scope: { tags: ['ops'] },
+        execute: () => ({ ok: true }),
+      });
+
+      ctx.ui.workbenchPanel({
+        id: 'panel-b',
+        label: 'Panel B',
+        client: { module: 'panels/Side.tsx', export: 'SideView' },
+      });
+      ctx.ui.screen({
+        id: 'main',
+        label: 'Main',
+        client: { module: 'index.tsx', export: 'MainView' },
+      });
+
+      ctx.route({ method: 'POST', path: '/items', handler: () => new Response('ok') });
+      ctx.route({ method: 'GET', path: '/health', public: true, handler: () => new Response('ok') });
+
+      ctx.doc('private_state', { secret: 'never-projected' });
+      ctx.doc('public_board', { count: 7 }, { public: true });
+      ctx.sessionDoc('live_stream', { n: 0 }, { public: true, durable: false });
+      ctx.sessionDoc('private_sess', { n: 1 }, { public: false, durable: false });
+
+      ctx.service({ id: 'svc-z', start: () => {}, stop: () => {} });
+      ctx.service({ id: 'svc-a', start: () => {}, stop: () => {} });
+
+      ctx.provider({
+        id: 'prov-b',
+        name: 'Provider B',
+        auth: {
+          apiKey: {
+            name: 'prov-b key',
+            resolve: async () => {
+              providerCallbackCalls += 1;
+              return undefined;
+            },
+          },
+        },
+        getModels: () => {
+          providerCallbackCalls += 1;
+          return [];
+        },
+        stream: () => {
+          providerCallbackCalls += 1;
+          throw new Error('should never execute stream');
+        },
+        streamSimple: () => {
+          providerCallbackCalls += 1;
+          throw new Error('should never execute streamSimple');
+        },
+      });
+    },
+  });
+
+  // Fail-isolated external plugin to inspect failed projection state.
+  await host.register(
+    {
+      id: 'm:broken',
+      name: 'Broken Plugin',
+      definePlugin: () => {
+        throw new HelmxError('boom_define', 'broken TOP_SECRET_MARKER', 500, { extra: undefined, nested: 'x' });
+      },
+    },
+    { isolateFailure: true },
+  );
+
+  const manifests = host.listManifests();
+  assert.deepEqual(manifests.map((m) => m.id), ['a:dep', 'm:broken', 'z:full']);
+
+  const full: PluginManifestProjection = host.getManifest('z:full');
+  assertPluginManifestProjection(full);
+  assert.equal(full.status, 'active');
+  assert.equal(full.enabled, true);
+  assert.equal(full.description, 'Contains [HOST_REDACTED] and [REDACTED]');
+  assert.deepEqual(full.dependencies, ['a:dep']);
+  // Canonical PLUGIN_HOOK_NAMES order regardless of registration order
+  assert.deepEqual(full.hooks, ['trigger', 'before_turn', 'turn_settled']);
+  assert.deepEqual(full.actions.map((a) => a.id), ['alpha', 'zeta']);
+  assert.equal(full.actions[0]!.toolName, actionToolAlias('z:full', 'alpha'));
+  assert.equal(full.actions[1]!.toolName, undefined);
+  assert.deepEqual(full.tools.map((tool) => tool.name), [actionToolAlias('z:full', 'alpha'), 'zebra_tool']);
+  assert.deepEqual(full.tools[0]!.scope, { profileIds: ['assistant'] });
+  assert.deepEqual(full.tools[0]!.structuredOutputSchema, { type: 'object' });
+  assert.deepEqual(full.tools[0]!.presentationMetaSchema, {
+    type: 'object',
+    properties: { badge: { type: 'string' } },
+    additionalProperties: false,
+  });
+  assert.deepEqual(full.tools[1]!.scope, { tags: ['ops'] });
+  assert.deepEqual(full.tools[1]!.structuredOutputSchema, { type: 'object' });
+  assert.deepEqual(full.tools[1]!.presentationMetaSchema, {
+    type: 'object',
+    properties: { count: { type: 'integer' } },
+    additionalProperties: false,
+  });
+  assert.equal(full.tools[1]!.replay, 'safe');
+  assert.deepEqual(full.ui.map((u) => `${u.surface}:${u.id}`), ['screen:main', 'workbench.panel:panel-b']);
+  assert.deepEqual(full.routes, [
+    { method: 'GET', path: '/api/plugins/z%3Afull/routes/health', public: true },
+    { method: 'POST', path: '/api/plugins/z%3Afull/routes/items', public: false },
+  ]);
+  assert.deepEqual(full.docs, [
+    { name: 'public_board', kind: 'doc', public: true, durable: true },
+    { name: 'live_stream', kind: 'sessionDoc', public: true, durable: false },
+  ]);
+  assert.deepEqual(full.configFields, [
+    { key: 'apiKey', type: 'string', secret: true, required: true },
+    { key: 'endpoint', type: 'string', secret: false, required: false, label: 'Endpoint', default: 'https://default.example' },
+  ]);
+  assert.deepEqual(full.providers, [{ id: 'prov-b', name: 'Provider B' }]);
+  assert.deepEqual(full.services, ['svc-a', 'svc-z']);
+  assert.deepEqual(full.clientModules.map((c) => c.module), ['index.tsx', 'panels/Side.tsx']);
+  assert.ok(full.clientModules.every((c) => typeof c.contentHash === 'string' && c.contentHash.length > 0));
+
+  const serialized = JSON.stringify(full);
+  assert.ok(!serialized.includes('LIVE_SECRET_XYZ'), 'runtime config values must never appear in manifest');
+  assert.ok(!serialized.includes('https://runtime.internal'), 'runtime config values must never appear in manifest');
+  assert.ok(!serialized.includes('hardcoded-secret-default'), 'secret field default must never appear in manifest');
+  assert.ok(!serialized.includes('private_state'), 'private doc descriptors must never appear in manifest');
+  assert.ok(!serialized.includes('private_sess'), 'private sessionDoc descriptors must never appear in manifest');
+  assert.ok(!serialized.includes('never-projected'), 'doc values must never appear in manifest');
+  assert.ok(!serialized.includes('TOP_SECRET_MARKER'), 'host redactor must scrub projected text');
+  assert.ok(!serialized.includes('PLUGIN_SECRET_MARKER'), 'redactText must scrub projected text');
+  assert.equal(providerCallbackCalls, 0, 'manifest introspection must never invoke provider callbacks');
+
+  const broken = host.getManifest('m:broken');
+  assertPluginManifestProjection(broken);
+  assert.equal(broken.status, 'failed');
+  assert.equal(broken.enabled, false);
+  assert.equal(broken.error?.code, 'boom_define');
+  assert.equal(broken.error?.message, 'broken [HOST_REDACTED]');
+  assert.deepEqual(broken.actions, []);
+
+  // Disabling removes live capabilities immediately while keeping config schema (without secret defaults) & dependencies
+  await host.disable('z:full');
+  const disabled = host.getManifest('z:full');
+  assertPluginManifestProjection(disabled);
+  assert.equal(disabled.status, 'disabled');
+  assert.equal(disabled.enabled, false);
+  assert.deepEqual(disabled.hooks, []);
+  assert.deepEqual(disabled.actions, []);
+  assert.deepEqual(disabled.tools, []);
+  assert.deepEqual(disabled.ui, []);
+  assert.deepEqual(disabled.routes, []);
+  assert.deepEqual(disabled.docs, []);
+  assert.deepEqual(disabled.providers, []);
+  assert.deepEqual(disabled.services, []);
+  assert.deepEqual(disabled.clientModules, []);
+  assert.deepEqual(disabled.dependencies, ['a:dep']);
+  assert.equal(disabled.configFields.length, 2);
+
+  throwsCode(() => host.getManifest('no:such-plugin'), 'unknown_plugin');
+  await host.dispose();
+  throwsCode(() => host.getManifest('a:dep'), 'plugin_host_disposed');
+  throwsCode(() => host.listManifests(), 'plugin_host_disposed');
+});
+
+test('doctorPluginDir captures validated PluginManifestProjection during dry-run and rejects intra-plugin tool conflicts', { timeout: 60_000 }, async (t) => {
+  const baseDir = await makeTempDir('helmx-doctor-manifest-');
+  t.after(() => cleanupDir(baseDir));
+  const buildProvider = createPluginBuildProvider();
+
+  // 1. Healthy plugin with capabilities -> report.manifest carries full dry-run capabilities before teardown
+  const okDir = join(baseDir, 'healthy-ext');
+  mkdirSync(join(okDir, 'client'), { recursive: true });
+  writeFileSync(
+    join(okDir, 'plugin.json'),
+    JSON.stringify({ id: 'ext-doc-manifest', name: 'Healthy Ext', clientRoot: './client' }),
+  );
+  writeFileSync(join(okDir, 'client', 'index.tsx'), 'export function MainScreen() { return "hi"; }\n');
+  writeFileSync(
+    join(okDir, 'index.ts'),
+    `export default {
+  id: 'ext-doc-manifest',
+  name: 'Healthy Ext',
+  definePlugin(ctx: any) {
+    ctx.configSchema({ token: { type: 'string', secret: true, default: 'leak-nope' } });
+    ctx.action({
+      id: 'ping',
+      description: 'Ping',
+      inputSchema: { type: 'object' },
+      outputSchema: { type: 'object' },
+      exposeAsTool: true,
+      handler: () => ({ ok: true }),
+    });
+    ctx.ui.screen({ id: 'main', label: 'Main', client: { module: 'index.tsx', export: 'MainScreen' } });
+    ctx.route({ method: 'GET', path: '/status', handler: () => new Response('ok') });
+    ctx.doc('priv', { secret: 1 });
+    ctx.doc('pub', { count: 1 }, { public: true });
+  },
+};\n`,
+  );
+
+  const okReport = await doctorPluginDir(okDir, { buildProvider });
+  assert.equal(okReport.ok, true);
+  assert.ok(okReport.manifest, 'doctor report should carry manifest when register succeeds');
+  assertPluginManifestProjection(okReport.manifest);
+  assert.equal(okReport.manifest.id, 'ext-doc-manifest');
+  assert.deepEqual(okReport.manifest.actions.map((a) => a.id), ['ping']);
+  assert.deepEqual(okReport.manifest.tools.map((tool) => tool.sourceKind), ['action']);
+  assert.deepEqual(okReport.manifest.ui.map((u) => u.id), ['main']);
+  assert.deepEqual(okReport.manifest.docs, [{ name: 'pub', kind: 'doc', public: true, durable: true }]);
+  assert.deepEqual(okReport.manifest.configFields, [{ key: 'token', type: 'string', secret: true, required: false }]);
+  assert.deepEqual(okReport.manifest.clientModules, [{ module: 'index.tsx' }]);
+  assert.equal('default' in okReport.manifest.configFields[0]!, false);
+
+  // 2. Intra-plugin tool collision between ctx.tool and exposeAsTool alias fails in register stage without manifest
+  const collideAlias = actionToolAlias('ext-doc-collide', 'ping');
+  const collideDir = join(baseDir, 'collide-ext');
+  mkdirSync(collideDir, { recursive: true });
+  writeFileSync(
+    join(collideDir, 'index.ts'),
+    `export default {
+  id: 'ext-doc-collide',
+  definePlugin(ctx: any) {
+    ctx.action({
+      id: 'ping',
+      description: 'Ping',
+      inputSchema: { type: 'object' },
+      outputSchema: { type: 'object' },
+      exposeAsTool: true,
+      handler: () => ({ ok: true }),
+    });
+    ctx.tool({
+      name: ${JSON.stringify(collideAlias)},
+      description: 'Colliding tool',
+      inputSchema: { type: 'object' },
+      execute: () => ({ ok: true }),
+    });
+  },
+};\n`,
+  );
+  const badReport = await doctorPluginDir(collideDir, { buildProvider });
+  assert.equal(badReport.ok, false);
+  const regCheck = badReport.checks.find((c) => c.id === 'register');
+  assert.equal(regCheck?.error?.code, 'duplicate_tool_name');
+  assert.equal(badReport.manifest, undefined, 'failed register must not emit partial manifest');
 });

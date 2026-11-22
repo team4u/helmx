@@ -250,7 +250,8 @@ export function resolveSubagentElapsedMs(input: {
     const elapsed = nodeDuration ?? input.backgroundRun.updatedAt - input.backgroundRun.createdAt
     return elapsed !== undefined && Number.isFinite(elapsed) && elapsed >= 0 ? elapsed : undefined
   }
-  if (parseSubagentExecutionInfo(input.toolSummary?.structuredOutput, input.toolSummary?.resultText)?.runId !== undefined) {
+  const execInfo = parseSubagentExecutionInfo(input.toolSummary?.presentationMeta)
+  if (execInfo?.runId !== undefined && (execInfo.background === true || execInfo.status === 'running')) {
     return undefined
   }
   const elapsed = input.toolSummary?.durationMs
@@ -272,58 +273,36 @@ function previewFromRecord(record: Record<string, unknown>): string | undefined 
     }
     if (v !== undefined && v !== null && typeof v === 'object') return firstLineOf(JSON.stringify(v), 100)
   }
-  return firstLineOf(JSON.stringify(record), 100)
+  return undefined
 }
 
-/** Extract the completion conclusion preview from structuredOutput or resultText. */
+/** Extract the completion conclusion preview from presentationMeta or plain resultText (zero JSON.parse). */
 export function extractSubagentResultPreview(
   resultText: string | undefined,
-  structuredOutput?: unknown,
+  presentationMeta?: unknown,
 ): string | undefined {
-  if (structuredOutput !== undefined && structuredOutput !== null && typeof structuredOutput === 'object' && !Array.isArray(structuredOutput)) {
-    return previewFromRecord(structuredOutput as Record<string, unknown>)
+  if (presentationMeta !== undefined && presentationMeta !== null && typeof presentationMeta === 'object' && !Array.isArray(presentationMeta)) {
+    const fromMeta = previewFromRecord(presentationMeta as Record<string, unknown>)
+    if (fromMeta !== undefined) return fromMeta
   }
   if (resultText === undefined) return undefined
   const trimmed = resultText.trim()
   if (trimmed === '') return undefined
-  if (trimmed.startsWith('{')) {
-    try {
-      const parsed: unknown = JSON.parse(trimmed)
-      if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        return previewFromRecord(parsed as Record<string, unknown>)
-      }
-    } catch {
-      // Not JSON: fall back to plain text handling.
-    }
-  }
   const cleaned = extractCleanPreviewLine(trimmed, 100)
   return cleaned !== '' ? cleaned : undefined
 }
 
 function errorTextFromToolSummary(toolSummary: SubagentParentToolSummary | undefined): string | undefined {
   if (toolSummary === undefined) return undefined
-  const structured = toolSummary.structuredOutput
-  if (structured !== undefined && structured !== null && typeof structured === 'object' && !Array.isArray(structured)) {
-    const record = structured as Record<string, unknown>
+  const meta = toolSummary.presentationMeta
+  if (meta !== undefined && meta !== null && typeof meta === 'object' && !Array.isArray(meta)) {
+    const record = meta as Record<string, unknown>
     const errField = record['error'] ?? (record['ok'] === false ? record['result'] : undefined)
     if (typeof errField === 'string' && errField.trim() !== '') {
       return firstLineOf(errField, 100)
     }
   }
   const raw = toolSummary.resultText?.trim()
-  if (raw !== undefined && raw !== '' && raw.startsWith('{')) {
-    try {
-      const parsed: unknown = JSON.parse(raw)
-      if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        const record = parsed as Record<string, unknown>
-        if (record['ok'] === false && typeof record['error'] === 'string' && record['error'].trim() !== '') {
-          return firstLineOf(record['error'], 100)
-        }
-      }
-    } catch {
-      // Not JSON: treat as plain text.
-    }
-  }
   if (toolSummary.isError === true && raw !== undefined && raw !== '') {
     return firstLineOf(raw, 100)
   }
@@ -342,16 +321,23 @@ function backgroundRunError(backgroundRun: WorkflowRunSummary, locale: HelmxLoca
   return fallback
 }
 
+function previewFromRunValue(value: unknown): string | undefined {
+  if (typeof value === 'string') return extractSubagentResultPreview(value)
+  if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+    return previewFromRecord(value as Record<string, unknown>) ?? firstLineOf(JSON.stringify(value), 100)
+  }
+  const serialized = JSON.stringify(value)
+  return serialized !== undefined ? firstLineOf(serialized, 100) : undefined
+}
+
 function backgroundRunResultPreview(backgroundRun: WorkflowRunSummary | undefined): string | undefined {
   if (backgroundRun === undefined) return undefined
   const nodeOutput = backgroundRun.nodes?.[0]?.output
   if (nodeOutput !== undefined) {
-    return extractSubagentResultPreview(typeof nodeOutput === 'string' ? nodeOutput : JSON.stringify(nodeOutput))
+    return previewFromRunValue(nodeOutput)
   }
   if (backgroundRun.result !== undefined) {
-    return extractSubagentResultPreview(
-      typeof backgroundRun.result === 'string' ? backgroundRun.result : JSON.stringify(backgroundRun.result),
-    )
+    return previewFromRunValue(backgroundRun.result)
   }
   if (backgroundRun.resultPreview !== undefined) {
     return extractSubagentResultPreview(backgroundRun.resultPreview)
@@ -472,7 +458,7 @@ export function resolveSubagentHeaderSnippet(
     if (fromEntries !== undefined) return { kind: 'done', text: fromEntries }
     const fromTool =
       input.backgroundRun === undefined
-        ? extractSubagentResultPreview(input.toolSummary?.resultText, input.toolSummary?.structuredOutput)
+        ? extractSubagentResultPreview(input.toolSummary?.resultText, input.toolSummary?.presentationMeta)
         : undefined
     if (fromTool !== undefined) return { kind: 'done', text: fromTool }
     return undefined

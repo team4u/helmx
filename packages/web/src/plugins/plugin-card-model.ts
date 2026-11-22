@@ -9,6 +9,7 @@
 import type { HelmxLocale, PluginSummary, ScreenSpec } from '@helmx/protocol/browser'
 import { resolveLocalizedText } from '@helmx/protocol/browser'
 import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
+import { isPluginSummaryActive, type PluginActivityLike } from '../lib/live-state.js'
 import type { GroupedUiSpecs } from '../lib/types.js'
 
 /** 插件中心默认占位图标（当插件未显式提供 icon 时使用）。 */
@@ -125,10 +126,10 @@ export function listPluginScreens(
     .map((item) => ({ pluginId: item.pluginId, screenId: item.spec.id, spec: item.spec }))
 }
 
-/** 插件是否具备可打开的主视图（enabled 且至少声明一个 Screen 贡献）。 */
+/** 插件是否具备可打开的主视图（处于活跃运行态且至少声明一个 Screen 贡献；enabled=true 但 status=failed 不得视为可打开）。 */
 export function pluginHasOpenableScreen(
   grouped: Pick<GroupedUiSpecs, 'screens'>,
-  plugin: Pick<PluginSummary, 'id' | 'enabled'>,
+  plugin: { id: string } & PluginActivityLike,
 ): boolean {
-  return plugin.enabled && listPluginScreens(grouped, plugin.id).length > 0
+  return isPluginSummaryActive(plugin) && listPluginScreens(grouped, plugin.id).length > 0
 }

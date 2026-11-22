@@ -299,6 +299,8 @@ export interface UiActionSpec extends UiSpecBase {
 export interface PluginSlotContributionSpec extends UiSpecBase {
   /** <ownerPluginId>/<slotName>, must contain exactly one /. */
   target: string
+  /** Component reference (requires the plugin definition to provide clientRoot or prebuiltClientDir; slots only support the client track). */
+  client: ClientComponentRef
   order?: number
   priority?: number
 }
@@ -328,6 +330,83 @@ export const COMPOSER_DOCK_SLOT = 'builtin:composer/dock' as const
 /** Namespace reserved by the host conversation overview card metadata area; does not imply a builtin:overview plugin exists.
  * Read-only badge/link pills (e.g. task number + column link) are contributed via ctx.ui.slot; heavy actions belong in the plugin's own screen/drawer. */
 export const OVERVIEW_CARD_META_SLOT = 'builtin:overview/card-meta' as const
+
+/** Single source of truth of the 5 host-reserved sub-slot target identifiers. */
+export const HOST_SLOT_TARGETS = [
+  PROFILE_DETAIL_SECTION_SLOT,
+  NODE_DETAIL_SECTION_SLOT,
+  COMPOSER_STATUS_SLOT,
+  COMPOSER_DOCK_SLOT,
+  OVERVIEW_CARD_META_SLOT,
+] as const
+
+export type HostSlotTarget = (typeof HOST_SLOT_TARGETS)[number]
+
+export interface HostSlotCatalogEntry {
+  readonly target: HostSlotTarget
+  readonly ownerPluginId: string
+  readonly slotName: string
+  readonly mode: 'list' | 'single'
+  readonly propsType: string
+  readonly conversationContext: 'none' | 'optional' | 'required'
+  readonly description: string
+}
+
+/** Single read-only protocol catalog of the 5 real host-mounted sub-slots. */
+export const HOST_SLOT_CATALOG = Object.freeze([
+  Object.freeze({
+    target: PROFILE_DETAIL_SECTION_SLOT,
+    ownerPluginId: 'builtin:profile',
+    slotName: 'detail-section',
+    mode: 'list',
+    propsType: 'ProfileDetailSlotProps',
+    conversationContext: 'none',
+    description: 'Profile detail drawer extension section',
+  }),
+  Object.freeze({
+    target: NODE_DETAIL_SECTION_SLOT,
+    ownerPluginId: 'builtin:node',
+    slotName: 'detail-section',
+    mode: 'list',
+    propsType: 'NodeDetailSlotProps',
+    conversationContext: 'none',
+    description: 'Existing node detail drawer extension section',
+  }),
+  Object.freeze({
+    target: COMPOSER_STATUS_SLOT,
+    ownerPluginId: 'builtin:composer',
+    slotName: 'status',
+    mode: 'list',
+    propsType: 'ComposerStatusSlotProps',
+    conversationContext: 'optional',
+    description: 'Read-only telemetry row below composer (persisted conversation or standby draft)',
+  }),
+  Object.freeze({
+    target: COMPOSER_DOCK_SLOT,
+    ownerPluginId: 'builtin:composer',
+    slotName: 'dock',
+    mode: 'list',
+    propsType: 'ComposerScopeProps',
+    conversationContext: 'required',
+    description: 'In-flight activity tray directly above AskDock in the composer',
+  }),
+  Object.freeze({
+    target: OVERVIEW_CARD_META_SLOT,
+    ownerPluginId: 'builtin:overview',
+    slotName: 'card-meta',
+    mode: 'list',
+    propsType: 'OverviewCardMetaSlotProps',
+    conversationContext: 'required',
+    description: 'Read-only metadata pill area on conversation overview cards',
+  }),
+] as const satisfies readonly HostSlotCatalogEntry[])
+
+type _AssertAllHostSlotsCataloged =
+  Exclude<HostSlotTarget, (typeof HOST_SLOT_CATALOG)[number]['target']> extends never
+    ? true
+    : never
+const _assertAllHostSlotsCataloged: _AssertAllHostSlotsCataloged = true
+void _assertAllHostSlotsCataloged
 
 /** Only mounted for existing nodes; contains no node access tokens or other credentials. */
 export interface NodeDetailSlotProps {
@@ -416,18 +495,6 @@ export interface TimelineRendererProps {
   conversationId: number
 }
 
-/** Lightweight summary of all tool calls in the same conversation (for plugins to dedupe themselves, e.g. folding multiple resumes of the same sub-conversation). */
-export interface ToolViewSiblingCall {
-  callId: string
-  toolName: string
-  input?: unknown
-  status: 'running' | 'done' | 'error'
-  result?: unknown
-  structuredOutput?: unknown
-  /** Present when the result is a truncated preview from the detail endpoint; plugins must not treat result as the full original text. */
-  resultTruncation?: ToolResultTruncation
-}
-
 /** tool.view: serializable data of a tool call process and result. */
 export interface ToolViewProps {
   callId: string
@@ -435,7 +502,8 @@ export interface ToolViewProps {
   input?: unknown
   status: 'running' | 'done' | 'error'
   result?: unknown
-  structuredOutput?: unknown
+  /** Bounded UI presentation metadata persisted on toolResult.details (never carries bulky structuredOutput). */
+  presentationMeta?: Readonly<Record<string, unknown>>
   /** Present when the result is a truncated preview from the detail endpoint; plugins must not treat result as the full original text. */
   resultTruncation?: ToolResultTruncation
   isError?: boolean
@@ -443,8 +511,6 @@ export interface ToolViewProps {
   durationMs?: number
   artifactRef?: string
   conversationId: number
-  /** All tool calls in the currently loaded timeline (chronological), for plugins to compute folding/continuation relationships themselves. */
-  siblingCalls?: ReadonlyArray<ToolViewSiblingCall>
 }
 
 export interface ComposerController {
@@ -620,8 +686,8 @@ export interface PluginClientContext {
  *
  * The single source of truth of exported symbols is PLUGIN_CLIENT_SHARED_EXPORTS:
  * - hooks: usePluginContext / usePluginLocale / usePluginTranslator / usePluginDoc / usePluginSessionDoc /
- *   useToolActivity / useConversations / useConversation / useConversationBackground / usePlugins /
- *   useScreenParams (screen-local params scope provided by the host ScreenHost) /
+ *   useToolActivity / useTimelineToolCalls / useConversations / useConversation / useConversationBackground /
+ *   usePlugins / useScreenParams (screen-local params scope provided by the host ScreenHost) /
  *   usePluginConfig / useHostModels / useScreenLocation (stable-handle reads of host capability slices:
  *   model catalog, navigation location; isolation contract pinned by @helmx/plugin-client tests —
  *   unrelated host port revisions must not re-render consumers);
@@ -740,6 +806,25 @@ export interface ScreenLocationSnapshot {
 
 }
 
+/** Execution status of a timeline tool call summary. */
+export type TimelineToolCallStatus = 'running' | 'done' | 'error'
+
+/**
+ * Lightweight, toolName-sharded summary of one tool call in the active timeline
+ * (returned by `useTimelineToolCalls(toolName)`).
+ * Omits bulky `result` text and truncation payloads; carries only bounded UI metadata.
+ */
+export interface TimelineToolCallSummary {
+  callId: string
+  toolName: string
+  /** Chronological 0-based position of this tool call within the loaded timeline. */
+  index: number
+  status: TimelineToolCallStatus
+  input?: unknown
+  /** Bounded UI metadata persisted on toolResult.details (never carries raw result text). */
+  presentationMeta?: Readonly<Record<string, unknown>>
+}
+
 /** GET /api/plugins/:id/client.mjs response metadata (HTTP error envelope on failure, never JS). */
 export interface PluginClientModuleInfo {
   pluginId: string
@@ -787,6 +872,7 @@ export const PLUGIN_CLIENT_SHARED_EXPORTS = [
   'usePluginDoc',
   'usePluginSessionDoc',
   'useToolActivity',
+  'useTimelineToolCalls',
   'useConversations',
   'useConversation',
   'useConversationBackground',

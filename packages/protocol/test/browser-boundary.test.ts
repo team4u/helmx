@@ -39,7 +39,10 @@ test('@helmx/protocol/browser: export declarations aligned with the root entry\'
     'COMPOSER_STATUS_SLOT',
     'COMPOSER_DOCK_SLOT',
     'OVERVIEW_CARD_META_SLOT',
+    'HOST_SLOT_TARGETS',
+    'HOST_SLOT_CATALOG',
     'matchesConversationScope',
+    'isPluginSummaryActive',
     'isSkillAvailable',
     'assertSchemaCompilable',
     'validateOrThrow',
@@ -62,6 +65,19 @@ test('@helmx/protocol/browser: export declarations aligned with the root entry\'
     'createLocaleTranslator',
     'encodeSessionDocSubParam',
     'parseSessionDocSubParam',
+    'TOOL_PRESENTATION_META_MAX_BYTES',
+    'TOOL_PRESENTATION_META_MAX_DEPTH',
+    'TOOL_PRESENTATION_META_MAX_NODES',
+    'assertBoundedPresentationMeta',
+    'EDIT_TOOL_RESULT_SCHEMA',
+    'READ_TOOL_META_SCHEMA',
+    'WRITE_TOOL_META_SCHEMA',
+    'BASH_TOOL_META_SCHEMA',
+    'ARTIFACT_REGISTER_META_SCHEMA',
+    'ARTIFACT_READ_META_SCHEMA',
+    'KERNEL_TOOL_PRESENTATION_META_SCHEMAS',
+    'assertPluginManifestProjection',
+    'compareCodeUnit',
   ] as const
 
   const browserRecord = browserExports as Record<string, unknown>
@@ -105,4 +121,19 @@ test('parsePluginUiContribution: covers every known surface and rejects invalid 
   for (const c of invalidCases) {
     assert.equal(parsePluginUiContribution(c.value), undefined, `${c.label} must return undefined`)
   }
+})
+
+test('isPluginSummaryActive: unified truth table across enabled/status/error combinations', { timeout: 60_000 }, () => {
+  const err = { code: 'plugin_enable_failed', message: 'boom', stage: 'enable' as const }
+  assert.equal(browserExports.isPluginSummaryActive({ enabled: true }), true)
+  assert.equal(browserExports.isPluginSummaryActive({ enabled: true, status: 'active' }), true)
+  assert.equal(browserExports.isPluginSummaryActive({ enabled: false }), false)
+  assert.equal(browserExports.isPluginSummaryActive({ enabled: false, status: 'active' }), false)
+  assert.equal(browserExports.isPluginSummaryActive({ enabled: false, status: 'disabled' }), false)
+  assert.equal(browserExports.isPluginSummaryActive({ enabled: true, status: 'disabled' }), false)
+  assert.equal(browserExports.isPluginSummaryActive({ enabled: true, status: 'failed' }), false)
+  assert.equal(browserExports.isPluginSummaryActive({ enabled: true, status: 'failed', error: err }), false)
+  assert.equal(browserExports.isPluginSummaryActive({ enabled: true, status: 'active', error: err }), false)
+  assert.equal(browserExports.isPluginSummaryActive({ enabled: true, error: err }), false)
+  assert.equal(browserExports.isPluginSummaryActive({ enabled: false, status: 'failed', error: err }), false)
 })
