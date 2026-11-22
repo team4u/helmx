@@ -606,7 +606,7 @@ test('node artifact assembly contract: dist-node is a four-external-dependency p
   // the install root's manifest, never in a package being installed (0.1.1 shipped inert overrides
   // and still warned ERESOLVE on `npm i -g`). The four exact pins must satisfy every peer in the
   // closure and no overrides may be declared.
-  assert.equal(pkg.overrides, undefined, 'node artifact must fix peer conflicts at pin time (realign with chord peerOptional pins), not ship inert overrides');
+  assert.equal(pkg.overrides, undefined, 'node artifact must fix peer conflicts at pin time (realign with the externals\' peer declarations), not ship inert overrides');
 
   const bundle = readFileSync(path.join(nodeStagingDir, 'dist/cli.js'), 'utf-8');
   assert.ok(bundle.startsWith('#!/usr/bin/env node'), 'the bundle must keep the shebang to work as a bin target');

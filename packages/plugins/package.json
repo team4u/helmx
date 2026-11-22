@@ -98,9 +98,9 @@
     "test": "tsx --test"
   },
   "dependencies": {
-    "@earendil-works/chord": "1.5.2",
-    "@earendil-works/pi-ai": "1.5.2",
-    "@earendil-works/pi-durable": "1.5.2",
+    "@earendil-works/chord": "1.6.0",
+    "@earendil-works/pi-ai": "1.6.0",
+    "@earendil-works/pi-durable": "1.6.0",
     "@helmx/protocol": "workspace:*",
     "cron-parser": "^5.10.4",
     "typebox": "^1.0.0"

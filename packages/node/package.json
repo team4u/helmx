@@ -19,12 +19,12 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@earendil-works/chord": "1.5.2",
-    "@earendil-works/pi-durable": "1.5.2",
+    "@earendil-works/chord": "1.6.0",
+    "@earendil-works/pi-durable": "1.6.0",
     "@helmx/protocol": "workspace:*",
     "@helmx/env-io": "workspace:*",
     "birpc": "^2.9.0",
-    "ws": "8.21.0"
+    "ws": "^8.18.0"
   },
   "devDependencies": {
     "@helmx/test-kit": "workspace:*",

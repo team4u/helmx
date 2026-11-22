@@ -122,13 +122,15 @@ test('failure durability: lastError stays visible across process restart (author
   const { models, faux } = makeFauxModels()
   const kernel = await KernelRuntime.open({ dataDir, cwd: dataDir, model: 'faux/faux-1', models })
   try {
+    // Use a non-retryable terminal provider error so a single faux response settles directly into runFailure
+    // without triggering pi-ai's transient retry loop (which exhausts the 1-item faux queue on retry).
     faux.setResponses([
-      fauxAssistantMessage('x', { errorMessage: 'connection reset by peer', stopReason: 'error' }),
+      fauxAssistantMessage('x', { errorMessage: 'upstream authentication failed', stopReason: 'error' }),
     ])
     await kernel.submitInput(1, 'failure before restart').catch(() => {})
     await kernel.waitForIdle(1).catch(() => {})
     await waitFor(() => kernel.getConversation(1).status === 'error')
-    assert.ok(kernel.getConversation(1).lastError?.includes('connection reset by peer'))
+    assert.ok(kernel.getConversation(1).lastError?.includes('upstream authentication failed'))
   } finally {
     await kernel.close()
   }
@@ -140,7 +142,7 @@ test('failure durability: lastError stays visible across process restart (author
     const summary = kernel2.getConversation(1)
     assert.equal(summary.status, 'error', 'error status should remain after restart')
     assert.ok(
-      summary.lastError?.includes('connection reset by peer'),
+      summary.lastError?.includes('upstream authentication failed'),
       `lastError should remain visible after restart, actual: ${summary.lastError}`,
     )
   } finally {

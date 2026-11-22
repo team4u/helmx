@@ -85,11 +85,13 @@ const cmp = (a, b) => (a[0] - b[0]) || (a[1] - b[1]) || ((a[2] ?? 0) - (b[2] ?? 
 
 /**
  * Scan the closure for peer declarations that conflict with root dependencies: npm enforces strict
- * peer resolution (ERESOLVE) by default, whereas pnpm permits wider peer ranges (the repo pins ws at
- * chord's peerOptional exact version so global installs stay ERESOLVE-clean; this scan stays as the
- * drift guard for future upstream peer re-pins).
- * Returns Map<peerName, rootVersion> for dist root package.json overrides
- * (always equal to the exact version pinned in root dependencies, per npm's rule that direct-dep overrides must match their spec).
+ * peer resolution (ERESOLVE) by default, whereas pnpm permits wider peer ranges. The check runs
+ * against the exact versions pnpm actually installed in this repository (what the dist manifests
+ * pin), since those are the versions a global install resolves; since chord 1.6.0 the upstream
+ * peers are ranges (^8.21.0), so plain caret ranges in the workspace satisfy them without pins.
+ * This scan stays as the drift guard for future upstream peer re-pins.
+ * Returns Map<peerName, rootVersion> of conflicting pins (Hub payload emits them as root overrides;
+ * node artifact treats any non-empty conflict as a hard build failure).
  */
 export function scanPeerOverrides(rootEntries) {
   // rootEntries: [{ name, version, fromPkgDir }] (root dependencies + resolution starting points).

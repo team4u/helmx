@@ -8,8 +8,8 @@
     "test": "tsx --test"
   },
   "devDependencies": {
-    "@earendil-works/chord": "1.5.2",
-    "@earendil-works/pi-durable": "1.5.2",
+    "@earendil-works/chord": "1.6.0",
+    "@earendil-works/pi-durable": "1.6.0",
     "@helmx/cli": "workspace:*",
     "@helmx/hub": "workspace:*",
     "@helmx/kernel": "workspace:*",

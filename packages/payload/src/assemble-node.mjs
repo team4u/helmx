@@ -94,15 +94,16 @@ export async function assembleNodeArtifact({ repoRoot, version, enginesNode }) {
   // npm resolves peers strictly (ERESOLVE) while the repository's pnpm install allows wider peer
   // ranges. Overrides cannot help here: npm only honors `overrides` in the install root's manifest,
   // never in a package being installed (`npm i -g @helmx/node` ships overrides that do nothing —
-  // proven by 0.1.1 warning despite carrying them). The only real fix is exact-version alignment
-  // with the peers of the four externals (repo pins ws at chord's peerOptional version), so make
-  // any residual conflict a hard build failure instead of shipping an inert field.
+  // proven by 0.1.1 warning despite carrying them). The published manifest pins the exact versions
+  // pnpm installed here, so the real contract is that those versions satisfy every peer declaration
+  // in the closure (chord 1.6.0 relaxed its peers to ranges, so caret specs satisfy them without
+  // workspace pins); make any residual conflict a hard build failure instead of shipping an inert field.
   const peerOverrides = scanPeerOverrides(EXTERNAL_DEPS.map((name) => ({ name, version: dependencies[name], fromPkgDir: nodePkgDir })));
   if (peerOverrides.size > 0) {
     const conflicts = [...peerOverrides.entries()].map(([name, version]) => `${name}@${version}`).sort().join(', ');
     console.error(
-      `[payload] node external dependency peers conflict with the exact pins (${conflicts}): npm ignores overrides of a globally installed package,` +
-        ' so realign the repository pins with the peers of the four externals (e.g. ws must equal chord peerOptional pin) before publishing',
+      `[payload] node external dependency peers conflict with the installed pins (${conflicts}): npm ignores overrides of a globally installed package,` +
+        ' so realign the repository dependencies with the peers of the four externals (e.g. a chord peer re-pin) before publishing',
     );
     process.exit(1);
   }

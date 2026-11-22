@@ -169,8 +169,9 @@ rootDependencies['@helmx/env-io'] = 'file:./env-io.tgz';
 rootDependencies['@helmx/hub'] = 'file:./hub.tgz';
 
 // npm resolves peers strictly by default (ERESOLVE), while the repository's pnpm install allows peer
-// versions wider than declared (the repo pins ws at chord's peerOptional exact version; this scan is
-// the drift guard for future upstream peer re-pins). Scan
+// versions wider than declared (the check runs against the exact versions pnpm installed here; chord
+// 1.6.0 relaxed its peers to ranges, so plain caret specs satisfy them — this scan is the drift guard
+// for future upstream peer re-pins). Scan
 // the installed closure to generate overrides that unify conflicting names held at the root to the root
 // exact versions — so a bare consumer-side `npm install --omit=dev --ignore-scripts` works out of the
 // box without extra flags (.npmrc cannot ship inside a tarball; npm permanently excludes it).

@@ -17,16 +17,16 @@
     "test": "tsx --test"
   },
   "dependencies": {
-    "@earendil-works/chord": "1.5.2",
-    "@earendil-works/pi-ai": "1.5.2",
-    "@earendil-works/pi-durable": "1.5.2",
-    "@earendil-works/pi-schema": "1.5.2",
+    "@earendil-works/chord": "1.6.0",
+    "@earendil-works/pi-ai": "1.6.0",
+    "@earendil-works/pi-durable": "1.6.0",
+    "@earendil-works/pi-schema": "1.6.0",
     "@helmx/protocol": "workspace:*",
     "@helmx/env-io": "workspace:*",
     "birpc": "^2.9.0",
     "diff": "8.0.4",
     "typebox": "^1.0.0",
-    "ws": "8.21.0"
+    "ws": "^8.18.0"
   },
   "devDependencies": {
     "@helmx/node": "workspace:*",
