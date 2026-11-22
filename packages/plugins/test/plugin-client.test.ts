@@ -1816,7 +1816,7 @@ test('外部插件 dist-client-only 分发：无源码无 node_modules 无 build
       'export function ExtScreen() { return "ext-prebuilt" }\n',
     )
 
-    const pluginDir = join(scratch, 'data', 'plugins', 'my-prebuilt-ext')
+    const pluginDir = join(scratch, 'data', 'installed-plugins', 'my-prebuilt-ext')
     await mkdir(pluginDir, { recursive: true })
     await writeFile(
       join(pluginDir, 'plugin.json'),
@@ -1866,6 +1866,7 @@ test('外部插件 dist-client-only 分发：无源码无 node_modules 无 build
     await writeFile(join(outsideDist, PREBUILT_CLIENT_MANIFEST_FILE), JSON.stringify({ version: 1, modules: {} }))
     const escapePluginDir = join(scratch, 'escape-ext')
     await mkdir(escapePluginDir, { recursive: true })
+    await writeFile(join(escapePluginDir, 'plugin.json'), JSON.stringify({ id: 'escape-ext', main: 'index.mjs' }))
     await writeFile(join(escapePluginDir, 'index.mjs'), 'export default { id: "escape-ext", name: "E", version: "0.1.0", definePlugin() {} }\n')
     await symlink(outsideDist, join(escapePluginDir, PREBUILT_CLIENT_DIR_NAME))
     const escapeReport = await doctorPluginDir(escapePluginDir, {})

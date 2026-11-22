@@ -187,14 +187,6 @@ async function doctorPluginDirInternal(
   let entryPath: string | undefined;
   const entryOk = await push('manifest', 'manifest and entry resolution', async () => {
     entryPath = await resolvePluginEntry(dir);
-    if (entryPath === undefined) {
-      throw new HelmxError(
-        'plugin_entry_missing',
-        `Directory ${dir} does not contain a plugin entrypoint (no plugin.json or conventional entrypoint found)`,
-        404,
-        { dir },
-      );
-    }
   });
 
   let definition: PluginDefinition | undefined;

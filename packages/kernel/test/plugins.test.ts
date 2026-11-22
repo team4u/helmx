@@ -2597,7 +2597,7 @@ test('clientHashes: reloadExternalPlugin recompiles and emits updated clientHash
   const host = makeHost();
   t.after(() => host.dispose());
 
-  const pluginDir = join(dataDir, 'plugins', 'ext-hash-reload');
+  const pluginDir = join(dataDir, 'installed-plugins', 'ext-hash-reload');
   mkdirSync(join(pluginDir, 'client'), { recursive: true });
   writeFileSync(
     join(pluginDir, 'plugin.json'),
@@ -2916,12 +2916,7 @@ test('PluginSummary.publicConfig filters secret fields, merges defaults, redacts
   const host = new PluginHost({
     buildProvider: createPluginBuildProvider(),
     dataDir,
-    host: {
-      ...baseBackend,
-      setPluginConfig: async (pluginId, values) => {
-        cfgStore.set(pluginId, values);
-      },
-    },
+    host: baseBackend,
     docs,
     config: cfgStore,
     redactText: (text) => text.replaceAll('sk-live-secret', '[REDACTED]'),
@@ -2966,7 +2961,7 @@ test('PluginSummary.publicConfig filters secret fields, merges defaults, redacts
   assert.equal('undeclaredKey' in (host.get('p:cfg-mixed')?.publicConfig ?? {}), false);
 
   const changedStart = eventPayloads.filter((e) => e.type === 'plugin.changed').length;
-  await host.setConfig('p:cfg-mixed', { windowMs: 3_500, apiKey: 'sk-live-secret' });
+  await host.setConfig('p:cfg-mixed', { windowMs: 3_500, apiKey: 'sk-live-secret', note: null });
   const updated = host.get('p:cfg-mixed')!;
   assert.deepEqual(updated.publicConfig, { windowMs: 3_500, label: 'fast' });
 
@@ -3231,7 +3226,7 @@ test('doctorPluginDir captures validated PluginManifestProjection during dry-run
   mkdirSync(join(okDir, 'client'), { recursive: true });
   writeFileSync(
     join(okDir, 'plugin.json'),
-    JSON.stringify({ id: 'ext-doc-manifest', name: 'Healthy Ext', clientRoot: './client' }),
+    JSON.stringify({ id: 'ext-doc-manifest', name: 'Healthy Ext', main: 'index.ts', clientRoot: './client' }),
   );
   writeFileSync(join(okDir, 'client', 'index.tsx'), 'export function MainScreen() { return "hi"; }\n');
   writeFileSync(
@@ -3274,6 +3269,10 @@ test('doctorPluginDir captures validated PluginManifestProjection during dry-run
   const collideAlias = actionToolAlias('ext-doc-collide', 'ping');
   const collideDir = join(baseDir, 'collide-ext');
   mkdirSync(collideDir, { recursive: true });
+  writeFileSync(
+    join(collideDir, 'plugin.json'),
+    JSON.stringify({ id: 'ext-doc-collide', main: 'index.ts' }),
+  );
   writeFileSync(
     join(collideDir, 'index.ts'),
     `export default {

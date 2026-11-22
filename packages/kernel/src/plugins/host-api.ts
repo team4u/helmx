@@ -28,9 +28,7 @@ export interface HostApiDependencies {
   tracker: PluginTaskTracker;
   options: PluginHostOptions;
   plugins: Map<string, PluginState>;
-  getConfig(pluginId: string): Record<string, unknown>;
   setConfig(pluginId: string, value: Record<string, unknown>): Promise<void>;
-  onConfigChanged?: (pluginId: string) => void;
   list(): PluginSummary[];
   listUi(): PluginUiContribution[];
   listActions(): ActionManifest[];
@@ -56,23 +54,6 @@ export interface HostApiDependencies {
  * - Abandoned without consuming or canceling -> keeps counter alive, blocking `disable`/`reload` with
  *   `409 plugin_has_live_tasks`. Headers alone do not settle the task (SSE streams stay tracked throughout).
  */
-
-/** Per-plugin read-modify-write chain for `setConfig` (serializes concurrent patches over whole-value `setPluginConfig`). */
-const pluginConfigWriteChains = new Map<string, Promise<unknown>>();
-
-function enqueuePluginConfigWrite(pluginId: string, op: () => Promise<void>): Promise<void> {
-  const prev = pluginConfigWriteChains.get(pluginId) ?? Promise.resolve();
-  const run = prev.then(op, op);
-  const tail = run.then(
-    () => {},
-    () => {},
-  );
-  pluginConfigWriteChains.set(pluginId, tail);
-  void tail.then(() => {
-    if (pluginConfigWriteChains.get(pluginId) === tail) pluginConfigWriteChains.delete(pluginId);
-  });
-  return run;
-}
 
 /**
  * Controlled `ExecutionEnv` proxy: validates epoch on every method call (invalidated on disable/re-enable)
@@ -489,14 +470,9 @@ export function wrapHostApi(
     },
 
     // 5. configuration & plugins
-    setConfig: async (patch) => {
-      guard('host.setConfig');
-      return enqueuePluginConfigWrite(pluginId, async () => {
-        const current = deps.getConfig(pluginId);
-        await backend.setPluginConfig(pluginId, { ...current, ...patch });
-        deps.onConfigChanged?.(pluginId);
-      });
-    },
+    // Delegate incremental patches straight to PluginHost.setConfig -> instance-level PluginConfigStore.set
+    // (shares serialization with HTTP PUT /api/plugins/:id/config and never materializes schema defaults).
+    setConfig: (patch) => tracked('host.setConfig', () => deps.setConfig(pluginId, patch)),
     plugins: pluginsPort,
     listPlugins: () => {
       guard('host.listPlugins');

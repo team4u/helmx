@@ -5,6 +5,7 @@
 export * from './plugin-host.js';
 export { reloadExternalPlugin, type ExternalPluginHost, type ReloadablePluginHost } from './external-loader.js';
 export { loadExternalPlugins, rescanExternalPlugins } from './scan-visitor.js';
+export { EXTERNAL_PLUGINS_DIR_NAME, PLUGIN_DATA_DIR_NAME, externalPluginsDir, pluginDataDirName } from './plugin-dir-name.js';
 export { readHelmxClientDependencies, readHelmxClientDist } from './plugin-manifest.js';
 export { readPrebuiltClientManifest, readPrebuiltClientBundle } from './ui-registry.js'
 export { registerPluginTsRoot, nextPluginGeneration, type BackendTsTransformFn } from './backend-ts-loader.js';

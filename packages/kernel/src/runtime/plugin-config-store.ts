@@ -129,6 +129,8 @@ export class HelmxPluginConfigStore implements PluginConfigStore {
     /** Final post-write state (required-field check evaluates merged final state). */
     const nextPlain: Record<string, unknown> = { ...existingPlain }
     const nextSecrets: Record<string, string> = { ...existingSecrets }
+    /** Incremental plain-field mutations applied inside ConfigService's file lock. */
+    const writePlain: Record<string, unknown> = {}
     /** Keys to delete from disk (`null` resets), bucketed by secret flag. */
     const removePlain: string[] = []
     const removeSecrets: string[] = []
@@ -161,6 +163,7 @@ export class HelmxPluginConfigStore implements PluginConfigStore {
           if (field.maximum !== undefined && fieldValue > field.maximum) throw invalid(pluginId, `field '${key}' must be <= ${field.maximum}`)
         }
         nextPlain[key] = fieldValue
+        writePlain[key] = fieldValue
       }
     }
 
@@ -176,9 +179,10 @@ export class HelmxPluginConfigStore implements PluginConfigStore {
     }
 
     // Persist first, then update mirror (failures propagate cleanly without polluting the in-memory view).
-    // Read-modify-write executes inside ConfigService's file lock callback so only this plugin's nested key
-    // is touched, avoiding stale snapshots outside the lock and concurrent overwrites from other modules.
-    const plainTouched = Object.keys(nextPlain).length > 0 || removePlain.length > 0
+    // Read-modify-write executes inside ConfigService's file lock callback applying only this patch's keys
+    // so concurrent disk edits to other fields or plugins are preserved cleanly.
+    const plainTouched = Object.keys(writePlain).length > 0 || removePlain.length > 0
+    let committedPlain: Record<string, unknown> | undefined
     if (plainTouched) {
       await this.configService.updateBy((current) => {
         const plugins = current['plugins']
@@ -186,10 +190,15 @@ export class HelmxPluginConfigStore implements PluginConfigStore {
           throw corrupt('plugins', `expected object, got ${typeof plugins}`)
         }
         const merged = isJsonObject(plugins) ? plugins : {}
-        const bucket = { ...(isJsonObject(merged[pluginId]) ? (merged[pluginId] as Record<string, unknown>) : {}), ...nextPlain }
+        const bucket = { ...(isJsonObject(merged[pluginId]) ? (merged[pluginId] as Record<string, unknown>) : {}), ...writePlain }
         for (const key of removePlain) delete bucket[key]
-        if (Object.keys(bucket).length === 0) delete merged[pluginId]
-        else merged[pluginId] = bucket
+        if (Object.keys(bucket).length === 0) {
+          delete merged[pluginId]
+          committedPlain = undefined
+        } else {
+          merged[pluginId] = bucket
+          committedPlain = { ...bucket }
+        }
         return { ...current, plugins: merged }
       })
     }
@@ -204,10 +213,10 @@ export class HelmxPluginConfigStore implements PluginConfigStore {
       await this.credentialService.deletePluginSecret(pluginId, key)
     }
 
-    // Sync in-memory mirror to match disk (write merges + null deletes; empty buckets removed).
+    // Sync in-memory mirror to match committed disk state (write merges + null deletes; empty buckets removed).
     if (plainTouched) {
-      if (Object.keys(nextPlain).length === 0) this.mirror.plain.delete(pluginId)
-      else this.mirror.plain.set(pluginId, { ...nextPlain })
+      if (committedPlain === undefined) this.mirror.plain.delete(pluginId)
+      else this.mirror.plain.set(pluginId, committedPlain)
     }
     if (Object.keys(nextSecrets).length === 0) this.mirror.secrets.delete(pluginId)
     else this.mirror.secrets.set(pluginId, { ...nextSecrets })

@@ -149,7 +149,7 @@ async function seedManagedInstall(
   base: string,
   pluginId: string,
 ): Promise<{ managed: string; pkgStore: PluginPackageManagerStore }> {
-  const managed = join(base, 'plugins', pluginId)
+  const managed = join(base, 'installed-plugins', pluginId)
   mkdirSync(managed, { recursive: true })
   writeFileSync(join(managed, 'plugin.json'), JSON.stringify({ id: pluginId, version: '0.1.0', main: 'index.mjs' }))
   writeFileSync(join(managed, 'index.mjs'), `export default { id: '${pluginId}', version: '0.1.0', definePlugin() {} }\n`)

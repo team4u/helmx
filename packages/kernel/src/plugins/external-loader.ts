@@ -1,48 +1,26 @@
 /**
  * Automatic discovery and dynamic loading of external plugin directories.
  *
- * Module layout (behavior unchanged): manifest parsing (plugin.json / package.json `helmx` field)
- * lives in plugin-manifest.ts; startup full scans and incremental rescans
- * (loadExternalPlugins / rescanExternalPlugins) live in scan-visitor.ts;
- * this module owns entrypoint resolution, module import & definition boundary validation,
- * definition normalization, controlled hot reload (`reload`), and source directory lookup.
+ * Module layout: manifest parsing (`plugin.json` / `package.json#helmx` field) lives in
+ * `plugin-manifest.ts`; startup full scans and incremental rescans (`loadExternalPlugins` /
+ * `rescanExternalPlugins`) live in `scan-visitor.ts`; this module owns entrypoint resolution,
+ * module import & definition boundary validation, definition normalization, controlled hot reload
+ * (`reload`), and source directory lookup.
  *
- * Two kinds of directories coexist under `<dataDir>/plugins/` (note that PluginHost.register creates
- * `<dataDir>/plugins/<pluginDataDirName(pluginId)>` as `ctx.dataDir` for each registered plugin):
- * 1. Pure plugin data directories for registered plugins (e.g., `builtin%3Aprofile`, `builtin%3Aherdr`;
- *    `:` in IDs is uniformly escaped as `%3A` so Windows does not interpret it as an NTFS alternate
- *    data stream and fail directory creation — see plugin-dir-name.ts);
- * 2. User-placed external third-party plugin directories (containing plugin.json or a convention entrypoint).
+ * Physical directory separation (eliminates `ctx.dataDir` blind-probe execution risk):
+ * 1. `<dataDir>/plugins/<pluginDataDirName(pluginId)>` is strictly per-plugin runtime data
+ *    (`ctx.dataDir`) and is NEVER scanned for executable code;
+ * 2. `<dataDir>/installed-plugins/<dir>` is the sole external plugin code root (both managed
+ *    package installs and hand-placed dev plugins).
  *
- * Detection rules (only rely on explicit entrypoint markers, never guess from directory names):
- * - When `plugin.json` exists: must parse as a JSON object; resolves the relative entrypoint from `main`
- *   (falling back to convention entry probes), strictly bounded inside the plugin directory (guards against
- *   path traversal, and `realpath` ensures symlinks cannot escape the root). Corrupt manifests, non-objects,
- *   invalid `main`, out-of-bounds entrypoints, or missing entrypoints throw explicit `HelmxError`s rather than
- *   being silently ignored (honesty invariant). Optional fields on `plugin.json`: `clientRoot` (frontend
- *   source dir), `clientDependencies` (frontend controlled npm specifier array resolved relative to the
- *   plugin dir), and `dependencies` (cross-plugin ID array); invalid values are explicitly rejected.
- * - Without `plugin.json`: probes `index.ts` / `index.tsx` / `index.mjs` / `index.js` / `plugin.ts` /
- *   `plugin.tsx` / `plugin.mjs` / `plugin.js` in order; if none exist, treats it as an ordinary plugin data
- *   directory and skips it silently.
- * - `.ts` / `.tsx` / `.mts` / `.cts` entrypoints are transpiled in-process by `backend-ts-loader` (with
- *   `import.meta.url` pointing to the real plugin source file; relative `.js -> .ts` imports, node built-ins,
- *   local `node_modules`, and host `@helmx/*` singletons are all available).
- * - IO errors: only ENOENT / ENOTDIR count as missing files; EACCES and other IO errors throw explicitly
- *   rather than being mistaken for a pure data directory.
- *
- * Security defaults:
- * - Dynamic loading uses explicit URL import via `pathToFileURL`;
- * - External plugin IDs must not use the `builtin:` prefix or collide with already-registered plugins;
- * - Any `locked` declaration is stripped (external plugins cannot mark themselves permanently resident);
- * - Only accepts `definePlugin` (the single `PluginDefinition` entrypoint; legacy aliases such as `setup`
- *   are explicitly rejected at the boundary);
- * - Registers with `{ enabled: false }` (least privilege); previously persisted `config.json.pluginEnabled[id] = true`
- *   is restored automatically inside `PluginHost.register`;
- * - External plugins without an explicit `clientRoot` default `clientRoot` to the plugin directory itself;
- *   an explicit `clientRoot` must be a non-empty string resolving to an absolute path inside the plugin
- *   directory (escapes are rejected). This check enforces a path-boundary convention only; plugin code runs
- *   with full host permissions and is not a security sandbox.
+ * Explicit manifest rules (no blind convention probing of `index.js`/`index.ts` or plain `package.json`):
+ * - Every external plugin directory MUST contain either `plugin.json` (with a non-empty string
+ *   `main`) or `package.json` with an explicit `"helmx"` object declaring `helmx.main`.
+ * - Missing manifests fail explicitly with `plugin_manifest_missing` without importing any file;
+ *   corrupt manifests, non-objects, missing/invalid `main`, path traversal, symlink escapes, or
+ *   missing entry files throw explicit `HelmxError`s (`plugin_manifest_invalid` / `plugin_entry_missing`).
+ * - `.ts` / `.tsx` / `.mts` / `.cts` entrypoints are transpiled in-process by `backend-ts-loader`.
+ * - IO errors: only ENOENT / ENOTDIR count as missing files; EACCES and other IO errors throw explicitly.
  */
 import { lstatSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
@@ -58,7 +36,7 @@ import {
   type PluginSummary,
 } from '@helmx/protocol';
 import { registerPluginTsRoot, nextPluginGeneration, type BackendTsTransformFn } from './backend-ts-loader.js';
-import { isBuiltinPluginDataDirName } from './plugin-dir-name.js';
+import { externalPluginsDir } from './plugin-dir-name.js';
 import {
   MANIFEST_PLUGIN_ID_PATTERN,
   readHelmxClientDependencies,
@@ -105,31 +83,20 @@ export interface ReloadablePluginHost extends ExternalPluginHost {
   unregister(pluginId: string): Promise<void>;
 }
 
-/** Convention entrypoint probe order when plugin.json (or `main`) is absent (TypeScript preferred, matching pi conventions). */
-const CONVENTION_ENTRIES = [
-  'index.ts',
-  'index.tsx',
-  'index.mjs',
-  'index.js',
-  'plugin.ts',
-  'plugin.tsx',
-  'plugin.mjs',
-  'plugin.js',
-] as const;
-
 // Full/incremental scan implementation lives in scan-visitor.ts; re-exported here to preserve existing public exports
 // (used by hub tests and production consumers).
 export { loadExternalPlugins, rescanExternalPlugins } from './scan-visitor.js';
 
 // ---------------------------------------------------------------------------
-// Entrypoint resolution
+// Entrypoint resolution (explicit manifest required; zero blind probing)
 // ---------------------------------------------------------------------------
 
 /**
- * Resolve a plugin directory's entrypoint file: undefined indicates no plugin entrypoint marker (pure data dir).
- * When plugin.json exists, follows the manifest branch (errors always throw explicitly, never silently skipped).
+ * Resolve a plugin directory's explicit entrypoint file from `plugin.json` (`main`) or
+ * `package.json#helmx` (`helmx.main`). Directories without an explicit Helmx manifest reject
+ * loudly with `plugin_manifest_missing` (never blindly probing `index.*` or plain `package.json`).
  */
-export async function resolvePluginEntry(dirPath: string): Promise<string | undefined> {
+export async function resolvePluginEntry(dirPath: string): Promise<string> {
   const manifestPath = join(dirPath, 'plugin.json');
   let manifestExists = true;
   try {
@@ -137,7 +104,6 @@ export async function resolvePluginEntry(dirPath: string): Promise<string | unde
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code !== 'ENOENT' && code !== 'ENOTDIR') {
-      // Re-throw real I/O errors such as EACCES explicitly instead of misclassifying as a plain data directory
       throw new HelmxError(
         'plugin_scan_failed',
         `external plugin directory cannot read: ${manifestPath}(${err instanceof Error ? err.message : String(err)})`,
@@ -148,45 +114,53 @@ export async function resolvePluginEntry(dirPath: string): Promise<string | unde
     manifestExists = false;
   }
   if (!manifestExists) {
-    const probed = probeConventionEntry(dirPath);
-    if (probed !== undefined) return probed;
-    // Fallback to standard npm entrypoint: `package.json#helmx.main` / `main` (`.js` rewrites to matching `.ts` source).
     const helmx = readHelmxField(dirPath);
-    const mainSpec = helmx?.main;
-    if (mainSpec !== undefined) {
-      // npm packages often point `.js` at transpiled artifacts; prefer matching `.ts`/`.tsx` sources when present.
-      const tsCandidate = mainSpec.replace(/\.js$/, '.ts').replace(/\.mjs$/, '.mts').replace(/\.cjs$/, '.cts');
-      const tryCandidates = tsCandidate !== mainSpec ? [tsCandidate, mainSpec] : [mainSpec];
-      let resolvedSpec: string | undefined;
-      for (const candidate of tryCandidates) {
-        if (statSync(join(dirPath, candidate)).isFile()) {
-          resolvedSpec = candidate;
-          break;
-        }
-      }
-      const spec = resolvedSpec ?? mainSpec;
-      return resolveManifestEntryFile(dirPath, spec, 'package.json entry');
+    if (helmx === null) {
+      throw new HelmxError(
+        'plugin_manifest_missing',
+        `External plugin ${dirPath} is missing an explicit manifest (requires plugin.json or package.json#helmx with "main")`,
+        400,
+        { dirPath },
+      );
     }
-    return undefined;
+    const mainSpec = helmx.main;
+    if (mainSpec === undefined) {
+      throw new HelmxError(
+        'plugin_manifest_invalid',
+        `External plugin ${dirPath} package.json helmx manifest must declare a non-empty string "main" entrypoint`,
+        400,
+        { dirPath },
+      );
+    }
+    // Check lexical containment before probing matching TS sources for compiled `.js`/`.mjs`/`.cjs` declarations.
+    const dirAbs = resolve(dirPath);
+    const dirReal = realpathSync(dirAbs);
+    if (isLexicallyOutsidePluginDir(dirAbs, dirReal, mainSpec, resolve(dirAbs, mainSpec))) {
+      throw new HelmxError(
+        'plugin_manifest_invalid',
+        `External plugin ${dirPath} package.json helmx.main escapes plugin directory: ${mainSpec}`,
+        400,
+        { dirPath, main: mainSpec },
+      );
+    }
+    const tsCandidate = mainSpec.replace(/\.js$/, '.ts').replace(/\.mjs$/, '.mts').replace(/\.cjs$/, '.cts');
+    if (tsCandidate !== mainSpec) {
+      try {
+        return resolveManifestEntryFile(dirPath, tsCandidate, 'package.json helmx.main');
+      } catch (err) {
+        if (!(err instanceof HelmxError) || err.code !== 'plugin_entry_missing') throw err;
+      }
+    }
+    return resolveManifestEntryFile(dirPath, mainSpec, 'package.json helmx.main');
   }
   const manifest = readManifest(manifestPath);
   const main = manifest['main'];
-  if (main === undefined) {
-    const probed = probeConventionEntry(dirPath);
-    if (probed !== undefined) return probed;
-    throw new HelmxError(
-      'plugin_entry_missing',
-      `External plugin ${dirPath} plugin.json does not declare main and no conventional entry (${CONVENTION_ENTRIES.join(' / ')}) was found`,
-      500,
-      { dirPath },
-    );
-  }
   if (typeof main !== 'string' || main.length === 0) {
     throw new HelmxError(
       'plugin_manifest_invalid',
       `External plugin ${dirPath} plugin.json main must be a non-empty string`,
-      500,
-      { dirPath, main: String(main) },
+      400,
+      { dirPath, ...(main !== undefined ? { main: String(main) } : {}) },
     );
   }
   return resolveManifestEntryFile(dirPath, main, 'plugin.json main');
@@ -244,29 +218,6 @@ function assertEntryFile(dirPath: string, main: string, entry: string, dirReal =
     );
   }
   return real;
-}
-
-/** in order probe convention entry file; hit i.e. return absolute path, all missing return undefined. */
-function probeConventionEntry(dirPath: string): string | undefined {
-  for (const name of CONVENTION_ENTRIES) {
-    let file: boolean;
-    try {
-      file = statSync(join(dirPath, name)).isFile();
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code !== 'ENOENT' && code !== 'ENOTDIR') {
-        throw new HelmxError(
-          'plugin_scan_failed',
-          `external plugin directory probe failed: ${join(dirPath, name)}(${err instanceof Error ? err.message : String(err)})`,
-          500,
-          { dirPath, code },
-        );
-      }
-      continue;
-    }
-    if (file) return assertEntryFile(dirPath, name, join(dirPath, name));
-  }
-  return undefined;
 }
 /** Validates plugin dependencies declared in JS definition (invalid shapes fail explicitly). */
 function normalizeCodeDependencies(
@@ -611,7 +562,7 @@ async function findPluginSource(
   pluginId: string,
   options: { transform?: BackendTsTransformFn } = {},
 ): Promise<PluginSourceLocation | undefined> {
-  const pluginsDir = join(dataDir, 'plugins');
+  const pluginsDir = externalPluginsDir(dataDir);
   let entries: Array<{ name: string; isDirectory(): boolean }>;
   try {
     entries = readdirSync(pluginsDir, { withFileTypes: true });
@@ -622,15 +573,13 @@ async function findPluginSource(
   const hits: PluginSourceLocation[] = [];
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
-    if (entry.name.startsWith('.') || isBuiltinPluginDataDirName(entry.name)) continue;
+    if (entry.name.startsWith('.')) continue;
     const dirPath = resolve(pluginsDir, entry.name);
     // Corruption in unrelated directories must not break the whole scan; if the target's own directory
     // fails to parse, its source itself is broken and the caller receives missing-source error.
-    let entryPath: string | undefined;
     const releaseTsRoot = registerPluginTsRoot(dirPath, { transform: options.transform });
     try {
-      entryPath = await resolvePluginEntry(dirPath);
-      if (entryPath === undefined) continue;
+      const entryPath = await resolvePluginEntry(dirPath);
       const definition = await importPluginDefinition(dirPath, entryPath);
       if (definition.id === pluginId) hits.push({ dir: dirPath, definition });
     } catch {
@@ -682,11 +631,12 @@ export async function reloadExternalPlugin(
   const wasEnabled = current.enabled;
   const source = await findPluginSource(dataDir, pluginId, { transform: tsTransformOf(plugins) });
   if (source === undefined) {
+    const codeRoot = externalPluginsDir(dataDir);
     throw new HelmxError(
       'plugin_source_missing',
-      `no external plugin source directory with id ${pluginId} found under ${join(dataDir, 'plugins')}`,
+      `no external plugin source directory with id ${pluginId} found under ${codeRoot}`,
       404,
-      { pluginId, pluginsDir: join(dataDir, 'plugins') },
+      { pluginId, pluginsDir: codeRoot },
     );
   }
   const sourceDir = source.dir;
@@ -696,11 +646,13 @@ export async function reloadExternalPlugin(
   await options.doctor?.(sourceDir);
 
   // Obtain a fresh cache-busting generation for the actual reload import.
-  const entryPath = await resolvePluginEntry(sourceDir);
-  if (entryPath === undefined) {
+  let entryPath: string;
+  try {
+    entryPath = await resolvePluginEntry(sourceDir);
+  } catch (err) {
     throw new HelmxError(
       'plugin_reload_failed',
-      `plugin entrypoint disappeared during reload (source changed between preflight and swap): ${sourceDir}`,
+      `plugin entrypoint became unavailable during reload (source changed between preflight and swap): ${sourceDir} (${err instanceof Error ? err.message : String(err)})`,
       500,
       { pluginId, sourceDir },
     );

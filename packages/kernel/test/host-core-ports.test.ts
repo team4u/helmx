@@ -559,35 +559,84 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
     }
   })
 
-  await t.test('setConfig: concurrent patches serialize read-modify-write without later writes clobbering earlier ones', { timeout: 60_000 }, async () => {
-    const captured: Record<string, unknown> = {}
+  await t.test('setConfig: delegates incremental patches to instance PluginConfigStore without materializing defaults or cross-host contention', { timeout: 60_000 }, async () => {
+    const storedA = new Map<string, Record<string, unknown>>()
+    const receivedPatches: Array<Record<string, unknown>> = []
     const firstWriteGate = deferred<void>()
-    let backendCalls = 0
-    const backend: PluginHostBackend = {
-      ...makeBackend({}),
-      setPluginConfig: async (_id, value) => {
-        backendCalls += 1
-        // Pause first write to fabricate the read-modify-write race window
-        if (backendCalls === 1) await firstWriteGate.promise
-        Object.assign(captured, value)
+    let backendSetPluginConfigCalled = false
+    let writeCount = 0
+
+    const storeA = {
+      get: (id: string) => ({ ...(storedA.get(id) ?? {}) }),
+      set: async (id: string, patch: Record<string, unknown>) => {
+        writeCount += 1
+        receivedPatches.push({ ...patch })
+        // Pause first write to fabricate an overlapping window between plugin ctx.host.setConfig and HTTP host.setConfig.
+        if (writeCount === 1) await firstWriteGate.promise
+        const next = { ...(storedA.get(id) ?? {}) }
+        for (const [k, v] of Object.entries(patch)) {
+          if (v === null) delete next[k]
+          else next[k] = v
+        }
+        storedA.set(id, next)
       },
     }
-    const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: backend, docs: new MemoryDocStore() })
-    let api!: HelmxHostApi
-    await host.register({
+    const backend: PluginHostBackend = {
+      ...makeBackend({}),
+      setPluginConfig: async () => {
+        backendSetPluginConfigCalled = true
+      },
+    }
+    const hostA = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: backend, docs: new MemoryDocStore(), config: storeA })
+
+    // Second independent PluginHost instance with the exact same pluginId must never be blocked by hostA's in-flight write.
+    const storedB = new Map<string, Record<string, unknown>>()
+    const storeB = {
+      get: (id: string) => ({ ...(storedB.get(id) ?? {}) }),
+      set: (id: string, patch: Record<string, unknown>) => {
+        storedB.set(id, { ...(storedB.get(id) ?? {}), ...patch })
+      },
+    }
+    const hostB = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: makeBackend({}), docs: new MemoryDocStore(), config: storeB })
+
+    let apiA!: HelmxHostApi
+    let apiB!: HelmxHostApi
+    const def = (capture: (api: HelmxHostApi) => void) => ({
       id: 'p:cfg',
-      definePlugin: (ctx) => { api = ctx.host },
-    }, { enabled: true })
+      definePlugin: (ctx: { configSchema: (s: Record<string, { type: 'number' | 'string'; default?: number | string }>) => void; host: HelmxHostApi }) => {
+        ctx.configSchema({
+          a: { type: 'number' },
+          b: { type: 'number' },
+          keepDefault: { type: 'string', default: 'from-schema' },
+        })
+        capture(ctx.host)
+      },
+    })
+    await hostA.register(def((api) => { apiA = api }), { enabled: true })
+    await hostB.register(def((api) => { apiB = api }), { enabled: true })
     try {
-      const w1 = api.setConfig({ a: 1 })
+      // Interleave plugin ctx.host.setConfig({ a: 1 }) with HTTP-path hostA.setConfig('p:cfg', { b: 2 })
+      const wPlugin = apiA.setConfig({ a: 1 })
       await new Promise<void>((resolve) => setImmediate(resolve))
-      const w2 = api.setConfig({ b: 2 })
+      const wHttp = hostA.setConfig('p:cfg', { b: 2 })
       await new Promise<void>((resolve) => setImmediate(resolve))
+
+      // While hostA's p:cfg write is blocked on firstWriteGate, hostB's p:cfg write completes immediately (no module-level chain).
+      await apiB.setConfig({ a: 99 })
+      assert.deepEqual(storedB.get('p:cfg'), { a: 99 }, 'second PluginHost instance must not be blocked or materialize defaults')
+
       firstWriteGate.resolve()
-      await Promise.all([w1, w2])
-      assert.deepEqual(captured, { a: 1, b: 2 })
+      await Promise.all([wPlugin, wHttp])
+
+      assert.equal(backendSetPluginConfigCalled, false, 'ctx.host.setConfig must go directly through PluginConfigStore, not backend.setPluginConfig')
+      assert.deepEqual(receivedPatches, [{ a: 1 }, { b: 2 }], 'only incremental patches reach PluginConfigStore (defaults never materialized)')
+      assert.deepEqual(storedA.get('p:cfg'), { a: 1, b: 2 })
+      assert.equal('keepDefault' in (storedA.get('p:cfg') ?? {}), false, 'schema default must never be materialized into store')
+      assert.equal(hostA.getConfigSources('p:cfg').keepDefault, 'default')
+      assert.equal(hostA.getConfig('p:cfg').keepDefault, 'from-schema')
     } finally {
-      await host.dispose()
+      await hostA.dispose()
+      await hostB.dispose()
     }
   })
 

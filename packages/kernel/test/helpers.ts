@@ -64,7 +64,7 @@ export class MemoryDocStore implements PluginDocStore {
   async flush(): Promise<void> {}
 }
 
-/** In-memory implementation of PluginConfigStore shared by plugin and host tests. */
+/** In-memory implementation of PluginConfigStore shared by plugin and host tests (incremental patch + null delete, matching HelmxPluginConfigStore). */
 export class MemoryConfigStore implements PluginConfigStore {
   readonly store = new Map<string, Record<string, unknown>>()
 
@@ -73,7 +73,13 @@ export class MemoryConfigStore implements PluginConfigStore {
   }
 
   set(pluginId: string, value: Record<string, unknown>): void {
-    this.store.set(pluginId, { ...value })
+    const next: Record<string, unknown> = { ...(this.store.get(pluginId) ?? {}) }
+    for (const [key, entry] of Object.entries(value)) {
+      if (entry === null) delete next[key]
+      else next[key] = entry
+    }
+    if (Object.keys(next).length === 0) this.store.delete(pluginId)
+    else this.store.set(pluginId, next)
   }
 }
 

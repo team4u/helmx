@@ -128,7 +128,7 @@ test('动作目录生命周期：普通插件启用即进目录、XML 转义与�
 test('磁盘外部插件：rescan 后默认隐藏，启用即自动进入目录，停用即清理', { timeout: 60_000 }, async () => {
   const conv = await env.kernel.createConversation({ title: 'ext-notice' })
   const host = env.kernel.plugins
-  const pluginDir = join(env.dataDir, 'plugins', 'external-notice')
+  const pluginDir = join(env.dataDir, 'installed-plugins', 'external-notice')
   mkdirSync(pluginDir, { recursive: true })
   writeFileSync(join(pluginDir, 'plugin.json'), JSON.stringify({
     id: 'external-notice', name: 'external notify', version: '1.0.0', main: 'index.mjs',

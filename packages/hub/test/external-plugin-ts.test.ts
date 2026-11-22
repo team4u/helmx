@@ -48,6 +48,7 @@ function writeTsPlugin(pluginsDir: string, dir = 'ts-demo'): { dirPath: string; 
     join(dirPath, 'lib', 'host-marker.ts'),
     "import { HelmxError } from '@helmx/protocol'\nexport const marker = new HelmxError('marker', 'marker')\nexport const ctor = HelmxError\n",
   )
+  writeFileSync(join(dirPath, 'plugin.json'), JSON.stringify({ id: dir, main: 'index.ts' }))
   writeFileSync(
     join(dirPath, 'index.ts'),
     `import { readFileSync } from 'node:fs'
@@ -122,7 +123,7 @@ let cleanDirPath = ''
 before(async () => {
   sharedDataDir = await makeTempDir('helmx-ext-ts-')
   outsideDir = await makeTempDir('helmx-ext-ts-out-')
-  const pluginsDir = join(sharedDataDir, 'plugins')
+  const pluginsDir = join(sharedDataDir, 'installed-plugins')
 
   demoCounter = writeTsPlugin(pluginsDir, 'ts-demo').counterName
   cycleCounter = writeTsPlugin(pluginsDir, 'ts-cycle').counterName
@@ -156,6 +157,7 @@ export default { id: 'tsx-manifest', name: 'TSX manifest plugin', definePlugin }
     "declare global { var __aliasInit: number | undefined }\nglobalThis.__aliasInit = (globalThis.__aliasInit ?? 0) + 1\nexport const tag = 'shared'\n",
   )
   symlinkSync(join(aliasDir, 'lib', 'shared.ts'), join(aliasDir, 'lib', 'alias.ts'))
+  writeFileSync(join(aliasDir, 'plugin.json'), JSON.stringify({ id: 'alias', main: 'index.ts' }))
   writeFileSync(
     join(aliasDir, 'index.ts'),
     `import { tag as viaJs } from './lib/shared.js'
@@ -182,6 +184,7 @@ export default {
     join(idDir, 'lib', 'shared.ts'),
     "declare global { var __identityInit: number | undefined }\nglobalThis.__identityInit = (globalThis.__identityInit ?? 0) + 1\nexport const tag = 'shared'\n",
   )
+  writeFileSync(join(idDir, 'plugin.json'), JSON.stringify({ id: 'identity', main: 'index.ts' }))
   writeFileSync(
     join(idDir, 'index.ts'),
     `import { tag as a } from './lib/shared.js'
@@ -203,13 +206,16 @@ export default {
   // ID 冲突种子插件
   const firstDup = join(pluginsDir, 'first')
   mkdirSync(firstDup, { recursive: true })
+  writeFileSync(join(firstDup, 'plugin.json'), JSON.stringify({ id: 'dup', main: 'index.ts' }))
   writeFileSync(join(firstDup, 'index.ts'), "export default { id: 'dup', definePlugin() {} }\n")
 
   // 语法错误与 4 类越界/逃逸场景（各自独立哨兵，绝不执行外部代码）
   mkdirSync(join(pluginsDir, 'broken-ts'), { recursive: true })
+  writeFileSync(join(pluginsDir, 'broken-ts', 'plugin.json'), JSON.stringify({ main: 'index.ts' }))
   writeFileSync(join(pluginsDir, 'broken-ts', 'index.ts'), 'export function f(: string {\n  return 1\n}\n')
 
   mkdirSync(join(pluginsDir, 'broken-dep', 'lib'), { recursive: true })
+  writeFileSync(join(pluginsDir, 'broken-dep', 'plugin.json'), JSON.stringify({ main: 'index.ts' }))
   writeFileSync(join(pluginsDir, 'broken-dep', 'index.ts'), "import { x } from './lib/bad.js'\nexport default { id: 'broken-dep', tag: x, definePlugin() {} }\n")
   writeFileSync(join(pluginsDir, 'broken-dep', 'lib', 'bad.ts'), 'export const x = {{{\n')
 
@@ -220,16 +226,19 @@ export default {
   const entryEvil = join(outsideDir, 'entry-evil.ts')
   writeFileSync(entryEvil, "globalThis.__escEntrySentinel = 1\nexport default { id: 'evil', definePlugin() {} }\n")
   mkdirSync(join(pluginsDir, 'entry-symlink'), { recursive: true })
+  writeFileSync(join(pluginsDir, 'entry-symlink', 'plugin.json'), JSON.stringify({ main: 'index.ts' }))
   symlinkSync(entryEvil, join(pluginsDir, 'entry-symlink', 'index.ts'))
 
   const depEvil = join(outsideDir, 'dep-evil.ts')
   writeFileSync(depEvil, "globalThis.__escDepSentinel = 1\nexport const x = 'evil'\n")
   mkdirSync(join(pluginsDir, 'dep-symlink', 'lib'), { recursive: true })
   symlinkSync(depEvil, join(pluginsDir, 'dep-symlink', 'lib', 'helper.ts'))
+  writeFileSync(join(pluginsDir, 'dep-symlink', 'plugin.json'), JSON.stringify({ main: 'index.ts' }))
   writeFileSync(join(pluginsDir, 'dep-symlink', 'index.ts'), "import { x } from './lib/helper.js'\nexport default { id: 'dep-symlink', tag: x, definePlugin() {} }\n")
 
   writeFileSync(join(sharedDataDir, 'evil-dotdot.ts'), "globalThis.__escDotdotSentinel = 1\nexport const x = 'evil'\n")
   mkdirSync(join(pluginsDir, 'dotdot'), { recursive: true })
+  writeFileSync(join(pluginsDir, 'dotdot', 'plugin.json'), JSON.stringify({ main: 'index.ts' }))
   writeFileSync(join(pluginsDir, 'dotdot', 'index.ts'), "import { x } from '../../evil-dotdot.js'\nexport default { id: 'dotdot', tag: x, definePlugin() {} }\n")
 
   sharedApp = (await createHubTestApp({ dataDir: sharedDataDir, cwd: sharedDataDir })).app
@@ -317,16 +326,17 @@ test('TS 语法错误定位与 4 类越界/逃逸契约：全部降级为 failed
 })
 
 test('ID 冲突失败后释放 TS 根并支持改 ID 重载，以及 loadExternalPlugins 直调 TS 插件', { timeout: 60_000 }, async () => {
-  const pluginsDir = join(sharedDataDir, 'plugins')
+  const pluginsDir = join(sharedDataDir, 'installed-plugins')
   const second = join(pluginsDir, 'second')
   mkdirSync(second, { recursive: true })
+  writeFileSync(join(second, 'plugin.json'), JSON.stringify({ main: 'index.ts' }))
   writeFileSync(join(second, 'index.ts'), "export default { id: 'dup', definePlugin() {} }\n")
 
   const reg0 = await loadExternalPlugins(sharedDataDir, sharedApp.kernel.plugins)
   assert.ok(!reg0.includes('dup'))
   assert.equal(sharedApp.kernel.plugins.list().find((p) => p.id === 'second')?.error?.code, 'plugin_already_registered')
 
-  rmSync(join(pluginsDir, 'first', 'index.ts'))
+  rmSync(join(pluginsDir, 'first'), { recursive: true, force: true })
   writeFileSync(
     join(second, 'index.ts'),
     `export default { id: 'second-fixed', definePlugin(ctx: any) {
@@ -335,6 +345,7 @@ test('ID 冲突失败后释放 TS 根并支持改 ID 重载，以及 loadExterna
   )
   const extra = join(pluginsDir, 'ts-extra')
   mkdirSync(extra, { recursive: true })
+  writeFileSync(join(extra, 'plugin.json'), JSON.stringify({ id: 'ts-extra', main: 'index.ts' }))
   writeFileSync(
     join(extra, 'index.ts'),
     `export default { id: 'ts-extra', definePlugin(ctx: any) {

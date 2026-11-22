@@ -1,10 +1,12 @@
 /**
- * scan-visitor.ts: shared `<dataDir>/plugins/` directory visitor used by both startup
+ * scan-visitor.ts: shared `<dataDir>/installed-plugins/` directory visitor used by both startup
  * scanning (`loadExternalPlugins`) and incremental discovery (`rescanExternalPlugins`),
  * parameterized by `ScanVisitPolicy`.
+ *
+ * Runtime data under `<dataDir>/plugins/` (`ctx.dataDir`) is physically separated and never scanned.
  */
 import { readdirSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { resolve } from 'node:path';
 import {
   HelmxError,
   parseNonEmptyLocalizedText,
@@ -12,7 +14,7 @@ import {
   type PluginDiagnosticError,
 } from '@helmx/protocol';
 import { nextPluginGeneration, registerPluginTsRoot, type BackendTsTransformFn } from './backend-ts-loader.js';
-import { isBuiltinPluginDataDirName } from './plugin-dir-name.js';
+import { externalPluginsDir } from './plugin-dir-name.js';
 import {
   importPluginDefinition,
   normalizeDefinition,
@@ -123,12 +125,13 @@ interface ScanVisitParams {
 }
 
 /**
- * Scans `<dataDir>/plugins/` according to `policy`. Individual scan/load errors record a `failed`
- * placeholder without blocking sibling plugins; missing `<dataDir>/plugins/` (`ENOENT`) returns cleanly.
+ * Scans `<dataDir>/installed-plugins/` according to `policy`. Individual scan/load errors (including
+ * missing/corrupt manifests) record a `failed` placeholder without blocking sibling plugins; missing
+ * `<dataDir>/installed-plugins/` (`ENOENT`) returns cleanly.
  */
 async function visitExternalPluginDirs(params: ScanVisitParams): Promise<void> {
   const { dataDir, plugins, existingIds, registered, transform, policy } = params;
-  const pluginsDir = join(dataDir, 'plugins');
+  const pluginsDir = externalPluginsDir(dataDir);
   let entries: Array<{ name: string; isDirectory(): boolean }>;
   try {
     entries = readdirSync(pluginsDir, { withFileTypes: true });
@@ -137,9 +140,9 @@ async function visitExternalPluginDirs(params: ScanVisitParams): Promise<void> {
     throw err;
   }
   for (const entry of entries) {
-    // Built-in plugin data dirs (`builtin%3A...`) and dotfiles never participate in external plugin discovery.
+    // Dot-prefixed directories (e.g. `.staging`, `.hidden`, `.DS_Store`) never participate in discovery.
     if (!entry.isDirectory()) continue;
-    if (entry.name.startsWith('.') || isBuiltinPluginDataDirName(entry.name)) continue;
+    if (entry.name.startsWith('.')) continue;
     const dirPath = resolve(pluginsDir, entry.name);
     if (policy.fastSkipDirNameEqualsId && existingIds.has(entry.name)) {
       policy.onSkipped();
@@ -150,10 +153,6 @@ async function visitExternalPluginDirs(params: ScanVisitParams): Promise<void> {
     let committed = false;
     try {
       const entryPath = await resolvePluginEntry(dirPath);
-      if (entryPath === undefined) {
-        policy.onSkipped(); // Pure data directory: skip silently
-        continue;
-      }
       const definition = await importScanDefinition(dirPath, entryPath, existingIds);
       if (existingIds.has(definition.id)) {
         if (policy.alreadyRegistered === 'skip') {
@@ -183,7 +182,7 @@ async function visitExternalPluginDirs(params: ScanVisitParams): Promise<void> {
 }
 
 /**
- * Scans `<dataDir>/plugins/` and dynamically loads all external plugins (registered disabled by default).
+ * Scans `<dataDir>/installed-plugins/` and dynamically loads all external plugins (registered disabled by default).
  * Returns the list of external plugin IDs registered in this pass (in directory scan order).
  * Single-directory faults in the scan/load phase are recorded as `failed` placeholders via `registerFailed`
  * without blocking other directories; define/enable faults during `register` are downgraded to `failed` entries
@@ -209,10 +208,10 @@ export async function loadExternalPlugins(dataDir: string, plugins: ExternalPlug
 }
 
 /**
- * Incrementally rescans the plugins directory: registers only newly discovered external plugins
+ * Incrementally rescans `<dataDir>/installed-plugins/`: registers only newly discovered external plugins
  * (disabled by default, with enabled-state restoration matching startup scan via persisted `pluginEnabled`);
  * already-registered plugins are neither reloaded nor disturbed. Returns newly registered IDs and
- * the skipped directory count (including pure data directories and already-registered directories).
+ * the skipped directory count (already-registered directories).
  */
 export async function rescanExternalPlugins(
   dataDir: string,

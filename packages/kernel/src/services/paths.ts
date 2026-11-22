@@ -29,6 +29,7 @@ const DATA_SUBDIRS = [
   'skills',
   'workflows',
   'plugins',
+  'installed-plugins',
   'artifacts',
   'cache',
 ] as const

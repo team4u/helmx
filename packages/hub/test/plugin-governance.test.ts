@@ -77,6 +77,7 @@ function makeHostFixture(dataDir: string): HostFixture {
 function writeExternalPlugin(pluginsDir: string, dir: string, entrySource: string): string {
   const dirPath = join(pluginsDir, dir)
   mkdirSync(dirPath, { recursive: true })
+  writeFileSync(join(dirPath, 'plugin.json'), JSON.stringify({ id: dir, main: 'index.mjs' }))
   writeFileSync(join(dirPath, 'index.mjs'), entrySource)
   return dirPath
 }
@@ -99,7 +100,7 @@ async function rejectsCode(promise: Promise<unknown>, code: string, status?: num
 
 test('createHelmx 外部插件混合故障隔离、reload/enable 自愈恢复与 builtin:triggers 占用预检', { timeout: 60_000 }, async (t) => {
   const dataDir = join(useTempDir(t, 'helmx-gov-app-'), 'hub')
-  const pluginsDir = join(dataDir, 'plugins')
+  const pluginsDir = join(dataDir, 'installed-plugins')
   mkdirSync(pluginsDir, { recursive: true })
 
   const PING_PLUGIN = (id: string) =>
@@ -160,10 +161,10 @@ export default { id: 'svc-fail', name: 'svc-fail', async definePlugin(ctx) {
     assert.equal(badDef.error?.stage, 'define')
     assert.deepEqual([badDef.hooks, badDef.actions, badDef.tools], [[], [], []])
 
-    // loadFailed 占位直接 enable 409，修复源码后 reload + enable 恢复
+    // loadFailed 占位直接 enable 409，修复 manifest 与源码后 reload + enable 恢复
     await rejectsCode(kernel.plugins.enable('fix-me'), 'plugin_load_failed', 409)
     writeFileSync(join(fixDir, 'index.mjs'), PING_PLUGIN('fix-me'))
-    rmSync(join(fixDir, 'plugin.json'))
+    writeFileSync(join(fixDir, 'plugin.json'), JSON.stringify({ id: 'fix-me', main: 'index.mjs' }))
     const reloaded = await kernel.plugins.reloadExternalPlugin('fix-me')
     assert.equal(reloaded.summary.status, 'disabled')
     assert.equal(reloaded.summary.error, undefined)

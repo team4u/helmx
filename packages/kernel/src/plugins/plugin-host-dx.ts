@@ -1,7 +1,6 @@
 /**
  * external plugin DX closed ring (doctor / reload / rescan) and managed package host durable adapt layer.
  */
-import { join } from 'node:path';
 import {
   HelmxError,
   type PluginBuildProvider,
@@ -22,6 +21,7 @@ import {
   type ReloadablePluginHost,
 } from './external-loader.js';
 import type { PackageManagerHost } from './package-manager.js';
+import { externalPluginsDir } from './plugin-dir-name.js';
 import { doctorPluginDir } from './plugin-doctor.js';
 import { requirePlugin } from './plugin-host-transitions.js';
 import { assertProvidersIdle } from './provider-coordinator.js';
@@ -76,11 +76,12 @@ export async function doctorExternalPluginDir(
       transform: options.buildProvider?.transformBackendTs,
     });
     if (source === undefined) {
+      const codeRoot = externalPluginsDir(options.dataDir);
       throw new HelmxError(
         'plugin_source_missing',
-        `in ${join(options.dataDir, 'plugins')} under not found id is ${target.id} external plugin source directory`,
+        `in ${codeRoot} under not found id is ${target.id} external plugin source directory`,
         404,
-        { pluginId: target.id, pluginsDir: join(options.dataDir, 'plugins') },
+        { pluginId: target.id, pluginsDir: codeRoot },
       );
     }
     dir = source;
@@ -155,14 +156,6 @@ export function createPackageManagerHost(deps: DxCoordinatorDeps): PackageManage
       });
       try {
         const entryPath = await resolvePluginEntry(dir);
-        if (entryPath === undefined) {
-          throw new HelmxError(
-            'plugin_entry_missing',
-            `Managed install directory contains no plugin entry (missing plugin.json and conventional entrypoints): ${dir}`,
-            500,
-            { dir },
-          );
-        }
         const definition = normalizeDefinition(await importPluginDefinition(dir, entryPath), dir);
         await deps.host.register(definition, { enabled: false });
         if (options.enabled) {
