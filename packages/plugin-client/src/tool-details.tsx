@@ -24,6 +24,8 @@ export interface ToolCallDetailsProps {
   result?: unknown
   /** Artifact reference detected in the output (kernel spill marker / art_ prefix); empty string renders no button. */
   artifactRef?: string
+  /** Whether the collapsible `<details>` block starts expanded (defaults to false). */
+  defaultOpen?: boolean
 }
 
 /** Strings pass through; objects pretty-print as JSON; unserializable values fall back to String(). */
@@ -37,10 +39,10 @@ function stringifyPretty(value: unknown): string | undefined {
   }
 }
 
-export function ToolCallDetails({ input, result, artifactRef }: ToolCallDetailsProps): ReactNode {
+export function ToolCallDetails({ input, result, artifactRef, defaultOpen = false }: ToolCallDetailsProps): ReactNode {
   const ctx = usePluginContext()
   const t = usePluginTranslator()
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(defaultOpen)
   const inputJson = useMemo(() => stringifyPretty(input), [input])
   const resultText = useMemo(() => stringifyPretty(result), [result])
 

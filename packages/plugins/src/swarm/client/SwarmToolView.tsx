@@ -287,7 +287,7 @@ export function SwarmToolView(props: ToolViewProps): ReactNode {
       {clickTarget === undefined ? (
         <div id={detailsId} hidden={!detailsOpen}>
           {detailsOpen ? (
-            <ToolCallDetails input={props.input} result={props.result} artifactRef={props.artifactRef} />
+            <ToolCallDetails input={props.input} result={props.result} artifactRef={props.artifactRef} defaultOpen />
           ) : null}
         </div>
       ) : null}

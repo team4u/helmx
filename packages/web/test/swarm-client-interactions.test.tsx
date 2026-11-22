@@ -621,7 +621,9 @@ describe("swarm-client-interactions", () => {
         rowBtn.click()
       })
       assert.equal(rowBtn.getAttribute('aria-expanded'), 'true')
-      assert.equal(runningMount.host.querySelector('.tool-call-details') !== null, true, '展开原始工具数据')
+      const details = runningMount.host.querySelector('details.tool-call-details') as HTMLDetailsElement | null
+      assert.ok(details !== null, '展开原始工具数据')
+      assert.equal(details.open, true, '点一次行即直接展开输入输出，无需二次点击 summary')
       assert.deepEqual(spy.drawerCalls, [51], '未新增抽屉调用（未伪造目标）')
     } finally {
       runningMount.unmount()
