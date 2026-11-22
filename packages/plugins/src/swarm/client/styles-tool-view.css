@@ -1,7 +1,4 @@
-/* ---------------------------------------------------------------------------
- * Tool trace rows (26px, same structure as the host .trace-row)
- * ------------------------------------------------------------------------- */
-
+/* Tool trace rows (26px, aligned with host .trace-row) */
 .sw-trace-row-btn {
   width: 100%;
   background: transparent;
@@ -11,54 +8,12 @@
   text-align: left;
   cursor: pointer;
 }
-
-.sw-trace-row-btn:hover {
-  background: var(--bg-hover);
-}
-
-.sw-trace-row-btn:focus-visible {
-  outline: 1.5px solid var(--accent);
-  outline-offset: -1.5px;
-}
-
-/* 长摘要与窄屏下工具名温和收缩省略，确保右侧状态灯、seq 与耗时不被挤出视口。 */
-.sw-trace-row-btn .trace-row-left {
-  flex: 1;
-  min-width: 0;
-}
-
-.sw-trace-row-btn .trace-tool-name {
-  flex-shrink: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.sw-trace-row-btn .trace-tool-summary {
-  min-width: 0;
-}
-
-.sw-trace-name {
-  color: var(--fg-secondary);
-}
-
-.sw-trace-badge {
-  height: 18px;
-  line-height: 16px;
-  padding: 0 5px;
-  font-size: 10.5px;
-  flex-shrink: 0;
-}
-
-.sw-trace-right {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-.sw-trace-error {
-  color: var(--err);
-}
+.sw-trace-row-btn:hover { background: var(--bg-hover); }
+.sw-trace-row-btn:focus-visible { outline: 1.5px solid var(--accent); outline-offset: -1.5px; }
+.sw-trace-row-btn .trace-row-left { flex: 1; min-width: 0; }
+.sw-trace-row-btn .trace-tool-name { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sw-trace-row-btn .trace-tool-summary { min-width: 0; }
+.sw-trace-name { color: var(--fg-secondary); }
+.sw-trace-badge { height: 18px; line-height: 16px; padding: 0 5px; font-size: 10.5px; flex-shrink: 0; }
+.sw-trace-right { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; flex-shrink: 0; }
+.sw-trace-error { color: var(--err); }

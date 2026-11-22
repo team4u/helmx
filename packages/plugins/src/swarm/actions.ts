@@ -1,11 +1,7 @@
 /**
- * builtin:swarm 动作与模型工具单点声明入口（按群组 / 成员 / 黑板子模块解耦实现）：
- * - 12 个业务动作全部通过 `exposeAsTool: { name: 'swarm_*', description, replay: 'safe', formatOutput }`
- *   与 `presentationMetaSchema` / `projectPresentationMeta` 单点声明（消除 12 对 `ctx.tool` + `ctx.action`
- *   重复注册，五端返回裸业务对象且模型读取精简文本摘要、UI 持久详情仅收有界轻量 presentationMeta）；
- * - 2 个 UI 补全动作声明 `visibility: 'ui'`，允许 Web 补全调用而拒绝 `run_action` / Workflow DSL / CLI。
+ * builtin:swarm single-point action & model-tool declarations (11 business tools + 1 UI completer).
  */
-import type { HelmxPluginContext, PluginActionContext } from '@helmx/protocol'
+import type { ConversationScope, HelmxPluginContext, JsonSchema, MaybePromise, PluginActionContext } from '@helmx/protocol'
 import {
   COORDINATOR_SCOPE,
   HISTORY_PARTICIPANT_SCOPE,
@@ -14,34 +10,7 @@ import {
   type BoardViewDoc,
   type SwarmCoordinator,
 } from './contracts.js'
-import {
-  abortWorkerOutputSchema,
-  archiveWorkerInputSchema,
-  archiveWorkerOutputSchema,
-  boardPostInputSchema,
-  boardPostOutputSchema,
-  boardReadInputSchema,
-  boardReadOutputSchema,
-  boardStatusInputSchema,
-  boardStatusOutputSchema,
-  closeGroupInputSchema,
-  closeGroupOutputSchema,
-  completerInputSchema,
-  completerOutputSchema,
-  createGroupInputSchema,
-  createGroupOutputSchema,
-  dispatchInputSchema,
-  dispatchWorkerOutputSchema,
-  inspectWorkerOutputSchema,
-  manageChannelInputSchema,
-  manageChannelOutputSchema,
-  swarmToolPresentationMetaSchema,
-  switchModelInputSchema,
-  switchModelOutputSchema,
-  updateGroupInputSchema,
-  updateGroupOutputSchema,
-  workerIdInputSchema,
-} from './action-schemas.js'
+import * as Schemas from './action-schemas.js'
 import {
   checkCoordinatorEligibility,
   createGroupHandlers,
@@ -49,16 +18,9 @@ import {
   ensureCoordinatorGroup,
   type EnsureCoordinatorGroupInput,
 } from './actions-group.js'
-import {
-  createWorkerHandlers,
-  type DispatchInput,
-  type InspectWorkerResult,
-} from './actions-worker.js'
+import { createWorkerHandlers, type DispatchInput, type InspectWorkerResult } from './actions-worker.js'
 import { createBoardHandlers } from './actions-board.js'
-import {
-  assertWorkerConversationId,
-  assertWorkerCwd,
-} from '../entry-text.js'
+import { assertWorkerConversationId, assertWorkerCwd } from '../entry-text.js'
 
 export {
   assertWorkerConversationId,
@@ -69,23 +31,23 @@ export {
   type EnsureCoordinatorGroupInput,
 }
 
-function boundedMetaText(value: string, maxChars: number): string | undefined {
-  const trimmed = value.trim()
-  if (trimmed === '') return undefined
-  return trimmed.length > maxChars ? trimmed.slice(0, maxChars) : trimmed
+const boundedText = (v: string, max: number): string | undefined => {
+  const t = v.trim()
+  return t === '' ? undefined : t.length > max ? t.slice(0, max) : t
 }
+const callKeyOf = (c: PluginActionContext): string | undefined =>
+  c.conversationId !== undefined && c.callId?.trim() ? `${c.conversationId}:${c.callId}` : undefined
 
 function formatBoardPostLine(p: BoardPost): string {
-  const wt =
-    p.worktreeSnapshot !== undefined
-      ? ` [worktree ${p.worktreeSnapshot.branch ?? p.worktreeSnapshot.worktreeId}: dirty=${p.worktreeSnapshot.dirtyCount}${p.worktreeSnapshot.commitsAhead !== undefined ? `, +${p.worktreeSnapshot.commitsAhead}` : ''}]`
-      : ''
+  const wt = p.worktreeSnapshot
+    ? ` [worktree ${p.worktreeSnapshot.branch ?? p.worktreeSnapshot.worktreeId}: dirty=${p.worktreeSnapshot.dirtyCount}${p.worktreeSnapshot.commitsAhead !== undefined ? `, +${p.worktreeSnapshot.commitsAhead}` : ''}]`
+    : ''
   const refs = p.refs.length > 0 ? ` refs=${p.refs.map((r) => `#${r}`).join(',')}` : ''
-  return `#${p.seq} [${p.channel}/${p.kind}] ${p.from} -> ${p.to.join(', ')}${refs}${wt}: ${p.body}`
+  return `#${p.seq} [${p.kind}] ${p.from} -> ${p.to.join(', ')}${refs}${wt}: ${p.body}`
 }
 
 function formatBoardStatusSummary(view: BoardViewDoc): string {
-  const lines: string[] = [
+  const lines = [
     `Group "${view.group.title}" (${view.group.id}, status=${view.group.status}, headSeq=${view.group.headSeq})`,
     `Headline [${view.headline.tone}/${view.headline.kind}]: ${view.headline.text}`,
   ]
@@ -95,14 +57,11 @@ function formatBoardStatusSummary(view: BoardViewDoc): string {
   if (view.members.length > 0) {
     lines.push(
       `Members (${view.members.length}): ${view.members
-        .map(
-          (m) =>
-            `@${m.name} (#${m.conversationId}, ${m.lifecycle}, ${m.liveState}${m.model !== undefined ? `, model=${m.model}` : ''}, cursor=${m.readCursorSeq}/${m.pendingWakeupSeq}${m.worktreeId !== undefined ? `, worktree=${m.worktreeId}` : ''})`,
-        )
+        .map((m) => `@${m.name} (#${m.conversationId}, ${m.lifecycle}, ${m.liveState}${m.model !== undefined ? `, model=${m.model}` : ''}, cursor=${m.readCursorSeq}/${m.pendingWakeupSeq}${m.worktreeId !== undefined ? `, worktree=${m.worktreeId}` : ''})`)
         .join('; ')}`,
     )
   }
-  if (view.group.retainedWorktrees !== undefined && view.group.retainedWorktrees.length > 0) {
+  if (view.group.retainedWorktrees?.length) {
     lines.push(
       `Retained worktrees: ${view.group.retainedWorktrees
         .map((w) => `@${w.memberName}:${w.branch} (+${w.commitsAhead}, ${w.nodeId !== 'local' ? `node=${w.nodeId}, ` : ''}${w.path})`)
@@ -110,18 +69,10 @@ function formatBoardStatusSummary(view: BoardViewDoc): string {
     )
   }
   if (view.posts.length > 0) {
-    const recent = view.posts.slice(-5).map((p) => formatBoardPostLine(p))
+    const recent = view.posts.slice(-5).map(formatBoardPostLine)
     lines.push(`Recent posts (${recent.length}/${view.posts.length}):\n${recent.join('\n')}`)
   }
   return lines.join('\n')
-}
-
-function makeToolCallKey(
-  conversationId: number | undefined,
-  callId: string | undefined,
-): string | undefined {
-  if (conversationId === undefined || callId === undefined || callId.trim() === '') return undefined
-  return `${conversationId}:${callId}`
 }
 
 function formatInspectWorkerSummary(res: InspectWorkerResult): string {
@@ -131,23 +82,44 @@ function formatInspectWorkerSummary(res: InspectWorkerResult): string {
   return `${header}\nRecent timeline (${entries.length}/${res.recentEntries.length}):\n${entries.join('\n')}`
 }
 
-export function registerSwarmActions(
-  ctx: HelmxPluginContext,
-  coordinator: SwarmCoordinator,
-): void {
-  const dispatchGuard = createSwarmDispatchGuard()
-  const { createGroup, updateGroup, manageChannel, closeGroup } = createGroupHandlers(ctx, coordinator, dispatchGuard)
-  const { dispatchWorker, abortWorker, switchWorkerModel, inspectWorker, archiveWorker } =
-    createWorkerHandlers(ctx, coordinator, dispatchGuard)
-  const { boardPost, boardRead, boardStatus, completeBoardMembers, completeBoardChannels } =
-    createBoardHandlers(ctx, coordinator)
+const groupMeta = (groupId: string, title: string): Record<string, unknown> => {
+  const groupTitle = boundedText(title, 120)
+  return { groupId, ...(groupTitle ? { groupTitle } : {}) }
+}
 
-  // ------------------------------------------------------------------
-  // 12 个业务动作：单点声明（HTTP / CLI / Workflow / Web + exposeAsTool 直投 swarm_* 模型工具）
-  // ------------------------------------------------------------------
-  ctx.action({
-    id: 'create_group',
+export function registerSwarmActions(ctx: HelmxPluginContext, coordinator: SwarmCoordinator): void {
+  const guard = createSwarmDispatchGuard()
+  const { createGroup, updateGroup, closeGroup } = createGroupHandlers(ctx, coordinator, guard)
+  const { dispatchWorker, abortWorker, switchWorkerModel, inspectWorker, archiveWorker } = createWorkerHandlers(ctx, coordinator, guard)
+  const { boardPost, boardRead, boardStatus, completeBoardMembers } = createBoardHandlers(ctx, coordinator)
+
+  function registerTool<TIn, TOut>(spec: {
+    id: string; cli: [string, string]; description: string; toolDescription?: string
+    scope?: ConversationScope; idempotent?: boolean; promptSnippet?: string; promptGuidelines?: string[]
+    inputSchema: JsonSchema; outputSchema: JsonSchema
+    handler: (input: TIn, context: PluginActionContext) => MaybePromise<TOut>
+    formatOutput: (input: NoInfer<TIn>, output: NoInfer<TOut>) => string
+    projectPresentationMeta: (input: NoInfer<TIn>, output: NoInfer<TOut>) => Record<string, unknown>
+  }): void {
+    ctx.action({
+      id: spec.id, description: spec.description,
+      ...(spec.scope ? { scope: spec.scope } : {}), ...(spec.idempotent ? { idempotent: true } : {}),
+      ...(spec.promptSnippet ? { promptSnippet: spec.promptSnippet } : {}),
+      ...(spec.promptGuidelines ? { promptGuidelines: spec.promptGuidelines } : {}),
+      cli: { command: ['swarm', spec.cli[0]], description: spec.cli[1] },
+      inputSchema: spec.inputSchema, outputSchema: spec.outputSchema,
+      exposeAsTool: { name: `swarm_${spec.id}`, description: spec.toolDescription ?? spec.description, replay: 'safe', formatOutput: spec.formatOutput },
+      presentationMetaSchema: Schemas.swarmToolPresentationMetaSchema,
+      projectPresentationMeta: spec.projectPresentationMeta,
+      handler: spec.handler,
+    })
+  }
+
+  registerTool({
+    id: 'create_group', cli: ['create-group', 'Create an active swarm collaboration group'],
     description: 'Create an active swarm collaboration group on a top-level conversation.',
+    toolDescription:
+      'Start an active peer swarm collaboration board on the current top-level human conversation, tagging it swarm-coordinator and unlocking squad tools next step. Use for complex tasks needing concurrent role division, live peer handoffs, or writer/verifier review loops; skip for single subtasks or fixed deterministic pipelines.',
     promptSnippet:
       'Start a coordinated multi-agent peer blackboard collaboration (`swarm_create_group`) when dividing non-overlapping work across multiple concurrent peer agents.',
     promptGuidelines: [
@@ -155,343 +127,124 @@ export function registerSwarmActions(
       'Do not use swarm_create_group for small sequential tasks, single subtasks, or fixed deterministic pipelines (use subagent / SubagentWorkflow when available).',
       'Once active, call load_skill({ skillId: "swarm" }) when available before dispatching workers via swarm_dispatch_worker.',
     ],
-    cli: { command: ['swarm', 'create-group'], description: 'Create an active swarm collaboration group' },
-    inputSchema: createGroupInputSchema,
-    outputSchema: createGroupOutputSchema,
-    exposeAsTool: {
-      name: 'swarm_create_group',
-      description:
-        'Start an active peer swarm collaboration board on the current top-level human conversation, tagging it swarm-coordinator and unlocking squad tools next step. Use for complex tasks needing concurrent role division, live peer handoffs, or writer/verifier review loops; skip for single subtasks or fixed deterministic pipelines.',
-      replay: 'safe',
-      formatOutput: (_input, res) => `Created swarm group "${res.group.title}" (${res.groupId}).`,
-    },
-    presentationMetaSchema: swarmToolPresentationMetaSchema,
-    projectPresentationMeta: (_input, res) => {
-      const groupTitle = boundedMetaText(res.group.title, 120)
-      return { groupId: res.groupId, ...(groupTitle !== undefined ? { groupTitle } : {}) }
-    },
-    handler: (input: Parameters<typeof createGroup>[0], context: PluginActionContext) =>
-      createGroup(input, context.conversationId, makeToolCallKey(context.conversationId, context.callId)),
+    inputSchema: Schemas.createGroupInputSchema, outputSchema: Schemas.createGroupOutputSchema,
+    handler: (input: Parameters<typeof createGroup>[0], c) => createGroup(input, c.conversationId, callKeyOf(c)),
+    formatOutput: (_i, r) => `Created swarm group "${r.group.title}" (${r.groupId}).`,
+    projectPresentationMeta: (_i, r) => groupMeta(r.groupId, r.group.title),
   })
 
-  ctx.action({
-    id: 'update_group',
-    description: 'Update swarm collaboration group metadata.',
-    scope: COORDINATOR_SCOPE,
-    cli: { command: ['swarm', 'update-group'], description: 'Update swarm collaboration group metadata' },
-    inputSchema: updateGroupInputSchema,
-    outputSchema: updateGroupOutputSchema,
-    exposeAsTool: {
-      name: 'swarm_update_group',
-      description: 'Update the active swarm collaboration group title or objective.',
-      replay: 'safe',
-      formatOutput: (_input, res) => `Updated swarm group "${res.group.title}" (${res.groupId}).`,
-    },
-    presentationMetaSchema: swarmToolPresentationMetaSchema,
-    projectPresentationMeta: (_input, res) => {
-      const groupTitle = boundedMetaText(res.group.title, 120)
-      return { groupId: res.groupId, ...(groupTitle !== undefined ? { groupTitle } : {}) }
-    },
-    handler: (input: Parameters<typeof updateGroup>[0], context: PluginActionContext) => updateGroup(input, context.conversationId),
+  registerTool({
+    id: 'update_group', cli: ['update-group', 'Update swarm collaboration group metadata'],
+    description: 'Update the active swarm collaboration group title or objective.',
+    scope: COORDINATOR_SCOPE, inputSchema: Schemas.updateGroupInputSchema, outputSchema: Schemas.updateGroupOutputSchema,
+    handler: (input: Parameters<typeof updateGroup>[0], c) => updateGroup(input, c.conversationId),
+    formatOutput: (_i, r) => `Updated swarm group "${r.group.title}" (${r.groupId}).`,
+    projectPresentationMeta: (_i, r) => groupMeta(r.groupId, r.group.title),
   })
 
-  ctx.action({
-    id: 'manage_channel',
-    description: 'Create, subscribe, unsubscribe, or archive swarm collaboration group subchannels.',
-    scope: COORDINATOR_SCOPE,
-    cli: { command: ['swarm', 'channel'], description: 'Manage swarm collaboration group subchannels' },
-    inputSchema: manageChannelInputSchema,
-    outputSchema: manageChannelOutputSchema,
-    exposeAsTool: {
-      name: 'swarm_manage_channel',
-      description:
-        'Create, subscribe, unsubscribe, or archive subchannels in the active swarm collaboration group (main cannot be unsubscribed or archived).',
-      replay: 'safe',
-      formatOutput: (input, res) => {
-        const memberPart = input.member !== undefined && input.member.trim() !== '' ? ` for @${input.member.trim()}` : ''
-        return `Channel #${input.channel.trim()} (${input.op}${memberPart}) updated in group ${res.groupId}.`
-      },
-    },
-    presentationMetaSchema: swarmToolPresentationMetaSchema,
-    projectPresentationMeta: (_input, res) => ({ groupId: res.groupId }),
-    handler: (input: Parameters<typeof manageChannel>[0], context: PluginActionContext) => manageChannel(input, context.conversationId),
-  })
-
-  ctx.action({
-    id: 'dispatch_worker',
+  registerTool({
+    id: 'dispatch_worker', cli: ['dispatch-worker', 'Recruit a named swarm peer worker'],
     description: 'Recruit a named peer worker role into an active swarm collaboration group.',
-    scope: COORDINATOR_SCOPE,
-    cli: { command: ['swarm', 'dispatch-worker'], description: 'Recruit a named swarm peer worker' },
-    inputSchema: dispatchInputSchema,
-    outputSchema: dispatchWorkerOutputSchema,
-    exposeAsTool: {
-      name: 'swarm_dispatch_worker',
-      description:
-        'Recruit a named peer role into the active swarm collaboration group with optional worktree isolation and clean-anchor conversation forking. Starts the worker asynchronously in the background and returns immediately.',
-      replay: 'safe',
-      formatOutput: (_input, res) =>
-        `Dispatched @${res.name} (#${res.workerConversationId}) in group ${res.groupId}${res.worktreeId !== undefined ? `, worktree=${res.worktreeId}` : ''}, brief=#${res.postSeq}.`,
-    },
-    presentationMetaSchema: swarmToolPresentationMetaSchema,
-    projectPresentationMeta: (_input, res) => ({
-      groupId: res.groupId,
-      memberName: res.name,
-      workerConversationId: res.workerConversationId,
-      seq: res.postSeq,
-    }),
-    handler: (input: DispatchInput, context: PluginActionContext) =>
-      dispatchWorker(
-        input,
-        context.conversationId,
-        context.signal,
-        makeToolCallKey(context.conversationId, context.callId),
-      ),
+    toolDescription:
+      'Recruit a named peer role into the active swarm collaboration group with optional worktree isolation and clean-anchor conversation forking. Starts the worker asynchronously in the background and returns immediately.',
+    scope: COORDINATOR_SCOPE, inputSchema: Schemas.dispatchInputSchema, outputSchema: Schemas.dispatchWorkerOutputSchema,
+    handler: (input: DispatchInput, c) => dispatchWorker(input, c.conversationId, c.signal, callKeyOf(c)),
+    formatOutput: (_i, r) =>
+      `Dispatched @${r.name} (#${r.workerConversationId}) in group ${r.groupId}${r.worktreeId ? `, worktree=${r.worktreeId}` : ''}, brief=#${r.postSeq}.`,
+    projectPresentationMeta: (_i, r) => ({ groupId: r.groupId, memberName: r.name, workerConversationId: r.workerConversationId, seq: r.postSeq }),
   })
 
-  ctx.action({
-    id: 'board_post',
+  registerTool({
+    id: 'board_post', cli: ['board-post', 'Publish a post to the swarm collaboration board'],
     description: 'Publish a structured post to the swarm collaboration board.',
-    scope: PARTICIPANT_SCOPE,
-    cli: { command: ['swarm', 'board-post'], description: 'Publish a post to the swarm collaboration board' },
-    inputSchema: boardPostInputSchema,
-    outputSchema: boardPostOutputSchema,
-    exposeAsTool: {
-      name: 'swarm_board_post',
-      description:
-        'Publish a structured message on the swarm collaboration board with deterministic target resolution and orthogonal wake control (handoff and done posts from worktree members automatically attach a worktree snapshot).',
-      replay: 'safe',
-      formatOutput: (_input, res) => {
-        const targets = res.post.resolvedTargets.length > 0 ? res.post.resolvedTargets : res.post.to
-        return `Posted #${res.post.seq} [${res.post.kind}] in #${res.post.channel} -> ${targets.join(', ')} (wake=${res.post.wake}).`
-      },
-    },
-    presentationMetaSchema: swarmToolPresentationMetaSchema,
-    projectPresentationMeta: (_input, res) => ({
-      groupId: res.post.groupId,
-      postKind: res.post.kind,
-      seq: res.post.seq,
-    }),
-    handler: (input: Parameters<typeof boardPost>[0], context: PluginActionContext) =>
-      boardPost(
-        input,
-        context.conversationId,
-        context.signal,
-        makeToolCallKey(context.conversationId, context.callId),
-      ),
+    toolDescription:
+      'Publish a structured message on the swarm collaboration board with deterministic target resolution and orthogonal wake control (handoff and done posts from worktree members automatically attach a worktree snapshot).',
+    scope: PARTICIPANT_SCOPE, inputSchema: Schemas.boardPostInputSchema, outputSchema: Schemas.boardPostOutputSchema,
+    handler: (input: Parameters<typeof boardPost>[0], c) => boardPost(input, c.conversationId, c.signal, callKeyOf(c)),
+    formatOutput: (_i, r) => `Posted #${r.post.seq} [${r.post.kind}] -> ${(r.post.resolvedTargets.length > 0 ? r.post.resolvedTargets : r.post.to).join(', ')} (wake=${r.post.wake}).`,
+    projectPresentationMeta: (_i, r) => ({ groupId: r.post.groupId, postKind: r.post.kind, seq: r.post.seq }),
   })
 
-  ctx.action({
-    id: 'board_read',
-    description: 'Read posts from the swarm collaboration board.',
-    idempotent: true,
-    scope: HISTORY_PARTICIPANT_SCOPE,
-    cli: { command: ['swarm', 'board-read'], description: 'Read posts from the swarm collaboration board' },
-    inputSchema: boardReadInputSchema,
-    outputSchema: boardReadOutputSchema,
-    exposeAsTool: {
-      name: 'swarm_board_read',
-      description: 'Read swarm collaboration board posts by channel, sinceSeq, or exact seqs.',
-      replay: 'safe',
-      formatOutput: (_input, res) =>
-        res.posts.length === 0
-          ? `No matching board posts in ${res.groupId} (headSeq=${res.headSeq}).`
-          : `Board ${res.groupId} (headSeq=${res.headSeq}, returned=${res.posts.length}):\n${res.posts.map(formatBoardPostLine).join('\n')}`,
-    },
-    presentationMetaSchema: swarmToolPresentationMetaSchema,
-    projectPresentationMeta: (_input, res) => ({
-      groupId: res.groupId,
-      seq: res.headSeq,
-      postCount: res.posts.length,
-    }),
-    handler: (input: Parameters<typeof boardRead>[0], context: PluginActionContext) => boardRead(input, context.conversationId),
+  registerTool({
+    id: 'board_read', cli: ['board-read', 'Read posts from the swarm collaboration board'],
+    description: 'Read swarm collaboration board posts by sinceSeq or exact seqs.',
+    idempotent: true, scope: HISTORY_PARTICIPANT_SCOPE,
+    inputSchema: Schemas.boardReadInputSchema, outputSchema: Schemas.boardReadOutputSchema,
+    handler: (input: Parameters<typeof boardRead>[0], c) => boardRead(input, c.conversationId),
+    formatOutput: (_i, r) =>
+      r.posts.length === 0
+        ? `No matching board posts in ${r.groupId} (headSeq=${r.headSeq}).`
+        : `Board ${r.groupId} (headSeq=${r.headSeq}, returned=${r.posts.length}):\n${r.posts.map(formatBoardPostLine).join('\n')}`,
+    projectPresentationMeta: (_i, r) => ({ groupId: r.groupId, seq: r.headSeq, postCount: r.posts.length }),
   })
 
-  ctx.action({
-    id: 'board_status',
-    description: 'Inspect swarm collaboration group board status, members, and retained worktrees.',
-    idempotent: true,
-    scope: HISTORY_PARTICIPANT_SCOPE,
-    cli: { command: ['swarm', 'board-status'], description: 'Inspect swarm collaboration group board status' },
-    inputSchema: boardStatusInputSchema,
-    outputSchema: boardStatusOutputSchema,
-    exposeAsTool: {
-      name: 'swarm_board_status',
-      description:
-        'Inspect live swarm collaboration group status, member cursors and live states, activeWorkingMembers, and retained worktrees.',
-      replay: 'safe',
-      formatOutput: (_input, res) => formatBoardStatusSummary(res),
-    },
-    presentationMetaSchema: swarmToolPresentationMetaSchema,
-    projectPresentationMeta: (_input, res) => {
-      const groupTitle = boundedMetaText(res.group.title, 120)
-      return {
-        groupId: res.group.id,
-        ...(groupTitle !== undefined ? { groupTitle } : {}),
-        seq: res.group.headSeq,
-        postCount: res.posts.length,
-      }
-    },
-    handler: (input: { groupId?: string }, context: PluginActionContext) => boardStatus(input, context.conversationId),
+  registerTool({
+    id: 'board_status', cli: ['board-status', 'Inspect swarm collaboration group board status'],
+    description: 'Inspect live swarm collaboration group status, member cursors and live states, activeWorkingMembers, and retained worktrees.',
+    idempotent: true, scope: HISTORY_PARTICIPANT_SCOPE,
+    inputSchema: Schemas.boardStatusInputSchema, outputSchema: Schemas.boardStatusOutputSchema,
+    handler: (input: { groupId?: string }, c) => boardStatus(input, c.conversationId),
+    formatOutput: (_i, r) => formatBoardStatusSummary(r),
+    projectPresentationMeta: (_i, r) => ({ ...groupMeta(r.group.id, r.group.title), seq: r.group.headSeq, postCount: r.posts.length }),
   })
 
-  ctx.action({
-    id: 'abort_worker',
-    description: 'Abort an in-flight swarm worker turn in place while preserving conversation history and worktree hold.',
-    scope: COORDINATOR_SCOPE,
-    cli: { command: ['swarm', 'abort-worker'], description: 'Abort an in-flight swarm worker turn in place' },
-    inputSchema: workerIdInputSchema,
-    outputSchema: abortWorkerOutputSchema,
-    exposeAsTool: {
-      name: 'swarm_abort_worker',
-      description:
-        'Stop an in-flight swarm worker turn in place while preserving its conversation history and managed worktree hold for follow-up correction.',
-      replay: 'safe',
-      formatOutput: (_input, res) =>
-        res.aborted
-          ? `Aborted @${res.name} (#${res.workerConversationId}).`
-          : `Member @${res.name} (#${res.workerConversationId}) was not running.`,
-    },
-    presentationMetaSchema: swarmToolPresentationMetaSchema,
-    projectPresentationMeta: (_input, res) => ({
-      workerConversationId: res.workerConversationId,
-      memberName: res.name,
-      aborted: res.aborted,
-    }),
-    handler: (input: Parameters<typeof abortWorker>[0], context: PluginActionContext) => abortWorker(input, context.conversationId),
+  registerTool({
+    id: 'abort_worker', cli: ['abort-worker', 'Abort an in-flight swarm worker turn in place'],
+    description: 'Stop an in-flight swarm worker turn in place while preserving its conversation history and managed worktree hold for follow-up correction.',
+    scope: COORDINATOR_SCOPE, inputSchema: Schemas.workerIdInputSchema, outputSchema: Schemas.abortWorkerOutputSchema,
+    handler: (input: Parameters<typeof abortWorker>[0], c) => abortWorker(input, c.conversationId),
+    formatOutput: (_i, r) => (r.aborted ? `Aborted @${r.name} (#${r.workerConversationId}).` : `Member @${r.name} (#${r.workerConversationId}) was not running.`),
+    projectPresentationMeta: (_i, r) => ({ workerConversationId: r.workerConversationId, memberName: r.name, aborted: r.aborted }),
   })
 
-  ctx.action({
-    id: 'switch_worker_model',
-    description: 'Switch an idle swarm worker conversation to another model in place.',
-    scope: COORDINATOR_SCOPE,
-    cli: { command: ['swarm', 'switch-model'], description: 'Switch an idle swarm worker conversation model' },
-    inputSchema: switchModelInputSchema,
-    outputSchema: switchModelOutputSchema,
-    exposeAsTool: {
-      name: 'swarm_switch_worker_model',
-      description:
-        'Switch an idle swarm worker conversation to another model (or tier/<id>) and optional thinking effort in place while preserving its conversation history; pass prompt to immediately post a brief and wake the worker on the new model.',
-      replay: 'safe',
-      formatOutput: (_input, res) => {
-        const effortPart = res.effort !== undefined && res.effort !== '' ? ` (effort=${res.effort})` : ''
-        const resumePart = res.postSeq !== undefined ? ` and woke with brief #${res.postSeq}` : ''
-        return `Switched @${res.name} (#${res.workerConversationId}) model to ${res.model}${effortPart}${resumePart}.`
-      },
+  registerTool({
+    id: 'switch_worker_model', cli: ['switch-model', 'Switch an idle swarm worker conversation model'],
+    description: 'Switch an idle swarm worker conversation to another model (or tier/<id>) and optional thinking effort in place while preserving its conversation history; pass prompt to immediately post a brief and wake the worker on the new model.',
+    scope: COORDINATOR_SCOPE, inputSchema: Schemas.switchModelInputSchema, outputSchema: Schemas.switchModelOutputSchema,
+    handler: (input: Parameters<typeof switchWorkerModel>[0], c) => switchWorkerModel(input, c.conversationId, callKeyOf(c)),
+    formatOutput: (_i, r) =>
+      `Switched @${r.name} (#${r.workerConversationId}) model to ${r.model}${r.effort ? ` (effort=${r.effort})` : ''}${r.postSeq !== undefined ? ` and woke with brief #${r.postSeq}` : ''}.`,
+    projectPresentationMeta: (_i, r) => {
+      const model = boundedText(r.model, 200)
+      return { workerConversationId: r.workerConversationId, memberName: r.name, ...(model ? { model } : {}), ...(r.postSeq !== undefined ? { seq: r.postSeq } : {}) }
     },
-    presentationMetaSchema: swarmToolPresentationMetaSchema,
-    projectPresentationMeta: (_input, res) => {
-      const model = boundedMetaText(res.model, 200)
-      return {
-        workerConversationId: res.workerConversationId,
-        memberName: res.name,
-        ...(model !== undefined ? { model } : {}),
-        ...(res.postSeq !== undefined ? { seq: res.postSeq } : {}),
-      }
-    },
-    handler: (input: Parameters<typeof switchWorkerModel>[0], context: PluginActionContext) =>
-      switchWorkerModel(
-        input,
-        context.conversationId,
-        makeToolCallKey(context.conversationId, context.callId),
-      ),
   })
 
-  ctx.action({
-    id: 'inspect_worker',
+  registerTool({
+    id: 'inspect_worker', cli: ['inspect-worker', 'Inspect a swarm worker'],
     description: "Read a swarm worker's recent timeline summary, artifact list, and bound worktreeId.",
-    idempotent: true,
-    scope: PARTICIPANT_SCOPE,
-    cli: { command: ['swarm', 'inspect-worker'], description: 'Inspect a swarm worker' },
-    inputSchema: workerIdInputSchema,
-    outputSchema: inspectWorkerOutputSchema,
-    exposeAsTool: {
-      name: 'swarm_inspect_worker',
-      description: "Read a swarm worker's recent timeline summary, artifact list, and bound worktreeId.",
-      replay: 'safe',
-      formatOutput: (_input, res) => formatInspectWorkerSummary(res),
-    },
-    presentationMetaSchema: swarmToolPresentationMetaSchema,
-    projectPresentationMeta: (_input, res) => ({
-      groupId: res.groupId,
-      workerConversationId: res.conversationId,
-      memberName: res.name,
-    }),
-    handler: (input: Parameters<typeof inspectWorker>[0], context: PluginActionContext) => inspectWorker(input, context.conversationId),
+    idempotent: true, scope: PARTICIPANT_SCOPE, inputSchema: Schemas.workerIdInputSchema, outputSchema: Schemas.inspectWorkerOutputSchema,
+    handler: (input: Parameters<typeof inspectWorker>[0], c) => inspectWorker(input, c.conversationId),
+    formatOutput: (_i, r) => formatInspectWorkerSummary(r),
+    projectPresentationMeta: (_i, r) => ({ groupId: r.groupId, workerConversationId: r.conversationId, memberName: r.name }),
   })
 
-  ctx.action({
-    id: 'archive_worker',
-    description: 'Archive an idle swarm worker: releases worktree holds and swaps swarm-worker tag for swarm-worker-archived.',
-    scope: COORDINATOR_SCOPE,
-    cli: { command: ['swarm', 'archive-worker'], description: 'Archive an idle swarm worker' },
-    inputSchema: archiveWorkerInputSchema,
-    outputSchema: archiveWorkerOutputSchema,
-    exposeAsTool: {
-      name: 'swarm_archive_worker',
-      description: 'Archive an idle swarm worker (verifying worktree merge safety and releasing worktree holds when applicable).',
-      replay: 'safe',
-      formatOutput: (_input, res) => `Archived worker #${res.workerConversationId}.`,
-    },
-    presentationMetaSchema: swarmToolPresentationMetaSchema,
-    projectPresentationMeta: (_input, res) => ({
-      workerConversationId: res.workerConversationId,
-      archived: res.archived,
-    }),
-    handler: (input: Parameters<typeof archiveWorker>[0], context: PluginActionContext) =>
-      archiveWorker(input, context.conversationId, context.signal),
+  registerTool({
+    id: 'archive_worker', cli: ['archive-worker', 'Archive an idle swarm worker'],
+    description: 'Archive an idle swarm worker (verifying worktree merge safety and releasing worktree holds when applicable).',
+    scope: COORDINATOR_SCOPE, inputSchema: Schemas.archiveWorkerInputSchema, outputSchema: Schemas.archiveWorkerOutputSchema,
+    handler: (input: Parameters<typeof archiveWorker>[0], c) => archiveWorker(input, c.conversationId, c.signal),
+    formatOutput: (_i, r) => `Archived worker #${r.workerConversationId}.`,
+    projectPresentationMeta: (_i, r) => ({ workerConversationId: r.workerConversationId, archived: r.archived }),
   })
 
-  ctx.action({
-    id: 'close_group',
+  registerTool({
+    id: 'close_group', cli: ['close-group', 'Close a swarm collaboration group'],
     description:
-      'Close a swarm collaboration group in full-cleanup mode, retain-branches mode (keepWorktree: true), or force mode (force: true bypasses only the uncommitted/unmerged worktree guard).',
-    scope: COORDINATOR_SCOPE,
-    cli: { command: ['swarm', 'close-group'], description: 'Close a swarm collaboration group' },
-    inputSchema: closeGroupInputSchema,
-    outputSchema: closeGroupOutputSchema,
-    exposeAsTool: {
-      name: 'swarm_close_group',
-      description:
-        'Close the swarm collaboration group in full-cleanup mode or retain-branches mode (keepWorktree: true releases holds and preserves modified branches in retainedWorktrees; force: true closes past the uncommitted/unmerged guard, discarding unmerged member worktree content).',
-      replay: 'safe',
-      formatOutput: (_input, res) =>
-        res.retainedWorktrees.length === 0
-          ? `Closed swarm group ${res.groupId} cleanly.`
-          : `Closed swarm group ${res.groupId}; retained ${res.retainedWorktrees.length} worktree(s) for merge: ${res.retainedWorktrees.map((w) => `@${w.memberName}:${w.branch} (+${w.commitsAhead}${w.nodeId !== 'local' ? `, node=${w.nodeId}` : ''})`).join(', ')}.`,
-    },
-    presentationMetaSchema: swarmToolPresentationMetaSchema,
-    projectPresentationMeta: (_input, res) => ({
-      groupId: res.groupId,
-      retainedCount: res.retainedWorktrees.length,
-    }),
-    handler: (input: Parameters<typeof closeGroup>[0], context: PluginActionContext) =>
-      closeGroup(input, context.conversationId, context.signal),
-  })
-
-  // ------------------------------------------------------------------
-  // 2 个 UI 补全动作：visibility: 'ui'（允许 Web 补全调用，拒绝 run_action / Workflow DSL / CLI）
-  // ------------------------------------------------------------------
-  ctx.action({
-    id: 'complete_board_members',
-    description: 'List mentionable swarm collaboration board roles for composer @ completion.',
-    visibility: 'ui',
-    idempotent: true,
-    scope: PARTICIPANT_SCOPE,
-    inputSchema: completerInputSchema,
-    outputSchema: completerOutputSchema,
-    handler: (input: { query?: string; conversationId?: number }, context: PluginActionContext) =>
-      completeBoardMembers(input, context.conversationId),
+      'Close the swarm collaboration group in full-cleanup mode or retain-branches mode (keepWorktree: true releases holds and preserves modified branches in retainedWorktrees; force: true closes past the uncommitted/unmerged guard, discarding unmerged member worktree content).',
+    scope: COORDINATOR_SCOPE, inputSchema: Schemas.closeGroupInputSchema, outputSchema: Schemas.closeGroupOutputSchema,
+    handler: (input: Parameters<typeof closeGroup>[0], c) => closeGroup(input, c.conversationId, c.signal),
+    formatOutput: (_i, r) =>
+      r.retainedWorktrees.length === 0
+        ? `Closed swarm group ${r.groupId} cleanly.`
+        : `Closed swarm group ${r.groupId}; retained ${r.retainedWorktrees.length} worktree(s) for merge: ${r.retainedWorktrees.map((w) => `@${w.memberName}:${w.branch} (+${w.commitsAhead}${w.nodeId !== 'local' ? `, node=${w.nodeId}` : ''})`).join(', ')}.`,
+    projectPresentationMeta: (_i, r) => ({ groupId: r.groupId, retainedCount: r.retainedWorktrees.length }),
   })
 
   ctx.action({
-    id: 'complete_board_channels',
-    description: 'List active swarm collaboration board subchannels for composer # completion.',
-    visibility: 'ui',
-    idempotent: true,
-    scope: PARTICIPANT_SCOPE,
-    inputSchema: completerInputSchema,
-    outputSchema: completerOutputSchema,
-    handler: (input: { query?: string; conversationId?: number }, context: PluginActionContext) =>
-      completeBoardChannels(input, context.conversationId),
+    id: 'complete_board_members', description: 'List mentionable swarm collaboration board roles for composer @ completion.',
+    visibility: 'ui', idempotent: true, scope: PARTICIPANT_SCOPE,
+    inputSchema: Schemas.completerInputSchema, outputSchema: Schemas.completerOutputSchema,
+    handler: (input: { query?: string; conversationId?: number }, c: PluginActionContext) => completeBoardMembers(input, c.conversationId),
   })
 }

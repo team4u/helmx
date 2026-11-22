@@ -429,7 +429,6 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
     const dirtyPost: BoardPost = {
       groupId,
       seq: committedHeadSeq + 1,
-      channel: 'main',
       from: 'coordinator',
       to: ['all'],
       resolvedTargets: [],
@@ -566,7 +565,6 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
       {
         groupId,
         seq: 1,
-        channel: 'main',
         from: 'coordinator',
         to: ['workerA'],
         resolvedTargets: ['workerA'],
@@ -579,7 +577,6 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
       {
         groupId,
         seq: 2,
-        channel: 'main',
         from: 'coordinator',
         to: ['workerB'],
         resolvedTargets: ['workerB'],
@@ -592,7 +589,6 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
       {
         groupId,
         seq: 3,
-        channel: 'main',
         from: 'coordinator',
         to: ['workerC'],
         resolvedTargets: ['workerC'],
@@ -616,7 +612,6 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
         isolation: 'inherit',
         nodeId: 'local',
         cwd: env1.repoDir,
-        channels: ['main'],
         lifecycle: 'active',
         readCursorSeq: 0,
         pendingWakeupSeq: 1,
@@ -637,7 +632,6 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
         isolation: 'inherit',
         nodeId: 'local',
         cwd: env1.repoDir,
-        channels: ['main'],
         lifecycle: 'active',
         readCursorSeq: 2,
         pendingWakeupSeq: 2,
@@ -653,7 +647,6 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
         isolation: 'inherit',
         nodeId: 'local',
         cwd: env1.repoDir,
-        channels: ['main'],
         lifecycle: 'active',
         readCursorSeq: 3,
         pendingWakeupSeq: 3,

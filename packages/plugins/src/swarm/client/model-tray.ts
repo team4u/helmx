@@ -1,12 +1,5 @@
 /**
- * Pure derivation for the builtin:swarm composer activity tray (zero React/DOM
- * dependencies, Fast Refresh compliant).
- *
- * Consumes only the live `board-view` session doc facts: in-flight members
- * (working / blocked), blocked-first ordering, one localized frontline digest
- * built from the newest post, and the group start time for the elapsed clock.
- * When no member is in flight the summary is empty and the tray must render
- * null (zero height).
+ * Pure derivation for the builtin:swarm composer activity tray (Fast Refresh compliant).
  */
 import type { AskSpec, ConversationLive, ConversationSummary } from '@helmx/protocol'
 import { DEFAULT_HELMX_LOCALE, resolveLocalizedText, type HelmxLocale } from '@helmx/plugin-client'
@@ -35,7 +28,6 @@ export interface SwarmTrayItem {
   conversationId: number
   liveState: BoardMemberView['liveState']
   isBlocked: boolean
-  /** Live host fact from the conversation summary (never fabricated). */
   doing?: string
   runDurationMs?: number
   runStartedAt?: number
@@ -45,7 +37,6 @@ export interface SwarmTrayItem {
   createdAt: number
 }
 
-/** Structured frontline so the component localizes the kind verb via copy.ts. */
 export interface SwarmTrayFrontline {
   from: string
   to: string
@@ -68,14 +59,10 @@ export function buildSwarmTraySummary(
   view: BoardViewDoc,
   conversations: ReadonlyArray<ConversationSummary>,
 ): SwarmTraySummary {
-  const summaryById = new Map<number, ConversationSummary>()
-  for (const conv of conversations) summaryById.set(conv.id, conv)
-
-  const inFlight = sortBoardMembersForDisplay(view.members.filter(isMemberInFlight))
-  const items: SwarmTrayItem[] = inFlight.map((member) => {
+  const summaryById = new Map(conversations.map((c) => [c.id, c]))
+  const items: SwarmTrayItem[] = sortBoardMembersForDisplay(view.members.filter(isMemberInFlight)).map((member) => {
     const summary = summaryById.get(member.conversationId)
-    const doing = summary?.doing !== undefined && summary.doing.trim() !== '' ? summary.doing.trim() : undefined
-    const timing = extractMemberTimingFields(member, summary, view.group.status)
+    const doing = summary?.doing?.trim() || undefined
     return {
       key: member.name,
       name: member.name,
@@ -83,23 +70,21 @@ export function buildSwarmTraySummary(
       liveState: member.liveState,
       isBlocked: member.liveState === 'blocked',
       ...(doing !== undefined ? { doing } : {}),
-      ...timing,
+      ...extractMemberTimingFields(member, summary, view.group.status),
       createdAt: member.createdAt,
     }
   })
 
-  const latestPost = view.posts.length > 0 ? view.posts[view.posts.length - 1] : undefined
-  let frontline: SwarmTrayFrontline | undefined
-  if (latestPost !== undefined) {
-    const to = latestPost.resolvedTargets[0] ?? latestPost.to[0] ?? ''
-    frontline = {
-      from: latestPost.from,
-      to,
-      kind: latestPost.kind,
-      digest: postDigestLine(latestPost.body, 90),
-      seq: latestPost.seq,
-    }
-  }
+  const latest = view.posts[view.posts.length - 1]
+  const frontline: SwarmTrayFrontline | undefined = latest
+    ? {
+        from: latest.from,
+        to: latest.resolvedTargets[0] ?? latest.to[0] ?? '',
+        kind: latest.kind,
+        digest: postDigestLine(latest.body, 90),
+        seq: latest.seq,
+      }
+    : undefined
 
   const progress = boardProgressOf(view.members)
   return {
@@ -113,7 +98,7 @@ export function buildSwarmTraySummary(
   }
 }
 
-function firstLineCompact(text: string, maxChars = 100): string {
+const firstLineCompact = (text: string, maxChars = 100): string => {
   const first = (text.trim().split(/\r?\n/, 1)[0] ?? '').replaceAll(/\s+/g, ' ').trim()
   return first.length > maxChars ? `${first.slice(0, maxChars - 1)}…` : first
 }
@@ -122,24 +107,19 @@ function lastMeaningfulLine(text: string): string | undefined {
   const lines = text.split('\n')
   for (let i = lines.length - 1; i >= 0; i -= 1) {
     const line = (lines[i] ?? '').trim()
-    if (line === '') continue
-    return line.replace(/^[#-]+\s+/, '')
+    if (line !== '') return line.replace(/^[#-]+\s+/, '')
   }
   return undefined
 }
 
 function formatRunningToolSnippet(toolName: string, input: unknown): string {
   if (isPlainObject(input)) {
-    const detail =
-      input['command'] ?? input['path'] ?? input['pattern'] ?? input['query'] ?? input['name'] ?? input['kind']
-    if (typeof detail === 'string' && detail.trim() !== '') {
-      return `${toolName}: ${firstLineCompact(detail, 80)}`
-    }
+    const detail = input['command'] ?? input['path'] ?? input['pattern'] ?? input['query'] ?? input['name'] ?? input['kind']
+    if (typeof detail === 'string' && detail.trim() !== '') return `${toolName}: ${firstLineCompact(detail, 80)}`
   }
   return toolName
 }
 
-/** Derive one live execution / approval snippet from host snapshot facts (never fabricated). */
 export function resolveSwarmTrayLiveSnippet(
   input: {
     isBlocked: boolean
@@ -154,12 +134,12 @@ export function resolveSwarmTrayLiveSnippet(
   if (input.detailError !== undefined) {
     return `${resolveLocalizedText(TRAY_LOAD_FAILED_TAG, locale)}: ${firstLineCompact(input.detailError)}`
   }
-  const hasBlocked =
+  if (
     input.isBlocked ||
     input.pendingAsk !== undefined ||
     (input.summary?.pendingAskCount ?? 0) > 0 ||
     input.summary?.status === 'blocked'
-  if (hasBlocked) {
+  ) {
     const raw =
       input.pendingAsk?.title ||
       input.pendingAsk?.description ||
@@ -170,26 +150,17 @@ export function resolveSwarmTrayLiveSnippet(
   }
 
   const runningTools = (input.live?.tools ?? []).filter((t) => t.status === 'running')
-  if (runningTools.length === 1) {
-    const tool = runningTools[0]!
-    return formatRunningToolSnippet(tool.toolName, tool.input)
-  }
+  if (runningTools.length === 1) return formatRunningToolSnippet(runningTools[0]!.toolName, runningTools[0]!.input)
   if (runningTools.length > 1) {
     const names = runningTools.slice(0, 2).map((t) => formatRunningToolSnippet(t.toolName, t.input)).join(' · ')
     return `${trayParallelToolsTag(runningTools.length, locale)}: ${names}`
   }
 
-  const liveText = input.live?.text !== undefined ? lastMeaningfulLine(input.live.text) : undefined
-  if (liveText !== undefined) {
-    return `${resolveLocalizedText(TRAY_OUTPUT_TAG, locale)}: ${firstLineCompact(liveText)}`
-  }
-  const liveThinking = input.live?.thinking !== undefined ? lastMeaningfulLine(input.live.thinking) : undefined
-  if (liveThinking !== undefined) {
-    return `${resolveLocalizedText(TRAY_THINKING_TAG, locale)}: ${firstLineCompact(liveThinking)}`
-  }
+  const liveText = input.live?.text ? lastMeaningfulLine(input.live.text) : undefined
+  if (liveText) return `${resolveLocalizedText(TRAY_OUTPUT_TAG, locale)}: ${firstLineCompact(liveText)}`
+  const liveThinking = input.live?.thinking ? lastMeaningfulLine(input.live.thinking) : undefined
+  if (liveThinking) return `${resolveLocalizedText(TRAY_THINKING_TAG, locale)}: ${firstLineCompact(liveThinking)}`
 
-  const doing = input.summary?.doing !== undefined && input.summary.doing.trim() !== ''
-    ? input.summary.doing.trim()
-    : input.fallbackDoing
-  return doing !== undefined && doing.trim() !== '' ? firstLineCompact(doing) : undefined
+  const doing = input.summary?.doing?.trim() || input.fallbackDoing?.trim()
+  return doing ? firstLineCompact(doing) : undefined
 }

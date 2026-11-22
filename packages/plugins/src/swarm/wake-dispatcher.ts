@@ -1,25 +1,14 @@
 /**
- * builtin:swarm 对等成员唤醒投递与主控微批汇总报告调度器（自 group-store 拆出）。
- *
- * 职责：
- * 1) 对等成员唤醒：按 (groupId, memberName) 单飞合并（在途并发重入安全），按读游标批合并
- *    选择帖子并经 submitInputGuarded 投递，失败仅记录诊断不中断调度；
- * 2) 主控汇总：COORDINATOR_BATCH_WINDOW_MS 微批窗口合并上报，同组单飞 + 冲刷期重检循环防丢批，
- *    含全员空闲补发（idle catchup）；
- * 3) 报告水位：lastCoordReportCompletionSeq 由本模块独占维护（供同回合防连发与重启恢复对账）；
- *    lastReportHadActiveWorkers 持久化在组 meta.json 中，重启后仍可准确补发全员空闲确认。
- *
- * 并发不变量与拆分前逐字等价：inflightWakeups / scheduledReports 覆盖整个微批等待窗口与
- * 实际投递过程（liveTasks 零间隙）；stopAndClear 经 drain() 先 cancel 再 allSettled 排空。
+ * builtin:swarm worker wakeup delivery & micro-batched coordinator report dispatcher.
  */
-import type { HelmxPluginContext, MaybePromise } from '@helmx/protocol'
+import type { HelmxPluginContext } from '@helmx/protocol'
 import {
   BOARD_REPORT_RENDERER,
   BOARD_WAKEUP_RENDERER,
-  COORDINATOR_BATCH_WINDOW_MS,
   isLifecycleTeardownError,
   type BoardPost,
   type CollabGroupRecord,
+  type GroupMemberState,
   type MemberLiveSnapshot,
   type SwarmCoordinator,
 } from './contracts.js'
@@ -33,136 +22,78 @@ import {
   synthesizeBoardView,
 } from './board-router.js'
 
-interface ScheduledReportEntry {
-  readonly promise: Promise<void>
-  trigger(delayMs: number, excludeSettlingConvId?: number): void
-  cancel(): void
-}
-
-interface InflightWakeupEntry {
-  readonly promise: Promise<void>
-  requestRetry(fromTurnSettled?: boolean): void
-}
-
-/** wake-dispatcher 对组存储门面的最小依赖端口。 */
 export interface WakeDispatcherPorts {
   readonly ctx: HelmxPluginContext
   readonly getCoordinator: () => SwarmCoordinator
-  readonly isStopping: () => boolean
+  readonly isAlive: () => boolean
   readonly getGroup: (groupId: string) => CollabGroupRecord | undefined
   readonly getPosts: (groupId: string) => readonly BoardPost[]
-  readonly mutateGroup: <T>(
-    groupId: string,
-    fn: (group: CollabGroupRecord, posts: readonly BoardPost[]) => MaybePromise<{ group: CollabGroupRecord; result: T }>,
-  ) => Promise<T>
+  readonly updateGroupMeta: (groupId: string, fn: (draft: CollabGroupRecord) => void) => Promise<void>
+  readonly updateMember: (groupId: string, memberName: string, fn: (member: GroupMemberState) => void) => Promise<void>
   readonly reportLockPath: (groupId: string) => string
   readonly wakeupLockPath: (groupId: string, memberName: string) => string
   readonly resolveMemberLive: (conversationId: number) => MemberLiveSnapshot
   readonly getBusyActiveMemberNames: (group: CollabGroupRecord, excludeConvId?: number) => Set<string>
 }
 
-/** 对等唤醒投递与主控报告调度能力（由 group-store 组合根装配后使用）。 */
-export interface WakeDispatcher {
-  deliverWorkerWakeup(groupId: string, memberName: string, opts?: { fromTurnSettled?: boolean }): Promise<void>
-  scheduleCoordinatorReport(groupId: string, delayMs: number, excludeSettlingConvId?: number): Promise<void>
-  flushCoordinatorReport(groupId: string, excludeSettlingConvId?: number): Promise<void>
-  shouldSendCoordinatorIdleCatchup(group: CollabGroupRecord, excludeSettlingConvId?: number): boolean
-  hasInflightWakeup(groupId: string, memberName: string): boolean
-  hasInflightDeliveriesForGroup(groupId: string): boolean
-  liveTaskLabels(): string[]
-  /** 主控最近一次报告的发送前 completionSeq（防同回合连发；静默守卫读）。 */
-  getLastCoordReportCompletionSeq(groupId: string): number | undefined
-  /** 重启恢复对账：主控在途报告水位回填。 */
-  noteCoordReportInflight(groupId: string, completionSeq: number): void
-  /** 主控回合结算：清同回合水位。 */
-  forgetCoordReportCompletion(groupId: string): void
-  /** 组退出活跃态：清该组全部报告水位。 */
-  forgetGroupReportState(groupId: string): void
-  resetWatermarks(): void
-  drain(): Promise<void>
-}
+export type WakeDispatcher = ReturnType<typeof createWakeDispatcher>
 
-export function createWakeDispatcher(ports: WakeDispatcherPorts): WakeDispatcher {
-  /** 在途对等成员唤醒集合（key: `${groupId}:${memberName}`）。 */
-  const inflightWakeups = new Map<string, InflightWakeupEntry>()
-  /** 在途主控汇总调度/投递集合（覆盖整个微批等待窗口与实际投递过程，零间隙跟踪）。 */
-  const scheduledReports = new Map<string, ScheduledReportEntry>()
-  /** 主控最近一次发出的 board-report 对应的发送前 completionSeq（防同回合连发）。 */
+export function createWakeDispatcher(ports: WakeDispatcherPorts) {
+  const inflightWakeups = new Map<string, { promise: Promise<void>; requestRetry: (fromTurnSettled?: boolean) => void }>()
+  const scheduledReports = new Map<string, { promise: Promise<void>; trigger: (delayMs: number, excludeConvId?: number) => void; cancel: () => void }>()
   const lastCoordReportCompletionSeq = new Map<string, number>()
 
   const hasInflightWakeupsForGroup = (groupId: string): boolean => {
     const prefix = `${groupId}:`
-    for (const key of inflightWakeups.keys()) {
-      if (key.startsWith(prefix)) return true
-    }
+    for (const key of inflightWakeups.keys()) if (key.startsWith(prefix)) return true
     return false
   }
 
-  const hasInflightDeliveriesForGroup = (groupId: string): boolean => {
-    if (scheduledReports.has(groupId)) return true
-    return hasInflightWakeupsForGroup(groupId)
-  }
+  const shouldSendCoordinatorIdleCatchup = (group: CollabGroupRecord, excludeConvId?: number): boolean =>
+    group.lastReportHadActiveWorkers === true &&
+    ports.getBusyActiveMemberNames(group, excludeConvId).size === 0 &&
+    !hasInflightWakeupsForGroup(group.id) &&
+    findIdleCatchupAnchorPost(group, ports.getPosts(group.id)) !== undefined
 
-  /** 单次对等成员唤醒投递尝试。 */
-  const executeSingleMemberWakeup = async (
-    groupId: string,
-    memberName: string,
-    fromTurnSettled: boolean,
-  ): Promise<void> => {
+  const canFlushCoordinator = (group: CollabGroupRecord, excludeConvId?: number): boolean =>
+    shouldFlushCoordinatorReport({
+      group,
+      posts: ports.getPosts(group.id),
+      busyMemberNames: ports.getBusyActiveMemberNames(group, excludeConvId),
+    }) || shouldSendCoordinatorIdleCatchup(group, excludeConvId)
+
+  const executeSingleMemberWakeup = async (groupId: string, memberName: string, fromTurnSettled: boolean): Promise<void> => {
+    if (!ports.isAlive()) return
     const coord = ports.getCoordinator()
-    if (ports.isStopping() || !coord.isActive() || coord.isShutdown() || ports.ctx.host.isClosing) return
     const group = ports.getGroup(groupId)
-    if (group === undefined || group.status !== 'active') return
-    const member = group.members.find((m) => m.name === memberName && m.lifecycle === 'active')
-    if (member === undefined || member.pendingWakeupSeq <= member.readCursorSeq) return
+    const member = group?.status === 'active' ? group.members.find((m) => m.name === memberName && m.lifecycle === 'active') : undefined
+    if (!group || !member || member.pendingWakeupSeq <= member.readCursorSeq) return
 
     const summary = coord.readConversationOrUndefined(member.conversationId)
-    if (summary === undefined) return
-    const prevWakeCompletion = member.lastWakeCompletionSeq
-    const isSettlingBusy = !fromTurnSettled && coord.settlingWorkers.has(member.conversationId)
     if (
+      !summary ||
       summary.status === 'working' ||
       summary.status === 'blocked' ||
-      isSettlingBusy ||
-      (prevWakeCompletion !== undefined && summary.completionSeq <= prevWakeCompletion)
+      (!fromTurnSettled && coord.settlingWorkers.has(member.conversationId)) ||
+      (member.lastWakeCompletionSeq !== undefined && summary.completionSeq <= member.lastWakeCompletionSeq)
     ) {
       return
     }
 
     const fromSeq = member.readCursorSeq + 1
     const toSeq = member.pendingWakeupSeq
-    const allPosts = ports.getPosts(groupId) ?? []
-    const selected = selectPostsForMemberWakeup(member, allPosts, fromSeq, toSeq)
+    const selected = selectPostsForMemberWakeup(member, ports.getPosts(groupId), fromSeq, toSeq)
     if (selected.length === 0) {
-      await ports.mutateGroup(groupId, (draft) => {
-        const target = draft.members.find((m) => m.name === memberName)
-        if (target !== undefined) target.readCursorSeq = Math.max(target.readCursorSeq, toSeq)
-        return { group: draft, result: undefined }
-      })
+      await ports.updateMember(groupId, memberName, (t) => { t.readCursorSeq = Math.max(t.readCursorSeq, toSeq) })
       return
     }
 
-    const envelope = formatWorkerWakeupEnvelope({
-      group,
-      member,
-      posts: selected,
-      fromSeq,
-      toSeq,
-    })
+    const envelope = formatWorkerWakeupEnvelope({ group, member, posts: selected, fromSeq, toSeq })
     const requestId = `swarm-wakeup:${groupId}:${memberName}:${fromSeq}-${toSeq}`
     const baseCompletionSeq = summary.completionSeq
 
-    await ports.mutateGroup(groupId, (draft) => {
-      const target = draft.members.find((m) => m.name === memberName)
-      if (target !== undefined) {
-        target.inflightWakeup = {
-          requestId,
-          fromSeq,
-          toSeq,
-          baseCompletionSeq,
-        }
-      }
-      return { group: draft, result: undefined }
+    await ports.updateMember(groupId, memberName, (t) => {
+      t.inflightWakeup = { requestId, fromSeq, toSeq, baseCompletionSeq }
     })
 
     try {
@@ -173,148 +104,85 @@ export function createWakeDispatcher(ports: WakeDispatcherPorts): WakeDispatcher
           origin: 'agent',
           whenBusy: 'followUp',
           requestId,
-          meta: {
-            renderer: BOARD_WAKEUP_RENDERER,
-            groupId,
-            workerName: memberName,
-            fromSeq,
-            toSeq,
-            postCount: selected.length,
-          },
+          meta: { renderer: BOARD_WAKEUP_RENDERER, groupId, workerName: memberName, fromSeq, toSeq, postCount: selected.length },
         },
         { expectedOwnership: 'helmx' },
       )
-      await ports.mutateGroup(groupId, (draft) => {
-        const target = draft.members.find((m) => m.name === memberName)
-        if (target !== undefined) {
-          target.readCursorSeq = Math.max(target.readCursorSeq, toSeq)
-          target.lastWakeCompletionSeq = baseCompletionSeq
-          delete target.inflightWakeup
-        }
-        return { group: draft, result: undefined }
+      await ports.updateMember(groupId, memberName, (t) => {
+        t.readCursorSeq = Math.max(t.readCursorSeq, toSeq)
+        t.lastWakeCompletionSeq = baseCompletionSeq
+        delete t.inflightWakeup
       })
     } catch (err) {
-      await ports.mutateGroup(groupId, (draft) => {
-        const target = draft.members.find((m) => m.name === memberName)
-        if (target !== undefined) {
-          if (target.inflightWakeup?.requestId === requestId) {
-            delete target.inflightWakeup
-          }
-          if (target.lastWakeCompletionSeq === baseCompletionSeq) {
-            delete target.lastWakeCompletionSeq
-          }
-        }
-        return { group: draft, result: undefined }
+      await ports.updateMember(groupId, memberName, (t) => {
+        if (t.inflightWakeup?.requestId === requestId) delete t.inflightWakeup
+        if (t.lastWakeCompletionSeq === baseCompletionSeq) delete t.lastWakeCompletionSeq
       }).catch(() => {})
-      if (!isLifecycleTeardownError(err)) {
-        coord.reportError(`协作组 ${groupId} 成员 @${memberName} 唤醒投递失败`, err)
-      }
+      if (!isLifecycleTeardownError(err)) coord.reportError(`协作组 ${groupId} 成员 @${memberName} 唤醒投递失败`, err)
     }
   }
 
-  /** 对单个对等成员执行合并唤醒（零间隙跟踪 + 在途并发重入安全）。 */
-  const deliverWorkerWakeup = (
-    groupId: string,
-    memberName: string,
-    opts?: { fromTurnSettled?: boolean },
-  ): Promise<void> => {
+  const deliverWorkerWakeup = (groupId: string, memberName: string, opts?: { fromTurnSettled?: boolean }): Promise<void> => {
+    if (!ports.isAlive()) return Promise.resolve()
     const coord = ports.getCoordinator()
-    if (ports.isStopping() || !coord.isActive() || coord.isShutdown() || ports.ctx.host.isClosing) {
-      return Promise.resolve()
-    }
     const lockKey = `${groupId}:${memberName}`
     const existing = inflightWakeups.get(lockKey)
-    if (existing !== undefined) {
+    if (existing) {
       existing.requestRetry(opts?.fromTurnSettled)
       return existing.promise
     }
 
     let retryRequested = false
-    let retryFromTurnSettled = opts?.fromTurnSettled === true
-
-    let entryRef!: InflightWakeupEntry
+    let retryFromSettled = opts?.fromTurnSettled === true
+    let entryRef!: { promise: Promise<void>; requestRetry: (fromTurnSettled?: boolean) => void }
     const promise = coord
       .track(`board-wakeup:${lockKey}`, () =>
         ports.ctx.host.withFileLock(ports.wakeupLockPath(groupId, memberName), async () => {
-          let currentFromTurnSettled = retryFromTurnSettled
+          let curFromSettled = retryFromSettled
           for (;;) {
             retryRequested = false
-            retryFromTurnSettled = false
-            await executeSingleMemberWakeup(groupId, memberName, currentFromTurnSettled)
-            if (!retryRequested || ports.isStopping() || ports.ctx.host.isClosing) break
-            currentFromTurnSettled = retryFromTurnSettled
+            retryFromSettled = false
+            await executeSingleMemberWakeup(groupId, memberName, curFromSettled)
+            if (!retryRequested || !ports.isAlive()) break
+            curFromSettled = retryFromSettled
           }
         }),
       )
-      .catch((err) => {
-        if (!isLifecycleTeardownError(err)) {
-          coord.reportError(`协作组 ${groupId} 唤醒任务异常`, err)
-        }
-      })
-      .finally(() => {
-        if (inflightWakeups.get(lockKey) === entryRef) {
-          inflightWakeups.delete(lockKey)
-        }
-      })
+      .catch((err) => { if (!isLifecycleTeardownError(err)) coord.reportError(`协作组 ${groupId} 唤醒任务异常`, err) })
+      .finally(() => { if (inflightWakeups.get(lockKey) === entryRef) inflightWakeups.delete(lockKey) })
 
     entryRef = {
       promise,
-      requestRetry: (fromTurnSettled) => {
+      requestRetry(fromSettled) {
         retryRequested = true
-        if (fromTurnSettled) retryFromTurnSettled = true
+        if (fromSettled) retryFromSettled = true
       },
     }
     inflightWakeups.set(lockKey, entryRef)
     return promise
   }
 
-  /** 判定组是否需要向主控补发全员已空闲汇总（持久标记曾含 activeWorkingMembers，现全员 idle 且最新有效非 comment 帖为已通知 done）。 */
-  const shouldSendCoordinatorIdleCatchup = (group: CollabGroupRecord, excludeSettlingConvId?: number): boolean => {
-    if (group.lastReportHadActiveWorkers !== true) return false
-    if (ports.getBusyActiveMemberNames(group, excludeSettlingConvId).size > 0) return false
-    if (hasInflightWakeupsForGroup(group.id)) return false
-    const allPosts = ports.getPosts(group.id) ?? []
-    return findIdleCatchupAnchorPost(group, allPosts) !== undefined
-  }
-
-  /** 执行主控汇总报告组装与投递（在 scheduledReports 单飞保护内执行）。 */
-  const executeCoordinatorReportFlush = async (
-    groupId: string,
-    excludeSettlingConvId?: number,
-  ): Promise<void> => {
+  const executeCoordinatorReportFlush = async (groupId: string, excludeConvId?: number): Promise<void> => {
+    if (!ports.isAlive()) return
     const coord = ports.getCoordinator()
-    if (ports.isStopping() || !coord.isActive() || coord.isShutdown() || ports.ctx.host.isClosing) return
     const group = ports.getGroup(groupId)
-    if (group === undefined || group.status !== 'active' || group.coordinatorDetached === true) return
+    if (!group || group.status !== 'active' || group.coordinatorDetached) return
 
-    const allPosts = ports.getPosts(groupId) ?? []
-    const hasPendingPosts = group.coordinatorPendingSeq > group.coordinatorNotifiedSeq
+    const allPosts = ports.getPosts(groupId)
+    const hasPending = group.coordinatorPendingSeq > group.coordinatorNotifiedSeq
     const canFlushPending =
-      hasPendingPosts &&
-      shouldFlushCoordinatorReport({
-        group,
-        posts: allPosts,
-        busyMemberNames: ports.getBusyActiveMemberNames(group, excludeSettlingConvId),
-      })
-    const isIdleCatchup = !hasPendingPosts && shouldSendCoordinatorIdleCatchup(group, excludeSettlingConvId)
+      hasPending &&
+      shouldFlushCoordinatorReport({ group, posts: allPosts, busyMemberNames: ports.getBusyActiveMemberNames(group, excludeConvId) })
+    const isIdleCatchup = !hasPending && shouldSendCoordinatorIdleCatchup(group, excludeConvId)
     if (!canFlushPending && !isIdleCatchup) return
 
     const coordSummary = coord.readConversationOrUndefined(group.coordinatorConversationId)
-    if (coordSummary === undefined) {
-      await ports.mutateGroup(groupId, (draft) => {
-        draft.coordinatorDetached = true
-        draft.updatedAt = Date.now()
-        return { group: draft, result: undefined }
-      })
+    if (!coordSummary) {
+      await ports.updateGroupMeta(groupId, (d) => { d.coordinatorDetached = true; d.updatedAt = Date.now() })
       return
     }
-
     const prevCompletion = lastCoordReportCompletionSeq.get(groupId)
-    if (
-      coordSummary.status === 'working' ||
-      coordSummary.status === 'blocked' ||
-      (prevCompletion !== undefined && coordSummary.completionSeq <= prevCompletion)
-    ) {
+    if (coordSummary.status === 'working' || coordSummary.status === 'blocked' || (prevCompletion !== undefined && coordSummary.completionSeq <= prevCompletion)) {
       return
     }
 
@@ -322,26 +190,22 @@ export function createWakeDispatcher(ports: WakeDispatcherPorts): WakeDispatcher
     let toSeq: number
     let selected: BoardPost[]
     let requestId: string
-
     if (canFlushPending) {
       fromSeq = group.coordinatorNotifiedSeq + 1
       toSeq = group.coordinatorPendingSeq
       selected = selectPostsForCoordinatorReport(allPosts, fromSeq, toSeq)
       if (selected.length === 0) {
-        await ports.mutateGroup(groupId, (draft) => {
-          draft.coordinatorNotifiedSeq = Math.max(draft.coordinatorNotifiedSeq, toSeq)
-          return { group: draft, result: undefined }
-        })
+        await ports.updateGroupMeta(groupId, (d) => { d.coordinatorNotifiedSeq = Math.max(d.coordinatorNotifiedSeq, toSeq) })
         return
       }
       requestId = `swarm-report:${groupId}:${fromSeq}-${toSeq}`
     } else {
-      const anchorPost = findIdleCatchupAnchorPost(group, allPosts)
-      if (anchorPost === undefined) return
-      fromSeq = anchorPost.seq
+      const anchor = findIdleCatchupAnchorPost(group, allPosts)
+      if (!anchor) return
+      fromSeq = anchor.seq
       toSeq = group.headSeq
       selected = selectPostsForCoordinatorReport(allPosts, fromSeq, toSeq)
-      if (selected.length === 0) selected = [anchorPost]
+      if (selected.length === 0) selected = [anchor]
       requestId = `swarm-report-idle:${groupId}:${group.headSeq}:${coordSummary.completionSeq}`
     }
 
@@ -351,213 +215,114 @@ export function createWakeDispatcher(ports: WakeDispatcherPorts): WakeDispatcher
       previewLimit: coord.getConfig().boardPreviewLimit,
       resolveMemberLive: ports.resolveMemberLive,
     })
-    const envelope = formatCoordinatorReportEnvelope({
-      group,
-      posts: selected,
-      fromSeq,
-      toSeq,
-      activeWorkingMembers: view.activeWorkingMembers,
-    })
+    const envelope = formatCoordinatorReportEnvelope({ group, posts: selected, fromSeq, toSeq, activeWorkingMembers: view.activeWorkingMembers })
     const baseCompletionSeq = coordSummary.completionSeq
     const hadActiveWorkers = view.activeWorkingMembers.length > 0
-    const meta = {
-      renderer: BOARD_REPORT_RENDERER,
-      groupId,
-      fromSeq,
-      toSeq,
-      postCount: selected.length,
-      headline: localizedHeadline,
-    }
 
-    await ports.mutateGroup(groupId, (draft) => {
-      draft.inflightReport = {
-        requestId,
-        fromSeq,
-        toSeq,
-        baseCompletionSeq,
-        hadActiveWorkers,
-      }
-      return { group: draft, result: undefined }
+    await ports.updateGroupMeta(groupId, (d) => {
+      d.inflightReport = { requestId, fromSeq, toSeq, baseCompletionSeq, hadActiveWorkers }
     })
     lastCoordReportCompletionSeq.set(groupId, baseCompletionSeq)
+
     try {
-      // 协作组主控恒为顶层人类会话（建组门禁保证）；汇总属人类显式建组委托的 followUp 回调，
-      // 经 submitInput 排队投递（不打断人类当前回合，不发送终端按键）。
       await ports.ctx.host.submitInput(group.coordinatorConversationId, envelope, {
         origin: 'agent',
         whenBusy: 'followUp',
         requestId,
-        meta,
+        meta: { renderer: BOARD_REPORT_RENDERER, groupId, fromSeq, toSeq, postCount: selected.length, headline: localizedHeadline },
       })
-      await ports.mutateGroup(groupId, (draft) => {
-        if (canFlushPending) {
-          draft.coordinatorNotifiedSeq = Math.max(draft.coordinatorNotifiedSeq, toSeq)
-        }
-        if (hadActiveWorkers) {
-          draft.lastReportHadActiveWorkers = true
-        } else {
-          delete draft.lastReportHadActiveWorkers
-        }
-        delete draft.inflightReport
-        return { group: draft, result: undefined }
+      await ports.updateGroupMeta(groupId, (d) => {
+        if (canFlushPending) d.coordinatorNotifiedSeq = Math.max(d.coordinatorNotifiedSeq, toSeq)
+        if (hadActiveWorkers) d.lastReportHadActiveWorkers = true
+        else delete d.lastReportHadActiveWorkers
+        delete d.inflightReport
       })
     } catch (err) {
-      if (lastCoordReportCompletionSeq.get(groupId) === baseCompletionSeq) {
-        lastCoordReportCompletionSeq.delete(groupId)
-      }
-      await ports.mutateGroup(groupId, (draft) => {
-        if (draft.inflightReport?.requestId === requestId) {
-          delete draft.inflightReport
-        }
-        return { group: draft, result: undefined }
-      }).catch(() => {})
-      if (!isLifecycleTeardownError(err)) {
-        coord.reportError(`协作组 ${groupId} 主控汇总投递失败`, err)
-      }
+      if (lastCoordReportCompletionSeq.get(groupId) === baseCompletionSeq) lastCoordReportCompletionSeq.delete(groupId)
+      await ports.updateGroupMeta(groupId, (d) => { if (d.inflightReport?.requestId === requestId) delete d.inflightReport }).catch(() => {})
+      if (!isLifecycleTeardownError(err)) coord.reportError(`协作组 ${groupId} 主控汇总投递失败`, err)
     }
   }
 
-  /**
-   * 零间隙调度主控微批汇总：
-   * - 同步进入 coord.track + ports.ctx.host.withFileLock(reportLockPathOf)，确保整个 50ms 微批等待窗口与
-   *   submitInput 投递期间 service.liveTasks() 与 PluginHost.activeTaskCount() 始终 >= 1；
-   * - 冲刷期间若新到达汇报请求，通过 pendingRescheduleMs 在退出前重检循环，避免丢批；
-   * - stopAndClear() 时通过 cancel() 立即中断定时器并干净退出。
-   */
-  const scheduleCoordinatorReport = (
-    groupId: string,
-    delayMs: number,
-    excludeSettlingConvId?: number,
-  ): Promise<void> => {
+  const scheduleCoordinatorReport = (groupId: string, delayMs: number, excludeConvId?: number): Promise<void> => {
+    if (!ports.isAlive()) return Promise.resolve()
     const coord = ports.getCoordinator()
-    if (ports.isStopping() || !coord.isActive() || coord.isShutdown() || ports.ctx.host.isClosing) {
-      return Promise.resolve()
-    }
     const existing = scheduledReports.get(groupId)
-    if (existing !== undefined) {
-      existing.trigger(delayMs, excludeSettlingConvId)
+    if (existing) {
+      existing.trigger(delayMs, excludeConvId)
       return existing.promise
     }
 
     let state: 'waiting' | 'flushing' | 'cancelled' = delayMs > 0 ? 'waiting' : 'flushing'
     let timer: NodeJS.Timeout | undefined
     let resolveWait: ((mode: 'flush' | 'cancel') => void) | undefined
-    let activeExcludeSettlingConvId: number | undefined = excludeSettlingConvId
-    let pendingRescheduleMs: number | undefined
-    let pendingExcludeSettlingConvId: number | undefined
+    let activeExclude = excludeConvId
+    let pendingDelay: number | undefined
+    let pendingExclude: number | undefined
 
-    const isCancelled = (): boolean => state === 'cancelled' || ports.isStopping()
     const readState = (): 'waiting' | 'flushing' | 'cancelled' => state
-    const consumePendingReschedule = (): { delayMs: number; excludeSettlingConvId?: number } | undefined => {
-      if (pendingRescheduleMs === undefined) return undefined
-      const delay = pendingRescheduleMs
-      const exclude = pendingExcludeSettlingConvId
-      pendingRescheduleMs = undefined
-      pendingExcludeSettlingConvId = undefined
-      return { delayMs: delay, ...(exclude !== undefined ? { excludeSettlingConvId: exclude } : {}) }
-    }
-
+    const isStopped = (): boolean => readState() === 'cancelled' || !ports.isAlive()
     const wakeWaiter = (mode: 'flush' | 'cancel'): void => {
-      if (timer !== undefined) {
-        clearTimeout(timer)
-        timer = undefined
-      }
+      if (timer) { clearTimeout(timer); timer = undefined }
       resolveWait?.(mode)
       resolveWait = undefined
     }
+    const waitDelay = (ms: number): Promise<'flush' | 'cancel'> =>
+      ms <= 0 || readState() !== 'waiting' || !ports.isAlive()
+        ? Promise.resolve(isStopped() ? 'cancel' : 'flush')
+        : new Promise<'flush' | 'cancel'>((resolve) => {
+            resolveWait = resolve
+            timer = setTimeout(() => { timer = undefined; wakeWaiter('flush') }, ms)
+            timer.unref?.()
+          })
 
-    const waitForDelay = (ms: number): Promise<'flush' | 'cancel'> => {
-      if (ms <= 0 || readState() !== 'waiting' || ports.isStopping()) {
-        return Promise.resolve(isCancelled() ? 'cancel' : 'flush')
-      }
-      return new Promise<'flush' | 'cancel'>((resolve) => {
-        resolveWait = resolve
-        timer = setTimeout(() => {
-          timer = undefined
-          wakeWaiter('flush')
-        }, ms)
-        timer.unref?.()
-      })
-    }
-
-    let entryRef!: ScheduledReportEntry
+    let entryRef!: { promise: Promise<void>; trigger: (d: number, e?: number) => void; cancel: () => void }
     const promise = coord
       .track(`board-report:${groupId}`, () =>
         ports.ctx.host.withFileLock(ports.reportLockPath(groupId), async () => {
           let nextDelay: number | undefined = delayMs
           while (nextDelay !== undefined) {
-            if (isCancelled()) return
-            if (nextDelay > 0 && readState() === 'waiting') {
-              const mode = await waitForDelay(nextDelay)
-              if (mode === 'cancel' || isCancelled()) return
-            }
+            if (isStopped()) return
+            if (nextDelay > 0 && readState() === 'waiting' && ((await waitDelay(nextDelay)) === 'cancel' || isStopped())) return
             state = 'flushing'
-            pendingRescheduleMs = undefined
-            pendingExcludeSettlingConvId = undefined
-            await executeCoordinatorReportFlush(groupId, activeExcludeSettlingConvId)
-            if (isCancelled()) return
-            const rescheduled = consumePendingReschedule()
-            if (rescheduled === undefined) break
+            pendingDelay = undefined
+            pendingExclude = undefined
+            await executeCoordinatorReportFlush(groupId, activeExclude)
+            if (isStopped() || pendingDelay === undefined) return
+            const reqDelay = pendingDelay
+            const reqExclude = pendingExclude
+            pendingDelay = undefined
+            pendingExclude = undefined
             const current = ports.getGroup(groupId)
-            const currentPosts = ports.getPosts(groupId) ?? []
-            const canFlushMore =
-              current !== undefined &&
-              (shouldFlushCoordinatorReport({
-                group: current,
-                posts: currentPosts,
-                busyMemberNames: ports.getBusyActiveMemberNames(current, rescheduled.excludeSettlingConvId),
-              }) ||
-                shouldSendCoordinatorIdleCatchup(current, rescheduled.excludeSettlingConvId))
-            if (!canFlushMore) {
-              break
-            }
-            activeExcludeSettlingConvId = rescheduled.excludeSettlingConvId
-            state = rescheduled.delayMs > 0 ? 'waiting' : 'flushing'
-            nextDelay = rescheduled.delayMs
+            if (!current || !canFlushCoordinator(current, reqExclude)) return
+            activeExclude = reqExclude
+            state = reqDelay > 0 ? 'waiting' : 'flushing'
+            nextDelay = reqDelay
           }
         }),
       )
-      .catch((err) => {
-        if (!isLifecycleTeardownError(err)) {
-          coord.reportError(`协作组 ${groupId} 汇总任务异常`, err)
-        }
-      })
+      .catch((err) => { if (!isLifecycleTeardownError(err)) coord.reportError(`协作组 ${groupId} 汇总任务异常`, err) })
       .finally(() => {
-        if (timer !== undefined) {
-          clearTimeout(timer)
-          timer = undefined
-        }
-        if (scheduledReports.get(groupId) === entryRef) {
-          scheduledReports.delete(groupId)
-        }
+        if (timer) { clearTimeout(timer); timer = undefined }
+        if (scheduledReports.get(groupId) === entryRef) scheduledReports.delete(groupId)
       })
 
     entryRef = {
       promise,
-      trigger: (requestedDelayMs: number, nextExcludeSettlingConvId?: number) => {
-        if (state === 'cancelled') return
-        if (state === 'waiting') {
-          if (nextExcludeSettlingConvId !== undefined) {
-            activeExcludeSettlingConvId = nextExcludeSettlingConvId
-          }
-          if (requestedDelayMs <= 0) {
-            state = 'flushing'
-            wakeWaiter('flush')
-          }
+      trigger(reqDelay, nextExclude) {
+        if (readState() === 'cancelled') return
+        if (readState() === 'waiting') {
+          if (nextExclude !== undefined) activeExclude = nextExclude
+          if (reqDelay <= 0) { state = 'flushing'; wakeWaiter('flush') }
           return
         }
-        pendingRescheduleMs =
-          pendingRescheduleMs === undefined
-            ? requestedDelayMs
-            : Math.min(pendingRescheduleMs, requestedDelayMs)
-        if (nextExcludeSettlingConvId !== undefined) {
-          pendingExcludeSettlingConvId = nextExcludeSettlingConvId
-        }
+        pendingDelay = pendingDelay === undefined ? reqDelay : Math.min(pendingDelay, reqDelay)
+        if (nextExclude !== undefined) pendingExclude = nextExclude
       },
-      cancel: () => {
+      cancel() {
         state = 'cancelled'
-        pendingRescheduleMs = undefined
-        pendingExcludeSettlingConvId = undefined
+        pendingDelay = undefined
+        pendingExclude = undefined
         wakeWaiter('cancel')
       },
     }
@@ -565,63 +330,30 @@ export function createWakeDispatcher(ports: WakeDispatcherPorts): WakeDispatcher
     return promise
   }
 
-  const flushCoordinatorReport = async (groupId: string, excludeSettlingConvId?: number): Promise<void> => {
-    await scheduleCoordinatorReport(groupId, 0, excludeSettlingConvId)
-  }
-
-
-  const dispatcher: WakeDispatcher = {
+  return {
     deliverWorkerWakeup,
     scheduleCoordinatorReport,
-    flushCoordinatorReport,
+    flushCoordinatorReport: (groupId: string, excludeConvId?: number) => scheduleCoordinatorReport(groupId, 0, excludeConvId),
     shouldSendCoordinatorIdleCatchup,
-    hasInflightWakeup: (groupId, memberName) => inflightWakeups.has(`${groupId}:${memberName}`),
-    hasInflightDeliveriesForGroup,
-
-    liveTaskLabels(): string[] {
-      const labels: string[] = []
-      for (const groupId of scheduledReports.keys()) {
-        labels.push(`board-report-schedule:${groupId}`)
-      }
-      for (const lockKey of inflightWakeups.keys()) {
-        labels.push(`board-wakeup:${lockKey}`)
-      }
-      return labels
-    },
-
-    getLastCoordReportCompletionSeq(groupId: string): number | undefined {
-      return lastCoordReportCompletionSeq.get(groupId)
-    },
-
-    noteCoordReportInflight(groupId: string, completionSeq: number): void {
-      lastCoordReportCompletionSeq.set(groupId, completionSeq)
-    },
-
-    forgetCoordReportCompletion(groupId: string): void {
-      lastCoordReportCompletionSeq.delete(groupId)
-    },
-
-    forgetGroupReportState(groupId: string): void {
-      lastCoordReportCompletionSeq.delete(groupId)
-    },
-
-    resetWatermarks(): void {
-      lastCoordReportCompletionSeq.clear()
-    },
-
-    async drain(): Promise<void> {
-      const pendingReports = [...scheduledReports.values()]
-      for (const entry of pendingReports) entry.cancel()
-      const pendingWakeups = [...inflightWakeups.values()]
-      await Promise.allSettled([
-        ...pendingReports.map((entry) => entry.promise),
-        ...pendingWakeups.map((entry) => entry.promise),
-      ])
+    canFlushCoordinator,
+    hasInflightWakeup: (groupId: string, memberName: string) => inflightWakeups.has(`${groupId}:${memberName}`),
+    hasInflightDeliveriesForGroup: (groupId: string) => scheduledReports.has(groupId) || hasInflightWakeupsForGroup(groupId),
+    liveTaskLabels: () => [
+      ...[...scheduledReports.keys()].map((id) => `board-report-schedule:${id}`),
+      ...[...inflightWakeups.keys()].map((key) => `board-wakeup:${key}`),
+    ],
+    getLastCoordReportCompletionSeq: (groupId: string) => lastCoordReportCompletionSeq.get(groupId),
+    noteCoordReportInflight: (groupId: string, seq: number) => void lastCoordReportCompletionSeq.set(groupId, seq),
+    forgetCoordReportCompletion: (groupId: string) => void lastCoordReportCompletionSeq.delete(groupId),
+    forgetGroupReportState: (groupId: string) => void lastCoordReportCompletionSeq.delete(groupId),
+    resetWatermarks: () => lastCoordReportCompletionSeq.clear(),
+    async drain() {
+      const reports = [...scheduledReports.values()]
+      for (const e of reports) e.cancel()
+      await Promise.allSettled([...reports.map((e) => e.promise), ...[...inflightWakeups.values()].map((e) => e.promise)])
       scheduledReports.clear()
       inflightWakeups.clear()
       lastCoordReportCompletionSeq.clear()
     },
   }
-
-  return dispatcher
 }

@@ -1,43 +1,18 @@
+import { HelmxError, type ConversationSummary, type HelmxPluginContext } from '@helmx/protocol'
 import {
-  HelmxError,
-  type ConversationSummary,
-  type HelmxPluginContext,
-} from '@helmx/protocol'
-import {
-  ARCHIVED_COORDINATOR_TAG,
-  ARCHIVED_WORKER_TAG,
-  COORDINATOR_TAG,
-  SWARM_PLUGIN_ID,
-  WORKER_TAG,
-  assertGroupId,
-  snapshotMemberTiming,
-  type BoardViewDoc,
-  type CollabGroupRecord,
-  type RetainedWorktreeInfo,
-  type SwarmCoordinator,
+  ARCHIVED_COORDINATOR_TAG, ARCHIVED_WORKER_TAG, COORDINATOR_TAG, WORKER_TAG,
+  assertGroupId, groupClosedError, groupNotFoundError, isPosIntId, setConversationTags, snapshotMemberTiming, swarmError,
+  type BoardViewDoc, type CollabGroupRecord, type RetainedWorktreeInfo, type SwarmCoordinator,
 } from './contracts.js'
 import {
-  checkMemberWorktree,
-  cleanupManagedWorktree,
-  inspectManagedWorktree,
-  releaseWorktreeHold,
+  checkMemberWorktree, inspectManagedWorktree, isIgnorableWorktreeError, settleMemberWorktree, toRetainedWorktreeInfo,
   type CheckedMemberWorktree,
 } from './worktree-bridge.js'
 
 export interface DispatchWorkerResult {
-  workerConversationId: number
-  groupId: string
-  name: string
-  worktreeId?: string
-  postSeq: number
+  workerConversationId: number; groupId: string; name: string; worktreeId?: string; postSeq: number
 }
 
-/**
- * Per-group admission & drain guard allowing concurrent dispatch_worker
- * setup (conversation creation / worktree acquisition) outside the short
- * group admission lock while keeping member names, capacity limits, and
- * close_group serialization race-free.
- */
 export interface SwarmDispatchGuard {
   isClosing(groupId: string): boolean
   beginClosing(groupId: string): void
@@ -45,63 +20,43 @@ export interface SwarmDispatchGuard {
   hasPendingMember(groupId: string, name: string): boolean
   pendingCount(groupId: string): number
   getPendingByKey(groupId: string, key: string): Promise<DispatchWorkerResult> | undefined
-  reserve(
-    groupId: string,
-    name: string,
-    key: string | undefined,
-    promise: Promise<DispatchWorkerResult>,
-  ): () => void
+  reserve(groupId: string, name: string, key: string | undefined, promise: Promise<DispatchWorkerResult>): () => void
   awaitInflight(groupId: string): Promise<void>
 }
 
 export function createSwarmDispatchGuard(): SwarmDispatchGuard {
-  const closingGroups = new Set<string>()
-  const pendingByGroup = new Map<
-    string,
-    Map<string, { key?: string; promise: Promise<DispatchWorkerResult> }>
-  >()
-
+  const closing = new Set<string>()
+  const pending = new Map<string, Map<string, { key?: string; promise: Promise<DispatchWorkerResult> }>>()
   return {
-    isClosing: (groupId) => closingGroups.has(groupId),
-    beginClosing: (groupId) => {
-      closingGroups.add(groupId)
-    },
-    endClosing: (groupId) => {
-      closingGroups.delete(groupId)
-    },
-    hasPendingMember: (groupId, name) => pendingByGroup.get(groupId)?.has(name) === true,
-    pendingCount: (groupId) => pendingByGroup.get(groupId)?.size ?? 0,
-    getPendingByKey: (groupId, key) => {
-      const map = pendingByGroup.get(groupId)
-      if (map === undefined) return undefined
-      for (const entry of map.values()) {
-        if (entry.key === key) return entry.promise
-      }
+    isClosing: (id) => closing.has(id),
+    beginClosing: (id) => void closing.add(id),
+    endClosing: (id) => void closing.delete(id),
+    hasPendingMember: (id, name) => pending.get(id)?.has(name) === true,
+    pendingCount: (id) => pending.get(id)?.size ?? 0,
+    getPendingByKey: (id, key) => {
+      for (const e of pending.get(id)?.values() ?? []) if (e.key === key) return e.promise
       return undefined
     },
-    reserve: (groupId, name, key, promise) => {
-      let map = pendingByGroup.get(groupId)
-      if (map === undefined) {
-        map = new Map()
-        pendingByGroup.set(groupId, map)
-      }
-      const entry = { ...(key !== undefined ? { key } : {}), promise }
+    reserve: (id, name, key, promise) => {
+      const map = pending.get(id) ?? new Map()
+      pending.set(id, map)
+      const entry = { ...(key ? { key } : {}), promise }
       map.set(name, entry)
-      let released = false
+      let done = false
       return () => {
-        if (released) return
-        released = true
-        const current = pendingByGroup.get(groupId)
-        if (current?.get(name) === entry) {
-          current.delete(name)
-          if (current.size === 0) pendingByGroup.delete(groupId)
+        if (done) return
+        done = true
+        const cur = pending.get(id)
+        if (cur?.get(name) === entry) {
+          cur.delete(name)
+          if (cur.size === 0) pending.delete(id)
         }
       }
     },
-    awaitInflight: async (groupId) => {
+    awaitInflight: async (id) => {
       for (;;) {
-        const map = pendingByGroup.get(groupId)
-        if (map === undefined || map.size === 0) return
+        const map = pending.get(id)
+        if (!map || map.size === 0) return
         await Promise.allSettled([...map.values()].map((e) => e.promise))
       }
     },
@@ -109,45 +64,31 @@ export function createSwarmDispatchGuard(): SwarmDispatchGuard {
 }
 
 export interface EnsureCoordinatorGroupInput {
-  conversationId: number
-  title: string
-  objective?: string
-  channels?: Array<{ name: string; topic?: string }>
-  reuseExisting?: boolean
-  createKey?: string
+  conversationId: number; title: string; objective?: string; reuseExisting?: boolean; createKey?: string
 }
 
-export function assertCoordinatorAuthority(
-  conversationId: number | undefined,
-  group: CollabGroupRecord,
-): void {
-  if (conversationId === undefined) return
-  if (conversationId !== group.coordinatorConversationId) {
-    throw new HelmxError(
+export function assertCoordinatorAuthority(conversationId: number | undefined, group: CollabGroupRecord): void {
+  if (conversationId !== undefined && conversationId !== group.coordinatorConversationId) {
+    throw swarmError(
       'conversation_scope_violation',
       `该操作仅允许协作组 '${group.id}' 的主控会话 #${group.coordinatorConversationId} 执行（当前会话 #${conversationId}）`,
       403,
-      {
-        pluginId: SWARM_PLUGIN_ID,
-        groupId: group.id,
-        coordinatorConversationId: group.coordinatorConversationId,
-        conversationId,
-      },
+      { groupId: group.id, coordinatorConversationId: group.coordinatorConversationId, conversationId },
     )
   }
 }
 
-export function isWorkerBusy(
+export const isWorkerBusy = (
   coordinator: Pick<SwarmCoordinator, 'readConversationOrUndefined' | 'settlingWorkers' | 'groups'>,
   conversationId: number,
   status?: string,
   groupId?: string,
   memberName?: string,
-): boolean {
-  const convStatus = status ?? coordinator.readConversationOrUndefined(conversationId)?.status
+): boolean => {
+  const s = status ?? coordinator.readConversationOrUndefined(conversationId)?.status
   return (
-    convStatus === 'working' ||
-    convStatus === 'blocked' ||
+    s === 'working' ||
+    s === 'blocked' ||
     coordinator.settlingWorkers.has(conversationId) ||
     (groupId !== undefined && memberName !== undefined && coordinator.groups.hasInflightWakeup(groupId, memberName))
   )
@@ -159,36 +100,26 @@ export function resolveCoordinatorGroup(
   conversationId: number | undefined,
   requireActive: boolean,
 ): CollabGroupRecord {
-  if (explicitGroupId !== undefined && explicitGroupId.trim() !== '') {
+  if (explicitGroupId?.trim()) {
     const group = groups.getGroup(assertGroupId(explicitGroupId))
-    if (group === undefined) {
-      throw new HelmxError('swarm_group_not_found', `协作组 '${explicitGroupId}' 不存在`, 404, {
-        pluginId: SWARM_PLUGIN_ID,
-        groupId: explicitGroupId,
-      })
-    }
+    if (!group) throw groupNotFoundError(explicitGroupId)
     assertCoordinatorAuthority(conversationId, group)
-    if (requireActive && group.status !== 'active') {
-      throw new HelmxError('swarm_group_closed', `协作组 '${group.id}' 已结单`, 409, {
-        pluginId: SWARM_PLUGIN_ID,
-        groupId: group.id,
-      })
-    }
+    if (requireActive && group.status !== 'active') throw groupClosedError(group.id)
     return group
   }
   if (conversationId !== undefined) {
     const active = groups.findActiveGroupByCoordinator(conversationId)
-    if (active !== undefined) return active
+    if (active) return active
     if (!requireActive) {
       const latest = groups.findLatestGroupForConversation(conversationId)
-      if (latest !== undefined && latest.coordinatorConversationId === conversationId) return latest
+      if (latest?.coordinatorConversationId === conversationId) return latest
     }
   }
-  throw new HelmxError(
+  throw swarmError(
     'swarm_group_not_found',
     '未找到关联的活跃协作组；请显式指定 groupId 或先调用 create_group 建组',
     404,
-    { pluginId: SWARM_PLUGIN_ID, ...(conversationId !== undefined ? { conversationId } : {}) },
+    conversationId !== undefined ? { conversationId } : undefined,
   )
 }
 
@@ -204,11 +135,7 @@ export function checkCoordinatorEligibility(
       details: { conversationId: conv.id, parentConversationId: conv.parentConversationId },
     }
   }
-  if (
-    ownership !== 'human' ||
-    conv.tags.includes(WORKER_TAG) ||
-    conv.tags.includes(ARCHIVED_WORKER_TAG)
-  ) {
+  if (ownership !== 'human' || conv.tags.includes(WORKER_TAG) || conv.tags.includes(ARCHIVED_WORKER_TAG)) {
     return {
       code: 'conversation_scope_violation',
       message: `禁止在后台会话或 Worker 会话 #${conv.id} 上创建协作组`,
@@ -225,53 +152,31 @@ export async function ensureCoordinatorGroup(
   input: EnsureCoordinatorGroupInput,
 ): Promise<{ groupId: string; group: BoardViewDoc['group'] }> {
   const { readConversationOrUndefined, enqueueDispatch, groups } = coordinator
-  const targetConvId = input.conversationId
-  const conv = readConversationOrUndefined(targetConvId)
-  if (conv === undefined) {
-    throw new HelmxError('not_found', `目标会话 #${targetConvId} 不存在`, 404, { conversationId: targetConvId })
-  }
-  const eligibilityErr = checkCoordinatorEligibility(conv, ctx.host.getConversationOwnership(targetConvId))
-  if (eligibilityErr !== undefined) {
-    throw new HelmxError(eligibilityErr.code, eligibilityErr.message, eligibilityErr.status, eligibilityErr.details)
-  }
+  const targetId = input.conversationId
+  const conv = readConversationOrUndefined(targetId)
+  if (!conv) throw new HelmxError('not_found', `目标会话 #${targetId} 不存在`, 404, { conversationId: targetId })
+  const err = checkCoordinatorEligibility(conv, ctx.host.getConversationOwnership(targetId))
+  if (err) throw new HelmxError(err.code, err.message, err.status, err.details)
 
-  return enqueueDispatch(`coord:${targetConvId}`, async () => {
-    const syncTagAndProjections = async (groupId: string): Promise<{ groupId: string; group: BoardViewDoc['group'] }> => {
-      const latestConv = readConversationOrUndefined(targetConvId)
-      if (latestConv !== undefined && !latestConv.tags.includes(COORDINATOR_TAG)) {
-        // 挂回活跃主控 tag 时同步摘除结单历史 tag，避免同一会话双主控标记并存。
-        await ctx.host.updateConversation(targetConvId, {
-          tags: [...latestConv.tags.filter((t) => t !== ARCHIVED_COORDINATOR_TAG), COORDINATOR_TAG],
-        })
-      }
+  return enqueueDispatch(`coord:${targetId}`, async () => {
+    const syncAndReturn = async (groupId: string): Promise<{ groupId: string; group: BoardViewDoc['group'] }> => {
+      const latest = readConversationOrUndefined(targetId)
+      if (latest && !latest.tags.includes(COORDINATOR_TAG)) await setConversationTags(ctx, latest, COORDINATOR_TAG, [ARCHIVED_COORDINATOR_TAG])
       groups.syncProjections()
-      const view = groups.buildBoardView(groupId)
-      return { groupId, group: view.group }
+      return { groupId, group: groups.buildBoardView(groupId).group }
     }
-
-    if (input.reuseExisting === true || input.createKey !== undefined) {
-      const existing = groups.findActiveGroupByCoordinator(targetConvId)
-      if (
-        existing !== undefined &&
-        (input.reuseExisting === true || existing.createKey === input.createKey)
-      ) {
-        return syncTagAndProjections(existing.id)
-      }
+    if (input.reuseExisting || input.createKey !== undefined) {
+      const existing = groups.findActiveGroupByCoordinator(targetId)
+      if (existing && (input.reuseExisting || existing.createKey === input.createKey)) return syncAndReturn(existing.id)
     }
-
     const created = await groups.createGroup({
-      coordinatorConversationId: targetConvId,
+      coordinatorConversationId: targetId,
       title: input.title.trim().slice(0, 120),
       ...(input.objective !== undefined ? { objective: input.objective } : {}),
-      ...(input.channels !== undefined ? { channels: input.channels } : {}),
       ...(input.createKey !== undefined ? { createKey: input.createKey } : {}),
     })
-    return syncTagAndProjections(created.id)
+    return syncAndReturn(created.id)
   })
-}
-
-function isPosIntId(v: unknown): v is number {
-  return typeof v === 'number' && Number.isInteger(v) && v > 0
 }
 
 export function createGroupHandlers(
@@ -282,41 +187,20 @@ export function createGroupHandlers(
   const { readConversationOrUndefined, enqueueDispatch, groups } = coordinator
 
   const createGroup = async (
-    input: {
-      title: string
-      objective?: string
-      channels?: Array<{ name: string; topic?: string }>
-      conversationId?: number
-    },
-    contextConversationId: number | undefined,
+    input: { title: string; objective?: string; conversationId?: number },
+    contextConvId: number | undefined,
     idempotencyKey?: string,
   ): Promise<{ groupId: string; group: BoardViewDoc['group'] }> => {
-    if (typeof input.title !== 'string' || input.title.trim() === '') {
-      throw new HelmxError('validation_error', 'create_group 需要非空 title', 400, {})
+    if (typeof input.title !== 'string' || !input.title.trim()) throw new HelmxError('validation_error', 'create_group 需要非空 title', 400, {})
+    if (input.conversationId !== undefined && contextConvId !== undefined && input.conversationId !== contextConvId) {
+      throw new HelmxError('validation_error', `conversationId 冲突：输入指定 #${input.conversationId} 与调用上下文 #${contextConvId} 不一致`, 400, { inputConversationId: input.conversationId, contextConversationId: contextConvId })
     }
-    if (
-      input.conversationId !== undefined &&
-      contextConversationId !== undefined &&
-      input.conversationId !== contextConversationId
-    ) {
-      throw new HelmxError(
-        'validation_error',
-        `conversationId 冲突：输入指定 #${input.conversationId} 与调用上下文 #${contextConversationId} 不一致`,
-        400,
-        { inputConversationId: input.conversationId, contextConversationId },
-      )
-    }
-    const targetConvId = input.conversationId ?? contextConversationId
-    if (!isPosIntId(targetConvId)) {
-      throw new HelmxError('validation_error', 'create_group 需要有效的目标主控会话 conversationId', 400, {})
-    }
+    const targetConvId = input.conversationId ?? contextConvId
+    if (!isPosIntId(targetConvId)) throw new HelmxError('validation_error', 'create_group 需要有效的目标主控会话 conversationId', 400, {})
     return ensureCoordinatorGroup(ctx, coordinator, {
-      conversationId: targetConvId,
-      title: input.title,
+      conversationId: targetConvId, title: input.title, reuseExisting: false,
       ...(input.objective !== undefined ? { objective: input.objective } : {}),
-      ...(input.channels !== undefined ? { channels: input.channels } : {}),
-      reuseExisting: false,
-      ...(idempotencyKey !== undefined ? { createKey: idempotencyKey } : {}),
+      ...(idempotencyKey ? { createKey: idempotencyKey } : {}),
     })
   }
 
@@ -325,7 +209,7 @@ export function createGroupHandlers(
     conversationId: number | undefined,
   ): Promise<{ groupId: string; group: BoardViewDoc['group'] }> => {
     const group = resolveCoordinatorGroup(groups, input.groupId, conversationId, true)
-    if (input.title !== undefined && (typeof input.title !== 'string' || input.title.trim() === '')) {
+    if (input.title !== undefined && (typeof input.title !== 'string' || !input.title.trim())) {
       throw new HelmxError('validation_error', 'title 必须是非空字符串', 400, {})
     }
     if (input.objective !== undefined && typeof input.objective !== 'string') {
@@ -335,176 +219,78 @@ export function createGroupHandlers(
       ...(input.title !== undefined ? { title: input.title.trim().slice(0, 120) } : {}),
       ...(input.objective !== undefined ? { objective: input.objective } : {}),
     })
-    const view = groups.buildBoardView(group.id)
-    return { groupId: group.id, group: view.group }
-  }
-
-  const manageChannel = async (
-    input: {
-      groupId?: string
-      op: 'create' | 'subscribe' | 'unsubscribe' | 'archive'
-      channel: string
-      topic?: string
-      member?: string
-    },
-    conversationId: number | undefined,
-  ): Promise<{ groupId: string; channels: Array<{ name: string; topic?: string; archived?: boolean }> }> => {
-    const group = resolveCoordinatorGroup(groups, input.groupId, conversationId, true)
-    if (!['create', 'subscribe', 'unsubscribe', 'archive'].includes(input.op)) {
-      throw new HelmxError('validation_error', `未知频道操作 '${String(input.op)}'`, 400, {})
-    }
-    return enqueueDispatch(`group:${group.id}`, async () => {
-      const updated = await groups.manageChannel(group.id, input)
-      return {
-        groupId: updated.id,
-        channels: updated.channels.map((c) => ({ ...c })),
-      }
-    })
+    return { groupId: group.id, group: groups.buildBoardView(group.id).group }
   }
 
   const closeGroup = async (
-    input: {
-      groupId?: string
-      keepWorktree?: boolean
-      abortRunning?: boolean
-      force?: boolean
-      summary?: string
-    },
+    input: { groupId?: string; keepWorktree?: boolean; abortRunning?: boolean; force?: boolean; summary?: string },
     conversationId: number | undefined,
     signal?: AbortSignal,
   ): Promise<{ closed: true; groupId: string; retainedWorktrees: RetainedWorktreeInfo[] }> => {
     const group = resolveCoordinatorGroup(groups, input.groupId, conversationId, false)
-    if (group.status === 'closed') {
-      return {
-        closed: true,
-        groupId: group.id,
-        retainedWorktrees: group.retainedWorktrees ?? [],
-      }
-    }
+    if (group.status === 'closed') return { closed: true, groupId: group.id, retainedWorktrees: group.retainedWorktrees ?? [] }
 
     return enqueueDispatch(`group:${group.id}`, async () => {
       dispatchGuard.beginClosing(group.id)
       try {
         await dispatchGuard.awaitInflight(group.id)
         const freshGroup = groups.getGroup(group.id)
-        if (freshGroup === undefined) {
-          throw new HelmxError('swarm_group_not_found', `协作组 '${group.id}' 不存在`, 404, {
-            pluginId: SWARM_PLUGIN_ID,
-            groupId: group.id,
-          })
-        }
-        if (freshGroup.status === 'closed') {
-          return {
-            closed: true,
-            groupId: freshGroup.id,
-            retainedWorktrees: freshGroup.retainedWorktrees ?? [],
-          }
-        }
+        if (!freshGroup) throw groupNotFoundError(group.id)
+        if (freshGroup.status === 'closed') return { closed: true, groupId: freshGroup.id, retainedWorktrees: freshGroup.retainedWorktrees ?? [] }
 
         const activeMembers = freshGroup.members.filter((m) => m.lifecycle === 'active')
-
-        for (const member of activeMembers) {
-          const s = readConversationOrUndefined(member.conversationId)
-          if (s === undefined || !isWorkerBusy(coordinator, member.conversationId, s.status, freshGroup.id, member.name)) continue
+        for (const m of activeMembers) {
+          const s = readConversationOrUndefined(m.conversationId)
+          if (!s || !isWorkerBusy(coordinator, m.conversationId, s.status, freshGroup.id, m.name)) continue
           if (input.abortRunning === true) {
-            if (s.status === 'working' || s.status === 'blocked') {
-              await ctx.host.abortConversationGuarded(member.conversationId, { expectedOwnership: 'helmx' })
-            }
+            if (s.status === 'working' || s.status === 'blocked') await ctx.host.abortConversationGuarded(m.conversationId, { expectedOwnership: 'helmx' })
             continue
           }
-          throw new HelmxError(
-            'swarm_worker_busy',
-            `协作组 '${freshGroup.id}' 成员 @${member.name} (#${member.conversationId}) 仍在运行中；请等待完工或传 abortRunning: true`,
-            409,
-            {
-              pluginId: SWARM_PLUGIN_ID,
-              groupId: freshGroup.id,
-              memberName: member.name,
-              workerConversationId: member.conversationId,
-            },
-          )
+          throw swarmError('swarm_worker_busy', `协作组 '${freshGroup.id}' 成员 @${m.name} (#${m.conversationId}) 仍在运行中；请等待完工或传 abortRunning: true`, 409, {
+            groupId: freshGroup.id, memberName: m.name, workerConversationId: m.conversationId,
+          })
         }
 
         const worktreeChecks: CheckedMemberWorktree[] = []
-        for (const member of activeMembers) {
-          const checked = await checkMemberWorktree(ctx, member, signal)
-          if (checked !== undefined) worktreeChecks.push(checked)
+        for (const m of activeMembers) {
+          const checked = await checkMemberWorktree(ctx, m, signal)
+          if (checked) worktreeChecks.push(checked)
         }
 
         const keepWorktree = input.keepWorktree === true
-        // force 只放开脏/未合入守卫（cleanup_worktree 同语义透传）；占用、归属、
-        // 锁定与 swarm_worker_busy 校验不因此绕过。
         if (!keepWorktree && input.force !== true) {
-          const unmerged = worktreeChecks.filter(
-            (item) => item.inspected.exists && (item.isDirty || item.unmergedCommits > 0),
-          )
+          const unmerged = worktreeChecks.filter((i) => i.inspected.exists && (i.isDirty || i.unmergedCommits > 0))
           if (unmerged.length > 0) {
-            const branchList = unmerged
-              .map((item) => `@${item.member.name}:${item.inspected.currentBranch ?? item.inspected.record.branch}`)
-              .join(', ')
-            throw new HelmxError(
+            const branches = unmerged.map((i) => `@${i.member.name}:${i.inspected.currentBranch ?? i.inspected.record.branch}`).join(', ')
+            throw swarmError(
               'swarm_worktree_unmerged',
-              `协作组 '${freshGroup.id}' 含未合入或脏工作树分支（${branchList}）；请传 keepWorktree: true 解锁主控合入收尾后再清理，或显式传 force: true 放弃未合入内容直接收尾`,
+              `协作组 '${freshGroup.id}' 含未合入或脏工作树分支（${branches}）；请传 keepWorktree: true 解锁主控合入收尾后再清理，或显式传 force: true 放弃未合入内容直接收尾`,
               409,
               {
-                pluginId: SWARM_PLUGIN_ID,
                 groupId: freshGroup.id,
-                unmergedWorktrees: unmerged.map((item) => ({
-                  memberName: item.member.name,
-                  worktreeId: item.worktreeId,
-                  branch: item.inspected.currentBranch ?? item.inspected.record.branch,
-                  path: item.inspected.record.path,
-                  commitsAhead: item.unmergedCommits,
-                  dirtyCount: item.inspected.dirtyFileCount,
-                })),
+                unmergedWorktrees: unmerged.map((i) => ({ ...toRetainedWorktreeInfo(i.member.name, i.member.nodeId, i.worktreeId, i.inspected, i.unmergedCommits), dirtyCount: i.inspected.dirtyFileCount })),
               },
             )
           }
         }
 
-        const retainedByWorktreeId = new Map<string, RetainedWorktreeInfo>()
-        // 保留此前 archive_worker({ keepWorktree: true }) 登记且仍存在未合入/脏改动的工作树
+        const retainedById = new Map<string, RetainedWorktreeInfo>()
         for (const prev of freshGroup.retainedWorktrees ?? []) {
           try {
             const inspected = await inspectManagedWorktree(ctx, prev.worktreeId, signal)
             const unmergedCommits = inspected.exists ? (inspected.unmergedCommits ?? inspected.commitsAhead ?? 0) : 0
             if (inspected.exists && (inspected.dirtyFileCount > 0 || unmergedCommits > 0)) {
-              retainedByWorktreeId.set(prev.worktreeId, {
-                memberName: prev.memberName,
-                nodeId: prev.nodeId,
-                worktreeId: prev.worktreeId,
-                branch: inspected.currentBranch ?? inspected.record.branch,
-                path: inspected.record.path,
-                commitsAhead: unmergedCommits,
-              })
+              retainedById.set(prev.worktreeId, toRetainedWorktreeInfo(prev.memberName, prev.nodeId, prev.worktreeId, inspected, unmergedCommits))
             }
           } catch (err) {
-            if (
-              err instanceof HelmxError &&
-              (err.code === 'not_found' || err.code === 'plugin_disabled' || err.code === 'unknown_action')
-            ) {
-              continue
-            }
-            throw err
+            if (!isIgnorableWorktreeError(err)) throw err
           }
         }
         for (const item of worktreeChecks) {
-          await releaseWorktreeHold(ctx, freshGroup.id, item.member.name, item.worktreeId, signal)
-          if (!item.inspected.exists) continue
-          if (keepWorktree && (item.isDirty || item.unmergedCommits > 0)) {
-            retainedByWorktreeId.set(item.worktreeId, {
-              memberName: item.member.name,
-              nodeId: item.member.nodeId,
-              worktreeId: item.worktreeId,
-              branch: item.inspected.currentBranch ?? item.inspected.record.branch,
-              path: item.inspected.record.path,
-              commitsAhead: item.unmergedCommits,
-            })
-          } else {
-            await cleanupManagedWorktree(ctx, item.worktreeId, input.force === true, signal)
-          }
+          const retained = await settleMemberWorktree(ctx, freshGroup.id, item, { keepWorktree, force: input.force === true, cleanupCleanWhenKeeping: true, signal })
+          if (retained) retainedById.set(retained.worktreeId, retained)
         }
-        const retainedWorktrees = [...retainedByWorktreeId.values()]
+        const retainedWorktrees = [...retainedById.values()]
 
         const now = Date.now()
         await groups.mutateGroup(freshGroup.id, (draft) => {
@@ -515,50 +301,32 @@ export function createGroupHandlers(
           delete draft.lastReportHadActiveWorkers
           delete draft.inflightReport
           delete draft.peerHopsSinceCoordinator
-          if (input.summary !== undefined && input.summary.trim() !== '') {
-            draft.closeSummary = input.summary.trim()
-          }
+          if (input.summary?.trim()) draft.closeSummary = input.summary.trim()
           for (const m of draft.members) {
-            if (m.lifecycle === 'active') {
-              const latestSummary = readConversationOrUndefined(m.conversationId)
-              const timing = snapshotMemberTiming(latestSummary, now)
-              m.lifecycle = 'archived'
-              m.archivedAt = now
-              if (timing.runDurationMs !== undefined) m.runDurationMs = timing.runDurationMs
-              if (timing.turnCount !== undefined) m.turnCount = timing.turnCount
-            }
+            if (m.lifecycle !== 'active') continue
+            const timing = snapshotMemberTiming(readConversationOrUndefined(m.conversationId), now)
+            m.lifecycle = 'archived'
+            m.archivedAt = now
+            if (timing.runDurationMs !== undefined) m.runDurationMs = timing.runDurationMs
+            if (timing.turnCount !== undefined) m.turnCount = timing.turnCount
           }
           return { group: draft, result: undefined }
         })
 
-        for (const member of activeMembers) {
-          const s = readConversationOrUndefined(member.conversationId)
-          if (s !== undefined) {
-            const nextTags = [...s.tags.filter((t) => t !== WORKER_TAG), ARCHIVED_WORKER_TAG]
-            await ctx.host.updateConversation(member.conversationId, { tags: nextTags })
-          }
+        for (const m of activeMembers) {
+          const s = readConversationOrUndefined(m.conversationId)
+          if (s) await setConversationTags(ctx, s, ARCHIVED_WORKER_TAG, [WORKER_TAG])
         }
-
         const coordConv = readConversationOrUndefined(freshGroup.coordinatorConversationId)
-        if (coordConv !== undefined && coordConv.tags.includes(COORDINATOR_TAG)) {
-          // 结单后将活跃主控 tag 原地替换为历史 tag：workbench 编排面板仍可访问已完成编组，
-          // 但 swarm_create_group 解锁、主控守卫与工具注入按活跃组判定不再复活。
-          await ctx.host.updateConversation(freshGroup.coordinatorConversationId, {
-            tags: [...coordConv.tags.filter((t) => t !== COORDINATOR_TAG), ARCHIVED_COORDINATOR_TAG],
-          })
-        }
+        if (coordConv?.tags.includes(COORDINATOR_TAG)) await setConversationTags(ctx, coordConv, ARCHIVED_COORDINATOR_TAG, [COORDINATOR_TAG])
 
         groups.syncProjections()
-        return {
-          closed: true,
-          groupId: freshGroup.id,
-          retainedWorktrees,
-        }
+        return { closed: true, groupId: freshGroup.id, retainedWorktrees }
       } finally {
         dispatchGuard.endClosing(group.id)
       }
     })
   }
 
-  return { createGroup, updateGroup, manageChannel, closeGroup }
+  return { createGroup, updateGroup, closeGroup }
 }

@@ -1,7 +1,7 @@
 /**
  * `builtin:swarm` 黑板路由、正交唤醒、回合结算与自愈守卫组合层集成测试（Integration 档）：
- * 1) forkFrom 干净锚点热分叉、#channel 寻址、被动留言(wake: false)与合并唤醒、
- *    abort_worker 原地刹车、switch_worker_model 原地切模、inspect_worker 与 @/# 幂等补全；
+ * 1) forkFrom 干净锚点热分叉、直接成员寻址、被动留言(wake: false)与合并唤醒、
+ *    abort_worker 原地刹车、switch_worker_model 原地切模、inspect_worker 与 @ 幂等补全；
  * 2) 回合 failed 自动上板 [blocker]、防哑巴退场单次续催 -> 二次命中代发 [blocker]、
  *    6 条件 0-Token 根因 [stall] 守卫与 Hub 重启补发未送达信封；
  * 3) 多工具轮成员回合的精确结算（回归 handOver 误判）；
@@ -41,16 +41,11 @@ import {
   type CollabGroupRecord,
 } from '../src/swarm.js'
 
-function availableChannelsOf(err: HelmxError): unknown {
-  if (typeof err.details !== 'object' || err.details === null) return undefined
-  return (err.details as { availableChannels?: unknown }).availableChannels
-}
-
 describe('builtin:swarm board routing, settlement & self-healing', () => {
   const gitTemplate = createGitTemplate()
   after(() => gitTemplate.cleanup())
 
-  test('swarm-int3: forkFrom clean anchor, #channel addressing & passive wake=false coalescing, abort_worker brake, switch_worker_model, inspect_worker, and @/# completions', { timeout: 60_000 }, async (t) => {
+  test('swarm-int3: forkFrom clean anchor, direct targeting & passive wake=false coalescing, abort_worker brake, switch_worker_model, inspect_worker, and @ completions', { timeout: 60_000 }, async (t) => {
     const env = await openSwarmEnv(useTempDir(t, 'helmx-swarm-int-'), gitTemplate)
     try {
       const { kernel } = env.app
@@ -62,8 +57,7 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
       await kernel.waitForIdle(coord.id)
 
       const { groupId } = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
-        title: 'Channel & Fork Squad',
-        channels: [{ name: 'qa', topic: 'QA channel' }],
+        title: 'Fork & Routing Squad',
         conversationId: coord.id,
       })) as { groupId: string }
 
@@ -84,7 +78,7 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
       const coder = (await kernel.plugins.invokeAction(
         SWARM_PLUGIN_ID,
         'dispatch_worker',
-        { prompt: 'Stand by with forked context.', name: 'coder', forkFrom: 'coordinator', channels: ['qa'] },
+        { prompt: 'Stand by with forked context.', name: 'coder', forkFrom: 'coordinator' },
         { conversationId: coord.id },
       )) as { workerConversationId: number }
       await kernel.waitForIdle(coder.workerConversationId)
@@ -93,7 +87,7 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
       assert.equal(forkedSawHistory, true, 'forkFrom="coordinator" must inherit clean parent conversation history')
       assert.deepEqual(kernel.getConversation(coder.workerConversationId).tags, [WORKER_TAG], 'forked worker must have swarm-worker tag only')
 
-      // Verify inspect_worker & @ / # completion actions
+      // Verify inspect_worker & @ completion action
       const inspected = (await kernel.plugins.invokeAction(
         SWARM_PLUGIN_ID,
         'inspect_worker',
@@ -111,13 +105,6 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
         { conversationId: coord.id },
       )) as { items: Array<{ id: string }> }
       assert.deepEqual(atItems.items.map((i) => i.id), ['coder'])
-      const hashItems = (await kernel.plugins.invokeAction(
-        SWARM_PLUGIN_ID,
-        'complete_board_channels',
-        { query: '', conversationId: coder.workerConversationId },
-        { conversationId: coder.workerConversationId },
-      )) as { items: Array<{ id: string }> }
-      assert.deepEqual(hashItems.items.map((i) => i.id), ['qa'])
 
       // Passive comment (wake: false default) MUST NOT wake idle coder
       const beforeCompletionSeq = kernel.getConversation(coder.workerConversationId).completionSeq
@@ -143,7 +130,7 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
         'comment(wake=false) must not wake an idle member',
       )
 
-      // Subsequent wake=true via '#qa' channel sweeps BOTH the passive comment AND the handoff into one wakeup!
+      // Subsequent wake=true handoff sweeps BOTH the passive comment AND the handoff into one wakeup!
       let sweptPrompt = ''
       const slowGate = deferred<void>()
       setSwarmRoleResponses(env.faux, {
@@ -157,7 +144,7 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
       })
       await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'board_post', {
         groupId,
-        to: ['#qa'],
+        to: ['coder'],
         kind: 'handoff',
         body: 'Active QA handoff #B',
       })
@@ -821,7 +808,6 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
     const newDonePost: BoardPost = {
       seq: doneSeq,
       groupId,
-      channel: 'main',
       from: 'fast',
       to: ['coordinator'],
       resolvedTargets: ['coordinator'],
@@ -881,7 +867,6 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
     postsAfterPart3.push({
       seq: commentSeq,
       groupId,
-      channel: 'main',
       from: 'slow',
       to: ['coordinator'],
       resolvedTargets: ['coordinator'],
@@ -935,7 +920,7 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
     }
   })
 
-  test('swarm-int16: swarm_manage_channel tool + empty channel 409, switch_worker_model effort+prompt one-shot resume, and 0-token peer hop circuit breaker', { timeout: 60_000 }, async (t) => {
+  test('swarm-int16: switch_worker_model effort+prompt one-shot resume, board_status model summary, and 0-token peer hop circuit breaker', { timeout: 60_000 }, async (t) => {
     const env = await openSwarmEnv(useTempDir(t, 'helmx-swarm-int16-'), gitTemplate)
     try {
       const { kernel } = env.app
@@ -946,8 +931,6 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
         conversationId: coord.id,
       })) as { groupId: string }
 
-      // 1) First-class swarm_manage_channel tool creates subchannel; waking empty subchannel fails closed with 409 swarm_channel_empty
-      //    and unknown channels report availableChannels without steering workers toward coordinator-only tools
       const execSwarmDerived = async <TOut>(
         toolName: string,
         input: Record<string, unknown>,
@@ -969,41 +952,7 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
         }
       }
 
-      await assert.rejects(
-        () =>
-          kernel.plugins.executeTool(
-            'swarm_dispatch_worker',
-            { groupId, name: 'ghost-worker', prompt: 'Should reject unknown channel', channels: ['wave1'] },
-            { conversationId: coord.id },
-          ),
-        (err: unknown) =>
-          err instanceof HelmxError &&
-          err.code === 'swarm_unknown_channel' &&
-          err.status === 404 &&
-          JSON.stringify(availableChannelsOf(err)) === JSON.stringify(['main']) &&
-          err.message.includes('swarm_manage_channel'),
-      )
-
-      const chToolRes = await execSwarmDerived<{ channels: Array<{ name: string }> }>(
-        'swarm_manage_channel',
-        { groupId, op: 'create', channel: 'empty-ch', topic: 'No members yet' },
-        { conversationId: coord.id },
-      )
-      assert.match(chToolRes.output, /#empty-ch/)
-      assert.ok(chToolRes.structuredOutput.channels.some((c) => c.name === 'empty-ch'))
-
-      await assert.rejects(
-        () =>
-          kernel.plugins.invokeAction(
-            SWARM_PLUGIN_ID,
-            'board_post',
-            { groupId, to: ['#empty-ch'], kind: 'handoff', body: 'Should fail closed' },
-            { conversationId: coord.id },
-          ),
-        (err: unknown) => err instanceof HelmxError && err.code === 'swarm_channel_empty' && err.status === 409,
-      )
-
-      // 2) switch_worker_model with effort + prompt switches model & thinkingLevel and wakes worker in one step (idempotent replay)
+      // 1) switch_worker_model with effort + prompt switches model & thinkingLevel and wakes worker in one step (idempotent replay)
       let resumedOnNewModel = false
       setSwarmRoleResponses(env.faux, {
         alpha: [
@@ -1018,13 +967,8 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
           },
           fauxAssistantMessage('alpha resumed done'),
         ],
-        waveworker: [
-          fauxAssistantMessage([fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', body: 'wave1 slice done' })], { stopReason: 'toolUse' }),
-          fauxAssistantMessage('waveworker done'),
-        ],
         coordinator: [
           fauxAssistantMessage('Coordinator noted stall.'),
-          fauxAssistantMessage('Coordinator noted waveworker done.'),
           fauxAssistantMessage('Coordinator noted resumed alpha done.'),
         ],
       })
@@ -1036,71 +980,6 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
         { conversationId: coord.id },
       )) as { workerConversationId: number }
       await kernel.waitForIdle(alpha.workerConversationId)
-      await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
-      await kernel.waitForIdle(coord.id)
-
-      // Worker unknown-channel diagnostics must never advertise coordinator-only swarm_manage_channel or 'all'
-      await assert.rejects(
-        () =>
-          kernel.plugins.executeTool(
-            'swarm_board_post',
-            { to: ['coordinator'], kind: 'comment', channel: 'ghost', body: 'Bad channel' },
-            { conversationId: alpha.workerConversationId },
-          ),
-        (err: unknown) =>
-          err instanceof HelmxError &&
-          err.code === 'swarm_unknown_channel' &&
-          err.status === 404 &&
-          JSON.stringify(availableChannelsOf(err)) === JSON.stringify(['main', 'empty-ch']) &&
-          !err.message.includes('swarm_manage_channel'),
-      )
-      await assert.rejects(
-        () =>
-          kernel.plugins.executeTool(
-            'swarm_board_post',
-            { to: ['#ghost'], kind: 'handoff', body: 'Bad target channel' },
-            { conversationId: alpha.workerConversationId },
-          ),
-        (err: unknown) =>
-          err instanceof HelmxError &&
-          err.code === 'swarm_unknown_channel' &&
-          err.status === 404 &&
-          JSON.stringify(availableChannelsOf(err)) === JSON.stringify(['empty-ch']) &&
-          err.message.includes('#empty-ch') &&
-          !err.message.includes('swarm_manage_channel') &&
-          !err.message.includes("'all'"),
-      )
-      await assert.rejects(
-        () =>
-          kernel.plugins.executeTool(
-            'swarm_board_read',
-            { channel: 'ghost' },
-            { conversationId: alpha.workerConversationId },
-          ),
-        (err: unknown) =>
-          err instanceof HelmxError &&
-          err.code === 'swarm_unknown_channel' &&
-          err.status === 404 &&
-          JSON.stringify(availableChannelsOf(err)) === JSON.stringify(['main', 'empty-ch']) &&
-          !err.message.includes('swarm_manage_channel'),
-      )
-
-      // Parallel same-turn [swarm_manage_channel(create), swarm_dispatch_worker(channels: ['wave1'])] must serialize admission without a 404 race
-      const [waveChannelRes, waveWorkerRes] = await Promise.all([
-        execSwarmDerived<{ channels: Array<{ name: string }> }>(
-          'swarm_manage_channel',
-          { groupId, op: 'create', channel: 'wave1', topic: 'Concurrent wave' },
-          { conversationId: coord.id },
-        ),
-        execSwarmDerived<{ workerConversationId: number; name: string }>(
-          'swarm_dispatch_worker',
-          { groupId, name: 'waveworker', prompt: 'Run wave1 slice', channels: ['wave1'] },
-          { conversationId: coord.id },
-        ),
-      ])
-      assert.ok(waveChannelRes.structuredOutput.channels.some((c) => c.name === 'wave1'))
-      assert.equal(waveWorkerRes.structuredOutput.name, 'waveworker')
-      await kernel.waitForIdle(waveWorkerRes.structuredOutput.workerConversationId)
       await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
       await kernel.waitForIdle(coord.id)
 
@@ -1129,17 +1008,15 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
       await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
       await kernel.waitForIdle(coord.id)
 
-      // board_status text summary surfaces member model= and waveworker's subscribed 'wave1' channel
-      const statusTool = await execSwarmDerived<{ members: Array<{ name: string; channels: string[] }> }>(
+      // board_status text summary surfaces member model=
+      const statusTool = await execSwarmDerived<{ members: Array<{ name: string }> }>(
         'swarm_board_status',
         { groupId },
         { conversationId: coord.id },
       )
       assert.match(statusTool.output, /model=faux\/faux-2/)
-      const waveMember = statusTool.structuredOutput.members.find((m) => m.name === 'waveworker')
-      assert.deepEqual(waveMember?.channels, ['main', 'wave1'])
 
-      // 3) 0-Token peer-to-peer hop circuit breaker (maxPeerHopsWithoutCoordinator = 2):
+      // 2) 0-Token peer-to-peer hop circuit breaker (maxPeerHopsWithoutCoordinator = 2):
       //    p1 -> p2 (hop 1) -> p1 (hop 2) -> p2 (hop 3 > 2 => trips breaker, pauses p2 wake, escalates system [blocker] to coordinator!)
       let p1Turns = 0
       let p2Turns = 0
