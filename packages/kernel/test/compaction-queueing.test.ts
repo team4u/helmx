@@ -634,4 +634,90 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
       await kernel.close()
     }
   })
+
+  it('native spawn resume during manual compaction queues helmx.input behind pi.compaction instead of racing on uncompacted context', { timeout: 60_000 }, async () => {
+    const { kernel, faux } = await openRuntime('spawn-resume-compaction')
+    let releaseSummary = () => {}
+    try {
+      const bigInput = '子会话大规模上下文历史素材。'.repeat(5_000)
+      faux.setResponses([
+        fauxAssistantMessage('child round 1'),
+        fauxAssistantMessage('child round 2'),
+        fauxAssistantMessage('child round 3'),
+      ])
+      let childId = 0
+      await kernel.spawnAgent({
+        parentConversationId: 1,
+        prompt: `child-round-1-marker: ${bigInput}`,
+        onResolved: (info) => { childId = info.conversationId ?? 0 },
+      })
+      assert.ok(childId > 0)
+      for (const marker of ['child-round-2-marker', 'child-round-3-marker']) {
+        await kernel.spawnAgent({
+          parentConversationId: 1,
+          resume: String(childId),
+          prompt: `${marker}: ${bigInput}`,
+        })
+      }
+      await waitFor(() => (kernel.getConversation(childId).contextUsage?.tokens ?? 0) > 30_000, 20_000)
+
+      let summaryEntered!: () => void
+      const enteredPromise = new Promise<void>((resolve) => { summaryEntered = resolve })
+      const summaryGate = new Promise<void>((resolve) => { releaseSummary = resolve })
+      const seenChildPrompts: string[][] = []
+
+      faux.setResponses([
+        async () => {
+          summaryEntered()
+          await summaryGate
+          return fauxAssistantMessage('compacted child summary')
+        },
+        async (ctx) => {
+          seenChildPrompts.push(ctx.messages.map((m) => extractText(m.content)))
+          return fauxAssistantMessage('child answer after compaction')
+        },
+      ])
+
+      await kernel.compactConversation(childId)
+      await enteredPromise
+      await waitFor(() => kernel.getConversation(childId).contextUsage?.compacting === true, 15_000)
+
+      // Resume native subagent while compaction is active: must queue in pi.inbox (helmx.input)
+      // and wait for compaction rather than racing ahead on uncompacted context.
+      const resumedTurn = kernel.spawnAgent({
+        parentConversationId: 1,
+        resume: String(childId),
+        prompt: 'post-compaction child task',
+        requestId: 'req-spawn-compact-1',
+      })
+
+      await waitFor(() => (findLive(kernel, childId)?.queuedInputs?.length ?? 0) === 1, 10_000)
+      const queued = findLive(kernel, childId)!.queuedInputs!
+      assert.equal(queued[0]?.text, 'post-compaction child task')
+      assert.equal(queued[0]?.origin, 'agent')
+      assert.equal(seenChildPrompts.length, 0, 'spawn resume must not run model before compaction commits')
+
+      releaseSummary()
+      const answer = await resumedTurn
+      assert.equal(answer, 'child answer after compaction')
+      await kernel.waitForIdle(childId)
+
+      const finalDetail = await kernel.getConversationDetail(childId, { limit: 100 })
+      const compactionIdx = finalDetail.entries.findIndex((e) => e.kind === 'pi.compaction')
+      const resumeInputIdx = finalDetail.entries.findIndex(
+        (e) =>
+          e.kind === 'helmx.input' &&
+          (e.data as { id?: string; text?: string; origin?: string } | undefined)?.id === 'req-spawn-compact-1',
+      )
+      assert.ok(compactionIdx >= 0, 'pi.compaction entry must be persisted on child conversation')
+      assert.ok(resumeInputIdx > compactionIdx, 'pi.compaction must persist before queued spawn helmx.input')
+      assert.equal(seenChildPrompts.length, 1)
+      const joined = seenChildPrompts[0]!.join('\n')
+      assert.ok(joined.includes('compacted child summary'), 'resumed subagent must see compacted summary')
+      assert.equal(joined.includes('child-round-1-marker'), false, 'compacted early history must be excluded')
+    } finally {
+      releaseSummary()
+      await kernel.close()
+    }
+  })
 })

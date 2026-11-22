@@ -258,6 +258,19 @@ export async function listModelCatalog(
   }
 }
 
+/** Valid `thinkingLevel` enum values (`pi-ai` `ModelThinkingLevel`; shared across conversation config, model defaults, and spawn `effort`). */
+export const THINKING_LEVELS = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
+
+/** Resolved model reference returned by `ModelRegistry.resolveModelRef` / `resolveModelRefWith`. */
+export interface ResolvedModelRef extends ModelRefParts {
+  /** Concrete canonical `'provider/modelId'` string. */
+  canonicalRef: string
+  /** Present when the input reference targeted `tier/<id>`. */
+  tierId?: string
+  /** Preset thinking level carried by the resolved tier (if configured). */
+  tierThinkingLevel?: string
+}
+
 /** Resolve default model reference; missing config fails explicitly instead of fabricating a model. */
 export function requireModelRef(ref: string | undefined): ModelRefParts {
   if (!ref || ref.trim() === '') {
@@ -268,6 +281,52 @@ export function requireModelRef(ref: string | undefined): ModelRefParts {
     )
   }
   return parseModelRef(ref)
+}
+
+/**
+ * Resolve a raw `'provider/model'` or `'tier/<id>'` reference into concrete parts + canonicalRef + optional tier preset.
+ * Shared hook-free primitive across `ConversationProfileService`, `ConversationService`, and native `spawn`.
+ */
+export function resolveModelRefWith(
+  ref: string,
+  resolveModelRef?: (ref: string) => ResolvedModelRef,
+  parseFallback: (ref: string) => ModelRefParts = parseModelRef,
+): ResolvedModelRef {
+  if (resolveModelRef !== undefined) return resolveModelRef(ref)
+  const parts = parseFallback(ref)
+  return { ...parts, canonicalRef: `${parts.provider}/${parts.modelId}` }
+}
+
+/**
+ * Resolve a global default model reference (dereferencing `tier/<id>` when a resolver is wired; failing with
+ * `model_not_configured` when unset/blank). Shared by host spawn wiring and model-resolution callers.
+ */
+export function resolveDefaultModelRef(
+  defaultModel: string | undefined,
+  resolveModelRef?: (ref: string) => ResolvedModelRef,
+): ResolvedModelRef {
+  if (defaultModel !== undefined && defaultModel.trim() !== '' && resolveModelRef !== undefined) {
+    return resolveModelRef(defaultModel.trim())
+  }
+  const parts = requireModelRef(defaultModel)
+  return { ...parts, canonicalRef: `${parts.provider}/${parts.modelId}` }
+}
+
+/** Pick the first configured (non-undefined, non-empty) thinking level from a precedence chain, then clamp to target model capabilities. */
+export function resolveClampedThinkingLevel(options: {
+  candidates: ReadonlyArray<string | undefined>
+  models?: Models
+  modelRef?: ModelRefParts
+}): string | undefined {
+  let inherited: string | undefined
+  for (const candidate of options.candidates) {
+    if (candidate !== undefined && candidate !== '') {
+      inherited = candidate
+      break
+    }
+  }
+  if (options.models === undefined) return inherited
+  return clampThinkingLevelForModel(options.models, options.modelRef, inherited)
 }
 
 /**

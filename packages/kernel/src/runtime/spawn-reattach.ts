@@ -14,6 +14,7 @@
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { Conversation, EntryId, EntryRecord, SettledSubmissionRecord } from '@earendil-works/pi-durable'
 import { HelmxError, isAbsoluteAgentPath, type AgentSpawnRequest } from '@helmx/protocol'
+import { assistantTextOfEntry, readEntryById } from './runtime-helpers.js'
 import { assertSpawnForkFields } from './spawn-fork.js'
 import { extractAcceptedStructuredOutputFromEntries } from './structured-output.js'
 
@@ -140,37 +141,24 @@ export async function recoverAcceptedStructuredOutput(
   return extractAcceptedStructuredOutputFromEntries(entries, schema)
 }
 
-function assistantTextFromEntry(entry: EntryRecord | undefined): string {
-  if (entry === undefined || entry.kind !== 'pi.assistant' || !Array.isArray(entry.model)) return ''
-  const msg = entry.model[0] as { content?: ReadonlyArray<{ type?: unknown; text?: unknown }> } | undefined
-  if (!msg || !Array.isArray(msg.content)) return ''
-  return msg.content
-    .filter((b) => b.type === 'text' && typeof b.text === 'string')
-    .map((b) => b.text as string)
-    .join('\n')
-}
-
 /**
- * Read assistant text for a given submission: prefers `settled.answer` directly, falling back to searching
- * `[settled.entry, settled.answer]` in reverse order for the latest non-empty `pi.assistant` text
- * (stopping at `pi.reset` or `helmx.rewind`).
+ * Read assistant text for a given submission: prefers `settled.answer` directly (via shared `readEntryById`
+ * + `assistantTextOfEntry`), falling back to searching `[settled.entry, settled.answer]` in reverse order for
+ * the latest non-empty `pi.assistant` text (stopping at `pi.reset` or `helmx.rewind`).
  */
 export async function readSubmissionAssistantText(
   conversation: Pick<Conversation, 'entries'>,
   settled: SettledSubmissionRecord,
+  options: { redact?: (text: string) => string } = {},
 ): Promise<string | undefined> {
   if (settled.type !== 'input' || settled.status !== 'done' || settled.answer === undefined) {
     return undefined
   }
   if (typeof conversation.entries !== 'function') return undefined
-  const directPage = await conversation.entries(
-    { minEntryId: settled.answer, maxEntryId: settled.answer, order: 'ascending' },
-    1,
-    undefined,
-    BACKGROUND_CONTEXT,
-  )
-  const directText = assistantTextFromEntry(directPage.items[0])
-  if (directText !== '') return directText
+  const applyRedact = (text: string): string => (options.redact !== undefined ? options.redact(text) : text)
+  const directEntry = await readEntryById(conversation, settled.answer, BACKGROUND_CONTEXT)
+  const directText = assistantTextOfEntry(directEntry)
+  if (directText !== '') return applyRedact(directText)
   if (settled.entry === undefined) return undefined
   let cursor = undefined
   for (;;) {
@@ -182,8 +170,8 @@ export async function readSubmissionAssistantText(
     )
     for (const entry of page.items) {
       if (entry.kind === 'pi.reset' || entry.kind === 'helmx.rewind') return undefined
-      const text = assistantTextFromEntry(entry)
-      if (text !== '') return text
+      const text = assistantTextOfEntry(entry)
+      if (text !== '') return applyRedact(text)
     }
     if (page.next === undefined) break
     cursor = page.next

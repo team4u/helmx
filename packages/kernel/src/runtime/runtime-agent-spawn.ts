@@ -27,7 +27,8 @@ import type { ConversationTracker } from './conversations.js'
 import type { EventHub } from './events.js'
 import type { HookBridge } from './hook-bridge.js'
 import type { ModelRegistry } from './model-registry.js'
-import { buildSpawnHost } from './spawn-host.js'
+import { resolveDefaultModelRef } from './models.js'
+import type { ResolvedAttachmentItem } from './conversation-attachments.js'
 import { normalizeSessionCwd, trustedPlatformFromEnvFabric } from './target-cwd.js'
 import {
   assertSpawnForkFields,
@@ -43,13 +44,31 @@ import {
   sanitizeAgentGateResult,
   sanitizeAgentNamespacedMeta,
 } from '@helmx/protocol'
-import { assertSpawnRequestTitle, isSpawnConversationInTurn, normalizeSpawnTitle, runNativeSpawn } from './spawn.js'
+import {
+  assertSpawnRequestTitle,
+  isSpawnConversationInTurn,
+  normalizeSpawnTitle,
+  runNativeSpawn,
+  type NativeSpawnDeps,
+  type ResolvedProfile,
+} from './spawn.js'
 import { cwdScopeViolationText } from './tools/cwd-scope.js'
 import { validateJsonSchema, type StructuredOutputSession } from './structured-output.js'
 import type { HelmxStore } from './store.js'
 import type { HelmxToolDeps } from './tool-deps.js'
 import { buildManagedEnv, runGate } from './tools.js'
-import type { SecretStash } from '../services/index.js'
+import type { Profile, SecretStash } from '../services/index.js'
+
+/** Trim a raw `Profile` down to the core fields consumed by native spawn execution. */
+function toResolvedProfile(profile: Profile): ResolvedProfile {
+  return {
+    ...(profile.model ? { model: profile.model } : {}),
+    ...(profile.thinkingLevel ? { thinkingLevel: profile.thinkingLevel } : {}),
+    ...(profile.cwd !== undefined ? { cwd: profile.cwd } : {}),
+    ...(profile.nodeId !== undefined ? { nodeId: profile.nodeId } : {}),
+    ...(profile.runtime !== undefined ? { runtime: profile.runtime } : {}),
+  }
+}
 
 /**
  * Boundary validation for `secretNames` (shared by spawn requests and `buildSpawnEnv`): string array where
@@ -358,13 +377,6 @@ export class RuntimeAgentSpawn {
       if (finalRequest.fork === true && (forkChanged || preResolvedForkAnchor === undefined)) {
         resolvedAnchor = await this.preflightForkRequest(finalRequest)
       }
-      if (
-        finalRequest.attachments !== undefined &&
-        finalRequest.attachments.length > 0 &&
-        finalRequest !== request
-      ) {
-        await this.deps.conversations.resolveAuthorizedAttachments(finalRequest.parentConversationId, finalRequest.attachments)
-      }
       const resolvedAttachments =
         finalRequest.attachments !== undefined && finalRequest.attachments.length > 0
           ? await this.deps.conversations.resolveAuthorizedAttachments(finalRequest.parentConversationId, finalRequest.attachments)
@@ -383,120 +395,157 @@ export class RuntimeAgentSpawn {
       }
 
       return runNativeSpawn(
-        buildSpawnHost({
-          finalRequest,
-          source: {
-            toolDeps: this.deps.toolDeps,
-            harness: this.deps.harness,
-            tracker: { getLastAssistantText: (id) => this.deps.tracker.getLastAssistantText(id) },
-            defaultModel: this.deps.modelsRegistry.defaultModel,
-            defaultThinkingLevel: this.deps.modelsRegistry.defaultThinkingLevel,
-            resolveModelRef: (ref) => this.deps.modelsRegistry.resolveModelRef(ref),
-            modelThinkingLevelOf: (ref) => this.deps.modelsRegistry.modelThinkingLevelOf(ref),
-            models: () => this.deps.modelsRegistry.models,
-            assertModelEnabled: (provider, modelId) => this.deps.modelsRegistry.assertModelEnabled(provider, modelId),
-            agentSessions: this.agentSessions,
-            structuredOutputSessions: this.structuredOutputSessions,
-            resolvedAttachments,
-            isNodeOnline: (nodeId) => this.deps.envFabric.isOnline(nodeId),
-            buildAttachmentBlock: (resolved) => this.deps.conversations.buildAttachmentBlock(resolved),
-            readProfileForSpawn: (profileId) => this.deps.conversations.readProfile(profileId),
-            getConvMeta: (childId) => this.deps.store.getConv(childId),
-            getConversationSummary: (childId) => {
-              const meta = this.deps.store.getConv(childId)
-              return meta ? this.deps.tracker.summaryOf(childId) : undefined
-            },
-            updateConversation: (childId, patch) => this.deps.updateConversation(childId, patch),
-            installExtension: (extension) => {
-              this.deps.registry.install(extension as never)
-            },
-            registerChildConversation: async (childId, parentId, profileId, childCwd, modelMirror, tags, thinkingLevel, nodeId, parentToolCallId, thinkingLevelOverride, title) => {
-              const profile = await this.deps.conversations.readProfile(profileId)
-              const parentMeta = this.deps.store.getConv(parentId)
-              const { forkSameProfile } = resolveForkMode(profileId, finalRequest.fork, parentMeta?.profileId)
-              // Freeze concrete model override at spawn creation time: explicit `tier/<id>` resolves to its
-              // concrete `provider/modelId` (`modelMirror`) so later tier edits or plugin disables never bust
-              // the child conversation's prompt cache or break resume/reattach.
-              const explicitModelOverride =
-                finalRequest.model !== undefined && finalRequest.model !== '' ? modelMirror : undefined
-              const inheritedModelOverride = resolveInheritedModelOverride(
-                explicitModelOverride,
-                forkSameProfile,
-                parentMeta?.modelOverride,
-              )
-              const now = Date.now()
-              const normalizedTitle = normalizeSpawnTitle(
-                title ?? finalRequest.title,
-                childId,
-                (text) => this.deps.stashService.redact(text),
-              )
-              this.deps.store.upsertConv({
-                id: childId,
-                title: normalizedTitle,
-                profileId,
-                tags,
-                parentConversationId: parentId,
-                ...(parentToolCallId !== undefined && parentToolCallId !== '' ? { parentToolCallId } : {}),
-                nodeId: nodeId ?? resolveSpawnTargetNodeId(profile?.nodeId, parentMeta?.nodeId, forkSameProfile),
-                cwd: childCwd,
-                model: modelMirror,
-                thinkingLevel: thinkingLevel ?? '',
-                // Clamped explicit override (native execution clamps against target model capability, or inherited on same-profile fork);
-                // when unspecified, preserves inheritance chain semantics without persisting an override.
-                ...(thinkingLevelOverride !== undefined ? { thinkingLevelOverride } : {}),
-                ...(inheritedModelOverride !== undefined && inheritedModelOverride !== ''
-                  ? { modelOverride: inheritedModelOverride }
-                  : {}),
-                unread: false,
-                pinned: false,
-                stateChangeSeq: 1,
-                completionSeq: 0,
-                createdAt: now,
-                updatedAt: now,
-              })
-              this.deps.markConversationOwnership(childId, 'helmx')
-              await this.deps.store.flushPublic()
-              await this.deps.tracker.observe(childId)
-              if (this.deps.store.getConv(childId) !== undefined && !this.deps.store.isDeleted(childId)) {
-                this.deps.events.publish('conversation.upsert', this.deps.conversations.withOwnership(this.deps.tracker.summaryOf(childId)))
-              }
-            },
-            resolveForkAnchor: (parentId: number) =>
-              resolvedAnchor !== undefined && parentId === finalRequest.parentConversationId
-                ? Promise.resolve(resolvedAnchor)
-                : resolveCleanForkAnchor(this.deps.harness, parentId),
-            bindChildToolCall: (childId, parentToolCallId) => {
-              const meta = this.deps.store.getConv(childId)
-              if (meta === undefined || meta.parentToolCallId === parentToolCallId) return
-              this.deps.store.upsertConv({ ...meta, parentToolCallId, updatedAt: Date.now() })
-              if (!this.deps.store.isDeleted(childId)) {
-                this.deps.events.publish('conversation.upsert', this.deps.conversations.withOwnership(this.deps.tracker.summaryOf(childId)))
-              }
-            },
-            // Guarded abort for signal bridge: reads current ownership and authoritative sequence watermark, then re-verifies
-            // atomically via kernel abortConversationGuarded (always rejects human-owned — watchdog hard rule; stale facts
-            // or disappeared targets reject deterministically, never falling back to unguarded abort).
-            abortChildConversationGuarded: async (childId) => {
-              const summary = this.deps.conversations.summaryWithOwnership(childId)
-              const ownedBy = summary.ownedBy ?? 'human'
-              if (ownedBy === 'human') {
-                throw new HelmxError(
-                  'ownership_conflict',
-                  `Child conversation ${childId} is currently human-owned; refusing automatic abort (watchdog hard rule)`,
-                  409,
-                  { conversationId: childId, currentOwnership: ownedBy },
-                )
-              }
-              await this.deps.conversations.abortConversationGuarded(childId, {
-                expectedOwnership: ownedBy,
-                expectedStateSeq: summary.stateChangeSeq,
-              })
-            },
-          },
-        }),
+        this.buildNativeSpawnDeps(finalRequest, resolvedAttachments, resolvedAnchor),
         finalRequest,
       )
     })
+  }
+
+  /** Compose `NativeSpawnDeps` directly from runtime dependencies (eliminates pass-through `spawn-host.ts` adapter). */
+  private buildNativeSpawnDeps(
+    finalRequest: AgentSpawnRequest,
+    resolvedAttachments: ReadonlyArray<ResolvedAttachmentItem> | undefined,
+    resolvedAnchor: number | undefined,
+  ): NativeSpawnDeps {
+    return {
+      ...this.deps.toolDeps,
+      harness: this.deps.harness,
+      getLastAssistantText: (id) => this.deps.tracker.getLastAssistantText(id),
+      tracker: this.deps.tracker,
+      resolveModel: () =>
+        resolveDefaultModelRef(
+          this.deps.modelsRegistry.defaultModel,
+          (ref) => this.deps.modelsRegistry.resolveModelRef(ref),
+        ),
+      resolveModelRef: (ref) => this.deps.modelsRegistry.resolveModelRef(ref),
+      assertModelEnabled: (provider, modelId) => this.deps.modelsRegistry.assertModelEnabled(provider, modelId),
+      resolveThinkingLevel: () => this.deps.modelsRegistry.defaultThinkingLevel,
+      modelThinkingLevelOf: (ref) => this.deps.modelsRegistry.modelThinkingLevelOf(ref),
+      modelsForClamp: () => this.deps.modelsRegistry.models,
+      agentSessions: this.agentSessions,
+      structuredOutputSessions: this.structuredOutputSessions,
+      assertNodeAvailable: (nodeId) => {
+        if (!this.deps.envFabric.isOnline(nodeId)) {
+          throw new HelmxError('node_offline', `Target node '${nodeId}' is offline; cannot start subagent`, 409, { nodeId })
+        }
+      },
+      ...(resolvedAttachments !== undefined
+        ? {
+            buildAttachmentsForPrompt: async (effectiveText: string, options?: { suffixText?: string }) => ({
+              content: await this.deps.conversations.buildAttachmentContent(effectiveText, resolvedAttachments, options),
+              attachments: resolvedAttachments.map((r) => r.ref),
+            }),
+          }
+        : {}),
+      resolveProfile: async (profileId) => {
+        const profile = await this.deps.conversations.readProfile(profileId)
+        return profile === undefined ? undefined : toResolvedProfile(profile)
+      },
+      getModelOverride: (childId) => this.deps.store.getConv(childId)?.modelOverride,
+      getParentOfConversation: (childId) => this.deps.store.getConv(childId)?.parentConversationId,
+      getConversation: (childId) => {
+        const meta = this.deps.store.getConv(childId)
+        return meta ? this.deps.tracker.summaryOf(childId) : undefined
+      },
+      updateConversation: (childId, patch) => this.deps.updateConversation(childId, patch),
+      installChildExtension: (extension) => {
+        this.deps.registry.install(extension as never)
+      },
+      registerChildConversation: async (
+        childId,
+        parentId,
+        profileId,
+        childCwd,
+        modelMirror,
+        tags,
+        thinkingLevel,
+        nodeId,
+        thinkingLevelOverride,
+        title,
+      ) => {
+        const profile = await this.deps.conversations.readProfile(profileId)
+        const parentMeta = this.deps.store.getConv(parentId)
+        const { forkSameProfile } = resolveForkMode(profileId, finalRequest.fork, parentMeta?.profileId)
+        // Freeze concrete model override at spawn creation time: explicit `tier/<id>` resolves to its
+        // concrete `provider/modelId` (`modelMirror`) so later tier edits or plugin disables never bust
+        // the child conversation's prompt cache or break resume/reattach.
+        const explicitModelOverride =
+          finalRequest.model !== undefined && finalRequest.model !== '' ? modelMirror : undefined
+        const inheritedModelOverride = resolveInheritedModelOverride(
+          explicitModelOverride,
+          forkSameProfile,
+          parentMeta?.modelOverride,
+        )
+        const now = Date.now()
+        const normalizedTitle = normalizeSpawnTitle(
+          title ?? finalRequest.title,
+          childId,
+          (text) => this.deps.stashService.redact(text),
+        )
+        const parentToolCallId = finalRequest.parentToolCallId
+        this.deps.store.upsertConv({
+          id: childId,
+          title: normalizedTitle,
+          profileId,
+          tags,
+          parentConversationId: parentId,
+          ...(parentToolCallId !== undefined && parentToolCallId !== '' ? { parentToolCallId } : {}),
+          nodeId: nodeId ?? resolveSpawnTargetNodeId(profile?.nodeId, parentMeta?.nodeId, forkSameProfile),
+          cwd: childCwd,
+          model: modelMirror,
+          thinkingLevel: thinkingLevel ?? '',
+          // Clamped explicit override (native execution clamps against target model capability, or inherited on same-profile fork);
+          // when unspecified, preserves inheritance chain semantics without persisting an override.
+          ...(thinkingLevelOverride !== undefined ? { thinkingLevelOverride } : {}),
+          ...(inheritedModelOverride !== undefined && inheritedModelOverride !== ''
+            ? { modelOverride: inheritedModelOverride }
+            : {}),
+          unread: false,
+          pinned: false,
+          stateChangeSeq: 1,
+          completionSeq: 0,
+          createdAt: now,
+          updatedAt: now,
+        })
+        this.deps.markConversationOwnership(childId, 'helmx')
+        await this.deps.store.flushPublic()
+        await this.deps.tracker.observe(childId)
+        if (this.deps.store.getConv(childId) !== undefined && !this.deps.store.isDeleted(childId)) {
+          this.deps.events.publish('conversation.upsert', this.deps.conversations.withOwnership(this.deps.tracker.summaryOf(childId)))
+        }
+      },
+      resolveForkAnchor: (parentId: number) =>
+        resolvedAnchor !== undefined && parentId === finalRequest.parentConversationId
+          ? Promise.resolve(resolvedAnchor)
+          : resolveCleanForkAnchor(this.deps.harness, parentId),
+      bindChildToolCall: (childId, parentToolCallId) => {
+        const meta = this.deps.store.getConv(childId)
+        if (meta === undefined || meta.parentToolCallId === parentToolCallId) return
+        this.deps.store.upsertConv({ ...meta, parentToolCallId, updatedAt: Date.now() })
+        if (!this.deps.store.isDeleted(childId)) {
+          this.deps.events.publish('conversation.upsert', this.deps.conversations.withOwnership(this.deps.tracker.summaryOf(childId)))
+        }
+      },
+      // Guarded abort for signal bridge: reads current ownership and authoritative sequence watermark, then re-verifies
+      // atomically via kernel abortConversationGuarded (always rejects human-owned — watchdog hard rule; stale facts
+      // or disappeared targets reject deterministically, never falling back to unguarded abort).
+      abortChildConversationGuarded: async (childId) => {
+        const summary = this.deps.conversations.summaryWithOwnership(childId)
+        const ownedBy = summary.ownedBy ?? 'human'
+        if (ownedBy === 'human') {
+          throw new HelmxError(
+            'ownership_conflict',
+            `Child conversation ${childId} is currently human-owned; refusing automatic abort (watchdog hard rule)`,
+            409,
+            { conversationId: childId, currentOwnership: ownedBy },
+          )
+        }
+        await this.deps.conversations.abortConversationGuarded(childId, {
+          expectedOwnership: ownedBy,
+          expectedStateSeq: summary.stateChangeSeq,
+        })
+      },
+    }
   }
 
   /**

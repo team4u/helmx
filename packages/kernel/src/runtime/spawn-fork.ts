@@ -17,8 +17,13 @@ import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { Models } from '@earendil-works/pi-ai'
 import type { Harness } from '@earendil-works/pi-durable'
 import { HelmxError, type AgentSpawnRequest } from '@helmx/protocol'
-import { clampThinkingLevelForModel, parseModelRef, type ModelRefParts } from './models.js'
-import type { ResolvedModelRef } from './model-registry.js'
+import {
+  parseModelRef,
+  resolveClampedThinkingLevel,
+  resolveModelRefWith,
+  type ModelRefParts,
+  type ResolvedModelRef,
+} from './models.js'
 
 interface ForkAnchorContextMessage {
   role?: string
@@ -89,10 +94,6 @@ export function resolveInheritedModelAndThinking(
   input: ForkModelAndThinkingInput,
 ): ForkModelAndThinkingResult {
   const { request, forkSameProfile, profile, parentSummary, defaultModel, resolveModelRef, defaultThinkingLevel, modelThinkingLevelOf, modelsForClamp } = input
-  const resolveRef = (ref: string): ModelRefParts & { tierThinkingLevel?: string } => {
-    if (resolveModelRef !== undefined) return resolveModelRef(ref)
-    return parseModelRef(ref)
-  }
   const rawExplicit = request.model !== undefined && request.model !== '' ? request.model : undefined
   const rawProfile = profile.model !== undefined && profile.model !== '' ? profile.model : undefined
   const rawParent = parentSummary?.model !== undefined && parentSummary.model !== '' ? parentSummary.model : undefined
@@ -102,7 +103,7 @@ export function resolveInheritedModelAndThinking(
     request.fork === true
       ? (rawExplicit ?? (forkSameProfile ? (rawParent ?? rawProfile) : (rawProfile ?? rawParent)))
       : (rawExplicit ?? rawProfile)
-  const resolved = winningRaw !== undefined ? resolveRef(winningRaw) : defaultModel()
+  const resolved = winningRaw !== undefined ? resolveModelRefWith(winningRaw, resolveModelRef) : defaultModel()
   const resolvedModel: ModelRefParts = { provider: resolved.provider, modelId: resolved.modelId }
   const tierThinking = resolved.tierThinkingLevel
 
@@ -118,13 +119,17 @@ export function resolveInheritedModelAndThinking(
   const perModelDefault = modelThinkingLevelOf?.(resolvedModel)
   // Thinking precedence: explicit effort > resolved tier preset > same-model parent override (fork) >
   // per-model default > Profile thinkingLevel > global defaultThinkingLevel -> clamp.
-  const inheritedLevel =
+  const thinkingCandidates =
     request.fork === true
-      ? (request.effort ?? tierThinking ?? (forkSameProfile ? (parentThinking ?? perModelDefault ?? profile.thinkingLevel) : (perModelDefault ?? profile.thinkingLevel ?? parentThinking)) ?? defaultThinkingLevel?.())
-      : (request.effort ?? tierThinking ?? perModelDefault ?? profile.thinkingLevel ?? defaultThinkingLevel?.())
-  const thinkingLevel = modelsForClamp
-    ? clampThinkingLevelForModel(modelsForClamp, resolvedModel, inheritedLevel)
-    : inheritedLevel
+      ? forkSameProfile
+        ? [request.effort, tierThinking, parentThinking, perModelDefault, profile.thinkingLevel, defaultThinkingLevel?.()]
+        : [request.effort, tierThinking, perModelDefault, profile.thinkingLevel, parentThinking, defaultThinkingLevel?.()]
+      : [request.effort, tierThinking, perModelDefault, profile.thinkingLevel, defaultThinkingLevel?.()]
+  const thinkingLevel = resolveClampedThinkingLevel({
+    candidates: thinkingCandidates,
+    models: modelsForClamp,
+    modelRef: resolvedModel,
+  })
   const thinkingLevelOverride =
     request.effort !== undefined
       ? thinkingLevel

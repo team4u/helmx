@@ -16,6 +16,17 @@ import type { HelmxStore } from './store.js'
 /** Image MIME types: predicate set for assembling multimodal ImageContent blocks from attachments. */
 const IMAGE_MIMES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
 
+/** Model-visible user prompt content (plain string or multimodal text + image content blocks). */
+export type PromptContent =
+  | string
+  | Array<{ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }>
+
+/** Authorized attachment reference paired with its absolute file path on Hub storage. */
+export interface ResolvedAttachmentItem {
+  ref: ConversationAttachmentRef
+  absPath: string
+}
+
 interface ConversationAttachmentsHost {
   readonly store: HelmxStore
   readonly artifactsSvc: ArtifactService
@@ -88,9 +99,9 @@ export class ConversationAttachments {
     return { ...resolved.ref, absPath: resolved.absPath }
   }
 
-  /** Plaintext `[Attached Files]` manifest block (for spawned task prompts, without body text prefix). */
+  /** Plaintext `[Attached Files]` manifest block (without body text prefix). */
   buildAttachmentBlock(
-    resolved: Array<{ ref: ConversationAttachmentRef; absPath: string }>,
+    resolved: ReadonlyArray<ResolvedAttachmentItem>,
   ): string {
     const lines = resolved.map(
       ({ ref, absPath }) =>
@@ -101,22 +112,24 @@ export class ConversationAttachments {
 
   /**
    * Build model-visible content with attachments:
-   * - appends the `[Attached Files]` manifest (with pull instructions) after the message body;
+   * - appends the `[Attached Files]` manifest (via `buildAttachmentBlock`) after `effectiveText`,
+   *   and optional `suffixText` (e.g., `<structured_output_contract>`) after the manifest;
    * - if any image attachments exist, returns a multimodal block array (text block + base64 ImageContent blocks);
    * - if no image attachments exist, returns the concatenated plain string.
    */
   async buildAttachmentContent(
     effectiveText: string,
-    resolved: Array<{ ref: ConversationAttachmentRef; absPath: string }>,
-  ): Promise<
-    string | Array<{ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }>
-  > {
-    const lines = resolved.map(
-      ({ ref, absPath }) =>
-        `- ${ref.name} (id=${ref.id}, mime=${ref.mimeType}, size=${ref.size} bytes, path=${absPath}, pull=\`helmx artifacts get ${ref.id} --output ./${ref.name}\`)`,
-    )
-    const attachedBlock = `[Attached Files]\n${lines.join('\n')}`
-    const modelText = effectiveText.length > 0 ? `${effectiveText}\n\n${attachedBlock}` : attachedBlock
+    resolved: ReadonlyArray<ResolvedAttachmentItem>,
+    options?: { suffixText?: string },
+  ): Promise<PromptContent> {
+    const attachedBlock = this.buildAttachmentBlock(resolved)
+    const sections: string[] = []
+    if (effectiveText.length > 0) sections.push(effectiveText)
+    sections.push(attachedBlock)
+    if (options?.suffixText !== undefined && options.suffixText.length > 0) {
+      sections.push(options.suffixText)
+    }
+    const modelText = sections.join('\n\n')
     const hasImage = resolved.some(({ ref }) => IMAGE_MIMES.has(ref.mimeType))
     if (!hasImage) return modelText
     const contentParts: Array<{ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }> = [

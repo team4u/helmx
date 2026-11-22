@@ -46,7 +46,7 @@ import type { Models } from '@earendil-works/pi-ai'
 import type { ConvMeta, HelmxStore } from './store.js'
 import { summaryOf } from './store.js'
 import { deriveConversationLive, toConversationEntry, type EntryRecordLike } from './entries.js'
-import { coveredByRewind, rewindIntervalOf, type RewindInterval } from './runtime-helpers.js'
+import { assistantTextOfEntry, coveredByRewind, rewindIntervalOf, type RewindInterval } from './runtime-helpers.js'
 import { emitDiagnostic, type KernelDiagnosticInput, type KernelDiagnosticSink } from './diagnostics.js'
 import { compactionFailureNoticeOf } from './context-usage.js'
 import { ContextUsageRefresh, type ContextUsageHost } from './context-usage-refresh.js'
@@ -746,7 +746,7 @@ export class ConversationTracker {
       if (entry === undefined) continue
       if (entry.kind === 'helmx.rewind' || entry.kind === 'pi.reset') break
       if (entry.kind === 'pi.assistant') {
-        const text = assistantTextOf(entry)
+        const text = assistantTextOfEntry(entry)
         if (text !== '') {
           this.events.onAssistantText(id, entry.id, text)
           break
@@ -1433,18 +1433,6 @@ function lastErrorOf(
 }
 
 // Inputs use durable input.id (requestId) as tracking identity, requiring no temporary key allocation.
-
-/** Extract assistant entry text block contents. */
-function assistantTextOf(entry: {
-  model?: ReadonlyArray<{ content?: ReadonlyArray<{ type: string; text?: string }> }>
-}): string {
-  const blocks = entry.model?.[0]?.content
-  if (!blocks) return ''
-  return blocks
-    .filter((b) => b.type === 'text' && typeof b.text === 'string')
-    .map((b) => b.text as string)
-    .join('\n')
-}
 
 export { deriveTitle }
 

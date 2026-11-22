@@ -15,8 +15,12 @@ import type { ModelThinkingLevel, Models } from '@earendil-works/pi-ai'
 import type { ConversationSummary } from '@helmx/protocol'
 import { HelmxError, assertProfileId } from '@helmx/protocol'
 import { type Profile, type ProfileService } from '../services/index.js'
-import { clampThinkingLevelForModel } from './models.js'
-import type { ResolvedModelRef } from './model-registry.js'
+import {
+  clampThinkingLevelForModel,
+  resolveClampedThinkingLevel,
+  resolveModelRefWith,
+  type ResolvedModelRef,
+} from './models.js'
 import type { EventHub } from './events.js'
 import type { HelmxStore } from './store.js'
 
@@ -66,9 +70,7 @@ export class ConversationProfileService {
 
   /** Resolve a raw `'provider/model'` or `'tier/<id>'` reference into concrete parts + optional tier preset thinking level. */
   resolveRef(ref: string): ResolvedModelRef {
-    if (this.host.resolveModelRef !== undefined) return this.host.resolveModelRef(ref)
-    const parts = this.host.parseModelRefOrThrow(ref)
-    return { ...parts, canonicalRef: `${parts.provider}/${parts.modelId}` }
+    return resolveModelRefWith(ref, this.host.resolveModelRef, this.host.parseModelRefOrThrow)
   }
 
   /** Conversation override > Profile.model > global default, dereferencing any `tier/<id>` into concrete model + tier preset thinking level. */
@@ -108,8 +110,11 @@ export class ConversationProfileService {
     const profile = await this.readProfile(profileId)
     if (!profile) throw new HelmxError('profile_not_found', `Profile referenced by conversation does not exist: ${profileId}`, 404, { profileId })
     const perModel = modelRef !== undefined ? this.host.modelThinkingLevelOf(modelRef) : undefined
-    const inherited = override || tierThinkingLevel || perModel || profile.thinkingLevel || this.host.defaultThinkingLevel()
-    return clampThinkingLevelForModel(this.host.models(), modelRef, inherited)
+    return resolveClampedThinkingLevel({
+      candidates: [override, tierThinkingLevel, perModel, profile.thinkingLevel, this.host.defaultThinkingLevel()],
+      models: this.host.models(),
+      modelRef,
+    })
   }
 
   async withConversationChange<T>(id: number, change: () => Promise<T>): Promise<T> {

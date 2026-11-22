@@ -1079,6 +1079,43 @@ test('SessionDocEventHub.multiplexResponse handles snapshot failure cleanup, kee
     await bpReader.cancel().catch(() => {})
     bpHub.close()
   }
+
+  // 4. Pre-aborted signal rejects cleanly with 499 aborted and zero leaked subscriptions.
+  const abortedHub = new SessionDocEventHub({ keepaliveMs: 10 })
+  const abortedCtrl = new AbortController()
+  abortedCtrl.abort()
+  assert.throws(
+    () =>
+      abortedHub.multiplexResponse([subA, subB], new Request('http://localhost/m', { signal: abortedCtrl.signal }), {
+        snapshot: (sub) => ({ seq: 0, doc: { ...sub, value: {} } }),
+      }),
+    (err: unknown) => err instanceof HelmxError && err.code === 'aborted' && err.status === 499,
+  )
+  assert.equal(abortedHub.subscriberCount, 0)
+
+  // 5. Keepalive accumulation obeys maxPendingBytes on multiplexed streams too.
+  const kaBpHub = new SessionDocEventHub({ maxPendingBytes: 300, keepaliveMs: 5 })
+  const kaCtrl = new AbortController()
+  const kaRes = kaBpHub.multiplexResponse([subA], new Request('http://localhost/m', { signal: kaCtrl.signal }), {
+    snapshot: (sub) => ({ seq: 0, doc: { ...sub, value: { ok: 1 } } }),
+  })
+  const kaReader = kaRes.body!.getReader()
+  try {
+    await kaReader.read()
+    const deadline = Date.now() + 3_000
+    while (kaBpHub.subscriberCount > 0 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 15))
+    }
+    assert.equal(kaBpHub.subscriberCount, 0, 'slow unread multiplex consumer must close under keepalive byte cap')
+    let done = false
+    while (!done) {
+      done = (await kaReader.read()).done === true
+    }
+  } finally {
+    kaCtrl.abort()
+    await kaReader.cancel().catch(() => {})
+    kaBpHub.close()
+  }
 })
 
 // ---------------------------------------------------------------------------

@@ -27,6 +27,7 @@ import { createModels, createProvider } from '@earendil-works/pi-ai/models'
 import { createFauxCore, fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import type { ConversationSummary } from '@helmx/protocol'
 import { KernelRuntime } from '../src/runtime/runtime.js'
+import { resolveInheritedModelAndThinking } from '../src/runtime/spawn-fork.js'
 
 type ThinkingSummary = ConversationSummary & { thinkingLevelOverride?: string }
 
@@ -73,6 +74,7 @@ function reasoningFauxProvider(options: {
 
 interface Fixture {
   kernel: KernelRuntime
+  models: ReturnType<typeof createModels>
   /** Capability-aware provider A (faux-cap-a/model-a supports up to max). */
   capA: ReturnType<typeof reasoningFauxProvider>
   /** Capability-aware provider B (faux-cap-b/model-b supports up to high). */
@@ -115,7 +117,7 @@ async function open(dir: string): Promise<Fixture> {
   models.setProvider(capB.provider)
   models.setProvider(legacyFaux.provider)
   const kernel = await KernelRuntime.open({ dataDir: dir, cwd: dir, models: models as never })
-  return { kernel, capA, capB, legacyFaux, dir }
+  return { kernel, models, capA, capB, legacyFaux, dir }
 }
 
 async function fixture(t: TestContext): Promise<Fixture> {
@@ -305,4 +307,40 @@ it('spawn creates child clamped by target model capability; resume also clamps e
     model: 'faux-cap-a/model-a',
   })
   await assertThinking(kernel, childB, 'low', undefined)
+})
+
+it('tier preset thinking clamping and empty-string fallback stay aligned between ConversationService and spawnAgent', { timeout: 60_000 }, async (t) => {
+  const { kernel, models, capB } = await fixture(t)
+  await kernel.setDefaultModel('faux-cap-a/model-a', 'medium')
+  // Register a tier targeting model-b (supports up to high) with preset thinkingLevel 'max':
+  // both ConversationService.createConversation and spawnAgent must clamp to 'high' and persist 'high' override.
+  kernel.registerModelTiers('test:tiers', () => ({
+    heavy: { model: 'faux-cap-b/model-b', thinkingLevel: 'max' },
+  }))
+  const conv = await kernel.createConversation({ model: 'tier/heavy' })
+  await assertThinking(kernel, conv.id, 'high', 'high')
+
+  capB.core.setResponses([fauxAssistantMessage('tier B done')])
+  let childId = 0
+  await kernel.spawnAgent({
+    parentConversationId: 1,
+    prompt: 'tier spawn',
+    model: 'tier/heavy',
+    onResolved: (info) => { childId = info.conversationId ?? 0 },
+  })
+  assert.ok(childId > 0)
+  await assertThinking(kernel, childId, 'high', 'high')
+
+  // Empty-string profile.thinkingLevel must fall through to defaultThinkingLevel (matching ConversationProfileService).
+  const fallback = resolveInheritedModelAndThinking({
+    request: {},
+    forkSameProfile: false,
+    profile: { model: 'faux-cap-b/model-b', thinkingLevel: '' },
+    parentSummary: undefined,
+    defaultModel: () => ({ provider: 'faux-cap-a', modelId: 'model-a' }),
+    defaultThinkingLevel: () => 'max',
+    modelsForClamp: models,
+  })
+  assert.equal(fallback.thinkingLevel, 'high', 'empty-string profile thinkingLevel must fall through and clamp defaultThinkingLevel')
+  assert.equal(fallback.thinkingLevelOverride, undefined)
 })

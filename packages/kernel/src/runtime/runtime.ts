@@ -65,7 +65,7 @@ import { NodeForwardService, type NodeForwardEvent, type NodeForwardInput, type 
 import type { EventHub, SessionDocEventHub } from './events.js'
 import type { HelmxDatabase } from './sqlite.js'
 import type { HelmxStore } from './store.js'
-import { THINKING_LEVELS } from './spawn.js'
+import { THINKING_LEVELS } from './models.js'
 import type { HelmxPluginConfigStore } from './plugin-config-store.js'
 import type { ConversationService } from './conversation-service.js'
 import type { RuntimeAgentSpawn } from './runtime-agent-spawn.js'

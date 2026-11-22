@@ -11,7 +11,7 @@
  */
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { copyJson, type JsonRepresentation } from '@earendil-works/chord/json'
-import { InboxDoc, LiveDoc, type Harness, type UserInput } from '@earendil-works/pi-durable'
+import { InboxDoc, LiveDoc, type Harness, type Submission, type UserInput } from '@earendil-works/pi-durable'
 import type {
   ArtifactMetadata,
   ConversationAttachmentRef,
@@ -26,8 +26,176 @@ import type { SecretStash } from '../services/index.js'
 import { deriveTitle, type ConversationTracker } from './conversations.js'
 import { normalizeBusyError } from './runtime-helpers.js'
 import { asConversationId } from './sdk-ids.js'
+import type { PromptContent } from './conversation-attachments.js'
 import type { SubmitInputOptions } from './conversation-service.js'
 import type { ConvMeta, HelmxStore } from './store.js'
+
+/** Minimal tracker callbacks needed to register, correlate, and roll back a durable input submission. */
+export interface DurableInputTracker {
+  registerInput(conversationId: number, input: ConversationInput): void
+  bindSubmission(conversationId: number, inputId: string, submissionId: number): void
+  dropInput(conversationId: number, inputId: string): void
+}
+
+/** Shared hook-free durable input submission parameters (reused by `ConversationInputPipeline` and native `spawn`). */
+export interface DurableInputSubmitOptions {
+  readonly harness: Harness
+  readonly conversation: NonNullable<Awaited<ReturnType<Harness['conversation']>>>
+  readonly conversationId: number
+  readonly input: ConversationInput
+  readonly whenBusy: WhenBusy
+  readonly content: PromptContent
+  /** Durable deduplication key (`pi_submissions.request_id`); defaults to `input.id`. */
+  readonly requestId?: string
+  readonly whenIdle?: 'reject'
+  /** Optional tracker correlation port (wired in full `KernelRuntime`; omitted in standalone `runNativeSpawn` unit tests). */
+  readonly tracker?: DurableInputTracker
+  /** Optional commit-point atomic guard re-check (synchronous, zero awaits). */
+  readonly assertMutationGuard?: () => void
+}
+
+/** Result of `submitDurableInput`: string submission ID plus live SDK `Submission` handle for awaiting completion. */
+export interface DurableInputSubmitResult {
+  readonly submissionId: string
+  readonly submission: Submission
+}
+
+/**
+ * Shared hook-free durable input submission primitive (`helmx.input` entry + tracker correlation + atomic
+ * compaction mutual exclusion + `requestId` deduplication).
+ *
+ * Used by both `ConversationInputPipeline.submitFreshInput` (top-level conversations after `input` hooks)
+ * and native `spawn` (sub-conversations without routing through top-level `input` hooks).
+ */
+export async function submitDurableInput(
+  options: DurableInputSubmitOptions,
+): Promise<DurableInputSubmitResult> {
+  const {
+    harness,
+    conversation,
+    conversationId,
+    input,
+    whenBusy,
+    content,
+    whenIdle,
+    tracker,
+    assertMutationGuard,
+  } = options
+  const requestId = options.requestId ?? input.id
+  const entryData = copyJson(
+    {
+      id: input.id,
+      text: input.text,
+      origin: input.origin,
+      createdAt: input.createdAt,
+      whenBusy,
+      ...(input.meta !== undefined ? { meta: input.meta } : {}),
+      ...(input.attachments !== undefined && input.attachments.length > 0
+        ? { attachments: input.attachments }
+        : {}),
+    },
+    { omitUndefinedProperties: true },
+  )
+  tracker?.registerInput(conversationId, input)
+  let queueResult:
+    | { handled: true; submissionId: number; alreadySettled: boolean }
+    | { handled: false }
+  try {
+    // Atomically check pi.live: SDK admitSubmission inspects live.run but not live.compactions;
+    // when idle with an active compaction task, enqueue into pi.inbox (or reject) inside this transaction
+    // so the new turn does not race ahead on uncompacted context.
+    const convId = asConversationId(conversationId)
+    queueResult = await conversation.commit(async (tx) => {
+      const live = await tx.doc(LiveDoc, convId)
+      const inbox = await tx.doc(InboxDoc, convId)
+      const existing = await tx.submissionByRequest(convId, requestId)
+      if (existing !== undefined) {
+        if (existing.type !== 'input') {
+          throw new Error(`Request ${requestId} already identifies a submission of type ${existing.type}`)
+        }
+        return {
+          handled: true as const,
+          submissionId: existing.id as number,
+          alreadySettled: existing.status === 'done' || existing.status === 'unanswered',
+        }
+      }
+      if (live.run === undefined && (live.compactions?.length ?? 0) > 0 && whenIdle !== 'reject') {
+        if (whenBusy === 'reject') {
+          throw new HelmxError(
+            'conversation_busy',
+            `conversation ${conversationId} is currently compacting context; rejecting submission (whenBusy=reject)`,
+            409,
+            { conversationId },
+          )
+        }
+        assertMutationGuard?.()
+        const sub = await tx.createSubmission({
+          conversationId: convId,
+          requestId,
+          type: 'input',
+          status: 'queued',
+        })
+        inbox.items.push({
+          id: sub.id,
+          mode: whenBusy === 'steer' ? 'steer' : 'followUp',
+          content: copyJson(content, { omitUndefinedProperties: true }) as JsonRepresentation<UserInput>,
+          entry: {
+            kind: 'helmx.input',
+            data: entryData,
+          },
+        })
+        return { handled: true as const, submissionId: sub.id as number, alreadySettled: false }
+      }
+      return { handled: false as const }
+    }, BACKGROUND_CONTEXT)
+  } catch (error) {
+    tracker?.dropInput(conversationId, input.id)
+    throw normalizeBusyError(error)
+  }
+
+  if (queueResult.handled) {
+    if (queueResult.alreadySettled) {
+      tracker?.dropInput(conversationId, input.id)
+    } else {
+      tracker?.bindSubmission(conversationId, input.id, queueResult.submissionId)
+    }
+    const submission = await harness.submission(queueResult.submissionId as never, BACKGROUND_CONTEXT)
+    if (submission === undefined) {
+      throw new HelmxError(
+        'not_found',
+        `submission ${queueResult.submissionId} disappeared immediately after admission`,
+        500,
+        { conversationId, submissionId: queueResult.submissionId },
+      )
+    }
+    return { submissionId: String(queueResult.submissionId), submission }
+  }
+
+  try {
+    // Final commit-point re-check: zero awaits before the subsequent SDK submit call,
+    // catching any ownership shift during preparation without producing a submission.
+    assertMutationGuard?.()
+    const submission = await conversation.submit(
+      {
+        type: 'input',
+        content,
+        whenBusy,
+        ...(whenIdle !== undefined ? { whenIdle } : {}),
+        entry: {
+          kind: 'helmx.input',
+          data: entryData,
+        },
+        requestId,
+      },
+      BACKGROUND_CONTEXT,
+    )
+    tracker?.bindSubmission(conversationId, input.id, submission.id as number)
+    return { submissionId: String(submission.id), submission }
+  } catch (error) {
+    tracker?.dropInput(conversationId, input.id)
+    throw normalizeBusyError(error)
+  }
+}
 
 interface ConversationInputPipelineHost {
   readonly harness: Harness
@@ -145,7 +313,7 @@ export class ConversationInputPipeline {
     this.host.store.upsertConv({ ...meta, title, stateChangeSeq: meta.stateChangeSeq + 1, updatedAt: Date.now() })
   }
 
-  /** Submit fresh input to SDK (non-rewind path; handles tracker registration and rollback on failure). */
+  /** Submit fresh input to SDK (non-rewind path; delegates durable commit, compaction mutex, and tracker correlation to `submitDurableInput`). */
   async submitFreshInput(
     conversation: NonNullable<Awaited<ReturnType<Harness['conversation']>>>,
     id: number,
@@ -154,7 +322,7 @@ export class ConversationInputPipeline {
       finalWhenBusy: WhenBusy
       effectiveText: string
       resolvedAttachments: Array<{ ref: ConversationAttachmentRef; metadata: ArtifactMetadata; absPath: string }> | undefined
-      content: string | Array<{ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }>
+      content: PromptContent
       requestId: string | undefined
       whenIdle?: 'reject'
       /** Guarded mutation commit-point atomic re-check payload (omitted for normal submissions). */
@@ -162,97 +330,29 @@ export class ConversationInputPipeline {
     },
   ): Promise<{ submissionId: string }> {
     const { finalInput, finalWhenBusy, effectiveText, resolvedAttachments, content, mutationGuard } = prepared
-    const requestId = prepared.requestId ?? finalInput.id
-    const entryData = copyJson(
-      {
-        id: finalInput.id,
-        text: effectiveText,
-        origin: finalInput.origin,
-        createdAt: finalInput.createdAt,
-        whenBusy: finalWhenBusy,
-        ...(finalInput.meta !== undefined ? { meta: finalInput.meta } : {}),
-        ...(resolvedAttachments !== undefined
-          ? { attachments: resolvedAttachments.map((r) => r.ref) }
-          : {}),
-      },
-      { omitUndefinedProperties: true },
-    )
-    this.host.tracker.registerInput(id, finalInput)
-    try {
-      // Atomically check pi.live: SDK admitSubmission inspects live.run but not live.compactions;
-      // when idle with an active compaction task, enqueue into pi.inbox (or reject) inside this transaction
-      // so the new turn does not race ahead on uncompacted context.
-      const convId = asConversationId(id)
-      const queueResult = await conversation.commit(async (tx) => {
-        const live = await tx.doc(LiveDoc, convId)
-        const inbox = await tx.doc(InboxDoc, convId)
-        const existing = await tx.submissionByRequest(convId, requestId)
-        if (existing !== undefined) {
-          if (existing.type !== 'input') {
-            throw new Error(`Request ${requestId} already identifies a submission of type ${existing.type}`)
-          }
-          return { handled: true as const, submissionId: existing.id as number }
-        }
-        if (live.run === undefined && (live.compactions?.length ?? 0) > 0 && prepared.whenIdle !== 'reject') {
-          if (finalWhenBusy === 'reject') {
-            throw new HelmxError(
-              'conversation_busy',
-              `conversation ${id} is currently compacting context; rejecting submission (whenBusy=reject)`,
-              409,
-              { conversationId: id },
-            )
-          }
-          if (mutationGuard !== undefined) {
-            this.host.assertMutationGuard(id, mutationGuard)
-          }
-          const sub = await tx.createSubmission({
-            conversationId: convId,
-            requestId,
-            type: 'input',
-            status: 'queued',
-          })
-          inbox.items.push({
-            id: sub.id,
-            mode: finalWhenBusy === 'steer' ? 'steer' : 'followUp',
-            content: copyJson(content, { omitUndefinedProperties: true }) as JsonRepresentation<UserInput>,
-            entry: {
-              kind: 'helmx.input',
-              data: entryData,
-            },
-          })
-          return { handled: true as const, submissionId: sub.id as number }
-        }
-        return { handled: false as const }
-      }, BACKGROUND_CONTEXT)
-      if (queueResult.handled) {
-        this.host.tracker.bindSubmission(id, finalInput.id, queueResult.submissionId)
-        return { submissionId: String(queueResult.submissionId) }
-      }
-
-      // Final commit-point re-check: zero awaits before the subsequent SDK submit call,
-      // catching any ownership shift during preparation without producing a submission.
-      if (mutationGuard !== undefined) {
-        this.host.assertMutationGuard(id, mutationGuard)
-      }
-      const submission = await conversation.submit(
-        {
-          type: 'input',
-          content,
-          whenBusy: finalWhenBusy,
-          ...(prepared.whenIdle !== undefined ? { whenIdle: prepared.whenIdle } : {}),
-          entry: {
-            kind: 'helmx.input',
-            data: entryData,
-          },
-          requestId,
-        },
-        BACKGROUND_CONTEXT,
-      )
-      this.host.tracker.bindSubmission(id, finalInput.id, submission.id as number)
-      return { submissionId: String(submission.id) }
-    } catch (error) {
-      this.host.tracker.dropInput(id, finalInput.id)
-      throw normalizeBusyError(error)
+    const input: ConversationInput = {
+      ...finalInput,
+      text: effectiveText,
+      whenBusy: finalWhenBusy,
+      ...(resolvedAttachments !== undefined
+        ? { attachments: resolvedAttachments.map((r) => r.ref) }
+        : { attachments: undefined }),
     }
+    const { submissionId } = await submitDurableInput({
+      harness: this.host.harness,
+      conversation,
+      conversationId: id,
+      input,
+      whenBusy: finalWhenBusy,
+      content,
+      requestId: prepared.requestId ?? finalInput.id,
+      whenIdle: prepared.whenIdle,
+      tracker: this.host.tracker,
+      assertMutationGuard:
+        mutationGuard !== undefined
+          ? () => this.host.assertMutationGuard(id, mutationGuard)
+          : undefined,
+    })
+    return { submissionId }
   }
 }
