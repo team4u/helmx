@@ -1,43 +1,22 @@
 /**
  * Hub process lifecycle owned by the launcher:
  *
- * - `startHub` spawns the committed payload entry (`start.mjs start`) detached with stdio
- *   redirected to `logs/hub.log` (file-backed output survives launcher exit; no pipes that could
- *   break a detached child), gates readiness primarily on the candidate's own stdout
- *   `Helmx Hub: <url>` listen-success line appearing in the log after spawn plus the child staying
- *   alive (`@helmx/hub` prints that line only after the HTTP server is listening) and the URL
- *   matching the launch configuration, and only then persists `hub.pid` plus the sticky
- *   `launch.json`. On Linux the pid record also carries the `/proc` start time as a reuse proof.
- *   `onSpawn` hands the spawned `ChildProcess` to callers that keep supervising it (`run`), so
- *   the same controlled startup flow can stop its own child without pid guessing;
- * - `stopHub` verifies the recorded pid is really our Hub before signalling, fail-closed: the
- *   only accepted proof is the immutable `/proc` start time recorded at spawn (a mismatch is pid
- *   reuse and is refused even when some other process answers on the port; a record without the
- *   proof — non-Linux platforms — is refused outright, steering to the supervised `run`), then
- *   escalates to `killProcessTree` (process group on POSIX, `taskkill /T` on Windows) when the
- *   graceful SIGTERM budget expires, and removes the pid file only after a confirmed exit;
- * - identity discipline mirrors the node daemon: without an ownership proof (a held
- *   `ChildProcess` from the same launcher, or a matching start time) a live pid is never
- *   signalled blindly — the user must verify manually;
- * - `lifecycle.lock` serializes every process-state mutation: concurrent starts, stops, and the
- *   update flow's stop→commit→start window (which takes the same lock as one atomic section via
- *   the exported `*Locked` primitives) can never interleave on one machine.
- *
- * Cross-platform boundary: graceful shutdown is POSIX-first. On Windows `process.kill(pid,
- * 'SIGTERM')` terminates without delivering a signal handler, so stop degrades to a short
- * pre-escalation wait; the escalation path (`taskkill /F /T`) is uniform.
+ * - `startHub` delegates detached spawning, `Helmx Hub: <url>` listen-line gating, and strict
+ *   URL matching to `@helmx/env-io`'s `spawnDetachedHubRelease`, then probes auxiliary health
+ *   and atomically persists `hub.pid` + sticky `launch.json`;
+ * - `stopHubGraceful` prefers the verified control channel (`stopHubViaControlChannel` in
+ *   `@helmx/env-io`), falling back to fail-closed Linux `/proc` start-time identity proof
+ *   (`stopHubLocked`);
+ * - `lifecycle.lock` serializes every process-state mutation (start/stop and the update
+ *   stop→commit→start window via `*Locked` primitives).
  */
-import { spawn, type ChildProcess } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
-import fsp from 'node:fs/promises';
+import type { ChildProcess } from 'node:child_process';
 import process from 'node:process';
 import {
-  controlRequest,
-  CONTROL_STOP_TIMEOUT_MS,
   killProcessTree,
-  readHubControlRecord,
-  readLogFrom,
   readLogTailBounded,
+  spawnDetachedHubRelease,
+  stopHubViaControlChannel,
   waitForPidExit,
   withCrossProcessFileLock,
 } from '@helmx/env-io';
@@ -52,7 +31,6 @@ import {
   resolveEffectiveLaunchConfig,
   writeLaunchConfig,
   writePidRecord,
-  type EffectiveLaunchConfig,
   type HubPidRecord,
   type LaunchConfig,
 } from './records.js';
@@ -61,8 +39,6 @@ import { isAliveOf, UsageError, type LauncherIo } from './io.js';
 import { readCurrentEntry } from './current.js';
 
 const LOG_TAIL_LINES = 40;
-/** `@helmx/hub` prints `Helmx Hub: <url>` right after `startHub` resolves (server listening). Multiline + global: the banner may follow earlier log lines in the same read, and `matchAll` requires global matching. */
-const LISTEN_LINE_PATTERN = /^Helmx Hub: (\S+)\s*$/gm;
 
 export interface StartHubOptions {
   /** Explicit flags (highest precedence) folded into the effective launch configuration. */
@@ -70,11 +46,7 @@ export interface StartHubOptions {
   healthTimeoutMs?: number;
   pollMs?: number;
   fetchFn?: typeof fetch;
-  /**
-   * Receives the spawned hub `ChildProcess` right after spawn (before the readiness wait).
-   * Lets a supervising caller hold the handle — stopping its own child never depends on pid
-   * guessing or health probing.
-   */
+  /** Receives the spawned hub `ChildProcess` right after spawn (used by foreground `run`). */
   onSpawn?: (child: ChildProcess) => void;
 }
 
@@ -104,24 +76,20 @@ export interface StopHubResult {
 }
 
 /**
- * Held across every process-state mutation (start/stop and the update commit window) so the
- * three can never interleave on one machine. Uses shared cross-process lock with dead-PID
- * stale recovery while preserving empty/live lock files.
+ * Held across every process-state mutation (start/stop and the update commit window) so they
+ * never interleave on one machine. Uses shared cross-process lock with dead-PID stale recovery.
  */
 export async function withLifecycleLock<T>(root: string, fn: () => Promise<T>): Promise<T> {
   const lockPath = pathsOf(root).lifecycleLockPath;
+  const busyError = (file: string, ownerPid?: number): Error =>
+    new UsageError(
+      `concurrent lifecycle operation conflict: ${file} already exists${ownerPid !== undefined ? ` (held by pid ${ownerPid})` : ''} (another start/stop/update is in progress, or a previous one crashed); confirm nothing is running and remove the lock file before retrying`,
+      'lifecycle_lock_busy',
+    );
   return await withCrossProcessFileLock(lockPath, fn, {
     waitMs: 0,
-    onBusy: (file, ownerPid) =>
-      new UsageError(
-        `concurrent lifecycle operation conflict: ${file} already exists${ownerPid !== undefined ? ` (held by pid ${ownerPid})` : ''} (another start/stop/update is in progress, or a previous one crashed); confirm nothing is running and remove the lock file before retrying`,
-        'lifecycle_lock_busy',
-      ),
-    onCorrupt: (file) =>
-      new UsageError(
-        `concurrent lifecycle operation conflict: ${file} already exists (another start/stop/update is in progress, or a previous one crashed); confirm nothing is running and remove the lock file before retrying`,
-        'lifecycle_lock_busy',
-      ),
+    onBusy: busyError,
+    onCorrupt: (file) => busyError(file),
   });
 }
 
@@ -158,81 +126,8 @@ async function assertNoLiveHub(
 }
 
 /**
- * The listen line must describe the configured endpoint, not just any `Helmx Hub: ` output: a
- * mismatch means the candidate bound somewhere other than the requested host/port and is surfaced
- * as an explicit failure instead of a false-ready.
- */
-function assertListenUrlMatches(listenUrl: string, config: EffectiveLaunchConfig): void {
-  let parsed: URL;
-  try {
-    parsed = new URL(listenUrl);
-  } catch {
-    throw new Error(`startup listen line URL is not parseable: "${listenUrl}"`);
-  }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    throw new Error(`startup listen line URL is not http(s): "${listenUrl}"`);
-  }
-  const expectedHost = config.host === '0.0.0.0' || config.host === '::' ? '127.0.0.1' : config.host;
-  const stripBrackets = (host: string): string => host.replace(/^\[|\]$/g, '');
-  if (parsed.port !== String(config.port) || stripBrackets(parsed.hostname) !== stripBrackets(expectedHost)) {
-    throw new Error(
-      `startup listen line reports ${listenUrl} but the launch configuration expects http://${expectedHost}:${config.port}`,
-    );
-  }
-}
-
-/**
- * Primary readiness gate: the candidate's own `Helmx Hub: <url>` listen line in `hub.log` (only
- * content appended after spawn counts) while the child stays alive. The URL's port must match the
- * launch config — a banner naming a different endpoint is not this candidate's listen success and
- * keeps the wait going; a port-matching line is then host-checked before being accepted. Rejects
- * with the exit detail and the log tail.
- */
-async function waitForListenLine(
-  logFile: string,
-  startOffset: number,
-  pid: number,
-  isAlive: (pid: number) => boolean,
-  options: { timeoutMs: number; pollMs: number; expectedPort: number; exitDetail: () => string | null },
-): Promise<string> {
-  const deadline = Date.now() + options.timeoutMs;
-  let offset = startOffset;
-  let scanned = '';
-  for (;;) {
-    if (!isAlive(pid)) {
-      const tail = await readLogTailBounded(logFile, LOG_TAIL_LINES);
-      const detail = options.exitDetail();
-      throw new Error(
-        `hub process exited before reporting readiness${detail !== null ? ` ${detail}` : ''} (no "Helmx Hub: " listen line)${tail !== '' ? `\n--- ${logFile} last ${LOG_TAIL_LINES} lines ---\n${tail}` : ''}`,
-      );
-    }
-    const chunk = await readLogFrom(logFile, offset);
-    offset = chunk.offset;
-    if (chunk.text !== '') {
-      scanned += chunk.text;
-      if (scanned.length > 200_000) scanned = scanned.slice(-100_000);
-      // Multiline-anchored match: the payload may (and does) print preceding log lines in the
-      // same chunk.
-      for (const match of scanned.matchAll(LISTEN_LINE_PATTERN)) {
-        const candidateUrl = match[1]!;
-        const parsed = /^https?:\/\/\[?([^\]]+)\]?:([0-9]+)$/.exec(candidateUrl);
-        if (parsed !== null && Number(parsed[2]) === options.expectedPort) return candidateUrl;
-      }
-    }
-    if (Date.now() >= deadline) {
-      const tail = await readLogTailBounded(logFile, LOG_TAIL_LINES);
-      throw new Error(
-        `hub readiness timed out after ${options.timeoutMs}ms: no "Helmx Hub: " listen line in ${logFile}${tail !== '' ? `\n--- last ${LOG_TAIL_LINES} lines ---\n${tail}` : ''}`,
-      );
-    }
-    await new Promise((resolve) => setTimeout(resolve, options.pollMs));
-  }
-}
-
-/**
  * Start the committed Hub release detached; persists `hub.pid` + `launch.json` only after
- * readiness. Unlocked body of the public `startHub` (the update flow calls it while already
- * holding `lifecycle.lock`).
+ * readiness. Unlocked body of `startHub` (update holds `lifecycle.lock` across stop→commit→start).
  */
 export async function startHubLocked(root: string, io: LauncherIo, options: StartHubOptions): Promise<StartHubResult> {
   const paths = pathsOf(root);
@@ -247,85 +142,46 @@ export async function startHubLocked(root: string, io: LauncherIo, options: Star
   });
   assertInstallIsolation(root, config.dataDir, io.env);
 
-  await fsp.mkdir(paths.logDir, { recursive: true });
-  const logHandle = await fsp.open(paths.hubLogPath, 'a');
-  const startOffset = (await logHandle.stat()).size;
-  const launchId = randomUUID();
-  const childEnv: NodeJS.ProcessEnv = {
-    ...io.env,
-    HELMX_PORT: String(config.port),
-    HELMX_HUB_ACTIVITY_LAUNCH_ID: launchId,
-    HELMX_HOST: config.host,
-    // Mark the hub as payload-managed: enables its in-process background updater and the
-    // /api/hub-update surface (docker/dev hubs run without it and honestly report inactive).
-    HELMX_HUB_INSTALL_ROOT: root,
-  };
-  if (config.dataDir !== undefined) childEnv.HELMX_DATA_DIR = config.dataDir;
-  if (config.model !== undefined) childEnv.HELMX_MODEL = config.model;
-  if (config.webDistDir !== undefined) childEnv.HELMX_WEB_DIST_DIR = config.webDistDir;
-  let child: ReturnType<typeof spawn>;
-  try {
-    child = spawn(process.execPath, [current.entryPath, 'start'], {
-      detached: true,
-      stdio: ['ignore', logHandle.fd, logHandle.fd],
-      env: childEnv,
-    });
-  } catch (error) {
-    await logHandle.close().catch(() => undefined);
-    throw new Error(`failed to spawn hub process: ${error instanceof Error ? error.message : String(error)}`);
-  }
-  if (child.pid === undefined) {
-    await logHandle.close().catch(() => undefined);
-    throw new Error('hub process pid unavailable after spawn (internal error)');
-  }
-  const pid = child.pid;
-  let exitDetail: string | null = null;
-  child.once('exit', (code, signal) => {
-    exitDetail = `(code=${code ?? 'null'} signal=${signal ?? 'null'})`;
+  const spawned = await spawnDetachedHubRelease({
+    root,
+    entryPath: current.entryPath,
+    config,
+    env: io.env,
+    timeoutMs: options.healthTimeoutMs ?? DEFAULTS.healthTimeoutMs,
+    pollMs: options.pollMs ?? DEFAULTS.healthPollMs,
+    isAlive,
+    onSpawn: options.onSpawn,
   });
-  child.unref();
-  options.onSpawn?.(child);
-  // Linux reuse proof for the pid record (see records.ts); harmless null elsewhere.
-  const startTime = await readProcessStartTime(pid);
-  await logHandle.close().catch(() => undefined);
 
   try {
-    const listenUrl = await waitForListenLine(paths.hubLogPath, startOffset, pid, isAlive, {
-      timeoutMs: options.healthTimeoutMs ?? DEFAULTS.healthTimeoutMs,
-      pollMs: options.pollMs ?? DEFAULTS.healthPollMs,
-      expectedPort: config.port,
-      exitDetail: () => exitDetail,
-    });
-    assertListenUrlMatches(listenUrl, config);
     // Auxiliary confirmation only: the listen line already proves the candidate is serving.
     const health = await probeHubHealth(config.port, config.host, {
       ...(options.fetchFn !== undefined ? { fetchFn: options.fetchFn } : {}),
       timeoutMs: DEFAULTS.healthRequestTimeoutMs,
     });
     await writePidRecord(root, {
-      pid,
-      launchId,
+      pid: spawned.pid,
+      launchId: spawned.launchId,
       version: current.version,
       entryPath: current.entryPath,
       port: config.port,
       ...(config.host !== undefined ? { host: config.host } : {}),
       ...(config.dataDir !== undefined ? { dataDir: config.dataDir } : {}),
       startedAt: new Date().toISOString(),
-      ...(startTime !== null ? { startTime } : {}),
+      ...(spawned.startTime !== null ? { startTime: spawned.startTime } : {}),
     });
     await writeLaunchConfig(root, persistableLaunchConfig(config));
     return {
-      pid,
+      pid: spawned.pid,
       version: current.version,
       entryPath: current.entryPath,
-      url: listenUrl,
-      logPath: paths.hubLogPath,
+      url: spawned.listenUrl,
+      logPath: spawned.logPath,
       health,
     };
   } catch (error) {
-    // Never leave an untracked half-started hub behind: kill the tree, then surface the error.
-    killProcessTree(pid);
-    await waitForPidExit(pid, 5_000, isAlive).catch(() => undefined);
+    killProcessTree(spawned.pid);
+    await waitForPidExit(spawned.pid, 5_000, isAlive).catch(() => undefined);
     const reason = error instanceof Error ? error.message : String(error);
     const tail = await readLogTailBounded(paths.hubLogPath, LOG_TAIL_LINES);
     throw new Error(
@@ -341,7 +197,7 @@ export function startHub(root: string, io: LauncherIo, options: StartHubOptions)
 
 /**
  * Stop the recorded Hub gracefully; identity is proven before any signal is sent. Unlocked body
- * of the public `stopHub` (the update flow calls it while already holding `lifecycle.lock`).
+ * of `stopHub`.
  */
 export async function stopHubLocked(root: string, io: LauncherIo, options?: StopHubOptions): Promise<StopHubResult> {
   const paths = pathsOf(root);
@@ -352,12 +208,6 @@ export async function stopHubLocked(root: string, io: LauncherIo, options?: Stop
     await removePidFileIfMatch(root, record);
     return { wasRunning: false, escalated: false, cleanedStalePid: true };
   }
-  // Fail-closed identity proof: the only signal-safe evidence that the recorded pid is still
-  // the hub this launcher spawned is the immutable process start time. A reachable health
-  // endpoint proves only that some hub-shaped server answers on the port — never that the
-  // recorded pid is that server — so without a start-time proof the pid is never signalled.
-  // Platforms without the proof (non-Linux detached records) surface an explicit refusal that
-  // steers to the supervised `run` (which holds its own ChildProcess and needs no pid guessing).
   if (record.startTime === undefined) {
     throw new UsageError(
       `pid ${record.pid} cannot be verified as this launcher's hub: the pid record carries no process start-time proof (no /proc start time on this platform or at spawn time), and a health endpoint alone cannot prove the pid was not reused; refusing to signal it — stop the hub from the foreground 'helmx start' session that owns it (Ctrl+C), or verify the process manually, stop it directly, and remove ${paths.pidPath}`,
@@ -399,9 +249,8 @@ export interface GracefulStopResult extends StopHubResult {
 }
 
 /**
- * Unlocked body of `stopHubGraceful` (called inside an already-held `lifecycle.lock`, e.g. by
- * `performHubUpdate`). Tries the verified control channel first (works uniformly on Linux, macOS,
- * and Windows), then falls back to `stopHubLocked` (`/proc` start-time proof).
+ * Unlocked body of `stopHubGraceful`. Tries the verified control channel first (uniform across
+ * Linux/macOS/Windows), then falls back to `stopHubLocked` (`/proc` start-time proof).
  */
 export async function stopHubGracefulLocked(root: string, io: LauncherIo, options?: StopHubOptions): Promise<GracefulStopResult> {
   const isAlive = isAliveOf(io);
@@ -416,28 +265,17 @@ export async function stopHubGracefulLocked(root: string, io: LauncherIo, option
     record.dataDir ??
     resolveEffectiveLaunchConfig({ env: io.env, saved: await readLaunchConfig(root) }).dataDir ??
     defaultHubDataDir(io.env);
-  const control = await readHubControlRecord(dataDir).catch(() => null);
-  if (control !== null) {
-    const reply = await controlRequest(control.endpoint, { type: 'stop', instanceId: control.instanceId }, CONTROL_STOP_TIMEOUT_MS, {
-      instanceId: control.instanceId,
-    });
-    if (reply !== null && reply.ok === true) {
-      const stopTimeoutMs = options?.stopTimeoutMs ?? DEFAULTS.stopTimeoutMs;
-      const exited = await waitForPidExit(record.pid, stopTimeoutMs, isAlive);
-      let escalated = false;
-      if (!exited) {
-        killProcessTree(record.pid);
-        const escalationWaitMs = options?.escalationWaitMs ?? DEFAULTS.stopEscalationWaitMs;
-        if (!(await waitForPidExit(record.pid, escalationWaitMs, isAlive))) {
-          throw new Error(
-            `hub pid ${record.pid} accepted the control-channel stop but did not exit within ${stopTimeoutMs}ms graceful budget plus ${escalationWaitMs}ms after escalation; pid file retained for diagnostics (${pathsOf(root).pidPath})`,
-          );
-        }
-        escalated = true;
-      }
-      await removePidFileIfMatch(root, record);
-      return { wasRunning: true, pid: record.pid, escalated, cleanedStalePid: false, via: 'control-channel' };
-    }
+  const controlOutcome = await stopHubViaControlChannel({
+    dataDir,
+    pid: record.pid,
+    stopTimeoutMs: options?.stopTimeoutMs ?? DEFAULTS.stopTimeoutMs,
+    escalationWaitMs: options?.escalationWaitMs ?? DEFAULTS.stopEscalationWaitMs,
+    escalateOnTimeout: true,
+    isAlive,
+  });
+  if (controlOutcome.stopped) {
+    await removePidFileIfMatch(root, record);
+    return { wasRunning: true, pid: record.pid, escalated: controlOutcome.escalated, cleanedStalePid: false, via: 'control-channel' };
   }
 
   // Channel unavailable or rejected: proof-based stop (keeps its explicit platform refusal).
@@ -445,9 +283,7 @@ export async function stopHubGracefulLocked(root: string, io: LauncherIo, option
   return { ...result, via: 'pid-proof' };
 }
 
-/**
- * Stop the running Hub gracefully, control channel first, serialized inside `lifecycle.lock`.
- */
+/** Stop the running Hub gracefully, control channel first, serialized inside `lifecycle.lock`. */
 export function stopHubGraceful(root: string, io: LauncherIo, options?: StopHubOptions): Promise<GracefulStopResult> {
   return withLifecycleLock(root, () => stopHubGracefulLocked(root, io, options));
 }
@@ -469,7 +305,7 @@ export async function readRunningHub(
   const alive = isAliveOf(io)(record.pid);
   const health = alive
     ? await probeHubHealth(record.port, record.host, {
-        ...(fetchFn !== undefined ? { fetchFn: fetchFn } : {}),
+        ...(fetchFn !== undefined ? { fetchFn } : {}),
         timeoutMs: DEFAULTS.identityProbeTimeoutMs,
       })
     : null;

@@ -9,7 +9,7 @@ import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import fsp from 'node:fs/promises';
 import process from 'node:process';
-import { readLogTailBounded, withCrossProcessFileLock } from '@helmx/env-io';
+import { readCurrentRelease, readLogTailBounded, requireReleaseEntry, withCrossProcessFileLock } from '@helmx/env-io';
 import {
   isAliveOf,
   logPathOf,
@@ -205,17 +205,17 @@ async function resolveDaemonLaunchTarget(
   dataDir: string,
   selfEntry: string,
 ): Promise<{ entryPath: string }> {
-  const { readCurrentRelease } = await import('./daemon/upgrader.js');
   const current = await readCurrentRelease(dataDir);
   if (current === null) return { entryPath: selfEntry };
+  const entryPath = requireReleaseEntry(current, 'entryPath');
   try {
-    await fsp.access(current.entryPath);
+    await fsp.access(entryPath);
   } catch {
     throw new Error(
-      `current.json points to a missing entry (${current.entryPath}, version ${current.version}): staged release may be corrupted; fix current.json or re-upgrade instead of falling back to an older entry`,
+      `current.json points to a missing entry (${entryPath}, version ${current.version}): staged release may be corrupted; fix current.json or re-upgrade instead of falling back to an older entry`,
     );
   }
-  return { entryPath: current.entryPath };
+  return { entryPath };
 }
 
 /** Ensure no live daemon or unverified PID owns `node.pid`; cleans up confirmed-dead stale records. */

@@ -10,8 +10,8 @@ import fs from 'node:fs/promises';
 import rawFs from 'node:fs';
 import { createHash } from 'node:crypto';
 import process from 'node:process';
-import { isStrictSemver } from '@helmx/protocol';
 import { UpgradeRejectedError } from './errors.js';
+import { assertDistTag } from './semver.js';
 
 export const DEFAULT_REGISTRY = 'https://registry.npmjs.org';
 
@@ -96,20 +96,6 @@ export async function fetchExactManifest(
   return { integrity, tarball };
 }
 
-/** Legal npm dist-tag segment: one path-safe segment; version-shaped tags are rejected (they resolve the exact-version document instead of a dist-tag). */
-const DIST_TAG_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-
-function requireDistTag(tag: string): void {
-  if (!DIST_TAG_PATTERN.test(tag)) {
-    throw new UpgradeRejectedError(
-      `invalid dist-tag: "${tag}" (expected a single path segment of letters, digits, ".", "_" or "-", not starting with a symbol)`,
-    );
-  }
-  if (isStrictSemver(tag)) {
-    throw new UpgradeRejectedError(`invalid dist-tag: "${tag}" is a version, not a dist-tag (request the exact version instead)`);
-  }
-}
-
 /** Query the version a dist-tag points at (`latest` by default; e.g. `beta` for pre-release channels). */
 export async function fetchLatestVersion(
   registryUrl: string,
@@ -117,7 +103,7 @@ export async function fetchLatestVersion(
   fetchImpl: typeof fetch,
   tag: string = 'latest',
 ): Promise<string> {
-  requireDistTag(tag);
+  assertDistTag(tag);
   const url = `${registryUrl}/${pkgName}/${tag}`;
   let latestVersion: string;
   try {

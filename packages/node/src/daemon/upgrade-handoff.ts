@@ -16,7 +16,7 @@ import { NODE_CONTROL_PRODUCT } from '../control.js';
 import fsp from 'node:fs/promises';
 import process from 'node:process';
 import { randomBytes } from 'node:crypto';
-import { readLogTailBounded } from '@helmx/env-io';
+import { readLogTailBounded, requireReleaseEntry } from '@helmx/env-io';
 import { UpgradeCommitUnconfirmedError, type PreparedNodeReplacement, type StagedNodeRelease } from './upgrader.js';
 
 export { readLogTailBounded };
@@ -140,9 +140,10 @@ export async function prepareNodeReplacement(
     throw new Error(`failed to open candidate log file (${options.logPath}): ${error instanceof Error ? error.message : String(error)}`);
   }
 
+  const entryPath = requireReleaseEntry(release, 'entryPath', 'staged release');
   let child: ChildProcess;
   try {
-    child = spawn(options.execPath ?? process.execPath, [release.entryPath, 'start', '--data-dir', options.dataDir, '--hub', options.hubUrl], {
+    child = spawn(options.execPath ?? process.execPath, [entryPath, 'start', '--data-dir', options.dataDir, '--hub', options.hubUrl], {
       detached: true,
       stdio: ['ignore', logHandle.fd, logHandle.fd, 'ipc'],
       env: childEnv,

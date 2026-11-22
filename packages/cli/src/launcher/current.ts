@@ -3,7 +3,7 @@
  * record in `@helmx/env-io` ({version, updatedAt, entries}) is the single source of truth; the Hub launcher's only
  * contract on top is the `entryPath` entry (absolute path to the committed payload `start.mjs`).
  */
-import { readCurrentRelease, type CurrentReleaseRecord } from '@helmx/env-io';
+import { readCurrentRelease, requireReleaseEntry, type CurrentReleaseRecord } from '@helmx/env-io';
 import { UsageError } from './io.js';
 
 export interface HubCurrentRelease {
@@ -21,9 +21,6 @@ export async function readCurrentEntry(root: string): Promise<HubCurrentRelease>
       'no_release_installed',
     );
   }
-  const entryPath = record.entries['entryPath'];
-  if (typeof entryPath !== 'string' || entryPath === '') {
-    throw new Error(`current.json entries.entryPath is missing or invalid (got ${JSON.stringify(record.entries)})`);
-  }
+  const entryPath = requireReleaseEntry(record, 'entryPath');
   return { version: record.version, entryPath, record };
 }

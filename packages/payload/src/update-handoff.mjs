@@ -1,22 +1,13 @@
 #!/usr/bin/env node
 /**
  * Zero-config update handoff for a payload-managed Hub (spawned detached by the Hub's
- * `/api/hub-update/apply`, or manually for recovery). One shot, release-locked to the CURRENT
- * release directory (it imports `@helmx/env-io` from the payload's own node_modules, so its
- * code version matches the release it is replacing).
+ * `/api/hub-update/apply`, or manually for recovery). One shot, release-locked to the target
+ * release directory (it imports `@helmx/env-io` from the payload's own node_modules).
  *
- * Sequence (env-driven contract; every step fails loudly, never silently degrades):
- *   1. grace delay — let the apply HTTP response flush before stopping anything;
- *   2. acquire `lifecycle.lock` so concurrent CLI start/stop/update commands cannot interleave;
- *   3. stop the running Hub over its control channel (verified `instanceId`; the only supported
- *      stop path — this script never signals PIDs it cannot prove);
- *   4. commit `current.json` to the staged target (entries carried in `update-ready.json`);
- *   5. start the target release detached (stdio -> `logs/hub.log`), gate readiness on the
- *      `Helmx Hub: <url>` listen line, then persist `hub.pid` (+ raw `/proc` start-time proof,
- *      `dataDir`, and `host`);
- *   6. on any post-commit failure: restore the previous `current.json` verbatim, restart the
- *      previous release, write `update-blocked.json`, exit 1 with diagnostics;
- *      on success: clear the blocked marker and `update-ready.json`, exit 0.
+ * Delegates all switch mechanics (lifecycle lock, verified control-channel stop, detached spawn
+ * with listen-line + `assertListenUrlMatches` readiness gate, atomic `hub.pid` persistence, and
+ * rollback-before-restart + blocked-release recording) to `@helmx/env-io` so CLI launcher and
+ * payload handoff never drift.
  *
  * Environment inputs (all required unless noted):
  *   HELMX_HANDOFF_ROOT                 install root (releases/, state, logs)
@@ -26,26 +17,26 @@
  *   HELMX_HANDOFF_DATA_DIR             hub data directory (control record + hub.pid dataDir)
  *   HELMX_HANDOFF_CONTROL_ENDPOINT     control channel endpoint of the running hub
  *   HELMX_HANDOFF_CONTROL_INSTANCE_ID  control channel instanceId
- *   HELMX_HANDOFF_LAUNCH_ID            fresh launch id for the new hub process
+ *   HELMX_HANDOFF_LAUNCH_ID            optional fresh launch id for the new hub process
  *   HELMX_HANDOFF_GRACE_MS             optional grace override (default 2000)
  *   HELMX_HANDOFF_TEST_*               test hooks: fast timeouts
  */
-import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import {
-  clearBlockedRelease,
-  controlRequest,
-  isProcessAlive,
+  commitAndSwitchHubRelease,
+  hubLifecycleLockPath,
+  hubLogPath,
+  isStrictSemver,
   readCurrentRelease,
-  readHubControlRecord,
-  readLogFrom,
-  readProcessStartTime,
-  waitForPidExit,
+  readLaunchConfig,
+  resolveEffectiveLaunchConfig,
+  spawnDetachedHubRelease,
+  stopHubViaControlChannel,
   withCrossProcessFileLock,
-  writeBlockedRelease,
-  writeCurrentRelease,
+  writeHubPidRecord,
 } from '@helmx/env-io';
 import { clearUpdateReady, readUpdateReady } from '@helmx/env-io/hub-payload';
 
@@ -56,16 +47,11 @@ const RELEASE_DIR = process.env.HELMX_HANDOFF_RELEASE_DIR ?? '';
 const DATA_DIR = process.env.HELMX_HANDOFF_DATA_DIR ?? '';
 const CONTROL_ENDPOINT = process.env.HELMX_HANDOFF_CONTROL_ENDPOINT ?? '';
 const CONTROL_INSTANCE_ID = process.env.HELMX_HANDOFF_CONTROL_INSTANCE_ID ?? '';
-const LAUNCH_ID = process.env.HELMX_HANDOFF_LAUNCH_ID ?? '';
+const LAUNCH_ID = process.env.HELMX_HANDOFF_LAUNCH_ID || randomUUID();
 const GRACE_MS = Number(process.env.HELMX_HANDOFF_GRACE_MS ?? '2000');
 const READY_TIMEOUT_MS = Number(process.env.HELMX_HANDOFF_TEST_READY_TIMEOUT_MS ?? '60000');
+const STOP_TIMEOUT_MS = Number(process.env.HELMX_HANDOFF_TEST_STOP_TIMEOUT_MS ?? '15000');
 const LOG = path.join(ROOT, 'logs', 'handoff.log');
-const LIFECYCLE_LOCK = path.join(ROOT, 'lifecycle.lock');
-
-const fail = (message) => {
-  log(`FAILED: ${message}`);
-  process.exit(1);
-};
 
 function log(line) {
   const stamped = `[handoff ${new Date().toISOString()}] ${line}`;
@@ -73,7 +59,10 @@ function log(line) {
   fsp.appendFile(LOG, `${stamped}\n`, 'utf8').catch(() => undefined);
 }
 
-const isStrictSemver = (value) => /^\d+\.\d+\.\d+(-[\w.-]+)?(\+[\w.-]+)?$/.test(value);
+const fail = (message) => {
+  log(`FAILED: ${message}`);
+  process.exit(1);
+};
 
 function validateEnv() {
   const required = [
@@ -90,104 +79,14 @@ function validateEnv() {
   if (!isStrictSemver(TARGET)) fail(`HELMX_HANDOFF_TARGET is not strict SemVer: "${TARGET}"`);
 }
 
-/** Stop the hub over the verified control channel and wait for the recorded pid to exit. */
-async function stopRunningHub() {
-  const control = await readHubControl();
-  if (control === null) {
-    throw new Error(`no hub control record in data directory "${DATA_DIR}" — cannot prove ownership of the running hub; refusing to continue`);
-  }
-  const stopTimeoutMs = Number(process.env.HELMX_HANDOFF_TEST_STOP_TIMEOUT_MS ?? '15000');
-  const reply = await controlRequest(
-    CONTROL_ENDPOINT,
-    { type: 'stop', instanceId: CONTROL_INSTANCE_ID },
-    stopTimeoutMs,
-    { instanceId: CONTROL_INSTANCE_ID },
-  );
-  if (reply === null || reply.ok !== true) {
-    throw new Error(`control-channel stop was not accepted (${reply === null ? 'no reply' : `error: ${reply.error ?? 'unknown'}`}); nothing was committed`);
-  }
-  const exited = await waitForPidExit(control.pid, stopTimeoutMs);
-  if (!exited) {
-    throw new Error(`hub pid ${control.pid} accepted the stop but did not exit within the budget; nothing was committed`);
-  }
-  log(`stopped hub pid ${control.pid} over the control channel`);
-}
-
-async function readHubControl() {
-  if (DATA_DIR === '') return null;
+async function resolveEntryFile(version, rawEntry) {
+  const resolved = path.isAbsolute(rawEntry) ? rawEntry : path.join(ROOT, 'releases', version, rawEntry);
   try {
-    const parsed = await readHubControlRecord(DATA_DIR);
-    if (parsed === null) return null;
-    if (parsed.instanceId !== CONTROL_INSTANCE_ID || parsed.endpoint !== CONTROL_ENDPOINT) return null;
-    return { pid: parsed.pid };
+    await fsp.access(resolved);
   } catch {
-    return null;
+    throw new Error(`release entry missing: ${resolved}`);
   }
-}
-
-/** Start a release detached and gate on its listen line; returns { pid, url }. */
-async function startRelease(entry, version) {
-  const logDir = path.join(ROOT, 'logs');
-  await fsp.mkdir(logDir, { recursive: true });
-  const hubLog = path.join(logDir, 'hub.log');
-  const logHandle = await fsp.open(hubLog, 'a');
-  const startOffset = (await logHandle.stat()).size;
-  const childEnv = { ...process.env };
-  for (const key of Object.keys(childEnv)) {
-    if (key.startsWith('HELMX_HANDOFF_')) delete childEnv[key];
-  }
-  delete childEnv.HELMX_HUB_ACTIVITY_LAUNCH_ID;
-  childEnv.HELMX_HUB_ACTIVITY_LAUNCH_ID = LAUNCH_ID;
-  childEnv.HELMX_HUB_INSTALL_ROOT = ROOT;
-  if (DATA_DIR !== '') childEnv.HELMX_DATA_DIR = DATA_DIR;
-  const child = spawn(process.execPath, [entry, 'start'], {
-    detached: true,
-    stdio: ['ignore', logHandle.fd, logHandle.fd],
-    env: childEnv,
-  });
-  await logHandle.close().catch(() => undefined);
-  if (child.pid === undefined) throw new Error('spawn produced no pid');
-  child.unref();
-  const deadline = Date.now() + READY_TIMEOUT_MS;
-  let scanned = '';
-  let offset = startOffset;
-  while (Date.now() < deadline) {
-    if (!isProcessAlive(child.pid)) throw new Error(`hub process exited before readiness (version ${version})`);
-    const chunk = await readLogFrom(hubLog, offset);
-    offset = chunk.offset;
-    if (chunk.text !== '') {
-      scanned = (scanned + chunk.text).slice(-200000);
-      const match = /^Helmx Hub: (\S+)\s*$/gm.exec(scanned);
-      if (match !== null) {
-        return { pid: child.pid, url: match[1] };
-      }
-    }
-    await new Promise((resolve) => setTimeout(resolve, 250));
-  }
-  throw new Error(`hub readiness timed out after ${READY_TIMEOUT_MS}ms (version ${version}, log: ${hubLog})`);
-}
-
-/** Persist the launcher's hub.pid contract for a freshly started release. */
-async function writePidRecord(pid, version, entry, url) {
-  const parsedUrl = new URL(url);
-  const port = Number(parsedUrl.port);
-  const configuredHost = process.env.HELMX_HOST && process.env.HELMX_HOST.trim() !== ''
-    ? process.env.HELMX_HOST.trim()
-    : parsedUrl.hostname;
-  const record = {
-    pid,
-    launchId: LAUNCH_ID,
-    version,
-    entryPath: entry,
-    port,
-    ...(configuredHost !== '' ? { host: configuredHost } : {}),
-    ...(DATA_DIR !== '' ? { dataDir: DATA_DIR } : {}),
-    startedAt: new Date().toISOString(),
-  };
-  // Store raw Linux /proc/<pid>/stat field-22 ticks (single source of truth shared with launcher).
-  const startTime = await readProcessStartTime(pid);
-  if (startTime !== null) record.startTime = startTime;
-  await fsp.writeFile(path.join(ROOT, 'hub.pid'), `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
+  return resolved;
 }
 
 async function main() {
@@ -204,51 +103,70 @@ async function main() {
   if (graceMs > 0) await new Promise((resolve) => setTimeout(resolve, graceMs));
 
   await withCrossProcessFileLock(
-    LIFECYCLE_LOCK,
+    hubLifecycleLockPath(ROOT),
     async () => {
       const previous = await readCurrentRelease(ROOT);
       if (previous === null) throw new Error('no current release to roll back to; the CLI owns bootstrap installs');
 
-      await stopRunningHub();
-
-      // Commit the staged target (entries carried by the ready record).
-      try {
-        await writeCurrentRelease(ROOT, {
-          version: TARGET,
-          updatedAt: new Date().toISOString(),
-          entries: { entryPath: ready.entryPath },
-        });
-        log(`committed current.json -> ${TARGET}`);
-      } catch (error) {
-        throw new Error(`commit failed (${error instanceof Error ? error.message : String(error)}); the hub is stopped and the pointer is untouched — restart manually`);
+      const stop = await stopHubViaControlChannel({
+        dataDir: DATA_DIR,
+        expectedControl: { endpoint: CONTROL_ENDPOINT, instanceId: CONTROL_INSTANCE_ID },
+        stopTimeoutMs: Number.isFinite(STOP_TIMEOUT_MS) && STOP_TIMEOUT_MS > 0 ? STOP_TIMEOUT_MS : 15_000,
+        escalateOnTimeout: false,
+      });
+      if (!stop.stopped) {
+        throw new Error(`control-channel stop was not accepted (${stop.detail}); nothing was committed`);
       }
+      log(`stopped hub pid ${stop.pid} over the control channel`);
 
-      try {
-        const started = await startRelease(ENTRY, TARGET);
-        await writePidRecord(started.pid, TARGET, ENTRY, started.url);
-        await clearBlockedRelease(ROOT);
-        await clearUpdateReady(ROOT);
-        log(`switch complete: ${previous.version} -> ${TARGET} (pid ${started.pid}, ${started.url})`);
-      } catch (error) {
-        const reason = error instanceof Error ? error.message : String(error);
-        log(`target failed to serve: ${reason}; rolling back to ${previous.version}`);
-        let rollbackNote = 'rollback start failed — restart manually';
-        try {
-          const restoredEntry = await resolvePreviousEntry(previous);
-          const restored = await startRelease(restoredEntry, previous.version);
-          await writeCurrentRelease(ROOT, previous);
-          await writePidRecord(restored.pid, previous.version, restoredEntry, restored.url);
-          rollbackNote = `rolled back to ${previous.version} (pid ${restored.pid})`;
-        } catch (rollbackError) {
-          rollbackNote = `rollback failed too: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`;
-        }
-        await writeBlockedRelease(ROOT, {
-          version: TARGET,
-          reason: `handoff: ${reason}; ${rollbackNote}`,
-          at: new Date().toISOString(),
-        }).catch(() => undefined);
-        throw new Error(`${reason}; ${rollbackNote}`);
-      }
+      const config = resolveEffectiveLaunchConfig({
+        env: process.env,
+        saved: await readLaunchConfig(ROOT),
+        ...(DATA_DIR !== '' ? { flags: { dataDir: DATA_DIR } } : {}),
+      });
+      const readyTimeoutMs = Number.isFinite(READY_TIMEOUT_MS) && READY_TIMEOUT_MS > 0 ? READY_TIMEOUT_MS : 60_000;
+      const targetEntryPath = path.resolve(RELEASE_DIR, ready.entryPath);
+      const effectiveTargetEntry = path.resolve(ENTRY);
+
+      const { started } = await commitAndSwitchHubRelease({
+        root: ROOT,
+        targetVersion: TARGET,
+        targetEntryPath,
+        previousRecord: previous,
+        shouldStart: true,
+        restartPreviousOnRollback: true,
+        blockedReasonPrefix: 'handoff',
+        logPathHint: hubLogPath(ROOT),
+        onLog: log,
+        formatRestored: (restored, prev) => `rolled back to ${prev.version} (pid ${restored.pid})`,
+        startRelease: async ({ version, entryPath }) => {
+          const entry = version === TARGET ? effectiveTargetEntry : await resolveEntryFile(version, entryPath);
+          const spawned = await spawnDetachedHubRelease({
+            root: ROOT,
+            entryPath: entry,
+            config,
+            env: process.env,
+            launchId: version === TARGET ? LAUNCH_ID : randomUUID(),
+            timeoutMs: readyTimeoutMs,
+            pollMs: 250,
+          });
+          await writeHubPidRecord(ROOT, {
+            pid: spawned.pid,
+            launchId: spawned.launchId,
+            version,
+            entryPath: entry,
+            port: config.port,
+            host: config.host,
+            ...(config.dataDir !== undefined ? { dataDir: config.dataDir } : {}),
+            startedAt: new Date().toISOString(),
+            ...(spawned.startTime !== null ? { startTime: spawned.startTime } : {}),
+          });
+          return spawned;
+        },
+      });
+
+      await clearUpdateReady(ROOT);
+      log(`switch complete: ${previous.version} -> ${TARGET} (pid ${started.pid}, ${started.listenUrl})`);
     },
     {
       waitMs: 5_000,
@@ -259,16 +177,6 @@ async function main() {
     },
   );
   process.exit(0);
-}
-
-/** Resolve the previous release's absolute entry from its committed relative entry path. */
-async function resolvePreviousEntry(previous) {
-  const releaseDir = path.join(ROOT, 'releases', previous.version);
-  const relative = previous.entries.entryPath;
-  const absolute = path.isAbsolute(relative) ? relative : path.join(releaseDir, relative);
-  const entryStat = await fsp.stat(absolute).then(() => absolute).catch(() => null);
-  if (entryStat === null) throw new Error(`previous release entry missing: ${absolute}`);
-  return entryStat;
 }
 
 main().catch((error) => fail(error instanceof Error ? error.stack ?? error.message : String(error)));

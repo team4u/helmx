@@ -10,7 +10,7 @@ import { test } from 'node:test';
 import { useTempDir } from '@helmx/test-kit/node';
 import { readCurrentRelease, writeCurrentRelease } from '@helmx/env-io';
 import {
-  isBlockedActive,
+  isBlockedVersionActive,
   parseLinuxStartTime,
   readPidRecord,
   readProcessStartTime,
@@ -100,10 +100,10 @@ test('removePidFileIfMatch only removes an unchanged record (compare-and-swap)',
 test('blocked cooldown boundaries: unparseable timestamps keep blocking', { timeout: 60_000 }, () => {
   const now = new Date('2026-01-01T12:00:00Z');
   const blocked = { version: '1.0.0', reason: 'r', at: '2026-01-01T11:00:00Z' }; // 60 minutes elapsed
-  assert.equal(isBlockedActive(blocked, now, 61 * 60_000), true); // still within cooldown
-  assert.equal(isBlockedActive(blocked, now, 60 * 60_000), false); // exactly at the boundary
-  assert.equal(isBlockedActive(blocked, now, 59 * 60_000), false); // past the cooldown
-  assert.equal(isBlockedActive({ ...blocked, at: 'garbage' }, now, 60_000), true);
+  assert.equal(isBlockedVersionActive(blocked, '1.0.0', now, 61 * 60_000), true); // still within cooldown
+  assert.equal(isBlockedVersionActive(blocked, '1.0.0', now, 60 * 60_000), false); // exactly at the boundary
+  assert.equal(isBlockedVersionActive(blocked, '1.0.0', now, 59 * 60_000), false); // past the cooldown
+  assert.equal(isBlockedVersionActive({ ...blocked, at: 'garbage' }, '1.0.0', now, 60_000), true);
 });
 
 test('launch configuration precedence: flags > env > saved > defaults; web-dist false handling', { timeout: 60_000 }, () => {

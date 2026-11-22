@@ -1,32 +1,36 @@
 /**
- * The shared self-update engine for long-running Helmx processes (`@helmx/node` daemon
- * today, the local Hub launcher next), living under `@helmx/env-io`'s `update/` subtree
- * and re-exported from the package root.
+ * The shared self-update engine for long-running Helmx processes (`@helmx/node` daemon,
+ * local Hub launcher, in-Hub updater, and payload update handoff), living under
+ * `@helmx/env-io`'s `update/` subtree and re-exported from the package root.
  *
  * Mechanisms provided (policy stays with the consumer):
  * - npm registry access: dist-tag/exact metadata fetch with timeouts, SHA-512 SRI verified
  *   tarball download (`downloadVerifiedTarball`), registry allowlisting for RPC-exposed inputs;
+ * - strict SemVer & dist-tag validation (`assertStrictSemver`, `assertDistTag`, `compareSemver`,
+ *   `normalizeTargetVersion`);
  * - immutable release staging: `releases/<version>/<uuid>/` directories with a `.complete`
- *   marker, cache revalidation, layout declared per product via `ReleaseLayout`
- *   (Node's dual `@helmx/node` + `@helmx/cli` packages, a single Hub payload, or an injected
- *   `stageExtractor` for layouts npm staging cannot express);
- * - atomic state: `current.json` / `update-blocked.json` (explicit corruption errors,
- *   `0600` atomic writes) and a cross-process `upgrade.lock`;
+ *   marker, cache revalidation, layout declared per product via `ReleaseLayout` or `StageExtractor`;
+ * - atomic state: unified `current.json` (`CurrentReleaseRecord`) / `update-blocked.json`
+ *   (`isBlockedVersionActive`, `resolveBlockedCooldownMs`) and stale-PID-recovering `upgrade.lock`;
  * - controlled npm runner: shell-free spawn, capped output, process-group kill on timeout;
- * - update orchestration: `performUpdate` with drain gate, strict commit-at-replacement
- *   semantics, rollback plus failure cooldown, and the never-roll-back contract for
- *   `UpgradeCommitUnconfirmedError`; `current.json` disk format is codec-injectable
- *   (`UpdateStateOps`) so consumers with pre-existing on-disk contracts keep them.
+ * - update & Hub-switch orchestration: `performUpdate` (Node) and `commitAndSwitchHubRelease` /
+ *   `spawnDetachedHubRelease` / `stopHubViaControlChannel` / `hub.pid` & `launch.json` (Hub).
  *
- * The engine depends only on `@helmx/protocol` (strict SemVer) and the host package's own
- * I/O helpers (atomic writes, process-tree termination); it never imports the kernel,
- * plugins, or the Hub, and keeps no product policy inside.
+ * The engine depends only on `@helmx/protocol` (strict SemVer) and Node builtins (zero `tar`
+ * dependency — Hub tarball unpacking stays isolated under the `./hub-payload` subpath).
  */
 export {
   UpgradeRejectedError,
   UpgradeCommitUnconfirmedError,
 } from './errors.js';
-export { compareSemver, normalizeTargetVersion } from './semver.js';
+export {
+  assertDistTag,
+  assertStrictSemver,
+  compareSemver,
+  compareStrictSemver,
+  isStrictSemver,
+  normalizeTargetVersion,
+} from './semver.js';
 export {
   DEFAULT_REGISTRY,
   METADATA_TIMEOUT_MS,
@@ -42,6 +46,7 @@ export {
   type DownloadTarballOptions,
 } from './registry.js';
 export {
+  DEFAULT_BLOCKED_COOLDOWN_MS,
   readCurrentRelease,
   writeCurrentRelease,
   deleteCurrentRelease,
@@ -49,9 +54,11 @@ export {
   writeBlockedRelease,
   clearBlockedRelease,
   readStateJson,
+  requireReleaseEntry,
+  resolveBlockedCooldownMs,
+  isBlockedVersionActive,
   type CurrentReleaseRecord,
   type BlockedReleaseRecord,
-  type UpdateStateOps,
 } from './state.js';
 export { runNpm } from './npm-runner.js';
 export {
@@ -82,3 +89,30 @@ export {
   type PreparedReplacement,
   type UpdateResult,
 } from './upgrade.js';
+export {
+  HUB_LISTEN_LINE_PATTERN,
+  hubPidPath,
+  hubLaunchConfigPath,
+  hubLogPath,
+  hubLifecycleLockPath,
+  readHubPidRecord,
+  writeHubPidRecord,
+  removeHubPidRecordIfMatch,
+  readLaunchConfig,
+  writeLaunchConfig,
+  resolveEffectiveLaunchConfig,
+  persistableLaunchConfig,
+  assertListenUrlMatches,
+  waitForHubListenLine,
+  spawnDetachedHubRelease,
+  stopHubViaControlChannel,
+  commitAndSwitchHubRelease,
+  type HubPidRecord,
+  type LaunchConfig,
+  type EffectiveLaunchConfig,
+  type SpawnDetachedHubOptions,
+  type SpawnedDetachedHub,
+  type StopHubViaControlOptions,
+  type StopHubViaControlOutcome,
+  type CommitHubSwitchOptions,
+} from './hub-switch.js';

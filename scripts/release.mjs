@@ -103,7 +103,7 @@ function bumpSemver(current, bumpType, preId = 'beta') {
       segs[segs.length - 1] = String(Number(last) + 1);
       return `${base}-${segs.join('.')}`;
     }
-    if (/^\d+$/.test(last)) return `${base}-${last + 1}`;
+    if (/^\d+$/.test(last)) return `${base}-${Number(last) + 1}`;
     return `${base}-${cur.pre}.1`;
   }
   return `${cur.major}.${cur.minor}.${cur.patch + 1}-${preId}.1`;
@@ -179,11 +179,11 @@ function main() {
     console.log('提示: --skip-verify 跳过本地门禁（release.yml 仍会全量验证）。');
   } else {
     for (const [label, cmdArgs] of [
-      ['typecheck', ['pnpm', ['typecheck']]],
+      ['build', ['pnpm', ['build']]],
+      ['typecheck', ['pnpm', ['typecheck:only']]],
       ['lint', ['pnpm', ['lint']]],
       ['check:hygiene', ['pnpm', ['check:hygiene']]],
-      ['build', ['pnpm', ['build']]],
-      ['test:all', ['pnpm', ['test:all']]],
+      ['test:all', ['pnpm', ['test:all:run']]],
     ]) {
       console.log(`- ${label}...`);
       run(cmdArgs[0], cmdArgs[1]);
