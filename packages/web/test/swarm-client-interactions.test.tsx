@@ -1402,16 +1402,42 @@ describe("swarm-client-interactions", () => {
       assert.equal(filteredPosts.length, 1, '切换到 #review 仅显示该频道记录')
       assert.match(filteredPosts[0]!.textContent ?? '', /Review note referencing #1/)
 
-      // Clicking #1 ref chip resets filter to show & highlight #1
+      // Clicking #1 ref chip opens inline peek popover without disturbing #review filter
       const refBtn = coordPanel.host.querySelector<HTMLButtonElement>('.sw-panel-post-ref')!
       assert.ok(refBtn !== null, '渲染可点击 #seq 引用芯片')
       assert.equal(refBtn.textContent, '#1')
       await act(async () => {
         refBtn.click()
       })
+      const peek = coordPanel.host.querySelector<HTMLElement>('.sw-peek-popover')
+      assert.ok(peek !== null, '点击引用芯片应原地弹出速览浮卡')
+      assert.match(peek.textContent ?? '', /#1/, '浮卡标题展示目标序号')
+      assert.equal(coordPanel.host.querySelectorAll('.sw-panel-post').length, 1, '速览浮卡打开时不打乱当前频道筛选视图')
+
+      // Clicking "Locate in list" resets filter, highlights #1, and shows jump-back bar to #3
+      const locateBtn = peek.querySelector<HTMLButtonElement>('.sw-peek-locate-btn')!
+      assert.ok(locateBtn !== null, '浮卡提供定位到列表入口')
+      await act(async () => {
+        locateBtn.click()
+      })
+      assert.ok(coordPanel.host.querySelector('.sw-peek-popover') === null, '定位后收起浮卡')
       const highlighted = coordPanel.host.querySelector<HTMLElement>('.sw-panel-post-highlighted')
-      assert.ok(highlighted !== null, '点击引用后高亮目标帖子')
+      assert.ok(highlighted !== null, '定位后高亮目标帖子')
       assert.equal(highlighted.getAttribute('data-post-seq'), '1')
+      const jumpBackBtn = coordPanel.host.querySelector<HTMLButtonElement>('.sw-panel-jump-back-btn')
+      assert.ok(jumpBackBtn !== null, '列表跳转后挂出返回原留言胶囊')
+      assert.match(jumpBackBtn.textContent ?? '', /返回 #2/)
+
+      // Clicking jump-back returns highlight to #2 and clears the jump-back bar
+      await act(async () => {
+        jumpBackBtn.click()
+      })
+      assert.equal(
+        coordPanel.host.querySelector<HTMLElement>('.sw-panel-post-highlighted')?.getAttribute('data-post-seq'),
+        '2',
+        '点击回跳胶囊返回原留言 #2',
+      )
+      assert.ok(coordPanel.host.querySelector('.sw-panel-jump-back') === null, '退空后自动隐藏回跳条')
 
       // Coordinator Abort button on working member
       const abortBtn = coordPanel.host.querySelector<HTMLButtonElement>('.sw-panel-member-abort')
@@ -1453,6 +1479,158 @@ describe("swarm-client-interactions", () => {
       assert.ok(workerPanel.host.querySelector('.sw-panel-close-btn') === null, 'Worker 视角不渲染结单按钮')
     } finally {
       workerPanel.unmount()
+    }
+    resetDefaultStubs()
+  })
+
+  test('SwarmWorkbenchPanel：正文内联 #seq 速览、浮卡内多层引用前进/后退、早期截断帖按需 board_read 与缺帖如实提示', { timeout: 60_000 }, async () => {
+    const { linkifyPostRefs } = await import('../../plugins/src/swarm/client/model-post-nav.js')
+    // linkifyPostRefs：保留代码块、行内代码与既有链接，仅转正文引用并跳过自身 seq
+    assert.equal(
+      linkifyPostRefs(
+        '见 #12 与（#5），忽略 `#9` 与 [已链接 #8](https://example.com) 与自身 #20。\n```\n#7 in fence\n```',
+        20,
+      ),
+      '见 [#12](#swarm-post-12) 与（[#5](#swarm-post-5)），忽略 `#9` 与 [已链接 #8](https://example.com) 与自身 #20。\n```\n#7 in fence\n```',
+    )
+
+    // 活跃板 headSeq=20，但尾部投影仅含 #12 与 #20；早期长帖 #2 需按需 board_read 拉回，#999 不存在。
+    const longEarlyBody = Array.from({ length: 12 }, (_, i) => `Early constraint line ${i + 1}`).join('\n')
+    const truncatedBoard = boardViewFixture({
+      group: {
+        id: 'grp-live',
+        title: '协同审改组',
+        objective: '零回归完成鉴权改造',
+        status: 'active',
+        coordinatorConversationId: 50,
+        activeWorkerCount: 2,
+        headSeq: 20,
+        channels: [{ name: 'main' }],
+        createdAt: 1_700_000_000_000,
+        updatedAt: 1_700_000_020_000,
+      },
+      posts: [
+        {
+          seq: 12,
+          groupId: 'grp-live',
+          from: 'author',
+          to: ['verifier'],
+          resolvedTargets: ['verifier'],
+          wake: true,
+          kind: 'handoff',
+          channel: 'main',
+          body: 'Implemented per #2 and bogus #999.',
+          refs: [2, 999],
+          createdAt: 1_700_000_012_000,
+        },
+        {
+          seq: 20,
+          groupId: 'grp-live',
+          from: 'verifier',
+          to: ['author'],
+          resolvedTargets: ['author'],
+          wake: true,
+          kind: 'review',
+          channel: 'main',
+          body: 'Checked #12 thoroughly; inline `#77` stays code.',
+          refs: [12],
+          createdAt: 1_700_000_020_000,
+        },
+      ],
+    })
+    setStubState({
+      docs: { index: coordinatorIndexFixture(), 'board-badges': { byConversation: {} } },
+      sessionDocs: { 'builtin:swarm/board-view/50': truncatedBoard },
+    })
+
+    let boardReadAttempts = 0
+    let failNextRead = true
+    const spy = makeSpyCtx({
+      conversationId: 50,
+      locale: 'zh-CN',
+      callAction: async (actionId) => {
+        if (actionId === 'board_read') {
+          boardReadAttempts += 1
+          if (failNextRead) {
+            failNextRead = false
+            throw new Error('temporary read failure')
+          }
+          return {
+            posts: [
+              {
+                seq: 2,
+                groupId: 'grp-live',
+                from: 'coordinator',
+                to: ['all'],
+                resolvedTargets: ['author', 'verifier'],
+                wake: true,
+                kind: 'brief',
+                channel: 'main',
+                body: longEarlyBody,
+                refs: [],
+                createdAt: 1_700_000_002_000,
+              },
+              ...(truncatedBoard.posts as unknown[]),
+            ],
+          }
+        }
+        return {}
+      },
+    })
+
+    const panel = await mount(
+      spy,
+      e(components.SwarmWorkbenchPanel, { conversation: convSummary(50, '主控', { tags: ['swarm-coordinator'] }) }),
+    )
+    try {
+      // 1) 正文内联链接可点开 #12 浮卡；行内代码 `#77` 不被转为链接
+      const inlineLink = panel.host.querySelector<HTMLAnchorElement>('.sw-panel-post[data-post-seq="20"] a[href="#swarm-post-12"]')
+      assert.ok(inlineLink !== null, '正文 #12 应渲染为可点击内联引用链接')
+      assert.ok(panel.host.querySelector('a[href="#swarm-post-77"]') === null, '行内代码中的 #77 不得转为链接')
+      await act(async () => { inlineLink.click() })
+
+      let peek = panel.host.querySelector<HTMLElement>('.sw-peek-popover')
+      assert.ok(peek !== null, '点击正文内联 #12 应打开速览浮卡')
+      assert.match(peek.textContent ?? '', /Implemented per #2/)
+      assert.equal(boardReadAttempts, 0, '已缓存的 #12 不应触发额外 board_read')
+
+      // 2) 在 #12 浮卡内继续点未缓存的早期帖 #2 -> 触发按需 board_read，首次失败如实报错并可重试
+      const nestedRef2 = peek.querySelector<HTMLAnchorElement>('a[href="#swarm-post-2"]')
+      assert.ok(nestedRef2 !== null, '浮卡内引用同样可点击')
+      await act(async () => { nestedRef2.click() })
+      await act(async () => { await new Promise((r) => setTimeout(r, 0)) })
+
+      peek = panel.host.querySelector<HTMLElement>('.sw-peek-popover')!
+      assert.equal(boardReadAttempts, 1, '早期未缓存帖 #2 必须触发按需 board_read')
+      assert.match(peek.textContent ?? '', /temporary read failure/, '读取失败如实呈现原文')
+      const retryBtn = [...peek.querySelectorAll<HTMLButtonElement>('button')].find((b) =>
+        (b.textContent ?? '').includes('重试'),
+      )
+      assert.ok(retryBtn !== null, '失败浮卡提供重试按钮')
+      await act(async () => { retryBtn!.click() })
+      await act(async () => { await new Promise((r) => setTimeout(r, 0)) })
+
+      // 重试成功后：浮卡默认展示完整全文（不二次折叠），且顶部带返回 #12 按钮
+      peek = panel.host.querySelector<HTMLElement>('.sw-peek-popover')!
+      assert.equal(boardReadAttempts, 2)
+      assert.match(peek.textContent ?? '', /Early constraint line 12/, '浮卡内长帖默认展示完整全文')
+      assert.ok(peek.querySelector('.sw-panel-post-toggle') === null, '浮卡内不再二次折叠正文')
+
+      // 3) 点浮卡返回按钮退回 #12，再点不存在的 #999 -> 如实提示未找到
+      const backBtn = peek.querySelector<HTMLButtonElement>('.sw-peek-back-btn')
+      assert.ok(backBtn !== null, '多层浮卡显示返回 #12 按钮')
+      assert.match(backBtn.textContent ?? '', /#12/)
+      await act(async () => { backBtn.click() })
+      peek = panel.host.querySelector<HTMLElement>('.sw-peek-popover')!
+      assert.match(peek.textContent ?? '', /Implemented per #2/, '浮卡退回 #12')
+
+      const ref999 = peek.querySelector<HTMLAnchorElement>('a[href="#swarm-post-999"]')
+      assert.ok(ref999 !== null)
+      await act(async () => { ref999.click() })
+      peek = panel.host.querySelector<HTMLElement>('.sw-peek-popover')!
+      assert.match(peek.textContent ?? '', /未找到记录 #999/, '不存在的序号如实提示未找到')
+    } finally {
+      panel.unmount()
     }
     resetDefaultStubs()
   })

@@ -70,8 +70,9 @@ export type ActiveModal =
   | { kind: 'hub-changelog'; from?: string }
   | { kind: 'artifact-preview'; artifactId: string; conversationId?: number }
   | { kind: 'workspace-file'; conversationId: number; path: string; startLine?: number; endLine?: number }
-  | { kind: 'conversation-drawer'; conversationId: number }
   | null
+
+export type { DrawerFrame } from './drawer-stack-model.js'
 
 export interface QualifiedUiSpec<T> {
   pluginId: string
@@ -481,8 +482,11 @@ export interface HelmxStoreValue {
   sidebarCollapsed: boolean
   /** Conversation ID inside the 1.5s double-Esc abort confirmation window (null = not armed). */
   pendingEscAbortConversationId: number | null
+  /** Ordered right-hand drawer navigation stack (bottom -> top: workbench and child conversation frames). */
+  drawerStack: import('./drawer-stack-model.js').DrawerFrame[]
+  /** True while the top drawer frame is a workbench frame. */
   workbenchOpen: boolean
-  workbenchTab: string // 'artifacts' | `plugin:${pluginId}/${panelId}` (dynamic tab, falls back in WorkbenchDrawer)
+  workbenchTab: string // 'artifacts' | `plugin:${pluginId}/${panelId}` (dynamic tab, falls back in WorkbenchView)
   activeModal: ActiveModal
   highlightedEntry: { conversationId: number; entryId: string } | null
   notices: ToastNotice[]
@@ -540,6 +544,16 @@ export interface HelmxStoreValue {
   setScreenParams(patch: Record<string, string | undefined>, options?: { split?: boolean; push?: boolean }): void
   setWorkbenchOpen(open: boolean): void
   setWorkbenchTab(tab: string): void
+  /** Push (or unwind to) a child conversation frame on the drawer navigation stack. */
+  openConversationDrawer(conversationId: number): void
+  /** Push (or focus) a workbench frame on the drawer navigation stack. */
+  openWorkbenchDrawer(options?: { tab?: string; conversationId?: number }): void
+  /** Pop the topmost drawer frame (closes the drawer when at depth 1). */
+  popDrawer(): void
+  /** Jump back to a specific depth in the drawer stack (breadcrumb click). */
+  truncateDrawerStack(index: number): void
+  /** Close the entire drawer stack. */
+  closeAllDrawers(): void
   /** Activity Rail space switch: navigates the primary pane to the space's most recent target (space default when none remembered), pushing history. */
   openSpace(space: SidebarSpace): void
   setActiveModal(modal: ActiveModal): void

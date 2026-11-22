@@ -1787,12 +1787,14 @@ pre {
 }
 
 /* 工作台抽屉页签与产物分栏（覆盖 modals.css 的 .tabs-bar / .tab-btn） */
+.helmx-workbench-view .tabs-bar,
 .helmx-workbench .tabs-bar {
   justify-content: space-between;
   gap: 8px;
-  padding: 4px 10px 0 12px;
+  padding: 4px 12px 0;
   flex-shrink: 0;
 }
+.helmx-workbench-view .workbench-tabs-scroll,
 .helmx-workbench .workbench-tabs-scroll {
   display: flex;
   align-items: center;
@@ -1802,9 +1804,11 @@ pre {
   overflow-x: auto;
   scrollbar-width: none;
 }
+.helmx-workbench-view .workbench-tabs-scroll::-webkit-scrollbar,
 .helmx-workbench .workbench-tabs-scroll::-webkit-scrollbar {
   display: none;
 }
+.helmx-workbench-view .tab-btn,
 .helmx-workbench .tab-btn {
   display: inline-flex;
   align-items: center;
@@ -1812,19 +1816,17 @@ pre {
   flex-shrink: 0;
   white-space: nowrap;
 }
-.helmx-workbench .workbench-close-btn {
-  flex-shrink: 0;
-  margin-left: auto;
-  align-self: center;
-}
+.helmx-workbench-view .workbench-body,
 .helmx-workbench .workbench-body {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
 }
+.helmx-workbench-view .workbench-plugin-body,
 .helmx-workbench .workbench-plugin-body {
   padding: 10px;
 }
+.helmx-workbench-view .workbench-footer,
 .helmx-workbench .workbench-footer {
   padding: 8px 12px;
   border-top: 1px solid var(--border);

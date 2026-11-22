@@ -14,8 +14,7 @@ import { isSameResolvedTarget, resolveTargetString, type ResolvedTarget } from '
 const baseState = (target: ResolvedTarget): WorkspaceLocationState => ({
   primaryTarget: target,
   splitTarget: null,
-  workbenchOpen: false,
-  workbenchTab: 'artifacts',
+  drawerStack: [],
   activeModal: null,
 })
 
@@ -68,21 +67,23 @@ test('serializeHash: 空或空白 pluginId 视为无选中插件，输出 #/sett
   )
 })
 
-test('serializeHash: 插件中心作为主屏时与分屏、工作台、弹窗正交组合', { timeout: 60_000 }, () => {
+test('serializeHash: 插件中心作为主屏时与分屏、抽屉栈、弹窗正交组合', { timeout: 60_000 }, () => {
   const state: WorkspaceLocationState = {
     primaryTarget: { kind: 'plugins', pluginId: 'builtin:herdr' },
     splitTarget: { kind: 'conversation', conversationId: 10 },
-    workbenchOpen: true,
-    workbenchTab: 'artifacts',
-    activeModal: { kind: 'conversation-drawer', conversationId: 11 },
+    drawerStack: [
+      { kind: 'workbench', tab: 'artifacts' },
+      { kind: 'conversation', conversationId: 11 },
+    ],
+    activeModal: { kind: 'artifact-preview', artifactId: 'a1' },
   }
   const hash = formatLocationHash(state)
   const search = new URLSearchParams(hash.slice(hash.indexOf('?') + 1))
   assert.equal(hash.startsWith('#/settings/plugins/builtin:herdr?'), true)
   assert.equal(search.get('split'), 'c/10')
-  assert.equal(search.get('wb'), 'artifacts')
-  assert.equal(search.get('modal'), 'drawer')
-  assert.equal(search.get('id'), '11')
+  assert.deepEqual(search.getAll('drawer'), ['wb/artifacts', 'c/11'])
+  assert.equal(search.get('modal'), 'artifact')
+  assert.equal(search.get('id'), 'a1')
 })
 
 // ---------------------------------------------------------------------------
@@ -94,7 +95,7 @@ test('parseLocationHash: #/settings/plugins 正确还原为 plugins 目标', { t
   assert.deepEqual(parsed.primaryTarget, { kind: 'plugins' })
   assert.deepEqual(parsed.target, { kind: 'plugins' })
   assert.equal(parsed.splitTarget, null)
-  assert.equal(parsed.workbenchOpen, false)
+  assert.deepEqual(parsed.drawerStack, [])
   assert.equal(parsed.activeModal, null)
 
   const parsedSlash = parseLocationHash('#/settings/plugins/')
@@ -129,8 +130,7 @@ test('roundtrip: plugins 目标双向编解码往返无损', { timeout: 60_000 }
     {
       primaryTarget: { kind: 'plugins', pluginId: 'builtin:workflow' },
       splitTarget: { kind: 'conversation', conversationId: 5 },
-      workbenchOpen: true,
-      workbenchTab: 'artifacts',
+      drawerStack: [{ kind: 'workbench', tab: 'artifacts' }],
       activeModal: null,
     },
   ]
@@ -229,9 +229,9 @@ test('shouldPushLocationHistory: 插件中心主屏下打开弹窗、工作台�
   const pluginsState = baseState({ kind: 'plugins' })
   const drawerOpenState = baseState({ kind: 'plugins', pluginId: 'builtin:workflow' })
 
-  // 1. 列表态下打开弹窗（activeModal）走 push
+  // 1. 列表态下打开弹窗（activeModal）或子会话抽屉走 push
   assert.equal(
-    shouldPushLocationHistory(pluginsState, { ...pluginsState, activeModal: { kind: 'conversation-drawer', conversationId: 1 } }),
+    shouldPushLocationHistory(pluginsState, { ...pluginsState, drawerStack: [{ kind: 'conversation', conversationId: 1 }] }),
     true,
   )
   assert.equal(
@@ -245,13 +245,13 @@ test('shouldPushLocationHistory: 插件中心主屏下打开弹窗、工作台�
     true,
   )
 
-  // 3. 插件中心下打开工作台抽屉（workbenchOpen）走 push
+  // 3. 插件中心下打开工作台抽屉走 push
   assert.equal(
-    shouldPushLocationHistory(pluginsState, { ...pluginsState, workbenchOpen: true }),
+    shouldPushLocationHistory(pluginsState, { ...pluginsState, drawerStack: [{ kind: 'workbench', tab: 'artifacts' }] }),
     true,
   )
   assert.equal(
-    shouldPushLocationHistory(drawerOpenState, { ...drawerOpenState, workbenchOpen: true }),
+    shouldPushLocationHistory(drawerOpenState, { ...drawerOpenState, drawerStack: [{ kind: 'workbench', tab: 'artifacts' }] }),
     true,
   )
 

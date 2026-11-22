@@ -543,8 +543,7 @@ describe("helmx-store-rerender-isolation", () => {
     const store = new HelmxExternalStore({
       primaryTarget: { kind: 'conversation', conversationId: 1 },
       splitTarget: null,
-      workbenchOpen: false,
-      workbenchTab: 'artifacts',
+      drawerStack: [],
       activeModal: null,
     })
     let live1Notifications = 0

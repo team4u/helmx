@@ -6,6 +6,7 @@ import * as ReactJsxRuntime from 'react/jsx-runtime'
 import * as LucideReact from 'lucide-react'
 import * as HelmxPluginClient from '@helmx/plugin-client'
 import { usePluginDocValue } from '@helmx/plugin-client'
+import { collectDrawerConversationIds } from './drawer-stack-model.js'
 import { HelmxExternalStore, type StoreBootLocation } from './helmx-store.js'
 import { PluginClientHostBridge } from './plugin-host-bridge.js'
 import {
@@ -13,6 +14,7 @@ import {
   useActiveModal,
   useAuthenticated,
   useConversationDetail,
+  useDrawerStack,
   useHelmxStore,
   useHighlightedEntry,
   useLoadError,
@@ -78,6 +80,7 @@ function HighlightedEntryWatcher({ store }: { store: HelmxExternalStore }) {
 function HelmxStoreEffects({ store, boot }: { store: HelmxExternalStore; boot: StoreBootLocation }) {
   const authenticated = useAuthenticated()
   const { primaryTarget, splitTarget } = useLocationTargets()
+  const drawerStack = useDrawerStack()
   const activeModal = useActiveModal()
   const locationState = useLocationState()
   const { locale, localePreference, themePreference } = useThemePreferencesState()
@@ -111,11 +114,12 @@ function HelmxStoreEffects({ store, boot }: { store: HelmxExternalStore; boot: S
     const nextVisible = new Set<number>()
     if (primaryTarget.kind === 'conversation') nextVisible.add(primaryTarget.conversationId)
     if (splitTarget?.kind === 'conversation') nextVisible.add(splitTarget.conversationId)
-    if (activeModal?.kind === 'conversation-drawer' || activeModal?.kind === 'artifact-preview' || activeModal?.kind === 'workspace-file') {
+    for (const id of collectDrawerConversationIds(drawerStack)) nextVisible.add(id)
+    if (activeModal?.kind === 'artifact-preview' || activeModal?.kind === 'workspace-file') {
       if (activeModal.conversationId !== undefined) nextVisible.add(activeModal.conversationId)
     }
     store.requests.syncVisibleConversations(nextVisible)
-  }, [primaryTarget, splitTarget, activeModal, store])
+  }, [primaryTarget, splitTarget, drawerStack, activeModal, store])
 
   const {
     unreadClearInFlight,
@@ -128,8 +132,10 @@ function HelmxStoreEffects({ store, boot }: { store: HelmxExternalStore; boot: S
     authenticatedRef: store.authenticatedRef,
     primaryTarget,
     splitTarget,
+    drawerStack,
     activeModal,
     targets: store.targets,
+    drawerStackRef: store.drawerStackRef,
     activeModalRef: store.activeModalRef,
     liveRef: store.liveRef,
     updateLive: store.updateLive,
@@ -211,7 +217,7 @@ function HelmxStoreEffects({ store, boot }: { store: HelmxExternalStore; boot: S
     focusedPanelRef: store.focusedPanelRef,
     targets: store.targets,
     activeModalRef: store.activeModalRef,
-    workbenchOpenRef: store.workbenchOpenRef,
+    drawerStackRef: store.drawerStackRef,
     liveRef: store.liveRef,
     clearEscAbortPrompt: store.clearEscAbortPrompt,
     confirmOrArmEscAbort: store.confirmOrArmEscAbort,
@@ -231,7 +237,7 @@ function HelmxStoreEffects({ store, boot }: { store: HelmxExternalStore; boot: S
     unreadClearedSeq,
     pluginEpoch: store.requests.pluginEpoch,
     targets: store.targets,
-    activeModalRef: store.activeModalRef,
+    drawerStackRef: store.drawerStackRef,
     pendingHistoryMode,
     logout,
     setSseConnected: store.setSseConnected,
@@ -251,7 +257,7 @@ function HelmxStoreEffects({ store, boot }: { store: HelmxExternalStore; boot: S
     refreshAssets: store.refreshAssets,
     applyPrimaryTarget: store.applyPrimaryTarget,
     setSplitTarget: store.setSplitTarget,
-    setActiveModal: store.setActiveModal,
+    pruneConversationFromDrawerStack: store.pruneConversationFromDrawerStack,
   })
 
   return (
@@ -274,7 +280,7 @@ export function HelmxStoreProvider({
     const parsed = parseLocationHash(rawHash)
     return {
       location: parsed,
-      needsHomeLanding: !hashHasPrimaryTarget(rawHash) && parsed.activeModal === null,
+      needsHomeLanding: !hashHasPrimaryTarget(rawHash) && parsed.activeModal === null && parsed.drawerStack.length === 0,
     }
   })
 

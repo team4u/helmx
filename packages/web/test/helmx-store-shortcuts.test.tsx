@@ -469,20 +469,23 @@ describe("helmx-store-shortcuts", () => {
     assert.equal(capturedStore?.workbenchOpen, false)
 
     // Mod+J with a conversation drawer open: the drawer is a full conversation
-    // context, so the workbench toggle keeps working (bound to the drawer conv).
+    // context, so the workbench toggle pushes/pops a workbench frame above it.
     await act(async () => {
-      capturedStore?.setActiveModal({ kind: 'conversation-drawer', conversationId: 2 })
+      capturedStore?.openConversationDrawer(2)
     })
     await settle()
-    // 经由括号表达式读取，规避前文 assert.equal 对 capturedStore?.activeModal 路径的窄化残留
-    const drawerModal: ActiveModal = (capturedStore ?? undefined)?.activeModal ?? null
-    assert.equal(drawerModal?.kind, 'conversation-drawer')
+    assert.deepEqual(capturedStore?.drawerStack, [{ kind: 'conversation', conversationId: 2 }])
     dispatchWindowKey(modInit('j'))
     assert.equal(capturedStore?.workbenchOpen, true, '会话抽屉打开时 Mod+J 仍应开合工作台')
+    assert.deepEqual(capturedStore?.drawerStack, [
+      { kind: 'conversation', conversationId: 2 },
+      { kind: 'workbench', conversationId: 2, tab: 'artifacts' },
+    ])
     dispatchWindowKey(modInit('j'))
     assert.equal(capturedStore?.workbenchOpen, false)
+    assert.deepEqual(capturedStore?.drawerStack, [{ kind: 'conversation', conversationId: 2 }])
     await act(async () => {
-      capturedStore?.setActiveModal(null)
+      capturedStore?.closeAllDrawers()
     })
     await settle()
 
@@ -596,7 +599,7 @@ describe("helmx-store-shortcuts", () => {
 
   test('App split containers with data-helmx-panel capture focus and coordinate the WorkbenchDrawer and sidebar-collapsed', { timeout: 60_000 }, async () => {
     window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, '1')
-    window.history.replaceState(null, '', '#/c/1?split=c/2&wb=artifacts')
+    window.history.replaceState(null, '', '#/c/1?split=c/2&drawer=wb/artifacts')
     installFetch()
 
     host = document.createElement('div')

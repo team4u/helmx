@@ -32,6 +32,7 @@ import type {
 import type { SessionDocKey } from './session-docs.js'
 import type {
   ActiveModal,
+  DrawerFrame,
   GroupedUiSpecs,
   HelmxStoreValue,
   ResolvedTarget,
@@ -268,6 +269,10 @@ export function usePluginDocsState(): Record<string, unknown> {
   return useDomainSlice('pluginDocsMap', (s) => s.getPluginDocsMap())
 }
 
+export function useConversationDetailsMap(): Record<number, ConversationDetail> {
+  return useDomainSlice('conversationDetailsMap', (s) => s.getConversationDetailsMap())
+}
+
 export function useLocationTargets(): LocationTargetsSlice {
   return useDomainSlice('locationTargets', (s) => s.getLocationTargetsSlice())
 }
@@ -282,6 +287,10 @@ export function useSplitTarget(): ResolvedTarget | null {
 
 export function useSidebarCollapsed(): boolean {
   return useDomainSlice('sidebarCollapsed', (s) => s.getSidebarCollapsed())
+}
+
+export function useDrawerStack(): DrawerFrame[] {
+  return useDomainSlice('drawerStack', (s) => s.getDrawerStack())
 }
 
 export function useWorkbenchState(): WorkbenchSlice {

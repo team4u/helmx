@@ -35,7 +35,7 @@ import { observeServerEpoch } from './server-clock.js'
 import { evictSessionDocsOfConversation, evictSessionDocSubscriptions } from './session-docs.js'
 import { isConversationArchived } from '../conversation/archive-model.js'
 import { standbyFallbackTarget } from './space-navigation.js'
-import type { ActiveModal, ResolvedTarget, ToastNotice } from './types.js'
+import type { DrawerFrame, ResolvedTarget, ToastNotice } from './types.js'
 import {
   isArtifactsWatermarkCurrent,
   isConversationStatusActive,
@@ -58,7 +58,7 @@ export interface UseSseEventsOptions {
   unreadClearedSeq: MutableRefObject<Map<number, number>>
   pluginEpoch: MutableRefObject<Map<string, number>>
   targets: MutableRefObject<{ primaryTarget: ResolvedTarget; splitTarget: ResolvedTarget | null }>
-  activeModalRef: MutableRefObject<ActiveModal>
+  drawerStackRef: MutableRefObject<DrawerFrame[]>
   pendingHistoryMode: MutableRefObject<'push' | 'replace' | null>
   logout: () => void
   setSseConnected: Dispatch<SetStateAction<boolean>>
@@ -82,7 +82,7 @@ export interface UseSseEventsOptions {
   refreshAssets: () => Promise<void>
   applyPrimaryTarget: (target: ResolvedTarget) => void
   setSplitTarget: Dispatch<SetStateAction<ResolvedTarget | null>>
-  setActiveModal: Dispatch<SetStateAction<ActiveModal>>
+  pruneConversationFromDrawerStack: (conversationId: number) => void
 }
 
 interface StreamSessionState {
@@ -368,13 +368,11 @@ function dispatchFrameSideEffects(
     const splitHit =
       ctx.targets.current.splitTarget?.kind === 'conversation' &&
       ctx.targets.current.splitTarget.conversationId === deletedConversationId
-    const drawerHit =
-      ctx.activeModalRef.current?.kind === 'conversation-drawer' &&
-      ctx.activeModalRef.current.conversationId === deletedConversationId
+    const drawerHit = ctx.drawerStackRef.current.some((frame) => frame.conversationId === deletedConversationId)
     if (primaryHit || splitHit || drawerHit) ctx.pendingHistoryMode.current = 'replace'
     if (primaryHit) ctx.applyPrimaryTarget(fallback)
     if (splitHit) ctx.setSplitTarget(null)
-    if (drawerHit) ctx.setActiveModal(null)
+    if (drawerHit) ctx.pruneConversationFromDrawerStack(deletedConversationId)
     ctx.setConversationArtifacts((prev) => {
       const next = { ...prev }
       delete next[deletedConversationId]
@@ -452,7 +450,7 @@ export function useSseEvents(options: UseSseEventsOptions): void {
     unreadClearedSeq,
     pluginEpoch,
     targets,
-    activeModalRef,
+    drawerStackRef,
     pendingHistoryMode,
     logout,
     setSseConnected,
@@ -472,7 +470,7 @@ export function useSseEvents(options: UseSseEventsOptions): void {
     refreshAssets,
     applyPrimaryTarget,
     setSplitTarget,
-    setActiveModal,
+    pruneConversationFromDrawerStack,
   } = options
 
   useEffect(() => {
@@ -530,7 +528,7 @@ export function useSseEvents(options: UseSseEventsOptions): void {
           unreadClearedSeq,
           pluginEpoch,
           targets,
-          activeModalRef,
+          drawerStackRef,
           pendingHistoryMode,
           logout,
           setSseConnected,
@@ -550,7 +548,7 @@ export function useSseEvents(options: UseSseEventsOptions): void {
           refreshAssets,
           applyPrimaryTarget,
           setSplitTarget,
-          setActiveModal,
+          pruneConversationFromDrawerStack,
           streamState,
           announceLive,
           resetRetry: () => { retry = 0 },
@@ -676,14 +674,14 @@ export function useSseEvents(options: UseSseEventsOptions): void {
     refreshAssets,
     updateLive,
     applyPrimaryTarget,
-    activeModalRef,
+    drawerStackRef,
     failedDocs,
     liveRef,
     pendingHistoryMode,
     pluginEpoch,
     requests,
     session,
-    setActiveModal,
+    pruneConversationFromDrawerStack,
     setConnectionError,
     setConversationArtifacts,
     conversationArtifactsRef,

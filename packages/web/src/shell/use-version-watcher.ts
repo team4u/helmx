@@ -44,7 +44,8 @@
  * 本模块只导出 hook 与纯类型（无组件），保持 .ts Fast Refresh 约定。
  */
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { useActiveModal, useAuthConnection, useLocationTargets, useStoreActions } from '../lib/store-context.js'
+import { collectDrawerConversationIds } from '../lib/drawer-stack-model.js'
+import { useActiveModal, useAuthConnection, useDrawerStack, useLocationTargets, useStoreActions } from '../lib/store-context.js'
 import {
   EMPTY_COMPOSER_DIRTY_SUMMARY,
   getComposerDirtySummary,
@@ -123,6 +124,7 @@ export interface VersionWatcherView {
 export function useVersionWatcher(options: VersionWatcherOptions = {}): VersionWatcherView {
   const { kernelBootId } = useAuthConnection()
   const { primaryTarget, splitTarget } = useLocationTargets()
+  const drawerStack = useDrawerStack()
   const activeModal = useActiveModal()
   const { pushNotice } = useStoreActions()
   // 本地未提交草稿现场（外部 store 聚合快照；getSnapshot 引用稳定）。
@@ -140,9 +142,9 @@ export function useVersionWatcher(options: VersionWatcherOptions = {}): VersionW
     const ids = new Set<number>()
     if (primaryTarget.kind === 'conversation') ids.add(primaryTarget.conversationId)
     if (splitTarget?.kind === 'conversation') ids.add(splitTarget.conversationId)
-    if (activeModal?.kind === 'conversation-drawer') ids.add(activeModal.conversationId)
+    for (const id of collectDrawerConversationIds(drawerStack)) ids.add(id)
     return ids
-  }, [primaryTarget, splitTarget, activeModal])
+  }, [primaryTarget, splitTarget, drawerStack])
   const visibleStandbyKeys = useMemo(() => {
     const keys = new Set<string>()
     if (primaryTarget.kind === 'agent') keys.add(standbyDraftKey({ panel: 'primary', ...primaryTarget }))
@@ -154,8 +156,8 @@ export function useVersionWatcher(options: VersionWatcherOptions = {}): VersionW
     composerSummary.conversationIds.some((id) => visibleConversationIds.has(id))
   const hasForegroundStandbyDirty = standbyDirtyKeys.some((key) => visibleStandbyKeys.has(key))
   const draftDirty = composerSummary.anyDirty || standbyDirtyKeys.length > 0
-  // 弹窗现场：任意 activeModal（含只读预览）都挂起自动刷新，理由见文件头。
-  const modalOpen = activeModal !== null
+  // 弹窗/抽屉现场：任意 activeModal 或打开中的抽屉栈都挂起自动刷新，理由见文件头。
+  const modalOpen = activeModal !== null || drawerStack.length > 0
   // 焦点输入保护：仅当聚焦在可见、非托管的可编辑文本框内且相对聚焦初值确实发生了修改
   // （或正处于 IME 组合输入态）时才置脏；卸载/隐藏时自动自愈，空框聚焦不误拦。
   const focusBaselineRef = useRef<WeakMap<Element, string>>(new WeakMap())

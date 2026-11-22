@@ -97,6 +97,19 @@ import {
   type ThemePreference,
   type ToastNotice,
 } from './types.js'
+import {
+  DEFAULT_WORKBENCH_TAB,
+  isSameDrawerStack,
+  normalizeWorkbenchTab,
+  popDrawerFrame,
+  pushDrawerFrame,
+  removeConversationFromDrawerStack,
+  topConversationDrawerId,
+  topDrawerFrame,
+  truncateDrawerStackTo,
+  updateTopWorkbenchTab,
+  type DrawerFrame,
+} from './drawer-stack-model.js'
 import { isSameLocationState, parseLocationHash, type WorkspaceLocationState } from './url-hash-model.js'
 import type { SseCursor } from './use-sse-events.js'
 import { isConversationStatusActive } from './use-unread-sync.js'
@@ -196,6 +209,7 @@ export interface NavSlice {
   focusedPanel: FocusedPanel
   sidebarCollapsed: boolean
   pendingEscAbortConversationId: number | null
+  drawerStack: DrawerFrame[]
   workbenchOpen: boolean
   workbenchTab: string
   activeModal: ActiveModal
@@ -247,6 +261,11 @@ export type HelmxStoreActions = Pick<
   | 'setScreenParams'
   | 'setWorkbenchOpen'
   | 'setWorkbenchTab'
+  | 'openConversationDrawer'
+  | 'openWorkbenchDrawer'
+  | 'popDrawer'
+  | 'truncateDrawerStack'
+  | 'closeAllDrawers'
   | 'openSpace'
   | 'setActiveModal'
   | 'dismissNotice'
@@ -291,6 +310,7 @@ export type StoreDomainKey =
   | 'focusedPanel'
   | 'sidebarCollapsed'
   | 'pendingEscAbort'
+  | 'drawerStack'
   | 'workbench'
   | 'activeModal'
   | 'locationState'
@@ -513,6 +533,7 @@ export class HelmxExternalStore {
   readonly conversationArtifactsRef: { current: Record<number, ArtifactMetadata[]> } = { current: {} }
   readonly targets: { current: { primaryTarget: ResolvedTarget; splitTarget: ResolvedTarget | null } }
   readonly focusedPanelRef: { current: FocusedPanel } = { current: 'primary' }
+  readonly drawerStackRef: { current: DrawerFrame[] }
   readonly workbenchOpenRef: { current: boolean }
   readonly activeModalRef: { current: ActiveModal }
 
@@ -605,14 +626,18 @@ export class HelmxExternalStore {
       plugins: this.liveState.plugins,
       screens: this.groupedUi.screens,
     }
+    const initialTop = topDrawerFrame(bootLocation.drawerStack)
+    const initialWbOpen = initialTop?.kind === 'workbench'
+    const initialWbTab = initialTop?.kind === 'workbench' ? initialTop.tab : DEFAULT_WORKBENCH_TAB
     this.navState = {
       primaryTarget: bootLocation.primaryTarget,
       splitTarget: bootLocation.splitTarget,
       focusedPanel: 'primary',
       sidebarCollapsed: getStoredSidebarCollapsed(),
       pendingEscAbortConversationId: null,
-      workbenchOpen: bootLocation.workbenchOpen,
-      workbenchTab: bootLocation.workbenchTab,
+      drawerStack: bootLocation.drawerStack,
+      workbenchOpen: initialWbOpen,
+      workbenchTab: initialWbTab,
       activeModal: bootLocation.activeModal,
       highlightedEntry: null,
     }
@@ -628,8 +653,7 @@ export class HelmxExternalStore {
     this.locationStateCache = {
       primaryTarget: this.navState.primaryTarget,
       splitTarget: this.navState.splitTarget,
-      workbenchOpen: this.navState.workbenchOpen,
-      workbenchTab: this.navState.workbenchTab,
+      drawerStack: this.navState.drawerStack,
       activeModal: this.navState.activeModal,
     }
     this.screenLocationSnapshot = buildScreenLocationSnapshot(
@@ -646,6 +670,7 @@ export class HelmxExternalStore {
         splitTarget: this.navState.splitTarget,
       },
     }
+    this.drawerStackRef = { current: this.navState.drawerStack }
     this.workbenchOpenRef = { current: this.navState.workbenchOpen }
     this.activeModalRef = { current: this.navState.activeModal }
 
@@ -685,6 +710,11 @@ export class HelmxExternalStore {
       setScreenParams: this.setScreenParams,
       setWorkbenchOpen: this.setWorkbenchOpen,
       setWorkbenchTab: this.setWorkbenchTab,
+      openConversationDrawer: this.openConversationDrawer,
+      openWorkbenchDrawer: this.openWorkbenchDrawer,
+      popDrawer: this.popDrawer,
+      truncateDrawerStack: this.truncateDrawerStack,
+      closeAllDrawers: this.closeAllDrawers,
       openSpace: this.openSpace,
       setActiveModal: this.setActiveModal,
       dismissNotice: this.dismissNotice,
@@ -803,6 +833,7 @@ export class HelmxExternalStore {
   getFocusedPanel = (): FocusedPanel => this.navState.focusedPanel
   getSidebarCollapsed = (): boolean => this.navState.sidebarCollapsed
   getPendingEscAbort = (): number | null => this.navState.pendingEscAbortConversationId
+  getDrawerStack = (): DrawerFrame[] => this.navState.drawerStack
   getWorkbenchSlice = (): WorkbenchSlice => this.workbenchSlice
   getActiveModal = (): ActiveModal => this.navState.activeModal
   getLocationState = (): WorkspaceLocationState => this.locationStateCache
@@ -1270,11 +1301,20 @@ export class HelmxExternalStore {
     if (next.splitTarget === null && next.focusedPanel !== 'primary') {
       next.focusedPanel = 'primary'
     }
+    const top = topDrawerFrame(next.drawerStack)
+    next.workbenchOpen = top?.kind === 'workbench'
+    if (top?.kind === 'workbench') {
+      next.workbenchTab = top.tab
+    }
     const primaryChanged = next.primaryTarget !== prev.primaryTarget
     const splitChanged = next.splitTarget !== prev.splitTarget
     const focusedChanged = next.focusedPanel !== prev.focusedPanel
     const collapsedChanged = next.sidebarCollapsed !== prev.sidebarCollapsed
     const escChanged = next.pendingEscAbortConversationId !== prev.pendingEscAbortConversationId
+    const drawerStackChanged = !isSameDrawerStack(prev.drawerStack, next.drawerStack)
+    if (!drawerStackChanged) {
+      next.drawerStack = prev.drawerStack
+    }
     const wbChanged = next.workbenchOpen !== prev.workbenchOpen || next.workbenchTab !== prev.workbenchTab
     const modalChanged = next.activeModal !== prev.activeModal
     const highlightChanged = next.highlightedEntry !== prev.highlightedEntry
@@ -1285,6 +1325,7 @@ export class HelmxExternalStore {
       !focusedChanged &&
       !collapsedChanged &&
       !escChanged &&
+      !drawerStackChanged &&
       !wbChanged &&
       !modalChanged &&
       !highlightChanged
@@ -1295,6 +1336,7 @@ export class HelmxExternalStore {
     this.navState = next
     this.targets.current = { primaryTarget: next.primaryTarget, splitTarget: next.splitTarget }
     this.focusedPanelRef.current = next.focusedPanel
+    this.drawerStackRef.current = next.drawerStack
     this.workbenchOpenRef.current = next.workbenchOpen
     this.activeModalRef.current = next.activeModal
 
@@ -1313,6 +1355,7 @@ export class HelmxExternalStore {
     }
     if (collapsedChanged) plan.domains.add('sidebarCollapsed')
     if (escChanged) plan.domains.add('pendingEscAbort')
+    if (drawerStackChanged) plan.domains.add('drawerStack')
     if (wbChanged) {
       this.workbenchSlice = {
         workbenchOpen: next.workbenchOpen,
@@ -1321,12 +1364,11 @@ export class HelmxExternalStore {
       plan.domains.add('workbench')
     }
     if (modalChanged) plan.domains.add('activeModal')
-    if (primaryChanged || splitChanged || wbChanged || modalChanged) {
+    if (primaryChanged || splitChanged || drawerStackChanged || modalChanged) {
       this.locationStateCache = {
         primaryTarget: next.primaryTarget,
         splitTarget: next.splitTarget,
-        workbenchOpen: next.workbenchOpen,
-        workbenchTab: next.workbenchTab,
+        drawerStack: next.drawerStack,
         activeModal: next.activeModal,
       }
       plan.domains.add('locationState')
@@ -1473,8 +1515,8 @@ export class HelmxExternalStore {
         splitTarget: null,
         focusedPanel: 'primary',
         primaryTarget: { kind: 'profiles' },
-        workbenchOpen: false,
-        workbenchTab: 'artifacts',
+        drawerStack: [],
+        workbenchTab: DEFAULT_WORKBENCH_TAB,
         pendingEscAbortConversationId: null,
         highlightedEntry: null,
       },
@@ -1931,25 +1973,91 @@ export class HelmxExternalStore {
     this.patchNav({ sidebarCollapsed: next })
   }
 
+  private resolveActiveStageConversationId(): number | undefined {
+    const focused = resolveFocusedPanel(this.navState.focusedPanel, this.navState.splitTarget)
+    const activeTarget = activeTargetForPanel(this.navState.primaryTarget, this.navState.splitTarget, focused)
+    const fallbackTarget = focused === 'split' ? this.navState.primaryTarget : this.navState.splitTarget
+    if (activeTarget.kind === 'conversation') return activeTarget.conversationId
+    if (fallbackTarget?.kind === 'conversation') return fallbackTarget.conversationId
+    return undefined
+  }
+
+  openConversationDrawer = (conversationId: number): void => {
+    const nextStack = pushDrawerFrame(this.navState.drawerStack, { kind: 'conversation', conversationId })
+    this.patchNav({ drawerStack: nextStack })
+  }
+
+  openWorkbenchDrawer = (options?: { tab?: string; conversationId?: number }): void => {
+    const top = topDrawerFrame(this.navState.drawerStack)
+    const underlyingConvId = topConversationDrawerId(this.navState.drawerStack)
+    const stageConvId = this.resolveActiveStageConversationId()
+    let frameConversationId: number | undefined
+    if (options?.conversationId !== undefined) {
+      frameConversationId =
+        underlyingConvId === undefined && options.conversationId === stageConvId
+          ? undefined
+          : options.conversationId
+    } else if (top?.kind === 'workbench') {
+      frameConversationId = top.conversationId
+    } else if (underlyingConvId !== undefined) {
+      frameConversationId = underlyingConvId
+    }
+    const tab = normalizeWorkbenchTab(
+      options?.tab ?? (top?.kind === 'workbench' ? top.tab : this.navState.workbenchTab),
+    )
+    const nextFrame: DrawerFrame =
+      frameConversationId !== undefined
+        ? { kind: 'workbench', conversationId: frameConversationId, tab }
+        : { kind: 'workbench', tab }
+    const nextStack = pushDrawerFrame(this.navState.drawerStack, nextFrame)
+    this.patchNav({ drawerStack: nextStack, workbenchTab: tab })
+  }
+
+  popDrawer = (): void => {
+    if (this.navState.drawerStack.length === 0) return
+    this.patchNav({ drawerStack: popDrawerFrame(this.navState.drawerStack) })
+  }
+
+  truncateDrawerStack = (index: number): void => {
+    if (this.navState.drawerStack.length === 0) return
+    this.patchNav({ drawerStack: truncateDrawerStackTo(this.navState.drawerStack, index) })
+  }
+
+  closeAllDrawers = (): void => {
+    if (this.navState.drawerStack.length === 0) return
+    this.patchNav({ drawerStack: [] })
+  }
+
+  pruneConversationFromDrawerStack = (conversationId: number): void => {
+    const nextStack = removeConversationFromDrawerStack(this.navState.drawerStack, conversationId)
+    if (nextStack !== this.navState.drawerStack) {
+      this.patchNav({ drawerStack: nextStack })
+    }
+  }
+
   setWorkbenchOpen = (update: StoreUpdater<boolean>): void => {
-    const next = applyUpdater(this.navState.workbenchOpen, update)
-    this.patchNav({ workbenchOpen: next })
+    const currentlyOpen = topDrawerFrame(this.navState.drawerStack)?.kind === 'workbench'
+    const next = applyUpdater(currentlyOpen, update)
+    if (next === currentlyOpen) return
+    if (next) {
+      this.openWorkbenchDrawer()
+    } else {
+      this.popDrawer()
+    }
   }
 
   setWorkbenchTab = (update: StoreUpdater<string>): void => {
-    const next = applyUpdater(this.navState.workbenchTab, update)
-    this.patchNav({ workbenchTab: next })
+    const top = topDrawerFrame(this.navState.drawerStack)
+    const currentTab = top?.kind === 'workbench' ? top.tab : this.navState.workbenchTab
+    const nextTab = normalizeWorkbenchTab(applyUpdater(currentTab, update))
+    const nextStack = updateTopWorkbenchTab(this.navState.drawerStack, nextTab)
+    this.patchNav({ drawerStack: nextStack, workbenchTab: nextTab })
   }
 
   setActiveModal = (update: StoreUpdater<ActiveModal>): void => {
     const next = applyUpdater(this.navState.activeModal, update)
-    const patch: Partial<NavSlice> = { activeModal: next }
-    // 打开会话抽屉即离开工作台「抬升态」：收起旧工作台，避免它隐藏在抽屉之下
-    // 却仍占据 workbenchOpen 语义（工作台改为绑定抽屉会话，经抽屉内按钮显式
-    // 重新打开、叠于抽屉之上）。深链恢复（applyExternalLocation）不走此路径，
-    // `wb` + `modal=drawer` 组合态仍可精确还原。
-    if (next?.kind === 'conversation-drawer') patch.workbenchOpen = false
-    this.patchNav(patch)
+    // 顶层预览弹窗（文件/产物/命令面板）与右侧抽屉栈正交：互不覆盖、各自按叠层关闭。
+    this.patchNav({ activeModal: next })
   }
 
   openTarget = (
@@ -1974,10 +2082,10 @@ export class HelmxExternalStore {
       // 总览不占对话空间记忆位（rememberSpaceTarget 内置守卫，见其注释）。
       this.rememberSpaceTarget(resolved)
       patch.primaryTarget = resolved
-      // 主屏导航离开当前视图时收起覆盖型会话抽屉：抽屉内徽标/通知等触发的
-      // openTarget 若不收抽屉，新目标被全高抽屉遮挡，表现为「点击无反应」。
-      // 深链恢复（applyExternalLocation）不走此路径，wb+modal=drawer 组合仍可精确还原。
-      if (this.navState.activeModal?.kind === 'conversation-drawer') patch.activeModal = null
+      // 主屏导航离开当前视图时收起覆盖型抽屉栈：抽屉内徽标/通知等触发的
+      // openTarget 若不收抽屉，新目标被抽屉遮挡，表现为「点击无反应」。
+      // 深链恢复（applyExternalLocation）不走此路径，组合态仍可精确还原。
+      if (this.navState.drawerStack.length > 0) patch.drawerStack = []
     }
     if (resolved.kind === 'conversation' && opts?.highlightEntryId) {
       patch.highlightedEntry = { conversationId: resolved.conversationId, entryId: opts.highlightEntryId }
@@ -2038,11 +2146,12 @@ export class HelmxExternalStore {
     this.pendingHistoryMode.current = null
     this.lastSyncedLocation.current = parsed
     this.rememberSpaceTarget(parsed.primaryTarget)
+    const top = topDrawerFrame(parsed.drawerStack)
     this.patchNav({
       primaryTarget: parsed.primaryTarget,
       splitTarget: parsed.splitTarget,
-      workbenchOpen: parsed.workbenchOpen,
-      workbenchTab: parsed.workbenchTab,
+      drawerStack: parsed.drawerStack,
+      ...(top?.kind === 'workbench' ? { workbenchTab: top.tab } : {}),
       activeModal: parsed.activeModal,
     })
   }

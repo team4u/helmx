@@ -104,12 +104,10 @@ export function createPluginClientHostPort(store: HelmxExternalStore): PluginCli
         ...(input.whenBusy !== undefined ? { whenBusy: input.whenBusy } : {}),
       })
     },
-
     // ---- Navigation & notifications ----
     openTarget: (target, options) =>
       store.actions.openTarget(target, options?.split === true ? { split: true } : undefined),
-    openConversationDrawer: (conversationId) =>
-      store.actions.setActiveModal({ kind: 'conversation-drawer', conversationId }),
+    openConversationDrawer: (conversationId) => store.actions.openConversationDrawer(conversationId),
     openArtifactPreview: (artifactId, conversationId) =>
       store.actions.setActiveModal({
         kind: 'artifact-preview',

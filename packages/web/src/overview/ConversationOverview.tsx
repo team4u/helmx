@@ -342,7 +342,7 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
     </>
   )
   const { locale, t } = useWebLocale()
-  const { openTarget, closeSplit, setActiveModal, setScreenParams, pushNotice } = useStoreActions()
+  const { openTarget, closeSplit, openConversationDrawer, setScreenParams, pushNotice } = useStoreActions()
   const { background, viewedConversationIds } = useGlobalAttention()
   const conversations = useConversations()
   const plugins = usePlugins()
@@ -610,7 +610,7 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
   }
 
   const drawerPeek = (conversationId: number): void => {
-    setActiveModal({ kind: 'conversation-drawer', conversationId })
+    openConversationDrawer(conversationId)
   }
 
   const openSplit = (conversationId: number): void => {

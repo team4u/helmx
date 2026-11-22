@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode, type RefObject } from 'react'
+import { useState, type ReactNode, type RefObject } from 'react'
 import {
   CopyButton,
   Dialog,
@@ -57,14 +57,10 @@ export function PreviewModalShell({
   const isMobile = useIsMobile(680)
   const isFullscreen = isMobile || desktopFullscreen
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
-
+  // Escape dismissal is delegated strictly to Radix Dialog's DismissableLayer
+  // so nested popovers/menus (e.g. MarkdownOutlinePopover, Select) close first
+  // without tearing down the modal, and modals layered above the drawer stack
+  // close only themselves.
   return (
     <Dialog open inline={inline} onOpenChange={(open) => { if (!open) onClose() }}>
       <DialogPortal inline={inline}>

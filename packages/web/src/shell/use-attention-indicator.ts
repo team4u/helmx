@@ -13,6 +13,7 @@ import {
   useAuthConnection,
   useConversationBackgroundSlice,
   useConversations,
+  useDrawerStack,
   useLocationTargets,
   usePlugins,
   useProfilesSlice,
@@ -38,6 +39,7 @@ export interface GlobalAttentionValue {
 export function useGlobalAttention(): GlobalAttentionValue {
   const { authenticated } = useAuthConnection()
   const { primaryTarget, splitTarget } = useLocationTargets()
+  const drawerStack = useDrawerStack()
   const activeModal = useActiveModal()
   const { badgeDocs, pendingBadgeDocs, snapshot: backgroundSnapshot } = useConversationBackgroundSlice()
   const conversations = useConversations()
@@ -57,8 +59,8 @@ export function useGlobalAttention(): GlobalAttentionValue {
   }, [badgeDocs, pendingBadgeDocs, authenticated, ensurePluginDoc])
 
   const viewedConversationIds = useMemo(
-    () => collectViewedConversationIds({ primaryTarget, splitTarget, activeModal }),
-    [primaryTarget, splitTarget, activeModal],
+    () => collectViewedConversationIds({ primaryTarget, splitTarget, drawerStack, activeModal }),
+    [primaryTarget, splitTarget, drawerStack, activeModal],
   )
   const indicator = useMemo(
     () => buildAttentionModel({ conversations, background, profiles, plugins, viewedConversationIds, t }),

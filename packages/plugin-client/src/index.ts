@@ -179,6 +179,7 @@ export type { DetailDrawerProps } from './ui/DetailDrawer.js'
 
 // ---- Content display ----
 export { MarkdownText } from './markdown.js'
+export type { MarkdownTextProps } from './markdown.js'
 export { MarkdownView, CodeBlockView } from './markdown-host.js'
 export type { MarkdownViewProps, CodeBlockViewProps } from './markdown-host.js'
 export { ToolCallDetails } from './tool-details.js'

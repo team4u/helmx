@@ -470,4 +470,60 @@ describe('WorkspaceFilePreviewModal', { timeout: 60_000 }, () => {
       resetBody()
     }
   })
+
+  test('Escape closes a nested outline popover first without closing PreviewModalShell', { timeout: 60_000 }, async () => {
+    const origFetch = globalThis.fetch
+    const shim = installObjectUrlShim()
+    globalThis.fetch = (async () =>
+      new Response('# Title\n\n## Section A\n\nBody text\n', {
+        status: 200,
+        headers: { 'Content-Type': 'text/markdown; charset=utf-8' },
+      })) as typeof fetch
+
+    let closeCalls = 0
+    const store = makeTestStore({ conversations: [conv(8, '/repo')] })
+    resetBody()
+    const mounted = mount(
+      e(
+        HostStoreProviders,
+        { value: store },
+        e(WorkspaceFilePreviewModal, {
+          conversationId: 8,
+          path: 'docs/guide.md',
+          onClose: () => { closeCalls += 1 },
+          inline: true,
+        }),
+      ),
+    )
+
+    try {
+      await flush()
+      const outlineBtn = document.querySelector<HTMLButtonElement>('button[aria-label*="Markdown outline"]')
+      assert.ok(outlineBtn !== null, 'markdown outline trigger rendered')
+      await act(async () => {
+        outlineBtn!.click()
+      })
+      await flush()
+      assert.ok(document.querySelector('.conversation-outline-popover') !== null, 'outline popover opened')
+
+      // First Escape closes only the outline popover; PreviewModalShell stays open
+      await act(async () => {
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+      })
+      await flush()
+      assert.equal(closeCalls, 0, 'first Escape must not dismiss PreviewModalShell while nested popover is open')
+
+      // Second Escape closes PreviewModalShell itself
+      await act(async () => {
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+      })
+      await flush()
+      assert.equal(closeCalls, 1, 'second Escape closes PreviewModalShell')
+    } finally {
+      mounted.unmount()
+      shim.restore()
+      globalThis.fetch = origFetch
+      resetBody()
+    }
+  })
 })

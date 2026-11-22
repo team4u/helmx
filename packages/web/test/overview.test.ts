@@ -403,7 +403,7 @@ test('#/overview parses and serializes round-trip; belongs to the conversations 
   const parsed = parseLocationHash('#/overview')
   assert.deepEqual(parsed.primaryTarget, { kind: 'overview' })
   assert.equal(hashHasPrimaryTarget('#/overview'), true)
-  assert.equal(formatLocationHash({ ...parsed, splitTarget: null, workbenchOpen: false, workbenchTab: 'artifacts', activeModal: null }), '#/overview')
+  assert.equal(formatLocationHash({ ...parsed, splitTarget: null, drawerStack: [], activeModal: null }), '#/overview')
   assert.equal(spaceForTarget({ kind: 'overview' }), 'conversations', 'the overview is a conversations-space host stage')
   const splitParsed = parseLocationHash('#/overview?split=overview')
   assert.deepEqual(splitParsed.splitTarget, { kind: 'overview' }, 'the overview can ride the split pane (same canonical path via the split param)')
@@ -418,7 +418,7 @@ test('#/overview filter state rides the sp./ssp. route-param namespaces round-tr
   })
   assert.deepEqual(parsed.splitTarget, { kind: 'overview', params: { source: 'managed' } }, 'the split overview carries its own ssp.* filter params')
   // 序列化往返无损（键按字典序稳定输出）。
-  const state = { ...parsed, workbenchOpen: false, workbenchTab: 'artifacts', activeModal: null }
+  const state = { ...parsed, drawerStack: [], activeModal: null }
   const hash = formatLocationHash(state)
   assert.equal(hash, '#/overview?split=overview&sp.bucket=running&sp.profile=coder&sp.q=%E8%B0%83%E7%A0%94&ssp.source=managed')
   assert.deepEqual(parseLocationHash(hash), state, 'round-trip is lossless')
@@ -432,7 +432,7 @@ test('#/overview filter state rides the sp./ssp. route-param namespaces round-tr
     { kind: 'overview', params: { bucket: 'running' } },
   )
   // 历史策略：仅筛选参数变化 replace（不污染后退栈）；坐标级切换 push。
-  const base = { splitTarget: null, workbenchOpen: false, workbenchTab: 'artifacts', activeModal: null }
+  const base = { splitTarget: null, drawerStack: [], activeModal: null }
   assert.equal(
     shouldPushLocationHistory(
       { ...base, primaryTarget: { kind: 'overview' } },
@@ -609,8 +609,8 @@ test('ConversationOverview renders the card grid with honest facts and directly 
       peekItem.click()
     })
     assert.deepEqual(
-      store.getNavSlice().activeModal,
-      { kind: 'conversation-drawer', conversationId: 11 },
+      store.getDrawerStack(),
+      [{ kind: 'conversation', conversationId: 11 }],
       'drawer peek opens the existing conversation drawer at the card target',
     )
 
@@ -2009,8 +2009,8 @@ test('ConversationOverview managed card keeps the view-only menu actions (peek +
       items[0]!.click()
     })
     assert.deepEqual(
-      store.getNavSlice().activeModal,
-      { kind: 'conversation-drawer', conversationId: 7 },
+      store.getDrawerStack(),
+      [{ kind: 'conversation', conversationId: 7 }],
       'drawer peek works on managed cards',
     )
   } finally {

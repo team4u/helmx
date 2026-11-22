@@ -244,7 +244,35 @@ export function panelCloseFailed(err: string, locale: HelmxLocale = DEFAULT_HELM
 }
 
 export function panelRefJumpLabel(seq: number, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
-  return resolveLocalizedText(L(`Jump to post #${seq}`, `跳转到记录 #${seq}`), locale)
+  return resolveLocalizedText(L(`Preview referenced post #${seq}`, `预览引用记录 #${seq}`), locale)
+}
+
+export const PEEK_LOCATE = L('Locate in list', '定位到列表')
+export const PEEK_CLOSE = L('Close preview', '关闭预览')
+export const PEEK_LOAD_FAILED = L('Failed to load referenced post', '引用记录读取失败')
+export const JUMP_BACK_DISMISS = L('Clear jump history', '清除回跳记录')
+
+export function peekRegionAria(seq: number, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  return resolveLocalizedText(L(`Referenced post #${seq}`, `引用记录 #${seq}`), locale)
+}
+
+export function peekBackLabel(seq: number, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  return resolveLocalizedText(L(`Back to #${seq}`, `返回 #${seq}`), locale)
+}
+
+export function peekLoadingLabel(seq: number, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  return resolveLocalizedText(L(`Loading post #${seq}…`, `正在读取记录 #${seq}…`), locale)
+}
+
+export function peekNotFoundLabel(seq: number, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  return resolveLocalizedText(
+    L(`Post #${seq} was not found in this group.`, `该编组中未找到记录 #${seq}。`),
+    locale,
+  )
+}
+
+export function jumpBackLabel(seq: number, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  return resolveLocalizedText(L(`Back to #${seq}`, `返回 #${seq}`), locale)
 }
 
 /**

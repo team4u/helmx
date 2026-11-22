@@ -163,13 +163,24 @@ export const conversationMessages = {
   'conv.pane.conversationDeletedBody': { en: 'Conversation #{id} deleted', 'zh-CN': '会话 #{id} 已删除' },
   'conv.pane.deleteFailed': { en: 'Failed to delete conversation', 'zh-CN': '删除会话失败' },
 
-  // --- Child conversation drawer ---------------------------------------------------
+  // --- Child conversation & stacked inspection drawer ---------------------------------
   'conv.drawer.closeChild': { en: 'Close child conversation drawer', 'zh-CN': '关闭子会话抽屉' },
   'conv.drawer.title': { en: 'Child conversation #{id} drawer', 'zh-CN': '子会话 #{id} 抽屉' },
   'conv.drawer.titleWithName': {
     en: 'Child conversation #{id} · {title} drawer',
     'zh-CN': '子会话 #{id} · {title} 抽屉',
   },
+  'conv.drawer.stackAria': { en: 'Inspection drawer', 'zh-CN': '检视抽屉' },
+  'conv.drawer.breadcrumbAria': { en: 'Drawer navigation trail', 'zh-CN': '抽屉层级路径' },
+  'conv.drawer.backAria': { en: 'Back to {label}', 'zh-CN': '返回上一层：{label}' },
+  'conv.drawer.backLabel': { en: 'Back', 'zh-CN': '返回' },
+  'conv.drawer.openSplit': { en: 'Open in split view', 'zh-CN': '在右侧分屏对照打开' },
+  'conv.drawer.splitLabel': { en: 'Split', 'zh-CN': '分屏' },
+  'conv.drawer.closeAll': { en: 'Close drawer', 'zh-CN': '关闭抽屉' },
+  'conv.drawer.workbenchLabel': { en: 'Workbench', 'zh-CN': '工作台' },
+  'conv.drawer.workbenchForConv': { en: 'Workbench · #{id}', 'zh-CN': '工作台 · #{id}' },
+  'conv.drawer.convLabel': { en: '#{id}', 'zh-CN': '#{id}' },
+  'conv.drawer.convLabelWithName': { en: '#{id} {title}', 'zh-CN': '#{id} {title}' },
 
   // --- Outline popover ---------------------------------------------------------------
   'conv.outline.trigger': { en: 'Outline', 'zh-CN': '大纲' },

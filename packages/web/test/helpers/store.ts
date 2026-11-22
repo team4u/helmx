@@ -51,6 +51,11 @@ export type TestStoreOverrides = Omit<
   | 'setScreenParams'
   | 'setWorkbenchOpen'
   | 'setWorkbenchTab'
+  | 'openConversationDrawer'
+  | 'openWorkbenchDrawer'
+  | 'popDrawer'
+  | 'truncateDrawerStack'
+  | 'closeAllDrawers'
   | 'openSpace'
   | 'setActiveModal'
   | 'dismissNotice'
@@ -88,15 +93,21 @@ export function makeTestStore(overrides: TestStoreOverrides = {}): HelmxExternal
     conversationArtifacts, loadErrors,
     profiles, profilesLoaded, assetsLoaded, models, modelDefaults, providers, credentials, skills, actions,
     primaryTarget, splitTarget, focusedPanel, sidebarCollapsed, pendingEscAbortConversationId,
-    workbenchOpen, workbenchTab, activeModal, highlightedEntry,
+    drawerStack, workbenchOpen, workbenchTab, activeModal, highlightedEntry,
     notices,
   } = overrides
+
+  const initialDrawerStack =
+    drawerStack !== undefined
+      ? drawerStack
+      : workbenchOpen
+        ? [{ kind: 'workbench' as const, tab: workbenchTab ?? 'artifacts' }]
+        : []
 
   const store = new HelmxExternalStore({
     primaryTarget: primaryTarget ?? { kind: 'conversation', conversationId: 1 },
     splitTarget: splitTarget ?? null,
-    workbenchOpen: workbenchOpen ?? false,
-    workbenchTab: workbenchTab ?? 'artifacts',
+    drawerStack: initialDrawerStack,
     activeModal: activeModal ?? null,
   })
   const hydrate = hydrationSurface(store)
@@ -132,6 +143,7 @@ export function makeTestStore(overrides: TestStoreOverrides = {}): HelmxExternal
     focusedPanel: focusedPanel ?? 'primary',
     sidebarCollapsed: sidebarCollapsed ?? false,
     pendingEscAbortConversationId: pendingEscAbortConversationId ?? null,
+    ...(workbenchTab !== undefined ? { workbenchTab } : {}),
     highlightedEntry: highlightedEntry ?? null,
   })
   store.updateLive(() => ({

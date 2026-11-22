@@ -73,8 +73,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
     pushNotice,
     closeSplit,
     openTarget,
-    setWorkbenchTab,
-    setWorkbenchOpen,
+    openWorkbenchDrawer,
   } = useStoreActions()
   const { t } = useWebLocale()
   const conversation = summary ?? detail
@@ -399,17 +398,16 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
           {(workbenchCount > 0 || hasWorkbenchPanel || hasAnyArtifacts) ? (
             <button
               type="button"
-              className={`btn btn-sm${workbenchOpen ? ' btn-primary' : ''}`}
+              className={`btn btn-sm${workbenchOpen && !isDrawer ? ' btn-primary' : ''}`}
               aria-label={workbenchCount > 0 ? t('conv.pane.workbenchWithCount', { count: workbenchCount }) : t('conv.pane.workbench')}
               title={t('conv.pane.workbenchTitle')}
               onClick={() => {
-                // 打开首个可用页签；已打开时保持当前有效页签。
+                // 打开首个可用页签；已打开时保持当前有效页签，并显式绑定当前会话。
                 const target = resolveActiveWorkbenchTab(
-                  workbenchOpen ? workbenchTab : undefined,
+                  workbenchOpen && !isDrawer ? workbenchTab : undefined,
                   workbenchTabs,
                 )
-                if (!workbenchOpen || target !== workbenchTab) setWorkbenchTab(target)
-                setWorkbenchOpen(true)
+                openWorkbenchDrawer({ tab: target, conversationId })
               }}
             >
               <HelmxIcon name="panel-right" size={12} />

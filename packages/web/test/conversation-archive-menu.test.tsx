@@ -154,12 +154,13 @@ function App(): React.ReactNode {
           ...(props.isDrawer ? { onCloseDrawer: () => store.setActiveModal(null) } : {}),
         })
       : null
+  const topDrawer = store.drawerStack[store.drawerStack.length - 1]
   // 折叠组仅随专用用例挂载：它不参与菜单交互断言，归档迁移经 SSE 推送驱动。
   return e(React.Fragment, null,
     pane(store.primaryTarget, `primary:${store.primaryTarget.kind === 'conversation' ? store.primaryTarget.conversationId : 'other'}`),
     pane(store.splitTarget, `split:${store.splitTarget?.kind === 'conversation' ? store.splitTarget.conversationId : 'other'}`, { isSplit: true }),
-    store.activeModal?.kind === 'conversation-drawer'
-      ? pane({ kind: 'conversation', conversationId: store.activeModal.conversationId }, `drawer:${store.activeModal.conversationId}`, { isDrawer: true })
+    topDrawer?.kind === 'conversation'
+      ? pane({ kind: 'conversation', conversationId: topDrawer.conversationId }, `drawer:${topDrawer.conversationId}`, { isDrawer: true })
       : null,
     e(ArchivedConversationsGroup, { background: new Map() }),
   )
@@ -315,7 +316,7 @@ describe("conversation-archive-menu", () => {
 
   test('归档抽屉会话：会话仍可查看，抽屉与主屏均不动', { timeout: 60_000 }, async () => {
     conversations = [summary(1), summary(2)]
-    await mount('#/c/1?modal=drawer&id=2')
+    await mount('#/c/1?drawer=c/2')
     await openMenu(1)
     await clickMenuItem('Archive conversation')
     assert.equal(patchRequests[0]?.url, '/api/conversations/2')

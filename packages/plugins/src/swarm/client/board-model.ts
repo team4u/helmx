@@ -704,7 +704,7 @@ export function extractPostRefs(post: BoardPost): number[] {
   for (const r of post.refs) {
     if (Number.isSafeInteger(r) && r > 0 && r !== post.seq) seen.add(r)
   }
-  const matches = post.body.matchAll(/(?:^|\s|\(|\[)#(\d+)\b/g)
+  const matches = post.body.matchAll(/(?:^|[\s(\[（【，。：；、·])#(\d+)\b/g)
   for (const match of matches) {
     const num = Number(match[1])
     if (Number.isSafeInteger(num) && num > 0 && num !== post.seq) seen.add(num)

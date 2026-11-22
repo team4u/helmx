@@ -396,7 +396,7 @@ describe("unread-visibility", () => {
       await h.waitFor((s) => s.sseConnected && s.conversations.some((conv) => conv.id === 7))
       assert.equal(h.patchCalls.length, 0, 'overview itself does not mark every unread conversation as read')
       await act(async () => {
-        h.store().setActiveModal({ kind: 'conversation-drawer', conversationId: 7 })
+        h.store().openConversationDrawer(7)
       })
       await h.waitFor((s) => h.patchCalls.length === 1 && s.conversations.find((conv) => conv.id === 7)?.unread === false)
       assert.deepEqual(h.patchCalls, [{ id: 7, body: { unread: false } }])

@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useState } from 'react'
 import type { ArtifactMetadata, ConversationSummary } from '@helmx/protocol/browser'
-import { EmptyState, HelmxIcon, Dialog, DialogContent, DialogOverlay, DialogPortal, DialogTitle, Tabs, TabsList, TabsTrigger } from '@helmx/plugin-client'
+import { EmptyState, HelmxIcon, Tabs, TabsList, TabsTrigger } from '@helmx/plugin-client'
 import {
   useConversationArtifacts,
   useConversationDetail,
@@ -12,7 +12,6 @@ import {
 } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
-import { Tooltip } from '../ui/Tooltip.js'
 import { artifactsApi } from '../lib/api.js'
 import { formatBytes, formatFullTimestamp, formatMessageTime } from '../lib/format.js'
 import {
@@ -47,7 +46,7 @@ function ArtifactThumb({ artifactId, filename }: { artifactId: string; filename:
         setThumbUrl(objectUrl)
       })
       .catch(() => {
-        /* 缩略图加载失败时保留默认图标占位 */
+        /* Keep the default icon placeholder when thumbnail loading fails */
       })
     return () => {
       cancelled = true
@@ -79,7 +78,7 @@ function ArtifactCard({
   const { t } = useWebLocale()
   const formatLabel = artifactFormatLabel(artifact.mimeType, artifact.name, t)
   const timestamp = artifact.createdAt > 0 ? formatMessageTime(artifact.createdAt) : ''
-  // 显示格式已由 MIME 推导时不再重复渲染原始 MIME 串（完整 MIME 在预览弹层仍可见）。
+  // Do not duplicate the raw MIME string once the display format is derived from it (full MIME remains visible in preview).
   const mimeRedundant = artifactMimeRedundant(artifact.mimeType, artifact.name)
 
   return (
@@ -246,22 +245,33 @@ function ArtifactsTab({ conversationId }: { conversationId: number }) {
   )
 }
 
-export interface WorkbenchDrawerProps {
+export interface WorkbenchViewProps {
   conversation?: ConversationSummary
-  /** 仅传 ID 时从 store 读取会话。 */
+  /** Conversation ID to scope the workbench (falls back to active primary/split conversation). */
   conversationId?: number
-  /** 测试用内联渲染；生产环境默认 Portal 到 body，脱离主壳层叠上下文。 */
-  inline?: boolean
+  /** Controlled tab value for this frame (defaults to store workbenchTab). */
+  tab?: string
+  /** Callback when the user switches tabs (defaults to store setWorkbenchTab). */
+  onTabChange?: (tab: string) => void
+  /** Only normalize unavailable tabs into the URL when this frame is the visible top frame. */
+  active?: boolean
 }
 
-/** 右侧工作台抽屉：内置产物页签 + 插件 workbench.panel（动态排序与角标）。 */
-export function WorkbenchDrawer(props: WorkbenchDrawerProps) {
-  const inline = props.inline ?? false
+/**
+ * Embedded workbench surface rendered inside DrawerStackShell (and directly in
+ * workbench unit tests): built-in Artifacts tab + plugin workbench.panel tabs.
+ * Close / breadcrumb chrome belongs solely to DrawerStackShell.
+ */
+export function WorkbenchView(props: WorkbenchViewProps) {
   const { primaryTarget, splitTarget } = useLocationTargets()
   const sseConnected = useSseConnected()
-  const { workbenchTab } = useWorkbenchState()
-  const { setWorkbenchTab, setWorkbenchOpen } = useStoreActions()
+  const { workbenchTab: storeWorkbenchTab } = useWorkbenchState()
+  const { setWorkbenchTab } = useStoreActions()
   const { t } = useWebLocale()
+  const active = props.active ?? true
+  const currentTab = props.tab ?? storeWorkbenchTab
+  const handleTabChange = props.onTabChange ?? setWorkbenchTab
+
   const conversationId =
     props.conversation?.id ??
     props.conversationId ??
@@ -274,25 +284,25 @@ export function WorkbenchDrawer(props: WorkbenchDrawerProps) {
   const detail = useConversationDetail(props.conversation === undefined ? conversationId : undefined)
   const conversation = props.conversation ?? summary ?? detail
   const tabs = useWorkbenchTabs(conversationId, conversation)
-  const activeTab = resolveActiveWorkbenchTab(workbenchTab, tabs)
+  const activeTab = resolveActiveWorkbenchTab(currentTab, tabs)
   const activePanel = tabs.find((tab) => tab.id === activeTab && tab.pluginId !== undefined)
   const footerParts = buildWorkbenchFooter(tabs)
+
   useEffect(() => {
-    // 首帧 UI 贡献和会话尚未返回时保留深链；确认不可用后才规范化 URL。
-    if (sseConnected && conversation !== undefined && activeTab !== workbenchTab) setWorkbenchTab(activeTab)
-  }, [sseConnected, conversation, activeTab, workbenchTab, setWorkbenchTab])
+    // Preserve deep links until SSE UI contributions and conversation arrive;
+    // normalize unavailable tabs only while this workbench frame is active on top.
+    if (active && sseConnected && conversation !== undefined && activeTab !== currentTab) {
+      handleTabChange(activeTab)
+    }
+  }, [active, sseConnected, conversation, activeTab, currentTab, handleTabChange])
 
   return (
-    <Dialog open inline={inline} onOpenChange={(open) => { if (!open) setWorkbenchOpen(false) }}>
-      <DialogPortal inline={inline}>
-        <DialogOverlay className="workbench-backdrop" aria-label={t('conv.workbench.close')}>
-          <DialogContent className="helmx-workbench" aria-label={t('conv.workbench.drawerAria')}>
-            <DialogTitle style={{ display: 'none' }}>{t('conv.pane.workbench')}</DialogTitle>
-            <Tabs
+    <div className="helmx-workbench-view">
+      <Tabs
         value={activeTab}
-        onValueChange={(val) => setWorkbenchTab(val)}
+        onValueChange={handleTabChange}
         variant="underline"
-        style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}
+        style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}
       >
         <TabsList asChild>
           <div className="tabs-bar">
@@ -312,17 +322,6 @@ export function WorkbenchDrawer(props: WorkbenchDrawerProps) {
                 </TabsTrigger>
               ))}
             </div>
-            <Tooltip content={t('conv.workbench.close')} side="left">
-              <button
-                type="button"
-                className="btn btn-ghost btn-icon-sm workbench-close-btn"
-                aria-label={t('conv.workbench.close')}
-                title={t('conv.workbench.close')}
-                onClick={() => setWorkbenchOpen(false)}
-              >
-                <HelmxIcon name="x" size={14} />
-              </button>
-            </Tooltip>
           </div>
         </TabsList>
         <div className="workbench-body">
@@ -344,17 +343,14 @@ export function WorkbenchDrawer(props: WorkbenchDrawerProps) {
             <EmptyState compact title={t('conv.workbench.tabUnavailable')} />
           )}
         </div>
-            </Tabs>
-            {footerParts.length > 0 ? (
-              <div className="workbench-footer">
-                {footerParts.map((part) => (
-                  <span key={part} className="badge badge-neutral">{part}</span>
-                ))}
-              </div>
-            ) : null}
-          </DialogContent>
-        </DialogOverlay>
-      </DialogPortal>
-    </Dialog>
+      </Tabs>
+      {footerParts.length > 0 ? (
+        <div className="workbench-footer">
+          {footerParts.map((part) => (
+            <span key={part} className="badge badge-neutral">{part}</span>
+          ))}
+        </div>
+      ) : null}
+    </div>
   )
 }
