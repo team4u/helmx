@@ -31,7 +31,7 @@ Web 主控台基于 React 19 + Vite 6（`packages/web`），交互原语统一 R
 
 - **严禁大面积内联样式**（`style={{ ... }}`）：除极少数动态计算的尺寸/坐标外，排版、间距与颜色一律使用设计系统原语类与 CSS 变量；
 - 常用通用类速查：分栏 `.modal-body-split` / `.modal-sidebar`；列表行 `.list-item-btn`；平坦分节 `.section-flat` 系列；表单 `.form-grid` / `.form-grid-label`；空状态 `.empty-state`；表格 `.helmx-table-wrap` / `.helmx-table`（统一内边距、12.5px 字体、表头 `var(--bg-subtle)`、`tr:hover`）；插件页面 `.screen-container` / `.screen-header` / `.screen-section`；工具栏行 `.screen-toolbar` / `.screen-toolbar-actions`（内含 `.search-box` 自动获得伸展权重）；键值 `.kv-grid` / `.kv-list`；提示横幅 `.callout`（`.callout-warn/-error/-ok`）；加载态 `.loading-state`；
-- **插件布局原语组件**（`@helmx/plugin-client` 导出，优先复用不要手写 div+className）：`Screen`（页面容器+页头）、`ScreenSection`（分节）、`ScreenToolbar`（页头与正文之间的工具栏行）、`DataTable`（统一 loading/empty 的表格外壳）、`KvGrid`（键值概览）；屏内嵌套组件读参数用 `useScreenParams()`（宿主 `ScreenHost` 建立的屏内 scope，非全屏上下文返回 `null`）；
+- **插件布局原语组件**（`@helmx/plugin-client` 导出，优先复用不要手写 div+className）：`Screen`（页面容器+页头）、`ScreenSection`（分节）、`ScreenToolbar`（页头与正文之间的工具栏行）、`DataTable`（统一 loading/empty 的表格外壳）、`KvGrid`（键值概览）、`DetailDrawer`（右侧详情抽屉外壳）、`SearchBox`、`EmptyState`、`LoadingState`、`StatusLight`、`ThinkingLevelControl`；屏内嵌套组件读参数用 `useScreenParams()`（宿主 `ScreenHost` 建立的屏内 scope，非全屏上下文返回 `null`）；
 - **强制样式复用铁律**：全仓所有插件必须优先复用主框架设计系统原语，严禁在插件内复制通用表格、页面布局、键值列表或提示条样式；插件本地 `.css` 只写业务特异结构（如 Mermaid 缩放画布、Workflow DAG 卡片、Apps 启动台网格）。
 
 ### Radix UI 唯一无头交互原语底座
@@ -40,11 +40,11 @@ Web 主控台基于 React 19 + Vite 6（`packages/web`），交互原语统一 R
 
 | 场景 | 用什么 |
 | :--- | :--- |
-| 弹窗与抽屉 | SDK `Dialog` 封装；Web 危险确认用 `AlertDialog` |
+| 弹窗与抽屉 | SDK `Dialog` / `DetailDrawer`；危险确认用 SDK `AlertDialog` / `ConfirmDialog` |
 | 下拉选择 | **全仓严禁原生 `<select>`**，统一 SDK `Select` / `MultiSelect`（无障碍 combobox 契约） |
-| 下拉菜单与气泡 | Web `DropdownMenu`；共享气泡 SDK `Popover` |
+| 下拉菜单与气泡 | SDK `DropdownMenu`；共享气泡 SDK `Popover` |
 | 标签页与分段 | SDK `Tabs` / `SegmentedControl` |
-| 轻量提示 / 开关勾选 | Web `Tooltip`；SDK `Switch` / `Checkbox` |
+| 轻量提示 / 开关勾选 | SDK `Tooltip`（全局由 `App` 的 `TooltipProvider` 托管 `skipDelayDuration`）；SDK `Switch` / `Checkbox` |
 
 SDK 不导入 Web store、路由或渲染实现。`HelmxStoreProvider` 经 `PluginClientHostContext` 注入真实数据与宿主能力；插件与宿主共享同一 SDK 上下文实例。
 

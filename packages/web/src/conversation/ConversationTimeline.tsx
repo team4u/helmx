@@ -13,6 +13,7 @@ import {
   CopyButton,
   createTimelineToolCallsStore,
   TimelineToolCallsContext,
+  Tooltip,
 } from '@helmx/plugin-client'
 import {
   useConversationDetail,
@@ -65,7 +66,6 @@ import {
 import { matchTimelineEntryActions, timelineEntryActionContextOf } from './action-model.js'
 import { LazyMount } from '../ui/LazyMount.js'
 import { PluginMicroAction } from '../ui/PluginMicroAction.js'
-import { Tooltip } from '../ui/Tooltip.js'
 import { formatBytes, formatDurationMs, formatFullTimestamp, formatMessageTime } from '../lib/format.js'
 
 export interface OutlineScrollRequest {

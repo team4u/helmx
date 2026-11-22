@@ -3,7 +3,7 @@ import type { ComposerScopeProps, ConversationSummary } from '@helmx/protocol/br
 import { COMPOSER_DOCK_SLOT, COMPOSER_STATUS_SLOT, resolveLocalizedText } from '@helmx/protocol/browser'
 import { conversationsApi } from '../lib/api.js'
 import { buildSlashMenuItems, pluginSlashCommandsFor } from '../lib/commands-model.js'
-import { HelmxIcon, PluginSlot } from '@helmx/plugin-client'
+import { HelmxIcon, PluginSlot, Tooltip } from '@helmx/plugin-client'
 import { matchesUiScope } from '../lib/types.js'
 import {
   useConversationDetail,
@@ -26,7 +26,6 @@ import { CommandPopover } from './CommandPopover.js'
 import { ModelPicker } from './ModelPicker.js'
 import { SessionEnvBar } from './SessionEnvBar.js'
 import { ComposerSendControls } from './ComposerSendControls.js'
-import { Tooltip } from '../ui/Tooltip.js'
 import { useComposerController } from './composer-controller.js'
 import { autoGrowTextarea, useComposerPopovers, useElementWidthResize } from './use-composer-popovers.js'
 import { useConversationDirtySink } from './conversation-window-model.js'

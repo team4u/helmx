@@ -19,7 +19,16 @@
 import { useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ConversationSummary } from '@helmx/protocol/browser'
-import { ConfirmDialog, HelmxIcon } from '@helmx/plugin-client'
+import {
+  ConfirmDialog,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuPortal,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+  HelmxIcon,
+} from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { useGroupedUi, useStoreActions } from '../lib/store-context.js'
 import { conversationsApi } from '../lib/api.js'
@@ -27,14 +36,6 @@ import { PluginMicroAction } from './PluginMicroAction.js'
 import { matchConversationActions } from '../conversation/action-model.js'
 import { isConversationArchived } from '../conversation/archive-model.js'
 import { patchConversationArchived } from '../shell/archive-ops.js'
-import {
-  DropdownMenu,
-  DropdownMenuPortal,
-  DropdownMenuTrigger,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-} from './DropdownMenu.js'
 import {
   isConversationArchivable,
   isConversationDeletable,

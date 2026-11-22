@@ -37,7 +37,21 @@ import { HubUpgradedNotice } from './HubUpgradedNotice.js'
 import { useEffect, useId, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ConversationSummary } from '@helmx/protocol/browser'
-import { ConfirmDialog, HelmxIcon, Checkbox, PluginSlot, SearchBox, SegmentedControl, Select } from '@helmx/plugin-client'
+import {
+  Checkbox,
+  ConfirmDialog,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuPortal,
+  DropdownMenuTrigger,
+  HelmxIcon,
+  PluginSlot,
+  SearchBox,
+  SegmentedControl,
+  Select,
+  Tooltip,
+} from '@helmx/plugin-client'
 import { OVERVIEW_CARD_META_SLOT } from '@helmx/protocol/browser'
 import {
   useAuthConnection,
@@ -50,14 +64,6 @@ import {
 } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
-import { Tooltip } from '../ui/Tooltip.js'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuPortal,
-  DropdownMenuTrigger,
-} from '../ui/DropdownMenu.js'
 import { ConversationRowActionsMenu } from '../ui/ConversationRowActionsMenu.js'
 import { conversationsApi } from '../lib/api.js'
 import { isConversationArchived } from '../conversation/archive-model.js'

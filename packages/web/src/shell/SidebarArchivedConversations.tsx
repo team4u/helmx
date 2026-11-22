@@ -18,7 +18,7 @@
  */
 import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import { Checkbox, ConfirmDialog, HelmxIcon } from '@helmx/plugin-client'
+import { Checkbox, ConfirmDialog, HelmxIcon, Tooltip } from '@helmx/plugin-client'
 import { conversationsApi } from '../lib/api.js'
 import {
   useConversations,
@@ -30,7 +30,6 @@ import {
   type LocationTargetsSlice,
 } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
-import { Tooltip } from '../ui/Tooltip.js'
 import { ConversationRowActionsMenu } from '../ui/ConversationRowActionsMenu.js'
 import {
   activeConversationIdsOf,

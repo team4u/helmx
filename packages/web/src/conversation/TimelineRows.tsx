@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ToolViewSpec } from '@helmx/protocol/browser'
-import { HelmxIcon } from '@helmx/plugin-client'
+import { HelmxIcon, Tooltip } from '@helmx/plugin-client'
 import { PluginUiView } from '../ui/PluginUiView.js'
 import { ToolExpandedBody, ToolRawBody } from './ToolExpandedBody.js'
 import { MarkdownView } from './MarkdownView.js'
@@ -17,7 +17,6 @@ import { summarizeStepGroup, toolRowStats } from './tool-body-model.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { formatDurationMs } from '../lib/format.js'
 import { serverNow } from '../lib/server-clock.js'
-import { Tooltip } from '../ui/Tooltip.js'
 
 // ---------------------------------------------------------------------------
 // 工具单行轨迹 / 思考折叠组（ConversationTimeline 的行级渲染单元）

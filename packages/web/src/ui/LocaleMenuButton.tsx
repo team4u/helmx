@@ -1,17 +1,17 @@
 import { useState, type ReactNode } from 'react'
-import { HelmxIcon } from '@helmx/plugin-client'
-import { useWebLocale } from '../i18n/use-web-locale.js'
-import { useStoreActions, useThemePreferencesState } from '../lib/store-context.js'
-import { resolveBrowserLocale } from '../lib/theme-preferences.js'
-import type { LocalePreference } from '../lib/types.js'
 import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuPortal,
   DropdownMenuRoot,
   DropdownMenuTrigger,
-} from './DropdownMenu.js'
-import { Tooltip } from './Tooltip.js'
+  HelmxIcon,
+  Tooltip,
+} from '@helmx/plugin-client'
+import { useWebLocale } from '../i18n/use-web-locale.js'
+import { useStoreActions, useThemePreferencesState } from '../lib/store-context.js'
+import { resolveBrowserLocale } from '../lib/theme-preferences.js'
+import type { LocalePreference } from '../lib/types.js'
 
 export interface LocaleMenuButtonProps {
   className?: string
