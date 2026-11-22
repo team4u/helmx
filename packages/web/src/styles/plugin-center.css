@@ -173,7 +173,8 @@
   flex-shrink: 0;
 }
 
-.plugin-card-open-btn {
+.plugin-card-open-btn,
+.plugin-card-split-btn {
   color: var(--fg-muted);
 }
 
@@ -401,7 +402,8 @@
 }
 
 @media (max-width: 860px) {
-  .plugin-drawer-split-btn {
+  .plugin-drawer-split-btn,
+  .plugin-card-split-btn {
     display: none !important;
   }
 }

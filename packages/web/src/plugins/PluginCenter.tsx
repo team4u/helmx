@@ -3,7 +3,7 @@ import type { PluginSummary } from '@helmx/protocol/browser'
 import { resolveLocalizedText } from '@helmx/protocol/browser'
 import { ApiClientError, pluginsApi } from '../lib/api.js'
 import { HelmxIcon, SearchBox } from '@helmx/plugin-client'
-import { useLocationTargets, usePlugins, useStoreActions } from '../lib/store-context.js'
+import { useLocationTargets, useOptionalGroupedUi, usePlugins, useStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { PluginCard } from './PluginCard.js'
 import { PluginDetailDrawer } from './PluginDetailDrawer.js'
@@ -16,7 +16,7 @@ import {
   type PluginStatusFilter,
 } from './plugin-center-model.js'
 
-const PLUGIN_STATUS_TABS: PluginStatusFilter[] = ['all', 'enabled', 'disabled']
+const PLUGIN_STATUS_TABS: PluginStatusFilter[] = ['all', 'views', 'enabled', 'disabled']
 
 export interface PluginCenterProps {
   isSplit?: boolean
@@ -40,6 +40,7 @@ export function PluginCenter({
   inlineDrawer = false,
 }: PluginCenterProps): React.JSX.Element {
   const plugins = usePlugins() ?? []
+  const groupedUi = useOptionalGroupedUi()
   const { primaryTarget, splitTarget } = useLocationTargets()
   const { syncPlugins, openTarget, closeSplit, pushNotice } = useStoreActions()
   const { locale, t } = useWebLocale()
@@ -51,11 +52,11 @@ export function PluginCenter({
   const [refreshTick, setRefreshTick] = useState(0)
   const refreshGeneration = React.useRef(0)
 
-  const statusSummary = useMemo(() => summarizePlugins(plugins), [plugins])
+  const statusSummary = useMemo(() => summarizePlugins(plugins, groupedUi), [plugins, groupedUi])
 
   const filteredPlugins = useMemo(() => {
-    return filterPlugins(plugins, { query, status: statusFilter }, locale)
-  }, [plugins, query, statusFilter, locale])
+    return filterPlugins(plugins, { query, status: statusFilter }, locale, groupedUi)
+  }, [plugins, query, statusFilter, locale, groupedUi])
 
   const currentTarget = isSplit ? splitTarget : primaryTarget
   const selectedPluginId =
@@ -236,9 +237,11 @@ export function PluginCenter({
             const count =
               statusKey === 'all'
                 ? statusSummary.total
-                : statusKey === 'enabled'
-                  ? statusSummary.enabled
-                  : statusSummary.disabled
+                : statusKey === 'views'
+                  ? statusSummary.withViews
+                  : statusKey === 'enabled'
+                    ? statusSummary.enabled
+                    : statusSummary.disabled
             const isActive = statusFilter === statusKey
             return (
               <button

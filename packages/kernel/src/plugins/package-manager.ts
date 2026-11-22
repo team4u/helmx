@@ -23,7 +23,7 @@
  * - In-process execution disclosure: doctor/register/enable run plugin code inside the Hub process with
  *   full host permissions; this manager enforces managed path boundaries only, never claiming sandboxing.
  */
-import { cp, mkdir, mkdtemp, readdir, readFile, rename, rm, stat } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readdir, readFile, realpath, rename, rm, stat } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { resolveNpmCommand, runControlledProcess, type ResolveNpmCommandIo } from '@helmx/env-io';
@@ -247,8 +247,11 @@ export class PluginPackageManager {
    * atomic move into managed directory -> persist record -> register (disabled by default).
    *
    * Transactional semantics (no partial artifacts, live instance stays safe):
-   * - Duplicate install protection: existing managed record or registered instance rejects with 409
-   *   `plugin_package_already_installed`;
+   * - Idempotent local-directory reinstall: when `source` is a local directory whose resolved plugin ID is
+   *   already installed from the same canonical local directory, performs an atomic hot update/reinstall
+   *   (preserving existing `ctx.doc` data and ensuring enabled when `options.enable !== false`);
+   * - Duplicate install protection: existing managed record from a different source (or non-local source),
+   *   or an unmanaged registered instance, rejects with 409 `plugin_package_already_installed`;
    * - Target occupancy protection: existing target directory rejects with 409 without deleting first;
    * - Post-rename failure (register / persist): removes new target and cleans staging completely;
    * - With `enable: true`, enable failure surfaces via `enableError` without rolling back installation.
@@ -275,8 +278,17 @@ export class PluginPackageManager {
             { source: parsed, staging: payloadDir, report },
           );
         }
-        // Duplicate install protection: reject if a managed record or registered instance already exists.
-        if (this.store.getRecord(pluginId) !== undefined) {
+        // Duplicate install protection: same canonical local directory performs an idempotent hot update/reinstall;
+        // any different source (or non-local source) rejects honestly with 409 plugin_package_already_installed.
+        const existingRecord = this.store.getRecord(pluginId);
+        if (existingRecord !== undefined) {
+          const sameLocalSource =
+            parsed.kind === 'local' &&
+            existingRecord.source.kind === 'local' &&
+            (await canonicalLocalPath(parsed.path)) === (await canonicalLocalPath(existingRecord.source.path));
+          if (sameLocalSource) {
+            return await this.reinstallSameLocalSource(existingRecord, parsed, payloadDir, staging, options);
+          }
           throw new HelmxError(
             'plugin_package_already_installed',
             `plugin ${pluginId} is already installed via package manager (run update or remove before reinstalling)`,
@@ -414,6 +426,103 @@ export class PluginPackageManager {
         await rm(staging, { recursive: true, force: true }).catch(() => {});
       }
     });
+  }
+
+  /**
+   * Idempotent hot update/reinstall for an already-installed plugin from the same canonical local directory:
+   * - Safety preflight (`assertManagedPluginUpdateSafe`) protects live tasks / busy providers;
+   * - Atomic swap + hot reload preserves existing `ctx.doc` persistent data (never calls `purgePluginPersistentData`);
+   * - Ensures the plugin is enabled when `options.enable !== false` (surfacing any enable error honestly via `enableError`).
+   */
+  private async reinstallSameLocalSource(
+    existingRecord: PluginPackageRecord,
+    parsed: Extract<PluginPackageSource, { kind: 'local' }>,
+    payloadDir: string,
+    staging: string,
+    options: { enable?: boolean },
+  ): Promise<PluginInstallResult> {
+    const pluginId = existingRecord.pluginId;
+    const isRegistered = this.host.listSummaries().some((s) => s.id === pluginId);
+    if (isRegistered) {
+      await this.host.assertManagedPluginUpdateSafe(pluginId);
+    }
+    const target = existingRecord.installPath;
+    assertInsideDataDir(this.pluginsDir(), target);
+    const backup = join(staging, 'backup');
+    if (await pathExists(target)) {
+      await rename(target, backup);
+    }
+    try {
+      await rename(payloadDir, target);
+    } catch (err) {
+      if (await pathExists(backup)) await rename(backup, target).catch(() => {});
+      throw err;
+    }
+    let summary: PluginSummary;
+    try {
+      if (isRegistered) {
+        ({ summary } = await this.host.updateManagedPlugin(pluginId, target, { keepEnabled: true }));
+      } else {
+        ({ summary } = await this.host.registerManagedPlugin(target, { enabled: false }));
+      }
+    } catch (reloadError) {
+      let rollbackError: { message: string } | undefined;
+      try {
+        await rename(target, join(staging, 'failed-new'));
+        if (await pathExists(backup)) await rename(backup, target);
+      } catch (rollbackErr) {
+        rollbackError = {
+          message: `directory restore failed: ${rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr)}`,
+        };
+      }
+      if (rollbackError === undefined && isRegistered) {
+        try {
+          await this.host.updateManagedPlugin(pluginId, target, { keepEnabled: true });
+        } catch (restoreErr) {
+          rollbackError = {
+            message: `old directory restored, but old instance reload failed: ${restoreErr instanceof Error ? restoreErr.message : String(restoreErr)}`,
+          };
+        }
+      }
+      throw new HelmxError(
+        'plugin_package_update_failed',
+        `plugin ${pluginId} reinstall reload failed ${rollbackError === undefined ? '(rolled back to previous version)' : `(incomplete rollback: ${rollbackError.message})`}: ${reloadError instanceof Error ? reloadError.message : String(reloadError)}`,
+        500,
+        {
+          pluginId,
+          installPath: target,
+          rolledBack: rollbackError === undefined,
+          ...(rollbackError !== undefined ? { rollbackError } : {}),
+          cause: reloadError instanceof Error ? { message: reloadError.message, stack: reloadError.stack } : undefined,
+        },
+      );
+    }
+    let enableError: { message: string; code: string } | undefined;
+    if (options.enable !== false && !summary.enabled) {
+      try {
+        summary = await this.host.enableManagedPlugin(pluginId);
+      } catch (err) {
+        enableError = {
+          message: err instanceof Error ? err.message : String(err),
+          code: err instanceof HelmxError ? err.code : 'plugin_enable_failed',
+        };
+        const fallback = this.host.listSummaries().find((s) => s.id === pluginId);
+        summary = { ...summary, ...(fallback !== undefined ? { enabled: fallback.enabled } : {}) };
+      }
+    }
+    const updated = await this.store.save({
+      pluginId,
+      source: parsed,
+      installPath: target,
+      version: summary.version ?? '',
+      installedAt: existingRecord.installedAt,
+      updatedAt: Date.now(),
+    });
+    return {
+      record: updated,
+      summary: this.attachManaged(summary, updated),
+      ...(enableError !== undefined ? { enableError } : {}),
+    };
   }
 
   /** Attach managed package metadata (`PluginSummary.managed`). */
@@ -740,6 +849,16 @@ export class PluginPackageManager {
       throw commandError('install', cmd, args, result);
     }
     return result;
+  }
+}
+
+/** Resolves a local path to its canonical real path (following symlinks; falls back to lexical resolve when absent). */
+async function canonicalLocalPath(target: string): Promise<string> {
+  const resolved = resolve(target);
+  try {
+    return await realpath(resolved);
+  } catch {
+    return resolved;
   }
 }
 

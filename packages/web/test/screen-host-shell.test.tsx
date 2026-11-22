@@ -315,7 +315,7 @@ describe("screen-host-shell", () => {
           title: '应用 demo-1 已就绪',
           body: 'x'.repeat(200),
           createdAt: 3000,
-          view: 'screen:builtin:apps/catalog?app=demo-1',
+          view: 'screen:demo-desk/main?app=demo-1',
         },
         { id: 'n-conv', type: 'notification', level: 'info', title: 'legacy', createdAt: 3100, conversationId: 42 },
         { id: 'n-bad', type: 'notification', level: 'info', title: 'broken target', createdAt: 3200, view: 'not-a-target' },
@@ -345,8 +345,8 @@ describe("screen-host-shell", () => {
     assert.equal(openedTargets.length, 1)
     assert.deepEqual(openedTargets[0], {
       kind: 'screen',
-      pluginId: 'builtin:apps',
-      screenId: 'catalog',
+      pluginId: 'demo-desk',
+      screenId: 'main',
       params: { app: 'demo-1' },
     })
     assert.equal(dismissedIds[0], 'n-view', '点击查看后应关闭对应气泡')

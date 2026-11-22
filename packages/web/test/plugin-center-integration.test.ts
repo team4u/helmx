@@ -207,7 +207,7 @@ test('PluginCenter DOM 交互：搜索过滤实时联动', { timeout: 60_000 }, 
   host.remove()
 })
 
-test('PluginCenter DOM 交互：渲染「全部 / 已启用 / 已停用」筛选药丸并支持切换过滤', { timeout: 60_000 }, async () => {
+test('PluginCenter DOM 交互：渲染「全部 / 应用视图 / 已启用 / 已停用」筛选药丸并支持切换过滤', { timeout: 60_000 }, async () => {
   const { PluginCenter } = await import('../src/plugins/PluginCenter.js')
   const host = document.createElement('div')
   document.body.appendChild(host)
@@ -215,6 +215,18 @@ test('PluginCenter DOM 交互：渲染「全部 / 已启用 / 已停用」筛选
 
   const store = makeTestStore({
     plugins: mockPlugins,
+    uiContributions: [
+      {
+        pluginId: 'builtin:triggers',
+        surface: 'screen',
+        spec: { id: 'main', label: 'Triggers', client: { module: 'index.tsx', export: 'Triggers' } },
+      },
+      {
+        pluginId: 'tools:calculator',
+        surface: 'screen',
+        spec: { id: 'calc', label: 'Calculator', client: { module: 'index.tsx', export: 'Calc' } },
+      },
+    ] as import('../src/lib/types.js').HelmxStoreValue['uiContributions'],
     primaryTarget: { kind: 'plugins' },
   })
 
@@ -226,7 +238,17 @@ test('PluginCenter DOM 交互：渲染「全部 / 已启用 / 已停用」筛选
     const enabledCount = mockPlugins.filter((p) => p.enabled).length
     const disabledCount = mockPlugins.filter((p) => !p.enabled).length
     const tabs = Array.from(host.querySelectorAll<HTMLButtonElement>('[role="tab"]'))
-    assert.equal(tabs.length, 3, '应渲染 全部 / 已启用 / 已停用 三个状态药丸')
+    assert.equal(tabs.length, 4, '应渲染 全部 / 应用视图 / 已启用 / 已停用 四个筛选药丸')
+
+    const viewsTab = tabs.find((t) => t.textContent?.includes('With views'))
+    assert.ok(viewsTab, '应渲染 With views 筛选药丸')
+    assert.match(viewsTab.textContent ?? '', /2/)
+    await act(async () => {
+      viewsTab.click()
+    })
+    const viewCardIds = Array.from(host.querySelectorAll('.plugin-card')).map((el) => el.getAttribute('data-plugin-id'))
+    assert.deepEqual(viewCardIds, ['builtin:triggers', 'tools:calculator'])
+
     const disabledTab = tabs.find((t) => t.textContent?.includes('Disabled'))
     assert.ok(disabledTab)
     assert.match(disabledTab.textContent ?? '', new RegExp(String(disabledCount)))
@@ -340,6 +362,7 @@ test('PluginCenter SSR：zh-CN locale 渲染中文标题、筛选标签与空状
   assert.match(html, /安装插件/)
   assert.match(html, /搜索插件名称、ID、Tool 或 Action…/)
   assert.match(html, /全部/)
+  assert.match(html, /应用视图/)
   assert.match(html, /已启用/)
   assert.match(html, /已停用/)
   assert.doesNotMatch(html, /Plugin Center/)

@@ -40,7 +40,7 @@ helmx start
 ## 文档
 
 - 定时跑任务或接收外部事件，见 [Cron 与 Webhook](docs/plugins/triggers.md) 和 [SuperAgent](docs/plugins/superagent.md)。
-- 想把经常做的事做成浏览器里能直接打开的工具，见 [应用中心](docs/plugins/apps.md) 和 [插件开发](docs/plugins/plugin-development.md)。
+- 想把经常做的事做成浏览器里能直接打开的工具（在插件中心按应用视图筛选与打开），见 [插件开发](docs/plugins/plugin-development.md)。
 - [文档目录](docs/README.md) 收录了 [CLI 手册](docs/cli/reference.md)、[架构说明](docs/architecture/overview.md) 和其他参考资料。
 
 Helmx 采用单管理员账户。插件和 shell 命令以执行它们的进程权限运行。项目仍在开发，接口和数据格式可能随版本变化。 [部署与凭据](docs/getting-started/installation.md) · [插件权限](docs/plugins/overview.md)

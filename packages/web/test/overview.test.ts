@@ -764,7 +764,7 @@ test('ConversationOverview restores filter state from a deep-linked #/overview?s
 
 test('ConversationOverview source filter: appears only with managed trees, narrows the grid per source', { timeout: 60_000 }, async () => {
   const appSection = {
-    pluginId: 'builtin:apps',
+    pluginId: 'demo-desk',
     surface: 'sidebar.section' as const,
     spec: { id: 'app-runs', label: { en: 'App runs' }, icon: 'check-square', filterTag: 'app' },
   }
@@ -869,7 +869,7 @@ test('ConversationOverview source filter: appears only with managed trees, narro
 
 test('ConversationOverview card meta slot: contributions render with tree props; no contribution leaves zero residue', { timeout: 60_000 }, async () => {
   const received: Array<Record<string, unknown>> = []
-  seedPluginClientModule('builtin:apps', 'overview-meta.tsx', {
+  seedPluginClientModule('demo-desk', 'overview-meta.tsx', {
     AppOverviewCardMeta: (props: Record<string, unknown>) => {
       received.push(props)
       const root = props['rootConversation'] as { id: number }
@@ -887,7 +887,7 @@ test('ConversationOverview card meta slot: contributions render with tree props;
     },
   })
   const slotContribution = {
-    pluginId: 'builtin:apps',
+    pluginId: 'demo-desk',
     surface: 'plugin.slot' as const,
     spec: {
       id: 'overview-card-meta',
@@ -904,7 +904,7 @@ test('ConversationOverview card meta slot: contributions render with tree props;
     ],
     // clientHashes 对齐 seedPluginClientModule 的 contentHash（'seeded'）：
     // PluginUiView 走内存缓存快路径，零网络请求（about:blank 下相对 URL fetch 必炸）。
-    plugins: [{ id: 'builtin:apps', name: 'Apps', version: '0.0.0', enabled: true, locked: false, hooks: [], actions: [], tools: [], clientHashes: { 'overview-meta.tsx': 'seeded' } }],
+    plugins: [{ id: 'demo-desk', name: 'Apps', version: '0.0.0', enabled: true, locked: false, hooks: [], actions: [], tools: [], clientHashes: { 'overview-meta.tsx': 'seeded' } }],
     primaryTarget: { kind: 'overview' },
     uiContributions: [slotContribution],
   })
@@ -1064,12 +1064,12 @@ test('MobileQuickNav: one-tap direct navigation with the shared count badge; ent
     primaryTarget: { kind: 'conversation', conversationId: 2 },
   })
   const quickEntry = {
-    key: 'builtin:apps/app-center',
-    pluginId: 'builtin:apps',
+    key: 'demo-desk/app-center',
+    pluginId: 'demo-desk',
     label: 'App Center',
     icon: 'check-square',
     order: 5,
-    target: { kind: 'screen', pluginId: 'builtin:apps', screenId: 'app-center' } as const,
+    target: { kind: 'screen', pluginId: 'demo-desk', screenId: 'app-center' } as const,
   }
   const container = document.createElement('div')
   document.body.appendChild(container)
@@ -1168,7 +1168,7 @@ test('MobileQuickNav: one-tap direct navigation with the shared count badge; ent
       renderNav(
         overviewStore({
           conversations: [conv({ id: 2, title: '在跑的调研', profileId: 'coder', status: 'working', createdAt: 8000, updatedAt: 8000 })],
-          primaryTarget: { kind: 'screen', pluginId: 'builtin:apps', screenId: 'app-center' },
+          primaryTarget: { kind: 'screen', pluginId: 'demo-desk', screenId: 'app-center' },
         }),
         quickEntry,
       )
@@ -1259,12 +1259,12 @@ test('ConversationOverview data-ready gate: loading state before the first snaps
 
 function quickNavItem(badge?: SidebarViewItem['badge']): SidebarViewItem {
   return {
-    key: 'builtin:apps/app-center',
-    pluginId: 'builtin:apps',
+    key: 'demo-desk/app-center',
+    pluginId: 'demo-desk',
     label: 'App Center',
     icon: 'check-square',
     order: 5,
-    target: { kind: 'screen', pluginId: 'builtin:apps', screenId: 'app-center' },
+    target: { kind: 'screen', pluginId: 'demo-desk', screenId: 'app-center' },
     badge,
   }
 }
@@ -1425,7 +1425,7 @@ function batchScenarioStore(): HelmxExternalStore {
     primaryTarget: { kind: 'overview' },
     uiContributions: [
       {
-        pluginId: 'builtin:apps',
+        pluginId: 'demo-desk',
         surface: 'sidebar.section' as const,
         spec: { id: 'app-conversations', label: { en: 'Apps' }, filterTag: 'app' },
       },
@@ -1972,7 +1972,7 @@ test('ConversationOverview new topic: no creatable agent renders no button', { t
 
 test('ConversationOverview managed card keeps the view-only menu actions (peek + right split)', { timeout: 60_000 }, async () => {
   const appSection = {
-    pluginId: 'builtin:apps',
+    pluginId: 'demo-desk',
     surface: 'sidebar.section' as const,
     spec: { id: 'app-runs', label: { en: 'App runs' }, icon: 'check-square', filterTag: 'app' },
   }

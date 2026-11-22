@@ -23,7 +23,11 @@
  *   dependent on any particular conversation existing).
  */
 import { HelmxError, escapeXml, isAbsoluteTargetPath, isPluginSummaryActive, isSkillAvailable, pathRulesForShape, targetPathShape, type HelmxHostProfilesPort, type JsonSchema, type PluginDefinition, type Profile, type SkillSummary } from '@helmx/protocol';
-import { HELMX_CLI_SKILL_ASSET, PROFILE_MANAGED_BY } from './profile/assets.js';
+import {
+  APP_BUILDER_SKILL_ASSET,
+  HELMX_CLI_SKILL_ASSET,
+  PROFILE_MANAGED_BY,
+} from './profile/assets.js';
 import {
   activeRuntimeKinds,
   describeHint,
@@ -45,6 +49,9 @@ const DEFAULT_PROFILE_ID = 'assistant';
 export {
   HELMX_CLI_SKILL_ID,
   HELMX_CLI_SKILL_ASSET,
+  APP_BUILDER_SKILL_ID,
+  APP_BUILDER_SKILL_ASSET,
+  APP_BUILDER_SKILL_MD,
   PROFILE_MANAGED_BY,
   renderSkillTemplate,
 } from './profile/assets.js'
@@ -130,6 +137,7 @@ export function createProfilePlugin(): PluginDefinition {
         id: 'profile-skills',
         async start() {
           await skills.ensureSkill(HELMX_CLI_SKILL_ASSET);
+          await skills.ensureSkill(APP_BUILDER_SKILL_ASSET);
           await ensureDefaultProfileManaged(profiles);
         },
         async stop() {},

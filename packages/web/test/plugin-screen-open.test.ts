@@ -91,6 +91,9 @@ test('PluginCard：enabled 且有 Screen 时底栏渲染打开视图，点击阻
 
   const openBtn = host.querySelector<HTMLButtonElement>('.plugin-card-open-btn')
   assert.ok(openBtn, '应渲染「打开视图」按钮')
+  const splitBtn = host.querySelector<HTMLButtonElement>('.plugin-card-split-btn')
+  assert.ok(splitBtn, '应渲染卡片分屏快捷打开按钮')
+  assert.ok(splitBtn.classList.contains('split-toggle-btn'), '分屏按钮应携带 split-toggle-btn 类以受 <=860px 窄屏隐藏规则约束')
 
   await act(async () => {
     openBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }))
@@ -101,6 +104,16 @@ test('PluginCard：enabled 且有 Screen 时底栏渲染打开视图，点击阻
     '点击打开视图以主屏 screen target 导航（首个 Screen 为主视图，不开分屏）',
   )
   assert.deepEqual(selections, [], '点击打开按钮不得触发卡片 onSelect 冒泡')
+
+  await act(async () => {
+    splitBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+  })
+  assert.deepEqual(
+    store.getSplitTarget(),
+    { kind: 'screen', pluginId: 'todo-app', screenId: 'main' },
+    '点击卡片分屏按钮应以 split: true 打开首个 Screen',
+  )
+  assert.deepEqual(selections, [], '点击分屏按钮不得触发卡片 onSelect 冒泡')
 
   act(() => root.unmount())
   host.remove()
@@ -119,6 +132,8 @@ test('PluginCard：停用或无 Screen 时不渲染打开按钮（无 Provider �
       )
     })
     assert.ok(host.querySelector('.plugin-card-open-btn') === null)
+    assert.ok(host.querySelector('.plugin-card-split-btn') === null)
+    assert.ok(host.querySelector('.plugin-card-split-btn') === null)
     act(() => root.unmount())
     host.remove()
   }
@@ -131,6 +146,7 @@ test('PluginCard：停用或无 Screen 时不渲染打开按钮（无 Provider �
     root.render(e(PluginCard, { plugin: APP_PLUGIN, selected: false, onSelect: () => {}, onToggle: () => {} }))
   })
   assert.ok(host.querySelector('.plugin-card-open-btn') === null)
+  assert.ok(host.querySelector('.plugin-card-split-btn') === null)
   act(() => root.unmount())
   host.remove()
 })
@@ -254,6 +270,7 @@ test('enabled=true 且 status=failed：不暴露可用 Screen（卡片/抽屉/�
     assert.equal(card.classList.contains('is-disabled'), true)
     assert.equal(card.classList.contains('is-failed'), true)
     assert.ok(host.querySelector('.plugin-card-open-btn') === null)
+    assert.ok(host.querySelector('.plugin-card-split-btn') === null)
 
     const sw = host.querySelector<HTMLButtonElement>('[role="switch"]')
     assert.ok(sw)

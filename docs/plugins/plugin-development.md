@@ -16,10 +16,10 @@
 helmx plugins init my-plugin                          # 生成到 ~/.helmx/plugins/my-plugin/（默认 full）
 helmx plugins init my-plugin --dir ~/code             # 生成到 ~/code/my-plugin/
 helmx plugins init my-plugin --template minimal       # 仅后端探针动作（无前端文件）
-helmx plugins init my-app --template app              # 全栈微应用骨架（可直接 apps validate/publish）
+helmx plugins init my-app --template app              # 全栈微应用骨架（带 ctx.ui.screen，可直接 doctor 与 install）
 ```
 
-full 模板产出 `plugin.json`（含 `clientRoot: "./client"`）、`index.ts`（doc 与 `increment` 动作）、`tsconfig.json`、`client/index.tsx`（`@helmx/plugin-client` 示例面板）与 `README.md`；minimal 仅后端 ping 探针；app 模板产出 public doc + 双 Schema 动作 + `ctx.ui.screen` 主视图 + 侧栏直达入口，生成目录无需发布即可通过 `helmx plugins doctor` 与 `helmx apps validate`。目标目录非空默认拒绝，`--force` 继续（同名文件被覆盖，不删除现有文件）。
+full 模板产出 `plugin.json`（含 `clientRoot: "./client"`）、`index.ts`（doc 与 `increment` 动作）、`tsconfig.json`、`client/index.tsx`（`@helmx/plugin-client` 示例面板）与 `README.md`；minimal 仅后端 ping 探针；app 模板产出 public doc + 双 Schema 动作 + `ctx.ui.screen` 主视图 + 可选侧栏直达入口，生成目录可直接通过 `helmx plugins doctor`（回报 `screens: ["main"]`），再经 `helmx plugins install <dir> --enable` 安装并在插件中心「应用视图」筛选与一键打开。目标目录非空默认拒绝，`--force` 继续（同名文件被覆盖，不删除现有文件）。
 
 ### ② 插件目录与清单
 
@@ -187,7 +187,7 @@ helmx plugins reload my-plugin
 
 - **doctor 四层检查**逐项真实执行：manifest 合法性与入口越根 → backend TS 转译与代际导入 → register 临时 PluginHost 真实执行 `definePlugin`（与生产同一校验链：action/tool/ui/doc/service/provider 形状、重复、scope）→ client 编译并校验具名导出真实存在（悬空 `export` 在此暴露，不留到运行期渲染空白）。检查使用独立代际号（`?helmxgen=N`）与临时内存 doc store，不影响已注册实例；doctor 专用后端对 `ctx.host.*` 一律 501 显式拒绝——`definePlugin` 顶层依赖宿主调用的插件在此如实失败，这是设计而非缺陷。
 - **reload 安全链**：在途任务预检（`409 plugin_has_live_tasks`）→ dry-run 完整 doctor 预检（失败则旧实例保持不动，`422 plugin_reload_preflight_failed` 附完整报告）→ 新代际切换（失败用旧代回滚）→ 启用状态保持。内置插件禁止热重载（403）。
-- **受管包安装**（区别于手放置入目录）：`helmx plugins install npm:<spec>|git:<repo>[@<ref>]|<https-git-url>|<本地路径> [--enable]`、`helmx plugins update <id>`、`helmx plugins remove <id> [--yes]`。安装启用即在 Hub 内执行可信插件代码，无沙箱；来源由 Hub 解析，本地路径相对 Hub 主机。
+- **受管包安装**（区别于手放置入目录）：`helmx plugins install npm:<spec>|git:<repo>[@<ref>]|<https-git-url>|<本地路径> [--enable]`、`helmx plugins update <id>`、`helmx plugins remove <id> [--yes]`。同一规范本地目录重复执行 `helmx plugins install` 会原地幂等热更新（保留既有 `ctx.doc` 数据，未显式传 `enable: false` 时确保启用）；不同来源覆盖既有插件 ID 仍诚实拒绝 `409 plugin_package_already_installed`。安装启用即在 Hub 内执行可信插件代码，无沙箱；来源由 Hub 解析，本地路径相对 Hub 主机。
 
 ## 常见进阶模式
 
@@ -267,5 +267,4 @@ ctx.service({
 
 - [插件系统设计与契约](overview.md)：`definePlugin(ctx)` 能力面、五端映射与停用预检
 - [生命周期 Hook 与全界面扩展点](../architecture/extension-points.md)：7 个 Hook 与 16 个 UI surface
-- [应用中心](apps.md)：全栈微应用的发布与目录
 - [Web 前端设计系统](../conventions/web-frontend.md)：视图形态、字号与零 Emoji 铁律

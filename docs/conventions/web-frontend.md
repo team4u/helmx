@@ -12,7 +12,7 @@ Web 主控台基于 React 19 + Vite 6（`packages/web`），交互原语统一 R
 
 ### 一级主舞台（Primary Stage）
 
-- 适用：会话、插件 Screen、插件中心、模型/角色/技能/节点中心、应用中心等管理与市场类界面；
+- 适用：会话、插件 Screen、插件中心、模型/角色/技能/节点中心等管理与市场类界面；
 - 形态：占满中央视口，响应式多列自适应卡片网格，顶部集成检索框、多维分类切换与实时统计；
 - **严禁将海量项、多维检索、管理与市场类界面塞进居中模态弹窗**。
 
@@ -32,7 +32,7 @@ Web 主控台基于 React 19 + Vite 6（`packages/web`），交互原语统一 R
 - **严禁大面积内联样式**（`style={{ ... }}`）：除极少数动态计算的尺寸/坐标外，排版、间距与颜色一律使用设计系统原语类与 CSS 变量；
 - 常用通用类速查：分栏 `.modal-body-split` / `.modal-sidebar`；列表行 `.list-item-btn`；平坦分节 `.section-flat` 系列；表单 `.form-grid` / `.form-grid-label`；空状态 `.empty-state`；表格 `.helmx-table-wrap` / `.helmx-table`（统一内边距、12.5px 字体、表头 `var(--bg-subtle)`、`tr:hover`）；插件页面 `.screen-container` / `.screen-header` / `.screen-section`；工具栏行 `.screen-toolbar` / `.screen-toolbar-actions`（内含 `.search-box` 自动获得伸展权重）；键值 `.kv-grid` / `.kv-list`；提示横幅 `.callout`（`.callout-warn/-error/-ok`）；加载态 `.loading-state`；
 - **插件布局原语组件**（`@helmx/plugin-client` 导出，优先复用不要手写 div+className）：`Screen`（页面容器+页头）、`ScreenSection`（分节）、`ScreenToolbar`（页头与正文之间的工具栏行）、`DataTable`（统一 loading/empty 的表格外壳）、`KvGrid`（键值概览）、`DetailDrawer`（右侧详情抽屉外壳）、`SearchBox`、`EmptyState`、`LoadingState`、`StatusLight`、`ThinkingLevelControl`；屏内嵌套组件读参数用 `useScreenParams()`（宿主 `ScreenHost` 建立的屏内 scope，非全屏上下文返回 `null`）；
-- **强制样式复用铁律**：全仓所有插件必须优先复用主框架设计系统原语，严禁在插件内复制通用表格、页面布局、键值列表或提示条样式；插件本地 `.css` 只写业务特异结构（如 Mermaid 缩放画布、Workflow DAG 卡片、Apps 启动台网格）。
+- **强制样式复用铁律**：全仓所有插件必须优先复用主框架设计系统原语，严禁在插件内复制通用表格、页面布局、键值列表或提示条样式；插件本地 `.css` 只写业务特异结构（如 Mermaid 缩放画布、Workflow DAG 卡片）。
 
 ### Radix UI 唯一无头交互原语底座
 

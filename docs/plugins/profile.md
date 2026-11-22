@@ -12,7 +12,7 @@
 
 插件服务 `profile-skills` 在启动时完成两件事：
 
-1. **同步受管系统技能 `helmx-cli`**：经 `ctx.host.skills.ensureSkill` 把 `skills/helmx-cli/`（SKILL.md + references）以源码版本为准逐文件覆盖、缺失补齐。PluginHost 校验 SKILL.md frontmatter 的 `managedByPlugin` 绑定 `builtin:profile`，受管技能常规写入接口 403 拒绝。技能目录同时合入机器级共享来源 `~/.agents/skills`。
+1. **同步受管系统技能 `helmx-cli` 与 `app-builder`**：经 `ctx.host.skills.ensureSkill` 把 `skills/helmx-cli/`（CLI 参考与插件开发专题）与 `skills/app-builder/`（全栈微应用开发 SOP 与可运行模板，面向标准 `ctx.ui.screen` 外部插件）以源码版本为准逐文件覆盖、缺失补齐。PluginHost 校验 SKILL.md frontmatter 的 `managedByPlugin` 绑定 `builtin:profile`，受管技能常规写入接口 403 拒绝。技能目录同时合入机器级共享来源 `~/.agents/skills`。
 2. **补写默认 Profile 托管声明**：默认 `assistant` Profile 由内核先行创建；插件启动时若其 `profile.json` 缺少 `managedByPlugin`，显式补写 `builtin:profile`（已存在时原样保留，不做旧数据归一化）。默认 Profile 不存在属内核未初始化异常，如实上抛。
 
 ### `before_turn` 注入流水线
@@ -86,6 +86,7 @@ Web 技能中心与 `helmx skills list/read` 共用同一套基于节点与可�
 | 节点技能库发现与读取 | `packages/plugins/src/profile/node-skills.ts` |
 | 协作目录计算与渲染 | `packages/plugins/src/profile/catalog.ts` |
 | helmx-cli 技能资产 | `packages/plugins/src/profile/skill/`（构建后随包分发） |
+| app-builder 技能资产 | `packages/plugins/src/profile/assets/app-builder/`（构建后随包分发） |
 | 测试 | `packages/plugins/test/profile-agents-md.test.ts`、`profile-node-skills.test.ts`、`profile-collaboration.test.ts`、`profile-collaboration.integration.test.ts`、`profile-starters.test.ts` |
 
 ## 相关文档

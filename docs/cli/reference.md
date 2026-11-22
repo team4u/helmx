@@ -191,7 +191,7 @@ PUT 为整体替换契约：update 走语义化标志时 CLI 先 GET 完整 Prof
 
 **`helmx plugins build [dir] [--dir <dir>] [--out <dir>] [--module <m>]`** — 本地预编译插件前端为静态 `dist-client/`（不访问 Hub）。编译器（`@helmx/plugin-build`，含平台原生 esbuild）按运行位置解析：源码模式/Hub payload 布局内由同级 `node_modules` 提供；npm 制品全局 CLI 需要本机已安装 Helmx 管理的 payload release（其 release 目录依赖闭包含该编译器），不可解析时显式报 `plugin_build_unavailable`（诚实边界：编译器无法零依赖交付）。
 
-**`helmx plugins install <source> [--enable]`** — 从 npm/Git/本地路径安装。source 四种写法：`npm:<spec>`、`git:<repo>[@<ref>]`（可含子目录）、HTTPS Git URL（`#<ref>` 可选）、本地路径（相对 Hub 主机解析）。**安装并启用即在 Hub 进程内执行可信插件代码（无沙箱），仅装可信来源**。
+**`helmx plugins install <source> [--enable]`** — 从 npm/Git/本地路径安装。source 四种写法：`npm:<spec>`、`git:<repo>[@<ref>]`（可含子目录）、HTTPS Git URL（`#<ref>` 可选）、本地路径（相对 Hub 主机解析）。对同一规范本地目录重复执行 `install` 会原地幂等热更新（保留既有 `ctx.doc` 数据，且未显式 `enable: false` 时确保启用）；不同来源试图覆盖既有插件 ID 仍返回 `409 plugin_package_already_installed`。**安装并启用即在 Hub 进程内执行可信插件代码（无沙箱），仅装可信来源**。
 
 **`helmx plugins update <id>` / `helmx plugins remove <id> [--yes]`** — 更新（源未变时 `changed: false` 幂等回报）与移除（破坏性：停用 + 清理 Hub 主机安装目录与记录；TTY 需输入 yes，非交互环境无 `--yes` 显式拒绝 `confirmation_required`）。
 
@@ -229,7 +229,6 @@ PUT 为整体替换契约：update 走语义化标志时 CLI 先 GET 完整 Prof
 | `helmx swarm abort-worker / switch-model / inspect-worker / archive-worker / close-group` | builtin:swarm | 中止成员当前回合、给闲置成员换模型、查看或归档成员、结单。用 `--keep-worktree` 保留有改动或未合入的工作树。 |
 | `helmx memory get / set / configure` | builtin:memory | 长期记忆管理；均以 `--profile-id <id>` 或 `--current` 选目标，皆缺 `400 validation_error`；`set --text <str> [--mode replace\|append]`；`configure --enabled <bool> [--text <str>]` |
 | `helmx memory dream / dream_status / dream_configure` | builtin:memory | 每日 Dream 记忆整理：`dream` 立即整理（`--profile-id`/`--current`，无候选或无模型会话合法跳过并返回 reason，在途关闭如实 `memory_disabled` 不写回）；`dream_status` 查看调度/候选/上次整理（`--profile-id`/`--current` 聚焦只读目标，候选文件异常显式报错）；`dream_configure --enabled <bool> --hour <0-23> --timezone <IANA>` 配置（至少一项，暂停即清除 nextRunAt，首启排下一低峰点、过期仅补跑一次） |
-| `helmx apps validate / publish / list / update_meta / remove` | builtin:apps | 全栈微应用生命周期（见[应用中心](../plugins/apps.md)） |
 | `helmx profile list_mentionable` | builtin:profile | 列出可 `@` 点名协作的 Profile 候选（`--current` / `--conversation-id` / `--profile-id` 选上下文） |
 | `helmx cron list / create / delete / trigger` | builtin:triggers | cron 任务管理；create 必填 `--id --schedule --text`（标准五字段，timezone 默认 UTC），支持 `--target-conversation-id` / `--target-profile-id` / `--thread-key` 定向 |
 | `helmx webhook create / list / delete` | builtin:triggers | webhook 端点管理（HMAC-SHA256 验签）；create 必填 `--id --secret`，**secret 仅允许人工 HTTP/CLI 配置**（会话上下文调用被 403 拒绝） |

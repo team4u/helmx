@@ -434,10 +434,9 @@ test('Skill-First 内置插件零默认 <available_actions>；internal/ui 403 �
 
   // 1) Skill-First 不变量：仅启用内置插件时，无任何动作常驻 <available_actions>（prompt.actions 缺席）。
   assert.equal(actionsSection(req), undefined, '仅启用内置插件时不应渲染 <available_actions>')
-  // 状态门控直投工具：无活跃 worktree 时省略 cleanup_worktree，无活跃子代理时省略 workflow_steer_*；apps_* 不再作为直投工具常驻。
+  // 状态门控直投工具：无活跃 worktree 时省略 cleanup_worktree，无活跃子代理时省略 workflow_steer_*。
   assert.ok(!req.toolNames.includes('cleanup_worktree'), '0 个活跃 worktree 时 before_turn 应省略 cleanup_worktree')
   assert.ok(!req.toolNames.some((name) => name.startsWith('workflow_steer_')), '0 个活跃子代理时 before_turn 应省略 workflow_steer')
-  assert.ok(!req.toolNames.some((name) => name.startsWith('apps_')), 'builtin:apps 动作不再作为常驻直投工具暴露')
   // cleanup_worktree 仍在 PluginHost 工具表中声明为 exposeAsTool。
   assert.ok(env.kernel.plugins.listTools().some((tool) => tool.name === 'cleanup_worktree'))
   // 全部请求段均不得泄漏内部动作名（防跨段残留）。

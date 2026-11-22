@@ -40,7 +40,7 @@ The optional Herdr plugin can run Claude Code, Codex, and other CLI agents in te
 ## Documentation
 
 - For scheduled work and inbound events, see [Cron and Webhooks](docs/plugins/triggers.md) and [SuperAgent](docs/plugins/superagent.md).
-- To turn a recurring task into a tool you can open from the browser, see [App Center](docs/plugins/apps.md) and [plugin development](docs/plugins/plugin-development.md).
+- To turn a recurring task into a tool you can open from the browser (via Plugin Center), see [plugin development](docs/plugins/plugin-development.md).
 - For the full docs, including the [CLI reference](docs/cli/reference.md) and [architecture](docs/architecture/overview.md), see the [documentation index](docs/README.md). Detailed guides are in Chinese.
 
 Helmx uses a single administrator account. Installed plugins and shell commands run with the privileges of the process that executes them. Interfaces and data formats can change between releases. [Deployment and credential details (Chinese)](docs/getting-started/installation.md) · [Plugin trust model (Chinese)](docs/plugins/overview.md)

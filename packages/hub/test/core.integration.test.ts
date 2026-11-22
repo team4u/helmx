@@ -994,11 +994,18 @@ test('跨重启持久闭环：helmx-cli 受管技能篡改恢复与只读门禁�
 
   const first = await createHubTestApp({ dataDir, cwd: dataDir })
   try {
-    // 校验 helmx-cli 与 generative-ui 受管技能内容后模拟磁盘篡改/误删 + 用户自建技能
+    // 校验 helmx-cli、app-builder 与 generative-ui 受管技能内容后模拟磁盘篡改/误删 + 用户自建技能
     const skills = await first.kernel.skills.list()
     const helmxCli = skills.find((s) => s.id === 'helmx-cli')!
     assert.equal(helmxCli.managedByPlugin, 'builtin:profile')
     assert.ok(helmxCli.references.includes('references/plugin-client-code-splitting.md'))
+    const appBuilder = skills.find((s) => s.id === 'app-builder')
+    assert.ok(appBuilder !== undefined, 'builtin:profile 应自举受管 app-builder 技能')
+    assert.equal(appBuilder.managedByPlugin, 'builtin:profile')
+    assert.ok(appBuilder.references.includes('references/fullstack-template.md'))
+    const appBuilderMd = await first.kernel.skills.readFile('app-builder')
+    assert.ok(appBuilderMd.includes('helmx plugins doctor') && appBuilderMd.includes('helmx plugins install'))
+    assert.ok(!appBuilderMd.includes('builtin:apps') && !appBuilderMd.includes('helmx apps'))
     assert.equal(skills.find((s) => s.id === 'generative-ui')?.managedByPlugin, 'builtin:json-render')
 
     writeFileSync(join(dataDir, 'skills', 'helmx-cli', 'SKILL.md'), '---\nname: helmx-cli\ndescription: tampered\n---\ntampered\n')

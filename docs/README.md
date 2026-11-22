@@ -28,7 +28,6 @@
 | [SuperAgent](plugins/superagent.md) | 后台任务路由、驻留 Worker 和巡检，按需启用 |
 | [Profile](plugins/profile.md) | 角色提示词、技能和协作候选 |
 | [长期记忆](plugins/memory.md) | 按 Profile 保存偏好和约定 |
-| [应用中心](plugins/apps.md) | 检查、发布和管理微应用 |
 | [Cron 与 Webhook](plugins/triggers.md) | 定时投递与接收外部事件 |
 | [Magpie](plugins/magpie.md) | 网关模型目录、配额和路由 |
 | [JSON 卡片](plugins/json-render.md) | 在聊天里展示表格、表单和操作按钮 |

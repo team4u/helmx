@@ -477,10 +477,10 @@ export interface PluginDoctorReport {
   /**
    * View ids declared via ctx.ui.screen during the real registration phase
    * that passed raw registration validation (present when register passes;
-   * additive optional field). Lets upper layers (e.g. builtin:apps
-   * validate/publish) hard-require that a full-stack app declares at least
-   * one Screen before install. Records only real calls — no static scanning
-   * or approximate derivation.
+   * additive optional field). Lets callers (CLI/tooling/micro-app workflows)
+   * verify that a screen-bearing plugin declares at least one Screen before
+   * install. Records only real calls — no static scanning or approximate
+   * derivation.
    */
   screens?: string[]
   /**

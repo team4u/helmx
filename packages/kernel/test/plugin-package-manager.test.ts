@@ -18,7 +18,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readdirSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readdirSync, readFileSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -759,22 +759,48 @@ test('install register fails due to concurrent same-name instance: preserves dir
   }
 })
 
-test('install duplicate guards return 409 for existing managed record, registered instance, or occupied target dir', { timeout: 60_000 }, async () => {
+test('install: same canonical local source hot-updates idempotently; different source / unmanaged / occupied return 409', { timeout: 60_000 }, async () => {
   const env = makeEnv()
   try {
-    const src = writeLocalPlugin(env.cwd, 'dup-plugin')
-    await env.manager.install(src)
-    // Duplicate install from same source: managed record already exists
-    await assert.rejects(
-      env.manager.install(src),
-      (err: unknown) => err instanceof HelmxError && err.code === 'plugin_package_already_installed' && err.status === 409,
-    )
-    // Different source with same id: still rejected
-    const src2 = writeLocalPlugin(join(env.cwd, 'alt'), 'dup-plugin')
+    const src = writeLocalPlugin(env.cwd, 'dup-plugin', '1.0.0')
+    const first = await env.manager.install(src, { enable: false })
+    assert.equal(first.summary.enabled, false)
+    assert.equal(first.record.version, '1.0.0')
+
+    // Edit same local source and reinstall with enable: false -> hot updates code, preserves record id & installedAt, keeps disabled
+    writeLocalPlugin(env.cwd, 'dup-plugin', '1.1.0')
+    const second = await env.manager.install(src, { enable: false })
+    assert.equal(second.record.id, first.record.id, 'reinstall preserves record id')
+    assert.equal(second.record.installedAt, first.record.installedAt, 'reinstall preserves installedAt')
+    assert.equal(second.record.version, '1.1.0')
+    assert.equal(second.summary.version, '1.1.0')
+    assert.equal(second.summary.enabled, false, 'explicit enable: false does not force-enable')
+
+    // Reinstall same canonical local source via symlink without enable flag -> hot updates & ensures enabled (enable !== false)
+    writeLocalPlugin(env.cwd, 'dup-plugin', '1.2.0')
+    const aliasLink = join(env.cwd, 'dup-plugin-link')
+    symlinkSync(src, aliasLink)
+    const third = await env.manager.install(aliasLink)
+    assert.equal(third.record.id, first.record.id)
+    assert.equal(third.record.version, '1.2.0')
+    assert.equal(third.summary.version, '1.2.0')
+    assert.equal(third.summary.enabled, true, 'same canonical local source reinstall ensures enabled when enable !== false')
+
+    // Different local source with same id: still rejected with 409 plugin_package_already_installed
+    const src2 = writeLocalPlugin(join(env.cwd, 'alt'), 'dup-plugin', '2.0.0')
     await assert.rejects(
       env.manager.install(src2),
-      (err: unknown) => err instanceof HelmxError && err.code === 'plugin_package_already_installed',
+      (err: unknown) => err instanceof HelmxError && err.code === 'plugin_package_already_installed' && err.status === 409,
     )
+
+    // Unmanaged already-registered instance (no package record): still rejected with 409
+    const manualSrc = writeLocalPlugin(env.cwd, 'manual-plugin', '1.0.0')
+    await env.host.registerManagedPlugin(manualSrc, { enabled: true })
+    await assert.rejects(
+      env.manager.install(manualSrc),
+      (err: unknown) => err instanceof HelmxError && err.code === 'plugin_package_already_installed' && err.status === 409,
+    )
+
     // Target directory occupied manually (no record and not registered)
     const occupied = join(env.dataDir, 'installed-plugins', 'occupied-plugin')
     mkdirSync(occupied, { recursive: true })
@@ -790,10 +816,10 @@ test('install duplicate guards return 409 for existing managed record, registere
   }
 })
 
-test('install when enable fails keeps plugin disabled, reports enableError, and persists record for restart', { timeout: 60_000 }, async () => {
+test('install when enable fails keeps plugin disabled, reports enableError, and recovers on same-source reinstall', { timeout: 60_000 }, async () => {
   const env = makeEnv()
   try {
-    const src = writeLocalPlugin(env.cwd, 'enablefail-plugin')
+    const src = writeLocalPlugin(env.cwd, 'enablefail-plugin', '1.0.0')
     env.enableFailIds.add('enablefail-plugin')
     const result = await env.manager.install(src, { enable: true })
     // Install succeeded while enable failed: summary reflects truth
@@ -807,11 +833,18 @@ test('install when enable fails keeps plugin disabled, reports enableError, and 
     const record = reloaded.getRecord('enablefail-plugin')
     assert.ok(record, 'enable failure does not prevent persisting record across restarts')
     assert.equal(record.source.kind, 'local')
-    // After clearing fault, reinstall conflicts 409 (use update instead)
+    // After clearing fault, same-source local reinstall hot-updates and enables cleanly
     env.enableFailIds.delete('enablefail-plugin')
+    writeLocalPlugin(env.cwd, 'enablefail-plugin', '1.1.0')
+    const recovered = await env.manager.install(src)
+    assert.equal(recovered.record.version, '1.1.0')
+    assert.equal(recovered.summary.enabled, true)
+    assert.equal(recovered.enableError, undefined)
+    // Different source with same id still conflicts 409
+    const otherSrc = writeLocalPlugin(join(env.cwd, 'other'), 'enablefail-plugin', '2.0.0')
     await assert.rejects(
-      env.manager.install(src),
-      (err: unknown) => err instanceof HelmxError && err.code === 'plugin_package_already_installed',
+      env.manager.install(otherSrc),
+      (err: unknown) => err instanceof HelmxError && err.code === 'plugin_package_already_installed' && err.status === 409,
     )
   } finally {
     env.close()

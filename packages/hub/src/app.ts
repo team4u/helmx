@@ -11,7 +11,6 @@ import { createHerdrPlugin } from '@helmx/plugins/herdr';
 import { createSuperAgentPlugin } from '@helmx/plugins/superagent';
 import { createTriggersPlugin } from '@helmx/plugins/triggers';
 import { createMagpiePlugin } from '@helmx/plugins/magpie';
-import { createAppsPlugin } from '@helmx/plugins/apps';
 import { createTokenSpeedPlugin } from '@helmx/plugins/token-speed';
 import { createTiersPlugin } from '@helmx/plugins/tiers';
 
@@ -39,7 +38,7 @@ export async function createHelmx(options: HelmxOptions = {}) {
     autoResume: false,
   });
   try {
-    // Default-enabled (12): profile (locked), workflow, worktree, swarm, memory, json-render, mermaid, apps, triggers, magpie, token-speed, tiers.
+    // Default-enabled (11): profile (locked), workflow, worktree, swarm, memory, json-render, mermaid, triggers, magpie, token-speed, tiers.
     // Post-startup recovery ordering (workflow child-session convergence before worktree crashed-lease
     // reclamation) is enforced by PluginHost.reconcile() topological order via service.reconcileAfter,
     // independent of plugin registration order here.
@@ -50,7 +49,6 @@ export async function createHelmx(options: HelmxOptions = {}) {
     await kernel.plugins.register(createMemoryPlugin());
     await kernel.plugins.register(createJsonRenderPlugin());
     await kernel.plugins.register(createMermaidPlugin());
-    await kernel.plugins.register(createAppsPlugin({ hubCwd: options.cwd ?? process.cwd() }));
     await kernel.plugins.register(createTriggersPlugin());
     await kernel.plugins.register(createMagpiePlugin());
     await kernel.plugins.register(createTokenSpeedPlugin());
