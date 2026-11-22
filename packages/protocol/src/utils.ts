@@ -8,11 +8,10 @@
  *
  * Drift adjudication (strict version wins at every historical divergence):
  * - `escapeXml` keeps the 4-entity form (`& < > "`): the minimal set that makes text safe
- *   in both XML text and double-quoted attribute positions; the former 3-entity copy in
- *   superagent watchdog output is tightened onto this form.
+ *   in both XML text and double-quoted attribute positions.
  * - `isValidEnvName` keeps the kernel's 128-char cap; the unbounded herdr copy is tightened.
  * - `assertProfileId` keeps the kernel's strict `[a-z0-9][a-z0-9-]` pattern (1..64, no trim,
- *   rejects whitespace/uppercase/path separators); the lenient superagent copy is tightened.
+ *   rejects whitespace/uppercase/path separators).
  */
 
 import { HelmxError } from './error.js'

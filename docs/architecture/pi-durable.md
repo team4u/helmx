@@ -35,7 +35,7 @@ stateDiagram-v2
 
 输入以持久 `ConversationInput.id` 为唯一身份，该值也是提交给 SDK 的 `requestId`。SDK 的 `run.inputs` 使用 submission ID，追踪器通过独立的 `submissionId → requestId` 索引关联，不能把两种标识当作同一个值。重启恢复活跃回合时，追踪器按 SDK 的权威 submission 清单精确回读对应 entry，补齐来源、元数据和附件。
 
-每次提交的 `helmx.input` entry 附着输入来源 `origin: 'human' | 'agent' | 'trigger'`，从 CLI/HTTP 一路透传到 `turn_settled` 钩子。后台 Worker 本回合消费的输入只要含任一 `agent / trigger` 来源，即向中枢（`builtin:superagent` 的 router 会话）投递汇报；纯 `human` 回合仅静默更新召回图谱。
+每次提交的 `helmx.input` entry 附着输入来源 `origin: 'human' | 'agent' | 'trigger'`，从 CLI/HTTP 一路透传到 `turn_settled` 钩子，供插件区分人类直连输入与代理/外部触发输入（例如 `builtin:memory` 的每日 Dream 仅从 `origin === 'human'` 的输入采集长期记忆候选）。
 
 会话归属权 `ownedBy: 'human' | 'bot' | 'helmx'`（缺省 `human`）是自动化红线的唯一可信判定来源：对 `bot/helmx` 归属的后台会话允许自动恢复或中止；对 `human` 的人类直连会话或 Herdr 终端窗格**严禁发送任何按键或中止指令**，仅允许只读诊断与通知。未标记一律按 `human` 对待。
 

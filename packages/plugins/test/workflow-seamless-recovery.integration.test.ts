@@ -1129,7 +1129,7 @@ test('安全红线：crashRecoveries > 3 熔断、secret_grant_expired_on_restar
   assert.match(tripped.error ?? '', /\[crash_recovery_limit\]/)
   assert.ok(abortedIds.includes(66), '熔断必须守卫中止关联子会话')
   assert.equal(settledReports.length, 1, '后台任务熔断必须向父会话补发失败通知')
-  assert.equal(sTrip.listAutoResumeCandidates(3).some((c) => c.runId === breakerRun.id), false, '熔断记录不得进入自动续跑候选')
+  assert.equal(tripped.resumable, false, '熔断记录不得可续跑')
   await sTrip.close()
 
   // 2) secretNames 授予且崩溃于 onResolved 前：落盘不含 secretNames，重启诚实标 failed(secret_grant_expired_on_restart)

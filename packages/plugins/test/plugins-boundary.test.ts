@@ -66,7 +66,7 @@ describe('@helmx/plugins 架构边界守护', () => {
     const files = collectSourceFiles(pluginsSrc)
     // 防呆：扫描必须有实质产出（防路径错误导致零扫描静默通过）。
     assert.ok(files.length >= 20, `plugins 源码文件数异常（${files.length} < 20），扫描可能指向了错误目录`)
-    for (const known of ['workflow.ts', 'worktree.ts', 'superagent.ts', 'profile.ts', join('worktree', 'worktree.ts'), join('worktree', 'isolation.ts'), join('workflow', 'engine', 'index.ts')]) {
+    for (const known of ['workflow.ts', 'worktree.ts', 'swarm.ts', 'profile.ts', join('worktree', 'worktree.ts'), join('worktree', 'isolation.ts'), join('workflow', 'engine', 'index.ts')]) {
       assert.ok(files.some((f) => f === join(pluginsSrc, known)), `未扫描到已知源码文件 ${known}（扫描器异常）`)
     }
 
@@ -105,15 +105,15 @@ describe('@helmx/plugins 架构边界守护', () => {
     }
   })
 
-  it('superagent/watchdog.ts 对包内 diagnostics 的导入合法（边界内相对导入不误报）', { timeout: 60_000 }, () => {
-    const file = join(pluginsSrc, 'superagent', 'watchdog.ts')
+  it('workflow/hooks.ts 对包内 lineage 的导入合法（边界内相对导入不误报）', { timeout: 60_000 }, () => {
+    const file = join(pluginsSrc, 'workflow', 'hooks.ts')
     const source = readFileSync(file, 'utf8')
     assert.ok(
-      importSpecifiersOf(source).includes('../diagnostics.js'),
-      'watchdog.ts 应包含 ../diagnostics.js 导入（若已重构请同步本守护样例）',
+      importSpecifiersOf(source).includes('../lineage.js'),
+      'workflow/hooks.ts 应包含 ../lineage.js 导入（若已重构请同步本守护样例）',
     )
-    const resolved = resolve(dirname(file), '../diagnostics.js')
+    const resolved = resolve(dirname(file), '../lineage.js')
     const rel = relative(pluginsSrc, resolved)
-    assert.ok(!rel.startsWith('..'), `diagnostics.js 应位于 @helmx/plugins src 内（实际解析到 ${resolved}）`)
+    assert.ok(!rel.startsWith('..'), `lineage.js 应位于 @helmx/plugins src 内（实际解析到 ${resolved}）`)
   })
 })

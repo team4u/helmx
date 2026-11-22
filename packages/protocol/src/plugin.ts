@@ -208,12 +208,6 @@ export interface AgentSpawnRequest {
  * 与外部执行插件（如 builtin:herdr）共同消费）；protocol 不再出口。
  */
 
-/*
- * 探针契约（WatchdogProbe 等）已移出 protocol 核心，由内置插件包共享契约
- * 模块提供（packages/plugins/src/diagnostics.ts，'diagnostics.collect'
- * 内部事件采集）。
- */
-
 /** 每个钩子的完整载荷类型映射。 */
 export interface HookPayloadMap {
   trigger: ExternalTriggerEnvelope
@@ -852,7 +846,7 @@ export interface HelmxHostApi {
     options?: { secretNames?: string[] },
   ): Record<string, string>
   /**
-   * 声明插件对本会话的管理权（如 superagent 的 router/watchdog 会话）：
+   * 声明插件对本会话的管理权（如 builtin:swarm 的活跃成员会话）：
    * 受管期间会话删除保护（409 conversation_managed_by_plugin），
    * 返回释放函数；插件停用/回滚时宿主自动释放。
    */

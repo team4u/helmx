@@ -91,7 +91,7 @@ void _assertAllSidebarBadgeFieldsListed
 export interface SidebarItemSpec extends UiSpecBase {
   label: LocalizedText
   icon?: string
-  /** Click target, e.g. 'conversation:1', 'conversation:profile:superagent', 'screen:builtin:superagent/recall-graph'. */
+  /** Click target, e.g. 'conversation:1', 'conversation:profile:assistant', 'screen:builtin:triggers/triggers'. */
   target?: string
   order?: number
   /**

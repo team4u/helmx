@@ -75,7 +75,6 @@ test('样式边界：StatusLight 统一外壳与 sr-only 文本归属 primitives
 const PLUGIN_PRIVATE_CLASS_PREFIXES = [
   'workflow-', 'subagent-', 'execution-', 'wf-', // builtin:workflow
   'herdr-', 'hd-', // builtin:herdr
-  'sa-', // builtin:superagent
   'tg-', // builtin:triggers
   'magpie-', // builtin:magpie
   'tiers-', // builtin:tiers

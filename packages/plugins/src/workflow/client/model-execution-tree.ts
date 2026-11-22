@@ -5,7 +5,7 @@
  * status/title/summary and recursing into child runs `runsByParent.get(convId)`.
  *
  * Unclaimed `conversations` (such as human `POST /api/conversations/:id/fork`
- * branches and `builtin:superagent` resident workers that have no `WorkflowRun`)
+ * branches and Swarm workers that have no `WorkflowRun`)
  * never enter the execution tree, workbench panel, or active tray.
  */
 import type { ConversationSummary } from '@helmx/protocol'
@@ -165,7 +165,7 @@ function executionRunLeafNode(run: WorkflowRunSummary, node: WorkflowNodeState):
  * - every `subagent` (foreground or background) and `SubagentWorkflow` has a
  *   `WorkflowRunSummary` in `runs` (ancestor-aggregated shard);
  * - conversations without a claiming `WorkflowRunSummary` (human forks,
- *   SuperAgent resident workers, etc.) are never mounted;
+ *   Swarm workers, etc.) are never mounted;
  * - descendant runs initiated by claimed child conversations recurse via
  *   `runsByParent.get(convId)` with cycle protection along `ancestry`.
  */

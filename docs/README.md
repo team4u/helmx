@@ -25,7 +25,6 @@
 | [Workflow](plugins/workflow.md) | 子代理和脚本运行 |
 | [受管工作树](plugins/worktree.md) | 分配隔离工作树、登记租约和安全清理 |
 | [Herdr](plugins/herdr.md) | 终端助手、文件交接和浏览器审批，按需启用 |
-| [SuperAgent](plugins/superagent.md) | 后台任务路由、驻留 Worker 和巡检，按需启用 |
 | [Profile](plugins/profile.md) | 角色提示词、技能和协作候选 |
 | [长期记忆](plugins/memory.md) | 按 Profile 保存偏好和约定 |
 | [Cron 与 Webhook](plugins/triggers.md) | 定时投递与接收外部事件 |

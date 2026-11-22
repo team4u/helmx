@@ -605,8 +605,7 @@ function SwitchImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCo
   const pendingKey = useId()
   const pending = ctx.isPending(pendingKey)
   const toggle = () => {
-    // Trigger the action with the new boolean injected as $value (the
-    // real-world superagent set_router_mode spelling)
+    // Trigger the action with the new boolean injected as $value
     ctx.runAction(node.props['action'], { ...ctx.scope, $value: !checked }, pendingKey)
   }
   return (

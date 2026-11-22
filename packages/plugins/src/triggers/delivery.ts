@@ -1,13 +1,13 @@
 /**
  * triggers/delivery.ts: the delivery helper shared by cron and webhook.
  *
- * Target resolution (§4.4, complementary to the superagent trigger hook's routing):
+ * Target resolution (§4.4, complementary to any plugin trigger hook routing):
  * - envelope.targetConversationId wins (mutually exclusive with the second parameter targetProfileId);
  * - targetProfileId only: take the lowest existing conversation ID of that Profile; with no
  *   conversation, validate the Profile exists and then create one (never deliver to the wrong role;
  *   concurrent creations single-flight and merge per profileId);
- * - neither: keep the default (no targetConversationId; the kernel resolves the assistant entry,
- *   and the superagent trigger hook may decide whether to route to the hub);
+ * - neither: keep the default (no targetConversationId; the kernel resolves the assistant entry
+ *   unless a trigger hook rewrites routing);
  * - text passes through raw (runtime.dispatchTrigger applies the unified defang anti-escape
  *   wrapping; connectors never double-wrap); the source convention is cron:<id> / webhook:<id>;
  */

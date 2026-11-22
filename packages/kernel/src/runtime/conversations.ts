@@ -1100,8 +1100,8 @@ export class ConversationTracker {
       this.flushLiveFinal(conversationId)
       // Advance durable watermark first, then construct settlement snapshot so plugins and read APIs observe identical state.
       // Increment completionSeq + set unread (cleared only by explicit human PATCH).
-      // Background derived sub-conversations (non-human ownership with parent chain, e.g. managed subagents / SuperAgent
-      // Workers) never fabricate human unread flags on completion; human forks (parent chain + human ownership) and top-level
+      // Background derived sub-conversations (non-human ownership with parent chain, e.g. managed subagents / Swarm
+      // workers) never fabricate human unread flags on completion; human forks (parent chain + human ownership) and top-level
       // direct conversations preserve unread semantics. Failures/aborts never set unread (existing contract).
       const settledAt = Date.now()
       const meta = this.store.getConv(conversationId)

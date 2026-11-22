@@ -27,7 +27,6 @@ import {
   renderSkillTemplate,
 } from '../../plugins/src/profile/assets.js'
 import { MANAGED_EXEC_ENV_VARS } from '../src/env/scoped-env.js'
-import { WATCHDOG_PLAYBOOK_SKILL_ASSET } from '../../plugins/src/superagent/assets.js'
 import { MemoryStore } from '../../plugins/src/memory/store.js'
 import { createProfileFileHost } from './helpers/profile-file-host.js'
 import { assert } from './helpers.js'
@@ -391,17 +390,6 @@ test('helmx-cli skill assets stay synchronized with UI extensions and runtime ca
     assert.ok(
       !refContent.includes('{{') && !refContent.includes('}}'),
       `HELMX_CLI_SKILL_ASSET reference "${refName}" must leave zero template placeholders`,
-    )
-  }
-
-  assert.ok(
-    !WATCHDOG_PLAYBOOK_SKILL_ASSET.skillMd.includes('{{') && !WATCHDOG_PLAYBOOK_SKILL_ASSET.skillMd.includes('}}'),
-    'WATCHDOG_PLAYBOOK_SKILL_ASSET.skillMd must leave zero template placeholders',
-  )
-  for (const [refName, refContent] of Object.entries(WATCHDOG_PLAYBOOK_SKILL_ASSET.references)) {
-    assert.ok(
-      !refContent.includes('{{') && !refContent.includes('}}'),
-      `WATCHDOG_PLAYBOOK_SKILL_ASSET reference "${refName}" must leave zero template placeholders`,
     )
   }
 

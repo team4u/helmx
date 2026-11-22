@@ -233,7 +233,6 @@ export async function startBackgroundAgent(
     preassigned?: {
       runId: string
       replayedFrom: string
-      autoResumeCount: number
       onPersisted?: () => void
       onPersistFailed?: () => void
     }
@@ -333,7 +332,6 @@ export async function startBackgroundAgent(
     ...(options?.preassigned !== undefined
       ? {
           replayedFrom: options.preassigned.replayedFrom,
-          autoResumeCount: options.preassigned.autoResumeCount,
         }
       : {}),
     subagentSpec,

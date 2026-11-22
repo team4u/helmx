@@ -297,12 +297,6 @@ describe('WorkflowService listRuns integrity', () => {
         wantRunId: 'wf_d1d1d1d1d1d1',
         wantProblem: 'entry 0 settledAt is not a non-negative finite number',
       },
-      {
-        name: 'invalid autoResumeCount',
-        value: [entry({ id: 'wf_e0e0e0e0e0e0', autoResumeCount: -1 })],
-        wantRunId: 'wf_e0e0e0e0e0e0',
-        wantProblem: 'entry 0 autoResumeCount is not a non-negative integer',
-      },
     ]
     for (const c of cases) {
       const state = makeStateStore()

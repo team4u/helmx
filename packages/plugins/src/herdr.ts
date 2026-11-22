@@ -14,7 +14,7 @@
  *   focus is an explicit user action; read/focus support nodeId disambiguation, ambiguity returns explicit 409).
  *
  * Lazy-loading discipline:
- * - Heavy runtime submodules (executor, transport, asks, metadata, overview, probes, rpc, spawn-rules)
+ * - Heavy runtime submodules (executor, transport, asks, metadata, overview, rpc, spawn-rules)
  *   live in ./herdr/runtime-bootstrap.ts and are imported on demand only when the plugin is enabled
  *   (service prepare/start). Disabled registration never evaluates heavy runtime code.
  */
@@ -156,12 +156,6 @@ export function createHerdrPlugin(
 
       ctx.hook.onTurnSettled(async (payload) => {
         await runtime?.onTurnSettled(payload)
-      })
-
-      // diagnostics.collect listener (rerouted from the old watchdog_tick priority-100 hook):
-      // Registered synchronously in definePlugin; delegates to runtime probes once prepared/started.
-      ctx.host.onEvent('diagnostics.collect', async (raw) => {
-        await runtime?.collectDiagnostics(raw)
       })
 
       // ---- actions (list/read/focus/steer registration and pane disambiguation in herdr/actions.ts) ----

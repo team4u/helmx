@@ -431,24 +431,23 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
   })
 
   // -------------------------------------------------------------------------
-  // 7. SuperAgent workers are not misclassified (have parentConversationId, but bypass spawn)
+  // 7. Non-spawn child conversations are not misclassified (have parentConversationId, but bypass spawn)
   // -------------------------------------------------------------------------
 
-  test('SuperAgent workers are unaffected: dispatch_worker conversations can spawn subagents normally', { timeout: 60_000 }, async () => {
+  test('non-spawn child conversations are unaffected: direct createConversation children can spawn subagents normally', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'depth7')
     const faux = makeFauxProvider()
     const app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
     try {
-      await app.kernel.plugins.enable('builtin:superagent')
-      const dispatched = (await app.kernel.plugins.invokeAction('builtin:superagent', 'dispatch_worker', {
-        prompt: 'worker task',
+      const worker = await app.kernel.createConversation({
+        title: 'direct child worker',
         profileId: 'assistant',
-      })) as { workerConversationId: number }
-      const worker = app.kernel.getConversation(dispatched.workerConversationId)
-      assert.equal(worker.parentConversationId !== undefined, true, 'worker has parentConversationId')
+        parentConversationId: 1,
+      })
+      assert.equal(worker.parentConversationId !== undefined, true, 'child conversation has parentConversationId')
 
-      // Worker is outside the registry: `spawnAgent` succeeds.
-      faux.setResponses([fauxAssistantMessage('worker derive subagent answer'), fauxAssistantMessage('worker turn complete')])
+      // Direct child is outside the managed-subagent registry: `spawnAgent` succeeds.
+      faux.setResponses([fauxAssistantMessage('worker derive subagent answer')])
       const spawned = await app.kernel.spawnAgent({
         parentConversationId: worker.id,
         prompt: 'worker normal derive',

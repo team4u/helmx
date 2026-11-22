@@ -40,7 +40,7 @@
  *   highest-priority agent_spawn backstop -- explicitly report subagent_depth_exceeded; explicit extension
  *   to deeper levels goes through the plugin config and the spawn meta's maxSubagentDepth field of this
  *   plugin's namespace (both validated within HARD_MAX_SUBAGENT_DEPTH; managed subagents cannot raise an
- *   inherited cap) (fork / SuperAgent workers are not in the table and are unaffected).
+ *   inherited cap) (fork / Swarm workers are not in the table and are unaffected).
  *
  * Modular split architecture (the entry only assembles; registration order and dependency injection in definePlugin):
  * - ./workflow/config.ts: plugin config schema and read-time validation (validated at startup, never run sick)

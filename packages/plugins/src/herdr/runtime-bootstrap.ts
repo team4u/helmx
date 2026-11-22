@@ -2,7 +2,7 @@
  * builtin:herdr runtime bootstrap (loaded dynamically on enable / service prepare+start).
  *
  * Kept separate from herdr.ts so disabled registrations never parse/eval transport,
- * executor, asks, metadata, overview, probes, rpc, or spawn-rules modules.
+ * executor, asks, metadata, overview, rpc, or spawn-rules modules.
  */
 
 import {
@@ -30,7 +30,6 @@ import { assembleHerdrDepsFromHost, nodeChannelFromHost } from './host-ports.js'
 import { MetadataProjector } from './metadata.js'
 import { OverviewProjector, type OverviewDoc } from './overview.js'
 import { PaneRegistry, nodeIdOf, type ManagedDoc } from './panes.js'
-import { HerdrProbeCollector } from './probes.js'
 import { parseAgentResult, parseSessionSnapshot } from './rpc.js'
 import { normalizeStartupTimeoutMs } from './spawn-rules.js'
 import { createHerdrTransport, isValidSessionName, resolveSocketPath } from './transport.js'
@@ -57,7 +56,6 @@ export interface HerdrRuntimeController {
   liveTasks(): string[]
   onAgentSpawn(request: AgentSpawnRequest): Promise<HookResult<AgentSpawnRequest>>
   onTurnSettled(payload: TurnSettledPayload): Promise<void>
-  collectDiagnostics(raw: unknown): Promise<void>
   getRegistry(): PaneRegistry | undefined
   getExecutor(): HerdrExecutor | undefined
   getTransport(): HerdrTransport
@@ -111,35 +109,6 @@ export function createHerdrRuntime(options: CreateHerdrRuntimeOptions): HerdrRun
 
   /** Cache of the pane seq from the last processed socket event (event dedup; agent.get is authoritative). */
   const eventSeqCache = new Map<string, number>()
-  /** Probe collector (observation watermarks / failure counters self-managed; reset on disable, forget on settle). */
-  const probes = new HerdrProbeCollector({
-    asks,
-    registry: () => registryRef.current,
-    overview: () => overviewRef.current,
-    executor: () => executorRef.current,
-    transport: transportOf,
-    localTarget: () => frozenLocalTarget,
-    signal: () => connectionAbort.signal,
-    settleUnmanaged: (pane) => {
-      registryRef.current?.update(nodeIdOf(pane), pane.paneId, {
-        outcome: 'settled',
-        settledAt: Date.now(),
-        outputFileName: undefined,
-      })
-      executorRef.current?.releasePaneState(pane)
-      forgetPaneCaches(nodeIdOf(pane), pane.paneId)
-    },
-    cancelAskQuietly: cancelQuietly,
-  })
-  let collectDiagnosticsListener: ((payload: unknown) => Promise<void> | void) | undefined
-  probes.register({
-    onEvent(_type, listener) {
-      collectDiagnosticsListener = listener
-      return () => {
-        collectDiagnosticsListener = undefined
-      }
-    },
-  })
 
   /** While disabling: the doc handle is already invalid, overview refreshes are skipped silently (KISS: no write, no error). */
   let stopping = false
@@ -227,7 +196,14 @@ export function createHerdrRuntime(options: CreateHerdrRuntimeOptions): HerdrRun
       subscriptionRetryTimer = undefined
       if (stopping || connectionAbort.signal.aborted) return
       void synchronizeSubscription(lastSubscribedPaneIds(), connectionAbort.signal)
-        .then((rebuilt) => { if (rebuilt) subscriptionRetryAttempt = 0 })
+        .then(async (rebuilt) => {
+          if (!rebuilt) return
+          subscriptionRetryAttempt = 0
+          const registry = registryRef.current
+          if (!stopping && registry !== undefined) {
+            await overviewRef.current?.refresh(registry, asks, frozenLocalTarget)
+          }
+        })
         .catch(() => {
           // Rebuild failed: keep retrying after backoff (next onError or this round's fallback).
           scheduleSubscriptionRetry()
@@ -277,7 +253,7 @@ export function createHerdrRuntime(options: CreateHerdrRuntimeOptions): HerdrRun
           if (unsubscribeRef.current === release) subscribedPaneKey = undefined
           overviewRef.current?.markSubscriptionFailed(error)
           host.notify('Herdr event subscription lost', error instanceof Error ? error.message : String(error), 'error')
-          // Loss self-healing: schedule backoff reconnect even when watchdogEnabled=false (deduped singleton).
+          // Loss self-healing: schedule backoff reconnect (deduped singleton).
           scheduleSubscriptionRetry()
         },
         { paneIds: ids, signal: connectionAbort.signal },
@@ -397,10 +373,9 @@ export function createHerdrRuntime(options: CreateHerdrRuntimeOptions): HerdrRun
   }
 
   // ---- Startup reconciliation: subscribe ack -> snapshot scan ----
-  /** When a pane is settled out of the registry, synchronously reclaim its probe/event caches (prevent long-lived leaks). */
+  /** When a pane is settled out of the registry, synchronously reclaim its event cache (prevent long-lived leaks). */
   function forgetPaneCaches(nodeId: string | undefined, paneId: string): void {
     eventSeqCache.delete(`${nodeId ?? 'local'}:${paneId}`)
-    probes.forget(nodeId, paneId)
   }
 
   async function reconcile(): Promise<void> {
@@ -757,8 +732,6 @@ export function createHerdrRuntime(options: CreateHerdrRuntimeOptions): HerdrRun
     projectorRef.current = undefined
     overviewRef.current = undefined
     eventSeqCache.clear()
-    // Probe observation watermarks / failure counts are invalidated with the enable cycle (new cycle restarts from first observation).
-    probes.reset()
     if (errors.length > 0) {
       const detail = errors.map((e) => (e instanceof Error ? depsOf().redact(e.message) : String(e))).join('; ')
       throw new HelmxError('plugin_service_stop_failed', `herdr service cleanup failed: ${detail}`, 500, { errors: detail })
@@ -849,9 +822,6 @@ export function createHerdrRuntime(options: CreateHerdrRuntimeOptions): HerdrRun
     },
     async onTurnSettled(payload: TurnSettledPayload): Promise<void> {
       await settleParentTurn(payload.conversation.id)
-    },
-    async collectDiagnostics(raw: unknown): Promise<void> {
-      await collectDiagnosticsListener?.(raw)
     },
     getRegistry: () => registryRef.current,
     getExecutor: () => executorRef.current,

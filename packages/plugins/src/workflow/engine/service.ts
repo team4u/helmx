@@ -73,7 +73,6 @@ export {
   type WorkflowServiceHost,
 } from './host-adapter.js'
 export type { WorkflowStateStore } from './run-store.js'
-export type { WorkflowAutoResumeCandidate } from './service-recovery.js'
 export type { WorkflowServiceOptions } from './service-context.js'
 
 export class WorkflowService {
@@ -357,13 +356,6 @@ export class WorkflowService {
       reserved: this.takeoverReservations.has(markerRunId),
       active: this.active.has(markerRunId),
     }).ghost
-  }
-
-  /**
-   * Return background workflows eligible for automatic resume (implemented in service-recovery).
-   */
-  listAutoResumeCandidates(maxAttempts = 3) {
-    return this.recovery.listAutoResumeCandidates(maxAttempts)
   }
 
   /** Wait for a run to finish and return its result (historical runs return result directly). */

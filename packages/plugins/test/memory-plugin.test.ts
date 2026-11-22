@@ -312,7 +312,7 @@ test('memory 插件行为', { timeout: 60_000 }, async (t) => {
       )
     }
 
-    // 顶层常驻会话（如 SuperAgent 中枢）仍正常获得记忆段落
+    // 顶层会话正常获得记忆段落
     const topResult = await host.runHook('before_turn', { ...makeTurn('assistant'), conversation: topLevelHelmx } as never)
     assert.equal(topResult.action, 'transform')
     assert.ok(topResult.value.sections.some((s: { id: string }) => s.id === 'memory.content'))

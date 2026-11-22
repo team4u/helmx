@@ -439,12 +439,12 @@ test('插件配置分层：磁盘不固化 default、sources 三态溯源、null
   await rejectsCode(store.set('ext:req', { token: 42 }, reqSchema), 'validation_error', 400)
 })
 
-test('createHelmx 全部 13 个内置插件的只读契约投影均通过严格校验并完整暴露 presentationMetaSchema', { timeout: 60_000 }, async (t) => {
+test('createHelmx 全部 12 个内置插件的只读契约投影均通过严格校验并完整暴露 presentationMetaSchema', { timeout: 60_000 }, async (t) => {
   const dataDir = useTempDir(t, 'helmx-hub-manifests-')
   const { app, kernel } = await createHubTestApp({ dataDir, cwd: dataDir })
   try {
     const initial = kernel.plugins.listManifests()
-    assert.equal(initial.length, 13)
+    assert.equal(initial.length, 12)
     for (const manifest of initial) {
       assertPluginManifestProjection(manifest)
     }
@@ -476,14 +476,10 @@ test('createHelmx 全部 13 个内置插件的只读契约投影均通过严格�
     const tiersManifest = kernel.plugins.getManifest('builtin:tiers')
     assert.equal(tiersManifest.actions.find((a) => a.id === 'replace')?.visibility, 'ui')
 
-    // Enabling default-disabled builtin:superagent also yields a strictly valid manifest with presentationMetaSchema.
-    await kernel.plugins.enable('builtin:superagent')
-    const saManifest = kernel.plugins.getManifest('builtin:superagent')
-    assertPluginManifestProjection(saManifest)
-    assert.equal(saManifest.status, 'active')
-    assert.equal(saManifest.tools.length, 7)
-    assert.ok(saManifest.tools.every((tool) => tool.sourceKind === 'action'))
-    assert.ok(saManifest.tools.some((tool) => tool.name === 'dispatch_worker' && tool.presentationMetaSchema !== undefined))
+    // Default-disabled builtin:herdr still yields a strictly valid manifest projection.
+    const herdrManifest = kernel.plugins.getManifest('builtin:herdr')
+    assertPluginManifestProjection(herdrManifest)
+    assert.equal(herdrManifest.status, 'disabled')
   } finally {
     await app.close()
   }

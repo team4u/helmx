@@ -1,8 +1,7 @@
 /**
  * Dual-form JSON spec normalization (pure logic, directly unit-testable).
  *
- * Form A (tree shorthand used by built-in plugins; the real-world shape in
- * superagent.ts / triggers.ts):
+ * Form A (tree shorthand used by built-in plugins; e.g. triggers.ts):
  *   { component: 'Card', children: [ { component: 'Text', text: '...' } ], ...props }
  * Form B (flat @json-render form):
  *   { root: 'rootId', elements: { rootId: { type: 'Card', props: {...}, children: ['child1'] } } }

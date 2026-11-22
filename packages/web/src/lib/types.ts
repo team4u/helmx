@@ -213,7 +213,7 @@ export function groupUiContributions(contributions: PluginUiContribution[]): Gro
 /**
  * Parses a declarative navigation target string:
  * - 'conversation:1' / 'conversation:42'
- * - 'conversation:profile:superagent' -> finds the resident or latest conversation of that profileId
+ * - 'conversation:profile:assistant' -> finds the resident or latest conversation of that profileId
  * - 'conversation:tag:worker' -> finds the latest conversation carrying that tag
  * - 'agent:assistant' -> opens that agent's standby page (the conversation is created on first send)
  * - 'screen:builtin:herdr/overview' -> opens a full-screen plugin view

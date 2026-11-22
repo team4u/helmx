@@ -187,7 +187,6 @@ export async function startWorkflowRun(
         preassigned: {
           runId: nextRunId,
           replayedFrom: replayFrom.id,
-          autoResumeCount: (replayFrom.autoResumeCount ?? 0) + 1,
           onPersisted: releaseTakeover,
           onPersistFailed: releaseTakeover,
         },
@@ -335,7 +334,6 @@ export async function startWorkflowRun(
       ? { notifyParentOnSettle: true }
       : {}),
     ...(foregroundContext ? { syncForeground: true } : {}),
-    ...(replayFrom !== undefined ? { autoResumeCount: (replayFrom.autoResumeCount ?? 0) + 1 } : {}),
     ...(meta?.description !== undefined ? { description: svc.redact(meta.description) } : {}),
     ...(meta?.phases !== undefined
       ? { phases: redactJsonValue(meta.phases, svc.redact) as RunRecord['phases'] }

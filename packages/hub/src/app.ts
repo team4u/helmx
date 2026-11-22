@@ -8,7 +8,6 @@ import { createMemoryPlugin } from '@helmx/plugins/memory';
 import { createJsonRenderPlugin } from '@helmx/plugins/json-render';
 import { createMermaidPlugin } from '@helmx/plugins/mermaid';
 import { createHerdrPlugin } from '@helmx/plugins/herdr';
-import { createSuperAgentPlugin } from '@helmx/plugins/superagent';
 import { createTriggersPlugin } from '@helmx/plugins/triggers';
 import { createMagpiePlugin } from '@helmx/plugins/magpie';
 import { createTokenSpeedPlugin } from '@helmx/plugins/token-speed';
@@ -53,9 +52,8 @@ export async function createHelmx(options: HelmxOptions = {}) {
     await kernel.plugins.register(createMagpiePlugin());
     await kernel.plugins.register(createTokenSpeedPlugin());
     await kernel.plugins.register(createTiersPlugin());
-    // Default-disabled (2, opt-in): herdr, superagent.
+    // Default-disabled (1, opt-in): herdr.
     await kernel.plugins.register(createHerdrPlugin(), { enabled: false });
-    await kernel.plugins.register(createSuperAgentPlugin(), { enabled: false });
     await loadExternalPlugins(kernel.dataDir, kernel.plugins);
     // Run `prepare -> start` across all registered plugins before resuming the SDK scheduler.
     // Two-phase boot (autoStart: false) defers this to the entrypoint after the HTTP listener opens.

@@ -28,7 +28,6 @@ export const ULTRA_SLOW_TEST_PREFIXES = [
   'runtime.test.ts',
   'plugins-contract.test.ts',
   'herdr',
-  'superagent',
   'background-restart',
   'native-worktree',
   'node-upgrade',
