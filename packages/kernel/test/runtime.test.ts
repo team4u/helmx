@@ -2428,17 +2428,14 @@ describe('KernelRuntime start and close concurrency', { timeout: 60_000 }, () =>
       await k1.close()
     }
 
-    // 2. Downgrade only helmx_conversation_fts to legacy unicode61 DDL (leaving pi_* tables untouched).
+    // 2. Drop only the derived helmx_conversation_fts table (leaving pi_* tables untouched).
     const dbPath = join(dir, 'state.sqlite')
     const raw = new DatabaseSync(dbPath)
     raw.exec('DROP TABLE helmx_conversation_fts')
-    raw.exec(
-      'CREATE VIRTUAL TABLE helmx_conversation_fts USING fts5(conversation_id UNINDEXED, entry_id UNINDEXED, title, body)',
-    )
     raw.exec(`DELETE FROM helmx_seq WHERE key = '${FTS_SCHEMA_VERSION_KEY}'`)
     raw.close()
 
-    // 3. Reopen KernelRuntime: must detect DDL mismatch, recreate trigram table, and rebuild FTS once from pi history.
+    // 3. Reopen KernelRuntime: must recreate trigram table and rebuild FTS once from pi history.
     const k2 = await openRuntime(dir)
     try {
       const triHits = await k2.search('连接池')

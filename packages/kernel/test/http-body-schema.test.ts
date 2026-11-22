@@ -485,20 +485,21 @@ test('models/refresh: rejects === "" only (preserves whitespace string); merges 
   }
 })
 
-test('providers PUT: array and { providers } wrapper share rules; wrong or unknown item fields return 400', { timeout: 60_000 }, async () => {
+test('providers PUT: requires { providers } object; rejects raw array and wrong/unknown item fields with 400', { timeout: 60_000 }, async () => {
   const calls = newCallLog()
   const kernel = makeKernel(calls)
   const good = {
     id: 'faux', protocol: 'openai', baseUrl: 'https://api.example.com', models: ['m'], enabled: true,
   }
-  const asArray = await call(kernel, 'PUT', '/api/providers', [good])
-  assert.equal(asArray.status, 200)
   const wrapped = await call(kernel, 'PUT', '/api/providers', { providers: [good] })
   assert.equal(wrapped.status, 200)
-  assert.equal(calls.providersSave!.length, 2)
+  assert.equal(calls.providersSave!.length, 1)
+  for (const nonObj of [[good], '"str"', 42]) {
+    const res = await call(kernel, 'PUT', '/api/providers', nonObj)
+    assert.equal(res.status, 400, `non-object body should reject with 400: ${JSON.stringify(nonObj)}`)
+    assert.equal(res.code, 'invalid_json')
+  }
   for (const bad of [
-    '"str"',
-    42,
     {},
     { providers: 'x' },
     { providers: [{}] },

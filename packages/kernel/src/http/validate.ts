@@ -9,20 +9,23 @@
 import { Type, type Static, type TSchema } from 'typebox'
 import {
   HelmxError,
-  PROFILE_STARTERS_MAX_ITEMS,
-  PROFILE_STARTER_LABEL_MAX_LENGTH,
-  PROFILE_STARTER_PROMPT_MAX_LENGTH,
+  SKILL_ID_PATTERN,
   validateOrThrow,
   type ConversationInit,
   type ConversationPatch,
   type InputOrigin,
   type JsonSchema,
   type Profile,
-  type ProfileRuntime,
-  type ProfileStarterPrompt,
   type ProviderConfig,
   type WhenBusy,
 } from '@helmx/protocol'
+import {
+  isCrossPlatformAbsolutePath,
+  PROFILE_RUNTIME_KIND_PATTERN,
+  PROFILE_THINKING_LEVELS,
+  validateProfileRuntime,
+  validateProfileStarters,
+} from '../services/profiles-skills.js'
 
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 /** Node ID rule (starts with an ASCII letter or digit; may contain . _ -, length 1..128). */
@@ -30,9 +33,7 @@ export const NODE_ID_PATTERN_SOURCE = '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$'
 /** Safe positive integer upper bound: matches Number.isSafeInteger (schema integer does not check safe bounds). */
 const MAX_SAFE_INTEGER = 9007199254740991
 const MODEL_REF_PATTERN = /^[^/\s]+\/[^\s]+$/
-const SKILL_ID_PATTERN_SOURCE = '^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$'
-const RUNTIME_KIND_PATTERN_SOURCE = '^[a-z][a-z0-9_-]{0,31}$'
-const THINKING_LEVELS = ['', 'off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
+const THINKING_LEVELS = ['', ...PROFILE_THINKING_LEVELS] as const
 
 // Reusable TypeBox schema primitives (valid JSON Schema consumed by @helmx/protocol's AJV validator).
 const IdString = Type.String({ pattern: ID_PATTERN.source })
@@ -90,15 +91,6 @@ export function requireUtf16LengthAtMost(field: string, value: string, maxLength
   if (value.length > maxLength) {
     throw new ValidationError(`${field} length must be <= ${maxLength}`)
   }
-}
-
-/**
- * Cross-platform absolute path check: POSIX `/`, Windows drive `^[a-zA-Z]:[\\/]` and UNC `^\\\\[^\\]+\\[^\\]+`.
- * Matches `isAbsoluteTargetPath` in runtime/tools.ts (the kernel evaluates remote/Windows target
- * path shape independently of the host OS).
- */
-function isCrossPlatformAbsolutePath(p: string): boolean {
-  return p.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(p) || /^\\\\[^\\]+\\[^\\]+/.test(p)
 }
 
 /** Numeric ID in route path params: non-numeric values fail immediately with 400 before reaching services. */
@@ -363,7 +355,7 @@ const PROFILE_STARTER_SCHEMA = Type.Object(
 const PROFILE_RUNTIME_SCHEMA = Type.Object(
   {
     // Kernel has zero hardcoded plugin enums: kind only checks the external runtime identifier format.
-    kind: Type.String({ pattern: RUNTIME_KIND_PATTERN_SOURCE }),
+    kind: Type.String({ pattern: PROFILE_RUNTIME_KIND_PATTERN.source }),
     agent: NonEmptyString,
     args: Type.Optional(Type.Array(Type.String())),
     nodeId: Type.Optional(NonEmptyString),
@@ -382,7 +374,7 @@ const PROFILE_COMMON_PROPS = {
   nodeId: Type.Optional(NodeIdString),
   cwd: Type.Optional(NonEmptyString),
   tags: Type.Optional(Type.Array(NonEmptyString)),
-  skills: Type.Optional(Type.Array(Type.String({ pattern: SKILL_ID_PATTERN_SOURCE }))),
+  skills: Type.Optional(Type.Array(Type.String({ pattern: SKILL_ID_PATTERN.source }))),
   starters: Type.Optional(Type.Array(PROFILE_STARTER_SCHEMA)),
   runtime: Type.Optional(PROFILE_RUNTIME_SCHEMA),
   managedByPlugin: Type.Optional(Type.String()),
@@ -400,6 +392,10 @@ const PROFILE_UPDATE_BODY_SCHEMA = Type.Object(
   { id: Type.Optional(IdString), ...PROFILE_COMMON_PROPS },
   { additionalProperties: false },
 )
+
+const throwValidationError = (message: string): never => {
+  throw new ValidationError(message)
+}
 
 export function parseProfileBody(body: Record<string, unknown>, opts: { requireId: boolean }): Profile {
   const parsed = opts.requireId
@@ -419,8 +415,12 @@ export function parseProfileBody(body: Record<string, unknown>, opts: { requireI
     throw new ValidationError('each tags item must be 1-64 characters')
   }
 
-  const starters = normalizeProfileStarters(parsed.starters)
-  const runtime = normalizeProfileRuntime(parsed.runtime)
+  const starters = parsed.starters !== undefined
+    ? validateProfileStarters(parsed.starters, { fail: throwValidationError })
+    : undefined
+  const runtime = parsed.runtime !== undefined
+    ? validateProfileRuntime(parsed.runtime, { fail: throwValidationError, allowEmptyRuntimeEnv: true })
+    : undefined
 
   const profile: Profile = { ...(parsed.id !== undefined ? { id: parsed.id } : {}) } as Profile
   if (parsed.name !== undefined) profile.name = parsed.name
@@ -437,58 +437,6 @@ export function parseProfileBody(body: Record<string, unknown>, opts: { requireI
   if (starters !== undefined) profile.starters = starters
   if (parsed.system !== undefined) profile.system = parsed.system
   return profile
-}
-
-function countCodePoints(text: string): number {
-  let count = 0
-  for (const _ of text) count += 1
-  return count
-}
-
-/**
- * Profile starters semantic checks matching ProfileService.validateProfileInput:
- * max item count, label trimming, non-whitespace prompt, and Unicode code-point limits.
- */
-function normalizeProfileStarters(
-  raw: Array<Static<typeof PROFILE_STARTER_SCHEMA>> | undefined,
-): ProfileStarterPrompt[] | undefined {
-  if (raw === undefined) return undefined
-  if (raw.length > PROFILE_STARTERS_MAX_ITEMS) {
-    throw new ValidationError(`starters at most ${PROFILE_STARTERS_MAX_ITEMS} items`)
-  }
-  return raw.map((item, index) => {
-    const trimmed = item.label.trim()
-    if (countCodePoints(trimmed) === 0) {
-      throw new ValidationError(`starters[${index}].label cannot be empty after trimming`)
-    }
-    if (countCodePoints(trimmed) > PROFILE_STARTER_LABEL_MAX_LENGTH) {
-      throw new ValidationError(`starters[${index}].label at most ${PROFILE_STARTER_LABEL_MAX_LENGTH} Unicode code points`)
-    }
-    if (item.prompt.trim() === '') {
-      throw new ValidationError(`starters[${index}].prompt cannot be pure whitespace`)
-    }
-    if (countCodePoints(item.prompt) > PROFILE_STARTER_PROMPT_MAX_LENGTH) {
-      throw new ValidationError(`starters[${index}].prompt at most ${PROFILE_STARTER_PROMPT_MAX_LENGTH} Unicode code points`)
-    }
-    return { label: trimmed, prompt: item.prompt }
-  })
-}
-
-function normalizeProfileRuntime(
-  runtime: Static<typeof PROFILE_RUNTIME_SCHEMA> | undefined,
-): ProfileRuntime | undefined {
-  if (runtime === undefined) return undefined
-  if (runtime.workspace !== undefined && !isCrossPlatformAbsolutePath(runtime.workspace)) {
-    throw new ValidationError('runtime.workspace must be a cross-platform absolute path (POSIX /, Windows drive, or UNC)')
-  }
-  return {
-    kind: runtime.kind,
-    agent: runtime.agent,
-    ...(runtime.args !== undefined ? { args: [...runtime.args] } : {}),
-    ...(runtime.nodeId !== undefined ? { nodeId: runtime.nodeId } : {}),
-    ...(runtime.workspace !== undefined ? { workspace: runtime.workspace } : {}),
-    ...(runtime.env !== undefined ? { env: { ...(runtime.env as Record<string, string>) } } : {}),
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -514,11 +462,7 @@ const PROVIDERS_BODY_SCHEMA = Type.Object(
   { additionalProperties: false },
 )
 
-/**
- * providers PUT body (object form): `{ providers: [...] }`. Array form is wrapped by the route layer
- * (`parseProvidersBodyValue`, preserving the CLI raw-array convention) before reusing this helper,
- * so both forms share the same per-item schema validation.
- */
+/** providers PUT body: `{ providers: ProviderConfig[] }`. */
 export function parseProvidersBody(body: Record<string, unknown>): ProviderConfig[] {
   const parsed = parseBodyWithSchema(PROVIDERS_BODY_SCHEMA, body, 'providers body')
   return parsed.providers.map((p) => ({

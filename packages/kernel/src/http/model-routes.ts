@@ -1,12 +1,12 @@
 /**
  * Model catalog domain routes: /api/models (default/filter/refresh/providers/list),
- * /api/providers (PUT full array or `{ providers }` wrapper), /api/credentials
+ * /api/providers (PUT `{ providers }` body), /api/credentials
  * (only id/configured key, never plaintext). Hot-reloads the model catalog after
  * providers/credentials changes (persisting without reloading leaves hot config stale).
  */
-import type { JsonSchema, ProviderConfig } from '@helmx/protocol'
+import type { JsonSchema } from '@helmx/protocol'
 import { HelmxError } from '@helmx/protocol'
-import { errorResponse, jsonOk, readJsonBody, readJsonValue, type JsonRedactor } from './http-utils.js'
+import { errorResponse, jsonOk, readJsonBody, type JsonRedactor } from './http-utils.js'
 import type { KernelRuntimeLike } from './contracts.js'
 import { assertBodySchema, parseCredentialBody, parseProvidersBody, requireIdParam, ValidationError } from './validate.js'
 import { methodNotAllowed, readOptionalJsonBody, type RouteContext } from './route-context.js'
@@ -193,22 +193,13 @@ export async function handleProvidersDomain(
   }
   if (method === 'GET') return jsonOk(redactor, await kernel.providers.list())
   if (method === 'PUT') {
-    // CLI sends a raw full array; Web historically sends `{ providers: [...] }`.
-    // Both forms go through the same strict per-item schema validation without relaxing field rules.
-    const value = await readJsonValue(ctx.request)
-    const providers = parseProvidersBodyValue(value)
+    const body = await readJsonBody(ctx.request)
+    const providers = parseProvidersBody(body)
     const saved = await kernel.providers.save(providers)
     await reloadModels(kernel)
     return jsonOk(redactor, saved)
   }
   return methodNotAllowed(redactor, method)
-}
-
-/** providers PUT body: full array (CLI convention) or `{ providers }` wrapper (Web form). */
-function parseProvidersBodyValue(value: unknown): ProviderConfig[] {
-  if (Array.isArray(value)) return parseProvidersBody({ providers: value })
-  if (value !== null && typeof value === 'object') return parseProvidersBody(value as Record<string, unknown>)
-  throw new ValidationError('body must be a ProviderConfig array or { providers: [...] }')
 }
 
 // ---------------------------------------------------------------------------

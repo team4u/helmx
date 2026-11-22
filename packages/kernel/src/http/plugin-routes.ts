@@ -218,7 +218,7 @@ function parsePluginDisableBody(body: Record<string, unknown>): { force?: boolea
 }
 
 /**
- * `POST /api/plugins/doctor` body: accepts `path` / `dir` (aliases for an absolute directory path)
+ * `POST /api/plugins/doctor` body: accepts `path` (absolute directory path)
  * or `id` (a registered plugin whose source directory is resolved server-side).
  */
 function parseDoctorTarget(body: Record<string, unknown>): { dir?: string; id?: string } {
@@ -227,7 +227,6 @@ function parseDoctorTarget(body: Record<string, unknown>): { dir?: string; id?: 
       type: 'object',
       properties: {
         path: { type: 'string', pattern: '\\S' },
-        dir: { type: 'string', pattern: '\\S' },
         id: { type: 'string', pattern: '\\S' },
       },
       additionalProperties: false,
@@ -235,28 +234,17 @@ function parseDoctorTarget(body: Record<string, unknown>): { dir?: string; id?: 
     body,
     'plugins doctor body',
   )
-  const dirLike = (v: unknown, field: string): string | undefined => {
-    if (typeof v !== 'string') return undefined
-    // Validate cross-platform absolute paths without `..` before running doctor checks.
-    assertDoctorTargetDir(v, field)
-    return v
-  }
-  const pathDir = dirLike(body.path, 'path')
-  const dirDir = dirLike(body.dir, 'dir')
-  if (pathDir !== undefined && dirDir !== undefined && pathDir !== dirDir) {
-    throw new ValidationError('path and dir conflict; provide only one of them (dir is a compatibility alias for path)')
-  }
+  const pathDir = typeof body.path === 'string' ? (assertDoctorTargetDir(body.path, 'path'), body.path) : undefined
   if (body.id !== undefined) {
-    if (pathDir !== undefined || dirDir !== undefined) {
-      throw new ValidationError('id and path/dir are mutually exclusive; provide only one')
+    if (pathDir !== undefined) {
+      throw new ValidationError('id and path are mutually exclusive; provide only one')
     }
     return { id: body.id as string }
   }
-  const resolved = pathDir ?? dirDir
-  if (resolved === undefined) {
-    throw new ValidationError('must provide either path/dir (absolute directory path) or id (registered plugin)')
+  if (pathDir === undefined) {
+    throw new ValidationError('must provide either path (absolute directory path) or id (registered plugin)')
   }
-  return { dir: resolved }
+  return { dir: pathDir }
 }
 
 /** Parses `?conversationId=N` query param as a positive safe integer (400 otherwise). */

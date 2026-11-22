@@ -45,7 +45,6 @@ import { HookBridge, prepareToolResultWith } from './hook-bridge.js'
 import { RuntimeToolRegistry } from './tool-registry.js'
 import { AssetReloader } from './asset-reloader.js'
 import { requireConv } from './runtime-helpers.js'
-import { RuntimeNodeOperations } from './runtime-nodes.js'
 import { RuntimeTriggerDispatcher } from './runtime-triggers.js'
 import { RuntimeAgentSpawn } from './runtime-agent-spawn.js'
 import { trustedPlatformFromEnvFabric } from './target-cwd.js'
@@ -87,7 +86,6 @@ export interface AssembledRuntimeServices {
   envFabric: EnvFabric
   toolDeps: HelmxToolDeps
   nodes: NodeManager
-  nodeOps: RuntimeNodeOperations
   ownership: RuntimeOwnershipManager
   agentSpawn: RuntimeAgentSpawn
   events: EventHub
@@ -258,12 +256,6 @@ export function assembleRuntimeServices(
     events,
     nodeUpgradeTimeoutMs: init.nodeUpgradeTimeoutMs,
     convOf: (id) => requireConv(options.store, id),
-  })
-
-  const nodeOps = new RuntimeNodeOperations({
-    nodes,
-    envFabric,
-    events,
   })
 
   // ---- Conversation ownership management ----
@@ -451,7 +443,6 @@ export function assembleRuntimeServices(
     envFabric,
     toolDeps,
     nodes,
-    nodeOps,
     ownership,
     agentSpawn,
     events,

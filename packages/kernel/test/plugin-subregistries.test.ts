@@ -677,9 +677,6 @@ test('UiRegistry: extension collection, parameter validation, and dependency che
     (err: unknown) => err instanceof HelmxError && err.code === 'duplicate_ui',
   );
 
-  // docs assertion is a stub after declarative JSON track removal: no longer validates doc references
-  ui.assertUiDocsRegistered('p1', () => false);
-
   const list = ui.listUi(['p1']);
   assert.equal(list.length, 1);
   assert.equal(list[0]!.surface, 'sidebar.item');

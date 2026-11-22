@@ -21,7 +21,7 @@
  *                    on the consumer-side node_modules layout, so a second unpacked copy would be pure
  *                    duplication (~6 MiB compressed); the unpacked staging directories below are
  *                    transient packing inputs, removed once the archives exist.
- *   cli/{package.json, dist/}      CLI output (package.json kept for locating/auditing; dist/index.js is
+ *   cli/{package.json, dist/index.js}  CLI output (package.json kept for locating/auditing; dist/index.js is
  *                                  the same zero-dependency single-file bundle as the dist-cli artifact,
  *                                  so the payload-side `helmx` and the globally installed `helmx` are one CLI;
  *                                  the bundle self-contains the CLI workspace closure, so it stays at the
@@ -34,10 +34,10 @@
  * control CLI (packages/cli/dist/index.js incl. the bundled-in launcher update-path closure) that
  * installs globally via one `npm install -g` (bin helmx); and the node daemon artifact
  * (see src/assemble-node.mjs): dist-node/ bundles the node daemon CLI (packages/node/dist/cli.js)
- * with @helmx/node + @helmx/env-io + @helmx/protocol inlined and exactly four external exact-version
- * dependencies (bin helmx-node → dist/cli.js; the dual-package self-upgrade target). The Hub payload
- * contract above is unchanged by those artifacts except for the cli entry bytes; a missing CLI or
- * node dist input aborts the build.
+ * with @helmx/node + @helmx/env-io + @helmx/protocol and pure-JS pi-durable/env/node + chord/context
+ * subpaths inlined and exactly two external exact-version dependencies (birpc / ws; bin helmx-node →
+ * dist/cli.js; the dual-package self-upgrade target). The Hub payload contract above is unchanged by
+ * those artifacts except for the cli entry bytes; a missing CLI or node dist input aborts the build.
  *
  * Note: `@helmx/plugin-client` is a browser-only SDK already bundled into `web/dist` and virtualized by
  * `@helmx/plugin-build` via `globalThis.__helmx_shared_plugin_client`, so neither `@helmx/plugin-client`
@@ -64,8 +64,22 @@ const stagingDir = path.join(payloadPkgRoot, 'dist');
 /** Publish payload package name (overridable via HELMX_PAYLOAD_PACKAGE). */
 const payloadPackageName = process.env.HELMX_PAYLOAD_PACKAGE ?? '@helmx/hub';
 
-/** Built-in plugin runtime asset subdirectories: every plugin resolver probes the same-named dist-side directory first. */
-const RUNTIME_ASSET_SUBDIRS = ['client', 'skill', 'assets'];
+/**
+ * Built-in plugin runtime asset subdirectories copied from packages/plugins/src/<name>/:
+ * raw `client/` TSX sources are excluded because every built-in UI plugin ships a mandatory
+ * prebuilt `dist-client/` artifact served directly with zero source-compile fallback.
+ */
+const RUNTIME_ASSET_SUBDIRS = ['skill', 'assets'];
+
+/** Excludes build-only / redundant files from runtime `.tgz` archives (source maps, TS decls, pre-gzipped assets). */
+function isExcludedRuntimeDistFile(filePath) {
+  return (
+    filePath.endsWith('.js.map') ||
+    filePath.endsWith('.d.ts') ||
+    filePath.endsWith('.d.ts.map') ||
+    filePath.endsWith('.gz')
+  );
+}
 
 const inputs = [
   ['hub dist entry', path.join(repoRoot, 'packages/hub/dist/main.js')],
@@ -217,25 +231,46 @@ const cliArtifact = await assembleCliArtifact({
 });
 
 // --- Node daemon artifact (third publish entry): the remote-machine install target. assembleNodeArtifact
-// bundles packages/node/dist/cli.js with the workspace closure inlined and the four external packages
-// (chord / pi-durable / birpc / ws) pinned at their exact installed versions; a broken bundle contract
-// aborts the build inside assemble-node.mjs. Publish order stays payload → cli → node.
+// bundles packages/node/dist/cli.js with the workspace closure and pure-JS pi-durable/env/node +
+// chord/context subpaths inlined and the two external packages (birpc / ws) pinned at their exact
+// installed versions; a broken bundle contract aborts the build inside assemble-node.mjs. Publish order
+// stays payload → cli → node.
 await assembleNodeArtifact({
   repoRoot,
   version: payloadPkg.version,
   enginesNode: distPackageJson.engines.node,
 });
 
-for (const dir of ['hub', 'kernel', 'plugins', 'plugin-build', 'env-io', 'protocol', 'cli']) {
-  cpSync(path.join(repoRoot, 'packages', dir, 'dist'), path.join(stagingDir, dir, 'dist'), { recursive: true });
+const builtinSrc = path.join(repoRoot, 'packages/plugins/src');
+const builtinDist = path.join(repoRoot, 'packages/plugins/dist');
+const copyRuntimeDistFilter = (src) => !isExcludedRuntimeDistFile(src);
+const copyPluginsDistFilter = (src) => {
+  if (isExcludedRuntimeDistFile(src)) return false;
+  // packages/plugins's own build copies raw src/<name>/client/ into dist/<name>/client/ for workspace dev;
+  // omit it from plugins.tgz because every built-in UI plugin ships mandatory prebuilt dist-client/.
+  const rel = path.relative(builtinDist, src);
+  if (!rel.startsWith('..') && !path.isAbsolute(rel)) {
+    const segs = rel.split(path.sep);
+    if (segs.length >= 2 && segs[1] === 'client' && existsSync(path.join(builtinSrc, segs[0], 'client'))) {
+      return false;
+    }
+  }
+  return true;
+};
+for (const dir of ['hub', 'kernel', 'plugins', 'plugin-build', 'env-io', 'protocol']) {
+  cpSync(path.join(repoRoot, 'packages', dir, 'dist'), path.join(stagingDir, dir, 'dist'), {
+    recursive: true,
+    filter: dir === 'plugins' ? copyPluginsDistFilter : copyRuntimeDistFilter,
+  });
   cpSync(path.join(repoRoot, 'packages', dir, 'package.json'), path.join(stagingDir, dir, 'package.json'));
 }
 // The payload's CLI entry is the same single-file bundle as the dist-cli artifact: the bundle
 // self-contains the CLI's workspace closure (the bundled-in launcher / the env-io update engine / tar ride along via
-// the update path), so the payload root dependency set needs no additions for the CLI to run and
-// start.mjs check keeps resolving from the cli entry point. The remaining cli/dist tsc outputs stay
-// as layout/auditing helper assets; `helmx plugins build`'s computed dynamic import of
-// @helmx/plugin-build resolves at runtime from the payload root node_modules (plugin-build.tgz).
+// the update path), so we stage only cli/package.json + cli/dist/index.js (no loose tsc outputs);
+// `helmx plugins build`'s computed dynamic import of @helmx/plugin-build resolves at runtime from
+// the payload root node_modules (plugin-build.tgz).
+mkdirSync(path.join(stagingDir, 'cli', 'dist'), { recursive: true });
+cpSync(path.join(repoRoot, 'packages', 'cli', 'package.json'), path.join(stagingDir, 'cli', 'package.json'));
 copyFileSync(cliArtifact.bundleFile, path.join(stagingDir, 'cli', 'dist', 'index.js'));
 cpSync(path.join(repoRoot, 'packages/web/dist'), path.join(stagingDir, 'web/dist'), { recursive: true });
 cpSync(path.join(payloadPkgRoot, 'src/start.mjs'), path.join(stagingDir, 'start.mjs'));
@@ -261,13 +296,10 @@ for (const component of ['hub', 'kernel', 'plugins', 'plugin-build', 'env-io', '
   if (component === 'hub') delete staged.bin;
   writeFileSync(manifestPath, `${JSON.stringify(staged, null, 2)}\n`);
 }
-// Built-in plugin runtime assets: packages/plugins/src/<name>/{client,skill,assets}
-// → dist/plugins/dist/<name>/{...} (the first probe location of every plugin resolver).
-// Must happen before packing plugins.tgz: archive installs (npm file:./plugins.tgz) only see the tgz
-// contents on the consumer side; if directory assets landed after packing, skill/assets/client would be
-// silently lost.
-const builtinSrc = path.join(repoRoot, 'packages/plugins/src');
-const builtinDist = path.join(repoRoot, 'packages/plugins/dist');
+// Built-in plugin runtime assets: packages/plugins/src/<name>/{skill,assets} and prebuilt
+// packages/plugins/dist/<name>/dist-client → dist/plugins/dist/<name>/{...} (the first probe
+// location of every plugin resolver). Must happen before packing plugins.tgz: archive installs
+// (npm file:./plugins.tgz) only see the tgz contents on the consumer side.
 const copiedAssets = [];
 const missingPrebuilt = [];
 for (const ent of readdirSync(builtinSrc, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
@@ -284,7 +316,10 @@ for (const ent of readdirSync(builtinSrc, { withFileTypes: true }).sort((a, b) =
     if (!existsSync(distClientManifest)) {
       missingPrebuilt.push(`${ent.name}/dist-client/manifest.json`);
     } else {
-      cpSync(distClientFrom, path.join(stagingDir, 'plugins/dist', ent.name, 'dist-client'), { recursive: true });
+      cpSync(distClientFrom, path.join(stagingDir, 'plugins/dist', ent.name, 'dist-client'), {
+        recursive: true,
+        filter: copyRuntimeDistFilter,
+      });
       copiedAssets.push(`${ent.name}/dist-client`);
     }
   }
