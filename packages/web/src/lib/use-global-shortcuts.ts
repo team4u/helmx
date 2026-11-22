@@ -3,10 +3,7 @@
  * strictly one key per function (Ctrl+L / Ctrl+O / Mod+K / Mod+B / Mod+J / Esc×2), no aliases.
  * Display copy is not produced here, so no locale seam is needed.
  */
-import { useEffect, type Dispatch, type MutableRefObject, type SetStateAction } from 'react'
-import type { LiveState } from './live-state.js'
-import { topConversationDrawerId, topDrawerFrame } from './drawer-stack-model.js'
-import type { ActiveModal, DrawerFrame, FocusedPanel, ResolvedTarget } from './types.js'
+import { useEffect } from 'react'
 import {
   activeTargetForPanel,
   hasAnyOpenOverlay,
@@ -19,80 +16,54 @@ import {
   resolveFocusedPanel,
   type HelmxShortcutDetail,
 } from '../shell/shortcuts-model.js'
+import { topConversationDrawerId, topDrawerFrame } from './drawer-stack-model.js'
+import type { HelmxExternalStore } from './helmx-store.js'
 
-export interface UseGlobalShortcutsOptions {
-  authenticatedRef: MutableRefObject<boolean>
-  focusedPanelRef: MutableRefObject<FocusedPanel>
-  targets: MutableRefObject<{ primaryTarget: ResolvedTarget; splitTarget: ResolvedTarget | null }>
-  activeModalRef: MutableRefObject<ActiveModal>
-  drawerStackRef: MutableRefObject<DrawerFrame[]>
-  liveRef: MutableRefObject<LiveState>
-  clearEscAbortPrompt: () => void
-  confirmOrArmEscAbort: (conversationId: number) => void
-  setActiveModal: Dispatch<SetStateAction<ActiveModal>>
-  setWorkbenchOpen: Dispatch<SetStateAction<boolean>>
-  toggleSidebarCollapsed: () => void
-}
-
-export function useGlobalShortcuts({
-  authenticatedRef,
-  focusedPanelRef,
-  targets,
-  activeModalRef,
-  drawerStackRef,
-  liveRef,
-  clearEscAbortPrompt,
-  confirmOrArmEscAbort,
-  setActiveModal,
-  setWorkbenchOpen,
-  toggleSidebarCollapsed,
-}: UseGlobalShortcutsOptions): void {
+export function useGlobalShortcuts(store: HelmxExternalStore): void {
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
-      if (!authenticatedRef.current) return
+      if (!store.getAuthenticated()) return
       if (event.isComposing || event.keyCode === 229) return
 
       const keyLower = event.key.toLowerCase()
       const isMod = (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey
       const isCtrlOnly = event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey
-      const panel = resolveFocusedPanel(focusedPanelRef.current, targets.current.splitTarget)
-      const activeTarget = activeTargetForPanel(
-        targets.current.primaryTarget,
-        targets.current.splitTarget,
-        panel,
-      )
+      const primaryTarget = store.getPrimaryTarget()
+      const splitTarget = store.getSplitTarget()
+      const panel = resolveFocusedPanel(store.getFocusedPanel(), splitTarget)
+      const activeTarget = activeTargetForPanel(primaryTarget, splitTarget, panel)
+      const activeModal = store.getActiveModal()
+      const drawerStack = store.getDrawerStack()
 
       if (isMod && keyLower === 'k') {
         if (event.defaultPrevented || hasBlockingAlertDialog()) return
         event.preventDefault()
-        clearEscAbortPrompt()
-        setActiveModal((current) => (current?.kind === 'command-palette' ? null : { kind: 'command-palette' }))
+        store.clearEscAbortPrompt()
+        store.setActiveModal((current) => (current?.kind === 'command-palette' ? null : { kind: 'command-palette' }))
         return
       }
 
       if (event.key === 'Escape' && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
         if (
           event.defaultPrevented ||
-          hasAnyOpenOverlay(activeModalRef.current, drawerStackRef.current.length > 0) ||
+          hasAnyOpenOverlay(activeModal, drawerStack.length > 0) ||
           isInlineInputEscapeTarget(event.target)
         ) {
-          clearEscAbortPrompt()
+          store.clearEscAbortPrompt()
           return
         }
         if (activeTarget.kind !== 'conversation') {
-          clearEscAbortPrompt()
+          store.clearEscAbortPrompt()
           return
         }
         const convId = activeTarget.conversationId
-        const conv =
-          liveRef.current.conversations.find((c) => c.id === convId) ??
-          liveRef.current.conversationDetails[convId]
+        const conv = store.getConversationSummary(convId) ?? store.getConversationDetail(convId)
         if (!isConversationAbortable(conv)) {
-          clearEscAbortPrompt()
+          store.clearEscAbortPrompt()
           return
         }
         event.preventDefault()
-        confirmOrArmEscAbort(convId)
+        store.confirmOrArmEscAbort(convId)
         return
       }
 
@@ -100,28 +71,28 @@ export function useGlobalShortcuts({
 
       if (isMod && keyLower === 'j') {
         // 抽屉栈内有会话帧时同样视作会话上下文：Mod+J 可在抽屉顶开合绑定该会话的工作台。
-        if (activeModalRef.current !== null || hasNonWorkbenchDialogOpen()) return
-        const top = topDrawerFrame(drawerStackRef.current)
-        const drawerConversationId = topConversationDrawerId(drawerStackRef.current)
+        if (activeModal !== null || hasNonWorkbenchDialogOpen()) return
+        const top = topDrawerFrame(drawerStack)
+        const drawerConversationId = topConversationDrawerId(drawerStack)
         if (top?.kind !== 'workbench' && activeTarget.kind !== 'conversation' && drawerConversationId === undefined) return
         event.preventDefault()
-        clearEscAbortPrompt()
-        setWorkbenchOpen((open) => !open)
+        store.clearEscAbortPrompt()
+        store.setWorkbenchOpen((open) => !open)
         return
       }
 
       if (isMod && keyLower === 'b') {
         if (
-          activeModalRef.current !== null ||
-          topConversationDrawerId(drawerStackRef.current) !== undefined ||
+          activeModal !== null ||
+          topConversationDrawerId(drawerStack) !== undefined ||
           hasNonWorkbenchDialogOpen()
         ) return
         event.preventDefault()
-        toggleSidebarCollapsed()
+        store.toggleSidebarCollapsed()
         return
       }
 
-      if (activeModalRef.current !== null || drawerStackRef.current.length > 0) return
+      if (activeModal !== null || drawerStack.length > 0) return
 
       if (isCtrlOnly && keyLower === 'l') {
         if (hasNonModelPickerDialogOpen()) return
@@ -141,17 +112,5 @@ export function useGlobalShortcuts({
     }
     window.addEventListener('keydown', keydown)
     return () => window.removeEventListener('keydown', keydown)
-  }, [
-    activeModalRef,
-    authenticatedRef,
-    clearEscAbortPrompt,
-    confirmOrArmEscAbort,
-    drawerStackRef,
-    focusedPanelRef,
-    liveRef,
-    setActiveModal,
-    setWorkbenchOpen,
-    targets,
-    toggleSidebarCollapsed,
-  ])
+  }, [store])
 }

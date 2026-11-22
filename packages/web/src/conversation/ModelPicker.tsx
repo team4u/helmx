@@ -15,7 +15,12 @@ import { useModelPickerControlAdapter } from './model-picker-adapter.js'
 // @helmx/plugin-client and is the single implementation shared with plugins.
 // ---------------------------------------------------------------------------
 
-export function ModelPicker({ conversation }: { conversation: ConversationSummary }) {
+export interface ModelPickerProps {
+  conversation: ConversationSummary
+  onReturnFocus?: () => boolean | void
+}
+
+export function ModelPicker({ conversation, onReturnFocus }: ModelPickerProps) {
   const models = useModels()
   const { pushNotice } = useStoreActions()
   const { t } = useWebLocale()
@@ -87,6 +92,7 @@ export function ModelPicker({ conversation }: { conversation: ConversationSummar
       onNotice={onNotice}
       onApply={apply}
       onResetDefault={resetToProfileDefault}
+      onReturnFocus={onReturnFocus}
     />
   )
 }

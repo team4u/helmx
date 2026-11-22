@@ -123,7 +123,7 @@ export function PreviewModalShell({
                 </div>
               ) : null}
               {state.phase === 'error' ? (
-                <div className="callout callout--error">
+                <div className="callout callout-error">
                   <HelmxIcon name="alert-circle" size={13} />
                   <span>{errorLabel}</span>
                 </div>

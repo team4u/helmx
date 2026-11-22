@@ -1,11 +1,12 @@
 /**
  * Synchronized host/plugin CSS scoping contract tests:
- * - Zero-specificity `:where([data-plugin-id="..."])` scoping avoids unilateral
- *   `@layer` cascade inversions while isolating plugin CSS across inline
- *   subtrees (`PluginScope` / `Screen`) and portalled overlays (`Dialog`,
- *   `Popover`, `DropdownMenu`, `Tooltip`, `Select`);
- * - Real happy-dom `getComputedStyle` verification proves cross-plugin and
- *   plugin-to-host isolation plus portal style propagation.
+ * - Host stylesheets declare `@layer host-base, host-components, plugin-ui;`,
+ *   and `scopePluginCss` wraps plugin CSS inside `@layer plugin-ui { ... }`
+ *   with zero-specificity `:where([data-plugin-id="..."])` scoping and
+ *   per-plugin `@keyframes` isolation across inline subtrees and portals;
+ * - Real happy-dom `getComputedStyle` verification proves layered host-vs-plugin
+ *   cascade priority, cross-plugin & plugin-to-host isolation, and portal style
+ *   propagation.
  */
 import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
@@ -63,12 +64,12 @@ test('PluginScope SSR: renders display:contents anchor inside plugin context and
   assert.match(explicit, /data-plugin-id="ext:custom"/)
 })
 
-test('scopePluginCss: scopes selectors, conditional at-rules, and :root without mutating keyframes or re-scoping', { timeout: 60_000 }, () => {
+test('scopePluginCss: wraps in @layer plugin-ui, scopes selectors & @keyframes/animation names, and is idempotent', { timeout: 60_000 }, () => {
   const raw = `
     /* header comment with { braces } and , commas */
     :root { --my-accent: #123456; }
-    .card, .card:hover { color: red; content: "a, {b}"; }
-    button.primary { font-weight: 600; }
+    .card, .card:hover { color: red; content: "a, {b}"; animation: spin 1s linear infinite, fadeIn 200ms ease-out; }
+    button.primary { font-weight: 600; animation-name: spin; }
     @media (max-width: 680px) {
       .grid { display: block; }
     }
@@ -79,27 +80,60 @@ test('scopePluginCss: scopes selectors, conditional at-rules, and :root without 
       from { transform: rotate(0deg); }
       to { transform: rotate(360deg); }
     }
+    @keyframes fadeIn {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
   `
   const scoped = scopePluginCss(raw, 'builtin:alpha')
+  assert.match(scoped, /^@layer plugin-ui \{[\s\S]*\}$/, 'plugin CSS must be wrapped in @layer plugin-ui')
   assert.match(scoped, /:where\(\[data-plugin-id="builtin:alpha"\]\)\s*\{\s*--my-accent: #123456;\s*\}/)
   assert.match(scoped, /:where\(\[data-plugin-id="builtin:alpha"\]\) \.card, :where\(\[data-plugin-id="builtin:alpha"\]\)\.card/)
   assert.match(scoped, /:where\(\[data-plugin-id="builtin:alpha"\]\) button\.primary, button:where\(\[data-plugin-id="builtin:alpha"\]\)\.primary/)
   assert.match(scoped, /@media \(max-width: 680px\)\s*\{[\s\S]*?:where\(\[data-plugin-id="builtin:alpha"\]\) \.grid/)
   assert.match(scoped, /@container panel \(max-width: 500px\)\s*\{[\s\S]*?:where\(\[data-plugin-id="builtin:alpha"\]\) \.row/)
-  assert.match(scoped, /@keyframes spin\s*\{\s*from \{ transform: rotate\(0deg\); \}\s*to \{ transform: rotate\(360deg\); \}\s*\}/)
-  assert.doesNotMatch(scoped, /@layer/, 'must never wrap plugin CSS in unilateral @layer')
 
-  // Idempotence: scoping a second time produces identical selectors
+  // Keyframe names are scoped per plugin and animation references are rewritten.
+  const scopedBeta = scopePluginCss('@keyframes spin { from { opacity: 0; } to { opacity: 1; } } .x { animation: spin 1s linear; }', 'builtin:beta')
+  const alphaKf = scoped.match(/@keyframes\s+([a-zA-Z0-9_-]+)/)?.[1]
+  const betaKf = scopedBeta.match(/@keyframes\s+([a-zA-Z0-9_-]+)/)?.[1]
+  assert.ok(alphaKf !== undefined && alphaKf.endsWith('-spin') && alphaKf !== 'spin')
+  assert.ok(betaKf !== undefined && betaKf.endsWith('-spin') && betaKf !== 'spin')
+  assert.notEqual(alphaKf, betaKf, 'distinct plugins must get distinct @keyframes identifiers')
+  assert.match(scoped, new RegExp(`animation:\\s*${alphaKf} 1s linear infinite, [a-zA-Z0-9_-]+-fadeIn 200ms ease-out;`))
+  assert.match(scoped, new RegExp(`animation-name:\\s*${alphaKf};`))
+
+  // Leading @charset / @import stay outside @layer plugin-ui.
+  const withCharset = scopePluginCss('@charset "utf-8";\n.foo { color: red; }', 'ext:c')
+  assert.match(withCharset, /^@charset "utf-8";\s*@layer plugin-ui \{/)
+
+  // Idempotence: scoping a second time produces identical output.
   const scopedTwice = scopePluginCss(scoped, 'builtin:alpha')
   assert.equal(scopedTwice, scoped)
 })
 
-test('scopePluginCss DOM: isolates inline subtrees and portalled dialogs across plugins and preserves specificity', { timeout: 60_000 }, async () => {
+/**
+ * Happy-dom's CSSOM parser drops `@layer <name> { ... }` blocks; unwrap top-level
+ * `@layer` wrappers only when feeding rules into happy-dom's selector engine so
+ * we can verify real DOM `:where([data-plugin-id="..."])` isolation alongside
+ * the `@layer plugin-ui` output assertions.
+ */
+function unwrapLayersForHappyDom(css: string): string {
+  return css
+    .replace(/@layer\s+[^{;]+;/g, '')
+    .replace(/@layer\s+[^{]+\{([\s\S]*)\}\s*$/m, '$1')
+}
+
+test('scopePluginCss DOM: layered host-base/host-components/plugin-ui isolates subtrees and portals with predictable cascade', { timeout: 60_000 }, async () => {
   const hostStyle = document.createElement('style')
-  // Unlayered host base rule
-  hostStyle.textContent = '.box { color: rgb(10, 10, 10); } .modal { color: rgb(20, 20, 20); }'
-  const pluginAStyle = document.createElement('style')
-  pluginAStyle.textContent = scopePluginCss(
+  const rawHostCss = `
+    @layer host-base, host-components, plugin-ui;
+    @layer host-components {
+      .box { color: rgb(10, 10, 10); }
+      .modal { color: rgb(20, 20, 20); }
+    }
+  `
+  const scopedPluginACss = scopePluginCss(
     `
       .box { color: rgb(1, 2, 3); }
       .box.box-accent { color: rgb(4, 5, 6); }
@@ -108,6 +142,10 @@ test('scopePluginCss DOM: isolates inline subtrees and portalled dialogs across 
     `,
     'ext:alpha',
   )
+  assert.match(scopedPluginACss, /^@layer plugin-ui \{[\s\S]*\}$/)
+  hostStyle.textContent = unwrapLayersForHappyDom(rawHostCss)
+  const pluginAStyle = document.createElement('style')
+  pluginAStyle.textContent = unwrapLayersForHappyDom(scopedPluginACss)
   document.head.append(hostStyle, pluginAStyle)
 
   const container = document.createElement('div')
@@ -164,7 +202,7 @@ test('scopePluginCss DOM: isolates inline subtrees and portalled dialogs across 
 
     assert.equal(getComputedStyle(hostBox).color, 'rgb(10, 10, 10)', 'plugin A CSS must never leak onto host chrome')
     assert.equal(getComputedStyle(betaBox).color, 'rgb(10, 10, 10)', 'plugin A CSS must never leak onto plugin B')
-    assert.equal(getComputedStyle(alphaBox).color, 'rgb(1, 2, 3)', 'plugin A inline element receives plugin A style without @layer inversion')
+    assert.equal(getComputedStyle(alphaBox).color, 'rgb(1, 2, 3)', 'plugin-ui layer cleanly overrides host-components')
     assert.equal(getComputedStyle(alphaAccent).color, 'rgb(4, 5, 6)', 'intra-plugin specificity is preserved under :where(...)')
     assert.equal(alphaPortal.getAttribute('data-plugin-id'), 'ext:alpha', 'portalled DialogContent carries data-plugin-id')
     assert.equal(getComputedStyle(alphaPortal).color, 'rgb(7, 8, 9)', 'portalled DialogContent root matches self-scoped plugin selector')

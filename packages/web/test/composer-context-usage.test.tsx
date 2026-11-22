@@ -178,11 +178,11 @@ test('first open of an idle conversation after restart: the merged list summary 
   }
 })
 
-test('CSS specificity regression: load the real forms.css and verify tone classes truly override the default gray', { timeout: 60_000 }, () => {
+test('CSS specificity regression: load the real composer.css and verify tone classes truly override the default gray', { timeout: 60_000 }, () => {
   // Regression background: the base rule `.composer-status-row .composer-context-status` (0,2,0)
   // must never outrank `.composer-status-row .composer-context-status-warn/-high` (0,2,0, declared later),
   // otherwise yellow/red never apply. DOM class assertions cannot catch that bug: verify with computedStyle from the real stylesheet.
-  const css = readFileSync(new URL('../src/styles/forms.css', import.meta.url), 'utf8')
+  const css = readFileSync(new URL('../src/styles/composer.css', import.meta.url), 'utf8')
   const style = document.createElement('style')
   style.textContent = `:root { --fg-muted: rgb(11, 12, 13); --warn: rgb(21, 22, 23); --err: rgb(31, 32, 33); }\n${css}`
   document.head.appendChild(style)
@@ -273,7 +273,7 @@ test('composer/status DOM placement & empty collapse: telemetry row sits below .
     return null
   }
   seedPluginClientModule('builtin:empty-status', 'index.tsx', { EmptyStatusProbe })
-  const css = readFileSync(new URL('../src/styles/forms.css', import.meta.url), 'utf8')
+  const css = readFileSync(new URL('../src/styles/composer.css', import.meta.url), 'utf8')
   const style = document.createElement('style')
   style.textContent = css
   document.head.appendChild(style)
@@ -564,7 +564,7 @@ test('conversationDurationLabel：生成中不重复展示本轮、第 2 轮起�
 test('Composer ConversationDurationStatus：与 ContextUsageStatus 同行、无 contextUsage 时撑开状态行且 warn 色调生效', { timeout: 60_000 }, async () => {
   const { resetServerClock } = await import('../src/lib/server-clock.js')
   resetServerClock()
-  const css = readFileSync(new URL('../src/styles/forms.css', import.meta.url), 'utf8')
+  const css = readFileSync(new URL('../src/styles/composer.css', import.meta.url), 'utf8')
   const style = document.createElement('style')
   style.textContent = `:root { --fg-muted: rgb(11, 12, 13); --warn: rgb(21, 22, 23); --err: rgb(31, 32, 33); }\n${css}`
   document.head.appendChild(style)

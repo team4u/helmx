@@ -15,6 +15,7 @@ import { HelmxStoreProvider } from '../src/lib/HelmxStoreProvider.js'
 import { HelmxExternalStore } from '../src/lib/helmx-store.js'
 import { StoreRequestManager } from '../src/lib/request-manager.js'
 import {
+  HelmxExternalStoreContext,
   useCatalogAssets,
   useConversationArtifacts,
   useConversationDetail,
@@ -22,7 +23,10 @@ import {
   useConversationSummary,
   useLocationTargets,
   useModels,
+  usePluginSummary,
 } from '../src/lib/store-context.js'
+import { PluginClientHostBridge } from '../src/lib/plugin-host-bridge.js'
+import { PluginUiView } from '../src/ui/PluginUiView.js'
 import { useWebLocale } from '../src/i18n/use-web-locale.js'
 import { applySnapshot, applyTransientLiveFrame, emptyLiveState } from '../src/lib/live-state.js'
 import type { HelmxStoreValue } from '../src/lib/types.js'
@@ -623,5 +627,168 @@ describe("helmx-store-rerender-isolation", () => {
     })
     assert.ok(observedError instanceof Error, '缺 Provider 时 keyed 切片 hook 必须显式抛错')
     assert.match(observedError.message, /must be called inside/)
+  })
+
+  test('failedDocs 仅在冷却窗口内抑制重复请求，冷却到期或 retryPluginDoc 可立即重试恢复', { timeout: 60_000 }, async () => {
+    const originalFetch = globalThis.fetch
+    let calls = 0
+    let shouldFail = true
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/plugins/test%3Aplugin/docs/state') {
+        calls++
+        if (shouldFail) {
+          return new Response(JSON.stringify({ error: 'temporary outage' }), {
+            status: 503,
+            headers: { 'content-type': 'application/json' },
+          })
+        }
+        return new Response(JSON.stringify({ value: { ok: true, attempt: calls } }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })
+    }) as typeof fetch
+
+    const store = new HelmxExternalStore({
+      primaryTarget: { kind: 'conversation', conversationId: 1 },
+      splitTarget: null,
+      drawerStack: [],
+      activeModal: null,
+    })
+    store.requests.failedDocRetryCooldownMs = 40
+    store.updateLive((prev) => applySnapshot(prev, makeSnapshot()))
+
+    try {
+      // 1. 首次失败后，冷却期内立即重试被抑制，防止渲染抖动打爆请求
+      assert.equal(await store.ensurePluginDoc('test:plugin', 'state'), undefined)
+      assert.equal(calls, 1)
+      assert.equal(await store.ensurePluginDoc('test:plugin', 'state'), undefined)
+      assert.equal(calls, 1, '冷却期内重复 ensurePluginDoc 应继续抑制')
+
+      // 2. 显式 retryPluginDoc 绕过冷却立刻重试并恢复
+      shouldFail = false
+      const recovered = await store.retryPluginDoc('test:plugin', 'state')
+      assert.deepEqual(recovered, { ok: true, attempt: 2 })
+      assert.equal(calls, 2)
+      assert.deepEqual(store.getPluginDoc('test:plugin/state'), { ok: true, attempt: 2 })
+      assert.equal(store.getLoadError('doc:test:plugin/state'), undefined, '重试成功后旧 loadError 应清除')
+
+      // 3. 另一份文档失败后等待冷却到期，ensurePluginDoc 自动重新放行
+      shouldFail = true
+      let calls2 = 0
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        if (String(input) === '/api/plugins/test%3Aplugin/docs/later') {
+          calls2++
+          if (shouldFail) return new Response('err', { status: 503 })
+          return new Response(JSON.stringify({ value: 'recovered-after-cooldown' }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          })
+        }
+        return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })
+      }) as typeof fetch
+
+      assert.equal(await store.ensurePluginDoc('test:plugin', 'later'), undefined)
+      assert.equal(calls2, 1)
+      shouldFail = false
+      await new Promise((resolve) => setTimeout(resolve, 55))
+      assert.equal(await store.ensurePluginDoc('test:plugin', 'later'), 'recovered-after-cooldown')
+      assert.equal(calls2, 2, '冷却窗口到期后 ensurePluginDoc 应自动允许重试而非永久封锁')
+    } finally {
+      store.dispose()
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test('PluginUiView 按 pluginId 精准订阅且 memoize PluginClientContext：无关插件更新零级联重渲染', { timeout: 60_000 }, async () => {
+    const store = new HelmxExternalStore({
+      primaryTarget: { kind: 'conversation', conversationId: 1 },
+      splitTarget: null,
+      drawerStack: [],
+      activeModal: null,
+    })
+    store.updateLive((prev) => applySnapshot(prev, makeSnapshot()))
+
+    let pluginARenders = 0
+    let pluginBRenders = 0
+    const seenContexts: unknown[] = []
+
+    const PluginAProbe = (): React.ReactNode => {
+      const summary = usePluginSummary('test:plugin')
+      pluginARenders++
+      return <div data-testid="plugin-a-summary">{typeof summary?.name === 'string' ? summary.name : ''}</div>
+    }
+    const PluginBProbe = (): React.ReactNode => {
+      const summary = usePluginSummary('builtin:profile')
+      pluginBRenders++
+      return <div data-testid="plugin-b-summary">{typeof summary?.name === 'string' ? summary.name : ''}</div>
+    }
+
+    // 验证 PluginUiView 不会因无关插件变化而重渲染（missing-client 路径同样挂载在 PluginUiView 上）
+    let uiViewRenders = 0
+    const spec = {}
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    let root: Root | undefined
+    mountedCleanups.push(async () => {
+      const r = root
+      if (r !== undefined) await act(async () => { r.unmount() })
+      store.dispose()
+      host.remove()
+    })
+
+    const CtxCapture = ({ pluginId, bump }: { pluginId: string; bump: number }): React.ReactNode => {
+      const ctx = usePluginContext()
+      seenContexts.push(ctx)
+      return <span data-bump={bump}>{pluginId}</span>
+    }
+    void CtxCapture
+
+    await act(async () => {
+      root = createRoot(host)
+      root.render(
+        <HelmxExternalStoreContext.Provider value={store}>
+          <PluginClientHostBridge store={store}>
+            <PluginAProbe />
+            <PluginBProbe />
+            <React.Profiler id="plugin-ui-view-a" onRender={() => { uiViewRenders++ }}>
+              <PluginUiView pluginId="test:plugin" spec={spec} />
+            </React.Profiler>
+          </PluginClientHostBridge>
+        </HelmxExternalStoreContext.Provider>,
+      )
+    })
+
+    pluginARenders = 0
+    pluginBRenders = 0
+    uiViewRenders = 0
+
+    // 更新无关插件 builtin:profile：仅 PluginBProbe 重渲染，PluginAProbe 与 PluginUiView('test:plugin') 零重渲染
+    await act(async () => {
+      store.updateLive((prev) => ({
+        ...prev,
+        plugins: prev.plugins.map((p) =>
+          p.id === 'builtin:profile' ? { ...p, name: 'Profile Updated' } : p,
+        ),
+      }))
+    })
+    assert.equal(pluginBRenders, 1, '目标变更插件订阅者应重渲染')
+    assert.equal(pluginARenders, 0, '无关插件订阅者不得因其他插件更新而重渲染')
+    assert.equal(uiViewRenders, 0, 'PluginUiView 不得因无关插件更新而级联重渲染')
+
+    // 更新 test:plugin 自身：PluginAProbe 与 PluginUiView('test:plugin') 精准响应
+    await act(async () => {
+      store.updateLive((prev) => ({
+        ...prev,
+        plugins: prev.plugins.map((p) =>
+          p.id === 'test:plugin' ? { ...p, name: 'Test Plugin v2' } : p,
+        ),
+      }))
+    })
+    assert.equal(pluginARenders, 1)
+    assert.equal(uiViewRenders, 1)
+    assert.equal(pluginBRenders, 1, '反向隔离：builtin:profile 不应因 test:plugin 更新而重渲染')
   })
 })

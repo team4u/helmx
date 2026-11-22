@@ -3,20 +3,19 @@
  * (pure data registrations never pass through this component).
  * - Dynamic compiled client module loading / export validation errors render
  *   explicitly (never a silent blank); ViewBoundary isolates render crashes;
- * - injects PluginClientContext (usePluginContext) plus the protocol-standard
- *   props;
+ * - injects a memoized PluginClientContext (usePluginContext) plus protocol-standard
+ *   props, and subscribes selectively only to its own pluginId summary so unrelated
+ *   plugin changes never cascade-re-render mounted plugin views;
  * - component-function validation: a non-function export fails explicitly.
- * Display copy (loading / failed / retry) resolves from the active locale;
- * loader-thrown error text stays English execution copy.
  */
-import { useEffect, useState, useSyncExternalStore } from 'react'
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import type { ComponentType, ReactNode } from 'react'
 import type { ClientComponentRef, ComposerController } from '@helmx/protocol/browser'
 import { HelmxIcon, createPluginClientContext, PluginClientContext, PluginScope, usePluginClientHost, ViewBoundary } from '@helmx/plugin-client'
+import { useWebLocale } from '../i18n/use-web-locale.js'
 import { isPluginSummaryActive } from '../lib/live-state.js'
 import { getCachedClientComponent, getPluginClientCacheRevision, loadPluginClientModule, PluginClientError, requireClientExport, subscribePluginClientCacheInvalidation } from '../lib/plugin-client.js'
-import { usePlugins } from '../lib/store-context.js'
-import { useWebLocale } from '../i18n/use-web-locale.js'
+import { usePluginSummary } from '../lib/store-context.js'
 
 export interface PluginUiViewProps {
   pluginId: string
@@ -39,7 +38,7 @@ type ClientState =
 
 export function PluginUiView(props: PluginUiViewProps): ReactNode {
   const { pluginId, spec } = props
-  const plugins = usePlugins()
+  const plugin = usePluginSummary(pluginId)
   const revision = useSyncExternalStore(
     subscribePluginClientCacheInvalidation,
     () => getPluginClientCacheRevision(pluginId),
@@ -49,7 +48,6 @@ export function PluginUiView(props: PluginUiViewProps): ReactNode {
   if (clientRef === undefined) {
     return <MissingTrackError pluginId={pluginId} />
   }
-  const plugin = plugins.find((p) => p.id === pluginId)
   const expectedHash =
     plugin !== undefined && isPluginSummaryActive(plugin)
       ? plugin.clientHashes?.[clientRef.module]
@@ -82,6 +80,11 @@ function ClientPluginUiView({
     const cached = getCachedClientComponent(pluginId, clientRef.module, clientRef.export, expectedHash)
     return cached !== undefined ? { phase: 'ready', Component: cached } : { phase: 'loading' }
   })
+
+  const ctx = useMemo(
+    () => createPluginClientContext(port, pluginId, conversationId, composer),
+    [port, pluginId, conversationId, composer],
+  )
 
   useEffect(() => {
     let cancelled = false
@@ -127,7 +130,7 @@ function ClientPluginUiView({
   }
   if (client.phase === 'error') {
     return (
-      <div className="callout callout--error" role="alert">
+      <div className="callout callout-error" role="alert">
         <HelmxIcon name="alert-triangle" size={13} />
         <div>
           <strong>{t('ui.pluginUi.loadFailedTitle', { pluginId })}</strong>
@@ -140,7 +143,6 @@ function ClientPluginUiView({
     )
   }
 
-  const ctx = createPluginClientContext(port, pluginId, conversationId, composer)
   return (
     <ViewBoundary label={label ?? t('ui.pluginUi.boundaryLabel')}>
       <PluginClientContext.Provider value={ctx}>
@@ -156,7 +158,7 @@ function ClientPluginUiView({
 function MissingTrackError({ pluginId }: { pluginId: string }): ReactNode {
   const { t } = useWebLocale()
   return (
-    <div className="callout callout--warning" role="alert">
+    <div className="callout callout-warn" role="alert">
       <HelmxIcon name="alert-triangle" size={13} />
       <span>{t('ui.pluginUi.missingClient', { pluginId })}</span>
     </div>

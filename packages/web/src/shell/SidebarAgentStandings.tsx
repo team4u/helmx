@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
 import type { ConversationSummary } from '@helmx/protocol/browser'
 import { archiveBatchNotice, patchConversationsArchived } from './archive-ops.js'
-import { bulkDeleteConversations, bulkDeleteNotice } from './bulk-delete-ops.js'
-import { Checkbox, ConfirmDialog, HelmxIcon, SearchBox, Tooltip } from '@helmx/plugin-client'
+import { useBatchConversationDelete } from './use-batch-conversation-delete.js'
+import { Checkbox, HelmxIcon, SearchBox, Tooltip } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
+import { BatchActionBar } from '../ui/BatchActionBar.js'
 import { ConversationRowActionsMenu } from '../ui/ConversationRowActionsMenu.js'
 import {
   AGENT_SUB_LIST_PREVIEW,
@@ -97,7 +98,7 @@ function AgentStandingItem({
   onCreate: (profileId: string) => void
   onNavigate?: () => void
   batchMode?: boolean
-  selectedIds?: Set<number>
+  selectedIds?: ReadonlySet<number>
   onToggleSelect?: (id: number) => void
 }) {
   const { t } = useWebLocale()
@@ -295,7 +296,7 @@ function AgentConversationsList({
   showAll: boolean
   onToggleShowAll: () => void
   batchMode?: boolean
-  selectedIds?: Set<number>
+  selectedIds?: ReadonlySet<number>
   onToggleSelect?: (id: number) => void
 }) {
   const { t } = useWebLocale()
@@ -442,11 +443,7 @@ export function AgentStandingsGroup({
   onNavigate?: () => void
 }) {
   const { t } = useWebLocale()
-  const [batchMode, setBatchMode] = useState(false)
-  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
-  const [deleting, setDeleting] = useState(false)
   const [archiving, setArchiving] = useState(false)
-  const [batchDeleteConfirmOpen, setBatchDeleteConfirmOpen] = useState(false)
   const [search, setSearch] = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
   const searchInputRef = useRef<HTMLInputElement | null>(null)
@@ -491,12 +488,18 @@ export function AgentStandingsGroup({
 
   // Derive batch-selectable ids strictly from visibleStandings so filtering
   // then clicking "Select all" / "Delete" can never wipe hidden conversations.
-  // Bulk-select includes idle automation conversations (bulk-deletable but not
-  // archivable); the archive button consumes the archivable subset below.
   const allDeletableIds = useMemo(() => {
     const visibleConvs = visibleStandings.flatMap((a) => a.conversations)
     return filterBulkSelectableConversations(visibleConvs).map((c) => c.id)
   }, [visibleStandings])
+
+  const batch = useBatchConversationDelete({
+    selectableIds: allDeletableIds,
+    pushNotice: store.pushNotice,
+    t,
+    busy: archiving,
+  })
+
   const archivableSelectedIds = useMemo(() => {
     const archivable = new Set(
       agentStandings
@@ -504,87 +507,21 @@ export function AgentStandingsGroup({
         .filter((conversation) => isConversationArchivable(conversation))
         .map((conversation) => conversation.id),
     )
-    return [...selectedIds].filter((id) => archivable.has(id))
-  }, [agentStandings, selectedIds])
+    return [...batch.selectedIds].filter((id) => archivable.has(id))
+  }, [agentStandings, batch.selectedIds])
 
-  useEffect(() => {
-    const allowed = new Set(allDeletableIds)
-    setSelectedIds((prev) => {
-      if (prev.size === 0) return prev
-      let changed = false
-      const next = new Set<number>()
-      for (const id of prev) {
-        if (allowed.has(id)) next.add(id)
-        else changed = true
-      }
-      return changed ? next : prev
-    })
-  }, [allDeletableIds])
-
-  const isAllSelected = allDeletableIds.length > 0 && allDeletableIds.every((id) => selectedIds.has(id))
-
-  const toggleSelect = (id: number) => {
-    setSelectedIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) {
-        next.delete(id)
-      } else {
-        next.add(id)
-      }
-      return next
-    })
-  }
-
-  /**
-   * Batch archive: per-conversation PATCH of the host archive tag + allSettled
-   * aggregation (partial failures never mask successes); archiving does not
-   * delete the conversation and the current target stays valid — the list
-   * updates purely via conversation.upsert. Unlike deletion's SSE fallback
-   * pipeline, no navigation happens here. Only the human-owned (archivable)
-   * subset of the selection participates — bulk-select may also include idle
-   * automation conversations that are bulk-deletable but never bulk-archivable.
-   */
   const executeBatchArchive = async () => {
-    if (selectedIds.size === 0 || archiving || deleting) return
+    if (batch.selectedIds.size === 0 || archiving || batch.deleting) return
     setArchiving(true)
     try {
       const convs = agentStandings
         .flatMap((agent) => agent.conversations)
-        .filter((conversation) => selectedIds.has(conversation.id) && isConversationArchivable(conversation))
+        .filter((conversation) => batch.selectedIds.has(conversation.id) && isConversationArchivable(conversation))
       const outcome = await patchConversationsArchived(convs, true)
       store.pushNotice(archiveBatchNotice(true, outcome, t))
-      setSelectedIds(new Set())
-      setBatchMode(false)
+      batch.exitBatchMode()
     } finally {
       setArchiving(false)
-    }
-  }
-
-  const executeBatchDelete = async () => {
-    const count = selectedIds.size
-    if (count === 0 || deleting) return
-    setBatchDeleteConfirmOpen(false)
-    setDeleting(true)
-    try {
-      const outcome = await bulkDeleteConversations(Array.from(selectedIds))
-      store.pushNotice(bulkDeleteNotice(outcome, t))
-
-      // No navigation here: rely solely on each successful deletion's
-      // conversation.deleted SSE event; the Provider conditionally falls back
-      // by current targets (avoiding stale-snapshot/selectedIds double jumps
-      // that would hurt failed items and fresh navigations).
-
-      setSelectedIds(new Set())
-      setBatchMode(false)
-    } catch (err) {
-      store.pushNotice({
-        type: 'notification',
-        level: 'error',
-        title: t('shell.batch.bulkDeleteError'),
-        body: err instanceof Error ? err.message : String(err),
-      })
-    } finally {
-      setDeleting(false)
     }
   }
 
@@ -615,23 +552,16 @@ export function AgentStandingsGroup({
               <HelmxIcon name="list-filter" size={12} />
             </button>
           </Tooltip>
-          <Tooltip content={batchMode ? t('shell.agents.exitBulk') : t('shell.agents.manageBulk')} side="top">
+          <Tooltip content={batch.batchMode ? t('shell.agents.exitBulk') : t('shell.agents.manageBulk')} side="top">
             <button
               type="button"
               className="btn btn-ghost btn-icon-xs"
               style={{
-                color: batchMode ? 'var(--accent)' : undefined,
+                color: batch.batchMode ? 'var(--accent)' : undefined,
               }}
-              title={batchMode ? t('shell.agents.exitBulk') : t('shell.agents.manageBulk')}
-              aria-label={batchMode ? t('shell.agents.exitBulk') : t('shell.agents.manageBulk')}
-              onClick={() => {
-                setBatchMode((v) => {
-                  if (v) {
-                    setSelectedIds(new Set())
-                  }
-                  return !v
-                })
-              }}
+              title={batch.batchMode ? t('shell.agents.exitBulk') : t('shell.agents.manageBulk')}
+              aria-label={batch.batchMode ? t('shell.agents.exitBulk') : t('shell.agents.manageBulk')}
+              onClick={batch.toggleBatchMode}
             >
               <HelmxIcon name="check-square" size={12} />
             </button>
@@ -663,57 +593,32 @@ export function AgentStandingsGroup({
           }}
         />
       )}
-      {batchMode && (
-        <div className="batch-bar sidebar-batch-bar">
-          <div className="batch-bar-header">
-            <span className="batch-bar-count tabular-nums">
-              {t('shell.batch.selected', { count: selectedIds.size })}
-            </span>
-            <button
-              type="button"
-              className="btn btn-ghost btn-xs"
-              onClick={() => {
-                setBatchMode(false)
-                setSelectedIds(new Set())
-              }}
-              title={t('shell.agents.exitBulk')}
-            >
-              {t('shell.batch.exit')}
-            </button>
-          </div>
-          <div className="batch-bar-actions">
+      {batch.batchMode && (
+        <BatchActionBar
+          className="sidebar-batch-bar"
+          selectedCount={batch.selectedIds.size}
+          selectableCount={allDeletableIds.length}
+          isAllSelected={batch.isAllSelected}
+          deleting={batch.deleting}
+          busy={archiving}
+          exitTitle={t('shell.agents.exitBulk')}
+          onExit={batch.exitBatchMode}
+          onToggleSelectAll={batch.toggleSelectAll}
+          extraActions={
             <button
               type="button"
               className="btn btn-sm"
-              disabled={allDeletableIds.length === 0 || deleting}
-              onClick={() => {
-                if (isAllSelected) {
-                  setSelectedIds(new Set())
-                } else {
-                  setSelectedIds(new Set(allDeletableIds))
-                }
-              }}
-            >
-              {isAllSelected ? t('shell.batch.clear') : t('shell.batch.selectAll')}
-            </button>
-            <button
-              type="button"
-              className="btn btn-sm"
-              disabled={archivableSelectedIds.length === 0 || deleting || archiving}
+              disabled={archivableSelectedIds.length === 0 || batch.deleting || archiving}
               onClick={() => void executeBatchArchive()}
             >
               {archiving ? t('shell.agents.archiving') : t('shell.agents.archiveCount', { count: archivableSelectedIds.length })}
             </button>
-            <button
-              type="button"
-              className="btn btn-sm btn-danger-sm"
-              disabled={selectedIds.size === 0 || deleting || archiving}
-              onClick={() => setBatchDeleteConfirmOpen(true)}
-            >
-              {deleting ? t('shell.batch.deleting') : t('shell.batch.deleteCount', { count: selectedIds.size })}
-            </button>
-          </div>
-        </div>
+          }
+          confirmOpen={batch.confirmOpen}
+          onConfirmOpenChange={batch.setConfirmOpen}
+          onRequestDelete={batch.requestDeleteConfirm}
+          onConfirmDelete={() => void batch.executeBatchDelete()}
+        />
       )}
       {visibleStandings.length === 0 ? (
         <div className="sidebar-search-empty">{t('shell.agents.noMatch')}</div>
@@ -729,24 +634,12 @@ export function AgentStandingsGroup({
             searching={searching}
             onCreate={openStandby}
             onNavigate={onNavigate}
-            batchMode={batchMode}
-            selectedIds={selectedIds}
-            onToggleSelect={toggleSelect}
+            batchMode={batch.batchMode}
+            selectedIds={batch.selectedIds}
+            onToggleSelect={batch.toggleSelect}
           />
         ))
       )}
-      <ConfirmDialog
-        open={batchDeleteConfirmOpen}
-        onOpenChange={setBatchDeleteConfirmOpen}
-        title={t('shell.batch.deleteConfirmTitle', { count: selectedIds.size })}
-        description={t('shell.batch.deleteConfirmDesc')}
-        confirmText={t('shell.batch.deleteConfirmButton')}
-        danger
-        onConfirm={() => {
-          void executeBatchDelete()
-        }}
-        onCancel={() => setBatchDeleteConfirmOpen(false)}
-      />
     </div>
   )
 }

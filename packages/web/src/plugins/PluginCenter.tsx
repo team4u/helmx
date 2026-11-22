@@ -1,14 +1,16 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import type * as React from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { PluginSummary } from '@helmx/protocol/browser'
 import { resolveLocalizedText } from '@helmx/protocol/browser'
-import { ApiClientError, pluginsApi } from '../lib/api.js'
-import { HelmxIcon, SearchBox } from '@helmx/plugin-client'
-import { useLocationTargets, useOptionalGroupedUi, usePlugins, useStoreActions } from '../lib/store-context.js'
+import { HelmxIcon } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
+import { ApiClientError, pluginsApi } from '../lib/api.js'
+import { useLocationTargets, useOptionalGroupedUi, usePlugins, useStoreActions } from '../lib/store-context.js'
+import { SystemCenterEmpty, SystemCenterShell, SystemCenterToolbar } from '../ui/SystemCenterShell.js'
+import { usePaneSplitToggle } from '../ui/use-pane-split-toggle.js'
 import { PluginCard } from './PluginCard.js'
 import { PluginDetailDrawer } from './PluginDetailDrawer.js'
 import { PluginInstallModal } from './PluginInstallModal.js'
-import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
 import {
   filterPlugins,
   pluginStatusTabLabel,
@@ -26,13 +28,7 @@ export interface PluginCenterProps {
 }
 
 /**
- * 全屏插件中心（Plugin Center）主视图容器：
- * - 升格为系统一级主舞台视图，彻底淘汰旧的居中模态小弹窗；
- * - 顶部工具栏：关键字检索搜索框；
- * - 响应式卡片网格：消费 PluginCard 自适应流式呈现；
- * - 详情与配置抽屉：右侧联动滑出 PluginDetailDrawer，与 URL Hash 深链（#/settings/plugins/<pluginId>）闭环同步；
- * - 快捷启停与通知：安全调用 pluginsApi，提供在途任务冲突提示；
- * - 严格遵循零 Emoji 铁律与 Fast Refresh 规范。
+ * 全屏插件中心（Plugin Center）主视图容器。
  */
 export function PluginCenter({
   isSplit = false,
@@ -42,56 +38,61 @@ export function PluginCenter({
   const plugins = usePlugins() ?? []
   const groupedUi = useOptionalGroupedUi()
   const { primaryTarget, splitTarget } = useLocationTargets()
-  const { syncPlugins, openTarget, closeSplit, pushNotice } = useStoreActions()
+  const { syncPlugins, openTarget, pushNotice } = useStoreActions()
   const { locale, t } = useWebLocale()
   const [query, setQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState<PluginStatusFilter>('all')
   const [togglingId, setTogglingId] = useState<string | null>(null)
   const [installOpen, setInstallOpen] = useState(false)
-  // 刷新代数：安装/更新/卸载后拉取列表；SSE plugin.changed 到达时避免重复拉取覆盖当前 target
   const [refreshTick, setRefreshTick] = useState(0)
-  const refreshGeneration = React.useRef(0)
+  const refreshGeneration = useRef(0)
 
   const statusSummary = useMemo(() => summarizePlugins(plugins, groupedUi), [plugins, groupedUi])
+  const pills = useMemo(
+    () =>
+      PLUGIN_STATUS_TABS.map((statusKey) => ({
+        key: statusKey,
+        label: pluginStatusTabLabel(statusKey, t),
+        count:
+          statusKey === 'all'
+            ? statusSummary.total
+            : statusKey === 'views'
+              ? statusSummary.withViews
+              : statusKey === 'enabled'
+                ? statusSummary.enabled
+                : statusSummary.disabled,
+      })),
+    [statusSummary, t],
+  )
 
-  const filteredPlugins = useMemo(() => {
-    return filterPlugins(plugins, { query, status: statusFilter }, locale, groupedUi)
-  }, [plugins, query, statusFilter, locale, groupedUi])
+  const filteredPlugins = useMemo(
+    () => filterPlugins(plugins, { query, status: statusFilter }, locale, groupedUi),
+    [plugins, query, statusFilter, locale, groupedUi],
+  )
 
   const currentTarget = isSplit ? splitTarget : primaryTarget
-  const selectedPluginId =
-    currentTarget?.kind === 'plugins' ? currentTarget.pluginId : undefined
-
+  const selectedPluginId = currentTarget?.kind === 'plugins' ? currentTarget.pluginId : undefined
   const selectedPlugin = useMemo(
     () => plugins.find((p) => p.id === selectedPluginId) ?? null,
     [plugins, selectedPluginId],
   )
-
   const isDrawerOpen = Boolean(selectedPluginId && selectedPlugin)
-
-  /** 拉取全量插件清单并写入 store（插件列表以 SSE 为增量真相，此处仅按需全量校准）。 */
-  const refreshPlugins = async () => {
-    const generation = ++refreshGeneration.current
-    try {
-      const list = await pluginsApi.list()
-      // 迟到的旧响应不得覆盖新状态（代数竞争保护）
-      if (generation !== refreshGeneration.current) return
-      syncPlugins?.(list)
-    } catch {
-      // 静默失败：SSE 快照仍是权威数据源，无需打断用户
-    }
-  }
-
-  // 包操作（安装/更新/卸载）后请求一次全量刷新
-  const handlePackageChanged = () => {
-    setRefreshTick((t) => t + 1)
-  }
 
   useEffect(() => {
     if (refreshTick === 0) return
-    void refreshPlugins()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refreshTick])
+    const generation = ++refreshGeneration.current
+    void pluginsApi
+      .list()
+      .then((list) => {
+        if (generation !== refreshGeneration.current) return
+        syncPlugins?.(list)
+      })
+      .catch(() => {
+        // 静默失败：SSE 快照仍是权威数据源，无需打断用户
+      })
+  }, [refreshTick, syncPlugins])
+
+  const handlePackageChanged = () => setRefreshTick((tick) => tick + 1)
 
   const openPluginTarget = (pluginId?: string) => {
     openTarget(
@@ -100,16 +101,6 @@ export function PluginCenter({
     )
   }
 
-  const handleSelectPlugin = (pluginId: string) => {
-    openPluginTarget(pluginId)
-  }
-
-  const handleCloseDrawer = () => {
-    openPluginTarget(undefined)
-  }
-
-  // 安装成功：刷新列表并导航至新插件详情抽屉（HTTP 结果先到，SSE 随后 upsert，两者幂等）。
-  // enable=true 但启用失败时，安装仍成功；必须显式提示，不把 disabled 状态伪装成已启用。
   const handleInstalled = (pluginId: string, enableError?: { code: string; message: string }) => {
     openPluginTarget(pluginId)
     handlePackageChanged()
@@ -121,11 +112,6 @@ export function PluginCenter({
         body: `${enableError.code}: ${enableError.message}`,
       })
     }
-  }
-
-  // 卸载成功：关闭抽屉并刷新列表（列表已无该插件，抽屉必须先收起）
-  const handleRemoved = () => {
-    openPluginTarget(undefined)
   }
 
   const handleTogglePlugin = async (
@@ -171,159 +157,95 @@ export function PluginCenter({
     }
   }
 
-  const toggleSplit = () => {
-    if (isSplit) {
-      onCloseSplit?.()
-      return
-    }
-    if (splitTarget !== null) {
-      closeSplit()
-      return
-    }
-    openTarget({ kind: 'plugins', pluginId: selectedPluginId }, { split: true })
-  }
+  const { isSplitActive, toggleSplit } = usePaneSplitToggle({
+    isSplit,
+    onCloseSplit,
+    getSplitTarget: () => ({ kind: 'plugins', pluginId: selectedPluginId }),
+  })
 
   return (
-    <div className={`primary-center${isSplit ? ' is-split' : ''}`} data-view="plugin-center">
-      {/* Top bar: title and actions */}
-      <div className="primary-center-topbar pane-topbar">
-        <div className="primary-center-title-wrap pane-title-group">
-          <div className="primary-center-title">
-            <HelmxIcon name="puzzle" size={14} />
-            <span>{t('plugins.center.title')}</span>
-          </div>
-        </div>
-
-        <div className="primary-center-topbar-actions pane-actions">
-          <button
-            type="button"
-            className="btn btn-sm"
-            title={t('plugins.center.installTitle')}
-            aria-label={t('plugins.installPlugin')}
-            onClick={() => setInstallOpen(true)}
-          >
-            <HelmxIcon name="download" size={12} />
-            <span className="pane-action-label">{t('plugins.installPlugin')}</span>
-          </button>
-          {isSplit ? (
-            <CloseSplitButton onCloseSplit={onCloseSplit} />
-          ) : (
-            <SplitToggleButton
-              isSplitActive={splitTarget !== null}
-              onToggleSplit={toggleSplit}
-            />
-          )}
-        </div>
-      </div>
-
-      {/* Search toolbar */}
-      <div className="primary-center-toolbar">
-        <SearchBox
-          className="primary-search-box"
-          clearButtonClassName="btn btn-ghost btn-sm primary-search-clear"
-          value={query}
-          onChange={setQuery}
-          placeholder={t('plugins.center.searchPlaceholder')}
-          ariaLabel={t('plugins.center.searchAria')}
-          clearLabel={t('plugins.center.clearSearch')}
-        />
-
-        <div
-          className="primary-category-pills"
-          role="tablist"
-          aria-label={t('plugins.center.filterAria')}
+    <SystemCenterShell
+      dataView="plugin-center"
+      isSplit={isSplit}
+      isSplitActive={isSplitActive}
+      onCloseSplit={onCloseSplit}
+      onToggleSplit={toggleSplit}
+      icon="puzzle"
+      title={t('plugins.center.title')}
+      headerActions={
+        <button
+          type="button"
+          className="btn btn-sm"
+          title={t('plugins.center.installTitle')}
+          aria-label={t('plugins.installPlugin')}
+          onClick={() => setInstallOpen(true)}
         >
-          {PLUGIN_STATUS_TABS.map((statusKey) => {
-            const count =
-              statusKey === 'all'
-                ? statusSummary.total
-                : statusKey === 'views'
-                  ? statusSummary.withViews
-                  : statusKey === 'enabled'
-                    ? statusSummary.enabled
-                    : statusSummary.disabled
-            const isActive = statusFilter === statusKey
-            return (
-              <button
-                key={statusKey}
-                type="button"
-                role="tab"
-                aria-selected={isActive}
-                className={`primary-category-pill${isActive ? ' is-active' : ''}`}
-                onClick={() => setStatusFilter(statusKey)}
-              >
-                <span>{pluginStatusTabLabel(statusKey, t)}</span>
-                <span className="badge tabular-nums">{count}</span>
-              </button>
-            )
-          })}
+          <HelmxIcon name="download" size={12} />
+          <span className="pane-action-label">{t('plugins.installPlugin')}</span>
+        </button>
+      }
+      toolbar={
+        <SystemCenterToolbar
+          query={query}
+          onQueryChange={setQuery}
+          searchPlaceholder={t('plugins.center.searchPlaceholder')}
+          searchAriaLabel={t('plugins.center.searchAria')}
+          clearSearchLabel={t('plugins.center.clearSearch')}
+          filterAriaLabel={t('plugins.center.filterAria')}
+          pills={pills}
+          activePill={statusFilter}
+          onSelectPill={setStatusFilter}
+        />
+      }
+      overlays={
+        <>
+          <PluginDetailDrawer
+            plugin={selectedPlugin}
+            open={isDrawerOpen}
+            onClose={() => openPluginTarget(undefined)}
+            onToggleEnabled={(plugin: PluginSummary, targetEnabled?: boolean, options?: { force?: boolean }) =>
+              handleTogglePlugin(plugin, targetEnabled, options)
+            }
+            toggling={togglingId === selectedPlugin?.id}
+            onPackageChanged={handlePackageChanged}
+            onRemoved={() => openPluginTarget(undefined)}
+            inline={inlineDrawer}
+          />
+          <PluginInstallModal
+            open={installOpen}
+            onClose={() => setInstallOpen(false)}
+            onInstalled={handleInstalled}
+            inline={inlineDrawer}
+          />
+        </>
+      }
+    >
+      {filteredPlugins.length > 0 ? (
+        <div className="primary-center-grid">
+          {filteredPlugins.map((plugin) => (
+            <PluginCard
+              key={plugin.id}
+              plugin={plugin}
+              selected={selectedPluginId === plugin.id}
+              onSelect={() => openPluginTarget(plugin.id)}
+              onToggle={(enabled) => handleTogglePlugin(plugin, enabled)}
+              toggling={togglingId === plugin.id}
+            />
+          ))}
         </div>
-      </div>
-
-      {/* Main viewport: responsive card grid or empty state */}
-      <div className="primary-center-content">
-        {filteredPlugins.length > 0 ? (
-          <div className="primary-center-grid">
-            {filteredPlugins.map((plugin) => (
-              <PluginCard
-                key={plugin.id}
-                plugin={plugin}
-                selected={selectedPluginId === plugin.id}
-                onSelect={() => handleSelectPlugin(plugin.id)}
-                onToggle={(enabled) => handleTogglePlugin(plugin, enabled)}
-                toggling={togglingId === plugin.id}
-              />
-            ))}
-          </div>
-        ) : (
-          <div className="primary-center-empty">
-            <div className="primary-center-empty-icon">
-              <HelmxIcon name="search" size={28} />
-            </div>
-            <div className="primary-center-empty-text">{t('plugins.center.emptyTitle')}</div>
-            <div className="primary-center-empty-hint text-subtle">
-              {t('plugins.center.emptyHint')}
-            </div>
-            {(query || statusFilter !== 'all') && (
-              <button
-                type="button"
-                className="btn btn-sm"
-                onClick={() => {
-                  setQuery('')
-                  setStatusFilter('all')
-                }}
-              >
-                <HelmxIcon name="rotate-ccw" size={12} />
-                <span>{t('plugins.center.resetSearch')}</span>
-              </button>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* Right slide-over detail and configuration drawer */}
-      <PluginDetailDrawer
-        plugin={selectedPlugin}
-        open={isDrawerOpen}
-        onClose={handleCloseDrawer}
-        onToggleEnabled={(
-          plugin: PluginSummary,
-          targetEnabled?: boolean,
-          options?: { force?: boolean },
-        ) => handleTogglePlugin(plugin, targetEnabled, options)}
-        toggling={togglingId === selectedPlugin?.id}
-        onPackageChanged={handlePackageChanged}
-        onRemoved={handleRemoved}
-        inline={inlineDrawer}
-      />
-
-      {/* Lightweight install modal: npm / git / local path; navigates to the new plugin drawer on success */}
-      <PluginInstallModal
-        open={installOpen}
-        onClose={() => setInstallOpen(false)}
-        onInstalled={handleInstalled}
-        inline={inlineDrawer}
-      />
-    </div>
+      ) : (
+        <SystemCenterEmpty
+          title={t('plugins.center.emptyTitle')}
+          hint={t('plugins.center.emptyHint')}
+          hintSubtle
+          showReset={Boolean(query) || statusFilter !== 'all'}
+          resetLabel={t('plugins.center.resetSearch')}
+          onReset={() => {
+            setQuery('')
+            setStatusFilter('all')
+          }}
+        />
+      )}
+    </SystemCenterShell>
   )
 }

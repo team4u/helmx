@@ -1,49 +1,25 @@
 /* Helmx 宿主样式入口（Quiet Surface 设计系统）。
- * 全部规则按原级联顺序拆分在 src/styles/ 分片中，@import 顺序即规则顺序，
- * 调整分片顺序前先核对样式覆盖关系（例如 search-box.css 必须位于全部 input 规则之后）。
- * 窄面板、移动端与减少动画偏好见 responsive.css（由 main.tsx 在本入口之后引入）。 */
-@import './styles/tokens.css';
-@import './styles/base.css';
-@import './styles/shell.css';
-@import './styles/navigation.css';
-@import './styles/conversation.css';
-@import './styles/composer.css';
-@import './styles/forms.css';
-@import './styles/primitives.css';
-@import './styles/modals.css';
-@import './styles/plugin-center.css';
-@import './styles/composer-widgets.css';
-@import './styles/segmented.css';
-@import './styles/overlays.css';
-@import './styles/search-box.css';
-@import './styles/standby.css';
-@import './styles/outline.css';
-@import './styles/overview.css';
+ * 显式级联层声明：`host-base < host-components < plugin-ui`，使插件注入的
+ * `@layer plugin-ui` 样式无需 `!important` 即可可预测地覆盖宿主默认原语。
+ * 窄面板、移动端与减少动画偏好见 responsive.css（由 main.tsx 在本入口之后引入，同样归入 host-components 层）。 */
+@layer host-base, host-components, plugin-ui;
 
-/* Hub 更新卡片（总览页顶部；仅存在就绪更新时渲染） */
-.hub-update-card {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0 16px 10px;
-  padding: 8px 12px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--bg-subtle);
-  font-size: 13px;
-  line-height: 1.45;
-}
-.hub-update-card-text { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
-.hub-update-card-error, .hub-update-card-busy { color: var(--fg-muted); flex: 0 1 auto; overflow-wrap: anywhere; }
-.hub-update-card-action {
-  flex: 0 0 auto;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: transparent;
-  color: inherit;
-  font-size: 13px;
-  padding: 4px 10px;
-  cursor: pointer;
-}
-.hub-update-card-action:disabled { opacity: 0.55; cursor: default; }
-.hub-update-card-switching, .hub-update-card-switched { border-style: dashed; }
+@import './styles/tokens.css' layer(host-base);
+@import './styles/base.css' layer(host-base);
+@import './styles/shell.css' layer(host-components);
+@import './styles/navigation.css' layer(host-components);
+@import './styles/conversation.css' layer(host-components);
+@import './styles/forms.css' layer(host-components);
+@import './styles/primitives.css' layer(host-components);
+@import './styles/composer.css' layer(host-components);
+@import './styles/modals.css' layer(host-components);
+@import './styles/centers.css' layer(host-components);
+@import './styles/model-center.css' layer(host-components);
+@import './styles/plugin-center.css' layer(host-components);
+@import './styles/composer-widgets.css' layer(host-components);
+@import './styles/segmented.css' layer(host-components);
+@import './styles/overlays.css' layer(host-components);
+@import './styles/search-box.css' layer(host-components);
+@import './styles/standby.css' layer(host-components);
+@import './styles/outline.css' layer(host-components);
+@import './styles/overview.css' layer(host-components);

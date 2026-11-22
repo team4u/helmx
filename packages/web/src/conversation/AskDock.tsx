@@ -287,7 +287,7 @@ function AskCard({ ask, source }: { ask: AskSpec; source?: AskSourceInfo }) {
         </div>
       ) : null}
       {error !== null ? (
-        <div className="callout callout--error">
+        <div className="callout callout-error">
           <HelmxIcon name="alert-circle" size={13} />
           <span className="callout-text">{error}</span>
         </div>

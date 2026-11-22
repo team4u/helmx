@@ -287,6 +287,47 @@ export function WorkbenchView(props: WorkbenchViewProps) {
   const activeTab = resolveActiveWorkbenchTab(currentTab, tabs)
   const activePanel = tabs.find((tab) => tab.id === activeTab && tab.pluginId !== undefined)
   const footerParts = buildWorkbenchFooter(tabs)
+  const slotProps = useMemo(
+    () => (conversation !== undefined ? { conversation } : undefined),
+    [conversation],
+  )
+
+  // Keep visited plugin workbench tabs mounted per conversation so switching
+  // tabs preserves plugin local state & scroll; reset on conversation switch.
+  const [visitedState, setVisitedState] = useState<{ conversationId: number | undefined; tabIds: string[] }>(() => ({
+    conversationId,
+    tabIds: activePanel !== undefined ? [activePanel.id] : [],
+  }))
+  const visitedTabIds = useMemo(() => {
+    const base = visitedState.conversationId === conversationId ? visitedState.tabIds : []
+    if (activePanel !== undefined && !base.includes(activePanel.id)) {
+      return [...base, activePanel.id]
+    }
+    return base
+  }, [visitedState, conversationId, activePanel])
+
+  useEffect(() => {
+    setVisitedState((prev) => {
+      if (prev.conversationId !== conversationId) {
+        return { conversationId, tabIds: activePanel !== undefined ? [activePanel.id] : [] }
+      }
+      if (activePanel !== undefined && !prev.tabIds.includes(activePanel.id)) {
+        return { conversationId, tabIds: [...prev.tabIds, activePanel.id] }
+      }
+      return prev
+    })
+  }, [conversationId, activePanel])
+
+  const mountedPluginTabs = useMemo(
+    () =>
+      tabs.filter(
+        (tab) =>
+          tab.pluginId !== undefined &&
+          tab.spec !== undefined &&
+          visitedTabIds.includes(tab.id),
+      ),
+    [tabs, visitedTabIds],
+  )
 
   useEffect(() => {
     // Preserve deep links until SSE UI contributions and conversation arrive;
@@ -327,20 +368,33 @@ export function WorkbenchView(props: WorkbenchViewProps) {
         <div className="workbench-body">
           {conversationId === undefined ? (
             <EmptyState compact title={t('conv.workbench.noActiveConversation')} />
-          ) : activeTab === 'artifacts' ? (
-            <ArtifactsTab key={conversationId} conversationId={conversationId} />
-          ) : activePanel !== undefined && activePanel.spec !== undefined && activePanel.pluginId !== undefined ? (
-            <div className="workbench-plugin-body">
-              <PluginUiView
-                pluginId={activePanel.pluginId}
-                spec={activePanel.spec}
-                conversationId={conversationId}
-                label={t('conv.workbench.panelLabel', { label: activePanel.label })}
-                slotProps={{ conversation: conversation ?? { id: conversationId } }}
-              />
-            </div>
           ) : (
-            <EmptyState compact title={t('conv.workbench.tabUnavailable')} />
+            <>
+              {activeTab === 'artifacts' ? (
+                <ArtifactsTab key={conversationId} conversationId={conversationId} />
+              ) : activePanel === undefined ? (
+                <EmptyState compact title={t('conv.workbench.tabUnavailable')} />
+              ) : null}
+              {mountedPluginTabs.map((tab) => {
+                const isTabActive = tab.id === activeTab
+                return (
+                  <div
+                    key={`${conversationId}:${tab.id}`}
+                    className="workbench-plugin-body"
+                    hidden={!isTabActive}
+                    style={isTabActive ? undefined : { display: 'none' }}
+                  >
+                    <PluginUiView
+                      pluginId={tab.pluginId!}
+                      spec={tab.spec!}
+                      conversationId={conversationId}
+                      label={t('conv.workbench.panelLabel', { label: tab.label })}
+                      slotProps={slotProps}
+                    />
+                  </div>
+                )
+              })}
+            </>
           )}
         </div>
       </Tabs>

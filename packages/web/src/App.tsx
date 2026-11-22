@@ -37,7 +37,7 @@ import {
   parseLocationHash,
   type WorkspaceLocationState,
 } from './lib/url-hash-model.js'
-import { isSameResolvedTarget } from './lib/types.js'
+import { isSameResolvedTarget, type ResolvedTarget } from './lib/types.js'
 import { ScreenHost } from './screens/ScreenHost.js'
 import { AuthGate } from './shell/AuthGate.js'
 import { Sidebar } from './shell/Sidebar.js'
@@ -181,6 +181,58 @@ const WorkspaceFilePreviewModal = lazyWithRetry(
   () => lazy(() => import('./conversation/WorkspaceFilePreviewModal.js').then((m) => ({ default: m.WorkspaceFilePreviewModal }))),
   { overlay: true },
 )
+
+function renderPaneTarget(
+  target: ResolvedTarget,
+  options: { panel: 'primary' | 'split'; onCloseSplit?: () => void },
+): ReactNode {
+  const { panel, onCloseSplit } = options
+  const splitProps = panel === 'split' ? { isSplit: true as const, onCloseSplit } : {}
+
+  switch (target.kind) {
+    case 'conversation':
+      // Primary conversations render through the keep-alive ConversationWindowStage.
+      if (panel === 'primary') return null
+      return (
+        <ConversationPane
+          key={`split-conv-${target.conversationId}`}
+          conversationId={target.conversationId}
+          {...splitProps}
+        />
+      )
+    case 'agent':
+      return (
+        <AgentStandbyPane
+          key={standbyDraftKey({ panel, ...target })}
+          profileId={target.profileId}
+          nodeId={target.nodeId}
+          cwd={target.cwd}
+          {...splitProps}
+        />
+      )
+    case 'screen':
+      return (
+        <ScreenHost
+          key={`${panel}-screen-${target.pluginId}-${target.screenId}`}
+          pluginId={target.pluginId}
+          screenId={target.screenId}
+          {...splitProps}
+        />
+      )
+    case 'overview':
+      return <ConversationOverview key={`${panel}-overview`} {...splitProps} />
+    case 'plugins':
+      return <PluginCenter key={`${panel}-plugins`} {...splitProps} />
+    case 'profiles':
+      return <ProfileCenter key={`${panel}-profiles`} {...splitProps} />
+    case 'skills':
+      return <SkillCenter key={`${panel}-skills`} {...splitProps} />
+    case 'nodes':
+      return <NodeCenter key={`${panel}-nodes`} {...splitProps} />
+    case 'models':
+      return <ModelCenter key={`${panel}-models`} {...splitProps} />
+  }
+}
 
 function QuietNotifierMount() {
   useQuietNotifier()
@@ -392,32 +444,7 @@ function HelmxShellInner({
                     <ConversationWindowStage
                       activeConversationId={primaryTarget.kind === 'conversation' ? primaryTarget.conversationId : null}
                     />
-                    {primaryTarget.kind === 'conversation' ? null : primaryTarget.kind === 'agent' ? (
-                      <AgentStandbyPane
-                        key={standbyDraftKey({ panel: 'primary', ...primaryTarget })}
-                        profileId={primaryTarget.profileId}
-                        nodeId={primaryTarget.nodeId}
-                        cwd={primaryTarget.cwd}
-                      />
-                    ) : primaryTarget.kind === 'screen' ? (
-                      <ScreenHost
-                        key={`primary-screen-${primaryTarget.pluginId}-${primaryTarget.screenId}`}
-                        pluginId={primaryTarget.pluginId}
-                        screenId={primaryTarget.screenId}
-                      />
-                    ) : primaryTarget.kind === 'overview' ? (
-                      <ConversationOverview key="primary-overview" />
-                    ) : primaryTarget.kind === 'plugins' ? (
-                      <PluginCenter key="primary-plugins" />
-                    ) : primaryTarget.kind === 'profiles' ? (
-                      <ProfileCenter key="primary-profiles" />
-                    ) : primaryTarget.kind === 'skills' ? (
-                      <SkillCenter key="primary-skills" />
-                    ) : primaryTarget.kind === 'nodes' ? (
-                      <NodeCenter key="primary-nodes" />
-                    ) : primaryTarget.kind === 'models' ? (
-                      <ModelCenter key="primary-models" />
-                    ) : null}
+                    {renderPaneTarget(primaryTarget, { panel: 'primary' })}
                   </>
                 )}
               </Suspense>
@@ -432,43 +459,7 @@ function HelmxShellInner({
                 onFocusCapture={focusSplit}
               >
                 <Suspense fallback={<div className="screen-loading" role="status">{t('conv.shell.loadingView')}</div>}>
-                  {splitTarget.kind === 'conversation' ? (
-                    <ConversationPane
-                      key={`split-conv-${splitTarget.conversationId}`}
-                      conversationId={splitTarget.conversationId}
-                      isSplit
-                      onCloseSplit={closeSplit}
-                    />
-                  ) : splitTarget.kind === 'agent' ? (
-                    <AgentStandbyPane
-                      key={standbyDraftKey({ panel: 'split', ...splitTarget })}
-                      profileId={splitTarget.profileId}
-                      nodeId={splitTarget.nodeId}
-                      cwd={splitTarget.cwd}
-                      isSplit
-                      onCloseSplit={closeSplit}
-                    />
-                  ) : splitTarget.kind === 'screen' ? (
-                    <ScreenHost
-                      key={`split-screen-${splitTarget.pluginId}-${splitTarget.screenId}`}
-                      pluginId={splitTarget.pluginId}
-                      screenId={splitTarget.screenId}
-                      isSplit
-                      onCloseSplit={closeSplit}
-                    />
-                  ) : splitTarget.kind === 'overview' ? (
-                    <ConversationOverview key="split-overview" isSplit onCloseSplit={closeSplit} />
-                  ) : splitTarget.kind === 'plugins' ? (
-                    <PluginCenter key="split-plugins" isSplit onCloseSplit={closeSplit} />
-                  ) : splitTarget.kind === 'profiles' ? (
-                    <ProfileCenter key="split-profiles" isSplit onCloseSplit={closeSplit} />
-                  ) : splitTarget.kind === 'skills' ? (
-                    <SkillCenter key="split-skills" isSplit onCloseSplit={closeSplit} />
-                  ) : splitTarget.kind === 'nodes' ? (
-                    <NodeCenter key="split-nodes" isSplit onCloseSplit={closeSplit} />
-                  ) : splitTarget.kind === 'models' ? (
-                    <ModelCenter key="split-models" isSplit onCloseSplit={closeSplit} />
-                  ) : null}
+                  {renderPaneTarget(splitTarget, { panel: 'split', onCloseSplit: closeSplit })}
                 </Suspense>
               </div>
             )}

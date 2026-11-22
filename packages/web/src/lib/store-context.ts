@@ -14,7 +14,7 @@ import type {
   ProviderConfig,
   SkillSummary,
 } from '@helmx/protocol/browser'
-import type { ModelDescriptor } from './api.js'
+import type { ModelCatalogDefaults, ModelDescriptor } from './api.js'
 import type {
   AuthSlice,
   CatalogSlice,
@@ -99,6 +99,13 @@ function subscribePluginDocKey(store: HelmxExternalStore, docKey: string, listen
 }
 function readPluginDocKey(store: HelmxExternalStore, docKey: string): unknown {
   return store.getPluginDoc(docKey)
+}
+
+function subscribePluginById(store: HelmxExternalStore, pluginId: string, listener: () => void): () => void {
+  return store.subscribePlugin(pluginId, listener)
+}
+function readPluginById(store: HelmxExternalStore, pluginId: string): PluginSummary | undefined {
+  return store.getPluginSummary(pluginId)
 }
 
 function useDomainSlice<T>(
@@ -198,6 +205,10 @@ export function useCatalogAssets(): CatalogSlice {
 
 export function useModels(): ModelDescriptor[] {
   return useDomainSlice('models', (s) => s.getModels())
+}
+
+export function useModelDefaults(): ModelCatalogDefaults {
+  return useDomainSlice('models', (s) => s.getModelDefaults())
 }
 
 export function useOptionalModels(): ModelDescriptor[] | undefined {
@@ -352,6 +363,10 @@ export function useLoadError(key: string | undefined): string | undefined {
 export function usePluginDoc(pluginId: string | undefined, docName: string | undefined): unknown {
   const docKey = pluginId && docName ? `${pluginId}/${docName}` : undefined
   return useKeyedSlice(subscribePluginDocKey, readPluginDocKey, docKey, undefined)
+}
+
+export function usePluginSummary(pluginId: string | undefined): PluginSummary | undefined {
+  return useKeyedSlice(subscribePluginById, readPluginById, pluginId, undefined)
 }
 
 // ---------------------------------------------------------------------------

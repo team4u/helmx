@@ -70,7 +70,12 @@ test('已挂载插件视图在快照重建后重载模块与样式，无关插�
         if (timer) clearTimeout(timer)
       }
       assert.equal(host.querySelector('.revision-card')?.textContent, '持续挂载的插件视图')
-      assert.equal(document.querySelectorAll('style[data-helmx-plugin-css]').length, 1)
+      const styleNodes = document.querySelectorAll<HTMLStyleElement>('style[data-helmx-plugin-css]')
+      assert.equal(styleNodes.length, 1)
+      const styleEl = styleNodes[0]!
+      assert.match(styleEl.textContent ?? '', /^@layer plugin-ui \{[\s\S]*\}$/, '插件样式节点必须包裹在 @layer plugin-ui 中')
+      // happy-dom CSSOM 暂不解析 @layer 块：仅在测试内剥除最外层 @layer 壳以驱动真实 getComputedStyle 断言
+      styleEl.textContent = (styleEl.textContent ?? '').replace(/^@layer plugin-ui \{\n?([\s\S]*)\n?\}$/, '$1')
       const card = host.querySelector('.revision-card')!
       assert.equal(getComputedStyle(card).borderTopWidth, '1px', '第一份 CSS 必须保留并随视图恢复')
       const reference = document.createElement('span')

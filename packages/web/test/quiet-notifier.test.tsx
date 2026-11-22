@@ -21,7 +21,7 @@ import * as React from 'react'
 import { act } from 'react'
 import type { Root } from 'react-dom/client'
 import type { ConversationSummary, HelmxLocale, PluginUiContribution, WorkbenchPanelSpec } from '@helmx/protocol'
-import { createLocaleTranslator } from '@helmx/protocol'
+import { createWebTranslator } from '../src/i18n/catalog.js'
 import { ensureHappyDom, waitForCondition } from './helpers/dom-harness.js'
 import type { HelmxExternalStore } from '../src/lib/helmx-store.js'
 import type { ResolvedTarget } from '../src/lib/types.js'
@@ -30,11 +30,13 @@ import {
   registerBrowserNotificationServiceWorker,
   resetBrowserNotificationServiceWorkerForTest,
 } from '../src/lib/browser-notification.js'
-import { useQuietNotifier, quietNotifyTimings, localizeQuietNotificationBody, localizeQuietNotificationTitle } from '../src/shell/use-quiet-notifier.js'
+import { useQuietNotifier, quietNotifyTimings } from '../src/shell/use-quiet-notifier.js'
 import {
   COMPLETED_NOTIFICATION_TITLE,
   ENDED_NOTIFICATION_TITLE,
   WAITING_NOTIFICATION_TITLE,
+  composeTreeBlockedNotification,
+  composeTreeCompletionNotification,
 } from '../src/shell/quiet-notify-model.js'
 
 ensureHappyDom()
@@ -1060,37 +1062,48 @@ test('SW 激活时 completion 与 blocked 通知透传目标会话 url（/#/c/<i
 // 通知展示文案双语（en/zh-CN）：title/body 投递时刻随当前 locale
 // ---------------------------------------------------------------------------
 
-const zhTranslate = createLocaleTranslator('zh-CN')
-const enTranslate = createLocaleTranslator('en')
+const zhT = createWebTranslator('zh-CN')
+const enT = createWebTranslator('en')
 
-test('通知文案纯函数：标题恒等映射双语、未知标题透传；正文片段翻译且会话标签原样保留', { timeout: 60_000 }, () => {
-  // 标题：三个规范常量双语映射，en 原样，未知标题（模型未定义形态）原样透传不猜
-  assert.equal(localizeQuietNotificationTitle(COMPLETED_NOTIFICATION_TITLE, enTranslate), 'Helmx conversation completed')
-  assert.equal(localizeQuietNotificationTitle(COMPLETED_NOTIFICATION_TITLE, zhTranslate), 'Helmx 会话已完成')
-  assert.equal(localizeQuietNotificationTitle(ENDED_NOTIFICATION_TITLE, zhTranslate), 'Helmx 会话已结束')
-  assert.equal(localizeQuietNotificationTitle(WAITING_NOTIFICATION_TITLE, zhTranslate), 'Helmx 等待你的处理')
-  assert.equal(localizeQuietNotificationTitle('#5 自定义标题', zhTranslate), '#5 自定义标题')
+test('通知文案纯函数：composeTree* 直接走 shell.quiet.* i18n 词条，零英文二次解析', { timeout: 60_000 }, () => {
+  const okConv = conv({ id: 5, title: '修复构建失败', status: 'done' })
+  const errConv = conv({ id: 1, title: '父会话', status: 'error' })
 
-  // 正文：根会话已删的整句常量
-  assert.equal(localizeQuietNotificationBody('Conversation finished', zhTranslate), '会话已结束')
-  assert.equal(localizeQuietNotificationBody('Conversation finished · with failures', zhTranslate), '会话已结束 · 有失败')
-  assert.equal(localizeQuietNotificationBody('Conversation finished', enTranslate), 'Conversation finished')
-
-  // 正文：会话标签（#id 标题）原样保留，前缀/计数/失败片段随 locale
-  assert.equal(localizeQuietNotificationBody('#5 修复构建失败', zhTranslate), '#5 修复构建失败')
-  assert.equal(localizeQuietNotificationBody('#1 父会话 · Has failures', zhTranslate), '#1 父会话 · 有失败')
-  assert.equal(
-    localizeQuietNotificationBody('Pending input/approvals: #1 部署检查', zhTranslate),
-    '待处理输入/审批: #1 部署检查',
+  assert.deepEqual(
+    composeTreeCompletionNotification({ rootId: 5, accumulatedConversationIds: new Set([5]), conversations: [okConv], t: enT }),
+    { title: 'Helmx conversation completed', body: '#5 修复构建失败', primaryConversationId: 5 },
   )
-  assert.equal(
-    localizeQuietNotificationBody('Pending input/approvals: #1 a · #2 b · #3 c · 5 pending in total · Has failures', zhTranslate),
-    '待处理输入/审批: #1 a · #2 b · #3 c · 共 5 个待处理 · 有失败',
+  assert.deepEqual(
+    composeTreeCompletionNotification({ rootId: 5, accumulatedConversationIds: new Set([5]), conversations: [okConv], t: zhT }),
+    { title: 'Helmx 会话已完成', body: '#5 修复构建失败', primaryConversationId: 5 },
   )
-  // en：与模型规范输出逐字一致（默认语言零改写）
-  assert.equal(
-    localizeQuietNotificationBody('Pending input/approvals: #1 a · 4 pending in total', enTranslate),
-    'Pending input/approvals: #1 a · 4 pending in total',
+  assert.deepEqual(
+    composeTreeCompletionNotification({ rootId: 1, accumulatedConversationIds: new Set([1]), conversations: [errConv], t: zhT }),
+    { title: 'Helmx 会话已结束', body: '#1 父会话 · 有失败', primaryConversationId: 1 },
+  )
+  // 根会话已删时的兜底正文同样直接走 i18n 词条
+  assert.deepEqual(
+    composeTreeCompletionNotification({ rootId: 99, accumulatedConversationIds: new Set([99]), conversations: [], t: zhT }),
+    { title: 'Helmx 会话已完成', body: '会话已结束', primaryConversationId: null },
+  )
+  // 多树等待处理 + 失败标注
+  const blockedConvs = [1, 2, 3, 4].map((id) =>
+    conv({ id, title: `任务${id}`, status: 'blocked', pendingAskCount: 1, updatedAt: 10_000 - id }),
+  )
+  const failedChild = conv({ id: 9, title: '失败子任务', status: 'error' })
+  assert.deepEqual(
+    composeTreeBlockedNotification({
+      rootId: 1,
+      blockedConversationIds: new Set([1, 2, 3, 4]),
+      accumulatedConversationIds: new Set([1, 9]),
+      conversations: [...blockedConvs, failedChild],
+      t: zhT,
+    }),
+    {
+      title: 'Helmx 等待你的处理',
+      body: '待处理输入/审批：#1 任务1 · #2 任务2 · #3 任务3 · 等 4 个待处理 · 有失败',
+      primaryConversationId: 1,
+    },
   )
 })
 
@@ -1140,7 +1153,7 @@ test('通知投递双语：zh-CN locale 下完成/失败/等待处理的 title �
     })
     await waitForCondition(() => notifications.length === 3)
     assert.equal(notifications[2]!.title, 'Helmx 等待你的处理')
-    assert.equal(notifications[2]!.options.body, '待处理输入/审批: #7 部署审批')
+    assert.equal(notifications[2]!.options.body, '待处理输入/审批：#7 部署审批')
     harness.unmount()
   } finally {
     restoreTimings()

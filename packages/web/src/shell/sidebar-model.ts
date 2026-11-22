@@ -21,6 +21,7 @@ import { isPluginSummaryActive, type PluginActivityLike } from '../lib/live-stat
 import type { HelmxStoreValue, QualifiedUiSpec, ResolvedTarget } from '../lib/types.js'
 import { resolveTargetString } from '../lib/types.js'
 import { isConversationArchived } from '../conversation/archive-model.js'
+import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 import { resolveFocusedPanel } from './shortcuts-model.js'
 
 export interface SidebarPartition {
@@ -511,19 +512,22 @@ export function fuzzyMatchConversations(
   )
 }
 
-/** 会话五态的展示文案。 */
-export function conversationStatusLabel(status: ConversationSummary['status']): string {
+/** 会话五态的展示文案（支持 i18n，缺省回落英文桥接）。 */
+export function conversationStatusLabel(
+  status: ConversationSummary['status'],
+  t: WebMessageTranslator = englishWebTranslator,
+): string {
   switch (status) {
     case 'working':
-      return 'Running'
+      return t('shell.status.working')
     case 'blocked':
-      return 'Awaiting confirmation'
+      return t('shell.status.blocked')
     case 'done':
-      return 'Completed'
+      return t('shell.status.done')
     case 'idle':
-      return 'Idle'
+      return t('shell.status.idle')
     case 'error':
-      return 'Error'
+      return t('shell.status.error')
     default:
       return status
   }
@@ -569,8 +573,9 @@ export function conversationStatusTooltip(
   status: ConversationSummary['status'],
   doing?: string,
   lastError?: string,
+  t: WebMessageTranslator = englishWebTranslator,
 ): string {
-  const base = conversationStatusLabel(status)
+  const base = conversationStatusLabel(status, t)
   if (status === 'working' && doing?.trim()) {
     return `${base}: ${doing.trim()}`
   }
@@ -648,8 +653,25 @@ export interface SidebarTargetPresence {
   splitSecondary: boolean
   /** 分屏开启且当前命中聚焦面板（驱动左侧 2px accent 焦点指示） */
   focused: boolean
-  /** 分屏开启时在行尾显示的面板微标：'主' | '分' | '主·分' | null */
+  /** 分屏开启时在行尾显示的面板微标键：'Main' | 'Split' | 'Main·Split' | null（渲染经 sidebarPaneTagLabel 本地化） */
   paneTag: 'Main' | 'Split' | 'Main·Split' | null
+}
+
+const PANE_TAG_LABEL_KEYS: Record<
+  NonNullable<SidebarTargetPresence['paneTag']>,
+  'shell.paneTag.main' | 'shell.paneTag.split' | 'shell.paneTag.both'
+> = {
+  Main: 'shell.paneTag.main',
+  Split: 'shell.paneTag.split',
+  'Main·Split': 'shell.paneTag.both',
+}
+
+/** 将侧栏分屏微标键映射为当前语言的展示文案（en: Main/Split/Main·Split；zh-CN: 主/分/主·分）。 */
+export function sidebarPaneTagLabel(
+  paneTag: NonNullable<SidebarTargetPresence['paneTag']>,
+  t: WebMessageTranslator = englishWebTranslator,
+): string {
+  return t(PANE_TAG_LABEL_KEYS[paneTag])
 }
 
 /** 按在场/焦点推导侧栏行级状态修饰类名后缀（供各侧栏行组件共用）。 */

@@ -23,13 +23,12 @@ import {
   ModelPickerControl,
   PluginSlot,
   Select,
-  type SelectOption,
   Switch,
 } from '@helmx/plugin-client'
 import { useNodes, useSkills } from '../lib/store-context.js'
 import { summarizeSingleLine } from '../lib/format.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
-import { nodeOptionLabel } from '../modals/nodes-modal-model.js'
+import { buildNodeSelectOptions } from '../modals/nodes-modal-model.js'
 import { useModelPickerControlAdapter } from '../conversation/model-picker-adapter.js'
 
 export interface ProfileDetailDrawerProps {
@@ -40,6 +39,21 @@ export interface ProfileDetailDrawerProps {
   inline?: boolean
   onSaved?: (saved: Profile) => void
   onDeleted?: (id: string) => void
+}
+
+interface StarterFormItem extends StarterDraft {
+  /** Stable client-side React key for mutable starter rows. */
+  key: string
+}
+
+let nextStarterKeySeq = 0
+function createStarterKey(): string {
+  nextStarterKeySeq += 1
+  return `starter-${nextStarterKeySeq}`
+}
+
+function toStarterFormItems(starters: Profile['starters']): StarterFormItem[] {
+  return startersToDrafts(starters).map((item) => ({ ...item, key: createStarterKey() }))
 }
 
 interface FormState {
@@ -56,7 +70,7 @@ interface FormState {
   systemEdited: boolean
   useAllSkills: boolean
   selectedSkillIds: string[]
-  starters: StarterDraft[]
+  starters: StarterFormItem[]
   /** 保存时非表单字段（tags/managedByPlugin）从最近详情快照透传。 */
   source: Profile | null
 }
@@ -92,8 +106,26 @@ function createInitialForm(profile: Profile | null, isNew: boolean): FormState {
     systemEdited: false,
     useAllSkills: profile.skills === undefined,
     selectedSkillIds: Array.isArray(profile.skills) ? [...profile.skills] : [],
-    starters: startersToDrafts(profile.starters),
+    starters: toStarterFormItems(profile.starters),
     source: profile,
+  }
+}
+
+function mergeProfileDetailIntoForm(base: FormState, detail: Profile): FormState {
+  return {
+    ...base,
+    name: detail.name ?? base.name,
+    model: resolveProfileModel(detail) ?? base.model,
+    thinkingLevel: detail.thinkingLevel ?? '',
+    nodeId: detail.nodeId ?? base.nodeId,
+    cwd: detail.cwd ?? base.cwd,
+    restrictToCwd: detail.restrictToCwd === true,
+    system: detail.system ?? base.system,
+    systemEdited: false,
+    useAllSkills: detail.skills === undefined,
+    selectedSkillIds: Array.isArray(detail.skills) ? [...detail.skills] : base.selectedSkillIds,
+    starters: toStarterFormItems(detail.starters),
+    source: detail,
   }
 }
 
@@ -152,28 +184,13 @@ export function ProfileDetailDrawer({
         .get(targetId)
         .then((detail) => {
           if (activeFetchIdRef.current !== targetId) return
-          setForm((prev) => {
-            const next: FormState = {
-              ...prev,
-              name: detail.name ?? prev.name,
-              model: resolveProfileModel(detail) ?? prev.model,
-              thinkingLevel: detail.thinkingLevel ?? '',
-              nodeId: detail.nodeId ?? prev.nodeId,
-              cwd: detail.cwd ?? prev.cwd,
-              restrictToCwd: detail.restrictToCwd === true,
-              system: detail.system ?? prev.system,
-              systemEdited: false,
-              useAllSkills: detail.skills === undefined,
-              selectedSkillIds: Array.isArray(detail.skills) ? [...detail.skills] : prev.selectedSkillIds,
-              starters: startersToDrafts(detail.starters),
-              source: detail,
-            }
-            setBaseline(next)
-            return next
-          })
+          const next = mergeProfileDetailIntoForm(initial, detail)
+          setForm(next)
+          setBaseline(next)
         })
-        .catch(() => {
-          // 详情获取失败时静默维持基础信息
+        .catch((err) => {
+          if (activeFetchIdRef.current !== targetId) return
+          setError(err instanceof Error ? err.message : String(err))
         })
     }
   }, [open, profile, isNew])
@@ -226,23 +243,18 @@ export function ProfileDetailDrawer({
     }
   }
 
-  // 默认节点下拉选项：未绑定项 + nodes 全量；既有值不在节点列表时补「未知节点」回退项
-  const nodeOptions = useMemo<SelectOption<string>[]>(() => {
-    const list: SelectOption<string>[] = [
-      { value: '', label: t('profiles.drawer.unboundNode'), icon: 'monitor' },
-      ...nodes.map((n) => ({
-        value: n.id,
-        label: nodeOptionLabel(n, t),
-        icon: n.id === 'local' || n.kind === 'local' ? 'monitor' : 'network',
-        meta: n.kind === 'local' ? undefined : n.online ? t('common.online') : t('common.offline'),
-      })),
-    ]
-    const current = form.nodeId.trim()
-    if (current !== '' && !list.some((o) => o.value === current)) {
-      list.push({ value: current, label: t('profiles.drawer.unknownNode', { id: current }), icon: 'alert-circle' })
-    }
-    return list
-  }, [nodes, form.nodeId, t])
+  // 默认节点下拉选项：未绑定项 + nodes 去重列表；既有值不在节点列表时补「未知节点」回退项
+  const nodeOptions = useMemo(
+    () =>
+      buildNodeSelectOptions({
+        nodes,
+        selectedNodeId: form.nodeId,
+        t,
+        unboundLabel: t('profiles.drawer.unboundNode'),
+        unknownNodeLabel: (id) => t('profiles.drawer.unknownNode', { id }),
+      }),
+    [nodes, form.nodeId, t],
+  )
 
   // 可用技能列表
   const availableSkills = skills ?? []
@@ -627,7 +639,7 @@ export function ProfileDetailDrawer({
                   form.starters.map((starter, index) => {
                     const issue = validateStarterDraft(starter, t)
                     return (
-                      <div key={`starter-${index}`} className="profile-starter-item">
+                      <div key={starter.key} className="profile-starter-item">
                         <div className="profile-starter-fields">
                           <input
                             type="text"
@@ -636,11 +648,12 @@ export function ProfileDetailDrawer({
                             value={starter.label}
                             aria-label={t('profiles.drawer.starters.labelAria', { index: index + 1 })}
                             onChange={(e) =>
-                              setForm((prev) => {
-                                const starters = [...prev.starters]
-                                starters[index] = { ...starters[index]!, label: e.target.value }
-                                return { ...prev, starters }
-                              })
+                              setForm((prev) => ({
+                                ...prev,
+                                starters: prev.starters.map((item) =>
+                                  item.key === starter.key ? { ...item, label: e.target.value } : item,
+                                ),
+                              }))
                             }
                           />
                           <textarea
@@ -650,11 +663,12 @@ export function ProfileDetailDrawer({
                             value={starter.prompt}
                             aria-label={t('profiles.drawer.starters.promptAria', { index: index + 1 })}
                             onChange={(e) =>
-                              setForm((prev) => {
-                                const starters = [...prev.starters]
-                                starters[index] = { ...starters[index]!, prompt: e.target.value }
-                                return { ...prev, starters }
-                              })
+                              setForm((prev) => ({
+                                ...prev,
+                                starters: prev.starters.map((item) =>
+                                  item.key === starter.key ? { ...item, prompt: e.target.value } : item,
+                                ),
+                              }))
                             }
                           />
                         </div>
@@ -672,7 +686,7 @@ export function ProfileDetailDrawer({
                           onClick={() =>
                             setForm((prev) => ({
                               ...prev,
-                              starters: prev.starters.filter((_, i) => i !== index),
+                              starters: prev.starters.filter((item) => item.key !== starter.key),
                             }))
                           }
                         >
@@ -690,7 +704,7 @@ export function ProfileDetailDrawer({
                 onClick={() =>
                   setForm((prev) => ({
                     ...prev,
-                    starters: [...prev.starters, { label: '', prompt: '' }],
+                    starters: [...prev.starters, { key: createStarterKey(), label: '', prompt: '' }],
                   }))
                 }
               >

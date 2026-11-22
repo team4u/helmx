@@ -19,7 +19,7 @@ class RenderBoundary extends Component<ViewBoundaryProps & { translate: LocaleTr
     if (!this.state.message) return this.props.children
     const t = this.props.translate
     const label = this.props.label ?? t(uiCopy.view)
-    return <div className="callout callout--error" role="alert">
+    return <div className="callout callout-error" role="alert">
       <HelmxIcon name="alert-triangle" />
       <div>
         <strong>{t({ en: `${label} failed to render`, 'zh-CN': `${label}渲染失败` })}</strong>

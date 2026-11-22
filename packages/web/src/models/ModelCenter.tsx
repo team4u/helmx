@@ -1,17 +1,20 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import type * as React from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { ModelProviderSummary, ProviderConfig } from '@helmx/protocol/browser'
+import { HelmxIcon, Tabs, TabsContent, TabsList, TabsTrigger } from '@helmx/plugin-client'
+import { useWebLocale } from '../i18n/use-web-locale.js'
 import { assetsApi } from '../lib/api.js'
-import { HelmxIcon, SearchBox, Tabs, TabsContent, TabsList, TabsTrigger } from '@helmx/plugin-client'
 import {
   useCredentials,
   useLocationTargets,
+  useModelDefaults,
   useModels,
   useProviders,
   useStoreActions,
 } from '../lib/store-context.js'
-import { useWebLocale } from '../i18n/use-web-locale.js'
 import type { ModelsCenterTab } from '../lib/types.js'
-import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
+import { SystemCenterEmpty, SystemCenterShell, SystemCenterToolbar } from '../ui/SystemCenterShell.js'
+import { usePaneSplitToggle } from '../ui/use-pane-split-toggle.js'
 import { GlobalDefaultsPanel, type DefaultModelInfo } from './GlobalDefaultsPanel.js'
 import { ModelCard } from './ModelCard.js'
 import { ModelDetailDrawer, type CustomGatewayCreateInput, type ProviderSavePayload } from './ModelDetailDrawer.js'
@@ -44,16 +47,8 @@ export interface ModelCenterProps {
 
 /**
  * Full-screen Models & Credentials Center primary view container:
- * - a system-level full-stage view that fully replaces the legacy modal;
- * - top tabs switch between "Providers" (search + category pills + card grid)
- *   and "Global default" (inline default-model form); the tab state persists
- *   through the URL hash (#/settings/models/defaults) where defaults is a
- *   reserved path segment (the global-default tab);
- * - dynamic catalog loading: pulls the backend PI-native providers and plugin
- *   gateways live, with full listing and one-click refresh;
- * - details & credentials drawer: the right-side ModelDetailDrawer stays in
- *   sync with the URL hash deep link (#/settings/models/<providerId>);
- * - strictly zero Emoji; follows Fast Refresh and WAI-ARIA rules.
+ * - reads global default model from store (`useModelDefaults`) with zero redundant `/api/models/default` fetch;
+ * - pulls backend PI-native & dynamic plugin provider catalog live via `assetsApi.listModelProviders()`.
  */
 export function ModelCenter({
   isSplit = false,
@@ -64,49 +59,61 @@ export function ModelCenter({
   onTestConnection,
 }: ModelCenterProps): React.JSX.Element {
   const models = useModels()
+  const modelDefaults = useModelDefaults()
   const storeProviders = useProviders()
   const credentials = useCredentials()
   const { primaryTarget, splitTarget } = useLocationTargets()
-  const { openTarget, closeSplit, refreshAssets, pushNotice } = useStoreActions()
+  const { openTarget, refreshAssets, pushNotice } = useStoreActions()
   const { t } = useWebLocale()
   const [query, setQuery] = useState('')
   const [statusTab, setStatusTab] = useState<ProviderFilterTab>('all')
 
-  // Dynamic catalog and global default model state
   const [catalog, setCatalog] = useState<ModelProviderSummary[]>([])
-  const [defaultModelInfo, setDefaultModelInfo] = useState<DefaultModelInfo | null>(null)
+  const [savedDefaultOverride, setSavedDefaultOverride] = useState<DefaultModelInfo | null>(null)
   const [refreshingCatalog, setRefreshingCatalog] = useState(false)
   const [creatingCustom, setCreatingCustom] = useState(false)
 
-  // On mount, fetch the full backend provider catalog and the global default
-  // model config (generation guard: stale responses never overwrite on deps change).
   useEffect(() => {
-    const generation = { cancelled: false }
-    const fetchRemote = async () => {
-      try {
-        const [cat, def] = await Promise.all([
-          assetsApi.listModelProviders().catch(() => []),
-          assetsApi.getDefaultModel().catch(() => null),
-        ])
-        if (generation.cancelled) return
-        if (Array.isArray(cat)) {
-          setCatalog(cat)
-        }
-        if (def && typeof def === 'object') {
-          setDefaultModelInfo(def)
-        }
-      } catch {
-        // ignore
-      }
+    setSavedDefaultOverride(null)
+  }, [modelDefaults])
+
+  const defaultModelInfo: DefaultModelInfo | null = useMemo(() => {
+    if (savedDefaultOverride !== null) return savedDefaultOverride
+    if (
+      modelDefaults.defaultModel === undefined &&
+      modelDefaults.defaultThinkingLevel === undefined &&
+      modelDefaults.defaultCompactionModel === undefined &&
+      modelDefaults.defaultCompactionThinkingLevel === undefined &&
+      modelDefaults.modelThinkingLevels === undefined
+    ) {
+      return null
     }
-    void fetchRemote()
+    return {
+      defaultModel: modelDefaults.defaultModel ?? '',
+      defaultThinkingLevel: modelDefaults.defaultThinkingLevel ?? '',
+      ...(modelDefaults.modelThinkingLevels !== undefined ? { modelThinkingLevels: modelDefaults.modelThinkingLevels } : {}),
+      ...(modelDefaults.defaultCompactionModel !== undefined ? { defaultCompactionModel: modelDefaults.defaultCompactionModel } : {}),
+      ...(modelDefaults.defaultCompactionThinkingLevel !== undefined
+        ? { defaultCompactionThinkingLevel: modelDefaults.defaultCompactionThinkingLevel }
+        : {}),
+    }
+  }, [modelDefaults, savedDefaultOverride])
+
+  useEffect(() => {
+    let cancelled = false
+    void assetsApi
+      .listModelProviders()
+      .then((cat) => {
+        if (!cancelled && Array.isArray(cat)) setCatalog(cat)
+      })
+      .catch(() => {
+        // ignore transient catalog fetch errors
+      })
     return () => {
-      generation.cancelled = true
+      cancelled = true
     }
   }, [models, credentials])
 
-  // Merge the mainstream presets with store credentials, gateways, the model
-  // catalog and the full backend catalog (labels follow the active locale).
   const providers = useMemo(() => {
     if (customProviders) return sortProvidersConfiguredFirst(customProviders)
     return buildMergedProviders(
@@ -120,19 +127,23 @@ export function ModelCenter({
   }, [customProviders, credentials, storeProviders, models, catalog, t])
 
   const statusCounts = useMemo(() => buildProviderCategoryCounts(providers), [providers])
+  const pills = useMemo(
+    () =>
+      buildProviderFilterTabs(t).map((tab) => ({
+        key: tab.key,
+        label: tab.label,
+        count: statusCounts[tab.key] ?? 0,
+      })),
+    [statusCounts, t],
+  )
 
-  // Combined filtering (by configuration status tab and keyword)
-  const filteredProviders = useMemo(() => {
-    return filterProviders(providers, { query, statusTab })
-  }, [providers, query, statusTab])
+  const filteredProviders = useMemo(
+    () => filterProviders(providers, { query, statusTab }),
+    [providers, query, statusTab],
+  )
 
-  // Routing <-> drawer wiring: providerId and tab in both primary and split panes
-  const currentTarget =
-    isSplit && splitTarget?.kind === 'models'
-      ? splitTarget
-      : primaryTarget
-  const selectedProviderId =
-    currentTarget.kind === 'models' ? currentTarget.providerId : undefined
+  const currentTarget = isSplit && splitTarget?.kind === 'models' ? splitTarget : primaryTarget
+  const selectedProviderId = currentTarget.kind === 'models' ? currentTarget.providerId : undefined
   const centerTab: ModelsCenterTab = currentTarget.kind === 'models' ? currentTarget.tab ?? 'providers' : 'providers'
 
   const selectedProvider = useMemo(() => {
@@ -159,32 +170,22 @@ export function ModelCenter({
     openTarget({ kind: 'models' }, isSplit ? { split: true } : undefined)
   }
 
-  // Tab changes write back to the URL: entering "Global default" clears the
-  // providerId (the drawer never coexists with it).
   const handleTabChange = (tab: string) => {
     if (tab === centerTab) return
     setCreatingCustom(false)
-    if (tab === 'defaults') {
-      openTarget({ kind: 'models', tab: 'defaults' }, isSplit ? { split: true } : undefined)
-    } else {
-      openTarget({ kind: 'models' }, isSplit ? { split: true } : undefined)
-    }
+    openTarget(
+      tab === 'defaults' ? { kind: 'models', tab: 'defaults' } : { kind: 'models' },
+      isSplit ? { split: true } : undefined,
+    )
   }
 
-  // Refresh the full model catalog
   const handleRefreshAll = async () => {
     setRefreshingCatalog(true)
     try {
       await assetsApi.refreshModels()
-      const [cat, def] = await Promise.all([
-        assetsApi.listModelProviders().catch(() => []),
-        assetsApi.getDefaultModel().catch(() => null),
-      ])
+      const cat = await assetsApi.listModelProviders().catch(() => [])
       if (Array.isArray(cat)) setCatalog(cat)
-      if (def && typeof def === 'object') setDefaultModelInfo(def)
-      if (refreshAssets) {
-        await refreshAssets()
-      }
+      if (refreshAssets) await refreshAssets()
       pushNotice?.({
         type: 'notification',
         level: 'info',
@@ -203,19 +204,11 @@ export function ModelCenter({
     }
   }
 
-  // Credential & model configuration save: credentials and model enablement
-  // (full-replace semantics) are submitted separately; static preset providers
-  // absent from the backend catalog skip the filter write (the catalog cannot
-  // annotate them, so writing would be meaningless).
-  const handleSave = async (
-    providerId: string,
-    data: ProviderSavePayload,
-  ) => {
+  const handleSave = async (providerId: string, data: ProviderSavePayload) => {
     if (onSaveProvider) {
       await onSaveProvider(providerId, data)
       return
     }
-
     const provider = providers.find((p) => p.id === providerId)
     const filterEligible = isProviderFilterEligible(provider, models)
 
@@ -223,8 +216,6 @@ export function ModelCenter({
       if (data.apiKey) {
         await assetsApi.setCredential(providerId, data.apiKey)
       }
-      // Custom gateway (providers.json) edit: full-replace updates only this
-      // entry's baseUrl / protocol / label / models; other gateways stay intact.
       if (provider?.custom === true && data.baseUrl !== undefined && data.baseUrl !== '') {
         const gateways = storeProviders ?? []
         const gateway = gateways.find((g) => g.id === providerId)
@@ -238,13 +229,9 @@ export function ModelCenter({
           ...(data.label !== undefined ? { label: data.label || undefined } : {}),
           ...(data.customModelIds !== undefined ? { models: data.customModelIds } : {}),
         }
-        await assetsApi.saveProviders(
-          gateways.map((g) => (g.id === providerId ? nextGateway : g)),
-        )
+        await assetsApi.saveProviders(gateways.map((g) => (g.id === providerId ? nextGateway : g)))
       }
       if (data.models && filterEligible) {
-        // Full replacement: the currently unchecked model ids are the
-        // provider's complete disabled set (matching backend semantics).
         const disabledModels = data.models.filter((m) => !m.enabled).map((m) => m.id)
         await assetsApi.setModelFilter({ provider: providerId, disabledModels })
       }
@@ -254,9 +241,7 @@ export function ModelCenter({
         title: t('models.notice.providerUpdated'),
         body: t('models.notice.providerUpdatedBody', { providerId }),
       })
-      if (refreshAssets) {
-        await refreshAssets()
-      }
+      if (refreshAssets) await refreshAssets()
     } catch (err) {
       pushNotice?.({
         type: 'notification',
@@ -280,12 +265,8 @@ export function ModelCenter({
     }
     try {
       await assetsApi.saveProviders([...gateways, nextConfig])
-      if (input.apiKey) {
-        await assetsApi.setCredential(input.id, input.apiKey)
-      }
-      if (refreshAssets) {
-        await refreshAssets()
-      }
+      if (input.apiKey) await assetsApi.setCredential(input.id, input.apiKey)
+      if (refreshAssets) await refreshAssets()
       pushNotice?.({
         type: 'notification',
         level: 'info',
@@ -310,9 +291,7 @@ export function ModelCenter({
     const target = providers.find((p) => p.id === providerId)
     try {
       await assetsApi.saveProviders(gateways.filter((g) => g.id !== providerId))
-      if (refreshAssets) {
-        await refreshAssets()
-      }
+      if (refreshAssets) await refreshAssets()
       pushNotice?.({
         type: 'notification',
         level: 'info',
@@ -331,35 +310,24 @@ export function ModelCenter({
     }
   }
 
-  const toggleSplit = () => {
-    if (isSplit) {
-      onCloseSplit?.()
-      return
-    }
-    if (splitTarget !== null) {
-      closeSplit()
-      return
-    }
-    openTarget(
-      { kind: 'models', providerId: selectedProviderId, tab: centerTab },
-      { split: true },
-    )
-  }
-
-  const filterTabs = buildProviderFilterTabs(t)
+  const { isSplitActive, toggleSplit } = usePaneSplitToggle({
+    isSplit,
+    onCloseSplit,
+    getSplitTarget: () => ({ kind: 'models', providerId: selectedProviderId, tab: centerTab }),
+  })
 
   return (
-    <div className={`primary-center${isSplit ? ' is-split' : ''}`} data-view="model-center">
-      {/* Top bar */}
-      <div className="primary-center-topbar pane-topbar">
-        <div className="primary-center-title-wrap pane-title-group">
-          <div className="primary-center-title">
-            <HelmxIcon name="cpu" size={14} />
-            <span>{t('models.title')}</span>
-          </div>
-        </div>
-
-        <div className="primary-center-topbar-actions pane-actions">
+    <SystemCenterShell
+      dataView="model-center"
+      isSplit={isSplit}
+      isSplitActive={isSplitActive}
+      onCloseSplit={onCloseSplit}
+      onToggleSplit={toggleSplit}
+      icon="cpu"
+      title={t('models.title')}
+      wrapContent={false}
+      headerActions={
+        <>
           <button
             type="button"
             className="btn btn-sm btn-primary"
@@ -379,124 +347,95 @@ export function ModelCenter({
             <HelmxIcon name="refresh-cw" size={12} className={refreshingCatalog ? 'spin' : undefined} />
             <span className="pane-action-label">{t('models.refreshCatalog')}</span>
           </button>
-          {isSplit ? (
-            <CloseSplitButton onCloseSplit={onCloseSplit} />
-          ) : (
-            <SplitToggleButton
-              isSplitActive={splitTarget !== null}
-              onToggleSplit={toggleSplit}
-            />
-          )}
-        </div>
-      </div>
-
-      {/* Top tabs: providers / global defaults */}
-      <Tabs value={centerTab} onValueChange={handleTabChange} className="model-center-tabs">
-        <TabsList aria-label={t('models.viewsAria')}>
-          <TabsTrigger value="providers" className="model-center-tab-btn">
-            <HelmxIcon name="layers" size={13} />
-            <span>{t('models.tab.providers')}</span>
-          </TabsTrigger>
-          <TabsTrigger value="defaults" className="model-center-tab-btn">
+        </>
+      }
+      belowTopbar={
+        <>
+          <Tabs value={centerTab} onValueChange={handleTabChange} className="model-center-tabs">
+            <TabsList aria-label={t('models.viewsAria')}>
+              <TabsTrigger value="providers" className="model-center-tab-btn">
+                <HelmxIcon name="layers" size={13} />
+                <span>{t('models.tab.providers')}</span>
+              </TabsTrigger>
+              <TabsTrigger value="defaults" className="model-center-tab-btn">
+                <HelmxIcon name="sliders" size={13} />
+                <span>{t('models.tab.defaults')}</span>
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
+          <div className="model-defaults-status">
             <HelmxIcon name="sliders" size={13} />
-            <span>{t('models.tab.defaults')}</span>
-          </TabsTrigger>
-        </TabsList>
-      </Tabs>
-
-      {/* Global default model compact status row */}
-      <div className="model-defaults-status">
-        <HelmxIcon name="sliders" size={13} />
-        <span
-          className={`badge ${defaultModelInfo?.defaultModel ? 'badge-ok' : 'badge-neutral'}`}
-        >
-          {defaultModelInfo?.defaultModel ? t('models.configured') : t('models.defaults.notSet')}
-        </span>
-        {defaultModelInfo?.defaultModel ? (
-          <span>
-            {t('models.defaults.currentPrefix')} <strong className="mono">{defaultModelInfo.defaultModel}</strong>
-            {defaultModelInfo.defaultThinkingLevel &&
-              defaultModelInfo.defaultThinkingLevel !== 'off' &&
-              t('models.defaults.thinkingLevelSuffix', { level: defaultModelInfo.defaultThinkingLevel })}
-          </span>
-        ) : (
-          <span>{t('models.defaults.unsetHint')}</span>
-        )}
-        {defaultModelInfo?.defaultCompactionModel && (
-          <span>
-            {t('models.defaults.compactionCurrentPrefix')}{' '}
-            <strong className="mono">{defaultModelInfo.defaultCompactionModel}</strong>
-            {defaultModelInfo.defaultCompactionThinkingLevel &&
-              defaultModelInfo.defaultCompactionThinkingLevel !== 'off' &&
-              t('models.defaults.thinkingLevelSuffix', {
-                level: defaultModelInfo.defaultCompactionThinkingLevel,
-              })}
-          </span>
-        )}
-        <span className="text-subtle">{t('models.defaults.inheritanceChain')}</span>
-      </div>
-
-      <Tabs value={centerTab} onValueChange={handleTabChange} className="model-center-main-tabs">
-        {/* Providers tab */}
-        <TabsContent value="providers" className="primary-center-content">
-          {/* Toolbar: search box, category pills and catalog refresh */}
-          <div className="primary-center-toolbar model-toolbar-inline">
-            <SearchBox
-              className="primary-search-box"
-              clearButtonClassName="btn btn-ghost btn-sm primary-search-clear"
-              value={query}
-              onChange={setQuery}
-              placeholder={t('models.searchPlaceholder')}
-              ariaLabel={t('models.searchAria')}
-              clearLabel={t('models.searchClear')}
-            />
-
-            <div
-              className="primary-category-pills"
-              role="tablist"
-              aria-label={t('models.filterAria')}
-            >
-              {filterTabs.map((tab) => {
-                const count = statusCounts[tab.key] ?? 0
-                const isActive = statusTab === tab.key
-                return (
-                  <button
-                    key={tab.key}
-                    type="button"
-                    role="tab"
-                    aria-selected={isActive}
-                    className={`primary-category-pill${isActive ? ' is-active' : ''}`}
-                    onClick={() => setStatusTab(tab.key)}
-                  >
-                    <span>{tab.label}</span>
-                    <span className="badge tabular-nums">{count}</span>
-                  </button>
-                )
-              })}
-            </div>
+            <span className={`badge ${defaultModelInfo?.defaultModel ? 'badge-ok' : 'badge-neutral'}`}>
+              {defaultModelInfo?.defaultModel ? t('models.configured') : t('models.defaults.notSet')}
+            </span>
+            {defaultModelInfo?.defaultModel ? (
+              <span>
+                {t('models.defaults.currentPrefix')} <strong className="mono">{defaultModelInfo.defaultModel}</strong>
+                {defaultModelInfo.defaultThinkingLevel &&
+                  defaultModelInfo.defaultThinkingLevel !== 'off' &&
+                  t('models.defaults.thinkingLevelSuffix', { level: defaultModelInfo.defaultThinkingLevel })}
+              </span>
+            ) : (
+              <span>{t('models.defaults.unsetHint')}</span>
+            )}
+            {defaultModelInfo?.defaultCompactionModel && (
+              <span>
+                {t('models.defaults.compactionCurrentPrefix')}{' '}
+                <strong className="mono">{defaultModelInfo.defaultCompactionModel}</strong>
+                {defaultModelInfo.defaultCompactionThinkingLevel &&
+                  defaultModelInfo.defaultCompactionThinkingLevel !== 'off' &&
+                  t('models.defaults.thinkingLevelSuffix', {
+                    level: defaultModelInfo.defaultCompactionThinkingLevel,
+                  })}
+              </span>
+            )}
+            <span className="text-subtle">{t('models.defaults.inheritanceChain')}</span>
           </div>
-
-          {/* Main card grid or empty state */}
+        </>
+      }
+      overlays={
+        <ModelDetailDrawer
+          provider={creatingCustom ? null : selectedProvider}
+          isNewCustom={creatingCustom}
+          existingProviderIds={providers.map((p) => p.id)}
+          open={isDrawerOpen}
+          onClose={handleCloseDrawer}
+          inline={inlineDrawer}
+          onSave={handleSave}
+          onCreateCustomGateway={handleCreateCustomGateway}
+          onDeleteCustomGateway={handleDeleteCustomGateway}
+          onTestConnection={onTestConnection}
+        />
+      }
+    >
+      <Tabs value={centerTab} onValueChange={handleTabChange} className="model-center-main-tabs">
+        <TabsContent value="providers" className="primary-center-content">
+          <SystemCenterToolbar
+            className="model-toolbar-inline"
+            query={query}
+            onQueryChange={setQuery}
+            searchPlaceholder={t('models.searchPlaceholder')}
+            searchAriaLabel={t('models.searchAria')}
+            clearSearchLabel={t('models.searchClear')}
+            filterAriaLabel={t('models.filterAria')}
+            pills={pills}
+            activePill={statusTab}
+            onSelectPill={setStatusTab}
+          />
           {filteredProviders.length === 0 ? (
-            <div className="primary-center-empty">
-              <div className="primary-center-empty-icon">
-                <HelmxIcon name="search" size={22} />
-              </div>
-              <div className="primary-center-empty-text">{t('models.emptyTitle')}</div>
-              <div className="primary-center-empty-hint">{t('models.emptyHint')}</div>
-              {(query || statusTab !== 'all') && (
-                <button
-                  type="button"
-                  className="btn btn-sm btn-ghost"
-                  onClick={() => {
-                    setQuery('')
-                    setStatusTab('all')
-                  }}
-                >
-                  {t('models.resetFilters')}
-                </button>
-              )}
-            </div>
+            <SystemCenterEmpty
+              iconSize={22}
+              title={t('models.emptyTitle')}
+              hint={t('models.emptyHint')}
+              showReset={Boolean(query) || statusTab !== 'all'}
+              resetLabel={t('models.resetFilters')}
+              resetIcon={false}
+              resetButtonClassName="btn btn-sm btn-ghost"
+              onReset={() => {
+                setQuery('')
+                setStatusTab('all')
+              }}
+            />
           ) : (
             <div className="primary-center-grid">
               {filteredProviders.map((provider) => (
@@ -510,29 +449,13 @@ export function ModelCenter({
             </div>
           )}
         </TabsContent>
-
-        {/* Global defaults tab */}
         <TabsContent value="defaults" className="primary-center-content">
           <GlobalDefaultsPanel
             defaultModelInfo={defaultModelInfo}
-            onSaved={setDefaultModelInfo}
+            onSaved={setSavedDefaultOverride}
           />
         </TabsContent>
       </Tabs>
-
-      {/* Provider details and credentials drawer */}
-      <ModelDetailDrawer
-        provider={creatingCustom ? null : selectedProvider}
-        isNewCustom={creatingCustom}
-        existingProviderIds={providers.map((p) => p.id)}
-        open={isDrawerOpen}
-        onClose={handleCloseDrawer}
-        inline={inlineDrawer}
-        onSave={handleSave}
-        onCreateCustomGateway={handleCreateCustomGateway}
-        onDeleteCustomGateway={handleDeleteCustomGateway}
-        onTestConnection={onTestConnection}
-      />
-    </div>
+    </SystemCenterShell>
   )
 }

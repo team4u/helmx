@@ -204,3 +204,456 @@
   flex-shrink: 1;
 }
 
+/* 会话起始环境紧凑下拉框：与旁边 cwd 输入框完全等高 (28px) 与等圆角 (var(--radius-sm)) */
+.composer-env-select .helmx-select-trigger {
+  height: 28px;
+  padding: 0 8px;
+  font-size: 11.5px;
+  border-radius: var(--radius-sm);
+  border-color: var(--border);
+  box-sizing: border-box;
+}
+
+.composer-env-select .helmx-select-option {
+  height: 26px;
+  padding: 0 8px;
+  font-size: 11.5px;
+  border-radius: 5px;
+}
+
+.composer-env-cwd {
+  height: 28px;
+  padding: 0 6px;
+  font-size: 11px;
+  max-width: 320px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-env-cwd-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.composer-env-cwd-icon {
+  position: absolute;
+  left: 8px;
+  pointer-events: none;
+  color: var(--fg-subtle);
+  flex-shrink: 0;
+  z-index: 1;
+}
+
+.input.composer-env-cwd-input {
+  height: 28px;
+  padding: 0 8px 0 26px;
+  line-height: normal;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  font-size: 11.5px;
+  box-sizing: border-box;
+}
+.composer-env-cwd-input {
+  width: min(320px, 100%);
+  font-size: 11.5px;
+}
+
+.composer-env-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.composer-env-error {
+  color: var(--err);
+  font-size: 11px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-env-warn {
+  color: var(--warn);
+  font-size: 11px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-env-hint {
+  margin-left: auto;
+  font-size: 10.5px;
+  color: var(--fg-subtle);
+  white-space: nowrap;
+}
+
+.composer-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 10px 0;
+}
+
+/* 历史消息编辑态提示条：极简行高、柔和底色，与附件区风格协调 */
+.composer-edit-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 8px 10px 0;
+  padding: 4px 8px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 11.5px;
+  color: var(--fg-muted);
+}
+
+.composer-edit-banner-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--fg-muted);
+}
+.composer-edit-banner-text svg {
+  flex-shrink: 0;
+  color: var(--fg-subtle);
+}
+
+.composer-edit-cancel {
+  flex-shrink: 0;
+  height: 22px;
+  padding: 0 6px;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+.attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 11.5px;
+  color: var(--fg-secondary);
+  vertical-align: middle;
+}
+button.attachment-chip {
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+button.attachment-chip:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+  color: var(--fg);
+}
+button.attachment-chip:active:not(:disabled) {
+  background: var(--bg-active);
+}
+button.attachment-chip:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+.attachment-chip .btn-icon-xs {
+  width: 18px;
+  height: 18px;
+  border-radius: var(--radius-xs);
+}
+
+.composer-textarea {
+  width: 100%;
+  min-height: 36px;
+  max-height: 200px;
+  padding: 8px 14px 4px;
+  border: none;
+  outline: none;
+  background: transparent;
+  resize: none;
+  /* 待命页与会话共用输入框，保持发送前后字号一致。 */
+  font-size: 15px;
+  line-height: 1.55;
+  overflow-y: auto;
+}
+
+.composer-toolbar {
+  min-height: 36px;
+  padding: 0 6px 6px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  line-height: normal;
+}
+
+.composer-picker-root {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 320px;
+  flex: 0 1 auto;
+}
+
+.composer-toolbar .composer-model-button {
+  min-width: 0;
+  max-width: 100%;
+  height: 32px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fg-secondary);
+  font-size: 12px;
+  line-height: normal;
+  gap: 5px;
+}
+.composer-model-button > svg { flex-shrink: 0; }
+.composer-model-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: normal; }
+.composer-model-level { flex-shrink: 0; color: var(--fg-muted); font-size: 11px; white-space: nowrap; }
+
+/* 输入框下方只读遥测状态行（ContextUsageStatus + COMPOSER_STATUS_SLOT 插件贡献） */
+.composer-status-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  min-width: 0;
+  padding: 0 14px;
+  margin-bottom: -4px;
+  color: var(--fg-muted);
+  font-size: 11.5px;
+  line-height: 1.4;
+  user-select: none;
+}
+.composer-status-row:not(:has(.composer-context-status)):not(:has(.composer-duration-status)):not(:has(.composer-status-slot:not(:empty))),
+.composer-status-row:not(:has(.composer-context-status)):not(:has(.composer-duration-status)):has([data-plugin-id]):not(:has([data-plugin-id]:not(:empty))) {
+  display: none;
+}
+.composer-status-row .composer-context-status,
+.composer-status-row .composer-duration-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-muted);
+  font-size: 11.5px;
+  line-height: 1.4;
+  user-select: none;
+}
+.composer-status-row .composer-context-status-warn { color: var(--warn); }
+.composer-status-row .composer-context-status-high { color: var(--err); }
+.composer-status-row .composer-duration-status-warn { color: var(--warn); }
+.composer-status-row .composer-status-slot {
+  display: contents;
+}
+.composer-status-row .composer-status-slot > *,
+.composer-status-row .composer-status-slot > [data-plugin-id] > * {
+  min-width: 0;
+  max-width: 100%;
+}
+.composer-status-row .composer-status-slot:empty,
+.composer-status-row .composer-status-slot:has([data-plugin-id]):not(:has([data-plugin-id]:not(:empty))) {
+  display: none;
+}
+
+.composer-toolbar-left,
+.composer-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  line-height: normal;
+}
+.composer-toolbar-right { justify-content: flex-end; }
+.composer-toolbar-left > button, .composer-extras, .composer-pill-item, .composer-toolbar-right > button { flex-shrink: 0; }
+.composer-pills { display: flex; min-width: 0; overflow-x: auto; scrollbar-width: none; gap: 4px; }
+.composer-toolbar .btn-send {
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0;
+  border-radius: 50%;
+}
+.composer-toolbar .btn-send.btn-primary { background: var(--fg); border-color: transparent; color: var(--fg-on-solid); }
+.composer-toolbar .btn-send.btn-primary:hover:not(:disabled) { background: var(--fg-secondary); color: var(--fg-on-solid); border-color: transparent; }
+.composer-toolbar .btn-send.btn-primary:disabled { opacity: 1; background: var(--bg-muted); color: var(--fg-subtle); }
+
+/* 正忙分体引导/发送主按钮 */
+.composer-split-send {
+  display: inline-flex;
+  align-items: stretch;
+  height: 32px;
+  min-height: 32px;
+  background: var(--fg);
+  color: var(--fg-on-solid);
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+  flex-shrink: 0;
+  transition: opacity 120ms ease, background 120ms ease;
+}
+
+.composer-split-send:has(.composer-split-main:disabled) {
+  opacity: 0.55;
+  background: var(--bg-muted);
+  color: var(--fg-subtle);
+  box-shadow: none;
+}
+
+.composer-split-main.composer-steer-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 100%;
+  padding: 0 10px 0 12px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  white-space: nowrap;
+  border-top-left-radius: var(--radius-pill);
+  border-bottom-left-radius: var(--radius-pill);
+  transition: background 100ms ease;
+}
+
+.composer-split-main.composer-steer-action:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--fg-on-solid) 14%, transparent);
+}
+
+.composer-split-main.composer-steer-action:disabled {
+  cursor: not-allowed;
+}
+
+.composer-split-divider {
+  width: 1px;
+  height: 16px;
+  align-self: center;
+  background: color-mix(in srgb, var(--fg-on-solid) 20%, transparent);
+  flex-shrink: 0;
+}
+
+.composer-split-send:has(.composer-split-main:disabled) .composer-split-divider {
+  background: var(--border);
+}
+
+.composer-split-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  border-top-right-radius: var(--radius-pill);
+  border-bottom-right-radius: var(--radius-pill);
+  transition: background 100ms ease;
+}
+
+.composer-split-trigger:hover:not(:disabled),
+.composer-split-trigger[data-state="open"] {
+  background: color-mix(in srgb, var(--fg-on-solid) 18%, transparent);
+}
+
+.composer-split-trigger:disabled {
+  cursor: not-allowed;
+}
+
+/* 策略选择下拉浮层 */
+.composer-busy-dropdown-content {
+  min-width: 230px;
+  padding: 5px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+}
+
+.composer-busy-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 9px;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  transition: background 80ms ease;
+  user-select: none;
+}
+
+.composer-busy-menu-item[data-highlighted],
+.composer-busy-menu-item:hover:not(:disabled) {
+  background: var(--bg-hover);
+  outline: none;
+}
+
+.composer-busy-menu-icon {
+  flex-shrink: 0;
+  color: var(--fg-muted);
+}
+
+.composer-busy-menu-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.composer-busy-menu-title {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--fg);
+  line-height: 1.2;
+}
+
+.composer-busy-menu-desc {
+  font-size: 11px;
+  color: var(--fg-muted);
+  line-height: 1.2;
+}
+
+.composer-busy-menu-kbd {
+  flex-shrink: 0;
+  font-size: 10.5px;
+  font-family: var(--font-mono);
+  color: var(--fg-subtle);
+  background: var(--bg-muted);
+  padding: 2px 5px;
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--border);
+}
+
+.composer-busy-menu-item[data-highlighted] .composer-busy-menu-icon,
+.composer-busy-menu-item:hover:not(:disabled) .composer-busy-menu-icon {
+  color: var(--fg);
+}
+
+.composer-busy-menu-item.helmx-dropdown-item-danger .composer-busy-menu-icon,
+.composer-busy-menu-item.helmx-dropdown-item-danger .composer-busy-menu-title {
+  color: var(--err);
+}
+
+.composer-busy-menu-item.helmx-dropdown-item-danger[data-highlighted],
+.composer-busy-menu-item.helmx-dropdown-item-danger:hover:not(:disabled) {
+  background: var(--err-bg);
+}
+

@@ -743,6 +743,12 @@ test('ModelCenter: GlobalDefaultsPanel reuses ModelPickerControl (model · level
       { id: 'anthropic/claude-3-7-sonnet', provider: 'anthropic', modelId: 'claude-3-7-sonnet', available: true, thinkingLevels: ['off', 'low', 'high'] },
       { id: 'openai/gpt-4o-mini', provider: 'openai', modelId: 'gpt-4o-mini', available: true, thinkingLevels: ['off', 'low', 'medium'] },
     ],
+    modelDefaults: {
+      defaultModel: 'anthropic/claude-3-7-sonnet',
+      defaultThinkingLevel: 'high',
+      defaultCompactionModel: 'openai/gpt-4o-mini',
+      defaultCompactionThinkingLevel: 'low',
+    },
   })
 
   const putBodies: Array<Record<string, unknown>> = []
@@ -965,8 +971,8 @@ test('ModelCenter: custom gateway endpoint save goes through PUT /api/providers 
       root.render(e(HostStoreProviders, { value: store }, e(ModelCenter, { inlineDrawer: true })))
     })
 
-    // 挂载期的远端目录/默认模型请求先行落地，避免其迟到回包在编辑后重置抽屉草稿
-    await waitForCondition(() => mountFetches.has('/api/models/providers') && mountFetches.has('/api/models/default'))
+    // 挂载期的远端目录请求先行落地，避免其迟到回包在编辑后重置抽屉草稿
+    await waitForCondition(() => mountFetches.has('/api/models/providers'))
     await act(async () => {})
     // Custom gateway merged from store.providers: endpoint editable
     const endpointInput = container.querySelector('input#model-drawer-base-url') as HTMLInputElement

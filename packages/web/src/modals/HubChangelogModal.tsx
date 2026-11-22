@@ -94,7 +94,7 @@ export function HubChangelogModal({ from, onClose, inline = false }: { from?: st
                 </div>
               ) : null}
               {state.phase === 'error' ? (
-                <div className="callout callout--error">{state.message}</div>
+                <div className="callout callout-error">{state.message}</div>
               ) : null}
               {state.phase === 'loaded' && data !== null && data.available !== true ? (
                 <div className="callout">{t('shell.hubChangelog.absent')}</div>

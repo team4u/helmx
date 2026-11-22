@@ -10,14 +10,7 @@ import { DEFAULT_HELMX_LOCALE, resolveLocalizedText } from '@helmx/protocol/brow
 import { ApiClientError, pluginsApi, type PluginConfigResponse } from '../lib/api.js'
 import { isPluginSummaryActive } from '../lib/live-state.js'
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogOverlay,
-  AlertDialogPortal,
-  AlertDialogTitle,
+  ConfirmDialog,
   DetailDrawer,
   EmptyState,
   HelmxIcon,
@@ -113,10 +106,21 @@ export function PluginConfigForm({
   const [error, setError] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
   const [resettingKey, setResettingKey] = useState<string | null>(null)
+  const savedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     setValues(initialFormValues(config))
   }, [config])
+
+  useEffect(
+    () => () => {
+      if (savedTimerRef.current !== null) {
+        clearTimeout(savedTimerRef.current)
+        savedTimerRef.current = null
+      }
+    },
+    [],
+  )
 
   if (entries.length === 0) {
     return <div className="text-subtle">{t('plugins.config.empty')}</div>
@@ -128,7 +132,11 @@ export function PluginConfigForm({
     try {
       await pluginsApi.setConfig(pluginId, buildPluginConfigPayload(config.schema ?? {}, values))
       setSaved(true)
-      setTimeout(() => setSaved(false), 1600)
+      if (savedTimerRef.current !== null) clearTimeout(savedTimerRef.current)
+      savedTimerRef.current = setTimeout(() => {
+        savedTimerRef.current = null
+        setSaved(false)
+      }, 1600)
       onSaved()
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -593,56 +601,25 @@ export function PluginDetailDrawer({
       }
       closeLabel={t('common.close')}
       aux={
-        <AlertDialog
+        <ConfirmDialog
           open={confirmRemoveOpen && Boolean(plugin?.managed)}
           inline={inline}
+          contentClassName="plugin-remove-confirm"
           onOpenChange={(isOpen) => {
             if (!isOpen && packageOp !== 'removing') setConfirmRemoveOpen(false)
           }}
-        >
-          <AlertDialogPortal inline={inline}>
-            <AlertDialogOverlay className="modal-backdrop">
-              <AlertDialogContent
-                className="modal plugin-remove-confirm"
-                role="alertdialog"
-                aria-label={t('plugins.package.confirmUninstallAria')}
-              >
-                <div className="modal-header">
-                  <AlertDialogTitle className="modal-title">{t('plugins.package.uninstallPlugin')}</AlertDialogTitle>
-                </div>
-                <div className="modal-body">
-                  <AlertDialogDescription className="plugin-remove-confirm-desc">
-                    {t('plugins.package.confirmUninstallBody', {
-                      name: (plugin !== null ? resolveLocalizedText(plugin.name, locale) : '') || plugin?.id || '',
-                      id: plugin?.id ?? '',
-                    })}
-                  </AlertDialogDescription>
-                </div>
-                <div className="modal-footer">
-                  <AlertDialogCancel asChild>
-                    <button
-                      className="btn btn-ghost btn-sm"
-                      disabled={packageOp === 'removing'}
-                      onClick={() => setConfirmRemoveOpen(false)}
-                    >
-                      {t('common.cancel')}
-                    </button>
-                  </AlertDialogCancel>
-                  <AlertDialogAction asChild>
-                    <button
-                      className="btn btn-danger btn-sm"
-                      disabled={packageOp === 'removing'}
-                      onClick={() => void handleRemovePackage()}
-                    >
-                      <HelmxIcon name="trash-2" size={12} />
-                      <span>{packageOp === 'removing' ? t('plugins.package.uninstalling') : t('plugins.package.confirmUninstall')}</span>
-                    </button>
-                  </AlertDialogAction>
-                </div>
-              </AlertDialogContent>
-            </AlertDialogOverlay>
-          </AlertDialogPortal>
-        </AlertDialog>
+          title={t('plugins.package.uninstallPlugin')}
+          description={t('plugins.package.confirmUninstallBody', {
+            name: (plugin !== null ? resolveLocalizedText(plugin.name, locale) : '') || plugin?.id || '',
+            id: plugin?.id ?? '',
+          })}
+          confirmText={packageOp === 'removing' ? t('plugins.package.uninstalling') : t('plugins.package.confirmUninstall')}
+          cancelText={t('common.cancel')}
+          danger
+          pending={packageOp === 'removing'}
+          onConfirm={() => void handleRemovePackage()}
+          onCancel={() => setConfirmRemoveOpen(false)}
+        />
       }
     >
             {!plugin ? (

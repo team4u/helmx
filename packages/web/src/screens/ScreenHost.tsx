@@ -12,6 +12,7 @@ import { useGroupedUi, useLocationTargets, useStoreActions } from '../lib/store-
 import type { ResolvedTarget } from '../lib/types.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
 import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
+import { usePaneSplitToggle } from '../ui/use-pane-split-toggle.js'
 
 export interface ScreenHostProps {
   pluginId: string
@@ -23,7 +24,7 @@ export interface ScreenHostProps {
 export function ScreenHost({ pluginId, screenId, isSplit, onCloseSplit }: ScreenHostProps): React.JSX.Element {
   const groupedUi = useGroupedUi()
   const { primaryTarget, splitTarget } = useLocationTargets()
-  const { setScreenParams, closeSplit, openTarget } = useStoreActions()
+  const { setScreenParams } = useStoreActions()
   const { locale, t } = useWebLocale()
   const matched = groupedUi.screens.find(
     (s) => s.pluginId === pluginId && (s.spec as { id?: string }).id === screenId,
@@ -50,25 +51,16 @@ export function ScreenHost({ pluginId, screenId, isSplit, onCloseSplit }: Screen
     [pluginId, screenId, screenScope],
   )
 
-  const toggleSplit = () => {
-    if (isSplit) {
-      onCloseSplit?.()
-      return
-    }
-    if (splitTarget !== null) {
-      closeSplit()
-      return
-    }
-    openTarget(
-      {
-        kind: 'screen',
-        pluginId,
-        screenId,
-        params: target !== null && target.kind === 'screen' ? target.params : undefined,
-      },
-      { split: true },
-    )
-  }
+  const { isSplitActive, toggleSplit } = usePaneSplitToggle({
+    isSplit,
+    onCloseSplit,
+    getSplitTarget: () => ({
+      kind: 'screen',
+      pluginId,
+      screenId,
+      params: target !== null && target.kind === 'screen' ? target.params : undefined,
+    }),
+  })
 
   if (matched === undefined) {
     return (
@@ -85,7 +77,7 @@ export function ScreenHost({ pluginId, screenId, isSplit, onCloseSplit }: Screen
               <CloseSplitButton onCloseSplit={onCloseSplit} />
             ) : (
               <SplitToggleButton
-                isSplitActive={splitTarget !== null}
+                isSplitActive={isSplitActive}
                 onToggleSplit={toggleSplit}
               />
             )}

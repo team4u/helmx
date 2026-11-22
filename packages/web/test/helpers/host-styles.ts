@@ -13,7 +13,7 @@ export function readHostStyles(): string {
   const entry = readFileSync(STYLES_ENTRY, 'utf8')
   const fragments: string[] = []
   for (const line of entry.split('\n')) {
-    const match = line.match(/^@import '\.\/styles\/([^']+\.css)';$/)
+    const match = line.match(/^@import '\.\/styles\/([^']+\.css)'(?:\s+layer\([^)]+\))?;$/)
     if (match) {
       fragments.push(readFileSync(join(WEB_ROOT, 'src/styles', match[1]!), 'utf8'))
     }

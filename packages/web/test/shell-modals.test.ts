@@ -984,23 +984,25 @@ test('批量选择状态计算：全选、反选与单选切换', { timeout: 60_
 })
 
 test('批量删除导航契约：Sidebar 不做二次导航，回退统一由 Provider 删除管道负责', { timeout: 60_000 }, () => {
-  // Sidebar 拆分后源码断言拼接主文件与拆出的子模块（断言本身不变）。
-  const sidebarSource = [
-    '../src/shell/Sidebar.tsx',
-    '../src/shell/SidebarAgentStandings.tsx',
-    '../src/shell/SidebarPrimitives.tsx',
-  ]
-    .map((p) => readFileSync(new URL(p, import.meta.url), 'utf8'))
-    .join('\n')
-  const batchStart = sidebarSource.indexOf('const executeBatchDelete')
-  const batchEnd = sidebarSource.indexOf('return (', batchStart)
+  // 批量删除状态机统一抽至 use-batch-conversation-delete.ts，验证共享 hook 与 Sidebar 均不做二次导航。
+  const batchHookSource = readFileSync(
+    new URL('../src/shell/use-batch-conversation-delete.ts', import.meta.url),
+    'utf8',
+  )
+  const batchStart = batchHookSource.indexOf('const executeBatchDelete')
+  const batchEnd = batchHookSource.indexOf('return {', batchStart)
   assert.ok(batchStart > 0 && batchEnd > batchStart, 'executeBatchDelete 存在')
-  const batchBody = sidebarSource.slice(batchStart, batchEnd)
+  const batchBody = batchHookSource.slice(batchStart, batchEnd)
   // 删除导航唯一 truth：成功 SSE conversation.deleted 事件 → Provider 按当前目标条件回退；
-  // Sidebar 不再基于旧快照/selectedIds 二次跳转（旧实现会连失败项一起跳走）。
-  assert.doesNotMatch(batchBody, /openTarget/, '批量删除不得在 Sidebar 内导航')
-  assert.doesNotMatch(batchBody, /closeSplit/, '批量删除不得在 Sidebar 内关分屏')
+  // 批量删除钩子与 Sidebar 不再基于旧快照/selectedIds 二次跳转（旧实现会连失败项一起跳走）。
+  assert.doesNotMatch(batchBody, /openTarget/, '批量删除不得在删除钩子内导航')
+  assert.doesNotMatch(batchBody, /closeSplit/, '批量删除不得在删除钩子内关分屏')
   assert.match(batchBody, /bulkDeleteConversations/, '批量删除仍发起真实删除请求（单次 bulk-delete 端点）')
+  const standingsSource = readFileSync(
+    new URL('../src/shell/SidebarAgentStandings.tsx', import.meta.url),
+    'utf8',
+  )
+  assert.match(standingsSource, /useBatchConversationDelete/, 'Sidebar 站位列表复用共享批量删除钩子')
 })
 
 test('删除回退仿真：主屏/分屏/抽屉命中被删会话时回该智能体待命态', { timeout: 60_000 }, () => {

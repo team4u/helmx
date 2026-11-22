@@ -1,0 +1,519 @@
+/* ==========================================================================
+ * 全屏资源中心矩阵与 540px 详情抽屉（Profiles / Skills / Nodes / Models / Plugins）
+ * 本文件为宿主样式分片，全局级联顺序由 src/styles.css 的 @import 顺序决定。
+ * ========================================================================== */
+
+.primary-center {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  overflow: hidden;
+  position: relative;
+}
+
+.primary-center-topbar {
+  height: 46px;
+  min-height: 46px;
+  padding: 0 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.primary-center-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+
+.primary-center-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--fg);
+  line-height: 46px;
+  white-space: nowrap;
+}
+
+.primary-center-subtitle {
+  font-size: 11.5px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.primary-center-topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.primary-center-stats {
+  font-size: 12px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+
+.primary-center-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.primary-search-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  min-width: min(260px, 100%);
+  flex: 1;
+  max-width: 420px;
+  color: var(--fg-muted);
+  transition: border-color 0.15s ease;
+  box-sizing: border-box;
+}
+
+.primary-search-box:focus-within {
+  border-color: var(--accent);
+  color: var(--fg);
+}
+
+.primary-search-box > svg {
+  pointer-events: none;
+  flex-shrink: 0;
+}
+
+.primary-search-box input {
+  flex: 1;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--fg);
+  font-size: 13px;
+  padding: 0;
+  min-width: 0;
+}
+
+.primary-search-clear {
+  flex-shrink: 0;
+  padding: 2px;
+  height: auto;
+  color: var(--fg-subtle);
+}
+
+.primary-search-clear:hover {
+  color: var(--fg);
+}
+
+@media (max-width: 680px) {
+  .primary-search-box {
+    min-width: 0;
+    max-width: none;
+    width: 100%;
+    flex: 1 1 100%;
+  }
+}
+
+.primary-category-pills {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow-x: auto;
+  max-width: 100%;
+  padding-bottom: 2px;
+}
+
+.primary-category-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  font-size: 12px;
+  color: var(--fg-muted);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+}
+
+.primary-category-pill:hover {
+  background: var(--bg-subtle);
+  color: var(--fg);
+}
+
+.primary-category-pill.is-active {
+  background: var(--bg-elevated);
+  color: var(--nav-active-fg);
+  border-color: var(--accent);
+}
+
+.primary-center-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+  min-height: 0;
+}
+
+.primary-center-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 60px 20px;
+  text-align: center;
+  color: var(--fg-muted);
+}
+
+.primary-center-empty-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-subtle);
+  margin-bottom: 4px;
+}
+
+.primary-center-empty-text {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--fg);
+}
+
+.primary-center-empty-hint {
+  font-size: 12px;
+  color: var(--fg-muted);
+  max-width: 320px;
+}
+
+.primary-center-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 14px;
+  width: 100%;
+}
+
+.primary-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  transition: border-color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease;
+  cursor: pointer;
+  outline: none;
+  position: relative;
+  min-height: 136px;
+  min-width: 0;
+}
+
+.primary-card:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-subtle);
+}
+
+.primary-card.is-selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.primary-card-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.primary-card-icon-wrap {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-subtle);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--fg);
+}
+
+.primary-card-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.primary-card-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.primary-card-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.primary-card-location {
+  min-width: 0;
+  align-items: flex-start;
+}
+
+.primary-card-location > svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.primary-card-desc {
+  font-size: 12px;
+  color: var(--fg-secondary);
+  line-height: 1.45;
+  min-height: 34px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.primary-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.primary-card-pills {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.primary-card-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  font-size: 10.5px;
+  font-weight: 500;
+  border: 1px solid var(--border);
+  background: var(--bg-subtle);
+  color: var(--fg-muted);
+}
+
+.primary-card-pill > svg {
+  flex-shrink: 0;
+}
+
+.primary-card-pill-label {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.primary-card-pill-suffix {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* 520px/540px 右侧滑出抽屉通用规范（模型/Profile/节点/技能/插件中心） */
+.primary-drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(8px) saturate(1.1);
+  -webkit-backdrop-filter: blur(8px) saturate(1.1);
+}
+
+.primary-drawer-content {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(540px, 100vw);
+  background: var(--bg-elevated);
+  border-left: 1px solid var(--border);
+  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.28);
+  display: flex;
+  flex-direction: column;
+  outline: none;
+  animation: primaryDrawerSlideIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.drawer-header,
+.primary-drawer-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--line-2);
+  background: var(--bg-elevated);
+  flex-shrink: 0;
+}
+
+.drawer-header > button:last-child,
+.primary-drawer-header > button:last-child {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.primary-drawer-header-left {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+}
+
+.primary-drawer-icon-wrap {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-subtle);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--fg);
+}
+
+.primary-drawer-title-col {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+
+.primary-drawer-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.primary-drawer-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.primary-drawer-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.primary-drawer-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--line-2);
+  background: var(--bg-elevated);
+  flex-shrink: 0;
+}
+
+@media (max-width: 640px) {
+  .primary-drawer-content {
+    width: 100vw;
+    border-left: none;
+  }
+}
+
+/* Profile 详情抽屉：空白会话引导词编辑区块与技能描述摘要 */
+.profile-starters-header { justify-content: space-between; }
+.profile-starters-list { display: flex; flex-direction: column; gap: 8px; }
+.profile-starters-empty { padding: 2px 0; }
+.profile-starter-item {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 32px 8px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.profile-starter-fields { display: flex; flex-direction: column; gap: 6px; }
+.profile-starter-label { font-size: 13px; }
+.profile-starter-prompt { font-size: 13px; line-height: 1.5; resize: vertical; min-height: 44px; }
+.profile-starter-error { font-size: 11px; color: var(--err); }
+.profile-runtime-args { font-size: 12.5px; line-height: 1.5; resize: vertical; min-height: 68px; }
+.profile-starter-remove { position: absolute; top: 6px; right: 4px; }
+.profile-starter-add { margin-top: 6px; }
+
+.profile-skill-desc {
+  font-size: 11px;
+  color: var(--fg-subtle);
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow-wrap: break-word;
+}
+
+@media (max-width: 680px) {
+  .profile-starter-item { padding: 6px 28px 6px 6px; }
+  .profile-starter-prompt { font-size: 13px; }
+}

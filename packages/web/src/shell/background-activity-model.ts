@@ -315,7 +315,7 @@ export function backgroundAwareStatusTooltip(input: {
   t?: WebMessageTranslator
 }): string {
   const t = input.t ?? englishWebTranslator
-  const base = conversationStatusTooltip(input.status, input.doing, input.lastError)
+  const base = conversationStatusTooltip(input.status, input.doing, input.lastError, t)
   const light = resolveStatusLight(input.status, input.backgroundActive)
   if (!light.background) return base
   const summary = input.backgroundSummary?.trim() ?? ''

@@ -1,9 +1,11 @@
-import React, { useMemo, useState } from 'react'
-import { HelmxIcon, SearchBox } from '@helmx/plugin-client'
-import { useLocationTargets, useNodes, useStoreActions } from '../lib/store-context.js'
-import { useWebLocale } from '../i18n/use-web-locale.js'
+import type * as React from 'react'
+import { useMemo, useState } from 'react'
+import { HelmxIcon } from '@helmx/plugin-client'
 import type { WebMessageKey } from '../i18n/catalog.js'
-import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
+import { useWebLocale } from '../i18n/use-web-locale.js'
+import { useLocationTargets, useNodes, useStoreActions } from '../lib/store-context.js'
+import { SystemCenterEmpty, SystemCenterShell, SystemCenterToolbar } from '../ui/SystemCenterShell.js'
+import { usePaneSplitToggle } from '../ui/use-pane-split-toggle.js'
 import { NodeCard } from './NodeCard.js'
 import { NodeDetailDrawer } from './NodeDetailDrawer.js'
 import {
@@ -20,11 +22,6 @@ export interface NodeCenterProps {
   inlineDrawer?: boolean
 }
 
-/**
- * Category pills as pure data: labels resolve through the active-locale
- * translator at render time (constant-table labels are never localized in
- * place). Shared exact-fit copy (all/online/offline) reuses `common.*`.
- */
 const CATEGORY_TABS: ReadonlyArray<{ key: NodeCategoryTab; labelKey: WebMessageKey }> = [
   { key: 'all', labelKey: 'common.all' },
   { key: 'local', labelKey: 'nodes.local' },
@@ -34,16 +31,7 @@ const CATEGORY_TABS: ReadonlyArray<{ key: NodeCategoryTab; labelKey: WebMessageK
 ]
 
 /**
- * Full-screen Compute Nodes Center primary view container:
- * - a system-level full-stage view managing local and distributed compute nodes;
- * - top toolbar: multi-dimensional search box, category pill tabs and status
- *   count badges;
- * - responsive card grid consuming NodeCard in an adaptive flow;
- * - details & diagnostics drawer: the right-side NodeDetailDrawer with node
- *   health checks, enrollment commands and capability lists;
- * - state loop: deeply integrated with the useHelmxStore() primaryTarget state
- *   and the URL hash;
- * - strictly zero Emoji and Fast Refresh compliant.
+ * Full-screen Compute Nodes Center primary view container.
  */
 export function NodeCenter({
   isSplit = false,
@@ -52,30 +40,34 @@ export function NodeCenter({
 }: NodeCenterProps): React.JSX.Element {
   const nodes = (useNodes() as NodeInfo[]) ?? []
   const { primaryTarget, splitTarget } = useLocationTargets()
-  const { openTarget, closeSplit, refreshNodes } = useStoreActions()
+  const { openTarget, refreshNodes } = useStoreActions()
   const { t } = useWebLocale()
   const [query, setQuery] = useState('')
   const [activeTab, setActiveTab] = useState<NodeCategoryTab>('all')
   const [isAddingNew, setIsAddingNew] = useState(false)
 
   const categoryCounts = useMemo(() => buildNodeCategoryCounts(nodes), [nodes])
+  const pills = useMemo(
+    () =>
+      CATEGORY_TABS.map((tab) => ({
+        key: tab.key,
+        label: t(tab.labelKey),
+        count: categoryCounts[tab.key] ?? 0,
+      })),
+    [categoryCounts, t],
+  )
 
-  const filteredNodes = useMemo(() => {
-    return filterNodes(nodes, {
-      query,
-      categoryTab: activeTab,
-    })
-  }, [nodes, query, activeTab])
+  const filteredNodes = useMemo(
+    () => filterNodes(nodes, { query, categoryTab: activeTab }),
+    [nodes, query, activeTab],
+  )
 
   const currentTarget = isSplit ? splitTarget : primaryTarget
-  const selectedNodeId =
-    currentTarget?.kind === 'nodes' ? currentTarget.nodeId : undefined
-
+  const selectedNodeId = currentTarget?.kind === 'nodes' ? currentTarget.nodeId : undefined
   const selectedNode = useMemo(
     () => nodes.find((n) => n.id === selectedNodeId) ?? null,
     [nodes, selectedNodeId],
   )
-
   const isDrawerOpen = Boolean(selectedNodeId && selectedNode) || isAddingNew
 
   const handleSelectNode = (nodeId: string) => {
@@ -88,135 +80,81 @@ export function NodeCenter({
     openTarget({ kind: 'nodes' }, isSplit ? { split: true } : undefined)
   }
 
-  const handleOpenAddNew = () => {
-    setIsAddingNew(true)
-  }
-
-  const toggleSplit = () => {
-    if (isSplit) {
-      onCloseSplit?.()
-      return
-    }
-    if (splitTarget !== null) {
-      closeSplit()
-      return
-    }
-    openTarget({ kind: 'nodes', nodeId: selectedNodeId }, { split: true })
-  }
+  const { isSplitActive, toggleSplit } = usePaneSplitToggle({
+    isSplit,
+    onCloseSplit,
+    getSplitTarget: () => ({ kind: 'nodes', nodeId: selectedNodeId }),
+  })
 
   return (
-    <div className={`primary-center node-center${isSplit ? ' is-split' : ''}`} data-view="node-center">
-      {/* Top bar: title and actions */}
-      <div className="primary-center-topbar pane-topbar">
-        <div className="primary-center-title-wrap pane-title-group">
-          <div className="primary-center-title">
-            <HelmxIcon name="cpu" size={14} />
-            <span>{t('nodes.title')}</span>
-          </div>
-        </div>
-
-        <div className="primary-center-topbar-actions pane-actions">
-          <button
-            type="button"
-            className="btn btn-sm"
-            onClick={handleOpenAddNew}
-            title={t('nodes.connectTitle')}
-          >
-            <HelmxIcon name="plus" size={12} />
-            <span className="pane-action-label">{t('nodes.connect')}</span>
-          </button>
-          {isSplit ? (
-            <CloseSplitButton onCloseSplit={onCloseSplit} />
-          ) : (
-            <SplitToggleButton
-              isSplitActive={splitTarget !== null}
-              onToggleSplit={toggleSplit}
-            />
-          )}
-        </div>
-      </div>
-
-      {/* Toolbar: search input and category pills */}
-      <div className="primary-center-toolbar">
-        <SearchBox
-          className="primary-search-box"
-          clearButtonClassName="btn btn-ghost btn-sm primary-search-clear"
-          value={query}
-          onChange={setQuery}
-          placeholder={t('nodes.searchPlaceholder')}
-          ariaLabel={t('nodes.searchAria')}
-          clearLabel={t('nodes.searchClear')}
+    <SystemCenterShell
+      dataView="node-center"
+      className="node-center"
+      isSplit={isSplit}
+      isSplitActive={isSplitActive}
+      onCloseSplit={onCloseSplit}
+      onToggleSplit={toggleSplit}
+      icon="cpu"
+      title={t('nodes.title')}
+      headerActions={
+        <button
+          type="button"
+          className="btn btn-sm"
+          onClick={() => setIsAddingNew(true)}
+          title={t('nodes.connectTitle')}
+        >
+          <HelmxIcon name="plus" size={12} />
+          <span className="pane-action-label">{t('nodes.connect')}</span>
+        </button>
+      }
+      toolbar={
+        <SystemCenterToolbar
+          query={query}
+          onQueryChange={setQuery}
+          searchPlaceholder={t('nodes.searchPlaceholder')}
+          searchAriaLabel={t('nodes.searchAria')}
+          clearSearchLabel={t('nodes.searchClear')}
+          filterAriaLabel={t('nodes.filterAria')}
+          pills={pills}
+          activePill={activeTab}
+          onSelectPill={setActiveTab}
         />
-
-        <div className="primary-category-pills" role="tablist" aria-label={t('nodes.filterAria')}>
-          {CATEGORY_TABS.map((tab) => {
-            const count = categoryCounts[tab.key] ?? 0
-            const isActive = activeTab === tab.key
-            return (
-              <button
-                key={tab.key}
-                type="button"
-                role="tab"
-                aria-selected={isActive}
-                className={`primary-category-pill${isActive ? ' is-active' : ''}`}
-                onClick={() => setActiveTab(tab.key)}
-              >
-                <span className="primary-category-pill-label">{t(tab.labelKey)}</span>
-                <span className="badge tabular-nums">{count}</span>
-              </button>
-            )
-          })}
+      }
+      overlays={
+        <NodeDetailDrawer
+          node={isAddingNew ? null : selectedNode}
+          open={isDrawerOpen}
+          isNew={isAddingNew}
+          onClose={handleCloseDrawer}
+          onRefresh={refreshNodes}
+          inline={inlineDrawer}
+        />
+      }
+    >
+      {filteredNodes.length > 0 ? (
+        <div className="primary-center-grid">
+          {filteredNodes.map((node) => (
+            <NodeCard
+              key={node.id}
+              node={node}
+              selected={selectedNodeId === node.id}
+              onSelect={() => handleSelectNode(node.id)}
+            />
+          ))}
         </div>
-      </div>
-
-      {/* Content: responsive card grid or empty state */}
-      <div className="primary-center-content">
-        {filteredNodes.length > 0 ? (
-          <div className="primary-center-grid">
-            {filteredNodes.map((node) => (
-              <NodeCard
-                key={node.id}
-                node={node}
-                selected={selectedNodeId === node.id}
-                onSelect={() => handleSelectNode(node.id)}
-              />
-            ))}
-          </div>
-        ) : (
-          <div className="primary-center-empty">
-            <div className="primary-center-empty-icon">
-              <HelmxIcon name="search" size={28} />
-            </div>
-            <div className="primary-center-empty-text">{t('nodes.emptyTitle')}</div>
-            <div className="primary-center-empty-hint text-subtle">
-              {t('nodes.emptyHint')}
-            </div>
-            {(query || activeTab !== 'all') && (
-              <button
-                type="button"
-                className="btn btn-sm"
-                onClick={() => {
-                  setQuery('')
-                  setActiveTab('all')
-                }}
-              >
-                <HelmxIcon name="rotate-ccw" size={12} />
-                <span>{t('nodes.resetFilters')}</span>
-              </button>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* Right slide-over details and diagnostics drawer */}
-      <NodeDetailDrawer
-        node={isAddingNew ? null : selectedNode}
-        open={isDrawerOpen}
-        isNew={isAddingNew}
-        onClose={handleCloseDrawer}
-        onRefresh={refreshNodes}
-        inline={inlineDrawer}
-      />
-    </div>
+      ) : (
+        <SystemCenterEmpty
+          title={t('nodes.emptyTitle')}
+          hint={t('nodes.emptyHint')}
+          hintSubtle
+          showReset={Boolean(query) || activeTab !== 'all'}
+          resetLabel={t('nodes.resetFilters')}
+          onReset={() => {
+            setQuery('')
+            setActiveTab('all')
+          }}
+        />
+      )}
+    </SystemCenterShell>
   )
 }

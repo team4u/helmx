@@ -3,14 +3,14 @@
  * first-load sync hook.
  */
 import { useCallback, useEffect, useRef, type MutableRefObject } from 'react'
-import type { ArtifactMetadata, ConversationDetail, ConversationSummary } from '@helmx/protocol/browser'
+import type { ArtifactMetadata, ConversationSummary } from '@helmx/protocol/browser'
+import { createWebTranslator } from '../i18n/catalog.js'
 import { conversationsApi } from './api.js'
 import { isPageActive } from './browser-notification.js'
-import { errorText } from './error-text.js'
 import { topDrawerFrame } from './drawer-stack-model.js'
-import type { LiveState } from './live-state.js'
-import type { ActiveModal, DrawerFrame, ResolvedTarget, ToastNotice } from './types.js'
-import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
+import { errorText } from './error-text.js'
+import type { HelmxExternalStore } from './helmx-store.js'
+import type { ActiveModal, DrawerFrame, ResolvedTarget } from './types.js'
 
 export interface ArtifactsSyncWatermark {
   stateChangeSeq: number
@@ -41,33 +41,12 @@ export function isArtifactsWatermarkCurrent(
 }
 
 export interface UseUnreadSyncOptions {
+  store: HelmxExternalStore
   authenticated: boolean
-  authenticatedRef: MutableRefObject<boolean>
   primaryTarget: ResolvedTarget
   splitTarget: ResolvedTarget | null
   drawerStack: DrawerFrame[]
   activeModal: ActiveModal
-  targets: MutableRefObject<{ primaryTarget: ResolvedTarget; splitTarget: ResolvedTarget | null }>
-  drawerStackRef: MutableRefObject<DrawerFrame[]>
-  activeModalRef: MutableRefObject<ActiveModal>
-  liveRef: MutableRefObject<LiveState>
-  updateLive: (update: (state: LiveState) => LiveState) => void
-  conversationArtifactsRef?: MutableRefObject<Record<number, ArtifactMetadata[]>>
-  artifactsWatermarksRef?: MutableRefObject<Map<number, ArtifactsSyncWatermark>>
-  session: MutableRefObject<number>
-  loadConversationDetail: (
-    conversationId: number,
-    force?: boolean,
-    opts?: { silent?: boolean; limit?: number },
-  ) => Promise<ConversationDetail | undefined>
-  loadConversationArtifacts: (conversationId: number, opts?: { silent?: boolean }) => Promise<ArtifactMetadata[] | undefined>
-  pushNotice: (notice: Omit<ToastNotice, 'id' | 'createdAt'>) => void
-  /**
-   * Locale seam: this hook runs inside HelmxStoreProvider's own body (no
-   * context access); the Provider does not pass `t` yet, so the English bridge
-   * translator keeps today's behavior until the wiring lands.
-   */
-  t?: WebMessageTranslator
 }
 
 export interface UseUnreadSyncResult {
@@ -79,44 +58,31 @@ export interface UseUnreadSyncResult {
 }
 
 export function useUnreadSync({
+  store,
   authenticated,
-  authenticatedRef,
   primaryTarget,
   splitTarget,
   drawerStack,
   activeModal,
-  drawerStackRef,
-  activeModalRef,
-  targets,
-  liveRef,
-  updateLive,
-  conversationArtifactsRef,
-  artifactsWatermarksRef,
-  session,
-  loadConversationDetail,
-  loadConversationArtifacts,
-  pushNotice,
-  t,
 }: UseUnreadSyncOptions): UseUnreadSyncResult {
-  const tt = t ?? englishWebTranslator
   const unreadClearInFlight = useRef(new Set<number>())
   const unreadClearedSeq = useRef(new Map<number, number>())
 
   const visibleConversationIds = useCallback((): number[] => {
     const ids = new Set<number>()
-    for (const target of [targets.current.primaryTarget, targets.current.splitTarget]) {
+    for (const target of [store.getPrimaryTarget(), store.getSplitTarget()]) {
       if (target?.kind === 'conversation') ids.add(target.conversationId)
     }
-    const topDrawer = topDrawerFrame(drawerStackRef.current)
+    const topDrawer = topDrawerFrame(store.getDrawerStack())
     if (topDrawer?.kind === 'conversation') {
       ids.add(topDrawer.conversationId)
     }
-    const modal = activeModalRef.current
+    const modal = store.getActiveModal()
     if (modal?.kind === 'artifact-preview' || modal?.kind === 'workspace-file') {
       if (modal.conversationId !== undefined) ids.add(modal.conversationId)
     }
     return [...ids]
-  }, [activeModalRef, drawerStackRef, targets])
+  }, [store])
 
   const resetUnreadSync = useCallback(() => {
     unreadClearInFlight.current.clear()
@@ -125,37 +91,28 @@ export function useUnreadSync({
 
   /**
    * Foreground-visibility-gated automatic unread clearing (single-flight +
-   * stateChangeSeq watermark dedup):
-   * - PATCH only when authenticated && isPageActive() and the conversation is
-   *   currently unread=true;
-   * - requests in flight are deduped by unreadClearInFlight; after success the
-   *   requestedSeq watermark is recorded, intercepting visibilitychange+focus
-   *   bursts while SSE upsert has not yet flipped unread to false;
-   * - receiving unread=false, or stateChangeSeq advancing while still
-   *   unread=true, allows the next clearing;
-   * - failures only report a toast notice and never pollute
-   *   loadErrors['conversation:id'].
+   * stateChangeSeq watermark dedup).
    */
   const clearVisibleConversationUnread = useCallback(
     (id: number, candidate?: ConversationSummary): void => {
-      const summary = candidate ?? liveRef.current.conversations.find((conv) => conv.id === id)
+      const summary = candidate ?? store.getConversationSummary(id)
       if (summary === undefined) return
       if (!summary.unread) {
         const clearedSeq = unreadClearedSeq.current.get(id)
         if (clearedSeq !== undefined && summary.stateChangeSeq > clearedSeq) unreadClearedSeq.current.delete(id)
         return
       }
-      if (!authenticatedRef.current || !isPageActive()) return
+      if (!store.getAuthenticated() || !isPageActive()) return
       if (unreadClearInFlight.current.has(id)) return
       const clearedSeq = unreadClearedSeq.current.get(id)
       if (clearedSeq !== undefined && summary.stateChangeSeq <= clearedSeq) return
-      const epoch = session.current
+      const epoch = store.requests.sessionEpoch
       const requestedSeq = summary.stateChangeSeq
       unreadClearInFlight.current.add(id)
       void conversationsApi
         .patch(id, { unread: false })
         .then((updated) => {
-          if (epoch !== session.current) return
+          if (epoch !== store.requests.sessionEpoch) return
           unreadClearInFlight.current.delete(id)
           const updatedSeq =
             typeof updated?.stateChangeSeq === 'number' && updated.unread === false
@@ -164,7 +121,7 @@ export function useUnreadSync({
           const ackSeq = Math.max(requestedSeq, updatedSeq)
           unreadClearedSeq.current.set(id, ackSeq)
           if (updated?.unread === false) {
-            updateLive((state) => {
+            store.updateLive((state) => {
               const current = state.conversations.find((conv) => conv.id === id)
               if (current === undefined) return state
               if (typeof updated.stateChangeSeq === 'number' && current.stateChangeSeq > updated.stateChangeSeq) return state
@@ -176,7 +133,7 @@ export function useUnreadSync({
               }
             })
           }
-          const latest = liveRef.current.conversations.find((conv) => conv.id === id)
+          const latest = store.getConversationSummary(id)
           if (latest !== undefined && !latest.unread) return
           if (
             latest !== undefined &&
@@ -186,14 +143,13 @@ export function useUnreadSync({
           ) {
             unreadClearedSeq.current.set(id, ackSeq)
             clearVisibleConversationUnread(id, latest)
-            return
           }
-          if (latest === undefined) return
         })
         .catch((error: unknown) => {
-          if (epoch === session.current) {
+          if (epoch === store.requests.sessionEpoch) {
             unreadClearInFlight.current.delete(id)
-            pushNotice({
+            const tt = createWebTranslator(store.getLocale())
+            store.pushNotice({
               type: 'notification',
               level: 'error',
               title: tt('shell.unread.markFailed'),
@@ -202,19 +158,18 @@ export function useUnreadSync({
           }
         })
     },
-    [authenticatedRef, liveRef, pushNotice, session, tt, updateLive, visibleConversationIds],
+    [store, visibleConversationIds],
   )
 
   useEffect(() => {
     if (!authenticated) return
     for (const id of visibleConversationIds()) {
-      void loadConversationDetail(id)
-      const cachedArtifacts = conversationArtifactsRef?.current[id]
-      const summary = liveRef.current.conversations.find((conv) => conv.id === id)
-      const wm = artifactsWatermarksRef?.current.get(id)
-      const artifactsUnchanged = isArtifactsWatermarkCurrent(cachedArtifacts, summary, wm)
-      if (!artifactsUnchanged) {
-        void loadConversationArtifacts(id)
+      void store.loadConversationDetail(id)
+      const cachedArtifacts = store.getConversationArtifactsMap()[id]
+      const summary = store.getConversationSummary(id)
+      const wm = store.requests.artifactsWatermarks.get(id)
+      if (!isArtifactsWatermarkCurrent(cachedArtifacts, summary, wm)) {
+        void store.loadConversationArtifacts(id)
       }
       clearVisibleConversationUnread(id)
     }
@@ -224,18 +179,11 @@ export function useUnreadSync({
     splitTarget,
     drawerStack,
     activeModal,
-    liveRef,
-    conversationArtifactsRef,
-    artifactsWatermarksRef,
-    loadConversationDetail,
-    loadConversationArtifacts,
+    store,
     visibleConversationIds,
     clearVisibleConversationUnread,
   ])
 
-  // When the tab becomes visible and the window refocused, catch up on clearing
-  // unread for the currently visible main/split conversations (logout/unmount
-  // unbinds automatically).
   useEffect(() => {
     if (!authenticated || typeof document === 'undefined' || typeof window === 'undefined') return
     const onPageActive = () => {
