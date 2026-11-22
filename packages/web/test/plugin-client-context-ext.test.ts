@@ -20,7 +20,9 @@ import {
   createPluginClientContext,
   PluginClientContext,
   usePluginDoc,
+  usePluginDocState,
   usePluginSessionDoc,
+  type PluginDocState,
 } from '@helmx/plugin-client'
 import { pluginsApi } from '../src/lib/api.js'
 import { makeTestStore } from './helpers/store.js'
@@ -193,4 +195,75 @@ test('locale/translate：宿主端口按 store locale 注入并可解析显示�
   const ctxZh = createPluginClientContext(createPluginClientHostPort(storeZh), 'test:plugin', 1)
   assert.equal(ctxZh.locale, 'zh-CN')
   assert.equal(ctxZh.translate({ en: 'Hi', 'zh-CN': '你好' }), '你好')
+})
+
+test('usePluginDocState：真实 store 驱动 loading -> error -> retry() -> ready 全链路', { timeout: 60_000 }, async (t) => {
+  let attempt = 0
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = (async () => {
+    attempt += 1
+    if (attempt === 1) {
+      return new Response(JSON.stringify({ error: { message: 'doc load boom' } }), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+    return new Response(JSON.stringify({ pluginId: 'test:plugin', name: 'status', value: { count: 7 } }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }) as typeof fetch
+  t.after(() => { globalThis.fetch = originalFetch })
+
+  const store = makeTestStore({
+    plugins: [{ id: 'test:plugin', name: 'Test', version: '1.0.0', enabled: true, locked: false, hooks: [], actions: [], tools: [] }],
+  })
+  const ctx = createPluginClientContext(createPluginClientHostPort(store), 'test:plugin', 1)
+  const probe = mountProbe<PluginDocState<{ count: number }>>(store, ctx, () => usePluginDocState<{ count: number }>('status'))
+  try {
+    for (let i = 0; i < 20 && probe.result()?.status !== 'error'; i++) await act(async () => {})
+    assert.equal(probe.result()?.status, 'error', '首次拉取失败必须进入 error 态')
+    assert.match(probe.result()?.error ?? '', /doc load boom/)
+    assert.equal(probe.result()?.data, undefined)
+
+    act(() => {
+      probe.result()!.retry()
+    })
+    for (let i = 0; i < 20 && probe.result()?.status !== 'ready'; i++) await act(async () => {})
+    assert.equal(probe.result()?.status, 'ready', '手动 retry 绕过冷却并恢复 ready')
+    assert.deepEqual(probe.result()?.data, { count: 7 })
+    assert.equal(probe.result()?.error, undefined)
+    assert.equal(attempt, 2)
+  } finally {
+    probe.unmount()
+  }
+})
+
+test('ctx.openWorkbench(panelId, params)：自动补全短面板 ID、写入 workbenchParams 并在切页/关闭时清空', { timeout: 60_000 }, () => {
+  const store = makeTestStore({})
+  const ctx = createPluginClientContext(createPluginClientHostPort(store), 'builtin:workflow', 1)
+
+  ctx.openWorkbench('tasks', { runId: 'wf_99', nodeId: 'step1' })
+  assert.equal(store.getWorkbenchSlice().workbenchOpen, true)
+  assert.equal(store.getWorkbenchSlice().workbenchTab, 'plugin:builtin:workflow/tasks')
+  assert.deepEqual(store.getWorkbenchSlice().workbenchParams, {
+    tab: 'plugin:builtin:workflow/tasks',
+    conversationId: 1,
+    params: { runId: 'wf_99', nodeId: 'step1' },
+  })
+
+  // 同 run 再次触发：生成新 params 对象引用以允许面板再次聚焦
+  const prevParamsRef = store.getWorkbenchSlice().workbenchParams?.params
+  ctx.openWorkbench('tasks', { runId: 'wf_99' })
+  assert.notEqual(store.getWorkbenchSlice().workbenchParams?.params, prevParamsRef)
+
+  // 手动切换页签或关闭工作台自动清理过期 workbenchParams
+  store.setWorkbenchTab('artifacts')
+  assert.equal(store.getWorkbenchSlice().workbenchParams, null)
+
+  ctx.openWorkbench('tasks', { runId: 'wf_100' })
+  assert.deepEqual(store.getWorkbenchSlice().workbenchParams?.params, { runId: 'wf_100' })
+  ctx.closeWorkbench()
+  assert.equal(store.getWorkbenchSlice().workbenchOpen, false)
+  assert.equal(store.getWorkbenchSlice().workbenchParams, null)
 })

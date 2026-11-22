@@ -2067,7 +2067,7 @@ test('跨进程并发冷编译共享缓存：自动回收死 PID 残留锁、无
     await mkdir(stagingDir, { recursive: true })
     await writeFile(
       join(stagingDir, `.${baseName}.compile.lock`),
-      JSON.stringify({ pid: deadPid, token: 'stale-dead-holder', createdAt: Date.now() }),
+      `${deadPid} stale-dead-holder\n`,
     )
 
     const pluginBuildEntry = import.meta.resolve('@helmx/plugin-build')

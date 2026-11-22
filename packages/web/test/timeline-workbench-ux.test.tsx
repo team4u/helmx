@@ -771,4 +771,49 @@ describe("timeline-workbench-ux", () => {
     assert.doesNotMatch(ui.host.textContent!, /动态队列|3 项待处理/)
     globalThis.fetch = originalFetch
   })
+
+  test('WorkbenchView 将 openWorkbenchDrawer 的 params 透传给目标插件面板，并在再次聚焦或切页时更新/清理', { timeout: 60_000 }, async () => {
+    const receivedParams: Array<Readonly<Record<string, unknown>> | undefined> = []
+    function FocusPanel(props: { conversation?: ConversationSummary; params?: Readonly<Record<string, unknown>> }) {
+      receivedParams.push(props.params)
+      return e('div', { 'data-testid': 'focus-panel' }, String(props.params?.['runId'] ?? 'none'))
+    }
+    seedPluginClientModule('sample', 'index.tsx', { FocusPanel }, 'h1')
+
+    const conv = makeConversation(1, { profileId: 'coder' })
+    const store = makeTestStore({
+      conversations: [conv],
+      plugins: [{ id: 'sample', name: 'Sample', version: '1.0.0', enabled: true, locked: false, hooks: [], actions: [], tools: [], clientHashes: { 'index.tsx': 'h1' } }],
+      uiContributions: [
+        {
+          pluginId: 'sample',
+          surface: 'workbench.panel',
+          spec: { id: 'tasks', label: 'Tasks', order: 10, client: { module: 'index.tsx', export: 'FocusPanel' } },
+        },
+      ],
+    })
+
+    store.actions.openWorkbenchDrawer({ tab: 'plugin:sample/tasks', conversationId: 1, params: { runId: 'wf_first' } })
+    const ui = mountNode()
+    await ui.render(store, e(WorkbenchView, { conversationId: 1 }))
+    await waitForCondition(() => ui.host.querySelector('[data-testid="focus-panel"]')?.textContent === 'wf_first')
+    assert.deepEqual(receivedParams.at(-1), { runId: 'wf_first' })
+
+    // 同一面板再次聚焦新 runId：keep-alive 挂载中的面板实时收到新 params
+    await act(async () => {
+      store.actions.openWorkbenchDrawer({ tab: 'plugin:sample/tasks', conversationId: 1, params: { runId: 'wf_second' } })
+    })
+    assert.equal(ui.host.querySelector('[data-testid="focus-panel"]')?.textContent, 'wf_second')
+    assert.deepEqual(receivedParams.at(-1), { runId: 'wf_second' })
+
+    // 手动切换页签后再切回：旧聚焦参数已被清空
+    await act(async () => {
+      store.actions.setWorkbenchTab('artifacts')
+    })
+    assert.equal(store.getWorkbenchSlice().workbenchParams, null)
+    await act(async () => {
+      store.actions.setWorkbenchTab('plugin:sample/tasks')
+    })
+    assert.equal(ui.host.querySelector('[data-testid="focus-panel"]')?.textContent, 'none')
+  })
 })

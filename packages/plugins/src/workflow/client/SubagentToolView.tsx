@@ -43,7 +43,6 @@ import {
 } from './models.ts'
 import type { SubagentBadge } from './models.ts'
 import { executionLightStatus } from './model-execution-status.ts'
-import { requestWorkbenchRunFocus } from './workbench-focus.ts'
 import {
   executionStatusLabel,
   SNIPPET_AWAITING_APPROVAL,
@@ -262,8 +261,7 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
       return
     }
     if (canOpenWorkbenchRun && targetWorkbenchRunId !== undefined) {
-      requestWorkbenchRunFocus(viewerConversationId, targetWorkbenchRunId)
-      ctx.openWorkbench(`plugin:${ctx.pluginId}/tasks`)
+      ctx.openWorkbench('tasks', { runId: targetWorkbenchRunId })
       return
     }
     setDetailsOpen((prev) => !prev)

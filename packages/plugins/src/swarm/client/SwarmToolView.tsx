@@ -7,7 +7,7 @@ import {
   HelmxIcon, StatusLight, ToolCallDetails, formatDurationMs, resolveLocalizedText,
   usePluginContext, usePluginDoc, usePluginLocale, useToolActivity, type HelmxLocale,
 } from '@helmx/plugin-client'
-import { SWARM_WORKBENCH_PANEL_TARGET, type SwarmIndexDoc } from './models.ts'
+import { SWARM_WORKBENCH_PANEL_ID, type SwarmIndexDoc } from './models.ts'
 import { isPlainObject, resolveConversationBoardLink } from './board-model.ts'
 import { extractSwarmPresentationMeta, resolveSwarmToolClickTarget, resolveSwarmToolFacts, type SwarmToolFacts } from './model-tool-view.ts'
 import { useElapsedNowMs } from './hooks.ts'
@@ -131,7 +131,12 @@ export function SwarmToolView(props: ToolViewProps): ReactNode {
         aria-controls={clickTarget === undefined ? detailsId : undefined}
         onClick={() => {
           if (clickTarget?.kind === 'member') ctx.openConversationDrawer(clickTarget.conversationId)
-          else if (clickTarget?.kind === 'group') ctx.openWorkbench(SWARM_WORKBENCH_PANEL_TARGET)
+          else if (clickTarget?.kind === 'group') {
+            const focusParams: Record<string, unknown> = {}
+            if (targetGroupId !== undefined) focusParams['groupId'] = targetGroupId
+            if (facts.seq !== undefined) focusParams['postSeq'] = facts.seq
+            ctx.openWorkbench(SWARM_WORKBENCH_PANEL_ID, Object.keys(focusParams).length > 0 ? focusParams : undefined)
+          }
           else setDetailsOpen((prev) => !prev)
         }}
       >

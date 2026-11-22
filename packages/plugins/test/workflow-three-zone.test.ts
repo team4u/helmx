@@ -13,7 +13,7 @@
  *      自动展开，展开无损呈现 runId、投递时间、完整 result、otherRunningTasks（含 runId）与复制按钮。
  * 3. 右侧工作台去重与无损承载（WorkflowWorkbenchPanel）：
  *    - 移除重复工作流库列表，保留跳转「工作流库」按钮；
- *    - 响应 workbench-focus 请求直开并高亮目标 run.id；
+ *    - 响应宿主 openWorkbench('tasks', { runId }) 聚焦参数直开并高亮目标 run.id；
  *    - WorkflowRunCardBody 去除重复 .phase-bar、提供无损 kv-grid（运行 ID/时间/源/定义）与 Radix Popover `···` 菜单；
  *    - SubagentLiveCard / ExternalRunSummary / WorkflowNodeCards 展示任务标题（含 entries 回退），机器坐标留在对话详情中查看。
  * 4. 图标与设计Constraints:WorkflowIcon 支持 search/play、零 Emoji、零 callout--warn 拼写错、Fast Refresh 只导出组件与类型。
@@ -99,6 +99,7 @@ interface HostStubLog {
   drawers: number[]
   workbenchTabs: string[]
   workbenchOpens: boolean[]
+  workbenchParams: Array<Record<string, unknown> | undefined>
   screens: string[]
   notices: Array<{ message: string; tone: string }>
   loadDetailCalls: number[]
@@ -145,6 +146,7 @@ function createHostHarness(init: {
     drawers: [],
     workbenchTabs: [],
     workbenchOpens: [],
+    workbenchParams: [],
     screens: [],
     notices: [],
     loadDetailCalls: [],
@@ -229,6 +231,11 @@ function createHostHarness(init: {
       log.drawers.push(id)
     },
     openArtifactPreview: () => undefined,
+    openWorkbench: (options) => {
+      log.workbenchOpens.push(true)
+      if (options?.tab !== undefined) log.workbenchTabs.push(options.tab)
+      log.workbenchParams.push(options?.params)
+    },
     setWorkbenchOpen: (open) => {
       log.workbenchOpens.push(open)
     },
@@ -333,24 +340,10 @@ describe('Workflow 三区零重复与无损呈现', () => {
     g[CLIENT_SHARED_GLOBALS['lucide-react']!] = LucideReact
     g[CLIENT_SHARED_GLOBALS['@helmx/plugin-client']!] = SDK
     tempDir = await mkdtemp(join(tmpdir(), 'helmx-wf-three-zone-'))
-    const surfaceEntries = [
-      'active-tray.tsx',
-      'background-report.tsx',
-      'tool-views.tsx',
-      'workbench.tsx',
-      'library.tsx',
-    ] as const
-    const bundles = await Promise.all(
-      surfaceEntries.map((entry) =>
-        compilePluginClientModule('builtin:workflow', WORKFLOW_CLIENT_DIR, entry, tempDir),
-      ),
-    )
-    const mods = await Promise.all(
-      bundles.map((bundle, idx) =>
-        import(`data:text/javascript;base64,${Buffer.from(bundle.code, 'utf8').toString('base64')}#three-zone-${idx}`),
-      ),
-    )
-    mod = Object.assign({}, ...mods) as WorkflowClientModule
+    const bundle = await compilePluginClientModule('builtin:workflow', WORKFLOW_CLIENT_DIR, 'index.tsx', tempDir)
+    mod = (await import(
+      `data:text/javascript;base64,${Buffer.from(bundle.code, 'utf8').toString('base64')}#three-zone-barrel`,
+    )) as unknown as WorkflowClientModule
     const wtBundle = await compilePluginClientModule('builtin:worktree', WORKTREE_CLIENT_DIR, 'slots.tsx', tempDir)
     wtSlots = (await import(
       `data:text/javascript;base64,${Buffer.from(wtBundle.code, 'utf8').toString('base64')}#three-zone-wt`,
@@ -929,12 +922,13 @@ describe('Workflow 三区零重复与无损呈现', () => {
         traceBtn.click()
       })
       assert.equal(harness.log.workbenchTabs.at(-1), 'plugin:builtin:workflow/tasks')
+      assert.deepEqual(harness.log.workbenchParams.at(-1), { runId: 'wf_target' })
     } finally {
       tlMount.unmount()
     }
 
-    // 2. 挂载右侧工作台：自动展开并高亮 wf_target，移除重复 WorkflowLibrarySection
-    const wbMount = harness.mountNode(e(mod.WorkflowWorkbenchPanel, {}))
+    // 2. 挂载右侧工作台：经宿主 params 透传自动展开并高亮 wf_target，移除重复 WorkflowLibrarySection
+    const wbMount = harness.mountNode(e(mod.WorkflowWorkbenchPanel, { params: harness.log.workbenchParams.at(-1) }))
     try {
       assert.ok(wbMount.container.querySelector('.workflow-lib-section') === null, '工作台必须去除重复工作流库列表')
       const libBtn = [...wbMount.container.querySelectorAll('button')].find((b) => b.textContent?.includes('Workflow library'))

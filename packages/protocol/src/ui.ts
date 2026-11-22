@@ -505,6 +505,8 @@ export interface ComposerStatusSlotProps {
 /** workbench.panel: conversation-aware right-drawer panel. */
 export interface WorkbenchPanelProps {
   conversation: ConversationSummary
+  /** Optional transient focus/deep-link parameters passed via `ctx.openWorkbench(panelId, params)`. */
+  params?: Readonly<Record<string, unknown>>
 }
 
 /**
@@ -605,8 +607,14 @@ export interface PluginClientContext {
   openConversationDrawer(conversationId: number): void
   /** Opens the artifact preview modal. */
   openArtifact(artifactId: string): void
-  /** Opens the workbench drawer (optionally activating a specific panel ID). */
-  openWorkbench(panelId?: string): void
+  /**
+   * Opens the workbench drawer.
+   * - `panelId`: local panel ID registered by this plugin (automatically qualified to
+   *   `plugin:<pluginId>/<panelId>`), a built-in host tab (`'artifacts'` / `'files'`),
+   *   or an explicit `'plugin:<id>/<panel>'` target;
+   * - `params`: optional focus/deep-link payload delivered via `WorkbenchPanelProps.params`.
+   */
+  openWorkbench(panelId?: string, params?: Record<string, unknown>): void
   /** Closes the workbench drawer. */
   closeWorkbench(): void
   /** Sends a global notification toast. */
@@ -632,7 +640,8 @@ export interface PluginClientContext {
  * mechanism as React — never bundles a second React copy).
  *
  * The single source of truth of exported symbols is PLUGIN_CLIENT_SHARED_EXPORTS:
- * - hooks: usePluginContext / usePluginLocale / usePluginTranslator / usePluginDoc / usePluginSessionDoc /
+ * - hooks: usePluginContext / usePluginLocale / usePluginTranslator / usePluginDoc /
+ *   usePluginDocState / usePluginSessionDoc / usePluginSessionDocState /
  *   useToolActivity / useTimelineToolCalls / useConversations / useConversation /
  *   usePlugins / useScreenParams (screen-local params scope provided by the host ScreenHost) /
  *   usePluginConfig / useHostModels (stable-handle read of the host model catalog slice; isolation
@@ -665,6 +674,17 @@ export interface PluginClientContext {
  *   formatBytes (human-readable bytes, 1024-based);
  * - PluginSlot: inter-plugin sub-slot rendering primitive.
  */
+
+/** Honest three-state lifecycle for reactive plugin doc / sessionDoc state hooks. */
+export type PluginDocLoadStatus = 'loading' | 'ready' | 'error'
+
+/** Reactive state returned by `usePluginDocState` and `usePluginSessionDocState`. */
+export interface PluginDocState<T = unknown> {
+  data: T | undefined
+  status: PluginDocLoadStatus
+  error?: string
+  retry: () => void
+}
 
 /** usePlugins(): reactive snapshot of host plugin list and Screen contributions (SSE driven, no polling). */
 export interface UsePluginsResult {
@@ -781,7 +801,9 @@ export const PLUGIN_CLIENT_SHARED_EXPORTS = [
   'usePluginLocale',
   'usePluginTranslator',
   'usePluginDoc',
+  'usePluginDocState',
   'usePluginSessionDoc',
+  'usePluginSessionDocState',
   'useToolActivity',
   'useTimelineToolCalls',
   'useConversations',

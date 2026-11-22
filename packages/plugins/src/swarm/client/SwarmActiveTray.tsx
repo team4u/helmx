@@ -7,7 +7,7 @@ import {
   DockTray, DockTrayRow, HelmxIcon, Tooltip, resolveLocalizedText,
   useConversation, useConversations, usePluginContext, usePluginDoc, usePluginLocale, usePluginSessionDoc,
 } from '@helmx/plugin-client'
-import { SWARM_WORKBENCH_PANEL_TARGET, type SwarmIndexDoc } from './models.ts'
+import { SWARM_WORKBENCH_PANEL_ID, type SwarmIndexDoc } from './models.ts'
 import { buildSwarmTraySummary, resolveSwarmTrayLiveSnippet, type SwarmTrayItem } from './model-tray.ts'
 import { resolveGroupTimingView, resolveTrayMemberTimingView } from './model-timing.ts'
 import { parseBoardView, resolveConversationBoardLink, type BoardViewDoc } from './board-model.ts'
@@ -127,7 +127,7 @@ function SwarmCoordinatorTray(props: { conversationId: number; groupId: string }
       }
       elapsed={groupTiming?.label}
       barAction={
-        <button type="button" className="btn btn-xs dock-tray-workbench sw-tray-workbench" onClick={() => ctx.openWorkbench(SWARM_WORKBENCH_PANEL_TARGET)}>
+        <button type="button" className="btn btn-xs dock-tray-workbench sw-tray-workbench" onClick={() => ctx.openWorkbench(SWARM_WORKBENCH_PANEL_ID, { groupId: board.group.id })}>
           <HelmxIcon name="network" size={11} /><span>{resolveLocalizedText(C.TRAY_WORKBENCH, locale)}</span>
         </button>
       }

@@ -5,7 +5,7 @@ import type { ReactNode } from 'react'
 import type { TimelineRendererProps } from '@helmx/protocol'
 import { HelmxIcon, resolveLocalizedText, usePluginContext, usePluginLocale } from '@helmx/plugin-client'
 import { parseBoardReportMeta, parseBoardWakeupMeta } from './board-model.ts'
-import { SWARM_WORKBENCH_PANEL_TARGET } from './models.ts'
+import { SWARM_WORKBENCH_PANEL_ID } from './models.ts'
 import { SW_BOARD_REPORT_PILL, SW_BOARD_WAKEUP_PILL, SW_PILL_OPEN_WORKBENCH, swReceiptCountLabel } from './copy.ts'
 
 function seqRangeLabel(fromSeq: number | undefined, toSeq: number | undefined): string | undefined {
@@ -19,13 +19,14 @@ export function SwarmBoardReportPill(props: TimelineRendererProps): ReactNode {
   const locale = usePluginLocale()
   const meta = parseBoardReportMeta(props)
   const seqLabel = seqRangeLabel(meta.fromSeq, meta.toSeq)
+  const focusSeq = meta.toSeq ?? meta.fromSeq
   const headlineText = meta.headline !== undefined ? resolveLocalizedText(meta.headline, locale) : ''
   return (
     <button
       type="button"
       className="sw-receipt-pill"
       aria-label={resolveLocalizedText(SW_PILL_OPEN_WORKBENCH, locale)}
-      onClick={() => ctx.openWorkbench(SWARM_WORKBENCH_PANEL_TARGET)}
+      onClick={() => ctx.openWorkbench(SWARM_WORKBENCH_PANEL_ID, focusSeq !== undefined ? { postSeq: focusSeq } : undefined)}
     >
       <span className="badge badge-accent">
         <HelmxIcon name="network" size={11} />
@@ -45,12 +46,13 @@ export function SwarmBoardWakeupPill(props: TimelineRendererProps): ReactNode {
   const locale = usePluginLocale()
   const meta = parseBoardWakeupMeta(props)
   const seqLabel = seqRangeLabel(meta.fromSeq, meta.toSeq)
+  const focusSeq = meta.toSeq ?? meta.fromSeq
   return (
     <button
       type="button"
       className="sw-receipt-pill"
       aria-label={resolveLocalizedText(SW_PILL_OPEN_WORKBENCH, locale)}
-      onClick={() => ctx.openWorkbench(SWARM_WORKBENCH_PANEL_TARGET)}
+      onClick={() => ctx.openWorkbench(SWARM_WORKBENCH_PANEL_ID, focusSeq !== undefined ? { postSeq: focusSeq } : undefined)}
     >
       <span className="badge badge-neutral">
         <HelmxIcon name="bell" size={11} />

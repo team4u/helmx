@@ -54,7 +54,6 @@ import { aggregateExecutionNodes, buildExecutionTree, buildLeafNodesForRun } fro
 import type { ExecutionNode } from './model-execution-tree.ts'
 import { collectExecutionApprovals } from './model-execution-view.ts'
 import { effectiveRunNodeStatus, executionLightStatus, executionRunStatus } from './model-execution-status.ts'
-import { requestWorkbenchRunFocus } from './workbench-focus.ts'
 import {
   ACTION_ABORT,
   approvalsBadge,
@@ -399,8 +398,7 @@ export function WorkflowToolView(props: ToolViewProps): ReactNode {
         className={`trace-row workflow-trace-row-btn${isError ? ' trace-row-error' : ''}`}
         aria-label={traceWorkflowRowLabel(displayName, summaryText, locale)}
         onClick={() => {
-          requestWorkbenchRunFocus(viewerConversationId ?? run.conversationId, run.id)
-          ctx.openWorkbench(`plugin:${ctx.pluginId}/tasks`)
+          ctx.openWorkbench('tasks', { runId: run.id })
         }}
       >
         <span className="trace-row-left">
@@ -603,8 +601,7 @@ export function WorkflowRunCardBody(props: {
             type="button"
             className="btn btn-sm"
             onClick={() => {
-              requestWorkbenchRunFocus(run.conversationId, run.id)
-              ctx.openWorkbench(`plugin:${ctx.pluginId}/tasks`)
+              ctx.openWorkbench('tasks', { runId: run.id })
             }}
           >
             {resolveLocalizedText(RUN_CARD_WORKBENCH_DETAILS, locale)}

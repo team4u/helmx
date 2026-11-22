@@ -22,7 +22,7 @@ import {
   subscribeSessionDoc,
 } from '../src/lib/session-docs.js'
 import { usePluginSessionDocsMap } from '../src/lib/store-context.js'
-import { usePluginSessionDocValue, usePluginSessionDocState } from '@helmx/plugin-client'
+import { usePluginSessionDocValue, usePluginSessionDocDiagnostics, usePluginSessionDocState, type PluginDocState } from '@helmx/plugin-client'
 import { createPluginClientHostPort } from '../src/lib/plugin-client-host.js'
 import { makeTestStore } from './helpers/store.js'
 import type { HelmxExternalStore } from '../src/lib/helmx-store.js'
@@ -79,7 +79,7 @@ describe("session-docs-hooks", () => {
     function Probes(): React.ReactNode {
       reads.push({
         value: usePluginSessionDocValue('runs', { pluginId: 'builtin:workflow', conversationId: 42 }),
-        diagnostics: usePluginSessionDocState('runs', { pluginId: 'builtin:workflow', conversationId: 42 }),
+        diagnostics: usePluginSessionDocDiagnostics('runs', { pluginId: 'builtin:workflow', conversationId: 42 }),
       })
       mapReads.push(usePluginSessionDocsMap('builtin:workflow', opts.docNames ?? ['runs', 'stats'], 42))
       return e('div', null, 'probe')
@@ -279,5 +279,60 @@ describe("session-docs-hooks", () => {
     assert.equal(capturedAuth, 'Bearer probe-token', 'hook 首次挂载即带 token（浏览器 401 退出回归）')
     harness.unmount()
     restore()
+  })
+
+  test('usePluginSessionDocState：三态 loading -> error -> retry() -> ready 端到端链路', { timeout: 60_000 }, async () => {
+    resetSessionDocSubscriptions()
+    let attempt = 0
+    const restore = bindSessionDocRuntime(async () => {
+      attempt += 1
+      if (attempt === 1) {
+        return new Response(JSON.stringify({ error: { message: 'session doc unavailable' } }), {
+          status: 404,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            const encoder = new TextEncoder()
+            controller.enqueue(encoder.encode(
+              multiplexFrame('snapshot', 1, { pluginId: 'builtin:workflow', name: 'runs', conversationId: 42, value: { ok: true } }),
+            ))
+          },
+        }),
+        { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
+      )
+    }, () => 'probe-token')
+    let latest: PluginDocState<{ ok: boolean }> | undefined
+    const readLatest = (): PluginDocState<{ ok: boolean }> | undefined => latest
+    function StateProbe(): React.ReactNode {
+      latest = usePluginSessionDocState<{ ok: boolean }>('runs', 42)
+      return e('div', null, latest.status)
+    }
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    let root: Root | undefined
+    act(() => {
+      root = createRoot(host)
+      root.render(e(TestStoreProvider, { value: makeTestStore() }, e(StateProbe)))
+    })
+    try {
+      assert.equal(readLatest()?.status, 'loading', '首帧未到达前为 loading')
+      for (let i = 0; i < 30 && readLatest()?.status !== 'error'; i++) await act(async () => {})
+      assert.equal(readLatest()?.status, 'error', '4xx 不可用显式进入 error 态')
+      assert.match(readLatest()?.error ?? '', /session doc unavailable/)
+      act(() => {
+        readLatest()!.retry()
+      })
+      for (let i = 0; i < 30 && readLatest()?.status !== 'ready'; i++) await act(async () => {})
+      assert.equal(readLatest()?.status, 'ready', 'retry() 重建多路复用流后恢复 ready')
+      assert.deepEqual(readLatest()?.data, { ok: true })
+      assert.equal(attempt, 2)
+    } finally {
+      act(() => { root!.unmount() })
+      host.remove()
+      restore()
+    }
   })
 })
