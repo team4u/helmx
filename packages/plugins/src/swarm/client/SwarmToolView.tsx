@@ -48,9 +48,11 @@ import {
   TRACE_DISPATCH,
   TRACE_EXPAND_DETAILS,
   TRACE_INSPECT,
+  TRACE_MANAGE_CHANNEL,
   TRACE_SWITCH_MODEL,
   TRACE_UNKNOWN_TOOL,
   TRACE_UPDATE_GROUP,
+  channelOpLabel,
   postKindLabel,
   traceAbortedNoop,
   traceOpenMemberLabel,
@@ -66,6 +68,7 @@ import type { HelmxLocale } from '@helmx/plugin-client'
 const TOOL_TITLE_KEYS: Readonly<Record<string, typeof TRACE_DISPATCH>> = {
   swarm_create_group: TRACE_CREATE_GROUP,
   swarm_update_group: TRACE_UPDATE_GROUP,
+  swarm_manage_channel: TRACE_MANAGE_CHANNEL,
   swarm_dispatch_worker: TRACE_DISPATCH,
   swarm_board_post: TRACE_BOARD_POST,
   swarm_board_read: TRACE_BOARD_READ,
@@ -95,6 +98,11 @@ function buildTraceSummary(facts: SwarmToolFacts, locale: HelmxLocale): string {
     case 'swarm_create_group':
     case 'swarm_update_group':
       parts.push(facts.groupTitle ?? '')
+      break
+    case 'swarm_manage_channel':
+      if (facts.channelOp !== undefined) parts.push(channelOpLabel(facts.channelOp, locale))
+      if (facts.channelName !== undefined) parts.push(`#${facts.channelName}`)
+      if (facts.memberName !== undefined) parts.push(`@${facts.memberName}`)
       break
     case 'swarm_dispatch_worker':
       if (facts.memberName !== undefined) parts.push(`@${facts.memberName}`)

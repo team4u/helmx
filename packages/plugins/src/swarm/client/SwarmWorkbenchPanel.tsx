@@ -16,14 +16,23 @@
  *
  * Component & type exports only (Fast Refresh compliant).
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { WorkbenchPanelProps } from '@helmx/protocol'
 import {
   Callout,
+  Checkbox,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogOverlay,
+  DialogPortal,
+  DialogTitle,
   HelmxIcon,
+  SegmentedControl,
   StatusLight,
   formatDurationMs,
+  formatModelShortName,
   resolveLocalizedText,
   useConversations,
   usePluginContext,
@@ -33,6 +42,7 @@ import {
 } from '@helmx/plugin-client'
 import type { SwarmIndexDoc } from './models.ts'
 import {
+  extractPostRefs,
   mergeBoardViewWithRead,
   parseBoardView,
   postDigestLine,
@@ -44,9 +54,19 @@ import {
 import { buildSwarmPanelModel } from './model-panel.ts'
 import { useElapsedNowMs, useSwarmBoardReadOnce, useSwarmBoardStatusFallback } from './hooks.ts'
 import {
+  ACTION_ABORT,
   PANEL_ACTIVITY_AUTHORED,
   PANEL_ACTIVITY_RECEIVED,
   PANEL_ACTIVITY_TITLE,
+  PANEL_CANCEL,
+  PANEL_CHANNEL_ALL,
+  PANEL_CHANNEL_FILTER_ARIA,
+  PANEL_CLOSE_ABORT_RUNNING,
+  PANEL_CLOSE_CONFIRM,
+  PANEL_CLOSE_DIALOG_DESC,
+  PANEL_CLOSE_DIALOG_TITLE,
+  PANEL_CLOSE_GROUP,
+  PANEL_CLOSE_KEEP_WORKTREE,
   PANEL_EMPTY_HINT,
   PANEL_EMPTY_TITLE,
   PANEL_FALLBACK_NOTE,
@@ -55,12 +75,15 @@ import {
   PANEL_LOADING,
   PANEL_MEMBERS_TITLE,
   PANEL_OBJECTIVE,
+  PANEL_POSTS_CHANNEL_EMPTY,
   PANEL_POSTS_EMPTY,
   PANEL_REFRESH,
   PANEL_RETAINED_TITLE,
   PANEL_RETRY,
   PANEL_STATUS_LOAD_FAILED,
+  panelCloseFailed,
   panelPostTargets,
+  panelRefJumpLabel,
   panelRetainedSummary,
   panelRowOpenLabel,
   panelStatusLabel,
@@ -68,6 +91,8 @@ import {
   postKindLabel,
   memberLiveStateLabel,
   memberAccessLabel,
+  resolvePanelHeadlineText,
+  trayAbortFailed,
   PANEL_MEMBER_ARCHIVED,
 } from './copy.ts'
 import { PostBodyText } from './PostBodyText.tsx'
@@ -99,10 +124,22 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
   const conversationId = props?.conversation?.id ?? ctx.conversationId
   const conversations = useConversations()
   const index = usePluginDoc<SwarmIndexDoc>('index')
+  const panelRef = useRef<HTMLDivElement | null>(null)
   const [historyExpanded, setHistoryExpanded] = useState(false)
+  const [selectedChannel, setSelectedChannel] = useState<string>('all')
+  const [highlightedSeq, setHighlightedSeq] = useState<number | undefined>(undefined)
+  const [busyAction, setBusyAction] = useState<string | undefined>(undefined)
+  const [closeDialogOpen, setCloseDialogOpen] = useState(false)
+  const [closeKeepWorktree, setCloseKeepWorktree] = useState(false)
+  const [closeAbortRunning, setCloseAbortRunning] = useState(false)
+  const [closeError, setCloseError] = useState<string | undefined>(undefined)
 
   useEffect(() => {
     setHistoryExpanded(false)
+    setSelectedChannel('all')
+    setHighlightedSeq(undefined)
+    setCloseDialogOpen(false)
+    setCloseError(undefined)
   }, [conversationId])
 
   const link = useMemo(
@@ -156,15 +193,31 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
     [board, readState.posts],
   )
 
+  const activeChannelFilter = useMemo(() => {
+    if (selectedChannel === 'all' || effectiveBoard === undefined) return 'all'
+    return effectiveBoard.group.channels.some((c) => c.name === selectedChannel && c.archived !== true)
+      ? selectedChannel
+      : 'all'
+  }, [selectedChannel, effectiveBoard])
+
   const model = useMemo(
     () =>
       effectiveBoard !== undefined
         ? buildSwarmPanelModel(effectiveBoard, conversations, {
             recentLimit: historyExpanded ? RECENT_LIMIT_EXPANDED : RECENT_LIMIT_COLLAPSED,
+            channel: activeChannelFilter,
           })
         : undefined,
-    [effectiveBoard, conversations, historyExpanded],
+    [effectiveBoard, conversations, historyExpanded, activeChannelFilter],
   )
+
+  useEffect(() => {
+    if (highlightedSeq === undefined) return
+    const el = panelRef.current?.querySelector<HTMLElement>(`[data-post-seq="${highlightedSeq}"]`)
+    if (el !== null && el !== undefined) {
+      el.scrollIntoView?.({ block: 'nearest' })
+    }
+  }, [highlightedSeq, model?.recentPosts])
 
   const groupElapsedActive = model !== undefined && model.status !== 'completed' && effectiveBoard !== undefined && effectiveBoard.group.createdAt > 0
   const nowMs = useElapsedNowMs(groupElapsedActive)
@@ -209,8 +262,91 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
     )
   }
 
+  const isCoordinatorActiveGroup =
+    effectiveBoard.group.status === 'active' &&
+    conversationId === effectiveBoard.group.coordinatorConversationId
+  const headlineText = resolvePanelHeadlineText(effectiveBoard, locale)
+  const visibleSeqs = new Set(model.recentPosts.map((p) => p.seq))
+
+  const runAbortMember = (memberName: string): void => {
+    if (busyAction !== undefined) return
+    setBusyAction(`abort:${memberName}`)
+    void ctx
+      .callAction('abort_worker', { groupId: effectiveBoard.group.id, name: memberName }, { conversationId })
+      .catch((err: unknown) => {
+        ctx.notify(trayAbortFailed(err instanceof Error ? err.message : String(err), locale), 'error')
+      })
+      .finally(() => {
+        setBusyAction(undefined)
+      })
+  }
+
+  const openCloseDialog = (): void => {
+    setCloseKeepWorktree(
+      effectiveBoard.members.some((m) => m.lifecycle === 'active' && m.worktreeId !== undefined),
+    )
+    setCloseAbortRunning(effectiveBoard.activeWorkingMembers.length > 0)
+    setCloseError(undefined)
+    setCloseDialogOpen(true)
+  }
+
+  const confirmCloseGroup = (): void => {
+    if (busyAction !== undefined) return
+    setBusyAction('close_group')
+    setCloseError(undefined)
+    void ctx
+      .callAction(
+        'close_group',
+        {
+          groupId: effectiveBoard.group.id,
+          ...(closeKeepWorktree ? { keepWorktree: true } : {}),
+          ...(closeAbortRunning ? { abortRunning: true } : {}),
+        },
+        { conversationId },
+      )
+      .then(() => {
+        setCloseDialogOpen(false)
+      })
+      .catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err)
+        setCloseError(msg)
+        ctx.notify(panelCloseFailed(msg, locale), 'error')
+      })
+      .finally(() => {
+        setBusyAction(undefined)
+      })
+  }
+
+  const handleJumpToPost = (seq: number): void => {
+    if (!visibleSeqs.has(seq)) {
+      const inFullBoard = effectiveBoard.posts.find((p) => p.seq === seq)
+      if (activeChannelFilter !== 'all' && (inFullBoard === undefined || inFullBoard.channel !== activeChannelFilter)) {
+        setSelectedChannel('all')
+      }
+      const inCollapsedRecent = effectiveBoard.posts
+        .slice(-RECENT_LIMIT_COLLAPSED)
+        .some((p) => p.seq === seq)
+      if (!inCollapsedRecent) {
+        setHistoryExpanded(true)
+      }
+    }
+    setHighlightedSeq(seq)
+  }
+
+  const showChannelFilter = model.channels.length > 1
+  const channelItems = showChannelFilter
+    ? [
+        { value: 'all', label: resolveLocalizedText(PANEL_CHANNEL_ALL, locale) },
+        ...model.channels.map((ch) => ({
+          value: ch.name,
+          label: `#${ch.name}`,
+          ...(ch.topic !== undefined ? { title: ch.topic } : {}),
+        })),
+      ]
+    : []
+
   return (
-    <div className="sw-panel">
+    <div ref={panelRef} className="sw-panel">
       <div className="sw-panel-head">
         <span className="sw-panel-head-left">
           <StatusLight status={panelHeadLight(model.status)} label={panelStatusLabel(model.status, locale)} />
@@ -225,20 +361,33 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
             <span className="sw-panel-elapsed tabular-nums">{groupElapsed}</span>
           ) : null}
         </span>
-        {isFallbackData ? (
-          <span className="stack-row">
-            <span className="badge badge-neutral">{resolveLocalizedText(PANEL_FALLBACK_NOTE, locale)}</span>
-            <button type="button" className="btn btn-xs" onClick={fallback.reload}>
-              <HelmxIcon name="rotate-cw" size={11} />
-              <span>{resolveLocalizedText(PANEL_REFRESH, locale)}</span>
+        <span className="stack-row sw-panel-head-actions">
+          {isFallbackData ? (
+            <>
+              <span className="badge badge-neutral">{resolveLocalizedText(PANEL_FALLBACK_NOTE, locale)}</span>
+              <button type="button" className="btn btn-xs" onClick={fallback.reload}>
+                <HelmxIcon name="rotate-cw" size={11} />
+                <span>{resolveLocalizedText(PANEL_REFRESH, locale)}</span>
+              </button>
+            </>
+          ) : null}
+          {isCoordinatorActiveGroup ? (
+            <button
+              type="button"
+              className="btn btn-xs sw-panel-close-btn"
+              disabled={busyAction !== undefined}
+              onClick={openCloseDialog}
+            >
+              <HelmxIcon name="check-circle" size={11} />
+              <span>{resolveLocalizedText(PANEL_CLOSE_GROUP, locale)}</span>
             </button>
-          </span>
-        ) : null}
+          ) : null}
+        </span>
       </div>
 
-      {model.headlineText !== '' ? (
+      {headlineText !== '' ? (
         <p className={`sw-panel-headline sw-panel-headline-${model.headlineTone}`}>
-          {model.headlineText}
+          {headlineText}
         </p>
       ) : null}
 
@@ -265,41 +414,62 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
                 row.latestActivity !== undefined
                   ? `${row.latestActivity.direction === 'received' ? resolveLocalizedText(PANEL_ACTIVITY_RECEIVED, locale) : resolveLocalizedText(PANEL_ACTIVITY_AUTHORED, locale)} · ${activityKind ?? ''}: ${postDigestLine(row.latestActivity.post.body, 90)}`
                   : undefined
+              const canAbort =
+                isCoordinatorActiveGroup &&
+                row.lifecycle === 'active' &&
+                (row.liveState === 'working' || row.liveState === 'blocked')
               return (
-                <button
-                  key={row.name}
-                  type="button"
-                  className="sw-panel-member-row"
-                  aria-label={`@${row.name} — ${panelRowOpenLabel(row.name, locale)}`}
-                  onClick={() => ctx.openConversationDrawer(row.conversationId)}
-                >
-                  <span className="sw-panel-member-main">
-                    <StatusLight
-                      status={LIVE_STATE_LIGHT_STATUS[row.liveState] ?? 'pending'}
-                      label={memberLiveStateLabel(row.liveState, locale)}
-                    />
-                    <span className="sw-panel-member-name">@{row.name}</span>
-                    {row.lifecycle === 'archived' ? (
-                      <span className="badge badge-neutral">{resolveLocalizedText(PANEL_MEMBER_ARCHIVED, locale)}</span>
-                    ) : null}
-                    <span className="badge badge-neutral">{memberAccessLabel(row.access, locale)}</span>
-                    {row.doing !== undefined ? (
-                      <span className="sw-panel-member-doing" title={row.doing}>{row.doing}</span>
-                    ) : null}
-                  </span>
-                  <span className="sw-panel-member-activity" title={activityText}>
-                    {activityText !== undefined ? activityText : `#${row.conversationId}`}
-                  </span>
-                  {row.worktree !== undefined ? (
-                    <span
-                      className="sw-panel-member-worktree"
-                      title={`${row.worktree.worktreeId}${row.worktree.branch ? ` · ${row.worktree.branch}` : ''}`}
-                    >
-                      <HelmxIcon name="git-branch" size={11} />
-                      <span>{panelWorktreeSummary(row.worktree, locale)}</span>
+                <div key={row.name} className="sw-panel-member-item">
+                  <button
+                    type="button"
+                    className="sw-panel-member-row"
+                    aria-label={`@${row.name} — ${panelRowOpenLabel(row.name, locale)}`}
+                    onClick={() => ctx.openConversationDrawer(row.conversationId)}
+                  >
+                    <span className="sw-panel-member-main">
+                      <StatusLight
+                        status={LIVE_STATE_LIGHT_STATUS[row.liveState] ?? 'pending'}
+                        label={memberLiveStateLabel(row.liveState, locale)}
+                      />
+                      <span className="sw-panel-member-name">@{row.name}</span>
+                      {row.lifecycle === 'archived' ? (
+                        <span className="badge badge-neutral">{resolveLocalizedText(PANEL_MEMBER_ARCHIVED, locale)}</span>
+                      ) : null}
+                      <span className="badge badge-neutral">{memberAccessLabel(row.access, locale)}</span>
+                      {row.model !== undefined ? (
+                        <span className="badge badge-neutral mono sw-panel-member-model" title={row.model}>
+                          {formatModelShortName(row.model)}
+                        </span>
+                      ) : null}
+                      {row.doing !== undefined ? (
+                        <span className="sw-panel-member-doing" title={row.doing}>{row.doing}</span>
+                      ) : null}
                     </span>
+                    <span className="sw-panel-member-activity" title={activityText}>
+                      {activityText !== undefined ? activityText : `#${row.conversationId}`}
+                    </span>
+                    {row.worktree !== undefined ? (
+                      <span
+                        className="sw-panel-member-worktree"
+                        title={`${row.worktree.worktreeId}${row.worktree.branch ? ` · ${row.worktree.branch}` : ''}`}
+                      >
+                        <HelmxIcon name="git-branch" size={11} />
+                        <span>{panelWorktreeSummary(row.worktree, locale)}</span>
+                      </span>
+                    ) : null}
+                  </button>
+                  {canAbort ? (
+                    <button
+                      type="button"
+                      className="btn btn-xs btn-danger sw-panel-member-abort"
+                      disabled={busyAction !== undefined}
+                      onClick={() => runAbortMember(row.name)}
+                    >
+                      <HelmxIcon name="square" size={11} />
+                      <span>{resolveLocalizedText(ACTION_ABORT, locale)}</span>
+                    </button>
                   ) : null}
-                </button>
+                </div>
               )
             })}
           </div>
@@ -336,30 +506,72 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
             <span>{resolveLocalizedText(historyExpanded ? PANEL_HISTORY_COLLAPSE : PANEL_HISTORY_TOGGLE, locale)}</span>
           </button>
         </div>
+        {showChannelFilter ? (
+          <div className="sw-panel-channels">
+            <SegmentedControl
+              size="sm"
+              value={activeChannelFilter}
+              onValueChange={(next) => setSelectedChannel(next)}
+              items={channelItems}
+              aria-label={resolveLocalizedText(PANEL_CHANNEL_FILTER_ARIA, locale)}
+            />
+          </div>
+        ) : null}
         {model.recentPosts.length === 0 ? (
-          <div className="sw-panel-empty-hint">{resolveLocalizedText(PANEL_POSTS_EMPTY, locale)}</div>
+          <div className="sw-panel-empty-hint">
+            {resolveLocalizedText(
+              activeChannelFilter !== 'all' ? PANEL_POSTS_CHANNEL_EMPTY : PANEL_POSTS_EMPTY,
+              locale,
+            )}
+          </div>
         ) : (
           <ol className="sw-panel-posts">
-            {model.recentPosts.map((post) => (
-              <li key={post.seq} className="sw-panel-post">
-                <div className="sw-panel-post-head">
-                  <span className={`badge ${postKindBadgeClass(post.kind)}`}>{postKindLabel(post.kind, locale)}</span>
-                  <span className="sw-panel-post-from">
-                    {post.from === 'coordinator' ? 'coordinator' : `@${post.from}`}
-                    {' -> '}
-                    {panelPostTargets(post)}
-                  </span>
-                  <span className="sw-panel-post-seq tabular-nums" title={post.body}>{`#${post.seq}`}</span>
-                </div>
-                <PostBodyText body={post.body} collapsible={shouldCollapsePostBody(post.body)} />
-                {post.worktreeSnapshot !== undefined ? (
-                  <div className="sw-panel-post-worktree">
-                    <HelmxIcon name="git-branch" size={11} />
-                    <span>{panelWorktreeSummary(post.worktreeSnapshot, locale)}</span>
+            {model.recentPosts.map((post) => {
+              const refs = extractPostRefs(post)
+              const isHighlighted = highlightedSeq === post.seq
+              return (
+                <li
+                  key={post.seq}
+                  data-post-seq={post.seq}
+                  className={`sw-panel-post${isHighlighted ? ' sw-panel-post-highlighted' : ''}`}
+                >
+                  <div className="sw-panel-post-head">
+                    <span className={`badge ${postKindBadgeClass(post.kind)}`}>{postKindLabel(post.kind, locale)}</span>
+                    {showChannelFilter && post.channel !== 'main' ? (
+                      <span className="badge badge-neutral mono sw-panel-post-channel">#{post.channel}</span>
+                    ) : null}
+                    <span className="sw-panel-post-from">
+                      {post.from === 'coordinator' ? 'coordinator' : `@${post.from}`}
+                      {' -> '}
+                      {panelPostTargets(post)}
+                    </span>
+                    <span className="sw-panel-post-seq tabular-nums" title={post.body}>{`#${post.seq}`}</span>
                   </div>
-                ) : null}
-              </li>
-            ))}
+                  <PostBodyText body={post.body} collapsible={shouldCollapsePostBody(post.body)} />
+                  {refs.length > 0 ? (
+                    <div className="sw-panel-post-refs">
+                      {refs.map((refSeq) => (
+                        <button
+                          key={refSeq}
+                          type="button"
+                          className="sw-panel-post-ref mono tabular-nums"
+                          aria-label={panelRefJumpLabel(refSeq, locale)}
+                          onClick={() => handleJumpToPost(refSeq)}
+                        >
+                          {`#${refSeq}`}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                  {post.worktreeSnapshot !== undefined ? (
+                    <div className="sw-panel-post-worktree">
+                      <HelmxIcon name="git-branch" size={11} />
+                      <span>{panelWorktreeSummary(post.worktreeSnapshot, locale)}</span>
+                    </div>
+                  ) : null}
+                </li>
+              )
+            })}
           </ol>
         )}
         {readState.error !== undefined ? (
@@ -372,6 +584,70 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
           </div>
         ) : null}
       </div>
+
+      {isCoordinatorActiveGroup ? (
+        <Dialog
+          open={closeDialogOpen}
+          onOpenChange={(open) => {
+            if (!open && busyAction !== 'close_group') {
+              setCloseDialogOpen(false)
+              setCloseError(undefined)
+            }
+          }}
+        >
+          <DialogPortal>
+            <DialogOverlay />
+            <DialogContent className="modal sw-close-dialog">
+              <DialogTitle>{resolveLocalizedText(PANEL_CLOSE_DIALOG_TITLE, locale)}</DialogTitle>
+              <DialogDescription className="sw-close-dialog-desc">
+                {resolveLocalizedText(PANEL_CLOSE_DIALOG_DESC, locale)}
+              </DialogDescription>
+              <div className="sw-close-dialog-options">
+                <Checkbox
+                  checked={closeKeepWorktree}
+                  onChange={setCloseKeepWorktree}
+                  disabled={busyAction === 'close_group'}
+                  label={resolveLocalizedText(PANEL_CLOSE_KEEP_WORKTREE, locale)}
+                />
+                {effectiveBoard.activeWorkingMembers.length > 0 ? (
+                  <Checkbox
+                    checked={closeAbortRunning}
+                    onChange={setCloseAbortRunning}
+                    disabled={busyAction === 'close_group'}
+                    label={resolveLocalizedText(PANEL_CLOSE_ABORT_RUNNING, locale)}
+                  />
+                ) : null}
+              </div>
+              {closeError !== undefined ? (
+                <Callout tone="err" title={resolveLocalizedText(PANEL_CLOSE_DIALOG_TITLE, locale)}>
+                  <p className="sw-panel-error-text">{closeError}</p>
+                </Callout>
+              ) : null}
+              <div className="sw-close-dialog-actions">
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={busyAction === 'close_group'}
+                  onClick={() => {
+                    setCloseDialogOpen(false)
+                    setCloseError(undefined)
+                  }}
+                >
+                  {resolveLocalizedText(PANEL_CANCEL, locale)}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-primary sw-close-dialog-confirm"
+                  disabled={busyAction === 'close_group'}
+                  onClick={confirmCloseGroup}
+                >
+                  {resolveLocalizedText(PANEL_CLOSE_CONFIRM, locale)}
+                </button>
+              </div>
+            </DialogContent>
+          </DialogPortal>
+        </Dialog>
+      ) : null}
     </div>
   )
 }

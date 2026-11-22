@@ -3,6 +3,7 @@ import {
   isJsonObject,
   type ConversationScope,
   type ConversationSummary,
+  type LocalizedText,
   type MaybePromise,
   type PluginDocHandle,
   type PluginSessionDocHandle,
@@ -77,6 +78,7 @@ export const HISTORY_PARTICIPANT_SCOPE: ConversationScope = {
 export const DEFAULT_SWARM_CONFIG: SwarmConfig = {
   maxWorkersPerGroup: 12,
   boardPreviewLimit: 80,
+  maxPeerHopsWithoutCoordinator: 16,
 }
 
 // ---------------------------------------------------------------------------
@@ -90,6 +92,7 @@ export type CollabGroupStatus = 'active' | 'closed'
 export interface SwarmConfig {
   maxWorkersPerGroup: number
   boardPreviewLimit: number
+  maxPeerHopsWithoutCoordinator: number
 }
 
 /** 全局 index 轻量反查指针：详细成员状态以组 meta.json 为唯一真源。 */
@@ -208,6 +211,8 @@ export interface CollabGroupRecord {
   /** 最近一次成功送达主控的汇总报告是否仍含 activeWorkingMembers（持久化供重启后补发全员空闲确认）。 */
   lastReportHadActiveWorkers?: boolean
   lastStallWatermark?: string
+  /** 自上次主控/系统升级介入以来连续发生的 peer-to-peer 自动唤醒跳数（0-Token 乒乓熔断计数）。 */
+  peerHopsSinceCoordinator?: number
   coordinatorDetached?: boolean
   /** keepWorktree: true 结单时固化的待主控合入分支清单。 */
   retainedWorktrees?: RetainedWorktreeInfo[]
@@ -248,7 +253,7 @@ export interface BoardBadgeEntry {
   coordinatorConversationId: number
   count: number
   tone: 'accent' | 'warn' | 'neutral'
-  footerText?: string
+  footerText?: LocalizedText
 }
 
 export interface BoardBadgesDoc {
@@ -382,7 +387,7 @@ export interface SwarmCoordinator {
   writeIndex(next: SwarmIndexDoc): SwarmIndexDoc
   readConversationOrUndefined(id: number | undefined): ConversationSummary | undefined
   reportError(title: string, detail: unknown): void
-  enqueueDispatch<T>(task: () => Promise<T>): Promise<T>
+  enqueueDispatch<T>(key: string, task: () => Promise<T>): Promise<T>
   track<T>(label: string, task: () => MaybePromise<T>): Promise<T>
   groups: CollabGroupRuntime
   settlingWorkers: Map<number, number>
@@ -425,6 +430,7 @@ export function resolveSwarmConfig(raw: Record<string, unknown>): SwarmConfig {
   return {
     maxWorkersPerGroup: readBoundedInt('maxWorkersPerGroup', 2, 32),
     boardPreviewLimit: readBoundedInt('boardPreviewLimit', 20, 200),
+    maxPeerHopsWithoutCoordinator: readBoundedInt('maxPeerHopsWithoutCoordinator', 2, 100),
   }
 }
 
@@ -715,6 +721,9 @@ export function assertCollabGroupRecord(value: unknown): CollabGroupRecord {
   }
   if (value.lastStallWatermark !== undefined && typeof value.lastStallWatermark !== 'string') {
     throw corrupt('lastStallWatermark 非法')
+  }
+  if (value.peerHopsSinceCoordinator !== undefined && !isNonNegInt(value.peerHopsSinceCoordinator)) {
+    throw corrupt('peerHopsSinceCoordinator 非法')
   }
   if (value.coordinatorDetached !== undefined && typeof value.coordinatorDetached !== 'boolean') {
     throw corrupt('coordinatorDetached 非法')

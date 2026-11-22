@@ -36,6 +36,7 @@ export function parseToolResultRecord(result: unknown): Record<string, unknown> 
 export type SwarmToolTargetKind =
   | 'create_group'
   | 'update_group'
+  | 'manage_channel'
   | 'dispatch_worker'
   | 'board_post'
   | 'board_read'
@@ -51,6 +52,10 @@ export interface SwarmToolFacts {
   toolName: SwarmToolTargetKind | string
   /** Group title / objective excerpts for group-level calls. */
   groupTitle?: string
+  /** Channel operation verb (create/subscribe/unsubscribe/archive). */
+  channelOp?: string
+  /** Channel short name without leading '#'. */
+  channelName?: string
   /** Target member short name when the call addresses one. */
   memberName?: string
   /** Member conversation id (from the structured result, input, or the index). */
@@ -130,6 +135,12 @@ export function resolveSwarmToolFacts(
       }
       break
     }
+    case 'swarm_manage_channel': {
+      facts.channelOp = asTrimmedString(inputRecord['op'], 24)
+      facts.channelName = asTrimmedString(inputRecord['channel'], 40)
+      facts.memberName = asTrimmedString(inputRecord['member'], 32)
+      break
+    }
     case 'swarm_dispatch_worker': {
       facts.memberName = readMemberName(inputRecord, resultRecord)
       facts.taskExcerpt = asTrimmedString(inputRecord['prompt'], 96)
@@ -166,6 +177,7 @@ export function resolveSwarmToolFacts(
       facts.memberName = readMemberName(inputRecord, resultRecord)
       facts.memberConversationId = readWorkerConversationId(inputRecord, resultRecord)
       facts.model = asTrimmedString(resultRecord?.['model'], 200) ?? asTrimmedString(inputRecord['model'], 200)
+      facts.seq = readPostSeq(resultRecord)
       break
     }
     case 'swarm_inspect_worker': {

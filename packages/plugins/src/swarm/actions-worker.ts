@@ -22,8 +22,11 @@ import {
 } from './contracts.js'
 import {
   assertCoordinatorAuthority,
+  createSwarmDispatchGuard,
   isWorkerBusy,
   resolveCoordinatorGroup,
+  type DispatchWorkerResult,
+  type SwarmDispatchGuard,
 } from './actions-group.js'
 import {
   WORKTREE_PLUGIN_ID,
@@ -63,12 +66,17 @@ export interface InspectWorkerResult {
   recentEntries: Array<{ id: string; kind: string; text: string }>
 }
 
-export function createWorkerHandlers(ctx: HelmxPluginContext, coordinator: SwarmCoordinator) {
+export function createWorkerHandlers(
+  ctx: HelmxPluginContext,
+  coordinator: SwarmCoordinator,
+  dispatchGuard: SwarmDispatchGuard = createSwarmDispatchGuard(),
+) {
   const {
     getConfig,
     readConversationOrUndefined,
     reportError,
     enqueueDispatch,
+    track,
     groups,
   } = coordinator
 
@@ -221,9 +229,23 @@ export function createWorkerHandlers(ctx: HelmxPluginContext, coordinator: Swarm
       if (!subscribedChannels.includes(chName)) subscribedChannels.push(chName)
     }
 
-    return enqueueDispatch(async () => {
+    // Phase 1: short per-group admission critical section (reserve member name & capacity slot).
+    type Admission =
+      | { kind: 'cached'; result: DispatchWorkerResult }
+      | { kind: 'join'; promise: Promise<DispatchWorkerResult> }
+      | {
+          kind: 'run'
+          groupId: string
+          groupTitle: string
+          coordinatorConversationId: number
+          resolveGate: (res: DispatchWorkerResult) => void
+          rejectGate: (err: unknown) => void
+          releaseReservation: () => void
+        }
+
+    const admission = await enqueueDispatch<Admission>(`group:${group.id}`, async () => {
       const freshGroup = groups.getGroup(group.id)
-      if (freshGroup === undefined || freshGroup.status !== 'active') {
+      if (freshGroup === undefined || freshGroup.status !== 'active' || dispatchGuard.isClosing(group.id)) {
         throw new HelmxError('swarm_group_closed', `协作组 '${group.id}' 已不可用或已结单`, 409, {
           pluginId: SWARM_PLUGIN_ID,
           groupId: group.id,
@@ -240,11 +262,14 @@ export function createWorkerHandlers(ctx: HelmxPluginContext, coordinator: Swarm
             existingMember.lastWakeTaskSeq ??
             freshGroup.headSeq
           return {
-            workerConversationId: existingMember.conversationId,
-            groupId: freshGroup.id,
-            name: existingMember.name,
-            ...(existingMember.worktreeId !== undefined ? { worktreeId: existingMember.worktreeId } : {}),
-            postSeq: existingPostSeq,
+            kind: 'cached',
+            result: {
+              workerConversationId: existingMember.conversationId,
+              groupId: freshGroup.id,
+              name: existingMember.name,
+              ...(existingMember.worktreeId !== undefined ? { worktreeId: existingMember.worktreeId } : {}),
+              postSeq: existingPostSeq,
+            },
           }
         }
         throw new HelmxError(
@@ -254,9 +279,23 @@ export function createWorkerHandlers(ctx: HelmxPluginContext, coordinator: Swarm
           { pluginId: SWARM_PLUGIN_ID, groupId: freshGroup.id, name: memberName },
         )
       }
+      if (idempotencyKey !== undefined) {
+        const inflightSameKey = dispatchGuard.getPendingByKey(freshGroup.id, idempotencyKey)
+        if (inflightSameKey !== undefined) {
+          return { kind: 'join', promise: inflightSameKey }
+        }
+      }
+      if (dispatchGuard.hasPendingMember(freshGroup.id, memberName)) {
+        throw new HelmxError(
+          'swarm_member_conflict',
+          `协作组 '${freshGroup.id}' 中成员名 '${memberName}' 正在派工中`,
+          409,
+          { pluginId: SWARM_PLUGIN_ID, groupId: freshGroup.id, name: memberName },
+        )
+      }
       const activeCount = freshGroup.members.filter((m) => m.lifecycle === 'active').length
       const maxMembers = getConfig().maxWorkersPerGroup
-      if (activeCount >= maxMembers) {
+      if (activeCount + dispatchGuard.pendingCount(freshGroup.id) >= maxMembers) {
         throw new HelmxError(
           'swarm_group_member_limit',
           `协作组 '${freshGroup.id}' 活跃成员数已达上限 ${maxMembers}`,
@@ -264,50 +303,99 @@ export function createWorkerHandlers(ctx: HelmxPluginContext, coordinator: Swarm
           { pluginId: SWARM_PLUGIN_ID, groupId: freshGroup.id, maxWorkersPerGroup: maxMembers },
         )
       }
-
-      const resolvedTarget = await ctx.host.resolveSpawnTarget({
-        parentConversationId: freshGroup.coordinatorConversationId,
-        profileId: targetProfile,
-        ...(requestedCwd !== undefined ? { requestCwd: requestedCwd } : {}),
-        ...(sourceConversationId !== undefined ? { fork: true } : {}),
-      })
-      if (explicitNodeId !== undefined && explicitNodeId !== resolvedTarget.nodeId) {
-        throw new HelmxError(
-          'validation_error',
-          `显式指定 nodeId '${explicitNodeId}' 与解析目标节点 '${resolvedTarget.nodeId}' 不一致`,
-          400,
-          { requestedNodeId: explicitNodeId, resolvedNodeId: resolvedTarget.nodeId },
-        )
+      for (const chName of subscribedChannels) {
+        if (chName === 'main') continue
+        const ch = freshGroup.channels.find((c) => c.name === chName)
+        if (ch === undefined) {
+          throw new HelmxError('swarm_unknown_channel', `频道 '${chName}' 不存在`, 404, {
+            pluginId: SWARM_PLUGIN_ID,
+            groupId: freshGroup.id,
+            channel: chName,
+          })
+        }
+        if (ch.archived === true) {
+          throw new HelmxError('swarm_channel_archived', `频道 '${chName}' 已归档，无法订阅`, 409, {
+            pluginId: SWARM_PLUGIN_ID,
+            groupId: freshGroup.id,
+            channel: chName,
+          })
+        }
       }
-      let finalNodeId = resolvedTarget.nodeId
-      let finalCwd = resolvedTarget.sourceCwd
-      const workerTitle =
-        input.title !== undefined && input.title.trim() !== ''
-          ? input.title.trim().slice(0, 80)
-          : `[${freshGroup.title}] @${memberName}`.slice(0, 80)
 
-      const created =
-        sourceConversationId !== undefined
-          ? await ctx.host.forkConversation(sourceConversationId, {
-              ...(input.forkEntryId !== undefined ? { entryId: input.forkEntryId } : {}),
-              title: workerTitle,
-              // 无论 fork 自同伴或主控，协作组内派工父链始终扁平挂接主控会话
-              parentConversationId: freshGroup.coordinatorConversationId,
-            })
-          : await ctx.host.createConversation({
-              title: workerTitle,
-              profileId: targetProfile,
-              tags: [WORKER_TAG],
-              parentConversationId: freshGroup.coordinatorConversationId,
-              nodeId: finalNodeId,
-              cwd: finalCwd,
-              ...(model !== undefined ? { model } : {}),
-            })
+      let resolveGate!: (res: DispatchWorkerResult) => void
+      let rejectGate!: (err: unknown) => void
+      const inflightPromise = new Promise<DispatchWorkerResult>((resolve, reject) => {
+        resolveGate = resolve
+        rejectGate = reject
+      })
+      inflightPromise.catch(() => undefined)
+      const releaseReservation = dispatchGuard.reserve(
+        freshGroup.id,
+        memberName,
+        idempotencyKey,
+        inflightPromise,
+      )
+      return {
+        kind: 'run',
+        groupId: freshGroup.id,
+        groupTitle: freshGroup.title,
+        coordinatorConversationId: freshGroup.coordinatorConversationId,
+        resolveGate,
+        rejectGate,
+        releaseReservation,
+      }
+    })
 
+    if (admission.kind === 'cached') return admission.result
+    if (admission.kind === 'join') return admission.promise
+
+    // Phase 2 & 3: slow conversation / worktree setup runs concurrently outside
+    // the group admission lock; addMemberWithBrief serializes metadata commit.
+    return track(`dispatch-worker:${admission.groupId}:${memberName}`, async () => {
+      let createdId: number | undefined
       let acquiredWorktreeId: string | undefined
-      const now = Date.now()
-
       try {
+        const resolvedTarget = await ctx.host.resolveSpawnTarget({
+          parentConversationId: admission.coordinatorConversationId,
+          profileId: targetProfile,
+          ...(requestedCwd !== undefined ? { requestCwd: requestedCwd } : {}),
+          ...(sourceConversationId !== undefined ? { fork: true } : {}),
+        })
+        if (explicitNodeId !== undefined && explicitNodeId !== resolvedTarget.nodeId) {
+          throw new HelmxError(
+            'validation_error',
+            `显式指定 nodeId '${explicitNodeId}' 与解析目标节点 '${resolvedTarget.nodeId}' 不一致`,
+            400,
+            { requestedNodeId: explicitNodeId, resolvedNodeId: resolvedTarget.nodeId },
+          )
+        }
+        let finalNodeId = resolvedTarget.nodeId
+        let finalCwd = resolvedTarget.sourceCwd
+        const workerTitle =
+          input.title !== undefined && input.title.trim() !== ''
+            ? input.title.trim().slice(0, 80)
+            : `[${admission.groupTitle}] @${memberName}`.slice(0, 80)
+
+        const created =
+          sourceConversationId !== undefined
+            ? await ctx.host.forkConversation(sourceConversationId, {
+                ...(input.forkEntryId !== undefined ? { entryId: input.forkEntryId } : {}),
+                title: workerTitle,
+                // 无论 fork 自同伴或主控，协作组内派工父链始终扁平挂接主控会话
+                parentConversationId: admission.coordinatorConversationId,
+              })
+            : await ctx.host.createConversation({
+                title: workerTitle,
+                profileId: targetProfile,
+                tags: [WORKER_TAG],
+                parentConversationId: admission.coordinatorConversationId,
+                nodeId: finalNodeId,
+                cwd: finalCwd,
+                ...(model !== undefined ? { model } : {}),
+              })
+        createdId = created.id
+
+        const now = Date.now()
         ctx.host.markConversationOwnership(created.id, 'helmx')
         if (sourceConversationId !== undefined || effort !== undefined) {
           await ctx.host.updateConversation(created.id, {
@@ -326,14 +414,14 @@ export function createWorkerHandlers(ctx: HelmxPluginContext, coordinator: Swarm
             'acquire_worktree',
             {
               conversationId: created.id,
-              parentConversationId: freshGroup.coordinatorConversationId,
+              parentConversationId: admission.coordinatorConversationId,
               profileId: targetProfile,
               ...(requestedCwd !== undefined ? { requestCwd: requestedCwd } : {}),
               ...(sourceConversationId !== undefined ? { fork: true } : {}),
               hold: {
                 pluginId: SWARM_PLUGIN_ID,
-                holdId: `${freshGroup.id}:${memberName}`,
-                label: `Swarm group "${freshGroup.title}" (${freshGroup.id}) member @${memberName} (#${created.id})`,
+                holdId: `${admission.groupId}:${memberName}`,
+                label: `Swarm group "${admission.groupTitle}" (${admission.groupId}) member @${memberName} (#${created.id})`,
               },
             },
             signal !== undefined ? { signal } : undefined,
@@ -356,7 +444,7 @@ export function createWorkerHandlers(ctx: HelmxPluginContext, coordinator: Swarm
         }
 
         const { post } = await groups.addMemberWithBrief(
-          freshGroup.id,
+          admission.groupId,
           {
             name: memberName,
             conversationId: created.id,
@@ -374,25 +462,35 @@ export function createWorkerHandlers(ctx: HelmxPluginContext, coordinator: Swarm
           input.prompt,
         )
 
-        return {
+        const result: DispatchWorkerResult = {
           workerConversationId: created.id,
-          groupId: freshGroup.id,
+          groupId: admission.groupId,
           name: memberName,
           ...(acquiredWorktreeId !== undefined ? { worktreeId: acquiredWorktreeId } : {}),
           postSeq: post.seq,
         }
+        admission.resolveGate(result)
+        return result
       } catch (err) {
-        reportError(`协作组 ${freshGroup.id} 成员 @${memberName} (#${created.id}) 派工失败，执行回滚`, err)
-        if (acquiredWorktreeId !== undefined) {
-          await releaseWorktreeHold(ctx, freshGroup.id, memberName, acquiredWorktreeId).catch(() => {})
-          await cleanupManagedWorktree(ctx, acquiredWorktreeId, true).catch(() => {})
+        if (createdId !== undefined) {
+          reportError(`协作组 ${admission.groupId} 成员 @${memberName} (#${createdId}) 派工失败，执行回滚`, err)
+          if (acquiredWorktreeId !== undefined) {
+            await releaseWorktreeHold(ctx, admission.groupId, memberName, acquiredWorktreeId).catch(() => {})
+            await cleanupManagedWorktree(ctx, acquiredWorktreeId, true).catch(() => {})
+          }
+          const freshConv = readConversationOrUndefined(createdId)
+          if (freshConv !== undefined) {
+            const nextTags = [
+              ...freshConv.tags.filter((t) => t !== WORKER_TAG && t !== COORDINATOR_TAG),
+              ARCHIVED_WORKER_TAG,
+            ]
+            await ctx.host.updateConversation(createdId, { tags: nextTags }).catch(() => {})
+          }
         }
-        const freshConv = readConversationOrUndefined(created.id)
-        if (freshConv !== undefined) {
-          const nextTags = [...freshConv.tags.filter((t) => t !== WORKER_TAG && t !== COORDINATOR_TAG), ARCHIVED_WORKER_TAG]
-          await ctx.host.updateConversation(created.id, { tags: nextTags }).catch(() => {})
-        }
+        admission.rejectGate(err)
         throw err
+      } finally {
+        admission.releaseReservation()
       }
     })
   }
@@ -420,14 +518,45 @@ export function createWorkerHandlers(ctx: HelmxPluginContext, coordinator: Swarm
   }
 
   const switchWorkerModel = async (
-    input: { groupId?: string; name?: string; workerConversationId?: number; model: string },
+    input: {
+      groupId?: string
+      name?: string
+      workerConversationId?: number
+      model: string
+      effort?: string
+      prompt?: string
+    },
     conversationId: number | undefined,
-  ): Promise<{ workerConversationId: number; model: string; name: string }> => {
+    idempotencyKey?: string,
+  ): Promise<{ workerConversationId: number; model: string; effort?: string; name: string; postSeq?: number }> => {
     if (typeof input.model !== 'string' || input.model.trim() === '') {
-      throw new HelmxError('validation_error', 'model 必须是非空字符串（格式 provider/model）', 400, {})
+      throw new HelmxError('validation_error', 'model 必须是非空字符串（格式 provider/model 或 tier/<id>）', 400, {})
     }
+    const effort =
+      input.effort !== undefined
+        ? typeof input.effort === 'string' && input.effort.trim() !== ''
+          ? input.effort.trim()
+          : (() => {
+              throw new HelmxError('validation_error', 'effort 必须是非空字符串', 400, {})
+            })()
+        : undefined
+    const prompt =
+      input.prompt !== undefined
+        ? typeof input.prompt === 'string' && input.prompt.trim() !== ''
+          ? input.prompt.trim()
+          : (() => {
+              throw new HelmxError('validation_error', 'prompt 必须是非空文本', 400, {})
+            })()
+        : undefined
+
     const { group, member, workerConversationId } = resolveTargetWorker(input, conversationId)
     assertCoordinatorAuthority(conversationId, group)
+    if (group.status !== 'active') {
+      throw new HelmxError('swarm_group_closed', `协作组 '${group.id}' 已结单，无法切换模型`, 409, {
+        pluginId: SWARM_PLUGIN_ID,
+        groupId: group.id,
+      })
+    }
     if (member.lifecycle !== 'active') {
       throw new HelmxError('swarm_unknown_target', `成员 @${member.name} 已归档，无法切换模型`, 409, {
         pluginId: SWARM_PLUGIN_ID,
@@ -442,6 +571,21 @@ export function createWorkerHandlers(ctx: HelmxPluginContext, coordinator: Swarm
         workerConversationId,
       })
     }
+
+    // Idempotent replay when prompt was already posted by the same tool call.
+    if (prompt !== undefined && idempotencyKey !== undefined) {
+      const existingPost = groups.getPosts(group.id).find((p) => p.idempotencyKey === idempotencyKey)
+      if (existingPost !== undefined) {
+        return {
+          workerConversationId: summary.id,
+          model: summary.model,
+          ...(effort !== undefined ? { effort: summary.thinkingLevel } : {}),
+          name: member.name,
+          postSeq: existingPost.seq,
+        }
+      }
+    }
+
     if (isWorkerBusy(coordinator, workerConversationId, summary.status)) {
       throw new HelmxError(
         'swarm_worker_busy',
@@ -451,11 +595,37 @@ export function createWorkerHandlers(ctx: HelmxPluginContext, coordinator: Swarm
       )
     }
 
-    const updated = await ctx.host.updateConversation(workerConversationId, { model: input.model.trim() })
+    const updated = await ctx.host.updateConversation(workerConversationId, {
+      model: input.model.trim(),
+      ...(effort !== undefined ? { thinkingLevel: effort } : {}),
+    })
+
+    if (prompt !== undefined) {
+      const post = await groups.appendPost(group.id, {
+        channel: 'main',
+        from: 'coordinator',
+        to: [member.name],
+        resolvedTargets: [member.name],
+        wake: true,
+        kind: 'brief',
+        refs: [],
+        body: prompt,
+        ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
+      })
+      return {
+        workerConversationId: updated.id,
+        model: updated.model,
+        ...(effort !== undefined ? { effort: updated.thinkingLevel } : {}),
+        name: member.name,
+        postSeq: post.seq,
+      }
+    }
+
     groups.syncProjections()
     return {
       workerConversationId: updated.id,
       model: updated.model,
+      ...(effort !== undefined ? { effort: updated.thinkingLevel } : {}),
       name: member.name,
     }
   }
@@ -528,7 +698,7 @@ export function createWorkerHandlers(ctx: HelmxPluginContext, coordinator: Swarm
       )
     }
 
-    return enqueueDispatch(async () => {
+    return enqueueDispatch(`group:${group.id}`, async () => {
       const freshSummary = readConversationOrUndefined(workerConversationId)
       if (freshSummary !== undefined && isWorkerBusy(coordinator, workerConversationId, freshSummary.status)) {
         throw new HelmxError(

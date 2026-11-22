@@ -22,6 +22,90 @@ import {
   type CheckedMemberWorktree,
 } from './worktree-bridge.js'
 
+export interface DispatchWorkerResult {
+  workerConversationId: number
+  groupId: string
+  name: string
+  worktreeId?: string
+  postSeq: number
+}
+
+/**
+ * Per-group admission & drain guard allowing concurrent dispatch_worker
+ * setup (conversation creation / worktree acquisition) outside the short
+ * group admission lock while keeping member names, capacity limits, and
+ * close_group serialization race-free.
+ */
+export interface SwarmDispatchGuard {
+  isClosing(groupId: string): boolean
+  beginClosing(groupId: string): void
+  endClosing(groupId: string): void
+  hasPendingMember(groupId: string, name: string): boolean
+  pendingCount(groupId: string): number
+  getPendingByKey(groupId: string, key: string): Promise<DispatchWorkerResult> | undefined
+  reserve(
+    groupId: string,
+    name: string,
+    key: string | undefined,
+    promise: Promise<DispatchWorkerResult>,
+  ): () => void
+  awaitInflight(groupId: string): Promise<void>
+}
+
+export function createSwarmDispatchGuard(): SwarmDispatchGuard {
+  const closingGroups = new Set<string>()
+  const pendingByGroup = new Map<
+    string,
+    Map<string, { key?: string; promise: Promise<DispatchWorkerResult> }>
+  >()
+
+  return {
+    isClosing: (groupId) => closingGroups.has(groupId),
+    beginClosing: (groupId) => {
+      closingGroups.add(groupId)
+    },
+    endClosing: (groupId) => {
+      closingGroups.delete(groupId)
+    },
+    hasPendingMember: (groupId, name) => pendingByGroup.get(groupId)?.has(name) === true,
+    pendingCount: (groupId) => pendingByGroup.get(groupId)?.size ?? 0,
+    getPendingByKey: (groupId, key) => {
+      const map = pendingByGroup.get(groupId)
+      if (map === undefined) return undefined
+      for (const entry of map.values()) {
+        if (entry.key === key) return entry.promise
+      }
+      return undefined
+    },
+    reserve: (groupId, name, key, promise) => {
+      let map = pendingByGroup.get(groupId)
+      if (map === undefined) {
+        map = new Map()
+        pendingByGroup.set(groupId, map)
+      }
+      const entry = { ...(key !== undefined ? { key } : {}), promise }
+      map.set(name, entry)
+      let released = false
+      return () => {
+        if (released) return
+        released = true
+        const current = pendingByGroup.get(groupId)
+        if (current?.get(name) === entry) {
+          current.delete(name)
+          if (current.size === 0) pendingByGroup.delete(groupId)
+        }
+      }
+    },
+    awaitInflight: async (groupId) => {
+      for (;;) {
+        const map = pendingByGroup.get(groupId)
+        if (map === undefined || map.size === 0) return
+        await Promise.allSettled([...map.values()].map((e) => e.promise))
+      }
+    },
+  }
+}
+
 export interface EnsureCoordinatorGroupInput {
   conversationId: number
   title: string
@@ -146,7 +230,7 @@ export async function ensureCoordinatorGroup(
     throw new HelmxError(eligibilityErr.code, eligibilityErr.message, eligibilityErr.status, eligibilityErr.details)
   }
 
-  return enqueueDispatch(async () => {
+  return enqueueDispatch(`coord:${targetConvId}`, async () => {
     const syncTagAndProjections = async (groupId: string): Promise<{ groupId: string; group: BoardViewDoc['group'] }> => {
       const latestConv = readConversationOrUndefined(targetConvId)
       if (latestConv !== undefined && !latestConv.tags.includes(COORDINATOR_TAG)) {
@@ -185,7 +269,11 @@ function isPosIntId(v: unknown): v is number {
   return typeof v === 'number' && Number.isInteger(v) && v > 0
 }
 
-export function createGroupHandlers(ctx: HelmxPluginContext, coordinator: SwarmCoordinator) {
+export function createGroupHandlers(
+  ctx: HelmxPluginContext,
+  coordinator: SwarmCoordinator,
+  dispatchGuard: SwarmDispatchGuard = createSwarmDispatchGuard(),
+) {
   const { readConversationOrUndefined, enqueueDispatch, groups } = coordinator
 
   const createGroup = async (
@@ -287,142 +375,149 @@ export function createGroupHandlers(ctx: HelmxPluginContext, coordinator: SwarmC
       }
     }
 
-    return enqueueDispatch(async () => {
-      const freshGroup = groups.getGroup(group.id)
-      if (freshGroup === undefined) {
-        throw new HelmxError('swarm_group_not_found', `协作组 '${group.id}' 不存在`, 404, {
-          pluginId: SWARM_PLUGIN_ID,
-          groupId: group.id,
-        })
-      }
-      if (freshGroup.status === 'closed') {
-        return {
-          closed: true,
-          groupId: freshGroup.id,
-          retainedWorktrees: freshGroup.retainedWorktrees ?? [],
-        }
-      }
-
-      const activeMembers = freshGroup.members.filter((m) => m.lifecycle === 'active')
-
-      for (const member of activeMembers) {
-        const s = readConversationOrUndefined(member.conversationId)
-        if (s === undefined || !isWorkerBusy(coordinator, member.conversationId, s.status)) continue
-        if (input.abortRunning === true) {
-          if (s.status === 'working' || s.status === 'blocked') {
-            await ctx.host.abortConversationGuarded(member.conversationId, { expectedOwnership: 'helmx' })
-          }
-          continue
-        }
-        throw new HelmxError(
-          'swarm_worker_busy',
-          `协作组 '${freshGroup.id}' 成员 @${member.name} (#${member.conversationId}) 仍在运行中；请等待完工或传 abortRunning: true`,
-          409,
-          {
+    return enqueueDispatch(`group:${group.id}`, async () => {
+      dispatchGuard.beginClosing(group.id)
+      try {
+        await dispatchGuard.awaitInflight(group.id)
+        const freshGroup = groups.getGroup(group.id)
+        if (freshGroup === undefined) {
+          throw new HelmxError('swarm_group_not_found', `协作组 '${group.id}' 不存在`, 404, {
             pluginId: SWARM_PLUGIN_ID,
+            groupId: group.id,
+          })
+        }
+        if (freshGroup.status === 'closed') {
+          return {
+            closed: true,
             groupId: freshGroup.id,
-            memberName: member.name,
-            workerConversationId: member.conversationId,
-          },
-        )
-      }
+            retainedWorktrees: freshGroup.retainedWorktrees ?? [],
+          }
+        }
 
-      const worktreeChecks: CheckedMemberWorktree[] = []
-      for (const member of activeMembers) {
-        const checked = await checkMemberWorktree(ctx, member, signal)
-        if (checked !== undefined) worktreeChecks.push(checked)
-      }
+        const activeMembers = freshGroup.members.filter((m) => m.lifecycle === 'active')
 
-      const keepWorktree = input.keepWorktree === true
-      // force 只放开脏/未合入守卫（cleanup_worktree 同语义透传）；占用、归属、
-      // 锁定与 swarm_worker_busy 校验不因此绕过。
-      if (!keepWorktree && input.force !== true) {
-        const unmerged = worktreeChecks.filter(
-          (item) => item.inspected.exists && (item.isDirty || item.unmergedCommits > 0),
-        )
-        if (unmerged.length > 0) {
-          const branchList = unmerged
-            .map((item) => `@${item.member.name}:${item.inspected.currentBranch ?? item.inspected.record.branch}`)
-            .join(', ')
+        for (const member of activeMembers) {
+          const s = readConversationOrUndefined(member.conversationId)
+          if (s === undefined || !isWorkerBusy(coordinator, member.conversationId, s.status)) continue
+          if (input.abortRunning === true) {
+            if (s.status === 'working' || s.status === 'blocked') {
+              await ctx.host.abortConversationGuarded(member.conversationId, { expectedOwnership: 'helmx' })
+            }
+            continue
+          }
           throw new HelmxError(
-            'swarm_worktree_unmerged',
-            `协作组 '${freshGroup.id}' 含未合入或脏工作树分支（${branchList}）；请传 keepWorktree: true 解锁主控合入收尾后再清理，或显式传 force: true 放弃未合入内容直接收尾`,
+            'swarm_worker_busy',
+            `协作组 '${freshGroup.id}' 成员 @${member.name} (#${member.conversationId}) 仍在运行中；请等待完工或传 abortRunning: true`,
             409,
             {
               pluginId: SWARM_PLUGIN_ID,
               groupId: freshGroup.id,
-              unmergedWorktrees: unmerged.map((item) => ({
-                memberName: item.member.name,
-                worktreeId: item.worktreeId,
-                branch: item.inspected.currentBranch ?? item.inspected.record.branch,
-                path: item.inspected.record.path,
-                commitsAhead: item.unmergedCommits,
-                dirtyCount: item.inspected.dirtyFileCount,
-              })),
+              memberName: member.name,
+              workerConversationId: member.conversationId,
             },
           )
         }
-      }
 
-      const retainedWorktrees: RetainedWorktreeInfo[] = []
-      for (const item of worktreeChecks) {
-        await releaseWorktreeHold(ctx, freshGroup.id, item.member.name, item.worktreeId, signal)
-        if (!item.inspected.exists) continue
-        if (keepWorktree && (item.isDirty || item.unmergedCommits > 0)) {
-          retainedWorktrees.push({
-            memberName: item.member.name,
-            worktreeId: item.worktreeId,
-            branch: item.inspected.currentBranch ?? item.inspected.record.branch,
-            path: item.inspected.record.path,
-            commitsAhead: item.unmergedCommits,
-          })
-        } else {
-          await cleanupManagedWorktree(ctx, item.worktreeId, input.force === true, signal)
+        const worktreeChecks: CheckedMemberWorktree[] = []
+        for (const member of activeMembers) {
+          const checked = await checkMemberWorktree(ctx, member, signal)
+          if (checked !== undefined) worktreeChecks.push(checked)
         }
-      }
 
-      const now = Date.now()
-      await groups.mutateGroup(freshGroup.id, (draft) => {
-        draft.status = 'closed'
-        draft.closedAt = now
-        draft.updatedAt = now
-        draft.retainedWorktrees = retainedWorktrees
-        delete draft.lastReportHadActiveWorkers
-        delete draft.inflightReport
-        if (input.summary !== undefined && input.summary.trim() !== '') {
-          draft.closeSummary = input.summary.trim()
-        }
-        for (const m of draft.members) {
-          if (m.lifecycle === 'active') {
-            m.lifecycle = 'archived'
-            m.archivedAt = now
+        const keepWorktree = input.keepWorktree === true
+        // force 只放开脏/未合入守卫（cleanup_worktree 同语义透传）；占用、归属、
+        // 锁定与 swarm_worker_busy 校验不因此绕过。
+        if (!keepWorktree && input.force !== true) {
+          const unmerged = worktreeChecks.filter(
+            (item) => item.inspected.exists && (item.isDirty || item.unmergedCommits > 0),
+          )
+          if (unmerged.length > 0) {
+            const branchList = unmerged
+              .map((item) => `@${item.member.name}:${item.inspected.currentBranch ?? item.inspected.record.branch}`)
+              .join(', ')
+            throw new HelmxError(
+              'swarm_worktree_unmerged',
+              `协作组 '${freshGroup.id}' 含未合入或脏工作树分支（${branchList}）；请传 keepWorktree: true 解锁主控合入收尾后再清理，或显式传 force: true 放弃未合入内容直接收尾`,
+              409,
+              {
+                pluginId: SWARM_PLUGIN_ID,
+                groupId: freshGroup.id,
+                unmergedWorktrees: unmerged.map((item) => ({
+                  memberName: item.member.name,
+                  worktreeId: item.worktreeId,
+                  branch: item.inspected.currentBranch ?? item.inspected.record.branch,
+                  path: item.inspected.record.path,
+                  commitsAhead: item.unmergedCommits,
+                  dirtyCount: item.inspected.dirtyFileCount,
+                })),
+              },
+            )
           }
         }
-        return { group: draft, result: undefined }
-      })
 
-      for (const member of activeMembers) {
-        const s = readConversationOrUndefined(member.conversationId)
-        if (s !== undefined) {
-          const nextTags = [...s.tags.filter((t) => t !== WORKER_TAG), ARCHIVED_WORKER_TAG]
-          await ctx.host.updateConversation(member.conversationId, { tags: nextTags })
+        const retainedWorktrees: RetainedWorktreeInfo[] = []
+        for (const item of worktreeChecks) {
+          await releaseWorktreeHold(ctx, freshGroup.id, item.member.name, item.worktreeId, signal)
+          if (!item.inspected.exists) continue
+          if (keepWorktree && (item.isDirty || item.unmergedCommits > 0)) {
+            retainedWorktrees.push({
+              memberName: item.member.name,
+              worktreeId: item.worktreeId,
+              branch: item.inspected.currentBranch ?? item.inspected.record.branch,
+              path: item.inspected.record.path,
+              commitsAhead: item.unmergedCommits,
+            })
+          } else {
+            await cleanupManagedWorktree(ctx, item.worktreeId, input.force === true, signal)
+          }
         }
-      }
 
-      const coordConv = readConversationOrUndefined(freshGroup.coordinatorConversationId)
-      if (coordConv !== undefined && coordConv.tags.includes(COORDINATOR_TAG)) {
-        // 结单后将活跃主控 tag 原地替换为历史 tag：workbench 编排面板仍可访问已完成编组，
-        // 但 swarm_create_group 解锁、主控守卫与工具注入按活跃组判定不再复活。
-        await ctx.host.updateConversation(freshGroup.coordinatorConversationId, {
-          tags: [...coordConv.tags.filter((t) => t !== COORDINATOR_TAG), ARCHIVED_COORDINATOR_TAG],
+        const now = Date.now()
+        await groups.mutateGroup(freshGroup.id, (draft) => {
+          draft.status = 'closed'
+          draft.closedAt = now
+          draft.updatedAt = now
+          draft.retainedWorktrees = retainedWorktrees
+          delete draft.lastReportHadActiveWorkers
+          delete draft.inflightReport
+          delete draft.peerHopsSinceCoordinator
+          if (input.summary !== undefined && input.summary.trim() !== '') {
+            draft.closeSummary = input.summary.trim()
+          }
+          for (const m of draft.members) {
+            if (m.lifecycle === 'active') {
+              m.lifecycle = 'archived'
+              m.archivedAt = now
+            }
+          }
+          return { group: draft, result: undefined }
         })
-      }
 
-      groups.syncProjections()
-      return {
-        closed: true,
-        groupId: freshGroup.id,
-        retainedWorktrees,
+        for (const member of activeMembers) {
+          const s = readConversationOrUndefined(member.conversationId)
+          if (s !== undefined) {
+            const nextTags = [...s.tags.filter((t) => t !== WORKER_TAG), ARCHIVED_WORKER_TAG]
+            await ctx.host.updateConversation(member.conversationId, { tags: nextTags })
+          }
+        }
+
+        const coordConv = readConversationOrUndefined(freshGroup.coordinatorConversationId)
+        if (coordConv !== undefined && coordConv.tags.includes(COORDINATOR_TAG)) {
+          // 结单后将活跃主控 tag 原地替换为历史 tag：workbench 编排面板仍可访问已完成编组，
+          // 但 swarm_create_group 解锁、主控守卫与工具注入按活跃组判定不再复活。
+          await ctx.host.updateConversation(freshGroup.coordinatorConversationId, {
+            tags: [...coordConv.tags.filter((t) => t !== COORDINATOR_TAG), ARCHIVED_COORDINATOR_TAG],
+          })
+        }
+
+        groups.syncProjections()
+        return {
+          closed: true,
+          groupId: freshGroup.id,
+          retainedWorktrees,
+        }
+      } finally {
+        dispatchGuard.endClosing(group.id)
       }
     })
   }

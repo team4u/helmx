@@ -43,7 +43,7 @@ import {
   type GroupMemberState,
 } from '../src/swarm.js'
 import { checkCoordinatorEligibility } from '../src/swarm/actions.js'
-import { boardPostInputSchema } from '../src/swarm/action-schemas.js'
+import { boardPostInputSchema, boardStatusOutputSchema } from '../src/swarm/action-schemas.js'
 import {
   formatCoordinatorReportEnvelope,
   formatWorkerWakeupEnvelope,
@@ -150,16 +150,33 @@ test('swarm-unit1: plugin definition contract, tags/scopes, config bounds, and s
   const defaults = resolveSwarmConfig({})
   assert.equal(defaults.maxWorkersPerGroup, 12)
   assert.equal(defaults.boardPreviewLimit, 80)
+  assert.equal(defaults.maxPeerHopsWithoutCoordinator, 16)
 
-  const custom = resolveSwarmConfig({ maxWorkersPerGroup: 2, boardPreviewLimit: 200 })
+  const custom = resolveSwarmConfig({ maxWorkersPerGroup: 2, boardPreviewLimit: 200, maxPeerHopsWithoutCoordinator: 4 })
   assert.equal(custom.maxWorkersPerGroup, 2)
   assert.equal(custom.boardPreviewLimit, 200)
+  assert.equal(custom.maxPeerHopsWithoutCoordinator, 4)
 
   assert.throws(() => resolveSwarmConfig({ maxWorkersPerGroup: 1 }), /2\.\.32/)
   assert.throws(() => resolveSwarmConfig({ maxWorkersPerGroup: 33 }), /2\.\.32/)
   assert.throws(() => resolveSwarmConfig({ maxWorkersPerGroup: 4.5 }), /2\.\.32/)
   assert.throws(() => resolveSwarmConfig({ boardPreviewLimit: 19 }), /20\.\.200/)
   assert.throws(() => resolveSwarmConfig({ boardPreviewLimit: 201 }), /20\.\.200/)
+  assert.throws(() => resolveSwarmConfig({ maxPeerHopsWithoutCoordinator: 1 }), /2\.\.100/)
+  assert.throws(() => resolveSwarmConfig({ maxPeerHopsWithoutCoordinator: 101 }), /2\.\.100/)
+
+  // Verify boardMemberViewSchema liveState enum matches MemberLiveState (includes 'done')
+  const membersSchema = (boardStatusOutputSchema['properties'] as Record<string, { items: { properties: { liveState: { enum: string[] } } } }>)['members']!
+  assert.deepEqual(
+    membersSchema.items.properties.liveState.enum,
+    ['idle', 'working', 'blocked', 'done', 'error', 'missing'],
+  )
+
+  // Verify peerHopsSinceCoordinator validator rejects negative numbers
+  assert.throws(
+    () => assertCollabGroupRecord({ ...makeGroup({ headSeq: 1 }), peerHopsSinceCoordinator: -1 }),
+    (err: unknown) => err instanceof HelmxError && err.code === 'swarm_doc_corrupt',
+  )
 
   assert.equal(assertMemberName('author-1'), 'author-1')
   for (const reserved of ['coordinator', 'all', 'system']) {
@@ -259,8 +276,26 @@ test('swarm-unit2: default wake derivation and Fail-Closed target resolution', {
   )
 
   // Active '#review' from 'author' -> expands ['author', 'verifier'], strips self 'author' -> ['verifier']
-  const subchannel = resolveBoardTargets(group, { role: 'worker', from: 'author' }, ['#review'])
+  const subchannel = resolveBoardTargets(group, { role: 'worker', from: 'author' }, ['#review'], { wake: true })
   assert.deepEqual(subchannel.resolvedTargets, ['verifier'])
+
+  // Active subchannel with 0 other active subscribers: fail-closed when wake=true, allowed when wake=false
+  const groupWithEmptyCh = makeGroup({
+    channels: [{ name: 'main' }, { name: 'empty' }, { name: 'solo' }],
+    members: [makeMember({ name: 'author', conversationId: 11, channels: ['main', 'solo'] })],
+  })
+  assert.throws(
+    () => resolveBoardTargets(groupWithEmptyCh, { role: 'coordinator', from: 'coordinator' }, ['#empty'], { wake: true }),
+    (err: unknown) => err instanceof HelmxError && err.code === 'swarm_channel_empty' && err.status === 409,
+  )
+  assert.throws(
+    () => resolveBoardTargets(groupWithEmptyCh, { role: 'worker', from: 'author' }, ['#solo'], { wake: true }),
+    (err: unknown) => err instanceof HelmxError && err.code === 'swarm_channel_empty' && err.status === 409,
+  )
+  assert.deepEqual(
+    resolveBoardTargets(groupWithEmptyCh, { role: 'coordinator', from: 'coordinator' }, ['#empty'], { wake: false }).resolvedTargets,
+    [],
+  )
 
   // Archived or unknown member -> 404 swarm_unknown_target
   assert.throws(
@@ -298,6 +333,7 @@ test('swarm-unit3: synthesizeBoardView, fingerprint deduplication, and byte-cons
   assert.deepEqual(first.view.activeWorkingMembers, ['verifier'])
   assert.equal(first.badge.tone, 'accent')
   assert.equal(first.badge.count, 2)
+  assert.deepEqual(first.badge.footerText, { en: '1 working', 'zh-CN': '1 项执行中' })
   assert.equal(first.view.edges.length, 2)
 
   // State change flips digest and badge tone
@@ -309,6 +345,10 @@ test('swarm-unit3: synthesizeBoardView, fingerprint deduplication, and byte-cons
   })
   assert.notEqual(errored.digest, first.digest)
   assert.equal(errored.badge.tone, 'warn')
+  assert.deepEqual(errored.badge.footerText, {
+    en: 'Member @verifier stopped in error state',
+    'zh-CN': '成员 @verifier 因错误停止',
+  })
   assert.equal(errored.view.headline.kind, 'blocker')
 
   // Byte-constant sections contain <active_swarm_group> and zero mutable roster/headSeq

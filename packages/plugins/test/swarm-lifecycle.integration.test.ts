@@ -88,6 +88,7 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
       for (const toolName of [
         'swarm_create_group',
         'swarm_update_group',
+        'swarm_manage_channel',
         'swarm_dispatch_worker',
         'swarm_board_post',
         'swarm_board_read',
@@ -134,6 +135,7 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
       const afterTools = preCapture[1]!.toolNames
       for (const expected of [
         'swarm_update_group',
+        'swarm_manage_channel',
         'swarm_dispatch_worker',
         'swarm_board_post',
         'swarm_board_read',
@@ -338,7 +340,7 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
         '/skill:swarm 重构鉴权模块并交叉验收',
         'helmx.input must preserve original /skill:swarm text verbatim without system-prompt wall',
       )
-      for (const expected of ['swarm_dispatch_worker', 'swarm_board_post', 'swarm_board_read', 'swarm_close_group', 'bash', 'edit', 'write', 'subagent', 'SubagentWorkflow']) {
+      for (const expected of ['swarm_manage_channel', 'swarm_dispatch_worker', 'swarm_board_post', 'swarm_board_read', 'swarm_close_group', 'bash', 'edit', 'write', 'subagent', 'SubagentWorkflow']) {
         assert.ok(turnMeta.toolNames.includes(expected), `expected ${expected} exposed on turn 1 after /skill:swarm`)
       }
       assert.equal(turnMeta.toolNames.includes('swarm_create_group'), false, 'expected swarm_create_group hidden on turn 1 after /skill:swarm')
@@ -616,6 +618,54 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
         { conversationId: evictedWorker.workerConversationId },
       )) as BoardViewDoc
       assert.equal(byArchivedWorker.group.id, evictedGroup.groupId)
+    } finally {
+      await env.close()
+    }
+  })
+
+  test('swarm-int13: concurrent dispatch_worker in one group enforces name uniqueness & maxWorkersPerGroup without global serialization', { timeout: 60_000 }, async (t) => {
+    const env = await openSwarmEnv(useTempDir(t, 'helmx-swarm-concurrent-'), gitTemplate)
+    try {
+      const { kernel } = env.app
+      await kernel.plugins.setConfig(SWARM_PLUGIN_ID, { maxWorkersPerGroup: 2 })
+      const coord = await kernel.createConversation({ title: 'Parallel Dispatch Coord', profileId: 'assistant', cwd: env.repoDir })
+      const { groupId } = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
+        title: 'Concurrent Squad',
+        conversationId: coord.id,
+      })) as { groupId: string }
+
+      setSwarmRoleResponses(env.faux, {
+        alpha: [
+          fauxAssistantMessage([fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', body: 'alpha done' })], { stopReason: 'toolUse' }),
+          fauxAssistantMessage('alpha settled'),
+        ],
+        beta: [
+          fauxAssistantMessage([fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', body: 'beta done' })], { stopReason: 'toolUse' }),
+          fauxAssistantMessage('beta settled'),
+        ],
+        coordinator: [fauxAssistantMessage('Coordinator noted both done.')],
+      })
+
+      // Fire 4 concurrent dispatches at once: alpha, duplicate alpha, beta, and over-limit gamma
+      const settled = await Promise.allSettled([
+        kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'dispatch_worker', { groupId, name: 'alpha', prompt: 'Slice A' }, { conversationId: coord.id }),
+        kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'dispatch_worker', { groupId, name: 'alpha', prompt: 'Dup Slice A' }, { conversationId: coord.id }),
+        kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'dispatch_worker', { groupId, name: 'beta', prompt: 'Slice B' }, { conversationId: coord.id }),
+        kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'dispatch_worker', { groupId, name: 'gamma', prompt: 'Over-limit C' }, { conversationId: coord.id }),
+      ])
+
+      const fulfilled = settled.filter((r) => r.status === 'fulfilled')
+      const rejected = settled.filter((r): r is PromiseRejectedResult => r.status === 'rejected')
+      assert.equal(fulfilled.length, 2, 'exactly 2 distinct workers admitted within maxWorkersPerGroup=2')
+      assert.equal(rejected.length, 2, 'duplicate name and over-capacity dispatch must reject')
+      const errCodes = rejected.map((r) => (r.reason instanceof HelmxError ? r.reason.code : 'other')).sort()
+      assert.deepEqual(errCodes, ['swarm_group_member_limit', 'swarm_member_conflict'])
+
+      const workers = fulfilled.map((r) => (r as PromiseFulfilledResult<{ workerConversationId: number }>).value)
+      for (const w of workers) await kernel.waitForIdle(w.workerConversationId)
+      await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+      await kernel.waitForIdle(coord.id)
+      await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'close_group', { groupId }, { conversationId: coord.id })
     } finally {
       await env.close()
     }

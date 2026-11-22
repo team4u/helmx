@@ -9,7 +9,7 @@
  * facts, never as the primary control surface.
  */
 import { DEFAULT_HELMX_LOCALE, resolveLocalizedText, type HelmxLocale, type LocalizedText } from '@helmx/plugin-client'
-import type { BoardPostKind, MemberLiveState } from './board-model.ts'
+import type { BoardPostKind, BoardViewDoc, MemberLiveState } from './board-model.ts'
 
 const L = (en: string, zh: string): LocalizedText => ({ en, 'zh-CN': zh })
 
@@ -71,6 +71,7 @@ export function memberAccessLabel(access: 'readwrite' | 'readonly', locale: Helm
 
 export const TRACE_CREATE_GROUP = L('Start swarm group', '创建协同编组')
 export const TRACE_UPDATE_GROUP = L('Update swarm group', '更新协同编组')
+export const TRACE_MANAGE_CHANNEL = L('Manage channel', '管理频道')
 export const TRACE_DISPATCH = L('Dispatch member', '派工成员')
 export const TRACE_BOARD_POST = L('Board post', '黑板发布')
 export const TRACE_BOARD_READ = L('Read board', '读取协同记录')
@@ -80,6 +81,20 @@ export const TRACE_SWITCH_MODEL = L('Switch member model', '切换成员模型')
 export const TRACE_INSPECT = L('Inspect member', '检视成员')
 export const TRACE_ARCHIVE = L('Archive member', '归档成员')
 export const TRACE_CLOSE_GROUP = L('Close swarm group', '结单协同编组')
+export const CHANNEL_OP_LABELS: Readonly<Record<'create' | 'subscribe' | 'unsubscribe' | 'archive', LocalizedText>> = {
+  create: L('Create', '创建'),
+  subscribe: L('Subscribe', '订阅'),
+  unsubscribe: L('Unsubscribe', '退订'),
+  archive: L('Archive', '归档'),
+}
+
+export function channelOpLabel(op: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  if (op in CHANNEL_OP_LABELS) {
+    return resolveLocalizedText(CHANNEL_OP_LABELS[op as keyof typeof CHANNEL_OP_LABELS], locale)
+  }
+  return op
+}
+
 export const TRACE_UNKNOWN_TOOL = L('Swarm tool', '协同工具')
 export const TRACE_EXPAND_DETAILS = L('Show raw details', '查看原始详情')
 export const TRACE_COLLAPSE_DETAILS = L('Hide raw details', '收起原始详情')
@@ -203,7 +218,105 @@ export const PANEL_HISTORY_COLLAPSE = L('Show less', '收起记录')
 export const SW_BODY_EXPAND: LocalizedText = { en: 'Expand full text', 'zh-CN': '展开全文' }
 export const SW_BODY_COLLAPSE: LocalizedText = { en: 'Collapse', 'zh-CN': '收起长文' }
 export const PANEL_POSTS_EMPTY = L('No board posts yet.', '暂无协同记录。')
+export const PANEL_POSTS_CHANNEL_EMPTY = L('No posts in this channel yet.', '该频道暂无协同记录。')
 export const PANEL_MEMBER_ARCHIVED = L('Archived', '已归档')
+export const PANEL_CLOSE_GROUP = L('Close group', '结单')
+export const PANEL_CLOSE_DIALOG_TITLE = L('Close swarm group', '结单协同编组')
+export const PANEL_CLOSE_DIALOG_DESC = L(
+  'Archive active members and end this collaboration group.',
+  '归档活跃成员并结束当前协同编组。',
+)
+export const PANEL_CLOSE_KEEP_WORKTREE = L(
+  'Keep modified worktree branches for merge',
+  '保留有改动的工作树分支待合入',
+)
+export const PANEL_CLOSE_ABORT_RUNNING = L(
+  'Abort running members before closing',
+  '结单前中止仍在运行的成员',
+)
+export const PANEL_CLOSE_CONFIRM = L('Confirm close', '确认结单')
+export const PANEL_CANCEL = L('Cancel', '取消')
+export const PANEL_CHANNEL_ALL = L('All', '全部')
+export const PANEL_CHANNEL_FILTER_ARIA = L('Filter board posts by channel', '按频道筛选动态')
+
+export function panelCloseFailed(err: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  return resolveLocalizedText(L(`Close group failed: ${err}`, `结单失败：${err}`), locale)
+}
+
+export function panelRefJumpLabel(seq: number, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  return resolveLocalizedText(L(`Jump to post #${seq}`, `跳转到记录 #${seq}`), locale)
+}
+
+/**
+ * Localize synthetic board headlines from `synthesizeHeadline` while preserving
+ * real post excerpts, user-authored close summaries, and custom headlines verbatim.
+ */
+export function resolvePanelHeadlineText(
+  view: BoardViewDoc,
+  locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
+): string {
+  const { group, headline, activeWorkingMembers } = view
+  if (group.status === 'closed') {
+    const retainedCount = group.retainedWorktrees?.length ?? 0
+    if (retainedCount > 0 && headline.kind === 'unmerged') {
+      return resolveLocalizedText(
+        L(
+          `Group closed with ${retainedCount} retained worktree branch${retainedCount === 1 ? '' : 'es'} awaiting merge`,
+          `编组已结单，保留 ${retainedCount} 个待合入工作树分支`,
+        ),
+        locale,
+      )
+    }
+    if (group.closeSummary !== undefined && group.closeSummary.trim() !== '') {
+      return group.closeSummary
+    }
+    if (headline.kind === 'closed' && headline.text === 'Swarm group closed') {
+      return resolveLocalizedText(L('Swarm group closed', '协同编组已结单'), locale)
+    }
+    return headline.text
+  }
+
+  if (headline.kind === 'blocker' && headline.refSeq === undefined && headline.targetMember !== undefined) {
+    if (headline.text === `Member @${headline.targetMember} stopped in error state`) {
+      return resolveLocalizedText(
+        L(
+          `Member @${headline.targetMember} stopped in error state`,
+          `成员 @${headline.targetMember} 因错误停止`,
+        ),
+        locale,
+      )
+    }
+  }
+
+  if (headline.kind === 'normal') {
+    if (activeWorkingMembers.length > 0 && headline.text.startsWith('Active: ')) {
+      const list = activeWorkingMembers.map((m) => `@${m}`).join(', ')
+      return resolveLocalizedText(L(`Active: ${list}`, `执行中：${list}`), locale)
+    }
+    if (headline.text === 'Group ready — dispatch peer roles to start collaboration') {
+      return resolveLocalizedText(
+        L(
+          'Group ready — dispatch peer roles to start collaboration',
+          '编组已就绪 — 请派工对等成员开始协同',
+        ),
+        locale,
+      )
+    }
+    const idleMatch = /^(\d+) active member\(s\) idle$/.exec(headline.text)
+    if (idleMatch !== null) {
+      const count = Number(idleMatch[1])
+      return resolveLocalizedText(
+        L(
+          `${count} active member${count === 1 ? '' : 's'} idle`,
+          `${count} 名活跃成员空闲待命`,
+        ),
+        locale,
+      )
+    }
+  }
+
+  return headline.text
+}
 export const PANEL_STATUS_LOAD_FAILED = L('Failed to load swarm group status', '协同编组状态读取失败')
 export function panelStatusInvalid(locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
   return resolveLocalizedText(L('Swarm status payload is structurally invalid', '协同状态返回结构无效'), locale)

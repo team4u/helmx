@@ -44,6 +44,7 @@ import {
 import {
   checkCoordinatorEligibility,
   createGroupHandlers,
+  createSwarmDispatchGuard,
   ensureCoordinatorGroup,
   type EnsureCoordinatorGroupInput,
 } from './actions-group.js'
@@ -95,7 +96,7 @@ function formatBoardStatusSummary(view: BoardViewDoc): string {
       `Members (${view.members.length}): ${view.members
         .map(
           (m) =>
-            `@${m.name} (#${m.conversationId}, ${m.lifecycle}, ${m.liveState}, cursor=${m.readCursorSeq}/${m.pendingWakeupSeq}${m.worktreeId !== undefined ? `, worktree=${m.worktreeId}` : ''})`,
+            `@${m.name} (#${m.conversationId}, ${m.lifecycle}, ${m.liveState}${m.model !== undefined ? `, model=${m.model}` : ''}, cursor=${m.readCursorSeq}/${m.pendingWakeupSeq}${m.worktreeId !== undefined ? `, worktree=${m.worktreeId}` : ''})`,
         )
         .join('; ')}`,
     )
@@ -133,9 +134,10 @@ export function registerSwarmActions(
   ctx: HelmxPluginContext,
   coordinator: SwarmCoordinator,
 ): void {
-  const { createGroup, updateGroup, manageChannel, closeGroup } = createGroupHandlers(ctx, coordinator)
+  const dispatchGuard = createSwarmDispatchGuard()
+  const { createGroup, updateGroup, manageChannel, closeGroup } = createGroupHandlers(ctx, coordinator, dispatchGuard)
   const { dispatchWorker, abortWorker, switchWorkerModel, inspectWorker, archiveWorker } =
-    createWorkerHandlers(ctx, coordinator)
+    createWorkerHandlers(ctx, coordinator, dispatchGuard)
   const { boardPost, boardRead, boardStatus, completeBoardMembers, completeBoardChannels } =
     createBoardHandlers(ctx, coordinator)
 
@@ -176,6 +178,22 @@ export function registerSwarmActions(
     execute: async (input: never, context: PluginToolContext) => {
       const res = await updateGroup(input as Parameters<typeof updateGroup>[0], context.conversationId)
       return envelope(`Updated swarm group "${res.group.title}" (${res.groupId}).`, res)
+    },
+  })
+
+  ctx.tool({
+    name: 'swarm_manage_channel',
+    description:
+      'Create, subscribe, unsubscribe, or archive subchannels in the active swarm collaboration group (main cannot be unsubscribed or archived).',
+    inputSchema: manageChannelInputSchema,
+    structuredOutputSchema: manageChannelOutputSchema,
+    scope: COORDINATOR_SCOPE,
+    replay: 'safe',
+    execute: async (input: never, context: PluginToolContext) => {
+      const typed = input as Parameters<typeof manageChannel>[0]
+      const res = await manageChannel(typed, context.conversationId)
+      const memberPart = typed.member !== undefined && typed.member.trim() !== '' ? ` for @${typed.member.trim()}` : ''
+      return envelope(`Channel #${typed.channel.trim()} (${typed.op}${memberPart}) updated in group ${res.groupId}.`, res)
     },
   })
 
@@ -276,14 +294,21 @@ export function registerSwarmActions(
 
   ctx.tool({
     name: 'swarm_switch_worker_model',
-    description: 'Switch an idle swarm worker conversation to another model in place while preserving its conversation history.',
+    description:
+      'Switch an idle swarm worker conversation to another model (or tier/<id>) and optional thinking effort in place while preserving its conversation history; pass prompt to immediately post a brief and wake the worker on the new model.',
     inputSchema: switchModelInputSchema,
     structuredOutputSchema: switchModelOutputSchema,
     scope: COORDINATOR_SCOPE,
     replay: 'safe',
     execute: async (input: never, context: PluginToolContext) => {
-      const res = await switchWorkerModel(input as Parameters<typeof switchWorkerModel>[0], context.conversationId)
-      return envelope(`Switched @${res.name} (#${res.workerConversationId}) model to ${res.model}.`, res)
+      const res = await switchWorkerModel(
+        input as Parameters<typeof switchWorkerModel>[0],
+        context.conversationId,
+        makeToolCallKey(context.conversationId, context.callId),
+      )
+      const effortPart = res.effort !== undefined && res.effort !== '' ? ` (effort=${res.effort})` : ''
+      const resumePart = res.postSeq !== undefined ? ` and woke with brief #${res.postSeq}` : ''
+      return envelope(`Switched @${res.name} (#${res.workerConversationId}) model to ${res.model}${effortPart}${resumePart}.`, res)
     },
   })
 

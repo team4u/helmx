@@ -250,9 +250,10 @@ export function CommandPaletteModal({
         panels: groupedUi.workbenchPanels,
         conversations,
         pluginDocs,
+        locale,
         t,
       }),
-    [groupedUi.workbenchPanels, conversations, pluginDocs, t],
+    [groupedUi.workbenchPanels, conversations, pluginDocs, locale, t],
   )
   const badgeDocs = useMemo(
     () => collectBackgroundBadgeDocs(groupedUi.workbenchPanels, conversations),

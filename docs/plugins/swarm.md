@@ -14,7 +14,7 @@ helmx swarm create-group --conversation-id 42 --title '检查导出模块' --jso
 
 ## 看板消息
 
-`board_post` 的 `to` 决定谁收到消息。可以填 `coordinator`、成员名或 `#频道名`。只有主控和人工调用可以用 `all`。`main` 是默认频道，`#main` 不作收件地址。找不到或已归档的收件人会使操作失败。
+`board_post` 的 `to` 决定谁收到消息。可以填 `coordinator`、成员名或 `#频道名`。只有主控和人工调用可以用 `all`。`main` 是默认频道，`#main` 不作收件地址。找不到或已归档的收件人会使操作失败；向当前无其他活跃订阅成员的子频道发送 `wake: true` 消息也会返回 `409 swarm_channel_empty`，防止静默掉棒。
 
 每条消息都有 `seq`。在回复里可以用 `refs: [12]` 和正文里的 `#12` 引用前一条意见。带 worktree 的成员发 `handoff` 或 `done` 时，看板会附上 `worktreeSnapshot`，包含分支、领先提交数和改动文件预览，供接手的人查对应工作树。
 
@@ -28,7 +28,7 @@ helmx swarm create-group --conversation-id 42 --title '检查导出模块' --jso
 
 - 时间线显示派工、交接和审查。点成员相关的记录可打开成员会话。
 - 主控会话里还有「进行中」区域，有成员正在执行或受阻时才显示。展开后可以查看成员或中止当前回合。
-- 右侧「Swarm 协同编组」面板显示任务目标、成员状态、分支和最近的看板消息。「查看完整记录」会加载更多消息。结单后仍可在工作台回看。
+- 右侧「Swarm 协同编组」面板显示任务目标、成员状态、模型、分支和最近的看板消息（含可点击 `#seq` 引用跳转与多频道筛选）。主控视角下可直接在面板中止在途成员或发起结单（支持 `keepWorktree` / `abortRunning` 选项）。「查看完整记录」会加载更多消息。结单后仍可在工作台回看。
 - 输入框支持 `@成员` 和 `#频道` 补全。切换成员模型需要等它空闲。中止当前回合会保留成员会话与工作树租约。
 
 ## 结单和清理
@@ -47,13 +47,13 @@ helmx swarm close-group --group-id "$group_id" --abort-running --keep-worktree
 | --- | --- | --- | --- |
 | `create_group` | `swarm_create_group` | `helmx swarm create-group` | 在顶层会话建立协作组 |
 | `update_group` | `swarm_update_group` | `helmx swarm update-group` | 改标题或目标 |
-| `manage_channel` | 经 `run_action` | `helmx swarm channel` | 创建、订阅、退订或归档子频道。`main` 不可退订或归档 |
+| `manage_channel` | `swarm_manage_channel` | `helmx swarm channel` | 创建、订阅、退订或归档子频道。`main` 不可退订或归档 |
 | `dispatch_worker` | `swarm_dispatch_worker` | `helmx swarm dispatch-worker` | 派工并唤醒成员。可选 worktree、会话分叉和模型 |
 | `board_post` | `swarm_board_post` | `helmx swarm board-post` | 发消息，指定收件人和是否唤醒 |
 | `board_read` | `swarm_board_read` | `helmx swarm board-read` | 分页读消息 |
 | `board_status` | `swarm_board_status` | `helmx swarm board-status` | 查组和成员状态，包括历史编组 |
 | `abort_worker` | `swarm_abort_worker` | `helmx swarm abort-worker` | 中止成员当前回合 |
-| `switch_worker_model` | `swarm_switch_worker_model` | `helmx swarm switch-model` | 为闲置成员更换模型 |
+| `switch_worker_model` | `swarm_switch_worker_model` | `helmx swarm switch-model` | 为闲置成员更换模型与思考档位，可选附带 `prompt` 立即续跑 |
 | `inspect_worker` | `swarm_inspect_worker` | `helmx swarm inspect-worker` | 查成员的近期记录、产物和工作树 |
 | `archive_worker` | `swarm_archive_worker` | `helmx swarm archive-worker` | 归档成员并处理工作树租约 |
 | `close_group` | `swarm_close_group` | `helmx swarm close-group` | 结单、清理或保留工作树 |
@@ -62,7 +62,7 @@ helmx swarm close-group --group-id "$group_id" --abort-running --keep-worktree
 
 ## 失败和恢复
 
-成员回合失败后，插件把脱敏错误写成 `blocker` 并报给主控。收到派工、交接或审查后完成回合却没发帖的成员，最多收到一次补发提醒。再没有回应时，插件会记录受阻情况。全组符合空闲条件却没有交付时，`stall` 记录会给出已知线索，例如某条交接没有唤醒收件人。检查由回合结束事件触发。
+成员回合失败后，插件把脱敏错误写成 `blocker` 并报给主控。收到派工、交接或审查后完成回合却没发帖的成员，最多收到一次补发提醒。再没有回应时，插件会记录受阻情况。全组符合空闲条件却没有交付时，`stall` 记录会给出已知线索，例如某条交接没有唤醒收件人。检查由回合结束事件触发。自上次主控介入起连续对等互唤超过 `maxPeerHopsWithoutCoordinator` 次时，插件以 0-Token 事件路径自动暂停对等唤醒并向主控上报 `blocker` 熔断。
 
 协作组保存于 `<dataDir>/groups/<groupId>/`。`board.jsonl` 先追加并同步写盘，再以 `meta.json` 的 `headSeq` 提交。重启会截掉单条未提交尾记录，已提交记录损坏会报 `swarm_doc_corrupt`。启动时会核对会话标签、归属和遗留的工作树租约，再根据已有提交记录补送需要恢复的唤醒和汇报。建组、派工与发帖按会话和工具调用 ID 去重。
 
@@ -74,6 +74,7 @@ helmx swarm close-group --group-id "$group_id" --abort-running --keep-worktree
 | --- | --- | --- |
 | `maxWorkersPerGroup` | `12` | 每组同时活跃的成员数，`2..32` |
 | `boardPreviewLimit` | `80` | 看板投影内近期消息数，`20..200` |
+| `maxPeerHopsWithoutCoordinator` | `16` | 自上次主控介入起允许的连续对等互唤次数，`2..100` |
 
 全局 `index` 和 `board-badges` 提供成员索引和界面计数。看板明细通过按主控会话分片的 `board-view` 提供，前端在查看编组时订阅。主控和成员通过 `swarm-coordinator`、`swarm-worker` 及各自的 `-archived` 标签区分。回合提示只包含稳定的组或成员信息，实时状态按需从看板读。
 

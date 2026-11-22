@@ -101,11 +101,11 @@ export function createBoardHandlers(ctx: HelmxPluginContext, coordinator: SwarmC
     }
 
     const channel = resolvePostChannel(group, input.channel)
-    const { normalizedTo, resolvedTargets } = resolveBoardTargets(group, caller, input.to)
     if (input.wake !== undefined && typeof input.wake !== 'boolean') {
       throw new HelmxError('validation_error', 'wake 必须是布尔值', 400, {})
     }
-    const wake = input.wake ?? resolveDefaultWake(kind, normalizedTo)
+    const wake = input.wake ?? resolveDefaultWake(kind, Array.isArray(input.to) ? input.to : [])
+    const { normalizedTo, resolvedTargets } = resolveBoardTargets(group, caller, input.to, { wake })
 
     const refs: number[] = []
     if (input.refs !== undefined) {

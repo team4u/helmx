@@ -99,6 +99,7 @@ export function PluginClientHostBridge({ store, children }: { store: HelmxExtern
           panels: slice.groupedUi.workbenchPanels,
           conversations: slice.conversations,
           pluginDocs: slice.pluginDocs,
+          locale: slice.locale,
           t: createWebTranslator(slice.locale),
         }),
       },

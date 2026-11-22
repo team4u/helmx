@@ -87,7 +87,7 @@ function panelContribution(
 }
 
 function badgesDoc(
-  entries: Record<string, { count: number; tone?: string; footerText?: string }>,
+  entries: Record<string, { count: number; tone?: string; footerText?: string | { en: string; 'zh-CN': string } }>,
 ): Record<string, unknown> {
   return { byConversation: entries }
 }
@@ -96,11 +96,13 @@ function summarize(input: {
   contributions?: PluginUiContribution[]
   conversations: ConversationSummary[]
   pluginDocs?: Record<string, unknown>
+  locale?: 'en' | 'zh-CN'
 }) {
   return summarizeConversationBackgroundActivity({
     panels: groupUiContributions(input.contributions ?? [panelContribution()]).workbenchPanels,
     conversations: input.conversations,
     pluginDocs: input.pluginDocs ?? {},
+    ...(input.locale !== undefined ? { locale: input.locale } : {}),
   })
 }
 
@@ -121,6 +123,21 @@ test('per-conversation badges with tone=accent count as in flight and merge foot
   })
   assert.deepEqual(index.get(1), { active: true, summary: '2 Running' })
   assert.deepEqual(index.get(2), { active: true, summary: '' })
+
+  // Bilingual LocalizedText footerText resolves per active UI locale
+  const bilingualDocs = {
+    'builtin:workflow/run-badges': badgesDoc({
+      '1': { count: 2, tone: 'accent', footerText: { en: '2 working', 'zh-CN': '2 项执行中' } },
+    }),
+  }
+  assert.deepEqual(summarize({ conversations, pluginDocs: bilingualDocs, locale: 'en' }).get(1), {
+    active: true,
+    summary: '2 working',
+  })
+  assert.deepEqual(summarize({ conversations, pluginDocs: bilingualDocs, locale: 'zh-CN' }).get(1), {
+    active: true,
+    summary: '2 项执行中',
+  })
 })
 
 test('neutral history counts and warn failure summaries never misreport as in flight', { timeout: 60_000 }, () => {

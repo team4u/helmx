@@ -7,7 +7,7 @@
  * - 解析当前有效激活页签（无效页签回退首个可用页签）。
  */
 import type { ArtifactKind, ArtifactMetadata, HelmxLocale, WorkbenchPanelBadgeSpec, WorkbenchPanelSpec } from '@helmx/protocol/browser'
-import { resolveLocalizedText } from '@helmx/protocol/browser'
+import { DEFAULT_HELMX_LOCALE, parseLocalizedText, resolveLocalizedText } from '@helmx/protocol/browser'
 import { createWebTranslator, englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 import type { GroupedUiSpecs } from '../lib/types.js'
 
@@ -46,11 +46,19 @@ function safeCount(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined
 }
 
+function resolveBadgeFooterText(raw: unknown, locale: HelmxLocale): string | undefined {
+  const parsed = parseLocalizedText(raw)
+  if (parsed === undefined) return undefined
+  const resolved = resolveLocalizedText(parsed, locale).trim()
+  return resolved !== '' ? resolved : undefined
+}
+
 /** 从插件 public doc 提取面板角标数据（按会话索引优先，缺省回落全局字段）。 */
 export function resolveWorkbenchPanelBadge(
   badge: WorkbenchPanelBadgeSpec | undefined,
   docValue: unknown,
   conversationId: number | undefined,
+  locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
 ): { count: number; tone: WorkbenchBadgeTone; footerText?: string } {
   if (badge === undefined) return { count: 0, tone: 'neutral' }
   if (docValue === null || typeof docValue !== 'object' || Array.isArray(docValue)) {
@@ -66,10 +74,11 @@ export function resolveWorkbenchPanelBadge(
         const e = entry as Record<string, unknown>
         const count = safeCount(e['count'])
         if (count !== undefined) {
+          const footerText = resolveBadgeFooterText(e['footerText'], locale)
           return {
             count,
             tone: toneValue(e['tone']) ?? 'neutral',
-            ...(typeof e['footerText'] === 'string' && e['footerText'] !== '' ? { footerText: e['footerText'] } : {}),
+            ...(footerText !== undefined ? { footerText } : {}),
           }
         }
       }
@@ -118,7 +127,12 @@ export function buildWorkbenchTabs(input: {
     const badge = panel.spec.badge
     const resolved =
       badge !== undefined
-        ? resolveWorkbenchPanelBadge(badge, input.pluginDocs[`${panel.pluginId}/${badge.doc}`], input.conversationId)
+        ? resolveWorkbenchPanelBadge(
+            badge,
+            input.pluginDocs[`${panel.pluginId}/${badge.doc}`],
+            input.conversationId,
+            input.locale,
+          )
         : { count: 0, tone: 'neutral' as const }
     tabs.push({
       id: `plugin:${panel.pluginId}/${panel.spec.id}`,

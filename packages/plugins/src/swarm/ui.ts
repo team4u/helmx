@@ -28,6 +28,7 @@ const SWARM_COORDINATOR_SCOPE: ConversationScope = {
 const SWARM_TOOL_NAMES = [
   'swarm_create_group',
   'swarm_update_group',
+  'swarm_manage_channel',
   'swarm_dispatch_worker',
   'swarm_board_post',
   'swarm_board_read',

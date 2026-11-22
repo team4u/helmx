@@ -82,7 +82,7 @@ export function createSwarmPlugin(): PluginDefinition {
     definePlugin(ctx) {
       let active = false
       let shutdown = false
-      let dispatchChain: Promise<unknown> = Promise.resolve()
+      const dispatchChains = new Map<string, Promise<unknown>>()
       const liveTasks = new Map<string, number>()
       const settlingWorkers = new Map<number, number>()
       let upsertUnsubscribe: (() => void) | undefined
@@ -167,9 +167,19 @@ export function createSwarmPlugin(): PluginDefinition {
         writeIndex,
         readConversationOrUndefined,
         reportError,
-        enqueueDispatch: <T>(fn: () => Promise<T>): Promise<T> => {
-          const task = dispatchChain.then(fn, fn)
-          dispatchChain = task.catch(() => undefined)
+        enqueueDispatch: <T>(key: string, fn: () => Promise<T>): Promise<T> => {
+          const prev = dispatchChains.get(key) ?? Promise.resolve()
+          const task = prev.then(fn, fn)
+          const settled = task.then(
+            () => undefined,
+            () => undefined,
+          )
+          dispatchChains.set(key, settled)
+          void settled.finally(() => {
+            if (dispatchChains.get(key) === settled) {
+              dispatchChains.delete(key)
+            }
+          })
           return task
         },
         track,
@@ -200,6 +210,15 @@ export function createSwarmPlugin(): PluginDefinition {
             'zh-CN': '看板实时会话文档保留的最近流转消息条数上限（整数 20..200）',
           },
           default: 80,
+        },
+        maxPeerHopsWithoutCoordinator: {
+          type: 'number',
+          label: { en: 'Max peer hops without coordinator', 'zh-CN': '主控未介入最大互唤跳数' },
+          description: {
+            en: 'Maximum consecutive peer-to-peer wakeups allowed before tripping a blocker circuit breaker to the coordinator (integer 2..100)',
+            'zh-CN': '自上次主控介入起允许的连续对等成员互唤上限，超限自动熔断并向主控上报受阻（整数 2..100）',
+          },
+          default: 16,
         },
       })
 

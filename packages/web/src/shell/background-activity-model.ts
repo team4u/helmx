@@ -32,7 +32,7 @@
  *   (deduplicated, joined with " · "); string meanings are never parsed.
  */
 
-import type { ConversationSummary, WorkbenchPanelSpec } from '@helmx/protocol/browser'
+import type { ConversationSummary, HelmxLocale, WorkbenchPanelSpec } from '@helmx/protocol/browser'
 import type { QualifiedUiSpec } from '../lib/types.js'
 import { matchesUiScope } from '../lib/types.js'
 import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
@@ -82,6 +82,8 @@ export function summarizeConversationBackgroundActivity(input: {
   panels: ReadonlyArray<QualifiedUiSpec<WorkbenchPanelSpec>>
   conversations: ReadonlyArray<ConversationSummary>
   pluginDocs: Record<string, unknown>
+  /** Locale for resolving LocalizedText badge footerText (defaults to DEFAULT_HELMX_LOCALE). */
+  locale?: HelmxLocale
   /** Locale translator for the compaction summary; English bridge when omitted (not-yet-migrated callers). */
   t?: WebMessageTranslator
 }): Map<number, ConversationBackgroundActivity> {
@@ -96,7 +98,7 @@ export function summarizeConversationBackgroundActivity(input: {
     const docValue = input.pluginDocs[`${panel.pluginId}/${badge.doc}`]
     for (const conversation of input.conversations) {
       if (!matchesUiScope(conversation, panel.spec.scope)) continue
-      const resolved = resolveWorkbenchPanelBadge(badge, docValue, conversation.id)
+      const resolved = resolveWorkbenchPanelBadge(badge, docValue, conversation.id, input.locale)
       if (resolved.tone !== 'accent') continue
       appendBackgroundSummary(result, conversation.id, resolved.footerText ?? '')
     }

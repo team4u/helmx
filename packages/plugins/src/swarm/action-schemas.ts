@@ -173,6 +173,18 @@ export const switchModelInputSchema: Record<string, unknown> = {
     name: memberNameSchema,
     workerConversationId: workerIdSchema,
     model: { type: 'string', minLength: 1, maxLength: 200 },
+    effort: {
+      type: 'string',
+      minLength: 1,
+      maxLength: 32,
+      description: 'Optional thinking/reasoning level override applied alongside the model switch',
+    },
+    prompt: {
+      type: 'string',
+      minLength: 1,
+      description:
+        'Optional resume instruction posted to the board as a coordinator brief to wake the member immediately after switching model',
+    },
   },
   required: ['model'],
   additionalProperties: false,
@@ -370,7 +382,7 @@ const boardMemberViewSchema: Record<string, unknown> = {
     inflightNudge: inflightNudgeIntentSchema,
     createdAt: { type: 'number' },
     archivedAt: { type: 'number' },
-    liveState: { type: 'string', enum: ['idle', 'working', 'blocked', 'error', 'missing'] },
+    liveState: { type: 'string', enum: ['idle', 'working', 'blocked', 'done', 'error', 'missing'] },
     model: { type: 'string' },
   },
   required: [
@@ -501,7 +513,9 @@ export const switchModelOutputSchema: Record<string, unknown> = {
   properties: {
     workerConversationId: { type: 'number' },
     model: { type: 'string' },
+    effort: { type: 'string' },
     name: { type: 'string' },
+    postSeq: { type: 'number' },
   },
   required: ['workerConversationId', 'model', 'name'],
   additionalProperties: false,

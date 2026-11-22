@@ -13,6 +13,7 @@ import {
   resolveMemberActivity,
   resolveMemberWorktree,
   sortBoardMembersForDisplay,
+  type BoardChannelInfo,
   type BoardMemberView,
   type BoardPost,
   type BoardViewDoc,
@@ -29,6 +30,8 @@ export interface SwarmPanelMemberRow {
   access: BoardMemberView['access']
   liveState: BoardMemberView['liveState']
   lifecycle: BoardMemberView['lifecycle']
+  model?: string
+  worktreeId?: string
   latestActivity: MemberActivity | undefined
   worktree: WorktreeHandoffSnapshot | undefined
   /** Live host fact from the conversation summary (never fabricated). */
@@ -40,6 +43,7 @@ export interface SwarmPanelModel {
   headlineText: string
   headlineTone: BoardViewDoc['headline']['tone']
   objective: string | undefined
+  channels: BoardChannelInfo[]
   rows: SwarmPanelMemberRow[]
   recentPosts: BoardPost[]
   progress: { done: number; total: number }
@@ -60,9 +64,10 @@ export function resolveSwarmPanelStatus(view: BoardViewDoc): SwarmPanelStatus {
 export function buildSwarmPanelModel(
   view: BoardViewDoc,
   conversations: ReadonlyArray<ConversationSummary>,
-  options: { recentLimit?: number } = {},
+  options: { recentLimit?: number; channel?: string } = {},
 ): SwarmPanelModel {
   const recentLimit = options.recentLimit ?? 6
+  const selectedChannel = options.channel
   const summaryById = new Map<number, ConversationSummary>()
   for (const conv of conversations) summaryById.set(conv.id, conv)
 
@@ -77,19 +82,27 @@ export function buildSwarmPanelModel(
       access: member.access,
       liveState: member.liveState,
       lifecycle: member.lifecycle,
+      ...(member.model !== undefined ? { model: member.model } : {}),
+      ...(member.worktreeId !== undefined ? { worktreeId: member.worktreeId } : {}),
       latestActivity: resolveMemberActivity(view.posts, member.name),
       worktree: member.worktreeId !== undefined ? resolveMemberWorktree(view.posts, member) : undefined,
       ...(doing !== undefined ? { doing } : {}),
     }
   })
 
-  const recentPosts = [...view.posts].sort((a, b) => b.seq - a.seq).slice(0, recentLimit).reverse()
+  const filteredPosts =
+    selectedChannel !== undefined && selectedChannel !== '' && selectedChannel !== 'all'
+      ? view.posts.filter((p) => p.channel === selectedChannel)
+      : view.posts
+  const recentPosts = [...filteredPosts].sort((a, b) => b.seq - a.seq).slice(0, recentLimit).reverse()
+  const channels = view.group.channels.filter((c) => c.archived !== true)
 
   return {
     status: resolveSwarmPanelStatus(view),
     headlineText: view.headline.text,
     headlineTone: view.headline.tone,
     objective: view.group.objective,
+    channels,
     rows,
     recentPosts,
     progress: boardProgressOf(view.members),

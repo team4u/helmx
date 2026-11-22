@@ -4,7 +4,7 @@
  * - 双向游标批合并信封组装（附统一反回声守则与主控 objective / activeWorkingMembers 锚点）；
  * - 看板投影（BoardViewDoc + BoardBadgesDoc）合成与 (headSeq, memberStateDigest) 去重指纹。
  */
-import { HelmxError, escapeXml } from '@helmx/protocol'
+import { HelmxError, escapeXml, type LocalizedText } from '@helmx/protocol'
 import {
   ACTIONABLE_WAKE_KINDS,
   COORDINATOR_ESCALATION_KINDS,
@@ -71,6 +71,7 @@ export function resolveBoardTargets(
   group: CollabGroupRecord,
   caller: BoardCallerIdentity,
   rawTargets: readonly string[],
+  options?: { wake?: boolean },
 ): { normalizedTo: string[]; resolvedTargets: string[] } {
   if (!Array.isArray(rawTargets) || rawTargets.length === 0) {
     throw new HelmxError('validation_error', 'board_post.to 必须是非空目标数组', 400, { groupId: group.id })
@@ -134,10 +135,20 @@ export function resolveBoardTargets(
           channel: chName,
         })
       }
+      let matchedOtherActive = 0
       for (const m of group.members) {
         if (m.lifecycle === 'active' && m.channels.includes(chName)) {
+          if (m.name !== caller.from) matchedOtherActive += 1
           pushResolved(m.name)
         }
+      }
+      if (options?.wake === true && matchedOtherActive === 0) {
+        throw new HelmxError(
+          'swarm_channel_empty',
+          `子频道 '${token}' 当前无其他活跃订阅成员，无法唤醒投递`,
+          409,
+          { pluginId: SWARM_PLUGIN_ID, groupId: group.id, channel: chName },
+        )
       }
       continue
     }
@@ -531,11 +542,22 @@ export function synthesizeBoardView(input: {
     : activeWorkingMembers.length > 0
       ? 'accent'
       : 'neutral'
-  const footerText = hasWarn
-    ? headline.text
-    : activeWorkingMembers.length > 0
-      ? `${activeWorkingMembers.length} working`
-      : undefined
+  let footerText: LocalizedText | undefined
+  if (hasWarn) {
+    if (headline.kind === 'blocker' && headline.refSeq === undefined && headline.targetMember !== undefined) {
+      footerText = {
+        en: `Member @${headline.targetMember} stopped in error state`,
+        'zh-CN': `成员 @${headline.targetMember} 因错误停止`,
+      }
+    } else {
+      footerText = headline.text
+    }
+  } else if (activeWorkingMembers.length > 0) {
+    footerText = {
+      en: `${activeWorkingMembers.length} working`,
+      'zh-CN': `${activeWorkingMembers.length} 项执行中`,
+    }
+  }
 
   const badge: BoardBadgeEntry = {
     groupId: group.id,

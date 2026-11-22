@@ -50,7 +50,7 @@ export function useGlobalAttention(): GlobalAttentionValue {
   const plugins = usePlugins()
   const { profiles } = useProfilesSlice()
   const { ensurePluginDoc } = useStoreActions()
-  const { t } = useWebLocale()
+  const { locale, t } = useWebLocale()
 
   const background = useMemo(
     () =>
@@ -58,9 +58,10 @@ export function useGlobalAttention(): GlobalAttentionValue {
         panels: groupedUi.workbenchPanels,
         conversations,
         pluginDocs,
+        locale,
         t,
       }),
-    [groupedUi.workbenchPanels, conversations, pluginDocs, t],
+    [groupedUi.workbenchPanels, conversations, pluginDocs, locale, t],
   )
   const badgeDocs = useMemo(
     () => collectBackgroundBadgeDocs(groupedUi.workbenchPanels, conversations),

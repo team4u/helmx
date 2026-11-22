@@ -394,20 +394,105 @@
   min-width: 0;
 }
 
-/* 成员行整行即会话抽屉入口：真实 button，无嵌套交互。 */
+/* 成员行整行即会话抽屉入口：真实 button，无嵌套交互；在途时中止按钮为右侧同级 sibling。 */
+.sw-panel-member-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  min-width: 0;
+}
+
 .sw-panel-member-row {
+  flex: 1;
   display: flex;
   flex-direction: column;
   gap: 2px;
   padding: 6px 8px;
-  border: 1px solid var(--border);
+  border: none;
   border-radius: var(--radius-sm);
-  background: var(--bg);
+  background: transparent;
   font: inherit;
   color: inherit;
   text-align: left;
   cursor: pointer;
   min-width: 0;
+}
+
+.sw-panel-member-abort {
+  flex-shrink: 0;
+  margin-right: 6px;
+}
+
+.sw-panel-member-model {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sw-panel-head-actions {
+  gap: 6px;
+}
+
+.sw-panel-channels {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.sw-panel-post-highlighted {
+  border-color: var(--accent);
+  background: var(--bg-subtle);
+}
+
+.sw-panel-post-refs {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.sw-panel-post-ref {
+  padding: 0 5px;
+  height: 18px;
+  line-height: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+  color: var(--fg-secondary);
+  font-size: 10.5px;
+  cursor: pointer;
+}
+
+.sw-panel-post-ref:hover {
+  border-color: var(--accent);
+  color: var(--fg);
+}
+
+.sw-close-dialog {
+  max-width: 440px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sw-close-dialog-desc {
+  font-size: 13px;
+  color: var(--fg-secondary);
+}
+
+.sw-close-dialog-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sw-close-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .sw-panel-member-row:hover {

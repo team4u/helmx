@@ -232,7 +232,7 @@ export interface WorkbenchPanelBadgeSpec {
   /**
    * Field name of the stats map indexed by conversation ID (reads
    * docValue[byConversationField][String(conversationId)], shaped as
-   * { count: number; tone?: 'warn' | 'accent' | 'neutral'; footerText?: string }).
+   * { count: number; tone?: 'warn' | 'accent' | 'neutral'; footerText?: LocalizedText }).
    */
   byConversationField?: string
 }

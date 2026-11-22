@@ -232,6 +232,9 @@ export function createCollabGroupRuntime(
     const validId = assertGroupId(groupId)
     let membersToWake: string[] = []
     let shouldNotifyCoordinator = false
+    let breakerTrip:
+      | { seq: number; from: string; to: string[]; maxPeerHops: number }
+      | undefined
 
     const createdPost = await runGroupLocked(validId, async () => {
       const current = groupsById.get(validId)
@@ -295,8 +298,38 @@ export function createCollabGroupRuntime(
         }
       }
 
+      const activeMemberNames = new Set(
+        next.members.filter((m) => m.lifecycle === 'active').map((m) => m.name),
+      )
+      const isWorkerPeerWake =
+        post.from !== 'coordinator' && post.from !== 'system' && post.wake && post.kind !== 'blocker'
+      const wakeablePeers = isWorkerPeerWake
+        ? post.resolvedTargets.filter((t) => t !== 'coordinator' && activeMemberNames.has(t))
+        : []
+
+      if (
+        post.from === 'coordinator' ||
+        (post.from === 'system' && (post.kind === 'blocker' || post.kind === 'stall'))
+      ) {
+        delete next.peerHopsSinceCoordinator
+      } else if (wakeablePeers.length > 0) {
+        const maxPeerHops = getCoordinator().getConfig().maxPeerHopsWithoutCoordinator
+        const nextHops = (next.peerHopsSinceCoordinator ?? 0) + 1
+        if (nextHops > maxPeerHops) {
+          breakerTrip = {
+            seq: post.seq,
+            from: post.from,
+            to: [...post.to],
+            maxPeerHops,
+          }
+          delete next.peerHopsSinceCoordinator
+        } else {
+          next.peerHopsSinceCoordinator = nextHops
+        }
+      }
+
       membersToWake = []
-      if (post.wake) {
+      if (post.wake && breakerTrip === undefined) {
         for (const target of post.resolvedTargets) {
           if (target === 'coordinator') continue
           const m = next.members.find((item) => item.name === target && item.lifecycle === 'active')
@@ -335,6 +368,20 @@ export function createCollabGroupRuntime(
 
     projections.syncIndex()
     projections.syncProjections()
+
+    if (breakerTrip !== undefined) {
+      await appendPost(validId, {
+        channel: 'main',
+        from: 'system',
+        to: ['coordinator'],
+        resolvedTargets: ['coordinator'],
+        wake: true,
+        kind: 'blocker',
+        refs: [breakerTrip.seq],
+        body: `Peer handoff circuit breaker tripped after ${breakerTrip.maxPeerHops} consecutive peer-to-peer wakeups without coordinator intervention (latest #${breakerTrip.seq} from @${breakerTrip.from} -> ${breakerTrip.to.join(', ')}). Automated peer wakeups paused for coordinator decision.`,
+      })
+      return createdPost
+    }
 
     for (const memberName of membersToWake) {
       void dispatcher.deliverWorkerWakeup(validId, memberName)
@@ -823,6 +870,7 @@ export function createCollabGroupRuntime(
           createdAt: now,
         }
         const post = assertBoardPost(redactObject(rawPost))
+        delete next.peerHopsSinceCoordinator
         next.headSeq = seq
         next.updatedAt = now
 

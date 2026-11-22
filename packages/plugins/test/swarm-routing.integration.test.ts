@@ -928,4 +928,179 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
       await app3.close()
     }
   })
+
+  test('swarm-int16: swarm_manage_channel tool + empty channel 409, switch_worker_model effort+prompt one-shot resume, and 0-token peer hop circuit breaker', { timeout: 60_000 }, async (t) => {
+    const env = await openSwarmEnv(useTempDir(t, 'helmx-swarm-int16-'), gitTemplate)
+    try {
+      const { kernel } = env.app
+      await kernel.plugins.setConfig(SWARM_PLUGIN_ID, { maxPeerHopsWithoutCoordinator: 2 })
+      const coord = await kernel.createConversation({ title: 'Swarm Polish Coord', profileId: 'assistant', cwd: env.repoDir })
+      const { groupId } = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
+        title: 'Polish Squad',
+        conversationId: coord.id,
+      })) as { groupId: string }
+
+      // 1) First-class swarm_manage_channel tool creates subchannel; waking empty subchannel fails closed with 409 swarm_channel_empty
+      const chToolRes = (await kernel.plugins.executeTool(
+        'swarm_manage_channel',
+        { groupId, op: 'create', channel: 'empty-ch', topic: 'No members yet' },
+        { conversationId: coord.id },
+      )) as { output: string; structuredOutput: { channels: Array<{ name: string }> } }
+      assert.match(chToolRes.output, /#empty-ch/)
+      assert.ok(chToolRes.structuredOutput.channels.some((c) => c.name === 'empty-ch'))
+
+      await assert.rejects(
+        () =>
+          kernel.plugins.invokeAction(
+            SWARM_PLUGIN_ID,
+            'board_post',
+            { groupId, to: ['#empty-ch'], kind: 'handoff', body: 'Should fail closed' },
+            { conversationId: coord.id },
+          ),
+        (err: unknown) => err instanceof HelmxError && err.code === 'swarm_channel_empty' && err.status === 409,
+      )
+
+      // 2) switch_worker_model with effort + prompt switches model & thinkingLevel and wakes worker in one step (idempotent replay)
+      let resumedOnNewModel = false
+      setSwarmRoleResponses(env.faux, {
+        alpha: [
+          fauxAssistantMessage([fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'comment', body: 'alpha parked' })], { stopReason: 'toolUse' }),
+          fauxAssistantMessage('alpha parked'),
+          () => {
+            resumedOnNewModel = true
+            return fauxAssistantMessage(
+              [fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', body: 'alpha resumed on faux-2' })],
+              { stopReason: 'toolUse' },
+            )
+          },
+          fauxAssistantMessage('alpha resumed done'),
+        ],
+        coordinator: [
+          fauxAssistantMessage('Coordinator noted stall.'),
+          fauxAssistantMessage('Coordinator noted resumed alpha done.'),
+        ],
+      })
+
+      const alpha = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'dispatch_worker',
+        { groupId, name: 'alpha', prompt: 'Initial turn on faux-1' },
+        { conversationId: coord.id },
+      )) as { workerConversationId: number }
+      await kernel.waitForIdle(alpha.workerConversationId)
+      await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+      await kernel.waitForIdle(coord.id)
+
+      const switchToolRes = (await kernel.plugins.executeTool(
+        'swarm_switch_worker_model',
+        { groupId, name: 'alpha', model: 'faux/faux-2', effort: 'high', prompt: 'Continue task on stronger model.' },
+        { conversationId: coord.id, callId: 'call-switch-resume-1' },
+      )) as { output: string; structuredOutput: { model: string; effort?: string; postSeq?: number } }
+      assert.equal(switchToolRes.structuredOutput.model, 'faux/faux-2')
+      assert.equal(switchToolRes.structuredOutput.effort, 'high')
+      assert.ok(typeof switchToolRes.structuredOutput.postSeq === 'number')
+      assert.match(switchToolRes.output, /effort=high/)
+      assert.match(switchToolRes.output, /brief #/)
+      assert.equal(kernel.getConversation(alpha.workerConversationId).thinkingLevel, 'high')
+
+      // Replay with same callId must deduplicate and return the same postSeq without waking twice
+      const replayRes = (await kernel.plugins.executeTool(
+        'swarm_switch_worker_model',
+        { groupId, name: 'alpha', model: 'faux/faux-2', effort: 'high', prompt: 'Continue task on stronger model.' },
+        { conversationId: coord.id, callId: 'call-switch-resume-1' },
+      )) as { structuredOutput: { postSeq?: number } }
+      assert.equal(replayRes.structuredOutput.postSeq, switchToolRes.structuredOutput.postSeq)
+
+      await waitFor(() => resumedOnNewModel)
+      await kernel.waitForIdle(alpha.workerConversationId)
+      await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+      await kernel.waitForIdle(coord.id)
+
+      // board_status text summary surfaces member model=
+      const statusTool = (await kernel.plugins.executeTool(
+        'swarm_board_status',
+        { groupId },
+        { conversationId: coord.id },
+      )) as { output: string }
+      assert.match(statusTool.output, /model=faux\/faux-2/)
+
+      // 3) 0-Token peer-to-peer hop circuit breaker (maxPeerHopsWithoutCoordinator = 2):
+      //    p1 -> p2 (hop 1) -> p1 (hop 2) -> p2 (hop 3 > 2 => trips breaker, pauses p2 wake, escalates system [blocker] to coordinator!)
+      let p1Turns = 0
+      let p2Turns = 0
+      setSwarmRoleResponses(env.faux, {
+        p1: [
+          () => {
+            p1Turns += 1
+            return fauxAssistantMessage(
+              [fauxToolCall('swarm_board_post', { to: ['p2'], kind: 'handoff', body: 'Ping #1 to p2' })],
+              { stopReason: 'toolUse' },
+            )
+          },
+          fauxAssistantMessage('p1 sent ping 1'),
+          () => {
+            p1Turns += 1
+            return fauxAssistantMessage(
+              [fauxToolCall('swarm_board_post', { to: ['p2'], kind: 'handoff', body: 'Ping #2 to p2 (should trip breaker)' })],
+              { stopReason: 'toolUse' },
+            )
+          },
+          fauxAssistantMessage('p1 sent ping 2'),
+        ],
+        p2: [
+          fauxAssistantMessage([fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'comment', body: 'p2 ready' })], { stopReason: 'toolUse' }),
+          fauxAssistantMessage('p2 ready'),
+          () => {
+            p2Turns += 1
+            return fauxAssistantMessage(
+              [fauxToolCall('swarm_board_post', { to: ['p1'], kind: 'review', body: 'Pong #1 back to p1' })],
+              { stopReason: 'toolUse' },
+            )
+          },
+          fauxAssistantMessage('p2 sent pong 1'),
+          () => {
+            p2Turns += 1
+            return fauxAssistantMessage('p2 should NOT be woken on tripped hop 3')
+          },
+        ],
+        coordinator: [
+          fauxAssistantMessage('Coordinator noted p2 ready stall.'),
+          fauxAssistantMessage('Coordinator received circuit breaker blocker.'),
+        ],
+      })
+
+      const p2 = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'dispatch_worker',
+        { groupId, name: 'p2', prompt: 'Stand by as reviewer' },
+        { conversationId: coord.id },
+      )) as { workerConversationId: number }
+      await kernel.waitForIdle(p2.workerConversationId)
+      await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+      await kernel.waitForIdle(coord.id)
+
+      const p1 = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'dispatch_worker',
+        { groupId, name: 'p1', prompt: 'Start ping-pong loop with p2' },
+        { conversationId: coord.id },
+      )) as { workerConversationId: number }
+
+      await waitFor(async () => {
+        const read = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'board_read', { groupId })) as { posts: BoardPost[] }
+        return read.posts.some((p) => p.from === 'system' && p.kind === 'blocker' && p.body.includes('circuit breaker tripped'))
+      })
+      await kernel.waitForIdle(p1.workerConversationId)
+      await kernel.waitForIdle(p2.workerConversationId)
+      await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+      await kernel.waitForIdle(coord.id)
+
+      assert.equal(p1Turns, 2, 'p1 ran initial brief + 1 review pong')
+      assert.equal(p2Turns, 1, 'p2 must NOT be woken on the 3rd consecutive peer hop after breaker tripped')
+
+      await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'close_group', { groupId }, { conversationId: coord.id })
+    } finally {
+      await env.close()
+    }
+  })
 })

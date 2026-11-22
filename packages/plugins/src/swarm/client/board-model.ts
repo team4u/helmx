@@ -9,7 +9,7 @@
  *   projection with headline, member live states, edges and recent posts;
  * - `board_status` / `board_read` action payloads for the explicit fallback.
  */
-import type { TimelineRendererProps } from '@helmx/protocol'
+import type { LocalizedText, TimelineRendererProps } from '@helmx/protocol'
 import type { SwarmIndexDoc } from './models.ts'
 
 export type WorkerAccess = 'readwrite' | 'readonly'
@@ -131,7 +131,7 @@ export interface BoardBadgeItem {
   coordinatorConversationId: number
   count: number
   tone: 'accent' | 'warn' | 'neutral'
-  footerText?: string
+  footerText?: LocalizedText
 }
 
 export interface BoardBadgesDoc {
@@ -212,12 +212,19 @@ export function parseBoardBadges(doc: unknown): Record<string, BoardBadgeItem> {
     if (typeof raw.groupId !== 'string' || raw.groupId === '') continue
     if (!isPosInt(raw.coordinatorConversationId)) continue
     const tone = raw.tone === 'warn' || raw.tone === 'accent' || raw.tone === 'neutral' ? raw.tone : 'neutral'
+    const rawFooter = raw.footerText
+    const footerText: LocalizedText | undefined =
+      typeof rawFooter === 'string' && rawFooter !== ''
+        ? rawFooter
+        : isPlainObject(rawFooter)
+          ? (rawFooter as LocalizedText)
+          : undefined
     out[convKey] = {
       groupId: raw.groupId,
       coordinatorConversationId: raw.coordinatorConversationId,
       count: isNonNegInt(raw.count) ? raw.count : 0,
       tone,
-      ...(typeof raw.footerText === 'string' && raw.footerText !== '' ? { footerText: raw.footerText } : {}),
+      ...(footerText !== undefined ? { footerText } : {}),
     }
   }
   return out

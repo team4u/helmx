@@ -453,6 +453,7 @@ describe("swarm-client-interactions", () => {
         'swarm_create_group',
         'swarm_dispatch_worker',
         'swarm_inspect_worker',
+        'swarm_manage_channel',
         'swarm_switch_worker_model',
         'swarm_update_group',
       ],
@@ -1231,6 +1232,177 @@ describe("swarm-client-interactions", () => {
       assert.deepEqual(calls[1], { actionId: 'board_read', input: { groupId: 'grp-evicted', limit: 200 } })
     } finally {
       archWorkerPanel.unmount()
+    }
+    resetDefaultStubs()
+  })
+
+  test('SwarmWorkbenchPanel & SwarmToolView：中文态势本地化、成员短模型徽章、可点击 #seq 引用、多频道筛选与主控兜底操作（中止/结单弹窗）', { timeout: 60_000 }, async () => {
+    // 1) SwarmToolView renders swarm_manage_channel & swarm_switch_worker_model with #seq
+    const tvSpy = makeSpyCtx({ conversationId: 50, locale: 'zh-CN' })
+    const chMount = await mount(
+      tvSpy,
+      e(components.SwarmToolView, toolViewProps({
+        callId: 'call-ch-1',
+        toolName: 'swarm_manage_channel',
+        input: { op: 'subscribe', channel: 'review', member: 'verifier' },
+        result: JSON.stringify({ groupId: 'grp-live', channels: [{ name: 'main' }, { name: 'review' }] }),
+      })),
+    )
+    try {
+      const text = chMount.host.textContent ?? ''
+      assert.match(text, /管理频道/)
+      assert.match(text, /订阅/)
+      assert.match(text, /#review/)
+      assert.match(text, /@verifier/)
+    } finally {
+      chMount.unmount()
+    }
+
+    const swMount = await mount(
+      tvSpy,
+      e(components.SwarmToolView, toolViewProps({
+        callId: 'call-sw-1',
+        toolName: 'swarm_switch_worker_model',
+        input: { name: 'author', model: 'openai/gpt-5', prompt: 'Resume now' },
+        result: JSON.stringify({ workerConversationId: 51, name: 'author', model: 'openai/gpt-5', postSeq: 9 }),
+      })),
+    )
+    try {
+      const text = swMount.host.textContent ?? ''
+      assert.match(text, /切换成员模型/)
+      assert.match(text, /@author/)
+      assert.match(text, /#9/)
+    } finally {
+      swMount.unmount()
+    }
+
+    // 2) SwarmWorkbenchPanel: zh-CN localized headline, short model badge, channel filter, clickable #seq refs, and coordinator Abort/Close controls
+    const multiChBoard = boardViewFixture({
+      group: {
+        id: 'grp-live',
+        title: '协同审改组',
+        objective: '零回归完成鉴权改造',
+        coordinatorConversationId: 50,
+        status: 'active',
+        activeWorkerCount: 2,
+        headSeq: 3,
+        channels: [{ name: 'main' }, { name: 'review', topic: 'Code review' }],
+        createdAt: Date.now() - 60_000,
+        updatedAt: 2000,
+      },
+      headline: {
+        text: 'Active: @verifier',
+        tone: 'info',
+        kind: 'normal',
+        targetMember: 'verifier',
+      },
+      posts: [
+        {
+          seq: 1,
+          groupId: 'grp-live',
+          channel: 'main',
+          from: 'coordinator',
+          to: ['author'],
+          resolvedTargets: ['author'],
+          wake: true,
+          kind: 'brief',
+          refs: [],
+          body: 'Implement token refresh in isolated worktree.',
+          createdAt: 1100,
+        },
+        {
+          seq: 2,
+          groupId: 'grp-live',
+          channel: 'review',
+          from: 'author',
+          to: ['#review'],
+          resolvedTargets: ['verifier'],
+          wake: true,
+          kind: 'handoff',
+          refs: [1],
+          body: 'Review note referencing #1 in subchannel.',
+          createdAt: 1500,
+        },
+      ],
+    })
+    setStubState({
+      docs: { index: coordinatorIndexFixture(), 'board-badges': { byConversation: {} } },
+      sessionDocs: { 'builtin:swarm/board-view/50': multiChBoard },
+    })
+
+    const coordSpy = makeSpyCtx({ conversationId: 50, locale: 'zh-CN' })
+    const coordPanel = await mount(
+      coordSpy,
+      e(components.SwarmWorkbenchPanel, { conversation: convSummary(50, '主控', { tags: ['swarm-coordinator'] }) }),
+    )
+    try {
+      const text = coordPanel.host.textContent ?? ''
+      assert.match(text, /执行中：@verifier/, 'zh-CN 本地化合成态势标题')
+      assert.match(text, /gpt-5/, '展示成员短模型名')
+      assert.match(text, /claude-sonnet-4-5/, '展示审阅成员短模型名')
+
+      // Channel filter SegmentedControl appears when channels > 1 and filters posts
+      const channelBtns = [...coordPanel.host.querySelectorAll<HTMLButtonElement>('.sw-panel-channels [role="tab"]')]
+      assert.equal(channelBtns.length, 3, 'All + #main + #review 三个频道选项')
+      const reviewTab = channelBtns.find((b) => (b.textContent ?? '').includes('#review'))!
+      await act(async () => {
+        reviewTab.click()
+      })
+      const filteredPosts = [...coordPanel.host.querySelectorAll('.sw-panel-post')]
+      assert.equal(filteredPosts.length, 1, '切换到 #review 仅显示该频道记录')
+      assert.match(filteredPosts[0]!.textContent ?? '', /Review note referencing #1/)
+
+      // Clicking #1 ref chip resets filter to show & highlight #1
+      const refBtn = coordPanel.host.querySelector<HTMLButtonElement>('.sw-panel-post-ref')!
+      assert.ok(refBtn !== null, '渲染可点击 #seq 引用芯片')
+      assert.equal(refBtn.textContent, '#1')
+      await act(async () => {
+        refBtn.click()
+      })
+      const highlighted = coordPanel.host.querySelector<HTMLElement>('.sw-panel-post-highlighted')
+      assert.ok(highlighted !== null, '点击引用后高亮目标帖子')
+      assert.equal(highlighted.getAttribute('data-post-seq'), '1')
+
+      // Coordinator Abort button on working member
+      const abortBtn = coordPanel.host.querySelector<HTMLButtonElement>('.sw-panel-member-abort')
+      assert.ok(abortBtn !== null, '主控面板为在途成员提供中止按钮')
+      await act(async () => {
+        abortBtn.click()
+      })
+      assert.deepEqual(
+        coordSpy.actionCalls.map((c) => ({ actionId: c.actionId, input: c.input })),
+        [{ actionId: 'abort_worker', input: { groupId: 'grp-live', name: 'verifier' } }],
+      )
+
+      // Coordinator Close Group dialog calls close_group with keepWorktree & abortRunning defaults
+      const closeBtn = coordPanel.host.querySelector<HTMLButtonElement>('.sw-panel-close-btn')
+      assert.ok(closeBtn !== null, '主控面板提供结单按钮')
+      await act(async () => {
+        closeBtn.click()
+      })
+      const confirmBtn = document.body.querySelector<HTMLButtonElement>('.sw-close-dialog-confirm')
+      assert.ok(confirmBtn !== null, '结单确认对话框渲染')
+      await act(async () => {
+        confirmBtn.click()
+      })
+      const closeCall = coordSpy.actionCalls.find((c) => c.actionId === 'close_group')
+      assert.ok(closeCall !== undefined, '确认结单调用 close_group 动作')
+      assert.deepEqual(closeCall.input, { groupId: 'grp-live', keepWorktree: true, abortRunning: true })
+    } finally {
+      coordPanel.unmount()
+    }
+
+    // Worker viewer must NOT see Abort or Close Group buttons
+    const workerSpy = makeSpyCtx({ conversationId: 51, locale: 'zh-CN' })
+    const workerPanel = await mount(
+      workerSpy,
+      e(components.SwarmWorkbenchPanel, { conversation: convSummary(51, 'author', { tags: ['swarm-worker'] }) }),
+    )
+    try {
+      assert.ok(workerPanel.host.querySelector('.sw-panel-member-abort') === null, 'Worker 视角不渲染中止按钮')
+      assert.ok(workerPanel.host.querySelector('.sw-panel-close-btn') === null, 'Worker 视角不渲染结单按钮')
+    } finally {
+      workerPanel.unmount()
     }
     resetDefaultStubs()
   })
