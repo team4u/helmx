@@ -40,8 +40,69 @@ export interface ProviderItem {
   dynamic?: boolean
   pluginId?: string
   custom?: boolean
+  protocol?: 'openai' | 'anthropic'
+  gatewayModels?: string[]
   authMethods?: Array<{ type: 'api_key' | 'oauth'; label: string }>
   models?: ProviderModelItem[]
+}
+
+const CUSTOM_GATEWAY_ID_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/
+
+/** Parse newline- or comma-separated custom gateway model IDs (trimmed, deduplicated). */
+export function parseCustomModelIds(raw: string): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const part of raw.split(/[\n,]+/)) {
+    const trimmed = part.trim()
+    if (trimmed !== '' && !seen.has(trimmed)) {
+      seen.add(trimmed)
+      out.push(trimmed)
+    }
+  }
+  return out
+}
+
+/** Validate custom gateway create/edit fields against providers.json protocol requirements. */
+export function validateCustomGatewayInput(
+  input: {
+    id: string
+    baseUrl: string
+    modelsText: string
+    isNew: boolean
+    existingIds?: ReadonlyArray<string>
+  },
+  t: WebMessageTranslator = englishWebTranslator,
+): string | null {
+  const id = input.id.trim().toLowerCase()
+  if (input.isNew) {
+    if (!id) return t('models.errors.customGatewayIdRequired')
+    if (!CUSTOM_GATEWAY_ID_RE.test(id)) return t('models.errors.customGatewayIdInvalid')
+    if (input.existingIds?.some((existing) => existing.toLowerCase() === id)) {
+      return t('models.errors.customGatewayIdDuplicate', { id })
+    }
+  }
+  const baseUrl = input.baseUrl.trim()
+  if (!baseUrl) return t('models.errors.customGatewayEndpointEmpty')
+  if (!/^https?:\/\/\S+$/i.test(baseUrl)) return t('models.errors.customGatewayUrlInvalid')
+  if (parseCustomModelIds(input.modelsText).length === 0) {
+    return t('models.errors.customGatewayModelsRequired')
+  }
+  return null
+}
+
+/**
+ * Whether per-model routing disable toggles can actually be saved for this
+ * provider: unconfigured static preset previews not present in the live
+ * backend catalog cannot be filtered yet.
+ */
+export function isProviderFilterEligible(
+  provider: ProviderItem | null | undefined,
+  catalogModels: ReadonlyArray<ModelDescriptor> = [],
+): boolean {
+  if (!provider) return false
+  if (provider.dynamic || provider.custom || provider.pluginId || provider.configured) return true
+  const key = provider.id.toLowerCase()
+  return catalogModels.some((m) => m.provider.toLowerCase() === key)
 }
 
 export type ProviderFilterTab = 'all' | 'configured'
@@ -168,17 +229,6 @@ export function buildDefaultProviders(
       models: [
         { id: 'llama-3.3-70b-versatile', name: 'Llama 3.3 70B Versatile', tags: [t('models.tag.ultraLowLatency'), 'LPU'], enabled: true },
         { id: 'deepseek-r1-distill-llama-70b', name: 'DeepSeek R1 Distill 70B', tags: [t('models.tag.fastInference')], enabled: true },
-      ],
-    },
-    {
-      id: 'custom',
-      name: t('models.preset.custom.name'),
-      configured: false,
-      modelsCount: 1,
-      baseUrl: 'http://127.0.0.1:8000/v1',
-      description: t('models.preset.custom.description'),
-      models: [
-        { id: 'custom-model', name: 'Custom Model', tags: [t('models.tag.customCompatible')], enabled: true },
       ],
     },
   ]
@@ -413,18 +463,33 @@ export function buildMergedProviders(
   for (const gw of gateways ?? []) {
     const key = gw.id.toLowerCase()
     const existing = providerMap.get(key)
+    const fallbackModels: ProviderModelItem[] = (gw.models ?? []).map((id) => ({
+      id,
+      name: id,
+      enabled: true,
+    }))
     if (existing) {
+      existing.name = gw.label || existing.name || gw.id
       existing.baseUrl = gw.baseUrl || existing.baseUrl
       existing.custom = true
+      existing.protocol = gw.protocol
+      existing.gatewayModels = [...(gw.models ?? [])]
       if (gw.enabled) existing.configured = true
+      if (!existing.models || existing.models.length === 0) {
+        existing.models = fallbackModels
+        existing.modelsCount = fallbackModels.length
+      }
     } else {
       providerMap.set(key, {
         id: gw.id,
         name: gw.label || gw.id,
         configured: Boolean(gw.enabled),
-        modelsCount: 0,
+        modelsCount: fallbackModels.length,
         baseUrl: gw.baseUrl,
         custom: true,
+        protocol: gw.protocol,
+        gatewayModels: [...(gw.models ?? [])],
+        models: fallbackModels,
         description: t('models.gatewayDynamicDescription'),
       })
     }

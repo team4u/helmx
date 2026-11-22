@@ -800,19 +800,22 @@
   word-break: break-all;
 }
 
-.callout-warn {
+.callout-warn,
+.callout--warning {
   background: var(--warn-bg);
   border-color: var(--warn-border);
   color: var(--warn);
 }
 
-.callout-error {
+.callout-error,
+.callout--error {
   background: var(--err-bg);
   border-color: var(--err-border);
   color: var(--err);
 }
 
-.callout-ok {
+.callout-ok,
+.callout--success {
   background: var(--ok-bg);
   border-color: var(--ok-border);
   color: var(--ok);
@@ -975,4 +978,197 @@ input::placeholder {
  * .sidebar-search，描边/背景/focus 高亮由容器提供，内层 input 透明无边框，
  * 并由文件末尾的统一兑底块中和全局 input 规则（见「搜索框统一规范兑底」）。
  */
+
+/* ==========================================================================
+ * 通用输入区底座活动托盘原语 (DockTray / DockTrayRow)
+ * ========================================================================== */
+
+.dock-tray {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+  overflow: hidden;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.dock-tray-warn {
+  border-color: var(--warn-border);
+}
+
+.dock-tray-bar {
+  height: 32px;
+  min-height: 32px;
+  padding: 0 6px 0 0;
+  display: flex;
+  align-items: stretch;
+  justify-content: space-between;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--fg-secondary);
+}
+
+.dock-tray-bar-toggle {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 0 0 8px;
+  background: none;
+  border: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.dock-tray-bar-toggle:hover {
+  background: var(--bg-hover);
+}
+
+.dock-tray-bar-toggle:focus-visible {
+  outline: 1.5px solid var(--accent);
+  outline-offset: -1.5px;
+}
+
+.dock-tray-badge {
+  height: 18px;
+  line-height: 16px;
+  padding: 0 5px;
+  font-size: 10.5px;
+  flex-shrink: 0;
+}
+
+.dock-tray-workbench {
+  align-self: center;
+  flex-shrink: 0;
+}
+
+.dock-tray-chevron {
+  color: var(--fg-muted);
+  flex-shrink: 0;
+}
+
+.dock-tray-frontline {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-muted);
+  font-size: 11.5px;
+}
+
+.dock-tray-count {
+  flex-shrink: 0;
+  white-space: nowrap;
+  color: var(--fg-secondary);
+  font-size: 11.5px;
+}
+
+.dock-tray-spacer {
+  flex: 1;
+}
+
+.dock-tray-elapsed {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-muted);
+  padding-right: 2px;
+}
+
+.dock-tray-list {
+  max-height: 180px;
+  overflow-y: auto;
+  border-top: 1px solid var(--border);
+  background: var(--bg-elevated);
+  display: flex;
+  flex-direction: column;
+}
+
+.dock-tray-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--border);
+  min-width: 0;
+}
+
+.dock-tray-row:last-child {
+  border-bottom: none;
+}
+
+.dock-tray-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 0 0 8px;
+  background: none;
+  border: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+}
+
+button.dock-tray-row-clickable {
+  cursor: pointer;
+}
+
+button.dock-tray-row-clickable:hover {
+  background: var(--bg-hover);
+}
+
+button.dock-tray-row-clickable:focus-visible {
+  outline: 1.5px solid var(--accent);
+  outline-offset: -1.5px;
+}
+
+.dock-tray-row-title {
+  flex-shrink: 1;
+  font-weight: 500;
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.dock-tray-row-id {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--fg-subtle);
+}
+
+.dock-tray-row-live {
+  flex: 1 1 0%;
+  min-width: 60px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-muted);
+  font-size: 11.5px;
+}
+
+.dock-tray-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  padding: 0 8px 0 0;
+}
+
+@media (max-width: 680px) {
+  .dock-tray-bar-toggle {
+    padding-left: 6px;
+  }
+  .dock-tray-elapsed {
+    display: none;
+  }
+}
 

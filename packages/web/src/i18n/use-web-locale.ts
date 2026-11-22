@@ -12,10 +12,16 @@
  * explicit `t` (or `locale`) parameter instead; see `i18n/catalog.ts` for the
  * English bridge default used at not-yet-migrated call sites.
  */
-import { useMemo } from 'react'
+import { useEffect, useMemo, useSyncExternalStore } from 'react'
 import { DEFAULT_HELMX_LOCALE, type HelmxLocale } from '@helmx/protocol/browser'
 import { useOptionalLocale } from '../lib/store-context.js'
-import { createWebTranslator, type WebMessageTranslator } from './catalog.js'
+import {
+  createWebTranslator,
+  getWebLocaleCatalogRevision,
+  preloadWebLocale,
+  subscribeWebLocaleCatalog,
+  type WebMessageTranslator,
+} from './catalog.js'
 
 export interface WebLocaleValue {
   /** Active UI locale (authoritative store state, or DEFAULT_HELMX_LOCALE outside a provider). */
@@ -26,5 +32,13 @@ export interface WebLocaleValue {
 
 export function useWebLocale(): WebLocaleValue {
   const locale = useOptionalLocale() ?? DEFAULT_HELMX_LOCALE
-  return useMemo(() => ({ locale, t: createWebTranslator(locale) }), [locale])
+  const catalogRevision = useSyncExternalStore(
+    subscribeWebLocaleCatalog,
+    getWebLocaleCatalogRevision,
+    getWebLocaleCatalogRevision,
+  )
+  useEffect(() => {
+    void preloadWebLocale(locale)
+  }, [locale])
+  return useMemo(() => ({ locale, t: createWebTranslator(locale) }), [locale, catalogRevision])
 }

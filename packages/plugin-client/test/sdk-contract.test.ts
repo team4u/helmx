@@ -107,7 +107,6 @@ interface PortStateInit {
   plugins?: PluginSummary[]
   screens?: Array<{ pluginId: string; spec: ScreenSpec }>
   pluginDocs?: Record<string, unknown>
-  conversationBackground?: SDK.ConversationBackgroundSnapshot
   overrides?: Partial<SDK.PluginClientHostPort>
 }
 
@@ -123,7 +122,6 @@ interface ReactiveTestPort {
   setLoadError: (key: string, next: string | undefined) => void
   setPlugins: (next: PluginSummary[], nextScreens?: Array<{ pluginId: string; spec: ScreenSpec }>) => void
   setPluginDoc: (docKey: string, next: unknown) => void
-  setConversationBackground: (next: SDK.ConversationBackgroundSnapshot) => void
 }
 
 const EMPTY_TEST_ASKS: AskSpec[] = Object.freeze([]) as unknown as AskSpec[]
@@ -160,13 +158,11 @@ function createReactivePort(log: PortLog, init: PortStateInit = {}): ReactiveTes
   const pluginDocs: Record<string, unknown> = {
     ...(init.pluginDocs ?? { 'p1/state': { ok: 1 } }),
   }
-  let background = init.conversationBackground
 
   const authListeners = new Set<() => void>()
   const prefsListeners = new Set<() => void>()
   const conversationsListeners = new Set<() => void>()
   const pluginsListeners = new Set<() => void>()
-  const backgroundListeners = new Set<() => void>()
   const summaryListeners = new Map<number, Set<() => void>>()
   const detailListeners = new Map<number, Set<() => void>>()
   const liveListeners = new Map<number, Set<() => void>>()
@@ -229,12 +225,6 @@ function createReactivePort(log: PortLog, init: PortStateInit = {}): ReactiveTes
     subscribeLoadError: (key, listener) => subKey(errorListeners, key, listener),
     getPluginsSnapshot: () => pluginsSnapshot,
     subscribePlugins: subSet(pluginsListeners),
-    ...(background !== undefined
-      ? {
-          getConversationBackground: () => background!,
-          subscribeConversationBackground: subSet(backgroundListeners),
-        }
-      : {}),
     getPluginDocValue: (docKey) => (Object.hasOwn(pluginDocs, docKey) ? pluginDocs[docKey] : undefined),
     subscribePluginDoc: (docKey, listener) => subKey(docListeners, docKey, listener),
     ensurePluginDoc: (pluginId, docName) => {
@@ -352,10 +342,6 @@ function createReactivePort(log: PortLog, init: PortStateInit = {}): ReactiveTes
       else pluginDocs[docKey] = next
       notifyKey(docListeners, docKey)
     },
-    setConversationBackground: (next) => {
-      background = next
-      notifySet(backgroundListeners)
-    },
   }
 }
 
@@ -438,66 +424,31 @@ test('useScreenParams: null outside a provided scope; inside it forwards params 
   void host
 })
 
-test('useConversationBackground: port snapshot forwards verbatim; absent host aggregation reports unknown (never fabricates)', { timeout: 60_000 }, () => {
-  const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
-  const byConversation = new Map<number, { active: boolean; summary: string }>([
-    [7, { active: true, summary: '2 Running' }],
-  ])
-  let fromPort: { unknown: boolean; active: boolean | undefined; summary: string | undefined } | undefined
-  let fromAbsentHost: { unknown: boolean; size: number } | undefined
-  function PortProbe(): React.ReactNode {
-    const snapshot = SDK.useConversationBackground()
-    const entry = snapshot.byConversation.get(7)
-    fromPort = { unknown: snapshot.unknown, active: entry?.active, summary: entry?.summary }
-    return null
-  }
-  function AbsentProbe(): React.ReactNode {
-    const snapshot = SDK.useConversationBackground()
-    fromAbsentHost = { unknown: snapshot.unknown, size: snapshot.byConversation.size }
-    return null
-  }
-  const port = makePort(log)
-  const portWithBackground = makePort(log, { conversationBackground: { unknown: false, byConversation } })
-  const withBackground = mount(
-    e(SDK.PluginClientHostContext.Provider, { value: portWithBackground },
-      e(PortProbe)),
-  )
-  assert.equal(fromPort!.unknown, false, 'the snapshot forwards the host aggregation as-is')
-  assert.equal(fromPort!.active, true)
-  assert.equal(fromPort!.summary, '2 Running')
-  const withoutBackground = mount(e(SDK.PluginClientHostContext.Provider, { value: port }, e(AbsentProbe)))
-  assert.equal(fromAbsentHost!.unknown, true, 'a host without the aggregation reports unknown')
-  assert.equal(fromAbsentHost!.size, 0, 'the absent-host fallback index is empty, never fabricated')
-  act(() => { void withBackground.root.unmount() })
-  act(() => { void withoutBackground.root.unmount() })
-})
-
-test('useHostModels: throws explicitly without the handles context; empty handles report unknown (undefined, never fabricated)', { timeout: 60_000 }, () => {
+test('useHostModels: throws explicitly without host context; absent capability reports unknown (undefined, never fabricated)', { timeout: 60_000 }, () => {
   const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
   function Probe(): React.ReactNode {
     void SDK.useHostModels()
     return null
   }
   assert.throws(
-    () => renderToString(e(SDK.PluginClientHostContext.Provider, { value: makePort(log) }, e(Probe))),
-    /useHostModels must be called inside <PluginClientHostHandlesContext\.Provider>/,
-    'useHostModels outside the handles context throws explicitly (never silently degraded)',
+    () => renderToString(e(Probe)),
+    /usePluginClientHost must be called inside <PluginClientHostContext\.Provider>/,
+    'useHostModels outside host context throws explicitly (never silently degraded)',
   )
   const seen: { slice?: SDK.HostModelsSlice } = {}
   const readSlice = (): SDK.HostModelsSlice | undefined => seen.slice
-  function HandlesProbe(): React.ReactNode {
+  function AbsentProbe(): React.ReactNode {
     seen.slice = SDK.useHostModels()
     return null
   }
   const { root } = mount(
-    e(SDK.PluginClientHostContext.Provider, { value: makePort(log) },
-      e(SDK.PluginClientHostHandlesContext.Provider, { value: {} }, e(HandlesProbe))),
+    e(SDK.PluginClientHostContext.Provider, { value: makePort(log) }, e(AbsentProbe)),
   )
   assert.ok(readSlice() === undefined, 'a host that injects no model capability reports unknown (undefined), never an empty catalog')
   act(() => { void root.unmount() })
 })
 
-test('useHostModels: isolated from main port value churn; catalog revisions re-render exactly once; three-state semantics honest', { timeout: 60_000 }, () => {
+test('useHostModels: catalog revisions re-render exactly once; three-state semantics honest', { timeout: 60_000 }, () => {
   const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
   const entries: ReadonlyArray<SDK.HostModelEntry> = [
     { id: 'openai/gpt-4o', provider: 'openai', modelId: 'gpt-4o', available: true, thinkingLevels: ['off', 'high'] },
@@ -508,13 +459,15 @@ test('useHostModels: isolated from main port value churn; catalog revisions re-r
   const empty: SDK.HostModelsSlice = { models: [] }
   let current: SDK.HostModelsSlice | undefined
   const listeners = new Set<() => void>()
-  const handles: SDK.PluginClientHostHandles = {
-    getModels: () => current,
-    subscribeModels: (listener) => {
-      listeners.add(listener)
-      return () => listeners.delete(listener)
+  const port = makePort(log, {
+    overrides: {
+      getModels: () => current,
+      subscribeModels: (listener) => {
+        listeners.add(listener)
+        return () => listeners.delete(listener)
+      },
     },
-  }
+  })
   let renders = 0
   const seen: { slice?: SDK.HostModelsSlice } = {}
   const readSlice = (): SDK.HostModelsSlice | undefined => seen.slice
@@ -523,28 +476,13 @@ test('useHostModels: isolated from main port value churn; catalog revisions re-r
     seen.slice = SDK.useHostModels()
     return null
   })
-  const { root } = mount(
-    e(SDK.PluginClientHostContext.Provider, { value: makePort(log) },
-      e(SDK.PluginClientHostHandlesContext.Provider, { value: handles }, e(Probe))),
-  )
+  const { root } = mount(e(SDK.PluginClientHostContext.Provider, { value: port }, e(Probe)))
   assert.equal(renders, 1, 'initial mount renders once')
   assert.ok(readSlice() === undefined, 'pre-first-load snapshot is unknown (undefined), never an empty catalog')
 
-  // P0.2: unrelated main port value revisions (streaming frames rebuild the port object) must not re-render the probe.
-  for (let i = 0; i < 3; i += 1) {
-    act(() => {
-      root.render(
-        e(SDK.PluginClientHostContext.Provider, { value: makePort(log, { conversations: [{ id: i, title: `c${i}`, tags: [], profileId: 'p' } as unknown as ConversationSummary] }) },
-          e(SDK.PluginClientHostHandlesContext.Provider, { value: handles }, e(Probe))),
-      )
-    })
-  }
-  assert.equal(renders, 1, 'main port value churn never re-renders useHostModels consumers (isolation contract)')
-  assert.ok(readSlice() === undefined, 'value stays unknown across unrelated port revisions')
-
   // Same-reference notification: useSyncExternalStore re-checks the snapshot and skips re-rendering.
   current = loading
-  assert.ok(handles.getModels?.() === loading && handles.getModels?.() === loading, 'repeated getModels calls return the same reference for the same underlying state')
+  assert.ok(port.getModels?.() === loading && port.getModels?.() === loading, 'repeated getModels calls return the same reference for the same underlying state')
   act(() => { for (const listener of [...listeners]) listener() })
   assert.equal(renders, 2, 'a catalog revision with a new reference re-renders exactly once')
   assert.ok(readSlice() === loading, 'the revision forwards the new slice reference verbatim')
@@ -560,82 +498,6 @@ test('useHostModels: isolated from main port value churn; catalog revisions re-r
   act(() => { for (const listener of [...listeners]) listener() })
   const emptyRead = readSlice()
   assert.ok(emptyRead === empty && emptyRead.models.length === 0, 'a loaded-but-empty catalog is a slice with models: [] — strictly distinct from the unknown state')
-  act(() => { void root.unmount() })
-})
-
-test('useScreenLocation: isolated from main port value churn; structured pane facts are truth (never loading state); absent capability reports undefined', { timeout: 60_000 }, () => {
-  const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
-  const screenOnly: SDK.ScreenLocationSnapshot = { screen: { pluginId: 'builtin:apps', screenId: 'catalog', params: { tab: 'all' } } }
-  const withSplit: SDK.ScreenLocationSnapshot = {
-    screen: { pluginId: 'builtin:apps', screenId: 'catalog', params: {} },
-    split: { pluginId: 'builtin:swarm', screenId: 'board', params: { grp: 'g1' } },
-  }
-  let current: SDK.ScreenLocationSnapshot | undefined
-  const listeners = new Set<() => void>()
-  const handles: SDK.PluginClientHostHandles = {
-    getScreenLocation: () => current,
-    subscribeScreenLocation: (listener) => {
-      listeners.add(listener)
-      return () => listeners.delete(listener)
-    },
-  }
-  function LocationProbe(): React.ReactNode {
-    void SDK.useScreenLocation()
-    return null
-  }
-  assert.throws(
-    () => renderToString(e(SDK.PluginClientHostContext.Provider, { value: makePort(log) }, e(LocationProbe))),
-    /useScreenLocation must be called inside <PluginClientHostHandlesContext\.Provider>/,
-    'useScreenLocation outside the handles context throws explicitly',
-  )
-  const absentSeen: { loc?: SDK.ScreenLocationSnapshot } = {}
-  const readAbsentLoc = (): SDK.ScreenLocationSnapshot | undefined => absentSeen.loc
-  function AbsentProbe(): React.ReactNode {
-    absentSeen.loc = SDK.useScreenLocation()
-    return null
-  }
-  const absent = mount(
-    e(SDK.PluginClientHostContext.Provider, { value: makePort(log) },
-      e(SDK.PluginClientHostHandlesContext.Provider, { value: {} }, e(AbsentProbe))),
-  )
-  assert.ok(readAbsentLoc() === undefined, 'a host that has not wired the location capability reports undefined (additive adoption), never a fabricated location')
-  act(() => { void absent.root.unmount() })
-
-  let renders = 0
-  const seen: { loc?: SDK.ScreenLocationSnapshot } = {}
-  const readLoc = (): SDK.ScreenLocationSnapshot | undefined => seen.loc
-  const Probe = React.memo(function LocationRevisionProbe(): React.ReactNode {
-    renders += 1
-    seen.loc = SDK.useScreenLocation()
-    return null
-  })
-  const { root } = mount(
-    e(SDK.PluginClientHostContext.Provider, { value: makePort(log) },
-      e(SDK.PluginClientHostHandlesContext.Provider, { value: handles }, e(Probe))),
-  )
-  assert.equal(renders, 1)
-  assert.ok(readLoc() === undefined, 'pre-wire snapshot is unknown')
-  current = screenOnly
-  act(() => { for (const listener of [...listeners]) listener() })
-  assert.ok(readLoc() === screenOnly, 'the location snapshot forwards verbatim')
-  const onlyRead = readLoc()
-  assert.ok(onlyRead?.split === undefined, 'no split pane open is an honest undefined member, not a fabricated zero-param pane')
-  assert.deepEqual(onlyRead?.screen?.params, { tab: 'all' }, 'primary pane params carry the sp.* truth')
-
-  current = withSplit
-  act(() => { for (const listener of [...listeners]) listener() })
-  const splitRead = readLoc()
-  assert.ok(splitRead === withSplit && splitRead.split?.screenId === 'board', 'split pane facts propagate when a split opens')
-
-  const churnPort = makePort(log, { conversations: [{ id: 99, title: 'c99', tags: [], profileId: 'p' } as unknown as ConversationSummary] })
-  act(() => {
-    root.render(
-      e(SDK.PluginClientHostContext.Provider, { value: churnPort },
-        e(SDK.PluginClientHostHandlesContext.Provider, { value: handles }, e(Probe))),
-    )
-  })
-  assert.equal(renders, 3, 'main port value churn never re-renders useScreenLocation consumers (isolation contract)')
-  assert.ok(readLoc() === withSplit, 'the pre-churn snapshot stays intact (no notification, no re-read)')
   act(() => { void root.unmount() })
 })
 
@@ -1367,7 +1229,6 @@ test('streaming conversationLives frames only re-render the matching useConversa
       2: { id: 2, entries: [] } as unknown as ConversationDetail,
     },
     pluginDocs: { 'p1/state': { v: 1 }, 'p2/other': { v: 2 } },
-    conversationBackground: { unknown: false, byConversation: new Map() },
   })
   const ctx = SDK.createPluginClientContext(reactive.port, 'p1', 1)
 
@@ -1380,7 +1241,6 @@ test('streaming conversationLives frames only re-render the matching useConversa
     docMissing: 0,
     locale: 0,
     pluginCtx: 0,
-    background: 0,
     slot: 0,
     copyBtn: 0,
   }
@@ -1429,11 +1289,6 @@ test('streaming conversationLives frames only re-render the matching useConversa
     observedTheme = c.theme
     return null
   })
-  const BackgroundProbe = React.memo(function BackgroundProbe(): React.ReactNode {
-    counts.background += 1
-    void SDK.useConversationBackground()
-    return null
-  })
   const SlotProbe = React.memo(function SlotProbe(): React.ReactNode {
     counts.slot += 1
     return e(SDK.PluginSlot, { name: 'owner/zone', ownerPluginId: 'owner', conversationId: 1 })
@@ -1454,7 +1309,6 @@ test('streaming conversationLives frames only re-render the matching useConversa
         e(DocMissingProbe),
         e(LocaleProbe),
         e(PluginCtxProbe),
-        e(BackgroundProbe),
         e(SlotProbe),
         e(CopyBtnProbe))),
   )
@@ -1477,7 +1331,6 @@ test('streaming conversationLives frames only re-render the matching useConversa
     assert.equal(counts.docP1, baseline.docP1, 'usePluginDoc is isolated from live frames')
     assert.equal(counts.locale, baseline.locale, 'usePluginLocale is isolated from live frames')
     assert.equal(counts.pluginCtx, baseline.pluginCtx, 'usePluginContext is isolated from live frames')
-    assert.equal(counts.background, baseline.background, 'useConversationBackground is isolated from live frames')
     assert.equal(counts.slot, baseline.slot, 'PluginSlot is isolated from live frames')
     assert.equal(counts.copyBtn, baseline.copyBtn, 'SDK UI controls (CopyButton) are isolated from live frames')
 

@@ -25,6 +25,7 @@ export function buildModelPickerControlCopy(t: WebMessageTranslator): ModelPicke
     listHeader: t('composer.model.listHeader'),
     navHint: t('composer.kbd.navConfirm'),
     emptyCatalog: t('composer.model.emptyCatalog'),
+    openModelsCenter: t('composer.model.openModelsCenter'),
     noMatches: t('composer.model.noMatches'),
     thinkingHeader: t('composer.model.thinkingHeader'),
     rowDefaultTitle: t('composer.model.rowDefaultTitle'),
@@ -44,6 +45,7 @@ export function buildModelPickerControlCopy(t: WebMessageTranslator): ModelPicke
 export function useModelPickerControlAdapter(conversationId?: number): {
   copy: ModelPickerControlCopy
   onNotice: ((message: string, tone: 'info' | 'warning' | 'error') => void) | undefined
+  onOpenModelsCenter: (() => void) | undefined
 } {
   const { t } = useWebLocale()
   const actions = useOptionalStoreActions()
@@ -59,5 +61,9 @@ export function useModelPickerControlAdapter(conversationId?: number): {
     },
     [actions, conversationId],
   )
-  return { copy, onNotice }
+  const onOpenModelsCenter = useMemo(
+    () => (actions ? () => actions.openTarget({ kind: 'models' }) : undefined),
+    [actions],
+  )
+  return { copy, onNotice, onOpenModelsCenter }
 }

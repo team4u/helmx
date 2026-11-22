@@ -183,7 +183,7 @@ export function PluginCenter({
   }
 
   return (
-    <div className={`plugin-center${isSplit ? ' is-split' : ''}`} data-view="plugin-center">
+    <div className={`primary-center${isSplit ? ' is-split' : ''}`} data-view="plugin-center">
       {/* Top bar: title and actions */}
       <div className="primary-center-topbar pane-topbar">
         <div className="primary-center-title-wrap pane-title-group">
@@ -216,10 +216,10 @@ export function PluginCenter({
       </div>
 
       {/* Search toolbar */}
-      <div className="plugin-center-toolbar">
+      <div className="primary-center-toolbar">
         <SearchBox
-          className="plugin-search-box"
-          clearButtonClassName="btn btn-ghost btn-sm plugin-search-clear"
+          className="primary-search-box"
+          clearButtonClassName="btn btn-ghost btn-sm primary-search-clear"
           value={query}
           onChange={setQuery}
           placeholder={t('plugins.center.searchPlaceholder')}
@@ -258,9 +258,9 @@ export function PluginCenter({
       </div>
 
       {/* Main viewport: responsive card grid or empty state */}
-      <div className="plugin-center-content">
+      <div className="primary-center-content">
         {filteredPlugins.length > 0 ? (
-          <div className="plugin-center-grid">
+          <div className="primary-center-grid">
             {filteredPlugins.map((plugin) => (
               <PluginCard
                 key={plugin.id}
@@ -273,12 +273,12 @@ export function PluginCenter({
             ))}
           </div>
         ) : (
-          <div className="plugin-center-empty">
-            <div className="plugin-center-empty-icon">
+          <div className="primary-center-empty">
+            <div className="primary-center-empty-icon">
               <HelmxIcon name="search" size={28} />
             </div>
-            <div className="plugin-center-empty-text">{t('plugins.center.emptyTitle')}</div>
-            <div className="plugin-center-empty-hint text-subtle">
+            <div className="primary-center-empty-text">{t('plugins.center.emptyTitle')}</div>
+            <div className="primary-center-empty-hint text-subtle">
               {t('plugins.center.emptyHint')}
             </div>
             {(query || statusFilter !== 'all') && (

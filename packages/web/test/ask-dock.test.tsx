@@ -323,4 +323,77 @@ describe("ask-dock", () => {
       host2.remove()
     }
   })
+
+  test('description stays visible with context terminalSnapshot, fenced snapshot strips delimiters, and single-confirm supports 1-click Approve/Reject', { timeout: 60_000 }, async () => {
+    installFetch()
+    const richAsks: AskSpec[] = [
+      {
+        id: 'ask-ctx',
+        conversationId: 1,
+        title: 'Run shell command?',
+        description: 'Needs confirmation before running rm -rf build/',
+        context: { terminalSnapshot: '$ ls -la\nbuild/' },
+        fields: [{ name: 'approve', label: 'Decision', type: 'confirm', required: true }],
+        status: 'pending',
+        expectedStateSeq: 19,
+        createdAt: 100,
+      } as AskSpec,
+      {
+        id: 'ask-fence',
+        conversationId: 1,
+        title: 'Review output',
+        description: 'Summary line before fence\n\n```text\nline-1\nline-2\n```',
+        fields: [{ name: 'note', label: 'Note', type: 'text', required: true }],
+        status: 'pending',
+        createdAt: 200,
+      },
+    ]
+    await renderAskDock(makeStore({ pendingAsks: richAsks }), 1)
+    const cards = [...document.querySelectorAll<HTMLFormElement>('form.ask-dock')]
+    assert.equal(cards.length, 2, 'AskCard renders as a semantic <form>')
+
+    // 1. Context snapshot does NOT hide ask.description; single-confirm hides redundant Submit button
+    const ctxCard = cards[0]!
+    assert.match(ctxCard.querySelector('.ask-dock-desc')?.textContent ?? '', /Needs confirmation before running rm -rf build\//)
+    const ctxSubmitBtns = [...ctxCard.querySelectorAll('.ask-dock-actions button')].filter((b) =>
+      b.textContent?.includes('Submit'),
+    )
+    assert.equal(ctxSubmitBtns.length, 0, 'single-confirm ask omits redundant Submit button')
+
+    // 1-click Approve submits immediately with CAS watermark
+    const approveBtn = [...ctxCard.querySelectorAll<HTMLButtonElement>('.ask-dock-confirm-actions button')].find((b) =>
+      b.textContent?.includes('Approve'),
+    )!
+    assert.ok(approveBtn !== undefined)
+    await act(async () => {
+      approveBtn.click()
+    })
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)) })
+    assert.equal(posts.length, 1)
+    assert.equal(posts[0]!.url, '/api/asks/ask-ctx/answer')
+    assert.deepEqual(posts[0]!.body, { answers: { approve: 'true' }, expectedStateSeq: 19 })
+
+    // 2. Fenced snapshot strips fence delimiters and keeps prefix description; Enter submits form
+    const fenceCard = cards[1]!
+    assert.equal(fenceCard.querySelector('.ask-dock-desc')?.textContent, 'Summary line before fence')
+    const snapToggle = fenceCard.querySelector<HTMLButtonElement>('.ask-dock-snapshot-btn')!
+    await act(async () => {
+      snapToggle.click()
+    })
+    const snapText = fenceCard.querySelector('.ask-dock-snapshot-pre code')?.textContent ?? ''
+    assert.equal(snapText, 'line-1\nline-2', 'fenced snapshot strips opening and closing triple backticks')
+    assert.equal(snapText.includes('```'), false)
+
+    const noteInput = fenceCard.querySelector<HTMLInputElement>('input.input')!
+    await act(async () => {
+      setInputValue(noteInput, 'looks good')
+    })
+    await act(async () => {
+      fenceCard.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    })
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)) })
+    assert.equal(posts.length, 2)
+    assert.equal(posts[1]!.url, '/api/asks/ask-fence/answer')
+    assert.deepEqual(posts[1]!.body, { answers: { note: 'looks good' } })
+  })
 })

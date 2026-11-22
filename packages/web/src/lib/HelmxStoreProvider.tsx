@@ -3,7 +3,6 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import * as ReactDom from 'react-dom'
 import * as ReactDomClient from 'react-dom/client'
 import * as ReactJsxRuntime from 'react/jsx-runtime'
-import * as LucideReact from 'lucide-react'
 import * as HelmxPluginClient from '@helmx/plugin-client'
 import { usePluginDocValue } from '@helmx/plugin-client'
 import { collectDrawerConversationIds } from './drawer-stack-model.js'
@@ -300,7 +299,6 @@ export function HelmxStoreProvider({
     w.__helmx_shared_react_dom = ReactDom
     w.__helmx_shared_react_dom_client = ReactDomClient
     w.__helmx_shared_react_jsx_runtime = ReactJsxRuntime
-    w.__helmx_shared_lucide_react = LucideReact
     w.__helmx_shared_plugin_client = HelmxPluginClient
     return () => {
       delete w.__HELMX_SHARED__

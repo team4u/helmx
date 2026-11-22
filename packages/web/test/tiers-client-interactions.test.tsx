@@ -247,9 +247,29 @@ describe("tiers-client-interactions", () => {
       )
       assert.deepEqual(afterApplyIds, ['coder'], 'applying a template must sync draft rows even when local edits were dirty')
 
-      // Delete first row's template (`budget`)
+      // Delete first row's template (`budget`) requires ConfirmDialog confirmation
       await act(async () => {
         findButton(fullMount.host, 'Delete').click()
+      })
+      assert.equal(ctx.actionCalls.length, 1, 'clicking Delete must wait for ConfirmDialog confirmation')
+      let confirmDialog = document.body.querySelector('[role="alertdialog"]')
+      assert.ok(confirmDialog !== null, 'template Delete opens AlertDialog confirmation')
+      await act(async () => {
+        findButton(confirmDialog!, 'Cancel').click()
+      })
+      assert.equal(ctx.actionCalls.length, 1, 'cancelling confirmation dialog must not call delete_template')
+
+      await act(async () => {
+        findButton(fullMount.host, 'Delete').click()
+      })
+      confirmDialog = document.body.querySelector('[role="alertdialog"]')
+      assert.ok(confirmDialog !== null)
+      const confirmDeleteBtn = Array.from(confirmDialog.querySelectorAll<HTMLButtonElement>('button')).find((b) =>
+        b.className.includes('btn-danger'),
+      )
+      assert.ok(confirmDeleteBtn !== undefined)
+      await act(async () => {
+        confirmDeleteBtn.click()
       })
       assert.deepEqual(ctx.actionCalls[1], { actionId: 'delete_template', input: { id: 'budget' } })
 

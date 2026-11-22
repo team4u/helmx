@@ -12,6 +12,7 @@ import type { ReactNode } from 'react'
 import type { ScreenProps } from '@helmx/protocol'
 import {
   Callout,
+  ConfirmDialog,
   EmptyState,
   HelmxIcon,
   KvGrid,
@@ -43,6 +44,7 @@ import {
 import {
   TIERS_ACTIVE_SECTION,
   TIERS_ADD_ROW,
+  TIERS_CANCEL,
   TIERS_CLEAR_MODEL,
   TIERS_COL_ACTIONS,
   TIERS_COL_ROSTER,
@@ -83,6 +85,7 @@ import {
   TIERS_TEMPLATE_ACTIVE_BADGE,
   TIERS_TEMPLATE_APPLY,
   TIERS_TEMPLATE_DELETE,
+  TIERS_TEMPLATE_DELETE_CONFIRM_TITLE,
   TIERS_TEMPLATE_DESC_LABEL,
   TIERS_TEMPLATE_DESC_PLACEHOLDER,
   TIERS_TEMPLATE_EMPTY,
@@ -97,6 +100,7 @@ import {
   tiersActionFailed,
   tiersPickModelWithHint,
   tiersTemplateAppliedNotice,
+  tiersTemplateDeleteConfirmBody,
   tiersTemplateSavedNotice,
 } from './copy.ts'
 import './styles.css'
@@ -121,6 +125,7 @@ export function TiersManagerScreen(_props: ScreenProps): ReactNode {
   const [tplId, setTplId] = useState('')
   const [tplName, setTplName] = useState('')
   const [tplDesc, setTplDesc] = useState('')
+  const [pendingDeleteTemplate, setPendingDeleteTemplate] = useState<TierTemplateView | null>(null)
   const nextRowCounter = useRef(1)
   const dirtyRef = useRef(false)
 
@@ -516,7 +521,7 @@ export function TiersManagerScreen(_props: ScreenProps): ReactNode {
                             type="button"
                             className="btn btn-ghost btn-sm"
                             disabled={busy}
-                            onClick={() => void handleDeleteTemplate(tpl.id)}
+                            onClick={() => setPendingDeleteTemplate(tpl)}
                           >
                             <span>{t(TIERS_TEMPLATE_DELETE)}</span>
                           </button>
@@ -530,6 +535,28 @@ export function TiersManagerScreen(_props: ScreenProps): ReactNode {
           </div>
         )}
       </ScreenSection>
+
+      <ConfirmDialog
+        open={pendingDeleteTemplate !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingDeleteTemplate(null)
+        }}
+        title={t(TIERS_TEMPLATE_DELETE_CONFIRM_TITLE)}
+        description={
+          pendingDeleteTemplate !== null
+            ? tiersTemplateDeleteConfirmBody(pendingDeleteTemplate.name, pendingDeleteTemplate.id, locale)
+            : ''
+        }
+        confirmText={t(TIERS_TEMPLATE_DELETE)}
+        cancelText={t(TIERS_CANCEL)}
+        danger
+        onConfirm={() => {
+          const target = pendingDeleteTemplate
+          setPendingDeleteTemplate(null)
+          if (target !== null) void handleDeleteTemplate(target.id)
+        }}
+        onCancel={() => setPendingDeleteTemplate(null)}
+      />
     </Screen>
   )
 }

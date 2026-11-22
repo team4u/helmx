@@ -170,6 +170,8 @@ export interface ModelPickerControlCopy {
   navHint: string
   /** Loaded catalog with zero usable models. */
   emptyCatalog: string
+  /** Optional button label to jump to Models & credentials from an empty catalog. */
+  openModelsCenter?: string
   /** Search matched nothing. */
   noMatches: string
   /** Level-chip group aria-label. */
@@ -198,6 +200,7 @@ export const DEFAULT_MODEL_PICKER_COPY: Readonly<ModelPickerControlCopy> = Objec
   listHeader: 'Model list',
   navHint: '↑↓ select · Enter confirm',
   emptyCatalog: 'No models available; configure a provider key in Models & credentials first',
+  openModelsCenter: 'Configure models',
   noMatches: 'No matching models',
   thinkingHeader: 'Thinking level',
   rowDefaultTitle: 'Use {model} (thinking level follows the default)',

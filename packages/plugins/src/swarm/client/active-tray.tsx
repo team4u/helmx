@@ -2,7 +2,6 @@
  * Dedicated composer-dock active-tray surface entrypoint for builtin:swarm
  * (`SwarmActiveTray`). Decoupled from the heavy workbench panel.
  */
-import './styles-active-tray.css'
 import type { ReactNode } from 'react'
 import type { ComposerScopeProps } from '@helmx/protocol'
 import { SwarmActiveTray as SwarmActiveTrayImpl } from './SwarmActiveTray.tsx'

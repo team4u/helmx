@@ -157,6 +157,9 @@
 .composer-popover .popover-item.composer-model-empty {
   cursor: default;
   color: var(--fg-subtle);
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
 }
 .composer-popover .popover-item.composer-model-empty:hover {
   background: transparent;
