@@ -2,11 +2,12 @@
  * Pure display model for the Composer read-only conversation duration readout
  * (shared by Composer.tsx and unit tests; zero React/DOM dependencies).
  *
- * Honesty & deduplication rules:
+ * Honesty & deduplication rules (compact text carries cross-turn aggregates only; per-turn
+ * elapsed time already lives in the timeline — live stopwatch while generating, turn footer
+ * duration once settled — so it is never duplicated here):
  * - `blocked` with valid `waitingMs`: `等待审批 <waiting>` (appends `· 累计 <total>` when totalRunMs > 0), warn tone;
- * - `working` with valid `currentRunMs`:
- *   - round 1 deduplication (`settledRunMs === 0`): `本轮 <current>` only;
- *   - round 2+ (`settledRunMs > 0`): `本轮 <current> · 累计 <total>`;
+ * - `working`: only when `settledRunMs > 0`, show live `累计 <total>` (settled + in-flight);
+ *   first in-flight turn with no settled history renders nothing;
  * - idle / done / error (or active without a start anchor): only when `settledRunMs > 0`, show `累计 <settled>`;
  *   otherwise return `null` (never fabricate `0s` when start anchors or history are absent);
  * - Tooltip breakdown lists recorded total run, current turn (if active), waiting duration (if blocked),
@@ -84,14 +85,12 @@ export function conversationDurationLabel(
     }
     tone = 'warn'
   } else if (timing.isRunning && timing.currentRunMs !== undefined) {
-    const turnText = formatStopwatchMs(timing.currentRunMs)
-    if (timing.settledRunMs === 0) {
-      text = t('composer.duration.currentTurn', { duration: turnText })
+    // 生成中：本轮秒表由时间线 live indicator 独占，状态行只承载跨回合聚合；
+    // 实时累计 = 已结算 + 在途（totalRunMs），首轮无历史则不显示（不伪造 0s）。
+    if (timing.settledRunMs > 0 && timing.totalRunMs !== undefined) {
+      text = t('composer.duration.total', { duration: formatStopwatchMs(timing.totalRunMs) })
     } else {
-      text = t('composer.duration.currentTurnWithTotal', {
-        turn: turnText,
-        total: formatStopwatchMs(timing.totalRunMs),
-      })
+      return null
     }
   } else if (timing.settledRunMs > 0) {
     text = t('composer.duration.total', { duration: formatDurationMs(timing.settledRunMs) })

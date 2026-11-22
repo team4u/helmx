@@ -322,11 +322,6 @@ export const composerMessages = {
     en: 'Waiting {waiting} · Total {total}',
     'zh-CN': '等待审批 {waiting} · 累计 {total}',
   },
-  'composer.duration.currentTurn': { en: 'Turn {duration}', 'zh-CN': '本轮 {duration}' },
-  'composer.duration.currentTurnWithTotal': {
-    en: 'Turn {turn} · Total {total}',
-    'zh-CN': '本轮 {turn} · 累计 {total}',
-  },
   'composer.duration.total': { en: 'Total {duration}', 'zh-CN': '累计 {duration}' },
   'composer.duration.tooltipTotalRun': { en: 'Total run: {duration}', 'zh-CN': '累计运行：{duration}' },
   'composer.duration.tooltipCurrentRun': { en: 'Current turn: {duration}', 'zh-CN': '本轮运行：{duration}' },
