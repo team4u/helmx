@@ -17,6 +17,10 @@
   gap: 10px;
   min-width: 0;
   flex-wrap: wrap;
+  /* Why 伸展吃满剩余宽度：搜索框 flex-basis(180px) 不参与本容器固有尺寸计算
+   * （按内容贡献约 176px），按内容定宽会比单行需求恒窄 4px，把行尾的分组
+   * 下拉挤到第二行（与视口宽度无关）；伸展后单行必然放下全部筛选。 */
+  flex: 1 1 auto;
 }
 
 .overview-filter-select {
