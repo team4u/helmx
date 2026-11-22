@@ -171,12 +171,18 @@ export interface PluginClientHostPort {
   // ---- Plugin docs ----
   /** Keyed read of a plugin public doc (`${pluginId}/${docName}`; undefined when absent). */
   getPluginDocValue(docKey: string): unknown
+  /** Optional existence check for a cached public doc (distinguishes unloaded from loaded). */
+  hasPluginDoc?(docKey: string): boolean
   /** Subscribe to revisions of a single `${pluginId}/${docName}` public doc. */
   subscribePluginDoc(docKey: string, listener: () => void): () => void
   ensurePluginDoc(pluginId: string, docName: string): Promise<unknown>
+  /** Explicit manual retry for a failed/stale public doc (clears retry cooldown and refetches immediately). */
+  retryPluginDoc?(pluginId: string, docName: string): Promise<unknown>
   getPluginSessionDoc(pluginId: string, docName: string, conversationId: number): Promise<unknown>
   subscribeSessionDoc(key: PluginSessionDocKey, listener: () => void): () => void
   getSessionDocState(key: PluginSessionDocKey): PluginSessionDocState
+  /** Explicit manual reconnect for a conversation-scoped session doc subscription. */
+  retrySessionDoc?(key: PluginSessionDocKey): void
 
   // ---- Actions & input ----
   invokePluginAction(pluginId: string, actionId: string, input: unknown, conversationId?: number): Promise<unknown>
@@ -189,6 +195,8 @@ export interface PluginClientHostPort {
   openTarget(target: string, options?: { split?: boolean }): void
   openConversationDrawer(conversationId: number): void
   openArtifactPreview(artifactId: string, conversationId?: number): void
+  /** Atomic workbench open + tab selection + optional transient focus params. */
+  openWorkbench?(options?: { tab?: string; conversationId?: number; params?: Record<string, unknown> }): void
   setWorkbenchOpen(open: boolean): void
   setWorkbenchTab(tab: string): void
   notify(message: string, tone: 'info' | 'warning' | 'error', conversationId?: number): void

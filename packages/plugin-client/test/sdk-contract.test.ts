@@ -65,8 +65,10 @@ test('host-facing symbols (port / context / factory / explicit-addressing hooks)
     'PluginClientContext',
     'usePluginContext',
     'createPluginClientContext',
+    'resolveWorkbenchPanelTabId',
     'usePluginDocValue',
-    'usePluginSessionDocState',
+    'usePluginDocValueState',
+    'usePluginSessionDocDiagnostics',
     'usePluginSessionDocValue',
     'ToolActivityContext',
     'useToolActivity',
@@ -619,10 +621,17 @@ test('createPluginClientContext: actions / input / navigation / notifications / 
   ctx.openConversationDrawer(3)
   ctx.openArtifact('art-1')
   ctx.openWorkbench('plugin:builtin:memory/main')
+  ctx.openWorkbench('tasks')
+  ctx.openWorkbench('artifacts')
   ctx.closeWorkbench()
   assert.deepEqual(log.drawers, [3])
   assert.deepEqual(log.artifacts, [{ artifactId: 'art-1', conversationId: 7 }], 'artifact preview inherits the current conversation')
-  assert.deepEqual(log.workbench, [true, 'plugin:builtin:memory/main', false])
+  assert.deepEqual(log.workbench, [
+    true, 'plugin:builtin:memory/main',
+    true, 'plugin:p1/tasks',
+    true, 'artifacts',
+    false,
+  ])
 
   ctx.notify('boom', 'error')
   assert.deepEqual(log.notices, [{ message: 'boom', tone: 'error', conversationId: 7 }])
@@ -645,6 +654,144 @@ test('createPluginClientContext: submitInput without conversation context reject
   await assert.rejects(() => ctx.submitInput('x'), /submitInput has no target conversation/, 'without a conversation, never drop silently')
   assert.throws(() => { void ctx.callAction('a', 1, { conversationId: 0 }) }, /must be a positive integer/, 'invalid conversation ID rejected synchronously')
   await assert.rejects(() => ctx.getPluginSessionDoc('runs'), /getPluginSessionDoc has no target conversation/)
+})
+
+test('createPluginClientContext.openWorkbench: resolves short local panelId, preserves host/explicit tabs, and forwards params atomically to port.openWorkbench', { timeout: 60_000 }, () => {
+  const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
+  const openCalls: Array<{ tab?: string; conversationId?: number; params?: Record<string, unknown> } | undefined> = []
+  const port = makePort(log, {
+    overrides: {
+      openWorkbench: (options) => {
+        openCalls.push(options)
+      },
+    },
+  })
+  const ctx = SDK.createPluginClientContext(port, 'builtin:workflow', 42)
+  ctx.openWorkbench('tasks', { runId: 'wf_1', nodeId: 'n1' })
+  ctx.openWorkbench('files')
+  ctx.openWorkbench('artifacts')
+  ctx.openWorkbench('plugin:builtin:swarm/groups', { groupId: 'g1' })
+  ctx.openWorkbench()
+
+  assert.deepEqual(openCalls, [
+    { tab: 'plugin:builtin:workflow/tasks', conversationId: 42, params: { runId: 'wf_1', nodeId: 'n1' } },
+    { tab: 'files', conversationId: 42 },
+    { tab: 'artifacts', conversationId: 42 },
+    { tab: 'plugin:builtin:swarm/groups', conversationId: 42, params: { groupId: 'g1' } },
+    { conversationId: 42 },
+  ])
+  assert.deepEqual(log.workbench, [], 'when port.openWorkbench is provided, legacy two-step open/tab setters are skipped')
+})
+
+test('usePluginDocState & usePluginSessionDocState: loading / ready / error transitions and manual retry', { timeout: 60_000 }, () => {
+  const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
+  const retriedPublic: Array<{ pluginId: string; docName: string }> = []
+  const retriedSession: SDK.PluginSessionDocKey[] = []
+  let sessionSnapshot: SDK.PluginSessionDocState = { hasValue: false, deleted: false, connected: false }
+  const sessionListeners = new Set<() => void>()
+
+  const reactive = createReactivePort(log, {
+    pluginDocs: {},
+    overrides: {
+      hasPluginDoc: (docKey) => docKey === 'p1/ready' || reactive.port.getPluginDocValue(docKey) !== undefined,
+      retryPluginDoc: (pluginId, docName) => {
+        retriedPublic.push({ pluginId, docName })
+        reactive.setLoadError(`doc:${pluginId}/${docName}`, undefined)
+        reactive.setPluginDoc(`${pluginId}/${docName}`, { recovered: true })
+        return Promise.resolve({ recovered: true })
+      },
+      subscribeSessionDoc: (_key, listener) => {
+        sessionListeners.add(listener)
+        return () => sessionListeners.delete(listener)
+      },
+      getSessionDocState: () => sessionSnapshot,
+      retrySessionDoc: (key) => {
+        retriedSession.push(key)
+        sessionSnapshot = { hasValue: true, deleted: false, connected: true, value: { seq: 9 } }
+        for (const fn of [...sessionListeners]) fn()
+      },
+    },
+  })
+
+  let docState: SDK.PluginDocState<{ recovered?: boolean }> | undefined
+  let docThin: { recovered?: boolean } | undefined
+  let sessState: SDK.PluginDocState<{ seq?: number }> | undefined
+  let sessThin: { seq?: number } | undefined
+  let noConvState: SDK.PluginDocState<unknown> | undefined
+
+  function Probe(): React.ReactNode {
+    docState = SDK.usePluginDocState<{ recovered?: boolean }>('items')
+    docThin = SDK.usePluginDoc<{ recovered?: boolean }>('items')
+    sessState = SDK.usePluginSessionDocState<{ seq?: number }>('runs', 12)
+    sessThin = SDK.usePluginSessionDoc<{ seq?: number }>('runs', { conversationId: 12 })
+    return e('div', null, `${docState.status}:${sessState.status}`)
+  }
+  function NoConvProbe(): React.ReactNode {
+    noConvState = SDK.usePluginSessionDocState('runs')
+    return e('div', null, noConvState.status)
+  }
+
+  const host = document.createElement('div')
+  let root: Root | undefined
+  act(() => {
+    root = createRoot(host)
+    root.render(
+      e(
+        SDK.PluginClientHostContext.Provider,
+        { value: reactive.port },
+        e(
+          SDK.PluginClientContext.Provider,
+          { value: SDK.createPluginClientContext(reactive.port, 'p1', 7) },
+          e(Probe),
+        ),
+        e(
+          SDK.PluginClientContext.Provider,
+          { value: SDK.createPluginClientContext(reactive.port, 'p1', undefined) },
+          e(NoConvProbe),
+        ),
+      ),
+    )
+  })
+
+  try {
+    // 1. Initial loading state before values arrive
+    assert.equal(docState?.status, 'loading')
+    assert.equal(docState?.data, undefined)
+    assert.equal(docThin, undefined)
+    assert.equal(sessState?.status, 'loading')
+    assert.equal(sessState?.data, undefined)
+    assert.equal(sessThin, undefined)
+    assert.equal(noConvState?.status, 'ready', 'without conversation context, no stream opens and status is ready')
+    assert.equal(noConvState?.data, undefined)
+
+    // 2. Error transitions for both public doc and session doc
+    act(() => {
+      reactive.setLoadError('doc:p1/items', 'HTTP 503')
+      sessionSnapshot = { hasValue: false, deleted: false, connected: false, error: 'stream broken' }
+      for (const fn of [...sessionListeners]) fn()
+    })
+    assert.equal(docState?.status, 'error')
+    assert.equal(docState?.error, 'HTTP 503')
+    assert.equal(sessState?.status, 'error')
+    assert.equal(sessState?.error, 'stream broken')
+    assert.equal(sessThin, undefined)
+
+    // 3. Explicit manual retry recovers both to ready
+    act(() => {
+      docState!.retry()
+      sessState!.retry()
+    })
+    assert.deepEqual(retriedPublic, [{ pluginId: 'p1', docName: 'items' }])
+    assert.deepEqual(retriedSession, [{ pluginId: 'p1', docName: 'runs', conversationId: 12 }])
+    assert.equal(docState?.status, 'ready')
+    assert.deepEqual(docState?.data, { recovered: true })
+    assert.deepEqual(docThin, { recovered: true })
+    assert.equal(sessState?.status, 'ready')
+    assert.deepEqual(sessState?.data, { seq: 9 })
+    assert.deepEqual(sessThin, { seq: 9 })
+  } finally {
+    act(() => root?.unmount())
+  }
 })
 
 // ---------------------------------------------------------------------------

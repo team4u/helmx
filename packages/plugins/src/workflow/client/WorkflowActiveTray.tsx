@@ -45,7 +45,6 @@ import { useElapsedNowMs, usePluginSessionDoc } from './hooks.ts'
 import { Icon } from './WorkflowIcon.tsx'
 import { buildActiveTraySummary, type ActiveTrayItem } from './model-active-tray.ts'
 import { resolveSubagentHeaderSnippet } from './model-subagent-card.ts'
-import { requestWorkbenchRunFocus } from './workbench-focus.ts'
 import {
   ACTION_ABORT,
   execConversationTitle,
@@ -163,8 +162,7 @@ function WorkflowActiveTrayRow(props: {
       return
     }
     if (item.runId !== undefined) {
-      requestWorkbenchRunFocus(props.rootConversationId, item.runId)
-      ctx.openWorkbench(`plugin:${ctx.pluginId}/tasks`)
+      ctx.openWorkbench('tasks', { runId: item.runId })
     }
   }
   const rowActivatable = item.conversationId !== undefined || item.runId !== undefined
@@ -330,8 +328,7 @@ export function WorkflowActiveTray(props: Partial<ComposerScopeProps>): ReactNod
           className="btn btn-xs dock-tray-workbench workflow-active-tray-workbench"
           onClick={() => {
             const singleRunId = summary.items.length === 1 ? summary.items[0]?.runId : undefined
-            if (singleRunId !== undefined) requestWorkbenchRunFocus(conversationId, singleRunId)
-            ctx.openWorkbench(`plugin:${ctx.pluginId}/tasks`)
+            ctx.openWorkbench('tasks', singleRunId !== undefined ? { runId: singleRunId } : undefined)
           }}
         >
           <Icon name="git-branch" size={11} />

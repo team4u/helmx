@@ -95,6 +95,7 @@ import type {
   StoreDomainKey,
   StoreListener,
   StoreUpdater,
+  WorkbenchParamsState,
   WorkbenchSlice,
 } from './store/types.js'
 
@@ -113,6 +114,7 @@ export type {
   StoreDomainKey,
   StoreListener,
   StoreUpdater,
+  WorkbenchParamsState,
   WorkbenchSlice,
 }
 
@@ -249,6 +251,7 @@ export class HelmxExternalStore {
       drawerStack: bootLocation.drawerStack,
       workbenchOpen: initialWbOpen,
       workbenchTab: initialWbTab,
+      workbenchParams: null,
       activeModal: bootLocation.activeModal,
       highlightedEntry: null,
     }
@@ -260,6 +263,7 @@ export class HelmxExternalStore {
     this.workbenchSlice = {
       workbenchOpen: this.navState.workbenchOpen,
       workbenchTab: this.navState.workbenchTab,
+      workbenchParams: null,
     }
     this.locationStateCache = {
       primaryTarget: this.navState.primaryTarget,
@@ -505,6 +509,7 @@ export class HelmxExternalStore {
   getHighlightedEntryForConversation = (id: number): { conversationId: number; entryId: string } | null =>
     this.navState.highlightedEntry?.conversationId === id ? this.navState.highlightedEntry : null
   getLoadError = (key: string): string | undefined => this.loadErrorsState[key]
+  hasPluginDoc = (docKey: string): boolean => Object.hasOwn(this.liveState.pluginDocs, docKey)
   getPluginDoc = (docKey: string): unknown =>
     Object.hasOwn(this.liveState.pluginDocs, docKey) ? this.liveState.pluginDocs[docKey] : undefined
 
@@ -841,6 +846,9 @@ export class HelmxExternalStore {
     if (top?.kind === 'workbench') {
       next.workbenchTab = top.tab
     }
+    if (!next.workbenchOpen || (next.workbenchParams !== null && next.workbenchParams.tab !== next.workbenchTab)) {
+      next.workbenchParams = null
+    }
     const primaryChanged = next.primaryTarget !== prev.primaryTarget
     const splitChanged = next.splitTarget !== prev.splitTarget
     const focusedChanged = next.focusedPanel !== prev.focusedPanel
@@ -848,7 +856,10 @@ export class HelmxExternalStore {
     const escChanged = next.pendingEscAbortConversationId !== prev.pendingEscAbortConversationId
     const drawerStackChanged = !isSameDrawerStack(prev.drawerStack, next.drawerStack)
     if (!drawerStackChanged) next.drawerStack = prev.drawerStack
-    const wbChanged = next.workbenchOpen !== prev.workbenchOpen || next.workbenchTab !== prev.workbenchTab
+    const wbChanged =
+      next.workbenchOpen !== prev.workbenchOpen ||
+      next.workbenchTab !== prev.workbenchTab ||
+      next.workbenchParams !== prev.workbenchParams
     const modalChanged = next.activeModal !== prev.activeModal
     const highlightChanged = next.highlightedEntry !== prev.highlightedEntry
 
@@ -887,6 +898,7 @@ export class HelmxExternalStore {
       this.workbenchSlice = {
         workbenchOpen: next.workbenchOpen,
         workbenchTab: next.workbenchTab,
+        workbenchParams: next.workbenchParams,
       }
       plan.domains.add('workbench')
     }
@@ -1036,6 +1048,7 @@ export class HelmxExternalStore {
         primaryTarget: { kind: 'profiles' },
         drawerStack: [],
         workbenchTab: DEFAULT_WORKBENCH_TAB,
+        workbenchParams: null,
         pendingEscAbortConversationId: null,
         highlightedEntry: null,
       },

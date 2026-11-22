@@ -90,6 +90,22 @@ function assertConversationId(id: number, label: string): void {
   }
 }
 
+const BUILTIN_WORKBENCH_TABS = new Set(['artifacts', 'files'])
+
+/**
+ * Resolves a plugin-facing workbench panel argument into the host workbench tab key:
+ * - empty / undefined -> undefined (open drawer without forcing a tab switch);
+ * - built-in host tabs (`'artifacts'`, `'files'`) or explicit `'plugin:...'` -> unchanged;
+ * - short local panel ID (e.g. `'tasks'`, `'groups'`) -> `plugin:${pluginId}/${panelId}`.
+ */
+export function resolveWorkbenchPanelTabId(pluginId: string, panelId?: string): string | undefined {
+  if (panelId === undefined) return undefined
+  const trimmed = panelId.trim()
+  if (trimmed === '') return undefined
+  if (BUILTIN_WORKBENCH_TABS.has(trimmed) || trimmed.startsWith('plugin:')) return trimmed
+  return `plugin:${pluginId}/${trimmed}`
+}
+
 /**
  * Build the plugin-ID-bound context implementation from the host port (used
  * internally by the host PluginUiView).
@@ -138,9 +154,18 @@ export function createPluginClientContext(
     openSplitScreen: (target) => port.openTarget(target, { split: true }),
     openConversationDrawer: (targetConversationId) => port.openConversationDrawer(targetConversationId),
     openArtifact: (artifactId) => port.openArtifactPreview(artifactId, conversationId),
-    openWorkbench: (panelId) => {
+    openWorkbench: (panelId, params) => {
+      const resolvedTab = resolveWorkbenchPanelTabId(pluginId, panelId)
+      if (port.openWorkbench !== undefined) {
+        port.openWorkbench({
+          ...(resolvedTab !== undefined ? { tab: resolvedTab } : {}),
+          ...(conversationId !== undefined ? { conversationId } : {}),
+          ...(params !== undefined ? { params } : {}),
+        })
+        return
+      }
       port.setWorkbenchOpen(true)
-      if (panelId) port.setWorkbenchTab(panelId)
+      if (resolvedTab !== undefined) port.setWorkbenchTab(resolvedTab)
     },
     closeWorkbench: () => port.setWorkbenchOpen(false),
     notify: (message, tone = 'info') => port.notify(message, tone, conversationId),

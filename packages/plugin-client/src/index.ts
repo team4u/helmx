@@ -27,7 +27,7 @@ export type {
 export type { HostModelEntry, HostModelsSlice } from '@helmx/protocol/browser'
 
 // ---- Plugin context (usePluginContext) and factory ----
-export { PluginClientContext, createPluginClientContext, usePluginContext } from './plugin-context.js'
+export { PluginClientContext, createPluginClientContext, resolveWorkbenchPanelTabId, usePluginContext } from './plugin-context.js'
 export { ScreenParamsContext, useScreenParams } from './screen-params.js'
 export type { ScreenParamsScope } from '@helmx/protocol/browser'
 
@@ -45,7 +45,17 @@ export {
 export type { HelmxLocale, LocalizedText, ExecutionText, LocaleTranslator } from './i18n.js'
 
 // ---- hooks: doc subscriptions / conversations / plugin list / tool activity ----
-export { usePluginDoc, usePluginDocValue, usePluginSessionDoc, usePluginSessionDocState, usePluginSessionDocValue } from './docs.js'
+export {
+  usePluginDoc,
+  usePluginDocState,
+  usePluginDocValue,
+  usePluginDocValueState,
+  usePluginSessionDoc,
+  usePluginSessionDocDiagnostics,
+  usePluginSessionDocState,
+  usePluginSessionDocValue,
+} from './docs.js'
+export type { PluginDocLoadStatus, PluginDocState, PluginSessionDocOptions } from './docs.js'
 export type { ConversationHookOptions, ConversationHookResult } from './conversation-hooks.js'
 export { useConversation, useConversations, useHostModels, usePluginConfig, usePlugins, useSharedNowMs } from './conversation-hooks.js'
 export { ToolActivityContext, useToolActivity } from './tool-activity.js'

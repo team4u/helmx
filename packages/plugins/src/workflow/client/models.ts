@@ -124,7 +124,7 @@ export type { ExecutionAggregate, ExecutionNodeStatus } from './model-execution-
 export type { ExecutionFrontlineItem, ExecutionApprovalItem } from './model-execution-view.ts'
 export type { ExecutionNodeKind, ExecutionNode, BuildExecutionTreeInput } from './model-execution-tree.ts'
 
-// Background report parsing / bottom activity tray / workbench run focus bus
+// Background report parsing / bottom activity tray
 export {
   parseBackgroundReportEntry,
   backgroundReportPreview,
@@ -140,10 +140,3 @@ export type {
 } from './model-background-report.ts'
 export { buildActiveTraySummary } from './model-active-tray.ts'
 export type { ActiveTrayItem, ActiveTraySummary } from './model-active-tray.ts'
-export {
-  requestWorkbenchRunFocus,
-  peekWorkbenchRunFocus,
-  clearWorkbenchRunFocus,
-  subscribeWorkbenchRunFocus,
-} from './workbench-focus.ts'
-export type { WorkbenchRunFocusRequest } from './workbench-focus.ts'

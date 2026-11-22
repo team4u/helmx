@@ -28,6 +28,7 @@ import type {
   ProfilesSlice,
   ResolvedAskEntry,
   StoreDomainKey,
+  WorkbenchParamsState,
   WorkbenchSlice,
 } from './helmx-store.js'
 import type { SessionDocKey } from './session-docs.js'
@@ -401,7 +402,7 @@ export function usePluginClientHash(
 // ---------------------------------------------------------------------------
 // Batch conversation-scoped plugin document (sessionDoc) subscription hooks
 // (host-only): single-value / diagnostics subscriptions live in
-// @helmx/plugin-client as usePluginSessionDocValue / usePluginSessionDocState
+// @helmx/plugin-client as usePluginSessionDocValue / usePluginSessionDocDiagnostics
 // (port-driven; plugins and the host share one implementation).
 // Ref-counted dedicated SSE streams connect only while mounted refs exist;
 // see lib/session-docs.ts.
@@ -482,5 +483,6 @@ export type {
   ProfilesSlice,
   ResolvedAskEntry,
   StoreDomainKey,
+  WorkbenchParamsState,
   WorkbenchSlice,
 }

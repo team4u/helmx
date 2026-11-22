@@ -44,13 +44,13 @@ test('工作流真实编译样式：__helmxClientCss 注入后阶段状态颜色
   theme.textContent = ':root { --fg-muted: #666666; --border: #333333; --bg-subtle: #eeeeee; --ok: #008800; --ok-border: #007700; --ok-bg: #ddffdd; --err: #ee0000; --err-border: #cc0000; --err-bg: #ffdddd; --accent: #0000ee; --accent-border: #0000cc; --accent-bg: #ddddff; }'
   document.head.appendChild(theme)
   const pluginStyle = document.createElement('style')
-  pluginStyle.setAttribute('data-helmx-plugin-css', 'builtin:workflow:workbench.tsx')
+  pluginStyle.setAttribute('data-helmx-plugin-css', 'builtin:workflow:index.tsx')
   document.head.appendChild(pluginStyle)
   const host = document.createElement('div')
   document.body.appendChild(host)
   try {
     mountSharedPluginNamespaces({ realHooks: true })
-    const { code } = await compilePluginClientModule('builtin:workflow', WORKFLOW_CLIENT_ROOT, 'workbench.tsx', cacheDir)
+    const { code } = await compilePluginClientModule('builtin:workflow', WORKFLOW_CLIENT_ROOT, 'index.tsx', cacheDir)
     const mod = (await import(`data:text/javascript;base64,${Buffer.from(code, 'utf8').toString('base64')}#styles-real`)) as Record<string, unknown>
     const css = mod[PLUGIN_CLIENT_CSS_EXPORT]
     assert.ok(typeof css === 'string' && css.length > 0, '编译产物必须导出插件合并 CSS')

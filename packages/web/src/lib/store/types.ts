@@ -78,9 +78,16 @@ export interface LocationTargetsSlice {
   focusedPanel: FocusedPanel
 }
 
+export interface WorkbenchParamsState {
+  tab: string
+  conversationId?: number
+  params: Readonly<Record<string, unknown>>
+}
+
 export interface WorkbenchSlice {
   workbenchOpen: boolean
   workbenchTab: string
+  workbenchParams: WorkbenchParamsState | null
 }
 
 export interface NavSlice {
@@ -92,6 +99,7 @@ export interface NavSlice {
   drawerStack: DrawerFrame[]
   workbenchOpen: boolean
   workbenchTab: string
+  workbenchParams: WorkbenchParamsState | null
   activeModal: ActiveModal
   highlightedEntry: { conversationId: number; entryId: string } | null
 }

@@ -80,7 +80,7 @@ export interface StoreNavActions {
   setSidebarCollapsed: (collapsed: boolean) => void
   toggleSidebarCollapsed: () => void
   openConversationDrawer: (conversationId: number) => void
-  openWorkbenchDrawer: (options?: { tab?: string; conversationId?: number }) => void
+  openWorkbenchDrawer: (options?: { tab?: string; conversationId?: number; params?: Record<string, unknown> }) => void
   popDrawer: () => void
   truncateDrawerStack: (index: number) => void
   closeAllDrawers: () => void
@@ -192,7 +192,7 @@ export function createStoreNavActions(
     host.patchNav({ drawerStack: nextStack })
   }
 
-  const openWorkbenchDrawer = (opts?: { tab?: string; conversationId?: number }): void => {
+  const openWorkbenchDrawer = (opts?: { tab?: string; conversationId?: number; params?: Record<string, unknown> }): void => {
     const nav = host.getNavSlice()
     const top = topDrawerFrame(nav.drawerStack)
     const underlyingConvId = topConversationDrawerId(nav.drawerStack)
@@ -216,7 +216,15 @@ export function createStoreNavActions(
         ? { kind: 'workbench', conversationId: frameConversationId, tab }
         : { kind: 'workbench', tab }
     const nextStack = pushDrawerFrame(nav.drawerStack, nextFrame)
-    host.patchNav({ drawerStack: nextStack, workbenchTab: tab })
+    const nextParams =
+      opts?.params !== undefined
+        ? {
+            tab,
+            ...(opts.conversationId !== undefined ? { conversationId: opts.conversationId } : {}),
+            params: Object.freeze({ ...opts.params }),
+          }
+        : null
+    host.patchNav({ drawerStack: nextStack, workbenchTab: tab, workbenchParams: nextParams })
   }
 
   const popDrawer = (): void => {

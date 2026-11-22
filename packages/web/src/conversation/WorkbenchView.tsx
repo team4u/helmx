@@ -23,6 +23,7 @@ import {
   isImageArtifact,
   partitionArtifactsByKind,
   resolveActiveWorkbenchTab,
+  type WorkbenchTab,
 } from './workbench-model.js'
 import { useWorkbenchTabs } from './workbench-hooks.js'
 
@@ -257,6 +258,46 @@ export interface WorkbenchViewProps {
   active?: boolean
 }
 
+function WorkbenchPluginTabPane({
+  tab,
+  conversationId,
+  conversation,
+  params,
+  isTabActive,
+  label,
+}: {
+  tab: WorkbenchTab
+  conversationId: number
+  conversation: ConversationSummary | undefined
+  params: Readonly<Record<string, unknown>> | undefined
+  isTabActive: boolean
+  label: string
+}) {
+  const slotProps = useMemo(() => {
+    if (conversation === undefined && params === undefined) return undefined
+    return {
+      ...(conversation !== undefined ? { conversation } : {}),
+      ...(params !== undefined ? { params } : {}),
+    }
+  }, [conversation, params])
+
+  return (
+    <div
+      className="workbench-plugin-body"
+      hidden={!isTabActive}
+      style={isTabActive ? undefined : { display: 'none' }}
+    >
+      <PluginUiView
+        pluginId={tab.pluginId!}
+        spec={tab.spec!}
+        conversationId={conversationId}
+        label={label}
+        slotProps={slotProps}
+      />
+    </div>
+  )
+}
+
 /**
  * Embedded workbench surface rendered inside DrawerStackShell (and directly in
  * workbench unit tests): built-in Artifacts tab + plugin workbench.panel tabs.
@@ -265,7 +306,7 @@ export interface WorkbenchViewProps {
 export function WorkbenchView(props: WorkbenchViewProps) {
   const { primaryTarget, splitTarget } = useLocationTargets()
   const sseConnected = useSseConnected()
-  const { workbenchTab: storeWorkbenchTab } = useWorkbenchState()
+  const { workbenchTab: storeWorkbenchTab, workbenchParams } = useWorkbenchState()
   const { setWorkbenchTab } = useStoreActions()
   const { t } = useWebLocale()
   const active = props.active ?? true
@@ -287,10 +328,6 @@ export function WorkbenchView(props: WorkbenchViewProps) {
   const activeTab = resolveActiveWorkbenchTab(currentTab, tabs)
   const activePanel = tabs.find((tab) => tab.id === activeTab && tab.pluginId !== undefined)
   const footerParts = buildWorkbenchFooter(tabs)
-  const slotProps = useMemo(
-    () => (conversation !== undefined ? { conversation } : undefined),
-    [conversation],
-  )
 
   // Keep visited plugin workbench tabs mounted per conversation so switching
   // tabs preserves plugin local state & scroll; reset on conversation switch.
@@ -377,21 +414,22 @@ export function WorkbenchView(props: WorkbenchViewProps) {
               ) : null}
               {mountedPluginTabs.map((tab) => {
                 const isTabActive = tab.id === activeTab
+                const tabParams =
+                  workbenchParams !== null &&
+                  workbenchParams.tab === tab.id &&
+                  (workbenchParams.conversationId === undefined || workbenchParams.conversationId === conversationId)
+                    ? workbenchParams.params
+                    : undefined
                 return (
-                  <div
+                  <WorkbenchPluginTabPane
                     key={`${conversationId}:${tab.id}`}
-                    className="workbench-plugin-body"
-                    hidden={!isTabActive}
-                    style={isTabActive ? undefined : { display: 'none' }}
-                  >
-                    <PluginUiView
-                      pluginId={tab.pluginId!}
-                      spec={tab.spec!}
-                      conversationId={conversationId}
-                      label={t('conv.workbench.panelLabel', { label: tab.label })}
-                      slotProps={slotProps}
-                    />
-                  </div>
+                    tab={tab}
+                    conversationId={conversationId}
+                    conversation={conversation}
+                    params={tabParams}
+                    isTabActive={isTabActive}
+                    label={t('conv.workbench.panelLabel', { label: tab.label })}
+                  />
                 )
               })}
             </>

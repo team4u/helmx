@@ -91,33 +91,19 @@ function syncSharedPluginGlobals(realHooks: boolean): void {
     realHooks ? SDK : stubPluginClientNamespace
 }
 
-const WORKFLOW_FOCUS_BUS_KEY = Symbol.for('helmx:builtin:workflow:workbench-focus')
-
-/**
- * Reset the cross-bundle `workbench-focus` bus stored on `globalThis` so a prior test or file
- * clicking a workflow/tray row never leaves a stale `pendingFocus` that collapses cards in later tests.
- * Passing `dropListeners: false` preserves active subscribers during mid-test stub refreshes.
- */
-export function resetWorkflowWorkbenchFocus(options: { dropListeners?: boolean } = {}): void {
-  const g = globalThis as Record<PropertyKey, unknown>
-  if (options.dropListeners === false) {
-    const bus = g[WORKFLOW_FOCUS_BUS_KEY] as { pendingFocus?: unknown } | undefined
-    if (bus !== undefined) bus.pendingFocus = undefined
-    return
-  }
-  delete g[WORKFLOW_FOCUS_BUS_KEY]
-}
-
 export function setWorkflowClientStub(options: WorkflowClientStubOptions = {}): void {
   stub = options
-  resetWorkflowWorkbenchFocus({ dropListeners: false })
   syncSharedPluginGlobals(false)
 }
+
+const NOOP_RETRY = (): void => {}
 
 const stubPluginClientNamespace = {
   ...SDK,
   usePluginDoc: () => stub.docValue,
+  usePluginDocState: () => ({ data: stub.docValue, status: 'ready' as const, retry: NOOP_RETRY }),
   usePluginSessionDoc: () => stub.docValue,
+  usePluginSessionDocState: () => ({ data: stub.docValue, status: 'ready' as const, retry: NOOP_RETRY }),
   useConversations: () => stub.conversations ?? [],
   useConversation: (id: number | undefined, options?: { includeDetail?: boolean }) =>
     stub.conversation?.(id, options) ?? {
@@ -160,20 +146,13 @@ const stubPluginClientNamespace = {
 
 export function mountSharedPluginNamespaces(options: { realHooks?: boolean } = {}): void {
   mountGen += 1
-  resetWorkflowWorkbenchFocus({ dropListeners: true })
   syncSharedPluginGlobals(options.realHooks === true)
 }
 
-export const WORKFLOW_SURFACE_MODULES = [
-  'active-tray.tsx',
-  'background-report.tsx',
-  'tool-views.tsx',
-  'workbench.tsx',
-  'library.tsx',
-] as const
+export const WORKFLOW_SURFACE_MODULES = ['index.tsx'] as const
 
 export async function importWorkflowClientModule(
-  moduleRef: string,
+  moduleRef = 'index.tsx',
   cacheDir = WORKFLOW_CLIENT_CACHE_DIR,
   options?: { realHooks?: boolean; scope?: string },
 ): Promise<Record<string, unknown>> {
@@ -259,6 +238,7 @@ export interface WorkflowHostLog {
   drawers: number[]
   workbenchTabs: string[]
   workbenchOpens: boolean[]
+  workbenchParams: Array<Record<string, unknown> | undefined>
   screens: string[]
   notices: Array<{ message: string; tone: string }>
   loadDetailCalls: number[]
@@ -286,6 +266,7 @@ export function createWorkflowHostHarness(init: {
     drawers: [],
     workbenchTabs: [],
     workbenchOpens: [],
+    workbenchParams: [],
     screens: [],
     notices: [],
     loadDetailCalls: [],
@@ -385,6 +366,11 @@ export function createWorkflowHostHarness(init: {
       log.drawers.push(id)
     },
     openArtifactPreview: () => undefined,
+    openWorkbench: (options) => {
+      log.workbenchOpens.push(true)
+      if (options?.tab !== undefined) log.workbenchTabs.push(options.tab)
+      log.workbenchParams.push(options?.params)
+    },
     setWorkbenchOpen: (open) => {
       log.workbenchOpens.push(open)
     },

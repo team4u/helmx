@@ -399,12 +399,9 @@ test('工作台去重工作流库仅留跳转入口；独立工作流库切换�
     },
     run: { run: { id: 'wf_new' } },
   })
-  const [workbenchMod, libraryMod] = await Promise.all([
-    importWorkflowClientModule('workbench.tsx'),
-    importWorkflowClientModule('library.tsx'),
-  ])
-  const Panel = workbenchMod['WorkflowWorkbenchPanel'] as (p: WorkbenchPanelProps) => React.ReactElement
-  const LibraryScreen = libraryMod['WorkflowLibraryScreen'] as (p: Record<string, unknown>) => React.ReactElement
+  const barrelMod = await importWorkflowClientModule('index.tsx')
+  const Panel = barrelMod['WorkflowWorkbenchPanel'] as (p: WorkbenchPanelProps) => React.ReactElement
+  const LibraryScreen = barrelMod['WorkflowLibraryScreen'] as (p: Record<string, unknown>) => React.ReactElement
 
   // 1. 工作台已去重：不内嵌定义列表、不重复请求 list，仅保留右上角「工作流库」跳转按钮。
   const wb = await mountClient(ctx, e(Panel, { conversation: workbenchConversation() }))
@@ -488,7 +485,7 @@ test('节点卡改动概览：检视渲染与审阅；completed run 提供「重
     inspect_worktree: INSPECT_RAW,
     run: { run: { id: 'wf_new' } },
   })
-  const mod = await importWorkflowClientModule('workbench.tsx')
+  const mod = await importWorkflowClientModule('index.tsx')
   const Panel = mod['WorkflowWorkbenchPanel'] as (p: WorkbenchPanelProps) => React.ReactElement
   const { host, unmount } = await mountClient(
     ctx,
@@ -564,7 +561,7 @@ test('检视失败显式呈现：错误可见且可重试，绝不伪造空统�
     ctx.calls.push({ action, input })
     throw new Error('node offline: 探测失败')
   }
-  const mod = await importWorkflowClientModule('workbench.tsx')
+  const mod = await importWorkflowClientModule('index.tsx')
   const Panel = mod['WorkflowWorkbenchPanel'] as (p: WorkbenchPanelProps) => React.ReactElement
   const { host, unmount } = await mountClient(
     ctx,
@@ -596,7 +593,7 @@ test('重放表单：内联 run 可重放且显式 args 覆盖；非法 JSON 不
     conversation: () => ({ summary: undefined, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} }),
   })
   const ctx = makeRecordingCtx({ run: { run: { id: 'wf_replay' } } })
-  const mod = await importWorkflowClientModule('workbench.tsx')
+  const mod = await importWorkflowClientModule('index.tsx')
   const Panel = mod['WorkflowWorkbenchPanel'] as (p: WorkbenchPanelProps) => React.ReactElement
   const { host, unmount } = await mountClient(
     ctx,
@@ -656,7 +653,7 @@ test('工作台重放双击防重复：在途 ref 拦截，同拍连点只发一
     if (action === 'run') await new Promise((resolve) => { resolveRun = resolve })
     return undefined
   }
-  const mod = await importWorkflowClientModule('workbench.tsx')
+  const mod = await importWorkflowClientModule('index.tsx')
   const Panel = mod['WorkflowWorkbenchPanel'] as (p: WorkbenchPanelProps) => React.ReactElement
   const { host, unmount } = await mountClient(ctx, e(Panel, { conversation: workbenchConversation() }))
   try {
@@ -703,7 +700,7 @@ test('独立子代理卡检视：有工作树时提供入口；点击不触发�
     worktreeSlots,
   })
   const ctx = makeRecordingCtx({ inspect_worktree: INSPECT_RAW })
-  const mod = await importWorkflowClientModule('workbench.tsx')
+  const mod = await importWorkflowClientModule('index.tsx')
   const Panel = mod['WorkflowWorkbenchPanel'] as (p: WorkbenchPanelProps) => React.ReactElement
   const { host, unmount } = await mountClient(
     ctx,
@@ -762,7 +759,7 @@ test('独立子代理卡检视：无登记 ID 时用 path+子会话节点消歧�
     worktreeSlots,
   })
   const ctx = makeRecordingCtx({ inspect_worktree: INSPECT_RAW })
-  const mod = await importWorkflowClientModule('workbench.tsx')
+  const mod = await importWorkflowClientModule('index.tsx')
   const Panel = mod['WorkflowWorkbenchPanel'] as (p: WorkbenchPanelProps) => React.ReactElement
   const { host, unmount } = await mountClient(
     ctx,
@@ -804,7 +801,7 @@ test('工作流节点卡不重复渲染检视节：节点外层一处，子代�
     worktreeSlots,
   })
   const ctx = makeRecordingCtx({})
-  const mod = await importWorkflowClientModule('workbench.tsx')
+  const mod = await importWorkflowClientModule('index.tsx')
   const Panel = mod['WorkflowWorkbenchPanel'] as (p: WorkbenchPanelProps) => React.ReactElement
   const { host, unmount } = await mountClient(
     ctx,
@@ -839,7 +836,7 @@ test('禁用 builtin:worktree（无工作树插槽贡献）时工作台与子代
     worktreeSlots: false,
   })
   const ctx = makeRecordingCtx({})
-  const mod = await importWorkflowClientModule('workbench.tsx')
+  const mod = await importWorkflowClientModule('index.tsx')
   const Panel = mod['WorkflowWorkbenchPanel'] as (p: WorkbenchPanelProps) => React.ReactElement
   const { host, unmount } = await mountClient(ctx, e(Panel, { conversation: workbenchConversation() }))
   try {

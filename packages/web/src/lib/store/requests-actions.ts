@@ -390,6 +390,7 @@ export function createStoreRequestActions(host: StoreRequestsHost): StoreRequest
     }
     if (force) {
       host.requests.clearDocFailure(key)
+      host.reportLoad(key)
     } else if (host.requests.isDocFailureSuppressed(key)) {
       return undefined
     }

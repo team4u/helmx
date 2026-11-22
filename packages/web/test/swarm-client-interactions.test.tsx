@@ -49,7 +49,7 @@ import {
   resolvePostTimeDisplay,
   resolveTrayMemberTimingView,
 } from '../../plugins/src/swarm/client/model-timing.js'
-import { SWARM_WORKBENCH_PANEL_TARGET } from '../../plugins/src/swarm/client/models.js'
+import { SWARM_WORKBENCH_PANEL_ID } from '../../plugins/src/swarm/client/models.js'
 import { registerSwarmUi } from '../../plugins/src/swarm/ui.js'
 import { ensureHappyDom } from './helpers/dom-harness.js'
 
@@ -65,7 +65,7 @@ const EMOJI_RE = /[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F1E6
 interface SwarmClientComponents {
   SwarmToolView: (p: ToolViewProps) => React.ReactElement
   SwarmActiveTray: (p: { conversation?: ConversationSummary }) => React.ReactElement
-  SwarmWorkbenchPanel: (p: { conversation?: ConversationSummary }) => React.ReactElement
+  SwarmWorkbenchPanel: (p: { conversation?: ConversationSummary; params?: Readonly<Record<string, unknown>> }) => React.ReactElement
   SwarmBoardReportPill: (p: TimelineRendererProps) => React.ReactElement
   SwarmBoardWakeupPill: (p: TimelineRendererProps) => React.ReactElement
 }
@@ -77,19 +77,14 @@ describe("swarm-client-interactions", () => {
 
   before(async () => {
     mountSharedPluginNamespaces({ realHooks: true })
-    const [toolViewMod, activeTrayMod, workbenchMod, receiptsMod] = await Promise.all([
-      importBuiltinClientModule('builtin:swarm', 'tool-view.tsx'),
-      importBuiltinClientModule('builtin:swarm', 'active-tray.tsx'),
-      importBuiltinClientModule('builtin:swarm', 'workbench.tsx'),
-      importBuiltinClientModule('builtin:swarm', 'board-receipts.tsx'),
-    ])
-    rawModule = { ...toolViewMod, ...activeTrayMod, ...workbenchMod, ...receiptsMod }
+    const barrelMod = await importBuiltinClientModule('builtin:swarm', 'index.tsx')
+    rawModule = barrelMod
     components = {
-      SwarmToolView: toolViewMod['SwarmToolView'] as SwarmClientComponents['SwarmToolView'],
-      SwarmActiveTray: activeTrayMod['SwarmActiveTray'] as SwarmClientComponents['SwarmActiveTray'],
-      SwarmWorkbenchPanel: workbenchMod['SwarmWorkbenchPanel'] as SwarmClientComponents['SwarmWorkbenchPanel'],
-      SwarmBoardReportPill: receiptsMod['SwarmBoardReportPill'] as SwarmClientComponents['SwarmBoardReportPill'],
-      SwarmBoardWakeupPill: receiptsMod['SwarmBoardWakeupPill'] as SwarmClientComponents['SwarmBoardWakeupPill'],
+      SwarmToolView: barrelMod['SwarmToolView'] as SwarmClientComponents['SwarmToolView'],
+      SwarmActiveTray: barrelMod['SwarmActiveTray'] as SwarmClientComponents['SwarmActiveTray'],
+      SwarmWorkbenchPanel: barrelMod['SwarmWorkbenchPanel'] as SwarmClientComponents['SwarmWorkbenchPanel'],
+      SwarmBoardReportPill: barrelMod['SwarmBoardReportPill'] as SwarmClientComponents['SwarmBoardReportPill'],
+      SwarmBoardWakeupPill: barrelMod['SwarmBoardWakeupPill'] as SwarmClientComponents['SwarmBoardWakeupPill'],
     }
   }, { timeout: 60_000 })
 
@@ -102,6 +97,7 @@ describe("swarm-client-interactions", () => {
   interface SpyCtx extends PluginClientContextType {
     drawerCalls: number[]
     workbenchCalls: Array<string | undefined>
+    workbenchParamCalls: Array<Record<string, unknown> | undefined>
     actionCalls: ActionCallRecord[]
     notifyCalls: Array<{ message: string; tone?: string }>
   }
@@ -109,6 +105,7 @@ describe("swarm-client-interactions", () => {
   function makeSpyCtx(overrides: Partial<SpyCtx> & Partial<PluginClientContextType> = {}): SpyCtx {
     const drawerCalls: number[] = []
     const workbenchCalls: Array<string | undefined> = []
+    const workbenchParamCalls: Array<Record<string, unknown> | undefined> = []
     const actionCalls: ActionCallRecord[] = []
     const notifyCalls: Array<{ message: string; tone?: string }> = []
     const locale = overrides.locale ?? 'en'
@@ -125,8 +122,9 @@ describe("swarm-client-interactions", () => {
         drawerCalls.push(id)
       },
       openArtifact: () => {},
-      openWorkbench: (panelId) => {
+      openWorkbench: (panelId, params) => {
         workbenchCalls.push(panelId)
+        workbenchParamCalls.push(params)
       },
       closeWorkbench: () => {},
       notify: (message, tone) => {
@@ -142,6 +140,7 @@ describe("swarm-client-interactions", () => {
     return Object.assign(base, {
       drawerCalls,
       workbenchCalls,
+      workbenchParamCalls,
       actionCalls,
       notifyCalls,
       ...overrides,
@@ -499,7 +498,7 @@ describe("swarm-client-interactions", () => {
       '普通会话不出现该 Tab；结单历史主控与已归档成员仍可访问历史编组',
     )
     assert.deepEqual(panels[0]!['badge'], { doc: 'board-badges', byConversationField: 'byConversation' })
-    assert.equal(SWARM_WORKBENCH_PANEL_TARGET, 'plugin:builtin:swarm/groups', '客户端面板目标与注册 id 锁定一致')
+    assert.equal(SWARM_WORKBENCH_PANEL_ID, 'groups', '客户端短面板 ID 与注册 id 锁定一致')
 
     assert.equal(recorded.filter((r) => r.method === 'screen').length, 0, '删除独立全屏 Board 控制台')
     assert.equal(recorded.filter((r) => r.method === 'action').length, 0, '删除顶栏独立 board action 入口')
@@ -595,7 +594,8 @@ describe("swarm-client-interactions", () => {
       await act(async () => {
         postMount.host.querySelector<HTMLButtonElement>('.sw-trace-row-btn')!.click()
       })
-      assert.deepEqual(spy.workbenchCalls, ['plugin:builtin:swarm/groups'], '编组级行打开协同工作台面板')
+      assert.deepEqual(spy.workbenchCalls, ['groups'], '编组级行打开协同工作台面板（短本地 panelId）')
+      assert.deepEqual(spy.workbenchParamCalls, [{ groupId: 'grp-live', postSeq: 2 }], '携带聚焦参数 groupId/postSeq')
     } finally {
       postMount.unmount()
     }
@@ -1078,7 +1078,8 @@ describe("swarm-client-interactions", () => {
       await act(async () => {
         pill.click()
       })
-      assert.deepEqual(spy.workbenchCalls, ['plugin:builtin:swarm/groups'], '点击卡片本体打开协同工作台面板')
+      assert.deepEqual(spy.workbenchCalls, ['groups'], '点击卡片本体打开协同工作台面板（短本地 panelId）')
+      assert.deepEqual(spy.workbenchParamCalls, [{ postSeq: 6 }], '回执卡片传递最新聚焦序号 postSeq')
     } finally {
       reportMount.unmount()
     }
@@ -1140,7 +1141,8 @@ describe("swarm-client-interactions", () => {
       await act(async () => {
         pill.click()
       })
-      assert.deepEqual(wakeupSpy.workbenchCalls, ['plugin:builtin:swarm/groups'])
+      assert.deepEqual(wakeupSpy.workbenchCalls, ['groups'])
+      assert.deepEqual(wakeupSpy.workbenchParamCalls, [{ postSeq: 5 }])
     } finally {
       wakeupMount.unmount()
     }
@@ -2229,6 +2231,58 @@ describe("swarm-client-interactions", () => {
       assert.equal(closedPanel.host.querySelector('.sw-panel-post-time')?.textContent, '+02:00')
     } finally {
       closedPanel.unmount()
+    }
+    resetDefaultStubs()
+  })
+
+  test('SwarmWorkbenchPanel：接收 openWorkbench params.postSeq 时自动高亮对应黑板帖并在超出折叠尾窗时展开历史', { timeout: 60_000 }, async () => {
+    const eightPosts = Array.from({ length: 8 }, (_, idx) => ({
+      seq: idx + 1,
+      groupId: 'grp-live',
+      from: idx === 0 ? 'coordinator' : 'author',
+      to: ['verifier'],
+      resolvedTargets: ['verifier'],
+      wake: true,
+      kind: idx === 0 ? 'brief' : 'comment',
+      refs: [],
+      body: `Post body #${idx + 1}`,
+      createdAt: 1000 + idx * 1000,
+    }))
+    const longBoard = boardViewFixture({
+      group: {
+        id: 'grp-live',
+        title: '协同审改组',
+        objective: '验证 postSeq 深链定位',
+        coordinatorConversationId: 50,
+        status: 'active',
+        activeWorkerCount: 2,
+        headSeq: 8,
+        createdAt: 1000,
+        updatedAt: 9000,
+      },
+      posts: eightPosts,
+    })
+    setStubState({
+      docs: { index: coordinatorIndexFixture(), 'board-badges': { byConversation: {} } },
+      sessionDocs: { 'builtin:swarm/board-view/50': longBoard },
+    })
+
+    const spy = makeSpyCtx({ conversationId: 50 })
+    const mounted = await mount(
+      spy,
+      e(components.SwarmWorkbenchPanel, {
+        conversation: convSummary(50, '主控', { tags: ['swarm-coordinator'] }),
+        params: { groupId: 'grp-live', postSeq: 2 },
+      }),
+    )
+    try {
+      const targetPost = mounted.host.querySelector<HTMLElement>('.sw-panel-post[data-post-seq="2"]')
+      assert.ok(targetPost !== null, '超出最近 6 条折叠窗口的 #2 自动展开历史后可见')
+      assert.ok(targetPost.classList.contains('sw-panel-post-highlighted'), '目标帖 #2 获得高亮类')
+      const otherPost = mounted.host.querySelector<HTMLElement>('.sw-panel-post[data-post-seq="8"]')
+      assert.ok(otherPost !== null && !otherPost.classList.contains('sw-panel-post-highlighted'), '非目标帖不高亮')
+    } finally {
+      mounted.unmount()
     }
     resetDefaultStubs()
   })

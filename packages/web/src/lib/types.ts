@@ -436,6 +436,8 @@ export interface HelmxStoreValue {
   /** True while the top drawer frame is a workbench frame. */
   workbenchOpen: boolean
   workbenchTab: string // 'artifacts' | `plugin:${pluginId}/${panelId}` (dynamic tab, falls back in WorkbenchView)
+  /** Transient focus/deep-link payload delivered to the active workbench panel (never persisted to the URL). */
+  workbenchParams: { tab: string; conversationId?: number; params: Readonly<Record<string, unknown>> } | null
   activeModal: ActiveModal
   highlightedEntry: { conversationId: number; entryId: string } | null
   notices: ToastNotice[]
@@ -497,8 +499,8 @@ export interface HelmxStoreValue {
   setWorkbenchTab(tab: string): void
   /** Push (or unwind to) a child conversation frame on the drawer navigation stack. */
   openConversationDrawer(conversationId: number): void
-  /** Push (or focus) a workbench frame on the drawer navigation stack. */
-  openWorkbenchDrawer(options?: { tab?: string; conversationId?: number }): void
+  /** Push (or focus) a workbench frame on the drawer navigation stack, optionally delivering transient focus params. */
+  openWorkbenchDrawer(options?: { tab?: string; conversationId?: number; params?: Record<string, unknown> }): void
   /** Pop the topmost drawer frame (closes the drawer when at depth 1). */
   popDrawer(): void
   /** Jump back to a specific depth in the drawer stack (breadcrumb click). */

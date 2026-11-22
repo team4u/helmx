@@ -33,11 +33,6 @@ import {
   workbenchResumeInvalidResult,
   workbenchResumeStarted,
 } from './copy.ts'
-import {
-  clearWorkbenchRunFocus,
-  peekWorkbenchRunFocus,
-  subscribeWorkbenchRunFocus,
-} from './workbench-focus.ts'
 
 function nodeMatchesRunId(node: ExecutionNode, targetRunId: string): boolean {
   if (node.run?.id === targetRunId) return true
@@ -55,37 +50,26 @@ export function WorkflowWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): Re
   )
   const runs = runsDoc?.runs ?? []
 
-  const [focusedRunId, setFocusedRunId] = useState<string | undefined>(() =>
-    conversationId !== undefined ? peekWorkbenchRunFocus(conversationId)?.runId : undefined,
+  const requestedRunId =
+    typeof props?.params?.['runId'] === 'string' && props.params['runId'] !== ''
+      ? props.params['runId']
+      : undefined
+  const [focusedRunId, setFocusedRunId] = useState<string | undefined>(requestedRunId)
+  const [openRunIds, setOpenRunIds] = useState<Record<string, boolean>>(() =>
+    requestedRunId !== undefined ? { [requestedRunId]: true } : {},
   )
-  const [openRunIds, setOpenRunIds] = useState<Record<string, boolean>>(() => {
-    const initial = conversationId !== undefined ? peekWorkbenchRunFocus(conversationId)?.runId : undefined
-    return initial !== undefined ? { [initial]: true } : {}
-  })
   const [resultOpenIds, setResultOpenIds] = useState<Record<string, boolean>>({})
   const [batchResuming, setBatchResuming] = useState(false)
   const batchResumeInFlight = useRef(false)
   const nodeRefs = useRef<Record<string, HTMLDivElement | null>>({})
+  const scrolledFocusRef = useRef<unknown>(undefined)
 
   useEffect(() => {
-    const pending = conversationId !== undefined ? peekWorkbenchRunFocus(conversationId)?.runId : undefined
-    setFocusedRunId(pending)
-    if (pending !== undefined) {
-      setOpenRunIds((prev) => ({ ...prev, [pending]: true }))
+    setFocusedRunId(requestedRunId)
+    if (requestedRunId !== undefined) {
+      setOpenRunIds((prev) => ({ ...prev, [requestedRunId]: true }))
     }
-  }, [conversationId])
-
-  useEffect(
-    () =>
-      subscribeWorkbenchRunFocus((target) => {
-        if (conversationId !== undefined && target.conversationId !== conversationId) {
-          return
-        }
-        setFocusedRunId(target.runId)
-        setOpenRunIds((prev) => ({ ...prev, [target.runId]: true }))
-      }),
-    [conversationId],
-  )
+  }, [conversationId, props?.params, requestedRunId])
 
   const tree = useMemo(
     () =>
@@ -97,6 +81,8 @@ export function WorkflowWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): Re
 
   useEffect(() => {
     if (conversationId === undefined || focusedRunId === undefined) return
+    const focusToken = props?.params ?? focusedRunId
+    if (scrolledFocusRef.current === focusToken) return
     const matchedTopNode = tree.find((node) => nodeMatchesRunId(node, focusedRunId))
     if (matchedTopNode === undefined) return
     const targetKey = matchedTopNode.run?.id ?? matchedTopNode.key
@@ -104,8 +90,8 @@ export function WorkflowWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): Re
     if (el !== null && el !== undefined && typeof el.scrollIntoView === 'function') {
       el.scrollIntoView({ block: 'nearest' })
     }
-    clearWorkbenchRunFocus(conversationId, focusedRunId)
-  }, [focusedRunId, tree, conversationId])
+    scrolledFocusRef.current = focusToken
+  }, [focusedRunId, props?.params, tree, conversationId])
 
   const resumableRuns = useMemo(
     () => (conversationId !== undefined ? listResumableFailedRuns(runs, conversationId) : []),

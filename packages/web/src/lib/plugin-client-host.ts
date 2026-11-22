@@ -82,11 +82,14 @@ export function createPluginClientHostPort(store: HelmxExternalStore): PluginCli
 
     // ---- Plugin docs ----
     getPluginDocValue: store.getPluginDoc,
+    hasPluginDoc: store.hasPluginDoc,
     subscribePluginDoc: store.subscribePluginDoc,
     ensurePluginDoc: store.actions.ensurePluginDoc,
+    retryPluginDoc: store.actions.retryPluginDoc,
     getPluginSessionDoc: store.actions.getPluginSessionDoc,
     subscribeSessionDoc: store.actions.subscribeSessionDoc,
     getSessionDocState: store.actions.getSessionDocState,
+    retrySessionDoc: store.actions.retrySessionDoc,
 
     // ---- Actions & input ----
     invokePluginAction: store.actions.invokePluginAction,
@@ -107,6 +110,7 @@ export function createPluginClientHostPort(store: HelmxExternalStore): PluginCli
         artifactId,
         ...(conversationId !== undefined ? { conversationId } : {}),
       }),
+    openWorkbench: (options) => store.actions.openWorkbenchDrawer(options),
     setWorkbenchOpen: (open) => store.actions.setWorkbenchOpen(open),
     setWorkbenchTab: (tab) => store.actions.setWorkbenchTab(tab),
     notify: (message, tone, conversationId) =>

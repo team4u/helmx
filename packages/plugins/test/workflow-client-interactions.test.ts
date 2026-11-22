@@ -15,22 +15,16 @@ import {
   act,
   createRoot,
   importWorkflowClientModule as baseImportWorkflowClientModule,
-  importWorkflowSurfaces,
   importWorktreeClientModule,
   mountSharedPluginNamespaces,
   setWorkflowClientStub,
   type WorktreeSlotComponents,
 } from './helpers/workflow-client-harness.js'
 
-// Load split per-surface production entrypoints (active-tray / tool-views / workbench)
-// under a file-scoped ESM fragment so shared DOM shard workers stay isolated.
-const importWorkflowClientModule = (moduleRef?: string) =>
-  moduleRef === undefined
-    ? importWorkflowSurfaces(['active-tray.tsx', 'tool-views.tsx', 'workbench.tsx'], undefined, {
-        realHooks: false,
-        scope: 'interactions',
-      })
-    : baseImportWorkflowClientModule(moduleRef, undefined, { realHooks: false, scope: 'interactions' })
+// Load unified single barrel entrypoint (index.tsx) under a file-scoped ESM fragment
+// so shared DOM shard workers stay isolated.
+const importWorkflowClientModule = (moduleRef = 'index.tsx') =>
+  baseImportWorkflowClientModule(moduleRef, undefined, { realHooks: false, scope: 'interactions' })
 
 const e = React.createElement
 const { PluginClientContext, resolveLocalizedText } = SDK
@@ -62,6 +56,7 @@ interface SpyCtx extends PluginClientContextType {
   screenCalls: string[]
   splitCalls: string[]
   workbenchCalls: string[]
+  workbenchParamCalls: Array<Record<string, unknown> | undefined>
   actionCalls: Array<{ actionId: string; input: unknown }>
   notifications: Array<{ message: string; tone?: 'info' | 'warning' | 'error' }>
 }
@@ -71,6 +66,7 @@ function makeSpyCtx(): SpyCtx {
   const screenCalls: string[] = []
   const splitCalls: string[] = []
   const workbenchCalls: string[] = []
+  const workbenchParamCalls: Array<Record<string, unknown> | undefined> = []
   const actionCalls: Array<{ actionId: string; input: unknown }> = []
   const notifications: Array<{ message: string; tone?: 'info' | 'warning' | 'error' }> = []
   return {
@@ -91,8 +87,9 @@ function makeSpyCtx(): SpyCtx {
       drawerCalls.push(id)
     },
     openArtifact: () => {},
-    openWorkbench: (tab) => {
+    openWorkbench: (tab, params) => {
       workbenchCalls.push(tab ?? '')
+      workbenchParamCalls.push(params)
     },
     closeWorkbench: () => {},
     notify: (message, tone) => {
@@ -107,6 +104,7 @@ function makeSpyCtx(): SpyCtx {
     screenCalls,
     splitCalls,
     workbenchCalls,
+    workbenchParamCalls,
     actionCalls,
     notifications,
   }
@@ -317,7 +315,8 @@ test('外部子代理在工作台渲染摘要（无原生子会话且不虚构�
     assert.match(row.textContent ?? '', /External agent/)
     await act(async () => { row.click() })
     assert.deepEqual(spy.drawerCalls, [], '外部任务不能虚构原生子会话')
-    assert.deepEqual(spy.workbenchCalls, ['plugin:builtin:workflow/tasks'], '有关联 run 时点击打开工作台查看详情')
+    assert.deepEqual(spy.workbenchCalls, ['tasks'], '有关联 run 时点击打开工作台查看详情（短本地 panelId）')
+    assert.deepEqual(spy.workbenchParamCalls, [{ runId: 'wf_ext' }], '点击工作台传递聚焦 runId')
 
     await rerender(e(Panel, { conversation: summary(1, 'idle') }))
     assert.ok(host.querySelector('.subagent-external-card') !== null, '工作台渲染 ExternalRunSummary')
@@ -362,7 +361,8 @@ test('工作流时间线点击定位工作台，工作台节点内嵌子代理�
     act(() => {
       toolRow!.click()
     })
-    assert.deepEqual(spy.workbenchCalls, ['plugin:builtin:workflow/tasks'], '点击时间线行打开工作台任务面板')
+    assert.deepEqual(spy.workbenchCalls, ['tasks'], '点击时间线行打开工作台任务面板（短本地 panelId）')
+    assert.deepEqual(spy.workbenchParamCalls, [{ runId: 'wf_nodes' }], '点击时间线行传递聚焦 runId')
 
     await rerender(e(Panel, { conversation: summary(1, 'idle') }))
     const cards = host.querySelectorAll('.subagent-card-clickable')

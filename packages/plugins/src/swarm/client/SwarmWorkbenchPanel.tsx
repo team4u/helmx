@@ -37,9 +37,16 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
   const index = usePluginDoc<SwarmIndexDoc>('index')
   const panelRef = useRef<HTMLDivElement | null>(null)
   const peekAnchorRef = useRef<HTMLElement | null>(null)
+  const appliedParamsRef = useRef<unknown>(undefined)
 
+  const requestedPostSeq =
+    typeof props?.params?.['postSeq'] === 'number' &&
+    Number.isSafeInteger(props.params['postSeq']) &&
+    props.params['postSeq'] > 0
+      ? props.params['postSeq']
+      : undefined
   const [historyExpanded, setHistoryExpanded] = useState(false)
-  const [highlightedSeq, setHighlightedSeq] = useState<number | undefined>(undefined)
+  const [highlightedSeq, setHighlightedSeq] = useState<number | undefined>(requestedPostSeq)
   const [peekState, setPeekState] = useState<PostPeekState | undefined>(undefined)
   const [jumpBackStack, setJumpBackStack] = useState<number[]>([])
   const [busyAction, setBusyAction] = useState<string | undefined>(undefined)
@@ -49,6 +56,7 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
   const [closeError, setCloseError] = useState<string | undefined>(undefined)
 
   useEffect(() => {
+    appliedParamsRef.current = undefined
     setHistoryExpanded(false)
     setHighlightedSeq(undefined)
     setPeekState(undefined)
@@ -106,6 +114,16 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
     () => (effectiveBoard ? buildSwarmPanelModel(effectiveBoard, conversations, { recentLimit: historyExpanded ? null : RECENT_LIMIT_COLLAPSED }) : undefined),
     [effectiveBoard, conversations, historyExpanded],
   )
+
+  useEffect(() => {
+    if (requestedPostSeq === undefined || props?.params === appliedParamsRef.current) return
+    setHighlightedSeq(requestedPostSeq)
+    if (effectiveBoard === undefined) return
+    appliedParamsRef.current = props?.params
+    if (!effectiveBoard.posts.slice(-RECENT_LIMIT_COLLAPSED).some((p) => p.seq === requestedPostSeq)) {
+      setHistoryExpanded(true)
+    }
+  }, [conversationId, props?.params, requestedPostSeq, effectiveBoard])
 
   useEffect(() => {
     if (highlightedSeq !== undefined) {

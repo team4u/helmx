@@ -29,11 +29,21 @@ export function setBuiltinClientStub(options: BuiltinClientStubOptions = {}): vo
   stub = options
 }
 
+const NOOP_RETRY = (): void => {}
+
 const sharedPluginClientNamespace = {
   ...HelmxPluginClient,
   usePluginDoc: (name: string) => (realHooks ? HelmxPluginClient.usePluginDoc(name) : stub.docs?.[name]),
-  usePluginSessionDoc: (name: string, options?: { conversationId?: number }) =>
+  usePluginDocState: (name: string, pluginId?: string) =>
+    realHooks
+      ? HelmxPluginClient.usePluginDocState(name, pluginId)
+      : { data: stub.docs?.[name], status: 'ready' as const, retry: NOOP_RETRY },
+  usePluginSessionDoc: (name: string, options?: { conversationId?: number; pluginId?: string }) =>
     realHooks ? HelmxPluginClient.usePluginSessionDoc(name, options) : undefined,
+  usePluginSessionDocState: (name: string, options?: HelmxPluginClient.PluginSessionDocOptions) =>
+    realHooks
+      ? HelmxPluginClient.usePluginSessionDocState(name, options)
+      : { data: undefined, status: 'ready' as const, retry: NOOP_RETRY },
   usePluginConfig: () => {
     const host = useContext(HelmxPluginClient.PluginClientHostContext)
     const ctx = useContext(HelmxPluginClient.PluginClientContext)
