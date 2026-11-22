@@ -4,6 +4,7 @@ import {
   assertBoardPostKind,
   assertGroupId,
   isPosIntId,
+  unknownChannelError,
   type BoardPost,
   type BoardPostKind,
   type BoardViewDoc,
@@ -100,7 +101,7 @@ export function createBoardHandlers(ctx: HelmxPluginContext, coordinator: SwarmC
       })
     }
 
-    const channel = resolvePostChannel(group, input.channel)
+    const channel = resolvePostChannel(group, input.channel, caller.role)
     if (input.wake !== undefined && typeof input.wake !== 'boolean') {
       throw new HelmxError('validation_error', 'wake 必须是布尔值', 400, {})
     }
@@ -211,11 +212,7 @@ export function createBoardHandlers(ctx: HelmxPluginContext, coordinator: SwarmC
     if (input.channel !== undefined && input.channel.trim() !== '') {
       const chName = input.channel.trim()
       if (!group.channels.some((c) => c.name === chName)) {
-        throw new HelmxError('swarm_unknown_channel', `未知频道 '${chName}'`, 404, {
-          pluginId: SWARM_PLUGIN_ID,
-          groupId: group.id,
-          channel: chName,
-        })
+        throw unknownChannelError(group, chName, { kind: 'read' })
       }
       filtered = filtered.filter((p) => p.channel === chName)
     }

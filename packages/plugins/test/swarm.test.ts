@@ -46,9 +46,13 @@ import { checkCoordinatorEligibility } from '../src/swarm/actions.js'
 import { registerSwarmHooks } from '../src/swarm/hooks.js'
 import {
   boardPostInputSchema,
+  boardReadInputSchema,
   boardStatusOutputSchema,
+  dispatchInputSchema,
+  manageChannelInputSchema,
   swarmToolPresentationMetaSchema,
 } from '../src/swarm/action-schemas.js'
+import { unknownChannelError } from '../src/swarm/contracts.js'
 import {
   extractSwarmPresentationMeta,
   resolveSwarmToolClickTarget,
@@ -83,6 +87,11 @@ function makeMember(over: Partial<GroupMemberState> = {}): GroupMemberState {
     createdAt: 1_000,
     ...over,
   }
+}
+
+function availableChannelsOf(err: HelmxError): unknown {
+  if (typeof err.details !== 'object' || err.details === null) return undefined
+  return (err.details as { availableChannels?: unknown }).availableChannels
 }
 
 function makeGroup(over: Partial<CollabGroupRecord> = {}): CollabGroupRecord {
@@ -251,8 +260,24 @@ test('swarm-unit2: default wake derivation and Fail-Closed target resolution', {
   assert.equal(resolvePostChannel(group, undefined), 'main')
   assert.equal(resolvePostChannel(group, 'review'), 'review')
   assert.throws(
-    () => resolvePostChannel(group, 'unknown'),
-    (err: unknown) => err instanceof HelmxError && err.code === 'swarm_unknown_channel' && err.status === 404,
+    () => resolvePostChannel(group, 'unknown', 'worker'),
+    (err: unknown) =>
+      err instanceof HelmxError &&
+      err.code === 'swarm_unknown_channel' &&
+      err.status === 404 &&
+      JSON.stringify(availableChannelsOf(err)) === JSON.stringify(['main', 'review']) &&
+      err.message.includes('main') &&
+      err.message.includes('review') &&
+      !err.message.includes('swarm_manage_channel'),
+  )
+  assert.throws(
+    () => resolvePostChannel(group, 'unknown', 'coordinator'),
+    (err: unknown) =>
+      err instanceof HelmxError &&
+      err.code === 'swarm_unknown_channel' &&
+      err.status === 404 &&
+      JSON.stringify(availableChannelsOf(err)) === JSON.stringify(['main', 'review']) &&
+      err.message.includes('swarm_manage_channel'),
   )
   assert.throws(
     () => resolvePostChannel(group, 'legacy'),
@@ -275,15 +300,81 @@ test('swarm-unit2: default wake derivation and Fail-Closed target resolution', {
     (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
   )
 
-  // Unknown '#ghost' -> 404; archived '#legacy' -> 409
+  // Unknown '#ghost' -> 404 (role-aware & excludes #main / archived); archived '#legacy' -> 409
   assert.throws(
     () => resolveBoardTargets(group, { role: 'worker', from: 'author' }, ['#ghost']),
-    (err: unknown) => err instanceof HelmxError && err.code === 'swarm_unknown_channel' && err.status === 404,
+    (err: unknown) =>
+      err instanceof HelmxError &&
+      err.code === 'swarm_unknown_channel' &&
+      err.status === 404 &&
+      JSON.stringify(availableChannelsOf(err)) === JSON.stringify(['review']) &&
+      err.message.includes('#review') &&
+      !err.message.includes('swarm_manage_channel') &&
+      !err.message.includes("'all'"),
+  )
+  assert.throws(
+    () => resolveBoardTargets(group, { role: 'coordinator', from: 'coordinator' }, ['#ghost']),
+    (err: unknown) =>
+      err instanceof HelmxError &&
+      err.code === 'swarm_unknown_channel' &&
+      err.status === 404 &&
+      JSON.stringify(availableChannelsOf(err)) === JSON.stringify(['review']) &&
+      err.message.includes('#review') &&
+      err.message.includes('swarm_manage_channel'),
+  )
+  const mainOnlyGroup = makeGroup({ channels: [{ name: 'main' }] })
+  assert.throws(
+    () => resolveBoardTargets(mainOnlyGroup, { role: 'worker', from: 'author' }, ['#wave1']),
+    (err: unknown) =>
+      err instanceof HelmxError &&
+      err.code === 'swarm_unknown_channel' &&
+      err.status === 404 &&
+      JSON.stringify(availableChannelsOf(err)) === JSON.stringify([]) &&
+      err.message.includes('#main 不可直接寻址') &&
+      !err.message.includes('swarm_manage_channel'),
   )
   assert.throws(
     () => resolveBoardTargets(group, { role: 'worker', from: 'author' }, ['#legacy']),
     (err: unknown) => err instanceof HelmxError && err.code === 'swarm_channel_archived' && err.status === 409,
   )
+
+  // unknownChannelError context coverage (dispatch / read / manage) + channel input schema descriptions
+  const dispatchUnknown = unknownChannelError(group, 'wave1', { kind: 'dispatch' })
+  assert.equal(dispatchUnknown.code, 'swarm_unknown_channel')
+  assert.equal(dispatchUnknown.status, 404)
+  assert.deepEqual(availableChannelsOf(dispatchUnknown), ['main', 'review'])
+  assert.match(dispatchUnknown.message, /省略/)
+  assert.match(dispatchUnknown.message, /swarm_manage_channel/)
+
+  const readUnknown = unknownChannelError(group, 'wave1', { kind: 'read' })
+  assert.deepEqual(availableChannelsOf(readUnknown), ['main', 'review', 'legacy'])
+  assert.match(readUnknown.message, /legacy（已归档）/)
+  assert.equal(readUnknown.message.includes('swarm_manage_channel'), false)
+
+  const archiveUnknown = unknownChannelError(group, 'wave1', { kind: 'manage', op: 'archive' })
+  assert.deepEqual(availableChannelsOf(archiveUnknown), ['review'])
+  assert.equal(archiveUnknown.message.includes('swarm_manage_channel'), false)
+
+  const subscribeUnknown = unknownChannelError(group, 'wave1', { kind: 'manage', op: 'subscribe' })
+  assert.deepEqual(availableChannelsOf(subscribeUnknown), ['main', 'review'])
+  assert.match(subscribeUnknown.message, /swarm_manage_channel/)
+
+  const unsubscribeUnknown = unknownChannelError(mainOnlyGroup, 'wave1', { kind: 'manage', op: 'unsubscribe' })
+  assert.deepEqual(availableChannelsOf(unsubscribeUnknown), [])
+  assert.equal(unsubscribeUnknown.message.includes('swarm_manage_channel'), false)
+
+  const dispatchChannelsDesc = String(
+    ((dispatchInputSchema['properties'] as Record<string, Record<string, unknown>>)['channels'] ?? {})['description'] ?? '',
+  )
+  assert.match(dispatchChannelsDesc, /omit by default/i)
+  assert.match(dispatchChannelsDesc, /swarm_manage_channel/)
+  for (const [label, schema] of [
+    ['boardPostInputSchema.channel', (boardPostInputSchema['properties'] as Record<string, Record<string, unknown>>)['channel']],
+    ['boardReadInputSchema.channel', (boardReadInputSchema['properties'] as Record<string, Record<string, unknown>>)['channel']],
+    ['manageChannelInputSchema.channel', (manageChannelInputSchema['properties'] as Record<string, Record<string, unknown>>)['channel']],
+  ] as const) {
+    assert.ok(typeof schema?.['description'] === 'string' && schema['description'].length > 0, `${label} 必须声明英文 description`)
+  }
 
   // Active '#review' from 'author' -> expands ['author', 'verifier'], strips self 'author' -> ['verifier']
   const subchannel = resolveBoardTargets(group, { role: 'worker', from: 'author' }, ['#review'], { wake: true })

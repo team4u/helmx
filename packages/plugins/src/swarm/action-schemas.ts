@@ -62,7 +62,12 @@ export const dispatchInputSchema: Record<string, unknown> = {
     forkEntryId: { type: 'integer', minimum: 1 },
     model: { type: 'string', minLength: 1, maxLength: 200 },
     effort: { type: 'string', minLength: 1, maxLength: 32 },
-    channels: { type: 'array', items: channelNameSchema },
+    channels: {
+      type: 'array',
+      items: channelNameSchema,
+      description:
+        "Optional existing subchannels to subscribe (omit by default: 'main' is always subscribed and @member / 'coordinator' addressing needs no subchannel; do not use for wave/batch labels. When #<channel> multicast is needed, create it first via swarm_create_group.channels or swarm_manage_channel with op='create')",
+    },
     title: { type: 'string', minLength: 1, maxLength: 80 },
     cwd: { type: 'string', minLength: 1 },
     nodeId: { type: 'string', minLength: 1, maxLength: 64, pattern: NODE_ID_PATTERN },
@@ -110,7 +115,10 @@ export const manageChannelInputSchema: Record<string, unknown> = {
   properties: {
     groupId: groupIdSchema,
     op: { type: 'string', enum: ['create', 'subscribe', 'unsubscribe', 'archive'] },
-    channel: channelNameSchema,
+    channel: {
+      ...channelNameSchema,
+      description: "Target subchannel name without leading '#' (lowercase [a-z0-9_-])",
+    },
     topic: { type: 'string', maxLength: 200 },
     member: memberNameSchema,
   },
@@ -135,7 +143,11 @@ export const boardPostInputSchema: Record<string, unknown> = {
         "Message intent: 'brief' (task assignment), 'handoff' (peer delivery), 'review' (verification feedback), 'comment' (passive note, wake defaults false), 'blocker' (escalates to coordinator immediately), 'done' (final completion to coordinator)",
     },
     body: { type: 'string', minLength: 1 },
-    channel: channelNameSchema,
+    channel: {
+      ...channelNameSchema,
+      description:
+        "Optional existing channel label for posting (defaults to 'main'; any non-'main' channel must already exist and not be archived)",
+    },
     wake: {
       type: 'boolean',
       description:
@@ -151,7 +163,10 @@ export const boardReadInputSchema: Record<string, unknown> = {
   type: 'object',
   properties: {
     groupId: groupIdSchema,
-    channel: channelNameSchema,
+    channel: {
+      ...channelNameSchema,
+      description: 'Optional existing channel name to filter posts (omit to read across all channels)',
+    },
     sinceSeq: { type: 'integer', minimum: 0 },
     seqs: { type: 'array', items: { type: 'integer', minimum: 1 } },
     limit: { type: 'integer', minimum: 1, maximum: 200 },

@@ -31,6 +31,7 @@ import {
   assertGroupId,
   isEnoent,
   isLifecycleTeardownError,
+  unknownChannelError,
   type BoardPost,
   type BoardPostKind,
   type BoardViewDoc,
@@ -765,11 +766,7 @@ export function createCollabGroupRuntime(
           }
           const ch = draft.channels.find((c) => c.name === chName)
           if (ch === undefined) {
-            throw new HelmxError('swarm_unknown_channel', `频道 '${chName}' 不存在`, 404, {
-              pluginId: SWARM_PLUGIN_ID,
-              groupId: draft.id,
-              channel: chName,
-            })
+            throw unknownChannelError(draft, chName, { kind: 'manage', op: 'archive' })
           }
           ch.archived = true
         } else if (input.op === 'subscribe' || input.op === 'unsubscribe') {
@@ -781,11 +778,7 @@ export function createCollabGroupRuntime(
           }
           const ch = draft.channels.find((c) => c.name === chName)
           if (ch === undefined) {
-            throw new HelmxError('swarm_unknown_channel', `频道 '${chName}' 不存在`, 404, {
-              pluginId: SWARM_PLUGIN_ID,
-              groupId: draft.id,
-              channel: chName,
-            })
+            throw unknownChannelError(draft, chName, { kind: 'manage', op: input.op })
           }
           if (input.op === 'subscribe' && ch.archived === true) {
             throw new HelmxError('swarm_channel_archived', `频道 '${chName}' 已归档，无法订阅`, 409, {
@@ -844,6 +837,20 @@ export function createCollabGroupRuntime(
             pluginId: SWARM_PLUGIN_ID,
             groupId: validId,
           })
+        }
+        for (const chName of memberInit.channels) {
+          if (chName === 'main') continue
+          const ch = current.channels.find((c) => c.name === chName)
+          if (ch === undefined) {
+            throw unknownChannelError(current, chName, { kind: 'dispatch' })
+          }
+          if (ch.archived === true) {
+            throw new HelmxError('swarm_channel_archived', `频道 '${chName}' 已归档，无法订阅`, 409, {
+              pluginId: SWARM_PLUGIN_ID,
+              groupId: validId,
+              channel: chName,
+            })
+          }
         }
         const next = structuredClone(current)
         const now = Date.now()

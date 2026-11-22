@@ -40,6 +40,11 @@ import {
   type CollabGroupRecord,
 } from '../src/swarm.js'
 
+function availableChannelsOf(err: HelmxError): unknown {
+  if (typeof err.details !== 'object' || err.details === null) return undefined
+  return (err.details as { availableChannels?: unknown }).availableChannels
+}
+
 describe('builtin:swarm board routing, settlement & self-healing', () => {
   const gitTemplate = createGitTemplate()
   after(() => gitTemplate.cleanup())
@@ -941,6 +946,22 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
       })) as { groupId: string }
 
       // 1) First-class swarm_manage_channel tool creates subchannel; waking empty subchannel fails closed with 409 swarm_channel_empty
+      //    and unknown channels report availableChannels without steering workers toward coordinator-only tools
+      await assert.rejects(
+        () =>
+          kernel.plugins.executeTool(
+            'swarm_dispatch_worker',
+            { groupId, name: 'ghost-worker', prompt: 'Should reject unknown channel', channels: ['wave1'] },
+            { conversationId: coord.id },
+          ),
+        (err: unknown) =>
+          err instanceof HelmxError &&
+          err.code === 'swarm_unknown_channel' &&
+          err.status === 404 &&
+          JSON.stringify(availableChannelsOf(err)) === JSON.stringify(['main']) &&
+          err.message.includes('swarm_manage_channel'),
+      )
+
       const chToolRes = (await kernel.plugins.executeTool(
         'swarm_manage_channel',
         { groupId, op: 'create', channel: 'empty-ch', topic: 'No members yet' },
@@ -975,8 +996,13 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
           },
           fauxAssistantMessage('alpha resumed done'),
         ],
+        waveworker: [
+          fauxAssistantMessage([fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', body: 'wave1 slice done' })], { stopReason: 'toolUse' }),
+          fauxAssistantMessage('waveworker done'),
+        ],
         coordinator: [
           fauxAssistantMessage('Coordinator noted stall.'),
+          fauxAssistantMessage('Coordinator noted waveworker done.'),
           fauxAssistantMessage('Coordinator noted resumed alpha done.'),
         ],
       })
@@ -988,6 +1014,71 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
         { conversationId: coord.id },
       )) as { workerConversationId: number }
       await kernel.waitForIdle(alpha.workerConversationId)
+      await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+      await kernel.waitForIdle(coord.id)
+
+      // Worker unknown-channel diagnostics must never advertise coordinator-only swarm_manage_channel or 'all'
+      await assert.rejects(
+        () =>
+          kernel.plugins.executeTool(
+            'swarm_board_post',
+            { to: ['coordinator'], kind: 'comment', channel: 'ghost', body: 'Bad channel' },
+            { conversationId: alpha.workerConversationId },
+          ),
+        (err: unknown) =>
+          err instanceof HelmxError &&
+          err.code === 'swarm_unknown_channel' &&
+          err.status === 404 &&
+          JSON.stringify(availableChannelsOf(err)) === JSON.stringify(['main', 'empty-ch']) &&
+          !err.message.includes('swarm_manage_channel'),
+      )
+      await assert.rejects(
+        () =>
+          kernel.plugins.executeTool(
+            'swarm_board_post',
+            { to: ['#ghost'], kind: 'handoff', body: 'Bad target channel' },
+            { conversationId: alpha.workerConversationId },
+          ),
+        (err: unknown) =>
+          err instanceof HelmxError &&
+          err.code === 'swarm_unknown_channel' &&
+          err.status === 404 &&
+          JSON.stringify(availableChannelsOf(err)) === JSON.stringify(['empty-ch']) &&
+          err.message.includes('#empty-ch') &&
+          !err.message.includes('swarm_manage_channel') &&
+          !err.message.includes("'all'"),
+      )
+      await assert.rejects(
+        () =>
+          kernel.plugins.executeTool(
+            'swarm_board_read',
+            { channel: 'ghost' },
+            { conversationId: alpha.workerConversationId },
+          ),
+        (err: unknown) =>
+          err instanceof HelmxError &&
+          err.code === 'swarm_unknown_channel' &&
+          err.status === 404 &&
+          JSON.stringify(availableChannelsOf(err)) === JSON.stringify(['main', 'empty-ch']) &&
+          !err.message.includes('swarm_manage_channel'),
+      )
+
+      // Parallel same-turn [swarm_manage_channel(create), swarm_dispatch_worker(channels: ['wave1'])] must serialize admission without a 404 race
+      const [waveChannelRes, waveWorkerRes] = await Promise.all([
+        kernel.plugins.executeTool(
+          'swarm_manage_channel',
+          { groupId, op: 'create', channel: 'wave1', topic: 'Concurrent wave' },
+          { conversationId: coord.id },
+        ) as Promise<{ structuredOutput: { channels: Array<{ name: string }> } }>,
+        kernel.plugins.executeTool(
+          'swarm_dispatch_worker',
+          { groupId, name: 'waveworker', prompt: 'Run wave1 slice', channels: ['wave1'] },
+          { conversationId: coord.id },
+        ) as Promise<{ structuredOutput: { workerConversationId: number; name: string } }>,
+      ])
+      assert.ok(waveChannelRes.structuredOutput.channels.some((c) => c.name === 'wave1'))
+      assert.equal(waveWorkerRes.structuredOutput.name, 'waveworker')
+      await kernel.waitForIdle(waveWorkerRes.structuredOutput.workerConversationId)
       await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
       await kernel.waitForIdle(coord.id)
 
@@ -1016,13 +1107,15 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
       await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
       await kernel.waitForIdle(coord.id)
 
-      // board_status text summary surfaces member model=
+      // board_status text summary surfaces member model= and waveworker's subscribed 'wave1' channel
       const statusTool = (await kernel.plugins.executeTool(
         'swarm_board_status',
         { groupId },
         { conversationId: coord.id },
-      )) as { output: string }
+      )) as { output: string; structuredOutput: { members: Array<{ name: string; channels: string[] }> } }
       assert.match(statusTool.output, /model=faux\/faux-2/)
+      const waveMember = statusTool.structuredOutput.members.find((m) => m.name === 'waveworker')
+      assert.deepEqual(waveMember?.channels, ['main', 'wave1'])
 
       // 3) 0-Token peer-to-peer hop circuit breaker (maxPeerHopsWithoutCoordinator = 2):
       //    p1 -> p2 (hop 1) -> p1 (hop 2) -> p2 (hop 3 > 2 => trips breaker, pauses p2 wake, escalates system [blocker] to coordinator!)

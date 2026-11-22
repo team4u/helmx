@@ -10,7 +10,7 @@ Swarm 在会话里提供一个共享看板。主控会话负责分工，成员�
 helmx swarm create-group --conversation-id 42 --title '检查导出模块' --json
 ```
 
-主控分配具体任务，协调接口和分支合入。成员可单独指定 Profile、模型、思考档位和频道。并发写代码的成员应各有独立的 Git worktree。Swarm 通过 `builtin:worktree` 分配工作树，并在协作期间持有租约，避免被清理。`readonly` 是任务约定，成员仍保有原来的工具权限。 [Git Worktree 的隔离范围](../workflows/worktree-and-gate.md)
+主控分配具体任务，协调接口和分支合入。成员可单独指定 Profile、模型、思考档位和频道；成员默认已订阅 `main`，仅在需要 `#频道名` 多播时先通过 `create_group` 或 `manage_channel` 创建子频道再派工订阅。并发写代码的成员应各有独立的 Git worktree。Swarm 通过 `builtin:worktree` 分配工作树，并在协作期间持有租约，避免被清理。`readonly` 是任务约定，成员仍保有原来的工具权限。 [Git Worktree 的隔离范围](../workflows/worktree-and-gate.md)
 
 ## 看板消息
 

@@ -509,6 +509,103 @@ export function assertChannelName(value: unknown): string {
   return trimmed
 }
 
+export type UnknownChannelContext =
+  | { kind: 'dispatch' }
+  | { kind: 'manage'; op: 'subscribe' | 'unsubscribe' | 'archive' }
+  | { kind: 'post_channel'; callerRole?: 'coordinator' | 'worker' | 'human' | 'system' }
+  | { kind: 'post_target'; callerRole: 'coordinator' | 'worker' | 'human' | 'system' }
+  | { kind: 'read' }
+
+/**
+ * 统一构造 `swarm_unknown_channel` (404) 诊断错误：
+ * - 在 `details.availableChannels` 中附带当前上下文实际可用的频道清单；
+ * - 按调用场景与角色权限分流修复指引（严禁向 worker 提及无权限的 `swarm_manage_channel` 或 `'all'`，
+ *   对 `#<channel>` 寻址明确排除不可直接寻址的 `#main`）。
+ */
+export function unknownChannelError(
+  group: CollabGroupRecord,
+  channelName: string,
+  context: UnknownChannelContext,
+): HelmxError {
+  const activeChannels = group.channels.filter((c) => c.archived !== true).map((c) => c.name)
+  const activeSubchannels = group.channels
+    .filter((c) => c.name !== 'main' && c.archived !== true)
+    .map((c) => c.name)
+
+  let availableChannels: string[]
+  let message: string
+
+  switch (context.kind) {
+    case 'dispatch': {
+      availableChannels = activeChannels
+      const activeText = activeChannels.length > 0 ? activeChannels.join('、') : '无'
+      message =
+        `频道 '${channelName}' 不存在（现有活跃频道：${activeText}）。` +
+        "成员默认已订阅 'main'，无需为波次/分组填写 channels（省略该字段即可）；" +
+        `如确需子频道多播隔离，请先调用 swarm_manage_channel({ op: 'create', channel: '${channelName}' }) 创建后再派工`
+      break
+    }
+    case 'manage': {
+      if (context.op === 'subscribe') {
+        availableChannels = activeChannels
+        const activeText = activeChannels.length > 0 ? activeChannels.join('、') : '无'
+        message =
+          `频道 '${channelName}' 不存在（现有活跃频道：${activeText}）。` +
+          `请先调用 swarm_manage_channel({ op: 'create', channel: '${channelName}' }) 创建后再订阅`
+      } else if (context.op === 'archive') {
+        availableChannels = activeSubchannels
+        message =
+          activeSubchannels.length > 0
+            ? `频道 '${channelName}' 不存在（可归档活跃子频道：${activeSubchannels.join('、')}）`
+            : `频道 '${channelName}' 不存在（当前没有可归档的活跃子频道）`
+      } else {
+        const subchannels = group.channels.filter((c) => c.name !== 'main').map((c) => c.name)
+        availableChannels = subchannels
+        message =
+          subchannels.length > 0
+            ? `频道 '${channelName}' 不存在（现有子频道：${subchannels.join('、')}）`
+            : `频道 '${channelName}' 不存在（当前只有主频道 main，无子频道可退订）`
+      }
+      break
+    }
+    case 'post_channel': {
+      availableChannels = activeChannels
+      const activeText = activeChannels.length > 0 ? activeChannels.join('、') : '无'
+      const canManage = context.callerRole === 'coordinator' || context.callerRole === 'human'
+      message = canManage
+        ? `未知频道 '${channelName}'（现有活跃频道：${activeText}）。如无需子频道可省略 channel（默认发往 'main'），或先调用 swarm_manage_channel({ op: 'create', channel: '${channelName}' }) 创建后再使用`
+        : `未知频道 '${channelName}'（现有活跃频道：${activeText}）。请省略 channel（默认发往 'main'）或改用现有活跃频道，并直接通过 @成员名 或 'coordinator' 寻址`
+      break
+    }
+    case 'post_target': {
+      availableChannels = activeSubchannels
+      const targetHint =
+        activeSubchannels.length > 0
+          ? `现有可用子频道：${activeSubchannels.map((c) => `#${c}`).join('、')}`
+          : '当前无可用子频道（#main 不可直接寻址）'
+      const canManage = context.callerRole === 'coordinator' || context.callerRole === 'human'
+      message = canManage
+        ? `未知子频道 '#${channelName}'（${targetHint}）。请改用现有子频道、直接指定成员名 / 'all'，或先调用 swarm_manage_channel({ op: 'create', channel: '${channelName}' }) 创建并订阅成员`
+        : `未知子频道 '#${channelName}'（${targetHint}）。请直接通过成员名或 'coordinator' 寻址${activeSubchannels.length > 0 ? '，或改用上述可用子频道' : ''}`
+      break
+    }
+    case 'read': {
+      availableChannels = group.channels.map((c) => c.name)
+      const display = group.channels.map((c) => (c.archived === true ? `${c.name}（已归档）` : c.name))
+      const listText = display.length > 0 ? display.join('、') : '无'
+      message = `未知频道 '${channelName}'（现有频道：${listText}）。可省略 channel 读取全部频道消息`
+      break
+    }
+  }
+
+  return new HelmxError('swarm_unknown_channel', message, 404, {
+    pluginId: SWARM_PLUGIN_ID,
+    groupId: group.id,
+    channel: channelName,
+    availableChannels,
+  })
+}
+
 /** 协作组 ID 强校验（防路径穿越）。 */
 export function assertGroupId(value: unknown): string {
   if (typeof value !== 'string') {

@@ -348,11 +348,13 @@ export function createGroupHandlers(
     if (!['create', 'subscribe', 'unsubscribe', 'archive'].includes(input.op)) {
       throw new HelmxError('validation_error', `未知频道操作 '${String(input.op)}'`, 400, {})
     }
-    const updated = await groups.manageChannel(group.id, input)
-    return {
-      groupId: updated.id,
-      channels: updated.channels.map((c) => ({ ...c })),
-    }
+    return enqueueDispatch(`group:${group.id}`, async () => {
+      const updated = await groups.manageChannel(group.id, input)
+      return {
+        groupId: updated.id,
+        channels: updated.channels.map((c) => ({ ...c })),
+      }
+    })
   }
 
   const closeGroup = async (

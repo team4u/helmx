@@ -14,6 +14,7 @@ import {
   assertChannelName,
   assertGroupId,
   assertMemberName,
+  unknownChannelError,
   type CollabGroupRecord,
   type GroupMemberState,
   type SwarmCoordinator,
@@ -207,25 +208,13 @@ export function createWorkerHandlers(
     const model = input.model !== undefined && input.model.trim() !== '' ? input.model.trim() : undefined
     const effort = input.effort !== undefined && input.effort.trim() !== '' ? input.effort.trim() : undefined
 
+    if (input.channels !== undefined && !Array.isArray(input.channels)) {
+      throw new HelmxError('validation_error', 'channels 必须是字符串数组', 400, {})
+    }
     const subscribedChannels = ['main']
     for (const rawCh of input.channels ?? []) {
       const chName = assertChannelName(rawCh)
       if (chName === 'main') continue
-      const ch = group.channels.find((c) => c.name === chName)
-      if (ch === undefined) {
-        throw new HelmxError('swarm_unknown_channel', `频道 '${chName}' 不存在`, 404, {
-          pluginId: SWARM_PLUGIN_ID,
-          groupId: group.id,
-          channel: chName,
-        })
-      }
-      if (ch.archived === true) {
-        throw new HelmxError('swarm_channel_archived', `频道 '${chName}' 已归档，无法订阅`, 409, {
-          pluginId: SWARM_PLUGIN_ID,
-          groupId: group.id,
-          channel: chName,
-        })
-      }
       if (!subscribedChannels.includes(chName)) subscribedChannels.push(chName)
     }
 
@@ -307,11 +296,7 @@ export function createWorkerHandlers(
         if (chName === 'main') continue
         const ch = freshGroup.channels.find((c) => c.name === chName)
         if (ch === undefined) {
-          throw new HelmxError('swarm_unknown_channel', `频道 '${chName}' 不存在`, 404, {
-            pluginId: SWARM_PLUGIN_ID,
-            groupId: freshGroup.id,
-            channel: chName,
-          })
+          throw unknownChannelError(freshGroup, chName, { kind: 'dispatch' })
         }
         if (ch.archived === true) {
           throw new HelmxError('swarm_channel_archived', `频道 '${chName}' 已归档，无法订阅`, 409, {

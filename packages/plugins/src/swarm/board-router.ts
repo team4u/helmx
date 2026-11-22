@@ -10,6 +10,7 @@ import {
   COORDINATOR_ESCALATION_KINDS,
   SWARM_PLUGIN_ID,
   toGroupSummary,
+  unknownChannelError,
   type BoardBadgeEntry,
   type BoardPost,
   type BoardPostKind,
@@ -39,14 +40,17 @@ export function resolveDefaultWake(kind: BoardPostKind, to: readonly string[]): 
 }
 
 /** 校验发帖目标频道存在且未归档（缺省 'main'）。 */
-export function resolvePostChannel(group: CollabGroupRecord, rawChannel: string | undefined): string {
+export function resolvePostChannel(
+  group: CollabGroupRecord,
+  rawChannel: string | undefined,
+  callerRole?: BoardCallerIdentity['role'],
+): string {
   const channelName = rawChannel === undefined || rawChannel.trim() === '' ? 'main' : rawChannel.trim()
   const found = group.channels.find((c) => c.name === channelName)
   if (found === undefined) {
-    throw new HelmxError('swarm_unknown_channel', `未知频道 '${channelName}'`, 404, {
-      pluginId: SWARM_PLUGIN_ID,
-      groupId: group.id,
-      channel: channelName,
+    throw unknownChannelError(group, channelName, {
+      kind: 'post_channel',
+      ...(callerRole !== undefined ? { callerRole } : {}),
     })
   }
   if (found.archived === true) {
@@ -122,11 +126,7 @@ export function resolveBoardTargets(
       }
       const ch = group.channels.find((c) => c.name === chName)
       if (ch === undefined) {
-        throw new HelmxError('swarm_unknown_channel', `未知子频道 '${token}'`, 404, {
-          pluginId: SWARM_PLUGIN_ID,
-          groupId: group.id,
-          channel: chName,
-        })
+        throw unknownChannelError(group, chName, { kind: 'post_target', callerRole: caller.role })
       }
       if (ch.archived === true) {
         throw new HelmxError('swarm_channel_archived', `子频道 '${token}' 已归档，拒绝投递`, 409, {
