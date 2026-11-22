@@ -58,7 +58,7 @@ import {
   adaptiveThinking,
   thinkingLevelMap,
 } from '../src/magpie/catalog.js'
-import { normalizeRoot, isLoopback, resolveGateway } from '../src/magpie/gateway.js'
+import { normalizeRoot, isLoopback, isLoopbackConnectionError, resolveGateway } from '../src/magpie/gateway.js'
 
 const MAGPIE = MAGPIE_PLUGIN_ID
 
@@ -593,6 +593,22 @@ test('magpie10: 未配置默认 loopback 不可达静默空闲（无 errors[magp
     assert.equal(cacheOnly.errors.size, 0)
     assert.equal(env.models.getModels('magpie').length, 0)
     assert.equal(statusDoc(env).reachable, false, 'cache-only 不推进 reachable')
+
+    // isLoopbackConnectionError 诚实性边界：含非拒绝类错误码（ECONNRESET/ETIMEDOUT/UND_ERR_HEADERS_TIMEOUT）的
+    // fetch failed 绝不误判为空闲未检测到，必须继续诚实抛错。
+    assert.equal(
+      isLoopbackConnectionError(new TypeError('fetch failed', { cause: Object.assign(new Error('refused'), { code: 'ECONNREFUSED' }) })),
+      true,
+    )
+    assert.equal(isLoopbackConnectionError(new TypeError('fetch failed')), true)
+    for (const code of ['ECONNRESET', 'ETIMEDOUT', 'UND_ERR_HEADERS_TIMEOUT'] as const) {
+      assert.equal(
+        isLoopbackConnectionError(new TypeError('fetch failed', { cause: Object.assign(new Error(code), { code }) })),
+        false,
+        `${code} 表示已运行但异常的本地网关，绝不能静默归类为空闲未检测到`,
+      )
+    }
+    assert.equal(isLoopbackConnectionError(new Error('http://127.0.0.1:3425/v1/models answered 503')), false)
   } finally {
     await env.close()
   }

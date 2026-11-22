@@ -65,15 +65,20 @@ export function isLoopbackConnectionError(error: unknown): boolean {
   if (error === null || error === undefined) return false
   const seen = new Set<unknown>()
   const queue: unknown[] = [error]
+  let sawErrorCode = false
   while (queue.length > 0) {
     const current = queue.shift()
     if (current === null || current === undefined || typeof current !== 'object' || seen.has(current)) continue
     seen.add(current)
     const rec = current as { code?: unknown; cause?: unknown; errors?: unknown }
-    if (typeof rec.code === 'string' && LOOPBACK_CONNECTION_ERROR_CODES.has(rec.code)) return true
+    if (typeof rec.code === 'string' && rec.code.length > 0) {
+      sawErrorCode = true
+      if (LOOPBACK_CONNECTION_ERROR_CODES.has(rec.code)) return true
+    }
     if (rec.cause !== undefined) queue.push(rec.cause)
     if (Array.isArray(rec.errors)) queue.push(...rec.errors)
   }
+  if (sawErrorCode) return false
   if (error instanceof TypeError) {
     if (/fetch failed/i.test(error.message) || /ECONNREFUSED|unreachable/i.test(error.message)) return true
   }
