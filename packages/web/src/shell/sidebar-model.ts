@@ -23,7 +23,6 @@ import type { HelmxStoreValue, QualifiedUiSpec, ResolvedTarget } from '../lib/ty
 import { resolveTargetString } from '../lib/types.js'
 import { ARCHIVED_TAG, isConversationArchived } from '../conversation/archive-model.js'
 import { resolveFocusedPanel } from './shortcuts-model.js'
-export { ARCHIVED_TAG, archiveConversationTags, isConversationArchived, restoreConversationTags } from '../conversation/archive-model.js'
 
 export interface SidebarPartition {
   /** sidebar.item 的 'conversation:profile:<id>' 已指向的 profileId 集合。 */

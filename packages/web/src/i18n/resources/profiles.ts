@@ -9,9 +9,8 @@ import type { MessageTable } from '../messages.js'
 export const profilesMessages = {
   // Category tab labels ('all'/'system' reuse common.all / common.builtIn).
   'profiles.tab.custom': { en: 'Custom', 'zh-CN': '自定义' },
-  'profiles.tab.herdr': { en: 'Herdr', 'zh-CN': 'Herdr' },
 
-  // Model binding select options (profile editor / detail drawer).
+  // Model binding select options (profile detail drawer).
   'profiles.modelOption.followSystemDefault': { en: 'Follow system default', 'zh-CN': '跟随系统默认' },
 
   // Starter draft validation errors (form display copy).
@@ -65,7 +64,7 @@ export const profilesMessages = {
   'profiles.card.followGlobalDefault': { en: 'Follow global default', 'zh-CN': '跟随全局默认' },
   'profiles.card.globalDefault': { en: 'Global default', 'zh-CN': '全局默认' },
   'profiles.card.skillsTitle': { en: 'Skills: {label}', 'zh-CN': '技能配置：{label}' },
-  'profiles.card.herdrRuntimeTitle': { en: 'Herdr external runtime', 'zh-CN': 'Herdr 外部运行时' },
+  'profiles.card.runtimeTitle': { en: 'External runtime: {label}', 'zh-CN': '外部运行时：{label}' },
   'profiles.card.linkedConversations': {
     en: 'Linked to {count} conversations',
     'zh-CN': '关联 {count} 个会话',
@@ -124,6 +123,53 @@ export const profilesMessages = {
     en: 'Starter {index}: {error}',
     'zh-CN': '引导词 {index}：{error}',
   },
+  'profiles.drawer.error.runtimeAgentRequired': {
+    en: 'Enter an external runtime agent',
+    'zh-CN': '请填写外部运行时 Agent',
+  },
+  'profiles.drawer.runtime.unmanagedNotice': {
+    en: 'Saved external runtime config ({kind}); its owning plugin is disabled or not managed here, kept as-is on save',
+    'zh-CN': '已保存外部运行时配置（{kind}），所属插件未启用或不由本编辑器管理，保存时原样保留',
+  },
+  'profiles.drawer.runtime.clear': { en: 'Clear', 'zh-CN': '清除' },
+  'profiles.drawer.runtime.clearTitle': {
+    en: 'Clear saved external runtime config',
+    'zh-CN': '清除已保存的外部运行时配置',
+  },
+  'profiles.drawer.runtime.kind': { en: 'Runtime type', 'zh-CN': '运行时类型' },
+  'profiles.drawer.runtime.agent': { en: 'Agent', 'zh-CN': 'Agent' },
+  'profiles.drawer.runtime.agentPlaceholder': { en: 'CLI agent kind', 'zh-CN': 'CLI 类型' },
+  'profiles.drawer.runtime.node': { en: 'Runtime node', 'zh-CN': '运行时节点' },
+  'profiles.drawer.runtime.workspace': { en: 'Workspace', 'zh-CN': 'Workspace' },
+  'profiles.drawer.runtime.workspacePlaceholder': {
+    en: 'Absolute working directory path',
+    'zh-CN': '绑定工作目录绝对路径',
+  },
+  'profiles.drawer.runtime.args': { en: 'Args', 'zh-CN': '参数' },
+  'profiles.drawer.runtime.argsPlaceholder': {
+    en: 'One argument per line (spaces inside an argument are preserved), e.g.\n--prompt\n--title Weekly Draft',
+    'zh-CN': '每行一个参数，参数内的空格会原样保留，如：\n--prompt\n--title 周报 草稿',
+  },
+  'profiles.drawer.runtime.envTitle': {
+    en: 'Environment variables (non-secret only; use Credentials for API keys)',
+    'zh-CN': '环境变量（仅非机密项；API Key 请使用凭据库）',
+  },
+  'profiles.drawer.runtime.envKeyPlaceholder': { en: 'KEY', 'zh-CN': 'KEY' },
+  'profiles.drawer.runtime.envValuePlaceholder': { en: 'VALUE', 'zh-CN': 'VALUE' },
+  'profiles.drawer.runtime.envKeyAria': {
+    en: 'Environment variable {index} key',
+    'zh-CN': '环境变量 {index} 键名',
+  },
+  'profiles.drawer.runtime.envValueAria': {
+    en: 'Environment variable {index} value',
+    'zh-CN': '环境变量 {index} 值',
+  },
+  'profiles.drawer.runtime.envDeleteAria': {
+    en: 'Delete environment variable {name}',
+    'zh-CN': '删除环境变量 {name}',
+  },
+  'profiles.drawer.runtime.envDeleteTitle': { en: 'Delete variable', 'zh-CN': '删除该变量' },
+  'profiles.drawer.runtime.envAdd': { en: 'Add variable', 'zh-CN': '添加变量' },
   'profiles.drawer.field.id': { en: 'Profile ID', 'zh-CN': '角色 ID' },
   'profiles.drawer.field.idPlaceholder': {
     en: 'Letters, digits and hyphens, e.g. code-reviewer',

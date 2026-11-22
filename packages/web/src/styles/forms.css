@@ -985,7 +985,7 @@ button.attachment-chip:disabled {
 }
 
 .composer-split-send:has(.composer-split-main:disabled) .composer-split-divider {
-  background: var(--border-subtle);
+  background: var(--border);
 }
 
 .composer-split-trigger {
@@ -1017,8 +1017,8 @@ button.attachment-chip:disabled {
 .composer-busy-dropdown-content {
   min-width: 230px;
   padding: 5px;
-  background: var(--bg-surface);
-  border: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
 }
@@ -1074,7 +1074,7 @@ button.attachment-chip:disabled {
   background: var(--bg-muted);
   padding: 2px 5px;
   border-radius: var(--radius-xs);
-  border: 1px solid var(--border-subtle);
+  border: 1px solid var(--border);
 }
 
 .composer-busy-menu-item[data-highlighted] .composer-busy-menu-icon,

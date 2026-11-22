@@ -855,6 +855,25 @@ test('ModelCenter SSR: backend catalog plugin gateways render as dynamic provide
   assert.equal(EMOJI_REGEX.test(html), false)
 })
 
+test('buildMergedProviders: zero-model dynamic catalog providers stay in the list', { timeout: 60_000 }, () => {
+  const emptyDynamic: ModelProviderSummary[] = [
+    {
+      id: 'empty-dynamic',
+      name: 'Empty Dynamic',
+      modelCount: 0,
+      dynamic: true,
+      baseUrl: 'http://127.0.0.1:9001',
+      authMethods: [{ type: 'api_key', label: 'API Key' }],
+    },
+  ]
+  const merged = buildMergedProviders([], [], [], [], emptyDynamic)
+  assert.equal(merged.length, 1)
+  assert.equal(merged[0]?.id, 'empty-dynamic')
+  assert.equal(merged[0]?.dynamic, true)
+  assert.equal(merged[0]?.baseUrl, 'http://127.0.0.1:9001')
+  assert.equal(merged[0]?.configured, false)
+})
+
 // ---------------------------------------------------------------------------
 // 4b. Custom gateway endpoint persistence (fix: endpoint edits from the model
 //     UI used to be silently dropped)

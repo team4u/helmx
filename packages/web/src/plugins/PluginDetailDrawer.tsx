@@ -9,9 +9,6 @@ import type { HelmxLocale, PluginSummary } from '@helmx/protocol/browser'
 import { DEFAULT_HELMX_LOCALE, resolveLocalizedText } from '@helmx/protocol/browser'
 import { ApiClientError, pluginsApi, type PluginConfigResponse } from '../lib/api.js'
 import { isPluginSummaryActive } from '../lib/live-state.js'
-import { EmptyState, HelmxIcon, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle, ModelPickerControl, Select, Switch } from '@helmx/plugin-client'
-import { createWebTranslator } from '../i18n/catalog.js'
-import { useOptionalGroupedUi, useOptionalLocale, useOptionalNodes, useOptionalProfiles, useOptionalStoreActions } from '../lib/store-context.js'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -21,7 +18,20 @@ import {
   AlertDialogOverlay,
   AlertDialogPortal,
   AlertDialogTitle,
-} from '../ui/AlertDialog.js'
+  EmptyState,
+  HelmxIcon,
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogOverlay,
+  DialogPortal,
+  DialogTitle,
+  ModelPickerControl,
+  Select,
+  Switch,
+} from '@helmx/plugin-client'
+import { createWebTranslator } from '../i18n/catalog.js'
+import { useOptionalGroupedUi, useOptionalLocale, useOptionalNodes, useOptionalProfiles, useOptionalStoreActions } from '../lib/store-context.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
 import { buildModelPickerControlCopy, useModelPickerControlAdapter } from '../conversation/model-picker-adapter.js'
 import {

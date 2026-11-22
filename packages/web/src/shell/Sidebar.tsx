@@ -21,13 +21,13 @@ import { ConversationRowActionsMenu } from '../ui/ConversationRowActionsMenu.js'
 import { isSameResolvedTarget, resolveTargetString, CENTER_TARGETS, spaceForTarget, type SidebarSpace } from '../lib/types.js'
 import { readBrowserNotificationPermission } from '../lib/browser-notification.js'
 import { formatModShortcut } from './shortcuts-model.js'
+import { isConversationArchived } from '../conversation/archive-model.js'
 import {
   composeSidebarBadgeLabel,
   extractRailQuickEntries,
   extractSidebarViews,
   filterConversationsByTag,
   getConversationPresence,
-  isConversationArchived,
   presenceNavClassSuffix,
   resolveSidebarTargetPresence,
   shouldSkipNavRowClick,

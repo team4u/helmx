@@ -132,7 +132,7 @@
 .plugin-center-empty-icon {
   width: 48px;
   height: 48px;
-  border-radius: var(--radius-full, 9999px);
+  border-radius: var(--radius-pill);
   background: var(--bg-subtle);
   border: 1px solid var(--border);
   display: flex;

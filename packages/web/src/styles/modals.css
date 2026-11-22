@@ -440,7 +440,7 @@
   font-size: 14px;
 }
 .hub-changelog-date {
-  color: var(--text-muted, #8a8f98);
+  color: var(--fg-muted);
   font-size: 12px;
 }
 .hub-upgraded-notice .hub-update-card-dismiss {

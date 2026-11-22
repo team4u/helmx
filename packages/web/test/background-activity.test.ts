@@ -28,7 +28,8 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import type { ConversationSummary, HelmxLocale, PluginUiContribution, WorkbenchPanelSpec } from '@helmx/protocol'
 import { groupUiContributions } from '../src/lib/types.js'
-import { ARCHIVED_TAG, conversationStatusDotClass, conversationStatusTooltip } from '../src/shell/sidebar-model.js'
+import { ARCHIVED_TAG } from '../src/conversation/archive-model.js'
+import { conversationStatusDotClass, conversationStatusTooltip } from '../src/shell/sidebar-model.js'
 import {
   backgroundAwareStatusTooltip,
   collectBackgroundBadgeDocs,

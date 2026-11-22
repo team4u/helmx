@@ -23,7 +23,8 @@ import { renderToString } from 'react-dom/server'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import type { ConversationSummary, PluginUiContribution, ScreenSpec, SidebarItemBadgeSpec, SidebarItemSpec, WorkbenchPanelSpec } from '@helmx/protocol'
-import { ARCHIVED_TAG, type SidebarViewItem } from '../src/shell/sidebar-model.js'
+import { ARCHIVED_TAG } from '../src/conversation/archive-model.js'
+import type { SidebarViewItem } from '../src/shell/sidebar-model.js'
 import type { ConversationBackgroundIndex } from '../src/shell/background-activity-model.js'
 import {
   aggregateAttentionTrees,

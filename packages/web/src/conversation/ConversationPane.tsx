@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { conversationsApi } from '../lib/api.js'
 import type { ConversationAttachmentRef, ConversationEntry } from '@helmx/protocol/browser'
-import { HelmxIcon, Popover, PopoverContent, PopoverTrigger } from '@helmx/plugin-client'
+import { ConfirmDialog, HelmxIcon, Popover, PopoverContent, PopoverTrigger } from '@helmx/plugin-client'
+import { isConversationArchived } from '../conversation/archive-model.js'
 import {
   collectEnabledPluginIds,
   isConversationArchivable,
-  isConversationArchived,
   isConversationDeletable,
   isHumanSelectableProfile,
   partitionSidebarUi,
@@ -16,7 +16,6 @@ import {
   useConversationDetail,
   useConversationLive,
   useConversationSummary,
-  useConversations,
   useGroupedUi,
   useLoadError,
   useLocationTargets,
@@ -29,7 +28,6 @@ import { useWebLocale } from '../i18n/use-web-locale.js'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuPortal, DropdownMenuSeparator, DropdownMenuTrigger } from '../ui/DropdownMenu.js'
 import { Tooltip } from '../ui/Tooltip.js'
 import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
-import { ConfirmDialog } from '../ui/AlertDialog.js'
 import { Composer } from './Composer.js'
 import { formatEnvSubtitle, sendingPendingVisible } from './composer-model.js'
 import { ConversationOutlinePopover, type OutlineJumpTarget } from './ConversationOutlinePopover.js'
@@ -61,7 +59,6 @@ export interface ConversationPaneProps {
 export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDrawer, onCloseDrawer, staged = true }: ConversationPaneProps) {
   const detail = useConversationDetail(conversationId)
   const summary = useConversationSummary(conversationId)
-  const conversations = useConversations()
   const live = useConversationLive(conversationId)
   const groupedUi = useGroupedUi()
   const convArtifacts = useConversationArtifacts(conversationId)

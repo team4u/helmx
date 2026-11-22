@@ -1,9 +1,10 @@
 import React from 'react'
+import { resolveLocalizedText } from '@helmx/protocol/browser'
 import type { Profile } from './profile-center-model.js'
 import {
+  findProfileRuntimeSpec,
   formatProfileLocation,
   formatShortModelName,
-  isHerdrProfile,
   isSystemProfile,
   resolveEffectiveProfileModel,
   summarizeProfileActivity,
@@ -11,6 +12,7 @@ import {
 import { HelmxIcon, StatusLight } from '@helmx/plugin-client'
 import {
   useOptionalConversations,
+  useOptionalGroupedUi,
   useOptionalPlugins,
   useOptionalStoreActions,
 } from '../lib/store-context.js'
@@ -57,10 +59,15 @@ export function ProfileCard({
 }: ProfileCardProps): React.JSX.Element {
   const storeConversations = useOptionalConversations()
   const storePlugins = useOptionalPlugins()
+  const groupedUi = useOptionalGroupedUi()
   const actions = useOptionalStoreActions()
-  const { t } = useWebLocale()
+  const { locale, t } = useWebLocale()
   const isSystem = isSystemProfile(profile)
-  const isHerdr = isHerdrProfile(profile)
+  const runtimeSpec =
+    profile.runtime !== undefined
+      ? findProfileRuntimeSpec(profile.runtime.kind, groupedUi?.profileRuntimes ?? [])
+      : undefined
+  const runtimeLabel = runtimeSpec !== undefined ? resolveLocalizedText(runtimeSpec.spec.label, locale) : undefined
   const effectiveModel = resolveEffectiveProfileModel(profile, defaultModelInfo)
   const location = formatProfileLocation(profile)
   const activity = summarizeProfileActivity(
@@ -180,10 +187,13 @@ export function ProfileCard({
             <HelmxIcon name="wrench" size={10} />
             <span className="primary-card-pill-label">{skillsLabel}</span>
           </span>
-          {isHerdr && (
-            <span className="primary-card-pill" title={t('profiles.card.herdrRuntimeTitle')}>
-              <HelmxIcon name="terminal" size={10} />
-              <span>Herdr</span>
+          {runtimeSpec !== undefined && runtimeLabel !== undefined && (
+            <span
+              className="primary-card-pill"
+              title={t('profiles.card.runtimeTitle', { label: runtimeLabel })}
+            >
+              <HelmxIcon name={runtimeSpec.spec.icon || 'terminal'} size={10} />
+              <span className="primary-card-pill-label">{runtimeLabel}</span>
             </span>
           )}
         </div>

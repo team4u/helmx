@@ -2,9 +2,9 @@ import React, { useEffect, useMemo, useState } from 'react'
 import type { Profile } from './profile-center-model.js'
 import {
   buildProfileCategoryCounts,
+  buildProfileCategoryTabs,
+  dedupeProfileRuntimeSpecs,
   filterProfiles,
-  profileCategoryTabLabel,
-  PROFILE_CATEGORY_TABS,
   type ProfileCategoryTab,
 } from './profile-center-model.js'
 import { ProfileCard } from './ProfileCard.js'
@@ -14,6 +14,7 @@ import { assetsApi } from '../lib/api.js'
 import {
   useAuthenticated,
   useLocationTargets,
+  useOptionalGroupedUi,
   useProfilesSlice,
   useStoreActions,
 } from '../lib/store-context.js'
@@ -43,8 +44,9 @@ export function ProfileCenter({
   const authenticated = useAuthenticated()
   const { profiles } = useProfilesSlice()
   const { primaryTarget, splitTarget } = useLocationTargets()
+  const groupedUi = useOptionalGroupedUi()
   const { openTarget, closeSplit, refreshAssets, pushNotice } = useStoreActions()
-  const { t } = useWebLocale()
+  const { locale, t } = useWebLocale()
   const [query, setQuery] = useState('')
   const [activeTab, setActiveTab] = useState<ProfileCategoryTab>('all')
   const [isCreatingNew, setIsCreatingNew] = useState(false)
@@ -71,14 +73,29 @@ export function ProfileCenter({
     }
   }, [authenticated])
 
-  const categoryCounts = useMemo(() => buildProfileCategoryCounts(profiles), [profiles])
+  const runtimeSpecs = useMemo(
+    () => dedupeProfileRuntimeSpecs(groupedUi?.profileRuntimes ?? []),
+    [groupedUi?.profileRuntimes],
+  )
+  const categoryTabs = useMemo(
+    () => buildProfileCategoryTabs(runtimeSpecs, locale, t),
+    [runtimeSpecs, locale, t],
+  )
+  const effectiveTab: ProfileCategoryTab = categoryTabs.some((tab) => tab.key === activeTab)
+    ? activeTab
+    : 'all'
+
+  const categoryCounts = useMemo(
+    () => buildProfileCategoryCounts(profiles, runtimeSpecs),
+    [profiles, runtimeSpecs],
+  )
 
   const filteredProfiles = useMemo(() => {
     return filterProfiles(profiles, {
       query,
-      categoryTab: activeTab,
+      categoryTab: effectiveTab,
     })
-  }, [profiles, query, activeTab])
+  }, [profiles, query, effectiveTab])
 
   const activeTarget = isSplit ? splitTarget : primaryTarget
   const selectedProfileId =
@@ -214,9 +231,9 @@ export function ProfileCenter({
           role="tablist"
           aria-label={t('profiles.center.filterLabel')}
         >
-          {PROFILE_CATEGORY_TABS.map((tab) => {
+          {categoryTabs.map((tab) => {
             const count = categoryCounts[tab.key] ?? 0
-            const isActive = activeTab === tab.key
+            const isActive = effectiveTab === tab.key
             return (
               <button
                 key={tab.key}
@@ -226,7 +243,7 @@ export function ProfileCenter({
                 className={`primary-category-pill${isActive ? ' is-active' : ''}`}
                 onClick={() => setActiveTab(tab.key)}
               >
-                <span>{profileCategoryTabLabel(tab.key, t)}</span>
+                <span>{tab.label}</span>
                 <span className="badge tabular-nums">{count}</span>
               </button>
             )
@@ -255,7 +272,7 @@ export function ProfileCenter({
             </div>
             <div className="primary-center-empty-text">{t('profiles.center.emptyTitle')}</div>
             <div className="primary-center-empty-hint">{t('profiles.center.emptyHint')}</div>
-            {(query || activeTab !== 'all') && (
+            {(query || effectiveTab !== 'all') && (
               <button
                 type="button"
                 className="btn btn-sm"

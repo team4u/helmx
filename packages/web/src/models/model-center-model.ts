@@ -60,13 +60,6 @@ export function buildProviderFilterTabs(
   ]
 }
 
-/**
- * English-label constant kept as the pre-i18n compatibility export; migrated
- * call sites use `buildProviderFilterTabs(t)` instead.
- */
-export const PROVIDER_FILTER_TABS: Array<{ key: ProviderFilterTab; label: string }> =
-  buildProviderFilterTabs()
-
 export interface FilterProvidersOptions {
   query?: string
   statusTab?: ProviderFilterTab

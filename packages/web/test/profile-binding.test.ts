@@ -17,7 +17,7 @@ import { join } from 'node:path'
 import type { Profile } from '@helmx/protocol'
 import { ProfileService } from '../../kernel/src/services/profiles-skills.js'
 import { parseProfileBody } from '../../kernel/src/http/validate.js'
-import { buildProfileSavePayload, createDraft, editProfileField } from '../src/modals/profile-editor-model.js'
+import { buildProfileSavePayload } from '../src/profiles/profile-center-model.js'
 import { MemoryStore } from '../../plugins/src/memory/store.js'
 import { createProfileFileHost } from '../../kernel/test/helpers/profile-file-host.js'
 
@@ -66,14 +66,26 @@ test('只改 name 的载荷保存后完整保留执行配置；MEMORY.md 不受 
 
     // 编辑器打开：加载详情（等价 GET /profiles/:id 富化形状）。
     const detail = await detailOf(svc, 'coder')
-    const draft = createDraft(detail)
 
     // 弹窗打开期间 Agent 向 MEMORY.md 并发追加新记忆（update_memory append）。
     await memoryStore.updateMemory('coder', '新事实：用户偏好极简界面', 'append')
 
     // 用户只改展示名，保存。
-    const edited = editProfileField(draft, { name: '重构工人' })
-    const payload = buildProfileSavePayload(edited, { isNew: false })
+    const payload = buildProfileSavePayload({
+      id: detail.id,
+      name: '重构工人',
+      model: detail.model,
+      thinkingLevel: detail.thinkingLevel,
+      nodeId: detail.nodeId,
+      cwd: detail.cwd,
+      restrictToCwd: detail.restrictToCwd,
+      skills: detail.skills,
+      starters: detail.starters,
+      runtime: detail.runtime,
+      source: detail,
+      isNew: false,
+      includeSystem: false,
+    })
     // 载荷层断言：完整基础配置 + 大文本省略；无 memory 字段（契约已删）。
     assert.equal(payload.name, '重构工人')
     assert.equal(payload.managedByPlugin, 'community:reporter')
@@ -122,8 +134,13 @@ test('清空 nodeId 的载荷保存后 profile.json 不再回读出 nodeId（回
     }
     await svc.save(detail)
     assert.equal((await svc.get('ops'))?.nodeId, 'gpu-node', '清除前节点绑定必须真实存在')
-    const cleared = editProfileField(createDraft(detail), { nodeId: '  ' })
-    const payload = buildProfileSavePayload(cleared, { isNew: false })
+    const payload = buildProfileSavePayload({
+      id: detail.id,
+      name: detail.name,
+      nodeId: '  ',
+      source: detail,
+      isNew: false,
+    })
     assert.equal('nodeId' in payload, false, '清空 nodeId 归一为载荷省略')
     assert.equal(payload.name, '运维')
 

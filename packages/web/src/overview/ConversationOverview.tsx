@@ -37,7 +37,7 @@ import { HubUpgradedNotice } from './HubUpgradedNotice.js'
 import { useEffect, useId, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ConversationSummary } from '@helmx/protocol/browser'
-import { HelmxIcon, Checkbox, PluginSlot, SearchBox, SegmentedControl, Select } from '@helmx/plugin-client'
+import { ConfirmDialog, HelmxIcon, Checkbox, PluginSlot, SearchBox, SegmentedControl, Select } from '@helmx/plugin-client'
 import { OVERVIEW_CARD_META_SLOT } from '@helmx/protocol/browser'
 import {
   useAuthConnection,
@@ -51,7 +51,6 @@ import {
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
 import { Tooltip } from '../ui/Tooltip.js'
-import { ConfirmDialog } from '../ui/AlertDialog.js'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -61,8 +60,9 @@ import {
 } from '../ui/DropdownMenu.js'
 import { ConversationRowActionsMenu } from '../ui/ConversationRowActionsMenu.js'
 import { conversationsApi } from '../lib/api.js'
+import { isConversationArchived } from '../conversation/archive-model.js'
 import { ConversationStatusDot, RemoteNodeTag } from '../shell/SidebarPrimitives.js'
-import { buildAgentStandings, isConversationArchived, partitionSidebarUi, isConversationArchivable, type AgentStanding } from '../shell/sidebar-model.js'
+import { buildAgentStandings, partitionSidebarUi, isConversationArchivable, type AgentStanding } from '../shell/sidebar-model.js'
 import { archiveBatchNotice, patchConversationsArchived } from '../shell/archive-ops.js'
 import { useGlobalAttention } from '../shell/use-attention-indicator.js'
 import {
