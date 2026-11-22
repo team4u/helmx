@@ -718,10 +718,20 @@ test('ctx.configSchema: label/description display copy validated at declaration 
     { type: 'number', format: 'model' },
     { type: 'number', format: 'node' },
     { type: 'string', format: 'unknown' },
+    { type: 'string', format: 'model', enum: ['m1'] },
+    { type: 'boolean', enum: ['true'] },
+    { type: 'string', secret: true, enum: ['s1'] },
+    { type: 'string[]', secret: true },
+    { type: 'string', enum: [] },
+    { type: 'string', enum: ['a', 'a'] },
+    { type: 'string', enum: ['a', 'b'], default: 'c' },
+    { type: 'string[]', enum: ['a', 'b'], default: ['a', 'c'] },
+    { type: 'string[]', default: 'not-array' },
+    { type: 'number', enum: [1, 2], integer: true, default: 3 },
   ] as unknown as PluginConfigFieldSchema[]) {
     await assert.rejects(
       host.register({
-        id: `p:cfg-format-bad-${badField.type}-${badField.format}`,
+        id: `p:cfg-bad-${Math.random().toString(36).slice(2)}`,
         definePlugin: (ctx) => {
           ctx.configSchema({ target: badField });
         },
@@ -729,6 +739,34 @@ test('ctx.configSchema: label/description display copy validated at declaration 
       (err: unknown) => err instanceof HelmxError && err.code === 'invalid_config_schema',
     );
   }
+
+  // enum and string[] declarations succeed, clone defaults safely, and project into PluginManifestProjection
+  await host.register({
+    id: 'p:cfg-enum-arr',
+    definePlugin: (ctx) => {
+      ctx.configSchema({
+        mode: { type: 'string', enum: ['fast', 'balanced'], default: 'fast' },
+        retries: { type: 'number', enum: [1, 2, 4], integer: true, minimum: 1, maximum: 4, default: 2 },
+        tags: { type: 'string[]', default: ['alpha'] },
+        channels: { type: 'string[]', enum: ['cron', 'webhook', 'manual'], default: ['cron'] },
+      });
+    },
+  });
+  const cfg = host.getConfig('p:cfg-enum-arr');
+  assert.deepEqual(cfg, { mode: 'fast', retries: 2, tags: ['alpha'], channels: ['cron'] });
+  // Mutating returned array default must not corrupt schema defaults on subsequent reads.
+  (cfg['tags'] as string[]).push('mutated');
+  assert.deepEqual(host.getConfig('p:cfg-enum-arr')['tags'], ['alpha']);
+
+  const manifest = host.getManifest('p:cfg-enum-arr');
+  assertPluginManifestProjection(manifest);
+  assert.deepEqual(manifest.configFields, [
+    { key: 'channels', type: 'string[]', secret: false, required: false, enum: ['cron', 'webhook', 'manual'], default: ['cron'] },
+    { key: 'mode', type: 'string', secret: false, required: false, enum: ['fast', 'balanced'], default: 'fast' },
+    { key: 'retries', type: 'number', secret: false, required: false, enum: [1, 2, 4], default: 2, minimum: 1, maximum: 4, integer: true },
+    { key: 'tags', type: 'string[]', secret: false, required: false, default: ['alpha'] },
+  ]);
+  await host.dispose();
 });
 
 // ---------------------------------------------------------------------------

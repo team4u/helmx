@@ -225,6 +225,22 @@ test('assertPluginManifestProjection enforces strict sorting, JSON safety, and l
     configFields: [
       { key: 'apiKey', type: 'string', secret: true, required: true },
       {
+        key: 'channels',
+        type: 'string[]',
+        secret: false,
+        required: false,
+        enum: ['cron', 'manual', 'webhook'],
+        default: ['cron'],
+      },
+      {
+        key: 'mode',
+        type: 'string',
+        secret: false,
+        required: false,
+        enum: ['balanced', 'fast'],
+        default: 'fast',
+      },
+      {
         key: 'retries',
         type: 'number',
         secret: false,
@@ -304,7 +320,10 @@ test('assertPluginManifestProjection enforces strict sorting, JSON safety, and l
   assertInvalid((m) => { m['routes'] = [...(m['routes'] as unknown[])].reverse() }, 'unsorted routes')
   assertInvalid((m) => { (m['docs'] as Array<Record<string, unknown>>)[0]!['public'] = false }, 'private doc in manifest')
   assertInvalid((m) => { (m['configFields'] as Array<Record<string, unknown>>)[0]!['default'] = 'leaked-secret' }, 'secret field default')
-  assertInvalid((m) => { (m['configFields'] as Array<Record<string, unknown>>)[1]!['default'] = 'wrong-type' }, 'mismatched default type')
+  assertInvalid((m) => { (m['configFields'] as Array<Record<string, unknown>>)[1]!['default'] = ['invalid-channel'] }, 'string[] default outside enum')
+  assertInvalid((m) => { (m['configFields'] as Array<Record<string, unknown>>)[1]!['enum'] = ['cron', 'cron'] }, 'duplicate enum entries')
+  assertInvalid((m) => { (m['configFields'] as Array<Record<string, unknown>>)[2]!['default'] = 'unknown-mode' }, 'string default outside enum')
+  assertInvalid((m) => { (m['configFields'] as Array<Record<string, unknown>>)[3]!['default'] = 'wrong-type' }, 'mismatched default type')
   assertInvalid((m) => { m['status'] = 'failed' }, 'failed status without error')
   assertInvalid((m) => { m['error'] = { code: 'x', message: 'y', stage: 'define' } }, 'active status with error')
   assertInvalid((m) => { m['extra'] = 1 }, 'unexpected root property')

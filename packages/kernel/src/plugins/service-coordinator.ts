@@ -1,5 +1,5 @@
 /**
- * Coordinates plugin service declarations, lifecycle barriers (`prepare -> start -> stop`), and resource tracking.
+ * Coordinates plugin service declarations, lifecycle barriers (`prepare -> start -> reconcile -> stop`), and resource tracking.
  */
 import {
   HelmxError,
@@ -88,6 +88,38 @@ export async function startServices(state: PluginState): Promise<void> {
 }
 
 /**
+ * Runs `reconcile()` sequentially in declaration order for started services
+ * (skips services without `reconcile` or already reconciled in this cycle).
+ */
+export async function reconcileServices(state: PluginState): Promise<void> {
+  for (const svc of state.services) {
+    if (!svc.started || svc.reconcile === undefined || svc.reconciled) continue;
+    try {
+      await svc.reconcile();
+      svc.reconciled = true;
+    } catch (err) {
+      throw err instanceof HelmxError
+        ? err
+        : new HelmxError(
+            'plugin_service_reconcile_failed',
+            `Plugin ${state.definition.id} service ${svc.id} reconcile failed: ${err instanceof Error ? err.message : String(err)}`,
+            500,
+            { pluginId: state.definition.id, serviceId: svc.id },
+          );
+    }
+  }
+}
+
+/** Runs `reconcile()` across all active enabled plugins in topological order. */
+export async function reconcileServiceBarrier(
+  enabledPlugins: PluginState[],
+): Promise<void> {
+  for (const state of enabledPlugins) {
+    await reconcileServices(state);
+  }
+}
+
+/**
  * Stops already-started services in reverse declaration order during startup-barrier rollback,
  * aggregating all stop errors cleanly.
  */
@@ -98,8 +130,10 @@ export async function stopServicesQuietly(state: PluginState): Promise<void> {
     try {
       await runControlledStop(state, () => svc.stop());
       svc.started = false;
+      svc.reconciled = false;
     } catch (err) {
       svc.started = false;
+      svc.reconciled = false;
       errors.push({ serviceId: svc.id, error: toJsonSafeError(err) });
     }
   }
@@ -126,6 +160,7 @@ export async function stopPluginServices(
       stopErrors.push({ serviceId: svc.id, error: toJsonSafeError(err) });
     } finally {
       svc.started = false;
+      svc.reconciled = false;
     }
   }
   return stopErrors;

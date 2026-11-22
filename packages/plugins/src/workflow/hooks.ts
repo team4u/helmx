@@ -147,16 +147,6 @@ export function registerWorkflowHooks(ctx: HelmxPluginContext, deps: WorkflowHoo
     projection.reprojectOnConversationDeleted()
   })
 
-  // ---- 启动后收敛遗留原生子会话 ----
-  // KernelRuntime.start() 在 pluginHost.start() -> harness.resume() -> started=true
-  // 之后按监听器注册顺序逐个 await 发送进程内 runtime.started；本插件先等
-  // 恢复收集的遗留子会话收敛 idle（组合根保证 builtin:worktree 在本插件之后
-  // 注册，其崩溃租约回收监听器随后执行，见 worktree.ts 的顺序约束注释）。
-  ctx.host.onEvent('runtime.started', async () => {
-    workflows.startDeferredReattaches()
-    await workflows.awaitPreparedChildrenSettled()
-  })
-
   // 只把账本已证明可安全续跑的后台失败 Run 交给 Watchdog。
   ctx.host.onEvent(DIAGNOSTICS_COLLECT_EVENT, (raw) => {
     if (projection.isStopping()) return

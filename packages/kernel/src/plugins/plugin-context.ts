@@ -3,7 +3,7 @@
  */
 import {
   HelmxError,
-  parseNonEmptyLocalizedText,
+  validatePluginConfigFieldSchema,
   type ActionManifest,
   type ArtifactPreviewerSpec,
   type CommandSpec,
@@ -34,7 +34,7 @@ import type { HookPipeline } from './hooks.js';
 import type { CapabilityRegistry } from './capability-registry.js';
 import { UiRegistry, UI_ACTION_SURFACES } from './ui-registry.js';
 import type { PluginDocRegistry } from './doc-registry.js';
-import { assertValidId } from './shared.js';
+import { assertValidId, jsonClone } from './shared.js';
 import { assertValidProviderShape } from './provider-coordinator.js';
 import { wrapHostApi, type HostApiDependencies } from './host-api.js';
 import type {
@@ -56,16 +56,15 @@ interface CreatePluginContextOptions {
   isRegisteredState: (state: PluginState) => boolean;
 }
 
-/** Closed enum of host-rendered semantic controls for configSchema string fields. */
-const CONFIG_FIELD_FORMATS: ReadonlySet<string> = new Set(['model', 'node', 'profile']);
+const UNSAFE_CONFIG_KEYS: ReadonlySet<string> = new Set(['__proto__', 'constructor', 'prototype']);
+const PLUGIN_ID_PATTERN = /^[A-Za-z0-9:_-]+$/;
 
 /**
- * Display-copy guard for ctx.configSchema declarations: label / description,
- * when present, must be valid non-blank LocalizedText (supported locale keys
- * only). Pure shape check on the display fields — value semantics stay with
- * PluginConfigStore at write time.
+ * Declaration boundary guard for `ctx.configSchema`: validates field keys, types (`string | number |
+ * boolean | string[]`), display copy (`label` / `description`), `format`, `enum`, numeric bounds,
+ * `secret` / `required` flags, and `default` via the single shared protocol validator.
  */
-function assertConfigSchemaDisplayCopy(
+function assertValidConfigSchema(
   pluginId: string,
   schema: Record<string, PluginConfigFieldSchema>,
 ): void {
@@ -73,37 +72,60 @@ function assertConfigSchemaDisplayCopy(
     throw new HelmxError('invalid_config_schema', `plugin ${pluginId} configSchema must be object`, 400, { pluginId });
   }
   for (const [key, field] of Object.entries(schema)) {
-    if (!field || typeof field !== 'object' || Array.isArray(field)) {
-      throw new HelmxError('invalid_config_schema', `plugin ${pluginId} config field ${key} must be object`, 400, {
-        pluginId,
-        field: key,
-      });
-    }
-    for (const copyField of ['label', 'description'] as const) {
-      const value = field[copyField];
-      if (value !== undefined && parseNonEmptyLocalizedText(value) === undefined) {
-        throw new HelmxError(
-          'invalid_config_schema',
-          `Plugin ${pluginId} config field ${key} ${copyField} must be display copy (non-empty string or { en, 'zh-CN' } map with non-blank values)`,
-          400,
-          { pluginId, field: key, copyField },
-        );
-      }
-    }
-    // Optional host-rendered control marker: closed host enum ('model' | 'node' |
-    // 'profile'), string fields only — rendering rights stay with the host.
-    if (
-      field.format !== undefined &&
-      (field.type !== 'string' || !CONFIG_FIELD_FORMATS.has(field.format))
-    ) {
+    if (key.length === 0 || UNSAFE_CONFIG_KEYS.has(key)) {
       throw new HelmxError(
         'invalid_config_schema',
-        `Plugin ${pluginId} config field ${key} format ${JSON.stringify(field.format)} is invalid (string fields only; allowed: model, node, profile)`,
+        `Plugin ${pluginId} config field key ${JSON.stringify(key)} is invalid`,
+        400,
+        { pluginId, field: key },
+      );
+    }
+    const reason = validatePluginConfigFieldSchema(field, {
+      allowSecretDefault: true,
+      requireBooleanFlags: false,
+    });
+    if (reason !== undefined) {
+      throw new HelmxError(
+        'invalid_config_schema',
+        `Plugin ${pluginId} config field ${key} ${reason}`,
         400,
         { pluginId, field: key },
       );
     }
   }
+}
+
+/** Validates and deduplicates optional `service.reconcileAfter` soft-ordering plugin IDs. */
+function normalizeServiceReconcileAfter(
+  pluginId: string,
+  serviceId: string,
+  targets: readonly string[] | undefined,
+): string[] | undefined {
+  if (targets === undefined) return undefined;
+  if (!Array.isArray(targets) || targets.some((t) => typeof t !== 'string' || !PLUGIN_ID_PATTERN.test(t))) {
+    throw new HelmxError(
+      'invalid_service_spec',
+      `Plugin ${pluginId} service ${serviceId} reconcileAfter must be an array of valid plugin IDs`,
+      400,
+      { pluginId, serviceId },
+    );
+  }
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const target of targets) {
+    if (target === pluginId) {
+      throw new HelmxError(
+        'plugin_dependency_cycle',
+        `Plugin ${pluginId} service ${serviceId} reconcileAfter cannot reference itself`,
+        409,
+        { pluginId, serviceId, cycle: [pluginId, pluginId] },
+      );
+    }
+    if (seen.has(target)) continue;
+    seen.add(target);
+    out.push(target);
+  }
+  return out.length > 0 ? out : undefined;
 }
 
 export function createPluginContext(options: CreatePluginContextOptions): HelmxPluginContext {
@@ -163,8 +185,8 @@ export function createPluginContext(options: CreatePluginContextOptions): HelmxP
       if (state.configSchema) {
         throw new HelmxError('duplicate_config_schema', `Plugin ${pluginId} declared duplicate configSchema`, 409);
       }
-      assertConfigSchemaDisplayCopy(pluginId, schema);
-      state.configSchema = schema;
+      assertValidConfigSchema(pluginId, schema);
+      state.configSchema = jsonClone(schema);
     },
 
     hook: {
@@ -221,10 +243,26 @@ export function createPluginContext(options: CreatePluginContextOptions): HelmxP
           { pluginId, serviceId: spec.id },
         );
       }
+      if (spec.reconcile !== undefined && typeof spec.reconcile !== 'function') {
+        throw new HelmxError(
+          'invalid_service_spec',
+          `Plugin ${pluginId} service ${spec.id} reconcile must be a function`,
+          400,
+          { pluginId, serviceId: spec.id },
+        );
+      }
+      const reconcileAfter = normalizeServiceReconcileAfter(pluginId, spec.id, spec.reconcileAfter);
       if (state.services.some((s) => s.id === spec.id)) {
         throw new HelmxError('duplicate_service', `Plugin ${pluginId} declared duplicate service ${spec.id}`, 409);
       }
-      state.services.push({ ...spec, pluginId, started: false, prepared: false });
+      state.services.push({
+        ...spec,
+        ...(reconcileAfter !== undefined ? { reconcileAfter } : {}),
+        pluginId,
+        started: false,
+        prepared: false,
+        reconciled: false,
+      });
     },
 
     provider: (provider: Provider) => {

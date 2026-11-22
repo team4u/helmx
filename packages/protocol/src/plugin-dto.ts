@@ -200,9 +200,28 @@ export interface PluginInUseItem {
   label: string
 }
 
+/** Closed set of supported `PluginConfigFieldSchema.type` discriminants. */
+export const PLUGIN_CONFIG_FIELD_TYPES = ['string', 'number', 'boolean', 'string[]'] as const
+export type PluginConfigFieldType = (typeof PLUGIN_CONFIG_FIELD_TYPES)[number]
+
+/** Closed set of host-rendered semantic picker formats for string config fields. */
+export const PLUGIN_CONFIG_FIELD_FORMATS = ['model', 'node', 'profile'] as const
+export type PluginConfigFieldFormat = (typeof PLUGIN_CONFIG_FIELD_FORMATS)[number]
+
+/** Runtime value shape accepted for a plugin config field. */
+export type PluginConfigFieldValue = string | number | boolean | string[]
+
 /** Plugin config field schema; secret: true is automatically split into credentials.json. */
 export interface PluginConfigFieldSchema {
-  type: 'string' | 'number' | 'boolean'
+  type: PluginConfigFieldType
+  /**
+   * Closed set of allowed values:
+   * - `string`: non-empty unique string list (value must be a member);
+   * - `string[]`: non-empty unique string list (every array element must be a member);
+   * - `number`: non-empty unique finite number list (respecting `integer` / `minimum` / `maximum`).
+   * Disallowed on `boolean`, `secret: true`, and `format`-bound fields.
+   */
+  enum?: Array<string | number>
   /**
    * Optional host-rendered semantic control for string fields. Rendering rights
    * always stay with the host (no plugin-supplied form components): 'model'
@@ -210,12 +229,12 @@ export interface PluginConfigFieldSchema {
    * nodes, 'profile' from the host Profiles. Stored values stay plain string
    * ids; the control only changes how the host renders the field.
    */
-  format?: 'model' | 'node' | 'profile'
+  format?: PluginConfigFieldFormat
   /** Display copy for the config form field (resolved by the active UI locale). */
   label?: LocalizedText
   /** Display copy describing the field purpose (resolved by the active UI locale). */
   description?: LocalizedText
-  default?: string | number | boolean
+  default?: PluginConfigFieldValue
   secret?: boolean
   required?: boolean
   /** Boundary constraints for numeric fields; validated uniformly by the host before writing. */

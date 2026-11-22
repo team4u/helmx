@@ -6,7 +6,6 @@
  */
 import {
   PLUGIN_HOOK_NAMES,
-  assertPluginManifestProjection,
   compareCodeUnit,
   type PluginDiagnosticError,
   type PluginManifestAction,
@@ -77,7 +76,9 @@ function normalizeDiagnosticError(error: PluginDiagnosticError): PluginDiagnosti
 /**
  * Projects a single plugin's current extension contract directly from the host's registries.
  * Never executes providers or action/tool/route handlers, omits secret config defaults, omits private
- * docs and doc values, and validates the final shape through `assertPluginManifestProjection`.
+ * docs and doc values, and guarantees JSON-safety and deterministic ordering by construction
+ * (all inputs are already validated at registration boundaries; `assertPluginManifestProjection`
+ * remains reserved for genuine external/untrusted JSON boundaries).
  */
 export function buildPluginManifestProjection(
   options: BuildManifestProjectionOptions,
@@ -169,11 +170,12 @@ export function buildPluginManifestProjection(
         type: field.type,
         secret,
         required: field.required === true,
+        ...(field.enum !== undefined ? { enum: jsonClone(field.enum) } : {}),
         ...(field.format !== undefined ? { format: field.format } : {}),
         ...(field.label !== undefined ? { label: jsonClone(field.label) } : {}),
         ...(field.description !== undefined ? { description: jsonClone(field.description) } : {}),
         // Never project `default` for secret fields (prevents hardcoded default secret leaks).
-        ...(!secret && field.default !== undefined ? { default: field.default } : {}),
+        ...(!secret && field.default !== undefined ? { default: jsonClone(field.default) } : {}),
         ...(field.minimum !== undefined ? { minimum: field.minimum } : {}),
         ...(field.maximum !== undefined ? { maximum: field.maximum } : {}),
         ...(field.integer !== undefined ? { integer: field.integer } : {}),
@@ -232,6 +234,5 @@ export function buildPluginManifestProjection(
     clientModules,
   };
 
-  const redacted = redactText !== undefined ? redactJsonValue(raw, redactText) : raw;
-  return assertPluginManifestProjection(redacted);
+  return (redactText !== undefined ? redactJsonValue(raw, redactText) : raw) as PluginManifestProjection;
 }

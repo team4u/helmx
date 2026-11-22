@@ -190,6 +190,8 @@ export interface ServiceEntry extends PluginServiceSpec {
   started: boolean;
   /** Tracks whether `prepare()` has already executed for this cycle. */
   prepared: boolean;
+  /** Tracks whether `reconcile()` has already executed for this cycle. */
+  reconciled: boolean;
 }
 
 /** Provider entry collected during `definePlugin`, mounted on enable and unmounted in reverse order on disable. */

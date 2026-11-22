@@ -1588,6 +1588,92 @@ describe('real PluginHost integration', { timeout: 60_000 }, () => {
     }
   })
 
+  it('plugin config persists and validates enum and string[] fields with null reset and mirror isolation', { timeout: 60_000 }, async () => {
+    const dir = join(root, 'p8-enum-arr')
+    const schema = {
+      mode: { type: 'string' as const, enum: ['fast', 'balanced', 'accurate'], default: 'balanced' },
+      level: { type: 'number' as const, enum: [1, 2, 3], integer: true, default: 2 },
+      tags: { type: 'string[]' as const, default: ['default-tag'] },
+      channels: { type: 'string[]' as const, enum: ['cron', 'webhook', 'manual'], required: true },
+    }
+    const kernel = await openRuntime(dir)
+    try {
+      await kernel.plugins.register({
+        id: 'test:enum-arr',
+        definePlugin(ctx) {
+          ctx.configSchema(schema)
+        },
+      })
+      // Missing required string[] without default rejects explicitly.
+      await assert.rejects(
+        kernel.plugins.setConfig('test:enum-arr', { mode: 'fast' }),
+        (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
+      )
+      // Required string[] set to empty array rejects explicitly.
+      await assert.rejects(
+        kernel.plugins.setConfig('test:enum-arr', { channels: [] }),
+        (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
+      )
+      // Out-of-enum scalar or array element and wrong element types reject explicitly.
+      for (const bad of [
+        { channels: ['cron'], mode: 'turbo' },
+        { channels: ['cron'], level: 5 },
+        { channels: ['cron', 'email'] },
+        { channels: ['cron'], tags: [123] },
+        { channels: 'cron' },
+      ]) {
+        await assert.rejects(
+          kernel.plugins.setConfig('test:enum-arr', bad),
+          (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
+        )
+      }
+
+      await kernel.plugins.setConfig('test:enum-arr', {
+        mode: 'accurate',
+        level: 3,
+        tags: ['ops', 'prod'],
+        channels: ['cron', 'webhook'],
+      })
+      const active = kernel.plugins.getConfig('test:enum-arr')
+      assert.deepEqual(active, {
+        mode: 'accurate',
+        level: 3,
+        tags: ['ops', 'prod'],
+        channels: ['cron', 'webhook'],
+      })
+      // Mutating returned array does not corrupt store mirror.
+      ;(active['tags'] as string[]).push('tampered')
+      assert.deepEqual(kernel.plugins.getConfig('test:enum-arr')['tags'], ['ops', 'prod'])
+
+      // Resetting tags via null falls back to schema default.
+      await kernel.plugins.setConfig('test:enum-arr', { tags: null })
+      assert.deepEqual(kernel.plugins.getConfig('test:enum-arr')['tags'], ['default-tag'])
+      assert.equal(kernel.plugins.getConfigSources('test:enum-arr')['tags'], 'default')
+      assert.equal(kernel.plugins.getConfigSources('test:enum-arr')['channels'], 'configured')
+    } finally {
+      await kernel.close()
+    }
+
+    // Reopen kernel and verify persisted enum / string[] values survive restart.
+    const kernel2 = await openRuntime(dir)
+    try {
+      await kernel2.plugins.register({
+        id: 'test:enum-arr',
+        definePlugin(ctx) {
+          ctx.configSchema(schema)
+        },
+      })
+      assert.deepEqual(kernel2.plugins.getConfig('test:enum-arr'), {
+        mode: 'accurate',
+        level: 3,
+        tags: ['default-tag'],
+        channels: ['cron', 'webhook'],
+      })
+    } finally {
+      await kernel2.close()
+    }
+  })
+
   it('watchdog ownership: spawn auto-marks child conversation helmx; human/unmarked stays human', { timeout: 60_000 }, async () => {
     const kernel = await openRuntime(join(root, 'p9'))
     try {
@@ -2274,11 +2360,13 @@ describe('KernelRuntime start and close concurrency', { timeout: 60_000 }, () =>
     const kernel = await KernelRuntime.open({ dataDir: dir, cwd: dir, autoResume: false })
     try {
       let startCalls = 0
-      // PluginHost.start holds its own single-flight state; replace method to test KernelRuntime retry semantics in isolation.
+      // PluginHost.start holds its own single-flight state; wrap method to inject first failure while letting retry start cleanly.
       const host = kernel.plugins as unknown as { start: () => Promise<void> }
+      const origStart = host.start.bind(kernel.plugins)
       host.start = async () => {
         startCalls += 1
         if (startCalls === 1) throw new Error('first startup failure')
+        await origStart()
       }
       await assert.rejects(kernel.start(), /first startup failure/)
       assert.equal(startCalls, 1)

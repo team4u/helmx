@@ -1,33 +1,36 @@
 /**
  * ui-spec-validators.ts: per-surface `registerUi` validation and two-phase dispatch table.
  *
- * Mechanical shape/type/pattern/unknown-key rules use precompiled TypeBox validators; cross-field
- * semantics (actionId vs client exclusivity, commandPalette slash reservations/duplicates,
- * profile.runtime kind duplicates, slot two-segment split, artifact array uniqueness, and
- * unsafe prototype keys) remain explicit. Two-phase dispatch (`validateUiSpecEarly` before
- * scope/client checks, `validateUiSpecLate` after) preserves original error precedence.
+ * Mechanical shape/type/pattern/unknown-key rules compile directly from `@helmx/protocol`'s
+ * single-source `UI_SPEC_SCHEMAS` and `UI_SPEC_PATTERNS` (zero schema duplication with
+ * `protocol/src/ui.ts`); cross-field semantics (actionId vs client exclusivity, commandPalette
+ * slash reservations/duplicates, profile.runtime kind duplicates, slot two-segment split,
+ * artifact array uniqueness, and unsafe prototype keys) remain explicit. Two-phase dispatch
+ * (`validateUiSpecEarly` before scope/client checks, `validateUiSpecLate` after) preserves
+ * original error precedence.
  */
-import { Type, type TObject, type TProperties } from 'typebox';
+import type { TObject, TProperties } from 'typebox';
 import { Compile, type Validator } from 'typebox/compile';
 import type { TLocalizedValidationError } from 'typebox/error';
 import {
   HelmxError,
   RESERVED_SLASH_COMMANDS,
+  SIDEBAR_ITEM_BADGE_FIELDS,
+  UI_ACTION_SURFACES,
+  UI_SPEC_PATTERNS,
+  UI_SPEC_SCHEMAS,
+  WORKBENCH_PANEL_BADGE_FIELDS,
+  isPlainObject,
   parseNonEmptyLocalizedText,
   type PluginUiContribution,
   type UiActionSpec,
 } from '@helmx/protocol';
-import { isPlainObject } from '@helmx/protocol';
+
+/** Re-exported from `@helmx/protocol` (shared by plugin-context and validation). */
+export { UI_ACTION_SURFACES };
 
 /** Host-reserved command slash triggers (`skill:` prefix is also reserved). */
 const RESERVED_COMMAND_SLASH: ReadonlySet<string> = new Set(RESERVED_SLASH_COMMANDS);
-
-/** UI action target -> registered surface mapping (shared by plugin-context and validation). */
-export const UI_ACTION_SURFACES: Readonly<Record<UiActionSpec['target'], string>> = {
-  'conversation:header': 'conversation.header.action',
-  'conversation:row': 'conversation.row.action',
-  'timeline:entry': 'timeline.entry.action',
-};
 
 const UI_ACTION_TARGET_BY_SURFACE: Readonly<Record<string, UiActionSpec['target']>> = Object.fromEntries(
   (Object.keys(UI_ACTION_SURFACES) as Array<UiActionSpec['target']>).map((key) => [UI_ACTION_SURFACES[key], key]),
@@ -47,24 +50,8 @@ export interface UiSpecContext {
 type UiSpecValidator = (spec: Record<string, unknown>, id: string, ctx: UiSpecContext) => void;
 
 // ---------------------------------------------------------------------------
-// Reusable TypeBox schemas & compiled validator helper
+// Compiled validator helper
 // ---------------------------------------------------------------------------
-
-const NonEmptyString = Type.String({ minLength: 1 });
-const ActionIdNoDotSchema = Type.String({ minLength: 1, pattern: '^[^.]+$' });
-const CommandActionIdSchema = Type.String({ pattern: '^[A-Za-z0-9_-]+$' });
-const CommandSlashSchema = Type.String({ pattern: '^[a-z0-9][a-z0-9:_-]{0,63}$' });
-const RuntimeKindSchema = Type.String({ pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$' });
-const MarkdownLanguageSchema = Type.String({ pattern: '^[a-z0-9][a-z0-9-]{0,31}$' });
-/** Canonical MIME: lowercase `type/subtype` or `type/<wildcard>` (rejects global wildcard, parameters, globs, uppercase). */
-const CanonicalMimeSchema = Type.String({
-  pattern: '^[a-z0-9][a-z0-9!#$&^_.+-]*\\/(?:[a-z0-9][a-z0-9!#$&^_.+-]*|\\*)$',
-});
-/** Lowercase leading-dot multi-segment extension (e.g. `.md`, `.tar.gz`); rejects path segments/wildcards. */
-const ArtifactExtensionSchema = Type.String({ pattern: '^\\.[a-z0-9]+(?:\\.[a-z0-9]+)*$' });
-const COMPLETER_DOC_NAME_PATTERN = /^[A-Za-z0-9._-]+$/;
-const CompleterDocNameSchema = Type.String({ pattern: COMPLETER_DOC_NAME_PATTERN.source });
-const CompleterItemsFieldSchema = Type.String({ pattern: '^[A-Za-z0-9_$][A-Za-z0-9_$-]{0,127}$' });
 
 interface DiagnosticError {
   message: string;
@@ -117,36 +104,10 @@ function assertUniqueStrings(
 // Early phase validators
 // ---------------------------------------------------------------------------
 
-const UI_ACTION_BASE_PROPS = {
-  actionId: Type.Optional(ActionIdNoDotSchema),
-  actionPluginId: Type.Optional(NonEmptyString),
-};
-
 const UI_ACTION_CHECKERS: Readonly<Record<UiActionSpec['target'], Validator<TProperties, TObject>>> = {
-  'conversation:header': Compile(
-    Type.Object({
-      ...UI_ACTION_BASE_PROPS,
-      placement: Type.Optional(Type.Enum(['toolbar', 'menu'] as const)),
-      kinds: Type.Optional(Type.Never()),
-      roles: Type.Optional(Type.Never()),
-    }),
-  ),
-  'conversation:row': Compile(
-    Type.Object({
-      ...UI_ACTION_BASE_PROPS,
-      placement: Type.Optional(Type.Never()),
-      kinds: Type.Optional(Type.Never()),
-      roles: Type.Optional(Type.Never()),
-    }),
-  ),
-  'timeline:entry': Compile(
-    Type.Object({
-      ...UI_ACTION_BASE_PROPS,
-      placement: Type.Optional(Type.Never()),
-      kinds: Type.Optional(Type.Array(NonEmptyString, { minItems: 1 })),
-      roles: Type.Optional(Type.Array(Type.Enum(['user', 'assistant'] as const), { minItems: 1 })),
-    }),
-  ),
+  'conversation:header': Compile(UI_SPEC_SCHEMAS.uiAction['conversation:header']),
+  'conversation:row': Compile(UI_SPEC_SCHEMAS.uiAction['conversation:row']),
+  'timeline:entry': Compile(UI_SPEC_SCHEMAS.uiAction['timeline:entry']),
 };
 
 function validateUiActionSpec(spec: Record<string, unknown>, id: string, ctx: UiSpecContext): void {
@@ -206,13 +167,7 @@ function validateUiActionSpec(spec: Record<string, unknown>, id: string, ctx: Ui
   delete spec['target'];
 }
 
-const COMMAND_PALETTE_CHECKER = Compile(
-  Type.Object({
-    slash: Type.Optional(CommandSlashSchema),
-    actionId: Type.Optional(CommandActionIdSchema),
-    actionPluginId: Type.Optional(NonEmptyString),
-  }),
-);
+const COMMAND_PALETTE_CHECKER = Compile(UI_SPEC_SCHEMAS.commandPalette);
 
 function validateCommandPaletteSpec(spec: Record<string, unknown>, id: string, ctx: UiSpecContext): void {
   const { pluginId } = ctx;
@@ -262,10 +217,8 @@ function validateCommandPaletteSpec(spec: Record<string, unknown>, id: string, c
   }
 }
 
-const PROFILE_RUNTIME_KIND_CHECKER = Compile(Type.Object({ kind: RuntimeKindSchema }));
-const PROFILE_RUNTIME_SUGGESTIONS_CHECKER = Compile(
-  Type.Object({ agentSuggestions: Type.Optional(Type.Array(NonEmptyString)) }),
-);
+const PROFILE_RUNTIME_KIND_CHECKER = Compile(UI_SPEC_SCHEMAS.profileRuntimeKind);
+const PROFILE_RUNTIME_SUGGESTIONS_CHECKER = Compile(UI_SPEC_SCHEMAS.profileRuntimeSuggestions);
 
 function validateProfileRuntimeSpec(spec: Record<string, unknown>, id: string, ctx: UiSpecContext): void {
   const { pluginId } = ctx;
@@ -296,9 +249,7 @@ function validateProfileRuntimeSpec(spec: Record<string, unknown>, id: string, c
   }
 }
 
-const PLUGIN_SLOT_CHECKER = Compile(
-  Type.Object({ target: Type.String({ minLength: 1, maxLength: 512 }) }),
-);
+const PLUGIN_SLOT_CHECKER = Compile(UI_SPEC_SCHEMAS.pluginSlot);
 
 function validateSlotSpec(spec: Record<string, unknown>, id: string, ctx: UiSpecContext): void {
   const { pluginId } = ctx;
@@ -318,7 +269,7 @@ function validateSlotSpec(spec: Record<string, unknown>, id: string, ctx: UiSpec
   }
   const owner = target.slice(0, slash);
   const slotName = target.slice(slash + 1);
-  if (!/^[A-Za-z0-9:_-]+$/.test(owner) || !/^[A-Za-z0-9._-]+$/.test(slotName)) {
+  if (!UI_SPEC_PATTERNS.slotOwnerPluginId.test(owner) || !UI_SPEC_PATTERNS.slotName.test(slotName)) {
     throw new HelmxError(
       'invalid_ui_spec',
       `plugin ${pluginId} ui.slot  target "${target}" segment identifier illegal (ownerPluginId allows : _ -,slotName allows . _ -)`,
@@ -340,11 +291,7 @@ function validateSlotSpec(spec: Record<string, unknown>, id: string, ctx: UiSpec
 // Late phase validators
 // ---------------------------------------------------------------------------
 
-const TIMELINE_RENDERER_CHECKER = Compile(
-  Type.Object({
-    matchMeta: Type.Optional(Type.Object({ renderer: NonEmptyString }, { additionalProperties: false })),
-  }),
-);
+const TIMELINE_RENDERER_CHECKER = Compile(UI_SPEC_SCHEMAS.timelineRenderer);
 
 function validateTimelineRendererSpec(spec: Record<string, unknown>, id: string, ctx: UiSpecContext): void {
   const { pluginId } = ctx;
@@ -356,11 +303,7 @@ function validateTimelineRendererSpec(spec: Record<string, unknown>, id: string,
   }));
 }
 
-const MARKDOWN_CODE_BLOCK_CHECKER = Compile(
-  Type.Object({
-    languages: Type.Array(MarkdownLanguageSchema, { minItems: 1 }),
-  }),
-);
+const MARKDOWN_CODE_BLOCK_CHECKER = Compile(UI_SPEC_SCHEMAS.markdownCodeBlock);
 
 function validateMarkdownCodeBlockSpec(spec: Record<string, unknown>, id: string, ctx: UiSpecContext): void {
   const { pluginId } = ctx;
@@ -382,12 +325,7 @@ function validateMarkdownCodeBlockSpec(spec: Record<string, unknown>, id: string
   }
 }
 
-const TOOL_VIEW_CHECKER = Compile(
-  Type.Object({
-    replaceRow: Type.Optional(Type.Boolean()),
-    toolNames: Type.Array(NonEmptyString, { minItems: 1 }),
-  }),
-);
+const TOOL_VIEW_CHECKER = Compile(UI_SPEC_SCHEMAS.toolView);
 
 function validateToolViewSpec(spec: Record<string, unknown>, id: string, ctx: UiSpecContext): void {
   const { pluginId } = ctx;
@@ -403,12 +341,7 @@ function validateToolViewSpec(spec: Record<string, unknown>, id: string, ctx: Ui
   });
 }
 
-const ARTIFACT_PREVIEWER_CHECKER = Compile(
-  Type.Object({
-    mimeTypes: Type.Optional(Type.Array(CanonicalMimeSchema, { minItems: 1 })),
-    extensions: Type.Optional(Type.Array(ArtifactExtensionSchema, { minItems: 1 })),
-  }),
-);
+const ARTIFACT_PREVIEWER_CHECKER = Compile(UI_SPEC_SCHEMAS.artifactPreviewer);
 
 const ARTIFACT_MATCH_EXPECT: Readonly<Record<'mimeTypes' | 'extensions', string>> = {
   mimeTypes: 'only allows small write type/subtype precise value or type/* through match, disallows */*, parameter,glob and large write',
@@ -449,29 +382,7 @@ function validateArtifactPreviewerSpec(spec: Record<string, unknown>, id: string
   }
 }
 
-const COMPLETER_TRIGGER_AND_SOURCE_CHECKER = Compile(
-  Type.Object({
-    trigger: Type.Enum(['@', '#', ':'] as const),
-    source: Type.Union([
-      Type.Object(
-        {
-          kind: Type.Literal('action'),
-          actionId: ActionIdNoDotSchema,
-          actionPluginId: Type.Optional(NonEmptyString),
-        },
-        { additionalProperties: false },
-      ),
-      Type.Object(
-        {
-          kind: Type.Enum(['doc', 'sessionDoc'] as const),
-          name: CompleterDocNameSchema,
-          itemsField: CompleterItemsFieldSchema,
-        },
-        { additionalProperties: false },
-      ),
-    ]),
-  }),
-);
+const COMPLETER_TRIGGER_AND_SOURCE_CHECKER = Compile(UI_SPEC_SCHEMAS.composerCompleter);
 
 function validateComposerCompleterSpec(spec: Record<string, unknown>, id: string, ctx: UiSpecContext): void {
   const { pluginId } = ctx;
@@ -531,7 +442,7 @@ function validateComposerCompleterSpec(spec: Record<string, unknown>, id: string
           details: { pluginId, id },
         };
       }
-      if (typeof source['name'] !== 'string' || !COMPLETER_DOC_NAME_PATTERN.test(source['name'])) {
+      if (typeof source['name'] !== 'string' || !UI_SPEC_PATTERNS.completerDocName.test(source['name'])) {
         return {
           message: `plugin ${pluginId} ui.composerCompleter  ${kind} source name must be this plugin public document name (allows character A-Za-z0-9._-)`,
           details: { pluginId, id, name: String(source['name']) },
@@ -569,21 +480,7 @@ function validateComposerCompleterSpec(spec: Record<string, unknown>, id: string
   }
 }
 
-const WORKBENCH_PANEL_CHECKER = Compile(
-  Type.Object({
-    badge: Type.Optional(
-      Type.Object(
-        {
-          doc: NonEmptyString,
-          countField: Type.Optional(NonEmptyString),
-          toneField: Type.Optional(NonEmptyString),
-          byConversationField: Type.Optional(NonEmptyString),
-        },
-        { additionalProperties: false },
-      ),
-    ),
-  }),
-);
+const WORKBENCH_PANEL_CHECKER = Compile(UI_SPEC_SCHEMAS.workbenchPanel);
 
 function validateWorkbenchPanelSpec(spec: Record<string, unknown>, id: string, ctx: UiSpecContext): void {
   const { pluginId } = ctx;
@@ -595,7 +492,10 @@ function validateWorkbenchPanelSpec(spec: Record<string, unknown>, id: string, c
     );
   }
   runCompiledUiSchema(WORKBENCH_PANEL_CHECKER, spec, id, ctx, (errors) => {
-    const err = findErrorByPathPrefix(errors, ['/badge/doc', '/badge/countField', '/badge/toneField', '/badge/byConversationField', '/badge']);
+    const err = findErrorByPathPrefix(
+      errors,
+      [...WORKBENCH_PANEL_BADGE_FIELDS.map((field) => `/badge/${field}`), '/badge'],
+    );
     const p = err?.instancePath ?? '';
     if (p === '/badge/doc') {
       return {
@@ -603,8 +503,8 @@ function validateWorkbenchPanelSpec(spec: Record<string, unknown>, id: string, c
         details: { pluginId, id },
       };
     }
-    for (const field of ['countField', 'toneField', 'byConversationField'] as const) {
-      if (p === `/badge/${field}`) {
+    for (const field of WORKBENCH_PANEL_BADGE_FIELDS) {
+      if (field !== 'doc' && p === `/badge/${field}`) {
         return {
           message: `plugin ${pluginId} ui.workbenchPanel  badge.${field} must be non-empty string field name`,
           details: { pluginId, id, field },
@@ -617,25 +517,7 @@ function validateWorkbenchPanelSpec(spec: Record<string, unknown>, id: string, c
   });
 }
 
-/** sidebar.item badge field names validated as safe top-level doc keys (rejects __proto__/constructor/prototype). */
-const SIDEBAR_BADGE_FIELDS = ['doc', 'countField', 'toneField', 'dotField', 'summaryField'] as const;
-
-const SIDEBAR_ITEM_CHECKER = Compile(
-  Type.Object({
-    badge: Type.Optional(
-      Type.Object(
-        {
-          doc: NonEmptyString,
-          countField: NonEmptyString,
-          toneField: Type.Optional(NonEmptyString),
-          dotField: Type.Optional(NonEmptyString),
-          summaryField: Type.Optional(NonEmptyString),
-        },
-        { additionalProperties: false },
-      ),
-    ),
-  }),
-);
+const SIDEBAR_ITEM_CHECKER = Compile(UI_SPEC_SCHEMAS.sidebarItem);
 
 function validateSidebarItemSpec(spec: Record<string, unknown>, id: string, ctx: UiSpecContext): void {
   const { pluginId } = ctx;
@@ -648,16 +530,12 @@ function validateSidebarItemSpec(spec: Record<string, unknown>, id: string, ctx:
     );
   }
   runCompiledUiSchema(SIDEBAR_ITEM_CHECKER, spec, id, ctx, (errors) => {
-    const err = findErrorByPathPrefix(errors, [
-      '/badge/doc',
-      '/badge/countField',
-      '/badge/toneField',
-      '/badge/dotField',
-      '/badge/summaryField',
-      '/badge',
-    ]);
+    const err = findErrorByPathPrefix(
+      errors,
+      [...SIDEBAR_ITEM_BADGE_FIELDS.map((field) => `/badge/${field}`), '/badge'],
+    );
     const p = err?.instancePath ?? '';
-    for (const field of SIDEBAR_BADGE_FIELDS) {
+    for (const field of SIDEBAR_ITEM_BADGE_FIELDS) {
       if (p === `/badge/${field}`) {
         return {
           message: `plugin ${pluginId} ui.sidebarItem badge.${field} must be non-empty string field name`,
@@ -673,7 +551,7 @@ function validateSidebarItemSpec(spec: Record<string, unknown>, id: string, ctx:
   // Field names become doc-key reads on the host; unsafe prototype keys must never pass.
   const badge = spec['badge'] as Record<string, unknown> | undefined;
   if (badge !== undefined) {
-    for (const field of SIDEBAR_BADGE_FIELDS) {
+    for (const field of SIDEBAR_ITEM_BADGE_FIELDS) {
       const value = badge[field];
       if (typeof value === 'string' && UNSAFE_TOP_LEVEL_KEYS.has(value)) {
         throw new HelmxError(

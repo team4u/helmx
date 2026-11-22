@@ -28,9 +28,19 @@ test('@helmx/protocol/browser: export declarations aligned with the root entry\'
   const requiredRuntimeExports = [
     'HelmxError',
     'PLUGIN_HOOK_NAMES',
+    'PLUGIN_CONFIG_FIELD_TYPES',
+    'PLUGIN_CONFIG_FIELD_FORMATS',
     'PLUGIN_CLIENT_SHARED_EXPORTS',
     'PLUGIN_UI_METHOD_NAMES',
     'KNOWN_PLUGIN_UI_SURFACES',
+    'UI_ACTION_SURFACES',
+    'UI_ACTION_PLACEMENTS',
+    'UI_ACTION_ROLES',
+    'SIDEBAR_BADGE_TONES',
+    'SIDEBAR_ITEM_BADGE_FIELDS',
+    'WORKBENCH_PANEL_BADGE_FIELDS',
+    'COMPOSER_COMPLETER_TRIGGERS',
+    'COMPOSER_COMPLETER_DOC_KINDS',
     'parsePluginUiContribution',
     'RESERVED_SLASH_COMMANDS',
     'PLUGIN_CLIENT_CSS_EXPORT',
@@ -76,16 +86,31 @@ test('@helmx/protocol/browser: export declarations aligned with the root entry\'
     'ARTIFACT_REGISTER_META_SCHEMA',
     'ARTIFACT_READ_META_SCHEMA',
     'KERNEL_TOOL_PRESENTATION_META_SCHEMAS',
+  ] as const
+
+  /** Server-only contract validators and TypeBox UI schemas that must NOT bloat `@helmx/protocol/browser`. */
+  const serverOnlyRuntimeExports = [
+    'UI_SPEC_PATTERNS',
+    'UI_SPEC_SCHEMAS',
     'assertPluginManifestProjection',
     'compareCodeUnit',
+    'validatePluginConfigFieldSchema',
+    'validatePluginConfigFieldValue',
   ] as const
 
   const browserRecord = browserExports as Record<string, unknown>
   const rootRecord = rootExports as Record<string, unknown>
-  assert.deepEqual(Object.keys(browserRecord).sort(), Object.keys(rootRecord).sort())
-  for (const key of Object.keys(browserRecord)) {
+  const browserKeys = Object.keys(browserRecord)
+  const expectedRootKeys = [...browserKeys, ...serverOnlyRuntimeExports].sort()
+  assert.deepEqual(expectedRootKeys, Object.keys(rootRecord).sort())
+  for (const key of browserKeys) {
     assert.equal(browserRecord[key], rootRecord[key], `browser.ts export ${key} must stay identical to index.ts`)
     assert.ok(key in pkgBrowser, `@helmx/protocol/browser package entry is missing export ${key}`)
+  }
+  for (const key of serverOnlyRuntimeExports) {
+    assert.ok(key in rootRecord, `index.ts is missing server-only runtime export ${key}`)
+    assert.equal(key in browserRecord, false, `browser.ts must not export server-only runtime symbol ${key}`)
+    assert.equal(key in pkgBrowser, false, `@helmx/protocol/browser must not export server-only runtime symbol ${key}`)
   }
   for (const key of requiredRuntimeExports) {
     assert.ok(key in browserRecord, `browser.ts is missing runtime export ${key}`)
@@ -136,4 +161,64 @@ test('isPluginSummaryActive: unified truth table across enabled/status/error com
   assert.equal(browserExports.isPluginSummaryActive({ enabled: true, status: 'active', error: err }), false)
   assert.equal(browserExports.isPluginSummaryActive({ enabled: true, error: err }), false)
   assert.equal(browserExports.isPluginSummaryActive({ enabled: false, status: 'failed', error: err }), false)
+})
+
+test('validatePluginConfigFieldSchema and validatePluginConfigFieldValue enforce enum and string[] contracts', { timeout: 60_000 }, () => {
+  const { validatePluginConfigFieldSchema, validatePluginConfigFieldValue } = rootExports
+  const declOpts = { allowSecretDefault: true, requireBooleanFlags: false } as const
+
+  // Valid enum and string[] declarations
+  assert.equal(
+    validatePluginConfigFieldSchema({ type: 'string', enum: ['fast', 'balanced'], default: 'fast' }, declOpts),
+    undefined,
+  )
+  assert.equal(
+    validatePluginConfigFieldSchema({ type: 'number', enum: [1, 2, 4], integer: true, minimum: 1, maximum: 4, default: 2 }, declOpts),
+    undefined,
+  )
+  assert.equal(
+    validatePluginConfigFieldSchema({ type: 'string[]', default: ['a', 'b'] }, declOpts),
+    undefined,
+  )
+  assert.equal(
+    validatePluginConfigFieldSchema({ type: 'string[]', enum: ['cron', 'webhook', 'manual'], default: ['cron'] }, declOpts),
+    undefined,
+  )
+
+  // Invalid declarations
+  const badSchemas: Array<[string, unknown]> = [
+    ['empty enum', { type: 'string', enum: [] }],
+    ['duplicate string enum', { type: 'string', enum: ['a', 'a'] }],
+    ['wrong element type in string enum', { type: 'string', enum: ['a', 1] }],
+    ['wrong element type in number enum', { type: 'number', enum: [1, '2'] }],
+    ['non-finite number enum', { type: 'number', enum: [1, Number.POSITIVE_INFINITY] }],
+    ['number enum violating integer', { type: 'number', integer: true, enum: [1, 1.5] }],
+    ['number enum violating minimum', { type: 'number', minimum: 2, enum: [1, 2] }],
+    ['boolean with enum', { type: 'boolean', enum: ['true'] }],
+    ['secret with enum', { type: 'string', secret: true, enum: ['a'] }],
+    ['secret with string[]', { type: 'string[]', secret: true }],
+    ['format with enum', { type: 'string', format: 'model', enum: ['m1'] }],
+    ['format on string[]', { type: 'string[]', format: 'node' }],
+    ['minimum > maximum', { type: 'number', minimum: 10, maximum: 5 }],
+    ['string default not in enum', { type: 'string', enum: ['a', 'b'], default: 'c' }],
+    ['string[] default not array', { type: 'string[]', default: 'a' }],
+    ['string[] default with non-string item', { type: 'string[]', default: ['a', 2] }],
+    ['string[] default item outside enum', { type: 'string[]', enum: ['a', 'b'], default: ['a', 'c'] }],
+  ]
+  for (const [label, schema] of badSchemas) {
+    assert.ok(
+      validatePluginConfigFieldSchema(schema, declOpts) !== undefined,
+      `expected rejection for ${label}`,
+    )
+  }
+
+  // Runtime value checks
+  const enumTags = { type: 'string[]' as const, enum: ['alpha', 'beta'] }
+  assert.equal(validatePluginConfigFieldValue(enumTags, []), undefined)
+  assert.equal(validatePluginConfigFieldValue(enumTags, ['alpha', 'beta']), undefined)
+  assert.ok(validatePluginConfigFieldValue(enumTags, ['alpha', 'gamma']) !== undefined)
+  assert.ok(validatePluginConfigFieldValue(enumTags, 'alpha') !== undefined)
+  const sparse: unknown[] = []
+  sparse[1] = 'alpha'
+  assert.ok(validatePluginConfigFieldValue(enumTags, sparse) !== undefined)
 })

@@ -803,8 +803,10 @@ process.kill(process.pid, 'SIGKILL')
     kernel.documentStore.set('builtin:worktree:worktree-state', preState)
     await kernel.documentStore.flush()
 
-    await kernel.plugins.register(createWorkflowPlugin())
+    // 刻意逆序注册（worktree 先于 workflow）：验证 reconcile 阶段按 reconcileAfter 拓扑序先收敛 workflow 遗留子会话，
+    // 再回收原生工作树崩溃租约，不再依赖 Hub 注册顺序。
     await kernel.plugins.register(createWorktreePlugin())
+    await kernel.plugins.register(createWorkflowPlugin())
     await kernel.plugins.setConfig('builtin:workflow', { autoRecoverOnRestart: false })
     await kernel.start()
 
@@ -813,7 +815,7 @@ process.kill(process.pid, 'SIGKILL')
 
     const postState = kernel.documentStore.get<Record<string, unknown>>('builtin:worktree:worktree-state', {})
     const postLeases = (postState['worktree-leases'] as Record<string, unknown> | undefined) ?? {}
-    assert.equal(postLeases[nativeLeaseKeys[0]!], undefined, '已停止原生租约必须被 runtime.started 自动回收')
+    assert.equal(postLeases[nativeLeaseKeys[0]!], undefined, '已停止原生租约必须被 reconcile 自动回收')
     assert.ok(postLeases['ext-lease-seed'], '外部 executionId 租约必须继续保留 fail-closed')
 
     // 确认 cleanup_worktree 不再被 worktree_execution_unknown 阻塞

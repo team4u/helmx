@@ -1,18 +1,24 @@
 /**
- * Read-only plugin extension contract projection DTOs and strict boundary validators
+ * Read-only plugin extension contract projection DTOs and external boundary validator
  * (zero `node:*`, zero `@earendil-works/pi-*`, zero live callbacks or secret values).
  *
- * Exported jointly by `@helmx/protocol` and `@helmx/protocol/browser`.
+ * Types are re-exported by `@helmx/protocol/browser`; runtime boundary validation
+ * (`assertPluginManifestProjection`) is exported only from `@helmx/protocol` for
+ * genuine external/untrusted JSON boundaries (never re-run on kernel-assembled projections).
  */
 
 import type { ConversationScope } from './conversation.js'
 import { HelmxError } from './error.js'
 import { parseNonEmptyLocalizedText, type LocalizedText } from './locale.js'
+import { validatePluginConfigFieldSchema } from './plugin-config-schema.js'
 import {
   PLUGIN_HOOK_NAMES,
   type ActionManifest,
   type HookName,
   type JsonSchema,
+  type PluginConfigFieldFormat,
+  type PluginConfigFieldType,
+  type PluginConfigFieldValue,
   type PluginDiagnosticError,
   type PluginPromptFields,
   type PluginStatus,
@@ -61,14 +67,15 @@ export interface PluginManifestDoc {
 
 export interface PluginManifestConfigField {
   key: string
-  type: 'string' | 'number' | 'boolean'
+  type: PluginConfigFieldType
   secret: boolean
   required: boolean
-  format?: 'model' | 'node' | 'profile'
+  enum?: Array<string | number>
+  format?: PluginConfigFieldFormat
   label?: LocalizedText
   description?: LocalizedText
   /** Non-secret default value only; strictly omitted when `secret === true`. */
-  default?: string | number | boolean
+  default?: PluginConfigFieldValue
   minimum?: number
   maximum?: number
   integer?: boolean
@@ -122,8 +129,6 @@ const KNOWN_UI_SURFACE_SET = new Set<string>(KNOWN_PLUGIN_UI_SURFACES)
 const ROUTE_METHODS = new Set<string>(['GET', 'POST', 'PUT', 'DELETE'])
 const PLUGIN_STATUSES = new Set<string>(['active', 'disabled', 'failed'])
 const ERROR_STAGES = new Set<string>(['scan', 'load', 'define', 'enable'])
-const CONFIG_TYPES = new Set<string>(['string', 'number', 'boolean'])
-const CONFIG_FORMATS = new Set<string>(['model', 'node', 'profile'])
 const UNSAFE_IDENTIFIER_KEYS = new Set<string>(['__proto__', 'constructor', 'prototype'])
 
 function invalidManifest(reason: string, details?: Record<string, unknown>): HelmxError {
@@ -356,6 +361,7 @@ const CONFIG_FIELD_KEYS = new Set([
   'type',
   'secret',
   'required',
+  'enum',
   'format',
   'label',
   'description',
@@ -613,41 +619,12 @@ export function assertPluginManifestProjection(value: unknown): PluginManifestPr
     if (!isPlainObject(f)) throw invalidManifest(`${label} must be a plain object`)
     assertAllowedKeys(f, CONFIG_FIELD_KEYS, label)
     assertSafeIdentifier(f['key'], `${label}.key`)
-    if (typeof f['type'] !== 'string' || !CONFIG_TYPES.has(f['type'])) {
-      throw invalidManifest(`${label}.type must be string | number | boolean`)
-    }
-    if (typeof f['secret'] !== 'boolean') throw invalidManifest(`${label}.secret must be boolean`)
-    if (typeof f['required'] !== 'boolean') throw invalidManifest(`${label}.required must be boolean`)
-    if (f['label'] !== undefined && parseNonEmptyLocalizedText(f['label']) === undefined) {
-      throw invalidManifest(`${label}.label must be valid non-empty LocalizedText when present`)
-    }
-    if (f['description'] !== undefined && parseNonEmptyLocalizedText(f['description']) === undefined) {
-      throw invalidManifest(`${label}.description must be valid non-empty LocalizedText when present`)
-    }
-    if (f['secret'] === true && Object.hasOwn(f, 'default')) {
-      throw invalidManifest(`${label} secret field must not expose default`)
-    }
-    if (f['default'] !== undefined) {
-      if (typeof f['default'] !== f['type'] || (typeof f['default'] === 'number' && !Number.isFinite(f['default']))) {
-        throw invalidManifest(`${label}.default must match field type ${f['type']}`)
-      }
-    }
-    if (f['format'] !== undefined) {
-      if (f['type'] !== 'string' || typeof f['format'] !== 'string' || !CONFIG_FORMATS.has(f['format'])) {
-        throw invalidManifest(`${label}.format is invalid`)
-      }
-    }
-    for (const bound of ['minimum', 'maximum'] as const) {
-      if (f[bound] !== undefined) {
-        if (f['type'] !== 'number' || typeof f[bound] !== 'number' || !Number.isFinite(f[bound])) {
-          throw invalidManifest(`${label}.${bound} must be a finite number on number fields`)
-        }
-      }
-    }
-    if (f['integer'] !== undefined) {
-      if (f['type'] !== 'number' || typeof f['integer'] !== 'boolean') {
-        throw invalidManifest(`${label}.integer must be a boolean on number fields`)
-      }
+    const reason = validatePluginConfigFieldSchema(f, {
+      allowSecretDefault: false,
+      requireBooleanFlags: true,
+    })
+    if (reason !== undefined) {
+      throw invalidManifest(`${label} ${reason}`)
     }
   }
   assertStrictlySortedUnique(

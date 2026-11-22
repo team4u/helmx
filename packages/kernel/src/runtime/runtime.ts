@@ -518,6 +518,7 @@ export class KernelRuntime {
       // Flipped synchronously right after resume (zero awaits in between): whenever `isStarted()` is true,
       // the scheduler has already left its paused state.
       this.#started = true
+      if (this.pluginHost) await this.pluginHost.reconcile()
       await this.emitHostEvent('runtime.started', {}, { broadcast: false })
     })()
     this.startPromise = attempt
