@@ -18,6 +18,7 @@ import {
   type AskSpec,
   type ConversationDetail,
   type ConversationEntry,
+  type ConversationBulkDeleteResponse,
   type ConversationInit,
   type ConversationInputResult,
   type ConversationListFilter,
@@ -737,6 +738,11 @@ export class KernelRuntime {
   async deleteConversation(id: number): Promise<void> {
     this.assertWritable()
     return this.conversations.deleteConversation(id)
+  }
+
+  async deleteConversations(ids: readonly number[]): Promise<ConversationBulkDeleteResponse> {
+    this.assertWritable()
+    return this.conversations.deleteConversations(ids)
   }
 
   async submitInput(

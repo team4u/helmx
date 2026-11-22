@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
-import { conversationsApi } from '../lib/api.js'
 import type { ConversationSummary } from '@helmx/protocol/browser'
 import { archiveBatchNotice, patchConversationsArchived } from './archive-ops.js'
+import { bulkDeleteConversations, bulkDeleteNotice } from './bulk-delete-ops.js'
 import { Checkbox, ConfirmDialog, HelmxIcon, SearchBox, Tooltip } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { ConversationRowActionsMenu } from '../ui/ConversationRowActionsMenu.js'
@@ -11,11 +11,13 @@ import {
   activeProfileIdsOf,
   buildAgentStandings,
   filterAgentStandings,
-  filterDeletableConversations,
+  filterBulkSelectableConversations,
   getAgentStandbyPresence,
   getConversationPresence,
+  isConversationArchivable,
   isConversationDeletable,
   openAgentStandby,
+  partitionSidebarUi,
   presenceNavClassSuffix,
   shouldSkipNavRowClick,
   type AgentStanding,
@@ -491,10 +493,25 @@ export function AgentStandingsGroup({
 
   // Derive batch-selectable ids strictly from visibleStandings so filtering
   // then clicking "Select all" / "Delete" can never wipe hidden conversations.
+  // Bulk-select includes idle automation conversations (bulk-deletable but not
+  // archivable); the archive button consumes the archivable subset below.
+  const sectionTags = useMemo(
+    () => partitionSidebarUi([], store.groupedUi.sidebarSections).sectionTags,
+    [store.groupedUi.sidebarSections],
+  )
   const allDeletableIds = useMemo(() => {
     const visibleConvs = visibleStandings.flatMap((a) => a.conversations)
-    return filterDeletableConversations(visibleConvs).map((c) => c.id)
-  }, [visibleStandings])
+    return filterBulkSelectableConversations(visibleConvs, sectionTags).map((c) => c.id)
+  }, [visibleStandings, sectionTags])
+  const archivableSelectedIds = useMemo(() => {
+    const archivable = new Set(
+      agentStandings
+        .flatMap((a) => a.conversations)
+        .filter((conversation) => isConversationArchivable(conversation))
+        .map((conversation) => conversation.id),
+    )
+    return [...selectedIds].filter((id) => archivable.has(id))
+  }, [agentStandings, selectedIds])
 
   useEffect(() => {
     const allowed = new Set(allDeletableIds)
@@ -529,7 +546,9 @@ export function AgentStandingsGroup({
    * aggregation (partial failures never mask successes); archiving does not
    * delete the conversation and the current target stays valid — the list
    * updates purely via conversation.upsert. Unlike deletion's SSE fallback
-   * pipeline, no navigation happens here.
+   * pipeline, no navigation happens here. Only the human-owned (archivable)
+   * subset of the selection participates — bulk-select may also include idle
+   * automation conversations that are bulk-deletable but never bulk-archivable.
    */
   const executeBatchArchive = async () => {
     if (selectedIds.size === 0 || archiving || deleting) return
@@ -537,7 +556,7 @@ export function AgentStandingsGroup({
     try {
       const convs = agentStandings
         .flatMap((agent) => agent.conversations)
-        .filter((conversation) => selectedIds.has(conversation.id))
+        .filter((conversation) => selectedIds.has(conversation.id) && isConversationArchivable(conversation))
       const outcome = await patchConversationsArchived(convs, true)
       store.pushNotice(archiveBatchNotice(true, outcome, t))
       setSelectedIds(new Set())
@@ -553,33 +572,8 @@ export function AgentStandingsGroup({
     setBatchDeleteConfirmOpen(false)
     setDeleting(true)
     try {
-      const ids = Array.from(selectedIds)
-      const results = await Promise.allSettled(ids.map((id) => conversationsApi.remove(id)))
-      const fulfilled = results.filter((r) => r.status === 'fulfilled').length
-      const rejected = results.filter((r) => r.status === 'rejected').length
-
-      if (rejected === 0) {
-        store.pushNotice({
-          type: 'notification',
-          level: 'info',
-          title: t('shell.batch.bulkDeleteCompleted'),
-          body: t('shell.batch.bulkDeleteCompletedBody', { count: fulfilled }),
-        })
-      } else if (fulfilled === 0) {
-        store.pushNotice({
-          type: 'notification',
-          level: 'error',
-          title: t('shell.batch.bulkDeleteFailed'),
-          body: t('shell.batch.bulkDeleteFailedBody', { count: rejected }),
-        })
-      } else {
-        store.pushNotice({
-          type: 'notification',
-          level: 'warning',
-          title: t('shell.batch.bulkDeletePartial'),
-          body: t('shell.batch.bulkDeletePartialBody', { fulfilled, rejected }),
-        })
-      }
+      const outcome = await bulkDeleteConversations(Array.from(selectedIds))
+      store.pushNotice(bulkDeleteNotice(outcome, t))
 
       // No navigation here: rely solely on each successful deletion's
       // conversation.deleted SSE event; the Provider conditionally falls back
@@ -711,10 +705,10 @@ export function AgentStandingsGroup({
             <button
               type="button"
               className="btn btn-sm"
-              disabled={selectedIds.size === 0 || deleting || archiving}
+              disabled={archivableSelectedIds.length === 0 || deleting || archiving}
               onClick={() => void executeBatchArchive()}
             >
-              {archiving ? t('shell.agents.archiving') : t('shell.agents.archiveCount', { count: selectedIds.size })}
+              {archiving ? t('shell.agents.archiving') : t('shell.agents.archiveCount', { count: archivableSelectedIds.length })}
             </button>
             <button
               type="button"

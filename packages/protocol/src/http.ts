@@ -55,6 +55,33 @@ export interface ConversationWithdrawResponse {
   entryId?: number
 }
 
+/** `POST /api/conversations/bulk-delete` request body. */
+export interface ConversationBulkDeleteRequest {
+  /**
+   * Conversation ids to delete (positive safe integers, 1..1000 entries; deduplicated in first-seen order by the server).
+   * Deleting a conversation cascades its derived child conversations (parentConversationId subtree, leaves first).
+   */
+  ids: number[]
+}
+
+/** Per-item failure entry of `POST /api/conversations/bulk-delete`. */
+export interface ConversationBulkDeleteFailure {
+  id: number
+  /** Stable error code (e.g. `not_found`, `conversation_managed_by_plugin`). */
+  code: string
+  message: string
+}
+
+/**
+ * `POST /api/conversations/bulk-delete` response: partial-success aggregation
+ * (HTTP 200 whenever the request body is schema-valid; per-item outcomes live in `failures`).
+ * An id already deleted earlier in the same batch (e.g. cascaded with its parent) counts as deleted.
+ */
+export interface ConversationBulkDeleteResponse {
+  deleted: number[]
+  failures: ConversationBulkDeleteFailure[]
+}
+
 /** Half-open UTF-16 highlight span `[start, end)` within `SearchHit.snippet`. */
 export interface SearchHighlightRange {
   /** Inclusive UTF-16 start offset. */

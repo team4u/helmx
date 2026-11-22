@@ -18,6 +18,8 @@ import type {
   ConversationInputResult,
   ConversationListFilter,
   ConversationPatch,
+  ConversationBulkDeleteFailure,
+  ConversationBulkDeleteResponse,
   ConversationSubmissionInfo,
   ConversationSummary,
   ConversationWithdrawResponse,
@@ -769,16 +771,94 @@ export class ConversationService {
 
   async deleteConversation(id: number): Promise<void> {
     this.assertWritable()
+    const subtree = this.collectDeletionSubtree(id)
+    this.assertSubtreeUnmanaged(subtree, id)
+    for (const target of subtree) await this.deleteOneConversation(target)
+  }
+
+  /**
+   * Bulk delete: partial-success aggregation over first-seen-deduplicated ids.
+   * Each item runs the exact single-delete pipeline (subtree cascade + managed protection);
+   * any per-item failure is reported in `failures` without aborting the rest, and an id that was
+   * already cascaded away by an earlier item in the same request counts as deleted.
+   */
+  async deleteConversations(ids: readonly number[]): Promise<ConversationBulkDeleteResponse> {
+    this.assertWritable()
+    const requested = [...new Set(ids)]
+    const requestedSet = new Set(requested)
+    const settled = new Set<number>()
+    const deleted: number[] = []
+    const failures: ConversationBulkDeleteFailure[] = []
+    for (const id of requested) {
+      if (settled.has(id)) {
+        deleted.push(id)
+        continue
+      }
+      try {
+        const subtree = this.collectDeletionSubtree(id)
+        this.assertSubtreeUnmanaged(subtree, id)
+        for (const target of subtree) {
+          await this.deleteOneConversation(target)
+          if (requestedSet.has(target)) settled.add(target)
+        }
+        deleted.push(id)
+      } catch (err) {
+        failures.push({
+          id,
+          code: err instanceof HelmxError ? err.code : 'internal_error',
+          message: err instanceof Error ? err.message : String(err),
+        })
+      }
+    }
+    return { deleted, failures }
+  }
+
+  /**
+   * Collect `id` plus its whole derived-child subtree (parentConversationId edges), leaves first
+   * (post-order) so children are always deleted before their parent. Missing root -> not_found.
+   */
+  private collectDeletionSubtree(id: number): number[] {
+    const childrenOf = new Map<number, number[]>()
+    for (const meta of this.store.listConvs()) {
+      const parent = meta.parentConversationId
+      if (parent === undefined) continue
+      const siblings = childrenOf.get(parent)
+      if (siblings === undefined) childrenOf.set(parent, [meta.id])
+      else siblings.push(meta.id)
+    }
     requireConv(this.store, id)
-    const owners = [...(this.o.managedConversations.get(id) ?? [])]
-    if (owners.length > 0) {
+    const ordered: number[] = []
+    const walk = (current: number): void => {
+      for (const child of childrenOf.get(current) ?? []) walk(child)
+      ordered.push(current)
+    }
+    walk(id)
+    return ordered
+  }
+
+  /**
+   * Whole-subtree managed protection: deleting half a derived tree then failing on a managed child
+   * would leave a broken partial state, so any managed node (root or descendant) blocks the entire
+   * item up front with 409, naming the blocking conversation and plugin owners.
+   */
+  private assertSubtreeUnmanaged(subtree: readonly number[], requestedId: number): void {
+    for (const nodeId of subtree) {
+      const owners = [...(this.o.managedConversations.get(nodeId) ?? [])]
+      if (owners.length === 0) continue
       throw new HelmxError(
         'conversation_managed_by_plugin',
-        `conversation ${id} is currently managed by plugin(s) (${owners.join(', ')}); release management before deleting`,
+        `conversation ${requestedId} cannot be deleted: ${
+          nodeId === requestedId ? `it is currently` : `its derived conversation ${nodeId} is`
+        } managed by plugin(s) (${owners.join(', ')}); release management before deleting`,
         409,
-        { conversationId: id, owners },
+        { conversationId: nodeId, owners, ...(nodeId !== requestedId ? { requestedConversationId: requestedId } : {}) },
       )
     }
+  }
+
+  /** Single-node deletion pipeline (the pre-cascade deleteConversation body, unchanged semantics). */
+  private async deleteOneConversation(id: number): Promise<void> {
+    requireConv(this.store, id)
     const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
     if (conversation) await conversation.abort(BACKGROUND_CONTEXT)
     // Cascade-cancel asks and wait for completion; IO errors must propagate (blocking further deletion side effects)

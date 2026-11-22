@@ -188,8 +188,18 @@ test('conversations create/send/abort/update/delete paths, bodies, and --current
       'POST /api/conversations/7/input': (body) => ({ body: { ok: true, echo: body } }),
       'POST /api/conversations/7/abort': () => ({ body: { ok: true } }),
       'PATCH /api/conversations/7': (body) => ({ body: { id: 7, ...(body as object) } }),
-      'DELETE /api/conversations/7': () => ({ status: 204 }),
-      'DELETE /api/conversations/1': () => ({ status: 409, body: { error: { code: 'conversation_managed_by_plugin', message: 'conversation is managed by an enabled plugin and cannot be deleted' } } }),
+      'POST /api/conversations/bulk-delete': (body) => {
+        const ids = (body as { ids: number[] }).ids
+        const blocked = new Set([1])
+        return {
+          body: {
+            deleted: ids.filter((id) => !blocked.has(id)),
+            failures: ids
+              .filter((id) => blocked.has(id))
+              .map((id) => ({ id, code: 'conversation_managed_by_plugin', message: 'conversation is managed by an enabled plugin and cannot be deleted' })),
+          },
+        }
+      },
     },
     { autoRegisterCleanup: t },
   )
@@ -231,13 +241,47 @@ test('conversations create/send/abort/update/delete paths, bodies, and --current
   assert.equal(overridden.code, 0, overridden.err)
   assert.deepEqual(hub.recorded.hits.at(-1)?.body, { model: 'openai/gpt-4o' })
 
+  // Single delete rides the same bulk endpoint with a one-element ids body
   const deleted = await runCliCaptured(['conversations', 'delete', '7', '--json'], env)
   assert.equal(deleted.code, 0, deleted.err)
+  assert.deepEqual(JSON.parse(deleted.out), { deleted: [7], failures: [] })
+  assert.deepEqual(hub.recorded.hits.at(-1)?.body, { ids: [7] })
 
-  // Plugin-managed 409 error envelope -> JSON on stderr + non-zero exit
-  const forbidden = await runCliCaptured(['conversations', 'delete', '1', '--json'], env)
+  // Plugin-managed per-item failure: full partial-success result stays on stdout + exit 1
+  const forbidden = await runCliCaptured(['conversations', 'delete', '1', '7', '--json'], env)
   assert.equal(forbidden.code, 1)
-  assert.equal(parseCliError(forbidden).code, 'conversation_managed_by_plugin')
+  const forbiddenResult = JSON.parse(forbidden.out)
+  assert.deepEqual(forbiddenResult.deleted, [7])
+  assert.equal(forbiddenResult.failures.length, 1)
+  assert.equal(forbiddenResult.failures[0].code, 'conversation_managed_by_plugin')
+
+  // Human mode: per-item lines + final aggregate; duplicates are collapsed client-side
+  const human = await runCliCaptured(['conversations', 'delete', '7', '7'], env)
+  assert.equal(human.code, 0, human.err)
+  assert.ok(human.out.includes('#7 deleted'))
+  assert.ok(human.out.includes('deleted 1, failed 0'))
+  assert.deepEqual(hub.recorded.hits.at(-1)?.body, { ids: [7] })
+
+  // Managed-turn self-delete guard (same fail-closed shape as self_watch_forbidden)
+  const selfDelete = await runCliCaptured(['conversations', 'delete', '42', '7', '--json'], {
+    ...env,
+    HELMX_ENV: '1',
+    HELMX_CONVERSATION_ID: '42',
+  })
+  assert.equal(selfDelete.code, 1)
+  assert.equal(parseCliError(selfDelete).code, 'self_delete_forbidden')
+
+  // --current + explicit ids stay mutually exclusive; a bare delete requires a target
+  const conflict = await runCliCaptured(['conversations', 'delete', '7', '--current', '--json'], { ...env, HELMX_CONVERSATION_ID: '7' })
+  assert.equal(conflict.code, 1)
+  assert.equal(parseCliError(conflict).code, 'conflicting_flags')
+  const bare = await runCliCaptured(['conversations', 'delete', '--json'], env)
+  assert.equal(bare.code, 1)
+  assert.equal(parseCliError(bare).code, 'missing_conversation_target')
+
+  const deletedCurrent = await runCliCaptured(['conversations', 'delete', '--current', '--json'], { ...env, HELMX_CONVERSATION_ID: '7' })
+  assert.equal(deletedCurrent.code, 0, deletedCurrent.err)
+  assert.deepEqual(hub.recorded.hits.at(-1)?.body, { ids: [7] })
 })
 
 test('--current missing/invalid and explicit missing IDs fail explicitly', { timeout: 60_000 }, async (t) => {

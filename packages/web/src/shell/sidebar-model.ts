@@ -90,6 +90,42 @@ export function isConversationArchivable(
   return true
 }
 
+/**
+ * 批量删除勾选口径（比归档口径宽、比在途自动化会话严）：
+ * - 人类自有根会话（即归档口径）全部可批量删除；
+ * - 自动化归属（bot/helmx）的历史会话（如已结束协作的 swarm worker）：无插件
+ *   sidebar.section 接管且不在途（非 working/blocked）时放开批量删除——插件
+ *   manageConversation 托管保护由服务端 bulk-delete 逐项权威判定（409 failures）；
+ * - 仅放开批量删除，不放开批量归档（归档仍走 isConversationArchivable 人类口径）。
+ */
+export function isConversationBulkDeletable(
+  conv: Pick<ConversationSummary, 'parentConversationId' | 'ownedBy' | 'tags' | 'status'>,
+  sectionTags?: ReadonlySet<string>,
+): boolean {
+  if (conv.parentConversationId !== undefined) return false
+  if (sectionTags !== undefined && conv.tags.some((t) => t !== ARCHIVED_TAG && sectionTags.has(t))) {
+    return false
+  }
+  if ((conv.ownedBy ?? 'human') === 'human') return true
+  return conv.status !== 'working' && conv.status !== 'blocked'
+}
+
+/** 批量管理勾选口径：可归档（人类）或可批量删除（含空闲自动化历史会话）的并集。 */
+export function isConversationBulkSelectable(
+  conv: ConversationSummary,
+  sectionTags?: ReadonlySet<string>,
+): boolean {
+  return isConversationArchivable(conv, sectionTags) || isConversationBulkDeletable(conv, sectionTags)
+}
+
+/** 过滤出批量管理可勾选的会话列表（勾选边界，非删除边界）。 */
+export function filterBulkSelectableConversations(
+  conversations: ConversationSummary[],
+  sectionTags?: ReadonlySet<string>,
+): ConversationSummary[] {
+  return conversations.filter((c) => isConversationBulkSelectable(c, sectionTags))
+}
+
 /** 归档分组条目：会话 + 归属智能体展示名（供分组内辨识）。 */
 export interface ArchivedConversationListItem {
   conv: ConversationSummary

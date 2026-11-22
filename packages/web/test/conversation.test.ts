@@ -13,6 +13,7 @@ import {
   patchConversationArchived,
   patchConversationsArchived,
 } from '../src/shell/archive-ops.js'
+import { bulkDeleteConversations, bulkDeleteNotice } from '../src/shell/bulk-delete-ops.js'
 import { ARCHIVED_TAG } from '../src/conversation/archive-model.js'
 import {
   buildTimelineItems,
@@ -1377,6 +1378,51 @@ test('patchConversationsArchived 汇总批量部分失败，archiveBatchNotice �
       title: 'Bulk Archive partially failed',
       body: '1 succeeded, 1 failed: 会话正在更新',
     })
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('bulkDeleteConversations 单次 bulk-delete 请求并如实聚合逐项结果', { timeout: 60_000 }, async () => {
+  const originalFetch = globalThis.fetch
+  const requests: Array<{ url: string; method: string; body: unknown }> = []
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    requests.push({ url: String(input), method: init?.method ?? 'GET', body: init?.body ? JSON.parse(String(init.body)) : undefined })
+    return new Response(
+      JSON.stringify({
+        deleted: [7, 9],
+        failures: [{ id: 1, code: 'conversation_managed_by_plugin', message: 'managed by builtin:swarm' }],
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    )
+  }) as typeof fetch
+
+  try {
+    const outcome = await bulkDeleteConversations([7, 9, 1])
+    assert.deepEqual(outcome, {
+      attempted: 3,
+      deleted: 2,
+      failed: 1,
+      firstError: 'conversation_managed_by_plugin: managed by builtin:swarm',
+    })
+    // Exactly one request for the whole batch, ids verbatim (server-side dedup/cascade)
+    assert.equal(requests.length, 1)
+    assert.equal(requests[0]?.method, 'POST')
+    assert.ok(requests[0]?.url.endsWith('/api/conversations/bulk-delete'))
+    assert.deepEqual(requests[0]?.body, { ids: [7, 9, 1] })
+    assert.deepEqual(bulkDeleteNotice(outcome), {
+      type: 'notification',
+      level: 'warning',
+      title: 'Bulk delete partially failed',
+      body: 'Deleted 2, failed 1 (conversation_managed_by_plugin: managed by builtin:swarm)',
+    })
+    assert.deepEqual(bulkDeleteNotice({ attempted: 2, deleted: 2, failed: 0 }), {
+      type: 'notification',
+      level: 'info',
+      title: 'Bulk delete completed',
+      body: 'Deleted 2 conversations',
+    })
+    assert.equal(bulkDeleteNotice({ attempted: 1, deleted: 0, failed: 1, firstError: 'not_found: gone' }).level, 'error')
   } finally {
     globalThis.fetch = originalFetch
   }

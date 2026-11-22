@@ -9,8 +9,8 @@
  *   (which automatically offers restore for archived conversations), or use
  *   bulk restore; the batch bar also offers bulk delete (confirm-gated, same
  *   channel as the agent standings group);
- * - Restore uses the existing conversation PATCH (archive-ops); delete goes
- *   through conversationsApi.remove per conversation with allSettled
+ * - Restore uses the existing conversation PATCH (archive-ops); bulk delete goes
+ *   through the single bulk-delete endpoint with server-side per-item
  *   aggregation (partial failures never mask successes); failures produce
  *   explicit notices and are never silently swallowed; deletion navigation is
  *   owned solely by the conversation.deleted SSE fallback pipeline, never here;
@@ -19,7 +19,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Checkbox, ConfirmDialog, HelmxIcon, Tooltip } from '@helmx/plugin-client'
-import { conversationsApi } from '../lib/api.js'
+import { bulkDeleteConversations, bulkDeleteNotice } from './bulk-delete-ops.js'
 import {
   useConversations,
   useGroupedUi,
@@ -196,12 +196,12 @@ export function ArchivedConversationsGroup({
   }
 
   /**
-   * Bulk delete: DELETE per conversation + allSettled aggregation (partial
-   * failures never mask successes; the same channel as the agent standings
-   * group — archived rows are human-owned root conversations by construction,
-   * so no extra deletability gate applies). No navigation here: rely solely on
-   * each successful deletion's conversation.deleted SSE event; the Provider
-   * conditionally falls back by current targets.
+   * Bulk delete via the single bulk endpoint (server-side per-item aggregation;
+   * partial failures never mask successes; archived rows are human-owned root
+   * conversations by construction, so no extra deletability gate applies). No
+   * navigation here: rely solely on each successful deletion's
+   * conversation.deleted SSE event; the Provider conditionally falls back by
+   * current targets.
    */
   const executeBatchDelete = async () => {
     const count = selectedIds.size
@@ -209,34 +209,8 @@ export function ArchivedConversationsGroup({
     setBatchDeleteConfirmOpen(false)
     setDeleting(true)
     try {
-      const ids = Array.from(selectedIds)
-      const results = await Promise.allSettled(ids.map((id) => conversationsApi.remove(id)))
-      const fulfilled = results.filter((r) => r.status === 'fulfilled').length
-      const rejected = results.filter((r) => r.status === 'rejected').length
-
-      if (rejected === 0) {
-        pushNotice({
-          type: 'notification',
-          level: 'info',
-          title: t('shell.batch.bulkDeleteCompleted'),
-          body: t('shell.batch.bulkDeleteCompletedBody', { count: fulfilled }),
-        })
-      } else if (fulfilled === 0) {
-        pushNotice({
-          type: 'notification',
-          level: 'error',
-          title: t('shell.batch.bulkDeleteFailed'),
-          body: t('shell.batch.bulkDeleteFailedBody', { count: rejected }),
-        })
-      } else {
-        pushNotice({
-          type: 'notification',
-          level: 'warning',
-          title: t('shell.batch.bulkDeletePartial'),
-          body: t('shell.batch.bulkDeletePartialBody', { fulfilled, rejected }),
-        })
-      }
-
+      const outcome = await bulkDeleteConversations(Array.from(selectedIds))
+      pushNotice(bulkDeleteNotice(outcome, t))
       setSelectedIds(new Set())
       setBatchMode(false)
     } catch (err) {

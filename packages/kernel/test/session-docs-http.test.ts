@@ -132,6 +132,7 @@ beforeEach(async () => {
     createConversation: async () => makeConversation(3),
     updateConversation: async (id) => makeConversation(id),
     deleteConversation: async () => {},
+    deleteConversations: async (ids: readonly number[]) => ({ deleted: [...ids], failures: [] }),
     submitInput: async () => ({ submissionId: 's' }),
     waitForInput: async (id) => ({ conversationId: id, submissionId: 's', text: '', entry: { id: 'e', kind: 'user' } }) as never,
     abortConversation: async () => {},

@@ -100,6 +100,19 @@ function makeKernel(): KernelRuntimeLike {
     async deleteConversation(id) {
       conversations.delete(id)
     },
+    async deleteConversations(ids) {
+      const deleted: number[] = []
+      const failures: Array<{ id: number; code: string; message: string }> = []
+      for (const id of ids) {
+        if (!conversations.has(id)) {
+          failures.push({ id, code: 'not_found', message: `conversation not found: ${id}` })
+          continue
+        }
+        conversations.delete(id)
+        deleted.push(id)
+      }
+      return { deleted, failures }
+    },
     async submitInput() {
       return { submissionId: 'sub-mock' }
     },

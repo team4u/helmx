@@ -66,11 +66,11 @@ import {
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
 import { ConversationRowActionsMenu } from '../ui/ConversationRowActionsMenu.js'
-import { conversationsApi } from '../lib/api.js'
 import { isConversationArchived } from '../conversation/archive-model.js'
 import { ConversationStatusDot, RemoteNodeTag } from '../shell/SidebarPrimitives.js'
-import { buildAgentStandings, partitionSidebarUi, isConversationArchivable, type AgentStanding } from '../shell/sidebar-model.js'
+import { buildAgentStandings, partitionSidebarUi, isConversationArchivable, isConversationBulkSelectable, type AgentStanding } from '../shell/sidebar-model.js'
 import { archiveBatchNotice, patchConversationsArchived } from '../shell/archive-ops.js'
+import { bulkDeleteConversations, bulkDeleteNotice } from '../shell/bulk-delete-ops.js'
 import { useGlobalAttention } from '../shell/use-attention-indicator.js'
 import { formatDurationMs, formatFullTimestamp, formatStopwatchMs } from '../lib/format.js'
 import {
@@ -539,12 +539,13 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
     [cards, profileFilter, nodeFilter, sourceFilter, queryFilter],
   )
 
-  // 批量管理口径与侧栏批量模式同界：仅人类自有、未被插件 sidebarSection
-  // 接管的根会话可勾选（isConversationArchivable ⇒ 可归档且可删除）；托管
-  // 与 bot 会话不参与批量，保护语义与侧栏勾选框一致。且收起分节内的卡片
-  // 不可见，不得进入可勾选与有效选择集。
+  // 批量管理勾选口径：人类自有根会话（可归档可删除）与空闲自动化历史会话
+  // （仅可批量删除，如已结束的 swarm worker）的并集；托管与在途（working/
+  // blocked）bot 会话不参与勾选，插件 manageConversation 托管保护由服务端
+  // bulk-delete 逐项权威判定。且收起分节内的卡片不可见，不得进入可勾选与
+  // 有效选择集。
   const isCardSelectable = useMemo(
-    () => (conv: ConversationSummary) => isConversationArchivable(conv, sectionTags),
+    () => (conv: ConversationSummary) => isConversationBulkSelectable(conv, sectionTags),
     [sectionTags],
   )
   const selectableCardIds = useMemo(
@@ -573,6 +574,15 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
     })
   }, [effectiveSelectedIds])
   const isAllSelected = selectableCardIds.length > 0 && selectableCardIds.length === effectiveSelectedIds.size
+  // 归档有效子集：选择集中人类自有（可归档）部分——仅可批量删除的空闲自动化
+  // 会话留在选择集里但不进入批量归档（按钮计数与执行集合一致）。
+  const effectiveArchivableSelectedIds = useMemo(
+    () =>
+      renderedCards
+        .filter((card) => effectiveSelectedIds.has(card.root.id) && isConversationArchivable(card.root, sectionTags))
+        .map((card) => card.root.id),
+    [renderedCards, effectiveSelectedIds, sectionTags],
+  )
   const batchDeleteConfirmOpen = batchDeleteIds !== null &&
     batchDeleteIds.size === effectiveSelectedIds.size &&
     [...batchDeleteIds].every((id) => effectiveSelectedIds.has(id))
@@ -611,12 +621,16 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
 
   /** 批量归档：逐会话 PATCH 宿主归档 tag + allSettled 聚合（部分失败不掩盖
    * 成功）；归档不删除会话、无导航，列表纯靠 conversation.upsert 更新
-   * （归档根树随即离开总览）。操作集合 = 有效选择集（可见可勾选卡片）。 */
+   * （归档根树随即离开总览）。仅选择集中人类自有（可归档）子集参与——
+   * 勾选集还可包含仅可批量删除的空闲自动化会话，它们绝不进入批量归档。
+   * 操作集合 = 有效选择集（可见可勾选卡片）。 */
   const executeBatchArchive = async (): Promise<void> => {
     if (effectiveSelectedIds.size === 0 || archiving || deleting) return
     setArchiving(true)
     try {
-      const convs = cards.filter((card) => effectiveSelectedIds.has(card.root.id)).map((card) => card.root)
+      const convs = cards
+        .filter((card) => effectiveSelectedIds.has(card.root.id) && isConversationArchivable(card.root, sectionTags))
+        .map((card) => card.root)
       const outcome = await patchConversationsArchived(convs, true)
       pushNotice(archiveBatchNotice(true, outcome, t))
       exitBatchMode()
@@ -625,7 +639,7 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
     }
   }
 
-  /** 批量删除：逐会话 DELETE + allSettled 聚合（与侧栏批量删除同语义）；
+  /** 批量删除：单次 bulk-delete 请求（服务端逐项聚合；部分失败不掩盖成功）；
    * 不做任何导航——若被删会话正被打开，由 conversation.deleted SSE 兜底
    * 管道统一处理当前目标回退。 */
   const executeBatchDelete = async (): Promise<void> => {
@@ -634,31 +648,8 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
     setBatchDeleteIds(null)
     setDeleting(true)
     try {
-      const results = await Promise.allSettled(ids.map((id) => conversationsApi.remove(id)))
-      const fulfilled = results.filter((r) => r.status === 'fulfilled').length
-      const rejected = results.filter((r) => r.status === 'rejected').length
-      if (rejected === 0) {
-        pushNotice({
-          type: 'notification',
-          level: 'info',
-          title: t('shell.batch.bulkDeleteCompleted'),
-          body: t('shell.batch.bulkDeleteCompletedBody', { count: fulfilled }),
-        })
-      } else if (fulfilled === 0) {
-        pushNotice({
-          type: 'notification',
-          level: 'error',
-          title: t('shell.batch.bulkDeleteFailed'),
-          body: t('shell.batch.bulkDeleteFailedBody', { count: rejected }),
-        })
-      } else {
-        pushNotice({
-          type: 'notification',
-          level: 'warning',
-          title: t('shell.batch.bulkDeletePartial'),
-          body: t('shell.batch.bulkDeletePartialBody', { fulfilled, rejected }),
-        })
-      }
+      const outcome = await bulkDeleteConversations(ids)
+      pushNotice(bulkDeleteNotice(outcome, t))
       exitBatchMode()
     } catch (err) {
       pushNotice({
@@ -941,12 +932,12 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
                 <button
                   type="button"
                   className="btn btn-sm"
-                  disabled={effectiveSelectedIds.size === 0 || deleting || archiving}
+                  disabled={effectiveArchivableSelectedIds.length === 0 || deleting || archiving}
                   onClick={() => {
                     void executeBatchArchive()
                   }}
                 >
-                  {archiving ? t('shell.agents.archiving') : t('shell.agents.archiveCount', { count: effectiveSelectedIds.size })}
+                  {archiving ? t('shell.agents.archiving') : t('shell.agents.archiveCount', { count: effectiveArchivableSelectedIds.length })}
                 </button>
                 <button
                   type="button"

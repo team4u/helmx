@@ -70,7 +70,7 @@
 
 **`helmx conversations update [id] [--current] [--title] [--model] [--thinking] [--profile-id] [--node] [--cwd] [--pinned] [--unread]`** — 部分更新。`--model`/`--thinking` 传空串清除覆盖并重算继承链；`--thinking` 取值 `off|minimal|low|medium|high|xhigh|max`。
 
-**`helmx conversations delete [id] [--current]`** — 删除会话。插件受管会话返回 `409 conversation_managed_by_plugin`。
+**`helmx conversations delete [id...] [--current]`** — 删除一个或多个会话（单次批量请求）。删除会级联其派生子会话（`parentConversationId` 子树，叶子先行）；插件受管会话逐项返回 `conversation_managed_by_plugin` 并计入 `failures`，退出码 1。`--json` 输出 `{deleted: number[], failures: [{id, code, message}]}`。受管回合内删除自身会话被拒（`self_delete_forbidden`）。
 
 **`helmx conversations reset [id] [--current] [--handoff <str>]`** — 重置上下文，新上下文以 handoff 文本开始。
 

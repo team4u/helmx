@@ -1838,6 +1838,67 @@ describe('conversation management protection and ownership', { timeout: 60_000 }
     }
   })
 
+  it('deleteConversation cascades the derived child subtree leaves-first; a managed descendant blocks the entire subtree', { timeout: 60_000 }, async () => {
+    const dir = join(root, 'o2')
+    const kernel = await openRuntime(dir, { model: 'faux/faux-1' })
+    try {
+      const parent = await kernel.createConversation({ title: 'parent' })
+      const child = await kernel.createConversation({ parentConversationId: parent.id, title: 'child' })
+      const grand = await kernel.createConversation({ parentConversationId: child.id, title: 'grand' })
+      await kernel.deleteConversation(parent.id)
+      const remaining = new Set(kernel.listConversations().map((c) => c.id))
+      assert.equal(remaining.has(parent.id) || remaining.has(child.id) || remaining.has(grand.id), false)
+
+      // Managed descendant: the whole subtree is rejected up front (no partial half-tree state).
+      const p2 = await kernel.createConversation({ title: 'p2' })
+      const c2 = await kernel.createConversation({ parentConversationId: p2.id, title: 'c2' })
+      const release = kernel.manageConversation(c2.id, 'test:owner-c2')
+      await assert.rejects(
+        () => kernel.deleteConversation(p2.id),
+        (err: unknown) =>
+          err instanceof HelmxError &&
+          err.code === 'conversation_managed_by_plugin' &&
+          err.message.includes(`derived conversation ${c2.id}`),
+      )
+      const afterReject = new Set(kernel.listConversations().map((c) => c.id))
+      assert.equal(afterReject.has(p2.id) && afterReject.has(c2.id), true)
+      release()
+      await kernel.deleteConversation(p2.id)
+      const afterDelete = new Set(kernel.listConversations().map((c) => c.id))
+      assert.equal(afterDelete.has(p2.id) || afterDelete.has(c2.id), false)
+    } finally {
+      await kernel.close()
+    }
+  })
+
+  it('deleteConversations aggregates partial failures per item; same-batch parent+child ids collapse to deleted', { timeout: 60_000 }, async () => {
+    const dir = join(root, 'o3')
+    const kernel = await openRuntime(dir, { model: 'faux/faux-1' })
+    try {
+      const a = await kernel.createConversation({ title: 'a' })
+      const aChild = await kernel.createConversation({ parentConversationId: a.id, title: 'a-child' })
+      const b = await kernel.createConversation({ title: 'b' })
+      const releaseB = kernel.manageConversation(b.id, 'test:owner-b')
+      // Parent a and its child in the same batch: the child is cascaded away with a
+      // and counts as deleted (not not_found); managed b and missing 999999 fail per item.
+      const result = await kernel.deleteConversations([a.id, aChild.id, b.id, 999999])
+      assert.deepEqual([...result.deleted].sort((x, y) => x - y), [a.id, aChild.id].sort((x, y) => x - y))
+      assert.equal(result.failures.length, 2)
+      const failureCodes = new Map(result.failures.map((f) => [f.id, f.code]))
+      assert.equal(failureCodes.get(b.id), 'conversation_managed_by_plugin')
+      assert.equal(failureCodes.get(999999), 'not_found')
+      const remaining = new Set(kernel.listConversations().map((c) => c.id))
+      assert.equal(remaining.has(a.id) || remaining.has(aChild.id), false)
+      assert.equal(remaining.has(b.id), true)
+      releaseB()
+      const again = await kernel.deleteConversations([b.id])
+      assert.deepEqual(again, { deleted: [b.id], failures: [] })
+      assert.equal(kernel.listConversations().some((c) => c.id === b.id), false)
+    } finally {
+      await kernel.close()
+    }
+  })
+
   it('markConversationOwnership: generic marking; child spawn automatically defaults to helmx', { timeout: 60_000 }, async () => {
     const dir = join(root, 'o2')
     const kernel = await openRuntime(dir, { model: 'faux/faux-1' })
