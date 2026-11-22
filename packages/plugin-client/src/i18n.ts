@@ -4,7 +4,10 @@
  * - `usePluginLocale()` resolves the active host UI locale: plugin context
  *   (usePluginContext) first, then the host port, then DEFAULT_HELMX_LOCALE —
  *   a locale always has a well-defined default, so unlike data ports this
- *   never throws for a missing provider;
+ *   never throws for a missing provider. Subscribes strictly to the host
+ *   `prefs` domain via `useSyncExternalStore`, so streaming `conversationLives`
+ *   frames never re-render SDK UI controls (`Select`, `SearchBox`,
+ *   `CopyButton`, `ViewBoundary`, etc.);
  * - `usePluginTranslator()` returns a referentially stable minimal translator
  *   bound to that locale (resolves LocalizedText display copy);
  * - the locale essentials (HelmxLocale / LocalizedText / normalize / resolve /
@@ -19,7 +22,7 @@
  *
  * No component exports in this file (Fast Refresh friendly).
  */
-import { useContext, useMemo } from 'react'
+import { useCallback, useContext, useMemo, useSyncExternalStore } from 'react'
 import {
   DEFAULT_HELMX_LOCALE,
   createLocaleTranslator,
@@ -27,13 +30,31 @@ import {
   type LocaleTranslator,
 } from '@helmx/protocol/browser'
 import { PluginClientHostContext } from './host-port.js'
-import { PluginClientContext } from './plugin-context.js'
+import { PluginClientContext, getContextBoundHostPort } from './plugin-context.js'
+
+const NOOP_UNSUBSCRIBE = (): void => {}
 
 /** Resolve the active UI locale: plugin context first, host port fallback, default locale last. */
 export function usePluginLocale(): HelmxLocale {
   const ctx = useContext(PluginClientContext)
   const host = useContext(PluginClientHostContext)
-  return ctx?.locale ?? host?.locale ?? DEFAULT_HELMX_LOCALE
+  const boundPort = getContextBoundHostPort(ctx)
+  const activePort = boundPort ?? (ctx === null ? (host ?? undefined) : undefined)
+
+  const subscribe = useCallback(
+    (listener: () => void): (() => void) => (activePort !== undefined ? activePort.subscribePrefs(listener) : NOOP_UNSUBSCRIBE),
+    [activePort],
+  )
+  const getSnapshot = useCallback(
+    (): HelmxLocale | undefined => (activePort !== undefined ? activePort.getLocale?.() : undefined),
+    [activePort],
+  )
+  const portLocale = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
+
+  if (ctx !== null && boundPort === undefined) {
+    return ctx.locale ?? DEFAULT_HELMX_LOCALE
+  }
+  return portLocale ?? ctx?.locale ?? DEFAULT_HELMX_LOCALE
 }
 
 /** Minimal translator bound to the active locale; referentially stable across renders while the locale is unchanged. */

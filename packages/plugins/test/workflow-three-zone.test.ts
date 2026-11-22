@@ -164,18 +164,41 @@ function createHostHarness(init: {
     return cur
   }
 
+  const noopUnsub = () => {}
+  const emptyAsks: AskSpec[] = []
+  const details = init.conversationDetails ?? {}
+  const lives = init.conversationLives ?? {}
+  const pluginDocs = init.pluginDocs ?? {}
+  const pluginsSnapshot = { plugins: [], screens: [] }
+  const pendingAsksByConv = new Map<number, AskSpec[]>()
+  for (const ask of init.pendingAsks ?? []) {
+    const list = pendingAsksByConv.get(ask.conversationId)
+    if (list === undefined) pendingAsksByConv.set(ask.conversationId, [ask])
+    else list.push(ask)
+  }
+
   const port: import('../../plugin-client/src/index.js').PluginClientHostPort = {
-    authenticated: true,
-    theme: 'dark',
-    locale: init.locale,
-    conversations,
-    conversationDetails: init.conversationDetails ?? {},
-    conversationLives: init.conversationLives ?? {},
-    pendingAsks: init.pendingAsks ?? [],
-    loadErrors: {},
-    plugins: [],
-    screens: [],
-    pluginDocs: init.pluginDocs ?? {},
+    getAuthenticated: () => true,
+    subscribeAuthenticated: () => noopUnsub,
+    getTheme: () => 'dark',
+    ...(init.locale !== undefined ? { getLocale: () => init.locale! } : {}),
+    subscribePrefs: () => noopUnsub,
+    getConversations: () => conversations,
+    subscribeConversations: () => noopUnsub,
+    getConversationSummary: (id) => conversations.find((c) => c.id === id),
+    subscribeConversationSummary: () => noopUnsub,
+    getConversationDetail: (id) => details[id],
+    subscribeConversationDetail: () => noopUnsub,
+    getConversationLive: (id) => lives[id],
+    subscribeConversationLive: () => noopUnsub,
+    getConversationPendingAsks: (id) => pendingAsksByConv.get(id) ?? emptyAsks,
+    subscribeConversationPendingAsks: () => noopUnsub,
+    getLoadError: () => undefined,
+    subscribeLoadError: () => noopUnsub,
+    getPluginsSnapshot: () => pluginsSnapshot,
+    subscribePlugins: () => noopUnsub,
+    getPluginDocValue: (docKey) => (Object.hasOwn(pluginDocs, docKey) ? pluginDocs[docKey] : undefined),
+    subscribePluginDoc: () => noopUnsub,
     ensurePluginDoc: async () => undefined,
     getPluginSessionDoc: async (_p, _d, convId) => ({ runs: sessionRuns.get(convId) ?? [] }),
     subscribeSessionDoc: (_key, listener) => {
@@ -360,13 +383,13 @@ describe('Workflow 三区零重复与无损呈现', () => {
       })
 
       // 2. runs 清空（仅剩无 WorkflowRun 的分叉 #99 仍在 working）或全部 settled 时归零返回 null（0px）
-      harness.port.conversations[1]!.status = 'idle'
+      harness.port.getConversations()[1]!.status = 'idle'
       harness.setRuns(1, [])
       assert.ok(mounted.container.querySelector('.workflow-active-tray') === null, '无在途任务时应返回 null（0px）')
       assert.equal(mounted.container.innerHTML, '', '归零时不得残留空包装节点')
 
       // 3. 注入运行中前台同步工作流 -> 渲染 32px 单行 HUD，支持展开并触发转后台 / 中止 / 工作台定位
-      harness.port.conversations[1]!.status = 'working'
+      harness.port.getConversations()[1]!.status = 'working'
       harness.setRuns(1, [runningWf])
       const trayBar = mounted.container.querySelector('.workflow-active-tray-bar')
       assert.ok(trayBar !== null, '运行中工作流应显示托盘栏')
@@ -415,7 +438,7 @@ describe('Workflow 三区零重复与无损呈现', () => {
       assert.equal(harness.log.workbenchTabs.at(-1), 'plugin:builtin:workflow/tasks')
 
       // 4. 全部收敛结算 -> 自动归零 0px
-      harness.port.conversations[1]!.status = 'idle'
+      harness.port.getConversations()[1]!.status = 'idle'
       harness.setRuns(1, [
         {
           ...runningWf,

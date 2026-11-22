@@ -925,18 +925,33 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
 
     const drawerCalls: number[] = []
     const workbenchCalls: Array<string | undefined> = []
+    const noopUnsub = () => {}
+    const emptyConversations: ConversationSummary[] = []
+    const emptyAsks: never[] = []
+    const pluginsSnapshot = { plugins: [], screens: [] }
+    const pluginDocs: Record<string, unknown> = { [`${SWARM_PLUGIN_ID}/index`]: { workers: [], groups: [] } }
     const port: import('@helmx/plugin-client').PluginClientHostPort = {
-      authenticated: true,
-      theme: 'dark',
-      locale: 'en',
-      conversations: [] as ConversationSummary[],
-      conversationDetails: {},
-      conversationLives: {},
-      pendingAsks: [],
-      loadErrors: {},
-      plugins: [],
-      screens: [],
-      pluginDocs: { [`${SWARM_PLUGIN_ID}/index`]: { workers: [], groups: [] } },
+      getAuthenticated: () => true,
+      subscribeAuthenticated: () => noopUnsub,
+      getTheme: () => 'dark',
+      getLocale: () => 'en',
+      subscribePrefs: () => noopUnsub,
+      getConversations: () => emptyConversations,
+      subscribeConversations: () => noopUnsub,
+      getConversationSummary: () => undefined,
+      subscribeConversationSummary: () => noopUnsub,
+      getConversationDetail: () => undefined,
+      subscribeConversationDetail: () => noopUnsub,
+      getConversationLive: () => undefined,
+      subscribeConversationLive: () => noopUnsub,
+      getConversationPendingAsks: () => emptyAsks,
+      subscribeConversationPendingAsks: () => noopUnsub,
+      getLoadError: () => undefined,
+      subscribeLoadError: () => noopUnsub,
+      getPluginsSnapshot: () => pluginsSnapshot,
+      subscribePlugins: () => noopUnsub,
+      getPluginDocValue: (docKey) => (Object.hasOwn(pluginDocs, docKey) ? pluginDocs[docKey] : undefined),
+      subscribePluginDoc: () => noopUnsub,
       ensurePluginDoc: async () => undefined,
       getPluginSessionDoc: async () => undefined,
       subscribeSessionDoc: () => () => {},

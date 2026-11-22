@@ -23,6 +23,7 @@ let realHooks = false
 
 const NOOP_SUBSCRIBE = (): (() => void) => () => {}
 const UNDEFINED_SNAPSHOT = (): undefined => undefined
+const EMPTY_CONFIG: Record<string, unknown> = Object.freeze({})
 
 export function setBuiltinClientStub(options: BuiltinClientStubOptions = {}): void {
   stub = options
@@ -36,11 +37,18 @@ const sharedPluginClientNamespace = {
   usePluginConfig: () => {
     const host = useContext(HelmxPluginClient.PluginClientHostContext)
     const ctx = useContext(HelmxPluginClient.PluginClientContext)
+    const live = useSyncExternalStore(
+      host?.subscribePlugins ?? NOOP_SUBSCRIBE,
+      () => {
+        const plugin = host?.getPluginsSnapshot().plugins.find((item) => item.id === ctx?.pluginId)
+        return (plugin?.publicConfig ?? EMPTY_CONFIG) as Record<string, unknown>
+      },
+      () => EMPTY_CONFIG,
+    )
     if (realHooks || (stub.config === undefined && host !== null && ctx !== null)) {
-      const plugin = host?.plugins.find((item) => item.id === ctx?.pluginId)
-      return (plugin?.publicConfig ?? {}) as Record<string, unknown>
+      return live
     }
-    return stub.config ?? {}
+    return stub.config ?? EMPTY_CONFIG
   },
   useHostModels: () => {
     const handles = useContext(HelmxPluginClient.PluginClientHostHandlesContext)

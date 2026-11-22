@@ -1,20 +1,28 @@
 /**
  * Reactive hooks for conversations, the plugin registry, and shared elapsed-time tickers
- * (host-port driven, live-synced over SSE, no polling and no mocks).
+ * (host-port driven via fine-grained domain/keyed `useSyncExternalStore` subscriptions,
+ * live-synced over SSE, no polling and no mocks).
  * No component exports in this file (Fast Refresh friendly).
  */
 import { useCallback, useContext, useEffect, useState, useSyncExternalStore } from 'react'
 import type { AskSpec, ConversationDetail, ConversationLive, ConversationSummary, HostModelsSlice, ScreenLocationSnapshot, UsePluginsResult } from '@helmx/protocol/browser'
-import { usePluginClientHost } from './host-port.js'
-import { PluginClientHostHandlesContext } from './host-port.js'
+import { PluginClientHostHandlesContext, usePluginClientHost } from './host-port.js'
 import type { ConversationBackgroundSnapshot } from './host-port.js'
-import { usePluginContext } from './plugin-context.js'
+import { useRequiredPluginContextBase } from './plugin-context.js'
 
 const EMPTY_PLUGIN_CONFIG: Readonly<Record<string, unknown>> = Object.freeze({})
+const EMPTY_PENDING_ASKS: AskSpec[] = Object.freeze([]) as unknown as AskSpec[]
 
-/** All conversation summaries (live-synced over SSE; same data source as the host left sidebar). */
+/** Stable no-op subscribe for optional host capabilities (returns a no-op unsubscribe). */
+const NOOP_UNSUBSCRIBE = (): void => {}
+const NOOP_SUBSCRIBE = (_listener: () => void): (() => void) => NOOP_UNSUBSCRIBE
+/** Stable undefined snapshot: a missing capability reads as unknown, never as an empty truth. */
+const UNDEFINED_SNAPSHOT = (): undefined => undefined
+
+/** All conversation summaries (live-synced over SSE; isolated from `conversationLives` token frames). */
 export function useConversations(): ConversationSummary[] {
-  return usePluginClientHost().conversations
+  const port = usePluginClientHost()
+  return useSyncExternalStore(port.subscribeConversations, port.getConversations, port.getConversations)
 }
 
 /** Stable empty index for the unknown fallback (never a fresh Map per render). */
@@ -22,6 +30,7 @@ const EMPTY_CONVERSATION_BACKGROUND: ConversationBackgroundSnapshot = Object.fre
   unknown: true,
   byConversation: new Map(),
 }) as ConversationBackgroundSnapshot
+const EMPTY_BACKGROUND_SNAPSHOT = (): ConversationBackgroundSnapshot => EMPTY_CONVERSATION_BACKGROUND
 
 /**
  * Host-standard conversation background in-flight snapshot (workbench badge
@@ -34,28 +43,26 @@ const EMPTY_CONVERSATION_BACKGROUND: ConversationBackgroundSnapshot = Object.fre
  */
 export function useConversationBackground(): ConversationBackgroundSnapshot {
   const port = usePluginClientHost()
-  return port.conversationBackground ?? EMPTY_CONVERSATION_BACKGROUND
+  return useSyncExternalStore(
+    port.subscribeConversationBackground ?? NOOP_SUBSCRIBE,
+    port.getConversationBackground ?? EMPTY_BACKGROUND_SNAPSHOT,
+    port.getConversationBackground ?? EMPTY_BACKGROUND_SNAPSHOT,
+  )
 }
 
 // ---------------------------------------------------------------------------
-// Stable-handle host capability reads (isolated from host port value churn)
+// Stable-handle host capability reads (isolated from unrelated domains)
 // ---------------------------------------------------------------------------
 
-/** Stable no-op subscribe for hosts that inject only part of the handle set (returns a no-op unsubscribe). */
-const NOOP_SUBSCRIBE = (_listener: () => void): (() => void) => () => {}
-/** Stable undefined snapshot: a missing getModels capability reads as unknown, never as an empty catalog. */
-const UNDEFINED_SNAPSHOT = (): undefined => undefined
-
 /**
- * Reactive read-only host model catalog slice via the stable-handle context
- * (never through the churning main port value): normalized entries plus the
- * global default chain. `undefined` = capability not injected or catalog not
- * yet first-loaded (render unknown/loading and disable selection); a slice
- * with `models: []` = loaded and genuinely empty ("no models"). The two
- * states are strictly distinct and must never leak into each other. On the
- * server the snapshot is always `undefined`; dynamic refresh, when offered,
- * is the handle's optional refreshModels action (absent = no refresh
- * capability).
+ * Reactive read-only host model catalog slice via the stable-handle context:
+ * normalized entries plus the global default chain. `undefined` = capability
+ * not injected or catalog not yet first-loaded (render unknown/loading and
+ * disable selection); a slice with `models: []` = loaded and genuinely empty
+ * ("no models"). The two states are strictly distinct and must never leak into
+ * each other. On the server the snapshot is always `undefined`; dynamic
+ * refresh, when offered, is the handle's optional refreshModels action (absent
+ * = no refresh capability).
  */
 export function useHostModels(): HostModelsSlice | undefined {
   const handles = useContext(PluginClientHostHandlesContext)
@@ -102,10 +109,7 @@ export function useScreenLocation(): ScreenLocationSnapshot | undefined {
  */
 export function usePlugins(): UsePluginsResult {
   const port = usePluginClientHost()
-  return {
-    plugins: port.plugins,
-    screens: port.screens,
-  }
+  return useSyncExternalStore(port.subscribePlugins, port.getPluginsSnapshot, port.getPluginsSnapshot)
 }
 
 /**
@@ -115,10 +119,13 @@ export function usePlugins(): UsePluginsResult {
  * Must be called inside `<PluginUiView>`.
  */
 export function usePluginConfig<T extends Record<string, unknown> = Record<string, unknown>>(): T {
-  const { pluginId } = usePluginContext()
+  const { pluginId } = useRequiredPluginContextBase()
   const port = usePluginClientHost()
-  const summary = port.plugins.find((p) => p.id === pluginId)
-  return (summary?.publicConfig ?? EMPTY_PLUGIN_CONFIG) as T
+  const getConfig = useCallback(
+    (): T => (port.getPluginsSnapshot().plugins.find((p) => p.id === pluginId)?.publicConfig ?? EMPTY_PLUGIN_CONFIG) as T,
+    [port, pluginId],
+  )
+  return useSyncExternalStore(port.subscribePlugins, getConfig, getConfig)
 }
 
 /** Live per-conversation view returned by useConversation. */
@@ -146,10 +153,14 @@ export interface ConversationHookOptions {
 }
 
 /**
- * Subscribe to a single conversation: the detail is auto-loaded by default when missing
- * and no failure is recorded, then updated live via SSE.
- * When `options?.includeDetail === false`, auto-loading is skipped while still returning any
- * already-cached `detail` plus `summary`, `live`, `pendingAsks`, `loadError`, and manual `reload`.
+ * Subscribe to a single conversation via keyed `useSyncExternalStore` slices:
+ * streaming frames (`conversationLives`) or detail/ask/error changes on other
+ * conversations never notify this subscriber.
+ *
+ * The detail is auto-loaded by default when missing and no failure is recorded,
+ * then updated live via SSE. When `options?.includeDetail === false`, auto-loading
+ * is skipped while still returning any already-cached `detail` plus `summary`,
+ * `live`, `pendingAsks`, `loadError`, and manual `reload`.
  * When conversationId is undefined (no conversation context), an empty view is
  * returned and no request is made.
  */
@@ -159,16 +170,67 @@ export function useConversation(
 ): ConversationHookResult {
   const port = usePluginClientHost()
   const includeDetail = options?.includeDetail !== false
-  const summary =
-    conversationId !== undefined ? port.conversations.find((c) => c.id === conversationId) : undefined
-  const detail = conversationId !== undefined ? port.conversationDetails[conversationId] : undefined
-  const live = conversationId !== undefined ? port.conversationLives[conversationId] : undefined
-  const pendingAsks =
-    conversationId !== undefined ? port.pendingAsks.filter((a) => a.conversationId === conversationId) : []
-  const loadError =
-    conversationId !== undefined ? port.loadErrors[`conversation:${conversationId}`] : undefined
-  const load = port.loadConversationDetail
+  const errorKey = conversationId !== undefined ? `conversation:${conversationId}` : undefined
 
+  const subscribeSummary = useCallback(
+    (listener: () => void): (() => void) =>
+      conversationId !== undefined ? port.subscribeConversationSummary(conversationId, listener) : NOOP_UNSUBSCRIBE,
+    [port, conversationId],
+  )
+  const getSummary = useCallback(
+    (): ConversationSummary | undefined =>
+      conversationId !== undefined ? port.getConversationSummary(conversationId) : undefined,
+    [port, conversationId],
+  )
+  const summary = useSyncExternalStore(subscribeSummary, getSummary, getSummary)
+
+  const subscribeDetail = useCallback(
+    (listener: () => void): (() => void) =>
+      conversationId !== undefined ? port.subscribeConversationDetail(conversationId, listener) : NOOP_UNSUBSCRIBE,
+    [port, conversationId],
+  )
+  const getDetail = useCallback(
+    (): ConversationDetail | undefined =>
+      conversationId !== undefined ? port.getConversationDetail(conversationId) : undefined,
+    [port, conversationId],
+  )
+  const detail = useSyncExternalStore(subscribeDetail, getDetail, getDetail)
+
+  const subscribeLive = useCallback(
+    (listener: () => void): (() => void) =>
+      conversationId !== undefined ? port.subscribeConversationLive(conversationId, listener) : NOOP_UNSUBSCRIBE,
+    [port, conversationId],
+  )
+  const getLive = useCallback(
+    (): ConversationLive | undefined =>
+      conversationId !== undefined ? port.getConversationLive(conversationId) : undefined,
+    [port, conversationId],
+  )
+  const live = useSyncExternalStore(subscribeLive, getLive, getLive)
+
+  const subscribePendingAsks = useCallback(
+    (listener: () => void): (() => void) =>
+      conversationId !== undefined ? port.subscribeConversationPendingAsks(conversationId, listener) : NOOP_UNSUBSCRIBE,
+    [port, conversationId],
+  )
+  const getPendingAsks = useCallback(
+    (): AskSpec[] =>
+      conversationId !== undefined ? port.getConversationPendingAsks(conversationId) : EMPTY_PENDING_ASKS,
+    [port, conversationId],
+  )
+  const pendingAsks = useSyncExternalStore(subscribePendingAsks, getPendingAsks, getPendingAsks)
+
+  const subscribeError = useCallback(
+    (listener: () => void): (() => void) => (errorKey !== undefined ? port.subscribeLoadError(errorKey, listener) : NOOP_UNSUBSCRIBE),
+    [port, errorKey],
+  )
+  const getError = useCallback(
+    (): string | undefined => (errorKey !== undefined ? port.getLoadError(errorKey) : undefined),
+    [port, errorKey],
+  )
+  const loadError = useSyncExternalStore(subscribeError, getError, getError)
+
+  const load = port.loadConversationDetail
   useEffect(() => {
     if (includeDetail && conversationId !== undefined && detail === undefined && loadError === undefined) {
       void load(conversationId)

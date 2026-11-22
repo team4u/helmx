@@ -25,6 +25,7 @@ import { act } from 'react'
 import {
   COMPOSER_DOCK_SLOT,
   parseNonEmptyLocalizedText,
+  type AskSpec,
   type CallActionOptions,
   type ConversationSummary,
   type HelmxPluginContext,
@@ -225,17 +226,36 @@ describe("swarm-client-interactions", () => {
     }
     const getSessionDocState = (key: PluginSessionDocKey) =>
       stubSessionStates[`${key.pluginId}/${key.docName}/${key.conversationId}`] ?? EMPTY_SESSION_DOC_STATE
+    const noopUnsub = () => {}
+    const emptyAsks: AskSpec[] = []
+    const pendingAsksByConv = new Map<number, AskSpec[]>()
+    for (const ask of stubPendingAsks as AskSpec[]) {
+      const list = pendingAsksByConv.get(ask.conversationId)
+      if (list === undefined) pendingAsksByConv.set(ask.conversationId, [ask])
+      else list.push(ask)
+    }
     const hostPort = {
-      authenticated: false,
-      conversations,
-      pluginDocs,
+      getAuthenticated: () => false,
+      subscribeAuthenticated: () => noopUnsub,
+      getTheme: () => 'dark',
+      subscribePrefs: () => noopUnsub,
+      getConversations: () => conversations,
+      subscribeConversations: () => noopUnsub,
+      getConversationSummary: (id: number) => conversations.find((c) => c.id === id),
+      subscribeConversationSummary: () => noopUnsub,
+      getConversationDetail: () => undefined,
+      subscribeConversationDetail: () => noopUnsub,
+      getConversationLive: (id: number) => stubConversationLives[id],
+      subscribeConversationLive: () => noopUnsub,
+      getConversationPendingAsks: (id: number) => pendingAsksByConv.get(id) ?? emptyAsks,
+      subscribeConversationPendingAsks: () => noopUnsub,
+      getLoadError: (key: string) => stubLoadErrors[key],
+      subscribeLoadError: () => noopUnsub,
+      getPluginDocValue: (docKey: string) => (Object.hasOwn(pluginDocs, docKey) ? pluginDocs[docKey] : undefined),
+      subscribePluginDoc: () => noopUnsub,
       ensurePluginDoc: noopEnsurePluginDoc,
       subscribeSessionDoc,
       getSessionDocState,
-      conversationDetails: {},
-      conversationLives: stubConversationLives,
-      pendingAsks: stubPendingAsks,
-      loadErrors: stubLoadErrors,
       loadConversationDetail: noopLoadConversationDetail,
     } as unknown as PluginClientHostPort
     await act(async () => {

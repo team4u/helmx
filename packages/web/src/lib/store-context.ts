@@ -18,11 +18,11 @@ import type { ModelDescriptor } from './api.js'
 import type {
   AuthSlice,
   CatalogSlice,
+  ConversationBackgroundSlice,
   HelmxExternalStore,
   HelmxStoreActions,
   LocationTargetsSlice,
   NavSlice,
-  PluginHostPortSlice,
   PluginsUiSlice,
   PrefsSlice,
   ProfilesSlice,
@@ -327,8 +327,8 @@ export function useNavSlice(): NavSlice {
   return useDomainSlice('nav', (s) => s.getNavSlice())
 }
 
-export function usePluginHostPortSlice(): PluginHostPortSlice {
-  return useDomainSlice('pluginHostPort', (s) => s.getPluginHostPortSlice())
+export function useConversationBackgroundSlice(): ConversationBackgroundSlice {
+  return useDomainSlice('conversationBackground', (s) => s.getConversationBackgroundSlice())
 }
 
 // ---- Per-Key / Per-Conversation Hooks -------------------------------------
@@ -474,11 +474,11 @@ export type { SessionDocKey }
 export type {
   AuthSlice,
   CatalogSlice,
+  ConversationBackgroundSlice,
   HelmxExternalStore,
   HelmxStoreActions,
   LocationTargetsSlice,
   NavSlice,
-  PluginHostPortSlice,
   PluginsUiSlice,
   PrefsSlice,
   ProfilesSlice,

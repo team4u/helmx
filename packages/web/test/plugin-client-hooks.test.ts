@@ -236,7 +236,7 @@ test('useConversation：reload 调用 loadConversationDetail(id, true) 强制刷
 
 test('createPluginClientContext.openConversationDrawer：打开 conversation-drawer 模态并收起已打开的工作台', { timeout: 60_000 }, () => {
   const store = makeStore({ workbenchOpen: true })
-  const ctx = createPluginClientContext(createPluginClientHostPort(store.getSnapshot()), 'test:plugin', 1)
+  const ctx = createPluginClientContext(createPluginClientHostPort(store), 'test:plugin', 1)
   ctx.openConversationDrawer(42)
   assert.deepEqual(store.getActiveModal(), { kind: 'conversation-drawer', conversationId: 42 }, '必须设置 conversation-drawer 模态')
   // 工作台改为绑定抽屉会话并经抽屉内按钮显式抬升：打开抽屉时收起旧工作台，
@@ -246,7 +246,7 @@ test('createPluginClientContext.openConversationDrawer：打开 conversation-dra
 
 test('createPluginClientContext.openConversationDrawer：工作台关闭时同样只开抽屉，不强制打开工作台', { timeout: 60_000 }, () => {
   const store = makeStore({ workbenchOpen: false })
-  const ctx = createPluginClientContext(createPluginClientHostPort(store.getSnapshot()), 'test:plugin', undefined)
+  const ctx = createPluginClientContext(createPluginClientHostPort(store), 'test:plugin', undefined)
   ctx.openConversationDrawer(7)
   assert.deepEqual(store.getActiveModal(), { kind: 'conversation-drawer', conversationId: 7 })
   assert.equal(store.getWorkbenchSlice().workbenchOpen, false, '抽屉入口不得强制展开工作台')

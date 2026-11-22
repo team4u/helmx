@@ -111,10 +111,11 @@ describe("session-docs-hooks", () => {
     }
   }
 
-  test('宿主端口在快照更新后保留订阅与加载函数身份', { timeout: 60_000 }, () => {
+  test('宿主端口在 store 变更后保留订阅与加载函数身份', { timeout: 60_000 }, () => {
     const store = stableSessionDocStore()
-    const initial = createPluginClientHostPort(store.getSnapshot())
-    const updated = createPluginClientHostPort({ ...store.getSnapshot(), conversations: [] })
+    const initial = createPluginClientHostPort(store)
+    store.updateLive((prev) => ({ ...prev, conversations: [] }))
+    const updated = createPluginClientHostPort(store)
     for (const key of ['subscribeSessionDoc', 'getSessionDocState', 'ensurePluginDoc', 'getPluginSessionDoc', 'loadConversationDetail', 'invokePluginAction'] as const) {
       assert.equal(updated[key], initial[key], key)
     }

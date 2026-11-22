@@ -68,18 +68,33 @@ function mountHerdrOverview(doc: OverviewDoc, locale?: 'en' | 'zh-CN') {
   const openedDrawers: number[] = []
   const paramsWrites: Array<Record<string, string | undefined>> = []
 
+  const noopUnsub = () => {}
+  const emptyConversations: never[] = []
+  const emptyAsks: never[] = []
+  const pluginsSnapshot = { plugins: [], screens: [] }
+  const pluginDocs: Record<string, unknown> = { 'builtin:herdr/overview': doc }
   const port: import('../../plugin-client/src/index.js').PluginClientHostPort = {
-    authenticated: true,
-    theme: 'dark',
-    locale,
-    conversations: [],
-    conversationDetails: {},
-    conversationLives: {},
-    pendingAsks: [],
-    loadErrors: {},
-    plugins: [],
-    screens: [],
-    pluginDocs: { 'builtin:herdr/overview': doc },
+    getAuthenticated: () => true,
+    subscribeAuthenticated: () => noopUnsub,
+    getTheme: () => 'dark',
+    ...(locale !== undefined ? { getLocale: () => locale } : {}),
+    subscribePrefs: () => noopUnsub,
+    getConversations: () => emptyConversations,
+    subscribeConversations: () => noopUnsub,
+    getConversationSummary: () => undefined,
+    subscribeConversationSummary: () => noopUnsub,
+    getConversationDetail: () => undefined,
+    subscribeConversationDetail: () => noopUnsub,
+    getConversationLive: () => undefined,
+    subscribeConversationLive: () => noopUnsub,
+    getConversationPendingAsks: () => emptyAsks,
+    subscribeConversationPendingAsks: () => noopUnsub,
+    getLoadError: () => undefined,
+    subscribeLoadError: () => noopUnsub,
+    getPluginsSnapshot: () => pluginsSnapshot,
+    subscribePlugins: () => noopUnsub,
+    getPluginDocValue: (docKey) => (Object.hasOwn(pluginDocs, docKey) ? pluginDocs[docKey] : undefined),
+    subscribePluginDoc: () => noopUnsub,
     ensurePluginDoc: async () => doc,
     getPluginSessionDoc: async () => undefined,
     subscribeSessionDoc: () => () => {},

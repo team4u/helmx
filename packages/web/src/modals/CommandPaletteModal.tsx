@@ -21,10 +21,10 @@ import {
 import { isAbortError } from '../lib/request-manager.js'
 import {
   useAuthConnection,
+  useConversationBackgroundSlice,
   useConversations,
   useGroupedUi,
   useLocationTargets,
-  usePluginDocsState,
   usePlugins,
   useProfilesSlice,
   useSidebarCollapsed,
@@ -34,10 +34,6 @@ import {
 } from '../lib/store-context.js'
 import { resolveBrowserLocale } from '../lib/theme-preferences.js'
 import type { LocalePreference } from '../lib/types.js'
-import {
-  collectBackgroundBadgeDocs,
-  summarizeConversationBackgroundActivity,
-} from '../shell/background-activity-model.js'
 import {
   activeTargetForPanel,
   formatModShortcut,
@@ -105,7 +101,7 @@ export function CommandPaletteModal({
   const { themePreference, localePreference: storeLocalePref, quietNotifyEnabled } = useThemePreferencesState()
   const groupedUi = useGroupedUi()
   const plugins = usePlugins()
-  const pluginDocs = usePluginDocsState()
+  const { badgeDocs, pendingBadgeDocs, snapshot: backgroundSnapshot } = useConversationBackgroundSlice()
   const { profiles } = useProfilesSlice()
   const actions = useStoreActions()
   const { locale, t } = useWebLocale()
@@ -244,25 +240,15 @@ export function CommandPaletteModal({
     }
   }, [query, isComposing, searchDebounceMs])
 
-  const background = useMemo(
-    () =>
-      summarizeConversationBackgroundActivity({
-        panels: groupedUi.workbenchPanels,
-        conversations,
-        pluginDocs,
-        locale,
-        t,
-      }),
-    [groupedUi.workbenchPanels, conversations, pluginDocs, locale, t],
-  )
-  const badgeDocs = useMemo(
-    () => collectBackgroundBadgeDocs(groupedUi.workbenchPanels, conversations),
-    [groupedUi.workbenchPanels, conversations],
-  )
+  const background = backgroundSnapshot.byConversation
   useEffect(() => {
     if (!authenticated) return
-    for (const ref of badgeDocs) void actions.ensurePluginDoc(ref.pluginId, ref.doc)
-  }, [badgeDocs, authenticated, actions.ensurePluginDoc])
+    for (const ref of badgeDocs) {
+      if (pendingBadgeDocs.has(`${ref.pluginId}/${ref.doc}`)) {
+        void actions.ensurePluginDoc(ref.pluginId, ref.doc)
+      }
+    }
+  }, [badgeDocs, pendingBadgeDocs, authenticated, actions.ensurePluginDoc])
 
   const close = useCallback(() => onClose(), [onClose])
 

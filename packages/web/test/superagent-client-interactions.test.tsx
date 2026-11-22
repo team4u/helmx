@@ -136,7 +136,13 @@ describe("superagent-client-interactions", () => {
     const host = document.createElement('div')
     document.body.appendChild(host)
     const root = createRoot(host)
-    const hostPort = { conversations } as unknown as PluginClientHostPort
+    const noopUnsub = () => {}
+    const hostPort = {
+      getConversations: () => conversations,
+      subscribeConversations: () => noopUnsub,
+      getTheme: () => 'dark',
+      subscribePrefs: () => noopUnsub,
+    } as unknown as PluginClientHostPort
     await act(async () => {
       root.render(
         e(
