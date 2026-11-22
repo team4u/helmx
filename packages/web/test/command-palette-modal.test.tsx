@@ -17,7 +17,8 @@ import * as React from 'react'
 import { act } from 'react'
 import type { Root } from 'react-dom/client'
 import type { ConversationSummary, PluginSummary, PluginUiContribution, Profile } from '@helmx/protocol'
-import { ensureHappyDom, flushMacrotask, jsonResponse, typeIntoControl, waitForCondition } from './helpers/dom-harness.js'
+import { jsonResponse } from '@helmx/test-kit'
+import { ensureHappyDom, flushMacrotask, typeIntoControl, waitForCondition } from './helpers/dom-harness.js'
 import { makeTestStore } from './helpers/store.js'
 
 ensureHappyDom()

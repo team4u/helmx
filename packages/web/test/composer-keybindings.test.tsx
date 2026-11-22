@@ -24,7 +24,8 @@ import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { describe, afterEach, test } from 'node:test'
 import * as React from 'react'
-import { ensureHappyDom, jsonResponse, waitForCondition } from './helpers/dom-harness.js'
+import { jsonResponse } from '@helmx/test-kit'
+import { ensureHappyDom, waitForCondition } from './helpers/dom-harness.js'
 import type {
   ComposerScopeProps,
   ConversationDetail,

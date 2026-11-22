@@ -12,10 +12,10 @@ import { describe, afterEach, test } from 'node:test'
 import * as React from 'react'
 import { act } from 'react'
 import type { Root } from 'react-dom/client'
+import { jsonResponse } from '@helmx/test-kit'
 import {
   ensureHappyDom,
   flushMacrotask,
-  jsonResponse,
   waitForCondition,
 } from './helpers/dom-harness.js'
 
