@@ -25,12 +25,15 @@ import {
   filterOverviewCards,
   groupOverviewCards,
   overviewBucketCounts,
+  overviewCardsNeedLiveClock,
   overviewFilterParamsRepair,
   overviewNodeKey,
   overviewNodeOptions,
   overviewProfileOptions,
   overviewShouldShowSectionHeaders,
   parseOverviewFilterParams,
+  resolveOverviewCardTiming,
+  resolveOverviewDescendantChipTiming,
   OVERVIEW_DESCENDANT_LIMIT,
 } from '../src/overview/overview-model.js'
 import { formatLocationHash, hashHasPrimaryTarget, parseLocationHash, shouldPushLocationHistory } from '../src/lib/url-hash-model.js'
@@ -2266,5 +2269,163 @@ test('ConversationOverview section collapse hides cards, excludes them from batc
     assert.equal(mount.container.querySelectorAll('.overview-card').length, 2)
   } finally {
     await mount.unmount()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 时间观测：单卡计时、后代芯片秒表、零定时器与不跳卡不变量
+// ---------------------------------------------------------------------------
+
+test('overview timing pure helpers: earliest pendingAskSince, root/descendant runStartedAt, settled runDurationMs, and zero-timer gate', { timeout: 60_000 }, () => {
+  const now = 100_000
+  const cards = buildCards([
+    // 1. needs_attention：树内两处 blocked，取最早 pendingAskSince (now - 45s)
+    conv({ id: 1, status: 'blocked', pendingAskCount: 1, pendingAskSince: now - 20_000, createdAt: 1000 }),
+    conv({ id: 11, parentConversationId: 1, status: 'blocked', pendingAskCount: 1, pendingAskSince: now - 45_000, createdAt: 1100 }),
+    // 2. running：根 idle，两个活跃后代取最早 runStartedAt (now - 70s)
+    conv({ id: 2, status: 'idle', createdAt: 2000 }),
+    conv({ id: 21, parentConversationId: 2, status: 'working', runStartedAt: now - 30_000, createdAt: 2100 }),
+    conv({ id: 22, parentConversationId: 2, status: 'working', runStartedAt: now - 70_000, createdAt: 2200 }),
+    // 3. running：根本身 working，优先取根 runStartedAt
+    conv({ id: 3, status: 'working', runStartedAt: now - 15_000, createdAt: 3000 }),
+    conv({ id: 31, parentConversationId: 3, status: 'working', runStartedAt: now - 90_000, createdAt: 3100 }),
+    // 4. unread_done：仅 root.runDurationMs > 0 时展示累计
+    conv({ id: 4, status: 'done', unread: true, runDurationMs: 125_000, createdAt: 4000 }),
+    // 5. quiet：runDurationMs = 0 不展示
+    conv({ id: 5, status: 'idle', runDurationMs: 0, createdAt: 5000 }),
+    // 6. running 但缺 runStartedAt：不编造
+    conv({ id: 6, status: 'working', createdAt: 6000 }),
+  ])
+
+  const byId = new Map(cards.map((c) => [c.root.id, c]))
+  assert.deepEqual(
+    cards.map((c) => c.root.id),
+    [1, 6, 3, 2, 4, 5],
+    'timing fields must never alter canonical bucket + createdAt-desc ordering',
+  )
+  assert.deepEqual(resolveOverviewCardTiming(byId.get(1)!, now), { waitingMs: 45_000 })
+  assert.deepEqual(resolveOverviewCardTiming(byId.get(2)!, now), { runningMs: 70_000 })
+  assert.deepEqual(resolveOverviewCardTiming(byId.get(3)!, now), { runningMs: 15_000 })
+  assert.deepEqual(resolveOverviewCardTiming(byId.get(4)!, now), { settledRunMs: 125_000 })
+  assert.deepEqual(resolveOverviewCardTiming(byId.get(5)!, now), {})
+  assert.deepEqual(resolveOverviewCardTiming(byId.get(6)!, now), {})
+
+  const chip21 = byId.get(2)!.descendants.find((d) => d.conv.id === 21)!
+  assert.deepEqual(resolveOverviewDescendantChipTiming(chip21, now), { kind: 'running', elapsedMs: 30_000 })
+  const chip11 = byId.get(1)!.descendants.find((d) => d.conv.id === 11)!
+  assert.deepEqual(resolveOverviewDescendantChipTiming(chip11, now), { kind: 'waiting', elapsedMs: 45_000 })
+
+  // 零定时器门控：全员安静/已完成（或缺少起点）返回 false；有任一活跃起点返回 true
+  assert.equal(overviewCardsNeedLiveClock([byId.get(4)!, byId.get(5)!, byId.get(6)!]), false)
+  assert.equal(overviewCardsNeedLiveClock([byId.get(1)!]), true)
+  assert.equal(overviewCardsNeedLiveClock([byId.get(2)!]), true)
+})
+
+test('ConversationOverview DOM: renders live waiting/running stopwatches, settled totals, active chip stopwatches, and uses 0 timers when quiet / 1 shared timer when active', { timeout: 60_000 }, async () => {
+  const { resetServerClock } = await import('../src/lib/server-clock.js')
+  resetServerClock()
+  const origSetInterval = globalThis.setInterval
+  let intervalCount = 0
+  globalThis.setInterval = ((...args: Parameters<typeof setInterval>) => {
+    intervalCount += 1
+    return origSetInterval(...args)
+  }) as typeof setInterval
+
+  try {
+    // 1. 全员安静/已完成：0 定时器开销，有 runDurationMs 的卡片展示「累计」
+    const quietStore = overviewStore({
+      locale: 'zh-CN',
+      conversations: [
+        conv({
+          id: 4,
+          title: '已完成卡片',
+          status: 'done',
+          unread: true,
+          runDurationMs: 125_000,
+          createdAt: new Date(2026, 10, 10, 14, 0, 0).getTime(),
+          updatedAt: new Date(2026, 10, 10, 14, 5, 0).getTime(),
+        }),
+        conv({ id: 5, title: '纯安静卡片', status: 'idle', runDurationMs: 0, createdAt: 5000, updatedAt: 5000 }),
+        conv({ id: 51, parentConversationId: 5, title: '安静子会话', status: 'idle', createdAt: 5100 }),
+      ],
+      primaryTarget: { kind: 'overview' },
+    })
+    const quietMount = await mountOverview(quietStore)
+    try {
+      assert.equal(intervalCount, 0, 'all-quiet/done overview must allocate 0 interval timers')
+      const doneCard = cardById(quietMount.container, 4)
+      assert.ok(doneCard !== undefined)
+      const doneTime = doneCard.querySelector<HTMLElement>('.overview-card-sub-time')
+      assert.ok(doneTime !== null)
+      assert.equal(doneTime.textContent, '累计 2m5s')
+      assert.match(doneTime.getAttribute('title') ?? '', /创建于 2026-11-10 14:00:00/)
+      assert.match(doneTime.getAttribute('title') ?? '', /更新于 2026-11-10 14:05:00/)
+      assert.ok(cardById(quietMount.container, 5)?.querySelector('.overview-card-sub-time') === null, '0ms runDurationMs renders no timing')
+    } finally {
+      await quietMount.unmount()
+    }
+
+    // 2. 多张运行/等待卡片与活跃后代芯片同时渲染：只挂载 1 个共享定时器
+    const now = Date.now()
+    const activeStore = overviewStore({
+      locale: 'zh-CN',
+      conversations: [
+        conv({ id: 1, title: '等审批根', status: 'idle', createdAt: 9000 }),
+        conv({
+          id: 11,
+          parentConversationId: 1,
+          title: '待批子代理',
+          status: 'blocked',
+          pendingAskCount: 1,
+          pendingAskSince: now - 18_400,
+          createdAt: 9100,
+        }),
+        conv({
+          id: 2,
+          title: '运行根',
+          status: 'working',
+          runStartedAt: now - 65_400,
+          createdAt: 8000,
+        }),
+        conv({
+          id: 21,
+          parentConversationId: 2,
+          title: '在跑子代理',
+          status: 'working',
+          runStartedAt: now - 12_400,
+          createdAt: 8100,
+        }),
+        conv({
+          id: 22,
+          parentConversationId: 2,
+          title: '已完成子代理',
+          status: 'done',
+          runDurationMs: 9000,
+          createdAt: 8050,
+        }),
+      ],
+      primaryTarget: { kind: 'overview' },
+    })
+    const activeMount = await mountOverview(activeStore)
+    try {
+      assert.equal(intervalCount, 1, 'multiple active cards and chips share exactly one setInterval')
+      const waitingCard = cardById(activeMount.container, 1)!
+      assert.match(waitingCard.querySelector('.overview-card-sub-time-warn')?.textContent ?? '', /已等待 18s/)
+      const waitingChip = waitingCard.querySelector('.overview-chip')!
+      assert.match(waitingChip.querySelector('.overview-chip-elapsed-warn')?.textContent ?? '', /18s/)
+
+      const runningCard = cardById(activeMount.container, 2)!
+      assert.match(runningCard.querySelector('.overview-card-sub-time')?.textContent ?? '', /1m05s/)
+      const chips = [...runningCard.querySelectorAll<HTMLElement>('.overview-chip')]
+      const workingChip = chips.find((el) => (el.textContent ?? '').includes('在跑子代理'))!
+      const quietChip = chips.find((el) => (el.textContent ?? '').includes('已完成子代理'))!
+      assert.match(workingChip.querySelector('.overview-chip-elapsed')?.textContent ?? '', /12s/)
+      assert.ok(quietChip.querySelector('.overview-chip-elapsed') === null, 'quiet descendant chip must not render stopwatch')
+    } finally {
+      await activeMount.unmount()
+    }
+  } finally {
+    globalThis.setInterval = origSetInterval
+    resetServerClock()
   }
 })

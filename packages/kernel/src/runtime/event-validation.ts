@@ -124,6 +124,9 @@ const CONVERSATION_SUMMARY_SCHEMA = Type.Object({
   lastError: Type.Optional(Type.String()),
   lastEntryId: Type.Optional(SafeNonNegativeInt),
   contextUsage: Type.Optional(CONTEXT_USAGE_SCHEMA),
+  runDurationMs: Type.Optional(SafeNonNegativeInt),
+  runStartedAt: Type.Optional(SafeNonNegativeInt),
+  pendingAskSince: Type.Optional(SafeNonNegativeInt),
 })
 
 const CONVERSATION_SUMMARY_CHECKER = Compile(CONVERSATION_SUMMARY_SCHEMA)

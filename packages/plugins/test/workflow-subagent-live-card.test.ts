@@ -29,6 +29,7 @@ const {
   resolveSubagentTaskTitle, resolveSubagentHeaderSnippet, buildSubagentStatSegments,
   extractSubagentResultPreview, formatShortModelName, formatSemanticToolAction,
   resolveSubagentElapsedMs, resolveRunElapsedMs, resolveNodeElapsedMs,
+  resolvePhaseElapsedMs, summarizeWorkflowTiming,
   resolveExecutionNodeElapsedMs, buildExecutionTree,
 } = await importWorkflowModels()
 
@@ -798,15 +799,141 @@ test('resolveSubagentElapsedMs：在途（working/blocked）有时钟才动态�
   )
   assert.equal(resolveSubagentElapsedMs({ toolSummary: { durationMs: 800 } }), 800)
   assert.equal(resolveSubagentElapsedMs({ backgroundRun: bgRun({ status: 'completed', createdAt: 1_000, updatedAt: 61_000 }) }), 60_000)
+  // 终态 backgroundRun 有 settledAt 时不受后续 updatedAt 漂移影响
+  assert.equal(
+    resolveSubagentElapsedMs({ backgroundRun: bgRun({ status: 'completed', createdAt: 1_000, settledAt: 21_000, updatedAt: 99_000 }) }),
+    20_000,
+  )
+  // 无 backgroundRun 但子会话在途/阻塞时，经 resolveConversationTiming 读取 runStartedAt / pendingAskSince（绝不用 createdAt 冒充）
+  assert.equal(
+    resolveSubagentElapsedMs({
+      status: 'working',
+      summary: { status: 'working', runStartedAt: start },
+      nowMs: start + 12_000,
+    }),
+    12_000,
+  )
+  assert.equal(
+    resolveSubagentElapsedMs({
+      status: 'blocked',
+      summary: { status: 'blocked', pendingAskSince: start + 3_000, pendingAskCount: 1 },
+      nowMs: start + 10_000,
+    }),
+    7_000,
+  )
+  assert.equal(
+    resolveSubagentElapsedMs({
+      status: 'working',
+      summary: { status: 'working' },
+      nowMs: start + 10_000,
+    }),
+    undefined,
+    '缺少 runStartedAt 与 pendingAskSince 时绝不用 conversation.createdAt 冒充',
+  )
 })
 
-test('resolveRunElapsedMs：running 随时钟动态推进，其余定格 createdAt→updatedAt 真实边界', { timeout: 60_000 }, () => {
+test('resolveRunElapsedMs：running 随时钟动态推进（负时差钳 0），终态锚定 settledAt 防漂移', { timeout: 60_000 }, () => {
   const start = 1_700_000_000_000
   assert.equal(resolveRunElapsedMs({ status: 'running', createdAt: start, updatedAt: start }, start + 4_000), 4_000)
   assert.equal(resolveRunElapsedMs({ status: 'running', createdAt: start, updatedAt: start + 2_000 }), 2_000)
-  assert.equal(resolveRunElapsedMs({ status: 'running', createdAt: start, updatedAt: start }, start - 1), 0)
+  assert.equal(resolveRunElapsedMs({ status: 'running', createdAt: start, updatedAt: start + 5_000 }, start - 100), 0)
   assert.equal(resolveRunElapsedMs({ status: 'completed', createdAt: 1_000, updatedAt: 61_000 }, start), 60_000)
+  assert.equal(resolveRunElapsedMs({ status: 'completed', createdAt: 1_000, settledAt: 31_000, updatedAt: 99_000 }, start), 30_000)
   assert.equal(resolveRunElapsedMs({ status: 'completed', createdAt: 5_000, updatedAt: 1_000 }), undefined)
+})
+
+test('resolvePhaseElapsedMs：运行中取 min(startedAt)→nowMs，全部落定取 max(end)−min(startedAt)，缺边界返回 undefined', { timeout: 60_000 }, () => {
+  const t0 = 1_700_000_000_000
+  // 空阶段 / 缺 startedAt 诚实省略
+  assert.equal(resolvePhaseElapsedMs({ status: 'pending', nodes: [] }, t0 + 5_000), undefined)
+  assert.equal(
+    resolvePhaseElapsedMs({ status: 'done', nodes: [{ id: 'a', kind: 'agent', status: 'done', durationMs: 5_000 }] }, t0 + 10_000),
+    undefined,
+  )
+  // 运行中：取 min(startedAt) 到 nowMs；SSR 无时钟省略；轻微负时差钳 0
+  const runningSection = {
+    status: 'running' as const,
+    nodes: [
+      { id: 'a', kind: 'agent', status: 'done' as const, startedAt: t0 + 2_000, settledAt: t0 + 8_000, durationMs: 6_000 },
+      { id: 'b', kind: 'agent', status: 'running' as const, startedAt: t0 + 5_000 },
+    ],
+  }
+  assert.equal(resolvePhaseElapsedMs(runningSection, t0 + 15_000), 13_000)
+  assert.equal(resolvePhaseElapsedMs(runningSection), undefined)
+  assert.equal(resolvePhaseElapsedMs(runningSection, t0 + 1_000), 0)
+
+  // 全部落定：并行节点取 max(settledAt ?? startedAt + durationMs) - min(startedAt)
+  assert.equal(
+    resolvePhaseElapsedMs({
+      status: 'done',
+      nodes: [
+        { id: 'p1', kind: 'agent', status: 'done', startedAt: t0, settledAt: t0 + 40_000, durationMs: 40_000 },
+        { id: 'p2', kind: 'agent', status: 'done', startedAt: t0 + 10_000, durationMs: 92_000 },
+      ],
+    }),
+    102_000,
+  )
+  // 未全落定（有 pending 且阶段非 running）返回 undefined
+  assert.equal(
+    resolvePhaseElapsedMs({
+      status: 'pending',
+      nodes: [
+        { id: 'p1', kind: 'agent', status: 'done', startedAt: t0, settledAt: t0 + 5_000 },
+        { id: 'p2', kind: 'agent', status: 'pending' },
+      ],
+    }),
+    undefined,
+  )
+})
+
+test('summarizeWorkflowTiming：拆解端到端墙钟、多节点并行累计耗时与起止时刻', { timeout: 60_000 }, () => {
+  const t0 = 1_700_000_000_000
+  const parallelDone = summarizeWorkflowTiming({
+    status: 'completed',
+    createdAt: t0,
+    settledAt: t0 + 40_000,
+    updatedAt: t0 + 120_000,
+    nodes: [
+      { id: 'a', kind: 'agent', status: 'done', startedAt: t0, durationMs: 30_000 },
+      { id: 'b', kind: 'agent', status: 'done', startedAt: t0 + 5_000, durationMs: 35_000 },
+      { id: 'c', kind: 'action', status: 'done', startedAt: t0 + 10_000, durationMs: 25_000 },
+    ],
+  })
+  assert.deepEqual(parallelDone, {
+    wallElapsedMs: 40_000,
+    nodeTotalDurationMs: 90_000,
+    measuredNodeCount: 3,
+    startedAt: t0,
+    settledAt: t0 + 40_000,
+  })
+
+  const live = summarizeWorkflowTiming(
+    {
+      status: 'running',
+      createdAt: t0,
+      updatedAt: t0 + 1_000,
+      nodes: [
+        { id: 'a', kind: 'agent', status: 'done', startedAt: t0, durationMs: 10_000 },
+        { id: 'b', kind: 'agent', status: 'running', startedAt: t0 + 2_000 },
+      ],
+    },
+    t0 + 22_000,
+  )
+  assert.deepEqual(live, {
+    wallElapsedMs: 22_000,
+    nodeTotalDurationMs: 30_000,
+    measuredNodeCount: 2,
+    startedAt: t0,
+  })
+
+  const unmeasured = summarizeWorkflowTiming({
+    status: 'completed',
+    createdAt: t0,
+    updatedAt: t0 + 5_000,
+    nodes: [{ id: 'a', kind: 'action', status: 'done' }],
+  })
+  assert.equal(unmeasured.measuredNodeCount, 0)
+  assert.equal(unmeasured.nodeTotalDurationMs, undefined)
 })
 
 test('resolveNodeElapsedMs：running 用 startedAt 动态、结算用 durationMs 定格，无边界省略', { timeout: 60_000 }, () => {
@@ -819,7 +946,7 @@ test('resolveNodeElapsedMs：running 用 startedAt 动态、结算用 durationMs
   assert.equal(resolveNodeElapsedMs({ status: 'failed', durationMs: -1 }), undefined)
 })
 
-test('resolveExecutionNodeElapsedMs：runNode 边界优先，容器行用 run，纯会话节点省略', { timeout: 60_000 }, () => {
+test('resolveExecutionNodeElapsedMs：runNode 边界优先，容器行用 run，纯会话行经 resolveConversationTiming 取真实边界', { timeout: 60_000 }, () => {
   const start = 1_700_000_000_000
   assert.equal(
     resolveExecutionNodeElapsedMs({ runNode: { id: 'n1', kind: 'action', status: 'running', startedAt: start } }, start + 2_000),
@@ -832,6 +959,22 @@ test('resolveExecutionNodeElapsedMs：runNode 边界优先，容器行用 run，
   assert.equal(
     resolveExecutionNodeElapsedMs({ run: bgRun({ status: 'running', createdAt: start, updatedAt: start }) }, start + 6_000),
     6_000,
+  )
+  assert.equal(
+    resolveExecutionNodeElapsedMs({ summary: { ...summary(11, 'working'), runStartedAt: start } }, start + 9_000),
+    9_000,
+  )
+  assert.equal(
+    resolveExecutionNodeElapsedMs(
+      { summary: { ...summary(11, 'blocked'), pendingAskSince: start + 4_000, pendingAskCount: 1 } },
+      start + 9_000,
+    ),
+    5_000,
+  )
+  assert.equal(
+    resolveExecutionNodeElapsedMs({ summary: { ...summary(11, 'working'), createdAt: start } }, start + 9_000),
+    undefined,
+    '纯会话无 runStartedAt / pendingAskSince 时绝不用 createdAt 冒充',
   )
   assert.equal(resolveExecutionNodeElapsedMs({}, start), undefined)
 })
@@ -1144,16 +1287,53 @@ test('ExecutionChildrenRows：真实 run/runNode 边界的行显示总耗时，�
   assert.ok(html.includes('1m35s'), '结算行显示持久化 duration 定格值')
 })
 
-test('ExternalRunSummary：显示 run 总耗时（结算定格 createdAt→updatedAt）', { timeout: 60_000 }, () => {
+test('ExternalRunSummary：显示 run 总耗时（锚定 settledAt）与每个内部节点行单节点耗时（落定/实时秒表）', { timeout: 60_000 }, () => {
+  const t0 = 1_700_000_000_000
   const h = createWorkflowHostHarness({ conversationId: 1 })
   const html = h.renderSsr(
     e(ExternalRunSummary, {
-      run: bgRun({ status: 'completed', createdAt: 1_000, updatedAt: 61_000 }),
+      run: bgRun({
+        status: 'completed',
+        createdAt: t0,
+        settledAt: t0 + 60_000,
+        updatedAt: t0 + 180_000,
+        nodes: [
+          { id: 'ext-1', kind: 'agent', status: 'done', label: 'Codex 构建', executionId: 'pane-1', durationMs: 42_500 },
+          { id: 'ext-2', kind: 'agent', status: 'done', label: 'Codex 验收', executionId: 'pane-2', durationMs: 95_000 },
+        ],
+      }),
       toolStatus: 'done',
     }),
   )
   assert.ok(html.includes('subagent-live-elapsed'), '应渲染独立总耗时位')
-  assert.ok(html.includes('1m0s'), '结算 run 显示定格总耗时')
+  assert.ok(html.includes('1m0s'), '结算 run 锚定 settledAt 显示定格总耗时（不被 updatedAt 漂移成 3m0s）')
+  assert.ok(html.includes('workflow-node-elapsed'), '每个内部节点行应展示单节点耗时')
+  assert.ok(html.includes('42.5s') && html.includes('1m35s'), '落定外部节点使用 formatDurationMs')
+
+  // 运行态客户端挂载：使用校准时钟展示整秒秒表（formatStopwatchMs）
+  const liveHarness = createWorkflowHostHarness({ conversationId: 1 })
+  liveHarness.port.getServerNow = () => t0 + 65_400
+  const liveMount = liveHarness.mountNode(
+    e(ExternalRunSummary, {
+      run: bgRun({
+        status: 'running',
+        createdAt: t0,
+        updatedAt: t0 + 1_000,
+        nodes: [
+          { id: 'ext-run', kind: 'agent', status: 'running', label: '运行节点', executionId: 'pane-9', startedAt: t0 + 5_000 },
+        ],
+      }),
+      toolStatus: 'running',
+    }),
+  )
+  try {
+    const headerElapsed = liveMount.container.querySelector('.subagent-live-elapsed')?.textContent ?? ''
+    const nodeElapsed = liveMount.container.querySelector('.workflow-node-elapsed')?.textContent ?? ''
+    assert.equal(headerElapsed, '1m05s', '运行态总耗时统一使用整秒秒表 formatStopwatchMs')
+    assert.equal(nodeElapsed, '1m00s', '运行态外部节点行统一使用整秒秒表 formatStopwatchMs')
+  } finally {
+    liveMount.unmount()
+  }
 })
 
 test('ExternalRunSummary：前台同步 run 失败兜底为执行失败，真后台与已 detach 保持后台执行失败', { timeout: 60_000 }, () => {

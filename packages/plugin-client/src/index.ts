@@ -178,4 +178,13 @@ export type { PluginSlotProps } from './plugin-slot.js'
 // ---- Icons and formatting pure functions ----
 export { HelmxIcon } from './icons.js'
 export type { HelmxIconName, HelmxIconProps } from './icons.js'
-export { formatTime, formatCompactTimestamp, formatDurationMs, formatBytes } from './format.js'
+export {
+  formatTime,
+  formatCompactTimestamp,
+  formatDurationMs,
+  formatStopwatchMs,
+  formatOffsetMs,
+  formatBytes,
+  resolveConversationTiming,
+} from './format.js'
+export type { ConversationTimingInput, ConversationTimingSnapshot } from './format.js'

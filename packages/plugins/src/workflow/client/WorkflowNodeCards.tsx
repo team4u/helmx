@@ -12,7 +12,15 @@
 import { useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { WorkflowNodeState } from '../../contracts.js'
-import { StatusLight, formatCompactTimestamp, formatDurationMs, resolveLocalizedText, usePluginContext, usePluginLocale } from '@helmx/plugin-client'
+import {
+  StatusLight,
+  formatCompactTimestamp,
+  formatDurationMs,
+  formatStopwatchMs,
+  resolveLocalizedText,
+  usePluginContext,
+  usePluginLocale,
+} from '@helmx/plugin-client'
 import { useElapsedNowMs } from './hooks.ts'
 import { Icon } from './WorkflowIcon.tsx'
 import { SubagentLiveCard } from './SubagentCard.tsx'
@@ -153,7 +161,9 @@ function WorkflowExecutionNodeCard(props: { node: WorkflowNodeState; runConversa
             <span className="subagent-live-stats workflow-node-stats tabular-nums">{nodeStats.join(' · ')}</span>
           ) : null}
           {elapsedMs !== undefined ? (
-            <span className="subagent-live-elapsed tabular-nums">{formatDurationMs(elapsedMs)}</span>
+            <span className="subagent-live-elapsed tabular-nums">
+              {node.status === 'running' ? formatStopwatchMs(elapsedMs) : formatDurationMs(elapsedMs)}
+            </span>
           ) : null}
           <StatusLight status={node.status} label={nodeStatusLabel(node.status, locale)} />
         </div>

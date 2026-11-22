@@ -43,6 +43,12 @@ import {
   parseBoardView,
   postDigestLine,
 } from '../../plugins/src/swarm/client/board-model.js'
+import {
+  resolveGroupTimingView,
+  resolvePanelMemberTimingView,
+  resolvePostTimeDisplay,
+  resolveTrayMemberTimingView,
+} from '../../plugins/src/swarm/client/model-timing.js'
 import { SWARM_WORKBENCH_PANEL_TARGET } from '../../plugins/src/swarm/client/models.js'
 import { registerSwarmUi } from '../../plugins/src/swarm/ui.js'
 import { ensureHappyDom } from './helpers/dom-harness.js'
@@ -214,6 +220,7 @@ describe("swarm-client-interactions", () => {
     ctx: PluginClientContextType,
     element: React.ReactElement,
     conversations: ConversationSummary[] = DEFAULT_CONVERSATIONS,
+    options?: { serverNowMs?: number },
   ): Promise<{ host: HTMLElement; unmount: () => void; subscribedSessionKeys: PluginSessionDocKey[] }> {
     const host = document.createElement('div')
     document.body.appendChild(host)
@@ -262,6 +269,7 @@ describe("swarm-client-interactions", () => {
       subscribeSessionDoc,
       getSessionDocState,
       loadConversationDetail: noopLoadConversationDetail,
+      ...(options?.serverNowMs !== undefined ? { getServerNow: () => options.serverNowMs! } : {}),
     } as unknown as PluginClientHostPort
     await act(async () => {
       root.render(
@@ -1784,6 +1792,504 @@ describe("swarm-client-interactions", () => {
       assert.ok(longPanel.host.querySelector('.sw-panel-post[data-post-seq="1"]') !== null, '早期 #1 成功合入列表')
     } finally {
       longPanel.unmount()
+    }
+    resetDefaultStubs()
+  })
+
+  // ---------------------------------------------------------------------------
+  // 7. Time observability: group elapsed (active/closed), tray rows, panel rows, board post offsets
+  // ---------------------------------------------------------------------------
+
+  test('时间观测纯模型与边界解析：宽松解析成员耗时、结单冻结总耗时、首轮去重/多轮累计/阻塞等待与黑板时间偏移', { timeout: 60_000 }, () => {
+    const T0 = 1_700_000_000_000
+    const NOW = T0 + 185_000 // +3m05s
+
+    // 1) Lenient boundary parsing: valid timing fields preserved; malformed ones omitted without discarding the board
+    const rawWithMixedTiming = boardViewFixture({
+      group: {
+        id: 'grp-time',
+        title: '耗时观测组',
+        coordinatorConversationId: 50,
+        status: 'active',
+        activeWorkerCount: 2,
+        headSeq: 2,
+        channels: [{ name: 'main' }],
+        createdAt: T0,
+        updatedAt: T0 + 60_000,
+      },
+      members: [
+        {
+          ...(boardViewFixture().members as Array<Record<string, unknown>>)[0]!,
+          liveState: 'done',
+          runDurationMs: 42_500,
+          turnCount: 3,
+          runStartedAt: -10, // invalid -> omitted leniently
+          pendingAskSince: 'bad', // invalid -> omitted leniently
+        },
+        {
+          ...(boardViewFixture().members as Array<Record<string, unknown>>)[1]!,
+          liveState: 'working',
+          runDurationMs: 45_000,
+          runStartedAt: NOW - 12_000,
+          turnCount: 1.5, // non-int -> omitted leniently
+        },
+      ],
+    })
+    const parsed = parseBoardView(rawWithMixedTiming)
+    assert.ok(parsed !== undefined, '非法可选耗时字段不得导致整张看板被拒')
+    assert.equal(parsed!.members[0]!.runDurationMs, 42_500)
+    assert.equal(parsed!.members[0]!.turnCount, 3)
+    assert.equal(parsed!.members[0]!.runStartedAt, undefined)
+    assert.equal(parsed!.members[0]!.pendingAskSince, undefined)
+    assert.equal(parsed!.members[1]!.runDurationMs, 45_000)
+    assert.equal(parsed!.members[1]!.runStartedAt, NOW - 12_000)
+    assert.equal(parsed!.members[1]!.turnCount, undefined)
+
+    // 2) Active group timing view & Tooltip breakdown
+    const activeGroupTiming = resolveGroupTimingView(parsed!, [], NOW, 'zh-CN')
+    assert.ok(activeGroupTiming !== undefined)
+    assert.equal(activeGroupTiming!.label, '3m05s')
+    assert.match(activeGroupTiming!.tooltip, /端到端总耗时：3m05s/)
+    assert.match(activeGroupTiming!.tooltip, /全员累计运行：1m39s/)
+    assert.match(activeGroupTiming!.tooltip, /创建时间：/)
+    assert.doesNotMatch(activeGroupTiming!.tooltip, /结单时间：/)
+
+    // 3) Closed group timing view freezes total elapsed (never disappears!) and includes closedAt
+    const closedBoard = parseBoardView(
+      boardViewFixture({
+        group: {
+          id: 'grp-closed',
+          title: '已结单组',
+          coordinatorConversationId: 50,
+          status: 'closed',
+          activeWorkerCount: 0,
+          headSeq: 2,
+          channels: [{ name: 'main' }],
+          createdAt: T0,
+          updatedAt: T0 + 125_000,
+          closedAt: T0 + 125_000,
+        },
+        members: [
+          {
+            ...(boardViewFixture().members as Array<Record<string, unknown>>)[0]!,
+            lifecycle: 'archived',
+            archivedAt: T0 + 120_000,
+            liveState: 'missing',
+            runDurationMs: 42_500,
+            turnCount: 2,
+          },
+          {
+            ...(boardViewFixture().members as Array<Record<string, unknown>>)[1]!,
+            lifecycle: 'archived',
+            archivedAt: T0 + 125_000,
+            liveState: 'missing',
+            runDurationMs: 25_000,
+            turnCount: 1,
+          },
+        ],
+        activeWorkingMembers: [],
+      }),
+    )!
+    const closedGroupTiming = resolveGroupTimingView(closedBoard, [], undefined, 'zh-CN')
+    assert.ok(closedGroupTiming !== undefined, '结单组必须继续冻结展示总耗时，不再消失')
+    assert.equal(closedGroupTiming!.label, '2m5s')
+    assert.match(closedGroupTiming!.tooltip, /端到端总耗时：2m5s/)
+    assert.match(closedGroupTiming!.tooltip, /全员累计运行：1m8s/)
+    assert.match(closedGroupTiming!.tooltip, /创建时间：/)
+    assert.match(closedGroupTiming!.tooltip, /结单时间：/)
+
+    // 4) Panel member row timing rules: first-turn dedup, multi-turn, blocked+total, settled>0, idle=0 omitted
+    const firstTurn = resolvePanelMemberTimingView(
+      { liveState: 'working', lifecycle: 'active', runDurationMs: 0, runStartedAt: NOW - 12_000, turnCount: 0, createdAt: T0 },
+      'active',
+      NOW,
+      'zh-CN',
+    )
+    assert.equal(firstTurn?.label, '12s', '首轮 working 去重仅显示本轮秒表')
+    assert.equal(firstTurn?.tone, 'live')
+
+    const multiTurn = resolvePanelMemberTimingView(
+      { liveState: 'working', lifecycle: 'active', runDurationMs: 45_000, runStartedAt: NOW - 12_000, turnCount: 2, createdAt: T0 },
+      'active',
+      NOW,
+      'zh-CN',
+    )
+    assert.equal(multiTurn?.label, '本轮 12s · 累计 57s')
+    assert.match(multiTurn?.tooltip ?? '', /累计运行：57s/)
+    assert.match(multiTurn?.tooltip ?? '', /本轮运行：12s/)
+    assert.match(multiTurn?.tooltip ?? '', /已完成轮次：2/)
+    assert.match(multiTurn?.tooltip ?? '', /加入时间：/)
+
+    const blockedWithTotal = resolvePanelMemberTimingView(
+      {
+        liveState: 'blocked',
+        lifecycle: 'active',
+        runDurationMs: 60_000,
+        runStartedAt: NOW - 30_000,
+        pendingAskSince: NOW - 25_000,
+        turnCount: 1,
+        createdAt: T0,
+      },
+      'active',
+      NOW,
+      'zh-CN',
+    )
+    assert.equal(blockedWithTotal?.label, '等待审批 25s · 累计 1m30s')
+    assert.equal(blockedWithTotal?.tone, 'warn')
+
+    const blockedNoPriorRun = resolvePanelMemberTimingView(
+      { liveState: 'blocked', lifecycle: 'active', runDurationMs: 0, pendingAskSince: NOW - 18_000, createdAt: T0 },
+      'active',
+      NOW,
+      'zh-CN',
+    )
+    assert.equal(blockedNoPriorRun?.label, '等待审批 18s')
+    assert.equal(blockedNoPriorRun?.tone, 'warn')
+
+    const settledDone = resolvePanelMemberTimingView(
+      { liveState: 'done', lifecycle: 'active', runDurationMs: 42_500, turnCount: 2, createdAt: T0 },
+      'active',
+      NOW,
+      'zh-CN',
+    )
+    assert.equal(settledDone?.label, '42.5s')
+    assert.equal(settledDone?.tone, 'settled')
+
+    const idleZero = resolvePanelMemberTimingView(
+      { liveState: 'idle', lifecycle: 'active', runDurationMs: 0, createdAt: T0 },
+      'active',
+      NOW,
+      'zh-CN',
+    )
+    assert.equal(idleZero, undefined, '空闲且累计为 0 时诚实省略')
+
+    // 5) Tray worker row timing rules
+    const trayBlocked = resolveTrayMemberTimingView(
+      { liveState: 'blocked', runDurationMs: 30_000, runStartedAt: NOW - 25_000, pendingAskSince: NOW - 20_000, turnCount: 1 },
+      NOW,
+      'zh-CN',
+    )
+    assert.equal(trayBlocked?.label, '等待审批 20s')
+    assert.equal(trayBlocked?.isWarn, true)
+    assert.match(trayBlocked?.tooltip ?? '', /本轮运行：25s/)
+    assert.match(trayBlocked?.tooltip ?? '', /累计运行：55s/)
+    assert.match(trayBlocked?.tooltip ?? '', /已完成轮次：1/)
+
+    const trayWorking = resolveTrayMemberTimingView(
+      { liveState: 'working', runDurationMs: 0, runStartedAt: NOW - 9_000, turnCount: 0 },
+      NOW,
+      'en',
+    )
+    assert.equal(trayWorking?.label, '9s')
+    assert.equal(trayWorking?.isWarn, false)
+
+    // 6) Board post relative offset & negative/invalid fallback
+    const postOffset = resolvePostTimeDisplay(T0 + 15_000, T0)
+    assert.equal(postOffset?.label, '+00:15')
+    assert.match(postOffset?.fullTimestamp ?? '', /^\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/)
+
+    const postHourOffset = resolvePostTimeDisplay(T0 + 3_735_000, T0)
+    assert.equal(postHourOffset?.label, '+1:02:15')
+
+    const postNegativeFallback = resolvePostTimeDisplay(T0 - 5_000, T0)
+    assert.equal(postNegativeFallback?.label, postNegativeFallback?.fullTimestamp, '负偏移回退紧凑时刻')
+  })
+
+  test('SwarmActiveTray & SwarmWorkbenchPanel 时间观测 DOM 渲染：共享时钟、阻塞 warn、首轮去重、多轮累计、黑板偏移与结单冻结', { timeout: 60_000 }, async () => {
+    const T0 = 1_700_000_000_000
+    const NOW = T0 + 185_000 // +3m05s
+
+    const timedBoard = boardViewFixture({
+      group: {
+        id: 'grp-live',
+        title: '耗时协同组',
+        objective: '验证实时与结单耗时渲染',
+        coordinatorConversationId: 50,
+        status: 'active',
+        activeWorkerCount: 4,
+        headSeq: 3,
+        channels: [{ name: 'main' }],
+        createdAt: T0,
+        updatedAt: T0 + 120_000,
+      },
+      members: [
+        {
+          name: 'blocker-w',
+          conversationId: 61,
+          profileId: 'coder',
+          access: 'readwrite',
+          isolation: 'inherit',
+          nodeId: 'local',
+          cwd: '/repo',
+          channels: ['main'],
+          lifecycle: 'active',
+          readCursorSeq: 1,
+          pendingWakeupSeq: 1,
+          createdAt: T0 + 1_000,
+          liveState: 'blocked',
+          runDurationMs: 60_000,
+          runStartedAt: NOW - 30_000,
+          pendingAskSince: NOW - 25_000,
+          turnCount: 1,
+        },
+        {
+          name: 'first-turn',
+          conversationId: 62,
+          profileId: 'coder',
+          access: 'readwrite',
+          isolation: 'inherit',
+          nodeId: 'local',
+          cwd: '/repo',
+          channels: ['main'],
+          lifecycle: 'active',
+          readCursorSeq: 1,
+          pendingWakeupSeq: 1,
+          createdAt: T0 + 2_000,
+          liveState: 'working',
+          runDurationMs: 0,
+          runStartedAt: NOW - 12_000,
+          turnCount: 0,
+        },
+        {
+          name: 'multi-turn',
+          conversationId: 63,
+          profileId: 'coder',
+          access: 'readwrite',
+          isolation: 'inherit',
+          nodeId: 'local',
+          cwd: '/repo',
+          channels: ['main'],
+          lifecycle: 'active',
+          readCursorSeq: 1,
+          pendingWakeupSeq: 1,
+          createdAt: T0 + 3_000,
+          liveState: 'working',
+          runDurationMs: 45_000,
+          runStartedAt: NOW - 12_000,
+          turnCount: 2,
+        },
+        {
+          name: 'done-w',
+          conversationId: 64,
+          profileId: 'reviewer',
+          access: 'readonly',
+          isolation: 'inherit',
+          nodeId: 'local',
+          cwd: '/repo',
+          channels: ['main'],
+          lifecycle: 'active',
+          readCursorSeq: 2,
+          pendingWakeupSeq: 1,
+          lastPostSeq: 2,
+          createdAt: T0 + 4_000,
+          liveState: 'done',
+          runDurationMs: 42_500,
+          turnCount: 2,
+        },
+        {
+          name: 'idle-zero',
+          conversationId: 65,
+          profileId: 'reviewer',
+          access: 'readonly',
+          isolation: 'inherit',
+          nodeId: 'local',
+          cwd: '/repo',
+          channels: ['main'],
+          lifecycle: 'active',
+          readCursorSeq: 1,
+          pendingWakeupSeq: 1,
+          createdAt: T0 + 5_000,
+          liveState: 'idle',
+          runDurationMs: 0,
+          turnCount: 0,
+        },
+      ],
+      posts: [
+        {
+          seq: 1,
+          groupId: 'grp-live',
+          channel: 'main',
+          from: 'coordinator',
+          to: ['blocker-w'],
+          resolvedTargets: ['blocker-w'],
+          wake: true,
+          kind: 'brief',
+          refs: [],
+          body: 'Initial task',
+          createdAt: T0 + 15_000,
+        },
+        {
+          seq: 2,
+          groupId: 'grp-live',
+          channel: 'main',
+          from: 'done-w',
+          to: ['coordinator'],
+          resolvedTargets: ['coordinator'],
+          wake: true,
+          kind: 'done',
+          refs: [1],
+          body: 'Completed check',
+          createdAt: T0 + 3_735_000,
+        },
+      ],
+      activeWorkingMembers: ['blocker-w', 'first-turn', 'multi-turn'],
+    })
+
+    setStubState({
+      docs: { index: coordinatorIndexFixture(), 'board-badges': { byConversation: {} } },
+      sessionDocs: { 'builtin:swarm/board-view/50': timedBoard },
+    })
+
+    // 1) SwarmActiveTray: shared clock drives HUD stopwatch + blocked/working row elapsed
+    const traySpy = makeSpyCtx({ conversationId: 50, locale: 'zh-CN' })
+    const trayMount = await mount(
+      traySpy,
+      e(components.SwarmActiveTray, { conversation: convSummary(50, '主控', { tags: ['swarm-coordinator'] }) }),
+      DEFAULT_CONVERSATIONS,
+      { serverNowMs: NOW },
+    )
+    try {
+      const hudElapsed = trayMount.host.querySelector<HTMLElement>('.sw-tray-bar-toggle .sw-tray-elapsed')
+      assert.equal(hudElapsed?.textContent, '3m05s', '托盘顶部显示整秒秒表')
+      const toggleBtn = trayMount.host.querySelector<HTMLButtonElement>('.sw-tray-bar-toggle')!
+      assert.match(toggleBtn.getAttribute('title') ?? '', /端到端总耗时：3m05s/, '托盘切换提示附组耗时拆解')
+
+      await act(async () => {
+        toggleBtn.click()
+      })
+      const rowTimings = [...trayMount.host.querySelectorAll<HTMLElement>('.sw-tray-row-elapsed')]
+      assert.equal(rowTimings.length, 3, '三个在途成员均渲染实时耗时')
+      assert.equal(rowTimings[0]!.textContent, '等待审批 25s')
+      assert.equal(rowTimings[0]!.classList.contains('sw-tray-row-elapsed-warn'), true, 'blocked 行使用 warn 色')
+      assert.equal(rowTimings[1]!.textContent, '12s')
+      assert.equal(rowTimings[1]!.classList.contains('sw-tray-row-elapsed-warn'), false)
+      assert.equal(rowTimings[2]!.textContent, '12s')
+
+      // Clicking expanded row with timing badge still opens ConversationDrawer
+      await act(async () => {
+        trayMount.host.querySelector<HTMLButtonElement>('.sw-tray-row-main')!.click()
+      })
+      assert.deepEqual(traySpy.drawerCalls, [61])
+    } finally {
+      trayMount.unmount()
+    }
+
+    // 2) SwarmWorkbenchPanel: active group elapsed, member timing modes, post offsets, zero progress bars
+    const panelSpy = makeSpyCtx({ conversationId: 50, locale: 'zh-CN' })
+    const panelMount = await mount(
+      panelSpy,
+      e(components.SwarmWorkbenchPanel, { conversation: convSummary(50, '主控', { tags: ['swarm-coordinator'] }) }),
+      DEFAULT_CONVERSATIONS,
+      { serverNowMs: NOW },
+    )
+    try {
+      const groupElapsed = panelMount.host.querySelector<HTMLElement>('.sw-panel-elapsed')
+      assert.equal(groupElapsed?.textContent, '3m05s')
+
+      const memberItems = [...panelMount.host.querySelectorAll<HTMLElement>('.sw-panel-member-item')]
+      const elapsedByName = new Map<string, HTMLElement | null>()
+      for (const item of memberItems) {
+        const name = item.querySelector('.sw-panel-member-name')?.textContent ?? ''
+        elapsedByName.set(name, item.querySelector<HTMLElement>('.sw-panel-member-elapsed'))
+      }
+      assert.equal(elapsedByName.get('@blocker-w')?.textContent, '等待审批 25s · 累计 1m30s')
+      assert.equal(elapsedByName.get('@blocker-w')?.classList.contains('sw-panel-member-elapsed-warn'), true)
+      assert.equal(elapsedByName.get('@first-turn')?.textContent, '12s', '首轮去重不重复显示本轮与累计')
+      assert.equal(elapsedByName.get('@multi-turn')?.textContent, '本轮 12s · 累计 57s')
+      assert.equal(elapsedByName.get('@done-w')?.textContent, '42.5s')
+      assert.equal(elapsedByName.get('@idle-zero'), null, '空闲且累计为 0 的成员诚实省略耗时')
+
+      // No progress bars or proportion bars rendered anywhere
+      assert.equal(panelMount.host.querySelectorAll('progress, [role="progressbar"]').length, 0)
+
+      // Post relative offsets next to #seq, and #seq stays title-less
+      const post1 = panelMount.host.querySelector<HTMLElement>('.sw-panel-post[data-post-seq="1"]')!
+      const post2 = panelMount.host.querySelector<HTMLElement>('.sw-panel-post[data-post-seq="2"]')!
+      const time1 = post1.querySelector<HTMLElement>('.sw-panel-post-time')
+      const time2 = post2.querySelector<HTMLElement>('.sw-panel-post-time')
+      assert.equal(time1?.textContent, '+00:15')
+      assert.match(time1?.getAttribute('aria-label') ?? '', /^\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/)
+      assert.equal(time2?.textContent, '+1:02:15')
+      assert.equal(post1.querySelector('.sw-panel-post-seq')?.getAttribute('title'), null)
+    } finally {
+      panelMount.unmount()
+    }
+
+    // 3) Closed group: group elapsed freezes (does NOT disappear) and archived members show solidified runtime even offline
+    const closedBoard = boardViewFixture({
+      group: {
+        id: 'grp-closed',
+        title: '已结单耗时组',
+        coordinatorConversationId: 50,
+        status: 'closed',
+        activeWorkerCount: 0,
+        headSeq: 1,
+        channels: [{ name: 'main' }],
+        createdAt: T0,
+        updatedAt: T0 + 125_000,
+        closedAt: T0 + 125_000,
+      },
+      members: [
+        {
+          name: 'author',
+          conversationId: 901,
+          profileId: 'coder',
+          access: 'readwrite',
+          isolation: 'inherit',
+          nodeId: 'local',
+          cwd: '/repo',
+          channels: ['main'],
+          lifecycle: 'archived',
+          archivedAt: T0 + 120_000,
+          readCursorSeq: 1,
+          pendingWakeupSeq: 1,
+          createdAt: T0 + 1_000,
+          liveState: 'missing',
+          runDurationMs: 65_000,
+          turnCount: 3,
+        },
+      ],
+      posts: [
+        {
+          seq: 1,
+          groupId: 'grp-closed',
+          channel: 'main',
+          from: 'author',
+          to: ['coordinator'],
+          resolvedTargets: ['coordinator'],
+          wake: true,
+          kind: 'done',
+          refs: [],
+          body: 'Archived result',
+          createdAt: T0 + 120_000,
+        },
+      ],
+      activeWorkingMembers: [],
+    })
+    setStubState({
+      docs: { index: { workers: [], groups: [closedBoard.group] }, 'board-badges': { byConversation: {} } },
+      sessionDocs: {},
+    })
+    const closedSpy = makeSpyCtx({
+      conversationId: 50,
+      locale: 'zh-CN',
+      callAction: async (actionId: string) => (actionId === 'board_status' ? closedBoard : {}),
+    })
+    const closedPanel = await mount(
+      closedSpy,
+      e(components.SwarmWorkbenchPanel, {
+        conversation: convSummary(50, '主控（已结单）', { tags: ['swarm-coordinator-archived'] }),
+      }),
+      [convSummary(50, '主控（已结单）', { tags: ['swarm-coordinator-archived'] })],
+    )
+    try {
+      const frozenGroupElapsed = closedPanel.host.querySelector<HTMLElement>('.sw-panel-elapsed')
+      assert.equal(frozenGroupElapsed?.textContent, '2m5s', '结单后组总耗时冻结展示，不再消失')
+      const archivedMemberElapsed = closedPanel.host.querySelector<HTMLElement>('.sw-panel-member-elapsed')
+      assert.equal(archivedMemberElapsed?.textContent, '1m5s', '会话缺失的已归档成员仍展示固化运行耗时')
+      assert.equal(closedPanel.host.querySelector('.sw-panel-post-time')?.textContent, '+02:00')
+    } finally {
+      closedPanel.unmount()
     }
     resetDefaultStubs()
   })

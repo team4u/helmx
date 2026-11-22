@@ -51,6 +51,7 @@ export function toSummary(
     status: record.status,
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
+    ...(record.settledAt !== undefined ? { settledAt: record.settledAt } : {}),
     ...(record.result !== undefined ? { result: record.result } : {}),
     ...(record.error !== undefined ? { error: record.error } : {}),
     ...(record.errorCode !== undefined ? { errorCode: record.errorCode } : {}),

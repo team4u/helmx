@@ -408,6 +408,10 @@ const boardMemberViewSchema: Record<string, unknown> = {
     archivedAt: { type: 'number' },
     liveState: { type: 'string', enum: ['idle', 'working', 'blocked', 'done', 'error', 'missing'] },
     model: { type: 'string' },
+    runDurationMs: { type: 'number', minimum: 0 },
+    runStartedAt: { type: 'number', minimum: 0 },
+    pendingAskSince: { type: 'number', minimum: 0 },
+    turnCount: { type: 'integer', minimum: 0 },
   },
   required: [
     'name',

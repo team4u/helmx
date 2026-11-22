@@ -46,6 +46,10 @@ export interface ConvMeta {
   pinned: boolean
   stateChangeSeq: number
   completionSeq: number
+  /** Cumulative in-flight duration (ms, non-negative integer) across settled logical turns. */
+  runDurationMs: number
+  /** Epoch ms start timestamp of the currently active logical turn (`live.run`); cleared on settlement. */
+  runStartedAt?: number
   /** Latest visible timeline entry ID (`0` when none; hydrated by tracker.observe/adopt and maintained in memory). */
   lastEntryId?: number
   createdAt: number
@@ -153,10 +157,12 @@ export class HelmxStore {
       pinned: number
       state_change_seq: number
       completion_seq: number
+      run_duration_ms: number
+      run_started_at: number | null
       created_at: number
       updated_at: number
     }>(
-      'SELECT id, title, profile_id, tags, parent_conversation_id, parent_tool_call_id, node_id, cwd, model, model_override, thinking_level, thinking_level_override, unread, pinned, state_change_seq, completion_seq, created_at, updated_at FROM helmx_conversations',
+      'SELECT id, title, profile_id, tags, parent_conversation_id, parent_tool_call_id, node_id, cwd, model, model_override, thinking_level, thinking_level_override, unread, pinned, state_change_seq, completion_seq, run_duration_ms, run_started_at, created_at, updated_at FROM helmx_conversations',
     )) {
       this.convs.set(row.id, {
         id: row.id,
@@ -175,6 +181,8 @@ export class HelmxStore {
         pinned: row.pinned === 1,
         stateChangeSeq: row.state_change_seq,
         completionSeq: row.completion_seq,
+        runDurationMs: row.run_duration_ms,
+        ...(row.run_started_at !== null ? { runStartedAt: row.run_started_at } : {}),
         createdAt: row.created_at,
         updatedAt: row.updated_at,
       })
@@ -342,9 +350,9 @@ export class HelmxStore {
     }
     this.enqueue(async () => {
       await this.db.run(
-        `INSERT INTO helmx_conversations (id, title, profile_id, tags, parent_conversation_id, parent_tool_call_id, node_id, cwd, model, model_override, thinking_level, thinking_level_override, unread, pinned, state_change_seq, completion_seq, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET title=excluded.title, profile_id=excluded.profile_id, tags=excluded.tags, parent_conversation_id=excluded.parent_conversation_id, parent_tool_call_id=excluded.parent_tool_call_id, node_id=excluded.node_id, cwd=excluded.cwd, model=excluded.model, model_override=excluded.model_override, thinking_level=excluded.thinking_level, thinking_level_override=excluded.thinking_level_override, unread=excluded.unread, pinned=excluded.pinned, state_change_seq=excluded.state_change_seq, completion_seq=excluded.completion_seq, updated_at=excluded.updated_at`,
+        `INSERT INTO helmx_conversations (id, title, profile_id, tags, parent_conversation_id, parent_tool_call_id, node_id, cwd, model, model_override, thinking_level, thinking_level_override, unread, pinned, state_change_seq, completion_seq, run_duration_ms, run_started_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET title=excluded.title, profile_id=excluded.profile_id, tags=excluded.tags, parent_conversation_id=excluded.parent_conversation_id, parent_tool_call_id=excluded.parent_tool_call_id, node_id=excluded.node_id, cwd=excluded.cwd, model=excluded.model, model_override=excluded.model_override, thinking_level=excluded.thinking_level, thinking_level_override=excluded.thinking_level_override, unread=excluded.unread, pinned=excluded.pinned, state_change_seq=excluded.state_change_seq, completion_seq=excluded.completion_seq, run_duration_ms=excluded.run_duration_ms, run_started_at=excluded.run_started_at, updated_at=excluded.updated_at`,
         snap.id,
         snap.title,
         snap.profileId,
@@ -361,6 +369,8 @@ export class HelmxStore {
         snap.pinned ? 1 : 0,
         snap.stateChangeSeq,
         snap.completionSeq,
+        snap.runDurationMs,
+        snap.runStartedAt ?? null,
         snap.createdAt,
         snap.updatedAt,
       )
@@ -426,6 +436,21 @@ export class HelmxStore {
   getAsk(id: string): AskRow | undefined {
     const row = this.asks.get(id)
     return row ? { ...row } : undefined
+  }
+
+  /**
+   * Earliest `createdAt` (epoch ms) among currently pending AskDocs for `conversationId`,
+   * derived directly from the in-memory `asks` mirror (zero dual-write).
+   */
+  earliestPendingAskCreatedAt(conversationId: number): number | undefined {
+    let earliest: number | undefined
+    for (const row of this.asks.values()) {
+      if (row.conversationId !== conversationId || row.status !== 'pending') continue
+      if (earliest === undefined || row.createdAt < earliest) {
+        earliest = row.createdAt
+      }
+    }
+    return earliest
   }
 
   /**
@@ -931,7 +956,7 @@ export class HelmxStore {
 }
 
 function cloneConv(meta: ConvMeta): ConvMeta {
-  return { ...meta, tags: [...meta.tags] }
+  return { ...meta, tags: [...meta.tags], runDurationMs: meta.runDurationMs ?? 0 }
 }
 
 /** Validate persisted JSON: fails explicitly on corruption (with location context) rather than falling back to empty values. */
@@ -968,6 +993,7 @@ export function summaryOf(
   doing?: string,
   lastError?: string,
   lastEntryId?: number,
+  pendingAskSince?: number,
 ): ConversationSummary {
   return {
     id: meta.id,
@@ -992,6 +1018,9 @@ export function summaryOf(
     unread: meta.unread,
     pinned: meta.pinned,
     pendingAskCount,
+    runDurationMs: meta.runDurationMs,
+    ...(meta.runStartedAt !== undefined ? { runStartedAt: meta.runStartedAt } : {}),
+    ...(pendingAskCount > 0 && pendingAskSince !== undefined ? { pendingAskSince } : {}),
     createdAt: meta.createdAt,
     updatedAt: meta.updatedAt,
   }

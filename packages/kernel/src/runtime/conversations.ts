@@ -251,6 +251,14 @@ export class ConversationTracker {
     const mirror = this.mirrorOf(id)
     const live = view.docs['pi.live'] as LiveStateShape | undefined
     mirror.live = live ?? {}
+    // Honest startup/re-attach cleanup: if no live run is active but a stale `runStartedAt`
+    // remained persisted (e.g. crash without resuming), clear it without adding downtime to `runDurationMs`.
+    if (!live?.run) {
+      const meta = this.store.getConv(id)
+      if (meta !== undefined && meta.runStartedAt !== undefined) {
+        this.store.upsertConv({ ...meta, runStartedAt: undefined })
+      }
+    }
     // Report lingering compaction failures even right after restart/re-attach (once per runtime lifecycle).
     this.noteCompactionFailure(id, live)
     let watermark = mirror.lastEmittedEntry
@@ -855,6 +863,12 @@ export class ConversationTracker {
     }
 
     if (live?.run) {
+      if (!runContinued) {
+        const meta = this.store.getConv(id)
+        if (meta !== undefined && meta.runStartedAt === undefined) {
+          this.store.upsertConv({ ...meta, runStartedAt: Date.now() })
+        }
+      }
       const runKey = `${id}:${live.run.taskId}`
       if (mirror.runTaskId !== live.run.taskId) {
         mirror.runTaskId = live.run.taskId
@@ -1089,15 +1103,22 @@ export class ConversationTracker {
       // Background derived sub-conversations (non-human ownership with parent chain, e.g. managed subagents / SuperAgent
       // Workers) never fabricate human unread flags on completion; human forks (parent chain + human ownership) and top-level
       // direct conversations preserve unread semantics. Failures/aborts never set unread (existing contract).
+      const settledAt = Date.now()
       const meta = this.store.getConv(conversationId)
       if (meta) {
         const unread = outcome === 'completed' && !this.isBackgroundDerived(conversationId, meta)
+        const elapsedMs =
+          meta.runStartedAt !== undefined && settledAt >= meta.runStartedAt
+            ? settledAt - meta.runStartedAt
+            : 0
         const updated: ConvMeta = {
           ...meta,
           unread,
           completionSeq: meta.completionSeq + 1,
           stateChangeSeq: meta.stateChangeSeq + 1,
-          updatedAt: Date.now(),
+          runDurationMs: meta.runDurationMs + elapsedMs,
+          runStartedAt: undefined,
+          updatedAt: settledAt,
         }
         this.store.upsertConv(updated)
         const settledStatus = unread ? 'done' : statusNow(updated, outcome)
@@ -1125,7 +1146,7 @@ export class ConversationTracker {
         inputs,
         outcome,
         error,
-        settledAt: Date.now(),
+        settledAt,
       }
       completion = this.events.onTurnSettled(payload, inputs)
     } catch (error) {
@@ -1192,7 +1213,9 @@ export class ConversationTracker {
     // Error diagnostic summary travels only with error status (live.runFailure clears when a new run starts, vanishing automatically).
     const lastError = status === 'error' ? lastErrorOf(live, this.redactError) : undefined
     const lastEntryId = this.lastEntryIds.get(conversationId) ?? meta.lastEntryId ?? 0
-    const summary = summaryOf(meta, status, pendingAsks, doing, lastError, lastEntryId)
+    const pendingAskSince =
+      pendingAsks > 0 ? this.store.earliestPendingAskCreatedAt?.(conversationId) : undefined
+    const summary = summaryOf(meta, status, pendingAsks, doing, lastError, lastEntryId, pendingAskSince)
     const usage = this.usage.cachedOrSchedule(conversationId)
     return usage === undefined ? summary : { ...summary, contextUsage: usage }
   }
@@ -1343,10 +1366,16 @@ export class ConversationTracker {
   setPendingAskCount(conversationId: number, count: number): void {
     const mirror = this.mirrorOf(conversationId)
     const prev = mirror.pendingAskCount
-    if (prev === count) return
+    const meta = this.store.getConv(conversationId)
+    if (prev === count) {
+      // Even when the pending ask count stays unchanged (e.g. concurrent settle + create within the same flush window),
+      // earliest pendingAskSince may have advanced; re-check semantic summaryKeyOf before skipping.
+      if (count === 0 || !meta || mirror.lastSummaryKey === summaryKeyOf(this.summaryOf(conversationId, count))) {
+        return
+      }
+    }
     mirror.pendingAskCount = count
     // Advance durable seq: pendingAsk change is a state change (relied upon by CAS watermarks).
-    const meta = this.store.getConv(conversationId)
     if (meta) {
       const updated: ConvMeta = {
         ...meta,
@@ -1413,9 +1442,9 @@ function statusNow(meta: ConvMeta, outcome: TurnOutcome): ConversationStatus {
   return meta.unread ? 'done' : 'idle'
 }
 
-/** Semantic summary fingerprint: status/doing/pendingAskCount/lastError (other fields do not participate in push dedupe). */
+/** Semantic summary fingerprint: status/doing/pendingAskCount/lastError/timing (other fields do not participate in push dedupe). */
 function summaryKeyOf(summary: ConversationSummary): string {
-  return `${summary.status}|${summary.doing ?? ''}|${summary.pendingAskCount}|${summary.lastError ?? ''}`
+  return `${summary.status}|${summary.doing ?? ''}|${summary.pendingAskCount}|${summary.lastError ?? ''}|${summary.runStartedAt ?? ''}|${summary.runDurationMs ?? 0}|${summary.pendingAskSince ?? ''}`
 }
 
 /** Build human-readable diagnostic summary from live.runFailure ('reason: detail'; omitted for non-error aborted/reset). */

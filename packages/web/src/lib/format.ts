@@ -4,7 +4,11 @@
 export {
   formatBytes,
   formatDurationMs,
+  formatOffsetMs,
+  formatStopwatchMs,
+  resolveConversationTiming,
 } from '@helmx/plugin-client'
+export type { ConversationTimingInput, ConversationTimingSnapshot } from '@helmx/plugin-client'
 
 /**
  * Compact human-readable token counts (strictly mirrors the pi agent footer formatTokens tiers,

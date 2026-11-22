@@ -27,7 +27,7 @@ import {
   DockTray,
   DockTrayRow,
   HelmxIcon,
-  formatDurationMs,
+  Tooltip,
   resolveLocalizedText,
   useConversation,
   useConversations,
@@ -39,6 +39,7 @@ import {
 import type { SwarmIndexDoc } from './models.ts'
 import { SWARM_WORKBENCH_PANEL_TARGET } from './models.ts'
 import { buildSwarmTraySummary, resolveSwarmTrayLiveSnippet, type SwarmTrayItem } from './model-tray.ts'
+import { resolveGroupTimingView, resolveTrayMemberTimingView } from './model-timing.ts'
 import { parseBoardView, resolveConversationBoardLink, type BoardViewDoc } from './board-model.ts'
 import { useElapsedNowMs } from './hooks.ts'
 import {
@@ -93,12 +94,24 @@ function SwarmTrayLiveLine(props: {
 
 function SwarmTrayRow(props: {
   item: SwarmTrayItem
+  nowMs: number | undefined
   busy: boolean
   onAbort: (key: string, memberName: string) => void
 }): ReactNode {
   const ctx = usePluginContext()
   const locale = usePluginLocale()
-  const { item } = props
+  const { item, nowMs } = props
+  const rowTiming = resolveTrayMemberTimingView(item, nowMs, locale)
+  const timingBadge =
+    rowTiming !== undefined ? (
+      <Tooltip content={rowTiming.tooltip} className="sw-timing-tooltip">
+        <span
+          className={`dock-tray-elapsed sw-tray-row-elapsed tabular-nums${rowTiming.isWarn ? ' sw-tray-row-elapsed-warn' : ''}`}
+        >
+          {rowTiming.label}
+        </span>
+      </Tooltip>
+    ) : undefined
   return (
     <DockTrayRow
       classPrefix="sw-tray"
@@ -106,6 +119,7 @@ function SwarmTrayRow(props: {
       statusLabel={memberLiveStateLabel(item.isBlocked ? 'blocked' : 'working', locale)}
       title={`@${item.name}`}
       idText={`#${item.conversationId}`}
+      badge={timingBadge}
       live={
         <SwarmTrayLiveLine
           conversationId={item.conversationId}
@@ -159,7 +173,7 @@ function SwarmCoordinatorTray(props: { conversationId: number; groupId: string }
     [board, conversations],
   )
 
-  const hasElapsed = summary !== undefined && summary.items.length > 0 && summary.groupStartedAt !== undefined
+  const hasElapsed = summary !== undefined && summary.items.length > 0
   const nowMs = useElapsedNowMs(hasElapsed)
 
   if (summary === undefined || summary.items.length === 0 || board === undefined) {
@@ -186,10 +200,10 @@ function SwarmCoordinatorTray(props: { conversationId: number; groupId: string }
 
   const frontlineText = summary.frontline !== undefined ? trayFrontline(summary.frontline, locale) : undefined
   const headlineItem = summary.items[0]
-  const hudElapsed =
-    nowMs !== undefined && summary.groupStartedAt !== undefined && nowMs >= summary.groupStartedAt
-      ? formatDurationMs(nowMs - summary.groupStartedAt)
-      : undefined
+  const groupTiming = resolveGroupTimingView(board, conversations, nowMs, locale)
+  const hudElapsed = groupTiming?.label
+  const baseToggleTitle = resolveLocalizedText(expanded ? TRAY_COLLAPSE : TRAY_EXPAND, locale)
+  const toggleTitle = groupTiming !== undefined ? `${baseToggleTitle}\n${groupTiming.tooltip}` : baseToggleTitle
   const frontline =
     headlineItem !== undefined ? (
       <SwarmTrayLiveLine
@@ -211,7 +225,7 @@ function SwarmCoordinatorTray(props: { conversationId: number; groupId: string }
       expanded={expanded}
       onToggle={() => setExpanded((v) => !v)}
       toggleLabel={trayToggleLabel(expanded, countText, locale)}
-      toggleTitle={resolveLocalizedText(expanded ? TRAY_COLLAPSE : TRAY_EXPAND, locale)}
+      toggleTitle={toggleTitle}
       status={hasBlocked ? 'blocked' : 'running'}
       statusLabel={countText}
       badge={
@@ -237,6 +251,7 @@ function SwarmCoordinatorTray(props: { conversationId: number; groupId: string }
         <SwarmTrayRow
           key={item.key}
           item={item}
+          nowMs={nowMs}
           busy={busyKey !== undefined}
           onAbort={runAbort}
         />

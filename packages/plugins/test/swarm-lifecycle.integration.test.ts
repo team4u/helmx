@@ -9,6 +9,7 @@
 import { after, describe, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdirSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -1384,6 +1385,133 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
       await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'close_group', { groupId: restrictedGroupId }, { conversationId: restrictedCoord.id })
     } finally {
       fakeSocket.close()
+      await env.close()
+    }
+  })
+
+  test('swarm-int6: archive_worker and close_group solidify member runDurationMs and turnCount into meta.json and preserve history after conversation deletion', { timeout: 60_000 }, async (t) => {
+    const dir = useTempDir(t, 'helmx-swarm-timing-')
+    const env = await openSwarmEnv(dir, gitTemplate)
+    try {
+      const { kernel } = env.app
+      const coord = await kernel.createConversation({ title: 'Timing Coord', profileId: 'assistant', cwd: env.repoDir })
+
+      const created = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'create_group',
+        { title: 'Timing Squad', objective: 'Verify timing solidification' },
+        { conversationId: coord.id },
+      )) as { groupId: string }
+
+      setSwarmRoleResponses(env.faux, {
+        coordinator: [() => fauxAssistantMessage('Coordinator noted both deliveries.')],
+        alpha: [
+          () => fauxAssistantMessage([
+            fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', body: 'alpha finished work' }),
+          ], { stopReason: 'toolUse' }),
+          () => fauxAssistantMessage('alpha done'),
+        ],
+        beta: [
+          () => fauxAssistantMessage([
+            fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', body: 'beta finished work' }),
+          ], { stopReason: 'toolUse' }),
+          () => fauxAssistantMessage('beta done'),
+        ],
+      })
+
+      const dispAlpha = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'dispatch_worker',
+        { groupId: created.groupId, name: 'alpha', prompt: 'Do alpha work' },
+        { conversationId: coord.id },
+      )) as { workerConversationId: number }
+      const dispBeta = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'dispatch_worker',
+        { groupId: created.groupId, name: 'beta', prompt: 'Do beta work' },
+        { conversationId: coord.id },
+      )) as { workerConversationId: number }
+
+      await kernel.waitForIdle(dispAlpha.workerConversationId)
+      await kernel.waitForIdle(dispBeta.workerConversationId)
+      await kernel.waitForIdle(coord.id)
+
+      // Live board-view / board_status exposes timing fields and passes strict output schema
+      const liveStatus = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'board_status',
+        { groupId: created.groupId },
+        { conversationId: coord.id },
+      )) as BoardViewDoc
+      const liveAlpha = liveStatus.members.find((m) => m.name === 'alpha')!
+      const liveBeta = liveStatus.members.find((m) => m.name === 'beta')!
+      assert.equal(typeof liveAlpha.runDurationMs, 'number')
+      assert.ok((liveAlpha.runDurationMs ?? -1) >= 0)
+      assert.ok((liveAlpha.turnCount ?? 0) >= 1)
+      assert.equal(typeof liveBeta.runDurationMs, 'number')
+      assert.ok((liveBeta.turnCount ?? 0) >= 1)
+
+      const alphaRunBeforeArchive = liveAlpha.runDurationMs!
+      const alphaTurnsBeforeArchive = liveAlpha.turnCount!
+      const betaRunBeforeClose = liveBeta.runDurationMs!
+      const betaTurnsBeforeClose = liveBeta.turnCount!
+
+      // Archive alpha -> solidified into meta.json
+      await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'archive_worker',
+        { groupId: created.groupId, name: 'alpha' },
+        { conversationId: coord.id },
+      )
+
+      const metaPath = join(env.dataDir, 'plugins', 'builtin%3Aswarm', 'groups', created.groupId, 'meta.json')
+      const metaAfterArchive = JSON.parse(await readFile(metaPath, 'utf8')) as {
+        members: Array<{ name: string; lifecycle: string; runDurationMs?: number; turnCount?: number }>
+      }
+      const metaAlpha = metaAfterArchive.members.find((m) => m.name === 'alpha')!
+      assert.equal(metaAlpha.lifecycle, 'archived')
+      assert.equal(metaAlpha.runDurationMs, alphaRunBeforeArchive)
+      assert.equal(metaAlpha.turnCount, alphaTurnsBeforeArchive)
+
+      // Close group -> beta also solidified into meta.json and closedAt recorded
+      await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'close_group',
+        { groupId: created.groupId, summary: 'all timing solidified' },
+        { conversationId: coord.id },
+      )
+      const metaAfterClose = JSON.parse(await readFile(metaPath, 'utf8')) as {
+        status: string
+        closedAt?: number
+        members: Array<{ name: string; lifecycle: string; runDurationMs?: number; turnCount?: number }>
+      }
+      assert.equal(metaAfterClose.status, 'closed')
+      assert.equal(typeof metaAfterClose.closedAt, 'number')
+      const metaBeta = metaAfterClose.members.find((m) => m.name === 'beta')!
+      assert.equal(metaBeta.lifecycle, 'archived')
+      assert.equal(metaBeta.runDurationMs, betaRunBeforeClose)
+      assert.equal(metaBeta.turnCount, betaTurnsBeforeClose)
+
+      // Delete both worker conversations -> historical board_status still serves solidified timing!
+      await kernel.deleteConversation(dispAlpha.workerConversationId)
+      await kernel.deleteConversation(dispBeta.workerConversationId)
+      const historicalStatus = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'board_status',
+        { groupId: created.groupId },
+        { conversationId: coord.id },
+      )) as BoardViewDoc
+      assert.equal(historicalStatus.group.status, 'closed')
+      assert.equal(typeof historicalStatus.group.closedAt, 'number')
+      const histAlpha = historicalStatus.members.find((m) => m.name === 'alpha')!
+      const histBeta = historicalStatus.members.find((m) => m.name === 'beta')!
+      assert.equal(histAlpha.liveState, 'missing')
+      assert.equal(histAlpha.runDurationMs, alphaRunBeforeArchive)
+      assert.equal(histAlpha.turnCount, alphaTurnsBeforeArchive)
+      assert.equal(histBeta.liveState, 'missing')
+      assert.equal(histBeta.runDurationMs, betaRunBeforeClose)
+      assert.equal(histBeta.turnCount, betaTurnsBeforeClose)
+    } finally {
       await env.close()
     }
   })

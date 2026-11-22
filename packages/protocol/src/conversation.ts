@@ -93,6 +93,12 @@ export interface ConversationSummary {
   unread: boolean
   pinned: boolean
   pendingAskCount: number
+  /** Cumulative in-flight duration (ms, non-negative integer) across settled logical turns; excludes idle time between turns. */
+  runDurationMs?: number
+  /** Epoch ms start timestamp of the currently active logical turn (`live.run`); preserved across same-turn tool handOvers and cleared on settlement. */
+  runStartedAt?: number
+  /** Epoch ms `createdAt` of the earliest currently pending AskDoc; present only when `pendingAskCount > 0` (derived in memory). */
+  pendingAskSince?: number
   createdAt: number
   updatedAt: number
 }

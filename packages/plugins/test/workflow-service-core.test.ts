@@ -1078,3 +1078,100 @@ test('emitEvent 收口：宿主适配器 async 抛错时 run 生命周期不受�
     assert.equal(env.service.getRun(summary.id).status, 'completed')
   })
 })
+
+test('settledAt 防漂移：终态一次性写入并透传摘要/索引，notifiedAt 与 resumedByRunId 写回 updatedAt 绝不覆盖', timeout, async (t) => {
+  const notifyEntered = deferred()
+  const notifyRelease = deferred()
+  const env = makeEnv(t, async () => '结果', {
+    onBackgroundAgentSettled: async () => {
+      notifyEntered.resolve()
+      await notifyRelease.promise
+    },
+  })
+  const first = await env.service.run(
+    {
+      conversationId: 30,
+      script: 'export const meta = { name: "settled-anchor", description: "d" }\nreturn await agent("任务")',
+    },
+    { notifyParentOnSettle: true },
+  )
+  const firstDone = env.service.wait(first.id)
+  await notifyEntered.promise
+  const beforeNotify = readRecordFile(env.dataDir, 30, first.id)
+  const initialSettledAt = beforeNotify['settledAt'] as number | undefined
+  assert.ok(typeof initialSettledAt === 'number' && initialSettledAt >= first.createdAt, '终态落盘必须写入 settledAt')
+
+  // 故意推进时钟等待后再放行 notifiedAt 写回与 resumeFromRunId 接管写回，确保 updatedAt 推进但 settledAt 不漂移。
+  await new Promise((resolve) => setTimeout(resolve, 15))
+  notifyRelease.resolve()
+  await firstDone
+
+  const afterNotifyFile = readRecordFile(env.dataDir, 30, first.id)
+  assert.ok(typeof afterNotifyFile['notifiedAt'] === 'number', 'notifiedAt 已写入')
+  assert.equal(afterNotifyFile['settledAt'], initialSettledAt, 'notifiedAt 写回不得覆盖 settledAt')
+
+  await new Promise((resolve) => setTimeout(resolve, 15))
+  const second = await env.service.run({ resumeFromRunId: first.id })
+  await env.service.wait(second.id)
+
+  const afterResumeFile = readRecordFile(env.dataDir, 30, first.id)
+  assert.equal(afterResumeFile['resumedByRunId'], second.id)
+  assert.equal(afterResumeFile['settledAt'], initialSettledAt, 'resumedByRunId 接管写回 updatedAt 时绝不得覆盖 settledAt')
+  assert.ok((afterResumeFile['updatedAt'] as number) > initialSettledAt, 'updatedAt 已因接管推进')
+
+  const index = env.docs.get('workflow/runs') as Array<Record<string, unknown>>
+  const idxEntry = index.find((item) => item['id'] === first.id)
+  assert.equal(idxEntry?.['settledAt'], initialSettledAt, '索引同步保留原 settledAt')
+  assert.equal(env.service.getRun(first.id).settledAt, initialSettledAt, 'summaryOf 透传原 settledAt')
+})
+
+test('settledAt 覆盖恢复标终态与优雅挂起：failRecoveredRecord 写 settledAt，suspend 挂起不写 settledAt', timeout, async (t) => {
+  // 1) 优雅挂起（suspend）：保持 status=running + suspendedCleanly=true，绝不写入 settledAt。
+  const started = deferred()
+  const hang = deferred()
+  const suspendEnv = makeEnv(t, (proto: unknown) => {
+    const req = proto as { signal?: AbortSignal }
+    started.resolve()
+    return new Promise((_resolve, reject) => {
+      req.signal?.addEventListener('abort', () => reject(new HelmxError('aborted', 'suspend', 409)), { once: true })
+      void hang.promise
+    })
+  })
+  const running = await suspendEnv.service.run({
+    conversationId: 31,
+    script: 'export const meta = { name: "suspend-no-settle", description: "d" }\nreturn await agent("挂起")',
+  })
+  await started.promise
+  await suspendEnv.service.suspend()
+  const suspendedRecord = readRecordFile(suspendEnv.dataDir, 31, running.id)
+  assert.equal(suspendedRecord['status'], 'running')
+  assert.equal(suspendedRecord['suspendedCleanly'], true)
+  assert.equal(suspendedRecord['settledAt'], undefined, '优雅挂起保持 running，不得写入 settledAt')
+
+  // 2) 非自动恢复启动（autoRecoverOnRestart=false）：failRecoveredRecord 把遗留 running 标 failed 时写入 settledAt。
+  const revived = new WorkflowService({
+    dataDir: suspendEnv.dataDir,
+    state: suspendEnv.state,
+    autoRecoverOnRestart: false,
+    host: {
+      spawnAgent: async () => 'unused',
+      invokeAction: async () => ({}),
+      listActions: () => [],
+      getConversation: (id: number) => makeParentSummary(id, suspendEnv.dataDir),
+      abortConversationGuarded: async () => {},
+      emitEvent: () => {},
+    },
+  })
+  t.after(async () => {
+    await revived.close()
+  })
+  await revived.init()
+  const recoveredSummary = revived.getRun(running.id)
+  assert.equal(recoveredSummary.status, 'failed')
+  assert.ok(
+    typeof recoveredSummary.settledAt === 'number' && recoveredSummary.settledAt >= running.createdAt,
+    'failRecoveredRecord 标终态时必须写入 settledAt',
+  )
+  const recoveredRecord = readRecordFile(suspendEnv.dataDir, 31, running.id)
+  assert.equal(recoveredRecord['settledAt'], recoveredSummary.settledAt)
+})

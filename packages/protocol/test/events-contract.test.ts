@@ -192,6 +192,9 @@ test('Stage 0 protocol contracts lock transient live, clientHashes, lastEntryId,
     unread: false,
     pinned: false,
     pendingAskCount: 0,
+    runDurationMs: 4500,
+    runStartedAt: 1500,
+    pendingAskSince: 1600,
     createdAt: 1000,
     updatedAt: 2000,
   }
@@ -201,6 +204,9 @@ test('Stage 0 protocol contracts lock transient live, clientHashes, lastEntryId,
   }
   assert.equal(convSummary.lastEntryId, 12)
   assert.equal(convDetail.lastEntryId, 12)
+  assert.equal(convSummary.runDurationMs, 4500)
+  assert.equal(convSummary.runStartedAt, 1500)
+  assert.equal(convSummary.pendingAskSince, 1600)
 
   const live: ConversationLive = {
     conversationId: 1,
@@ -214,9 +220,11 @@ test('Stage 0 protocol contracts lock transient live, clientHashes, lastEntryId,
     seq: 10,
     headSeq: 12,
     conversationLives: [live],
+    serverTime: 2600,
   }
   assert.equal(transientFrame.live.conversationId, 1)
   assert.equal(resumedFrame.conversationLives?.[0]?.text, 'streaming...')
+  assert.equal(resumedFrame.serverTime, 2600)
 
   const actions: SessionDocMultiplexAction[] = ['snapshot', 'updated', 'deleted']
   const frames: SessionDocMultiplexFrame[] = actions.map((action, idx) => {

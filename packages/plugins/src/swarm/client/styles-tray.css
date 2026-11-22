@@ -1,0 +1,16 @@
+/* ---------------------------------------------------------------------------
+ * Composer activity tray local timing accents (host .dock-tray* owns layout)
+ * ------------------------------------------------------------------------- */
+
+.sw-tray-row-elapsed {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.sw-tray-row-elapsed-warn {
+  color: var(--warn);
+}
+
+.helmx-tooltip-content.sw-timing-tooltip {
+  white-space: pre-line;
+}

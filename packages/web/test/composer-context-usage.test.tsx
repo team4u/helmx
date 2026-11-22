@@ -453,3 +453,172 @@ test('AgentStandbyPane mounts COMPOSER_STATUS_SLOT below .composer-box with effe
   }
 })
 
+test('conversationDurationLabel：首轮去重、第 2 轮累加、blocked 等待审批、空闲态与 Tooltip 拆解', { timeout: 60_000 }, async () => {
+  const { conversationDurationLabel, conversationDurationNeedsLiveClock } = await import(
+    '../src/conversation/conversation-duration-model.js'
+  )
+  const { createWebTranslator } = await import('../src/i18n/catalog.js')
+  const tZh = createWebTranslator('zh-CN')
+  const tEn = createWebTranslator('en')
+
+  const createdAt = new Date(2026, 10, 10, 14, 0, 0).getTime()
+  const now = createdAt + 120_000
+
+  // 1. 空闲无累计 -> null 且零时钟需求
+  assert.equal(conversationDurationNeedsLiveClock({ status: 'idle', runDurationMs: 0 }), false)
+  assert.equal(conversationDurationLabel({ status: 'idle', runDurationMs: 0 }, now, tZh), null)
+
+  // 2. working 第 1 轮（settledRunMs === 0）：首轮去重，仅显示「本轮 12s」
+  const round1 = conversationDurationLabel(
+    {
+      status: 'working',
+      runDurationMs: 0,
+      runStartedAt: now - 12_300,
+      completionSeq: 0,
+      createdAt,
+      updatedAt: now,
+    },
+    now,
+    tZh,
+  )
+  assert.ok(round1 !== null)
+  assert.equal(round1.text, '本轮 12s')
+  assert.equal(round1.tone, 'default')
+  assert.match(round1.tooltip, /本轮运行：12s/)
+  assert.match(round1.tooltip, /创建于：2026-11-10 14:00:00/)
+  assert.match(round1.tooltip, /会话跨度：2m00s/)
+
+  // 3. working 第 2 轮起（settledRunMs > 0）：显示「本轮 12s · 累计 1m12s」
+  const round2 = conversationDurationLabel(
+    {
+      status: 'working',
+      runDurationMs: 60_000,
+      runStartedAt: now - 12_300,
+      completionSeq: 1,
+      createdAt,
+      updatedAt: now,
+    },
+    now,
+    tZh,
+  )
+  assert.ok(round2 !== null)
+  assert.equal(round2.text, '本轮 12s · 累计 1m12s')
+  assert.match(round2.tooltip, /累计运行：1m12s/)
+  assert.match(round2.tooltip, /已结算轮次：1/)
+
+  // 4. blocked 等待审批（warn 语义；无累计仅「等待审批 15s」，有累计附「· 累计 1m20s」）
+  const blockedOnly = conversationDurationLabel(
+    {
+      status: 'blocked',
+      pendingAskCount: 1,
+      pendingAskSince: now - 15_400,
+      runDurationMs: 0,
+    },
+    now,
+    tZh,
+  )
+  assert.ok(blockedOnly !== null)
+  assert.equal(blockedOnly.text, '等待审批 15s')
+  assert.equal(blockedOnly.tone, 'warn')
+
+  const blockedWithTotal = conversationDurationLabel(
+    {
+      status: 'blocked',
+      pendingAskCount: 1,
+      pendingAskSince: now - 15_400,
+      runDurationMs: 65_000,
+      runStartedAt: now - 15_400,
+      completionSeq: 2,
+      createdAt,
+      updatedAt: now,
+    },
+    now,
+    tZh,
+  )
+  assert.ok(blockedWithTotal !== null)
+  assert.equal(blockedWithTotal.text, '等待审批 15s · 累计 1m20s')
+  assert.equal(blockedWithTotal.tone, 'warn')
+  assert.match(blockedWithTotal.tooltip, /等待审批：15s/)
+
+  // 5. 空闲/完成/错误：settledRunMs > 0 显示「累计 2m5s」（英文 Total 2m5s）
+  const settledEn = conversationDurationLabel(
+    { status: 'done', runDurationMs: 125_000, completionSeq: 3, createdAt, updatedAt: createdAt + 300_000 },
+    now,
+    tEn,
+  )
+  assert.ok(settledEn !== null)
+  assert.equal(settledEn.text, 'Total 2m5s')
+  assert.match(settledEn.tooltip, /Total run: 2m5s/)
+  assert.match(settledEn.tooltip, /Settled turns: 3/)
+  assert.match(settledEn.tooltip, /Session span: 5m0s/)
+})
+
+test('Composer ConversationDurationStatus：与 ContextUsageStatus 同行、无 contextUsage 时撑开状态行且 warn 色调生效', { timeout: 60_000 }, async () => {
+  const { resetServerClock } = await import('../src/lib/server-clock.js')
+  resetServerClock()
+  const css = readFileSync(new URL('../src/styles/forms.css', import.meta.url), 'utf8')
+  const style = document.createElement('style')
+  style.textContent = `:root { --fg-muted: rgb(11, 12, 13); --warn: rgb(21, 22, 23); --err: rgb(31, 32, 33); }\n${css}`
+  document.head.appendChild(style)
+
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = createRoot(host)
+  try {
+    // 1. 无 contextUsage 但有 runDurationMs：.composer-status-row 不得被 :not(:has(...)) 隐藏
+    const idleWithDuration: ConversationSummary = {
+      ...conv(undefined),
+      status: 'done',
+      runDurationMs: 65_000,
+      completionSeq: 2,
+      createdAt: 1_700_000_000_000,
+      updatedAt: 1_700_000_200_000,
+    }
+    await act(async () => {
+      root.render(
+        e(
+          HostStoreProviders,
+          { value: makeTestStore({ locale: 'zh-CN', conversations: [idleWithDuration] }) },
+          e(Composer, { conversation: idleWithDuration, prefill: null }),
+        ),
+      )
+    })
+    const row = host.querySelector<HTMLElement>('.composer-status-row')
+    const durationEl = host.querySelector<HTMLElement>('.composer-duration-status')
+    assert.ok(row !== null && durationEl !== null)
+    assert.equal(getComputedStyle(row).display, 'flex', 'duration status keeps .composer-status-row visible')
+    assert.equal(durationEl.textContent, '累计 1m5s')
+    assert.equal(getComputedStyle(durationEl).color, 'rgb(11, 12, 13)')
+
+    // 2. blocked 状态：warn 色调覆写默认灰，只读无按钮
+    const now = Date.now()
+    const blockedConv: ConversationSummary = {
+      ...conv({ tokens: 50_000, contextWindow: 200_000 }),
+      status: 'blocked',
+      pendingAskCount: 1,
+      pendingAskSince: now - 10_400,
+      runDurationMs: 30_000,
+    }
+    await act(async () => {
+      root.render(
+        e(
+          HostStoreProviders,
+          { value: makeTestStore({ locale: 'zh-CN', conversations: [blockedConv] }) },
+          e(Composer, { conversation: blockedConv, prefill: null }),
+        ),
+      )
+    })
+    const warnEl = host.querySelector<HTMLElement>('.composer-duration-status-warn')
+    assert.ok(warnEl !== null)
+    assert.ok(warnEl.querySelector('button') === null, 'duration status must stay read-only')
+    assert.match(warnEl.textContent ?? '', /等待审批 10s · 累计 30s/)
+    assert.equal(getComputedStyle(warnEl).color, 'rgb(21, 22, 23)', 'warn tone must override default gray')
+  } finally {
+    resetServerClock()
+    localStorage.removeItem('helmx:locale')
+    act(() => root.unmount())
+    host.remove()
+    style.remove()
+  }
+})
+

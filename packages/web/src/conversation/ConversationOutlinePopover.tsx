@@ -1,7 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { HelmxIcon, Popover, PopoverContent, PopoverTrigger } from '@helmx/plugin-client'
+import { HelmxIcon, Popover, PopoverContent, PopoverTrigger, useSharedNowMs } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
-import { formatMessageTime } from '../lib/format.js'
+import {
+  formatDurationMs,
+  formatMessageTime,
+  formatStopwatchMs,
+  resolveConversationTiming,
+  type ConversationTimingInput,
+} from '../lib/format.js'
 import {
   countOutlineTurns,
   filterOutlineNodes,
@@ -39,6 +45,12 @@ export interface ConversationOutlinePopoverProps {
   portalled?: boolean
   /** 是否强制挂载浮层内容；嵌套 Dialog 中可避免 Radix Presence 首次打开丢失内容。 */
   forceMount?: boolean
+  /** 会话累计运行耗时（ms）；大于 0 时在大纲顶栏附紧凑摘要（文档大纲不传）。 */
+  totalRunMs?: number
+  /** 可选会话实时计时输入（浮层打开且在途时同步累加本轮耗时；关闭时不挂载定时器）。 */
+  liveTiming?: ConversationTimingInput
+  /** 大纲摘要展示轮次数（缺省回退大纲内人类提问轮数）。 */
+  summaryTurnCount?: number
   /** 是否存在更早的未加载历史分页。 */
   hasEarlierHistory?: boolean
   loadingEarlierHistory?: boolean
@@ -66,6 +78,9 @@ export function ConversationOutlinePopover({
   showModeToggle = true,
   portalled = true,
   forceMount,
+  totalRunMs,
+  liveTiming,
+  summaryTurnCount,
   hasEarlierHistory = false,
   loadingEarlierHistory = false,
   onLoadEarlierHistory,
@@ -82,9 +97,39 @@ export function ConversationOutlinePopover({
   const searchInputRef = useRef<HTMLInputElement | null>(null)
   const listRef = useRef<HTMLDivElement | null>(null)
 
+  const liveClockActive =
+    open &&
+    liveTiming !== undefined &&
+    (liveTiming.status === 'working' ||
+      liveTiming.status === 'blocked' ||
+      (typeof liveTiming.pendingAskCount === 'number' && liveTiming.pendingAskCount > 0)) &&
+    typeof liveTiming.runStartedAt === 'number' &&
+    Number.isFinite(liveTiming.runStartedAt) &&
+    liveTiming.runStartedAt >= 0
+  const liveNowMs = useSharedNowMs(liveClockActive)
+  const resolvedTiming = liveTiming !== undefined ? resolveConversationTiming(liveTiming, liveNowMs) : undefined
+  const effectiveTotalRunMs =
+    resolvedTiming?.totalRunMs !== undefined
+      ? resolvedTiming.totalRunMs
+      : typeof totalRunMs === 'number' && Number.isFinite(totalRunMs) && totalRunMs > 0
+        ? totalRunMs
+        : undefined
   const effectiveMode: OutlineFilterMode = showModeToggle ? mode : 'all'
   const turnCount = useMemo(() => countOutlineTurns(nodes), [nodes])
   const displayCount = badgeCount ?? turnCount
+  const summaryTurns = summaryTurnCount ?? turnCount
+  const outlineSummaryText =
+    effectiveTotalRunMs !== undefined && effectiveTotalRunMs > 0
+      ? (() => {
+          const duration =
+            resolvedTiming?.currentRunMs !== undefined
+              ? formatStopwatchMs(effectiveTotalRunMs)
+              : formatDurationMs(effectiveTotalRunMs)
+          return summaryTurns > 0
+            ? t('conv.outline.summaryTurnsAndTotal', { count: summaryTurns, duration })
+            : t('conv.outline.summaryTotalOnly', { duration })
+        })()
+      : ''
   const hasFilterableNodes = useMemo(
     () =>
       nodes.some(
@@ -239,6 +284,12 @@ export function ConversationOutlinePopover({
             ) : null}
           </div>
 
+          {outlineSummaryText !== '' ? (
+            <div className="conversation-outline-summary mono tabular-nums">
+              {outlineSummaryText}
+            </div>
+          ) : null}
+
           {hasEarlierHistory && onLoadEarlierHistory !== undefined ? (
             <div className="conversation-outline-earlier-bar">
               <button
@@ -304,6 +355,8 @@ export function ConversationOutlinePopover({
 
                 if (node.kind === 'assistant') {
                   const timeText = formatMessageTime(node.createdAt)
+                  const durationText =
+                    node.durationMs !== undefined && node.durationMs > 0 ? formatDurationMs(node.durationMs) : ''
                   return (
                     <button
                       key={node.key}
@@ -325,8 +378,15 @@ export function ConversationOutlinePopover({
                       {node.status === 'failed' ? (
                         <span className="conversation-outline-status-badge">{t('conv.tool.statusFailed')}</span>
                       ) : null}
-                      {timeText !== '' ? (
-                        <span className="conversation-outline-time mono tabular-nums">{timeText}</span>
+                      {durationText !== '' || timeText !== '' ? (
+                        <span className="conversation-outline-meta mono tabular-nums">
+                          {durationText !== '' ? (
+                            <span className="conversation-outline-duration">{durationText}</span>
+                          ) : null}
+                          {timeText !== '' ? (
+                            <span className="conversation-outline-time">{timeText}</span>
+                          ) : null}
+                        </span>
                       ) : null}
                     </button>
                   )

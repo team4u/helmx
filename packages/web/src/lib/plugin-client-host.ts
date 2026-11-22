@@ -18,6 +18,7 @@ import { createLocaleTranslator, type HelmxLocale, type LocaleTranslator } from 
 import type { PluginClientHostPort, PluginSlotPortItem } from '@helmx/plugin-client'
 import { assetsApi, conversationsApi } from './api.js'
 import type { HelmxExternalStore } from './helmx-store.js'
+import { serverNow } from './server-clock.js'
 import { MarkdownView, CodeBlockView } from '../conversation/MarkdownView.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
 import { collectSlotItems } from '../ui/plugin-slot-model.js'
@@ -118,6 +119,9 @@ export function createPluginClientHostPort(store: HelmxExternalStore): PluginCli
 
     // ---- Detail loading ----
     loadConversationDetail: store.actions.loadConversationDetail,
+
+    // ---- Calibrated server clock ----
+    getServerNow: serverNow,
 
     // ---- Sub-slots ----
     slots: {

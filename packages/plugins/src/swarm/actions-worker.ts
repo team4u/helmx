@@ -14,6 +14,7 @@ import {
   assertChannelName,
   assertGroupId,
   assertMemberName,
+  snapshotMemberTiming,
   unknownChannelError,
   type CollabGroupRecord,
   type GroupMemberState,
@@ -804,9 +805,14 @@ export function createWorkerHandlers(
 
       await groups.mutateGroup(group.id, (draft) => {
         const target = draft.members.find((m) => m.name === freshMember.name)
+        const now = Date.now()
         if (target !== undefined) {
+          const latestSummary = readConversationOrUndefined(workerConversationId)
+          const timing = snapshotMemberTiming(latestSummary, now)
           target.lifecycle = 'archived'
-          target.archivedAt = Date.now()
+          target.archivedAt = now
+          if (timing.runDurationMs !== undefined) target.runDurationMs = timing.runDurationMs
+          if (timing.turnCount !== undefined) target.turnCount = timing.turnCount
           target.readCursorSeq = Math.max(target.readCursorSeq, target.pendingWakeupSeq)
           delete target.lastWakeTaskSeq
           delete target.silentExitNudgeSeq
@@ -818,7 +824,7 @@ export function createWorkerHandlers(
           const existing = (draft.retainedWorktrees ?? []).filter((item) => item.worktreeId !== retainedEntry.worktreeId)
           draft.retainedWorktrees = [...existing, retainedEntry]
         }
-        draft.updatedAt = Date.now()
+        draft.updatedAt = now
         return { group: draft, result: undefined }
       })
 

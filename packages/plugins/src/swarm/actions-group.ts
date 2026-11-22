@@ -10,6 +10,7 @@ import {
   SWARM_PLUGIN_ID,
   WORKER_TAG,
   assertGroupId,
+  snapshotMemberTiming,
   type BoardViewDoc,
   type CollabGroupRecord,
   type RetainedWorktreeInfo,
@@ -519,8 +520,12 @@ export function createGroupHandlers(
           }
           for (const m of draft.members) {
             if (m.lifecycle === 'active') {
+              const latestSummary = readConversationOrUndefined(m.conversationId)
+              const timing = snapshotMemberTiming(latestSummary, now)
               m.lifecycle = 'archived'
               m.archivedAt = now
+              if (timing.runDurationMs !== undefined) m.runDurationMs = timing.runDurationMs
+              if (timing.turnCount !== undefined) m.turnCount = timing.turnCount
             }
           }
           return { group: draft, result: undefined }

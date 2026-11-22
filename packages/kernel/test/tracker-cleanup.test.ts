@@ -308,6 +308,7 @@ describe('duplicate requestId submission and restart recovery', { timeout: 60_00
         pinned: false,
         stateChangeSeq: 1,
         completionSeq: 0,
+        runDurationMs: 0,
         createdAt: Date.now(),
         updatedAt: Date.now(),
       })
@@ -425,6 +426,7 @@ describe('duplicate requestId submission and restart recovery', { timeout: 60_00
           pinned: false,
           stateChangeSeq: 1,
           completionSeq: 0,
+          runDurationMs: 0,
           createdAt: Date.now(),
           updatedAt: Date.now(),
         } as never)

@@ -285,10 +285,17 @@ export const runCardReplayAccepted = t1((runId: string) =>
 )
 export const RUN_KV_RUN_ID = L('Run ID', '运行 ID')
 export const RUN_KV_CREATED_AT = L('Started at', '发起时间')
+export const RUN_KV_SETTLED_AT = L('Finished at', '完成时间')
 export const RUN_KV_SELF_STATUS = L('Run self status', 'run 自身状态')
 export const RUN_KV_UPDATED_AT = L('Updated at', '更新时间')
 export const RUN_KV_SOURCE_RUN = L('Source run', '源 run')
 export const RUN_KV_SAVED_DEF = L('Saved definition', '保存定义')
+export const runTimingWallLine = t1((duration: string) => L(`End-to-end: ${duration}`, `端到端总耗时：${duration}`))
+export const runTimingNodeTotalLine = t1((duration: string) =>
+  L(`Node total ${duration} (incl. parallel)`, `节点累计 ${duration}（含并行）`),
+)
+export const runTimingStartedLine = t1((time: string) => L(`Started: ${time}`, `开始：${time}`))
+export const runTimingSettledLine = t1((time: string) => L(`Finished: ${time}`, `结束：${time}`))
 export const RUN_NO_NODES = L('No node status yet', '暂无节点状态')
 export const RUN_RESULT_SECTION = L('Final output', '最终产出')
 export const RUN_COLLAPSE_RESULT = L('Collapse full result', '收起完整结果')
@@ -610,6 +617,9 @@ export function trayActionFailed(action: 'abort' | 'detach', err: string, locale
   const label = resolveLocalizedText(action === 'abort' ? ACTION_ABORT : ACTION_DETACH, locale)
   return resolveLocalizedText(L(`${label} failed: ${err}`, `${label}失败：${err}`), locale)
 }
+export const trayAwaitingApprovalElapsed = t1((duration: string) =>
+  L(`Awaiting approval ${duration}`, `等待审批 ${duration}`),
+)
 
 export const execOpenConversationLabel = t1((id: number) => L(`Open conversation #${id} drawer`, `打开会话 #${id} 抽屉`))
 export const execCollapseChildrenLabel = t1((title: string) => L(`Collapse direct children of ${title}`, `收起 ${title} 直系子项`))

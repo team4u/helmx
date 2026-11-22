@@ -34,7 +34,7 @@ import type { WorkflowRunSummary } from '../../contracts.js'
 import {
   DockTray,
   DockTrayRow,
-  formatDurationMs,
+  formatStopwatchMs,
   resolveLocalizedText,
   useConversation,
   useConversations,
@@ -57,6 +57,7 @@ import {
   TRAY_REGION_ARIA,
   TRAY_WORKBENCH,
   trayActionFailed,
+  trayAwaitingApprovalElapsed,
   trayCount,
   trayRowOpenConversationLabel,
   trayRowOpenRunLabel,
@@ -146,10 +147,16 @@ function WorkflowActiveTrayRow(props: {
   const locale = usePluginLocale()
   const { item } = props
 
-  const itemElapsed =
-    props.nowMs !== undefined && item.startedAt !== undefined && props.nowMs >= item.startedAt
-      ? formatDurationMs(props.nowMs - item.startedAt)
+  const waitingMs =
+    item.isBlocked && props.nowMs !== undefined && item.pendingAskSince !== undefined
+      ? Math.max(0, props.nowMs - item.pendingAskSince)
       : undefined
+  const itemElapsed =
+    waitingMs !== undefined
+      ? trayAwaitingApprovalElapsed(formatStopwatchMs(waitingMs), locale)
+      : props.nowMs !== undefined && item.startedAt !== undefined
+        ? formatStopwatchMs(Math.max(0, props.nowMs - item.startedAt))
+        : undefined
   const isFallbackConvTitle =
     item.conversationId !== undefined && item.title === execConversationTitle(item.conversationId, locale)
   // Row detail entry: conversation rows open the drawer, other rows focus the
@@ -269,7 +276,10 @@ export function WorkflowActiveTray(props: Partial<ComposerScopeProps>): ReactNod
     [conversationId, conversations, runs, ownedBy, locale],
   )
 
-  const hasTimer = summary !== undefined && summary.items.length > 0 && summary.earliestStartedAt !== undefined
+  const hasTimer =
+    summary !== undefined &&
+    summary.items.length > 0 &&
+    (summary.earliestStartedAt !== undefined || summary.earliestPendingAskSince !== undefined)
   const nowMs = useElapsedNowMs(hasTimer)
 
   if (conversationId === undefined || summary === undefined || summary.items.length === 0) {
@@ -306,9 +316,11 @@ export function WorkflowActiveTray(props: Partial<ComposerScopeProps>): ReactNod
   const headlineItem =
     singleItem ?? summary.items.find((item) => item.activityConversationId !== undefined)
   const trayElapsed =
-    nowMs !== undefined && summary.earliestStartedAt !== undefined && nowMs >= summary.earliestStartedAt
-      ? formatDurationMs(nowMs - summary.earliestStartedAt)
-      : undefined
+    hasBlocked && nowMs !== undefined && summary.earliestPendingAskSince !== undefined
+      ? trayAwaitingApprovalElapsed(formatStopwatchMs(Math.max(0, nowMs - summary.earliestPendingAskSince)), locale)
+      : nowMs !== undefined && summary.earliestStartedAt !== undefined
+        ? formatStopwatchMs(Math.max(0, nowMs - summary.earliestStartedAt))
+        : undefined
   const frontline =
     summary.approvals.length > 0 ? (
       <span className="dock-tray-frontline workflow-active-tray-frontline">{summary.approvals[0]!.text}</span>

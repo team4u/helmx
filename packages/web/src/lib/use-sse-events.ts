@@ -189,7 +189,11 @@ function handleSnapshotFrame(payload: unknown, ctx: FrameHandlerContext): void {
   })
 
   ctx.updateLive((state) => applySnapshot(state, snap))
-  // 时钟采样：归约校验通过后的服务端 updatedAt 才可信（snapshot 为连接时刻快照，偏旧样本只会被滑窗最小值淘汰）。
+  // 时钟采样：归约校验通过后的服务端 serverTime / updatedAt 才可信（snapshot 为连接时刻快照，
+  // 优先消费首帧 Hub serverTime，避免空闲会话或无 live 帧时无法校准偏差）。
+  if (typeof snap.serverTime === 'number' && Number.isFinite(snap.serverTime) && snap.serverTime > 0) {
+    observeServerEpoch(snap.serverTime)
+  }
   observeLiveFrameClocks(snap.conversationLives)
   ctx.sseCursorRef.current = { bootId: snap.bootId, seq: snap.seq }
   ctx.setKernelBootId(snap.bootId)
@@ -254,6 +258,9 @@ function handleResumedFrame(payload: unknown, ctx: FrameHandlerContext): void {
   ctx.streamState.mode = 'resumed'
   ctx.streamState.resumedHeadSeq = resumed.headSeq
   ctx.updateLive((state) => applyResumedFrame(state, resumed))
+  if (typeof resumed.serverTime === 'number' && Number.isFinite(resumed.serverTime) && resumed.serverTime > 0) {
+    observeServerEpoch(resumed.serverTime)
+  }
   observeLiveFrameClocks(resumed.conversationLives)
   ctx.resetRetry()
   // 不清详情/产物/插件缓存：续传补发未丢失任何状态；只有实际追平 headSeq

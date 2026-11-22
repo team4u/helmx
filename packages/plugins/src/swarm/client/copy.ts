@@ -400,3 +400,66 @@ export function swReceiptCountLabel(count: number, locale: HelmxLocale = DEFAULT
     locale,
   )
 }
+
+// ---------------------------------------------------------------------------
+// Time observability labels & Tooltip breakdowns (zero Emoji)
+// ---------------------------------------------------------------------------
+
+export function timingWaitingLabel(duration: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  return resolveLocalizedText(L(`Awaiting approval ${duration}`, `等待审批 ${duration}`), locale)
+}
+
+export function timingWaitingWithTotalLabel(
+  waiting: string,
+  total: string,
+  locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
+): string {
+  return resolveLocalizedText(
+    L(`Awaiting approval ${waiting} · total ${total}`, `等待审批 ${waiting} · 累计 ${total}`),
+    locale,
+  )
+}
+
+export function timingTurnWithTotalLabel(
+  turn: string,
+  total: string,
+  locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
+): string {
+  return resolveLocalizedText(L(`Turn ${turn} · total ${total}`, `本轮 ${turn} · 累计 ${total}`), locale)
+}
+
+export function timingTooltipEndToEnd(duration: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  return resolveLocalizedText(L(`End-to-end: ${duration}`, `端到端总耗时：${duration}`), locale)
+}
+
+export function timingTooltipMembersTotal(duration: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  return resolveLocalizedText(L(`Total member runtime: ${duration}`, `全员累计运行：${duration}`), locale)
+}
+
+export function timingTooltipCreatedAt(timestamp: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  return resolveLocalizedText(L(`Created: ${timestamp}`, `创建时间：${timestamp}`), locale)
+}
+
+export function timingTooltipClosedAt(timestamp: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  return resolveLocalizedText(L(`Closed: ${timestamp}`, `结单时间：${timestamp}`), locale)
+}
+
+export function timingTooltipWaiting(duration: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  return resolveLocalizedText(L(`Awaiting approval: ${duration}`, `等待审批：${duration}`), locale)
+}
+
+export function timingTooltipCurrentTurn(duration: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  return resolveLocalizedText(L(`Current turn: ${duration}`, `本轮运行：${duration}`), locale)
+}
+
+export function timingTooltipCumulativeRun(duration: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  return resolveLocalizedText(L(`Cumulative runtime: ${duration}`, `累计运行：${duration}`), locale)
+}
+
+export function timingTooltipTurns(count: number, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  return resolveLocalizedText(L(`Completed turns: ${count}`, `已完成轮次：${count}`), locale)
+}
+
+export function timingTooltipJoinedAt(timestamp: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  return resolveLocalizedText(L(`Joined: ${timestamp}`, `加入时间：${timestamp}`), locale)
+}

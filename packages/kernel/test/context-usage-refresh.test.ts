@@ -141,6 +141,7 @@ function metaOf(model: string): ConvMeta {
     pinned: false,
     stateChangeSeq: 1,
     completionSeq: 0,
+    runDurationMs: 0,
     createdAt: 0,
     updatedAt: 0,
   }
