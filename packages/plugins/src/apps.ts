@@ -22,9 +22,7 @@
  *   and PackageManager run on the Hub host and only work on the local node's filesystem);
  * - Disabling this plugin does not affect published apps (they are independent managed external plugins whose lifecycle belongs to PluginHost).
  */
-import { existsSync, readFileSync } from 'node:fs'
-import { dirname, isAbsolute, join, resolve as resolvePath } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { isAbsolute, resolve as resolvePath } from 'node:path'
 import {
   HelmxError,
   LOCALIZED_TEXT_JSON_SCHEMA,
@@ -34,7 +32,7 @@ import {
   type PluginDoctorReport,
   type PluginSummary,
 } from '@helmx/protocol'
-import { resolvePluginClientAssets } from './asset-paths.js'
+import { loadManagedSkillAsset, resolvePluginClientAssets } from './asset-paths.js'
 
 export const APPS_PLUGIN_ID = 'builtin:apps'
 const APPS_SCREEN_ID = 'center'
@@ -86,21 +84,14 @@ const CATALOG_DOC = 'catalog'
 // Asset directory resolution (client / skill)
 // ---------------------------------------------------------------------------
 
-function readSkillAssets(): { skillMd: string; references: Record<string, string> } {
-  const here = dirname(fileURLToPath(import.meta.url))
-  const local = join(here, 'apps', 'skill')
-  const dir = existsSync(local)
-    ? local
-    : join(dirname(here), 'src', 'apps', 'skill')
-  if (!existsSync(dir)) {
-    throw new HelmxError('apps_skill_missing', `built-in plugin ${APPS_PLUGIN_ID} cannot find its skill asset directory`, 500)
-  }
-  return {
-    skillMd: readFileSync(join(dir, 'SKILL.md'), 'utf-8'),
-    references: {
-      'fullstack-template.md': readFileSync(join(dir, 'references', 'fullstack-template.md'), 'utf-8'),
-    },
-  }
+function readSkillAssets() {
+  return loadManagedSkillAsset({
+    pluginId: APPS_PLUGIN_ID,
+    skillId: APP_BUILDER_SKILL_ID,
+    relativeDir: 'apps/skill',
+    missingErrorCode: 'apps_skill_missing',
+    references: ['fullstack-template.md'],
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -277,6 +268,7 @@ export function createAppsPlugin(deps: { hubCwd?: string } = {}): PluginDefiniti
       ctx.action<{ dir: string }, AppValidateResult>({
         id: 'validate',
         description: 'Run a static precheck (doctor four phases + Screen check) on a workspace app directory; relative paths resolve against the calling conversation cwd',
+        exposeToPrompt: false,
         inputSchema: {
           type: 'object',
           properties: { dir: { type: 'string', minLength: 1 } },
@@ -302,7 +294,6 @@ export function createAppsPlugin(deps: { hubCwd?: string } = {}): PluginDefiniti
           positional: [{ field: 'dir', required: true }],
         },
         idempotent: true,
-        exposeAsTool: true,
         async handler(input, context) {
           const port = ctx.host.plugins
           const dir = resolveAppSourceDir(input.dir, context, { getConversation, hubCwd })
@@ -330,6 +321,7 @@ export function createAppsPlugin(deps: { hubCwd?: string } = {}): PluginDefiniti
       >({
         id: 'publish',
         description: 'Publish (or upgrade) a workspace full-stack app: validate first, then managed-install or hot-update and enable, registering catalog metadata',
+        exposeToPrompt: false,
         inputSchema: {
           type: 'object',
           properties: {
@@ -359,7 +351,6 @@ export function createAppsPlugin(deps: { hubCwd?: string } = {}): PluginDefiniti
           command: ['apps', 'publish'],
           positional: [{ field: 'dir', required: true }],
         },
-        exposeAsTool: true,
         async handler(input, context) {
           const port = ctx.host.plugins
           const resolvedDir = resolveAppSourceDir(input.dir, context, { getConversation, hubCwd })
@@ -478,6 +469,7 @@ export function createAppsPlugin(deps: { hubCwd?: string } = {}): PluginDefiniti
       >({
         id: 'list',
         description: 'Aggregate all current full-stack apps (host plugin/UI list left-joined with catalog metadata; orphan catalog entries ignored automatically)',
+        exposeToPrompt: false,
         inputSchema: { type: 'object', properties: {}, additionalProperties: false },
         outputSchema: {
           type: 'object',
@@ -506,7 +498,6 @@ export function createAppsPlugin(deps: { hubCwd?: string } = {}): PluginDefiniti
         },
         cli: { command: ['apps', 'list'] },
         idempotent: true,
-        exposeAsTool: true,
         async handler() {
           const port = ctx.host.plugins
           const summaries = port.list()
@@ -559,6 +550,7 @@ export function createAppsPlugin(deps: { hubCwd?: string } = {}): PluginDefiniti
       >({
         id: 'update_meta',
         description: 'Update an app catalog metadata (pinned/category/icon/source dir/origin conversation); does not touch the plugin itself',
+        exposeToPrompt: false,
         inputSchema: {
           type: 'object',
           properties: {
@@ -619,6 +611,7 @@ export function createAppsPlugin(deps: { hubCwd?: string } = {}): PluginDefiniti
       ctx.action<{ pluginId: string }, { pluginId: string; installPath: string; wasEnabled: boolean }>({
         id: 'remove',
         description: 'Uninstall a managed-installed full-stack app and clean the catalog registration (the local source directory is unaffected)',
+        exposeToPrompt: false,
         inputSchema: {
           type: 'object',
           properties: { pluginId: { type: 'string', minLength: 1 } },
@@ -681,12 +674,7 @@ export function createAppsPlugin(deps: { hubCwd?: string } = {}): PluginDefiniti
       ctx.service({
         id: 'app-builder-skill',
         async start() {
-          const assets = readSkillAssets()
-          await ctx.host.skills.ensureSkill({
-            id: APP_BUILDER_SKILL_ID,
-            skillMd: assets.skillMd,
-            references: assets.references,
-          })
+          await ctx.host.skills.ensureSkill(readSkillAssets())
         },
         async stop() {},
       })

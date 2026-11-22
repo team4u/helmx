@@ -508,8 +508,12 @@ test('magpie8: 动作契约——status / refresh / quota（不含路由追踪�
     await env.host.enable(MAGPIE)
     await waitFor(() => statusDoc(env).reachable === true)
 
-    const actionIds = env.host.listActions().filter((a) => a.pluginId === MAGPIE).map((a) => a.id).sort()
+    const magpieActions = env.host.listActions().filter((a) => a.pluginId === MAGPIE)
+    const actionIds = magpieActions.map((a) => a.id).sort()
     assert.deepEqual(actionIds, ['quota', 'refresh', 'status'], '只暴露 status / refresh / quota 三个动作')
+    for (const action of magpieActions) {
+      assert.equal(action.exposeToPrompt, false, `magpie.${action.id} 不常驻模型 <available_actions>`)
+    }
     assert.equal(env.fetchState.calls.some((c) => c.includes('/v1/magpie/trace')), false, '启动与刷新绝不请求 /v1/magpie/trace')
 
     const status = (await env.host.invokeAction(MAGPIE, 'status', {})) as StatusView
@@ -562,19 +566,27 @@ test('magpie9: 显式配置网关失败——refresh 动作显式抛错（不静
   }
 })
 
-test('magpie10: provider.refreshModels 网络失败一律 throw；cache-only 永不失败', { timeout: 60_000 }, async () => {
+test('magpie10: 未配置默认 loopback 不可达静默空闲（无 errors[magpie] 噪音），显式 refresh 仍诚实 502；cache-only 永不失败', { timeout: 60_000 }, async () => {
   const env = await makeEnv({ backendAtDefault: { failModels: 'connect ECONNREFUSED 127.0.0.1:3425' } })
   try {
     await env.host.enable(MAGPIE)
-    await waitFor(() => statusDoc(env).reachable === false && statusDoc(env).lastError !== undefined)
+    await waitFor(() => env.fetchState.calls.some((url) => url.endsWith('/v1/models')))
+    // 等待启动后台刷新结算
+    await new Promise((resolve) => setTimeout(resolve, 20))
 
+    // 全局 models.refresh 在未显式配置且默认 loopback 拒绝连接时不产生 errors['magpie'] 噪音
     const result = await env.models.refresh({ providers: ['magpie'], allowNetwork: true, force: true })
-    assert.equal(result.errors.size, 1, '默认 loopback 未运行也必须显式报错，绝不静默 errors:{}')
-    const err = result.errors.get('magpie')!
-    assert.match(err.message, /ECONNREFUSED|models/)
+    assert.equal(result.errors.size, 0, '未配置默认 loopback 未运行时不污染全局 models.refresh errors')
+    assert.equal(statusDoc(env).reachable, false)
+    assert.equal(statusDoc(env).lastError, undefined, '未配置空闲态不记录错误噪音')
+    assert.equal(statusDoc(env).summaryText, 'Magpie · not connected')
 
-    // 网络失败经 onCatalogChange 通知插件：doc lastError 同步刷新
-    await waitFor(() => (statusDoc(env).lastError ?? '').includes('ECONNREFUSED'))
+    // 显式运行 helmx magpie refresh（调用 refresh 动作）必须诚实抛 502 magpie_gateway_unreachable
+    await assert.rejects(
+      () => env.host.invokeAction(MAGPIE, 'refresh', {}),
+      (err: unknown) => err instanceof HelmxError && err.code === 'magpie_gateway_unreachable' && err.status === 502,
+    )
+    assert.match(statusDoc(env).lastError ?? '', /ECONNREFUSED/, '显式 refresh 失败后记录真实诊断')
 
     // cache-only 刷新（allowNetwork:false）永不失败：无缓存时空目录，且不触发网络成功伪装
     const cacheOnly = await env.models.refresh({ providers: ['magpie'], allowNetwork: false })

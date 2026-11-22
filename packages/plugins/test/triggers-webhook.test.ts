@@ -150,11 +150,14 @@ class FakeBackend implements PluginHostBackend {
   isClosing(): boolean {
     return this.closing
   }
+  ensuredSkills: Array<{ id: string; skillMd: string; references: Record<string, string> }> = []
   skills = {
     list: async () => [],
     readFile: async () => { throw new HelmxError('unsupported', '本 fixture 无技能', 501) },
     directory: async (id: string) => `/tmp/triggers-fixture-skills/${id}`,
-    ensureSkill: async () => { throw new HelmxError('unsupported', '本 fixture 无技能', 501) },
+    ensureSkill: async (asset: { id: string; skillMd: string; references: Record<string, string> }) => {
+      this.ensuredSkills.push(asset)
+    },
   }
   setPluginConfig(): Promise<void> { return Promise.resolve() }
   async getConversationDetail(): Promise<never> { throw new HelmxError('unsupported', '本 fixture 无详情', 501) }
@@ -387,10 +390,21 @@ test('webhook_create 校验：id/secret 形状、两目标互斥、重复 409、
     'validation_error',
     400,
   )
-  // 会话上下文（run_action 路径）：拒绝（secret 已入模型历史的边界纪律）
+  // 会话上下文（run_action 路径）：scope:{conversationIds:[]} 在进入 handler 前直接 403 拒绝（且 exposeToPrompt:false 隐藏出目录）
+  const webhookActions = h.host.listActions().filter((a) => a.pluginId === TRIGGERS_PLUGIN_ID && a.id.startsWith('webhook_'))
+  for (const action of webhookActions) {
+    assert.equal(action.exposeToPrompt, false, `${action.id} 经 Skill-First 不常驻 <available_actions>`)
+  }
+  const createManifest = webhookActions.find((a) => a.id === 'webhook_create')!
+  assert.deepEqual(createManifest.scope, { conversationIds: [] }, 'webhook_create scope 排除全部会话上下文')
+  assert.equal(createManifest.promptGuidelines, undefined, 'webhook_create 不再常驻 promptGuidelines')
+  assert.ok(
+    h.backend.ensuredSkills.some((s) => s.id === 'triggers' && s.skillMd.includes('managedByPlugin: builtin:triggers')),
+    'builtin:triggers 启动时应自举受管 triggers 技能',
+  )
   await rejectsCode(
     h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_create', { id: 'ok', secret: 'x'.repeat(32) }, { conversationId: 1 }),
-    'webhook_secret_context_forbidden',
+    'conversation_scope_violation',
     403,
   )
   // schema 层拒绝（inputSchema additionalProperties:false）

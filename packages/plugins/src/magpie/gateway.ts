@@ -54,6 +54,33 @@ export function isLoopback(root: string): boolean {
   return host === 'localhost' || host === '::1' || host === '0.0.0.0' || /^127\./.test(host)
 }
 
+const LOOPBACK_CONNECTION_ERROR_CODES = new Set(['ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH'])
+
+/**
+ * Detect whether a fetch failure indicates an absent local loopback gateway (connection refusal /
+ * unreachable socket), as opposed to HTTP status responses (4xx/5xx), malformed payloads, timeouts,
+ * aborts, or explicit gateway faults.
+ */
+export function isLoopbackConnectionError(error: unknown): boolean {
+  if (error === null || error === undefined) return false
+  const seen = new Set<unknown>()
+  const queue: unknown[] = [error]
+  while (queue.length > 0) {
+    const current = queue.shift()
+    if (current === null || current === undefined || typeof current !== 'object' || seen.has(current)) continue
+    seen.add(current)
+    const rec = current as { code?: unknown; cause?: unknown; errors?: unknown }
+    if (typeof rec.code === 'string' && LOOPBACK_CONNECTION_ERROR_CODES.has(rec.code)) return true
+    if (rec.cause !== undefined) queue.push(rec.cause)
+    if (Array.isArray(rec.errors)) queue.push(...rec.errors)
+  }
+  if (error instanceof TypeError) {
+    if (/fetch failed/i.test(error.message) || /ECONNREFUSED|unreachable/i.test(error.message)) return true
+  }
+  if (error instanceof Error && /\bECONNREFUSED\b/.test(error.message)) return true
+  return false
+}
+
 /**
  * 读取当前生效网关快照：
  * 1. 插件配置 gatewayUrl / apiKey（用户显式配置）；

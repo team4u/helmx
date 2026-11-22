@@ -8,37 +8,22 @@
  *   进入/离开可用技能目录（停用后模型目录与聊天 ```ui 围栏渲染同时消失，
  *   不留幻影提示词）。
  */
-import { existsSync, readFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
-import { HelmxError, type PluginDefinition } from '@helmx/protocol'
-import { resolvePluginClientAssets } from './asset-paths.js'
+import type { PluginDefinition } from '@helmx/protocol'
+import { loadManagedSkillAsset, resolvePluginClientAssets } from './asset-paths.js'
 
 const JSON_RENDER_PLUGIN_ID = 'builtin:json-render'
 
 /** 本插件自举的受管技能 ID。 */
 const GENERATIVE_UI_SKILL_ID = 'generative-ui'
 
-function resolveSkillDir(): string {
-  const here = dirname(fileURLToPath(import.meta.url))
-  const local = join(here, 'json-render', 'skill')
-  if (existsSync(local)) return local
-  const pkgRoot = dirname(here)
-  const srcFallback = join(pkgRoot, 'src', 'json-render', 'skill')
-  if (existsSync(srcFallback)) return srcFallback
-  throw new HelmxError('json_render_skill_missing', `内置插件 ${JSON_RENDER_PLUGIN_ID} 找不到技能资产目录`, 500)
-}
-
-/** 读取技能资产并渲染模板占位符（与 profile/assets 同机制，保持严格失败）。 */
-function readSkillAssets(): { skillMd: string; references: Record<string, string> } {
-  const dir = resolveSkillDir()
-  const read = (rel: string): string => readFileSync(join(dir, rel), 'utf-8')
-  const primitives = read('references/primitives.md')
-  const actions = read('references/actions.md')
-  return {
-    skillMd: read('SKILL.md'),
-    references: { 'primitives.md': primitives, 'actions.md': actions },
-  }
+function readSkillAssets() {
+  return loadManagedSkillAsset({
+    pluginId: JSON_RENDER_PLUGIN_ID,
+    skillId: GENERATIVE_UI_SKILL_ID,
+    relativeDir: 'json-render/skill',
+    missingErrorCode: 'json_render_skill_missing',
+    references: ['primitives.md', 'actions.md'],
+  })
 }
 
 export function createJsonRenderPlugin(): PluginDefinition {
@@ -62,12 +47,7 @@ export function createJsonRenderPlugin(): PluginDefinition {
       ctx.service({
         id: 'generative-ui-skill',
         async start() {
-          const assets = readSkillAssets()
-          await ctx.host.skills.ensureSkill({
-            id: GENERATIVE_UI_SKILL_ID,
-            skillMd: assets.skillMd,
-            references: assets.references,
-          })
+          await ctx.host.skills.ensureSkill(readSkillAssets())
         },
         async stop() {},
       })

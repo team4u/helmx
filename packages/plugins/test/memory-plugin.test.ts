@@ -597,6 +597,7 @@ test('memory 动作清单：get/set/configure/dream/dream_status/dream_configure
       } else {
         assert.equal(m.cli, undefined, '其余 memory 动作未覆写 cli（默认路径 memory <action>）')
       }
+      assert.equal(m.exposeToPrompt, false, `memory.${m.id} 不常驻模型 <available_actions>`)
       assert.ok(m.inputSchema.type === 'object')
       assert.ok(m.outputSchema.type === 'object')
       assert.ok(!(m.inputSchema as { required?: string[] }).required?.includes('profileId'), 'profileId 是可选的目标 selector')

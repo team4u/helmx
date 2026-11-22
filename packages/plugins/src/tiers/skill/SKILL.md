@@ -22,7 +22,7 @@ Model tiers decouple **cognitive roles** (`tier/<id>`) from **concrete model IDs
 ## Discovering Active Tiers
 
 - When auto-injection is enabled, active usable tiers appear directly in `<available_model_tiers>` with their `tier/<id>`, preset effort, and routing guidance.
-- Otherwise (or to inspect saved templates and disabled/unavailable entries), query the live roster via action `builtin:tiers.list` (CLI: `helmx tiers list --json`).
+- Otherwise (or to inspect saved templates and disabled/unavailable entries), query the live roster via `run_action({ actionId: "builtin:tiers.list", input: {} })` (CLI: `helmx tiers list --json`).
 - Always match tasks against the **actually configured tiers** rather than assuming fixed tier names exist.
 
 ## Multi-Tier Orchestration Patterns

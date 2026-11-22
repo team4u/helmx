@@ -6,14 +6,103 @@
  * 「与入口同目录优先、回退 <pkg>/src/」定位，两种形态都能找到资产。本模块与
  * 各插件入口文件同层（src/ 或 dist/），以自身位置推导与以调用方入口推导等价。
  */
-import { existsSync, lstatSync } from 'node:fs'
+import { existsSync, lstatSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { HelmxError, PREBUILT_CLIENT_DIR_NAME } from '@helmx/protocol'
+import { HelmxError, PREBUILT_CLIENT_DIR_NAME, type PluginSkillAsset } from '@helmx/protocol'
 
 export interface PluginClientAssets {
   clientRoot?: string
   prebuiltClientDir?: string
+}
+
+export interface ManagedSkillAssetSpec {
+  pluginId: string
+  skillId: string
+  /** Relative directory under `packages/plugins/src/` (e.g. `'workflow/skill'` or `'swarm/assets/swarm'`). */
+  relativeDir: string
+  missingErrorCode: string
+  /** Reference filenames under `<relativeDir>/references/<name>`. */
+  references?: readonly string[]
+  /** Optional content transform applied to `SKILL.md` and every reference file. */
+  transform?: (content: string) => string
+}
+
+/**
+ * Strict `{{KEY}}` template interpolation for built-in skill/profile markdown assets.
+ * Throws `HelmxError('unreplaced_skill_placeholder')` on undefined keys or leftover placeholders.
+ */
+export function renderSkillTemplate(
+  template: string,
+  vars: Readonly<Record<string, string>>,
+): string {
+  const rendered = template.replace(/\{\{\s*([A-Za-z0-9_]+)\s*\}\}/g, (_match, key: string) => {
+    const val = vars[key]
+    if (val === undefined) {
+      throw new HelmxError(
+        'unreplaced_skill_placeholder',
+        `技能模板存在未定义占位符: {{${key}}}`,
+        500,
+        { key },
+      )
+    }
+    return val
+  })
+
+  const remaining = rendered.match(/\{\{[^}]*\}\}/)
+  if (remaining !== null) {
+    throw new HelmxError(
+      'unreplaced_skill_placeholder',
+      `技能模板渲染后仍残留未替换占位符: ${remaining[0]}`,
+      500,
+      { placeholder: remaining[0] },
+    )
+  }
+
+  return rendered
+}
+
+/**
+ * Resolve a built-in plugin static asset directory across both tsx-source (`src/`) and built (`dist/`)
+ * layouts, failing explicitly with `missingErrorCode` if neither candidate exists.
+ */
+export function resolvePluginAssetDir(
+  pluginId: string,
+  relativeSubdir: string,
+  missingErrorCode: string,
+): string {
+  const here = dirname(fileURLToPath(import.meta.url))
+  const segments = relativeSubdir.split('/').filter((segment) => segment.length > 0)
+  const local = join(here, ...segments)
+  if (existsSync(local)) return local
+
+  const srcFallback = join(dirname(here), 'src', ...segments)
+  if (existsSync(srcFallback)) return srcFallback
+
+  throw new HelmxError(
+    missingErrorCode,
+    `Built-in plugin ${pluginId} cannot find asset directory '${relativeSubdir}' (tried: "${local}", "${srcFallback}")`,
+    500,
+    { pluginId, paths: [local, srcFallback] },
+  )
+}
+
+/**
+ * Load a built-in managed skill asset (`SKILL.md` + optional `references/*.md`) from disk.
+ */
+export function loadManagedSkillAsset(spec: ManagedSkillAssetSpec): PluginSkillAsset {
+  const dir = resolvePluginAssetDir(spec.pluginId, spec.relativeDir, spec.missingErrorCode)
+  const apply = (raw: string): string => (spec.transform !== undefined ? spec.transform(raw) : raw)
+  const skillMd = apply(readFileSync(join(dir, 'SKILL.md'), 'utf-8'))
+  const references: Record<string, string> = {}
+  for (const name of spec.references ?? []) {
+    references[name] = apply(readFileSync(join(dir, 'references', name), 'utf-8'))
+  }
+  return {
+    id: spec.skillId,
+    skillMd,
+    references,
+  }
 }
 
 function entryExistsOnDisk(targetPath: string): boolean {

@@ -165,6 +165,7 @@ export function createMemoryPlugin(options: { dream?: DreamEngineOptions } = {})
       ctx.action<{ profileId?: string }, { profileId: string; enabled: boolean; content: string; initialized: boolean }>({
         id: 'get',
         description: 'Read the Profile long-term memory content and switch state (pass --profile-id, or use --current for the current conversation)',
+        exposeToPrompt: false,
         inputSchema: {
           type: 'object',
           properties: { profileId: { type: 'string', minLength: 1 } },
@@ -204,6 +205,7 @@ export function createMemoryPlugin(options: { dream?: DreamEngineOptions } = {})
       ctx.action<{ profileId?: string; text: string; mode?: 'append' | 'replace' }, { profileId: string; updated: boolean; length: number }>({
         id: 'set',
         description: 'Write the Profile MEMORY.md in full or append (--profile-id or --current picks the target)',
+        exposeToPrompt: false,
         inputSchema: {
           type: 'object',
           properties: {
@@ -248,6 +250,7 @@ export function createMemoryPlugin(options: { dream?: DreamEngineOptions } = {})
       >({
         id: 'configure',
         description: 'Configure the Profile long-term memory switch (--profile-id or --current picks the target)',
+        exposeToPrompt: false,
         inputSchema: {
           type: 'object',
           properties: {
@@ -473,6 +476,7 @@ export function createMemoryPlugin(options: { dream?: DreamEngineOptions } = {})
         id: 'dream',
         description:
           'Run the memory Dream (consolidation) for one Profile now: merges collected candidates into MEMORY.md via a strict model JSON contract with CAS write-back; skips honestly with a reason when there are no candidates or no model conversation (pass --profile-id, or use --current for the current conversation)',
+        exposeToPrompt: false,
         // The model call has its own deadline (and abort); the CLI must not add a 30s cap.
         cli: { timeoutMs: 0 },
         inputSchema: {
@@ -523,6 +527,7 @@ export function createMemoryPlugin(options: { dream?: DreamEngineOptions } = {})
         id: 'dream_status',
         description:
           'Dream status: schedule config, next run, in-flight profiles, and per-Profile candidate count / memory length / last run (optionally focused with --profile-id or --current; without a target the global view is returned)',
+        exposeToPrompt: false,
         inputSchema: {
           type: 'object',
           properties: { profileId: { type: 'string', minLength: 1 } },
@@ -585,6 +590,7 @@ export function createMemoryPlugin(options: { dream?: DreamEngineOptions } = {})
         id: 'dream_configure',
         description:
           'Configure the daily Dream schedule (global): --enabled <bool> pauses/resumes auto consolidation; --hour <0-23> and --timezone <IANA> set the daily low-peak point; at least one field required',
+        exposeToPrompt: false,
         inputSchema: {
           type: 'object',
           properties: {

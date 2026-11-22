@@ -235,22 +235,6 @@ export interface WorkflowRunBadgesDocState {
 }
 
 // ---------------------------------------------------------------------------
-// 受管 worktree 清理契约（迁自 @helmx/protocol worktree.ts）
-// ---------------------------------------------------------------------------
-
-/** 受管工作树清理：路径必须与节点一起定位，或使用宿主分配的稳定 ID。 */
-export interface WorktreeCleanupRequest {
-  worktreeId?: string
-  conversationId?: number
-  path?: string
-  nodeId?: string
-  /** 指定已合入的目标分支或提交（缺省优先用记录里的 baseBranch，再回退到主工作树 HEAD）。 */
-  mergedInto?: string
-  deleteBranch?: boolean
-  force?: boolean
-}
-
-// ---------------------------------------------------------------------------
 // 外部执行 steer 委托契约（迁自 @helmx/protocol plugin.ts）
 // ---------------------------------------------------------------------------
 

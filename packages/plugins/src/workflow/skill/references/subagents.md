@@ -22,8 +22,10 @@ An `agentType` such as `herdr:agy` is routed through the owning external plugin 
 
 Use the workflow steer action or `helmx workflows steer <runId> --text <guidance>` only for a running background subagent that belongs to the current task tree. The operation is guarded by ownership and the current execution watermark. A successful delivery means the guidance was sent, not that it has already been executed.
 
-## Worktree cleanup
+## Worktree inspection & cleanup
 
-After inspecting or merging a child worktree, call the model tool `cleanup_worktree({ worktreeId: execution.worktree.id })` with the real execution metadata. This is a conversation tool (registered by the `builtin:worktree` plugin), not a DSL function.
+List or inspect registered managed worktrees read-only via `run_action({ actionId: "builtin:worktree.list_worktrees", input: {} })` and `run_action({ actionId: "builtin:worktree.inspect_worktree", input: { worktreeId } })` (CLI: `helmx worktrees list --json`, `helmx worktrees inspect <worktreeId> --json`).
+
+After inspecting or merging a child worktree, call the model tool `cleanup_worktree({ worktreeId: execution.worktree.id })` with the real execution metadata. This is a conversation tool (registered by `builtin:worktree`, active whenever managed worktrees exist), not a DSL function.
 
 The equivalent CLI is `helmx worktrees cleanup --worktree-id <id> --json`. Cleanup refuses dirty, unmerged, occupied, locked, or uncertain worktrees by default. `force` only addresses the dirty/unmerged protection and never bypasses the other safety checks.
