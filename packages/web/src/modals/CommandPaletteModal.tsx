@@ -14,7 +14,6 @@ import { useWebLocale } from '../i18n/use-web-locale.js'
 import { searchApi } from '../lib/api.js'
 import {
   commandActionPluginId,
-  commandHint,
   commandsForConversation,
   type QualifiedCommand,
 } from '../lib/commands-model.js'
@@ -32,19 +31,21 @@ import {
   useThemePreferencesState,
   useWorkbenchState,
 } from '../lib/store-context.js'
-import { resolveBrowserLocale } from '../lib/theme-preferences.js'
 import type { LocalePreference } from '../lib/types.js'
 import {
   activeTargetForPanel,
-  formatModShortcut,
   isApplePlatform,
   resolveFocusedPanel,
-  selectRecentConversationsForPalette,
-  type HelmxShortcutDetail,
 } from '../shell/shortcuts-model.js'
 import { collectEnabledPluginIds, isHumanSelectableProfile } from '../shell/sidebar-model.js'
 import { ConversationStatusDot } from '../shell/SidebarPrimitives.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
+import {
+  buildPaletteContextCommands,
+  buildPaletteNavigationCommands,
+  buildPaletteRecentRows,
+  buildPaletteUtilityCommands,
+} from './command-palette-catalog.js'
 import {
   buildPaletteRows,
   resolvePaletteEscapeAction,
@@ -53,7 +54,6 @@ import {
   resolveSnippetHighlightSegments,
   resolveTitleHighlightSegments,
   type HighlightSegment,
-  type PaletteCommandRow,
   type PaletteGroupKey,
   type PaletteRow,
   type PaletteSearchHit,
@@ -138,8 +138,6 @@ export function CommandPaletteModal({
     inputEl?.focus()
   }, [inputEl])
 
-  // Attach native composition listeners directly to the inner <input> once the
-  // Radix DialogPortal mounts it, catching both bubbling and non-bubbling events.
   useEffect(() => {
     if (!inputEl) return
     const onCompositionStart = () => {
@@ -158,7 +156,6 @@ export function CommandPaletteModal({
     }
   }, [inputEl])
 
-  // Track visualViewport height so soft keyboard opening on mobile shrinks the palette cleanly.
   useEffect(() => {
     if (!modalEl) return
     const vv = typeof window !== 'undefined' ? window.visualViewport : null
@@ -276,204 +273,37 @@ export function CommandPaletteModal({
     return conversations.find((c) => c.id === activeTarget.conversationId)
   }, [activeTarget, conversations])
 
-  const contextCommands = useMemo<PaletteCommandRow[]>(() => {
-    const list: PaletteCommandRow[] = []
-    if (activeTarget.kind === 'conversation' || activeTarget.kind === 'agent') {
-      list.push({
-        kind: 'command',
-        id: 'builtin:toggle-model-picker',
-        group: 'context',
-        title: t('modals.palette.cmd.toggleModelPicker'),
-        shortcut: 'Ctrl+L',
-        icon: 'sparkles',
-        keywords: ['model', 'picker', 'Model', 'Switch model', '模型', '切换模型'],
-        run: () => {
-          const detail: HelmxShortcutDetail = { action: 'toggle-model-picker', panel: activePanel }
-          window.dispatchEvent(new CustomEvent<HelmxShortcutDetail>('helmx:shortcut', { detail }))
-        },
-      })
-    }
-    if (activeTarget.kind === 'conversation') {
-      list.push({
-        kind: 'command',
-        id: 'builtin:toggle-process-groups',
-        group: 'context',
-        title: t('modals.palette.cmd.toggleProcessGroups'),
-        shortcut: 'Ctrl+O',
-        icon: 'list-tree',
-        keywords: ['process', 'thinking', 'tools', 'Process', 'Thinking', 'Collapse', '过程', '思考', '工具', '收起'],
-        run: () => {
-          const detail: HelmxShortcutDetail = { action: 'toggle-process-groups', panel: activePanel }
-          window.dispatchEvent(new CustomEvent<HelmxShortcutDetail>('helmx:shortcut', { detail }))
-        },
-      })
-    }
-    if (activeTarget.kind === 'conversation' || workbenchOpen) {
-      list.push({
-        kind: 'command',
-        id: 'builtin:toggle-workbench',
-        group: 'context',
-        title: workbenchOpen ? t('modals.palette.cmd.closeWorkbench') : t('modals.palette.cmd.openWorkbench'),
-        shortcut: formatModShortcut('J'),
-        icon: 'panel-right',
-        keywords: ['workbench', 'drawer', 'Workbench', 'Artifacts', '工作台', '产物'],
-        run: () => actions.setWorkbenchOpen(!workbenchOpen),
-      })
-    }
-    list.push({
-      kind: 'command',
-      id: 'builtin:new-conversation',
-      group: 'context',
-      title: t('modals.palette.cmd.newConversation'),
-      hint: paletteProfileId !== undefined ? paletteProfileId : t('modals.palette.cmd.selectProfileFirst'),
-      icon: 'plus',
-      keywords: ['new', 'conversation', 'topic', '新建', '会话', '话题'],
-      target: paletteProfileId !== undefined ? { kind: 'agent', profileId: paletteProfileId } : { kind: 'profiles' },
-    })
-    if (splitTarget) {
-      list.push({
-        kind: 'command',
-        id: 'builtin:close-split',
-        group: 'context',
-        title: t('modals.palette.cmd.closeSplit'),
-        icon: 'panel-right',
-        keywords: ['split', 'close', '分屏', '关闭'],
-        run: () => actions.closeSplit(),
-      })
-    }
-    return list
-  }, [activePanel, activeTarget.kind, actions, paletteProfileId, splitTarget, t, workbenchOpen])
-
-  const recentConversationRows = useMemo<PaletteSearchHitRow[]>(
+  const contextCommands = useMemo(
     () =>
-      selectRecentConversationsForPalette(conversations, paletteConversation?.id, 5, background).map((conv) => ({
-        kind: 'search-hit',
-        id: `recent-conv:${conv.id}`,
-        group: 'recent',
-        conv,
-        isLocalConversation: true,
-        hit: {
-          conversationId: conv.id,
-          title: conv.title,
-          entryId: '',
-          snippet: t('modals.palette.recentSnippet', { id: conv.id, profileId: conv.profileId }),
-        },
-      })),
+      buildPaletteContextCommands({
+        activeTarget,
+        activePanel,
+        workbenchOpen,
+        paletteProfileId,
+        splitTarget,
+        setWorkbenchOpen: actions.setWorkbenchOpen,
+        closeSplit: actions.closeSplit,
+        t,
+      }),
+    [activePanel, activeTarget, actions.closeSplit, actions.setWorkbenchOpen, paletteProfileId, splitTarget, t, workbenchOpen],
+  )
+
+  const recentConversationRows = useMemo(
+    () => buildPaletteRecentRows(conversations, paletteConversation?.id, background, t),
     [conversations, paletteConversation?.id, background, t],
   )
 
-  const profileNavigationRows = useMemo<PaletteCommandRow[]>(
+  const navigationCommands = useMemo(
     () =>
-      profiles
-        .filter((profile) => isHumanSelectableProfile(profile, enabledPluginIds))
-        .map((profile) => {
-          const displayName = profile.name?.trim() || profile.id
-          return {
-            kind: 'command',
-            id: `profile:${profile.id}`,
-            group: 'navigation',
-            title: t('modals.palette.cmd.openAgent', { name: displayName }),
-            ...(displayName !== profile.id ? { hint: profile.id } : {}),
-            icon: 'bot',
-            keywords: [
-              'agent',
-              'profile',
-              'new',
-              'standby',
-              '智能体',
-              '角色',
-              '待命',
-              profile.id,
-              ...(profile.name ? [profile.name] : []),
-              ...(profile.tags ?? []),
-            ],
-            target: { kind: 'agent', profileId: profile.id },
-          }
-        }),
-    [profiles, enabledPluginIds, t],
-  )
-
-  const viewRows = useMemo<PaletteCommandRow[]>(
-    () =>
-      groupedUi.screens.map((screen) => {
-        const plugin = plugins?.find((p) => p.id === screen.pluginId)
-        const pluginName =
-          plugin !== undefined ? resolveLocalizedText(plugin.name, locale) || screen.pluginId : screen.pluginId
-        const label = resolveLocalizedText(screen.spec.label, locale) || `${screen.pluginId}/${screen.spec.id}`
-        return {
-          kind: 'command',
-          id: `view:${screen.pluginId}/${screen.spec.id}`,
-          group: 'navigation',
-          title: label,
-          hint: pluginName,
-          icon: screen.spec.icon ?? 'panel-right',
-          keywords: [label, screen.pluginId, screen.spec.id, pluginName, 'view', 'screen', '视图'],
-          target: { kind: 'screen', pluginId: screen.pluginId, screenId: screen.spec.id },
-        }
+      buildPaletteNavigationCommands({
+        profiles,
+        enabledPluginIds,
+        screens: groupedUi.screens,
+        plugins,
+        locale,
+        t,
       }),
-    [groupedUi.screens, plugins, locale],
-  )
-
-  const navigationCommands = useMemo<PaletteCommandRow[]>(
-    () => [
-      {
-        kind: 'command',
-        id: 'builtin:open-overview',
-        group: 'navigation',
-        title: t('modals.palette.cmd.openOverview'),
-        icon: 'activity',
-        keywords: ['overview', 'dashboard', 'lobby', 'status', '总览', '会话总览', '大堂', '态势'],
-        target: { kind: 'overview' },
-      },
-      ...profileNavigationRows,
-      ...viewRows,
-      {
-        kind: 'command',
-        id: 'builtin:open-profile-editor',
-        group: 'navigation',
-        title: t('modals.palette.cmd.openProfiles'),
-        icon: 'bot',
-        keywords: ['profile', 'profiles', 'Profile', 'Agents', '角色', '智能体'],
-        target: { kind: 'profiles' },
-      },
-      {
-        kind: 'command',
-        id: 'builtin:open-provider-auth',
-        group: 'navigation',
-        title: t('modals.palette.cmd.openModels'),
-        icon: 'key',
-        keywords: ['model', 'models', 'provider', 'providers', 'key', 'Model', 'Credentials', '模型', '凭证', '供应商'],
-        target: { kind: 'models' },
-      },
-      {
-        kind: 'command',
-        id: 'builtin:open-skill-viewer',
-        group: 'navigation',
-        title: t('modals.palette.cmd.openSkills'),
-        icon: 'sparkles',
-        keywords: ['skill', 'skills', 'Skills', '技能'],
-        target: { kind: 'skills' },
-      },
-      {
-        kind: 'command',
-        id: 'builtin:open-nodes',
-        group: 'navigation',
-        title: t('modals.palette.cmd.openNodes'),
-        icon: 'network',
-        keywords: ['node', 'nodes', 'byom', 'helmx-node', 'Nodes', '节点', '计算节点'],
-        target: { kind: 'nodes' },
-      },
-      {
-        kind: 'command',
-        id: 'builtin:open-plugin-center',
-        group: 'navigation',
-        title: t('modals.palette.cmd.openPlugins'),
-        icon: 'boxes',
-        keywords: ['plugin', 'plugins', 'settings', 'Plugins', 'Settings', 'Plugin Center', '插件', '设置', '插件中心'],
-        target: { kind: 'plugins' },
-      },
-    ],
-    [profileNavigationRows, viewRows, t],
+    [profiles, enabledPluginIds, groupedUi.screens, plugins, locale, t],
   )
 
   const invokePluginCommand = useCallback(
@@ -507,112 +337,41 @@ export function CommandPaletteModal({
     [groupedUi.commands, paletteConversation],
   )
 
-  const pluginCommands = useMemo<PaletteCommandRow[]>(
-    () =>
-      scopedPluginCommands.map((cmd) => ({
-        kind: 'command',
-        id: `plugin:${cmd.pluginId}/${cmd.spec.id}`,
-        group: 'commands',
-        title: resolveLocalizedText(cmd.spec.title, locale),
-        hint: commandHint(cmd.spec, cmd.pluginId, locale),
-        icon: cmd.spec.icon ?? 'zap',
-        keywords: [
-          ...(cmd.spec.keywords ?? []),
-          ...(cmd.spec.slash !== undefined ? [cmd.spec.slash, `/${cmd.spec.slash}`] : []),
-        ],
-        run: () => {
-          if (cmd.spec.client !== undefined) {
-            setPreviewCmd({ pluginId: cmd.pluginId, spec: cmd.spec })
-            return
-          }
-          invokePluginCommand(cmd)
-        },
-      })),
-    [scopedPluginCommands, locale, invokePluginCommand],
-  )
-
   const localePref: LocalePreference = storeLocalePref ?? 'auto'
 
-  const utilityCommands = useMemo<PaletteCommandRow[]>(
-    () => [
-      ...pluginCommands,
-      {
-        kind: 'command',
-        id: 'builtin:toggle-sidebar',
-        group: 'commands',
-        title: sidebarCollapsed ? t('modals.palette.cmd.expandSidebar') : t('modals.palette.cmd.collapseSidebar'),
-        shortcut: formatModShortcut('B'),
-        icon: 'columns',
-        keywords: ['sidebar', 'collapse', 'Sidebar', 'Collapse', 'Navigation', '侧栏', '导航', '收起', '展开'],
-        run: () => actions.toggleSidebarCollapsed?.(),
-      },
-      {
-        kind: 'command',
-        id: 'builtin:toggle-theme',
-        group: 'commands',
-        title:
-          themePreference === 'system'
-            ? t('modals.palette.cmd.themeToLight')
-            : themePreference === 'light'
-              ? t('modals.palette.cmd.themeToDark')
-              : t('modals.palette.cmd.themeToSystem'),
-        icon: themePreference === 'system' ? 'monitor' : themePreference === 'light' ? 'sun' : 'moon',
-        keywords: ['theme', 'light', 'dark', 'system', '主题', '浅色', '暗色', '系统'],
-        run: () => actions.toggleTheme(),
-      },
-      {
-        kind: 'command',
-        id: 'builtin:cycle-locale',
-        group: 'commands',
-        title:
-          localePref === 'auto'
-            ? t('modals.palette.cmd.localeToEnglish')
-            : localePref === 'en'
-              ? t('modals.palette.cmd.localeToZhCn')
-              : t('modals.palette.cmd.localeToAuto'),
-        hint: localePref === 'auto' ? t('shell.locale.auto') : localePref === 'en' ? 'English' : '简体中文',
-        icon: 'globe',
-        keywords: ['language', 'locale', 'i18n', 'auto', 'english', 'chinese', '语言', '中文', '英文', '自动'],
-        run: () => {
-          const nextPref: LocalePreference =
-            localePref === 'auto' ? 'en' : localePref === 'en' ? 'zh-CN' : 'auto'
-          if (actions.setLocalePreference) {
-            actions.setLocalePreference(nextPref)
-          } else {
-            actions.setLocale(nextPref === 'auto' ? resolveBrowserLocale() : nextPref)
-          }
-        },
-      },
-      {
-        kind: 'command',
-        id: 'builtin:toggle-quiet-notify',
-        group: 'commands',
-        title: quietNotifyEnabled
-          ? t('modals.palette.cmd.quietNotifyDisable')
-          : t('modals.palette.cmd.quietNotifyEnable'),
-        icon: quietNotifyEnabled ? 'bell' : 'bell-off',
-        keywords: [
-          'notify',
-          'notification',
-          'background',
-          'quiet',
-          'blocked',
-          'Notifications',
-          'Alerts',
-          'Background',
-          'Completed',
-          'Approvals',
-          '通知',
-          '后台',
-          '提醒',
-          '审批',
-        ],
-        run: () => {
-          void actions.setQuietNotify(!quietNotifyEnabled)
-        },
-      },
+  const utilityCommands = useMemo(
+    () =>
+      buildPaletteUtilityCommands({
+        scopedPluginCommands,
+        locale,
+        sidebarCollapsed,
+        themePreference,
+        localePref,
+        quietNotifyEnabled,
+        onPreviewCommand: setPreviewCmd,
+        onInvokePluginCommand: invokePluginCommand,
+        toggleSidebarCollapsed: actions.toggleSidebarCollapsed,
+        toggleTheme: actions.toggleTheme,
+        setLocalePreference: actions.setLocalePreference,
+        setLocale: actions.setLocale,
+        setQuietNotify: actions.setQuietNotify,
+        t,
+      }),
+    [
+      scopedPluginCommands,
+      locale,
+      sidebarCollapsed,
+      themePreference,
+      localePref,
+      quietNotifyEnabled,
+      invokePluginCommand,
+      actions.toggleSidebarCollapsed,
+      actions.toggleTheme,
+      actions.setLocalePreference,
+      actions.setLocale,
+      actions.setQuietNotify,
+      t,
     ],
-    [pluginCommands, sidebarCollapsed, themePreference, localePref, quietNotifyEnabled, actions, t],
   )
 
   const makeConversationRow = useCallback(
@@ -664,7 +423,6 @@ export function CommandPaletteModal({
     return map
   }, [rows])
 
-  // Sync ARIA combobox attributes onto the SearchBox inner <input>.
   useEffect(() => {
     if (!inputEl) return
     inputEl.setAttribute('role', 'combobox')
@@ -710,7 +468,6 @@ export function CommandPaletteModal({
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (composingRef.current || e.nativeEvent.isComposing || e.keyCode === 229) return
-
     if (e.key === 'ArrowDown') {
       e.preventDefault()
       ignoreHoverRef.current = true
@@ -773,9 +530,7 @@ export function CommandPaletteModal({
       }
       return
     }
-    if (!ignoreHoverRef.current) {
-      setSelectedId(rowId)
-    }
+    if (!ignoreHoverRef.current) setSelectedId(rowId)
   }
 
   const trimmedQuery = query.trim()
@@ -987,7 +742,7 @@ export function CommandPaletteModal({
               )}
 
               {searchFailed && settledQuery === trimmedQuery && trimmedQuery !== '' && (
-                <div className="callout callout--warning palette-status-notice" role="status">
+                <div className="callout callout-warn palette-status-notice" role="status">
                   <HelmxIcon name="alert-triangle" size={13} />
                   <span>{t('modals.palette.searchUnavailable')}</span>
                 </div>

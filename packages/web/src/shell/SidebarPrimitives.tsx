@@ -4,7 +4,7 @@ import { asksApi } from '../lib/api.js'
 import { HelmxIcon, Tooltip } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import type { WebMessageTranslator } from '../i18n/catalog.js'
-import type { SidebarStoreView, SidebarTargetPresence } from './sidebar-model.js'
+import { sidebarPaneTagLabel, type SidebarStoreView, type SidebarTargetPresence } from './sidebar-model.js'
 import {
   backgroundAwareStatusTooltip,
   resolveStatusLight,
@@ -160,7 +160,7 @@ export function SidebarPaneTag({ paneTag }: { paneTag: SidebarTargetPresence['pa
   if (paneTag === null) return null
   return (
     <span className="nav-pane-tag" title={paneTagTitle(t, paneTag)}>
-      {paneTag}
+      {sidebarPaneTagLabel(paneTag, t)}
     </span>
   )
 }

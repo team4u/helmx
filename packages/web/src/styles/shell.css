@@ -697,3 +697,31 @@
 .overview-count-badge[data-tone='blocked'] { background: var(--warn); }
 .overview-count-badge[data-tone='running'] { background: var(--accent); }
 .overview-count-badge[data-tone='done'] { background: var(--ok); }
+
+/* Hub 更新卡片（总览页顶部；仅存在就绪更新时渲染） */
+.hub-update-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 16px 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-subtle);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.hub-update-card-text { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.hub-update-card-error, .hub-update-card-busy { color: var(--fg-muted); flex: 0 1 auto; overflow-wrap: anywhere; }
+.hub-update-card-action {
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font-size: 13px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+.hub-update-card-action:disabled { opacity: 0.55; cursor: default; }
+.hub-update-card-switching, .hub-update-card-switched { border-style: dashed; }

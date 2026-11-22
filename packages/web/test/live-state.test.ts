@@ -19,6 +19,14 @@ test('SSE 分段 CRLF、多 data 行与注释不能丢帧', { timeout: 60_000 },
   assert.deepEqual(messages, [{ event: 'snapshot', data: '{"seq":\n10}' }, { event: 'notification', data: '{"text":"中文"}' }])
 })
 
+test('会话列表排序仅遵循 pinned 与 updatedAt（不按固定 id=1 特判置顶）', { timeout: 60_000 }, () => {
+  const c1: ConversationSummary = { ...conv, id: 1, pinned: false, updatedAt: 100 }
+  const c2: ConversationSummary = { ...conv, id: 2, pinned: false, updatedAt: 300 }
+  const c3: ConversationSummary = { ...conv, id: 3, pinned: true, updatedAt: 50 }
+  const state = applySnapshot(emptyLiveState(), { ...snapshot, conversations: [c1, c2, c3] })
+  assert.deepEqual(state.conversations.map((item) => item.id), [3, 2, 1])
+})
+
 test('重连快照 SWR 保活存在会话的详情并清理已删会话与过时插件文档，重复帧忽略而缺帧要求重新同步', { timeout: 60_000 }, () => {
   const existingDetail: ConversationDetail = {
     ...conv,

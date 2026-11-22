@@ -184,7 +184,7 @@ function TruncatedOutputFooter({
   if (truncation === undefined) return null
   if (resultFetch.phase === 'failed') {
     return (
-      <div className="callout callout--error" role="alert">
+      <div className="callout callout-error" role="alert">
         <HelmxIcon name="alert-triangle" size={12} />
         <span className="callout-text">
           {t('conv.trunc.fetchFailed', { error: resultFetch.error ?? t('conv.trunc.unknownError') })}
@@ -356,7 +356,7 @@ function EditToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
     return (
       <>
         <div className="trace-section-label">{t('conv.edit.succeededNoDiff')}</div>
-        <div className="callout callout--error" role="alert">
+        <div className="callout callout-error" role="alert">
           <HelmxIcon name="alert-triangle" size={12} />
           <span className="callout-text">
             {t('conv.edit.invalidMeta', { reason: resultCheck === undefined ? t('conv.edit.missingStructured') : resultCheck.reason })}

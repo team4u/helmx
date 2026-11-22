@@ -2,6 +2,40 @@
  * 通用设计系统原语：按钮、徽章、行、卡片、表格、分屏与输入框
  * 本文件为宿主样式分片，全局级联顺序由 src/styles.css 的 @import 顺序决定。
  * ========================================================================== */
+/* 基础操作按钮 */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 27px;
+  padding: 0 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--fg);
+  font-size: 12.5px;
+  font-weight: 500;
+  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.04);
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease, opacity 100ms ease, filter 120ms ease;
+}
+.btn:hover:not(:disabled) {
+  border-color: var(--fg-muted);
+  background: var(--bg-subtle);
+  color: var(--fg);
+}
+.btn:active:not(:disabled) {
+  background: var(--bg-hover);
+}
+.btn:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+
 /* 次级/轮廓操作按钮 */
 .btn-secondary {
   height: 27px;
@@ -720,6 +754,21 @@
   max-width: 1480px;
 }
 
+/* 全出血全屏视图（<Screen layout="full-bleed">）：释放舞台宽限与滚动容器留白，供宽表、双栏或画布贴边铺开 */
+.screen-container[data-screen-layout="full-bleed"] {
+  max-width: none;
+  padding: 0;
+}
+
+.screen-host-stage:has([data-screen-layout="full-bleed"]) {
+  max-width: none;
+  width: 100%;
+}
+
+.timeline-scroll:has(> .screen-host-stage [data-screen-layout="full-bleed"]) {
+  padding: 0;
+}
+
 .screen-title {
   display: flex;
   align-items: center;
@@ -789,10 +838,9 @@
   gap: 8px;
 }
 
-.callout-flush,
-.callout--flush {
-  border-radius: 0 !important;
-  border-width: 0 !important;
+.callout.callout-flush {
+  border-radius: 0;
+  border-width: 0;
 }
 
 .callout span,
@@ -800,6 +848,7 @@
   word-break: break-all;
 }
 
+/* 规范类为 .callout-warn / .callout-error / .callout-ok；保留双横线选择器以兼容尚未切换的内置插件视图 */
 .callout-warn,
 .callout--warning {
   background: var(--warn-bg);
@@ -900,12 +949,7 @@
 
 .input,
 .select,
-.textarea,
-input[type="text"],
-input[type="password"],
-input[type="search"],
-input[type="email"],
-input[type="number"] {
+.textarea {
   width: 100%;
   padding: 0 9px;
   border-radius: 7px;
@@ -925,17 +969,6 @@ input[type="number"] {
   line-height: 25px;
 }
 
-.input,
-.select,
-input[type="text"],
-input[type="password"],
-input[type="search"],
-input[type="email"],
-input[type="number"] {
-  height: 27px;
-  line-height: 25px;
-}
-
 textarea.input,
 textarea.textarea,
 .textarea {
@@ -948,12 +981,7 @@ textarea.textarea,
 
 .input:focus,
 .select:focus,
-.textarea:focus,
-input[type="text"]:focus,
-input[type="password"]:focus,
-input[type="search"]:focus,
-input[type="email"]:focus,
-input[type="number"]:focus {
+.textarea:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
 }

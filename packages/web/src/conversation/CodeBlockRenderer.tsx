@@ -36,7 +36,7 @@ function CodeBlockError({ language, code, message, onRetry }: { language: string
         <span>{language}</span>
         <CopyButton text={code} />
       </div>
-      <div className="callout callout--error" role="alert">
+      <div className="callout callout-error" role="alert">
         <HelmxIcon name="alert-triangle" size={13} />
         <div>
           <strong>{t('conv.codeblock.renderFailed')}</strong>

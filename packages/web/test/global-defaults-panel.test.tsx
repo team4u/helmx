@@ -78,6 +78,13 @@ async function mountDefaultsPanel(savedMap: Record<string, string>): Promise<Pan
   const store = makeTestStore({
     primaryTarget: { kind: 'models', tab: 'defaults' },
     models: CATALOG_MODELS,
+    modelDefaults: {
+      defaultModel: '',
+      defaultThinkingLevel: '',
+      modelThinkingLevels: { ...savedMap },
+      defaultCompactionModel: '',
+      defaultCompactionThinkingLevel: '',
+    },
   })
   const levels: Record<string, string> = { ...savedMap }
   const putBodies: Array<Record<string, unknown>> = []
@@ -108,12 +115,18 @@ async function mountDefaultsPanel(savedMap: Record<string, string>): Promise<Pan
         { status: 200 },
       )
     }
-    if (path === '/api/models/default') {
+    if (path === '/api/models') {
       return new Response(
         JSON.stringify({
+          models: CATALOG_MODELS.map((m) => ({
+            provider: m.provider,
+            modelId: m.modelId,
+            available: m.available,
+          })),
+          thinkingLevels: Object.fromEntries(CATALOG_MODELS.map((m) => [m.id, m.thinkingLevels])),
           defaultModel: '',
           defaultThinkingLevel: '',
-          modelThinkingLevels: { ...savedMap },
+          modelThinkingLevels: { ...levels },
           defaultCompactionModel: '',
           defaultCompactionThinkingLevel: '',
         }),
@@ -123,7 +136,7 @@ async function mountDefaultsPanel(savedMap: Record<string, string>): Promise<Pan
     // 真实 refreshAssets 会重拉资产端点：数组响应保持目录切片形状合法
     if (
       path === '/api/credentials' || path === '/api/skills' || path === '/api/profiles' ||
-      path === '/api/models' || path === '/api/providers' || path === '/api/actions'
+      path === '/api/providers' || path === '/api/actions'
     ) {
       return new Response(JSON.stringify([]), { status: 200 })
     }

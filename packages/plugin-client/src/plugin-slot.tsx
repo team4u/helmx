@@ -14,12 +14,12 @@
  *
  * This file only exports components and TS types (same Fast Refresh contract).
  */
-import { createContext, useCallback, useContext, useSyncExternalStore } from 'react'
+import { createContext, useCallback, useContext, useMemo, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
 import type { ComposerController } from '@helmx/protocol/browser'
 import { usePluginTranslator } from './i18n.js'
 import { HelmxIcon } from './icons.js'
-import { usePluginClientHost } from './host-port.js'
+import { usePluginClientHost, type PluginSlotPortItem } from './host-port.js'
 import { PluginClientContext } from './plugin-context.js'
 
 const NOOP_UNSUBSCRIBE = (): void => {}
@@ -63,6 +63,43 @@ function isValidQualifiedSlotTarget(target: string): boolean {
   const owner = target.slice(0, slash)
   const slotName = target.slice(slash + 1)
   return /^[A-Za-z0-9:_-]+$/.test(owner) && /^[A-Za-z0-9._-]+$/.test(slotName)
+}
+
+interface SlotContributionItemProps {
+  item: PluginSlotPortItem
+  qualified: string
+  ancestry: SlotAncestry
+  slotProps?: Record<string, unknown>
+  conversationId?: number
+  composer?: ComposerController
+}
+
+function SlotContributionItem({
+  item,
+  qualified,
+  ancestry,
+  slotProps,
+  conversationId,
+  composer,
+}: SlotContributionItemProps): ReactNode {
+  const host = usePluginClientHost()
+  const nextAncestry = useMemo<SlotAncestry>(
+    () => ({
+      chain: [...ancestry.chain, [item.pluginId, item.contributionId] as const],
+      depth: ancestry.depth + 1,
+    }),
+    [ancestry, item.pluginId, item.contributionId],
+  )
+  return (
+    <SlotAncestryContext.Provider value={nextAncestry}>
+      {host.slots.renderItem(item, {
+        slotProps,
+        conversationId,
+        composer,
+        label: `Slot ${qualified}/${item.contributionId}`,
+      })}
+    </SlotAncestryContext.Provider>
+  )
 }
 
 export function PluginSlot(props: PluginSlotProps): ReactNode {
@@ -116,7 +153,7 @@ export function PluginSlot(props: PluginSlotProps): ReactNode {
 
   if (owner === undefined || owner.trim().length === 0) {
     return (
-      <div className="callout callout--warning" role="alert">
+      <div className="callout callout-warn" role="alert">
         <HelmxIcon name="alert-triangle" size={13} />
         <span>
           {t({
@@ -131,7 +168,7 @@ export function PluginSlot(props: PluginSlotProps): ReactNode {
   const qualified = name.includes('/') ? name : `${owner}/${name}`
   if (!isValidQualifiedSlotTarget(qualified)) {
     return (
-      <div className="callout callout--warning" role="alert">
+      <div className="callout callout-warn" role="alert">
         <HelmxIcon name="alert-triangle" size={13} />
         <span>
           {t({
@@ -150,7 +187,7 @@ export function PluginSlot(props: PluginSlotProps): ReactNode {
 
   if (ancestry.depth >= MAX_SLOT_DEPTH) {
     return (
-      <div className="callout callout--warning" role="alert" data-helmx-slot={qualified}>
+      <div className="callout callout-warn" role="alert" data-helmx-slot={qualified}>
         <HelmxIcon name="alert-triangle" size={13} />
         <span>
           {t({
@@ -174,7 +211,7 @@ export function PluginSlot(props: PluginSlotProps): ReactNode {
         const key = `${item.pluginId}/${item.contributionId}`
         if (ancestry.chain.some(([pid, cid]) => pid === item.pluginId && cid === item.contributionId)) {
           return (
-            <div className="callout callout--warning" role="alert" key={key} data-helmx-slot-cycle={key}>
+            <div className="callout callout-warn" role="alert" key={key} data-helmx-slot-cycle={key}>
               <HelmxIcon name="alert-triangle" size={13} />
               <span>
                 {t({
@@ -186,17 +223,15 @@ export function PluginSlot(props: PluginSlotProps): ReactNode {
           )
         }
         return (
-          <SlotAncestryContext.Provider
+          <SlotContributionItem
             key={key}
-            value={{ chain: [...ancestry.chain, [item.pluginId, item.contributionId] as const], depth: ancestry.depth + 1 }}
-          >
-            {host.slots.renderItem(item, {
-              slotProps,
-              conversationId,
-              composer,
-              label: `Slot ${qualified}/${item.contributionId}`,
-            })}
-          </SlotAncestryContext.Provider>
+            item={item}
+            qualified={qualified}
+            ancestry={ancestry}
+            slotProps={slotProps}
+            conversationId={conversationId}
+            composer={composer}
+          />
         )
       })}
     </Container>

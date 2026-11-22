@@ -72,6 +72,12 @@ export interface ModelPickerControlProps {
   onCatalogRefreshed?: () => void | Promise<void>
   /** Optional callback to open Models & credentials when the catalog has zero usable models. */
   onOpenModelsCenter?: () => void
+  /**
+   * Optional callback invoked when the picker closes via keyboard or selection
+   * (not outside click). Return `true` after moving focus explicitly to prevent
+   * Radix from restoring focus to the trigger button.
+   */
+  onReturnFocus?: () => boolean | void
 }
 
 export function ModelPickerControl({
@@ -96,6 +102,7 @@ export function ModelPickerControl({
   onResetDefault,
   onCatalogRefreshed,
   onOpenModelsCenter,
+  onReturnFocus,
 }: ModelPickerControlProps) {
   // Catalog slice via the stable host port: undefined = capability not
   // injected or first load in flight (explicit unknown state, never a
@@ -262,12 +269,8 @@ export function ModelPickerControl({
                 interactedOutsideRef.current = false
                 return
               }
-              const textarea = rootRef.current
-                ?.closest('.composer-box')
-                ?.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')
-              if (textarea !== null && textarea !== undefined) {
+              if (onReturnFocus?.() === true) {
                 event.preventDefault()
-                textarea.focus()
               }
             }}
             onInteractOutside={() => {

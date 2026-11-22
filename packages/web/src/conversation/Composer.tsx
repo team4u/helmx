@@ -1,39 +1,36 @@
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useId, useMemo, useRef } from 'react'
 import type { ComposerScopeProps, ConversationSummary } from '@helmx/protocol/browser'
 import { COMPOSER_DOCK_SLOT, COMPOSER_STATUS_SLOT } from '@helmx/protocol/browser'
-import { conversationsApi } from '../lib/api.js'
-import { buildSlashMenuItems, pluginSlashCommandsFor } from '../lib/commands-model.js'
 import { HelmxIcon, PluginSlot, Tooltip, useSharedNowMs } from '@helmx/plugin-client'
+import { useWebLocale } from '../i18n/use-web-locale.js'
+import { conversationsApi } from '../lib/api.js'
+import { pluginSlashCommandsFor } from '../lib/commands-model.js'
 import {
   useConversationDetail,
   useGroupedUi,
   useHelmxExternalStore,
-  usePlugins,
   useProfilesSlice,
-  useSkills,
-  useStoreActions,
 } from '../lib/store-context.js'
-import { useWebLocale } from '../i18n/use-web-locale.js'
-import { collectEnabledPluginIds } from '../shell/sidebar-model.js'
 import { conversationSkillScope } from '../skills/skill-scope-model.js'
-import { useScopedSkillCatalog } from '../skills/use-scoped-skills.js'
-import { slashMenuSkillsWithScope } from './slash-menu-skills.js'
 import { AskDock } from './AskDock.js'
-import { CompletionPopover } from './CompletionPopover.js'
-import { CommandPopover } from './CommandPopover.js'
+import { ComposerInputShell, type ComposerAttachmentItem } from './ComposerInputShell.js'
+import { ComposerSendControls } from './ComposerSendControls.js'
 import { ModelPicker } from './ModelPicker.js'
 import { SessionEnvBar } from './SessionEnvBar.js'
-import { ComposerSendControls } from './ComposerSendControls.js'
 import { useComposerController } from './composer-controller.js'
-import { autoGrowTextarea, useComposerPopovers, useElementWidthResize } from './use-composer-popovers.js'
-import { useConversationDirtySink } from './conversation-window-model.js'
 import {
-  canConfigureSessionEnv,
   busyEnterMode,
+  canConfigureSessionEnv,
   getComposerPlaceholder,
   useIsMobile,
 } from './composer-model.js'
 import { useComposerSend, type ComposerPrefill } from './composer-send.js'
+import { contextUsageLabel } from './context-usage-model.js'
+import {
+  conversationDurationLabel,
+  conversationDurationNeedsLiveClock,
+} from './conversation-duration-model.js'
+import { useConversationDirtySink } from './conversation-window-model.js'
 import {
   canRecallOnArrowUp,
   isComposerSubmitEnterEvent,
@@ -41,12 +38,8 @@ import {
   latestHumanQueuedInput,
 } from './keybindings-model.js'
 import { lastEditableHumanInput } from './timeline-model.js'
-import { contextUsageLabel } from './context-usage-model.js'
-import {
-  conversationDurationLabel,
-  conversationDurationNeedsLiveClock,
-} from './conversation-duration-model.js'
-import { formatBytes } from '../lib/format.js'
+import { useComposerAttachments } from './use-composer-attachments.js'
+import { useComposerCompletions } from './use-composer-completions.js'
 
 export interface ComposerProps {
   conversation: ConversationSummary
@@ -57,12 +50,6 @@ export interface ComposerProps {
   /** /new 新话题入口：进入本智能体待命页（首次发送才落库）；宿主传入面板位置明确的导航回调。 */
   onNewThread?: () => void
 }
-
-// ---------------------------------------------------------------------------
-// 上下文用量只读状态（输入框下方遥测状态行；不可交互）。
-// 速率类只读指标（如 builtin:token-speed）经同行的 COMPOSER_STATUS_SLOT 插槽
-// 由可选插件贡献，宿主不再内置任何响应速率计算与展示。
-// ---------------------------------------------------------------------------
 
 function ContextUsageStatus({ conversation }: { conversation: ConversationSummary }) {
   const { t } = useWebLocale()
@@ -75,7 +62,7 @@ function ContextUsageStatus({ conversation }: { conversation: ConversationSummar
       className={`composer-context-status${label.tone === 'high' ? ' composer-context-status-high' : label.tone === 'warn' ? ' composer-context-status-warn' : ''}`}
       title={label.title}
     >
-      {label !== null ? <span className="mono tabular-nums">{label.text}</span> : null}
+      <span className="mono tabular-nums">{label.text}</span>
     </span>
   )
 }
@@ -106,21 +93,13 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
   const externalStore = useHelmxExternalStore()
   const detail = useConversationDetail(conversation.id)
   const groupedUi = useGroupedUi()
-  const plugins = usePlugins()
   const { profiles } = useProfilesSlice()
-  const skills = useSkills()
   const { locale, t } = useWebLocale()
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
-  const composerBoxRef = useRef<HTMLDivElement | null>(null)
-  const fileInputRef = useRef<HTMLInputElement | null>(null)
-  const dragDepthRef = useRef(0)
-  const [dragging, setDragging] = useState(false)
-  const [slashMenuItems, setSlashMenuItems] = useState<Array<{ id: string; label: string; hint?: string; apply?: string; run?: () => void }>>([])
 
   const compacting = conversation.contextUsage?.compacting === true
   const working = conversation.status === 'working' || conversation.status === 'blocked' || compacting
   const isMobile = useIsMobile(680)
-  // 历史尚未完整加载且当前页没有 reset 时，不能把缺少消息的分页窗口当作空会话。
   const detailEntries = detail?.nextCursor && !detail.entries.some((entry) => entry.kind === 'pi.reset')
     ? undefined
     : detail?.entries
@@ -131,8 +110,6 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
     [groupedUi.commands, conversation],
   )
 
-  // 发送管线（草稿 / 编辑锚点 / 附件上传 / 提交与失败恢复 / 环境阻塞）。
-  // 版本自动刷新挂起判定：实例级脏状态上报键（主屏/分屏/抽屉可同屏渲染同一会话）。
   const composerDirtyKey = useId()
   const dirtySink = useConversationDirtySink()
   const {
@@ -169,65 +146,35 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
     dirtySink,
   })
 
-  useLayoutEffect(() => {
-    autoGrowTextarea(textareaRef.current)
-  }, [text, isMobile])
-  useElementWidthResize(textareaRef, () => autoGrowTextarea(textareaRef.current))
-
-  const {
-    slashOpen,
-    popoverQuery,
-    completionOpen,
-    completionTrigger,
-    completionSnapshot,
-    detectPopover,
-    handleTextareaKeyUp,
-    handleTextareaClick,
-    shouldDeferKeyToPopover,
-    applySlashPick,
-    closeSlashPopover,
-    applyCompletionPick,
-    closeCompletionPopover,
-  } = useComposerPopovers({
-    textareaRef,
-    draftText: text,
-    readLiveDraft,
-    setDraftState,
-    completers: groupedUi.composerCompleters,
-    conversation,
-    resetKey: conversation.id,
-  })
-
-  // 斜杠菜单三源合并：宿主内置命令 + 当前会话可用技能（profile.skills 白名单 +
-  // 插件启用双过滤，缺 Profile 时先不展示技能）+ 满足作用域的插件命令。
-  // 会话物理坐标 (nodeId, cwd) 的节点工作区技能经合并目录补入（Hub 基底
-  // 恒在；目录未加载/失败/离线不回退移除 Hub 技能）。
-  const enabledPluginIds = useMemo(() => collectEnabledPluginIds(plugins), [plugins])
   const conversationProfile = useMemo(
     () => profiles.find((p) => p.id === conversation.profileId),
     [profiles, conversation.profileId],
   )
-  const { invokePluginAction } = useStoreActions()
   const conversationScope = useMemo(
     () => conversationSkillScope(conversation),
     [conversation.nodeId, conversation.cwd],
   )
-  const scopedSkillCatalog = useScopedSkillCatalog(conversationScope, invokePluginAction)
-  const availableSkills = useMemo(
-    () =>
-      slashMenuSkillsWithScope(
-        conversationProfile,
-        skills,
-        enabledPluginIds,
-        scopedSkillCatalog.catalog?.skills,
-      ),
-    [conversationProfile, skills, enabledPluginIds, scopedSkillCatalog.catalog],
-  )
-  useEffect(() => {
-    setSlashMenuItems(
-      buildSlashMenuItems(availableSkills, slashPluginCommands, runPluginCommand, locale),
-    )
-  }, [availableSkills, slashPluginCommands, runPluginCommand, locale])
+
+  const completions = useComposerCompletions({
+    textareaRef,
+    draftText: text,
+    isMobile,
+    readLiveDraft,
+    setDraftState,
+    conversation,
+    profile: conversationProfile,
+    skillScope: conversationScope,
+    slashPluginCommands,
+    onRunPluginCommand: runPluginCommand,
+    locale,
+    resetKey: conversation.id,
+  })
+
+  const handleUploadFiles = useCallback((files: File[]) => {
+    void uploadFiles(files)
+  }, [uploadFiles])
+
+  const fileHandlers = useComposerAttachments({ onFiles: handleUploadFiles })
 
   const composer = useComposerController({
     text,
@@ -241,6 +188,13 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
     submitExplicitText: sendExplicit,
   })
 
+  const returnFocusToTextarea = useCallback(() => {
+    const el = textareaRef.current
+    if (el === null) return false
+    el.focus()
+    return true
+  }, [])
+
   const abortTurn = async (): Promise<void> => {
     try {
       await conversationsApi.abort(conversation.id)
@@ -249,43 +203,10 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
     }
   }
 
-  const onPaste = (e: React.ClipboardEvent): void => {
-    const files = Array.from(e.clipboardData?.files ?? [])
-    if (files.length > 0) {
-      e.preventDefault()
-      void uploadFiles(files)
-    }
-  }
-
-  const onDragEnter = (e: React.DragEvent): void => {
-    e.preventDefault()
-    dragDepthRef.current += 1
-    if (e.dataTransfer.types.includes('Files')) setDragging(true)
-  }
-
-  const onDragLeave = (e: React.DragEvent): void => {
-    e.preventDefault()
-    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1)
-    if (dragDepthRef.current === 0) setDragging(false)
-  }
-
-  const onDrop = (e: React.DragEvent): void => {
-    e.preventDefault()
-    dragDepthRef.current = 0
-    setDragging(false)
-    const files = Array.from(e.dataTransfer.files ?? [])
-    if (files.length > 0) void uploadFiles(files)
-  }
-
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
-    // 浮层已消费或已被 defaultPrevented 的按键绝不再向下传递触发发送
-    if (e.defaultPrevented || e.nativeEvent.defaultPrevented) {
-      return
-    }
-    if (shouldDeferKeyToPopover(e)) {
-      return // Handled by the global overlay capture (not intercepted during IME composing; left to the input method)
-    }
-    if (e.key === 'Escape' && !slashOpen && !completionOpen && editingEntryId !== null) {
+    if (e.defaultPrevented || e.nativeEvent.defaultPrevented) return
+    if (completions.shouldDeferKeyToPopover(e)) return
+    if (e.key === 'Escape' && !completions.slashOpen && !completions.completionOpen && editingEntryId !== null) {
       e.preventDefault()
       e.stopPropagation()
       cancelEdit()
@@ -316,162 +237,114 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
       const target = lastEditableHumanInput(detail?.entries ?? [])
       if (target !== undefined) {
         e.preventDefault()
-        // ↑ 进入历史编辑：整体替换文本 / 锚点 / 附件（含空附件清空旧草稿）
         applyHistoryEdit(target)
       }
     }
   }
 
+  const attachmentItems = useMemo<ComposerAttachmentItem[]>(
+    () =>
+      attachments.map((att) => ({
+        key: att.artifactId,
+        name: att.name,
+        size: att.size,
+        icon: 'paperclip',
+        onRemove: () => removeAttachment(att.artifactId),
+      })),
+    [attachments, removeAttachment],
+  )
+
   return (
-    <div className="composer-shell">
-      <div className="composer-inner">
-        {/* Reserved slot at the top of the host composer: in-flight orchestration activity renders directly above the AskDock (never tucked into the more menu on desktop or mobile); collapses to zero height when idle. */}
-        <PluginSlot
-          ownerPluginId="builtin:composer"
-          name={COMPOSER_DOCK_SLOT}
-          conversationId={conversation.id}
-          composer={composer}
-          className="composer-dock-slot"
-          slotProps={{ conversation, composer } satisfies ComposerScopeProps}
-        />
-        <AskDock conversationId={conversation.id} />
-        {envConfigurable ? (
-          <SessionEnvBar
-            key={`env-${conversation.id}`}
-            conversation={conversation}
-            sendBlocked={sendInFlight}
-            onBlockerChange={handleEnvBlocker}
+    <ComposerInputShell
+      aboveBox={
+        <>
+          <PluginSlot
+            ownerPluginId="builtin:composer"
+            name={COMPOSER_DOCK_SLOT}
+            conversationId={conversation.id}
+            composer={composer}
+            className="composer-dock-slot"
+            slotProps={{ conversation, composer } satisfies ComposerScopeProps}
           />
-        ) : null}
-        <div
-          className="composer-box"
-          ref={composerBoxRef}
-          data-dragging={dragging ? 'true' : undefined}
-          onDragEnter={onDragEnter}
-          onDragOver={(e) => e.preventDefault()}
-          onDragLeave={onDragLeave}
-          onDrop={onDrop}
-        >
-          {editingEntryId !== null ? (
-            <div className="composer-edit-banner" role="status">
-              <span className="composer-edit-banner-text">
-                <HelmxIcon name="edit" size={12} />
-                <span>{working
-                  ? t('conv.composer.editingWorking')
-                  : t('conv.composer.editingIdle')}</span>
-              </span>
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm composer-edit-cancel"
-                onClick={cancelEdit}
-                title={t('conv.composer.cancelEditTitle')}
-              >
-                <HelmxIcon name="x" size={12} />
-                <span>{t('common.cancel')}</span>
-                <span className="kbd-hint composer-inline-kbd">Esc</span>
-              </button>
-            </div>
-          ) : null}
-          {attachments.length > 0 ? (
-            <div className="composer-attachments">
-              {attachments.map((att) => (
-                <span key={att.artifactId} className="attachment-chip">
-                  <HelmxIcon name="paperclip" size={11} />
-                  <span>{att.name}</span>
-                  <span className="mono tabular-nums">{formatBytes(att.size)}</span>
-                  <Tooltip content={t('composer.standby.removeAttachmentTitle', { name: att.name })} side="top">
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-icon-xs"
-                      title={t('composer.standby.removeAttachment')}
-                      aria-label={t('composer.standby.removeAttachmentTitle', { name: att.name })}
-                      onClick={() => removeAttachment(att.artifactId)}
-                    >
-                      <HelmxIcon name="x" size={10} />
-                    </button>
-                  </Tooltip>
-                </span>
-              ))}
-            </div>
-          ) : null}
-          <textarea
-            aria-label={t('conv.composer.inputAria')}
-            ref={textareaRef}
-            className="composer-textarea selectable"
-            data-composer-draft-managed="true"
-            value={text}
-            rows={1}
-            placeholder={getComposerPlaceholder(working, isMobile, t)}
-            onChange={(e) => {
-              setDraftState(e.target.value)
-              detectPopover(e.target.value, e.target.selectionStart ?? e.target.value.length)
-            }}
-            onKeyUp={handleTextareaKeyUp}
-            onClick={handleTextareaClick}
-            onKeyDown={onKeyDown}
-            onPaste={onPaste}
-            spellCheck={false}
-          />
-          {slashOpen ? (
-            <CommandPopover
-              query={popoverQuery}
-              slashItems={slashMenuItems}
-              onPick={applySlashPick}
-              onClose={closeSlashPopover}
-              anchorRef={composerBoxRef}
+          <AskDock conversationId={conversation.id} />
+          {envConfigurable ? (
+            <SessionEnvBar
+              key={`env-${conversation.id}`}
+              conversation={conversation}
+              sendBlocked={sendInFlight}
+              onBlockerChange={handleEnvBlocker}
             />
           ) : null}
-          <CompletionPopover
-            open={completionOpen}
-            trigger={completionTrigger}
-            snapshot={completionSnapshot}
-            onPick={applyCompletionPick}
-            onClose={closeCompletionPopover}
-            anchorRef={composerBoxRef}
-          />
-          <div className="composer-toolbar">
-            <div className="composer-toolbar-left">
-              <Tooltip content={t('conv.composer.uploadAttachment')} side="top">
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-sm composer-icon-button"
-                  title={t('conv.composer.uploadAttachment')}
-                  aria-label={t('conv.composer.uploadAttachment')}
-                  onClick={() => fileInputRef.current?.click()}
-                >
-                  <HelmxIcon name="plus" size={19} />
-                </button>
-              </Tooltip>
-              <ModelPicker conversation={conversation} />
-              <input
-                ref={fileInputRef}
-                type="file"
-                multiple
-                style={{ display: 'none' }}
-                onChange={(e) => {
-                  const files = Array.from(e.target.files ?? [])
-                  e.target.value = ''
-                  if (files.length > 0) void uploadFiles(files)
-                }}
-              />
-            </div>
-            <ComposerSendControls
-              working={working}
-              editingEntryId={editingEntryId}
-              sending={sending}
-              uploading={uploading}
-              envBlocker={envBlocker}
-              text={text}
-              isMobile={isMobile}
-              send={send}
-              abortTurn={abortTurn}
-            />
+        </>
+      }
+      boxBanner={
+        editingEntryId !== null ? (
+          <div className="composer-edit-banner" role="status">
+            <span className="composer-edit-banner-text">
+              <HelmxIcon name="edit" size={12} />
+              <span>{working ? t('conv.composer.editingWorking') : t('conv.composer.editingIdle')}</span>
+            </span>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm composer-edit-cancel"
+              onClick={cancelEdit}
+              title={t('conv.composer.cancelEditTitle')}
+            >
+              <HelmxIcon name="x" size={12} />
+              <span>{t('common.cancel')}</span>
+              <span className="kbd-hint composer-inline-kbd">Esc</span>
+            </button>
           </div>
-        </div>
-        {/* Read-only telemetry row below .composer-box: decouples status indicators
-            from interactive toolbar controls so desktop, split panes, and mobile never
-            clip or crowd controls; collapses to zero height when empty. */}
-        <div className="composer-status-row">
+        ) : undefined
+      }
+      attachments={attachmentItems}
+      textareaRef={textareaRef}
+      textareaAriaLabel={t('conv.composer.inputAria')}
+      value={text}
+      placeholder={getComposerPlaceholder(working, isMobile, t)}
+      onTextChange={(nextValue, caret) => {
+        setDraftState(nextValue)
+        completions.detectPopover(nextValue, caret)
+      }}
+      onKeyUp={completions.handleTextareaKeyUp}
+      onClick={completions.handleTextareaClick}
+      onKeyDown={onKeyDown}
+      onPaste={fileHandlers.onPaste}
+      dragging={fileHandlers.dragging}
+      onDragEnter={fileHandlers.onDragEnter}
+      onDragOver={fileHandlers.onDragOver}
+      onDragLeave={fileHandlers.onDragLeave}
+      onDrop={fileHandlers.onDrop}
+      fileInputRef={fileHandlers.fileInputRef}
+      uploadButtonLabel={t('conv.composer.uploadAttachment')}
+      onOpenFilePicker={fileHandlers.openFilePicker}
+      onFileInputChange={fileHandlers.onFileInputChange}
+      slashOpen={completions.slashOpen}
+      popoverQuery={completions.popoverQuery}
+      slashMenuItems={completions.slashMenuItems}
+      onPickSlash={completions.applySlashPick}
+      onCloseSlash={completions.closeSlashPopover}
+      completionOpen={completions.completionOpen}
+      completionTrigger={completions.completionTrigger}
+      completionSnapshot={completions.completionSnapshot}
+      onPickCompletion={completions.applyCompletionPick}
+      onCloseCompletion={completions.closeCompletionPopover}
+      modelPicker={<ModelPicker conversation={conversation} onReturnFocus={returnFocusToTextarea} />}
+      sendControls={
+        <ComposerSendControls
+          working={working}
+          editingEntryId={editingEntryId}
+          sending={sending}
+          uploading={uploading}
+          envBlocker={envBlocker}
+          text={text}
+          isMobile={isMobile}
+          send={send}
+          abortTurn={abortTurn}
+        />
+      }
+      statusRow={
+        <>
           <ContextUsageStatus conversation={conversation} />
           <ConversationDurationStatus conversation={conversation} />
           <PluginSlot
@@ -482,8 +355,8 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
             className="composer-status-slot"
             slotProps={{ conversation, composer } satisfies ComposerScopeProps}
           />
-        </div>
-      </div>
-    </div>
+        </>
+      }
+    />
   )
 }

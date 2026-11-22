@@ -14,9 +14,9 @@ export interface CalloutProps {
 
 const TONE_CLASS: Record<NonNullable<CalloutProps['tone']>, string> = {
   info: 'callout',
-  warn: 'callout callout--warning',
-  err: 'callout callout--error',
-  ok: 'callout callout--success',
+  warn: 'callout callout-warn',
+  err: 'callout callout-error',
+  ok: 'callout callout-ok',
 }
 
 const TONE_ICON: Record<NonNullable<CalloutProps['tone']>, string> = {

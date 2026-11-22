@@ -469,7 +469,9 @@ export interface HelmxStoreValue {
    * network triggered, pagination cursor untouched). */
   backfillConversationEntry(conversationId: number, entry: ConversationEntry): void
   loadConversationArtifacts(conversationId: number, opts?: { silent?: boolean }): Promise<ArtifactMetadata[] | undefined>
-  ensurePluginDoc(pluginId: string, docName: string): Promise<unknown>
+  ensurePluginDoc(pluginId: string, docName: string, options?: { force?: boolean }): Promise<unknown>
+  /** Explicit retry for a plugin public doc (clears retry-cooldown suppression and refetches immediately). */
+  retryPluginDoc(pluginId: string, docName: string): Promise<unknown>
   /** Subscribes to a conversation-scoped doc tuple (ref-counted dedicated SSE stream; see lib/session-docs.ts). */
   subscribeSessionDoc(key: SessionDocKey, listener: () => void): () => void
   /** Reads the current cached state of a conversation-scoped doc (with error and deleted markers; empty state when unsubscribed). */

@@ -237,6 +237,8 @@ export interface ConfirmDialogProps {
   onConfirm: () => void
   onCancel?: () => void
   inline?: boolean
+  /** Optional extra class name merged onto the `.modal` AlertDialogContent container. */
+  contentClassName?: string
 }
 
 /**
@@ -258,6 +260,7 @@ export function ConfirmDialog({
   onConfirm,
   onCancel,
   inline,
+  contentClassName,
 }: ConfirmDialogProps) {
   const t = usePluginTranslator()
   const resolvedConfirmText = confirmText ?? t(uiCopy.confirm)
@@ -267,7 +270,7 @@ export function ConfirmDialog({
       <AlertDialogPortal inline={inline}>
         <AlertDialogOverlay className="modal-backdrop">
           <AlertDialogContent
-            className="modal"
+            className={contentClassName ? `modal ${contentClassName}` : 'modal'}
             style={{
               maxWidth: 440,
               background: 'var(--bg-elevated)',

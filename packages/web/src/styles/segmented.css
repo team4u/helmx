@@ -59,29 +59,4 @@
   opacity: 0.45;
   cursor: not-allowed;
 }
-/* 模态弹窗全屏覆盖模式与 Mermaid 画布图层 */
-.modal-fullscreen-backdrop {
-  position: fixed !important;
-  inset: 0 !important;
-  width: 100vw !important;
-  height: 100dvh !important;
-  padding: 0 !important;
-  background: var(--bg) !important;
-  z-index: var(--dialog-layer-z, 120) !important;
-}
-
-.modal-fullscreen {
-  max-width: 100vw !important;
-  width: 100vw !important;
-  height: 100dvh !important;
-  max-height: 100dvh !important;
-  border-radius: 0 !important;
-  border: none !important;
-  box-shadow: none !important;
-}
-
-.modal-body-flush {
-  padding: 0 !important;
-  overflow: hidden !important;
-}
 

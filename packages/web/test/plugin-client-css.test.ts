@@ -464,6 +464,13 @@ describe("plugin-client-css", () => {
       // 2. SDK Portal (DialogContent) 自动打标 data-plugin-id，避免重复包壳
       assert.equal(alphaModal.getAttribute('data-plugin-id'), 'p:alpha')
 
+      // 2.5 生产注入的样式标签已用 @layer plugin-ui 包裹
+      for (const styleEl of allPluginStyles()) {
+        assert.match(styleEl.textContent ?? '', /^@layer plugin-ui \{[\s\S]*\}$/, '插件样式节点必须包裹在 @layer plugin-ui 中')
+        // happy-dom CSSOM 暂不解析 @layer 块：仅在测试内剥除最外层 @layer 壳以驱动真实 getComputedStyle 选择器隔离断言
+        styleEl.textContent = (styleEl.textContent ?? '').replace(/^@layer plugin-ui \{\n?([\s\S]*)\n?\}$/, '$1')
+      }
+
       // 3. 真实样式计算：各插件同名 .shared-card 互不串扰、不污染宿主且在 Portal 中生效
       assert.equal(getComputedStyle(alphaCard).color, 'rgb(255, 0, 0)')
       assert.equal(getComputedStyle(alphaModal).color, 'rgb(10, 20, 30)')

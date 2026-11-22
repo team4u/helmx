@@ -9,7 +9,6 @@ import type {
   ArtifactMetadata,
   AskSpec,
   ConversationDetail,
-  ConversationEntry,
   ConversationLive,
   ConversationSummary,
   CredentialSummary,
@@ -18,53 +17,22 @@ import type {
   LocalizedText,
   NodeInfo,
   PluginSummary,
-  PluginUiContribution,
-  Profile,
   ProviderConfig,
   SkillSummary,
   UsePluginsResult,
 } from '@helmx/protocol/browser'
 import { resolveLocalizedText } from '@helmx/protocol/browser'
-import {
-  assetsApi,
-  authApi,
-  conversationsApi,
-  nodesApi,
-  pluginsApi,
-  setStoredToken,
-  type ModelCatalogDefaults,
-  type ModelDescriptor,
-} from './api.js'
+import { createWebTranslator, type WebMessageKey } from '../i18n/catalog.js'
+import { resetStandbyDrafts } from '../conversation/standby-model.js'
+import { ESC_ABORT_WINDOW_MS, getStoredSidebarCollapsed } from '../shell/shortcuts-model.js'
+import { authApi, setStoredToken, type ModelCatalogDefaults, type ModelDescriptor } from './api.js'
 import { requestBrowserNotificationPermission } from './browser-notification.js'
+import { DEFAULT_WORKBENCH_TAB, isSameDrawerStack, topDrawerFrame, type DrawerFrame } from './drawer-stack-model.js'
 import { errorText } from './error-text.js'
-import {
-  applyConversationEntry,
-  emptyLiveState,
-  entryMatchesReference,
-  isPluginSummaryActive,
-  mergeConversationDetail,
-  omitPluginDocLoadErrors,
-  reconcilePluginsState,
-  sortNodes,
-  type LiveState,
-} from './live-state.js'
-import { reconcilePluginClientCache, resetPluginClientCache } from './plugin-client.js'
-import { isAbortError, StoreRequestManager } from './request-manager.js'
-import {
-  evictSessionDocSubscriptions,
-  getSessionDocState,
-  resetSessionDocSubscriptions,
-  retrySessionDoc,
-  subscribeSessionDoc,
-} from './session-docs.js'
-import {
-  applyScreenParamsPatch,
-  defaultSpaceTarget,
-  hasVisibleConversationRoots,
-  partitionScreenParamsPatch,
-  resolveSpaceSwitch,
-  type SpaceTargetInput,
-} from './space-navigation.js'
+import { emptyLiveState, type LiveState } from './live-state.js'
+import { resetPluginClientCache } from './plugin-client.js'
+import { StoreRequestManager } from './request-manager.js'
+import { getSessionDocState, resetSessionDocSubscriptions, retrySessionDoc, subscribeSessionDoc } from './session-docs.js'
 import {
   applyDocumentLocale,
   applyDocumentTheme,
@@ -80,411 +48,81 @@ import {
   resolveTheme,
 } from './theme-preferences.js'
 import {
-  defaultConversationDetailLimit,
   groupUiContributions,
-  resolveTargetString,
-  spaceForTarget,
   type ActiveModal,
   type FocusedPanel,
   type GroupedUiSpecs,
   type HelmxStoreValue,
   type LocalePreference,
   type ResolvedTarget,
-  type SidebarSpace,
   type ThemeMode,
   type ThemePreference,
   type ToastNotice,
 } from './types.js'
-import {
-  DEFAULT_WORKBENCH_TAB,
-  isSameDrawerStack,
-  normalizeWorkbenchTab,
-  popDrawerFrame,
-  pushDrawerFrame,
-  removeConversationFromDrawerStack,
-  topConversationDrawerId,
-  topDrawerFrame,
-  truncateDrawerStackTo,
-  updateTopWorkbenchTab,
-  type DrawerFrame,
-} from './drawer-stack-model.js'
-import { isSameLocationState, parseLocationHash, type WorkspaceLocationState } from './url-hash-model.js'
+import { parseLocationHash, type WorkspaceLocationState } from './url-hash-model.js'
 import type { SseCursor } from './use-sse-events.js'
-import { isConversationStatusActive } from './use-unread-sync.js'
-import { resetStandbyDrafts } from '../conversation/standby-model.js'
+import { recomputeConversationBackgroundSlice } from './store/background-slice.js'
 import {
-  activeTargetForPanel,
-  ESC_ABORT_WINDOW_MS,
-  getStoredSidebarCollapsed,
-  isConversationAbortable,
-  persistSidebarCollapsed,
-  resolveFocusedPanel,
-} from '../shell/shortcuts-model.js'
-import { createWebTranslator, type WebMessageKey } from '../i18n/catalog.js'
-import {
-  collectBackgroundBadgeDocs,
-  summarizeConversationBackgroundActivity,
-  type BackgroundBadgeDocRef,
-  type ConversationBackgroundIndex,
-} from '../shell/background-activity-model.js'
+  addChangedRecordKeys,
+  addChangedStringKeys,
+  applyUpdater,
+  EMPTY_BACKGROUND_INDEX,
+  EMPTY_BADGE_DOCS,
+  EMPTY_PENDING_ASKS,
+  EMPTY_PENDING_BADGE_DOCS,
+  emptyPlan,
+  ESC_ABORT_NOTICE_ID,
+  hasNotifyChanges,
+  isSameAskArray,
+  shallowEqualAuth,
+} from './store/helpers.js'
+import { createStoreNavActions, type StoreNavActions } from './store/nav-actions.js'
+import { createStoreRequestActions, type StoreRequestActions } from './store/requests-actions.js'
+import { StoreSubscriptionBus } from './store/subscriptions.js'
+import type {
+  AuthSlice,
+  CatalogSlice,
+  ConversationBackgroundSlice,
+  HelmxStoreActions,
+  LocationTargetsSlice,
+  NavSlice,
+  NotifyPlan,
+  PluginsUiSlice,
+  PrefsSlice,
+  ProfilesSlice,
+  ResolvedAskEntry,
+  StoreBootLocation,
+  StoreDomainKey,
+  StoreListener,
+  StoreUpdater,
+  WorkbenchSlice,
+} from './store/types.js'
 
-const ESC_ABORT_NOTICE_ID = 'esc-abort-confirm'
-const EMPTY_PENDING_ASKS: AskSpec[] = Object.freeze([]) as unknown as AskSpec[]
-const EMPTY_BADGE_DOCS: ReadonlyArray<BackgroundBadgeDocRef> = Object.freeze([])
-const EMPTY_PENDING_BADGE_DOCS: ReadonlySet<string> = new Set<string>()
-const EMPTY_BACKGROUND_INDEX: ConversationBackgroundIndex = new Map()
-
-const ASSET_LOAD_FAILURE_TITLES: ReadonlyArray<LocalizedText> = [
-  { en: 'Profiles failed to load', 'zh-CN': '角色加载失败' },
-  { en: 'Models failed to load', 'zh-CN': '模型加载失败' },
-  { en: 'Providers failed to load', 'zh-CN': '网关加载失败' },
-  { en: 'Credentials failed to load', 'zh-CN': '凭据加载失败' },
-  { en: 'Skills failed to load', 'zh-CN': '技能加载失败' },
-  { en: 'Plugin actions failed to load', 'zh-CN': '插件动作加载失败' },
-]
-
-export type StoreListener = () => void
-export type StoreUpdater<T> = T | ((prev: T) => T)
-
-export interface AuthSlice {
-  authReady: boolean
-  authConfigured: boolean
-  authenticated: boolean
-  authError: string | null
-  sseConnected: boolean
-  connectionError: string | null
-  kernelBootId: string | null
-}
-
-export interface PrefsSlice {
-  theme: ThemeMode
-  themePreference: ThemePreference
-  locale: HelmxLocale
-  localePreference: LocalePreference
-  quietNotifyEnabled: boolean
-}
-
-export interface ProfilesSlice {
-  profiles: Profile[]
-  profilesLoaded: boolean
-  assetsLoaded: boolean
-}
-
-export interface CatalogSlice {
-  profiles: Profile[]
-  profilesLoaded: boolean
-  assetsLoaded: boolean
-  models: ModelDescriptor[]
-  /** GET /api/models 顶层全局默认链（HostModelsSlice 除 models 外的部分；首载前为空对象，由 assetsLoaded 门控读取）。 */
-  modelDefaults: ModelCatalogDefaults
-  providers: ProviderConfig[]
-  credentials: CredentialSummary[]
-  skills: SkillSummary[]
-  actions: ActionManifest[]
-}
-
-export interface PluginsUiSlice {
-  plugins: PluginSummary[]
-  uiContributions: PluginUiContribution[]
-  groupedUi: GroupedUiSpecs
-}
-
-export interface LocationTargetsSlice {
-  primaryTarget: ResolvedTarget
-  splitTarget: ResolvedTarget | null
-  focusedPanel: FocusedPanel
-}
-
-export interface WorkbenchSlice {
-  workbenchOpen: boolean
-  workbenchTab: string
-}
-
-export interface NavSlice {
-  primaryTarget: ResolvedTarget
-  splitTarget: ResolvedTarget | null
-  focusedPanel: FocusedPanel
-  sidebarCollapsed: boolean
-  pendingEscAbortConversationId: number | null
-  drawerStack: DrawerFrame[]
-  workbenchOpen: boolean
-  workbenchTab: string
-  activeModal: ActiveModal
-  highlightedEntry: { conversationId: number; entryId: string } | null
-}
-
-export interface ConversationBackgroundSlice {
-  /** Discovered per-conversation workbench badge docs for on-demand ensurePluginDoc. */
-  badgeDocs: ReadonlyArray<BackgroundBadgeDocRef>
-  /** Badge-doc keys (`${pluginId}/${doc}`) not yet present in `pluginDocs` (honest unknown gate). */
-  pendingBadgeDocs: ReadonlySet<string>
-  /** Standard background in-flight snapshot shared by host views and the SDK host port. */
-  snapshot: {
-    unknown: boolean
-    byConversation: ConversationBackgroundIndex
-  }
-}
-
-export type ResolvedAskEntry = HelmxStoreValue['resolvedAsksByConv'][number][number]
-
-export type HelmxStoreActions = Pick<
-  HelmxStoreValue,
-  | 'setTheme'
-  | 'setThemePreference'
-  | 'toggleTheme'
-  | 'setLocale'
-  | 'setLocalePreference'
-  | 'setQuietNotify'
-  | 'checkAuth'
-  | 'onAuthenticated'
-  | 'logout'
-  | 'refreshAssets'
-  | 'syncPlugins'
-  | 'refreshNodes'
-  | 'loadConversationDetail'
-  | 'loadEarlierEntries'
-  | 'backfillConversationEntry'
-  | 'loadConversationArtifacts'
-  | 'ensurePluginDoc'
-  | 'subscribeSessionDoc'
-  | 'getSessionDocState'
-  | 'getPluginSessionDoc'
-  | 'retrySessionDoc'
-  | 'openTarget'
-  | 'closeSplit'
-  | 'setFocusedPanel'
-  | 'setSidebarCollapsed'
-  | 'toggleSidebarCollapsed'
-  | 'setScreenParams'
-  | 'setWorkbenchOpen'
-  | 'setWorkbenchTab'
-  | 'openConversationDrawer'
-  | 'openWorkbenchDrawer'
-  | 'popDrawer'
-  | 'truncateDrawerStack'
-  | 'closeAllDrawers'
-  | 'openSpace'
-  | 'setActiveModal'
-  | 'dismissNotice'
-  | 'pushNotice'
-  | 'invokePluginAction'
->
-
-export type StoreDomainKey =
-  | 'all'
-  | 'auth'
-  | 'authenticated'
-  | 'sseConnected'
-  | 'prefs'
-  | 'locale'
-  | 'theme'
-  | 'quietNotify'
-  | 'catalog'
-  | 'profiles'
-  | 'models'
-  | 'hostModels'
-  | 'providers'
-  | 'credentials'
-  | 'skills'
-  | 'actions'
-  | 'conversations'
-  | 'conversationDetailsMap'
-  | 'conversationLivesMap'
-  | 'conversationArtifactsMap'
-  | 'pendingAsks'
-  | 'resolvedAsksMap'
-  | 'asks'
-  | 'plugins'
-  | 'groupedUi'
-  | 'pluginsUi'
-  | 'pluginDocsMap'
-  | 'nodes'
-  | 'loadErrorsMap'
-  | 'nav'
-  | 'locationTargets'
-  | 'primaryTarget'
-  | 'splitTarget'
-  | 'focusedPanel'
-  | 'sidebarCollapsed'
-  | 'pendingEscAbort'
-  | 'drawerStack'
-  | 'workbench'
-  | 'activeModal'
-  | 'locationState'
-  | 'conversationBackground'
-  | 'highlightedEntry'
-  | 'notices'
-
-export interface StoreBootLocation {
-  location: WorkspaceLocationState
-  needsHomeLanding: boolean
-}
-
-interface NotifyPlan {
-  domains: Set<StoreDomainKey>
-  liveIds: Set<number>
-  detailIds: Set<number>
-  summaryIds: Set<number>
-  artifactIds: Set<number>
-  pendingAskIds: Set<number>
-  resolvedAskIds: Set<number>
-  highlightIds: Set<number>
-  loadErrorKeys: Set<string>
-  pluginDocKeys: Set<string>
-}
-
-function emptyPlan(): NotifyPlan {
-  return {
-    domains: new Set(),
-    liveIds: new Set(),
-    detailIds: new Set(),
-    summaryIds: new Set(),
-    artifactIds: new Set(),
-    pendingAskIds: new Set(),
-    resolvedAskIds: new Set(),
-    highlightIds: new Set(),
-    loadErrorKeys: new Set(),
-    pluginDocKeys: new Set(),
-  }
-}
-
-function addChangedRecordKeys<V>(
-  prev: Record<number, V>,
-  next: Record<number, V>,
-  out: Set<number>,
-): void {
-  for (const key of Object.keys(prev)) {
-    const id = Number(key)
-    if (prev[id] !== next[id]) out.add(id)
-  }
-  for (const key of Object.keys(next)) {
-    const id = Number(key)
-    if (prev[id] !== next[id]) out.add(id)
-  }
-}
-
-function addChangedStringKeys<V>(
-  prev: Record<string, V>,
-  next: Record<string, V>,
-  out: Set<string>,
-): void {
-  for (const key of Object.keys(prev)) {
-    if (!Object.hasOwn(next, key) || prev[key] !== next[key]) out.add(key)
-  }
-  for (const key of Object.keys(next)) {
-    if (!Object.hasOwn(prev, key) || prev[key] !== next[key]) out.add(key)
-  }
-}
-
-function applyUpdater<T>(prev: T, update: StoreUpdater<T>): T {
-  return typeof update === 'function' ? (update as (p: T) => T)(prev) : update
-}
-
-function sameArtifactMetadata(a: ArtifactMetadata, b: ArtifactMetadata): boolean {
-  return (
-    a === b ||
-    (a.id === b.id &&
-      a.conversationId === b.conversationId &&
-      a.kind === b.kind &&
-      a.name === b.name &&
-      a.path === b.path &&
-      a.mimeType === b.mimeType &&
-      a.size === b.size &&
-      a.createdAt === b.createdAt)
-  )
-}
-
-/**
- * 复用未变更产物的数组与单项引用：内容完全一致时返回原数组以跳过订阅重渲染，
- * 列表变更时保留未变项原引用，避免预览模态框因元数据引用刷新误重置解码状态。
- */
-function reconcileArtifactList(
-  prev: ReadonlyArray<ArtifactMetadata> | undefined,
-  next: ArtifactMetadata[],
-): ArtifactMetadata[] {
-  if (prev === undefined) return next
-  const prevById = new Map(prev.map((item) => [item.id, item]))
-  let allSame = prev.length === next.length
-  const merged = next.map((item, index) => {
-    const existing = prevById.get(item.id)
-    if (existing !== undefined && sameArtifactMetadata(existing, item)) {
-      if (allSame && prev[index] !== existing) allSame = false
-      return existing
-    }
-    allSame = false
-    return item
-  })
-  return allSame ? (prev as ArtifactMetadata[]) : merged
-}
-
-function shallowEqualAuth(a: AuthSlice, b: AuthSlice): boolean {
-  return (
-    a.authReady === b.authReady &&
-    a.authConfigured === b.authConfigured &&
-    a.authenticated === b.authenticated &&
-    a.authError === b.authError &&
-    a.sseConnected === b.sseConnected &&
-    a.connectionError === b.connectionError &&
-    a.kernelBootId === b.kernelBootId
-  )
-}
-
-function isSameAskArray(a: ReadonlyArray<AskSpec>, b: ReadonlyArray<AskSpec>): boolean {
-  if (a === b) return true
-  if (a.length !== b.length) return false
-  for (let i = 0; i < a.length; i += 1) {
-    if (a[i] !== b[i]) return false
-  }
-  return true
-}
-
-function isSameBadgeDocs(
-  a: ReadonlyArray<BackgroundBadgeDocRef>,
-  b: ReadonlyArray<BackgroundBadgeDocRef>,
-): boolean {
-  if (a === b) return true
-  if (a.length !== b.length) return false
-  for (let i = 0; i < a.length; i += 1) {
-    if (a[i]!.pluginId !== b[i]!.pluginId || a[i]!.doc !== b[i]!.doc) return false
-  }
-  return true
-}
-
-function isSameStringSet(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
-  if (a === b) return true
-  if (a.size !== b.size) return false
-  for (const key of a) {
-    if (!b.has(key)) return false
-  }
-  return true
-}
-
-function isSameBackgroundIndex(a: ConversationBackgroundIndex, b: ConversationBackgroundIndex): boolean {
-  if (a === b) return true
-  if (a.size !== b.size) return false
-  for (const [id, entry] of a) {
-    const other = b.get(id)
-    if (other === undefined || other.active !== entry.active || other.summary !== entry.summary) return false
-  }
-  return true
+export type {
+  AuthSlice,
+  CatalogSlice,
+  ConversationBackgroundSlice,
+  HelmxStoreActions,
+  LocationTargetsSlice,
+  NavSlice,
+  PluginsUiSlice,
+  PrefsSlice,
+  ProfilesSlice,
+  ResolvedAskEntry,
+  StoreBootLocation,
+  StoreDomainKey,
+  StoreListener,
+  StoreUpdater,
+  WorkbenchSlice,
 }
 
 export class HelmxExternalStore {
   readonly requests = new StoreRequestManager()
-  readonly sseCursorRef: { current: SseCursor | null } = { current: null }
-  readonly lastSyncedLocation: { current: WorkspaceLocationState }
-  readonly pendingHistoryMode: { current: 'push' | 'replace' | null } = { current: null }
-  readonly liveRef: { current: LiveState }
-  readonly authenticatedRef: { current: boolean } = { current: false }
-  readonly profilesRef: { current: Profile[] } = { current: [] }
-  readonly profilesLoadedRef: { current: boolean } = { current: false }
-  readonly assetsLoadedRef: { current: boolean } = { current: false }
-  readonly conversationArtifactsRef: { current: Record<number, ArtifactMetadata[]> } = { current: {} }
-  readonly targets: { current: { primaryTarget: ResolvedTarget; splitTarget: ResolvedTarget | null } }
-  readonly focusedPanelRef: { current: FocusedPanel } = { current: 'primary' }
-  readonly drawerStackRef: { current: DrawerFrame[] }
-  readonly workbenchOpenRef: { current: boolean }
-  readonly activeModalRef: { current: ActiveModal }
+  private readonly bus = new StoreSubscriptionBus()
+
+  sseCursor: SseCursor | null = null
+  lastSyncedLocation: WorkspaceLocationState
+  pendingHistoryMode: 'push' | 'replace' | null = null
 
   private authState: AuthSlice = {
     authReady: false,
@@ -518,6 +156,7 @@ export class HelmxExternalStore {
   private pluginsSnapshot: UsePluginsResult
   private hostModelsSlice: HostModelsSlice | undefined = undefined
   private summaryById = new Map<number, ConversationSummary>()
+  private pluginById = new Map<string, PluginSummary>()
   private pendingAsksByConv = new Map<number, AskSpec[]>()
   private artifactsState: Record<number, ArtifactMetadata[]> = {}
   private loadErrorsState: Record<string, string> = {}
@@ -535,26 +174,50 @@ export class HelmxExternalStore {
   private fullSnapshotCache: HelmxStoreValue | null = null
 
   private noticeSequence = 0
-  private spaceMemory: Partial<Record<SidebarSpace, ResolvedTarget>>
-  private escAbortTimer: ReturnType<typeof setTimeout> | null = null
-  private readonly escAbortWindowMs: number
   private logoutImpl: (() => void) | null = null
+  private readonly requestActions: StoreRequestActions
+  private readonly navActions: StoreNavActions
 
-  private domainListeners = new Map<StoreDomainKey, Set<StoreListener>>()
-  private liveListeners = new Map<number, Set<StoreListener>>()
-  private detailListeners = new Map<number, Set<StoreListener>>()
-  private summaryListeners = new Map<number, Set<StoreListener>>()
-  private artifactsListeners = new Map<number, Set<StoreListener>>()
-  private pendingAskListeners = new Map<number, Set<StoreListener>>()
-  private resolvedAsksListeners = new Map<number, Set<StoreListener>>()
-  private highlightListeners = new Map<number, Set<StoreListener>>()
-  private loadErrorListeners = new Map<string, Set<StoreListener>>()
-  private pluginDocListeners = new Map<string, Set<StoreListener>>()
+  // Bound public methods (delegated to domain action slices)
+  readonly refreshAssets: StoreRequestActions['refreshAssets']
+  readonly syncPlugins: StoreRequestActions['syncPlugins']
+  readonly refreshNodes: StoreRequestActions['refreshNodes']
+  readonly loadConversationDetail: StoreRequestActions['loadConversationDetail']
+  readonly loadEarlierEntries: StoreRequestActions['loadEarlierEntries']
+  readonly backfillConversationEntry: StoreRequestActions['backfillConversationEntry']
+  readonly loadConversationArtifacts: StoreRequestActions['loadConversationArtifacts']
+  readonly ensurePluginDoc: StoreRequestActions['ensurePluginDoc']
+  readonly retryPluginDoc: StoreRequestActions['retryPluginDoc']
+  readonly getPluginSessionDoc: StoreRequestActions['getPluginSessionDoc']
+  readonly invokePluginAction: StoreRequestActions['invokePluginAction']
+
+  readonly applyPrimaryTarget: StoreNavActions['applyPrimaryTarget']
+  readonly setSplitTarget: StoreNavActions['setSplitTarget']
+  readonly setFocusedPanel: StoreNavActions['setFocusedPanel']
+  readonly closeSplit: StoreNavActions['closeSplit']
+  readonly setSidebarCollapsed: StoreNavActions['setSidebarCollapsed']
+  readonly toggleSidebarCollapsed: StoreNavActions['toggleSidebarCollapsed']
+  readonly openConversationDrawer: StoreNavActions['openConversationDrawer']
+  readonly openWorkbenchDrawer: StoreNavActions['openWorkbenchDrawer']
+  readonly popDrawer: StoreNavActions['popDrawer']
+  readonly truncateDrawerStack: StoreNavActions['truncateDrawerStack']
+  readonly closeAllDrawers: StoreNavActions['closeAllDrawers']
+  readonly pruneConversationFromDrawerStack: StoreNavActions['pruneConversationFromDrawerStack']
+  readonly setWorkbenchOpen: StoreNavActions['setWorkbenchOpen']
+  readonly setWorkbenchTab: StoreNavActions['setWorkbenchTab']
+  readonly setActiveModal: StoreNavActions['setActiveModal']
+  readonly openTarget: StoreNavActions['openTarget']
+  readonly openSpace: StoreNavActions['openSpace']
+  readonly setScreenParams: StoreNavActions['setScreenParams']
+  readonly applyExternalLocation: StoreNavActions['applyExternalLocation']
+  readonly performHomeLanding: StoreNavActions['performHomeLanding']
+  readonly stepHighlightedEntry: StoreNavActions['stepHighlightedEntry']
+  readonly clearEscAbortPrompt: StoreNavActions['clearEscAbortPrompt']
+  readonly confirmOrArmEscAbort: StoreNavActions['confirmOrArmEscAbort']
 
   readonly actions: HelmxStoreActions
 
   constructor(bootLocation: WorkspaceLocationState, options?: { escAbortWindowMs?: number }) {
-    this.escAbortWindowMs = options?.escAbortWindowMs ?? ESC_ABORT_WINDOW_MS
     const themePreference = getStoredPreference()
     const localePreference = getStoredLocalePreference()
     const locale = resolveLocale(localePreference)
@@ -604,19 +267,85 @@ export class HelmxExternalStore {
       drawerStack: this.navState.drawerStack,
       activeModal: this.navState.activeModal,
     }
-    this.spaceMemory = {}
-    this.rememberSpaceTarget(bootLocation.primaryTarget)
-    this.lastSyncedLocation = { current: bootLocation }
-    this.liveRef = { current: this.liveState }
-    this.targets = {
-      current: {
-        primaryTarget: this.navState.primaryTarget,
-        splitTarget: this.navState.splitTarget,
+    this.lastSyncedLocation = bootLocation
+
+    this.requestActions = createStoreRequestActions({
+      requests: this.requests,
+      getLiveState: this.getLiveState,
+      getConversationSummary: this.getConversationSummary,
+      getConversationArtifactsMap: this.getConversationArtifactsMap,
+      getLoadErrorsMap: this.getLoadErrorsMap,
+      translate: this.translate,
+      emit: this.emit,
+      patchCatalog: (patch, plan, deferEmit) => this.patchCatalog(patch, plan, deferEmit),
+      updateLive: this.updateLive,
+      setConversationArtifacts: this.setConversationArtifacts,
+      setLoadErrors: this.setLoadErrors,
+      reportLoad: this.reportLoad,
+      pushNotice: this.pushNotice,
+    })
+
+    this.refreshAssets = this.requestActions.refreshAssets
+    this.syncPlugins = this.requestActions.syncPlugins
+    this.refreshNodes = this.requestActions.refreshNodes
+    this.loadConversationDetail = this.requestActions.loadConversationDetail
+    this.loadEarlierEntries = this.requestActions.loadEarlierEntries
+    this.backfillConversationEntry = this.requestActions.backfillConversationEntry
+    this.loadConversationArtifacts = this.requestActions.loadConversationArtifacts
+    this.ensurePluginDoc = this.requestActions.ensurePluginDoc
+    this.retryPluginDoc = this.requestActions.retryPluginDoc
+    this.getPluginSessionDoc = this.requestActions.getPluginSessionDoc
+    this.invokePluginAction = this.requestActions.invokePluginAction
+
+    this.navActions = createStoreNavActions(
+      {
+        requests: this.requests,
+        setLastSyncedLocation: (value) => { this.lastSyncedLocation = value },
+        setPendingHistoryMode: (value) => { this.pendingHistoryMode = value },
+        getNavSlice: this.getNavSlice,
+        getLocationState: this.getLocationState,
+        getLiveState: this.getLiveState,
+        getCatalogSlice: this.getCatalogSlice,
+        getGroupedUi: this.getGroupedUi,
+        getConversationSummary: this.getConversationSummary,
+        getLoadErrorsMap: this.getLoadErrorsMap,
+        getNotices: this.getNotices,
+        translate: this.translate,
+        tt: (key, params) => this.tt(key, params),
+        emit: this.emit,
+        patchNav: (patch, plan, deferEmit) => this.patchNav(patch, plan, deferEmit),
+        setNotices: this.setNotices,
+        pushNotice: this.pushNotice,
+        loadEarlierEntries: this.loadEarlierEntries,
       },
-    }
-    this.drawerStackRef = { current: this.navState.drawerStack }
-    this.workbenchOpenRef = { current: this.navState.workbenchOpen }
-    this.activeModalRef = { current: this.navState.activeModal }
+      { escAbortWindowMs: options?.escAbortWindowMs ?? ESC_ABORT_WINDOW_MS },
+    )
+
+    this.navActions.rememberSpaceTarget(bootLocation.primaryTarget)
+
+    this.applyPrimaryTarget = this.navActions.applyPrimaryTarget
+    this.setSplitTarget = this.navActions.setSplitTarget
+    this.setFocusedPanel = this.navActions.setFocusedPanel
+    this.closeSplit = this.navActions.closeSplit
+    this.setSidebarCollapsed = this.navActions.setSidebarCollapsed
+    this.toggleSidebarCollapsed = this.navActions.toggleSidebarCollapsed
+    this.openConversationDrawer = this.navActions.openConversationDrawer
+    this.openWorkbenchDrawer = this.navActions.openWorkbenchDrawer
+    this.popDrawer = this.navActions.popDrawer
+    this.truncateDrawerStack = this.navActions.truncateDrawerStack
+    this.closeAllDrawers = this.navActions.closeAllDrawers
+    this.pruneConversationFromDrawerStack = this.navActions.pruneConversationFromDrawerStack
+    this.setWorkbenchOpen = this.navActions.setWorkbenchOpen
+    this.setWorkbenchTab = this.navActions.setWorkbenchTab
+    this.setActiveModal = this.navActions.setActiveModal
+    this.openTarget = this.navActions.openTarget
+    this.openSpace = this.navActions.openSpace
+    this.setScreenParams = this.navActions.setScreenParams
+    this.applyExternalLocation = this.navActions.applyExternalLocation
+    this.performHomeLanding = this.navActions.performHomeLanding
+    this.stepHighlightedEntry = this.navActions.stepHighlightedEntry
+    this.clearEscAbortPrompt = this.navActions.clearEscAbortPrompt
+    this.confirmOrArmEscAbort = this.navActions.confirmOrArmEscAbort
 
     this.actions = {
       setTheme: this.setTheme,
@@ -642,6 +371,7 @@ export class HelmxExternalStore {
       backfillConversationEntry: this.backfillConversationEntry,
       loadConversationArtifacts: this.loadConversationArtifacts,
       ensurePluginDoc: this.ensurePluginDoc,
+      retryPluginDoc: this.retryPluginDoc,
       subscribeSessionDoc,
       getSessionDocState,
       getPluginSessionDoc: this.getPluginSessionDoc,
@@ -672,15 +402,8 @@ export class HelmxExternalStore {
   }
 
   dispose(): void {
-    this.clearEscTimer()
+    this.navActions.clearEscTimer()
     this.requests.dispose()
-  }
-
-  private clearEscTimer(): void {
-    if (this.escAbortTimer !== null) {
-      clearTimeout(this.escAbortTimer)
-      this.escAbortTimer = null
-    }
   }
 
   translate = (text: LocalizedText): string => resolveLocalizedText(text, this.prefsState.locale)
@@ -691,53 +414,40 @@ export class HelmxExternalStore {
 
   // ---- Subscriptions --------------------------------------------------------
 
-  subscribeDomain = (key: StoreDomainKey, listener: StoreListener): (() => void) => {
-    return this.addListener(this.domainListeners, key, listener)
-  }
+  subscribeDomain = (key: StoreDomainKey, listener: StoreListener): (() => void) =>
+    this.bus.subscribeDomain(key, listener)
 
-  subscribeAll = (listener: StoreListener): (() => void) => this.subscribeDomain('all', listener)
+  subscribeAll = (listener: StoreListener): (() => void) => this.bus.subscribeDomain('all', listener)
 
   subscribeConversationLive = (conversationId: number, listener: StoreListener): (() => void) =>
-    this.addListener(this.liveListeners, conversationId, listener)
+    this.bus.subscribeConversationLive(conversationId, listener)
 
   subscribeConversationDetail = (conversationId: number, listener: StoreListener): (() => void) =>
-    this.addListener(this.detailListeners, conversationId, listener)
+    this.bus.subscribeConversationDetail(conversationId, listener)
 
   subscribeConversationSummary = (conversationId: number, listener: StoreListener): (() => void) =>
-    this.addListener(this.summaryListeners, conversationId, listener)
+    this.bus.subscribeConversationSummary(conversationId, listener)
 
   subscribeConversationArtifacts = (conversationId: number, listener: StoreListener): (() => void) =>
-    this.addListener(this.artifactsListeners, conversationId, listener)
+    this.bus.subscribeConversationArtifacts(conversationId, listener)
 
   subscribeConversationPendingAsks = (conversationId: number, listener: StoreListener): (() => void) =>
-    this.addListener(this.pendingAskListeners, conversationId, listener)
+    this.bus.subscribeConversationPendingAsks(conversationId, listener)
 
   subscribeResolvedAsks = (conversationId: number, listener: StoreListener): (() => void) =>
-    this.addListener(this.resolvedAsksListeners, conversationId, listener)
+    this.bus.subscribeResolvedAsks(conversationId, listener)
 
   subscribeHighlightForConversation = (conversationId: number, listener: StoreListener): (() => void) =>
-    this.addListener(this.highlightListeners, conversationId, listener)
+    this.bus.subscribeHighlightForConversation(conversationId, listener)
 
   subscribeLoadError = (key: string, listener: StoreListener): (() => void) =>
-    this.addListener(this.loadErrorListeners, key, listener)
+    this.bus.subscribeLoadError(key, listener)
 
   subscribePluginDoc = (docKey: string, listener: StoreListener): (() => void) =>
-    this.addListener(this.pluginDocListeners, docKey, listener)
+    this.bus.subscribePluginDoc(docKey, listener)
 
-  private addListener<K>(map: Map<K, Set<StoreListener>>, key: K, listener: StoreListener): () => void {
-    let set = map.get(key)
-    if (set === undefined) {
-      set = new Set()
-      map.set(key, set)
-    }
-    set.add(listener)
-    return () => {
-      const current = map.get(key)
-      if (current === undefined) return
-      current.delete(listener)
-      if (current.size === 0) map.delete(key)
-    }
-  }
+  subscribePlugin = (pluginId: string, listener: StoreListener): (() => void) =>
+    this.bus.subscribePlugin(pluginId, listener)
 
   // ---- Cached Snapshot Getters ----------------------------------------------
 
@@ -764,6 +474,7 @@ export class HelmxExternalStore {
   getPendingAsks = (): AskSpec[] => this.liveState.pendingAsks
   getResolvedAsksMap = (): Record<number, ResolvedAskEntry[]> => this.liveState.resolvedAsksByConv
   getPlugins = (): PluginSummary[] => this.liveState.plugins
+  getPluginSummary = (pluginId: string): PluginSummary | undefined => this.pluginById.get(pluginId)
   getGroupedUi = (): GroupedUiSpecs => this.groupedUi
   getPluginsUiSlice = (): PluginsUiSlice => this.pluginsUiSlice
   getPluginsSnapshot = (): UsePluginsResult => this.pluginsSnapshot
@@ -819,170 +530,54 @@ export class HelmxExternalStore {
     plan: NotifyPlan,
     triggers: { panelsOrConversations: boolean; locale: boolean; changedDocKeys?: ReadonlySet<string> },
   ): void {
-    const prev = this.conversationBackgroundSlice
-    if (!triggers.panelsOrConversations && !triggers.locale) {
-      if (triggers.changedDocKeys === undefined || triggers.changedDocKeys.size === 0) return
-      let touchesBadgeDoc = false
-      for (const key of triggers.changedDocKeys) {
-        if (this.backgroundBadgeDocKeys.has(key)) {
-          touchesBadgeDoc = true
-          break
-        }
-      }
-      if (!touchesBadgeDoc) return
-    }
-
-    let nextBadgeDocs = prev.badgeDocs
-    if (triggers.panelsOrConversations) {
-      const collected = collectBackgroundBadgeDocs(
-        this.groupedUi.workbenchPanels,
-        this.liveState.conversations,
-      )
-      if (!isSameBadgeDocs(prev.badgeDocs, collected)) {
-        nextBadgeDocs = collected.length === 0 ? EMPTY_BADGE_DOCS : Object.freeze(collected)
-        this.backgroundBadgeDocKeys = new Set(nextBadgeDocs.map((ref) => `${ref.pluginId}/${ref.doc}`))
-      }
-    }
-
-    const rawPending = new Set<string>()
-    for (const ref of nextBadgeDocs) {
-      const key = `${ref.pluginId}/${ref.doc}`
-      if (!Object.hasOwn(this.liveState.pluginDocs, key)) rawPending.add(key)
-    }
-    const nextPendingBadgeDocs = isSameStringSet(prev.pendingBadgeDocs, rawPending)
-      ? prev.pendingBadgeDocs
-      : rawPending.size === 0
-        ? EMPTY_PENDING_BADGE_DOCS
-        : rawPending
-
-    const nextUnknown = nextPendingBadgeDocs.size > 0
-    const rawByConversation = summarizeConversationBackgroundActivity({
-      panels: this.groupedUi.workbenchPanels,
+    const result = recomputeConversationBackgroundSlice({
+      prevSlice: this.conversationBackgroundSlice,
+      prevBadgeDocKeys: this.backgroundBadgeDocKeys,
+      workbenchPanels: this.groupedUi.workbenchPanels,
       conversations: this.liveState.conversations,
       pluginDocs: this.liveState.pluginDocs,
       locale: this.prefsState.locale,
-      t: createWebTranslator(this.prefsState.locale),
+      triggers,
     })
-    const nextSnapshot =
-      prev.snapshot.unknown === nextUnknown &&
-      isSameBackgroundIndex(prev.snapshot.byConversation, rawByConversation)
-        ? prev.snapshot
-        : Object.freeze({
-            unknown: nextUnknown,
-            byConversation: rawByConversation.size === 0 ? EMPTY_BACKGROUND_INDEX : rawByConversation,
-          })
-
-    if (
-      nextBadgeDocs === prev.badgeDocs &&
-      nextPendingBadgeDocs === prev.pendingBadgeDocs &&
-      nextSnapshot === prev.snapshot
-    ) {
-      return
-    }
-    this.conversationBackgroundSlice = {
-      badgeDocs: nextBadgeDocs,
-      pendingBadgeDocs: nextPendingBadgeDocs,
-      snapshot: nextSnapshot,
-    }
+    this.backgroundBadgeDocKeys = result.badgeDocKeys
+    if (!result.changed) return
+    this.conversationBackgroundSlice = result.slice
     plan.domains.add('conversationBackground')
   }
 
   // ---- Atomic Commit / Notification Engine ----------------------------------
 
-  private emit(plan: NotifyPlan): void {
-    const anyChanged =
-      plan.domains.size > 0 ||
-      plan.liveIds.size > 0 ||
-      plan.detailIds.size > 0 ||
-      plan.summaryIds.size > 0 ||
-      plan.artifactIds.size > 0 ||
-      plan.pendingAskIds.size > 0 ||
-      plan.resolvedAskIds.size > 0 ||
-      plan.highlightIds.size > 0 ||
-      plan.loadErrorKeys.size > 0 ||
-      plan.pluginDocKeys.size > 0
-    if (!anyChanged) return
-
+  private emit = (plan: NotifyPlan): void => {
+    if (!hasNotifyChanges(plan)) return
     this.fullSnapshotCache = null
-
-    // Reconcile armed double-Esc abort synchronously on nav / conversation / detail shifts.
-    this.reconcileEscAbort(plan)
-
-    const listeners = new Set<StoreListener>()
-    const collect = <K>(map: Map<K, Set<StoreListener>>, key: K) => {
-      const set = map.get(key)
-      if (set !== undefined) {
-        for (const fn of set) listeners.add(fn)
-      }
-    }
-
-    for (const domain of plan.domains) collect(this.domainListeners, domain)
-    for (const id of plan.liveIds) collect(this.liveListeners, id)
-    for (const id of plan.detailIds) collect(this.detailListeners, id)
-    for (const id of plan.summaryIds) collect(this.summaryListeners, id)
-    for (const id of plan.artifactIds) collect(this.artifactsListeners, id)
-    for (const id of plan.pendingAskIds) collect(this.pendingAskListeners, id)
-    for (const id of plan.resolvedAskIds) collect(this.resolvedAsksListeners, id)
-    for (const id of plan.highlightIds) collect(this.highlightListeners, id)
-    for (const key of plan.loadErrorKeys) collect(this.loadErrorListeners, key)
-    for (const key of plan.pluginDocKeys) collect(this.pluginDocListeners, key)
-
-    for (const fn of listeners) fn()
+    this.navActions.reconcileEscAbort(plan)
+    this.bus.dispatch(plan)
   }
 
-  private reconcileEscAbort(plan: NotifyPlan): void {
-    const pendingId = this.navState.pendingEscAbortConversationId
-    if (pendingId === null) return
-    const activeTarget = activeTargetForPanel(
-      this.navState.primaryTarget,
-      this.navState.splitTarget,
-      this.navState.focusedPanel,
-    )
-    const targetInvalid = activeTarget.kind !== 'conversation' || activeTarget.conversationId !== pendingId
-    const conv = this.summaryById.get(pendingId) ?? this.liveState.conversationDetails[pendingId]
-    if (!targetInvalid && isConversationAbortable(conv)) return
-
-    this.clearEscTimer()
-    this.navState = { ...this.navState, pendingEscAbortConversationId: null }
-    plan.domains.add('pendingEscAbort')
-    plan.domains.add('nav')
-    plan.domains.add('all')
-    if (this.noticesState.some((item) => item.id === ESC_ABORT_NOTICE_ID)) {
-      this.noticesState = this.noticesState.filter((item) => item.id !== ESC_ABORT_NOTICE_ID)
-      plan.domains.add('notices')
-    }
-  }
-
-  // ---- Internal Mutators ----------------------------------------------------
+  // ---- Internal Mutators (also form the hydration surface for test/helpers/store.ts) ----
 
   private patchAuth(patch: Partial<AuthSlice>, plan = emptyPlan(), deferEmit = false): void {
     const prev = this.authState
     const next: AuthSlice = { ...prev, ...patch }
     if (shallowEqualAuth(prev, next)) return
     this.authState = next
-    this.authenticatedRef.current = next.authenticated
     plan.domains.add('auth')
     plan.domains.add('all')
-    if (next.authenticated !== prev.authenticated) {
-      plan.domains.add('authenticated')
-    }
+    if (next.authenticated !== prev.authenticated) plan.domains.add('authenticated')
     if (next.sseConnected !== prev.sseConnected) plan.domains.add('sseConnected')
     if (!deferEmit) this.emit(plan)
   }
 
   setSseConnected = (update: StoreUpdater<boolean>): void => {
-    const next = applyUpdater(this.authState.sseConnected, update)
-    this.patchAuth({ sseConnected: next })
+    this.patchAuth({ sseConnected: applyUpdater(this.authState.sseConnected, update) })
   }
 
   setConnectionError = (update: StoreUpdater<string | null>): void => {
-    const next = applyUpdater(this.authState.connectionError, update)
-    this.patchAuth({ connectionError: next })
+    this.patchAuth({ connectionError: applyUpdater(this.authState.connectionError, update) })
   }
 
   setKernelBootId = (update: StoreUpdater<string | null>): void => {
-    const next = applyUpdater(this.authState.kernelBootId, update)
-    this.patchAuth({ kernelBootId: next })
+    this.patchAuth({ kernelBootId: applyUpdater(this.authState.kernelBootId, update) })
   }
 
   private patchPrefs(patch: Partial<PrefsSlice>, plan = emptyPlan()): void {
@@ -1000,18 +595,12 @@ export class HelmxExternalStore {
     this.prefsState = next
     plan.domains.add('prefs')
     plan.domains.add('all')
-    if (next.theme !== prev.theme || next.themePreference !== prev.themePreference) {
-      plan.domains.add('theme')
-    }
-    if (next.locale !== prev.locale || next.localePreference !== prev.localePreference) {
-      plan.domains.add('locale')
-    }
+    if (next.theme !== prev.theme || next.themePreference !== prev.themePreference) plan.domains.add('theme')
+    if (next.locale !== prev.locale || next.localePreference !== prev.localePreference) plan.domains.add('locale')
     if (next.locale !== prev.locale) {
       this.recomputeConversationBackground(plan, { panelsOrConversations: false, locale: true })
     }
-    if (next.quietNotifyEnabled !== prev.quietNotifyEnabled) {
-      plan.domains.add('quietNotify')
-    }
+    if (next.quietNotifyEnabled !== prev.quietNotifyEnabled) plan.domains.add('quietNotify')
     this.emit(plan)
   }
 
@@ -1039,20 +628,18 @@ export class HelmxExternalStore {
         profilesLoaded: next.profilesLoaded,
         assetsLoaded: next.assetsLoaded,
       }
-      this.profilesRef.current = next.profiles
-      this.profilesLoadedRef.current = next.profilesLoaded
-      this.assetsLoadedRef.current = next.assetsLoaded
       plan.domains.add('profiles')
       changed = true
     }
-    if (next.models !== prev.models || next.modelDefaults !== prev.modelDefaults) { plan.domains.add('models'); changed = true }
+    if (next.models !== prev.models || next.modelDefaults !== prev.modelDefaults) {
+      plan.domains.add('models')
+      changed = true
+    }
     if (
       next.assetsLoaded !== prev.assetsLoaded ||
       (next.assetsLoaded && (next.models !== prev.models || next.modelDefaults !== prev.modelDefaults))
     ) {
-      this.hostModelsSlice = next.assetsLoaded
-        ? { models: next.models, ...next.modelDefaults }
-        : undefined
+      this.hostModelsSlice = next.assetsLoaded ? { models: next.models, ...next.modelDefaults } : undefined
       plan.domains.add('hostModels')
       changed = true
     }
@@ -1072,7 +659,6 @@ export class HelmxExternalStore {
     const next = update(prev)
     if (next === prev) return
     this.liveState = next
-    this.liveRef.current = next
 
     if (next.conversationLives !== prev.conversationLives) {
       addChangedRecordKeys(prev.conversationLives, next.conversationLives, plan.liveIds)
@@ -1120,9 +706,7 @@ export class HelmxExternalStore {
         }
       }
       for (const convId of nextByConv.keys()) {
-        if (!this.pendingAsksByConv.has(convId)) {
-          plan.pendingAskIds.add(convId)
-        }
+        if (!this.pendingAsksByConv.has(convId)) plan.pendingAskIds.add(convId)
       }
       this.pendingAsksByConv = nextByConv
       plan.domains.add('pendingAsks')
@@ -1138,6 +722,15 @@ export class HelmxExternalStore {
       }
     }
     if (next.plugins !== prev.plugins) {
+      const nextPluginMap = new Map<string, PluginSummary>()
+      for (const plugin of next.plugins) nextPluginMap.set(plugin.id, plugin)
+      for (const [id, prevPlugin] of this.pluginById) {
+        if (nextPluginMap.get(id) !== prevPlugin) plan.pluginIds.add(id)
+      }
+      for (const [id, nextPlugin] of nextPluginMap) {
+        if (this.pluginById.get(id) !== nextPlugin) plan.pluginIds.add(id)
+      }
+      this.pluginById = nextPluginMap
       plan.domains.add('plugins')
       plan.domains.add('pluginsUi')
       plan.domains.add('all')
@@ -1192,7 +785,6 @@ export class HelmxExternalStore {
     addChangedRecordKeys(prev, next, plan.artifactIds)
     if (plan.artifactIds.size === 0) return
     this.artifactsState = next
-    this.conversationArtifactsRef.current = next
     plan.domains.add('conversationArtifactsMap')
     plan.domains.add('all')
     if (!deferEmit) this.emit(plan)
@@ -1255,9 +847,7 @@ export class HelmxExternalStore {
     const collapsedChanged = next.sidebarCollapsed !== prev.sidebarCollapsed
     const escChanged = next.pendingEscAbortConversationId !== prev.pendingEscAbortConversationId
     const drawerStackChanged = !isSameDrawerStack(prev.drawerStack, next.drawerStack)
-    if (!drawerStackChanged) {
-      next.drawerStack = prev.drawerStack
-    }
+    if (!drawerStackChanged) next.drawerStack = prev.drawerStack
     const wbChanged = next.workbenchOpen !== prev.workbenchOpen || next.workbenchTab !== prev.workbenchTab
     const modalChanged = next.activeModal !== prev.activeModal
     const highlightChanged = next.highlightedEntry !== prev.highlightedEntry
@@ -1277,12 +867,6 @@ export class HelmxExternalStore {
     }
 
     this.navState = next
-    this.targets.current = { primaryTarget: next.primaryTarget, splitTarget: next.splitTarget }
-    this.focusedPanelRef.current = next.focusedPanel
-    this.drawerStackRef.current = next.drawerStack
-    this.workbenchOpenRef.current = next.workbenchOpen
-    this.activeModalRef.current = next.activeModal
-
     plan.domains.add('nav')
     plan.domains.add('all')
     if (primaryChanged) plan.domains.add('primaryTarget')
@@ -1321,7 +905,6 @@ export class HelmxExternalStore {
       if (prev.highlightedEntry !== null) plan.highlightIds.add(prev.highlightedEntry.conversationId)
       if (next.highlightedEntry !== null) plan.highlightIds.add(next.highlightedEntry.conversationId)
     }
-
     if (!deferEmit) this.emit(plan)
   }
 
@@ -1427,24 +1010,24 @@ export class HelmxExternalStore {
     this.patchAuth({ authConfigured: true, authError: null, authenticated: true })
   }
 
-  /** Resets non-URL refs, timers, and caches before the provider resets window.history. */
+  /** Resets non-URL timers and caches before the provider resets window.history. */
   prepareLogoutHistoryReset(): void {
-    this.clearEscTimer()
+    this.navActions.clearEscTimer()
     this.requests.resetOnLogout()
-    this.sseCursorRef.current = null
+    this.sseCursor = null
     resetStandbyDrafts()
     resetPluginClientCache()
     resetSessionDocSubscriptions()
     setStoredToken(null)
-    this.lastSyncedLocation.current = parseLocationHash('#/settings/profiles')
-    this.pendingHistoryMode.current = null
+    this.lastSyncedLocation = parseLocationHash('#/settings/profiles')
+    this.pendingHistoryMode = null
   }
 
   /** Clears all reactive store slices in one atomic batch on logout. */
   finishLogoutStateReset(): void {
     const plan = emptyPlan()
     this.patchAuth({ authenticated: false, sseConnected: false, connectionError: null }, plan, true)
-    this.spaceMemory = { settings: { kind: 'profiles' } }
+    this.navActions.resetSpaceMemory({ settings: { kind: 'profiles' } })
     this.patchNav(
       {
         activeModal: null,
@@ -1481,722 +1064,5 @@ export class HelmxExternalStore {
       true,
     )
     this.emit(plan)
-  }
-
-  // ---- Assets, Plugins & Nodes ----------------------------------------------
-
-  refreshAssets = async (): Promise<void> => {
-    const { generation, controller } = this.requests.beginAssetRefresh()
-    const signal = controller.signal
-    const isStale = (): boolean => generation !== this.requests.assetGeneration.current || signal.aborted
-
-    const profilesTask = assetsApi.listProfiles({ signal }).then(
-      (list) => {
-        if (isStale()) return
-        const plan = emptyPlan()
-        this.patchCatalog({ profiles: list, profilesLoaded: true }, plan, true)
-        if (Object.hasOwn(this.loadErrorsState, 'assets:profiles')) {
-          const nextErrors = { ...this.loadErrorsState }
-          delete nextErrors['assets:profiles']
-          this.setLoadErrors(nextErrors, plan, true)
-        }
-        this.emit(plan)
-      },
-      (reason: unknown) => {
-        if (isAbortError(reason) || isStale()) return
-        const plan = emptyPlan()
-        this.patchCatalog({ profilesLoaded: true }, plan, true)
-        const nextMessage = errorText(reason)
-        if (this.loadErrorsState['assets:profiles'] !== nextMessage) {
-          this.setLoadErrors({ ...this.loadErrorsState, 'assets:profiles': nextMessage }, plan, true)
-        }
-        this.emit(plan)
-        this.pushNotice({
-          type: 'notification',
-          level: 'error',
-          title: this.translate(ASSET_LOAD_FAILURE_TITLES[0]!),
-          body: nextMessage,
-        })
-      },
-    )
-
-    const otherTasks = Promise.allSettled([
-      assetsApi.listModels({ signal }),
-      assetsApi.listProviders({ signal }),
-      assetsApi.listCredentials({ signal }),
-      assetsApi.listSkills({ signal }),
-      pluginsApi.listActions({ signal }),
-    ]).then((results) => {
-      if (isStale()) return
-      const patch: Partial<CatalogSlice> = {}
-      if (results[0].status === 'fulfilled') {
-        const catalog = results[0].value
-        const { models, ...modelDefaults } = catalog
-        patch.models = models
-        patch.modelDefaults = modelDefaults
-      }
-      if (results[1].status === 'fulfilled') patch.providers = results[1].value
-      if (results[2].status === 'fulfilled') patch.credentials = results[2].value
-      if (results[3].status === 'fulfilled') patch.skills = results[3].value
-      if (results[4].status === 'fulfilled') patch.actions = results[4].value
-      this.patchCatalog(patch)
-      results.forEach((result, index) => {
-        if (result.status === 'rejected' && !isAbortError(result.reason)) {
-          this.pushNotice({
-            type: 'notification',
-            level: 'error',
-            title: this.translate(ASSET_LOAD_FAILURE_TITLES[index + 1]!),
-            body: errorText(result.reason),
-          })
-        }
-      })
-    })
-
-    await Promise.all([profilesTask, otherTasks])
-    if (isStale()) return
-    this.requests.finishAssetRefresh(controller)
-    this.patchCatalog({ assetsLoaded: true })
-  }
-
-  /**
-   * HTTP 全量插件摘要校准（如 PluginCenter 安装/更新/卸载后的 GET /api/plugins）：
-   * - 按 `sameJsonValue` 保留未变更插件引用；
-   * - 立即清理非 active（disabled / enabled=true,status=failed）及已移除插件的 `uiContributions`、
-   *   `pluginDocs`、`sessionDocs` 与 doc 请求/错误；
-   * - 对 active 插件的非纯配置变更（`clientHashes` / 非配置元数据变化）及非 active→active 恢复，
-   *   清理对应 `doc:<pluginId>/` 文档缓存、`failedDocs`、`requests`、`loadErrors` 并递增 `pluginEpoch`；
-   *   纯 `publicConfig` 变更全部保留；
-   * - 按摘要增量对账 `reconcilePluginClientCache`（逐出停用/失败/移除或 hash 变更模块与样式，推进 revision）；
-   * - 架构边界：`GET /api/plugins` 仅返回 `PluginSummary[]` 不含 `PluginUiContribution[]`（内核未暴露 HTTP `listUi`），
-   *   对仍 active 插件保留既有 `uiContributions`，新增或结构变更的 UI 贡献仍由 SSE `plugin.changed` / `snapshot` 收敛。
-   */
-  syncPlugins = (next: PluginSummary[]): void => {
-    if (!Array.isArray(next)) return
-    const plan = emptyPlan()
-    const reconciled = reconcilePluginsState(this.liveState, next)
-
-    if (reconciled.state !== this.liveState) {
-      this.updateLive(() => reconciled.state, plan, true)
-    }
-
-    if (reconciled.invalidatedDocPluginIds.size > 0) {
-      for (const pluginId of reconciled.invalidatedDocPluginIds) {
-        const docPrefix = `doc:${pluginId}/`
-        this.requests.pluginEpoch.current.set(
-          pluginId,
-          (this.requests.pluginEpoch.current.get(pluginId) ?? 0) + 1,
-        )
-        for (const key of [...this.requests.failedDocs.current]) {
-          if (key.startsWith(docPrefix)) this.requests.failedDocs.current.delete(key)
-        }
-        for (const key of [...this.requests.requests.current.keys()]) {
-          if (key.startsWith(docPrefix)) this.requests.requests.current.delete(key)
-        }
-      }
-      this.setLoadErrors(
-        (prev) => omitPluginDocLoadErrors(prev, reconciled.invalidatedDocPluginIds),
-        plan,
-        true,
-      )
-    }
-
-    reconcilePluginClientCache(reconciled.state.plugins)
-    for (const pluginId of reconciled.inactivePluginIds) {
-      evictSessionDocSubscriptions(pluginId)
-    }
-
-    this.emit(plan)
-  }
-
-  refreshNodes = async (): Promise<NodeInfo[] | undefined> => {
-    const epoch = this.requests.session.current
-    const nodesBeforeRequest = this.liveState.nodes
-    try {
-      const list = await nodesApi.list()
-      if (epoch !== this.requests.session.current) return undefined
-      const sorted = sortNodes(list)
-      this.updateLive((state) => (state.nodes === nodesBeforeRequest ? { ...state, nodes: sorted } : state))
-      return this.liveState.nodes
-    } catch (error) {
-      if (epoch === this.requests.session.current) {
-        this.pushNotice({
-          type: 'notification',
-          level: 'error',
-          title: this.translate({ en: 'Compute nodes failed to load', 'zh-CN': '计算节点加载失败' }),
-          body: errorText(error),
-        })
-      }
-      return undefined
-    }
-  }
-
-  // ---- Conversations & Plugin Docs Requests ---------------------------------
-
-  loadConversationDetail = async (
-    id: number,
-    force = false,
-    opts?: { silent?: boolean; limit?: number },
-  ): Promise<ConversationDetail | undefined> => {
-    const key = `conversation:${id}`
-    const existing = this.requests.requests.current.get(key)
-    if (existing) return existing as Promise<ConversationDetail | undefined>
-    if (!force && this.liveState.conversationDetails[id]) return this.liveState.conversationDetails[id]
-
-    const silent = opts?.silent === true
-    const hasCached = this.liveState.conversationDetails[id] !== undefined
-    const limit = opts?.limit ?? defaultConversationDetailLimit()
-
-    return this.requests.runControlled({
-      key,
-      onStart: () => {
-        if (!silent || !hasCached) this.reportLoad(key)
-      },
-      onError: (error) => {
-        if (!silent || this.liveState.conversationDetails[id] === undefined) {
-          this.reportLoad(key, error)
-        }
-      },
-      exec: async ({ signal, isStale }) => {
-        const detail = await conversationsApi.getDetail(id, { limit, signal })
-        if (isStale()) return undefined
-        const plan = emptyPlan()
-        if (Object.hasOwn(this.loadErrorsState, key)) {
-          const nextErrors = { ...this.loadErrorsState }
-          delete nextErrors[key]
-          this.setLoadErrors(nextErrors, plan, true)
-        }
-        this.updateLive((state) => mergeConversationDetail(state, detail), plan, true)
-        this.emit(plan)
-        return detail
-      },
-    })
-  }
-
-  loadEarlierEntries = async (id: number): Promise<void> => {
-    const detail = this.liveState.conversationDetails[id]
-    if (!detail?.nextCursor) return
-    const key = `history:${id}`
-    if (this.requests.requests.current.has(key)) return
-    const limit = defaultConversationDetailLimit()
-    const cursor = detail.nextCursor
-
-    await this.requests.runControlled<void>({
-      key,
-      onStart: () => {
-        this.reportLoad(key)
-      },
-      onError: (error) => {
-        this.reportLoad(key, error)
-      },
-      exec: async ({ signal, isStale }) => {
-        const page = await conversationsApi.getDetail(id, { limit, cursor, signal })
-        if (isStale()) return undefined
-        this.updateLive((state) => mergeConversationDetail(state, page, true))
-        return undefined
-      },
-    })
-  }
-
-  backfillConversationEntry = (conversationId: number, entry: ConversationEntry): void => {
-    this.updateLive((state) => applyConversationEntry(state, conversationId, entry))
-  }
-
-  loadConversationArtifacts = async (
-    id: number,
-    opts?: { silent?: boolean },
-  ): Promise<ArtifactMetadata[] | undefined> => {
-    const key = `artifacts:${id}`
-    const existing = this.requests.requests.current.get(key)
-    if (existing) {
-      const latest = this.summaryById.get(id) ?? this.liveState.conversationDetails[id]
-      const inFlight = this.requests.artifactsInFlight.get(id)
-      const latestActive = latest !== undefined && isConversationStatusActive(latest.status)
-      if (
-        latest !== undefined &&
-        !latestActive &&
-        (inFlight === undefined ||
-          inFlight.active ||
-          inFlight.watermark === undefined ||
-          inFlight.watermark.stateChangeSeq !== latest.stateChangeSeq ||
-          inFlight.watermark.lastEntryId !== latest.lastEntryId)
-      ) {
-        this.requests.dirtyArtifacts.add(id)
-      }
-      return existing as Promise<ArtifactMetadata[] | undefined>
-    }
-
-    const silent = opts?.silent === true
-    const hasCached = this.artifactsState[id] !== undefined
-    const sampledSummary = this.summaryById.get(id)
-    const sampledActive = sampledSummary !== undefined && isConversationStatusActive(sampledSummary.status)
-    const sampledWatermark =
-      sampledSummary !== undefined && !sampledActive
-        ? { stateChangeSeq: sampledSummary.stateChangeSeq, lastEntryId: sampledSummary.lastEntryId }
-        : undefined
-    const sessionEpoch = this.requests.session.current
-    const reqEpochBefore = this.requests.requestEpochs.get(key) ?? 0
-    this.requests.artifactsInFlight.set(id, { active: sampledActive, watermark: sampledWatermark })
-    this.requests.dirtyArtifacts.delete(id)
-
-    const result = await this.requests.runControlled({
-      key,
-      onStart: () => {
-        if (!silent || !hasCached) this.reportLoad(key)
-      },
-      onError: (error) => {
-        if (!silent || this.artifactsState[id] === undefined) {
-          this.reportLoad(key, error)
-          this.pushNotice({
-            type: 'notification',
-            level: 'error',
-            title: this.translate({ en: 'Conversation artifacts failed to load', 'zh-CN': '会话产物加载失败' }),
-            body: errorText(error),
-            conversationId: id,
-          })
-        }
-      },
-      exec: async ({ signal, isStale }) => {
-        const list = await conversationsApi.listArtifacts(id, { signal })
-        if (isStale()) return undefined
-        const plan = emptyPlan()
-        if (Object.hasOwn(this.loadErrorsState, key)) {
-          const nextErrors = { ...this.loadErrorsState }
-          delete nextErrors[key]
-          this.setLoadErrors(nextErrors, plan, true)
-        }
-        const reconciled = reconcileArtifactList(this.artifactsState[id], list)
-        this.setConversationArtifacts(
-          (prev) => (prev[id] === reconciled ? prev : { ...prev, [id]: reconciled }),
-          plan,
-          true,
-        )
-        this.emit(plan)
-        const latestSummary = this.summaryById.get(id) ?? this.liveState.conversationDetails[id]
-        const latestActive = latestSummary !== undefined && isConversationStatusActive(latestSummary.status)
-        if (!sampledActive && !latestActive && !this.requests.dirtyArtifacts.has(id)) {
-          const resolvedWatermark =
-            sampledWatermark ??
-            (latestSummary !== undefined
-              ? { stateChangeSeq: latestSummary.stateChangeSeq, lastEntryId: latestSummary.lastEntryId }
-              : undefined)
-          if (resolvedWatermark !== undefined) this.requests.artifactsWatermarks.current.set(id, resolvedWatermark)
-          else this.requests.artifactsWatermarks.current.delete(id)
-        } else {
-          this.requests.artifactsWatermarks.current.delete(id)
-        }
-        return reconciled
-      },
-    })
-
-    if (sessionEpoch === this.requests.session.current && (this.requests.requestEpochs.get(key) ?? 0) === reqEpochBefore + 1) {
-      this.requests.artifactsInFlight.delete(id)
-      if (this.requests.dirtyArtifacts.delete(id)) {
-        return await this.loadConversationArtifacts(id, { silent: true })
-      }
-    }
-    return result
-  }
-
-  ensurePluginDoc = async (pluginId: string, name: string): Promise<unknown> => {
-    const docKey = `${pluginId}/${name}`
-    const key = `doc:${docKey}`
-    if (Object.hasOwn(this.liveState.pluginDocs, docKey)) return this.liveState.pluginDocs[docKey]
-    if (this.requests.failedDocs.current.has(key)) return undefined
-    const existing = this.requests.requests.current.get(key)
-    if (existing) return existing
-
-    const epoch = this.requests.session.current
-    const pluginVersion = this.requests.pluginEpoch.current.get(pluginId)
-    const task = pluginsApi
-      .getPublicDoc(pluginId, name)
-      .then((doc) => {
-        if (epoch !== this.requests.session.current || pluginVersion !== this.requests.pluginEpoch.current.get(pluginId)) {
-          return undefined
-        }
-        if (this.liveState.plugins.some((p) => p.id === pluginId && isPluginSummaryActive(p))) {
-          const plan = emptyPlan()
-          this.requests.failedDocs.current.delete(key)
-          if (!Object.hasOwn(this.liveState.pluginDocs, docKey)) {
-            this.updateLive(
-              (state) =>
-                Object.hasOwn(state.pluginDocs, docKey) ||
-                !state.plugins.some((p) => p.id === pluginId && isPluginSummaryActive(p))
-                  ? state
-                  : { ...state, pluginDocs: { ...state.pluginDocs, [docKey]: doc.value } },
-              plan,
-              true,
-            )
-          }
-          if (Object.hasOwn(this.loadErrorsState, key)) {
-            const nextErrors = { ...this.loadErrorsState }
-            delete nextErrors[key]
-            this.setLoadErrors(nextErrors, plan, true)
-          }
-          this.emit(plan)
-        }
-        return doc.value
-      })
-      .catch((error: unknown) => {
-        if (epoch === this.requests.session.current && pluginVersion === this.requests.pluginEpoch.current.get(pluginId)) {
-          this.requests.failedDocs.current.add(key)
-          this.reportLoad(key, error)
-          this.pushNotice({
-            type: 'notification',
-            level: 'error',
-            title: this.translate({ en: 'Plugin state failed to load', 'zh-CN': '插件状态读取失败' }),
-            body: this.translate({
-              en: `${pluginId}/${name}: ${errorText(error)}`,
-              'zh-CN': `${pluginId}/${name}：${errorText(error)}`,
-            }),
-          })
-        }
-        return undefined
-      })
-      .finally(() => {
-        if (this.requests.requests.current.get(key) === task) this.requests.requests.current.delete(key)
-      })
-    this.requests.requests.current.set(key, task)
-    return task
-  }
-
-  getPluginSessionDoc = async (pluginId: string, docName: string, conversationId: number): Promise<unknown> => {
-    const doc = await pluginsApi.getPublicSessionDoc(pluginId, docName, conversationId)
-    return doc.value
-  }
-
-  invokePluginAction = async (pluginId: string, actionId: string, input: unknown, conversationId?: number) =>
-    pluginsApi.invokeAction(pluginId, actionId, input, conversationId)
-
-  // ---- Navigation, Shortcuts & Esc-Abort ------------------------------------
-
-  /** 空间记忆写入的唯一入口：总览是有专属入口的顶层目的地，不占对话空间
-   *  的记忆位——boot 初始化、程序导航（applyPrimaryTarget/openTarget）与
-   *  hashchange 同步（applyExternalLocation）全部经此收敛，「对话」空间按钮
-   *  永远跳回最近的真实会话/待命目标，绝不被总览劫持（含 #/overview 直达
-   *  后的刷新场景）。 */
-  private rememberSpaceTarget(target: ResolvedTarget): void {
-    if (target.kind === 'overview') return
-    this.spaceMemory[spaceForTarget(target)] = target
-  }
-
-  applyPrimaryTarget = (target: ResolvedTarget): void => {
-    this.rememberSpaceTarget(target)
-    this.patchNav({ primaryTarget: target })
-  }
-
-  setSplitTarget = (update: StoreUpdater<ResolvedTarget | null>): void => {
-    const next = applyUpdater(this.navState.splitTarget, update)
-    this.patchNav({ splitTarget: next })
-  }
-
-  setFocusedPanel = (panel: FocusedPanel): void => {
-    const next = resolveFocusedPanel(panel, this.navState.splitTarget)
-    this.patchNav({ focusedPanel: next })
-  }
-
-  closeSplit = (): void => {
-    this.patchNav({ splitTarget: null, focusedPanel: 'primary' })
-  }
-
-  setSidebarCollapsed = (collapsed: boolean): void => {
-    persistSidebarCollapsed(collapsed)
-    this.patchNav({ sidebarCollapsed: collapsed })
-  }
-
-  toggleSidebarCollapsed = (): void => {
-    const next = !this.navState.sidebarCollapsed
-    persistSidebarCollapsed(next)
-    this.patchNav({ sidebarCollapsed: next })
-  }
-
-  private resolveActiveStageConversationId(): number | undefined {
-    const focused = resolveFocusedPanel(this.navState.focusedPanel, this.navState.splitTarget)
-    const activeTarget = activeTargetForPanel(this.navState.primaryTarget, this.navState.splitTarget, focused)
-    const fallbackTarget = focused === 'split' ? this.navState.primaryTarget : this.navState.splitTarget
-    if (activeTarget.kind === 'conversation') return activeTarget.conversationId
-    if (fallbackTarget?.kind === 'conversation') return fallbackTarget.conversationId
-    return undefined
-  }
-
-  openConversationDrawer = (conversationId: number): void => {
-    const nextStack = pushDrawerFrame(this.navState.drawerStack, { kind: 'conversation', conversationId })
-    this.patchNav({ drawerStack: nextStack })
-  }
-
-  openWorkbenchDrawer = (options?: { tab?: string; conversationId?: number }): void => {
-    const top = topDrawerFrame(this.navState.drawerStack)
-    const underlyingConvId = topConversationDrawerId(this.navState.drawerStack)
-    const stageConvId = this.resolveActiveStageConversationId()
-    let frameConversationId: number | undefined
-    if (options?.conversationId !== undefined) {
-      frameConversationId =
-        underlyingConvId === undefined && options.conversationId === stageConvId
-          ? undefined
-          : options.conversationId
-    } else if (top?.kind === 'workbench') {
-      frameConversationId = top.conversationId
-    } else if (underlyingConvId !== undefined) {
-      frameConversationId = underlyingConvId
-    }
-    const tab = normalizeWorkbenchTab(
-      options?.tab ?? (top?.kind === 'workbench' ? top.tab : this.navState.workbenchTab),
-    )
-    const nextFrame: DrawerFrame =
-      frameConversationId !== undefined
-        ? { kind: 'workbench', conversationId: frameConversationId, tab }
-        : { kind: 'workbench', tab }
-    const nextStack = pushDrawerFrame(this.navState.drawerStack, nextFrame)
-    this.patchNav({ drawerStack: nextStack, workbenchTab: tab })
-  }
-
-  popDrawer = (): void => {
-    if (this.navState.drawerStack.length === 0) return
-    this.patchNav({ drawerStack: popDrawerFrame(this.navState.drawerStack) })
-  }
-
-  truncateDrawerStack = (index: number): void => {
-    if (this.navState.drawerStack.length === 0) return
-    this.patchNav({ drawerStack: truncateDrawerStackTo(this.navState.drawerStack, index) })
-  }
-
-  closeAllDrawers = (): void => {
-    if (this.navState.drawerStack.length === 0) return
-    this.patchNav({ drawerStack: [] })
-  }
-
-  pruneConversationFromDrawerStack = (conversationId: number): void => {
-    const nextStack = removeConversationFromDrawerStack(this.navState.drawerStack, conversationId)
-    if (nextStack !== this.navState.drawerStack) {
-      this.patchNav({ drawerStack: nextStack })
-    }
-  }
-
-  setWorkbenchOpen = (update: StoreUpdater<boolean>): void => {
-    const currentlyOpen = topDrawerFrame(this.navState.drawerStack)?.kind === 'workbench'
-    const next = applyUpdater(currentlyOpen, update)
-    if (next === currentlyOpen) return
-    if (next) {
-      this.openWorkbenchDrawer()
-    } else {
-      this.popDrawer()
-    }
-  }
-
-  setWorkbenchTab = (update: StoreUpdater<string>): void => {
-    const top = topDrawerFrame(this.navState.drawerStack)
-    const currentTab = top?.kind === 'workbench' ? top.tab : this.navState.workbenchTab
-    const nextTab = normalizeWorkbenchTab(applyUpdater(currentTab, update))
-    const nextStack = updateTopWorkbenchTab(this.navState.drawerStack, nextTab)
-    this.patchNav({ drawerStack: nextStack, workbenchTab: nextTab })
-  }
-
-  setActiveModal = (update: StoreUpdater<ActiveModal>): void => {
-    const next = applyUpdater(this.navState.activeModal, update)
-    // 顶层预览弹窗（文件/产物/命令面板）与右侧抽屉栈正交：互不覆盖、各自按叠层关闭。
-    this.patchNav({ activeModal: next })
-  }
-
-  openTarget = (
-    target: string | ResolvedTarget,
-    opts?: { split?: boolean; highlightEntryId?: string; history?: 'push' | 'replace' },
-  ): void => {
-    const resolved = typeof target === 'string' ? resolveTargetString(target, this.liveState.conversations) : target
-    if (!resolved) {
-      this.pushNotice({
-        type: 'notification',
-        level: 'warning',
-        title: this.tt('shell.nav.targetNotReady'),
-        body: typeof target === 'string' ? target : this.tt('shell.nav.invalidTarget'),
-      })
-      return
-    }
-    if (opts?.history !== undefined) this.pendingHistoryMode.current = opts.history
-    const patch: Partial<NavSlice> = {}
-    if (opts?.split) {
-      patch.splitTarget = resolved
-    } else {
-      // 总览不占对话空间记忆位（rememberSpaceTarget 内置守卫，见其注释）。
-      this.rememberSpaceTarget(resolved)
-      patch.primaryTarget = resolved
-      // 主屏导航离开当前视图时收起覆盖型抽屉栈：抽屉内徽标/通知等触发的
-      // openTarget 若不收抽屉，新目标被抽屉遮挡，表现为「点击无反应」。
-      // 深链恢复（applyExternalLocation）不走此路径，组合态仍可精确还原。
-      if (this.navState.drawerStack.length > 0) patch.drawerStack = []
-    }
-    if (resolved.kind === 'conversation' && opts?.highlightEntryId) {
-      patch.highlightedEntry = { conversationId: resolved.conversationId, entryId: opts.highlightEntryId }
-    }
-    this.patchNav(patch)
-  }
-
-  openSpace = (space: SidebarSpace): void => {
-    const input: SpaceTargetInput = {
-      conversations: this.liveState.conversations,
-      profiles: this.catalogState.profiles,
-      plugins: this.liveState.plugins,
-      assetsLoaded: this.catalogState.profilesLoaded || this.catalogState.assetsLoaded,
-      grouped: this.groupedUi,
-    }
-    const resolution = resolveSpaceSwitch(space, this.navState.primaryTarget, this.spaceMemory, input)
-    if (resolution.kind === 'already-in-space') return
-    if (resolution.clearStaleMemory) delete this.spaceMemory[space]
-    if (resolution.kind === 'unavailable') {
-      this.pushNotice({
-        type: 'notification',
-        level: 'warning',
-        title: this.tt('shell.nav.noOpenableEntry'),
-        body: space === 'views' ? this.tt('shell.nav.noViewsBody') : this.tt('shell.nav.noConversationsBody'),
-      })
-      return
-    }
-    this.openTarget(resolution.target, { history: 'push' })
-  }
-
-  setScreenParams = (
-    patch: Record<string, string | undefined>,
-    options?: { split?: boolean; push?: boolean },
-  ): void => {
-    const { validEntries, invalidKeys } = partitionScreenParamsPatch(patch)
-    for (const key of invalidKeys) {
-      this.pushNotice({
-        type: 'notification',
-        level: 'warning',
-        title: this.translate({ en: 'Ignored invalid Screen parameter key', 'zh-CN': '已忽略非法 Screen 参数键' }),
-        body: this.translate({
-          en: `Parameter ${key} must use a valid key and a string value`,
-          'zh-CN': `参数 ${key} 必须使用合法键和字符串值`,
-        }),
-      })
-    }
-    const currentTarget = options?.split ? this.navState.splitTarget : this.navState.primaryTarget
-    if (validEntries.length === 0 || (currentTarget?.kind !== 'screen' && currentTarget?.kind !== 'overview')) return
-    if (options?.push) this.pendingHistoryMode.current = 'push'
-    if (options?.split) {
-      this.setSplitTarget((current) => (current === null ? current : applyScreenParamsPatch(current, validEntries)))
-    } else {
-      this.applyPrimaryTarget(applyScreenParamsPatch(currentTarget, validEntries))
-    }
-  }
-
-  applyExternalLocation = (parsed: WorkspaceLocationState): void => {
-    this.pendingHistoryMode.current = null
-    this.lastSyncedLocation.current = parsed
-    this.rememberSpaceTarget(parsed.primaryTarget)
-    const top = topDrawerFrame(parsed.drawerStack)
-    this.patchNav({
-      primaryTarget: parsed.primaryTarget,
-      splitTarget: parsed.splitTarget,
-      drawerStack: parsed.drawerStack,
-      ...(top?.kind === 'workbench' ? { workbenchTab: top.tab } : {}),
-      activeModal: parsed.activeModal,
-    })
-  }
-
-  performHomeLanding(initialLocation: WorkspaceLocationState): void {
-    if (!isSameLocationState(this.locationStateCache, initialLocation)) return
-    const input: SpaceTargetInput = {
-      conversations: this.liveState.conversations,
-      profiles: this.catalogState.profiles,
-      plugins: this.liveState.plugins,
-      assetsLoaded: this.catalogState.profilesLoaded || this.catalogState.assetsLoaded,
-      grouped: this.groupedUi,
-    }
-    // 并发主入口：非全新系统（存在可见根会话树，与总览暴露边界同口径）冷
-    // 启动以 replace 落到会话总览；全新/清空系统回退对话空间缺省目标
-    // （最新根会话所属角色的待命页，无会话时首个可用角色），保住首次
-    // 部署打开即能打字的体验。
-    if (hasVisibleConversationRoots(input)) {
-      this.openTarget({ kind: 'overview' }, { history: 'replace' })
-      return
-    }
-    const home = defaultSpaceTarget('conversations', input)
-    if (home === null) return
-    this.openTarget(home, { history: 'replace' })
-  }
-
-  stepHighlightedEntry(): void {
-    const current = this.navState.highlightedEntry
-    if (current === null) return
-    const detail = this.liveState.conversationDetails[current.conversationId]
-    if (!detail) return
-    const matched = detail.entries.find((entry) => entryMatchesReference(entry, current.entryId))
-    if (matched) {
-      if (matched.id !== current.entryId) {
-        this.patchNav({ highlightedEntry: { ...current, entryId: matched.id } })
-        return
-      }
-      this.requests.delay(() => {
-        if (this.navState.highlightedEntry === current) {
-          this.patchNav({ highlightedEntry: null })
-        }
-      }, 5000)
-    } else if (detail.nextCursor && !this.loadErrorsState[`history:${detail.id}`]) {
-      void this.loadEarlierEntries(detail.id)
-    } else if (!detail.nextCursor) {
-      this.pushNotice({
-        type: 'notification',
-        level: 'warning',
-        title: this.tt('shell.nav.searchEntryGone'),
-        conversationId: detail.id,
-      })
-      this.patchNav({ highlightedEntry: null })
-    }
-  }
-
-  clearEscAbortPrompt = (): void => {
-    this.clearEscTimer()
-    const plan = emptyPlan()
-    if (this.navState.pendingEscAbortConversationId !== null) {
-      this.patchNav({ pendingEscAbortConversationId: null }, plan, true)
-    }
-    if (this.noticesState.some((item) => item.id === ESC_ABORT_NOTICE_ID)) {
-      this.setNotices((prev) => prev.filter((item) => item.id !== ESC_ABORT_NOTICE_ID), plan, true)
-    }
-    this.emit(plan)
-  }
-
-  private armEscAbortPrompt(conversationId: number): void {
-    this.clearEscTimer()
-    const plan = emptyPlan()
-    this.patchNav({ pendingEscAbortConversationId: conversationId }, plan, true)
-    this.setNotices(
-      (prev) => [
-        ...prev.filter((item) => item.id !== ESC_ABORT_NOTICE_ID),
-        {
-          id: ESC_ABORT_NOTICE_ID,
-          type: 'notification',
-          level: 'warning',
-          title: this.tt('shell.esc.confirmTitle'),
-          body: this.tt('shell.esc.confirmBody'),
-          conversationId,
-          createdAt: Date.now(),
-        },
-      ],
-      plan,
-      true,
-    )
-    this.emit(plan)
-
-    this.escAbortTimer = setTimeout(() => {
-      this.escAbortTimer = null
-      this.clearEscAbortPrompt()
-    }, this.escAbortWindowMs)
-  }
-
-  confirmOrArmEscAbort = (conversationId: number): void => {
-    if (this.navState.pendingEscAbortConversationId === conversationId) {
-      this.clearEscAbortPrompt()
-      void conversationsApi.abort(conversationId).catch((error: unknown) => {
-        this.pushNotice({
-          type: 'notification',
-          level: 'error',
-          title: this.tt('shell.esc.abortFailedTitle'),
-          body: errorText(error),
-          conversationId,
-        })
-      })
-    } else {
-      this.armEscAbortPrompt(conversationId)
-    }
   }
 }

@@ -2,10 +2,9 @@
  * SSE 实时订阅、短断线续传（bootId + seq 水位与失败回退全量 snapshot）、
  * 空闲看门狗及指数退避重连状态机 hook。
  */
-import { useEffect, type Dispatch, type MutableRefObject, type SetStateAction } from 'react'
+import { useEffect } from 'react'
 import type {
   ArtifactMetadata,
-  ConversationDetail,
   ConversationSummary,
   HelmxEvent,
   HelmxEventFrame,
@@ -13,8 +12,10 @@ import type {
   HelmxSnapshot,
   HelmxTransientLiveFrame,
 } from '@helmx/protocol/browser'
+import { isConversationArchived } from '../conversation/archive-model.js'
 import { getStoredToken } from './api.js'
 import { errorText } from './error-text.js'
+import type { HelmxExternalStore } from './helmx-store.js'
 import {
   applyEventFrame,
   applyResumedFrame,
@@ -28,18 +29,15 @@ import {
   sameClientHashes,
   SseParser,
   sseClientTimings,
-  type LiveState,
 } from './live-state.js'
 import { evictPluginClientCache, reconcilePluginClientCache } from './plugin-client.js'
 import { observeServerEpoch } from './server-clock.js'
 import { evictSessionDocsOfConversation, evictSessionDocSubscriptions } from './session-docs.js'
-import { isConversationArchived } from '../conversation/archive-model.js'
 import { standbyFallbackTarget } from './space-navigation.js'
-import type { DrawerFrame, ResolvedTarget, ToastNotice } from './types.js'
 import {
   isArtifactsWatermarkCurrent,
   isConversationStatusActive,
-  type ArtifactsSyncWatermark,
+  type UseUnreadSyncResult,
 } from './use-unread-sync.js'
 
 export interface SseCursor {
@@ -48,41 +46,13 @@ export interface SseCursor {
 }
 
 export interface UseSseEventsOptions {
+  store: HelmxExternalStore
   authenticated: boolean
-  session: MutableRefObject<number>
-  sseCursorRef: MutableRefObject<SseCursor | null>
-  liveRef: MutableRefObject<LiveState>
-  requests: MutableRefObject<Map<string, Promise<unknown>>>
-  failedDocs: MutableRefObject<Set<string>>
-  unreadClearInFlight: MutableRefObject<Set<number>>
-  unreadClearedSeq: MutableRefObject<Map<number, number>>
-  pluginEpoch: MutableRefObject<Map<string, number>>
-  targets: MutableRefObject<{ primaryTarget: ResolvedTarget; splitTarget: ResolvedTarget | null }>
-  drawerStackRef: MutableRefObject<DrawerFrame[]>
-  pendingHistoryMode: MutableRefObject<'push' | 'replace' | null>
   logout: () => void
-  setSseConnected: Dispatch<SetStateAction<boolean>>
-  setConnectionError: Dispatch<SetStateAction<string | null>>
-  setLoadErrors: Dispatch<SetStateAction<Record<string, string>>>
-  updateLive: (update: (state: LiveState) => LiveState) => void
-  setKernelBootId: Dispatch<SetStateAction<string | null>>
-  setConversationArtifacts: Dispatch<SetStateAction<Record<number, ArtifactMetadata[]>>>
-  conversationArtifactsRef?: MutableRefObject<Record<number, ArtifactMetadata[]>>
-  artifactsWatermarksRef?: MutableRefObject<Map<number, ArtifactsSyncWatermark>>
-  visibleConversationIds: () => number[]
-  loadConversationDetail: (
-    id: number,
-    force?: boolean,
-    opts?: { silent?: boolean; limit?: number },
-  ) => Promise<ConversationDetail | undefined>
-  loadConversationArtifacts: (id: number, opts?: { silent?: boolean }) => Promise<ArtifactMetadata[] | undefined>
-  abortInFlightConversationRequests?: () => void
-  clearVisibleConversationUnread: (id: number, candidate?: ConversationSummary) => void
-  pushNotice: (notice: Omit<ToastNotice, 'id' | 'createdAt'>) => void
-  refreshAssets: () => Promise<void>
-  applyPrimaryTarget: (target: ResolvedTarget) => void
-  setSplitTarget: Dispatch<SetStateAction<ResolvedTarget | null>>
-  pruneConversationFromDrawerStack: (conversationId: number) => void
+  unreadSync: Pick<
+    UseUnreadSyncResult,
+    'unreadClearInFlight' | 'unreadClearedSeq' | 'visibleConversationIds' | 'clearVisibleConversationUnread'
+  >
 }
 
 interface StreamSessionState {
@@ -91,7 +61,9 @@ interface StreamSessionState {
   liveAnnounced: boolean
 }
 
-interface FrameHandlerContext extends UseSseEventsOptions {
+interface FrameHandlerContext {
+  store: HelmxExternalStore
+  unreadSync: UseSseEventsOptions['unreadSync']
   streamState: StreamSessionState
   announceLive: () => void
   resetRetry: () => void
@@ -116,18 +88,17 @@ function handleSnapshotFrame(payload: unknown, ctx: FrameHandlerContext): void {
   if (snap === null || typeof snap !== 'object' || typeof snap.bootId !== 'string' || snap.bootId === '') {
     throw new Error('Invalid kernel live snapshot format (no valid bootId)')
   }
-  const prevPlugins = ctx.liveRef.current.plugins
-  const prevDetails = ctx.liveRef.current.conversationDetails
-  const prevConversationIds = new Set(ctx.liveRef.current.conversations.map((c) => c.id))
+  const { store, unreadSync } = ctx
+  const prevLive = store.getLiveState()
+  const prevPlugins = prevLive.plugins
+  const prevDetails = prevLive.conversationDetails
+  const prevConversationIds = new Set(prevLive.conversations.map((c) => c.id))
   const nextConversationIds = new Set(snap.conversations.map((c) => c.id))
 
   ctx.streamState.mode = 'fresh'
-  ctx.session.current++
-  ctx.abortInFlightConversationRequests?.()
-  ctx.requests.current.clear()
-  ctx.failedDocs.current.clear()
-  ctx.unreadClearInFlight.current.clear()
-  ctx.unreadClearedSeq.current.clear()
+  store.requests.resetOnSnapshot()
+  unreadSync.unreadClearInFlight.current.clear()
+  unreadSync.unreadClearedSeq.current.clear()
 
   // 断线期间增量对账插件客户端缓存：保留启用且 hash 未变的模块与样式，仅逐出变更/停用项。
   reconcilePluginClientCache(snap.plugins)
@@ -157,12 +128,12 @@ function handleSnapshotFrame(payload: unknown, ctx: FrameHandlerContext): void {
   for (const prevId of prevConversationIds) {
     if (!nextConversationIds.has(prevId)) {
       evictSessionDocsOfConversation(prevId)
-      ctx.artifactsWatermarksRef?.current.delete(prevId)
+      store.requests.artifactsWatermarks.delete(prevId)
     }
   }
 
   // loadErrors 仅清理已被停用/移除/hash 变更插件的旧 doc 错误以及已删除会话的错误。
-  ctx.setLoadErrors((prev) => {
+  store.setLoadErrors((prev) => {
     let changed = false
     const next: Record<string, string> = {}
     for (const [key, value] of Object.entries(prev)) {
@@ -188,18 +159,16 @@ function handleSnapshotFrame(payload: unknown, ctx: FrameHandlerContext): void {
     return changed ? next : prev
   })
 
-  ctx.updateLive((state) => applySnapshot(state, snap))
-  // 时钟采样：归约校验通过后的服务端 serverTime / updatedAt 才可信（snapshot 为连接时刻快照，
-  // 优先消费首帧 Hub serverTime，避免空闲会话或无 live 帧时无法校准偏差）。
+  store.updateLive((state) => applySnapshot(state, snap))
   if (typeof snap.serverTime === 'number' && Number.isFinite(snap.serverTime) && snap.serverTime > 0) {
     observeServerEpoch(snap.serverTime)
   }
   observeLiveFrameClocks(snap.conversationLives)
-  ctx.sseCursorRef.current = { bootId: snap.bootId, seq: snap.seq }
-  ctx.setKernelBootId(snap.bootId)
+  store.sseCursor = { bootId: snap.bootId, seq: snap.seq }
+  store.setKernelBootId(snap.bootId)
 
   // SWR 保活：保留仍存在会话的产物缓存，仅清理已删除会话。
-  ctx.setConversationArtifacts((prev) => {
+  store.setConversationArtifacts((prev) => {
     let changed = false
     const next: Record<number, ArtifactMetadata[]> = {}
     for (const [k, list] of Object.entries(prev)) {
@@ -212,7 +181,8 @@ function handleSnapshotFrame(payload: unknown, ctx: FrameHandlerContext): void {
 
   ctx.resetRetry()
   ctx.announceLive()
-  for (const id of ctx.visibleConversationIds()) {
+  const artifactsMap = store.getConversationArtifactsMap()
+  for (const id of unreadSync.visibleConversationIds()) {
     const prevDetail = prevDetails[id]
     const nextSummary = snap.conversations.find((c) => c.id === id)
     const unchanged =
@@ -225,24 +195,25 @@ function handleSnapshotFrame(payload: unknown, ctx: FrameHandlerContext): void {
       prevDetail.lastEntryId === nextSummary.lastEntryId
     if (!unchanged) {
       const silent = prevDetail !== undefined
-      void ctx.loadConversationDetail(id, true, silent ? { silent: true } : undefined)
-      void ctx.loadConversationArtifacts(id, silent ? { silent: true } : undefined)
-    } else if (ctx.conversationArtifactsRef !== undefined && ctx.conversationArtifactsRef.current[id] === undefined) {
-      void ctx.loadConversationArtifacts(id, { silent: true })
-    } else if (ctx.artifactsWatermarksRef !== undefined && !ctx.artifactsWatermarksRef.current.has(id)) {
-      ctx.artifactsWatermarksRef.current.set(id, {
+      void store.loadConversationDetail(id, true, silent ? { silent: true } : undefined)
+      void store.loadConversationArtifacts(id, silent ? { silent: true } : undefined)
+    } else if (artifactsMap[id] === undefined) {
+      void store.loadConversationArtifacts(id, { silent: true })
+    } else if (!store.requests.artifactsWatermarks.has(id)) {
+      store.requests.artifactsWatermarks.set(id, {
         stateChangeSeq: nextSummary.stateChangeSeq,
         lastEntryId: nextSummary.lastEntryId,
       })
     }
-    ctx.clearVisibleConversationUnread(id)
+    unreadSync.clearVisibleConversationUnread(id)
   }
 }
 
 function handleResumedFrame(payload: unknown, ctx: FrameHandlerContext): void {
   if (ctx.streamState.mode !== null) throw new Error('Live connection received a duplicate resumed control frame')
+  const { store } = ctx
   const resumed = payload as HelmxResumedFrame
-  const current = ctx.sseCursorRef.current
+  const current = store.sseCursor
   if (
     current === null ||
     resumed === null ||
@@ -257,27 +228,23 @@ function handleResumedFrame(payload: unknown, ctx: FrameHandlerContext): void {
   }
   ctx.streamState.mode = 'resumed'
   ctx.streamState.resumedHeadSeq = resumed.headSeq
-  ctx.updateLive((state) => applyResumedFrame(state, resumed))
+  store.updateLive((state) => applyResumedFrame(state, resumed))
   if (typeof resumed.serverTime === 'number' && Number.isFinite(resumed.serverTime) && resumed.serverTime > 0) {
     observeServerEpoch(resumed.serverTime)
   }
   observeLiveFrameClocks(resumed.conversationLives)
   ctx.resetRetry()
-  // 不清详情/产物/插件缓存：续传补发未丢失任何状态；只有实际追平 headSeq
-  // 才宣称 live（零补发时立即 live），重放中不显示「新鲜」。
-  if (ctx.liveRef.current.seq >= ctx.streamState.resumedHeadSeq) ctx.announceLive()
+  if (store.getLiveState().seq >= ctx.streamState.resumedHeadSeq) ctx.announceLive()
 }
 
 function handleTransientLiveFrame(payload: unknown, ctx: FrameHandlerContext): void {
   if (ctx.streamState.mode === null) throw new Error('Live connection missing the initial snapshot')
-  ctx.updateLive((state) => applyTransientLiveFrame(state, payload as HelmxTransientLiveFrame))
-  // 时钟采样：updateLive 同步归约，形状校验失败会同步抛出；能走到这里说明 live.updatedAt 可信。
+  ctx.store.updateLive((state) => applyTransientLiveFrame(state, payload as HelmxTransientLiveFrame))
   observeLiveFrameClocks([(payload as HelmxTransientLiveFrame).live])
 }
 
 /**
  * 帧内 ConversationLive 的 updatedAt 喂给时钟偏差估计（server-clock）。
- * 只在对应归约函数校验通过后调用：这里不再重复形状校验，仅做数值防御。
  */
 function observeLiveFrameClocks(lives: ReadonlyArray<{ updatedAt?: unknown }> | undefined): void {
   if (!Array.isArray(lives)) return
@@ -294,33 +261,24 @@ function dispatchFrameSideEffects(
   configOnlyPluginChange: boolean,
   ctx: FrameHandlerContext,
 ): void {
-  if (event.type === 'notification' && 'title' in event) ctx.pushNotice(event)
+  const { store, unreadSync } = ctx
+  if (event.type === 'notification' && 'title' in event) store.pushNotice(event)
   if (event.type === 'plugin.changed' && 'plugin' in event) {
     if (!configOnlyPluginChange) {
-      const docPrefix = `doc:${event.plugin.id}/`
-      ctx.pluginEpoch.current.set(event.plugin.id, (ctx.pluginEpoch.current.get(event.plugin.id) ?? 0) + 1)
-      for (const key of [...ctx.failedDocs.current]) {
-        if (key.startsWith(docPrefix)) ctx.failedDocs.current.delete(key)
-      }
-      for (const key of [...ctx.requests.current.keys()]) {
-        if (key.startsWith(docPrefix)) ctx.requests.current.delete(key)
-      }
-      ctx.setLoadErrors((prev) => omitPluginDocLoadErrors(prev, new Set([event.plugin.id])))
-      // 任意非纯配置 plugin.changed（含启停/失败/移除/clientHashes 或元数据变化）都让该插件
-      // client 模块缓存失效，保证重载代码即时生效并拒绝迟到加载结果。
+      store.requests.invalidatePluginDocRequests(event.plugin.id)
+      store.setLoadErrors((prev) => omitPluginDocLoadErrors(prev, new Set([event.plugin.id])))
       evictPluginClientCache(event.plugin.id)
-      // 插件非 active（停用/失败/卸载）时同步释放全部会话文档订阅
       if (!isPluginSummaryActive(event.plugin)) {
         evictSessionDocSubscriptions(event.plugin.id)
       }
-      void ctx.refreshAssets()
+      void store.refreshAssets()
     }
   }
   if (event.type === 'plugin.doc.updated' && 'doc' in event) {
-    if (ctx.liveRef.current.plugins.some((p) => p.id === event.doc.pluginId && isPluginSummaryActive(p))) {
+    if (store.getLiveState().plugins.some((p) => p.id === event.doc.pluginId && isPluginSummaryActive(p))) {
       const key = `doc:${event.doc.pluginId}/${event.doc.name}`
-      ctx.failedDocs.current.delete(key)
-      ctx.setLoadErrors((prev) => {
+      store.requests.clearDocFailure(key)
+      store.setLoadErrors((prev) => {
         if (!Object.hasOwn(prev, key)) return prev
         const next = { ...prev }
         delete next[key]
@@ -328,59 +286,52 @@ function dispatchFrameSideEffects(
       })
     }
   }
-  if (event.type === 'models.changed') void ctx.refreshAssets()
-  if (event.type === 'profile.changed') void ctx.refreshAssets()
+  if (event.type === 'models.changed') void store.refreshAssets()
+  if (event.type === 'profile.changed') void store.refreshAssets()
   if (event.type === 'conversation.upsert' && 'conversation' in event) {
     const conv = event.conversation
-    const clearedSeq = ctx.unreadClearedSeq.current.get(conv.id)
+    const clearedSeq = unreadSync.unreadClearedSeq.current.get(conv.id)
     if (!conv.unread && clearedSeq !== undefined && conv.stateChangeSeq > clearedSeq) {
-      ctx.unreadClearedSeq.current.delete(conv.id)
+      unreadSync.unreadClearedSeq.current.delete(conv.id)
     }
-    const visible = ctx.visibleConversationIds().includes(conv.id)
+    const visible = unreadSync.visibleConversationIds().includes(conv.id)
     if (visible && !isConversationStatusActive(conv.status)) {
-      const cachedArtifacts = ctx.conversationArtifactsRef?.current[conv.id]
-      const wm = ctx.artifactsWatermarksRef?.current.get(conv.id)
+      const cachedArtifacts = store.getConversationArtifactsMap()[conv.id]
+      const wm = store.requests.artifactsWatermarks.get(conv.id)
       if (!isArtifactsWatermarkCurrent(cachedArtifacts, conv, wm)) {
-        void ctx.loadConversationArtifacts(conv.id)
+        void store.loadConversationArtifacts(conv.id)
       }
     }
-    if (visible && conv.unread) ctx.clearVisibleConversationUnread(conv.id, conv)
+    if (visible && conv.unread) unreadSync.clearVisibleConversationUnread(conv.id, conv)
   }
   if (archivedSummary !== undefined) {
-    // 归档导航唯一事实源：仅当被归档的正是当前主屏/分屏目标时，以 replace 跳到
-    // 该智能体待命页（新建会话页，继承节点/目录）；归档不删除会话，其余目标
-    // （含抽屉）不动——已归档会话仍可打开查看，用户已切走时不覆盖新导航。
     const fallback = standbyFallbackTarget(archivedSummary)
+    const primaryTarget = store.getPrimaryTarget()
+    const splitTarget = store.getSplitTarget()
     const primaryHit =
-      ctx.targets.current.primaryTarget.kind === 'conversation' &&
-      ctx.targets.current.primaryTarget.conversationId === archivedSummary.id
+      primaryTarget.kind === 'conversation' && primaryTarget.conversationId === archivedSummary.id
     const splitHit =
-      ctx.targets.current.splitTarget?.kind === 'conversation' &&
-      ctx.targets.current.splitTarget.conversationId === archivedSummary.id
-    if (primaryHit || splitHit) ctx.pendingHistoryMode.current = 'replace'
-    if (primaryHit) ctx.applyPrimaryTarget(fallback)
-    // 分屏命中时分屏原地变为待命页（与「新话题」的分屏语义一致），不收起分屏布局。
-    if (splitHit) ctx.setSplitTarget(fallback)
+      splitTarget?.kind === 'conversation' && splitTarget.conversationId === archivedSummary.id
+    if (primaryHit || splitHit) store.pendingHistoryMode = 'replace'
+    if (primaryHit) store.applyPrimaryTarget(fallback)
+    if (splitHit) store.setSplitTarget(fallback)
   }
   if (deletedConversationId !== undefined) {
-    ctx.unreadClearInFlight.current.delete(deletedConversationId)
-    ctx.unreadClearedSeq.current.delete(deletedConversationId)
-    // 删除导航唯一事实源：仅当被删的正是当前主屏/分屏/抽屉目标时，
-    // 以 replace 回到该智能体待命态（无 Profile 信息时显式回角色中心）；
-    // 绝不选中其他会话，批量连续删除不闪烁，用户已切走时不覆盖新导航。
+    unreadSync.unreadClearInFlight.current.delete(deletedConversationId)
+    unreadSync.unreadClearedSeq.current.delete(deletedConversationId)
     const fallback = standbyFallbackTarget(deletedSummary)
+    const primaryTarget = store.getPrimaryTarget()
+    const splitTarget = store.getSplitTarget()
     const primaryHit =
-      ctx.targets.current.primaryTarget.kind === 'conversation' &&
-      ctx.targets.current.primaryTarget.conversationId === deletedConversationId
+      primaryTarget.kind === 'conversation' && primaryTarget.conversationId === deletedConversationId
     const splitHit =
-      ctx.targets.current.splitTarget?.kind === 'conversation' &&
-      ctx.targets.current.splitTarget.conversationId === deletedConversationId
-    const drawerHit = ctx.drawerStackRef.current.some((frame) => frame.conversationId === deletedConversationId)
-    if (primaryHit || splitHit || drawerHit) ctx.pendingHistoryMode.current = 'replace'
-    if (primaryHit) ctx.applyPrimaryTarget(fallback)
-    if (splitHit) ctx.setSplitTarget(null)
-    if (drawerHit) ctx.pruneConversationFromDrawerStack(deletedConversationId)
-    ctx.setConversationArtifacts((prev) => {
+      splitTarget?.kind === 'conversation' && splitTarget.conversationId === deletedConversationId
+    const drawerHit = store.getDrawerStack().some((frame) => frame.conversationId === deletedConversationId)
+    if (primaryHit || splitHit || drawerHit) store.pendingHistoryMode = 'replace'
+    if (primaryHit) store.applyPrimaryTarget(fallback)
+    if (splitHit) store.setSplitTarget(null)
+    if (drawerHit) store.pruneConversationFromDrawerStack(deletedConversationId)
+    store.setConversationArtifacts((prev) => {
       const next = { ...prev }
       delete next[deletedConversationId]
       return next
@@ -395,18 +346,16 @@ function handleEventFrame(payload: unknown, ctx: FrameHandlerContext): void {
   if (frame === null || typeof frame !== 'object' || frame.event === null || typeof frame.event !== 'object' || typeof frame.event.type !== 'string') {
     throw new Error('Invalid live event frame format (missing event)')
   }
-  const oldSeq = ctx.liveRef.current.seq
-  // 删除事件先快照被删会话摘要（applyEventFrame 后列表即移除）：待命目标需
-  // 继承其 profileId/nodeId/cwd，防止远端坐标悄悄回落本机。
+  const { store } = ctx
+  const prevLive = store.getLiveState()
+  const oldSeq = prevLive.seq
   const deletedEvent = frame.event.type === 'conversation.deleted' && 'conversationId' in frame.event ? frame.event : undefined
   const deletedSummary = deletedEvent !== undefined
-    ? ctx.liveRef.current.conversations.find((c) => c.id === deletedEvent.conversationId)
+    ? prevLive.conversations.find((c) => c.id === deletedEvent.conversationId)
     : undefined
-  // 归档迁移同样需要前置快照判定「未归档 → 已归档」（upsert 高频到达，仅在
-  // 真迁移时才触发导航；恢复与其余 upsert 一律不动）。
   const upsertEvent = frame.event.type === 'conversation.upsert' && 'conversation' in frame.event ? frame.event : undefined
   const prevUpsertedSummary = upsertEvent !== undefined
-    ? ctx.liveRef.current.conversations.find((c) => c.id === upsertEvent.conversation.id)
+    ? prevLive.conversations.find((c) => c.id === upsertEvent.conversation.id)
     : undefined
   const archivedSummary = upsertEvent !== undefined &&
       prevUpsertedSummary !== undefined &&
@@ -414,24 +363,23 @@ function handleEventFrame(payload: unknown, ctx: FrameHandlerContext): void {
       isConversationArchived(upsertEvent.conversation)
     ? upsertEvent.conversation
     : undefined
-  // 在 applyEventFrame 改写插件列表前快照前置摘要与 UI 贡献，用以判定是否纯配置热更新。
   const pluginChangedEvent = frame.event.type === 'plugin.changed' && 'plugin' in frame.event ? frame.event : undefined
   const configOnlyPluginChange =
     pluginChangedEvent !== undefined &&
     Array.isArray(pluginChangedEvent.ui) &&
     isConfigOnlyPluginChange(
-      ctx.liveRef.current.plugins.find((p) => p.id === pluginChangedEvent.plugin.id),
-      ctx.liveRef.current.uiContributions.filter((item) => item.pluginId === pluginChangedEvent.plugin.id),
+      prevLive.plugins.find((p) => p.id === pluginChangedEvent.plugin.id),
+      prevLive.uiContributions.filter((item) => item.pluginId === pluginChangedEvent.plugin.id),
       pluginChangedEvent.plugin,
       pluginChangedEvent.ui,
     )
-  ctx.updateLive((state) => applyEventFrame(state, frame))
-  // 按帧实际应用推进续传水位（应用失败已在边界作废凭据，绝不提前推进）。
-  const applied = ctx.sseCursorRef.current
-  if (applied !== null && ctx.liveRef.current.seq > applied.seq) {
-    ctx.sseCursorRef.current = { bootId: applied.bootId, seq: ctx.liveRef.current.seq }
+  store.updateLive((state) => applyEventFrame(state, frame))
+  const nextSeq = store.getLiveState().seq
+  const applied = store.sseCursor
+  if (applied !== null && nextSeq > applied.seq) {
+    store.sseCursor = { bootId: applied.bootId, seq: nextSeq }
   }
-  if (ctx.streamState.mode === 'resumed' && ctx.liveRef.current.seq >= ctx.streamState.resumedHeadSeq) {
+  if (ctx.streamState.mode === 'resumed' && nextSeq >= ctx.streamState.resumedHeadSeq) {
     ctx.announceLive()
   }
   if (frame.seq <= oldSeq) return
@@ -445,40 +393,13 @@ function handleEventFrame(payload: unknown, ctx: FrameHandlerContext): void {
   )
 }
 
-export function useSseEvents(options: UseSseEventsOptions): void {
+export function useSseEvents({ store, authenticated, logout, unreadSync }: UseSseEventsOptions): void {
   const {
-    authenticated,
-    session,
-    sseCursorRef,
-    liveRef,
-    requests,
-    failedDocs,
     unreadClearInFlight,
     unreadClearedSeq,
-    pluginEpoch,
-    targets,
-    drawerStackRef,
-    pendingHistoryMode,
-    logout,
-    setSseConnected,
-    setConnectionError,
-    setLoadErrors,
-    updateLive,
-    setKernelBootId,
-    setConversationArtifacts,
-    conversationArtifactsRef,
-    artifactsWatermarksRef,
     visibleConversationIds,
-    loadConversationDetail,
-    loadConversationArtifacts,
-    abortInFlightConversationRequests,
     clearVisibleConversationUnread,
-    pushNotice,
-    refreshAssets,
-    applyPrimaryTarget,
-    setSplitTarget,
-    pruneConversationFromDrawerStack,
-  } = options
+  } = unreadSync
 
   useEffect(() => {
     if (!authenticated) return
@@ -490,6 +411,13 @@ export function useSseEvents(options: UseSseEventsOptions): void {
     let immediateReconnect = false
     let lastDataAt = 0
 
+    const syncFacade = {
+      unreadClearInFlight,
+      unreadClearedSeq,
+      visibleConversationIds,
+      clearVisibleConversationUnread,
+    }
+
     const connect = async (): Promise<void> => {
       connecting = true
       lastDataAt = Date.now()
@@ -497,9 +425,7 @@ export function useSseEvents(options: UseSseEventsOptions): void {
       let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
       try {
         const token = getStoredToken()
-        // 短断线续传：携带上一条连接实际应用到的水位（双凭据缺一不可）；
-        // 校验不过时内核改发 snapshot 全量对齐，客户端无需预判。
-        const cursor = sseCursorRef.current
+        const cursor = store.sseCursor
         const eventsUrl = buildSseEventsUrl(cursor)
         const response = await fetch(eventsUrl, {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
@@ -510,62 +436,27 @@ export function useSseEvents(options: UseSseEventsOptions): void {
           return
         }
         if (cursor !== null && response.status === 400) {
-          // 续传凭据被判非法：作废凭据（本次即失败重连，下次全量），绝不带坏凭据死循环。
-          sseCursorRef.current = null
+          store.sseCursor = null
           throw new Error('Live resume request rejected by the kernel (HTTP 400); falling back to full re-sync')
         }
         if (!response.ok || !response.body) throw new Error(`Live connection failed (HTTP ${response.status})`)
 
-        /** null=待首帧控制帧；fresh=全量已就绪；resumed=补发中（追平 headSeq 才 live）。 */
         const streamState: StreamSessionState = { mode: null, resumedHeadSeq: 0, liveAnnounced: false }
         const announceLive = (): void => {
           if (streamState.liveAnnounced) return
           streamState.liveAnnounced = true
-          setSseConnected(true)
-          setConnectionError(null)
+          store.setSseConnected(true)
+          store.setConnectionError(null)
         }
         const ctx: FrameHandlerContext = {
-          authenticated,
-          session,
-          sseCursorRef,
-          liveRef,
-          requests,
-          failedDocs,
-          unreadClearInFlight,
-          unreadClearedSeq,
-          pluginEpoch,
-          targets,
-          drawerStackRef,
-          pendingHistoryMode,
-          logout,
-          setSseConnected,
-          setConnectionError,
-          setLoadErrors,
-          updateLive,
-          setKernelBootId,
-          setConversationArtifacts,
-          conversationArtifactsRef,
-          artifactsWatermarksRef,
-          visibleConversationIds,
-          loadConversationDetail,
-          loadConversationArtifacts,
-          abortInFlightConversationRequests,
-          clearVisibleConversationUnread,
-          pushNotice,
-          refreshAssets,
-          applyPrimaryTarget,
-          setSplitTarget,
-          pruneConversationFromDrawerStack,
+          store,
+          unreadSync: syncFacade,
           streamState,
           announceLive,
           resetRetry: () => { retry = 0 },
         }
 
         const parser = new SseParser((message) => {
-          // 消息处理边界：任何协议错误（无效 JSON / 空或畸形控制帧 / 缺 event 增量 /
-          // 快照或帧应用失败 / 握手不匹配 / 重复控制帧）都在此作废续传凭据后重抛
-          // 断开本连接，下次强制全量——绝不带着可能错位的水位重试坏状态；网络层
-          // 异常（空闲超时/流断开）不经过此边界，完好凭据仍可短断线续传。
           try {
             const payload: unknown = JSON.parse(message.data)
             if (message.event === 'snapshot') handleSnapshotFrame(payload, ctx)
@@ -573,9 +464,7 @@ export function useSseEvents(options: UseSseEventsOptions): void {
             else if (message.event === 'conversation.live') handleTransientLiveFrame(payload, ctx)
             else handleEventFrame(payload, ctx)
           } catch (error) {
-            // 协议边界统一作废续传凭据（见边界注释）后重抛：本次连接按失败重连，
-            // 下次必须全量快照，绝不携带可能错位的水位重试。
-            sseCursorRef.current = null
+            store.sseCursor = null
             throw error
           }
         })
@@ -586,9 +475,6 @@ export function useSseEvents(options: UseSseEventsOptions): void {
         while (active) {
           const read = await readSseChunkWithDeadline(reader, sseClientTimings.idleTimeoutMs, controller.signal)
           if (read.kind === 'idle') {
-            // 连接卡死（如 dev 代理保留的挂起流，reader.read() 永不返回）：
-            // 抛错走统一 catch（提示 + abort 解开挂起读取）与 finally 重连；
-            // 重连 fetch 拿 401 即登出。正常连接持续收到字节（含心跳注释）不会触发。
             throw new Error('Live connection idle timeout; reconnecting')
           }
           if (read.chunk.done) break
@@ -598,9 +484,7 @@ export function useSseEvents(options: UseSseEventsOptions): void {
         }
         if (active) throw new Error('Live connection lost; re-syncing')
       } catch (error) {
-        if (active && !controller.signal.aborted) setConnectionError(errorText(error))
-        // 出错连接一律主动中止：解开空闲超时下可能挂起的 reader.read()
-        //（其余路径连接本已坏，abort 幂等无害），finally 统一进入重连。
+        if (active && !controller.signal.aborted) store.setConnectionError(errorText(error))
         controller.abort()
       } finally {
         if (reader) {
@@ -610,13 +494,12 @@ export function useSseEvents(options: UseSseEventsOptions): void {
         connecting = false
         controller = undefined
         if (active) {
-          setSseConnected(false)
+          store.setSseConnected(false)
           if (immediateReconnect) {
             immediateReconnect = false
             retry = 0
             void connect()
           } else {
-            // 指数退避 + 随机抖动：内核重启等同时断线场景避免同步重连风暴。
             const backoff = computeReconnectBackoffMs(retry)
             retry += 1
             timer = setTimeout(() => {
@@ -630,7 +513,6 @@ export function useSseEvents(options: UseSseEventsOptions): void {
 
     const wakeup = (): void => {
       if (!active || immediateReconnect) return
-      // 1. 断线重连退避等待中：立即取消退避定时器并发起无延迟重连
       if (timer !== undefined) {
         clearTimeout(timer)
         timer = undefined
@@ -638,7 +520,6 @@ export function useSseEvents(options: UseSseEventsOptions): void {
         void connect()
         return
       }
-      // 2. 活跃连接疑似半开陈旧（长时间未收任何字节/心跳）：中止当前连接立即重连；健康流不误杀
       if (connecting && controller !== undefined) {
         if (Date.now() - lastDataAt >= sseClientTimings.staleWakeupMs) {
           immediateReconnect = true
@@ -646,7 +527,6 @@ export function useSseEvents(options: UseSseEventsOptions): void {
         }
         return
       }
-      // 3. 无定时器且无在途连接：立即重连
       retry = 0
       void connect()
     }
@@ -671,35 +551,11 @@ export function useSseEvents(options: UseSseEventsOptions): void {
     }
   }, [
     authenticated,
+    store,
     logout,
-    loadConversationDetail,
-    loadConversationArtifacts,
-    abortInFlightConversationRequests,
-    visibleConversationIds,
-    clearVisibleConversationUnread,
-    pushNotice,
-    refreshAssets,
-    updateLive,
-    applyPrimaryTarget,
-    drawerStackRef,
-    failedDocs,
-    liveRef,
-    pendingHistoryMode,
-    pluginEpoch,
-    requests,
-    session,
-    pruneConversationFromDrawerStack,
-    setConnectionError,
-    setConversationArtifacts,
-    conversationArtifactsRef,
-    artifactsWatermarksRef,
-    setKernelBootId,
-    setLoadErrors,
-    setSplitTarget,
-    setSseConnected,
-    sseCursorRef,
-    targets,
     unreadClearInFlight,
     unreadClearedSeq,
+    visibleConversationIds,
+    clearVisibleConversationUnread,
   ])
 }

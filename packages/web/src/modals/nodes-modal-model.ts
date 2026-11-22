@@ -9,6 +9,7 @@
  */
 
 import type { NodeInfo } from '@helmx/protocol/browser'
+import type { SelectOption } from '@helmx/plugin-client'
 import { formatBytes } from '../lib/format.js'
 import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 
@@ -87,6 +88,68 @@ export function nodeOptionLabel(node: NodeInfo, t?: WebMessageTranslator): strin
   const tt = t ?? englishWebTranslator
   if (node.kind === 'local') return tt('modals.nodeOption.local', { id: node.id })
   return node.online ? node.id : tt('modals.nodeOption.offline', { id: node.id })
+}
+
+export interface BuildNodeSelectOptionsInput {
+  nodes: ReadonlyArray<NodeInfo>
+  selectedNodeId?: string
+  t?: WebMessageTranslator
+  /** Prepend an unbound empty-value option (used by ProfileDetailDrawer). */
+  unboundLabel?: string
+  /** Ensure a `local` fallback entry exists when `nodes` has not loaded `local` yet. */
+  ensureLocal?: boolean
+  /** Custom label builder when `selectedNodeId` is absent from `nodes`. */
+  unknownNodeLabel?: (nodeId: string) => string
+}
+
+/**
+ * Deduplicated SelectOption builder shared by ProfileDetailDrawer and
+ * Composer/Standby environment bars: guarantees unique option values by node id
+ * and optionally prepends an unbound option or appends an unknown-node fallback.
+ */
+export function buildNodeSelectOptions({
+  nodes,
+  selectedNodeId,
+  t,
+  unboundLabel,
+  ensureLocal = false,
+  unknownNodeLabel,
+}: BuildNodeSelectOptionsInput): SelectOption<string>[] {
+  const tt = t ?? englishWebTranslator
+  const seen = new Set<string>()
+  const list: SelectOption<string>[] = []
+  if (unboundLabel !== undefined) {
+    seen.add('')
+    list.push({ value: '', label: unboundLabel, icon: 'monitor' })
+  }
+  for (const node of nodes) {
+    if (seen.has(node.id)) continue
+    seen.add(node.id)
+    const isLocal = node.id === 'local' || node.kind === 'local'
+    list.push({
+      value: node.id,
+      label: nodeOptionLabel(node, tt),
+      icon: isLocal ? 'monitor' : 'network',
+      meta: isLocal ? undefined : node.online ? tt('common.online') : tt('common.offline'),
+    })
+  }
+  if (ensureLocal && !seen.has('local')) {
+    seen.add('local')
+    list.unshift({
+      value: 'local',
+      label: tt('modals.nodeOption.local', { id: 'local' }),
+      icon: 'monitor',
+    })
+  }
+  const current = selectedNodeId?.trim() ?? ''
+  if (current !== '' && !seen.has(current)) {
+    list.push({
+      value: current,
+      label: unknownNodeLabel ? unknownNodeLabel(current) : current,
+      icon: 'alert-circle',
+    })
+  }
+  return list
 }
 
 /** Usage computation (free + total -> used / percent / label); missing data returns null. */

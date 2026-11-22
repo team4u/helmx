@@ -460,7 +460,7 @@ describe('WorkspaceFilePreviewModal', { timeout: 60_000 }, () => {
 
     try {
       await flush()
-      const errCallout = document.querySelector('.callout--error')
+      const errCallout = document.querySelector('.callout-error')
       assert.ok(errCallout !== null, 'error callout rendered')
       assert.match(errCallout.textContent ?? '', /File missing/)
     } finally {

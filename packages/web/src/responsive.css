@@ -1,4 +1,5 @@
-/* 共用的适配与交互边界，插件视图也继承相同规则。 */
+/* 共用的适配与交互边界，插件视图也继承相同规则（归属 host-components 层，避免无层规则压过 plugin-ui）。 */
+@layer host-components {
 .helmx-main-stage { flex-direction: column; position: relative; }
 .helmx-panes { flex: 1; min-height: 0; min-width: 0; display: flex; overflow: hidden; }
 .helmx-pane { container-type: inline-size; }
@@ -367,4 +368,5 @@ button, a, input, select, textarea { touch-action: manipulation; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
+}
 }

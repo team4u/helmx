@@ -36,7 +36,9 @@ export function emptyLiveState(): LiveState {
 }
 
 function sortConversations(list: ConversationSummary[]): ConversationSummary[] {
-  return [...list].sort((a, b) => Number(b.id === 1) - Number(a.id === 1) || b.updatedAt - a.updatedAt)
+  return [...list].sort(
+    (a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || b.updatedAt - a.updatedAt || b.id - a.id,
+  )
 }
 
 /** 节点列表排序：local 恒在首项，其余按 id 稳定排列。 */

@@ -157,8 +157,16 @@ export const shellMessages = {
   'shell.archived.restoreCount': { en: 'Restore ({count})', 'zh-CN': '恢复 ({count})' },
 
   // Sidebar primitives: status dots, node tags, pane tags, pending approvals
+  'shell.status.working': { en: 'Running', 'zh-CN': '运行中' },
+  'shell.status.blocked': { en: 'Awaiting confirmation', 'zh-CN': '等待确认' },
+  'shell.status.done': { en: 'Completed', 'zh-CN': '已完成' },
+  'shell.status.idle': { en: 'Idle', 'zh-CN': '空闲' },
+  'shell.status.error': { en: 'Error', 'zh-CN': '错误' },
   'shell.status.liveHealthy': { en: 'Live connection healthy', 'zh-CN': '实时连接正常' },
   'shell.status.liveLost': { en: 'Live connection lost, reconnecting', 'zh-CN': '实时连接断开，正在重连' },
+  'shell.paneTag.main': { en: 'Main', 'zh-CN': '主' },
+  'shell.paneTag.split': { en: 'Split', 'zh-CN': '分' },
+  'shell.paneTag.both': { en: 'Main·Split', 'zh-CN': '主·分' },
   'shell.pane.main': { en: 'Open in main view', 'zh-CN': '主屏打开' },
   'shell.pane.split': { en: 'Open in split view', 'zh-CN': '分屏打开' },
   'shell.pane.both': { en: 'Open in both main and split views', 'zh-CN': '主屏与分屏均打开' },

@@ -14,7 +14,8 @@ import type {
   ProviderConfig,
   SkillSummary,
 } from '@helmx/protocol/browser'
-import type { ModelDescriptor } from './api.js'
+import type { ModelCatalogDefaults, ModelDescriptor } from './api.js'
+import { isPluginSummaryActive } from './live-state.js'
 import type {
   AuthSlice,
   CatalogSlice,
@@ -99,6 +100,13 @@ function subscribePluginDocKey(store: HelmxExternalStore, docKey: string, listen
 }
 function readPluginDocKey(store: HelmxExternalStore, docKey: string): unknown {
   return store.getPluginDoc(docKey)
+}
+
+function subscribePluginById(store: HelmxExternalStore, pluginId: string, listener: () => void): () => void {
+  return store.subscribePlugin(pluginId, listener)
+}
+function readPluginById(store: HelmxExternalStore, pluginId: string): PluginSummary | undefined {
+  return store.getPluginSummary(pluginId)
 }
 
 function useDomainSlice<T>(
@@ -198,6 +206,10 @@ export function useCatalogAssets(): CatalogSlice {
 
 export function useModels(): ModelDescriptor[] {
   return useDomainSlice('models', (s) => s.getModels())
+}
+
+export function useModelDefaults(): ModelCatalogDefaults {
+  return useDomainSlice('models', (s) => s.getModelDefaults())
 }
 
 export function useOptionalModels(): ModelDescriptor[] | undefined {
@@ -352,6 +364,38 @@ export function useLoadError(key: string | undefined): string | undefined {
 export function usePluginDoc(pluginId: string | undefined, docName: string | undefined): unknown {
   const docKey = pluginId && docName ? `${pluginId}/${docName}` : undefined
   return useKeyedSlice(subscribePluginDocKey, readPluginDocKey, docKey, undefined)
+}
+
+export function usePluginSummary(pluginId: string | undefined): PluginSummary | undefined {
+  return useKeyedSlice(subscribePluginById, readPluginById, pluginId, undefined)
+}
+
+/**
+ * Selective subscription to only a single plugin module's active `clientHashes[moduleRef]`:
+ * avoids re-rendering mounted plugin views when unrelated plugins update OR when the same
+ * plugin changes non-hash metadata (name, publicConfig, etc.).
+ */
+export function usePluginClientHash(
+  pluginId: string,
+  moduleRef: string | undefined,
+): string | undefined {
+  const external = useContext(HelmxExternalStoreContext)
+  const subscribe = useCallback(
+    (listener: () => void) =>
+      external !== null && moduleRef !== undefined ? external.subscribePlugin(pluginId, listener) : NOOP_UNSUBSCRIBE,
+    [external, pluginId, moduleRef],
+  )
+  const getSnapshot = (): string | undefined | typeof UNSET => {
+    if (external === null) return UNSET
+    if (moduleRef === undefined) return undefined
+    const plugin = external.getPluginSummary(pluginId)
+    return plugin !== undefined && isPluginSummaryActive(plugin)
+      ? plugin.clientHashes?.[moduleRef]
+      : undefined
+  }
+  const value = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
+  if (value !== UNSET) return value
+  throw new Error('useHelmxStore must be called inside <HelmxStoreProvider>')
 }
 
 // ---------------------------------------------------------------------------

@@ -768,6 +768,11 @@ describe("composer-keybindings", () => {
           thinkingLevels: ['off', 'low', 'medium', 'high', 'max'],
         },
       ],
+      modelDefaults: {
+        defaultModel: 'magpie/auto/glm-5.3',
+        defaultThinkingLevel: 'max',
+        modelThinkingLevels: {},
+      },
       uiContributions: [
         {
           pluginId: 'builtin:memory',
@@ -1010,6 +1015,11 @@ describe("composer-keybindings", () => {
           thinkingLevels: ['off', 'low', 'medium', 'high', 'max'],
         },
       ],
+      modelDefaults: {
+        defaultModel: 'magpie/auto/glm-5.3',
+        defaultThinkingLevel: 'max',
+        modelThinkingLevels: {},
+      },
     })
     const host = mountTree(
       e(HostStoreProviders, { value: store }, e(AgentStandbyPane, { profileId: 'assistant' })),

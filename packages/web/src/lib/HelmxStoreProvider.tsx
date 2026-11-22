@@ -1,10 +1,9 @@
 import * as React from 'react'
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import * as ReactDom from 'react-dom'
 import * as ReactDomClient from 'react-dom/client'
 import * as ReactJsxRuntime from 'react/jsx-runtime'
 import * as HelmxPluginClient from '@helmx/plugin-client'
-import { usePluginDocValue } from '@helmx/plugin-client'
 import { collectDrawerConversationIds } from './drawer-stack-model.js'
 import { HelmxExternalStore, type StoreBootLocation } from './helmx-store.js'
 import { PluginClientHostBridge } from './plugin-host-bridge.js'
@@ -14,7 +13,6 @@ import {
   useAuthenticated,
   useConversationDetail,
   useDrawerStack,
-  useHelmxStore,
   useHighlightedEntry,
   useLoadError,
   useLocationState,
@@ -84,8 +82,6 @@ function HelmxStoreEffects({ store, boot }: { store: HelmxExternalStore; boot: S
   const locationState = useLocationState()
   const { locale, localePreference, themePreference } = useThemePreferencesState()
 
-  const { lastSyncedLocation, pendingHistoryMode } = store
-
   useEffect(() => {
     applyDocumentLocale(locale)
   }, [locale])
@@ -120,31 +116,15 @@ function HelmxStoreEffects({ store, boot }: { store: HelmxExternalStore; boot: S
     store.requests.syncVisibleConversations(nextVisible)
   }, [primaryTarget, splitTarget, drawerStack, activeModal, store])
 
-  const {
-    unreadClearInFlight,
-    unreadClearedSeq,
-    visibleConversationIds,
-    clearVisibleConversationUnread,
-    resetUnreadSync,
-  } = useUnreadSync({
+  const unreadSync = useUnreadSync({
+    store,
     authenticated,
-    authenticatedRef: store.authenticatedRef,
     primaryTarget,
     splitTarget,
     drawerStack,
     activeModal,
-    targets: store.targets,
-    drawerStackRef: store.drawerStackRef,
-    activeModalRef: store.activeModalRef,
-    liveRef: store.liveRef,
-    updateLive: store.updateLive,
-    conversationArtifactsRef: store.conversationArtifactsRef,
-    artifactsWatermarksRef: store.requests.artifactsWatermarks,
-    session: store.requests.session,
-    loadConversationDetail: store.loadConversationDetail,
-    loadConversationArtifacts: store.loadConversationArtifacts,
-    pushNotice: store.pushNotice,
   })
+  const { resetUnreadSync } = unreadSync
 
   useEffect(() => {
     void store.checkAuth()
@@ -167,22 +147,10 @@ function HelmxStoreEffects({ store, boot }: { store: HelmxExternalStore; boot: S
     return () => window.removeEventListener('helmx:unauthorized', logout)
   }, [logout])
 
-  // ---- Screen route param updates (implemented inside the single navigation
-  // mechanism; components must never touch browser history directly) ----
-  const setScreenParams = useCallback(
-    (patch: Record<string, string | undefined>, options?: { split?: boolean; push?: boolean }) => {
-      store.setScreenParams(patch, options)
-    },
-    [store],
-  )
-  const invokePluginAction = store.invokePluginAction
-  void setScreenParams
-  void invokePluginAction
-
   useEffect(() => {
     const applyUrlLocation = () => {
       const parsed = parseLocationHash(window.location.hash)
-      if (isSameLocationState(parsed, lastSyncedLocation.current)) return
+      if (isSameLocationState(parsed, store.lastSyncedLocation)) return
       store.applyExternalLocation(parsed)
     }
     window.addEventListener('hashchange', applyUrlLocation)
@@ -191,72 +159,33 @@ function HelmxStoreEffects({ store, boot }: { store: HelmxExternalStore; boot: S
       window.removeEventListener('hashchange', applyUrlLocation)
       window.removeEventListener('popstate', applyUrlLocation)
     }
-  }, [lastSyncedLocation, store])
+  }, [store])
 
   useEffect(() => {
     if (!authenticated) return
     const nextHash = formatLocationHash(locationState)
     if (nextHash === window.location.hash) {
-      lastSyncedLocation.current = locationState
-      pendingHistoryMode.current = null
+      store.lastSyncedLocation = locationState
+      store.pendingHistoryMode = null
       return
     }
-    const override = pendingHistoryMode.current
-    if (override === 'push' || (override === null && shouldPushLocationHistory(lastSyncedLocation.current, locationState))) {
+    const override = store.pendingHistoryMode
+    if (override === 'push' || (override === null && shouldPushLocationHistory(store.lastSyncedLocation, locationState))) {
       window.history.pushState(null, '', nextHash)
     } else {
       window.history.replaceState(null, '', nextHash)
     }
-    pendingHistoryMode.current = null
-    lastSyncedLocation.current = locationState
-  }, [authenticated, lastSyncedLocation, locationState, pendingHistoryMode])
+    store.pendingHistoryMode = null
+    store.lastSyncedLocation = locationState
+  }, [authenticated, locationState, store])
 
-  useGlobalShortcuts({
-    authenticatedRef: store.authenticatedRef,
-    focusedPanelRef: store.focusedPanelRef,
-    targets: store.targets,
-    activeModalRef: store.activeModalRef,
-    drawerStackRef: store.drawerStackRef,
-    liveRef: store.liveRef,
-    clearEscAbortPrompt: store.clearEscAbortPrompt,
-    confirmOrArmEscAbort: store.confirmOrArmEscAbort,
-    setActiveModal: store.setActiveModal,
-    setWorkbenchOpen: store.setWorkbenchOpen,
-    toggleSidebarCollapsed: store.toggleSidebarCollapsed,
-  })
+  useGlobalShortcuts(store)
 
   useSseEvents({
+    store,
     authenticated,
-    session: store.requests.session,
-    sseCursorRef: store.sseCursorRef,
-    liveRef: store.liveRef,
-    requests: store.requests.requests,
-    failedDocs: store.requests.failedDocs,
-    unreadClearInFlight,
-    unreadClearedSeq,
-    pluginEpoch: store.requests.pluginEpoch,
-    targets: store.targets,
-    drawerStackRef: store.drawerStackRef,
-    pendingHistoryMode,
     logout,
-    setSseConnected: store.setSseConnected,
-    setConnectionError: store.setConnectionError,
-    setLoadErrors: store.setLoadErrors,
-    updateLive: store.updateLive,
-    setKernelBootId: store.setKernelBootId,
-    setConversationArtifacts: store.setConversationArtifacts,
-    conversationArtifactsRef: store.conversationArtifactsRef,
-    artifactsWatermarksRef: store.requests.artifactsWatermarks,
-    visibleConversationIds,
-    loadConversationDetail: store.loadConversationDetail,
-    loadConversationArtifacts: store.loadConversationArtifacts,
-    abortInFlightConversationRequests: store.requests.abortInFlightConversationRequests,
-    clearVisibleConversationUnread,
-    pushNotice: store.pushNotice,
-    refreshAssets: store.refreshAssets,
-    applyPrimaryTarget: store.applyPrimaryTarget,
-    setSplitTarget: store.setSplitTarget,
-    pruneConversationFromDrawerStack: store.pruneConversationFromDrawerStack,
+    unreadSync,
   })
 
   return (
@@ -294,14 +223,12 @@ export function HelmxStoreProvider({
 
   useEffect(() => {
     const w = window as unknown as Record<string, unknown>
-    w.__HELMX_SHARED__ = { React, useHelmxStore, usePluginDoc: usePluginDocValue }
     w.__helmx_shared_react = React
     w.__helmx_shared_react_dom = ReactDom
     w.__helmx_shared_react_dom_client = ReactDomClient
     w.__helmx_shared_react_jsx_runtime = ReactJsxRuntime
     w.__helmx_shared_plugin_client = HelmxPluginClient
     return () => {
-      delete w.__HELMX_SHARED__
       delete w.__helmx_shared_react
       delete w.__helmx_shared_react_dom
       delete w.__helmx_shared_react_dom_client

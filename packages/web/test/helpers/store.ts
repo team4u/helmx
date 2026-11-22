@@ -39,6 +39,7 @@ export type TestStoreOverrides = Omit<
   | 'backfillConversationEntry'
   | 'loadConversationArtifacts'
   | 'ensurePluginDoc'
+  | 'retryPluginDoc'
   | 'subscribeSessionDoc'
   | 'getSessionDocState'
   | 'getPluginSessionDoc'

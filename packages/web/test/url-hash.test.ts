@@ -456,15 +456,15 @@ test('契约: HelmxStoreProvider 初始状态取自 Hash、监听外部变更、
   // semantics of the single write-back effect (comment text may be translated;
   // slice ends at the final sync statement covering the full push/replace branches).
   const writeBackStart = source.indexOf('const nextHash = formatLocationHash(locationState)')
-  const writeBackEnd = source.indexOf('lastSyncedLocation.current = locationState', source.indexOf('lastSyncedLocation.current = locationState', writeBackStart) + 1)
+  const writeBackEnd = source.indexOf('store.lastSyncedLocation = locationState', source.indexOf('store.lastSyncedLocation = locationState', writeBackStart) + 1)
   const writeBack = source.slice(writeBackStart, writeBackEnd)
   assert.ok(writeBack.length > 0, 'write-back effect must exist with a stable code anchor')
   assert.ok(writeBack.includes('nextHash === window.location.hash'), 'compare against the address bar before writing back')
   assert.ok(writeBack.includes('pushState') && writeBack.includes('replaceState'), '写回须区分 push/replace')
   // setParams push 标记与 openTarget history 选项经唯一写回 effect 消费，组件不直接操作 history
-  assert.ok(writeBack.includes('pendingHistoryMode.current'), '显式历史标记须由唯一写回 effect 消费')
-  const screenParamsImpl = source.slice(source.indexOf('const setScreenParams'), source.indexOf('const invokePluginAction'))
-  assert.ok(!screenParamsImpl.includes('history.'), 'setScreenParams 不得直接操作浏览器历史')
+  assert.ok(writeBack.includes('store.pendingHistoryMode'), '显式历史标记须由唯一写回 effect 消费')
+  const navActionsSource = await readSource('../src/lib/store/nav-actions.ts')
+  assert.ok(!navActionsSource.includes('history.'), 'nav-actions (含 setScreenParams) 不得直接操作浏览器历史')
   // logout 用 replaceState 复位地址栏，不污染历史栈（默认角色中心的规范路径）
   const logoutBody = source.slice(source.indexOf('const logout'), source.indexOf('useEffect', source.indexOf('const logout')))
   assert.match(logoutBody, /replaceState\(null, '', '#\/settings\/profiles'\)/)

@@ -18,8 +18,8 @@
  */
 import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import { Checkbox, ConfirmDialog, HelmxIcon, Tooltip } from '@helmx/plugin-client'
-import { bulkDeleteConversations, bulkDeleteNotice } from './bulk-delete-ops.js'
+import { Checkbox, HelmxIcon, Tooltip } from '@helmx/plugin-client'
+import { useBatchConversationDelete } from './use-batch-conversation-delete.js'
 import {
   useConversations,
   useLocationTargets,
@@ -29,6 +29,7 @@ import {
   type LocationTargetsSlice,
 } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
+import { BatchActionBar } from '../ui/BatchActionBar.js'
 import { ConversationRowActionsMenu } from '../ui/ConversationRowActionsMenu.js'
 import {
   activeConversationIdsOf,
@@ -151,74 +152,31 @@ export function ArchivedConversationsGroup({
   const activeConversationIds = activeConversationIdsOf(locationTargets)
   const hasActiveArchived = items.some((item) => activeConversationIds.has(item.conv.id))
   const [open, setOpen] = useState(hasActiveArchived)
-  const [batchMode, setBatchMode] = useState(false)
-  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [restoring, setRestoring] = useState(false)
-  const [deleting, setDeleting] = useState(false)
-  const [batchDeleteConfirmOpen, setBatchDeleteConfirmOpen] = useState(false)
+  const selectableIds = useMemo(() => items.map((item) => item.conv.id), [items])
+  const batch = useBatchConversationDelete({
+    selectableIds,
+    pushNotice,
+    t,
+    busy: restoring,
+  })
 
   useEffect(() => {
     if (hasActiveArchived) setOpen(true)
   }, [hasActiveArchived, locationTargets.primaryTarget, locationTargets.splitTarget])
 
-  const toggleSelect = (id: number) => {
-    setSelectedIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-  }
-
-  const isAllSelected = items.length > 0 && items.every((item) => selectedIds.has(item.conv.id))
-
-  /** Bulk restore: per-conversation PATCH + allSettled aggregation (partial
-   *  failures never mask successes); single-row restore goes through the inline
-   *  "more actions" menu (ConversationRowActionsMenu offers restore for
-   *  archived conversations automatically). */
   const executeBatchRestore = async () => {
-    if (selectedIds.size === 0 || restoring || deleting) return
+    if (batch.selectedIds.size === 0 || restoring || batch.deleting) return
     setRestoring(true)
     try {
       const convs = items
-        .filter((item) => selectedIds.has(item.conv.id))
+        .filter((item) => batch.selectedIds.has(item.conv.id))
         .map((item) => item.conv)
       const outcome = await patchConversationsArchived(convs, false)
       pushNotice(archiveBatchNotice(false, outcome, t))
-      setSelectedIds(new Set())
-      setBatchMode(false)
+      batch.exitBatchMode()
     } finally {
       setRestoring(false)
-    }
-  }
-
-  /**
-   * Bulk delete via the single bulk endpoint (server-side per-item aggregation;
-   * partial failures never mask successes; archived rows are human-owned root
-   * conversations by construction, so no extra deletability gate applies). No
-   * navigation here: rely solely on each successful deletion's
-   * conversation.deleted SSE event; the Provider conditionally falls back by
-   * current targets.
-   */
-  const executeBatchDelete = async () => {
-    const count = selectedIds.size
-    if (count === 0 || deleting || restoring) return
-    setBatchDeleteConfirmOpen(false)
-    setDeleting(true)
-    try {
-      const outcome = await bulkDeleteConversations(Array.from(selectedIds))
-      pushNotice(bulkDeleteNotice(outcome, t))
-      setSelectedIds(new Set())
-      setBatchMode(false)
-    } catch (err) {
-      pushNotice({
-        type: 'notification',
-        level: 'error',
-        title: t('shell.batch.bulkDeleteError'),
-        body: err instanceof Error ? err.message : String(err),
-      })
-    } finally {
-      setDeleting(false)
     }
   }
 
@@ -244,72 +202,46 @@ export function ArchivedConversationsGroup({
           </span>
         </button>
         {open && (
-          <Tooltip content={batchMode ? t('shell.archived.exitBulk') : t('shell.archived.manageBulk')} side="top">
+          <Tooltip content={batch.batchMode ? t('shell.archived.exitBulk') : t('shell.archived.manageBulk')} side="top">
             <button
               type="button"
               className="btn btn-ghost btn-icon-xs"
-              style={{ color: batchMode ? 'var(--accent)' : undefined }}
-              title={batchMode ? t('shell.archived.exitBulk') : t('shell.archived.manageBulk')}
-              aria-label={batchMode ? t('shell.archived.exitBulk') : t('shell.archived.manageBulk')}
-              onClick={() => {
-                setBatchMode((v) => {
-                  if (v) setSelectedIds(new Set())
-                  return !v
-                })
-              }}
+              style={{ color: batch.batchMode ? 'var(--accent)' : undefined }}
+              title={batch.batchMode ? t('shell.archived.exitBulk') : t('shell.archived.manageBulk')}
+              aria-label={batch.batchMode ? t('shell.archived.exitBulk') : t('shell.archived.manageBulk')}
+              onClick={batch.toggleBatchMode}
             >
               <HelmxIcon name="check-square" size={12} />
             </button>
           </Tooltip>
         )}
       </div>
-      {open && batchMode && (
-        <div className="batch-bar sidebar-batch-bar">
-          <div className="batch-bar-header">
-            <span className="batch-bar-count tabular-nums">
-              {t('shell.batch.selected', { count: selectedIds.size })}
-            </span>
-            <button
-              type="button"
-              className="btn btn-ghost btn-xs"
-              onClick={() => {
-                setBatchMode(false)
-                setSelectedIds(new Set())
-              }}
-              title={t('shell.archived.exitBulk')}
-            >
-              {t('shell.batch.exit')}
-            </button>
-          </div>
-          <div className="batch-bar-actions">
+      {open && batch.batchMode && (
+        <BatchActionBar
+          className="sidebar-batch-bar"
+          selectedCount={batch.selectedIds.size}
+          selectableCount={items.length}
+          isAllSelected={batch.isAllSelected}
+          deleting={batch.deleting}
+          busy={restoring}
+          exitTitle={t('shell.archived.exitBulk')}
+          onExit={batch.exitBatchMode}
+          onToggleSelectAll={batch.toggleSelectAll}
+          extraActions={
             <button
               type="button"
               className="btn btn-sm"
-              disabled={items.length === 0 || restoring || deleting}
-              onClick={() => {
-                setSelectedIds(isAllSelected ? new Set() : new Set(items.map((item) => item.conv.id)))
-              }}
-            >
-              {isAllSelected ? t('shell.batch.clear') : t('shell.batch.selectAll')}
-            </button>
-            <button
-              type="button"
-              className="btn btn-sm"
-              disabled={selectedIds.size === 0 || restoring || deleting}
+              disabled={batch.selectedIds.size === 0 || restoring || batch.deleting}
               onClick={() => void executeBatchRestore()}
             >
-              {restoring ? t('shell.archived.restoring') : t('shell.archived.restoreCount', { count: selectedIds.size })}
+              {restoring ? t('shell.archived.restoring') : t('shell.archived.restoreCount', { count: batch.selectedIds.size })}
             </button>
-            <button
-              type="button"
-              className="btn btn-sm btn-danger-sm"
-              disabled={selectedIds.size === 0 || restoring || deleting}
-              onClick={() => setBatchDeleteConfirmOpen(true)}
-            >
-              {deleting ? t('shell.batch.deleting') : t('shell.batch.deleteCount', { count: selectedIds.size })}
-            </button>
-          </div>
-        </div>
+          }
+          confirmOpen={batch.confirmOpen}
+          onConfirmOpenChange={batch.setConfirmOpen}
+          onRequestDelete={batch.requestDeleteConfirm}
+          onConfirmDelete={() => void batch.executeBatchDelete()}
+        />
       )}
       {open &&
         items.map((item) => (
@@ -320,23 +252,11 @@ export function ArchivedConversationsGroup({
             onOpenConversation={(conversationId) => openTarget({ kind: 'conversation', conversationId })}
             background={background}
             onNavigate={onNavigate}
-            batchMode={batchMode}
-            selected={selectedIds.has(item.conv.id)}
-            onToggleSelect={toggleSelect}
+            batchMode={batch.batchMode}
+            selected={batch.selectedIds.has(item.conv.id)}
+            onToggleSelect={batch.toggleSelect}
           />
         ))}
-      <ConfirmDialog
-        open={batchDeleteConfirmOpen}
-        onOpenChange={setBatchDeleteConfirmOpen}
-        title={t('shell.batch.deleteConfirmTitle', { count: selectedIds.size })}
-        description={t('shell.batch.deleteConfirmDesc')}
-        confirmText={t('shell.batch.deleteConfirmButton')}
-        danger
-        onConfirm={() => {
-          void executeBatchDelete()
-        }}
-        onCancel={() => setBatchDeleteConfirmOpen(false)}
-      />
     </div>
   )
 }

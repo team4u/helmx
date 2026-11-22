@@ -38,6 +38,16 @@ export interface GlobalDefaultsPanelProps {
  *   never overwrite newer state while the model catalog refreshes;
  * - strictly zero Emoji and built on design primitives.
  */
+interface KeyedModelThinkingRow extends ModelThinkingRow {
+  key: number
+}
+
+let nextPerModelRowKey = 1
+
+function toKeyedRows(rows: ReadonlyArray<ModelThinkingRow>): KeyedModelThinkingRow[] {
+  return rows.map((row) => ({ ...row, key: nextPerModelRowKey++ }))
+}
+
 export function GlobalDefaultsPanel({
   defaultModelInfo,
   onSaved,
@@ -54,13 +64,18 @@ export function GlobalDefaultsPanel({
   const [formCompactionLevel, setFormCompactionLevel] = useState(
     () => defaultModelInfo?.defaultCompactionThinkingLevel ?? '',
   )
-  const [perModelRows, setPerModelRows] = useState<ModelThinkingRow[]>(() =>
-    rowsFromModelThinkingLevels(defaultModelInfo?.modelThinkingLevels),
+  const [perModelRows, setPerModelRows] = useState<KeyedModelThinkingRow[]>(() =>
+    toKeyedRows(rowsFromModelThinkingLevels(defaultModelInfo?.modelThinkingLevels)),
   )
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [saveSuccess, setSaveSuccess] = useState(false)
   const loadGeneration = useRef(0)
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => () => {
+    if (saveTimerRef.current !== null) clearTimeout(saveTimerRef.current)
+  }, [])
 
   // Sync the local form when external state changes (deep-link navigation /
   // catalog refresh); only for passive property synchronization.
@@ -71,7 +86,7 @@ export function GlobalDefaultsPanel({
       setFormLevel(defaultModelInfo.defaultThinkingLevel ?? '')
       setFormCompactionModel(defaultModelInfo.defaultCompactionModel ?? '')
       setFormCompactionLevel(defaultModelInfo.defaultCompactionThinkingLevel ?? '')
-      setPerModelRows(rowsFromModelThinkingLevels(defaultModelInfo.modelThinkingLevels))
+      setPerModelRows(toKeyedRows(rowsFromModelThinkingLevels(defaultModelInfo.modelThinkingLevels)))
       return () => {
         loadGeneration.current = Math.max(loadGeneration.current, gen)
       }
@@ -123,7 +138,11 @@ export function GlobalDefaultsPanel({
         body: noticeBody,
       })
       setSaveSuccess(true)
-      setTimeout(() => setSaveSuccess(false), 2400)
+      if (saveTimerRef.current !== null) clearTimeout(saveTimerRef.current)
+      saveTimerRef.current = setTimeout(() => {
+        saveTimerRef.current = null
+        setSaveSuccess(false)
+      }, 2400)
     } catch (err) {
       if (gen !== loadGeneration.current) return
       setSaveError(err instanceof Error ? err.message : String(err))
@@ -137,7 +156,7 @@ export function GlobalDefaultsPanel({
     setFormLevel(defaultModelInfo?.defaultThinkingLevel ?? '')
     setFormCompactionModel(defaultModelInfo?.defaultCompactionModel ?? '')
     setFormCompactionLevel(defaultModelInfo?.defaultCompactionThinkingLevel ?? '')
-    setPerModelRows(rowsFromModelThinkingLevels(defaultModelInfo?.modelThinkingLevels))
+    setPerModelRows(toKeyedRows(rowsFromModelThinkingLevels(defaultModelInfo?.modelThinkingLevels)))
     setSaveError(null)
   }
 
@@ -220,7 +239,7 @@ export function GlobalDefaultsPanel({
             <button
               type="button"
               className="btn btn-ghost"
-              onClick={() => setPerModelRows((rows) => [...rows, { model: '', level: '' }])}
+              onClick={() => setPerModelRows((rows) => [...rows, { key: nextPerModelRowKey++, model: '', level: '' }])}
               disabled={saving}
             >
               <HelmxIcon name="plus" size={14} />
@@ -232,7 +251,7 @@ export function GlobalDefaultsPanel({
             <p className="text-subtle">{t('models.defaults.perModelEmpty')}</p>
           )}
           {perModelRows.map((row, index) => (
-            <div className="model-defaults-row" key={index}>
+            <div className="model-defaults-row" key={row.key}>
               <ModelPickerControl
                 buttonId={`model-defaults-permodel-${index}`}
                 buttonAriaLabel={t('models.defaults.perModelAria')}
@@ -250,19 +269,19 @@ export function GlobalDefaultsPanel({
                 onNotice={onNotice}
                 onApply={(id, lvl) =>
                   setPerModelRows((rows) =>
-                    rows.map((existing, i) => (i === index ? { model: id, level: lvl ?? '' } : existing)),
+                    rows.map((existing) => (existing.key === row.key ? { ...existing, model: id, level: lvl ?? '' } : existing)),
                   )
                 }
                 onResetDefault={() =>
                   setPerModelRows((rows) =>
-                    rows.map((existing, i) => (i === index ? { model: '', level: '' } : existing)),
+                    rows.map((existing) => (existing.key === row.key ? { ...existing, model: '', level: '' } : existing)),
                   )
                 }
               />
               <button
                 type="button"
                 className="model-defaults-row-remove"
-                onClick={() => setPerModelRows((rows) => rows.filter((_, i) => i !== index))}
+                onClick={() => setPerModelRows((rows) => rows.filter((existing) => existing.key !== row.key))}
                 disabled={saving}
                 title={t('models.defaults.perModelRemove')}
                 aria-label={t('models.defaults.perModelRemove')}
