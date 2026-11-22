@@ -772,6 +772,9 @@ export interface PluginClientContext {
  *   (syntax-highlighted code block) / CopyButton (copy button);
  * - formatting pure functions: formatTime (compact MM-DD HH:mm) / formatCompactTimestamp
  *   (MM-DD HH:mm:ss log timestamp) / formatDurationMs (millisecond duration summary) /
+ *   formatStopwatchMs (1Hz whole-second stopwatch Xs / XmYYs / XhYYm) /
+ *   formatOffsetMs (relative offset +MM:SS / +H:MM:SS) /
+ *   resolveConversationTiming (honest conversation timing snapshot) /
  *   formatBytes (human-readable bytes, 1024-based);
  * - PluginSlot: inter-plugin sub-slot rendering primitive.
  */
@@ -1021,5 +1024,8 @@ export const PLUGIN_CLIENT_SHARED_EXPORTS = [
   'formatTime',
   'formatCompactTimestamp',
   'formatDurationMs',
+  'formatStopwatchMs',
+  'formatOffsetMs',
+  'resolveConversationTiming',
   'formatBytes',
 ] as const

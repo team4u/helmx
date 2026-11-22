@@ -1291,7 +1291,14 @@ test('useSharedNowMs: consumes optional host port.getServerNow(), preserves this
 })
 
 test('timing formatters (formatStopwatchMs / formatOffsetMs / formatDurationMs) and resolveConversationTiming contract + pure sub-entry exports', { timeout: 60_000 }, () => {
-  // Verify index.ts and pure.ts expose the exact same functions.
+  // Verify timing helpers are locked in PLUGIN_CLIENT_SHARED_EXPORTS and index.ts/pure.ts expose identical functions.
+  for (const name of ['formatStopwatchMs', 'formatOffsetMs', 'resolveConversationTiming'] as const) {
+    assert.ok(
+      (PLUGIN_CLIENT_SHARED_EXPORTS as readonly string[]).includes(name),
+      `PLUGIN_CLIENT_SHARED_EXPORTS must include ${name}`,
+    )
+    assert.equal(typeof SDK[name], 'function', `@helmx/plugin-client must export ${name}`)
+  }
   assert.ok(SDK.formatStopwatchMs === PureSDK.formatStopwatchMs)
   assert.ok(SDK.formatOffsetMs === PureSDK.formatOffsetMs)
   assert.ok(SDK.formatDurationMs === PureSDK.formatDurationMs)
