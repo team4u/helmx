@@ -283,38 +283,8 @@ describe('SSE snapshot + seq race', { timeout: 60_000 }, () => {
   })
 })
 
-describe('Ask CAS and secret persistence boundaries', { timeout: 60_000 }, () => {
-  it('stashes secret answers: store and events hold markers only', { timeout: 60_000 }, async () => {
-    const kernel = await openRuntime(join(root, 't8'))
-    try {
-      const askPromise = kernel.createAsk({
-        conversationId: 1,
-        title: 'needs secret',
-        fields: [
-          { name: 'API_KEY', label: 'API Key', type: 'text', secret: true, required: true },
-        ],
-      })
-      await new Promise((r) => setTimeout(r, 20))
-      const pending = kernel.listAsks('pending')
-      assert.equal(pending.length, 1)
-      const ask = pending[0]
-      assert.ok(ask)
-      await kernel.answerAsk(ask.id, { API_KEY: 'super-secret-123' })
-      const result = await askPromise
-      // Answer holds marker form only; plaintext enters child processes via envFor (accessible in-process)
-      assert.equal(result.status, 'answered')
-      assert.ok(result.answers['API_KEY']!.startsWith('[REDACTED:stash:'))
-      const env = kernel.services.stash.envFor(1)
-      assert.ok(String(env['API_KEY']).length > 0)
-      // Persisted rows keep markers only: verify via ask list query
-      const answered = kernel.listAsks('answered')
-      assert.equal(answered.length, 1)
-    } finally {
-      await kernel.close()
-    }
-  })
-
-  it('CAS: answering after external seq advance supersedes cleanly', { timeout: 60_000 }, async () => {
+describe('Ask CAS and persistence boundaries', { timeout: 60_000 }, () => {
+  it('CAS: answering with stale client expectedStateSeq returns 409, matching seq answers', { timeout: 60_000 }, async () => {
     const kernel = await openRuntime(join(root, 't9'))
     try {
       const askPromise = kernel.createAsk({
@@ -326,15 +296,16 @@ describe('Ask CAS and secret persistence boundaries', { timeout: 60_000 }, () =>
       await new Promise((r) => setTimeout(r, 20))
       const ask = kernel.listAsks('pending')[0]
       assert.ok(ask)
-      // herdr terminal side already advanced to 11
-      kernel.registerAskSeqResolver(() => 11)
-      const result = await kernel.answerAsk(ask.id, { confirm: 'yes' })
-      assert.equal(result.status, 'superseded')
+      await assert.rejects(
+        () => kernel.answerAsk(ask.id, { confirm: 'true' }, 9),
+        (err: unknown) => err instanceof HelmxError && err.code === 'ask_state_conflict',
+      )
+      const result = await kernel.answerAsk(ask.id, { confirm: 'true' }, 10)
+      assert.equal(result.status, 'answered')
       assert.equal(kernel.listAsks('pending').length, 0)
-      // createAsk resolves synchronously to superseded (empty answers; never hangs or backfills false approval).
       const settled = await askPromise
-      assert.equal(settled.status, 'superseded')
-      assert.deepEqual(settled.answers, {})
+      assert.equal(settled.status, 'answered')
+      assert.deepEqual(settled.answers, { confirm: 'true' })
     } finally {
       await kernel.close()
     }
@@ -666,8 +637,8 @@ describe('native subagent', { timeout: 60_000 }, () => {
   it('spawnAgent normalizes title on fresh creation (trim, redact secrets, cap 120 chars, fallback on blank) and preserves title on resume', { timeout: 60_000 }, async () => {
     const kernel = await openRuntime(join(root, 'spawn-title-normalize'))
     try {
-      // Register both per-conversation stash secret and global redaction token.
-      kernel.services.stash.put(1, 'API_TOKEN', 'secret-token-xyz-987')
+      // Register global redaction tokens.
+      const disposeSecret1 = kernel.services.stash.addRedaction('secret-token-xyz-987')
       const disposeGlobal = kernel.stash.addRedaction('global-secret-456')
 
       kernel.__faux.setResponses([
@@ -742,6 +713,7 @@ describe('native subagent', { timeout: 60_000 }, () => {
         })
         assert.equal(kernel.getConversation(child1).title, 'Inspect build failure')
       } finally {
+        disposeSecret1()
         disposeGlobal()
       }
     } finally {
@@ -751,13 +723,11 @@ describe('native subagent', { timeout: 60_000 }, () => {
 })
 
 describe('triggers and cascading deletion', { timeout: 60_000 }, () => {
-  it('dispatchTrigger defaults to human-owned assistant entry without preemption by newer bot/helmx conversations', { timeout: 60_000 }, async () => {
+  it('dispatchTrigger defaults to human-owned assistant entry without preemption by newer helmx conversations', { timeout: 60_000 }, async () => {
     const kernel = await openRuntime(join(root, 'trigger-ownership'))
     try {
       const humanId = 1
-      const bot = await kernel.createConversation({ title: 'newer Bot', profileId: 'assistant' })
       const helmx = await kernel.createConversation({ title: 'newer Helmx', profileId: 'assistant' })
-      kernel.markConversationOwnership(bot.id, 'bot')
       kernel.markConversationOwnership(helmx.id, 'helmx')
       kernel.__faux.setResponses([fauxAssistantMessage('event handled')])
 
@@ -767,11 +737,9 @@ describe('triggers and cascading deletion', { timeout: 60_000 }, () => {
       const humanInputs = (await kernel.getConversationDetail(humanId, { limit: 100 })).entries
         .filter((entry) => entry.kind === 'helmx.input')
       assert.ok(humanInputs.some((entry) => JSON.stringify(entry.data).includes('only deliver to human')))
-      for (const id of [bot.id, helmx.id]) {
-        const inputs = (await kernel.getConversationDetail(id, { limit: 100 })).entries
-          .filter((entry) => entry.kind === 'helmx.input')
-        assert.equal(inputs.length, 0, `assistant conversation ${id} with non-human ownedBy must not preempt human entry`)
-      }
+      const inputs = (await kernel.getConversationDetail(helmx.id, { limit: 100 })).entries
+        .filter((entry) => entry.kind === 'helmx.input')
+      assert.equal(inputs.length, 0, `assistant conversation ${helmx.id} with non-human ownedBy must not preempt human entry`)
     } finally {
       await kernel.close()
     }
@@ -1215,41 +1183,6 @@ describe('real PluginHost integration', { timeout: 60_000 }, () => {
             }
             return { action: 'continue' }
           })
-
-          ctx.hook.onToolResult((payload) => {
-            if (payload.toolName !== 'contract_tool') return { action: 'continue' }
-            if (hookMode === 'valid_transform') {
-              return {
-                action: 'transform',
-                value: {
-                  ...payload,
-                  result: {
-                    ...payload.result,
-                    presentationMeta: { badge: 'hook-rewritten TOP_SECRET_META_TOKEN', count: 9 },
-                  },
-                },
-              }
-            }
-            if (hookMode === 'invalid_transform') {
-              return {
-                action: 'transform',
-                value: {
-                  ...payload,
-                  result: {
-                    ...payload.result,
-                    presentationMeta: { badge: 'bad', unexpectedField: true },
-                  },
-                },
-              }
-            }
-            if (hookMode === 'legacy_details') {
-              return {
-                action: 'handled',
-                result: { output: 'handled', details: { badge: 'legacy' } },
-              }
-            }
-            return { action: 'continue' }
-          })
         },
       })
       kernel.refreshPluginTools()
@@ -1267,33 +1200,6 @@ describe('real PluginHost integration', { timeout: 60_000 }, () => {
         fauxAssistantMessage('turn 1 complete'),
       ])
       await kernel.submitInput(1, 'run phase 1 tool contract checks')
-      await kernel.waitForIdle(1)
-
-      // Turn 2: valid tool_result transform -> redacted presentationMeta persisted.
-      hookMode = 'valid_transform'
-      kernel.__faux.setResponses([
-        fauxAssistantMessage([fauxToolCall('contract_tool', { mode: 'separated' }, { id: 'tc-hook-ok' })], { stopReason: 'toolUse' }),
-        fauxAssistantMessage('turn 2 complete'),
-      ])
-      await kernel.submitInput(1, 'run valid transform')
-      await kernel.waitForIdle(1)
-
-      // Turn 3: invalid tool_result transform -> explicit error, details omitted.
-      hookMode = 'invalid_transform'
-      kernel.__faux.setResponses([
-        fauxAssistantMessage([fauxToolCall('contract_tool', { mode: 'separated' }, { id: 'tc-hook-bad' })], { stopReason: 'toolUse' }),
-        fauxAssistantMessage('turn 3 complete'),
-      ])
-      await kernel.submitInput(1, 'run invalid transform')
-      await kernel.waitForIdle(1)
-
-      // Turn 4: tool_result handled with legacy details -> explicit error, details omitted.
-      hookMode = 'legacy_details'
-      kernel.__faux.setResponses([
-        fauxAssistantMessage([fauxToolCall('contract_tool', { mode: 'separated' }, { id: 'tc-hook-legacy' })], { stopReason: 'toolUse' }),
-        fauxAssistantMessage('turn 4 complete'),
-      ])
-      await kernel.submitInput(1, 'run legacy details handled')
       await kernel.waitForIdle(1)
 
       // Verify before_turn projected structuredOutputSchema & presentationMetaSchema.
@@ -1338,22 +1244,6 @@ describe('real PluginHost integration', { timeout: 60_000 }, () => {
         structuredOutput: 'not-an-envelope',
       })
       assert.deepEqual(biz.details, { badge: 'biz:7:[REDACTED]', count: 7 })
-
-      // 5. valid tool_result transform: updated presentationMeta redacted & persisted.
-      const hookOk = byCallId.get('tc-hook-ok')!
-      assert.equal(hookOk.isError, false)
-      assert.deepEqual(hookOk.details, { badge: 'hook-rewritten [REDACTED]', count: 9 })
-
-      // 6. invalid tool_result transform & legacy details handled: explicit failure, details omitted.
-      const hookBad = byCallId.get('tc-hook-bad')!
-      assert.equal(hookBad.isError, true)
-      assert.equal(hookBad.details, undefined)
-      assert.match(hookBad.content?.[0]?.text ?? '', /tool_result_failed/)
-
-      const hookLegacy = byCallId.get('tc-hook-legacy')!
-      assert.equal(hookLegacy.isError, true)
-      assert.equal(hookLegacy.details, undefined)
-      assert.match(hookLegacy.content?.[0]?.text ?? '', /legacy details/)
     } finally {
       disposeSecret()
       await kernel.close()
@@ -1506,36 +1396,6 @@ describe('real PluginHost integration', { timeout: 60_000 }, () => {
       assert.equal(await kernel.getLastAssistantText(1), 'received normalized input')
       // FTS indexes the post-transform text.
       const hits = await kernel.search('normalized')
-      assert.ok(hits.length >= 1)
-    } finally {
-      await kernel.close()
-    }
-  })
-
-  it('trigger transform applies both target and text (prevents tag escape)', { timeout: 60_000 }, async () => {
-    const kernel = await openRuntime(join(root, 'p7'))
-    try {
-      await kernel.plugins.register({
-        id: 'test:route',
-        definePlugin(ctx) {
-          ctx.hook.onTrigger((envelope) => {
-            return {
-              action: 'transform',
-              value: { ...envelope, text: `${envelope.text}\n[rewritten by test:route]` },
-            }
-          })
-        },
-      })
-      kernel.__faux.setResponses([fauxAssistantMessage('trigger handled')])
-      await kernel.dispatchTrigger({
-        id: 'evt-p7',
-        source: 'cron',
-        text: 'original trigger text',
-        createdAt: Date.now(),
-      })
-      await kernel.waitForIdle(1)
-      assert.equal((await kernel.getLastAssistantText(1)).includes('trigger handled'), true)
-      const hits = await kernel.search('rewritten by test:route')
       assert.ok(hits.length >= 1)
     } finally {
       await kernel.close()
@@ -1762,38 +1622,15 @@ describe('real PluginHost integration', { timeout: 60_000 }, () => {
 // ProfileRuntime nodeId/workspace/env boundary validation
 // ---------------------------------------------------------------------------
 
-describe('ProfileRuntime nodeId/workspace/env boundary validation', { timeout: 60_000 }, () => {
-  it('valid fields persist; malformed shapes reject explicitly at save boundary', { timeout: 60_000 }, async () => {
+describe('Profile unknown field boundary validation', { timeout: 60_000 }, () => {
+  it('removed runtime field rejects explicitly at save boundary', { timeout: 60_000 }, async () => {
     const dir = join(root, 'pr1')
     const kernel = await openRuntime(dir, { model: 'faux/faux-1' })
     try {
       const svc = kernel.services.profiles
-      const saved = await svc.save({
-        id: 'remote-agent',
-        name: 'Remote Agent',
-        runtime: {
-          kind: 'herdr',
-          agent: 'claude',
-          nodeId: 'gpu-box',
-          workspace: '/workspace/proj',
-          env: { WORKER_MODE: 'fast', MAX_TASKS: '4' },
-        },
-      })
-      assert.equal(saved.runtime?.nodeId, 'gpu-box')
-      assert.equal(saved.runtime?.workspace, '/workspace/proj')
-      assert.deepEqual(saved.runtime?.env, { WORKER_MODE: 'fast', MAX_TASKS: '4' })
-      // Read path preserves fields too.
-      const reread = await svc.get('remote-agent')
-      assert.equal(reread?.runtime?.nodeId, 'gpu-box')
-      // Invalid shapes reject.
-      await assert.rejects(() =>
-        svc.save({ id: 'bad', runtime: { kind: 'herdr', agent: 'x', nodeId: '' } as never }),
-      )
-      await assert.rejects(() =>
-        svc.save({ id: 'bad', runtime: { kind: 'herdr', agent: 'x', env: { '1BAD': 'v' } } as never }),
-      )
-      await assert.rejects(() =>
-        svc.save({ id: 'bad', runtime: { kind: 'herdr', agent: 'x', env: { K: 1 } } as never }),
+      await assert.rejects(
+        () => svc.save({ id: 'bad', runtime: { kind: 'docker', agent: 'x' } } as never),
+        /unknown field 'runtime'/i,
       )
     } finally {
       await kernel.close()

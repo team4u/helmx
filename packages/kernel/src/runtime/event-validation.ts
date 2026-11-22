@@ -25,10 +25,8 @@ import type {
   Profile,
   PublicPluginDoc,
   PublicPluginSessionDoc,
-  SecretLifetime,
 } from '@helmx/protocol'
 import { redactJsonValue } from '../redact.js'
-import { validateSecretLifetime } from '../services/secret-stash.js'
 
 const NonEmptyString = Type.String({ minLength: 1 })
 const SafePositiveInt = Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER })
@@ -117,7 +115,7 @@ const CONVERSATION_SUMMARY_SCHEMA = Type.Object({
   updatedAt: Type.Number(),
   parentConversationId: Type.Optional(Type.Integer()),
   parentToolCallId: Type.Optional(Type.String()),
-  ownedBy: Type.Optional(Type.Enum(['human', 'helmx', 'bot'] as const)),
+  ownedBy: Type.Optional(Type.Enum(['human', 'helmx'] as const)),
   nodeId: Type.Optional(Type.String()),
   thinkingLevelOverride: Type.Optional(Type.String()),
   doing: Type.Optional(Type.String()),
@@ -176,9 +174,7 @@ const ASK_FIELD_SCHEMA = Type.Object({
   label: Type.String(),
   type: Type.Enum(['text', 'select', 'confirm'] as const),
   options: Type.Optional(Type.Array(Type.Object({ label: Type.String(), value: Type.String() }))),
-  secret: Type.Optional(Type.Boolean()),
   required: Type.Optional(Type.Boolean()),
-  secretLifetime: Type.Optional(Type.Unknown()),
 })
 
 const ASK_SPEC_CHECKER = Compile(
@@ -202,20 +198,6 @@ function assertAskSpecShape(value: unknown): AskSpec {
     'ask.upsert requires an AskSpec-shaped ask (id/conversationId/title/fields/status/createdAt)',
   )
   for (const field of ask.fields) {
-    if (field.secretLifetime !== undefined) {
-      if (field.secret !== true) {
-        throw new HelmxError('invalid_event', 'ask.upsert secretLifetime is only allowed on secret fields', 500)
-      }
-      try {
-        validateSecretLifetime(field.secretLifetime as SecretLifetime, 'ask.upsert field.secretLifetime')
-      } catch (error) {
-        throw new HelmxError(
-          'invalid_event',
-          error instanceof Error ? error.message : 'ask.upsert field.secretLifetime has invalid format',
-          500,
-        )
-      }
-    }
     if (field.type === 'select' && (!field.options || field.options.length === 0)) {
       throw new HelmxError(
         'invalid_event',
@@ -292,7 +274,6 @@ const PROFILE_CHANGED_CHECKER = Compile(
       tags: Type.Optional(Type.Array(Type.String())),
       skills: Type.Optional(Type.Array(Type.String())),
       managedByPlugin: Type.Optional(Type.String()),
-      humanSelectable: Type.Optional(Type.Boolean()),
       restrictToCwd: Type.Optional(Type.Boolean()),
     }),
     removed: Type.Optional(Type.Boolean()),

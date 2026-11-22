@@ -179,11 +179,6 @@ export function registerSubagentTool(
           description: `Subtree spawn-depth ceiling (1..${HARD_MAX_SUBAGENT_DEPTH}; inherits current ceiling, default ${DEFAULT_MAX_SUBAGENT_DEPTH})`,
         },
         attachments: { type: 'array', items: { type: 'string' }, description: 'Artifact IDs passed to the subagent (optional)' },
-        secretNames: {
-          type: 'array',
-          items: { type: 'string' },
-          description: 'Parent secret env var names to grant (external runtimes only, optional)',
-        },
       },
       required: ['prompt'],
       additionalProperties: false,
@@ -216,15 +211,6 @@ export function registerSubagentTool(
         const list = a['attachments']
         if (!Array.isArray(list) || list.some((item) => typeof item !== 'string' || item.length === 0)) {
           return envelopeError('subagent_failed: attachments 需为非空字符串数组（产物 ID 列表）', 'invalid attachments: 需为非空字符串数组')
-        }
-      }
-      if (a['secretNames'] !== undefined) {
-        const list = a['secretNames']
-        if (!Array.isArray(list) || list.some((item) => typeof item !== 'string' || item.length === 0)) {
-          return envelopeError(
-            'subagent_failed: secretNames 需为非空字符串数组（机密环境变量名；缺省不携带任何父会话机密）',
-            'invalid secretNames: 需为非空字符串数组',
-          )
         }
       }
       if (a['background'] !== undefined && typeof a['background'] !== 'boolean') {
@@ -397,7 +383,6 @@ export function registerSubagentTool(
             ? { meta: withWorkflowSpawnMeta(undefined, { maxSubagentDepth: Number(a['maxSubagentDepth']) }) }
             : {}),
           ...(Array.isArray(a['attachments']) ? { attachments: a['attachments'] as string[] } : {}),
-          ...(Array.isArray(a['secretNames']) ? { secretNames: a['secretNames'] as string[] } : {}),
           onResolved: (info) => {
             resolved = info
           },

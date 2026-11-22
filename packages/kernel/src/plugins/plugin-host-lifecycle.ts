@@ -273,7 +273,6 @@ export async function runDisableTransaction(
   if (options.force !== true) {
     const usages = await collectPluginInUse(pluginId, state, {
       plugins: ctx.plugins,
-      uiRegistry: ctx.uiRegistry,
       host: ctx.host,
     });
     if (usages.length > 0) {

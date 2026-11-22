@@ -180,7 +180,7 @@ test('openHelmxDatabase: storage.close() preserves shared db; init failure close
   await recovered.close()
 })
 
-test('runtime.close() during streaming preserves continuity: GenerationTask returns to pending without restarts, resumes automatically, and dispatches runtime.started in order', { timeout: 60_000 }, async (t) => {
+test('runtime.close() during streaming preserves continuity: GenerationTask returns to pending without restarts, resumes automatically, and runs prepare/start/reconcile in order', { timeout: 60_000 }, async (t) => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helmx-graceful-gen-'))
   t.after(() => rmSync(dataDir, { recursive: true, force: true }))
 
@@ -195,12 +195,6 @@ test('runtime.close() during streaming preserves continuity: GenerationTask retu
   t.after(() => runtime1.close().catch(() => {}))
 
   const lifecycleOrder: string[] = []
-  const leakedToEvents: string[] = []
-  const unsubscribe = runtime1.events.subscribe((frame: HelmxEventFrame) => {
-    const ev = frame.event as { type?: string }
-    if (ev.type === 'runtime.started') leakedToEvents.push(ev.type)
-  })
-  t.after(() => unsubscribe())
   await runtime1.plugins.register({
     id: 'test:lifecycle-order',
     name: 'lifecycle order probe',
@@ -218,15 +212,11 @@ test('runtime.close() during streaming preserves continuity: GenerationTask retu
         },
         stop() {},
       })
-      ctx.host.onEvent('runtime.started', () => {
-        lifecycleOrder.push('runtime.started')
-      })
     },
   })
 
   await runtime1.start()
-  assert.deepEqual(lifecycleOrder, ['plugin.prepare', 'plugin.start', 'plugin.reconcile', 'runtime.started'])
-  assert.equal(leakedToEvents.length, 0, 'runtime.started is an internal event (broadcast: false) and must not leak to external SSE')
+  assert.deepEqual(lifecycleOrder, ['plugin.prepare', 'plugin.start', 'plugin.reconcile'])
 
   // Slow streaming generation: verify conversation enters working and emits partial tokens before graceful close.
   faux1.setResponses([fauxAssistantMessage('long slow streaming output text used to ensure turn stays mid-generation on graceful shutdown')])

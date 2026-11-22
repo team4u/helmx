@@ -25,13 +25,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { AskService } from '../src/runtime/asks.js'
 import { HelmxStore } from '../src/runtime/store.js'
-import { openHelmxDatabase, type HelmxDatabase } from '../src/runtime/sqlite.js'
-import { SecretStash } from '../src/services/index.js'
+import { openHelmxDatabase } from '../src/runtime/sqlite.js'
 
 interface TestContext {
   service: AskService
   store: HelmxStore
-  stash: SecretStash
   events: Array<{ type: string; payload: unknown }>
   pendingChanged: number[]
   /** Closes store and underlying db sequentially (must be called in finally to avoid fd leaks). */
@@ -61,12 +59,10 @@ async function openService(
     options.onError !== undefined ? { onError: options.onError } : {},
   )
   await store.load()
-  const stash = new SecretStash()
   const events: Array<{ type: string; payload: unknown }> = []
   const pendingChanged: number[] = []
   const service = new AskService({
     store,
-    stash,
     onEvent: (type, payload) => {
       events.push({ type, payload })
       options.onEvent?.(type, payload)
@@ -77,7 +73,6 @@ async function openService(
   return {
     service,
     store,
-    stash,
     events,
     pendingChanged,
     async close() {
@@ -109,7 +104,6 @@ describe('Ask lifecycle: synchronous supersede/answer never hangs', { timeout: 6
       let hook: AskService
       hook = new AskService({
         store: ctx.store,
-        stash: ctx.stash,
         onEvent: (type, payload) => {
           if (type === 'ask.upsert') {
             void hook.cancelAsk((payload as { id: string }).id, 'superseded')
@@ -136,7 +130,6 @@ describe('Ask lifecycle: synchronous supersede/answer never hangs', { timeout: 6
       let hook: AskService
       hook = new AskService({
         store: ctx.store,
-        stash: ctx.stash,
         onEvent: (type, payload) => {
           if (type === 'ask.upsert') {
             void hook.answerAsk((payload as { id: string }).id, { x: 'sync answer' })
@@ -382,11 +375,9 @@ describe('Ask persistence failures (SQL tail chain injection): never return fals
     const db = await openHelmxDatabase(join(rootDir, `ask-${Math.random().toString(36).slice(2)}`))
     const store = new HelmxStore(db)
     await store.load()
-    const stash = new SecretStash()
     const events: Array<{ type: string; payload: unknown }> = []
     const failing = new AskService({
       store,
-      stash,
       onEvent: (type, payload) => {
         events.push({ type, payload })
         if (type === 'ask.resolved') throw new Error('event publish fault')
@@ -513,7 +504,7 @@ describe('Ask pre-allocated ID', { timeout: 60_000 }, () => {
 // ---------------------------------------------------------------------------
 
 describe('Ask CAS semantics preservation', { timeout: 60_000 }, () => {
-  it('stale client seq 409; missing resolver ask_state_unavailable; mismatched seq (including rollback) resolves superseded', { timeout: 60_000 }, async () => {
+  it('stale client seq 409; matching seq or omitted seq answers normally', { timeout: 60_000 }, async () => {
     const ctx = await openService()
     try {
       const pa = ctx.service.createAsk({ ...baseSpec, expectedStateSeq: 10, title: 'CAS' })
@@ -524,97 +515,26 @@ describe('Ask CAS semantics preservation', { timeout: 60_000 }, () => {
         () => ctx.service.answerAsk(ask.id, { x: 'v' }, 9),
         (err: unknown) => err instanceof HelmxError && err.code === 'ask_state_conflict',
       )
-      await assert.rejects(
-        () => ctx.service.answerAsk(ask.id, { x: 'v' }),
-        (err: unknown) => err instanceof HelmxError && err.code === 'ask_state_unavailable',
-      )
-      // Both rollback (9 < 10) and advance (11 > 10) resolve to superseded and settle createAsk.
-      let target = 9
-      ctx.service.registerSeqResolver(() => target)
-      const settledBackward = await ctx.service.answerAsk(ask.id, { x: 'v' })
-      assert.equal(settledBackward.status, 'superseded')
-      const r1 = await assertSettlesWithin(pa, 2_000, 'seq rollback superseded')
-      assert.equal(r1.status, 'superseded')
-      assert.deepEqual(r1.answers, {})
+      const ok1 = await ctx.service.answerAsk(ask.id, { x: 'v' }, 10)
+      assert.equal(ok1.status, 'answered')
+      const r1 = await assertSettlesWithin(pa, 2_000, 'matching seq answer')
+      assert.equal(r1.status, 'answered')
 
-      const pb = ctx.service.createAsk({ ...baseSpec, expectedStateSeq: 5, title: 'CAS match' })
+      const pb = ctx.service.createAsk({ ...baseSpec, expectedStateSeq: 5, title: 'CAS no client seq' })
       await new Promise((r) => setTimeout(r, 20))
       const ask2 = ctx.service.listAsks('pending')[0]!
-      target = 5
-      const ok = await ctx.service.answerAsk(ask2.id, { x: 'v' })
-      assert.equal(ok.status, 'answered')
-      const r2 = await assertSettlesWithin(pb, 2_000, 'matching seq answer')
+      const ok2 = await ctx.service.answerAsk(ask2.id, { x: 'v' })
+      assert.equal(ok2.status, 'answered')
+      const r2 = await assertSettlesWithin(pb, 2_000, 'omitted seq answer')
       assert.equal(r2.status, 'answered')
     } finally {
       await ctx.close()
     }
   })
-})
 
-// ---------------------------------------------------------------------------
-
-describe('Ask secret redaction boundary', { timeout: 60_000 }, () => {
-  it('secret answers hold only stash markers in result/store/events while envFor recovers plaintext', { timeout: 60_000 }, async () => {
+  it('duplicate field.name declarations reject with validation_error', { timeout: 60_000 }, async () => {
     const ctx = await openService()
     try {
-      const pa = ctx.service.createAsk({
-        conversationId: 1,
-        title: 'secret key',
-        fields: [{ name: 'API_KEY', label: 'Key', type: 'text', secret: true, required: true }],
-      })
-      await new Promise((r) => setTimeout(r, 20))
-      await ctx.service.answerAsk(ctx.service.listAsks('pending')[0]!.id, { API_KEY: 'plain-secret-value' })
-      const result = await pa
-      assert.equal(result.status, 'answered')
-      assert.ok(result.answers['API_KEY']!.startsWith('[REDACTED:stash:'), 'result carries only stash marker')
-      // Persisted row contains no plaintext.
-      const row = ctx.store.getAsk(result.id)!
-      assert.ok(!row.specJson.includes('plain-secret-value'))
-      assert.ok(!row.resultJson!.includes('plain-secret-value'))
-      assert.ok(row.resultJson!.includes('[REDACTED:stash:'))
-      // Event payloads contain no plaintext.
-      for (const frame of ctx.events) {
-        assert.ok(!JSON.stringify(frame).includes('plain-secret-value'), 'event must not leak plaintext')
-      }
-      // Conversation environment recovers plaintext (accessible in-process).
-      assert.equal(ctx.stash.envFor(1)['API_KEY'], 'plain-secret-value')
-    } finally {
-      await ctx.close()
-    }
-  })
-
-  it('empty secret is not stashed (stores empty string); duplicate secret declarations still reject', { timeout: 60_000 }, async () => {
-    const ctx = await openService()
-    try {
-      const pa = ctx.service.createAsk({
-        conversationId: 1,
-        title: 'empty secret',
-        fields: [{ name: 'EMPTY_TOKEN', label: 'T', type: 'text', secret: true }],
-      })
-      await new Promise((r) => setTimeout(r, 20))
-      await ctx.service.answerAsk(ctx.service.listAsks('pending')[0]!.id, { EMPTY_TOKEN: '' })
-      const result = await pa
-      assert.equal(result.status, 'answered')
-      assert.equal(result.answers['EMPTY_TOKEN'], '')
-      // 'api_key' and 'API_KEY' are distinct field names: valid declarations can coexist (no silent merging).
-      const pboth = ctx.service.createAsk({
-        conversationId: 1,
-        title: 'dual secret coexistence',
-        fields: [
-          { name: 'api_key', label: 'a', type: 'text', secret: true },
-          { name: 'API_KEY', label: 'b', type: 'text', secret: true },
-        ],
-      })
-      await new Promise((r) => setTimeout(r, 20))
-      await ctx.service.answerAsk(ctx.service.listAsks('pending')[0]!.id, {
-        api_key: 'lower',
-        API_KEY: 'upper',
-      })
-      const both = await pboth
-      assert.equal(both.status, 'answered')
-      assert.equal(ctx.stash.envFor(1)['api_key'], 'lower')
-      assert.equal(ctx.stash.envFor(1)['API_KEY'], 'upper')
-      // Duplicate field.name still rejects.
       await assert.rejects(
         () =>
           ctx.service.createAsk({

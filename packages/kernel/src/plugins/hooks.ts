@@ -1,5 +1,5 @@
 /**
- * Priority-ordered hook pipeline shared across the 7 backend hook points (zero business hardcoding).
+ * Priority-ordered hook pipeline shared across the 4 backend hook points (zero business hardcoding).
  *
  * Semantics:
  * - Higher priority runs first; ties preserve registration order (`Array.prototype.sort` is stable);
@@ -12,30 +12,24 @@ import {
   HelmxError,
   type AgentSpawnRequest,
   type BeforeTurnHookPayload,
-  type ExternalTriggerEnvelope,
   type HookHandler,
   type HookName,
   type HookPayloadMap,
   type HookResult,
   type InputHookPayload,
-  type ToolCallHookPayload,
-  type ToolResultHookPayload,
   type TurnSettledPayload,
 } from '@helmx/protocol';
 
 /**
  * Allowed return actions per hook point:
- * - `trigger` / `input` / `tool_call`: may intercept (`handled`/`block`) or transform;
+ * - `input`: may intercept (`handled`/`block`) or transform;
  * - `before_turn`: supports `continue` and `transform` (in-place or transformed payload);
- * - `tool_result` / `agent_spawn`: may transform or take over via `handled`;
+ * - `agent_spawn`: may transform, wrap via `next`, or take over via `handled`;
  * - `turn_settled`: notification hook (no `block`).
  */
 export const HOOK_ALLOWED_ACTIONS: Record<HookName, ReadonlySet<string>> = {
-  trigger: new Set(['continue', 'transform', 'handled']),
   input: new Set(['continue', 'transform', 'handled', 'block']),
   before_turn: new Set(['continue', 'transform']),
-  tool_call: new Set(['continue', 'transform', 'handled', 'block']),
-  tool_result: new Set(['continue', 'transform', 'handled']),
   agent_spawn: new Set(['continue', 'transform', 'handled']),
   turn_settled: new Set(['continue', 'transform', 'handled']),
 };
@@ -136,16 +130,6 @@ function checkConversationInput(v: unknown): string | null {
 }
 
 const PAYLOAD_CHECKS: Record<HookName, PayloadCheck> = {
-  trigger: (v) => {
-    if (!isObj(v)) return 'must be an ExternalTriggerEnvelope object';
-    return (
-      reqString(v, 'id') ??
-      reqString(v, 'source') ??
-      reqString(v, 'text') ??
-      reqNonNegativeInt(v, 'createdAt') ??
-      optString(v, 'threadKey')
-    );
-  },
   input: (v) => {
     if (!isObj(v)) return 'must be an object';
     return reqPositiveInt(v, 'conversationId') ?? checkConversationInput(v.input);
@@ -175,25 +159,6 @@ const PAYLOAD_CHECKS: Record<HookName, PayloadCheck> = {
     }
     return null;
   },
-  tool_call: (v) => {
-    if (!isObj(v)) return 'must be an object';
-    return (
-      reqPositiveInt(v, 'conversationId') ??
-      reqString(v, 'callId') ??
-      reqString(v, 'toolName') ??
-      (isObj(v.input) ? null : 'field input must be an object')
-    );
-  },
-  tool_result: (v) => {
-    if (!isObj(v)) return 'must be an object';
-    return (
-      reqPositiveInt(v, 'conversationId') ??
-      reqString(v, 'callId') ??
-      reqString(v, 'toolName') ??
-      (isObj(v.input) ? null : 'field input must be an object') ??
-      ('result' in v ? null : 'field result must be present (value may be null)')
-    );
-  },
   agent_spawn: (v) => {
     if (!isObj(v)) return 'must be an AgentSpawnRequest object';
     return (
@@ -207,13 +172,22 @@ const PAYLOAD_CHECKS: Record<HookName, PayloadCheck> = {
       optString(v, 'nodeId') ??
       optString(v, 'cwd') ??
       optString(v, 'gate') ??
+      (v.gateTimeoutMs === undefined ||
+      (typeof v.gateTimeoutMs === 'number' && Number.isSafeInteger(v.gateTimeoutMs) && v.gateTimeoutMs > 0)
+        ? null
+        : 'field gateTimeoutMs must be a positive safe integer if present') ??
       optString(v, 'resume') ??
       optString(v, 'requestId') ??
       (v.fork === undefined || typeof v.fork === 'boolean' ? null : 'field fork must be a boolean if present') ??
       (v.reattach === undefined || isObj(v.reattach) ? null : 'field reattach must be an object if present') ??
       (v.isolation === undefined || typeof v.isolation === 'string' ? null : 'field isolation must be a string if present') ??
       (v.schema === undefined || isObj(v.schema) ? null : 'field schema must be an object if present') ??
-      (v.onCreated === undefined || typeof v.onCreated === 'function' ? null : 'field onCreated must be a function if present') ??
+      (v.attachments === undefined || (Array.isArray(v.attachments) && v.attachments.every((a) => typeof a === 'string'))
+        ? null
+        : 'field attachments must be a string array if present') ??
+      (v.meta === undefined || isObj(v.meta) ? null : 'field meta must be a plain object if present') ??
+      (v.onResolved === undefined || typeof v.onResolved === 'function' ? null : 'field onResolved must be a function if present') ??
+      (v.onGateResult === undefined || typeof v.onGateResult === 'function' ? null : 'field onGateResult must be a function if present') ??
       (v.signal === undefined || v.signal instanceof AbortSignal ? null : 'field signal must be an AbortSignal if present')
     );
   },
@@ -545,9 +519,6 @@ export class HookPipeline<K extends HookName> {
 export type {
   AgentSpawnRequest,
   BeforeTurnHookPayload,
-  ExternalTriggerEnvelope,
   InputHookPayload,
-  ToolCallHookPayload,
-  ToolResultHookPayload,
   TurnSettledPayload,
 };

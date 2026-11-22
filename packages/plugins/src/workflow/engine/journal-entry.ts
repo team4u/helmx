@@ -185,8 +185,6 @@ export interface AgentJournalKeyInput {
   attachments?: string[]
   /** A changed dispatch cap changes subagent behavior; cached results under the old grant must not replay. */
   maxSubagentDepth?: number
-  /** A changed secret grant changes the external runtime environment; cached results under the old grant must not replay. */
-  secretNames?: string[]
   /** Working directory (agent({ cwd })): a changed directory is a different execution context and must not hit an old cache. */
   cwd?: string
   /** Target compute node ID (agent({ nodeId })): a changed node changes the execution context and must not hit an old cache. */
@@ -225,7 +223,6 @@ export function agentJournalKey(input: AgentJournalKeyInput): string {
     input.attachments !== undefined ? input.attachments : null,
     input.schema !== undefined ? input.schema : null,
     input.maxSubagentDepth ?? null,
-    input.secretNames !== undefined ? input.secretNames : null,
     input.cwd !== undefined ? input.cwd : null,
     input.nodeId !== undefined ? input.nodeId : null,
   ])

@@ -4,20 +4,14 @@
  * 目录用途：让当前会话「知道还有哪些角色可点名」（@id 协作约定）与
  * subagent / SubagentWorkflow 的 agentType 候选。它只是一份认知目录：
  * - 不是权限沙箱：不做任何访问控制承诺；
- * - 不承诺候选运行时健康：listUi 的 profile.runtime 贡献只证明「声明该
- *   kind 的插件当前已启用」，未注册 UI 只挂 agent_spawn 钩子的第三方
- *   运行时不出现在目录中（保守可见，不冒充全集）；
  * - 实时重读：Profile 增删改与插件启停在下次请求 / 回合生效。
  *
  * 排除规则（缺省不鼓励嵌套协作，不是硬深度限制）：
  * - 排除当前会话自身 Profile（自己不能点名自己）；
- * - 排除 humanSelectable === false（常驻单例角色不面向人类选择）；
- * - 排除 managedByPlugin 指向未启用插件的 Profile（托管插件停用即隐藏）；
- * - 排除 runtime.kind 无任何已启用 profile.runtime UI 贡献对应的 Profile
- *  （外部运行时未被插件接管时原生执行行会显式拒绝，不进入目录误导）。
+ * - 排除 managedByPlugin 指向未启用插件的 Profile（托管插件停用即隐藏）。
  */
 
-import { escapeXml, type PluginUiContribution, type Profile } from '@helmx/protocol'
+import { escapeXml, type Profile } from '@helmx/protocol'
 
 /** 补全摘要上限：100 Unicode 码点（与 PROFILE_STARTER 同口径的展示直觉）。 */
 export const PROFILE_SUMMARY_MAX_CODEPOINTS = 100
@@ -26,25 +20,12 @@ export const PROFILE_SUMMARY_MAX_CODEPOINTS = 100
 export interface ProfileCatalogEntry {
   id: string
   name: string
-  /** 'native' 或外部运行时 kind（如 'herdr'；来自 profile.runtime.kind）。 */
-  runtimeKind: string
   /** 候选 SYSTEM.md 首个非标题自然段摘要；缺失为 undefined（不伪造）。 */
   summary?: string
   /** 展示用执行位置（Profile 显式配置；undefined = 继承调用方上下文）。 */
   nodeId?: string
-  /** 展示用工作目录（runtime.workspace 覆盖顶层 cwd；undefined = 继承）。 */
+  /** 展示用工作目录（undefined = 继承）。 */
   cwd?: string
-}
-
-/** 按 runtime.kind 建立已声明接管的 kind 集合（仅 kind 字符串，不假设插件 id）。 */
-export function activeRuntimeKinds(ui: readonly PluginUiContribution[]): Set<string> {
-  const kinds = new Set<string>()
-  for (const contribution of ui) {
-    if (contribution.surface !== 'profile.runtime') continue
-    const kind = (contribution.spec as { kind?: unknown }).kind
-    if (typeof kind === 'string' && kind.length > 0) kinds.add(kind)
-  }
-  return kinds
 }
 
 /** 单个 Profile 是否可进入协作目录（排除规则见模块头注释）。 */
@@ -52,27 +33,20 @@ export function isCollaborationCandidate(
   profile: Profile,
   currentProfileId: string,
   enabledPluginIds: ReadonlySet<string>,
-  runtimeKinds: ReadonlySet<string>,
 ): boolean {
   if (profile.id === currentProfileId) return false
-  if (profile.humanSelectable === false) return false
   if (profile.managedByPlugin !== undefined && !enabledPluginIds.has(profile.managedByPlugin)) return false
-  const runtime = profile.runtime
-  if (runtime !== undefined && !runtimeKinds.has(runtime.kind)) return false
   return true
 }
 
 /** 目录条目构造（纯投影：不做摘要提取，summary 由调用方按需补充）。 */
 export function toCatalogEntry(profile: Profile): ProfileCatalogEntry {
-  const runtime = profile.runtime
   return {
     id: profile.id,
     name: profile.name ?? profile.id,
-    runtimeKind: runtime?.kind ?? 'native',
     summary: undefined,
-    nodeId: runtime?.nodeId ?? profile.nodeId,
-    // runtime.workspace 是外部执行目录（覆盖顶层 cwd 语义）；原生路径沿用 cwd。
-    cwd: runtime?.workspace ?? profile.cwd,
+    nodeId: profile.nodeId,
+    cwd: profile.cwd,
   }
 }
 
@@ -140,9 +114,7 @@ export function truncateCodePoints(text: string, maxCodePoints: number): string 
 
 /**
  * 渲染 profile.catalog 注入段（<available_profiles>）：每条候选一行紧凑
- * XML 条目，全部动态字段经转义。runtime 标注：native=原生 subagent；
- * external:kind=外部运行时（外部运行时不加载该 Profile 的 SYSTEM /
- * skills / MEMORY，执行环境与生命周期和原生会话不同）。
+ * XML 条目，全部动态字段经转义。
  */
 export function renderProfileCatalogSection(
   entries: readonly ProfileCatalogEntry[],
@@ -150,11 +122,6 @@ export function renderProfileCatalogSection(
 ): string {
   const lines = entries.map((entry) => {
     const attrs = [`id="${escapeXml(entry.id)}"`, `name="${escapeXml(entry.name)}"`, `mention="@${escapeXml(entry.id)}"`]
-    attrs.push(
-      entry.runtimeKind === 'native'
-        ? 'runtime="native"'
-        : `runtime="external:${escapeXml(entry.runtimeKind)}"`,
-    )
     const position = describePosition(entry)
     if (position !== undefined) attrs.push(`at="${escapeXml(position)}"`)
     const inner = entry.summary !== undefined ? escapeXml(entry.summary) : ''
@@ -167,11 +134,11 @@ export function renderProfileCatalogSection(
     ...lines,
     '协作指引：',
     `- 需要委派任务时用 ${tools} 的 agentType 指定 Profile id；缺省不主动转发用户消息（主持串并联，不劫持输入）。`,
-    `- ${tools} 按调用会话归属决定缺省等待方式：human 缺省后台，bot/helmx 缺省同步；目标 Profile 不改变此策略。后台启动后继续响应用户，完成汇报自动到达，不要轮询等待。`,
+    `- ${tools} 按调用会话归属决定缺省等待方式：human 缺省后台，helmx 缺省同步；目标 Profile 不改变此策略。后台启动后继续响应用户，完成汇报自动到达，不要轮询等待。`,
     '- 点名只是让对应角色在需要时参与；不自动读取对方 SYSTEM/MEMORY 全文，不复制本会话全部历史，只在必要时转述任务所需上下文。',
     '- 附件只能传递当前会话有权使用的产物（自己或父链产出）；兄弟/子孙会话的产物不能直接转发。',
     '- node/cwd 不同的会话没有自动文件同步：不能把本机路径当远端文件；执行位置见 at 属性（未标注则继承当前会话）。',
-    '- 原生子会话的 resume 沿用父子归属与空闲要求；external 运行时生命周期由其插件管理（如 Herdr 终端窗格），两者语义不同，不承诺任意永久 resume。',
+    '- 原生子会话的 resume 沿用父子归属与空闲要求。',
     '</available_profiles>',
   ].join('\n')
 }

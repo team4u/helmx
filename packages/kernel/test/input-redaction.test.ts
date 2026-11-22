@@ -78,10 +78,9 @@ function sqliteTablesContaining(dbPath: string, needle: string): string[] {
 test('direct input with managed token and stash secret is redacted end-to-end across text/meta/title/entry/FTS/SQLite', { timeout: 60_000 }, async () => {
   const env = await makeEnv('helmx-input-redact-direct-')
   try {
-    // Conversation-scoped stash secret (placeholder format after redaction: [REDACTED:stash:<uuid>]).
     const conversation = await env.kernel.createConversation()
-    const placeholder = env.kernel.stash.put(conversation.id, 'API_KEY', 'sk-secret-plain-value-9f3k')
-    assert.ok(placeholder.startsWith('[REDACTED:stash:'))
+    env.kernel.stash.addRedaction('sk-secret-plain-value-9f3k')
+    const placeholder = '[REDACTED]'
 
     const requests: string[] = []
     env.faux.setResponses([

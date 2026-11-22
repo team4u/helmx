@@ -399,7 +399,7 @@ export async function cleanupWorktree(
     authority = await resolveRepoAuthority(deps, record.nodeId, record.repoRoot, input.signal)
   } else {
     authority = await resolveRepoAuthority(deps, record.nodeId, record.path, input.signal)
-    store.assertMetadataSecretFree({ repoRoot: authority.mainPath }, { nodeId: record.nodeId, executionId: record.executionId })
+    store.assertMetadataSecretFree({ repoRoot: authority.mainPath }, { nodeId: record.nodeId })
     store.updateRecord(record.id, (r) => ({ ...r, repoRoot: authority.mainPath }))
   }
 

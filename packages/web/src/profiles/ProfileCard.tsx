@@ -1,8 +1,6 @@
 import React from 'react'
-import { resolveLocalizedText } from '@helmx/protocol/browser'
 import type { Profile } from './profile-center-model.js'
 import {
-  findProfileRuntimeSpec,
   formatProfileLocation,
   formatShortModelName,
   isSystemProfile,
@@ -12,7 +10,6 @@ import {
 import { HelmxIcon, StatusLight } from '@helmx/plugin-client'
 import {
   useOptionalConversations,
-  useOptionalGroupedUi,
   useOptionalPlugins,
   useOptionalStoreActions,
 } from '../lib/store-context.js'
@@ -59,15 +56,9 @@ export function ProfileCard({
 }: ProfileCardProps): React.JSX.Element {
   const storeConversations = useOptionalConversations()
   const storePlugins = useOptionalPlugins()
-  const groupedUi = useOptionalGroupedUi()
   const actions = useOptionalStoreActions()
-  const { locale, t } = useWebLocale()
+  const { t } = useWebLocale()
   const isSystem = isSystemProfile(profile)
-  const runtimeSpec =
-    profile.runtime !== undefined
-      ? findProfileRuntimeSpec(profile.runtime.kind, groupedUi?.profileRuntimes ?? [])
-      : undefined
-  const runtimeLabel = runtimeSpec !== undefined ? resolveLocalizedText(runtimeSpec.spec.label, locale) : undefined
   const effectiveModel = resolveEffectiveProfileModel(profile, defaultModelInfo)
   const location = formatProfileLocation(profile)
   const activity = summarizeProfileActivity(
@@ -187,15 +178,6 @@ export function ProfileCard({
             <HelmxIcon name="wrench" size={10} />
             <span className="primary-card-pill-label">{skillsLabel}</span>
           </span>
-          {runtimeSpec !== undefined && runtimeLabel !== undefined && (
-            <span
-              className="primary-card-pill"
-              title={t('profiles.card.runtimeTitle', { label: runtimeLabel })}
-            >
-              <HelmxIcon name={runtimeSpec.spec.icon || 'terminal'} size={10} />
-              <span className="primary-card-pill-label">{runtimeLabel}</span>
-            </span>
-          )}
         </div>
       </div>
 
@@ -205,23 +187,21 @@ export function ProfileCard({
             ? t('profiles.card.linkedConversations', { count: activity.conversationCount })
             : t('profiles.card.noLinkedConversations')}
         </span>
-        {profile.humanSelectable !== false && (
-          <button
-            type="button"
-            className="btn btn-sm"
-            disabled={activity.managingPluginDisabled}
-            title={
-              activity.managingPluginDisabled
-                ? t('profiles.card.chatDisabledTitle')
-                : t('profiles.card.startConversationTitle', { name: displayName })
-            }
-            onClick={handleChatClick}
-            onKeyDown={(e) => e.stopPropagation()}
-          >
-            <HelmxIcon name="message-square" size={12} />
-            <span>{t('profiles.card.conversationAction')}</span>
-          </button>
-        )}
+        <button
+          type="button"
+          className="btn btn-sm"
+          disabled={activity.managingPluginDisabled}
+          title={
+            activity.managingPluginDisabled
+              ? t('profiles.card.chatDisabledTitle')
+              : t('profiles.card.startConversationTitle', { name: displayName })
+          }
+          onClick={handleChatClick}
+          onKeyDown={(e) => e.stopPropagation()}
+        >
+          <HelmxIcon name="message-square" size={12} />
+          <span>{t('profiles.card.conversationAction')}</span>
+        </button>
       </div>
     </div>
   )

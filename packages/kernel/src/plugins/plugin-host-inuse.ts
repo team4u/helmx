@@ -4,12 +4,10 @@
 import { HelmxError } from '@helmx/protocol';
 import { collectServiceInUse } from './service-coordinator.js';
 import { collectDependents } from './plugin-host-deps.js';
-import type { UiRegistry } from './ui-registry.js';
 import type { PluginHostBackend, PluginInUseItem, PluginState } from './types.js';
 
 interface CollectInUseDeps {
   plugins: ReadonlyMap<string, PluginState>;
-  uiRegistry: UiRegistry;
   host: PluginHostBackend;
 }
 
@@ -45,17 +43,15 @@ export async function collectPluginInUse(
   const usages: PluginInUseItem[] = await collectServiceInUse(pluginId, state);
   appendDependentUsages(deps.plugins, pluginId, usages);
 
-  const runtimeKinds = new Set(deps.uiRegistry.getProfileRuntimeKinds(pluginId));
   const providerIds = state.providers.map((p) => p.provider.id);
-  if (runtimeKinds.size === 0 && providerIds.length === 0) return usages;
+  if (providerIds.length === 0) return usages;
 
   let profiles: Array<{
     id: string;
     name?: string;
     model?: string;
-    runtime?: { kind: string };
   }> = [];
-  if ((runtimeKinds.size > 0 || providerIds.length > 0) && deps.host.profiles?.list) {
+  if (deps.host.profiles?.list) {
     try {
       profiles = (await deps.host.profiles.list()) as typeof profiles;
     } catch (err) {
@@ -63,15 +59,7 @@ export async function collectPluginInUse(
     }
   }
   for (const profile of profiles) {
-    if (runtimeKinds.size > 0 && profile.runtime && runtimeKinds.has(profile.runtime.kind)) {
-      usages.push({
-        kind: 'profile_runtime',
-        id: profile.id,
-        label: `role "${profile.name || profile.id}" binds external runtime ${profile.runtime.kind}`,
-      });
-    }
     if (
-      providerIds.length > 0 &&
       typeof profile.model === 'string' &&
       providerIds.some((pid) => profile.model!.startsWith(`${pid}/`))
     ) {

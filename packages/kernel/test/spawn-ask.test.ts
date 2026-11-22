@@ -69,7 +69,6 @@ async function openSpawnHarness(options: { profiles?: Record<string, { model?: s
     dataDir: '/tmp/helmx-spawn-test',
     defaultCwd: process.cwd(),
     hubUrl: 'http://127.0.0.1:3200',
-    stashEnvFor: (id) => stash.envFor(id),
     redact: (t) => stash.redact(t),
     artifacts: new ArtifactService('/tmp/helmx-spawn-test', { get: () => undefined, list: () => [], put: () => {}, deleteByConversation: () => {} } as never),
     harness,
@@ -596,11 +595,10 @@ describe('spawn profile and runtime declaration', { timeout: 60_000 }, () => {
     }
   })
 
-  it('profile declares herdr runtime: explicit unsupported_runtime when no plugin handles it', { timeout: 60_000 }, async () => {
+  it('external runtime syntax (colon agentType): explicit unsupported_runtime when no plugin handles it', { timeout: 60_000 }, async () => {
     const th = await openSpawnHarness({
       profiles: {
         assistant: {},
-        'cli-agent': { runtime: { kind: 'herdr', agent: 'claude' } },
       },
     })
     try {
@@ -609,16 +607,7 @@ describe('spawn profile and runtime declaration', { timeout: 60_000 }, () => {
           runNativeSpawn(th.deps, {
             parentConversationId: 1,
             prompt: 'x',
-            agentType: 'cli-agent',
-          } as never),
-        (err: unknown) => err instanceof HelmxError && err.code === 'unsupported_runtime',
-      )
-      await assert.rejects(
-        () =>
-          runNativeSpawn(th.deps, {
-            parentConversationId: 1,
-            prompt: 'x',
-            agentType: 'herdr:agy',
+            agentType: 'external:agent',
           } as never),
         (err: unknown) => err instanceof HelmxError && err.code === 'unsupported_runtime',
       )
@@ -762,7 +751,6 @@ describe('Ask CAS and honest settlement', { timeout: 60_000 }, () => {
     pendingChanged = []
     service = new AskService({
       store,
-      stash,
       onEvent: (type, payload) => events.push({ type, payload }),
       onConvPendingChanged: (id) => pendingChanged.push(id),
       validateConversation: options.validateConversation,
@@ -783,55 +771,8 @@ describe('Ask CAS and honest settlement', { timeout: 60_000 }, () => {
       () => service.answerAsk(ask.id, { confirm: 'true' }, 9),
       (err: unknown) => err instanceof HelmxError && err.code === 'ask_state_conflict',
     )
-    await service.cancelAsk(ask.id)
-    await store.close()
-  })
-
-  it('CAS expectedStateSeq present without resolver: rejects with ask_state_unavailable instead of faking validation', { timeout: 60_000 }, async () => {
-    await openAskService()
-    const askPromise = service.createAsk({
-      conversationId: 1,
-      title: 'requires seq',
-      expectedStateSeq: 5,
-      fields: [{ name: 'x', label: 'X', type: 'text' }],
-    })
-    void askPromise.catch(() => {})
-    const ask = service.listAsks('pending')[0]!
-    await assert.rejects(
-      () => service.answerAsk(ask.id, { x: 'v' }),
-      (err: unknown) => err instanceof HelmxError && err.code === 'ask_state_unavailable',
-    )
-    await service.cancelAsk(ask.id)
-    await store.close()
-  })
-
-  it('any target seq mismatch (including rollback) resolves superseded; exact match passes', { timeout: 60_000 }, async () => {
-    await openAskService()
-    const askPromise = service.createAsk({
-      conversationId: 1,
-      title: 'seq watermark',
-      expectedStateSeq: 10,
-      fields: [{ name: 'x', label: 'X', type: 'text' }],
-    })
-    void askPromise.catch(() => {})
-    const ask = service.listAsks('pending')[0]!
-    // Rollback (9 < 10): previously only caught >; now any mismatch supersedes.
-    let target = 9
-    service.registerSeqResolver(() => target)
-    const superseded = await service.answerAsk(ask.id, { x: 'v' })
-    assert.equal(superseded.status, 'superseded')
-    // Matching seq: answers normally.
-    const ask2Promise = service.createAsk({
-      conversationId: 1,
-      title: 'seq match',
-      expectedStateSeq: 3,
-      fields: [{ name: 'x', label: 'X', type: 'text' }],
-    })
-    void ask2Promise.catch(() => {})
-    const ask2 = service.listAsks('pending')[0]!
-    target = 3
-    const answered = await service.answerAsk(ask2.id, { x: 'v' })
-    assert.equal(answered.status, 'answered')
+    const ok = await service.answerAsk(ask.id, { confirm: 'true' }, 10)
+    assert.equal(ok.status, 'answered')
     await store.close()
   })
 
@@ -889,49 +830,6 @@ describe('Ask CAS and honest settlement', { timeout: 60_000 }, () => {
     await store.close()
   })
 
-  it('secret: rejects invalid env names, preserves case without colliding, skips empty values from stash', { timeout: 60_000 }, async () => {
-    await openAskService()
-    // Invalid env name (hyphen): rejected immediately at createAsk (rather than failing later inside stash.put).
-    await assert.rejects(
-      () =>
-        service.createAsk({
-          conversationId: 1,
-          title: 'broken name',
-          fields: [{ name: 'api-key', label: 'K', type: 'text', secret: true }],
-        }),
-      (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
-    )
-    // 'api_key' and 'API_KEY' are distinct field names: preserved side-by-side without silent overwriting.
-    const askPromise = service.createAsk({
-      conversationId: 1,
-      title: 'dual secret',
-      fields: [
-        { name: 'api_key', label: 'lowercase', type: 'text', secret: true },
-        { name: 'API_KEY', label: 'uppercase', type: 'text', secret: true },
-      ],
-    })
-    void askPromise.catch(() => {})
-    const ask = service.listAsks('pending')[0]!
-    const answered = await service.answerAsk(ask.id, { api_key: 'lower-secret', API_KEY: 'upper-secret' })
-    assert.equal(answered.status, 'answered')
-    const env = stash.envFor(1)
-    assert.equal(env['api_key'], 'lower-secret')
-    assert.equal(env['API_KEY'], 'upper-secret')
-    // Empty secret is not stashed: answer stores empty string with no stash entry.
-    const ask2Promise = service.createAsk({
-      conversationId: 1,
-      title: 'empty secret',
-      fields: [{ name: 'EMPTY_TOKEN', label: 'T', type: 'text', secret: true }],
-    })
-    void ask2Promise.catch(() => {})
-    const ask2 = service.listAsks('pending')[0]!
-    const settled2 = await service.answerAsk(ask2.id, { EMPTY_TOKEN: '' })
-    assert.equal(settled2.status, 'answered')
-    const row2 = store.getAsk(ask2.id)
-    assert.equal(JSON.parse(row2!.resultJson!).EMPTY_TOKEN, '')
-    await store.close()
-  })
-
   it('createAsk boundaries: duplicate name / invalid type / missing conversation / missing title', { timeout: 60_000 }, async () => {
     await openAskService({ validateConversation: (id) => id === 1 })
     const expectValidation = (promise: Promise<unknown>) =>
@@ -966,15 +864,12 @@ describe('Ask CAS and honest settlement', { timeout: 60_000 }, () => {
     await store.close()
   })
 
-  it('pending asks remaining across restart: emits diagnostic notice noting secret references expired', { timeout: 60_000 }, async () => {
+  it('pending asks remaining across restart: emits diagnostic notice', { timeout: 60_000 }, async () => {
     await openAskService()
     const askPromise = service.createAsk({
       conversationId: 1,
       title: 'orphaned',
-      fields: [
-        { name: 'x', label: 'X', type: 'text' },
-        { name: 'TOKEN', label: 'T', type: 'text', secret: true },
-      ],
+      fields: [{ name: 'x', label: 'X', type: 'text' }],
     })
     void askPromise.catch(() => {})
     await new Promise((r) => setTimeout(r, 20))
@@ -984,8 +879,8 @@ describe('Ask CAS and honest settlement', { timeout: 60_000 }, () => {
     )
     assert.ok(notification, 'must emit diagnostic notification')
     assert.ok(
-      String((notification.payload as { body?: string }).body).includes('expired'),
-      'must note that secret references expired across restart',
+      String((notification.payload as { body?: string }).body).includes('pending'),
+      'must note that ask remains pending after restart',
     )
     await service.cancelAsk(service.listAsks('pending')[0]!.id)
     await store.close()

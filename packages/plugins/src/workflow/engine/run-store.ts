@@ -143,11 +143,11 @@ export interface RunRecord {
   suspendedCleanly?: boolean
   /** 连续非优雅挂起的崩溃恢复计数（> 3 触发 [crash_recovery_limit] 熔断）。 */
   crashRecoveries?: number
-  /** 脱敏后的后台单子代理启动规格（用于重启原位重挂与失败后 resume 续接；严禁落盘 secretNames 明文）。 */
+  /** 脱敏后的后台单子代理启动规格（用于重启原位重挂与失败后 resume 续接）。 */
   subagentSpec?: PersistedSubagentSpec
 }
 
-/** 持久化的单子代理派生规格（严格脱敏，不含机密名或密钥明文）。 */
+/** 持久化的单子代理派生规格（严格脱敏）。 */
 export interface PersistedSubagentSpec {
   agentId: string
   requestId: string
@@ -164,7 +164,6 @@ export interface PersistedSubagentSpec {
   effort?: string
   fork?: boolean
   attachments?: string[]
-  hadSecretGrant?: boolean
 }
 
 /** Printable form of persistence-layer read errors (for store exception diagnostics). */
@@ -293,7 +292,6 @@ function subagentSpecProblem(value: unknown): string | undefined {
     return `非对象结构（${typeof value}）`
   }
   const spec = value as Record<string, unknown>
-  if ('secretNames' in spec) return '不得持久 secretNames'
   if (typeof spec['agentId'] !== 'string' || spec['agentId'] === '') return 'agentId 非非空字符串'
   if (typeof spec['requestId'] !== 'string' || spec['requestId'] === '') return 'requestId 非非空字符串'
   if (typeof spec['prompt'] !== 'string') return 'prompt 非字符串'

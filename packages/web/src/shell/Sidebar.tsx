@@ -1,6 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react'
-import type { ConversationSummary } from '@helmx/protocol/browser'
-import { resolveLocalizedText } from '@helmx/protocol/browser'
+import { useMemo, type ReactNode } from 'react'
 import { HelmxIcon, Tooltip } from '@helmx/plugin-client'
 import {
   useAuthConnection,
@@ -16,179 +14,32 @@ import {
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { LocaleMenuButton } from '../ui/LocaleMenuButton.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
-import { ConversationRowActionsMenu } from '../ui/ConversationRowActionsMenu.js'
 import { isSameResolvedTarget, resolveTargetString, CENTER_TARGETS, spaceForTarget, type SidebarSpace } from '../lib/types.js'
 import { readBrowserNotificationPermission } from '../lib/browser-notification.js'
 import { formatModShortcut } from './shortcuts-model.js'
-import { isConversationArchived } from '../conversation/archive-model.js'
 import {
   composeSidebarBadgeLabel,
   extractRailQuickEntries,
   extractSidebarViews,
-  filterConversationsByTag,
-  getConversationPresence,
   presenceNavClassSuffix,
   resolveSidebarTargetPresence,
   shouldSkipNavRowClick,
   sidebarBadgeCountLabel,
   sidebarBadgeToneClass,
   type SidebarStoreView,
-  type SidebarTargetPresence,
   type SidebarViewItem,
 } from './sidebar-model.js'
-import type { ConversationBackgroundActivity, ConversationBackgroundIndex } from './background-activity-model.js'
+import type { ConversationBackgroundIndex } from './background-activity-model.js'
 import { AgentStandingsGroup } from './SidebarAgentStandings.js'
 import { ArchivedConversationsGroup } from './SidebarArchivedConversations.js'
 import { useGlobalAttention } from './use-attention-indicator.js'
 import { useSidebarBadges } from './use-sidebar-badges.js'
 import {
-  ConversationStatusDot,
   HoverIconButton,
   PendingAsksPanel,
   SidebarPaneTag,
   StatusDot,
 } from './SidebarPrimitives.js'
-
-/** 插件动态会话分组区（sidebar.section）：filterTag 分组通用渲染，支持 collapsible / defaultCollapsed。 */
-function SidebarSectionGroups({ store, background }: { store: SidebarStoreView; background: ConversationBackgroundIndex }) {
-  const { t } = useWebLocale()
-  const sections = store.groupedUi.sidebarSections.filter((s) => s.spec.filterTag)
-  // 纯内容型 section（无 filterTag，但声明了 client 内容）：渲染内容本身，
-  // 不因缺少 filterTag 静默丢弃（与 sidebar.item 的 client 内容渲染同一策略）。
-  const contentSections = store.groupedUi.sidebarSections.filter(
-    (s) => !s.spec.filterTag && s.spec.client !== undefined,
-  )
-  return (
-    <>
-      {contentSections.map((section) => (
-        <div key={`content:${section.pluginId}/${section.spec.id}`} style={{ padding: '0 10px 6px' }}>
-          <PluginUiView pluginId={section.pluginId} spec={section.spec} label={t('shell.sidebar.sectionLabel', { id: section.spec.id })} />
-        </div>
-      ))}
-      {sections.map((section) => (
-        <SidebarSectionGroup
-          key={`${section.pluginId}/${section.spec.id}`}
-          store={store}
-          section={section}
-          background={background}
-        />
-      ))}
-    </>
-  )
-}
-
-/** 单条会话行（插件 sidebar.section 分组内渲染）：状态灯前置行首固定灯位，
- *  右侧保留分屏微标（如有）、#id 与动作区；分屏入口收敛到会话详情顶栏，行内不携带分屏按钮。 */
-function ConversationRow({
-  conv,
-  background,
-  presence,
-  onOpen,
-}: {
-  conv: ConversationSummary
-  background?: ConversationBackgroundActivity
-  presence: SidebarTargetPresence
-  onOpen: () => void
-}) {
-  const { t } = useWebLocale()
-  return (
-    <div
-      className={`nav-item sidebar-conversation-row${presenceNavClassSuffix(presence)}`}
-      style={{ minHeight: 30, opacity: 1 }}
-      onClick={(e) => {
-        if (shouldSkipNavRowClick(e.target, e.currentTarget)) return
-        onOpen()
-      }}
-    >
-      <button
-        type="button"
-        className="nav-item-main nav-open"
-        onClick={onOpen}
-        aria-current={presence.active ? 'page' : undefined}
-      >
-        <span className="nav-status-slot">
-          <ConversationStatusDot conv={conv} background={background} />
-        </span>
-        <span className="nav-item-label">{conv.title || t('shell.conversationFallback', { id: conv.id })}</span>
-      </button>
-      <span className="nav-item-meta">
-        <SidebarPaneTag paneTag={presence.paneTag} />
-        <span className="tabular-nums">#{conv.id}</span>
-        <span className="nav-item-row-actions">
-          <ConversationRowActionsMenu conversation={conv} />
-        </span>
-      </span>
-    </div>
-  )
-}
-
-/** 单个 sidebar.section 分组：声明 collapsible 时渲染可折叠头部与计数徽标。 */
-function SidebarSectionGroup({
-  store,
-  section,
-  background,
-}: {
-  store: SidebarStoreView
-  section: SidebarStoreView['groupedUi']['sidebarSections'][number]
-  background: ConversationBackgroundIndex
-}) {
-  const { locale, t } = useWebLocale()
-  const spec = section.spec
-  const tag = spec.filterTag as string
-  const sectionLabel = resolveLocalizedText(spec.label, locale)
-  const convs = useMemo(
-    // 按创建时间倒序固定排列（同刻按 id 决胜）：分组内会话后台跑动推进 updatedAt 不再引起跳位。
-    () =>
-      filterConversationsByTag(store.conversations, tag)
-        .filter((conversation) => !isConversationArchived(conversation))
-        .sort((a, b) => b.createdAt - a.createdAt || b.id - a.id),
-    [store.conversations, tag],
-  )
-  const collapsible = spec.collapsible === true
-  const [open, setOpen] = useState(!collapsible || spec.defaultCollapsed !== true)
-
-  return (
-    <div className="sidebar-group">
-      {collapsible ? (
-        <button
-          type="button"
-          className="sidebar-group-header"
-          style={{ width: '100%', background: 'transparent', border: 'none', cursor: 'pointer' }}
-          title={open ? t('shell.sidebar.collapseSection') : t('shell.sidebar.expandSection')}
-          aria-expanded={open}
-          onClick={() => setOpen((v) => !v)}
-        >
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
-            {spec.icon !== undefined && <HelmxIcon name={spec.icon} size={12} />}
-            <span className="nav-item-label">{sectionLabel}</span>
-          </span>
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-            <span className="badge badge-neutral tabular-nums">{convs.length}</span>
-            <HelmxIcon name={open ? 'chevron-down' : 'chevron-right'} size={12} />
-          </span>
-        </button>
-      ) : (
-        <div className="sidebar-group-header">
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-            <HelmxIcon name={spec.icon} size={12} />
-            {sectionLabel}
-          </span>
-          <span className="tabular-nums">{convs.length}</span>
-        </div>
-      )}
-      {open &&
-        convs.map((conv) => (
-          <ConversationRow
-            key={conv.id}
-            conv={conv}
-            background={background.get(conv.id)}
-            presence={getConversationPresence(store, conv.id)}
-            onOpen={() => store.openTarget({ kind: 'conversation', conversationId: conv.id })}
-          />
-        ))}
-    </div>
-  )
-}
 
 /** 独立「视图」分组：screen: 导航项 + 无导航 target 的自定义客户端侧栏组件。 */
 function ViewNavGroup({ store }: { store: SidebarStoreView }) {
@@ -721,7 +572,6 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
             <>
               <PendingAsksPanel store={sidebarStore} />
               <AgentStandingsGroup store={sidebarStore} background={background} onNavigate={onClose} />
-              <SidebarSectionGroups store={sidebarStore} background={background} />
               <ArchivedConversationsGroup background={background} onNavigate={onClose} />
             </>
           ) : space === 'views' ? (

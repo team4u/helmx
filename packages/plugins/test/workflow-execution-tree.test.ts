@@ -148,7 +148,7 @@ test('executionToolStatus：summary working/blocked → running，error → erro
 test('buildExecutionTree 回归：人类 fork 会话与 SuperAgent 驻留 Worker（无 WorkflowRun）绝不进入执行树或活跃托盘', { timeout: 60_000 }, async () => {
   const humanFork = summary(50, 'working', 1, { ownedBy: 'human', title: '人类分叉分支', doing: '人类正在对话' })
   const superagentWorker = summary(60, 'working', 1, {
-    ownedBy: 'bot',
+    ownedBy: 'helmx',
     tags: ['worker'],
     profileId: 'coder',
     title: 'SuperAgent Worker',

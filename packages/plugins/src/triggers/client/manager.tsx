@@ -68,7 +68,6 @@ import {
   TRIGGERS_KV_LAST_RUN,
   TRIGGERS_KV_NEXT_RUN,
   TRIGGERS_KV_SECRET_STATE,
-  TRIGGERS_KV_THREAD_KEY,
   TRIGGERS_KV_TIMEZONE,
   TRIGGERS_MANAGER_NOTE,
   TRIGGERS_OFF,
@@ -249,7 +248,6 @@ function WebhookTable({
           <tr>
             <th>ID</th>
             <th>{t(TRIGGERS_COL_DESCRIPTION)}</th>
-            <th>{t(TRIGGERS_KV_THREAD_KEY)}</th>
             <th>{t(TRIGGERS_COL_CREATED)}</th>
             <th className="cell-actions">{t(TRIGGERS_COL_ACTIONS)}</th>
           </tr>
@@ -272,7 +270,6 @@ function WebhookTable({
               <td data-label={t(TRIGGERS_COL_DESCRIPTION)} className="cell-ellipsis" title={hook.description ?? ''}>
                 {hook.description ?? '—'}
               </td>
-              <td data-label={t(TRIGGERS_KV_THREAD_KEY)} className="mono">{hook.threadKey ?? '—'}</td>
               <td data-label={t(TRIGGERS_COL_CREATED)}>{formatTime(hook.createdAt) || '—'}</td>
               <td data-label={t(TRIGGERS_COL_ACTIONS)} className="cell-actions">
                 <div
@@ -406,7 +403,6 @@ function TriggerDetailDrawer({
         <KvGrid
           items={[
             { key: t(TRIGGERS_KV_DESCRIPTION), value: webhook.description ?? '—' },
-            { key: t(TRIGGERS_KV_THREAD_KEY), value: <span className="mono">{webhook.threadKey ?? '—'}</span> },
             { key: t(TRIGGERS_KV_DELIVERY_TARGET), value: formatTriggerTargetSummary(webhook, locale) },
             { key: t(TRIGGERS_KV_SECRET_STATE), value: webhook.hasSecret ? t(TRIGGERS_SECRET_CONFIGURED) : t(TRIGGERS_SECRET_MISSING) },
             { key: t(TRIGGERS_KV_CREATED), value: formatTime(webhook.createdAt) || '—' },

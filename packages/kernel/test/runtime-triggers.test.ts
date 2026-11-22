@@ -35,7 +35,6 @@ function makeDispatcher(over: {
   const calls: SubmitCall[] = []
   const dispatcher = new RuntimeTriggerDispatcher({
     store: { listConvs: over.listConvs } as never,
-    hookBridge: { runHookChain: async () => undefined } as never,
     getConversation: over.getConversation as never,
     getConversationOwnership: () => 'human' as const,
     createConversation: over.createConversation as never,

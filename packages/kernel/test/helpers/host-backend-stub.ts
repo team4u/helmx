@@ -34,13 +34,10 @@ export function hostBackendStub(): PluginHostBackend {
     getConversationOwnership: () => 'human',
     listArtifacts: () => Promise.resolve([]),
     withFileLock: <T,>(_path: string, fn: () => Promise<T>) => fn(),
-    withFileMutationQueue: <T,>(_t: unknown, fn: () => Promise<T>) => fn(),
-    buildSpawnEnv: () => ({}),
     listActiveSpawnExecutions: () => [],
     onEvent: () => () => {},
     emitEvent: () => {},
     cancelAsk: () => Promise.resolve(),
-    registerAskSeqResolver: () => () => {},
     manageConversation: () => () => {},
     markConversationOwnership: () => {},
   }

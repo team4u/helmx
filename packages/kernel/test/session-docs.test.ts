@@ -70,10 +70,9 @@ function makeHostApi(options: { existing: Set<number> } = { existing: new Set([1
     markConversationOwnership: () => {},
     createAsk: async () => ({ id: 'ask-1', status: 'answered', answers: {} }),
     cancelAsk: async () => {},
-    registerAskSeqResolver: () => () => {},
     onEvent: () => () => {},
     abortConversation: async () => {},
-    getConversationOwnership(): 'helmx' | 'bot' | 'human' {
+    getConversationOwnership(): 'helmx' | 'human' {
       return 'human'
     },
     spawnAgent: async () => ({}),
@@ -155,7 +154,7 @@ afterEach(async () => {
 // UI extension point registration validation
 // ---------------------------------------------------------------------------
 
-test('profileRuntime/micro-action/slot registration succeeds and validates safe integer priority/order', { timeout: 60_000 }, async () => {
+test('slot registration succeeds and validates safe integer order', { timeout: 60_000 }, async () => {
   const clientRoot = join(dataDir, 'p-ui-client')
   mkdirSync(clientRoot, { recursive: true })
   writeFileSync(join(clientRoot, 'index.tsx'), 'export function ToolbarSlot() { return null }\n')
@@ -164,33 +163,15 @@ test('profileRuntime/micro-action/slot registration succeeds and validates safe 
     id: 'p:ui',
     clientRoot,
     definePlugin: (ctx) => {
-      ctx.ui.profileRuntime({ id: 'herdr', kind: 'herdr', label: 'Herdr runtime', order: 10 })
-      ctx.ui.action({ id: 'a1', target: 'conversation:header', label: 'archive', actionId: 'archive', placement: 'toolbar' })
-      ctx.ui.action({ id: 'a2', target: 'conversation:row', label: 'cleanup', actionId: 'cleanup' })
-      ctx.ui.action({
-        id: 'a3',
-        target: 'timeline:entry',
-        label: 'quote',
-        actionId: 'quote',
-        kinds: ['user'],
-        roles: ['user'],
-      })
       ctx.ui.slot({ id: 's1', target: 'p:other/toolbar', order: 5, client: { module: 'index.tsx', export: 'ToolbarSlot' } })
     },
   })
   const ui = host.listUi()
-  assert.equal(ui.length, 5)
-  const surfaces = ui.map((u) => u.surface).sort()
-  assert.deepEqual(surfaces, [
-    'conversation.header.action',
-    'conversation.row.action',
-    'plugin.slot',
-    'profile.runtime',
-    'timeline.entry.action',
-  ])
+  assert.equal(ui.length, 1)
+  assert.deepEqual(ui.map((u) => u.surface), ['plugin.slot'])
 })
 
-test('invalid shapes reject explicitly: non-integer priority, reserved slash, multi-slash slot target, missing slot client, and empty action tracks', { timeout: 60_000 }, async () => {
+test('invalid shapes reject explicitly: non-integer priority, reserved slash, multi-slash slot target, missing slot client', { timeout: 60_000 }, async () => {
   const clientRoot = join(dataDir, 'p-invalid-client')
   mkdirSync(clientRoot, { recursive: true })
   writeFileSync(join(clientRoot, 'index.tsx'), 'export function X() { return null }\n')
@@ -242,24 +223,6 @@ test('invalid shapes reject explicitly: non-integer priority, reserved slash, mu
     }),
     (err: unknown) => err instanceof HelmxError && err.code === 'invalid_ui_spec',
   )
-  await assert.rejects(
-    host.register({
-      id: 'p:x5',
-      definePlugin: (ctx) => {
-        ctx.ui.action({ id: 'a', target: 'conversation:header', label: 'empty' })
-      },
-    }),
-    (err: unknown) => err instanceof HelmxError && err.code === 'invalid_ui_spec',
-  )
-  await assert.rejects(
-    host.register({
-      id: 'p:x6',
-      definePlugin: (ctx) => {
-        ctx.ui.action({ id: 'a', target: 'timeline:entry', label: 'broken role', actionId: 'x', roles: ['system'] as never })
-      },
-    }),
-    (err: unknown) => err instanceof HelmxError && err.code === 'invalid_ui_spec',
-  )
 })
 
 test('sessionDocs declaration removed with declarative track: specs no longer carry that field', { timeout: 60_000 }, async () => {
@@ -276,66 +239,6 @@ test('sessionDocs declaration removed with declarative track: specs no longer ca
   const tool = ui.find((u) => u.surface === 'tool.view')
   assert.ok(tool !== undefined)
   assert.equal('sessionDocs' in (tool.spec as Record<string, unknown>), false, 'spec must omit sessionDocs field (declarative JSON track removed)')
-})
-
-test('cross-plugin duplicate kind rejects explicitly at commit point; disabled probes do not occupy names', { timeout: 60_000 }, async () => {
-  const host = makeHost()
-  await host.register({
-    id: 'p:a',
-    definePlugin: (ctx) => {
-      ctx.ui.profileRuntime({ id: 'r', kind: 'herdr', label: 'A' })
-    },
-  })
-  await assert.rejects(
-    host.register({
-      id: 'p:b',
-      definePlugin: (ctx) => {
-        ctx.ui.profileRuntime({ id: 'r', kind: 'herdr', label: 'B' })
-      },
-    }),
-    (err: unknown) => err instanceof HelmxError && err.code === 'duplicate_profile_runtime_kind',
-  )
-  // Disabled probe does not occupy names: enabled:false register with the same kind succeeds without affecting active plugin.
-  await host.register(
-    {
-      id: 'p:c',
-      definePlugin: (ctx) => {
-        ctx.ui.profileRuntime({ id: 'r', kind: 'herdr', label: 'C' })
-      },
-    },
-    { enabled: false },
-  )
-  // Enabled plugin stays intact; disabled probe exposes zero UI.
-  const ui = host.listUi().filter((u) => u.surface === 'profile.runtime')
-  assert.equal(ui.length, 1)
-  assert.equal(ui[0]!.pluginId, 'p:a')
-})
-
-test('disabled probe does not occupy names: enabling later still rejects conflicts with enabled plugins', { timeout: 60_000 }, async () => {
-  const host = makeHost()
-  await host.register({
-    id: 'p:a',
-    definePlugin: (ctx) => {
-      ctx.ui.profileRuntime({ id: 'r', kind: 'herdr', label: 'A' })
-    },
-  })
-  await host.register(
-    {
-      id: 'p:probe',
-      definePlugin: (ctx) => {
-        ctx.ui.profileRuntime({ id: 'r', kind: 'herdr', label: 'Probe' })
-      },
-    },
-    { enabled: false },
-  )
-  await assert.rejects(
-    host.enable('p:probe'),
-    (err: unknown) => err instanceof HelmxError && err.code === 'duplicate_profile_runtime_kind',
-  )
-  // After disabling p:a, probe plugin can enable cleanly (name released).
-  await host.disable('p:a')
-  await host.enable('p:probe')
-  assert.ok(host.listUi().some((u) => u.pluginId === 'p:probe' && u.surface === 'profile.runtime'))
 })
 
 test('cross-plugin slash conflict rejects in both define phase and commit point', { timeout: 60_000 }, async () => {

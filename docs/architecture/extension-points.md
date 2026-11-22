@@ -1,6 +1,6 @@
 # 后端生命周期 Hook 与前端全界面扩展点
 
-本文面向插件开发者与宿主维护者：给出后端 7 个生命周期 Hook 与前端 16 个 `ctx.ui` 注册方法的完整契约、宿主协调架构、`ctx.action` 五端映射规则，以及插件持久状态（doc / sessionDoc）与公共数据的投影边界。类型唯一真源在 [`packages/protocol/src/plugin.ts`](../../packages/protocol/src/plugin.ts) 与 [`ui.ts`](../../packages/protocol/src/ui.ts)。插件开发的完整实战（目录结构、构建、发布）见[插件开发指南](../plugins/plugin-development.md)；插件系统设计总纲见[插件系统概览](../plugins/overview.md)。
+本文面向插件开发者与宿主维护者：给出后端 4 个生命周期 Hook 与前端 10 个 `ctx.ui` 注册方法的完整契约、宿主协调架构、`ctx.action` 五端映射规则，以及插件持久状态（doc / sessionDoc）与公共数据的投影边界。类型唯一真源在 [`packages/protocol/src/plugin.ts`](../../packages/protocol/src/plugin.ts) 与 [`ui.ts`](../../packages/protocol/src/ui.ts)。插件开发的完整实战（目录结构、构建、发布）见[插件开发指南](../plugins/plugin-development.md)；插件系统设计总纲见[插件系统概览](../plugins/overview.md)。
 
 ## 宿主内部协调架构
 
@@ -21,32 +21,26 @@
 
 动作与工具的认知入口均由声明驱动：`ctx.action` 默认进入 `<available_actions>` 目录，`exposeAsTool: true` 则使用独立工具声明，`ctx.tool` 提供模型专用工具。`promptSnippet` / `promptGuidelines` 仅在对应能力对当前会话可达时注入。完整参数 Schema 可用 `run_action({ actionId, describe: true })` 按需只读获取，不执行 handler。
 
-## 后端：7 个生命周期 Hook
+## 后端：4 个生命周期 Hook
 
-Hook 覆盖从外部事件入站到回合终态结算的完整调用链。处理器签名与载荷类型见 `HookPayloadMap`；注册时 `priority` 数值较大者先执行，同优先级按注册顺序（稳定排序）。
+Hook 覆盖从输入提交到回合终态结算的完整调用链。处理器签名与载荷类型见 `HookPayloadMap`；注册时 `priority` 数值较大者先执行，同优先级按注册顺序（稳定排序）。
 
 ```typescript
 export type HookName =
-  | 'trigger'      // 外部入站事件（cron/webhook 经 defang 防逃逸信封）
   | 'input'        // 每次提交输入（human/agent/trigger 三种 origin；支持 block 拦截）
   | 'before_turn'  // 回合推理前，可原地改写 tools/sections/messages
-  | 'tool_call'    // 工具开始执行前（支持 block 门控）
-  | 'tool_result'  // 工具执行返回后
   | 'agent_spawn'  // 子代理派生（额外支持 around continuation）
   | 'turn_settled' // 回合终态（completed | failed | aborted 统一覆盖）
 ```
 
 | Hook | 触发时机 | 典型应用 | 允许的控制流 |
 | :--- | :--- | :--- | :--- |
-| `trigger` | 外部事件投递入站 | ThreadKey 直通 Worker、定向投递 | `continue / transform / handled` |
 | `input` | 输入提交 | 输入审计、斜杠入口门控、上下文预处理 | `continue / transform / handled / block` |
 | `before_turn` | 回合推理前 | 注入记忆段落、动态增删工具 | `continue / transform` |
-| `tool_call` | 工具执行前 | 权限门控、敏感参数二次确认 | `continue / transform / handled / block` |
-| `tool_result` | 工具返回后 | 产物登记、结果格式化 | `continue / transform / handled` |
 | `agent_spawn` | 子代理派生 | 接管外部运行时或包裹隔离生命周期 | `continue / transform / handled` + around |
-| `turn_settled` | 回合终态结算 | 向中枢汇报、级联取消、更新召回图谱 | `continue / transform / handled` |
+| `turn_settled` | 回合终态结算 | 向中枢汇报、级联取消、记忆采集与自愈 | `continue / transform / handled` |
 
-四种控制流的语义：`continue` 放行；`transform` 原地改写载荷交由后续处理器与内核消费；`handled` 短路接管并终止默认行为；`block` 门控拦截并附带显式 reason（仅 `tool_call` 与 `input` 允许）。非法产物——缺 action、未知 action、该钩子不允许的组合、`transform` 缺 value、`block` 缺 reason——在宿主处显式抛 `invalid_hook_result`，绝不静默当 continue。
+四种控制流的语义：`continue` 放行；`transform` 原地改写载荷交由后续处理器与内核消费；`handled` 短路接管并终止默认行为；`block` 门控拦截并附带显式 reason（仅 `input` 允许）。非法产物——缺 action、未知 action、该钩子不允许的组合、`transform` 缺 value、`block` 缺 reason——在宿主处显式抛 `invalid_hook_result`，绝不静默当 continue。
 
 内核不内置巡检定时器，也不存在 `watchdog_tick` Hook：周期性任务一律由插件自管服务调度。
 
@@ -54,40 +48,34 @@ export type HookName =
 
 `agent_spawn` 额外提供受控 continuation（第二参数 `next`），是编排类插件包裹资源生命周期的关键机制：
 
-- 不调用 `next` 而返回 `handled` = 完全接管（`builtin:herdr` 用此路径把派生请求改道到远端 Herdr 窗格）；
-- `await next(finalRequest)` = around 包裹：宿主恰好一次执行后续管道与默认原生执行行，插件可在 `next` 前分配资源、在 `next` 后按成败收敛（finally 语义）。`builtin:worktree` 以 priority 200 注册（先于 herdr 的 100 执行 = 更外层，后于 `builtin:workflow` 深度守卫的 300 = 更内层），在 `next` 前分配 Worktree、在 `next` 后按结果决定保留或清理；
+- 不调用 `next` 而返回 `handled` = 完全接管派生执行；
+- `await next(finalRequest)` = around 包裹：宿主恰好一次执行后续管道与默认原生执行行，插件可在 `next` 前分配资源、在 `next` 后按成败收敛（finally 语义）。`builtin:worktree` 以 priority 200 注册（后于 `builtin:workflow` 深度守卫的 300 = 更内层），在 `next` 前分配 Worktree、在 `next` 后按结果决定保留或清理；
 - `next` 仅可调用一次，重复调用或与 `handled/transform` 混用显式拒绝；包裹期间抛错如实上抛，宿主不吞。
 
-`AgentSpawnRequest.isolation`（如 `'worktree'`）是插件层策略 metadata，内核不解释该值：由具备对应能力的插件经 continuation 改写最终请求的 cwd/元数据兑现；无插件兑现而原样到达原生执行行时显式返回 `unsupported_runtime`，绝不静默忽略。同理，非空 `secretNames`（外部运行时的机密授予）未被钩子接管而到达原生执行行时显式拒绝 `unsupported_secret_grant`，绝不假装子代理已取得机密。
+`AgentSpawnRequest.isolation`（如 `'worktree'`）是插件层策略 metadata，内核不解释该值：由具备对应能力的插件经 continuation 改写最终请求的 cwd/元数据兑现；无插件兑现而原样到达原生执行行时显式返回 `unsupported_runtime`，绝不静默忽略。
 
 ## 前端：全界面扩展点（client.tsx 单轨）
 
-视图类扩展点统一采用 `client.tsx` React 组件单轨：`UiSpecBase` 只接受 `client: ClientComponentRef`（模块相对路径 + 具名导出），不接受声明式 JSON Spec——JSON 渲染能力由 `builtin:json-render` 插件经 `markdownCodeBlock` 提供。组件与宿主共享同一份 React 运行时（`@helmx/plugin-client` 虚拟化为全局命名空间，不打包第二份 React）。运行时元数据（`profileRuntime`）与输入补全（`composerCompleter`）是纯数据声明，不涉及组件。
+视图类扩展点统一采用 `client.tsx` React 组件单轨：`UiSpecBase` 只接受 `client: ClientComponentRef`（模块相对路径 + 具名导出），不接受声明式 JSON Spec——JSON 渲染能力由 `builtin:json-render` 插件经 `markdownCodeBlock` 提供。组件与宿主共享同一份 React 运行时（`@helmx/plugin-client` 虚拟化为全局命名空间，不打包第二份 React）。输入补全（`composerCompleter`）是纯数据声明，不涉及组件。
 
-`ctx.ui` 全部 16 个注册方法（与 `PLUGIN_UI_METHOD_NAMES` 双向锁定）：
+`ctx.ui` 全部 10 个注册方法（与 `PLUGIN_UI_METHOD_NAMES` 双向锁定）：
 
 | 方法 | surface | 说明 |
 | :--- | :--- | :--- |
 | `sidebarItem(spec)` | `sidebar.item` | 左栏导航项；`target` 如 `'conversation:1'`、`'screen:builtin:triggers/triggers'`；`quickEntry: true` 且目标为 screen 时，宿主在折叠 Rail / 移动抽屉常驻一键入口（目标 screen 必须实际存在，插件停用后随贡献即时消失） |
-| `sidebarSection(spec)` | `sidebar.section` | 可折叠分组；`filterTag` 过滤会话 |
 | `screen(spec)` | `screen` | 全屏自定义视图，支持左右 Split View 并排展示 |
 | `timelineRenderer(spec)` | `timeline.renderer` | 按 `kinds`（entry kind 列表）与 `matchMeta`（`data.renderer` 匹配，AND 组合）接管时间线条目 |
 | `markdownCodeBlock(spec)` | `markdown.codeBlock` | 按围栏语言（`languages` 精确匹配小写化）接管 Markdown 代码块渲染 |
 | `toolView(spec)` | `tool.view` | 按 `toolNames` 接管工具调用卡片；`replaceRow: true` 时完全替换外层默认工具行 |
-| `composerPill(spec)` | `composer.pill` | 输入框下方快捷药丸按钮 |
-| `composerWidget(spec)` | `composer.widget` | 展开式输入区小部件（组件收 `ComposerScopeProps.composer` 受控句柄） |
 | `composerCompleter(spec)` | `composer.completer` | `@ / # / :` 触发的候选数据源（纯数据，无 client） |
-| `artifactPreviewer(spec)` | `artifact.previewer` | 按 `mimeTypes`（精确或 `type/*`）或 `extensions`（含点号小写后缀，OR 组合）匹配产物预览 |
 | `workbenchPanel(spec)` | `workbench.panel` | 会话右侧抽屉面板；`badge` 声明 doc 驱动的动态角标 |
-| `command(spec)` | `command` | 全局命令（⌘K）；`slash` 同时派生输入框 `/xxx` 菜单 |
+| `command(spec)` | `commandPalette` | 全局命令（⌘K）；`slash` 同时派生输入框 `/xxx` 菜单 |
 | `settingsPanel(spec)` | `settings.panel` | 设置面板（同一插件可声明多个） |
-| `profileRuntime(spec)` | `profile.runtime` | Profile 外部运行时元数据（id/kind/label/icon/agentSuggestions） |
-| `action(spec)` | `conversation.header.action` 等 | 统一微操作：`target: 'conversation:header' \| 'conversation:row' \| 'timeline:entry'` |
 | `slot(spec)` | `plugin.slot` | 向 `<ownerPluginId>/<slotName>` 子插槽注入组件 |
 
 ### priority 裁决与公共约束
 
-`timelineRenderer`、`toolView`、`markdownCodeBlock`、`composerCompleter` 与 `artifactPreviewer` 均支持 `priority`：数值较大者优先，缺省 0，同优先级保持贡献顺序。高优先级插件停用后由剩余候选接管。`command.slash` 不得占用宿主保留词（`new / clear / compact`），也不得与其他启用插件重名。所有 `spec.scope`（`ConversationScope`：conversationIds/tags/profileIds/modelProviders 字段间 AND、字段内 OR）同时约束可见性与执行——scope 是会话策略而非用户鉴权，无 conversationId 的人工 HTTP/CLI 调用不受限。
+`timelineRenderer`、`toolView`、`markdownCodeBlock` 与 `composerCompleter` 均支持 `priority`：数值较大者优先，缺省 0，同优先级保持贡献顺序。高优先级插件停用后由剩余候选接管。`command.slash` 不得占用宿主保留词（`new / clear / compact`），也不得与其他启用插件重名。所有 `spec.scope`（`ConversationScope`：conversationIds/tags/profileIds/modelProviders 字段间 AND、字段内 OR）同时约束可见性与执行——scope 是会话策略而非用户鉴权，无 conversationId 的人工 HTTP/CLI 调用不受限。
 
 ### 工具结果三通道、`ToolViewProps` 与分片时间线订阅
 
@@ -123,13 +111,9 @@ export interface ComposerController {
 
 省略 `submit` 的文本参数时提交当前草稿及附件；显式提供文本时不消费原草稿；失败必须经 Promise 拒绝并展示诊断，不得视作发送成功。输入区子插槽继承同一控制器。
 
-### 微操作、宿主保留插槽与产物预览
-
-微操作 `ctx.ui.action({ target, actionId?, client?, ... })` 以 target 区分三类容器：`conversation:header`（顶栏，`placement: 'toolbar' | 'menu'` 直出按钮或收纳菜单）、`conversation:row`（左栏会话行菜单）、`timeline:entry`（消息操作栏，`kinds`/`roles` 过滤）。声明 `actionId` 时由宿主代管按钮、pending 状态与失败通知（`actionPluginId` 可显式指向另一插件）；声明 `client` 时自渲染。`actionId` 与 `client` 二选一，两者皆缺在注册边界拒绝；调用上下文固定为实际会话，`input` 不得覆盖宿主注入的 `conversationId` / `entryId`。
+### 宿主保留插槽
 
 宿主保留五个子插槽常量（单一只读协议目录 `HOST_SLOT_CATALOG` / `HOST_SLOT_TARGETS` 在 `packages/protocol/src/ui.ts`）：`PROFILE_DETAIL_SECTION_SLOT`（`builtin:profile/detail-section`，传 `ProfileDetailSlotProps`：`profileId / isNew / disabled`）、`NODE_DETAIL_SECTION_SLOT`（`builtin:node/detail-section`，仅已有节点挂载，传 `NodeDetailSlotProps`：`nodeId / isLocal / isOnline / isNew: false`）、`COMPOSER_STATUS_SLOT`（`builtin:composer/status`，输入框下方只读遥测状态行上下文用量旁，实会话传 `ComposerScopeProps`，待命草稿传 `ComposerStatusSlotProps`；速率类只读指标如 `builtin:token-speed` 的实时解码速率经此插槽贡献）、`COMPOSER_DOCK_SLOT`（`builtin:composer/dock`，Composer 底部在途编排活动区，传 `ComposerScopeProps`）与 `OVERVIEW_CARD_META_SLOT`（`builtin:overview/card-meta`，会话总览卡片元信息区，传 `OverviewCardMetaSlotProps`：`rootConversation / memberIds`；只读徽标/跳转胶囊经 `ctx.ui.slot` 贡献，重操作留在插件自己的 screen/抽屉）。`builtin:node`、`builtin:composer` 与 `builtin:overview` 是宿主保留命名空间，不代表存在同名插件。插槽不传接入令牌，也不隐式借用当前会话。
-
-`artifactPreviewer` 组件收到 `ArtifactPreviewerProps`：`size` 来自真实 Blob；`name` 未获得元数据时省缺（不用 artifactId 冒充）；`text` 仅提供最多 1 MiB 的解码文本，二进制或超限为 `null`；`blobUrl` 由宿主管理生命周期，插件不得撤销。插件预览保留宿主默认视图与下载；插件失败显示诊断而非改用其他内容冒充。
 
 ### 输入补全数据源
 

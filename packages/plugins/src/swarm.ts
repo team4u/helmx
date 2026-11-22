@@ -85,7 +85,6 @@ export function createSwarmPlugin(): PluginDefinition {
       const settlingWorkers = new Map<number, number>()
       let upsertUnsubscribe: (() => void) | undefined
       let deletedUnsubscribe: (() => void) | undefined
-      let runtimeStartedUnsubscribe: (() => void) | undefined
       let reconcilePromise: Promise<void> | undefined
 
       const countLabel = (label: string, delta: number): void => {
@@ -262,19 +261,23 @@ export function createSwarmPlugin(): PluginDefinition {
             if (deletedId === undefined) return
             await groupsRuntime.onConversationDeleted(deletedId)
           })
-          runtimeStartedUnsubscribe = ctx.host.onEvent('runtime.started', () => {
-            if (!active || shutdown) return
-            const task = track('reconcile-recovered-groups', () => groupsRuntime.reconcileRecoveredGroups()).catch(
-              (err) => {
-                if (!shutdown) reportError('Swarm 启动恢复对账失败', err)
-              },
-            )
-            reconcilePromise = task
-            return task
-          })
           active = true
           await groupsRuntime.loadAllFromDisk()
           await groupsRuntime.reconcileOrphansOnBoot()
+        },
+        async reconcile() {
+          if (!active || shutdown) return
+          const task = track('reconcile-recovered-groups', () => groupsRuntime.reconcileRecoveredGroups()).catch(
+            (err) => {
+              if (!shutdown) reportError('Swarm 启动恢复对账失败', err)
+            },
+          )
+          reconcilePromise = task
+          try {
+            await task
+          } finally {
+            if (reconcilePromise === task) reconcilePromise = undefined
+          }
         },
         async stop() {
           shutdown = true
@@ -283,8 +286,6 @@ export function createSwarmPlugin(): PluginDefinition {
           upsertUnsubscribe = undefined
           deletedUnsubscribe?.()
           deletedUnsubscribe = undefined
-          runtimeStartedUnsubscribe?.()
-          runtimeStartedUnsubscribe = undefined
           await groupsRuntime.stopAndClear()
           if (reconcilePromise !== undefined) {
             await Promise.allSettled([reconcilePromise])

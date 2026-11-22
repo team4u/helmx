@@ -47,7 +47,6 @@ export class PluginHostBackendFixtureBase implements PluginHostBackend {
   skills: Port<'skills'> = {
     list: () => unsupported('host.skills.list'),
     readFile: () => unsupported('host.skills.readFile'),
-    directory: () => unsupported('host.skills.directory'),
     ensureSkill: async (asset) => {
       this.ensuredSkills.push(structuredClone(asset))
     },
@@ -58,20 +57,6 @@ export class PluginHostBackendFixtureBase implements PluginHostBackend {
     set: () => unsupported('host.secrets.set'),
     delete: () => unsupported('host.secrets.delete'),
     addRedaction: () => unsupported('host.secrets.addRedaction'),
-  }
-
-  plugins: Port<'plugins'> = {
-    doctorPlugin: () => unsupported('host.plugins.doctor'),
-    installPlugin: () => unsupported('host.plugins.install'),
-    updatePlugin: () => unsupported('host.plugins.update'),
-    removePlugin: () => unsupported('host.plugins.remove'),
-    enablePlugin: () => unsupported('host.plugins.enable'),
-    disablePlugin: () => unsupported('host.plugins.disable'),
-  }!
-
-  setPluginConfig(...args: Parameters<Port<'setPluginConfig'>>): ReturnType<Port<'setPluginConfig'>> {
-    void args
-    unsupported('host.setPluginConfig')
   }
 
   dispatchTrigger(...args: Parameters<Port<'dispatchTrigger'>>): ReturnType<Port<'dispatchTrigger'>> {
@@ -145,20 +130,6 @@ export class PluginHostBackendFixtureBase implements PluginHostBackend {
     unsupported('host.abortConversationGuarded')
   }
 
-  resetConversationGuarded(
-    ...args: Parameters<NonNullable<Port<'resetConversationGuarded'>>>
-  ): ReturnType<NonNullable<Port<'resetConversationGuarded'>>> {
-    void args
-    unsupported('host.resetConversationGuarded')
-  }
-
-  compactConversationGuarded(
-    ...args: Parameters<NonNullable<Port<'compactConversationGuarded'>>>
-  ): ReturnType<NonNullable<Port<'compactConversationGuarded'>>> {
-    void args
-    unsupported('host.compactConversationGuarded')
-  }
-
   submitInputGuarded(
     ...args: Parameters<NonNullable<Port<'submitInputGuarded'>>>
   ): ReturnType<NonNullable<Port<'submitInputGuarded'>>> {
@@ -176,16 +147,6 @@ export class PluginHostBackendFixtureBase implements PluginHostBackend {
   listArtifacts(...args: Parameters<Port<'listArtifacts'>>): ReturnType<Port<'listArtifacts'>> {
     void args
     unsupported('host.listArtifacts')
-  }
-
-  createArtifact(...args: Parameters<Port<'createArtifact'>>): ReturnType<Port<'createArtifact'>> {
-    void args
-    unsupported('host.createArtifact')
-  }
-
-  getArtifact(...args: Parameters<Port<'getArtifact'>>): ReturnType<Port<'getArtifact'>> {
-    void args
-    unsupported('host.getArtifact')
   }
 
   completeText(...args: Parameters<Port<'completeText'>>): ReturnType<Port<'completeText'>> {
@@ -211,11 +172,6 @@ export class PluginHostBackendFixtureBase implements PluginHostBackend {
   ): ReturnType<Port<'atomicWriteFile'>> {
     void args
     unsupported('host.atomicWriteFile')
-  }
-
-  buildSpawnEnv(...args: Parameters<Port<'buildSpawnEnv'>>): ReturnType<Port<'buildSpawnEnv'>> {
-    void args
-    unsupported('host.buildSpawnEnv')
   }
 
   manageConversation(
@@ -245,14 +201,6 @@ export class PluginHostBackendFixtureBase implements PluginHostBackend {
   execEnv(...args: Parameters<Port<'execEnv'>>): ReturnType<Port<'execEnv'>> {
     void args
     throw new HelmxError('unsupported', 'this fixture does not execute node commands', 501)
-  }
-
-  withFileMutationQueue<T>(
-    _target: { nodeId: string; cwd: string; path: string },
-    _fn: () => Promise<T>,
-    _opts?: { signal?: AbortSignal },
-  ): Promise<T> {
-    throw new HelmxError('unsupported', 'this fixture does not support file mutation queue', 501)
   }
 
   resolveSpawnTarget(
@@ -303,13 +251,6 @@ export class PluginHostBackendFixtureBase implements PluginHostBackend {
     unsupported('host.cancelAsk')
   }
 
-  registerAskSeqResolver(
-    ...args: Parameters<Port<'registerAskSeqResolver'>>
-  ): ReturnType<Port<'registerAskSeqResolver'>> {
-    void args
-    unsupported('host.registerAskSeqResolver')
-  }
-
   onEvent(...args: Parameters<Port<'onEvent'>>): ReturnType<Port<'onEvent'>> {
     void args
     unsupported('host.onEvent')
@@ -341,7 +282,6 @@ export function createPluginHostBackendFixture(): PluginHostBackend {
     skills: {
       list: d.skills.list,
       readFile: d.skills.readFile,
-      directory: d.skills.directory,
       ensureSkill: d.skills.ensureSkill,
     },
     secrets: {
@@ -350,15 +290,6 @@ export function createPluginHostBackendFixture(): PluginHostBackend {
       delete: d.secrets.delete,
       addRedaction: d.secrets.addRedaction,
     },
-    plugins: {
-      doctorPlugin: d.plugins!.doctorPlugin,
-      installPlugin: d.plugins!.installPlugin,
-      updatePlugin: d.plugins!.updatePlugin,
-      removePlugin: d.plugins!.removePlugin,
-      enablePlugin: d.plugins!.enablePlugin,
-      disablePlugin: d.plugins!.disablePlugin,
-    },
-    setPluginConfig: f(d.setPluginConfig),
     dispatchTrigger: f(d.dispatchTrigger),
     submitInput: f(d.submitInput),
     submitInputGuarded: f(d.submitInputGuarded),
@@ -371,31 +302,18 @@ export function createPluginHostBackendFixture(): PluginHostBackend {
     updateConversation: f(d.updateConversation),
     abortConversation: f(d.abortConversation),
     abortConversationGuarded: f(d.abortConversationGuarded),
-    resetConversationGuarded: f(d.resetConversationGuarded),
-    compactConversationGuarded: f(d.compactConversationGuarded),
     getConversationOwnership: f(d.getConversationOwnership),
     listArtifacts: f(d.listArtifacts),
-    createArtifact: f(d.createArtifact),
-    getArtifact: f(d.getArtifact),
     completeText: f(d.completeText),
     executionEnv: f(d.executionEnv),
     withFileLock: <T,>(...args: Parameters<PluginHostBackend['withFileLock']>) =>
       d.withFileLock(...(args as [string, () => Promise<T>, { signal?: AbortSignal }?])) as Promise<T>,
     atomicWriteFile: f(d.atomicWriteFile),
-    buildSpawnEnv: f(d.buildSpawnEnv),
     manageConversation: f(d.manageConversation),
     markConversationOwnership: f(d.markConversationOwnership),
     spawnAgent: f(d.spawnAgent),
     runGate: f(d.runGate),
     execEnv: f(d.execEnv),
-    withFileMutationQueue: <T,>(...args: Parameters<PluginHostBackend['withFileMutationQueue']>) =>
-      d.withFileMutationQueue(
-        ...(args as unknown as [
-          { nodeId: string; cwd: string; path: string },
-          () => Promise<T>,
-          { signal?: AbortSignal }?,
-        ]),
-      ),
     resolveSpawnTarget: f(d.resolveSpawnTarget),
     listActiveSpawnExecutions: f(d.listActiveSpawnExecutions),
     inspectNodePathUsage: f(d.inspectNodePathUsage),
@@ -404,7 +322,6 @@ export function createPluginHostBackendFixture(): PluginHostBackend {
     registerModelTiers: f(d.registerModelTiers),
     createAsk: f(d.createAsk),
     cancelAsk: f(d.cancelAsk),
-    registerAskSeqResolver: f(d.registerAskSeqResolver),
     onEvent: f(d.onEvent),
     emitEvent: f(d.emitEvent),
   }

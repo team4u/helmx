@@ -115,7 +115,7 @@ export function defaultSpaceTarget(space: SidebarSpace, input: SpaceTargetInput)
     return { kind: 'agent', profileId: latestRoot.profileId }
   }
   const visible = input.profiles.filter((profile) => isProfileVisible(profile, enabledPluginIds))
-  const preferred = visible.find((profile) => profile.humanSelectable !== false) ?? visible[0]
+  const preferred = visible[0]
   return preferred === undefined ? null : { kind: 'agent', profileId: preferred.id }
 }
 

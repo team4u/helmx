@@ -598,8 +598,8 @@ function mountControllerProbe(conversation: ConversationSummary) {
     return React.createElement('span', null, 'controller probe')
   }
   seedPluginClientModule('test:controller', 'probe.tsx', { Probe })
-  const mounted = mountComposer(conversation, [{ pluginId: 'test:controller', surface: 'composer.widget', spec: {
-    id: 'probe', client: { module: 'probe.tsx', export: 'Probe' },
+  const mounted = mountComposer(conversation, [{ pluginId: 'test:controller', surface: 'plugin.slot', spec: {
+    id: 'probe', target: 'builtin:composer/dock', client: { module: 'probe.tsx', export: 'Probe' },
   } }])
   assert.ok(controller)
   return { ...mounted, controller: controller! }

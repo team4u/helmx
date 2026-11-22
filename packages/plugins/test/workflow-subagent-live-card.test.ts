@@ -361,7 +361,7 @@ test('前台同步 run：查看会话即发起会话且 human 归属显示「转
     }).includes('Move to background'),
     'human 查看方应显示转入后台按钮',
   )
-  for (const ownedBy of ['helmx', 'bot']) {
+  for (const ownedBy of ['helmx'] as const) {
     assert.ok(
       !renderCard('running', {
         ...baseOpts,

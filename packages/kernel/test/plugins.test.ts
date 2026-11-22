@@ -10,8 +10,7 @@ import { SecretStash, AuthService } from '../src/services/index.js';
 import { createHubHandler, type KernelRuntimeLike } from '../src/http/index.js';
 import {
   HelmxError,
-  assertPluginManifestProjection,
-  type ExternalTriggerEnvelope,
+  type InputHookPayload,
   type PluginConfigFieldSchema,
   type PluginDefinition,
   type PluginDocHandle,
@@ -55,7 +54,7 @@ function makeConversation(id: number) {
 
 /**
  * plugin host backend port complete fake(new contract:AskResult three state + lifecycle port).
- * record manageConversation / onWorkflowSettled / registerAskSeqResolver invoke,
+ * record manageConversation / onEvent invoke,
  * supply lifecycle release test assertion.
  */
 function makeHostApi(events: string[] = []): PluginHostBackend {
@@ -81,14 +80,11 @@ function makeHostApi(events: string[] = []): PluginHostBackend {
     markConversationOwnership: () => {},
     createAsk: async () => ({ id: 'ask-1', status: 'answered', answers: {} }),
     cancelAsk: async () => {},
-    registerAskSeqResolver: () => () => {
-      events.push('unregister-ask-seq');
-    },
     onEvent: () => () => {
       events.push('unregister-workflow-settled');
     },
     abortConversation: async () => {},
-    getConversationOwnership(): 'helmx' | 'bot' | 'human' {
+    getConversationOwnership(): 'helmx' | 'human' {
       return 'human'
     },
     spawnAgent: async () => ({}),
@@ -103,12 +99,15 @@ function makeHostApi(events: string[] = []): PluginHostBackend {
   };
 }
 
-function makeEnvelope(over: Partial<ExternalTriggerEnvelope> = {}): ExternalTriggerEnvelope {
+function makeInput(over: Partial<InputHookPayload> = {}): InputHookPayload {
   return {
-    id: 'evt-1',
-    source: 'cron',
-    text: '<external_event>hello</external_event>',
-    createdAt: 1,
+    conversationId: 1,
+    input: {
+      id: 'inp-1',
+      text: 'hello',
+      origin: 'human',
+      createdAt: 1,
+    },
     ...over,
   };
 }
@@ -153,11 +152,11 @@ test('priority and same priority register order: high priority first run, same p
   await host.register({
     id: 'p:a',
     definePlugin: (ctx) => {
-      ctx.hook.onTrigger(() => {
+      ctx.hook.onInput(() => {
         order.push('a-p0');
         return { action: 'continue' };
       });
-      ctx.hook.onTrigger(
+      ctx.hook.onInput(
         () => {
           order.push('a-p10');
           return { action: 'continue' };
@@ -169,7 +168,7 @@ test('priority and same priority register order: high priority first run, same p
   await host.register({
     id: 'p:b',
     definePlugin: (ctx) => {
-      ctx.hook.onTrigger(
+      ctx.hook.onInput(
         () => {
           order.push('b-p10');
           return { action: 'continue' };
@@ -178,7 +177,7 @@ test('priority and same priority register order: high priority first run, same p
       );
     },
   });
-  await host.runHook('trigger', makeEnvelope());
+  await host.runHook('input', makeInput());
   assert.deepEqual(order, ['a-p10', 'b-p10', 'a-p0']);
 });
 
@@ -188,22 +187,22 @@ test('transform.value pass downstream: after continue handle see to change write
   await host.register({
     id: 'p:route',
     definePlugin: (ctx) => {
-      ctx.hook.onTrigger(
-        (env) => ({ action: 'transform', value: { ...env, targetConversationId: 7 } }),
+      ctx.hook.onInput(
+        (p) => ({ action: 'transform', value: { ...p, input: { ...p.input, text: 'rewritten' } } }),
         { priority: 10 },
       );
-      ctx.hook.onTrigger((env) => {
-        seen.push(`low:${env.targetConversationId}`);
+      ctx.hook.onInput((p) => {
+        seen.push(`low:${p.input.text}`);
         return { action: 'continue' };
       });
     },
   });
-  const result = await host.runHook('trigger', makeEnvelope());
+  const result = await host.runHook('input', makeInput());
   assert.equal(result.action, 'transform');
   if (result.action === 'transform') {
-    assert.equal(result.value.targetConversationId, 7);
+    assert.equal(result.value.input.text, 'rewritten');
   }
-  assert.deepEqual(seen, ['low:7']);
+  assert.deepEqual(seen, ['low:rewritten']);
 });
 
 test('handled short route: after continue handle do not execute, by default behavior by take over', { timeout: 60_000 }, async () => {
@@ -212,39 +211,22 @@ test('handled short route: after continue handle do not execute, by default beha
   await host.register({
     id: 'p:gate',
     definePlugin: (ctx) => {
-      ctx.hook.onTrigger(
+      ctx.hook.onInput(
         () => ({ action: 'handled', result: { dropped: true } }),
         { priority: 10 },
       );
-      ctx.hook.onTrigger(() => {
+      ctx.hook.onInput(() => {
         downstreamRan = true;
         return { action: 'continue' };
       });
     },
   });
-  const result = await host.runHook('trigger', makeEnvelope());
+  const result = await host.runHook('input', makeInput());
   assert.deepEqual(result, { action: 'handled', result: { dropped: true } });
   assert.equal(downstreamRan, false);
 });
 
-test('tool_call block carry reason short route;block missing reason explicit errors', { timeout: 60_000 }, async () => {
-  const host = makeHost();
-  await host.register({
-    id: 'p:guard',
-    definePlugin: (ctx) => {
-      ctx.hook.onToolCall((p) =>
-        p.toolName === 'bash' ? { action: 'block', reason: 'sensitive command must human confirm' } : { action: 'continue' },
-      );
-    },
-  });
-  const blocked = await host.runHook('tool_call', {
-    conversationId: 1,
-    callId: 'c1',
-    toolName: 'bash',
-    input: { command: 'rm -rf /' },
-  });
-  assert.deepEqual(blocked, { action: 'block', reason: 'sensitive command must human confirm' });
-
+test('input block carry reason short route; block missing reason explicit errors', { timeout: 60_000 }, async () => {
   const inputBlockedHost = makeHost();
   await inputBlockedHost.register({
     id: 'p:input-guard',
@@ -264,11 +246,11 @@ test('tool_call block carry reason short route;block missing reason explicit err
   await host2.register({
     id: 'p:bad-block',
     definePlugin: (ctx) => {
-      ctx.hook.onToolCall(() => ({ action: 'block', reason: '' }) as never);
+      ctx.hook.onInput(() => ({ action: 'block', reason: '' }) as never);
     },
   });
   await assert.rejects(
-    host2.runHook('tool_call', { conversationId: 1, callId: 'c1', toolName: 'bash', input: {} }),
+    host2.runHook('input', makeInput()),
     (err: unknown) => {
       assert.ok(err instanceof HelmxError);
       assert.equal(err.code, 'invalid_hook_result');
@@ -340,10 +322,10 @@ test('hook return undefined etc. price continue;transform missing value / break 
   await host.register({
     id: 'p:void',
     definePlugin: (ctx) => {
-      ctx.hook.onTrigger(() => undefined);
+      ctx.hook.onInput(() => undefined);
     },
   });
-  const ok = await host.runHook('trigger', makeEnvelope());
+  const ok = await host.runHook('input', makeInput());
   assert.equal(ok.action, 'transform'); // pipeline only void handle, payload original pass out
 
   // transform missing value
@@ -351,23 +333,23 @@ test('hook return undefined etc. price continue;transform missing value / break 
   await h2.register({
     id: 'p:no-value',
     definePlugin: (ctx) => {
-      ctx.hook.onTrigger(() => ({ action: 'transform' }) as never);
+      ctx.hook.onInput(() => ({ action: 'transform' }) as never);
     },
   });
-  await assertRejectsCode(() => h2.runHook('trigger', makeEnvelope()), 'invalid_hook_result');
+  await assertRejectsCode(() => h2.runHook('input', makeInput()), 'invalid_hook_result');
 
-  // transform break must want field (source by delete)
+  // transform break must want field (input.id by delete)
   const h3 = makeHost();
   await h3.register({
     id: 'p:break',
     definePlugin: (ctx) => {
-      ctx.hook.onTrigger((env) => {
-        const broken = { ...env, source: '' };
+      ctx.hook.onInput((p) => {
+        const broken = { ...p, input: { ...p.input, id: '' } };
         return { action: 'transform', value: broken };
       });
     },
   });
-  await assert.rejects(h3.runHook('trigger', makeEnvelope()), (err: unknown) => {
+  await assert.rejects(h3.runHook('input', makeInput()), (err: unknown) => {
     assert.ok(err instanceof HelmxError);
     assert.equal(err.code, 'invalid_hook_result');
     return true;
@@ -378,10 +360,10 @@ test('hook return undefined etc. price continue;transform missing value / break 
   await h4.register({
     id: 'p:unknown-action',
     definePlugin: (ctx) => {
-      ctx.hook.onTrigger(() => ({ action: 'resend' }) as never);
+      ctx.hook.onInput(() => ({ action: 'resend' }) as never);
     },
   });
-  await assertRejectsCode(() => h4.runHook('trigger', makeEnvelope()), 'invalid_hook_result');
+  await assertRejectsCode(() => h4.runHook('input', makeInput()), 'invalid_hook_result');
 });
 
 test('hook execute throw exception: wrap hook_execution_failed and not silently', { timeout: 60_000 }, async () => {
@@ -759,7 +741,6 @@ test('ctx.configSchema: label/description display copy validated at declaration 
   assert.deepEqual(host.getConfig('p:cfg-enum-arr')['tags'], ['alpha']);
 
   const manifest = host.getManifest('p:cfg-enum-arr');
-  assertPluginManifestProjection(manifest);
   assert.deepEqual(manifest.configFields, [
     { key: 'channels', type: 'string[]', secret: false, required: false, enum: ['cron', 'webhook', 'manual'], default: ['cron'] },
     { key: 'mode', type: 'string', secret: false, required: false, enum: ['fast', 'balanced'], default: 'fast' },
@@ -831,13 +812,13 @@ test('runHook execute during disable by reject (hook in-flight count is task)', 
   await host.register({
     id: 'p:hooky',
     definePlugin: (ctx) => {
-      ctx.hook.onTrigger(async () => {
+      ctx.hook.onInput(async () => {
         await gate;
         return { action: 'continue' };
       });
     },
   });
-  const running = host.runHook('trigger', makeEnvelope());
+  const running = host.runHook('input', makeInput());
   await new Promise((r) => setTimeout(r, 20));
   await assertRejectsCode(() => host.disable('p:hooky'), 'plugin_has_live_tasks');
   release();
@@ -1079,16 +1060,24 @@ test('UI seven class ten function unify collect can serialization spec; cannot s
     id: 'p:ui',
     clientRoot: uiClientRoot,
     definePlugin: (ctx) => {
+      ctx.action({
+        id: 'search',
+        description: 'search items',
+        idempotent: true,
+        inputSchema: { type: 'object' },
+        outputSchema: { type: 'object' },
+        handler: () => ({ items: [] }),
+      });
       ctx.ui.sidebarItem({ id: 'home', label: 'person assist', target: 'conversation:1' });
-      ctx.ui.sidebarSection({ id: 'workers', label: 'Worker' });
       ctx.ui.screen({ id: 'graph', label: 'recall graph', client: { module: 'index.tsx', export: 'Graph' } });
       ctx.ui.timelineRenderer({ id: 'report', kinds: ['worker.report'] });
+      ctx.ui.markdownCodeBlock({ id: 'fence', languages: ['mermaid'], client: { module: 'index.tsx', export: 'Graph' } });
       ctx.ui.toolView({ id: 'term', toolNames: ['bash'] });
-      ctx.ui.composerPill({ id: 'pill', label: 'P' });
-      ctx.ui.composerWidget({ id: 'widget' });
+      ctx.ui.composerCompleter({ id: 'at', label: 'Mention', trigger: '@', source: { kind: 'action', actionId: 'search' } });
       ctx.ui.workbenchPanel({ id: 'panel', label: 'artifact' });
       ctx.ui.command({ id: 'cmd', title: 'run inspection', actionPluginId: 'builtin:superagent', actionId: 'patrol' });
       ctx.ui.settingsPanel({ id: 'set', label: 'settings' });
+      ctx.ui.slot({ id: 'badge', target: 'p:ui/header', client: { module: 'index.tsx', export: 'Graph' } });
     },
   });
   const ui = host.listUi();
@@ -1096,15 +1085,15 @@ test('UI seven class ten function unify collect can serialization spec; cannot s
   const surfaces = new Set(ui.map((u) => u.surface));
   for (const expected of [
     'sidebar.item',
-    'sidebar.section',
     'screen',
     'timeline.renderer',
+    'markdown.codeBlock',
     'tool.view',
-    'composer.pill',
-    'composer.widget',
+    'composer.completer',
     'workbench.panel',
     'commandPalette',
     'settings.panel',
+    'plugin.slot',
   ]) {
     assert.ok(surfaces.has(expected), `missing ${expected}`);
   }
@@ -1266,7 +1255,7 @@ test('disable→enable rebuild complete register cycle: duplicate ctx.doc / conf
         outputSchema: { type: 'object' },
         handler: () => ({ pong: true }),
       });
-      ctx.hook.onTrigger(() => undefined);
+      ctx.hook.onInput(() => undefined);
     },
   });
   await host.disable('p:cycle');
@@ -1279,7 +1268,7 @@ test('disable→enable rebuild complete register cycle: duplicate ctx.doc / conf
   // action/hook/schema all rebuild
   assert.deepEqual(await host.invokeAction('p:cycle', 'ping', {}), { pong: true });
   assert.equal(host.getConfigSchema('p:cycle').token?.type, 'string');
-  assert.deepEqual(host.list().find((p) => p.id === 'p:cycle')!.hooks, ['trigger']);
+  assert.deepEqual(host.list().find((p) => p.id === 'p:cycle')!.hooks, ['input']);
 });
 
 test('old context in disable after disallows continue register/modify:epoch make handle i.e. moment expires', { timeout: 60_000 }, async () => {
@@ -1298,7 +1287,7 @@ test('old context in disable after disallows continue register/modify:epoch make
 
   // old context: everything register method reject
   throwsCode(() => stolen!.action({ id: 'x', description: 'x', inputSchema: { type: 'object' }, outputSchema: { type: 'object' }, handler: () => ({}) }), 'plugin_context_closed');
-  throwsCode(() => stolen!.hook.onTrigger(() => undefined), 'plugin_context_closed');
+  throwsCode(() => stolen!.hook.onInput(() => undefined), 'plugin_context_closed');
   throwsCode(() => stolen!.configSchema({ a: { type: 'string' } }), 'plugin_context_closed');
   throwsCode(() => stolen!.route({ method: 'GET', path: '/x', handler: () => new Response('x') }), 'plugin_context_closed');
   // old doc handle: read write reject, and not pollute durable layer (still is cycle inside write 0)
@@ -1360,7 +1349,7 @@ test('disable awaits stop while gating invokeAction/executeTool/runHook; stop fa
         outputSchema: { type: 'object' },
         handler: () => ({}),
       });
-      ctx.hook.onTrigger(() => undefined);
+      ctx.hook.onInput(() => undefined);
     },
   });
 
@@ -1370,7 +1359,7 @@ test('disable awaits stop while gating invokeAction/executeTool/runHook; stop fa
   // While stopping, new invocations reject and hooks skip the disabling plugin's handlers.
   await assertRejectsCode(() => host.invokeAction('p:race', 'ping', {}), 'plugin_disabled');
   await assertRejectsCode(() => host.executeTool('nope', {}, { conversationId: 1 }), 'unknown_tool');
-  const hookResult = await host.runHook('trigger', makeEnvelope());
+  const hookResult = await host.runHook('input', makeInput());
   assert.equal(hookResult.action, 'continue');
   releaseStop();
   await disabling;
@@ -1386,7 +1375,7 @@ test('runHook in disable await during do not by execute: not enabled plugin hand
     id: 'p:dying',
     definePlugin: (ctx) => {
       ctx.service({ id: 'svc', start: () => {}, stop: () => stopGate });
-      ctx.hook.onTrigger(() => {
+      ctx.hook.onInput(() => {
         hookRan = true;
         return { action: 'continue' };
       });
@@ -1395,7 +1384,7 @@ test('runHook in disable await during do not by execute: not enabled plugin hand
   const disabling = host.disable('p:dying');
   await new Promise((r) => setTimeout(r, 20));
   // stop await in (enabled still true but phase=deactivating):handler do not execute
-  const r = await host.runHook('trigger', makeEnvelope());
+  const r = await host.runHook('input', makeInput());
   assert.equal(r.action, 'continue');
   assert.equal(hookRan, false);
   releaseStop();
@@ -1447,7 +1436,7 @@ test('register route in (definePlugin await suspended)runHook do not execute not
   const registering = host.register({
     id: 'p:defining',
     definePlugin: async (ctx) => {
-      ctx.hook.onTrigger(() => {
+      ctx.hook.onInput(() => {
         hookRan = true;
         return { action: 'continue' };
       });
@@ -1455,13 +1444,13 @@ test('register route in (definePlugin await suspended)runHook do not execute not
     },
   });
   await new Promise((r) => setTimeout(r, 20));
-  const r = await host.runHook('trigger', makeEnvelope());
+  const r = await host.runHook('input', makeInput());
   assert.equal(r.action, 'continue');
   assert.equal(hookRan, false);
   releaseDefine();
   await registering;
   // register after completion can execute
-  const r2 = await host.runHook('trigger', makeEnvelope());
+  const r2 = await host.runHook('input', makeInput());
   assert.equal(r2.action, 'transform');
   assert.equal(hookRan, true);
 });
@@ -2142,7 +2131,6 @@ test('hook number field tight: non- integer/negative id/negative seq reject, leg
     definePlugin: (ctx) => {
       ctx.hook.onBeforeTurn(() => undefined);
       ctx.hook.onInput(() => undefined);
-      ctx.hook.onTrigger(() => undefined);
     },
   });
   const expectInvalid = async (operation: Promise<unknown>) => {
@@ -2168,14 +2156,10 @@ test('hook number field tight: non- integer/negative id/negative seq reject, leg
   await expectInvalid(
     host.runHook('input', { conversationId: 1.5, input: { id: 'i', text: 'hi', origin: 'human', createdAt: 1 } }),
   );
-  // trigger.id missing/empty reject
-  await expectInvalid(host.runHook('trigger', { ...makeEnvelope(), id: '' }));
 
   // legal empty text(by default data) do not reject: only type validate do not force non-empty;createdAt=0 legal
   const ok = await host.runHook('input', { conversationId: 1, input: { id: 'i', text: '', origin: 'human', createdAt: 0 } });
   assert.equal(ok.action, 'transform');
-  const okEnv = await host.runHook('trigger', makeEnvelope());
-  assert.equal(okEnv.action, 'transform');
 });
 
 // ---------------------------------------------------------------------------
@@ -2472,7 +2456,7 @@ test('clientHashes: precompiled on register/enable, carried in list/get/plugin.c
     clientRoot,
     definePlugin: (ctx) => {
       ctx.ui.screen({ id: 'main', label: 'Main', client: { module: 'index.tsx', export: 'MainScreen' } });
-      ctx.ui.composerWidget({ id: 'widget', client: { module: 'index.tsx', export: 'SideWidget' } });
+      ctx.ui.slot({ id: 'widget', target: 'p:multi-client/side', client: { module: 'index.tsx', export: 'SideWidget' } });
       ctx.ui.workbenchPanel({ id: 'extra', label: 'Extra', client: { module: 'panels/Extra.tsx', export: 'ExtraPanel' } });
     },
   };
@@ -2961,8 +2945,6 @@ test('PluginSummary.publicConfig filters secret fields, merges defaults, redacts
   });
   t.after(() => host.dispose());
 
-  let updateFromCtxHost!: (next: Record<string, unknown>) => Promise<void>;
-
   await host.register({
     id: 'p:cfg-no-schema',
     definePlugin: () => {},
@@ -2984,7 +2966,6 @@ test('PluginSummary.publicConfig filters secret fields, merges defaults, redacts
         note: { type: 'string' },
         apiKey: { type: 'string', secret: true, default: 'sk-default' },
       });
-      updateFromCtxHost = (next) => ctx.host.setConfig(next);
     },
   });
 
@@ -3010,7 +2991,7 @@ test('PluginSummary.publicConfig filters secret fields, merges defaults, redacts
     label: 'fast',
   });
 
-  await updateFromCtxHost({ windowMs: 4_000, label: 'turbo', apiKey: 'another-secret' });
+  await host.setConfig('p:cfg-mixed', { windowMs: 4_000, label: 'turbo', apiKey: 'another-secret' });
   const lastChanged = eventPayloads.filter((e) => e.type === 'plugin.changed').at(-1)!.payload as { plugin: PluginSummary };
   assert.deepEqual(lastChanged.plugin.publicConfig, { windowMs: 4_000, label: 'turbo' });
   assert.equal('apiKey' in (lastChanged.plugin.publicConfig ?? {}), false);
@@ -3067,7 +3048,7 @@ test('PluginHost.getManifest / listManifests: stably sorted read-only projection
       });
       // Register in deliberately non-sorted order to verify deterministic sorting.
       ctx.hook.onTurnSettled(() => {});
-      ctx.hook.onTrigger(() => {});
+      ctx.hook.onInput(() => {});
       ctx.hook.onBeforeTurn(() => {});
 
       ctx.action({
@@ -3167,13 +3148,12 @@ test('PluginHost.getManifest / listManifests: stably sorted read-only projection
   assert.deepEqual(manifests.map((m) => m.id), ['a:dep', 'm:broken', 'z:full']);
 
   const full: PluginManifestProjection = host.getManifest('z:full');
-  assertPluginManifestProjection(full);
   assert.equal(full.status, 'active');
   assert.equal(full.enabled, true);
   assert.equal(full.description, 'Contains [HOST_REDACTED] and [REDACTED]');
   assert.deepEqual(full.dependencies, ['a:dep']);
   // Canonical PLUGIN_HOOK_NAMES order regardless of registration order
-  assert.deepEqual(full.hooks, ['trigger', 'before_turn', 'turn_settled']);
+  assert.deepEqual(full.hooks, ['input', 'before_turn', 'turn_settled']);
   assert.deepEqual(full.actions.map((a) => a.id), ['alpha', 'zeta']);
   assert.equal(full.actions[0]!.toolName, actionToolAlias('z:full', 'alpha'));
   assert.equal(full.actions[1]!.toolName, undefined);
@@ -3223,7 +3203,6 @@ test('PluginHost.getManifest / listManifests: stably sorted read-only projection
   assert.equal(providerCallbackCalls, 0, 'manifest introspection must never invoke provider callbacks');
 
   const broken = host.getManifest('m:broken');
-  assertPluginManifestProjection(broken);
   assert.equal(broken.status, 'failed');
   assert.equal(broken.enabled, false);
   assert.equal(broken.error?.code, 'boom_define');
@@ -3233,7 +3212,6 @@ test('PluginHost.getManifest / listManifests: stably sorted read-only projection
   // Disabling removes live capabilities immediately while keeping config schema (without secret defaults) & dependencies
   await host.disable('z:full');
   const disabled = host.getManifest('z:full');
-  assertPluginManifestProjection(disabled);
   assert.equal(disabled.status, 'disabled');
   assert.equal(disabled.enabled, false);
   assert.deepEqual(disabled.hooks, []);
@@ -3293,7 +3271,6 @@ test('doctorPluginDir captures validated PluginManifestProjection during dry-run
   const okReport = await doctorPluginDir(okDir, { buildProvider });
   assert.equal(okReport.ok, true);
   assert.ok(okReport.manifest, 'doctor report should carry manifest when register succeeds');
-  assertPluginManifestProjection(okReport.manifest);
   assert.equal(okReport.manifest.id, 'ext-doc-manifest');
   assert.deepEqual(okReport.manifest.actions.map((a) => a.id), ['ping']);
   assert.deepEqual(okReport.manifest.tools.map((tool) => tool.sourceKind), ['action']);
@@ -3398,9 +3375,8 @@ test('PluginHost: ctx.host.invokeAction stamps unforgeable callerPluginId and en
       },
     });
 
-    // Manifest projection carries visibility and passes strict protocol validation
+    // Manifest projection carries visibility
     const manifest = host.getManifest('sec:provider');
-    assertPluginManifestProjection(manifest);
     assert.equal(manifest.actions.find((a) => a.id === 'internal_op')?.visibility, 'internal');
     assert.equal(manifest.actions.find((a) => a.id === 'ui_op')?.visibility, 'ui');
 
@@ -3435,5 +3411,123 @@ test('PluginHost: ctx.host.invokeAction stamps unforgeable callerPluginId and en
     );
   } finally {
     await host.dispose();
+  }
+});
+
+test('ctx.doc.set uses single-pass serialization via store.setJson and enforces 2 MiB limit before writing', { timeout: 60_000 }, async () => {
+  const setJsonCalls: Array<{ key: string; json: string }> = [];
+  let fallbackSetCalls = 0;
+  const raw = new Map<string, string>();
+  const fastStore: PluginDocStore = {
+    get: <T>(key: string, initial: T): T => (raw.has(key) ? (JSON.parse(raw.get(key)!) as T) : initial),
+    set: () => {
+      fallbackSetCalls += 1;
+    },
+    setJson: (key: string, valueJson: string) => {
+      setJsonCalls.push({ key, json: valueJson });
+      raw.set(key, valueJson);
+    },
+    deletePlugin: () => {},
+    flush: async () => {},
+  };
+  const host = new PluginHost({
+    buildProvider: createPluginBuildProvider(),
+    dataDir,
+    host: makeHostApi(events),
+    docs: fastStore,
+  });
+  try {
+    let handle!: PluginDocHandle<{ items: number[]; pad?: string }>;
+    await host.register({
+      id: 'p:fast-doc',
+      definePlugin: (ctx) => {
+        handle = ctx.doc('board', { items: [] }, { public: true });
+      },
+    });
+    const input = { items: [1, 2, 3] };
+    handle.set(input);
+    // Mutating caller object after set must not corrupt emitted/stored data.
+    input.items.push(999);
+    assert.equal(fallbackSetCalls, 0, 'store.set should be bypassed when store.setJson is available');
+    assert.equal(setJsonCalls.length, 1);
+    assert.equal(setJsonCalls[0]!.key, 'p:fast-doc:board');
+    assert.equal(setJsonCalls[0]!.json, JSON.stringify({ items: [1, 2, 3] }));
+    assert.deepEqual(handle.get(), { items: [1, 2, 3] });
+    const docEvents = eventPayloads.filter((e) => e.type === 'plugin.doc.updated');
+    assert.equal(docEvents.length, 1);
+    assert.deepEqual((docEvents[0]!.payload as { doc: { value: unknown } }).doc.value, { items: [1, 2, 3] });
+
+    // Oversized payload (> 2 MiB) is rejected with 413 before writing to store or emitting events.
+    const huge = 'x'.repeat(2 * 1024 * 1024 + 64);
+    throwsCode(() => handle.set({ items: [], pad: huge }), 'plugin_doc_too_large');
+    assert.equal(setJsonCalls.length, 1, 'oversized write must not touch store.setJson');
+    assert.deepEqual(handle.get(), { items: [1, 2, 3] });
+  } finally {
+    await host.dispose();
+  }
+});
+
+test('agent_spawn hook validates onResolved, onGateResult, attachments, meta, and gateTimeoutMs fields', { timeout: 60_000 }, async () => {
+  const host = makeHost();
+  try {
+      await host.register({
+        id: 'p:spawn-validate',
+        definePlugin: (ctx) => {
+          ctx.hook.onAgentSpawn(async (req, next) => {
+            await next(req);
+          });
+        },
+      });
+    const validReq = {
+      parentConversationId: 1,
+      prompt: 'build feature',
+      gateTimeoutMs: 5_000,
+      attachments: ['art-1', 'art-2'],
+      meta: { trace: { ok: true } },
+      onResolved: () => {},
+      onGateResult: () => {},
+    };
+    const ok = await host.runHookAround('agent_spawn', validReq, async (r) => ({ output: r.prompt }));
+    assert.deepEqual(ok, { output: 'build feature' });
+
+    const invalidCases: Array<Record<string, unknown>> = [
+      { ...validReq, onResolved: 'not-a-function' },
+      { ...validReq, onGateResult: 123 },
+      { ...validReq, attachments: [42] },
+      { ...validReq, meta: 'not-an-object' },
+      { ...validReq, gateTimeoutMs: 0 },
+    ];
+    for (const bad of invalidCases) {
+      await assertRejectsCode(
+        () => host.runHookAround('agent_spawn', bad as never, async () => ({})),
+        'invalid_hook_result',
+      );
+    }
+  } finally {
+    await host.dispose();
+  }
+});
+
+test('doctorPluginDir rejects arbitrary top-level ctx.host.* and nested sub-port calls via Proxy with 501 unsupported', { timeout: 60_000 }, async (t) => {
+  const baseDir = await makeTempDir('helmx-doctor-proxy-');
+  t.after(() => cleanupDir(baseDir));
+  const buildProvider = createPluginBuildProvider();
+
+  for (const [slug, callExpr] of [
+    ['direct-host', 'ctx.host.createConversation({})'],
+    ['nested-profiles', 'ctx.host.profiles.list()'],
+    ['nested-secrets', 'ctx.host.secrets.get("k")'],
+  ] as const) {
+    const dir = join(baseDir, slug);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'plugin.json'), JSON.stringify({ id: `ext-proxy-${slug}`, main: 'index.ts' }));
+    writeFileSync(
+      join(dir, 'index.ts'),
+      `export default {\n  id: 'ext-proxy-${slug}',\n  async definePlugin(ctx: any) {\n    await ${callExpr};\n  },\n};\n`,
+    );
+    const report = await doctorPluginDir(dir, { buildProvider });
+    assert.equal(report.ok, false, `${slug} should fail doctor`);
+    const reg = report.checks.find((c) => c.id === 'register');
+    assert.equal(reg?.error?.code, 'unsupported', `${slug} should fail with 501 unsupported`);
   }
 });

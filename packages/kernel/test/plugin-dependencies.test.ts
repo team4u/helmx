@@ -300,12 +300,7 @@ test('failed-while-enabled dependent clears clientHashes, ui, capabilities, and 
   const host = new PluginHost({
     buildProvider: createPluginBuildProvider(),
     dataDir,
-    host: {
-      ...makeBackend(),
-      setPluginConfig: async (pluginId, value) => {
-        configs.set(pluginId, { ...value })
-      },
-    },
+    host: makeBackend(),
     docs,
     config: {
       get: (pluginId) => ({ ...(configs.get(pluginId) ?? {}) }),
@@ -338,7 +333,7 @@ test('failed-while-enabled dependent clears clientHashes, ui, capabilities, and 
         execute: () => ({ content: [{ type: 'text', text: 'ok' }] }),
       })
       ctx.route({ method: 'GET', path: '/health', handler: () => new Response('ok') })
-      ctx.hook.onTrigger(() => ({ action: 'continue' }))
+      ctx.hook.onInput(() => ({ action: 'continue' }))
     },
   }, { enabled: true })
 
@@ -346,7 +341,7 @@ test('failed-while-enabled dependent clears clientHashes, ui, capabilities, and 
   const activeSummary = host.get('user')!
   assert.equal(activeSummary.status, 'active')
   assert.ok(activeSummary.clientHashes?.['index.tsx'])
-  assert.deepEqual(activeSummary.hooks, ['trigger'])
+  assert.deepEqual(activeSummary.hooks, ['input'])
   assert.deepEqual(activeSummary.actions, ['ping'])
   assert.deepEqual(activeSummary.tools, ['dep_tool'])
   assert.equal(host.listUi().filter((u) => u.pluginId === 'user').length, 1)
@@ -429,7 +424,7 @@ test('failed-while-enabled dependent clears clientHashes, ui, capabilities, and 
   assert.equal(recovered.status, 'active')
   assert.equal(recovered.error, undefined)
   assert.ok(recovered.clientHashes?.['index.tsx'])
-  assert.deepEqual(recovered.hooks, ['trigger'])
+  assert.deepEqual(recovered.hooks, ['input'])
   assert.deepEqual(recovered.actions, ['ping'])
   assert.deepEqual(recovered.tools, ['dep_tool'])
   assert.equal(host.listUi().filter((u) => u.pluginId === 'user').length, 1)

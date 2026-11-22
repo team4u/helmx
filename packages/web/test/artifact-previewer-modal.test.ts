@@ -12,10 +12,8 @@ import { test } from 'node:test'
 import * as React from 'react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import type { ArtifactPreviewerProps, ArtifactMetadata, ConversationSummary, PluginUiContribution } from '@helmx/protocol'
-import { groupUiContributions } from '../src/lib/types.js'
+import type { ArtifactMetadata, ConversationSummary } from '@helmx/protocol'
 import { ArtifactPreviewModal } from '../src/conversation/ArtifactPreviewModal.js'
-import { seedPluginClientModule, resetPluginClientCache } from '../src/lib/plugin-client.js'
 import { makeTestStore } from './helpers/store.js'
 import type { HelmxExternalStore } from '../src/lib/helmx-store.js'
 import { HostStoreProviders } from './helpers/host-store.js'
@@ -108,19 +106,7 @@ const convSummary = (id: number, over: Partial<ConversationSummary> = {}): Conve
   ...over,
 }) as ConversationSummary
 
-const previewerContribution = (
-  pluginId: string,
-  id: string,
-  label: string,
-  extra: Record<string, unknown> = {},
-): PluginUiContribution => ({
-  pluginId,
-  surface: 'artifact.previewer',
-  spec: { id, label, ...extra },
-})
-
 function buildStore(over: {
-  contributions?: PluginUiContribution[]
   conversations?: ConversationSummary[]
   artifacts?: TestArtifact[]
   conversationId?: number
@@ -129,7 +115,7 @@ function buildStore(over: {
   const conversationId = over.conversationId ?? 7
   const metas = (over.artifacts ?? []).map((a) => artifactMeta(a, conversationId))
   const store = makeTestStore({
-    uiContributions: over.contributions ?? [],
+    uiContributions: [],
     conversations: over.conversations ?? [convSummary(conversationId)],
     // asyncMeta：模拟深链元数据尚未到达（load 为空操作，由测试稍后注入元数据）。
     conversationArtifacts: over.asyncMeta === true ? {} : { [conversationId]: metas },
@@ -228,130 +214,6 @@ test('Markdown 富文本预览复用会话大纲：显示章节数量并精确�
   resetBody()
 })
 
-test('client 轨插件预览器：真实 Props（会话上下文 / blobUrl / size / text）并保留默认切换', { timeout: 60_000 }, async (t) => {
-  const received: ArtifactPreviewerProps[] = []
-  seedPluginClientModule('demo:csv', 'csv.tsx', {
-    CsvPreviewer: (props: Record<string, unknown>) => {
-      received.push(props as unknown as ArtifactPreviewerProps)
-      const ctxProps = props as unknown as ArtifactPreviewerProps
-      return e('div', { 'data-testid': 'csv-previewer' }, `${ctxProps.name}:${ctxProps.mimeType}:${ctxProps.size}:${ctxProps.blobUrl}:${ctxProps.text}`)
-    },
-  })
-  const shim = installObjectUrlShim()
-  const originalRevoke = URL.revokeObjectURL
-  const artifact = makeArtifact('art-csv-1', new TextEncoder().encode('a,b\n1,2'), 'data.csv', 'text/csv')
-  installArtifactFetch([artifact])
-  const store = buildStore({
-    contributions: [previewerContribution('demo:csv', 'csv', 'CSV 表格', { mimeTypes: ['text/csv'], extensions: ['.csv'], client: { module: 'csv.tsx', export: 'CsvPreviewer' } })],
-    artifacts: [artifact],
-  })
-
-  resetBody()
-  const host = document.createElement('div')
-  document.body.appendChild(host)
-  const root = mount(host, store, 'art-csv-1', 7)
-  await flush()
-  await rerender(root, store, 'art-csv-1', 7)
-
-  const panel = previewPanel()
-  assert.ok(panel !== null, '插件预览视图渲染')
-  const node = document.querySelector('[data-testid="csv-previewer"]')
-  assert.ok(node !== null, 'client 组件挂载')
-  const props = received.at(-1)!
-  assert.equal(props.artifactId, 'art-csv-1')
-  assert.equal(props.conversationId, 7, '真实会话上下文传入')
-  assert.equal(props.name, 'data.csv')
-  assert.equal(props.mimeType, 'text/csv')
-  assert.equal(props.size, artifact.bytes.byteLength, 'size 为真实 Blob.size')
-  assert.match(props.blobUrl, /^blob:/, '宿主管理 blobUrl')
-  assert.equal(props.text, 'a,b\n1,2', '文本解码传入')
-
-  // 默认切换：点击「默认预览」回退宿主默认渲染
-  const defaultBtn = [...document.querySelectorAll('button')].find((b) => (b.textContent ?? '').includes('Default preview'))
-  assert.ok(defaultBtn !== undefined, '提供切回默认入口')
-  await act(async () => { defaultBtn!.click() })
-  await flush()
-  assert.ok(previewPanel() === null, '切回默认后插件视图消失')
-
-  // 选择器存在且包含默认项与插件项
-  const trigger = document.querySelector('.helmx-select-trigger') as HTMLElement | null
-  assert.ok(trigger !== null, '预览方式选择器渲染')
-
-  act(() => { root.unmount() })
-  
-  assert.equal(shim.active().length, 0, '卸载后 ObjectURL 全部回收')
-  URL.revokeObjectURL = originalRevoke
-  resetPluginClientCache()
-})
-
-test('scope 贡献：无会话上下文不可泛命中；会话元数据命中后生效', { timeout: 60_000 }, async () => {
-  installObjectUrlShim()
-  const artifact = makeArtifact('art-7', new TextEncoder().encode('hello'), 'a.log', 'text/plain')
-  installArtifactFetch([artifact])
-  seedPluginClientModule('demo:log', 'log.tsx', { LogView: () => e('div', null, 'PLUGIN-LOG-VIEW') })
-  const contribution = previewerContribution('demo:log', 'log', '日志视图', { extensions: ['.log'], scope: { tags: ['worker'] }, client: { module: 'log.tsx', export: 'LogView' } })
-
-  // 无会话上下文（conversationId undefined 且 store 无该会话）
-  const storeNoCtx = buildStore({ contributions: [contribution], artifacts: [artifact], conversationId: 999 })
-  storeNoCtx.updateLive((prev) => ({ ...prev, conversations: [] }))
-  resetBody()
-  const host = document.createElement('div')
-  document.body.appendChild(host)
-  const root = mount(host, storeNoCtx, 'art-7', undefined)
-  await flush()
-  assert.ok(previewPanel() === null, '无会话上下文：scope 贡献不命中（不渲染插件视图）')
-
-  // 有会话上下文且 tag 命中 → 插件 JSON 轨命中
-  const storeHit = buildStore({
-    contributions: [contribution],
-    artifacts: [artifact],
-    conversations: [convSummary(7, { tags: ['worker'] })],
-  })
-  await rerender(root, storeHit, 'art-7', 7)
-  await flush()
-  const panel = previewPanel()
-  assert.ok(panel !== null, '会话命中 scope 后插件视图渲染')
-  assert.match(panel!.textContent ?? '', /PLUGIN-LOG-VIEW/, 'client 轨同样挂载')
-
-  act(() => { root.unmount() })
-  
-  resetPluginClientCache()
-})
-
-test('插件停用（贡献移除）：选择状态有效回退默认渲染', { timeout: 60_000 }, async () => {
-  installObjectUrlShim()
-  const artifact = makeArtifact('art-mv', new TextEncoder().encode('# hi'), 'readme.md', 'text/markdown')
-  installArtifactFetch([artifact])
-  seedPluginClientModule('demo:md', 'md.tsx', { MdView: () => e('div', null, 'PLUGIN-MD') })
-  const contribution = previewerContribution('demo:md', 'md', 'MD 视图', { extensions: ['.md'], client: { module: 'md.tsx', export: 'MdView' } })
-  const store = buildStore({ contributions: [contribution], artifacts: [artifact] })
-
-  resetBody()
-  const host = document.createElement('div')
-  document.body.appendChild(host)
-  const root = mount(host, store, 'art-mv', 7)
-  await flush()
-
-  // 选择插件视图
-  const selectTrigger = document.querySelector('.helmx-select-trigger') as HTMLElement
-  assert.ok(selectTrigger !== undefined)
-  // 通过 select trigger 的键盘交互较繁琐：直接模拟 Select 的 onChange 不可达（Radix 封装），
-  // 改为断言选中插件视图的默认行为（priority 唯一命中自动选择前仍显示默认），
-  // 这里验证默认渲染已存在，然后移除贡献验证回退。
-  assert.notEqual(previewPanel(), null, '命中插件贡献提供选择')
-
-  // 模拟插件停用：uiContributions 移除 → groupedUi 重建
-  store.updateLive((prev) => ({ ...prev, uiContributions: [] }))
-  await rerender(root, store, 'art-mv', 7)
-  await flush()
-  assert.ok(previewPanel() === null, '贡献移除后插件视图即时消失')
-  assert.ok(document.querySelector('.modal-body') !== null, '宿主默认渲染仍在')
-
-  act(() => { root.unmount() })
-  
-  resetPluginClientCache()
-})
-
 test('切产物竞态：旧 blob/text/name 不混入新产物 + ObjectURL 回收', { timeout: 60_000 }, async () => {
   const shim = installObjectUrlShim()
   const csv = makeArtifact('art-a', new TextEncoder().encode('a,b\n1,2'), 'a.csv', 'text/csv')
@@ -376,102 +238,24 @@ test('切产物竞态：旧 blob/text/name 不混入新产物 + ObjectURL 回收
   assert.equal(shim.active().length, 1, '仅当前产物 URL 存活，旧的已回收')
 
   act(() => { root.unmount() })
-  
   assert.equal(shim.active().length, 0, '卸载后 ObjectURL 全部回收')
-  resetPluginClientCache()
 })
 
-test('文本超 1MiB：默认渲染显式超限说明；插件 Props text 为 null', { timeout: 60_000 }, async () => {
+test('文本超 1MiB：默认渲染显式超限说明（不截断伪装）', { timeout: 60_000 }, async () => {
   installObjectUrlShim()
   const bigBytes = new Uint8Array(1024 * 1024 + 10)
   const big = makeArtifact('art-big', bigBytes, 'big.json', 'application/json')
   installArtifactFetch([big])
-  let pluginText: string | null | undefined
-  seedPluginClientModule('demo:json', 'json.tsx', {
-    JsonPreviewer: (props: Record<string, unknown>) => {
-      pluginText = (props as unknown as ArtifactPreviewerProps).text
-      return e('div', { 'data-testid': 'json-previewer' }, 'json-view')
-    },
-  })
-  const store = buildStore({
-    contributions: [previewerContribution('demo:json', 'json', 'JSON 视图', { mimeTypes: ['application/json'], client: { module: 'json.tsx', export: 'JsonPreviewer' } })],
-    artifacts: [big],
-  })
+  const store = buildStore({ artifacts: [big] })
 
   resetBody()
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = mount(host, store, 'art-big', 7)
   await flush()
-  await rerender(root, store, 'art-big', 7)
-  await flush()
-
-  assert.ok(document.querySelector('[data-testid="json-previewer"]') !== null, '插件命中渲染')
-  assert.equal(pluginText, null, '超限 text 为 null（不截断伪装）')
-  assert.match(document.body.textContent ?? '', /preview limit/, '显式超限说明呈现')
+  assert.match(document.body.textContent ?? '', /1\s*MiB|preview limit|过大/i, '显式超限说明呈现')
 
   act(() => { root.unmount() })
-  
-  resetPluginClientCache()
-})
-
-test('深链元数据异步到达：加载完成后按扩展名命中（名称未知不猜）', { timeout: 60_000 }, async () => {
-  installObjectUrlShim()
-  const svg = makeArtifact('art-svg', new TextEncoder().encode('<svg/>'), undefined, 'image/svg+xml')
-  installArtifactFetch([svg])
-  const contribution = previewerContribution('demo:svg', 'svg', 'SVG 视图', { extensions: ['.svg'], json: { component: 'Text', text: 'PLUGIN-SVG' } })
-
-  // 异步元数据：初始 conversationArtifacts 为空，load 延迟后注入
-  const store = buildStore({ contributions: [contribution], artifacts: [svg], asyncMeta: true })
-
-  resetBody()
-  const host = document.createElement('div')
-  document.body.appendChild(host)
-  const root = mount(host, store, 'art-svg', 7)
-  await flush()
-  // 元数据未到：名称未知，扩展名不猜 → 不命中
-  assert.ok(previewPanel() === null, '元数据未到不按扩展名命中')
-
-  // 元数据异步到达（name 仍未知：该产物无名称）→ 依旧不命中（不伪造名称）
-  store.setConversationArtifacts({
-    7: [artifactMeta(svg, 7)],
-  })
-  await rerender(root, store, 'art-svg', 7)
-  await flush()
-  assert.ok(previewPanel() === null, '名称未知不以 artifactId 猜后缀')
-
-  act(() => { root.unmount() })
-  
-  resetPluginClientCache()
-})
-
-test('深链元数据异步到达：命名元数据后到 → 扩展名命中插件', { timeout: 60_000 }, async () => {
-  installObjectUrlShim()
-  const svg = makeArtifact('art-svg2', new TextEncoder().encode('<svg/>'), 'chart.svg', 'image/svg+xml')
-  installArtifactFetch([svg])
-  seedPluginClientModule('demo:svg', 'svg.tsx', { SvgView: () => e('div', null, 'PLUGIN-SVG-2') })
-  const contribution = previewerContribution('demo:svg', 'svg', 'SVG 视图', { extensions: ['.svg'], client: { module: 'svg.tsx', export: 'SvgView' } })
-  const store = buildStore({ contributions: [contribution], artifacts: [svg], asyncMeta: true })
-
-  resetBody()
-  const host = document.createElement('div')
-  document.body.appendChild(host)
-  const root = mount(host, store, 'art-svg2', 7)
-  await flush()
-  assert.ok(previewPanel() === null, '元数据未到不命中')
-
-  store.setConversationArtifacts({
-    7: [artifactMeta(svg, 7)],
-  })
-  await rerender(root, store, 'art-svg2', 7)
-  await flush()
-  const panel = previewPanel()
-  assert.ok(panel !== null, '命名元数据到达后扩展名命中')
-  assert.match(panel!.textContent ?? '', /PLUGIN-SVG-2/)
-
-  act(() => { root.unmount() })
-  
-  resetPluginClientCache()
 })
 
 test('ArtifactPreviewModal switches UI copy between en and zh-CN', { timeout: 60_000 }, async () => {

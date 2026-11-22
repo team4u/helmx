@@ -2,15 +2,12 @@
  * 内置插件间共享编排契约（非 protocol 核心）。
  *
  * 本模块是编排业务形状的唯一权威定义，消费方为 builtin:workflow（引擎 /
- * 隔离层 / steer / 客户端投影）与外部执行插件（builtin:herdr 的执行元数据
- * 产出与 steer 动作实现）。内核 envelope（@helmx/protocol）只保留通用字段与
+ * 隔离层 / steer / 客户端投影）与 builtin:worktree。内核 envelope（@helmx/protocol）只保留通用字段与
  * 命名空间 meta（JSON-safe），不理解以下任何业务结构：
  * - workflow 运行 / 节点 / 进度 / 保存定义与文档形状（迁自 protocol workflow.ts）；
  * - 受管 worktree 清理契约（迁自 protocol worktree.ts）；
- * - 外部执行 steer 委托契约（ExternalSteerRequest / Result 与控制引用；
- *   迁自 protocol plugin.ts）；
- * - AgentSpawnRequest.meta / AgentExecutionInfo.meta 的 'builtin:workflow'
- *   命名空间业务形状（runId / 派生深度上限 / worktree 描述）及其边界校验。
+ * - AgentSpawnRequest.meta / AgentExecutionInfo.meta 的 'builtin:workflow' 与
+ *   'builtin:worktree' 命名空间业务形状（runId / 派生深度上限 / worktree 描述）及其边界校验。
  *
  * 纪律：本模块只做形状定义与边界校验（复用 @helmx/protocol 的 AJV 基础设施），
  * 不携带运行时服务；业务值在消费方边界用这里的 schema 显式验证，非法输入
@@ -97,7 +94,7 @@ export interface WorkflowNodeState {
   status: WorkflowNodeStatus
   /** 直接复用成功账本结果，未新建执行上下文。HTTP、CLI 与事件使用同一字段。 */
   cached?: boolean
-  /** agent 节点的执行后端标识（Profile ID 或 'herdr:<kind>'）。 */
+  /** agent 节点的执行 Profile ID。 */
   agentType?: string
   /** 展示名（脚本 label / 派生描述）。 */
   label?: string
@@ -105,14 +102,12 @@ export interface WorkflowNodeState {
   nodeId?: string
   /** agent 节点实际执行的会话 ID。 */
   conversationId?: number
-  /** 外部运行时执行标识（如 Herdr 窗格/标签 ID）。 */
+  /** 外部运行时执行标识（保留供第三方扩展使用）。 */
   executionId?: string
   /** 实际生效工作目录。 */
   effectiveCwd?: string
   /** isolation: 'worktree' 分配的隔离工作树（见 WorktreeExecutionDescriptor）。 */
   worktree?: WorktreeExecutionDescriptor
-  /** 外部执行控制动作引用（onResolved.controls 透传；steer 据此路由外部委托）。 */
-  controls?: AgentExecutionControls
   phaseIndex?: number
   phaseTitle?: string
   /** agent 节点的原始提示词（审计/重放展示用）。 */
@@ -237,84 +232,24 @@ export interface WorkflowRunBadgesDocState {
 }
 
 // ---------------------------------------------------------------------------
-// 外部执行 steer 委托契约（迁自 @helmx/protocol plugin.ts）
-// ---------------------------------------------------------------------------
-
-/**
- * 外部执行环境的控制动作引用（纯机制引用）：执行插件在 onResolved 的
- * meta（'builtin:workflow' 命名空间 controls）回传，供编排层（如
- * builtin:workflow 的 steer）经宿主 invokeAction 委托控制动作。
- * 只存 pluginId/actionId 动作坐标，绝不携带回调、运行时策略或机密；
- * 具体授权与守卫由目标插件动作独立执行（不因委托而豁免）。
- */
-export type AgentExecutionControls = {
-  /**
-   * 插话（steer）委托：目标动作实现 ExternalSteerRequest / ExternalSteerResult，
-   * 独立校验授权、归属和状态，并如实返回实际守卫级别。
-   */
-  steer?: { pluginId: string; actionId: string }
-}
-
-/**
- * 外部执行环境 steer 委托标准输入（builtin:workflow.steer 依据节点
- * controls.steer 组装后经宿主 invokeAction 调用执行插件动作）。
- * workflowRunId/parentConversationId 为必填外部控制契约：目标动作必须
- * 与受管执行记录强匹配，绝不凭调用方自报坐标放行。
- */
-export interface ExternalSteerRequest {
-  /** 受管执行标识（onResolved.executionId）。 */
-  executionId: string
-  /** 实际执行节点（'local' 或节点 ID）。 */
-  nodeId: string
-  /** 派生该执行的 workflow run ID（强匹配）。 */
-  workflowRunId: string
-  /** 派生该执行的父会话 ID（强匹配）。 */
-  parentConversationId: number
-  /** 插话指导内容（非空白；原样交执行插件组装投递文本）。 */
-  text: string
-}
-
-/**
- * 外部执行环境 steer 委托标准输出（执行插件动作必须返回的严格形状；
- * 委托方逐字段核销，任何坏产物显式拒绝）。
- *
- * steered=true 仅代表文本已投递，不代表指导已被消费或执行完成。
- * preflight 是发送前预检，cas 是提交点的服务端原子复核；两者不可混称。
- */
-export interface ExternalSteerResult {
-  steered: true
-  executionId: string
-  nodeId: string
-  /** 预检或提交点复核时观测的权威水位，具体语义由 guardLevel 区分。 */
-  stateChangeSeq: number
-  /** 外部受管执行一律 helmx 归属（human/bot 归属不适用外部窗格）。 */
-  ownership: 'helmx'
-  /** preflight：发送前预检；cas：服务端在提交点原子复核。 */
-  guardLevel: 'preflight' | 'cas'
-}
-
-// ---------------------------------------------------------------------------
 // spawn / execution meta 的 'builtin:workflow' / 'builtin:worktree' 命名空间业务形状与边界校验
 // ---------------------------------------------------------------------------
 
 /**
- * 编排命名空间键：AgentSpawnRequest.meta / AgentExecutionInfo.meta 中归
- * builtin:workflow 所有的业务槽（runId / 派生深度上限 / 控制引用）。
- * 外部运行时插件（如 builtin:herdr）按本模块契约读写该槽。
+ * 编排命名空间键：AgentSpawnRequest.meta 中归 builtin:workflow 所有的业务槽（runId / 派生深度上限）。
  */
 export const WORKFLOW_META_NAMESPACE = WORKFLOW_PLUGIN_ID
 
 /**
  * 受管工作树命名空间键：AgentExecutionInfo.meta 中归 builtin:worktree 所有的
- * worktree 业务槽（隔离描述）。与 workflow 命名空间正交：外部运行时回传
- * controls（workflow 槽）与 worktree（worktree 槽）可组合、互不覆盖。
+ * worktree 业务槽（隔离描述）。
  */
 export const WORKTREE_PLUGIN_ID = 'builtin:worktree' as const
 export const WORKTREE_META_NAMESPACE = WORKTREE_PLUGIN_ID
 
 /** spawn meta 业务形状（meta['builtin:workflow']；派生请求侧）。 */
 type WorkflowSpawnMeta = {
-  /** 发起本次派生的 run ID（引擎注入；herdr 双轨保活清理等按此归档）。 */
+  /** 发起本次派生的 run ID（引擎注入）。 */
   runId?: string
   /**
    * 显式授予本次派生子代理子树的派生深度上限（1..HARD_MAX_SUBAGENT_DEPTH）。
@@ -324,7 +259,7 @@ type WorkflowSpawnMeta = {
   maxSubagentDepth?: number
 }
 
-/** 受管 worktree 描述（execution meta 业务形状；隔离层与外部运行时共同使用）。 */
+/** 受管 worktree 描述（execution meta 业务形状）。 */
 export type WorktreeExecutionDescriptor = {
   /** worktree 绝对路径。 */
   path: string
@@ -338,12 +273,6 @@ export type WorktreeExecutionDescriptor = {
   /** 源目录本身是受管 Worktree 时记录其 worktreeId（多级派生父子关系）。 */
   parentWorktreeId?: string
   dirtySource?: boolean
-}
-
-/** execution meta 业务形状（meta['builtin:workflow']；onResolved 回传侧，仅控制引用）。 */
-type WorkflowExecutionMeta = {
-  /** 外部执行控制动作引用（必须与 executionId + nodeId 同时回传）。 */
-  controls?: AgentExecutionControls
 }
 
 /** execution meta 业务形状（meta['builtin:worktree']；onResolved 回传侧，仅隔离工作树描述）。 */
@@ -403,13 +332,6 @@ export function withWorkflowSpawnMeta(
   return { ...(meta ?? {}), [WORKFLOW_META_NAMESPACE]: next }
 }
 
-/** 非空 trim 后仍非空的字符串字段校验（controls 坐标用）。 */
-function requireTrimmedString(value: unknown): string | undefined {
-  if (typeof value !== 'string') return undefined
-  const trimmed = value.trim()
-  return trimmed === '' ? undefined : trimmed
-}
-
 function metaInvalidError(namespace: string, reason: string): HelmxError {
   return new HelmxError(
     'meta_invalid',
@@ -417,42 +339,6 @@ function metaInvalidError(namespace: string, reason: string): HelmxError {
     502,
     { namespace, reason },
   )
-}
-
-/** 校验并克隆 controls（严格形状：拒绝未知键和非空 trim 字符串之外的任何值）。 */
-function sanitizeControls(value: unknown): AgentExecutionControls {
-  const err = (reason: string): HelmxError => metaInvalidError(WORKFLOW_META_NAMESPACE, reason)
-  const source = value as Partial<AgentExecutionControls> | null
-  if (source === null || typeof source !== 'object' || Array.isArray(source)) {
-    throw err('controls 必须是对象')
-  }
-  for (const key of Object.keys(source)) {
-    if (key !== 'steer') {
-      throw err(`controls 未知字段 "${key}"`)
-    }
-  }
-  const out: AgentExecutionControls = {}
-  const steer = source.steer as Partial<NonNullable<AgentExecutionControls['steer']>> | undefined
-  if (steer !== undefined) {
-    if (steer === null || typeof steer !== 'object' || Array.isArray(steer)) {
-      throw err('controls.steer 必须是对象')
-    }
-    for (const key of Object.keys(steer)) {
-      if (key !== 'pluginId' && key !== 'actionId') {
-        throw err(`controls.steer 未知字段 "${key}"`)
-      }
-    }
-    const pluginId = requireTrimmedString(steer.pluginId)
-    const actionId = requireTrimmedString(steer.actionId)
-    if (pluginId === undefined || actionId === undefined) {
-      throw err('controls.steer.pluginId/actionId 必须是非空 trim 字符串')
-    }
-    out.steer = { pluginId, actionId }
-  }
-  if (out.steer === undefined) {
-    throw err('controls 至少包含 steer')
-  }
-  return out
 }
 
 /** 校验并克隆受管 worktree 描述（绝对路径 / 非空分支 / 可选登记字段）。 */
@@ -489,71 +375,6 @@ function sanitizeWorktreeDescriptor(value: unknown): WorktreeExecutionDescriptor
 }
 
 /**
- * 读取并校验 execution meta 的 workflow 命名空间业务值（消费方边界）。
- * 入参为已过内核 envelope 校验的 AgentExecutionInfo；命名空间缺失返回
- * 空对象；存在即严格校验 controls 形状，并保持通用安全不变量：控制引用只对
- * 外部执行有意义，必须与 executionId + nodeId 同时回传（孤立 controls 拒绝；
- * 原生执行的控制走内核 guarded 端口，不经 controls）。
- */
-export function extractWorkflowExecutionMeta(info: AgentExecutionInfo): WorkflowExecutionMeta {
-  if (info.meta === undefined) return {}
-  // envelope 复验（与 parseWorkflowSpawnMeta 同理）：不信任中间链改写后的
-  // 形状，坏 envelope 在业务消费前显式拒绝（引擎/隔离层入口虽已 sanitize，
-  // 这里守住一切漏判路径）。
-  const sanitized = sanitizeAgentNamespacedMeta(info.meta, {
-    agentId: WORKFLOW_META_NAMESPACE,
-    field: 'onResolved meta',
-  })
-  const slot = sanitized[WORKFLOW_META_NAMESPACE]
-  if (slot === undefined) return {}
-  if (slot === null || typeof slot !== 'object' || Array.isArray(slot)) {
-    throw metaInvalidError(WORKFLOW_META_NAMESPACE, '命名空间的值必须是普通对象')
-  }
-  for (const key of Object.keys(slot)) {
-    if (key !== 'controls') {
-      throw metaInvalidError(WORKFLOW_META_NAMESPACE, `未知字段 "${key}"`)
-    }
-  }
-  const out: WorkflowExecutionMeta = {}
-  const raw = slot as Record<string, unknown>
-  if (raw['controls'] !== undefined) {
-    out.controls = sanitizeControls(raw['controls'])
-    if (info.executionId === undefined || info.nodeId === undefined) {
-      throw metaInvalidError(
-        WORKFLOW_META_NAMESPACE,
-        'controls 必须与 executionId + nodeId 同时回传（孤立控制引用拒绝；原生执行不需要 controls）',
-      )
-    }
-  }
-  return out
-}
-
-/**
- * 构造/合并 execution meta 的 workflow 命名空间（生产方辅助；外部运行时如
- * builtin:herdr 回传 controls 时使用）。传入 existing 时合并进既有 meta：
- * 其他命名空间（其他插件注入的业务槽，如 builtin:worktree 的 worktree 槽）
- * 经 envelope sanitizer 防御性克隆/校验后原样保留；workflow 命名空间按键
- * 覆盖合并（未提及的既有键保留），给其他插件链留出的命名空间不因本轮写入丢失。
- */
-export function workflowExecutionMeta(
-  value: WorkflowExecutionMeta,
-  existing?: AgentNamespacedMeta,
-): AgentNamespacedMeta {
-  const merged: Record<string, JsonSafeObject> =
-    existing === undefined
-      ? {}
-      : { ...sanitizeAgentNamespacedMeta(existing, {
-          agentId: WORKFLOW_META_NAMESPACE,
-          field: 'execution meta 合并基底',
-        }) }
-  const previous = merged[WORKFLOW_META_NAMESPACE] ?? {}
-  const slot: { [key: string]: JsonSafeValue | undefined } = { ...previous }
-  if (value.controls !== undefined) slot['controls'] = value.controls
-  merged[WORKFLOW_META_NAMESPACE] = slot as JsonSafeObject
-  return merged
-}
-
-/**
  * 读取并校验 execution meta 的 worktree 命名空间业务值（消费方边界）。
  * 入参为已过内核 envelope 校验的 AgentExecutionInfo；命名空间缺失返回
  * 空对象；存在即严格校验 worktree 描述形状，坏值显式拒绝、绝不静默丢弃。
@@ -584,9 +405,8 @@ export function extractWorktreeExecutionMeta(info: AgentExecutionInfo): Worktree
 
 /**
  * 构造/合并 execution meta 的 worktree 命名空间（生产方辅助；隔离层回填
- * 受管登记 id 与外部运行时如 builtin:herdr 回传 worktree 时使用）。传入
- * existing 时合并进既有 meta：其他命名空间（如 builtin:workflow 的 controls
- * 槽）经 envelope sanitizer 防御性克隆/校验后原样保留；worktree 命名空间按
+ * 受管登记 id 时使用）。传入 existing 时合并进既有 meta：其他命名空间
+ * 经 envelope sanitizer 防御性克隆/校验后原样保留；worktree 命名空间按
  * 键覆盖合并（未提及的既有键保留），给其他插件链留出的命名空间不因本轮写
  * 入丢失。
  */
@@ -627,7 +447,7 @@ export interface ManagedWorktreeRecord {
   /** 唯一标识（`${nodeId}:${path}`）。 */
   id: string
   nodeId: string
-  /** 主工作树路径（权威 `git worktree list` 首条登记；external 首次清理时解析并持久化）。 */
+  /** 主工作树路径（权威 `git worktree list` 首条登记）。 */
   repoRoot: string
   path: string
   branch: string
@@ -639,8 +459,7 @@ export interface ManagedWorktreeRecord {
   dirtySource: boolean
   parentConversationId: number
   conversationId?: number
-  executionId?: string
-  origin: 'native' | 'external'
+  origin: 'native'
   status: 'active' | 'removed'
   createdAt: number
   removedAt?: number

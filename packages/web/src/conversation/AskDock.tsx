@@ -112,25 +112,18 @@ function AskFieldInput({
       </span>
     )
   }
-  const secret = field.secret === true
   return (
     <span className="ask-dock-input-wrap">
       <input
         id={inputId}
         className="input"
-        type={secret ? 'password' : 'text'}
+        type="text"
         value={value}
         disabled={disabled}
-        placeholder={secret ? t('composer.ask.secretPlaceholder') : field.label}
+        placeholder={field.label}
         onChange={(e) => onChange(e.target.value)}
         autoComplete="off"
       />
-      {secret ? (
-        <span className="ask-dock-secret-hint">
-          <HelmxIcon name="lock" size={11} />
-          {t('composer.ask.secretHint')}
-        </span>
-      ) : null}
     </span>
   )
 }

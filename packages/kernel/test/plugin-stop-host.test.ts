@@ -22,7 +22,6 @@ import {
   HelmxError,
   type ConversationSummary,
   type EnvExecResponse,
-  type NodeHostEnv,
   type NodeTunnelTarget,
   type PluginDefinition,
   type PluginDocHandle,
@@ -100,7 +99,7 @@ class StopWindowBackend implements PluginHostBackend {
     this.record('abortConversation')
     if (!this.conversations.has(id)) throw new HelmxError('not_found', `conversation missing: ${id}`, 404)
   }
-  getConversationOwnership(): 'helmx' | 'bot' | 'human' {
+  getConversationOwnership(): 'helmx' | 'human' {
     return 'helmx'
   }
   isClosing(): boolean {
@@ -245,25 +244,11 @@ class StopWindowBackend implements PluginHostBackend {
     getNodeHubUrl: () => undefined,
     nodePlatform: () => 'linux',
   }
-  async getNodeHostEnv(nodeId: string): Promise<NodeHostEnv> {
-    this.record('getNodeHostEnv')
-    return {
-      platform: 'linux',
-      homeDir: `/home/${nodeId}`,
-      tempDir: '/tmp',
-      dirs: {},
-      env: {},
-    }
-  }
   async openTunnel(_nodeId: string, _target: NodeTunnelTarget): Promise<PassThrough> {
     this.record('openTunnel')
     const stream = new PassThrough()
     this.openedTunnels.push(stream)
     return stream
-  }
-  nodeFetch = (): typeof fetch => {
-    this.record('nodeFetch')
-    return (async () => new Response('ok')) as typeof fetch
   }
 }
 
@@ -339,8 +324,7 @@ test('disable stop window allows cleanup subset (reads / cancels / IPC cleanup /
       { label: 'cancelAsk', run: (host) => host.cancelAsk('ask-1', 'cancelled').then(() => ok.push('cancelAsk')) },
       { label: 'redact', run: (host) => { host.redact('secret'); ok.push('redact') } },
       { label: 'nodeIpc.isOnline', run: (host) => { assert.equal(host.nodeIpc.isOnline('remote-1'), true); ok.push('nodeIpc.isOnline') } },
-      { label: 'getNodeHostEnv', run: (host) => host.getNodeHostEnv('remote-1').then((env) => { assert.equal(env.platform, 'linux'); ok.push('getNodeHostEnv') }) },
-      { label: 'openTunnel', run: (host) => host.openTunnel('remote-1', { socketPath: '/run/herdr.sock' }).then((stream) => { stream.destroy(); ok.push('openTunnel') }) },
+      { label: 'openTunnel', run: (host) => host.openTunnel('remote-1', { host: '127.0.0.1', port: 9000 }).then((stream) => { stream.destroy(); ok.push('openTunnel') }) },
       { label: 'doc.final.write', run: async (host) => void (await Promise.resolve(host)) },
     ],
     captured,
@@ -355,7 +339,6 @@ test('disable stop window allows cleanup subset (reads / cancels / IPC cleanup /
     'cancelAsk',
     'redact',
     'nodeIpc.isOnline',
-    'getNodeHostEnv',
     'openTunnel',
     'emitEvent:probe.stopped',
   ]) {
@@ -371,7 +354,6 @@ test('disable stop window allows cleanup subset (reads / cancels / IPC cleanup /
     'cancelAsk',
     'redact',
     'nodeIpc.isOnline',
-    'getNodeHostEnv',
     'openTunnel',
   ])
   await host.dispose()
@@ -400,10 +382,8 @@ test('dispose stop window permits cleanup subset (including final doc writes and
           seen.push('abortConversation')
           assert.equal(ctx.host.nodeIpc.isOnline('remote-1'), true)
           seen.push('nodeIpc.isOnline')
-          await ctx.host.getNodeHostEnv('remote-1')
-          seen.push('getNodeHostEnv')
           // Intentionally leave cleanup tunnel open to verify teardown hostReleases destroys it on stop exit.
-          await ctx.host.openTunnel('remote-1', { socketPath: '/run/herdr.sock' })
+          await ctx.host.openTunnel('remote-1', { host: '127.0.0.1', port: 9000 })
           seen.push('openTunnel')
           finalDoc.set({ phase: 'stopped' })
           seen.push('doc.set')
@@ -422,7 +402,6 @@ test('dispose stop window permits cleanup subset (including final doc writes and
     'cancelAsk',
     'abortConversation',
     'nodeIpc.isOnline',
-    'getNodeHostEnv',
     'openTunnel',
     'doc.set',
     'emitEvent',
@@ -431,7 +410,7 @@ test('dispose stop window permits cleanup subset (including final doc writes and
   assert.equal(backend.openedTunnels[0]?.destroyed, true, 'teardown must destroy any stop-window tunnel left open')
 })
 
-test('stop window blocks new work (spawn/submitInput/createConversation/dispatchTrigger/createAsk/execEnv/completeText/withFileLock/reset+compact guarded) with zero backend calls', { timeout: 60_000 }, async () => {
+test('stop window blocks new work (spawn/submitInput/createConversation/dispatchTrigger/createAsk/execEnv/completeText/withFileLock) with zero backend calls', { timeout: 60_000 }, async () => {
   const expected: string[] = []
   const def: PluginDefinition = {
     id: 'test:stop-reject',
@@ -449,12 +428,9 @@ test('stop window blocks new work (spawn/submitInput/createConversation/dispatch
             { label: 'dispatchTrigger', run: () => ctx.host.dispatchTrigger({ kind: 'webhook' } as never) },
             { label: 'createAsk', run: () => ctx.host.createAsk({ conversationId: 1, ownerPluginId: 'x', title: 't' } as never) },
             { label: 'execEnv', run: () => ctx.host.execEnv({ command: ['ls'] }) },
-            { label: 'resetConversationGuarded', run: () => ctx.host.resetConversationGuarded(1) },
-            { label: 'compactConversationGuarded', run: () => ctx.host.compactConversationGuarded(1) },
             { label: 'getConversationSubmission', run: () => ctx.host.getConversationSubmission(1, 'req-late') },
             { label: 'completeText', run: () => ctx.host.completeText({ conversationId: 1, systemPrompt: '', text: '' } as never) },
             { label: 'withFileLock', run: () => ctx.host.withFileLock('/tmp/late', async () => 1) },
-            { label: 'nodeFetch', run: () => ctx.host.nodeFetch('remote-1') },
           ]
           for (const attempt of attempts) {
             try {
@@ -482,12 +458,9 @@ test('stop window blocks new work (spawn/submitInput/createConversation/dispatch
     'dispatchTrigger',
     'createAsk',
     'execEnv',
-    'resetConversationGuarded',
-    'compactConversationGuarded',
     'getConversationSubmission',
     'completeText',
     'withFileLock',
-    'nodeFetch',
   ])
   // New work entries all reject at the guard layer: backend sees zero calls here.
   assert.deepEqual(backend.cleanCalls.filter((c) => !c.startsWith('emitEvent:')), [], 'new work calls must never reach backend')
@@ -507,8 +480,7 @@ test('stop window closes after stop returns: any old ctx call (including cleanup
     () => captured.handles!.host.cancelAsk('a', 'cancelled'),
     () => captured.handles!.host.emitEvent('x', { type: 'x' }),
     () => captured.handles!.host.nodeIpc.isOnline('remote-1'),
-    () => captured.handles!.host.getNodeHostEnv('remote-1'),
-    () => captured.handles!.host.openTunnel('remote-1', { socketPath: '/run/herdr.sock' }),
+    () => captured.handles!.host.openTunnel('remote-1', { host: '127.0.0.1', port: 9000 }),
     () => captured.handles!.host.redact('x'),
     () => captured.handles!.doc.set({ phase: 'late' }),
   ]
@@ -548,7 +520,7 @@ test('cleanup I/O failures thrown inside stop preserve original error in stop di
         id: 'svc',
         start() {},
         async stop() {
-          await ctx.host.getNodeHostEnv('remote-9')
+          await ctx.host.openTunnel('remote-9', { host: '127.0.0.1', port: 9000 })
         },
       })
     },

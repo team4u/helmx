@@ -649,7 +649,7 @@ describe('detachForegroundSyncRun 纯逻辑授权（动作入口）', () => {
 
   function ports(
     run: WorkflowRunSummary | undefined,
-    options: { ownership?: (id: number) => 'helmx' | 'bot' | 'human' } = {},
+    options: { ownership?: (id: number) => 'helmx' | 'human' } = {},
   ): DetachHostPorts & DetachEnginePorts {
     const ownership = options.ownership ?? ((id: number) => (id === 1 ? 'human' : id === 2 ? 'helmx' : 'human'))
     return {

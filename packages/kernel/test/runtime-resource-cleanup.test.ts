@@ -13,26 +13,11 @@
 import { strict as assert } from 'node:assert'
 import { after, before, describe, it } from 'node:test'
 import { join } from 'node:path'
-import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import { KernelRuntime } from '../src/runtime/index.js'
 import { createEnvFabric, type EnvFabric } from '../src/env/index.js'
 import { cleanupDir, makeFauxModels, makeTempDir } from './helpers.js'
 
 type FauxHandle = ReturnType<typeof makeFauxModels>['faux']
-
-interface RuntimeInternals {
-  handledToolCalls: Map<string, { conversationId: number | undefined; result: unknown }>
-}
-
-function internalsOf(kernel: KernelRuntime): RuntimeInternals {
-  return kernel as unknown as RuntimeInternals
-}
-
-function fabricBasesOf(fabric: EnvFabric): Map<string, unknown> {
-  // EnvFabric's bases map is closure-private inside createEnvFabric; verified via RemoteExecutionEnv
-  // instance identity and envFor behavior (see evictConversation tests) rather than direct reads.
-  throw new Error('must not read bases directly (closure-private)')
-}
 
 const timeout = { timeout: 60_000 } as const
 
@@ -96,78 +81,6 @@ describe('diagnostics.collect external aggregation (replaces watchdogTick transf
       const collected: { probes: unknown[] } = { probes: [] }
       await kernel.emitHostEvent('diagnostics.collect', collected, { broadcast: false })
       assert.equal(collected.probes.length, 0)
-    } finally {
-      await kernel.close()
-    }
-  })
-})
-
-describe('handledToolCalls orphan cleanup', { timeout: 60_000 }, () => {
-  it('fallback clears unconsumed handled tool_call entries when turn settles (turn_settled)', timeout, async () => {
-    const kernel = await openRuntime(join(root, 'handled-1'))
-    try {
-      const internals = internalsOf(kernel)
-      // Registers a tool_call hook returning handled for `probe` while the model replies directly
-      // with text (never executing the tool) -- leaving an unconsumed handled entry cleared by turn_settled.
-      await kernel.plugins.register({
-        id: 'test:handled-residue',
-        definePlugin(ctx) {
-          ctx.hook.onToolCall(async (call: { toolName: string; callId: string }) => {
-            if (call.toolName !== 'probe') return undefined
-            return {
-              action: 'handled',
-              result: { output: [{ type: 'text', text: 'intercepted' }], isError: false },
-            }
-          })
-        },
-      })
-      const conv = await kernel.createConversation({})
-      kernel.__faux.setResponses([fauxAssistantMessage('direct reply without invoking tool')])
-      await kernel.submitInput(conv.id, 'casual prompt')
-      await kernel.waitForIdle(conv.id)
-      // Once turn settles, no stale handled entry for this conversation may remain even if execute never ran.
-      for (const key of internals.handledToolCalls.keys()) {
-        const entry = internals.handledToolCalls.get(key)
-        assert.notEqual(entry?.conversationId, conv.id, 'conversation residue must be cleared after turn finishes')
-      }
-      await kernel.deleteConversation(conv.id)
-    } finally {
-      await kernel.close()
-    }
-  })
-
-  it('abortConversation and deleteConversation fallbacks clean up conversation residue', timeout, async () => {
-    const kernel = await openRuntime(join(root, 'handled-2'))
-    try {
-      const internals = internalsOf(kernel)
-      const conv = await kernel.createConversation({})
-      // Directly seed residue (simulating a handled registration before a model turn cancels).
-      internals.handledToolCalls.set('call-residue-1', {
-        conversationId: conv.id,
-        result: { output: [{ type: 'text', text: 'x' }], isError: false },
-      })
-      internals.handledToolCalls.set('call-other-conv', {
-        conversationId: undefined,
-        result: { output: [{ type: 'text', text: 'y' }], isError: false },
-      })
-      await kernel.abortConversation(conv.id)
-      assert.equal(
-        internals.handledToolCalls.has('call-residue-1'),
-        false,
-        'abort must clean up handled residue for that conversation',
-      )
-      assert.equal(internals.handledToolCalls.has('call-other-conv'), true, 'other owners remain unaffected')
-
-      internals.handledToolCalls.set('call-residue-2', {
-        conversationId: conv.id,
-        result: { output: [{ type: 'text', text: 'x' }], isError: false },
-      })
-      await kernel.deleteConversation(conv.id)
-      assert.equal(
-        internals.handledToolCalls.has('call-residue-2'),
-        false,
-        'deleting conversation must clean up handled residue for that conversation',
-      )
     } finally {
       await kernel.close()
     }
@@ -248,7 +161,6 @@ describe('EnvFabric.evictConversation', { timeout: 60_000 }, () => {
   })
 
   it('deleteConversation triggers evictConversation cleanly via runtime wiring', timeout, async () => {
-    void fabricBasesOf
     const kernel = await openRuntime(join(root, 'evict-1'))
     try {
       const conv = await kernel.createConversation({})
@@ -294,37 +206,6 @@ describe('EnvFabric.evictConversation', { timeout: 60_000 }, () => {
       const count = fabric.debugBaseCount()
       await kernel.updateConversation(other.id, { title: 'only title' })
       assert.equal(fabric.debugBaseCount(), count, 'non-target updates do not evict cached env targets')
-    } finally {
-      await kernel.close()
-    }
-  })
-})
-
-describe('faux tool pipeline regression (handled consumption path still works)', { timeout: 60_000 }, () => {
-  it('tool_call handled returns intercepted result at execute layer (happy path intact)', timeout, async () => {
-    const kernel = await openRuntime(join(root, 'handled-ok'))
-    try {
-      await kernel.plugins.register({
-        id: 'test:handled-normal',
-        definePlugin(ctx) {
-          ctx.hook.onToolCall(async (call: { toolName: string }) => {
-            if (call.toolName !== 'bash') return undefined
-            return {
-              action: 'handled',
-              result: { output: [{ type: 'text', text: 'intercepted result: echo intercepted' }], isError: false },
-            }
-          })
-        },
-      })
-      kernel.__faux.setResponses([
-        fauxAssistantMessage([fauxToolCall('bash', { command: 'echo hi' })], { stopReason: 'toolUse' }),
-        fauxAssistantMessage('complete'),
-      ])
-      await kernel.submitInput(1, 'run echo')
-      await kernel.waitForIdle(1)
-      assert.equal(await kernel.getLastAssistantText(1), 'complete')
-      // Normal consumption: handled entry is removed immediately during execute.
-      assert.equal(internalsOf(kernel).handledToolCalls.size, 0)
     } finally {
       await kernel.close()
     }

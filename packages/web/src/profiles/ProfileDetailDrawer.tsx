@@ -2,19 +2,11 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import {
   PROFILE_DETAIL_SECTION_SLOT,
   PROFILE_STARTERS_MAX_ITEMS,
-  resolveLocalizedText,
-  type ProfileRuntime,
 } from '@helmx/protocol/browser'
-import type { EnvPair, Profile, StarterDraft } from './profile-center-model.js'
+import type { Profile, StarterDraft } from './profile-center-model.js'
 import {
-  argsTextToArgs,
-  argsToText,
   buildProfileSavePayload,
-  dedupeProfileRuntimeSpecs,
-  envToPairs,
   isSystemProfile,
-  normalizeRuntime,
-  pairsToEnv,
   profileIdValid,
   profilesApi,
   resolveProfileModel,
@@ -34,7 +26,7 @@ import {
   type SelectOption,
   Switch,
 } from '@helmx/plugin-client'
-import { useNodes, useOptionalGroupedUi, useSkills } from '../lib/store-context.js'
+import { useNodes, useSkills } from '../lib/store-context.js'
 import { summarizeSingleLine } from '../lib/format.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { nodeOptionLabel } from '../modals/nodes-modal-model.js'
@@ -65,10 +57,7 @@ interface FormState {
   useAllSkills: boolean
   selectedSkillIds: string[]
   starters: StarterDraft[]
-  runtime: ProfileRuntime | undefined
-  runtimeArgsText: string
-  runtimeEnvPairs: EnvPair[]
-  /** 保存时非表单字段（tags/managedByPlugin/humanSelectable）从最近详情快照透传。 */
+  /** 保存时非表单字段（tags/managedByPlugin）从最近详情快照透传。 */
   source: Profile | null
 }
 
@@ -87,9 +76,6 @@ function createInitialForm(profile: Profile | null, isNew: boolean): FormState {
       useAllSkills: true,
       selectedSkillIds: [],
       starters: [],
-      runtime: undefined,
-      runtimeArgsText: '',
-      runtimeEnvPairs: [],
       source: null,
     }
   }
@@ -107,9 +93,6 @@ function createInitialForm(profile: Profile | null, isNew: boolean): FormState {
     useAllSkills: profile.skills === undefined,
     selectedSkillIds: Array.isArray(profile.skills) ? [...profile.skills] : [],
     starters: startersToDrafts(profile.starters),
-    runtime: profile.runtime,
-    runtimeArgsText: argsToText(profile.runtime?.args),
-    runtimeEnvPairs: envToPairs(profile.runtime?.env),
     source: profile,
   }
 }
@@ -117,7 +100,7 @@ function createInitialForm(profile: Profile | null, isNew: boolean): FormState {
 /**
  * 智能体角色详情与配置抽屉（520px-560px 宽度）：
  * - 基于 Radix Dialog 原语实现平滑右侧滑出；
- * - 覆盖角色 ID、名称、描述、默认模型、默认节点、工作目录、外部运行时、系统提示词、插件扩展子插槽与技能白名单；
+ * - 覆盖角色 ID、名称、描述、默认模型、默认节点、工作目录、系统提示词、插件扩展子插槽与技能白名单；
  * - 提供脏表单防护、新建校验与删除二次确认；
  * - 严格遵循零 Emoji 铁律与 Fast Refresh 规范。
  */
@@ -132,9 +115,8 @@ export function ProfileDetailDrawer({
 }: ProfileDetailDrawerProps): React.JSX.Element {
   const nodes = useNodes()
   const skills = useSkills()
-  const groupedUi = useOptionalGroupedUi()
   const pickerAdapter = useModelPickerControlAdapter()
-  const { locale, t } = useWebLocale()
+  const { t } = useWebLocale()
   const [form, setForm] = useState<FormState>(() => createInitialForm(profile, isNew))
   const [baseline, setBaseline] = useState<FormState>(() => createInitialForm(profile, isNew))
   const [isSaving, setIsSaving] = useState(false)
@@ -184,9 +166,6 @@ export function ProfileDetailDrawer({
               useAllSkills: detail.skills === undefined,
               selectedSkillIds: Array.isArray(detail.skills) ? [...detail.skills] : prev.selectedSkillIds,
               starters: startersToDrafts(detail.starters),
-              runtime: detail.runtime,
-              runtimeArgsText: argsToText(detail.runtime?.args),
-              runtimeEnvPairs: envToPairs(detail.runtime?.env),
               source: detail,
             }
             setBaseline(next)
@@ -201,20 +180,6 @@ export function ProfileDetailDrawer({
 
   const isSystem = Boolean(profile && isSystemProfile(profile))
   const canDelete = !isNew && !isSystem && Boolean(profile)
-
-  const runtimeSpecs = useMemo(
-    () => dedupeProfileRuntimeSpecs(groupedUi?.profileRuntimes ?? []),
-    [groupedUi?.profileRuntimes],
-  )
-  const runtimeSpecsByKind = useMemo(
-    () => new Map(runtimeSpecs.map((item) => [item.spec.kind, item] as const)),
-    [runtimeSpecs],
-  )
-  const defaultRuntimeSpec = runtimeSpecs[0]
-  const activeRuntimeSpec =
-    form.runtime !== undefined ? runtimeSpecsByKind.get(form.runtime.kind) : undefined
-  const canEditRuntime =
-    runtimeSpecs.length > 0 && (form.runtime === undefined || activeRuntimeSpec !== undefined)
 
   // 计算脏表单状态
   const isDirty = useMemo(() => {
@@ -232,8 +197,7 @@ export function ProfileDetailDrawer({
         form.system.trim() !== '' ||
         !form.useAllSkills ||
         form.selectedSkillIds.length > 0 ||
-        form.starters.length > 0 ||
-        form.runtime !== undefined
+        form.starters.length > 0
       )
     }
 
@@ -247,9 +211,6 @@ export function ProfileDetailDrawer({
     if (form.systemEdited || form.system !== baseline.system) return true
     if (form.useAllSkills !== baseline.useAllSkills) return true
     if (startersDirty(form.starters, baseline.starters)) return true
-    if (JSON.stringify(normalizeRuntime(form.runtime)) !== JSON.stringify(normalizeRuntime(baseline.runtime))) {
-      return true
-    }
 
     const sortedCurrent = [...form.selectedSkillIds].sort().join(',')
     const sortedBaseline = [...baseline.selectedSkillIds].sort().join(',')
@@ -283,39 +244,6 @@ export function ProfileDetailDrawer({
     return list
   }, [nodes, form.nodeId, t])
 
-  const runtimeNodeOptions = useMemo<SelectOption<string>[]>(() => {
-    const list: SelectOption<string>[] = [
-      { value: '', label: t('profiles.drawer.unboundNode'), icon: 'monitor' },
-      ...nodes.map((n) => ({
-        value: n.id,
-        label: nodeOptionLabel(n, t),
-        icon: n.id === 'local' || n.kind === 'local' ? 'monitor' : 'network',
-        meta: n.kind === 'local' ? undefined : n.online ? t('common.online') : t('common.offline'),
-      })),
-    ]
-    const current = form.runtime?.nodeId?.trim() ?? ''
-    if (current !== '' && !list.some((o) => o.value === current)) {
-      list.push({ value: current, label: t('profiles.drawer.unknownNode', { id: current }), icon: 'alert-circle' })
-    }
-    return list
-  }, [nodes, form.runtime?.nodeId, t])
-
-  const patchRuntimeField = (patch: Partial<ProfileRuntime>) => {
-    setForm((prev) => {
-      if (!prev.runtime) return prev
-      return { ...prev, runtime: { ...prev.runtime, ...patch } }
-    })
-  }
-
-  const switchRuntimeKind = (kind: string) => {
-    setForm((prev) => ({
-      ...prev,
-      runtime: { kind, agent: '' },
-      runtimeArgsText: '',
-      runtimeEnvPairs: [],
-    }))
-  }
-
   // 可用技能列表
   const availableSkills = skills ?? []
 
@@ -346,11 +274,6 @@ export function ProfileDetailDrawer({
       return
     }
 
-    if (form.runtime !== undefined && form.runtime.agent.trim() === '') {
-      setError(t('profiles.drawer.error.runtimeAgentRequired'))
-      return
-    }
-
     const starterError = validateStarterDrafts(form.starters, t)
     if (starterError !== null) {
       setError(t('profiles.drawer.error.starterPrefix', { index: starterError.index + 1, error: starterError.error }))
@@ -370,7 +293,6 @@ export function ProfileDetailDrawer({
         system: form.system,
         skills: form.useAllSkills ? undefined : form.selectedSkillIds,
         starters: form.starters,
-        runtime: form.runtime,
         source: form.source,
         isNew,
         includeSystem: form.systemEdited,
@@ -647,271 +569,6 @@ export function ProfileDetailDrawer({
                 </div>
               </div>
             </section>
-
-            {/* Unmanaged external runtime (plugin disabled or removed): preserve on save unless cleared explicitly */}
-            {!canEditRuntime && form.runtime !== undefined && (
-              <section className="section-flat flex-row-between" data-runtime-unmanaged={form.runtime.kind}>
-                <span className="text-muted">
-                  {t('profiles.drawer.runtime.unmanagedNotice', { kind: form.runtime.kind })}
-                </span>
-                <button
-                  type="button"
-                  className="btn btn-sm"
-                  title={t('profiles.drawer.runtime.clearTitle')}
-                  disabled={isSaving || isDeleting}
-                  onClick={() =>
-                    setForm((prev) => ({
-                      ...prev,
-                      runtime: undefined,
-                      runtimeArgsText: '',
-                      runtimeEnvPairs: [],
-                    }))
-                  }
-                >
-                  <HelmxIcon name="x" size={12} />
-                  <span>{t('profiles.drawer.runtime.clear')}</span>
-                </button>
-              </section>
-            )}
-
-            {/* Dynamic external runtime section driven by ctx.ui.profileRuntime */}
-            {canEditRuntime && (
-              <section className="section-flat" data-runtime-section="true">
-                {(() => {
-                  const headerSpec = activeRuntimeSpec ?? defaultRuntimeSpec
-                  const headerLabel = headerSpec ? resolveLocalizedText(headerSpec.spec.label, locale) : ''
-                  const headerDesc =
-                    headerSpec?.spec.description !== undefined
-                      ? resolveLocalizedText(headerSpec.spec.description, locale)
-                      : ''
-                  return (
-                    <div className="flex-col-xs">
-                      <Switch
-                        id="profile-form-runtime-switch"
-                        checked={form.runtime !== undefined}
-                        onChange={(enabled) => {
-                          if (enabled && form.runtime === undefined && defaultRuntimeSpec) {
-                            setForm((prev) => ({
-                              ...prev,
-                              runtime: { kind: defaultRuntimeSpec.spec.kind, agent: '' },
-                              runtimeArgsText: '',
-                              runtimeEnvPairs: [],
-                            }))
-                          } else if (!enabled) {
-                            setForm((prev) => ({
-                              ...prev,
-                              runtime: undefined,
-                              runtimeArgsText: '',
-                              runtimeEnvPairs: [],
-                            }))
-                          }
-                        }}
-                        label={
-                          <span className="section-flat-title flex-row">
-                            <HelmxIcon name={headerSpec?.spec.icon || 'terminal'} size={13} />
-                            <span>{headerLabel}</span>
-                          </span>
-                        }
-                      />
-                      {headerDesc !== '' && <div className="profile-editor-hint">{headerDesc}</div>}
-                    </div>
-                  )
-                })()}
-
-                {form.runtime !== undefined && (
-                  <div className="flex-col">
-                    <div className="form-grid">
-                      {runtimeSpecs.length > 1 && (
-                        <>
-                          <label htmlFor="profile-form-runtime-kind" className="form-grid-label">
-                            {t('profiles.drawer.runtime.kind')}
-                          </label>
-                          <div className="form-grid-value">
-                            <Select
-                              id="profile-form-runtime-kind"
-                              value={form.runtime.kind}
-                              options={runtimeSpecs.map((item) => ({
-                                value: item.spec.kind,
-                                label: resolveLocalizedText(item.spec.label, locale),
-                                icon: item.spec.icon || 'terminal',
-                              }))}
-                              className="w-full"
-                              inline={inline}
-                              onChange={(e) => switchRuntimeKind(e.target.value)}
-                            />
-                          </div>
-                        </>
-                      )}
-
-                      <label htmlFor="profile-form-runtime-agent" className="form-grid-label">
-                        {t('profiles.drawer.runtime.agent')}
-                      </label>
-                      <div className="form-grid-value">
-                        <input
-                          id="profile-form-runtime-agent"
-                          type="text"
-                          className="input mono"
-                          list="helmx-profile-runtime-agents"
-                          value={form.runtime.agent}
-                          placeholder={
-                            (activeRuntimeSpec?.spec.agentSuggestions ?? []).slice(0, 4).join(' / ') ||
-                            t('profiles.drawer.runtime.agentPlaceholder')
-                          }
-                          onChange={(e) => patchRuntimeField({ agent: e.target.value })}
-                        />
-                        <datalist id="helmx-profile-runtime-agents">
-                          {(activeRuntimeSpec?.spec.agentSuggestions ?? []).map((suggestion) => (
-                            <option key={suggestion} value={suggestion} />
-                          ))}
-                        </datalist>
-                      </div>
-
-                      <label htmlFor="profile-form-runtime-node" className="form-grid-label">
-                        {t('profiles.drawer.runtime.node')}
-                      </label>
-                      <div className="form-grid-value">
-                        <Select
-                          id="profile-form-runtime-node"
-                          value={form.runtime.nodeId ?? ''}
-                          options={runtimeNodeOptions}
-                          popoverClassName="helmx-select-popover-wide"
-                          className="w-full mono"
-                          inline={inline}
-                          placeholder={t('profiles.drawer.unboundNode')}
-                          onChange={(e) =>
-                            patchRuntimeField({ nodeId: e.target.value === '' ? undefined : e.target.value })
-                          }
-                        />
-                      </div>
-
-                      <label htmlFor="profile-form-runtime-workspace" className="form-grid-label">
-                        {t('profiles.drawer.runtime.workspace')}
-                      </label>
-                      <div className="form-grid-value">
-                        <input
-                          id="profile-form-runtime-workspace"
-                          type="text"
-                          className="input mono"
-                          value={form.runtime.workspace ?? ''}
-                          placeholder={t('profiles.drawer.runtime.workspacePlaceholder')}
-                          onChange={(e) =>
-                            patchRuntimeField({ workspace: e.target.value })
-                          }
-                        />
-                      </div>
-
-                      <label
-                        htmlFor="profile-form-runtime-args"
-                        className="form-grid-label form-grid-align-start"
-                      >
-                        {t('profiles.drawer.runtime.args')}
-                      </label>
-                      <div className="form-grid-value">
-                        <textarea
-                          id="profile-form-runtime-args"
-                          className="input mono profile-runtime-args"
-                          rows={3}
-                          spellCheck={false}
-                          value={form.runtimeArgsText}
-                          placeholder={t('profiles.drawer.runtime.argsPlaceholder')}
-                          onChange={(e) => {
-                            const text = e.target.value
-                            setForm((prev) => ({
-                              ...prev,
-                              runtimeArgsText: text,
-                              runtime: prev.runtime
-                                ? { ...prev.runtime, args: argsTextToArgs(text) }
-                                : prev.runtime,
-                            }))
-                          }}
-                        />
-                      </div>
-                    </div>
-
-                    <div className="flex-col">
-                      <span className="text-muted">{t('profiles.drawer.runtime.envTitle')}</span>
-                      {form.runtimeEnvPairs.map((pair, idx) => (
-                        <div key={`runtime-env-${idx}`} className="flex-row">
-                          <input
-                            id={`profile-form-runtime-env-key-${idx}`}
-                            type="text"
-                            className="input mono flex-1"
-                            placeholder={t('profiles.drawer.runtime.envKeyPlaceholder')}
-                            aria-label={t('profiles.drawer.runtime.envKeyAria', { index: idx + 1 })}
-                            value={pair.key}
-                            onChange={(e) => {
-                              const next = [...form.runtimeEnvPairs]
-                              next[idx] = { ...pair, key: e.target.value }
-                              setForm((prev) => ({
-                                ...prev,
-                                runtimeEnvPairs: next,
-                                runtime: prev.runtime
-                                  ? { ...prev.runtime, env: pairsToEnv(next) }
-                                  : prev.runtime,
-                              }))
-                            }}
-                          />
-                          <input
-                            id={`profile-form-runtime-env-value-${idx}`}
-                            type="text"
-                            className="input mono flex-1"
-                            placeholder={t('profiles.drawer.runtime.envValuePlaceholder')}
-                            aria-label={t('profiles.drawer.runtime.envValueAria', { index: idx + 1 })}
-                            value={pair.value}
-                            onChange={(e) => {
-                              const next = [...form.runtimeEnvPairs]
-                              next[idx] = { ...pair, value: e.target.value }
-                              setForm((prev) => ({
-                                ...prev,
-                                runtimeEnvPairs: next,
-                                runtime: prev.runtime
-                                  ? { ...prev.runtime, env: pairsToEnv(next) }
-                                  : prev.runtime,
-                              }))
-                            }}
-                          />
-                          <button
-                            type="button"
-                            className="btn btn-ghost btn-sm"
-                            aria-label={t('profiles.drawer.runtime.envDeleteAria', {
-                              name: pair.key || idx + 1,
-                            })}
-                            title={t('profiles.drawer.runtime.envDeleteTitle')}
-                            disabled={isSaving || isDeleting}
-                            onClick={() => {
-                              const next = form.runtimeEnvPairs.filter((_, i) => i !== idx)
-                              setForm((prev) => ({
-                                ...prev,
-                                runtimeEnvPairs: next,
-                                runtime: prev.runtime
-                                  ? { ...prev.runtime, env: pairsToEnv(next) }
-                                  : prev.runtime,
-                              }))
-                            }}
-                          >
-                            <HelmxIcon name="x" size={12} />
-                          </button>
-                        </div>
-                      ))}
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-sm"
-                        disabled={isSaving || isDeleting}
-                        onClick={() =>
-                          setForm((prev) => ({
-                            ...prev,
-                            runtimeEnvPairs: [...prev.runtimeEnvPairs, { key: '', value: '' }],
-                          }))
-                        }
-                      >
-                        <HelmxIcon name="plus" size={12} />
-                        <span>{t('profiles.drawer.runtime.envAdd')}</span>
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </section>
-            )}
 
             {/* System prompt section */}
             <section className="section-flat">

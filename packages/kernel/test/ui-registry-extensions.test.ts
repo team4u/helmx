@@ -28,11 +28,6 @@ function registerCommand(ui: UiRegistry, pluginId: string, id: string, slash?: s
   ui.registerUi(pluginId, 'commandPalette', spec, 'command');
 }
 
-/** Minimal helper to register a valid profile.runtime spec. */
-function registerProfileRuntime(ui: UiRegistry, pluginId: string, kind: string): void {
-  ui.registerUi(pluginId, 'profile.runtime', { id: `rt-${kind}`, kind, label: kind }, 'profileRuntime');
-}
-
 test('markdown.codeBlock: validates languages shape, rejects duplicates, requires client', { timeout: 60_000 }, () => {
   const ui = new UiRegistry(createPluginBuildProvider());
   const client = { module: 'index.tsx', export: 'C' };
@@ -68,59 +63,6 @@ test('markdown.codeBlock: validates languages shape, rejects duplicates, require
     () => ui.registerUi('p1', 'markdown.codeBlock', { id: 'bad5', languages: ['a'] }, 'markdownCodeBlock'),
     isHelmxError('invalid_ui_spec'),
   );
-});
-
-test('ui.action: requires actionId or client and enforces field ownership', { timeout: 60_000 }, () => {
-  const ui = new UiRegistry(createPluginBuildProvider());
-  const client = { module: 'index.tsx', export: 'C' };
-
-  // Valid: header + actionId + placement toolbar
-  ui.registerUi(
-    'p1',
-    'conversation.header.action',
-    { id: 'a1', target: 'conversation:header', label: 'L', actionId: 'x', placement: 'toolbar' },
-    'action',
-  );
-  // Valid: timeline:entry + kinds/roles
-  ui.registerUi(
-    'p1',
-    'timeline.entry.action',
-    { id: 'a2', target: 'timeline:entry', label: 'L', actionId: 'x', kinds: ['pi.user'], roles: ['user'] },
-    'action',
-  );
-  // Valid: client track (without actionId)
-  ui.registerUi(
-    'p1',
-    'conversation.row.action',
-    { id: 'a3', target: 'conversation:row', label: 'L', client },
-    'action',
-    CLIENT_ROOT,
-  );
-
-  // All execution tracks omitted: rejects
-  assert.throws(
-    () => ui.registerUi('p1', 'conversation.header.action', { id: 'bad1', target: 'conversation:header', label: 'L' }, 'action'),
-    isHelmxError('invalid_ui_spec'),
-  );
-  // actionId contains a dot: rejects
-  assert.throws(
-    () => ui.registerUi('p1', 'conversation.header.action', { id: 'bad2', target: 'conversation:header', label: 'L', actionId: 'x.y' }, 'action'),
-    isHelmxError('invalid_ui_spec'),
-  );
-  // placement allowed on header only
-  assert.throws(
-    () => ui.registerUi('p1', 'conversation.row.action', { id: 'bad3', target: 'conversation:row', label: 'L', actionId: 'x', placement: 'toolbar' }, 'action'),
-    isHelmxError('invalid_ui_spec'),
-  );
-  // kinds/roles allowed on timeline:entry only
-  assert.throws(
-    () => ui.registerUi('p1', 'conversation.header.action', { id: 'bad4', target: 'conversation:header', label: 'L', actionId: 'x', kinds: ['a'] }, 'action'),
-    isHelmxError('invalid_ui_spec'),
-  );
-  // target field stripped upon registration (surface carries that semantic)
-  const list = ui.listUi();
-  const stored = list.find((u) => (u.spec as { id?: string }).id === 'a1');
-  assert.equal('target' in (stored?.spec as Record<string, unknown>), false, 'target is not stored inside spec');
 });
 
 test('priority/order must be finite safe integers', { timeout: 60_000 }, () => {
@@ -189,40 +131,6 @@ test('commandPalette: slash format, reserved words, and intra-plugin duplicates'
     );
   }
   assert.throws(() => ui.registerUi('p1', 'screen', null, 'screen'), isHelmxError('invalid_ui_spec'));
-});
-
-test('profile.runtime: kind/label/agentSuggestions validation and intra-plugin duplicate kind', { timeout: 60_000 }, () => {
-  const ui = new UiRegistry(createPluginBuildProvider());
-  registerProfileRuntime(ui, 'p1', 'worker');
-  registerProfileRuntime(ui, 'p1', 'watcher'); // distinct kinds within one plugin are valid
-
-  for (const bad of ['', ' bad', 'a b', 'a#b', 'x'.repeat(66)]) {
-    assert.throws(
-      () => registerProfileRuntime(ui, 'p1', bad),
-      isHelmxError('invalid_ui_spec'),
-      `kind=${JSON.stringify(bad)}`,
-    );
-  }
-  assert.throws(
-    () => ui.registerUi('p1', 'profile.runtime', { id: 'rt-nolabel', kind: 'x' }, 'profileRuntime'),
-    isHelmxError('invalid_ui_spec'),
-  );
-  assert.throws(
-    () =>
-      ui.registerUi('p1', 'profile.runtime', { id: 'rt-sug', kind: 'x', label: 'X', agentSuggestions: ['a', ''] }, 'profileRuntime'),
-    isHelmxError('invalid_ui_spec'),
-  );
-  // Intra-plugin duplicate kind: 409 duplicate_profile_runtime_kind with kind in details
-  assert.throws(
-    () => ui.registerUi('p1', 'profile.runtime', { id: 'rt-worker-again', kind: 'worker', label: 'W' }, 'profileRuntime'),
-    (err: unknown) => {
-      assert.ok(err instanceof HelmxError);
-      assert.equal(err.code, 'duplicate_profile_runtime_kind');
-      assert.equal(err.status, 409);
-      assert.equal((err.details as { kind: string }).kind, 'worker');
-      return true;
-    },
-  );
 });
 
 test('sidebar.item badge: plain-object shape, unknown keys, unsafe doc-key fields', { timeout: 60_000 }, () => {
@@ -298,25 +206,15 @@ test('sidebar.item badge: plain-object shape, unknown keys, unsafe doc-key field
 test('assertCrossPluginUnique: checks across active+pending while excluding self', { timeout: 60_000 }, () => {
   const ui = new UiRegistry(createPluginBuildProvider());
   registerCommand(ui, 'a', 'cmd', 'wf');
-  registerProfileRuntime(ui, 'a', 'worker');
   registerCommand(ui, 'b', 'cmd', 'wf'); // conflicts with a
-  registerProfileRuntime(ui, 'b', 'worker'); // conflicts with a
   registerCommand(ui, 'c', 'cmd', 'other');
-  registerProfileRuntime(ui, 'c', 'watcher');
 
   // Registry itself does not track active plugins: succeeds when namespaces are disjoint
   ui.assertCrossPluginUnique('c', ['a', 'c']);
-  // pending=b conflicts with active a: slash collision hits first
+  // pending=b conflicts with active a: slash collision rejects
   assert.throws(
     () => ui.assertCrossPluginUnique('b', ['a', 'c']),
     isHelmxError('duplicate_command_slash'),
-  );
-  // Removing b's command collision reveals the kind collision
-  ui.removePlugin('b');
-  registerProfileRuntime(ui, 'b', 'worker');
-  assert.throws(
-    () => ui.assertCrossPluginUnique('b', ['a', 'c']),
-    isHelmxError('duplicate_profile_runtime_kind'),
   );
 
   // When pending also appears in the active list (e.g. host passes active ∪ pending), self must not collide with itself
@@ -332,12 +230,10 @@ test('assertCrossPluginUnique: checks across active+pending while excluding self
 test('inactive probe reserves no global names: disabled-by-default registrations skip final check', { timeout: 60_000 }, () => {
   const ui = new UiRegistry(createPluginBuildProvider());
   registerCommand(ui, 'probe', 'cmd', 'wf');
-  registerProfileRuntime(ui, 'probe', 'worker');
 
-  // probe is disabled by default (not in active set), so b can claim the same slash/kind
+  // probe is disabled by default (not in active set), so b can claim the same slash
   ui.assertCrossPluginUnique('b', ['b']);
   registerCommand(ui, 'b', 'cmd', 'wf');
-  registerProfileRuntime(ui, 'b', 'worker');
 
   // Once probe is enabled (entering active set), the final uniqueness check rejects it
   assert.throws(
@@ -345,7 +241,7 @@ test('inactive probe reserves no global names: disabled-by-default registrations
     isHelmxError('duplicate_command_slash'),
   );
 
-  // Intra-plugin duplicate kind/slash is still rejected immediately at registerUi before the final check
+  // Intra-plugin duplicate slash is still rejected immediately at registerUi before the final check
   assert.throws(
     () => ui.registerUi('b', 'commandPalette', { id: 'cmd2', title: 'C', slash: 'wf', actionId: 'x' }, 'command'),
     isHelmxError('duplicate_command_slash'),
@@ -355,7 +251,6 @@ test('inactive probe reserves no global names: disabled-by-default registrations
 test('clear/remove releases registered names and UI declarations', { timeout: 60_000 }, () => {
   const ui = new UiRegistry(createPluginBuildProvider());
   registerCommand(ui, 'a', 'cmd', 'wf');
-  registerProfileRuntime(ui, 'a', 'worker');
   ui.registerUi('a', 'sidebar.item', { id: 's1', label: 'S', docs: ['d1'] }, 'sidebarItem');
 
   // clear drops all specs: other plugins may claim those names
@@ -363,7 +258,6 @@ test('clear/remove releases registered names and UI declarations', { timeout: 60
   assert.equal(ui.getUiByPlugin('a').length, 0);
 
   registerCommand(ui, 'b', 'cmd', 'wf');
-  registerProfileRuntime(ui, 'b', 'worker');
   ui.assertCrossPluginUnique('b', ['b']);
 
   // removePlugin deletes entries completely: disappears from listUi(active)

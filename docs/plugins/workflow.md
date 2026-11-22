@@ -9,7 +9,7 @@
 - **`subagent`**：派生子代理。支持 `fork: true` 从父会话上下文分叉、`nodeId` 动态目标计算节点覆写（显式 `'local'` 可切回本机，远端节点需兼容 `cwd`，与 `resume` 互斥）、`isolation: 'worktree'` 隔离工作树、`resume` 续接（凭 `execution.conversationId` / `executionId`）、`schema` 结构化输出、`gate` 验收命令、`model` / `effort` 覆盖、`maxSubagentDepth` 显式授予派生深度；
 - **`SubagentWorkflow`**：确定性 DSL 编排（内联 `script` / `scriptPath` / 已保存 `name`），journal 账本支持 `resumeFromRunId` 断点恢复。
 
-后台策略按**当前会话归属**判定：human 会话缺省后台（终态后幂等汇报自动到达父会话，禁止 sleep 轮询）、显式 `background: false` 同步等待；`bot` / `helmx` 自动化会话缺省同步、显式 `background: true` 拒绝。`helmx workflows run` 动作与模型工具的 `background` 是不同参数、不同入口。
+后台策略按**当前会话归属**判定：human 会话缺省后台（终态后幂等汇报自动到达父会话，禁止 sleep 轮询）、显式 `background: false` 同步等待；`helmx` 自动化会话缺省同步、显式 `background: true` 拒绝。`helmx workflows run` 动作与模型工具的 `background` 是不同参数、不同入口。
 
 ### 动作（11 个，五端复用）
 
@@ -23,7 +23,7 @@
 | `runs` | `helmx workflows runs` | 列出运行记录，支持按会话过滤 |
 | `inspect` | `helmx workflows inspect <runId>` | 单个运行详情（节点状态 + 进度时间线） |
 | `abort` | `helmx workflows abort <runId>` | 中止运行中的工作流或后台子代理 |
-| `steer` | `helmx workflows steer <runId> --text` | 向在途后台子代理插话纠偏；原生执行经内核 guarded 端口按归属与 CAS 水位提交，外部执行按节点 `controls.steer` 委托目标插件并如实返回 `guardLevel`（`preflight` / `cas`）；`steered=true` 仅代表投递成功 |
+| `steer` | `helmx workflows steer <runId> --text` | 向在途后台子代理插话纠偏；经内核 guarded 端口按归属与 CAS 水位提交（`guardLevel: 'cas'`）；`steered=true` 仅代表投递成功 |
 | `detach` | `helmx workflows detach <runId>` | 把运行中的**前台同步** run 转入后台：阻塞中的工具调用立即返回后台句柄，终态 followUp 汇报；仅 running 且前台同步标记的 run 可转，run 发起会话必须 human-owned |
 | `resume_failed` | `helmx workflows resume-failed` | 批量续接指定会话（`--conversation-id` / `--current`）或全局（`--all`）下所有可恢复的 `failed` 工作流与后台单子代理；不可恢复项如实记入 `skipped` |
 
@@ -53,7 +53,7 @@
 | `runs` | 公开 `ctx.sessionDoc`（`durable: false`） | 纯内存瞬态投影：当前会话及后代发起的 run 分片（专有 SSE 订阅，单分片 `MAX_PROJECTED_RUNS_PER_CONVERSATION = 100` 保留全部 `running` + 最新终态，剥离完整 `result` 仅保留 `hasResult`/`resultPreview` 并附带 `errorCode`/`resumable`）；启动时自 `records` 重建，停用不落盘 |
 | `run-badges` | 公开 `ctx.doc`（`durable: false`） | 纯内存瞬态投影：基于全量运行态聚合的每会话紧凑角标（`count / tone / footerText`，不受 100 条分片滑窗影响；**一级口径**——只计本会话直接发起的 run，后代 run 归其发起会话自己的角标）；启动时自 `records` 重建，停用不落盘 |
 
-工作流定义文件唯一存储真源是 `<ctx.dataDir>/workflows/<name>.js`。引擎经 `emitEvent` 发布 `workflow.updated`（全局仅状态失效提示）与 `workflow.settled`（完整 summary，`broadcast: false` 进程内分发，`builtin:herdr` 监听它做双轨保活清理）。
+工作流定义文件唯一存储真源是 `<ctx.dataDir>/workflows/<name>.js`。引擎经 `emitEvent` 发布 `workflow.updated`（全局仅状态失效提示）与 `workflow.settled`（完整 summary，`broadcast: false` 进程内分发）。
 
 **嵌套深度契约**：受管子代理（经 `subagent` / 编排引擎 / 任何 `agent_spawn` 管道派生、`onResolved` 回传 `conversationId` 的子会话）默认可嵌套 2 层，达到子树上限即编排叶子。三道防线：`before_turn` 剥离叶子回合的派工工具、工具/动作入口前置拒绝（`403 subagent_depth_exceeded`）、`agent_spawn` 钩子（priority 300）兜底。会话级 `conversations fork` 与 Swarm 成员不进登记表、不受限。DSL `workflow()` 脚本组合深度保持一层限制，与子代理层级分别计数。
 
@@ -82,4 +82,3 @@
 - [原生 JavaScript DSL 手册](../workflows/dsl-guide.md)：`agent` / `parallel` / `pipeline` / `phase` 语法与确定性约束
 - [Git Worktree 与代码门禁](../workflows/worktree-and-gate.md)：Worktree 生命周期、租约与 Gate 验收
 - [状态流水与故障恢复](../workflows/journaling-recovery.md)：journal 记账、前缀重放与断点续跑语义
-- [Herdr 终端协同](herdr.md)：外部运行时执行体如何被编排消费

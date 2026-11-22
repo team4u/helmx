@@ -267,9 +267,6 @@ export async function invokeAgentSpawn(
   request: WorkflowSpawnRequest,
   isResume: boolean,
 ): Promise<WorkflowSpawnResult> {
-  if (request.reattach?.executionId !== undefined && deps.waitExternalRuntimeReady !== undefined) {
-    await deps.waitExternalRuntimeReady()
-  }
   if (deps.host.isHostClosing?.() === true) {
     run.abort.abort()
     return {
@@ -369,9 +366,7 @@ export async function invokeAgentSpawn(
     ...(request.model !== undefined ? { model: request.model } : {}),
     ...(request.effort !== undefined ? { effort: request.effort } : {}),
     ...(request.isolation !== undefined ? { isolation: request.isolation } : {}),
-    ...(!isResume && (!isReattach || request.reattach?.executionId !== undefined) && request.nodeId !== undefined
-      ? { nodeId: request.nodeId }
-      : {}),
+    ...(!isResume && !isReattach && request.nodeId !== undefined ? { nodeId: request.nodeId } : {}),
     ...(!isResume && !isReattach && request.cwd !== undefined ? { cwd: request.cwd } : {}),
     ...(request.gateTimeoutMs !== undefined ? { gateTimeoutMs: request.gateTimeoutMs } : {}),
     meta: withWorkflowSpawnMeta(undefined, {
@@ -380,7 +375,6 @@ export async function invokeAgentSpawn(
     }),
     ...(request.schema !== undefined ? { schema: request.schema.schema } : {}),
     ...(request.attachments !== undefined ? { attachments: request.attachments } : {}),
-    ...(!isReattach && request.secretNames !== undefined ? { secretNames: request.secretNames } : {}),
     ...(request.requestId !== undefined ? { requestId: request.requestId } : {}),
     ...(request.reattach !== undefined ? { reattach: request.reattach } : {}),
     ...(resumeRef !== undefined ? { resume: resumeRef } : {}),

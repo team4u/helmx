@@ -45,7 +45,7 @@ import { createEnvFabric } from '../../kernel/src/env/fabric.js'
 import { runNativeSpawn, type NativeSpawnDeps } from '../../kernel/src/runtime/spawn.js'
 import { WorktreeAllocator, type ManagedWorktreeRecord } from '../src/worktree/worktree.js'
 import type { ManagedWorktreeHold } from '../src/worktree/worktree-store.js'
-import { extractWorkflowExecutionMeta, extractWorktreeExecutionMeta } from '../src/contracts.js'
+import { extractWorktreeExecutionMeta } from '../src/contracts.js'
 import { WorktreeIsolation, type WorktreeIsolationDeps } from '../src/worktree/isolation.js'
 import { createWorkflowPlugin } from '../src/workflow.js'
 import { createWorktreePlugin } from '../src/worktree.js'
@@ -257,7 +257,6 @@ async function openSpawnHarness(repoDir: string, dataDir: string): Promise<{
     dataDir,
     defaultCwd: repoDir,
     hubUrl: 'http://127.0.0.1:3200',
-    stashEnvFor: (id) => stash.envFor(id),
     redact: (t) => stash.redact(t),
     artifacts: new ArtifactService(dataDir, { get: () => undefined, list: () => [], put: () => {}, deleteByConversation: () => {} } as never),
     envFabric,
@@ -783,7 +782,7 @@ async function executeCleanupTool(
       makeConversationSummary({ id, cwd: dataDir, model: '', createdAt: 1, updatedAt: 1 }),
     updateConversation: async () => ({}) as never,
     abortConversation: async () => {},
-    getConversationOwnership(id: number): 'helmx' | 'bot' | 'human' {
+    getConversationOwnership(id: number): 'helmx' | 'human' {
       // 入口会话 #1 为 human；spawn 派生子会话为 helmx-owned（cleanup 工具的
       // 归属安全校验依赖真实区分，不能全部伪装 human 遮蔽拒绝分支）。
       return id === 1 ? 'human' : 'helmx'
@@ -800,12 +799,10 @@ async function executeCleanupTool(
     redact: (t: string) => t,
     execEnv: async (req: { command: string | string[]; cwd?: string; timeoutMs?: number }) =>
       localExec(req.command, { ...(req.cwd !== undefined ? { cwd: req.cwd } : {}), ...(req.timeoutMs !== undefined ? { timeout: req.timeoutMs / 1000 } : {}) }),
-    withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') },
     manageConversation: () => () => {},
     markConversationOwnership: () => {},
     createAsk: async () => ({}) as never,
     cancelAsk: async () => {},
-    registerAskSeqResolver: () => () => {},
     onEvent: () => () => {},
     emitEvent: () => {},
   }
@@ -1167,72 +1164,6 @@ function rawRecords(docs: Map<string, unknown>): ManagedWorktreeRecord[] {
   return ((all['runtime/worktrees'] as { records?: ManagedWorktreeRecord[] } | undefined)?.records ?? []) as ManagedWorktreeRecord[]
 }
 
-describe('external 登记与真实清理', { timeout: 60_000 }, () => {
-  it('registerExternal 去重同 (nodeId,path)；cleanup 真实移除 external worktree；repoRoot 解析并持久化主工作树', { timeout: 60_000 }, async () => {
-    const dir = join(rootDir, 't7a')
-    const repo = makeGitRepo(join(dir, 'repo'))
-    const docs = new Map<string, unknown>()
-    const allocator = bareAllocator(docs)
-    try {
-      // 手工建一个 external worktree（模拟 herdr worktree.create 产物）。
-      const wtPath = join(dir, '.helmx-worktrees', 'repo-ext01')
-      execFileSync('git', ['worktree', 'add', wtPath, '-b', 'helmx/wf-ext01'], { cwd: repo })
-      const first = allocator.registerExternal({ nodeId: 'local', path: wtPath, branch: 'helmx/wf-ext01', parentConversationId: 1, executionId: 'exec-1' })
-      const second = allocator.registerExternal({ nodeId: 'local', path: wtPath, branch: 'helmx/wf-ext01', parentConversationId: 1, executionId: 'exec-1' })
-      assert.equal(second.id, first.id, '同 (nodeId,path) 登记应去重为一条')
-      assert.equal(rawRecords(docs).filter((r) => r.id === first.id).length, 1, '登记记录不得重复堆积')
-      assert.equal(first.repoRoot, '', 'external 初始 repoRoot 为空')
-
-      // 干净 external worktree：无 baseCommit 也照常清理（unmerged 相对主 HEAD=0）。
-      if (PROCESS_SCAN_ON) {
-        const result = await allocator.cleanup({ worktreeId: first.id, deleteBranch: true })
-        assert.equal(result.removed, true)
-        assert.equal(result.branchDeleted, true)
-        assert.ok(!existsSync(wtPath), 'external worktree 目录应被移除')
-        const after = rawRecords(docs).find((r) => r.id === first.id)!
-        assert.equal(after.status, 'removed')
-        assert.equal(after.repoRoot, repo, 'repoRoot 应已解析并持久化为真正主工作树')
-        // 幂等重放。
-        const again = await allocator.cleanup({ worktreeId: first.id })
-        assert.equal(again.removed, false)
-      } else {
-        await assertCleanupPlatformRejected(() => allocator.cleanup({ worktreeId: first.id, deleteBranch: true }))
-        assert.ok(existsSync(wtPath), '非 Linux 拒绝清理时目录不得被移除')
-      }
-    } finally {
-      rmSync(dir, { recursive: true, force: true })
-    }
-  })
-
-  it('external 记录在 worktree 内有未合入提交时（baseCommit 为空）同样拒绝 worktree_dirty', { timeout: 60_000 }, async () => {
-    const dir = join(rootDir, 't7b')
-    const repo = makeGitRepo(join(dir, 'repo'))
-    const docs = new Map<string, unknown>()
-    const allocator = bareAllocator(docs)
-    try {
-      const wtPath = join(dir, '.helmx-worktrees', 'repo-ext02')
-      execFileSync('git', ['worktree', 'add', wtPath, '-b', 'helmx/wf-ext02'], { cwd: repo })
-      writeFileSync(join(wtPath, 'feat.txt'), 'x\n')
-      execFileSync('git', ['add', '.'], { cwd: wtPath })
-      execFileSync('git', ['commit', '-qm', 'feat'], { cwd: wtPath })
-      const record = allocator.registerExternal({ nodeId: 'local', path: wtPath, branch: 'helmx/wf-ext02', parentConversationId: 1 })
-      await assert.rejects(
-        () => allocator.cleanup({ worktreeId: record.id }),
-        (err: unknown) => {
-          assert.ok(err instanceof HelmxError)
-          assert.equal(err.code, 'worktree_dirty')
-          const details = err.details as { unmergedCommits?: number }
-          assert.ok((details?.unmergedCommits ?? 0) >= 1, 'baseCommit 为空也必须按主工作树 HEAD 报告未合入提交')
-          return true
-        },
-      )
-      assert.ok(existsSync(wtPath), '拒绝时目录不得被移除')
-    } finally {
-      rmSync(dir, { recursive: true, force: true })
-    }
-  })
-})
-
 describe('同路径跨节点歧义', { timeout: 60_000 }, () => {
   it('多节点同名路径：未指定 nodeId 显式 validation_error；指定 nodeId 或 worktreeId 精确清理', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 't8')
@@ -1241,11 +1172,26 @@ describe('同路径跨节点歧义', { timeout: 60_000 }, () => {
     const allocator = bareAllocator(docs)
     try {
       const sharedPath = join(dir, 'shared-wt')
-      // 两个节点各自登记同一路径（真实 worktree 只建一个；local + 远端
-      // 节点同名登记模拟多节点同仓同路径场景——歧义检查在 git 探测之前）。
       execFileSync('git', ['worktree', 'add', sharedPath, '-b', 'helmx/spawn-m001'], { cwd: repo })
-      const a = allocator.registerExternal({ nodeId: 'local', path: sharedPath, branch: 'helmx/spawn-m001', parentConversationId: 1 })
-      const b = allocator.registerExternal({ nodeId: 'node-b', path: sharedPath, branch: 'helmx/spawn-m001', parentConversationId: 1 })
+      const a: ManagedWorktreeRecord = {
+        id: `local:${sharedPath}`,
+        nodeId: 'local',
+        path: sharedPath,
+        branch: 'helmx/spawn-m001',
+        repoRoot: repo,
+        baseCommit: '',
+        parentConversationId: 1,
+        createdAt: 1,
+        status: 'active',
+        origin: 'native',
+        dirtySource: false,
+      }
+      const b: ManagedWorktreeRecord = {
+        ...a,
+        id: `node-b:${sharedPath}`,
+        nodeId: 'node-b',
+      }
+      docs.set('builtin:worktree:worktree-state', { 'runtime/worktrees': { version: 1, records: [a, b] } })
 
       await assert.rejects(
         () => allocator.cleanup({ path: sharedPath }),
@@ -1576,33 +1522,7 @@ function dirnameOf(p: string): string {
 }
 
 describe('持久化元数据机密检查', { timeout: 60_000 }, () => {
-  it('registerExternal 路径含已登记 secret：显式 worktree_metadata_secret（含非机密定位字段），绝不 raw 落库', { timeout: 60_000 }, () => {
-    const docs = new Map<string, unknown>()
-    const SECRET = 'sk-secret-token-123'
-    const allocator = bareAllocator(docs, { redact: (t) => t.replaceAll(SECRET, '***') })
-    assert.throws(
-      () =>
-        allocator.registerExternal({
-          nodeId: 'local',
-          path: `/repo/.helmx-worktrees/wt-${SECRET}`,
-          branch: 'helmx/wf-s1',
-          parentConversationId: 7,
-          conversationId: 9,
-          executionId: 'exec-42',
-        }),
-      (err: unknown) => {
-        assert.ok(err instanceof HelmxError)
-        assert.equal(err.code, 'worktree_metadata_secret')
-        assert.ok(!err.message.includes(SECRET), 'message 绝不泄漏 secret 原文')
-        assert.ok(err.message.includes('exec-42'), 'message 应含非机密 executionId 以便定位失败的外部执行')
-        assert.ok(err.message.includes('conversationId: 9'), 'message 应含非机密 conversationId')
-        return true
-      },
-    )
-    assert.equal(rawRecords(docs).length, 0, '拒绝后不得有任何记录落库')
-  })
-
-  it('allocate 目标路径含 secret（redact 差异）同样拒绝且不落库', { timeout: 60_000 }, async () => {
+  it('allocate 目标路径含 secret（redact 差异）拒绝且不落库', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 't13b')
     const repo = makeGitRepo(join(dir, 'repo'))
     const docs = new Map<string, unknown>()
@@ -1784,32 +1704,6 @@ describe('目录缺失态恢复（force 登记清除）', { timeout: 60_000 }, (
       const persisted = rawRecords(docs).find((r) => r.id === record.id)
       assert.equal(persisted?.status, 'removed')
       assert.equal(persisted?.branchDeleted, true)
-    } finally {
-      rmSync(dir, { recursive: true, force: true })
-    }
-  })
-
-  it('external 记录无 repoRoot 锚点：force 清登记但不执行 prune，输出如实说明', { timeout: 60_000 }, async () => {
-    const dir = join(rootDir, 't15e')
-    const repo = makeGitRepo(join(dir, 'repo'))
-    const docs = new Map<string, unknown>()
-    const allocator = bareAllocator(docs)
-    try {
-      const ghostPath = join(dir, '.helmx-worktrees', 'repo-ghost01')
-      allocator.registerExternal({
-        nodeId: 'local',
-        path: ghostPath,
-        branch: 'helmx/wf-ghost01',
-        parentConversationId: 1,
-      })
-      assert.ok(!existsSync(ghostPath), '前置：登记路径本不存在')
-      const result = await allocator.cleanup({ worktreeId: `local:${ghostPath}`, force: true })
-      assert.equal(result.removed, true)
-      assert.equal(result.removedReason, 'directory_missing_forced')
-      assert.ok(result.prune !== undefined && result.prune.ran === false, '无 repoRoot 锚点时不执行 prune')
-      assert.ok((result.prune?.output ?? '').includes('repoRoot'), '输出应如实说明未执行 prune 的原因')
-      const persisted = rawRecords(docs).find((r) => r.id === `local:${ghostPath}`)
-      assert.equal(persisted?.status, 'removed')
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -2617,14 +2511,10 @@ async function openWorkflowPluginHost(options: {
         ...(req.cwd !== undefined ? { cwd: req.cwd } : {}),
         ...(req.timeoutMs !== undefined ? { timeout: req.timeoutMs / 1000 } : {}),
       }),
-    withFileMutationQueue(): Promise<never> {
-      throw new Error('本 fixture 不承载文件互斥队列')
-    },
     manageConversation: () => () => {},
     markConversationOwnership: () => {},
     createAsk: async () => ({}) as never,
     cancelAsk: async () => {},
-    registerAskSeqResolver: () => () => {},
     onEvent: () => () => {},
     emitEvent: () => {},
   }
@@ -3103,7 +2993,8 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
     const docs = new Map<string, unknown>()
     const stash = new SecretStash()
     const secretVal = 'sk-super-secret-hold-token-999'
-    const placeholder = stash.put(1, 'SA_TOKEN', secretVal)
+    const placeholder = '[REDACTED]'
+    stash.addRedaction(secretVal)
     const { host, close } = await openWorkflowPluginHost({
       repoDir: repo,
       dataDir: join(dir, 'data'),
@@ -3471,119 +3362,29 @@ function leaseCount(docStore: WorktreeIsolationDeps['docStore']): number {
   return Object.keys(docStore.get<Record<string, unknown>>('worktree-leases', {})).length
 }
 
-describe('WorktreeIsolation：外部运行时租约与并发窗口保护', { timeout: 60_000 }, () => {
-  it('外部运行时租约首写 flush 失败：显式诊断、无 unhandledRejection；结算写重试后租约释放', { timeout: 60_000 }, async () => {
-    const stderrLines: string[] = []
-    const originalWrite = process.stderr.write.bind(process.stderr)
-    process.stderr.write = ((chunk: unknown, ...rest: unknown[]) => {
-      stderrLines.push(String(chunk))
-      return (originalWrite as (c: unknown, ...r: unknown[]) => boolean)(chunk, ...rest)
-    }) as typeof process.stderr.write
-    try {
-      const handle = makeFakeIsolation({ failFlushFirst: 1 })
-      await assertNoUnhandledRejection(async () => {
-        let resolved: AgentExecutionInfo | undefined
-        const result = await handle.isolation.aroundSpawn(
-          {
-            parentConversationId: 1,
-            prompt: '外部任务',
-            agentType: 'ext:demo',
-            isolation: 'worktree',
-            onResolved: (info: AgentExecutionInfo) => {
-              resolved = info
-            },
-          } as never,
-          async (final) => {
-            ;(final as AgentSpawnRequest).onResolved?.({
-              nodeId: 'local',
-              meta: { 'builtin:worktree': { worktree: { path: '/wt/ext-1', branch: 'helmx/spawn-ext1' } } },
-              conversationId: 7,
-              executionId: 'exec-1',
-            })
-            return 'ext-done'
-          },
-        )
-        assert.equal(result, 'ext-done')
-        assert.ok(
-          resolved !== undefined && extractWorktreeExecutionMeta(resolved).worktree?.id,
-          'enriched worktree 元数据应回传调用方',
-        )
-        assert.equal(leaseCount(handle.docStore), 0, '结算后租约必须释放（settle 写重试整页落盘）')
-      })
-      assert.ok(
-        stderrLines.some((line) => line.includes('租约') && line.includes('落盘失败')),
-        `flush 失败必须 stderr 显式诊断（实际 ${JSON.stringify(stderrLines)}）`,
-      )
-    } finally {
-      process.stderr.write = originalWrite
-    }
-  })
-
-  it('外部运行时 execution meta 合并往返：worktree 增强不丢 other-plugin 命名空间与 controls；租约存 enriched 合并结果', { timeout: 60_000 }, async () => {
-    const handle = makeFakeIsolation()
-    let resolved: AgentExecutionInfo | undefined
-    let midflightLeaseInfo: AgentExecutionInfo | undefined
-    const result = await handle.isolation.aroundSpawn(
-      {
-        parentConversationId: 1,
-        prompt: '外部任务',
-        agentType: 'ext:demo',
-        isolation: 'worktree',
-        onResolved: (info: AgentExecutionInfo) => {
-          resolved = info
-        },
-      } as never,
-      async (final) => {
-        ;(final as AgentSpawnRequest).onResolved?.({
-          nodeId: 'local',
-          conversationId: 7,
-          executionId: 'exec-ns-1',
-          meta: {
-            'builtin:worktree': {
-              worktree: { path: '/wt/ext-ns', branch: 'helmx/spawn-extns' },
-            },
-            'builtin:workflow': {
-              controls: { steer: { pluginId: 'ext:demo', actionId: 'steer' } },
-            },
-            'other-plugin': { keep: ['ns', { roundtrip: true }] },
-          },
-        })
-        const leases = handle.docStore.get<Record<string, { info?: AgentExecutionInfo }>>('worktree-leases', {})
-        midflightLeaseInfo = Object.values(leases)[0]?.info
-        return 'ext-done'
-      },
-    )
-    assert.equal(result, 'ext-done')
-    assert.ok(resolved !== undefined, 'onResolved 应回传 enriched 信息')
-    const wtMeta = extractWorktreeExecutionMeta(resolved)
-    assert.equal(wtMeta.worktree?.id, 'local:/wt/ext-ns', 'worktree 应被统一登记并回填稳定 id')
-    assert.deepEqual(
-      extractWorkflowExecutionMeta(resolved).controls,
-      { steer: { pluginId: 'ext:demo', actionId: 'steer' } },
-      'worktree 增强不得丢失正交 workflow 命名空间的 controls（steer 委托引用）',
-    )
-    assert.deepEqual(
-      resolved.meta?.['other-plugin'],
-      { keep: ['ns', { roundtrip: true }] },
-      '其他插件的命名空间必须原样保留（合并而非覆盖）',
-    )
-    assert.ok(midflightLeaseInfo !== undefined, '执行期间应有租约记录')
-    const leaseWt = extractWorktreeExecutionMeta(midflightLeaseInfo)
-    assert.equal(leaseWt.worktree?.id, 'local:/wt/ext-ns')
-    assert.deepEqual(midflightLeaseInfo.meta?.['other-plugin'], { keep: ['ns', { roundtrip: true }] })
-    assert.equal(leaseCount(handle.docStore), 0)
-  })
-
+describe('WorktreeIsolation：租约与并发窗口保护', { timeout: 60_000 }, () => {
   it('resumeWithWorktree 租约前置：远端验证窗口内并发 cleanup 被租约 fail-closed 拒绝；resume 正常续接', { timeout: 60_000 }, async () => {
     const wtPath = '/wt/resume-race'
+    const worktreeId = `local:${wtPath}`
     const handle = makeFakeIsolation({ gatedExistsPath: wtPath })
-    const worktreeId = handle.isolation.allocator.registerExternal({
-      nodeId: 'local',
-      path: wtPath,
-      branch: 'helmx/spawn-resume1',
-      parentConversationId: 1,
-      conversationId: 42,
-    }).id
+    handle.docStore.set('runtime/worktrees', {
+      version: 1,
+      records: [
+        {
+          id: worktreeId,
+          nodeId: 'local',
+          path: wtPath,
+          branch: 'helmx/spawn-resume1',
+          repoRoot: '/repo',
+          baseCommit: 'abc',
+          parentConversationId: 1,
+          conversationId: 42,
+          createdAt: 1,
+          status: 'active',
+          origin: 'native',
+        },
+      ],
+    })
 
     const nextCwds: Array<string | undefined> = []
     const resumePromise = handle.isolation.aroundSpawn(
@@ -3616,12 +3417,23 @@ describe('WorktreeIsolation：外部运行时租约与并发窗口保护', { tim
 
   it('resumeWithWorktree 租约前置：验证失败（目录已消失）释放占位租约，不留永久占位', { timeout: 60_000 }, async () => {
     const handle = makeFakeIsolation({ existsValue: false })
-    handle.isolation.allocator.registerExternal({
-      nodeId: 'local',
-      path: '/wt/resume-race',
-      branch: 'helmx/spawn-resume1',
-      parentConversationId: 1,
-      conversationId: 42,
+    handle.docStore.set('runtime/worktrees', {
+      version: 1,
+      records: [
+        {
+          id: 'local:/wt/resume-race',
+          nodeId: 'local',
+          path: '/wt/resume-race',
+          branch: 'helmx/spawn-resume1',
+          repoRoot: '/repo',
+          baseCommit: 'abc',
+          parentConversationId: 1,
+          conversationId: 42,
+          createdAt: 1,
+          status: 'active',
+          origin: 'native',
+        },
+      ],
     })
 
     await assert.rejects(

@@ -64,7 +64,7 @@ export function createWorkflowEngineHost(deps: WorkflowEngineHostDeps): Workflow
     // ——内核仍拒 human，绝不因此回退普通 abortConversation；守卫拒绝
     // （归属翻转/水位推进/目标删除）确定性放弃并诊断，不重试不掩盖。
     abortConversationGuarded: async (id) => {
-      let guard: { expectedOwnership?: 'bot' | 'helmx'; expectedStateSeq?: number } = {}
+      let guard: { expectedOwnership?: 'helmx'; expectedStateSeq?: number } = {}
       try {
         const ownership = host.getConversationOwnership(id)
         guard =

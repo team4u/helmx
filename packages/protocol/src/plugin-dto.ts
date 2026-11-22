@@ -23,21 +23,15 @@ export type MaybePromise<T> = T | Promise<T>
 // ---------------------------------------------------------------------------
 
 export type HookName =
-  | 'trigger'
   | 'input'
   | 'before_turn'
-  | 'tool_call'
-  | 'tool_result'
   | 'agent_spawn'
   | 'turn_settled'
 
 /** Single source of truth of backend hook mount point names (bi-directionally locked with the HookName type). */
 export const PLUGIN_HOOK_NAMES = [
-  'trigger',
   'input',
   'before_turn',
-  'tool_call',
-  'tool_result',
   'agent_spawn',
   'turn_settled',
 ] as const satisfies readonly HookName[]
@@ -49,8 +43,7 @@ void _assertAllHookNamesListed
 
 /**
  * External inbound event envelope (cron / webhook, delivered after defang
- * anti-escape wrapping). When a threadKey subscription matches, transform may
- * rewrite targetConversationId to deliver straight to a Worker.
+ * anti-escape wrapping).
  */
 export interface ExternalTriggerEnvelope {
   id: string
@@ -58,8 +51,6 @@ export interface ExternalTriggerEnvelope {
   source: string
   /** Wrapped (defanged) payload text. */
   text: string
-  /** Direct-pass-through subscription key (ThreadSubscriptionDoc routing). */
-  threadKey?: string
   /** Optional targeted conversation; the default target is resolved by the kernel from the current assistant entry. */
   targetConversationId?: number
   metadata?: Record<string, unknown>
@@ -264,12 +255,9 @@ export interface PluginConfigResponse {
 export interface GuardedMutationExpectation {
   /**
    * Ownership at authorization time (probe fact). The kernel requires current
-   * ownership to belong to the automation domain ('bot' | 'helmx'; 'human' is
-   * always rejected); when a concrete value is provided, current ownership
-   * must match it exactly (bot/helmx handover counts as a new fact and is
-   * conservatively rejected).
+   * ownership to belong to the automation domain ('helmx'; 'human' is always rejected).
    */
-  expectedOwnership?: 'bot' | 'helmx'
+  expectedOwnership?: 'helmx'
   /** Authoritative watermark at authorization time (stateChangeSeq); when provided, the current value must be equal (CAS). */
   expectedStateSeq?: number
 }

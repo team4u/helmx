@@ -60,7 +60,7 @@ class FakeBackend extends PluginHostBackendFixtureBase {
   getConversationActivity(): { consecutiveErrors: number } {
     return { consecutiveErrors: 0 }
   }
-  getConversationOwnership(): 'helmx' | 'bot' | 'human' {
+  getConversationOwnership(): 'helmx' | 'human' {
     return 'human'
   }
   spawnAgent(): Promise<unknown> {

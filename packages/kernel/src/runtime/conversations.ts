@@ -140,7 +140,7 @@ export class ConversationTracker {
     redactError?: (text: string) => string
     /** Current conversation ownership reader (injected by Runtime via ownership.getOwnership); defaults to human.
      * Used solely for unread policy on turn settlement so background derived sub-conversations never mark fake human unreads. */
-    ownershipOf?: (id: number) => 'helmx' | 'bot' | 'human'
+    ownershipOf?: (id: number) => 'helmx' | 'human'
     /** Current Models catalog reader (for contextUsage window lookup); if omitted, contextWindow stays unset without fabricating. */
     models?: () => Models
     /** Host closing predicate (double protection alongside tracker.close()). */
@@ -186,7 +186,7 @@ export class ConversationTracker {
   }
 
   /** Live conversation ownership reader (defaults to human); consumed solely by unread policy on turn settlement. */
-  private readonly ownershipOf: ((id: number) => 'helmx' | 'bot' | 'human') | undefined
+  private readonly ownershipOf: ((id: number) => 'helmx' | 'human') | undefined
 
   /** Live Models catalog reader (if omitted, window stays unset). */
   private readonly modelsOf: (() => Models) | undefined

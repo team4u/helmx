@@ -5,7 +5,6 @@
  *   `worktree list --porcelain -z` 定位真正主仓 + 单次 `status --porcelain=v2 --branch`
  *   取 HEAD/分支/dirtySource），在主工作树同级 `.helmx-worktrees/<repo>-<shortId>` 创建
  *   独立 worktree 与 `helmx/spawn-<shortId>` 分支；
- * - `registerExternal`：外部运行时回传的 worktree 统一登记；
  * - `inspect` / `verifyForResume` / `cleanup`：转发至子模块并与统一 `WorktreeStore` 共享状态。
  */
 import type { FileError, Result } from '@earendil-works/pi-durable/env'
@@ -72,16 +71,6 @@ interface AllocateInput {
     baseCommit: string
     dirtySource: boolean
   }) => Promise<void>
-}
-
-interface RegisterExternalInput {
-  nodeId: string
-  path: string
-  branch: string
-  parentConversationId: number
-  conversationId?: number
-  executionId?: string
-  sourceCwd?: string
 }
 
 export interface CleanupInput {
@@ -337,52 +326,6 @@ export class WorktreeAllocator {
   /** 释放持久持有锁（缺失/无锁幂等返 false；归属不一致抛 409 worktree_hold_mismatch）。 */
   releaseHold(worktreeId: string, pluginId: string, holdId: string): boolean {
     return this.store.releaseHold(worktreeId, pluginId, holdId)
-  }
-
-  registerExternal(input: RegisterExternalInput): ManagedWorktreeRecord {
-    const id = `${input.nodeId}:${input.path}`
-    this.store.assertMetadataSecretFree(
-      {
-        path: input.path,
-        branch: input.branch,
-        repoRoot: input.sourceCwd ?? '',
-        nodeId: input.nodeId,
-        executionId: input.executionId ?? '',
-      },
-      {
-        nodeId: this.redact(input.nodeId),
-        parentConversationId: input.parentConversationId,
-        conversationId: input.conversationId,
-        executionId: input.executionId !== undefined ? this.redact(input.executionId) : undefined,
-      },
-    )
-    const existing = this.store.findById(id)
-    if (existing !== undefined) {
-      const updated: ManagedWorktreeRecord = {
-        ...existing,
-        ...(input.conversationId !== undefined ? { conversationId: input.conversationId } : {}),
-        ...(input.executionId !== undefined ? { executionId: input.executionId } : {}),
-      }
-      this.store.updateRecord(id, () => updated)
-      return updated
-    }
-    const record: ManagedWorktreeRecord = {
-      id,
-      nodeId: input.nodeId,
-      repoRoot: input.sourceCwd ?? '',
-      path: input.path,
-      branch: input.branch,
-      baseCommit: '',
-      dirtySource: false,
-      parentConversationId: input.parentConversationId,
-      ...(input.conversationId !== undefined ? { conversationId: input.conversationId } : {}),
-      ...(input.executionId !== undefined ? { executionId: input.executionId } : {}),
-      origin: 'external',
-      status: 'active',
-      createdAt: Date.now(),
-    }
-    this.store.append(record)
-    return record
   }
 
   getForConversation(conversationId: number): ManagedWorktreeRecord | undefined {

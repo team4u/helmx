@@ -15,7 +15,6 @@
 | `HELMX_DATA_DIR` | 数据目录，默认 `~/.helmx` |
 | `HELMX_CONVERSATION_ID` | 供 `--current` 解析会话目标 |
 | `HELMX_NODE_ID` | 供 `nodes upgrade --current` 解析节点目标 |
-| `HERDR_SOCKET_PATH` | 覆盖 Herdr IPC 管道路径（helmx-node doctor 检查项之一） |
 
 **凭据优先级**：`HELMX_TOKEN` 环境变量（显式给出即短路磁盘，不触碰凭据文件）> `<dataDir>/cli-token` 登录态文件（0600 JSON `{ hubUrl, token }`，`helmx login` 写入；损坏显式报错不静默当无凭据）> 默认 3202。`hubUrl` 与目标 endpoint 不一致时不携带旧 token。内核凭据保险库 `<dataDir>/credentials.json` 仅供 Hub 托管模型密钥与插件配置，CLI 命令绝不直接读写。
 
@@ -230,10 +229,8 @@ PUT 为整体替换契约：update 走语义化标志时 CLI 先 GET 完整 Prof
 | `helmx memory get / set / configure` | builtin:memory | 长期记忆管理；均以 `--profile-id <id>` 或 `--current` 选目标，皆缺 `400 validation_error`；`set --text <str> [--mode replace\|append]`；`configure --enabled <bool> [--text <str>]` |
 | `helmx memory dream / dream_status / dream_configure` | builtin:memory | 每日 Dream 记忆整理：`dream` 立即整理（`--profile-id`/`--current`，无候选或无模型会话合法跳过并返回 reason，在途关闭如实 `memory_disabled` 不写回）；`dream_status` 查看调度/候选/上次整理（`--profile-id`/`--current` 聚焦只读目标，候选文件异常显式报错）；`dream_configure --enabled <bool> --hour <0-23> --timezone <IANA>` 配置（至少一项，暂停即清除 nextRunAt，首启排下一低峰点、过期仅补跑一次） |
 | `helmx profile list_mentionable` | builtin:profile | 列出可 `@` 点名协作的 Profile 候选（`--current` / `--conversation-id` / `--profile-id` 选上下文） |
-| `helmx cron list / create / delete / trigger` | builtin:triggers | cron 任务管理；create 必填 `--id --schedule --text`（标准五字段，timezone 默认 UTC），支持 `--target-conversation-id` / `--target-profile-id` / `--thread-key` 定向 |
+| `helmx cron list / create / delete / trigger` | builtin:triggers | cron 任务管理；create 必填 `--id --schedule --text`（标准五字段，timezone 默认 UTC），支持 `--target-conversation-id` / `--target-profile-id` 定向 |
 | `helmx webhook create / list / delete` | builtin:triggers | webhook 端点管理（HMAC-SHA256 验签）；create 必填 `--id --secret`，**secret 仅允许人工 HTTP/CLI 配置**（会话上下文调用被 403 拒绝） |
-| `helmx herdr list / read / focus` | builtin:herdr | 窗格管理；read 返回 40 行脱敏终端尾部快照，`--node-id` 消歧跨节点同 ID（歧义 409） |
-| `helmx herdr steer` | builtin:herdr | 向受管且由 workflow run 派生的窗格插话（`guardLevel=preflight` 发送前预检）；通常用 `helmx workflows steer <runId> --text` 自动路由 |
 | `helmx magpie status / refresh / quota` | builtin:magpie | 网关状态、目录刷新与配额查询 |
 
 ---
@@ -254,7 +251,7 @@ PUT 为整体替换契约：update 走语义化标志时 CLI 先 GET 完整 Prof
 
 **`helmx-node upgrade [--check] [--version <v>] [--registry <url>] [--force]`** — 自升级：`@helmx/node` 自升级 → 双阶段 SHA-512 校验 → 离线安装至不可变候选目录 → 金丝雀握手 → `upgradeCommit` 唯一提交点 → 失败自动回滚并写 `update-blocked.json` 隔离。
 
-**`helmx-node doctor`** — 无副作用只读自检：`node.json` 权限（0600）、运行账户权限（检测 root / 免密 sudo 风险）、Hub WebSocket 握手连通性与 RTT（不发送 `register`，不挤占在线会话）、Herdr 本地 IPC 管道状态。
+**`helmx-node doctor`** — 无副作用只读自检：`node.json` 权限（0600）、运行账户权限（检测 root / 免密 sudo 风险）、Hub WebSocket 握手连通性与 RTT（不发送 `register`，不挤占在线会话）。
 
 **`helmx-node service install / uninstall / status [--hub <url>]`** — 开机自启服务管理，跨平台映射：Linux `systemd --user`、macOS `launchd` Agent、Windows `schtasks`。
 

@@ -17,7 +17,6 @@ import {
   isConversationArchivable,
   isConversationDeletable,
   openAgentStandby,
-  partitionSidebarUi,
   presenceNavClassSuffix,
   shouldSkipNavRowClick,
   type AgentStanding,
@@ -476,10 +475,9 @@ export function AgentStandingsGroup({
         conversations: store.conversations,
         plugins: store.plugins,
         sidebarItems: store.groupedUi.sidebarItems,
-        sidebarSections: store.groupedUi.sidebarSections,
         locale: store.locale,
       }),
-    [store.profiles, store.conversations, store.plugins, store.groupedUi.sidebarItems, store.groupedUi.sidebarSections, store.locale],
+    [store.profiles, store.conversations, store.plugins, store.groupedUi.sidebarItems, store.locale],
   )
 
   const visibleStandings = useMemo(
@@ -495,14 +493,10 @@ export function AgentStandingsGroup({
   // then clicking "Select all" / "Delete" can never wipe hidden conversations.
   // Bulk-select includes idle automation conversations (bulk-deletable but not
   // archivable); the archive button consumes the archivable subset below.
-  const sectionTags = useMemo(
-    () => partitionSidebarUi([], store.groupedUi.sidebarSections).sectionTags,
-    [store.groupedUi.sidebarSections],
-  )
   const allDeletableIds = useMemo(() => {
     const visibleConvs = visibleStandings.flatMap((a) => a.conversations)
-    return filterBulkSelectableConversations(visibleConvs, sectionTags).map((c) => c.id)
-  }, [visibleStandings, sectionTags])
+    return filterBulkSelectableConversations(visibleConvs).map((c) => c.id)
+  }, [visibleStandings])
   const archivableSelectedIds = useMemo(() => {
     const archivable = new Set(
       agentStandings

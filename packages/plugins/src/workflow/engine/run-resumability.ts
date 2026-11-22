@@ -171,16 +171,6 @@ export function inspectRunResumability(
           reason: 'subagent run interrupted by process restart（缺少持久化启动规格 subagentSpec，无法自动恢复）',
         }
       }
-      const exec = record.subagentMeta?.execution
-      const hasHandle = exec?.conversationId !== undefined || exec?.executionId !== undefined
-      if (!hasHandle && spec.hadSecretGrant === true) {
-        return {
-          resumable: false,
-          code: 'secret_grant_expired_on_restart',
-          reason:
-            '[secret_grant_expired_on_restart] 后台子代理在创建执行环境前因重启中断，且原请求授予了会话内存机密（secretNames），重启后内存机密已失效，拒绝无机密降级启动',
-        }
-      }
       return { resumable: true }
     }
     const resolvedScript = tryReadPersistedScript(record, ctx)

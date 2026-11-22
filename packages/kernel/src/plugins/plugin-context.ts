@@ -4,35 +4,27 @@
 import {
   HelmxError,
   validatePluginConfigFieldSchema,
-  type ActionManifest,
-  type ArtifactPreviewerSpec,
   type CommandSpec,
   type ComposerCompleterSpec,
-  type ComposerPillSpec,
-  type ComposerWidgetSpec,
   type HelmxPluginContext,
   type HookHandler,
   type HookName,
   type HookOptions,
   type MarkdownCodeBlockSpec,
-  type PluginActionContext,
   type PluginConfigFieldSchema,
   type PluginServiceSpec,
   type PluginSlotContributionSpec,
-  type ProfileRuntimeUiSpec,
   type ScreenSpec,
   type SettingsPanelSpec,
   type SidebarItemSpec,
-  type SidebarSectionSpec,
   type TimelineRendererSpec,
   type ToolViewSpec,
-  type UiActionSpec,
   type WorkbenchPanelSpec,
 } from '@helmx/protocol';
 import type { Provider } from '@earendil-works/pi-ai';
 import type { HookPipeline } from './hooks.js';
 import type { CapabilityRegistry } from './capability-registry.js';
-import { UiRegistry, UI_ACTION_SURFACES } from './ui-registry.js';
+import type { UiRegistry } from './ui-registry.js';
 import type { PluginDocRegistry } from './doc-registry.js';
 import { assertValidId, jsonClone } from './shared.js';
 import { assertValidProviderShape } from './provider-coordinator.js';
@@ -190,11 +182,8 @@ export function createPluginContext(options: CreatePluginContextOptions): HelmxP
     },
 
     hook: {
-      onTrigger: (fn, o) => addHook('trigger', fn, o),
       onInput: (fn, o) => addHook('input', fn, o),
       onBeforeTurn: (fn, o) => addHook('before_turn', fn, o),
-      onToolCall: (fn, o) => addHook('tool_call', fn, o),
-      onToolResult: (fn, o) => addHook('tool_result', fn, o),
       onAgentSpawn: (fn, o) => addHook('agent_spawn', fn, o),
       onTurnSettled: (fn, o) => addHook('turn_settled', fn, o),
     },
@@ -279,10 +268,6 @@ export function createPluginContext(options: CreatePluginContextOptions): HelmxP
         assertOpen('declare ui.sidebarItem');
         uiRegistry.registerUi(pluginId, 'sidebar.item', spec, 'sidebarItem', state.definition.clientRoot);
       },
-      sidebarSection: (spec: SidebarSectionSpec) => {
-        assertOpen('declare ui.sidebarSection');
-        uiRegistry.registerUi(pluginId, 'sidebar.section', spec, 'sidebarSection', state.definition.clientRoot);
-      },
       screen: (spec: ScreenSpec) => {
         assertOpen('declare ui.screen');
         uiRegistry.registerUi(pluginId, 'screen', spec, 'screen', state.definition.clientRoot);
@@ -299,21 +284,9 @@ export function createPluginContext(options: CreatePluginContextOptions): HelmxP
         assertOpen('declare ui.toolView');
         uiRegistry.registerUi(pluginId, 'tool.view', spec, 'toolView', state.definition.clientRoot);
       },
-      composerPill: (spec: ComposerPillSpec) => {
-        assertOpen('declare ui.composerPill');
-        uiRegistry.registerUi(pluginId, 'composer.pill', spec, 'composerPill', state.definition.clientRoot);
-      },
-      composerWidget: (spec: ComposerWidgetSpec) => {
-        assertOpen('declare ui.composerWidget');
-        uiRegistry.registerUi(pluginId, 'composer.widget', spec, 'composerWidget', state.definition.clientRoot);
-      },
       composerCompleter: (spec: ComposerCompleterSpec) => {
         assertOpen('declare ui.composerCompleter');
         uiRegistry.registerUi(pluginId, 'composer.completer', spec, 'composerCompleter', state.definition.clientRoot);
-      },
-      artifactPreviewer: (spec: ArtifactPreviewerSpec) => {
-        assertOpen('declare ui.artifactPreviewer');
-        uiRegistry.registerUi(pluginId, 'artifact.previewer', spec, 'artifactPreviewer', state.definition.clientRoot);
       },
       workbenchPanel: (spec: WorkbenchPanelSpec) => {
         assertOpen('declare ui.workbenchPanel');
@@ -326,23 +299,6 @@ export function createPluginContext(options: CreatePluginContextOptions): HelmxP
       settingsPanel: (spec: SettingsPanelSpec) => {
         assertOpen('declare ui.settingsPanel');
         uiRegistry.registerUi(pluginId, 'settings.panel', spec, 'settingsPanel', state.definition.clientRoot);
-      },
-      profileRuntime: (spec: ProfileRuntimeUiSpec) => {
-        assertOpen('declare ui.profileRuntime');
-        uiRegistry.registerUi(pluginId, 'profile.runtime', spec, 'profileRuntime', state.definition.clientRoot);
-      },
-      action: (spec: UiActionSpec) => {
-        assertOpen(`declare ui.action(${spec.target})`);
-        const surface = UI_ACTION_SURFACES[spec.target];
-        if (surface === undefined) {
-          throw new HelmxError(
-            'invalid_ui_spec',
-            `Plugin ${pluginId} ui.action target is invalid (${String(spec.target)}; allowed: conversation:header | conversation:row | timeline:entry)`,
-            400,
-            { pluginId, target: String(spec.target) },
-          );
-        }
-        uiRegistry.registerUi(pluginId, surface, spec, 'action', state.definition.clientRoot);
       },
       slot: (spec: PluginSlotContributionSpec) => {
         assertOpen('declare ui.slot');

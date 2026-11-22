@@ -13,9 +13,7 @@ export interface HelmxToolDeps {
   defaultCwd: string
   /** Hub URL derived from `HELMX_PORT` (e.g. `http://127.0.0.1:3202`; injectable for tests). */
   hubUrl: string
-  /** Inject conversation-scoped `SecretStash` environment variables. */
-  stashEnvFor(conversationId: number): Record<string, string>
-  /** Text redaction (stash plaintext -> marker; one-way only). */
+  /** Text redaction (global registered secret -> `[REDACTED]`; one-way only). */
   redact(text: string): string
   /** Managed process token (read on each call via getter; omits `HELMX_TOKEN` if unset or disposed). */
   processToken?: () => string | undefined

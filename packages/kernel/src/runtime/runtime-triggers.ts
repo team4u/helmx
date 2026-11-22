@@ -4,22 +4,17 @@
  * Responsibilities:
  * - Defang external message envelopes via XML escaping (prevents `</external_event>` tag injection);
  * - Busy policy: trigger deliveries submit with `whenBusy = 'steer'` (`followUp` remains available to explicit callers);
- * - Resolve the default delivery target when no explicit target is specified (deduplicating concurrent resolution via `resolveDefaultTriggerTarget`);
- * - Orchestrate the external trigger pipeline (`dispatchTrigger`: validate original explicit target -> run `trigger` hook -> `submitInput`).
+ * - Resolve the default delivery target when no explicit target is specified (deduplicating concurrent resolution via `resolveDefaultTriggerTarget`).
  */
 
-import { HelmxError } from '@helmx/protocol'
-import type { ConversationInit, ConversationSummary, ExternalTriggerEnvelope } from '@helmx/protocol'
-import type { HookBridge } from './hook-bridge.js'
-import { escapeXml } from '@helmx/protocol'
-import { stripEnvelope } from './runtime-helpers.js'
+import { HelmxError, escapeXml } from '@helmx/protocol'
+import type { ConversationInit, ConversationOwnership, ConversationSummary, ExternalTriggerEnvelope } from '@helmx/protocol'
 import type { HelmxStore } from './store.js'
 
 interface RuntimeTriggerDispatcherDeps {
   readonly store: HelmxStore
-  readonly hookBridge: HookBridge
   getConversation(id: number): ConversationSummary
-  getConversationOwnership(id: number): 'helmx' | 'bot' | 'human'
+  getConversationOwnership(id: number): ConversationOwnership
   createConversation(init: ConversationInit): Promise<ConversationSummary>
   submitInput(
     id: number,
@@ -44,12 +39,9 @@ export class RuntimeTriggerDispatcher {
 
   /**
    * Resolve the default delivery target for a trigger without an explicit target:
-   * - Entered only when `targetConversationId` is unset on the envelope (post-hook transforms may rewrite it);
-   * - Selects the newest non-child human-owned conversation under the assistant Profile; ownership is read solely
-   *   from the authoritative `conversation-ownership` document rather than inferred from tags/parent or summaries;
+   * - Selects the newest non-child human-owned conversation under the assistant Profile;
    * - Creates a normal assistant conversation on demand if none matches, coalescing concurrent in-process creations;
    *   the Promise is cleared immediately upon settlement so deletable IDs are not cached and failures can retry.
-   * Explicitly designated targets are validated before the `trigger` hook runs and never enter this method.
    */
   async resolveDefaultTriggerTarget(): Promise<number> {
     const candidates = this.deps.store
@@ -78,39 +70,22 @@ export class RuntimeTriggerDispatcher {
     }
   }
 
-  /** External trigger delivery: validate any original explicit target before running hooks that may rewrite routing. */
+  /** External trigger delivery: validate any explicit target, defang once, and deliver. */
   async dispatchTrigger(envelope: ExternalTriggerEnvelope): Promise<void> {
+    const text = this.defang(envelope)
     if (envelope.targetConversationId !== undefined) {
-      // Hooks (including ThreadKey mapping) must not mask an invalid explicit target by rewriting it to a valid one.
+      // Explicit target: deleted/invalid targets fail loudly with not_found (never masked by default re-routing).
       this.deps.getConversation(envelope.targetConversationId)
-    }
-    const initial: ExternalTriggerEnvelope = { ...envelope, text: this.defang(envelope) }
-    const outcome = await this.deps.hookBridge.runHookChain('trigger', initial)
-    if (outcome?.action === 'handled') return
-    let final = initial
-    if (outcome?.action === 'transform') {
-      final = outcome.value as ExternalTriggerEnvelope
-      // Re-defang post-transform text in case a plugin replaced the original payload.
-      final = { ...final, text: this.defang({ ...final, text: stripEnvelope(final.text) }) }
-    }
-    if (final.targetConversationId !== undefined) {
-      // Explicit target (including hook rewrites): deleted targets fall through to submitInput's requireConv
-      // and throw not_found (honest rejection; an expired explicit target must not be masked by re-routing).
-      await this.deps.submitInput(final.targetConversationId, final.text, { origin: 'trigger', whenBusy: 'steer' })
+      await this.deps.submitInput(envelope.targetConversationId, text, { origin: 'trigger', whenBusy: 'steer' })
       return
     }
-    // Default target: the target conversation may be deleted during the TOCTOU window between resolve and
-    // submitInput (cannot be closed atomically). submitInput validates requireConv before any side effect;
-    // on not_found for the default path, resolve and deliver once more — this re-evaluates routing rather than
-    // retrying delivery to the same target (preserving cron fire-once semantics); a second failure propagates
-    // cleanly (dropping that trigger payload, matching pre-fix behavior).
     const target = await this.resolveDefaultTriggerTarget()
     try {
-      await this.deps.submitInput(target, final.text, { origin: 'trigger', whenBusy: 'steer' })
+      await this.deps.submitInput(target, text, { origin: 'trigger', whenBusy: 'steer' })
     } catch (err) {
       if (!(err instanceof HelmxError && err.code === 'not_found')) throw err
       const resolved = await this.resolveDefaultTriggerTarget()
-      await this.deps.submitInput(resolved, final.text, { origin: 'trigger', whenBusy: 'steer' })
+      await this.deps.submitInput(resolved, text, { origin: 'trigger', whenBusy: 'steer' })
     }
   }
 }

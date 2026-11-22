@@ -14,14 +14,13 @@ import type {
   SidebarBadgeTone,
   SidebarItemBadgeSpec,
   SidebarItemSpec,
-  SidebarSectionSpec,
   SkillSummary,
 } from '@helmx/protocol/browser'
 import { parseLocalizedText, resolveLocalizedText } from '@helmx/protocol/browser'
 import { isPluginSummaryActive, type PluginActivityLike } from '../lib/live-state.js'
 import type { HelmxStoreValue, QualifiedUiSpec, ResolvedTarget } from '../lib/types.js'
 import { resolveTargetString } from '../lib/types.js'
-import { ARCHIVED_TAG, isConversationArchived } from '../conversation/archive-model.js'
+import { isConversationArchived } from '../conversation/archive-model.js'
 import { resolveFocusedPanel } from './shortcuts-model.js'
 
 export interface SidebarPartition {
@@ -29,18 +28,14 @@ export interface SidebarPartition {
   pinnedProfileIds: Set<string>
   /** sidebar.item 的 'conversation:<id>' 已指向的会话 ID 集合。 */
   pinnedConversationIds: Set<number>
-  /** sidebar.section 声明的过滤标签集合（如 'worker'）。 */
-  sectionTags: Set<string>
 }
 
-/** 从 UI 贡献中提取 sidebar.item / sidebar.section 的去重规则输入。 */
+/** 从 UI 贡献中提取 sidebar.item 的去重规则输入。 */
 export function partitionSidebarUi(
   sidebarItems: Array<QualifiedUiSpec<SidebarItemSpec>>,
-  sidebarSections: Array<QualifiedUiSpec<SidebarSectionSpec>>,
 ): SidebarPartition {
   const pinnedProfileIds = new Set<string>()
   const pinnedConversationIds = new Set<number>()
-  const sectionTags = new Set<string>()
 
   for (const item of sidebarItems) {
     const target = item.spec.target
@@ -55,14 +50,10 @@ export function partitionSidebarUi(
       if (Number.isInteger(idNum) && idNum > 0) pinnedConversationIds.add(idNum)
     }
   }
-  for (const section of sidebarSections) {
-    const tag = section.spec.filterTag?.trim()
-    if (tag) sectionTags.add(tag)
-  }
-  return { pinnedProfileIds, pinnedConversationIds, sectionTags }
+  return { pinnedProfileIds, pinnedConversationIds }
 }
 
-/** sidebar.section 过滤：会话 tags 命中 filterTag 即属该分组。 */
+/** 按标签过滤会话列表。 */
 export function filterConversationsByTag(conversations: ConversationSummary[], tag: string): ConversationSummary[] {
   return conversations.filter((c) => c.tags.includes(tag))
 }
@@ -73,57 +64,43 @@ export function filterConversationsByTag(conversations: ConversationSummary[], t
 
 /**
  * 会话是否可被人工归档管理（与删除保护同界）：
- * - 子代理派生会话（有父链）与 bot/helmx 托管会话不参与——归档是人类整理行为；
- * - 已被插件 sidebar.section filterTag 接管的会话不参与——归档对其无可见效果
- *   （仍留在插件分组），避免「点了归档却什么都不发生」。
+ * - 子代理派生会话（有父链）与 helmx 托管会话不参与——归档是人类整理行为。
  * 当前已归档的会话本函数仍可能返回 true（可管理性），菜单按归档态选择动作。
  */
 export function isConversationArchivable(
   conv: Pick<ConversationSummary, 'parentConversationId' | 'ownedBy' | 'tags'>,
-  sectionTags?: ReadonlySet<string>,
 ): boolean {
   if (conv.parentConversationId !== undefined) return false
   if ((conv.ownedBy ?? 'human') !== 'human') return false
-  if (sectionTags !== undefined && conv.tags.some((t) => t !== ARCHIVED_TAG && sectionTags.has(t))) {
-    return false
-  }
   return true
 }
 
 /**
  * 批量删除勾选口径（比归档口径宽、比在途自动化会话严）：
  * - 人类自有根会话（即归档口径）全部可批量删除；
- * - 自动化归属（bot/helmx）的历史会话（如已结束协作的 swarm worker）：无插件
- *   sidebar.section 接管且不在途（非 working/blocked）时放开批量删除——插件
- *   manageConversation 托管保护由服务端 bulk-delete 逐项权威判定（409 failures）；
+ * - 自动化归属（helmx）的历史会话（如已结束协作的 swarm worker）：不在途
+ *   （非 working/blocked）时放开批量删除——插件 manageConversation 托管保护
+ *   由服务端 bulk-delete 逐项权威判定（409 failures）；
  * - 仅放开批量删除，不放开批量归档（归档仍走 isConversationArchivable 人类口径）。
  */
 export function isConversationBulkDeletable(
   conv: Pick<ConversationSummary, 'parentConversationId' | 'ownedBy' | 'tags' | 'status'>,
-  sectionTags?: ReadonlySet<string>,
 ): boolean {
   if (conv.parentConversationId !== undefined) return false
-  if (sectionTags !== undefined && conv.tags.some((t) => t !== ARCHIVED_TAG && sectionTags.has(t))) {
-    return false
-  }
   if ((conv.ownedBy ?? 'human') === 'human') return true
   return conv.status !== 'working' && conv.status !== 'blocked'
 }
 
 /** 批量管理勾选口径：可归档（人类）或可批量删除（含空闲自动化历史会话）的并集。 */
-export function isConversationBulkSelectable(
-  conv: ConversationSummary,
-  sectionTags?: ReadonlySet<string>,
-): boolean {
-  return isConversationArchivable(conv, sectionTags) || isConversationBulkDeletable(conv, sectionTags)
+export function isConversationBulkSelectable(conv: ConversationSummary): boolean {
+  return isConversationArchivable(conv) || isConversationBulkDeletable(conv)
 }
 
 /** 过滤出批量管理可勾选的会话列表（勾选边界，非删除边界）。 */
 export function filterBulkSelectableConversations(
   conversations: ConversationSummary[],
-  sectionTags?: ReadonlySet<string>,
 ): ConversationSummary[] {
-  return conversations.filter((c) => isConversationBulkSelectable(c, sectionTags))
+  return conversations.filter(isConversationBulkSelectable)
 }
 
 /** 归档分组条目：会话 + 归属智能体展示名（供分组内辨识）。 */
@@ -134,18 +111,15 @@ export interface ArchivedConversationListItem {
 
 /**
  * 构建「已归档」分组条目：仅收人类自有根会话，沿用 Agent 站位同一暴露规则
- * （有父链 / bot-helmx 托管 / 已停用插件托管 Profile / 插件 section 接管的会话绝不进入，即使带宿主归档 tag），
+ * （有父链 / helmx 托管 / 已停用插件托管 Profile 的会话绝不进入，即使带宿主归档 tag），
  * 按 createdAt 倒序（同刻按 id 倒序），排序键与普通列表一致。Profile 可见性与 Agent 站位保持一致。
  */
 export function buildArchivedConversationList(input: {
   conversations: ConversationSummary[]
   profiles: Profile[]
   plugins?: ReadonlyArray<{ id: string } & PluginActivityLike>
-  sidebarSections?: Array<QualifiedUiSpec<SidebarSectionSpec>>
 }): ArchivedConversationListItem[] {
-  const { conversations, profiles, plugins = [], sidebarSections = [] } = input
-  const partition = partitionSidebarUi([], sidebarSections)
-  const sectionTags = partition.sectionTags
+  const { conversations, profiles, plugins = [] } = input
   const enabledPluginIds = collectEnabledPluginIds(plugins)
   const visibleProfileIds = new Set(
     profiles.filter((profile) => isProfileVisible(profile, enabledPluginIds)).map((profile) => profile.id),
@@ -156,7 +130,6 @@ export function buildArchivedConversationList(input: {
       if (!isConversationArchived(c)) return false
       if (c.parentConversationId !== undefined) return false
       if ((c.ownedBy ?? 'human') !== 'human') return false
-      if (c.tags.some((t) => t !== ARCHIVED_TAG && sectionTags.has(t))) return false
       if (profiles.some((profile) => profile.id === c.profileId) && !visibleProfileIds.has(c.profileId)) return false
       return true
     })
@@ -201,7 +174,6 @@ export interface AgentStandingsInput {
   conversations: ConversationSummary[]
   plugins: ReadonlyArray<{ id: string } & PluginActivityLike>
   sidebarItems?: Array<QualifiedUiSpec<SidebarItemSpec>>
-  sidebarSections?: Array<QualifiedUiSpec<SidebarSectionSpec>>
   /** 显示名解析 locale（sidebar.item label 属 LocalizedText 显示元数据）。 */
   locale: HelmxLocale
 }
@@ -220,12 +192,12 @@ interface SidebarPinMeta {
  * - 可见 Profile 各占一个一级站位；未加载资产的会话按实际 profileId 展示；
  * - 会话指向型 sidebar.item 的 label/order 覆盖对应站位的默认展示；
  * - 人类自由会话按 profileId 归集到各自 Agent 下（Profile 已删时生成孤儿兜底站位）；
- * - 插件停用后其 managedByPlugin 站位与 ownedBy=helmx/bot 遗留会话自动隐藏。
+ * - 插件停用后其 managedByPlugin 站位与 ownedBy=helmx 遗留会话自动隐藏。
  */
 export function buildAgentStandings(input: AgentStandingsInput): AgentStanding[] {
-  const { profiles, conversations, plugins, sidebarItems = [], sidebarSections = [], locale } = input
+  const { profiles, conversations, plugins, sidebarItems = [], locale } = input
   const enabledPluginIds = collectEnabledPluginIds(plugins)
-  const partition = partitionSidebarUi(sidebarItems, sidebarSections)
+  const partition = partitionSidebarUi(sidebarItems)
 
   const visibleProfiles = profiles.filter((p) => isProfileVisible(p, enabledPluginIds))
   const visibleProfileIds = new Set(visibleProfiles.map((p) => p.id))
@@ -253,13 +225,11 @@ export function buildAgentStandings(input: AgentStandingsInput): AgentStanding[]
 
   // 可挂到 Agent 站位下的会话：
   // 1. 排除子代理派生会话（有父链）；
-  // 2. 排除被 sidebar.section 接管的会话（后台 Worker 等分组展示，不重复挂载）；
-  // 3. 排除已人工归档会话（集中进「已归档」分组，绝不同时出现在活跃列表）；
-  // 4. 非 human 会话仅保留可见 Profile 的常驻会话（ownedBy=helmx 或被启用 sidebar.item 指向）。
+  // 2. 排除已人工归档会话（集中进「已归档」分组，绝不同时出现在活跃列表）；
+  // 3. 非 human 会话仅保留可见 Profile 的常驻会话（ownedBy=helmx 或被启用 sidebar.item 指向）。
   const attachable = conversations.filter((c) => {
     if (c.parentConversationId !== undefined) return false
     if (isConversationArchived(c)) return false
-    if (c.tags.some((t) => partition.sectionTags.has(t))) return false
     if ((c.ownedBy ?? 'human') === 'human') return true
     return (
       visibleProfileIds.has(c.profileId) &&
@@ -511,16 +481,13 @@ export function isProfileVisible(profile: Profile, enabledPluginIds: ReadonlySet
 }
 
 /**
- * 人类可在该 Agent 下新建对话的 Profile：可见性之外仅依据通用
- * humanSelectable 字段（常驻单例角色由托管插件置 false，缺省 true），
- * 不按插件 id / 固定角色 id 排除。
+ * 人类可在该 Agent 下新建对话的 Profile（仅判定插件托管可见性）。
  */
 export function isHumanSelectableProfile(
   profile: Profile,
   enabledPluginIds: ReadonlySet<string>,
 ): boolean {
-  if (!isProfileVisible(profile, enabledPluginIds)) return false
-  return profile.humanSelectable !== false
+  return isProfileVisible(profile, enabledPluginIds)
 }
 
 /** 插件自举/托管的 Skill 在对应插件未启用时隐藏（技能库与 / 斜杠菜单消费）。 */

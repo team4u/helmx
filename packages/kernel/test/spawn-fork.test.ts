@@ -732,7 +732,7 @@ describe('KernelRuntime.spawnAgent({ fork: true }) integration contracts', { tim
 
       // 2. SecretStash secrets never leak into forked subagent.
       const secretParent = await kernel.createConversation({ cwd: dir })
-      kernel.stash.put(secretParent.id, 'SECRET_API_KEY', 'sk-fork-secret-998877')
+      kernel.stash.addRedaction('sk-fork-secret-998877')
       await kernel.submitInput(secretParent.id, 'record secret sk-fork-secret-998877')
       await kernel.waitForIdle(secretParent.id)
 
@@ -744,11 +744,9 @@ describe('KernelRuntime.spawnAgent({ fork: true }) integration contracts', { tim
       assert.ok(secretForkMessages)
       const serialized = JSON.stringify(secretForkMessages)
       assert.ok(!serialized.includes('sk-fork-secret-998877'), 'forked subagent history must not contain plaintext secrets')
-      assert.ok(serialized.includes('[REDACTED:stash:'), 'forked subagent history should retain redaction placeholder')
+      assert.ok(serialized.includes('[REDACTED]'), 'forked subagent history should retain redaction placeholder')
       const secretChildren = kernel.listConversations({ parentConversationId: secretParent.id })
       assert.equal(secretChildren.length, 1)
-      assert.deepEqual(kernel.stash.envFor(secretChildren[0]!.id), {})
-      assert.equal(kernel.buildSpawnEnv(secretChildren[0]!.id, dir)['SECRET_API_KEY'], undefined)
 
       // 3. Pre-hook rejections must fire before the agent_spawn hook chain.
       const hitsBeforeRejects = agentSpawnHookHits
@@ -769,17 +767,7 @@ describe('KernelRuntime.spawnAgent({ fork: true }) integration contracts', { tim
         400,
       )
       await assertRejectsCode(
-        () => kernel.spawnAgent({ parentConversationId: secretParent.id, agentType: 'herdr:agy', fork: true, prompt: 'external runtime' }),
-        'unsupported_runtime',
-        400,
-      )
-      await kernel.services.profiles.save({
-        id: 'herdr-profile',
-        name: 'external agent',
-        runtime: { kind: 'herdr', agent: 'agy' },
-      })
-      await assertRejectsCode(
-        () => kernel.spawnAgent({ parentConversationId: secretParent.id, agentType: 'herdr-profile', fork: true, prompt: 'external profile' }),
+        () => kernel.spawnAgent({ parentConversationId: secretParent.id, agentType: 'external:agy', fork: true, prompt: 'external runtime' }),
         'unsupported_runtime',
         400,
       )
@@ -1039,18 +1027,13 @@ describe('KernelRuntime.spawnAgent({ fork: true }) integration contracts', { tim
       await kernel.submitInput(1, 'establish valid parent conversation history')
       await kernel.waitForIdle(1)
       const emptyConv = await kernel.createConversation({ cwd: dir })
-      await kernel.services.profiles.save({
-        id: 'herdr-prof',
-        name: 'external runtime',
-        runtime: { kind: 'herdr', agent: 'agy' },
-      })
 
       let mode:
         | 'bad-type'
         | 'bad-node-type'
         | 'bad-node-syntax'
         | 'flip-to-empty'
-        | 'flip-to-herdr-prof'
+        | 'flip-to-external-agent'
         | 'retarget-empty-parent' = 'bad-type'
       let downstreamHits = 0
       await kernel.plugins.register({
@@ -1070,8 +1053,8 @@ describe('KernelRuntime.spawnAgent({ fork: true }) integration contracts', { tim
               if (mode === 'flip-to-empty') {
                 return { action: 'transform', value: { ...req, fork: true } }
               }
-              if (mode === 'flip-to-herdr-prof') {
-                return { action: 'transform', value: { ...req, fork: true, agentType: 'herdr-prof' } }
+              if (mode === 'flip-to-external-agent') {
+                return { action: 'transform', value: { ...req, fork: true, agentType: 'external:agy' } }
               }
               return { action: 'transform', value: { ...req, parentConversationId: emptyConv.id } }
             },
@@ -1115,9 +1098,9 @@ describe('KernelRuntime.spawnAgent({ fork: true }) integration contracts', { tim
         409,
       )
 
-      mode = 'flip-to-herdr-prof'
+      mode = 'flip-to-external-agent'
       await assertRejectsCode(
-        () => kernel.spawnAgent({ parentConversationId: 1, prompt: 'non-fork rewritten to external profile' }),
+        () => kernel.spawnAgent({ parentConversationId: 1, prompt: 'non-fork rewritten to external agent' }),
         'unsupported_runtime',
         400,
       )

@@ -10,10 +10,7 @@ import {
   secretConfigured,
 } from '../src/modals/plugin-config-form-model.js'
 import {
-  argsTextToArgs,
-  argsToText,
   buildProfileSavePayload,
-  normalizeRuntime,
 } from '../src/profiles/profile-center-model.js'
 
 // ---------------------------------------------------------------------------
@@ -156,7 +153,6 @@ function baseProfile(overrides: Partial<Profile> = {}): Profile {
     nodeId: 'gpu-node',
     cwd: '/srv/work',
     tags: ['worker'],
-    runtime: { kind: 'herdr', agent: 'agy', nodeId: 'ops-box', workspace: '/srv/herdr' },
     system: '# SYSTEM\n基础提示词',
     ...overrides,
   }
@@ -176,21 +172,19 @@ function payloadFromProfile(
     restrictToCwd: profile.restrictToCwd,
     system: profile.system,
     skills: profile.skills,
-    runtime: profile.runtime,
     source: profile,
     isNew: false,
     ...overrides,
   })
 }
 
-test('仅改展示名：载荷仍携带完整基础配置，不丢节点/目录/运行时；system 省略', { timeout: 60_000 }, () => {
+test('仅改展示名：载荷仍携带完整基础配置，不丢节点/目录；system 省略', { timeout: 60_000 }, () => {
   const payload = payloadFromProfile(baseProfile(), { name: '重构工人' })
   assert.equal(payload.name, '重构工人')
   assert.equal(payload.model, 'zhipu/glm-4.6', 'PUT 整体替换：未改的 model 必须随载荷保留')
   assert.equal(payload.nodeId, 'gpu-node', '只改名不丢执行节点')
   assert.equal(payload.cwd, '/srv/work', '只改名不丢工作目录')
   assert.deepEqual(payload.tags, ['worker'])
-  assert.deepEqual(payload.runtime, { kind: 'herdr', agent: 'agy', nodeId: 'ops-box', workspace: '/srv/herdr' }, '只改名不丢外部运行时')
   assert.equal('system' in payload, false, '未编辑 system 时必须省略')
 })
 
@@ -203,7 +197,6 @@ test('未做任何修改：载荷为完整规范化基础配置', { timeout: 60_
     nodeId: 'gpu-node',
     cwd: '/srv/work',
     tags: ['worker'],
-    runtime: { kind: 'herdr', agent: 'agy', nodeId: 'ops-box', workspace: '/srv/herdr' },
   })
 })
 
@@ -212,7 +205,6 @@ test('基线无可选字段：载荷仍提交骨架（tags 空数组），不携
   assert.deepEqual(payload, { id: 'bare', tags: [] })
   assert.equal('nodeId' in payload, false)
   assert.equal('cwd' in payload, false)
-  assert.equal('runtime' in payload, false)
   assert.equal('system' in payload, false)
   assert.equal('memory' in payload, false)
 })
@@ -240,65 +232,12 @@ test('新建 Profile：提交完整基础配置 + 当前 system 全文', { timeo
   assert.equal(payload.nodeId, 'gpu-node')
   assert.equal(payload.cwd, '/srv/work')
   assert.equal('tags' in payload, false)
-  assert.deepEqual(payload.runtime, { kind: 'herdr', agent: 'agy', nodeId: 'ops-box', workspace: '/srv/herdr' })
   assert.equal(payload.system, '# 新提示词')
   assert.equal('memory' in payload, false)
 })
 
 // ---------------------------------------------------------------------------
-// runtime.args：每行一个参数，带空格参数保真
-// ---------------------------------------------------------------------------
-
-test('argsTextToArgs 每行一个参数且保留参数内部空格', { timeout: 60_000 }, () => {
-  assert.deepEqual(argsTextToArgs('--model\nglm-4.6'), ['--model', 'glm-4.6'])
-  assert.deepEqual(argsTextToArgs('--title\n周报 草稿 v2'), ['--title', '周报 草稿 v2'])
-  assert.deepEqual(argsTextToArgs('  --trim  \n\n  --keep inner  \n'), ['--trim', '--keep inner'])
-  assert.deepEqual(argsTextToArgs(''), [])
-})
-
-test('argsToText 与 argsTextToArgs 往返保真（不按空格拆分）', { timeout: 60_000 }, () => {
-  const args = ['--prompt', 'fix the bug now', '--title', '周报 草稿']
-  assert.deepEqual(argsTextToArgs(argsToText(args)), args)
-})
-
-test('normalizeRuntime：空 nodeId/workspace/env/args 省略，参数仅 trim 边界', { timeout: 60_000 }, () => {
-  const normalized = normalizeRuntime({
-    kind: 'herdr',
-    agent: 'agy',
-    nodeId: '   ',
-    workspace: '',
-    args: ['  --keep inner  ', ''],
-    env: { EMPTY_KEY: '' },
-  })
-  assert.deepEqual(normalized, { kind: 'herdr', agent: 'agy', args: ['--keep inner'], env: { EMPTY_KEY: '' } })
-  assert.equal('nodeId' in normalized, false)
-  assert.equal('workspace' in normalized, false)
-})
-
-test('normalizeRuntime：runtime 整体可被清空（关闭 Herdr 运行时）', { timeout: 60_000 }, () => {
-  assert.equal(normalizeRuntime(undefined), undefined)
-})
-
-test('runtime 随载荷完整规范化提交；关闭（undefined）时才省略', { timeout: 60_000 }, () => {
-  const base = baseProfile({ runtime: { kind: 'herdr', agent: 'agy', nodeId: '  ' } })
-  // 未修改的 runtime 也随完整载荷提交（规范化后空白 nodeId 省略）。
-  const unchanged = payloadFromProfile(base)
-  assert.deepEqual(unchanged.runtime, { kind: 'herdr', agent: 'agy' })
-
-  const payload = payloadFromProfile(base, {
-    runtime: { kind: 'herdr', agent: 'agy', nodeId: '  ', args: ['--title', '周报 草稿'] },
-  })
-  assert.deepEqual(payload.runtime, { kind: 'herdr', agent: 'agy', args: ['--title', '周报 草稿'] })
-})
-
-test('关闭外部运行时：载荷省略 runtime 键，整体替换即删除', { timeout: 60_000 }, () => {
-  const payload = payloadFromProfile(baseProfile(), { runtime: undefined })
-  assert.equal('runtime' in payload, false)
-  assert.equal(payload.nodeId, 'gpu-node', '关闭 runtime 不影响顶层执行节点')
-})
-
-// ---------------------------------------------------------------------------
-// Profile 顶层 nodeId / cwd（普通会话执行默认节点与工作目录，与 runtime.nodeId 不同层级）
+// Profile 顶层 nodeId / cwd（普通会话执行默认节点与工作目录）
 // ---------------------------------------------------------------------------
 
 test('顶层 nodeId / cwd 修改进入载荷；清空归一为省略（删除覆盖，回退 local）', { timeout: 60_000 }, () => {

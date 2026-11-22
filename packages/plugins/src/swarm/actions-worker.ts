@@ -188,22 +188,6 @@ export function createWorkerHandlers(
     if (profileRecord === undefined) {
       throw new HelmxError('validation_error', `Profile 不存在：${targetProfile}`, 400, { profileId: targetProfile })
     }
-    if (profileRecord.humanSelectable === false) {
-      throw new HelmxError(
-        'validation_error',
-        `dispatch_worker 禁止使用系统内部 Profile '${targetProfile}'`,
-        400,
-        { profileId: targetProfile },
-      )
-    }
-    if (profileRecord.runtime !== undefined) {
-      throw new HelmxError(
-        'unsupported_runtime',
-        `dispatch_worker 仅支持内建会话运行时，不支持外部运行时 Profile '${targetProfile}'（runtime=${profileRecord.runtime.kind}:${profileRecord.runtime.agent}）`,
-        400,
-        { profileId: targetProfile, runtime: profileRecord.runtime },
-      )
-    }
 
     const requestedNodeId = input.nodeId === undefined ? undefined : assertWorkerNodeId(input.nodeId)
     const requestedCwd = input.cwd === undefined ? undefined : assertWorkerCwd(input.cwd)

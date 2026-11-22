@@ -156,8 +156,8 @@ test('redaction: when error detail echoes a registered stash secret, lastError s
   try {
     const secretValue = 'sk-helmx-test-9f3ab2c7deadbeef'
     const conversation = await env.kernel.createConversation()
-    const placeholder = env.kernel.stash.put(conversation.id, 'API_KEY', secretValue)
-    assert.ok(placeholder.startsWith('[REDACTED:stash:'))
+    env.kernel.stash.addRedaction(secretValue)
+    const placeholder = '[REDACTED]'
 
     // Provider error detail echoes secret plaintext (simulating upstream response echoing request headers/params).
     env.faux.setResponses([

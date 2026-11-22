@@ -27,8 +27,6 @@ import { after, before, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import type { EnvFabric } from '../../kernel/src/env/index.js'
 import { composeExecutionEnv } from '../../kernel/src/env/scoped-env.js'
-import { buildSpawnPaneEnv } from '../src/herdr/spawn-rules.js'
-import { mergeGrantedEnvWithManagedLocks } from '../src/herdr/executor.js'
 import {
   buildManagedEnv,
   createBashTool,
@@ -67,7 +65,6 @@ async function makeDeps(dir: string, extra: Partial<HelmxToolDeps> = {}): Promis
     dataDir: dir,
     defaultCwd: dir,
     hubUrl: 'http://127.0.0.1:3202',
-    stashEnvFor: () => ({}),
     redact: (t) => stash.redact(t),
     artifacts,
     ...extra,
@@ -285,7 +282,7 @@ describe('register_artifact：local 真实字节登记', { timeout: 60_000 }, ()
     const dir = join(rootDir, 'ra-local-3')
     const stash = new SecretStash()
     const secretValue = '{{SECRET_ra_local_3}}'
-    stash.put(1, 'TOK', secretValue)
+    stash.addRedaction(secretValue)
     const artifacts = new ArtifactService(dir, new InMemoryArtifactRepository(), stash)
     const deps: HelmxToolDeps = {
       ...(await makeDeps(dir)),
@@ -828,68 +825,14 @@ describe('HELMX_EXECUTION_SCOPE：稳定锚点与受管覆盖锁定', { timeout:
     }
   })
 
-  it('Herdr 窗格：Profile 注入的 HELMX_EXECUTION_SCOPE 被受管值固定覆盖', { timeout: 60_000 }, async () => {
-    const deps = await makeDeps(join(rootDir, 'scope-3'))
-    const managed = buildManagedEnv(deps, '/wt/pane', 12, 'local')
-    const { env } = buildSpawnPaneEnv(
-      managed,
-      { HELMX_EXECUTION_SCOPE: 'evil-scope', CUSTOM: 'ok' },
-      { remote: false },
-    )
-    assert.equal(env['HELMX_EXECUTION_SCOPE'], managed['HELMX_EXECUTION_SCOPE'], '受管 scope 权威')
-    assert.equal(env['CUSTOM'], 'ok', '非受管 Profile env 正常保留')
-  })
-
-  it('scope 别名劫持防护：stash / profileEnv / 授予值的大小写变体一律剥除', { timeout: 60_000 }, async () => {
-    // 1) stash 别名：secret 命中 helmx_execution_scope / Helmx_Cwd 等变体时，
-    //    buildManagedEnv 直接剥除（Windows env 名大小写不敏感，别名可劫持）。
-    const stash = new SecretStash()
-    const evilScope = '{{SECRET_evil_scope}}'
-    const evilCwd = '{{SECRET_evil_cwd}}'
-    stash.put(1, 'helmx_execution_scope', evilScope)
-    stash.put(1, 'Helmx_Cwd', evilCwd)
-    stash.put(1, 'LEGIT', 'kept')
+  it('scope 别名劫持防护：runShell 子进程读到 canonical scope 而非宿主大小写变体', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'scope-alias-1')
-    await ensureDataDir(dir)
-    const artifacts = new ArtifactService(dir, new InMemoryArtifactRepository(), stash)
-    const deps: HelmxToolDeps = {
-      dataDir: dir,
-      defaultCwd: dir,
-      hubUrl: 'http://127.0.0.1:3202',
-      stashEnvFor: (id) => stash.envFor(id),
-      redact: (t) => stash.redact(t),
-      artifacts,
-    }
+    const deps = await makeDeps(dir)
     const env = buildManagedEnv(deps, '/work', 1, 'local')
-    assert.equal('helmx_execution_scope' in env, false, 'stash lowercase 别名必须剥除')
-    assert.equal('Helmx_Cwd' in env, false, 'stash 混合大小写别名必须剥除')
     assert.ok(env['HELMX_EXECUTION_SCOPE']!.startsWith('helmx-'), 'canonical scope 权威存在')
     assert.equal(env['HELMX_CWD'], '/work', 'canonical HELMX_CWD 权威')
-    assert.equal(env['LEGIT'], 'kept', '非受管 secret 正常注入')
-    // 子进程实测：任何大小写形式都只解析出受管 scope（Windows 语义等价验证）。
     const probe = await runShell(deps, 'printf %s "$HELMX_EXECUTION_SCOPE"', { conversationId: 1 })
     assert.equal(probe.ok, true)
     assert.ok(probe.output.startsWith('helmx-'), '子进程读到的是受管 scope 而非别名')
-
-    // 2) Profile env 别名：buildSpawnPaneEnv 大小写不敏感剥除受管键。
-    const managed = buildManagedEnv(deps, '/wt', 1, 'local')
-    const pane = buildSpawnPaneEnv(
-      managed,
-      { helmx_execution_scope: 'evil', Helmx_Execution_Scope: 'evil2', OK_VALUE: 'ok' },
-      { remote: false },
-    )
-    assert.equal('helmx_execution_scope' in pane.env, false)
-    assert.equal('Helmx_Execution_Scope' in pane.env, false)
-    assert.equal(pane.env['HELMX_EXECUTION_SCOPE'], managed['HELMX_EXECUTION_SCOPE'])
-    assert.equal(pane.env['OK_VALUE'], 'ok')
-
-    // 3) 授予值别名：mergeGrantedEnvWithManagedLocks 剥除变体并重申基线。
-    const merged = mergeGrantedEnvWithManagedLocks(
-      { HELMX_EXECUTION_SCOPE: managed['HELMX_EXECUTION_SCOPE']!, HELMX_CWD: '/base' },
-      { helmx_execution_scope: 'evil-granted', GRANTED_KEY: 'ok' },
-    )
-    assert.equal('helmx_execution_scope' in merged, false, '授予名命中变体不得劫持基线 scope')
-    assert.equal(merged['HELMX_EXECUTION_SCOPE'], managed['HELMX_EXECUTION_SCOPE'])
-    assert.equal(merged['GRANTED_KEY'], 'ok', '非受管授予值正常保留')
   })
 })

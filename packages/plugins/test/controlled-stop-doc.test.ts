@@ -67,7 +67,7 @@ class FakeBackend extends PluginHostBackendFixtureBase {
   abortConversation(): Promise<void> {
     return Promise.resolve()
   }
-  getConversationOwnership(): 'helmx' | 'bot' | 'human' {
+  getConversationOwnership(): 'helmx' | 'human' {
     return 'human'
   }
   spawnAgent(): Promise<unknown> {

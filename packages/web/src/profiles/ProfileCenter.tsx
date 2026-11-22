@@ -3,7 +3,6 @@ import type { Profile } from './profile-center-model.js'
 import {
   buildProfileCategoryCounts,
   buildProfileCategoryTabs,
-  dedupeProfileRuntimeSpecs,
   filterProfiles,
   type ProfileCategoryTab,
 } from './profile-center-model.js'
@@ -14,7 +13,6 @@ import { assetsApi } from '../lib/api.js'
 import {
   useAuthenticated,
   useLocationTargets,
-  useOptionalGroupedUi,
   useProfilesSlice,
   useStoreActions,
 } from '../lib/store-context.js'
@@ -44,9 +42,8 @@ export function ProfileCenter({
   const authenticated = useAuthenticated()
   const { profiles } = useProfilesSlice()
   const { primaryTarget, splitTarget } = useLocationTargets()
-  const groupedUi = useOptionalGroupedUi()
   const { openTarget, closeSplit, refreshAssets, pushNotice } = useStoreActions()
-  const { locale, t } = useWebLocale()
+  const { t } = useWebLocale()
   const [query, setQuery] = useState('')
   const [activeTab, setActiveTab] = useState<ProfileCategoryTab>('all')
   const [isCreatingNew, setIsCreatingNew] = useState(false)
@@ -73,22 +70,12 @@ export function ProfileCenter({
     }
   }, [authenticated])
 
-  const runtimeSpecs = useMemo(
-    () => dedupeProfileRuntimeSpecs(groupedUi?.profileRuntimes ?? []),
-    [groupedUi?.profileRuntimes],
-  )
-  const categoryTabs = useMemo(
-    () => buildProfileCategoryTabs(runtimeSpecs, locale, t),
-    [runtimeSpecs, locale, t],
-  )
+  const categoryTabs = useMemo(() => buildProfileCategoryTabs(t), [t])
   const effectiveTab: ProfileCategoryTab = categoryTabs.some((tab) => tab.key === activeTab)
     ? activeTab
     : 'all'
 
-  const categoryCounts = useMemo(
-    () => buildProfileCategoryCounts(profiles, runtimeSpecs),
-    [profiles, runtimeSpecs],
-  )
+  const categoryCounts = useMemo(() => buildProfileCategoryCounts(profiles), [profiles])
 
   const filteredProfiles = useMemo(() => {
     return filterProfiles(profiles, {

@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-插件系统是 Helmx 的核心生产能力：内核（`@helmx/kernel`）只保留持久会话、跨节点执行底座、Model/Auth 与插件宿主四块通用机制，其余一切业务能力由插件承载。官方插件实现与资产位于 `packages/plugins`，由产品组合根 `packages/hub/src/app.ts` 的 `createHelmx` 注册，共 12 个内置插件：
+插件系统是 Helmx 的核心生产能力：内核（`@helmx/kernel`）只保留持久会话、跨节点执行底座、Model/Auth 与插件宿主四块通用机制，其余一切业务能力由插件承载。官方插件实现与资产位于 `packages/plugins`，由产品组合根 `packages/hub/src/app.ts` 的 `createHelmx` 注册，共 11 个内置插件（全部默认启用）：
 
 | 插件 ID | 名称 | 职责一句话 | 默认状态 | locked |
 | :--- | :--- | :--- | :--- | :--- |
@@ -16,7 +16,6 @@
 | `builtin:json-render` | JSON 卡片渲染 | 接管 ```ui 代码围栏渲染声明式 JSON Spec 卡片，自举 `generative-ui` 技能 | 启用 | 否 |
 | `builtin:mermaid` | Mermaid 图表 | 接管 ```mermaid 围栏，把 Mermaid 文本渲染为矢量图表 | 启用 | 否 |
 | `builtin:triggers` | 触发器 | Cron 定时与 Webhook 签名入站连接器 | 启用 | 否 |
-| `builtin:herdr` | Herdr 终端 | 拦截 `agent_spawn` 驱动本机/远端 Herdr CLI Agent，带 CAS 审批桥 | 停用 | 否 |
 | `builtin:magpie` | Magpie 网关 | 动态模型网关接入：目录、配额与路由组诊断 | 启用 | 否 |
 | `builtin:token-speed` | Token 速率 | 输入区状态行实时解码速率（只读展示，内核零速率计算） | 启用 | 否 |
 | `builtin:tiers` | 模型档位 | 语义模型档位（`tier/<id>`）、自定义多套模板与 `model-tiers` 受管技能 | 启用 | 否 |
@@ -35,15 +34,15 @@
 | :--- | :--- | :--- |
 | `ctx.pluginId` / `ctx.dataDir` | 只读身份与专属数据目录 | `<dataDir>/plugins/<id>/` |
 | `ctx.getConfig()` / `ctx.configSchema(schema)` | 读取与声明配置 | `type: string/number/boolean`（`string` 支持 `format: 'model' / 'node' / 'profile'`，由宿主渲染模型目录 / 计算节点 / Profile 标准选择控件）；`secret: true` 分离至 `credentials.json` |
-| `ctx.hook` | 注册 7 个生命周期 Hook | `trigger / input / before_turn / tool_call / tool_result / agent_spawn / turn_settled`，支持 `priority` |
+| `ctx.hook` | 注册 4 个生命周期 Hook | `input / before_turn / agent_spawn / turn_settled`，支持 `priority` |
 | `ctx.action(spec)` | 注册五端复用动作 | 强类型 `inputSchema` / `outputSchema`；可选 `cli.command` / `exposeAsTool` / `promptSnippet` / `promptGuidelines` / `scope` / `idempotent` |
 | `ctx.tool(spec)` | 注册仅对模型可见的工具 | 同样支持 `scope` 与提示词投射字段 |
 | `ctx.route(spec)` | 挂载 Web Standard 原始 HTTP 路由 | `public: true` 跳过 Token 鉴权（webhook 回调用） |
 | `ctx.doc(name, initial, opts)` | 声明全局持久文档 | state.sqlite；`public: true` 进全局首帧与 SSE 广播 |
 | `ctx.sessionDoc(name, initial, opts)` | 按会话分片的持久文档 | 不进全局首帧/全局 SSE，专用 SSE 按需订阅 |
-| `ctx.service(spec)` | 注册后台长驻服务 | `prepare / start / stop / liveTasks / inUse` |
+| `ctx.service(spec)` | 注册后台长驻服务 | `prepare / start / reconcile / stop / liveTasks / inUse` |
 | `ctx.provider(provider)` | 注册模型供应商网关 | 启用时挂载、停用后注销，宿主统一协调 |
-| `ctx.ui` | 前端扩展点注册表（16 个 surface） | 见[扩展点详解](../architecture/extension-points.md) |
+| `ctx.ui` | 前端扩展点注册表（10 个 surface） | 见[扩展点详解](../architecture/extension-points.md) |
 | `ctx.host` | 宿主运行时能力（`HelmxHostApi`） | 见下文 |
 
 启动时序遵守**全局 prepare 后 start 屏障**：`PluginHost.start` 先对全体已启用服务执行 `prepare()`，全部完成后才依次 `start()`，最后恢复会话调度。热启用单个插件同样先 prepare 后 start。`stop()` 返回后本周期 doc 句柄失效；宿主在 await `stop()` 链期间开放受控停止窗口，允许本插件当前周期的 doc 句柄完成最终写入（`builtin:workflow` 在此窗口做最终 runs 投影并 `await flush()`）。
@@ -69,17 +68,15 @@
 | 分组 | 端口 |
 | :--- | :--- |
 | 外部事件 | `dispatchTrigger(envelope)`（统一 defang 防逃逸投递） |
-| 输入与会话 | `submitInput` / `submitInputGuarded`（均支持 `attachments` 产物 ID 列表，按会话或祖先链授权挂载）、`createConversation / forkConversation / listConversations / getConversation / getConversationDetail / getConversationSubmission / updateConversation / abortConversation / abortConversationGuarded`、`resetConversationGuarded / compactConversationGuarded`（插件自动化专用上下文维护：内核串行域内于 SDK reset/compact 前同步复核归属（human 一律拒绝）与可选 CAS 水位；handoff/instructions 过统一脱敏）、`manageConversation`（删除保护）、`markConversationOwnership` |
-| 人机审批 | `createAsk / cancelAsk / registerAskSeqResolver`（CAS 水位解析器） |
-| 子代理与执行 | `spawnAgent / runGate / execEnv / resolveSpawnTarget / listActiveSpawnExecutions / withFileMutationQueue` |
-| 动作互调与治理 | `prepareAction / invokeAction / listActions / plugins`（受管包生命周期端口） |
-| 资产端口 | `profiles / skills / secrets`（Profile 与 SYSTEM.md、技能受管自举、插件私有机密）、`listArtifacts / createArtifact / getArtifact`（会话产物列表、内存字节写入（与 HTTP 上传同链校验，返回 ID 供 `submitInput` 挂载）、授权读取） |
-| 节点与文件 | `nodeIpc / nodeFetch / openTunnel / executionEnv / withFileLock / atomicWriteFile / buildSpawnEnv / inspectNodePathUsage` |
-| 通用机制 | `redact / completeText / refreshModels / listPlugins / listUi / setConfig / isClosing / onEvent / emitEvent` |
+| 输入与会话 | `submitInput` / `submitInputGuarded`（均支持 `attachments` 产物 ID 列表，按会话或祖先链授权挂载）、`createConversation / forkConversation / listConversations / getConversation / getConversationDetail / getConversationSubmission / updateConversation / abortConversation / abortConversationGuarded`、`manageConversation`（删除保护）、`markConversationOwnership` |
+| 人机审批 | `createAsk / cancelAsk` |
+| 子代理与执行 | `spawnAgent / runGate / execEnv / resolveSpawnTarget / listActiveSpawnExecutions` |
+| 动作互调与治理 | `prepareAction / invokeAction / listActions / listPlugins` |
+| 资产端口 | `profiles / skills / secrets`（Profile 与 SYSTEM.md、技能受管自举、插件私有机密）、`listArtifacts` |
+| 节点与文件 | `nodeIpc / openTunnel / executionEnv / withFileLock / atomicWriteFile / inspectNodePathUsage` |
+| 通用机制 | `redact / completeText / refreshModels / listUi / isClosing / onEvent / emitEvent` |
 
-三条使用纪律：受管 Git Worktree 清理不在 `ctx.host`——需要清理时调用 `builtin:worktree` 的 `cleanup_worktree` 动作；`execEnv` 目标节点或目录缺省继承请求会话坐标，节点离线显式报 `409 node_offline`，绝不静默回退本机。
-
-第三条纪律：插件做「清理/重置会话上下文」必须走 `resetConversationGuarded` / `compactConversationGuarded`（或复用既有 HTTP/CLI 面向人类开放的语义），**不得**用 `createConversation` 另起会话冒充上下文清理，也不得经 `execEnv`/`executionEnv` 反向调用宿主 `helmx` CLI 绕过类型契约与归属红线（`execEnv` 是节点命令执行端口，不是宿主 API 通道）。
+使用纪律：受管 Git Worktree 清理不在 `ctx.host`——需要清理时调用 `builtin:worktree` 的 `cleanup_worktree` 动作；`execEnv` 目标节点或目录缺省继承请求会话坐标，节点离线显式报 `409 node_offline`，绝不静默回退本机；插件不得经 `execEnv`/`executionEnv` 反向调用宿主 `helmx` CLI 绕过类型契约与归属红线。
 
 ## 配置与数据边界
 
@@ -121,7 +118,7 @@
 
 ## 相关文档
 
-- 各内置插件深度文档：[workflow](workflow.md) · [worktree](worktree.md) · [swarm](swarm.md) · [profile](profile.md) · [memory](memory.md) · [herdr](herdr.md) · [triggers](triggers.md) · [magpie](magpie.md) · [json-render](json-render.md) · [mermaid](mermaid.md) · [token-speed](token-speed.md) · [tiers](tiers.md)
+- 各内置插件深度文档：[workflow](workflow.md) · [worktree](worktree.md) · [swarm](swarm.md) · [profile](profile.md) · [memory](memory.md) · [triggers](triggers.md) · [magpie](magpie.md) · [json-render](json-render.md) · [mermaid](mermaid.md) · [token-speed](token-speed.md) · [tiers](tiers.md)
 - [插件开发实战](plugin-development.md)：从 `helmx plugins init` 到 doctor / rescan / enable / reload 的完整闭环
-- [生命周期 Hook 与全界面扩展点](../architecture/extension-points.md)：7 个 Hook 与 16 个 UI surface 的逐项契约
+- [生命周期 Hook 与全界面扩展点](../architecture/extension-points.md)：4 个 Hook 与 10 个 UI surface 的逐项契约
 - [微内核架构总览](../architecture/overview.md)：内核四块机制与包依赖方向

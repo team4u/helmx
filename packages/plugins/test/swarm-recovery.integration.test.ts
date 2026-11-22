@@ -94,19 +94,15 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
           model: 'faux/faux-1',
           providers: [faux.provider],
         })
-        await app.kernel.plugins.register({
-          id: 'test:sigkill-dispatch-trap',
-          name: 'sigkill dispatch trap',
-          definePlugin(ctx) {
-            ctx.hook.onToolResult((ev) => {
-              if (ev.toolName === 'swarm_dispatch_worker') {
-                writeSync(1, 'TRAPPED_DISPATCH=' + JSON.stringify({ callId: ev.callId }) + '\\n')
-                process.kill(process.pid, 'SIGKILL')
-              }
-              return { action: 'continue' }
-            })
-          },
-        })
+        const origExecTool = app.kernel.plugins.executeTool.bind(app.kernel.plugins)
+        app.kernel.plugins.executeTool = async (name, input, ctx) => {
+          const result = await origExecTool(name, input, ctx)
+          if (name === 'swarm_dispatch_worker') {
+            writeSync(1, 'TRAPPED_DISPATCH=' + JSON.stringify({ callId: ctx?.callId }) + '\\n')
+            process.kill(process.pid, 'SIGKILL')
+          }
+          return result
+        }
         const coord = await app.kernel.createConversation({
           title: 'Replay Dispatch Coord',
           profileId: 'assistant',
@@ -224,19 +220,15 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
           model: 'faux/faux-1',
           providers: [faux.provider],
         })
-        await app.kernel.plugins.register({
-          id: 'test:sigkill-post-trap',
-          name: 'sigkill post trap',
-          definePlugin(ctx) {
-            ctx.hook.onToolResult((ev) => {
-              if (ev.toolName === 'swarm_board_post') {
-                writeSync(1, 'TRAPPED_POST=1\\n')
-                process.kill(process.pid, 'SIGKILL')
-              }
-              return { action: 'continue' }
-            })
-          },
-        })
+        const origExecTool = app.kernel.plugins.executeTool.bind(app.kernel.plugins)
+        app.kernel.plugins.executeTool = async (name, input, ctx) => {
+          const result = await origExecTool(name, input, ctx)
+          if (name === 'swarm_board_post') {
+            writeSync(1, 'TRAPPED_POST=1\\n')
+            process.kill(process.pid, 'SIGKILL')
+          }
+          return result
+        }
         const coord = await app.kernel.createConversation({
           title: 'Post Replay Coord',
           profileId: 'assistant',

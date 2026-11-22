@@ -562,22 +562,6 @@ export class WorktreeStore {
     return token
   }
 
-  /** 同步回调内登记 running 租约（外部运行时首次回填专用；调用方自行触发异步 flush）。 */
-  stageRunningLease(target: { worktreeId: string; nodeId: string; path: string; info: AgentExecutionInfo }): string {
-    const token = randomUUID()
-    const map = this.listLeases()
-    map.set(token, {
-      phase: 'running',
-      nodeId: target.nodeId,
-      path: target.path,
-      info: target.info,
-      worktreeId: target.worktreeId,
-      createdAt: Date.now(),
-    })
-    this.saveLeases(map)
-    return token
-  }
-
   updateLease(token: string, info: AgentExecutionInfo): void {
     const map = this.listLeases()
     const lease = map.get(token)
@@ -588,15 +572,14 @@ export class WorktreeStore {
 
   async acquireReattachLease(
     target: { worktreeId: string; nodeId: string; path: string },
-    match: { conversationId?: number; executionId?: string },
+    match: { conversationId?: number },
     info: AgentExecutionInfo,
   ): Promise<string> {
     const map = this.listLeases()
     for (const [token, lease] of map) {
       if (lease.worktreeId !== target.worktreeId) continue
-      const matchExec = match.executionId !== undefined && lease.info.executionId === match.executionId
       const matchConv = match.conversationId !== undefined && lease.info.conversationId === match.conversationId
-      if (matchExec || matchConv) {
+      if (matchConv) {
         map.set(token, {
           ...lease,
           phase: 'running',
@@ -621,20 +604,6 @@ export class WorktreeStore {
     this.saveLeases(map)
     await this.flush()
     return token
-  }
-
-  findLeaseTokenByExecution(match: { executionId?: string; conversationId?: number }): string | undefined {
-    for (const [token, lease] of this.listLeases()) {
-      if (match.executionId !== undefined && lease.info.executionId === match.executionId) return token
-      if (
-        match.conversationId !== undefined &&
-        lease.info.executionId === undefined &&
-        lease.info.conversationId === match.conversationId
-      ) {
-        return token
-      }
-    }
-    return undefined
   }
 
   async settleLease(token: string, succeeded: boolean, neverStarted: boolean): Promise<void> {

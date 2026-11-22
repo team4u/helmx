@@ -37,16 +37,14 @@ function makeHostApi(): PluginHostBackend {
     markConversationOwnership: noop,
     createAsk: async () => ({ id: 'ask-1', status: 'answered', answers: {} }),
     cancelAsk: async () => {},
-    registerAskSeqResolver: () => () => {},
     onEvent: () => () => {},
     abortConversation: async () => {},
-    getConversationOwnership(): 'helmx' | 'bot' | 'human' {
+    getConversationOwnership(): 'helmx' | 'human' {
       return 'human'
     },
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
     execEnv: async () => { throw new HelmxError('unsupported', 'this fixture does not execute node commands', 501) },
-    withFileMutationQueue(): Promise<never> { throw new Error('this fixture does not support file mutation queue') },
     emitEvent: () => {},
   };
 }

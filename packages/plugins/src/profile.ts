@@ -29,7 +29,6 @@ import {
   PROFILE_MANAGED_BY,
 } from './profile/assets.js';
 import {
-  activeRuntimeKinds,
   describeHint,
   extractSystemSummary,
   isCollaborationCandidate,
@@ -83,7 +82,6 @@ export {
 } from './profile/scoped-skills.js'
 export {
   PROFILE_SUMMARY_MAX_CODEPOINTS,
-  activeRuntimeKinds,
   describeHint,
   describePosition,
   extractSystemSummary,
@@ -287,28 +285,25 @@ export function createProfilePlugin(): PluginDefinition {
       /**
        * Unified computation of the collaboration catalog (the completion action and the
        * before_turn injection share the same fact source):
-       * - exclude self / humanSelectable:false / managed plugins disabled / runtime.kind
-       *   without an enabled profile.runtime UI contribution (see catalog.ts rules);
+       * - exclude self / managed plugins disabled (see catalog.ts rules);
        * - decide purely by whether the turn still has dispatch tools: builtin:workflow strips
        *   subagent/SubagentWorkflow for managed subagents at the depth cap (orchestration leaves)
        *   at a higher-priority hook, so this naturally returns empty -- no blanket exclusion by
-       * parentConversationId (fork / Swarm workers also have parent chains yet should keep
+       *   parentConversationId (fork / Swarm workers also have parent chains yet should keep
        *   full collaboration ability; level-1 subagents keep dispatch tools by default and also get the catalog);
        * - re-read the Profile catalog and plugin state live on every call (edits/toggles take effect next turn).
        */
       const computeCatalog = async (currentProfileId: string): Promise<ProfileCatalogEntry[]> => {
-        const [allProfiles, pluginSummaries, uiContributions] = await Promise.all([
+        const [allProfiles, pluginSummaries] = await Promise.all([
           profiles.list(),
           ctx.host.listPlugins(),
-          ctx.host.listUi(),
         ])
         const dispatchTools = new Set(['subagent', 'SubagentWorkflow'])
         if (!pluginSummaries.some((plugin) => isPluginSummaryActive(plugin) && plugin.tools.some((name) => dispatchTools.has(name)))) {
           return []
         }
         const activePluginIds = new Set(pluginSummaries.filter(isPluginSummaryActive).map((p) => p.id))
-        const runtimeKinds = activeRuntimeKinds(uiContributions)
-        const candidates = allProfiles.filter((p) => isCollaborationCandidate(p, currentProfileId, activePluginIds, runtimeKinds))
+        const candidates = allProfiles.filter((p) => isCollaborationCandidate(p, currentProfileId, activePluginIds))
         return Promise.all(
           candidates.map(async (profile) => ({
             ...toCatalogEntry(profile),
@@ -419,7 +414,7 @@ export function createProfilePlugin(): PluginDefinition {
             })
             .map((entry) => ({
               id: entry.id,
-              label: `@${entry.id} · ${entry.name}${entry.runtimeKind === 'native' ? '' : ` (external:${entry.runtimeKind})`}`,
+              label: `@${entry.id} · ${entry.name}`,
               insertText: `@${entry.id} `,
               hint: describeHint(entry),
               icon: 'bot',

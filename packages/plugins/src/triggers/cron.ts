@@ -57,7 +57,6 @@ export interface CronJob {
   catchUp: boolean
   targetConversationId?: number
   targetProfileId?: string
-  threadKey?: string
   /** The planned time of the most recent claim (the schedule point, not delivery completion). */
   lastRunAt?: number
   /** The next planned trigger time (epoch ms). */
@@ -160,7 +159,6 @@ export function normalizeCronInput(input: {
   catchUp?: boolean
   targetConversationId?: number
   targetProfileId?: string
-  threadKey?: string
 }): CronJob {
   if (typeof input.id !== 'string' || !ID_PATTERN.test(input.id)) {
     throw new HelmxError(
@@ -199,9 +197,6 @@ export function normalizeCronInput(input: {
   if (hasProfile && (typeof input.targetProfileId !== 'string' || input.targetProfileId.length === 0)) {
     throw new HelmxError('validation_error', 'targetProfileId must be a non-empty string', 400, { field: 'targetProfileId' })
   }
-  if (input.threadKey !== undefined && (typeof input.threadKey !== 'string' || input.threadKey.length === 0)) {
-    throw new HelmxError('validation_error', 'threadKey must be a non-empty string', 400, { field: 'threadKey' })
-  }
   if (input.enabled !== undefined && typeof input.enabled !== 'boolean') {
     throw new HelmxError('validation_error', 'enabled must be a boolean', 400, { field: 'enabled' })
   }
@@ -220,7 +215,6 @@ export function normalizeCronInput(input: {
     catchUp: input.catchUp ?? false,
     ...(hasConv ? { targetConversationId: input.targetConversationId } : {}),
     ...(hasProfile ? { targetProfileId: input.targetProfileId } : {}),
-    ...(input.threadKey !== undefined ? { threadKey: input.threadKey } : {}),
   }
 }
 
@@ -283,7 +277,7 @@ function parseCronJob(rawJob: unknown, index: number, seen: Set<string>): CronJo
       id: job.id,
     })
   }
-  for (const field of ['description', 'targetProfileId', 'threadKey', 'lastError'] as const) {
+  for (const field of ['description', 'targetProfileId', 'lastError'] as const) {
     if (job[field] !== undefined && typeof job[field] !== 'string') {
       throw new HelmxError('cron_doc_corrupt', `crons doc corrupted: ${where} (${job.id}) has an invalid ${field} type`, 500, {
         index,
@@ -329,7 +323,6 @@ function parseCronJob(rawJob: unknown, index: number, seen: Set<string>): CronJo
     catchUp: job.catchUp,
     ...(job.targetConversationId !== undefined ? { targetConversationId: job.targetConversationId as number } : {}),
     ...(job.targetProfileId !== undefined ? { targetProfileId: job.targetProfileId as string } : {}),
-    ...(job.threadKey !== undefined ? { threadKey: job.threadKey as string } : {}),
     ...(job.lastRunAt !== undefined ? { lastRunAt: job.lastRunAt as number } : {}),
     ...(job.nextRunAt !== undefined ? { nextRunAt: job.nextRunAt as number } : {}),
     ...(job.lastError !== undefined ? { lastError: job.lastError as string } : {}),
@@ -395,7 +388,6 @@ export function buildCronEnvelope(job: CronJob, fireAt: number): ExternalTrigger
     source: `cron:${job.id}`,
     text: job.text,
     createdAt: fireAt,
-    ...(job.threadKey !== undefined ? { threadKey: job.threadKey } : {}),
     ...(job.targetConversationId !== undefined ? { targetConversationId: job.targetConversationId } : {}),
   }
 }
@@ -636,7 +628,6 @@ export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clo
         catchUp: { type: 'boolean' },
         targetConversationId: { type: 'integer', minimum: 1, description: 'Explicit target conversation ID (mutually exclusive with targetProfileId)' },
         targetProfileId: { type: 'string', minLength: 1, description: 'Target Profile ID for trigger routing (mutually exclusive with targetConversationId)' },
-        threadKey: { type: 'string', minLength: 1 },
       },
       required: ['id', 'schedule', 'text'],
       additionalProperties: false,

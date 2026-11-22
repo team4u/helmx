@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS helmx_conversations (
   tags TEXT NOT NULL DEFAULT '[]',
   parent_conversation_id INTEGER,
   parent_tool_call_id TEXT,
+  owned_by TEXT NOT NULL DEFAULT 'human',
   node_id TEXT NOT NULL DEFAULT 'local',
   cwd TEXT NOT NULL,
   model TEXT NOT NULL DEFAULT '',

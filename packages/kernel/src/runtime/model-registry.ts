@@ -335,7 +335,7 @@ export class ModelRegistry {
     if (tier === undefined) {
       throw new HelmxError(
         'model_tier_not_found',
-        `Model tier '${ref}' is not registered (configure it in Model Tiers or enable builtin:tiers)`,
+        `Model tier '${ref}' is not registered`,
         404,
         { tierId: parsed.modelId, ref },
       )

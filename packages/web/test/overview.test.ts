@@ -79,14 +79,13 @@ function conv(partial: Partial<ConversationSummary> & { id: number }): Conversat
 function buildCards(
   conversations: ConversationSummary[],
   background: ConversationBackgroundIndex = new Map(),
-  overrides: { profiles?: Array<{ id: string; name?: string; managedByPlugin?: string }>; plugins?: Array<{ id: string; enabled: boolean }>; sectionTags?: ReadonlySet<string> } = {},
+  overrides: { profiles?: Array<{ id: string; name?: string; managedByPlugin?: string }>; plugins?: Array<{ id: string; enabled: boolean }> } = {},
 ) {
   return buildOverviewCards({
     conversations,
     background,
     profiles: overrides.profiles ?? [],
     plugins: overrides.plugins ?? [],
-    ...(overrides.sectionTags !== undefined ? { sectionTags: overrides.sectionTags } : {}),
   })
 }
 
@@ -197,61 +196,18 @@ test('filterOverviewCards: bucket/profile/node AND combos; quiet only in all; lo
   assert.deepEqual(overviewNodeOptions(cards).sort(), ['local', 'remote-1'])
 })
 
-// ---------------------------------------------------------------------------
-// 纯函数：来源筛选（managed 判定与 sidebarSection filterTag 同源）
-// ---------------------------------------------------------------------------
-
-test('buildOverviewCards: managed trees follow the sidebar sectionTags (non-archived tag hits); memberIds carry the whole tree', { timeout: 60_000 }, () => {
-  const sectionTags = new Set(['task', 'worker-archived'])
-  const cards = buildCards(
-    [
-      conv({ id: 1, tags: ['task'], status: 'working' }),
-      conv({ id: 11, parentConversationId: 1, status: 'idle' }),
-      conv({ id: 2, tags: ['worker-archived'], status: 'idle' }),
-      conv({ id: 3, tags: [ARCHIVED_TAG], status: 'idle' }),
-      conv({ id: 4, status: 'idle' }),
-    ],
-    new Map(),
-    { sectionTags },
-  )
+test('buildOverviewCards: memberIds carry the whole tree (root + descendants)', { timeout: 60_000 }, () => {
+  const cards = buildCards([
+    conv({ id: 1, status: 'working' }),
+    conv({ id: 11, parentConversationId: 1, status: 'idle' }),
+    conv({ id: 3, tags: [ARCHIVED_TAG], status: 'idle' }),
+    conv({ id: 4, status: 'idle' }),
+  ])
   const byId = new Map(cards.map((card) => [card.root.id, card]))
-  assert.equal(byId.get(1)!.managed, true, 'a section filterTag hit marks the tree managed')
-  assert.equal(byId.get(2)!.managed, true, 'any declared filterTag matches (e.g. worker-archived), zero plugin-id special casing')
-  assert.equal(byId.get(4)!.managed, false, 'untagged trees stay regular')
   assert.deepEqual(byId.get(1)!.memberIds, [1, 11], 'memberIds carry the whole tree (root included) for the meta slot props')
   assert.deepEqual(byId.get(4)!.memberIds, [4], 'a single-member tree lists just the root')
-  // 归档标签不参与 managed 判定（树本身也不进总览，这里验证无残留）。
   assert.equal(byId.has(3), false, 'archived roots never enter the overview')
-  // 未传 sectionTags（无插件 section 贡献）时全部树视为常规会话。
-  const noTags = buildCards([conv({ id: 1, tags: ['task'], status: 'working' })])
-  assert.equal(noTags[0]!.managed, false, 'without section contributions every tree stays regular')
-})
-
-test('filterOverviewCards: source filter ANDs with the other dimensions; default all keeps everything', { timeout: 60_000 }, () => {
-  const cards = buildCards(
-    [
-      conv({ id: 1, tags: ['task'], status: 'blocked' }),
-      conv({ id: 2, status: 'working', profileId: 'coder' }),
-      conv({ id: 3, status: 'idle', profileId: 'coder' }),
-    ],
-    new Map(),
-    { sectionTags: new Set(['task']) },
-  )
-  const base = { bucket: 'all' as const, profileId: '', nodeId: '' }
-  assert.deepEqual(filterOverviewCards(cards, base).map((c) => c.root.id), [1, 2, 3], 'omitted source defaults to all')
-  assert.deepEqual(filterOverviewCards(cards, { ...base, source: 'all' }).map((c) => c.root.id), [1, 2, 3])
-  assert.deepEqual(filterOverviewCards(cards, { ...base, source: 'regular' }).map((c) => c.root.id), [2, 3], 'regular keeps only non-managed trees')
-  assert.deepEqual(filterOverviewCards(cards, { ...base, source: 'managed' }).map((c) => c.root.id), [1], 'managed keeps only section-tagged trees')
-  assert.deepEqual(
-    filterOverviewCards(cards, { bucket: 'running', profileId: 'coder', nodeId: '', source: 'regular' }).map((c) => c.root.id),
-    [2],
-    'source ANDs with bucket/profile/node',
-  )
-  assert.deepEqual(
-    filterOverviewCards(cards, { bucket: 'running', profileId: 'coder', nodeId: '', source: 'managed' }),
-    [],
-    'a running coder tree that is managed drops out of the regular+managed combo intersection',
-  )
+  assert.equal(byId.get(1)!.managed, false)
 })
 
 test('filterOverviewCards: query matches root title, profile label, honest summary and descendant titles; ANDs with the other dimensions', { timeout: 60_000 }, () => {
@@ -765,13 +721,7 @@ test('ConversationOverview restores filter state from a deep-linked #/overview?s
   }
 })
 
-test('ConversationOverview source filter: appears only with managed trees, narrows the grid per source', { timeout: 60_000 }, async () => {
-  const appSection = {
-    pluginId: 'demo-desk',
-    surface: 'sidebar.section' as const,
-    spec: { id: 'app-runs', label: { en: 'App runs' }, icon: 'check-square', filterTag: 'app' },
-  }
-  // 无托管树：来源筛选不渲染（零无效控件噪音）。
+test('ConversationOverview source filter: hidden when no managed trees exist', { timeout: 60_000 }, async () => {
   const regularOnly = overviewStore({
     conversations: [
       conv({ id: 2, title: '在跑的调研', profileId: 'coder', status: 'working', createdAt: 8000, updatedAt: 8000 }),
@@ -788,85 +738,11 @@ test('ConversationOverview source filter: appears only with managed trees, narro
       root.render(e(HostStoreProviders, { value: regularOnly }, e(ConversationOverview)))
     })
     assert.ok(container.querySelector('[aria-label="Filter by source"]') === null, 'no managed trees: the source select stays hidden')
-
-    // 有托管树：来源筛选渲染，切换 managed 只留任务树、regular 只留常规树。
-    const mixed = overviewStore({
-      conversations: [
-        conv({ id: 1, title: '应用会话', profileId: 'assistant', tags: ['app'], status: 'working', createdAt: 9000, updatedAt: 9000 }),
-        conv({ id: 2, title: '在跑的调研', profileId: 'coder', status: 'working', createdAt: 8000, updatedAt: 8000 }),
-      ],
-      primaryTarget: { kind: 'overview' },
-      uiContributions: [appSection],
-    })
-    await act(async () => {
-      root!.render(e(HostStoreProviders, { value: mixed }, e(ConversationOverview)))
-    })
-    assert.equal(container.querySelectorAll('.overview-card').length, 2, 'both trees render under the all filter')
-    const sourceSelect = container.querySelector<HTMLElement>('[aria-label="Filter by source"]')
-    assert.ok(sourceSelect !== null, 'with a managed tree present the source select renders')
-
-    await act(async () => {
-      sourceSelect.click()
-    })
-    const managedOption = [...document.body.querySelectorAll('[role="option"]')].find((el) =>
-      el.textContent?.includes('Managed conversations'),
-    ) as HTMLElement | undefined
-    assert.ok(managedOption !== undefined, 'the managed option lists in the open listbox')
-    await act(async () => {
-      managedOption.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
-    })
-    let cards = container.querySelectorAll('.overview-card')
-    assert.equal(cards.length, 1, 'only the managed tree stays visible')
-    assert.ok(cards[0]!.textContent?.includes('应用会话'))
-
-    // 插件 section 贡献消失（停用）但深链/地址栏仍停在 managed：筛选器保持
-    // 可见防困住，卡片如实归零（绝不伪报常规树为托管）。筛选状态现在住在
-    // URL 参数里，用「带参挂载 + 无 section 贡献」还原真实停用后刷新场景。
-    const disabled = overviewStore({
-      conversations: [
-        conv({ id: 1, title: '应用会话', profileId: 'assistant', tags: ['app'], status: 'working', createdAt: 9000, updatedAt: 9000 }),
-        conv({ id: 2, title: '在跑的调研', profileId: 'coder', status: 'working', createdAt: 8000, updatedAt: 8000 }),
-      ],
-      primaryTarget: { kind: 'overview', params: { source: 'managed' } },
-    })
-    await act(async () => {
-      root!.render(e(HostStoreProviders, { value: disabled }, e(ConversationOverview)))
-    })
-    assert.equal(container.querySelectorAll('.overview-card').length, 0, 'with the managed filter held, no managed tree stays visible')
-    assert.ok(container.querySelector('[aria-label="Filter by source"]') !== null, 'the source select stays visible (never traps the user on a stale value)')
-    assert.ok(container.textContent?.includes('No conversations match'), 'the filtered-empty semantics point at the filters, not at the system being empty')
   } finally {
     await act(async () => {
       root?.unmount()
     })
     container.remove()
-  }
-  // 全新挂载（筛选值回到默认 all）：无 section 贡献时一切归常规，筛选器隐藏。
-  {
-    const fresh = overviewStore({
-      conversations: [
-        conv({ id: 1, title: '应用会话', profileId: 'assistant', tags: ['app'], status: 'working', createdAt: 9000, updatedAt: 9000 }),
-        conv({ id: 2, title: '在跑的调研', profileId: 'coder', status: 'working', createdAt: 8000, updatedAt: 8000 }),
-      ],
-      primaryTarget: { kind: 'overview' },
-    })
-    const container2 = document.createElement('div')
-    document.body.appendChild(container2)
-    let root2: Root | undefined
-    try {
-      await act(async () => {
-        root2 = createRoot(container2)
-        root2.render(e(HostStoreProviders, { value: fresh }, e(ConversationOverview)))
-      })
-      const cards = container2.querySelectorAll('.overview-card')
-      assert.equal(cards.length, 2, 'no section contributions: every tree is regular again and stays visible')
-      assert.ok(container2.querySelector('[aria-label="Filter by source"]') === null, 'a fresh mount without managed trees hides the source select')
-    } finally {
-      await act(async () => {
-        root2?.unmount()
-      })
-      container2.remove()
-    }
   }
 })
 
@@ -1427,23 +1303,15 @@ async function overviewSettle(): Promise<void> {
   })
 }
 
-/** 批量场景：常规根 x2 + 托管根（sidebarSection filterTag 接管）+ bot 根。 */
+/** 批量场景：常规根 x2 + helmx 托管根。 */
 function batchScenarioStore(): HelmxExternalStore {
   return overviewStore({
     conversations: [
       conv({ id: 1, title: '常规根 A', profileId: 'assistant', createdAt: 9000, updatedAt: 9000 }),
       conv({ id: 2, title: '常规根 B', profileId: 'coder', createdAt: 8000, updatedAt: 8000 }),
-      conv({ id: 3, title: '托管应用根', tags: ['app'], createdAt: 7000, updatedAt: 7000 }),
-      conv({ id: 4, title: 'bot 会话根', ownedBy: 'bot', createdAt: 6000, updatedAt: 6000 }),
+      conv({ id: 4, title: 'helmx 会话根', ownedBy: 'helmx', createdAt: 6000, updatedAt: 6000 }),
     ],
     primaryTarget: { kind: 'overview' },
-    uiContributions: [
-      {
-        pluginId: 'demo-desk',
-        surface: 'sidebar.section' as const,
-        spec: { id: 'app-conversations', label: { en: 'Apps' }, filterTag: 'app' },
-      },
-    ],
   })
 }
 
@@ -1453,7 +1321,7 @@ function cardById(container: HTMLElement, id: number): HTMLElement | undefined {
   )
 }
 
-test('ConversationOverview batch mode: card click toggles selection, managed/bot roots stay protected, exit clears', { timeout: 60_000 }, async () => {
+test('ConversationOverview batch mode: card click toggles selection, helmx roots stay protected, exit clears', { timeout: 60_000 }, async () => {
   const store = batchScenarioStore()
   const mount = await mountOverview(store)
   try {
@@ -1472,14 +1340,13 @@ test('ConversationOverview batch mode: card click toggles selection, managed/bot
     assert.ok(batchBar.parentElement === batchWrap, 'batch bar sits inside .overview-batch-bar-wrap for aligned outer gutters')
 
     const cards = [...mount.container.querySelectorAll<HTMLElement>('.overview-card')]
-    assert.equal(cards.length, 4)
+    assert.equal(cards.length, 3)
     for (const card of cards) {
       assert.ok(card.querySelector('.overview-card-batch-check') !== null, 'every card carries a batch checkbox')
     }
-    // 勾选口径：托管（sidebarSection 接管）根不可勾选；空闲 bot 根放开勾选（仅参与批量删除）。
+    // 勾选口径：常规根与空闲 helmx 根放开勾选（空闲 helmx 根仅参与批量删除）。
     assert.equal(cardById(mount.container, 1)?.querySelector<HTMLInputElement>('[role="checkbox"], input[type="checkbox"]')?.disabled, false)
-    assert.equal(cardById(mount.container, 3)?.querySelector<HTMLInputElement>('[role="checkbox"], input[type="checkbox"]')?.disabled, true, 'the managed root is not selectable')
-    assert.equal(cardById(mount.container, 4)?.querySelector<HTMLInputElement>('[role="checkbox"], input[type="checkbox"]')?.disabled, false, 'the idle bot root is bulk-selectable (bulk delete only)')
+    assert.equal(cardById(mount.container, 4)?.querySelector<HTMLInputElement>('[role="checkbox"], input[type="checkbox"]')?.disabled, false, 'the idle helmx root is bulk-selectable (bulk delete only)')
 
     // 批量模式点击卡片 = 勾选（不打开会话抽屉）
     await act(async () => {
@@ -1492,7 +1359,7 @@ test('ConversationOverview batch mode: card click toggles selection, managed/bot
     })
     assert.ok(cardById(mount.container, 1)?.classList.contains('is-selected') === false, 'clicking again deselects')
 
-    // 全选覆盖可勾选卡片（常规根 A/B + 空闲 bot 根），托管根保持未选。
+    // 全选覆盖可勾选卡片（常规根 A/B + 空闲 helmx 根）。
     const selectAll = [...mount.container.querySelectorAll<HTMLButtonElement>('.overview-batch-bar button')]
       .find((btn) => btn.textContent === 'Select all')
     assert.ok(selectAll !== null)
@@ -1501,7 +1368,6 @@ test('ConversationOverview batch mode: card click toggles selection, managed/bot
     })
     assert.ok(cardById(mount.container, 1)?.classList.contains('is-selected'))
     assert.ok(cardById(mount.container, 2)?.classList.contains('is-selected'))
-    assert.ok(cardById(mount.container, 3)?.classList.contains('is-selected') === false)
     assert.ok(cardById(mount.container, 4)?.classList.contains('is-selected'))
     assert.ok(mount.container.textContent?.includes('3 selected'), 'the bar states the honest selection count')
 
@@ -1620,19 +1486,17 @@ test('ConversationOverview batch delete requires confirmation and DELETEs each s
   }
 })
 
-test('ConversationOverview card actions menu: archive and delete for human roots, none for protected roots', { timeout: 60_000 }, async () => {
+test('ConversationOverview card actions menu: archive and delete for human roots, view-only for helmx roots', { timeout: 60_000 }, async () => {
   const stub = installConversationMutationStub()
   const store = batchScenarioStore()
   const mount = await mountOverview(store)
   try {
     const humanCard = cardById(mount.container, 1)
-    const botCard = cardById(mount.container, 4)
-    const managedCard = cardById(mount.container, 3)
+    const helmxCard = cardById(mount.container, 4)
     assert.ok(humanCard?.querySelector('.overview-card-actions button') !== null, 'the human root card renders the "..." menu trigger')
-    // bot 根：宿主归档/删除不参与，但只读视图动作（抽屉速览/右分屏）照常提供。
-    assert.ok(botCard?.querySelector('.overview-card-actions button') !== null, 'the bot root card still renders the "..." menu (view-only actions)')
+    // helmx 根：宿主归档/删除不参与，但只读视图动作（抽屉速览/右分屏）照常提供。
+    assert.ok(helmxCard?.querySelector('.overview-card-actions button') !== null, 'the helmx root card still renders the "..." menu (view-only actions)')
 
-    // 菜单打开（Radix 挂 body）：归档 + 删除两项都在；托管根只有删除（面板同语义）。
     const trigger = humanCard?.querySelector<HTMLButtonElement>('.overview-card-actions button')
     assert.ok(trigger !== null)
     await act(async () => {
@@ -1654,20 +1518,6 @@ test('ConversationOverview card actions menu: archive and delete for human roots
       'archiving from the card menu PATCHes that root conversation',
     )
     assert.ok(stub.patches[0]?.tags?.includes(ARCHIVED_TAG))
-
-    // 托管根：无归档项，仅删除项（人类自有可删除，与会话面板一致）
-    const managedTrigger = managedCard?.querySelector<HTMLButtonElement>('.overview-card-actions button')
-    assert.ok(managedTrigger !== null, 'the managed root still gets the menu (delete-only)')
-    await act(async () => {
-      managedTrigger!.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, cancelable: true }))
-    })
-    await overviewSettle()
-    const managedItems = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].map((item) => item.textContent ?? '')
-    assert.ok(managedItems.some((label) => label.includes('Delete conversation')), 'delete stays available for the managed root')
-    assert.ok(
-      managedItems.every((label) => !label.includes('Archive conversation')),
-      'archive is not offered for a managed root (no visible effect)',
-    )
   } finally {
     await mount.unmount()
     stub.restore()
@@ -1970,8 +1820,9 @@ test('ConversationOverview new topic: multiple agents open a dropdown with the l
 
 test('ConversationOverview new topic: no creatable agent renders no button', { timeout: 60_000 }, async () => {
   const store = overviewStore({
-    profiles: [{ id: 'bot1', name: '机器人', humanSelectable: false }],
-    conversations: [conv({ id: 4, title: 'bot 会话根', ownedBy: 'bot', createdAt: 6000, updatedAt: 6000 })],
+    profiles: [{ id: 'disabled-agent', name: '停用插件角色', managedByPlugin: 'ext:off' }],
+    plugins: [{ id: 'ext:off', name: 'Off', version: '1.0.0', locked: false, enabled: false, hooks: [], actions: [], tools: [] }],
+    conversations: [conv({ id: 4, title: 'helmx 会话根', ownedBy: 'helmx', createdAt: 6000, updatedAt: 6000 })],
     primaryTarget: { kind: 'overview' },
   })
   const mount = await mountOverview(store)
@@ -1983,23 +1834,17 @@ test('ConversationOverview new topic: no creatable agent renders no button', { t
 })
 
 // ---------------------------------------------------------------------------
-// 并发主入口：托管/受保护卡的 `...` 菜单仍提供只读视图动作；分屏实例直进同侧
+// 并发主入口：受保护卡的 `...` 菜单仍提供只读视图动作；分屏实例直进同侧
 // ---------------------------------------------------------------------------
 
-test('ConversationOverview managed card keeps the view-only menu actions (peek + right split)', { timeout: 60_000 }, async () => {
-  const appSection = {
-    pluginId: 'demo-desk',
-    surface: 'sidebar.section' as const,
-    spec: { id: 'app-runs', label: { en: 'App runs' }, icon: 'check-square', filterTag: 'app' },
-  }
-  // bot 归属的托管根：宿主归档/删除均不参与——菜单只剩两个只读视图动作
+test('ConversationOverview protected card keeps the view-only menu actions (peek + right split)', { timeout: 60_000 }, async () => {
+  // helmx 归属的托管根：宿主归档/删除均不参与——菜单只剩两个只读视图动作
   // （prepend-only 分支：无分隔线、无后续宿主动作）。
   const store = overviewStore({
     conversations: [
-      conv({ id: 7, title: '应用会话', profileId: 'assistant', ownedBy: 'bot', tags: ['app'], status: 'working', createdAt: 9000, updatedAt: 9000 }),
+      conv({ id: 7, title: '应用会话', profileId: 'assistant', ownedBy: 'helmx', tags: ['app'], status: 'working', createdAt: 9000, updatedAt: 9000 }),
     ],
     primaryTarget: { kind: 'overview' },
-    uiContributions: [appSection],
   })
   const container = document.createElement('div')
   document.body.appendChild(container)

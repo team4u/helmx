@@ -39,4 +39,4 @@
 
 工作流可以从现有示例开始。多视角审查见 [cross-review.js](../workflows/examples/cross-review.js)，单模块的拆分和验收见 [module-dev.js](../workflows/examples/module-dev.js)，多个模块并行开发见 [arch-master.js](../workflows/examples/arch-master.js)。后两个示例包含写入和合入步骤，运行前先读脚本并确认目标会话的节点、仓库和分支。
 
-跨机器工作时，先给会话或 Profile 选好节点和目录。希望在子代理或工作流里调度一个终端 CLI 时，可以再接入 Herdr。 [节点接入](installation.md#接入远端节点) · [Herdr](../plugins/herdr.md)
+跨机器工作时，先给会话或 Profile 选好节点和目录。 [节点接入](installation.md#接入远端节点)

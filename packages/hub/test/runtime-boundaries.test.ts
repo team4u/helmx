@@ -23,44 +23,40 @@ function collectStrings(value: unknown): string[] {
   return []
 }
 
-test('真实组合：插件结果改写、机密脱敏与超长输出 Spill 共用最终边界', { timeout: 60_000 }, async () => {
+test('真实组合：插件对象工具输出、全局机密脱敏与超长输出 Spill 共用最终边界', { timeout: 60_000 }, async () => {
   const { kernel } = fixture
   const conv = await kernel.createConversation({ title: 'boundary-results' })
   const secret = ['example"quoted', 'next line'].join('\n')
-  const marker = kernel.stash.put(conv.id, 'BOUNDARY_EXAMPLE', secret)
+  kernel.stash.addRedaction(secret)
   let executions = 0
   await kernel.plugins.register({
     id: 'boundary:results',
     definePlugin(ctx) {
       ctx.tool({ name: 'object_probe', description: 'test object output', inputSchema: { type: 'object' }, execute: () => { executions++; return { nested: { value: secret } } } })
-      ctx.tool({ name: 'transform_probe', description: 'test output change write', inputSchema: { type: 'object' }, execute: () => { executions++; return 'original-output' } })
-      ctx.hook.onToolResult((payload) => payload.toolName === 'transform_probe'
-        ? { action: 'transform', value: { ...payload, result: { output: [{ type: 'text', text: `transformed ${secret} ${'x'.repeat(40 * 1024)}` }] } } }
-        : undefined)
+      ctx.tool({ name: 'large_probe', description: 'test large output spill', inputSchema: { type: 'object' }, execute: () => { executions++; return `spilled-payload ${secret} ${'x'.repeat(40 * 1024)}` } })
     },
   })
   try {
     let observed: string[] = []
     fixture.faux.setResponses([
-      fauxAssistantMessage([fauxToolCall('object_probe', {}), fauxToolCall('transform_probe', {})], { stopReason: 'toolUse' }),
+      fauxAssistantMessage([fauxToolCall('object_probe', {}), fauxToolCall('large_probe', {})], { stopReason: 'toolUse' }),
       (context) => { observed = collectStrings(context.messages); return fauxAssistantMessage('finished') },
     ])
     await kernel.submitInput(conv.id, 'check plugin output')
     await kernel.waitForIdle(conv.id)
     assert.equal(executions, 2)
-    assert.ok(observed.some((text) => text.includes(marker)))
-    assert.ok(observed.some((text) => text.includes('transformed')))
-    assert.ok(!observed.some((text) => text.includes('original-output')))
+    assert.ok(observed.some((text) => text.includes('[REDACTED]')))
+    assert.ok(observed.some((text) => text.includes('spilled-payload')))
     assert.ok(!observed.some((text) => text.includes(secret) || text.includes(JSON.stringify(secret).slice(1, -1))))
     const artifacts = await kernel.artifacts.list(conv.id)
     assert.equal(artifacts.length, 1)
     const spilled = await kernel.artifacts.readContent(artifacts[0]!.id)
-    assert.ok(spilled.includes('transformed') && spilled.includes(marker))
+    assert.ok(spilled.includes('spilled-payload') && spilled.includes('[REDACTED]'))
     assert.ok(!spilled.includes(secret))
     const source = join(fixture.dataDir, 'sensitive.txt')
     await writeFile(source, secret)
     const registered = await kernel.artifacts.register(conv.id, source)
-    assert.equal(await kernel.artifacts.readContent(registered.id), marker)
+    assert.equal(await kernel.artifacts.readContent(registered.id), '[REDACTED]')
   } finally {
     await kernel.plugins.disable('boundary:results')
   }

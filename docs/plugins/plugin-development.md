@@ -206,13 +206,7 @@ ctx.ui.slot({ id: 'node-inspection', target: NODE_DETAIL_SECTION_SLOT, client: {
 
 组件接收 `{ nodeId, isLocal, isOnline, isNew: false }`，按 `nodeId` 调用插件自己的 Action 获取诊断。`builtin:profile` 的 `PROFILE_DETAIL_SECTION_SLOT` 同理（Props `{ profileId, isNew, disabled }`）。
 
-### 产物预览器与输入补全源
-
-```typescript
-ctx.ui.artifactPreviewer({ id: 'csv', label: '数据表', mimeTypes: ['text/csv'], extensions: ['.csv', '.tsv'], priority: 10, client: { module: 'client.tsx', export: 'CsvPreview' } });
-```
-
-组件接收 `ArtifactPreviewerProps`：`text` 在二进制或超过 1 MiB 时为 `null`（必须明确提示而非展示空表冒充结果）；`blobUrl` 由宿主管理、组件不得撤销。
+### 输入补全源
 
 补全源三种数据源：`{ kind: 'doc', name, itemsField }`（公开文档顶层数组字段）、`{ kind: 'action', actionId }`（须声明 `idempotent: true`；输入 `{ query, conversationId }` 输出 `{ items: Array<{id, label, insertText, hint?, icon?}> }`）、`{ kind: 'sessionDoc', ... }`。补全只插入 `insertText`，不执行、不发送、不审批。
 
@@ -266,5 +260,5 @@ ctx.service({
 ## 相关文档
 
 - [插件系统设计与契约](overview.md)：`definePlugin(ctx)` 能力面、五端映射与停用预检
-- [生命周期 Hook 与全界面扩展点](../architecture/extension-points.md)：7 个 Hook 与 16 个 UI surface
+- [生命周期 Hook 与全界面扩展点](../architecture/extension-points.md)：4 个 Hook 与 10 个 UI surface
 - [Web 前端设计系统](../conventions/web-frontend.md)：视图形态、字号与零 Emoji 铁律

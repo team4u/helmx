@@ -155,9 +155,6 @@ function makePlatformFabric(options: {
     evictConversation: () => undefined,
     debugBaseCount: () => 0,
     debugBases: () => [],
-    getNodeHostEnv: () => {
-      throw new Error('not used in test')
-    },
     dispose: () => Promise.resolve(),
   } as never
 }
@@ -170,7 +167,6 @@ async function makeDeps(dir: string, envFabric?: EnvFabric, nodeIdOf?: (id: numb
     dataDir: dir,
     defaultCwd: dir,
     hubUrl: 'http://127.0.0.1:3202',
-    stashEnvFor: () => ({}),
     redact: (t) => stash.redact(t),
     artifacts,
     ...(envFabric !== undefined ? { envFabric } : {}),

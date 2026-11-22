@@ -39,69 +39,7 @@ function expectThrow(
 }
 
 // ---------------------------------------------------------------------------
-// Early phase: three UI action surfaces
-// ---------------------------------------------------------------------------
-
-test('conversation.header.action: valid passes; missing actionId/client or invalid placement rejects; strips redundant target field', { timeout: 60_000 }, () => {
-  const ok: Record<string, unknown> = { id: 'a1', actionId: 'act', placement: 'toolbar', target: 'conversation:header' };
-  validateUiSpecEarly('conversation.header.action', ok, 'a1', makeCtx('conversation.header.action'));
-  assert.equal('target' in ok, false, 'registered input should strip redundant target field');
-
-  expectThrow(
-    () => validateUiSpecEarly('conversation.header.action', { id: 'a1' }, 'a1', makeCtx('conversation.header.action')),
-    'invalid_ui_spec',
-    'must provide at least one of actionId or client',
-  );
-  expectThrow(
-    () =>
-      validateUiSpecEarly(
-        'conversation.header.action',
-        { id: 'a1', actionId: 'act', placement: 'sidebar' },
-        'a1',
-        makeCtx('conversation.header.action'),
-      ),
-    'invalid_ui_spec',
-    "placement only allows 'toolbar' | 'menu'",
-  );
-});
-
-test('conversation.row.action: disallows placement; rejects dotted actionId', { timeout: 60_000 }, () => {
-  validateUiSpecEarly('conversation.row.action', { id: 'r1', client: { module: 'a.tsx', export: 'X' } }, 'r1', makeCtx('conversation.row.action'));
-  expectThrow(
-    () =>
-      validateUiSpecEarly('conversation.row.action', { id: 'r1', actionId: 'act', placement: 'menu' }, 'r1', makeCtx('conversation.row.action')),
-    'invalid_ui_spec',
-    'disallows placement',
-  );
-  expectThrow(
-    () => validateUiSpecEarly('conversation.row.action', { id: 'r1', actionId: 'a.b' }, 'r1', makeCtx('conversation.row.action')),
-    'invalid_ui_spec',
-    'without dots',
-  );
-});
-
-test('timeline.entry.action: valid kinds/roles pass; invalid roles and kinds on row surface reject', { timeout: 60_000 }, () => {
-  validateUiSpecEarly(
-    'timeline.entry.action',
-    { id: 'e1', actionId: 'act', kinds: ['bash'], roles: ['user'] },
-    'e1',
-    makeCtx('timeline.entry.action'),
-  );
-  expectThrow(
-    () =>
-      validateUiSpecEarly('timeline.entry.action', { id: 'e1', actionId: 'act', roles: ['system'] }, 'e1', makeCtx('timeline.entry.action')),
-    'invalid_ui_spec',
-    "roles only allows a non-empty array of 'user' | 'assistant'",
-  );
-  expectThrow(
-    () => validateUiSpecEarly('conversation.row.action', { id: 'r1', actionId: 'act', kinds: ['bash'] }, 'r1', makeCtx('conversation.row.action')),
-    'invalid_ui_spec',
-    'disallows kinds',
-  );
-});
-
-// ---------------------------------------------------------------------------
-// Early phase: commandPalette / profile.runtime / plugin.slot
+// Early phase: commandPalette / plugin.slot
 // ---------------------------------------------------------------------------
 
 test('commandPalette: slash+actionId passes; reserved words and intra-plugin duplicate slash reject', { timeout: 60_000 }, () => {
@@ -119,22 +57,6 @@ test('commandPalette: slash+actionId passes; reserved words and intra-plugin dup
     () => validateUiSpecEarly('commandPalette', { id: 'c1', slash: 'chart' }, 'c1', makeCtx('commandPalette')),
     'invalid_ui_spec',
     'must bind actionId when declaring slash',
-  );
-});
-
-test('profile.runtime: valid kind/label passes; invalid kind format and intra-plugin duplicate reject', { timeout: 60_000 }, () => {
-  const ctx = makeCtx('profile.runtime', [
-    { pluginId: 'p1', surface: 'profile.runtime', spec: { id: 'k0', kind: 'python' } },
-  ]);
-  validateUiSpecEarly('profile.runtime', { id: 'k1', kind: 'node', label: 'Node' }, 'k1', makeCtx('profile.runtime'));
-  expectThrow(
-    () => validateUiSpecEarly('profile.runtime', { id: 'k1', kind: '1bad kind', label: 'x' }, 'k1', makeCtx('profile.runtime')),
-    'invalid_ui_spec',
-    'kind must match',
-  );
-  expectThrow(
-    () => validateUiSpecEarly('profile.runtime', { id: 'k1', kind: 'python', label: 'x' }, 'k1', ctx),
-    'duplicate_profile_runtime_kind',
   );
 });
 
@@ -196,25 +118,6 @@ test('tool.view: valid toolNames+replaceRow passes; non-boolean replaceRow rejec
     () => validateUiSpecLate('tool.view', { id: 'v1', toolNames: ['bash'], replaceRow: 'yes' }, 'v1', makeCtx('tool.view')),
     'invalid_ui_spec',
     'replaceRow must be boolean value',
-  );
-});
-
-test('artifact.previewer: valid MIME/extension patterns pass; */*, parameterized patterns, and duplicates reject', { timeout: 60_000 }, () => {
-  validateUiSpecLate(
-    'artifact.previewer',
-    { id: 'pr1', label: 'L', mimeTypes: ['text/markdown', 'image/*'], extensions: ['.md', '.tar.gz'] },
-    'pr1',
-    makeCtx('artifact.previewer'),
-  );
-  expectThrow(
-    () => validateUiSpecLate('artifact.previewer', { id: 'pr1', label: 'L', mimeTypes: ['*/*'] }, 'pr1', makeCtx('artifact.previewer')),
-    'invalid_ui_spec',
-    'illegal',
-  );
-  expectThrow(
-    () => validateUiSpecLate('artifact.previewer', { id: 'pr1', label: 'L', extensions: ['.md', '.md'] }, 'pr1', makeCtx('artifact.previewer')),
-    'invalid_ui_spec',
-    'contains duplicate items',
   );
 });
 

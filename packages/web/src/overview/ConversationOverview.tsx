@@ -68,7 +68,7 @@ import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
 import { ConversationRowActionsMenu } from '../ui/ConversationRowActionsMenu.js'
 import { isConversationArchived } from '../conversation/archive-model.js'
 import { ConversationStatusDot, RemoteNodeTag } from '../shell/SidebarPrimitives.js'
-import { buildAgentStandings, partitionSidebarUi, isConversationArchivable, isConversationBulkSelectable, type AgentStanding } from '../shell/sidebar-model.js'
+import { buildAgentStandings, isConversationArchivable, isConversationBulkSelectable, type AgentStanding } from '../shell/sidebar-model.js'
 import { archiveBatchNotice, patchConversationsArchived } from '../shell/archive-ops.js'
 import { bulkDeleteConversations, bulkDeleteNotice } from '../shell/bulk-delete-ops.js'
 import { useGlobalAttention } from '../shell/use-attention-indicator.js'
@@ -449,15 +449,9 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
     if (repair !== null) setScreenParams(repair, { split: isSplit === true })
   }, [overviewParams, isSplit, setScreenParams])
 
-  // 来源判定与侧栏同源（sidebarSection filterTag，零插件 ID 特判）：
-  // 插件停用后其 section 贡献消失，卡片自然回到「常规对话」一侧。
-  const { sectionTags } = useMemo(
-    () => partitionSidebarUi(groupedUi.sidebarItems, groupedUi.sidebarSections),
-    [groupedUi.sidebarItems, groupedUi.sidebarSections],
-  )
   const cards = useMemo(
-    () => buildOverviewCards({ conversations, background, profiles, plugins, t, sectionTags }),
-    [conversations, background, profiles, plugins, t, sectionTags],
+    () => buildOverviewCards({ conversations, background, profiles, plugins, t }),
+    [conversations, background, profiles, plugins, t],
   )
   const visibleCards = useMemo(
     () =>
@@ -540,13 +534,13 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
   )
 
   // 批量管理勾选口径：人类自有根会话（可归档可删除）与空闲自动化历史会话
-  // （仅可批量删除，如已结束的 swarm worker）的并集；托管与在途（working/
-  // blocked）bot 会话不参与勾选，插件 manageConversation 托管保护由服务端
+  // （仅可批量删除，如已结束的 swarm worker）的并集；在途（working/
+  // blocked）helmx 会话不参与勾选，插件 manageConversation 托管保护由服务端
   // bulk-delete 逐项权威判定。且收起分节内的卡片不可见，不得进入可勾选与
   // 有效选择集。
   const isCardSelectable = useMemo(
-    () => (conv: ConversationSummary) => isConversationBulkSelectable(conv, sectionTags),
-    [sectionTags],
+    () => (conv: ConversationSummary) => isConversationBulkSelectable(conv),
+    [],
   )
   const selectableCardIds = useMemo(
     () => renderedCards.filter((card) => isCardSelectable(card.root)).map((card) => card.root.id),
@@ -579,9 +573,9 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
   const effectiveArchivableSelectedIds = useMemo(
     () =>
       renderedCards
-        .filter((card) => effectiveSelectedIds.has(card.root.id) && isConversationArchivable(card.root, sectionTags))
+        .filter((card) => effectiveSelectedIds.has(card.root.id) && isConversationArchivable(card.root))
         .map((card) => card.root.id),
-    [renderedCards, effectiveSelectedIds, sectionTags],
+    [renderedCards, effectiveSelectedIds],
   )
   const batchDeleteConfirmOpen = batchDeleteIds !== null &&
     batchDeleteIds.size === effectiveSelectedIds.size &&
@@ -629,7 +623,7 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
     setArchiving(true)
     try {
       const convs = cards
-        .filter((card) => effectiveSelectedIds.has(card.root.id) && isConversationArchivable(card.root, sectionTags))
+        .filter((card) => effectiveSelectedIds.has(card.root.id) && isConversationArchivable(card.root))
         .map((card) => card.root)
       const outcome = await patchConversationsArchived(convs, true)
       pushNotice(archiveBatchNotice(true, outcome, t))
@@ -684,7 +678,6 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
       conversations,
       plugins,
       sidebarItems: groupedUi.sidebarItems,
-      sidebarSections: groupedUi.sidebarSections,
       locale,
     })
     const creatable = standings.filter((standing) => standing.canCreateConversation)
@@ -703,7 +696,7 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
       if (b.profileId === latestRootProfileId) return 1
       return a.order - b.order || a.profileId.localeCompare(b.profileId)
     })
-  }, [profiles, conversations, plugins, groupedUi.sidebarItems, groupedUi.sidebarSections, locale])
+  }, [profiles, conversations, plugins, groupedUi.sidebarItems, locale])
 
   const openNewTopic = (profileId: string): void => {
     openTarget({ kind: 'agent', profileId }, isSplit ? { split: true } : undefined)

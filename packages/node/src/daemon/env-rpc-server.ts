@@ -26,18 +26,12 @@ import type {
   EnvExecOk,
   EnvExecOutputEvent,
   NodeEnvRpcFunctions,
-  NodeHostEnv,
-  NodeHostEnvQuery,
   NodePathUsage,
   NodeTunnelOpenInput,
   RpcResult,
 } from '@helmx/protocol';
 import { drainingRejection, invalidInput, isRecord, rpcFail } from './env-rpc-shared.js';
-import { createHostEnvHandler, type NodeHostEnvContext } from './env-rpc-ipc.js';
 import { createTunnelHandler } from './env-rpc-tunnel.js';
-
-export { collectNodeHostEnv } from './env-rpc-ipc.js';
-export type { NodeHostEnvContext } from './env-rpc-ipc.js';
 
 export interface NodeEnvRpcServerOptions {
   /** Base directory for relative paths (daemon data directory). */
@@ -48,8 +42,6 @@ export interface NodeEnvRpcServerOptions {
   shellEnv?: Record<string, string | undefined>;
   /** Maximum characters per streamed output chunk (>= 1; defaults to 256 KiB chars). */
   maxOutputChunkChars?: number;
-  /** Injectable host environment context for `nodeHostEnv` (tests override platform/dirs/env deterministically). */
-  hostEnvContext?: NodeHostEnvContext;
   /** Test/managed-host overrides for `envPathUsage` scanning. */
   pathUsage?: {
     procRoot?: string;
@@ -112,7 +104,6 @@ const safeChunkEnd = (text: string, offset: number, limit: number): number => {
 
 /** `NodeEnvRpcFunctions` extended with lifecycle control (`dispose`, `setDraining`) and introspection. */
 export interface NodeEnvRpcServer extends NodeEnvRpcFunctions {
-  nodeHostEnv(input?: NodeHostEnvQuery): Promise<RpcResult<NodeHostEnv>>;
   nodeTunnelOpen(input: NodeTunnelOpenInput): Promise<RpcResult<null>>;
   nodeTunnelAbort(tunnelId: string): Promise<void>;
   /** Close all open readers, abort active commands, and tear down tunnel sockets. Idempotent. */
@@ -130,7 +121,6 @@ const VOID_RPC_METHODS = new Set(['envAbortExec', 'envCleanup', 'nodeTunnelAbort
 const ADMIT_POLICIES: Record<string, { drainingWhat?: string; tracked?: 'exec'; optionalInput?: boolean }> = {
   envExec: { drainingWhat: 'commands', tracked: 'exec' },
   nodeTunnelOpen: { drainingWhat: 'tunnels' },
-  nodeHostEnv: { optionalInput: true },
 };
 
 export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEnvRpcServer {
@@ -193,10 +183,6 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
   type RunningExec = { controller: AbortController };
   const running = new Map<string, RunningExec>();
 
-  const hostEnv = createHostEnvHandler({
-    context: options.hostEnvContext,
-    isDisposed: () => disposed,
-  });
   const tunnels = createTunnelHandler({
     openTunnelStream: options.openTunnelStream,
     isDisposed: () => disposed,
@@ -540,7 +526,6 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
 
   };
   const rpcFunctions: NodeEnvRpcFunctions = Object.assign(rpc, {
-    nodeHostEnv: (input?: NodeHostEnvQuery): Promise<RpcResult<NodeHostEnv>> => hostEnv.nodeHostEnv(input),
     nodeTunnelOpen: (input: NodeTunnelOpenInput): Promise<RpcResult<null>> => tunnels.nodeTunnelOpen(input),
     nodeTunnelAbort: tunnels.nodeTunnelAbort,
   });

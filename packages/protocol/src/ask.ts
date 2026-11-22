@@ -1,6 +1,5 @@
 /**
- * AskDoc approval contract: supports expectedStateSeq CAS optimistic locking and automatic
- * ingestion of secret answers.
+ * AskDoc approval contract: structured human-in-the-loop prompts with optional expectedStateSeq guard.
  */
 
 export type AskFieldType = 'text' | 'select' | 'confirm'
@@ -18,30 +17,7 @@ export interface AskFieldSpec {
   type: AskFieldType
   /** Candidate list when type is select. */
   options?: Array<AskFieldOption>
-  /** When true, the answer is written into the in-memory SecretStash; the persistence layer and context only keep [REDACTED:stash:<uuid>]. */
-  secret?: boolean
-  /**
-   * Lifetime of a secret answer (only allowed on secret: true fields; defaults to
-   * conversation-scoped, never expiring). Expiry or turn settlement only stops
-   * environment injection; redaction never stops (old values still redact all output).
-   */
-  secretLifetime?: SecretLifetime
   required?: boolean
-}
-
-/**
- * Secret lifetime (AskFieldSpec.secretLifetime and SecretStash.put share the same
- * representation):
- * - ttlMs: injection validity in milliseconds, a finite positive safe integer, capped
- *   at 24 hours; expiry is judged lazily (checked on read, no extra timers);
- * - scope: 'conversation' (default, injected for the conversation's lifetime) /
- *   'turn' (injection stops at the next turn settlement of completed | failed |
- *   aborted; idle does not sweep — an answer landing asynchronously belongs to the
- *   next turn).
- */
-export interface SecretLifetime {
-  ttlMs?: number
-  scope?: 'conversation' | 'turn'
 }
 
 export type AskStatus = 'pending' | 'answered' | 'cancelled' | 'superseded'
@@ -54,11 +30,7 @@ export interface AskSpec {
   title: string
   description?: string
   fields: AskFieldSpec[]
-  /**
-   * Optional CAS watermark (for herdr terminal state synchronization race
-   * protection): if the target's stateChangeSeq has advanced when the answer is
-   * submitted, the ask automatically transitions to superseded and is closed.
-   */
+  /** Optional CAS watermark: if the caller submits a conflicting expectedStateSeq, the host rejects with 409. */
   expectedStateSeq?: number
   status: AskStatus
   createdAt: number
@@ -73,17 +45,17 @@ export interface AskCreateSpec extends Omit<AskSpec, 'id' | 'status' | 'createdA
 /**
  * Terminal result of createAsk: the three normal outcomes
  * (answered/cancelled/superseded) all resolve; only validation/I/O/host failures
- * reject. superseded means the CAS closed the ask; the caller should treat it as
+ * reject. superseded means the ask was superseded; the caller should treat it as
  * having received no answer.
  */
 export interface AskResult {
   id: string
   status: 'answered' | 'cancelled' | 'superseded'
-  /** fieldName -> answer value (secret fields hold stash references); an empty object in non-answered states. */
+  /** fieldName -> answer value; an empty object in non-answered states. */
   answers: Record<string, string>
 }
 
-/** Human-submitted answers (`POST /api/asks/:id/answer`); secret fields store only stash references. */
+/** Human-submitted answers (`POST /api/asks/:id/answer`). */
 export interface AskAnswer {
   askId: string
   /** fieldName -> answer value. */

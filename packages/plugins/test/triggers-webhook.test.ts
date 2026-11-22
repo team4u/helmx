@@ -120,7 +120,7 @@ class FakeBackend implements PluginHostBackend {
   getConversationActivity(): { consecutiveErrors: number } {
     return { consecutiveErrors: 0 }
   }
-  getConversationOwnership(): 'helmx' | 'bot' | 'human' {
+  getConversationOwnership(): 'helmx' | 'human' {
     return 'human'
   }
   async spawnAgent(): Promise<unknown> {
@@ -521,17 +521,15 @@ test('公开路由：签名覆盖原始字节（utf8 多字节）+ body 超限 4
   rmSync(h.dataDir, { recursive: true, force: true })
 })
 
-test('公开路由：threadKey/targetConversationId 元数据生效（投递 envelope 携带）', { timeout: 60_000 }, async () => {
+test('公开路由：targetConversationId 元数据生效（投递 envelope 携带）', { timeout: 60_000 }, async () => {
   const h = await makeHarness()
   await h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_create', {
     id: 'hook',
     secret: 'topsecret',
-    threadKey: 'deploy-42',
     targetConversationId: 7,
   })
   const ok = await callWebhookRoute(h.host, 'hook', 'payload', 'topsecret')
   assert.equal(ok.status, 202)
-  assert.equal(h.backend.dispatched[0]!.threadKey, 'deploy-42')
   assert.equal(h.backend.dispatched[0]!.targetConversationId, 7)
   await h.host.dispose()
   rmSync(h.dataDir, { recursive: true, force: true })
@@ -627,9 +625,6 @@ test('doc 边界：旧开发 doc 缺 hasSecret / 双目标 / 越界字段 → �
   await rejectsCode(h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_list', {}), 'triggers_doc_corrupt', 500)
   // description 超长（> 500）
   seed([{ id: 'x', hasSecret: true, description: 'd'.repeat(501), createdAt: 1 }])
-  await rejectsCode(h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_list', {}), 'triggers_doc_corrupt', 500)
-  // threadKey 越界（> 200）
-  seed([{ id: 'x', hasSecret: true, threadKey: 'k'.repeat(201), createdAt: 1 }])
   await rejectsCode(h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_list', {}), 'triggers_doc_corrupt', 500)
   // targetProfileId 空串
   seed([{ id: 'x', hasSecret: true, targetProfileId: '', createdAt: 1 }])

@@ -233,7 +233,6 @@ describe("triggers-client-interactions", () => {
       assert.match(host.textContent ?? '', /Webhook endpoints/, 'webhook 区块')
       assert.match(host.textContent ?? '', /ci/, 'webhook id')
       assert.match(host.textContent ?? '', /CI 构建/, '描述')
-      assert.match(host.textContent ?? '', /ci\/main/, 'threadKey')
       assert.match(host.textContent ?? '', /Secrets are never shown in docs/, 'secret 边界提示')
       assert.doesNotMatch(host.textContent ?? '', /hasSecret/, '布尔协作字段不进展示')
     } finally {
@@ -329,7 +328,7 @@ describe("triggers-client-interactions", () => {
       assert.ok(host.querySelector('[role="dialog"].primary-drawer-content') === null, '关闭按钮应收起抽屉')
 
       const webhookRow = Array.from(host.querySelectorAll('tbody tr')).find((tr) =>
-        tr.textContent?.includes('ci/main'),
+        tr.textContent?.includes('CI 构建'),
       )
       assert.ok(webhookRow)
       await act(async () => {

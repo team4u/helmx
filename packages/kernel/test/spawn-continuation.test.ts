@@ -225,9 +225,9 @@ test('runAround mixed transform and continuation: transform rewrite applies befo
 })
 
 test('runAround only supports agent_spawn: other hooks explicitly reject', { timeout: 60_000 }, async () => {
-  const pipeline = new HookPipeline<'trigger'>('trigger')
+  const pipeline = new HookPipeline<'input'>('input')
   await assert.rejects(
-    () => pipeline.runAround({ id: 'x', source: 's', text: 't', createdAt: 0 } as never, async () => undefined as never),
+    () => pipeline.runAround({ conversationId: 1, input: { text: 't' } } as never, async () => undefined as never),
     (err: unknown) => {
       assert.ok(err instanceof HelmxError)
       assert.equal(err.code, 'invalid_hook_invocation')

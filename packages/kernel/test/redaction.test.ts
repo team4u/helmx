@@ -9,7 +9,8 @@ import { SecretStash } from '../src/services/secret-stash.js'
 test('structured redaction covers values and keys with quotes/newlines while preserving existing placeholders', { timeout: 60_000 }, () => {
   const stash = new SecretStash()
   const secret = ['example"value', 'next line'].join('\n')
-  const marker = stash.put(1, 'EXAMPLE', secret)
+  stash.addRedaction(secret)
+  const marker = '[REDACTED]'
   const result = redactJsonValue({ [secret]: { list: [secret, marker] } }, (text) => stash.redact(text))
   assert.deepEqual(result, { [marker]: { list: [marker, marker] } })
   assert.equal(JSON.stringify(result).includes('example'), false)
@@ -27,7 +28,7 @@ test('structured output rejects cycles, non-JSON values, and post-redaction key 
 test('streaming redaction covers secrets across chunks, overlapping prefixes, and former cut boundaries', { timeout: 60_000 }, () => {
   for (const secret of ['ababa', '{{SECRET_mvch3tgr}}', '😀private😀', 'A'.repeat(5_000) + 'Z']) {
     const stash = new SecretStash()
-    stash.put(1, 'TOKEN', secret)
+    stash.addRedaction(secret)
     const input = 'padding'.repeat(600) + secret + 'after'.repeat(900)
     const sizes = [1, 2, 13, 4_096]
     for (const size of sizes) {
@@ -43,8 +44,8 @@ test('streaming redaction covers secrets across chunks, overlapping prefixes, an
 
 test('secrets sharing a prefix preserve longest-match literal redaction semantics', { timeout: 60_000 }, () => {
   const stash = new SecretStash()
-  stash.put(1, 'SHORT', 'abc')
-  stash.put(1, 'LONG', 'abcdef')
+  stash.addRedaction('abc')
+  stash.addRedaction('abcdef')
   const stream = stash.createStreamingRedactor()
   const output = stream.push('abc') + stream.push('def-more') + stream.flush()
   assert.equal(output, stash.redact('abcdef-more'))

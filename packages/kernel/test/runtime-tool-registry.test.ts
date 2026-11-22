@@ -19,13 +19,11 @@ import {
 import {
   HookBridge,
   prepareToolResultWith,
-  type HandledToolCallEntry,
 } from '../src/runtime/hook-bridge.js'
 import {
   actionToolResult,
   guardToolExecutionResult,
   pluginToolResult,
-  toolResultOf,
 } from '../src/runtime/runtime-helpers.js'
 import type { HelmxToolDeps } from '../src/runtime/tool-deps.js'
 import type { DerivedToolSpec, PluginHost } from '../src/plugins/index.js'
@@ -33,35 +31,9 @@ import { CapabilityRegistry } from '../src/plugins/capability-registry.js'
 import { PluginTaskTracker } from '../src/plugins/tracking.js'
 
 describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000 }, () => {
-  it('wrapToolExecute: returns intercepted result and removes cache entry when handled cache hits, without calling underlying tool', { timeout: 60_000 }, async () => {
-    const handledToolCalls = new Map<string, HandledToolCallEntry>()
-    handledToolCalls.set('call-1', {
-      conversationId: 42,
-      result: { output: [{ type: 'text', text: 'intercepted-result' }], isError: false },
-    })
-
-    let underlyingExecuted = false
-    const wrapped = wrapToolExecute(handledToolCalls, async () => {
-      underlyingExecuted = true
-      return { output: [{ type: 'text', text: 'original' }] }
-    })
-
-    const res = (await wrapped({} as never, { callId: 'call-1' } as never, {})) as {
-      output: Array<{ type: 'text'; text: string }>
-      isError: boolean
-    }
-    assert.equal(underlyingExecuted, false, 'original tool execute must not be called')
-    assert.deepEqual(res, {
-      output: [{ type: 'text', text: 'intercepted-result' }],
-      isError: false,
-    })
-    assert.equal(handledToolCalls.has('call-1'), false, 'entry should be removed from handled cache once consumed')
-  })
-
-  it('wrapToolExecute: passes through to underlying tool execute when handled cache misses', { timeout: 60_000 }, async () => {
-    const handledToolCalls = new Map<string, HandledToolCallEntry>()
+  it('wrapToolExecute: passes through to underlying tool execute when not aborted', { timeout: 60_000 }, async () => {
     let calledWith: unknown = undefined
-    const wrapped = wrapToolExecute(handledToolCalls, async (args) => {
+    const wrapped = wrapToolExecute(async (args) => {
       calledWith = args
       return { output: [{ type: 'text', text: 'normal-output' }] }
     })
@@ -81,12 +53,10 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
       },
     }
 
-    const handledToolCalls = new Map<string, HandledToolCallEntry>()
     const fakeToolDeps: HelmxToolDeps = {
       dataDir: '/tmp/test',
       defaultCwd: '/tmp/test',
       hubUrl: 'http://127.0.0.1:3202',
-      stashEnvFor: () => ({}),
       redact: (t) => t.replace(/secret/g, '[REDACTED]'),
       artifacts: {
         spill: async () => ({ text: 'spill' }),
@@ -125,7 +95,6 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
       getPluginHost: () => fakeHost,
       isArtifactAuthorized: (_c, _a) => true,
       redact: (t) => t.replace(/secret/g, '[REDACTED]'),
-      handledToolCalls,
       getConversation: (id) => ({
         id,
         title: 'test',
@@ -178,18 +147,6 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
     assert.ok(okRes.output[0]!.text.includes('[REDACTED]'))
     assert.ok(!okRes.output[0]!.text.includes('secret'))
 
-    // Interception when handled tool call hits
-    handledToolCalls.set('call-intercepted', {
-      conversationId: 1,
-      result: { output: [{ type: 'text', text: 'handled-by-hook' }], isError: false },
-    })
-    const interceptedRes = (await (runActionTool.execute as unknown as (args: unknown, api: unknown, ctx: unknown) => Promise<unknown>)(
-      { actionId: 'demo.test' },
-      { conversationId: 1, callId: 'call-intercepted' },
-      {},
-    )) as { output: Array<{ text: string }> }
-    assert.equal(interceptedRes.output[0]!.text, 'handled-by-hook')
-
     // describe mode: returns full manifest (including nested schema) without calling handler
     invokedAction = undefined
     const descRes = await runActionTool.execute({ actionId: 'demo.test', describe: true }, { conversationId: 1 }, {})
@@ -229,12 +186,10 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
       },
     }
 
-    const handledToolCalls = new Map<string, HandledToolCallEntry>()
     const fakeToolDeps: HelmxToolDeps = {
       dataDir: '/tmp/test',
       defaultCwd: '/tmp/test',
       hubUrl: 'http://127.0.0.1:3202',
-      stashEnvFor: () => ({}),
       redact: (t) => t.replace(/token-123/g, '***'),
       artifacts: {
         spill: async () => ({ text: 'spill' }),
@@ -273,7 +228,6 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
       getPluginHost: () => fakeHost,
       isArtifactAuthorized: () => true,
       redact: (t) => t.replace(/token-123/g, '***'),
-      handledToolCalls,
       getConversation: (id) => ({
         id,
         title: 'test',
@@ -326,10 +280,9 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
     assert.equal(installed[1]!.tools?.length, 0)
   })
 
-  it('wrapToolExecute: throws unified abort error if abortSignal fired during underlying execution (preserving Error reason; short-circuits handled calls)', { timeout: 60_000 }, async () => {
-    const handledToolCalls = new Map<string, HandledToolCallEntry>()
+  it('wrapToolExecute: throws unified abort error if abortSignal fired during underlying execution (preserving Error reason)', { timeout: 60_000 }, async () => {
     const ac1 = new AbortController()
-    const wrappedNormal = wrapToolExecute(handledToolCalls, async () => {
+    const wrappedNormal = wrapToolExecute(async () => {
       ac1.abort()
       return { output: [{ type: 'text', text: 'late-ok' }] }
     })
@@ -340,7 +293,7 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
 
     const ac2 = new AbortController()
     const customReason = new Error('kernel closing')
-    const wrappedErrResult = wrapToolExecute(handledToolCalls, async () => {
+    const wrappedErrResult = wrapToolExecute(async () => {
       ac2.abort(customReason)
       return { output: [{ type: 'text', text: 'late-error-result' }], isError: true }
     })
@@ -348,20 +301,6 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
       () => wrappedErrResult({} as never, { callId: 'call-abort-2' } as never, { abortSignal: ac2.signal }),
       (error: unknown) => error === customReason,
     )
-
-    // When handledToolCalls short-circuits, neither underlying tool runs nor abortSignal throws
-    const acHandled = new AbortController()
-    acHandled.abort(new Error('late abort'))
-    handledToolCalls.set('call-handled-abort', {
-      conversationId: 1,
-      result: { output: [{ type: 'text', text: 'pre-handled' }], isError: false },
-    })
-    const handledRes = (await wrappedNormal(
-      {} as never,
-      { callId: 'call-handled-abort' } as never,
-      { abortSignal: acHandled.signal },
-    )) as { output: Array<{ text: string }> }
-    assert.equal(handledRes.output[0]!.text, 'pre-handled')
   })
 
   it('installKernelTools: only read-only tools read and read_artifact declare replay: "safe"; others remain non-safe by default', { timeout: 60_000 }, () => {
@@ -370,7 +309,6 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
       dataDir: '/tmp/test',
       defaultCwd: '/tmp/test',
       hubUrl: 'http://127.0.0.1:3202',
-      stashEnvFor: () => ({}),
       redact: (t) => t,
       artifacts: {
         spill: async () => ({ text: 'spill' }),
@@ -389,7 +327,6 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
       getPluginHost: () => undefined,
       isArtifactAuthorized: () => true,
       redact: (t) => t,
-      handledToolCalls: new Map(),
       getConversation: (id) => ({
         id,
         title: 'test',
@@ -459,7 +396,6 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
       dataDir: '/tmp/test',
       defaultCwd: '/tmp/test',
       hubUrl: 'http://127.0.0.1:3202',
-      stashEnvFor: () => ({}),
       redact: (t) => t,
       artifacts: {
         spill: async () => ({ text: 'spill' }),
@@ -483,7 +419,6 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
       }),
       isArtifactAuthorized: () => true,
       redact: (t) => t,
-      handledToolCalls: new Map(),
       getConversation: (id) => ({
         id,
         title: 'test',
@@ -695,7 +630,6 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
       dataDir: '/tmp/test',
       defaultCwd: '/tmp/test',
       hubUrl: 'http://127.0.0.1:3202',
-      stashEnvFor: () => ({}),
       redact,
       artifacts: {
         spill: async () => ({ text: 'spill' }),
@@ -715,7 +649,6 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
       }),
       isArtifactAuthorized: () => true,
       redact,
-      handledToolCalls: new Map(),
       getConversation: () => fakeConv,
     })
 
@@ -769,8 +702,12 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
     assert.deepEqual(bare.structuredOutput, { output: 1, isError: 'x' })
   })
 
-  it('HookBridge.afterTool & prepareToolResultWith: enforce identical presentationMeta/structuredOutput guard on transform, handled, and tool_call takeover', { timeout: 60_000 }, async () => {
-    const redact = (t: string) => t.replaceAll('SECRET', '[REDACTED]')
+  it('HookBridge.afterTool & prepareToolResultWith: enforce presentationMeta/structuredOutput guard once without double-redaction', { timeout: 60_000 }, async () => {
+    let redactCalls = 0
+    const redact = (t: string) => {
+      redactCalls += 1
+      return t.replaceAll('SECRET', '[REDACTED]')
+    }
     const metaSchema = {
       type: 'object',
       properties: { badge: { type: 'string' } },
@@ -784,8 +721,6 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
       additionalProperties: false,
     }
 
-    let hookOutcome: unknown = { action: 'continue' }
-    let observedToolResultPayload: { result?: PluginToolResultEnvelope } | undefined
     const fakeHost = {
       listTools: () => [
         {
@@ -806,12 +741,7 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
         },
       ],
       listActions: () => [],
-      runHook: async (name: string, payload: unknown) => {
-        if (name === 'tool_result') {
-          observedToolResultPayload = payload as { result?: PluginToolResultEnvelope }
-        }
-        return hookOutcome
-      },
+      runHook: async () => ({ action: 'continue' }),
       runHookAround: async (_name: string, payload: unknown, next: (p: unknown) => Promise<unknown>) => next(payload),
     } as unknown as PluginHost
 
@@ -819,12 +749,10 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
     const artifacts = {
       spill: async (_convId: number, _id: string, text: string) => ({ text }),
     }
-    const handledToolCalls = new Map<string, HandledToolCallEntry>()
     const bridge = new HookBridge({
       registry: { install(ext: Extension) { installedExt = ext } },
       pluginHost: () => fakeHost,
-      handledToolCalls,
-      prepareToolResult: (convId, res) => prepareToolResultWith(artifacts, redact, convId, res),
+      prepareToolResult: (convId, res, opts) => prepareToolResultWith(artifacts, redact, convId, res, opts),
       safeSummary: () => undefined,
       currentRunInputs: () => [],
       redact,
@@ -842,42 +770,41 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
       }
     }).handlers
 
-    // 1. Valid `tool_result` transform: receives `presentationMeta` (mapped from `details`), updates it, redacts & persists.
-    hookOutcome = {
-      action: 'transform',
-      value: {
-        conversationId: 1,
-        callId: 'c1',
-        toolName: 'guarded_tool',
-        input: {},
-        result: { output: 'out SECRET', structuredOutput: { ok: true }, presentationMeta: { badge: 'new SECRET' } },
-      },
+    // 1. Valid result: redacts output, structuredOutput, and details in a single guard pass (no double guardToolExecutionResult).
+    const sampleRaw = {
+      output: [{ type: 'text' as const, text: 'out SECRET' }],
+      structuredOutput: { ok: true },
+      details: { badge: 'new SECRET' },
     }
-    const okTransform = await toolHook.afterTool(
+    redactCalls = 0
+    await prepareToolResultWith(artifacts, redact, 1, sampleRaw, {
+      toolName: 'guarded_tool',
+      callId: 'c0',
+      structuredOutputSchema: structuredSchema,
+      presentationMetaSchema: metaSchema,
+      enforceSchemas: true,
+    })
+    const singlePassCalls = redactCalls
+    assert.ok(singlePassCalls > 0)
+
+    redactCalls = 0
+    const okRes = await toolHook.afterTool(
       { id: 'c1', name: 'guarded_tool', arguments: {} },
-      { output: [{ type: 'text', text: 'orig' }], details: { badge: 'old' } },
+      sampleRaw,
       { conversationId: 1 },
     )
-    assert.deepEqual(observedToolResultPayload?.result?.presentationMeta, { badge: 'old' })
-    assert.equal(okTransform['isError'], undefined)
-    assert.deepEqual(okTransform['output'], [{ type: 'text', text: 'out [REDACTED]' }])
-    assert.deepEqual(okTransform['structuredOutput'], { ok: true })
-    assert.deepEqual(okTransform['details'], { badge: 'new [REDACTED]' })
-
-    // 2. Valid `tool_result` handled: also maps presentationMeta -> details after redaction + schema + budget.
-    hookOutcome = {
-      action: 'handled',
-      result: { output: 'handled SECRET', presentationMeta: { badge: 'h-SECRET' } },
-    }
-    const okHandled = await toolHook.afterTool(
-      { id: 'c2', name: 'guarded_tool', arguments: {} },
-      { output: [{ type: 'text', text: 'orig' }] },
-      { conversationId: 1 },
+    assert.equal(okRes['isError'], undefined)
+    assert.deepEqual(okRes['output'], [{ type: 'text', text: 'out [REDACTED]' }])
+    assert.deepEqual(okRes['structuredOutput'], { ok: true })
+    assert.deepEqual(okRes['details'], { badge: 'new [REDACTED]' })
+    // Single pass: afterTool must match one prepareToolResultWith pass (double guard would be 2x).
+    assert.equal(
+      redactCalls,
+      singlePassCalls,
+      `afterTool must run guardToolExecutionResult only once (got ${redactCalls} redact calls vs single-pass baseline ${singlePassCalls})`,
     )
-    assert.equal(okHandled['isError'], undefined)
-    assert.deepEqual(okHandled['details'], { badge: 'h-[REDACTED]' })
 
-    // 3. Invalid hook cases MUST all converge to `isError: true` with `details: undefined` and `structuredOutput: undefined`.
+    // 2. Invalid raw tool results MUST all converge to `isError: true` with `details: undefined` and `structuredOutput: undefined`.
     const deep13 = (() => {
       let cur: unknown = { leaf: 1 }
       for (let i = 0; i < TOOL_PRESENTATION_META_MAX_DEPTH; i += 1) cur = { next: cur }
@@ -889,97 +816,84 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
     const symbolMeta: Record<PropertyKey, unknown> = { badge: 'ok', [Symbol('k')]: 'v' }
     const arrWithExtra = [1] as unknown[] & { extra?: string }
     arrWithExtra.extra = 'dropped'
-    const badCases: Array<{ label: string; toolName: string; outcome: unknown; pattern: RegExp }> = [
+    const badCases: Array<{ label: string; toolName: string; rawResult: Record<string, unknown>; pattern: RegExp }> = [
       {
-        label: 'transform legacy details field rejected',
-        toolName: 'guarded_tool',
-        outcome: { action: 'transform', value: { result: { output: 'ok', details: { badge: 'legacy' } } } },
-        pattern: /presentationMeta instead of legacy details/,
-      },
-      {
-        label: 'handled legacy details field rejected',
-        toolName: 'guarded_tool',
-        outcome: { action: 'handled', result: { output: 'ok', details: { badge: 'legacy' } } },
-        pattern: /presentationMeta instead of legacy details/,
-      },
-      {
-        label: 'presentationMeta on tool without presentationMetaSchema rejected',
+        label: 'details on tool without presentationMetaSchema rejected',
         toolName: 'plain_tool',
-        outcome: { action: 'transform', value: { result: { output: 'ok', presentationMeta: { badge: 'x' } } } },
+        rawResult: { output: [{ type: 'text', text: 'ok' }], details: { badge: 'x' } },
         pattern: /presentationMetaSchema/,
       },
       {
-        label: 'presentationMeta violating schema rejected',
+        label: 'details violating schema rejected',
         toolName: 'guarded_tool',
-        outcome: { action: 'handled', result: { output: 'ok', presentationMeta: { badge: 123 } } },
+        rawResult: { output: [{ type: 'text', text: 'ok' }], details: { badge: 123 } },
         pattern: /presentationMetaSchema/,
       },
       {
-        label: 'presentationMeta > 64 KiB rejected without truncation',
+        label: 'details > 64 KiB rejected without truncation',
         toolName: 'guarded_tool',
-        outcome: { action: 'transform', value: { result: { output: 'ok', presentationMeta: { badge: 'a'.repeat(TOOL_PRESENTATION_META_MAX_BYTES) } } } },
+        rawResult: { output: [{ type: 'text', text: 'ok' }], details: { badge: 'a'.repeat(TOOL_PRESENTATION_META_MAX_BYTES) } },
         pattern: /max byte size/,
       },
       {
-        label: 'presentationMeta depth > 12 rejected',
+        label: 'details depth > 12 rejected',
         toolName: 'guarded_tool',
-        outcome: { action: 'transform', value: { result: { output: 'ok', presentationMeta: deep13 } } },
+        rawResult: { output: [{ type: 'text', text: 'ok' }], details: deep13 },
         pattern: /max nesting depth/,
       },
       {
-        label: 'presentationMeta nodes > 2000 rejected',
+        label: 'details nodes > 2000 rejected',
         toolName: 'guarded_tool',
-        outcome: { action: 'transform', value: { result: { output: 'ok', presentationMeta: tooManyNodes } } },
+        rawResult: { output: [{ type: 'text', text: 'ok' }], details: tooManyNodes },
         pattern: /max node count/,
       },
       {
-        label: 'presentationMeta prototype key rejected',
+        label: 'details prototype key rejected',
         toolName: 'guarded_tool',
-        outcome: { action: 'handled', result: { output: 'ok', presentationMeta: JSON.parse('{"badge":"ok","__proto__":1}') } },
+        rawResult: { output: [{ type: 'text', text: 'ok' }], details: JSON.parse('{"badge":"ok","__proto__":1}') },
         pattern: /prototype key/,
       },
       {
-        label: 'presentationMeta NaN rejected (not laundered to null)',
+        label: 'details NaN rejected (not laundered to null)',
         toolName: 'guarded_tool',
-        outcome: { action: 'handled', result: { output: 'ok', presentationMeta: { badge: 'ok', bad: Number.NaN } } },
+        rawResult: { output: [{ type: 'text', text: 'ok' }], details: { badge: 'ok', bad: Number.NaN } },
         pattern: /non-finite/,
       },
       {
-        label: 'presentationMeta non-enumerable own property rejected (not silently dropped)',
+        label: 'details non-enumerable own property rejected (not silently dropped)',
         toolName: 'guarded_tool',
-        outcome: { action: 'handled', result: { output: 'ok', presentationMeta: nonEnumMeta } },
+        rawResult: { output: [{ type: 'text', text: 'ok' }], details: nonEnumMeta },
         pattern: /non-enumerable/,
       },
       {
-        label: 'presentationMeta symbol own key rejected (not silently dropped)',
+        label: 'details symbol own key rejected (not silently dropped)',
         toolName: 'guarded_tool',
-        outcome: { action: 'handled', result: { output: 'ok', presentationMeta: symbolMeta } },
+        rawResult: { output: [{ type: 'text', text: 'ok' }], details: symbolMeta },
         pattern: /symbol key/,
       },
       {
-        label: 'presentationMeta array extra own property rejected (not silently dropped)',
+        label: 'details array extra own property rejected (not silently dropped)',
         toolName: 'guarded_tool',
-        outcome: { action: 'handled', result: { output: 'ok', presentationMeta: { badge: 'ok', items: arrWithExtra } } },
+        rawResult: { output: [{ type: 'text', text: 'ok' }], details: { badge: 'ok', items: arrWithExtra } },
         pattern: /extra own property/,
       },
       {
         label: 'structuredOutput violating schema rejected',
         toolName: 'guarded_tool',
-        outcome: { action: 'transform', value: { result: { output: 'ok', structuredOutput: { ok: 'nope' }, presentationMeta: { badge: 'ok' } } } },
+        rawResult: { output: [{ type: 'text', text: 'ok' }], structuredOutput: { ok: 'nope' }, details: { badge: 'ok' } },
         pattern: /structuredOutputSchema/,
       },
       {
         label: 'structuredOutput on tool without structuredOutputSchema rejected',
         toolName: 'plain_tool',
-        outcome: { action: 'handled', result: { output: 'ok', structuredOutput: { ok: true } } },
+        rawResult: { output: [{ type: 'text', text: 'ok' }], structuredOutput: { ok: true } },
         pattern: /structuredOutputSchema/,
       },
     ]
     for (const c of badCases) {
-      hookOutcome = c.outcome
       const res = await toolHook.afterTool(
         { id: `bad-${c.label}`, name: c.toolName, arguments: {} },
-        { output: [{ type: 'text', text: 'orig' }] },
+        c.rawResult,
         { conversationId: 1 },
       )
       assert.equal(res['isError'], true, `${c.label}: must set isError: true`)
@@ -989,16 +903,7 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
       assert.match(text, c.pattern, `${c.label}: unexpected error text "${text}"`)
     }
 
-    // 4. toolResultOf preserves presentationMeta -> details (for downstream afterTool guard) and rejects legacy details.
-    const taken = toolResultOf({ output: 'cached', presentationMeta: { badge: 'hit' }, structuredOutput: { ok: true } })
-    assert.equal(taken.isError, false)
-    assert.deepEqual(taken.details, { badge: 'hit' })
-    assert.deepEqual(taken.structuredOutput, { ok: true })
-    const badTaken = toolResultOf({ output: 'cached', details: { badge: 'legacy' } })
-    assert.equal(badTaken.isError, true)
-    assert.equal(badTaken.details, undefined)
-
-    // 5. Direct prepareToolResultWith rejects non-finite / undefined / prototype key / accessor / oversized details before JSON.stringify.
+    // 3. Direct prepareToolResultWith rejects non-finite / undefined / prototype key / accessor / oversized details before JSON.stringify.
     await assert.rejects(
       () => prepareToolResultWith(artifacts, redact, 1, { output: [{ type: 'text', text: 'ok' }], details: { n: Number.NaN } as never }),
       (err: unknown) => err instanceof HelmxError && err.code === 'invalid_tool_result',
@@ -1012,7 +917,7 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
       (err: unknown) => err instanceof HelmxError && err.code === 'invalid_tool_result',
     )
 
-    // 6. Enumerable getters on details/presentationMeta must NEVER execute and must fail closed (cleared details + isError: true).
+    // 4. Enumerable getters on details must NEVER execute and must fail closed (cleared details + isError: true).
     let detailsGetterCalled = false
     const makeDetailsGetter = () => {
       const obj: Record<string, unknown> = {}
@@ -1032,8 +937,6 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
     )
     assert.equal(detailsGetterCalled, false, 'prepareToolResultWith must reject details getter without invocation')
 
-    // Raw tool result details entering HookBridge.afterTool without hook mutation
-    hookOutcome = { action: 'continue' }
     const rawDetailsRes = await toolHook.afterTool(
       { id: 'bad-details-getter-raw', name: 'guarded_tool', arguments: {} },
       { output: [{ type: 'text', text: 'orig' }], details: makeDetailsGetter() },
@@ -1043,18 +946,6 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
     assert.equal(rawDetailsRes['isError'], true)
     assert.equal(rawDetailsRes['details'], undefined)
     assert.match(((rawDetailsRes['output'] as Array<{ text: string }>)[0] ?? { text: '' }).text, /accessor/)
-
-    // Hook handled returning presentationMeta with enumerable getter
-    hookOutcome = { action: 'handled', result: { output: 'ok', presentationMeta: makeDetailsGetter() } }
-    const hookDetailsRes = await toolHook.afterTool(
-      { id: 'bad-details-getter-hook', name: 'guarded_tool', arguments: {} },
-      { output: [{ type: 'text', text: 'orig' }] },
-      { conversationId: 1 },
-    )
-    assert.equal(detailsGetterCalled, false, 'HookBridge.afterTool must reject hook presentationMeta getter without invocation')
-    assert.equal(hookDetailsRes['isError'], true)
-    assert.equal(hookDetailsRes['details'], undefined)
-    assert.match(((hookDetailsRes['output'] as Array<{ text: string }>)[0] ?? { text: '' }).text, /accessor/)
   })
 
   it('guardToolExecutionResult: validates and redacts rest envelope fields without JSON.stringify, preserving output/diagnostics/usage/control and rejecting non-JSON disguises', { timeout: 60_000 }, () => {

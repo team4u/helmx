@@ -245,35 +245,11 @@ try {
       })
       ctx.ui.sidebarItem({ id: 'ui-ext-entry', label: 'UI 扩展验收', icon: 'layers', target: 'screen:test:ui-owner/main' })
       ctx.ui.screen({ id: 'main', label: 'UI 扩展验收主屏', client: { module: 'client.tsx', export: 'Screen' } })
-      ctx.ui.composerPill({
-        id: 'draft-tools',
-        label: '草稿工具',
-        client: { module: 'client.tsx', export: 'ComposerPill' },
-        scope: { tags: ['ui-ext'] },
-      })
       ctx.ui.workbenchPanel({
         id: 'metrics',
         label: '会话 metrics',
         icon: 'activity',
         client: { module: 'client.tsx', export: 'MetricsPanel' },
-      })
-      // Micro-actions (ctx.ui.action): header toolbar button and row menu item (host injects conversationId)
-      ctx.ui.action({
-        id: 'header-increment',
-        target: 'conversation:header',
-        label: 'metrics +1',
-        icon: 'plus',
-        placement: 'toolbar',
-        actionId: 'increment',
-        scope: { tags: ['ui-ext'] },
-      })
-      ctx.ui.action({
-        id: 'row-bump-status',
-        target: 'conversation:row',
-        label: 'status bump',
-        icon: 'zap',
-        actionId: 'bump_status',
-        scope: { tags: ['ui-ext'] },
       })
       // Slash command: actionId='increment', input explicitly fills the test conversation id
       ctx.ui.command({
@@ -397,16 +373,6 @@ try {
         scope: { tags: ['ui-ext'] },
         client: { module: 'client.tsx', export: 'ContributorComposerStatus' },
       })
-      // Timeline micro-action registration targeting test:ui-owner.bump_status across plugins
-      ctx.ui.action({
-        id: 'entry-note',
-        target: 'timeline:entry',
-        label: '标记验收条目',
-        icon: 'check',
-        actionId: 'bump_status',
-        actionPluginId: 'test:ui-owner',
-        scope: { tags: ['ui-ext'] },
-      })
     },
   })
 
@@ -490,8 +456,8 @@ async function runSelfCheck({ app: activeApp, hub: activeHub, token, mainConvId 
     .filter((u) => u.pluginId === 'test:ui-owner' || u.pluginId === 'test:ui-contributor')
   const ownerUi = fixtureUi.filter((u) => u.pluginId === 'test:ui-owner')
   const contributorUi = fixtureUi.filter((u) => u.pluginId === 'test:ui-contributor')
-  assert.equal(ownerUi.length, 9, 'expected 9 owner UI contributions')
-  assert.equal(contributorUi.length, 5, 'expected 5 contributor UI contributions')
+  assert.equal(ownerUi.length, 6, 'expected 6 owner UI contributions')
+  assert.equal(contributorUi.length, 4, 'expected 4 contributor UI contributions')
 
   const hostSlotSet = new Set(
     Array.isArray(protocol.HOST_SLOT_TARGETS) ? protocol.HOST_SLOT_TARGETS : CANONICAL_HOST_SLOT_TARGETS,
@@ -519,18 +485,7 @@ async function runSelfCheck({ app: activeApp, hub: activeHub, token, mainConvId 
         assert.ok(hostSlotSet.has(spec.target), `builtin slot target must belong to HOST_SLOT_CATALOG: ${spec.target}`)
       }
     }
-    if (
-      item.surface === 'conversation.header.action' ||
-      item.surface === 'conversation.row.action' ||
-      item.surface === 'timeline.entry.action'
-    ) {
-      assert.equal('target' in spec, false, `${item.surface} strips redundant target field`)
-      assert.equal(typeof spec.actionId, 'string')
-    }
   }
-
-  const entryAction = fixtureUi.find((u) => u.pluginId === 'test:ui-contributor' && u.surface === 'timeline.entry.action')
-  assert.equal(entryAction?.spec.actionPluginId, 'test:ui-owner')
 
   // 3) Verify HTTP serving of webDistDir, plugin list, and compiled client.tsx bundles
   const htmlRes = await fetch(`${activeHub.url}/`)

@@ -7,7 +7,7 @@
  * missing we return safe defaults instead of fabricating data.
  */
 import { DEFAULT_HELMX_LOCALE, resolveLocalizedText, type HelmxLocale } from '@helmx/plugin-client'
-import { TRIGGER_TARGET_DEFAULT, triggerTargetConversation, triggerTargetProfile, triggerTargetThreadKey } from './copy.ts'
+import { TRIGGER_TARGET_DEFAULT, triggerTargetConversation, triggerTargetProfile } from './copy.ts'
 
 /** Row shape of the CronDoc (public doc 'crons'), display field subset. */
 export interface CronJobRow {
@@ -20,7 +20,6 @@ export interface CronJobRow {
   catchUp: boolean
   targetConversationId?: number
   targetProfileId?: string
-  threadKey?: string
   lastRunAt?: number
   nextRunAt?: number
   lastError?: string
@@ -33,7 +32,6 @@ export interface WebhookRow {
   description?: string
   targetConversationId?: number
   targetProfileId?: string
-  threadKey?: string
   createdAt: number
 }
 
@@ -43,7 +41,7 @@ export type TriggerDetailSelection =
 
 /**
  * Human-readable summary of a trigger's delivery target (conversation /
- * profile / ThreadKey, falling back to default routing when no explicit
+ * profile, falling back to default routing when no explicit
  * target is set). Copy resolves against the given locale (defaults to en so
  * existing English assertions stay valid).
  */
@@ -51,7 +49,6 @@ export function formatTriggerTargetSummary(
   row: {
     targetConversationId?: number
     targetProfileId?: string
-    threadKey?: string
   },
   locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
 ): string {
@@ -61,9 +58,6 @@ export function formatTriggerTargetSummary(
   }
   if (row.targetProfileId) {
     parts.push(triggerTargetProfile(row.targetProfileId, locale))
-  }
-  if (row.threadKey) {
-    parts.push(triggerTargetThreadKey(row.threadKey, locale))
   }
   return parts.length > 0 ? parts.join(' · ') : resolveLocalizedText(TRIGGER_TARGET_DEFAULT, locale)
 }

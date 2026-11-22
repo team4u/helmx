@@ -443,12 +443,6 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
     const env = await openSwarmEnv(useTempDir(t, 'helmx-swarm-int8-'), gitTemplate)
     try {
       const { kernel } = env.app
-      // 1) External runtime profile rejected with 400 unsupported_runtime
-      await kernel.services.profiles.save({
-        id: 'ext-agent',
-        name: 'External Agent',
-        runtime: { kind: 'herdr', agent: 'codex' },
-      })
       // Restricted profile without swarm skill
       await kernel.services.profiles.save({
         id: 'no-swarm-skill',
@@ -501,16 +495,6 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
         conversationId: coord.id,
       })) as { groupId: string }
 
-      await assert.rejects(
-        () =>
-          kernel.plugins.invokeAction(
-            SWARM_PLUGIN_ID,
-            'dispatch_worker',
-            { groupId, name: 'ext', prompt: 'Should fail', profileId: 'ext-agent' },
-            { conversationId: coord.id },
-          ),
-        (err: unknown) => err instanceof HelmxError && err.code === 'unsupported_runtime' && err.status === 400,
-      )
       // Invalid nodeId format rejects 400 validation_error; remote nodeId without cwd rejects 400 validation_error; offline remote nodeId with cwd rejects 409 node_offline
       await assert.rejects(
         () =>

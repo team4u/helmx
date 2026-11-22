@@ -13,11 +13,7 @@ Use the `subagent` tool for one delegated task. Required input is `prompt`; usef
 - `isolation: "worktree"` keeps the child branch and worktree after the run. Inspect and merge before cleanup.
 - `resume` continues an existing execution context. It is not the same as workflow ledger replay.
 
-The business result and execution metadata are separate. Preserve `conversationId`, `executionId`, `effectiveCwd`, and `worktree` when later inspection or cleanup needs them.
-
-## External runtimes
-
-An `agentType` such as `herdr:agy` is routed through the owning external plugin when available. The external pane has its own execution identity and handoff protocol. Do not read terminal screen text as a result or silently fall back to local execution when the target is unavailable.
+The business result and execution metadata are separate. Preserve `conversationId`, `effectiveCwd`, and `worktree` when later inspection or cleanup needs them.
 
 ## Background control
 

@@ -25,10 +25,7 @@ export { withFileLock, withProcessFileLock } from './file-lock.js'
 
 export {
   SecretStash,
-  parsePlaceholder,
-  validateSecretLifetime,
-  MAX_SECRET_TTL_MS,
-  type StashedSecret,
+  REDACTED_MARKER,
 } from './secret-stash.js'
 
 export {

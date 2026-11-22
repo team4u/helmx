@@ -11,7 +11,7 @@
  * - `close()` awaits full drain of in-flight flushes and returns the first persistence error to callers.
  */
 
-import type { ArtifactKind, ConversationStatus, ConversationSummary, SearchHit } from '@helmx/protocol'
+import type { ArtifactKind, ConversationOwnership, ConversationStatus, ConversationSummary, SearchHit } from '@helmx/protocol'
 import { HelmxError, isArtifactKind } from '@helmx/protocol'
 import type { NodeSqliteDatabase } from '@earendil-works/chord/sqlite/node'
 import { emitDiagnostic, type KernelDiagnosticSink } from './diagnostics.js'
@@ -31,6 +31,8 @@ export interface ConvMeta {
   parentConversationId?: number
   /** Parent conversation's tool call ID that spawned or most recently resumed this child (live execution correlation). */
   parentToolCallId?: string
+  /** Conversation ownership (`'human'` default; `'helmx'` for automation-owned conversations). */
+  ownedBy?: ConversationOwnership
   /** Bound compute node ID (defaults to `'local'`). */
   nodeId: string
   cwd: string
@@ -147,6 +149,7 @@ export class HelmxStore {
       tags: string
       parent_conversation_id: number | null
       parent_tool_call_id: string | null
+      owned_by: string | null
       node_id: string | null
       cwd: string
       model: string
@@ -162,7 +165,7 @@ export class HelmxStore {
       created_at: number
       updated_at: number
     }>(
-      'SELECT id, title, profile_id, tags, parent_conversation_id, parent_tool_call_id, node_id, cwd, model, model_override, thinking_level, thinking_level_override, unread, pinned, state_change_seq, completion_seq, run_duration_ms, run_started_at, created_at, updated_at FROM helmx_conversations',
+      'SELECT id, title, profile_id, tags, parent_conversation_id, parent_tool_call_id, owned_by, node_id, cwd, model, model_override, thinking_level, thinking_level_override, unread, pinned, state_change_seq, completion_seq, run_duration_ms, run_started_at, created_at, updated_at FROM helmx_conversations',
     )) {
       this.convs.set(row.id, {
         id: row.id,
@@ -171,6 +174,7 @@ export class HelmxStore {
         tags: parseStoredJson<string[]>(`helmx_conversations#${row.id}.tags`, row.tags),
         parentConversationId: row.parent_conversation_id ?? undefined,
         parentToolCallId: row.parent_tool_call_id || undefined,
+        ownedBy: row.owned_by === 'helmx' ? 'helmx' : 'human',
         nodeId: row.node_id || 'local',
         cwd: row.cwd,
         model: row.model,
@@ -331,12 +335,26 @@ export class HelmxStore {
     }
   }
 
+  /** Update conversation ownership column in O(1); returns true if ownership changed on an existing conversation. */
+  setConvOwnership(id: number, owner: ConversationOwnership): boolean {
+    this.assertWritable()
+    const existing = this.convs.get(id)
+    if (existing === undefined || this.tombstones.has(id)) return false
+    const current: ConversationOwnership = existing.ownedBy === 'helmx' ? 'helmx' : 'human'
+    if (current === owner) return false
+    existing.ownedBy = owner
+    this.enqueue(() =>
+      this.db.run('UPDATE helmx_conversations SET owned_by = ? WHERE id = ?', owner, id),
+    )
+    return true
+  }
+
   upsertConv(meta: ConvMeta): void {
     this.assertWritable()
     const prev = this.convs.get(meta.id)
     const titleChanged = prev?.title !== meta.title
     // Deep-copy snapshot: SQL parameters bind to snapshot values so subsequent caller mutations cannot affect queued writes.
-    const snap = cloneConv(meta)
+    const snap = cloneConv({ ...meta, ownedBy: meta.ownedBy ?? prev?.ownedBy ?? 'human' })
     if (snap.lastEntryId === undefined && prev?.lastEntryId !== undefined) {
       snap.lastEntryId = prev.lastEntryId
     }
@@ -350,15 +368,16 @@ export class HelmxStore {
     }
     this.enqueue(async () => {
       await this.db.run(
-        `INSERT INTO helmx_conversations (id, title, profile_id, tags, parent_conversation_id, parent_tool_call_id, node_id, cwd, model, model_override, thinking_level, thinking_level_override, unread, pinned, state_change_seq, completion_seq, run_duration_ms, run_started_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET title=excluded.title, profile_id=excluded.profile_id, tags=excluded.tags, parent_conversation_id=excluded.parent_conversation_id, parent_tool_call_id=excluded.parent_tool_call_id, node_id=excluded.node_id, cwd=excluded.cwd, model=excluded.model, model_override=excluded.model_override, thinking_level=excluded.thinking_level, thinking_level_override=excluded.thinking_level_override, unread=excluded.unread, pinned=excluded.pinned, state_change_seq=excluded.state_change_seq, completion_seq=excluded.completion_seq, run_duration_ms=excluded.run_duration_ms, run_started_at=excluded.run_started_at, updated_at=excluded.updated_at`,
+        `INSERT INTO helmx_conversations (id, title, profile_id, tags, parent_conversation_id, parent_tool_call_id, owned_by, node_id, cwd, model, model_override, thinking_level, thinking_level_override, unread, pinned, state_change_seq, completion_seq, run_duration_ms, run_started_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET title=excluded.title, profile_id=excluded.profile_id, tags=excluded.tags, parent_conversation_id=excluded.parent_conversation_id, parent_tool_call_id=excluded.parent_tool_call_id, owned_by=excluded.owned_by, node_id=excluded.node_id, cwd=excluded.cwd, model=excluded.model, model_override=excluded.model_override, thinking_level=excluded.thinking_level, thinking_level_override=excluded.thinking_level_override, unread=excluded.unread, pinned=excluded.pinned, state_change_seq=excluded.state_change_seq, completion_seq=excluded.completion_seq, run_duration_ms=excluded.run_duration_ms, run_started_at=excluded.run_started_at, updated_at=excluded.updated_at`,
         snap.id,
         snap.title,
         snap.profileId,
         JSON.stringify(snap.tags),
         snap.parentConversationId ?? null,
         snap.parentToolCallId !== undefined && snap.parentToolCallId !== '' ? snap.parentToolCallId : null,
+        snap.ownedBy === 'helmx' ? 'helmx' : 'human',
         snap.nodeId || 'local',
         snap.cwd,
         snap.model,
@@ -544,10 +563,12 @@ export class HelmxStore {
     return this.pluginDocs.get(pluginId + '\0' + name)
   }
 
-  /** `valueJson` must be valid JSON: rejects explicitly rather than persisting unreadable data. */
-  putPluginDoc(pluginId: string, name: string, valueJson: string): void {
+  /** `valueJson` must be valid JSON: callers that just serialized via `JSON.stringify` may pass `prevalidated: true`. */
+  putPluginDoc(pluginId: string, name: string, valueJson: string, options?: { prevalidated?: boolean }): void {
     this.assertWritable()
-    parseStoredJson<unknown>(`helmx_plugin_docs#${pluginId}:${name}.value`, valueJson)
+    if (options?.prevalidated !== true) {
+      parseStoredJson<unknown>(`helmx_plugin_docs#${pluginId}:${name}.value`, valueJson)
+    }
     this.pluginDocs.set(pluginId + '\0' + name, valueJson)
     this.enqueue(() =>
       this.db.run(
@@ -595,13 +616,21 @@ export class HelmxStore {
     return this.pluginSessionDocs.get(`${pluginId}\0${name}\0${conversationId}`)
   }
 
-  /** Write per-conversation document (`valueJson` must be valid JSON; rejects malformed payloads explicitly). */
-  putPluginSessionDoc(pluginId: string, name: string, conversationId: number, valueJson: string): void {
+  /** Write per-conversation document (`valueJson` must be valid JSON; pre-serialized callers may pass `prevalidated: true`). */
+  putPluginSessionDoc(
+    pluginId: string,
+    name: string,
+    conversationId: number,
+    valueJson: string,
+    options?: { prevalidated?: boolean },
+  ): void {
     this.assertWritable()
-    parseStoredJson<unknown>(
-      `helmx_plugin_session_docs#${pluginId}:${name}#${conversationId}.value`,
-      valueJson,
-    )
+    if (options?.prevalidated !== true) {
+      parseStoredJson<unknown>(
+        `helmx_plugin_session_docs#${pluginId}:${name}#${conversationId}.value`,
+        valueJson,
+      )
+    }
     this.pluginSessionDocs.set(`${pluginId}\0${name}\0${conversationId}`, valueJson)
     this.enqueue(() =>
       this.db.run(
@@ -956,7 +985,12 @@ export class HelmxStore {
 }
 
 function cloneConv(meta: ConvMeta): ConvMeta {
-  return { ...meta, tags: [...meta.tags], runDurationMs: meta.runDurationMs ?? 0 }
+  return {
+    ...meta,
+    ownedBy: meta.ownedBy === 'helmx' ? 'helmx' : 'human',
+    tags: [...meta.tags],
+    runDurationMs: meta.runDurationMs ?? 0,
+  }
 }
 
 /** Validate persisted JSON: fails explicitly on corruption (with location context) rather than falling back to empty values. */
@@ -1004,6 +1038,7 @@ export function summaryOf(
     ...(meta.parentToolCallId !== undefined && meta.parentToolCallId !== ''
       ? { parentToolCallId: meta.parentToolCallId }
       : {}),
+    ownedBy: meta.ownedBy === 'helmx' ? 'helmx' : 'human',
     nodeId: meta.nodeId || 'local',
     cwd: meta.cwd,
     model: meta.model,

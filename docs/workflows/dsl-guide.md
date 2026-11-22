@@ -47,7 +47,7 @@ pnpm helmx workflows run ./review.js --args '{"pr": 1024, "strict": true}' --con
 | `label` | `string` | 展示名；同时是本 run 内 `resume` 的引用句柄 |
 | `phase` | `string` | 所属阶段名（覆盖当前 ambient 阶段） |
 | `model` | `string` | 模型覆盖，如 `'provider/model'` |
-| `agentType` | `string` | Profile ID（专家角色标识）或外部运行时标识（如 `herdr:agy`） |
+| `agentType` | `string` | Profile ID（专家角色标识） |
 | `isolation` | `'worktree'` | 启用独立 Git Worktree 隔离（唯一合法值） |
 | `gate` | `string` | 验收 shell 命令，退出码非 0 或超时判定失败；完整结果（`exitCode`、`timedOut`）经 `agent.withMeta` 回传 |
 | `resume` | `string` | 续接本 run 内既有智能体的 label |
@@ -61,7 +61,7 @@ pnpm helmx workflows run ./review.js --args '{"pr": 1024, "strict": true}' --con
 | `gateTimeoutMs` | `number` | 单次门禁命令超时毫秒数（1_000 .. 600_000 整数，默认 120_000）。仅在设置 `gate` 时有效 |
 | `maxAttempts` | `number` | 失败自动重试次数上限（1 .. 10 整数，默认 1）。配合 `gate` 或 `timeoutMs` 使用；需要 `label`，未传时自动生成 |
 
-选项互斥规则：`resume` 与 `agentType`、`model`、`isolation`、`effort`、`nodeId`、`cwd` 互斥（续接会话保持它启动时的类型、模型、计算节点、工作目录与思考配置；需要换节点或换目录就新建调用），但允许与 `schema`、`gate`、`attachments`、`maxSubagentDepth` 组合（续接回合可携带新的输出契约、门禁与本轮附件；附件只属于本轮提交，不自动沿用原任务的附件列表）。传未知选项名会直接报错，可用键固定为 `label, phase, model, agentType, isolation, gate, resume, effort, schema, attachments, maxSubagentDepth, nodeId, cwd, timeoutMs, gateTimeoutMs, maxAttempts`。机密授予（`secretNames`）不是 DSL 选项；需要显式授予父会话机密时，使用独立 `subagent` 模型工具的 `secretNames` 参数。
+选项互斥规则：`resume` 与 `agentType`、`model`、`isolation`、`effort`、`nodeId`、`cwd` 互斥（续接会话保持它启动时的类型、模型、计算节点、工作目录与思考配置；需要换节点或换目录就新建调用），但允许与 `schema`、`gate`、`attachments`、`maxSubagentDepth` 组合（续接回合可携带新的输出契约、门禁与本轮附件；附件只属于本轮提交，不自动沿用原任务的附件列表）。传未知选项名会直接报错，可用键固定为 `label, phase, model, agentType, isolation, gate, resume, effort, schema, attachments, maxSubagentDepth, nodeId, cwd, timeoutMs, gateTimeoutMs, maxAttempts`。
 
 **结构化输出**：配置 `schema` 时宿主为子智能体挂载结构化契约，引擎解析其 JSON 回复并按 Schema 校验，通过则返回原生对象，不通过（非 JSON 或不合契约）返回 `null`：
 
@@ -80,7 +80,7 @@ const result = await agent("提取提交的修改范围与风险点", {
 if (result === null) throw new Error("结构化输出校验失败")
 ```
 
-**跨 Profile 点名**：`agentType` 填真实 Profile ID（如 `reviewer`），不带 `@` 前缀，也不是显示名。用户在会话里写 `@reviewer` 是向当前智能体点名——那只是认知约定，实际执行仍由当前会话经 `subagent` 的 `agentType`（或脚本内 `agent()`）落地，点名本身不构成授权。外部运行时标识采用 `namespace:kind` 形式（含冒号），如 `herdr:agy`。
+**跨 Profile 点名**：`agentType` 填真实 Profile ID（如 `reviewer`），不带 `@` 前缀，也不是显示名。用户在会话里写 `@reviewer` 是向当前智能体点名——那只是认知约定，实际执行仍由当前会话经 `subagent` 的 `agentType`（或脚本内 `agent()`）落地，点名本身不构成授权。
 
 **同步节点语义**：`agent()` 没有也不接受 `background` 选项——run 内的 DSL 节点始终等待真实结果（可用键固定列表不含 `background`，传未知选项名直接报错）。后台策略发生在工具层：`subagent` / `SubagentWorkflow` 模型工具按当前会话归属缺省（人类直连会话缺省后台、自动化会话缺省同步且显式 `background: true` 被拒绝）；CLI/动作 `pnpm helmx workflows run` 则是缺省启动即返回、`--wait` 才同步。三个入口互不混同，不要在脚本里期待后台句柄。
 

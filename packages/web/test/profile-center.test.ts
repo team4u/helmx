@@ -11,28 +11,25 @@ import { ensureHappyDom, typeIntoControl, waitForCondition } from './helpers/dom
 import {
   buildProfileCategoryCounts,
   buildProfileCategoryTabs,
-  dedupeProfileRuntimeSpecs,
   filterProfiles,
-  findProfileRuntimeSpec,
   formatProfileLocation,
   formatShortModelName,
   isSystemProfile,
   profileIdValid,
   resolveEffectiveProfileModel,
   resolveProfileModel,
-  runtimeCategoryTabKey,
   summarizeProfileActivity,
   summarizeProfiles,
 } from '../src/profiles/profile-center-model.js'
 import { ProfileCard } from '../src/profiles/ProfileCard.js'
 import { ProfileDetailDrawer } from '../src/profiles/ProfileDetailDrawer.js'
 import { ProfileCenter } from '../src/profiles/ProfileCenter.js'
-import type { NodeInfo, PluginSummary, PluginUiContribution, ProfileRuntimeUiSpec } from '@helmx/protocol/browser'
+import type { NodeInfo, PluginSummary, PluginUiContribution } from '@helmx/protocol/browser'
 import type { ModelDescriptor } from '../src/lib/api.js'
 import { makeTestStore } from './helpers/store.js'
 import { HostStoreProviders } from './helpers/host-store.js'
 import { seedPluginClientModule } from '../src/lib/plugin-client.js'
-import { groupUiContributions, type QualifiedUiSpec } from '../src/lib/types.js'
+import { groupUiContributions } from '../src/lib/types.js'
 import { PROFILE_DETAIL_SECTION_SLOT } from '@helmx/protocol'
 
 ensureHappyDom()
@@ -68,13 +65,12 @@ const mockProfiles: [Profile, Profile, Profile, Profile, Profile] = [
     isSystem: true,
   },
   {
-    id: 'herdr-worker',
-    name: 'Herdr 终端专家',
-    description: '外部 Herdr 终端进程对接角色',
+    id: 'custom-worker',
+    name: '自定义专员',
+    description: '通用自定义任务执行角色',
     model: 'claude-3-5-sonnet',
     defaultModel: 'claude-3-5-sonnet',
-    runtime: { kind: 'herdr', agent: 'agy' },
-    tags: ['herdr', 'worker'],
+    tags: ['worker'],
     skills: undefined, // follows all available skills
   },
   {
@@ -129,43 +125,6 @@ const mockSkills: SkillSummary[] = [
   { id: 'bash', name: 'Bash 命令执行', description: '节点环境命令驱动', references: [] },
 ]
 
-const herdrRuntimeContribution: PluginUiContribution = {
-  pluginId: 'builtin:herdr',
-  surface: 'profile.runtime',
-  spec: {
-    id: 'herdr',
-    kind: 'herdr',
-    label: { en: 'Herdr runtime', 'zh-CN': 'Herdr 终端运行时' },
-    icon: 'terminal',
-    description: { en: 'Delegate turns to a Herdr terminal pane.', 'zh-CN': '将对话回合委托给 Herdr 终端窗格。' },
-    agentSuggestions: ['agy', 'pi', 'codex'],
-    order: 100,
-  },
-}
-
-const dockerRuntimeContribution: PluginUiContribution = {
-  pluginId: 'community:docker',
-  surface: 'profile.runtime',
-  spec: {
-    id: 'docker',
-    kind: 'docker',
-    label: { en: 'Docker sandbox', 'zh-CN': 'Docker 沙箱' },
-    icon: 'box',
-    agentSuggestions: ['claude', 'opencode'],
-    order: 80,
-  },
-}
-
-const herdrRuntimeSpec: QualifiedUiSpec<ProfileRuntimeUiSpec> = {
-  pluginId: 'builtin:herdr',
-  spec: herdrRuntimeContribution.spec as ProfileRuntimeUiSpec,
-}
-
-const dockerRuntimeSpec: QualifiedUiSpec<ProfileRuntimeUiSpec> = {
-  pluginId: 'community:docker',
-  spec: dockerRuntimeContribution.spec as ProfileRuntimeUiSpec,
-}
-
 // ---------------------------------------------------------------------------
 // 1. Pure model unit tests
 // ---------------------------------------------------------------------------
@@ -174,37 +133,13 @@ test('profile-center-model: isSystemProfile classification rules', { timeout: 60
   assert.equal(isSystemProfile(mockProfiles[0]), true, 'superagent counts as a system profile')
   assert.equal(isSystemProfile(mockProfiles[1]), true, 'watchdog / isSystem=true counts as a system profile')
   assert.equal(isSystemProfile(mockProfiles[4]), true, 'managedByPlugin counts as a protected system profile')
-  assert.equal(isSystemProfile(mockProfiles[2]), false, 'herdr-worker is a custom / non-system profile')
+  assert.equal(isSystemProfile(mockProfiles[2]), false, 'custom-worker is a custom / non-system profile')
   assert.equal(isSystemProfile(mockProfiles[3]), false, 'code-reviewer is a custom profile')
 })
 
-test('profile-center-model: dynamic ctx.ui.profileRuntime tabs, deduplication, and lookup', { timeout: 60_000 }, () => {
-  // Without any plugin runtime contributions, only base tabs exist (no hardcoded herdr)
-  const baseTabs = buildProfileCategoryTabs([])
+test('profile-center-model: base category tabs', { timeout: 60_000 }, () => {
+  const baseTabs = buildProfileCategoryTabs()
   assert.deepEqual(baseTabs.map((t) => t.key), ['all', 'system', 'custom'])
-
-  // Duplicate kind keeps first occurrence and preserves order
-  const dupSpec: QualifiedUiSpec<ProfileRuntimeUiSpec> = {
-    pluginId: 'other:herdr',
-    spec: { id: 'herdr-2', kind: 'herdr', label: 'Duplicate Herdr' },
-  }
-  const deduped = dedupeProfileRuntimeSpecs([herdrRuntimeSpec, dupSpec, dockerRuntimeSpec])
-  assert.equal(deduped.length, 2)
-  assert.equal(deduped[0]!.pluginId, 'builtin:herdr')
-  assert.equal(deduped[1]!.spec.kind, 'docker')
-
-  const tabsZh = buildProfileCategoryTabs(deduped, 'zh-CN')
-  assert.deepEqual(tabsZh, [
-    { key: 'all', label: 'All' },
-    { key: 'system', label: 'Built-in' },
-    { key: 'custom', label: 'Custom' },
-    { key: 'runtime:herdr', label: 'Herdr 终端运行时' },
-    { key: 'runtime:docker', label: 'Docker 沙箱' },
-  ])
-
-  assert.equal(findProfileRuntimeSpec('herdr', deduped)?.pluginId, 'builtin:herdr')
-  assert.equal(findProfileRuntimeSpec('unknown', deduped), undefined)
-  assert.equal(findProfileRuntimeSpec(undefined, deduped), undefined)
 })
 
 test('profile-center-model: resolveProfileModel prefers defaultModel and falls back to model', { timeout: 60_000 }, () => {
@@ -235,14 +170,7 @@ test('profile-center-model: filterProfiles category tab filtering', { timeout: 6
 
   const custom = filterProfiles(mockProfiles, { query: '', categoryTab: 'custom' })
   assert.equal(custom.length, 2)
-  assert.deepEqual(custom.map((p) => p.id), ['herdr-worker', 'code-reviewer'])
-
-  const runtimeFiltered = filterProfiles(
-    [...mockProfiles, { id: 'tag-only-herdr', tags: ['herdr'] }],
-    { query: '', categoryTab: runtimeCategoryTabKey('herdr') },
-  )
-  assert.equal(runtimeFiltered.length, 1, 'runtime:<kind> tab matches Profile.runtime.kind, never a hardcoded tag')
-  assert.equal(runtimeFiltered[0]!.id, 'herdr-worker')
+  assert.deepEqual(custom.map((p) => p.id), ['custom-worker', 'code-reviewer'])
 })
 
 test('profile-center-model: filterProfiles multi-dimension fuzzy search', { timeout: 60_000 }, () => {
@@ -282,7 +210,7 @@ test('profile-center-model: filterProfiles multi-dimension fuzzy search', { time
   assert.equal(resSkills[0]!.id, 'code-reviewer')
 
   // 8. Search and category intersection gating
-  const resCross = filterProfiles(mockProfiles, { query: '终端专家', categoryTab: 'system' })
+  const resCross = filterProfiles(mockProfiles, { query: '自定义专员', categoryTab: 'system' })
   assert.equal(resCross.length, 0, 'searching a custom profile under the system tab must not match')
 })
 
@@ -292,15 +220,6 @@ test('profile-center-model: buildProfileCategoryCounts and summarizeProfiles', {
     all: 5,
     system: 3,
     custom: 2,
-  })
-
-  const withRuntimeCounts = buildProfileCategoryCounts(mockProfiles, [herdrRuntimeSpec, dockerRuntimeSpec])
-  assert.deepEqual(withRuntimeCounts, {
-    all: 5,
-    system: 3,
-    custom: 2,
-    'runtime:herdr': 1,
-    'runtime:docker': 0,
   })
 
   const summary = summarizeProfiles(mockProfiles)
@@ -351,8 +270,8 @@ test('ProfileCard: SSR structure, badges, skill pills and zero emoji', { timeout
   assert.match(systemHtml, /系统/) // system lock pill (zh fixture name)
   assert.doesNotMatch(systemHtml, EMOJI_REGEX, 'system profile card output must contain no emoji')
 
-  // 2. Runtime profile without plugin contribution: zero hardcoded runtime pill
-  const noPluginHtml = renderToStaticMarkup(
+  // 2. Custom profile following all skills
+  const customHtml = renderToStaticMarkup(
     renderCardElement(
       e(ProfileCard, {
         profile: mockProfiles[2],
@@ -361,29 +280,11 @@ test('ProfileCard: SSR structure, badges, skill pills and zero emoji', { timeout
       }),
     ),
   )
-  assert.match(noPluginHtml, /Herdr 终端专家/)
-  assert.match(noPluginHtml, /All available skills/)
-  assert.doesNotMatch(noPluginHtml, /Herdr runtime/)
-  assert.doesNotMatch(noPluginHtml, /External runtime:/)
-
-  // 3. Runtime profile with ctx.ui.profileRuntime contribution: dynamic label pill appears
-  const withPluginHtml = renderToStaticMarkup(
-    renderCardElement(
-      e(ProfileCard, {
-        profile: mockProfiles[2],
-        selected: false,
-        onSelect: () => {},
-      }),
-      [herdrRuntimeContribution],
-    ),
-  )
-
-  assert.match(withPluginHtml, /Herdr 终端专家/)
-  assert.match(withPluginHtml, /herdr-worker/)
-  assert.match(withPluginHtml, /All available skills/)
-  assert.match(withPluginHtml, /Herdr runtime/)
-  assert.doesNotMatch(withPluginHtml, /is-selected/)
-  assert.doesNotMatch(withPluginHtml, EMOJI_REGEX, 'Runtime card output must contain no emoji')
+  assert.match(customHtml, /自定义专员/)
+  assert.match(customHtml, /custom-worker/)
+  assert.match(customHtml, /All available skills/)
+  assert.doesNotMatch(customHtml, /is-selected/)
+  assert.doesNotMatch(customHtml, EMOJI_REGEX, 'Custom card output must contain no emoji')
 })
 
 // ---------------------------------------------------------------------------
@@ -582,30 +483,10 @@ test('ProfileDetailDrawer: default node binding renders existing values with an 
 // ---------------------------------------------------------------------------
 
 test('ProfileCenter: top bar, search bar, card grid and zero emoji', { timeout: 60_000 }, () => {
-  // Without profile.runtime contributions: base tabs only (no hardcoded Herdr tab)
-  const baseStore = makeTestStore({
-    profiles: mockProfiles,
-    models: mockModels,
-    skills: mockSkills,
-    primaryTarget: { kind: 'profiles' },
-  })
-  const baseHtml = renderToStaticMarkup(
-    e(
-      HostStoreProviders,
-      { value: baseStore },
-      e(ProfileCenter, {
-        isSplit: false,
-        inlineDrawer: true,
-      }),
-    ),
-  )
-  assert.doesNotMatch(baseHtml, /Herdr runtime/)
-
   const store = makeTestStore({
     profiles: mockProfiles,
     models: mockModels,
     skills: mockSkills,
-    uiContributions: [herdrRuntimeContribution],
     primaryTarget: { kind: 'profiles' },
   })
 
@@ -625,17 +506,16 @@ test('ProfileCenter: top bar, search bar, card grid and zero emoji', { timeout: 
   assert.match(html, /Agent Profile Center/)
   assert.match(html, /New profile/)
 
-  // 2. Toolbar search and dynamic category tabs
+  // 2. Toolbar search and base category tabs
   assert.match(html, /Search profile name, ID, model, tags or skills…/)
   assert.match(html, /All/)
   assert.match(html, /Built-in/)
   assert.match(html, /Custom/)
-  assert.match(html, /Herdr runtime/)
 
   // 3. Card grid flow
   assert.match(html, /SuperAgent 中枢/)
   assert.match(html, /巡检看门狗/)
-  assert.match(html, /Herdr 终端专家/)
+  assert.match(html, /自定义专员/)
   assert.match(html, /代码审查助手/)
 
   assert.doesNotMatch(html, EMOJI_REGEX, 'ProfileCenter output must contain no emoji anywhere')
@@ -1085,361 +965,4 @@ test('ProfileDetailDrawer: restrict-to-cwd switch renders with localized label a
   assert.match(html, /profile-form-restrict-cwd/)
   assert.match(html, /guardrail, not a sandbox/, 'the guardrail-not-sandbox hint keeps the honesty wording')
   assert.doesNotMatch(html, EMOJI_REGEX)
-})
-
-// ---------------------------------------------------------------------------
-// 5. Dynamic ctx.ui.profileRuntime consumption: ProfileDetailDrawer & plugin disable fallback
-// ---------------------------------------------------------------------------
-
-test('ProfileDetailDrawer: zero runtime residue when no profile.runtime UI contributions exist and profile has no runtime', { timeout: 60_000 }, () => {
-  const store = makeTestStore({ models: mockModels, skills: mockSkills })
-  const html = renderToStaticMarkup(
-    e(
-      HostStoreProviders,
-      { value: store },
-      e(ProfileDetailDrawer, {
-        profile: mockProfiles[3],
-        isNew: false,
-        open: true,
-        inline: true,
-        onClose: () => {},
-      }),
-    ),
-  )
-  assert.doesNotMatch(html, /data-runtime-section/)
-  assert.doesNotMatch(html, /data-runtime-unmanaged/)
-  assert.doesNotMatch(html, /profile-form-runtime-switch/)
-})
-
-test('ProfileDetailDrawer: single vs multiple ctx.ui.profileRuntime specs render expected controls and datalist suggestions', { timeout: 60_000 }, () => {
-  // 1 spec: switch + agent/node/workspace/args/env fields, no redundant kind Select
-  const singleStore = makeTestStore({
-    models: mockModels,
-    skills: mockSkills,
-    uiContributions: [herdrRuntimeContribution],
-  })
-  const singleHtml = renderToStaticMarkup(
-    e(
-      HostStoreProviders,
-      { value: singleStore },
-      e(ProfileDetailDrawer, {
-        profile: {
-          ...mockProfiles[2]!,
-          runtime: { kind: 'herdr', agent: 'agy', args: ['--fast'], env: { FOO: 'bar' } },
-        },
-        isNew: false,
-        open: true,
-        inline: true,
-        onClose: () => {},
-      }),
-    ),
-  )
-  assert.match(singleHtml, /data-runtime-section="true"/)
-  assert.match(singleHtml, /Herdr runtime/)
-  assert.match(singleHtml, /Delegate turns to a Herdr terminal pane\./)
-  assert.doesNotMatch(singleHtml, /profile-form-runtime-kind/)
-  assert.match(singleHtml, /profile-form-runtime-agent/)
-  assert.match(singleHtml, /<option value="agy"><\/option>/)
-  assert.match(singleHtml, /<option value="pi"><\/option>/)
-  assert.match(singleHtml, /<option value="codex"><\/option>/)
-  assert.match(singleHtml, /profile-form-runtime-args/)
-  assert.match(singleHtml, /--fast/)
-  assert.match(singleHtml, /profile-form-runtime-env-key-0/)
-
-  // 2 specs: kind selector appears
-  const multiStore = makeTestStore({
-    models: mockModels,
-    skills: mockSkills,
-    uiContributions: [herdrRuntimeContribution, dockerRuntimeContribution],
-  })
-  const multiHtml = renderToStaticMarkup(
-    e(
-      HostStoreProviders,
-      { value: multiStore },
-      e(ProfileDetailDrawer, {
-        profile: mockProfiles[2]!,
-        isNew: false,
-        open: true,
-        inline: true,
-        onClose: () => {},
-      }),
-    ),
-  )
-  assert.match(multiHtml, /profile-form-runtime-kind/)
-  assert.doesNotMatch(multiHtml, EMOJI_REGEX)
-})
-
-test('ProfileDetailDrawer: unmanaged runtime notice preserves or explicitly clears runtime when plugin is disabled', { timeout: 60_000 }, async () => {
-  const { act } = await import('react')
-  const { createRoot } = await import('react-dom/client')
-
-  const putBodies: Array<Record<string, unknown>> = []
-  const originalFetch = globalThis.fetch
-  const targetProfile: Profile = {
-    id: 'herdr-worker',
-    name: 'Herdr 终端专家',
-    runtime: { kind: 'herdr', agent: 'agy', args: ['--model', 'sonnet'] },
-    tags: ['herdr'],
-  }
-
-  let getCount = 0
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = typeof input === 'string' ? input : (input as URL).toString()
-    if (url === '/api/profiles/herdr-worker' && (!init?.method || init.method === 'GET')) {
-      getCount += 1
-      return new Response(JSON.stringify({ ...targetProfile, system: '' }), { status: 200 })
-    }
-    if (url === '/api/profiles/herdr-worker' && init?.method === 'PUT') {
-      const parsed = JSON.parse(String(init.body)) as Record<string, unknown>
-      putBodies.push(parsed)
-      return new Response(JSON.stringify(parsed), { status: 200 })
-    }
-    return new Response(JSON.stringify({}), { status: 200 })
-  }) as typeof fetch
-
-  // Disabled plugin: zero profile.runtime contributions
-  const store = makeTestStore({ models: mockModels, skills: mockSkills, profiles: [targetProfile] })
-  const container = document.createElement('div')
-  document.body.appendChild(container)
-  const root = createRoot(container)
-
-  try {
-    await act(async () => {
-      root.render(
-        e(
-          HostStoreProviders,
-          { value: store },
-          e(ProfileDetailDrawer, {
-            profile: targetProfile,
-            isNew: false,
-            open: true,
-            inline: true,
-            onClose: () => {},
-          }),
-        ),
-      )
-    })
-    await waitForCondition(() => getCount > 0)
-    await act(async () => {})
-
-    // Unmanaged notice appears, runtime switch does not
-    const notice = container.querySelector('[data-runtime-unmanaged="herdr"]')
-    assert.ok(notice, 'existing runtime with disabled plugin shows unmanaged notice')
-    assert.ok(container.querySelector('#profile-form-runtime-switch') === null)
-
-    // Save without clearing -> runtime is preserved intact
-    const saveBtn = Array.from(container.querySelectorAll('button')).find(
-      (btn) => (btn.textContent ?? '').includes('Save profile'),
-    )!
-    await act(async () => {
-      saveBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
-    })
-    assert.equal(putBodies.length, 1)
-    assert.deepEqual(putBodies[0]!.runtime, { kind: 'herdr', agent: 'agy', args: ['--model', 'sonnet'] })
-
-    // Clear unmanaged runtime -> notice disappears and next Save omits runtime
-    const clearBtn = Array.from(notice.querySelectorAll('button')).find(
-      (btn) => (btn.textContent ?? '').includes('Clear'),
-    )!
-    await act(async () => {
-      clearBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
-    })
-    assert.ok(container.querySelector('[data-runtime-unmanaged="herdr"]') === null)
-
-    await act(async () => {
-      saveBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
-    })
-    assert.equal(putBodies.length, 2)
-    assert.equal('runtime' in putBodies[1]!, false)
-  } finally {
-    globalThis.fetch = originalFetch
-    await act(async () => {
-      root.unmount()
-    })
-    container.remove()
-  }
-})
-
-test('ProfileDetailDrawer: interactive runtime editing validates agent and submits normalized runtime fields', { timeout: 60_000 }, async () => {
-  const { act } = await import('react')
-  const { createRoot } = await import('react-dom/client')
-
-  const putBodies: Array<Record<string, unknown>> = []
-  const originalFetch = globalThis.fetch
-  const baseProfile: Profile = {
-    id: 'editable-worker',
-    name: 'Editable Worker',
-    tags: ['worker'],
-  }
-
-  let getCount = 0
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = typeof input === 'string' ? input : (input as URL).toString()
-    if (url === '/api/profiles/editable-worker' && (!init?.method || init.method === 'GET')) {
-      getCount += 1
-      return new Response(JSON.stringify({ ...baseProfile, system: '# keep existing' }), { status: 200 })
-    }
-    if (url === '/api/profiles/editable-worker' && init?.method === 'PUT') {
-      const parsed = JSON.parse(String(init.body)) as Record<string, unknown>
-      putBodies.push(parsed)
-      return new Response(JSON.stringify(parsed), { status: 200 })
-    }
-    return new Response(JSON.stringify({}), { status: 200 })
-  }) as typeof fetch
-
-  const store = makeTestStore({
-    models: mockModels,
-    skills: mockSkills,
-    profiles: [baseProfile],
-    uiContributions: [herdrRuntimeContribution],
-  })
-  const container = document.createElement('div')
-  document.body.appendChild(container)
-  const root = createRoot(container)
-
-  try {
-    await act(async () => {
-      root.render(
-        e(
-          HostStoreProviders,
-          { value: store },
-          e(ProfileDetailDrawer, {
-            profile: baseProfile,
-            isNew: false,
-            open: true,
-            inline: true,
-            onClose: () => {},
-          }),
-        ),
-      )
-    })
-    await waitForCondition(() => getCount > 0)
-    await act(async () => {})
-
-    // Toggle runtime switch ON
-    const runtimeSwitch = container.querySelector('#profile-form-runtime-switch') as HTMLButtonElement
-    assert.ok(runtimeSwitch)
-    await act(async () => {
-      runtimeSwitch.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
-    })
-
-    // Saving with empty agent must show validation error and not issue PUT
-    const saveBtn = Array.from(container.querySelectorAll('button')).find(
-      (btn) => (btn.textContent ?? '').includes('Save profile'),
-    )!
-    await act(async () => {
-      saveBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
-    })
-    assert.equal(putBodies.length, 0)
-    assert.match(container.textContent ?? '', /Enter an external runtime agent/)
-
-    // Fill agent, workspace, multi-line args, and env pair
-    await act(async () => {
-      typeIntoControl(container.querySelector('#profile-form-runtime-agent') as HTMLInputElement, '  pi ')
-      typeIntoControl(container.querySelector('#profile-form-runtime-workspace') as HTMLInputElement, ' /srv/herdr ')
-      typeIntoControl(
-        container.querySelector('#profile-form-runtime-args') as HTMLTextAreaElement,
-        '--model\n  glm-4.6 --fast \n\n',
-      )
-    })
-    const addEnvBtn = Array.from(container.querySelectorAll('button')).find(
-      (btn) => (btn.textContent ?? '').includes('Add variable'),
-    )!
-    await act(async () => {
-      addEnvBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
-    })
-    await act(async () => {
-      typeIntoControl(container.querySelector('#profile-form-runtime-env-key-0') as HTMLInputElement, ' HELMX_MODE ')
-      typeIntoControl(container.querySelector('#profile-form-runtime-env-value-0') as HTMLInputElement, 'strict')
-    })
-
-    await act(async () => {
-      saveBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
-    })
-
-    assert.equal(putBodies.length, 1)
-    assert.deepEqual(putBodies[0]!.runtime, {
-      kind: 'herdr',
-      agent: 'pi',
-      workspace: '/srv/herdr',
-      args: ['--model', 'glm-4.6 --fast'],
-      env: { HELMX_MODE: 'strict' },
-    })
-    // Unedited SYSTEM.md stays omitted so server does not overwrite concurrent writes
-    assert.equal('system' in putBodies[0]!, false)
-  } finally {
-    globalThis.fetch = originalFetch
-    await act(async () => {
-      root.unmount()
-    })
-    container.remove()
-  }
-})
-
-test('ProfileCenter: disabling runtime plugin removes dynamic tab and pill with zero residue and falls back active tab to All', { timeout: 60_000 }, async () => {
-  const { act } = await import('react')
-  const { createRoot } = await import('react-dom/client')
-
-  const enabledHerdrPlugin: PluginSummary = {
-    id: 'builtin:herdr',
-    name: 'Herdr',
-    version: '0.1.0',
-    locked: false,
-    enabled: true,
-    status: 'active',
-    hooks: [],
-    actions: [],
-    tools: [],
-  }
-  const disabledHerdrPlugin: PluginSummary = {
-    ...enabledHerdrPlugin,
-    enabled: false,
-    status: 'disabled',
-  }
-
-  const store = makeTestStore({
-    profiles: mockProfiles,
-    models: mockModels,
-    skills: mockSkills,
-    plugins: [enabledHerdrPlugin],
-    uiContributions: [herdrRuntimeContribution],
-    primaryTarget: { kind: 'profiles' },
-  })
-  const container = document.createElement('div')
-  document.body.appendChild(container)
-  const root = createRoot(container)
-
-  try {
-    await act(async () => {
-      root.render(
-        e(HostStoreProviders, { value: store }, e(ProfileCenter, { isSplit: false, inlineDrawer: true })),
-      )
-    })
-
-    const runtimeTab = Array.from(container.querySelectorAll('button')).find(
-      (btn) => (btn.textContent ?? '').includes('Herdr runtime'),
-    )!
-    assert.ok(runtimeTab, 'dynamic runtime tab renders when plugin is enabled')
-    await act(async () => {
-      runtimeTab.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
-    })
-    // Filtered down to herdr-worker only
-    assert.match(container.textContent ?? '', /Herdr 终端专家/)
-    assert.doesNotMatch(container.textContent ?? '', /SuperAgent 中枢/)
-
-    // Disable the plugin via real store.syncPlugins lifecycle -> reconciles uiContributions
-    await act(async () => {
-      store.syncPlugins([disabledHerdrPlugin])
-    })
-
-    // Dynamic tab & pill disappear; effectiveTab safely falls back to All showing all cards again
-    assert.doesNotMatch(container.textContent ?? '', /Herdr runtime/)
-    assert.match(container.textContent ?? '', /SuperAgent 中枢/)
-    assert.match(container.textContent ?? '', /Herdr 终端专家/)
-  } finally {
-    await act(async () => {
-      root.unmount()
-    })
-    container.remove()
-  }
 })

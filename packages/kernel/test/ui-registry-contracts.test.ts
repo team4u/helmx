@@ -34,78 +34,6 @@ import { MemoryDocStore, cleanupDir, makeTempDir } from './helpers.js';
 const isHelmxError = (code: string) => (err: unknown): boolean => err instanceof HelmxError && err.code === code;
 
 // ---------------------------------------------------------------------------
-// UiRegistry boundaries: artifact.previewer
-// ---------------------------------------------------------------------------
-
-test('artifactPreviewer: valid MIME/extension declarations pass and matcher list validation rejects malformed specs', { timeout: 60_000 }, () => {
-  const ui = new UiRegistry(createPluginBuildProvider());
-
-  // client track + exact MIME + multi-segment extension + priority are all valid
-  ui.registerUi(
-    'p1',
-    'artifact.previewer',
-    {
-      id: 'md',
-      label: 'Markdown preview',
-      priority: 10,
-      client: { module: './preview.tsx', export: 'Preview' },
-      mimeTypes: ['text/markdown', 'text/*'],
-      extensions: ['.md', '.tar.gz'],
-    },
-    'artifactPreviewer',
-    '/tmp/client-root',
-  );
-  // json-only track (declarative fallback) is valid
-  ui.registerUi(
-    'p1',
-    'artifact.previewer',
-    { id: 'img', label: 'Image preview', json: { component: 'Text', text: 'image' }, mimeTypes: ['image/*'] },
-    'artifactPreviewer',
-  );
-  // Omitting all matcher fields is valid (means never auto-selected by matcher, resolved by frontend)
-  ui.registerUi('p1', 'artifact.previewer', { id: 'any', label: 'any' }, 'artifactPreviewer');
-  assert.equal(ui.listUi().length, 3);
-
-  // label required and non-empty
-  assert.throws(
-    () => ui.registerUi('p1', 'artifact.previewer', { id: 'bad-label', mimeTypes: ['text/plain'] }, 'artifactPreviewer'),
-    isHelmxError('invalid_ui_spec'),
-  );
-
-  // mimeTypes: non-array / empty array / non-string / duplicates
-  for (const mimeTypes of [[], ['text/plain', 'text/plain'], ['text/plain', 1], 'text/plain']) {
-    assert.throws(
-      () => ui.registerUi('p1', 'artifact.previewer', { id: 'bad-mime', label: 'x', mimeTypes }, 'artifactPreviewer'),
-      isHelmxError('invalid_ui_spec'),
-    );
-  }
-  // extensions: same rules
-  for (const extensions of [[], ['.md', '.md'], ['.md', 1], '.md']) {
-    assert.throws(
-      () => ui.registerUi('p1', 'artifact.previewer', { id: 'bad-ext', label: 'x', extensions }, 'artifactPreviewer'),
-      isHelmxError('invalid_ui_spec'),
-    );
-  }
-
-  // MIME validation: rejects */*, prefix globs, wildcards inside subtype, parameters, uppercase, empty segments
-  for (const bad of ['*/*', 'text/*x', 'te*t/plain', '*/plain', 'text/plain;charset=utf-8', 'Text/Plain', '/plain', 'text/', 'text']) {
-    assert.throws(
-      () => ui.registerUi('p1', 'artifact.previewer', { id: 'bad-mime2', label: 'x', mimeTypes: [bad] }, 'artifactPreviewer'),
-      isHelmxError('invalid_ui_spec'),
-      `MIME "${bad}" should be rejected`,
-    );
-  }
-  // Extension validation: rejects uppercase, missing leading dot, path segments, wildcards, empty segments
-  for (const bad of ['.MD', 'md', '.md/x', '.m*', '.', '..', '.md.', '.*']) {
-    assert.throws(
-      () => ui.registerUi('p1', 'artifact.previewer', { id: 'bad-ext2', label: 'x', extensions: [bad] }, 'artifactPreviewer'),
-      isHelmxError('invalid_ui_spec'),
-      `extension "${bad}" should be rejected`,
-    );
-  }
-});
-
-// ---------------------------------------------------------------------------
 // UiRegistry boundaries: composer.completer
 // ---------------------------------------------------------------------------
 
@@ -259,21 +187,9 @@ test('display copy fields: one registerUi guard covers label/title/description o
   ui.registerUi('p1', 'settings.panel', { id: 'settings', label: { en: 'Settings', 'zh-CN': '设置' } }, 'settingsPanel');
   ui.registerUi(
     'p1',
-    'artifact.previewer',
-    { id: 'md', label: { en: 'Markdown', 'zh-CN': 'Markdown 预览' }, mimeTypes: ['text/markdown'] },
-    'artifactPreviewer',
-  );
-  ui.registerUi(
-    'p1',
     'composer.completer',
     { id: 'at', label: { en: 'Mention', 'zh-CN': '提及' }, trigger: '@', source: { kind: 'action', actionId: 'complete' } },
     'composerCompleter',
-  );
-  ui.registerUi(
-    'p1',
-    'profile.runtime',
-    { id: 'node', kind: 'node', label: { en: 'Node', 'zh-CN': 'Node 运行时' } },
-    'profileRuntime',
   );
   ui.registerUi('p1', 'timeline.renderer', { id: 'render', title: { en: 'Custom', 'zh-CN': '自定义' } }, 'timelineRenderer');
   ui.registerUi(
@@ -288,7 +204,7 @@ test('display copy fields: one registerUi guard covers label/title/description o
     'slot',
     '/tmp/client-root',
   );
-  assert.equal(ui.listUi().length, 9);
+  assert.equal(ui.listUi().length, 7);
 
   // raw localized shape is stored as declared (listUi keeps the map, no locale coercion)
   const nav = ui.listUi().find((c) => c.surface === 'sidebar.item')!;
@@ -300,9 +216,7 @@ test('display copy fields: one registerUi guard covers label/title/description o
   // label validator (timeline.renderer), proving the guard is one place for all surfaces.
   for (const [surface, fnName] of [
     ['sidebar.item', 'sidebarItem'],
-    ['sidebar.section', 'sidebarSection'],
     ['screen', 'screen'],
-    ['composer.pill', 'composerPill'],
     ['settings.panel', 'settingsPanel'],
     ['workbench.panel', 'workbenchPanel'],
     ['timeline.renderer', 'timelineRenderer'],
@@ -359,10 +273,8 @@ function createHostBackend(): PluginHostBackend {
     spawnAgent: unused,
     runGate: unused,
     execEnv: unused,
-    withFileMutationQueue: unused,
     createAsk: unused,
     cancelAsk: unused,
-    registerAskSeqResolver: () => () => {},
     onEvent: () => () => {},
     emitEvent: () => {},
   };
@@ -445,24 +357,16 @@ test('host: new contracts preserve contributions across register/disable/enable 
         trigger: ':',
         source: { kind: 'sessionDoc', name: 'ctx-items', itemsField: 'list' },
       });
-      ctx.ui.artifactPreviewer({
-        id: 'md',
-        label: 'Markdown',
-        mimeTypes: ['text/markdown', 'text/*'],
-        extensions: ['.md', '.tar.gz'],
-      });
     },
   };
   try {
     await host.register(plugin);
     const contributions = host.listUi();
-    assert.equal(contributions.length, 4);
+    assert.equal(contributions.length, 3);
     assert.deepEqual(
       contributions.map((c) => c.surface).sort(),
-      ['artifact.previewer', 'composer.completer', 'composer.completer', 'composer.completer'],
+      ['composer.completer', 'composer.completer', 'composer.completer'],
     );
-    const previewer = contributions.find((c) => c.surface === 'artifact.previewer')!;
-    assert.equal((previewer.spec as { label?: string }).label, 'Markdown');
 
     // Contributions disappear immediately on disable
     await host.disable('test:contracts');
@@ -470,14 +374,13 @@ test('host: new contracts preserve contributions across register/disable/enable 
 
     // Restored cleanly on re-enable (re-evaluated across enable cycles)
     await host.enable('test:contracts');
-    assert.equal(host.listUi().length, 4);
+    assert.equal(host.listUi().length, 3);
 
-    // Method count parity: single source of truth in protocol has 16 methods matching ctx.ui
-    assert.equal(PLUGIN_UI_METHOD_NAMES.length, 16);
+    // Method count parity: single source of truth in protocol has 10 methods matching ctx.ui
+    assert.equal(PLUGIN_UI_METHOD_NAMES.length, 10);
     assert.ok(PLUGIN_UI_METHOD_NAMES.includes('markdownCodeBlock' as const));
-    assert.ok(PLUGIN_UI_METHOD_NAMES.includes('action' as const));
     assert.ok(PLUGIN_UI_METHOD_NAMES.includes('composerCompleter' as const));
-    assert.ok(PLUGIN_UI_METHOD_NAMES.includes('artifactPreviewer' as const));
+    assert.ok(PLUGIN_UI_METHOD_NAMES.includes('slot' as const));
   } finally {
     await host.dispose();
     await cleanupDir(dataDir);

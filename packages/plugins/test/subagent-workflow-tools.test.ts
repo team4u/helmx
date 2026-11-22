@@ -380,7 +380,7 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
         nodeId: 'local',
         executionId: 'pane-9',
         effectiveCwd: '/srv/wt/helmx-42',
-        worktree: { id: 'local:/srv/wt/helmx-42', path: '/srv/wt/helmx-42', branch: 'helmx/wf-run-1' },
+        worktree: { path: '/srv/wt/helmx-42', branch: 'helmx/wf-run-1' },
       }
       assert.deepEqual(envelope['execution'], expectedExec)
       assert.deepEqual(details['execution'], expectedExec)
@@ -767,144 +767,31 @@ function fauxThinking(text: string): { type: 'thinking'; thinking: string } {
 }
 
 // ---------------------------------------------------------------------------
-// 3. buildSpawnEnv / buildManagedEnv：外部 spawn 环境边界
+// 3. buildManagedEnv：受管环境构造
 // ---------------------------------------------------------------------------
 
-describe('buildSpawnEnv 外部环境构造', { timeout: 60_000 }, () => {
-  it('仅会话 stash + 受管五变量 + 受管 token；绝不携带 process.env（PATH/HOME/spy 键）', { timeout: 60_000 }, async () => {
-    const dir = join(rootDir, 'env1')
-    const kernel = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(),
-      dataDir: dir,
-      cwd: dir,
-      hubUrl: 'http://127.0.0.1:3999',
-      model: 'faux/faux-1',
-    })
-    try {
-      process.env['HELMX_SPAWN_SPY'] = 'host-secret'
-      kernel.stash.put(9, 'MY_API_KEY', 'sekrit-value')
-      // stash 同名伪造：受管变量必须覆盖（HELMX_CWD/HELMX_TOKEN 不可被会话秘密劫持）。
-      kernel.stash.put(9, 'HELMX_CWD', '/evil')
-      kernel.stash.put(9, 'HELMX_TOKEN', 'stash-spoofed-token')
-
-      const env = kernel.buildSpawnEnv(9, '/srv/work')
-      assert.equal(env['MY_API_KEY'], undefined, '缺省最小授权：外部 spawn 不携带任何父会话机密')
-      assert.equal(env['HELMX_ENV'], '1')
-      assert.equal(env['HELMX_HUB_URL'], 'http://127.0.0.1:3999')
-      assert.equal(env['HELMX_CONVERSATION_ID'], '9')
-      assert.equal(env['HELMX_CWD'], '/srv/work', '受管 HELMX_CWD 保持权威（stash 同名伪造未注入）')
-      assert.equal(env['HELMX_DATA_DIR'], dir)
-      const token = env['HELMX_TOKEN']
-      assert.ok(token && token !== 'stash-spoofed-token', 'HELMX_TOKEN 必须是受管 token（不受 stash 伪造影响）')
-      assert.ok(token!.length > 8)
-
-      // 显式授予（含受管同名伪造）：逐名注入 + 受管变量仍固定覆盖。
-      const granted = kernel.buildSpawnEnv(9, '/srv/work', 'local', {
-        secretNames: ['MY_API_KEY', 'HELMX_CWD', 'HELMX_TOKEN'],
-      })
-      assert.equal(granted['MY_API_KEY'], 'sekrit-value', '显式 secretNames 逐名注入（spawn env 设计目标）')
-      assert.equal(granted['HELMX_CWD'], '/srv/work', '受管 HELMX_CWD 覆盖 stash 同名伪造')
-      assert.equal(granted['HELMX_TOKEN'], token, 'HELMX_TOKEN 必须是受管 token（覆盖 stash 伪造）')
-
-      // 绝不携带宿主 process.env：PATH/HOME 与 spy 键均不得外泄到远端。
-      assert.equal(env['PATH'], undefined, 'spawn env 不得携带宿主 PATH')
-      assert.equal(env['HOME'], undefined, 'spawn env 不得携带宿主 HOME')
-      assert.equal(env['HELMX_SPAWN_SPY'], undefined, '宿主自定义环境变量不得外泄')
-      delete process.env['HELMX_SPAWN_SPY']
-
-      // 秘密与受管 token 均在脱敏登记内：日志/模型上下文只见 [REDACTED]。
-      assert.ok(kernel.stash.redact(`x${token}y`).includes('[REDACTED'), '受管 token 必须可被脱敏')
-      const redacted = kernel.stash.redact(`prefix${'sekrit-value'}suffix`)
-      assert.ok(!redacted.includes('sekrit-value'), 'stash 秘密明文不得出现在脱敏产物')
-    } finally {
-      delete process.env['HELMX_SPAWN_SPY']
-      await kernel.close()
-    }
-  })
-
-  it('ctx.host.buildSpawnEnv 真实端口：secretNames 显式授予完整转发（backend 第 4 参不吞）', { timeout: 60_000 }, async () => {
-    // 回归：runtime-host-backend 曾丢掉 options 参数，显式授予被静默吞成
-    // 缺省最小授权。经真实 KernelRuntime + createPluginHostBackend + wrapHostApi
-    // 全链验证第 4 参真实贯通到 RuntimeAgentSpawn.buildSpawnEnv。
-    const dir = join(rootDir, 'env-host-port')
-    const kernel = await KernelRuntime.open({ dataDir: dir, cwd: dir, model: 'faux/faux-1' })
-    try {
-      let api!: import('@helmx/protocol').HelmxHostApi
-      await kernel.plugins.register({
-        id: 'test:host-spawn-env-port',
-        definePlugin(ctx) {
-          api = ctx.host
-        },
-      } satisfies import('@helmx/protocol').PluginDefinition, { enabled: true })
-      kernel.stash.put(9, 'HOST_PORT_KEY', 'host-port-value')
-
-      // 缺省最小授权：不携带任何父会话机密。
-      const minimal = api.buildSpawnEnv(9, '/srv/host-port', 'local')
-      assert.equal(minimal['HOST_PORT_KEY'], undefined, '缺省不得携带父会话机密')
-
-      // 显式逐名授予经 host 端口真实注入（backend 转发缺失时这里会拿到 undefined）。
-      const granted = api.buildSpawnEnv(9, '/srv/host-port', 'local', {
-        secretNames: ['HOST_PORT_KEY'],
-      })
-      assert.equal(granted['HOST_PORT_KEY'], 'host-port-value', 'secretNames 显式授予必须经 host 端口完整转发并注入')
-
-      // 授予不存在机密名：显式 404 secret_not_found，不静默空注入（同步端口契约）。
-      assert.throws(
-        () => api.buildSpawnEnv(9, '/srv/host-port', 'local', { secretNames: ['MISSING_NAME'] }),
-        (error: unknown) => error instanceof HelmxError && error.code === 'secret_not_found',
-      )
-    } finally {
-      await kernel.close()
-    }
-  })
-
-  it('非法入参显式拒绝（conversationId is not a positive integer / 空 cwd）', { timeout: 60_000 }, async () => {
-    const dir = join(rootDir, 'env2')
-    const kernel = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(),
-      dataDir: dir,
-      cwd: dir,
-      model: 'faux/faux-1',
-    })
-    try {
-      assert.throws(() => kernel.buildSpawnEnv(0, '/x'), (err: unknown) => {
-        assert.ok(err instanceof HelmxError && err.code === 'validation_error')
-        return true
-      })
-      assert.throws(() => kernel.buildSpawnEnv(1.5, '/x'), (err: unknown) => {
-        assert.ok(err instanceof HelmxError && err.code === 'validation_error')
-        return true
-      })
-      assert.throws(() => kernel.buildSpawnEnv(1, ''), (err: unknown) => {
-        assert.ok(err instanceof HelmxError && err.code === 'validation_error')
-        return true
-      })
-    } finally {
-      await kernel.close()
-    }
-  })
-
-  it('buildManagedEnv：无受管 token provider 时不透传任何 HELMX_TOKEN（继承语义不存在——本构造无 process.env 基底）', { timeout: 60_000 }, () => {
+describe('buildManagedEnv 环境构造', { timeout: 60_000 }, () => {
+  it('buildManagedEnv：无受管 token provider 时不透传任何 HELMX_TOKEN', { timeout: 60_000 }, () => {
     const stash = new SecretStash()
-    stash.put(3, 'HELMX_TOKEN', 'spoof')
     const deps: HelmxToolDeps = {
       dataDir: '/d',
       defaultCwd: '/base',
       hubUrl: 'http://127.0.0.1:3202',
-      stashEnvFor: (id) => stash.envFor(id),
       redact: (t) => stash.redact(t),
       artifacts: null as never,
     }
     const env = buildManagedEnv(deps, '/work', 3)
-    assert.equal(env['HELMX_TOKEN'], undefined, '无 provider 时 stash 同名伪造也不得透传')
+    assert.equal(env['HELMX_TOKEN'], undefined)
     const withProvider = buildManagedEnv({ ...deps, processToken: () => 'managed-tok' }, '/work', 3)
-    assert.equal(withProvider['HELMX_TOKEN'], 'managed-tok', '有 provider 时受管 token 覆盖伪造')
+    assert.equal(withProvider['HELMX_TOKEN'], 'managed-tok')
   })
 })
 
 // ---------------------------------------------------------------------------
-// 4. Gate 执行环境与实际 Herdr 任务一致：options.env 注入机制
+// 4. Gate 执行环境：options.env 注入机制
 // ---------------------------------------------------------------------------
 
-describe('runGate/runShell options.env 注入（本机 Gate 与 Herdr 任务同环境）', { timeout: 60_000 }, () => {
+describe('runGate/runShell options.env 注入', { timeout: 60_000 }, () => {
   it('真实 Gate 子进程读自定义 env；HELMX 固定值与受管 token 不被注入覆盖；无 provider 时剥除注入的旧 token', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'gate1')
     const kernel = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(),
@@ -914,8 +801,6 @@ describe('runGate/runShell options.env 注入（本机 Gate 与 Herdr 任务同�
       model: 'faux/faux-1',
     })
     try {
-      // 插件会传 Profile.runtime.env 与管理环境组成的 spawnEnv：自定义 CI 路径
-      // 可达，但 HELMX 固定值不得被外部注入劫持。
       const spawnEnv: Record<string, string> = {
         CI_TOOL_HOME: '/opt/ci-tools',
         HELMX_CWD: '/evil-cwd',
@@ -946,7 +831,6 @@ describe('runGate/runShell options.env 注入（本机 Gate 与 Herdr 任务同�
       dataDir: dir,
       defaultCwd: dir,
       hubUrl: 'http://127.0.0.1:3202',
-      stashEnvFor: (id) => stash.envFor(id),
       redact: (t) => stash.redact(t),
       artifacts: null as never,
     }
@@ -988,7 +872,7 @@ test('外部子代理执行元数据的工具正文与持久结果统一脱敏',
   const kernel = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, providers: [faux.provider], model: 'faux/faux-1' })
   try {
     const secret = 'private-metadata-folder'
-    kernel.stash.put(1, 'PATH_SECRET', secret)
+    kernel.stash.addRedaction(secret)
     // subagent 工具由 builtin:workflow 插件提供（引擎 state 走插件私有 records doc）。
     await kernel.plugins.register(createWorkflowPlugin())
     await kernel.plugins.register({
@@ -1015,7 +899,7 @@ test('外部子代理执行元数据的工具正文与持久结果统一脱敏',
     const output = JSON.stringify(detail)
     assert.ok(detail.entries.some((entry) => entry.kind === 'pi.tool-result'))
     assert.ok(output.includes('pane-9'), '非机密续接标识仍可读取')
-    assert.ok(output.includes('[REDACTED:'), '正文或元数据应包含真实 stash 标记')
+    assert.ok(output.includes('[REDACTED]'), '正文或元数据应包含脱敏标记')
     assert.ok(!output.includes(secret), '执行目录与分支中的机密不得落入工具正文或结构化结果')
   } finally {
     await kernel.close()

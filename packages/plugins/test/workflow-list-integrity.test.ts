@@ -666,7 +666,6 @@ function makeBackend(): PluginHostBackend {
     markConversationOwnership: () => {},
     createAsk: async () => ({}) as never,
     cancelAsk: async () => {},
-    registerAskSeqResolver: () => () => {},
     onEvent: () => () => {},
     emitEvent: () => {},
   }

@@ -2,19 +2,17 @@
  * `agent_spawn` 隔离生命周期流程：
  * - `spawnWithWorktree`：新建 + `isolation: 'worktree'`（副作用前落盘占位租约 -> 分配 -> 改写 cwd -> `next` -> 终态收敛）；
  * - `resumeWithWorktree`：续接已绑定隔离树的子会话（占位租约前置防并发清理，禁止切换节点或 cwd）；
- * - `reattachWithWorktree`：跨重启原位恢复原生隔离工作树（复用记录与租约，不重复注入上下文）；
- * - `trackWithoutPreallocation`：外部运行时 / 普通派生（不预分配；`onResolved` 回传 worktree 时统一登记与上锁）。
+ * - `reattachWithWorktree`：跨重启原位恢复原生隔离工作树（复用记录与租约，不重复注入上下文）。
  */
 import {
   HelmxError,
   isValidNodeId,
   NODE_ID_PATTERN,
-  redactJsonValue,
   sanitizeAgentExecutionInfo as sanitizeExecutionInfo,
   type AgentExecutionInfo,
   type AgentSpawnRequest,
 } from '@helmx/protocol'
-import { extractWorktreeExecutionMeta, worktreeExecutionMeta, type WorktreeExecutionDescriptor } from '../contracts.js'
+import { worktreeExecutionMeta, type WorktreeExecutionDescriptor } from '../contracts.js'
 import type { ManagedWorktreeRecord, WorktreeAllocator } from './worktree.js'
 import type { WorktreeStore } from './worktree-store.js'
 import type { WorktreeIsolationDeps } from './isolation.js'
@@ -279,90 +277,6 @@ export async function reattachWithWorktree(
     if (enteredNext && ctx.deps.host.isClosing !== true) {
       await ctx.store.settleLeaseAfterNextFailure(leaseToken, execution).catch(() => {})
     }
-    throw error
-  }
-}
-
-export async function trackWithoutPreallocation(
-  ctx: IsolationSpawnContext,
-  request: AgentSpawnRequest,
-  next: (finalRequest: AgentSpawnRequest) => Promise<unknown>,
-): Promise<unknown> {
-  if (request.onResolved === undefined) return next(request)
-  let leaseToken: string | undefined =
-    request.reattach !== undefined
-      ? ctx.store.findLeaseTokenByExecution({
-          ...(request.reattach.executionId !== undefined ? { executionId: request.reattach.executionId } : {}),
-          ...(request.reattach.conversationId !== undefined ? { conversationId: request.reattach.conversationId } : {}),
-        })
-      : undefined
-
-  const finalRequest: AgentSpawnRequest = {
-    ...request,
-    onResolved: (raw) => {
-      const info = sanitizeExecutionInfo(raw, { agentId: request.agentId ?? 'subagent' })
-      const externalWorktree = extractWorktreeExecutionMeta(info).worktree
-      if (externalWorktree !== undefined) {
-        if (info.nodeId === undefined) {
-          throw new HelmxError('execution_info_invalid', '隔离工作树必须回传实际 nodeId，不能推测外部运行时的节点', 502)
-        }
-        const managed =
-          ctx.allocator.findActive({ path: externalWorktree.path, nodeId: info.nodeId }) ??
-          ctx.allocator.registerExternal({
-            nodeId: info.nodeId,
-            path: externalWorktree.path,
-            branch: externalWorktree.branch,
-            parentConversationId: request.parentConversationId,
-            ...(info.conversationId !== undefined ? { conversationId: info.conversationId } : {}),
-            ...(info.executionId !== undefined ? { executionId: info.executionId } : {}),
-          })
-        const safe = redactJsonValue(managed, (text) => ctx.deps.host.redact(text))
-        if (JSON.stringify(safe) !== JSON.stringify(managed)) {
-          throw new HelmxError(
-            'worktree_metadata_secret',
-            `隔离执行元数据包含已登记机密，拒绝持久化；执行标识 ${info.executionId ?? info.conversationId ?? '未知'}`,
-            400,
-          )
-        }
-        const enriched: AgentExecutionInfo = withWorktreeExecutionMeta(info, {
-          ...externalWorktree,
-          id: managed.id,
-          ...(managed.repoRoot !== '' ? { repoRoot: managed.repoRoot } : {}),
-          ...(managed.baseCommit !== '' ? { baseCommit: managed.baseCommit, dirtySource: managed.dirtySource } : {}),
-        })
-        if (info.conversationId !== undefined) {
-          ctx.store.recordAgentBinding(request.agentId, info.conversationId, request.parentConversationId)
-        }
-        if (leaseToken === undefined) {
-          leaseToken = ctx.store.stageRunningLease({
-            worktreeId: managed.id,
-            nodeId: managed.nodeId,
-            path: managed.path,
-            info: enriched,
-          })
-          void ctx.deps.docStore.flush().catch((error: unknown) => {
-            process.stderr.write(
-              `builtin:worktree: worktree 租约 ${managed.id} 落盘失败（执行期间崩溃将失去清理保护，结算写会重试）: ${
-                error instanceof Error ? error.message : String(error)
-              }\n`,
-            )
-          })
-        } else {
-          ctx.store.updateLease(leaseToken, enriched)
-        }
-        request.onResolved?.(enriched)
-        return
-      }
-      request.onResolved?.(info)
-    },
-  }
-
-  try {
-    const result = await next(finalRequest)
-    if (leaseToken !== undefined) await ctx.store.settleLease(leaseToken, true, false)
-    return result
-  } catch (error) {
-    if (leaseToken !== undefined) await ctx.store.settleLease(leaseToken, false, false).catch(() => {})
     throw error
   }
 }
