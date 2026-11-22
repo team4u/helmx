@@ -32,6 +32,8 @@ import {
   readNodeIdentity,
   writeNodeIdentity,
 } from '../src/daemon/index.js';
+import { runNodeCli } from '../src/cli.js';
+import { sanitizedHostEnv } from '@helmx/test-kit/node';
 
 /** re- use port: first occupy a idle port, closure after to fixture backlisten(reconnect back same port use). */
 async function reservePort(): Promise<number> {
@@ -564,6 +566,74 @@ test('daemon child process env sets HELMX_HUB_URL to node actual hubUrl', { time
     assert.equal(r.ok, true, r.ok ? '' : r.error.message);
   } finally {
     await daemon.close();
+    await hub.close();
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('node.json.lock recovers stale dead-PID lock automatically without wedging bindIdentityFromJoinToken', { timeout: 60_000 }, async () => {
+  const dir = await tempDir('helmx-dlc-stalelock-');
+  try {
+    // Write a lock owned by a dead PID (99999999 is far beyond PID_MAX on Linux/macOS).
+    await fs.writeFile(path.join(dir, 'node.json.lock'), '99999999 dead-owner\n', 'utf8');
+    const bound = await bindIdentityFromJoinToken(dir, 'stale-rec:sec', 'http://127.0.0.1:3202');
+    assert.equal(bound.nodeId, 'stale-rec');
+    assert.equal(await fs.stat(path.join(dir, 'node.json.lock')).then(() => true, () => false), false);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('registration rejection logs/surfaces exact Hub reason and helmx-node start -d fails non-zero instead of exiting 0', { timeout: 60_000 }, async () => {
+  const dir = await tempDir('helmx-dlc-reject-reason-');
+  const hub = await startHub({ heartbeatMs: 15_000 });
+  hub.setBehavior({ registerAck: () => ({ ok: false, heartbeatMs: 0, reason: 'invalid_token_revoked' }) });
+  const logs: string[] = [];
+  const daemon = await createNodeDaemon({
+    hubUrl: hub.url,
+    identity: { nodeId: 'rej-1', token: 'rej-1:bad' },
+    dataDir: dir,
+    reconnectBaseDelayMs: 200,
+    reconnectMaxDelayMs: 500,
+    log: (m) => logs.push(m),
+  });
+  try {
+    assert.equal(await daemon.waitUntilRegistered(5_000), false);
+    assert.equal(daemon.lastRejectReason(), 'invalid_token_revoked');
+    assert.ok(logs.some((l) => l.includes('invalid_token_revoked')), `logs should include reject reason: ${logs.join('\n')}`);
+  } finally {
+    await daemon.close();
+  }
+
+  // `helmx-node start -d` must fail non-zero with `registration_rejected` when Hub explicitly rejects auth.
+  let out = '';
+  let err = '';
+  try {
+    const code = await runNodeCli(
+      ['start', '-d', '--hub', hub.url, '--token', 'rej-cli:bad', '--data-dir', dir, '--json'],
+      {
+        env: { ...sanitizedHostEnv() },
+        out: (t) => (out += t),
+        err: (t) => (err += t),
+      },
+    );
+    assert.equal(code, 1, `expected non-zero exit on explicit Hub rejection; stdout=${out}`);
+    const parsed = JSON.parse(err) as { error: { code: string; message: string } };
+    assert.equal(parsed.error.code, 'registration_rejected');
+    assert.match(parsed.error.message, /invalid_token_revoked/);
+
+    // Human mode `helmx-node status` renders readable key-value lines (not raw JSON).
+    let statusOut = '';
+    const statusCode = await runNodeCli(['status', '--data-dir', dir], {
+      env: { ...sanitizedHostEnv() },
+      out: (t) => (statusOut += t),
+      err: () => {},
+    });
+    assert.equal(statusCode, 0);
+    assert.match(statusOut, /identity:\s+bound \(nodeId=rej-cli\)/);
+    assert.match(statusOut, /daemon:\s+not running/);
+    assert.ok(!statusOut.trimStart().startsWith('{'), `human status should not be raw JSON:\n${statusOut}`);
+  } finally {
     await hub.close();
     await fs.rm(dir, { recursive: true, force: true });
   }

@@ -37,7 +37,7 @@ import type {
   RpcResult,
 } from '@helmx/protocol';
 import { DEFAULT_NODE_ID } from '@helmx/protocol';
-import { atomicWriteJson } from '@helmx/env-io';
+import { atomicWriteJson, withCrossProcessFileLock } from '@helmx/env-io';
 import { createNodeEnvRpcServer, type NodeEnvRpcServer, type NodeEnvRpcServerOptions } from './env-rpc-server.js';
 import { createSocketBirpcEvents } from './birpc-events.js';
 import {
@@ -99,6 +99,8 @@ export interface NodeDaemon {
   readonly hubUrl: string;
   /** Returns true if currently connected and registered with the Hub. */
   isConnected(): boolean;
+  /** Last explicit Hub registration rejection reason (cleared on successful registration). */
+  lastRejectReason(): string | undefined;
   /**
    * Resolves `true` immediately if already online, or waits for the next registration outcome
    * (`true` on success; `false` on close, disconnect, rejection, or timeout).
@@ -261,7 +263,7 @@ export async function writeNodeIdentity(dataDir: string, identity: NodeIdentity)
 
 const bindLocks = new Map<string, Promise<unknown>>();
 
-/** Serialize identity binding per `dataDir` via an in-process queue and exclusive `node.json.lock` (`wx`). */
+/** Serialize identity binding per `dataDir` via an in-process queue and cross-process `node.json.lock` (with dead-PID stale recovery). */
 async function withIdentityLock<T>(dataDir: string, fn: () => Promise<T>): Promise<T> {
   const previous = bindLocks.get(dataDir);
   let releaseInner: () => void = () => undefined;
@@ -275,27 +277,17 @@ async function withIdentityLock<T>(dataDir: string, fn: () => Promise<T>): Promi
     // Prior failure does not block subsequent bind attempts.
   }
   const lockPath = path.join(dataDir, 'node.json.lock');
-  let handle: fs.FileHandle | undefined;
+  const busyError = (file: string, ownerPid?: number): Error =>
+    new Error(
+      `concurrent identity bind conflict: ${file} already exists${ownerPid !== undefined ? ` (held by pid ${ownerPid})` : ''} (another helmx-node connect is writing, or a previous bind crashed); confirm no bind is active and remove the lock file before retrying`,
+    );
   try {
-    await fs.mkdir(dataDir, { recursive: true });
-    try {
-      handle = await fs.open(lockPath, 'wx');
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-      throw new Error(
-        `concurrent identity bind conflict: ${lockPath} already exists (another helmx-node connect is writing, or a previous bind crashed); confirm no bind is active and remove the lock file before retrying`,
-      );
-    }
-  } catch (error) {
-    releaseInner();
-    if (bindLocks.get(dataDir) === gate) bindLocks.delete(dataDir);
-    throw error;
-  }
-  try {
-    return await fn();
+    return await withCrossProcessFileLock(lockPath, fn, {
+      waitMs: 0,
+      onBusy: busyError,
+      onCorrupt: (file) => busyError(file),
+    });
   } finally {
-    await handle!.close().catch(() => undefined);
-    await fs.unlink(lockPath).catch(() => undefined);
     releaseInner();
     if (bindLocks.get(dataDir) === gate) bindLocks.delete(dataDir);
   }
@@ -527,6 +519,7 @@ export async function createNodeDaemon(options: NodeDaemonOptions): Promise<Node
   let reconnectDelay = reconnectBaseDelayMs;
   const settlingDisposes = new Set<Promise<void>>();
   const cleanupErrors: unknown[] = [];
+  let lastRejectReason: string | undefined;
 
   const registerWaiters = new Set<(ok: boolean) => void>();
 
@@ -536,6 +529,8 @@ export async function createNodeDaemon(options: NodeDaemonOptions): Promise<Node
     registerWaiters.clear();
     for (const waiter of waiters) waiter(false);
   };
+
+  const announceRejected = confirmOffline;
 
   const announceRegistered = (): void => {
     if (registerWaiters.size === 0) return;
@@ -816,10 +811,17 @@ export async function createNodeDaemon(options: NodeDaemonOptions): Promise<Node
         }
         const result = ack.result;
         if (result?.ok !== true || !Number.isFinite(result.heartbeatMs) || result.heartbeatMs <= 0 || result.heartbeatMs > 300_000) {
-          log('registration rejected');
-          onGone('register rejected');
+          const detail =
+            result?.ok !== true
+              ? (typeof result?.reason === 'string' && result.reason.trim() !== '' ? result.reason.trim() : 'rejected by Hub')
+              : `invalid heartbeatMs (${String(result.heartbeatMs)})`;
+          lastRejectReason = detail;
+          log(`registration rejected: ${detail}`);
+          announceRejected();
+          onGone(`register rejected (${detail})`);
           return;
         }
+        lastRejectReason = undefined;
         gen.registered = true;
         reconnectDelay = reconnectBaseDelayMs;
         announceRegistered();
@@ -889,13 +891,18 @@ export async function createNodeDaemon(options: NodeDaemonOptions): Promise<Node
       onGone('error');
     });
     socket.on('unexpected-response', (_req, res) => {
-      log(`WS rejected: HTTP ${res.statusCode}`);
+      const status = res.statusCode ?? 'unknown';
+      lastRejectReason = `HTTP ${status}`;
+      log(`WS rejected: HTTP ${status}`);
+      if (res.statusCode === 401 || res.statusCode === 403) {
+        announceRejected();
+      }
       try {
         res.resume();
       } catch {
         // Ignore.
       }
-      onGone('rejected');
+      onGone(`rejected (HTTP ${status})`);
     });
   };
 
@@ -1030,6 +1037,7 @@ export async function createNodeDaemon(options: NodeDaemonOptions): Promise<Node
     identity,
     hubUrl,
     isConnected: () => generation?.registered === true && generation.socket.readyState === WebSocket.OPEN,
+    lastRejectReason: () => lastRejectReason,
     waitUntilRegistered(timeoutMs = 10_000): Promise<boolean> {
       if (closed) return Promise.resolve(false);
       if (generation?.registered === true && generation.socket.readyState === WebSocket.OPEN) {
@@ -1094,29 +1102,6 @@ export async function createNodeDaemon(options: NodeDaemonOptions): Promise<Node
 
   connect();
   return daemon;
-}
-
-/** CLI entrypoint (`helmx-node connect`): runs in foreground until `signal` aborts. */
-export async function runNodeDaemon(
-  input: NodeConnectInput,
-  options: { signal?: AbortSignal; dataDir?: string; envServer?: NodeDaemonOptions['envServer'] } = {},
-): Promise<void> {
-  const dataDir = resolveNodeDataDir(options.dataDir);
-  const identity = await resolveRunIdentity(dataDir, input);
-  const daemon = await createNodeDaemon({
-    hubUrl: input.hubUrl,
-    identity,
-    dataDir,
-    envServer: options.envServer,
-  });
-  await new Promise<void>((resolve, reject) => {
-    const stop = (): void => {
-      options.signal?.removeEventListener('abort', stop);
-      void daemon.close().then(resolve, reject);
-    };
-    if (options.signal?.aborted) stop();
-    else options.signal?.addEventListener('abort', stop, { once: true });
-  });
 }
 
 /** Handle-returning entrypoint for embedding/testing without capturing process signals. */

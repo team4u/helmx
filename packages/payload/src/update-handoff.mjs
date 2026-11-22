@@ -7,44 +7,47 @@
  *
  * Sequence (env-driven contract; every step fails loudly, never silently degrades):
  *   1. grace delay — let the apply HTTP response flush before stopping anything;
- *   2. stop the running Hub over its control channel (verified `instanceId`; the only supported
+ *   2. acquire `lifecycle.lock` so concurrent CLI start/stop/update commands cannot interleave;
+ *   3. stop the running Hub over its control channel (verified `instanceId`; the only supported
  *      stop path — this script never signals PIDs it cannot prove);
- *   3. commit `current.json` to the staged target (entries carried in `update-ready.json`);
- *   4. start the target release detached (stdio -> `logs/hub.log`), gate readiness on the
- *      `Helmx Hub: <url>` listen line, then persist `hub.pid` (+ Linux start-time proof);
- *   5. on any post-commit failure: restore the previous `current.json` verbatim, restart the
+ *   4. commit `current.json` to the staged target (entries carried in `update-ready.json`);
+ *   5. start the target release detached (stdio -> `logs/hub.log`), gate readiness on the
+ *      `Helmx Hub: <url>` listen line, then persist `hub.pid` (+ raw `/proc` start-time proof,
+ *      `dataDir`, and `host`);
+ *   6. on any post-commit failure: restore the previous `current.json` verbatim, restart the
  *      previous release, write `update-blocked.json`, exit 1 with diagnostics;
  *      on success: clear the blocked marker and `update-ready.json`, exit 0.
  *
  * Environment inputs (all required unless noted):
- *   HELMX_HANDOFF_ROOT               install root (releases/, state, logs)
- *   HELMX_HANDOFF_TARGET             strict-SemVer target version
- *   HELMX_HANDOFF_ENTRY              absolute payload entry (start.mjs) of the target
- *   HELMX_HANDOFF_RELEASE_DIR        absolute staged release dir (for record keeping)
- *   HELMX_HANDOFF_DATA_DIR           hub data directory (log tail context)
- *   HELMX_HANDOFF_CONTROL_ENDPOINT   control channel endpoint of the running hub
+ *   HELMX_HANDOFF_ROOT                 install root (releases/, state, logs)
+ *   HELMX_HANDOFF_TARGET               strict-SemVer target version
+ *   HELMX_HANDOFF_ENTRY                absolute payload entry (start.mjs) of the target
+ *   HELMX_HANDOFF_RELEASE_DIR          absolute staged release dir (for record keeping)
+ *   HELMX_HANDOFF_DATA_DIR             hub data directory (control record + hub.pid dataDir)
+ *   HELMX_HANDOFF_CONTROL_ENDPOINT     control channel endpoint of the running hub
  *   HELMX_HANDOFF_CONTROL_INSTANCE_ID  control channel instanceId
- *   HELMX_HANDOFF_LAUNCH_ID          fresh launch id for the new hub process
- *   HELMX_HANDOFF_GRACE_MS           optional grace override (default 2000)
- *   HELMX_HANDOFF_TEST_*             test hooks: fast timeouts, no-spawn dry runs
+ *   HELMX_HANDOFF_LAUNCH_ID            fresh launch id for the new hub process
+ *   HELMX_HANDOFF_GRACE_MS             optional grace override (default 2000)
+ *   HELMX_HANDOFF_TEST_*               test hooks: fast timeouts
  */
 import { spawn } from 'node:child_process';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
-import { createRequire } from 'node:module';
-
-const require = createRequire(import.meta.url);
-const {
-  controlRequest,
-  readCurrentRelease,
-  writeCurrentRelease,
-  readBlockedRelease,
-  writeBlockedRelease,
+import {
   clearBlockedRelease,
-  readUpdateReady,
-  clearUpdateReady,
-} = require('@helmx/env-io');
+  controlRequest,
+  isProcessAlive,
+  readCurrentRelease,
+  readHubControlRecord,
+  readLogFrom,
+  readProcessStartTime,
+  waitForPidExit,
+  withCrossProcessFileLock,
+  writeBlockedRelease,
+  writeCurrentRelease,
+} from '@helmx/env-io';
+import { clearUpdateReady, readUpdateReady } from '@helmx/env-io/hub-payload';
 
 const ROOT = process.env.HELMX_HANDOFF_ROOT ?? '';
 const TARGET = process.env.HELMX_HANDOFF_TARGET ?? '';
@@ -57,6 +60,7 @@ const LAUNCH_ID = process.env.HELMX_HANDOFF_LAUNCH_ID ?? '';
 const GRACE_MS = Number(process.env.HELMX_HANDOFF_GRACE_MS ?? '2000');
 const READY_TIMEOUT_MS = Number(process.env.HELMX_HANDOFF_TEST_READY_TIMEOUT_MS ?? '60000');
 const LOG = path.join(ROOT, 'logs', 'handoff.log');
+const LIFECYCLE_LOCK = path.join(ROOT, 'lifecycle.lock');
 
 const fail = (message) => {
   log(`FAILED: ${message}`);
@@ -86,54 +90,23 @@ function validateEnv() {
   if (!isStrictSemver(TARGET)) fail(`HELMX_HANDOFF_TARGET is not strict SemVer: "${TARGET}"`);
 }
 
-async function readProcessStartTime(pid) {
-  if (process.platform !== 'linux') return null;
-  try {
-    const stat = await fsp.readFile(`/proc/${pid}/stat`, 'utf8');
-    const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
-    const ticks = Number(fields[19]);
-    if (!Number.isFinite(ticks)) return null;
-    const hz = Number(process.env.HELMX_HANDOFF_TEST_CLK_TCK ?? 100);
-    return Math.floor(ticks * 1000 / hz);
-  } catch {
-    return null;
-  }
-}
-
-const isAlive = (pid) => {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-};
-
-async function waitForPidExit(pid, timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (!isAlive(pid)) return true;
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  return !isAlive(pid);
-}
-
 /** Stop the hub over the verified control channel and wait for the recorded pid to exit. */
 async function stopRunningHub() {
   const control = await readHubControl();
   if (control === null) {
     fail(`no hub control record in data directory "${DATA_DIR}" — cannot prove ownership of the running hub; refusing to continue`);
   }
+  const stopTimeoutMs = Number(process.env.HELMX_HANDOFF_TEST_STOP_TIMEOUT_MS ?? '15000');
   const reply = await controlRequest(
     CONTROL_ENDPOINT,
     { type: 'stop', instanceId: CONTROL_INSTANCE_ID },
-    Number(process.env.HELMX_HANDOFF_TEST_STOP_TIMEOUT_MS ?? '15000'),
+    stopTimeoutMs,
     { instanceId: CONTROL_INSTANCE_ID },
   );
   if (reply === null || reply.ok !== true) {
     fail(`control-channel stop was not accepted (${reply === null ? 'no reply' : `error: ${reply.error ?? 'unknown'}`}); nothing was committed`);
   }
-  const exited = await waitForPidExit(control.pid, Number(process.env.HELMX_HANDOFF_TEST_STOP_TIMEOUT_MS ?? '15000'));
+  const exited = await waitForPidExit(control.pid, stopTimeoutMs);
   if (!exited) {
     fail(`hub pid ${control.pid} accepted the stop but did not exit within the budget; nothing was committed`);
   }
@@ -143,11 +116,9 @@ async function stopRunningHub() {
 async function readHubControl() {
   if (DATA_DIR === '') return null;
   try {
-    const raw = await fsp.readFile(path.join(DATA_DIR, 'hub-control.json'), 'utf8');
-    const parsed = JSON.parse(raw);
-    if (typeof parsed !== 'object' || parsed === null) return null;
+    const parsed = await readHubControlRecord(DATA_DIR);
+    if (parsed === null) return null;
     if (parsed.instanceId !== CONTROL_INSTANCE_ID || parsed.endpoint !== CONTROL_ENDPOINT) return null;
-    if (!Number.isInteger(parsed.pid) || parsed.pid <= 0) return null;
     return { pid: parsed.pid };
   } catch {
     return null;
@@ -168,6 +139,7 @@ async function startRelease(entry, version) {
   delete childEnv.HELMX_HUB_ACTIVITY_LAUNCH_ID;
   childEnv.HELMX_HUB_ACTIVITY_LAUNCH_ID = LAUNCH_ID;
   childEnv.HELMX_HUB_INSTALL_ROOT = ROOT;
+  if (DATA_DIR !== '') childEnv.HELMX_DATA_DIR = DATA_DIR;
   const child = spawn(process.execPath, [entry, 'start'], {
     detached: true,
     stdio: ['ignore', logHandle.fd, logHandle.fd],
@@ -180,13 +152,15 @@ async function startRelease(entry, version) {
   let scanned = '';
   let offset = startOffset;
   while (Date.now() < deadline) {
-    if (!isAlive(child.pid)) throw new Error(`hub process exited before readiness (version ${version})`);
-    const chunk = await fsp.readFile(hubLog, 'utf8').then((text) => text.slice(offset), () => '');
-    offset += Buffer.byteLength(chunk, 'utf8');
-    scanned = (scanned + chunk).slice(-200000);
-    const match = /^Helmx Hub: (\S+)\s*$/gm.exec(scanned);
-    if (match !== null) {
-      return { pid: child.pid, url: match[1] };
+    if (!isProcessAlive(child.pid)) throw new Error(`hub process exited before readiness (version ${version})`);
+    const chunk = await readLogFrom(hubLog, offset);
+    offset = chunk.offset;
+    if (chunk.text !== '') {
+      scanned = (scanned + chunk.text).slice(-200000);
+      const match = /^Helmx Hub: (\S+)\s*$/gm.exec(scanned);
+      if (match !== null) {
+        return { pid: child.pid, url: match[1] };
+      }
     }
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
@@ -195,15 +169,22 @@ async function startRelease(entry, version) {
 
 /** Persist the launcher's hub.pid contract for a freshly started release. */
 async function writePidRecord(pid, version, entry, url) {
-  const port = Number(new URL(url).port);
+  const parsedUrl = new URL(url);
+  const port = Number(parsedUrl.port);
+  const configuredHost = process.env.HELMX_HOST && process.env.HELMX_HOST.trim() !== ''
+    ? process.env.HELMX_HOST.trim()
+    : parsedUrl.hostname;
   const record = {
     pid,
     launchId: LAUNCH_ID,
     version,
     entryPath: entry,
     port,
+    ...(configuredHost !== '' ? { host: configuredHost } : {}),
+    ...(DATA_DIR !== '' ? { dataDir: DATA_DIR } : {}),
     startedAt: new Date().toISOString(),
   };
+  // Store raw Linux /proc/<pid>/stat field-22 ticks (single source of truth shared with launcher).
   const startTime = await readProcessStartTime(pid);
   if (startTime !== null) record.startTime = startTime;
   await fsp.writeFile(path.join(ROOT, 'hub.pid'), `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
@@ -222,50 +203,62 @@ async function main() {
   const graceMs = Number.isFinite(GRACE_MS) && GRACE_MS >= 0 ? GRACE_MS : 2000;
   if (graceMs > 0) await new Promise((resolve) => setTimeout(resolve, graceMs));
 
-  const previous = await readCurrentRelease(ROOT);
-  if (previous === null) fail('no current release to roll back to; the CLI owns bootstrap installs');
+  await withCrossProcessFileLock(
+    LIFECYCLE_LOCK,
+    async () => {
+      const previous = await readCurrentRelease(ROOT);
+      if (previous === null) fail('no current release to roll back to; the CLI owns bootstrap installs');
 
-  await stopRunningHub();
+      await stopRunningHub();
 
-  // Commit the staged target (entries carried by the ready record).
-  try {
-    await writeCurrentRelease(ROOT, {
-      version: TARGET,
-      updatedAt: new Date().toISOString(),
-      entries: { entryPath: ready.entryPath },
-    });
-    log(`committed current.json -> ${TARGET}`);
-  } catch (error) {
-    fail(`commit failed (${error instanceof Error ? error.message : String(error)}); the hub is stopped and the pointer is untouched — restart manually`);
-  }
+      // Commit the staged target (entries carried by the ready record).
+      try {
+        await writeCurrentRelease(ROOT, {
+          version: TARGET,
+          updatedAt: new Date().toISOString(),
+          entries: { entryPath: ready.entryPath },
+        });
+        log(`committed current.json -> ${TARGET}`);
+      } catch (error) {
+        fail(`commit failed (${error instanceof Error ? error.message : String(error)}); the hub is stopped and the pointer is untouched — restart manually`);
+      }
 
-  try {
-    const started = await startRelease(ENTRY, TARGET);
-    await writePidRecord(started.pid, TARGET, ENTRY, started.url);
-    await clearBlockedRelease(ROOT);
-    await clearUpdateReady(ROOT);
-    log(`switch complete: ${previous.version} -> ${TARGET} (pid ${started.pid}, ${started.url})`);
-    process.exit(0);
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-    log(`target failed to serve: ${reason}; rolling back to ${previous.version}`);
-    let rollbackNote = 'rollback start failed — restart manually';
-    try {
-      const restoredEntry = await resolvePreviousEntry(previous);
-      const restored = await startRelease(restoredEntry, previous.version);
-      await writeCurrentRelease(ROOT, previous);
-      await writePidRecord(restored.pid, previous.version, restoredEntry, restored.url);
-      rollbackNote = `rolled back to ${previous.version} (pid ${restored.pid})`;
-    } catch (rollbackError) {
-      rollbackNote = `rollback failed too: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`;
-    }
-    await writeBlockedRelease(ROOT, {
-      version: TARGET,
-      reason: `handoff: ${reason}; ${rollbackNote}`,
-      at: new Date().toISOString(),
-    }).catch(() => undefined);
-    fail(`${reason}; ${rollbackNote}`);
-  }
+      try {
+        const started = await startRelease(ENTRY, TARGET);
+        await writePidRecord(started.pid, TARGET, ENTRY, started.url);
+        await clearBlockedRelease(ROOT);
+        await clearUpdateReady(ROOT);
+        log(`switch complete: ${previous.version} -> ${TARGET} (pid ${started.pid}, ${started.url})`);
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        log(`target failed to serve: ${reason}; rolling back to ${previous.version}`);
+        let rollbackNote = 'rollback start failed — restart manually';
+        try {
+          const restoredEntry = await resolvePreviousEntry(previous);
+          const restored = await startRelease(restoredEntry, previous.version);
+          await writeCurrentRelease(ROOT, previous);
+          await writePidRecord(restored.pid, previous.version, restoredEntry, restored.url);
+          rollbackNote = `rolled back to ${previous.version} (pid ${restored.pid})`;
+        } catch (rollbackError) {
+          rollbackNote = `rollback failed too: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`;
+        }
+        await writeBlockedRelease(ROOT, {
+          version: TARGET,
+          reason: `handoff: ${reason}; ${rollbackNote}`,
+          at: new Date().toISOString(),
+        }).catch(() => undefined);
+        fail(`${reason}; ${rollbackNote}`);
+      }
+    },
+    {
+      waitMs: 5_000,
+      onBusy: (lockPath, ownerPid) =>
+        new Error(
+          `concurrent lifecycle operation conflict: ${lockPath} is held${ownerPid !== undefined ? ` by pid ${ownerPid}` : ''}; aborting handoff without modifying state`,
+        ),
+    },
+  );
+  process.exit(0);
 }
 
 /** Resolve the previous release's absolute entry from its committed relative entry path. */

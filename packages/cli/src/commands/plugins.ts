@@ -25,7 +25,7 @@ import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
 import { CliError } from '../errors.js'
 import { parseFlags } from '../args.js'
-import { printValue } from '../output.js'
+import { printTableColumns, printValue, resolveDisplayString } from '../output.js'
 import type { HubClient } from '../hub-client.js'
 import {
   SCAFFOLD_CLIENT_APP_TSX,
@@ -141,7 +141,18 @@ export function pluginsCommands(): CommandSpec[] {
     async run(ctx: CommandContext) {
       parseNoFlags(ctx)
       const hub = await ctx.hub()
-      printResult(ctx, await hub.get<PluginSummary[]>('/api/plugins'))
+      const list = await hub.get<PluginSummary[]>('/api/plugins')
+      if (ctx.json || !Array.isArray(list)) {
+        printResult(ctx, list)
+        return
+      }
+      printTableColumns(ctx.io, list, [
+        { label: 'id', value: (p) => p.id },
+        { label: 'status', value: (p) => p.status ?? (p.enabled ? 'active' : 'disabled') },
+        { label: 'name', value: (p) => resolveDisplayString(p.name) },
+        { label: 'description', value: (p) => (p.description !== undefined ? resolveDisplayString(p.description) : '') },
+        { label: 'error', value: (p) => (p.error ? `${p.error.code} (${p.error.stage}): ${p.error.message}` : '') },
+      ])
     },
   })
 
@@ -623,7 +634,23 @@ export function pluginsCommands(): CommandSpec[] {
     async run(ctx: CommandContext) {
       parseNoFlags(ctx)
       const hub = await ctx.hub()
-      printResult(ctx, await hub.get<ActionManifest[]>('/api/actions'))
+      const list = await hub.get<ActionManifest[]>('/api/actions')
+      if (ctx.json || !Array.isArray(list)) {
+        printResult(ctx, list)
+        return
+      }
+      printTableColumns(ctx.io, list, [
+        { label: 'action', value: (a) => `${a.pluginId}.${a.id}` },
+        {
+          label: 'cli',
+          value: (a) => {
+            if (a.cli?.hidden === true || a.visibility === 'ui' || a.visibility === 'internal') return '(hidden)'
+            const prefix = a.pluginId.startsWith('builtin:') ? a.pluginId.slice('builtin:'.length) : a.pluginId
+            return `helmx ${(a.cli?.command ?? [prefix, a.id]).join(' ')}`
+          },
+        },
+        { label: 'description', value: (a) => a.cli?.description ?? a.description },
+      ])
     },
   })
 

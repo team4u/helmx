@@ -116,12 +116,32 @@ export function flagsFromSchema(schema: JsonSchema): { flags: FlagSpec[]; skippe
       skipped.push(rawName)
       continue
     }
-    const type = flagTypeOf((properties as Record<string, unknown>)[rawName])
+    const propSchema = (properties as Record<string, unknown>)[rawName]
+    const type = flagTypeOf(propSchema)
     if (type === undefined) {
       skipped.push(rawName)
       continue // unmappable properties must be passed via whole --input (validated on the server)
     }
-    flags.push({ name, type, required: requiredNames.has(rawName) })
+    const helpParts: string[] = []
+    if (propSchema !== null && typeof propSchema === 'object' && !Array.isArray(propSchema)) {
+      const ps = propSchema as { description?: unknown; enum?: unknown }
+      if (typeof ps.description === 'string' && ps.description.trim() !== '') {
+        helpParts.push(ps.description.trim())
+      }
+      if (
+        Array.isArray(ps.enum) &&
+        ps.enum.length > 0 &&
+        ps.enum.every((v) => typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean')
+      ) {
+        helpParts.push(`(${ps.enum.map(String).join('|')})`)
+      }
+    }
+    flags.push({
+      name,
+      type,
+      required: requiredNames.has(rawName),
+      ...(helpParts.length > 0 ? { help: helpParts.join(' ') } : {}),
+    })
   }
   return { flags, skipped }
 }

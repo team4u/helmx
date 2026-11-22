@@ -94,7 +94,7 @@ async function checkIdentity(dataDir: string): Promise<NodeDoctorCheck & { ident
     return {
       id: 'identity',
       status: 'error',
-      message: `node identity file is unreadable (${error instanceof Error ? error.message : String(error)}); inspect and remove ${file}, then re-bind with helmx-node connect <hubUrl> --token <token>`,
+      message: `node identity file is unreadable (${error instanceof Error ? error.message : String(error)}); inspect and remove ${file}, then re-bind with helmx-node start -d --hub <hubUrl> --token <token>`,
       identity,
     };
   }
@@ -102,7 +102,7 @@ async function checkIdentity(dataDir: string): Promise<NodeDoctorCheck & { ident
     return {
       id: 'identity',
       status: 'error',
-      message: `node identity file not found at ${file}; bind a JOIN token first with helmx-node connect <hubUrl> --token <token>`,
+      message: `node identity file not found at ${file}; bind a JOIN token first with helmx-node start -d --hub <hubUrl> --token <token>`,
       identity,
     };
   }
@@ -306,7 +306,7 @@ export async function runNodeDoctor(options: NodeDoctorOptions = {}): Promise<No
       message:
         identity === null
           ? 'identity invalid; skipping Hub reachability probe'
-          : 'Hub URL not configured (pass --hub, set HELMX_HUB_URL, or bind via helmx-node connect)',
+          : 'Hub URL not configured (pass --hub, set HELMX_HUB_URL, or bind via helmx-node start -d --hub <hubUrl> --token <token>)',
     });
   } else {
     checks.push(await checkHub(hubUrl, identity.nodeId, connectTimeoutMs));

@@ -31,7 +31,16 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import fsp from 'node:fs/promises';
 import process from 'node:process';
-import { controlRequest, CONTROL_STOP_TIMEOUT_MS, killProcessTree, readHubControlRecord } from '@helmx/env-io';
+import {
+  controlRequest,
+  CONTROL_STOP_TIMEOUT_MS,
+  killProcessTree,
+  readHubControlRecord,
+  readLogFrom,
+  readLogTailBounded,
+  waitForPidExit,
+  withCrossProcessFileLock,
+} from '@helmx/env-io';
 import { DEFAULTS, assertInstallIsolation, defaultHubDataDir, pathsOf } from './layout.js';
 import {
   assertEntryExists,
@@ -51,7 +60,6 @@ import { hubHealthUrl, probeHubHealth, type HubHealthStatus } from './health.js'
 import { isAliveOf, UsageError, type LauncherIo } from './io.js';
 import { readCurrentEntry } from './current.js';
 
-const EXIT_POLL_MS = 100;
 const LOG_TAIL_LINES = 40;
 /** `@helmx/hub` prints `Helmx Hub: <url>` right after `startHub` resolves (server listening). Multiline + global: the banner may follow earlier log lines in the same read, and `matchAll` requires global matching. */
 const LISTEN_LINE_PATTERN = /^Helmx Hub: (\S+)\s*$/gm;
@@ -97,69 +105,24 @@ export interface StopHubResult {
 
 /**
  * Held across every process-state mutation (start/stop and the update commit window) so the
- * three can never interleave on one machine.
+ * three can never interleave on one machine. Uses shared cross-process lock with dead-PID
+ * stale recovery while preserving empty/live lock files.
  */
 export async function withLifecycleLock<T>(root: string, fn: () => Promise<T>): Promise<T> {
   const lockPath = pathsOf(root).lifecycleLockPath;
-  await fsp.mkdir(root, { recursive: true });
-  let handle: fsp.FileHandle;
-  try {
-    handle = await fsp.open(lockPath, 'wx');
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
-      throw new UsageError(
-        `concurrent lifecycle operation conflict: ${lockPath} already exists (another start/stop/update is in progress, or a previous one crashed); confirm nothing is running and remove the lock file before retrying`,
+  return await withCrossProcessFileLock(lockPath, fn, {
+    waitMs: 0,
+    onBusy: (file, ownerPid) =>
+      new UsageError(
+        `concurrent lifecycle operation conflict: ${file} already exists${ownerPid !== undefined ? ` (held by pid ${ownerPid})` : ''} (another start/stop/update is in progress, or a previous one crashed); confirm nothing is running and remove the lock file before retrying`,
         'lifecycle_lock_busy',
-      );
-    }
-    throw error;
-  }
-  try {
-    return await fn();
-  } finally {
-    await handle.close().catch(() => undefined);
-    await fsp.unlink(lockPath).catch(() => undefined);
-  }
-}
-
-async function readLogTail(logFile: string, maxLines: number): Promise<string> {
-  try {
-    const text = await fsp.readFile(logFile, 'utf8');
-    const lines = text.split('\n').filter((line) => line !== '');
-    return lines.slice(-maxLines).join('\n');
-  } catch {
-    return '';
-  }
-}
-
-/** Read the log from `offset` and return the new text plus the advanced offset. */
-async function readLogFrom(logFile: string, offset: number): Promise<{ text: string; offset: number }> {
-  let handle: fsp.FileHandle;
-  try {
-    handle = await fsp.open(logFile, 'r');
-  } catch {
-    return { text: '', offset };
-  }
-  try {
-    const stat = await handle.stat();
-    if (stat.size <= offset) return { text: '', offset };
-    const length = Math.min(stat.size - offset, 1_000_000);
-    const buffer = Buffer.alloc(length);
-    const { bytesRead } = await handle.read(buffer, 0, length, offset);
-    return { text: buffer.subarray(0, bytesRead).toString('utf8'), offset: offset + bytesRead };
-  } finally {
-    await handle.close().catch(() => undefined);
-  }
-}
-
-/** Poll a pid until it exits or the budget expires (returns whether it exited). */
-async function waitForExitPid(pid: number, timeoutMs: number, isAlive: (pid: number) => boolean): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
-  while (isAlive(pid)) {
-    if (Date.now() >= deadline) return false;
-    await new Promise((resolve) => setTimeout(resolve, EXIT_POLL_MS));
-  }
-  return true;
+      ),
+    onCorrupt: (file) =>
+      new UsageError(
+        `concurrent lifecycle operation conflict: ${file} already exists (another start/stop/update is in progress, or a previous one crashed); confirm nothing is running and remove the lock file before retrying`,
+        'lifecycle_lock_busy',
+      ),
+  });
 }
 
 /**
@@ -237,7 +200,7 @@ async function waitForListenLine(
   let scanned = '';
   for (;;) {
     if (!isAlive(pid)) {
-      const tail = await readLogTail(logFile, LOG_TAIL_LINES);
+      const tail = await readLogTailBounded(logFile, LOG_TAIL_LINES);
       const detail = options.exitDetail();
       throw new Error(
         `hub process exited before reporting readiness${detail !== null ? ` ${detail}` : ''} (no "Helmx Hub: " listen line)${tail !== '' ? `\n--- ${logFile} last ${LOG_TAIL_LINES} lines ---\n${tail}` : ''}`,
@@ -257,7 +220,7 @@ async function waitForListenLine(
       }
     }
     if (Date.now() >= deadline) {
-      const tail = await readLogTail(logFile, LOG_TAIL_LINES);
+      const tail = await readLogTailBounded(logFile, LOG_TAIL_LINES);
       throw new Error(
         `hub readiness timed out after ${options.timeoutMs}ms: no "Helmx Hub: " listen line in ${logFile}${tail !== '' ? `\n--- last ${LOG_TAIL_LINES} lines ---\n${tail}` : ''}`,
       );
@@ -362,9 +325,9 @@ export async function startHubLocked(root: string, io: LauncherIo, options: Star
   } catch (error) {
     // Never leave an untracked half-started hub behind: kill the tree, then surface the error.
     killProcessTree(pid);
-    await waitForExitPid(pid, 5_000, isAlive).catch(() => undefined);
+    await waitForPidExit(pid, 5_000, isAlive).catch(() => undefined);
     const reason = error instanceof Error ? error.message : String(error);
-    const tail = await readLogTail(paths.hubLogPath, LOG_TAIL_LINES);
+    const tail = await readLogTailBounded(paths.hubLogPath, LOG_TAIL_LINES);
     throw new Error(
       `hub failed to become ready: ${reason}${tail !== '' && !reason.includes('---') ? `\n--- ${paths.hubLogPath} last ${LOG_TAIL_LINES} lines ---\n${tail}` : ''}`,
     );
@@ -397,7 +360,7 @@ export async function stopHubLocked(root: string, io: LauncherIo, options?: Stop
   // steers to the supervised `run` (which holds its own ChildProcess and needs no pid guessing).
   if (record.startTime === undefined) {
     throw new UsageError(
-      `pid ${record.pid} cannot be verified as this launcher's hub: the pid record carries no process start-time proof (no /proc start time on this platform or at spawn time), and a health endpoint alone cannot prove the pid was not reused; refusing to signal it — stop the hub from the launcher 'run' session that owns it (Ctrl+C), or verify the process manually, stop it directly, and remove ${paths.pidPath}`,
+      `pid ${record.pid} cannot be verified as this launcher's hub: the pid record carries no process start-time proof (no /proc start time on this platform or at spawn time), and a health endpoint alone cannot prove the pid was not reused; refusing to signal it — stop the hub from the foreground 'helmx start' session that owns it (Ctrl+C), or verify the process manually, stop it directly, and remove ${paths.pidPath}`,
       'hub_identity_unverifiable',
     );
   }
@@ -410,13 +373,13 @@ export async function stopHubLocked(root: string, io: LauncherIo, options?: Stop
   }
   process.kill(record.pid, 'SIGTERM');
   const stopTimeoutMs = options?.stopTimeoutMs ?? DEFAULTS.stopTimeoutMs;
-  if (await waitForExitPid(record.pid, stopTimeoutMs, isAlive)) {
+  if (await waitForPidExit(record.pid, stopTimeoutMs, isAlive)) {
     await removePidFileIfMatch(root, record);
     return { wasRunning: true, pid: record.pid, escalated: false, cleanedStalePid: false };
   }
   killProcessTree(record.pid);
   const escalationWaitMs = options?.escalationWaitMs ?? DEFAULTS.stopEscalationWaitMs;
-  if (!(await waitForExitPid(record.pid, escalationWaitMs, isAlive))) {
+  if (!(await waitForPidExit(record.pid, escalationWaitMs, isAlive))) {
     throw new Error(
       `hub pid ${record.pid} did not exit within ${stopTimeoutMs}ms graceful budget plus ${escalationWaitMs}ms after escalation; pid file retained for diagnostics (${paths.pidPath})`,
     );
@@ -436,26 +399,19 @@ export interface GracefulStopResult extends StopHubResult {
 }
 
 /**
- * Stop the running Hub gracefully, control channel first: the live process itself verifies the
- * request (`instanceId` secret from the `0600` `hub-control.json` record) and runs its full
- * graceful shutdown — this is the only path that works uniformly on Linux, macOS, and Windows.
- * When the channel is unavailable (stale/missing record, pre-channel hub, connect failure) the
- * call degrades to the pid-record identity-proof stop (`stopHubLocked`), which keeps its own
- * honest platform limitations.
+ * Unlocked body of `stopHubGraceful` (called inside an already-held `lifecycle.lock`, e.g. by
+ * `performHubUpdate`). Tries the verified control channel first (works uniformly on Linux, macOS,
+ * and Windows), then falls back to `stopHubLocked` (`/proc` start-time proof).
  */
-export async function stopHubGraceful(root: string, io: LauncherIo, options?: StopHubOptions): Promise<GracefulStopResult> {
+export async function stopHubGracefulLocked(root: string, io: LauncherIo, options?: StopHubOptions): Promise<GracefulStopResult> {
   const isAlive = isAliveOf(io);
   const record = await readPidRecord(root);
   if (record === null) return { wasRunning: false, escalated: false, cleanedStalePid: false, via: 'pid-proof' };
   if (!isAlive(record.pid)) {
-    // Reuse the proof-based cleanup for dead/stale records (also removes the pid file).
-    const cleaned = await stopHub(root, io, options);
-    return { ...cleaned, via: 'pid-proof' };
+    await removePidFileIfMatch(root, record);
+    return { wasRunning: false, escalated: false, cleanedStalePid: true, via: 'pid-proof' };
   }
 
-  // Control-channel attempt against the data directory this hub was launched with. The channel
-  // stop is a lifecycle mutation (the hub drains and exits, the pid record is removed), so it runs
-  // inside the same lifecycle lock as every other start/stop mutation.
   const dataDir =
     record.dataDir ??
     resolveEffectiveLaunchConfig({ env: io.env, saved: await readLaunchConfig(root) }).dataDir ??
@@ -466,30 +422,34 @@ export async function stopHubGraceful(root: string, io: LauncherIo, options?: St
       instanceId: control.instanceId,
     });
     if (reply !== null && reply.ok === true) {
-      return await withLifecycleLock(root, async () => {
-        const stopTimeoutMs = options?.stopTimeoutMs ?? DEFAULTS.stopTimeoutMs;
-        const exited = await waitForExitPid(record.pid, stopTimeoutMs, isAlive);
-        let escalated = false;
-        if (!exited) {
-          // The wrapper survived the hub's own graceful window: escalate the whole tree.
-          killProcessTree(record.pid);
-          const escalationWaitMs = options?.escalationWaitMs ?? DEFAULTS.stopEscalationWaitMs;
-          if (!(await waitForExitPid(record.pid, escalationWaitMs, isAlive))) {
-            throw new Error(
-              `hub pid ${record.pid} accepted the control-channel stop but did not exit within ${stopTimeoutMs}ms graceful budget plus ${escalationWaitMs}ms after escalation; pid file retained for diagnostics (${pathsOf(root).pidPath})`,
-            );
-          }
-          escalated = true;
+      const stopTimeoutMs = options?.stopTimeoutMs ?? DEFAULTS.stopTimeoutMs;
+      const exited = await waitForPidExit(record.pid, stopTimeoutMs, isAlive);
+      let escalated = false;
+      if (!exited) {
+        killProcessTree(record.pid);
+        const escalationWaitMs = options?.escalationWaitMs ?? DEFAULTS.stopEscalationWaitMs;
+        if (!(await waitForPidExit(record.pid, escalationWaitMs, isAlive))) {
+          throw new Error(
+            `hub pid ${record.pid} accepted the control-channel stop but did not exit within ${stopTimeoutMs}ms graceful budget plus ${escalationWaitMs}ms after escalation; pid file retained for diagnostics (${pathsOf(root).pidPath})`,
+          );
         }
-        await removePidFileIfMatch(root, record);
-        return { wasRunning: true, pid: record.pid, escalated, cleanedStalePid: false, via: 'control-channel' as const };
-      });
+        escalated = true;
+      }
+      await removePidFileIfMatch(root, record);
+      return { wasRunning: true, pid: record.pid, escalated, cleanedStalePid: false, via: 'control-channel' };
     }
   }
 
   // Channel unavailable or rejected: proof-based stop (keeps its explicit platform refusal).
-  const result = await stopHub(root, io, options);
+  const result = await stopHubLocked(root, io, options);
   return { ...result, via: 'pid-proof' };
+}
+
+/**
+ * Stop the running Hub gracefully, control channel first, serialized inside `lifecycle.lock`.
+ */
+export function stopHubGraceful(root: string, io: LauncherIo, options?: StopHubOptions): Promise<GracefulStopResult> {
+  return withLifecycleLock(root, () => stopHubGracefulLocked(root, io, options));
 }
 
 export interface RunningHubInfo {

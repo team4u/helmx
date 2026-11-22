@@ -9,6 +9,7 @@ import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import fsp from 'node:fs/promises';
 import process from 'node:process';
+import { readLogTailBounded, withCrossProcessFileLock } from '@helmx/env-io';
 import {
   isAliveOf,
   logPathOf,
@@ -41,12 +42,19 @@ import {
 
 const LAUNCHER_POLL_MS = 2_000;
 
-/** Parse `{ type: 'helmx-node.ready', pid, instanceId, state }` over native Node stdio IPC. */
-function parseReadyMessage(message: unknown, instanceId: string): DaemonReadyState | null {
+/** Parse `{ type: 'helmx-node.ready', pid, instanceId, state, reason? }` over native Node stdio IPC. */
+function parseReadyMessage(
+  message: unknown,
+  instanceId: string,
+): { state: DaemonReadyState } | { state: 'rejected'; reason: string } | null {
   if (typeof message !== 'object' || message === null) return null;
   const record = message as Record<string, unknown>;
   if (record['type'] !== 'helmx-node.ready' || record['instanceId'] !== instanceId) return null;
-  return record['state'] === 'registered' ? 'registered' : 'starting';
+  if (record['state'] === 'rejected') {
+    const reason = typeof record['reason'] === 'string' && record['reason'].trim() !== '' ? record['reason'].trim() : 'rejected by Hub';
+    return { state: 'rejected', reason };
+  }
+  return { state: record['state'] === 'registered' ? 'registered' : 'starting' };
 }
 
 /**
@@ -94,6 +102,7 @@ export async function defaultSpawnDaemon(options: {
 
   type Outcome =
     | { kind: 'ready'; state: DaemonReadyState }
+    | { kind: 'rejected'; reason: string }
     | { kind: 'error'; error: Error }
     | { kind: 'exit'; code: number | null }
     | { kind: 'timeout' };
@@ -109,8 +118,10 @@ export async function defaultSpawnDaemon(options: {
       resolve(value);
     };
     const onMessage = (message: unknown): void => {
-      const state = parseReadyMessage(message, instanceId);
-      if (state !== null) finish({ kind: 'ready', state });
+      const parsed = parseReadyMessage(message, instanceId);
+      if (parsed === null) return;
+      if (parsed.state === 'rejected') finish({ kind: 'rejected', reason: parsed.reason });
+      else finish({ kind: 'ready', state: parsed.state });
     };
     const onError = (error: Error): void => finish({ kind: 'error', error });
     const onExit = (code: number | null): void => finish({ kind: 'exit', code });
@@ -148,50 +159,37 @@ export async function defaultSpawnDaemon(options: {
   detachChannel();
   child.unref();
   await logHandle.close().catch(() => undefined);
+  if (outcome.kind === 'rejected') {
+    throw new UsageError(
+      `Hub rejected node registration: ${outcome.reason} (check token or re-issue with "helmx nodes issue <nodeId>"; log: ${logFile})`,
+      'registration_rejected',
+    );
+  }
   const reason =
     outcome.kind === 'error'
       ? `background process failed to start (spawn error): ${outcome.error.message}`
       : outcome.kind === 'exit'
         ? `background process exited immediately after startup (code=${outcome.code ?? 'null'})`
         : `background process did not report ready (helmx-node.ready) within ${readyTimeoutMs}ms`;
-  const tail = await readLogTail(logFile, 40);
+  const tail = await readLogTailBounded(logFile, 40);
   throw new Error(`${reason}${tail !== '' ? `\n--- ${logFile} last 40 lines ---\n${tail}` : ''}`);
 }
 
 /**
- * Concurrency lock (`O_CREAT|O_EXCL`) spanning instance check -> spawn -> PID persistence.
- * Never deletes a pre-existing lock silently because another `start` may be in flight.
+ * Concurrency lock spanning instance check -> spawn -> PID persistence.
+ * Recovers confirmed-dead PID stale locks; never deletes an active or empty/corrupt lock silently.
  */
 async function withStartLock<T>(dataDir: string, fn: () => Promise<T>): Promise<T> {
   const lockPath = startLockPath(dataDir);
-  await fsp.mkdir(dataDir, { recursive: true });
-  let handle: fsp.FileHandle;
-  try {
-    handle = await fsp.open(lockPath, 'wx');
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
-      throw new Error(
-        `concurrent start conflict: ${lockPath} already exists (another helmx-node start is in progress, or a previous start crashed); confirm no start is running and remove the lock file before retrying`,
-      );
-    }
-    throw error;
-  }
-  try {
-    return await fn();
-  } finally {
-    await handle.close().catch(() => undefined);
-    await fsp.unlink(lockPath).catch(() => undefined);
-  }
-}
-
-async function readLogTail(logFile: string, maxLines: number): Promise<string> {
-  try {
-    const text = await fsp.readFile(logFile, 'utf8');
-    const lines = text.split('\n').filter((line) => line !== '');
-    return lines.slice(-maxLines).join('\n');
-  } catch {
-    return '';
-  }
+  const busyError = (file: string, ownerPid?: number): Error =>
+    new Error(
+      `concurrent start conflict: ${file} already exists${ownerPid !== undefined ? ` (held by pid ${ownerPid})` : ''} (another helmx-node start is in progress, or a previous start crashed); confirm no start is running and remove the lock file before retrying`,
+    );
+  return await withCrossProcessFileLock(lockPath, fn, {
+    waitMs: 0,
+    onBusy: busyError,
+    onCorrupt: (file) => busyError(file),
+  });
 }
 
 /** Inherit loader flags (`--require`/`--import`) while stripping inspector/profiler flags. */

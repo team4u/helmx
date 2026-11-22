@@ -41,7 +41,12 @@ function forwardSignals(controller: AbortController): () => void {
 }
 
 /** Report readiness to the parent process; candidates keep IPC open until activation completes. */
-function reportReady(control: { instanceId: string } | undefined, pendingActivation: boolean, state: DaemonReadyState): void {
+function reportReady(
+  control: { instanceId: string } | undefined,
+  pendingActivation: boolean,
+  state: DaemonReadyState | 'rejected',
+  reason?: string,
+): void {
   if (control === undefined || process.send === undefined) return;
   try {
     process.send({
@@ -49,11 +54,12 @@ function reportReady(control: { instanceId: string } | undefined, pendingActivat
       pid: process.pid,
       instanceId: control.instanceId,
       state,
-    } satisfies { type: 'helmx-node.ready'; pid: number; instanceId: string; state: DaemonReadyState });
+      ...(reason !== undefined ? { reason } : {}),
+    });
   } catch {
     // Parent IPC channel already closed; normal controlled instances keep running and reconnecting.
   }
-  if (!pendingActivation) {
+  if (!pendingActivation || state === 'rejected') {
     try {
       if (process.connected && process.disconnect !== undefined) process.disconnect();
     } catch {
@@ -310,7 +316,18 @@ export async function runDaemonProcess(options: {
       },
     );
     const registered = await handle.waitUntilRegistered(10_000);
-    if (control !== undefined) {
+    const rejectReason = registered ? undefined : handle.lastRejectReason();
+    if (!registered && rejectReason !== undefined) {
+      if (control !== undefined) {
+        reportReady(control, false, 'rejected', rejectReason);
+        return 1;
+      }
+      if (!json) {
+        io.err(
+          `registration rejected by Hub: ${rejectReason} (check token or re-issue with "helmx nodes issue ${nodeId}")\n`,
+        );
+      }
+    } else if (control !== undefined) {
       reportReady(control, pendingActivation, registered ? 'registered' : 'starting');
     } else if (!json) {
       io.out(

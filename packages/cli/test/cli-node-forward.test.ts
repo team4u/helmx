@@ -70,7 +70,7 @@ test('nodes forward: POST creates forward with exact body mapping; unexpected st
   assert.ok(del !== undefined, 'should explicitly DELETE forward after stream drop')
 })
 
-test('nodes forward: bare target port defaults to 127.0.0.1; IPv6 bracketed listen address parsed', { timeout: 60_000 }, async (t) => {
+test('nodes forward: bare listen port defaults listenHost to 127.0.0.1; bare target port defaults targetHost to 127.0.0.1; IPv6 bracketed listen address parsed', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helmx-cli-forward-')
   const hub = await startMockHub(
     {
@@ -79,27 +79,34 @@ test('nodes forward: bare target port defaults to 127.0.0.1; IPv6 bracketed list
         assert.deepEqual(body, { listenHost: '::1', listenPort: 19090, targetPort: 8080 })
         return { status: 201, body: { ...SESSION, nodeId: 'node-b', listenHost: '::1', listenPort: 19090, targetHost: '127.0.0.1', targetPort: 8080 } }
       },
+      'POST /api/nodes/node-bare/forward': (body) => {
+        assert.deepEqual(body, { listenHost: '127.0.0.1', listenPort: 18080, targetPort: 8080 })
+        return { status: 201, body: { ...SESSION, nodeId: 'node-bare', listenHost: '127.0.0.1', listenPort: 18080, targetHost: '127.0.0.1', targetPort: 8080 } }
+      },
       [`DELETE /api/nodes/forward/${SESSION.forwardId}`]: () => ({ status: 200, body: { ok: true } }),
     },
     { autoRegisterCleanup: t },
   )
   const result = await runCliCaptured(['nodes', 'forward', 'node-b', '[::1]:19090', '8080'], makeCliEnv(hub.url, dir))
   assert.equal(result.code, 0, 'IPv6 listen + default stopped terminal frame exits 0')
-  const post = hub.hits.find((h) => h.method === 'POST')
-  assert.ok(post !== undefined)
+  assert.match(result.out, /Hub host/)
+
+  const bare = await runCliCaptured(['nodes', 'forward', 'node-bare', '18080', '8080'], makeCliEnv(hub.url, dir))
+  assert.equal(bare.code, 0, `bare listen port should default to 127.0.0.1 (${bare.err})`)
+  assert.ok(hub.hits.some((h) => h.method === 'POST' && h.path === '/api/nodes/node-bare/forward'))
 })
 
-test('nodes forward: argument validation rejects missing positionals, bad ports, and bare listen port', { timeout: 60_000 }, async (t) => {
+test('nodes forward: argument validation rejects missing positionals and bad ports', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helmx-cli-forward-')
   const hub = await startMockHub({}, { autoRegisterCleanup: t })
   const env = makeCliEnv(hub.url, dir)
   for (const [argv, pattern] of [
     [['nodes', 'forward'], /missing node target|positional argument/],
-    // No nodeId and no --current (first arg is listen address) -> missing node target.
+    // No nodeId and no --current (first arg is listen address or bare port) -> missing node target.
     [['nodes', 'forward', '127.0.0.1:18080', '8080'], /missing node target|--current/],
+    [['nodes', 'forward', '18080', '8080'], /missing node target|--current/],
     [['nodes', 'forward', 'node-a'], /missing.*listenHost/],
     [['nodes', 'forward', 'node-a', '127.0.0.1:18080'], /missing.*targetHost/],
-    [['nodes', 'forward', 'node-a', '18080', '8080'], /host:port|listen address/],
     [['nodes', 'forward', 'node-a', '127.0.0.1:0', '8080'], /port must be in 1\.\.65535/],
     [['nodes', 'forward', 'node-a', '127.0.0.1:99999', '8080'], /port must be in 1\.\.65535/],
     [['nodes', 'forward', 'node-a', '127.0.0.1:18080', 'abc'], /port number|host:port/],

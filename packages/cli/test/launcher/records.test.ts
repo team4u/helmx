@@ -29,8 +29,6 @@ import {
   resolvePayloadPackageName,
   resolveRegistryUrl,
   resolveBlockedCooldownMs,
-  resolveUpdateIntervalMs,
-  resolveUpdateTag,
 } from '../../src/launcher/layout.js';
 import { UsageError } from '../../src/launcher/io.js';
 
@@ -170,17 +168,10 @@ test('current entry access: engine record shape, entryPath extraction, explicit 
   assert.equal(engineRecord.entries['hub'], entryPath);
 });
 
-test('layout helpers: update interval, dist-tag channels, and their invalid forms', { timeout: 60_000 }, () => {
-  assert.equal(resolveUpdateIntervalMs({}), 15 * 60 * 1000);
-  assert.equal(resolveUpdateIntervalMs({ HELMX_HUB_UPDATE_INTERVAL_MS: '5000' }), 5000);
-  assert.throws(() => resolveUpdateIntervalMs({ HELMX_HUB_UPDATE_INTERVAL_MS: '0' }), /invalid HELMX_HUB_UPDATE_INTERVAL_MS/);
-  assert.throws(() => resolveUpdateIntervalMs({ HELMX_HUB_UPDATE_INTERVAL_MS: 'abc' }), /invalid HELMX_HUB_UPDATE_INTERVAL_MS/);
-
-  assert.equal(resolveUpdateTag({}), 'latest');
-  assert.equal(resolveUpdateTag({ HELMX_HUB_UPDATE_TAG: 'beta' }), 'beta');
-  assert.throws(() => resolveUpdateTag({ HELMX_HUB_UPDATE_TAG: '../evil' }), /invalid dist-tag/);
+test('layout helpers: dist-tag validation rejects version-like and invalid channels', { timeout: 60_000 }, () => {
   assert.throws(() => assertDistTag('1.2.3'), /looks like a version, not a dist-tag/);
   assert.throws(() => assertDistTag('foo bar'), /invalid dist-tag/);
+  assert.throws(() => assertDistTag('../evil'), /invalid dist-tag/);
   assert.equal(assertDistTag('beta-1.0'), 'beta-1.0');
 });
 

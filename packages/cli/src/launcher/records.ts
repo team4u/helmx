@@ -6,10 +6,8 @@
  * on ENOENT via the engine's `readStateJson`); writes are atomic (`0600`).
  */
 import fsp from 'node:fs/promises';
-import path from 'node:path';
-import process from 'node:process';
-import { atomicWriteJson } from '@helmx/env-io';
-import { readStateJson } from '@helmx/env-io';
+import { atomicWriteJson, parseLinuxStartTime, readProcessStartTime, readStateJson } from '@helmx/env-io';
+import { resolveInsideRelease } from '@helmx/env-io/hub-payload';
 import { isStrictSemver } from '@helmx/protocol';
 import { pathsOf } from './layout.js';
 
@@ -203,49 +201,10 @@ export function persistableLaunchConfig(config: EffectiveLaunchConfig): LaunchCo
 }
 
 // ---------------------------------------------------------------------------
-// pid identity proof — Linux /proc start time
+// pid identity proof & release path containment (delegated to @helmx/env-io)
 // ---------------------------------------------------------------------------
 
-/**
- * Parse the start-time field (22) out of a `/proc/<pid>/stat` line. The `comm` field may contain
- * spaces and parentheses, so fields are counted after the final `)`. `null` when the content does
- * not look like a stat line (explicit, never guessed).
- */
-export function parseLinuxStartTime(statContent: string): number | null {
-  const close = statContent.lastIndexOf(')');
-  if (close === -1) return null;
-  const fields = statContent.slice(close + 2).trim().split(/\s+/);
-  // fields[0] is `state` (field 3 overall); start time is field 22 → index 19.
-  const raw = fields[19];
-  if (raw === undefined || !/^\d+$/.test(raw)) return null;
-  return Number(raw);
-}
-
-/**
- * Current start time of `pid` on Linux, or `null` on platforms without `/proc` and when the pid
- * cannot be read. A recorded start time plus a matching current value proves the pid was not
- * reused; a mismatch proves it was.
- */
-export async function readProcessStartTime(pid: number): Promise<number | null> {
-  if (process.platform !== 'linux') return null;
-  try {
-    return parseLinuxStartTime(await fsp.readFile(`/proc/${pid}/stat`, 'utf8'));
-  } catch {
-    return null;
-  }
-}
-
-/** Resolve a release entry path relative to its release directory (traversal-checked). */
-export function resolveInsideRelease(releaseDir: string, relative: string, label: string): string {
-  if (typeof relative !== 'string' || relative === '') {
-    throw new Error(`${label} must be a non-empty relative path`);
-  }
-  const resolved = path.resolve(releaseDir, relative);
-  if (resolved !== releaseDir && !resolved.startsWith(releaseDir + path.sep)) {
-    throw new Error(`${label} escapes the release directory: ${relative} (resolved to ${resolved})`);
-  }
-  return resolved;
-}
+export { parseLinuxStartTime, readProcessStartTime, resolveInsideRelease };
 
 /** Entry existence check helper (explicit corruption errors instead of silent fallbacks). */
 export async function assertEntryExists(entryPath: string, context: string): Promise<void> {

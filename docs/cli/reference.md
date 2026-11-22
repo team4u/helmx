@@ -25,13 +25,15 @@
 
 ## 核心命令
 
-### 鉴权与全局
+### 鉴权、诊断与全局
 
-**`helmx setup [--password <str>]`** — 初始化管理员密码并登录（`POST /api/auth/setup`）。缺省 `--password` 且 stdin 非 TTY 时读一行。
+**`helmx setup [--password <str>]`** — 初始化管理员密码并登录（`POST /api/auth/setup`）。省略 `--password` 时在 TTY 下交互式隐藏输入，非 TTY 时从 stdin 读取首行。
 
-**`helmx login [--password <str>]`** — 登录并保存凭据（`POST /api/auth/login`）。
+**`helmx login [--password <str>]`** — 登录并保存凭据（`POST /api/auth/login`）。省略 `--password` 时同样支持 TTY 隐藏输入或 stdin 管道。
 
-**`helmx status`** — 查看鉴权状态与 Hub 连通性（`GET /api/auth/status`，无 token 也可探测）。
+**`helmx status`** — 查看鉴权状态、Hub 连通性与本机 Hub 快照（`GET /api/auth/status`，无 token 或 Hub 离线时仍如实展示本机 Hub 状态与日志路径）。
+
+**`helmx doctor`** — 无副作用只读自检：依次检查数据目录与 `cli-token` 权限（0600）、本机 Hub 安装/运行快照、Hub 连通与登录态、已配置可用模型与默认模型、以及注册计算节点在线状态。
 
 **`helmx events watch`** — 订阅全局 SSE（`GET /api/events`）。首帧 `snapshot` 含会话、待答提问、插件、UI 贡献与 `pluginDocs` 公共文档；此后逐条增量。`--json` 模式逐帧 NDJSON。
 
@@ -100,7 +102,7 @@
 
 | 标志 | 说明 |
 | :--- | :--- |
-| `--profile <id>` / `--title <str>` / `--tags <t>` | 会话归属与追溯 |
+| `--profile <id>` / `--node <id>` / `--title <str>` / `--tags <t>` | 会话归属、计算节点绑定与追溯 |
 | `--cwd <dir>` / `--model <m>` | 工作目录（绝对路径）/ 模型覆盖 |
 | `--timeout <ms>` | 等待超时（缺省无限等待）；超时后会话保留并给出 ID |
 | `--delete-on-success` | 仅在成功取得回答后删除会话；任一失败均保留诊断会话 |
@@ -137,19 +139,19 @@ PUT 为整体替换契约：update 走语义化标志时 CLI 先 GET 完整 Prof
 
 **`helmx providers list` / `helmx providers set --input <json>`** — 模型网关列表查看与整体替换（`ProviderConfig[]`，密钥置于环境变量，严禁写入配置体）。
 
-**`helmx credentials list / set <id> --value <str> / delete <id>`** — 服务端凭据管理。明文持久化于 `credentials.json` 并注册 SecretStash 脱敏，不提供明文回读。
+**`helmx credentials list / set <id> [--value <str>] / delete <id>`** — 服务端凭据管理。`set` 省略 `--value` 时在 TTY 下交互式隐藏输入或从 stdin 读取，避免密钥暴露在命令行参数中；明文持久化于 `credentials.json` 并注册 SecretStash 脱敏，不提供明文回读。
 
 ### 节点与跨节点执行
 
-**`helmx nodes list`** — 节点列表（id/kind/online/version/hostname/platform 与健康快照）。
+**`helmx nodes list`** — 节点列表（id/kind/online/version/hostname/platform/health 紧凑摘要）。
 
-**`helmx nodes issue <nodeId>`** — 签发接入令牌，明文 `<nodeId>:<secret>` 仅返回一次。
+**`helmx nodes issue <nodeId>`** — 签发接入令牌，明文 `<nodeId>:<secret>` 仅返回一次，并输出可直接复制的 `helmx-node start -d --hub ... --token ...` 命令（若 Hub 地址为回环地址则显式警告）。
 
 **`helmx nodes remove <nodeId>`** — 注销节点并断开连接。
 
 **`helmx nodes upgrade [<nodeId>] [--check] [--version <v>] [--registry <url>] [--force] [--current]`** — 检查或执行节点自升级（远端首次安装走 `npm install -g @helmx/node`）；`--current` 读 `HELMX_NODE_ID`；执行禁用客户端超时。
 
-**`helmx nodes forward [<nodeId> | --current] <listenHost:listenPort> [<targetHost>:]<targetPort>`** — 前台本地 TCP 端口转发：Hub 主机按需监听并将连接经节点隧道转发到目标节点视角的 `host:port`（目标 host 缺省 `127.0.0.1`），Ctrl-C 退出即关闭。
+**`helmx nodes forward [<nodeId> | --current] <[listenHost:]listenPort> <[targetHost:]targetPort>`** — 前台 **Hub 主机** TCP 端口转发：在 Hub 所在主机上监听（裸 `<listenPort>` 缺省绑定 `127.0.0.1`）并将连接经节点隧道转发到目标节点视角的 `host:port`（目标 host 缺省 `127.0.0.1`），Ctrl-C 退出即关闭。
 
 **`helmx nodes forwards` / `helmx nodes forward-inspect <forwardId>` / `helmx nodes forward-stop <forwardId>`** — 活动转发的列出、详情与停止（`forwardId` 形如 `fwd-<uuid>`）。
 
@@ -254,7 +256,7 @@ PUT 为整体替换契约：update 走语义化标志时 CLI 先 GET 完整 Prof
 
 **`helmx-node upgrade [--check] [--version <v>] [--registry <url>] [--force]`** — 自升级：`@helmx/node` 自升级 → 双阶段 SHA-512 校验 → 离线安装至不可变候选目录 → 金丝雀握手 → `upgradeCommit` 唯一提交点 → 失败自动回滚并写 `update-blocked.json` 隔离。
 
-**`helmx-node doctor`** — 无副作用只读自检：`node.json` 权限（0600）、工作空间磁盘写入权限、Hub 端口连通性、Herdr 本地 IPC 管道状态。
+**`helmx-node doctor`** — 无副作用只读自检：`node.json` 权限（0600）、运行账户权限（检测 root / 免密 sudo 风险）、Hub WebSocket 握手连通性与 RTT（不发送 `register`，不挤占在线会话）、Herdr 本地 IPC 管道状态。
 
 **`helmx-node service install / uninstall / status [--hub <url>]`** — 开机自启服务管理，跨平台映射：Linux `systemd --user`、macOS `launchd` Agent、Windows `schtasks`。
 

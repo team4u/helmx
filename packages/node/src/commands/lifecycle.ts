@@ -30,8 +30,17 @@ export async function connectCommand(ctx: CommandContext): Promise<number> {
   if (parsed.flags.get('once') === true) {
     const handle = await runNodeDaemonHandle({ hubUrl, token }, { dataDir });
     const ok = await handle.waitUntilRegistered(15_000);
+    const reason = ok ? undefined : handle.lastRejectReason();
     await handle.close();
-    emit({ ok, nodeId: identity.nodeId, hubUrl, dataDir, registered: ok });
+    if (parsed.json) {
+      emit({ ok, nodeId: identity.nodeId, hubUrl, dataDir, registered: ok, ...(reason !== undefined ? { reason } : {}) });
+    } else if (ok) {
+      io.out(`connected and registered: node ${identity.nodeId} -> ${hubUrl}\n`);
+    } else {
+      io.err(
+        `registration failed for node ${identity.nodeId} (${hubUrl})${reason !== undefined ? `: ${reason}` : ': timed out or Hub unreachable'}\n`,
+      );
+    }
     return ok ? 0 : 1;
   }
   return await runDaemonProcess({ io, json: parsed.json, dataDir, hubUrl, token, nodeId: identity.nodeId });
@@ -53,7 +62,19 @@ async function startDetached(ctx: CommandContext, token: string | undefined, hub
     readyState === 'registered'
       ? `daemon started and registered with Hub (pid ${pid})`
       : `daemon started (pid ${pid}), registration not yet complete: will keep reconnecting with backoff if Hub is unreachable; check logs at ${logPath}`;
-  emit({ ok: true, pid, dataDir, hubUrl: effectiveHub, nodeId: identity.nodeId, logPath, state: readyState, message });
+  if (parsed.json) {
+    emit({ ok: true, pid, dataDir, hubUrl: effectiveHub, nodeId: identity.nodeId, logPath, state: readyState, message });
+  } else {
+    io.out(
+      [
+        message,
+        `node:     ${identity.nodeId}`,
+        `hub:      ${effectiveHub}`,
+        `state:    ${readyState}`,
+        `log:      ${logPath}`,
+      ].join('\n') + '\n',
+    );
+  }
   return 0;
 }
 
@@ -108,9 +129,17 @@ export async function startCommand(ctx: CommandContext): Promise<number> {
 }
 
 export async function stopCommand(ctx: CommandContext): Promise<number> {
-  const { io, dataDir, emit } = ctx;
+  const { io, parsed, dataDir, emit } = ctx;
   const stopped = await stopDaemon(io, dataDir);
-  emit({ ok: true, stopped: true, outcome: stopped.outcome, pid: stopped.pid, dataDir });
+  if (parsed.json) {
+    emit({ ok: true, stopped: true, outcome: stopped.outcome, pid: stopped.pid, dataDir });
+  } else {
+    io.out(
+      stopped.outcome === 'stale'
+        ? `daemon was not running (removed stale pid ${stopped.pid})\n`
+        : `daemon pid ${stopped.pid} stopped\n`,
+    );
+  }
   return 0;
 }
 
@@ -119,7 +148,7 @@ export async function restartCommand(ctx: CommandContext): Promise<number> {
   const hubUrl = await resolveHubUrl(io, parsed, false);
   const identity = await readNodeIdentityStrict(dataDir);
   const effectiveHub = hubUrl !== '' ? hubUrl : identity.hubUrl ?? '';
-  if (effectiveHub === '') throw new UsageError('restart requires a bound Hub URL (run helmx-node connect first)', 'missing_identity');
+  if (effectiveHub === '') throw new UsageError('restart requires a bound Hub URL (run helmx-node start -d --hub <url> --token <token> first)', 'missing_identity');
   const previous = await readPidRecord(dataDir);
   let previousPid: number | null = null;
   if (previous !== null) {
@@ -128,28 +157,38 @@ export async function restartCommand(ctx: CommandContext): Promise<number> {
     await stopDaemon(io, dataDir);
   }
   const { pid, logPath, readyState } = await startDaemon(io, dataDir, effectiveHub);
-  emit({
-    ok: true,
-    pid,
-    dataDir,
-    hubUrl: effectiveHub,
-    nodeId: identity.nodeId,
-    logPath,
-    state: readyState,
-    ...(previousPid !== null ? { previousPid } : {}),
-  });
+  if (parsed.json) {
+    emit({
+      ok: true,
+      pid,
+      dataDir,
+      hubUrl: effectiveHub,
+      nodeId: identity.nodeId,
+      logPath,
+      state: readyState,
+      ...(previousPid !== null ? { previousPid } : {}),
+    });
+  } else {
+    const lines = [
+      ...(previousPid !== null ? [`stopped previous daemon (pid ${previousPid})`] : ['no previous daemon was running']),
+      `started daemon (pid ${pid}, node ${identity.nodeId}, state ${readyState})`,
+      `hub:      ${effectiveHub}`,
+      `log:      ${logPath}`,
+    ];
+    io.out(`${lines.join('\n')}\n`);
+  }
   return 0;
 }
 
 export async function statusCommand(ctx: CommandContext): Promise<number> {
-  const { io, dataDir, emit } = ctx;
+  const { io, parsed, dataDir, emit } = ctx;
   const { readNodeIdentity } = await import('../daemon/index.js');
   const identity = await readNodeIdentity(dataDir);
   const daemon = await statusDaemon(io, dataDir);
   // Version priority: live daemon control-channel report -> staged current.json -> package.json.
   const { resolveEffectiveNodeVersion } = await import('../daemon/upgrader.js');
   const version = daemon.version ?? (await resolveEffectiveNodeVersion(dataDir));
-  emit({
+  const payload = {
     bound: identity !== null,
     ...(identity !== null ? { nodeId: identity.nodeId, hubUrl: identity.hubUrl ?? null } : {}),
     dataDir,
@@ -159,6 +198,25 @@ export async function statusCommand(ctx: CommandContext): Promise<number> {
     ...(daemon.state !== undefined ? { state: daemon.state } : {}),
     ...(daemon.pidStale === true ? { pidStale: true } : {}),
     ...(daemon.detail !== undefined ? { detail: daemon.detail } : {}),
-  });
+  };
+  if (parsed.json) {
+    emit(payload);
+    return 0;
+  }
+  const processLine =
+    daemon.pid === null
+      ? 'not running'
+      : daemon.pidAlive
+        ? `running (pid ${daemon.pid}, state ${daemon.state ?? 'unknown'})`
+        : `not running (stale pid ${daemon.pid})`;
+  const lines = [
+    `identity: ${identity !== null ? `bound (nodeId=${identity.nodeId})` : 'not bound'}`,
+    ...(identity?.hubUrl ? [`hub:      ${identity.hubUrl}`] : []),
+    `daemon:   ${processLine}`,
+    `version:  ${version}`,
+    `dataDir:  ${dataDir}`,
+    ...(daemon.detail !== undefined ? [`detail:   ${daemon.detail}`] : []),
+  ];
+  io.out(`${lines.join('\n')}\n`);
   return 0;
 }

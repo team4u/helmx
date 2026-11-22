@@ -9,13 +9,13 @@
  * (`/api/hub-update`) and applied by `helmx update` or the Web UI.
  */
 import { readCurrentRelease, readBlockedRelease } from '@helmx/env-io';
+import type { HubUpdateCore } from '@helmx/env-io/hub-payload';
 import { assertDistTag, pathsOf, resolvePayloadPackageName, resolveRegistryUrl } from './layout.js';
 import { readLaunchConfig, readPidRecord, resolveEffectiveLaunchConfig } from './records.js';
-import { readRunningHub, startHub, stopHubGraceful, withLifecycleLock } from './process.js';
+import { readRunningHub, startHub, stopHubGraceful } from './process.js';
 import { checkHubUpgrade, performHubUpdate } from './update.js';
 import { runHubForeground } from './run.js';
 import { describeActivityCounts } from './activity.js';
-import type { UpdateCore } from './update-core.js';
 import { UsageError, isAliveOf, type LauncherIo } from './io.js';
 
 export interface CommandContext {
@@ -23,7 +23,7 @@ export interface CommandContext {
   root: string;
   /** Test seams: fake registry fetch and a port-shaped update-core fake (no registry/npm). */
   fetchFn?: typeof fetch;
-  core?: UpdateCore;
+  core?: HubUpdateCore;
 }
 
 export interface CommandFlags {
