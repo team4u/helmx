@@ -11,14 +11,13 @@
  */
 import type { Profile } from '@helmx/protocol'
 import { CliError } from '../errors.js'
-import { flagValue, parseFlags, type FlagSpec } from '../args.js'
+import { flagValue, type FlagSpec } from '../args.js'
 import { printTableColumns } from '../output.js'
 import type { CommandContext, CommandSpec } from './shared.js'
 import type { HubClient } from '../hub-client.js'
 import {
   assertNoExtraPositionals,
   coerceMetaFlag,
-  parseNoFlags,
   printResult,
   readTextFileFlag,
   requirePositional,
@@ -48,8 +47,6 @@ const semanticFlags: FlagSpec[] = [
   { name: 'starters', type: 'json', help: 'blank conversation starter prompts JSON array (e.g. \'[{"label":"Weekly report","prompt":"..."}]\', max 6 items; [] clears to defaults)' },
   { name: 'restrict-to-cwd', type: 'boolean', help: 'restrict file tools (read/write/edit/register_artifact) and subagent cwd to the conversation working directory (guardrail, not an OS sandbox; --restrict-to-cwd=false disables)' },
 ]
-
-const PARSE_FLAGS_SPEC = semanticFlags.map((f) => ({ ...f }))
 
 /** Whether any semantic flag (excluding --input) was provided. */
 function hasSemanticFlags(flags: Map<string, unknown>): boolean {
@@ -167,7 +164,6 @@ export function profilesCommands(): CommandSpec[] {
     path: ['profiles', 'list'],
     description: 'List Profiles (GET /api/profiles)',
     async run(ctx: CommandContext) {
-      parseNoFlags(ctx)
       const hub = await ctx.hub()
       const list = await hub.get<Profile[]>('/api/profiles')
       if (ctx.json || !Array.isArray(list)) {
@@ -189,8 +185,7 @@ export function profilesCommands(): CommandSpec[] {
     description: 'Get a Profile (GET /api/profiles/:id)',
     positional: '<id>',
     async run(ctx: CommandContext) {
-      const parsed = parseFlags([], ctx.args)
-      const id = requirePositional(parsed.positionals, 0, 'id')
+      const id = requirePositional(ctx.positionals, 0, 'id')
       const hub = await ctx.hub()
       printResult(ctx, await hub.get<Profile>(`/api/profiles/${encodeURIComponent(id)}`))
     },
@@ -202,20 +197,19 @@ export function profilesCommands(): CommandSpec[] {
     flags: semanticFlags,
     positional: '[id]',
     async run(ctx: CommandContext) {
-      const parsed = parseFlags(PARSE_FLAGS_SPEC, ctx.args)
-      const id = parsed.positionals[0]
-      assertNoExtraPositionals(parsed.positionals, 1)
-      validateSkillsFlags(parsed.flags)
-      validateStartersFlag(parsed.flags)
-      const hasInput = parsed.flags.has('input')
-      if (!hasInput && !hasSemanticFlags(parsed.flags)) {
+      const id = ctx.positionals[0]
+      assertNoExtraPositionals(ctx.positionals, 1)
+      validateSkillsFlags(ctx.flags)
+      validateStartersFlag(ctx.flags)
+      const hasInput = ctx.flags.has('input')
+      if (!hasInput && !hasSemanticFlags(ctx.flags)) {
         throw new CliError(
           'no fields provided: pass --input <json> or semantic flags (--name/--model/--node/--cwd/--system[-file]/--skills/--all-skills/--starters/--restrict-to-cwd) (profiles create)',
           'missing_update_fields',
         )
       }
-      const body: Record<string, unknown> = hasInput ? coerceMetaFlag(parsed.flags.get('input'), 'input') : {}
-      await applySemanticFlags(parsed.flags, body)
+      const body: Record<string, unknown> = hasInput ? coerceMetaFlag(ctx.flags.get('input'), 'input') : {}
+      await applySemanticFlags(ctx.flags, body)
       if (id !== undefined) {
         if (typeof body['id'] === 'string' && body['id'] !== id) {
           throw new CliError(`positional id "${id}" does not match id "${String(body['id'])}" in --input`, 'invalid_flag_value')
@@ -233,13 +227,12 @@ export function profilesCommands(): CommandSpec[] {
     flags: semanticFlags,
     positional: '<id>',
     async run(ctx: CommandContext) {
-      const parsed = parseFlags(PARSE_FLAGS_SPEC, ctx.args)
-      const id = requirePositional(parsed.positionals, 0, 'id')
-      assertNoExtraPositionals(parsed.positionals, 1)
-      validateSkillsFlags(parsed.flags)
-      validateStartersFlag(parsed.flags)
-      const hasInput = parsed.flags.has('input')
-      const semantic = hasSemanticFlags(parsed.flags)
+      const id = requirePositional(ctx.positionals, 0, 'id')
+      assertNoExtraPositionals(ctx.positionals, 1)
+      validateSkillsFlags(ctx.flags)
+      validateStartersFlag(ctx.flags)
+      const hasInput = ctx.flags.has('input')
+      const semantic = hasSemanticFlags(ctx.flags)
       if (!hasInput && !semantic) {
         throw new CliError(
           'no fields provided: pass --input <json> or semantic flags (--name/--model/--node/--cwd/--system[-file]/--skills/--all-skills/--starters/--restrict-to-cwd) (profiles update)',
@@ -251,11 +244,11 @@ export function profilesCommands(): CommandSpec[] {
       if (semantic) {
         // Full-replacement contract: GET and merge first so untouched fields (nodeId/cwd/model/tags/runtime...) are preserved
         body = await fetchProfileBase(hub, id)
-        if (hasInput) Object.assign(body, coerceMetaFlag(parsed.flags.get('input'), 'input'))
-        await applySemanticFlags(parsed.flags, body)
+        if (hasInput) Object.assign(body, coerceMetaFlag(ctx.flags.get('input'), 'input'))
+        await applySemanticFlags(ctx.flags, body)
       } else {
         // --input alone: explicit full replacement (caller guarantees completeness)
-        body = coerceMetaFlag(parsed.flags.get('input'), 'input')
+        body = coerceMetaFlag(ctx.flags.get('input'), 'input')
       }
       body['id'] = id
       printResult(ctx, await hub.put<Profile>(`/api/profiles/${encodeURIComponent(id)}`, body))
@@ -267,8 +260,7 @@ export function profilesCommands(): CommandSpec[] {
     description: 'Delete a Profile (DELETE /api/profiles/:id)',
     positional: '<id>',
     async run(ctx: CommandContext) {
-      const parsed = parseFlags([], ctx.args)
-      const id = requirePositional(parsed.positionals, 0, 'id')
+      const id = requirePositional(ctx.positionals, 0, 'id')
       const hub = await ctx.hub()
       printResult(ctx, await hub.delete<unknown>(`/api/profiles/${encodeURIComponent(id)}`))
     },

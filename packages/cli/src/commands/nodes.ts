@@ -1,5 +1,5 @@
 /**
- * Compute node management commands (Hub side): nodes list / issue / remove / upgrade.
+ * Compute node management commands (Hub side): nodes list / issue / remove / upgrade / forward*.
  * Pure control-plane API, separate from `helmx-node` (the managed machine daemon).
  */
 import { CliError } from '../errors.js'
@@ -10,11 +10,12 @@ import type {
   NodeUpgradeCheckResult,
   NodeUpgradeResult,
 } from '@helmx/protocol'
-import { flagValue, parseFlags, type FlagSpec } from '../args.js'
+import { flagValue, type FlagSpec } from '../args.js'
 import type { Io } from '../options.js'
-import type { CommandContext, CommandSpec } from './shared.js'
-import { assertNoExtraPositionals, parseNoFlags, printResult, requirePositional } from './shared.js'
 import { printTableColumns, printText } from '../output.js'
+import { runWithSignalAbort, type StreamRunResult } from '../stream.js'
+import type { CommandContext, CommandSpec } from './shared.js'
+import { assertNoExtraPositionals, printResult, requirePositional } from './shared.js'
 
 function formatGiB(bytes: number): string {
   const gib = bytes / (1024 ** 3)
@@ -53,6 +54,18 @@ function printNodesTable(io: Io, nodes: NodeInfo[]): void {
     { label: 'hostname', value: (n) => n.hostname ?? '' },
     { label: 'platform', value: (n) => n.platform ?? '' },
     { label: 'health', value: (n) => formatNodeHealth(n) },
+  ])
+}
+
+function printForwardsTable(io: Io, forwards: NodeForwardSession[]): void {
+  printTableColumns(io, forwards, [
+    { label: 'forwardId', value: (f) => f.forwardId },
+    { label: 'node', value: (f) => f.nodeId },
+    { label: 'listen', value: (f) => f.listenHost },
+    { label: 'port', value: (f) => String(f.listenPort) },
+    { label: 'target', value: (f) => f.targetHost },
+    { label: 'port', value: (f) => String(f.targetPort) },
+    { label: 'active', value: (f) => String(f.activeConnections) },
   ])
 }
 
@@ -116,50 +129,28 @@ function printUpgradeResult(io: Io, nodeId: string, result: NodeUpgradeResult): 
   ].join('\n'))
 }
 
-/** Validate upgrade check response shape (honesty rule: reject invalid responses explicitly without guessing). */
-function requireUpgradeCheckResult(nodeId: string, value: unknown): NodeUpgradeCheckResult {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-    throw new CliError('Hub upgrade check response must be an object', 'invalid_response')
-  }
-  const v = value as Record<string, unknown>
+function printForwardDetail(io: Io, forward: NodeForwardSession): void {
+  const lines = [
+    `Forward ${forward.forwardId}`,
+    `Listening ${forward.listenHost}:${forward.listenPort} -> node ${forward.nodeId} ${forward.targetHost}:${forward.targetPort}`,
+    `Active connections ${forward.activeConnections} (total ${forward.totalConnections})`,
+  ]
+  if (forward.lastError !== undefined) lines.push(`Last error ${forward.lastError}`)
+  printText(io, lines.join('\n'))
+}
+
+/** Minimal guard for upgrade check fields consumed directly by human formatting. */
+function requireUpgradeCheckFields(value: unknown): NodeUpgradeCheckResult {
+  const v = value as Partial<NodeUpgradeCheckResult> | null | undefined
   if (
-    typeof v['currentVersion'] !== 'string' ||
-    typeof v['latestVersion'] !== 'string' ||
-    typeof v['updateAvailable'] !== 'boolean'
+    !v || typeof v !== 'object' || Array.isArray(v) ||
+    typeof v.currentVersion !== 'string' ||
+    typeof v.latestVersion !== 'string' ||
+    typeof v.updateAvailable !== 'boolean'
   ) {
     throw new CliError('Hub upgrade check response is missing fields (currentVersion/latestVersion/updateAvailable)', 'invalid_response')
   }
-  const blocked = v['blocked']
-  if (
-    blocked !== undefined &&
-    (blocked === null || typeof blocked !== 'object' || Array.isArray(blocked) ||
-      typeof (blocked as Record<string, unknown>)['version'] !== 'string' ||
-      typeof (blocked as Record<string, unknown>)['reason'] !== 'string' ||
-      typeof (blocked as Record<string, unknown>)['at'] !== 'string')
-  ) {
-    throw new CliError(`node ${nodeId} upgrade check blocked field is invalid`, 'invalid_response')
-  }
-  return value as NodeUpgradeCheckResult
-}
-
-/** Validate upgrade result response shape. */
-function requireUpgradeResult(value: unknown): NodeUpgradeResult {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-    throw new CliError('Hub upgrade response must be an object', 'invalid_response')
-  }
-  const v = value as Record<string, unknown>
-  if (
-    typeof v['ok'] !== 'boolean' ||
-    typeof v['previousVersion'] !== 'string' ||
-    typeof v['targetVersion'] !== 'string' ||
-    typeof v['upgraded'] !== 'boolean'
-  ) {
-    throw new CliError('Hub upgrade response is missing fields (ok/previousVersion/targetVersion/upgraded)', 'invalid_response')
-  }
-  if (v['pid'] !== undefined && (typeof v['pid'] !== 'number' || !Number.isInteger(v['pid']) || (v['pid'] as number) <= 0)) {
-    throw new CliError('Hub upgrade response has invalid pid', 'invalid_response')
-  }
-  return value as NodeUpgradeResult
+  return v as NodeUpgradeCheckResult
 }
 
 /** Flag specs for nodes upgrade. */
@@ -220,63 +211,13 @@ function parseEndpoint(raw: string, what: string, allowBarePort: boolean): { hos
   return { host, port }
 }
 
-/** Validate forward session shape returned by Hub (honesty rule: reject invalid responses explicitly). */
-function requireNodeForwardSession(value: unknown, what: string): NodeForwardSession {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-    throw new CliError(`${what} must be an object`, 'invalid_response')
+function requireForwardId(positionals: readonly string[]): string {
+  const forwardId = requirePositional(positionals, 0, 'forwardId')
+  assertNoExtraPositionals(positionals, 1)
+  if (!/^fwd-[0-9a-f-]{36}$/.test(forwardId)) {
+    throw new CliError('forwardId must be in fwd-<uuid> format', 'invalid_id')
   }
-  const v = value as Record<string, unknown>
-  if (
-    typeof v['forwardId'] !== 'string' ||
-    typeof v['nodeId'] !== 'string' ||
-    typeof v['listenHost'] !== 'string' ||
-    typeof v['listenPort'] !== 'number' ||
-    typeof v['targetHost'] !== 'string' ||
-    typeof v['targetPort'] !== 'number' ||
-    typeof v['activeConnections'] !== 'number' ||
-    typeof v['totalConnections'] !== 'number'
-  ) {
-    throw new CliError(`${what} is missing or has invalid fields (forwardId/nodeId/listen*/target*/activeConnections/totalConnections)`, 'invalid_response')
-  }
-  return value as NodeForwardSession
-}
-
-/** Fixed columns for nodes forwards in human mode. */
-const FORWARD_COLUMNS: ReadonlyArray<{ key: keyof NodeForwardSession; label: string }> = [
-  { key: 'forwardId', label: 'forwardId' },
-  { key: 'nodeId', label: 'node' },
-  { key: 'listenHost', label: 'listen' },
-  { key: 'listenPort', label: 'port' },
-  { key: 'targetHost', label: 'target' },
-  { key: 'targetPort', label: 'port' },
-  { key: 'activeConnections', label: 'active' },
-]
-
-function printForwardsTable(io: Io, forwards: NodeForwardSession[]): void {
-  if (forwards.length === 0) {
-    io.out('(empty)\n')
-    return
-  }
-  const rows = forwards.map((f) => FORWARD_COLUMNS.map(({ key }) => {
-    const value = f[key]
-    return value === undefined ? '' : String(value)
-  }))
-  const widths = FORWARD_COLUMNS.map(({ label }, i) => Math.max(label.length, ...rows.map((r) => r[i]!.length)))
-  io.out(FORWARD_COLUMNS.map(({ label }, i) => label.padEnd(widths[i]!)).join('  ') + '\n')
-  io.out(widths.map((w) => '-'.repeat(w)).join('  ') + '\n')
-  for (const row of rows) {
-    io.out(row.map((cell, i) => cell.padEnd(widths[i]!)).join('  ') + '\n')
-  }
-}
-
-function printForwardDetail(io: Io, forward: NodeForwardSession): void {
-  const lines = [
-    `Forward ${forward.forwardId}`,
-    `Listening ${forward.listenHost}:${forward.listenPort} -> node ${forward.nodeId} ${forward.targetHost}:${forward.targetPort}`,
-    `Active connections ${forward.activeConnections} (total ${forward.totalConnections})`,
-  ]
-  if (forward.lastError !== undefined) lines.push(`Last error ${forward.lastError}`)
-  printText(io, lines.join('\n'))
+  return forwardId
 }
 
 export function nodesCommands(): CommandSpec[] {
@@ -286,15 +227,11 @@ export function nodesCommands(): CommandSpec[] {
     path: ['nodes', 'list'],
     description: 'List compute nodes, online status, and versions (GET /api/nodes)',
     async run(ctx: CommandContext) {
-      parseNoFlags(ctx)
       const hub = await ctx.hub()
       const nodes = await hub.get<NodeInfo[]>('/api/nodes')
       if (!Array.isArray(nodes)) throw new CliError('Hub node list must be an array', 'invalid_response')
-      if (ctx.json) {
-        printResult(ctx, nodes)
-        return
-      }
-      printNodesTable(ctx.io, nodes)
+      if (ctx.json) printResult(ctx, nodes)
+      else printNodesTable(ctx.io, nodes)
     },
   })
 
@@ -303,19 +240,15 @@ export function nodesCommands(): CommandSpec[] {
     description: 'Issue a node access token (POST /api/nodes/issue; plaintext token returned once)',
     positional: '<nodeId>',
     async run(ctx: CommandContext) {
-      const parsed = parseFlags([], ctx.args)
-      const nodeId = requirePositional(parsed.positionals, 0, 'nodeId')
-      assertNoExtraPositionals(parsed.positionals, 1)
+      const nodeId = requirePositional(ctx.positionals, 0, 'nodeId')
+      assertNoExtraPositionals(ctx.positionals, 1)
       const hub = await ctx.hub()
       const issued = await hub.post<NodeIssuedToken>('/api/nodes/issue', { nodeId })
       if (!issued || typeof issued !== 'object' || issued.nodeId !== nodeId || typeof issued.token !== 'string' || !issued.token.startsWith(`${nodeId}:`)) {
         throw new CliError('Hub issue response is missing a valid node token', 'invalid_response')
       }
-      if (ctx.json) {
-        printResult(ctx, issued)
-        return
-      }
-      printIssuedToken(ctx.io, issued, hub.baseUrl)
+      if (ctx.json) printResult(ctx, issued)
+      else printIssuedToken(ctx.io, issued, hub.baseUrl)
     },
   })
 
@@ -324,9 +257,8 @@ export function nodesCommands(): CommandSpec[] {
     description: 'Remove a managed node and disconnect it immediately (DELETE /api/nodes/:id)',
     positional: '<nodeId>',
     async run(ctx: CommandContext) {
-      const parsed = parseFlags([], ctx.args)
-      const nodeId = requirePositional(parsed.positionals, 0, 'nodeId')
-      assertNoExtraPositionals(parsed.positionals, 1)
+      const nodeId = requirePositional(ctx.positionals, 0, 'nodeId')
+      assertNoExtraPositionals(ctx.positionals, 1)
       const hub = await ctx.hub()
       printResult(ctx, await hub.delete<unknown>(`/api/nodes/${encodeURIComponent(nodeId)}`))
     },
@@ -338,13 +270,12 @@ export function nodesCommands(): CommandSpec[] {
     flags: [...UPGRADE_FLAGS],
     positional: '[<nodeId>]',
     async run(ctx: CommandContext) {
-      const parsed = parseFlags(UPGRADE_FLAGS, ctx.args)
-      assertNoExtraPositionals(parsed.positionals, 1)
-      const nodeId = resolveNodeTarget(parsed.flags, parsed.positionals[0], ctx.env)
-      const check = parsed.flags.get('check') === true
-      const version = flagValue<string>(parsed.flags, 'version')
-      const registry = flagValue<string>(parsed.flags, 'registry')
-      const force = parsed.flags.get('force') === true
+      assertNoExtraPositionals(ctx.positionals, 1)
+      const nodeId = resolveNodeTarget(ctx.flags, ctx.positionals[0], ctx.env)
+      const check = ctx.flags.get('check') === true
+      const version = flagValue<string>(ctx.flags, 'version')
+      const registryUrl = flagValue<string>(ctx.flags, 'registry')
+      const force = ctx.flags.get('force') === true
       // Mutual exclusion: --check is read-only and cannot be combined with upgrade execution flags.
       if (check && version !== undefined) {
         throw new CliError('--check and --version are mutually exclusive (cannot specify a target version when checking)', 'invalid_flag_value')
@@ -352,12 +283,10 @@ export function nodesCommands(): CommandSpec[] {
       if (check && force) {
         throw new CliError('--check and --force are mutually exclusive (check does not execute an upgrade)', 'invalid_flag_value')
       }
-      const registryUrl = registry !== undefined ? registry : undefined
       const hub = await ctx.hub()
       if (check) {
         const query = registryUrl !== undefined ? `?registryUrl=${encodeURIComponent(registryUrl)}` : ''
-        const result = await hub.get<NodeUpgradeCheckResult>(`/api/nodes/${encodeURIComponent(nodeId)}/upgrade/check${query}`)
-        const checked = requireUpgradeCheckResult(nodeId, result)
+        const checked = requireUpgradeCheckFields(await hub.get<NodeUpgradeCheckResult>(`/api/nodes/${encodeURIComponent(nodeId)}/upgrade/check${query}`))
         if (ctx.json) printResult(ctx, checked)
         else printUpgradeCheck(ctx.io, nodeId, checked)
         return
@@ -370,11 +299,13 @@ export function nodesCommands(): CommandSpec[] {
       if (registryUrl !== undefined) body['registryUrl'] = registryUrl
       if (force) body['force'] = true
       // Upgrade drains in-flight commands and replaces the daemon; disable the default 30s client timeout.
-      const result = await hub.request<NodeUpgradeResult>('POST', `/api/nodes/${encodeURIComponent(nodeId)}/upgrade`, {
+      const upgraded = await hub.request<NodeUpgradeResult>('POST', `/api/nodes/${encodeURIComponent(nodeId)}/upgrade`, {
         ...(Object.keys(body).length > 0 ? { body } : {}),
         timeoutMs: 0,
       })
-      const upgraded = requireUpgradeResult(result)
+      if (!upgraded || typeof upgraded !== 'object' || typeof upgraded.ok !== 'boolean') {
+        throw new CliError('Hub upgrade response is invalid', 'invalid_response')
+      }
       if (!upgraded.ok) {
         // Honesty rule: HTTP 200 with ok:false (explicitly rejected by node) is a failure —
         // exit 1 and never print an incomplete result as exit code 0.
@@ -396,44 +327,24 @@ export function nodesCommands(): CommandSpec[] {
     ],
     positional: '[<nodeId>] <[listenHost:]listenPort> <[targetHost:]targetPort>',
     async run(ctx: CommandContext) {
-      const FORWARD_FLAGS: readonly FlagSpec[] = [
-        { name: 'current', type: 'boolean', help: 'read HELMX_NODE_ID as the target node' },
-      ]
-      const parsed = parseFlags(FORWARD_FLAGS, ctx.args)
       // Positional layout: [<nodeId>] <[listenHost:]listenPort> <[targetHost:]targetPort>.
       // Bare listenPort defaults listenHost to 127.0.0.1 on the Hub host.
-      const useCurrent = parsed.flags.get('current') === true
-      let nodeId: string
-      let listenIndex = 0
-      if (useCurrent) {
-        if (parsed.positionals.length >= 3) {
-          throw new CliError('nodeId and --current are mutually exclusive', 'invalid_flag_value')
-        }
-        const raw = ctx.env['HELMX_NODE_ID']
-        if (!raw || !raw.trim()) {
-          throw new CliError('--current requires HELMX_NODE_ID to be set', 'current_node_missing')
-        }
-        nodeId = raw.trim()
-        listenIndex = 0
-      } else {
-        const first = parsed.positionals[0]
-        const looksLikeEndpoint = first === undefined || first.includes(':') || /^\d+$/.test(first)
-        if (looksLikeEndpoint) {
-          throw new CliError('missing node target: provide <nodeId> or --current (reads HELMX_NODE_ID)', 'missing_node_target')
-        }
-        if (first.trim() === '') throw new CliError('nodeId must be a non-empty node ID', 'invalid_id')
-        nodeId = first
-        listenIndex = 1
-      }
-      const listenRaw = requirePositional(parsed.positionals, listenIndex, '[listenHost:]listenPort')
-      const targetRaw = requirePositional(parsed.positionals, listenIndex + 1, '[targetHost:]targetPort')
-      assertNoExtraPositionals(parsed.positionals, listenIndex + 2)
+      const useCurrent = ctx.flags.get('current') === true
+      const first = ctx.positionals[0]
+      const explicitNodeId = useCurrent
+        ? (ctx.positionals.length >= 3 ? first : undefined)
+        : (first === undefined || first.includes(':') || /^\d+$/.test(first) ? undefined : first)
+      const nodeId = resolveNodeTarget(ctx.flags, explicitNodeId, ctx.env)
+      const listenIndex = useCurrent ? 0 : 1
+      const listenRaw = requirePositional(ctx.positionals, listenIndex, '[listenHost:]listenPort')
+      const targetRaw = requirePositional(ctx.positionals, listenIndex + 1, '[targetHost:]targetPort')
+      assertNoExtraPositionals(ctx.positionals, listenIndex + 2)
       const listen = parseEndpoint(listenRaw, '<[listenHost:]listenPort>', true)
       const listenHost = listen.host ?? '127.0.0.1'
       const target = parseEndpoint(targetRaw, '<[targetHost:]targetPort>', true)
       const hub = await ctx.hub()
       // Create the forwarder (listener lives on the Hub host only for the duration of this command; Hub foreground lease auto-stops if the event stream is never attached).
-      const created = await hub.post<NodeForwardSession>(
+      const forward = await hub.post<NodeForwardSession>(
         `/api/nodes/${encodeURIComponent(nodeId)}/forward`,
         {
           listenHost,
@@ -442,7 +353,9 @@ export function nodesCommands(): CommandSpec[] {
           ...(target.host === undefined ? {} : { targetHost: target.host }),
         },
       )
-      const forward = requireNodeForwardSession(created, 'Hub forward create response')
+      if (!forward || typeof forward !== 'object' || typeof forward.forwardId !== 'string') {
+        throw new CliError('Hub forward create response is missing forwardId', 'invalid_response')
+      }
       const forwardId = forward.forwardId
 
       // Explicit stop: only tolerate already-removed (404 / not_found); rethrow other errors instead of falsely reporting cleanup success.
@@ -455,56 +368,39 @@ export function nodesCommands(): CommandSpec[] {
           })
       }
 
-      // Foreground signal handling: mark stopping and abort the event stream so the Promise finishes through finally cleanup cleanly
-      // without calling process.exit inside a signal callback (the runCli caller owns process exit).
-      const stopController = new AbortController()
-      let stopping = false
-      let cleanupError: unknown
-      const onSignal = (): void => {
-        if (stopping) return
-        stopping = true
-        stopController.abort()
-      }
-      process.once('SIGINT', onSignal)
-      process.once('SIGTERM', onSignal)
-
       let hubStopped = false
+      let cleanupError: unknown
       if (!ctx.json) {
         printText(ctx.io, [
           `Forwarding established on Hub host (${hub.baseUrl}): ${forward.listenHost}:${forward.listenPort} -> node ${nodeId} ${target.host ?? '127.0.0.1'}:${target.port}`,
           'Press Ctrl-C to exit and close forwarding.',
         ].join('\n'))
       }
+      let outcome: StreamRunResult
       try {
         // NDJSON event stream (acts as foreground lease holder): blocks until disconnected (Hub stopped / network drop / signal).
-        // Always recognize terminal states regardless of --json; forward signal to the streaming request.
-        await hub.streamNdjson(
-          'GET',
-          `/api/nodes/forward/${encodeURIComponent(forwardId)}/events`,
-          {
-            signal: stopController.signal,
-            onLine: (value: unknown) => {
-              const event = value as { type?: string; count?: number; message?: string }
-              if (event?.type === 'connection') {
-                if (ctx.json) ctx.io.out(`${JSON.stringify(value)}\n`)
-                else printText(ctx.io, `Connection established (active ${event.count ?? 0})`)
-              } else if (event?.type === 'error') {
-                if (ctx.json) ctx.io.out(`${JSON.stringify(value)}\n`)
-                else printText(ctx.io, `Forwarding error: ${event.message ?? 'unknown'}`)
-              } else if (event?.type === 'stopped') {
-                hubStopped = true
-                if (ctx.json) ctx.io.out(`${JSON.stringify(value)}\n`)
-                else printText(ctx.io, 'Hub stopped forwarding')
-              }
-            },
-          },
+        outcome = await runWithSignalAbort(
+          (stream) =>
+            hub.streamNdjson('GET', `/api/nodes/forward/${encodeURIComponent(forwardId)}/events`, {
+              signal: stream.signal,
+              onLine: (value: unknown) => {
+                const event = value as { type?: string; count?: number; message?: string }
+                if (event?.type === 'connection') {
+                  if (ctx.json) ctx.io.out(`${JSON.stringify(value)}\n`)
+                  else printText(ctx.io, `Connection established (active ${event.count ?? 0})`)
+                } else if (event?.type === 'error') {
+                  if (ctx.json) ctx.io.out(`${JSON.stringify(value)}\n`)
+                  else printText(ctx.io, `Forwarding error: ${event.message ?? 'unknown'}`)
+                } else if (event?.type === 'stopped') {
+                  hubStopped = true
+                  if (ctx.json) ctx.io.out(`${JSON.stringify(value)}\n`)
+                  else printText(ctx.io, 'Hub stopped forwarding')
+                }
+              },
+            }),
+          { swallowOnlyOnSignal: true },
         )
-      } catch (error) {
-        // Aborting the stream via signal is expected shutdown (proceeds through finally cleanup and exits 0).
-        if (!(stopping && error instanceof CliError && error.code === 'aborted')) throw error
       } finally {
-        process.removeListener('SIGINT', onSignal)
-        process.removeListener('SIGTERM', onSignal)
         try {
           await stopForward()
         } catch (error) {
@@ -518,7 +414,7 @@ export function nodesCommands(): CommandSpec[] {
           'forward_cleanup_failed',
         )
       }
-      if (stopping || hubStopped) return
+      if (outcome.cancelled || hubStopped) return
       // Event stream ended unexpectedly without a terminal frame (network drop / Hub crash): exit non-zero honestly.
       throw new CliError('forwarding event stream ended (Hub may have stopped forwarding)', 'forward_stream_ended')
     },
@@ -528,16 +424,11 @@ export function nodesCommands(): CommandSpec[] {
     path: ['nodes', 'forwards'],
     description: 'List active port forwards (GET /api/nodes/forward)',
     async run(ctx: CommandContext) {
-      parseNoFlags(ctx)
       const hub = await ctx.hub()
       const forwards = await hub.get<NodeForwardSession[]>('/api/nodes/forward')
       if (!Array.isArray(forwards)) throw new CliError('Hub forward list must be an array', 'invalid_response')
-      const checked = forwards.map((f) => requireNodeForwardSession(f, 'Hub forward list item'))
-      if (ctx.json) {
-        printResult(ctx, checked)
-        return
-      }
-      printForwardsTable(ctx.io, checked)
+      if (ctx.json) printResult(ctx, forwards)
+      else printForwardsTable(ctx.io, forwards)
     },
   })
 
@@ -546,20 +437,11 @@ export function nodesCommands(): CommandSpec[] {
     description: 'Inspect port forward details (GET /api/nodes/forward/:forwardId)',
     positional: '<forwardId>',
     async run(ctx: CommandContext) {
-      const parsed = parseFlags([], ctx.args)
-      const forwardId = requirePositional(parsed.positionals, 0, 'forwardId')
-      assertNoExtraPositionals(parsed.positionals, 1)
-      if (!/^fwd-[0-9a-f-]{36}$/.test(forwardId)) {
-        throw new CliError('forwardId must be in fwd-<uuid> format', 'invalid_id')
-      }
+      const forwardId = requireForwardId(ctx.positionals)
       const hub = await ctx.hub()
       const detail = await hub.get<NodeForwardSession>(`/api/nodes/forward/${encodeURIComponent(forwardId)}`)
-      const checked = requireNodeForwardSession(detail, 'Hub forward details')
-      if (ctx.json) {
-        printResult(ctx, checked)
-        return
-      }
-      printForwardDetail(ctx.io, checked)
+      if (ctx.json) printResult(ctx, detail)
+      else printForwardDetail(ctx.io, detail)
     },
   })
 
@@ -568,12 +450,7 @@ export function nodesCommands(): CommandSpec[] {
     description: 'Stop port forwarding (DELETE /api/nodes/forward/:forwardId)',
     positional: '<forwardId>',
     async run(ctx: CommandContext) {
-      const parsed = parseFlags([], ctx.args)
-      const forwardId = requirePositional(parsed.positionals, 0, 'forwardId')
-      assertNoExtraPositionals(parsed.positionals, 1)
-      if (!/^fwd-[0-9a-f-]{36}$/.test(forwardId)) {
-        throw new CliError('forwardId must be in fwd-<uuid> format', 'invalid_id')
-      }
+      const forwardId = requireForwardId(ctx.positionals)
       const hub = await ctx.hub()
       printResult(ctx, await hub.delete<{ ok: boolean }>(`/api/nodes/forward/${encodeURIComponent(forwardId)}`))
     },

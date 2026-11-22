@@ -114,6 +114,39 @@ export class HubClient {
   }
 
   /**
+   * Perform a single Hub fetch with unified timeout / abort / unreachable error classification.
+   */
+  private async fetchHub(
+    where: string,
+    path: string,
+    init: RequestInit,
+    opts: { timeoutMs?: number; callerSignal?: AbortSignal; connectTimeoutLabel?: string } = {},
+  ): Promise<Response> {
+    try {
+      return await this.io.fetchImpl(`${this.endpoint.baseUrl}${path}`, {
+        ...init,
+        redirect: 'error',
+      })
+    } catch (err) {
+      if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+        if (opts.connectTimeoutLabel !== undefined) {
+          if (opts.callerSignal?.aborted === true) throw new CliError('cancelled', 'aborted')
+          throw new CliError(`${opts.connectTimeoutLabel} (${opts.timeoutMs ?? this.timeoutMs}ms): ${where}`, 'timeout')
+        }
+        if (err.name === 'TimeoutError') {
+          const ms = opts.timeoutMs !== undefined ? opts.timeoutMs : this.timeoutMs
+          throw new CliError(`request timed out (${ms}ms): ${where}`, 'timeout')
+        }
+        throw new CliError(`request cancelled: ${where}`, 'aborted')
+      }
+      throw new CliError(
+        `cannot connect to Hub (${this.endpoint.baseUrl}): ${err instanceof Error ? err.message : String(err)}`,
+        'hub_unreachable',
+      )
+    }
+  }
+
+  /**
    * JSON request; omits request body when body is undefined. timeoutMs=0 disables the default timeout
    * (for --wait long waits); any other value overrides the instance default.
    * auth: true (default) requires token; false forces anonymous; 'optional' attaches token if present
@@ -124,28 +157,17 @@ export class HubClient {
     if (opts.auth === 'optional') Object.assign(headers, this.authHeaders({}, true))
     else if (opts.auth !== false) Object.assign(headers, this.authHeaders())
     if (opts.body !== undefined) headers['content-type'] = 'application/json'
-    let response: Response
-    try {
-      response = await this.io.fetchImpl(`${this.endpoint.baseUrl}${path}`, {
+    const response = await this.fetchHub(
+      `${method} ${path}`,
+      path,
+      {
         method,
         headers,
         body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
         signal: this.signalFor(opts.timeoutMs, opts.signal),
-        redirect: 'error',
-      })
-    } catch (err) {
-      if (err instanceof Error && err.name === 'TimeoutError') {
-        const ms = opts.timeoutMs !== undefined ? opts.timeoutMs : this.timeoutMs
-        throw new CliError(`request timed out (${ms}ms): ${method} ${path}`, 'timeout')
-      }
-      if (err instanceof Error && err.name === 'AbortError') {
-        throw new CliError(`request cancelled: ${method} ${path}`, 'aborted')
-      }
-      throw new CliError(
-        `cannot connect to Hub (${this.endpoint.baseUrl}): ${err instanceof Error ? err.message : String(err)}`,
-        'hub_unreachable',
-      )
-    }
+      },
+      { timeoutMs: opts.timeoutMs },
+    )
     return this.parseEntity<T>(response, `${method} ${path}`)
   }
 
@@ -171,25 +193,10 @@ export class HubClient {
 
   /** Binary content download: returns the raw Response (already verified 2xx). */
   async raw(path: string, signal?: AbortSignal): Promise<Response> {
-    let response: Response
-    try {
-      response = await this.io.fetchImpl(`${this.endpoint.baseUrl}${path}`, {
-        headers: this.authHeaders(),
-        signal: this.signal(signal),
-        redirect: 'error',
-      })
-    } catch (err) {
-      if (err instanceof Error && err.name === 'TimeoutError') {
-        throw new CliError(`request timed out (${this.timeoutMs}ms): GET ${path}`, 'timeout')
-      }
-      if (err instanceof Error && err.name === 'AbortError') {
-        throw new CliError(`request cancelled: GET ${path}`, 'aborted')
-      }
-      throw new CliError(
-        `cannot connect to Hub (${this.endpoint.baseUrl}): ${err instanceof Error ? err.message : String(err)}`,
-        'hub_unreachable',
-      )
-    }
+    const response = await this.fetchHub(`GET ${path}`, path, {
+      headers: this.authHeaders(),
+      signal: this.signal(signal),
+    })
     if (!response.ok) throw await this.toCliError(response, `GET ${path}`)
     return response
   }
@@ -210,27 +217,12 @@ export class HubClient {
       'x-artifact-filename': encodeURIComponent(fileName),
       ...(mimeType !== undefined ? { 'x-artifact-mime-type': mimeType } : {}),
     })
-    let response: Response
-    try {
-      response = await this.io.fetchImpl(`${this.endpoint.baseUrl}${path}`, {
-        method: 'POST',
-        headers,
-        body: bytes as unknown as BodyInit,
-        signal: this.signal(undefined),
-        redirect: 'error',
-      })
-    } catch (err) {
-      if (err instanceof Error && err.name === 'TimeoutError') {
-        throw new CliError(`request timed out (${this.timeoutMs}ms): POST ${path}`, 'timeout')
-      }
-      if (err instanceof Error && err.name === 'AbortError') {
-        throw new CliError(`request cancelled: POST ${path}`, 'aborted')
-      }
-      throw new CliError(
-        `cannot connect to Hub (${this.endpoint.baseUrl}): ${err instanceof Error ? err.message : String(err)}`,
-        'hub_unreachable',
-      )
-    }
+    const response = await this.fetchHub(`POST ${path}`, path, {
+      method: 'POST',
+      headers,
+      body: bytes as unknown as BodyInit,
+      signal: this.signal(undefined),
+    })
     return this.parseEntity<ArtifactMetadata>(response, `POST ${path}`)
   }
 
@@ -289,24 +281,12 @@ export class HubClient {
   ): Promise<void> {
     const headers = this.authHeaders({ accept: 'application/x-ndjson' })
     if (opts.body !== undefined) headers['content-type'] = 'application/json'
-    let response: Response
-    try {
-      response = await this.io.fetchImpl(`${this.endpoint.baseUrl}${path}`, {
-        method,
-        headers,
-        body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
-        signal: opts.signal,
-        redirect: 'error',
-      })
-    } catch (err) {
-      if (err instanceof Error && err.name === 'AbortError') {
-        throw new CliError(`request cancelled: ${method} ${path}`, 'aborted')
-      }
-      throw new CliError(
-        `cannot connect to Hub (${this.endpoint.baseUrl}): ${err instanceof Error ? err.message : String(err)}`,
-        'hub_unreachable',
-      )
-    }
+    const response = await this.fetchHub(`${method} ${path}`, path, {
+      method,
+      headers,
+      body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+      signal: opts.signal,
+    })
     if (!response.ok) throw await this.toCliError(response, `${method} ${path}`)
     if (!response.body) {
       throw new CliError(`Hub did not return a streaming response body (${method} ${path})`, 'invalid_response')
@@ -382,19 +362,14 @@ export class HubClient {
     const callerAborted = (): boolean => listeners.signal?.aborted === true
     let response: Response
     try {
-      response = await this.io.fetchImpl(`${this.endpoint.baseUrl}${path}`, {
-        headers: this.authHeaders({ accept: 'text/event-stream' }),
-        signal: AbortSignal.any([connectController.signal, ...(listeners.signal ? [listeners.signal] : [])]),
-        redirect: 'error',
-      })
-    } catch (err) {
-      if (err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError')) {
-        if (callerAborted()) throw new CliError('cancelled', 'aborted')
-        throw new CliError(`connection timed out (${this.timeoutMs}ms): GET ${path}`, 'timeout')
-      }
-      throw new CliError(
-        `cannot connect to Hub (${this.endpoint.baseUrl}): ${err instanceof Error ? err.message : String(err)}`,
-        'hub_unreachable',
+      response = await this.fetchHub(
+        `GET ${path}`,
+        path,
+        {
+          headers: this.authHeaders({ accept: 'text/event-stream' }),
+          signal: AbortSignal.any([connectController.signal, ...(listeners.signal ? [listeners.signal] : [])]),
+        },
+        { callerSignal: listeners.signal, connectTimeoutLabel: 'connection timed out' },
       )
     } finally {
       clearTimeout(connectTimer)

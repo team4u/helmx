@@ -6,6 +6,8 @@ export type FlagType = 'string' | 'number' | 'boolean' | 'json'
 export interface FlagSpec {
   /** Flag name in kebab-case, e.g. 'expected-state-seq'. */
   name: string
+  /** Optional single-character short alias (e.g. 'd' for `-d`). */
+  short?: string
   type: FlagType
   required?: boolean
   /** Repeatable flag: collects each occurrence as a string into a final string[] (e.g. --set/--field). */
@@ -48,9 +50,28 @@ function coerce(spec: FlagSpec, raw: string): unknown {
  */
 export function parseFlags(specs: readonly FlagSpec[], argv: readonly string[]): ParsedArgs {
   const byName = new Map(specs.map((s) => [s.name, s] as const))
+  const byShort = new Map(specs.filter((s) => s.short !== undefined).map((s) => [s.short!, s] as const))
   const flags = new Map<string, unknown>()
   const positionals: string[] = []
   let i = 0
+  const assignValue = (spec: FlagSpec, label: string, inline: string | undefined): void => {
+    let raw = inline
+    if (raw === undefined) {
+      const next = argv[i + 1]
+      if (next === undefined || (next.startsWith('--') && next.length > 2)) {
+        throw new CliError(`${label} is missing a value`, 'missing_value')
+      }
+      raw = next
+      i += 1
+    }
+    if (spec.repeated) {
+      const list = (flags.get(spec.name) as string[] | undefined) ?? []
+      list.push(raw)
+      flags.set(spec.name, list)
+    } else {
+      flags.set(spec.name, coerce(spec, raw))
+    }
+  }
   while (i < argv.length) {
     const token = argv[i]!
     if (token === '--') {
@@ -70,31 +91,13 @@ export function parseFlags(specs: readonly FlagSpec[], argv: readonly string[]):
         if (inline === undefined || inline === 'true') flags.set(name, true)
         else if (inline === 'false') flags.set(name, false)
         else throw new CliError(`--${name} requires true/false, got "${inline}"`, 'invalid_flag_value')
-      } else if (spec.repeated) {
-        let raw = inline
-        if (raw === undefined) {
-          const next = argv[i + 1]
-          if (next === undefined || (next.startsWith('--') && next.length > 2)) {
-            throw new CliError(`--${name} is missing a value`, 'missing_value')
-          }
-          raw = next
-          i += 1
-        }
-        const list = (flags.get(name) as string[] | undefined) ?? []
-        list.push(raw)
-        flags.set(name, list)
       } else {
-        let raw = inline
-        if (raw === undefined) {
-          const next = argv[i + 1]
-          if (next === undefined || (next.startsWith('--') && next.length > 2)) {
-            throw new CliError(`--${name} is missing a value`, 'missing_value')
-          }
-          raw = next
-          i += 1
-        }
-        flags.set(name, coerce(spec, raw))
+        assignValue(spec, `--${name}`, inline)
       }
+    } else if (token.startsWith('-') && !token.startsWith('--') && token.length === 2 && byShort.has(token.slice(1))) {
+      const spec = byShort.get(token.slice(1))!
+      if (spec.type === 'boolean') flags.set(spec.name, true)
+      else assignValue(spec, `-${spec.short}`, undefined)
     } else {
       positionals.push(token)
     }

@@ -10,13 +10,17 @@ import type { HubClient } from '../hub-client.js'
 import type { Io } from '../options.js'
 import { printText, printValue } from '../output.js'
 import { credentialsPath, updateCliCredentials } from '../credentials.js'
-import { flagValue, parseFlags, type FlagSpec } from '../args.js'
+import { flagValue, type FlagSpec } from '../args.js'
 
 export interface CommandContext {
   io: Io
   env: NodeJS.ProcessEnv
   json: boolean
   args: string[]
+  /** Parsed command flags populated by the dispatcher from `CommandSpec.flags` (for static core commands). */
+  flags: Map<string, unknown>
+  /** Parsed positional arguments populated by the dispatcher (for static core commands). */
+  positionals: string[]
   dataDir: string
   /** CLI process working directory: sole base for resolving local relative paths (never silently switched by HELMX_CWD). */
   cwd: string
@@ -294,11 +298,6 @@ export function validateEnum(raw: unknown, values: readonly string[], flagName: 
     throw new CliError(`--${flagName} must be ${values.join('|')}, got "${String(raw)}"`, 'invalid_flag_value')
   }
   return raw
-}
-
-/** Shared parser for flagless commands (rejects all flags and positional arguments). */
-export function parseNoFlags(ctx: CommandContext): void {
-  parseFlags([], ctx.args)
 }
 
 // ---------------------------------------------------------------------------

@@ -2,7 +2,7 @@
 import type { ArtifactMetadata } from '@helmx/protocol'
 import path from 'node:path'
 import { CliError } from '../errors.js'
-import { flagValue, parseFlags } from '../args.js'
+import { flagValue } from '../args.js'
 import type { CommandContext, CommandSpec } from './shared.js'
 import {
   pathDetails,
@@ -27,8 +27,7 @@ export function artifactsCommands(): CommandSpec[] {
     flags: [...convFlags],
     positional: '[id]',
     async run(ctx: CommandContext) {
-      const parsed = parseFlags([{ name: 'current', type: 'boolean' }], ctx.args)
-      const id = resolveConversationTarget(parsed.flags, parsed.positionals[0], ctx.env)
+      const id = resolveConversationTarget(ctx.flags, ctx.positionals[0], ctx.env)
       const hub = await ctx.hub()
       printResult(ctx, await hub.get<ArtifactMetadata[]>(`/api/conversations/${id}/artifacts`))
     },
@@ -44,18 +43,10 @@ export function artifactsCommands(): CommandSpec[] {
     ],
     positional: '<filePath> [id]',
     async run(ctx: CommandContext) {
-      const parsed = parseFlags(
-        [
-          { name: 'current', type: 'boolean' },
-          { name: 'name', type: 'string' },
-          { name: 'mime-type', type: 'string' },
-        ],
-        ctx.args,
-      )
-      const filePath = requirePositional(parsed.positionals, 0, 'filePath', 'missing_file_path')
-      const id = resolveConversationTarget(parsed.flags, parsed.positionals[1], ctx.env)
-      if (parsed.positionals.length > 2) {
-        throw new CliError(`unexpected positional argument: ${parsed.positionals.slice(2).join(' ')}`, 'unexpected_positional')
+      const filePath = requirePositional(ctx.positionals, 0, 'filePath', 'missing_file_path')
+      const id = resolveConversationTarget(ctx.flags, ctx.positionals[1], ctx.env)
+      if (ctx.positionals.length > 2) {
+        throw new CliError(`unexpected positional argument: ${ctx.positionals.slice(2).join(' ')}`, 'unexpected_positional')
       }
       const fsp = await import('node:fs/promises')
       const { resolvedPath, sessionCwd } = resolveCallerPath(ctx, filePath)
@@ -81,8 +72,8 @@ export function artifactsCommands(): CommandSpec[] {
           pathDetails(filePath, resolvedPath, ctx, sessionCwd),
         )
       }
-      const fileName = flagValue<string>(parsed.flags, 'name') ?? path.basename(resolvedPath)
-      const mimeType = flagValue<string>(parsed.flags, 'mime-type')
+      const fileName = flagValue<string>(ctx.flags, 'name') ?? path.basename(resolvedPath)
+      const mimeType = flagValue<string>(ctx.flags, 'mime-type')
       const hub = await ctx.hub()
       const metadata = await hub.uploadArtifact(id, fileName, bytes, mimeType)
       printResult(ctx, metadata)
@@ -98,9 +89,8 @@ export function artifactsCommands(): CommandSpec[] {
     flags: [{ name: 'output', type: 'string', help: 'output file path for binary content (resolved relative to CLI cwd)' }],
     positional: '<id>',
     async run(ctx: CommandContext) {
-      const parsed = parseFlags([{ name: 'output', type: 'string' }], ctx.args)
-      const id = requirePositional(parsed.positionals, 0, 'id')
-      const output = flagValue<string>(parsed.flags, 'output')
+      const id = requirePositional(ctx.positionals, 0, 'id')
+      const output = flagValue<string>(ctx.flags, 'output')
       const hub = await ctx.hub()
       const response = await hub.raw(`/api/artifacts/${encodeURIComponent(id)}/content`)
       const contentType = response.headers.get('content-type') ?? ''

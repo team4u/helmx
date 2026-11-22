@@ -1,11 +1,10 @@
 /** Auth commands: setup / login / status. */
 import { existsSync } from 'node:fs'
 import type { AuthStatus } from '@helmx/protocol'
-import { parseFlags } from '../args.js'
 import { CliError } from '../errors.js'
 import type { LocalHubSnapshot } from '../launcher/index.js'
 import type { CommandContext, CommandSpec } from './shared.js'
-import { assertNoExtraPositionals, authAndSave, parseNoFlags, printResult, resolvePasswordFlag } from './shared.js'
+import { assertNoExtraPositionals, authAndSave, printResult, resolvePasswordFlag } from './shared.js'
 
 function formatLocalHubLines(snapshot: LocalHubSnapshot | null): string[] {
   const lines: string[] = []
@@ -38,9 +37,8 @@ export function authCommands(): CommandSpec[] {
     description: 'Initialize the admin password and log in (POST /api/auth/setup)',
     flags: [passwordFlag],
     async run(ctx: CommandContext) {
-      const parsed = parseFlags([{ name: 'password', type: 'string' }], ctx.args)
-      assertNoExtraPositionals(parsed.positionals, 0)
-      const password = await resolvePasswordFlag(ctx, parsed.flags)
+      assertNoExtraPositionals(ctx.positionals, 0)
+      const password = await resolvePasswordFlag(ctx, ctx.flags)
       await authAndSave(ctx, '/api/auth/setup', password)
     },
   })
@@ -50,9 +48,8 @@ export function authCommands(): CommandSpec[] {
     description: 'Log in and save credentials (POST /api/auth/login)',
     flags: [passwordFlag],
     async run(ctx: CommandContext) {
-      const parsed = parseFlags([{ name: 'password', type: 'string' }], ctx.args)
-      assertNoExtraPositionals(parsed.positionals, 0)
-      const password = await resolvePasswordFlag(ctx, parsed.flags)
+      assertNoExtraPositionals(ctx.positionals, 0)
+      const password = await resolvePasswordFlag(ctx, ctx.flags)
       await authAndSave(ctx, '/api/auth/login', password)
     },
   })
@@ -61,7 +58,6 @@ export function authCommands(): CommandSpec[] {
     path: ['status'],
     description: 'View authentication status (GET /api/auth/status) plus the local Hub lifecycle snapshot',
     async run(ctx: CommandContext) {
-      parseNoFlags(ctx)
       const { readLocalHubSnapshot, resolveInstallRoot } = await import('../launcher/index.js')
       const installRoot = resolveInstallRoot(ctx.env)
       const readSnapshot = async (): Promise<LocalHubSnapshot | null> =>

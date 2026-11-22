@@ -5,7 +5,7 @@
  */
 import type { ConversationInputResult, ConversationSummary } from '@helmx/protocol'
 import { CliError } from '../errors.js'
-import { flagValue, parseFlags, type FlagSpec } from '../args.js'
+import { flagValue, type FlagSpec } from '../args.js'
 import type { CommandContext, CommandSpec } from './shared.js'
 import { assertNoExtraPositionals, coerceTags, printPlainText, printResult } from './shared.js'
 
@@ -80,15 +80,14 @@ export function askCommands(): CommandSpec[] {
       flags: askFlags,
       positional: '[text]',
       async run(ctx: CommandContext) {
-        const parsed = parseFlags(askFlags, ctx.args)
-        assertNoExtraPositionals(parsed.positionals, 1)
-        const timeoutMs = flagValue<number>(parsed.flags, 'timeout')
+        assertNoExtraPositionals(ctx.positionals, 1)
+        const timeoutMs = flagValue<number>(ctx.flags, 'timeout')
         if (timeoutMs !== undefined && (!Number.isInteger(timeoutMs) || timeoutMs <= 0)) {
           throw new CliError(`--timeout must be a positive integer in milliseconds, got "${timeoutMs}"`, 'invalid_flag_value')
         }
         // prompt = positional arguments + piped stdin (read only when not a TTY; at least one non-whitespace part required)
         const stdinText = ctx.io.stdin.isTTY ? undefined : await ctx.io.stdin.readAll()
-        const prompt = combinePrompt(parsed.positionals[0], stdinText)
+        const prompt = combinePrompt(ctx.positionals[0], stdinText)
         if (prompt === '') {
           throw new CliError('missing prompt: provide <text> positional argument or pipe input via stdin', 'empty_input')
         }
@@ -102,10 +101,10 @@ export function askCommands(): CommandSpec[] {
           ['cwd', 'cwd'],
           ['model', 'model'],
         ] as const) {
-          const v = flagValue<string>(parsed.flags, flag)
+          const v = flagValue<string>(ctx.flags, flag)
           if (v !== undefined) createBody[key] = v
         }
-        const tags = flagValue<string>(parsed.flags, 'tags')
+        const tags = flagValue<string>(ctx.flags, 'tags')
         if (tags !== undefined) createBody.tags = coerceTags(tags)
         const hub = await ctx.hub()
         const created = await hub.post<ConversationSummary>('/api/conversations', createBody)
@@ -132,7 +131,7 @@ export function askCommands(): CommandSpec[] {
 
         // 3) Optional: delete conversation only after wait response validates; keep conversation and fail explicitly if deletion fails
         let deleted = false
-        if (parsed.flags.get('delete-on-success') === true) {
+        if (ctx.flags.get('delete-on-success') === true) {
           try {
             await hub.delete(`/api/conversations/${conversationId}`)
             deleted = true

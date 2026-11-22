@@ -10,8 +10,9 @@ import type {
   ConversationUpsertEvent,
 } from '@helmx/protocol'
 import { CliError } from '../errors.js'
-import { flagValue, parseFlags, type FlagSpec } from '../args.js'
+import { flagValue, type FlagSpec } from '../args.js'
 import { printTableColumns } from '../output.js'
+import { watchJsonSse } from '../stream.js'
 import { formatConversationTiming, formatDurationMs, projectConversationForHuman } from '../timing.js'
 import type { CommandContext, CommandSpec } from './shared.js'
 import {
@@ -19,7 +20,6 @@ import {
   coerceMetaFlag,
   coerceTags,
   enumFlag,
-  parseNoFlags,
   parsePositiveInt,
   printPlainText,
   printResult,
@@ -43,13 +43,8 @@ export function conversationsCommands(): CommandSpec[] {
     path: ['events', 'watch'],
     description: 'Subscribe to the global SSE event stream (GET /api/events; initial snapshot + incremental updates)',
     async run(ctx: CommandContext) {
-      parseNoFlags(ctx)
       const hub = await ctx.hub()
-      const controller = new AbortController()
-      const onSignal = () => controller.abort()
-      process.once('SIGINT', onSignal)
-      process.once('SIGTERM', onSignal)
-      const render = (event: string, payload: unknown): void => {
+      await watchJsonSse(hub, ctx.io, '/api/events', (event, payload) => {
         if (ctx.json) {
           // NDJSON: emit snapshot and incremental frames verbatim (one JSON value per line)
           ctx.io.out(`${JSON.stringify(payload ?? null)}\n`)
@@ -63,29 +58,7 @@ export function conversationsCommands(): CommandSpec[] {
           return
         }
         ctx.io.out(`${summarizeEvent(payload)}\n`)
-      }
-      try {
-        await hub.streamEvents({
-          signal: controller.signal,
-          onFrame: ({ event, data }) => {
-            let payload: unknown
-            try {
-              payload = JSON.parse(data)
-            } catch {
-              // Malformed frame: log diagnostic to stderr and skip without breaking the stream (keepalive noise is expected)
-              ctx.io.err(`helmx: ignoring non-JSON SSE frame (${data.slice(0, 120)})\n`)
-              return
-            }
-            render(event, payload)
-          },
-        })
-      } catch (err) {
-        if (err instanceof CliError && err.code === 'aborted') return
-        throw err
-      } finally {
-        process.off('SIGINT', onSignal)
-        process.off('SIGTERM', onSignal)
-      }
+      })
     },
   })
 
@@ -101,24 +74,14 @@ export function conversationsCommands(): CommandSpec[] {
       { name: 'parent', type: 'number', help: 'list only direct child conversations of this conversation' },
     ],
     async run(ctx: CommandContext) {
-      const parsed = parseFlags(
-        [
-          { name: 'profile', type: 'string' },
-          { name: 'status', type: 'string' },
-          { name: 'tag', type: 'string' },
-          { name: 'all', type: 'boolean' },
-          { name: 'parent', type: 'number' },
-        ],
-        ctx.args,
-      )
-      assertNoExtraPositionals(parsed.positionals, 0)
+      assertNoExtraPositionals(ctx.positionals, 0)
       const query = new URLSearchParams()
-      const profile = flagValue<string>(parsed.flags, 'profile')
-      const status = flagValue<string>(parsed.flags, 'status')
-      const tag = flagValue<string>(parsed.flags, 'tag')
-      const all = parsed.flags.get('all') === true
-      const parent = flagValue<number>(parsed.flags, 'parent')
-      if (all && parsed.flags.has('parent')) {
+      const profile = flagValue<string>(ctx.flags, 'profile')
+      const status = flagValue<string>(ctx.flags, 'status')
+      const tag = flagValue<string>(ctx.flags, 'tag')
+      const all = ctx.flags.get('all') === true
+      const parent = flagValue<number>(ctx.flags, 'parent')
+      if (all && ctx.flags.has('parent')) {
         throw new CliError('--all and --parent are mutually exclusive: cannot list all conversations and filter direct children at the same time', 'invalid_flag_value')
       }
       if (parent !== undefined) {
@@ -167,19 +130,11 @@ export function conversationsCommands(): CommandSpec[] {
     ],
     positional: '[id]',
     async run(ctx: CommandContext) {
-      const parsed = parseFlags(
-        [
-          { name: 'current', type: 'boolean' },
-          { name: 'limit', type: 'number' },
-          { name: 'cursor', type: 'string' },
-        ],
-        ctx.args,
-      )
-      const id = resolveConversationTarget(parsed.flags, parsed.positionals[0], ctx.env)
-      assertNoExtraPositionals(parsed.positionals, 1)
+      const id = resolveConversationTarget(ctx.flags, ctx.positionals[0], ctx.env)
+      assertNoExtraPositionals(ctx.positionals, 1)
       const query = new URLSearchParams()
-      const limit = flagValue<number>(parsed.flags, 'limit')
-      const cursor = flagValue<string>(parsed.flags, 'cursor')
+      const limit = flagValue<number>(ctx.flags, 'limit')
+      const cursor = flagValue<string>(ctx.flags, 'cursor')
       if (limit !== undefined) {
         if (!Number.isInteger(limit) || limit < 1) {
           throw new CliError(`--limit must be a positive integer, got "${limit}"`, 'invalid_flag_value')
@@ -200,15 +155,14 @@ export function conversationsCommands(): CommandSpec[] {
     flags: convFlags,
     positional: '[id] <entryId>',
     async run(ctx: CommandContext) {
-      const parsed = parseFlags([{ name: 'current', type: 'boolean' }], ctx.args)
-      const first = parsed.positionals[0]
-      const second = parsed.positionals[1]
-      assertNoExtraPositionals(parsed.positionals, 2)
+      const first = ctx.positionals[0]
+      const second = ctx.positionals[1]
+      assertNoExtraPositionals(ctx.positionals, 2)
       if (second === undefined && first === undefined) {
         throw new CliError('missing <entryId> positional argument ([id] <entryId>; use --current for target conversation)', 'missing_positional')
       }
       // Single positional means entryId: conversation target must come from --current (or env).
-      const id = resolveConversationTarget(parsed.flags, second === undefined ? undefined : first, ctx.env)
+      const id = resolveConversationTarget(ctx.flags, second === undefined ? undefined : first, ctx.env)
       const entryId = parsePositiveInt((second ?? first) as string, 'entryId')
       const hub = await ctx.hub()
       printResult(ctx, await hub.get<unknown>(`/api/conversations/${id}/entries/${entryId}`))
@@ -225,25 +179,18 @@ export function conversationsCommands(): CommandSpec[] {
     ],
     positional: '[id] <path>',
     async run(ctx: CommandContext) {
-      const parsed = parseFlags(
-        [
-          { name: 'current', type: 'boolean' },
-          { name: 'output', type: 'string' },
-        ],
-        ctx.args,
-      )
-      const first = parsed.positionals[0]
-      const second = parsed.positionals[1]
-      assertNoExtraPositionals(parsed.positionals, 2)
+      const first = ctx.positionals[0]
+      const second = ctx.positionals[1]
+      assertNoExtraPositionals(ctx.positionals, 2)
       if (first === undefined) {
         throw new CliError('missing <path> positional argument ([id] <path>, or pass --current for the conversation target)', 'missing_positional')
       }
-      const id = resolveConversationTarget(parsed.flags, second === undefined ? undefined : first, ctx.env)
+      const id = resolveConversationTarget(ctx.flags, second === undefined ? undefined : first, ctx.env)
       const filePath = (second ?? first) as string
       if (filePath.trim() === '') {
         throw new CliError('workspace file path cannot be empty', 'invalid_path')
       }
-      const output = flagValue<string>(parsed.flags, 'output')
+      const output = flagValue<string>(ctx.flags, 'output')
       const hub = await ctx.hub()
       const response = await hub.raw(`/api/conversations/${id}/files/content?path=${encodeURIComponent(filePath)}`)
       if (output !== undefined) {
@@ -286,18 +233,7 @@ export function conversationsCommands(): CommandSpec[] {
       { name: 'tags', type: 'string', help: 'JSON array or comma-separated' },
     ],
     async run(ctx: CommandContext) {
-      const parsed = parseFlags(
-        [
-          { name: 'title', type: 'string' },
-          { name: 'profile-id', type: 'string' },
-          { name: 'node', type: 'string' },
-          { name: 'cwd', type: 'string' },
-          { name: 'model', type: 'string' },
-          { name: 'tags', type: 'string' },
-        ],
-        ctx.args,
-      )
-      assertNoExtraPositionals(parsed.positionals, 0)
+      assertNoExtraPositionals(ctx.positionals, 0)
       const body: Record<string, unknown> = {}
       for (const [flag, key] of [
         ['title', 'title'],
@@ -306,10 +242,10 @@ export function conversationsCommands(): CommandSpec[] {
         ['cwd', 'cwd'],
         ['model', 'model'],
       ] as const) {
-        const v = flagValue<string>(parsed.flags, flag)
+        const v = flagValue<string>(ctx.flags, flag)
         if (v !== undefined) body[key] = v
       }
-      const tags = flagValue<string>(parsed.flags, 'tags')
+      const tags = flagValue<string>(ctx.flags, 'tags')
       if (tags !== undefined) body.tags = coerceTags(tags)
       const hub = await ctx.hub()
       printConversationRecord(ctx, await hub.post<ConversationSummary>('/api/conversations', body))
@@ -333,22 +269,8 @@ export function conversationsCommands(): CommandSpec[] {
     ],
     positional: '[id]',
     async run(ctx: CommandContext) {
-      const parsed = parseFlags(
-        [
-          { name: 'current', type: 'boolean' },
-          { name: 'title', type: 'string' },
-          { name: 'model', type: 'string' },
-          { name: 'thinking', type: 'string' },
-          { name: 'profile-id', type: 'string' },
-          { name: 'node', type: 'string' },
-          { name: 'cwd', type: 'string' },
-          { name: 'pinned', type: 'boolean' },
-          { name: 'unread', type: 'boolean' },
-        ],
-        ctx.args,
-      )
-      const id = resolveConversationTarget(parsed.flags, parsed.positionals[0], ctx.env)
-      assertNoExtraPositionals(parsed.positionals, 1)
+      const id = resolveConversationTarget(ctx.flags, ctx.positionals[0], ctx.env)
+      assertNoExtraPositionals(ctx.positionals, 1)
       const body: Record<string, unknown> = {}
       for (const [flag, key] of [
         ['title', 'title'],
@@ -358,11 +280,11 @@ export function conversationsCommands(): CommandSpec[] {
         ['cwd', 'cwd'],
         ['thinking', 'thinkingLevel'],
       ] as const) {
-        const v = flagValue<string>(parsed.flags, flag)
+        const v = flagValue<string>(ctx.flags, flag)
         if (v !== undefined) body[key] = v
       }
       for (const key of ['pinned', 'unread'] as const) {
-        const v = parsed.flags.get(key)
+        const v = ctx.flags.get(key)
         if (v !== undefined) body[key] = v
       }
       if (Object.keys(body).length === 0) {
@@ -381,8 +303,7 @@ export function conversationsCommands(): CommandSpec[] {
     flags: convFlags,
     positional: '[id...]',
     async run(ctx: CommandContext) {
-      const parsed = parseFlags([{ name: 'current', type: 'boolean' }], ctx.args)
-      const ids = resolveConversationTargets(parsed.flags, parsed.positionals, ctx.env)
+      const ids = resolveConversationTargets(ctx.flags, ctx.positionals, ctx.env)
       // Self-delete guard: HELMX_ENV is a fail-closed managed binding absent from human terminals,
       // so HELMX_ENV=1 + a target matching HELMX_CONVERSATION_ID reliably means "this process is a
       // tool exec of the very conversation being deleted" — the server would abort the executing
@@ -416,17 +337,10 @@ export function conversationsCommands(): CommandSpec[] {
     flags: [...convFlags, { name: 'handoff', type: 'string', help: 'handoff text used as the first user message after reset' }],
     positional: '[id]',
     async run(ctx: CommandContext) {
-      const parsed = parseFlags(
-        [
-          { name: 'current', type: 'boolean' },
-          { name: 'handoff', type: 'string' },
-        ],
-        ctx.args,
-      )
-      const id = resolveConversationTarget(parsed.flags, parsed.positionals[0], ctx.env)
-      assertNoExtraPositionals(parsed.positionals, 1)
+      const id = resolveConversationTarget(ctx.flags, ctx.positionals[0], ctx.env)
+      assertNoExtraPositionals(ctx.positionals, 1)
       const body: Record<string, unknown> = {}
-      const handoff = flagValue<string>(parsed.flags, 'handoff')
+      const handoff = flagValue<string>(ctx.flags, 'handoff')
       if (handoff !== undefined) body.handoff = handoff
       const hub = await ctx.hub()
       printConversationRecord(ctx, await hub.post<ConversationSummary>(`/api/conversations/${id}/reset`, body))
@@ -440,17 +354,10 @@ export function conversationsCommands(): CommandSpec[] {
     flags: [...convFlags, { name: 'instructions', type: 'string', help: 'custom instructions for compaction summary' }],
     positional: '[id]',
     async run(ctx: CommandContext) {
-      const parsed = parseFlags(
-        [
-          { name: 'current', type: 'boolean' },
-          { name: 'instructions', type: 'string' },
-        ],
-        ctx.args,
-      )
-      const id = resolveConversationTarget(parsed.flags, parsed.positionals[0], ctx.env)
-      assertNoExtraPositionals(parsed.positionals, 1)
+      const id = resolveConversationTarget(ctx.flags, ctx.positionals[0], ctx.env)
+      assertNoExtraPositionals(ctx.positionals, 1)
       const body: Record<string, unknown> = {}
-      const instructions = flagValue<string>(parsed.flags, 'instructions')
+      const instructions = flagValue<string>(ctx.flags, 'instructions')
       if (instructions !== undefined) body.instructions = instructions
       const hub = await ctx.hub()
       printResult(ctx, await hub.post<unknown>(`/api/conversations/${id}/compact`, body))
@@ -468,23 +375,15 @@ export function conversationsCommands(): CommandSpec[] {
     ],
     positional: '[id]',
     async run(ctx: CommandContext) {
-      const parsed = parseFlags(
-        [
-          { name: 'current', type: 'boolean' },
-          { name: 'entry-id', type: 'number' },
-          { name: 'title', type: 'string' },
-        ],
-        ctx.args,
-      )
-      const id = resolveConversationTarget(parsed.flags, parsed.positionals[0], ctx.env)
-      assertNoExtraPositionals(parsed.positionals, 1)
-      const entryId = flagValue<number>(parsed.flags, 'entry-id')
+      const id = resolveConversationTarget(ctx.flags, ctx.positionals[0], ctx.env)
+      assertNoExtraPositionals(ctx.positionals, 1)
+      const entryId = flagValue<number>(ctx.flags, 'entry-id')
       if (entryId !== undefined && (!Number.isSafeInteger(entryId) || entryId <= 0)) {
         throw new CliError('--entry-id must be a positive integer', 'invalid_flag_value')
       }
       const body: Record<string, unknown> = {}
       if (entryId !== undefined) body.entryId = entryId
-      const title = flagValue<string>(parsed.flags, 'title')
+      const title = flagValue<string>(ctx.flags, 'title')
       if (title !== undefined) body.title = title
       const hub = await ctx.hub()
       printConversationRecord(ctx, await hub.post<ConversationSummary>(`/api/conversations/${id}/fork`, body))
@@ -506,42 +405,30 @@ export function conversationsCommands(): CommandSpec[] {
     ],
     positional: '[id] <text>',
     async run(ctx: CommandContext) {
-      const parsed = parseFlags(
-        [
-          { name: 'current', type: 'boolean' },
-          { name: 'when-busy', type: 'string' },
-          { name: 'origin', type: 'string' },
-          { name: 'meta', type: 'json' },
-          { name: 'attach', type: 'string' },
-          { name: 'replace-from', type: 'number' },
-          { name: 'wait', type: 'boolean' },
-        ],
-        ctx.args,
-      )
-      const useCurrent = parsed.flags.get('current') === true
-      if (useCurrent && parsed.positionals.length === 2 && /^\d+$/.test(parsed.positionals[0]!)) {
+      const useCurrent = ctx.flags.get('current') === true
+      if (useCurrent && ctx.positionals.length === 2 && /^\d+$/.test(ctx.positionals[0]!)) {
         throw new CliError('conversation ID and --current are mutually exclusive', 'conflicting_flags')
       }
       const id = useCurrent
-        ? resolveConversationTarget(parsed.flags, undefined, ctx.env)
-        : resolveConversationTarget(parsed.flags, parsed.positionals[0], ctx.env)
+        ? resolveConversationTarget(ctx.flags, undefined, ctx.env)
+        : resolveConversationTarget(ctx.flags, ctx.positionals[0], ctx.env)
       const textIndex = useCurrent ? 0 : 1
-      const text = requirePositional(parsed.positionals, textIndex, 'text', 'missing_text')
-      if (parsed.positionals.length > textIndex + 1) {
-        throw new CliError(`unexpected positional argument: ${parsed.positionals.slice(textIndex + 1).join(' ')} (wrap text containing spaces in quotes)`, 'unexpected_positional')
+      const text = requirePositional(ctx.positionals, textIndex, 'text', 'missing_text')
+      if (ctx.positionals.length > textIndex + 1) {
+        throw new CliError(`unexpected positional argument: ${ctx.positionals.slice(textIndex + 1).join(' ')} (wrap text containing spaces in quotes)`, 'unexpected_positional')
       }
       const body: Record<string, unknown> = { text }
-      const whenBusy = flagValue<string>(parsed.flags, 'when-busy')
-      const origin = flagValue<string>(parsed.flags, 'origin')
+      const whenBusy = flagValue<string>(ctx.flags, 'when-busy')
+      const origin = flagValue<string>(ctx.flags, 'origin')
       if (whenBusy !== undefined) body.whenBusy = validateEnum(whenBusy, WHEN_BUSY, 'when-busy')
       if (origin !== undefined) body.origin = validateEnum(origin, ORIGINS, 'origin')
-      if (parsed.flags.has('meta')) body.meta = coerceMetaFlag(parsed.flags.get('meta'), 'meta')
-      const attachRaw = flagValue<string>(parsed.flags, 'attach')
+      if (ctx.flags.has('meta')) body.meta = coerceMetaFlag(ctx.flags.get('meta'), 'meta')
+      const attachRaw = flagValue<string>(ctx.flags, 'attach')
       if (attachRaw !== undefined) {
         const attachIds = attachRaw.split(',').map((s) => s.trim()).filter((s) => s.length > 0)
         if (attachIds.length > 0) body.attachments = attachIds
       }
-      const replaceFrom = flagValue<number>(parsed.flags, 'replace-from')
+      const replaceFrom = flagValue<number>(ctx.flags, 'replace-from')
       if (replaceFrom !== undefined) {
         if (!Number.isInteger(replaceFrom) || replaceFrom <= 0) {
           throw new CliError(`--replace-from must be a positive integer, got "${replaceFrom}"`, 'invalid_flag_value')
@@ -549,7 +436,7 @@ export function conversationsCommands(): CommandSpec[] {
         body.replaceFromEntryId = replaceFrom
       }
       const hub = await ctx.hub()
-      const wait = parsed.flags.get('wait') === true
+      const wait = ctx.flags.get('wait') === true
       const result = await hub.request<unknown>(
         'POST',
         `/api/conversations/${id}/input${wait ? '?wait=1' : ''}`,
@@ -576,16 +463,9 @@ export function conversationsCommands(): CommandSpec[] {
     flags: [...convFlags, { name: 'submission-id', type: 'number', required: true, help: 'queued submission ID to withdraw' }],
     positional: '[id]',
     async run(ctx: CommandContext) {
-      const parsed = parseFlags(
-        [
-          { name: 'current', type: 'boolean' },
-          { name: 'submission-id', type: 'number', required: true },
-        ],
-        ctx.args,
-      )
-      const id = resolveConversationTarget(parsed.flags, parsed.positionals[0], ctx.env)
-      assertNoExtraPositionals(parsed.positionals, 1)
-      const submissionId = flagValue<number>(parsed.flags, 'submission-id')
+      const id = resolveConversationTarget(ctx.flags, ctx.positionals[0], ctx.env)
+      assertNoExtraPositionals(ctx.positionals, 1)
+      const submissionId = flagValue<number>(ctx.flags, 'submission-id')
       if (submissionId === undefined || !Number.isInteger(submissionId) || submissionId <= 0) {
         throw new CliError('--submission-id must be a positive integer', 'invalid_flag_value')
       }
@@ -601,9 +481,8 @@ export function conversationsCommands(): CommandSpec[] {
     flags: convFlags,
     positional: '[id]',
     async run(ctx: CommandContext) {
-      const parsed = parseFlags([{ name: 'current', type: 'boolean' }], ctx.args)
-      const id = resolveConversationTarget(parsed.flags, parsed.positionals[0], ctx.env)
-      assertNoExtraPositionals(parsed.positionals, 1)
+      const id = resolveConversationTarget(ctx.flags, ctx.positionals[0], ctx.env)
+      assertNoExtraPositionals(ctx.positionals, 1)
       const hub = await ctx.hub()
       printResult(ctx, await hub.post<unknown>(`/api/conversations/${id}/abort`))
     },
@@ -623,19 +502,12 @@ export function conversationsCommands(): CommandSpec[] {
     ],
     positional: '<id>',
     async run(ctx: CommandContext) {
-      const parsed = parseFlags(
-        [
-          { name: 'timeout', type: 'number' },
-          { name: 'quiet', type: 'boolean' },
-        ],
-        ctx.args,
-      )
       const id = parsePositiveInt(
-        requirePositional(parsed.positionals, 0, 'id', 'missing_conversation_target'),
+        requirePositional(ctx.positionals, 0, 'id', 'missing_conversation_target'),
         'conversation ID',
       )
-      assertNoExtraPositionals(parsed.positionals, 1)
-      const timeoutMs = flagValue<number>(parsed.flags, 'timeout')
+      assertNoExtraPositionals(ctx.positionals, 1)
+      const timeoutMs = flagValue<number>(ctx.flags, 'timeout')
       if (timeoutMs !== undefined && (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0)) {
         throw new CliError(`--timeout must be a positive integer (milliseconds), got "${timeoutMs}"`, 'invalid_flag_value')
       }
@@ -651,28 +523,10 @@ export function conversationsCommands(): CommandSpec[] {
           )
         }
       }
-      const quiet = parsed.flags.get('quiet') === true
+      const quiet = ctx.flags.get('quiet') === true
       const hub = await ctx.hub()
 
       const startedAt = Date.now()
-      const controller = new AbortController()
-      let timedOut = false
-      let cancelled = false
-      const onSignal = () => {
-        cancelled = true
-        controller.abort()
-      }
-      process.once('SIGINT', onSignal)
-      process.once('SIGTERM', onSignal)
-      const timer =
-        timeoutMs !== undefined
-          ? setTimeout(() => {
-              timedOut = true
-              controller.abort()
-            }, timeoutMs)
-          : undefined
-      timer?.unref?.()
-
       let snapshotSeen = false
       let missing = false
       let deleted = false
@@ -686,7 +540,7 @@ export function conversationsCommands(): CommandSpec[] {
         if (ctx.json) ctx.io.out(`${JSON.stringify(jsonValue)}\n`)
         else ctx.io.out(`${text}\n`)
       }
-      const applySummary = (next: ConversationSummary): void => {
+      const applySummary = (next: ConversationSummary, abort: () => void): void => {
         summary = next
         if (next.status !== lastStatus) {
           const from = lastStatus
@@ -705,65 +559,52 @@ export function conversationsCommands(): CommandSpec[] {
         }
         if (WATCH_SETTLED_STATUSES.has(next.status)) {
           settled = next.status
-          controller.abort()
+          abort()
         }
       }
 
-      try {
-        await hub.streamEvents({
-          signal: controller.signal,
-          onFrame: ({ event, data }) => {
-            let payload: unknown
-            try {
-              payload = JSON.parse(data)
-            } catch {
-              ctx.io.err(`helmx: ignoring non-JSON SSE frame (${data.slice(0, 120)})\n`)
+      const outcome = await watchJsonSse(
+        hub,
+        ctx.io,
+        '/api/events',
+        (event, payload, stream) => {
+          if (settled !== undefined || deleted || missing) return
+          if (event === 'snapshot') {
+            snapshotSeen = true
+            const snap = payload as { conversations?: unknown }
+            const found = Array.isArray(snap.conversations)
+              ? (snap.conversations as ConversationSummary[]).find((c) => c?.id === id)
+              : undefined
+            if (!found) {
+              missing = true
+              stream.abort()
               return
             }
-            if (settled !== undefined || deleted || missing) return
-            if (event === 'snapshot') {
-              snapshotSeen = true
-              const snap = payload as { conversations?: unknown }
-              const found = Array.isArray(snap.conversations)
-                ? (snap.conversations as ConversationSummary[]).find((c) => c?.id === id)
-                : undefined
-              if (!found) {
-                missing = true
-                controller.abort()
-                return
-              }
-              applySummary(found)
-              return
+            applySummary(found, stream.abort)
+            return
+          }
+          const inner = (payload as { event?: { type?: string } }).event
+          if (inner?.type === 'conversation.upsert') {
+            const conversation = (inner as unknown as ConversationUpsertEvent).conversation
+            if (conversation && conversation.id === id) applySummary(conversation, stream.abort)
+            return
+          }
+          if (inner?.type === 'conversation.deleted') {
+            if ((inner as unknown as ConversationDeletedEvent).conversationId === id) {
+              deleted = true
+              stream.abort()
             }
-            const inner = (payload as { event?: { type?: string } }).event
-            if (inner?.type === 'conversation.upsert') {
-              const conversation = (inner as unknown as ConversationUpsertEvent).conversation
-              if (conversation && conversation.id === id) applySummary(conversation)
-              return
-            }
-            if (inner?.type === 'conversation.deleted') {
-              if ((inner as unknown as ConversationDeletedEvent).conversationId === id) {
-                deleted = true
-                controller.abort()
-              }
-            }
-          },
-        })
-      } catch (err) {
-        // Settle/timeout/signal aborts surface as 'aborted'; anything else is a real failure and propagates
-        if (!(err instanceof CliError && err.code === 'aborted')) throw err
-      } finally {
-        if (timer !== undefined) clearTimeout(timer)
-        process.off('SIGINT', onSignal)
-        process.off('SIGTERM', onSignal)
-      }
+          }
+        },
+        { timeoutMs },
+      )
 
-      if (cancelled) return 0
+      if (outcome.cancelled) return 0
       if (deleted) {
         throw new CliError(`conversation #${id} was deleted while watching`, 'conversation_deleted')
       }
       if (!snapshotSeen) {
-        if (timedOut) throw new CliError(`conversation #${id} did not settle within ${timeoutMs}ms (no snapshot received)`, 'watch_timeout', 124)
+        if (outcome.timedOut) throw new CliError(`conversation #${id} did not settle within ${timeoutMs}ms (no snapshot received)`, 'watch_timeout', 124)
         throw new CliError('event stream ended before the snapshot frame arrived', 'stream_closed')
       }
       if (missing) {
@@ -771,7 +612,7 @@ export function conversationsCommands(): CommandSpec[] {
       }
       if (settled === undefined) {
         const doingSuffix = lastDoing ? `, doing: ${lastDoing}` : ''
-        if (timedOut) {
+        if (outcome.timedOut) {
           throw new CliError(`conversation #${id} did not settle within ${timeoutMs}ms (last status: ${lastStatus ?? '?'}${doingSuffix})`, 'watch_timeout', 124)
         }
         throw new CliError(`event stream ended before conversation #${id} settled (last status: ${lastStatus ?? '?'})`, 'stream_closed')

@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { installOsService, uninstallOsService, getOsServiceStatus, type OsServiceProfile, type OsServiceStatus } from '@helmx/env-io'
-import { flagValue, parseFlags } from '../args.js'
+import { flagValue } from '../args.js'
 import { CliError } from '../errors.js'
 import { assertNoExtraPositionals, requirePositional, type CommandSpec } from './shared.js'
 
@@ -102,13 +102,12 @@ export const serviceCommands: CommandSpec[] = [
     positional: '<install|uninstall|status>',
     flags: [{ name: 'data-dir', type: 'string', help: 'Hub data directory the service runs with (default ~/.helmx or HELMX_DATA_DIR)' }],
     async run(ctx) {
-      const parsed = parseFlags([{ name: 'data-dir', type: 'string' }], ctx.args)
-      assertNoExtraPositionals(parsed.positionals, 1)
-      const action = requirePositional(parsed.positionals, 0, 'service action (install | uninstall | status)')
+      assertNoExtraPositionals(ctx.positionals, 1)
+      const action = requirePositional(ctx.positionals, 0, 'service action (install | uninstall | status)')
       if (!ACTIONS.includes(action as ServiceAction)) {
         throw new CliError(`unknown service action "${action}" (expected install, uninstall, or status)`, 'invalid_argument')
       }
-      const value = flagValue<string>(parsed.flags, 'data-dir')
+      const value = flagValue<string>(ctx.flags, 'data-dir')
       if (value?.trim() === '') throw new CliError('--data-dir requires a non-empty value', 'invalid_flag_value')
       return await runServiceAction(action as ServiceAction, ctx, value)
     },
