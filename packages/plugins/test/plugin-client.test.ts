@@ -110,6 +110,7 @@ function makeKernel(): KernelRuntimeLike {
     createConversation: async () => makeConversation(1),
     updateConversation: async (id: number) => makeConversation(id),
     deleteConversation: async () => {},
+    deleteConversations: async (ids: readonly number[]) => ({ deleted: [...ids], failures: [] }),
     submitInput: async () => ({ submissionId: 'sub' }),
     waitForInput: async (id: number) => ({ conversationId: id, submissionId: 'sub', text: '', entry: { id: 'e', kind: 'pi.assistant' } }),
     abortConversation: async () => {},

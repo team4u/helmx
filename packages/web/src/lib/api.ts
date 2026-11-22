@@ -5,6 +5,7 @@ import type {
   AuthStatus,
   AuthToken,
   ConversationCompactResponse,
+  ConversationBulkDeleteResponse,
   ConversationDetail,
   ConversationEntry,
   ConversationForkRequest,
@@ -194,6 +195,9 @@ export const conversationsApi = {
   },
   remove(id: number): Promise<{ ok: boolean }> {
     return apiRequest<{ ok: boolean }>('DELETE', `/api/conversations/${id}`)
+  },
+  bulkRemove(ids: readonly number[]): Promise<ConversationBulkDeleteResponse> {
+    return apiRequest<ConversationBulkDeleteResponse>('POST', '/api/conversations/bulk-delete', { ids: [...ids] })
   },
   submitInput(
     id: number,

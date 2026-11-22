@@ -39,6 +39,8 @@ import {
   isAgentStandbyActive,
   isConversationActive,
   isConversationArchivable,
+  isConversationBulkDeletable,
+  isConversationBulkSelectable,
   isConversationDeletable,
   isHumanSelectableProfile,
   isProfileVisible,
@@ -323,6 +325,26 @@ test('人工归档 tags 幂等保留其他标签，恢复只移除 archived', { 
   assert.equal(isConversationArchivable(conv({ id: 2, parentConversationId: 1 }), new Set()), false)
   assert.equal(isConversationArchivable(conv({ id: 3, ownedBy: 'bot' }), new Set()), false)
   assert.equal(isConversationArchivable(conv({ id: 4, tags: ['worker'] }), new Set(['worker'])), false)
+})
+
+test('批量管理勾选口径：人类根会话全放开，空闲自动化根会话仅放开删除', { timeout: 60_000 }, () => {
+  const sectionTags = new Set(['worker'])
+  // 人类根会话：归档与删除都放开（含 working 态——单行删除同款语义）
+  assert.equal(isConversationArchivable(conv({ id: 1, status: 'working' }), sectionTags), true)
+  assert.equal(isConversationBulkDeletable(conv({ id: 1, status: 'working' }), sectionTags), true)
+  // 空闲自动化历史会话（如已结束的 swarm worker）：仅放开批量删除
+  assert.equal(isConversationArchivable(conv({ id: 2, ownedBy: 'helmx', status: 'idle' }), sectionTags), false)
+  assert.equal(isConversationBulkDeletable(conv({ id: 2, ownedBy: 'helmx', status: 'idle' }), sectionTags), true)
+  assert.equal(isConversationBulkDeletable(conv({ id: 3, ownedBy: 'bot', status: 'done' }), new Set()), true)
+  // 在途自动化会话绝不放开（working/blocked）
+  assert.equal(isConversationBulkDeletable(conv({ id: 4, ownedBy: 'helmx', status: 'working' }), new Set()), false)
+  assert.equal(isConversationBulkDeletable(conv({ id: 5, ownedBy: 'bot', status: 'blocked' }), new Set()), false)
+  // 子会话与插件 section 接管会话：两个口径都不放开
+  assert.equal(isConversationBulkDeletable(conv({ id: 6, parentConversationId: 1, status: 'idle' }), new Set()), false)
+  assert.equal(isConversationBulkDeletable(conv({ id: 7, ownedBy: 'helmx', status: 'idle', tags: ['worker'] }), sectionTags), false)
+  // 勾选口径 = 归档 ∪ 批量删除
+  assert.equal(isConversationBulkSelectable(conv({ id: 8, ownedBy: 'helmx', status: 'idle' }), sectionTags), true)
+  assert.equal(isConversationBulkSelectable(conv({ id: 9, parentConversationId: 1 }), sectionTags), false)
 })
 
 test('buildArchivedConversationList 只展示人类根会话并按创建时间稳定排序', { timeout: 60_000 }, () => {
@@ -1070,7 +1092,7 @@ test('批量删除导航契约：Sidebar 不做二次导航，回退统一由 Pr
   // Sidebar 不再基于旧快照/selectedIds 二次跳转（旧实现会连失败项一起跳走）。
   assert.doesNotMatch(batchBody, /openTarget/, '批量删除不得在 Sidebar 内导航')
   assert.doesNotMatch(batchBody, /closeSplit/, '批量删除不得在 Sidebar 内关分屏')
-  assert.match(batchBody, /conversationsApi\.remove/, '批量删除仍发起真实删除请求')
+  assert.match(batchBody, /bulkDeleteConversations/, '批量删除仍发起真实删除请求（单次 bulk-delete 端点）')
 })
 
 test('删除回退仿真：主屏/分屏/抽屉命中被删会话时回该智能体待命态', { timeout: 60_000 }, () => {

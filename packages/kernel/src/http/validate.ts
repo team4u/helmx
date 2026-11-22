@@ -341,6 +341,20 @@ export function parseConversationWithdrawBody(body: Record<string, unknown>): { 
   return { submissionId: parsed.submissionId }
 }
 
+const CONVERSATION_BULK_DELETE_BODY_SCHEMA = Type.Object(
+  { ids: Type.Array(SafePositiveInt, { minItems: 1, maxItems: 1000 }) },
+  { additionalProperties: false },
+)
+
+/**
+ * POST /api/conversations/bulk-delete: ids is a non-empty array (1..1000) of safe positive integers.
+ * Order-preserving dedup happens in the service (first-seen wins), not here — validation stays mechanical.
+ */
+export function parseConversationBulkDeleteBody(body: Record<string, unknown>): { ids: number[] } {
+  const parsed = parseBodyWithSchema(CONVERSATION_BULK_DELETE_BODY_SCHEMA, body, 'bulk-delete body')
+  return { ids: parsed.ids }
+}
+
 // ---------------------------------------------------------------------------
 // Profile body (TypeBox mechanical shape + cross-field / trim / code-point semantics)
 // ---------------------------------------------------------------------------

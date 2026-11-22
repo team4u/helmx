@@ -2,7 +2,13 @@
  * Conversation commands: conversations list/get/create/update/delete/reset/compact/fork,
  * send, abort, and events watch. create/update support --node <nodeId> to bind a compute node.
  */
-import type { ConversationStatus, ConversationSummary, ConversationDeletedEvent, ConversationUpsertEvent } from '@helmx/protocol'
+import type {
+  ConversationBulkDeleteResponse,
+  ConversationStatus,
+  ConversationSummary,
+  ConversationDeletedEvent,
+  ConversationUpsertEvent,
+} from '@helmx/protocol'
 import { CliError } from '../errors.js'
 import { flagValue, parseFlags, type FlagSpec } from '../args.js'
 import { printTableColumns } from '../output.js'
@@ -19,6 +25,7 @@ import {
   printResult,
   requirePositional,
   resolveConversationTarget,
+  resolveConversationTargets,
   validateEnum,
   writeDownloadedOutput,
 } from './shared.js'
@@ -366,18 +373,39 @@ export function conversationsCommands(): CommandSpec[] {
     },
   })
 
-  // ---- conversations delete ----
+  // ---- conversations delete (single or bulk; always one bulk-delete request) ----
   cmds.push({
     path: ['conversations', 'delete'],
-    description: 'Delete a conversation (DELETE /api/conversations/:id; plugin-managed conversations are protected)',
+    description:
+      'Delete one or more conversations (POST /api/conversations/bulk-delete; cascades derived child conversations; plugin-managed conversations are protected and reported per item)',
     flags: convFlags,
-    positional: '[id]',
+    positional: '[id...]',
     async run(ctx: CommandContext) {
       const parsed = parseFlags([{ name: 'current', type: 'boolean' }], ctx.args)
-      const id = resolveConversationTarget(parsed.flags, parsed.positionals[0], ctx.env)
-      assertNoExtraPositionals(parsed.positionals, 1)
+      const ids = resolveConversationTargets(parsed.flags, parsed.positionals, ctx.env)
+      // Self-delete guard: HELMX_ENV is a fail-closed managed binding absent from human terminals,
+      // so HELMX_ENV=1 + a target matching HELMX_CONVERSATION_ID reliably means "this process is a
+      // tool exec of the very conversation being deleted" — the server would abort the executing
+      // turn mid-command, cutting the batch (and this reply) in half. Reject up front.
+      if (ctx.env['HELMX_ENV'] === '1') {
+        const selfId = Number(ctx.env['HELMX_CONVERSATION_ID'])
+        if (Number.isSafeInteger(selfId) && selfId > 0 && ids.includes(selfId)) {
+          throw new CliError(
+            `refusing to delete conversation #${selfId}: it is the conversation executing this command (the turn would be aborted mid-delete); delete it from the Web UI or a human terminal, or unset HELMX_ENV if this really is an interactive terminal`,
+            'self_delete_forbidden',
+          )
+        }
+      }
       const hub = await ctx.hub()
-      printResult(ctx, await hub.delete<unknown>(`/api/conversations/${id}`))
+      const result = await hub.post<ConversationBulkDeleteResponse>('/api/conversations/bulk-delete', { ids })
+      if (ctx.json) {
+        ctx.io.out(`${JSON.stringify(result)}\n`)
+      } else {
+        for (const id of result.deleted) ctx.io.out(`#${id} deleted\n`)
+        for (const failure of result.failures) ctx.io.err(`#${failure.id} failed [${failure.code}]: ${failure.message}\n`)
+        ctx.io.out(`deleted ${result.deleted.length}, failed ${result.failures.length}\n`)
+      }
+      return result.failures.length > 0 ? 1 : 0
     },
   })
 

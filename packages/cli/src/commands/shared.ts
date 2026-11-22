@@ -87,6 +87,34 @@ export function resolveConversationTarget(
   throw new CliError('missing conversation target: pass an explicit <id> or --current (reads HELMX_CONVERSATION_ID)', 'missing_conversation_target')
 }
 
+/**
+ * Resolve multiple conversation targets (bulk commands): one or more explicit positional ids, or --current.
+ * Mutually exclusive; each id must be a positive integer. Order is preserved and duplicates are kept
+ * (the server deduplicates in first-seen order).
+ */
+export function resolveConversationTargets(
+  flags: Map<string, unknown>,
+  positionalIds: readonly string[],
+  env: NodeJS.ProcessEnv,
+): number[] {
+  const current = flags.get('current') === true
+  if (positionalIds.length > 0 && current) {
+    throw new CliError('conversation IDs and --current are mutually exclusive', 'conflicting_flags')
+  }
+  if (positionalIds.length > 0) {
+    const parsed = positionalIds.map((raw) => parsePositiveInt(raw, 'conversation ID'))
+    return [...new Set(parsed)]
+  }
+  if (current) {
+    const raw = env['HELMX_CONVERSATION_ID']
+    if (!raw || !raw.trim()) {
+      throw new CliError('--current requires HELMX_CONVERSATION_ID to be set', 'current_conversation_missing')
+    }
+    return [parsePositiveInt(raw, 'HELMX_CONVERSATION_ID')]
+  }
+  throw new CliError('missing conversation target: pass one or more <id> arguments or --current (reads HELMX_CONVERSATION_ID)', 'missing_conversation_target')
+}
+
 // ---------------------------------------------------------------------------
 // Flag value normalization
 // ---------------------------------------------------------------------------

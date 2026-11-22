@@ -117,6 +117,15 @@ function installFetch(): void {
         })
       })
     }
+    if (url === '/api/conversations/bulk-delete' && method === 'POST') {
+      const body = init?.body === undefined ? {} : (JSON.parse(String(init.body)) as { ids?: number[] })
+      const ids = body.ids ?? []
+      deleteRequests.push(url)
+      // 服务端语义：bulk-delete 逐会话广播 conversation.deleted，前端列表随 SSE 移除。
+      conversations = conversations.filter((c) => !ids.includes(c.id))
+      for (const id of ids) sendEvent?.(eventFrame({ type: 'conversation.deleted', conversationId: id }))
+      return new Response(JSON.stringify({ deleted: ids, failures: [] }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }
     if (/^\/api\/conversations\/\d+$/.test(url) && method === 'DELETE') {
       const id = Number(/\/api\/conversations\/(\d+)$/.exec(url)![1])
       deleteRequests.push(url)
@@ -340,7 +349,7 @@ describe("conversation-archive-menu", () => {
     assert.ok(observed?.notices.some((n) => n.title === 'Conversations restored'), '恢复成功应有通知')
   })
 
-  test('归档分组全选后批量删除：确认后逐会话 DELETE，列表随 conversation.deleted 清空', { timeout: 60_000 }, async () => {
+  test('归档分组全选后批量删除：确认后单次 bulk-delete，列表随 conversation.deleted 清空', { timeout: 60_000 }, async () => {
     conversations = [summary(1), summary(2, { tags: [ARCHIVED_TAG] }), summary(3, { tags: [ARCHIVED_TAG] })]
     await mount('#/c/1')
 
@@ -391,7 +400,7 @@ describe("conversation-archive-menu", () => {
     await act(async () => { confirm!.click() })
     await settle()
 
-    assert.deepEqual([...deleteRequests].sort(), ['/api/conversations/2', '/api/conversations/3'], '应对全部选中归档会话发起删除')
+    assert.deepEqual(deleteRequests, ['/api/conversations/bulk-delete'], '应对全部选中归档会话发起单次 bulk-delete 请求')
     assert.ok(document.querySelector('.archived-conversations-group') === null, '删除 SSE 后归档分组应清空消失')
     assert.deepEqual(observed?.primary, { kind: 'conversation', conversationId: 1 }, '删除非当前目标会话不得导航')
     assert.ok(observed?.notices.some((n) => n.title === 'Bulk delete completed'), '批量删除成功应有通知')

@@ -206,6 +206,19 @@ function makeKernel(): KernelRuntimeLike {
       if (!conversations.has(id)) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
       conversations.delete(id)
     },
+    async deleteConversations(ids) {
+      const deleted: number[] = []
+      const failures: Array<{ id: number; code: string; message: string }> = []
+      for (const id of ids) {
+        if (!conversations.has(id)) {
+          failures.push({ id, code: 'not_found', message: `conversation not found: ${id}` })
+          continue
+        }
+        conversations.delete(id)
+        deleted.push(id)
+      }
+      return { deleted, failures }
+    },
     async submitInput(id, text, opts) {
       if (!conversations.has(id)) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
       submitted.push({ id, text, opts })
@@ -588,8 +601,47 @@ test('POST /api/conversations create; PATCH update; DELETE conversation 200 (no 
   assert.equal(gone.status, 404)
 })
 
-test('POST /api/conversations rejects empty string model on creation: must be provider/model', { timeout: 60_000 }, async () => {
+test('POST /api/conversations/bulk-delete: partial-success aggregation stays HTTP 200; validation errors return 400', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
+  const a = await call(handler, 'POST', '/api/conversations', { body: { title: 'bulk a', cwd: '/tmp' } })
+  const b = await call(handler, 'POST', '/api/conversations', { body: { title: 'bulk b', cwd: '/tmp' } })
+  assert.equal(a.status, 201)
+  assert.equal(b.status, 201)
+  const res = await call(handler, 'POST', '/api/conversations/bulk-delete', {
+    body: { ids: [a.body.id, b.body.id, 999999] },
+  })
+  assert.equal(res.status, 200)
+  assert.deepEqual(res.body.deleted.sort(), [a.body.id, b.body.id].sort())
+  assert.equal(res.body.failures.length, 1)
+  assert.equal(res.body.failures[0].id, 999999)
+  assert.equal(res.body.failures[0].code, 'not_found')
+  for (const id of [a.body.id, b.body.id]) {
+    const gone = await call(handler, 'GET', `/api/conversations/${id}`)
+    assert.equal(gone.status, 404)
+  }
+
+  const empty = await call(handler, 'POST', '/api/conversations/bulk-delete', { body: { ids: [] } })
+  assert.equal(empty.status, 400)
+  assert.equal(empty.body.error.code, 'validation_error')
+  const tooMany = await call(handler, 'POST', '/api/conversations/bulk-delete', {
+    body: { ids: Array.from({ length: 1001 }, (_, i) => i + 1) },
+  })
+  assert.equal(tooMany.status, 400)
+  const badId = await call(handler, 'POST', '/api/conversations/bulk-delete', { body: { ids: [0, 3] } })
+  assert.equal(badId.status, 400)
+  const extraField = await call(handler, 'POST', '/api/conversations/bulk-delete', { body: { ids: [3], force: true } })
+  assert.equal(extraField.status, 400)
+})
+
+test('bulk-delete route shape: GET returns 405, extra segments return 404, literal does not collide with :id', { timeout: 60_000 }, async () => {
+  const { handler } = makeHandlers()
+  const get = await call(handler, 'GET', '/api/conversations/bulk-delete')
+  assert.equal(get.status, 405)
+  const extra = await call(handler, 'POST', '/api/conversations/bulk-delete/extra', { body: { ids: [3] } })
+  assert.equal(extra.status, 404)
+})
+
+test('POST /api/conversations rejects empty string model on creation: must be provider/model', { timeout: 60_000 }, async () => {  const { handler } = makeHandlers()
   const res = await call(handler, 'POST', '/api/conversations', { body: { model: '' } })
   assert.equal(res.status, 400)
   assert.equal(res.body.error.code, 'validation_error')

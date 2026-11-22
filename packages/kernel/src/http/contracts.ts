@@ -10,6 +10,7 @@ import type {
   ArtifactMetadata,
   AskSpec,
   ConversationCompactResponse,
+  ConversationBulkDeleteResponse,
   ConversationDetail,
   ConversationInit,
   ConversationInputResult,
@@ -286,6 +287,8 @@ export interface KernelRuntimeLike {
   createConversation(init?: ConversationInit): Promise<ConversationSummary> | ConversationSummary
   updateConversation(id: number, patch: ConversationPatch): Promise<ConversationSummary> | ConversationSummary
   deleteConversation(id: number): Promise<void> | void
+  /** POST /api/conversations/bulk-delete consume: partial-success bulk delete with derived-subtree cascade. */
+  deleteConversations(ids: readonly number[]): Promise<ConversationBulkDeleteResponse> | ConversationBulkDeleteResponse
   submitInput(
     id: number,
     text: string,

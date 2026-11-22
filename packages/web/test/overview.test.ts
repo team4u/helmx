@@ -1358,15 +1358,17 @@ test('MobileQuickNav: numeric badge, quiet dot, summary aria-label and zero nois
 // 交互：批量管理（勾选/保护口径/归档/删除）、卡面操作菜单与紧凑元信息行
 // ---------------------------------------------------------------------------
 
-/** 总览批量/菜单交互的 fetch 桩：记录会话 PATCH（归档 tag）与 DELETE。 */
+/** 总览批量/菜单交互的 fetch 桩：记录会话 PATCH（归档 tag）、单删 DELETE 与 bulk-delete。 */
 function installConversationMutationStub(): {
   patches: Array<{ id: number; tags?: string[] }>
   deletes: number[]
+  bulkDeletes: number[][]
   restore: () => void
 } {
   const original = globalThis.fetch
   const patches: Array<{ id: number; tags?: string[] }> = []
   const deletes: number[] = []
+  const bulkDeletes: number[][] = []
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
     const match = /^\/api\/conversations\/(\d+)$/.exec(url)
@@ -1383,9 +1385,18 @@ function installConversationMutationStub(): {
       deletes.push(Number(match[1]))
       return new Response(JSON.stringify({ ok: true }), { status: 200 })
     }
+    if (url === '/api/conversations/bulk-delete' && method === 'POST') {
+      const body = init?.body === undefined ? {} : (JSON.parse(String(init.body)) as { ids?: number[] })
+      const ids = body.ids ?? []
+      bulkDeletes.push(ids)
+      return new Response(JSON.stringify({ deleted: ids, failures: [] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }
     return new Response(JSON.stringify({}), { status: 200 })
   })
-  return { patches, deletes, restore: () => { globalThis.fetch = original } }
+  return { patches, deletes, bulkDeletes, restore: () => { globalThis.fetch = original } }
 }
 
 async function mountOverview(store: HelmxExternalStore): Promise<{
@@ -1465,10 +1476,10 @@ test('ConversationOverview batch mode: card click toggles selection, managed/bot
     for (const card of cards) {
       assert.ok(card.querySelector('.overview-card-batch-check') !== null, 'every card carries a batch checkbox')
     }
-    // 保护口径与侧栏批量模式同界：托管（sidebarSection 接管）与 bot 根不可勾选。
+    // 勾选口径：托管（sidebarSection 接管）根不可勾选；空闲 bot 根放开勾选（仅参与批量删除）。
     assert.equal(cardById(mount.container, 1)?.querySelector<HTMLInputElement>('[role="checkbox"], input[type="checkbox"]')?.disabled, false)
     assert.equal(cardById(mount.container, 3)?.querySelector<HTMLInputElement>('[role="checkbox"], input[type="checkbox"]')?.disabled, true, 'the managed root is not selectable')
-    assert.equal(cardById(mount.container, 4)?.querySelector<HTMLInputElement>('[role="checkbox"], input[type="checkbox"]')?.disabled, true, 'the bot root is not selectable')
+    assert.equal(cardById(mount.container, 4)?.querySelector<HTMLInputElement>('[role="checkbox"], input[type="checkbox"]')?.disabled, false, 'the idle bot root is bulk-selectable (bulk delete only)')
 
     // 批量模式点击卡片 = 勾选（不打开会话抽屉）
     await act(async () => {
@@ -1481,7 +1492,7 @@ test('ConversationOverview batch mode: card click toggles selection, managed/bot
     })
     assert.ok(cardById(mount.container, 1)?.classList.contains('is-selected') === false, 'clicking again deselects')
 
-    // 全选只覆盖可勾选卡片（常规根 A/B），托管与 bot 根保持未选。
+    // 全选覆盖可勾选卡片（常规根 A/B + 空闲 bot 根），托管根保持未选。
     const selectAll = [...mount.container.querySelectorAll<HTMLButtonElement>('.overview-batch-bar button')]
       .find((btn) => btn.textContent === 'Select all')
     assert.ok(selectAll !== null)
@@ -1491,8 +1502,8 @@ test('ConversationOverview batch mode: card click toggles selection, managed/bot
     assert.ok(cardById(mount.container, 1)?.classList.contains('is-selected'))
     assert.ok(cardById(mount.container, 2)?.classList.contains('is-selected'))
     assert.ok(cardById(mount.container, 3)?.classList.contains('is-selected') === false)
-    assert.ok(cardById(mount.container, 4)?.classList.contains('is-selected') === false)
-    assert.ok(mount.container.textContent?.includes('2 selected'), 'the bar states the honest selection count')
+    assert.ok(cardById(mount.container, 4)?.classList.contains('is-selected'))
+    assert.ok(mount.container.textContent?.includes('3 selected'), 'the bar states the honest selection count')
 
     // 退出批量模式：清空勾选、恢复直达语义
     const exit = [...mount.container.querySelectorAll<HTMLButtonElement>('.overview-batch-bar button')]
@@ -1570,14 +1581,14 @@ test('ConversationOverview batch delete requires confirmation and DELETEs each s
       .find((btn) => btn.textContent?.startsWith('Delete'))
     assert.ok(deleteBtn !== null)
 
-    // 先取消：不发起任何 DELETE
+    // 先取消：不发起任何删除请求
     await act(async () => {
       deleteBtn!.click()
     })
     await overviewSettle()
     const dialog = document.querySelector('[role="alertdialog"]')
     assert.ok(dialog !== null, 'batch delete opens a confirmation dialog first')
-    assert.ok(dialog.textContent?.includes('Delete 2 selected conversations?'), 'the confirm copy carries the count')
+    assert.ok(dialog.textContent?.includes('Delete 3 selected conversations?'), 'the confirm copy carries the count')
     const cancel = [...document.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')]
       .find((btn) => btn.textContent?.trim() === 'Cancel')
     await act(async () => {
@@ -1585,8 +1596,9 @@ test('ConversationOverview batch delete requires confirmation and DELETEs each s
     })
     await overviewSettle()
     assert.deepEqual(stub.deletes, [], 'cancelling the dialog issues no deletes')
+    assert.deepEqual(stub.bulkDeletes, [], 'cancelling the dialog issues no bulk delete')
 
-    // 确认：逐会话 DELETE + 通知 + 退出批量模式
+    // 确认：单次 bulk-delete 请求（含空闲 bot 根）+ 通知 + 退出批量模式
     await act(async () => {
       deleteBtn!.click()
     })
@@ -1598,7 +1610,8 @@ test('ConversationOverview batch delete requires confirmation and DELETEs each s
       confirm!.click()
     })
     await overviewSettle()
-    assert.deepEqual([...stub.deletes].sort(), [1, 2], 'confirming DELETEs every selected root')
+    assert.deepEqual(stub.bulkDeletes, [[1, 2, 4]], 'confirming sends exactly one bulk-delete request with every selected root')
+    assert.deepEqual(stub.deletes, [], 'the bulk flow never falls back to per-conversation DELETEs')
     assert.ok(store.getNotices().some((notice) => notice.title === 'Bulk delete completed'), 'the batch delete outcome lands as a notice')
     assert.ok(mount.container.querySelector('.overview-batch-bar') === null, 'a successful batch delete exits batch mode')
   } finally {
@@ -1824,10 +1837,10 @@ test('ConversationOverview batch boundary: selection stays within the visible se
     await act(async () => {
       selectAll?.click()
     })
-    assert.ok(mount.container.textContent?.includes('2 selected'), 'both visible human roots are selected')
+    assert.ok(mount.container.textContent?.includes('3 selected'), 'both human roots plus the idle bot root are selected')
 
     const deleteBtn = [...mount.container.querySelectorAll<HTMLButtonElement>('.overview-batch-bar button')]
-      .find((btn) => btn.textContent === 'Delete (2)')
+      .find((btn) => btn.textContent === 'Delete (3)')
     assert.ok(deleteBtn)
     await act(async () => deleteBtn.click())
     assert.ok(document.querySelector('[role="alertdialog"]'))

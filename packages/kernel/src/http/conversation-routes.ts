@@ -1,6 +1,6 @@
 /**
  * Conversation domain routes: /api/conversations (list/create/detail/update/delete/input/
- * withdraw/abort/reset/compact/fork/entries/:entryId/artifacts), /api/asks
+ * withdraw/abort/reset/compact/fork/entries/:entryId/artifacts/bulk-delete), /api/asks
  * (approval queue), and /api/search (full-text index search).
  */
 import type { ConversationListFilter, ConversationStatus } from '@helmx/protocol'
@@ -9,6 +9,7 @@ import { buildContentDisposition, errorResponse, jsonOk, readJsonBody, type Json
 import type { KernelRuntimeLike } from './contracts.js'
 import {
   parseAskAnswerBody,
+  parseConversationBulkDeleteBody,
   parseConversationCompactBody,
   parseConversationForkBody,
   parseConversationInit,
@@ -45,9 +46,16 @@ export async function handleConversationsDomain(
     }
     return methodNotAllowed(redactor, method)
   }
+  // ---- Bulk delete: POST /api/conversations/bulk-delete (matched before :id parsing; the literal is not a positive integer) ----
+  if (second === 'bulk-delete') {
+    if (third !== undefined) return errorResponse(redactor, 404, 'not_found', 'route not found')
+    if (method !== 'POST') return methodNotAllowed(redactor, method)
+    const body = await readJsonBody(ctx.request)
+    const { ids } = parseConversationBulkDeleteBody(body)
+    return jsonOk(redactor, await kernel.deleteConversations(ids))
+  }
   const id = parseIdParam(second)
-  if (third === undefined) {
-    if (method === 'GET') {
+  if (third === undefined) {    if (method === 'GET') {
       return jsonOk(redactor, await kernel.getConversationDetail(id, parseDetailPagination(ctx.url)))
     }
     if (method === 'PATCH') {

@@ -343,6 +343,7 @@ describe('workspace file reader & HTTP GET /api/conversations/:id/files/content'
       createConversation: () => { throw new Error('unused') },
       updateConversation: () => { throw new Error('unused') },
       deleteConversation: () => {},
+      deleteConversations: (ids: readonly number[]) => ({ deleted: [...ids], failures: [] }),
       submitInput: () => ({ submissionId: 'x' }),
       waitForInput: () => { throw new Error('unused') },
       abortConversation: () => {},

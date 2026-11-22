@@ -58,6 +58,7 @@ function makeKernel(dataDir: string): KernelRuntimeLike {
       throw new Error('unused')
     },
     deleteConversation: async () => {},
+    deleteConversations: async (ids: readonly number[]) => ({ deleted: [...ids], failures: [] }),
     submitInput: async () => {
       throw new Error('unused')
     },
