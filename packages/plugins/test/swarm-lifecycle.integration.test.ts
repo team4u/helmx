@@ -98,7 +98,6 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
       for (const toolName of [
         'swarm_create_group',
         'swarm_update_group',
-        'swarm_manage_channel',
         'swarm_dispatch_worker',
         'swarm_board_post',
         'swarm_board_read',
@@ -145,7 +144,6 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
       const afterTools = preCapture[1]!.toolNames
       for (const expected of [
         'swarm_update_group',
-        'swarm_manage_channel',
         'swarm_dispatch_worker',
         'swarm_board_post',
         'swarm_board_read',
@@ -350,7 +348,7 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
         '/skill:swarm 重构鉴权模块并交叉验收',
         'helmx.input must preserve original /skill:swarm text verbatim without system-prompt wall',
       )
-      for (const expected of ['swarm_manage_channel', 'swarm_dispatch_worker', 'swarm_board_post', 'swarm_board_read', 'swarm_close_group', 'bash', 'edit', 'write', 'subagent', 'SubagentWorkflow']) {
+      for (const expected of ['swarm_update_group', 'swarm_dispatch_worker', 'swarm_board_post', 'swarm_board_read', 'swarm_close_group', 'bash', 'edit', 'write', 'subagent', 'SubagentWorkflow']) {
         assert.ok(turnMeta.toolNames.includes(expected), `expected ${expected} exposed on turn 1 after /skill:swarm`)
       }
       assert.equal(turnMeta.toolNames.includes('swarm_create_group'), false, 'expected swarm_create_group hidden on turn 1 after /skill:swarm')
@@ -482,10 +480,9 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
       await kernel.waitForIdle(noSkillCoord.id)
       assert.equal(noSkillCoordSection.includes('load_skill('), false)
       assert.equal(availableActionsInCoordTurn.includes('complete_board_members'), false, 'visibility:ui hides UI completer from <available_actions>')
-      assert.equal(availableActionsInCoordTurn.includes('complete_board_channels'), false, 'visibility:ui hides UI channel completer from <available_actions>')
       assert.equal(availableActionsInCoordTurn.includes('list_mentionable'), false, 'exposeToPrompt:false hides profile @ completer')
-      assert.ok(coordToolsInTurn.includes('swarm_manage_channel'), 'coordinator manages channels directly via exposeAsTool derived tool')
-      assert.equal(availableActionsInCoordTurn.includes('builtin:swarm.manage_channel'), false, 'exposeAsTool action is not duplicated in <available_actions>')
+      assert.ok(coordToolsInTurn.includes('swarm_update_group'), 'coordinator updates group directly via exposeAsTool derived tool')
+      assert.equal(availableActionsInCoordTurn.includes('builtin:swarm.update_group'), false, 'exposeAsTool action is not duplicated in <available_actions>')
       await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'close_group', { groupId: noSkillGroupId }, { conversationId: noSkillCoord.id })
 
       // 2) Dispatch validation & flat forkFrom & structuredOutput tool envelope
@@ -699,7 +696,7 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
     }
   })
 
-  test('swarm-int16: all 12 swarm_* tools emit bounded presentationMeta alongside full structuredOutput, and compiled SwarmToolView reads presentationMeta directly', { timeout: 60_000 }, async (t) => {
+  test('swarm-int16: all 11 swarm_* tools emit bounded presentationMeta alongside full structuredOutput, and compiled SwarmToolView reads presentationMeta directly', { timeout: 60_000 }, async (t) => {
     const root = useTempDir(t, 'helmx-swarm-int16-')
     const env = await openSwarmEnv(root, gitTemplate)
     try {
@@ -746,15 +743,6 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
       assert.equal(updated.structuredOutput.group.title, 'Presentation Squad v2')
       validateOrThrow(swarmToolPresentationMetaSchema, updated.presentationMeta, 'swarm_update_group meta')
       assert.deepEqual(updated.presentationMeta, { groupId, groupTitle: 'Presentation Squad v2' })
-
-      const managedCh = await execSwarmDerived<{ channels: Array<{ name: string }> }>(
-        'swarm_manage_channel',
-        { groupId, op: 'create', channel: 'review', topic: 'Review channel' },
-        { conversationId: coord.id },
-      )
-      assert.ok(managedCh.structuredOutput.channels.some((c) => c.name === 'review'))
-      validateOrThrow(swarmToolPresentationMetaSchema, managedCh.presentationMeta, 'swarm_manage_channel meta')
-      assert.deepEqual(managedCh.presentationMeta, { groupId })
 
       env.faux.setResponses([
         fauxAssistantMessage(

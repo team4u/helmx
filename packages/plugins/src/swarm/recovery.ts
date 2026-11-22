@@ -1,177 +1,97 @@
 /**
- * builtin:swarm 强杀（SIGKILL）与重启对账辅助：
- * - inspectBoardWalLines：以 meta.json.headSeq 为唯一事务提交点校验 board.jsonl，回滚至多 1 条崩溃未提交 WAL 尾；
- * - classifyInflightIntent：对账崩溃前登记的在途唤醒/续催/汇总提交意图（区分仍在跑 / 已完成 / 未提交）；
- * - classifyMemberDetailOutcome：从会话时间线精准判定重启前遗留未回帖成员是 failed / aborted / 静默完成 / 仍排队；
- * - reconcileOrphanConversations / reconcileOrphanWorktreeHolds：按 meta.json 单真源清理半途强杀遗留的孤儿会话标签与 Worktree 锁。
+ * builtin:swarm crash-recovery & boot-reconciliation helpers:
+ * - WAL tail inspection/rollback against meta.headSeq;
+ * - authoritative inflight submission classification (pi_submissions);
+ * - settled member timeline outcome classification;
+ * - orphan conversation tag & worktree hold cleanup on boot.
  */
 import {
-  HelmxError,
-  isJsonObject,
-  type ConversationEntry,
-  type ConversationSubmissionInfo,
-  type ConversationSummary,
-  type HelmxHostApi,
-  type HelmxPluginContext,
+  HelmxError, isJsonObject,
+  type ConversationEntry, type ConversationSummary, type HelmxHostApi, type HelmxPluginContext,
 } from '@helmx/protocol'
+import { lastAssistantText, truncate } from '../entry-text.js'
 import {
-  ARCHIVED_COORDINATOR_TAG,
-  ARCHIVED_WORKER_TAG,
-  COORDINATOR_TAG,
-  SWARM_PLUGIN_ID,
-  WORKER_TAG,
-  assertBoardPost,
-  type BoardPost,
-  type CollabGroupRecord,
-  type GroupMemberState,
+  ARCHIVED_COORDINATOR_TAG, ARCHIVED_WORKER_TAG, COORDINATOR_TAG, SWARM_PLUGIN_ID, WORKER_TAG,
+  assertBoardPost, setConversationTags, swarmError,
+  type BoardPost, type CollabGroupRecord, type GroupMemberState,
 } from './contracts.js'
-import {
-  WORKTREE_PLUGIN_ID,
-  cleanupManagedWorktree,
-  releaseWorktreeHoldById,
-} from './worktree-bridge.js'
+import { WORKTREE_PLUGIN_ID, cleanupManagedWorktree, releaseWorktreeHoldById } from './worktree-bridge.js'
 
-export interface WalInspectionResult {
-  posts: BoardPost[]
-  trimmed: boolean
-  trimReason?: string
-}
+export interface WalInspectionResult { posts: BoardPost[]; trimmed: boolean; trimReason?: string }
 
-/**
- * 纯函数校验 board.jsonl 与 meta.headSeq 提交点一致性：
- * - 前 headSeq 行必须严格合法且 seq=1..headSeq 连续，任何缺失或损坏均抛 swarm_doc_corrupt；
- * - 允许至多 1 行未提交 WAL 尾（meta.json 原子替换前崩溃留下的截断半行或单条 seq=headSeq+1 完整待提交行），
- *   返回 trimmed=true 交由调用方原子截断回 headSeq。
- */
-export function inspectBoardWalLines(
-  rawBoard: string,
-  groupId: string,
-  headSeq: number,
-): WalInspectionResult {
+export function inspectBoardWalLines(rawBoard: string, groupId: string, headSeq: number): WalInspectionResult {
   const corrupt = (detail: string, extra?: Record<string, unknown>): HelmxError =>
-    new HelmxError('swarm_doc_corrupt', `协作组 '${groupId}' ${detail}`, 500, {
-      pluginId: SWARM_PLUGIN_ID,
-      groupId,
-      ...extra,
-    })
+    swarmError('swarm_doc_corrupt', `协作组 '${groupId}' ${detail}`, 500, { groupId, ...extra })
 
   if (rawBoard === '') {
-    if (headSeq !== 0) {
-      throw corrupt(`board.jsonl 为空但 meta.headSeq=${headSeq}`, { postsCount: 0, headSeq })
-    }
+    if (headSeq !== 0) throw corrupt(`board.jsonl 为空但 meta.headSeq=${headSeq}`, { postsCount: 0, headSeq })
     return { posts: [], trimmed: false }
   }
 
-  const endsWithNewline = rawBoard.endsWith('\n')
   const rawLines = rawBoard.split('\n')
-  if (endsWithNewline) rawLines.pop()
-
+  if (rawBoard.endsWith('\n')) rawLines.pop()
   if (rawLines.length < headSeq) {
-    throw corrupt(`board.jsonl 条数(${rawLines.length})少于 meta.headSeq(${headSeq})`, {
-      postsCount: rawLines.length,
-      headSeq,
-    })
+    throw corrupt(`board.jsonl 条数(${rawLines.length})少于 meta.headSeq(${headSeq})`, { postsCount: rawLines.length, headSeq })
   }
 
   const posts: BoardPost[] = []
   for (let i = 0; i < headSeq; i += 1) {
-    const rawLine = rawLines[i]!
-    if (rawLine.trim() === '') {
-      throw corrupt(`board.jsonl 第 ${i + 1} 行为空行`, { line: i + 1 })
+    const line = rawLines[i]!
+    if (line.trim() === '') throw corrupt(`board.jsonl 第 ${i + 1} 行为空行`, { line: i + 1 })
+    let parsed: unknown
+    try { parsed = JSON.parse(line) } catch (err) {
+      throw corrupt(`board.jsonl 第 ${i + 1} 行 JSON 非法：${err instanceof Error ? err.message : String(err)}`, { line: i + 1 })
     }
-    let parsedLine: unknown
-    try {
-      parsedLine = JSON.parse(rawLine)
-    } catch (err) {
-      throw corrupt(
-        `board.jsonl 第 ${i + 1} 行 JSON 非法：${err instanceof Error ? err.message : String(err)}`,
-        { line: i + 1 },
-      )
-    }
-    const post = assertBoardPost(parsedLine)
+    const post = assertBoardPost(parsed)
     if (post.groupId !== groupId || post.seq !== i + 1) {
-      throw corrupt(
-        `board.jsonl 第 ${i + 1} 行序号或 groupId 不连续（收到 seq=${post.seq}）`,
-        { line: i + 1, seq: post.seq },
-      )
+      throw corrupt(`board.jsonl 第 ${i + 1} 行序号或 groupId 不连续（收到 seq=${post.seq}）`, { line: i + 1, seq: post.seq })
     }
     posts.push(post)
   }
 
-  const extraLines = rawLines.slice(headSeq)
-  if (extraLines.length === 0) {
-    return { posts, trimmed: false }
-  }
-  if (extraLines.length > 1) {
-    throw corrupt(
-      `board.jsonl 条数(${rawLines.length})超出 meta.headSeq(${headSeq}) 多行（${extraLines.length} 行），拒绝静默丢弃`,
-      { postsCount: rawLines.length, headSeq },
-    )
+  const extraCount = rawLines.length - headSeq
+  if (extraCount === 0) return { posts, trimmed: false }
+  if (extraCount > 1) {
+    throw corrupt(`board.jsonl 条数(${rawLines.length})超出 meta.headSeq(${headSeq}) 多行（${extraCount} 行），拒绝静默丢弃`, { postsCount: rawLines.length, headSeq })
   }
 
-  const extraLine = extraLines[0]!
-  let parsedExtra: unknown
+  const extraLine = rawLines[headSeq]!
   let extraParsedOk = false
   if (extraLine.trim() !== '') {
     try {
-      parsedExtra = JSON.parse(extraLine)
+      const extraPost = assertBoardPost(JSON.parse(extraLine))
       extraParsedOk = true
-    } catch {
-      // 崩溃截断的半行 JSON，按未提交 WAL 尾回滚
-    }
-  }
-  if (extraParsedOk) {
-    const extraPost = assertBoardPost(parsedExtra)
-    if (extraPost.groupId !== groupId || extraPost.seq !== headSeq + 1) {
-      throw corrupt(
-        `board.jsonl 第 ${headSeq + 1} 行未提交记录序号或 groupId 异常（收到 seq=${extraPost.seq}）`,
-        { line: headSeq + 1, seq: extraPost.seq },
-      )
+      if (extraPost.groupId !== groupId || extraPost.seq !== headSeq + 1) {
+        throw corrupt(`board.jsonl 第 ${headSeq + 1} 行未提交记录序号或 groupId 异常（收到 seq=${extraPost.seq}）`, { line: headSeq + 1, seq: extraPost.seq })
+      }
+    } catch (err) {
+      if (err instanceof HelmxError) throw err
     }
   }
 
   return {
-    posts,
-    trimmed: true,
-    trimReason: extraParsedOk
-      ? `uncommitted post seq=${headSeq + 1} before meta.json commit`
-      : `truncated tail line after headSeq=${headSeq}`,
+    posts, trimmed: true,
+    trimReason: extraParsedOk ? `uncommitted post seq=${headSeq + 1} before meta.json commit` : `truncated tail line after headSeq=${headSeq}`,
   }
-}
-
-export interface InflightSubmissionMarker {
-  requestId: string
-  baseCompletionSeq: number
 }
 
 export type InflightIntentStatus = 'missing_conv' | 'active' | 'settled' | 'uncommitted'
 
-/**
- * 统一对账在途提交意图（唤醒 / 续催 / 主控汇总共用）：
- * 仅以内核持久提交表（pi_submissions）中 (conversationId, requestId) 的权威记录为准，
- * 绝不凭无关回合的 working/blocked 状态或 completionSeq 推进猜测提交是否生效：
- * - missing_conv：目标会话不存在；
- * - active：该 requestId 已被内核受理且处于 queued / placed 在途状态；
- * - settled：该 requestId 已达 done / unanswered 终态；
- * - uncommitted：内核未找到该 requestId 提交记录，可安全释放水位并幂等重投。
- */
 export async function classifyInflightIntent(
   host: Pick<HelmxHostApi, 'getConversationSubmission'>,
   conversationId: number,
   summary: ConversationSummary | undefined,
-  intent: Pick<InflightSubmissionMarker, 'requestId'>,
+  intent: { requestId: string },
 ): Promise<InflightIntentStatus> {
   if (summary === undefined) return 'missing_conv'
-  let submission: ConversationSubmissionInfo | undefined
   try {
-    submission = await host.getConversationSubmission(conversationId, intent.requestId)
+    const sub = await host.getConversationSubmission(conversationId, intent.requestId)
+    if (sub === undefined) return 'uncommitted'
+    return sub.status === 'queued' || sub.status === 'placed' ? 'active' : 'settled'
   } catch (err) {
     if (err instanceof HelmxError && err.code === 'not_found') return 'missing_conv'
     throw err
   }
-  if (submission === undefined) return 'uncommitted'
-  if (submission.status === 'queued' || submission.status === 'placed') return 'active'
-  return 'settled'
 }
 
 export type MemberSettledClassification =
@@ -186,26 +106,17 @@ function matchesMemberWakeOrNudgeInput(
   memberName: string,
   taskSeq: number,
 ): boolean {
-  if (entry.kind !== 'helmx.input' || !isJsonObject(entry.data)) return false
+  if (entry.kind !== 'helmx.input' || !isJsonObject(entry.data) || typeof entry.data['id'] !== 'string') return false
   const id = entry.data['id']
-  if (typeof id !== 'string') return false
   if (id === `swarm-nudge:${groupId}:${memberName}:${taskSeq}`) return true
-  const wakePrefix = `swarm-wakeup:${groupId}:${memberName}:`
-  if (!id.startsWith(wakePrefix)) return false
-  const range = id.slice(wakePrefix.length)
-  const dash = range.indexOf('-')
-  if (dash <= 0) return false
-  const toSeq = Number(range.slice(dash + 1))
+  const prefix = `swarm-wakeup:${groupId}:${memberName}:`
+  if (!id.startsWith(prefix)) return false
+  const dash = id.indexOf('-', prefix.length)
+  if (dash <= prefix.length) return false
+  const toSeq = Number(id.slice(dash + 1))
   return Number.isInteger(toSeq) && toSeq >= taskSeq
 }
 
-/**
- * 根据成员摘要与最近时间线，判定重启前尚未调用 swarm_board_post 的已停机成员应走哪条自愈分支：
- * - error -> 补发系统 [blocker]；
- * - completed（最后回复非 aborted/error）-> 补跑 evaluateSilentExit（单次续催或二次 [blocker]）；
- * - aborted（被人为中止或无回复中止）-> 清理任务水位不误发续催；
- * - pending_queue（唤醒仍在 pi.inbox 等待压缩完成）-> 暂不介入。
- */
 export function classifyMemberDetailOutcome(
   entries: readonly ConversationEntry[],
   summary: Pick<ConversationSummary, 'status' | 'completionSeq' | 'lastError'>,
@@ -213,10 +124,7 @@ export function classifyMemberDetailOutcome(
   member: Pick<GroupMemberState, 'name' | 'lastWakeTaskSeq' | 'lastWakeCompletionSeq'>,
 ): MemberSettledClassification {
   if (summary.status === 'error') {
-    return {
-      kind: 'failed',
-      ...(summary.lastError !== undefined ? { error: summary.lastError } : {}),
-    }
+    return { kind: 'failed', ...(summary.lastError !== undefined ? { error: summary.lastError } : {}) }
   }
   const taskSeq = member.lastWakeTaskSeq
   if (taskSeq === undefined) return { kind: 'pending_queue' }
@@ -231,14 +139,11 @@ export function classifyMemberDetailOutcome(
       break
     }
   }
-
-  if (lastInputIdx === -1) {
-    if (!completionAdvanced) return { kind: 'pending_queue' }
-  } else if (!completionAdvanced) {
-    const lastInput = entries[lastInputIdx]!
-    if (!matchesMemberWakeOrNudgeInput(lastInput, groupId, member.name, taskSeq)) {
-      return { kind: 'pending_queue' }
-    }
+  if (
+    !completionAdvanced &&
+    (lastInputIdx === -1 || !matchesMemberWakeOrNudgeInput(entries[lastInputIdx]!, groupId, member.name, taskSeq))
+  ) {
+    return { kind: 'pending_queue' }
   }
 
   const tail = lastInputIdx >= 0 ? entries.slice(lastInputIdx + 1) : entries
@@ -248,23 +153,26 @@ export function classifyMemberDetailOutcome(
     for (let j = entry.model.length - 1; j >= 0; j -= 1) {
       const msg = entry.model[j]
       if (!isJsonObject(msg) || msg['role'] !== 'assistant') continue
-      const stopReason = msg['stopReason']
-      if (stopReason === 'aborted') return { kind: 'aborted' }
-      if (stopReason === 'error') {
-        const errText =
-          typeof msg['errorMessage'] === 'string' && msg['errorMessage'].trim() !== ''
-            ? msg['errorMessage'].trim()
-            : undefined
-        return { kind: 'failed', ...(errText !== undefined ? { error: errText } : {}) }
+      if (msg['stopReason'] === 'aborted') return { kind: 'aborted' }
+      if (msg['stopReason'] === 'error') {
+        const errText = typeof msg['errorMessage'] === 'string' ? msg['errorMessage'].trim() : ''
+        return { kind: 'failed', ...(errText !== '' ? { error: errText } : {}) }
       }
       return { kind: 'completed' }
     }
   }
-
   return { kind: 'aborted' }
 }
 
-/** 启动阶段按 meta.json 单真源收敛孤儿/错配的 Swarm 会话标签与归属权。 */
+export async function collectMemberLastReplySummary(
+  host: Pick<HelmxHostApi, 'getConversationDetail' | 'redact'>,
+  conversationId: number,
+): Promise<string> {
+  const detail = await host.getConversationDetail(conversationId, { limit: 10 })
+  const lastText = lastAssistantText(detail.entries).trim()
+  return lastText === '' ? '' : truncate(host.redact(lastText), 600)
+}
+
 export async function reconcileOrphanConversations(
   ctx: HelmxPluginContext,
   groups: Iterable<CollabGroupRecord>,
@@ -280,95 +188,54 @@ export async function reconcileOrphanConversations(
   }
 
   for (const conv of ctx.host.listConversations()) {
-    const hasCoordTag = conv.tags.includes(COORDINATOR_TAG)
-    const hasArchivedCoordTag = conv.tags.includes(ARCHIVED_COORDINATOR_TAG)
-    const hasWorkerTag = conv.tags.includes(WORKER_TAG)
-    const hasArchivedWorkerTag = conv.tags.includes(ARCHIVED_WORKER_TAG)
+    const hasCoord = conv.tags.includes(COORDINATOR_TAG)
+    const hasArchCoord = conv.tags.includes(ARCHIVED_COORDINATOR_TAG)
+    const hasWorker = conv.tags.includes(WORKER_TAG)
+    const hasArchWorker = conv.tags.includes(ARCHIVED_WORKER_TAG)
 
     if (activeCoordinators.has(conv.id)) {
-      if (!hasCoordTag || hasArchivedCoordTag) {
-        const nextTags = [
-          ...conv.tags.filter((t) => t !== ARCHIVED_COORDINATOR_TAG && t !== COORDINATOR_TAG),
-          COORDINATOR_TAG,
-        ]
-        await ctx.host.updateConversation(conv.id, { tags: nextTags })
-      }
-      continue
-    }
-
-    if (activeWorkers.has(conv.id)) {
+      if (!hasCoord || hasArchCoord) await setConversationTags(ctx, conv, COORDINATOR_TAG, [ARCHIVED_COORDINATOR_TAG])
+    } else if (activeWorkers.has(conv.id)) {
       ctx.host.markConversationOwnership(conv.id, 'helmx')
-      if (!hasWorkerTag || hasArchivedWorkerTag || hasCoordTag) {
-        const nextTags = [
-          ...conv.tags.filter((t) => t !== ARCHIVED_WORKER_TAG && t !== COORDINATOR_TAG && t !== WORKER_TAG),
-          WORKER_TAG,
-        ]
-        await ctx.host.updateConversation(conv.id, { tags: nextTags })
+      if (!hasWorker || hasArchWorker || hasCoord) {
+        await setConversationTags(ctx, conv, WORKER_TAG, [ARCHIVED_WORKER_TAG, COORDINATOR_TAG])
       }
-      continue
-    }
-
-    if (hasWorkerTag || (hasCoordTag && conv.parentConversationId !== undefined)) {
+    } else if (hasWorker || (hasCoord && conv.parentConversationId !== undefined)) {
       ctx.host.markConversationOwnership(conv.id, 'helmx')
-      const base = conv.tags.filter(
-        (t) => t !== WORKER_TAG && t !== COORDINATOR_TAG && t !== ARCHIVED_WORKER_TAG,
-      )
-      await ctx.host.updateConversation(conv.id, { tags: [...base, ARCHIVED_WORKER_TAG] })
-      continue
-    }
-
-    if (hasCoordTag && conv.parentConversationId === undefined) {
-      const base = conv.tags.filter((t) => t !== COORDINATOR_TAG && t !== ARCHIVED_COORDINATOR_TAG)
-      await ctx.host.updateConversation(conv.id, { tags: [...base, ARCHIVED_COORDINATOR_TAG] })
+      await setConversationTags(ctx, conv, ARCHIVED_WORKER_TAG, [WORKER_TAG, COORDINATOR_TAG])
+    } else if (hasCoord && conv.parentConversationId === undefined) {
+      await setConversationTags(ctx, conv, ARCHIVED_COORDINATOR_TAG, [COORDINATOR_TAG])
     }
   }
 }
 
-interface ListedWorktreeEntry {
-  id: string
-  status?: string
-  hold?: { pluginId?: string; holdId?: string }
-}
-
-/**
- * 启动阶段回收半途强杀遗留的孤儿 Swarm Worktree 锁与目录：
- * 仅处理 status === 'active' 且 hold.pluginId === 'builtin:swarm' 但不对应任何活跃成员的记录；
- * keepWorktree: true 主动释放锁（hold 已为空）的分支不受影响。
- */
 export async function reconcileOrphanWorktreeHolds(
   ctx: HelmxPluginContext,
   groups: Iterable<CollabGroupRecord>,
   logDiagnostic: (message: string) => void,
 ): Promise<boolean> {
-  let listed: { worktrees?: ListedWorktreeEntry[] } | undefined
+  let listed: { worktrees?: Array<{ id: string; status?: string; hold?: { pluginId?: string; holdId?: string } }> }
   try {
-    listed = (await ctx.host.invokeAction(WORKTREE_PLUGIN_ID, 'list_worktrees', {})) as {
-      worktrees?: ListedWorktreeEntry[]
-    }
+    listed = (await ctx.host.invokeAction(WORKTREE_PLUGIN_ID, 'list_worktrees', {})) as typeof listed
   } catch (err) {
-    if (
-      err instanceof HelmxError &&
-      (err.code === 'plugin_disabled' || err.code === 'unknown_action')
-    ) {
-      return false
+    if (!(err instanceof HelmxError && (err.code === 'plugin_disabled' || err.code === 'unknown_action'))) {
+      logDiagnostic(`查询受管 worktree 失败：${err instanceof Error ? err.message : String(err)}`)
     }
-    logDiagnostic(`查询受管 worktree 失败：${err instanceof Error ? err.message : String(err)}`)
     return false
   }
 
   const activeHoldTargets = new Map<string, string>()
   for (const group of groups) {
     if (group.status !== 'active') continue
-    for (const member of group.members) {
-      if (member.lifecycle === 'active' && member.worktreeId !== undefined) {
-        activeHoldTargets.set(`${group.id}:${member.name}`, member.worktreeId)
+    for (const m of group.members) {
+      if (m.lifecycle === 'active' && m.worktreeId !== undefined) {
+        activeHoldTargets.set(`${group.id}:${m.name}`, m.worktreeId)
       }
     }
   }
 
-  for (const wt of listed?.worktrees ?? []) {
-    if (wt.status !== 'active') continue
-    if (wt.hold?.pluginId !== SWARM_PLUGIN_ID) continue
+  for (const wt of listed.worktrees ?? []) {
+    if (wt.status !== 'active' || wt.hold?.pluginId !== SWARM_PLUGIN_ID) continue
     const holdId = wt.hold.holdId ?? ''
     if (holdId !== '' && activeHoldTargets.get(holdId) === wt.id) continue
     if (holdId === '') {

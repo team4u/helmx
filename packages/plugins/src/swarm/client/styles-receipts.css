@@ -1,8 +1,4 @@
-/* ---------------------------------------------------------------------------
- * Timeline 1-line receipt pills (swarm:board-report / swarm:board-wakeup)
- * ------------------------------------------------------------------------- */
-
-/* 整卡即点击目标（同成员行/26px 工具轨迹的整行按钮心智模型，无尾部 chevron） */
+/* Timeline 1-line receipt pills (swarm:board-report / swarm:board-wakeup) */
 .sw-receipt-pill {
   display: flex;
   align-items: center;
@@ -18,36 +14,11 @@
   text-align: left;
   cursor: pointer;
 }
-
-.sw-receipt-pill:hover {
-  background: var(--bg-hover);
-}
-
-.sw-receipt-pill:focus-visible {
-  outline: 1.5px solid var(--accent);
-  outline-offset: -1.5px;
-}
-
-.sw-receipt-seq {
-  font-size: 11.5px;
-  color: var(--fg-subtle);
-}
-
-.sw-receipt-count {
-  font-size: 11.5px;
-  color: var(--fg-subtle);
-}
-
-.sw-receipt-headline {
-  color: var(--fg-secondary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 480px;
-}
+.sw-receipt-pill:hover { background: var(--bg-hover); }
+.sw-receipt-pill:focus-visible { outline: 1.5px solid var(--accent); outline-offset: -1.5px; }
+.sw-receipt-seq, .sw-receipt-count { font-size: 11.5px; color: var(--fg-subtle); }
+.sw-receipt-headline { color: var(--fg-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 480px; }
 
 @media (max-width: 680px) {
-  .sw-receipt-headline {
-    max-width: 100%;
-  }
+  .sw-receipt-headline { max-width: 100%; }
 }

@@ -1,12 +1,9 @@
 /**
- * builtin:swarm 与 builtin:worktree 的跨插件 Worktree 协作桥接辅助：
- * - 只读检视 worktree 状态（inspect_worktree，由 builtin:worktree 权威计算 unmergedCommits）；
- * - 统一释放持久持有锁（release_worktree_hold）与清理工作树（cleanup_worktree）；
- * - 统一生成 Worktree 交接快照与未合入提交汇总。
+ * Cross-plugin bridge between builtin:swarm and builtin:worktree.
  */
-import type { HelmxPluginContext } from '@helmx/protocol'
+import { HelmxError, type HelmxPluginContext } from '@helmx/protocol'
 import { WORKTREE_PLUGIN_ID, type WorktreeInspectResult } from '../contracts.js'
-import { type GroupMemberState, type WorktreeHandoffSnapshot } from './contracts.js'
+import type { GroupMemberState, RetainedWorktreeInfo, WorktreeHandoffSnapshot } from './contracts.js'
 
 export { WORKTREE_PLUGIN_ID }
 
@@ -18,24 +15,24 @@ export interface CheckedMemberWorktree {
   isDirty: boolean
 }
 
+export const isIgnorableWorktreeError = (err: unknown): boolean =>
+  err instanceof HelmxError && (err.code === 'not_found' || err.code === 'plugin_disabled' || err.code === 'unknown_action')
+
 export function extractChangedFilesPreview(inspected: WorktreeInspectResult, maxItems = 20): string[] {
   const seen = new Set<string>()
   const out: string[] = []
   const push = (file: string): void => {
     const clean = file.trim()
-    if (clean === '' || seen.has(clean)) return
-    seen.add(clean)
-    if (out.length < maxItems) out.push(clean)
+    if (clean && !seen.has(clean)) {
+      seen.add(clean)
+      if (out.length < maxItems) out.push(clean)
+    }
   }
-  for (const rawLine of inspected.dirtyFiles) {
-    const pathPart = rawLine.length > 3 ? rawLine.slice(3).trim() : rawLine.trim()
-    push(pathPart)
-  }
+  for (const rawLine of inspected.dirtyFiles) push(rawLine.length > 3 ? rawLine.slice(3) : rawLine)
   if (typeof inspected.diffStat === 'string') {
     for (const line of inspected.diffStat.split('\n')) {
       const pipeIdx = line.indexOf(' | ')
-      if (pipeIdx <= 0) continue
-      push(line.slice(0, pipeIdx))
+      if (pipeIdx > 0) push(line.slice(0, pipeIdx))
     }
   }
   return out
@@ -46,27 +43,36 @@ export async function inspectManagedWorktree(
   worktreeId: string,
   signal?: AbortSignal,
 ): Promise<WorktreeInspectResult> {
-  const raw = await ctx.host.invokeAction(
+  return (await ctx.host.invokeAction(
     WORKTREE_PLUGIN_ID,
     'inspect_worktree',
     { worktreeId, diff: false },
-    signal !== undefined ? { signal } : undefined,
-  )
-  return raw as WorktreeInspectResult
+    signal ? { signal } : undefined,
+  )) as WorktreeInspectResult
 }
 
-export function toWorktreeHandoffSnapshot(
+export const toWorktreeHandoffSnapshot = (worktreeId: string, inspected: WorktreeInspectResult): WorktreeHandoffSnapshot => ({
+  worktreeId,
+  ...(inspected.currentBranch !== undefined ? { branch: inspected.currentBranch } : {}),
+  ...(inspected.commitsAhead !== undefined ? { commitsAhead: inspected.commitsAhead } : {}),
+  dirtyCount: inspected.dirtyFileCount,
+  changedFilesPreview: extractChangedFilesPreview(inspected),
+})
+
+export const toRetainedWorktreeInfo = (
+  memberName: string,
+  nodeId: string,
   worktreeId: string,
   inspected: WorktreeInspectResult,
-): WorktreeHandoffSnapshot {
-  return {
-    worktreeId,
-    ...(inspected.currentBranch !== undefined ? { branch: inspected.currentBranch } : {}),
-    ...(inspected.commitsAhead !== undefined ? { commitsAhead: inspected.commitsAhead } : {}),
-    dirtyCount: inspected.dirtyFileCount,
-    changedFilesPreview: extractChangedFilesPreview(inspected),
-  }
-}
+  unmergedCommits: number,
+): RetainedWorktreeInfo => ({
+  memberName,
+  nodeId,
+  worktreeId,
+  branch: inspected.currentBranch ?? inspected.record.branch,
+  path: inspected.record.path,
+  commitsAhead: unmergedCommits,
+})
 
 export async function checkMemberWorktree(
   ctx: HelmxPluginContext,
@@ -76,13 +82,7 @@ export async function checkMemberWorktree(
   if (member.worktreeId === undefined) return undefined
   const inspected = await inspectManagedWorktree(ctx, member.worktreeId, signal)
   const unmergedCommits = inspected.exists ? (inspected.unmergedCommits ?? inspected.commitsAhead ?? 0) : 0
-  return {
-    member,
-    worktreeId: member.worktreeId,
-    inspected,
-    unmergedCommits,
-    isDirty: inspected.exists && inspected.dirtyFileCount > 0,
-  }
+  return { member, worktreeId: member.worktreeId, inspected, unmergedCommits, isDirty: inspected.exists && inspected.dirtyFileCount > 0 }
 }
 
 export async function releaseWorktreeHoldById(
@@ -91,26 +91,16 @@ export async function releaseWorktreeHoldById(
   worktreeId: string,
   signal?: AbortSignal,
 ): Promise<void> {
-  await ctx.host.invokeAction(
-    WORKTREE_PLUGIN_ID,
-    'release_worktree_hold',
-    {
-      worktreeId,
-      holdId,
-    },
-    signal !== undefined ? { signal } : undefined,
-  )
+  await ctx.host.invokeAction(WORKTREE_PLUGIN_ID, 'release_worktree_hold', { worktreeId, holdId }, signal ? { signal } : undefined)
 }
 
-export async function releaseWorktreeHold(
+export const releaseWorktreeHold = (
   ctx: HelmxPluginContext,
   groupId: string,
   memberName: string,
   worktreeId: string,
   signal?: AbortSignal,
-): Promise<void> {
-  await releaseWorktreeHoldById(ctx, `${groupId}:${memberName}`, worktreeId, signal)
-}
+): Promise<void> => releaseWorktreeHoldById(ctx, `${groupId}:${memberName}`, worktreeId, signal)
 
 export async function cleanupManagedWorktree(
   ctx: HelmxPluginContext,
@@ -121,11 +111,25 @@ export async function cleanupManagedWorktree(
   await ctx.host.invokeAction(
     WORKTREE_PLUGIN_ID,
     'cleanup_worktree',
-    {
-      worktreeId,
-      deleteBranch: true,
-      ...(force ? { force: true } : {}),
-    },
-    signal !== undefined ? { signal } : undefined,
+    { worktreeId, deleteBranch: true, ...(force ? { force: true } : {}) },
+    signal ? { signal } : undefined,
   )
+}
+
+/** Release member hold and either return RetainedWorktreeInfo (when keepWorktree && modified) or clean up the worktree. */
+export async function settleMemberWorktree(
+  ctx: HelmxPluginContext,
+  groupId: string,
+  item: CheckedMemberWorktree,
+  opts: { keepWorktree: boolean; force: boolean; cleanupCleanWhenKeeping?: boolean; signal?: AbortSignal },
+): Promise<RetainedWorktreeInfo | undefined> {
+  await releaseWorktreeHold(ctx, groupId, item.member.name, item.worktreeId, opts.signal)
+  if (!item.inspected.exists) return undefined
+  if (opts.keepWorktree && (item.isDirty || item.unmergedCommits > 0)) {
+    return toRetainedWorktreeInfo(item.member.name, item.member.nodeId, item.worktreeId, item.inspected, item.unmergedCommits)
+  }
+  if (!opts.keepWorktree || opts.cleanupCleanWhenKeeping === true) {
+    await cleanupManagedWorktree(ctx, item.worktreeId, opts.force, opts.signal)
+  }
+  return undefined
 }

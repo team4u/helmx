@@ -4,7 +4,7 @@
  * 覆盖（收敛后形态：无独立 BoardScreen，编排心智模型对齐 builtin:workflow）：
  * 1. UI 扩展注册不变量（registerSwarmUi：toolView 覆盖全部 swarm_* 工具且 replaceRow、
  *    COMPOSER_DOCK_SLOT 活动托盘仅主控作用域、workbench.panel 'groups' 仅参与者作用域、
- *    swarm:board-report / swarm:board-wakeup 单行回执渲染器、@/# composerCompleter、
+ *    swarm:board-report / swarm:board-wakeup 单行回执渲染器、@ composerCompleter、
  *    零 screen / 零顶栏 action / 零 sidebarItem、双语 LocalizedText、零 Emoji）；
  * 2. SwarmToolView 26px 工具轨迹行：dispatch 完成态点击打开成员会话抽屉、黑板发布行点击
  *    打开协同工作台面板、无法定目标的行展开原始详情、错误态如实展示首行、zh-CN 自然语言；
@@ -353,7 +353,6 @@ describe("swarm-client-interactions", () => {
         status: 'active',
         activeWorkerCount: 2,
         headSeq: 3,
-        channels: [{ name: 'main' }],
         createdAt: Date.now() - 3 * 60_000,
         updatedAt: 2000,
       },
@@ -372,7 +371,6 @@ describe("swarm-client-interactions", () => {
           nodeId: 'local',
           cwd: '/repo-wt/author',
           worktreeId: 'wt-author-1',
-          channels: ['main'],
           lifecycle: 'active',
           readCursorSeq: 1,
           pendingWakeupSeq: 1,
@@ -389,7 +387,6 @@ describe("swarm-client-interactions", () => {
           isolation: 'inherit',
           nodeId: 'local',
           cwd: '/repo',
-          channels: ['main'],
           lifecycle: 'active',
           readCursorSeq: 1,
           pendingWakeupSeq: 2,
@@ -402,7 +399,6 @@ describe("swarm-client-interactions", () => {
         {
           seq: 1,
           groupId: 'grp-live',
-          channel: 'main',
           from: 'coordinator',
           to: ['author'],
           resolvedTargets: ['author'],
@@ -415,7 +411,6 @@ describe("swarm-client-interactions", () => {
         {
           seq: 2,
           groupId: 'grp-live',
-          channel: 'main',
           from: 'author',
           to: ['verifier'],
           resolvedTargets: ['verifier'],
@@ -482,7 +477,6 @@ describe("swarm-client-interactions", () => {
         'swarm_create_group',
         'swarm_dispatch_worker',
         'swarm_inspect_worker',
-        'swarm_manage_channel',
         'swarm_switch_worker_model',
         'swarm_update_group',
       ],
@@ -524,7 +518,6 @@ describe("swarm-client-interactions", () => {
     }))
     assert.deepEqual(completers, [
       { id: 'swarm-board-members', trigger: '@', source: { kind: 'action', actionId: 'complete_board_members' } },
-      { id: 'swarm-board-channels', trigger: '#', source: { kind: 'action', actionId: 'complete_board_channels' } },
     ])
 
     for (const { method, spec } of recorded) {
@@ -589,7 +582,7 @@ describe("swarm-client-interactions", () => {
         callId: 'call-2',
         toolName: 'swarm_board_post',
         input: { to: ['verifier'], kind: 'handoff', body: 'Token refresh implemented, ready for review.' },
-        result: 'Posted #2 [handoff] in #main -> verifier (wake=true).',
+        result: 'Posted #2 [handoff] -> verifier (wake=true).',
         presentationMeta: { groupId: 'grp-live', postKind: 'handoff', seq: 2 },
       })),
     )
@@ -1172,7 +1165,7 @@ describe("swarm-client-interactions", () => {
 
     const badKindPost = (boardViewFixture().posts as Array<Record<string, unknown>>)[0]!
     assert.equal(parseBoardPost({ ...badKindPost, kind: 'invented' }), undefined)
-    assert.equal(parseBoardPost({ ...badKindPost, channel: '' }), undefined)
+    assert.equal(parseBoardPost({ ...badKindPost, from: '' }), undefined)
     assert.equal(parseBoardReadPosts({ posts: [{ ...badKindPost, kind: 'bad' }] }), undefined)
 
     // Orthogonal completion progress: active + idle + caught-up cursor + lastOutboundEdge done/handoff
@@ -1319,29 +1312,9 @@ describe("swarm-client-interactions", () => {
     resetDefaultStubs()
   })
 
-  test('SwarmWorkbenchPanel & SwarmToolView：中文态势本地化、成员短模型徽章、可点击 #seq 引用、多频道筛选与主控兜底操作（中止/结单弹窗）', { timeout: 60_000 }, async () => {
-    // 1) SwarmToolView renders swarm_manage_channel & swarm_switch_worker_model with #seq
+  test('SwarmWorkbenchPanel & SwarmToolView：中文态势本地化、成员短模型徽章、可点击 #seq 引用与主控兜底操作（中止/结单弹窗）', { timeout: 60_000 }, async () => {
+    // 1) SwarmToolView renders swarm_switch_worker_model with #seq
     const tvSpy = makeSpyCtx({ conversationId: 50, locale: 'zh-CN' })
-    const chMount = await mount(
-      tvSpy,
-      e(components.SwarmToolView, toolViewProps({
-        callId: 'call-ch-1',
-        toolName: 'swarm_manage_channel',
-        input: { op: 'subscribe', channel: 'review', member: 'verifier' },
-        result: 'Channel #review (subscribe for @verifier) updated in group grp-live.',
-        presentationMeta: { groupId: 'grp-live' },
-      })),
-    )
-    try {
-      const text = chMount.host.textContent ?? ''
-      assert.match(text, /管理频道/)
-      assert.match(text, /订阅/)
-      assert.match(text, /#review/)
-      assert.match(text, /@verifier/)
-    } finally {
-      chMount.unmount()
-    }
-
     const swMount = await mount(
       tvSpy,
       e(components.SwarmToolView, toolViewProps({
@@ -1361,8 +1334,8 @@ describe("swarm-client-interactions", () => {
       swMount.unmount()
     }
 
-    // 2) SwarmWorkbenchPanel: zh-CN localized headline, short model badge, channel filter, clickable #seq refs, and coordinator Abort/Close controls
-    const multiChBoard = boardViewFixture({
+    // 2) SwarmWorkbenchPanel: zh-CN localized headline, short model badge, clickable #seq refs, and coordinator Abort/Close controls
+    const singleBoard = boardViewFixture({
       group: {
         id: 'grp-live',
         title: '协同审改组',
@@ -1370,8 +1343,7 @@ describe("swarm-client-interactions", () => {
         coordinatorConversationId: 50,
         status: 'active',
         activeWorkerCount: 2,
-        headSeq: 3,
-        channels: [{ name: 'main' }, { name: 'review', topic: 'Code review' }],
+        headSeq: 2,
         createdAt: Date.now() - 60_000,
         updatedAt: 2000,
       },
@@ -1385,7 +1357,6 @@ describe("swarm-client-interactions", () => {
         {
           seq: 1,
           groupId: 'grp-live',
-          channel: 'main',
           from: 'coordinator',
           to: ['author'],
           resolvedTargets: ['author'],
@@ -1398,21 +1369,20 @@ describe("swarm-client-interactions", () => {
         {
           seq: 2,
           groupId: 'grp-live',
-          channel: 'review',
           from: 'author',
-          to: ['#review'],
+          to: ['verifier'],
           resolvedTargets: ['verifier'],
           wake: true,
           kind: 'handoff',
           refs: [1],
-          body: 'Review note referencing #1 in subchannel.',
+          body: 'Review note referencing #1 on main board.',
           createdAt: 1500,
         },
       ],
     })
     setStubState({
       docs: { index: coordinatorIndexFixture(), 'board-badges': { byConversation: {} } },
-      sessionDocs: { 'builtin:swarm/board-view/50': multiChBoard },
+      sessionDocs: { 'builtin:swarm/board-view/50': singleBoard },
     })
 
     const coordSpy = makeSpyCtx({ conversationId: 50, locale: 'zh-CN' })
@@ -1425,19 +1395,9 @@ describe("swarm-client-interactions", () => {
       assert.match(text, /执行中：@verifier/, 'zh-CN 本地化合成态势标题')
       assert.match(text, /gpt-5/, '展示成员短模型名')
       assert.match(text, /claude-sonnet-4-5/, '展示审阅成员短模型名')
+      assert.ok(coordPanel.host.querySelector('.sw-panel-channels') === null, '单黑板不渲染频道筛选栏')
 
-      // Channel filter SegmentedControl appears when channels > 1 and filters posts
-      const channelBtns = [...coordPanel.host.querySelectorAll<HTMLButtonElement>('.sw-panel-channels [role="tab"]')]
-      assert.equal(channelBtns.length, 3, 'All + #main + #review 三个频道选项')
-      const reviewTab = channelBtns.find((b) => (b.textContent ?? '').includes('#review'))!
-      await act(async () => {
-        reviewTab.click()
-      })
-      const filteredPosts = [...coordPanel.host.querySelectorAll('.sw-panel-post')]
-      assert.equal(filteredPosts.length, 1, '切换到 #review 仅显示该频道记录')
-      assert.match(filteredPosts[0]!.textContent ?? '', /Review note referencing #1/)
-
-      // Clicking #1 ref chip opens inline peek popover without disturbing #review filter
+      // Clicking #1 ref chip opens inline peek popover
       const refBtn = coordPanel.host.querySelector<HTMLButtonElement>('.sw-panel-post-ref')!
       assert.ok(refBtn !== null, '渲染可点击 #seq 引用芯片')
       assert.equal(refBtn.textContent, '#1')
@@ -1447,9 +1407,8 @@ describe("swarm-client-interactions", () => {
       const peek = coordPanel.host.querySelector<HTMLElement>('.sw-peek-popover')
       assert.ok(peek !== null, '点击引用芯片应原地弹出速览浮卡')
       assert.match(peek.textContent ?? '', /#1/, '浮卡标题展示目标序号')
-      assert.equal(coordPanel.host.querySelectorAll('.sw-panel-post').length, 1, '速览浮卡打开时不打乱当前频道筛选视图')
 
-      // Clicking "Locate in list" resets filter, highlights #1, and shows jump-back bar to #3
+      // Clicking "Locate in list" highlights #1 and shows jump-back bar to #2
       const locateBtn = peek.querySelector<HTMLButtonElement>('.sw-peek-locate-btn')!
       assert.ok(locateBtn !== null, '浮卡提供定位到列表入口')
       await act(async () => {
@@ -1540,7 +1499,6 @@ describe("swarm-client-interactions", () => {
         coordinatorConversationId: 50,
         activeWorkerCount: 2,
         headSeq: 20,
-        channels: [{ name: 'main' }],
         createdAt: 1_700_000_000_000,
         updatedAt: 1_700_000_020_000,
       },
@@ -1553,7 +1511,6 @@ describe("swarm-client-interactions", () => {
           resolvedTargets: ['verifier'],
           wake: true,
           kind: 'handoff',
-          channel: 'main',
           body: 'Implemented per #2 and bogus #999.',
           refs: [2, 999],
           createdAt: 1_700_000_012_000,
@@ -1566,7 +1523,6 @@ describe("swarm-client-interactions", () => {
           resolvedTargets: ['author'],
           wake: true,
           kind: 'review',
-          channel: 'main',
           body: 'Checked #12 thoroughly; inline `#77` stays code.',
           refs: [12],
           createdAt: 1_700_000_020_000,
@@ -1602,7 +1558,6 @@ describe("swarm-client-interactions", () => {
                 resolvedTargets: ['author', 'verifier'],
                 wake: true,
                 kind: 'brief',
-                channel: 'main',
                 body: longEarlyBody,
                 refs: [],
                 createdAt: 1_700_000_002_000,
@@ -1679,7 +1634,6 @@ describe("swarm-client-interactions", () => {
         status: 'active',
         activeWorkerCount: 0,
         headSeq: 0,
-        channels: [{ name: 'main' }],
         createdAt: 1_700_000_000_000,
         updatedAt: 1_700_000_000_000,
       },
@@ -1713,7 +1667,6 @@ describe("swarm-client-interactions", () => {
     const makeStubPost = (seq: number, body = `Post #${seq}`) => ({
       seq,
       groupId: 'grp-long',
-      channel: 'main',
       from: 'author',
       to: ['verifier'],
       resolvedTargets: ['verifier'],
@@ -1731,7 +1684,6 @@ describe("swarm-client-interactions", () => {
         status: 'active',
         activeWorkerCount: 2,
         headSeq: 250,
-        channels: [{ name: 'main' }],
         createdAt: 1_700_000_000_000,
         updatedAt: 1_700_000_250_000,
       },
@@ -1813,7 +1765,6 @@ describe("swarm-client-interactions", () => {
         status: 'active',
         activeWorkerCount: 2,
         headSeq: 2,
-        channels: [{ name: 'main' }],
         createdAt: T0,
         updatedAt: T0 + 60_000,
       },
@@ -1864,7 +1815,6 @@ describe("swarm-client-interactions", () => {
           status: 'closed',
           activeWorkerCount: 0,
           headSeq: 2,
-          channels: [{ name: 'main' }],
           createdAt: T0,
           updatedAt: T0 + 125_000,
           closedAt: T0 + 125_000,
@@ -2008,7 +1958,6 @@ describe("swarm-client-interactions", () => {
         status: 'active',
         activeWorkerCount: 4,
         headSeq: 3,
-        channels: [{ name: 'main' }],
         createdAt: T0,
         updatedAt: T0 + 120_000,
       },
@@ -2021,7 +1970,6 @@ describe("swarm-client-interactions", () => {
           isolation: 'inherit',
           nodeId: 'local',
           cwd: '/repo',
-          channels: ['main'],
           lifecycle: 'active',
           readCursorSeq: 1,
           pendingWakeupSeq: 1,
@@ -2040,7 +1988,6 @@ describe("swarm-client-interactions", () => {
           isolation: 'inherit',
           nodeId: 'local',
           cwd: '/repo',
-          channels: ['main'],
           lifecycle: 'active',
           readCursorSeq: 1,
           pendingWakeupSeq: 1,
@@ -2058,7 +2005,6 @@ describe("swarm-client-interactions", () => {
           isolation: 'inherit',
           nodeId: 'local',
           cwd: '/repo',
-          channels: ['main'],
           lifecycle: 'active',
           readCursorSeq: 1,
           pendingWakeupSeq: 1,
@@ -2076,7 +2022,6 @@ describe("swarm-client-interactions", () => {
           isolation: 'inherit',
           nodeId: 'local',
           cwd: '/repo',
-          channels: ['main'],
           lifecycle: 'active',
           readCursorSeq: 2,
           pendingWakeupSeq: 1,
@@ -2094,7 +2039,6 @@ describe("swarm-client-interactions", () => {
           isolation: 'inherit',
           nodeId: 'local',
           cwd: '/repo',
-          channels: ['main'],
           lifecycle: 'active',
           readCursorSeq: 1,
           pendingWakeupSeq: 1,
@@ -2108,7 +2052,6 @@ describe("swarm-client-interactions", () => {
         {
           seq: 1,
           groupId: 'grp-live',
-          channel: 'main',
           from: 'coordinator',
           to: ['blocker-w'],
           resolvedTargets: ['blocker-w'],
@@ -2121,7 +2064,6 @@ describe("swarm-client-interactions", () => {
         {
           seq: 2,
           groupId: 'grp-live',
-          channel: 'main',
           from: 'done-w',
           to: ['coordinator'],
           resolvedTargets: ['coordinator'],
@@ -2224,7 +2166,6 @@ describe("swarm-client-interactions", () => {
         status: 'closed',
         activeWorkerCount: 0,
         headSeq: 1,
-        channels: [{ name: 'main' }],
         createdAt: T0,
         updatedAt: T0 + 125_000,
         closedAt: T0 + 125_000,
@@ -2238,7 +2179,6 @@ describe("swarm-client-interactions", () => {
           isolation: 'inherit',
           nodeId: 'local',
           cwd: '/repo',
-          channels: ['main'],
           lifecycle: 'archived',
           archivedAt: T0 + 120_000,
           readCursorSeq: 1,
@@ -2253,7 +2193,6 @@ describe("swarm-client-interactions", () => {
         {
           seq: 1,
           groupId: 'grp-closed',
-          channel: 'main',
           from: 'author',
           to: ['coordinator'],
           resolvedTargets: ['coordinator'],

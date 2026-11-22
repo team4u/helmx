@@ -1,14 +1,5 @@
 /**
- * Board post body with honest collapse semantics: collapsed shows the existing
- * preview slice and expands to the full stored text (never a fake "expand
- * everything" over truncated data). Both states render through the shared
- * MarkdownText primitive on the host's msg-ai-body typography (same instance
- * of react-markdown + GFM as the timeline; a truncated slice degrades the same
- * way streaming partials do — unclosed fences/tables stay honest previews).
- * When `onRefClick` is provided, `#seq` references in prose become clickable
- * inline triggers for the post peek popover.
- *
- * Component & type exports only (Fast Refresh compliant).
+ * Collapsible Markdown post body with clickable inline `#seq` reference triggers (Fast Refresh compliant).
  */
 import { useCallback, useMemo, useState } from 'react'
 import type { MouseEvent, ReactNode } from 'react'
@@ -27,19 +18,17 @@ export interface PostBodyTextProps {
 export function PostBodyText(props: PostBodyTextProps): ReactNode {
   const locale = usePluginLocale()
   const [expanded, setExpanded] = useState(false)
-  const showFull = !props.collapsible || expanded
-  const rawText = showFull ? props.body : previewPostBody(props.body)
+  const rawText = !props.collapsible || expanded ? props.body : previewPostBody(props.body)
   const renderedText = useMemo(
     () => (props.onRefClick !== undefined ? linkifyPostRefs(rawText, props.selfSeq) : rawText),
     [rawText, props.selfSeq, props.onRefClick],
   )
   const handleLinkClick = useCallback(
     (href: string, event: MouseEvent<HTMLAnchorElement>) => {
-      if (props.onRefClick === undefined) return
-      const seq = parseSwarmPostHref(href)
+      const seq = props.onRefClick ? parseSwarmPostHref(href) : undefined
       if (seq === undefined) return
       event.preventDefault()
-      props.onRefClick(seq, event.currentTarget)
+      props.onRefClick!(seq, event.currentTarget)
     },
     [props.onRefClick],
   )
@@ -47,10 +36,7 @@ export function PostBodyText(props: PostBodyTextProps): ReactNode {
   return (
     <div className="sw-panel-post-body">
       <div className="sw-panel-post-text msg-ai-body">
-        <MarkdownText
-          text={renderedText}
-          onLinkClick={props.onRefClick !== undefined ? handleLinkClick : undefined}
-        />
+        <MarkdownText text={renderedText} onLinkClick={props.onRefClick ? handleLinkClick : undefined} />
       </div>
       {props.collapsible ? (
         <button

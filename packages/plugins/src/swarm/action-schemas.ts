@@ -1,651 +1,187 @@
 /**
- * builtin:swarm 动作与模型工具共享 JSON Schema 定义（全部机器描述固定纯英文）。
+ * builtin:swarm action & model-tool shared JSON Schemas (English machine descriptions only).
  */
 import { NODE_ID_PATTERN } from '@helmx/protocol'
 import {
   BOARD_POST_KINDS,
-  CHANNEL_NAME_PATTERN,
   GROUP_ID_PATTERN,
+  MEMBER_LIVE_STATES,
   MEMBER_NAME_PATTERN,
   PROFILE_ID_PATTERN,
+  S,
+  boardPostSchema,
+  memberStateBaseProps,
+  memberStateRequired,
+  retainedWorktreeSchema,
 } from './contracts.js'
 
-const groupIdSchema: Record<string, unknown> = {
-  type: 'string',
-  minLength: 1,
-  maxLength: 64,
-  pattern: GROUP_ID_PATTERN,
-}
-const memberNameSchema: Record<string, unknown> = {
-  type: 'string',
-  minLength: 1,
-  maxLength: 32,
-  pattern: MEMBER_NAME_PATTERN,
-}
-const channelNameSchema: Record<string, unknown> = {
-  type: 'string',
-  minLength: 1,
-  maxLength: 40,
-  pattern: CHANNEL_NAME_PATTERN,
-}
+const groupIdSchema = S.str({ minLength: 1, maxLength: 64, pattern: GROUP_ID_PATTERN })
+const memberNameSchema = S.str({ minLength: 1, maxLength: 32, pattern: MEMBER_NAME_PATTERN })
+export const workerIdSchema = S.int(1)
+const workerRefProps = { workerConversationId: workerIdSchema, groupId: groupIdSchema, name: memberNameSchema }
 
-export const workerIdSchema: Record<string, unknown> = { type: 'integer', minimum: 1 }
+export const workerIdInputSchema = S.obj(workerRefProps)
 
-export const workerIdInputSchema: Record<string, unknown> = {
-  type: 'object',
-  properties: {
-    workerConversationId: workerIdSchema,
+export const dispatchInputSchema = S.obj(
+  {
+    prompt: S.str({ minLength: 1, description: 'Initial brief task assignment for this peer role' }),
     groupId: groupIdSchema,
-    name: memberNameSchema,
-  },
-  additionalProperties: false,
-}
-
-export const dispatchInputSchema: Record<string, unknown> = {
-  type: 'object',
-  properties: {
-    prompt: { type: 'string', minLength: 1, description: 'Initial brief task assignment for this peer role' },
-    groupId: groupIdSchema,
-    name: {
-      ...memberNameSchema,
-      description: 'Unique lowercase role name (e.g. author, verifier)',
-    },
-    profileId: { type: 'string', minLength: 1, maxLength: 64, pattern: PROFILE_ID_PATTERN },
-    access: { type: 'string', enum: ['readwrite', 'readonly'] },
-    isolation: { type: 'string', enum: ['inherit', 'worktree'] },
-    forkFrom: {
-      type: 'string',
-      minLength: 1,
-      maxLength: 32,
-      description: "Optional fork source: 'coordinator' or an existing member name",
-    },
-    forkEntryId: { type: 'integer', minimum: 1 },
-    model: { type: 'string', minLength: 1, maxLength: 200 },
-    effort: { type: 'string', minLength: 1, maxLength: 32 },
-    channels: {
-      type: 'array',
-      items: channelNameSchema,
-      description:
-        "Optional existing subchannels to subscribe (omit by default: 'main' is always subscribed and @member / 'coordinator' addressing needs no subchannel; do not use for wave/batch labels. When #<channel> multicast is needed, create it first via swarm_create_group.channels or swarm_manage_channel with op='create')",
-    },
-    title: { type: 'string', minLength: 1, maxLength: 80 },
-    nodeId: {
-      type: 'string',
+    name: { ...memberNameSchema, description: 'Unique lowercase role name (e.g. author, verifier)' },
+    profileId: S.str({ minLength: 1, maxLength: 64, pattern: PROFILE_ID_PATTERN }),
+    access: S.enm(['readwrite', 'readonly']),
+    isolation: S.enm(['inherit', 'worktree']),
+    forkFrom: S.str({ minLength: 1, maxLength: 32, description: "Optional fork source: 'coordinator' or an existing member name" }),
+    forkEntryId: S.int(1),
+    model: S.str({ minLength: 1, maxLength: 200 }),
+    effort: S.str({ minLength: 1, maxLength: 32 }),
+    title: S.str({ minLength: 1, maxLength: 80 }),
+    nodeId: S.str({
       minLength: 1,
       maxLength: 128,
       pattern: NODE_ID_PATTERN,
       description:
         'Optional target compute node ID (overrides Profile/coordinator node; explicit "local" switches back to the Hub host; requires cwd or a compatible Profile cwd on remote nodes)',
-    },
-    cwd: { type: 'string', minLength: 1 },
+    }),
+    cwd: S.str({ minLength: 1 }),
   },
-  required: ['prompt', 'name'],
-  additionalProperties: false,
-}
+  ['prompt', 'name'],
+)
 
-export const createGroupInputSchema: Record<string, unknown> = {
-  type: 'object',
-  properties: {
-    title: { type: 'string', minLength: 1, maxLength: 120, description: 'Swarm collaboration group title' },
-    objective: { type: 'string', maxLength: 4000, description: 'Shared objective anchor for the squad' },
-    channels: {
-      type: 'array',
-      items: {
-        type: 'object',
-        properties: {
-          name: channelNameSchema,
-          topic: { type: 'string', maxLength: 200 },
-        },
-        required: ['name'],
-        additionalProperties: false,
-      },
-      description: 'Optional initial subchannels besides main',
-    },
-    conversationId: { type: 'integer', minimum: 1, description: 'Target top-level coordinator conversation ID' },
+export const createGroupInputSchema = S.obj(
+  {
+    title: S.str({ minLength: 1, maxLength: 120, description: 'Swarm collaboration group title' }),
+    objective: S.str({ maxLength: 4000, description: 'Shared objective anchor for the squad' }),
+    conversationId: { ...S.int(1), description: 'Target top-level coordinator conversation ID' },
   },
-  required: ['title'],
-  additionalProperties: false,
-}
+  ['title'],
+)
 
-export const updateGroupInputSchema: Record<string, unknown> = {
-  type: 'object',
-  properties: {
+export const updateGroupInputSchema = S.obj({
+  groupId: groupIdSchema,
+  title: S.str({ minLength: 1, maxLength: 120 }),
+  objective: S.str({ maxLength: 4000 }),
+})
+
+export const boardPostInputSchema = S.obj(
+  {
     groupId: groupIdSchema,
-    title: { type: 'string', minLength: 1, maxLength: 120 },
-    objective: { type: 'string', maxLength: 4000 },
-  },
-  additionalProperties: false,
-}
-
-export const manageChannelInputSchema: Record<string, unknown> = {
-  type: 'object',
-  properties: {
-    groupId: groupIdSchema,
-    op: { type: 'string', enum: ['create', 'subscribe', 'unsubscribe', 'archive'] },
-    channel: {
-      ...channelNameSchema,
-      description: "Target subchannel name without leading '#' (lowercase [a-z0-9_-])",
-    },
-    topic: { type: 'string', maxLength: 200 },
-    member: memberNameSchema,
-  },
-  required: ['op', 'channel'],
-  additionalProperties: false,
-}
-
-export const boardPostInputSchema: Record<string, unknown> = {
-  type: 'object',
-  properties: {
-    groupId: groupIdSchema,
-    to: {
-      type: 'array',
+    to: S.arr(S.str({ minLength: 1, maxLength: 64 }), {
       minItems: 1,
-      items: { type: 'string', minLength: 1, maxLength: 64 },
-      description: "Targets: 'coordinator', 'all' (coordinator/human only), '#<channel>', or '<memberName>'",
-    },
-    kind: {
-      type: 'string',
-      enum: ['brief', 'handoff', 'review', 'comment', 'blocker', 'done'],
-      description:
-        "Message intent: 'brief' (task assignment), 'handoff' (peer delivery), 'review' (verification feedback), 'comment' (passive note, wake defaults false), 'blocker' (escalates to coordinator immediately), 'done' (final completion to coordinator)",
-    },
-    body: { type: 'string', minLength: 1 },
-    channel: {
-      ...channelNameSchema,
-      description:
-        "Optional existing channel label for posting (defaults to 'main'; any non-'main' channel must already exist and not be archived)",
-    },
-    wake: {
-      type: 'boolean',
-      description:
-        'Trigger a follow-up turn for target sessions (defaults to false for comment, true otherwise; busy peers receive coalesced wakeups on settle, and done posts to coordinator batch until all active workers are idle)',
-    },
-    refs: { type: 'array', items: { type: 'integer', minimum: 1 } },
+      description: "Targets: 'coordinator', 'all' (coordinator/human only), or '<memberName>'",
+    }),
+    kind: S.enm(
+      ['brief', 'handoff', 'review', 'comment', 'blocker', 'done'],
+      "Message intent: 'brief' (task assignment), 'handoff' (peer delivery), 'review' (verification feedback), 'comment' (passive note, wake defaults false), 'blocker' (escalates to coordinator immediately), 'done' (final completion to coordinator)",
+    ),
+    body: S.str({ minLength: 1 }),
+    wake: S.bool(
+      'Trigger a follow-up turn for target sessions (defaults to false for comment, true otherwise; busy peers receive coalesced wakeups on settle, and done posts to coordinator batch until all active workers are idle)',
+    ),
+    refs: S.arr(S.int(1)),
   },
-  required: ['to', 'kind', 'body'],
-  additionalProperties: false,
-}
+  ['to', 'kind', 'body'],
+)
 
-export const boardReadInputSchema: Record<string, unknown> = {
-  type: 'object',
-  properties: {
-    groupId: groupIdSchema,
-    channel: {
-      ...channelNameSchema,
-      description: 'Optional existing channel name to filter posts (omit to read across all channels)',
-    },
-    sinceSeq: { type: 'integer', minimum: 0 },
-    seqs: { type: 'array', items: { type: 'integer', minimum: 1 } },
-    limit: { type: 'integer', minimum: 1, maximum: 200 },
+export const boardReadInputSchema = S.obj({
+  groupId: groupIdSchema,
+  sinceSeq: S.int(0),
+  seqs: S.arr(S.int(1)),
+  limit: S.int(1, 200),
+})
+
+export const boardStatusInputSchema = S.obj({ groupId: groupIdSchema })
+
+export const switchModelInputSchema = S.obj(
+  {
+    ...workerRefProps,
+    model: S.str({ minLength: 1, maxLength: 200 }),
+    effort: S.str({ minLength: 1, maxLength: 32, description: 'Optional thinking/reasoning level override applied alongside the model switch' }),
+    prompt: S.str({ minLength: 1, description: 'Optional resume instruction posted to the board as a coordinator brief to wake the member immediately after switching model' }),
   },
-  additionalProperties: false,
-}
+  ['model'],
+)
 
-export const boardStatusInputSchema: Record<string, unknown> = {
-  type: 'object',
-  properties: {
-    groupId: groupIdSchema,
+export const archiveWorkerInputSchema = S.obj({ ...workerRefProps, keepWorktree: S.bool(), force: S.bool() })
+
+export const closeGroupInputSchema = S.obj({
+  groupId: groupIdSchema,
+  keepWorktree: S.bool('Release holds and archive members while preserving modified worktree branches in retainedWorktrees for merging'),
+  abortRunning: S.bool('Abort any running group members before closing'),
+  force: S.bool('Force member worktree cleanup past the uncommitted/unmerged guard (occupancy by holds/running conversations/process scans, ownership and locked checks still refuse; never bypasses swarm_worker_busy)'),
+  summary: S.str({ maxLength: 2000 }),
+})
+
+export const completerInputSchema = S.obj({ query: S.str(), conversationId: S.int(1) })
+
+const groupViewInfoSchema = S.obj(
+  {
+    id: S.str(), title: S.str(), objective: S.str(), coordinatorConversationId: S.num(),
+    status: S.enm(['active', 'closed']), coordinatorDetached: S.bool(), activeWorkerCount: S.num(),
+    headSeq: S.num(), retainedWorktrees: S.arr(retainedWorktreeSchema), closeSummary: S.str(),
+    createdAt: S.num(), updatedAt: S.num(), closedAt: S.num(),
   },
-  additionalProperties: false,
-}
+  ['id', 'title', 'coordinatorConversationId', 'status', 'activeWorkerCount', 'headSeq', 'createdAt', 'updatedAt'],
+)
 
-export const switchModelInputSchema: Record<string, unknown> = {
-  type: 'object',
-  properties: {
-    groupId: groupIdSchema,
-    name: memberNameSchema,
-    workerConversationId: workerIdSchema,
-    model: { type: 'string', minLength: 1, maxLength: 200 },
-    effort: {
-      type: 'string',
-      minLength: 1,
-      maxLength: 32,
-      description: 'Optional thinking/reasoning level override applied alongside the model switch',
-    },
-    prompt: {
-      type: 'string',
-      minLength: 1,
-      description:
-        'Optional resume instruction posted to the board as a coordinator brief to wake the member immediately after switching model',
-    },
-  },
-  required: ['model'],
-  additionalProperties: false,
-}
+const boardMemberViewSchema = S.obj(
+  { ...memberStateBaseProps, liveState: S.enm(MEMBER_LIVE_STATES), model: S.str(), runStartedAt: S.num(0), pendingAskSince: S.num(0) },
+  [...memberStateRequired, 'liveState'],
+)
 
-export const archiveWorkerInputSchema: Record<string, unknown> = {
-  type: 'object',
-  properties: {
-    workerConversationId: workerIdSchema,
-    groupId: groupIdSchema,
-    name: memberNameSchema,
-    keepWorktree: { type: 'boolean' },
-    force: { type: 'boolean' },
-  },
-  additionalProperties: false,
-}
-
-export const closeGroupInputSchema: Record<string, unknown> = {
-  type: 'object',
-  properties: {
-    groupId: groupIdSchema,
-    keepWorktree: {
-      type: 'boolean',
-      description: 'Release holds and archive members while preserving modified worktree branches in retainedWorktrees for merging',
-    },
-    abortRunning: { type: 'boolean', description: 'Abort any running group members before closing' },
-    force: {
-      type: 'boolean',
-      description:
-        'Force member worktree cleanup past the uncommitted/unmerged guard (occupancy by holds/running conversations/process scans, ownership and locked checks still refuse; never bypasses swarm_worker_busy)',
-    },
-    summary: { type: 'string', maxLength: 2000 },
-  },
-  additionalProperties: false,
-}
-
-export const completerInputSchema: Record<string, unknown> = {
-  type: 'object',
-  properties: {
-    query: { type: 'string' },
-    conversationId: { type: 'integer', minimum: 1 },
-  },
-  additionalProperties: false,
-}
-
-// ---------------------------------------------------------------------------
-// 输出 Schema（14 个 ctx.action outputSchema 与 11 个 swarm_* 工具 structuredOutputSchema 同源共享）
-// ---------------------------------------------------------------------------
-
-const boardChannelSchema: Record<string, unknown> = {
-  type: 'object',
-  properties: {
-    name: { type: 'string' },
-    topic: { type: 'string' },
-    archived: { type: 'boolean' },
-  },
-  required: ['name'],
-  additionalProperties: false,
-}
-
-const retainedWorktreeSchema: Record<string, unknown> = {
-  type: 'object',
-  properties: {
-    memberName: { type: 'string' },
-    nodeId: { type: 'string' },
-    worktreeId: { type: 'string' },
-    branch: { type: 'string' },
-    path: { type: 'string' },
-    commitsAhead: { type: 'number' },
-  },
-  required: ['memberName', 'nodeId', 'worktreeId', 'branch', 'path', 'commitsAhead'],
-  additionalProperties: false,
-}
-
-const groupViewInfoSchema: Record<string, unknown> = {
-  type: 'object',
-  properties: {
-    id: { type: 'string' },
-    title: { type: 'string' },
-    objective: { type: 'string' },
-    coordinatorConversationId: { type: 'number' },
-    status: { type: 'string', enum: ['active', 'closed'] },
-    coordinatorDetached: { type: 'boolean' },
-    activeWorkerCount: { type: 'number' },
-    headSeq: { type: 'number' },
-    channels: { type: 'array', items: boardChannelSchema },
-    retainedWorktrees: { type: 'array', items: retainedWorktreeSchema },
-    closeSummary: { type: 'string' },
-    createdAt: { type: 'number' },
-    updatedAt: { type: 'number' },
-    closedAt: { type: 'number' },
-  },
-  required: [
-    'id',
-    'title',
-    'coordinatorConversationId',
-    'status',
-    'activeWorkerCount',
-    'headSeq',
-    'channels',
-    'createdAt',
-    'updatedAt',
-  ],
-  additionalProperties: false,
-}
-
-const worktreeSnapshotSchema: Record<string, unknown> = {
-  type: 'object',
-  properties: {
-    worktreeId: { type: 'string' },
-    branch: { type: 'string' },
-    commitsAhead: { type: 'number' },
-    dirtyCount: { type: 'number' },
-    changedFilesPreview: { type: 'array', items: { type: 'string' } },
-  },
-  required: ['worktreeId', 'dirtyCount', 'changedFilesPreview'],
-  additionalProperties: false,
-}
-
-const boardPostSchema: Record<string, unknown> = {
-  type: 'object',
-  properties: {
-    seq: { type: 'number' },
-    groupId: { type: 'string' },
-    channel: { type: 'string' },
-    from: { type: 'string' },
-    to: { type: 'array', items: { type: 'string' } },
-    resolvedTargets: { type: 'array', items: { type: 'string' } },
-    wake: { type: 'boolean' },
-    kind: { type: 'string', enum: ['brief', 'handoff', 'review', 'comment', 'blocker', 'done', 'stall'] },
-    refs: { type: 'array', items: { type: 'number' } },
-    body: { type: 'string' },
-    idempotencyKey: { type: 'string' },
-    worktreeSnapshot: worktreeSnapshotSchema,
-    createdAt: { type: 'number' },
-  },
-  required: ['seq', 'groupId', 'channel', 'from', 'to', 'resolvedTargets', 'wake', 'kind', 'refs', 'body', 'createdAt'],
-  additionalProperties: false,
-}
-
-const inflightWakeupIntentSchema: Record<string, unknown> = {
-  type: 'object',
-  properties: {
-    requestId: { type: 'string' },
-    fromSeq: { type: 'number' },
-    toSeq: { type: 'number' },
-    baseCompletionSeq: { type: 'number' },
-  },
-  required: ['requestId', 'fromSeq', 'toSeq', 'baseCompletionSeq'],
-  additionalProperties: false,
-}
-
-const inflightNudgeIntentSchema: Record<string, unknown> = {
-  type: 'object',
-  properties: {
-    requestId: { type: 'string' },
-    taskSeq: { type: 'number' },
-    baseCompletionSeq: { type: 'number' },
-  },
-  required: ['requestId', 'taskSeq', 'baseCompletionSeq'],
-  additionalProperties: false,
-}
-
-const boardMemberViewSchema: Record<string, unknown> = {
-  type: 'object',
-  properties: {
-    name: { type: 'string' },
-    conversationId: { type: 'number' },
-    profileId: { type: 'string' },
-    access: { type: 'string', enum: ['readwrite', 'readonly'] },
-    isolation: { type: 'string', enum: ['inherit', 'worktree'] },
-    nodeId: { type: 'string' },
-    cwd: { type: 'string' },
-    worktreeId: { type: 'string' },
-    channels: { type: 'array', items: { type: 'string' } },
-    lifecycle: { type: 'string', enum: ['active', 'archived'] },
-    readCursorSeq: { type: 'number' },
-    pendingWakeupSeq: { type: 'number' },
-    lastPostSeq: { type: 'number' },
-    lastWakeTaskSeq: { type: 'number' },
-    silentExitNudgeSeq: { type: 'number' },
-    lastWakeCompletionSeq: { type: 'number' },
-    lastOutboundEdge: {
-      type: 'object',
-      properties: {
-        seq: { type: 'number' },
-        to: { type: 'array', items: { type: 'string' } },
-        kind: { type: 'string' },
-      },
-      required: ['seq', 'to', 'kind'],
-      additionalProperties: false,
-    },
-    dispatchKey: { type: 'string' },
-    briefPostSeq: { type: 'number' },
-    inflightWakeup: inflightWakeupIntentSchema,
-    inflightNudge: inflightNudgeIntentSchema,
-    createdAt: { type: 'number' },
-    archivedAt: { type: 'number' },
-    liveState: { type: 'string', enum: ['idle', 'working', 'blocked', 'done', 'error', 'missing'] },
-    model: { type: 'string' },
-    runDurationMs: { type: 'number', minimum: 0 },
-    runStartedAt: { type: 'number', minimum: 0 },
-    pendingAskSince: { type: 'number', minimum: 0 },
-    turnCount: { type: 'integer', minimum: 0 },
-  },
-  required: [
-    'name',
-    'conversationId',
-    'profileId',
-    'access',
-    'isolation',
-    'nodeId',
-    'cwd',
-    'channels',
-    'lifecycle',
-    'readCursorSeq',
-    'pendingWakeupSeq',
-    'createdAt',
-    'liveState',
-  ],
-  additionalProperties: false,
-}
-
-export const createGroupOutputSchema: Record<string, unknown> = {
-  type: 'object',
-  properties: {
-    groupId: { type: 'string' },
-    group: groupViewInfoSchema,
-  },
-  required: ['groupId', 'group'],
-  additionalProperties: false,
-}
-
+export const createGroupOutputSchema = S.obj({ groupId: S.str(), group: groupViewInfoSchema }, ['groupId', 'group'])
 export const updateGroupOutputSchema = createGroupOutputSchema
-
-export const manageChannelOutputSchema: Record<string, unknown> = {
-  type: 'object',
-  properties: {
-    groupId: { type: 'string' },
-    channels: { type: 'array', items: boardChannelSchema },
-  },
-  required: ['groupId', 'channels'],
-  additionalProperties: false,
-}
-
-export const dispatchWorkerOutputSchema: Record<string, unknown> = {
-  type: 'object',
-  properties: {
-    workerConversationId: { type: 'number' },
-    groupId: { type: 'string' },
-    name: { type: 'string' },
-    worktreeId: { type: 'string' },
-    postSeq: { type: 'number' },
-  },
-  required: ['workerConversationId', 'groupId', 'name', 'postSeq'],
-  additionalProperties: false,
-}
-
-export const boardPostOutputSchema: Record<string, unknown> = {
-  type: 'object',
-  properties: {
-    post: boardPostSchema,
-  },
-  required: ['post'],
-  additionalProperties: false,
-}
-
-export const boardReadOutputSchema: Record<string, unknown> = {
-  type: 'object',
-  properties: {
-    groupId: { type: 'string' },
-    headSeq: { type: 'number' },
-    posts: { type: 'array', items: boardPostSchema },
-  },
-  required: ['groupId', 'headSeq', 'posts'],
-  additionalProperties: false,
-}
-
-export const boardStatusOutputSchema: Record<string, unknown> = {
-  type: 'object',
-  properties: {
+export const dispatchWorkerOutputSchema = S.obj(
+  { workerConversationId: S.num(), groupId: S.str(), name: S.str(), worktreeId: S.str(), postSeq: S.num() },
+  ['workerConversationId', 'groupId', 'name', 'postSeq'],
+)
+export const boardPostOutputSchema = S.obj({ post: boardPostSchema }, ['post'])
+export const boardReadOutputSchema = S.obj({ groupId: S.str(), headSeq: S.num(), posts: S.arr(boardPostSchema) }, ['groupId', 'headSeq', 'posts'])
+export const boardStatusOutputSchema = S.obj(
+  {
     group: groupViewInfoSchema,
-    headline: {
-      type: 'object',
-      properties: {
-        kind: { type: 'string', enum: ['normal', 'stall', 'blocker', 'unmerged', 'closed'] },
-        tone: { type: 'string', enum: ['info', 'ok', 'warn', 'err'] },
-        text: { type: 'string' },
-        targetMember: { type: 'string' },
-        refSeq: { type: 'number' },
-      },
-      required: ['kind', 'tone', 'text'],
-      additionalProperties: false,
-    },
-    members: { type: 'array', items: boardMemberViewSchema },
-    posts: { type: 'array', items: boardPostSchema },
-    activeWorkingMembers: { type: 'array', items: { type: 'string' } },
+    headline: S.obj(
+      { kind: S.enm(['normal', 'stall', 'blocker', 'unmerged', 'closed']), tone: S.enm(['info', 'ok', 'warn', 'err']), text: S.str(), targetMember: S.str(), refSeq: S.num() },
+      ['kind', 'tone', 'text'],
+    ),
+    members: S.arr(boardMemberViewSchema),
+    posts: S.arr(boardPostSchema),
+    activeWorkingMembers: S.arr(S.str()),
   },
-  required: ['group', 'headline', 'members', 'posts', 'activeWorkingMembers'],
-  additionalProperties: false,
-}
-
-export const abortWorkerOutputSchema: Record<string, unknown> = {
-  type: 'object',
-  properties: {
-    aborted: { type: 'boolean' },
-    workerConversationId: { type: 'number' },
-    name: { type: 'string' },
+  ['group', 'headline', 'members', 'posts', 'activeWorkingMembers'],
+)
+export const abortWorkerOutputSchema = S.obj({ aborted: S.bool(), workerConversationId: S.num(), name: S.str() }, ['aborted', 'workerConversationId', 'name'])
+export const switchModelOutputSchema = S.obj(
+  { workerConversationId: S.num(), model: S.str(), effort: S.str(), name: S.str(), postSeq: S.num() },
+  ['workerConversationId', 'model', 'name'],
+)
+export const inspectWorkerOutputSchema = S.obj(
+  {
+    conversationId: S.num(), groupId: S.str(), name: S.str(), worktreeId: S.str(), title: S.str(),
+    profileId: S.str(), status: S.str(), doing: { anyOf: [{ type: 'string' }, { type: 'null' }] }, completionSeq: S.num(),
+    artifacts: S.arr(S.obj({ id: S.str(), name: S.str(), size: S.num() }, ['id', 'name', 'size'])),
+    recentEntries: S.arr(S.obj({ id: S.str(), kind: S.str(), text: S.str() }, ['id', 'kind', 'text'])),
   },
-  required: ['aborted', 'workerConversationId', 'name'],
-  additionalProperties: false,
-}
-
-export const switchModelOutputSchema: Record<string, unknown> = {
-  type: 'object',
-  properties: {
-    workerConversationId: { type: 'number' },
-    model: { type: 'string' },
-    effort: { type: 'string' },
-    name: { type: 'string' },
-    postSeq: { type: 'number' },
-  },
-  required: ['workerConversationId', 'model', 'name'],
-  additionalProperties: false,
-}
-
-export const inspectWorkerOutputSchema: Record<string, unknown> = {
-  type: 'object',
-  properties: {
-    conversationId: { type: 'number' },
-    groupId: { type: 'string' },
-    name: { type: 'string' },
-    worktreeId: { type: 'string' },
-    title: { type: 'string' },
-    profileId: { type: 'string' },
-    status: { type: 'string' },
-    doing: { anyOf: [{ type: 'string' }, { type: 'null' }] },
-    completionSeq: { type: 'number' },
-    artifacts: {
-      type: 'array',
-      items: {
-        type: 'object',
-        properties: {
-          id: { type: 'string' },
-          name: { type: 'string' },
-          size: { type: 'number' },
-        },
-        required: ['id', 'name', 'size'],
-        additionalProperties: false,
-      },
-    },
-    recentEntries: {
-      type: 'array',
-      items: {
-        type: 'object',
-        properties: {
-          id: { type: 'string' },
-          kind: { type: 'string' },
-          text: { type: 'string' },
-        },
-        required: ['id', 'kind', 'text'],
-        additionalProperties: false,
-      },
-    },
-  },
-  required: [
-    'conversationId',
-    'groupId',
-    'name',
-    'title',
-    'profileId',
-    'status',
-    'doing',
-    'completionSeq',
-    'artifacts',
-    'recentEntries',
-  ],
-  additionalProperties: false,
-}
-
-export const archiveWorkerOutputSchema: Record<string, unknown> = {
-  type: 'object',
-  properties: {
-    archived: { type: 'boolean' },
-    workerConversationId: { type: 'number' },
-  },
-  required: ['archived', 'workerConversationId'],
-  additionalProperties: false,
-}
-
-export const closeGroupOutputSchema: Record<string, unknown> = {
-  type: 'object',
-  properties: {
-    closed: { type: 'boolean' },
-    groupId: { type: 'string' },
-    retainedWorktrees: { type: 'array', items: retainedWorktreeSchema },
-  },
-  required: ['closed', 'groupId', 'retainedWorktrees'],
-  additionalProperties: false,
-}
-
-export const completerOutputSchema: Record<string, unknown> = {
-  type: 'object',
-  properties: {
-    items: {
-      type: 'array',
-      items: {
-        type: 'object',
-        properties: {
-          id: { type: 'string' },
-          label: { type: 'string' },
-          insertText: { type: 'string' },
-          hint: { type: 'string' },
-          icon: { type: 'string' },
-        },
-        required: ['id', 'label', 'insertText'],
-        additionalProperties: false,
-      },
-    },
-  },
-  required: ['items'],
-  additionalProperties: false,
-}
-
-export const swarmToolPresentationMetaSchema: Record<string, unknown> = {
-  type: 'object',
-  properties: {
-    groupId: { type: 'string', minLength: 1, maxLength: 64 },
-    groupTitle: { type: 'string', minLength: 1, maxLength: 120 },
-    memberName: { type: 'string', minLength: 1, maxLength: 32 },
-    workerConversationId: { type: 'integer', minimum: 1 },
-    postKind: { type: 'string', enum: [...BOARD_POST_KINDS] },
-    seq: { type: 'integer', minimum: 0 },
-    postCount: { type: 'integer', minimum: 0 },
-    aborted: { type: 'boolean' },
-    model: { type: 'string', minLength: 1, maxLength: 200 },
-    archived: { type: 'boolean' },
-    retainedCount: { type: 'integer', minimum: 0 },
-  },
-  additionalProperties: false,
-}
+  ['conversationId', 'groupId', 'name', 'title', 'profileId', 'status', 'doing', 'completionSeq', 'artifacts', 'recentEntries'],
+)
+export const archiveWorkerOutputSchema = S.obj({ archived: S.bool(), workerConversationId: S.num() }, ['archived', 'workerConversationId'])
+export const closeGroupOutputSchema = S.obj(
+  { closed: S.bool(), groupId: S.str(), retainedWorktrees: S.arr(retainedWorktreeSchema) },
+  ['closed', 'groupId', 'retainedWorktrees'],
+)
+export const completerOutputSchema = S.obj(
+  { items: S.arr(S.obj({ id: S.str(), label: S.str(), insertText: S.str(), hint: S.str(), icon: S.str() }, ['id', 'label', 'insertText'])) },
+  ['items'],
+)
+export const swarmToolPresentationMetaSchema = S.obj({
+  groupId: S.str({ minLength: 1, maxLength: 64 }),
+  groupTitle: S.str({ minLength: 1, maxLength: 120 }),
+  memberName: S.str({ minLength: 1, maxLength: 32 }),
+  workerConversationId: S.int(1),
+  postKind: S.enm(BOARD_POST_KINDS),
+  seq: S.int(0),
+  postCount: S.int(0),
+  aborted: S.bool(),
+  model: S.str({ minLength: 1, maxLength: 200 }),
+  archived: S.bool(),
+  retainedCount: S.int(0),
+})

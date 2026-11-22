@@ -1,6 +1,6 @@
 # Swarm 插件
 
-Swarm 在会话里提供一个共享看板。主控会话负责分工，成员把进度、问题和审查意见发给需要处理的人。协作组按需创建，插件启动时不会创建常驻会话。第一次使用可以从一次代码交接开始。 [Swarm 实战](../getting-started/orchestration-guide.md)
+Swarm 在会话里提供一张共享顺序黑板。主控会话负责分工，成员把进度、问题和审查意见发给需要处理的人。协作组按需创建，插件启动时不会创建常驻会话。第一次使用可以从一次代码交接开始。 [Swarm 实战](../getting-started/orchestration-guide.md)
 
 ## 建组和派工
 
@@ -10,11 +10,11 @@ Swarm 在会话里提供一个共享看板。主控会话负责分工，成员�
 helmx swarm create-group --conversation-id 42 --title '检查导出模块' --json
 ```
 
-主控分配具体任务，协调接口和分支合入。成员可单独指定 Profile、目标计算节点（`nodeId`）、工作目录（`cwd`）、模型、思考档位和频道；`nodeId` 覆盖 Profile 与主控所在节点（显式传 `local` 可切回 Hub 本机），远端节点必须提供 `cwd` 或匹配的 Profile `cwd`，且节点离线时在创建会话前即返回 `409 node_offline`。成员默认已订阅 `main`，仅在需要 `#频道名` 多播时先通过 `create_group` 或 `manage_channel` 创建子频道再派工订阅。并发写代码的成员应各有独立的 Git worktree；注意主控本机的 `git merge` 仅适用于同节点上的工作树，跨节点工作树需在各自节点上处理合入。Swarm 通过 `builtin:worktree` 分配工作树，并在协作期间持有租约，避免被清理。`readonly` 是任务约定，成员仍保有原来的工具权限。 [Git Worktree 的隔离范围](../workflows/worktree-and-gate.md)
+主控分配具体任务，协调接口和分支合入。成员可单独指定 Profile、目标计算节点（`nodeId`）、工作目录（`cwd`）、模型和思考档位；`nodeId` 覆盖 Profile 与主控所在节点（显式传 `local` 可切回 Hub 本机），远端节点必须提供 `cwd` 或匹配的 Profile `cwd`，且节点离线时在创建会话前即返回 `409 node_offline`。并发写代码的成员应各有独立的 Git worktree；注意主控本机的 `git merge` 仅适用于同节点上的工作树，跨节点工作树需在各自节点上处理合入。Swarm 通过 `builtin:worktree` 分配工作树，并在协作期间持有租约，避免被清理。`readonly` 是任务约定，成员仍保有原来的工具权限。 [Git Worktree 的隔离范围](../workflows/worktree-and-gate.md)
 
 ## 看板消息
 
-`board_post` 的 `to` 决定谁收到消息。可以填 `coordinator`、成员名或 `#频道名`。只有主控和人工调用可以用 `all`。`main` 是默认频道，`#main` 不作收件地址。找不到或已归档的收件人会使操作失败；向当前无其他活跃订阅成员的子频道发送 `wake: true` 消息会返回 `409 swarm_channel_empty`，剔除发帖者自身后没有任何活跃可唤醒目标（如自寻址或空组 `all`）会返回 `409 swarm_no_active_targets`，防止静默掉棒。
+每个协作组维护一条单线递增序号的共享黑板。`board_post` 的 `to` 决定谁收到消息，可填 `coordinator` 或活跃成员名（可选前导 `@`）；只有主控和人工调用可以用 `all`。找不到或已归档的收件人会使操作失败；剔除发帖者自身后没有任何活跃可唤醒目标（如自寻址或空组 `all`）会返回 `409 swarm_no_active_targets`，防止静默掉棒。
 
 每条消息都有 `seq`。在回复里可以用 `refs: [12]` 和正文里的 `#12` 引用前一条意见。带 worktree 的成员发 `handoff` 或 `done` 时，看板会附上 `worktreeSnapshot`，包含分支、领先提交数和改动文件预览，供接手的人查对应工作树。
 
@@ -28,8 +28,8 @@ helmx swarm create-group --conversation-id 42 --title '检查导出模块' --jso
 
 - 时间线显示派工、交接和审查。点成员相关的记录可打开成员会话。
 - 主控会话里还有「进行中」区域，有成员正在执行或受阻时才显示。展开后可以查看成员或中止当前回合。
-- 右侧「Swarm 协同编组」面板显示任务目标、成员状态、模型、分支和最近的看板消息（含可点击 `#seq` 正文内联与引用芯片速览浮卡——支持浮卡内连续追查与返回、按 `seqs` 精确补拉任意早期记录，以及「定位到列表」后的 `← 返回 #seq` 回跳栈与多频道筛选）。主控视角下可直接在面板中止在途成员或发起结单（支持 `keepWorktree` / `abortRunning` 选项）。「查看完整记录」会加载最近 200 条记录，超过 200 条时可通过「加载更早记录」继续向前分页。结单后仍可在工作台回看。
-- 输入框支持 `@成员` 和 `#频道` 补全。切换成员模型需要等它空闲。中止当前回合会保留成员会话与工作树租约。
+- 右侧「Swarm 协同编组」面板显示任务目标、成员状态、模型、分支和最近的看板消息（含可点击 `#seq` 正文内联与引用芯片速览浮卡——支持浮卡内连续追查与返回、按 `seqs` 精确补拉任意早期记录，以及「定位到列表」后的 `← 返回 #seq` 回跳栈）。主控视角下可直接在面板中止在途成员或发起结单（支持 `keepWorktree` / `abortRunning` 选项）。「查看完整记录」会加载最近 200 条记录，超过 200 条时可通过「加载更早记录」继续向前分页。结单后仍可在工作台回看。
+- 输入框支持 `@成员` 补全。切换成员模型需要等它空闲。中止当前回合会保留成员会话与工作树租约。
 
 ## 结单和清理
 
@@ -47,7 +47,6 @@ helmx swarm close-group --group-id "$group_id" --abort-running --keep-worktree
 | --- | --- | --- | --- |
 | `create_group` | `swarm_create_group` | `helmx swarm create-group` | 在顶层会话建立协作组 |
 | `update_group` | `swarm_update_group` | `helmx swarm update-group` | 改标题或目标 |
-| `manage_channel` | `swarm_manage_channel` | `helmx swarm channel` | 创建、订阅、退订或归档子频道。`main` 不可退订或归档 |
 | `dispatch_worker` | `swarm_dispatch_worker` | `helmx swarm dispatch-worker` | 派工并唤醒成员。可选目标节点（`nodeId`）、工作目录（`cwd`）、worktree、会话分叉和模型 |
 | `board_post` | `swarm_board_post` | `helmx swarm board-post` | 发消息，指定收件人和是否唤醒 |
 | `board_read` | `swarm_board_read` | `helmx swarm board-read` | 分页读消息 |
@@ -58,7 +57,7 @@ helmx swarm close-group --group-id "$group_id" --abort-running --keep-worktree
 | `archive_worker` | `swarm_archive_worker` | `helmx swarm archive-worker` | 归档成员并处理工作树租约 |
 | `close_group` | `swarm_close_group` | `helmx swarm close-group` | 结单、清理或保留工作树 |
 
-`complete_board_members` 和 `complete_board_channels` 给输入框提供候选。模型可用的工具取决于当前会话的组内身份。成员侧用 `swarm_board_read` 和 `swarm_board_post` 交接，派工、换模型和结单由主控处理。 [CLI 参数参考](../cli/reference.md)
+`complete_board_members` 给输入框提供 `@` 补全候选。模型可用的工具取决于当前会话的组内身份。成员侧用 `swarm_board_read` 和 `swarm_board_post` 交接，派工、换模型和结单由主控处理。 [CLI 参数参考](../cli/reference.md)
 
 ## 失败和恢复
 
@@ -78,4 +77,4 @@ helmx swarm close-group --group-id "$group_id" --abort-running --keep-worktree
 
 全局 `index` 和 `board-badges` 提供成员索引和界面计数。看板明细通过按主控会话分片的 `board-view` 提供，前端在查看编组时订阅。主控和成员通过 `swarm-coordinator`、`swarm-worker` 及各自的 `-archived` 标签区分。回合提示只包含稳定的组或成员信息，实时状态按需从看板读。
 
-[插件入口](../../packages/plugins/src/swarm.ts) · [Swarm 实现](../../packages/plugins/src/swarm/) · [插件集成测试](../../packages/plugins/test/swarm.integration.test.ts) · [界面测试](../../packages/web/test/swarm-client-interactions.test.tsx)
+[插件入口](../../packages/plugins/src/swarm.ts) · [Swarm 实现](../../packages/plugins/src/swarm/) · [界面测试](../../packages/web/test/swarm-client-interactions.test.tsx)

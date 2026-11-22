@@ -1,65 +1,25 @@
 /**
- * builtin:swarm：极简独立多智能体黑板协同插件（默认启用、可停用）。
- *
- * 架构边界（Option A — 零全局常驻会话、零轮询 Watchdog、谁派生谁负责）：
- * - 零启动时常驻会话与零后台巡检定时器，所有协同组按需在顶层人类会话上创建；
- * - 零静态 dependencies（空闲时不阻塞停用 builtin:workflow / builtin:worktree；持锁工作树由 ManagedWorktreeHold 保护）；
- * - 单真源 <dataDir>/groups/<groupId>/{meta.json, board.jsonl} 派生 index / board-badges / board-view；
- * - 纯 turn_settled 事件驱动自愈（失败自动上板 [blocker]、哑巴退场单次续催、6 条件 0-Token [stall] 守卫）。
+ * builtin:swarm — on-demand single-board multi-agent peer collaboration plugin.
  */
+import { HelmxError, type ConversationSummary, type MaybePromise, type PluginDefinition } from '@helmx/protocol'
+import { loadManagedSkillAsset, resolvePluginClientAssets } from './asset-paths.js'
 import {
-  HelmxError,
-  type ConversationSummary,
-  type MaybePromise,
-  type PluginDefinition,
-} from '@helmx/protocol'
-import { resolvePluginClientAssets } from './asset-paths.js'
-import { readSwarmSkillAsset } from './swarm/assets.js'
-import {
-  ARCHIVED_COORDINATOR_TAG,
-  ARCHIVED_WORKER_TAG,
   BOARD_BADGES_DOC_NAME,
-  BOARD_REPORT_RENDERER,
   BOARD_VIEW_DOC_NAME,
-  BOARD_WAKEUP_RENDERER,
-  COORDINATOR_SCOPE,
-  COORDINATOR_TAG,
   INDEX_DOC_NAME,
-  PARTICIPANT_SCOPE,
   SWARM_PLUGIN_ID,
   SWARM_SKILL_ID,
-  WORKER_TAG,
   asConversationDeletedEvent,
   asConversationUpsertEvent,
-  assertBoardPost,
-  assertChannelName,
-  assertCollabGroupRecord,
-  assertGroupId,
   assertIndexDoc,
-  assertMemberName,
+  createKeyedQueue,
   resolveSwarmConfig,
-  type BoardBadgeEntry,
   type BoardBadgesDoc,
-  type BoardPost,
-  type BoardPostKind,
   type BoardViewDoc,
-  type BoardViewHeadline,
-  type BoardViewMember,
-  type CollabChannelSpec,
-  type CollabGroupRecord,
-  type CollabGroupStatus,
-  type CollabGroupSummary,
-  type GroupMemberState,
-  type MemberLiveState,
-  type RetainedWorktreeInfo,
   type SwarmConfig,
   type SwarmCoordinator,
   type SwarmDocs,
   type SwarmIndexDoc,
-  type SwarmWorkerPointer,
-  type WorkerAccess,
-  type WorkerIsolation,
-  type WorktreeHandoffSnapshot,
 } from './swarm/contracts.js'
 import { createCollabGroupRuntime } from './swarm/group-store.js'
 import { registerSwarmActions } from './swarm/actions.js'
@@ -80,68 +40,53 @@ export function createSwarmPlugin(): PluginDefinition {
     definePlugin(ctx) {
       let active = false
       let shutdown = false
-      const dispatchChains = new Map<string, Promise<unknown>>()
+      const dispatchQueue = createKeyedQueue()
       const liveTasks = new Map<string, number>()
       const settlingWorkers = new Map<number, number>()
-      let upsertUnsubscribe: (() => void) | undefined
-      let deletedUnsubscribe: (() => void) | undefined
+      let upsertUnsub: (() => void) | undefined
+      let deletedUnsub: (() => void) | undefined
       let reconcilePromise: Promise<void> | undefined
-
-      const countLabel = (label: string, delta: number): void => {
-        const next = (liveTasks.get(label) ?? 0) + delta
-        if (next > 0) liveTasks.set(label, next)
-        else liveTasks.delete(label)
-      }
 
       async function track<T>(label: string, task: () => MaybePromise<T>): Promise<T> {
         if (shutdown) {
-          throw new HelmxError('plugin_disabled', `${SWARM_PLUGIN_ID} 已停用，拒绝后台任务 ${label}`, 409, {
-            pluginId: SWARM_PLUGIN_ID,
-          })
+          throw new HelmxError('plugin_disabled', `${SWARM_PLUGIN_ID} 已停用，拒绝后台任务 ${label}`, 409, { pluginId: SWARM_PLUGIN_ID })
         }
-        countLabel(label, +1)
+        liveTasks.set(label, (liveTasks.get(label) ?? 0) + 1)
         try {
           return await task()
         } finally {
-          countLabel(label, -1)
+          const next = (liveTasks.get(label) ?? 1) - 1
+          if (next > 0) liveTasks.set(label, next)
+          else liveTasks.delete(label)
         }
       }
 
-      const logDiagnostic = (message: string): void => {
-        console.error(`[swarm] ${ctx.host.redact(message)}`)
-      }
-
       const reportError = (title: string, detail: unknown): void => {
-        const message = detail instanceof Error ? detail.message : String(detail)
-        const body = ctx.host.redact(`${title}：${message}`)
+        const msg = detail instanceof Error ? detail.message : String(detail)
         try {
           ctx.host.emitEvent('notification', {
             type: 'notification',
             level: 'error',
             title: ctx.host.redact(title),
-            body,
+            body: ctx.host.redact(`${title}：${msg}`),
           })
         } catch (eventErr) {
-          logDiagnostic(`swarm 事件上报失败：${eventErr instanceof Error ? eventErr.message : String(eventErr)}`)
+          console.error(`[swarm] ${ctx.host.redact(`事件上报失败：${eventErr instanceof Error ? eventErr.message : String(eventErr)}`)}`)
         }
       }
 
-      const getConfig = (): SwarmConfig =>
-        resolveSwarmConfig(ctx.getConfig() as Record<string, unknown>)
-
+      const getConfig = (): SwarmConfig => resolveSwarmConfig(ctx.getConfig() as Record<string, unknown>)
       const docs: SwarmDocs = {
         index: ctx.doc<SwarmIndexDoc>(INDEX_DOC_NAME, { workers: [], groups: [] }, { public: true, durable: false }),
         boardBadges: ctx.doc<BoardBadgesDoc>(BOARD_BADGES_DOC_NAME, { byConversation: {} }, { public: true, durable: false }),
         boardView: ctx.sessionDoc<BoardViewDoc | null>(BOARD_VIEW_DOC_NAME, null, { public: true, durable: false }),
       }
-
       const readIndex = (): SwarmIndexDoc => assertIndexDoc(docs.index.get())
       const writeIndex = (next: SwarmIndexDoc): SwarmIndexDoc => {
         assertIndexDoc(next)
         docs.index.set(next)
         return next
       }
-
       const readConversationOrUndefined = (id: number | undefined): ConversationSummary | undefined => {
         if (!Number.isInteger(id) || (id as number) <= 0) return undefined
         try {
@@ -154,7 +99,6 @@ export function createSwarmPlugin(): PluginDefinition {
 
       let coordinatorRef!: SwarmCoordinator
       const groupsRuntime = createCollabGroupRuntime(ctx, () => coordinatorRef)
-
       const coordinator: SwarmCoordinator = {
         isActive: () => active,
         isShutdown: () => shutdown,
@@ -164,21 +108,7 @@ export function createSwarmPlugin(): PluginDefinition {
         writeIndex,
         readConversationOrUndefined,
         reportError,
-        enqueueDispatch: <T>(key: string, fn: () => Promise<T>): Promise<T> => {
-          const prev = dispatchChains.get(key) ?? Promise.resolve()
-          const task = prev.then(fn, fn)
-          const settled = task.then(
-            () => undefined,
-            () => undefined,
-          )
-          dispatchChains.set(key, settled)
-          void settled.finally(() => {
-            if (dispatchChains.get(key) === settled) {
-              dispatchChains.delete(key)
-            }
-          })
-          return task
-        },
+        enqueueDispatch: dispatchQueue.enqueue,
         track,
         groups: groupsRuntime,
         settlingWorkers,
@@ -193,28 +123,19 @@ export function createSwarmPlugin(): PluginDefinition {
         maxWorkersPerGroup: {
           type: 'number',
           label: { en: 'Max workers per group', 'zh-CN': '单组最大成员数' },
-          description: {
-            en: 'Maximum active peer members allowed in a single collaboration group (integer 2..32)',
-            'zh-CN': '单个协作组同时处于活跃生命周期的对等成员上限（整数 2..32）',
-          },
+          description: { en: 'Maximum active peer members allowed in a single collaboration group (integer 2..32)', 'zh-CN': '单个协作组同时处于活跃生命周期的对等成员上限（整数 2..32）' },
           default: 12,
         },
         boardPreviewLimit: {
           type: 'number',
           label: { en: 'Board preview limit', 'zh-CN': '看板预览消息上限' },
-          description: {
-            en: 'Maximum recent board posts retained in the board-view session document (integer 20..200)',
-            'zh-CN': '看板实时会话文档保留的最近流转消息条数上限（整数 20..200）',
-          },
+          description: { en: 'Maximum recent board posts retained in the board-view session document (integer 20..200)', 'zh-CN': '看板实时会话文档保留的最近流转消息条数上限（整数 20..200）' },
           default: 80,
         },
         maxPeerHopsWithoutCoordinator: {
           type: 'number',
           label: { en: 'Max peer hops without coordinator', 'zh-CN': '主控未介入最大互唤跳数' },
-          description: {
-            en: 'Maximum consecutive peer-to-peer wakeups allowed before tripping a blocker circuit breaker to the coordinator (integer 2..100)',
-            'zh-CN': '自上次主控介入起允许的连续对等成员互唤上限，超限自动熔断并向主控上报受阻（整数 2..100）',
-          },
+          description: { en: 'Maximum consecutive peer-to-peer wakeups allowed before tripping a blocker circuit breaker to the coordinator (integer 2..100)', 'zh-CN': '自上次主控介入起允许的连续对等成员互唤上限，超限自动熔断并向主控上报受阻（整数 2..100）' },
           default: 16,
         },
       })
@@ -224,42 +145,37 @@ export function createSwarmPlugin(): PluginDefinition {
         liveTasks() {
           const labels = [...liveTasks.keys(), ...groupsRuntime.liveTaskLabels()]
           if (!active) return labels
-          const busyIds = new Set<number>()
-          for (const w of readIndex().workers) busyIds.add(w.conversationId)
-          for (const id of busyIds) {
-            try {
-              const s = ctx.host.getConversation(id)
-              if (s.status === 'working' || s.status === 'blocked') labels.push(`worker-run:${id}`)
-            } catch (err) {
-              if (err instanceof HelmxError && err.code === 'not_found') continue
-              throw err
-            }
+          for (const id of new Set(readIndex().workers.map((w) => w.conversationId))) {
+            const s = readConversationOrUndefined(id)
+            if (s?.status === 'working' || s?.status === 'blocked') labels.push(`worker-run:${id}`)
           }
-          for (const [settlingId, count] of settlingWorkers) {
-            if (count > 0) labels.push(`worker-settle:${settlingId}`)
+          for (const [id, count] of settlingWorkers) {
+            if (count > 0) labels.push(`worker-settle:${id}`)
           }
           return labels
         },
-        inUse() {
-          if (!active) return []
-          return groupsRuntime.inUseItems()
-        },
+        inUse: () => (active ? groupsRuntime.inUseItems() : []),
         async start() {
           shutdown = false
           getConfig()
           readIndex()
-          await ctx.host.skills.ensureSkill(readSwarmSkillAsset())
-          upsertUnsubscribe = ctx.host.onEvent('conversation.upsert', (payload) => {
+          await ctx.host.skills.ensureSkill(
+            loadManagedSkillAsset({
+              pluginId: SWARM_PLUGIN_ID,
+              skillId: SWARM_SKILL_ID,
+              relativeDir: `swarm/assets/${SWARM_SKILL_ID}`,
+              missingErrorCode: 'swarm_asset_missing',
+            }),
+          )
+          upsertUnsub = ctx.host.onEvent('conversation.upsert', (p) => {
             if (!active || shutdown) return
-            const upsert = asConversationUpsertEvent(payload)
-            if (upsert === undefined) return
-            groupsRuntime.onConversationUpsert(upsert.id)
+            const ev = asConversationUpsertEvent(p)
+            if (ev) groupsRuntime.onConversationUpsert(ev.id)
           })
-          deletedUnsubscribe = ctx.host.onEvent('conversation.deleted', async (payload) => {
+          deletedUnsub = ctx.host.onEvent('conversation.deleted', async (p) => {
             if (!active || shutdown) return
-            const deletedId = asConversationDeletedEvent(payload)
-            if (deletedId === undefined) return
-            await groupsRuntime.onConversationDeleted(deletedId)
+            const id = asConversationDeletedEvent(p)
+            if (id !== undefined) await groupsRuntime.onConversationDeleted(id)
           })
           active = true
           await groupsRuntime.loadAllFromDisk()
@@ -267,11 +183,9 @@ export function createSwarmPlugin(): PluginDefinition {
         },
         async reconcile() {
           if (!active || shutdown) return
-          const task = track('reconcile-recovered-groups', () => groupsRuntime.reconcileRecoveredGroups()).catch(
-            (err) => {
-              if (!shutdown) reportError('Swarm 启动恢复对账失败', err)
-            },
-          )
+          const task = track('reconcile-recovered-groups', () => groupsRuntime.reconcileRecoveredGroups()).catch((err) => {
+            if (!shutdown) reportError('Swarm 启动恢复对账失败', err)
+          })
           reconcilePromise = task
           try {
             await task
@@ -282,12 +196,12 @@ export function createSwarmPlugin(): PluginDefinition {
         async stop() {
           shutdown = true
           active = false
-          upsertUnsubscribe?.()
-          upsertUnsubscribe = undefined
-          deletedUnsubscribe?.()
-          deletedUnsubscribe = undefined
+          upsertUnsub?.()
+          upsertUnsub = undefined
+          deletedUnsub?.()
+          deletedUnsub = undefined
           await groupsRuntime.stopAndClear()
-          if (reconcilePromise !== undefined) {
+          if (reconcilePromise) {
             await Promise.allSettled([reconcilePromise])
             reconcilePromise = undefined
           }
@@ -299,68 +213,20 @@ export function createSwarmPlugin(): PluginDefinition {
 }
 
 export {
-  SWARM_PLUGIN_ID,
-  SWARM_SKILL_ID,
-  COORDINATOR_TAG,
-  WORKER_TAG,
-  ARCHIVED_COORDINATOR_TAG,
-  ARCHIVED_WORKER_TAG,
-  COORDINATOR_SCOPE,
-  PARTICIPANT_SCOPE,
-  BOARD_REPORT_RENDERER,
-  BOARD_WAKEUP_RENDERER,
-  INDEX_DOC_NAME,
-  BOARD_BADGES_DOC_NAME,
-  BOARD_VIEW_DOC_NAME,
-  resolveSwarmConfig,
-  assertIndexDoc,
-  assertCollabGroupRecord,
-  assertBoardPost,
-  assertMemberName,
-  assertChannelName,
-  assertGroupId,
-  type SwarmConfig,
-  type WorkerAccess,
-  type WorkerIsolation,
-  type CollabGroupStatus,
-  type BoardPostKind,
-  type SwarmWorkerPointer,
-  type SwarmIndexDoc,
-  type CollabGroupSummary,
-  type GroupMemberState,
-  type RetainedWorktreeInfo,
-  type CollabChannelSpec,
-  type CollabGroupRecord,
-  type WorktreeHandoffSnapshot,
-  type BoardPost,
-  type BoardBadgeEntry,
-  type BoardBadgesDoc,
-  type BoardViewHeadline,
-  type MemberLiveState,
-  type BoardViewMember,
-  type BoardViewDoc,
-}
+  SWARM_PLUGIN_ID, SWARM_SKILL_ID, COORDINATOR_TAG, WORKER_TAG, ARCHIVED_COORDINATOR_TAG, ARCHIVED_WORKER_TAG,
+  COORDINATOR_SCOPE, PARTICIPANT_SCOPE, BOARD_REPORT_RENDERER, BOARD_WAKEUP_RENDERER,
+  INDEX_DOC_NAME, BOARD_BADGES_DOC_NAME, BOARD_VIEW_DOC_NAME,
+  resolveSwarmConfig, assertIndexDoc, assertCollabGroupRecord, assertBoardPost, assertMemberName, assertGroupId,
+  type SwarmConfig, type WorkerAccess, type WorkerIsolation, type CollabGroupStatus, type BoardPostKind,
+  type SwarmWorkerPointer, type SwarmIndexDoc, type CollabGroupSummary, type GroupMemberState,
+  type RetainedWorktreeInfo, type CollabGroupRecord, type WorktreeHandoffSnapshot, type BoardPost,
+  type BoardBadgeEntry, type BoardBadgesDoc, type BoardViewHeadline, type MemberLiveState, type BoardViewMember, type BoardViewDoc,
+} from './swarm/contracts.js'
 
 export {
-  resolveDefaultWake,
-  resolvePostChannel,
-  resolveBoardTargets,
-  shouldFlushCoordinatorReport,
-  findIdleCatchupAnchorPost,
-  synthesizeHeadline,
-  synthesizeBoardView,
+  resolveDefaultWake, resolveBoardTargets, shouldFlushCoordinatorReport,
+  findIdleCatchupAnchorPost, synthesizeHeadline, synthesizeBoardView,
 } from './swarm/board-router.js'
-
-export {
-  evaluateSilentExit,
-  diagnoseStallRootCause,
-  computeStallWatermark,
-  evaluateGroupQuiescence,
-} from './swarm/board-stall.js'
-
-export {
-  activeSwarmGroupCoordinatorSection,
-  activeSwarmGroupWorkerSection,
-} from './swarm/hooks.js'
-
+export { evaluateSilentExit, diagnoseStallRootCause, computeStallWatermark, evaluateGroupQuiescence } from './swarm/board-stall.js'
+export { activeSwarmGroupCoordinatorSection, activeSwarmGroupWorkerSection } from './swarm/hooks.js'
 export { registerSwarmUi } from './swarm/ui.js'

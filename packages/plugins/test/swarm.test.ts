@@ -2,7 +2,7 @@
  * builtin:swarm 协同黑板纯函数与插件定义单测（Unit 档，纯内存零全局副作用）：
  * - 插件定义契约：SWARM_PLUGIN_ID = 'builtin:swarm'、无静态 dependencies: ['builtin:workflow']；
  * - 配置边界（maxWorkersPerGroup 2..32，boardPreviewLimit 20..200）与单真源契约守卫；
- * - Fail-Closed 目标解析（coordinator / all 权限 / #main 400 / 未知或归档频道 / 未知成员）与正交 wake 缺省推导；
+ * - Fail-Closed 目标解析（coordinator / all 权限 / 未知或归档成员）与正交 wake 缺省推导；
  * - BoardViewDoc 合成与 (headSeq, memberStateDigest) 投影指纹去重；
  * - 100% 字节恒定的 <active_swarm_group> 提示词段构造；
  * - 防哑巴退场单次自愈（nudge -> fallback_blocker）与 6 条件 0-Token [stall] 三类根因判定。
@@ -22,7 +22,6 @@ import {
   activeSwarmGroupCoordinatorSection,
   activeSwarmGroupWorkerSection,
   assertBoardPost,
-  assertChannelName,
   assertCollabGroupRecord,
   assertGroupId,
   assertIndexDoc,
@@ -34,7 +33,6 @@ import {
   findIdleCatchupAnchorPost,
   resolveBoardTargets,
   resolveDefaultWake,
-  resolvePostChannel,
   resolveSwarmConfig,
   shouldFlushCoordinatorReport,
   synthesizeBoardView,
@@ -52,10 +50,9 @@ import {
   boardStatusOutputSchema,
   closeGroupOutputSchema,
   dispatchInputSchema,
-  manageChannelInputSchema,
   swarmToolPresentationMetaSchema,
 } from '../src/swarm/action-schemas.js'
-import { snapshotMemberTiming, unknownChannelError } from '../src/swarm/contracts.js'
+import { snapshotMemberTiming } from '../src/swarm/contracts.js'
 import { createBoardProjections } from '../src/swarm/projections.js'
 import { parseBoardView } from '../src/swarm/client/board-model.ts'
 import {
@@ -85,18 +82,12 @@ function makeMember(over: Partial<GroupMemberState> = {}): GroupMemberState {
     nodeId: 'local',
     cwd: '/repo/wt-author',
     worktreeId: 'local:/repo/wt-author',
-    channels: ['main'],
     lifecycle: 'active',
     readCursorSeq: 0,
     pendingWakeupSeq: 0,
     createdAt: 1_000,
     ...over,
   }
-}
-
-function availableChannelsOf(err: HelmxError): unknown {
-  if (typeof err.details !== 'object' || err.details === null) return undefined
-  return (err.details as { availableChannels?: unknown }).availableChannels
 }
 
 function makeGroup(over: Partial<CollabGroupRecord> = {}): CollabGroupRecord {
@@ -106,13 +97,8 @@ function makeGroup(over: Partial<CollabGroupRecord> = {}): CollabGroupRecord {
     objective: 'Ship clean auth refactor with full test coverage',
     coordinatorConversationId: 1,
     status: 'active',
-    channels: [
-      { name: 'main' },
-      { name: 'review', topic: 'Code review loop' },
-      { name: 'legacy', archived: true },
-    ],
     members: [
-      makeMember({ name: 'author', conversationId: 11, channels: ['main', 'review'] }),
+      makeMember({ name: 'author', conversationId: 11 }),
       makeMember({
         name: 'verifier',
         conversationId: 12,
@@ -120,14 +106,12 @@ function makeGroup(over: Partial<CollabGroupRecord> = {}): CollabGroupRecord {
         isolation: 'inherit',
         cwd: '/repo',
         worktreeId: undefined,
-        channels: ['main', 'review'],
       }),
       makeMember({
         name: 'retired',
         conversationId: 13,
         lifecycle: 'archived',
         archivedAt: 2_000,
-        channels: ['main', 'review'],
       }),
     ],
     headSeq: 0,
@@ -143,7 +127,6 @@ function makePost(seq: number, over: Partial<BoardPost> = {}): BoardPost {
   return {
     seq,
     groupId: 'grp_test_1',
-    channel: 'main',
     from: 'coordinator',
     to: ['author'],
     resolvedTargets: ['author'],
@@ -209,8 +192,6 @@ test('swarm-unit1: plugin definition contract, tags/scopes, config bounds, and s
   assert.throws(() => assertMemberName('AuthorUpper'), /非法/)
   assert.throws(() => assertMemberName('has space'), /非法/)
 
-  assert.equal(assertChannelName('review-1'), 'review-1')
-  assert.throws(() => assertChannelName('#review'), /非法/)
   assert.equal(assertGroupId('grp_abc-123'), 'grp_abc-123')
   assert.throws(() => assertGroupId('../escape'), /非法/)
 
@@ -262,32 +243,6 @@ test('swarm-unit2: default wake derivation and Fail-Closed target resolution', {
   assert.equal(resolveDefaultWake('handoff', []), false)
 
   const group = makeGroup()
-  assert.equal(resolvePostChannel(group, undefined), 'main')
-  assert.equal(resolvePostChannel(group, 'review'), 'review')
-  assert.throws(
-    () => resolvePostChannel(group, 'unknown', 'worker'),
-    (err: unknown) =>
-      err instanceof HelmxError &&
-      err.code === 'swarm_unknown_channel' &&
-      err.status === 404 &&
-      JSON.stringify(availableChannelsOf(err)) === JSON.stringify(['main', 'review']) &&
-      err.message.includes('main') &&
-      err.message.includes('review') &&
-      !err.message.includes('swarm_manage_channel'),
-  )
-  assert.throws(
-    () => resolvePostChannel(group, 'unknown', 'coordinator'),
-    (err: unknown) =>
-      err instanceof HelmxError &&
-      err.code === 'swarm_unknown_channel' &&
-      err.status === 404 &&
-      JSON.stringify(availableChannelsOf(err)) === JSON.stringify(['main', 'review']) &&
-      err.message.includes('swarm_manage_channel'),
-  )
-  assert.throws(
-    () => resolvePostChannel(group, 'legacy'),
-    (err: unknown) => err instanceof HelmxError && err.code === 'swarm_channel_archived' && err.status === 409,
-  )
 
   // Coordinator 'all' expands only active members (excludes archived 'retired')
   const broadcast = resolveBoardTargets(group, { role: 'coordinator', from: 'coordinator' }, ['all'])
@@ -299,109 +254,18 @@ test('swarm-unit2: default wake derivation and Fail-Closed target resolution', {
     (err: unknown) => err instanceof HelmxError && err.code === 'swarm_broadcast_forbidden' && err.status === 403,
   )
 
-  // '#main' -> 400 validation_error
+  // Single-board addressing: legacy '#channel' syntax is rejected as unknown target, and schemas omit channel/channels
   assert.throws(
-    () => resolveBoardTargets(group, { role: 'coordinator', from: 'coordinator' }, ['#main']),
-    (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
+    () => resolveBoardTargets(group, { role: 'worker', from: 'author' }, ['#review']),
+    (err: unknown) => err instanceof HelmxError && err.code === 'swarm_unknown_target' && err.status === 404,
   )
+  assert.equal('channels' in (dispatchInputSchema['properties'] as Record<string, unknown>), false)
+  assert.equal('channel' in (boardPostInputSchema['properties'] as Record<string, unknown>), false)
+  assert.equal('channel' in (boardReadInputSchema['properties'] as Record<string, unknown>), false)
 
-  // Unknown '#ghost' -> 404 (role-aware & excludes #main / archived); archived '#legacy' -> 409
-  assert.throws(
-    () => resolveBoardTargets(group, { role: 'worker', from: 'author' }, ['#ghost']),
-    (err: unknown) =>
-      err instanceof HelmxError &&
-      err.code === 'swarm_unknown_channel' &&
-      err.status === 404 &&
-      JSON.stringify(availableChannelsOf(err)) === JSON.stringify(['review']) &&
-      err.message.includes('#review') &&
-      !err.message.includes('swarm_manage_channel') &&
-      !err.message.includes("'all'"),
-  )
-  assert.throws(
-    () => resolveBoardTargets(group, { role: 'coordinator', from: 'coordinator' }, ['#ghost']),
-    (err: unknown) =>
-      err instanceof HelmxError &&
-      err.code === 'swarm_unknown_channel' &&
-      err.status === 404 &&
-      JSON.stringify(availableChannelsOf(err)) === JSON.stringify(['review']) &&
-      err.message.includes('#review') &&
-      err.message.includes('swarm_manage_channel'),
-  )
-  const mainOnlyGroup = makeGroup({ channels: [{ name: 'main' }] })
-  assert.throws(
-    () => resolveBoardTargets(mainOnlyGroup, { role: 'worker', from: 'author' }, ['#wave1']),
-    (err: unknown) =>
-      err instanceof HelmxError &&
-      err.code === 'swarm_unknown_channel' &&
-      err.status === 404 &&
-      JSON.stringify(availableChannelsOf(err)) === JSON.stringify([]) &&
-      err.message.includes('#main 不可直接寻址') &&
-      !err.message.includes('swarm_manage_channel'),
-  )
-  assert.throws(
-    () => resolveBoardTargets(group, { role: 'worker', from: 'author' }, ['#legacy']),
-    (err: unknown) => err instanceof HelmxError && err.code === 'swarm_channel_archived' && err.status === 409,
-  )
-
-  // unknownChannelError context coverage (dispatch / read / manage) + channel input schema descriptions
-  const dispatchUnknown = unknownChannelError(group, 'wave1', { kind: 'dispatch' })
-  assert.equal(dispatchUnknown.code, 'swarm_unknown_channel')
-  assert.equal(dispatchUnknown.status, 404)
-  assert.deepEqual(availableChannelsOf(dispatchUnknown), ['main', 'review'])
-  assert.match(dispatchUnknown.message, /省略/)
-  assert.match(dispatchUnknown.message, /swarm_manage_channel/)
-
-  const readUnknown = unknownChannelError(group, 'wave1', { kind: 'read' })
-  assert.deepEqual(availableChannelsOf(readUnknown), ['main', 'review', 'legacy'])
-  assert.match(readUnknown.message, /legacy（已归档）/)
-  assert.equal(readUnknown.message.includes('swarm_manage_channel'), false)
-
-  const archiveUnknown = unknownChannelError(group, 'wave1', { kind: 'manage', op: 'archive' })
-  assert.deepEqual(availableChannelsOf(archiveUnknown), ['review'])
-  assert.equal(archiveUnknown.message.includes('swarm_manage_channel'), false)
-
-  const subscribeUnknown = unknownChannelError(group, 'wave1', { kind: 'manage', op: 'subscribe' })
-  assert.deepEqual(availableChannelsOf(subscribeUnknown), ['main', 'review'])
-  assert.match(subscribeUnknown.message, /swarm_manage_channel/)
-
-  const unsubscribeUnknown = unknownChannelError(mainOnlyGroup, 'wave1', { kind: 'manage', op: 'unsubscribe' })
-  assert.deepEqual(availableChannelsOf(unsubscribeUnknown), [])
-  assert.equal(unsubscribeUnknown.message.includes('swarm_manage_channel'), false)
-
-  const dispatchChannelsDesc = String(
-    ((dispatchInputSchema['properties'] as Record<string, Record<string, unknown>>)['channels'] ?? {})['description'] ?? '',
-  )
-  assert.match(dispatchChannelsDesc, /omit by default/i)
-  assert.match(dispatchChannelsDesc, /swarm_manage_channel/)
-  for (const [label, schema] of [
-    ['boardPostInputSchema.channel', (boardPostInputSchema['properties'] as Record<string, Record<string, unknown>>)['channel']],
-    ['boardReadInputSchema.channel', (boardReadInputSchema['properties'] as Record<string, Record<string, unknown>>)['channel']],
-    ['manageChannelInputSchema.channel', (manageChannelInputSchema['properties'] as Record<string, Record<string, unknown>>)['channel']],
-  ] as const) {
-    assert.ok(typeof schema?.['description'] === 'string' && schema['description'].length > 0, `${label} 必须声明英文 description`)
-  }
-
-  // Active '#review' from 'author' -> expands ['author', 'verifier'], strips self 'author' -> ['verifier']
-  const subchannel = resolveBoardTargets(group, { role: 'worker', from: 'author' }, ['#review'], { wake: true })
-  assert.deepEqual(subchannel.resolvedTargets, ['verifier'])
-
-  // Active subchannel with 0 other active subscribers: fail-closed when wake=true, allowed when wake=false
-  const groupWithEmptyCh = makeGroup({
-    channels: [{ name: 'main' }, { name: 'empty' }, { name: 'solo' }],
-    members: [makeMember({ name: 'author', conversationId: 11, channels: ['main', 'solo'] })],
-  })
-  assert.throws(
-    () => resolveBoardTargets(groupWithEmptyCh, { role: 'coordinator', from: 'coordinator' }, ['#empty'], { wake: true }),
-    (err: unknown) => err instanceof HelmxError && err.code === 'swarm_channel_empty' && err.status === 409,
-  )
-  assert.throws(
-    () => resolveBoardTargets(groupWithEmptyCh, { role: 'worker', from: 'author' }, ['#solo'], { wake: true }),
-    (err: unknown) => err instanceof HelmxError && err.code === 'swarm_channel_empty' && err.status === 409,
-  )
-  assert.deepEqual(
-    resolveBoardTargets(groupWithEmptyCh, { role: 'coordinator', from: 'coordinator' }, ['#empty'], { wake: false }).resolvedTargets,
-    [],
-  )
+  // Peer-to-peer direct addressing strips self when mixed with valid targets
+  const peerDirect = resolveBoardTargets(group, { role: 'worker', from: 'author' }, ['author', 'verifier'], { wake: true })
+  assert.deepEqual(peerDirect.resolvedTargets, ['verifier'])
 
   // Self-only addressing or 'all' on a 0-member group: fail-closed (409 swarm_no_active_targets) when wake=true, allowed when wake=false
   assert.throws(
@@ -691,28 +555,27 @@ test('lastAssistantText skips toolResult and user text blocks, walking back to t
   )
 })
 
-test('swarm-unit6: main channel noise isolation, XML escape, schema from removal, skill whitelist gating, and quiescence lastWakeCompletionSeq', { timeout: 60_000 }, () => {
-  // 1) selectPostsForMemberWakeup excludes other members' main-channel wake=true coordinator reports
+test('swarm-unit6: board noise isolation, XML escape, schema from removal, skill whitelist gating, and quiescence lastWakeCompletionSeq', { timeout: 60_000 }, () => {
+  // 1) selectPostsForMemberWakeup excludes other members' coordinator reports and unrelated peer briefs
   const group = makeGroup({
-    headSeq: 4,
-    channels: [{ name: 'main' }, { name: 'review' }],
+    headSeq: 5,
     members: [
-      makeMember({ name: 'alpha', conversationId: 11, channels: ['main', 'review'] }),
-      makeMember({ name: 'beta', conversationId: 12, channels: ['main'], readCursorSeq: 0, pendingWakeupSeq: 4 }),
+      makeMember({ name: 'alpha', conversationId: 11 }),
+      makeMember({ name: 'beta', conversationId: 12, readCursorSeq: 0, pendingWakeupSeq: 4 }),
     ],
   })
   const posts: BoardPost[] = [
-    makePost(1, { from: 'alpha', to: ['coordinator'], resolvedTargets: ['coordinator'], wake: true, kind: 'done', channel: 'main', body: 'LONG_ALPHA_REPORT' }),
-    makePost(2, { from: 'coordinator', to: ['all'], resolvedTargets: ['alpha', 'beta'], wake: false, kind: 'comment', channel: 'main', body: 'PASSIVE_MAIN_NOTE' }),
-    makePost(3, { from: 'alpha', to: ['coordinator'], resolvedTargets: ['coordinator'], wake: true, kind: 'handoff', channel: 'review', body: 'UNSUBSCRIBED_SUBCHANNEL' }),
-    makePost(4, { from: 'coordinator', to: ['beta'], resolvedTargets: ['beta'], wake: true, kind: 'brief', channel: 'main', body: 'BETA_TASK' }),
-    makePost(5, { from: 'alpha', to: ['coordinator'], resolvedTargets: ['coordinator'], wake: false, kind: 'comment', channel: 'main', body: 'PRIVATE_ALPHA_NOTE_TO_COORD' }),
+    makePost(1, { from: 'alpha', to: ['coordinator'], resolvedTargets: ['coordinator'], wake: true, kind: 'done', body: 'LONG_ALPHA_REPORT' }),
+    makePost(2, { from: 'coordinator', to: ['all'], resolvedTargets: ['alpha', 'beta'], wake: false, kind: 'comment', body: 'PASSIVE_BROADCAST_NOTE' }),
+    makePost(3, { from: 'coordinator', to: ['alpha'], resolvedTargets: ['alpha'], wake: true, kind: 'brief', body: 'UNRELATED_ALPHA_TASK' }),
+    makePost(4, { from: 'coordinator', to: ['beta'], resolvedTargets: ['beta'], wake: true, kind: 'brief', body: 'BETA_TASK' }),
+    makePost(5, { from: 'alpha', to: ['coordinator'], resolvedTargets: ['coordinator'], wake: false, kind: 'comment', body: 'PRIVATE_ALPHA_NOTE_TO_COORD' }),
   ]
   const selected = selectPostsForMemberWakeup(group.members[1]!, posts, 1, 5)
   assert.deepEqual(
     selected.map((p) => p.seq),
     [2, 4],
-    'must include passive main broadcast note (#2) and targeted brief (#4), but omit alpha->coordinator done (#1), unsubscribed subchannel (#3), and alpha->coordinator private passive comment (#5)',
+    'must include passive broadcast note (#2) and targeted brief (#4), but omit alpha->coordinator done (#1), unrelated alpha brief (#3), and alpha->coordinator private passive comment (#5)',
   )
 
   // 2) boardPostInputSchema no longer accepts from and documents kind/wake semantics
@@ -1248,7 +1111,7 @@ test('swarm-unit10: swarmToolPresentationMetaSchema bounds UI metadata and model
   assert.equal(factsWithoutMeta.seq, undefined)
   assert.equal(resolveSwarmToolClickTarget(factsWithoutMeta), undefined)
 
-  // 3) Direct presentationMeta consumption across all 12 tools (including 0-counts and boolean flags)
+  // 3) Direct presentationMeta consumption across all 11 tools (including 0-counts and boolean flags)
   const dispatchProps = {
     ...jsonOnlyResultProps,
     presentationMeta: { groupId: 'grp_1', memberName: 'author', workerConversationId: 51, seq: 7 },
@@ -1263,15 +1126,6 @@ test('swarm-unit10: swarmToolPresentationMetaSchema bounds UI metadata and model
     resolveSwarmToolFacts('swarm_create_group', {}, { groupId: 'grp_1', groupTitle: 'Meta Title' }).groupTitle,
     'Meta Title',
   )
-  const channelFacts = resolveSwarmToolFacts(
-    'swarm_manage_channel',
-    { op: 'subscribe', channel: 'review', member: 'author' },
-    { groupId: 'grp_1' },
-  )
-  assert.equal(channelFacts.channelOp, 'subscribe')
-  assert.equal(channelFacts.channelName, 'review')
-  assert.equal(channelFacts.memberName, 'author')
-  assert.deepEqual(resolveSwarmToolClickTarget(channelFacts), { kind: 'group' })
   assert.equal(
     resolveSwarmToolFacts('swarm_board_post', { body: 'Ready' }, { groupId: 'grp_1', postKind: 'handoff', seq: 3 }).postKind,
     'handoff',
