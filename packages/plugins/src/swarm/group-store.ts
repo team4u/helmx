@@ -39,7 +39,7 @@ import {
   type CollabGroupRecord,
   type CollabGroupRuntime,
   type GroupMemberState,
-  type MemberLiveState,
+  type MemberLiveSnapshot,
   type SwarmCoordinator,
   type WorktreeHandoffSnapshot,
 } from './contracts.js'
@@ -115,10 +115,17 @@ export function createCollabGroupRuntime(
       }
     }
   }
-  const resolveMemberLive = (conversationId: number): { liveState: MemberLiveState; model?: string } => {
+  const resolveMemberLive = (conversationId: number): MemberLiveSnapshot => {
     const summary = getCoordinator().readConversationOrUndefined(conversationId)
     if (summary === undefined) return { liveState: 'missing' }
-    return { liveState: summary.status, model: summary.model }
+    return {
+      liveState: summary.status,
+      model: summary.model,
+      ...(summary.runDurationMs !== undefined ? { runDurationMs: summary.runDurationMs } : {}),
+      ...(summary.runStartedAt !== undefined ? { runStartedAt: summary.runStartedAt } : {}),
+      ...(summary.pendingAskSince !== undefined ? { pendingAskSince: summary.pendingAskSince } : {}),
+      turnCount: summary.completionSeq,
+    }
   }
 
   const getBusyActiveMemberNames = (group: CollabGroupRecord, excludeConvId?: number): Set<string> => {

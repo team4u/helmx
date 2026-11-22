@@ -19,6 +19,7 @@ import {
   type BoardMemberView,
   type BoardViewDoc,
 } from './board-model.ts'
+import { extractMemberTimingFields } from './model-timing.ts'
 import {
   TRAY_AWAITING_APPROVAL,
   TRAY_AWAITING_HUMAN,
@@ -36,6 +37,12 @@ export interface SwarmTrayItem {
   isBlocked: boolean
   /** Live host fact from the conversation summary (never fabricated). */
   doing?: string
+  runDurationMs?: number
+  runStartedAt?: number
+  pendingAskSince?: number
+  pendingAskCount?: number
+  turnCount?: number
+  createdAt: number
 }
 
 /** Structured frontline so the component localizes the kind verb via copy.ts. */
@@ -68,6 +75,7 @@ export function buildSwarmTraySummary(
   const items: SwarmTrayItem[] = inFlight.map((member) => {
     const summary = summaryById.get(member.conversationId)
     const doing = summary?.doing !== undefined && summary.doing.trim() !== '' ? summary.doing.trim() : undefined
+    const timing = extractMemberTimingFields(member, summary, view.group.status)
     return {
       key: member.name,
       name: member.name,
@@ -75,6 +83,8 @@ export function buildSwarmTraySummary(
       liveState: member.liveState,
       isBlocked: member.liveState === 'blocked',
       ...(doing !== undefined ? { doing } : {}),
+      ...timing,
+      createdAt: member.createdAt,
     }
   })
 

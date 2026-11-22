@@ -53,6 +53,8 @@ import {
   swarmToolPresentationMetaSchema,
 } from '../src/swarm/action-schemas.js'
 import { unknownChannelError } from '../src/swarm/contracts.js'
+import { snapshotMemberTiming } from '../src/swarm/contracts.js'
+import { createBoardProjections } from '../src/swarm/projections.js'
 import {
   extractSwarmPresentationMeta,
   resolveSwarmToolClickTarget,
@@ -1366,4 +1368,127 @@ test('swarm hooks：isSwarmSkillAllowed 按统一 active 谓词判定（enabled=
   assert.equal(activeTurn?.action, 'transform')
   const activeSection = activeTurn?.value?.sections.find((s) => s.id === 'swarm.active_group')?.text ?? ''
   assert.ok(activeSection.includes(`call load_skill({ skillId: "${SWARM_SKILL_ID}" })`), 'active 时应恢复 swarm 技能引导')
+})
+
+test('swarm-unit11: member timing validation, snapshotMemberTiming solidification, board-view projection, and zero streaming write amplification', { timeout: 60_000 }, () => {
+  // 1) assertCollabGroupRecord validates persisted runDurationMs (isFiniteTime) & turnCount (isNonNegInt)
+  const validTimedGroup = makeGroup({
+    members: [
+      makeMember({ name: 'author', lifecycle: 'archived', archivedAt: 5_000, runDurationMs: 12_345, turnCount: 3 }),
+      makeMember({ name: 'verifier', conversationId: 12, runDurationMs: 0, turnCount: 0 }),
+    ],
+  })
+  const parsedGroup = assertCollabGroupRecord(validTimedGroup)
+  assert.equal(parsedGroup.members[0]!.runDurationMs, 12_345)
+  assert.equal(parsedGroup.members[0]!.turnCount, 3)
+
+  for (const badMember of [
+    makeMember({ runDurationMs: -1 }),
+    makeMember({ runDurationMs: Number.NaN }),
+    makeMember({ turnCount: -1 }),
+    makeMember({ turnCount: 1.5 }),
+  ]) {
+    assert.throws(
+      () => assertCollabGroupRecord(makeGroup({ members: [badMember] })),
+      (err: unknown) => err instanceof HelmxError && err.code === 'swarm_doc_corrupt',
+    )
+  }
+
+  // 2) snapshotMemberTiming solidifies settled & in-flight active delta honestly
+  assert.deepEqual(
+    snapshotMemberTiming({ status: 'idle', runDurationMs: 12_500, completionSeq: 3 }, 90_000),
+    { runDurationMs: 12_500, turnCount: 3 },
+  )
+  assert.deepEqual(
+    snapshotMemberTiming({ status: 'working', runDurationMs: 10_000, runStartedAt: 50_000, completionSeq: 1 }, 54_200),
+    { runDurationMs: 14_200, turnCount: 1 },
+  )
+  assert.deepEqual(
+    snapshotMemberTiming({ status: 'blocked', runDurationMs: 0, runStartedAt: 50_000, completionSeq: 0 }, 55_000),
+    { runDurationMs: 5_000, turnCount: 0 },
+  )
+  assert.deepEqual(
+    snapshotMemberTiming({ status: 'done', runDurationMs: 8_000, runStartedAt: 50_000, completionSeq: 2 }, 90_000),
+    { runDurationMs: 8_000, turnCount: 2 },
+    'non-live status must ignore stale runStartedAt',
+  )
+  assert.deepEqual(snapshotMemberTiming(undefined, 90_000), {})
+
+  // 3) synthesizeBoardView projects live timing, falls back to persisted snapshot when missing/archived, and passes schema
+  const group = makeGroup({
+    headSeq: 1,
+    members: [
+      makeMember({ name: 'author', conversationId: 11, lifecycle: 'active' }),
+      makeMember({ name: 'verifier', conversationId: 12, lifecycle: 'active', runDurationMs: 9_000, turnCount: 2 }),
+      makeMember({ name: 'retired', conversationId: 13, lifecycle: 'archived', archivedAt: 2_000, runDurationMs: 31_000, turnCount: 4 }),
+    ],
+  })
+  const posts = [makePost(1)]
+
+  const liveMap = new Map<number, { liveState: 'working' | 'blocked' | 'idle' | 'missing'; model?: string; runDurationMs?: number; runStartedAt?: number; pendingAskSince?: number; turnCount?: number }>([
+    [11, { liveState: 'working', model: 'openai/gpt-5', runDurationMs: 15_000, runStartedAt: 60_000, turnCount: 1 }],
+    [12, { liveState: 'missing' }],
+    [13, { liveState: 'idle', model: 'openai/gpt-5', runDurationMs: 99_999, runStartedAt: 70_000, turnCount: 9 }],
+  ])
+
+  const syn1 = synthesizeBoardView({
+    group,
+    posts,
+    previewLimit: 80,
+    resolveMemberLive: (id) => liveMap.get(id) ?? { liveState: 'missing' },
+  })
+  assert.doesNotThrow(() => validateOrThrow(boardStatusOutputSchema, syn1.view, 'board_status output schema'))
+
+  const mAuthor = syn1.view.members.find((m) => m.name === 'author')!
+  assert.equal(mAuthor.runDurationMs, 15_000)
+  assert.equal(mAuthor.runStartedAt, 60_000)
+  assert.equal(mAuthor.pendingAskSince, undefined)
+  assert.equal(mAuthor.turnCount, 1)
+
+  const mVerifier = syn1.view.members.find((m) => m.name === 'verifier')!
+  assert.equal(mVerifier.liveState, 'missing')
+  assert.equal(mVerifier.runDurationMs, 9_000, 'missing conversation falls back to persisted member.runDurationMs')
+  assert.equal(mVerifier.turnCount, 2, 'missing conversation falls back to persisted member.turnCount')
+  assert.equal(mVerifier.runStartedAt, undefined)
+
+  const mRetired = syn1.view.members.find((m) => m.name === 'retired')!
+  assert.equal(mRetired.runDurationMs, 31_000, 'archived member preserves solidified runDurationMs')
+  assert.equal(mRetired.turnCount, 4, 'archived member preserves solidified turnCount')
+  assert.equal(mRetired.runStartedAt, undefined, 'archived member never exposes live runStartedAt')
+
+  // 4) Digest deduplication: repeated streaming frames produce 0 writes; timing anchor changes immediately emit 1 write
+  const setCalls: unknown[] = []
+  const projections = createBoardProjections({
+    getCoordinator: () =>
+      ({
+        isShutdown: () => false,
+        getConfig: () => ({ maxWorkersPerGroup: 12, boardPreviewLimit: 80, maxPeerHopsWithoutCoordinator: 16 }),
+        getDocs: () => ({
+          boardView: { set: (_id: number, v: unknown) => setCalls.push(v) },
+          boardBadges: { set: () => {} },
+        }),
+        readConversationOrUndefined: (id: number) => ({ id }),
+        writeIndex: () => {},
+      }) as never,
+    isStopping: () => false,
+    getAllGroups: () => [group],
+    getPosts: () => posts,
+    resolveMemberLive: (id) => liveMap.get(id) ?? { liveState: 'missing' },
+  })
+
+  projections.syncCoordinatorProjection(1)
+  assert.equal(setCalls.length, 1, 'initial projection writes once')
+  projections.syncCoordinatorProjection(1)
+  projections.syncCoordinatorProjection(1)
+  assert.equal(setCalls.length, 1, 'unchanged streaming frames must cause 0 board-view writes')
+
+  // Approval wait starts -> pendingAskSince changes -> digest flips -> writes once
+  liveMap.set(11, { liveState: 'blocked', model: 'openai/gpt-5', runDurationMs: 15_000, runStartedAt: 60_000, pendingAskSince: 65_000, turnCount: 1 })
+  projections.syncCoordinatorProjection(1)
+  assert.equal(setCalls.length, 2, 'pendingAskSince transition triggers board-view update')
+
+  // Turn settles -> runDurationMs & turnCount update, runStartedAt/pendingAskSince clear -> writes once
+  liveMap.set(11, { liveState: 'idle', model: 'openai/gpt-5', runDurationMs: 28_000, turnCount: 2 })
+  projections.syncCoordinatorProjection(1)
+  assert.equal(setCalls.length, 3, 'turn settlement timing update triggers board-view update')
 })

@@ -20,6 +20,7 @@ import {
   type MemberActivity,
   type WorktreeHandoffSnapshot,
 } from './board-model.ts'
+import { extractMemberTimingFields } from './model-timing.ts'
 
 export type SwarmPanelStatus = 'running' | 'attention' | 'completed'
 
@@ -36,6 +37,13 @@ export interface SwarmPanelMemberRow {
   worktree: WorktreeHandoffSnapshot | undefined
   /** Live host fact from the conversation summary (never fabricated). */
   doing?: string
+  createdAt: number
+  archivedAt?: number
+  runDurationMs?: number
+  runStartedAt?: number
+  pendingAskSince?: number
+  pendingAskCount?: number
+  turnCount?: number
 }
 
 export interface SwarmPanelModel {
@@ -75,6 +83,7 @@ export function buildSwarmPanelModel(
   const rows: SwarmPanelMemberRow[] = ordered.map((member) => {
     const summary = summaryById.get(member.conversationId)
     const doing = summary?.doing !== undefined && summary.doing.trim() !== '' ? summary.doing.trim() : undefined
+    const timing = extractMemberTimingFields(member, summary, view.group.status)
     return {
       name: member.name,
       conversationId: member.conversationId,
@@ -87,6 +96,9 @@ export function buildSwarmPanelModel(
       latestActivity: resolveMemberActivity(view.posts, member.name),
       worktree: member.worktreeId !== undefined ? resolveMemberWorktree(view.posts, member) : undefined,
       ...(doing !== undefined ? { doing } : {}),
+      createdAt: member.createdAt,
+      ...(member.archivedAt !== undefined ? { archivedAt: member.archivedAt } : {}),
+      ...timing,
     }
   })
 

@@ -19,7 +19,7 @@ import {
   type BoardViewMember,
   type CollabGroupRecord,
   type GroupMemberState,
-  type MemberLiveState,
+  type MemberLiveSnapshot,
 } from './contracts.js'
 import { truncate } from './settlement.js'
 
@@ -511,11 +511,20 @@ export function synthesizeBoardView(input: {
   group: CollabGroupRecord
   posts: readonly BoardPost[]
   previewLimit: number
-  resolveMemberLive: (conversationId: number) => { liveState: MemberLiveState; model?: string }
+  resolveMemberLive: (conversationId: number) => MemberLiveSnapshot
 }): { view: BoardViewDoc; digest: string; badge: BoardBadgeEntry; localizedHeadline: LocalizedText } {
   const { group, posts, previewLimit, resolveMemberLive } = input
   const members: BoardViewMember[] = group.members.map((m) => {
     const live = resolveMemberLive(m.conversationId)
+    const isArchived = m.lifecycle === 'archived' || group.status === 'closed'
+    const runDurationMs = isArchived
+      ? (m.runDurationMs ?? live.runDurationMs)
+      : (live.runDurationMs ?? m.runDurationMs)
+    const turnCount = isArchived
+      ? (m.turnCount ?? live.turnCount)
+      : (live.turnCount ?? m.turnCount)
+    const runStartedAt = !isArchived && live.liveState !== 'missing' ? live.runStartedAt : undefined
+    const pendingAskSince = !isArchived && live.liveState !== 'missing' ? live.pendingAskSince : undefined
     return {
       ...m,
       channels: [...m.channels],
@@ -524,6 +533,10 @@ export function synthesizeBoardView(input: {
         : {}),
       liveState: live.liveState,
       ...(live.model !== undefined ? { model: live.model } : {}),
+      ...(runDurationMs !== undefined ? { runDurationMs } : {}),
+      ...(runStartedAt !== undefined ? { runStartedAt } : {}),
+      ...(pendingAskSince !== undefined ? { pendingAskSince } : {}),
+      ...(turnCount !== undefined ? { turnCount } : {}),
     }
   })
 
@@ -566,6 +579,7 @@ export function synthesizeBoardView(input: {
     channels: group.channels,
     retainedWorktrees: group.retainedWorktrees ?? [],
     closeSummary: group.closeSummary ?? '',
+    closedAt: group.closedAt ?? 0,
     previewLimit,
     members: members.map((m) => [
       m.name,
@@ -581,6 +595,10 @@ export function synthesizeBoardView(input: {
       m.lastPostSeq ?? 0,
       m.lastWakeTaskSeq ?? 0,
       m.silentExitNudgeSeq ?? 0,
+      m.runDurationMs ?? -1,
+      m.runStartedAt ?? -1,
+      m.pendingAskSince ?? -1,
+      m.turnCount ?? -1,
     ]),
   })
 

@@ -173,6 +173,10 @@ export interface GroupMemberState {
   inflightWakeup?: InflightWakeupIntent
   /** 尚待提交或尚待与内核状态对账的在途哑巴续催意图。 */
   inflightNudge?: InflightNudgeIntent
+  /** 归档成员或结单关闭协作组时固化的累计在途运行耗时（ms），保证历史面板在会话离线/归档后仍可读。 */
+  runDurationMs?: number
+  /** 归档成员或结单关闭协作组时固化的已完成回合计数（对应 ConversationSummary.completionSeq）。 */
+  turnCount?: number
   createdAt: number
   archivedAt?: number
 }
@@ -268,9 +272,22 @@ export interface BoardViewHeadline {
   refSeq?: number
 }
 
+export interface MemberLiveSnapshot {
+  liveState: MemberLiveState
+  model?: string
+  runDurationMs?: number
+  runStartedAt?: number
+  pendingAskSince?: number
+  turnCount?: number
+}
+
 export type BoardViewMember = GroupMemberState & {
   liveState: MemberLiveState
   model?: string
+  runDurationMs?: number
+  runStartedAt?: number
+  pendingAskSince?: number
+  turnCount?: number
 }
 
 export interface BoardViewDoc {
@@ -398,6 +415,31 @@ export function isNonNegInt(v: unknown): v is number {
 
 export function isFiniteTime(v: unknown): v is number {
   return typeof v === 'number' && Number.isFinite(v) && v >= 0
+}
+
+/**
+ * 固化成员当前的累计运行耗时与已完成轮次快照（供 archiveWorker / closeGroup 落盘前调用）：
+ * 若归档或结单瞬间会话仍处于 working / blocked 且携带有效 runStartedAt，诚实补算至 now，
+ * 避免丢失当前在途片段；无任何耗时事实时省略字段，绝不编造虚假 0。
+ */
+export function snapshotMemberTiming(
+  summary: Pick<ConversationSummary, 'status' | 'runDurationMs' | 'runStartedAt' | 'completionSeq'> | undefined,
+  now: number,
+): { runDurationMs?: number; turnCount?: number } {
+  if (summary === undefined) return {}
+  const settledMs = isFiniteTime(summary.runDurationMs) ? Math.trunc(summary.runDurationMs) : undefined
+  const isLive = summary.status === 'working' || summary.status === 'blocked'
+  const activeDeltaMs =
+    isLive && isFiniteTime(summary.runStartedAt) && isFiniteTime(now) && now >= summary.runStartedAt
+      ? Math.trunc(now - summary.runStartedAt)
+      : 0
+  const runDurationMs =
+    settledMs !== undefined || activeDeltaMs > 0 ? (settledMs ?? 0) + activeDeltaMs : undefined
+  const turnCount = isNonNegInt(summary.completionSeq) ? summary.completionSeq : undefined
+  return {
+    ...(runDurationMs !== undefined ? { runDurationMs } : {}),
+    ...(turnCount !== undefined ? { turnCount } : {}),
+  }
 }
 
 export function isBoardPostKind(v: unknown): v is BoardPostKind {
@@ -767,6 +809,8 @@ export function assertCollabGroupRecord(value: unknown): CollabGroupRecord {
       (m.lastWakeCompletionSeq !== undefined && !isNonNegInt(m.lastWakeCompletionSeq)) ||
       (m.dispatchKey !== undefined && !isNonEmptyString(m.dispatchKey)) ||
       (m.briefPostSeq !== undefined && !isPosIntId(m.briefPostSeq)) ||
+      (m.runDurationMs !== undefined && !isFiniteTime(m.runDurationMs)) ||
+      (m.turnCount !== undefined && !isNonNegInt(m.turnCount)) ||
       !isFiniteTime(m.createdAt) ||
       (m.archivedAt !== undefined && !isFiniteTime(m.archivedAt))
     ) {
