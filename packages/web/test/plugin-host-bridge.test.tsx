@@ -483,4 +483,33 @@ describe('plugin-host-bridge', () => {
     assert.ok(hostSlice?.badgeDocs === badgeDocsBeforeLocale, 'locale switch keeps badgeDocs reference stable')
     assert.ok(hostSlice?.pendingBadgeDocs === pendingBeforeLocale, 'locale switch keeps pendingBadgeDocs reference stable')
   })
+
+  test('PluginClientHostPort.getServerNow injects calibrated serverNow for SDK useSharedNowMs consumers', { timeout: 60_000 }, async () => {
+    const { useSharedNowMs } = await import('@helmx/plugin-client')
+    const { observeServerEpoch, resetServerClock } = await import('../src/lib/server-clock.js')
+    resetServerClock()
+    const skewMs = 15_000
+    observeServerEpoch(Date.now() - skewMs)
+
+    const store = makeTestStore({ conversations: [makeConv(1, { status: 'working' })] })
+    let sampledPortNow: number | undefined
+    let sampledHookNow: number | undefined
+
+    function ClockProbe(): React.ReactNode {
+      const port = React.useContext(PluginClientHostContext)
+      sampledPortNow = port?.getServerNow?.()
+      sampledHookNow = useSharedNowMs(true)
+      return null
+    }
+
+    try {
+      mountTree(e(HostStoreProviders, { value: store }, e(ClockProbe)))
+      assert.ok(typeof sampledPortNow === 'number' && Number.isFinite(sampledPortNow), 'host port exposes getServerNow')
+      assert.ok(typeof sampledHookNow === 'number' && Number.isFinite(sampledHookNow), 'useSharedNowMs samples host getServerNow on mount')
+      const offset = Date.now() - sampledHookNow
+      assert.ok(Math.abs(offset - skewMs) < 1500, `useSharedNowMs should inherit ~${skewMs}ms calibrated server offset, got ${offset}ms`)
+    } finally {
+      resetServerClock()
+    }
+  })
 })

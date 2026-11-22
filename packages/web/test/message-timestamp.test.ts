@@ -191,7 +191,7 @@ test('timeline-model：toolCall 运行耗时锚点 = 响应结束时刻（timest
   assert.equal(unanchoredTool?.startedAt, undefined, '无 durationMs 不编造起点')
 })
 
-test('timeline-model：多步骤回合累加 AssistantMessage durationMs 并以最小 startedAt 与最大 settledAt 结算', { timeout: 60_000 }, () => {
+test('timeline-model：多步骤回合按真实端到端跨度结算 durationMs，并保留 modelDurationMs / toolDurationMs 拆解', { timeout: 60_000 }, () => {
   const step1Start = 1731234510000
   const step1Duration = 1200 // 1731234511200 settled
   const step2Start = 1731234515000
@@ -244,8 +244,91 @@ test('timeline-model：多步骤回合累加 AssistantMessage durationMs 并以�
   assert.equal(turn.kind, 'assistant')
   assert.equal(turn.startedAt, step1Start)
   assert.equal(turn.settledAt, step2Start + step2Duration)
-  // 累加两段 assistant duration: 1200 + 2000 = 3200
-  assert.equal(turn.durationMs, 3200)
+  // 回合真实端到端跨度：1731234517000 - 1731234510000 = 7000（覆盖模型 + 工具 + 调度间隔）
+  assert.equal(turn.durationMs, step2Start + step2Duration - step1Start)
+  assert.equal(turn.modelDurationMs, step1Duration + step2Duration)
+  assert.equal(turn.toolDurationMs, 400)
+})
+
+test('timeline-model：appendToolResultEntry 推进 settledAt（entry.createdAt 或 startedAt+durationMs），遗留无时间戳数据回退累加', { timeout: 60_000 }, () => {
+  const startMs = 1731234510000
+
+  // 1. 工具后中止/无后续 assistant：entry.createdAt 推进 settledAt
+  const withCreatedAt = buildTimelineItems([
+    {
+      id: '1',
+      kind: 'pi.assistant',
+      model: [
+        {
+          role: 'assistant',
+          timestamp: startMs,
+          durationMs: 1000,
+          content: [{ type: 'toolCall', id: 'c1', name: 'bash', arguments: { command: 'sleep 3' } }],
+        },
+      ],
+    },
+    {
+      id: '2',
+      kind: 'pi.tool-result',
+      createdAt: startMs + 5000,
+      model: [{ role: 'toolResult', toolCallId: 'c1', content: 'done', isError: false, durationMs: 3200 }],
+    },
+  ])[0] as AssistantTurn
+  assert.equal(withCreatedAt.startedAt, startMs)
+  assert.equal(withCreatedAt.settledAt, startMs + 5000)
+  assert.equal(withCreatedAt.durationMs, 5000)
+  assert.equal(withCreatedAt.modelDurationMs, 1000)
+  assert.equal(withCreatedAt.toolDurationMs, 3200)
+
+  // 2. 无 entry.createdAt 时，以已配对工具 startedAt + durationMs 推进 settledAt
+  const withPairedTool = buildTimelineItems([
+    {
+      id: '1',
+      kind: 'pi.assistant',
+      model: [
+        {
+          role: 'assistant',
+          timestamp: startMs,
+          durationMs: 1000,
+          content: [{ type: 'toolCall', id: 'c1', name: 'bash', arguments: { command: 'sleep 3' } }],
+        },
+      ],
+    },
+    {
+      id: '2',
+      kind: 'pi.tool-result',
+      model: [{ role: 'toolResult', toolCallId: 'c1', content: 'done', isError: false, durationMs: 2500 }],
+    },
+  ])[0] as AssistantTurn
+  assert.equal(withPairedTool.settledAt, startMs + 3500)
+  assert.equal(withPairedTool.durationMs, 3500)
+  assert.equal(withPairedTool.modelDurationMs, 1000)
+  assert.equal(withPairedTool.toolDurationMs, 2500)
+
+  // 3. 遗留无时间戳条目：回退 modelDurationMs + toolDurationMs
+  const legacyNoTimestamps = buildTimelineItems([
+    {
+      id: '1',
+      kind: 'pi.assistant',
+      model: [
+        {
+          role: 'assistant',
+          durationMs: 1200,
+          content: [{ type: 'toolCall', id: 'c1', name: 'bash', arguments: {} }],
+        },
+      ],
+    },
+    {
+      id: '2',
+      kind: 'pi.tool-result',
+      model: [{ role: 'toolResult', toolCallId: 'c1', content: 'ok', isError: false, durationMs: 800 }],
+    },
+  ])[0] as AssistantTurn
+  assert.equal(legacyNoTimestamps.startedAt, undefined)
+  assert.equal(legacyNoTimestamps.settledAt, undefined)
+  assert.equal(legacyNoTimestamps.durationMs, 2000)
+  assert.equal(legacyNoTimestamps.modelDurationMs, 1200)
+  assert.equal(legacyNoTimestamps.toolDurationMs, 800)
 })
 
 test('timeline-model：无显式 durationMs 但有跨度 timestamp 时得出 durationMs', { timeout: 60_000 }, () => {
@@ -293,6 +376,7 @@ interface AssistantMsgSpec {
   id: string
   content: unknown[]
   durationMs?: number
+  timestamp?: number
 }
 
 function processEntry(spec: AssistantMsgSpec): ConversationEntry {
@@ -302,7 +386,7 @@ function processEntry(spec: AssistantMsgSpec): ConversationEntry {
     model: [
       {
         role: 'assistant',
-        timestamp: 1731234510000,
+        timestamp: spec.timestamp ?? 1731234510000,
         ...(spec.durationMs !== undefined ? { durationMs: spec.durationMs } : {}),
         content: spec.content,
         stopReason: 'stop',
@@ -360,11 +444,13 @@ test('timeline-model：合格响应（思考+工具调用、无正文）的模�
   const summary = summarizeStepGroup(group.steps)
   assert.equal(summary.modelDurationMs, 3200)
   assert.equal(summary.toolDurationMs, 500)
-  // footer 回合耗时语义不变：仍是本回合全部 assistant duration 之和
-  assert.equal(turn.durationMs, 3200)
+  // footer 回合耗时采用真实端到端跨度（模型 3200 + 工具 500 = 3700），并保留模型/工具拆解
+  assert.equal(turn.durationMs, 3700)
+  assert.equal(turn.modelDurationMs, 3200)
+  assert.equal(turn.toolDurationMs, 500)
 })
 
-test('timeline-model：含非空可见正文的响应不进入过程统计，footer 回合耗时保持原语义', { timeout: 60_000 }, () => {
+test('timeline-model：含非空可见正文的响应不进入过程统计，footer 回合耗时按端到端跨度结算', { timeout: 60_000 }, () => {
   const entries: ConversationEntry[] = [
     processEntry({
       id: '1',
@@ -386,8 +472,10 @@ test('timeline-model：含非空可见正文的响应不进入过程统计，foo
   const summary = summarizeStepGroup(group.steps)
   assert.equal('modelDurationMs' in summary, false)
   assert.equal(summary.toolDurationMs, 500)
-  // footer 仍计完整回合（不因正文而清零）
-  assert.equal(turn.durationMs, 3200)
+  // footer 计完整回合端到端跨度（3200 + 500 = 3700）并保留拆解
+  assert.equal(turn.durationMs, 3700)
+  assert.equal(turn.modelDurationMs, 3200)
+  assert.equal(turn.toolDurationMs, 500)
 })
 
 test('timeline-model：同一响应含多个思考块时耗时只归属一次（首个思考块）', { timeout: 60_000 }, () => {
@@ -415,9 +503,11 @@ test('timeline-model：同一响应含多个思考块时耗时只归属一次（
 })
 
 test('timeline-model：正文把回合拆成多个折叠组时，每条响应耗时只进入其所在组（跨组去重）', { timeout: 60_000 }, () => {
+  const t0 = 1731234510000
   const entries: ConversationEntry[] = [
     processEntry({
       id: '1',
+      timestamp: t0,
       durationMs: 1000,
       content: [
         { type: 'thinking', thinking: '第一轮' },
@@ -427,11 +517,13 @@ test('timeline-model：正文把回合拆成多个折叠组时，每条响应耗
     resultEntry('2', 'c1', 500),
     processEntry({
       id: '3',
+      timestamp: t0 + 1500,
       durationMs: 800,
       content: [{ type: 'text', text: '中间一段说明文字。' }],
     }),
     processEntry({
       id: '4',
+      timestamp: t0 + 2300,
       durationMs: 2000,
       content: [
         { type: 'thinking', thinking: '第二轮' },
@@ -454,8 +546,10 @@ test('timeline-model：正文把回合拆成多个折叠组时，每条响应耗
   assert.equal(summary2.toolDurationMs, 700)
   // 跨组合计恰为两条合格响应各一次（1000 + 2000），无重复计入
   assert.equal(summary1.modelDurationMs! + summary2.modelDurationMs!, 3000)
-  // footer 回合耗时 = 全部 assistant duration 之和（1000 + 800 + 2000），语义不变
-  assert.equal(turn.durationMs, 3800)
+  // 回合拆解与端到端跨度一致（模型 3800 + 工具 1200 = 5000ms 跨度）
+  assert.equal(turn.modelDurationMs, 3800)
+  assert.equal(turn.toolDurationMs, 1200)
+  assert.equal(turn.durationMs, 5000)
 })
 
 test('timeline-model：toolView 特殊卡把工具行拆出折叠组后，响应耗时仍只随思考块归属一次', { timeout: 60_000 }, () => {
@@ -663,6 +757,67 @@ test('ConversationTimeline：完成回合渲染时间与耗时，以及 Tooltip 
 
   // 3. 极简无 Emoji：不包含任何 Emoji 表情图标
   assert.doesNotMatch(html, /[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/u)
+})
+
+test('ConversationTimeline：含工具回合的底部 Tooltip 展示端到端总耗时与模型/工具累计拆解（en / zh-CN）', { timeout: 60_000 }, () => {
+  const conv = makeSummary(1, 'idle')
+  const startMs = new Date(2026, 10, 10, 14, 28, 0).getTime()
+  const entries: ConversationEntry[] = [
+    { id: '1', kind: 'helmx.input', data: { text: '执行构建', origin: 'human', createdAt: startMs - 2000 } },
+    {
+      id: '2',
+      kind: 'pi.assistant',
+      model: [
+        {
+          role: 'assistant',
+          timestamp: startMs,
+          durationMs: 2000,
+          content: [{ type: 'toolCall', id: 'c1', name: 'bash', arguments: { command: 'pnpm build' } }],
+        },
+      ],
+    },
+    {
+      id: '3',
+      kind: 'pi.tool-result',
+      createdAt: startMs + 32_000,
+      model: [{ role: 'toolResult', toolCallId: 'c1', toolName: 'bash', content: [{ type: 'text', text: 'ok' }], isError: false, durationMs: 28_000 }],
+    },
+    {
+      id: '4',
+      kind: 'pi.assistant',
+      model: [
+        {
+          role: 'assistant',
+          timestamp: startMs + 32_000,
+          durationMs: 3000,
+          content: [{ type: 'text', text: '构建成功。' }],
+          stopReason: 'stop',
+        },
+      ],
+    },
+  ]
+
+  const htmlEn = renderToString(
+    e(
+      HostStoreProviders,
+      { value: makeMockStore({ conversations: [conv], locale: 'en' }) },
+      e(ConversationTimeline, { conversation: conv, detailEntries: entries, onRequestEdit: () => {} }),
+    ),
+  )
+  assert.match(htmlEn, /Took 35\.0s/)
+  assert.match(htmlEn, /Completed at 2026-11-10 14:28:35 · took 35\.0s/)
+  assert.match(htmlEn, /Model 5\.0s · Tools cumulative 28\.0s/)
+
+  const htmlZh = renderToString(
+    e(
+      HostStoreProviders,
+      { value: makeMockStore({ conversations: [conv], locale: 'zh-CN' }) },
+      e(ConversationTimeline, { conversation: conv, detailEntries: entries, onRequestEdit: () => {} }),
+    ),
+  )
+  assert.match(htmlZh, /耗时 35\.0s/)
+  assert.match(htmlZh, /完成于 2026-11-10 14:28:35 · 耗时 35\.0s/)
+  assert.match(htmlZh, /模型 5\.0s · 工具累计 28\.0s/)
 })
 
 test('ConversationTimeline：回合处于 busy（working/live）时不提前渲染时间与耗时', { timeout: 60_000 }, () => {

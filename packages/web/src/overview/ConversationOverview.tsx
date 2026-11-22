@@ -51,6 +51,7 @@ import {
   SegmentedControl,
   Select,
   Tooltip,
+  useSharedNowMs,
 } from '@helmx/plugin-client'
 import { OVERVIEW_CARD_META_SLOT } from '@helmx/protocol/browser'
 import {
@@ -71,16 +72,20 @@ import { ConversationStatusDot, RemoteNodeTag } from '../shell/SidebarPrimitives
 import { buildAgentStandings, partitionSidebarUi, isConversationArchivable, type AgentStanding } from '../shell/sidebar-model.js'
 import { archiveBatchNotice, patchConversationsArchived } from '../shell/archive-ops.js'
 import { useGlobalAttention } from '../shell/use-attention-indicator.js'
+import { formatDurationMs, formatFullTimestamp, formatStopwatchMs } from '../lib/format.js'
 import {
   buildOverviewCards,
   filterOverviewCards,
   groupOverviewCards,
   overviewBucketCounts,
+  overviewCardsNeedLiveClock,
   overviewFilterParamsRepair,
   overviewNodeOptions,
   overviewProfileOptions,
   overviewShouldShowSectionHeaders,
   parseOverviewFilterParams,
+  resolveOverviewCardTiming,
+  resolveOverviewDescendantChipTiming,
   OVERVIEW_DESCENDANT_LIMIT,
   type OverviewBucketFilter,
   type OverviewCard,
@@ -105,6 +110,7 @@ const EMPTY_COLLAPSED_KEYS: ReadonlySet<string> = new Set()
  * 绝不嵌套进按钮。批量模式下按钮与整卡点击变为勾选切换（aria-pressed）。 */
 function OverviewCardView({
   card,
+  nowMs,
   onOpenConversation,
   onDrawerPeek,
   onOpenSplit,
@@ -117,6 +123,8 @@ function OverviewCardView({
   onToggleExpanded,
 }: {
   card: OverviewCard
+  /** 由总览页单实例 useSharedNowMs 向下透传的校准时刻（安静态为 undefined，零定时器）。 */
+  nowMs?: number
   onOpenConversation: (conversationId: number) => void
   onDrawerPeek: (conversationId: number) => void
   onOpenSplit: (conversationId: number) => void
@@ -134,8 +142,9 @@ function OverviewCardView({
   const needsAttention = card.bucket === 'needs_attention'
   const errorText = card.representative.status === 'error' ? card.representative.lastError?.trim() : undefined
   const remoteNodeId = card.root.nodeId !== undefined && card.root.nodeId !== 'local' ? card.root.nodeId : null
-  // 紧凑元信息行：角色 · @节点 · 摘要 同一行（远端节点折叠进来，不再独占
-  // 一行）；摘要尾随弹性截断，角色/节点固定不丢事实。
+  const cardTiming = resolveOverviewCardTiming(card, nowMs)
+  // 紧凑元信息行：角色 · @节点 · 耗时/秒表 · 摘要 同一行（远端节点与耗时折叠进来，
+  // 不增加卡片高度）；摘要尾随弹性截断，角色/节点/耗时固定不丢事实。
   const metaParts: ReactNode[] = []
   if (card.profileLabel !== '') {
     metaParts.push(
@@ -149,6 +158,42 @@ function OverviewCardView({
       <span key="node" className="overview-card-sub-node mono" title={t('shell.node.title', { id: remoteNodeId })}>
         @{remoteNodeId}
       </span>,
+    )
+  }
+  if (cardTiming.waitingMs !== undefined) {
+    metaParts.push(
+      <span key="timing" className="overview-card-sub-time overview-card-sub-time-warn mono tabular-nums">
+        {t('shell.overview.waited', { duration: formatStopwatchMs(cardTiming.waitingMs) })}
+      </span>,
+    )
+  } else if (cardTiming.runningMs !== undefined) {
+    metaParts.push(
+      <span key="timing" className="overview-card-sub-time mono tabular-nums">
+        {formatStopwatchMs(cardTiming.runningMs)}
+      </span>,
+    )
+  } else if (cardTiming.settledRunMs !== undefined) {
+    const createdText = formatFullTimestamp(card.root.createdAt)
+    const updatedText = formatFullTimestamp(card.root.updatedAt)
+    const timingTooltip = [
+      createdText !== '' ? t('shell.overview.createdAt', { time: createdText }) : '',
+      updatedText !== '' ? t('shell.overview.updatedAt', { time: updatedText }) : '',
+    ].filter((line) => line !== '').join('\n')
+    const settledSpan = (
+      <span className="overview-card-sub-time mono tabular-nums" title={timingTooltip || undefined}>
+        {t('shell.overview.totalRun', { duration: formatDurationMs(cardTiming.settledRunMs) })}
+      </span>
+    )
+    metaParts.push(
+      timingTooltip !== '' ? (
+        <Tooltip key="timing" content={timingTooltip} side="top" className="helmx-tooltip-multiline">
+          {settledSpan}
+        </Tooltip>
+      ) : (
+        <span key="timing" className="overview-card-sub-time mono tabular-nums">
+          {t('shell.overview.totalRun', { duration: formatDurationMs(cardTiming.settledRunMs) })}
+        </span>
+      ),
     )
   }
   if (!needsAttention && card.summaryText !== '') {
@@ -293,31 +338,41 @@ function OverviewCardView({
       />
       {card.descendants.length > 0 && (
         <div className="overview-chips">
-          {shownDescendants.map((descendant) => (
-            <button
-              key={descendant.conv.id}
-              type="button"
-              className="overview-chip"
-              title={t('shell.attention.openConversation', { id: descendant.conv.id })}
-              onClick={(e) => {
-                e.stopPropagation()
-                if (batchMode) {
-                  toggleCardSelect()
-                  return
-                }
-                onOpenConversation(descendant.conv.id)
-              }}
-            >
-              <ConversationStatusDot
-                conv={descendant.conv}
-                background={descendant.backgroundActive ? { active: true, summary: '' } : undefined}
-                showDone={descendant.conv.unread && !viewedConversationIds.has(descendant.conv.id)}
-              />
-              <span className="overview-chip-label">
-                {descendant.conv.title || t('shell.conversationFallback', { id: descendant.conv.id })}
-              </span>
-            </button>
-          ))}
+          {shownDescendants.map((descendant) => {
+            const chipTiming = resolveOverviewDescendantChipTiming(descendant, nowMs)
+            return (
+              <button
+                key={descendant.conv.id}
+                type="button"
+                className="overview-chip"
+                title={t('shell.attention.openConversation', { id: descendant.conv.id })}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  if (batchMode) {
+                    toggleCardSelect()
+                    return
+                  }
+                  onOpenConversation(descendant.conv.id)
+                }}
+              >
+                <ConversationStatusDot
+                  conv={descendant.conv}
+                  background={descendant.backgroundActive ? { active: true, summary: '' } : undefined}
+                  showDone={descendant.conv.unread && !viewedConversationIds.has(descendant.conv.id)}
+                />
+                <span className="overview-chip-label">
+                  {descendant.conv.title || t('shell.conversationFallback', { id: descendant.conv.id })}
+                </span>
+                {chipTiming !== undefined ? (
+                  <span
+                    className={`overview-chip-elapsed mono tabular-nums${chipTiming.kind === 'waiting' ? ' overview-chip-elapsed-warn' : ''}`}
+                  >
+                    {formatStopwatchMs(chipTiming.elapsedMs)}
+                  </span>
+                ) : null}
+              </button>
+            )
+          })}
           {/* 安静卡默认折叠全部后代为「N 个子会话」，活跃卡超过上限折叠为「还有 N 个」，
               点击均就地按同序展开补齐剩余后代，再点收起。 */}
           {showDescendantToggle && (
@@ -451,6 +506,13 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
     if (!showSectionHeaders) return visibleCards
     return cardGroups.flatMap((group) => (activeCollapsedKeys.has(group.key) ? [] : group.cards))
   }, [showSectionHeaders, visibleCards, cardGroups, activeCollapsedKeys])
+  // 单实例共享秒表门控：仅当当前可见卡片或已展开可见后代芯片存在有效秒表起点时才激活；
+  // 全员安静/已完成或均缺起点时 0 定时器开销，绝不影响桶序 + createdAt 倒序排列。
+  const overviewNeedsLiveClock = useMemo(
+    () => overviewCardsNeedLiveClock(renderedCards, expandedCardIds),
+    [renderedCards, expandedCardIds],
+  )
+  const overviewNowMs = useSharedNowMs(overviewNeedsLiveClock)
   const dataReady = conversations.length > 0 || (assetsLoaded && sseConnected)
   const profileOptions = useMemo(() => overviewProfileOptions(cards), [cards])
   const nodeOptions = useMemo(() => overviewNodeOptions(cards), [cards])
@@ -978,6 +1040,7 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
                         <OverviewCardView
                           key={card.root.id}
                           card={card}
+                          nowMs={overviewNowMs}
                           onOpenConversation={openConversation}
                           onDrawerPeek={drawerPeek}
                           onOpenSplit={openSplit}
@@ -1002,6 +1065,7 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
               <OverviewCardView
                 key={card.root.id}
                 card={card}
+                nowMs={overviewNowMs}
                 onOpenConversation={openConversation}
                 onDrawerPeek={drawerPeek}
                 onOpenSplit={openSplit}

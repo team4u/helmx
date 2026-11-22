@@ -1930,4 +1930,48 @@ describe("sse-resume", () => {
       await h.close()
     }
   })
+
+  test('首帧 snapshot.serverTime 与 resumed.serverTime 立即校准 serverNow()（即使无活跃 conversationLives）', { timeout: 60_000 }, async () => {
+    const { resetServerClock, serverNow } = await import('../src/lib/server-clock.js')
+    resetServerClock()
+    localStorage.setItem('helmx:token', 't1')
+    const h = await mountProvider()
+    try {
+      const localAtSnap = Date.now()
+      const skewedServerSnap = localAtSnap - 10_000
+      const first = snapshotConnection(h, {
+        bootId: 'b1',
+        seq: 1,
+        serverTime: skewedServerSnap,
+        conversations: [],
+        pendingAsks: [],
+        plugins: [],
+        ui: [],
+      })
+      await h.waitFor((o) => o.sseConnected === true)
+      const driftAfterSnap = Math.abs((Date.now() - serverNow()) - 10_000)
+      assert.ok(driftAfterSnap < 1500, `snapshot.serverTime should calibrate ~10s offset, got drift=${driftAfterSnap}ms`)
+
+      // 断线续传：resumed.serverTime 进一步提供更低延迟/校正样本
+      resetServerClock()
+      let second: ControlledStream | undefined
+      h.nextEvents((_url, signal) => {
+        const c = controlledStream(signal)
+        second = c
+        return c
+      })
+      first.end()
+      await h.waitFor(() => h.eventsUrls.length >= 2 && second !== undefined)
+      const skewedServerResumed = Date.now() + 8_000
+      second!.send(resumedFrame({ bootId: 'b1', seq: 1, headSeq: 1, serverTime: skewedServerResumed }))
+      await h.waitFor((o) => o.sseConnected === true)
+      const driftAfterResumed = Math.abs((serverNow() - Date.now()) - 8_000)
+      assert.ok(driftAfterResumed < 1500, `resumed.serverTime should calibrate ~+8s offset, got drift=${driftAfterResumed}ms`)
+      second!.end()
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)) })
+    } finally {
+      resetServerClock()
+      await h.close()
+    }
+  })
 })

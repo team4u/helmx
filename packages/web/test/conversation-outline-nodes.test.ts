@@ -397,3 +397,62 @@ test('搜索不引入普通工具与 thinking：step-group 过程细节不可搜
   const hit = filterOutlineNodes(nodes, { query: 'unique-marker' })
   assert.equal(hit.length, 0, '普通 bash 工具入参不进大纲，不可搜')
 })
+
+test('OutlineAssistantNode 携带已结算单轮 durationMs，运行中与无耗时回合省略', { timeout: 60_000 }, () => {
+  const t0 = 1_731_234_510_000
+  const settledItems = buildTimelineItems([
+    humanEntry('1', '查一下'),
+    {
+      id: '2',
+      kind: 'pi.assistant',
+      model: [
+        {
+          role: 'assistant',
+          timestamp: t0,
+          durationMs: 2500,
+          content: [{ type: 'text', text: '这是已结算回复。' }],
+        },
+      ],
+    },
+    humanEntry('3', '跑个命令'),
+    {
+      id: '4',
+      kind: 'pi.assistant',
+      model: [
+        {
+          role: 'assistant',
+          timestamp: t0 + 10_000,
+          durationMs: 1000,
+          content: [{ type: 'toolCall', id: 'c1', name: 'bash', arguments: { command: 'ls' } }],
+        },
+      ],
+    },
+    {
+      id: '5',
+      kind: 'pi.tool-result',
+      createdAt: t0 + 14_500,
+      model: [{ role: 'toolResult', toolCallId: 'c1', toolName: 'bash', content: [{ type: 'text', text: 'ok' }], durationMs: 3500 }],
+    },
+  ])
+  const settledNodes = buildConversationOutline(settledItems)
+  const assistants = settledNodes.filter((n): n is OutlineAssistantNode => n.kind === 'assistant')
+  assert.equal(assistants.length, 2)
+  assert.equal(assistants[0]!.durationMs, 2500)
+  assert.equal(assistants[1]!.durationMs, 4500, 'status-only settled turn also preserves end-to-end durationMs')
+
+  const liveItems = buildTimelineItems(
+    [
+      humanEntry('1', '流式中'),
+      {
+        id: '2',
+        kind: 'pi.assistant',
+        model: [{ role: 'assistant', timestamp: t0, durationMs: 1200, content: [{ type: 'text', text: '半截正文' }] }],
+      },
+    ],
+    { working: true },
+  )
+  const liveNodes = buildConversationOutline(liveItems)
+  const liveAssistant = liveNodes.find((n): n is OutlineAssistantNode => n.kind === 'assistant')
+  assert.ok(liveAssistant !== undefined)
+  assert.equal(liveAssistant.durationMs, undefined, 'live assistant turn must not display a premature settled duration')
+})

@@ -872,14 +872,15 @@ button.attachment-chip:disabled {
   line-height: 1.4;
   user-select: none;
 }
-.composer-status-row:not(:has(.composer-context-status)):not(:has(.composer-status-slot:not(:empty))),
-.composer-status-row:not(:has(.composer-context-status)):has([data-plugin-id]):not(:has([data-plugin-id]:not(:empty))) {
+.composer-status-row:not(:has(.composer-context-status)):not(:has(.composer-duration-status)):not(:has(.composer-status-slot:not(:empty))),
+.composer-status-row:not(:has(.composer-context-status)):not(:has(.composer-duration-status)):has([data-plugin-id]):not(:has([data-plugin-id]:not(:empty))) {
   display: none;
 }
 /* 上下文用量只读状态：不可点击，仅色调差异。
  * 色调类与基础规则同 specificity（.composer-status-row 前缀一致），
  * 声明在后覆盖默认灰，否则 0,1,0 < 0,2,0 黄红永远不生效。 */
-.composer-status-row .composer-context-status {
+.composer-status-row .composer-context-status,
+.composer-status-row .composer-duration-status {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -895,6 +896,7 @@ button.attachment-chip:disabled {
 }
 .composer-status-row .composer-context-status-warn { color: var(--warn); }
 .composer-status-row .composer-context-status-high { color: var(--err); }
+.composer-status-row .composer-duration-status-warn { color: var(--warn); }
 /* 宿主状态行插件插槽（上下文用量旁，如 builtin:token-speed 速率与 builtin:magpie 配额）：
  * 用 display: contents 打平插槽容器，让各插件项与 .composer-context-status 作为同级 flex 子项
  * 逐个参与换行（避免整块插槽因总宽超限把短速率指标一起拖到下一行）；无子内容时自动折叠。 */

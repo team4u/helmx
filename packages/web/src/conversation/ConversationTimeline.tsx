@@ -14,6 +14,7 @@ import {
   createTimelineToolCallsStore,
   TimelineToolCallsContext,
   Tooltip,
+  useSharedNowMs,
 } from '@helmx/plugin-client'
 import {
   useConversationDetail,
@@ -66,7 +67,13 @@ import {
 import { matchTimelineEntryActions, timelineEntryActionContextOf } from './action-model.js'
 import { LazyMount } from '../ui/LazyMount.js'
 import { PluginMicroAction } from '../ui/PluginMicroAction.js'
-import { formatBytes, formatDurationMs, formatFullTimestamp, formatMessageTime } from '../lib/format.js'
+import {
+  formatBytes,
+  formatFullTimestamp,
+  formatMessageTime,
+  formatStopwatchMs,
+  resolveConversationTiming,
+} from '../lib/format.js'
 
 export interface OutlineScrollRequest {
   entryId: string
@@ -620,6 +627,44 @@ function TurnErrorNotice({
   )
 }
 
+/** 首 token 前等待行：独立挂载共享秒表（不触发整条时间线每秒重渲染），缺少起点绝不编造。 */
+function TimelineLiveWaitingRow({
+  conversation,
+  isWorking,
+}: {
+  conversation: ConversationSummary
+  isWorking: boolean
+}) {
+  const { t } = useWebLocale()
+  const clockActive =
+    isWorking &&
+    typeof conversation.runStartedAt === 'number' &&
+    Number.isFinite(conversation.runStartedAt) &&
+    conversation.runStartedAt >= 0
+  const nowMs = useSharedNowMs(clockActive)
+  const currentRunMs = clockActive ? resolveConversationTiming(conversation, nowMs).currentRunMs : undefined
+  return (
+    <div className="msg-ai-block" role="status" aria-live="polite">
+      <span className="msg-origin-tag msg-live-waiting" aria-label={t('conv.timeline.generating')}>
+        <span className="msg-live-dots" aria-hidden="true">
+          <span />
+          <span />
+          <span />
+        </span>
+        {currentRunMs !== undefined ? (
+          <span className="msg-live-meta">
+            <span className="msg-live-label">{t('conv.turn.generatingShort')}</span>
+            <span className="msg-live-sep" aria-hidden="true">{' · '}</span>
+            <span className="msg-live-elapsed mono tabular-nums">{formatStopwatchMs(currentRunMs)}</span>
+          </span>
+        ) : (
+          <span className="msg-live-label">{t('conv.timeline.generating')}</span>
+        )}
+      </span>
+    </div>
+  )
+}
+
 // ---------------------------------------------------------------------------
 // Main timeline
 // ---------------------------------------------------------------------------
@@ -876,6 +921,15 @@ export function ConversationTimeline({
   const lastAssistantKey = useMemo(() => {
     for (let i = items.length - 1; i >= 0; i--) {
       if (items[i]!.kind === 'assistant') return items[i]!.key
+    }
+    return undefined
+  }, [items])
+
+  const trailingAssistantKey = useMemo(() => {
+    for (let i = items.length - 1; i >= 0; i--) {
+      const item = items[i]!
+      if (item.kind === 'human' && item.queuedMode !== undefined) continue
+      return item.kind === 'assistant' ? item.key : undefined
     }
     return undefined
   }, [items])
@@ -1404,6 +1458,7 @@ export function ConversationTimeline({
                 conversation={conversation}
                 anchorEntry={resolveAssistantAnchorEntry(item.entryIds, activeEntriesById)}
                 isLatestTurn={item.key === lastAssistantKey}
+                isTrailingTurn={item.key === trailingAssistantKey}
                 processShortcut={processToggle?.turnKey === item.key ? processToggle.command : undefined}
                 onForkFromHere={entryActions.forkFromHere}
                 onRegenerate={
@@ -1416,16 +1471,7 @@ export function ConversationTimeline({
           )
         })}
         {(isWorking && !hasLiveTurn) || (sendingPending && !isWorking) ? (
-          <div className="msg-ai-block" role="status" aria-live="polite">
-            <span className="msg-origin-tag msg-live-waiting" aria-label={t('conv.timeline.generating')}>
-              <span className="msg-live-dots" aria-hidden="true">
-                <span />
-                <span />
-                <span />
-              </span>
-              <span className="msg-live-label">{t('conv.timeline.generating')}</span>
-            </span>
-          </div>
+          <TimelineLiveWaitingRow conversation={conversation} isWorking={isWorking} />
         ) : null}
         {resolvedAsks.map(({ ask, status }) => (
           <ResolvedAskRow key={`ask:${ask.id}`} ask={ask} status={status} />

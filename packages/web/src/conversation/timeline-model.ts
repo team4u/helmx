@@ -151,8 +151,12 @@ export interface AssistantTurn {
   startedAt?: number
   /** Turn settled timestamp (ms); omitted while unsettled or not captured. */
   settledAt?: number
-  /** Total turn duration (ms); omitted when not captured. */
+  /** End-to-end turn duration (ms): settledAt - startedAt when valid, falling back to cumulative model+tool sum when timestamps are absent. */
   durationMs?: number
+  /** Cumulative model-response duration across pi.assistant entries in this turn (ms). */
+  modelDurationMs?: number
+  /** Cumulative tool-execution duration across pi.tool-result entries in this turn (ms). */
+  toolDurationMs?: number
 }
 
 export interface HumanInputItem {
@@ -614,7 +618,13 @@ interface TurnAcc {
   modelLocked?: boolean
   startedAt?: number
   settledAt?: number
-  durationMs?: number
+  modelDurationMs?: number
+  toolDurationMs?: number
+}
+
+function advanceTurnSettledAt(acc: TurnAcc, timestamp: number | undefined): void {
+  if (typeof timestamp !== 'number' || !Number.isFinite(timestamp) || timestamp <= 0) return
+  acc.settledAt = acc.settledAt !== undefined ? Math.max(acc.settledAt, timestamp) : timestamp
 }
 
 function newTurn(): TurnAcc {
@@ -778,12 +788,15 @@ function flushTurn(acc: TurnAcc | null, items: TimelineItem[], live: boolean): v
   if (segments.length === 0 && acc.entryIds.length === 0) return
   if (segments.length === 0) return
   const prevKey = items.length > 0 ? items[items.length - 1]!.key : 'root'
-  const durationMs =
-    acc.durationMs !== undefined
-      ? acc.durationMs
-      : acc.startedAt !== undefined && acc.settledAt !== undefined && acc.settledAt > acc.startedAt
-        ? acc.settledAt - acc.startedAt
-        : undefined
+  const spanDurationMs =
+    acc.startedAt !== undefined && acc.settledAt !== undefined && acc.settledAt > acc.startedAt
+      ? acc.settledAt - acc.startedAt
+      : undefined
+  const fallbackDurationMs =
+    acc.modelDurationMs !== undefined || acc.toolDurationMs !== undefined
+      ? (acc.modelDurationMs ?? 0) + (acc.toolDurationMs ?? 0)
+      : undefined
+  const durationMs = spanDurationMs ?? fallbackDurationMs
 
   // Effective model: the first trusted entry locks provider+model and the level; later entries
   // with inconsistent levels (or untrusted identities) drop the single-level display; provider+model stays.
@@ -807,6 +820,8 @@ function flushTurn(acc: TurnAcc | null, items: TimelineItem[], live: boolean): v
     ...(acc.startedAt !== undefined ? { startedAt: acc.startedAt } : {}),
     ...(acc.settledAt !== undefined ? { settledAt: acc.settledAt } : {}),
     ...(durationMs !== undefined ? { durationMs } : {}),
+    ...(acc.modelDurationMs !== undefined ? { modelDurationMs: acc.modelDurationMs } : {}),
+    ...(acc.toolDurationMs !== undefined ? { toolDurationMs: acc.toolDurationMs } : {}),
   })
 }
 
@@ -891,11 +906,10 @@ function appendAssistantEntry(
 
       if (msgTimestamp !== undefined) {
         acc.startedAt = acc.startedAt !== undefined ? Math.min(acc.startedAt, msgTimestamp) : msgTimestamp
-        const settled = msgTimestamp + (msgDurationMs ?? 0)
-        acc.settledAt = acc.settledAt !== undefined ? Math.max(acc.settledAt, settled) : settled
+        advanceTurnSettledAt(acc, msgTimestamp + (msgDurationMs ?? 0))
       }
       if (msgDurationMs !== undefined) {
-        acc.durationMs = (acc.durationMs ?? 0) + msgDurationMs
+        acc.modelDurationMs = (acc.modelDurationMs ?? 0) + msgDurationMs
       }
 
       // Eligible process duration: this response carried thinking + toolCall and no non-empty
@@ -970,6 +984,7 @@ function appendToolResultEntry(
   toolViewByName: ReadonlyMap<string, QualifiedToolView> | undefined,
 ): void {
   acc.entryIds.push(entry.id)
+  advanceTurnSettledAt(acc, entry.createdAt)
   const model = entry.model
   if (!Array.isArray(model)) return
   for (let mi = 0; mi < model.length; mi++) {
@@ -986,6 +1001,9 @@ function appendToolResultEntry(
       typeof m.durationMs === 'number' && Number.isFinite(m.durationMs) && m.durationMs >= 0
         ? m.durationMs
         : undefined
+    if (durationMs !== undefined) {
+      acc.toolDurationMs = (acc.toolDurationMs ?? 0) + durationMs
+    }
     // Server truncation markers ride on the toolResult message (truncated/totalChars/totalLines).
     const truncation = readResultTruncation(m)
     // The persisted UI channel is toolResult message details (bounded presentationMeta);
@@ -1005,7 +1023,12 @@ function appendToolResultEntry(
           candidate.isError = isError
           if (resultText !== '') candidate.resultText = resultText
           if (presentationMeta !== undefined) candidate.presentationMeta = presentationMeta
-          if (durationMs !== undefined) candidate.durationMs = durationMs
+          if (durationMs !== undefined) {
+            candidate.durationMs = durationMs
+            if (candidate.startedAt !== undefined) {
+              advanceTurnSettledAt(acc, candidate.startedAt + durationMs)
+            }
+          }
           candidate.artifactRef = detectArtifactRef(candidate.resultText)
           if (truncation !== undefined) {
             candidate.resultTruncation = truncation

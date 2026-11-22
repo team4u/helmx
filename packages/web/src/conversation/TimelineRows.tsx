@@ -1,7 +1,7 @@
-import { useEffect, useId, useMemo, useRef, useState } from 'react'
+import { useId, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ToolViewSpec } from '@helmx/protocol/browser'
-import { HelmxIcon, Tooltip } from '@helmx/plugin-client'
+import { HelmxIcon, Tooltip, useSharedNowMs } from '@helmx/plugin-client'
 import { PluginUiView } from '../ui/PluginUiView.js'
 import { ToolExpandedBody, ToolIoBody, ToolRawBody } from './ToolExpandedBody.js'
 import { MarkdownView } from './MarkdownView.js'
@@ -15,8 +15,7 @@ import {
 } from './timeline-model.js'
 import { summarizeStepGroup, toolRowStats } from './tool-body-model.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
-import { formatDurationMs } from '../lib/format.js'
-import { serverNow } from '../lib/server-clock.js'
+import { formatDurationMs, formatStopwatchMs } from '../lib/format.js'
 
 // ---------------------------------------------------------------------------
 // 工具单行轨迹 / 思考折叠组（ConversationTimeline 的行级渲染单元）
@@ -24,17 +23,14 @@ import { serverNow } from '../lib/server-clock.js'
 
 /**
  * 运行中工具的实时已耗时秒表：起点为派发该调用的响应结束时刻（消息 timestamp+durationMs，
- * 见 timeline-model appendEntry），本地每秒跳字，工具落定随行卸载（无孤儿定时器）。
- * tabular-nums 防止秒位跳动抖宽。
- * now 取服务端时钟域（server-clock 偏差校正）：两端时钟差几秒不再整体偏移秒表、落定跳变。
+ * 见 timeline-model appendEntry），复用全局共享 1Hz 定时器（useSharedNowMs，无每行独立
+ * interval）与整秒单调格式化（formatStopwatchMs，无 `.0s` 抖动），工具落定随行卸载。
+ * 时钟源通过 PluginClientHostPort.getServerNow 接入 Hub 校准时钟域。
  */
 function RunningElapsed({ startedAt }: { startedAt: number }): ReactNode {
-  const [now, setNow] = useState(() => serverNow())
-  useEffect(() => {
-    const timer = setInterval(() => setNow(serverNow()), 1000)
-    return () => clearInterval(timer)
-  }, [])
-  return <span className="tabular-nums">{formatDurationMs(Math.max(0, now - startedAt))}</span>
+  const nowMs = useSharedNowMs(true)
+  if (nowMs === undefined) return null
+  return <span className="tabular-nums">{formatStopwatchMs(Math.max(0, nowMs - startedAt))}</span>
 }
 
 export function TraceRow({
