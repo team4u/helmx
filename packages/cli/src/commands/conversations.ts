@@ -6,6 +6,7 @@ import type { ConversationStatus, ConversationSummary, ConversationDeletedEvent,
 import { CliError } from '../errors.js'
 import { flagValue, parseFlags, type FlagSpec } from '../args.js'
 import { printTableColumns } from '../output.js'
+import { formatConversationTiming, formatDurationMs, projectConversationForHuman } from '../timing.js'
 import type { CommandContext, CommandSpec } from './shared.js'
 import {
   assertNoExtraPositionals,
@@ -136,9 +137,11 @@ export function conversationsCommands(): CommandSpec[] {
         printResult(ctx, list)
         return
       }
+      const nowMs = Date.now()
       printTableColumns(ctx.io, list, [
         { label: 'id', value: (c) => String(c.id) },
         { label: 'status', value: (c) => c.status ?? '' },
+        { label: 'timing', value: (c) => formatConversationTiming(c, nowMs) },
         { label: 'profile', value: (c) => c.profileId ?? '' },
         { label: 'node', value: (c) => c.nodeId ?? 'local' },
         { label: 'title', value: (c) => c.title ?? '' },
@@ -179,7 +182,7 @@ export function conversationsCommands(): CommandSpec[] {
       if (cursor !== undefined) query.set('cursor', cursor)
       const qs = query.size > 0 ? `?${query.toString()}` : ''
       const hub = await ctx.hub()
-      printResult(ctx, await hub.get<unknown>(`/api/conversations/${id}${qs}`))
+      printConversationRecord(ctx, await hub.get<unknown>(`/api/conversations/${id}${qs}`))
     },
   })
 
@@ -302,7 +305,7 @@ export function conversationsCommands(): CommandSpec[] {
       const tags = flagValue<string>(parsed.flags, 'tags')
       if (tags !== undefined) body.tags = coerceTags(tags)
       const hub = await ctx.hub()
-      printResult(ctx, await hub.post<ConversationSummary>('/api/conversations', body))
+      printConversationRecord(ctx, await hub.post<ConversationSummary>('/api/conversations', body))
     },
   })
 
@@ -359,7 +362,7 @@ export function conversationsCommands(): CommandSpec[] {
         throw new CliError('no update fields provided (--title/--model/--thinking/--profile-id/--node/--cwd/--pinned/--unread)', 'missing_update_fields')
       }
       const hub = await ctx.hub()
-      printResult(ctx, await hub.patch<ConversationSummary>(`/api/conversations/${id}`, body))
+      printConversationRecord(ctx, await hub.patch<ConversationSummary>(`/api/conversations/${id}`, body))
     },
   })
 
@@ -398,7 +401,7 @@ export function conversationsCommands(): CommandSpec[] {
       const handoff = flagValue<string>(parsed.flags, 'handoff')
       if (handoff !== undefined) body.handoff = handoff
       const hub = await ctx.hub()
-      printResult(ctx, await hub.post<ConversationSummary>(`/api/conversations/${id}/reset`, body))
+      printConversationRecord(ctx, await hub.post<ConversationSummary>(`/api/conversations/${id}/reset`, body))
     },
   })
 
@@ -456,7 +459,7 @@ export function conversationsCommands(): CommandSpec[] {
       const title = flagValue<string>(parsed.flags, 'title')
       if (title !== undefined) body.title = title
       const hub = await ctx.hub()
-      printResult(ctx, await hub.post<ConversationSummary>(`/api/conversations/${id}/fork`, body))
+      printConversationRecord(ctx, await hub.post<ConversationSummary>(`/api/conversations/${id}/fork`, body))
     },
   })
 
@@ -661,7 +664,9 @@ export function conversationsCommands(): CommandSpec[] {
           const from = lastStatus
           lastStatus = next.status
           if (from === undefined) {
-            progress(`watching #${next.id} ${next.title} (${next.status})`, { type: 'watch', conversation: next })
+            const timing = formatConversationTiming(next, Date.now())
+            const timingSuffix = timing ? ` — ${timing}` : ''
+            progress(`watching #${next.id} ${next.title} (${next.status})${timingSuffix}`, { type: 'watch', conversation: next })
           } else {
             progress(`[${clock(new Date())}] status: ${from} -> ${next.status}`, { type: 'status', conversationId: next.id, status: next.status })
           }
@@ -745,14 +750,22 @@ export function conversationsCommands(): CommandSpec[] {
       }
 
       // Settled: the final line is always printed (even with --quiet) so scripted consumers keep the outcome.
-      const elapsedMs = Date.now() - startedAt
+      const elapsedMs = Math.max(0, Date.now() - startedAt)
+      const totalRunMs =
+        typeof summary?.runDurationMs === 'number' && Number.isFinite(summary.runDurationMs) && summary.runDurationMs > 0
+          ? summary.runDurationMs
+          : undefined
       if (ctx.json) {
         const result: Record<string, unknown> = { type: 'result', conversationId: id, status: settled, elapsedMs }
+        if (typeof summary?.runDurationMs === 'number' && Number.isFinite(summary.runDurationMs) && summary.runDurationMs >= 0) {
+          result.runDurationMs = summary.runDurationMs
+        }
         if (settled === 'error' && summary?.lastError !== undefined) result.lastError = summary.lastError
         ctx.io.out(`${JSON.stringify(result)}\n`)
       } else {
         const errorSuffix = settled === 'error' && summary?.lastError ? ` — ${summary.lastError}` : ''
-        ctx.io.out(`#${id} ${summary?.title ?? ''} settled: ${settled}${errorSuffix} (in ${formatDuration(elapsedMs)})\n`)
+        const totalSuffix = totalRunMs !== undefined ? `, total ${formatDurationMs(totalRunMs)}` : ''
+        ctx.io.out(`#${id} ${summary?.title ?? ''} settled: ${settled}${errorSuffix} (in ${formatDurationMs(elapsedMs)}${totalSuffix})\n`)
       }
       return settled === 'error' ? 1 : 0
     },
@@ -761,21 +774,25 @@ export function conversationsCommands(): CommandSpec[] {
   return cmds
 }
 
+/**
+ * Render a single conversation summary/detail object: `--json` emits raw server fields untouched
+ * (preserving `runDurationMs`, `runStartedAt`, `pendingAskSince`); human mode synthesizes a clean
+ * `timing` field when timing data exists and omits raw epoch/ms fields.
+ */
+function printConversationRecord(ctx: CommandContext, value: unknown): void {
+  if (ctx.json || value === null || typeof value !== 'object' || Array.isArray(value)) {
+    printResult(ctx, value)
+    return
+  }
+  printResult(ctx, projectConversationForHuman(value as Record<string, unknown>, Date.now()))
+}
+
 /** Turn-terminal statuses for `conversations watch`: blocked keeps waiting (an Ask may still resolve it). */
 const WATCH_SETTLED_STATUSES = new Set<ConversationStatus>(['done', 'idle', 'error'])
 
 /** Local wall-clock time as HH:MM:SS (display-only progress prefix). */
 function clock(date: Date): string {
   return date.toTimeString().slice(0, 8)
-}
-
-/** Compact human duration (1s / 4m32s / 2h07m). */
-function formatDuration(ms: number): string {
-  const totalSeconds = Math.max(1, Math.round(ms / 1000))
-  if (totalSeconds < 60) return `${totalSeconds}s`
-  const minutes = Math.floor(totalSeconds / 60)
-  if (minutes < 60) return `${minutes}m${totalSeconds % 60}s`
-  return `${Math.floor(minutes / 60)}h${minutes % 60}m`
 }
 
 /** Single-line human-readable summary of an incremental SSE event. */
@@ -790,8 +807,9 @@ function summarizeEvent(payload: unknown): string {
   let extra = ''
   switch (event.type) {
     case 'conversation.upsert': {
-      const c = event.conversation as { id?: number; title?: string; status?: string } | undefined
-      extra = `#${c?.id ?? '?'} ${c?.title ?? ''} (${c?.status ?? '?'})`
+      const c = event.conversation as Partial<ConversationSummary> | undefined
+      const timing = c ? formatConversationTiming(c, Date.now()) : ''
+      extra = `#${c?.id ?? '?'} ${c?.title ?? ''} (${c?.status ?? '?'})${timing ? ` — ${timing}` : ''}`
       break
     }
     case 'conversation.deleted':
