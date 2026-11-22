@@ -7,8 +7,9 @@
  * - Env option injection (managed `HELMX_TOKEN` / `HELMX_HUB_URL` / `HELMX_CONVERSATION_ID` /
  *   SecretStash secrets) via the `envOptions` callback: the secret service lives outside fabric,
  *   and fabric only consumes the callback output without holding secrets itself;
- * - IPC bridge (`ipcCall` / `ipcSubscribe`): lets optional plugins (e.g. `builtin:herdr`) connect
- *   to Unix Sockets / Named Pipes on the target machine over the node channel, consistently across nodes.
+ * - Target-node host environment discovery (`getNodeHostEnv`) + passthrough tunnels (`openTunnel`):
+ *   let optional plugins (e.g. `builtin:herdr`) discover target-node endpoints and open raw Duplex streams
+ *   to controlled Unix Sockets / Windows Named Pipes without leaking plugin protocol logic into `@helmx/node`.
  *
  * Cache lifecycle (bounded without ref-counting or LRU machinery):
  * - **Conversation-scoped targets (`envForTarget` with `conversationId`)**: cached per
@@ -28,9 +29,12 @@ import { createLocalExecutionEnv } from './local-host-env.js'
 import { BACKGROUND_CONTEXT, withAbortSignal, type Context } from '@earendil-works/chord/context'
 import {
   HelmxError,
+  validateNodeHostEnvQuery,
+  validateNodeHostEnvSnapshot,
   type NodeEnvRpcFunctions,
-  type NodeIpcCallInput,
-  type NodeIpcSubscribeInput,
+  type NodeHostDirs,
+  type NodeHostEnv,
+  type NodeHostEnvQuery,
   type NodePathUsage,
   type NodePathUsageProcess,
   type NodeTunnelTarget,
@@ -41,17 +45,17 @@ import {
   scanPathUsage,
   validatePosixScanPath,
 } from '@helmx/env-io'
-import { randomUUID } from 'node:crypto'
+import os from 'node:os'
 import type { Duplex } from 'node:stream'
 import { NodeRegistry, normalizeTunnelTarget } from './registry.js'
 import { RemoteExecutionEnv } from './remote-env.js'
-import { connectLocalTunnel, tunnelFetch } from './node-fetch.js'
+import { connectLocalSocketTunnel, connectLocalTunnel, tunnelFetch } from './node-fetch.js'
 import { createScopedExecutionEnv, type EnvTarget, type ScopedExecutionEnv } from './scoped-env.js'
 import { envWithFileMutationQueue } from './file-mutation-queue.js'
 
 export { ExecOutputHub } from './exec-output.js'
 export { NodeRegistry, tokenAuthenticator, sha256hex, normalizeTunnelTarget } from './registry.js'
-export type { NodeRegistryOptions, NodeConnection, RegisterOutcome, HubConnectionLocal, NodeSideFunctions, UpgradeWaiterHandle } from './registry.js'
+export type { NodeRegistryOptions, NodeConnection, RegisterOutcome, HubConnectionLocal, NodeSideFunctions, NormalizedTunnelTarget, UpgradeWaiterHandle } from './registry.js'
 export { HelmxUpgradeBusyError, HelmxUpgradeTimeoutError, HelmxUpgradeCancelledError } from './registry.js'
 export { RemoteExecutionEnv } from './remote-env.js'
 export type { NodeRpcResolver, RemoteExecutionEnvOptions } from './remote-env.js'
@@ -89,6 +93,14 @@ interface EnvFabricOptions {
   cliBinDir?: () => string | undefined
   /** Cap on waiting for reconnect during remote file RPCs (ms); see `remote-env.ts` for default. */
   remoteRpcWaitTimeoutMs?: number
+  /**
+   * Optional local host environment overrides for deterministic cross-platform tests (defaults to live Hub `os`/env).
+   */
+  localHostEnv?: {
+    homeDir?: string
+    tempDir?: string
+    getEnv?: (name: string) => string | undefined
+  }
   /** Diagnostic logger when releasing resources fails during `dispose` fallback cleanup (defaults to `console.error`). */
   logReleaseError?: (message: string) => void
 }
@@ -127,24 +139,14 @@ export interface EnvFabric {
   /** Wait for a remote node to come online (cancellable); `local` is always true. */
   waitForOnline(nodeId: string, context: Context): Promise<boolean>
   /**
-   * Single-shot local-IPC call on a node (connects to a Unix Socket / Named Pipe on the target machine
-   * across nodes). Throws explicitly if IPC bridge is unsupported or node is offline (fail-fast, no silent fallback);
-   * preserves `node_draining` in `RpcResult` when the node is draining for upgrade (connection is still alive
-   * and distinguishable from offline/cancelled so callers like `builtin:herdr` can classify it).
+   * Read-only target-node host environment discovery (platform, homeDir, tempDir, standard config
+   * dirs, and explicitly requested non-secret env keys).
+   * - `local`: collects Hub host facts in-process;
+   * - remote: calls `rpc.nodeHostEnv` on the target node and strictly validates the response at the
+   *   boundary; offline throws `409 node_offline`, older daemon throws `501 node_host_env_not_supported`
+   *   — **never** falls back to Hub's local environment.
    */
-  ipcCall(nodeId: string, input: NodeIpcCallInput, signal?: AbortSignal): Promise<RpcResult<string>>
-  /**
-   * Streaming local-IPC subscription on a node: `onLine` fires per line; `onClosed` fires exactly once
-   * on end/disconnect/cancel; returns a stop function. Throws if unsupported; throws `HelmxError('node_draining', ..., 503)`
-   * if the node is draining for upgrade.
-   */
-  ipcSubscribe(
-    nodeId: string,
-    input: Omit<NodeIpcSubscribeInput, 'subscribeId'>,
-    onLine: (line: string) => void,
-    onClosed: (error?: string) => void,
-    signal?: AbortSignal,
-  ): Promise<() => void>
+  getNodeHostEnv(nodeId: string, query?: NodeHostEnvQuery, signal?: AbortSignal): Promise<NodeHostEnv>
   /** Hub URL reported by a node at registration (kept current for remote spawned processes connecting back). */
   getNodeHubUrl(nodeId: string): string | undefined
   /**
@@ -171,12 +173,12 @@ export interface EnvFabric {
     signal?: AbortSignal,
   ): Promise<T>
   /**
-   * First-class arbitrary TCP tunnel primitive: opens a raw Duplex to `host:port` on the target node.
+   * First-class passthrough tunnel primitive: opens a raw Duplex to TCP `host:port` or a controlled
+   * local IPC socket / Windows Named Pipe (`socketPath`) on the target node.
    * - `local`: direct in-process `net.connect`;
    * - remote: reuses `registry.openTunnel` (served by the dedicated WS tunnel gateway without a second transport);
    * - unknown/offline node: throws `HelmxError('node_offline', ..., 409)` explicitly, never falling back to local;
    * - abort/timeout/error: throws explicitly and guarantees resource cleanup (no leaked Duplex).
-   * `host` is resolved and connected on the node (defaults to `127.0.0.1` if omitted).
    */
   openTunnel(nodeId: string, target: NodeTunnelTarget, signal?: AbortSignal): Promise<Duplex>
   /**
@@ -378,104 +380,123 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
       return (await registry.waitForNodeOnline(nodeId, context)) !== undefined
     },
 
-    async ipcCall(nodeId: string, input: NodeIpcCallInput, signal?: AbortSignal): Promise<RpcResult<string>> {
-      const rpc = await requireRpc(nodeId, signal)
-      const ipcCallFn = rpc.ipcCall
-      const ipcAbort = rpc.ipcAbortCall
-      if (ipcCallFn === undefined) {
-        throw new HelmxError('ipc_not_supported', `node ${nodeId} daemon does not support local IPC calls`, 501, {
-          nodeId,
-        })
+    async getNodeHostEnv(nodeId: string, query?: NodeHostEnvQuery, signal?: AbortSignal): Promise<NodeHostEnv> {
+      const checkedQuery = validateNodeHostEnvQuery(query)
+      if (!checkedQuery.ok) {
+        throw new HelmxError('validation_error', checkedQuery.message, 400, { nodeId })
       }
-      const callId = input.callId ?? `ipc-${randomUUID()}`
-      // Best-effort abort of in-flight call when `signal` fires (node closes underlying socket immediately).
-      const onAbort = () => {
-        void ipcAbort?.(callId).catch(() => undefined)
+      if (signal?.aborted) {
+        throw new HelmxError('aborted', 'node host env query cancelled', 499, { nodeId })
       }
-      signal?.addEventListener('abort', onAbort, { once: true })
-      if (signal?.aborted) { onAbort(); throw new HelmxError('aborted', 'IPC call cancelled', 499) }
-      try {
-        return await ipcCallFn({ ...input, callId })
-      } finally {
-        signal?.removeEventListener('abort', onAbort)
-      }
-    },
-
-    async ipcSubscribe(
-      nodeId: string,
-      input: Omit<NodeIpcSubscribeInput, 'subscribeId'>,
-      onLine: (line: string) => void,
-      onClosed: (error?: string) => void,
-      signal?: AbortSignal,
-    ): Promise<() => void> {
-      const rpc = await requireRpc(nodeId, signal)
-      const ipcSubscribeFn = rpc.ipcSubscribe
-      const ipcUnsubscribeFn = rpc.ipcUnsubscribe
-      if (ipcSubscribeFn === undefined || ipcUnsubscribeFn === undefined) {
-        throw new HelmxError('ipc_not_supported', `node ${nodeId} daemon does not support local IPC subscriptions`, 501, {
-          nodeId,
-        })
-      }
-      const subscribeId = randomUUID()
-      let closed = false
-      let closedOnce = false
-      const finish = (error?: string): void => {
-        if (closedOnce) return
-        closedOnce = true
-        signal?.removeEventListener('abort', onAbort)
-        registry.removeIpcSink(nodeId, subscribeId)
-        try {
-          onClosed(error)
-        } catch {
-          // Subscriber callback faults must not break fabric.
+      if (nodeId === 'local') {
+        const getEnv = options.localHostEnv?.getEnv ?? ((name: string) => process.env[name])
+        const readNonEmpty = (name: string): string | undefined => {
+          const val = getEnv(name)
+          return typeof val === 'string' && val.length > 0 ? val : undefined
+        }
+        const dirs: NodeHostDirs = {}
+        const setDir = (field: keyof NodeHostDirs, envName: string): void => {
+          const val = readNonEmpty(envName)
+          if (val !== undefined) dirs[field] = val
+        }
+        setDir('xdgConfigHome', 'XDG_CONFIG_HOME')
+        setDir('xdgStateHome', 'XDG_STATE_HOME')
+        setDir('xdgRuntimeDir', 'XDG_RUNTIME_DIR')
+        setDir('appData', 'APPDATA')
+        setDir('localAppData', 'LOCALAPPDATA')
+        setDir('userProfile', 'USERPROFILE')
+        setDir('home', 'HOME')
+        const env: Record<string, string> = {}
+        for (const key of checkedQuery.envKeys) {
+          const val = readNonEmpty(key)
+          if (val !== undefined) env[key] = val
+        }
+        return {
+          platform: hubPlatform(),
+          homeDir: options.localHostEnv?.homeDir ?? os.homedir(),
+          tempDir: options.localHostEnv?.tempDir ?? os.tmpdir(),
+          dirs,
+          env,
         }
       }
-      const onAbort = () => {
-        if (closed) return
-        closed = true
-        void ipcUnsubscribeFn(subscribeId).catch(() => undefined)
-        finish('aborted')
+      const rpc = await requireRpc(nodeId, signal)
+      const fn = rpc.nodeHostEnv
+      if (fn === undefined) {
+        throw new HelmxError(
+          'node_host_env_not_supported',
+          `node ${nodeId} daemon does not support target host env discovery (nodeHostEnv); refusing to fall back to Hub local env`,
+          501,
+          { nodeId },
+        )
       }
-      registry.addIpcSink(nodeId, subscribeId, {
-        onEvent: (line) => {
-          if (closed) return
-          try { onLine(line) } catch { onAbort() }
-        },
-        onClosed: (error) => {
-          if (closed) return
-          closed = true
-          finish(error)
-        },
-      })
-      signal?.addEventListener('abort', onAbort, { once: true })
-      let result: Awaited<ReturnType<typeof ipcSubscribeFn>>
-      try { result = await ipcSubscribeFn({ ...input, subscribeId }) }
-      catch (error) { closed = true; finish('node connection lost'); throw error }
-      if (signal?.aborted) { onAbort(); throw new HelmxError('aborted', 'IPC subscription cancelled', 499) }
-      if (!result.ok) {
-        closed = true
-        finish(result.error.message)
-        // Node draining for upgrade: throw stable `node_draining` (503) to distinguish from ordinary `ipc_subscribe_failed`
-        // rather than swallowing node state into a generic error.
-        if (result.error.code === 'node_draining') {
+      const rpcPromise = fn(checkedQuery.envKeys.length > 0 ? { envKeys: checkedQuery.envKeys } : {})
+      let result: unknown
+      if (signal === undefined) {
+        try {
+          result = await rpcPromise
+        } catch (error) {
           throw new HelmxError(
-            'node_draining',
-            `node ${nodeId} is draining for upgrade; rejecting new IPC subscription: ${result.error.message}`,
-            503,
+            'node_host_env_failed',
+            `node ${nodeId} host env discovery RPC failed: ${error instanceof Error ? error.message : String(error)}`,
+            502,
             { nodeId },
           )
         }
-        throw new HelmxError('ipc_subscribe_failed', `node ${nodeId} IPC subscription failed: ${result.error.message}`, 502, {
-          nodeId,
-          code: result.error.code,
+      } else {
+        // Race against abort signal so callers are not blocked by a hung remote RPC; observe late rejection.
+        rpcPromise.catch(() => undefined)
+        let onAbort: (() => void) | undefined
+        const abortPromise = new Promise<never>((_resolve, reject) => {
+          onAbort = () => reject(new HelmxError('aborted', 'node host env query cancelled', 499, { nodeId }))
+          if (signal.aborted) onAbort()
+          else signal.addEventListener('abort', onAbort, { once: true })
         })
+        try {
+          result = await Promise.race([rpcPromise, abortPromise])
+        } catch (error) {
+          if (error instanceof HelmxError) throw error
+          throw new HelmxError(
+            'node_host_env_failed',
+            `node ${nodeId} host env discovery RPC failed: ${error instanceof Error ? error.message : String(error)}`,
+            502,
+            { nodeId },
+          )
+        } finally {
+          if (onAbort !== undefined) signal.removeEventListener('abort', onAbort)
+        }
       }
-      return () => {
-        if (closed) return
-        closed = true
-        void ipcUnsubscribeFn(subscribeId).catch(() => undefined)
-        finish()
+      const envelope = result as { ok?: unknown; value?: unknown; error?: unknown } | null | undefined
+      if (typeof envelope !== 'object' || envelope === null || typeof envelope.ok !== 'boolean') {
+        throw new HelmxError(
+          'node_host_env_failed',
+          `node ${nodeId} host env discovery returned an invalid envelope (ok is not a strict boolean)`,
+          502,
+          { nodeId },
+        )
       }
+      if (!envelope.ok) {
+        const e = envelope.error as { code?: unknown; message?: unknown } | undefined
+        const code = typeof e?.code === 'string' && e.code !== '' ? e.code : 'unknown'
+        const message = typeof e?.message === 'string' && e.message !== '' ? e.message : 'unknown error'
+        if (code === 'aborted') throw new HelmxError('aborted', message, 499, { nodeId })
+        if (code === 'invalid') throw new HelmxError('validation_error', message, 400, { nodeId })
+        throw new HelmxError(
+          'node_host_env_failed',
+          `node ${nodeId} host env discovery failed (${code}: ${message})`,
+          502,
+          { nodeId, code },
+        )
+      }
+      const validated = validateNodeHostEnvSnapshot(envelope.value, checkedQuery.envKeys)
+      if (!validated.ok) {
+        throw new HelmxError(
+          'node_host_env_failed',
+          `node ${nodeId} returned an invalid host env snapshot (${validated.message}); refusing to use it`,
+          502,
+          { nodeId },
+        )
+      }
+      return validated.value
     },
 
     getNodeHubUrl(nodeId: string): string | undefined {
@@ -492,7 +513,7 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
     },
 
     async openTunnel(nodeId: string, target: NodeTunnelTarget, signal?: AbortSignal): Promise<Duplex> {
-      const { host, port } = normalizeTunnelTarget(target)
+      const normalized = normalizeTunnelTarget(target)
       if (signal?.aborted) {
         throw new HelmxError('aborted', 'tunnel establishment cancelled', 499, { nodeId })
       }
@@ -502,7 +523,10 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
       // Also track local tunnels for shutdown: including sockets still awaiting connect.
       if (nodeId === 'local') {
         const connectSignal = signal === undefined ? closing.signal : AbortSignal.any([signal, closing.signal])
-        const duplex = await connectLocalTunnel(host ?? '127.0.0.1', port, connectSignal)
+        const duplex =
+          normalized.kind === 'socket'
+            ? await connectLocalSocketTunnel(normalized.socketPath, connectSignal)
+            : await connectLocalTunnel(normalized.host ?? '127.0.0.1', normalized.port, connectSignal)
         if (closing.signal.aborted || signal?.aborted) {
           duplex.destroy()
           throw new HelmxError('aborted', 'tunnel establishment cancelled', 499, { nodeId })
@@ -511,7 +535,7 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
         duplex.once('close', () => localTunnels.delete(duplex))
         return duplex
       }
-      return await registry.openTunnel(nodeId, { ...(host === undefined ? {} : { host }), port }, signal)
+      return await registry.openTunnel(nodeId, target, signal)
     },
 
     nodeFetch(nodeId: string): typeof fetch {

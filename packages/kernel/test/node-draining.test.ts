@@ -1,9 +1,8 @@
 /**
  * Kernel-side consumption semantics for node upgrade draining (`node_draining`):
- * - fabric.ipcCall: RpcResult preserves the raw `node_draining` error code (connection remains active
- *   for the caller to handle, never swallowed as aborted/unknown);
- * - fabric.ipcSubscribe: rejecting new subscriptions during draining throws HelmxError `node_draining`
- *   (503), distinct from `ipc_subscribe_failed` (502), and invokes `onClosed` exactly once;
+ * - fabric.openTunnel (TCP & socketPath): rejecting new tunnels during draining throws HelmxError
+ *   `node_draining` (503), distinct from `node_tunnel_failed` (502) / `node_offline` (409);
+ * - fabric.getNodeHostEnv: read-only host env discovery succeeds while draining;
  * - remote-env exec: when the node returns `node_draining` from envExec, the error code passes
  *   through untouched (never collapsed into aborted/unknown), fails immediately without waiting for
  *   reconnect (the node is online; draining != offline); genuine cancellations remain `aborted`.
@@ -11,7 +10,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { setTimeout as delay } from 'node:timers/promises'
 import { BACKGROUND_CONTEXT, withAbortSignal } from '@earendil-works/chord/context'
 import { HelmxError, type NodeEnvRpcFunctions } from '@helmx/protocol'
 import type { WebSocket as WsSocket } from 'ws'
@@ -26,7 +24,7 @@ class FakeSocket extends EventEmitter {
   close() { this.readyState = 3; this.emit('close') }
 }
 
-/** Registers a fake node (constant auth) with arbitrary injected env RPC handlers (e.g., ipcSubscribe). */
+/** Registers a fake node (constant auth) with arbitrary injected env RPC handlers. */
 async function registerFakeNode(registry: NodeRegistry, nodeId: string, rpc: Record<string, unknown>): Promise<FakeSocket> {
   const socket = new FakeSocket()
   const outcome = await registry.register(
@@ -38,45 +36,46 @@ async function registerFakeNode(registry: NodeRegistry, nodeId: string, rpc: Rec
   return socket
 }
 
-test('fabric.ipcCall: draining rejection preserves raw node_draining code in RpcResult (neither throws nor swallows)', { timeout: 60_000 }, async () => {
+test('fabric.openTunnel (socketPath): draining rejection throws HelmxError node_draining (503)', { timeout: 60_000 }, async () => {
   const fabric = createEnvFabric({ authenticate: () => true })
   try {
     const socket = await registerFakeNode(fabric.registry, 'drain-node', {
-      ipcCall: async () => ({
+      nodeTunnelOpen: async () => ({
         ok: false,
-        error: { code: 'node_draining', message: 'daemon is draining (upgrade in progress), rejecting new IPC calls' },
+        error: { code: 'node_draining', message: 'daemon is draining (upgrade in progress), rejecting new tunnels' },
       }),
-      ipcAbortCall: async () => undefined,
+      nodeTunnelAbort: async () => undefined,
     })
-    const result = await fabric.ipcCall('drain-node', { line: 'ping' })
-    assert.equal(result.ok, false)
-    assert.equal(!result.ok && result.error.code, 'node_draining')
-    assert.match(!result.ok ? result.error.message : '', /draining/)
+    await assert.rejects(
+      fabric.openTunnel('drain-node', { socketPath: '/tmp/herdr.sock' }),
+      (error: unknown) =>
+        error instanceof HelmxError && error.code === 'node_draining' && error.status === 503 && /draining/.test(error.message),
+    )
     socket.close()
   } finally {
     await fabric.dispose()
   }
 })
 
-test('fabric.ipcSubscribe: draining rejection throws HelmxError node_draining (503) and calls onClosed once', { timeout: 60_000 }, async () => {
+test('fabric.getNodeHostEnv: read-only discovery passes through target node env snapshot while draining', { timeout: 60_000 }, async () => {
   const fabric = createEnvFabric({ authenticate: () => true })
   try {
-    const socket = await registerFakeNode(fabric.registry, 'drain-sub-node', {
-      ipcSubscribe: async () => ({
-        ok: false,
-        error: { code: 'node_draining', message: 'daemon is draining (upgrade in progress), rejecting new IPC subscriptions' },
+    const socket = await registerFakeNode(fabric.registry, 'drain-env-node', {
+      nodeHostEnv: async () => ({
+        ok: true,
+        value: {
+          platform: 'win32',
+          homeDir: 'C:\\Users\\dev',
+          tempDir: 'C:\\Users\\dev\\AppData\\Local\\Temp',
+          dirs: { appData: 'C:\\Users\\dev\\AppData\\Roaming', userProfile: 'C:\\Users\\dev' },
+          env: { HERDR_SOCKET_PATH: '\\\\.\\pipe\\herdr-dev' },
+        },
       }),
-      ipcUnsubscribe: async () => undefined,
     })
-    let closed = 0
-    await assert.rejects(
-      fabric.ipcSubscribe('drain-sub-node', { line: 'hello' }, () => undefined, () => { closed += 1 }),
-      (error: unknown) =>
-        error instanceof HelmxError && error.code === 'node_draining' && error.status === 503 && /draining/.test(error.message),
-    )
-    // Subscription was never established: the reject path already notified onClosed (no leaked wait).
-    await delay(20)
-    assert.equal(closed, 1)
+    const snapshot = await fabric.getNodeHostEnv('drain-env-node', { envKeys: ['HERDR_SOCKET_PATH'] })
+    assert.equal(snapshot.platform, 'win32')
+    assert.equal(snapshot.dirs.appData, 'C:\\Users\\dev\\AppData\\Roaming')
+    assert.equal(snapshot.env['HERDR_SOCKET_PATH'], '\\\\.\\pipe\\herdr-dev')
     socket.close()
   } finally {
     await fabric.dispose()

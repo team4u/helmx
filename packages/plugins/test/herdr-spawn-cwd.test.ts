@@ -191,7 +191,8 @@ async function openExecutor(platforms: Record<string, string>) {
     isOnline: () => true,
     getNodeHubUrl: () => 'http://127.0.0.1:3202',
     nodePlatform: (nodeId) => platforms[nodeId],
-    ipcCall: () => { throw new HelmxError('unsupported', '本测试不经 IPC', 501) },
+    getNodeHostEnv: () => { throw new HelmxError('unsupported', '本测试不经 hostEnv', 501) },
+    openTunnel: () => { throw new HelmxError('unsupported', '本测试不经 tunnel', 501) },
     envFor: () => { throw new HelmxError('unsupported', '本测试不用 envFor', 501) },
   }
   const profiles = new Map<string, Profile>()
@@ -213,7 +214,7 @@ async function openExecutor(platforms: Record<string, string>) {
       profiles: { get: async (id) => profiles.get(id) },
       buildSpawnEnv: (_conversationId, cwd) => ({ HELMX_CWD: cwd, HELMX_ENV: '1' }),
       redact: (t) => t,
-      runLocalGate: async () => ({ ok: true, output: 'gate ok' }),
+      runGate: async () => ({ ok: true, output: 'gate ok' }),
       nodeChannel,
       transport,
     },

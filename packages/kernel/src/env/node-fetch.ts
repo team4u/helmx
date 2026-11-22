@@ -44,18 +44,45 @@ const abandonedBodies = new FinalizationRegistry<() => void>((settle) => {
  * Throws HelmxError explicitly on abort/timeout/error and guarantees socket release (never leaks half-open sockets).
  */
 export function connectLocalTunnel(host: string, port: number, signal?: AbortSignal): Promise<Duplex> {
+  return connectLocalNetStream(
+    () => net.connect({ host, port }),
+    `${host}:${port}`,
+    { host, port },
+    signal,
+  )
+}
+
+/**
+ * Local node socket/Named Pipe tunnel implementation: connects directly via `net.connect({ path })` inside
+ * the Hub process after boundary validation (`normalizeTunnelTarget`). Same abort/timeout/error cleanup discipline.
+ */
+export function connectLocalSocketTunnel(socketPath: string, signal?: AbortSignal): Promise<Duplex> {
+  return connectLocalNetStream(
+    () => net.connect({ path: socketPath }),
+    socketPath,
+    { socketPath },
+    signal,
+  )
+}
+
+function connectLocalNetStream(
+  dial: () => net.Socket,
+  label: string,
+  details: Record<string, unknown>,
+  signal?: AbortSignal,
+): Promise<Duplex> {
   if (signal?.aborted) {
-    return Promise.reject(new HelmxError('aborted', 'tunnel establishment cancelled', 499, { host, port }))
+    return Promise.reject(new HelmxError('aborted', 'tunnel establishment cancelled', 499, details))
   }
   return new Promise<Duplex>((resolve, reject) => {
-    const socket = net.connect({ host, port })
+    const socket = dial()
     let settled = false
     const timer = setTimeout(() => {
       finishErr(new HelmxError(
         'node_tunnel_timeout',
-        `connect ${host}:${port} timed out (${LOCAL_TUNNEL_CONNECT_TIMEOUT_MS}ms)`,
+        `connect ${label} timed out (${LOCAL_TUNNEL_CONNECT_TIMEOUT_MS}ms)`,
         504,
-        { host, port },
+        details,
       ))
     }, LOCAL_TUNNEL_CONNECT_TIMEOUT_MS)
     timer.unref?.()
@@ -75,12 +102,12 @@ export function connectLocalTunnel(host: string, port: number, signal?: AbortSig
       reject(error)
     }
     const onAbort = (): void => {
-      finishErr(new HelmxError('aborted', 'tunnel establishment cancelled', 499, { host, port }))
+      finishErr(new HelmxError('aborted', 'tunnel establishment cancelled', 499, details))
     }
     signal?.addEventListener('abort', onAbort, { once: true })
     socket.once('connect', () => {
       if (signal?.aborted) {
-        finishErr(new HelmxError('aborted', 'tunnel establishment cancelled', 499, { host, port }))
+        finishErr(new HelmxError('aborted', 'tunnel establishment cancelled', 499, details))
         return
       }
       finishOk()
@@ -88,9 +115,9 @@ export function connectLocalTunnel(host: string, port: number, signal?: AbortSig
     socket.once('error', (error: Error) => {
       finishErr(new HelmxError(
         'node_tunnel_connect_failed',
-        `connect ${host}:${port} failed: ${error.message}`,
+        `connect ${label} failed: ${error.message}`,
         502,
-        { host, port },
+        details,
       ))
     })
   })

@@ -3,50 +3,79 @@
  *
  * Division discipline (mechanism vs policy separation):
  * - The host exposes generic mechanisms on ctx.host: profiles / buildSpawnEnv / redact /
- *   runGate / getArtifact / completeText / nodeIpc / executionEnv -- with no
- *   Herdr semantics whatsoever;
- * - this module only does "dependency assembly": reads from ctx.host's real types (HelmxHostApi;
- *   since core db1e447b, ports like nodeIpc/executionEnv are typed in protocol) and assembles
- *   HerdrPluginDependencies and HerdrNodeChannel (the Context semantics converge into the
- *   public port's AbortSignal); optional ports are omitted when absent (no degradation, no fabrication).
+ *   runGate / getArtifact / completeText / nodeIpc / openTunnel / executionEnv -- with zero Herdr semantics;
+ * - Gate execution delegates directly to `ctx.host.runGate` for both local (`nodeId: 'local'`) and remote nodes;
+ * - Node channel uses `openTunnel({ socketPath })` + `getNodeHostEnv`:
+ *   NOTE (follow-up Host API integration):
+ *   1. `protocol/src/plugin.ts` (`HelmxHostOpenTunnelPort`) and `kernel/src/plugins/host-api.ts` still type
+ *      `openTunnel`'s target as `{ host?: string; port: number }` rather than `NodeTunnelTarget` (at runtime
+ *      `host-api.ts` forwards `target` directly to `backend.openTunnel`);
+ *   2. `protocol/src/plugin.ts` (`HelmxHostApi`) and `kernel/src/plugins/host-api.ts` + `runtime-host-backend.ts`
+ *      have not yet wired `getNodeHostEnv` — until integrated, invoking `getNodeHostEnv` through `nodeChannelFromHost`
+ *      throws an explicit `501 node_host_env_not_supported` (never silently falling back to Hub local env).
  */
 
-import type { HelmxHostApi } from '@helmx/protocol'
-import type { HerdrNodeChannel, HerdrNodeEnv, HerdrPluginDependencies, HerdrTransport } from './contracts.js'
+import type { Duplex } from 'node:stream'
+import {
+  HelmxError,
+  type HelmxHostApi,
+  type NodeHostEnv,
+  type NodeHostEnvQuery,
+  type NodeTunnelTarget,
+} from '@helmx/protocol'
+import type { HerdrNodeChannel, HerdrPluginDependencies, HerdrTransport } from './contracts.js'
 import { createBlockedSnapshotAnalyzer } from './snapshot-analysis.js'
 
+/** Forward-looking structural shape for `ctx.host` once Host API integration wires `getNodeHostEnv` + `NodeTunnelTarget`. */
+interface HostWithTargetEnvAndTunnel {
+  getNodeHostEnv?: (nodeId: string, query?: NodeHostEnvQuery, signal?: AbortSignal) => Promise<NodeHostEnv>
+  openTunnel: (nodeId: string, target: NodeTunnelTarget, signal?: AbortSignal) => Promise<Duplex>
+}
+
 export function nodeChannelFromHost(host: HelmxHostApi): HerdrNodeChannel {
+  const extended = host as unknown as HostWithTargetEnvAndTunnel
   return {
     isOnline: (nodeId) => host.nodeIpc.isOnline(nodeId),
     getNodeHubUrl: (nodeId) => host.nodeIpc.getNodeHubUrl?.(nodeId),
     ...(host.nodeIpc.nodePlatform !== undefined
       ? { nodePlatform: (nodeId: string) => host.nodeIpc.nodePlatform?.(nodeId) }
       : {}),
-    ipcCall: (nodeId, input, signal) => host.nodeIpc.call(nodeId, input, signal),
+    getNodeHostEnv: (nodeId, query, signal) => {
+      if (typeof extended.getNodeHostEnv === 'function') {
+        return extended.getNodeHostEnv(nodeId, query, signal)
+      }
+      return Promise.reject(
+        new HelmxError(
+          'node_host_env_not_supported',
+          `Host API has not wired getNodeHostEnv port for node '${nodeId}' yet; refusing to fall back to Hub local env`,
+          501,
+          { nodeId },
+        ),
+      )
+    },
+    openTunnel: (nodeId, target, signal) => extended.openTunnel(nodeId, target, signal),
     envFor: (nodeId, cwd) => host.executionEnv(nodeId, cwd),
-    ipcSubscribe: (nodeId, input, onLine, onClosed, signal) =>
-      host.nodeIpc.subscribe(nodeId, input, onLine, onClosed, signal),
   }
 }
 
 /**
  * ctx.host -> HerdrPluginDependencies (the assembly point of the zero-arg factory).
- * runLocalGate pins nodeId:'local' (local gate semantics; remote gates go through transport.runGate).
- * analyzeBlockedSnapshot is assembled only when completeText is available (AI snapshot enhancement is optional).
- * transport is injectable (test fixtures); production builds createHerdrTransport in the plugin entry.
+ * Both local and remote gates delegate directly to `ctx.host.runGate` with explicit `nodeId`.
+ * `analyzeBlockedSnapshot` is assembled via `host.completeText`.
  */
 export function assembleHerdrDepsFromHost(
   host: HelmxHostApi,
-  options: { transport?: HerdrTransport } = {},
+  options: { transport?: HerdrTransport; nodeChannel?: HerdrNodeChannel } = {},
 ): HerdrPluginDependencies {
   const analyzer = createBlockedSnapshotAnalyzer({ completeConversationText: (input) => host.completeText(input) })
+  const nodeChannel = options.nodeChannel ?? nodeChannelFromHost(host)
   return {
     profiles: { get: (id) => host.profiles.get(id) },
-    buildSpawnEnv: (conversationId, cwd, nodeId, options) => host.buildSpawnEnv(conversationId, cwd, nodeId, options),
+    buildSpawnEnv: (conversationId, cwd, nodeId, opts) => host.buildSpawnEnv(conversationId, cwd, nodeId, opts),
     redact: (text) => host.redact(text),
-    runLocalGate: (command, opts) => host.runGate(command, { ...opts, nodeId: 'local' }),
+    runGate: (command, opts) => host.runGate(command, opts),
     getArtifact: (id, conversationId) => host.getArtifact(id, conversationId),
-    nodeChannel: nodeChannelFromHost(host),
+    nodeChannel,
     analyzeBlockedSnapshot: (input) => analyzer.analyze(input),
     ...(options.transport !== undefined ? { transport: options.transport } : {}),
   }

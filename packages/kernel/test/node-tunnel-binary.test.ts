@@ -37,7 +37,11 @@ after(async () => {
 const execFileAsync = promisify(execFile)
 
 /** Minimal EnvFabric Hub (HTTP server + both gateways + real daemon). */
-async function startHub(authenticate: (nodeId: string, token: string) => boolean, nodeId: string) {
+async function startHub(
+  authenticate: (nodeId: string, token: string) => boolean,
+  nodeId: string,
+  envServer?: Parameters<typeof createNodeDaemon>[0]['envServer'],
+) {
   const fabric = createEnvFabric({ authenticate, heartbeatIntervalMs: 60_000, heartbeatTimeoutMs: 60_000 })
   const server = http.createServer((_req, res) => {
     res.writeHead(404)
@@ -53,6 +57,7 @@ async function startHub(authenticate: (nodeId: string, token: string) => boolean
     hubUrl: `http://127.0.0.1:${address.port}`,
     identity: { nodeId, token: `${nodeId}:secret` },
     dataDir: nodeData,
+    ...(envServer !== undefined ? { envServer } : {}),
     reconnectBaseDelayMs: 100,
     reconnectMaxDelayMs: 800,
     log: () => undefined,
@@ -270,5 +275,107 @@ test('nodeFetch HTTP: arbitrary non-loopback hostname + null body for HEAD/204',
   } finally {
     await hub.close()
     await new Promise<void>((resolve) => server.close(() => resolve()))
+  }
+})
+
+test('socketPath UDS tunnel + nodeHostEnv discovery across live Hub <-> node daemon', { timeout: 60_000 }, async () => {
+  const sockDir = mkdtempSync(join(rootDir, 'uds-live-'))
+  const sockPath = join(sockDir, 'herdr.sock')
+  const sockets = new Set<net.Socket>()
+  const uds = net.createServer((socket) => {
+    sockets.add(socket)
+    socket.once('close', () => sockets.delete(socket))
+    let buf = ''
+    socket.on('data', (chunk) => {
+      buf += chunk.toString('utf8')
+      let nl = buf.indexOf('\n')
+      while (nl >= 0) {
+        const line = buf.slice(0, nl)
+        buf = buf.slice(nl + 1)
+        nl = buf.indexOf('\n')
+        const req = JSON.parse(line) as { id: string; method: string }
+        if (req.method === 'events.subscribe') {
+          socket.write(`${JSON.stringify({ id: req.id, result: { type: 'subscription_started' } })}\n`)
+          socket.write(`${JSON.stringify({ event: 'pane_updated', data: { pane_id: 'w1:p9' } })}\n`)
+        } else {
+          socket.end(`${JSON.stringify({ id: req.id, result: { ok: true, method: req.method } })}\n`)
+        }
+      }
+    })
+  })
+  await new Promise<void>((resolve) => uds.listen(sockPath, resolve))
+
+  const prevHubSocket = process.env.HERDR_SOCKET_PATH
+  process.env.HERDR_SOCKET_PATH = '/hub-only/must-not-be-used.sock'
+  const hub = await startHub(
+    (id, token) => id === 'uds-node' && token === 'uds-node:secret',
+    'uds-node',
+    {
+      hostEnvContext: {
+        platform: 'linux',
+        homeDir: '/home/remote',
+        tempDir: '/tmp',
+        getEnv: (name) => (name === 'HERDR_SOCKET_PATH' ? sockPath : undefined),
+      },
+    },
+  )
+  try {
+    assert.equal(hub.ready, true)
+    // 1. Hub discovers remote target env over live /ws/node (unaffected by Hub's own HERDR_SOCKET_PATH).
+    const hostEnv = await hub.fabric.getNodeHostEnv('uds-node', { envKeys: ['HERDR_SOCKET_PATH'] })
+    assert.equal(hostEnv.platform, 'linux')
+    assert.equal(hostEnv.env['HERDR_SOCKET_PATH'], sockPath)
+
+    // 2. One-shot NDJSON RPC over live /ws/node-tunnel socketPath stream.
+    const rpcStream = await hub.fabric.openTunnel('uds-node', { socketPath: hostEnv.env['HERDR_SOCKET_PATH']! })
+    rpcStream.write(`${JSON.stringify({ id: '1', method: 'ping', params: {} })}\n`)
+    const rpcLine = await withTimeout(
+      new Promise<string>((resolve, reject) => {
+        let out = ''
+        rpcStream.on('data', (c: Buffer) => {
+          out += c.toString('utf8')
+          const idx = out.indexOf('\n')
+          if (idx >= 0) resolve(out.slice(0, idx))
+        })
+        rpcStream.once('error', reject)
+      }),
+      5_000,
+      'rpc response over live UDS tunnel',
+    )
+    rpcStream.destroy()
+    assert.deepEqual(JSON.parse(rpcLine), { id: '1', result: { ok: true, method: 'ping' } })
+
+    // 3. Streaming events over live /ws/node-tunnel socketPath stream (ACK + event frames pass verbatim).
+    const subStream = await hub.fabric.openTunnel('uds-node', { socketPath: hostEnv.env['HERDR_SOCKET_PATH']! })
+    subStream.write(`${JSON.stringify({ id: 'sub', method: 'events.subscribe', params: {} })}\n`)
+    const subLines = await withTimeout(
+      new Promise<string[]>((resolve, reject) => {
+        let out = ''
+        const lines: string[] = []
+        subStream.on('data', (c: Buffer) => {
+          out += c.toString('utf8')
+          let idx = out.indexOf('\n')
+          while (idx >= 0) {
+            lines.push(out.slice(0, idx))
+            out = out.slice(idx + 1)
+            idx = out.indexOf('\n')
+            if (lines.length >= 2) resolve(lines)
+          }
+        })
+        subStream.once('error', reject)
+      }),
+      5_000,
+      'subscription frames over live UDS tunnel',
+    )
+    subStream.destroy()
+    assert.deepEqual(JSON.parse(subLines[0]!), { id: 'sub', result: { type: 'subscription_started' } })
+    assert.deepEqual(JSON.parse(subLines[1]!), { event: 'pane_updated', data: { pane_id: 'w1:p9' } })
+  } finally {
+    if (prevHubSocket === undefined) delete process.env.HERDR_SOCKET_PATH
+    else process.env.HERDR_SOCKET_PATH = prevHubSocket
+    await hub.close()
+    for (const s of sockets) s.destroy()
+    await new Promise<void>((resolve) => uds.close(() => resolve()))
+    rmSync(sockDir, { recursive: true, force: true })
   }
 })

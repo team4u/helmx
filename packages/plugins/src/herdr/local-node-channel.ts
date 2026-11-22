@@ -1,11 +1,13 @@
 /**
  * Minimal production helper for local node connections (`nodeId === 'local'`):
- * - Real IPC: on Unix, connect directly to the UDS path; on Windows, convert the marker
- *   file path into the Named Pipe name per herdr's actual rules (see the windowsPipeNameOf source-evidence comment);
- * - Real execution environment: the `NodeExecutionEnv` structure already satisfies `HerdrNodeEnv` (a Pick subset).
+ * - Windows Named Pipe conversion per herdr / interprocess 2.4.2 rules (see source-evidence notes below);
+ * - Local `NodeHostEnv` collection (pure/injectable for cross-platform unit tests);
+ * - Local `openTunnel` implementation opening a connected Duplex to a controlled Unix socket / Named Pipe
+ *   (or TCP host:port) strictly for `nodeId === 'local'` (every remote nodeId is rejected explicitly);
+ * - Local `envFor`: `NodeExecutionEnv` satisfies `HerdrNodeEnv`.
  *
  * Windows pipe name rules (verified against interprocess 2.4.2 source, not guessed):
- * - `src/os/windows/path_conversion.rs` `pathcvt` (L126-137): a namespaced name is just
+ * - `src/os/windows/path_conversion.rs` `pathcvt` (L126-137): a namespaced name is
  *   `\\` + `.` (local host) + `\\pipe\\` + the raw name joined segment by segment, **without replacing
  *   colons/slashes** (after herdr's marker path `C:\\Users\\...\\herdr.sock` enters the pipe name, the colon
  *   stays as-is -- NPFS does not forbid `:` in names apart from NUL and path-separator semantics);
@@ -15,27 +17,35 @@
  */
 
 import { connect } from 'node:net'
+import os from 'node:os'
+import type { Duplex } from 'node:stream'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
-import type { RpcResult } from '@helmx/protocol'
+import {
+  classifyControlledSocketPath,
+  HelmxError,
+  validateNodeHostEnvQuery,
+  WINDOWS_LOCAL_PIPE_PREFIX,
+  type NodeHostDirs,
+  type NodeHostEnv,
+  type NodeHostEnvQuery,
+  type NodeTunnelTarget,
+} from '@helmx/protocol'
 import type { HerdrNodeChannel, HerdrNodeEnv } from './contracts.js'
-import { isWindowsShapedPath } from './transport.js'
-
-/** The local-host segment of interprocess's `\\<host>\\pipe\\<name>` (pathcvt LOCAL_HOSTNAME). */
-const PIPE_PREFIX = '\\\\.\\pipe\\'
+import { isWindowsShapedPath } from './transport-output.js'
 
 /**
  * Windows marker file path -> named pipe connection name.
- * Rule = `\\.\\pipe\\` + the raw path (only normalize forward slashes to backslashes; colons/other characters as-is).
- * A full pipe path (`\\.\\pipe\\...` or `\\HOST\\pipe\\...`) is returned unchanged.
+ * Rule = `\\.\pipe\` + the raw path (only normalize forward slashes to backslashes; colons/other characters as-is).
+ * A full pipe path (`\\.\pipe\...` or `\\HOST\pipe\...`) is returned unchanged.
  */
 export function windowsPipeNameOf(markerPath: string): string {
   const normalized = markerPath.replaceAll('/', '\\')
   if (isPipePath(normalized)) return normalized
-  return PIPE_PREFIX + normalized
+  return WINDOWS_LOCAL_PIPE_PREFIX + normalized
 }
 
 /** Same rule as interprocess `is_pipefs`: `\\HOST\\pipe\\...` (non-empty host segment) is a full pipe path. */
-function isPipePath(path: string): boolean {
+export function isPipePath(path: string): boolean {
   if (!path.startsWith('\\\\')) return false
   const hostEnd = path.indexOf('\\', 2)
   if (hostEnd <= 2) return false
@@ -59,13 +69,59 @@ export function connectHerdrEndpoint(endpoint: string, kind: 'unix-socket' | 'na
   return connect(endpoint)
 }
 
+/** Injectable overrides for pure/cross-platform local `NodeHostEnv` collection. */
+export interface LocalHostEnvOverrides {
+  platform?: string
+  homeDir?: string
+  tempDir?: string
+  getEnv?: (name: string) => string | undefined
+}
+
+/** Collect `NodeHostEnv` facts from the local host (or injected test overrides). */
+export function collectLocalNodeHostEnv(
+  envKeys: readonly string[] = [],
+  overrides: LocalHostEnvOverrides = {},
+): NodeHostEnv {
+  const getEnv = overrides.getEnv ?? ((name: string) => process.env[name])
+  const readNonEmpty = (name: string): string | undefined => {
+    const val = getEnv(name)
+    return typeof val === 'string' && val.length > 0 ? val : undefined
+  }
+  const dirs: NodeHostDirs = {}
+  const setDir = (field: keyof NodeHostDirs, envName: string): void => {
+    const val = readNonEmpty(envName)
+    if (val !== undefined) dirs[field] = val
+  }
+  setDir('xdgConfigHome', 'XDG_CONFIG_HOME')
+  setDir('xdgStateHome', 'XDG_STATE_HOME')
+  setDir('xdgRuntimeDir', 'XDG_RUNTIME_DIR')
+  setDir('appData', 'APPDATA')
+  setDir('localAppData', 'LOCALAPPDATA')
+  setDir('userProfile', 'USERPROFILE')
+  setDir('home', 'HOME')
+
+  const env: Record<string, string> = {}
+  for (const key of envKeys) {
+    const val = readNonEmpty(key)
+    if (val !== undefined) env[key] = val
+  }
+  return {
+    platform: overrides.platform ?? process.platform,
+    homeDir: overrides.homeDir ?? os.homedir(),
+    tempDir: overrides.tempDir ?? os.tmpdir(),
+    dirs,
+    env,
+  }
+}
+
 /**
- * Local node channel (`nodeId === 'local'`; every other node is rejected -- when EnvFabric is not injected,
- * transport explicitly reports herdr_node_unavailable for remote targets; never uses this class as a local fallback).
- * One request per connection: write a single-line request, return on the first newline response, then close.
+ * Local node channel (`nodeId === 'local'`; every other node is rejected explicitly — when EnvFabric is not injected,
+ * transport explicitly reports `herdr_node_unavailable` / `herdr_node_offline` for remote targets; never falls back to local).
  */
 export class LocalNodeChannel implements HerdrNodeChannel {
   private readonly envCache = new Map<string, HerdrNodeEnv>()
+
+  constructor(private readonly hostEnvOverrides: LocalHostEnvOverrides = {}) {}
 
   isOnline(nodeId: string): boolean {
     return nodeId === 'local'
@@ -77,67 +133,91 @@ export class LocalNodeChannel implements HerdrNodeChannel {
 
   /** The local node is the Hub host itself: the platform is process.platform (for cwd normalization). */
   nodePlatform(nodeId: string): string | undefined {
-    return nodeId === 'local' ? process.platform : undefined
+    return nodeId === 'local' ? (this.hostEnvOverrides.platform ?? process.platform) : undefined
   }
 
-  async ipcCall(
-    nodeId: string,
-    input: { endpoint?: string; session?: string; line: string; timeoutMs?: number },
-    signal?: AbortSignal,
-  ): Promise<RpcResult<string>> {
+  async getNodeHostEnv(nodeId: string, query?: NodeHostEnvQuery, signal?: AbortSignal): Promise<NodeHostEnv> {
     if (nodeId !== 'local') {
-      return { ok: false, error: { code: 'invalid', message: `LocalNodeChannel only carries the 'local' node (got '${nodeId}')` } }
+      throw new HelmxError(
+        'node_offline',
+        `LocalNodeChannel only carries the 'local' node (got '${nodeId}')`,
+        409,
+        { nodeId },
+      )
     }
-    if (input.endpoint === undefined) {
-      return { ok: false, error: { code: 'invalid', message: 'ipcCall requires an explicit endpoint' } }
+    const checked = validateNodeHostEnvQuery(query)
+    if (!checked.ok) {
+      throw new HelmxError('validation_error', checked.message, 400, { nodeId })
     }
     if (signal?.aborted) {
-      return { ok: false, error: { code: 'aborted', message: 'ipcCall aborted' } }
+      throw new HelmxError('aborted', 'node host env query cancelled', 499, { nodeId })
     }
-    return await new Promise<RpcResult<string>>((resolve) => {
-      // Endpoint form follows path shape (a Windows endpoint must be converted to the pipe name; never connect to the marker file).
-      const socket = connectHerdrEndpoint(input.endpoint!, endpointKindOf(input.endpoint!))
-      socket.setNoDelay(true)
-      const chunks: Buffer[] = []
-      let done = false
-      const settle = (result: RpcResult<string>) => {
-        if (done) return
-        done = true
-        clearTimeout(timer)
-        signal?.removeEventListener('abort', onAbort)
-        socket.destroy()
-        resolve(result)
+    return collectLocalNodeHostEnv(checked.envKeys, this.hostEnvOverrides)
+  }
+
+  async openTunnel(nodeId: string, target: NodeTunnelTarget, signal?: AbortSignal): Promise<Duplex> {
+    if (nodeId !== 'local') {
+      throw new HelmxError(
+        'node_offline',
+        `LocalNodeChannel only carries the 'local' node (got '${nodeId}')`,
+        409,
+        { nodeId },
+      )
+    }
+    if (signal?.aborted) {
+      throw new HelmxError('aborted', 'tunnel establishment cancelled', 499, { nodeId })
+    }
+    const raw = target as unknown as Record<string, unknown>
+    const hasSocketPath = raw['socketPath'] !== undefined
+    const hasTcpField = raw['port'] !== undefined || raw['host'] !== undefined
+    if (hasSocketPath && hasTcpField) {
+      throw new HelmxError('validation_error', 'tunnel target cannot mix socketPath with host/port', 400, { nodeId })
+    }
+    let dial: () => ReturnType<typeof connect>
+    let label: string
+    if (hasSocketPath) {
+      const checked = classifyControlledSocketPath(raw['socketPath'])
+      if (!checked.ok) {
+        throw new HelmxError('validation_error', checked.message, 400, { nodeId, socketPath: raw['socketPath'] })
       }
-      const timer =
-        input.timeoutMs === undefined
-          ? undefined
-          : setTimeout(() => {
-              settledTimeout = true
-              settle({ ok: false, error: { code: 'timeout', message: `ipcCall no response within ${input.timeoutMs}ms` } })
-            }, input.timeoutMs)
-      timer?.unref?.()
-      let settledTimeout = false
-      const onAbort = () => settle({ ok: false, error: { code: 'aborted', message: 'ipcCall aborted' } })
+      label = checked.socketPath
+      dial = () => connect({ path: checked.socketPath })
+    } else {
+      const port = raw['port']
+      const host = typeof raw['host'] === 'string' && raw['host'].length > 0 ? raw['host'] : '127.0.0.1'
+      if (typeof port !== 'number' || !Number.isSafeInteger(port) || port < 1 || port > 65535) {
+        throw new HelmxError('validation_error', 'tunnel target port must be an integer between 1 and 65535', 400, { nodeId, port })
+      }
+      label = `${host}:${port}`
+      dial = () => connect({ host, port })
+    }
+    return await new Promise<Duplex>((resolve, reject) => {
+      const socket = dial()
+      let settled = false
+      const cleanup = (): void => {
+        signal?.removeEventListener('abort', onAbort)
+      }
+      const onAbort = (): void => {
+        if (settled) return
+        settled = true
+        cleanup()
+        socket.destroy()
+        reject(new HelmxError('aborted', 'tunnel establishment cancelled', 499, { nodeId }))
+      }
       signal?.addEventListener('abort', onAbort, { once: true })
-      socket.on('connect', () => socket.write(`${input.line}\n`))
-      socket.on('data', (chunk: Buffer) => {
-        chunks.push(chunk)
-        const joined = Buffer.concat(chunks)
-        const newline = joined.indexOf(0x0a)
-        if (newline >= 0) settle({ ok: true, value: joined.subarray(0, newline).toString('utf8') })
+      socket.once('connect', () => {
+        if (settled) return
+        if (signal?.aborted) { onAbort(); return }
+        settled = true
+        cleanup()
+        resolve(socket)
       })
-      socket.once('close', () => {
-        if (settledTimeout || signal?.aborted) return
-        const joined = Buffer.concat(chunks)
-        settle(
-          joined.length === 0
-            ? { ok: false, error: { code: 'unknown', message: 'ipc endpoint closed before response' } }
-            : { ok: true, value: joined.toString('utf8').split('\n')[0]! },
-        )
-      })
-      socket.once('error', (err) => {
-        if (settledTimeout || signal?.aborted) return
-        settle({ ok: false, error: { code: 'unknown', message: err.message } })
+      socket.once('error', (err: Error) => {
+        if (settled) return
+        settled = true
+        cleanup()
+        socket.destroy()
+        reject(new HelmxError('node_tunnel_connect_failed', `connect ${label} failed: ${err.message}`, 502, { nodeId }))
       })
     })
   }
@@ -148,8 +228,6 @@ export class LocalNodeChannel implements HerdrNodeChannel {
     }
     const cached = this.envCache.get(cwd)
     if (cached !== undefined) return cached
-    // The NodeExecutionEnv structure already satisfies HerdrNodeEnv (a Pick subset); cancellation is derived
-    // by the caller at the exec options (transport-layer withAbortSignal).
     const env: HerdrNodeEnv = new NodeExecutionEnv({ cwd })
     this.envCache.set(cwd, env)
     return env

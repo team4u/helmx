@@ -41,7 +41,6 @@ function emptyTransport(): import('../src/herdr/contracts.js').HerdrTransport {
     },
     async readOutput() { throw new HelmxError('unsupported', 'client 编译测试不读交接文件', 501) },
     async removeOutput() { throw new HelmxError('unsupported', 'client 编译测试不删交接文件', 501) },
-    async runGate() { return { ok: true, output: '' } },
     async subscribe(_target, onEvent, onError) {
       void onEvent
       void onError

@@ -38,9 +38,9 @@ import {
 import { KernelRuntime } from '../../kernel/src/runtime/index.js'
 import { PluginHost, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
 import { createHerdrPlugin } from '../src/herdr.js'
-import { ipcLineCall, serveTransport } from './helpers/herdr-unit-fixture.js'
+import { createServedNodeChannel, serveTransport } from './helpers/herdr-unit-fixture.js'
 import type { HerdrTarget, HerdrTransport } from '../src/herdr/contracts.js'
-import type { HelmxHostNodeIpcPort, RpcResult } from '@helmx/protocol'
+import type { HelmxHostNodeIpcPort } from '@helmx/protocol'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
 import {
   MemoryConfigStore,
@@ -533,42 +533,30 @@ async function makeProbeEnv(
       transport.remotePanes.set(p.nodeId, bucket)
     }
   }
-  // 受控协议服务器：零参插件的生产 transport 经插件配置 socketPath 直连。
+  // 受控协议服务器：零参插件的生产 transport 本机经 socketPath 直连，远端经 openTunnel({ socketPath })。
   const socketPath = join(dataDir, 'herdr.sock')
-  // 帧路由：远端单行 IPC 请求期间指向目标 nodeId，其余时间归位本机 socket
-  //（serveTransport 经 targetOf 感知，把帧分发进对应分桶，与真实 EnvFabric 同构）。
-  let routedNodeId: string | undefined
-  const served = await serveTransport(transport, socketPath, () =>
-    routedNodeId !== undefined && routedNodeId !== 'local' ? { nodeId: routedNodeId } : {},
-  )
-  backend.nodeIpc = {
+  const served = await serveTransport(transport, socketPath, () => ({}))
+  const servedChannel = createServedNodeChannel({
+    dataDir,
+    transport,
     isOnline: () => true,
     getNodeHubUrl: () => undefined,
-    call: async (nodeId, input, signal): Promise<RpcResult<string>> => {
-      routedNodeId = nodeId
-      try {
-        return await ipcLineCall(socketPath, input.line, input.timeoutMs, signal)
-      } finally {
-        routedNodeId = undefined
-      }
-    },
-    subscribe: async () => {
-      throw new HelmxError('unsupported', '本 fixture 不承载远端 IPC 订阅', 501)
-    },
-  }
+    envFor: () => backend.executionEnv(),
+  })
   const host = new PluginHost({ buildProvider: createPluginBuildProvider(),
     dataDir,
     host: backend,
     docs,
     config: new MemoryConfigStore({ socketPath }),
   })
-  await host.register(createHerdrPlugin(), { enabled: true })
+  await host.register(createHerdrPlugin({ nodeChannel: servedChannel.channel }), { enabled: true })
   return {
     host,
     backend,
     transport,
     async close() {
       await host.dispose().catch(() => {})
+      await servedChannel.close()
       await served.close()
       rmSync(dataDir, { recursive: true, force: true })
     },

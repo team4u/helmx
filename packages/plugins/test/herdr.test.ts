@@ -44,9 +44,9 @@ import {
   HERDR_FAST_TEST_TIMINGS,
   HerdrFakeBackend as FakeBackend,
   StandardFakeHerdrTransport as FakeTransport,
+  createServedNodeChannel,
   herdrFileNameOf as fileNameOf,
   herdrTurnSettledOf as turnSettledOf,
-  ipcLineCall,
   openHerdrUnitEnv as makeEnv,
   scriptHerdrSuccess as scriptSuccess,
   serveTransport,
@@ -391,13 +391,14 @@ test('审批桥: 回答后终端 seq 已推进时不发键，直接续等', { ti
 // gate 与远端
 // ---------------------------------------------------------------------------
 
-test('Gate 恰好一次 + env 注入（本机 runLocalGate 携带 spawn env）', { timeout: 60_000 }, async () => {
+test('Gate 恰好一次 + env 注入（本机 ctx.host.runGate 携带 nodeId=local 与 spawn env）', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     scriptSuccess(env, 'gate-ok')
     await spawnDirect(env, { agentType: 'herdr:agy', gate: 'exit 0' })
     assert.equal(env.gateLog.length, 1, 'gate 恰好一次')
     assert.equal(env.gateLog[0]!.command, 'exit 0')
+    assert.equal(env.gateLog[0]!.nodeId, 'local', '本机 gate 显式钉住 nodeId=local')
     assert.equal(env.gateLog[0]!.cwd, env.backend.conversations.get(1)!.cwd, 'gate 在实际 cwd 执行')
     assert.equal(env.gateLog[0]!.env?.['HELMX_ENV'], '1')
     assert.equal(env.gateLog[0]!.env?.['HELMX_CWD'], env.backend.conversations.get(1)!.cwd)
@@ -406,7 +407,7 @@ test('Gate 恰好一次 + env 注入（本机 runLocalGate 携带 spawn env）',
   }
 })
 
-test('远端节点: 全部调用走 nodeId target、剥除 loopback HUB_URL/TOKEN、远端 gate', { timeout: 60_000 }, async () => {
+test('远端节点: 全部调用走 nodeId target、剥除 loopback HUB_URL/TOKEN、远端 gate 委托 ctx.host.runGate', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     scriptSuccess(env, 'remote-ok')
@@ -419,10 +420,10 @@ test('远端节点: 全部调用走 nodeId target、剥除 loopback HUB_URL/TOKE
     const envSent = env.transport.calls.find((c) => c.method === 'tab.create')!.params['env'] as Record<string, string>
     assert.equal('HELMX_HUB_URL' in envSent, false)
     assert.equal('HELMX_TOKEN' in envSent, false)
-    // 远端 gate 不走本机 runLocalGate：生产 transport.runGate 经 nodeChannel
-    // .envFor（= backend.executionEnv 真实 NodeExecutionEnv）在实际 cwd 执行
-    // exit 0 成功；FakeTransport.runGate 不再是承载点。
-    assert.equal(env.gateLog.length, 0)
+    // 本机与远端 gate 统一委托 ctx.host.runGate（显式透传目标 nodeId），transport 不再重复实现 runGate。
+    assert.equal(env.gateLog.length, 1, '远端 gate 统一委托 ctx.host.runGate 恰好一次')
+    assert.equal(env.gateLog[0]!.command, 'exit 0')
+    assert.equal(env.gateLog[0]!.nodeId, 'remote-node')
     assert.equal(env.transport.calls.filter((c) => c.method === 'runGate').length, 0)
     // buildSpawnEnv 收到目标 nodeId（窗格 env 按节点构造）。
     assert.ok(env.spawnEnvLog.some((e) => e.nodeId === 'remote-node'), '远端窗格 env 按目标 nodeId 构造')
@@ -1460,7 +1461,6 @@ class ProbeTransport implements HerdrTransport {
   }
   async readOutput(): Promise<string> { throw new HelmxError('unsupported', 'test', 400) }
   async removeOutput(): Promise<void> {}
-  async runGate() { return { ok: true, output: '' } }
   async subscribe(
     _target: HerdrTarget,
     _onEvent: (event: HerdrEvent) => void,
@@ -1481,7 +1481,7 @@ interface HerdrProbeEnv {
   host: PluginHost
   backend: FakeBackend
   transport: ProbeTransport
-  ipcCalls: Array<{ method: string; timeoutMs?: number }>
+  tunnelOpens: Array<{ nodeId: string; socketPath?: string }>
   close(): Promise<void>
 }
 
@@ -1523,16 +1523,20 @@ async function makeHerdrProbeEnv(
     socketPath,
     () => ({ nodeId: HERDR_REMOTE_NODE }),
   )
-  const ipcCalls: Array<{ method: string; timeoutMs?: number }> = []
-  backend.nodeIpc = {
+  const tunnelOpens: Array<{ nodeId: string; socketPath?: string }> = []
+  const servedChannel = createServedNodeChannel({
+    dataDir,
+    transport,
     isOnline: () => true,
     getNodeHubUrl: () => undefined,
-    call: async (_nodeId, input, signal) => {
-      const method = (JSON.parse(input.line) as { method: string }).method
-      ipcCalls.push({ method, timeoutMs: input.timeoutMs })
-      return ipcLineCall(socketPath, input.line, input.timeoutMs, signal)
+    envFor: (nodeId, cwd) => backend.executionEnv(nodeId, cwd),
+  })
+  const observedChannel = {
+    ...servedChannel.channel,
+    openTunnel: (nodeId: string, target: import('@helmx/protocol').NodeTunnelTarget, signal?: AbortSignal) => {
+      tunnelOpens.push({ nodeId, socketPath: 'socketPath' in target ? target.socketPath : undefined })
+      return servedChannel.channel.openTunnel(nodeId, target, signal)
     },
-    subscribe: async () => { throw new HelmxError('unsupported', '本 fixture 不承载 IPC 订阅', 501) },
   }
   const host = new PluginHost({ buildProvider: createPluginBuildProvider(),
     dataDir,
@@ -1541,9 +1545,10 @@ async function makeHerdrProbeEnv(
     config: new MemoryConfigStore({ socketPath }),
   })
   try {
-    await host.register(createHerdrPlugin(HERDR_FAST_TEST_TIMINGS), { enabled: true })
+    await host.register(createHerdrPlugin({ ...HERDR_FAST_TEST_TIMINGS, nodeChannel: observedChannel }), { enabled: true })
   } catch (error) {
     await host.dispose().catch(() => {})
+    await servedChannel.close().catch(() => {})
     await served.close()
     rmSync(dataDir, { recursive: true, force: true })
     throw error
@@ -1552,9 +1557,10 @@ async function makeHerdrProbeEnv(
     host,
     backend,
     transport,
-    ipcCalls,
+    tunnelOpens,
     async close() {
       await host.dispose().catch(() => {})
+      await servedChannel.close()
       await served.close()
       rmSync(dataDir, { recursive: true, force: true })
     },
@@ -1567,17 +1573,66 @@ async function runHerdrTick(env: HerdrProbeEnv): Promise<DiagnosticsCollection> 
   return payload
 }
 
-test('herdr tick：agent.get / session.snapshot 全部带 5s 短超时', { timeout: 60_000 }, async () => {
+test('herdr tick：远端探针走 openTunnel({ socketPath }) 到达受控服务器，且 agent.get 带 5s 短超时', { timeout: 60_000 }, async () => {
   const env = await makeHerdrProbeEnv([
     { paneId: 'w:p1', agentName: 'helmx-wf-a', cwd: '/tmp/a', status: 'working', seq: 5 },
   ])
   try {
-    await runHerdrTick(env)
-    const relevant = env.ipcCalls.filter((c) => c.method === 'agent.get' || c.method === 'session.snapshot')
-    assert.ok(relevant.length > 0, '应有 agent.get / session.snapshot 经 nodeIpc 通道到达受控服务器')
-    for (const call of relevant) {
-      assert.equal(call.timeoutMs, 5_000, `${call.method} 应带 timeoutMs=5000（实际 ${String(call.timeoutMs)}）`)
+    const payload = await runHerdrTick(env)
+    assert.equal(payload.probes.length, 1)
+    assert.ok(
+      env.tunnelOpens.some((t) => t.nodeId === HERDR_REMOTE_NODE && typeof t.socketPath === 'string' && t.socketPath.endsWith('.sock')),
+      '远端探针应经 openTunnel({ socketPath }) 到达受控服务器',
+    )
+    // 验证探针采集器调用 transport.call('agent.get', ..., { timeoutMs: 5_000 }) 的显式短超时契约
+    const { HerdrProbeCollector } = await import('../src/herdr/probes.js')
+    const { AskCoordinator } = await import('../src/herdr/asks.js')
+    const { PaneRegistry } = await import('../src/herdr/panes.js')
+    const seenTimeouts: Array<{ method: string; timeoutMs?: number }> = []
+    let doc: import('../src/herdr/panes.js').ManagedDoc = {
+      version: 1,
+      panes: [{
+        target: { nodeId: HERDR_REMOTE_NODE },
+        paneId: 'w:p1',
+        tabId: 't-1',
+        effectiveCwd: '/tmp/a',
+        agentName: 'helmx-wf-a',
+        routing: { kind: 'agy' },
+        parentConversationId: 3,
+        outcome: 'keepalive',
+        createdAt: 1,
+      }],
     }
+    const registry = new PaneRegistry({ get: () => doc, set: (next) => { doc = next } }, doc)
+    const collector = new HerdrProbeCollector({
+      asks: new AskCoordinator(() => undefined),
+      registry: () => registry,
+      overview: () => undefined,
+      executor: () => undefined,
+      localTarget: () => ({}),
+      settleUnmanaged: () => {},
+      cancelAskQuietly: async () => {},
+      transport: () => ({
+        async call(_t, method, _params, opts) {
+          seenTimeouts.push({ method, timeoutMs: opts?.timeoutMs })
+          return { type: 'agent_info', agent: { pane_id: 'w:p1', name: 'helmx-wf-a', status: 'working', state_change_seq: 5 } }
+        },
+        async readOutput() { return '' },
+        async removeOutput() {},
+        async subscribe() { return () => {} },
+      }),
+      signal: () => new AbortController().signal,
+    })
+    let listener: ((payload: unknown) => Promise<void> | void) | undefined
+    collector.register({
+      onEvent(_type, cb) {
+        listener = cb
+        return () => {}
+      },
+    })
+    const directPayload: DiagnosticsCollection = { timestamp: Date.now(), conversations: [], probes: [] }
+    await listener!(directPayload)
+    assert.deepEqual(seenTimeouts, [{ method: 'agent.get', timeoutMs: 5_000 }])
   } finally {
     await env.close()
   }

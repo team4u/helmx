@@ -8,7 +8,7 @@
  *   exactly once (same-shape follow-up), then fail explicitly with herdr_output_contract_violation plus the
  *   agent.read recent_unwrapped 40-line redacted snapshot; never pass off dirty terminal text as the result;
  * - readDiagnostic: 40-line redacted diagnostic snapshot (shared by executor / approval bridge);
- * - runGateFor: exactly once after file success (local runLocalGate / remote transport.runGate,
+ * - runGateFor: exactly once after file success (delegates directly to `ctx.host.runGate` with explicit `nodeId`,
  *   same actual cwd and routing baseline env; secrets are never cached, re-authorized per request secretNames
  *   from the current stash; missing/expired/settled gets an explicit 404 before the gate subprocess starts).
  *
@@ -49,8 +49,8 @@ interface PaneHandoffPort {
   project(pane: ManagedPane, token: string): Promise<void>
   /** Failure pane keep-the-scene marker (outcome=failed + redacted failureNote). */
   markFailed(pane: ManagedPane, note: string): Promise<void>
-  /** Local Gate execution port (remote goes through transport.runGate). */
-  runLocalGate: HerdrPluginDependencies['runLocalGate']
+  /** Unified Gate execution port (`ctx.host.runGate` for both local and remote nodes). */
+  runGate: HerdrPluginDependencies['runGate']
   /** md handoff stability recheck interval (shortened in tests; production default 300ms). */
   mdStableRecheckMs?: number
 }
@@ -185,20 +185,18 @@ export class PaneHandoff {
     }
   }
 
-  /** gate: exactly once after file success; local runLocalGate, remote transport.runGate (same actual cwd and routing baseline env). */
+  /** gate: exactly once after file success; delegates directly to `ctx.host.runGate` for both local and remote nodes (same actual cwd and routing baseline env). */
   async runGateFor(request: AgentSpawnRequest, pane: ManagedPane): Promise<void> {
     const baseline = this.port.paneEnvOf(paneStateKey(pane))
     if (baseline === undefined) throw new HelmxError('herdr_context_unavailable', 'task environment is lost; cannot run Gate in the same environment', 409)
     const env = this.port.applyPaneSecrets(baseline, request.parentConversationId, pane.effectiveCwd, targetOf(pane), request.secretNames ?? [])
-    const gate: { ok: boolean; output: string } =
-      nodeIdOf(pane) === undefined
-        ? await this.port.runLocalGate(request.gate!, {
-            cwd: pane.effectiveCwd,
-            conversationId: this.port.askConversationId(request.parentConversationId),
-            signal: request.signal,
-            env,
-          })
-        : await this.port.transport.runGate(targetOf(pane), request.gate!, pane.effectiveCwd, request.signal, env)
+    const gate = await this.port.runGate(request.gate!, {
+      cwd: pane.effectiveCwd,
+      conversationId: this.port.askConversationId(request.parentConversationId),
+      nodeId: nodeIdOf(pane) ?? 'local',
+      signal: request.signal,
+      env,
+    })
     request.onGateResult?.({ ...gate, output: this.port.redact(gate.output) })
     if (!gate.ok) {
       await this.port.markFailed(pane, `gate failed: ${request.gate}`)

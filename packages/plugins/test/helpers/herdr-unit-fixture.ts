@@ -14,18 +14,19 @@
  *   真实落盘（含父目录创建）、delete 真实删除——生产 readLocalOutput /
  *   removeLocalOutput 在同一路径真实生效。
  */
-import { createServer, type Server, type Socket } from 'node:net'
+import { connect as netConnect, createServer, type Server, type Socket } from 'node:net'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import {
   HelmxError,
-  type AgentGateResult,
   type AskResult,
   type ConversationSummary,
   type HelmxHostNodeIpcPort,
   type MaybePromise,
+  type NodeHostEnv,
+  type NodeTunnelTarget,
   type Profile,
   type RpcResult,
 } from '@helmx/protocol'
@@ -34,7 +35,7 @@ import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import { PluginHost, type PluginHostBackend } from '../../../kernel/src/plugins/index.js'
 import type { WorkflowRunSummary } from '../../src/contracts.js'
 import { createHerdrPlugin } from '../../src/herdr.js'
-import type { HerdrEvent, HerdrPluginDependencies, HerdrTarget, HerdrTransport } from '../../src/herdr/contracts.js'
+import type { HerdrEvent, HerdrNodeChannel, HerdrNodeEnv, HerdrPluginDependencies, HerdrTarget, HerdrTransport } from '../../src/herdr/contracts.js'
 import { connectHerdrEndpoint, endpointKindOf, windowsPipeNameOf } from '../../src/herdr/local-node-channel.js'
 import { SEND_KEYS_CAS_CAPABILITY } from '../../src/herdr/rpc.js'
 import { MemoryConfigStore, MemoryDocStore, makeConversationSummary } from './plugin-test-env.js'
@@ -476,19 +477,6 @@ export abstract class BaseFakeHerdrTransport implements HerdrTransport {
     if (this.outputFiles.delete(key)) this.removedFiles.push(key)
   }
 
-  async runGate(
-    target: HerdrTarget,
-    command: string,
-    cwd: string,
-    signal?: AbortSignal,
-    env?: Record<string, string>,
-  ): Promise<AgentGateResult> {
-    void signal
-    this.record(target, 'runGate', { command, cwd, env })
-    this.gateRuns += 1
-    return { ok: true, output: 'remote gate ok' }
-  }
-
   async subscribe(
     target: HerdrTarget,
     onEvent: (event: HerdrEvent) => void,
@@ -670,7 +658,7 @@ export class HerdrFakeBackend implements PluginHostBackend {
   workflowListeners = new Set<(run: WorkflowRunSummary) => void | Promise<void>>()
   typedListeners = new Map<string, Set<(payload: unknown) => void | Promise<void>>>()
   spawnEnvLog: Array<{ conversationId: number; cwd: string; nodeId: string }> = []
-  gateLog: Array<{ command: string; cwd?: string; env?: Record<string, string> }> = []
+  gateLog: Array<{ command: string; cwd?: string; nodeId?: string; env?: Record<string, string> }> = []
   profileStore = new Map<string, Profile>()
   completeTextImpl: ((input: { conversationId: number; systemPrompt: string; text: string }) => Promise<string>) | undefined
   getArtifactImpl: ((id: string, conversationId: number) => Promise<{ id: string; name: string; mimeType: string; size: number; absPath: string }>) | undefined
@@ -780,8 +768,8 @@ export class HerdrFakeBackend implements PluginHostBackend {
   getConversationOwnership(): 'helmx' | 'bot' | 'human' { return 'human' }
   isClosing(): boolean { return false }
   async spawnAgent(): Promise<unknown> { return {} }
-  async runGate(command: string, options?: { cwd?: string; env?: Record<string, string> }): Promise<{ ok: boolean; output: string }> {
-    this.gateLog.push({ command, cwd: options?.cwd, env: options?.env })
+  async runGate(command: string, options?: { cwd?: string; nodeId?: string; env?: Record<string, string> }): Promise<{ ok: boolean; output: string }> {
+    this.gateLog.push({ command, cwd: options?.cwd, nodeId: options?.nodeId, env: options?.env })
     return { ok: true, output: 'local gate ok' }
   }
   async invokeAction(): Promise<unknown> { return {} }
@@ -844,8 +832,106 @@ export interface HerdrUnitEnv<TTransport extends HerdrTransport = StandardFakeHe
   parentCwd: string
   profiles: Map<string, Profile>
   spawnEnvLog: Array<{ conversationId: number; cwd: string; nodeId: string }>
-  gateLog: Array<{ command: string; cwd?: string; env?: Record<string, string> }>
+  gateLog: Array<{ command: string; cwd?: string; nodeId?: string; env?: Record<string, string> }>
   close(): Promise<void>
+}
+
+/**
+ * 为单元测试构造基于真实 UDS `serveTransport` 的远端 `HerdrNodeChannel`：
+ * 每个远端 `nodeId` 懒启动独立受控 UDS（通过 `getNodeHostEnv` 返回该节点的
+ * `HERDR_SOCKET_PATH`，再经 `openTunnel({ socketPath })` 拨号），完全无共享路由竞态。
+ */
+export function createServedNodeChannel(options: {
+  dataDir: string
+  transport: HerdrTransport
+  isOnline?: (nodeId: string) => boolean
+  getNodeHubUrl?: (nodeId: string) => string | undefined
+  nodePlatform?: (nodeId: string) => string | undefined
+  envFor: (nodeId: string, cwd: string) => HerdrNodeEnv
+}): { channel: HerdrNodeChannel; close(): Promise<void> } {
+  const remoteServers = new Map<string, Promise<ServedTransport>>()
+  const isOnline = options.isOnline ?? (() => true)
+
+  const ensureRemoteSocket = (nodeId: string): Promise<ServedTransport> => {
+    let pending = remoteServers.get(nodeId)
+    if (pending === undefined) {
+      const safeId = nodeId.replace(/[^A-Za-z0-9._-]/g, '_')
+      const remoteSocketPath = join(options.dataDir, `remote-${safeId}.sock`)
+      pending = serveTransport(options.transport, remoteSocketPath, () => ({ nodeId }))
+      remoteServers.set(nodeId, pending)
+    }
+    return pending
+  }
+
+  const channel: HerdrNodeChannel = {
+    isOnline,
+    ...(options.getNodeHubUrl !== undefined ? { getNodeHubUrl: options.getNodeHubUrl } : {}),
+    ...(options.nodePlatform !== undefined ? { nodePlatform: options.nodePlatform } : {}),
+    async getNodeHostEnv(nodeId: string, _query, signal?: AbortSignal): Promise<NodeHostEnv> {
+      if (signal?.aborted) throw new HelmxError('aborted', 'getNodeHostEnv aborted', 499)
+      if (!isOnline(nodeId)) {
+        throw new HelmxError('node_offline', `node '${nodeId}' is offline`, 409, { nodeId })
+      }
+      const served = await ensureRemoteSocket(nodeId)
+      return {
+        platform: process.platform,
+        homeDir: options.dataDir,
+        tempDir: tmpdir(),
+        dirs: { home: options.dataDir },
+        env: { HERDR_SOCKET_PATH: served.socketPath },
+      }
+    },
+    async openTunnel(nodeId: string, target: NodeTunnelTarget, signal?: AbortSignal) {
+      if (signal?.aborted) throw new HelmxError('aborted', 'openTunnel aborted', 499)
+      if (!isOnline(nodeId)) {
+        throw new HelmxError('node_offline', `node '${nodeId}' is offline`, 409, { nodeId })
+      }
+      if (!('socketPath' in target) || typeof target.socketPath !== 'string') {
+        throw new HelmxError('invalid_input', 'herdr unit channel only supports socketPath tunnels', 400)
+      }
+      const socketPath = target.socketPath
+      return await new Promise<Socket>((resolve, reject) => {
+        const socket = netConnect({ path: socketPath })
+        socket.setNoDelay(true)
+        let settled = false
+        const onAbort = (): void => {
+          if (settled) return
+          settled = true
+          socket.destroy()
+          reject(new HelmxError('aborted', 'openTunnel aborted', 499))
+        }
+        const onConnect = (): void => {
+          if (settled) return
+          settled = true
+          signal?.removeEventListener('abort', onAbort)
+          socket.off('error', onError)
+          resolve(socket)
+        }
+        const onError = (err: Error): void => {
+          if (settled) return
+          settled = true
+          signal?.removeEventListener('abort', onAbort)
+          socket.destroy()
+          reject(new HelmxError('node_tunnel_connect_failed', `socket tunnel connect failed: ${err.message}`, 502))
+        }
+        signal?.addEventListener('abort', onAbort, { once: true })
+        socket.once('connect', onConnect)
+        socket.once('error', onError)
+      })
+    },
+    envFor: options.envFor,
+  }
+
+  return {
+    channel,
+    async close() {
+      const servers = await Promise.allSettled([...remoteServers.values()])
+      remoteServers.clear()
+      for (const item of servers) {
+        if (item.status === 'fulfilled') await item.value.close().catch(() => {})
+      }
+    },
+  }
 }
 
 /**
@@ -871,25 +957,22 @@ export async function openHerdrUnitEnv<TTransport extends HerdrTransport = Stand
 
   const socketPath = options.socketPath ?? join(dataDir, 'herdr.sock')
   const localTarget = options.localTarget ?? {}
-  let routedNodeId: string | undefined
-  const served = await serveTransport(transport, socketPath, () =>
-    routedNodeId !== undefined && routedNodeId !== 'local' ? { nodeId: routedNodeId } : localTarget,
-  )
+  const served = await serveTransport(transport, socketPath, () => localTarget)
   const hubUrls = options.hubUrls
   backend.nodeIpc = {
     isOnline: (nodeId: string) => hubUrls === undefined || nodeId === 'local' || nodeId in hubUrls || nodeId === 'remote-node',
     getNodeHubUrl: (nodeId: string) => hubUrls?.[nodeId],
-    call: async (nodeId, input, signal) => {
-      signal?.throwIfAborted()
-      routedNodeId = nodeId
-      try {
-        return await ipcLineCall(socketPath, input.line, input.timeoutMs, signal)
-      } finally {
-        routedNodeId = undefined
-      }
-    },
-    subscribe: async () => { throw new HelmxError('unsupported', '本 fixture 无节点 IPC 订阅', 501) },
+    call: async () => { throw new HelmxError('unsupported', 'legacy nodeIpc.call removed; use openTunnel', 501) },
+    subscribe: async () => { throw new HelmxError('unsupported', 'legacy nodeIpc.subscribe removed; use openTunnel', 501) },
   }
+  const servedChannel = createServedNodeChannel({
+    dataDir,
+    transport,
+    isOnline: (nodeId) => backend.nodeIpc.isOnline(nodeId),
+    getNodeHubUrl: (nodeId) => backend.nodeIpc.getNodeHubUrl?.(nodeId),
+    nodePlatform: (nodeId) => backend.nodeIpc.nodePlatform?.(nodeId),
+    envFor: (nodeId, cwd) => backend.executionEnv(nodeId, cwd),
+  })
 
   const host = new PluginHost({
     buildProvider: createPluginBuildProvider(),
@@ -902,12 +985,14 @@ export async function openHerdrUnitEnv<TTransport extends HerdrTransport = Stand
     await host.register(
       createHerdrPlugin({
         ...HERDR_FAST_TEST_TIMINGS,
+        nodeChannel: servedChannel.channel,
         ...options.timingOverrides,
       }),
       { enabled: options.enabled ?? true },
     )
   } catch (error) {
     await host.dispose().catch(() => {})
+    await servedChannel.close().catch(() => {})
     await served.close().catch(() => {})
     rmSync(dataDir, { recursive: true, force: true })
     throw error
@@ -926,6 +1011,7 @@ export async function openHerdrUnitEnv<TTransport extends HerdrTransport = Stand
     gateLog: backend.gateLog,
     async close() {
       await host.dispose().catch(() => {})
+      await servedChannel.close()
       await served.close()
       rmSync(dataDir, { recursive: true, force: true })
     },

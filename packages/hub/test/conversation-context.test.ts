@@ -46,7 +46,7 @@ async function registerFakeNode(
     { register(input: NodeRegisterInput): Promise<NodeRegisterResult> },
     HubConnectionLocal
   >(
-    { onEnvExecOutput: () => undefined, onIpcEvent: () => undefined, onIpcClosed: () => undefined },
+    { onEnvExecOutput: () => undefined },
     {
       post: (data) => {
         if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(data))

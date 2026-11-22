@@ -307,10 +307,6 @@ class SecretPaneFakeTransport implements HerdrTransport {
   async removeOutput(_t: HerdrTarget, cwd: string, fileName: string): Promise<void> {
     rmSync(join(cwd, '.helmx', fileName), { force: true })
   }
-  async runGate(_t: HerdrTarget, _cmd: string, _cwd: string, _sig: AbortSignal | undefined, env?: Record<string, string>) {
-    this.gateEnvs.push(env ?? {})
-    return { ok: true, output: 'gate ok' }
-  }
   async subscribe() { return () => {} }
 }
 
@@ -341,11 +337,15 @@ function makePaneEnv(dataDir: string, options: { clock?: () => number; onPrompte
       profiles: { get: async (id) => profiles.get(id) },
       buildSpawnEnv: (id, cwd, nodeId, opts) => spawnBackend.buildSpawnEnv(id, cwd, nodeId, opts),
       redact: (t) => stash.redact(t),
-      runLocalGate: async () => ({ ok: true, output: 'gate ok' }),
+      runGate: async (_cmd, opts) => {
+        transport.gateEnvs.push(opts.env ?? {})
+        return { ok: true, output: 'gate ok' }
+      },
       nodeChannel: {
         isOnline: () => true,
         getNodeHubUrl: () => 'http://10.0.0.5:3202',
-        ipcCall: () => { throw new Error('unused') },
+        getNodeHostEnv: () => { throw new Error('unused') },
+        openTunnel: () => { throw new Error('unused') },
         envFor: () => { throw new Error('unused') },
       },
       transport,

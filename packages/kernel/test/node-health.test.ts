@@ -139,8 +139,6 @@ async function connectNode(
   >(
     {
       onEnvExecOutput: () => undefined,
-      onIpcEvent: () => undefined,
-      onIpcClosed: () => undefined,
     },
     {
       post: (data) => {
@@ -537,8 +535,6 @@ async function connectNodeWithToken(
   >(
     {
       onEnvExecOutput: () => undefined,
-      onIpcEvent: () => undefined,
-      onIpcClosed: () => undefined,
     },
     {
       post: (data) => {

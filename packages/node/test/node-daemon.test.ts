@@ -21,8 +21,6 @@ import type {
   EnvExecOutputEvent,
   HubEnvStreamFunctions,
   NodeEnvRpcFunctions,
-  NodeIpcClosedEvent,
-  NodeIpcEvent,
   NodeRegisterInput,
   NodeRegisterResult,
 } from '@helmx/protocol';
@@ -287,171 +285,36 @@ async function startHerdrLikeServer(
   };
 }
 
-test('ipcCall request/response and timeout', { timeout: 60_000 }, async (t) => {
-  const srv = await startHerdrLikeServer((line, socket) => {
-    const req = JSON.parse(line) as { id: string; method: string };
-    socket.write(`${JSON.stringify({ id: req.id, result: { echo: req.method } })}\n`);
-  });
-  t.after(async () => {
-    await srv.close();
-  });
-  const dir = await tempDir('helmx-node-ipc-client-');
-  const server = createNodeEnvRpcServer({ defaultCwd: dir });
-  t.after(async () => {
-    await server.dispose();
-    await fs.rm(dir, { recursive: true, force: true });
-  });
-
-  const line = JSON.stringify({ id: '1', method: 'tab.list' });
-  const ok = await server.ipcCall!({ endpoint: srv.path, line, timeoutMs: 5_000 });
-  assert.equal(ok.ok, true);
-  assert.equal(ok.ok && JSON.parse(ok.value).result.echo, 'tab.list');
-
-  // Timeout: server sends no response
-  const silent = await startHerdrLikeServer(() => undefined);
-  try {
-    const r = await server.ipcCall!({ endpoint: silent.path, line, timeoutMs: 300 });
-    assert.equal(r.ok, false);
-    assert.equal(!r.ok && r.error.code, 'timeout');
-  } finally {
-    await silent.close();
-  }
-
-  // Connection error: missing socket path
-  const dead = await server.ipcCall!({ endpoint: path.join(dir, 'no', 'such.sock'), line, timeoutMs: 1_000 });
-  assert.equal(dead.ok, false);
-  assert.equal(!dead.ok && dead.error.code, 'unknown');
-
-  // Rejects response lines containing NUL bytes
-  const nulSrv = await startHerdrLikeServer((_line, socket) => {
-    socket.write(Buffer.concat([Buffer.from('{"a":"x"\u0000}'), Buffer.from('\n')]));
-  });
-  try {
-    const r = await server.ipcCall!({ endpoint: nulSrv.path, line, timeoutMs: 5_000 });
-    assert.equal(r.ok, false);
-  } finally {
-    await nulSrv.close();
-  }
-});
-
-test('ipcAbortCall cancels blocking waits immediately', { timeout: 60_000 }, async (t) => {
-  // Server accepts request and hangs without replying (simulates `agent.prompt --wait`)
-  const srv = await startHerdrLikeServer(() => undefined);
-  t.after(async () => {
-    await srv.close();
-  });
-  const dir = await tempDir('helmx-node-ipc-abort-');
-  const server = createNodeEnvRpcServer({ defaultCwd: dir });
-  t.after(async () => {
-    await server.dispose();
-    await fs.rm(dir, { recursive: true, force: true });
-  });
-
-  const start = Date.now();
-  const pending = server.ipcCall!({
-    callId: 'call-1',
-    endpoint: srv.path,
-    line: JSON.stringify({ id: '1', method: 'agent.prompt', params: { wait: true } }),
-    timeoutMs: 60_000,
-  });
-  await delay(200);
-  assert.equal(server.getActiveIpcCallCount(), 1);
-  await server.ipcAbortCall!('call-1');
-  const result = await pending;
-  const elapsed = Date.now() - start;
-  assert.equal(result.ok, false);
-  assert.ok(elapsed < 5_000, `abort should take effect immediately (actual ${elapsed}ms)`);
-  assert.equal(server.getActiveIpcCallCount(), 0);
-});
-
-test('ipcSubscribe streams events and ipcUnsubscribe closes cleanly', { timeout: 60_000 }, async (t) => {
-  const events: NodeIpcEvent[] = [];
-  const closed: NodeIpcClosedEvent[] = [];
-  // Server sends subscription_started ACK, then pushes an event frame every 40ms
-  const srv = await startHerdrLikeServer((line, socket) => {
-    const req = JSON.parse(line) as { id: string };
-    socket.write(`${JSON.stringify({ id: req.id, result: { type: 'subscription_started' } })}\n`);
-    let seq = 0;
-    const timer = setInterval(() => {
-      // After peer disconnect, close event can trail next timer tick; check writable so fixture stops cleanly.
-      if (socket.destroyed || !socket.writable) {
-        clearInterval(timer);
-        return;
-      }
-      seq += 1;
-      socket.write(`${JSON.stringify({ event: 'tick', data: { seq } })}\n`);
-    }, 40);
-    socket.once('close', () => clearInterval(timer));
-  });
-  t.after(async () => {
-    await srv.close();
-  });
-  const dir = await tempDir('helmx-node-ipc-sub-');
+test('nodeHostEnv reports target node platform, dirs, and requested non-secret env vars', { timeout: 60_000 }, async (t) => {
+  const dir = await tempDir('helmx-node-hostenv-');
   const server = createNodeEnvRpcServer({
     defaultCwd: dir,
-    onIpcEvent: (e) => events.push(e),
-    onIpcClosed: (e) => closed.push(e),
+    hostEnvContext: {
+      platform: 'win32',
+      homeDir: 'C:\\Users\\alice',
+      tempDir: 'C:\\Users\\alice\\AppData\\Local\\Temp',
+      getEnv: (name) => ({
+        APPDATA: 'C:\\Users\\alice\\AppData\\Roaming',
+        HERDR_SOCKET_PATH: '\\\\.\\pipe\\herdr-alice',
+      })[name],
+    },
   });
   t.after(async () => {
     await server.dispose();
     await fs.rm(dir, { recursive: true, force: true });
   });
 
-  const ack = await server.ipcSubscribe!({
-    subscribeId: 'sub-1',
-    endpoint: srv.path,
-    line: JSON.stringify({ id: 'sub', method: 'events.subscribe', params: {} }),
-  });
-  assert.equal(ack.ok, true, ack.ok ? '' : ack.error.message);
-  assert.equal(server.getActiveIpcSubscriptionCount(), 1);
-
-  await waitFor(() => events.length >= 3, 5_000, 'at least 3 streaming events');
-  assert.ok(events.length >= 3, `should receive streaming events (actual ${events.length})`);
-  assert.equal(events[0]?.subscribeId, 'sub-1');
-  assert.equal(JSON.parse(events[0]!.line).event, 'tick');
-
-  // Explicit unsubscribe does not fire onIpcClosed
-  await server.ipcUnsubscribe!('sub-1');
-  await waitFor(() => server.getActiveIpcSubscriptionCount() === 0, 5_000, 'subscription count cleared after unsubscribe');
-  assert.equal(server.getActiveIpcSubscriptionCount(), 0);
-  assert.equal(closed.length, 0, 'explicit unsubscribe must not emit onIpcClosed');
-  const countAfterUnsub = events.length;
-  await delay(250);
-  assert.equal(events.length, countAfterUnsub, 'no more events received after unsubscribe');
-
-  // Server rejects subscription with error envelope
-  const rejectSrv = await startHerdrLikeServer((line, socket) => {
-    const req = JSON.parse(line) as { id: string };
-    socket.write(`${JSON.stringify({ id: req.id, error: { code: 'bad_filter', message: 'invalid filter' } })}\n`);
-  });
-  try {
-    const r = await server.ipcSubscribe!({
-      subscribeId: 'sub-2',
-      endpoint: rejectSrv.path,
-      line: JSON.stringify({ id: 'sub', method: 'events.subscribe' }),
-    });
-    assert.equal(r.ok, false);
-    assert.match(!r.ok ? r.error.message : '', /bad_filter/);
-  } finally {
-    await rejectSrv.close();
+  const ok = await server.nodeHostEnv({ envKeys: ['HERDR_SOCKET_PATH'] });
+  assert.equal(ok.ok, true);
+  if (ok.ok) {
+    assert.equal(ok.value.platform, 'win32');
+    assert.equal(ok.value.dirs.appData, 'C:\\Users\\alice\\AppData\\Roaming');
+    assert.equal(ok.value.env['HERDR_SOCKET_PATH'], '\\\\.\\pipe\\herdr-alice');
   }
 
-  // Rejects ACK whose result type is not subscription_started
-  const badAckSrv = await startHerdrLikeServer((line, socket) => {
-    const req = JSON.parse(line) as { id: string };
-    socket.write(`${JSON.stringify({ id: req.id, result: { type: 'something_else' } })}\n`);
-  });
-  try {
-    const r = await server.ipcSubscribe!({
-      subscribeId: 'sub-3',
-      endpoint: badAckSrv.path,
-      line: JSON.stringify({ id: 'sub', method: 'events.subscribe' }),
-    });
-    assert.equal(r.ok, false);
-    assert.match(!r.ok ? r.error.message : '', /unexpected|subscription_started/);
-  } finally {
-    await badAckSrv.close();
-  }
+  const bad = await server.nodeHostEnv({ envKeys: ['HELMX_TOKEN'] });
+  assert.equal(bad.ok, false);
+  assert.equal(!bad.ok && bad.error.code, 'invalid');
 });
 
 test('ipc fixture isolates in-flight write errors after peer disconnect', { timeout: 60_000 }, async () => {
@@ -481,35 +344,6 @@ test('ipc fixture isolates in-flight write errors after peer disconnect', { time
   } finally {
     client.destroy();
     await srv.close();
-  }
-});
-
-test('resolveIpcEndpoint priority (explicit > env var > session default)', { timeout: 60_000 }, async () => {
-  const server = createNodeEnvRpcServer({ defaultCwd: '/tmp' }) as NodeEnvRpcServer & {
-    resolveIpcEndpoint(input: { endpoint?: string; session?: string }): string;
-  };
-  try {
-    // Explicit endpoint takes precedence
-    assert.equal(server.resolveIpcEndpoint({ endpoint: '/explicit/sock' }), '/explicit/sock');
-    // HERDR_SOCKET_PATH comes next (before session inference)
-    process.env['HERDR_SOCKET_PATH'] = '/env/sock';
-    try {
-      assert.equal(server.resolveIpcEndpoint({}), '/env/sock');
-      assert.equal(server.resolveIpcEndpoint({ session: 'work' }), '/env/sock');
-    } finally {
-      delete process.env['HERDR_SOCKET_PATH'];
-    }
-    // With session, defaults to sessions/<session>/herdr.sock
-    const withSession = server.resolveIpcEndpoint({ session: 'work' });
-    assert.match(withSession, /herdr[/]sessions[/]work[/]herdr\.sock$/);
-    // Without session, defaults to herdr.sock
-    const noSession = server.resolveIpcEndpoint({});
-    assert.match(noSession, /herdr[/]herdr\.sock$/);
-    // Invalid session name fails validation
-    assert.throws(() => server.resolveIpcEndpoint({ session: '../evil' }), /session/i);
-    assert.throws(() => server.resolveIpcEndpoint({ session: 'a b' }), /session/i);
-  } finally {
-    await server.dispose();
   }
 });
 
@@ -590,13 +424,9 @@ async function startHubFixture(options: {
   heartbeatMs?: number;
   reject?: boolean;
   execOutputs: EnvExecOutputEvent[];
-  ipcEvents?: NodeIpcEvent[];
-  ipcClosed?: NodeIpcClosedEvent[];
   /** Reuse port across Hub restarts in reconnect tests. */
   port?: number;
 }): Promise<HubFixture> {
-  const ipcEventsSink: NodeIpcEvent[] = options.ipcEvents ?? [];
-  const ipcClosedSink: NodeIpcClosedEvent[] = options.ipcClosed ?? [];
   const registrations: NodeRegisterInput[] = [];
   const heartbeats: string[] = [];
   let nodeRpc: BirpcReturn<NodeEnvRpcFunctions, NodeHubLocal> | undefined;
@@ -606,8 +436,6 @@ async function startHubFixture(options: {
     register(input: NodeRegisterInput): Promise<NodeRegisterResult>;
     heartbeat(nodeId: string): boolean;
     onEnvExecOutput(event: EnvExecOutputEvent): void;
-    onIpcEvent(event: NodeIpcEvent): void;
-    onIpcClosed(event: NodeIpcClosedEvent): void;
   }
 
   const server = http.createServer((_req, res) => {
@@ -643,12 +471,6 @@ async function startHubFixture(options: {
         },
         onEnvExecOutput(event) {
           options.execOutputs.push(event);
-        },
-        onIpcEvent(event) {
-          ipcEventsSink.push(event);
-        },
-        onIpcClosed(event) {
-          ipcClosedSink.push(event);
         },
       };
       nodeRpc = createBirpc<NodeEnvRpcFunctions, NodeHubLocal>(local, {
@@ -700,30 +522,31 @@ async function startHubFixture(options: {
   };
 }
 
-test('createNodeDaemon: register + heartbeat + reverse envExec/envReadTextFile/ipcCall', { timeout: 60_000 }, async () => {
+test('createNodeDaemon: register + heartbeat + reverse envExec/envReadTextFile/nodeHostEnv', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helmx-node-daemon-');
   const execOutputs: EnvExecOutputEvent[] = [];
-  const ipcEvents: NodeIpcEvent[] = [];
-  const ipcClosed: NodeIpcClosedEvent[] = [];
   const token = 'work-a:secret-a';
   const hub = await startHubFixture({
     expectedToken: token,
     heartbeatMs: 120,
     execOutputs,
-    ipcEvents,
-    ipcClosed,
-  });
-  // Target IPC socket (not hosted by Hub fixture; daemon connects locally on node side)
-  // to verify ipcCall forwards over WS to a local Herdr-compatible socket.
-  const ipcSrv = await startHerdrLikeServer((line, socket) => {
-    const req = JSON.parse(line) as { id: string };
-    socket.write(`${JSON.stringify({ id: req.id, result: { pong: true } })}\n`);
   });
 
   const daemon = await createNodeDaemon({
     hubUrl: hub.url,
     identity: { nodeId: 'work-a', token },
     dataDir: dir,
+    envServer: {
+      hostEnvContext: {
+        platform: 'win32',
+        homeDir: 'C:\\Users\\remote',
+        tempDir: 'C:\\Users\\remote\\AppData\\Local\\Temp',
+        getEnv: (k) => ({
+          APPDATA: 'C:\\Users\\remote\\AppData\\Roaming',
+          HERDR_SOCKET_PATH: 'C:\\Users\\remote\\herdr.sock',
+        })[k],
+      },
+    },
   });
   try {
     assert.equal(await daemon.waitUntilRegistered(10_000), true, 'should finish registration');
@@ -761,40 +584,16 @@ test('createNodeDaemon: register + heartbeat + reverse envExec/envReadTextFile/i
     await waitFor(() => execOutputs.map((e) => e.text).join('').includes('via-hub-exec'), 10_000, 'reverse envExec output delivery');
     assert.match(execOutputs.map((e) => e.text).join(''), /via-hub-exec/);
 
-    // Reverse ipcCall: reaches local Herdr stub socket via node
-    const ipc = await rpc!.ipcCall!({
-      endpoint: ipcSrv.path,
-      line: JSON.stringify({ id: '1', method: 'ping' }),
-      timeoutMs: 5_000,
-    });
-    assert.equal(ipc.ok, true, ipc.ok ? '' : ipc.error.message);
-    assert.equal(ipc.ok && JSON.parse(ipc.value).result.pong, true);
-
-    // Reverse ipcSubscribe: forwards event stream to Hub
-    const events: NodeIpcEvent[] = [];
-    // Attach a streaming socket server
-    const subSrv = await startHerdrLikeServer((line, socket) => {
-      const req = JSON.parse(line) as { id: string };
-      socket.write(`${JSON.stringify({ id: req.id, result: { type: 'subscription_started' } })}\n`);
-      socket.write(`${JSON.stringify({ event: 'hello' })}\n`);
-    });
-    const subAck = await rpc!.ipcSubscribe!({
-      subscribeId: 's1',
-      endpoint: subSrv.path,
-      line: JSON.stringify({ id: 'sub', method: 'events.subscribe' }),
-    });
-    assert.equal(subAck.ok, true, subAck.ok ? '' : subAck.error.message);
-    await waitFor(
-      () => ipcEvents.some((e) => e.subscribeId === 's1' && JSON.parse(e.line).event === 'hello'),
-      10_000,
-      'ipc event forwarded to Hub',
-    );
-    assert.ok(ipcEvents.some((e) => e.subscribeId === 's1' && JSON.parse(e.line).event === 'hello'), 'ipc event should reach Hub');
-    await rpc!.ipcUnsubscribe!('s1');
-    await subSrv.close();
+    // Reverse nodeHostEnv: Hub reads target-node platform/dirs/env over WS without using Hub's local env
+    const hostEnv = await rpc!.nodeHostEnv!({ envKeys: ['HERDR_SOCKET_PATH'] });
+    assert.equal(hostEnv.ok, true, hostEnv.ok ? '' : hostEnv.error.message);
+    if (hostEnv.ok) {
+      assert.equal(hostEnv.value.platform, 'win32');
+      assert.equal(hostEnv.value.dirs.appData, 'C:\\Users\\remote\\AppData\\Roaming');
+      assert.equal(hostEnv.value.env['HERDR_SOCKET_PATH'], 'C:\\Users\\remote\\herdr.sock');
+    }
   } finally {
     await daemon.close();
-    await ipcSrv.close();
     await hub.close();
     await fs.rm(dir, { recursive: true, force: true });
   }

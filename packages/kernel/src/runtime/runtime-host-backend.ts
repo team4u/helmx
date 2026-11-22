@@ -9,7 +9,7 @@
  */
 
 import { HelmxError, isValidProfileId } from '@helmx/protocol'
-import type { HelmxHostOpenTunnelPort } from '@helmx/protocol'
+import type { HelmxHostOpenTunnelPort, NodeTunnelTarget } from '@helmx/protocol'
 import { FileNotFoundError, atomicWriteFile, withFileLock } from '../services/index.js'
 import type { PluginHostBackend, PluginSessionDocStore } from '../plugins/index.js'
 import type { HelmxStore } from './store.js'
@@ -85,12 +85,29 @@ export function createPluginHostBackend(runtime: KernelRuntime): PluginHostBacke
       // consumers must neither guess nor rewrite). Routed through the sole EnvFabric.nodePlatformOf read-only port
       // rather than duplicating platform lookup logic here.
       nodePlatform: (nodeId) => runtime.envFabric.nodePlatformOf(nodeId),
-      call: (nodeId, input, signal) => runtime.envFabric.ipcCall(nodeId, input, signal),
-      subscribe: (nodeId, input, onLine, onClosed, signal) =>
-        runtime.envFabric.ipcSubscribe(nodeId, input, onLine, onClosed, signal),
+      // Legacy line-IPC call/subscribe have been removed from EnvFabric; explicit 501 until Host API integration
+      // removes `HelmxHostNodeIpcPort.call/subscribe` from `protocol/src/plugin.ts` and `kernel/src/plugins/host-api.ts`.
+      call: (nodeId) =>
+        Promise.reject(
+          new HelmxError(
+            'ipc_not_supported',
+            `legacy nodeIpc.call(${nodeId}) has been removed; use openTunnel({ socketPath }) + getNodeHostEnv`,
+            501,
+            { nodeId },
+          ),
+        ),
+      subscribe: (nodeId) =>
+        Promise.reject(
+          new HelmxError(
+            'ipc_not_supported',
+            `legacy nodeIpc.subscribe(${nodeId}) has been removed; use openTunnel({ socketPath }) + getNodeHostEnv`,
+            501,
+            { nodeId },
+          ),
+        ),
     },
     nodeFetch: (nodeId) => runtime.envFabric.nodeFetch(nodeId),
-    openTunnel: ((nodeId: string, target: { host?: string; port: number }, signal?: AbortSignal) =>
+    openTunnel: ((nodeId: string, target: NodeTunnelTarget, signal?: AbortSignal) =>
       runtime.envFabric.openTunnel(nodeId, target, signal)) as HelmxHostOpenTunnelPort,
     // Host plugin governance ports: delegate directly to PluginHost's public methods (sharing the same chain
     // as HTTP management: per-plugin lifecycle queue, active-task tracking, locked/in-use protection, avoiding a

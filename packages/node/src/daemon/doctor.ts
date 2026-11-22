@@ -11,12 +11,13 @@
  */
 
 import net from 'node:net';
+import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import { WebSocket } from 'ws';
-import { resolveHerdrIpcEndpoint } from './env-rpc-server.js';
+import { WINDOWS_LOCAL_PIPE_PREFIX } from '@helmx/protocol';
 import { readNodeIdentity, resolveNodeDataDir } from './index.js';
 
 export type NodeDoctorCheckStatus = 'ok' | 'warn' | 'error' | 'info';
@@ -233,18 +234,26 @@ async function checkHub(hubUrl: string, nodeId: string, connectTimeoutMs: number
   });
 }
 
+/** Derive the default local Herdr IPC socket/pipe path for the optional `helmx-node doctor` probe. */
+function defaultLocalHerdrEndpoint(env: NodeJS.ProcessEnv): string {
+  const override = env['HERDR_SOCKET_PATH'];
+  if (override !== undefined && override !== '') return override;
+  const xdg = env['XDG_CONFIG_HOME'];
+  if (process.platform === 'win32') {
+    const base =
+      (xdg !== undefined && xdg !== '' ? xdg : undefined) ??
+      (env['APPDATA'] !== undefined && env['APPDATA'] !== '' ? env['APPDATA'] : undefined) ??
+      (env['USERPROFILE'] !== undefined && env['USERPROFILE'] !== '' ? `${env['USERPROFILE']}\\AppData\\Roaming` : undefined) ??
+      (env['HOME'] !== undefined && env['HOME'] !== '' ? `${env['HOME']}\\.config` : os.tmpdir());
+    return `${WINDOWS_LOCAL_PIPE_PREFIX}${base}\\herdr\\herdr.sock`;
+  }
+  const base = xdg !== undefined && xdg !== '' ? xdg : path.join(os.homedir(), '.config');
+  return path.join(base, 'herdr', 'herdr.sock');
+}
+
 /** Probe local Herdr IPC socket reachability (`info` when absent, since Herdr is optional). */
 async function checkHerdrIpc(env: NodeJS.ProcessEnv): Promise<NodeDoctorCheck> {
-  let endpoint: string;
-  try {
-    endpoint = resolveHerdrIpcEndpoint({}, { getEnv: (k: string) => env[k] });
-  } catch (error) {
-    return {
-      id: 'herdr_ipc',
-      status: 'info',
-      message: `unable to resolve Herdr IPC endpoint: ${error instanceof Error ? error.message : String(error)}`,
-    };
-  }
+  const endpoint = defaultLocalHerdrEndpoint(env);
   return await new Promise<NodeDoctorCheck>((resolve) => {
     let settled = false;
     const socket = net.connect(endpoint);
