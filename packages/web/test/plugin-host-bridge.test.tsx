@@ -23,13 +23,11 @@ import {
   CopyButton,
   PluginClientContext,
   PluginClientHostContext,
-  PluginClientHostHandlesContext,
   PluginSlot,
   SearchBox,
   Select,
   createPluginClientContext,
   useConversation,
-  useConversationBackground,
   useConversations,
   useHostModels,
   usePluginConfig,
@@ -38,8 +36,6 @@ import {
   usePluginLocale,
   usePluginTranslator,
   usePlugins,
-  useScreenLocation,
-  type PluginClientHostHandles,
   type PluginClientHostPort,
 } from '@helmx/plugin-client'
 import type {
@@ -50,7 +46,6 @@ import type {
   HostModelsSlice,
   PluginSummary,
   PluginUiContribution,
-  ScreenLocationSnapshot,
 } from '@helmx/protocol'
 import { applyTransientLiveFrame } from '../src/lib/live-state.js'
 import { useConversationBackgroundSlice } from '../src/lib/store-context.js'
@@ -154,7 +149,6 @@ describe('plugin-host-bridge', () => {
     })
 
     const observedPorts: PluginClientHostPort[] = []
-    const observedHandles: PluginClientHostHandles[] = []
     const counts = {
       contextHolder: 0,
       conv1: 0,
@@ -165,9 +159,7 @@ describe('plugin-host-bridge', () => {
       docP1: 0,
       locale: 0,
       pluginCtx: 0,
-      background: 0,
       models: 0,
-      screenLoc: 0,
       slot: 0,
       controls: 0,
     }
@@ -216,19 +208,9 @@ describe('plugin-host-bridge', () => {
       lastTheme = usePluginContext().theme
       return null
     })
-    const BackgroundProbe = React.memo(function BackgroundProbe(): React.ReactNode {
-      counts.background += 1
-      void useConversationBackground()
-      return null
-    })
     const ModelsProbe = React.memo(function ModelsProbe(): React.ReactNode {
       counts.models += 1
       void useHostModels()
-      return null
-    })
-    const ScreenLocProbe = React.memo(function ScreenLocProbe(): React.ReactNode {
-      counts.screenLoc += 1
-      void useScreenLocation()
       return null
     })
     const SlotProbe = React.memo(function SlotProbe(): React.ReactNode {
@@ -249,10 +231,8 @@ describe('plugin-host-bridge', () => {
     const ContextHolder = React.memo(function ContextHolder(): React.ReactNode {
       counts.contextHolder += 1
       const port = React.useContext(PluginClientHostContext)
-      const handles = React.useContext(PluginClientHostHandlesContext)
-      assert.ok(port !== null && handles !== null)
+      assert.ok(port !== null)
       observedPorts.push(port)
-      observedHandles.push(handles)
       const ctx = React.useMemo(() => createPluginClientContext(port, 'p1', 1), [port])
       return e(
         PluginClientContext.Provider,
@@ -265,9 +245,7 @@ describe('plugin-host-bridge', () => {
         e(DocP1Probe),
         e(LocaleProbe),
         e(PluginCtxProbe),
-        e(BackgroundProbe),
         e(ModelsProbe),
-        e(ScreenLocProbe),
         e(SlotProbe),
         e(ControlsProbe),
       )
@@ -275,7 +253,6 @@ describe('plugin-host-bridge', () => {
 
     const { host } = mountTree(e(HostStoreProviders, { value: store }, e(ContextHolder)))
     assert.equal(observedPorts.length, 1)
-    assert.ok(observedPorts[0] === observedHandles[0], 'host port and host handles share the exact same stable handle')
     assert.equal(host.querySelector('button')?.getAttribute('title'), 'Copy')
     const baseline = { ...counts }
 
@@ -300,13 +277,11 @@ describe('plugin-host-bridge', () => {
     assert.equal(counts.docP1, baseline.docP1, 'usePluginDoc is isolated from live frames')
     assert.equal(counts.locale, baseline.locale, 'usePluginLocale / usePluginTranslator are isolated from live frames')
     assert.equal(counts.pluginCtx, baseline.pluginCtx, 'usePluginContext is isolated from live frames')
-    assert.equal(counts.background, baseline.background, 'useConversationBackground is isolated from live frames')
     assert.equal(counts.models, baseline.models, 'useHostModels is isolated from live frames')
-    assert.equal(counts.screenLoc, baseline.screenLoc, 'useScreenLocation is isolated from live frames')
     assert.equal(counts.slot, baseline.slot, 'PluginSlot is isolated from live frames')
     assert.equal(counts.controls, baseline.controls, 'SDK UI controls (CopyButton/SearchBox/Select) do not re-render on live frames')
 
-    // 2. Unrelated plugin doc update does not wake p1/state subscriber or background subscriber.
+    // 2. Unrelated plugin doc update does not wake p1/state subscriber.
     act(() => {
       store.updateLive((prev) => ({
         ...prev,
@@ -314,7 +289,6 @@ describe('plugin-host-bridge', () => {
       }))
     })
     assert.equal(counts.docP1, baseline.docP1)
-    assert.equal(counts.background, baseline.background)
     assert.equal(counts.contextHolder, baseline.contextHolder)
 
     // 3. Pending ask update on conv #2 does not wake conv #1.
@@ -341,93 +315,6 @@ describe('plugin-host-bridge', () => {
     assert.equal(host.querySelector('button')?.getAttribute('title'), '复制', 'SDK CopyButton updates localized label in place')
     assert.equal(counts.controls, baseline.controls, 'outer ControlsProbe wrapper does not need to re-render when child SDK controls update locale')
     assert.equal(counts.docP1, baseline.docP1)
-  })
-
-  test('useScreenLocation wired through real PluginClientHostBridge: tracks screen/split/params with semantic dedup', { timeout: 60_000 }, () => {
-    const store = makeTestStore({
-      primaryTarget: { kind: 'conversation', conversationId: 1 },
-      splitTarget: null,
-    })
-
-    let renders = 0
-    const seen: Array<ScreenLocationSnapshot | undefined> = []
-    const Probe = React.memo(function ScreenLocationProbe(): React.ReactNode {
-      renders += 1
-      seen.push(useScreenLocation())
-      return null
-    })
-
-    mountTree(e(HostStoreProviders, { value: store }, e(Probe)))
-    assert.equal(renders, 1)
-    const initial = seen.at(-1)
-    assert.ok(initial !== undefined, 'wired host reports structured snapshot {}, never undefined')
-    assert.equal(initial.screen, undefined)
-    assert.equal(initial.split, undefined)
-
-    // Non-screen navigations, workbench toggle, modal open, focus change, and live frames must NOT re-render.
-    act(() => {
-      store.openTarget({ kind: 'conversation', conversationId: 2 })
-      store.openTarget({ kind: 'profiles' })
-      store.setWorkbenchOpen(true)
-      store.setActiveModal({ kind: 'command-palette' })
-      store.updateLive((prev) =>
-        applyTransientLiveFrame(prev, {
-          live: { conversationId: 1, text: 'delta', tools: [], updatedAt: 10 },
-        }),
-      )
-    })
-    assert.equal(renders, 1, 'non-screen navigation and UI churn keep screenLocation snapshot referentially identical')
-
-    // Open a plugin screen in primary pane.
-    act(() => {
-      store.openTarget({ kind: 'screen', pluginId: 'builtin:apps', screenId: 'catalog', params: { tab: 'all' } })
-    })
-    assert.equal(renders, 2)
-    assert.deepEqual(seen.at(-1), {
-      screen: { pluginId: 'builtin:apps', screenId: 'catalog', params: { tab: 'all' } },
-    })
-
-    // Update primary screen params via store.setScreenParams.
-    act(() => {
-      store.setScreenParams({ tab: 'pinned', q: 'sync' })
-    })
-    assert.equal(renders, 3)
-    assert.deepEqual(seen.at(-1)?.screen, {
-      pluginId: 'builtin:apps',
-      screenId: 'catalog',
-      params: { tab: 'pinned', q: 'sync' },
-    })
-
-    // Open a plugin screen in split pane and mutate its ssp.* params.
-    act(() => {
-      store.openTarget({ kind: 'screen', pluginId: 'builtin:swarm', screenId: 'board' }, { split: true })
-    })
-    assert.equal(renders, 4)
-    assert.deepEqual(seen.at(-1)?.split, {
-      pluginId: 'builtin:swarm',
-      screenId: 'board',
-      params: {},
-    })
-
-    act(() => {
-      store.setScreenParams({ grp: 'g1' }, { split: true })
-    })
-    assert.equal(renders, 5)
-    assert.deepEqual(seen.at(-1)?.split, {
-      pluginId: 'builtin:swarm',
-      screenId: 'board',
-      params: { grp: 'g1' },
-    })
-
-    // Toggling focused panel between primary and split does not change screenLocation.
-    act(() => store.setFocusedPanel('split'))
-    assert.equal(renders, 5, 'focus panel toggle does not re-render useScreenLocation')
-
-    // Closing split removes split pane cleanly.
-    act(() => store.closeSplit())
-    assert.equal(renders, 6)
-    assert.equal(seen.at(-1)?.split, undefined)
-    assert.equal(seen.at(-1)?.screen?.screenId, 'catalog')
   })
 
   test('three-state loaded/auth/error honesty across real bridge: useHostModels, usePluginDoc, and useConversation', { timeout: 60_000 }, () => {
@@ -518,7 +405,7 @@ describe('plugin-host-bridge', () => {
     assert.ok(readModels() === undefined, 'logout returns hostModels to unknown (undefined)')
   })
 
-  test('centralized conversationBackground slice: shared by host and SDK, honest unknown gate, immune to unrelated churn', { timeout: 60_000 }, () => {
+  test('centralized conversationBackground slice: host honest unknown gate and immune to unrelated churn', { timeout: 60_000 }, () => {
     const panelContribution: PluginUiContribution = {
       pluginId: 'builtin:workflow',
       surface: 'workbench.panel',
@@ -536,33 +423,22 @@ describe('plugin-host-bridge', () => {
       pluginDocs: {},
     })
 
-    let sdkRenders = 0
     let hostRenders = 0
-    let sdkSnap: ReturnType<typeof useConversationBackground> | undefined
     let hostSlice: ReturnType<typeof useConversationBackgroundSlice> | undefined
 
-    const SdkBgProbe = React.memo(function SdkBgProbe(): React.ReactNode {
-      sdkRenders += 1
-      sdkSnap = useConversationBackground()
-      return null
-    })
     const HostBgProbe = React.memo(function HostBgProbe(): React.ReactNode {
       hostRenders += 1
       hostSlice = useConversationBackgroundSlice()
       return null
     })
 
-    mountTree(e(HostStoreProviders, { value: store }, e(SdkBgProbe), e(HostBgProbe)))
+    mountTree(e(HostStoreProviders, { value: store }, e(HostBgProbe)))
 
-    // Badge doc not yet loaded -> honest unknown=true, identical snapshot ref shared by host and SDK.
-    assert.equal(sdkRenders, 1)
     assert.equal(hostRenders, 1)
-    assert.equal(sdkSnap?.unknown, true, 'missing badge doc keeps background honestly unknown')
-    assert.ok(sdkSnap === hostSlice?.snapshot, 'SDK and host consume the exact same centralized snapshot object')
+    assert.equal(hostSlice?.snapshot.unknown, true, 'missing badge doc keeps background honestly unknown')
     assert.equal(hostSlice?.badgeDocs.length, 1)
     assert.equal(hostSlice?.pendingBadgeDocs.has('builtin:workflow/run-badges'), true)
 
-    // Unrelated plugin doc updates, live frames, and non-status conversation title edits must NOT re-render either consumer.
     act(() => {
       store.updateLive((prev) => ({
         ...prev,
@@ -571,10 +447,8 @@ describe('plugin-host-bridge', () => {
         conversations: [makeConv(1, { status: 'idle', title: 'Renamed Conv 1' })],
       }))
     })
-    assert.equal(sdkRenders, 1, 'unrelated docs, live frames, and title changes trigger zero background re-renders')
-    assert.equal(hostRenders, 1)
+    assert.equal(hostRenders, 1, 'unrelated docs, live frames, and title changes trigger zero background re-renders')
 
-    // Delivering the badge doc flips unknown -> false and exposes the accent entry.
     act(() => {
       store.updateLive((prev) => ({
         ...prev,
@@ -586,13 +460,10 @@ describe('plugin-host-bridge', () => {
         },
       }))
     })
-    assert.equal(sdkRenders, 2)
     assert.equal(hostRenders, 2)
-    assert.equal(sdkSnap?.unknown, false)
-    assert.deepEqual(sdkSnap?.byConversation.get(1), { active: true, summary: '2 Running' })
-    assert.ok(sdkSnap === hostSlice?.snapshot)
+    assert.equal(hostSlice?.snapshot.unknown, false)
+    assert.deepEqual(hostSlice?.snapshot.byConversation.get(1), { active: true, summary: '2 Running' })
 
-    // Context compaction localizes on locale switch while preserving badgeDocs & pendingBadgeDocs references.
     const badgeDocsBeforeLocale = hostSlice?.badgeDocs
     const pendingBeforeLocale = hostSlice?.pendingBadgeDocs
     act(() => {
@@ -606,9 +477,9 @@ describe('plugin-host-bridge', () => {
         ],
       }))
     })
-    assert.equal(sdkSnap?.byConversation.get(1)?.summary, '2 Running · Compacting context')
+    assert.equal(hostSlice?.snapshot.byConversation.get(1)?.summary, '2 Running · Compacting context')
     act(() => store.setLocale('zh-CN'))
-    assert.equal(sdkSnap?.byConversation.get(1)?.summary, '2 Running · 上下文精简中')
+    assert.equal(hostSlice?.snapshot.byConversation.get(1)?.summary, '2 Running · 上下文精简中')
     assert.ok(hostSlice?.badgeDocs === badgeDocsBeforeLocale, 'locale switch keeps badgeDocs reference stable')
     assert.ok(hostSlice?.pendingBadgeDocs === pendingBeforeLocale, 'locale switch keeps pendingBadgeDocs reference stable')
   })

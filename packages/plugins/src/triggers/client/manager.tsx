@@ -16,6 +16,7 @@ import './styles.css'
 import type { ReactNode } from 'react'
 import type { ScreenProps } from '@helmx/protocol'
 import {
+  ConfirmDialog,
   DataTable,
   DetailDrawer,
   HelmxIcon,
@@ -38,6 +39,7 @@ import {
   type WebhookRow,
 } from './models.ts'
 import {
+  TRIGGERS_CANCEL,
   TRIGGERS_CLOSE,
   TRIGGERS_COL_ACTIONS,
   TRIGGERS_COL_COMMAND,
@@ -49,6 +51,8 @@ import {
   TRIGGERS_COL_NEXT_RUN,
   TRIGGERS_COL_SCHEDULE,
   TRIGGERS_COMMAND_SECTION,
+  TRIGGERS_CONFIRM_DELETE_CRON_TITLE,
+  TRIGGERS_CONFIRM_DELETE_WEBHOOK_TITLE,
   TRIGGERS_CRON_DETAIL_SUBTITLE,
   TRIGGERS_CRON_LOADING,
   TRIGGERS_CRON_SECTION,
@@ -79,6 +83,7 @@ import {
   TRIGGERS_WEBHOOK_LOADING,
   TRIGGERS_WEBHOOK_SECTION,
   triggersActionFailed,
+  triggersConfirmDeleteBody,
 } from './copy.ts'
 
 function ActionError({ message }: { message: string }): ReactNode {
@@ -127,12 +132,14 @@ function CronTable({
   actions,
   selectedId,
   onSelect,
+  onRequestDelete,
 }: {
   jobs: CronJobRow[]
   loading: boolean
   actions: UsePluginActionResult
   selectedId?: string
   onSelect: (id: string) => void
+  onRequestDelete: (id: string) => void
 }): ReactNode {
   const t = usePluginTranslator()
   return (
@@ -200,7 +207,7 @@ function CronTable({
                     iconName="trash-2"
                     disabled={actions.pending}
                     danger
-                    onClick={() => void actions.run('cron_delete', { id: job.id }, { key: `delete:${job.id}` })}
+                    onClick={() => onRequestDelete(job.id)}
                   />
                 </div>
               </td>
@@ -219,12 +226,14 @@ function WebhookTable({
   actions,
   selectedId,
   onSelect,
+  onRequestDelete,
 }: {
   webhooks: WebhookRow[]
   loading: boolean
   actions: UsePluginActionResult
   selectedId?: string
   onSelect: (id: string) => void
+  onRequestDelete: (id: string) => void
 }): ReactNode {
   const t = usePluginTranslator()
   return (
@@ -276,7 +285,7 @@ function WebhookTable({
                     iconName="trash-2"
                     disabled={actions.pending}
                     danger
-                    onClick={() => void actions.run('webhook_delete', { id: hook.id }, { key: `webhook-delete:${hook.id}` })}
+                    onClick={() => onRequestDelete(hook.id)}
                   />
                 </div>
               </td>
@@ -294,12 +303,14 @@ function TriggerDetailDrawer({
   actions,
   inline,
   onClose,
+  onRequestDelete,
 }: {
   cronJob?: CronJobRow
   webhook?: WebhookRow
   actions: UsePluginActionResult
   inline?: boolean
   onClose: () => void
+  onRequestDelete: (target: TriggerDetailSelection) => void
 }): ReactNode {
   const locale = usePluginLocale()
   const t = usePluginTranslator()
@@ -336,7 +347,7 @@ function TriggerDetailDrawer({
               type="button"
               className="btn btn-sm btn-danger"
               disabled={actions.pending}
-              onClick={() => void actions.run('cron_delete', { id: cronJob.id }, { key: `delete:${cronJob.id}` })}
+              onClick={() => onRequestDelete({ kind: 'cron', id: cronJob.id })}
             >
               <HelmxIcon name="trash-2" size={12} />
               <span>{t(TRIGGERS_DELETE)}</span>
@@ -356,7 +367,7 @@ function TriggerDetailDrawer({
             type="button"
             className="btn btn-sm btn-danger"
             disabled={actions.pending}
-            onClick={() => void actions.run('webhook_delete', { id: webhook.id }, { key: `webhook-delete:${webhook.id}` })}
+            onClick={() => onRequestDelete({ kind: 'webhook', id: webhook.id })}
           >
             <HelmxIcon name="trash-2" size={12} />
             <span>{t(TRIGGERS_DELETE)}</span>
@@ -421,11 +432,23 @@ export function TriggersManagerScreen(
   const jobs = parseCronJobs(crons)
   const hooks = parseWebhooks(webhooks)
   const [selection, setSelection] = useState<TriggerDetailSelection | null>(null)
+  const [pendingDelete, setPendingDelete] = useState<TriggerDetailSelection | null>(null)
 
   const selectedCron =
     selection?.kind === 'cron' ? jobs.find((job) => job.id === selection.id) : undefined
   const selectedWebhook =
     selection?.kind === 'webhook' ? hooks.find((hook) => hook.id === selection.id) : undefined
+
+  const confirmDelete = (): void => {
+    const target = pendingDelete
+    if (target === null) return
+    setPendingDelete(null)
+    if (target.kind === 'cron') {
+      void actions.run('cron_delete', { id: target.id }, { key: `delete:${target.id}` })
+    } else {
+      void actions.run('webhook_delete', { id: target.id }, { key: `webhook-delete:${target.id}` })
+    }
+  }
 
   return (
     <Screen
@@ -458,6 +481,7 @@ export function TriggersManagerScreen(
           actions={actions}
           selectedId={selectedCron?.id}
           onSelect={(id) => setSelection({ kind: 'cron', id })}
+          onRequestDelete={(id) => setPendingDelete({ kind: 'cron', id })}
         />
       </ScreenSection>
 
@@ -475,6 +499,7 @@ export function TriggersManagerScreen(
           actions={actions}
           selectedId={selectedWebhook?.id}
           onSelect={(id) => setSelection({ kind: 'webhook', id })}
+          onRequestDelete={(id) => setPendingDelete({ kind: 'webhook', id })}
         />
       </ScreenSection>
 
@@ -487,8 +512,32 @@ export function TriggersManagerScreen(
           actions={actions}
           inline={props.inlineDrawer}
           onClose={() => setSelection(null)}
+          onRequestDelete={setPendingDelete}
         />
       )}
+
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingDelete(null)
+        }}
+        title={
+          pendingDelete?.kind === 'webhook'
+            ? t(TRIGGERS_CONFIRM_DELETE_WEBHOOK_TITLE)
+            : t(TRIGGERS_CONFIRM_DELETE_CRON_TITLE)
+        }
+        description={
+          pendingDelete !== null
+            ? triggersConfirmDeleteBody(pendingDelete.kind, pendingDelete.id, locale)
+            : ''
+        }
+        confirmText={t(TRIGGERS_DELETE)}
+        cancelText={t(TRIGGERS_CANCEL)}
+        danger
+        inline={props.inlineDrawer}
+        onConfirm={confirmDelete}
+        onCancel={() => setPendingDelete(null)}
+      />
     </Screen>
   )
 }

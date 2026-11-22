@@ -126,6 +126,8 @@ export const shellMessages = {
   // Agents group in the sidebar
   'shell.agents.groupTitle': { en: 'Agents', 'zh-CN': '智能体' },
   'shell.agents.newTopicUnder': { en: 'Start a new topic under {label}', 'zh-CN': '在 {label} 下开始新话题' },
+  'shell.agents.expandTopics': { en: 'Expand {label} topics', 'zh-CN': '展开 {label} 的话题列表' },
+  'shell.agents.collapseTopics': { en: 'Collapse {label} topics', 'zh-CN': '收起 {label} 的话题列表' },
   'shell.agents.showMore': { en: 'Show more ({count} more)', 'zh-CN': '展开更多 (剩余 {count} 条)' },
   'shell.agents.protectedTitle': {
     en: 'Protected conversations cannot be deleted',

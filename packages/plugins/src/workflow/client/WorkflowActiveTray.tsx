@@ -27,12 +27,13 @@
  *   prefers the current progress / approval content, expanded bar shows the
  *   concise task count instead of repeating task names.
  */
-import { useEffect, useId, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ComposerScopeProps } from '@helmx/protocol'
 import type { WorkflowRunSummary } from '../../contracts.js'
 import {
-  StatusLight,
+  DockTray,
+  DockTrayRow,
   formatDurationMs,
   resolveLocalizedText,
   useConversation,
@@ -121,7 +122,11 @@ function ActiveTrayLiveLine(props: {
   if (text === undefined || text.trim() === '') return null
   return (
     <span
-      className={props.inline === true ? 'workflow-active-tray-frontline' : 'workflow-active-tray-row-live'}
+      className={
+        props.inline === true
+          ? 'dock-tray-frontline workflow-active-tray-frontline'
+          : 'dock-tray-row-live workflow-active-tray-row-live'
+      }
       title={text}
     >
       {text}
@@ -167,50 +172,9 @@ function WorkflowActiveTrayRow(props: {
       : item.runId !== undefined
         ? trayRowOpenRunLabel(item.runId, locale)
         : item.title
-  const rowMainClass = `workflow-active-tray-row-main${rowActivatable ? ' workflow-active-tray-row-clickable' : ''}`
-  // 单行行体（与折叠横栏同构）：状态灯/标题/#id/进度/耗时与实况同行，
-  // 实况吃掉剩余宽度单行省略——行高恒定，实况长短变化不引起托盘/输入区跳动。
-  const rowMainContent = (
-    <>
-      <StatusLight
-        status={item.isBlocked ? 'blocked' : 'running'}
-        label={executionStatusLabel(item.isBlocked ? 'blocked' : 'working', locale)}
-      />
-      <span className="workflow-active-tray-row-title">{item.title}</span>
-      {item.conversationId !== undefined && !isFallbackConvTitle ? (
-        <span className="workflow-active-tray-row-id tabular-nums">{`#${item.conversationId}`}</span>
-      ) : null}
-      {item.progress !== undefined ? (
-        <span className="badge badge-neutral workflow-trace-badge tabular-nums">
-          {`${item.progress.done}/${item.progress.total}`}
-        </span>
-      ) : null}
-      {itemElapsed !== undefined ? (
-        <span className="workflow-active-tray-elapsed tabular-nums">{itemElapsed}</span>
-      ) : null}
-      <ActiveTrayLiveLine
-        conversationId={item.activityConversationId ?? item.conversationId}
-        runId={item.runId}
-        runs={props.runs}
-        fallback={item.doing}
-      />
-    </>
-  )
-  return (
-    <div className="workflow-active-tray-row">
-      {rowActivatable ? (
-        <button
-          type="button"
-          className={rowMainClass}
-          aria-label={`${item.title} — ${rowLabel}`}
-          onClick={openRow}
-        >
-          {rowMainContent}
-        </button>
-      ) : (
-        <div className={rowMainClass}>{rowMainContent}</div>
-      )}
-      <div className="workflow-active-tray-row-actions">
+  const rowActions =
+    (item.canDetach && item.runId !== undefined) || (item.canAbort && item.runId !== undefined) ? (
+      <>
         {item.canDetach && item.runId !== undefined ? (
           <button
             type="button"
@@ -235,8 +199,36 @@ function WorkflowActiveTrayRow(props: {
             <span>{resolveLocalizedText(ACTION_ABORT, locale)}</span>
           </button>
         ) : null}
-      </div>
-    </div>
+      </>
+    ) : undefined
+
+  return (
+    <DockTrayRow
+      classPrefix="workflow-active-tray"
+      status={item.isBlocked ? 'blocked' : 'running'}
+      statusLabel={executionStatusLabel(item.isBlocked ? 'blocked' : 'working', locale)}
+      title={item.title}
+      idText={item.conversationId !== undefined && !isFallbackConvTitle ? `#${item.conversationId}` : undefined}
+      badge={
+        item.progress !== undefined ? (
+          <span className="badge badge-neutral dock-tray-badge workflow-trace-badge tabular-nums">
+            {`${item.progress.done}/${item.progress.total}`}
+          </span>
+        ) : undefined
+      }
+      elapsed={itemElapsed}
+      live={
+        <ActiveTrayLiveLine
+          conversationId={item.activityConversationId ?? item.conversationId}
+          runId={item.runId}
+          runs={props.runs}
+          fallback={item.doing}
+        />
+      }
+      onOpen={rowActivatable ? openRow : undefined}
+      openAriaLabel={`${item.title} — ${rowLabel}`}
+      actions={rowActions}
+    />
   )
 }
 
@@ -252,7 +244,6 @@ export function WorkflowActiveTray(props: Partial<ComposerScopeProps>): ReactNod
   const conversations = useConversations()
   const [expanded, setExpanded] = useState(false)
   const [busyKey, setBusyKey] = useState<string | undefined>(undefined)
-  const listId = useId()
 
   useEffect(() => {
     setExpanded(false)
@@ -314,65 +305,50 @@ export function WorkflowActiveTray(props: Partial<ComposerScopeProps>): ReactNod
   // item); a container digest never overrides a real live target.
   const headlineItem =
     singleItem ?? summary.items.find((item) => item.activityConversationId !== undefined)
+  const trayElapsed =
+    nowMs !== undefined && summary.earliestStartedAt !== undefined && nowMs >= summary.earliestStartedAt
+      ? formatDurationMs(nowMs - summary.earliestStartedAt)
+      : undefined
+  const frontline =
+    summary.approvals.length > 0 ? (
+      <span className="dock-tray-frontline workflow-active-tray-frontline">{summary.approvals[0]!.text}</span>
+    ) : headlineItem !== undefined ? (
+      <ActiveTrayLiveLine
+        conversationId={headlineItem.activityConversationId ?? headlineItem.conversationId}
+        runId={headlineItem.runId}
+        runs={runs}
+        fallback={headlineItem.doing}
+        inline
+      />
+    ) : summary.frontline.length > 0 ? (
+      <span className="dock-tray-frontline workflow-active-tray-frontline">{summary.frontline[0]!.text}</span>
+    ) : undefined
 
   return (
-    <div
-      className={`workflow-active-tray${hasBlocked ? ' workflow-active-tray-warn' : ''}`}
-      role="region"
-      aria-label={resolveLocalizedText(TRAY_REGION_ARIA, locale)}
-    >
-      <div className="workflow-active-tray-bar">
+    <DockTray
+      classPrefix="workflow-active-tray"
+      warn={hasBlocked}
+      regionLabel={resolveLocalizedText(TRAY_REGION_ARIA, locale)}
+      expanded={expanded}
+      onToggle={() => setExpanded((v) => !v)}
+      toggleLabel={trayToggleLabel(expanded, countText, locale)}
+      toggleTitle={resolveLocalizedText(expanded ? TRAY_COLLAPSE : TRAY_EXPAND, locale)}
+      status={hasBlocked ? 'blocked' : 'running'}
+      statusLabel={countText}
+      badge={
+        singleProgress !== undefined ? (
+          <span className="badge badge-neutral dock-tray-badge workflow-trace-badge tabular-nums">
+            {`${singleProgress.done}/${singleProgress.total}`}
+          </span>
+        ) : undefined
+      }
+      count={summary.items.length > 1 || expanded ? countText : undefined}
+      frontline={frontline}
+      elapsed={trayElapsed}
+      barAction={
         <button
           type="button"
-          className="workflow-active-tray-bar-toggle"
-          aria-expanded={expanded}
-          aria-controls={listId}
-          aria-label={trayToggleLabel(expanded, countText, locale)}
-          title={resolveLocalizedText(expanded ? TRAY_COLLAPSE : TRAY_EXPAND, locale)}
-          onClick={() => setExpanded((v) => !v)}
-        >
-          <StatusLight status={hasBlocked ? 'blocked' : 'running'} label={countText} />
-          {singleProgress !== undefined ? (
-            <span className="badge badge-neutral workflow-trace-badge tabular-nums">
-              {`${singleProgress.done}/${singleProgress.total}`}
-            </span>
-          ) : null}
-          {summary.items.length > 1 || expanded ? (
-            <span className="workflow-active-tray-count">{countText}</span>
-          ) : null}
-          {/* Collapsed bar prefers the current progress / approval content;
-             expanded bar stays concise (count only, no repeated task names).
-             Multi-task headline: after approvals, real live content from the
-             first tray item's own subtree target (never a cross-row target),
-             then the frontline digest. */}
-          {expanded ? null : summary.approvals.length > 0 ? (
-            <span className="workflow-active-tray-frontline">{summary.approvals[0]!.text}</span>
-          ) : headlineItem !== undefined ? (
-            <ActiveTrayLiveLine
-              conversationId={headlineItem.activityConversationId ?? headlineItem.conversationId}
-              runId={headlineItem.runId}
-              runs={runs}
-              fallback={headlineItem.doing}
-              inline
-            />
-          ) : summary.frontline.length > 0 ? (
-            <span className="workflow-active-tray-frontline">{summary.frontline[0]!.text}</span>
-          ) : null}
-          <span className="workflow-active-tray-spacer" />
-          {nowMs !== undefined && summary.earliestStartedAt !== undefined && nowMs >= summary.earliestStartedAt ? (
-            <span className="workflow-active-tray-elapsed tabular-nums">
-              {formatDurationMs(nowMs - summary.earliestStartedAt)}
-            </span>
-          ) : null}
-          <Icon
-            name={expanded ? 'chevron-down' : 'chevron-up'}
-            size={11}
-            className="workflow-active-tray-chevron"
-          />
-        </button>
-        <button
-          type="button"
-          className="btn btn-xs workflow-active-tray-workbench"
+          className="btn btn-xs dock-tray-workbench workflow-active-tray-workbench"
           onClick={() => {
             const singleRunId = summary.items.length === 1 ? summary.items[0]?.runId : undefined
             if (singleRunId !== undefined) requestWorkbenchRunFocus(conversationId, singleRunId)
@@ -382,22 +358,19 @@ export function WorkflowActiveTray(props: Partial<ComposerScopeProps>): ReactNod
           <Icon name="git-branch" size={11} />
           <span>{resolveLocalizedText(TRAY_WORKBENCH, locale)}</span>
         </button>
-      </div>
-      {expanded ? (
-        <div id={listId} className="workflow-active-tray-list">
-          {summary.items.map((item) => (
-            <WorkflowActiveTrayRow
-              key={item.key}
-              item={item}
-              rootConversationId={conversationId}
-              runs={runs}
-              nowMs={nowMs}
-              busy={busyKey !== undefined}
-              onAction={runAction}
-            />
-          ))}
-        </div>
-      ) : null}
-    </div>
+      }
+    >
+      {summary.items.map((item) => (
+        <WorkflowActiveTrayRow
+          key={item.key}
+          item={item}
+          rootConversationId={conversationId}
+          runs={runs}
+          nowMs={nowMs}
+          busy={busyKey !== undefined}
+          onAction={runAction}
+        />
+      ))}
+    </DockTray>
   )
 }

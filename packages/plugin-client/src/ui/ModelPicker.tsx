@@ -1,8 +1,8 @@
-import { useContext, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { MODEL_TIER_PREFIX } from '@helmx/protocol/browser'
 import { HelmxIcon } from '../icons.js'
 import { Popover, PopoverContent, PopoverPortal, PopoverTrigger } from './Popover.js'
-import { PluginClientHostHandlesContext } from '../host-port.js'
+import { usePluginClientHost } from '../host-port.js'
 import { useHostModels } from '../conversation-hooks.js'
 import {
   DEFAULT_MODEL_PICKER_COPY,
@@ -70,6 +70,8 @@ export interface ModelPickerControlProps {
   onApply: (model: string, thinkingLevel: string | null) => void | Promise<void>
   onResetDefault: () => void | Promise<void>
   onCatalogRefreshed?: () => void | Promise<void>
+  /** Optional callback to open Models & credentials when the catalog has zero usable models. */
+  onOpenModelsCenter?: () => void
 }
 
 export function ModelPickerControl({
@@ -93,12 +95,13 @@ export function ModelPickerControl({
   onApply,
   onResetDefault,
   onCatalogRefreshed,
+  onOpenModelsCenter,
 }: ModelPickerControlProps) {
-  // Catalog slice via the stable-handle context: undefined = capability not
+  // Catalog slice via the stable host port: undefined = capability not
   // injected or first load in flight (explicit unknown state, never a
   // fabricated empty catalog); models: [] = loaded and genuinely empty.
   const catalog = useHostModels()
-  const handles = useContext(PluginClientHostHandlesContext)
+  const host = usePluginClientHost()
   const copy: ModelPickerControlCopy = { ...DEFAULT_MODEL_PICKER_COPY, ...copyOverride }
   const models = catalog?.models ?? []
   const catalogUnknown = catalog === undefined
@@ -171,7 +174,7 @@ export function ModelPickerControl({
   }
 
   const refreshCatalog = async (): Promise<void> => {
-    const refreshModels = handles?.refreshModels
+    const refreshModels = host.refreshModels
     if (refreshModels === undefined) return
     setRefreshing(true)
     try {
@@ -215,10 +218,9 @@ export function ModelPickerControl({
   const effectiveLevel = resolveEffectiveThinkingLevel(currentLevels, activeThinkingLevel)
   const showLevel = supportsThinking && effectiveLevel !== '' && effectiveLevel !== 'off'
   const allUnavailable =
-    models.length > 0 &&
-    models.every((model) => !model.available || model.disabled === true) &&
-    filteredTiers.length === 0
-  const canRefresh = handles?.refreshModels !== undefined
+    (models.length === 0 || models.every((model) => !model.available || model.disabled === true)) &&
+    rawTiers.every((tier) => !tier.available || tier.disabled === true)
+  const canRefresh = host.refreshModels !== undefined
 
   return (
     <span className="composer-picker-root" ref={rootRef}>
@@ -429,7 +431,21 @@ export function ModelPickerControl({
               {catalogUnknown ? (
                 <div className="popover-item composer-model-empty">{copy.catalogUnavailable}</div>
               ) : allUnavailable ? (
-                <div className="popover-item composer-model-empty">{copy.emptyCatalog}</div>
+                <div className="popover-item composer-model-empty">
+                  <span>{copy.emptyCatalog}</span>
+                  {onOpenModelsCenter !== undefined ? (
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-xs"
+                      onClick={() => {
+                        setOpen(false)
+                        onOpenModelsCenter()
+                      }}
+                    >
+                      {copy.openModelsCenter}
+                    </button>
+                  ) : null}
+                </div>
               ) : navItems.length === 0 ? (
                 <div className="popover-item composer-model-empty">{copy.noMatches}</div>
               ) : null}

@@ -194,6 +194,22 @@ export const TIERS_TEMPLATE_DELETE: LocalizedText = {
   'zh-CN': '删除',
 }
 
+export const TIERS_CANCEL: LocalizedText = {
+  en: 'Cancel',
+  'zh-CN': '取消',
+}
+
+export const TIERS_TEMPLATE_DELETE_CONFIRM_TITLE: LocalizedText = {
+  en: 'Delete preset template',
+  'zh-CN': '确认删除编制模板',
+}
+
+export function tiersTemplateDeleteConfirmBody(name: string, id: string, locale: HelmxLocale): string {
+  return locale === 'zh-CN'
+    ? `确定删除编制模板「${name}」（${id}）吗？此操作无法撤销。`
+    : `Delete preset template "${name}" (${id})? This action cannot be undone.`
+}
+
 export const TIERS_COL_TEMPLATE: LocalizedText = {
   en: 'Template',
   'zh-CN': '模板',

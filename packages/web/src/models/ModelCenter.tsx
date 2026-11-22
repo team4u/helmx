@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import type { ModelProviderSummary } from '@helmx/protocol/browser'
+import type { ModelProviderSummary, ProviderConfig } from '@helmx/protocol/browser'
 import { assetsApi } from '../lib/api.js'
 import { HelmxIcon, SearchBox, Tabs, TabsContent, TabsList, TabsTrigger } from '@helmx/plugin-client'
 import {
@@ -14,17 +14,17 @@ import type { ModelsCenterTab } from '../lib/types.js'
 import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
 import { GlobalDefaultsPanel, type DefaultModelInfo } from './GlobalDefaultsPanel.js'
 import { ModelCard } from './ModelCard.js'
-import { ModelDetailDrawer } from './ModelDetailDrawer.js'
+import { ModelDetailDrawer, type CustomGatewayCreateInput, type ProviderSavePayload } from './ModelDetailDrawer.js'
 import {
   buildDefaultProviders,
   buildMergedProviders,
   buildProviderCategoryCounts,
   buildProviderFilterTabs,
   filterProviders,
+  isProviderFilterEligible,
   sortProvidersConfiguredFirst,
   type ProviderFilterTab,
   type ProviderItem,
-  type ProviderModelItem,
 } from './model-center-model.js'
 
 export interface ModelCenterProps {
@@ -34,7 +34,7 @@ export interface ModelCenterProps {
   providers?: ProviderItem[]
   onSaveProvider?: (
     providerId: string,
-    data: { apiKey?: string; baseUrl?: string; models?: ProviderModelItem[] },
+    data: ProviderSavePayload,
   ) => Promise<void> | void
   onTestConnection?: (
     providerId: string,
@@ -76,6 +76,7 @@ export function ModelCenter({
   const [catalog, setCatalog] = useState<ModelProviderSummary[]>([])
   const [defaultModelInfo, setDefaultModelInfo] = useState<DefaultModelInfo | null>(null)
   const [refreshingCatalog, setRefreshingCatalog] = useState(false)
+  const [creatingCustom, setCreatingCustom] = useState(false)
 
   // On mount, fetch the full backend provider catalog and the global default
   // model config (generation guard: stale responses never overwrite on deps change).
@@ -139,13 +140,22 @@ export function ModelCenter({
     return providers.find((p) => p.id === selectedProviderId) ?? null
   }, [providers, selectedProviderId])
 
-  const isDrawerOpen = Boolean(selectedProviderId && selectedProvider)
+  const isDrawerOpen = creatingCustom || Boolean(selectedProviderId && selectedProvider)
 
   const handleSelectProvider = (providerId: string) => {
+    setCreatingCustom(false)
     openTarget({ kind: 'models', providerId }, isSplit ? { split: true } : undefined)
   }
 
+  const handleOpenCreateCustom = () => {
+    setCreatingCustom(true)
+    if (centerTab !== 'providers' || selectedProviderId !== undefined) {
+      openTarget({ kind: 'models' }, isSplit ? { split: true } : undefined)
+    }
+  }
+
   const handleCloseDrawer = () => {
+    setCreatingCustom(false)
     openTarget({ kind: 'models' }, isSplit ? { split: true } : undefined)
   }
 
@@ -153,6 +163,7 @@ export function ModelCenter({
   // providerId (the drawer never coexists with it).
   const handleTabChange = (tab: string) => {
     if (tab === centerTab) return
+    setCreatingCustom(false)
     if (tab === 'defaults') {
       openTarget({ kind: 'models', tab: 'defaults' }, isSplit ? { split: true } : undefined)
     } else {
@@ -198,7 +209,7 @@ export function ModelCenter({
   // annotate them, so writing would be meaningless).
   const handleSave = async (
     providerId: string,
-    data: { apiKey?: string; baseUrl?: string; models?: ProviderModelItem[] },
+    data: ProviderSavePayload,
   ) => {
     if (onSaveProvider) {
       await onSaveProvider(providerId, data)
@@ -206,28 +217,30 @@ export function ModelCenter({
     }
 
     const provider = providers.find((p) => p.id === providerId)
-    const filterEligible = Boolean(provider && (provider.dynamic || provider.custom || provider.pluginId || provider.baseUrl))
+    const filterEligible = isProviderFilterEligible(provider, models)
 
     try {
       if (data.apiKey) {
         await assetsApi.setCredential(providerId, data.apiKey)
       }
-      // Custom gateway (providers.json) endpoint change: under full-replace
-      // semantics only that entry's baseUrl changes; other gateways and fields
-      // stay untouched. Plugin gateway endpoints (e.g. magpie) are owned by
-      // the plugin configuration, never written here — and never pretend to
-      // have been saved.
+      // Custom gateway (providers.json) edit: full-replace updates only this
+      // entry's baseUrl / protocol / label / models; other gateways stay intact.
       if (provider?.custom === true && data.baseUrl !== undefined && data.baseUrl !== '') {
         const gateways = storeProviders ?? []
         const gateway = gateways.find((g) => g.id === providerId)
         if (gateway === undefined) {
           throw new Error(`Custom gateway ${providerId} not found in providers.json; cannot update the endpoint`)
         }
-        if (data.baseUrl !== gateway.baseUrl) {
-          await assetsApi.saveProviders(
-            gateways.map((g) => (g.id === providerId ? { ...g, baseUrl: data.baseUrl! } : g)),
-          )
+        const nextGateway: ProviderConfig = {
+          ...gateway,
+          baseUrl: data.baseUrl,
+          ...(data.protocol !== undefined ? { protocol: data.protocol } : {}),
+          ...(data.label !== undefined ? { label: data.label || undefined } : {}),
+          ...(data.customModelIds !== undefined ? { models: data.customModelIds } : {}),
         }
+        await assetsApi.saveProviders(
+          gateways.map((g) => (g.id === providerId ? nextGateway : g)),
+        )
       }
       if (data.models && filterEligible) {
         // Full replacement: the currently unchecked model ids are the
@@ -244,6 +257,69 @@ export function ModelCenter({
       if (refreshAssets) {
         await refreshAssets()
       }
+    } catch (err) {
+      pushNotice?.({
+        type: 'notification',
+        level: 'error',
+        title: t('models.notice.saveFailed'),
+        body: err instanceof Error ? err.message : String(err),
+      })
+      throw err
+    }
+  }
+
+  const handleCreateCustomGateway = async (input: CustomGatewayCreateInput) => {
+    const gateways = storeProviders ?? []
+    const nextConfig: ProviderConfig = {
+      id: input.id,
+      protocol: input.protocol,
+      baseUrl: input.baseUrl,
+      models: input.models,
+      ...(input.label ? { label: input.label } : {}),
+      enabled: true,
+    }
+    try {
+      await assetsApi.saveProviders([...gateways, nextConfig])
+      if (input.apiKey) {
+        await assetsApi.setCredential(input.id, input.apiKey)
+      }
+      if (refreshAssets) {
+        await refreshAssets()
+      }
+      pushNotice?.({
+        type: 'notification',
+        level: 'info',
+        title: t('models.notice.customCreated'),
+        body: t('models.notice.customCreatedBody', { name: input.label || input.id, id: input.id }),
+      })
+      setCreatingCustom(false)
+      openTarget({ kind: 'models', providerId: input.id }, isSplit ? { split: true } : undefined)
+    } catch (err) {
+      pushNotice?.({
+        type: 'notification',
+        level: 'error',
+        title: t('models.notice.saveFailed'),
+        body: err instanceof Error ? err.message : String(err),
+      })
+      throw err
+    }
+  }
+
+  const handleDeleteCustomGateway = async (providerId: string) => {
+    const gateways = storeProviders ?? []
+    const target = providers.find((p) => p.id === providerId)
+    try {
+      await assetsApi.saveProviders(gateways.filter((g) => g.id !== providerId))
+      if (refreshAssets) {
+        await refreshAssets()
+      }
+      pushNotice?.({
+        type: 'notification',
+        level: 'info',
+        title: t('models.notice.customDeleted'),
+        body: t('models.notice.customDeletedBody', { name: target?.name || providerId }),
+      })
+      handleCloseDrawer()
     } catch (err) {
       pushNotice?.({
         type: 'notification',
@@ -284,6 +360,15 @@ export function ModelCenter({
         </div>
 
         <div className="primary-center-topbar-actions pane-actions">
+          <button
+            type="button"
+            className="btn btn-sm btn-primary"
+            onClick={handleOpenCreateCustom}
+            title={t('models.addCustomGatewayTitle')}
+          >
+            <HelmxIcon name="plus" size={12} />
+            <span className="pane-action-label">{t('models.addCustomGateway')}</span>
+          </button>
           <button
             type="button"
             className="btn btn-sm"
@@ -437,11 +522,15 @@ export function ModelCenter({
 
       {/* Provider details and credentials drawer */}
       <ModelDetailDrawer
-        provider={selectedProvider}
+        provider={creatingCustom ? null : selectedProvider}
+        isNewCustom={creatingCustom}
+        existingProviderIds={providers.map((p) => p.id)}
         open={isDrawerOpen}
         onClose={handleCloseDrawer}
         inline={inlineDrawer}
         onSave={handleSave}
+        onCreateCustomGateway={handleCreateCustomGateway}
+        onDeleteCustomGateway={handleDeleteCustomGateway}
         onTestConnection={onTestConnection}
       />
     </div>

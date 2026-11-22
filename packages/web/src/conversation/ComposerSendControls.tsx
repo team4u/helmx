@@ -81,6 +81,15 @@ export function ComposerSendControls({
         <div className="composer-busy-mobile-actions">
           <button
             type="button"
+            className="btn btn-sm btn-danger btn-pill btn-icon-sm composer-abort-button"
+            onClick={() => void abortTurn()}
+            title={t('composer.sendControls.stopExecution')}
+            aria-label={t('composer.sendControls.stopExecution')}
+          >
+            <HelmxIcon name="square" size={12} />
+          </button>
+          <button
+            type="button"
             className="btn btn-sm btn-primary composer-mobile-steer-btn composer-steer-action"
             disabled={busyDisabled}
             onClick={() => void send('steer')}

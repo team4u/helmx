@@ -136,7 +136,7 @@
   --nav-row-bg: var(--nav-list-hover-bg);
 }
 
-.sidebar-context .agent-standing-group .nav-item:not(.nav-item-active):not(.nav-item-split):has([aria-expanded="true"]) {
+.sidebar-context .agent-standing-group .nav-item:not(.nav-item-active):not(.nav-item-split):has(.nav-item-row-actions [aria-expanded="true"]) {
   --nav-row-bg: var(--nav-list-hover-bg);
   color: var(--fg);
 }
@@ -308,6 +308,26 @@
 
 .agent-standing-row .nav-status-slot {
   width: 14px;
+}
+
+.agent-standing-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  margin-left: -2px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.agent-standing-toggle:hover {
+  background: var(--bg-hover);
 }
 
 .agent-standing-chevron {

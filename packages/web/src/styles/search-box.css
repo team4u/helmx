@@ -13,8 +13,6 @@
 .search-box > .input,
 .primary-search-box input,
 .primary-search-box .input,
-.plugin-search-box input,
-.plugin-search-box .input,
 .sidebar-search-input {
   border: none !important;
   background: transparent !important;
@@ -29,8 +27,6 @@
 .search-box > .input:focus,
 .primary-search-box input:focus,
 .primary-search-box .input:focus,
-.plugin-search-box input:focus,
-.plugin-search-box .input:focus,
 .sidebar-search-input:focus {
   border-color: transparent !important;
   background: transparent !important;

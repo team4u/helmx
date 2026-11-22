@@ -41,7 +41,7 @@ const {
 const { usePluginAction } = await import('../src/ui/use-plugin-action.js')
 const { PluginClientContext } = await import('../src/plugin-context.js')
 const { EmptyState } = await import('../src/ui/EmptyState.js')
-const { ThinkingLevelControl } = await import('../src/ui/ThinkingLevelControl.js')
+const { DockTray, DockTrayRow } = await import('../src/ui/DockTray.js')
 const { ConfirmDialog } = await import('../src/ui/AlertDialog.js')
 
 const e = React.createElement
@@ -175,48 +175,84 @@ test('EmptyState SSR: host vocabulary with optional icon/title/hint and compact 
 })
 
 // ---------------------------------------------------------------------------
-// ThinkingLevelControl
+// DockTray / DockTrayRow
 // ---------------------------------------------------------------------------
 
-test('ThinkingLevelControl SSR: renders plain levels in the segmented control; empty list renders nothing', { timeout: 60_000 }, () => {
+test('DockTray SSR & DOM: renders shared .dock-tray vocabulary, optional classPrefix, and collapsible list', { timeout: 60_000 }, async () => {
   const html = renderToString(
-    e(ThinkingLevelControl, { value: 'high', levels: ['off', 'medium', 'high'], onPick: () => {} }),
+    e(
+      DockTray,
+      {
+        classPrefix: 'workflow-active-tray',
+        regionLabel: 'Active workflows',
+        expanded: true,
+        onToggle: () => {},
+        toggleLabel: 'Toggle workflows',
+        status: 'running',
+        statusLabel: 'Running',
+        count: '2 running',
+        barAction: e('button', { type: 'button', className: 'btn btn-ghost btn-xs' }, 'Open'),
+      },
+      e(DockTrayRow, {
+        classPrefix: 'workflow-active-tray',
+        status: 'running',
+        statusLabel: 'Running',
+        title: 'deploy',
+        idText: '#12',
+        onOpen: () => {},
+        openAriaLabel: 'Open deploy',
+      }),
+    ),
   )
-  assert.ok(html.includes('segmented-control'), 'builds on the shared segmented vocabulary')
-  assert.ok(html.includes('aria-label="Thinking level"'), 'default accessible name resolves from the shared locale')
-  for (const level of ['off', 'medium', 'high']) {
-    assert.ok(html.includes(`>${level}<`), `level ${level} renders as plain text`)
-  }
-  assert.ok(html.includes('data-state="active"'), 'the effective level is marked active')
+  assert.ok(html.includes('dock-tray workflow-active-tray'), 'carries shared and prefixed container classes')
+  assert.ok(html.includes('dock-tray-row workflow-active-tray-row'), 'row carries shared and prefixed classes')
+  assert.ok(html.includes('deploy') && html.includes('#12'))
+  assert.doesNotMatch(html, /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u, 'zero emoji')
 
-  const none = renderToString(
-    e(ThinkingLevelControl, { value: 'high', levels: [], onPick: () => {} }),
-  )
-  assert.ok(none === '', 'an empty level list renders nothing')
-})
-
-test('ThinkingLevelControl DOM: invalid value falls back to a supported level; picks go through the single channel', { timeout: 60_000 }, async () => {
   const container = document.createElement('div')
   document.body.appendChild(container)
   const root = createRoot(container)
-
-  const picks: string[] = []
-  await act(async () => {
-    root.render(
-      e(ThinkingLevelControl, { value: 'nonexistent', levels: ['off', 'high'], onPick: (level) => picks.push(level) }),
+  let clicked = 0
+  function Harness(): React.ReactNode {
+    const [expanded, setExpanded] = React.useState(true)
+    return e(
+      DockTray,
+      {
+        regionLabel: 'Active tasks',
+        expanded,
+        onToggle: () => setExpanded((v) => !v),
+        toggleLabel: 'Toggle tasks',
+        status: 'running',
+        statusLabel: 'Running',
+        count: '1 active',
+      },
+      e(DockTrayRow, {
+        status: 'waiting',
+        statusLabel: 'Waiting',
+        title: 'review',
+        onOpen: () => {
+          clicked += 1
+        },
+        openAriaLabel: 'Open review',
+      }),
     )
-  })
-
-  const triggers = [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')]
-  assert.ok(triggers.length === 2, `both levels render as tab triggers (got ${triggers.length})`)
-  const activeStates = triggers.map((trigger) => trigger.getAttribute('data-state'))
-  assert.ok(activeStates.filter((state) => state === 'active').length === 1, 'exactly one active fallback level')
-
+  }
   await act(async () => {
-    triggers[1]!.click()
+    root.render(e(Harness))
   })
-  assert.ok(picks.length === 1 && picks[0] === 'high', `one pick event for the clicked level (got ${JSON.stringify(picks)})`)
-
+  const toggleBtn = container.querySelector<HTMLButtonElement>('button.dock-tray-bar-toggle')
+  assert.ok(toggleBtn !== null && toggleBtn.getAttribute('aria-expanded') === 'true')
+  const rowBtn = container.querySelector<HTMLButtonElement>('button.dock-tray-row-main')
+  assert.ok(rowBtn !== null)
+  await act(async () => {
+    rowBtn.click()
+  })
+  assert.equal(clicked, 1)
+  await act(async () => {
+    toggleBtn.click()
+  })
+  assert.equal(toggleBtn.getAttribute('aria-expanded'), 'false')
+  assert.ok(container.querySelector('.dock-tray-list') === null, 'collapsing hides the tray list')
   await act(async () => {
     root.unmount()
   })

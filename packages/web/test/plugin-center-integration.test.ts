@@ -122,17 +122,17 @@ test('PluginCenter SSR：渲染搜索框、统计徽章与卡片网格', { timeo
   )
 
   // 1. 主容器类名
-  assert.match(html, /class="[^"]*plugin-center[^"]*"/)
+  assert.match(html, /class="[^"]*primary-center[^"]*"/)
 
   // 2. 搜索框与搜索图标
-  assert.match(html, /class="[^"]*plugin-search-box[^"]*"/)
+  assert.match(html, /class="[^"]*primary-search-box[^"]*"/)
   assert.match(html, /placeholder="[^"]*Search/)
 
   // 3. 统计指标显示（无故障态时不展示异常计数）
   assert.doesNotMatch(html, /个异常/)
 
   // 5. 响应式自适应网格与所有卡片
-  assert.match(html, /class="[^"]*plugin-center-grid[^"]*"/)
+  assert.match(html, /class="[^"]*primary-center-grid[^"]*"/)
   assert.match(html, /data-plugin-id="builtin:profile"/)
   assert.match(html, /data-plugin-id="builtin:workflow"/)
   assert.match(html, /data-plugin-id="builtin:herdr"/)
@@ -185,7 +185,7 @@ test('PluginCenter DOM 交互：搜索过滤实时联动', { timeout: 60_000 }, 
   assert.equal(cards.length, 5)
 
   // 搜索框输入 "workflow"
-  const searchInput = host.querySelector<HTMLInputElement>('.plugin-search-box input')
+  const searchInput = host.querySelector<HTMLInputElement>('.primary-search-box input')
   assert.ok(searchInput, '应存在搜索输入框')
 
   await act(async () => {
@@ -271,15 +271,15 @@ test('PluginCenter DOM 交互：抽屉根据 primaryTarget.pluginId 展开，关
   })
 
   // 验证抽屉处于展开态
-  const drawer = host.querySelector('.plugin-drawer-content')
+  const drawer = host.querySelector('.primary-drawer-content')
   assert.ok(drawer, 'PluginDetailDrawer 应展开')
 
   // 验证抽屉显示选中的插件名称
-  const title = drawer.querySelector('.plugin-drawer-title')
+  const title = drawer.querySelector('.primary-drawer-title')
   assert.match(title?.textContent ?? '', /工作流引擎/)
 
   // 点击抽屉关闭按钮
-  const closeBtn = drawer.querySelector('.plugin-drawer-close-btn')
+  const closeBtn = drawer.querySelector('button[aria-label="Close"]')
   assert.ok(closeBtn, '应存在抽屉关闭按钮')
 
   await act(async () => {

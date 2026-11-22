@@ -16,9 +16,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ProfileDetailSlotProps } from '@helmx/protocol'
-import { Switch, usePluginContext, usePluginLocale, usePluginTranslator } from '@helmx/plugin-client'
-
-import { Loader2, MoonStar, Save } from 'lucide-react'
+import { HelmxIcon, Switch, usePluginContext, usePluginLocale, usePluginTranslator } from '@helmx/plugin-client'
 import {
   MEMORY_DIRTY_HINT,
   MEMORY_DISABLED_HINT,
@@ -417,7 +415,7 @@ export function ProfileMemorySection(props: ProfileDetailSlotProps): ReactNode {
 
       {currentState === null ? (
         <div className="memory-section-load">
-          {currentBusy === 'load' && <Loader2 size={12} className="spin-slow" />}
+          {currentBusy === 'load' && <HelmxIcon name="loader" size={12} className="spin-slow" />}
           {currentError === null ? (
             <span>{currentBusy === 'load' ? t(MEMORY_LOADING) : t(MEMORY_NOT_LOADED)}</span>
           ) : (
@@ -464,7 +462,7 @@ export function ProfileMemorySection(props: ProfileDetailSlotProps): ReactNode {
               disabled={disabled || currentBusy !== null || dreamLocksContent || !dirty}
               onClick={() => void handleSave()}
             >
-              {currentBusy === 'save' ? <Loader2 size={13} className="spin-slow" /> : <Save size={13} />}
+              {currentBusy === 'save' ? <HelmxIcon name="loader" size={13} className="spin-slow" /> : <HelmxIcon name="save" size={13} />}
               <span>{currentBusy === 'save' ? t(MEMORY_SAVING) : t(MEMORY_SAVE)}</span>
             </button>
             {dirty && <span className="text-subtle text-xs">{t(MEMORY_DIRTY_HINT)}</span>}
@@ -522,7 +520,7 @@ function MemoryDreamBlock(props: MemoryDreamBlockProps): ReactNode {
     <div className="memory-dream-block">
       <div className="flex-row-between memory-section-header">
         <span className="text-subtle text-xs memory-dream-title">
-          <MoonStar size={12} />
+          <HelmxIcon name="moon-star" size={12} />
           <span>{t(MEMORY_DREAM_TITLE)}</span>
         </span>
         <div className="flex-row memory-dream-actions">
@@ -532,7 +530,7 @@ function MemoryDreamBlock(props: MemoryDreamBlockProps): ReactNode {
             disabled={disabled || busy !== null || statusLoading || props.memoryBusy}
             onClick={props.onRun}
           >
-            {busy === 'run' ? <Loader2 size={13} className="spin-slow" /> : <MoonStar size={13} />}
+            {busy === 'run' ? <HelmxIcon name="loader" size={13} className="spin-slow" /> : <HelmxIcon name="moon-star" size={13} />}
             <span>{busy === 'run' ? t(MEMORY_DREAM_RUNNING) : t(MEMORY_DREAM_RUN)}</span>
           </button>
           {autoConfig !== null && (

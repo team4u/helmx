@@ -413,7 +413,7 @@ test('ProfileDetailDrawer: edit-existing mode rendering and zero emoji', { timeo
   assert.match(html, /class="[^"]*primary-drawer-content[^"]*"/)
   assert.match(html, /代码审查助手/)
   assert.match(html, /code-reviewer/)
-  assert.match(html, /严格的代码规范与缺陷审查专家/)
+  assert.doesNotMatch(html, /id="profile-form-desc"/, 'non-persisted description textarea must not render in ProfileDetailDrawer')
   assert.match(html, /System prompt \(SYSTEM\.md\)/)
   // The memory section is injected by the builtin:memory slot (absent without plugin contributions; the host hardcodes nothing)
   assert.doesNotMatch(html, /长期记忆 \(MEMORY\.md\)/)
@@ -443,7 +443,7 @@ test('ProfileDetailDrawer: system profiles are protected from deletion', { timeo
   )
 
   assert.match(html, /巡检看门狗/)
-  assert.match(html, /系统/) // system lock pill (zh fixture name)
+  assert.match(html, /System/) // system lock pill
   assert.doesNotMatch(html, /Delete profile/, 'built-in system profiles must not show the delete button')
   assert.doesNotMatch(html, EMOJI_REGEX, 'system profile drawer output must contain no emoji')
 })

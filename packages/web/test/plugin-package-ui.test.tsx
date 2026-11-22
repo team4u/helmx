@@ -519,7 +519,7 @@ test('PluginDetailDrawer：卸载 409 在途任务展示清晰诊断，不关闭
     assert.match(callout.textContent ?? '', /plugin_has_live_tasks/)
     assert.match(callout.textContent ?? '', /live tasks/)
     assert.equal(removedCallbackCount, 0, '失败时不得触发关闭抽屉回调')
-    assert.ok(host.querySelector('.plugin-drawer-content'), '失败后抽屉保持展开')
+    assert.ok(host.querySelector('.primary-drawer-content'), '失败后抽屉保持展开')
   } finally {
     pluginsApi.getConfig = originalGetConfig
     pluginsApi.remove = originalRemove

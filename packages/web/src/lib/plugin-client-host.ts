@@ -70,10 +70,6 @@ export function createPluginClientHostPort(store: HelmxExternalStore): PluginCli
     getPluginsSnapshot: store.getPluginsSnapshot,
     subscribePlugins: (listener) => store.subscribeDomain('pluginsUi', listener),
 
-    // ---- Centralized conversation background in-flight activity ----
-    getConversationBackground: () => store.getConversationBackgroundSlice().snapshot,
-    subscribeConversationBackground: (listener) => store.subscribeDomain('conversationBackground', listener),
-
     // ---- Model catalog (three-state assetsLoaded gate) ----
     getModels: store.getHostModelsSlice,
     subscribeModels: (listener) => store.subscribeDomain('hostModels', listener),
@@ -82,10 +78,6 @@ export function createPluginClientHostPort(store: HelmxExternalStore): PluginCli
       await store.actions.refreshAssets()
       return { errors: res.errors ?? {} }
     },
-
-    // ---- Navigation screen location (URL hash single source of truth) ----
-    getScreenLocation: store.getScreenLocation,
-    subscribeScreenLocation: (listener) => store.subscribeDomain('screenLocation', listener),
 
     // ---- Plugin docs ----
     getPluginDocValue: store.getPluginDoc,

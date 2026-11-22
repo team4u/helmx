@@ -45,6 +45,26 @@ export const TRIGGERS_OFF: LocalizedText = { en: 'Off', 'zh-CN': '关闭' }
 /** Row actions. */
 export const TRIGGERS_TRIGGER_NOW: LocalizedText = { en: 'Trigger now', 'zh-CN': '立即触发' }
 export const TRIGGERS_DELETE: LocalizedText = { en: 'Delete', 'zh-CN': '删除' }
+export const TRIGGERS_CANCEL: LocalizedText = { en: 'Cancel', 'zh-CN': '取消' }
+export const TRIGGERS_CONFIRM_DELETE_CRON_TITLE: LocalizedText = { en: 'Delete cron job', 'zh-CN': '确认删除定时任务' }
+export const TRIGGERS_CONFIRM_DELETE_WEBHOOK_TITLE: LocalizedText = { en: 'Delete webhook endpoint', 'zh-CN': '确认删除 Webhook 端点' }
+export function triggersConfirmDeleteBody(kind: 'cron' | 'webhook', id: string, locale: HelmxLocale): string {
+  return kind === 'cron'
+    ? resolveLocalizedText(
+        {
+          en: `Delete cron job "${id}"? Scheduled runs will stop immediately and this cannot be undone.`,
+          'zh-CN': `确定删除定时任务「${id}」吗？删除后调度将立即停止且无法撤销。`,
+        },
+        locale,
+      )
+    : resolveLocalizedText(
+        {
+          en: `Delete webhook endpoint "${id}"? Incoming requests to this endpoint will be rejected and this cannot be undone.`,
+          'zh-CN': `确定删除 Webhook 端点「${id}」吗？删除后发往该端点的请求将被拒绝且无法撤销。`,
+        },
+        locale,
+      )
+}
 export const TRIGGERS_CLOSE: LocalizedText = { en: 'Close', 'zh-CN': '关闭' }
 
 /** Detail drawer chrome. */

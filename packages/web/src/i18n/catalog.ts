@@ -62,4 +62,17 @@ export function createWebTranslator(locale: HelmxLocale): WebMessageTranslator {
  */
 export const englishWebTranslator: WebMessageTranslator = createWebTranslator('en')
 
+/** No-op in Node/SSR/tests where all locale tables are already synchronously in memory. */
+export async function preloadWebLocale(_locale: HelmxLocale): Promise<void> {}
+
+/** No-op subscription matching catalog.browser.ts (Node/tests never swap chunks). */
+export function subscribeWebLocaleCatalog(_listener: () => void): () => void {
+  return () => {}
+}
+
+/** Monotonic revision matching catalog.browser.ts. */
+export function getWebLocaleCatalogRevision(): number {
+  return 0
+}
+
 export type { MessageEntry, MessageTable, MessageParams } from './messages.js'

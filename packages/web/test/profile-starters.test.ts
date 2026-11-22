@@ -283,7 +283,7 @@ test('ProfileDetailDrawer & validateStarterDraft: zh-CN locale renders localized
   )
   assert.match(zhEditHtml, /角色 ID/)
   assert.match(zhEditHtml, /角色名称/)
-  assert.match(zhEditHtml, /角色描述/)
+  assert.doesNotMatch(zhEditHtml, /id="profile-form-desc"/)
   assert.match(zhEditHtml, /默认模型/)
   assert.match(zhEditHtml, /思考档位/)
   assert.match(zhEditHtml, /默认节点/)

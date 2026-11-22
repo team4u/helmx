@@ -20,12 +20,13 @@
  *
  * Component & type exports only (Fast Refresh compliant).
  */
-import { useId, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ComposerScopeProps } from '@helmx/protocol'
 import {
+  DockTray,
+  DockTrayRow,
   HelmxIcon,
-  StatusLight,
   formatDurationMs,
   resolveLocalizedText,
   useConversation,
@@ -81,7 +82,10 @@ function SwarmTrayLiveLine(props: {
   const text = snippet ?? props.emptyFallback
   if (text === undefined || text.trim() === '') return null
   return (
-    <span className={props.inline === true ? 'sw-tray-frontline' : 'sw-tray-row-live'} title={text}>
+    <span
+      className={props.inline === true ? 'dock-tray-frontline sw-tray-frontline' : 'dock-tray-row-live sw-tray-row-live'}
+      title={text}
+    >
       {text}
     </span>
   )
@@ -96,26 +100,22 @@ function SwarmTrayRow(props: {
   const locale = usePluginLocale()
   const { item } = props
   return (
-    <div className="sw-tray-row">
-      <button
-        type="button"
-        className="sw-tray-row-main"
-        aria-label={`@${item.name} — ${trayRowOpenLabel(item.name, locale)}`}
-        onClick={() => ctx.openConversationDrawer(item.conversationId)}
-      >
-        <StatusLight
-          status={item.isBlocked ? 'blocked' : 'running'}
-          label={memberLiveStateLabel(item.isBlocked ? 'blocked' : 'working', locale)}
-        />
-        <span className="sw-tray-row-title">@{item.name}</span>
-        <span className="sw-tray-row-id tabular-nums">{`#${item.conversationId}`}</span>
+    <DockTrayRow
+      classPrefix="sw-tray"
+      status={item.isBlocked ? 'blocked' : 'running'}
+      statusLabel={memberLiveStateLabel(item.isBlocked ? 'blocked' : 'working', locale)}
+      title={`@${item.name}`}
+      idText={`#${item.conversationId}`}
+      live={
         <SwarmTrayLiveLine
           conversationId={item.conversationId}
           isBlocked={item.isBlocked}
           fallback={item.doing}
         />
-      </button>
-      <div className="sw-tray-row-actions">
+      }
+      onOpen={() => ctx.openConversationDrawer(item.conversationId)}
+      openAriaLabel={`@${item.name} — ${trayRowOpenLabel(item.name, locale)}`}
+      actions={
         <button
           type="button"
           className="btn btn-xs btn-danger"
@@ -125,8 +125,8 @@ function SwarmTrayRow(props: {
           <HelmxIcon name="square" size={11} />
           <span>{resolveLocalizedText(ACTION_ABORT, locale)}</span>
         </button>
-      </div>
-    </div>
+      }
+    />
   )
 }
 
@@ -138,7 +138,6 @@ function SwarmCoordinatorTray(props: { conversationId: number; groupId: string }
   const conversations = useConversations()
   const [expanded, setExpanded] = useState(false)
   const [busyKey, setBusyKey] = useState<string | undefined>(undefined)
-  const listId = useId()
 
   // The shell has already proved this conversation IS the coordinator, so the
   // board-view subscription key below is the conversation's own id.
@@ -191,69 +190,58 @@ function SwarmCoordinatorTray(props: { conversationId: number; groupId: string }
     nowMs !== undefined && summary.groupStartedAt !== undefined && nowMs >= summary.groupStartedAt
       ? formatDurationMs(nowMs - summary.groupStartedAt)
       : undefined
+  const frontline =
+    headlineItem !== undefined ? (
+      <SwarmTrayLiveLine
+        conversationId={headlineItem.conversationId}
+        isBlocked={headlineItem.isBlocked}
+        fallback={headlineItem.doing}
+        emptyFallback={frontlineText}
+        inline
+      />
+    ) : frontlineText !== undefined ? (
+      <span className="dock-tray-frontline sw-tray-frontline">{frontlineText}</span>
+    ) : undefined
 
   return (
-    <div
-      className={`sw-tray${hasBlocked ? ' sw-tray-warn' : ''}`}
-      role="region"
-      aria-label={resolveLocalizedText(TRAY_REGION_ARIA, locale)}
-    >
-      <div className="sw-tray-bar">
+    <DockTray
+      classPrefix="sw-tray"
+      warn={hasBlocked}
+      regionLabel={resolveLocalizedText(TRAY_REGION_ARIA, locale)}
+      expanded={expanded}
+      onToggle={() => setExpanded((v) => !v)}
+      toggleLabel={trayToggleLabel(expanded, countText, locale)}
+      toggleTitle={resolveLocalizedText(expanded ? TRAY_COLLAPSE : TRAY_EXPAND, locale)}
+      status={hasBlocked ? 'blocked' : 'running'}
+      statusLabel={countText}
+      badge={
+        <span className="badge badge-neutral dock-tray-badge sw-tray-badge tabular-nums">
+          {trayProgress(summary.doneCount, summary.activeCount, locale)}
+        </span>
+      }
+      count={summary.items.length > 1 || expanded ? countText : undefined}
+      frontline={frontline}
+      elapsed={hudElapsed}
+      barAction={
         <button
           type="button"
-          className="sw-tray-bar-toggle"
-          aria-expanded={expanded}
-          aria-controls={listId}
-          aria-label={trayToggleLabel(expanded, countText, locale)}
-          title={resolveLocalizedText(expanded ? TRAY_COLLAPSE : TRAY_EXPAND, locale)}
-          onClick={() => setExpanded((v) => !v)}
-        >
-          <StatusLight status={hasBlocked ? 'blocked' : 'running'} label={countText} />
-          <span className="badge badge-neutral sw-tray-badge tabular-nums">
-            {trayProgress(summary.doneCount, summary.activeCount, locale)}
-          </span>
-          {summary.items.length > 1 || expanded ? (
-            <span className="sw-tray-count">{countText}</span>
-          ) : null}
-          {expanded ? null : headlineItem !== undefined ? (
-            <SwarmTrayLiveLine
-              conversationId={headlineItem.conversationId}
-              isBlocked={headlineItem.isBlocked}
-              fallback={headlineItem.doing}
-              emptyFallback={frontlineText}
-              inline
-            />
-          ) : frontlineText !== undefined ? (
-            <span className="sw-tray-frontline">{frontlineText}</span>
-          ) : null}
-          <span className="sw-tray-spacer" />
-          {hudElapsed !== undefined ? (
-            <span className="sw-tray-elapsed tabular-nums">{hudElapsed}</span>
-          ) : null}
-          <HelmxIcon name={expanded ? 'chevron-down' : 'chevron-up'} size={11} className="sw-tray-chevron" />
-        </button>
-        <button
-          type="button"
-          className="btn btn-xs sw-tray-workbench"
+          className="btn btn-xs dock-tray-workbench sw-tray-workbench"
           onClick={() => ctx.openWorkbench(SWARM_WORKBENCH_PANEL_TARGET)}
         >
           <HelmxIcon name="network" size={11} />
           <span>{resolveLocalizedText(TRAY_WORKBENCH, locale)}</span>
         </button>
-      </div>
-      {expanded ? (
-        <div id={listId} className="sw-tray-list">
-          {summary.items.map((item) => (
-            <SwarmTrayRow
-              key={item.key}
-              item={item}
-              busy={busyKey !== undefined}
-              onAbort={runAbort}
-            />
-          ))}
-        </div>
-      ) : null}
-    </div>
+      }
+    >
+      {summary.items.map((item) => (
+        <SwarmTrayRow
+          key={item.key}
+          item={item}
+          busy={busyKey !== undefined}
+          onAbort={runAbort}
+        />
+      ))}
+    </DockTray>
   )
 }
 

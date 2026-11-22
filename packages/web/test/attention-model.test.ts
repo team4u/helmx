@@ -716,52 +716,6 @@ test('CommandPaletteModal: all plugin views are searchable rows and open via the
 })
 
 // ---------------------------------------------------------------------------
-// 插件 SDK 共享宿主后台在途快照（useConversationBackground 经真实桥）
-// ---------------------------------------------------------------------------
-
-const { HostStoreProviders } = await import('./helpers/host-store.js')
-const { useConversationBackground } = await import('@helmx/plugin-client')
-
-test('useConversationBackground via the real host bridge: badge docs hydrate entries; missing docs report unknown', { timeout: 60_000 }, () => {
-  const WORKFLOW_PANEL_SPEC2: WorkbenchPanelSpec = {
-    id: 'tasks',
-    label: '工作流与子代理',
-    badge: { doc: 'run-badges', byConversationField: 'byConversation' },
-  }
-  const panelContribution2: PluginUiContribution = {
-    pluginId: 'builtin:workflow',
-    surface: 'workbench.panel',
-    spec: WORKFLOW_PANEL_SPEC2,
-  }
-  const plugins = [{ id: 'builtin:workflow', name: 'Workflow', version: '0.0.0', enabled: true, locked: false, hooks: [], actions: [], tools: [] }]
-  const conversations = [conv({ id: 1, title: '主会话', profileId: 'assistant' })]
-  const captured: Array<{ unknown: boolean; active: boolean | undefined; summary: string | undefined }> = []
-
-  function Probe(): React.ReactNode {
-    const snapshot = useConversationBackground()
-    const entry = snapshot.byConversation.get(1)
-    captured.push({ unknown: snapshot.unknown, active: entry?.active, summary: entry?.summary })
-    return null
-  }
-
-  const unloaded = makeTestStore({ plugins, conversations, uiContributions: [panelContribution2] })
-  renderToString(e(HostStoreProviders, { value: unloaded }, e(Probe)))
-  assert.ok(captured.at(-1)!.unknown === true, 'badge doc not yet loaded: facts are unknown, never "no background work"')
-  assert.ok(captured.at(-1)!.active === undefined)
-
-  const loaded = makeTestStore({
-    plugins,
-    conversations,
-    uiContributions: [panelContribution2],
-    pluginDocs: { 'builtin:workflow/run-badges': { byConversation: { '1': { count: 2, tone: 'accent', footerText: '2 Running' } } } },
-  })
-  renderToString(e(HostStoreProviders, { value: loaded }, e(Probe)))
-  const last = captured.at(-1)!
-  assert.ok(last.unknown === false, 'hydrated badge docs flip the snapshot to known')
-  assert.ok(last.active === true && last.summary === '2 Running', 'the entry carries the host-standard aggregation verdict')
-})
-
-// ---------------------------------------------------------------------------
 // 侧栏视图徽标（sidebar.item badge 声明：纯函数 + Activity Rail / 视图行渲染）
 // ---------------------------------------------------------------------------
 

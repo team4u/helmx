@@ -55,13 +55,11 @@ const { conversationsApi, assetsApi } = await import('../src/lib/api.js')
 const { seedPluginClientModule } = await import('../src/lib/plugin-client.js')
 const {
   usePluginContext,
-  HELMX_SHORTCUT_EVENT,
   initialModelActiveIndex,
-  isShortcutPanelMatch,
   resolveEffectiveThinkingLevel,
-  resolveElementPanel,
   stepActiveIndex,
 } = await import('@helmx/plugin-client')
+const HELMX_SHORTCUT_EVENT = 'helmx:shortcut'
 const { HostStoreProviders } = await import('./helpers/host-store.js')
 const { makeTestStore, HelmxExternalStoreContext } = await import('./helpers/store.js')
 const { Composer } = await import('../src/conversation/Composer.js')
@@ -128,7 +126,7 @@ describe("composer-keybindings", () => {
     assert.equal(resolveEffectiveThinkingLevel(['minimal', 'high'], 'max'), 'minimal')
   })
 
-  test('keybindings-model: initialModelActiveIndex / stepActiveIndex and panel matching', { timeout: 60_000 }, () => {
+  test('keybindings-model: initialModelActiveIndex / stepActiveIndex', { timeout: 60_000 }, () => {
     const items = [{ id: 'a/1' }, { id: 'b/2' }, { id: 'c/3' }]
     assert.equal(initialModelActiveIndex(items, ''), -1)
     assert.equal(initialModelActiveIndex(items, '   '), -1)
@@ -138,20 +136,6 @@ describe("composer-keybindings", () => {
     assert.equal(stepActiveIndex(-1, 3, -1), 2)
     assert.equal(stepActiveIndex(2, 3, 1), 0)
     assert.equal(stepActiveIndex(0, 3, -1), 2)
-
-    const splitWrap = document.createElement('div')
-    splitWrap.setAttribute('data-helmx-panel', 'split')
-    const child = document.createElement('span')
-    splitWrap.appendChild(child)
-    assert.equal(resolveElementPanel(child), 'split')
-    assert.equal(isShortcutPanelMatch(child, 'split'), true)
-    assert.equal(isShortcutPanelMatch(child, 'primary'), false)
-
-    const drawer = document.createElement('div')
-    drawer.className = 'conversation-drawer'
-    const drawerChild = document.createElement('span')
-    drawer.appendChild(drawerChild)
-    assert.equal(isShortcutPanelMatch(drawerChild, 'primary'), false, 'a drawer child without data-helmx-panel never answers primary shortcuts')
   })
 
   // ---------------------------------------------------------------------------
@@ -679,15 +663,18 @@ describe("composer-keybindings", () => {
   // 7. Mobile busy dual buttons [steer] + [queue] and desktop .kbd-hint
   // ---------------------------------------------------------------------------
 
-  test('ComposerSendControls: mobile busy with input explicitly renders independent [steer] and [queue] buttons; desktop keeps the split dropdown and .kbd-hint', { timeout: 60_000 }, async () => {
+  test('ComposerSendControls: mobile busy with input explicitly renders Stop, [steer] and [queue] buttons; desktop keeps the split dropdown and .kbd-hint', { timeout: 60_000 }, async () => {
     const sent: Array<string | undefined> = []
+    let aborted = 0
     const send = async (mode?: 'steer' | 'followUp' | 'reject') => {
       sent.push(mode)
     }
-    const abortTurn = async () => {}
+    const abortTurn = async () => {
+      aborted += 1
+    }
     const blocker = { blocked: false, reason: null }
 
-    // Mobile busy: renders both the [steer] and [queue] independent buttons explicitly, no narrow
+    // Mobile busy: renders compact Stop + [steer] + [queue] independent buttons explicitly, no narrow
     // split trigger. ComposerSendControls reads the locale via useWebLocale, so it mounts inside a
     // store provider.
     const mobileHost = mountTree(
@@ -704,15 +691,19 @@ describe("composer-keybindings", () => {
       })),
     )
     assert.ok(mobileHost.querySelector('.composer-split-trigger') === null, 'mobile renders no narrow split trigger')
+    const stopBtn = mobileHost.querySelector<HTMLButtonElement>('button.composer-abort-button')
     const steerBtn = mobileHost.querySelector<HTMLButtonElement>('button.composer-mobile-steer-btn')
     const queueBtn = mobileHost.querySelector<HTMLButtonElement>('button.composer-mobile-queue-btn')
+    assert.ok(stopBtn !== null, 'mobile busy with text keeps compact Stop button reachable')
     assert.ok(steerBtn && steerBtn.textContent?.includes('Steer'), 'mobile shows the [steer] button')
     assert.ok(queueBtn && queueBtn.textContent?.includes('Queue'), 'mobile shows the [queue] button')
 
     await act(async () => {
+      stopBtn.click()
       steerBtn.click()
       queueBtn.click()
     })
+    assert.equal(aborted, 1, 'mobile compact Stop button aborts the active turn')
     assert.deepEqual(sent, ['steer', 'followUp'])
 
     // Desktop: renders the split dropdown; menu-item badges carry the .kbd-hint class

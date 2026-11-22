@@ -6,9 +6,7 @@ import {
   Popover,
   PopoverRoot,
   PopoverTrigger,
-  PopoverPortal,
   PopoverContent,
-  PopoverArrow,
   DropdownMenu,
   DropdownMenuRoot,
   DropdownMenuTrigger,
@@ -21,9 +19,7 @@ import {
   TooltipProvider,
   TooltipRoot,
   TooltipTrigger,
-  TooltipPortal,
   TooltipContent,
-  TooltipArrow,
 } from '@helmx/plugin-client'
 
 test('Popover 原语挂载、数据属性与无障碍属性（SSR）', { timeout: 60_000 }, () => {
@@ -37,14 +33,9 @@ test('Popover 原语挂载、数据属性与无障碍属性（SSR）', { timeout
         React.createElement('button', { type: 'button' }, '触发器'),
       ),
       React.createElement(
-        PopoverPortal,
-        null,
-        React.createElement(
-          PopoverContent,
-          { className: 'custom-popover' },
-          React.createElement(PopoverArrow, null),
-          React.createElement('div', null, '浮层正文'),
-        ),
+        PopoverContent,
+        { className: 'custom-popover' },
+        React.createElement('div', null, '浮层正文'),
       ),
     ),
   )
@@ -58,7 +49,6 @@ test('Popover 原语挂载、数据属性与无障碍属性（SSR）', { timeout
   assert.match(openHtml, /role="dialog"/)
   assert.match(openHtml, /helmx-popover-content/)
   assert.match(openHtml, /custom-popover/)
-  assert.match(openHtml, /helmx-popover-arrow/)
   assert.match(openHtml, /浮层正文/)
 
   // 关闭状态
@@ -71,11 +61,7 @@ test('Popover 原语挂载、数据属性与无障碍属性（SSR）', { timeout
         { asChild: true },
         React.createElement('button', { type: 'button' }, '触发器'),
       ),
-      React.createElement(
-        PopoverPortal,
-        null,
-        React.createElement(PopoverContent, null, '不渲染内容'),
-      ),
+      React.createElement(PopoverContent, null, '不渲染内容'),
     ),
   )
   assert.match(closedHtml, /aria-expanded="false"/)
@@ -156,14 +142,9 @@ test('Tooltip 原语挂载、无障碍属性与独立使用能力（SSR）', { t
           React.createElement('button', { type: 'button', 'aria-label': '关闭' }, 'X'),
         ),
         React.createElement(
-          TooltipPortal,
+          TooltipContent,
           null,
-          React.createElement(
-            TooltipContent,
-            null,
-            '关闭弹窗',
-            React.createElement(TooltipArrow, null),
-          ),
+          '关闭弹窗',
         ),
       ),
     ),
@@ -172,7 +153,6 @@ test('Tooltip 原语挂载、无障碍属性与独立使用能力（SSR）', { t
   assert.match(primitiveHtml, /aria-describedby=/)
   assert.match(primitiveHtml, /role="tooltip"/)
   assert.match(primitiveHtml, /helmx-tooltip-content/)
-  assert.match(primitiveHtml, /helmx-tooltip-arrow/)
   assert.match(primitiveHtml, /关闭弹窗/)
 
   // Tooltip 便捷包装器（无需外层 Provider 即可独立安全渲染）
