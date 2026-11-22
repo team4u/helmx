@@ -121,6 +121,8 @@ export class PluginHost {
   private capabilityRegistry = new CapabilityRegistry();
   private uiRegistry: UiRegistry;
   private configStore?: PluginConfigStore;
+  /** Instance-level per-plugin config write serialization (shared by HTTP PUT and ctx.host.setConfig). */
+  private configWriteChains = new Map<string, Promise<unknown>>();
   private disposed = false;
   private registerSeq = 0;
   private servicesStarted: boolean;
@@ -519,9 +521,9 @@ export class PluginHost {
 
   async setConfig(pluginId: string, value: Record<string, unknown>): Promise<void> {
     this.assertNotDisposed();
-    const state = requirePlugin(this.plugins, pluginId);
-    const schema = state.configSchema ?? {};
-    if (!this.configStore) {
+    requirePlugin(this.plugins, pluginId);
+    const store = this.configStore;
+    if (!store) {
       throw new HelmxError(
         'config_store_unavailable',
         'PluginHost not provide persist PluginConfigStore, modify plugin config do not by support',
@@ -529,8 +531,31 @@ export class PluginHost {
         { pluginId },
       );
     }
-    await this.configStore.set(pluginId, value, schema);
-    this.emitPluginChanged(state);
+    return this.enqueueConfigWrite(pluginId, async () => {
+      this.assertNotDisposed();
+      const state = requirePlugin(this.plugins, pluginId);
+      const schema = state.configSchema ?? {};
+      await store.set(pluginId, value, schema);
+      if (!this.disposed && this.plugins.get(pluginId) === state) {
+        this.emitPluginChanged(state);
+      }
+    });
+  }
+
+  private enqueueConfigWrite<T>(pluginId: string, op: () => Promise<T>): Promise<T> {
+    const prev = this.configWriteChains.get(pluginId) ?? Promise.resolve();
+    const run = prev.then(op, op);
+    const tail = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.configWriteChains.set(pluginId, tail);
+    void tail.then(() => {
+      if (this.configWriteChains.get(pluginId) === tail) {
+        this.configWriteChains.delete(pluginId);
+      }
+    });
+    return run;
   }
 
   // --- disposal and in-flight task tracking ---------------------------------------------------
@@ -611,13 +636,7 @@ export class PluginHost {
         tracker: this.tracker,
         options: this.options,
         plugins: this.plugins,
-        getConfig: (id) => this.getConfig(id),
         setConfig: (id, val) => this.setConfig(id, val),
-        onConfigChanged: (id) => {
-          if (this.disposed) return;
-          const target = this.plugins.get(id);
-          if (target) this.emitPluginChanged(target);
-        },
         list: () => this.list(),
         listUi: () => this.listUi(),
         listActions: () => this.listActions(),

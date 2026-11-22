@@ -476,6 +476,86 @@ test('writing when plugins field is corrupt throws config_corrupt explicitly wit
   assert.equal(raw['plugins'], 'corrupt', 'corrupt content preserved as-is');
 });
 
+test('concurrent HTTP host.setConfig and plugin ctx.host.setConfig share instance serialization without clobbering or materializing defaults', { timeout: 60_000 }, async () => {
+  const credDir = join(dataDir, 'cred-concurrent');
+  mkdirSync(credDir, { recursive: true });
+  const cfg = new InterposingConfigService(dataDir);
+  const store = makeRealStore(cfg, new CredentialService(credDir));
+  await store.load();
+
+  const host = makeHost(store);
+  let pluginSetConfig!: (patch: Record<string, unknown>) => Promise<void>;
+  await host.register({
+    id: 'p:concurrent-cfg',
+    definePlugin: (ctx) => {
+      ctx.configSchema({
+        mode: { type: 'string', default: 'auto' },
+        retries: { type: 'number', default: 3 },
+        endpoint: { type: 'string' },
+        apiKey: { type: 'string', secret: true },
+      });
+      pluginSetConfig = (patch) => ctx.host.setConfig(patch);
+    },
+  }, { enabled: true });
+
+  // Interpose a concurrent HTTP write while plugin ctx.host.setConfig is in flight:
+  // both patches apply incrementally and neither materializes schema defaults onto disk.
+  const firstEntered = deferred<void>();
+  const releaseFirst = deferred<void>();
+  cfg.interpose = async () => {
+    firstEntered.resolve();
+    await releaseFirst.promise;
+  };
+
+  const pluginWrite = pluginSetConfig({ endpoint: 'https://plugin.local' });
+  await firstEntered.promise;
+  const httpWrite = host.setConfig('p:concurrent-cfg', { retries: 7, apiKey: 'secret-from-http' });
+  releaseFirst.resolve();
+  await Promise.all([pluginWrite, httpWrite]);
+
+  const raw = JSON.parse(readFileSync(join(dataDir, 'config.json'), 'utf8')) as {
+    plugins?: Record<string, Record<string, unknown>>;
+  };
+  assert.deepEqual(raw.plugins?.['p:concurrent-cfg'], {
+    endpoint: 'https://plugin.local',
+    retries: 7,
+  }, 'both concurrent writes must survive and schema default "mode" must never be materialized to disk');
+  assert.equal('mode' in (raw.plugins?.['p:concurrent-cfg'] ?? {}), false);
+  assert.equal('apiKey' in (raw.plugins?.['p:concurrent-cfg'] ?? {}), false, 'secret field must never leak into config.json');
+  assert.deepEqual(host.getConfigSources('p:concurrent-cfg'), {
+    mode: 'default',
+    retries: 'configured',
+    endpoint: 'configured',
+    apiKey: 'configured',
+  });
+  assert.deepEqual(host.getConfig('p:concurrent-cfg'), {
+    mode: 'auto',
+    retries: 7,
+    endpoint: 'https://plugin.local',
+    apiKey: 'secret-from-http',
+  });
+
+  // Secret-only patch via ctx.host.setConfig preserves external plain-field edits on disk without overwriting config.json.
+  const externalCfg = new ConfigService(dataDir);
+  await externalCfg.updateBy((cur) => ({
+    ...cur,
+    plugins: {
+      ...(cur['plugins'] as Record<string, Record<string, unknown>>),
+      'p:concurrent-cfg': { endpoint: 'https://external-edit.local', retries: 9 },
+    },
+  }));
+  await pluginSetConfig({ apiKey: 'rotated-secret' });
+  const afterSecretRaw = JSON.parse(readFileSync(join(dataDir, 'config.json'), 'utf8')) as {
+    plugins?: Record<string, Record<string, unknown>>;
+  };
+  assert.deepEqual(afterSecretRaw.plugins?.['p:concurrent-cfg'], {
+    endpoint: 'https://external-edit.local',
+    retries: 9,
+  }, 'secret-only patch must not overwrite concurrent plain config on disk');
+
+  await host.dispose();
+});
+
 // ---------------------------------------------------------------------------
 // 4. Disable gate TOCTOU & plugin_in_use recovery
 // ---------------------------------------------------------------------------

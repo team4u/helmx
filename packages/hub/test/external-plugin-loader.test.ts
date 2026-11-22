@@ -48,9 +48,10 @@ export function Panel(props: { title: string }) {
 }
 `
 
-function writeConventionPlugin(pluginsDir: string, dir = 'demo-external'): string {
+function writeManifestPlugin(pluginsDir: string, dir = 'demo-external'): string {
   const dirPath = join(pluginsDir, dir)
   mkdirSync(dirPath, { recursive: true })
+  writeFileSync(join(dirPath, 'plugin.json'), JSON.stringify({ id: dir, main: 'index.mjs' }))
   writeFileSync(join(dirPath, 'index.mjs'), CONVENTION_PLUGIN_SRC(dir))
   writeFileSync(join(dirPath, 'client.tsx'), CONVENTION_CLIENT_TSX)
   return dirPath
@@ -63,10 +64,11 @@ let sharedApp: HubTestApp
 before(async () => {
   sharedDataDir = await makeTempDir('helmx-ext-loader-')
   outsideDir = await makeTempDir('helmx-ext-outside-')
-  const pluginsDir = join(sharedDataDir, 'plugins')
+  const pluginsDir = join(sharedDataDir, 'installed-plugins')
+  const runtimeDataRoot = join(sharedDataDir, 'plugins')
 
-  // 1. 健康外部插件（约定入口、plugin.json main、无 name 缺省回退、clientRoot: ./client）
-  writeConventionPlugin(pluginsDir, 'demo-external')
+  // 1. 健康外部插件（显式 plugin.json / package.json#helmx / 无 name 缺省回退 / clientRoot: ./client）
+  writeManifestPlugin(pluginsDir, 'demo-external')
 
   const manifestDir = join(pluginsDir, 'manifest-plugin')
   mkdirSync(join(manifestDir, 'src'), { recursive: true })
@@ -81,8 +83,31 @@ before(async () => {
       id: 'ping',
       description: 'back sound',
       inputSchema: { type: 'object', additionalProperties: false },
-      outputSchema: { type: 'object', properties: { pong: { type: 'boolean' } }, required: ['pong'], additionalProperties: false },
-      handler: () => ({ pong: true }),
+      outputSchema: { type: 'object', properties: { pong: { type: 'boolean' }, dataDir: { type: 'string' } }, required: ['pong', 'dataDir'], additionalProperties: false },
+      handler: () => ({ pong: true, dataDir: ctx.dataDir }),
+    })
+  },
+}\n`,
+  )
+
+  const pkgHelmxDir = join(pluginsDir, 'pkg-helmx-plugin')
+  mkdirSync(pkgHelmxDir, { recursive: true })
+  writeFileSync(
+    join(pkgHelmxDir, 'package.json'),
+    JSON.stringify({ name: 'pkg-helmx-plugin', helmx: { main: 'entry.mjs' } }),
+  )
+  writeFileSync(
+    join(pkgHelmxDir, 'entry.mjs'),
+    `export default {
+  id: 'pkg-helmx-plugin',
+  name: 'pkg helmx plugin',
+  async definePlugin(ctx) {
+    ctx.action({
+      id: 'ping',
+      description: 'back sound',
+      inputSchema: { type: 'object', additionalProperties: false },
+      outputSchema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'], additionalProperties: false },
+      handler: () => ({ ok: true }),
     })
   },
 }\n`,
@@ -90,6 +115,7 @@ before(async () => {
 
   const noNameDir = join(pluginsDir, 'no-name')
   mkdirSync(noNameDir, { recursive: true })
+  writeFileSync(join(noNameDir, 'plugin.json'), JSON.stringify({ id: 'no-name-plugin', main: 'index.mjs' }))
   writeFileSync(
     join(noNameDir, 'index.mjs'),
     `export default {
@@ -123,20 +149,25 @@ before(async () => {
   )
   writeFileSync(join(clientRootDir, 'client', 'index.tsx'), 'export function MainScreen() { return null }\n')
 
-  // 2. 纯数据目录与隐藏目录（必须静默跳过）
-  const memoryDataDir = join(pluginsDir, pluginDataDirName('builtin:memory'))
+  // 2. 运行数据目录 <dataDir>/plugins/ 与隐藏目录绝不参与外部插件扫描执行（即使放了 plugin.json + index.mjs 哨兵）
+  const memoryDataDir = join(runtimeDataRoot, pluginDataDirName('builtin:memory'))
   mkdirSync(memoryDataDir, { recursive: true })
   writeFileSync(join(memoryDataDir, 'notes.md'), 'memory plugin data')
-  const herdrDataDir = join(pluginsDir, pluginDataDirName('builtin:herdr'))
+  const herdrDataDir = join(runtimeDataRoot, pluginDataDirName('builtin:herdr'))
   mkdirSync(join(herdrDataDir, 'state'), { recursive: true })
   writeFileSync(join(herdrDataDir, 'state', 'cache.json'), '{}')
-  mkdirSync(join(pluginsDir, 'some-plugin-data'), { recursive: true })
-  writeFileSync(join(pluginsDir, 'some-plugin-data', 'MEMORY.md'), 'data only')
+  mkdirSync(join(runtimeDataRoot, 'some-plugin-data'), { recursive: true })
+  writeFileSync(join(runtimeDataRoot, 'some-plugin-data', 'MEMORY.md'), 'data only')
+  writeFileSync(join(runtimeDataRoot, 'some-plugin-data', 'plugin.json'), JSON.stringify({ id: 'data-dir-poison', main: 'index.mjs' }))
+  writeFileSync(
+    join(runtimeDataRoot, 'some-plugin-data', 'index.mjs'),
+    'globalThis.__dataDirPoisonExecuted = true\nexport default { id: "data-dir-poison", definePlugin() {} }\n',
+  )
   mkdirSync(join(pluginsDir, '.hidden'), { recursive: true })
-  writeFileSync(join(pluginsDir, '.hidden', 'index.mjs'), 'export default {}')
-  mkdirSync(join(pluginsDir, 'empty-dir'), { recursive: true })
+  writeFileSync(join(pluginsDir, '.hidden', 'plugin.json'), JSON.stringify({ id: 'hidden', main: 'index.mjs' }))
+  writeFileSync(join(pluginsDir, '.hidden', 'index.mjs'), 'globalThis.__hiddenExecuted = true\nexport default {}')
 
-  // 3. 13 类故障/越界外部插件目录（各自降级注册为 failed，互不阻塞）
+  // 3. 故障/越界/无 manifest 外部插件目录（各自降级注册为 failed，互不阻塞，绝不盲探执行）
   writeFileSync(join(outsideDir, 'evil.mjs'), 'export default { id: "evil", name: "evil", definePlugin() {} }')
   writeFileSync(join(sharedDataDir, 'outside.mjs'), 'throw new Error("outside_module_was_imported")')
 
@@ -147,22 +178,53 @@ before(async () => {
     return p
   }
 
+  put('no-manifest-bare', {
+    'index.mjs': 'globalThis.__blindProbeBareExecuted = true\nexport default { id: "no-manifest-bare", definePlugin() {} }\n',
+  })
+  put('plain-pkg-json', {
+    'package.json': JSON.stringify({ name: 'plain-pkg-json', main: 'index.mjs' }),
+    'index.mjs': 'globalThis.__blindProbePkgExecuted = true\nexport default { id: "plain-pkg-json", definePlugin() {} }\n',
+  })
+  put('manifest-no-main', {
+    'plugin.json': JSON.stringify({ id: 'manifest-no-main' }),
+    'index.mjs': 'globalThis.__manifestNoMainExecuted = true\nexport default { id: "manifest-no-main", definePlugin() {} }\n',
+  })
+  put('pkg-helmx-no-main', {
+    'package.json': JSON.stringify({ name: 'pkg-helmx-no-main', helmx: {} }),
+    'index.mjs': 'globalThis.__pkgHelmxNoMainExecuted = true\nexport default { id: "pkg-helmx-no-main", definePlugin() {} }\n',
+  })
   put('broken-manifest', { 'plugin.json': '{ not valid json !!', 'index.mjs': 'export default { id: "x", definePlugin() {} }' })
   put('array-manifest', { 'plugin.json': '[1, 2, 3]', 'index.mjs': 'export default { id: "x", definePlugin() {} }' })
-  put('fake-builtin', { 'index.mjs': "export default { id: 'builtin:evil', name: 'smoke fill', async definePlugin() {} }\n" })
-  put('colon-plugin', { 'index.mjs': "export default { id: 'vendor:plugin', name: 'colon', async definePlugin() {} }\n" })
+  put('fake-builtin', {
+    'plugin.json': JSON.stringify({ main: 'index.mjs' }),
+    'index.mjs': "export default { id: 'builtin:evil', name: 'smoke fill', async definePlugin() {} }\n",
+  })
+  put('colon-plugin', {
+    'plugin.json': JSON.stringify({ main: 'index.mjs' }),
+    'index.mjs': "export default { id: 'vendor:plugin', name: 'colon', async definePlugin() {} }\n",
+  })
   put('traversal', { 'plugin.json': JSON.stringify({ main: '../../outside.mjs' }) })
   put('missing-entry', { 'plugin.json': JSON.stringify({ main: 'ghost.mjs' }) })
   const symEsc = put('symlink-escape', { 'plugin.json': JSON.stringify({ main: 'entry.mjs' }) })
   symlinkSync(join(outsideDir, 'evil.mjs'), join(symEsc, 'entry.mjs'))
-  put('bad-client-root', { 'index.mjs': "export default { id: 'bad-client-root', name: 'bad', clientRoot: 123, definePlugin() {} }\n" })
-  const convEsc = put('convention-escape', {})
-  symlinkSync(join(sharedDataDir, 'outside.mjs'), join(convEsc, 'index.mjs'))
-  const symLoop = put('symlink-loop', {})
+  put('bad-client-root', {
+    'plugin.json': JSON.stringify({ main: 'index.mjs' }),
+    'index.mjs': "export default { id: 'bad-client-root', name: 'bad', clientRoot: 123, definePlugin() {} }\n",
+  })
+  const symLoop = put('symlink-loop', { 'plugin.json': JSON.stringify({ main: 'index.mjs' }) })
   symlinkSync(join(symLoop, 'index.mjs'), join(symLoop, 'index.mjs'))
-  put('setup-alias', { 'index.mjs': "export default { id: 'setup-alias', name: 'old', setup() {} }\n" })
-  put('empty-name', { 'index.mjs': "export default { id: 'empty-name', name: '', definePlugin() {} }\n" })
-  put('no-setup', { 'index.mjs': 'export default { id: "no-setup", name: "without entry" }' })
+  put('setup-alias', {
+    'plugin.json': JSON.stringify({ main: 'index.mjs' }),
+    'index.mjs': "export default { id: 'setup-alias', name: 'old', setup() {} }\n",
+  })
+  put('empty-name', {
+    'plugin.json': JSON.stringify({ main: 'index.mjs' }),
+    'index.mjs': "export default { id: 'empty-name', name: '', definePlugin() {} }\n",
+  })
+  put('no-setup', {
+    'plugin.json': JSON.stringify({ main: 'index.mjs' }),
+    'index.mjs': 'export default { id: "no-setup", name: "without entry" }',
+  })
 
   sharedApp = (await createHubTestApp({ dataDir: sharedDataDir, cwd: sharedDataDir })).app
 }, { timeout: 60_000 })
@@ -173,16 +235,18 @@ after(async () => {
   await cleanupDir(outsideDir)
 }, { timeout: 60_000 })
 
-test('自动发现与全链路启用：约定入口、plugin.json main、缺省 name、clientRoot 默认与显式 ./client 均生效，纯数据目录静默忽略', { timeout: 60_000 }, async () => {
+test('自动发现与全链路启用：installed-plugins 代码根与 plugins 运行数据物理分离，显式 plugin.json / package.json#helmx 生效', { timeout: 60_000 }, async () => {
   const list = sharedApp.kernel.plugins.list()
   const ids = list.map((p) => p.id)
 
-  // 纯数据目录/隐藏目录静默跳过，内置插件不受扰
+  // 运行数据目录 <dataDir>/plugins/ 与隐藏目录绝不参与发现或执行
   assert.equal(list.filter((p) => p.id === 'builtin:memory').length, 1)
-  assert.ok(!ids.includes('some-plugin-data') && !ids.includes('.hidden') && !ids.includes('empty-dir'))
+  assert.ok(!ids.includes('some-plugin-data') && !ids.includes('data-dir-poison') && !ids.includes('.hidden'))
+  assert.equal((globalThis as Record<string, unknown>).__dataDirPoisonExecuted, undefined, 'ctx.dataDir 下的代码绝不得被扫描执行')
+  assert.equal((globalThis as Record<string, unknown>).__hiddenExecuted, undefined)
   assert.ok(ids.includes('builtin:profile'))
 
-  // 约定入口默认停用且 locked=false；启用后 action / public doc / 默认 clientRoot 编译全通
+  // 显式 plugin.json 默认停用且 locked=false；启用后 action / public doc / 默认 clientRoot 编译全通
   const demo = list.find((p) => p.id === 'demo-external')!
   assert.equal(demo.enabled, false)
   assert.equal(demo.locked, false)
@@ -192,10 +256,17 @@ test('自动发现与全链路启用：约定入口、plugin.json main、缺省 
   const client = await sharedApp.kernel.plugins.getClientModule('demo-external', 'client.tsx')
   assert.match(client.code, /__helmx_shared_react/)
 
-  // plugin.json main 指定入口
+  // plugin.json main 指定入口，且 ctx.dataDir 留在 <dataDir>/plugins/<id>（与 installed-plugins 物理分离）
   assert.equal(list.find((p) => p.id === 'manifest-plugin')?.enabled, false)
   await sharedApp.kernel.plugins.enable('manifest-plugin')
-  assert.equal(((await sharedApp.kernel.plugins.invokeAction('manifest-plugin', 'ping', {})) as { pong: boolean }).pong, true)
+  const ping = (await sharedApp.kernel.plugins.invokeAction('manifest-plugin', 'ping', {})) as { pong: boolean; dataDir: string }
+  assert.equal(ping.pong, true)
+  assert.equal(ping.dataDir, join(sharedDataDir, 'plugins', 'manifest-plugin'))
+
+  // package.json#helmx 显式声明入口
+  assert.equal(list.find((p) => p.id === 'pkg-helmx-plugin')?.enabled, false)
+  await sharedApp.kernel.plugins.enable('pkg-helmx-plugin')
+  assert.equal(((await sharedApp.kernel.plugins.invokeAction('pkg-helmx-plugin', 'ping', {})) as { ok: boolean }).ok, true)
 
   // 无 name 导出回退 id
   const noName = list.find((p) => p.id === 'no-name-plugin')!
@@ -209,7 +280,7 @@ test('自动发现与全链路启用：约定入口、plugin.json main、缺省 
   assert.ok(subClient.exports.includes('MainScreen'))
 })
 
-test('故障隔离与边界拒绝：13 类坏 manifest / 冒充 builtin: / 冒号 ID / 路径穿越 / symlink 逃逸与环 / 非法导出均降级为 failed', { timeout: 60_000 }, () => {
+test('故障隔离与边界拒绝：无 manifest 零执行 / 坏 manifest / 冒充 builtin: / 冒号 ID / 路径穿越 / symlink 逃逸与环 / 非法导出均降级为 failed', { timeout: 60_000 }, () => {
   const byId = new Map(sharedApp.kernel.plugins.list().map((p) => [p.id, p]))
   const expectFailed = (id: string, code: string, pattern?: RegExp) => {
     const item = byId.get(id)
@@ -219,6 +290,15 @@ test('故障隔离与边界拒绝：13 类坏 manifest / 冒充 builtin: / 冒�
     assert.equal(item.error?.code, code)
     if (pattern !== undefined) assert.match(item.error!.message, pattern)
   }
+
+  expectFailed('no-manifest-bare', 'plugin_manifest_missing')
+  expectFailed('plain-pkg-json', 'plugin_manifest_missing')
+  expectFailed('manifest-no-main', 'plugin_manifest_invalid')
+  expectFailed('pkg-helmx-no-main', 'plugin_manifest_invalid')
+  assert.equal((globalThis as Record<string, unknown>).__blindProbeBareExecuted, undefined, '无 manifest 目录绝不得盲探执行 index.mjs')
+  assert.equal((globalThis as Record<string, unknown>).__blindProbePkgExecuted, undefined, '普通 package.json 绝不得盲探执行 main')
+  assert.equal((globalThis as Record<string, unknown>).__manifestNoMainExecuted, undefined)
+  assert.equal((globalThis as Record<string, unknown>).__pkgHelmxNoMainExecuted, undefined)
 
   expectFailed('broken-manifest', 'plugin_manifest_invalid')
   expectFailed('array-manifest', 'plugin_manifest_invalid')
@@ -230,16 +310,16 @@ test('故障隔离与边界拒绝：13 类坏 manifest / 冒充 builtin: / 冒�
   expectFailed('missing-entry', 'plugin_entry_missing')
   expectFailed('symlink-escape', 'plugin_manifest_invalid', /symlink/)
   expectFailed('bad-client-root', 'invalid_plugin_definition', /clientRoot/)
-  expectFailed('convention-escape', 'plugin_manifest_invalid')
   expectFailed('symlink-loop', 'plugin_scan_failed')
   expectFailed('setup-alias', 'invalid_plugin_definition', /definePlugin/)
   expectFailed('empty-name', 'invalid_plugin_definition', /name/)
   expectFailed('no-setup', 'invalid_plugin_definition')
 })
 
-test('loadExternalPlugins 直调：返回新注册 ID 列表，缺失 plugins 目录返回空数组', { timeout: 60_000 }, async (t) => {
-  const dirPath = join(sharedDataDir, 'plugins', 'direct-loader')
+test('loadExternalPlugins 直调：返回新注册 ID 列表，缺失 installed-plugins 目录返回空数组', { timeout: 60_000 }, async (t) => {
+  const dirPath = join(sharedDataDir, 'installed-plugins', 'direct-loader')
   mkdirSync(dirPath, { recursive: true })
+  writeFileSync(join(dirPath, 'plugin.json'), JSON.stringify({ id: 'direct-loader', main: 'index.mjs' }))
   writeFileSync(
     join(dirPath, 'index.mjs'),
     `export default {
@@ -266,8 +346,8 @@ test('loadExternalPlugins 直调：返回新注册 ID 列表，缺失 plugins �
 
 test('pluginEnabled 跨重启恢复：持久化 true 自动启用，持久化 false 保持停用', { timeout: 60_000 }, async (t) => {
   const dataDir = join(useTempDir(t, 'helmx-ext-restart-'), 'hub')
-  writeConventionPlugin(join(dataDir, 'plugins'), 'stay-on')
-  writeConventionPlugin(join(dataDir, 'plugins'), 'stay-off')
+  writeManifestPlugin(join(dataDir, 'installed-plugins'), 'stay-on')
+  writeManifestPlugin(join(dataDir, 'installed-plugins'), 'stay-off')
 
   const first = await createHubTestApp({ dataDir, cwd: dataDir })
   try {

@@ -138,9 +138,9 @@ console.log('CHILD_OK')
 })
 
 test('doctor: client plugin check fails as expected without provider; passes once injected', { timeout: 60_000 }, async () => {
-  const dirPath = join(dataDir, 'plugins', 'port-client')
+  const dirPath = join(dataDir, 'installed-plugins', 'port-client')
   mkdirSync(join(dirPath, 'client'), { recursive: true })
-  writeFileSync(join(dirPath, 'plugin.json'), JSON.stringify({ id: 'port-client', clientRoot: './client' }))
+  writeFileSync(join(dirPath, 'plugin.json'), JSON.stringify({ id: 'port-client', main: 'index.mjs', clientRoot: './client' }))
   writeFileSync(
     join(dirPath, 'index.mjs'),
     [
@@ -163,8 +163,9 @@ test('doctor: client plugin check fails as expected without provider; passes onc
 })
 
 test('doctor: JS-only plugins pass even without provider (no gratuitous coupling)', { timeout: 60_000 }, async () => {
-  const dirPath = join(dataDir, 'plugins', 'port-js')
+  const dirPath = join(dataDir, 'installed-plugins', 'port-js')
   mkdirSync(dirPath, { recursive: true })
+  writeFileSync(join(dirPath, 'plugin.json'), JSON.stringify({ id: 'port-js', main: 'index.mjs' }))
   writeFileSync(
     join(dirPath, 'index.mjs'),
     'function definePlugin(ctx) { ctx.action({ id: "a", description: "A", inputSchema: { type: "object" }, outputSchema: { type: "object" }, handler: () => ({}) }) }\nexport default { id: "port-js", name: "Port JS", definePlugin }',

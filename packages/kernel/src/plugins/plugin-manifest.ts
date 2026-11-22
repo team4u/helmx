@@ -207,12 +207,8 @@ export function readHelmxField(
   }
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
   const helmx = (parsed as Record<string, unknown>)['helmx'];
-  if (helmx === undefined) {
-    // Fallback to standard npm package.json `main` when `helmx` is absent.
-    const main = (parsed as Record<string, unknown>)['main'];
-    if (typeof main === 'string' && main.length > 0) return { main };
-    return null;
-  }
+  // Explicit manifest discipline: plain npm `package.json` without a `helmx` object is never treated as a Helmx plugin.
+  if (helmx === undefined) return null;
   if (typeof helmx !== 'object' || helmx === null || Array.isArray(helmx)) {
     throw new HelmxError(
       'plugin_manifest_invalid',
@@ -249,15 +245,6 @@ export function readHelmxField(
     helmxObj['dependencies'],
   );
   if (dependencies !== undefined) result.dependencies = dependencies;
-  if (
-    result.main === undefined &&
-    result.clientRoot === undefined &&
-    result.clientDist === undefined &&
-    result.clientDependencies === undefined &&
-    result.dependencies === undefined
-  ) {
-    return null;
-  }
   return result;
 }
 

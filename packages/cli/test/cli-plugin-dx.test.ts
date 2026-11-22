@@ -323,7 +323,7 @@ test('plugins init: generates local skeleton (default full template: plugin.json
   const body = JSON.parse(r.out) as { pluginId: string; dir: string; files: string[]; template: string }
   assert.equal(body.pluginId, 'my-plugin')
   assert.equal(body.template, 'full', 'default template is full')
-  assert.ok(body.dir.startsWith(dataDir))
+  assert.equal(body.dir, path.join(dataDir, 'installed-plugins', 'my-plugin'))
   for (const f of ['plugin.json', 'index.ts', 'tsconfig.json', 'client/index.tsx', 'README.md']) {
     assert.ok(body.files.includes(f), `output should contain ${f}: ${JSON.stringify(body.files)}`)
   }

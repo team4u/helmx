@@ -41,6 +41,7 @@ function writeMinimalPlugin(
   const dirPath = join(pluginsDir, dir)
   mkdirSync(join(dirPath, 'lib'), { recursive: true })
   const probeValue = opts.probeValue ?? 'v1'
+  writeFileSync(join(dirPath, 'plugin.json'), JSON.stringify({ id: dir, main: 'index.ts' }))
   writeFileSync(
     join(dirPath, 'index.ts'),
     `import { sharedDep } from './lib/shared.js'
@@ -87,6 +88,7 @@ function writeClientPlugin(
   mkdirSync(join(dirPath, 'client'), { recursive: true })
   const actualExport = opts.actualExportName ?? 'SamplePanel'
   const declaredExport = opts.declaredExportName ?? actualExport
+  writeFileSync(join(dirPath, 'plugin.json'), JSON.stringify({ id: dir, main: 'index.ts', clientRoot: './client' }))
   writeFileSync(
     join(dirPath, 'index.ts'),
     `function definePlugin(ctx: any) {
@@ -116,6 +118,7 @@ export function ${actualExport}(): React.JSX.Element {
 function writeSlashPlugin(pluginsDir: string, dir: string, slash: string): string {
   const dirPath = join(pluginsDir, dir)
   mkdirSync(dirPath, { recursive: true })
+  writeFileSync(join(dirPath, 'plugin.json'), JSON.stringify({ id: dir, main: 'index.ts' }))
   writeFileSync(
     join(dirPath, 'index.ts'),
     `function definePlugin(ctx: any) {
@@ -215,6 +218,7 @@ test('doctorPluginDir：健康插件与前端组件通过，损坏 manifest / TS
 
   const syntaxDir = join(pluginsDir, 'dx-syntax')
   mkdirSync(syntaxDir, { recursive: true })
+  writeFileSync(join(syntaxDir, 'plugin.json'), JSON.stringify({ id: 'dx-syntax', main: 'index.ts' }))
   writeFileSync(join(syntaxDir, 'index.ts'), 'export default { id: "dx-syntax", definePlugin( {}\n')
   const syntaxReport = await doctorPluginDir(syntaxDir, { buildProvider })
   assert.equal(syntaxReport.ok, false)
@@ -224,6 +228,7 @@ test('doctorPluginDir：健康插件与前端组件通过，损坏 manifest / TS
 
   const dupDir = join(pluginsDir, 'dx-dup-action')
   mkdirSync(dupDir, { recursive: true })
+  writeFileSync(join(dupDir, 'plugin.json'), JSON.stringify({ id: 'dx-dup-action', main: 'index.ts' }))
   writeFileSync(
     join(dupDir, 'index.ts'),
     `function definePlugin(ctx: any) {
@@ -256,7 +261,7 @@ export default { id: 'dx-dup-action', definePlugin }\n`,
 // ---------------------------------------------------------------------------
 
 test('rescan 与 reload 全路径：增量注册不扰既有、热重载代际推进、预检失败保活、403/404/409 门禁、停用保持与冲突回滚', { timeout: 60_000 }, async () => {
-  const pluginsDir = join(env.dataDir, 'plugins')
+  const pluginsDir = join(env.dataDir, 'installed-plugins')
 
   // 1. rescan：新目录默认停用，已启用插件不受扰，二次扫描无新增
   writeMinimalPlugin(pluginsDir, 'dx-first')
@@ -355,7 +360,7 @@ test('rescan 与 reload 全路径：增量注册不扰既有、热重载代际�
 })
 
 test('DX HTTP 路由契约：POST /api/plugins/doctor | rescan | :id/reload 鉴权、参数校验与 404/422 信封', { timeout: 60_000 }, async () => {
-  const pluginsDir = join(env.dataDir, 'plugins')
+  const pluginsDir = join(env.dataDir, 'installed-plugins')
   const { dirPath } = writeMinimalPlugin(pluginsDir, 'dx-http-pl')
   await env.kernel.plugins.rescanExternalPlugins()
   await env.kernel.plugins.enable('dx-http-pl')
@@ -422,7 +427,7 @@ test('受管包 HTTP 路由：install（默认停用与 enable:true / body 边�
   assert.equal(installed.body.record.pluginId, 'http-demo')
   assert.equal(installed.body.summary.enabled, false)
   assert.equal(installed.body.summary.managed.source.path, src1)
-  assert.ok(existsSync(join(env.dataDir, 'plugins', 'http-demo', 'index.mjs')))
+  assert.ok(existsSync(join(env.dataDir, 'installed-plugins', 'http-demo', 'index.mjs')))
 
   const list = await env.call('GET', '/api/plugins')
   assert.ok(list.body.find((p: { id: string; managed?: unknown }) => p.id === 'http-demo')?.managed)
@@ -461,7 +466,7 @@ test('受管包 HTTP 路由：install（默认停用与 enable:true / body 边�
   assert.equal(removed.status, 200)
   assert.equal(removed.body.pluginId, 'http-rm')
   assert.equal(removed.body.wasEnabled, true)
-  assert.ok(!existsSync(join(env.dataDir, 'plugins', 'http-rm')))
+  assert.ok(!existsSync(join(env.dataDir, 'installed-plugins', 'http-rm')))
   assert.ok(existsSync(join(srcRm, 'index.mjs')))
   const config = JSON.parse(readFileSync(join(env.dataDir, 'config.json'), 'utf8')) as { pluginPackages?: Record<string, unknown> }
   assert.equal(config.pluginPackages?.['http-rm'], undefined)

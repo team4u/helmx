@@ -178,7 +178,7 @@ test('host.plugins port delegation: doctor/install/update/enable/disable/remove 
     const removed = await api.plugins.remove('port-demo')
     assert.equal(removed.pluginId, 'port-demo')
     assert.equal(removed.wasEnabled, true)
-    assert.ok(!existsSync(join(env.dataDir, 'plugins', 'port-demo')), 'managed directory should be deleted')
+    assert.ok(!existsSync(join(env.dataDir, 'installed-plugins', 'port-demo')), 'managed directory should be deleted')
     assert.ok(existsSync(join(src, 'index.mjs')), 'user source directory stays intact')
     assert.ok(!api.plugins.list().some((s) => s.id === 'port-demo'), 'removed plugin leaves host list')
   } finally {
@@ -213,6 +213,7 @@ test('host.plugins.disable disables another plugin via port and respects force o
 function writeScreenPlugin(parent: string, id: string): string {
   const dir = join(parent, id)
   mkdirSync(join(dir, 'client'), { recursive: true })
+  writeFileSync(join(dir, 'plugin.json'), JSON.stringify({ id, version: '1.0.0', main: 'index.ts', clientRoot: './client' }, null, 2))
   writeFileSync(
     join(dir, 'index.ts'),
     `function definePlugin(ctx: any) {

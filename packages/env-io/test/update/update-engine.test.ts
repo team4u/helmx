@@ -30,6 +30,8 @@ import {
   performUpdate,
   stageRelease,
   runNpm,
+  resolveNpmCommand,
+  runControlledProcess,
   fetchLatestVersion,
   downloadVerifiedTarball,
   readCurrentRelease,
@@ -1388,4 +1390,124 @@ test('runNpm timeout kills entire process group so descendant processes cannot k
     alive = isAlive(grandPid);
   }
   assert.equal(alive, false, 'descendant process must be killed with its process group on timeout without leaving orphans');
+});
+
+test('resolveNpmCommand: POSIX uses npm directly; win32 locates npm-cli.js beside execPath without shell fallback', { timeout: 60_000 }, () => {
+  assert.deepEqual(resolveNpmCommand({ platform: 'linux' }), { command: 'npm', args: [] });
+  assert.deepEqual(resolveNpmCommand({ platform: 'darwin' }), { command: 'npm', args: [] });
+
+  const siblingHit = 'C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npm-cli.js';
+  assert.deepEqual(
+    resolveNpmCommand({
+      platform: 'win32',
+      execPath: 'C:\\Program Files\\nodejs\\node.exe',
+      existsSync: (p) => p === siblingHit,
+    }),
+    { command: 'C:\\Program Files\\nodejs\\node.exe', args: [siblingHit] },
+  );
+
+  const parentHit = 'C:\\tools\\node_modules\\npm\\bin\\npm-cli.js';
+  assert.deepEqual(
+    resolveNpmCommand({
+      platform: 'win32',
+      execPath: 'C:\\tools\\bin\\node.exe',
+      existsSync: (p) => p === parentHit,
+    }),
+    { command: 'C:\\tools\\bin\\node.exe', args: [parentHit] },
+  );
+
+  assert.throws(
+    () =>
+      resolveNpmCommand({
+        platform: 'win32',
+        execPath: 'C:\\missing\\node.exe',
+        existsSync: () => false,
+      }),
+    /npm-cli\.js/,
+  );
+});
+
+test('runControlledProcess: enforces per-stream tail-retaining output cap and kills full process tree on timeout', { timeout: 60_000 }, async (t) => {
+  const dir = await tempDir('controlled-proc-');
+  t.after(async () => {
+    await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
+  });
+
+  // 1. Per-stream output cap retains exact trailing diagnostic bytes without unbounded buffering.
+  const noisy = await runControlledProcess(
+    process.execPath,
+    [
+      '-e',
+      "process.stdout.write('A'.repeat(2000) + 'TAIL_OUT'); process.stderr.write('B'.repeat(2000) + 'TAIL_ERR');",
+    ],
+    { cwd: dir, timeoutMs: 10_000, maxOutputChars: 32 },
+  );
+  assert.equal(noisy.code, 0);
+  assert.equal(noisy.timedOut, false);
+  assert.equal(noisy.stdoutTruncated, true);
+  assert.equal(noisy.stderrTruncated, true);
+  assert.equal(noisy.stdout.length, 32);
+  assert.equal(noisy.stderr.length, 32);
+  assert.ok(noisy.stdout.endsWith('TAIL_OUT'), `stdout must preserve trailing marker: ${noisy.stdout}`);
+  assert.ok(noisy.stderr.endsWith('TAIL_ERR'), `stderr must preserve trailing marker: ${noisy.stderr}`);
+
+  // 2. Timeout terminates child + grandchild holding stdio open without hanging or leaking orphans.
+  if (process.platform !== 'win32') {
+    const grandPidFile = path.join(dir, 'grand.pid');
+    const runner = path.join(dir, 'spawn-grand.cjs');
+    await fs.writeFile(
+      runner,
+      [
+        "const fs = require('node:fs');",
+        "const { spawn } = require('node:child_process');",
+        "const g = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: ['ignore', 'inherit', 'inherit'] });",
+        "fs.writeFileSync(process.argv[2], String(g.pid));",
+        "process.stdout.write('BEFORE_TIMEOUT\\n');",
+        "setInterval(() => {}, 1000);",
+      ].join('\n'),
+      'utf8',
+    );
+    t.after(async () => {
+      const pid = Number((await fs.readFile(grandPidFile, 'utf8').catch(() => '')).trim());
+      if (Number.isInteger(pid) && pid > 0) {
+        try {
+          process.kill(pid, 'SIGKILL');
+        } catch {
+          // already dead
+        }
+      }
+    });
+
+    const pending = runControlledProcess(process.execPath, [runner, grandPidFile], {
+      cwd: dir,
+      timeoutMs: 3_000,
+    });
+    const waitDeadline = Date.now() + 2_500;
+    let rawPid = '';
+    while (Date.now() < waitDeadline) {
+      rawPid = await fs.readFile(grandPidFile, 'utf8').catch(() => '');
+      if (rawPid.trim().length > 0) break;
+      await delay(20);
+    }
+    const result = await pending;
+    assert.equal(result.timedOut, true);
+    assert.equal(result.code, -1);
+    assert.ok(result.stdout.includes('BEFORE_TIMEOUT'));
+
+    if (rawPid.trim().length === 0) {
+      rawPid = await fs.readFile(grandPidFile, 'utf8').catch(() => '');
+    }
+    const grandPid = Number(rawPid.trim());
+    assert.ok(Number.isInteger(grandPid) && grandPid > 0, `descendant pid file must be written before timeout (got ${JSON.stringify(rawPid)})`);
+    let alive = true;
+    for (let i = 0; i < 20 && alive; i += 1) {
+      try {
+        process.kill(grandPid, 0);
+        await delay(50);
+      } catch {
+        alive = false;
+      }
+    }
+    assert.equal(alive, false, 'grandchild holding inherited stdio must be killed on timeout');
+  }
 });

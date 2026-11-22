@@ -55,6 +55,14 @@ export {
 } from './state.js';
 export { runNpm } from './npm-runner.js';
 export {
+  DEFAULT_CONTROLLED_OUTPUT_CAP,
+  resolveNpmCommand,
+  runControlledProcess,
+  type ControlledProcessOptions,
+  type ControlledProcessResult,
+  type ResolveNpmCommandIo,
+} from './process-runner.js';
+export {
   stageRelease,
   type NpmPackageSpec,
   type ReleaseLayout,

@@ -10,24 +10,27 @@
  * - `npm install` never runs lifecycle scripts (`--ignore-scripts --no-audit --no-fund --foreground-scripts`
  *   makes any bypass visible); `git` runs non-interactively (`GIT_TERMINAL_PROMPT=0 / GIT_ASKPASS=echo`)
  *   with `--depth 1` shallow clones;
- * - Staging happens under `<dataDir>/plugins/.staging/<uuid>/`, atomically renamed into
- *   `<dataDir>/plugins/<safeName>/`; failures (including doctor or registration failure) clean up
+ * - Staging happens under `<dataDir>/installed-plugins/.staging/<uuid>/`, atomically renamed into
+ *   `<dataDir>/installed-plugins/<safeName>/` (physically separate from per-plugin runtime `ctx.dataDir`
+ *   under `<dataDir>/plugins/<pluginId>`); failures (including doctor or registration failure) clean up
  *   staging without leaving partial artifacts;
- * - Local sources are copied (not symlinked) into the managed directory, because PluginHost.register
- *   uses `<dataDir>/plugins/<pluginId>` as both source dir and `ctx.dataDir` (symlinks would write data
- *   into user source trees and `remove` would delete user files);
+ * - Local sources are copied (not symlinked) into the managed directory so edits and `remove` operate on
+ *   the managed copy without mutating or deleting user source files;
  * - Copies exclude `node_modules`, `.git`, and dot-prefixed entries; runtime dependencies declared in
  *   `package.json.dependencies` are installed cleanly with `--omit=dev` and lifecycle scripts disabled;
+ * - Subprocess execution delegates to `@helmx/env-io` (`resolveNpmCommand` + `runControlledProcess`):
+ *   shell-free spawn, Windows `npm-cli.js` resolution, per-stream output cap, and full process-tree kill on timeout;
  * - In-process execution disclosure: doctor/register/enable run plugin code inside the Hub process with
  *   full host permissions; this manager enforces managed path boundaries only, never claiming sandboxing.
  */
-import { spawn } from 'node:child_process';
 import { cp, mkdir, mkdtemp, readdir, readFile, rename, rm, stat } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { resolveNpmCommand, runControlledProcess, type ResolveNpmCommandIo } from '@helmx/env-io';
 import { HelmxError, type PluginBuildProvider, type PluginInstallResult, type PluginPackageRecord, type PluginRemoveResult, type PluginPackageSource, type PluginSummary, type PluginUpdateResult } from '@helmx/protocol';
 import { verifyDeclaredPrebuiltDir } from './external-loader.js';
 import { parsePluginSource } from './package-source.js';
+import { externalPluginsDir } from './plugin-dir-name.js';
 import { doctorPluginDir } from './plugin-doctor.js';
 import { readHelmxClientDependencies } from './plugin-manifest.js';
 import type { PluginPackageManagerStore } from './package-store.js';
@@ -36,20 +39,38 @@ import type { PluginPackageManagerStore } from './package-store.js';
 // Process runner (injectable for tests without real network access)
 // ---------------------------------------------------------------------------
 
-interface RunResult {
+export interface RunResult {
   code: number
   stdout: string
   stderr: string
+  timedOut?: boolean
+  stdoutTruncated?: boolean
+  stderrTruncated?: boolean
 }
 
-/** Process execution abstraction: spawns npm/git in production; mocked in tests. */
-export type PackageRunner = (cmd: string, args: string[], opts: { cwd: string; timeoutMs: number }) => Promise<RunResult>;
+export interface PackageRunnerOptions {
+  cwd: string
+  timeoutMs: number
+  maxOutputChars?: number
+}
 
-/** Default runner: non-interactive env, merged stdio tails, SIGKILL on timeout. */
-export const defaultPackageRunner: PackageRunner = (cmd, args, opts) =>
-  new Promise((resolvePromise, rejectPromise) => {
-    const child = spawn(cmd, args, {
+/** Process execution abstraction: spawns npm/git/tar in production; mocked in tests. */
+export type PackageRunner = (cmd: string, args: string[], opts: PackageRunnerOptions) => Promise<RunResult>;
+
+/**
+ * Create a controlled package runner reusing `@helmx/env-io`'s shell-free process-tree executor:
+ * resolves `npm` via `resolveNpmCommand` (handling Windows `npm-cli.js` without `shell: true`),
+ * caps captured stdout/stderr per stream, and kills the entire process tree on timeout.
+ */
+export function createPackageRunner(
+  resolveNpm: (io?: ResolveNpmCommandIo) => { command: string; args: string[] } = resolveNpmCommand,
+): PackageRunner {
+  return async (cmd, args, opts) => {
+    const resolved = cmd === 'npm' ? resolveNpm() : { command: cmd, args: [] as string[] };
+    const result = await runControlledProcess(resolved.command, [...resolved.args, ...args], {
       cwd: opts.cwd,
+      timeoutMs: opts.timeoutMs,
+      ...(opts.maxOutputChars !== undefined ? { maxOutputChars: opts.maxOutputChars } : {}),
       env: {
         ...process.env,
         GIT_TERMINAL_PROMPT: '0',
@@ -62,24 +83,20 @@ export const defaultPackageRunner: PackageRunner = (cmd, args, opts) =>
         npm_config_update_notifier: 'false',
         CI: '1',
       },
-      stdio: ['ignore', 'pipe', 'pipe'],
     });
-    let stdout = '';
-    let stderr = '';
-    const timer = setTimeout(() => {
-      child.kill('SIGKILL');
-    }, opts.timeoutMs);
-    child.stdout.on('data', (d: Buffer) => { stdout += d.toString(); });
-    child.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
-    child.on('error', (err) => {
-      clearTimeout(timer);
-      rejectPromise(err);
-    });
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      resolvePromise({ code: code ?? -1, stdout, stderr });
-    });
-  });
+    return {
+      code: result.code,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      timedOut: result.timedOut,
+      stdoutTruncated: result.stdoutTruncated,
+      stderrTruncated: result.stderrTruncated,
+    };
+  };
+}
+
+/** Default runner: non-interactive env, Windows-safe npm spawn, tail-capped output, full process-tree kill on timeout. */
+export const defaultPackageRunner: PackageRunner = createPackageRunner();
 
 /** Trailing 40-line snapshot (honesty invariant: external tool failures attach terminal output tail). */
 export function tailLines(text: string, lines = 40): string {
@@ -88,11 +105,21 @@ export function tailLines(text: string, lines = 40): string {
 }
 
 function commandError(kind: string, cmd: string, args: string[], result: RunResult): HelmxError {
+  const statusDetail = result.timedOut === true ? 'timed out and process tree terminated' : `exit ${result.code}`;
   return new HelmxError(
     `plugin_package_${kind}_failed`,
-    `plugin package ${kind} command failed: ${cmd} ${args.join(' ')} (exit ${result.code})\n${tailLines(result.stderr || result.stdout)}`,
+    `plugin package ${kind} command failed: ${cmd} ${args.join(' ')} (${statusDetail})\n${tailLines(result.stderr || result.stdout)}`,
     500,
-    { cmd, args, code: result.code, stdoutTail: tailLines(result.stdout), stderrTail: tailLines(result.stderr) },
+    {
+      cmd,
+      args,
+      code: result.code,
+      ...(result.timedOut === true ? { timedOut: true } : {}),
+      ...(result.stdoutTruncated === true ? { stdoutTruncated: true } : {}),
+      ...(result.stderrTruncated === true ? { stderrTruncated: true } : {}),
+      stdoutTail: tailLines(result.stdout),
+      stderrTail: tailLines(result.stderr),
+    },
   );
 }
 
@@ -199,7 +226,7 @@ export class PluginPackageManager {
   }
 
   private pluginsDir(): string {
-    return join(this.dataDir, 'plugins');
+    return externalPluginsDir(this.dataDir);
   }
 
   private stagingRoot(): string {
@@ -617,7 +644,7 @@ export class PluginPackageManager {
       );
     }
     const rel = relative(resolve(this.pluginsDir()), resolve(source.path));
-    const inside = !(rel === '' || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel));
+    const inside = rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
     if (inside) {
       throw new HelmxError(
         'validation_error',

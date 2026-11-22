@@ -492,7 +492,7 @@ export function pluginsCommands(): CommandSpec[] {
     description:
       'Local scaffold: generate an external plugin skeleton in the target directory without contacting Hub; --template app passes helmx apps validate',
     flags: [
-      { name: 'dir', type: 'string', help: 'target parent directory (defaults to <dataDir>/plugins; must exist or be creatable)' },
+      { name: 'dir', type: 'string', help: 'target parent directory (defaults to <dataDir>/installed-plugins; must exist or be creatable)' },
       { name: 'name', type: 'string', help: 'plugin directory name and default id (alphanumeric plus - _, defaults to sample-plugin)' },
       {
         name: 'template',
@@ -702,7 +702,7 @@ async function runPluginsInit(ctx: CommandContext): Promise<void> {
   const parentDir =
     typeof parsed.flags.get('dir') === 'string' && (parsed.flags.get('dir') as string).length > 0
       ? (parsed.flags.get('dir') as string)
-      : `${ctx.dataDir}/plugins`
+      : `${ctx.dataDir}/installed-plugins`
   const target = `${parentDir.replace(/\/+$/, '')}/${name}`
   const force = parsed.flags.get('force') === true
 
