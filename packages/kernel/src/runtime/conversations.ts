@@ -1366,10 +1366,16 @@ export class ConversationTracker {
   setPendingAskCount(conversationId: number, count: number): void {
     const mirror = this.mirrorOf(conversationId)
     const prev = mirror.pendingAskCount
-    if (prev === count) return
+    const meta = this.store.getConv(conversationId)
+    if (prev === count) {
+      // Even when the pending ask count stays unchanged (e.g. concurrent settle + create within the same flush window),
+      // earliest pendingAskSince may have advanced; re-check semantic summaryKeyOf before skipping.
+      if (count === 0 || !meta || mirror.lastSummaryKey === summaryKeyOf(this.summaryOf(conversationId, count))) {
+        return
+      }
+    }
     mirror.pendingAskCount = count
     // Advance durable seq: pendingAsk change is a state change (relied upon by CAS watermarks).
-    const meta = this.store.getConv(conversationId)
     if (meta) {
       const updated: ConvMeta = {
         ...meta,

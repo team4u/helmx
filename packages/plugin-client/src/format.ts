@@ -129,8 +129,8 @@ export interface ConversationTimingInput {
  *   `undefined` when neither settled duration (`settledRunMs === 0`) nor live elapsed time (`currentRunMs === undefined`)
  *   is present so idle conversations without recorded work stay unambiguously empty;
  * - `waitingMs`: live elapsed ms waiting on the earliest pending AskDoc (`max(0, nowMs - pendingAskSince)`),
- *   present ONLY when `isBlocked === true`, `pendingAskCount !== 0`, and both `pendingAskSince` and `nowMs`
- *   are valid non-negative finite numbers;
+ *   present ONLY when `isBlocked === true`, `pendingAskCount` is either omitted or a positive finite number,
+ *   and both `pendingAskSince` and `nowMs` are valid non-negative finite numbers;
  * - `nowMs` participates ONLY while `isRunning` or `isBlocked` (never leaks live wall-clock deltas into idle/done/error states).
  */
 export interface ConversationTimingSnapshot {
@@ -168,7 +168,7 @@ export function resolveConversationTiming(
     isRunning && hasRunStart && hasNow ? Math.max(0, nowMs - conv.runStartedAt!) : undefined
   const waitingMs =
     isBlocked &&
-    conv.pendingAskCount !== 0 &&
+    (conv.pendingAskCount === undefined || hasPendingAsk) &&
     isNonNegativeFinite(conv.pendingAskSince) &&
     hasNow
       ? Math.max(0, nowMs - conv.pendingAskSince)

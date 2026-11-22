@@ -1428,19 +1428,30 @@ test('timing formatters (formatStopwatchMs / formatOffsetMs / formatDurationMs) 
     },
   )
 
-  // 7. Blocked with pendingAskCount=0 or missing/invalid fields: never fabricates waitingMs or NaN.
+  // 7. Blocked with pendingAskCount=0, negative, NaN, or Infinity: never fabricates waitingMs or NaN.
+  for (const invalidCount of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+    assert.deepEqual(
+      SDK.resolveConversationTiming(
+        {
+          status: 'blocked',
+          runDurationMs: -100,
+          runStartedAt: Number.NaN,
+          pendingAskCount: invalidCount,
+          pendingAskSince: 14_000,
+        },
+        20_000,
+      ),
+      { settledRunMs: 0, isRunning: false, isBlocked: true },
+      `blocked with pendingAskCount=${String(invalidCount)} must omit waitingMs`,
+    )
+  }
+  // Blocked with omitted pendingAskCount and valid pendingAskSince still computes waitingMs honestly.
   assert.deepEqual(
     SDK.resolveConversationTiming(
-      {
-        status: 'blocked',
-        runDurationMs: -100,
-        runStartedAt: Number.NaN,
-        pendingAskCount: 0,
-        pendingAskSince: 14_000,
-      },
+      { status: 'blocked', pendingAskSince: 14_000 },
       20_000,
     ),
-    { settledRunMs: 0, isRunning: false, isBlocked: true },
+    { settledRunMs: 0, waitingMs: 6_000, isRunning: false, isBlocked: true },
   )
 })
 

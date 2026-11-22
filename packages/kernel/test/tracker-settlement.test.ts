@@ -446,4 +446,59 @@ describe('ConversationTracker settlement vs run handOver (real harness)', { time
       }
     }
   })
+
+  it('setPendingAskCount emits upsert and bumps stateChangeSeq when count is unchanged (1 -> 1) but pendingAskSince shifts', { timeout: 60_000 }, async () => {
+    const { tracker, store, summaries, close, conversationId } = await openTracker()
+    try {
+      store.putAsk({
+        id: 'ask-t1',
+        conversationId,
+        specJson: JSON.stringify({ id: 'ask-t1', title: 'first', status: 'pending', fields: [] }),
+        status: 'pending',
+        createdAt: 10_000,
+      })
+      tracker.setPendingAskCount(conversationId, 1)
+      const first = summaries[summaries.length - 1]!
+      assert.equal(first.status, 'blocked')
+      assert.equal(first.pendingAskCount, 1)
+      assert.equal(first.pendingAskSince, 10_000)
+      const seqAfterFirst = first.stateChangeSeq
+      const countBeforeNoop = summaries.length
+
+      // Repeating setPendingAskCount(1) with identical pendingAskSince must stay a no-op.
+      tracker.setPendingAskCount(conversationId, 1)
+      assert.equal(summaries.length, countBeforeNoop)
+      assert.equal(store.getConv(conversationId)?.stateChangeSeq, seqAfterFirst)
+
+      // Simulate concurrent settle(ask-t1) + create(ask-t2) inside the same flush window: count stays 1, pendingAskSince moves to 20_000.
+      store.putAsk({
+        id: 'ask-t1',
+        conversationId,
+        specJson: JSON.stringify({ id: 'ask-t1', title: 'first', status: 'answered', fields: [] }),
+        status: 'answered',
+        createdAt: 10_000,
+        settledAt: 19_000,
+      })
+      store.putAsk({
+        id: 'ask-t2',
+        conversationId,
+        specJson: JSON.stringify({ id: 'ask-t2', title: 'second', status: 'pending', fields: [] }),
+        status: 'pending',
+        createdAt: 20_000,
+      })
+      tracker.setPendingAskCount(conversationId, 1)
+      assert.equal(summaries.length, countBeforeNoop + 1, 'same-count pendingAskSince shift must emit conversation.upsert')
+      const shifted = summaries[summaries.length - 1]!
+      assert.equal(shifted.pendingAskCount, 1)
+      assert.equal(shifted.pendingAskSince, 20_000)
+      assert.equal(shifted.stateChangeSeq, seqAfterFirst + 1, 'same-count pendingAskSince shift must advance stateChangeSeq')
+
+      // Second callback from the interleaved pair must deduplicate cleanly.
+      tracker.setPendingAskCount(conversationId, 1)
+      assert.equal(summaries.length, countBeforeNoop + 1)
+      assert.equal(store.getConv(conversationId)?.stateChangeSeq, seqAfterFirst + 1)
+    } finally {
+      await close()
+    }
+  })
 })

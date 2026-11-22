@@ -407,6 +407,44 @@ describe('emitRunSummary: real-time summary on run start and doing semantic chan
         const finalUpsert = upserts[upserts.length - 1]!
         assert.equal(finalUpsert.pendingAskCount, 0)
         assert.equal(finalUpsert.pendingAskSince, undefined)
+
+        // Concurrent settle + create: even when pendingAskCount stays 1 across an interleaved flush window,
+        // pendingAskSince must advance to the newly created ask and emit a conversation.upsert.
+        const ask3P = kernel.createAsk({
+          id: 'ask-swap-old',
+          conversationId: 1,
+          title: 'old approval',
+          fields: [{ name: 'confirm', label: 'confirm', type: 'confirm' }],
+        })
+        void ask3P.catch(() => {})
+        await waitFor(() => kernel.getConversation(1).pendingAskCount === 1)
+        const askOld = kernel.listAsks('pending').find((a) => a.id === 'ask-swap-old')!
+        assert.equal(kernel.getConversation(1).pendingAskSince, askOld.createdAt)
+        const upsertsBeforeSwap = upserts.length
+        const seqBeforeSwap = kernel.getConversation(1).stateChangeSeq
+
+        await new Promise((r) => setTimeout(r, 15))
+        // Fire answerAsk(old) and createAsk(new) concurrently in the same tick.
+        const askNewP = kernel.createAsk({
+          id: 'ask-swap-new',
+          conversationId: 1,
+          title: 'new approval',
+          fields: [{ name: 'confirm', label: 'confirm', type: 'confirm' }],
+        })
+        void askNewP.catch(() => {})
+        await kernel.answerAsk('ask-swap-old', { confirm: 'true' })
+        await waitFor(() => kernel.listAsks('pending').some((a) => a.id === 'ask-swap-new'))
+        const askNew = kernel.listAsks('pending').find((a) => a.id === 'ask-swap-new')!
+        assert.ok(askNew.createdAt > askOld.createdAt)
+        await waitFor(() =>
+          upserts.slice(upsertsBeforeSwap).some((u) => u.pendingAskCount === 1 && u.pendingAskSince === askNew.createdAt),
+        )
+        assert.equal(kernel.getConversation(1).pendingAskCount, 1)
+        assert.equal(kernel.getConversation(1).pendingAskSince, askNew.createdAt)
+        assert.ok(kernel.getConversation(1).stateChangeSeq > seqBeforeSwap)
+
+        await kernel.answerAsk('ask-swap-new', { confirm: 'true' })
+        await waitFor(() => kernel.getConversation(1).pendingAskCount === 0)
       } finally {
         stop()
       }
