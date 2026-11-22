@@ -6,6 +6,8 @@
  * （conversationId / executionId / worktree）独立于业务 result 回报。
  */
 import {
+  NODE_ID_PATTERN,
+  isValidNodeId,
   safeResultText,
   type AgentExecutionInfo,
   type AgentSpawnRequest,
@@ -132,13 +134,21 @@ export function registerSubagentTool(
       'Full subagent, runtime, worktree, and lifecycle reference: load_skill({ skillId: "workflow", path: "references/subagents.md" }).',
     ],
     description:
-      'Spawn a subagent for one delegated task. Human conversations default to background (returns runId; completion arrives as a steer follow-up); automated conversations (bot/helmx) run synchronously (background:true rejected). Pass background:false only when the next step depends on the result. Supports label, agentType (Profile ID or external runtime), fork, cwd, isolation:"worktree", model, effort, gate, schema, attachments, maxSubagentDepth, and resume. See load_skill({ skillId: "workflow", path: "references/subagents.md" }).',
+      'Spawn a subagent for one delegated task. Human conversations default to background (returns runId; completion arrives as a steer follow-up); automated conversations (bot/helmx) run synchronously (background:true rejected). Pass background:false only when the next step depends on the result. Supports label, agentType (Profile ID or external runtime), fork, nodeId, cwd, isolation:"worktree", model, effort, gate, schema, attachments, maxSubagentDepth, and resume. See load_skill({ skillId: "workflow", path: "references/subagents.md" }).',
     inputSchema: {
       type: 'object',
       properties: {
         prompt: { type: 'string', description: 'Subagent task instructions' },
         label: { type: 'string', description: 'Short task label (4-40 chars, optional)' },
         agentType: { type: 'string', description: 'Profile ID or external runtime (defaults to assistant; fork inherits parent)' },
+        nodeId: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 128,
+          pattern: NODE_ID_PATTERN,
+          description:
+            'Optional target compute node ID (overrides Profile/parent node; explicit "local" switches back to the Hub host; requires cwd or a compatible Profile cwd on remote nodes; mutually exclusive with resume)',
+        },
         cwd: { type: 'string', description: 'Absolute working directory (optional)' },
         fork: {
           type: 'boolean',
@@ -228,6 +238,22 @@ export function registerSubagentTool(
           'subagent_failed: fork 与 resume 互斥，不能同时从父会话分叉并续接既有子会话',
           'fork 与 resume 互斥',
         )
+      }
+      let nodeId: string | undefined
+      if (a['nodeId'] !== undefined) {
+        if (!isValidNodeId(a['nodeId'])) {
+          return envelopeError(
+            `subagent_failed: nodeId 非法（收到 ${JSON.stringify(a['nodeId'])}），需匹配 ${NODE_ID_PATTERN}`,
+            `invalid nodeId: ${JSON.stringify(a['nodeId'])}`,
+          )
+        }
+        if (a['resume'] !== undefined) {
+          return envelopeError(
+            'subagent_failed: nodeId 与 resume 互斥，不能在续接既有子会话时切换计算节点',
+            'nodeId 与 resume 互斥',
+          )
+        }
+        nodeId = a['nodeId']
       }
       // background 缺省与显式拒绝（权威 ownership 判定，非角色枚举）。
       const backgroundChoice = resolveBackground(
@@ -358,6 +384,7 @@ export function registerSubagentTool(
           prompt: String(a['prompt']),
           ...(label !== undefined && a['resume'] === undefined ? { title: label } : {}),
           ...(a['agentType'] !== undefined ? { agentType: String(a['agentType']) } : {}),
+          ...(nodeId !== undefined ? { nodeId } : {}),
           ...(a['cwd'] !== undefined ? { cwd: String(a['cwd']) } : {}),
           ...(a['fork'] === true ? { fork: true } : {}),
           ...(a['isolation'] !== undefined ? { isolation: 'worktree' } : {}),

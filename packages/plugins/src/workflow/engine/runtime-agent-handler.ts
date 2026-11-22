@@ -63,7 +63,7 @@ export async function handleAgentCall(ctx: AgentCallContext, callId: number, pay
   if (resolution.kind !== 'live') return
   const state = resolution.state
   const {
-    base, index, scope, scopeId, label, agentType, model, isolation, agentId, compiledSchema,
+    base, index, scope, scopeId, label, agentType, model, isolation, nodeId, agentId, compiledSchema,
     keyInput, attemptLimit, queuedAt, recordAttempt,
   } = state
   let attempt = state.attempt
@@ -172,6 +172,7 @@ export async function handleAgentCall(ctx: AgentCallContext, callId: number, pay
               ...(payload.phaseTitle !== undefined ? { phaseTitle: payload.phaseTitle } : {}),
               ...(payload.gate !== undefined ? { gate: payload.gate } : {}),
               ...(payload.attachments !== undefined ? { attachments: payload.attachments } : {}),
+              ...(nodeId !== undefined ? { nodeId } : {}),
               ...(payload.cwd !== undefined ? { cwd: payload.cwd } : {}),
               ...(payload.timeoutMs !== undefined ? { timeoutMs: payload.timeoutMs } : {}),
               ...(payload.gateTimeoutMs !== undefined ? { gateTimeoutMs: payload.gateTimeoutMs } : {}),
@@ -218,6 +219,7 @@ export async function handleAgentCall(ctx: AgentCallContext, callId: number, pay
                 ...(payload.gate !== undefined ? { gate: payload.gate } : {}),
                 ...(payload.attachments !== undefined ? { attachments: payload.attachments } : {}),
                 ...(payload.secretNames !== undefined ? { secretNames: payload.secretNames } : {}),
+                ...(nodeId !== undefined ? { nodeId } : {}),
                 ...(payload.cwd !== undefined ? { cwd: payload.cwd } : {}),
                 ...(payload.timeoutMs !== undefined ? { timeoutMs: payload.timeoutMs } : {}),
                 ...(payload.gateTimeoutMs !== undefined ? { gateTimeoutMs: payload.gateTimeoutMs } : {}),

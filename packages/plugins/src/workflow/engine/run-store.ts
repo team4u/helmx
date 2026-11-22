@@ -29,7 +29,7 @@ import {
   writeSync,
 } from 'node:fs'
 import { join } from 'node:path'
-import { HelmxError, type AgentExecutionInfo, type JsonSchema } from '@helmx/protocol'
+import { HelmxError, isValidNodeId, type AgentExecutionInfo, type JsonSchema } from '@helmx/protocol'
 import type {
   WorkflowProgressEntry,
   WorkflowRunStatus,
@@ -153,6 +153,7 @@ export interface PersistedSubagentSpec {
   requestId: string
   prompt: string
   agentType?: string
+  nodeId?: string
   cwd?: string
   isolation?: 'none' | 'worktree'
   gate?: string
@@ -298,6 +299,9 @@ function subagentSpecProblem(value: unknown): string | undefined {
   if (typeof spec['prompt'] !== 'string') return 'prompt 非字符串'
   for (const field of ['agentType', 'cwd', 'gate', 'model', 'effort'] as const) {
     if (spec[field] !== undefined && typeof spec[field] !== 'string') return `${field} 非字符串`
+  }
+  if (spec['nodeId'] !== undefined && !isValidNodeId(spec['nodeId'])) {
+    return 'nodeId 非法'
   }
   if (spec['isolation'] !== undefined && spec['isolation'] !== 'none' && spec['isolation'] !== 'worktree') {
     return 'isolation 非法'

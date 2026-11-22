@@ -16,13 +16,12 @@
  * host-adapter.ts，本模块只做动作面的解析、校验与调用。
  */
 
-import { HelmxError, isAbsoluteTargetPath, type EnvExecResponse } from '@helmx/protocol'
+import { HelmxError, isAbsoluteTargetPath, isValidNodeId, type EnvExecResponse } from '@helmx/protocol'
 import type { ActiveRun } from './active-run.js'
 import type { EngineHostDeps, WorkflowServiceHost } from './host-adapter.js'
 
 export const BUILTIN_ENV_EXEC_PLUGIN = 'env'
 export const BUILTIN_ENV_EXEC_ACTION = 'exec'
-const NODE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 
 export interface ValidatedEnvExecInput {
   command: string | string[]
@@ -147,7 +146,7 @@ export function validateEnvExecInput(host: WorkflowServiceHost, input: unknown):
 
   let nodeId: string | undefined
   if (raw.nodeId !== undefined) {
-    if (typeof raw.nodeId !== 'string' || !NODE_ID_RE.test(raw.nodeId)) {
+    if (!isValidNodeId(raw.nodeId)) {
       throw new HelmxError(
         'validation_error',
         'env.exec nodeId 需匹配 /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/（字母数字开头，可含 . _ -）',

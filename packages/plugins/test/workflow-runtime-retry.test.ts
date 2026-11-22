@@ -18,6 +18,9 @@
 import { strict as assert } from 'node:assert'
 import { describe, it } from 'node:test'
 import type { WorkflowAgentEntry } from '../src/workflow/engine/progress.js'
+import { JournalReplay } from '../src/workflow/engine/replay.js'
+import { resolveAgentReplayCall } from '../src/workflow/engine/runtime-agent-replay.js'
+import { Semaphore } from '../src/workflow/engine/runtime-control.js'
 import {
   agentRetryPrompt,
   MAX_AGENT_ATTEMPTS,
@@ -267,5 +270,137 @@ describe('scoped resume keys and retry prompt helpers', () => {
     assert.ok(prompt.startsWith('do the task\n\n[attempt 1 failed]\ngate failed\n'))
     assert.ok(prompt.endsWith('Fix the problem above and complete the original task.'))
     assert.equal(MAX_AGENT_ATTEMPTS, 10)
+  })
+})
+
+describe('workflow runtime dynamic nodeId pass-through, replay key & host-boundary validation', () => {
+  it('forwards nodeId across agent(), agent.withMeta(), and goal(), and distinguishes replay keys by nodeId', timeout, async () => {
+    const seen: Array<{ prompt: string; nodeId?: string; cwd?: string }> = []
+    const writes: Array<Record<string, unknown>> = []
+    const host = baseHost({
+      async spawnAgent(request) {
+        seen.push({ prompt: request.prompt, nodeId: request.nodeId, cwd: request.cwd })
+        request.onResolved?.({ nodeId: request.nodeId ?? 'local', conversationId: seen.length + 10 })
+        return { ok: true, text: `ran:${request.nodeId ?? 'default'}:${request.prompt}` }
+      },
+    })
+
+    const script =
+      META('dyn-node-dsl') +
+      'const a = await agent("step1", { label: "s1", nodeId: "gpu-1", cwd: "/srv/repo" })\n' +
+      'const b = await agent.withMeta("step2", { label: "s2", nodeId: "local" })\n' +
+      'const c = await goal({ objective: "step3", label: "s3", nodeId: "win-build", cwd: "C:\\\\repo", maxAttempts: 1 })\n' +
+      'return { a, b, c }'
+
+    const first = await runWorkflow({
+      script,
+      host,
+      journal: {
+        append(entry) {
+          writes.push({ ...entry })
+        },
+      },
+    })
+    assert.equal(first.status, 'completed', first.error)
+    assert.deepEqual(seen, [
+      { prompt: 'step1', nodeId: 'gpu-1', cwd: '/srv/repo' },
+      { prompt: 'step2', nodeId: 'local', cwd: undefined },
+      { prompt: 'step3', nodeId: 'win-build', cwd: 'C:\\repo' },
+    ])
+    const val = first.value as { a: string; b: { ok: boolean; execution?: { nodeId?: string } }; c: { ok: boolean; execution?: { nodeId?: string } } }
+    assert.equal(val.a, 'ran:gpu-1:step1')
+    assert.equal(val.b.execution?.nodeId, 'local')
+    assert.equal(val.c.execution?.nodeId, 'win-build')
+
+    // 相同 nodeId 重放：全部命中缓存（0 次 spawn）
+    const replaySameSeen: string[] = []
+    const replaySame = await runWorkflow({
+      script,
+      host: baseHost({
+        async spawnAgent(request) {
+          replaySameSeen.push(request.prompt)
+          return { ok: true, text: 'should-not-run' }
+        },
+      }),
+      journal: { entries: writes as never },
+    })
+    assert.equal(replaySame.status, 'completed', replaySame.error)
+    assert.deepEqual(replaySameSeen, [])
+    assert.equal(replaySame.replayedCount, 3)
+
+    // 修改 step1 的 nodeId：v4 指纹必须失配并重新执行，不得复用旧节点缓存
+    const changedScript = script.replace('nodeId: "gpu-1"', 'nodeId: "gpu-2"')
+    const replayDiffSeen: Array<{ prompt: string; nodeId?: string }> = []
+    const replayDiff = await runWorkflow({
+      script: changedScript,
+      host: baseHost({
+        async spawnAgent(request) {
+          replayDiffSeen.push({ prompt: request.prompt, nodeId: request.nodeId })
+          return { ok: true, text: `rerun:${request.nodeId}` }
+        },
+      }),
+      journal: { entries: writes as never },
+    })
+    assert.equal(replayDiff.status, 'completed', replayDiff.error)
+    assert.equal(replayDiff.replayedCount, 0)
+    assert.equal(replayDiffSeen[0]?.nodeId, 'gpu-2')
+  })
+
+  it('host boundary rejects invalid payload.nodeId and payload.resume + payload.nodeId as fatal', timeout, async () => {
+    const responses: Array<{ callId: number; ok: boolean; error?: string; fatal?: boolean }> = []
+    const makeCtx = () => ({
+      host: baseHost({
+        resumeAgent: async () => ({ ok: true, text: 'never' }),
+      }),
+      agentCap: 10,
+      retryFailedCalls: false,
+      runState: { isAborted: () => false, isSettled: () => false },
+      emit: () => {},
+      respond: (callId: number, ok: boolean, _value?: unknown, error?: string, fatal?: boolean) => {
+        responses.push({ callId, ok, error, fatal })
+      },
+      allocateIndex: () => 0,
+      recordAgent: async () => {},
+      inflight: new Set<string>(),
+      semaphore: new Semaphore(1),
+      completedByLabel: new Map(),
+      openLaunches: new Map(),
+      replay: new JournalReplay([]),
+      counters: { agentCount: 0, replayedCount: 0, spentOutputTokens: 0 },
+      redactText: (t: string) => t,
+    })
+
+    const badFormat = await resolveAgentReplayCall(makeCtx(), 1, {
+      prompt: 'hi',
+      nodeId: '_bad/node',
+      scopePath: 'root',
+      scopeCallIndex: 0,
+    })
+    assert.equal(badFormat.kind, 'responded')
+    assert.equal(responses[0]?.ok, false)
+    assert.equal(responses[0]?.fatal, true)
+    assert.match(responses[0]?.error ?? '', /opts\.nodeId/)
+
+    const badType = await resolveAgentReplayCall(makeCtx(), 2, {
+      prompt: 'hi',
+      nodeId: 123 as unknown as string,
+      scopePath: 'root',
+      scopeCallIndex: 0,
+    })
+    assert.equal(badType.kind, 'responded')
+    assert.equal(responses[1]?.ok, false)
+    assert.equal(responses[1]?.fatal, true)
+
+    const conflict = await resolveAgentReplayCall(makeCtx(), 3, {
+      prompt: 'hi',
+      resume: 'prev',
+      nodeId: 'gpu-1',
+      scopePath: 'root',
+      scopeCallIndex: 0,
+    })
+    assert.equal(conflict.kind, 'responded')
+    assert.equal(responses[2]?.ok, false)
+    assert.equal(responses[2]?.fatal, true)
+    assert.match(responses[2]?.error ?? '', /opts\.resume and opts\.nodeId are mutually exclusive/)
   })
 })

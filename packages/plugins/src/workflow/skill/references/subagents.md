@@ -2,13 +2,14 @@
 
 ## `subagent`
 
-Use the `subagent` tool for one delegated task. Required input is `prompt`; useful options include `label`, `agentType`, `fork`, `cwd`, `isolation: "worktree"`, `model`, `effort`, `gate`, `schema`, `attachments`, `maxSubagentDepth`, `resume`, and `background`.
+Use the `subagent` tool for one delegated task. Required input is `prompt`; useful options include `label`, `agentType`, `fork`, `nodeId`, `cwd`, `isolation: "worktree"`, `model`, `effort`, `gate`, `schema`, `attachments`, `maxSubagentDepth`, `resume`, and `background`.
 
 - Use a short `label` so the task card and child conversation are identifiable.
 - Human-owned conversations default to background. Keep working and wait for the automatic steer report; do not poll or sleep.
 - Automation-owned conversations default to synchronous. Explicit `background: true` is rejected for those callers.
 - Use `background: false` only when the next step depends on the actual result.
 - `fork: true` creates a native child from the parent's completed context. It cannot be combined with `resume` and is unsupported for external runtimes.
+- `nodeId` targets a specific compute node (overrides Profile/parent node; explicit `"local"` switches back to the Hub host; remote nodes require `cwd` or a compatible Profile `cwd`; mutually exclusive with `resume`).
 - `isolation: "worktree"` keeps the child branch and worktree after the run. Inspect and merge before cleanup.
 - `resume` continues an existing execution context. It is not the same as workflow ledger replay.
 

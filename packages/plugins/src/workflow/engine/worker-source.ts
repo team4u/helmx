@@ -8,6 +8,7 @@
  *   globalThis.Date 均拒绝，codeGeneration 禁 eval/Function）。
  */
 
+import { NODE_ID_PATTERN } from '@helmx/protocol'
 import type { WorktreeExecutionDescriptor } from '../../contracts.js'
 import type { WorkflowGateResult } from './runtime-types.js'
 
@@ -214,7 +215,8 @@ function optionalText(value, what) {
 }
 
 const EFFORT_LEVELS = ["minimal", "low", "medium", "high", "xhigh", "max"];
-const AGENT_OPTIONS = ["label", "phase", "model", "agentType", "isolation", "gate", "resume", "effort", "schema", "attachments", "maxSubagentDepth", "cwd", "timeoutMs", "gateTimeoutMs", "maxAttempts"];
+const NODE_ID_RE = new RegExp(${JSON.stringify(NODE_ID_PATTERN)});
+const AGENT_OPTIONS = ["label", "phase", "model", "agentType", "isolation", "gate", "resume", "effort", "schema", "attachments", "maxSubagentDepth", "nodeId", "cwd", "timeoutMs", "gateTimeoutMs", "maxAttempts"];
 const ACTION_OPT_KEYS = ["idempotent", "label", "phase"];
 
 let nextPhaseIndex = 0;
@@ -374,6 +376,10 @@ function readAgentOptions(prompt, opts) {
   ) {
     throw new Error("agent() opts.maxSubagentDepth must be an integer between 1 and 5.");
   }
+  const nodeId = optionalText(options.nodeId, "agent() opts.nodeId");
+  if (nodeId !== undefined && !NODE_ID_RE.test(nodeId)) {
+    throw new Error("agent() opts.nodeId must match " + ${JSON.stringify(NODE_ID_PATTERN)} + ".");
+  }
   const cwd = optionalText(options.cwd, "agent() opts.cwd");
   const timeoutMs = options.timeoutMs;
   if (
@@ -410,6 +416,9 @@ function readAgentOptions(prompt, opts) {
     if (isolation !== undefined) {
       throw new Error("agent() opts.resume and opts.isolation are mutually exclusive: a resumed agent keeps the working tree it was started in.");
     }
+    if (nodeId !== undefined) {
+      throw new Error("agent() opts.resume and opts.nodeId are mutually exclusive: a resumed agent keeps the compute node it was started on.");
+    }
     if (cwd !== undefined) {
       throw new Error("agent() opts.resume and opts.cwd are mutually exclusive: a resumed agent keeps the working directory it was started in.");
     }
@@ -431,6 +440,7 @@ function readAgentOptions(prompt, opts) {
     schema: schema,
     attachments: attachments,
     maxSubagentDepth: maxSubagentDepth,
+    nodeId: nodeId,
     cwd: cwd,
     timeoutMs: timeoutMs,
     gateTimeoutMs: gateTimeoutMs,
@@ -457,6 +467,7 @@ async function callAgentHost(scope, options, withMeta) {
     schema: options.schema,
     attachments: options.attachments,
     maxSubagentDepth: options.maxSubagentDepth,
+    nodeId: options.nodeId,
     cwd: options.cwd,
     timeoutMs: options.timeoutMs,
     gateTimeoutMs: options.gateTimeoutMs,

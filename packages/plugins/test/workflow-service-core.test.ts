@@ -1,6 +1,6 @@
 /**
  * 设计文档 §2.3 / §3.2 / §4.2-4.3 的 service/journal 侧核心测试：
- * - journal key v3（cwd 槽）与 agent 行 execution/gate 记录（校验 + 脱敏 + 每次尝试独立 index）；
+ * - journal key v4（cwd / nodeId 槽）与 agent 行 execution/gate 记录（校验 + 脱敏 + 每次尝试独立 index）；
  * - invokeSpawn 失败分支保留 executionInfo/gateResult、timeoutMs 单回合超时（自有
  *   AbortController + unref 计时器：TimeoutError reason、timedOut:true、返回前等完
  *   自己触发的守卫中止、成功出口撤销计时器）；
@@ -39,15 +39,27 @@ import type { WorkflowSpawnRequest, WorkflowSpawnResult } from '../src/workflow/
 const timeout = { timeout: 60_000 } as const
 
 // ---------------------------------------------------------------------------
-// journal：key v3 cwd 槽 / agent 行 execution+gate / 脱敏
+// journal：key v4 cwd+nodeId 槽 / agent 行 execution+gate / 脱敏
 // ---------------------------------------------------------------------------
 
-test('agentJournalKey v3：cwd 参与指纹，未提供时键值稳定', timeout, () => {
+test('agentJournalKey v4：cwd 与 nodeId 参与指纹，未提供时键值稳定', timeout, () => {
   const base = { prompt: 'p', label: 'l' }
   const withoutCwd = agentJournalKey(base)
   assert.equal(agentJournalKey({ ...base }), withoutCwd, '同输入同键（版本前缀稳定）')
   assert.notEqual(agentJournalKey({ ...base, cwd: '/repo/a' }), withoutCwd, 'cwd 变化即不同调用')
   assert.notEqual(agentJournalKey({ ...base, cwd: '/repo/b' }), agentJournalKey({ ...base, cwd: '/repo/a' }))
+  assert.notEqual(agentJournalKey({ ...base, nodeId: 'gpu-1' }), withoutCwd, 'nodeId 变化即不同调用')
+  assert.notEqual(agentJournalKey({ ...base, nodeId: 'local' }), withoutCwd, '显式 local 与省略 nodeId 指纹不同')
+  assert.notEqual(
+    agentJournalKey({ ...base, nodeId: 'gpu-1' }),
+    agentJournalKey({ ...base, nodeId: 'gpu-2' }),
+    '不同 nodeId 指纹不同',
+  )
+  assert.notEqual(
+    agentJournalKey({ ...base, cwd: '/repo/a', nodeId: 'gpu-1' }),
+    agentJournalKey({ ...base, cwd: '/repo/a', nodeId: 'gpu-2' }),
+    '同 cwd 不同 nodeId 指纹不同',
+  )
 })
 
 test('agent 行携带 execution/gate 落盘可回读，不触发 actionUncertain；损坏形状计 ioError', timeout, async (t) => {

@@ -2265,4 +2265,41 @@ describe('WorkflowService', () => {
       rmSync(strDataDir, { recursive: true, force: true })
     }
   })
+
+  it('host-adapter：DSL agent({ nodeId, cwd }) 透传 nodeId 到 AgentSpawnRequest，续接 resume 不携带 nodeId', timeout, async () => {
+    const nodeDataDir = mkdtempSync(join(tmpdir(), 'wf-dsl-nodeid-'))
+    const spawns: Array<Record<string, unknown>> = []
+    const baseHost = makeServiceHost()
+    const host: WorkflowServiceHost = {
+      ...baseHost,
+      spawnAgent: async (req) => {
+        spawns.push(req as unknown as Record<string, unknown>)
+        req.onResolved?.({ nodeId: req.nodeId ?? 'gpu-1', conversationId: 501, effectiveCwd: req.cwd ?? '/srv/repo' })
+        return req.resume !== undefined ? 'resumed-ok' : 'first-ok'
+      },
+    }
+    const service = new WorkflowService({ dataDir: nodeDataDir, host, state: makeStateStore() })
+    try {
+      const summary = await service.run({
+        conversationId: 1,
+        script:
+          META('dsl-nodeid-forward') +
+          'const a = await agent("first", { label: "worker", nodeId: "gpu-1", cwd: "/srv/repo" })\n' +
+          'const b = await agent("second", { resume: "worker" })\n' +
+          'return [a, b]',
+      })
+      const result = await service.wait(summary.id)
+      assert.equal(service.getRun(summary.id).status, 'completed', service.getRun(summary.id).error)
+      assert.deepEqual(result, ['first-ok', 'resumed-ok'])
+      assert.equal(spawns.length, 2)
+      assert.equal(spawns[0]!['nodeId'], 'gpu-1')
+      assert.equal(spawns[0]!['cwd'], '/srv/repo')
+      assert.equal(spawns[1]!['resume'], '501')
+      assert.equal(spawns[1]!['nodeId'], undefined, 'resume 不得携带 nodeId')
+      assert.equal(spawns[1]!['cwd'], undefined, 'resume 不得携带 cwd')
+    } finally {
+      await service.close()
+      rmSync(nodeDataDir, { recursive: true, force: true })
+    }
+  })
 })
