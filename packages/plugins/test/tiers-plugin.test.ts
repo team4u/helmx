@@ -621,7 +621,7 @@ test('integration: two-phase cold restart with defaultModel/compactionModel/Prof
     // Editing unrelated metadata on a Profile inheriting dangling `tier/scout` must not fail alignment.
     const assistantProfile = await app.kernel.profiles.get('assistant')
     assert.ok(assistantProfile)
-    await app.kernel.profiles.save({ ...assistantProfile, description: 'updated while tiers disabled' })
+    await app.kernel.profiles.save({ ...assistantProfile, name: 'updated while tiers disabled' })
     await app.kernel.alignProfileConversations('assistant')
 
     // Frozen conversation still executes cleanly without builtin:tiers.
