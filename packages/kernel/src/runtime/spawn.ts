@@ -19,15 +19,24 @@
  *   with worktree isolation) and fails explicitly with `unsupported_runtime` instead of silently ignoring.
  */
 
+import { randomUUID } from 'node:crypto'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
-import type { AgentChange, Extension } from '@earendil-works/pi-durable'
+import type { AgentChange, Extension, Submission } from '@earendil-works/pi-durable'
 import type { ModelThinkingLevel } from '@earendil-works/pi-ai'
-import type { AgentSpawnRequest, ConversationPatch, ConversationSummary } from '@helmx/protocol'
+import type {
+  AgentSpawnRequest,
+  ConversationAttachmentRef,
+  ConversationInput,
+  ConversationPatch,
+  ConversationSummary,
+  WhenBusy,
+} from '@helmx/protocol'
 import { HelmxError, parseModelTierRef, sanitizeAgentNamespacedMeta } from '@helmx/protocol'
 import type { Harness } from '@earendil-works/pi-durable'
 import type { Models } from '@earendil-works/pi-ai'
-import { parseModelRef, type ModelRefParts } from './models.js'
-import type { ResolvedModelRef } from './model-registry.js'
+import { THINKING_LEVELS, parseModelRef, type ModelRefParts, type ResolvedModelRef } from './models.js'
+import type { PromptContent } from './conversation-attachments.js'
+import { submitDurableInput, type DurableInputTracker } from './conversation-input.js'
 import { normalizeSessionCwd, trustedPlatformFromEnvFabric } from './target-cwd.js'
 import { resolveSpawnTargetChain } from './spawn-target.js'
 import {
@@ -55,8 +64,7 @@ const bg = BACKGROUND_CONTEXT
 /** Default spawn profile: `assistant` (built-in general profile; never introduces new role enums). */
 const DEFAULT_SPAWN_PROFILE = 'assistant'
 
-/** Valid `thinkingLevel` enum values (`pi-ai` `ModelThinkingLevel`; `effort` maps directly here, rejecting arbitrary strings). */
-export const THINKING_LEVELS = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
+export { THINKING_LEVELS }
 
 /** Maximum character length for normalized child conversation titles on fresh spawn. */
 const MAX_SPAWN_TITLE_LENGTH = 120
@@ -144,13 +152,19 @@ export interface NativeSpawnDeps extends HelmxToolDeps {
   agentSessions: Map<string, number>
   /**
    * Structured-output result slots shared across this `Harness` (`conversationId -> session`): fully assembled hosts
-   * (`RuntimeAgentSpawn` / `buildSpawnHost`) hold and inject this instead of a module-level `WeakMap<Harness, Map>`;
+   * (`RuntimeAgentSpawn`) hold and inject this instead of a module-level `WeakMap<Harness, Map>`;
    * concurrent spawns are isolated by `conversationId` key (so even after same-named extensions are replaced in-place
    * on the registry, older extension closures still hit their own slot dynamically).
    * Minimal `runNativeSpawn` setups (without `schema`) may omit it; requests with `schema` missing this fail loudly
    * rather than silently losing structured outputs.
    */
   structuredOutputSessions?: Map<number, StructuredOutputSession>
+  /**
+   * Optional tracker correlation port for `helmx.input` submissions (`registerInput`/`bindSubmission`/`dropInput`):
+   * wired by `RuntimeAgentSpawn` so child turns populate `turn_settled.inputs` cleanly without routing through top-level
+   * `input` hooks; standalone `runNativeSpawn` unit tests may omit it.
+   */
+  tracker?: DurableInputTracker
   /**
    * Record parent-child relationship and validate profile: invalid `profileId` must throw `HelmxError('not_found')`.
    * `childCwd` is the effective cwd used by the child conversation (also used by Gate).
@@ -211,10 +225,13 @@ export interface NativeSpawnDeps extends HelmxToolDeps {
    */
   installChildExtension(extension: Extension): void
   /**
-   * Construct `[Attached Files]` block (host already validated existence & authorization in `spawnAgent`).
-   * Injects only when attachments are present.
+   * Build model-visible prompt content (multimodal image blocks + `[Attached Files]` manifest + optional trailing
+   * `suffixText`) and lightweight attachment refs for pre-authorized attachments (shared with `ConversationAttachments`).
    */
-  resolveAttachmentsForPrompt?(): Promise<string>
+  buildAttachmentsForPrompt?(
+    effectiveText: string,
+    options?: { suffixText?: string },
+  ): Promise<{ content: PromptContent; attachments: ConversationAttachmentRef[] }>
   /** Node availability preflight (rejects offline). Creation target chain lives in `spawn-target.ts`. */
   assertNodeAvailable?: (nodeId: string) => void
   /** Optional: resolve clean fork anchor entry ID in parent conversation (defaults to `resolveCleanForkAnchor`). */
@@ -847,6 +864,43 @@ async function runChildTurn(
   }
 }
 
+/** Submit one child turn through the shared hook-free durable input primitive (`helmx.input` + compaction mutex + tracker correlation). */
+async function submitChildInput(
+  deps: NativeSpawnDeps,
+  conversation: Awaited<ReturnType<Harness['conversation']>> & object,
+  childId: number,
+  options: {
+    text: string
+    content: PromptContent
+    whenBusy: WhenBusy
+    requestId?: string
+    attachments?: ConversationAttachmentRef[]
+  },
+): Promise<Submission> {
+  const inputId = options.requestId ?? randomUUID()
+  const input: ConversationInput = {
+    id: inputId,
+    text: options.text,
+    origin: 'agent',
+    whenBusy: options.whenBusy,
+    createdAt: Date.now(),
+    ...(options.attachments !== undefined && options.attachments.length > 0
+      ? { attachments: options.attachments }
+      : {}),
+  }
+  const { submission } = await submitDurableInput({
+    harness: deps.harness,
+    conversation,
+    conversationId: childId,
+    input,
+    whenBusy: options.whenBusy,
+    content: options.content,
+    requestId: inputId,
+    tracker: deps.tracker,
+  })
+  return submission
+}
+
 /** Submit a turn, await completion, and inspect terminal status (structured branch checks settled output before text). */
 async function driveTurn(
   deps: NativeSpawnDeps,
@@ -856,31 +910,45 @@ async function driveTurn(
   structured: StructuredOutputSession | undefined,
   gateCwd: string,
 ): Promise<unknown> {
-  // Attachments were already authorized by host; append manifest block after prompt body, before output contract.
-  const attachmentBlock =
-    request.attachments !== undefined && request.attachments.length > 0 && deps.resolveAttachmentsForPrompt
-      ? `\n\n${await deps.resolveAttachmentsForPrompt()}\n`
-      : ''
-  const basePrompt = `${request.prompt}${attachmentBlock}`
-  const promptText = structured
-    ? `${basePrompt}
-
-<structured_output_contract>
+  const effectivePrompt = deps.redact ? deps.redact(request.prompt) : request.prompt
+  const contractSuffix = structured
+    ? `<structured_output_contract>
 After finishing your answer, call the register_structured_output tool to submit your final structured result (the output parameter must satisfy the JSON Schema below).
 Schema: ${JSON.stringify(structured.schema)}
 </structured_output_contract>`
-    : basePrompt
+    : undefined
+
+  // Attachments were already authorized by host; reuse shared ConversationAttachments content builder
+  // so native spawns emit identical [Attached Files] + multimodal ImageContent blocks before the output contract.
+  let content: PromptContent
+  let attachments: ConversationAttachmentRef[] | undefined
+  if (
+    request.attachments !== undefined &&
+    request.attachments.length > 0 &&
+    deps.buildAttachmentsForPrompt !== undefined
+  ) {
+    const built = await deps.buildAttachmentsForPrompt(effectivePrompt, {
+      ...(contractSuffix !== undefined ? { suffixText: contractSuffix } : {}),
+    })
+    content = built.content
+    attachments = built.attachments
+  } else {
+    content =
+      contractSuffix !== undefined
+        ? effectivePrompt.length > 0
+          ? `${effectivePrompt}\n\n${contractSuffix}`
+          : contractSuffix
+        : effectivePrompt
+  }
 
   // Busy mode: steer (unified default); reattach uses followUp as safety net behind requestId dedup.
-  const submission = await conversation.submit(
-    {
-      type: 'input',
-      ...(request.requestId !== undefined ? { requestId: request.requestId } : {}),
-      content: promptText,
-      whenBusy: request.reattach !== undefined ? 'followUp' : 'steer',
-    },
-    bg,
-  )
+  const submission = await submitChildInput(deps, conversation, childId, {
+    text: effectivePrompt,
+    content,
+    whenBusy: request.reattach !== undefined ? 'followUp' : 'steer',
+    ...(request.requestId !== undefined ? { requestId: request.requestId } : {}),
+    ...(attachments !== undefined ? { attachments } : {}),
+  })
   const settled = await submission.wait(bg)
   assertNotUnanswered(settled, childId)
 
@@ -893,9 +961,11 @@ Schema: ${JSON.stringify(structured.schema)}
       turnSettled.status === 'done' &&
       turnSettled.answer !== undefined
     ) {
-      return await readSubmissionAssistantText(conversation, turnSettled)
+      return await readSubmissionAssistantText(conversation, turnSettled, { redact: deps.redact })
     }
-    return deps.getLastAssistantText(childId)
+    const fallback = deps.getLastAssistantText(childId)
+    if (fallback === undefined) return undefined
+    return deps.redact ? deps.redact(fallback) : fallback
   }
 
   if (structured) {
@@ -924,19 +994,17 @@ Schema: ${JSON.stringify(structured.schema)}
       return parsed.value
     }
     const healRequestId = request.requestId !== undefined ? `${request.requestId}:schema-heal` : undefined
-    const heal = await conversation.submit(
-      {
-        type: 'input',
-        ...(healRequestId !== undefined ? { requestId: healRequestId } : {}),
-        content:
-          `Your previous response did not submit the result via the register_structured_output tool. Please call ` +
-          `register_structured_output immediately with an output parameter containing valid JSON matching the Schema below.` +
-          `
-Schema: ${JSON.stringify(structured.schema)}`,
-        whenBusy: 'steer',
-      },
-      bg,
-    )
+    const healPrompt =
+      `Your previous response did not submit the result via the register_structured_output tool. Please call ` +
+      `register_structured_output immediately with an output parameter containing valid JSON matching the Schema below.` +
+      `
+Schema: ${JSON.stringify(structured.schema)}`
+    const heal = await submitChildInput(deps, conversation, childId, {
+      text: healPrompt,
+      content: healPrompt,
+      whenBusy: 'steer',
+      ...(healRequestId !== undefined ? { requestId: healRequestId } : {}),
+    })
     const healSettled = await heal.wait(bg)
     assertNotUnanswered(healSettled, childId)
     if (structured.accepted !== undefined) {

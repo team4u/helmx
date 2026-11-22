@@ -5,8 +5,9 @@
  * rewind interval parsing, 404 conversation checks, and other cross-module reusable helpers.
  */
 import { join } from 'node:path'
+import { BACKGROUND_CONTEXT, type Context } from '@earendil-works/chord/context'
 import type { JsonValue } from '@earendil-works/chord/json'
-import type { ToolExecutionResult } from '@earendil-works/pi-durable'
+import type { Conversation, EntryId, EntryRecord, ToolExecutionResult } from '@earendil-works/pi-durable'
 import type { ConversationSummary, JsonSchema, PluginToolTextBlock } from '@helmx/protocol'
 import type { Models } from '@earendil-works/pi-ai'
 import {
@@ -1101,18 +1102,51 @@ export function entryModelText(entry: { model?: ReadonlyArray<{ content?: unknow
     .join('\n')
 }
 
-/** Concatenate assistant text blocks from an `entry.model` array (used to extract `waitForInput` answers). */
-export function assistantTextOfModel(model: unknown[] | undefined): string {
-  if (model === undefined) return ''
+/** Concatenate assistant text blocks from an `entry.model` array (shared by `waitForInput`, tracker, detail FTS, and native spawn). */
+export function assistantTextOfModel(model: ReadonlyArray<unknown> | undefined): string {
+  if (!Array.isArray(model)) return ''
   const out: string[] = []
   for (const message of model) {
-    const blocks = (message as { content?: ReadonlyArray<{ type: string; text?: string }> }).content
-    if (!blocks) continue
+    if (message === null || typeof message !== 'object') continue
+    const blocks = (message as { content?: unknown }).content
+    if (!Array.isArray(blocks)) continue
     for (const block of blocks) {
-      if (block.type === 'text' && typeof block.text === 'string') out.push(block.text)
+      if (
+        block !== null &&
+        typeof block === 'object' &&
+        (block as { type?: unknown }).type === 'text' &&
+        typeof (block as { text?: unknown }).text === 'string'
+      ) {
+        out.push((block as { text: string }).text)
+      }
     }
   }
   return out.join('\n')
+}
+
+/** Extract assistant text from a single entry (returns `''` for non-`pi.assistant` entries). */
+export function assistantTextOfEntry(
+  entry: { kind: string; model?: ReadonlyArray<unknown> } | undefined,
+): string {
+  if (entry === undefined || entry.kind !== 'pi.assistant') return ''
+  return assistantTextOfModel(entry.model)
+}
+
+/** Read a single persisted entry by exact ID (shared by `ConversationService.waitForInput` and `readSubmissionAssistantText`). */
+export async function readEntryById(
+  conversation: Pick<Conversation, 'entries'>,
+  entryId: EntryId,
+  context: Context = BACKGROUND_CONTEXT,
+): Promise<EntryRecord | undefined> {
+  if (typeof conversation.entries !== 'function') return undefined
+  const page = await conversation.entries(
+    { minEntryId: entryId, maxEntryId: entryId, order: 'ascending' },
+    1,
+    undefined,
+    context,
+  )
+  const item = page.items[0]
+  return item !== undefined && item.id === entryId ? item : undefined
 }
 
 // ---------------------------------------------------------------------------

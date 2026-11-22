@@ -22,7 +22,9 @@ import { after, before, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { join } from 'node:path'
 import { AskService } from '../src/runtime/asks.js'
+import { assistantTextOfEntry, assistantTextOfModel } from '../src/runtime/runtime-helpers.js'
 import { runNativeSpawn, type NativeSpawnDeps } from '../src/runtime/spawn.js'
+import { readSubmissionAssistantText } from '../src/runtime/spawn-reattach.js'
 import { HelmxStore } from '../src/runtime/store.js'
 import { openHelmxDatabase } from '../src/runtime/sqlite.js'
 import { ArtifactService, SecretStash } from '../src/services/index.js'
@@ -1072,5 +1074,58 @@ describe('spawn parentToolCallId: real-time binding between parent tool call ID 
     } finally {
       await th.close()
     }
+  })
+
+  it('shared assistant answer extraction handles multi-message model, range fallback, rewind/reset stop, and redaction', { timeout: 60_000 }, async () => {
+    // 1. assistantTextOfModel & assistantTextOfEntry across multiple model messages and non-assistant entries.
+    assert.equal(
+      assistantTextOfModel([
+        { role: 'assistant', content: [{ type: 'text', text: 'part-1' }, { type: 'toolCall', id: 'tc1' }] },
+        { role: 'assistant', content: [{ type: 'text', text: 'part-2' }] },
+      ]),
+      'part-1\npart-2',
+    )
+    assert.equal(assistantTextOfEntry({ kind: 'helmx.input', model: [{ content: [{ type: 'text', text: 'ignored' }] }] }), '')
+    assert.equal(
+      assistantTextOfEntry({ kind: 'pi.assistant', model: [{ content: [{ type: 'text', text: 'ok' }] }] }),
+      'ok',
+    )
+
+    // 2. readSubmissionAssistantText falls back from tool-only answer entry to earlier assistant entry in range, with redaction.
+    const entriesA = [
+      { id: 10, kind: 'helmx.input', model: [{ role: 'user', content: 'task' }] },
+      { id: 11, kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: 'secret=TOP_SECRET' }] }] },
+      { id: 12, kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'toolCall', id: 'tc1' }] }] },
+    ]
+    const fakeConv = (items: typeof entriesA) => ({
+      entries: async (query: { minEntryId?: number; maxEntryId?: number; order?: 'ascending' | 'descending' }) => {
+        const filtered = items.filter(
+          (e) =>
+            (query.minEntryId === undefined || e.id >= query.minEntryId) &&
+            (query.maxEntryId === undefined || e.id <= query.maxEntryId),
+        )
+        if (query.order === 'descending') filtered.reverse()
+        return { items: filtered as never, next: undefined }
+      },
+    })
+    const recovered = await readSubmissionAssistantText(
+      fakeConv(entriesA) as never,
+      { type: 'input', status: 'done', entry: 10 as never, answer: 12 as never } as never,
+      { redact: (t) => t.replaceAll('TOP_SECRET', '[REDACTED]') },
+    )
+    assert.equal(recovered, 'secret=[REDACTED]')
+
+    // 3. Range fallback stops at helmx.rewind / pi.reset instead of returning superseded assistant text.
+    const entriesWithReset = [
+      { id: 10, kind: 'helmx.input', model: [] },
+      { id: 11, kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: 'stale' }] }] },
+      { id: 12, kind: 'pi.reset', model: [] },
+      { id: 13, kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'toolCall', id: 'tc2' }] }] },
+    ]
+    const stopped = await readSubmissionAssistantText(
+      fakeConv(entriesWithReset) as never,
+      { type: 'input', status: 'done', entry: 10 as never, answer: 13 as never } as never,
+    )
+    assert.equal(stopped, undefined, 'range fallback must stop at pi.reset instead of returning stale assistant text')
   })
 })

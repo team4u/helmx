@@ -33,15 +33,22 @@ import type { ConversationTracker } from './conversations.js'
 import type { EventHub } from './events.js'
 import {
   assistantTextOfModel,
+  readEntryById,
   requireConv,
   type RewindInterval,
 } from './runtime-helpers.js'
 import { toConversationEntry } from './entries.js'
-import { clampThinkingLevelForModel } from './models.js'
-import type { ResolvedModelRef } from './model-registry.js'
-import { THINKING_LEVELS } from './spawn.js'
+import {
+  THINKING_LEVELS,
+  clampThinkingLevelForModel,
+  type ResolvedModelRef,
+} from './models.js'
 import type { HelmxStore } from './store.js'
-import { ConversationAttachments } from './conversation-attachments.js'
+import {
+  ConversationAttachments,
+  type PromptContent,
+  type ResolvedAttachmentItem,
+} from './conversation-attachments.js'
 import { ConversationContextOps } from './conversation-context-ops.js'
 import { ConversationDetailService } from './conversation-detail.js'
 import { ConversationInputPipeline } from './conversation-input.js'
@@ -793,15 +800,16 @@ export class ConversationService {
     return this.attachments.resolveAuthorizedAttachment(conversationId, artifactId)
   }
 
-  buildAttachmentBlock(resolved: Array<{ ref: ConversationAttachmentRef; absPath: string }>): string {
+  buildAttachmentBlock(resolved: ReadonlyArray<ResolvedAttachmentItem>): string {
     return this.attachments.buildAttachmentBlock(resolved)
   }
 
   async buildAttachmentContent(
     effectiveText: string,
-    resolved: Array<{ ref: ConversationAttachmentRef; absPath: string }>,
-  ): Promise<string | Array<{ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }>> {
-    return this.attachments.buildAttachmentContent(effectiveText, resolved)
+    resolved: ReadonlyArray<ResolvedAttachmentItem>,
+    options?: { suffixText?: string },
+  ): Promise<PromptContent> {
+    return this.attachments.buildAttachmentContent(effectiveText, resolved, options)
   }
 
   // ------------------------------------------------------------------
@@ -1003,24 +1011,14 @@ export class ConversationService {
     }
     const conversation = await runWaitOp(() => this.harness.conversation(id as never, waitContext))
     if (!conversation) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
-    const page = await runWaitOp(() =>
-      conversation.entries(
-        { minEntryId: settled.answer as never, maxEntryId: settled.answer as never, order: 'ascending' },
-        1,
-        undefined,
-        waitContext,
-      ),
-    )
-    const raw = page.items[0] as
-      | { id: number; kind: string; data?: unknown; model?: unknown[] }
-      | undefined
-    if (raw === undefined || raw.id !== settled.answer) {
+    const raw = await runWaitOp(() => readEntryById(conversation, settled.answer as never, waitContext))
+    if (raw === undefined) {
       throw new HelmxError('not_found', `answer entry missing: ${settled.answer}`, 502, {
         conversationId: id,
         submissionId,
       })
     }
-    const entry = toConversationEntry(raw)
+    const entry = toConversationEntry(raw as unknown as { id: number; kind: string; data?: unknown; model?: unknown[] })
     const text = this.stash.redact(assistantTextOfModel(entry.model))
     return { conversationId: id, submissionId, text, entry }
   }

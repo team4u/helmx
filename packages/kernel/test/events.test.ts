@@ -946,4 +946,62 @@ describe('EventHub SSE idle heartbeat', { timeout: 60_000 }, () => {
     controller.abort()
     await reader.cancel().catch(() => {})
   })
+
+  it('pre-aborted request signal closes immediately without subscribing or starting keepalive timer', { timeout: 60_000 }, async () => {
+    const { hub } = makeFixture({ keepaliveMs: 10 })
+    const controller = new AbortController()
+    controller.abort()
+    const response = hub.response(new Request('http://x/api/events', { signal: controller.signal }))
+    assert.ok(response.body)
+    assert.equal(hub.subscriberCount, 0, 'pre-aborted request must clean up subscription synchronously in start')
+    const reader = response.body.getReader()
+    const first = await reader.read()
+    assert.equal(first.done, true, 'pre-aborted stream must end immediately without emitting frames')
+    await new Promise((r) => setTimeout(r, 40))
+    assert.equal(hub.subscriberCount, 0)
+  })
+
+  it('resumed stream starts idle keepalive after pull-paced replay drains and still enforces byte backpressure', { timeout: 60_000 }, async () => {
+    const { hub } = makeFixture({ keepaliveMs: 10, maxPendingBytes: 360 })
+    hub.publish('notification', { level: 'info', title: 'first' })
+    const seq1 = hub.seq
+    hub.publish('notification', { level: 'info', title: 'second' })
+    hub.publish('notification', { level: 'info', title: 'third' })
+
+    const controller = new AbortController()
+    const url = `http://x/api/events?afterSeq=${seq1}&bootId=${encodeURIComponent(hub.bootId)}`
+    const response = hub.response(new Request(url, { signal: controller.signal }))
+    assert.equal(response.status, 200)
+    assert.ok(response.body)
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+
+    // Pull resumed handshake + 2 replayed frames + first post-drain keepalive.
+    const seen: string[] = []
+    let sawKeepalive = false
+    const deadline = Date.now() + 3_000
+    while (!sawKeepalive) {
+      assert.ok(Date.now() < deadline, 'timed out waiting for post-replay keepalive')
+      const chunk = await reader.read()
+      assert.equal(chunk.done, false)
+      const text = decoder.decode(chunk.value!)
+      if (text === ': keepalive\n\n') {
+        sawKeepalive = true
+      } else {
+        seen.push(text)
+      }
+    }
+    const joined = seen.join('')
+    assert.match(joined, /event: resumed/)
+    assert.match(joined, /"title":"second"/)
+    assert.match(joined, /"title":"third"/)
+
+    // Stop reading: keepalive accumulation must hit maxPendingBytes and close the slow consumer cleanly.
+    await waitFor(() => hub.subscriberCount === 0)
+    let done = false
+    while (!done) {
+      done = (await reader.read()).done === true
+    }
+    controller.abort()
+  })
 })

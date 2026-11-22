@@ -58,7 +58,12 @@ function collectToolResultTexts(context: TranscriptContext | undefined): Array<{
 
 async function countUserEntries(runtime: KernelRuntime, conversationId: number): Promise<number> {
   const detail = await runtime.getConversationDetail(conversationId, { limit: 200 })
-  return detail.entries.filter((e) => e.kind === 'pi.user').length
+  assert.equal(
+    detail.entries.filter((e) => e.kind === 'pi.user').length,
+    0,
+    'native spawn must persist helmx.input entries instead of bare pi.user',
+  )
+  return detail.entries.filter((e) => e.kind === 'helmx.input').length
 }
 
 async function runSeederUntilSigkill(
@@ -890,7 +895,7 @@ test('spawnAgent(requestId + reattach.conversationId) resumes in-place across ru
     reattach: { conversationId: childId3 },
   })
   assert.deepEqual(result3b, { status: 'healed', count: 2 })
-  assert.equal(await countUserEntries(r3b, childId3), 2, 'exactly one pi.user for initial turn and one for :schema-heal (zero duplicates)')
+  assert.equal(await countUserEntries(r3b, childId3), 2, 'exactly one helmx.input for initial turn and one for :schema-heal (zero duplicates)')
 
   // ---- Scenario 4: plain-text turn already persisted before close() (in-memory lastAssistant unpopulated); reattach reads text directly and runs gate ----
   const dir4 = mkdtempSync(join(tmpdir(), 'helmx-reattach-close-plain-'))

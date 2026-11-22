@@ -50,7 +50,7 @@ import {
   pruneUndefined,
   validateAndRedactConversationLive,
 } from './event-validation.js'
-import { byteBoundedWrite, closeControllerQuietly, encodeSseChunk, KEEPALIVE_CHUNK, sseResponse } from './sse-stream.js'
+import { encodeSseChunk, SseStreamController } from './sse-stream.js'
 
 /**
  * Snapshot provider: omits bootId (injected by the EventHub instance as single source of truth);
@@ -372,71 +372,26 @@ export class EventHub {
       })
     }
 
-    /** Flush queue item: either a replay reference (shared ring bytes) or a live frame/heartbeat arriving mid-flush. */
-    interface OutboundEntry {
-      chunk: Uint8Array
-      /** Bytes counted against slow-consumer budget (0 for replay references to avoid double-counting ring memory). */
-      liveBytes: number
-    }
-
-    let outbound: OutboundEntry[] = []
-    let outboundLiveBytes = 0
-    /** True while flushing replay/backlog: business bytes go solely through the flush queue drained step-by-step by pull. */
-    let flushing = false
-    let closed = false
     let unsubscribe: (() => void) | undefined
-    let controllerRef: ReadableStreamDefaultController<Uint8Array> | undefined
-    let keepaliveTimer: ReturnType<typeof setInterval> | undefined
-
-    const write = (chunk: Uint8Array): boolean =>
-      byteBoundedWrite(controllerRef, closed, chunk, this.maxPendingBytes)
-
-    /** Enqueue a frame/heartbeat arriving during flush onto the tail (preserves strict byte ordering and charges slow-consumer budget). */
-    const pushOutbound = (chunk: Uint8Array): boolean => {
-      if (outboundLiveBytes + chunk.byteLength > this.maxPendingBytes) return false
-      outboundLiveBytes += chunk.byteLength
-      outbound.push({ chunk, liveBytes: chunk.byteLength })
-      return true
-    }
-
-    const shutdown = (): void => {
-      if (closed) return
-      closed = true
-      if (keepaliveTimer !== undefined) {
-        clearInterval(keepaliveTimer)
-        keepaliveTimer = undefined
-      }
-      this.transientStreamSenders.delete(sendTransientChunk)
-      request.signal.removeEventListener('abort', shutdown)
-      unsubscribe?.()
-      unsubscribe = undefined
-      const controller = controllerRef
-      controllerRef = undefined
-      closeControllerQuietly(controller)
-    }
-
     const sendTransientChunk = (chunk: Uint8Array): void => {
-      if (closed) return
-      const ok = flushing ? pushOutbound(chunk) : write(chunk)
-      if (!ok) shutdown()
+      if (stream.closed) return
+      if (!stream.send(chunk)) stream.close()
     }
-
-    const startKeepalive = (): void => {
-      // Idle heartbeat: SSE comment line (leading `:`), ignored by parsers, never fabricates business events or advances seq;
-      // goes through unified write backpressure so slow/stalled readers that don't drain are closed cleanly.
-      if (keepaliveTimer !== undefined || closed) return
-      keepaliveTimer = startKeepaliveInterval(this.keepaliveMs, write, shutdown)
-    }
+    const stream = new SseStreamController({
+      request,
+      maxPendingBytes: this.maxPendingBytes,
+      keepaliveMs: this.keepaliveMs,
+      onClose: () => {
+        this.transientStreamSenders.delete(sendTransientChunk)
+        unsubscribe?.()
+        unsubscribe = undefined
+      },
+    })
 
     // Subscribe first, then sample synchronously (within the same microtask, buffering prevents missed frames); snapshot errors throw synchronously to HTTP.
     const handle = this.openStream(
-      (frame, chunk) => {
-        if (closed) return false
-        // Frames arriving mid-flush queue after replay (strict byte order); once flushed, switch to direct write with byte backpressure.
-        if (flushing) return pushOutbound(chunk)
-        return write(chunk)
-      },
-      shutdown,
+      (_frame, chunk) => stream.send(chunk),
+      () => stream.close(),
     )
     unsubscribe = handle.unsubscribe
 
@@ -460,62 +415,25 @@ export class EventHub {
       try {
         snap = this.currentSnapshot()
       } catch (error) {
-        shutdown()
+        stream.close()
         throw error
       }
       liveSeq = snap.seq
       handshake = encodeSseChunk('snapshot', snap)
     }
 
-    return sseResponse({
-      start: (controller) => {
-        // Without a byte Strategy at construction, controller is always the default controller (preserves original behavior).
-        controllerRef = controller as ReadableStreamDefaultController<Uint8Array>
-        if (closed) {
-          // Closed before stream initialized (e.g., synchronous overflow in snapshot provider): close immediately.
-          closeControllerQuietly(controllerRef)
-          return
-        }
-        if (request.signal.aborted) {
-          shutdown()
-          return
-        }
-        request.signal.addEventListener('abort', shutdown)
-        // Write handshake frame immediately (subject to byte budget); replay bytes are held out for pull-driven flushing
-        // at consumer pace so consumers that haven't called pull yet don't hit the 1 MiB pending cap prematurely.
-        if (!write(handshake)) {
-          shutdown()
-          return
-        }
-        outbound = replay.map((chunk) => ({ chunk, liveBytes: 0 }))
-        flushing = outbound.length > 0
-        // Flush buffered frames from subscription setup (seq > liveSeq): tail-queued during flush, or written directly.
-        if (!handle.goLive(liveSeq)) return
-        if (!closed) this.transientStreamSenders.add(sendTransientChunk)
-        if (!flushing) startKeepalive()
-      },
-      pull: () => {
-        if (closed || !flushing) return
-        const entry = outbound.shift()
-        if (entry === undefined) return
-        outboundLiveBytes -= entry.liveBytes
-        const controller = controllerRef
-        if (controller === undefined) return
-        // pull semantics: consumer already has a pending read, so enqueue satisfies it immediately without building unread backlog.
-        try {
-          controller.enqueue(entry.chunk)
-        } catch {
-          shutdown()
-          return
-        }
-        if (outbound.length === 0) {
-          flushing = false
-          startKeepalive()
-        }
-      },
-      cancel: () => {
-        shutdown()
-      },
+    return stream.toResponse(() => {
+      // Write handshake frame immediately (subject to byte budget); replay bytes are held out for pull-driven flushing
+      // at consumer pace so consumers that haven't called pull yet don't hit the 1 MiB pending cap prematurely.
+      if (!stream.write(handshake)) {
+        stream.close()
+        return
+      }
+      stream.beginReplayFlush(replay)
+      // Flush buffered frames from subscription setup (seq > liveSeq): tail-queued during flush, or written directly.
+      if (!handle.goLive(liveSeq)) return
+      if (!stream.closed) this.transientStreamSenders.add(sendTransientChunk)
+      if (!stream.flushing) stream.startKeepalive()
     })
   }
 
@@ -666,17 +584,6 @@ function isActiveLiveView(live: ConversationLive): boolean {
   )
 }
 
-function startKeepaliveInterval(
-  keepaliveMs: number,
-  write: (chunk: Uint8Array) => boolean,
-  shutdown: () => void,
-): ReturnType<typeof setInterval> | undefined {
-  if (keepaliveMs <= 0) return undefined
-  return setInterval(() => {
-    if (!write(KEEPALIVE_CHUNK)) shutdown()
-  }, keepaliveMs)
-}
-
 /**
  * SessionDocEventHub: dedicated event stream for conversation documents.
  *
@@ -818,48 +725,33 @@ export class SessionDocEventHub {
     /** Buffered frames arriving before snapshot flush completes (switches to byte backpressure afterward). */
     let pending: SessionDocQueuedFrame[] = []
     let streaming = false
-    let closed = false
     let unsubscribe: (() => void) | undefined
-    let controllerRef: ReadableStreamDefaultController<Uint8Array> | undefined
-    let keepaliveTimer: ReturnType<typeof setInterval> | undefined
-
-    const write = (chunk: Uint8Array): boolean =>
-      byteBoundedWrite(controllerRef, closed, chunk, this.maxPendingBytes)
-
     /** Stream handle registered on shutdown; undefined during provider phase (delete is idempotent). */
     let streamEntry: SessionDocStreamEntry | undefined
-    const shutdown = (): void => {
-      if (closed) return
-      closed = true
-      if (keepaliveTimer !== undefined) {
-        clearInterval(keepaliveTimer)
-        keepaliveTimer = undefined
-      }
-      request.signal.removeEventListener('abort', shutdown)
-      unsubscribe?.()
-      unsubscribe = undefined
-      if (streamEntry !== undefined) this.streams.delete(streamEntry)
-      const controller = controllerRef
-      controllerRef = undefined
-      closeControllerQuietly(controller)
-    }
 
-    const startKeepalive = (): void => {
-      if (keepaliveTimer !== undefined || closed) return
-      keepaliveTimer = startKeepaliveInterval(this.keepaliveMs, write, shutdown)
-    }
+    const stream = new SseStreamController({
+      request,
+      maxPendingBytes: this.maxPendingBytes,
+      keepaliveMs: this.keepaliveMs,
+      onClose: () => {
+        unsubscribe?.()
+        unsubscribe = undefined
+        if (streamEntry !== undefined) this.streams.delete(streamEntry)
+        pending = []
+      },
+    })
 
     // Subscribe+buffer first (same sync window as snapshot read so no frames are lost; buffered frames keep seq for deduplication).
     unsubscribe = this.subscribe(options.target, (frame) => {
-      if (closed) return
+      if (stream.closed) return
       const chunk = encodeSseChunk('plugin.session_doc.updated', frame)
       if (streaming) {
-        if (!write(chunk)) shutdown()
+        if (!stream.write(chunk)) stream.close()
         return
       }
       if (pending.length >= this.maxPending) {
         // Backlog exceeded before snapshot flushed (only possible on synchronous burst in provider): close stream explicitly.
-        shutdown()
+        stream.close()
         return
       }
       pending.push({ seq: frame.seq, chunk })
@@ -871,46 +763,30 @@ export class SessionDocEventHub {
       if (request.signal.aborted) throw new HelmxError('aborted', 'request aborted before subscription was established', 499)
       snap = options.snapshot()
     } catch (error) {
-      shutdown()
+      stream.close()
       throw error
     }
     const snapshotChunk = encodeSseChunk('snapshot', snap)
-    streamEntry = { targets: [options.target], stop: shutdown }
-    if (!closed) this.streams.add(streamEntry)
+    streamEntry = { targets: [options.target], stop: () => stream.close() }
+    if (!stream.closed) this.streams.add(streamEntry)
 
-    return sseResponse({
-      start: (controller) => {
-        // Without a byte queuing strategy at construction, controller is always the default controller (preserves original behavior).
-        controllerRef = controller as ReadableStreamDefaultController<Uint8Array>
-        if (closed) {
-          closeControllerQuietly(controllerRef)
+    return stream.toResponse(() => {
+      // Buffered subscription and snapshot are ready: emit snapshot first, then flush newer buffered frames
+      // (frames with seq <= snapshot.seq are already reflected in the snapshot and skipped to avoid duplicates).
+      if (!stream.write(snapshotChunk)) {
+        stream.close()
+        return
+      }
+      streaming = true
+      for (const frame of pending) {
+        if (frame.seq <= snap.seq) continue
+        if (!stream.write(frame.chunk)) {
+          stream.close()
           return
         }
-        if (request.signal.aborted) {
-          shutdown()
-          return
-        }
-        request.signal.addEventListener('abort', shutdown)
-        // Buffered subscription and snapshot are ready: emit snapshot first, then flush newer buffered frames
-        // (frames with seq <= snapshot.seq are already reflected in the snapshot and skipped to avoid duplicates).
-        if (!write(snapshotChunk)) {
-          shutdown()
-          return
-        }
-        streaming = true
-        for (const frame of pending) {
-          if (frame.seq <= snap.seq) continue
-          if (!write(frame.chunk)) {
-            shutdown()
-            return
-          }
-        }
-        pending = []
-        startKeepalive()
-      },
-      cancel: () => {
-        shutdown()
-      },
+      }
+      pending = []
+      stream.startKeepalive()
     })
   }
 
@@ -949,42 +825,27 @@ export class SessionDocEventHub {
 
     let pending: SessionDocMultiplexQueuedFrame[] = []
     let streaming = false
-    let closed = false
     const unsubscribes: Array<() => void> = []
-    let controllerRef: ReadableStreamDefaultController<Uint8Array> | undefined
-    let keepaliveTimer: ReturnType<typeof setInterval> | undefined
     let streamEntry: SessionDocStreamEntry | undefined
 
-    const write = (chunk: Uint8Array): boolean =>
-      byteBoundedWrite(controllerRef, closed, chunk, this.maxPendingBytes)
-
-    const shutdown = (): void => {
-      if (closed) return
-      closed = true
-      if (keepaliveTimer !== undefined) {
-        clearInterval(keepaliveTimer)
-        keepaliveTimer = undefined
-      }
-      request.signal.removeEventListener('abort', shutdown)
-      while (unsubscribes.length > 0) {
-        const unsub = unsubscribes.pop()
-        unsub?.()
-      }
-      if (streamEntry !== undefined) this.streams.delete(streamEntry)
-      const controller = controllerRef
-      controllerRef = undefined
-      closeControllerQuietly(controller)
-    }
-
-    const startKeepalive = (): void => {
-      if (keepaliveTimer !== undefined || closed) return
-      keepaliveTimer = startKeepaliveInterval(this.keepaliveMs, write, shutdown)
-    }
+    const stream = new SseStreamController({
+      request,
+      maxPendingBytes: this.maxPendingBytes,
+      keepaliveMs: this.keepaliveMs,
+      onClose: () => {
+        while (unsubscribes.length > 0) {
+          const unsub = unsubscribes.pop()
+          unsub?.()
+        }
+        if (streamEntry !== undefined) this.streams.delete(streamEntry)
+        pending = []
+      },
+    })
 
     for (const target of targets) {
       const key = SessionDocEventHub.keyOf(target)
       const unsub = this.subscribe(target, (frame) => {
-        if (closed) return
+        if (stream.closed) return
         const doc = (frame.event as { doc: PublicPluginSessionDoc }).doc
         const action: SessionDocMultiplexAction = doc.deleted === true ? 'deleted' : 'updated'
         const multiplexFrame: SessionDocMultiplexFrame = {
@@ -997,11 +858,11 @@ export class SessionDocEventHub {
         }
         const chunk = encodeSseChunk('session_doc', multiplexFrame)
         if (streaming) {
-          if (!write(chunk)) shutdown()
+          if (!stream.write(chunk)) stream.close()
           return
         }
         if (pending.length >= this.maxPending) {
-          shutdown()
+          stream.close()
           return
         }
         pending.push({ key, seq: frame.seq, chunk })
@@ -1030,46 +891,31 @@ export class SessionDocEventHub {
         snapshotChunks.push(encodeSseChunk('session_doc', multiplexFrame))
       }
     } catch (error) {
-      shutdown()
+      stream.close()
       throw error
     }
 
-    streamEntry = { targets, stop: shutdown }
-    if (!closed) this.streams.add(streamEntry)
+    streamEntry = { targets, stop: () => stream.close() }
+    if (!stream.closed) this.streams.add(streamEntry)
 
-    return sseResponse({
-      start: (controller) => {
-        controllerRef = controller as ReadableStreamDefaultController<Uint8Array>
-        if (closed) {
-          closeControllerQuietly(controllerRef)
+    return stream.toResponse(() => {
+      for (const chunk of snapshotChunks) {
+        if (!stream.write(chunk)) {
+          stream.close()
           return
         }
-        if (request.signal.aborted) {
-          shutdown()
+      }
+      streaming = true
+      for (const item of pending) {
+        const snapSeq = snapshotSeqs.get(item.key) ?? -1
+        if (item.seq <= snapSeq) continue
+        if (!stream.write(item.chunk)) {
+          stream.close()
           return
         }
-        request.signal.addEventListener('abort', shutdown)
-        for (const chunk of snapshotChunks) {
-          if (!write(chunk)) {
-            shutdown()
-            return
-          }
-        }
-        streaming = true
-        for (const item of pending) {
-          const snapSeq = snapshotSeqs.get(item.key) ?? -1
-          if (item.seq <= snapSeq) continue
-          if (!write(item.chunk)) {
-            shutdown()
-            return
-          }
-        }
-        pending = []
-        startKeepalive()
-      },
-      cancel: () => {
-        shutdown()
-      },
+      }
+      pending = []
+      stream.startKeepalive()
     })
   }
 }

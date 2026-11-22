@@ -20,19 +20,9 @@ import type {
 } from '@helmx/protocol'
 import { HelmxError, MODEL_TIER_PREFIX, isValidModelTierId } from '@helmx/protocol'
 import type { ConfigService, CredentialService, ProviderService, SecretStash } from '../services/index.js'
-import { listModelCatalog, listModelProviders, buildModels } from './models.js'
+import { listModelCatalog, listModelProviders, buildModels, type ResolvedModelRef } from './models.js'
 
-/** Resolved model reference returned by `ModelRegistry.resolveModelRef`. */
-export interface ResolvedModelRef {
-  provider: string
-  modelId: string
-  /** Concrete canonical `'provider/modelId'` string. */
-  canonicalRef: string
-  /** Present when the input reference targeted `tier/<id>`. */
-  tierId?: string
-  /** Preset thinking level carried by the resolved tier (if configured). */
-  tierThinkingLevel?: string
-}
+export type { ResolvedModelRef }
 
 /** Built-in PI provider ID set (lazily built once for registration conflict preflight without hardcoding lists). */
 const builtinProviderIds = new Set(builtinProviders().map((p) => p.id))
