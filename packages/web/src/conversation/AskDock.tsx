@@ -124,7 +124,7 @@ function AskFieldInput({
 }
 
 function AskCard({ ask, source }: { ask: AskSpec; source?: AskSourceInfo }) {
-  const { setActiveModal } = useStoreActions()
+  const { openConversationDrawer } = useStoreActions()
   const { t } = useWebLocale()
   // The same approval can appear in both an ancestor panel and a child
   // conversation drawer; form labels associate with this instance only.
@@ -210,7 +210,7 @@ function AskCard({ ask, source }: { ask: AskSpec; source?: AskSourceInfo }) {
               ? t('composer.ask.openChildTitle', { id: source.conversationId, title: source.title })
               : t('composer.ask.openChildDrawer', { id: source.conversationId })}
             aria-label={t('composer.ask.openChildDrawer', { id: source.conversationId })}
-            onClick={() => setActiveModal({ kind: 'conversation-drawer', conversationId: source.conversationId })}
+            onClick={() => openConversationDrawer(source.conversationId)}
           >
             <HelmxIcon name="corner-down-right" size={11} />
             {t('composer.ask.fromSource', { id: source.conversationId })}

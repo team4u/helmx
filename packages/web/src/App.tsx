@@ -18,19 +18,19 @@ import { ConversationPane } from './conversation/ConversationPane.js'
 import { ConversationWindowStage } from './conversation/ConversationWindowStage.js'
 import { AgentStandbyPane } from './conversation/AgentStandbyPane.js'
 import { standbyDraftKey } from './conversation/standby-model.js'
-import { ConversationDrawer } from './conversation/ConversationDrawer.js'
+import { DrawerStackShell } from './conversation/DrawerStackShell.js'
 import { useWebLocale } from './i18n/use-web-locale.js'
 import { HelmxStoreProvider } from './lib/HelmxStoreProvider.js'
 import {
   useActiveModal,
   useAuthConnection,
   useConversations,
+  useDrawerStack,
   useGroupedUi,
   useLocationTargets,
   useProfilesSlice,
   useSidebarCollapsed,
   useStoreActions,
-  useWorkbenchState,
 } from './lib/store-context.js'
 import {
   hashHasPrimaryTarget,
@@ -178,10 +178,6 @@ const WorkspaceFilePreviewModal = lazyWithRetry(
   () => lazy(() => import('./conversation/WorkspaceFilePreviewModal.js').then((m) => ({ default: m.WorkspaceFilePreviewModal }))),
   { overlay: true },
 )
-const WorkbenchDrawer = lazyWithRetry(
-  () => lazy(() => import('./conversation/WorkbenchDrawer.js').then((m) => ({ default: m.WorkbenchDrawer }))),
-  { overlay: true },
-)
 
 function QuietNotifierMount() {
   useQuietNotifier()
@@ -197,7 +193,7 @@ function HelmxShellInner({
   const { assetsLoaded } = useProfilesSlice()
   const { primaryTarget, splitTarget, focusedPanel } = useLocationTargets()
   const sidebarCollapsed = useSidebarCollapsed()
-  const { workbenchOpen, workbenchTab } = useWorkbenchState()
+  const drawerStack = useDrawerStack()
   const activeModal = useActiveModal()
   const { setActiveModal, setFocusedPanel, checkAuth, closeSplit } = useStoreActions()
   const { locale, t } = useWebLocale()
@@ -210,7 +206,7 @@ function HelmxShellInner({
     const rawHash = window.location.hash
     const parsed = parseLocationHash(rawHash)
     return {
-      needsHomeLanding: !hashHasPrimaryTarget(rawHash) && parsed.activeModal === null,
+      needsHomeLanding: !hashHasPrimaryTarget(rawHash) && parsed.activeModal === null && parsed.drawerStack.length === 0,
       initialLocation: parsed,
     }
   })
@@ -258,10 +254,10 @@ function HelmxShellInner({
   }, [authenticated, sseConnected, connectionBannerDelayMs])
 
   useEffect(() => {
-    if (activeModal !== null) {
+    if (activeModal !== null || drawerStack.length > 0) {
       setSidebarOpen(false)
     }
-  }, [activeModal])
+  }, [activeModal, drawerStack.length])
 
   if (!authReady) {
     return (
@@ -286,8 +282,7 @@ function HelmxShellInner({
   const currentLocation: WorkspaceLocationState = {
     primaryTarget,
     splitTarget,
-    workbenchOpen,
-    workbenchTab,
+    drawerStack,
     activeModal,
   }
   const homeLandingPending =
@@ -307,13 +302,6 @@ function HelmxShellInner({
       : fallbackTarget?.kind === 'conversation'
         ? fallbackTarget.conversationId
         : undefined
-
-  // 工作台绑定「正在查看的会话」：会话抽屉打开时优先绑定抽屉会话，与主会话
-  // 同等的完整工作台（产物 + 插件面板按该会话 scope 解析）；否则回退主屏/
-  // 分屏活动会话。叠层高度由 plugin-client overlay-stack 按打开时序自动裁决。
-  const drawerConversationId =
-    activeModal?.kind === 'conversation-drawer' ? activeModal.conversationId : undefined
-  const workbenchConversationId = drawerConversationId ?? activeConversationId
 
   // 移动端快捷导航簇的 quickEntry 按钮仅在「不在该视图上」时渲染（主屏已停在
   // 入口目标时就地隐藏）；顶栏左让位宽度（mq-quick-on）跟随真实可见性，而非
@@ -483,10 +471,8 @@ function HelmxShellInner({
           </div>
         </main>
 
-        {workbenchOpen && (
-          <Suspense fallback={<div className="screen-loading screen-loading-overlay" role="status">{t('conv.shell.loadingWorkbench')}</div>}>
-            <WorkbenchDrawer conversationId={workbenchConversationId} />
-          </Suspense>
+        {drawerStack.length > 0 && (
+          <DrawerStackShell activeConversationId={activeConversationId} />
         )}
 
         {activeModal?.kind === 'command-palette' && (
@@ -519,14 +505,8 @@ function HelmxShellInner({
             />
           </Suspense>
         )}
-        {activeModal?.kind === 'conversation-drawer' && (
-          <ConversationDrawer
-            conversationId={activeModal.conversationId}
-            onClose={closeModal}
-          />
-        )}
 
-        <ModalFocusScope active={activeModal !== null} onClose={closeModal} />
+        <ModalFocusScope active={activeModal !== null || drawerStack.length > 0} onClose={closeModal} />
         <ToastOverlay />
       </div>
     </LazyRetryContext.Provider>

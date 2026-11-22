@@ -16,8 +16,7 @@ import { isSameResolvedTarget, resolveTargetString } from '../src/lib/types.js'
 const conversation = (conversationId: number): WorkspaceLocationState => ({
   primaryTarget: { kind: 'conversation', conversationId },
   splitTarget: null,
-  workbenchOpen: false,
-  workbenchTab: 'artifacts',
+  drawerStack: [],
   activeModal: null,
 })
 
@@ -32,15 +31,14 @@ test('parse: 会话主屏（#/c/<id>）与空 Hash 默认角色中心', { timeou
   const parsed = parseLocationHash('#/c/42')
   assert.deepEqual(parsed.primaryTarget, { kind: 'conversation', conversationId: 42 })
   assert.equal(parsed.splitTarget, null)
-  assert.equal(parsed.workbenchOpen, false)
-  assert.equal(parsed.workbenchTab, 'artifacts')
+  assert.deepEqual(parsed.drawerStack, [])
   assert.equal(parsed.activeModal, null)
   // "" / "#" / "#/" 均解析为默认角色中心（无会话依赖，零会话可用）
   for (const raw of ['', '#', '#/']) {
     const empty = parseLocationHash(raw)
     assert.deepEqual(empty.primaryTarget, { kind: 'profiles' })
     assert.equal(empty.splitTarget, null)
-    assert.equal(empty.workbenchOpen, false)
+    assert.deepEqual(empty.drawerStack, [])
     assert.equal(empty.activeModal, null)
   }
 })
@@ -125,36 +123,51 @@ test('format: 模型中心路径段序列化与往返无损；providers 缺省 T
   assert.equal(shouldPushLocationHistory(defaultsState, providersState), false)
 })
 
-test('parse: 工作台参数 wb（开、Tab 值与缺省关闭）', { timeout: 60_000 }, () => {
-  const open = parseLocationHash('#/c/1?wb=artifacts')
-  assert.equal(open.workbenchOpen, true)
-  assert.equal(open.workbenchTab, 'artifacts')
+test('parse: 抽屉栈参数 drawer（工作台、绑定会话工作台、多层子会话、非法项丢弃与深度截断）', { timeout: 60_000 }, () => {
+  const wbOnly = parseLocationHash('#/c/1?drawer=wb/artifacts')
+  assert.deepEqual(wbOnly.drawerStack, [{ kind: 'workbench', tab: 'artifacts' }])
+
   const closed = parseLocationHash('#/c/1')
-  assert.equal(closed.workbenchOpen, false)
-  assert.equal(closed.workbenchTab, 'artifacts')
-  // wb 存在但值为空：视为打开且 Tab 回退默认 artifacts；wb=tasks 解析为插件面板 ID
-  const emptyTab = parseLocationHash('#/c/1?wb=')
-  assert.equal(emptyTab.workbenchOpen, true)
-  assert.equal(emptyTab.workbenchTab, 'artifacts')
-  const pluginTab = parseLocationHash('#/c/1?wb=tasks')
-  assert.equal(pluginTab.workbenchOpen, true)
-  assert.equal(pluginTab.workbenchTab, 'tasks')
+  assert.deepEqual(closed.drawerStack, [])
+
+  const multiLayer = parseLocationHash(
+    '#/c/10?drawer=wb%2Fplugin%3Abuiltin%3Aswarm%2Fgroups&drawer=c%2F67&drawer=wb%4067%2Fartifacts&drawer=c%2F89',
+  )
+  assert.deepEqual(multiLayer.drawerStack, [
+    { kind: 'workbench', tab: 'plugin:builtin:swarm/groups' },
+    { kind: 'conversation', conversationId: 67 },
+    { kind: 'workbench', conversationId: 67, tab: 'artifacts' },
+    { kind: 'conversation', conversationId: 89 },
+  ])
+
+  // 非法项静默丢弃；重复帧截断去重；超过 5 层丢弃最底层
+  const dirtyAndDeep = parseLocationHash(
+    '#/c/1?drawer=bad&drawer=c/0&drawer=wb/&drawer=wb@abc/x&drawer=c/10&drawer=c/11&drawer=c/12&drawer=c/13&drawer=c/14&drawer=c/15',
+  )
+  assert.deepEqual(dirtyAndDeep.drawerStack, [
+    { kind: 'conversation', conversationId: 11 },
+    { kind: 'conversation', conversationId: 12 },
+    { kind: 'conversation', conversationId: 13 },
+    { kind: 'conversation', conversationId: 14 },
+    { kind: 'conversation', conversationId: 15 },
+  ])
+
+  const dedup = parseLocationHash('#/c/1?drawer=wb/artifacts&drawer=c/11&drawer=c/22&drawer=c/11')
+  assert.deepEqual(dedup.drawerStack, [
+    { kind: 'workbench', tab: 'artifacts' },
+    { kind: 'conversation', conversationId: 11 },
+  ])
 })
 
-test('parse: 现役弹窗还原子项 ID，旧列表 modal key 静默忽略为 null', { timeout: 60_000 }, () => {
-  // 开发阶段不兼容：legacy 列表 modal key（profiles/providers/skills/plugins/nodes）
-  // 解析结果为无 modal，无迁移提示。
-  for (const legacyKey of ['profiles', 'providers', 'skills', 'plugins', 'nodes']) {
+test('parse: 现役弹窗还原子项 ID，旧列表与旧 drawer modal key 静默忽略为 null', { timeout: 60_000 }, () => {
+  // 开发阶段不兼容：legacy modal key 解析结果为无 modal，无迁移提示。
+  for (const legacyKey of ['profiles', 'providers', 'skills', 'plugins', 'nodes', 'drawer']) {
     assert.equal(parseLocationHash(`#/c/1?modal=${legacyKey}`).activeModal, null, legacyKey)
-    assert.equal(parseLocationHash(`#/c/1?modal=${legacyKey}&id=watchdog`).activeModal, null, legacyKey)
+    assert.equal(parseLocationHash(`#/c/1?modal=${legacyKey}&id=42`).activeModal, null, legacyKey)
   }
   assert.deepEqual(parseLocationHash('#/c/1?modal=artifact&id=art-123&conv=42').activeModal, {
     kind: 'artifact-preview',
     artifactId: 'art-123',
-    conversationId: 42,
-  })
-  assert.deepEqual(parseLocationHash('#/c/1?modal=drawer&id=42').activeModal, {
-    kind: 'conversation-drawer',
     conversationId: 42,
   })
 })
@@ -172,25 +185,20 @@ test('format: command-palette 是瞬态弹窗，不序列化进 URL', { timeout:
   assert.equal(formatLocationHash(state), '#/c/1')
 })
 
-test('format: 组合状态（视图主屏 + 会话分屏 + 工作台 + 弹窗子项，URLSearchParams 规范编码）', { timeout: 60_000 }, () => {
+test('format: 组合状态（视图主屏 + 会话分屏 + 多层抽屉栈 + 弹窗子项，URLSearchParams 规范编码）', { timeout: 60_000 }, () => {
   const state: WorkspaceLocationState = {
     primaryTarget: { kind: 'screen', pluginId: 'builtin:herdr', screenId: 'overview' },
     splitTarget: { kind: 'conversation', conversationId: 42 },
-    workbenchOpen: true,
-    workbenchTab: 'plugin:builtin:herdr/panel-x',
+    drawerStack: [
+      { kind: 'workbench', tab: 'plugin:builtin:herdr/panel-x' },
+      { kind: 'conversation', conversationId: 11 },
+    ],
     activeModal: { kind: 'artifact-preview', artifactId: 'art-1', conversationId: 42 },
   }
   const hash = formatLocationHash(state)
-  // query 部分是标准 URLSearchParams.toString()：值内 / 与 : 均编码；
-  // 路径 segment 仅保留冒号可读（builtin:herdr）。
-  assert.equal(
-    hash,
-    '#/views/builtin:herdr/overview?split=c%2F42&wb=plugin%3Abuiltin%3Aherdr%2Fpanel-x&modal=artifact&id=art-1&conv=42',
-  )
-  // 用 URLSearchParams 解析断言等价：不依赖手写编码预期。
   const query = new URLSearchParams(hash.slice(hash.indexOf('?') + 1))
   assert.equal(query.get('split'), 'c/42')
-  assert.equal(query.get('wb'), 'plugin:builtin:herdr/panel-x')
+  assert.deepEqual(query.getAll('drawer'), ['wb/plugin:builtin:herdr/panel-x', 'c/11'])
   assert.equal(query.get('modal'), 'artifact')
   assert.equal(query.get('id'), 'art-1')
   assert.equal(query.get('conv'), '42')
@@ -204,19 +212,30 @@ test('roundtrip: 全部位置形态双向往返无损', { timeout: 60_000 }, () 
     {
       primaryTarget: { kind: 'screen', pluginId: 'builtin:herdr', screenId: 'overview' },
       splitTarget: { kind: 'screen', pluginId: 'builtin:superagent', screenId: 'router' },
-      workbenchOpen: false,
-      workbenchTab: 'artifacts',
+      drawerStack: [],
       activeModal: null,
     },
     { ...conversation(1), splitTarget: { kind: 'conversation', conversationId: 42 } },
     { ...conversation(1), splitTarget: { kind: 'plugins', pluginId: 'builtin:herdr' } },
     { ...conversation(1), primaryTarget: { kind: 'profiles', profileId: 'watchdog' } },
     { ...conversation(1), primaryTarget: { kind: 'models', providerId: 'anthropic', tab: 'defaults' } },
-    { ...conversation(1), workbenchOpen: true, workbenchTab: 'artifacts' },
+    { ...conversation(1), drawerStack: [{ kind: 'workbench', tab: 'artifacts' }] },
+    {
+      ...conversation(1),
+      drawerStack: [
+        { kind: 'workbench', tab: 'plugin:builtin:swarm/groups' },
+        { kind: 'conversation', conversationId: 11 },
+        { kind: 'workbench', conversationId: 11, tab: 'artifacts' },
+      ],
+    },
     { ...conversation(1), activeModal: { kind: 'artifact-preview', artifactId: 'art-9' } },
     { ...conversation(1), activeModal: { kind: 'artifact-preview', artifactId: 'art-9', conversationId: 42 } },
     { ...conversation(1), activeModal: { kind: 'workspace-file', conversationId: 1, path: 'README.md', startLine: 3, endLine: 5 } },
-    { ...conversation(1), activeModal: { kind: 'conversation-drawer', conversationId: 11 } },
+    {
+      ...conversation(1),
+      drawerStack: [{ kind: 'conversation', conversationId: 11 }],
+      activeModal: { kind: 'workspace-file', conversationId: 11, path: 'src/app.ts', startLine: 10 },
+    },
   ]
   for (const state of states) {
     const back = roundtrip(state)
@@ -312,28 +331,27 @@ test('parse/format: sidebar 参数不再属于位置契约（解析忽略、序�
   assert.equal((parsed as unknown as Record<string, unknown>).sidebarSpace, undefined)
   // 整体往返后 sidebar 参数消失
   assert.equal(formatLocationHash(parseLocationHash('#/c/5?sidebar=settings')), '#/c/5')
-  assert.equal(formatLocationHash(parseLocationHash('#/views/p/main?sidebar=settings&wb=')), '#/views/p/main?wb=artifacts')
+  assert.equal(
+    formatLocationHash(parseLocationHash('#/views/p/main?sidebar=settings&drawer=wb/artifacts')),
+    '#/views/p/main?drawer=wb%2Fartifacts',
+  )
 })
 
 // ---------------------------------------------------------------------------
 // isSameLocationState 与 shouldPushLocationHistory
 // ---------------------------------------------------------------------------
 
-test('isSameLocationState: 五字段逐一比较；command-palette 等价于 null', { timeout: 60_000 }, () => {
+test('isSameLocationState: 四字段逐一比较；command-palette 等价于 null', { timeout: 60_000 }, () => {
   const base = conversation(1)
   assert.equal(isSameLocationState(base, conversation(1)), true)
   assert.equal(isSameLocationState(base, conversation(2)), false)
   assert.equal(isSameLocationState(base, { ...base, splitTarget: { kind: 'conversation', conversationId: 1 } }), false)
-  assert.equal(isSameLocationState(base, { ...base, workbenchOpen: true, workbenchTab: 'artifacts' }), false)
-  // 工作台打开时 Tab 参与比较；关闭时 Tab 只是记忆值不参与
-  const openA = { ...base, workbenchOpen: true, workbenchTab: 'artifacts' }
-  const openB = { ...base, workbenchOpen: true, workbenchTab: 'plugin:example/queue' }
+  assert.equal(isSameLocationState(base, { ...base, drawerStack: [{ kind: 'workbench', tab: 'artifacts' }] }), false)
+  const openA = { ...base, drawerStack: [{ kind: 'workbench' as const, tab: 'artifacts' }] }
+  const openB = { ...base, drawerStack: [{ kind: 'workbench' as const, tab: 'plugin:example/queue' }] }
   assert.equal(isSameLocationState(openA, openB), false)
-  const closedA = { ...base, workbenchOpen: false, workbenchTab: 'artifacts' }
-  const closedB = { ...base, workbenchOpen: false, workbenchTab: 'plugin:example/queue' }
-  assert.equal(isSameLocationState(closedA, closedB), true)
   assert.equal(isSameLocationState(base, { ...base, activeModal: { kind: 'command-palette' } }), true)
-  assert.equal(isSameLocationState(base, { ...base, activeModal: { kind: 'conversation-drawer', conversationId: 1 } }), false)
+  assert.equal(isSameLocationState(base, { ...base, drawerStack: [{ kind: 'conversation', conversationId: 1 }] }), false)
   assert.equal(
     isSameLocationState(
       { ...base, activeModal: { kind: 'artifact-preview', artifactId: 'a1' } },
@@ -343,19 +361,29 @@ test('isSameLocationState: 五字段逐一比较；command-palette 等价于 nul
   )
 })
 
-test('shouldPushLocationHistory: 主屏/分屏/工作台/弹窗开关走 push', { timeout: 60_000 }, () => {
+test('shouldPushLocationHistory: 主屏/分屏/抽屉栈加深/弹窗开关走 push', { timeout: 60_000 }, () => {
   const base = conversation(1)
+  const wb = { ...base, drawerStack: [{ kind: 'workbench' as const, tab: 'artifacts' }] }
+  const wbAndConv = {
+    ...base,
+    drawerStack: [
+      { kind: 'workbench' as const, tab: 'artifacts' },
+      { kind: 'conversation' as const, conversationId: 11 },
+    ],
+  }
   assert.equal(shouldPushLocationHistory(base, conversation(2)), true)
   assert.equal(shouldPushLocationHistory(base, { ...base, primaryTarget: { kind: 'screen', pluginId: 'builtin:herdr', screenId: 'overview' } }), true)
   assert.equal(shouldPushLocationHistory(base, { ...base, splitTarget: { kind: 'conversation', conversationId: 2 } }), true)
-  assert.equal(shouldPushLocationHistory(base, { ...base, workbenchOpen: true, workbenchTab: 'artifacts' }), true)
-  assert.equal(shouldPushLocationHistory(base, { ...base, activeModal: { kind: 'conversation-drawer', conversationId: 1 } }), true)
-  assert.equal(shouldPushLocationHistory({ ...base, activeModal: { kind: 'conversation-drawer', conversationId: 1 } }, base), true)
-  // 弹窗类型切换也是 push
+  assert.equal(shouldPushLocationHistory(base, wb), true)
+  assert.equal(shouldPushLocationHistory(wb, wbAndConv), true, '抽屉压栈走 push，浏览器后退可剥一层')
+  // 抽屉退层或关闭走 replace，避免残留死历史项
+  assert.equal(shouldPushLocationHistory(wbAndConv, wb), false)
+  assert.equal(shouldPushLocationHistory(wbAndConv, base), false)
+  // 弹窗打开/关闭与类型切换走 push
   assert.equal(
     shouldPushLocationHistory(
-      { ...base, activeModal: { kind: 'conversation-drawer', conversationId: 1 } },
       { ...base, activeModal: { kind: 'artifact-preview', artifactId: 'a1' } },
+      { ...base, activeModal: { kind: 'workspace-file', conversationId: 1, path: 'README.md' } },
     ),
     true,
   )
@@ -380,15 +408,15 @@ test('shouldPushLocationHistory: 工作台内切 Tab 与等价态走 replace', {
   const base = conversation(1)
   assert.equal(
     shouldPushLocationHistory(
-      { ...base, workbenchOpen: true, workbenchTab: 'artifacts' },
-      { ...base, workbenchOpen: true, workbenchTab: 'plugin:builtin:herdr/panel-x' },
+      { ...base, drawerStack: [{ kind: 'workbench', tab: 'artifacts' }] },
+      { ...base, drawerStack: [{ kind: 'workbench', tab: 'plugin:builtin:herdr/panel-x' }] },
     ),
     false,
   )
   assert.equal(
     shouldPushLocationHistory(
-      { ...base, workbenchOpen: true, workbenchTab: 'artifacts' },
-      { ...base, workbenchOpen: true, workbenchTab: 'artifacts' },
+      { ...base, drawerStack: [{ kind: 'workbench', tab: 'artifacts' }] },
+      { ...base, drawerStack: [{ kind: 'workbench', tab: 'artifacts' }] },
     ),
     false,
   )
@@ -460,8 +488,7 @@ test('screen params: sp.* 归主屏、ssp.* 归分屏，同一 screen 双开参�
   const state: WorkspaceLocationState = {
     primaryTarget: { kind: 'screen', pluginId: 'p', screenId: 'main', params: { tab: 'a', filter: 'x' } },
     splitTarget: { kind: 'screen', pluginId: 'p', screenId: 'main', params: { tab: 'b' } },
-    workbenchOpen: false,
-    workbenchTab: 'artifacts',
+    drawerStack: [],
     activeModal: null,
   }
   assert.deepEqual(roundtrip(state), state)
@@ -482,11 +509,10 @@ test('screen params: 字典序稳定序列化，与其它查询参数共存', { 
   const state: WorkspaceLocationState = {
     primaryTarget: { kind: 'screen', pluginId: 'p', screenId: 'main', params: { zeta: '1', alpha: '2', mid: '3' } },
     splitTarget: null,
-    workbenchOpen: true,
-    workbenchTab: 'tasks',
+    drawerStack: [{ kind: 'workbench', tab: 'tasks' }],
     activeModal: null,
   }
-  assert.equal(formatLocationHash(state), '#/views/p/main?sp.alpha=2&sp.mid=3&sp.zeta=1&wb=tasks')
+  assert.equal(formatLocationHash(state), '#/views/p/main?sp.alpha=2&sp.mid=3&sp.zeta=1&drawer=wb%2Ftasks')
 })
 
 test('screen params: 非法键 / 空值 / 非法编码 / 未知前缀全部丢弃，不产生半损参数', { timeout: 60_000 }, () => {
@@ -507,7 +533,7 @@ test('screen params: 非法键 / 空值 / 非法编码 / 未知前缀全部丢�
   // 值里的特殊字符经 URLSearchParams 编码往返无损（空格、&、=、?、#）
   const weird = parseLocationHash(formatLocationHash({
     primaryTarget: { kind: 'screen', pluginId: 'p', screenId: 'main', params: { q: "a b&c=d?e#f", path: '/x/y' } },
-    splitTarget: null, workbenchOpen: false, workbenchTab: 'artifacts', activeModal: null,
+    splitTarget: null, drawerStack: [], activeModal: null,
   }))
   const weirdParams = weird.primaryTarget.kind === 'screen' ? weird.primaryTarget.params : undefined
   assert.deepEqual(weirdParams, { q: "a b&c=d?e#f", path: '/x/y' })

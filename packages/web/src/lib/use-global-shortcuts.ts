@@ -5,7 +5,8 @@
  */
 import { useEffect, type Dispatch, type MutableRefObject, type SetStateAction } from 'react'
 import type { LiveState } from './live-state.js'
-import type { ActiveModal, FocusedPanel, ResolvedTarget } from './types.js'
+import { topConversationDrawerId, topDrawerFrame } from './drawer-stack-model.js'
+import type { ActiveModal, DrawerFrame, FocusedPanel, ResolvedTarget } from './types.js'
 import {
   activeTargetForPanel,
   hasAnyOpenOverlay,
@@ -24,7 +25,7 @@ export interface UseGlobalShortcutsOptions {
   focusedPanelRef: MutableRefObject<FocusedPanel>
   targets: MutableRefObject<{ primaryTarget: ResolvedTarget; splitTarget: ResolvedTarget | null }>
   activeModalRef: MutableRefObject<ActiveModal>
-  workbenchOpenRef: MutableRefObject<boolean>
+  drawerStackRef: MutableRefObject<DrawerFrame[]>
   liveRef: MutableRefObject<LiveState>
   clearEscAbortPrompt: () => void
   confirmOrArmEscAbort: (conversationId: number) => void
@@ -38,7 +39,7 @@ export function useGlobalShortcuts({
   focusedPanelRef,
   targets,
   activeModalRef,
-  workbenchOpenRef,
+  drawerStackRef,
   liveRef,
   clearEscAbortPrompt,
   confirmOrArmEscAbort,
@@ -72,7 +73,7 @@ export function useGlobalShortcuts({
       if (event.key === 'Escape' && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
         if (
           event.defaultPrevented ||
-          hasAnyOpenOverlay(activeModalRef.current, workbenchOpenRef.current) ||
+          hasAnyOpenOverlay(activeModalRef.current, drawerStackRef.current.length > 0) ||
           isInlineInputEscapeTarget(event.target)
         ) {
           clearEscAbortPrompt()
@@ -98,12 +99,11 @@ export function useGlobalShortcuts({
       if (event.defaultPrevented) return
 
       if (isMod && keyLower === 'j') {
-        // 会话抽屉打开时视作会话上下文：Ctrl+J 仍可开合（工作台绑定抽屉会话）。
-        const openModal = activeModalRef.current
-        const drawerConversationId =
-          openModal?.kind === 'conversation-drawer' ? openModal.conversationId : undefined
-        if ((openModal !== null && drawerConversationId === undefined) || hasNonWorkbenchDialogOpen()) return
-        if (!workbenchOpenRef.current && activeTarget.kind !== 'conversation' && drawerConversationId === undefined) return
+        // 抽屉栈内有会话帧时同样视作会话上下文：Mod+J 可在抽屉顶开合绑定该会话的工作台。
+        if (activeModalRef.current !== null || hasNonWorkbenchDialogOpen()) return
+        const top = topDrawerFrame(drawerStackRef.current)
+        const drawerConversationId = topConversationDrawerId(drawerStackRef.current)
+        if (top?.kind !== 'workbench' && activeTarget.kind !== 'conversation' && drawerConversationId === undefined) return
         event.preventDefault()
         clearEscAbortPrompt()
         setWorkbenchOpen((open) => !open)
@@ -111,13 +111,17 @@ export function useGlobalShortcuts({
       }
 
       if (isMod && keyLower === 'b') {
-        if (activeModalRef.current !== null || hasNonWorkbenchDialogOpen()) return
+        if (
+          activeModalRef.current !== null ||
+          topConversationDrawerId(drawerStackRef.current) !== undefined ||
+          hasNonWorkbenchDialogOpen()
+        ) return
         event.preventDefault()
         toggleSidebarCollapsed()
         return
       }
 
-      if (activeModalRef.current !== null || workbenchOpenRef.current) return
+      if (activeModalRef.current !== null || drawerStackRef.current.length > 0) return
 
       if (isCtrlOnly && keyLower === 'l') {
         if (hasNonModelPickerDialogOpen()) return
@@ -142,12 +146,12 @@ export function useGlobalShortcuts({
     authenticatedRef,
     clearEscAbortPrompt,
     confirmOrArmEscAbort,
+    drawerStackRef,
     focusedPanelRef,
     liveRef,
     setActiveModal,
     setWorkbenchOpen,
     targets,
     toggleSidebarCollapsed,
-    workbenchOpenRef,
   ])
 }

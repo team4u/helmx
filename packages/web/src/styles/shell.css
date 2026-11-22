@@ -334,8 +334,8 @@
   flex-shrink: 0;
 }
 
-/* 工作台抽屉遮罩：与 primary-drawer 同规范的毛玻璃遮罩，点击关闭 */
-.workbench-backdrop {
+/* 统一检视抽屉栈（工作台 + 子会话共用单容器，按栈层级切换与 <Activity> 保活） */
+.drawer-stack-backdrop {
   position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, 0.28);
@@ -346,50 +346,163 @@
   -webkit-tap-highlight-color: transparent;
 }
 
-.helmx-workbench {
+.drawer-stack-dialog {
   position: fixed;
   top: 0;
   right: 0;
   bottom: 0;
-  width: min(560px, 100vw);
   display: flex;
   flex-direction: column;
-  background: var(--bg-elevated);
-  border-left: 1px solid var(--border);
-  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.28);
-  overflow: hidden;
-  animation: drawerSlideIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-/* ==========================================================================
- * 2. 子代理会话侧边抽屉 (Conversation Drawer)
- * 规范：毛玻璃遮罩 (blur 8px saturate 1.1)、平滑全高滑出动效、深阴影
- * ========================================================================== */
-
-.conversation-drawer-backdrop {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.28);
-  backdrop-filter: blur(8px) saturate(1.1);
-  -webkit-backdrop-filter: blur(8px) saturate(1.1);
-  border: none;
-  cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
-}
-
-.conversation-drawer {
-  position: fixed;
-  right: 0;
-  top: 0;
-  bottom: 0;
-  width: min(720px, 92vw);
   background: var(--bg);
   border-left: 1px solid var(--border);
   box-shadow: -8px 0 24px rgba(0, 0, 0, 0.28);
+  overflow: hidden;
+  animation: drawerSlideIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: width 0.16s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.drawer-stack-dialog-narrow {
+  width: min(580px, 94vw);
+  background: var(--bg-elevated);
+}
+
+.drawer-stack-dialog-wide {
+  width: min(740px, 94vw);
+}
+
+.drawer-stack-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 40px;
+  padding: 4px 10px 4px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elevated);
+  flex-shrink: 0;
+}
+
+.drawer-stack-nav {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.drawer-stack-back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 7px;
+  height: 26px;
+  flex-shrink: 0;
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.drawer-stack-crumbs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.drawer-stack-crumbs::-webkit-scrollbar {
+  display: none;
+}
+
+.drawer-stack-crumb-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  flex-shrink: 1;
+}
+
+.drawer-stack-crumb-item:last-child {
+  flex-shrink: 0;
+  max-width: 60%;
+}
+
+.drawer-stack-crumb-sep {
+  color: var(--fg-muted);
+  flex-shrink: 0;
+}
+
+.drawer-stack-crumb-btn {
+  border: none;
+  background: transparent;
+  color: var(--fg-secondary);
+  font-size: 12.5px;
+  padding: 2px 5px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 160px;
+}
+
+.drawer-stack-crumb-btn:hover {
+  color: var(--fg);
+  background: var(--bg-subtle);
+}
+
+.drawer-stack-crumb-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.drawer-stack-crumb-current {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+  padding: 2px 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.drawer-stack-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.drawer-stack-close-btn {
+  flex-shrink: 0;
+}
+
+.drawer-stack-body {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  animation: drawerSlideIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.drawer-stack-frame {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.helmx-workbench-view {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-elevated);
+  overflow: hidden;
 }
 
 /* 右侧滑出抽屉通用入场动效（conversation / plugin / workbench / primary 抽屉共用） */

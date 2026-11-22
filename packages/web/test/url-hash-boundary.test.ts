@@ -5,8 +5,7 @@ import { formatLocationHash, parseLocationHash, type WorkspaceLocationState } fr
 const base: WorkspaceLocationState = {
   primaryTarget: { kind: 'conversation', conversationId: 1 },
   splitTarget: null,
-  workbenchOpen: false,
-  workbenchTab: 'artifacts',
+  drawerStack: [],
   activeModal: null,
 }
 
@@ -24,8 +23,10 @@ test('Hash 边界：所有路径段、查询值都按各自层级编解码', { t
       ...base,
       primaryTarget: target,
       splitTarget: target,
-      workbenchOpen: true,
-      workbenchTab: id,
+      drawerStack: [
+        { kind: 'workbench', tab: id },
+        { kind: 'conversation', conversationId: 11 },
+      ],
       activeModal: { kind: 'artifact-preview', artifactId: id },
     }
     assert.deepEqual(parseLocationHash(formatLocationHash(state)), state, id)

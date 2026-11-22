@@ -34,6 +34,7 @@ export type PluginClientHostStoreInput = Pick<
   | 'getSessionDocState'
   | 'invokePluginAction'
   | 'openTarget'
+  | 'openConversationDrawer'
   | 'setActiveModal'
   | 'setWorkbenchOpen'
   | 'setWorkbenchTab'
@@ -67,7 +68,7 @@ export function createPluginClientHostPort(store: PluginClientHostStoreInput): P
       })
     },
     openTarget: (target, options) => store.openTarget(target, options?.split === true ? { split: true } : undefined),
-    openConversationDrawer: (conversationId) => store.setActiveModal({ kind: 'conversation-drawer', conversationId }),
+    openConversationDrawer: (conversationId) => store.openConversationDrawer(conversationId),
     openArtifactPreview: (artifactId, conversationId) =>
       store.setActiveModal({ kind: 'artifact-preview', artifactId, ...(conversationId !== undefined ? { conversationId } : {}) }),
     setWorkbenchOpen: (open) => store.setWorkbenchOpen(open),

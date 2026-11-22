@@ -1,9 +1,16 @@
 import { pathRulesForShape } from '@helmx/protocol/browser'
+import {
+  formatDrawerFrameToken,
+  isSameDrawerStack,
+  parseDrawerStackTokens,
+  shouldPushDrawerHistory,
+  type DrawerFrame,
+} from './drawer-stack-model.js'
 import { isSameResolvedTarget, isPrototypeParamKey, SCREEN_PARAM_KEY_PATTERN, type ActiveModal, type ResolvedTarget } from './types.js'
 
 /**
  * The workspace location expressed by the address-bar hash: primary target,
- * right split, workbench drawer and top-level modal.
+ * right split, ordered right-hand drawer stack, and top-level modal.
  * This module has zero React/DOM dependencies and only does pure encode /
  * decode / compare functions; the syntax contract lives in test/url-hash.test.ts.
  * Parse defaults (empty hash / invalid path -> profile center) stay unchanged;
@@ -27,36 +34,32 @@ export interface WorkspaceLocationState {
   primaryTarget: ResolvedTarget
   target?: ResolvedTarget
   splitTarget: ResolvedTarget | null
-  workbenchOpen: boolean
-  workbenchTab: string
+  drawerStack: DrawerFrame[]
   activeModal: ActiveModal
 }
 
-/** Modals persisted into the URL (command-palette is a transient search box, excluded). */
-type PersistedModal = Exclude<ActiveModal, null | { kind: 'command-palette' }>
+/** Modals persisted into the URL (command-palette and hub-changelog are transient, excluded). */
+type PersistedModal = Exclude<ActiveModal, null | { kind: 'command-palette' } | { kind: 'hub-changelog' }>
 
 /**
  * Default primary screen: the agent profile center (conversation-free, usable
  * with zero or all conversations deleted; serializes to
  * `#/settings/profiles`; the historical conversation:1 default was removed
  * with the root-conversation redesign). The parse-layer default is unchanged;
- * a landing entry with "no explicit primary target and no modal" is upgraded
+ * a landing entry with "no explicit primary target and no overlay" is upgraded
  * by HelmxStoreProvider to the conversation-space default via replace once
  * data is ready (see the landing effect).
  */
 const DEFAULT_PRIMARY: ResolvedTarget = { kind: 'profiles' }
-const DEFAULT_WORKBENCH_TAB = 'artifacts'
 
 const MODAL_KIND_TO_KEY = {
   'artifact-preview': 'artifact',
   'workspace-file': 'file',
-  'conversation-drawer': 'drawer',
 } as const
 
 const MODAL_KEY_TO_KIND = {
   artifact: 'artifact-preview',
   file: 'workspace-file',
-  drawer: 'conversation-drawer',
 } as const
 
 /** Path segments keep only colons readable; slashes inside a segment must be encoded so they never confuse target separators. */
@@ -374,11 +377,6 @@ function parseActiveModal(params: URLSearchParams): ActiveModal {
       const lineRange = parseHashLineRange(params.get('line'))
       return { kind: 'workspace-file', conversationId: fileConvId, path, ...lineRange }
     }
-    case 'conversation-drawer': {
-      if (subId === undefined) return null
-      const convId = parsePositiveInt(subId)
-      return convId === null ? null : { kind: 'conversation-drawer', conversationId: convId }
-    }
   }
 }
 
@@ -415,7 +413,6 @@ export function hashHasPrimaryTarget(rawHash: string): boolean {
 export function parseLocationHash(rawHash: string): WorkspaceLocationState {
   const { path, params } = splitHash(rawHash)
   const splitRaw = params.get('split')
-  const workbenchTab = params.get('wb')
   let primaryTarget = parseTargetValue(path) ?? DEFAULT_PRIMARY
   // The draft env of an agent standby primary comes from top-level node/cwd
   // params; the node scope of a skills center primary comes from top-level node;
@@ -436,8 +433,7 @@ export function parseLocationHash(rawHash: string): WorkspaceLocationState {
       splitTarget !== null && (splitTarget.kind === 'screen' || splitTarget.kind === 'overview')
         ? applyScreenParams(splitTarget, extractScreenParams(params, SPLIT_SCREEN_PARAM_PREFIX))
         : splitTarget,
-    workbenchOpen: params.has('wb'),
-    workbenchTab: workbenchTab !== null && workbenchTab !== '' ? workbenchTab : DEFAULT_WORKBENCH_TAB,
+    drawerStack: parseDrawerStackTokens(params.getAll('drawer')),
     activeModal: parseActiveModal(params),
   }
   Object.defineProperty(state, 'target', {
@@ -468,8 +464,8 @@ export function formatLocationHash(state: WorkspaceLocationState): string {
   // Primary/split screen params occupy the sp.* / ssp.* namespaces respectively: the same screen open twice never crosses params.
   query.push(...formatScreenParams(state.primaryTarget, PRIMARY_SCREEN_PARAM_PREFIX))
   if (state.splitTarget !== null) query.push(...formatScreenParams(state.splitTarget, SPLIT_SCREEN_PARAM_PREFIX))
-  if (state.workbenchOpen) {
-    query.push(['wb', state.workbenchTab === '' ? DEFAULT_WORKBENCH_TAB : state.workbenchTab])
+  for (const frame of state.drawerStack) {
+    query.push(['drawer', formatDrawerFrameToken(frame)])
   }
   const modal = state.activeModal
   // command-palette and hub-changelog are ephemeral UI: never serialized into the URL hash.
@@ -490,24 +486,21 @@ export function formatLocationHash(state: WorkspaceLocationState): string {
             : String(modal.startLine)
         query.push(['line', lineStr])
       }
-    } else {
-      query.push(['id', String(modal.conversationId)])
     }
   }
   const search = new URLSearchParams(query).toString()
   return `#/${formatTargetValue(state.primaryTarget)}${search === '' ? '' : `?${search}`}`
 }
 
-/** command-palette is a transient modal and never participates in location comparison (consistent with staying out of the URL). */
+/** command-palette and hub-changelog are transient modals and never participate in location comparison (consistent with staying out of the URL). */
 const normalizeModal = (modal: ActiveModal): PersistedModal | null =>
-  modal === null || modal.kind === 'command-palette' ? null : modal
+  modal === null || modal.kind === 'command-palette' || modal.kind === 'hub-changelog' ? null : modal
 
-/** Compare location fields one by one; workbenchTab participates only while the workbench is open (closed, it is just a memory value not in the URL). */
+/** Compare location fields one by one (primary, split, drawerStack, persisted modal). */
 export function isSameLocationState(a: WorkspaceLocationState, b: WorkspaceLocationState): boolean {
   if (!isSameResolvedTarget(a.primaryTarget, b.primaryTarget)) return false
   if (!isSameResolvedTarget(a.splitTarget, b.splitTarget)) return false
-  if (a.workbenchOpen !== b.workbenchOpen) return false
-  if (a.workbenchOpen && a.workbenchTab !== b.workbenchTab) return false
+  if (!isSameDrawerStack(a.drawerStack, b.drawerStack)) return false
   const modalA = normalizeModal(a.activeModal)
   const modalB = normalizeModal(b.activeModal)
   if ((modalA === null) !== (modalB === null)) return false
@@ -522,9 +515,6 @@ export function isSameLocationState(a: WorkspaceLocationState, b: WorkspaceLocat
       && modalA.path === modalB.path
       && (modalA.startLine ?? undefined) === (modalB.startLine ?? undefined)
       && (modalA.endLine ?? undefined) === (modalB.endLine ?? undefined)
-  }
-  if (modalA.kind === 'conversation-drawer' && modalB.kind === 'conversation-drawer') {
-    return modalA.conversationId === modalB.conversationId
   }
   return true
 }
@@ -620,7 +610,7 @@ export function shouldPushLocationHistory(prev: WorkspaceLocationState, next: Wo
   // Params-only changes (screen coordinate unchanged) or switching/closing inside a center drawer -> replace, so filter keystrokes do not pollute the back stack; force a push explicitly at the call site (the setScreenParams push flag).
   if (isTargetSlotChanged(prev.primaryTarget, next.primaryTarget)) return true
   if (isTargetSlotChanged(prev.splitTarget, next.splitTarget)) return true
-  if (prev.workbenchOpen !== next.workbenchOpen) return true
+  if (shouldPushDrawerHistory(prev.drawerStack, next.drawerStack)) return true
   const prevModal = normalizeModal(prev.activeModal)
   const nextModal = normalizeModal(next.activeModal)
   if ((prevModal === null) !== (nextModal === null)) return true
@@ -636,16 +626,13 @@ export function shouldPushLocationHistory(prev: WorkspaceLocationState, next: Wo
       || (prevModal.startLine ?? undefined) !== (nextModal.startLine ?? undefined)
       || (prevModal.endLine ?? undefined) !== (nextModal.endLine ?? undefined)
   }
-  if (prevModal.kind === 'conversation-drawer' && nextModal.kind === 'conversation-drawer') {
-    return prevModal.conversationId !== nextModal.conversationId
-  }
   return false
 }
 
 export type HashSerializable =
   | WorkspaceLocationState
-  | { target: ResolvedTarget; splitTarget?: ResolvedTarget | null; workbenchOpen?: boolean; workbenchTab?: string; activeModal?: ActiveModal }
-  | { primaryTarget: ResolvedTarget; splitTarget?: ResolvedTarget | null; workbenchOpen?: boolean; workbenchTab?: string; activeModal?: ActiveModal }
+  | { target: ResolvedTarget; splitTarget?: ResolvedTarget | null; drawerStack?: DrawerFrame[]; activeModal?: ActiveModal }
+  | { primaryTarget: ResolvedTarget; splitTarget?: ResolvedTarget | null; drawerStack?: DrawerFrame[]; activeModal?: ActiveModal }
   | ResolvedTarget
 
 /**
@@ -668,8 +655,7 @@ export function serializeHash(input: HashSerializable): string {
     return formatLocationHash({
       primaryTarget: input,
       splitTarget: null,
-      workbenchOpen: false,
-      workbenchTab: DEFAULT_WORKBENCH_TAB,
+      drawerStack: [],
       activeModal: null,
     })
   }
@@ -683,8 +669,7 @@ export function serializeHash(input: HashSerializable): string {
   return formatLocationHash({
     primaryTarget,
     splitTarget: input.splitTarget ?? null,
-    workbenchOpen: input.workbenchOpen ?? false,
-    workbenchTab: input.workbenchTab ?? DEFAULT_WORKBENCH_TAB,
+    drawerStack: input.drawerStack ?? [],
     activeModal: input.activeModal ?? null,
   })
 }

@@ -81,6 +81,7 @@ export function PluginClientHostBridge({ store, children }: { store: HelmxExtern
         getSessionDocState: store.actions.getSessionDocState,
         invokePluginAction: store.actions.invokePluginAction,
         openTarget: store.actions.openTarget,
+        openConversationDrawer: store.actions.openConversationDrawer,
         setActiveModal: store.actions.setActiveModal,
         setWorkbenchOpen: store.actions.setWorkbenchOpen,
         setWorkbenchTab: store.actions.setWorkbenchTab,

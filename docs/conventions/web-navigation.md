@@ -16,7 +16,7 @@
 | Hash 契约 | `packages/web/src/lib/url-hash-model.ts` | 唯一编解码真源（零 React/DOM 依赖的纯函数） |
 | 浏览器同步 | `packages/web/src/lib/HelmxStoreProvider.tsx` | 唯一写回路径与历史策略 |
 
-组件统一调用 `store.openTarget / closeSplit / setScreenParams / setWorkbenchOpen / setWorkbenchTab / openSpace / setActiveModal` 导航。不得另建平行路由、直接操作 `history.*`，或用组件本地状态管理已有全局位置。
+组件统一调用 `store.openTarget / closeSplit / setScreenParams / openConversationDrawer / openWorkbenchDrawer / popDrawer / truncateDrawerStack / closeAllDrawers / setWorkbenchOpen / setWorkbenchTab / openSpace / setActiveModal` 导航。不得另建平行路由、直接操作 `history.*`，或用组件本地状态管理已有全局位置。
 
 ### 层级化路径树
 
@@ -49,11 +49,12 @@
 
 ### 历史策略红线
 
-- push：切换主屏/分屏、开关工作台、持久弹窗、Rail 空间切换；
-- replace：同一弹窗内切换子项、工作台内切 Tab、同一 screen / overview 目标仅改参数（含总览筛选与搜索）、待命目标仅改草稿环境、删除回退与草稿→真实会话迁移；
+- push：切换主屏/分屏、抽屉栈打开与加深压栈（`drawer=wb/...` / `drawer=c/<id>`）、持久弹窗、Rail 空间切换；
+- replace：抽屉栈退层（`<- 返回` / `Esc` / 面包屑截断 / 关闭整栈）、同一弹窗内切换子项、工作台内切 Tab、同一 screen / overview 目标仅改参数（含总览筛选与搜索）、待命目标仅改草稿环境、删除回退与草稿→真实会话迁移；
 - `replace` 只替换当前历史项，不能也不宣称清空整个历史栈；历史策略统一维护在 `shouldPushLocationHistory`，调用方可经 `openTarget({ history })` 覆写下一拍；
 - 访问已删除会话的深链显式提示不存在，不得路由循环或静默跳转；
-- **主屏导航自动收起会话抽屉**：非 split 的 `openTarget` 推进主屏目标时若覆盖型会话抽屉（`conversation-drawer`）开着，顺手 `activeModal = null`——否则抽屉内徽标/通知触发的深链被全高抽屉自身遮挡，表现为「点击无反应」；分屏导航不遮挡不收；深链恢复（`applyExternalLocation`）不走此路径，`wb+modal=drawer` 组合态仍可精确还原。
+- **抽屉栈与顶层模态正交**：右侧抽屉栈通过重复查询参数 `drawer=wb/<tab>`、`drawer=wb@<convId>/<tab>`、`drawer=c/<id>` 按底到顶序列化（同帧去重截断、上限 5 层），与顶层居中预览模态（`modal=artifact` / `modal=file`）完全正交、互不覆盖；
+- **主屏导航自动收起抽屉栈**：非 split 的 `openTarget` 推进主屏目标时若抽屉栈非空，顺手清空 `drawerStack`——否则抽屉内徽标/通知触发的深链被全高抽屉自身遮挡，表现为「点击无反应」；分屏导航不遮挡不收；深链恢复（`applyExternalLocation`）不走此路径，`drawer` + `modal` 组合态仍可精确还原。
 
 ## 目标路由参数（Screen 与总览共用 `sp.*` / `ssp.*` 机制）
 

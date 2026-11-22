@@ -7,8 +7,9 @@ import type { ArtifactMetadata, ConversationDetail, ConversationSummary } from '
 import { conversationsApi } from './api.js'
 import { isPageActive } from './browser-notification.js'
 import { errorText } from './error-text.js'
+import { topDrawerFrame } from './drawer-stack-model.js'
 import type { LiveState } from './live-state.js'
-import type { ActiveModal, ResolvedTarget, ToastNotice } from './types.js'
+import type { ActiveModal, DrawerFrame, ResolvedTarget, ToastNotice } from './types.js'
 import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 
 export interface ArtifactsSyncWatermark {
@@ -44,8 +45,10 @@ export interface UseUnreadSyncOptions {
   authenticatedRef: MutableRefObject<boolean>
   primaryTarget: ResolvedTarget
   splitTarget: ResolvedTarget | null
+  drawerStack: DrawerFrame[]
   activeModal: ActiveModal
   targets: MutableRefObject<{ primaryTarget: ResolvedTarget; splitTarget: ResolvedTarget | null }>
+  drawerStackRef: MutableRefObject<DrawerFrame[]>
   activeModalRef: MutableRefObject<ActiveModal>
   liveRef: MutableRefObject<LiveState>
   updateLive: (update: (state: LiveState) => LiveState) => void
@@ -80,7 +83,9 @@ export function useUnreadSync({
   authenticatedRef,
   primaryTarget,
   splitTarget,
+  drawerStack,
   activeModal,
+  drawerStackRef,
   activeModalRef,
   targets,
   liveRef,
@@ -102,12 +107,16 @@ export function useUnreadSync({
     for (const target of [targets.current.primaryTarget, targets.current.splitTarget]) {
       if (target?.kind === 'conversation') ids.add(target.conversationId)
     }
+    const topDrawer = topDrawerFrame(drawerStackRef.current)
+    if (topDrawer?.kind === 'conversation') {
+      ids.add(topDrawer.conversationId)
+    }
     const modal = activeModalRef.current
-    if (modal?.kind === 'conversation-drawer' || modal?.kind === 'artifact-preview' || modal?.kind === 'workspace-file') {
+    if (modal?.kind === 'artifact-preview' || modal?.kind === 'workspace-file') {
       if (modal.conversationId !== undefined) ids.add(modal.conversationId)
     }
     return [...ids]
-  }, [activeModalRef, targets])
+  }, [activeModalRef, drawerStackRef, targets])
 
   const resetUnreadSync = useCallback(() => {
     unreadClearInFlight.current.clear()
@@ -213,6 +222,7 @@ export function useUnreadSync({
     authenticated,
     primaryTarget,
     splitTarget,
+    drawerStack,
     activeModal,
     liveRef,
     conversationArtifactsRef,

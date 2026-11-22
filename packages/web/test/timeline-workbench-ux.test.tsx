@@ -30,7 +30,8 @@ const { createRoot } = await import('react-dom/client')
 const { HostStoreProviders } = await import('./helpers/host-store.js')
 const { ConversationTimeline } = await import('../src/conversation/ConversationTimeline.js')
 const { ConversationPane } = await import('../src/conversation/ConversationPane.js')
-const { WorkbenchDrawer } = await import('../src/conversation/WorkbenchDrawer.js')
+const { DrawerStackShell } = await import('../src/conversation/DrawerStackShell.js')
+const { WorkbenchView } = await import('../src/conversation/WorkbenchView.js')
 
 const e = React.createElement
 const origFetch = globalThis.fetch
@@ -497,7 +498,8 @@ describe("timeline-workbench-ux", () => {
     })
 
     const ui = mountNode()
-    await ui.render(storeMixed, e(WorkbenchDrawer, { conversationId: 1, inline: true }))
+    await ui.render(storeMixed, e(DrawerStackShell, { activeConversationId: 1, inline: true }))
+    await waitForCondition(() => ui.host.querySelector('.tab-btn') !== null)
 
     // 页签标题绝不出现 `产物 (2) 2`
     const tabTexts = [...ui.host.querySelectorAll('.tab-btn')].map((el) => el.textContent?.trim())
@@ -505,12 +507,9 @@ describe("timeline-workbench-ux", () => {
     assert.ok(!tabTexts.some((t) => t?.includes('(2)')))
     assert.ok(!tabTexts.some((t) => /MEMORY/i.test(t ?? '')), '不添加 MEMORY.md 标签页')
 
-    // 关闭按钮位于 .tabs-bar 末尾且不在可滚动 tabs 容器内部
-    const tabsBar = ui.host.querySelector('.helmx-workbench .tabs-bar')!
-    const closeBtn = tabsBar.lastElementChild?.querySelector('.workbench-close-btn') ?? (
-      tabsBar.lastElementChild?.classList.contains('workbench-close-btn') ? tabsBar.lastElementChild : null
-    )
-    assert.ok(closeBtn, '关闭按钮 [×] 应位于工作台 tabs-bar 最右侧')
+    // 关闭按钮统一归属抽屉顶栏最右侧，工作台 tabs-bar 不再重复渲染关闭按钮
+    const closeBtn = ui.host.querySelector('.drawer-stack-header .drawer-stack-close-btn')
+    assert.ok(closeBtn, '关闭按钮 [×] 应位于统一抽屉顶栏最右侧')
     assert.ok(ui.host.querySelector('.workbench-tabs-scroll .workbench-close-btn') === null)
 
     // 正式产物区可见注册产物与上传附件，不含 spill 文件名
@@ -578,7 +577,7 @@ describe("timeline-workbench-ux", () => {
       workbenchTab: 'artifacts',
       conversationArtifacts: { 1: [registered, uploaded, spill1, spill2], 2: [spill1] },
     })
-    await ui.render(spillOnlyStore, e(WorkbenchDrawer, { conversationId: 2, inline: true }))
+    await ui.render(spillOnlyStore, e(WorkbenchView, { conversationId: 2 }))
     const spillOnlyTabBtn = ui.host.querySelector('.tab-btn')!
     assert.equal(spillOnlyTabBtn.textContent?.trim(), 'Artifacts')
     assert.match(ui.host.textContent ?? '', /No registered artifacts or uploaded attachments yet/)
@@ -597,7 +596,7 @@ describe("timeline-workbench-ux", () => {
       TasksPanel: ({ conversation }: { conversation?: { id?: number } }) =>
         e('div', null, `工作流任务树面板 #${conversation?.id ?? 0}`),
     })
-    await ui.render(wfTabStore, e(WorkbenchDrawer, { conversationId: 1, inline: true }))
+    await ui.render(wfTabStore, e(WorkbenchView, { conversationId: 1 }))
     assert.match(ui.host.textContent ?? '', /工作流任务树面板 #1/)
     const inactiveArtifactsTab = [...ui.host.querySelectorAll('.tab-btn')].find((el) => el.textContent?.includes('Artifacts'))
     assert.equal(inactiveArtifactsTab?.textContent?.trim(), 'Artifacts2', '切换至其他页签时产物计数亦不可重复')
@@ -650,9 +649,10 @@ describe("timeline-workbench-ux", () => {
       conversationArtifacts: { 1: [registered] },
     })
     const ui = mountNode()
-    await ui.render(storeZh, e(WorkbenchDrawer, { conversationId: 1, inline: true }))
+    await ui.render(storeZh, e(DrawerStackShell, { activeConversationId: 1, inline: true }))
+    await waitForCondition(() => ui.host.querySelector('.tab-btn') !== null)
     assert.ok(ui.host.querySelector('[aria-label="工作台抽屉"]') !== null)
-    assert.ok(ui.host.querySelector('[aria-label="关闭工作台"]') !== null)
+    assert.ok(ui.host.querySelector('[aria-label="关闭抽屉"]') !== null)
     assert.ok(ui.host.querySelector('[aria-label="正式产物"]') !== null)
     assert.match(ui.host.textContent ?? '', /产物1/)
     assert.match(ui.host.textContent ?? '', /注册产物/)
@@ -662,9 +662,9 @@ describe("timeline-workbench-ux", () => {
     await act(async () => {
       storeZh.setLocale('en')
     })
-    await ui.render(storeZh, e(WorkbenchDrawer, { conversationId: 1, inline: true }))
+    await ui.render(storeZh, e(DrawerStackShell, { activeConversationId: 1, inline: true }))
     assert.ok(ui.host.querySelector('[aria-label="Workbench drawer"]') !== null)
-    assert.ok(ui.host.querySelector('[aria-label="Close workbench"]') !== null)
+    assert.ok(ui.host.querySelector('[aria-label="Close drawer"]') !== null)
     assert.match(ui.host.textContent ?? '', /Artifacts1/)
     assert.match(ui.host.textContent ?? '', /Registered artifact/)
     localStorage.removeItem('helmx:locale')
@@ -738,14 +738,14 @@ describe("timeline-workbench-ux", () => {
       realSetTab(tab)
     }
     const ui = mountNode()
-    await ui.render(store, e(WorkbenchDrawer, { conversationId: 1, inline: true }))
+    await ui.render(store, e(WorkbenchView, { conversationId: 1 }))
     assert.deepEqual(selections, [], '初始快照前不能覆盖请求的合法深链')
     const conv = makeConversation(1, { profileId: 'coder' })
     await act(async () => {
       store.setSseConnected(true)
       store.updateLive((prev) => ({ ...prev, conversations: [conv], uiContributions: panels }))
     })
-    await ui.render(store, e(WorkbenchDrawer, { conversationId: 1, inline: true }))
+    await ui.render(store, e(WorkbenchView, { conversationId: 1 }))
     assert.deepEqual(selections, [], '快照到达后有效深链仍然有效')
     await waitForCondition(() => (ui.host.querySelector('.tab-btn')?.textContent ?? '').includes('动态队列3'))
     const labels = [...ui.host.querySelectorAll('.tab-btn')].map((button) => button.textContent)
@@ -761,11 +761,11 @@ describe("timeline-workbench-ux", () => {
     assert.doesNotMatch(workbench.textContent!, /103/, '顶栏必须与抽屉使用同一 scope')
 
     realSetTab('plugin:sample/removed')
-    await ui.render(store, e(WorkbenchDrawer, { conversationId: 1, inline: true }))
+    await ui.render(store, e(WorkbenchView, { conversationId: 1 }))
     assert.deepEqual(selections, [requested], '不可用页签应回退排序后的首个可用页签，而非硬编码 artifacts')
     assert.match(ui.host.querySelector('.tab-btn-active')?.textContent ?? '', /动态队列/)
     store.updateLive((prev) => ({ ...prev, uiContributions: [] }))
-    await ui.render(store, e(WorkbenchDrawer, { conversationId: 1, inline: true }))
+    await ui.render(store, e(WorkbenchView, { conversationId: 1 }))
     assert.deepEqual(selections, [requested, 'artifacts'])
     assert.doesNotMatch(ui.host.textContent!, /动态队列|3 项待处理/)
     globalThis.fetch = originalFetch

@@ -14,8 +14,7 @@ import { isSameResolvedTarget, resolveTargetString, type ResolvedTarget } from '
 const baseState = (target: ResolvedTarget): WorkspaceLocationState => ({
   primaryTarget: target,
   splitTarget: null,
-  workbenchOpen: false,
-  workbenchTab: 'artifacts',
+  drawerStack: [],
   activeModal: null,
 })
 
@@ -78,20 +77,22 @@ test('serializeHash: empty or blank ids count as no sub-item, outputting only th
   assert.equal(serializeHash({ kind: 'models', providerId: '' }), '#/settings/models')
 })
 
-test('serializeHash: the four centers as the main screen compose orthogonally with split, workbench and modals', { timeout: 60_000 }, () => {
+test('serializeHash: the four centers as the main screen compose orthogonally with split, drawer stack and modals', { timeout: 60_000 }, () => {
   const state: WorkspaceLocationState = {
     primaryTarget: { kind: 'profiles', profileId: 'superagent' },
     splitTarget: { kind: 'models', providerId: 'anthropic' },
-    workbenchOpen: true,
-    workbenchTab: 'artifacts',
-    activeModal: { kind: 'conversation-drawer', conversationId: 5 },
+    drawerStack: [
+      { kind: 'workbench', tab: 'artifacts' },
+      { kind: 'conversation', conversationId: 5 },
+    ],
+    activeModal: { kind: 'artifact-preview', artifactId: 'a1' },
   }
   const hash = formatLocationHash(state)
   const search = new URLSearchParams(hash.slice(hash.indexOf('?') + 1))
   assert.equal(hash.startsWith('#/settings/profiles/superagent?'), true)
   assert.equal(search.get('split'), 'settings/models/anthropic')
-  assert.equal(search.get('wb'), 'artifacts')
-  assert.equal(search.get('modal'), 'drawer')
+  assert.deepEqual(search.getAll('drawer'), ['wb/artifacts', 'c/5'])
+  assert.equal(search.get('modal'), 'artifact')
 })
 
 // ---------------------------------------------------------------------------
@@ -162,8 +163,7 @@ test('roundtrip: the four center targets encode and decode losslessly in both di
     {
       primaryTarget: { kind: 'profiles', profileId: 'coder' },
       splitTarget: { kind: 'nodes', nodeId: 'local' },
-      workbenchOpen: true,
-      workbenchTab: 'artifacts',
+      drawerStack: [{ kind: 'workbench', tab: 'artifacts' }],
       activeModal: null,
     },
   ]

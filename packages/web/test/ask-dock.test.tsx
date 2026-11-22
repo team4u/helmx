@@ -196,11 +196,16 @@ describe("ask-dock", () => {
 
   test('clicking the source badge opens the corresponding child conversation drawer', { timeout: 60_000 }, async () => {
     installFetch()
-    await renderAskDock(makeStore(), 1)
+    const store = makeStore()
+    await renderAskDock(store, 1)
     const btn = sourceButtons().find((b) => b.textContent === 'From #11')
     assert.ok(btn)
     await act(async () => { btn!.click() })
-    assert.deepEqual(activeModal, { kind: 'conversation-drawer', conversationId: 11 }, 'child conversation #11 drawer opens')
+    assert.deepEqual(
+      store.getDrawerStack(),
+      [{ kind: 'conversation', conversationId: 11 }],
+      'child conversation #11 drawer opens on the drawer stack',
+    )
   })
 
   test('submitting a descendant ask answer goes through the original asksApi with the CAS watermark', { timeout: 60_000 }, async () => {

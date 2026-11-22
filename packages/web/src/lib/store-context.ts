@@ -33,6 +33,7 @@ import type {
 import type { SessionDocKey } from './session-docs.js'
 import type {
   ActiveModal,
+  DrawerFrame,
   FocusedPanel,
   GroupedUiSpecs,
   HelmxStoreValue,
@@ -301,6 +302,10 @@ export function useFocusedPanel(): FocusedPanel {
 
 export function useSidebarCollapsed(): boolean {
   return useDomainSlice('sidebarCollapsed', (s) => s.getSidebarCollapsed())
+}
+
+export function useDrawerStack(): DrawerFrame[] {
+  return useDomainSlice('drawerStack', (s) => s.getDrawerStack())
 }
 
 export function useWorkbenchState(): WorkbenchSlice {

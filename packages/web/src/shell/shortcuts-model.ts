@@ -33,10 +33,10 @@ const OVERLAY_SELECTOR = [
 ].join(', ')
 
 const DIALOG_SELECTOR = '[role="dialog"], [role="alertdialog"]'
-// 会话抽屉是完整的会话视图（非阻断性弹窗）：对工作台快捷键视为会话上下文，
+// 统一抽屉栈是完整的会话/工作台视图（非阻断性弹窗）：对工作台快捷键视为会话上下文，
 // 不计入「其他对话框打开」的阻断判定。
 const NON_WORKBENCH_DIALOG_SELECTOR =
-  '[role="alertdialog"], [role="dialog"]:not(.helmx-workbench):not(.conversation-drawer)'
+  '[role="alertdialog"], [role="dialog"]:not(.drawer-stack-dialog):not(.helmx-workbench):not(.conversation-drawer)'
 const NON_MODEL_PICKER_DIALOG_SELECTOR = '[role="alertdialog"], [role="dialog"]:not(.composer-model-popover)'
 
 export function getStoredSidebarCollapsed(): boolean {
@@ -105,8 +105,8 @@ export function hasNonModelPickerDialogOpen(): boolean {
   return document.querySelector(NON_MODEL_PICKER_DIALOG_SELECTOR) !== null
 }
 
-export function hasAnyOpenOverlay(activeModal: ActiveModal, workbenchOpen: boolean): boolean {
-  if (activeModal !== null || workbenchOpen) return true
+export function hasAnyOpenOverlay(activeModal: ActiveModal, drawerOpen: boolean): boolean {
+  if (activeModal !== null || drawerOpen) return true
   if (typeof document === 'undefined') return false
   return document.querySelector(OVERLAY_SELECTOR) !== null
 }

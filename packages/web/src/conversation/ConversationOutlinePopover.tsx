@@ -176,6 +176,7 @@ export function ConversationOutlinePopover({
           ) : null}
         </button>
       </PopoverTrigger>
+      {!forceMount || open ? (
       <PopoverContent
         portalled={portalled}
         forceMount={forceMount ? true : undefined}
@@ -390,6 +391,7 @@ export function ConversationOutlinePopover({
             )}
           </div>
       </PopoverContent>
+      ) : null}
     </Popover>
   )
 }

@@ -78,7 +78,7 @@ function dispatchVisibility(visible: boolean): void {
 const CLEAN_COMPOSER: ComposerDirtySnapshot = { hasDraftText: false, editingEntry: false, hasAttachments: false, busy: false }
 
 interface Harness {
-  renderStore: (bootId: string | null, overrides?: { activeModal?: HelmxStoreValue['activeModal'] }) => void
+  renderStore: (bootId: string | null, overrides?: { activeModal?: HelmxStoreValue['activeModal']; drawerStack?: HelmxStoreValue['drawerStack'] }) => void
   store: () => HelmxExternalStore
   view: () => VersionWatcherView
   fetchCalls: Array<{ url: string; init: RequestInit }>
@@ -155,11 +155,21 @@ function mountWatcher(initialHtml = builtIndexHtml(CURRENT_ENTRY), nav: { locati
     )
   })
   // kernelBootId 经真实 setter 推进（auth 领域订阅通知）；其余覆写按用例一次性水合。
-  const renderStore = (bootId: string | null, overrides: { activeModal?: HelmxStoreValue['activeModal'] } = {}): void => {
-    const { activeModal } = overrides
+  const renderStore = (
+    bootId: string | null,
+    overrides: { activeModal?: HelmxStoreValue['activeModal']; drawerStack?: HelmxStoreValue['drawerStack'] } = {},
+  ): void => {
+    const { activeModal, drawerStack } = overrides
     act(() => {
       store.setKernelBootId(bootId)
       if (activeModal !== undefined) store.setActiveModal(activeModal)
+      if (drawerStack !== undefined) {
+        store.closeAllDrawers()
+        for (const frame of drawerStack) {
+          if (frame.kind === 'conversation') store.openConversationDrawer(frame.conversationId)
+          else store.openWorkbenchDrawer({ tab: frame.tab, conversationId: frame.conversationId })
+        }
+      }
     })
   }
   return {
@@ -639,8 +649,8 @@ describe("use-version-watcher", () => {
     await flush()
     assert.equal(h.view().deferReason, 'background-draft-and-modal', '后台草稿 + 打开窗口精确组合')
 
-    // 若在 conversation-drawer 中打开了会话 9，则视为当前可见草稿
-    h.renderStore('boot-2', { activeModal: { kind: 'conversation-drawer', conversationId: 9 } })
+    // 若在抽屉栈中打开了会话 9，则视为当前可见草稿
+    h.renderStore('boot-2', { activeModal: null, drawerStack: [{ kind: 'conversation', conversationId: 9 }] })
     await flush()
     assert.equal(h.view().deferReason, 'draft-and-modal', '抽屉内会话草稿属于当前可见现场')
 
@@ -648,7 +658,7 @@ describe("use-version-watcher", () => {
     act(() => {
       h.store().openTarget({ kind: 'conversation', conversationId: 9 }, { split: true })
     })
-    h.renderStore('boot-2', { activeModal: null })
+    h.renderStore('boot-2', { activeModal: null, drawerStack: [] })
     await flush()
     assert.equal(h.view().deferReason, 'draft', '分屏内会话草稿属于当前可见现场')
 

@@ -55,6 +55,7 @@ import { buildSwarmPanelModel } from './model-panel.ts'
 import { useElapsedNowMs, useSwarmBoardReadOnce, useSwarmBoardStatusFallback } from './hooks.ts'
 import {
   ACTION_ABORT,
+  JUMP_BACK_DISMISS,
   PANEL_ACTIVITY_AUTHORED,
   PANEL_ACTIVITY_RECEIVED,
   PANEL_ACTIVITY_TITLE,
@@ -81,6 +82,7 @@ import {
   PANEL_RETAINED_TITLE,
   PANEL_RETRY,
   PANEL_STATUS_LOAD_FAILED,
+  jumpBackLabel,
   panelCloseFailed,
   panelPostTargets,
   panelRefJumpLabel,
@@ -95,7 +97,17 @@ import {
   trayAbortFailed,
   PANEL_MEMBER_ARCHIVED,
 } from './copy.ts'
+import {
+  currentPeekSeq,
+  openPostPeek,
+  popJumpBack,
+  popPostPeek,
+  pushJumpBack,
+  pushPostPeek,
+  type PostPeekState,
+} from './model-post-nav.ts'
 import { PostBodyText } from './PostBodyText.tsx'
+import { SwarmPostPeekPopover } from './SwarmPostPeekPopover.tsx'
 
 const RECENT_LIMIT_COLLAPSED = 6
 const RECENT_LIMIT_EXPANDED = 200
@@ -125,9 +137,12 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
   const conversations = useConversations()
   const index = usePluginDoc<SwarmIndexDoc>('index')
   const panelRef = useRef<HTMLDivElement | null>(null)
+  const peekAnchorRef = useRef<HTMLElement | null>(null)
   const [historyExpanded, setHistoryExpanded] = useState(false)
   const [selectedChannel, setSelectedChannel] = useState<string>('all')
   const [highlightedSeq, setHighlightedSeq] = useState<number | undefined>(undefined)
+  const [peekState, setPeekState] = useState<PostPeekState | undefined>(undefined)
+  const [jumpBackStack, setJumpBackStack] = useState<number[]>([])
   const [busyAction, setBusyAction] = useState<string | undefined>(undefined)
   const [closeDialogOpen, setCloseDialogOpen] = useState(false)
   const [closeKeepWorktree, setCloseKeepWorktree] = useState(false)
@@ -138,6 +153,8 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
     setHistoryExpanded(false)
     setSelectedChannel('all')
     setHighlightedSeq(undefined)
+    setPeekState(undefined)
+    setJumpBackStack([])
     setCloseDialogOpen(false)
     setCloseError(undefined)
   }, [conversationId])
@@ -176,8 +193,14 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
   const isFallbackData = liveBoard === undefined && board !== undefined
   const resolvedGroupId = link?.groupId ?? board?.group.id
 
+  const peekTargetSeq = peekState !== undefined ? currentPeekSeq(peekState) : undefined
+  const peekNeedsFullRead =
+    peekTargetSeq !== undefined &&
+    board !== undefined &&
+    peekTargetSeq <= board.group.headSeq &&
+    !board.posts.some((p) => p.seq === peekTargetSeq)
   const needsFullRead =
-    historyExpanded &&
+    (historyExpanded || peekNeedsFullRead) &&
     (isFallbackData || (board !== undefined && board.posts.length < board.group.headSeq))
   const readState = useSwarmBoardReadOnce(
     resolvedGroupId,
@@ -317,7 +340,7 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
       })
   }
 
-  const handleJumpToPost = (seq: number): void => {
+  const scrollAndHighlightPost = (seq: number): void => {
     if (!visibleSeqs.has(seq)) {
       const inFullBoard = effectiveBoard.posts.find((p) => p.seq === seq)
       if (activeChannelFilter !== 'all' && (inFullBoard === undefined || inFullBoard.channel !== activeChannelFilter)) {
@@ -332,6 +355,33 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
     }
     setHighlightedSeq(seq)
   }
+
+  const handleOpenPeek = (originSeq: number, targetSeq: number, anchorEl: HTMLElement): void => {
+    peekAnchorRef.current = anchorEl
+    setPeekState(openPostPeek(originSeq, targetSeq))
+  }
+
+  const handleLocateFromPeek = (targetSeq: number): void => {
+    if (peekState !== undefined) {
+      setJumpBackStack((prev) => pushJumpBack(prev, peekState.originSeq, targetSeq))
+    }
+    setPeekState(undefined)
+    scrollAndHighlightPost(targetSeq)
+  }
+
+  const handleJumpBack = (): void => {
+    const { targetSeq, nextStack } = popJumpBack(jumpBackStack)
+    setJumpBackStack(nextStack)
+    if (targetSeq !== undefined) {
+      scrollAndHighlightPost(targetSeq)
+    }
+  }
+
+  const peekPost =
+    peekTargetSeq !== undefined
+      ? effectiveBoard.posts.find((p) => p.seq === peekTargetSeq)
+      : undefined
+  const jumpBackTop = jumpBackStack.length > 0 ? jumpBackStack[jumpBackStack.length - 1] : undefined
 
   const showChannelFilter = model.channels.length > 1
   const channelItems = showChannelFilter
@@ -517,6 +567,30 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
             />
           </div>
         ) : null}
+        {jumpBackTop !== undefined ? (
+          <div className="sw-panel-jump-back" role="status">
+            <button
+              type="button"
+              className="btn btn-xs btn-ghost sw-panel-jump-back-btn"
+              onClick={handleJumpBack}
+            >
+              <HelmxIcon name="arrow-left" size={11} />
+              <span>{jumpBackLabel(jumpBackTop, locale)}</span>
+              {jumpBackStack.length > 1 ? (
+                <span className="badge badge-neutral tabular-nums">{jumpBackStack.length}</span>
+              ) : null}
+            </button>
+            <button
+              type="button"
+              className="btn btn-xs btn-ghost btn-icon-sm sw-panel-jump-back-clear"
+              aria-label={resolveLocalizedText(JUMP_BACK_DISMISS, locale)}
+              title={resolveLocalizedText(JUMP_BACK_DISMISS, locale)}
+              onClick={() => setJumpBackStack([])}
+            >
+              <HelmxIcon name="x" size={11} />
+            </button>
+          </div>
+        ) : null}
         {model.recentPosts.length === 0 ? (
           <div className="sw-panel-empty-hint">
             {resolveLocalizedText(
@@ -547,7 +621,12 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
                     </span>
                     <span className="sw-panel-post-seq tabular-nums" title={post.body}>{`#${post.seq}`}</span>
                   </div>
-                  <PostBodyText body={post.body} collapsible={shouldCollapsePostBody(post.body)} />
+                  <PostBodyText
+                    body={post.body}
+                    collapsible={shouldCollapsePostBody(post.body)}
+                    selfSeq={post.seq}
+                    onRefClick={(refSeq, anchorEl) => handleOpenPeek(post.seq, refSeq, anchorEl)}
+                  />
                   {refs.length > 0 ? (
                     <div className="sw-panel-post-refs">
                       {refs.map((refSeq) => (
@@ -556,7 +635,7 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
                           type="button"
                           className="sw-panel-post-ref mono tabular-nums"
                           aria-label={panelRefJumpLabel(refSeq, locale)}
-                          onClick={() => handleJumpToPost(refSeq)}
+                          onClick={(event) => handleOpenPeek(post.seq, refSeq, event.currentTarget)}
                         >
                           {`#${refSeq}`}
                         </button>
@@ -574,6 +653,21 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
             })}
           </ol>
         )}
+        {peekState !== undefined ? (
+          <SwarmPostPeekPopover
+            peekState={peekState}
+            anchorRef={peekAnchorRef}
+            post={peekPost}
+            loading={readState.loading && peekPost === undefined}
+            error={peekPost === undefined ? readState.error : undefined}
+            showChannelBadge={showChannelFilter}
+            onPushRef={(seq) => setPeekState((prev) => (prev !== undefined ? pushPostPeek(prev, seq) : prev))}
+            onBack={() => setPeekState((prev) => (prev !== undefined ? popPostPeek(prev) : undefined))}
+            onLocate={handleLocateFromPeek}
+            onRetry={readState.retry}
+            onClose={() => setPeekState(undefined)}
+          />
+        ) : null}
         {readState.error !== undefined ? (
           <div className="sw-panel-empty-hint stack-row">
             <span>{readState.error}</span>

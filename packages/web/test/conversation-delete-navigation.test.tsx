@@ -20,7 +20,7 @@ let host: HTMLElement | undefined
 let deleteRequest: { conversationId: number; complete(): void } | undefined
 /** 当前挂起的 /api/events 流发送器：流终结（abort/cancel）后自动失效。 */
 let sendEvent: SseFrameSender | undefined
-let observed: { primary: ResolvedTarget; split: ResolvedTarget | null; modal: ActiveModal } | undefined
+let observed: { primary: ResolvedTarget; split: ResolvedTarget | null; drawerStack: import('../src/lib/types.js').DrawerFrame[]; modal: ActiveModal } | undefined
 let navigateTo: ((target: ResolvedTarget) => void) | undefined
 let historyLog: Array<{ method: 'push' | 'replace'; hash: string }> = []
 
@@ -106,7 +106,7 @@ function installFetch(): void {
 
 function App(): React.ReactNode {
   const store = useHelmxStore()
-  observed = { primary: store.primaryTarget, split: store.splitTarget, modal: store.activeModal }
+  observed = { primary: store.primaryTarget, split: store.splitTarget, drawerStack: store.drawerStack, modal: store.activeModal }
   navigateTo = (target) => store.openTarget(target)
   const pane = (target: ResolvedTarget | null, key: string, props: { isSplit?: boolean; isDrawer?: boolean } = {}) =>
     target?.kind === 'conversation'
@@ -118,11 +118,12 @@ function App(): React.ReactNode {
           ...(props.isDrawer ? { onCloseDrawer: () => store.setActiveModal(null) } : {}),
         })
       : null
+  const topDrawer = store.drawerStack[store.drawerStack.length - 1]
   return e(React.Fragment, null,
     pane(store.primaryTarget, `primary:${store.primaryTarget.kind === 'conversation' ? store.primaryTarget.conversationId : 'other'}`),
     pane(store.splitTarget, `split:${store.splitTarget?.kind === 'conversation' ? store.splitTarget.conversationId : 'other'}`, { isSplit: true }),
-    store.activeModal?.kind === 'conversation-drawer'
-      ? pane({ kind: 'conversation', conversationId: store.activeModal.conversationId }, `drawer:${store.activeModal.conversationId}`, { isDrawer: true })
+    topDrawer?.kind === 'conversation'
+      ? pane({ kind: 'conversation', conversationId: topDrawer.conversationId }, `drawer:${topDrawer.conversationId}`, { isDrawer: true })
       : null,
   )
 }
@@ -229,13 +230,13 @@ describe("conversation-delete-navigation", () => {
   })
 
   test('删除抽屉会话只关闭对应抽屉', { timeout: 60_000 }, async () => {
-    await mount('#/c/1?modal=drawer&id=2')
-    assert.equal(observed?.modal?.kind, 'conversation-drawer')
+    await mount('#/c/1?drawer=c/2')
+    assert.deepEqual(observed?.drawerStack, [{ kind: 'conversation', conversationId: 2 }])
     await clickDelete(1)
     assert.equal(deleteRequest?.conversationId, 2)
     await finishDelete()
     assert.deepEqual(observed?.primary, { kind: 'conversation', conversationId: 1 })
-    assert.equal(observed?.modal, null)
+    assert.deepEqual(observed?.drawerStack, [])
   })
 
   test('删除本机主屏会话 replace 回该智能体待命态（不选其他会话）', { timeout: 60_000 }, async () => {
