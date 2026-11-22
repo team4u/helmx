@@ -166,6 +166,8 @@ export interface WorkflowRunSummary {
   status: WorkflowRunStatus
   createdAt: number
   updatedAt: number
+  /** 首次进入终态（completed / failed / aborted）的时间戳（epoch ms）；后续 notifiedAt / resumedByRunId 写回不覆盖，用于防耗时漂移。 */
+  settledAt?: number
   result?: unknown
   error?: string
   /** 结构化错误码（如 validation_error / workflow_action_uncertain / crash_recovery_limit / secret_grant_expired_on_restart 等；取代错误文本子串猜测）。 */

@@ -107,14 +107,18 @@ export class StartupRecovery {
     if (record.suspendedCleanly !== undefined) {
       delete record.suspendedCleanly
     }
+    const now = Date.now()
     record.status = 'failed'
-    record.updatedAt = Date.now()
+    record.updatedAt = now
+    if (record.settledAt === undefined) {
+      record.settledAt = now
+    }
     record.errorCode = errorCode
     record.error = errorText
     if (record.nodes !== undefined) {
       record.nodes = record.nodes.map((node) =>
         node.status === 'running' || node.status === 'pending'
-          ? { ...node, status: 'failed', settledAt: record.updatedAt, error: record.error }
+          ? { ...node, status: 'failed', settledAt: now, error: record.error }
           : node,
       )
     }
@@ -349,7 +353,7 @@ export class StartupRecovery {
       candidates.push({
         runId: record.id,
         conversationId: record.conversationId,
-        failedAt: record.updatedAt,
+        failedAt: record.settledAt ?? record.updatedAt,
         autoResumeCount: record.autoResumeCount ?? 0,
       })
     }

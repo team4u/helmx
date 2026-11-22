@@ -1654,4 +1654,86 @@ describe('Workflow 三区零重复与无损呈现', () => {
       }
     }
   })
+
+  test('WorkflowActiveTray 时间观测：纯子会话补读 runStartedAt 整秒秒表，阻塞项优先展示等待审批耗时', { timeout: 60_000 }, () => {
+    const t0 = 1_700_000_000_000
+    // 1. 纯子会话节点（run.createdAt 与 runNode.startedAt 缺失/0）补读 summary.runStartedAt
+    const subRunNoStart: WorkflowRunSummary = {
+      id: 'wf_tray_conv_start',
+      kind: 'subagent',
+      name: '调研子代理',
+      conversationId: 1,
+      status: 'running',
+      createdAt: 0,
+      updatedAt: 0,
+      nodes: [{ id: 's0', kind: 'agent', status: 'running', conversationId: 81 }],
+    }
+    const blockedSubRun: WorkflowRunSummary = {
+      id: 'wf_tray_blocked_wait',
+      kind: 'subagent',
+      name: '审批子代理',
+      conversationId: 1,
+      status: 'running',
+      createdAt: t0,
+      updatedAt: t0 + 1_000,
+      nodes: [{ id: 's1', kind: 'agent', status: 'running', conversationId: 82 }],
+    }
+
+    const harness = createHostHarness({
+      conversationId: 1,
+      locale: 'zh-CN',
+      conversations: [
+        createConv({ id: 1, ownedBy: 'human' }),
+        createConv({
+          id: 81,
+          parentConversationId: 1,
+          status: 'working',
+          title: '深度检索',
+          runStartedAt: t0 + 10_000,
+        }),
+        createConv({
+          id: 82,
+          parentConversationId: 1,
+          status: 'blocked',
+          title: '发布确认',
+          pendingAskCount: 1,
+          pendingAskSince: t0 + 50_000,
+          runStartedAt: t0 + 2_000,
+        }),
+      ],
+      pendingAsks: [
+        { id: 'ask-82', conversationId: 82, title: '确认发布生产环境', fields: [], status: 'pending', createdAt: t0 + 50_000 },
+      ],
+      runsByConversation: { 1: [subRunNoStart, blockedSubRun] },
+    })
+    harness.port.getServerNow = () => t0 + 75_800
+
+    const mounted = harness.mountNode(e(mod.WorkflowActiveTray, { conversation: createConv({ id: 1, ownedBy: 'human' }) }))
+    try {
+      // 顶栏因存在阻塞项，优先展示「等待审批 25s」（整秒秒表，绝无小数 25.8s）
+      const barElapsed = mounted.container.querySelector('.workflow-active-tray-bar .workflow-active-tray-elapsed')?.textContent ?? ''
+      assert.equal(barElapsed, '等待审批 25s', '顶栏存在阻塞项时优先展示等待审批整秒秒表')
+
+      const toggle = mounted.container.querySelector('button.workflow-active-tray-bar-toggle') as HTMLButtonElement
+      act(() => {
+        toggle.click()
+      })
+      const rows = [...mounted.container.querySelectorAll('.workflow-active-tray-row')]
+      const blockedRow = rows.find((r) => (r.textContent ?? '').includes('发布确认'))
+      const runningRow = rows.find((r) => (r.textContent ?? '').includes('深度检索'))
+      assert.ok(blockedRow !== undefined && runningRow !== undefined)
+      assert.equal(
+        blockedRow!.querySelector('.workflow-active-tray-elapsed')?.textContent,
+        '等待审批 25s',
+        '阻塞行优先展示等待审批耗时（整秒秒表）',
+      )
+      assert.equal(
+        runningRow!.querySelector('.workflow-active-tray-elapsed')?.textContent,
+        '1m05s',
+        '无 run.createdAt / runNode.startedAt 时补读 summary.runStartedAt 并展示整秒秒表',
+      )
+    } finally {
+      mounted.unmount()
+    }
+  })
 })
