@@ -1,11 +1,11 @@
 /** AskDoc commands: asks list / answer / cancel. */
 import type { AskSpec } from '@helmx/protocol'
 import { CliError } from '../errors.js'
-import { flagValue, parseFlags } from '../args.js'
+import { flagValue } from '../args.js'
 import { printTableColumns } from '../output.js'
 import { formatAskWaiting } from '../timing.js'
 import type { CommandContext, CommandSpec } from './shared.js'
-import { assertNoExtraPositionals, parseNoFlags, printResult, requirePositional } from './shared.js'
+import { assertNoExtraPositionals, printResult, requirePositional } from './shared.js'
 
 export function asksCommands(): CommandSpec[] {
   const cmds: CommandSpec[] = []
@@ -14,7 +14,6 @@ export function asksCommands(): CommandSpec[] {
     path: ['asks', 'list'],
     description: 'List pending asks (GET /api/asks)',
     async run(ctx: CommandContext) {
-      parseNoFlags(ctx)
       const hub = await ctx.hub()
       const list = await hub.get<AskSpec[]>('/api/asks')
       if (ctx.json || !Array.isArray(list)) {
@@ -41,21 +40,14 @@ export function asksCommands(): CommandSpec[] {
     ],
     positional: '<id>',
     async run(ctx: CommandContext) {
-      const parsed = parseFlags(
-        [
-          { name: 'answers', type: 'json', required: true },
-          { name: 'expected-state-seq', type: 'number' },
-        ],
-        ctx.args,
-      )
-      const id = requirePositional(parsed.positionals, 0, 'id')
-      assertNoExtraPositionals(parsed.positionals, 1)
-      const answers = parsed.flags.get('answers')
+      const id = requirePositional(ctx.positionals, 0, 'id')
+      assertNoExtraPositionals(ctx.positionals, 1)
+      const answers = ctx.flags.get('answers')
       if (answers === null || typeof answers !== 'object' || Array.isArray(answers)) {
         throw new CliError('--answers must be a JSON object mapping fieldName to answer value', 'invalid_flag_value')
       }
       const body: Record<string, unknown> = { answers }
-      const seq = flagValue<number>(parsed.flags, 'expected-state-seq')
+      const seq = flagValue<number>(ctx.flags, 'expected-state-seq')
       if (seq !== undefined) body.expectedStateSeq = seq
       const hub = await ctx.hub()
       printResult(ctx, await hub.post<unknown>(`/api/asks/${encodeURIComponent(id)}/answer`, body))
@@ -67,9 +59,8 @@ export function asksCommands(): CommandSpec[] {
     description: 'Cancel a pending ask (POST /api/asks/:id/cancel)',
     positional: '<id>',
     async run(ctx: CommandContext) {
-      const parsed = parseFlags([], ctx.args)
-      const id = requirePositional(parsed.positionals, 0, 'id')
-      assertNoExtraPositionals(parsed.positionals, 1)
+      const id = requirePositional(ctx.positionals, 0, 'id')
+      assertNoExtraPositionals(ctx.positionals, 1)
       const hub = await ctx.hub()
       printResult(ctx, await hub.post<unknown>(`/api/asks/${encodeURIComponent(id)}/cancel`))
     },

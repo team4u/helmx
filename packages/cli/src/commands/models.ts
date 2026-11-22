@@ -1,6 +1,6 @@
 /** Model commands: models list / default / providers / refresh / filter. */
 import type { ModelCatalog, ModelProviderSummary, ModelProvidersRefreshResult, SetModelFilterBody } from '@helmx/protocol'
-import { parseFlags, type FlagSpec } from '../args.js'
+import { flagValue, type FlagSpec } from '../args.js'
 import { CliError } from '../errors.js'
 import { printTableColumns } from '../output.js'
 import { assertNoExtraPositionals, printResult } from './shared.js'
@@ -33,7 +33,6 @@ export function modelsCommands(): CommandSpec[] {
       path: ['models', 'list'],
       description: 'List available models (GET /api/models)',
       async run(ctx: CommandContext) {
-        parseFlags([], ctx.args)
         const hub = await ctx.hub()
         const catalog = await hub.get<ModelCatalog>('/api/models')
         printResult(ctx, ctx.json ? catalog : catalog.models)
@@ -44,14 +43,13 @@ export function modelsCommands(): CommandSpec[] {
       description: 'View or set global default model, per-model thinking defaults, and compaction model (GET/PUT /api/models/default)',
       flags: DEFAULT_FLAGS,
       async run(ctx: CommandContext) {
-        const parsed = parseFlags(DEFAULT_FLAGS, ctx.args)
-        assertNoExtraPositionals(parsed.positionals, 0)
+        assertNoExtraPositionals(ctx.positionals, 0)
         const hub = await ctx.hub()
-        const set = parsed.flags.get('set') as string | undefined
-        const thinking = parsed.flags.get('thinking') as string | undefined
-        const modelThinking = parsed.flags.get('model-thinking') as string | undefined
-        const compaction = parsed.flags.get('compaction') as string | undefined
-        const compactionThinking = parsed.flags.get('compaction-thinking') as string | undefined
+        const set = flagValue<string>(ctx.flags, 'set')
+        const thinking = flagValue<string>(ctx.flags, 'thinking')
+        const modelThinking = flagValue<string>(ctx.flags, 'model-thinking')
+        const compaction = flagValue<string>(ctx.flags, 'compaction')
+        const compactionThinking = flagValue<string>(ctx.flags, 'compaction-thinking')
         // Parse `provider/model=level` once at the first `=` (modelId may contain slashes, never `=`).
         const modelThinkingEntry =
           modelThinking === undefined
@@ -113,7 +111,6 @@ export function modelsCommands(): CommandSpec[] {
       path: ['models', 'providers'],
       description: 'List Pi providers and authentication methods (GET /api/models/providers)',
       async run(ctx: CommandContext) {
-        parseFlags([], ctx.args)
         const hub = await ctx.hub()
         const providers = await hub.get<ModelProviderSummary[]>('/api/models/providers')
         if (ctx.json || !Array.isArray(providers)) {
@@ -134,9 +131,8 @@ export function modelsCommands(): CommandSpec[] {
       description: 'Refresh dynamic model catalog (POST /api/models/refresh)',
       flags: REFRESH_FLAGS,
       async run(ctx: CommandContext) {
-        const parsed = parseFlags(REFRESH_FLAGS, ctx.args)
-        assertNoExtraPositionals(parsed.positionals, 0)
-        const provider = parsed.flags.get('provider') as string | undefined
+        assertNoExtraPositionals(ctx.positionals, 0)
+        const provider = flagValue<string>(ctx.flags, 'provider')
         const hub = await ctx.hub()
         const result = await hub.post<ModelProvidersRefreshResult>('/api/models/refresh', {
           ...(provider !== undefined ? { provider } : {}),
@@ -149,12 +145,11 @@ export function modelsCommands(): CommandSpec[] {
       description: 'View or set disabled models (GET/PUT /api/models/filter)',
       flags: FILTER_FLAGS,
       async run(ctx: CommandContext) {
-        const parsed = parseFlags(FILTER_FLAGS, ctx.args)
-        assertNoExtraPositionals(parsed.positionals, 0)
+        assertNoExtraPositionals(ctx.positionals, 0)
         const hub = await ctx.hub()
-        const provider = parsed.flags.get('provider') as string | undefined
-        const disable = (parsed.flags.get('disable') as string[] | undefined) ?? []
-        const clear = parsed.flags.get('clear') === true
+        const provider = flagValue<string>(ctx.flags, 'provider')
+        const disable = (ctx.flags.get('disable') as string[] | undefined) ?? []
+        const clear = ctx.flags.get('clear') === true
 
         // Read mode: without any write flags, display disabled models from the current catalog.
         if (provider === undefined && disable.length === 0 && !clear) {

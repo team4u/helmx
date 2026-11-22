@@ -1,7 +1,8 @@
 /** Cross-node command execution; JSON and human output share the same success and exit semantics. */
 import type { EnvExecRequest, EnvExecResponse, EnvExecStreamFrame } from '@helmx/protocol'
 import { CliError } from '../errors.js'
-import { flagValue, parseFlags } from '../args.js'
+import { flagValue } from '../args.js'
+import { runWithSignalAbort } from '../stream.js'
 import type { CommandContext, CommandSpec } from './shared.js'
 import { parsePositiveInt, printResult, resolveConversationTarget } from './shared.js'
 
@@ -46,11 +47,10 @@ export function envCommands(): CommandSpec[] {
     flags: [...ENV_EXEC_FLAGS],
     positional: '-- <command...>',
     async run(ctx: CommandContext) {
-      const parsed = parseFlags(ENV_EXEC_FLAGS, ctx.args)
-      const body: EnvExecRequest = { command: commandFromPositionals(parsed.positionals) }
-      const nodeId = flagValue<string>(parsed.flags, 'node')
-      const cwd = flagValue<string>(parsed.flags, 'cwd')
-      const timeout = flagValue<number>(parsed.flags, 'timeout')
+      const body: EnvExecRequest = { command: commandFromPositionals(ctx.positionals) }
+      const nodeId = flagValue<string>(ctx.flags, 'node')
+      const cwd = flagValue<string>(ctx.flags, 'cwd')
+      const timeout = flagValue<number>(ctx.flags, 'timeout')
       if (nodeId !== undefined) {
         if (nodeId.trim() === '') throw new CliError('--node must be a non-empty node ID', 'invalid_flag_value')
         body.nodeId = nodeId
@@ -63,10 +63,10 @@ export function envCommands(): CommandSpec[] {
         }
         body.timeoutMs = timeoutMs
       }
-      if (parsed.flags.get('current') === true) {
-        body.conversationId = resolveConversationTarget(parsed.flags, undefined, ctx.env)
+      if (ctx.flags.get('current') === true) {
+        body.conversationId = resolveConversationTarget(ctx.flags, undefined, ctx.env)
       }
-      if (parsed.flags.get('stream') === true) {
+      if (ctx.flags.get('stream') === true) {
         body.stream = true
         await runStreamed(ctx, body)
         return
@@ -86,17 +86,13 @@ export function envCommands(): CommandSpec[] {
 }
 
 async function runStreamed(ctx: CommandContext, body: EnvExecRequest): Promise<void> {
-  const controller = new AbortController()
-  const onSignal = () => controller.abort()
-  process.once('SIGINT', onSignal)
-  process.once('SIGTERM', onSignal)
   let terminal = false
   let failure: CliError | undefined
-  try {
+  const outcome = await runWithSignalAbort(async (stream) => {
     const hub = await ctx.hub()
     await hub.streamNdjson('POST', '/api/env/exec', {
       body,
-      signal: controller.signal,
+      signal: stream.signal,
       onLine(value) {
         if (!value || typeof value !== 'object' || Array.isArray(value)) {
           throw new CliError('Hub NDJSON frame must be an object', 'invalid_response')
@@ -131,14 +127,9 @@ async function runStreamed(ctx: CommandContext, body: EnvExecRequest): Promise<v
         throw new CliError(`Unknown Hub NDJSON frame type: ${String(raw.type)}`, 'invalid_response')
       },
     })
-  } catch (error) {
-    if (controller.signal.aborted || (error instanceof CliError && error.code === 'aborted')) {
-      throw new CliError('cancelled (env exec)', 'aborted', 130)
-    }
-    throw error
-  } finally {
-    process.off('SIGINT', onSignal)
-    process.off('SIGTERM', onSignal)
+  })
+  if (outcome.aborted) {
+    throw new CliError('cancelled (env exec)', 'aborted', 130)
   }
   if (!terminal) throw new CliError('node output stream ended before receiving an exit frame; command result is unknown', 'stream_incomplete')
   if (failure) throw failure

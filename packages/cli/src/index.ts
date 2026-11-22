@@ -11,6 +11,7 @@ import { realpathSync } from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
+import { parseFlags } from './args.js'
 import type { CommandContext, CommandSpec } from './commands/index.js'
 import { coreCommands } from './commands/index.js'
 import { loadDynamicCommands } from './actions.js'
@@ -199,6 +200,8 @@ export async function runCli(argv: readonly string[] = [], options: RunCliOption
       env,
       json,
       args: [],
+      flags: new Map(),
+      positionals: [],
       dataDir,
       cwd: options.cwd ?? process.cwd(),
       async hub() {
@@ -271,6 +274,9 @@ export async function runCli(argv: readonly string[] = [], options: RunCliOption
     const ctx = makeContext()
     ctx.args = rest.slice(coreMatched.consumed)
     try {
+      const parsed = parseFlags(coreMatched.command.flags ?? [], ctx.args)
+      ctx.flags = parsed.flags
+      ctx.positionals = parsed.positionals
       return (await coreMatched.command.run(ctx)) ?? 0
     } catch (err) {
       return emitError(describeError(err))

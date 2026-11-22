@@ -7,7 +7,6 @@
  * - GET requests pass query parameters in the path and send no request body.
  */
 import { CliError } from '../errors.js'
-import { parseFlags } from '../args.js'
 import type { CommandContext, CommandSpec } from './shared.js'
 import {
   assertNoExtraPositionals,
@@ -30,22 +29,15 @@ export function apiCommands(): CommandSpec[] {
       ],
       positional: '<method> <path>',
       async run(ctx: CommandContext) {
-        const parsed = parseFlags(
-          [
-            { name: 'input', type: 'json' },
-            { name: 'field', type: 'string', repeated: true },
-          ],
-          ctx.args,
-        )
-        const method = requirePositional(parsed.positionals, 0, 'method', 'missing_method').toUpperCase()
+        const method = requirePositional(ctx.positionals, 0, 'method', 'missing_method').toUpperCase()
         if (!(HTTP_METHODS as readonly string[]).includes(method)) {
-          throw new CliError(`<method> must be ${HTTP_METHODS.join('|')}, got "${parsed.positionals[0]}"`, 'invalid_flag_value')
+          throw new CliError(`<method> must be ${HTTP_METHODS.join('|')}, got "${ctx.positionals[0]}"`, 'invalid_flag_value')
         }
-        const rawPath = requirePositional(parsed.positionals, 1, 'path', 'missing_path')
-        assertNoExtraPositionals(parsed.positionals, 2)
+        const rawPath = requirePositional(ctx.positionals, 1, 'path', 'missing_path')
+        assertNoExtraPositionals(ctx.positionals, 2)
         const path = rawPath.startsWith('/') ? rawPath : `/${rawPath}`
-        const hasInput = parsed.flags.has('input')
-        const fields = repeatedValues(parsed.flags, 'field')
+        const hasInput = ctx.flags.has('input')
+        const fields = repeatedValues(ctx.flags, 'field')
         if (method === 'GET' && (hasInput || fields.length > 0)) {
           throw new CliError('GET requests do not accept a request body; pass query parameters in the path instead', 'invalid_flag_value')
         }
@@ -57,7 +49,7 @@ export function apiCommands(): CommandSpec[] {
         const fieldsObj = parseKeyValues(fields, 'field')
         let body: unknown
         if (hasInput) {
-          const input = parsed.flags.get('input')
+          const input = ctx.flags.get('input')
           if (fields.length > 0) {
             // Mixing --field with --input: only a JSON object base can merge (arrays/scalars have no keys to override, so reject explicitly)
             if (input === null || typeof input !== 'object' || Array.isArray(input)) {

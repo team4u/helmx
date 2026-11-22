@@ -16,7 +16,7 @@
  */
 import type { SkillSummary } from '@helmx/protocol'
 import { CliError } from '../errors.js'
-import { flagValue, parseFlags } from '../args.js'
+import { flagValue } from '../args.js'
 import type { HubClient } from '../hub-client.js'
 import type { CommandContext, CommandSpec } from './shared.js'
 import { printPlainText, printResult, requirePositional, resolveConversationTarget } from './shared.js'
@@ -143,9 +143,8 @@ export function skillsCommands(): CommandSpec[] {
     description: 'List available skills: Hub global catalog (GET /api/skills); --current or --node [--cwd] scope to a node (and optional workspace) via the builtin:profile skill_catalog action',
     flags: SKILL_SCOPE_FLAGS,
     async run(ctx: CommandContext) {
-      const parsed = parseFlags(SKILL_SCOPE_FLAGS, ctx.args)
       const hub = await ctx.hub()
-      const scope = await resolveSkillScope(parsed.flags, ctx.env, hub)
+      const scope = await resolveSkillScope(ctx.flags, ctx.env, hub)
       if (scope === undefined) {
         printResult(ctx, await hub.get<SkillSummary[]>('/api/skills'))
         return
@@ -177,17 +176,10 @@ export function skillsCommands(): CommandSpec[] {
     ],
     positional: '<id>',
     async run(ctx: CommandContext) {
-      const parsed = parseFlags(
-        [
-          { name: 'path', type: 'string' },
-          ...SKILL_SCOPE_FLAGS,
-        ],
-        ctx.args,
-      )
-      const id = requirePositional(parsed.positionals, 0, 'id')
-      const p = flagValue<string>(parsed.flags, 'path')
+      const id = requirePositional(ctx.positionals, 0, 'id')
+      const p = flagValue<string>(ctx.flags, 'path')
       const hub = await ctx.hub()
-      const scope = await resolveSkillScope(parsed.flags, ctx.env, hub)
+      const scope = await resolveSkillScope(ctx.flags, ctx.env, hub)
       if (scope === undefined) {
         const query = p ? `?path=${encodeURIComponent(p)}` : ''
         const res = await hub.get<{ text: string }>(`/api/skills/${encodeURIComponent(id)}${query}`)

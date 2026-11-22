@@ -1,6 +1,5 @@
 /** Full-text search command: search <query>. */
 import type { SearchHit } from '@helmx/protocol'
-import { parseFlags } from '../args.js'
 import { CliError } from '../errors.js'
 import type { CommandContext, CommandSpec } from './shared.js'
 import { printResult } from './shared.js'
@@ -12,8 +11,7 @@ export function searchCommands(): CommandSpec[] {
       description: 'Full-text search across conversations (GET /api/search?q=)',
       positional: '<query>',
       async run(ctx: CommandContext) {
-        const parsed = parseFlags([], ctx.args)
-        const query = parsed.positionals.join(' ')
+        const query = ctx.positionals.join(' ')
         if (!query) throw new CliError('missing <query> positional argument', 'missing_query')
         const hub = await ctx.hub()
         const hits = await hub.get<SearchHit[]>(`/api/search?q=${encodeURIComponent(query)}`)
