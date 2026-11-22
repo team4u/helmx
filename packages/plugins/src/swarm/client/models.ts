@@ -18,7 +18,6 @@ export const SWARM_WORKBENCH_PANEL_TARGET = 'plugin:builtin:swarm/groups' as con
 export interface SwarmIndexWorkerItem {
   conversationId: number
   coordinatorConversationId: number
-  parentConversationId?: number
   profileId: string
   groupId: string
   name: string
@@ -27,7 +26,6 @@ export interface SwarmIndexWorkerItem {
 
 /** Public doc 'index' projected by builtin:swarm. */
 export interface SwarmIndexDoc {
-  version?: 1
   workers?: SwarmIndexWorkerItem[]
   groups?: CollabGroupSummary[]
 }

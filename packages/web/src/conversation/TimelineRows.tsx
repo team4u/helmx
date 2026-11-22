@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ToolViewSpec } from '@helmx/protocol/browser'
 import { HelmxIcon, Tooltip } from '@helmx/plugin-client'
 import { PluginUiView } from '../ui/PluginUiView.js'
-import { ToolExpandedBody, ToolRawBody } from './ToolExpandedBody.js'
+import { ToolExpandedBody, ToolIoBody, ToolRawBody } from './ToolExpandedBody.js'
 import { MarkdownView } from './MarkdownView.js'
 import {
   buildToolViewProps,
@@ -47,6 +47,7 @@ export function TraceRow({
   defaultOpen: boolean
 }) {
   const [open, setOpen] = useState(defaultOpen)
+  const ioPanelId = useId()
   const { t } = useWebLocale()
 
   const rowFailed = Boolean(tool.isError)
@@ -69,8 +70,9 @@ export function TraceRow({
   // 单行极简统计（edit +N −N / write 行数）：只报事实，运行态不伪称成功。
   const stats = useMemo(() => toolRowStats(tool, t), [tool, t])
 
-  // 命中插件 tool.view：replaceRow=true 时插件组件完全替换默认工具行；
-  // 未设置时保持外层 trace-row + 下方 trace-toolview 的默认双栏形态。
+  // 命中插件 tool.view：replaceRow=true 时插件组件替换默认工具行，宿主同时
+  // 统一在行尾提供输入/输出检视开关（任意插件卡片均可展开查看完整入参、输出
+  // 与截断原文）；未设置时保持外层 trace-row + 下方 trace-toolview 的默认双栏形态。
   // inline 插件视图保留工具行的原始数据入口，专属展开体仅用于宿主工具。
   // 顶层业务卡标记 data-outline-card-id（tool.key）：会话大纲二级锚精确定位。
   const toolView = tool.toolView
@@ -87,13 +89,40 @@ export function TraceRow({
     >
       {toolView !== undefined && replaceRow ? (
         <div className="trace-block">
-          <PluginUiView
-            pluginId={toolView.pluginId}
-            spec={toolView.spec}
-            conversationId={conversationId}
-            label={t('conv.tool.viewLabel', { name: tool.toolName })}
-            slotProps={toolViewProps}
-          />
+          <div className="trace-block-head">
+            <div className="trace-block-view">
+              <PluginUiView
+                pluginId={toolView.pluginId}
+                spec={toolView.spec}
+                conversationId={conversationId}
+                label={t('conv.tool.viewLabel', { name: tool.toolName })}
+                slotProps={toolViewProps}
+              />
+            </div>
+            <Tooltip content={open ? t('conv.tool.hideIo') : t('conv.tool.showIo')}>
+              <button
+                type="button"
+                className={`trace-io-toggle${open ? ' trace-io-toggle-open' : ''}`}
+                aria-expanded={open}
+                aria-controls={ioPanelId}
+                aria-label={
+                  open
+                    ? t('conv.tool.hideIoAria', { name: tool.toolName })
+                    : t('conv.tool.showIoAria', { name: tool.toolName })
+                }
+                onClick={() => setOpen((v) => !v)}
+              >
+                <HelmxIcon name="code" size={12} />
+              </button>
+            </Tooltip>
+          </div>
+          <div id={ioPanelId} hidden={!open}>
+            {open ? (
+              <div className="trace-expanded-body selectable">
+                <ToolIoBody tool={tool} conversationId={conversationId} />
+              </div>
+            ) : null}
+          </div>
         </div>
       ) : (
         <>

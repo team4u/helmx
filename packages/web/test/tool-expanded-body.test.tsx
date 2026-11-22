@@ -1156,3 +1156,163 @@ test('ConversationTimeline 端到端装配：toolResult.details 透传至 ToolVi
     resetPluginClientCache()
   }
 })
+
+test('TraceRow：replaceRow=true 卡片统一提供宿主输入/输出展开开关，保留插件主点击行为并展示完整入参/输出/截断与原始数据', { timeout: 60_000 }, async () => {
+  resetPluginClientCache()
+  let cardClicks = 0
+  seedPluginClientModule('demo:cards', 'index.tsx', {
+    CardRow: (props: Record<string, unknown>) =>
+      e(
+        'button',
+        {
+          type: 'button',
+          className: 'demo-card-row',
+          onClick: () => {
+            cardClicks += 1
+          },
+        },
+        `card:${String(props['toolName'])}`,
+      ),
+  }, 'hash-io-1')
+
+  const makeCardStore = (locale: 'en' | 'zh-CN' = 'en') =>
+    makeTestStore({
+      locale,
+      plugins: [{
+        id: 'demo:cards',
+        name: 'Demo Cards',
+        version: '1.0.0',
+        enabled: true,
+        locked: false,
+        status: 'active',
+        hooks: [],
+        actions: [],
+        tools: [],
+        clientHashes: { 'index.tsx': 'hash-io-1' },
+      }],
+    })
+
+  const m = createMount()
+  try {
+    // 1) Swarm / workflow / subagent 形态的 replaceRow=true 卡片：点击卡片本身仍触发插件主操作，点击右侧 I/O 开关展开完整输入与输出
+    await m.render(
+      e(
+        HostStoreProviders,
+        { value: makeCardStore('en') },
+        e(TraceRow, {
+          tool: trace({
+            key: 'tool:sw-1',
+            callId: 'sw-1',
+            toolName: 'swarm_dispatch_worker',
+            input: {
+              name: 'author',
+              prompt: 'Line 1: audit auth\nLine 2: run tests',
+            },
+            resultText: 'Dispatched @author (#51), brief=#1.',
+            resultTruncation: { truncated: true, totalLines: 120 },
+            resultEntryId: '99',
+            presentationMeta: { workerConversationId: 51, seq: 1 },
+            artifactRef: 'art_sw_1',
+            toolView: {
+              pluginId: 'demo:cards',
+              spec: {
+                id: 'swarm-card',
+                toolNames: ['swarm_dispatch_worker'],
+                replaceRow: true,
+                client: { module: 'index.tsx', export: 'CardRow' },
+              },
+            },
+          }),
+          conversationId: 7,
+          defaultOpen: false,
+        }),
+      ),
+    )
+    await waitForCondition(() => m.host.querySelector('.demo-card-row') !== null)
+    assert.ok(m.host.querySelector('.trace-row') === null, 'replaceRow=true 仍不渲染宿主默认 .trace-row')
+
+    const toggle = m.host.querySelector<HTMLButtonElement>('.trace-io-toggle')
+    assert.ok(toggle !== null, 'replaceRow=true 渲染统一输入/输出展开开关')
+    assert.equal(toggle.getAttribute('aria-expanded'), 'false')
+    assert.match(toggle.getAttribute('aria-label') ?? '', /Show input & output for swarm_dispatch_worker/)
+    const panelId = toggle.getAttribute('aria-controls')
+    assert.ok(panelId !== null && panelId !== '')
+    const panel = document.getElementById(panelId)
+    assert.ok(panel !== null && panel.hidden === true, '折叠态 aria-controls 指向真实隐藏面板')
+
+    // 点击卡片本身不触发展开，保留插件跳转语义
+    await act(async () => {
+      m.host.querySelector<HTMLButtonElement>('.demo-card-row')!.click()
+    })
+    assert.equal(cardClicks, 1)
+    assert.equal(toggle.getAttribute('aria-expanded'), 'false')
+
+    // 点击 I/O 开关展开：可见 KV 多行入参、输出、截断全文提示、产物入口与原始数据
+    await act(async () => {
+      toggle.click()
+    })
+    assert.equal(toggle.getAttribute('aria-expanded'), 'true')
+    assert.equal(toggle.classList.contains('trace-io-toggle-open'), true)
+    assert.equal(panel.hidden, false)
+    assert.ok(panel.querySelector('.trace-kv') !== null, '入参以可读键值形态展示')
+    assert.match(panel.textContent ?? '', /Line 1: audit auth\nLine 2: run tests/, '多行入参按真实换行展示')
+    assert.match(panel.textContent ?? '', /Dispatched @author \(#51\), brief=#1\./, '输出完整可见')
+    assert.match(panel.textContent ?? '', /Expand full text \(120 lines in total\)/, '服务端截断时保留展开全文取回入口')
+    assert.match(panel.textContent ?? '', /Open full artifact #art_sw_1/, 'Spill 产物入口保留')
+    const copyOut = [...panel.querySelectorAll('button')].find((b) => b.textContent?.includes('Copy output')) as HTMLButtonElement | undefined
+    assert.ok(copyOut !== undefined && copyOut.disabled === true, '截断态输出复制受门禁保护')
+
+    const rawBtn = panel.querySelector<HTMLButtonElement>('.trace-raw .trace-inline-btn')
+    assert.ok(rawBtn !== null)
+    await act(async () => {
+      rawBtn.click()
+    })
+    assert.match(panel.textContent ?? '', /"workerConversationId": 51/, '原始数据保留结构化 presentationMeta')
+
+    // 再次点击收起
+    await act(async () => {
+      toggle.click()
+    })
+    assert.equal(toggle.getAttribute('aria-expanded'), 'false')
+    assert.equal(panel.hidden, true)
+
+    // 2) 插件 replaceRow=true 接管 bash 且运行中无输出时：不越权渲染宿主 BashToolBody，也不呈现空白，且支持 zh-CN 文案
+    await m.render(
+      e(
+        HostStoreProviders,
+        { value: makeCardStore('zh-CN') },
+        e(TraceRow, {
+          tool: trace({
+            key: 'tool:bash-override',
+            callId: 'b-1',
+            toolName: 'bash',
+            status: 'running',
+            input: { command: 'echo hi' },
+            toolView: {
+              pluginId: 'demo:cards',
+              spec: {
+                id: 'bash-card',
+                toolNames: ['bash'],
+                replaceRow: true,
+                client: { module: 'index.tsx', export: 'CardRow' },
+              },
+            },
+          }),
+          conversationId: 7,
+          defaultOpen: true,
+        }),
+      ),
+    )
+    const zhToggle = m.host.querySelector<HTMLButtonElement>('.trace-io-toggle')!
+    assert.match(zhToggle.getAttribute('aria-label') ?? '', /查看 bash 的输入与输出|收起 bash 的输入与输出/)
+    await act(async () => {
+      if (zhToggle.getAttribute('aria-expanded') === 'false') zhToggle.click()
+    })
+    assert.ok(m.host.querySelector('.trace-cmd-head') === null, '不越权渲染宿主专属 BashToolBody')
+    assert.ok(m.host.querySelector('.trace-kv') !== null, '使用通用键值入参视图')
+    assert.match(m.host.textContent ?? '', /执行中，暂无输出。/, '运行中无输出如实提示，不留空白')
+  } finally {
+    m.unmount()
+    resetPluginClientCache()
+  }
+})

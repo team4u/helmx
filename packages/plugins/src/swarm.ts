@@ -28,7 +28,6 @@ import {
   PARTICIPANT_SCOPE,
   SWARM_PLUGIN_ID,
   SWARM_SKILL_ID,
-  WORKER_ARCHIVED_TAG,
   WORKER_TAG,
   asConversationDeletedEvent,
   asConversationUpsertEvent,
@@ -44,7 +43,6 @@ import {
   type BoardPost,
   type BoardPostKind,
   type BoardViewDoc,
-  type BoardViewEdge,
   type BoardViewHeadline,
   type BoardViewMember,
   type CollabChannelSpec,
@@ -306,7 +304,6 @@ export {
   WORKER_TAG,
   ARCHIVED_COORDINATOR_TAG,
   ARCHIVED_WORKER_TAG,
-  WORKER_ARCHIVED_TAG,
   COORDINATOR_SCOPE,
   PARTICIPANT_SCOPE,
   BOARD_REPORT_RENDERER,
@@ -340,7 +337,6 @@ export {
   type BoardViewHeadline,
   type MemberLiveState,
   type BoardViewMember,
-  type BoardViewEdge,
   type BoardViewDoc,
 }
 
@@ -350,7 +346,6 @@ export {
   resolveBoardTargets,
   shouldFlushCoordinatorReport,
   findIdleCatchupAnchorPost,
-  aggregateBoardEdges,
   synthesizeHeadline,
   synthesizeBoardView,
 } from './swarm/board-router.js'

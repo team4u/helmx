@@ -1182,8 +1182,9 @@ test('ToolCallDetails: renders raw input/output with host trace classes; the art
         e(SDK.ToolCallDetails, { input: { resume: 11 }, result: 'done text', artifactRef: 'art_full' }))),
   )
   try {
-    const details = host.querySelector('details.tool-call-details')
+    const details = host.querySelector('details.tool-call-details') as HTMLDetailsElement | null
     assert.ok(details !== null, 'renders a details.tool-call-details (host public trace vocabulary)')
+    assert.equal(details.open, false, 'collapsed by default when defaultOpen is omitted')
     assert.equal(details.querySelector('summary')?.textContent, '调用详情')
     assert.deepEqual(
       [...details.querySelectorAll('.trace-section-label')].map((n) => n.textContent),
@@ -1205,6 +1206,23 @@ test('ToolCallDetails: renders raw input/output with host trace classes; the art
       [...host.querySelectorAll('.trace-section-label')].map((n) => n.textContent),
       ['Input', 'Output'],
     )
+  } finally {
+    act(() => root.unmount())
+  }
+})
+
+test('ToolCallDetails: defaultOpen=true renders expanded on first mount without requiring a second click', { timeout: 60_000 }, () => {
+  const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
+  const port = makePort(log)
+  const { host, root } = mount(
+    e(SDK.PluginClientHostContext.Provider, { value: port },
+      e(SDK.PluginClientContext.Provider, { value: SDK.createPluginClientContext(port, 'p1', 7) },
+        e(SDK.ToolCallDetails, { input: { prompt: 'hello' }, result: 'world', defaultOpen: true }))),
+  )
+  try {
+    const details = host.querySelector('details.tool-call-details') as HTMLDetailsElement | null
+    assert.ok(details !== null)
+    assert.equal(details.open, true, 'starts expanded when defaultOpen=true')
   } finally {
     act(() => root.unmount())
   }

@@ -20,7 +20,6 @@ export const SWARM_SKILL_ID = 'swarm'
 export const COORDINATOR_TAG = 'swarm-coordinator'
 export const WORKER_TAG = 'swarm-worker'
 export const ARCHIVED_WORKER_TAG = 'swarm-worker-archived'
-export const WORKER_ARCHIVED_TAG = ARCHIVED_WORKER_TAG
 /**
  * 结单后主控会话的历史 tag：仅供 UI（workbench 编排面板）继续访问已完成编组，
  * 不进入任何工具/动作 scope，也不触发 <active_swarm_group> 注入
@@ -43,7 +42,6 @@ export const MEMBER_NAME_PATTERN = '^[a-z][a-z0-9_-]{0,31}$'
 export const CHANNEL_NAME_PATTERN = '^[a-z][a-z0-9_-]{0,39}$'
 export const GROUP_ID_PATTERN = '^[A-Za-z0-9_-]{1,64}$'
 export const PROFILE_ID_PATTERN = '^[a-z0-9][a-z0-9-]{0,63}$'
-export const NODE_ID_PATTERN = '^[^\\s/\\\\]{1,64}$'
 
 const MEMBER_NAME_RE = new RegExp(MEMBER_NAME_PATTERN)
 const CHANNEL_NAME_RE = new RegExp(CHANNEL_NAME_PATTERN)
@@ -275,14 +273,6 @@ export type BoardViewMember = GroupMemberState & {
   model?: string
 }
 
-export interface BoardViewEdge {
-  from: string
-  to: string
-  count: number
-  lastSeq: number
-  lastKind: BoardPostKind
-}
-
 export interface BoardViewDoc {
   group: CollabGroupSummary & {
     objective?: string
@@ -292,7 +282,6 @@ export interface BoardViewDoc {
   }
   headline: BoardViewHeadline
   members: BoardViewMember[]
-  edges: BoardViewEdge[]
   posts: BoardPost[]
   activeWorkingMembers: string[]
 }
@@ -375,6 +364,8 @@ export interface CollabGroupRuntime {
     lastReplySummary: string
   }): Promise<void>
   onCoordinatorTurnSettled(conversationId: number): Promise<void>
+  hasInflightWakeup(groupId: string, memberName: string): boolean
+  afterMemberArchived(groupId: string): Promise<void>
 }
 
 /** 模块间运行时协调契约（解耦 swarm.ts 与 actions/hooks/group-store 子模块）。 */

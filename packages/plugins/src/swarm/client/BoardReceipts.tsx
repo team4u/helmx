@@ -32,6 +32,7 @@ export function SwarmBoardReportPill(props: TimelineRendererProps): ReactNode {
   const locale = usePluginLocale()
   const meta = parseBoardReportMeta(props)
   const seqLabel = seqRangeLabel(meta.fromSeq, meta.toSeq)
+  const headlineText = meta.headline !== undefined ? resolveLocalizedText(meta.headline, locale) : ''
   return (
     <button
       type="button"
@@ -49,8 +50,8 @@ export function SwarmBoardReportPill(props: TimelineRendererProps): ReactNode {
       {meta.postCount !== undefined ? (
         <span className="sw-receipt-count tabular-nums">{swReceiptCountLabel(meta.postCount, locale)}</span>
       ) : null}
-      {meta.headline !== undefined && meta.headline !== '' ? (
-        <span className="sw-receipt-headline" title={meta.headline}>{meta.headline}</span>
+      {headlineText !== '' ? (
+        <span className="sw-receipt-headline" title={headlineText}>{headlineText}</span>
       ) : null}
     </button>
   )

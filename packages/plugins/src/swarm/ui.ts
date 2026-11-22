@@ -1,28 +1,13 @@
-import { COMPOSER_DOCK_SLOT, type ConversationScope, type HelmxPluginContext } from '@helmx/protocol'
+import { COMPOSER_DOCK_SLOT, type HelmxPluginContext } from '@helmx/protocol'
+import {
+  BOARD_REPORT_RENDERER,
+  BOARD_WAKEUP_RENDERER,
+  COORDINATOR_SCOPE,
+  HISTORY_PARTICIPANT_SCOPE,
+  PARTICIPANT_SCOPE,
+} from './contracts.js'
 
 export const SWARM_WORKBENCH_PANEL_ID = 'groups' as const
-export const SWARM_COORDINATOR_TAG = 'swarm-coordinator' as const
-export const SWARM_COORDINATOR_ARCHIVED_TAG = 'swarm-coordinator-archived' as const
-export const SWARM_WORKER_TAG = 'swarm-worker' as const
-export const SWARM_WORKER_ARCHIVED_TAG = 'swarm-worker-archived' as const
-export const SWARM_BOARD_REPORT_RENDERER = 'swarm:board-report' as const
-export const SWARM_BOARD_WAKEUP_RENDERER = 'swarm:board-wakeup' as const
-
-const SWARM_PARTICIPANT_SCOPE: ConversationScope = {
-  tags: [SWARM_COORDINATOR_TAG, SWARM_WORKER_TAG],
-}
-
-// 结单历史 tag（含历史主控与已归档 Worker）仅放行工作台编排面板查看历史编组；@/# 补全仍限活跃参与者。
-const SWARM_HISTORY_VIEWER_SCOPE: ConversationScope = {
-  tags: [SWARM_COORDINATOR_TAG, SWARM_COORDINATOR_ARCHIVED_TAG, SWARM_WORKER_TAG, SWARM_WORKER_ARCHIVED_TAG],
-}
-
-// 活动托盘仅主控会话挂载：composer dock 槽的语义是「本会话派出的在飞事项」（与
-// builtin:workflow 的 runs 同构），worker 视角的组上下文由会话自身状态灯与按需
-// 打开的工作台面板提供，不在 worker 输入区重复 dock 组级 HUD。
-const SWARM_COORDINATOR_SCOPE: ConversationScope = {
-  tags: [SWARM_COORDINATOR_TAG],
-}
 
 /** Model-facing swarm tool names (single source for the toolView trace registration). */
 const SWARM_TOOL_NAMES = [
@@ -58,31 +43,34 @@ export function registerSwarmUi(ctx: HelmxPluginContext): void {
     replaceRow: true,
     client: { module: 'tool-view.tsx', export: 'SwarmToolView' },
   })
+  // 活动托盘仅主控会话挂载：composer dock 槽语义是「本会话派出的在飞事项」，
+  // worker 视角的组上下文由会话状态灯与按需打开的工作台面板提供。
   ctx.ui.slot({
     id: 'swarm-active-tray',
     target: COMPOSER_DOCK_SLOT,
-    scope: SWARM_COORDINATOR_SCOPE,
+    scope: COORDINATOR_SCOPE,
     client: { module: 'active-tray.tsx', export: 'SwarmActiveTray' },
   })
+  // 结单历史 tag 仅放行工作台编排面板查看历史编组；@/# 补全仍限活跃参与者。
   ctx.ui.workbenchPanel({
     id: SWARM_WORKBENCH_PANEL_ID,
     label: { en: 'Swarm Groups', 'zh-CN': 'Swarm 协同编组' },
     icon: 'network',
     order: 12,
-    scope: SWARM_HISTORY_VIEWER_SCOPE,
+    scope: HISTORY_PARTICIPANT_SCOPE,
     badge: { doc: 'board-badges', byConversationField: 'byConversation' },
     client: { module: 'workbench.tsx', export: 'SwarmWorkbenchPanel' },
   })
   ctx.ui.timelineRenderer({
     id: 'swarm-board-report',
     title: { en: 'Swarm Board Report', 'zh-CN': '协同看板汇总' },
-    matchMeta: { renderer: SWARM_BOARD_REPORT_RENDERER },
+    matchMeta: { renderer: BOARD_REPORT_RENDERER },
     client: { module: 'board-receipts.tsx', export: 'SwarmBoardReportPill' },
   })
   ctx.ui.timelineRenderer({
     id: 'swarm-board-wakeup',
     title: { en: 'Swarm Board Wakeup', 'zh-CN': '协同看板唤醒' },
-    matchMeta: { renderer: SWARM_BOARD_WAKEUP_RENDERER },
+    matchMeta: { renderer: BOARD_WAKEUP_RENDERER },
     client: { module: 'board-receipts.tsx', export: 'SwarmBoardWakeupPill' },
   })
   ctx.ui.composerCompleter({
@@ -90,7 +78,7 @@ export function registerSwarmUi(ctx: HelmxPluginContext): void {
     label: { en: 'Swarm Members', 'zh-CN': '协同组成员' },
     trigger: '@',
     priority: 120,
-    scope: SWARM_PARTICIPANT_SCOPE,
+    scope: PARTICIPANT_SCOPE,
     source: { kind: 'action', actionId: 'complete_board_members' },
   })
   ctx.ui.composerCompleter({
@@ -98,7 +86,7 @@ export function registerSwarmUi(ctx: HelmxPluginContext): void {
     label: { en: 'Swarm Channels', 'zh-CN': '协同组频道' },
     trigger: '#',
     priority: 120,
-    scope: SWARM_PARTICIPANT_SCOPE,
+    scope: PARTICIPANT_SCOPE,
     source: { kind: 'action', actionId: 'complete_board_channels' },
   })
 }

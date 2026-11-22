@@ -544,3 +544,7 @@
 .sw-panel-history-toggle {
   flex-shrink: 0;
 }
+
+.sw-panel-load-earlier {
+  align-self: center;
+}

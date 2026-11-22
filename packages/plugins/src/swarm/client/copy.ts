@@ -215,8 +215,11 @@ export const PANEL_RETRY = L('Retry', '重试')
 export const PANEL_REFRESH = L('Refresh', '刷新')
 export const PANEL_HISTORY_TOGGLE = L('Show full record', '查看完整记录')
 export const PANEL_HISTORY_COLLAPSE = L('Show less', '收起记录')
+export const PANEL_LOAD_EARLIER = L('Load earlier records', '加载更早记录')
+export const PANEL_LOADING_EARLIER = L('Loading earlier…', '正在加载更早记录…')
 export const SW_BODY_EXPAND: LocalizedText = { en: 'Expand full text', 'zh-CN': '展开全文' }
 export const SW_BODY_COLLAPSE: LocalizedText = { en: 'Collapse', 'zh-CN': '收起长文' }
+export const PANEL_MEMBERS_EMPTY = L('No members dispatched yet.', '尚未派工成员。')
 export const PANEL_POSTS_EMPTY = L('No board posts yet.', '暂无协同记录。')
 export const PANEL_POSTS_CHANNEL_EMPTY = L('No posts in this channel yet.', '该频道暂无协同记录。')
 export const PANEL_MEMBER_ARCHIVED = L('Archived', '已归档')
@@ -276,14 +279,15 @@ export function jumpBackLabel(seq: number, locale: HelmxLocale = DEFAULT_HELMX_L
 }
 
 /**
- * Localize synthetic board headlines from `synthesizeHeadline` while preserving
- * real post excerpts, user-authored close summaries, and custom headlines verbatim.
+ * Derive localized panel headline strictly from structured `BoardViewDoc` fields
+ * (zero regex/string reverse-parsing of English templates), while preserving
+ * real post excerpts (`refSeq !== undefined`) and user-authored `closeSummary` verbatim.
  */
 export function resolvePanelHeadlineText(
   view: BoardViewDoc,
   locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
 ): string {
-  const { group, headline, activeWorkingMembers } = view
+  const { group, headline, activeWorkingMembers, members } = view
   if (group.status === 'closed') {
     const retainedCount = group.retainedWorktrees?.length ?? 0
     if (retainedCount > 0 && headline.kind === 'unmerged') {
@@ -298,30 +302,33 @@ export function resolvePanelHeadlineText(
     if (group.closeSummary !== undefined && group.closeSummary.trim() !== '') {
       return group.closeSummary
     }
-    if (headline.kind === 'closed' && headline.text === 'Swarm group closed') {
+    if (headline.kind === 'closed') {
       return resolveLocalizedText(L('Swarm group closed', '协同编组已结单'), locale)
     }
     return headline.text
   }
 
-  if (headline.kind === 'blocker' && headline.refSeq === undefined && headline.targetMember !== undefined) {
-    if (headline.text === `Member @${headline.targetMember} stopped in error state`) {
-      return resolveLocalizedText(
-        L(
-          `Member @${headline.targetMember} stopped in error state`,
-          `成员 @${headline.targetMember} 因错误停止`,
-        ),
-        locale,
-      )
-    }
+  if (headline.refSeq !== undefined) {
+    return headline.text
+  }
+
+  if (headline.kind === 'blocker' && headline.targetMember !== undefined) {
+    return resolveLocalizedText(
+      L(
+        `Member @${headline.targetMember} stopped in error state`,
+        `成员 @${headline.targetMember} 因错误停止`,
+      ),
+      locale,
+    )
   }
 
   if (headline.kind === 'normal') {
-    if (activeWorkingMembers.length > 0 && headline.text.startsWith('Active: ')) {
+    if (activeWorkingMembers.length > 0) {
       const list = activeWorkingMembers.map((m) => `@${m}`).join(', ')
       return resolveLocalizedText(L(`Active: ${list}`, `执行中：${list}`), locale)
     }
-    if (headline.text === 'Group ready — dispatch peer roles to start collaboration') {
+    const activeCount = members.filter((m) => m.lifecycle === 'active').length
+    if (activeCount === 0) {
       return resolveLocalizedText(
         L(
           'Group ready — dispatch peer roles to start collaboration',
@@ -330,17 +337,13 @@ export function resolvePanelHeadlineText(
         locale,
       )
     }
-    const idleMatch = /^(\d+) active member\(s\) idle$/.exec(headline.text)
-    if (idleMatch !== null) {
-      const count = Number(idleMatch[1])
-      return resolveLocalizedText(
-        L(
-          `${count} active member${count === 1 ? '' : 's'} idle`,
-          `${count} 名活跃成员空闲待命`,
-        ),
-        locale,
-      )
-    }
+    return resolveLocalizedText(
+      L(
+        `${activeCount} active member${activeCount === 1 ? '' : 's'} idle`,
+        `${activeCount} 名活跃成员空闲待命`,
+      ),
+      locale,
+    )
   }
 
   return headline.text

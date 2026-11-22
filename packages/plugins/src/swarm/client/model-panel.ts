@@ -64,9 +64,9 @@ export function resolveSwarmPanelStatus(view: BoardViewDoc): SwarmPanelStatus {
 export function buildSwarmPanelModel(
   view: BoardViewDoc,
   conversations: ReadonlyArray<ConversationSummary>,
-  options: { recentLimit?: number; channel?: string } = {},
+  options: { recentLimit?: number | null; channel?: string } = {},
 ): SwarmPanelModel {
-  const recentLimit = options.recentLimit ?? 6
+  const recentLimit = options.recentLimit === undefined ? 6 : options.recentLimit
   const selectedChannel = options.channel
   const summaryById = new Map<number, ConversationSummary>()
   for (const conv of conversations) summaryById.set(conv.id, conv)
@@ -94,7 +94,8 @@ export function buildSwarmPanelModel(
     selectedChannel !== undefined && selectedChannel !== '' && selectedChannel !== 'all'
       ? view.posts.filter((p) => p.channel === selectedChannel)
       : view.posts
-  const recentPosts = [...filteredPosts].sort((a, b) => b.seq - a.seq).slice(0, recentLimit).reverse()
+  const sortedDesc = [...filteredPosts].sort((a, b) => b.seq - a.seq)
+  const recentPosts = (recentLimit !== null ? sortedDesc.slice(0, recentLimit) : sortedDesc).reverse()
   const channels = view.group.channels.filter((c) => c.archived !== true)
 
   return {

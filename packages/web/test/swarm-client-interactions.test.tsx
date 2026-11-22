@@ -390,10 +390,6 @@ describe("swarm-client-interactions", () => {
           model: 'anthropic/claude-sonnet-4-5',
         },
       ],
-      edges: [
-        { from: 'coordinator', to: 'author', count: 1, lastSeq: 1, lastKind: 'brief' },
-        { from: 'author', to: 'verifier', count: 1, lastSeq: 2, lastKind: 'handoff' },
-      ],
       posts: [
         {
           seq: 1,
@@ -621,7 +617,9 @@ describe("swarm-client-interactions", () => {
         rowBtn.click()
       })
       assert.equal(rowBtn.getAttribute('aria-expanded'), 'true')
-      assert.equal(runningMount.host.querySelector('.tool-call-details') !== null, true, '展开原始工具数据')
+      const details = runningMount.host.querySelector('details.tool-call-details') as HTMLDetailsElement | null
+      assert.ok(details !== null, '展开原始工具数据')
+      assert.equal(details.open, true, '点一次行即直接展开输入输出，无需二次点击 summary')
       assert.deepEqual(spy.drawerCalls, [51], '未新增抽屉调用（未伪造目标）')
     } finally {
       runningMount.unmount()
@@ -1084,6 +1082,35 @@ describe("swarm-client-interactions", () => {
       reportMount.unmount()
     }
 
+    // LocalizedText headline in SwarmBoardReportPill renders in active zh-CN locale
+    const zhSpy = makeSpyCtx({ conversationId: 50, locale: 'zh-CN' })
+    const zhReportMount = await mount(
+      zhSpy,
+      e(components.SwarmBoardReportPill, {
+        conversationId: 50,
+        entry: {
+          id: 'e-11',
+          kind: 'helmx.input',
+          data: {
+            meta: {
+              renderer: 'swarm:board-report',
+              groupId: 'grp-live',
+              fromSeq: 7,
+              toSeq: 7,
+              postCount: 1,
+              headline: { en: 'Active: @verifier', 'zh-CN': '执行中：@verifier' },
+            },
+          },
+        },
+      }),
+    )
+    try {
+      const zhText = zhReportMount.host.textContent ?? ''
+      assert.match(zhText, /执行中：@verifier/, '回执胶囊在中文界面本地化渲染 LocalizedText headline')
+    } finally {
+      zhReportMount.unmount()
+    }
+
     const wakeupSpy = makeSpyCtx({ conversationId: 51 })
     const wakeupMount = await mount(
       wakeupSpy,
@@ -1544,13 +1571,15 @@ describe("swarm-client-interactions", () => {
     })
 
     let boardReadAttempts = 0
+    const boardReadInputs: unknown[] = []
     let failNextRead = true
     const spy = makeSpyCtx({
       conversationId: 50,
       locale: 'zh-CN',
-      callAction: async (actionId) => {
+      callAction: async (actionId, input) => {
         if (actionId === 'board_read') {
           boardReadAttempts += 1
+          boardReadInputs.push(input)
           if (failNextRead) {
             failNextRead = false
             throw new Error('temporary read failure')
@@ -1570,7 +1599,6 @@ describe("swarm-client-interactions", () => {
                 refs: [],
                 createdAt: 1_700_000_002_000,
               },
-              ...(truncatedBoard.posts as unknown[]),
             ],
           }
         }
@@ -1594,7 +1622,7 @@ describe("swarm-client-interactions", () => {
       assert.match(peek.textContent ?? '', /Implemented per #2/)
       assert.equal(boardReadAttempts, 0, '已缓存的 #12 不应触发额外 board_read')
 
-      // 2) 在 #12 浮卡内继续点未缓存的早期帖 #2 -> 触发按需 board_read，首次失败如实报错并可重试
+      // 2) 在 #12 浮卡内继续点未缓存的早期帖 #2 -> 按 seqs:[2] 精确补拉，首次失败如实报错并可重试
       const nestedRef2 = peek.querySelector<HTMLAnchorElement>('a[href="#swarm-post-2"]')
       assert.ok(nestedRef2 !== null, '浮卡内引用同样可点击')
       await act(async () => { nestedRef2.click() })
@@ -1602,6 +1630,7 @@ describe("swarm-client-interactions", () => {
 
       peek = panel.host.querySelector<HTMLElement>('.sw-peek-popover')!
       assert.equal(boardReadAttempts, 1, '早期未缓存帖 #2 必须触发按需 board_read')
+      assert.deepEqual(boardReadInputs[0], { groupId: 'grp-live', seqs: [2] }, '浮卡缺失引用必须按 seqs 精确补拉')
       assert.match(peek.textContent ?? '', /temporary read failure/, '读取失败如实呈现原文')
       const retryBtn = [...peek.querySelectorAll<HTMLButtonElement>('button')].find((b) =>
         (b.textContent ?? '').includes('重试'),
@@ -1631,6 +1660,130 @@ describe("swarm-client-interactions", () => {
       assert.match(peek.textContent ?? '', /未找到记录 #999/, '不存在的序号如实提示未找到')
     } finally {
       panel.unmount()
+    }
+
+    // 4) 空成员编组文案与 >200 条历史分页向前加载 + 早期 #seq 定位不截断
+    const emptyMembersBoard = boardViewFixture({
+      group: {
+        id: 'grp-empty',
+        title: '新建待派工编组',
+        coordinatorConversationId: 50,
+        status: 'active',
+        activeWorkerCount: 0,
+        headSeq: 0,
+        channels: [{ name: 'main' }],
+        createdAt: 1_700_000_000_000,
+        updatedAt: 1_700_000_000_000,
+      },
+      headline: { text: 'Group ready — dispatch peer roles to start collaboration', tone: 'info', kind: 'normal' },
+      members: [],
+      posts: [],
+      activeWorkingMembers: [],
+    })
+    setStubState({
+      docs: {
+        index: {
+          workers: [],
+          groups: [emptyMembersBoard.group],
+        },
+        'board-badges': { byConversation: {} },
+      },
+      sessionDocs: { 'builtin:swarm/board-view/50': emptyMembersBoard },
+    })
+    const emptyPanel = await mount(
+      makeSpyCtx({ conversationId: 50, locale: 'zh-CN' }),
+      e(components.SwarmWorkbenchPanel, { conversation: convSummary(50, '主控', { tags: ['swarm-coordinator'] }) }),
+    )
+    try {
+      const emptyText = emptyPanel.host.textContent ?? ''
+      assert.match(emptyText, /尚未派工成员。/, '空成员区必须显示成员空文案而非帖子空文案')
+      assert.match(emptyText, /编组已就绪/, '无正则结构字段推导就绪标题')
+    } finally {
+      emptyPanel.unmount()
+    }
+
+    const makeStubPost = (seq: number, body = `Post #${seq}`) => ({
+      seq,
+      groupId: 'grp-long',
+      channel: 'main',
+      from: 'author',
+      to: ['verifier'],
+      resolvedTargets: ['verifier'],
+      wake: true,
+      kind: 'handoff',
+      refs: seq === 250 ? [12] : [],
+      body,
+      createdAt: 1_700_000_000_000 + seq * 1000,
+    })
+    const longBoard = boardViewFixture({
+      group: {
+        id: 'grp-long',
+        title: '长协同组',
+        coordinatorConversationId: 50,
+        status: 'active',
+        activeWorkerCount: 2,
+        headSeq: 250,
+        channels: [{ name: 'main' }],
+        createdAt: 1_700_000_000_000,
+        updatedAt: 1_700_000_250_000,
+      },
+      posts: Array.from({ length: 10 }, (_, i) => makeStubPost(241 + i, i === 9 ? 'Final check citing #12.' : `Recent #${241 + i}`)),
+    })
+    setStubState({
+      docs: { index: { workers: [], groups: [longBoard.group] }, 'board-badges': { byConversation: {} } },
+      sessionDocs: { 'builtin:swarm/board-view/50': longBoard },
+    })
+    const longReadCalls: unknown[] = []
+    const longSpy = makeSpyCtx({
+      conversationId: 50,
+      locale: 'zh-CN',
+      callAction: async (actionId, input) => {
+        if (actionId !== 'board_read') return {}
+        longReadCalls.push(input)
+        const inp = input as { seqs?: number[]; sinceSeq?: number; limit?: number }
+        if (Array.isArray(inp.seqs)) {
+          return { posts: inp.seqs.map((s) => makeStubPost(s, `Early exact post #${s}`)) }
+        }
+        if (typeof inp.sinceSeq === 'number') {
+          const count = inp.limit ?? 50
+          return { posts: Array.from({ length: count }, (_, i) => makeStubPost(inp.sinceSeq! + 1 + i)) }
+        }
+        return { posts: Array.from({ length: 200 }, (_, i) => makeStubPost(51 + i)) }
+      },
+    })
+    const longPanel = await mount(
+      longSpy,
+      e(components.SwarmWorkbenchPanel, { conversation: convSummary(50, '主控', { tags: ['swarm-coordinator'] }) }),
+    )
+    try {
+      // #seq badge must not dump raw body into native title tooltip
+      const seqEl = longPanel.host.querySelector<HTMLElement>('.sw-panel-post[data-post-seq="250"] .sw-panel-post-seq')
+      assert.equal(seqEl?.getAttribute('title'), null, '#seq 徽章不得把整段正文塞入原生 title')
+
+      // Click #12 -> exact seqs:[12] fetch -> Locate in list -> #12 stays visible past 200 recent posts!
+      const ref12 = longPanel.host.querySelector<HTMLAnchorElement>('.sw-panel-post[data-post-seq="250"] a[href="#swarm-post-12"]')!
+      await act(async () => { ref12.click() })
+      await act(async () => { await new Promise((r) => setTimeout(r, 0)) })
+      assert.deepEqual(longReadCalls[0], { groupId: 'grp-long', seqs: [12] })
+      const locateBtn = longPanel.host.querySelector<HTMLButtonElement>('.sw-peek-locate-btn')!
+      assert.ok(locateBtn !== null)
+      await act(async () => { locateBtn.click() })
+      await act(async () => { await new Promise((r) => setTimeout(r, 0)) })
+      assert.ok(
+        longPanel.host.querySelector('.sw-panel-post-highlighted[data-post-seq="12"]') !== null,
+        '定位早期帖 #12 时即使已加载最新 200 条也不得被 slice(0, 200) 截掉',
+      )
+
+      // "Load earlier records" button appears and fetches #1..#50 via sinceSeq=0, limit=50
+      const loadEarlierBtn = longPanel.host.querySelector<HTMLButtonElement>('.sw-panel-load-earlier')
+      assert.ok(loadEarlierBtn !== null, '超过 200 条记录时展示加载更早记录按钮')
+      await act(async () => { loadEarlierBtn.click() })
+      await act(async () => { await new Promise((r) => setTimeout(r, 0)) })
+      assert.deepEqual(longReadCalls.at(-1), { groupId: 'grp-long', sinceSeq: 0, limit: 50 })
+      assert.ok(longPanel.host.querySelector('.sw-panel-load-earlier') === null, '加载至 #1 后隐藏更早记录按钮')
+      assert.ok(longPanel.host.querySelector('.sw-panel-post[data-post-seq="1"]') !== null, '早期 #1 成功合入列表')
+    } finally {
+      longPanel.unmount()
     }
     resetDefaultStubs()
   })

@@ -6,7 +6,7 @@
  * - public doc `index`: group summaries + worker pointers;
  * - public doc `board-badges`: per-conversation badge entries;
  * - session doc `board-view` (keyed by coordinatorConversationId): live board
- *   projection with headline, member live states, edges and recent posts;
+ *   projection with headline, member live states and recent posts;
  * - `board_status` / `board_read` action payloads for the explicit fallback.
  */
 import type { LocalizedText, TimelineRendererProps } from '@helmx/protocol'
@@ -94,14 +94,6 @@ export interface BoardPost {
   createdAt: number
 }
 
-export interface BoardEdgeSummary {
-  from: string
-  to: string
-  count: number
-  lastSeq: number
-  lastKind: BoardPostKind
-}
-
 export interface BoardHeadline {
   text: string
   tone: 'info' | 'warn' | 'err' | 'ok'
@@ -121,7 +113,6 @@ export interface BoardViewDoc {
   group: BoardGroupView
   headline: BoardHeadline
   members: BoardMemberView[]
-  edges: BoardEdgeSummary[]
   posts: BoardPost[]
   activeWorkingMembers: string[]
 }
@@ -144,7 +135,7 @@ export interface BoardReportReceiptMeta {
   fromSeq?: number
   toSeq?: number
   postCount?: number
-  headline?: string
+  headline?: LocalizedText
 }
 
 export interface BoardWakeupReceiptMeta {
@@ -465,29 +456,6 @@ export function parseBoardView(raw: unknown): BoardViewDoc | undefined {
     members.push(parsed)
   }
 
-  if (!Array.isArray(raw.edges)) return undefined
-  const edges: BoardEdgeSummary[] = []
-  for (const e of raw.edges) {
-    if (
-      !isPlainObject(e) ||
-      !isNonEmptyString(e.from) ||
-      !isNonEmptyString(e.to) ||
-      !isPosInt(e.count) ||
-      !isNonNegInt(e.lastSeq) ||
-      typeof e.lastKind !== 'string' ||
-      !VALID_POST_KINDS.has(e.lastKind)
-    ) {
-      return undefined
-    }
-    edges.push({
-      from: e.from,
-      to: e.to,
-      count: e.count,
-      lastSeq: e.lastSeq,
-      lastKind: e.lastKind as BoardPostKind,
-    })
-  }
-
   if (!Array.isArray(raw.posts)) return undefined
   const posts: BoardPost[] = []
   for (const p of raw.posts) {
@@ -518,7 +486,6 @@ export function parseBoardView(raw: unknown): BoardViewDoc | undefined {
     },
     headline,
     members,
-    edges,
     posts,
     activeWorkingMembers: raw.activeWorkingMembers,
   }
@@ -585,7 +552,7 @@ export function resolveConversationBoardLink(
       g?.coordinatorConversationId ??
       (isPosInt(workerEntry.coordinatorConversationId)
         ? workerEntry.coordinatorConversationId
-        : workerEntry.parentConversationId ?? conversationId)
+        : conversationId)
     return {
       groupId: workerEntry.groupId,
       coordinatorConversationId: coordId,

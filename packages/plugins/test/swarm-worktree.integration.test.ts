@@ -189,7 +189,7 @@ describe('builtin:swarm worktree isolation, handoff & close_group recovery', () 
       // Verify sessionDoc('board-view') matches board_status
       const sessionView = kernel.plugins.getPublicSessionDoc(SWARM_PLUGIN_ID, 'board-view', coord.id).value as BoardViewDoc
       assert.equal(sessionView.group.id, groupId)
-      assert.ok(sessionView.edges.some((e) => e.from === 'author' && e.to === 'verifier'))
+      assert.ok(sessionView.posts.some((p) => p.from === 'author' && p.resolvedTargets.includes('verifier')))
 
       // Verify coordinator timeline report and worker wakeup carry swarm:board-report & swarm:board-wakeup renderers
       const coordDetail = await kernel.getConversationDetail(coord.id, { limit: 20 })
@@ -290,12 +290,59 @@ describe('builtin:swarm worktree isolation, handoff & close_group recovery', () 
       const coordTagsAfterRecreate = kernel.getConversation(coord.id).tags
       assert.equal(coordTagsAfterRecreate.includes(COORDINATOR_TAG), true, 're-created group restores the active coordinator tag')
       assert.equal(coordTagsAfterRecreate.includes(ARCHIVED_COORDINATOR_TAG), false, 'history tag is stripped on re-activation')
+
+      // archive_worker({ keepWorktree: true }) records unmerged branch into group.retainedWorktrees and close_group preserves it
+      let keptStep = 0
+      env.faux.setResponses(Array.from({ length: 6 }, () => (ctx: { messages: unknown[] }) => {
+        const meta = captureRequestMeta(ctx.messages as unknown as Record<string, unknown>[])
+        const sec = meta.sectionsById['swarm.active_group'] ?? ''
+        if (!sec.includes('name="kept"')) return fauxAssistantMessage('Coordinator noted kept worker.')
+        keptStep += 1
+        if (keptStep === 1) {
+          return fauxAssistantMessage(
+            [fauxToolCall('bash', { command: 'printf "kept-branch\n" > kept.txt && git add kept.txt && git commit -m "feat: kept"' })],
+            { stopReason: 'toolUse' },
+          )
+        }
+        return fauxAssistantMessage(
+          [fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', body: 'Committed kept.txt.' })],
+          { stopReason: 'toolUse' },
+        )
+      }))
+      const keptWorker = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'dispatch_worker',
+        { groupId: recreated.groupId, name: 'kept', prompt: 'Commit kept.txt', isolation: 'worktree' },
+        { conversationId: coord.id },
+      )) as { workerConversationId: number; worktreeId: string }
+      await kernel.waitForIdle(keptWorker.workerConversationId)
+      await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+      await kernel.waitForIdle(coord.id)
       await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'archive_worker',
+        { groupId: recreated.groupId, name: 'kept', keepWorktree: true },
+        { conversationId: coord.id },
+      )
+      const statusAfterArchive = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'board_status',
+        { groupId: recreated.groupId },
+        { conversationId: coord.id },
+      )) as BoardViewDoc
+      assert.equal(statusAfterArchive.group.retainedWorktrees?.length, 1)
+      assert.equal(statusAfterArchive.group.retainedWorktrees?.[0]?.worktreeId, keptWorker.worktreeId)
+
+      const secondClose = (await kernel.plugins.invokeAction(
         SWARM_PLUGIN_ID,
         'close_group',
         { groupId: recreated.groupId },
         { conversationId: coord.id },
-      )
+      )) as { closed: boolean; retainedWorktrees: Array<{ worktreeId: string; memberName: string }> }
+      assert.equal(secondClose.closed, true)
+      assert.equal(secondClose.retainedWorktrees.length, 1, 'close_group must preserve retainedWorktrees recorded by archive_worker({ keepWorktree: true })')
+      assert.equal(secondClose.retainedWorktrees[0]?.worktreeId, keptWorker.worktreeId)
+      await kernel.plugins.invokeAction(WORKTREE_ID, 'cleanup_worktree', { worktreeId: keptWorker.worktreeId, force: true })
       assert.equal(kernel.getConversation(coord.id).tags.includes(ARCHIVED_COORDINATOR_TAG), true, 'closing again re-swaps to the history tag')
 
       // Closed group and coordinatorDetached fallback: delete coordinator #C, board_status & board_read still work!

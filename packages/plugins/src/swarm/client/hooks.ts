@@ -81,35 +81,51 @@ export function useSwarmBoardStatusFallback(
   return { view, loading, error, reload }
 }
 
+function mergePostLists(existing: readonly BoardPost[], incoming: readonly BoardPost[]): BoardPost[] {
+  if (incoming.length === 0) return [...existing]
+  const bySeq = new Map<number, BoardPost>()
+  for (const p of existing) bySeq.set(p.seq, p)
+  for (const p of incoming) bySeq.set(p.seq, p)
+  return [...bySeq.values()].sort((a, b) => a.seq - b.seq)
+}
+
 export interface SwarmBoardReadState {
   posts: BoardPost[]
   loading: boolean
+  loadingEarlier: boolean
+  hasEarlier: boolean
   error: string | undefined
   retry: () => void
+  loadEarlier: () => void
 }
 
 /**
  * On-demand `board_read` history loader for the "show full record" affordance
- * in the workbench panel (resets on group switch, tracks headSeq updates, and
- * allows retries on failure; callers merge into the view).
+ * in the workbench panel: loads the newest page (`limit: 200`), accumulates
+ * earlier pages backwards via `sinceSeq` when `headSeq > 200`, tracks headSeq
+ * updates without discarding earlier pages, and resets cleanly on group switch.
  */
 export function useSwarmBoardReadOnce(
   groupId: string | undefined,
   open: boolean,
-  options: { conversationId?: number; headSeq?: number } = {},
+  options: { conversationId?: number; headSeq?: number; initialOldestSeq?: number } = {},
 ): SwarmBoardReadState {
   const ctx = usePluginContext()
   const locale = usePluginLocale()
   const [posts, setPosts] = useState<BoardPost[]>([])
   const [loading, setLoading] = useState(false)
+  const [loadingEarlier, setLoadingEarlier] = useState(false)
+  const [earlierExhausted, setEarlierExhausted] = useState(false)
   const [error, setError] = useState<string | undefined>(undefined)
   const [nonce, setNonce] = useState(0)
   const generation = useRef(0)
+  const earlierGen = useRef(0)
   const lastGroupId = useRef<string | undefined>(undefined)
   const loadedKey = useRef<string | undefined>(undefined)
 
   const retry = useCallback(() => {
     loadedKey.current = undefined
+    setEarlierExhausted(false)
     setNonce((n) => n + 1)
   }, [])
 
@@ -118,9 +134,12 @@ export function useSwarmBoardReadOnce(
       lastGroupId.current = groupId
       loadedKey.current = undefined
       generation.current += 1
+      earlierGen.current += 1
       setPosts([])
       setError(undefined)
       setLoading(false)
+      setLoadingEarlier(false)
+      setEarlierExhausted(false)
     }
     if (!open || groupId === undefined || groupId === '') return
     const targetKey = `${groupId}:${options.headSeq ?? 0}`
@@ -138,7 +157,7 @@ export function useSwarmBoardReadOnce(
           return
         }
         loadedKey.current = targetKey
-        setPosts(parsed)
+        setPosts((prev) => mergePostLists(prev, parsed))
       })
       .catch((err: unknown) => {
         if (generation.current !== current) return
@@ -148,6 +167,139 @@ export function useSwarmBoardReadOnce(
         if (generation.current === current) setLoading(false)
       })
   }, [open, groupId, options.headSeq, options.conversationId, ctx, locale, nonce])
+
+  const contiguousMinSeq =
+    posts.length > 0
+      ? posts[0]!.seq
+      : options.initialOldestSeq
+
+  const hasEarlier =
+    open &&
+    !earlierExhausted &&
+    contiguousMinSeq !== undefined &&
+    contiguousMinSeq > 1 &&
+    (options.headSeq ?? 0) > posts.length
+
+  const loadEarlier = useCallback(() => {
+    if (groupId === undefined || groupId === '' || loadingEarlier || loading) return
+    if (contiguousMinSeq === undefined || contiguousMinSeq <= 1) return
+    const pageLimit = Math.min(200, contiguousMinSeq - 1)
+    const sinceSeq = Math.max(0, contiguousMinSeq - 1 - pageLimit)
+    const current = ++earlierGen.current
+    const targetGroupId = groupId
+    setLoadingEarlier(true)
+    setError(undefined)
+    void ctx
+      .callAction(
+        'board_read',
+        { groupId: targetGroupId, sinceSeq, limit: pageLimit },
+        { conversationId: options.conversationId },
+      )
+      .then((raw) => {
+        if (earlierGen.current !== current || lastGroupId.current !== targetGroupId) return
+        const parsed = parseBoardReadPosts(raw)
+        if (parsed === undefined) {
+          setError(panelStatusInvalid(locale))
+          return
+        }
+        if (parsed.length === 0 || parsed[0]!.seq >= contiguousMinSeq) {
+          setEarlierExhausted(true)
+          return
+        }
+        setPosts((prev) => mergePostLists(prev, parsed))
+      })
+      .catch((err: unknown) => {
+        if (earlierGen.current !== current || lastGroupId.current !== targetGroupId) return
+        setError(err instanceof Error ? err.message : String(err))
+      })
+      .finally(() => {
+        if (earlierGen.current === current) setLoadingEarlier(false)
+      })
+  }, [groupId, loadingEarlier, loading, contiguousMinSeq, ctx, options.conversationId, locale])
+
+  return { posts, loading, loadingEarlier, hasEarlier, error, retry, loadEarlier }
+}
+
+export interface SwarmBoardPeekState {
+  posts: BoardPost[]
+  loading: boolean
+  error: string | undefined
+  retry: () => void
+}
+
+/**
+ * Exact O(1) `board_read({ groupId, seqs: [targetSeq] })` loader for `#seq`
+ * peek popovers when the referenced post is not in the live/history cache
+ * (works for any seq even in >200 post groups, accumulates fetched posts per
+ * group so nested `#18 -> #12 -> #5` navigation never refetches).
+ */
+export function useSwarmBoardPeekPost(
+  groupId: string | undefined,
+  targetSeq: number | undefined,
+  options: { conversationId?: number; enabled?: boolean } = {},
+): SwarmBoardPeekState {
+  const ctx = usePluginContext()
+  const locale = usePluginLocale()
+  const enabled = options.enabled === true
+  const [posts, setPosts] = useState<BoardPost[]>([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | undefined>(undefined)
+  const [nonce, setNonce] = useState(0)
+  const generation = useRef(0)
+  const lastGroupId = useRef<string | undefined>(undefined)
+  const attemptedSeqs = useRef(new Set<number>())
+
+  const retry = useCallback(() => {
+    if (targetSeq !== undefined) attemptedSeqs.current.delete(targetSeq)
+    setError(undefined)
+    setNonce((n) => n + 1)
+  }, [targetSeq])
+
+  useEffect(() => {
+    if (lastGroupId.current !== groupId) {
+      lastGroupId.current = groupId
+      attemptedSeqs.current.clear()
+      generation.current += 1
+      setPosts([])
+      setError(undefined)
+      setLoading(false)
+    }
+    if (!enabled || groupId === undefined || groupId === '' || targetSeq === undefined) {
+      setLoading(false)
+      setError(undefined)
+      return
+    }
+    if (attemptedSeqs.current.has(targetSeq)) return
+    const current = ++generation.current
+    const seqToFetch = targetSeq
+    setLoading(true)
+    setError(undefined)
+    void ctx
+      .callAction(
+        'board_read',
+        { groupId, seqs: [seqToFetch] },
+        { conversationId: options.conversationId },
+      )
+      .then((raw) => {
+        if (generation.current !== current) return
+        const parsed = parseBoardReadPosts(raw)
+        if (parsed === undefined) {
+          setError(panelStatusInvalid(locale))
+          return
+        }
+        attemptedSeqs.current.add(seqToFetch)
+        if (parsed.length > 0) {
+          setPosts((prev) => mergePostLists(prev, parsed))
+        }
+      })
+      .catch((err: unknown) => {
+        if (generation.current !== current) return
+        setError(err instanceof Error ? err.message : String(err))
+      })
+      .finally(() => {
+        if (generation.current === current) setLoading(false)
+      })
+  }, [enabled, groupId, targetSeq, options.conversationId, ctx, locale, nonce])
 
   return { posts, loading, error, retry }
 }
