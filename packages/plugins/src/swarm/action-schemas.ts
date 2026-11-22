@@ -6,7 +6,6 @@ import {
   CHANNEL_NAME_PATTERN,
   GROUP_ID_PATTERN,
   MEMBER_NAME_PATTERN,
-  NODE_ID_PATTERN,
   PROFILE_ID_PATTERN,
 } from './contracts.js'
 
@@ -70,7 +69,6 @@ export const dispatchInputSchema: Record<string, unknown> = {
     },
     title: { type: 'string', minLength: 1, maxLength: 80 },
     cwd: { type: 'string', minLength: 1 },
-    nodeId: { type: 'string', minLength: 1, maxLength: 64, pattern: NODE_ID_PATTERN },
   },
   required: ['prompt', 'name'],
   additionalProperties: false,
@@ -491,25 +489,10 @@ export const boardStatusOutputSchema: Record<string, unknown> = {
       additionalProperties: false,
     },
     members: { type: 'array', items: boardMemberViewSchema },
-    edges: {
-      type: 'array',
-      items: {
-        type: 'object',
-        properties: {
-          from: { type: 'string' },
-          to: { type: 'string' },
-          count: { type: 'number' },
-          lastSeq: { type: 'number' },
-          lastKind: { type: 'string' },
-        },
-        required: ['from', 'to', 'count', 'lastSeq', 'lastKind'],
-        additionalProperties: false,
-      },
-    },
     posts: { type: 'array', items: boardPostSchema },
     activeWorkingMembers: { type: 'array', items: { type: 'string' } },
   },
-  required: ['group', 'headline', 'members', 'edges', 'posts', 'activeWorkingMembers'],
+  required: ['group', 'headline', 'members', 'posts', 'activeWorkingMembers'],
   additionalProperties: false,
 }
 

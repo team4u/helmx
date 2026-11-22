@@ -10,6 +10,7 @@
 import {
   MAX_INDEX_CLOSED_GROUPS,
   toGroupSummary,
+  type BoardBadgeEntry,
   type BoardBadgesDoc,
   type BoardPost,
   type CollabGroupRecord,
@@ -33,10 +34,26 @@ export interface ProjectionPorts {
 export interface BoardProjections {
   syncIndex(): void
   syncProjections(): void
+  /** 按受影响的单个主控会话增量重算投影（避免单成员状态刷新重扫全部协作组）。 */
+  syncCoordinatorProjection(coordinatorConversationId: number): void
   /** 清空全部投影指纹与已写快照（loadAllFromDisk / stopAndClear 阶段）。 */
   reset(): void
   /** 会话删除后清除其投影登记。 */
   forgetCoordinator(conversationId: number): void
+}
+
+function pickPreferredGroup(
+  existing: CollabGroupRecord | undefined,
+  candidate: CollabGroupRecord,
+): CollabGroupRecord {
+  if (existing === undefined) return candidate
+  if (existing.status !== candidate.status) {
+    return candidate.status === 'active' ? candidate : existing
+  }
+  if (candidate.updatedAt !== existing.updatedAt) {
+    return candidate.updatedAt > existing.updatedAt ? candidate : existing
+  }
+  return candidate.createdAt > existing.createdAt ? candidate : existing
 }
 
 export function createBoardProjections(ports: ProjectionPorts): BoardProjections {
@@ -44,9 +61,89 @@ export function createBoardProjections(ports: ProjectionPorts): BoardProjections
   const writtenViewDigests = new Map<number, string>()
   /** 已写入过 board-view 的主控会话集合（用于清理或停止阶段核对）。 */
   const projectedCoordinators = new Set<number>()
+  /** coordinatorConversationId -> 该主控组当前贡献的 board-badges 映射切片（增量同步共用）。 */
+  const cachedBadgesByCoord = new Map<number, Record<string, BoardBadgeEntry>>()
   /** 上次写入 doc('index') / doc('board-badges') 的序列化快照。 */
   let writtenIndexJson = ''
   let writtenBadgesJson = ''
+
+  const flushBadgesDoc = (coord: SwarmCoordinator): void => {
+    const byConversation: BoardBadgesDoc['byConversation'] = {}
+    for (const entries of cachedBadgesByCoord.values()) {
+      Object.assign(byConversation, entries)
+    }
+    const nextBadgesJson = JSON.stringify(byConversation)
+    if (nextBadgesJson !== writtenBadgesJson) {
+      coord.getDocs().boardBadges.set({ byConversation })
+      writtenBadgesJson = nextBadgesJson
+    }
+  }
+
+  const projectSingleCoordinator = (
+    coordId: number,
+    group: CollabGroupRecord | undefined,
+    coord: SwarmCoordinator,
+    previewLimit: number,
+  ): void => {
+    const docs = coord.getDocs()
+    const coordConv = coord.readConversationOrUndefined(coordId)
+
+    if (group === undefined) {
+      if (projectedCoordinators.has(coordId) && coordConv !== undefined) {
+        docs.boardView.set(coordId, null)
+      }
+      projectedCoordinators.delete(coordId)
+      writtenViewDigests.delete(coordId)
+      cachedBadgesByCoord.delete(coordId)
+      return
+    }
+
+    const posts = ports.getPosts(group.id)
+    if (posts === undefined) {
+      // 已结单且尚未按需懒加载 board.jsonl：不写空黑板假投影，清除陈旧投影以便面板走 board_status 回退
+      if (projectedCoordinators.has(coordId) && coordConv !== undefined) {
+        docs.boardView.set(coordId, null)
+      }
+      writtenViewDigests.delete(coordId)
+      projectedCoordinators.delete(coordId)
+      cachedBadgesByCoord.delete(coordId)
+      return
+    }
+
+    const { view, digest, badge } = synthesizeBoardView({
+      group,
+      posts,
+      previewLimit,
+      resolveMemberLive: ports.resolveMemberLive,
+    })
+
+    if (coordConv !== undefined && !group.coordinatorDetached) {
+      if (writtenViewDigests.get(coordId) !== digest) {
+        docs.boardView.set(coordId, view)
+        writtenViewDigests.set(coordId, digest)
+        projectedCoordinators.add(coordId)
+      }
+    } else {
+      writtenViewDigests.delete(coordId)
+      projectedCoordinators.delete(coordId)
+    }
+
+    if (group.status === 'active') {
+      const slice: Record<string, BoardBadgeEntry> = {}
+      if (coordConv !== undefined && !group.coordinatorDetached) {
+        slice[String(coordId)] = badge
+      }
+      for (const member of group.members) {
+        if (member.lifecycle !== 'active') continue
+        if (coord.readConversationOrUndefined(member.conversationId) === undefined) continue
+        slice[String(member.conversationId)] = badge
+      }
+      if (Object.keys(slice).length > 0) cachedBadgesByCoord.set(coordId, slice)
+      else cachedBadgesByCoord.delete(coordId)
+    } else {
+      cachedBadgesByCoord.delete(coordId)
+    }
+  }
 
   const syncIndex = (): void => {
     const coord = ports.getCoordinator()
@@ -83,88 +180,50 @@ export function createBoardProjections(ports: ProjectionPorts): BoardProjections
   const syncProjections = (): void => {
     const coord = ports.getCoordinator()
     if (ports.isStopping() || coord.isShutdown()) return
-    const docs = coord.getDocs()
     const previewLimit = coord.getConfig().boardPreviewLimit
 
     const targetGroupByCoordinator = new Map<number, CollabGroupRecord>()
-    const orderedGroups = ports.getAllGroups().sort(
-      (a, b) => b.updatedAt - a.updatedAt || b.createdAt - a.createdAt,
-    )
-    for (const group of orderedGroups) {
-      const existing = targetGroupByCoordinator.get(group.coordinatorConversationId)
-      if (existing === undefined || (existing.status !== 'active' && group.status === 'active')) {
-        targetGroupByCoordinator.set(group.coordinatorConversationId, group)
-      }
+    for (const group of ports.getAllGroups()) {
+      targetGroupByCoordinator.set(
+        group.coordinatorConversationId,
+        pickPreferredGroup(targetGroupByCoordinator.get(group.coordinatorConversationId), group),
+      )
     }
-
-    const byConversation: BoardBadgesDoc['byConversation'] = {}
 
     for (const [coordId, group] of targetGroupByCoordinator) {
-      const coordConv = coord.readConversationOrUndefined(coordId)
-      const posts = ports.getPosts(group.id)
-      if (posts === undefined) {
-        // 已结单且尚未按需懒加载 board.jsonl：不写空黑板假投影，清除陈旧投影以便面板走 board_status 回退
-        if (projectedCoordinators.has(coordId) && coordConv !== undefined) {
-          docs.boardView.set(coordId, null)
-        }
-        writtenViewDigests.delete(coordId)
-        projectedCoordinators.delete(coordId)
-        continue
-      }
-      const { view, digest, badge } = synthesizeBoardView({
-        group,
-        posts,
-        previewLimit,
-        resolveMemberLive: ports.resolveMemberLive,
-      })
-
-      if (coordConv !== undefined && !group.coordinatorDetached) {
-        if (writtenViewDigests.get(coordId) !== digest) {
-          docs.boardView.set(coordId, view)
-          writtenViewDigests.set(coordId, digest)
-          projectedCoordinators.add(coordId)
-        }
-      } else {
-        writtenViewDigests.delete(coordId)
-        projectedCoordinators.delete(coordId)
-      }
-
-      if (group.status === 'active') {
-        if (coordConv !== undefined && !group.coordinatorDetached) {
-          byConversation[String(coordId)] = badge
-        }
-        for (const member of group.members) {
-          if (member.lifecycle !== 'active') continue
-          if (coord.readConversationOrUndefined(member.conversationId) === undefined) continue
-          byConversation[String(member.conversationId)] = badge
-        }
-      }
+      projectSingleCoordinator(coordId, group, coord, previewLimit)
     }
 
-    for (const coordId of [...projectedCoordinators]) {
+    for (const coordId of new Set([...projectedCoordinators, ...cachedBadgesByCoord.keys()])) {
       if (targetGroupByCoordinator.has(coordId)) continue
-      if (coord.readConversationOrUndefined(coordId) !== undefined) {
-        docs.boardView.set(coordId, null)
-      }
-      projectedCoordinators.delete(coordId)
-      writtenViewDigests.delete(coordId)
+      projectSingleCoordinator(coordId, undefined, coord, previewLimit)
     }
 
-    const nextBadgesJson = JSON.stringify(byConversation)
-    if (nextBadgesJson !== writtenBadgesJson) {
-      docs.boardBadges.set({ byConversation })
-      writtenBadgesJson = nextBadgesJson
-    }
+    flushBadgesDoc(coord)
   }
 
+  const syncCoordinatorProjection = (coordinatorConversationId: number): void => {
+    const coord = ports.getCoordinator()
+    if (ports.isStopping() || coord.isShutdown()) return
+    const previewLimit = coord.getConfig().boardPreviewLimit
+    let targetGroup: CollabGroupRecord | undefined
+    for (const group of ports.getAllGroups()) {
+      if (group.coordinatorConversationId !== coordinatorConversationId) continue
+      targetGroup = pickPreferredGroup(targetGroup, group)
+    }
+    projectSingleCoordinator(coordinatorConversationId, targetGroup, coord, previewLimit)
+    flushBadgesDoc(coord)
+  }
 
   const projections: BoardProjections = {
     syncIndex,
     syncProjections,
+    syncCoordinatorProjection,
 
     reset(): void {
       writtenViewDigests.clear()
       projectedCoordinators.clear()
+      cachedBadgesByCoord.clear()
       writtenIndexJson = ''
       writtenBadgesJson = ''
     },

@@ -620,18 +620,18 @@ export function createCollabGroupRuntime(
 
     onConversationUpsert(conversationId: number): void {
       if (stopping) return
-      let relevant = false
+      const affectedCoordinators = new Set<number>()
       for (const group of groupsById.values()) {
         if (
           group.coordinatorConversationId === conversationId ||
           group.members.some((m) => m.conversationId === conversationId)
         ) {
-          relevant = true
-          break
+          affectedCoordinators.add(group.coordinatorConversationId)
         }
       }
-      if (!relevant) return
-      projections.syncProjections()
+      for (const coordId of affectedCoordinators) {
+        projections.syncCoordinatorProjection(coordId)
+      }
     },
 
     async onConversationDeleted(conversationId: number): Promise<void> {
@@ -927,6 +927,28 @@ export function createCollabGroupRuntime(
         !group.coordinatorDetached &&
         (shouldFlushPending || dispatcher.shouldSendCoordinatorIdleCatchup(group))
       ) {
+        await dispatcher.flushCoordinatorReport(group.id)
+        return
+      }
+      await healing.checkAndEmitQuiescenceStall(group.id)
+    },
+
+    hasInflightWakeup(groupId: string, memberName: string): boolean {
+      return dispatcher.hasInflightWakeup(groupId, memberName)
+    },
+
+    async afterMemberArchived(groupId: string): Promise<void> {
+      const coord = getCoordinator()
+      if (stopping || !coord.isActive() || coord.isShutdown() || ctx.host.isClosing) return
+      const group = groupsById.get(groupId)
+      if (group === undefined || group.status !== 'active' || group.coordinatorDetached) return
+      const groupPosts = postsByGroup.get(group.id) ?? []
+      const shouldFlushPending = shouldFlushCoordinatorReport({
+        group,
+        posts: groupPosts,
+        busyMemberNames: getBusyActiveMemberNames(group),
+      })
+      if (shouldFlushPending || dispatcher.shouldSendCoordinatorIdleCatchup(group)) {
         await dispatcher.flushCoordinatorReport(group.id)
         return
       }

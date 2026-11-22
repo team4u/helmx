@@ -15,7 +15,6 @@ import {
   type BoardPost,
   type BoardPostKind,
   type BoardViewDoc,
-  type BoardViewEdge,
   type BoardViewHeadline,
   type BoardViewMember,
   type CollabGroupRecord,
@@ -166,6 +165,15 @@ export function resolveBoardTargets(
     pushResolved(member.name)
   }
 
+  if (options?.wake === true && resolved.length === 0) {
+    throw new HelmxError(
+      'swarm_no_active_targets',
+      '收件目标剔除发帖者自身后为空，没有可唤醒的活跃目标（如仅需留档请设 wake: false）',
+      409,
+      { pluginId: SWARM_PLUGIN_ID, groupId: group.id, to: normalizedTo },
+    )
+  }
+
   return { normalizedTo, resolvedTargets: resolved }
 }
 
@@ -191,7 +199,7 @@ function formatSinglePostBlock(post: BoardPost): string {
   return [header, escapeXml(post.body), ...snapLines].join('\n')
 }
 
-/** 组装发往对等成员的合并唤醒信封（包含 (fromSeq-1, toSeq] 内定向、订阅子频道与主频道被动背景记录）。 */
+/** 组装发往对等成员的合并唤醒信封（包含 (fromSeq-1, toSeq] 内定向与已订阅子频道记录；'all' 广播已展开进 resolvedTargets）。 */
 export function selectPostsForMemberWakeup(
   member: GroupMemberState,
   posts: readonly BoardPost[],
@@ -204,8 +212,7 @@ export function selectPostsForMemberWakeup(
       p.seq <= toSeq &&
       p.from !== member.name &&
       (p.resolvedTargets.includes(member.name) ||
-        (p.channel !== 'main' && member.channels.includes(p.channel)) ||
-        (p.channel === 'main' && !p.wake)),
+        (p.channel !== 'main' && member.channels.includes(p.channel))),
   )
 }
 
@@ -286,15 +293,36 @@ export function shouldFlushCoordinatorReport(input: {
 
 /**
  * 查找全员空闲补发（idle catch-up）锚点帖：
- * 忽略尾部被动 comment，仅当最后一条非 comment 有效帖为已进入并送达主控水位的 done 时返回该帖。
+ * 仅跳过无未读活跃成员目标且发帖者无未结清行动任务的尾部被动 comment，
+ * 若尾部 comment 来自尚未交付行动结果的活跃成员或留下未唤醒成员，返回 undefined 交由 stall 单次兜底。
  */
 export function findIdleCatchupAnchorPost(
   group: CollabGroupRecord,
   posts: readonly BoardPost[],
 ): BoardPost | undefined {
+  const activeByName = new Map(
+    group.members.filter((m) => m.lifecycle === 'active').map((m) => [m.name, m]),
+  )
   for (let i = posts.length - 1; i >= 0; i -= 1) {
     const post = posts[i]!
-    if (post.kind === 'comment') continue
+    if (post.kind === 'comment') {
+      if (!post.wake) {
+        const hasUnreadActivePeer = post.resolvedTargets.some((target) => {
+          const m = activeByName.get(target)
+          return m !== undefined && m.readCursorSeq < post.seq
+        })
+        if (hasUnreadActivePeer) return undefined
+        const sender = activeByName.get(post.from)
+        if (sender !== undefined && sender.lastWakeTaskSeq !== undefined) {
+          const taskSeq = sender.lastWakeTaskSeq
+          const hasOutcomeAfterTask = posts.some(
+            (p) => p.from === sender.name && p.seq >= taskSeq && p.kind !== 'comment',
+          )
+          if (!hasOutcomeAfterTask) return undefined
+        }
+      }
+      continue
+    }
     if (
       post.kind === 'done' &&
       group.coordinatorPendingSeq >= post.seq &&
@@ -331,33 +359,6 @@ export function formatCoordinatorReportEnvelope(input: {
     '</swarm_board_report>',
   ]
   return lines.join('\n')
-}
-
-/** 聚合全局拓扑边（按 from -> to 汇总次数、最新序号与最新类型）。 */
-export function aggregateBoardEdges(posts: readonly BoardPost[]): BoardViewEdge[] {
-  const byKey = new Map<string, BoardViewEdge>()
-  for (const post of posts) {
-    const targets = post.resolvedTargets.length > 0 ? post.resolvedTargets : post.to
-    for (const rawTarget of targets) {
-      if (rawTarget === post.from) continue
-      const key = `${post.from}\0${rawTarget}`
-      const existing = byKey.get(key)
-      if (existing === undefined) {
-        byKey.set(key, {
-          from: post.from,
-          to: rawTarget,
-          count: 1,
-          lastSeq: post.seq,
-          lastKind: post.kind,
-        })
-      } else {
-        existing.count += 1
-        existing.lastSeq = post.seq
-        existing.lastKind = post.kind
-      }
-    }
-  }
-  return [...byKey.values()]
 }
 
 /** 合成看板顶部一句话态势。 */
@@ -459,13 +460,59 @@ export function synthesizeHeadline(
   }
 }
 
+/** 结合结构字段生成与 synthesizeHeadline 同源的双语展示文案（供 badge footer 与时间线回执胶囊共用）。 */
+function synthesizeHeadlineLocalized(
+  group: CollabGroupRecord,
+  headline: BoardViewHeadline,
+  activeMemberCount: number,
+  activeWorkingMembers: readonly string[],
+): LocalizedText {
+  if (group.status === 'closed') {
+    const retainedCount = group.retainedWorktrees?.length ?? 0
+    if (retainedCount > 0 && headline.kind === 'unmerged') {
+      return {
+        en: `Group closed with ${retainedCount} retained worktree branch${retainedCount === 1 ? '' : 'es'} awaiting merge`,
+        'zh-CN': `编组已结单，保留 ${retainedCount} 个待合入工作树分支`,
+      }
+    }
+    if (group.closeSummary !== undefined && group.closeSummary.trim() !== '') {
+      return group.closeSummary
+    }
+    return { en: 'Swarm group closed', 'zh-CN': '协同编组已结单' }
+  }
+  if (headline.refSeq !== undefined) return headline.text
+  if (headline.kind === 'blocker' && headline.targetMember !== undefined) {
+    return {
+      en: `Member @${headline.targetMember} stopped in error state`,
+      'zh-CN': `成员 @${headline.targetMember} 因错误停止`,
+    }
+  }
+  if (headline.kind === 'normal') {
+    if (activeWorkingMembers.length > 0) {
+      const list = activeWorkingMembers.map((m) => `@${m}`).join(', ')
+      return { en: `Active: ${list}`, 'zh-CN': `执行中：${list}` }
+    }
+    if (activeMemberCount === 0) {
+      return {
+        en: 'Group ready — dispatch peer roles to start collaboration',
+        'zh-CN': '编组已就绪 — 请派工对等成员开始协同',
+      }
+    }
+    return {
+      en: `${activeMemberCount} active member${activeMemberCount === 1 ? '' : 's'} idle`,
+      'zh-CN': `${activeMemberCount} 名活跃成员空闲待命`,
+    }
+  }
+  return headline.text
+}
+
 /** 合成单个协作组的完整 BoardViewDoc 及其 (headSeq, memberStateDigest) 去重指纹。 */
 export function synthesizeBoardView(input: {
   group: CollabGroupRecord
   posts: readonly BoardPost[]
   previewLimit: number
   resolveMemberLive: (conversationId: number) => { liveState: MemberLiveState; model?: string }
-}): { view: BoardViewDoc; digest: string; badge: BoardBadgeEntry } {
+}): { view: BoardViewDoc; digest: string; badge: BoardBadgeEntry; localizedHeadline: LocalizedText } {
   const { group, posts, previewLimit, resolveMemberLive } = input
   const members: BoardViewMember[] = group.members.map((m) => {
     const live = resolveMemberLive(m.conversationId)
@@ -484,10 +531,15 @@ export function synthesizeBoardView(input: {
     .filter((m) => m.lifecycle === 'active' && (m.liveState === 'working' || m.liveState === 'blocked'))
     .map((m) => m.name)
 
-  const edges = aggregateBoardEdges(posts)
   const headline = synthesizeHeadline(group, members, posts, activeWorkingMembers)
   const previewPosts = posts.slice(-previewLimit)
   const summary = toGroupSummary(group)
+  const localizedHeadline = synthesizeHeadlineLocalized(
+    group,
+    headline,
+    summary.activeWorkerCount,
+    activeWorkingMembers,
+  )
 
   const view: BoardViewDoc = {
     group: {
@@ -501,7 +553,6 @@ export function synthesizeBoardView(input: {
     },
     headline,
     members,
-    edges,
     posts: previewPosts,
     activeWorkingMembers,
   }
@@ -544,14 +595,7 @@ export function synthesizeBoardView(input: {
       : 'neutral'
   let footerText: LocalizedText | undefined
   if (hasWarn) {
-    if (headline.kind === 'blocker' && headline.refSeq === undefined && headline.targetMember !== undefined) {
-      footerText = {
-        en: `Member @${headline.targetMember} stopped in error state`,
-        'zh-CN': `成员 @${headline.targetMember} 因错误停止`,
-      }
-    } else {
-      footerText = headline.text
-    }
+    footerText = localizedHeadline
   } else if (activeWorkingMembers.length > 0) {
     footerText = {
       en: `${activeWorkingMembers.length} working`,
@@ -567,5 +611,5 @@ export function synthesizeBoardView(input: {
     ...(footerText !== undefined ? { footerText } : {}),
   }
 
-  return { view, digest, badge }
+  return { view, digest, badge, localizedHeadline }
 }

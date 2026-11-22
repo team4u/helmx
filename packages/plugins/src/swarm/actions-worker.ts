@@ -3,7 +3,6 @@ import type { AcquireWorktreeResult } from '../contracts.js'
 import {
   assertWorkerConversationId,
   assertWorkerCwd,
-  assertWorkerNodeId,
   recentEntrySummaries,
 } from '../entry-text.js'
 import {
@@ -17,6 +16,7 @@ import {
   unknownChannelError,
   type CollabGroupRecord,
   type GroupMemberState,
+  type RetainedWorktreeInfo,
   type SwarmCoordinator,
   type WorkerAccess,
   type WorkerIsolation,
@@ -50,7 +50,6 @@ export interface DispatchInput {
   channels?: string[]
   title?: string
   cwd?: string
-  nodeId?: string
 }
 
 export interface InspectWorkerResult {
@@ -204,7 +203,6 @@ export function createWorkerHandlers(
     }
 
     const requestedCwd = input.cwd === undefined ? undefined : assertWorkerCwd(input.cwd)
-    const explicitNodeId = input.nodeId === undefined ? undefined : assertWorkerNodeId(input.nodeId)
     const model = input.model !== undefined && input.model.trim() !== '' ? input.model.trim() : undefined
     const effort = input.effort !== undefined && input.effort.trim() !== '' ? input.effort.trim() : undefined
 
@@ -346,14 +344,6 @@ export function createWorkerHandlers(
           ...(requestedCwd !== undefined ? { requestCwd: requestedCwd } : {}),
           ...(sourceConversationId !== undefined ? { fork: true } : {}),
         })
-        if (explicitNodeId !== undefined && explicitNodeId !== resolvedTarget.nodeId) {
-          throw new HelmxError(
-            'validation_error',
-            `显式指定 nodeId '${explicitNodeId}' 与解析目标节点 '${resolvedTarget.nodeId}' 不一致`,
-            400,
-            { requestedNodeId: explicitNodeId, resolvedNodeId: resolvedTarget.nodeId },
-          )
-        }
         let finalNodeId = resolvedTarget.nodeId
         let finalCwd = resolvedTarget.sourceCwd
         const workerTitle =
@@ -411,14 +401,6 @@ export function createWorkerHandlers(
             signal !== undefined ? { signal } : undefined,
           )) as AcquireWorktreeResult
           acquiredWorktreeId = wt.worktreeId
-          if (explicitNodeId !== undefined && explicitNodeId !== wt.nodeId) {
-            throw new HelmxError(
-              'validation_error',
-              `显式指定 nodeId '${explicitNodeId}' 与 worktree 分配节点 '${wt.nodeId}' 不一致`,
-              400,
-              { requestedNodeId: explicitNodeId, worktreeNodeId: wt.nodeId, worktreeId: wt.worktreeId },
-            )
-          }
           finalCwd = wt.path
           finalNodeId = wt.nodeId
           await ctx.host.updateConversation(created.id, {
@@ -570,7 +552,7 @@ export function createWorkerHandlers(
       }
     }
 
-    if (isWorkerBusy(coordinator, workerConversationId, summary.status)) {
+    if (isWorkerBusy(coordinator, workerConversationId, summary.status, group.id, member.name)) {
       throw new HelmxError(
         'swarm_worker_busy',
         `成员 @${member.name} (#${workerConversationId}) 当前仍在运行中（${summary.status}）；请先等待完成或调用 abort_worker 刹停后再切换模型`,
@@ -673,7 +655,7 @@ export function createWorkerHandlers(
       return { archived: true, workerConversationId }
     }
     const summary = readConversationOrUndefined(workerConversationId)
-    if (summary !== undefined && isWorkerBusy(coordinator, workerConversationId, summary.status)) {
+    if (summary !== undefined && isWorkerBusy(coordinator, workerConversationId, summary.status, group.id, member.name)) {
       throw new HelmxError(
         'swarm_worker_busy',
         `成员 @${member.name} (#${workerConversationId}) 当前正在运行或结算，拒绝归档（请先 abort_worker 或等待结束）`,
@@ -683,30 +665,53 @@ export function createWorkerHandlers(
     }
 
     return enqueueDispatch(`group:${group.id}`, async () => {
+      const freshGroup = groups.getGroup(group.id)
+      const freshMember = freshGroup?.members.find((m) => m.name === member.name)
+      if (freshMember === undefined || freshMember.lifecycle === 'archived') {
+        const cur = readConversationOrUndefined(workerConversationId)
+        if (cur !== undefined && cur.tags.includes(WORKER_TAG)) {
+          const nextTags = [
+            ...cur.tags.filter((t) => t !== WORKER_TAG && t !== ARCHIVED_WORKER_TAG),
+            ARCHIVED_WORKER_TAG,
+          ]
+          await ctx.host.updateConversation(workerConversationId, { tags: nextTags })
+        }
+        return { archived: true, workerConversationId }
+      }
       const freshSummary = readConversationOrUndefined(workerConversationId)
-      if (freshSummary !== undefined && isWorkerBusy(coordinator, workerConversationId, freshSummary.status)) {
+      if (freshSummary !== undefined && isWorkerBusy(coordinator, workerConversationId, freshSummary.status, group.id, freshMember.name)) {
         throw new HelmxError(
           'swarm_worker_busy',
-          `成员 @${member.name} (#${workerConversationId}) 已进入运行，拒绝归档`,
+          `成员 @${freshMember.name} (#${workerConversationId}) 已进入运行，拒绝归档`,
           409,
-          { pluginId: SWARM_PLUGIN_ID, workerConversationId, name: member.name, status: freshSummary.status },
+          { pluginId: SWARM_PLUGIN_ID, workerConversationId, name: freshMember.name, status: freshSummary.status },
         )
       }
 
-      const wtCheck = await checkMemberWorktree(ctx, member, signal)
+      let retainedEntry: RetainedWorktreeInfo | undefined
+      const wtCheck = await checkMemberWorktree(ctx, freshMember, signal)
       if (wtCheck !== undefined) {
         if (input.keepWorktree === true) {
-          await releaseWorktreeHold(ctx, group.id, member.name, wtCheck.worktreeId, signal)
+          await releaseWorktreeHold(ctx, group.id, freshMember.name, wtCheck.worktreeId, signal)
+          if (wtCheck.inspected.exists && (wtCheck.isDirty || wtCheck.unmergedCommits > 0)) {
+            retainedEntry = {
+              memberName: freshMember.name,
+              worktreeId: wtCheck.worktreeId,
+              branch: wtCheck.inspected.currentBranch ?? wtCheck.inspected.record.branch,
+              path: wtCheck.inspected.record.path,
+              commitsAhead: wtCheck.unmergedCommits,
+            }
+          }
         } else {
           if (input.force !== true && wtCheck.inspected.exists && (wtCheck.isDirty || wtCheck.unmergedCommits > 0)) {
             throw new HelmxError(
               'swarm_worktree_unmerged',
-              `成员 @${member.name} 的工作树 ${wtCheck.worktreeId} (branch: ${wtCheck.inspected.currentBranch ?? wtCheck.inspected.record.branch}) 存在未提交改动(${wtCheck.inspected.dirtyFileCount})或未合入提交(${wtCheck.unmergedCommits})；请先合入或传 keepWorktree: true / force: true`,
+              `成员 @${freshMember.name} 的工作树 ${wtCheck.worktreeId} (branch: ${wtCheck.inspected.currentBranch ?? wtCheck.inspected.record.branch}) 存在未提交改动(${wtCheck.inspected.dirtyFileCount})或未合入提交(${wtCheck.unmergedCommits})；请先合入或传 keepWorktree: true / force: true`,
               409,
               {
                 pluginId: SWARM_PLUGIN_ID,
                 groupId: group.id,
-                memberName: member.name,
+                memberName: freshMember.name,
                 worktreeId: wtCheck.worktreeId,
                 branch: wtCheck.inspected.currentBranch ?? wtCheck.inspected.record.branch,
                 path: wtCheck.inspected.record.path,
@@ -715,7 +720,7 @@ export function createWorkerHandlers(
               },
             )
           }
-          await releaseWorktreeHold(ctx, group.id, member.name, wtCheck.worktreeId, signal)
+          await releaseWorktreeHold(ctx, group.id, freshMember.name, wtCheck.worktreeId, signal)
           if (wtCheck.inspected.exists) {
             await cleanupManagedWorktree(ctx, wtCheck.worktreeId, input.force === true, signal)
           }
@@ -723,20 +728,34 @@ export function createWorkerHandlers(
       }
 
       await groups.mutateGroup(group.id, (draft) => {
-        const target = draft.members.find((m) => m.name === member.name)
+        const target = draft.members.find((m) => m.name === freshMember.name)
         if (target !== undefined) {
           target.lifecycle = 'archived'
           target.archivedAt = Date.now()
+          target.readCursorSeq = Math.max(target.readCursorSeq, target.pendingWakeupSeq)
+          delete target.lastWakeTaskSeq
+          delete target.silentExitNudgeSeq
+          delete target.lastWakeCompletionSeq
+          delete target.inflightWakeup
+          delete target.inflightNudge
+        }
+        if (retainedEntry !== undefined) {
+          const existing = (draft.retainedWorktrees ?? []).filter((item) => item.worktreeId !== retainedEntry.worktreeId)
+          draft.retainedWorktrees = [...existing, retainedEntry]
         }
         draft.updatedAt = Date.now()
         return { group: draft, result: undefined }
       })
 
       if (freshSummary !== undefined) {
-        const nextTags = [...freshSummary.tags.filter((t) => t !== WORKER_TAG), ARCHIVED_WORKER_TAG]
+        const nextTags = [
+          ...freshSummary.tags.filter((t) => t !== WORKER_TAG && t !== ARCHIVED_WORKER_TAG),
+          ARCHIVED_WORKER_TAG,
+        ]
         await ctx.host.updateConversation(workerConversationId, { tags: nextTags })
       }
 
+      await groups.afterMemberArchived(group.id)
       return { archived: true, workerConversationId }
     })
   }

@@ -58,13 +58,11 @@ import { createBoardHandlers } from './actions-board.js'
 import {
   assertWorkerConversationId,
   assertWorkerCwd,
-  assertWorkerNodeId,
 } from '../entry-text.js'
 
 export {
   assertWorkerConversationId,
   assertWorkerCwd,
-  assertWorkerNodeId,
   checkCoordinatorEligibility,
   ensureCoordinatorGroup,
   type DispatchInput,
@@ -310,7 +308,7 @@ export function registerSwarmActions(
 
   ctx.action({
     id: 'board_status',
-    description: 'Inspect swarm collaboration group board status, members, edges, and retained worktrees.',
+    description: 'Inspect swarm collaboration group board status, members, and retained worktrees.',
     idempotent: true,
     scope: HISTORY_PARTICIPANT_SCOPE,
     cli: { command: ['swarm', 'board-status'], description: 'Inspect swarm collaboration group board status' },
@@ -319,7 +317,7 @@ export function registerSwarmActions(
     exposeAsTool: {
       name: 'swarm_board_status',
       description:
-        'Inspect live swarm collaboration group status, member cursors and live states, activeWorkingMembers, handoff edges, and retained worktrees.',
+        'Inspect live swarm collaboration group status, member cursors and live states, activeWorkingMembers, and retained worktrees.',
       replay: 'safe',
       formatOutput: (_input, res) => formatBoardStatusSummary(res),
     },

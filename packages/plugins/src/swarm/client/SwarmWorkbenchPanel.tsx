@@ -52,7 +52,12 @@ import {
   type BoardViewDoc,
 } from './board-model.ts'
 import { buildSwarmPanelModel } from './model-panel.ts'
-import { useElapsedNowMs, useSwarmBoardReadOnce, useSwarmBoardStatusFallback } from './hooks.ts'
+import {
+  useElapsedNowMs,
+  useSwarmBoardPeekPost,
+  useSwarmBoardReadOnce,
+  useSwarmBoardStatusFallback,
+} from './hooks.ts'
 import {
   ACTION_ABORT,
   JUMP_BACK_DISMISS,
@@ -73,7 +78,10 @@ import {
   PANEL_FALLBACK_NOTE,
   PANEL_HISTORY_COLLAPSE,
   PANEL_HISTORY_TOGGLE,
+  PANEL_LOAD_EARLIER,
   PANEL_LOADING,
+  PANEL_LOADING_EARLIER,
+  PANEL_MEMBERS_EMPTY,
   PANEL_MEMBERS_TITLE,
   PANEL_OBJECTIVE,
   PANEL_POSTS_CHANNEL_EMPTY,
@@ -110,7 +118,6 @@ import { PostBodyText } from './PostBodyText.tsx'
 import { SwarmPostPeekPopover } from './SwarmPostPeekPopover.tsx'
 
 const RECENT_LIMIT_COLLAPSED = 6
-const RECENT_LIMIT_EXPANDED = 200
 
 const LIVE_STATE_LIGHT_STATUS: Record<string, string> = {
   working: 'running',
@@ -193,27 +200,44 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
   const isFallbackData = liveBoard === undefined && board !== undefined
   const resolvedGroupId = link?.groupId ?? board?.group.id
 
-  const peekTargetSeq = peekState !== undefined ? currentPeekSeq(peekState) : undefined
-  const peekNeedsFullRead =
-    peekTargetSeq !== undefined &&
-    board !== undefined &&
-    peekTargetSeq <= board.group.headSeq &&
-    !board.posts.some((p) => p.seq === peekTargetSeq)
   const needsFullRead =
-    (historyExpanded || peekNeedsFullRead) &&
+    historyExpanded &&
     (isFallbackData || (board !== undefined && board.posts.length < board.group.headSeq))
   const readState = useSwarmBoardReadOnce(
     resolvedGroupId,
     needsFullRead,
-    { conversationId, headSeq: board?.group.headSeq },
+    {
+      conversationId,
+      headSeq: board?.group.headSeq,
+      initialOldestSeq: board !== undefined && board.posts.length > 0 ? board.posts[0]!.seq : undefined,
+    },
   )
 
-  const effectiveBoard = useMemo(
+  const boardWithHistory = useMemo(
     () =>
       board !== undefined && readState.posts.length > 0
         ? mergeBoardViewWithRead(board, readState.posts)
         : board,
     [board, readState.posts],
+  )
+
+  const peekTargetSeq = peekState !== undefined ? currentPeekSeq(peekState) : undefined
+  const peekNeedsExactRead =
+    peekTargetSeq !== undefined &&
+    boardWithHistory !== undefined &&
+    peekTargetSeq <= boardWithHistory.group.headSeq &&
+    !boardWithHistory.posts.some((p) => p.seq === peekTargetSeq)
+  const peekReadState = useSwarmBoardPeekPost(resolvedGroupId, peekTargetSeq, {
+    conversationId,
+    enabled: peekNeedsExactRead,
+  })
+
+  const effectiveBoard = useMemo(
+    () =>
+      boardWithHistory !== undefined && peekReadState.posts.length > 0
+        ? mergeBoardViewWithRead(boardWithHistory, peekReadState.posts)
+        : boardWithHistory,
+    [boardWithHistory, peekReadState.posts],
   )
 
   const activeChannelFilter = useMemo(() => {
@@ -227,7 +251,7 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
     () =>
       effectiveBoard !== undefined
         ? buildSwarmPanelModel(effectiveBoard, conversations, {
-            recentLimit: historyExpanded ? RECENT_LIMIT_EXPANDED : RECENT_LIMIT_COLLAPSED,
+            recentLimit: historyExpanded ? null : RECENT_LIMIT_COLLAPSED,
             channel: activeChannelFilter,
           })
         : undefined,
@@ -454,7 +478,7 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
           <span className="badge badge-neutral tabular-nums">{model.rows.length}</span>
         </div>
         {model.rows.length === 0 ? (
-          <div className="sw-panel-empty-hint">{resolveLocalizedText(PANEL_POSTS_EMPTY, locale)}</div>
+          <div className="sw-panel-empty-hint">{resolveLocalizedText(PANEL_MEMBERS_EMPTY, locale)}</div>
         ) : (
           <div className="sw-panel-members">
             {model.rows.map((row) => {
@@ -591,6 +615,22 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
             </button>
           </div>
         ) : null}
+        {readState.hasEarlier ? (
+          <button
+            type="button"
+            className="btn btn-xs btn-ghost sw-panel-load-earlier"
+            disabled={readState.loadingEarlier || readState.loading}
+            onClick={readState.loadEarlier}
+          >
+            <HelmxIcon name="chevron-up" size={11} />
+            <span>
+              {resolveLocalizedText(
+                readState.loadingEarlier ? PANEL_LOADING_EARLIER : PANEL_LOAD_EARLIER,
+                locale,
+              )}
+            </span>
+          </button>
+        ) : null}
         {model.recentPosts.length === 0 ? (
           <div className="sw-panel-empty-hint">
             {resolveLocalizedText(
@@ -619,7 +659,7 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
                       {' -> '}
                       {panelPostTargets(post)}
                     </span>
-                    <span className="sw-panel-post-seq tabular-nums" title={post.body}>{`#${post.seq}`}</span>
+                    <span className="sw-panel-post-seq tabular-nums">{`#${post.seq}`}</span>
                   </div>
                   <PostBodyText
                     body={post.body}
@@ -658,13 +698,13 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
             peekState={peekState}
             anchorRef={peekAnchorRef}
             post={peekPost}
-            loading={readState.loading && peekPost === undefined}
-            error={peekPost === undefined ? readState.error : undefined}
+            loading={peekReadState.loading && peekPost === undefined}
+            error={peekPost === undefined ? peekReadState.error : undefined}
             showChannelBadge={showChannelFilter}
             onPushRef={(seq) => setPeekState((prev) => (prev !== undefined ? pushPostPeek(prev, seq) : prev))}
             onBack={() => setPeekState((prev) => (prev !== undefined ? popPostPeek(prev) : undefined))}
             onLocate={handleLocateFromPeek}
-            onRetry={readState.retry}
+            onRetry={peekReadState.retry}
             onClose={() => setPeekState(undefined)}
           />
         ) : null}

@@ -67,6 +67,7 @@ export interface WakeDispatcher {
   scheduleCoordinatorReport(groupId: string, delayMs: number, excludeSettlingConvId?: number): Promise<void>
   flushCoordinatorReport(groupId: string, excludeSettlingConvId?: number): Promise<void>
   shouldSendCoordinatorIdleCatchup(group: CollabGroupRecord, excludeSettlingConvId?: number): boolean
+  hasInflightWakeup(groupId: string, memberName: string): boolean
   hasInflightDeliveriesForGroup(groupId: string): boolean
   liveTaskLabels(): string[]
   /** 主控最近一次报告的发送前 completionSeq（防同回合连发；静默守卫读）。 */
@@ -344,7 +345,7 @@ export function createWakeDispatcher(ports: WakeDispatcherPorts): WakeDispatcher
       requestId = `swarm-report-idle:${groupId}:${group.headSeq}:${coordSummary.completionSeq}`
     }
 
-    const { view } = synthesizeBoardView({
+    const { view, localizedHeadline } = synthesizeBoardView({
       group,
       posts: allPosts,
       previewLimit: coord.getConfig().boardPreviewLimit,
@@ -365,7 +366,7 @@ export function createWakeDispatcher(ports: WakeDispatcherPorts): WakeDispatcher
       fromSeq,
       toSeq,
       postCount: selected.length,
-      headline: view.headline.text,
+      headline: localizedHeadline,
     }
 
     await ports.mutateGroup(groupId, (draft) => {
@@ -574,6 +575,7 @@ export function createWakeDispatcher(ports: WakeDispatcherPorts): WakeDispatcher
     scheduleCoordinatorReport,
     flushCoordinatorReport,
     shouldSendCoordinatorIdleCatchup,
+    hasInflightWakeup: (groupId, memberName) => inflightWakeups.has(`${groupId}:${memberName}`),
     hasInflightDeliveriesForGroup,
 
     liveTaskLabels(): string[] {
