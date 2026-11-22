@@ -82,8 +82,26 @@ function syncSharedPluginGlobals(realHooks: boolean): void {
     realHooks ? SDK : stubPluginClientNamespace
 }
 
+const WORKFLOW_FOCUS_BUS_KEY = Symbol.for('helmx:builtin:workflow:workbench-focus')
+
+/**
+ * Reset the cross-bundle `workbench-focus` bus stored on `globalThis` so a prior test or file
+ * clicking a workflow/tray row never leaves a stale `pendingFocus` that collapses cards in later tests.
+ * Passing `dropListeners: false` preserves active subscribers during mid-test stub refreshes.
+ */
+export function resetWorkflowWorkbenchFocus(options: { dropListeners?: boolean } = {}): void {
+  const g = globalThis as Record<PropertyKey, unknown>
+  if (options.dropListeners === false) {
+    const bus = g[WORKFLOW_FOCUS_BUS_KEY] as { pendingFocus?: unknown } | undefined
+    if (bus !== undefined) bus.pendingFocus = undefined
+    return
+  }
+  delete g[WORKFLOW_FOCUS_BUS_KEY]
+}
+
 export function setWorkflowClientStub(options: WorkflowClientStubOptions = {}): void {
   stub = options
+  resetWorkflowWorkbenchFocus({ dropListeners: false })
   syncSharedPluginGlobals(false)
 }
 
@@ -105,6 +123,7 @@ const stubPluginClientNamespace = {
 
 export function mountSharedPluginNamespaces(options: { realHooks?: boolean } = {}): void {
   mountGen += 1
+  resetWorkflowWorkbenchFocus({ dropListeners: true })
   syncSharedPluginGlobals(options.realHooks === true)
 }
 

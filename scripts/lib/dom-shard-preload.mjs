@@ -152,6 +152,27 @@ export function resetSharedHappyDom() {
       // Ignore read-only fetch
     }
   }
+
+  // Clear cross-bundle builtin plugin client buses stored on globalThis via Symbol.for('helmx:builtin:*')
+  // (e.g. workflow workbench-focus, magpie auto-refresh) so sequential test files in one dom-shared
+  // worker never inherit pending focus requests or dangling timers from an earlier file.
+  try {
+    for (const sym of Object.getOwnPropertySymbols(globalThis)) {
+      const key = Symbol.keyFor(sym);
+      if (typeof key !== 'string' || !key.startsWith('helmx:builtin:')) continue;
+      const slot = globalThis[sym];
+      if (slot && typeof slot === 'object' && 'timer' in slot && slot.timer !== undefined) {
+        try {
+          clearInterval(slot.timer);
+        } catch {
+          // Ignore invalid timer handles
+        }
+      }
+      delete globalThis[sym];
+    }
+  } catch {
+    // Ignore read-only global symbols
+  }
 }
 
 await installDomShardPreload();

@@ -1278,6 +1278,16 @@ test('WorkflowRunCardBody 头部整块可点展开：主体真实按钮切换，
     docValue: {
       runs: [
         {
+          id: 'wf_hdr_first',
+          kind: 'workflow',
+          name: '最新已完成工作流',
+          conversationId: 1,
+          status: 'completed',
+          createdAt: 2_500,
+          updatedAt: 3_000,
+          nodes: [{ id: 'f', kind: 'action', status: 'done', label: '首条动作' }],
+        },
+        {
           id: 'wf_hdr_toggle',
           kind: 'workflow',
           name: '头部展开工作流',
@@ -1297,18 +1307,20 @@ test('WorkflowRunCardBody 头部整块可点展开：主体真实按钮切换，
   const Panel = mod['WorkflowWorkbenchPanel'] as React.ComponentType<Record<string, unknown>>
   const { host, unmount } = await mountClient(spy, e(Panel, { conversation: summary(1, 'idle') }))
   try {
-    const main = host.querySelector('button.workflow-run-header-main') as HTMLButtonElement | null
+    const targetWrap = host.querySelector('[data-run-id="wf_hdr_toggle"]') as HTMLElement | null
+    assert.ok(targetWrap !== null, '应渲染目标非首条已完成工作流卡')
+    const main = targetWrap.querySelector('button.workflow-run-header-main') as HTMLButtonElement | null
     assert.ok(main !== null, '头部主体为真实展开开关按钮')
     assert.equal(main.querySelectorAll('button').length, 0, '开关内无嵌套交互')
     // 非首个/非运行中的 run 默认收起。
     assert.equal(main.getAttribute('aria-expanded'), 'false', '默认收起')
-    const body = host.querySelector('.workflow-run-card [id][hidden]') as HTMLElement | null
+    const body = targetWrap.querySelector('.workflow-run-card [id][hidden]') as HTMLElement | null
     assert.ok(body !== null, '卡体区域存在且默认隐藏')
     await act(async () => { main.click() })
     assert.equal(main.getAttribute('aria-expanded'), 'true', '点击头部主体整块展开')
     assert.equal(body!.hidden, false, '展开后卡体可见')
     // 已结算 run 无中止按钮；「更多」弹层按钮为同级 sibling，点击不切换展开态。
-    const siblingBtns = [...host.querySelectorAll('.workflow-run-header > button')] as HTMLButtonElement[]
+    const siblingBtns = [...targetWrap.querySelectorAll('.workflow-run-header > button')] as HTMLButtonElement[]
     const nonMain = siblingBtns.find((b) => !b.classList.contains('workflow-run-header-main'))
     if (nonMain !== undefined) {
       await act(async () => { nonMain.click() })

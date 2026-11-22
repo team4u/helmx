@@ -375,13 +375,13 @@ after(() => {
   rmSync(rootDir, { recursive: true, force: true })
 })
 
-/** 读取子会话提交的 prompt 文本（pi.user entry 的 user 消息 content）。 */
+/** 读取子会话最近一次提交的 prompt 文本（helmx.input entry 的 user 消息 content）。 */
 async function childPromptText(harness: Harness, childId: number): Promise<string> {
   const conversation = await harness.conversation(childId as never, BACKGROUND_CONTEXT)
   assert.ok(conversation)
   const page = await conversation.entries({ order: 'descending' }, 50, undefined, BACKGROUND_CONTEXT)
-  for (const entry of [...page.items].reverse()) {
-    if (entry.kind !== 'pi.user') continue
+  for (const entry of page.items) {
+    if (entry.kind !== 'helmx.input') continue
     const model = entry.model ?? []
     let text = ''
     for (const msg of model) {

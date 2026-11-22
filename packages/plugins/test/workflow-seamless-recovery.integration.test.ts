@@ -277,8 +277,8 @@ test('T1-A: 原生后台单子代理（isolation:worktree + schema + gate）经 
     assert.equal(finalRecord['crashRecoveries'], undefined, '优雅恢复不计异常崩溃')
 
     const childDetail = await k2.getConversationDetail(childId, { limit: 100 })
-    const childUsers = childDetail.entries.filter((e) => e.kind === 'pi.user')
-    assert.equal(childUsers.length, 1, 'requestId 幂等保证子会话绝无重复用户消息或重复 worktreeContextPrompt')
+    const childInputs = childDetail.entries.filter((e) => e.kind === 'helmx.input')
+    assert.equal(childInputs.length, 1, 'requestId 幂等保证子会话绝无重复用户消息或重复 worktreeContextPrompt')
 
     const worktrees = (await k2.plugins.invokeAction('builtin:worktree', 'list_worktrees', {})) as { worktrees: Array<{ path: string }> }
     assert.equal(worktrees.worktrees.length, 1, '绝不重复分配第二个 Worktree')
@@ -368,7 +368,7 @@ process.kill(process.pid, 'SIGKILL')
     const record = readPersistedRecord(dataDir, 1, runId!)
     assert.equal(record['crashRecoveries'], 1, 'SIGKILL 非优雅恢复必须记录 crashRecoveries=1')
     const childDetail = await k2.getConversationDetail(childId, { limit: 100 })
-    assert.equal(childDetail.entries.filter((e) => e.kind === 'pi.user').length, 1, 'SIGKILL 重挂不重复追加用户消息')
+    assert.equal(childDetail.entries.filter((e) => e.kind === 'helmx.input').length, 1, 'SIGKILL 重挂不重复追加用户消息')
     // 等待主会话处理完后台汇报（回合完成后 unread=true 置为 done），避免 close 时报 PluginHost 已 dispose
     await waitFor(
       () => {
