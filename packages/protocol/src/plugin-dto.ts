@@ -325,6 +325,18 @@ export interface PluginSummary {
   publicConfig?: Record<string, unknown>
 }
 
+/** Minimal slice of `PluginSummary` required to judge whether a plugin is actively running. */
+export type PluginActivityLike = Pick<PluginSummary, 'enabled' | 'status' | 'error'>
+
+/**
+ * Unified active-plugin predicate across kernel, plugins, and browser UI:
+ * active iff `enabled === true`, `status` is omitted or `'active'`, and no failure `error` is present.
+ * Notably, `enabled: true` with `status: 'failed'` (e.g. after a dependency is force-disabled) is NOT active.
+ */
+export function isPluginSummaryActive(plugin: PluginActivityLike): boolean {
+  return plugin.enabled && (plugin.status === undefined || plugin.status === 'active') && plugin.error === undefined
+}
+
 /** Managed plugin package metadata (shape of PluginSummary.managed; additive optional field). */
 export interface PluginManagedMeta {
   /** Install source (normalized shape; includes the raw source string for echo). */

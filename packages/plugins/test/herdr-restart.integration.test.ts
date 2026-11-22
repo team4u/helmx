@@ -1049,3 +1049,74 @@ test('PaneRegistry.prune：结算记录有界回收，running/keepalive 绝不�
   assert.ok(registry.get(undefined, 'p-s-3') !== undefined)
   assert.equal(doc.panes.length, 4, '持久镜像同步收敛')
 })
+
+test('Herdr 启动对账：builtin:workflow 处于 enabled=true, status=failed 时不视为 active（不保活孤儿 keepalive，也不调 inspect）', { timeout: 60_000 }, async (t) => {
+  const defer = useCleanupStack(t)
+  const dataDir = useTempDir(t, 'helmx-herdr-wf-failed-data-')
+  const workDir = useTempDir(t, 'helmx-herdr-wf-failed-work-')
+  const sockDir = useTempDir(t, 'helmx-herdr-wf-failed-sock-')
+  const socketPath = join(sockDir, 'herdr.sock')
+  const transport = new RestartFakeTransport()
+  const server = await serveTransport(transport, socketPath)
+  defer(async () => {
+    transport.closed = true
+    await server.close()
+  })
+
+  // 1. 首次启动：完成一次挂有 workflowRunId 的 herdr spawn，进入 keepalive 状态并优雅关停（保留窗格与持久化记录）
+  transport.promptStatus = 'done'
+  transport.onPrompt = (pane, text) => {
+    mkdirSync(join(pane.cwd, '.helmx'), { recursive: true })
+    writeFileSync(join(pane.cwd, '.helmx', fileNameOf(text)), 'done-for-keepalive', 'utf8')
+  }
+  let kernel = await openKernelWithHerdr(defer, dataDir, workDir, socketPath, { configureFirst: true })
+  const firstOut = await kernel.spawnAgent({
+    parentConversationId: 1,
+    agentType: 'herdr:pi',
+    prompt: '产生 workflow keepalive 窗格',
+    cwd: workDir,
+    meta: { 'builtin:workflow': { runId: 'wf_failed_plugin_run' } },
+  })
+  assert.equal(firstOut, 'done-for-keepalive')
+  await kernel.close()
+  assert.equal(transport.calls.filter((c) => c.method === 'tab.close').length, 0, '优雅关停不关闭 keepalive 窗格')
+
+  // 2. 重启并注册依赖 dep:base 的 builtin:workflow，在 start() 前强停 dep:base 使其真实落入 enabled=true, status='failed'
+  let inspectCalls = 0
+  const depBase: PluginDefinition = {
+    id: 'dep:base',
+    name: 'Dep Base',
+    definePlugin() {},
+  }
+  const fakeWorkflow: PluginDefinition = {
+    id: 'builtin:workflow',
+    name: 'Fake Workflow',
+    dependencies: ['dep:base'],
+    definePlugin(ctx) {
+      ctx.action({
+        id: 'inspect',
+        description: 'stub inspect',
+        inputSchema: { type: 'object', properties: { runId: { type: 'string' } }, required: ['runId'] },
+        outputSchema: { type: 'object', properties: { status: { type: 'string' } } },
+        handler: async () => {
+          inspectCalls += 1
+          return { status: 'running' }
+        },
+      })
+    },
+  }
+
+  kernel = await openKernelWithHerdr(defer, dataDir, workDir, socketPath, {
+    prePlugins: [depBase, fakeWorkflow],
+    autoStart: false,
+  })
+  await kernel.plugins.disable('dep:base', { force: true })
+  const wfSummary = kernel.plugins.list().find((p) => p.id === 'builtin:workflow')
+  assert.equal(wfSummary?.enabled, true)
+  assert.equal(wfSummary?.status, 'failed')
+
+  await kernel.start()
+  // reconcile() 应将 failed workflow 视为不活跃 -> 立即回收该空闲 keepalive 孤儿窗格；reconcileWorkflowOrphansAfterStartup 亦不得调 inspect
+  await waitFor(() => transport.calls.filter((c) => c.method === 'tab.close').length === 1)
+  assert.equal(inspectCalls, 0, 'builtin:workflow 处于 failed 状态时不得调用其 inspect 动作')
+})

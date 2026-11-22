@@ -354,13 +354,77 @@ test('assertBoundedPresentationMeta: inspects Reflect.ownKeys and rejects symbol
       !JSON.stringify(err.details ?? {}).includes('SECRET'),
   )
 
-  // 3. Write-only enumerable setter evaluates to undefined and is rejected (never silently omitted).
+  // 3. Accessors (enumerable getters and write-only setters on objects and arrays) must be rejected WITHOUT invocation.
+  let enumGetterCalled = false
+  const enumGetterRoot: Record<string, unknown> = { ok: true }
+  Object.defineProperty(enumGetterRoot, 'badge', {
+    get() {
+      enumGetterCalled = true
+      return 'forged'
+    },
+    enumerable: true,
+  })
+  const enumGetterNestedInner: Record<string, unknown> = { ok: true }
+  Object.defineProperty(enumGetterNestedInner, 'badge', {
+    get() {
+      enumGetterCalled = true
+      return 'forged'
+    },
+    enumerable: true,
+  })
+  const enumGetterNullProto = Object.create(null) as Record<string, unknown>
+  enumGetterNullProto['ok'] = true
+  Object.defineProperty(enumGetterNullProto, 'badge', {
+    get() {
+      enumGetterCalled = true
+      return 'forged'
+    },
+    enumerable: true,
+  })
   const writeOnlySetter: Record<string, unknown> = { ok: true }
   Object.defineProperty(writeOnlySetter, 'dropMe', { set() {}, enumerable: true })
+
+  for (const bad of [enumGetterRoot, { inner: enumGetterNestedInner }, enumGetterNullProto, writeOnlySetter]) {
+    assert.throws(
+      () => assertBoundedPresentationMeta(bad),
+      (err: unknown) => err instanceof HelmxError && err.code === 'invalid_tool_result' && err.status === 500 && err.message.includes('accessor'),
+    )
+  }
+  assert.equal(enumGetterCalled, false, 'enumerable getter on details/presentationMeta must be rejected without invocation')
+
+  // Secret inside enumerable accessor key name is redacted in diagnostic message and details.
+  const secretAccessorKey: Record<string, unknown> = { ok: true }
+  Object.defineProperty(secretAccessorKey, 'SECRET_GETTER', {
+    get() {
+      enumGetterCalled = true
+      return 'SECRET_VAL'
+    },
+    enumerable: true,
+  })
   assert.throws(
-    () => assertBoundedPresentationMeta(writeOnlySetter),
-    (err: unknown) => err instanceof HelmxError && err.code === 'invalid_tool_result' && err.message.includes('undefined'),
+    () => assertBoundedPresentationMeta(secretAccessorKey, { redact }),
+    (err: unknown) =>
+      err instanceof HelmxError &&
+      err.code === 'invalid_tool_result' &&
+      err.message.includes('accessor') &&
+      !err.message.includes('SECRET') &&
+      !JSON.stringify(err.details ?? {}).includes('SECRET'),
   )
+  assert.equal(enumGetterCalled, false, 'secret-named enumerable getter must not be invoked')
+
+  const arrEnumGetter = [1, 2]
+  Object.defineProperty(arrEnumGetter, '0', {
+    get() {
+      enumGetterCalled = true
+      return 1
+    },
+    enumerable: true,
+  })
+  assert.throws(
+    () => assertBoundedPresentationMeta({ list: arrEnumGetter }),
+    (err: unknown) => err instanceof HelmxError && err.code === 'invalid_tool_result' && err.message.includes('accessor'),
+  )
+  assert.equal(enumGetterCalled, false, 'enumerable array element getter must be rejected without invocation')
 
   // 4. Arrays: extra string/symbol/non-enumerable properties, prototype keys, non-enumerable elements, and Array subclasses.
   const arrExtra = [1, 2] as unknown[] & { extra?: string }

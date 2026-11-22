@@ -42,6 +42,7 @@ test('@helmx/protocol/browser: export declarations aligned with the root entry\'
     'HOST_SLOT_TARGETS',
     'HOST_SLOT_CATALOG',
     'matchesConversationScope',
+    'isPluginSummaryActive',
     'isSkillAvailable',
     'assertSchemaCompilable',
     'validateOrThrow',
@@ -120,4 +121,19 @@ test('parsePluginUiContribution: covers every known surface and rejects invalid 
   for (const c of invalidCases) {
     assert.equal(parsePluginUiContribution(c.value), undefined, `${c.label} must return undefined`)
   }
+})
+
+test('isPluginSummaryActive: unified truth table across enabled/status/error combinations', { timeout: 60_000 }, () => {
+  const err = { code: 'plugin_enable_failed', message: 'boom', stage: 'enable' as const }
+  assert.equal(browserExports.isPluginSummaryActive({ enabled: true }), true)
+  assert.equal(browserExports.isPluginSummaryActive({ enabled: true, status: 'active' }), true)
+  assert.equal(browserExports.isPluginSummaryActive({ enabled: false }), false)
+  assert.equal(browserExports.isPluginSummaryActive({ enabled: false, status: 'active' }), false)
+  assert.equal(browserExports.isPluginSummaryActive({ enabled: false, status: 'disabled' }), false)
+  assert.equal(browserExports.isPluginSummaryActive({ enabled: true, status: 'disabled' }), false)
+  assert.equal(browserExports.isPluginSummaryActive({ enabled: true, status: 'failed' }), false)
+  assert.equal(browserExports.isPluginSummaryActive({ enabled: true, status: 'failed', error: err }), false)
+  assert.equal(browserExports.isPluginSummaryActive({ enabled: true, status: 'active', error: err }), false)
+  assert.equal(browserExports.isPluginSummaryActive({ enabled: true, error: err }), false)
+  assert.equal(browserExports.isPluginSummaryActive({ enabled: false, status: 'failed', error: err }), false)
 })

@@ -998,7 +998,7 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
     assert.equal(badTaken.isError, true)
     assert.equal(badTaken.details, undefined)
 
-    // 5. Direct prepareToolResultWith rejects non-finite / undefined / prototype key / oversized details before JSON.stringify.
+    // 5. Direct prepareToolResultWith rejects non-finite / undefined / prototype key / accessor / oversized details before JSON.stringify.
     await assert.rejects(
       () => prepareToolResultWith(artifacts, redact, 1, { output: [{ type: 'text', text: 'ok' }], details: { n: Number.NaN } as never }),
       (err: unknown) => err instanceof HelmxError && err.code === 'invalid_tool_result',
@@ -1011,6 +1011,50 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
       () => prepareToolResultWith(artifacts, redact, 1, { output: [{ type: 'text', text: 'ok' }], details: JSON.parse('{"__proto__":1}') }),
       (err: unknown) => err instanceof HelmxError && err.code === 'invalid_tool_result',
     )
+
+    // 6. Enumerable getters on details/presentationMeta must NEVER execute and must fail closed (cleared details + isError: true).
+    let detailsGetterCalled = false
+    const makeDetailsGetter = () => {
+      const obj: Record<string, unknown> = {}
+      Object.defineProperty(obj, 'badge', {
+        get() {
+          detailsGetterCalled = true
+          return 'forged'
+        },
+        enumerable: true,
+      })
+      return obj
+    }
+
+    await assert.rejects(
+      () => prepareToolResultWith(artifacts, redact, 1, { output: [{ type: 'text', text: 'ok' }], details: makeDetailsGetter() as never }),
+      (err: unknown) => err instanceof HelmxError && err.code === 'invalid_tool_result' && err.message.includes('accessor'),
+    )
+    assert.equal(detailsGetterCalled, false, 'prepareToolResultWith must reject details getter without invocation')
+
+    // Raw tool result details entering HookBridge.afterTool without hook mutation
+    hookOutcome = { action: 'continue' }
+    const rawDetailsRes = await toolHook.afterTool(
+      { id: 'bad-details-getter-raw', name: 'guarded_tool', arguments: {} },
+      { output: [{ type: 'text', text: 'orig' }], details: makeDetailsGetter() },
+      { conversationId: 1 },
+    )
+    assert.equal(detailsGetterCalled, false, 'HookBridge.afterTool must reject raw details getter without invocation')
+    assert.equal(rawDetailsRes['isError'], true)
+    assert.equal(rawDetailsRes['details'], undefined)
+    assert.match(((rawDetailsRes['output'] as Array<{ text: string }>)[0] ?? { text: '' }).text, /accessor/)
+
+    // Hook handled returning presentationMeta with enumerable getter
+    hookOutcome = { action: 'handled', result: { output: 'ok', presentationMeta: makeDetailsGetter() } }
+    const hookDetailsRes = await toolHook.afterTool(
+      { id: 'bad-details-getter-hook', name: 'guarded_tool', arguments: {} },
+      { output: [{ type: 'text', text: 'orig' }] },
+      { conversationId: 1 },
+    )
+    assert.equal(detailsGetterCalled, false, 'HookBridge.afterTool must reject hook presentationMeta getter without invocation')
+    assert.equal(hookDetailsRes['isError'], true)
+    assert.equal(hookDetailsRes['details'], undefined)
+    assert.match(((hookDetailsRes['output'] as Array<{ text: string }>)[0] ?? { text: '' }).text, /accessor/)
   })
 
   it('guardToolExecutionResult: validates and redacts rest envelope fields without JSON.stringify, preserving output/diagnostics/usage/control and rejecting non-JSON disguises', { timeout: 60_000 }, () => {
@@ -1196,6 +1240,61 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
       { label: 'unsupported top-level field', value: { output: [], forged: 'SECRET' } },
       { label: 'unsupported field in diagnostic', value: { diagnostics: [{ severity: 'info', message: 'ok', extra: 1 }] } },
       { label: 'non-finite structuredOutput without schema', value: { output: [], structuredOutput: { n: Number.NEGATIVE_INFINITY } } },
+      {
+        label: 'enumerable getter on details root',
+        value: {
+          output: [],
+          details: Object.defineProperty({ ok: true }, 'SECRET_BADGE', {
+            get() {
+              getterOrToJsonInvoked = true
+              return 'forged'
+            },
+            enumerable: true,
+          }),
+        },
+      },
+      {
+        label: 'enumerable getter nested inside details',
+        value: {
+          output: [],
+          details: {
+            nested: Object.defineProperty({ ok: true }, 'badge', {
+              get() {
+                getterOrToJsonInvoked = true
+                return 'forged'
+              },
+              enumerable: true,
+            }),
+          },
+        },
+      },
+      {
+        label: 'write-only setter on details',
+        value: {
+          output: [],
+          details: Object.defineProperty({ ok: true }, 'writeOnly', {
+            set() {
+              getterOrToJsonInvoked = true
+            },
+            enumerable: true,
+          }),
+        },
+      },
+      {
+        label: 'enumerable getter on array element inside details',
+        value: {
+          output: [],
+          details: {
+            items: Object.defineProperty(['a'], '0', {
+              get() {
+                getterOrToJsonInvoked = true
+                return 'forged'
+              },
+              enumerable: true,
+            }),
+          },
+        },
+      },
     ]
 
     for (const c of badPayloads) {

@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { isPluginSummaryActive as protocolIsPluginSummaryActive } from '@helmx/protocol/browser'
 import type { ConversationDetail, ConversationLive, ConversationSummary, HelmxSnapshot } from '@helmx/protocol'
-import { applyConversationEntry, applyEventFrame, applyResumedFrame, applySnapshot, applyTransientLiveFrame, emptyLiveState, entryMatchesReference, mergeConversationDetail, omitPluginDocLoadErrors, reconcilePluginsState, sortNodes, sseClientTimings, SseParser } from '../src/lib/live-state.js'
+import { applyConversationEntry, applyEventFrame, applyResumedFrame, applySnapshot, applyTransientLiveFrame, emptyLiveState, entryMatchesReference, isPluginSummaryActive, mergeConversationDetail, omitPluginDocLoadErrors, reconcilePluginsState, sortNodes, sseClientTimings, SseParser } from '../src/lib/live-state.js'
 import { normalizeModelCatalogInfo } from '../src/lib/api.js'
 import type { NodeInfo } from '@helmx/protocol'
 
@@ -574,4 +575,5 @@ test('reconcilePluginsState 按摘要对账 plugins/uiContributions/pluginDocs�
   ])
   assert.equal(recoverRes.inactivePluginIds.has('fail'), false)
   assert.equal(recoverRes.invalidatedDocPluginIds.has('fail'), true)
+  assert.equal(isPluginSummaryActive, protocolIsPluginSummaryActive, 'Web live-state 必须直接复用 @helmx/protocol/browser 共享活跃谓词')
 })

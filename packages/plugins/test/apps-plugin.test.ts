@@ -964,3 +964,28 @@ test('apps client：双语 LocalizedText 插件摘要与 ScreenSpec.label 的模
     }
   }
 })
+
+test('apps client isAppPluginActive 与 @helmx/protocol isPluginSummaryActive 全真值表完全一致', { timeout: 60_000 }, async () => {
+  const [{ isPluginSummaryActive }, { isAppPluginActive }] = await Promise.all([
+    import('@helmx/protocol'),
+    import('../src/apps/client/models.ts'),
+  ])
+  const err = { code: 'plugin_dependency_not_enabled', message: 'dep off', stage: 'enable' as const }
+  const statuses = [undefined, 'active', 'disabled', 'failed'] as const
+  for (const enabled of [true, false]) {
+    for (const status of statuses) {
+      for (const error of [undefined, err]) {
+        const sample = {
+          enabled,
+          ...(status !== undefined ? { status } : {}),
+          ...(error !== undefined ? { error } : {}),
+        }
+        assert.equal(
+          isAppPluginActive(sample),
+          isPluginSummaryActive(sample),
+          `mismatch for ${JSON.stringify(sample)}`,
+        )
+      }
+    }
+  }
+})

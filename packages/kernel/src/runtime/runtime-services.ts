@@ -15,10 +15,9 @@ import type {
   ConversationSummary,
   ModelsChangedEvent,
   PluginBuildProvider,
-  PluginSummary,
   TurnSettledPayload,
 } from '@helmx/protocol'
-import { HelmxError } from '@helmx/protocol'
+import { HelmxError, isPluginSummaryActive } from '@helmx/protocol'
 import type { ConversationOwnership } from './runtime-ownership.js'
 import {
   ArtifactService as SvcArtifactService,
@@ -101,20 +100,6 @@ export interface AssembledRuntimeServices {
   triggers: RuntimeTriggerDispatcher
   toolRegistry: RuntimeToolRegistry
   assetReloader: AssetReloader
-}
-
-/**
- * Matches `isPluginStateActive` (`enabled && phase === 'idle' && lastError === undefined`) on
- * `plugin.changed` summaries: disabled (`enabled !== true`), failed (`status === 'failed'` or
- * `error !== undefined`), and non-idle transitional projections (`status === 'disabled'`) are all
- * inactive and close dedicated session-doc streams for that plugin.
- */
-function isPluginSummaryActive(plugin: PluginSummary): boolean {
-  return (
-    plugin.enabled === true &&
-    plugin.error === undefined &&
-    (plugin.status === undefined || plugin.status === 'active')
-  )
 }
 
 export function assembleRuntimeServices(

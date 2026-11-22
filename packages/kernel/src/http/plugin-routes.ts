@@ -6,7 +6,7 @@
  * Disable double-gate: re-checks plugin enabled status via summary before dispatch (409 if disabled)
  * and tracks handler execution in `liveTasks` (shared with actions/tools for disable blocking).
  */
-import { HelmxError } from '@helmx/protocol'
+import { HelmxError, isPluginSummaryActive } from '@helmx/protocol'
 import type { JsonSchema, PluginConfigFieldSchema, PublicPluginSessionDoc } from '@helmx/protocol'
 import { gzipSync } from 'node:zlib'
 import { errorResponse, jsonOk, readJsonBody, type JsonRedactor } from './http-utils.js'
@@ -430,7 +430,7 @@ async function dispatchPluginRoute(
     return errorResponse(redactor, 404, 'route_not_found', `Plugin route not found: ${method} /${rest}`)
   }
   const summary = kernel.plugins.get?.(found.pluginId)
-  if (summary !== undefined && summary.enabled !== true) {
+  if (summary !== undefined && !isPluginSummaryActive(summary)) {
     throw new HelmxError('plugin_disabled', `Plugin ${found.pluginId} is disabled; route unavailable`, 409, {
       pluginId: found.pluginId,
     })

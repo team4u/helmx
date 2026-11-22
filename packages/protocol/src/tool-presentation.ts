@@ -162,7 +162,15 @@ export function assertBoundedPresentationMeta(
               { path: `${path}[${i}]` },
             )
           }
-          out.push(visit(current[i], `${path}[${i}]`, depth + 1))
+          if (desc.get !== undefined || desc.set !== undefined) {
+            throw new HelmxError(
+              code,
+              `${label} presentationMeta contains an accessor array element at ${path}[${i}]`,
+              status,
+              { path: `${path}[${i}]` },
+            )
+          }
+          out.push(visit(desc.value, `${path}[${i}]`, depth + 1))
         }
         // Inspect all own keys (`Reflect.ownKeys`) to reject symbols, prototype keys, or extra named properties
         // on arrays that index loops / JSON.stringify would silently drop.
@@ -238,6 +246,15 @@ export function assertBoundedPresentationMeta(
             { path, key: safeKey },
           )
         }
+        if (desc.get !== undefined || desc.set !== undefined) {
+          const safeKey = redact ? redact(rawKey) : rawKey
+          throw new HelmxError(
+            code,
+            `${label} presentationMeta contains an accessor property "${safeKey}" at ${path}`,
+            status,
+            { path, key: safeKey },
+          )
+        }
         const key = redact ? redact(rawKey) : rawKey
         if (FORBIDDEN_META_KEY_SET.has(key)) {
           throw new HelmxError(
@@ -256,7 +273,7 @@ export function assertBoundedPresentationMeta(
           )
         }
         seenKeys.add(key)
-        out[key] = visit(current[rawKey], `${path}.${key}`, depth + 1)
+        out[key] = visit(desc.value, `${path}.${key}`, depth + 1)
       }
       return out
     } finally {

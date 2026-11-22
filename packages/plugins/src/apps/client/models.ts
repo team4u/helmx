@@ -168,7 +168,10 @@ interface AppCenterStats {
   pinned: number
 }
 
-/** Consistent active-runtime predicate for app plugin summaries (enabled=true with status='failed' is NOT active). */
+/**
+ * Mirrors `@helmx/protocol`'s `isPluginSummaryActive` for the isolated plugin-client bundle
+ * (enabled=true with status='failed' or error is NOT active; locked by truth-table test in apps-plugin.test.ts).
+ */
 export function isAppPluginActive(plugin: Pick<PluginSummary, 'enabled' | 'status' | 'error'>): boolean {
   return plugin.enabled && (plugin.status === undefined || plugin.status === 'active') && plugin.error === undefined
 }

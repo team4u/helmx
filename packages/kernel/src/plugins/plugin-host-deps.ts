@@ -4,6 +4,7 @@
 import { HelmxError } from '@helmx/protocol';
 import {
   findDependencyCycle,
+  isPluginStateActive,
   topoSortByDependencies,
 } from './lifecycle-helpers.js';
 import type { PluginState } from './types.js';
@@ -48,12 +49,18 @@ export function assertDependenciesSatisfied(
         { pluginId, dependency: dep },
       );
     }
-    if (!depState.enabled || depState.phase !== 'idle') {
+    if (!isPluginStateActive(depState)) {
       throw new HelmxError(
         'plugin_dependency_not_enabled',
-        `Plugin ${pluginId} depends on ${dep}, which is not enabled (dependencies must be registered and enabled)`,
+        `Plugin ${pluginId} depends on ${dep}, which is not active (dependencies must be registered, enabled, and error-free)`,
         409,
-        { pluginId, dependency: dep, dependencyEnabled: depState.enabled, dependencyPhase: depState.phase },
+        {
+          pluginId,
+          dependency: dep,
+          dependencyEnabled: depState.enabled,
+          dependencyPhase: depState.phase,
+          ...(depState.lastError !== undefined ? { dependencyStatus: 'failed' } : {}),
+        },
       );
     }
   }
