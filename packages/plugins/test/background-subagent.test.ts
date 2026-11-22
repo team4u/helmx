@@ -903,4 +903,229 @@ describe('startBackgroundAgent', () => {
 
     await service.close()
   })
+
+  it('PersistedSubagentSpec.nodeId：持久保存、崩溃重挂前恢复、有句柄重挂与 resumeFromRunId 不携带、损坏拒绝', timeout, async () => {
+    const localDir = mkdtempSync(join(tmpdir(), 'wf-bgsub-node-'))
+    try {
+      const state = makeStateStore()
+      const host = makeHost()
+      host.behavior = { kind: 'noOnResolved', result: 'remote-ok' }
+      const service = new WorkflowService({ dataDir: localDir, host, state })
+
+      // 1) startBackgroundAgent 透传 nodeId 并在 subagentSpec 落盘
+      const started = await service.startBackgroundAgent({
+        parentConversationId: 1,
+        prompt: 'remote task',
+        nodeId: 'gpu-1',
+        cwd: '/srv/work',
+      })
+      await service.wait(started.run.id)
+      assert.equal(host.spawns[0]!['nodeId'], 'gpu-1')
+      assert.equal(host.spawns[0]!['cwd'], '/srv/work')
+      const persisted = readRecord(localDir, started.run.id)
+      const persistedSpec = persisted['subagentSpec'] as Record<string, unknown>
+      assert.equal(persistedSpec['nodeId'], 'gpu-1')
+      assert.equal(persistedSpec['cwd'], '/srv/work')
+      await service.close()
+
+      // 2) pre-resolve 崩溃恢复（无 execution handle）：reattachBackgroundAgent 必须还原 nodeId + cwd
+      const preResolveId = 'wf_pre_node0001'
+      const now = Date.now()
+      seedRecord(localDir, {
+        id: preResolveId,
+        name: 'remote-pre',
+        conversationId: 1,
+        status: 'running',
+        kind: 'subagent',
+        notifyParentOnSettle: true,
+        createdAt: now,
+        updatedAt: now,
+        journalPath: join(localDir, 'artifacts', '1', `workflow-${preResolveId}.jsonl`),
+        subagentSpec: {
+          agentId: `${preResolveId}:subagent-0`,
+          requestId: `helmx:spawn:${preResolveId}`,
+          prompt: 'retry remote',
+          nodeId: 'gpu-2',
+          cwd: '/srv/retry',
+        },
+        nodes: [{ id: 'subagent-0', kind: 'agent', label: 'remote-pre', status: 'running', startedAt: now }],
+      })
+
+      // 3) post-resolve 崩溃重挂（已有 conversationId 句柄）：发送 reattach，不传 nodeId / cwd
+      const postResolveId = 'wf_post_node001'
+      seedRecord(localDir, {
+        id: postResolveId,
+        name: 'remote-post',
+        conversationId: 1,
+        status: 'running',
+        kind: 'subagent',
+        notifyParentOnSettle: true,
+        createdAt: now,
+        updatedAt: now,
+        journalPath: join(localDir, 'artifacts', '1', `workflow-${postResolveId}.jsonl`),
+        subagentMeta: { execution: { nodeId: 'gpu-2', conversationId: 88, effectiveCwd: '/srv/retry' } },
+        subagentSpec: {
+          agentId: `${postResolveId}:subagent-0`,
+          requestId: `helmx:spawn:${postResolveId}`,
+          prompt: 'reattach remote',
+          nodeId: 'gpu-2',
+          cwd: '/srv/retry',
+        },
+        nodes: [{ id: 'subagent-0', kind: 'agent', label: 'remote-post', status: 'running', startedAt: now, conversationId: 88 }],
+      })
+
+      // 3b) 外部运行时（executionId）崩溃重挂：必须携带 nodeId（供 Herdr 定位远端窗格）且不带 cwd
+      const extReattachId = 'wf_ext_node0001'
+      seedRecord(localDir, {
+        id: extReattachId,
+        name: 'remote-ext-reattach',
+        conversationId: 1,
+        status: 'running',
+        kind: 'subagent',
+        notifyParentOnSettle: true,
+        createdAt: now,
+        updatedAt: now,
+        journalPath: join(localDir, 'artifacts', '1', `workflow-${extReattachId}.jsonl`),
+        subagentMeta: { execution: { nodeId: 'gpu-2', executionId: 'pane-77', effectiveCwd: '/srv/retry' } },
+        subagentSpec: {
+          agentId: `${extReattachId}:subagent-0`,
+          requestId: `helmx:spawn:${extReattachId}`,
+          prompt: 'reattach external pane',
+          agentType: 'herdr:pi',
+          nodeId: 'gpu-2',
+          cwd: '/srv/retry',
+        },
+        nodes: [{ id: 'subagent-0', kind: 'agent', label: 'remote-ext-reattach', status: 'running', startedAt: now, executionId: 'pane-77' }],
+      })
+
+      // 3c) 外部运行时重挂且 execution 未记录 nodeId 时回退使用 subagentSpec.nodeId
+      const extFallbackId = 'wf_ext_node0002'
+      seedRecord(localDir, {
+        id: extFallbackId,
+        name: 'remote-ext-fallback',
+        conversationId: 1,
+        status: 'running',
+        kind: 'subagent',
+        notifyParentOnSettle: true,
+        createdAt: now,
+        updatedAt: now,
+        journalPath: join(localDir, 'artifacts', '1', `workflow-${extFallbackId}.jsonl`),
+        subagentMeta: { execution: { executionId: 'pane-78', effectiveCwd: '/srv/retry' } },
+        subagentSpec: {
+          agentId: `${extFallbackId}:subagent-0`,
+          requestId: `helmx:spawn:${extFallbackId}`,
+          prompt: 'reattach external fallback',
+          agentType: 'herdr:pi',
+          nodeId: 'gpu-3',
+          cwd: '/srv/retry',
+        },
+        nodes: [{ id: 'subagent-0', kind: 'agent', label: 'remote-ext-fallback', status: 'running', startedAt: now, executionId: 'pane-78' }],
+      })
+
+      // 4) failed 有句柄子代理经 resumeFromRunId 续接：带 resume，绝不带 nodeId（防与 resume 互斥）
+      const failedId = 'wf_fail_node001'
+      seedRecord(localDir, {
+        id: failedId,
+        name: 'remote-failed',
+        conversationId: 1,
+        status: 'failed',
+        error: 'interrupted',
+        kind: 'subagent',
+        notifyParentOnSettle: true,
+        createdAt: now,
+        updatedAt: now,
+        journalPath: join(localDir, 'artifacts', '1', `workflow-${failedId}.jsonl`),
+        subagentMeta: { execution: { nodeId: 'gpu-2', conversationId: 91, effectiveCwd: '/srv/retry' } },
+        subagentSpec: {
+          agentId: `${failedId}:subagent-0`,
+          requestId: `helmx:spawn:${failedId}`,
+          prompt: 'resume remote',
+          nodeId: 'gpu-2',
+          cwd: '/srv/retry',
+        },
+        nodes: [{ id: 'subagent-0', kind: 'agent', label: 'remote-failed', status: 'failed', startedAt: now, conversationId: 91 }],
+      })
+
+      const idx = state.get<Array<Record<string, unknown>>>('workflow/runs', [])
+      state.set('workflow/runs', [
+        ...idx,
+        { id: preResolveId, conversationId: 1, status: 'running', createdAt: now, updatedAt: now, notifyParentOnSettle: true },
+        { id: postResolveId, conversationId: 1, status: 'running', createdAt: now, updatedAt: now, notifyParentOnSettle: true },
+        { id: extReattachId, conversationId: 1, status: 'running', createdAt: now, updatedAt: now, notifyParentOnSettle: true },
+        { id: extFallbackId, conversationId: 1, status: 'running', createdAt: now, updatedAt: now, notifyParentOnSettle: true },
+        { id: failedId, conversationId: 1, status: 'failed', createdAt: now, updatedAt: now, notifyParentOnSettle: true },
+      ])
+
+      const recoverHost = makeHost()
+      recoverHost.behavior = { kind: 'noOnResolved', result: 'recovered-ok' }
+      const recovered = new WorkflowService({ dataDir: localDir, host: recoverHost, state, autoRecoverOnRestart: true })
+      await recovered.init()
+      await recovered.wait(preResolveId)
+      await recovered.wait(postResolveId)
+      await recovered.wait(extReattachId)
+      await recovered.wait(extFallbackId)
+
+      const preSpawn = recoverHost.spawns.find((s) => s['requestId'] === `helmx:spawn:${preResolveId}`)
+      assert.ok(preSpawn, 'pre-resolve 恢复应重新调用 spawnAgent')
+      assert.equal(preSpawn['nodeId'], 'gpu-2', 'pre-resolve 恢复必须还原 subagentSpec.nodeId')
+      assert.equal(preSpawn['cwd'], '/srv/retry', 'pre-resolve 恢复必须还原 subagentSpec.cwd')
+      assert.equal(preSpawn['reattach'], undefined)
+
+      const postSpawn = recoverHost.spawns.find((s) => s['requestId'] === `helmx:spawn:${postResolveId}`)
+      assert.ok(postSpawn, 'post-resolve 恢复应调用 reattach spawnAgent')
+      assert.deepEqual(postSpawn['reattach'], { conversationId: 88, effectiveCwd: '/srv/retry' })
+      assert.equal(postSpawn['nodeId'], undefined, '原生 conversationId 重挂不得携带 nodeId')
+      assert.equal(postSpawn['cwd'], undefined, '原生 conversationId 重挂不得携带 cwd')
+
+      const extSpawn = recoverHost.spawns.find((s) => s['requestId'] === `helmx:spawn:${extReattachId}`)
+      assert.ok(extSpawn, '外部 executionId 重挂应调用 spawnAgent')
+      assert.deepEqual(extSpawn['reattach'], { executionId: 'pane-77', effectiveCwd: '/srv/retry' })
+      assert.equal(extSpawn['nodeId'], 'gpu-2', '外部 executionId 重挂必须携带 nodeId')
+      assert.equal(extSpawn['cwd'], undefined, '外部 executionId 重挂不得携带 cwd')
+
+      const extFallbackSpawn = recoverHost.spawns.find((s) => s['requestId'] === `helmx:spawn:${extFallbackId}`)
+      assert.ok(extFallbackSpawn, '外部 executionId 重挂回退应调用 spawnAgent')
+      assert.deepEqual(extFallbackSpawn['reattach'], { executionId: 'pane-78', effectiveCwd: '/srv/retry' })
+      assert.equal(extFallbackSpawn['nodeId'], 'gpu-3', 'execution.nodeId 缺失时应回退 subagentSpec.nodeId')
+      assert.equal(extFallbackSpawn['cwd'], undefined)
+
+      // resumeFromRunId 续接 failed 子代理：只传 resume，不传 nodeId
+      const resumedRun = await recovered.run({ resumeFromRunId: failedId })
+      await recovered.wait(resumedRun.id)
+      const resumeSpawn = recoverHost.spawns.find((s) => s['resume'] === '91')
+      assert.ok(resumeSpawn, 'resumeFromRunId 应以 conversationId 续接')
+      assert.equal(resumeSpawn['nodeId'], undefined, 'resumeFromRunId 续接不得携带 nodeId（与 resume 互斥）')
+
+      // 5) 损坏的 subagentSpec.nodeId 必须触发显式 workflow_record_corrupt
+      const badNodeSpecId = 'wf_bad_nodespec1'
+      seedRecord(localDir, {
+        id: badNodeSpecId,
+        name: 'bad-node-spec',
+        conversationId: 1,
+        status: 'failed',
+        kind: 'subagent',
+        createdAt: now,
+        updatedAt: now,
+        journalPath: join(localDir, 'artifacts', '1', `workflow-${badNodeSpecId}.jsonl`),
+        subagentSpec: {
+          agentId: `${badNodeSpecId}:subagent-0`,
+          requestId: `helmx:spawn:${badNodeSpecId}`,
+          prompt: 'bad',
+          nodeId: '_bad/node!',
+        },
+      })
+      state.set('workflow/runs', [
+        ...state.get<Array<Record<string, unknown>>>('workflow/runs', []),
+        { id: badNodeSpecId, conversationId: 1, status: 'failed', createdAt: now, updatedAt: now },
+      ])
+      assert.throws(
+        () => recovered.getRun(badNodeSpecId),
+        (err: unknown) => err instanceof HelmxError && err.code === 'workflow_record_corrupt',
+      )
+
+      await recovered.close()
+    } finally {
+      rmSync(localDir, { recursive: true, force: true })
+    }
+  })
 })

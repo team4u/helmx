@@ -20,6 +20,7 @@ export interface WorkflowSpawnRequest {
   model?: string
   effort?: string
   isolation?: 'worktree'
+  nodeId?: string
   cwd?: string
   timeoutMs?: number
   gateTimeoutMs?: number
@@ -254,6 +255,7 @@ interface AgentCallPayload extends ReplayScope {
   maxSubagentDepth?: number
   /** Parent-conversation secret env var names explicitly granted for external runtime injection (re-validated at the host boundary; sent down only on fresh spawns). */
   secretNames?: string[]
+  nodeId?: string
   cwd?: string
   timeoutMs?: number
   gateTimeoutMs?: number

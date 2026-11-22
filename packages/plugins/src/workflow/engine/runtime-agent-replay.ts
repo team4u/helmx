@@ -7,6 +7,7 @@
  * already responded directly, 'live' = handed to runtime-agent-handler.ts with the attempt ring's mutable state.
  */
 
+import { isValidNodeId, NODE_ID_PATTERN } from '@helmx/protocol'
 import { agentJournalKey, type AgentJournalKeyInput, type JournalScope, type JournalWriteInput } from './journal.js'
 import { compileJsonSchema, type CompiledSchema } from './json-schema.js'
 import { HARD_MAX_SUBAGENT_DEPTH } from '../../contracts.js'
@@ -26,6 +27,7 @@ export interface AgentLiveState {
   agentType: string
   model: string | undefined
   isolation: 'worktree' | undefined
+  nodeId: string | undefined
   agentId: string
   compiledSchema: CompiledSchema | undefined
   /** Fingerprint input for recomputing attemptKey (prompt/resume evolve per attempt; other fields unchanged). */
@@ -49,6 +51,26 @@ export interface AgentLiveState {
 export type AgentReplayResolution = { kind: 'responded' } | { kind: 'live'; state: AgentLiveState }
 
 export async function resolveAgentReplayCall(ctx: AgentCallContext, callId: number, payload: AgentCallPayload): Promise<AgentReplayResolution> {
+  if (payload.nodeId !== undefined && !isValidNodeId(payload.nodeId)) {
+    ctx.respond(
+      callId,
+      false,
+      undefined,
+      `agent() opts.nodeId must match ${NODE_ID_PATTERN}.`,
+      true,
+    )
+    return { kind: 'responded' }
+  }
+  if (payload.resume !== undefined && payload.nodeId !== undefined) {
+    ctx.respond(
+      callId,
+      false,
+      undefined,
+      'agent() opts.resume and opts.nodeId are mutually exclusive: a resumed agent keeps the compute node it was started on.',
+      true,
+    )
+    return { kind: 'responded' }
+  }
   const runGate = ctx.host.runGate?.bind(ctx.host)
   const resumeAgent = ctx.host.resumeAgent?.bind(ctx.host)
   if (payload.gate !== undefined && runGate === undefined) {
@@ -187,6 +209,7 @@ export async function resolveAgentReplayCall(ctx: AgentCallContext, callId: numb
   const agentType = resumed?.agentType ?? payload.agentType ?? 'assistant'
   const model = resumed !== undefined ? resumed.model : payload.model
   const isolation = resumed !== undefined ? resumed.isolation : payload.isolation
+  const nodeId = resumed !== undefined ? undefined : payload.nodeId
   ctx.openLaunches.set(callId, label)
 
   const base: WorkflowAgentEntry = {
@@ -222,6 +245,7 @@ export async function resolveAgentReplayCall(ctx: AgentCallContext, callId: numb
     maxSubagentDepth: payload.maxSubagentDepth,
     secretNames: payload.secretNames,
     cwd: payload.cwd,
+    nodeId: payload.nodeId,
     schema: payload.schema !== undefined ? JSON.stringify(payload.schema) : undefined,
   }
   const firstAttemptKey = agentJournalKey(keyInput)
@@ -426,7 +450,7 @@ export async function resolveAgentReplayCall(ctx: AgentCallContext, callId: numb
   return {
     kind: 'live',
     state: {
-      base, index, scope, scopeId, label, agentType, model, isolation, agentId, compiledSchema,
+      base, index, scope, scopeId, label, agentType, model, isolation, nodeId, agentId, compiledSchema,
       keyInput, attemptKey, attemptPrompt, attempt, attemptIndex, attemptLimit, resumeTarget,
       ...(reattachEntry !== undefined ? { reattachEntry } : {}),
       queuedAt, recordAttempt,

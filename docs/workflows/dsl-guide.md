@@ -55,12 +55,13 @@ pnpm helmx workflows run ./review.js --args '{"pr": 1024, "strict": true}' --con
 | `schema` | `object` | 结构化输出的 JSON Schema |
 | `attachments` | `string[]` | 本次调用携带的产物 ID 列表 |
 | `maxSubagentDepth` | `number` | 相对任务树根的绝对子代理层级上限（1..5 整数；默认继承上限 2，根会话为第 0 层）。根会话可为大任务提高上限；受管子代理不得提高继承上限。续接未传时保留授权，显式设置重新校验；字段参与恢复缓存指纹 |
+| `nodeId` | `string` | 目标计算节点 ID（匹配 `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`；覆写 Profile/父会话默认节点；显式 `'local'` 可切回 Hub 本机；指向远端节点时需提供 `cwd` 或使用同节点兼容的 Profile `cwd`）。字段参与恢复缓存指纹 |
 | `cwd` | `string` | 子代理工作目录（跨平台绝对路径）。不带 `isolation` 时直接在该目录运行；带 `isolation: 'worktree'` 时从该目录切出子级 Worktree。字段参与恢复缓存指纹 |
 | `timeoutMs` | `number` | 单回合超时毫秒数（1_000 .. 3_600_000 整数）。超时中止子会话并按失败返回；只限制执行时限，不改变调用身份，不记入恢复缓存 Key |
 | `gateTimeoutMs` | `number` | 单次门禁命令超时毫秒数（1_000 .. 600_000 整数，默认 120_000）。仅在设置 `gate` 时有效 |
 | `maxAttempts` | `number` | 失败自动重试次数上限（1 .. 10 整数，默认 1）。配合 `gate` 或 `timeoutMs` 使用；需要 `label`，未传时自动生成 |
 
-选项互斥规则：`resume` 与 `agentType`、`model`、`isolation`、`effort`、`cwd` 互斥（续接会话保持它启动时的类型、模型、工作目录与思考配置；需要换目录就新建调用），但允许与 `schema`、`gate`、`attachments`、`maxSubagentDepth` 组合（续接回合可携带新的输出契约、门禁与本轮附件；附件只属于本轮提交，不自动沿用原任务的附件列表）。传未知选项名会直接报错，可用键固定为 `label, phase, model, agentType, isolation, gate, resume, effort, schema, attachments, maxSubagentDepth, cwd, timeoutMs, gateTimeoutMs, maxAttempts`。机密授予（`secretNames`）不是 DSL 选项；需要显式授予父会话机密时，使用独立 `subagent` 模型工具的 `secretNames` 参数。
+选项互斥规则：`resume` 与 `agentType`、`model`、`isolation`、`effort`、`nodeId`、`cwd` 互斥（续接会话保持它启动时的类型、模型、计算节点、工作目录与思考配置；需要换节点或换目录就新建调用），但允许与 `schema`、`gate`、`attachments`、`maxSubagentDepth` 组合（续接回合可携带新的输出契约、门禁与本轮附件；附件只属于本轮提交，不自动沿用原任务的附件列表）。传未知选项名会直接报错，可用键固定为 `label, phase, model, agentType, isolation, gate, resume, effort, schema, attachments, maxSubagentDepth, nodeId, cwd, timeoutMs, gateTimeoutMs, maxAttempts`。机密授予（`secretNames`）不是 DSL 选项；需要显式授予父会话机密时，使用独立 `subagent` 模型工具的 `secretNames` 参数。
 
 **结构化输出**：配置 `schema` 时宿主为子智能体挂载结构化契约，引擎解析其 JSON 回复并按 Schema 校验，通过则返回原生对象，不通过（非 JSON 或不合契约）返回 `null`：
 

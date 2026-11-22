@@ -289,6 +289,7 @@ export async function startBackgroundAgent(
     requestId: deterministicRequestId,
     prompt: svc.redact(request.prompt),
     ...(request.agentType !== undefined && request.agentType !== '' ? { agentType: request.agentType } : {}),
+    ...(request.nodeId !== undefined ? { nodeId: request.nodeId } : {}),
     ...(request.cwd !== undefined ? { cwd: svc.redact(request.cwd) } : {}),
     ...(request.isolation === 'worktree' || request.isolation === 'none'
       ? { isolation: request.isolation }
@@ -527,6 +528,9 @@ export function reattachBackgroundAgent(
     ...(spec.schema !== undefined ? { schema: spec.schema } : {}),
     ...(hasHandle
       ? {
+          ...(!isNativeReattach && (exec?.nodeId ?? spec.nodeId) !== undefined
+            ? { nodeId: exec?.nodeId ?? spec.nodeId }
+            : {}),
           reattach: {
             ...(exec?.conversationId !== undefined ? { conversationId: exec.conversationId } : {}),
             ...(exec?.executionId !== undefined ? { executionId: exec.executionId } : {}),
@@ -534,6 +538,7 @@ export function reattachBackgroundAgent(
           },
         }
       : {
+          ...(spec.nodeId !== undefined ? { nodeId: spec.nodeId } : {}),
           ...(spec.cwd !== undefined ? { cwd: spec.cwd } : {}),
           ...(spec.model !== undefined ? { model: spec.model } : {}),
           ...(spec.effort !== undefined ? { effort: spec.effort } : {}),

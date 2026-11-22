@@ -42,6 +42,7 @@ Supported options:
 - `agentType`: Profile ID or external runtime such as `herdr:agy`;
 - `model`, `effort`: execution overrides;
 - `isolation: "worktree"`: independent managed Git worktree;
+- `nodeId`: target compute node ID (overrides Profile/parent node; explicit `"local"` switches back to the Hub host; remote nodes require `cwd` or a compatible Profile `cwd`);
 - `cwd`: absolute target workspace;
 - `gate`, `gateTimeoutMs`: verification command and timeout;
 - `timeoutMs`: agent turn timeout;
@@ -51,7 +52,7 @@ Supported options:
 - `maxSubagentDepth`: absolute task-tree depth cap;
 - `maxAttempts`: bounded retry count for the agent node.
 
-Do not combine `resume` with a new `agentType`, `model`, `isolation`, or `effort`. Continuations require an existing idle execution that still belongs to the current task tree.
+Do not combine `resume` with a new `agentType`, `model`, `isolation`, `nodeId`, `cwd`, or `effort`. Continuations require an existing idle execution that still belongs to the current task tree.
 
 ### `agent.withMeta(prompt, options?)` and `goal(spec)`
 

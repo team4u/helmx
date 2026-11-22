@@ -31,7 +31,7 @@ import {
   fauxToolCall,
 } from '@earendil-works/pi-ai/providers/faux'
 import type { AgentSpawnRequest, HelmxPluginContext, JsonSchema, PluginToolSpec } from '@helmx/protocol'
-import { HelmxError, validateOrThrow } from '@helmx/protocol'
+import { HelmxError, NODE_ID_PATTERN, validateOrThrow } from '@helmx/protocol'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -169,9 +169,12 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
       // 声明：全部新字段进入 inputSchema（模型可见）。
       assert.ok(declared, 'before_turn 应捕获 subagent 声明')
       const props = declared!.inputSchema['properties'] as Record<string, unknown>
-      for (const field of ['label', 'agentType', 'cwd', 'isolation', 'resume', 'model', 'effort', 'fork']) {
+      for (const field of ['label', 'agentType', 'nodeId', 'cwd', 'isolation', 'resume', 'model', 'effort', 'fork']) {
         assert.ok(props[field], `subagent 声明应含 ${field}`)
       }
+      const nodeIdSchema = props['nodeId'] as { type?: string; pattern?: string }
+      assert.equal(nodeIdSchema.type, 'string')
+      assert.equal(nodeIdSchema.pattern, NODE_ID_PATTERN, 'nodeId 声明应复用协议权威 NODE_ID_PATTERN')
       const isolationSchema = props['isolation'] as { enum?: unknown[] }
       assert.deepEqual(isolationSchema.enum, ['worktree'], 'isolation 声明应仅允许 worktree')
 
@@ -387,6 +390,69 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
         0,
         'handled 后端接管时不得派生原生子会话',
       )
+    } finally {
+      await kernel.close()
+    }
+  })
+
+  it('nodeId 透传到 agent_spawn；非法 nodeId 与 resume + nodeId 在工具入口被显式拒绝且零派生', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 'sa-nodeid')
+    const faux = makeFauxProvider()
+    const kernel = await KernelRuntime.open({
+      buildProvider: createPluginBuildProvider(),
+      dataDir: dir,
+      cwd: dir,
+      model: 'faux/faux-1',
+      providers: [faux.provider],
+    })
+    try {
+      await kernel.plugins.register(createWorkflowPlugin())
+      const spawns: AgentSpawnRequest[] = []
+      await kernel.plugins.register(spawnObserver(spawns))
+
+      // 1) 合法 nodeId='local' 原样进入 agent_spawn 并完成
+      faux.setResponses([
+        fauxAssistantMessage(
+          [fauxToolCall('subagent', { prompt: '显式本机任务', nodeId: 'local', background: false })],
+          { stopReason: 'toolUse' },
+        ),
+        fauxAssistantMessage('本机完成'),
+        fauxAssistantMessage('主回合1完成'),
+      ])
+      await kernel.submitInput(1, '指定 nodeId=local')
+      await kernel.waitForIdle(1)
+      assert.equal(spawns.length, 1)
+      assert.equal(spawns[0]!.nodeId, 'local', 'nodeId 应原样进入 AgentSpawnRequest')
+
+      // 2) 非法 nodeId 格式在参数校验层即被拒绝，绝不进入 agent_spawn
+      faux.setResponses([
+        fauxAssistantMessage(
+          [fauxToolCall('subagent', { prompt: '坏节点', nodeId: '_bad/node!', background: false })],
+          { stopReason: 'toolUse' },
+        ),
+        fauxAssistantMessage('主回合2完成'),
+      ])
+      await kernel.submitInput(1, '非法 nodeId')
+      await kernel.waitForIdle(1)
+      assert.equal(spawns.length, 1, '非法 nodeId 绝不进入 agent_spawn')
+      const badDetail = await kernel.getConversationDetail(1, { limit: 50 })
+      const badText = toolResultText(badDetail, 'subagent')
+      assert.match(badText, /nodeId/)
+
+      // 3) resume + nodeId 互斥在工具入口被显式拒绝，绝不进入 agent_spawn
+      faux.setResponses([
+        fauxAssistantMessage(
+          [fauxToolCall('subagent', { prompt: '互斥调用', resume: '2', nodeId: 'gpu-1', background: false })],
+          { stopReason: 'toolUse' },
+        ),
+        fauxAssistantMessage('主回合3完成'),
+      ])
+      await kernel.submitInput(1, 'resume + nodeId 互斥')
+      await kernel.waitForIdle(1)
+      assert.equal(spawns.length, 1, 'resume + nodeId 绝不进入 agent_spawn')
+      const conflictDetail = await kernel.getConversationDetail(1, { limit: 50 })
+      const conflictText = toolResultText(conflictDetail, 'subagent')
+      assert.match(conflictText, /nodeId 与 resume 互斥/)
     } finally {
       await kernel.close()
     }
@@ -1071,6 +1137,27 @@ describe('subagent / SubagentWorkflow 工具 presentationMeta 轻量投影与 Sc
     assert.equal(badArg.isError, true)
     assert.deepEqual(badArg.presentationMeta, { ok: false })
     validateOrThrow(subagentTool.presentationMetaSchema!, badArg.presentationMeta, 'subagent.badArg.presentationMeta')
+
+    // 4) 直调 execute 入口（绕过 JSON Schema）：非法 nodeId 与 resume + nodeId 均返回结构化错误
+    for (const badNode of ['_bad', 'bad/node', '', 123]) {
+      const badNodeRes = (await subagentTool.execute(
+        { prompt: '坏节点', nodeId: badNode },
+        { conversationId: 1, callId: `call_sa_bad_node_${String(badNode)}` },
+      )) as { isError: boolean; structuredOutput: Record<string, unknown>; presentationMeta: Record<string, unknown> }
+      assert.equal(badNodeRes.isError, true)
+      assert.equal(badNodeRes.structuredOutput['ok'], false)
+      assert.deepEqual(badNodeRes.presentationMeta, { ok: false })
+      validateOrThrow(subagentTool.presentationMetaSchema!, badNodeRes.presentationMeta, 'subagent.badNode.presentationMeta')
+    }
+    const conflictRes = (await subagentTool.execute(
+      { prompt: '冲突', resume: '21', nodeId: 'gpu-1' },
+      { conversationId: 1, callId: 'call_sa_node_resume' },
+    )) as { isError: boolean; structuredOutput: Record<string, unknown>; presentationMeta: Record<string, unknown> }
+    assert.equal(conflictRes.isError, true)
+    assert.equal(conflictRes.structuredOutput['ok'], false)
+    assert.match(String(conflictRes.structuredOutput['result']), /nodeId 与 resume 互斥/)
+    assert.deepEqual(conflictRes.presentationMeta, { ok: false })
+    validateOrThrow(subagentTool.presentationMetaSchema!, conflictRes.presentationMeta, 'subagent.conflictNode.presentationMeta')
   })
 
   it('SubagentWorkflow：声明 presentationMetaSchema，完整 WorkflowRunSummary 仅进 structuredOutput，presentationMeta 仅存轻量索引', { timeout: 60_000 }, async () => {

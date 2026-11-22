@@ -189,27 +189,31 @@ export interface AgentJournalKeyInput {
   secretNames?: string[]
   /** Working directory (agent({ cwd })): a changed directory is a different execution context and must not hit an old cache. */
   cwd?: string
+  /** Target compute node ID (agent({ nodeId })): a changed node changes the execution context and must not hit an old cache. */
+  nodeId?: string
 }
 
 /**
- * The canonical version of agent call keys (v2 fixed slots).
+ * The canonical version of agent call keys (v4 fixed slots).
  *
  * v1 (old ledgers) appended variable-length slots after the resume slot (an extra trailing slot when schema
  * was present). If attachments kept being appended at the tail, it would collide directly with v1's
  * schema tail slot: v1's `[p,l,m,t,e,i,g,r,schema]` and a hypothetical v2
  * `[p,l,m,t,e,i,g,r,schema?,attachments?]` would produce same-canonical-different-semantics collisions
  * across the four quadrants of schema present/absent x attachments present/absent.
- * Hence v2 converges in one step to versioned fixed slots: attachments always occupies slot 10 (null = not
+ * Hence v2 converged in one step to versioned fixed slots: attachments always occupies slot 10 (null = not
  * provided), schema always slot 11 (null = not provided); any later new field may only be appended after
- * the version number. secretNames is appended as slot 13 (null = not provided; unconditionally slotted,
- * colliding with no old tail slot). v3 appends cwd as slot 14 (same unconditional rule): a changed cwd
+ * the version number. secretNames occupies slot 13 (null = not provided; unconditionally slotted,
+ * colliding with no old tail slot). v3 appended cwd as slot 14 (same unconditional rule): a changed cwd
  * changes the execution context (a child worktree can be spawned from that directory); cached results under
- * the old directory must not replay. Note: unconditional slotting makes **all call keys mismatch old
- * ledgers** after every version bump (including calls not carrying the new field) -- the dev period has no
+ * the old directory must not replay. v4 appends nodeId as slot 15 (same unconditional rule): a changed
+ * target compute node changes the execution context and must not replay cached results from another node.
+ * Note: unconditional slotting makes **all call keys mismatch old ledgers** after every version bump
+ * (including calls not carrying the new field) -- dev-phase contract has zero legacy v3 fallback.
  */
 export function agentJournalKey(input: AgentJournalKeyInput): string {
   const canonical = JSON.stringify([
-    'v3',
+    'v4',
     input.prompt,
     input.label ?? null,
     input.model ?? null,
@@ -223,6 +227,7 @@ export function agentJournalKey(input: AgentJournalKeyInput): string {
     input.maxSubagentDepth ?? null,
     input.secretNames !== undefined ? input.secretNames : null,
     input.cwd !== undefined ? input.cwd : null,
+    input.nodeId !== undefined ? input.nodeId : null,
   ])
   return createHash('sha256').update(canonical).digest('hex').slice(0, 32)
 }

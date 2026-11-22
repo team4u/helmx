@@ -43,6 +43,7 @@ interface AgentCallPayload {
   schema?: unknown
   attachments?: string[]
   maxSubagentDepth?: number
+  nodeId?: string
   cwd?: string
   timeoutMs?: number
   gateTimeoutMs?: number
@@ -244,6 +245,27 @@ describe('worker-source new agent options', () => {
     assert.match(outcome.error ?? '', /opts\.resume and opts\.cwd are mutually exclusive/)
   })
 
+  it('forwards valid nodeId (including explicit local) and rejects invalid nodeId or resume + nodeId', timeout, async () => {
+    const remote = await runWorkerSource('await agent("work", { nodeId: "gpu-1.us_west", cwd: "/srv/repo" })')
+    assert.equal(remote.status, 'complete')
+    assert.equal(remote.agentCalls[0]?.nodeId, 'gpu-1.us_west')
+    assert.equal(remote.agentCalls[0]?.cwd, '/srv/repo')
+
+    const explicitLocal = await runWorkerSource('await agent("work", { nodeId: "local" })')
+    assert.equal(explicitLocal.status, 'complete')
+    assert.equal(explicitLocal.agentCalls[0]?.nodeId, 'local')
+
+    for (const bad of ['', '  ', '_bad', '-leading', 'bad/node', 'bad node', 'a'.repeat(129), 42]) {
+      const invalid = await runWorkerSource(`await agent("x", { nodeId: ${JSON.stringify(bad)} })`)
+      assert.equal(invalid.status, 'error', `nodeId ${String(bad)} should fail`)
+      assert.match(invalid.error ?? '', /opts\.nodeId/)
+    }
+
+    const conflict = await runWorkerSource('await agent("fix", { resume: "impl", nodeId: "gpu-1" })')
+    assert.equal(conflict.status, 'error')
+    assert.match(conflict.error ?? '', /opts\.resume and opts\.nodeId are mutually exclusive/)
+  })
+
   it('rejects cwd that is empty or blank', timeout, async () => {
     const blank = await runWorkerSource('await agent("x", { cwd: "  " })')
     assert.equal(blank.status, 'error')
@@ -345,17 +367,34 @@ describe('worker-source goal()', () => {
     assert.equal(payload?.withMeta, true)
   })
 
-  it('honours explicit maxAttempts and forwards cwd/timeoutMs/gateTimeoutMs', timeout, async () => {
+  it('honours explicit maxAttempts and forwards nodeId/cwd/timeoutMs/gateTimeoutMs', timeout, async () => {
     const outcome = await runWorkerSource(
-      'return await goal({ objective: "o", cwd: "/repo", maxAttempts: 5, timeoutMs: 300000, gate: "pnpm test", gateTimeoutMs: 30000 })',
+      'return await goal({ objective: "o", nodeId: "gpu-1", cwd: "/repo", maxAttempts: 5, timeoutMs: 300000, gate: "pnpm test", gateTimeoutMs: 30000 })',
       { onAgent: () => META_OK },
     )
     assert.equal(outcome.status, 'complete')
     const payload = outcome.agentCalls[0]
     assert.equal(payload?.maxAttempts, 5)
+    assert.equal(payload?.nodeId, 'gpu-1')
     assert.equal(payload?.cwd, '/repo')
     assert.equal(payload?.timeoutMs, 300000)
     assert.equal(payload?.gateTimeoutMs, 30000)
+
+    const withMetaOutcome = await runWorkerSource(
+      'return await agent.withMeta("o", { nodeId: "win-1", cwd: "C:\\\\repo" })',
+      { onAgent: () => META_OK },
+    )
+    assert.equal(withMetaOutcome.status, 'complete')
+    assert.equal(withMetaOutcome.agentCalls[0]?.nodeId, 'win-1')
+    assert.equal(withMetaOutcome.agentCalls[0]?.cwd, 'C:\\repo')
+
+    const badGoal = await runWorkerSource('await goal({ objective: "o", nodeId: "_bad" })')
+    assert.equal(badGoal.status, 'error')
+    assert.match(badGoal.error ?? '', /opts\.nodeId/)
+
+    const conflictGoal = await runWorkerSource('await goal({ objective: "o", resume: "prev", nodeId: "gpu-1" })')
+    assert.equal(conflictGoal.status, 'error')
+    assert.match(conflictGoal.error ?? '', /opts\.resume and opts\.nodeId are mutually exclusive/)
   })
 
   it('rejects missing objective, non-object spec and unknown keys', timeout, async () => {
