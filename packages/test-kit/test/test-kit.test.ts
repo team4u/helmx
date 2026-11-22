@@ -5,8 +5,8 @@
  */
 
 import assert from 'node:assert/strict'
-import { execFileSync } from 'node:child_process'
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { execFileSync, spawnSync } from 'node:child_process'
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import process from 'node:process'
@@ -17,6 +17,7 @@ import {
   assertRejectsCode,
   deferred,
   jsonResponse,
+  resetDomEnvironment,
   makeConversationSummary,
   makePluginSummary,
   makeProfile,
@@ -37,6 +38,7 @@ import { startMockHub } from '../src/http.js'
 import { createGitTemplate, initGitRepo } from '../src/git.js'
 
 const SRC_INDEX_PATH = fileURLToPath(new URL('../src/index.ts', import.meta.url))
+const REPO_ROOT = fileURLToPath(new URL('../../..', import.meta.url))
 
 test('src/index.ts stays purely isomorphic: zero node:* runtime or type imports', { timeout: 60_000 }, () => {
   const sourceText = readFileSync(SRC_INDEX_PATH, 'utf8')
@@ -55,6 +57,83 @@ test('src/index.ts stays purely isomorphic: zero node:* runtime or type imports'
   for (const spec of specifiers) {
     assert.ok(!spec.startsWith('node:'), `src/index.ts must not import node:* modules: ${spec}`)
     assert.equal(spec, '@helmx/protocol/browser', `src/index.ts must only import contracts from @helmx/protocol/browser: ${spec}`)
+  }
+})
+
+test('check-test-hygiene rejects newly added subtests and cross-package test helpers', { timeout: 60_000 }, () => {
+  const fixtureDir = join(REPO_ROOT, 'packages', 'web', 'test', '.helmx-hygiene-gate-fixture')
+  mkdirSync(fixtureDir, { recursive: true })
+  const fixture = join(fixtureDir, 'new.test.ts')
+  try {
+    writeFileSync(fixture, [
+      "import { fixture } from '../../../kernel/test/helpers/fixture.js'",
+      "import test from 'node:test'",
+      "test('outer', { timeout: 60_000 }, async (t) => {",
+      "  await t.test('nested', async () => {})",
+      '})',
+      '',
+    ].join('\n'), 'utf8')
+    const result = spawnSync(process.execPath, [
+      join(REPO_ROOT, 'scripts', 'check-test-hygiene.mjs'),
+      '--files',
+      fixture,
+    ], { cwd: REPO_ROOT, encoding: 'utf8' })
+    assert.equal(result.status, 1, result.stderr)
+    assert.match(result.stderr, /subtest-timeout-missing/)
+    assert.match(result.stderr, /cross-package-test-helper/)
+  } finally {
+    rmSync(fixtureDir, { recursive: true, force: true })
+  }
+})
+
+test('resetDomEnvironment is safe when no browser DOM exists', { timeout: 60_000 }, () => {
+  assert.doesNotThrow(() => resetDomEnvironment())
+})
+
+test('resetDomEnvironment clears DOM, storage, and history through the shared browser contract', { timeout: 60_000 }, () => {
+  const removedBodyAttrs: string[] = []
+  const removedDocumentAttrs: string[] = []
+  let localStorageClears = 0
+  let sessionStorageClears = 0
+  let historyArgs: unknown[] | undefined
+  const fakeDocument = {
+    activeElement: null,
+    body: {
+      innerHTML: '<div>stale</div>',
+      attributes: [{ name: 'data-stale' }],
+      removeAttribute(name: string) { removedBodyAttrs.push(name) },
+    },
+    head: { innerHTML: '<style>stale</style>' },
+    title: 'stale title',
+    documentElement: {
+      attributes: [{ name: 'lang' }],
+      removeAttribute(name: string) { removedDocumentAttrs.push(name) },
+    },
+  } as unknown as Document
+  const fakeWindow = {
+    localStorage: { clear() { localStorageClears += 1 } },
+    sessionStorage: { clear() { sessionStorageClears += 1 } },
+    history: { replaceState(...args: unknown[]) { historyArgs = args } },
+  } as unknown as Window
+  const documentDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'document')
+  const windowDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'window')
+  try {
+    Object.defineProperty(globalThis, 'document', { configurable: true, value: fakeDocument })
+    Object.defineProperty(globalThis, 'window', { configurable: true, value: fakeWindow })
+    resetDomEnvironment()
+    assert.equal(fakeDocument.body.innerHTML, '')
+    assert.equal(fakeDocument.head.innerHTML, '')
+    assert.equal(fakeDocument.title, '')
+    assert.deepEqual(removedBodyAttrs, ['data-stale'])
+    assert.deepEqual(removedDocumentAttrs, ['lang'])
+    assert.equal(localStorageClears, 1)
+    assert.equal(sessionStorageClears, 1)
+    assert.deepEqual(historyArgs, [null, '', '/'])
+  } finally {
+    if (documentDescriptor) Object.defineProperty(globalThis, 'document', documentDescriptor)
+    else delete (globalThis as { document?: unknown }).document
+    if (windowDescriptor) Object.defineProperty(globalThis, 'window', windowDescriptor)
+    else delete (globalThis as { window?: unknown }).window
   }
 })
 

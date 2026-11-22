@@ -137,6 +137,44 @@ export function jsonResponse(payload: unknown, status = 200, headers?: HeadersIn
   })
 }
 
+/**
+ * Reset mutable DOM state shared by browser-style test workers.
+ *
+ * This helper deliberately avoids importing a DOM implementation or React, so it is safe to
+ * reuse from happy-dom, browser, and Node test files. A missing DOM is a no-op.
+ */
+export function resetDomEnvironment(): void {
+  if (typeof document === 'undefined') return
+
+  ;(document.activeElement as HTMLElement | null)?.blur?.()
+  document.body.innerHTML = ''
+  for (const attr of Array.from(document.body.attributes)) {
+    document.body.removeAttribute(attr.name)
+  }
+  document.head.innerHTML = ''
+  document.title = ''
+  for (const attr of Array.from(document.documentElement.attributes)) {
+    document.documentElement.removeAttribute(attr.name)
+  }
+  if (typeof window === 'undefined') return
+
+  try {
+    window.localStorage.clear()
+  } catch {
+    // Synthetic DOM implementations may reject storage access.
+  }
+  try {
+    window.sessionStorage.clear()
+  } catch {
+    // Synthetic DOM implementations may reject storage access.
+  }
+  try {
+    window.history.replaceState(null, '', '/')
+  } catch {
+    // Synthetic DOM implementations may reject history updates.
+  }
+}
+
 /** Assert an async operation rejects with an error matching the given code (and optional HTTP status); return the caught error. */
 export async function assertRejectsCode(
   fn: () => Promise<unknown>,

@@ -16,10 +16,10 @@ import { act } from 'react'
 import type { Root } from 'react-dom/client'
 import type { ConversationSummary } from '@helmx/protocol'
 import { hangingEventStream, type SseFrameSender } from './helpers/sse-stream.js'
+import { jsonResponse } from '@helmx/test-kit'
 import {
   ensureHappyDom,
   flushMacrotask,
-  jsonResponse,
   typeIntoControl,
   waitForCondition,
 } from './helpers/dom-harness.js'

@@ -2,11 +2,12 @@
  * 共享 happy-dom 测试宿主原语：
  * - 不静态引入 @helmx/plugin-client / Radix / react-dom/client，确保需要交互展开 Radix 浮层
  *   的测试可在调用 ensureHappyDom() 后再动态 import 相关模块；
- * - 提供幂等 DOM 注册、跨测试全局/DOM 状态复位、输入控制、微任务/宏任务冲刷、条件等待与 JSON 响应构造。
+ * - 提供幂等 DOM 注册、跨测试全局/DOM 状态复位、输入控制、微任务/宏任务冲刷与条件等待；JSON 响应构造复用 @helmx/test-kit。
  */
 import * as React from 'react'
 import { act } from 'react'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
+import { resetDomEnvironment } from '@helmx/test-kit'
 import type { Root } from 'react-dom/client'
 import { resetServerClock } from '../../src/lib/server-clock.js'
 
@@ -113,31 +114,7 @@ export function resetHappyDom(): void {
   g.ResizeObserver = NoopResizeObserver
   resetServerClock()
 
-  ;(document.activeElement as HTMLElement | null)?.blur?.()
-  document.body.innerHTML = ''
-  for (const attr of Array.from(document.body.attributes)) {
-    document.body.removeAttribute(attr.name)
-  }
-  document.head.innerHTML = ''
-  document.title = ''
-  for (const attr of Array.from(document.documentElement.attributes)) {
-    document.documentElement.removeAttribute(attr.name)
-  }
-  try {
-    window.localStorage.clear()
-  } catch {
-    // 合成环境下容忍存储异常
-  }
-  try {
-    window.sessionStorage.clear()
-  } catch {
-    // 合成环境下容忍存储异常
-  }
-  try {
-    window.history.replaceState(null, '', '/')
-  } catch {
-    // 合成环境下容忍 history 异常
-  }
+  resetDomEnvironment()
 }
 
 /** 向受控 input 或 textarea 写入文本并触发 React 兼容的 input 事件。 */
@@ -183,14 +160,6 @@ export async function waitForCondition(
       await new Promise<void>((resolve) => setTimeout(resolve, intervalMs))
     })
   }
-}
-
-/** 构造 application/json 测试响应。 */
-export function jsonResponse(payload: unknown, status = 200): Response {
-  return new Response(JSON.stringify(payload), {
-    status,
-    headers: { 'content-type': 'application/json' },
-  })
 }
 
 export interface MountedDomRoot {
