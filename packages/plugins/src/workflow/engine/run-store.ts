@@ -60,6 +60,8 @@ export interface RunIndexEntry {
   status: WorkflowRunStatus
   createdAt: number
   updatedAt: number
+  /** Authoritative terminal settlement timestamp (epoch ms); never overwritten by later metadata writes. */
+  settledAt?: number
   /** Background-start marker (inherited by resume'd new runs; used by diagnostics/probe decisions). */
   notifyParentOnSettle?: boolean
   /** Current cumulative auto-resume count (initial default = 0; +1 on each resumeFromRunId takeover). */
@@ -78,6 +80,8 @@ export interface RunRecord {
   status: WorkflowRunStatus
   createdAt: number
   updatedAt: number
+  /** Authoritative terminal settlement timestamp (epoch ms); written once on terminal transition and never overwritten. */
+  settledAt?: number
   result?: unknown
   error?: string
   /** 结构化失败错误码（如 validation_error / workflow_action_uncertain / crash_recovery_limit 等）。 */
@@ -202,6 +206,12 @@ function runIndexProblem(raw: unknown): { problem: string; runId: string } | und
     if (typeof e['updatedAt'] !== 'number' || !Number.isFinite(e['updatedAt'])) {
       return { problem: `entry ${i} updatedAt is not a finite number`, runId }
     }
+    if (
+      e['settledAt'] !== undefined &&
+      (typeof e['settledAt'] !== 'number' || !Number.isFinite(e['settledAt']) || e['settledAt'] < 0)
+    ) {
+      return { problem: `entry ${i} settledAt is not a non-negative finite number`, runId }
+    }
     if (e['notifyParentOnSettle'] !== undefined && typeof e['notifyParentOnSettle'] !== 'boolean') {
       return { problem: `entry ${i} notifyParentOnSettle is not a boolean`, runId }
     }
@@ -240,6 +250,12 @@ function runRecordProblem(record: unknown): string | undefined {
   }
   if (!Number.isFinite(r['createdAt']) || typeof r['createdAt'] !== 'number') return 'createdAt is not a number'
   if (!Number.isFinite(r['updatedAt']) || typeof r['updatedAt'] !== 'number') return 'updatedAt is not a number'
+  if (
+    r['settledAt'] !== undefined &&
+    (typeof r['settledAt'] !== 'number' || !Number.isFinite(r['settledAt']) || r['settledAt'] < 0)
+  ) {
+    return 'settledAt is not a non-negative finite number'
+  }
   if (typeof r['journalPath'] !== 'string') return 'journalPath is not a string'
   const childIds = r['childConversationIds']
   if (
@@ -406,6 +422,7 @@ export class RunStore {
       status: record.status,
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
+      ...(record.settledAt !== undefined ? { settledAt: record.settledAt } : {}),
       ...(record.notifyParentOnSettle === true ? { notifyParentOnSettle: true } : {}),
       ...(record.autoResumeCount !== undefined ? { autoResumeCount: record.autoResumeCount } : {}),
       ...(record.resumedByRunId !== undefined ? { resumedByRunId: record.resumedByRunId } : {}),

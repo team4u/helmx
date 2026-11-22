@@ -4,7 +4,12 @@
  * frontline activity and descendant approval digests (zero React/DOM
  * dependencies).
  */
-import { DEFAULT_HELMX_LOCALE, resolveLocalizedText, type HelmxLocale } from '@helmx/plugin-client'
+import {
+  DEFAULT_HELMX_LOCALE,
+  resolveConversationTiming,
+  resolveLocalizedText,
+  type HelmxLocale,
+} from '@helmx/plugin-client'
 import type { ExecutionNode } from './model-execution-tree.ts'
 import { compactCardTitle } from './model-subagent-card.ts'
 import {
@@ -30,15 +35,22 @@ import {
  * boundaries first (running advances with startedAt + nowMs, settled freezes
  * at durationMs); container rows without a runNode (deep workflow / external)
  * and conversation rows carrying a background run use run boundaries; pure
- * conversation nodes without a reliable turn boundary (the conversation
- * createdAt is not a turn boundary) return undefined — never fabricated.
+ * conversation nodes without a run fall back to honest conversation timing
+ * (`summary.runStartedAt` / `summary.pendingAskSince` via `resolveConversationTiming`)
+ * while running/blocked — never fabricating from `conversation.createdAt`.
  */
 export function resolveExecutionNodeElapsedMs(
-  node: Pick<ExecutionNode, 'run' | 'runNode'>,
+  node: Pick<ExecutionNode, 'run' | 'runNode' | 'summary'>,
   nowMs?: number,
 ): number | undefined {
   if (node.runNode !== undefined) return resolveNodeElapsedMs(node.runNode, nowMs)
   if (node.run !== undefined) return resolveRunElapsedMs(node.run, nowMs)
+  if (node.summary !== undefined) {
+    const timing = resolveConversationTiming(node.summary, nowMs)
+    if (timing.isRunning || timing.isBlocked) {
+      return timing.currentRunMs ?? timing.waitingMs
+    }
+  }
   return undefined
 }
 

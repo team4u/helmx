@@ -43,6 +43,7 @@ export interface ActiveTrayItem {
   progress?: { done: number; total: number }
   doing?: string
   startedAt?: number
+  pendingAskSince?: number
   canAbort: boolean
   canDetach: boolean
 }
@@ -55,6 +56,7 @@ export interface ActiveTraySummary {
   frontline: ExecutionFrontlineItem[]
   approvals: ExecutionApprovalItem[]
   earliestStartedAt?: number
+  earliestPendingAskSince?: number
 }
 
 function isExecutionNodeActive(node: ExecutionNode): boolean {
@@ -68,11 +70,28 @@ function isExecutionNodeActive(node: ExecutionNode): boolean {
 }
 
 function nodeStartedAt(node: ExecutionNode): number | undefined {
-  const candidates = [node.run?.createdAt, node.runNode?.startedAt]
+  const candidates = [node.run?.createdAt, node.runNode?.startedAt, node.summary?.runStartedAt]
   for (const ts of candidates) {
     if (typeof ts === 'number' && Number.isFinite(ts) && ts > 0) return ts
   }
   return undefined
+}
+
+function nodePendingAskSince(node: ExecutionNode): number | undefined {
+  let earliest: number | undefined
+  const visit = (cur: ExecutionNode): void => {
+    const isNodeBlocked =
+      cur.status === 'blocked' ||
+      cur.summary?.status === 'blocked' ||
+      (cur.summary?.pendingAskCount ?? 0) > 0
+    const ts = isNodeBlocked ? cur.summary?.pendingAskSince : undefined
+    if (typeof ts === 'number' && Number.isFinite(ts) && ts > 0) {
+      if (earliest === undefined || ts < earliest) earliest = ts
+    }
+    for (const child of cur.children) visit(child)
+  }
+  visit(node)
+  return earliest
 }
 
 function nodeProgressOf(node: ExecutionNode): { done: number; total: number } | undefined {
@@ -136,6 +155,7 @@ export function buildActiveTraySummary(
   let runningCount = 0
   let blockedCount = 0
   let earliestStartedAt: number | undefined
+  let earliestPendingAskSince: number | undefined
 
   const items: ActiveTrayItem[] = activeNodes.map((node) => {
     const isBlocked =
@@ -148,6 +168,13 @@ export function buildActiveTraySummary(
     const startedAt = nodeStartedAt(node)
     if (startedAt !== undefined && (earliestStartedAt === undefined || startedAt < earliestStartedAt)) {
       earliestStartedAt = startedAt
+    }
+    const pendingAskSince = isBlocked ? nodePendingAskSince(node) : undefined
+    if (
+      pendingAskSince !== undefined &&
+      (earliestPendingAskSince === undefined || pendingAskSince < earliestPendingAskSince)
+    ) {
+      earliestPendingAskSince = pendingAskSince
     }
 
     const frontlineItem = collectExecutionFrontline([node], 1, locale)[0]
@@ -209,6 +236,7 @@ export function buildActiveTraySummary(
       ...(progress !== undefined ? { progress } : {}),
       ...(doing !== undefined ? { doing } : {}),
       ...(startedAt !== undefined ? { startedAt } : {}),
+      ...(pendingAskSince !== undefined ? { pendingAskSince } : {}),
       canAbort: node.run?.status === 'running',
       canDetach: node.run !== undefined && canDetachForegroundRun(node.run, input.viewer),
     }
@@ -222,5 +250,6 @@ export function buildActiveTraySummary(
     frontline: collectExecutionFrontline(activeNodes, 2, locale),
     approvals: collectExecutionApprovals(activeNodes, 2, locale),
     ...(earliestStartedAt !== undefined ? { earliestStartedAt } : {}),
+    ...(earliestPendingAskSince !== undefined ? { earliestPendingAskSince } : {}),
   }
 }

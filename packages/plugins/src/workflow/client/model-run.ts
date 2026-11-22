@@ -424,32 +424,136 @@ export function formatWorkflowNodeStats(node: WorkflowNodeState): string[] {
   return segments
 }
 
+function finiteNonNegative(value: number | undefined): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+}
+
 export function resolveRunElapsedMs(
-  run: Pick<WorkflowRunSummary, 'status' | 'createdAt' | 'updatedAt'>,
+  run: Pick<WorkflowRunSummary, 'status' | 'createdAt' | 'updatedAt' | 'settledAt'>,
   nowMs?: number,
 ): number | undefined {
   if (
     run.status === 'running' &&
-    nowMs !== undefined && Number.isFinite(nowMs) &&
-    Number.isFinite(run.createdAt) && nowMs >= run.createdAt
+    nowMs !== undefined &&
+    Number.isFinite(nowMs) &&
+    Number.isFinite(run.createdAt)
   ) {
-    return nowMs - run.createdAt
+    return Math.max(0, nowMs - run.createdAt)
   }
-  const settled = run.updatedAt - run.createdAt
+  const endAt = run.settledAt ?? run.updatedAt
+  const settled = endAt - run.createdAt
   return Number.isFinite(settled) && settled >= 0 ? settled : undefined
 }
 
 export function resolveNodeElapsedMs(
-  node: Pick<WorkflowNodeState, 'status' | 'startedAt' | 'durationMs'>,
+  node: Pick<WorkflowNodeState, 'status' | 'startedAt' | 'settledAt' | 'durationMs'>,
   nowMs?: number,
 ): number | undefined {
   if (node.status === 'running') {
     return node.startedAt !== undefined && Number.isFinite(node.startedAt) &&
-      nowMs !== undefined && Number.isFinite(nowMs) && nowMs >= node.startedAt
-      ? nowMs - node.startedAt
+      nowMs !== undefined && Number.isFinite(nowMs)
+      ? Math.max(0, nowMs - node.startedAt)
       : undefined
   }
-  return node.durationMs !== undefined && Number.isFinite(node.durationMs) && node.durationMs >= 0
-    ? node.durationMs
-    : undefined
+  if (node.durationMs !== undefined) {
+    return Number.isFinite(node.durationMs) && node.durationMs >= 0 ? node.durationMs : undefined
+  }
+  if (
+    finiteNonNegative(node.startedAt) &&
+    finiteNonNegative(node.settledAt) &&
+    node.settledAt >= node.startedAt
+  ) {
+    return node.settledAt - node.startedAt
+  }
+  return undefined
+}
+
+/**
+ * Derive a phase section's wall-clock elapsed time strictly from real node boundaries:
+ * - while any node is running (or the section itself is running), `max(0, nowMs - min(startedAt))`;
+ * - when all nodes have settled, `max(settledAt ?? (startedAt + durationMs)) - min(startedAt)`;
+ * - when valid boundaries are missing, honestly returns `undefined` (never fabricated).
+ */
+export function resolvePhaseElapsedMs(
+  section: Pick<WorkflowPhaseSection, 'status' | 'nodes'>,
+  nowMs?: number,
+): number | undefined {
+  if (section.nodes.length === 0) return undefined
+  let minStartedAt: number | undefined
+  for (const node of section.nodes) {
+    if (finiteNonNegative(node.startedAt)) {
+      if (minStartedAt === undefined || node.startedAt < minStartedAt) {
+        minStartedAt = node.startedAt
+      }
+    }
+  }
+  if (minStartedAt === undefined) return undefined
+
+  const hasRunning = section.nodes.some((n) => n.status === 'running')
+  if (hasRunning || section.status === 'running') {
+    return finiteNonNegative(nowMs) ? Math.max(0, nowMs - minStartedAt) : undefined
+  }
+
+  const allSettled = section.nodes.every(
+    (n) => n.status === 'done' || n.status === 'failed' || n.status === 'skipped',
+  )
+  if (!allSettled) return undefined
+
+  let maxEndedAt: number | undefined
+  for (const node of section.nodes) {
+    const endedAt = finiteNonNegative(node.settledAt)
+      ? node.settledAt
+      : finiteNonNegative(node.startedAt) && finiteNonNegative(node.durationMs)
+        ? node.startedAt + node.durationMs
+        : undefined
+    if (endedAt !== undefined && (maxEndedAt === undefined || endedAt > maxEndedAt)) {
+      maxEndedAt = endedAt
+    }
+  }
+  if (maxEndedAt === undefined || maxEndedAt < minStartedAt) return undefined
+  return maxEndedAt - minStartedAt
+}
+
+export interface WorkflowTimingSummary {
+  wallElapsedMs?: number
+  nodeTotalDurationMs?: number
+  measuredNodeCount: number
+  startedAt?: number
+  settledAt?: number
+}
+
+/**
+ * Summarize end-to-end wall-clock elapsed time vs cumulative node compute time
+ * (including parallel overlap) and start/finish timestamps for Tooltip display.
+ */
+export function summarizeWorkflowTiming(
+  run: Pick<WorkflowRunSummary, 'status' | 'createdAt' | 'updatedAt' | 'settledAt' | 'nodes'>,
+  nowMs?: number,
+): WorkflowTimingSummary {
+  const wallElapsedMs = resolveRunElapsedMs(run, nowMs)
+  let nodeTotal = 0
+  let measuredNodeCount = 0
+  for (const node of run.nodes ?? []) {
+    const elapsed = resolveNodeElapsedMs(node, nowMs)
+    if (elapsed !== undefined) {
+      nodeTotal += elapsed
+      measuredNodeCount += 1
+    }
+  }
+  const startedAt = finiteNonNegative(run.createdAt) && run.createdAt > 0 ? run.createdAt : undefined
+  const settledAnchor =
+    run.status !== 'running'
+      ? (finiteNonNegative(run.settledAt) && run.settledAt > 0
+          ? run.settledAt
+          : finiteNonNegative(run.updatedAt) && run.updatedAt > 0
+            ? run.updatedAt
+            : undefined)
+      : undefined
+  return {
+    ...(wallElapsedMs !== undefined ? { wallElapsedMs } : {}),
+    ...(measuredNodeCount > 0 ? { nodeTotalDurationMs: nodeTotal } : {}),
+    measuredNodeCount,
+    ...(startedAt !== undefined ? { startedAt } : {}),
+    ...(settledAnchor !== undefined ? { settledAt: settledAnchor } : {}),
+  }
 }

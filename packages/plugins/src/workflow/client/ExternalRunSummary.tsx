@@ -5,14 +5,26 @@
  * action (detach).
  */
 import type { ReactNode } from 'react'
-import { StatusLight, formatDurationMs, usePluginContext, usePluginLocale, usePluginTranslator } from '@helmx/plugin-client'
+import {
+  StatusLight,
+  formatDurationMs,
+  formatStopwatchMs,
+  usePluginContext,
+  usePluginLocale,
+  usePluginTranslator,
+} from '@helmx/plugin-client'
 import type { WorkflowRunSummary } from '../../contracts.js'
 import { useElapsedNowMs } from './hooks.ts'
 import { Icon } from './WorkflowIcon.tsx'
 import { isPlaceholderNodeLabel, isPlaceholderRunName } from './model-format.ts'
 import { executionLightStatus } from './model-execution-status.ts'
 import { subagentBadge, runFailureFallbackLabel } from './model-subagent-card.ts'
-import { canDetachForegroundRun, resolveRunElapsedMs, type DetachViewerScope } from './model-run.ts'
+import {
+  canDetachForegroundRun,
+  resolveNodeElapsedMs,
+  resolveRunElapsedMs,
+  type DetachViewerScope,
+} from './model-run.ts'
 import {
   ACTION_DETACH,
   ACTION_DETACH_EXTERNAL_ARIA,
@@ -56,8 +68,8 @@ export function ExternalRunSummary(props: {
   const active = badge.status === 'working'
   const failedState = badge.status === 'error'
   // Run total duration: advances with the stopwatch while running, freezes at
-  // createdAt → updatedAt when finished; omitted honestly without run data.
-  const nowMs = useElapsedNowMs(active && run?.status === 'running')
+  // createdAt → settledAt/updatedAt when finished; omitted honestly without run data.
+  const nowMs = useElapsedNowMs((active && run?.status === 'running') || running > 0)
   const elapsedMs = run !== undefined ? resolveRunElapsedMs(run, nowMs) : undefined
   const primaryTitle =
     run !== undefined && !isPlaceholderRunName(run.name, run.id)
@@ -90,7 +102,9 @@ export function ExternalRunSummary(props: {
           )
         })()}
         {elapsedMs !== undefined ? (
-          <span className="subagent-live-elapsed tabular-nums">{formatDurationMs(elapsedMs)}</span>
+          <span className="subagent-live-elapsed tabular-nums">
+            {run?.status === 'running' ? formatStopwatchMs(elapsedMs) : formatDurationMs(elapsedMs)}
+          </span>
         ) : null}
         {run !== undefined && canDetachForegroundRun(run, props.viewer) ? (
           <button
@@ -113,13 +127,21 @@ export function ExternalRunSummary(props: {
       <div className="subagent-live-stream subagent-external-body">
         {nodes.length > 0 ? (
           <div className="workflow-node-list">
-            {nodes.map((n) => (
-              <div key={n.id} className="workflow-node-line">
-                <StatusLight status={n.status} label={nodeStatusLabel(n.status, locale)} />
-                <span className="workflow-node-label">{n.label ?? n.id}</span>
-                {n.executionId !== undefined ? <span className="subagent-external-exec">{n.executionId}</span> : null}
-              </div>
-            ))}
+            {nodes.map((n) => {
+              const nodeElapsedMs = resolveNodeElapsedMs(n, nowMs)
+              return (
+                <div key={n.id} className="workflow-node-line">
+                  <StatusLight status={n.status} label={nodeStatusLabel(n.status, locale)} />
+                  <span className="workflow-node-label">{n.label ?? n.id}</span>
+                  {n.executionId !== undefined ? <span className="subagent-external-exec">{n.executionId}</span> : null}
+                  {nodeElapsedMs !== undefined ? (
+                    <span className="workflow-node-elapsed mono tabular-nums">
+                      {n.status === 'running' ? formatStopwatchMs(nodeElapsedMs) : formatDurationMs(nodeElapsedMs)}
+                    </span>
+                  ) : null}
+                </div>
+              )
+            })}
           </div>
         ) : (
           <div className="subagent-stream-line subagent-stream-empty">
