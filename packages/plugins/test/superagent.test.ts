@@ -23,6 +23,7 @@ import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/provid
 
 import {
   HelmxError,
+  NODE_ID_PATTERN,
   validateOrThrow,
   type PluginClientContext as PluginClientContextType,
   type ToolViewProps,
@@ -635,7 +636,7 @@ test('superagent9: dispatch_worker 非阻塞——立即返回、worker 标签/p
     assert.equal(kernel.getConversationOwnership(dispatched.workerConversationId), 'helmx')
     assert.equal(((await readDocRaw(env, 'index')) as { workers: unknown[] }).workers.length, 1)
 
-    // 禁止派生中枢/看门狗（自激防护）；Profile 不存在显式拒绝
+    // 禁止派生中枢/看门狗（自激防护）；Profile 不存在显式拒绝；非法 nodeId 统一按 NODE_ID_PATTERN 拒绝
     await assert.rejects(
       () => kernel.plugins.invokeAction('builtin:superagent', 'dispatch_worker', { prompt: 'x', profileId: 'superagent' }),
       (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && /自激/.test(err.message),
@@ -643,6 +644,14 @@ test('superagent9: dispatch_worker 非阻塞——立即返回、worker 标签/p
     await assert.rejects(
       () => kernel.plugins.invokeAction('builtin:superagent', 'dispatch_worker', { prompt: 'x', profileId: 'no-such-profile' }),
       (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && /不存在/.test(err.message),
+    )
+    const dispatchMeta = kernel.plugins.listActions().find((a) => a.pluginId === 'builtin:superagent' && a.id === 'dispatch_worker')
+    const nodeIdSchema = (dispatchMeta?.inputSchema['properties'] as Record<string, Record<string, unknown>> | undefined)?.['nodeId']
+    assert.equal(nodeIdSchema?.['pattern'], NODE_ID_PATTERN)
+    assert.equal(nodeIdSchema?.['maxLength'], 128)
+    await assert.rejects(
+      () => kernel.plugins.invokeAction('builtin:superagent', 'dispatch_worker', { prompt: 'x', nodeId: '-invalid-node', cwd: '/srv/x' }),
+      (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
     )
 
     // 先等首个 Worker 回合结束，再等其汇报卡在中枢真实落库并结算（faux 队列确定性消耗）。

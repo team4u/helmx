@@ -9,7 +9,14 @@
  * or an injected user text is returned as the member's reply summary.
  */
 
-import { HelmxError, isAbsoluteAgentPath, redactJsonValue, type HelmxHostApi } from '@helmx/protocol'
+import {
+  HelmxError,
+  NODE_ID_PATTERN,
+  isAbsoluteAgentPath,
+  isValidNodeId,
+  redactJsonValue,
+  type HelmxHostApi,
+} from '@helmx/protocol'
 
 /** Last assistant text across entries (newest first, message-role checked; '' when none). */
 export function lastAssistantText(entries: Array<{ kind?: string; model?: unknown }>): string {
@@ -86,15 +93,15 @@ export function assertWorkerCwd(value: string): string {
   return trimmed
 }
 
-/** Worker 绑定节点：非空 1..64 字符、无空白、无路径分隔符。 */
+/** Worker 绑定节点：匹配 `@helmx/protocol` 权威 `NODE_ID_PATTERN`（1..128 字符，含 `'local'`）。 */
 export function assertWorkerNodeId(value: string): string {
-  const trimmed = value.trim()
-  if (trimmed === '' || trimmed.length > 64 || /\s|[/\\]/.test(trimmed)) {
+  const trimmed = typeof value === 'string' ? value.trim() : ''
+  if (!isValidNodeId(trimmed)) {
     throw new HelmxError(
       'validation_error',
-      `nodeId 非法（非空 1..64 字符，不含空白与路径分隔符，收到：${value}）`,
+      `nodeId 非法（需匹配 ${NODE_ID_PATTERN}，收到：${String(value)}）`,
       400,
-      {},
+      { nodeId: value },
     )
   }
   return trimmed

@@ -10,7 +10,7 @@ Swarm 在会话里提供一个共享看板。主控会话负责分工，成员�
 helmx swarm create-group --conversation-id 42 --title '检查导出模块' --json
 ```
 
-主控分配具体任务，协调接口和分支合入。成员可单独指定 Profile、模型、思考档位和频道；成员默认已订阅 `main`，仅在需要 `#频道名` 多播时先通过 `create_group` 或 `manage_channel` 创建子频道再派工订阅。并发写代码的成员应各有独立的 Git worktree。Swarm 通过 `builtin:worktree` 分配工作树，并在协作期间持有租约，避免被清理。`readonly` 是任务约定，成员仍保有原来的工具权限。 [Git Worktree 的隔离范围](../workflows/worktree-and-gate.md)
+主控分配具体任务，协调接口和分支合入。成员可单独指定 Profile、目标计算节点（`nodeId`）、工作目录（`cwd`）、模型、思考档位和频道；`nodeId` 覆盖 Profile 与主控所在节点（显式传 `local` 可切回 Hub 本机），远端节点必须提供 `cwd` 或匹配的 Profile `cwd`，且节点离线时在创建会话前即返回 `409 node_offline`。成员默认已订阅 `main`，仅在需要 `#频道名` 多播时先通过 `create_group` 或 `manage_channel` 创建子频道再派工订阅。并发写代码的成员应各有独立的 Git worktree；注意主控本机的 `git merge` 仅适用于同节点上的工作树，跨节点工作树需在各自节点上处理合入。Swarm 通过 `builtin:worktree` 分配工作树，并在协作期间持有租约，避免被清理。`readonly` 是任务约定，成员仍保有原来的工具权限。 [Git Worktree 的隔离范围](../workflows/worktree-and-gate.md)
 
 ## 看板消息
 
@@ -33,7 +33,7 @@ helmx swarm create-group --conversation-id 42 --title '检查导出模块' --jso
 
 ## 结单和清理
 
-默认结单会先确认成员已停止，再检查工作树。发现未提交改动或未合入提交时，返回 `swarm_worktree_unmerged`。用 `keepWorktree: true` 结单会释放租约，保留有改动或尚未合入的工作树，并在 `retainedWorktrees` 里列出路径和分支。通过清理检查的其他工作树仍会被清理。`force: true` 结单只放开脏/未合入守卫（放弃未合入内容直接收尾）；占用（租约、在跑成员、进程扫描）、归属与锁定校验依旧拒绝。结单后可以在同一会话开始新组。
+默认结单会先确认成员已停止，再检查工作树。发现未提交改动或未合入提交时，返回 `swarm_worktree_unmerged`。用 `keepWorktree: true` 结单会释放租约，保留有改动或尚未合入的工作树，并在 `retainedWorktrees` 里列出节点（`nodeId`）、路径和分支。通过清理检查的其他工作树仍会被清理。`force: true` 结单只放开脏/未合入守卫（放弃未合入内容直接收尾）；占用（租约、在跑成员、进程扫描）、归属与锁定校验依旧拒绝。结单后可以在同一会话开始新组。
 
 需要停止整个协作组时，用 `--abort-running` 中止在跑的成员。把环境变量 `group_id` 设为建组命令返回的 `groupId`。
 
@@ -48,7 +48,7 @@ helmx swarm close-group --group-id "$group_id" --abort-running --keep-worktree
 | `create_group` | `swarm_create_group` | `helmx swarm create-group` | 在顶层会话建立协作组 |
 | `update_group` | `swarm_update_group` | `helmx swarm update-group` | 改标题或目标 |
 | `manage_channel` | `swarm_manage_channel` | `helmx swarm channel` | 创建、订阅、退订或归档子频道。`main` 不可退订或归档 |
-| `dispatch_worker` | `swarm_dispatch_worker` | `helmx swarm dispatch-worker` | 派工并唤醒成员。可选 worktree、会话分叉和模型 |
+| `dispatch_worker` | `swarm_dispatch_worker` | `helmx swarm dispatch-worker` | 派工并唤醒成员。可选目标节点（`nodeId`）、工作目录（`cwd`）、worktree、会话分叉和模型 |
 | `board_post` | `swarm_board_post` | `helmx swarm board-post` | 发消息，指定收件人和是否唤醒 |
 | `board_read` | `swarm_board_read` | `helmx swarm board-read` | 分页读消息 |
 | `board_status` | `swarm_board_status` | `helmx swarm board-status` | 查组和成员状态，包括历史编组 |

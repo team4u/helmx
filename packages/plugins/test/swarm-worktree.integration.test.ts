@@ -232,12 +232,13 @@ describe('builtin:swarm worktree isolation, handoff & close_group recovery', () 
         { conversationId: coord.id },
       )) as {
         closed: boolean
-        retainedWorktrees: Array<{ memberName: string; worktreeId: string; branch: string; path: string; commitsAhead: number }>
+        retainedWorktrees: Array<{ memberName: string; nodeId: string; worktreeId: string; branch: string; path: string; commitsAhead: number }>
       }
       assert.equal(closed.closed, true)
       assert.equal(closed.retainedWorktrees.length, 1)
       const retained = closed.retainedWorktrees[0]!
       assert.equal(retained.memberName, 'author')
+      assert.equal(retained.nodeId, 'local')
       assert.equal(retained.commitsAhead, 1)
       assert.ok(existsSync(join(retained.path, 'feature.txt')))
       assert.equal(kernel.getConversation(coord.id).tags.includes(COORDINATOR_TAG), false, 'coordinator must drop swarm-coordinator tag')
@@ -332,16 +333,18 @@ describe('builtin:swarm worktree isolation, handoff & close_group recovery', () 
       )) as BoardViewDoc
       assert.equal(statusAfterArchive.group.retainedWorktrees?.length, 1)
       assert.equal(statusAfterArchive.group.retainedWorktrees?.[0]?.worktreeId, keptWorker.worktreeId)
+      assert.equal(statusAfterArchive.group.retainedWorktrees?.[0]?.nodeId, 'local')
 
       const secondClose = (await kernel.plugins.invokeAction(
         SWARM_PLUGIN_ID,
         'close_group',
         { groupId: recreated.groupId },
         { conversationId: coord.id },
-      )) as { closed: boolean; retainedWorktrees: Array<{ worktreeId: string; memberName: string }> }
+      )) as { closed: boolean; retainedWorktrees: Array<{ worktreeId: string; memberName: string; nodeId: string }> }
       assert.equal(secondClose.closed, true)
       assert.equal(secondClose.retainedWorktrees.length, 1, 'close_group must preserve retainedWorktrees recorded by archive_worker({ keepWorktree: true })')
       assert.equal(secondClose.retainedWorktrees[0]?.worktreeId, keptWorker.worktreeId)
+      assert.equal(secondClose.retainedWorktrees[0]?.nodeId, 'local')
       await kernel.plugins.invokeAction(WORKTREE_ID, 'cleanup_worktree', { worktreeId: keptWorker.worktreeId, force: true })
       assert.equal(kernel.getConversation(coord.id).tags.includes(ARCHIVED_COORDINATOR_TAG), true, 'closing again re-swaps to the history tag')
 

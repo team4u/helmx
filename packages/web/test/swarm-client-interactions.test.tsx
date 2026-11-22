@@ -955,7 +955,7 @@ describe("swarm-client-interactions", () => {
     const closedBoard = boardViewFixture()
     ;((closedBoard.group as { status: string })).status = 'closed'
     ;(closedBoard.group as { retainedWorktrees?: unknown[] }).retainedWorktrees = [
-      { memberName: 'author', worktreeId: 'wt-author-1', branch: 'helmx/author', path: '/repo-wt/author', commitsAhead: 2 },
+      { memberName: 'author', nodeId: 'local', worktreeId: 'wt-author-1', branch: 'helmx/author', path: '/repo-wt/author', commitsAhead: 2 },
     ]
     setStubState({ docs: { index: closedIndex, 'board-badges': { byConversation: {} } } })
 

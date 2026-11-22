@@ -8,8 +8,9 @@
  */
 import { after, describe, test } from 'node:test'
 import assert from 'node:assert/strict'
+import { mkdirSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { dirname, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
@@ -517,15 +518,36 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
           ),
         (err: unknown) => err instanceof HelmxError && err.code === 'unsupported_runtime' && err.status === 400,
       )
+      // Invalid nodeId format rejects 400 validation_error; remote nodeId without cwd rejects 400 validation_error; offline remote nodeId with cwd rejects 409 node_offline
       await assert.rejects(
         () =>
           kernel.plugins.invokeAction(
             SWARM_PLUGIN_ID,
             'dispatch_worker',
-            { groupId, name: 'badnode', prompt: 'Should fail', nodeId: 'nonexistent-node' },
+            { groupId, name: 'badnode', prompt: 'Should fail', nodeId: '../bad-node' },
             { conversationId: coord.id },
           ),
         (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
+      )
+      await assert.rejects(
+        () =>
+          kernel.plugins.invokeAction(
+            SWARM_PLUGIN_ID,
+            'dispatch_worker',
+            { groupId, name: 'nocwdnode', prompt: 'Should fail', nodeId: 'nonexistent-node' },
+            { conversationId: coord.id },
+          ),
+        (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
+      )
+      await assert.rejects(
+        () =>
+          kernel.plugins.invokeAction(
+            SWARM_PLUGIN_ID,
+            'dispatch_worker',
+            { groupId, name: 'offlinenode', prompt: 'Should fail', nodeId: 'nonexistent-node', cwd: '/remote/work' },
+            { conversationId: coord.id },
+          ),
+        (err: unknown) => err instanceof HelmxError && err.code === 'node_offline' && err.status === 409,
       )
 
       env.faux.setResponses([
@@ -1111,6 +1133,258 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
       assert.match(closeRetainedView.container.textContent ?? '', /2 branches kept for merge/)
     } finally {
       closeRetainedView.unmount()
+    }
+  })
+
+  test('swarm-int17: dynamic nodeId dispatch on online remote node (inherit), peer forkFrom, explicit local override, offline 409, missing cwd 400, and restrictToCwd 403', { timeout: 60_000 }, async (t) => {
+    const root = useTempDir(t, 'helmx-swarm-dyn-node-')
+    const env = await openSwarmEnv(root, gitTemplate)
+    const remoteWorkDir = join(root, 'remote-workspace')
+    const remoteHomeDir = join(root, 'remote-home')
+    const remoteTmpDir = join(root, 'remote-tmp')
+    mkdirSync(remoteWorkDir, { recursive: true })
+    mkdirSync(remoteHomeDir, { recursive: true })
+    mkdirSync(remoteTmpDir, { recursive: true })
+
+    let closedSocket = false
+    const listeners = new Map<string, Array<(...args: unknown[]) => void>>()
+    const fakeSocket = {
+      OPEN: 1,
+      CLOSED: 3,
+      get readyState() {
+        return closedSocket ? 3 : 1
+      },
+      once(event: string, fn: (...args: unknown[]) => void) {
+        const arr = listeners.get(event) ?? []
+        arr.push(fn)
+        listeners.set(event, arr)
+        return this
+      },
+      close() {
+        if (closedSocket) return
+        closedSocket = true
+        for (const fn of listeners.get('close') ?? []) fn()
+        listeners.clear()
+      },
+    }
+
+    try {
+      const { kernel } = env.app
+      const issued = await kernel.issueNodeToken('remote-box')
+      const notFoundRpc = async () => ({ ok: false as const, error: { code: 'not_found' as const, message: 'ENOENT' } })
+      const reg = await kernel.envFabric.registry.register(
+        fakeSocket as never,
+        {
+          nodeId: 'remote-box',
+          token: issued.token,
+          hostname: 'remote-box.test',
+          platform: 'linux',
+        },
+        () =>
+          ({
+            nodeHostEnv: async () => ({
+              ok: true,
+              value: {
+                platform: 'linux',
+                homeDir: remoteHomeDir,
+                tempDir: remoteTmpDir,
+                env: {},
+              },
+            }),
+            envCanonicalPath: notFoundRpc,
+            envFileInfo: notFoundRpc,
+            envListDir: notFoundRpc,
+            envOpenDirReader: notFoundRpc,
+            envOpenBinaryReader: notFoundRpc,
+            envOpenTextLineReader: notFoundRpc,
+            envExists: async () => ({ ok: true, value: false }),
+            $close: () => {},
+          }) as never,
+      )
+      assert.equal(reg.accepted, true)
+      assert.equal(kernel.envFabric.isOnline('remote-box'), true)
+
+      const coord = await kernel.createConversation({ title: 'Multi-Node Coord', profileId: 'assistant', cwd: env.repoDir })
+      const { groupId } = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
+        title: 'Multi-Node Squad',
+        conversationId: coord.id,
+      })) as { groupId: string }
+
+      // 1) Remote nodeId without cwd rejects 400 validation_error with zero conversations created
+      const convCountBeforeErrors = kernel.listConversations().length
+      await assert.rejects(
+        () =>
+          kernel.plugins.invokeAction(
+            SWARM_PLUGIN_ID,
+            'dispatch_worker',
+            { groupId, name: 'nocwd', prompt: 'Missing remote cwd', nodeId: 'remote-box', isolation: 'inherit' },
+            { conversationId: coord.id },
+          ),
+        (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
+      )
+      assert.equal(kernel.listConversations().length, convCountBeforeErrors)
+
+      // 2) Offline remote nodeId rejects 409 node_offline BEFORE creating any conversation
+      await assert.rejects(
+        () =>
+          kernel.plugins.invokeAction(
+            SWARM_PLUGIN_ID,
+            'dispatch_worker',
+            { groupId, name: 'offlinew', prompt: 'Offline node', nodeId: 'offline-box', cwd: '/srv/offline', isolation: 'inherit' },
+            { conversationId: coord.id },
+          ),
+        (err: unknown) => err instanceof HelmxError && err.code === 'node_offline' && err.status === 409,
+      )
+      assert.equal(kernel.listConversations().length, convCountBeforeErrors, 'offline preflight must leave zero orphan conversations')
+
+      // 3) Online remote node dispatch succeeds with isolation: 'inherit'
+      setSwarmRoleResponses(env.faux, {
+        remoter: [
+          fauxAssistantMessage([fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', body: 'Remote task complete' })], { stopReason: 'toolUse' }),
+          fauxAssistantMessage('Remote worker settled.'),
+        ],
+        remote_fork: [
+          fauxAssistantMessage([fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', body: 'Remote fork complete' })], { stopReason: 'toolUse' }),
+          fauxAssistantMessage('Remote fork settled.'),
+        ],
+        local_switch: [
+          fauxAssistantMessage([fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', body: 'Switched back to local' })], { stopReason: 'toolUse' }),
+          fauxAssistantMessage('Local switch settled.'),
+        ],
+        coordinator: [
+          fauxAssistantMessage('Coordinator noted remote completion.'),
+          fauxAssistantMessage('Coordinator noted remote fork.'),
+          fauxAssistantMessage('Coordinator noted local switch.'),
+        ],
+      })
+
+      const remoter = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'dispatch_worker',
+        { groupId, name: 'remoter', prompt: 'Run on remote-box', nodeId: 'remote-box', cwd: remoteWorkDir, isolation: 'inherit' },
+        { conversationId: coord.id },
+      )) as { workerConversationId: number }
+      await kernel.waitForIdle(remoter.workerConversationId)
+      await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+      await kernel.waitForIdle(coord.id)
+
+      const remoterConv = kernel.getConversation(remoter.workerConversationId)
+      assert.equal(remoterConv.nodeId, 'remote-box')
+      assert.equal(remoterConv.cwd, remoteWorkDir)
+
+      // 4) forkFrom: '<remotePeer>' inherits peer's (nodeId, cwd) while keeping flat parentConversationId -> coordinator
+      const remoteFork = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'dispatch_worker',
+        { groupId, name: 'remote_fork', prompt: 'Continue on same remote node', forkFrom: 'remoter', isolation: 'inherit' },
+        { conversationId: coord.id },
+      )) as { workerConversationId: number }
+      await kernel.waitForIdle(remoteFork.workerConversationId)
+      await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+      await kernel.waitForIdle(coord.id)
+
+      const remoteForkConv = kernel.getConversation(remoteFork.workerConversationId)
+      assert.equal(remoteForkConv.parentConversationId, coord.id, 'forkFrom peer keeps flat coordinator parent')
+      assert.equal(remoteForkConv.nodeId, 'remote-box', 'forkFrom peer inherits peer nodeId')
+      assert.equal(remoteForkConv.cwd, remoteWorkDir, 'forkFrom peer inherits peer cwd')
+
+      // 5) forkFrom: '<remotePeer>' with explicit nodeId: 'local' switches back to Hub host without leaking remote cwd
+      const localSwitch = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'dispatch_worker',
+        { groupId, name: 'local_switch', prompt: 'Switch back to Hub local', forkFrom: 'remoter', nodeId: 'local', isolation: 'inherit' },
+        { conversationId: coord.id },
+      )) as { workerConversationId: number }
+      await kernel.waitForIdle(localSwitch.workerConversationId)
+      await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+      await kernel.waitForIdle(coord.id)
+
+      const localSwitchConv = kernel.getConversation(localSwitch.workerConversationId)
+      assert.equal(localSwitchConv.nodeId, 'local')
+      assert.equal(localSwitchConv.cwd, env.repoDir, 'explicit local nodeId must not leak remote peer cwd')
+
+      // Verify board_status reflects real member nodeIds
+      const status = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'board_status', { groupId }, { conversationId: coord.id })) as BoardViewDoc
+      assert.equal(status.members.find((m) => m.name === 'remoter')?.nodeId, 'remote-box')
+      assert.equal(status.members.find((m) => m.name === 'remote_fork')?.nodeId, 'remote-box')
+      assert.equal(status.members.find((m) => m.name === 'local_switch')?.nodeId, 'local')
+
+      await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'close_group', { groupId }, { conversationId: coord.id })
+
+      // 6) Profile.restrictToCwd coordinator blocks cross-node dispatch directly AND via unrestricted peer forkFrom (403 path_outside_workspace)
+      await kernel.services.profiles.save({
+        id: 'restricted-coord',
+        name: 'Restricted Coordinator',
+        restrictToCwd: true,
+      })
+      const restrictedCoord = await kernel.createConversation({
+        title: 'Restricted Coord',
+        profileId: 'restricted-coord',
+        cwd: env.repoDir,
+      })
+      const { groupId: restrictedGroupId } = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
+        title: 'Restricted Squad',
+        conversationId: restrictedCoord.id,
+      })) as { groupId: string }
+
+      const convCountBeforeRestricted = kernel.listConversations().length
+      await assert.rejects(
+        () =>
+          kernel.plugins.invokeAction(
+            SWARM_PLUGIN_ID,
+            'dispatch_worker',
+            { groupId: restrictedGroupId, name: 'escape_direct', prompt: 'Direct cross-node', nodeId: 'remote-box', cwd: remoteWorkDir, isolation: 'inherit' },
+            { conversationId: restrictedCoord.id },
+          ),
+        (err: unknown) => err instanceof HelmxError && err.code === 'path_outside_workspace' && err.status === 403,
+      )
+      assert.equal(kernel.listConversations().length, convCountBeforeRestricted)
+
+      // Seed a local unrestricted peer inside the restricted coordinator's workspace, then try escaping via forkFrom
+      setSwarmRoleResponses(env.faux, {
+        local_peer: [
+          fauxAssistantMessage([fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', body: 'Local peer done' })], { stopReason: 'toolUse' }),
+          fauxAssistantMessage('Local peer settled.'),
+        ],
+        coordinator: [fauxAssistantMessage('Restricted coord noted peer.')],
+      })
+      const localPeer = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'dispatch_worker',
+        { groupId: restrictedGroupId, name: 'local_peer', prompt: 'Work locally', profileId: 'assistant', isolation: 'inherit' },
+        { conversationId: restrictedCoord.id },
+      )) as { workerConversationId: number }
+      await kernel.waitForIdle(localPeer.workerConversationId)
+      await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+      await kernel.waitForIdle(restrictedCoord.id)
+
+      const countBeforePeerEscape = kernel.listConversations().length
+      await assert.rejects(
+        () =>
+          kernel.plugins.invokeAction(
+            SWARM_PLUGIN_ID,
+            'dispatch_worker',
+            { groupId: restrictedGroupId, name: 'escape_peer_node', prompt: 'Escape node via peer', forkFrom: 'local_peer', nodeId: 'remote-box', cwd: remoteWorkDir, isolation: 'inherit' },
+            { conversationId: restrictedCoord.id },
+          ),
+        (err: unknown) => err instanceof HelmxError && err.code === 'path_outside_workspace' && err.status === 403,
+      )
+      await assert.rejects(
+        () =>
+          kernel.plugins.invokeAction(
+            SWARM_PLUGIN_ID,
+            'dispatch_worker',
+            { groupId: restrictedGroupId, name: 'escape_peer_cwd', prompt: 'Escape cwd via peer', forkFrom: 'local_peer', cwd: remoteWorkDir, isolation: 'inherit' },
+            { conversationId: restrictedCoord.id },
+          ),
+        (err: unknown) => err instanceof HelmxError && err.code === 'path_outside_workspace' && err.status === 403,
+      )
+      assert.equal(kernel.listConversations().length, countBeforePeerEscape)
+
+      await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'close_group', { groupId: restrictedGroupId }, { conversationId: restrictedCoord.id })
+    } finally {
+      fakeSocket.close()
+      await env.close()
     }
   })
 })

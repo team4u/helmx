@@ -3,6 +3,7 @@ import type { AcquireWorktreeResult } from '../contracts.js'
 import {
   assertWorkerConversationId,
   assertWorkerCwd,
+  assertWorkerNodeId,
   recentEntrySummaries,
 } from '../entry-text.js'
 import {
@@ -49,6 +50,7 @@ export interface DispatchInput {
   effort?: string
   channels?: string[]
   title?: string
+  nodeId?: string
   cwd?: string
 }
 
@@ -202,6 +204,7 @@ export function createWorkerHandlers(
       )
     }
 
+    const requestedNodeId = input.nodeId === undefined ? undefined : assertWorkerNodeId(input.nodeId)
     const requestedCwd = input.cwd === undefined ? undefined : assertWorkerCwd(input.cwd)
     const model = input.model !== undefined && input.model.trim() !== '' ? input.model.trim() : undefined
     const effort = input.effort !== undefined && input.effort.trim() !== '' ? input.effort.trim() : undefined
@@ -338,14 +341,84 @@ export function createWorkerHandlers(
       let createdId: number | undefined
       let acquiredWorktreeId: string | undefined
       try {
+        const resolveBaseConversationId = sourceConversationId ?? admission.coordinatorConversationId
+        const isPeerFork =
+          sourceConversationId !== undefined && sourceConversationId !== admission.coordinatorConversationId
+        const activeCoordSummary =
+          readConversationOrUndefined(admission.coordinatorConversationId) ?? coordSummary
+        const coordProfileRecord =
+          isPeerFork && activeCoordSummary !== undefined
+            ? activeCoordSummary.profileId === targetProfile
+              ? profileRecord
+              : await ctx.host.profiles.get(activeCoordSummary.profileId)
+            : undefined
+        const coordRestricted = coordProfileRecord?.restrictToCwd === true
+        const coordNodeId = activeCoordSummary?.nodeId ?? 'local'
+        if (coordRestricted) {
+          const activeSourceSummary =
+            readConversationOrUndefined(sourceConversationId!) ?? sourceSummary
+          const forkSameProfile = activeSourceSummary?.profileId === targetProfile
+          const predictedNodeId =
+            requestedNodeId ??
+            (forkSameProfile
+              ? (activeSourceSummary?.nodeId ?? profileRecord.nodeId ?? 'local')
+              : (profileRecord.nodeId ?? activeSourceSummary?.nodeId ?? 'local'))
+          if (predictedNodeId !== coordNodeId) {
+            throw new HelmxError(
+              'path_outside_workspace',
+              `path_outside_workspace: resolved spawn target node '${predictedNodeId}' differs from coordinator conversation node '${coordNodeId}'; this conversation is restricted to its working directory (Profile.restrictToCwd)`,
+              403,
+              {
+                pluginId: SWARM_PLUGIN_ID,
+                coordinatorConversationId: admission.coordinatorConversationId,
+                resolvedNodeId: predictedNodeId,
+                coordinatorNodeId: coordNodeId,
+                ...(requestedNodeId !== undefined ? { requestedNodeId } : {}),
+              },
+            )
+          }
+        }
         const resolvedTarget = await ctx.host.resolveSpawnTarget({
-          parentConversationId: admission.coordinatorConversationId,
+          parentConversationId: resolveBaseConversationId,
           profileId: targetProfile,
+          ...(requestedNodeId !== undefined ? { requestNodeId: requestedNodeId } : {}),
           ...(requestedCwd !== undefined ? { requestCwd: requestedCwd } : {}),
           ...(sourceConversationId !== undefined ? { fork: true } : {}),
         })
+        if (coordRestricted) {
+          if (resolvedTarget.nodeId !== coordNodeId) {
+            throw new HelmxError(
+              'path_outside_workspace',
+              `path_outside_workspace: resolved spawn target node '${resolvedTarget.nodeId}' differs from coordinator conversation node '${coordNodeId}'; this conversation is restricted to its working directory (Profile.restrictToCwd)`,
+              403,
+              {
+                pluginId: SWARM_PLUGIN_ID,
+                coordinatorConversationId: admission.coordinatorConversationId,
+                resolvedNodeId: resolvedTarget.nodeId,
+                coordinatorNodeId: coordNodeId,
+                ...(requestedNodeId !== undefined ? { requestedNodeId } : {}),
+              },
+            )
+          }
+          if (requestedCwd !== undefined) {
+            await ctx.host.resolveSpawnTarget({
+              parentConversationId: admission.coordinatorConversationId,
+              profileId: targetProfile,
+              requestNodeId: resolvedTarget.nodeId,
+              requestCwd: requestedCwd,
+            })
+          }
+        }
         let finalNodeId = resolvedTarget.nodeId
         let finalCwd = resolvedTarget.sourceCwd
+        if (finalNodeId !== 'local' && !ctx.host.nodeIpc.isOnline(finalNodeId)) {
+          throw new HelmxError(
+            'node_offline',
+            `目标节点 '${finalNodeId}' 离线或未注册，无法派工`,
+            409,
+            { pluginId: SWARM_PLUGIN_ID, nodeId: finalNodeId },
+          )
+        }
         const workerTitle =
           input.title !== undefined && input.title.trim() !== ''
             ? input.title.trim().slice(0, 80)
@@ -389,8 +462,9 @@ export function createWorkerHandlers(
             'acquire_worktree',
             {
               conversationId: created.id,
-              parentConversationId: admission.coordinatorConversationId,
+              parentConversationId: resolveBaseConversationId,
               profileId: targetProfile,
+              ...(requestedNodeId !== undefined ? { requestNodeId: requestedNodeId } : {}),
               ...(requestedCwd !== undefined ? { requestCwd: requestedCwd } : {}),
               ...(sourceConversationId !== undefined ? { fork: true } : {}),
               hold: {
@@ -696,6 +770,7 @@ export function createWorkerHandlers(
           if (wtCheck.inspected.exists && (wtCheck.isDirty || wtCheck.unmergedCommits > 0)) {
             retainedEntry = {
               memberName: freshMember.name,
+              nodeId: freshMember.nodeId,
               worktreeId: wtCheck.worktreeId,
               branch: wtCheck.inspected.currentBranch ?? wtCheck.inspected.record.branch,
               path: wtCheck.inspected.record.path,

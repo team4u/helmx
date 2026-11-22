@@ -11,6 +11,7 @@
  *   默认停用注册零重模块解析开销。
  */
 import {
+  NODE_ID_PATTERN,
   type ConversationScope,
   type HelmxPluginContext,
   type JsonSchema,
@@ -61,7 +62,7 @@ const DISPATCH_INPUT_SCHEMA: Record<string, unknown> = {
     title: { type: 'string', minLength: 1, maxLength: 80 },
     threadKey: { type: 'string', minLength: 1, maxLength: 200 },
     cwd: { type: 'string', minLength: 1 },
-    nodeId: { type: 'string', minLength: 1, maxLength: 64, pattern: '^[^\\s/\\\\]+$' },
+    nodeId: { type: 'string', minLength: 1, maxLength: 128, pattern: NODE_ID_PATTERN },
   },
   required: ['prompt'],
   additionalProperties: false,

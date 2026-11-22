@@ -470,6 +470,7 @@ export function createGroupHandlers(
             if (inspected.exists && (inspected.dirtyFileCount > 0 || unmergedCommits > 0)) {
               retainedByWorktreeId.set(prev.worktreeId, {
                 memberName: prev.memberName,
+                nodeId: prev.nodeId,
                 worktreeId: prev.worktreeId,
                 branch: inspected.currentBranch ?? inspected.record.branch,
                 path: inspected.record.path,
@@ -492,6 +493,7 @@ export function createGroupHandlers(
           if (keepWorktree && (item.isDirty || item.unmergedCommits > 0)) {
             retainedByWorktreeId.set(item.worktreeId, {
               memberName: item.member.name,
+              nodeId: item.member.nodeId,
               worktreeId: item.worktreeId,
               branch: item.inspected.currentBranch ?? item.inspected.record.branch,
               path: item.inspected.record.path,
