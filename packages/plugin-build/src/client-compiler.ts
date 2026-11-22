@@ -321,7 +321,7 @@ async function compileAndPersist(
       logLevel: 'silent',
       plugins: [
         sharedShimPlugin(),
-        containmentPlugin(pluginId, rootReal, npmRoots),
+        containmentPlugin(pluginId, rootReal, entryReal, npmRoots),
         cssPolicyPlugin(pluginId),
       ],
     });
@@ -763,7 +763,9 @@ function resolveNpmSpecifier(
     const nmReal = realpathOrNull(join(root.packageRoot, 'node_modules'));
     if (nmReal === null) continue;
     const { pkg, sub } = splitNpmSpecifier(spec);
-    const pkgReal = realpathOrNull(join(nmReal, pkg));
+    const pkgCandidate = resolve(nmReal, pkg);
+    if (!isInside(nmReal, pkgCandidate)) continue;
+    const pkgReal = realpathOrNull(pkgCandidate);
     if (pkgReal === null) continue;
     const entry = resolveNpmPackageEntry(pkgReal, sub === '' ? pkg : `${pkg}/${sub}`);
     if (entry === null) continue;
@@ -821,17 +823,123 @@ function resolveNpmPackageEntry(pkgDir: string, spec: string): string | null {
     if (typeof rel !== 'string' || rel === '') continue;
     const abs = rel.startsWith('./') ? join(pkgDir, rel.slice(2)) : join(pkgDir, rel);
     const real = realpathOrNull(abs);
-    if (real !== null && existsSync(real)) return real;
+    if (real !== null && isInside(pkgDir, real) && existsSync(real)) return real;
+  }
+  return null;
+}
+
+function isRelativeSpecifier(spec: string): boolean {
+  return (
+    spec === '.' ||
+    spec === '..' ||
+    spec.startsWith('./') ||
+    spec.startsWith('../') ||
+    spec.startsWith('.\\') ||
+    spec.startsWith('..\\')
+  );
+}
+
+function isAbsoluteImport(spec: string): boolean {
+  return isAbsolute(spec) || isAbsoluteTargetPath(spec);
+}
+
+/** Returns true when `targetReal` lies under a `node_modules` directory nested inside `rootReal`. */
+function isInsideClientNodeModules(rootReal: string, targetReal: string): boolean {
+  const rel = relative(rootReal, targetReal);
+  if (rel === '' || rel.startsWith(`..${sep}`) || rel === '..' || isAbsolute(rel)) return false;
+  return rel.split(sep).includes('node_modules');
+}
+
+/** Returns true when `targetReal` is a local source file inside `rootReal` (excluding any nested `node_modules`). */
+function isInsideClientSource(rootReal: string, targetReal: string): boolean {
+  return isInside(rootReal, targetReal) && !isInsideClientNodeModules(rootReal, targetReal);
+}
+
+function isRegularFile(path: string): boolean {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Validates and resolves the canonical package directory of a transitive npm dependency imported by an
+ * already-authorized npm package. Rejects resolutions outside `node_modules`, missing `package.json`,
+ * or files escaping their owning package directory via symlinks.
+ */
+function resolveTransitiveNpmPackageDir(
+  specifier: string,
+  resolveDir: string,
+  resolvedPath: string,
+  fileReal: string,
+): string | null {
+  // 1. Verify via the lexical `node_modules/<pkg>` slot reachable from `resolveDir`.
+  //    Supports standard/pnpm layouts as well as symlinked workspace/`npm link` packages whose
+  //    realpath does not contain `node_modules`, while rejecting file-level symlink escapes and
+  //    non-`node_modules` tsconfig path aliases.
+  if (!specifier.startsWith('#') && resolveDir !== '') {
+    const { pkg } = splitNpmSpecifier(specifier);
+    const pkgParts = pkg.split('/').filter(Boolean);
+    const validPkg =
+      pkgParts.length > 0 &&
+      !pkgParts.some((part) => part === '.' || part === '..') &&
+      (pkg.startsWith('@') ? pkgParts.length === 2 && pkgParts[0]!.length > 1 : pkgParts.length === 1);
+    if (validPkg) {
+      let dir = resolve(resolveDir);
+      for (;;) {
+        const nmDir = join(dir, 'node_modules');
+        const pkgCandidate = resolve(nmDir, ...pkgParts);
+        if (isInside(nmDir, pkgCandidate)) {
+          const pkgReal = realpathOrNull(pkgCandidate);
+          if (pkgReal !== null && isInsideClientSource(pkgReal, fileReal) && isRegularFile(join(pkgReal, 'package.json'))) {
+            return pkgReal;
+          }
+        }
+        const parent = dirname(dir);
+        if (parent === dir) break;
+        dir = parent;
+      }
+    }
+  }
+  // 2. Fallback for `#imports` or `browser`-field remapped bare specifiers resolving inside `node_modules`.
+  const normalizedResolved = resolve(resolvedPath);
+  const nmMarker = `${sep}node_modules${sep}`;
+  if (!normalizedResolved.includes(nmMarker) && !fileReal.includes(nmMarker)) {
+    return null;
+  }
+  if (normalizedResolved.includes(nmMarker)) {
+    const lexicalPkgDir = findPackageDirOf(normalizedResolved);
+    if (lexicalPkgDir === null) return null;
+    const pkgReal = realpathOrNull(lexicalPkgDir);
+    if (pkgReal !== null && isInsideClientSource(pkgReal, fileReal) && isRegularFile(join(pkgReal, 'package.json'))) {
+      return pkgReal;
+    }
+    return null;
+  }
+  const realPkgDir = findPackageDirOf(fileReal);
+  if (realPkgDir !== null && isInsideClientSource(realPkgDir, fileReal) && isRegularFile(join(realPkgDir, 'package.json'))) {
+    return realPkgDir;
   }
   return null;
 }
 
 /**
  * Enforces `clientRoot` and controlled-npm realpath containment at resolve and load time.
+ *
+ * Security invariants:
+ * - Only the validated `entryReal` (`kind === 'entry-point'`) may resolve as an absolute path; all other
+ *   absolute imports (POSIX, Windows drive, UNC) are explicitly rejected.
+ * - `node_modules` access is strictly opt-in: top-level bare specifiers must be declared in `npmRoots`,
+ *   and transitive bare dependencies are only authorized when imported by an already-authorized npm
+ *   package and resolving inside a valid `node_modules` package with `package.json`.
+ * - `onLoad` performs zero auto-authorization: every loaded file must already lie inside `clientRoot`
+ *   source or `authorizedNpmDirs`.
  */
 function containmentPlugin(
   pluginId: string,
   rootReal: string,
+  entryReal: string,
   npmRoots: ReadonlyArray<ClientNpmRoot> = [],
 ): EsbuildPlugin {
   const authorizedNpmDirs = new Set<string>();
@@ -841,19 +949,131 @@ function containmentPlugin(
     authorizedNpmDirs.add(real);
     return real;
   };
-  const isNpmAuthorized = (realPath: string): boolean => {
+  /** Returns the most specific authorized npm package root directly owning `realPath` (excluding nested `node_modules`), or `null`. */
+  const authorizedNpmDirOf = (realPath: string): string | null => {
+    let best: string | null = null;
     for (const dir of authorizedNpmDirs) {
-      if (isInside(dir, realPath)) return true;
+      if (isInsideClientSource(dir, realPath) && (best === null || dir.length > best.length)) {
+        best = dir;
+      }
     }
-    return false;
+    return best;
   };
+  const isNpmAuthorized = (realPath: string): boolean => authorizedNpmDirOf(realPath) !== null;
   return {
     name: 'helmx-containment',
     setup(b) {
-      b.onResolve({ filter: /^[^./]/ }, (args) => {
-        if (isAbsoluteTargetPath(args.path)) return null;
-        if (args.kind === 'url-token' || args.kind === 'import-rule') return null;
+      b.onResolve({ filter: /.*/ }, async (args) => {
+        if ((args.pluginData as { helmxContainmentInternal?: boolean } | undefined)?.helmxContainmentInternal === true) {
+          return null;
+        }
+        const importer = args.importer || 'entry';
+        if (args.kind === 'entry-point') {
+          const real = realpathOrNull(args.path);
+          if (real !== null && real === entryReal && isInsideClientSource(rootReal, real)) {
+            return null;
+          }
+          return {
+            errors: [{
+              text: `plugin ${pluginId} rejected unauthorized entry point (out of bounds): ${args.path}`,
+            }],
+          };
+        }
+        // CSS url(...) tokens and remote/data CSS @import rules belong to cssPolicyPlugin / esbuild data loader.
+        if (args.kind === 'url-token') return null;
+        if (args.kind === 'import-rule' && (/^(https?:)?\/\//i.test(args.path) || /^data:/i.test(args.path))) {
+          return null;
+        }
         if ((CLIENT_SHARED_EXTERNALS as readonly string[]).includes(args.path)) return null;
+
+        // Reject all non-entry-point absolute path imports (POSIX /..., Windows C:\..., UNC \\...).
+        if (isAbsoluteImport(args.path)) {
+          return {
+            errors: [{
+              text:
+                `plugin ${pluginId} rejected unauthorized absolute import "${args.path}" (imported by ${importer}): ` +
+                `out of bounds absolute paths are not permitted; clientRoot only permits relative imports, ` +
+                `shared dependencies (${CLIENT_SHARED_EXTERNALS.join(', ')}), and declared npm specifiers`,
+            }],
+          };
+        }
+
+        const importerReal = args.importer !== '' ? realpathOrNull(args.importer) : null;
+        const importerNpmDir = importerReal !== null ? authorizedNpmDirOf(importerReal) : null;
+
+        // Relative imports: enforce realpath containment inside clientRoot (or inside the owning authorized npm package).
+        if (isRelativeSpecifier(args.path)) {
+          const resolved = await b.resolve(args.path, {
+            kind: args.kind,
+            importer: args.importer,
+            resolveDir: args.resolveDir,
+            namespace: args.namespace,
+            pluginData: { helmxContainmentInternal: true },
+          });
+          if (resolved.errors.length > 0 || !resolved.path) return null;
+          if (resolved.external || (resolved.namespace !== '' && resolved.namespace !== 'file') || !isAbsolute(resolved.path)) {
+            return null;
+          }
+          const real = realpathOrNull(resolved.path);
+          if (importerNpmDir !== null) {
+            if (real !== null && isInsideClientSource(importerNpmDir, real)) return null;
+            return {
+              errors: [{
+                text: `plugin ${pluginId} rejected out of bounds relative import (escapes authorized npm package via ../ or symlink): ${real ?? resolved.path}`,
+              }],
+            };
+          }
+          if (real !== null && isInsideClientSource(rootReal, real)) return null;
+          return {
+            errors: [{
+              text: `plugin ${pluginId} rejected out of bounds relative import (escapes root via ../, symlink, or points to an undeclared npm file): ${real ?? resolved.path}`,
+            }],
+          };
+        }
+
+        // Bare imports originating inside an already-authorized npm package: allow transitive npm packages
+        // resolved strictly through a valid node_modules package (or already-authorized internal imports).
+        if (importerNpmDir !== null) {
+          const resolved = await b.resolve(args.path, {
+            kind: args.kind,
+            importer: args.importer,
+            resolveDir: args.resolveDir,
+            namespace: args.namespace,
+            pluginData: { helmxContainmentInternal: true },
+          });
+          if (resolved.errors.length > 0 || !resolved.path) {
+            const peerNpm = resolveNpmSpecifier(args.path, npmRoots);
+            if (peerNpm !== null) {
+              authorizeNpmPackageDir(peerNpm.pkgDir);
+              return { path: peerNpm.path };
+            }
+            return null;
+          }
+          if (resolved.external || (resolved.namespace !== '' && resolved.namespace !== 'file') || !isAbsolute(resolved.path)) {
+            return null;
+          }
+          const real = realpathOrNull(resolved.path);
+          if (real === null) {
+            return {
+              errors: [{
+                text: `plugin ${pluginId} rejected out of bounds transitive dependency "${args.path}" (imported by ${importer}): ${resolved.path}`,
+              }],
+            };
+          }
+          const transitivePkgDir = resolveTransitiveNpmPackageDir(args.path, args.resolveDir, resolved.path, real);
+          if (transitivePkgDir !== null) {
+            authorizeNpmPackageDir(transitivePkgDir);
+            return null;
+          }
+          if (isInsideClientSource(importerNpmDir, real) || isNpmAuthorized(real)) return null;
+          return {
+            errors: [{
+              text: `plugin ${pluginId} rejected unauthorized transitive dependency "${args.path}" (imported by ${importer}, resolved to ${real}): resolved outside a valid node_modules package`,
+            }],
+          };
+        }
+
+        // Bare imports from clientRoot: must match an explicitly declared controlled npm specifier.
         const npm = resolveNpmSpecifier(args.path, npmRoots);
         if (npm !== null) {
           authorizeNpmPackageDir(npm.pkgDir);
@@ -869,13 +1089,24 @@ function containmentPlugin(
             }],
           };
         }
-        if (args.importer !== '') {
-          const importerReal = realpathOrNull(args.importer);
-          if (importerReal !== null && isNpmAuthorized(importerReal)) {
-            return null;
-          }
+        // Bare CSS @import (e.g. `@import "base.css"`): allow only if it resolves to a local stylesheet inside clientRoot.
+        if (args.kind === 'import-rule') {
+          const resolved = await b.resolve(args.path, {
+            kind: args.kind,
+            importer: args.importer,
+            resolveDir: args.resolveDir,
+            namespace: args.namespace,
+            pluginData: { helmxContainmentInternal: true },
+          });
+          if (resolved.errors.length > 0 || !resolved.path) return null;
+          const real = realpathOrNull(resolved.path);
+          if (real !== null && isInsideClientSource(rootReal, real)) return null;
+          return {
+            errors: [{
+              text: `plugin ${pluginId} rejected out of bounds stylesheet @import "${args.path}" (imported by ${importer}): ${real ?? resolved.path}`,
+            }],
+          };
         }
-        const importer = args.importer || 'entry';
         return {
           errors: [{
             text:
@@ -884,32 +1115,11 @@ function containmentPlugin(
           }],
         };
       });
-      b.onResolve({ filter: /^\.\.?\// }, (args) => {
-        const importerReal = realpathOrNull(args.importer);
-        if (importerReal !== null && isNpmAuthorized(importerReal)) return null;
-        const candidate = realpathOrNull(resolve(args.resolveDir, args.path));
-        if (candidate === null || isInside(rootReal, candidate) || isNpmAuthorized(candidate)) return null;
-        return {
-          errors: [{
-            text: `plugin ${pluginId} rejected out of bounds relative import (escapes root via ../ or points to an undeclared npm file): ${candidate}`,
-          }],
-        };
-      });
       b.onLoad({ filter: /.*/ }, (args) => {
         if (args.namespace !== 'file') return null;
-        if (!/\.[cm]?[jt]sx?$|\.json$|\.css$/.test(args.path)) return null;
         const real = realpathOrNull(args.path);
         if (real === null) return null;
-        const inClientRoot = isInside(rootReal, real);
-        const inNpmRoot = isNpmAuthorized(real);
-        if (!inClientRoot && !inNpmRoot) {
-          if (real.includes(sep + 'node_modules' + sep)) {
-            const pkgDir = findPackageDirOf(real);
-            if (pkgDir !== null) {
-              authorizeNpmPackageDir(pkgDir);
-              return null;
-            }
-          }
+        if (!isInsideClientSource(rootReal, real) && !isNpmAuthorized(real)) {
           return {
             errors: [{
               text: `plugin ${pluginId} rejected out of bounds file (escapes root via ../, symlink escape, or undeclared npm resolution): ${real}`,
@@ -935,12 +1145,32 @@ function isAllowedCssAssetUrl(rawUrl: string): boolean {
   return false;
 }
 
-function findPackageDirOf(fileReal: string): string {
-  let dir = dirname(fileReal);
+/**
+ * Finds the owning package root directory containing `package.json` for `fileReal`, or `null`
+ * when no valid package root exists. Never returns `fileReal` itself and never walks above a
+ * `node_modules` directory into an ancestor workspace's `package.json`.
+ */
+export function findPackageDirOf(fileReal: string): string | null {
+  const normalized = resolve(fileReal);
+  const nmMarker = `${sep}node_modules${sep}`;
+  const lastNm = normalized.lastIndexOf(nmMarker);
+  if (lastNm !== -1) {
+    const afterNm = normalized.slice(lastNm + nmMarker.length);
+    const parts = afterNm.split(sep).filter(Boolean);
+    if (parts.length < 2) return null;
+    const first = parts[0]!;
+    if (first.startsWith('.')) return null;
+    const pkgSegments = first.startsWith('@') ? 2 : 1;
+    if (parts.length <= pkgSegments) return null;
+    const candidate = join(normalized.slice(0, lastNm + nmMarker.length), ...parts.slice(0, pkgSegments));
+    return isRegularFile(join(candidate, 'package.json')) ? candidate : null;
+  }
+  let dir = dirname(normalized);
   for (;;) {
-    if (existsSync(join(dir, 'package.json'))) return dir;
+    if (basename(dir) === 'node_modules') return null;
+    if (isRegularFile(join(dir, 'package.json'))) return dir;
     const parent = dirname(dir);
-    if (parent === dir) return fileReal;
+    if (parent === dir) return null;
     dir = parent;
   }
 }

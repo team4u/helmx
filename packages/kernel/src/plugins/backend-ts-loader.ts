@@ -4,7 +4,8 @@
  * - Transpiles `.ts`/`.tsx`/`.mts`/`.cts` source files inside registered plugin roots (via realpath)
  *   using Node `module.registerHooks` + the host build port's `transformBackendTs`;
  * - Preserves real source URLs so `import.meta.url` points to real files, and ESM cache keeps
- *   `@helmx/*` singleton identity consistent with the host;
+ *   explicitly allowlisted public `@helmx/*` contract singletons consistent with the host while
+ *   rejecting private host packages (`@helmx/kernel`, `@helmx/env-io`, etc.);
  * - Resolves TS-style relative imports (`.js -> .ts/.tsx`, extensionless -> `.ts/.tsx/index.ts`)
  *   and patches ESM `.json` imports with `type: 'json'`;
  * - Rejects symlink/relative escapes outside registered roots;
@@ -19,11 +20,19 @@ import { HelmxError, type PluginBuildProvider } from '@helmx/protocol';
 /** Transpilation function signature (`PluginBuildProvider.transformBackendTs`). */
 export type BackendTsTransformFn = PluginBuildProvider['transformBackendTs'];
 
+/**
+ * Explicit allowlist of public `@helmx/*` host contract specifiers permitted for backend external plugins.
+ * Resolved via host `import.meta.resolve` to preserve shared singletons (e.g. `HelmxError` identity).
+ * All other `@helmx/*` specifiers (such as `@helmx/kernel`, `@helmx/env-io`, `@helmx/hub`,
+ * `@helmx/plugin-build`, `@helmx/plugins`, `@helmx/node`) are private host packages and rejected.
+ */
+export const PUBLIC_BACKEND_HELMX_PACKAGES: ReadonlySet<string> = new Set([
+  '@helmx/protocol',
+  '@helmx/protocol/browser',
+]);
+
 /** Supported TypeScript source extensions (`.cts` output is still loaded as ESM for a uniform module model). */
 const TS_SOURCE_EXTENSIONS = new Set(['.ts', '.tsx', '.mts', '.cts']);
-
-/** JS-family extensions natively recognized by Node (TS-style relative import sources). */
-const JS_FAMILY_EXTENSIONS = new Set(['.js', '.mjs', '.cjs']);
 
 /** Registered plugin root directory (`realpath`): reference count and root-specific transpiler injected via the build port. */
 interface TsRootEntry {
@@ -93,12 +102,7 @@ function isInsideRoot(root: string, target: string): boolean {
   return rel === '' || (!rel.startsWith(`..${sep}`) && rel !== '..' && !isAbsolute(rel));
 }
 
-/** Returns true if `url` falls under any registered plugin root (registered by `realpath`; symlinks resolved at `resolve`). */
-function isInsideAnyRoot(url: string): boolean {
-  return rootOfUrl(url) !== undefined;
-}
-
-/** Returns the registered root containing `url`, or `undefined` if outside all roots. */
+/** Returns the most specific registered root containing `url`, or `undefined` if outside all roots. */
 function rootOfUrl(url: string): string | undefined {
   if (rootRefCounts.size === 0 || !url.startsWith('file:')) return undefined;
   let path: string;
@@ -107,27 +111,18 @@ function rootOfUrl(url: string): string | undefined {
   } catch {
     return undefined;
   }
+  let best: string | undefined;
   for (const root of rootRefCounts.keys()) {
-    if (isInsideRoot(root, path)) return root;
+    if (isInsideRoot(root, path) && (best === undefined || root.length > best.length)) {
+      best = root;
+    }
   }
-  return undefined;
-}
-
-/** Returns the transpiler registered for `url`'s root (or `undefined` when unwired; `load` rejects explicitly). */
-function transformOfRoot(url: string): BackendTsTransformFn | undefined {
-  const root = rootOfUrl(url);
-  return root === undefined ? undefined : rootRefCounts.get(root)?.transform;
+  return best;
 }
 
 function fileExtension(path: string): string {
   const dot = path.lastIndexOf('.');
   return dot === -1 ? '' : path.slice(dot);
-}
-
-/** Returns the extension of a specifier (stripping query/fragment; handles bare package names and subpaths uniformly). */
-function specifierExtension(specifier: string): string {
-  const clean = specifier.split('?')[0]!.split('#')[0]!;
-  return fileExtension(clean);
 }
 
 /**
@@ -155,7 +150,7 @@ function isFile(path: string): boolean {
   }
 }
 
-/** Reject `.js`-style specifiers that resolve to TypeScript sources outside the plugin root. */
+/** Reject relative specifiers that resolve to TypeScript sources outside registered plugin roots. */
 function rootEscapeError(specifier: string, candidate: string, real: string): HelmxError {
   return new HelmxError(
     'plugin_load_failed',
@@ -165,22 +160,71 @@ function rootEscapeError(specifier: string, candidate: string, real: string): He
   );
 }
 
+/** Reject imports of host-private `@helmx/*` packages from external plugin roots. */
+function privateHelmxPackageError(specifier: string, parent: string): HelmxError {
+  const allowed = [...PUBLIC_BACKEND_HELMX_PACKAGES];
+  return new HelmxError(
+    'plugin_load_failed',
+    `external plugin cannot import private host package "${specifier}" (from ${parent}); only public @helmx/* contract packages (${allowed.join(', ')}) are permitted`,
+    500,
+    { specifier, parent, allowedPackages: allowed },
+  );
+}
+
 /** Register process-wide Node module hooks (idempotent). */
 function ensureHooks(): void {
   if (hooks !== undefined) return;
   hooks = registerHooks({
     resolve(specifier, context, nextResolve) {
       const parent = context.parentURL;
-      if (parent === undefined || !isInsideAnyRoot(parent)) {
+      const parentRoot = parent === undefined ? undefined : rootOfUrl(parent);
+      // Guard direct `file:` TS imports targeting a registered plugin root (e.g. a symlink inside a
+      // plugin root escaping outside) and absolute TS path imports originating inside a plugin root
+      // before Node's default resolver resolves symlinks or crosses into another plugin root.
+      const cleanSpecPath = specifier.startsWith('file:')
+        ? (() => {
+            try {
+              return fileURLToPath(specifier);
+            } catch {
+              return undefined;
+            }
+          })()
+        : parentRoot !== undefined && isAbsolute(specifier.split('?')[0]!.split('#')[0]!)
+          ? specifier.split('?')[0]!.split('#')[0]!
+          : undefined;
+      if (cleanSpecPath !== undefined) {
+        const owningRoot = parentRoot ?? (specifier.startsWith('file:') ? rootOfUrl(specifier) : undefined);
+        if (owningRoot !== undefined && TS_SOURCE_EXTENSIONS.has(fileExtension(cleanSpecPath))) {
+          let real: string | undefined;
+          try {
+            real = realpathSync(cleanSpecPath);
+          } catch (error) {
+            const code = (error as NodeJS.ErrnoException).code;
+            if (code !== 'ENOENT' && code !== 'ENOTDIR') throw error;
+          }
+          if (real !== undefined && !isInsideRoot(owningRoot, real)) {
+            throw rootEscapeError(specifier, specifier, real);
+          }
+        }
+      }
+      if (parent === undefined || parentRoot === undefined) {
         return nextResolve(specifier, context);
       }
       if (specifier.startsWith('./') || specifier.startsWith('../')) {
         // Propagate generation tag from parent across internal relative imports so reloads get a fresh
         // isolated module graph, while leaving bare specifiers (@helmx/* / npm / node:) shared.
         const parentGeneration = generationOfUrl(parent);
-        /** Append generation tag only to URLs inside plugin roots so shared modules are not duplicated. */
+        const isInsideParentRootUrl = (url: string): boolean => {
+          if (!url.startsWith('file:')) return false;
+          try {
+            return isInsideRoot(parentRoot, fileURLToPath(url));
+          } catch {
+            return false;
+          }
+        };
+        /** Append generation tag only to URLs inside the owning plugin root so shared modules are not duplicated. */
         const settle = (url: string): { url: string; shortCircuit?: boolean } =>
-          parentGeneration === undefined || !isInsideAnyRoot(url)
+          parentGeneration === undefined || !isInsideParentRootUrl(url)
             ? { url }
             : { url: withGenerationQuery(url, parentGeneration), shortCircuit: true };
         let resolved: { url: string; shortCircuit?: boolean };
@@ -197,7 +241,7 @@ function ensureHooks(): void {
           }
           for (const candidate of tsResolutionCandidates(target)) {
             if (!isFile(candidate)) continue;
-            // Resolve symlinks to deduplicate URLs and reject targets escaping the plugin directory.
+            // Resolve symlinks to deduplicate URLs and reject targets escaping the owning plugin directory.
             let real: string;
             try {
               real = realpathSync(candidate);
@@ -206,20 +250,20 @@ function ensureHooks(): void {
               if (code === 'ENOENT' || code === 'ENOTDIR') continue;
               throw error;
             }
-            if (!isInsideAnyRoot(pathToFileURL(real).href)) {
+            if (!isInsideRoot(parentRoot, real)) {
               throw rootEscapeError(specifier, candidate, real);
             }
             return settle(pathToFileURL(real).href);
           }
           throw err;
         }
-        // Re-check `.js -> .ts` resolutions handled by downstream hooks (such as tsx) for realpath containment.
+        // Re-check TypeScript resolutions (both `.js -> .ts` via downstream hooks like tsx and explicit `.ts`
+        // symlinks) for realpath containment inside the owning plugin root and canonical module identity.
         const resolvedUrl = resolved.url;
         if (
           typeof resolvedUrl === 'string' &&
           resolvedUrl.startsWith('file:') &&
-          JS_FAMILY_EXTENSIONS.has(specifierExtension(specifier)) &&
-          TS_SOURCE_EXTENSIONS.has(fileExtension(resolvedUrl))
+          TS_SOURCE_EXTENSIONS.has(fileExtension(fileURLToPath(resolvedUrl)))
         ) {
           let real: string;
           try {
@@ -229,7 +273,7 @@ function ensureHooks(): void {
             if (code === 'ENOENT' || code === 'ENOTDIR') return resolved;
             throw error;
           }
-          if (!isInsideAnyRoot(pathToFileURL(real).href)) {
+          if (!isInsideRoot(parentRoot, real)) {
             throw rootEscapeError(specifier, resolvedUrl, real);
           }
           return settle(pathToFileURL(real).href);
@@ -246,21 +290,38 @@ function ensureHooks(): void {
         }
         return resolved;
       }
-      // Host shared contract packages (`@helmx/*`): resolve from host so plugins share singletons without double bundling.
+      // Explicit public `@helmx/*` allowlist: resolve from host to preserve shared singletons,
+      // and reject all private host packages (`@helmx/kernel`, `@helmx/env-io`, etc.) without fallback.
       if (specifier.startsWith('@helmx/')) {
-        try {
-          const url = hostMetaResolve(specifier);
-          if (typeof url === 'string' && url.startsWith('file:')) {
-            return { url, shortCircuit: true };
-          }
-        } catch {
-          // If unavailable on host (e.g. frontend-only packages), fall through to plugin directory resolution.
+        if (!PUBLIC_BACKEND_HELMX_PACKAGES.has(specifier)) {
+          throw privateHelmxPackageError(specifier, parent);
         }
+        let url: string;
+        try {
+          url = hostMetaResolve(specifier);
+        } catch (err) {
+          throw new HelmxError(
+            'plugin_load_failed',
+            `external plugin failed to resolve public host package "${specifier}" (from ${parent}): ${err instanceof Error ? err.message : String(err)}`,
+            500,
+            { specifier, parent },
+          );
+        }
+        if (typeof url === 'string' && url.startsWith('file:')) {
+          return { url, shortCircuit: true };
+        }
+        throw new HelmxError(
+          'plugin_load_failed',
+          `external plugin resolved public host package "${specifier}" to non-file URL: ${String(url)}`,
+          500,
+          { specifier, parent, url },
+        );
       }
       return nextResolve(specifier, context);
     },
     load(url, context, nextLoad) {
-      if (!isInsideAnyRoot(url)) {
+      const owningRoot = rootOfUrl(url);
+      if (owningRoot === undefined) {
         return nextLoad(url, context);
       }
       // Compute extension from the path without query parameters (generation URLs carry `?helmxgen=N`).
@@ -276,15 +337,25 @@ function ensureHooks(): void {
         return nextLoad(url, context);
       }
       const file = fileURLToPath(url);
+      let real: string;
+      try {
+        real = realpathSync(file);
+      } catch (err) {
+        // Propagate source stat/read failures (permissions / deleted race) directly.
+        throw err;
+      }
+      if (!isInsideRoot(owningRoot, real)) {
+        throw rootEscapeError(file, url, real);
+      }
       let source: string;
       try {
-        source = readFileSync(file, 'utf8');
+        source = readFileSync(real, 'utf8');
       } catch (err) {
         // Propagate source read failures (permissions / deleted race) directly.
         throw err;
       }
       // Transpiler must be injected by the build port; never silently fall back.
-      const transform = transformOfRoot(url);
+      const transform = rootRefCounts.get(owningRoot)?.transform;
       if (transform === undefined) {
         throw new HelmxError(
           'unsupported_backend_ts_build',
