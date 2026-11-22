@@ -1,5 +1,6 @@
 import {
   HelmxError,
+  NODE_ID_PATTERN,
   assertProfileId,
   type HelmxPluginContext,
   type PluginActionContext,
@@ -72,7 +73,7 @@ const dispatchInputSchema: Record<string, unknown> = {
     title: { type: 'string', minLength: 1, maxLength: 80 },
     threadKey: { type: 'string', minLength: 1, maxLength: 200 },
     cwd: { type: 'string', minLength: 1 },
-    nodeId: { type: 'string', minLength: 1, maxLength: 64, pattern: '^[^\\s/\\\\]+$' },
+    nodeId: { type: 'string', minLength: 1, maxLength: 128, pattern: NODE_ID_PATTERN },
   },
   required: ['prompt'],
   additionalProperties: false,

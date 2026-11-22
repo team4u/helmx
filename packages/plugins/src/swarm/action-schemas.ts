@@ -1,6 +1,7 @@
 /**
  * builtin:swarm 动作与模型工具共享 JSON Schema 定义（全部机器描述固定纯英文）。
  */
+import { NODE_ID_PATTERN } from '@helmx/protocol'
 import {
   BOARD_POST_KINDS,
   CHANNEL_NAME_PATTERN,
@@ -68,6 +69,14 @@ export const dispatchInputSchema: Record<string, unknown> = {
         "Optional existing subchannels to subscribe (omit by default: 'main' is always subscribed and @member / 'coordinator' addressing needs no subchannel; do not use for wave/batch labels. When #<channel> multicast is needed, create it first via swarm_create_group.channels or swarm_manage_channel with op='create')",
     },
     title: { type: 'string', minLength: 1, maxLength: 80 },
+    nodeId: {
+      type: 'string',
+      minLength: 1,
+      maxLength: 128,
+      pattern: NODE_ID_PATTERN,
+      description:
+        'Optional target compute node ID (overrides Profile/coordinator node; explicit "local" switches back to the Hub host; requires cwd or a compatible Profile cwd on remote nodes)',
+    },
     cwd: { type: 'string', minLength: 1 },
   },
   required: ['prompt', 'name'],
@@ -263,12 +272,13 @@ const retainedWorktreeSchema: Record<string, unknown> = {
   type: 'object',
   properties: {
     memberName: { type: 'string' },
+    nodeId: { type: 'string' },
     worktreeId: { type: 'string' },
     branch: { type: 'string' },
     path: { type: 'string' },
     commitsAhead: { type: 'number' },
   },
-  required: ['memberName', 'worktreeId', 'branch', 'path', 'commitsAhead'],
+  required: ['memberName', 'nodeId', 'worktreeId', 'branch', 'path', 'commitsAhead'],
   additionalProperties: false,
 }
 

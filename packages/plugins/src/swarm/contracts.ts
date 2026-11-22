@@ -179,6 +179,7 @@ export interface GroupMemberState {
 
 export interface RetainedWorktreeInfo {
   memberName: string
+  nodeId: string
   worktreeId: string
   branch: string
   path: string
@@ -822,6 +823,7 @@ export function assertCollabGroupRecord(value: unknown): CollabGroupRecord {
       if (
         !isJsonObject(rw) ||
         typeof rw.memberName !== 'string' ||
+        !isNonEmptyString(rw.nodeId) ||
         typeof rw.worktreeId !== 'string' ||
         typeof rw.branch !== 'string' ||
         typeof rw.path !== 'string' ||

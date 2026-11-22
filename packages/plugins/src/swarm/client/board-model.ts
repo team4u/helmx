@@ -33,6 +33,7 @@ export interface CollabGroupSummary {
 
 export interface RetainedWorktreeInfo {
   memberName: string
+  nodeId: string
   worktreeId: string
   branch: string
   path: string
@@ -330,6 +331,7 @@ function parseRetainedWorktreesStrict(rawList: unknown): RetainedWorktreeInfo[] 
     if (
       !isPlainObject(w) ||
       !isNonEmptyString(w.memberName) ||
+      !isNonEmptyString(w.nodeId) ||
       !isNonEmptyString(w.worktreeId) ||
       !isNonEmptyString(w.branch) ||
       !isNonEmptyString(w.path) ||
@@ -339,6 +341,7 @@ function parseRetainedWorktreesStrict(rawList: unknown): RetainedWorktreeInfo[] 
     }
     out.push({
       memberName: w.memberName,
+      nodeId: w.nodeId,
       worktreeId: w.worktreeId,
       branch: w.branch,
       path: w.path,

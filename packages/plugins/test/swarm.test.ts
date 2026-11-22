@@ -9,7 +9,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { HelmxError, validateOrThrow } from '@helmx/protocol'
+import { HelmxError, NODE_ID_PATTERN, validateOrThrow } from '@helmx/protocol'
 import {
   ARCHIVED_COORDINATOR_TAG,
   ARCHIVED_WORKER_TAG,
@@ -43,16 +43,20 @@ import {
   type GroupMemberState,
 } from '../src/swarm.js'
 import { checkCoordinatorEligibility } from '../src/swarm/actions.js'
+import { createGroupHandlers } from '../src/swarm/actions-group.js'
+import { createWorkerHandlers } from '../src/swarm/actions-worker.js'
 import { registerSwarmHooks } from '../src/swarm/hooks.js'
 import {
   boardPostInputSchema,
   boardReadInputSchema,
   boardStatusOutputSchema,
+  closeGroupOutputSchema,
   dispatchInputSchema,
   manageChannelInputSchema,
   swarmToolPresentationMetaSchema,
 } from '../src/swarm/action-schemas.js'
 import { unknownChannelError } from '../src/swarm/contracts.js'
+import { parseBoardView } from '../src/swarm/client/board-model.ts'
 import {
   extractSwarmPresentationMeta,
   resolveSwarmToolClickTarget,
@@ -68,7 +72,7 @@ import {
   classifyMemberDetailOutcome,
   inspectBoardWalLines,
 } from '../src/swarm/recovery.js'
-import { lastAssistantText } from '../src/entry-text.js'
+import { assertWorkerNodeId, lastAssistantText } from '../src/entry-text.js'
 
 function makeMember(over: Partial<GroupMemberState> = {}): GroupMemberState {
   return {
@@ -417,9 +421,15 @@ test('swarm-unit2: default wake derivation and Fail-Closed target resolution', {
     [],
   )
 
-  // dispatchInputSchema omits nodeId (inherited via kernel resolveSpawnTarget)
-  const dispatchProps = dispatchInputSchema['properties'] as Record<string, unknown>
-  assert.equal('nodeId' in dispatchProps, false)
+  // dispatchInputSchema exposes dynamic nodeId aligned with @helmx/protocol NODE_ID_PATTERN
+  const dispatchProps = dispatchInputSchema['properties'] as Record<string, Record<string, unknown>>
+  assert.equal('nodeId' in dispatchProps, true)
+  const nodeIdProp = dispatchProps['nodeId']!
+  assert.equal(nodeIdProp['type'], 'string')
+  assert.equal(nodeIdProp['minLength'], 1)
+  assert.equal(nodeIdProp['maxLength'], 128)
+  assert.equal(nodeIdProp['pattern'], NODE_ID_PATTERN)
+  assert.ok(typeof nodeIdProp['description'] === 'string' && nodeIdProp['description'].length > 0)
 
   // Archived or unknown member -> 404 swarm_unknown_target
   assert.throws(
@@ -1366,4 +1376,378 @@ test('swarm hooks：isSwarmSkillAllowed 按统一 active 谓词判定（enabled=
   assert.equal(activeTurn?.action, 'transform')
   const activeSection = activeTurn?.value?.sections.find((s) => s.id === 'swarm.active_group')?.text ?? ''
   assert.ok(activeSection.includes(`call load_skill({ skillId: "${SWARM_SKILL_ID}" })`), 'active 时应恢复 swarm 技能引导')
+})
+
+test('swarm-unit11: assertWorkerNodeId unifies validation with @helmx/protocol NODE_ID_PATTERN', { timeout: 60_000 }, () => {
+  assert.equal(assertWorkerNodeId('local'), 'local')
+  assert.equal(assertWorkerNodeId('  gpu-node.01_a  '), 'gpu-node.01_a')
+  assert.equal(assertWorkerNodeId('a'.repeat(128)), 'a'.repeat(128))
+  for (const invalid of ['', '   ', '-leading-dash', '.leading-dot', 'has space', 'a/b', 'a\\b', 'a'.repeat(129)]) {
+    assert.throws(
+      () => assertWorkerNodeId(invalid),
+      (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
+      `expected invalid nodeId '${invalid}' to throw 400 validation_error`,
+    )
+  }
+})
+
+test('swarm-unit12: dispatch_worker dynamic nodeId forwarding, offline preflight, peer forkFrom base, and restrictToCwd guard', { timeout: 60_000 }, async () => {
+  const buildHarness = (opts: {
+    onlineNodes?: ReadonlySet<string>
+    coordProfile?: { id: string; restrictToCwd?: boolean; nodeId?: string }
+    peerNodeId?: string
+    peerCwd?: string
+    peerProfileId?: string
+    resolveImpl?: (input: Record<string, unknown>) => { nodeId: string; sourceCwd: string; parentCwd?: string }
+  } = {}) => {
+    const onlineNodes = opts.onlineNodes ?? new Set(['remote-a'])
+    const coordProfile = opts.coordProfile ?? { id: 'assistant', restrictToCwd: false }
+    const profiles = new Map<string, Record<string, unknown>>([
+      ['assistant', { id: 'assistant', name: 'Assistant', ...(coordProfile.id === 'assistant' ? coordProfile : {}) }],
+      ['restricted-coord', { id: 'restricted-coord', name: 'Restricted', restrictToCwd: true }],
+      ['remote-worker', { id: 'remote-worker', name: 'Remote Worker', nodeId: 'remote-a' }],
+      ...(coordProfile.id !== 'assistant' ? [[coordProfile.id, { name: coordProfile.id, ...coordProfile }] as const] : []),
+    ])
+    const conversations = new Map<number, Record<string, unknown>>([
+      [1, { id: 1, title: 'Coord', profileId: coordProfile.id, tags: [COORDINATOR_TAG], nodeId: 'local', cwd: '/repo', status: 'idle' }],
+      [11, { id: 11, title: 'Alpha', profileId: opts.peerProfileId ?? 'assistant', tags: [WORKER_TAG], nodeId: opts.peerNodeId ?? 'remote-a', cwd: opts.peerCwd ?? '/srv/alpha', status: 'idle', parentConversationId: 1 }],
+    ])
+    let nextConvId = 100
+    const resolveCalls: Array<Record<string, unknown>> = []
+    const acquireCalls: Array<Record<string, unknown>> = []
+    const createCalls: Array<Record<string, unknown>> = []
+    const forkCalls: Array<{ id: number; opts?: Record<string, unknown> }> = []
+    const updateCalls: Array<{ id: number; patch: Record<string, unknown> }> = []
+    const addedMembers: Array<Record<string, unknown>> = []
+
+    const group = makeGroup({
+      id: 'grp_dyn_1',
+      coordinatorConversationId: 1,
+      members: [
+        makeMember({
+          name: 'alpha',
+          conversationId: 11,
+          profileId: opts.peerProfileId ?? 'assistant',
+          nodeId: opts.peerNodeId ?? 'remote-a',
+          cwd: opts.peerCwd ?? '/srv/alpha',
+          worktreeId: undefined,
+          isolation: 'inherit',
+        }),
+      ],
+    })
+
+    const fakeCtx = {
+      host: {
+        profiles: {
+          get: async (id: string) => profiles.get(id),
+        },
+        nodeIpc: {
+          isOnline: (nodeId: string) => nodeId === 'local' || onlineNodes.has(nodeId),
+        },
+        resolveSpawnTarget: async (input: Record<string, unknown>) => {
+          resolveCalls.push(input)
+          if (opts.resolveImpl !== undefined) return opts.resolveImpl(input)
+          const parent = conversations.get(input['parentConversationId'] as number) as { nodeId?: string; cwd?: string } | undefined
+          const targetNodeId = (input['requestNodeId'] as string | undefined) ?? parent?.nodeId ?? 'local'
+          const sourceCwd = (input['requestCwd'] as string | undefined) ?? parent?.cwd ?? '/repo'
+          return { nodeId: targetNodeId, sourceCwd, parentCwd: parent?.cwd }
+        },
+        createConversation: async (init: Record<string, unknown>) => {
+          createCalls.push(init)
+          const id = nextConvId++
+          const created = { id, ...init, status: 'idle', tags: (init['tags'] as string[] | undefined) ?? [] }
+          conversations.set(id, created)
+          return created
+        },
+        forkConversation: async (id: number, forkOpts?: Record<string, unknown>) => {
+          forkCalls.push({ id, ...(forkOpts !== undefined ? { opts: forkOpts } : {}) })
+          const newId = nextConvId++
+          const src = conversations.get(id) ?? {}
+          const created = { ...src, id: newId, ...(forkOpts ?? {}), tags: [] }
+          conversations.set(newId, created)
+          return created
+        },
+        markConversationOwnership: () => {},
+        updateConversation: async (id: number, patch: Record<string, unknown>) => {
+          updateCalls.push({ id, patch })
+          const prev = conversations.get(id) ?? { id }
+          const next = { ...prev, ...patch }
+          conversations.set(id, next)
+          return next
+        },
+        invokeAction: async (pluginId: string, actionId: string, payload: Record<string, unknown>) => {
+          if (pluginId === 'builtin:worktree' && actionId === 'acquire_worktree') {
+            acquireCalls.push(payload)
+            const wtNode = (payload['requestNodeId'] as string | undefined) ?? 'local'
+            const wtPath = `${(payload['requestCwd'] as string | undefined) ?? '/srv/repo'}-wt`
+            return {
+              worktreeId: `${wtNode}:${wtPath}`,
+              path: wtPath,
+              branch: 'helmx/wt-1',
+              baseCommit: 'abc123',
+              nodeId: wtNode,
+            }
+          }
+          return {}
+        },
+      },
+    } as never
+
+    const fakeCoordinator = {
+      getConfig: () => resolveSwarmConfig({}),
+      readConversationOrUndefined: (id: number) => conversations.get(id),
+      reportError: () => {},
+      enqueueDispatch: async <T>(_key: string, fn: () => Promise<T>) => fn(),
+      track: async <T>(_label: string, fn: () => Promise<T>) => fn(),
+      groups: {
+        getGroup: (id: string) => (id === group.id ? group : undefined),
+        listGroups: () => [group],
+        findActiveGroupByCoordinator: (cid: number) => (cid === 1 ? group : undefined),
+        findLatestGroupForConversation: (cid: number) => (cid === 1 ? group : undefined),
+        getPosts: () => [],
+        addMemberWithBrief: async (_groupId: string, member: Record<string, unknown>, _prompt: string) => {
+          addedMembers.push(member)
+          group.members.push(member as unknown as GroupMemberState)
+          return { post: makePost(addedMembers.length) }
+        },
+      },
+    } as never
+
+    const handlers = createWorkerHandlers(fakeCtx, fakeCoordinator)
+    return { handlers, resolveCalls, acquireCalls, createCalls, forkCalls, updateCalls, addedMembers, conversations }
+  }
+
+  // 1) Forwards requestNodeId to BOTH resolveSpawnTarget and acquire_worktree
+  {
+    const h = buildHarness({ onlineNodes: new Set(['remote-a']) })
+    const res = await h.handlers.dispatchWorker(
+      { groupId: 'grp_dyn_1', name: 'builder', prompt: 'Build remotely', nodeId: 'remote-a', cwd: '/srv/repo', isolation: 'worktree' },
+      1,
+    )
+    assert.equal(res.name, 'builder')
+    assert.equal(res.worktreeId, 'remote-a:/srv/repo-wt')
+    assert.deepEqual(h.resolveCalls, [
+      { parentConversationId: 1, profileId: 'assistant', requestNodeId: 'remote-a', requestCwd: '/srv/repo' },
+    ])
+    assert.equal(h.acquireCalls.length, 1)
+    assert.equal(h.acquireCalls[0]!['parentConversationId'], 1)
+    assert.equal(h.acquireCalls[0]!['requestNodeId'], 'remote-a')
+    assert.equal(h.acquireCalls[0]!['requestCwd'], '/srv/repo')
+    assert.equal(h.addedMembers[0]!['nodeId'], 'remote-a')
+    assert.equal(h.addedMembers[0]!['cwd'], '/srv/repo-wt')
+  }
+
+  // 2) Omits requestNodeId when input.nodeId is undefined (preserves acquire_worktree additionalProperties: false)
+  {
+    const h = buildHarness()
+    await h.handlers.dispatchWorker(
+      { groupId: 'grp_dyn_1', name: 'localw', prompt: 'Build locally', isolation: 'worktree' },
+      1,
+    )
+    assert.equal('requestNodeId' in h.resolveCalls[0]!, false)
+    assert.equal('requestNodeId' in h.acquireCalls[0]!, false)
+  }
+
+  // 3) Rejects invalid nodeId with 400 validation_error before any host calls
+  {
+    const h = buildHarness()
+    await assert.rejects(
+      () => h.handlers.dispatchWorker({ groupId: 'grp_dyn_1', name: 'bad', prompt: 'Nope', nodeId: '../escape' }, 1),
+      (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
+    )
+    assert.equal(h.resolveCalls.length, 0)
+    assert.equal(h.createCalls.length, 0)
+  }
+
+  // 4) Rejects offline remote nodeId with 409 node_offline BEFORE creating or forking any conversation
+  {
+    const h = buildHarness({ onlineNodes: new Set() })
+    await assert.rejects(
+      () => h.handlers.dispatchWorker({ groupId: 'grp_dyn_1', name: 'offlinew', prompt: 'Wait', nodeId: 'remote-down', cwd: '/srv/down' }, 1),
+      (err: unknown) => err instanceof HelmxError && err.code === 'node_offline' && err.status === 409,
+    )
+    assert.equal(h.createCalls.length, 0, 'offline preflight must reject before createConversation')
+    assert.equal(h.forkCalls.length, 0, 'offline preflight must reject before forkConversation')
+    assert.equal(h.acquireCalls.length, 0, 'offline preflight must reject before acquire_worktree')
+  }
+
+  // 5) forkFrom: '<peer>' passes peer conversationId as parentConversationId to resolveSpawnTarget AND acquire_worktree,
+  //    while keeping forkConversation parentConversationId flat (coordinator)
+  {
+    const h = buildHarness({ onlineNodes: new Set(['remote-a']), peerNodeId: 'remote-a', peerCwd: '/srv/alpha' })
+    await h.handlers.dispatchWorker(
+      { groupId: 'grp_dyn_1', name: 'beta', prompt: 'Continue peer work', forkFrom: 'alpha', isolation: 'worktree' },
+      1,
+    )
+    assert.deepEqual(h.resolveCalls, [
+      { parentConversationId: 11, profileId: 'assistant', fork: true },
+    ])
+    assert.equal(h.forkCalls.length, 1)
+    assert.equal(h.forkCalls[0]!.id, 11)
+    assert.equal(h.forkCalls[0]!.opts?.['parentConversationId'], 1, 'conversation tree stays flat under coordinator')
+    assert.equal(h.acquireCalls.length, 1)
+    assert.equal(h.acquireCalls[0]!['parentConversationId'], 11, 'acquire_worktree resolves against peer fork source')
+    assert.equal(h.acquireCalls[0]!['fork'], true)
+  }
+
+  // 6) Restricted coordinator (Profile.restrictToCwd: true) cannot escape node via unrestricted peer forkFrom
+  {
+    const h = buildHarness({
+      onlineNodes: new Set(['remote-a']),
+      coordProfile: { id: 'restricted-coord', restrictToCwd: true },
+      peerProfileId: 'assistant',
+      peerNodeId: 'remote-a',
+      peerCwd: '/srv/alpha',
+    })
+    await assert.rejects(
+      () => h.handlers.dispatchWorker({ groupId: 'grp_dyn_1', name: 'escape1', prompt: 'Escape via peer node', forkFrom: 'alpha' }, 1),
+      (err: unknown) => err instanceof HelmxError && err.code === 'path_outside_workspace' && err.status === 403,
+    )
+    assert.equal(h.forkCalls.length, 0)
+    await assert.rejects(
+      () => h.handlers.dispatchWorker({ groupId: 'grp_dyn_1', name: 'escape2', prompt: 'Escape via explicit node', forkFrom: 'alpha', nodeId: 'remote-a', cwd: '/srv/alpha' }, 1),
+      (err: unknown) => err instanceof HelmxError && err.code === 'path_outside_workspace' && err.status === 403,
+    )
+    assert.equal(h.forkCalls.length, 0)
+  }
+})
+
+test('swarm-unit13: RetainedWorktreeInfo.nodeId strict contract across validators, schemas, board-model, archive_worker & close_group', { timeout: 60_000 }, async () => {
+  // 1) assertCollabGroupRecord requires non-empty nodeId on retainedWorktrees
+  const validRetained = {
+    memberName: 'author',
+    nodeId: 'remote-a',
+    worktreeId: 'remote-a:/srv/wt-author',
+    branch: 'helmx/author',
+    path: '/srv/wt-author',
+    commitsAhead: 2,
+  }
+  const validGroup = makeGroup({ headSeq: 1, retainedWorktrees: [validRetained] })
+  assert.equal(assertCollabGroupRecord(validGroup).retainedWorktrees?.[0]?.nodeId, 'remote-a')
+  assert.throws(
+    () =>
+      assertCollabGroupRecord({
+        ...makeGroup({ headSeq: 1 }),
+        retainedWorktrees: [{ memberName: 'author', worktreeId: 'wt-1', branch: 'b', path: '/p', commitsAhead: 1 }],
+      }),
+    (err: unknown) => err instanceof HelmxError && err.code === 'swarm_doc_corrupt',
+  )
+
+  // 2) closeGroupOutputSchema & boardStatusOutputSchema enforce required nodeId on retainedWorktrees
+  assert.doesNotThrow(() =>
+    validateOrThrow(closeGroupOutputSchema, { closed: true, groupId: 'grp_1', retainedWorktrees: [validRetained] }, 'valid retained'),
+  )
+  assert.throws(() =>
+    validateOrThrow(
+      closeGroupOutputSchema,
+      {
+        closed: true,
+        groupId: 'grp_1',
+        retainedWorktrees: [{ memberName: 'author', worktreeId: 'wt-1', branch: 'b', path: '/p', commitsAhead: 1 }],
+      },
+      'missing nodeId must fail schema',
+    ),
+  )
+
+  // 3) Client parseBoardView preserves nodeId and rejects items missing nodeId
+  const baseView = synthesizeBoardView({
+    group: validGroup,
+    posts: [makePost(1)],
+    previewLimit: 80,
+    resolveMemberLive: () => ({ liveState: 'idle' }),
+  }).view
+  const parsed = parseBoardView(baseView)
+  assert.equal(parsed?.group.retainedWorktrees?.[0]?.nodeId, 'remote-a')
+  const brokenView = structuredClone(baseView) as unknown as { group: { retainedWorktrees: Array<Record<string, unknown>> } }
+  delete brokenView.group.retainedWorktrees[0]!['nodeId']
+  assert.equal(parseBoardView(brokenView), undefined, 'client parser must reject retainedWorktree missing nodeId')
+
+  // 4) archiveWorker({ keepWorktree: true }) & closeGroup({ keepWorktree: true }) populate & preserve member.nodeId
+  const group = makeGroup({
+    id: 'grp_ret_1',
+    coordinatorConversationId: 1,
+    members: [
+      makeMember({
+        name: 'remote_a',
+        conversationId: 21,
+        nodeId: 'remote-a',
+        cwd: '/srv/wt-a',
+        worktreeId: 'remote-a:/srv/wt-a',
+      }),
+      makeMember({
+        name: 'remote_b',
+        conversationId: 22,
+        nodeId: 'remote-b',
+        cwd: '/srv/wt-b',
+        worktreeId: 'remote-b:/srv/wt-b',
+      }),
+    ],
+  })
+  const convMap = new Map<number, Record<string, unknown>>([
+    [1, { id: 1, tags: [COORDINATOR_TAG], status: 'idle', nodeId: 'local', cwd: '/repo' }],
+    [21, { id: 21, tags: [WORKER_TAG], status: 'idle', nodeId: 'remote-a', cwd: '/srv/wt-a' }],
+    [22, { id: 22, tags: [WORKER_TAG], status: 'idle', nodeId: 'remote-b', cwd: '/srv/wt-b' }],
+  ])
+  const fakeCtx = {
+    host: {
+      updateConversation: async (id: number, patch: Record<string, unknown>) => {
+        const next = { ...(convMap.get(id) ?? { id }), ...patch }
+        convMap.set(id, next)
+        return next
+      },
+      invokeAction: async (_pluginId: string, actionId: string, payload: Record<string, unknown>) => {
+        if (actionId === 'inspect_worktree') {
+          const wtId = payload['worktreeId'] as string
+          const isA = wtId.startsWith('remote-a:')
+          return {
+            exists: true,
+            dirtyFileCount: 0,
+            unmergedCommits: isA ? 2 : 3,
+            currentBranch: isA ? 'helmx/a' : 'helmx/b',
+            record: {
+              id: wtId,
+              nodeId: isA ? 'remote-a' : 'remote-b',
+              branch: isA ? 'helmx/a' : 'helmx/b',
+              path: isA ? '/srv/wt-a' : '/srv/wt-b',
+            },
+          }
+        }
+        return {}
+      },
+    },
+  } as never
+  const fakeCoordinator = {
+    getConfig: () => resolveSwarmConfig({}),
+    readConversationOrUndefined: (id: number) => convMap.get(id),
+    settlingWorkers: new Set<number>(),
+    reportError: () => {},
+    enqueueDispatch: async <T>(_key: string, fn: () => Promise<T>) => fn(),
+    track: async <T>(_label: string, fn: () => Promise<T>) => fn(),
+    groups: {
+      getGroup: (id: string) => (id === group.id ? group : undefined),
+      listGroups: () => [group],
+      findActiveGroupByCoordinator: (cid: number) => (cid === 1 ? group : undefined),
+      findLatestGroupForConversation: (cid: number) => (cid === 1 ? group : undefined),
+      hasInflightWakeup: () => false,
+      mutateGroup: async (_id: string, fn: (draft: CollabGroupRecord) => { group: CollabGroupRecord; result: unknown }) => {
+        fn(group)
+      },
+      afterMemberArchived: async () => {},
+      syncProjections: () => {},
+    },
+  } as never
+
+  const workerHandlers = createWorkerHandlers(fakeCtx, fakeCoordinator)
+  const groupHandlers = createGroupHandlers(fakeCtx, fakeCoordinator)
+
+  await workerHandlers.archiveWorker({ groupId: 'grp_ret_1', name: 'remote_a', keepWorktree: true }, 1)
+  assert.equal(group.retainedWorktrees?.length, 1)
+  assert.equal(group.retainedWorktrees?.[0]?.nodeId, 'remote-a')
+
+  const closed = await groupHandlers.closeGroup({ groupId: 'grp_ret_1', keepWorktree: true }, 1)
+  assert.equal(closed.retainedWorktrees.length, 2)
+  assert.deepEqual(
+    closed.retainedWorktrees.map((w) => [w.memberName, w.nodeId]).sort(),
+    [['remote_a', 'remote-a'], ['remote_b', 'remote-b']],
+  )
 })

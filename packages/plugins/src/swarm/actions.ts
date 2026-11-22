@@ -105,7 +105,7 @@ function formatBoardStatusSummary(view: BoardViewDoc): string {
   if (view.group.retainedWorktrees !== undefined && view.group.retainedWorktrees.length > 0) {
     lines.push(
       `Retained worktrees: ${view.group.retainedWorktrees
-        .map((w) => `@${w.memberName}:${w.branch} (+${w.commitsAhead}, ${w.path})`)
+        .map((w) => `@${w.memberName}:${w.branch} (+${w.commitsAhead}, ${w.nodeId !== 'local' ? `node=${w.nodeId}, ` : ''}${w.path})`)
         .join('; ')}`,
     )
   }
@@ -457,7 +457,7 @@ export function registerSwarmActions(
       formatOutput: (_input, res) =>
         res.retainedWorktrees.length === 0
           ? `Closed swarm group ${res.groupId} cleanly.`
-          : `Closed swarm group ${res.groupId}; retained ${res.retainedWorktrees.length} worktree(s) for merge: ${res.retainedWorktrees.map((w) => `@${w.memberName}:${w.branch} (+${w.commitsAhead})`).join(', ')}.`,
+          : `Closed swarm group ${res.groupId}; retained ${res.retainedWorktrees.length} worktree(s) for merge: ${res.retainedWorktrees.map((w) => `@${w.memberName}:${w.branch} (+${w.commitsAhead}${w.nodeId !== 'local' ? `, node=${w.nodeId}` : ''})`).join(', ')}.`,
     },
     presentationMetaSchema: swarmToolPresentationMetaSchema,
     projectPresentationMeta: (_input, res) => ({
