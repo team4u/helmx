@@ -344,7 +344,7 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
       {!canOpenChildDrawer && !canOpenWorkbenchRun ? (
         <div id={detailsId} hidden={!detailsOpen}>
           {detailsOpen ? (
-            <ToolCallDetails input={props.input} result={props.result} artifactRef={props.artifactRef} />
+            <ToolCallDetails input={props.input} result={props.result} artifactRef={props.artifactRef} defaultOpen />
           ) : null}
         </div>
       ) : null}
