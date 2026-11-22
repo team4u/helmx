@@ -41,7 +41,7 @@ export interface PluginManifestUiItem {
   spec: Record<string, unknown>
 }
 
-export type PluginManifestRouteMethod = 'GET' | 'POST' | 'PUT' | 'DELETE'
+export type PluginManifestRouteMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD'
 
 export interface PluginManifestRoute {
   method: PluginManifestRouteMethod

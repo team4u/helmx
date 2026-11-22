@@ -9,6 +9,7 @@
 import { HelmxError, isPluginSummaryActive } from '@helmx/protocol'
 import type { JsonSchema, PluginConfigFieldSchema, PublicPluginSessionDoc } from '@helmx/protocol'
 import { gzipSync } from 'node:zlib'
+import { redactJsonValue } from '../redact.js'
 import { errorResponse, jsonOk, readJsonBody, type JsonRedactor } from './http-utils.js'
 import { decodeSegment, findPluginRoute } from './route-match.js'
 import type { KernelRuntimeLike } from './contracts.js'
@@ -433,14 +434,91 @@ async function dispatchPluginRoute(
       pluginId: found.pluginId,
     })
   }
-  const invokeHandler = (): Promise<Response> => Promise.resolve(found.route.handler(request))
+  const invokeHandler = (): Promise<Response> =>
+    Promise.resolve(found.route.handler(request, { params: found.params }))
   const response = await (kernel.plugins.withTask !== undefined
     ? kernel.plugins.withTask(found.pluginId, `route:${found.route.method} ${found.route.path}`, invokeHandler)
     : invokeHandler())
   if (!(response instanceof Response)) {
     throw new HelmxError('invalid_route_handler_output', 'Plugin route handler must return a Response', 500)
   }
-  return response
+  return redactPluginRouteResponse(response, kernel.stash)
+}
+
+function classifyPluginRouteMediaType(contentType: string | null): 'json' | 'text' | 'sse' | 'other' {
+  if (contentType === null) return 'other'
+  const mediaType = contentType.split(';')[0]?.trim().toLowerCase() ?? ''
+  if (mediaType === 'text/event-stream') return 'sse'
+  if (mediaType === 'application/json' || mediaType.endsWith('+json')) return 'json'
+  if (mediaType.startsWith('text/')) return 'text'
+  return 'other'
+}
+
+/**
+ * Automatically redacts text/JSON plugin route responses (`text/*`, `application/json`, `*+json`)
+ * through `SecretStash.redact` while preserving status and headers. Binary and non-text streams
+ * pass through untouched without buffering; `text/event-stream` is redacted chunk-by-chunk via TransformStream.
+ */
+async function redactPluginRouteResponse(
+  response: Response,
+  stash: KernelRuntimeLike['stash'],
+): Promise<Response> {
+  if (stash === undefined || response.body === null) return response
+  const encoding = response.headers.get('content-encoding')?.trim().toLowerCase()
+  if (encoding !== undefined && encoding !== '' && encoding !== 'identity') return response
+
+  const kind = classifyPluginRouteMediaType(response.headers.get('content-type'))
+  if (kind === 'other') return response
+
+  const headers = new Headers(response.headers)
+  headers.delete('content-length')
+
+  if (kind === 'sse') {
+    const decoder = new TextDecoder()
+    const encoder = new TextEncoder()
+    const streamRedactor = stash.createStreamingRedactor?.()
+    const redactedStream = response.body.pipeThrough(
+      new TransformStream<Uint8Array, Uint8Array>({
+        transform(chunk, controller) {
+          const text = decoder.decode(chunk, { stream: true })
+          const out = streamRedactor ? streamRedactor.push(text) : stash.redact(text)
+          if (out.length > 0) controller.enqueue(encoder.encode(out))
+        },
+        flush(controller) {
+          const tail = decoder.decode()
+          const out = streamRedactor
+            ? (tail.length > 0 ? streamRedactor.push(tail) : '') + streamRedactor.flush()
+            : tail.length > 0
+              ? stash.redact(tail)
+              : ''
+          if (out.length > 0) controller.enqueue(encoder.encode(out))
+        },
+      }),
+    )
+    return new Response(redactedStream, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    })
+  }
+
+  const rawText = await response.text()
+  let redactedText: string
+  if (kind === 'json') {
+    try {
+      const parsed: unknown = JSON.parse(rawText)
+      redactedText = JSON.stringify(redactJsonValue(parsed, (text) => stash.redact(text)))
+    } catch {
+      redactedText = stash.redact(rawText)
+    }
+  } else {
+    redactedText = stash.redact(rawText)
+  }
+  return new Response(redactedText, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  })
 }
 
 /**

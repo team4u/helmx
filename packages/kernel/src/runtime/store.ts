@@ -12,7 +12,7 @@
  */
 
 import type { ArtifactKind, ConversationOwnership, ConversationStatus, ConversationSummary, SearchHit } from '@helmx/protocol'
-import { HelmxError, isArtifactKind } from '@helmx/protocol'
+import { HelmxError, compareCodeUnit, isArtifactKind } from '@helmx/protocol'
 import type { NodeSqliteDatabase } from '@earendil-works/chord/sqlite/node'
 import { emitDiagnostic, type KernelDiagnosticSink } from './diagnostics.js'
 import {
@@ -109,6 +109,8 @@ export class HelmxStore {
   private readonly pluginDocs = new Map<string, string>() // pluginId\0name -> json
   /** Per-conversation plugin document mirror: `pluginId\0name\0conversationId -> json`. */
   private readonly pluginSessionDocs = new Map<string, string>()
+  /** Per-plugin keyed KV mirror: `pluginId -> namespace -> key -> { valueJson, updatedAt }`. */
+  private readonly pluginKv = new Map<string, Map<string, Map<string, { valueJson: string; updatedAt: number }>>>()
   /** Logical deletion tombstones: prevents re-importing SDK-retained history after restarts. */
   private readonly tombstones = new Set<number>()
   /**
@@ -261,6 +263,19 @@ export class HelmxStore {
         row.value,
       )
       this.pluginSessionDocs.set(`${row.plugin_id}\0${row.name}\0${row.conversation_id}`, row.value)
+    }
+    for (const row of await this.db.all<{
+      plugin_id: string
+      namespace: string
+      key: string
+      value_json: string
+      updated_at: number
+    }>('SELECT plugin_id, namespace, key, value_json, updated_at FROM helmx_plugin_kv')) {
+      parseStoredJson<unknown>(
+        `helmx_plugin_kv#${row.plugin_id}:${row.namespace}/${row.key}.value_json`,
+        row.value_json,
+      )
+      this.setPluginKvMirror(row.plugin_id, row.namespace, row.key, row.value_json, row.updated_at)
     }
     const seqRow = await this.db.get<{ value: number }>(
       "SELECT value FROM helmx_seq WHERE key = 'events'",
@@ -679,6 +694,134 @@ export class HelmxStore {
       if (Number.isSafeInteger(convId) && convId > 0) out.push(convId)
     }
     return out.sort((a, b) => a - b)
+  }
+
+  // ---------------- plugin kv ----------------
+
+  private setPluginKvMirror(
+    pluginId: string,
+    namespace: string,
+    key: string,
+    valueJson: string,
+    updatedAt: number,
+  ): void {
+    let byNs = this.pluginKv.get(pluginId)
+    if (!byNs) {
+      byNs = new Map()
+      this.pluginKv.set(pluginId, byNs)
+    }
+    let byKey = byNs.get(namespace)
+    if (!byKey) {
+      byKey = new Map()
+      byNs.set(namespace, byKey)
+    }
+    byKey.set(key, { valueJson, updatedAt })
+  }
+
+  getPluginKv(pluginId: string, namespace: string, key: string): { valueJson: string; updatedAt: number } | undefined {
+    const entry = this.pluginKv.get(pluginId)?.get(namespace)?.get(key)
+    return entry ? { valueJson: entry.valueJson, updatedAt: entry.updatedAt } : undefined
+  }
+
+  putPluginKv(
+    pluginId: string,
+    namespace: string,
+    key: string,
+    valueJson: string,
+    options?: { prevalidated?: boolean; updatedAt?: number },
+  ): number {
+    this.assertWritable()
+    if (options?.prevalidated !== true) {
+      parseStoredJson<unknown>(`helmx_plugin_kv#${pluginId}:${namespace}/${key}.value_json`, valueJson)
+    }
+    const updatedAt = options?.updatedAt ?? Date.now()
+    this.setPluginKvMirror(pluginId, namespace, key, valueJson, updatedAt)
+    this.enqueue(() =>
+      this.db.run(
+        `INSERT INTO helmx_plugin_kv (plugin_id, namespace, key, value_json, updated_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(plugin_id, namespace, key) DO UPDATE SET
+           value_json = excluded.value_json,
+           updated_at = excluded.updated_at`,
+        pluginId,
+        namespace,
+        key,
+        valueJson,
+        updatedAt,
+      ),
+    )
+    return updatedAt
+  }
+
+  deletePluginKvKey(pluginId: string, namespace: string, key: string): boolean {
+    this.assertWritable()
+    const byNs = this.pluginKv.get(pluginId)
+    const byKey = byNs?.get(namespace)
+    if (!byKey || !byKey.delete(key)) return false
+    if (byKey.size === 0) byNs!.delete(namespace)
+    if (byNs!.size === 0) this.pluginKv.delete(pluginId)
+    this.enqueue(() =>
+      this.db.run(
+        'DELETE FROM helmx_plugin_kv WHERE plugin_id = ? AND namespace = ? AND key = ?',
+        pluginId,
+        namespace,
+        key,
+      ),
+    )
+    return true
+  }
+
+  listPluginKv(
+    pluginId: string,
+    namespace: string,
+    opts?: { prefix?: string; limit?: number; cursor?: string },
+  ): { items: Array<{ key: string; valueJson: string; updatedAt: number }>; nextCursor?: string } {
+    const byKey = this.pluginKv.get(pluginId)?.get(namespace)
+    if (!byKey || byKey.size === 0) return { items: [] }
+    const prefix = opts?.prefix
+    const cursor = opts?.cursor
+    const limit = opts?.limit
+    const keys: string[] = []
+    for (const key of byKey.keys()) {
+      if (prefix !== undefined && !key.startsWith(prefix)) continue
+      if (cursor !== undefined && compareCodeUnit(key, cursor) <= 0) continue
+      keys.push(key)
+    }
+    keys.sort(compareCodeUnit)
+    const hasMore = limit !== undefined && keys.length > limit
+    const pageKeys = hasMore ? keys.slice(0, limit) : keys
+    const items = pageKeys.map((key) => {
+      const entry = byKey.get(key)!
+      return { key, valueJson: entry.valueJson, updatedAt: entry.updatedAt }
+    })
+    return {
+      items,
+      ...(hasMore && items.length > 0 ? { nextCursor: items[items.length - 1]!.key } : {}),
+    }
+  }
+
+  clearPluginKvNamespace(pluginId: string, namespace: string): void {
+    this.assertWritable()
+    const byNs = this.pluginKv.get(pluginId)
+    if (byNs) {
+      byNs.delete(namespace)
+      if (byNs.size === 0) this.pluginKv.delete(pluginId)
+    }
+    this.enqueue(() =>
+      this.db.run(
+        'DELETE FROM helmx_plugin_kv WHERE plugin_id = ? AND namespace = ?',
+        pluginId,
+        namespace,
+      ),
+    )
+  }
+
+  deletePluginKv(pluginId: string): void {
+    this.assertWritable()
+    this.pluginKv.delete(pluginId)
+    this.enqueue(() =>
+      this.db.run('DELETE FROM helmx_plugin_kv WHERE plugin_id = ?', pluginId),
+    )
   }
 
   // ---------------- FTS ----------------

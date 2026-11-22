@@ -34,8 +34,6 @@ import {
   type MaybePromise,
   type ModelCatalog,
   type ModelProvidersRefreshResult,
-  type ModelTierRegistration,
-  type ModelTierSpec,
   type NodeInfo,
   type NodeIssuedToken,
   type NodeUpgradeCheckInput,
@@ -79,6 +77,7 @@ import {
 import {
   createGlobalDocumentStore,
   createPluginHostBackend,
+  createPluginKvStore,
   createPluginSessionDocStore,
 } from './runtime-host-backend.js'
 import { formatDiagnosticError, type KernelDiagnosticInput } from './diagnostics.js'
@@ -287,9 +286,11 @@ export class KernelRuntime {
       host: createPluginHostBackend(this),
       docs: this.documentStore,
       sessionDocs: createPluginSessionDocStore(this.store),
+      kv: createPluginKvStore(this.store),
       config: this.svc.pluginConfig,
       buildProvider: this.init.buildProvider,
     })
+    this.modelsRegistry.bindPluginHost(this.pluginHost)
     // Warm managed package install records (`config.json` `pluginPackages`; throws on corruption) before attaching manager.
     const packageStore = new PluginPackageManagerStore(this.svc.configSvc)
     await packageStore.load()
@@ -906,14 +907,6 @@ export class KernelRuntime {
 
   async listModels(): Promise<ModelCatalog> {
     return this.modelsRegistry.listModels()
-  }
-
-  /** Mount a plugin-owned runtime model-tier table into `ModelRegistry`. */
-  registerModelTiers(
-    pluginId: string,
-    getTiers: () => Readonly<Record<string, ModelTierSpec>>,
-  ): ModelTierRegistration {
-    return this.modelsRegistry.registerModelTiers(pluginId, getTiers)
   }
 
   /** Set disabled models (`PUT /api/models/filter`): clears all when `provider` is undefined. */

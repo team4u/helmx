@@ -15,10 +15,13 @@ import type {
   ModelCatalog,
   ModelProvidersRefreshResult,
   ModelTierCatalogEntry,
-  ModelTierRegistration,
+  ModelTiersCapability,
   ModelTierSpec,
+  ProvidedCapability,
 } from '@helmx/protocol'
 import { HelmxError, MODEL_TIER_PREFIX, isValidModelTierId } from '@helmx/protocol'
+
+const MODEL_TIERS_CAPABILITY_ID = 'helmx.model-tiers'
 import type { ConfigService, CredentialService, ProviderService, SecretStash } from '../services/index.js'
 import { listModelCatalog, listModelProviders, buildModels, type ResolvedModelRef } from './models.js'
 
@@ -148,8 +151,17 @@ export class ModelRegistry {
   modelPlaceholder = 'unconfigured'
   /** Explicitly disabled models (`providerId -> modelId[]`; from `config.json.disabledModels`). */
   private disabledModels: Record<string, string[]> = {}
-  /** Runtime model-tier table sources mounted by plugins (e.g. `builtin:tiers`); auto-unmounted on plugin disable. */
-  private readonly tierSources = new Map<symbol, { pluginId: string; getTiers: () => Readonly<Record<string, ModelTierSpec>> }>()
+  /** Bound plugin capability host for consuming `'helmx.model-tiers'` providers. */
+  private boundCapabilityHost:
+    | {
+        consumeCapability<T>(capabilityId: string): ReadonlyArray<ProvidedCapability<T>>
+        onCapabilityChanged(capabilityId: string, listener: () => void): () => void
+      }
+    | undefined
+  /** Active `onChanged` unsubscribers keyed by provider implementation identity. */
+  private readonly tierSubscriptions = new Map<ModelTiersCapability, () => void>()
+  /** Unsubscribe handle for `PluginHost.onCapabilityChanged('helmx.model-tiers', ...)`. */
+  private releaseTierCapabilityListener: (() => void) | undefined
 
   constructor(
     options: ModelRegistryOptions,
@@ -187,8 +199,37 @@ export class ModelRegistry {
     return run
   }
 
-  /** Wait for all in-flight model changes to settle before shutdown. */
+  /** Attach `PluginHost` capability lookup so `ModelRegistry` consumes `'helmx.model-tiers'` automatically. */
+  bindPluginHost(host: {
+    consumeCapability<T>(capabilityId: string): ReadonlyArray<ProvidedCapability<T>>
+    onCapabilityChanged(capabilityId: string, listener: () => void): () => void
+  }): void {
+    this.unbindTierCapabilities()
+    this.boundCapabilityHost = host
+    this.releaseTierCapabilityListener = host.onCapabilityChanged(MODEL_TIERS_CAPABILITY_ID, () => {
+      this.syncTierCapabilities(true)
+    })
+    this.syncTierCapabilities(false)
+  }
+
+  private unbindTierCapabilities(): void {
+    const release = this.releaseTierCapabilityListener
+    this.releaseTierCapabilityListener = undefined
+    release?.()
+    for (const unsub of [...this.tierSubscriptions.values()]) {
+      try {
+        unsub()
+      } catch {
+        // Ignore cleanup errors from retiring plugin listeners.
+      }
+    }
+    this.tierSubscriptions.clear()
+    this.boundCapabilityHost = undefined
+  }
+
+  /** Wait for all in-flight model changes to settle and detach capability listeners before shutdown. */
   async dispose(): Promise<void> {
+    this.unbindTierCapabilities()
     await this.modelsChain
   }
 
@@ -238,64 +279,88 @@ export class ModelRegistry {
     return catalog
   }
 
-  /**
-   * Mount a live model-tier table owned by a plugin (`ctx.host.registerModelTiers`).
-   * Kernel validates target syntax / non-recursiveness at resolution time and rejects conflicting
-   * tier IDs across active sources; `release()` is idempotent and automatically invoked on plugin disable.
-   */
-  registerModelTiers(
-    pluginId: string,
-    getTiers: () => Readonly<Record<string, ModelTierSpec>>,
-  ): ModelTierRegistration {
-    const token = Symbol(`tiers:${pluginId}`)
-    const initial = getTiers()
-    this.assertNoTierIdConflicts(token, initial)
-    this.tierSources.set(token, { pluginId, getTiers })
-    let released = false
-    return {
-      notifyChanged: async () => {
-        if (released || !this.tierSources.has(token)) return
-        this.assertNoTierIdConflicts(token, getTiers())
-        this.events.publish('models.changed', { providers: [] })
-        await this.alignAllConversations()
-      },
-      release: () => {
-        if (released) return
-        released = true
-        if (!this.tierSources.delete(token)) return
-        this.events.publish('models.changed', { providers: [] })
-        void this.alignAllConversations().catch(() => {})
-      },
+  /** Read active `'helmx.model-tiers'` capability providers from `PluginHost`. */
+  private readTierProviders(): ReadonlyArray<ProvidedCapability<ModelTiersCapability>> {
+    const host = this.boundCapabilityHost
+    if (host === undefined) return []
+    try {
+      return host
+        .consumeCapability<ModelTiersCapability>(MODEL_TIERS_CAPABILITY_ID)
+        .filter((entry) => entry.impl !== null && typeof entry.impl === 'object' && typeof entry.impl.getTiers === 'function')
+    } catch (err) {
+      if (err instanceof HelmxError && err.code === 'plugin_host_disposed') return []
+      throw err
     }
   }
 
+  private syncTierCapabilities(emitOnDelta: boolean): void {
+    const providers = this.readTierProviders()
+    const activeImpls = new Set(providers.map((entry) => entry.impl))
+    let changed = false
+
+    for (const [impl, unsub] of [...this.tierSubscriptions.entries()]) {
+      if (activeImpls.has(impl)) continue
+      this.tierSubscriptions.delete(impl)
+      changed = true
+      try {
+        unsub()
+      } catch {
+        // Ignore cleanup errors when detaching disabled providers.
+      }
+    }
+
+    for (const { impl } of providers) {
+      if (this.tierSubscriptions.has(impl)) continue
+      changed = true
+      const unsub =
+        typeof impl.onChanged === 'function'
+          ? impl.onChanged(() => this.handleTierSourceChanged())
+          : undefined
+      this.tierSubscriptions.set(impl, typeof unsub === 'function' ? unsub : () => {})
+    }
+
+    if (emitOnDelta && changed) {
+      this.events.publish('models.changed', { providers: [] })
+      void this.alignAllConversations().catch(() => {})
+    }
+  }
+
+  private async handleTierSourceChanged(): Promise<void> {
+    this.assertNoTierIdConflicts(this.readTierProviders())
+    this.events.publish('models.changed', { providers: [] })
+    await this.alignAllConversations()
+  }
+
   private assertNoTierIdConflicts(
-    selfToken: symbol,
-    incoming: Readonly<Record<string, ModelTierSpec>>,
+    providers: ReadonlyArray<ProvidedCapability<ModelTiersCapability>>,
   ): void {
-    const incomingIds = Object.keys(incoming)
-    if (incomingIds.length === 0) return
-    for (const [token, source] of this.tierSources) {
-      if (token === selfToken) continue
-      const existing = source.getTiers()
-      for (const id of incomingIds) {
-        if (Object.prototype.hasOwnProperty.call(existing, id)) {
+    const ownerByTierId = new Map<string, string>()
+    for (const { pluginId, impl } of providers) {
+      const map = impl.getTiers()
+      if (map === null || typeof map !== 'object') continue
+      for (const id of Object.keys(map)) {
+        if (!isValidModelTierId(id)) continue
+        const existingOwner = ownerByTierId.get(id)
+        if (existingOwner !== undefined) {
           throw new HelmxError(
             'model_tier_conflict',
-            `Model tier '${MODEL_TIER_PREFIX}/${id}' is already registered by plugin '${source.pluginId}'`,
+            `Model tier '${MODEL_TIER_PREFIX}/${id}' is already registered by plugin '${existingOwner}'`,
             409,
-            { tierId: id, owner: source.pluginId },
+            { tierId: id, owner: existingOwner },
           )
         }
+        ownerByTierId.set(id, pluginId)
       }
     }
   }
 
-  /** Collect active runtime model tiers from all mounted plugin sources (preserving declaration order). */
+  /** Collect active runtime model tiers from all mounted `'helmx.model-tiers'` capability providers. */
   getRegisteredTiers(): Record<string, ModelTierSpec> {
+    const providers = this.readTierProviders()
+    this.assertNoTierIdConflicts(providers)
     const result: Record<string, ModelTierSpec> = {}
-    for (const source of this.tierSources.values()) {
-      const map = source.getTiers()
+    for (const { impl } of providers) {
+      const map = impl.getTiers()
       if (map === null || typeof map !== 'object') continue
       for (const [id, spec] of Object.entries(map)) {
         if (!isValidModelTierId(id) || spec === null || typeof spec !== 'object' || typeof spec.model !== 'string') {

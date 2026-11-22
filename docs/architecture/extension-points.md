@@ -10,8 +10,10 @@
 
 | 组件 | 职责 |
 | :--- | :--- |
-| `CapabilityRegistry` | 动作、工具与原始路由的注册、Schema 校验与五端映射 |
+| `CapabilityRegistry` | 动作、工具与原始路由的注册、Schema/路径冲突校验与五端映射 |
+| `CapabilityServiceRegistry` | `ctx.provide` / `ctx.consume` 类型化能力注册、自动生命周期释放与变更观察（内核 `ModelRegistry` 经此消费 `helmx.model-tiers`） |
 | `PluginDocRegistry` | 全局 `ctx.doc` 与按会话分片 `ctx.sessionDoc` 的持久化与发布 |
+| `PluginKvRegistry` | `ctx.kv<T>(namespace)` 按键持久存储、边界校验、SecretStash 脱敏与 256 KiB 单条上限 |
 | `UiRegistry` | 界面声明校验、跨插件冲突裁决（priority），经注入端口请求客户端构建产物 |
 | `RuntimeToolRegistry` | 注册与热更新内核/插件工具；`run_action` 调用与只读 `describe` |
 | `HookBridge` | 每次模型请求按 scope 裁剪插件工具；钩子链收敛后投射动作目录，清理不可达能力的旧指引 |
@@ -162,4 +164,30 @@ pnpm helmx plugins doc builtin:workflow runs --current --watch --json
 
 `builtin:workflow` 是这一投影模型的基准用例：完整运行摘要放入会话文档 `runs`（每会话只写自己的 run）；全局 `workflow.updated` 事件仅含 `id / conversationId / status` 提示，不旁路广播完整摘要；摘要无变化时不重复发布。这样全局首帧与广播通道免于运行详情的写放大，而 `runs` 明细按需订阅。
 
-停用插件后，其公共文档快照不再进入首帧、订阅随生命周期移除；私有数据保留在 `state.sqlite`，重新启用后可继续读取（开发阶段不承诺格式兼容）。
+停用插件后，其公共文档快照不再进入首帧、订阅随生命周期移除；私有文档与 `ctx.kv` 数据保留在 `state.sqlite`，重新启用后可继续读取，卸载受管包时统一清除（开发阶段不承诺格式兼容）。
+
+## 插件间能力注册、KV 存储与原始 HTTP 路由
+
+### 类型化能力注册表（`ctx.provide` / `ctx.consume`）
+
+插件通过 `ctx.provide<T>(capabilityId, impl)` 向宿主注册强类型能力实现，返回幂等释放函数；其他插件通过 `ctx.consume<T>(capabilityId)` 读取当前活跃插件提供的实现列表（`ReadonlyArray<{ pluginId: string; impl: T }>`），内核子系统亦可通过只读 `PluginHost.consumeCapability<T>(capabilityId)` 与 `onCapabilityChanged` 消费能力，避免为单个插件在 `ctx.host` 开设专用端口：
+
+- **标识与生命周期边界**：`capabilityId` 在注册与消费边界均按 `^[a-z0-9][a-z0-9._-]{0,63}$` 强校验；受插件 epoch 守卫约束；插件停用、停止、回滚或卸载时宿主自动释放其提供的全部能力，非活跃（disabled / deactivating / failed）插件的实现即时从 `consume` 视图消失。
+- **典型内置契约**：
+  - `helmx.dispatch-tools`：`builtin:workflow`（`['subagent', 'SubagentWorkflow']`）与 `builtin:swarm`（`['swarm_dispatch_worker']`）声明各自派工工具，`builtin:profile` 动态消费以决定协作目录注入与 `@` 补全（零硬编码工具名，任意第三方派工插件自动生效）；
+  - `helmx.model-tiers`：`builtin:tiers` 提供 `{ getTiers, onChanged }`，内核 `ModelRegistry` 直接从 `PluginHost` 消费并在启停与变更时自动广播 `models.changed` 并对齐继承会话。
+
+### 轻量按键持久存储（`ctx.kv`）
+
+`ctx.kv<T>(namespace)` 返回绑定 `(pluginId, namespace)` 的 `PluginKvHandle<T>`，底层落盘 `state.sqlite` 的 `helmx_plugin_kv(plugin_id, namespace, key, value_json, updated_at)`：
+
+- **接口**：`get(key)`、`set(key, value)`、`delete(key)`、`list({ prefix?, limit?, cursor? })`（按 UTF-16 code-unit 确定性排序与游标分页）、`clear()`、`flush()`；
+- **边界与安全**：`namespace`（`^[A-Za-z0-9._-]{1,64}$`）、`key`（1..256 可打印字符）与分页参数在边界强校验；`set` 经 `redactJsonValue` 校验 JSON 合法性并过全局 `SecretStash.redact` 后按单条序列化落盘，单条上限 **256 KiB**（超限显式 `413 plugin_kv_too_large` 且不破坏旧值）；受 epoch 守卫（停用后旧句柄拒绝，受控 `stopWindow` 内允许收尾写回与 `flush()`）；卸载插件时随 `purgePluginPersistentData` 彻底清理。
+
+### 原始 HTTP 路由（`ctx.route`）
+
+`ctx.route({ method, path, public?, handler })` 挂载于 `/api/plugins/<encodeURIComponent(pluginId)>/routes<path>`：
+
+- **方法与参数提取**：支持 `GET | POST | PUT | PATCH | DELETE | HEAD`；`:param` 路径段经严格 percent-decoding 后作为只读 `{ params }` 经第二参数传入 `handler(req, ctx)`（既有单参 `handler(req)` 无缝兼容；静态路径优先于同长度参数化路径）；
+- **注册期冲突检测**：同一插件内相同 HTTP 方法与碰撞路径结构（如 `/items/:a` 与 `/items/:b`，或重复参数名）在注册期即显式拒绝（`400 validation_error`），杜绝静默遮蔽；
+- **响应自动脱敏**：`text/*`、`application/json` 与 `*+json` 响应在出站前自动过 `SecretStash.redact`（保留状态码与自定义响应头、清除过时 `content-length`；`text/event-stream` 经 `TransformStream` 流式脱敏），二进制与非文本流（如 `application/octet-stream`）零缓冲直接透传。

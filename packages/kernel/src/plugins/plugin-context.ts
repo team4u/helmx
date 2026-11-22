@@ -24,9 +24,12 @@ import {
 import type { Provider } from '@earendil-works/pi-ai';
 import type { HookPipeline } from './hooks.js';
 import type { CapabilityRegistry } from './capability-registry.js';
+import type { CapabilityServiceRegistry } from './capability-service-registry.js';
 import type { UiRegistry } from './ui-registry.js';
 import type { PluginDocRegistry } from './doc-registry.js';
-import { assertValidId, jsonClone } from './shared.js';
+import type { PluginKvRegistry } from './kv-registry.js';
+import { assertValidId, idempotentRelease, jsonClone } from './shared.js';
+import { isPluginStateActive } from './lifecycle-helpers.js';
 import { assertValidProviderShape } from './provider-coordinator.js';
 import { wrapHostApi, type HostApiDependencies } from './host-api.js';
 import type {
@@ -39,10 +42,13 @@ interface CreatePluginContextOptions {
   epoch: number;
   pipelines: Map<HookName, HookPipeline<HookName>>;
   capabilityRegistry: CapabilityRegistry;
+  capabilityServiceRegistry: CapabilityServiceRegistry;
   uiRegistry: UiRegistry;
   docRegistry: PluginDocRegistry;
+  kvRegistry: PluginKvRegistry;
   configStore?: PluginConfigStore;
   hostDeps: HostApiDependencies;
+  getActivePluginIds: () => ReadonlySet<string>;
   assertNotDisposed: () => void;
   assertContextUsable: (state: PluginState, epoch: number, what: string) => void;
   isRegisteredState: (state: PluginState) => boolean;
@@ -126,10 +132,13 @@ export function createPluginContext(options: CreatePluginContextOptions): HelmxP
     epoch,
     pipelines,
     capabilityRegistry,
+    capabilityServiceRegistry,
     uiRegistry,
     docRegistry,
+    kvRegistry,
     configStore,
     hostDeps,
+    getActivePluginIds,
     assertNotDisposed,
     assertContextUsable,
     isRegisteredState,
@@ -158,6 +167,13 @@ export function createPluginContext(options: CreatePluginContextOptions): HelmxP
       return;
     }
     assertContextUsable(state, epoch, `doc ${name} handle`);
+  };
+
+  const assertKvUsable = (namespace: string) => {
+    if (state.stopWindow && isRegisteredState(state) && state.epoch === epoch) {
+      return;
+    }
+    assertContextUsable(state, epoch, `kv ${namespace} handle`);
   };
 
   const addHook = <N extends HookName>(name: N, fn: HookHandler<N>, opts?: HookOptions) => {
@@ -211,6 +227,35 @@ export function createPluginContext(options: CreatePluginContextOptions): HelmxP
     sessionDoc: (name, initial, opts) => {
       assertOpen(`declare sessionDoc ${name}`);
       return docRegistry.registerSessionDoc(pluginId, name, initial, opts, () => assertDocUsable(name));
+    },
+
+    kv: <T = unknown>(namespace: string) => {
+      assertKvUsable(namespace);
+      return kvRegistry.createHandle<T>(pluginId, namespace, () => assertKvUsable(namespace));
+    },
+
+    provide: <T,>(capabilityId: string, impl: T): (() => void) => {
+      assertContextUsable(state, epoch, `provide ${capabilityId}`);
+      const removeEntry = capabilityServiceRegistry.provide(pluginId, capabilityId, impl);
+      const release = idempotentRelease(() => {
+        const removed = removeEntry();
+        if (removed && state.enabled) {
+          capabilityServiceRegistry.notifyChanged([capabilityId]);
+        }
+      });
+      state.hostReleases.add(release);
+      if (isPluginStateActive(state)) {
+        capabilityServiceRegistry.notifyChanged([capabilityId]);
+      }
+      return () => {
+        state.hostReleases.delete(release);
+        release();
+      };
+    },
+
+    consume: <T,>(capabilityId: string) => {
+      assertContextUsable(state, epoch, `consume ${capabilityId}`);
+      return capabilityServiceRegistry.consume<T>(capabilityId, getActivePluginIds());
     },
 
     service: (spec: PluginServiceSpec) => {

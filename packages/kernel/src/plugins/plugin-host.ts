@@ -34,6 +34,7 @@ import {
   type PluginToolContext,
   type PluginUiContribution,
   type PluginUpdateResult,
+  type ProvidedCapability,
   type PublicPluginDoc,
   type PublicPluginSessionDoc,
 } from '@helmx/protocol';
@@ -43,6 +44,8 @@ import { PluginTaskTracker } from './tracking.js';
 import type { PluginPackageManager, PackageManagerHost } from './package-manager.js';
 import type { PluginPackageManagerStore } from './package-store.js';
 import { PluginDocRegistry } from './doc-registry.js';
+import { PluginKvRegistry } from './kv-registry.js';
+import { CapabilityServiceRegistry } from './capability-service-registry.js';
 import {
   CapabilityRegistry,
   type ActionCallerIdentity,
@@ -104,6 +107,9 @@ import {
 
 export type { PluginDocStore, PluginSessionDocStore, PluginDocRegistryOptions } from './doc-registry.js';
 export { PLUGIN_DOC_MAX_JSON_BYTES } from './doc-registry.js';
+export type { PluginKvStore, PluginKvRawEntry, PluginKvRegistryOptions } from './kv-registry.js';
+export { PLUGIN_KV_MAX_VALUE_BYTES } from './kv-registry.js';
+export { CAPABILITY_ID_PATTERN } from './capability-service-registry.js';
 export {
   type ActionCallerIdentity,
   type ActionInvocationSurface,
@@ -126,7 +132,9 @@ export class PluginHost {
   private pipelines = new Map<HookName, HookPipeline<HookName>>();
   private tracker = new PluginTaskTracker();
   private docRegistry: PluginDocRegistry;
+  private kvRegistry: PluginKvRegistry;
   private capabilityRegistry = new CapabilityRegistry();
+  private capabilityServiceRegistry = new CapabilityServiceRegistry();
   private uiRegistry: UiRegistry;
   private configStore?: PluginConfigStore;
   /** Instance-level per-plugin config write serialization (shared by HTTP PUT and ctx.host.setConfig). */
@@ -162,6 +170,11 @@ export class PluginHost {
           });
         },
       },
+    );
+    this.kvRegistry = new PluginKvRegistry(
+      options.kv,
+      (text) => this.redactProjectionText(text),
+      { maxValueBytes: options.maxKvValueBytes },
     );
   }
 
@@ -327,6 +340,24 @@ export class PluginHost {
   listUi(): PluginUiContribution[] {
     this.assertNotDisposed();
     return this.uiRegistry.listUi(getActiveEnabledPluginIds(this.plugins));
+  }
+
+  /**
+   * Read-only lookup of active plugin-provided capabilities for `capabilityId`.
+   * Allows kernel subsystems (e.g. `ModelRegistry`) to consume plugin capabilities without bespoke host ports.
+   */
+  consumeCapability<T>(capabilityId: string): ReadonlyArray<ProvidedCapability<T>> {
+    this.assertNotDisposed();
+    return this.capabilityServiceRegistry.consume<T>(
+      capabilityId,
+      new Set(getActiveEnabledPluginIds(this.plugins)),
+    );
+  }
+
+  /** Subscribes to active-provider changes for `capabilityId`; returns an idempotent unsubscribe handle. */
+  onCapabilityChanged(capabilityId: string, listener: () => void): () => void {
+    this.assertNotDisposed();
+    return this.capabilityServiceRegistry.onCapabilityChanged(capabilityId, listener);
   }
 
   // --- external plugin DX and managed package -------------------------------------------------
@@ -626,6 +657,7 @@ export class PluginHost {
     return {
       pipelines: this.pipelines,
       capabilityRegistry: this.capabilityRegistry,
+      capabilityServiceRegistry: this.capabilityServiceRegistry,
       uiRegistry: this.uiRegistry,
       docRegistry: this.docRegistry,
     };
@@ -659,6 +691,7 @@ export class PluginHost {
       tracker: this.tracker,
       providers: this.options.providers,
       docRegistry: this.docRegistry,
+      kvRegistry: this.kvRegistry,
       host: this,
     };
   }
@@ -669,9 +702,12 @@ export class PluginHost {
       epoch,
       pipelines: this.pipelines,
       capabilityRegistry: this.capabilityRegistry,
+      capabilityServiceRegistry: this.capabilityServiceRegistry,
       uiRegistry: this.uiRegistry,
       docRegistry: this.docRegistry,
+      kvRegistry: this.kvRegistry,
       configStore: this.configStore,
+      getActivePluginIds: () => new Set(getActiveEnabledPluginIds(this.plugins)),
       hostDeps: {
         backend: this.options.host,
         tracker: this.tracker,

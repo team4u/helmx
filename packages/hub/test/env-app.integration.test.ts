@@ -4,7 +4,7 @@
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import assert from 'node:assert/strict'
 import { access, mkdir, readFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import { after, before, test } from 'node:test'
 import { runCli } from '../../cli/src/index.js'
 import { createNodeDaemon, type NodeDaemon } from '../../node/src/index.js'
@@ -68,7 +68,14 @@ before(async () => {
       hubUrl: hubEnv.hubUrl,
       identity: { nodeId: 'integration-node', token: nodeToken },
       dataDir: nodeDir,
-      envServer: { shellEnv: { HELMX_NODE_TEST_ORIGIN: 'remote-executor' } },
+      envServer: {
+        shellEnv: {
+          HELMX_NODE_TEST_ORIGIN: 'remote-executor',
+          // Put this worktree's generated `helmx` shim first on the simulated remote node's PATH
+          // so tests stay hermetic instead of executing a stale global `/usr/local/bin/helmx`.
+          PATH: `${join(hubDir, 'bin')}${delimiter}${process.env['PATH'] ?? ''}`,
+        },
+      },
       reconnectBaseDelayMs: 50,
       log: () => undefined,
     })

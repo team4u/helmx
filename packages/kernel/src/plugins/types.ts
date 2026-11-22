@@ -10,8 +10,6 @@ import type {
   HookName,
   PluginBuildProvider,
   ModelCatalog,
-  ModelTierRegistration,
-  ModelTierSpec,
   PluginConfigFieldSchema,
   PluginDefinition,
   PluginDiagnosticError,
@@ -20,8 +18,10 @@ import type {
 } from '@helmx/protocol';
 import type { Provider } from '@earendil-works/pi-ai';
 import type { PluginDocStore, PluginSessionDocStore } from './doc-registry.js';
+import type { PluginKvStore } from './kv-registry.js';
 
 export type { PluginDocStore, PluginSessionDocStore } from './doc-registry.js';
+export type { PluginKvStore } from './kv-registry.js';
 
 export interface PluginConfigStore {
   get(pluginId: string): Record<string, unknown>;
@@ -128,11 +128,6 @@ export interface PluginHostBackend
   manageConversation(id: number, pluginId: string): () => void
   /** Optional: read current model catalog snapshot (501 when unwired). */
   listModels?(): Promise<ModelCatalog>
-  /** Optional: mount a runtime model-tier table owned by `pluginId` (501 when unwired). */
-  registerModelTiers?(
-    pluginId: string,
-    getTiers: () => Readonly<Record<string, ModelTierSpec>>,
-  ): ModelTierRegistration
 }
 
 export interface PluginHostOptions {
@@ -141,6 +136,10 @@ export interface PluginHostOptions {
   docs: PluginDocStore;
   /** Durable store for per-conversation `sessionDoc`s (`durable !== false`); missing rejects durable declarations with 501. */
   sessionDocs?: PluginSessionDocStore;
+  /** Durable store for per-plugin keyed KV storage (`ctx.kv`); missing rejects `ctx.kv` declarations with 501. */
+  kv?: PluginKvStore;
+  /** Optional per-entry UTF-8 JSON byte limit override for `ctx.kv` (defaults to 256 KiB; mainly for tests). */
+  maxKvValueBytes?: number;
   config?: PluginConfigStore;
   /** Optional model provider mount port (`ctx.provider`). */
   providers?: PluginProviderPort;

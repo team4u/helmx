@@ -1,7 +1,7 @@
 /** builtin:tiers: semantic model tiers (`tier/<id>`) and reusable preset templates. */
 import {
   HelmxError, MODEL_TIER_DESCRIPTION_MAX_LENGTH,
-  type ModelTierRegistration, type ModelTierSpec, type PluginDefinition,
+  type ModelTiersCapability, type ModelTierSpec, type PluginDefinition,
 } from '@helmx/protocol'
 import { resolvePluginClientAssets } from './asset-paths.js'
 import { readTiersSkillAsset } from './tiers/assets.js'
@@ -71,7 +71,7 @@ export function createTiersPlugin(): PluginDefinition {
       })
 
       const stateDoc = ctx.doc<TiersStateDoc>(TIERS_STATE_DOC, createEmptyTiersState(), { public: true })
-      let registration: ModelTierRegistration | undefined
+      const tierChangeListeners = new Set<() => Promise<void> | void>()
       let writeChain: Promise<unknown> = Promise.resolve()
 
       const enqueueWrite = <T>(op: () => Promise<T>): Promise<T> => {
@@ -81,11 +81,26 @@ export function createTiersPlugin(): PluginDefinition {
       }
       const readState = (): TiersStateDoc => sanitizeStateDoc(stateDoc.get())
       const autoInjectEnabled = (): boolean => (ctx.getConfig() as TiersPluginConfig).autoInjectCatalog !== false
+      const notifyTiersChanged = async (): Promise<void> => {
+        for (const listener of [...tierChangeListeners]) {
+          await listener()
+        }
+      }
       const persist = async (next: TiersStateDoc, notifyTiers = true): Promise<void> => {
         stateDoc.set(next)
         await stateDoc.flush()
-        if (notifyTiers) await registration?.notifyChanged()
+        if (notifyTiers) await notifyTiersChanged()
       }
+
+      ctx.provide<ModelTiersCapability>('helmx.model-tiers', {
+        getTiers: () => readState().tiers,
+        onChanged: (listener) => {
+          tierChangeListeners.add(listener)
+          return () => {
+            tierChangeListeners.delete(listener)
+          }
+        },
+      })
 
       const buildListPayload = async () => {
         const state = readState()
@@ -109,16 +124,12 @@ export function createTiersPlugin(): PluginDefinition {
 
       ctx.service({
         id: 'tiers-runtime',
-        prepare() { registration = ctx.host.registerModelTiers(() => readState().tiers) },
         async start() {
           await ctx.host.skills.ensureSkill(readTiersSkillAsset())
-          if (Object.keys(readState().tiers).length > 0) await registration?.notifyChanged()
+          if (Object.keys(readState().tiers).length > 0) await notifyTiersChanged()
         },
         async stop() {
           await writeChain
-          const reg = registration
-          registration = undefined
-          reg?.release()
         },
         async inUse() {
           if (Object.keys(readState().tiers).length === 0) return []
