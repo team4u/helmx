@@ -195,7 +195,7 @@ export async function runNodeCli(argv: readonly string[] = [], ioInput: Partial<
     const message = error instanceof Error ? error.message : String(error);
     const code = error instanceof UsageError ? error.code : 'usage_error';
     if (argv.includes('--json')) io.err(`${JSON.stringify({ error: { code, message } })}\n`);
-    else io.err(`error: ${message}\n`);
+    else io.err(`error [${code}]: ${message}\n`);
     return 1;
   }
 
@@ -212,7 +212,7 @@ export async function runNodeCli(argv: readonly string[] = [], ioInput: Partial<
 
   const emitError = (message: string, code: string): number => {
     if (parsed.json) io.err(`${JSON.stringify({ error: { code, message } })}\n`);
-    else io.err(`error: ${message}\n`);
+    else io.err(`error [${code}]: ${message}\n`);
     return 1;
   };
 

@@ -1,11 +1,14 @@
 import process from 'node:process';
+import { CliError } from './errors.js';
 
-/** stdin abstraction used by commands like `ask` to read piped input; tests inject stubs to avoid real process I/O. */
+/** stdin abstraction used by commands like `ask` and secret prompts; tests inject stubs to avoid real process I/O. */
 export interface StdinSource {
-  /** Interactive terminal check: never read stdin under a TTY (prevents blocking indefinitely before EOF). */
+  /** Interactive terminal check: never read piped stdin under a TTY (prevents blocking indefinitely before EOF). */
   isTTY: boolean;
   /** Read all stdin content until EOF (only called when non-TTY). */
   readAll(): Promise<string>;
+  /** Prompt for a secret interactively without echoing characters to the terminal (used when `isTTY` is true). */
+  readSecret?(prompt: string): Promise<string>;
 }
 
 /** Injection hooks for runCli: tests override streams and fetch to avoid touching real process I/O. */
@@ -27,6 +30,70 @@ export interface Io {
   stdin: StdinSource;
 }
 
+/** Read a secret interactively from a TTY in raw mode without echoing characters to the terminal. */
+async function readSecretFromProcessTty(prompt: string): Promise<string> {
+  if (process.stdin.isTTY !== true || typeof process.stdin.setRawMode !== 'function') {
+    throw new CliError('interactive secret prompt requires a TTY', 'not_a_tty');
+  }
+  const stdin = process.stdin;
+  const wasRaw = stdin.isRaw === true;
+  process.stderr.write(prompt);
+  return await new Promise<string>((resolve, reject) => {
+    const chars: string[] = [];
+    const cleanup = (): void => {
+      stdin.off('data', onData);
+      stdin.off('end', onEnd);
+      stdin.off('error', onError);
+      try {
+        stdin.setRawMode(wasRaw);
+      } catch {
+        // Ignore restore errors if stream already closed.
+      }
+      stdin.pause();
+    };
+    const finish = (value: string): void => {
+      cleanup();
+      process.stderr.write('\n');
+      resolve(value);
+    };
+    const fail = (err: Error): void => {
+      cleanup();
+      process.stderr.write('\n');
+      reject(err);
+    };
+    const onData = (chunk: Buffer | string): void => {
+      const text = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+      for (const ch of text) {
+        if (ch === '\r' || ch === '\n' || ch === '\x04') {
+          finish(chars.join(''));
+          return;
+        }
+        if (ch === '\x03') {
+          fail(new CliError('cancelled', 'aborted', 130));
+          return;
+        }
+        if (ch === '\x7f' || ch === '\x08') {
+          chars.pop();
+          continue;
+        }
+        if (ch >= ' ') chars.push(ch);
+      }
+    };
+    const onEnd = (): void => finish(chars.join(''));
+    const onError = (err: Error): void => fail(err);
+    try {
+      stdin.setRawMode(true);
+    } catch (err) {
+      fail(err instanceof Error ? err : new Error(String(err)));
+      return;
+    }
+    stdin.resume();
+    stdin.on('data', onData);
+    stdin.on('end', onEnd);
+    stdin.on('error', onError);
+  });
+}
+
 /** Default stdin source: lazy TTY check (avoids touching process state at module load), then reads stdin to completion. */
 function processStdin(): StdinSource {
   return {
@@ -38,6 +105,7 @@ function processStdin(): StdinSource {
       for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
       return Buffer.concat(chunks).toString('utf8');
     },
+    readSecret: readSecretFromProcessTty,
   };
 }
 

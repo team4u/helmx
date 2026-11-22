@@ -7,6 +7,7 @@ import { CORE_CLI_COMMAND_PATHS } from '@helmx/protocol'
 import type { CommandSpec } from './shared.js'
 import { CliError } from '../errors.js'
 import { authCommands } from './auth.js'
+import { doctorCommands } from './doctor.js'
 import { updateCommand } from './update.js'
 import { startCommands } from './start.js'
 import { serviceCommands } from './service.js'
@@ -104,6 +105,7 @@ function assertCommandTableValid(commands: readonly CommandSpec[]): void {
 export function coreCommands(): CommandSpec[] {
   const commands = [
     ...authCommands(),
+    ...doctorCommands(),
     updateCommand,
   ...startCommands,
   ...serviceCommands,

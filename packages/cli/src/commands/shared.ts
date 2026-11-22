@@ -65,15 +65,19 @@ export function assertNoExtraPositionals(positionals: readonly string[], fromInd
 
 /**
  * Resolve conversation target: explicit positional ID or --current (from HELMX_CONVERSATION_ID).
- * Fails explicitly when both are missing/invalid; explicit positional takes precedence if both are provided.
+ * Mutually exclusive; fails explicitly when both are provided or both are missing/invalid.
  */
 export function resolveConversationTarget(
   flags: Map<string, unknown>,
   positionalId: string | undefined,
   env: NodeJS.ProcessEnv,
 ): number {
+  const current = flags.get('current') === true
+  if (positionalId !== undefined && current) {
+    throw new CliError('conversation ID and --current are mutually exclusive', 'conflicting_flags')
+  }
   if (positionalId !== undefined) return parsePositiveInt(positionalId, 'conversation ID')
-  if (flags.get('current') === true) {
+  if (current) {
     const raw = env['HELMX_CONVERSATION_ID']
     if (!raw || !raw.trim()) {
       throw new CliError('--current requires HELMX_CONVERSATION_ID to be set', 'current_conversation_missing')
@@ -198,14 +202,47 @@ export async function authAndSave(ctx: CommandContext, path: '/api/auth/setup' |
   }
 }
 
-/** Shared password resolution for setup/login: --password takes precedence, falling back to non-TTY stdin. */
-export async function resolvePasswordFlag(ctx: CommandContext, flags: Map<string, unknown>): Promise<string> {
-  const raw = flagValue<string>(flags, 'password')
-  const password = raw ?? (process.stdin.isTTY ? undefined : await readPasswordFromStdin())
-  if (!password) {
-    throw new CliError('missing password: pass --password <password> or pipe via stdin (--password is required under a TTY)', 'missing_password')
+/**
+ * Resolve a secret value without requiring it in argv (avoiding `ps` / shell-history leaks):
+ * explicit flag > masked TTY prompt (when `stdin.isTTY` + `readSecret`) > first line of piped stdin.
+ * Do not trim whitespace since secrets/passwords may contain intentional spaces.
+ */
+export async function resolveSecretValue(
+  ctx: CommandContext,
+  explicit: string | undefined,
+  options: { flagName: string; prompt: string; missingCode: string },
+): Promise<string> {
+  if (explicit !== undefined) {
+    if (explicit.length === 0) {
+      throw new CliError(`--${options.flagName} cannot be empty`, options.missingCode)
+    }
+    return explicit
   }
-  return password
+  let value: string | undefined
+  if (ctx.io.stdin.isTTY) {
+    if (ctx.io.stdin.readSecret !== undefined) {
+      value = await ctx.io.stdin.readSecret(options.prompt)
+    }
+  } else {
+    const raw = await ctx.io.stdin.readAll()
+    value = raw.split(/\r?\n/, 1)[0]
+  }
+  if (!value) {
+    throw new CliError(
+      `missing ${options.flagName}: enter interactively in a TTY, pipe via stdin, or pass --${options.flagName} <value>`,
+      options.missingCode,
+    )
+  }
+  return value
+}
+
+/** Shared password resolution for setup/login: --password > masked TTY prompt > piped stdin. */
+export async function resolvePasswordFlag(ctx: CommandContext, flags: Map<string, unknown>): Promise<string> {
+  return await resolveSecretValue(ctx, flagValue<string>(flags, 'password'), {
+    flagName: 'password',
+    prompt: 'Password: ',
+    missingCode: 'missing_password',
+  })
 }
 
 // ---------------------------------------------------------------------------

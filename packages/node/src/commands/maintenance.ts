@@ -18,7 +18,19 @@ export async function upgradeCommand(ctx: CommandContext): Promise<number> {
     const result = await checkNodeUpgrade(dataDir, {
       ...(registryUrl !== undefined ? { registryUrl } : {}),
     });
-    emit({ ok: true, ...result, dataDir });
+    if (parsed.json) {
+      emit({ ok: true, ...result, dataDir });
+    } else {
+      const lines = [
+        `current:  ${result.currentVersion}`,
+        `latest:   ${result.latestVersion}`,
+        `update:   ${result.updateAvailable ? 'available' : 'up to date'}`,
+      ];
+      if (result.blocked !== undefined) {
+        lines.push(`blocked:  ${result.blocked.version} since ${result.blocked.at} (${result.blocked.reason})`);
+      }
+      io.out(`${lines.join('\n')}\n`);
+    }
     return 0;
   }
   // Executing an upgrade requires a live managed daemon.
@@ -51,12 +63,20 @@ export async function upgradeCommand(ctx: CommandContext): Promise<number> {
   // Validate response schema before emitting success.
   const result = validateUpgradeResult(response.result);
   const sourcePid = record.pid;
-  emit({
-    ok: true,
-    ...result,
-    previousPid: sourcePid,
-    dataDir,
-  });
+  if (parsed.json) {
+    emit({
+      ok: true,
+      ...result,
+      previousPid: sourcePid,
+      dataDir,
+    });
+  } else if (!result.upgraded) {
+    io.out(`already at ${result.targetVersion} (no upgrade needed)\n`);
+  } else {
+    io.out(
+      `upgraded: ${result.previousVersion} -> ${result.targetVersion}${result.pid !== undefined ? ` (new pid ${result.pid}, previous pid ${sourcePid})` : ''}\n`,
+    );
+  }
   return 0;
 }
 
@@ -91,15 +111,36 @@ export async function serviceCommand(ctx: CommandContext): Promise<number> {
     const result = await installNodeService(cliEntryPath, dataDir, {
       ...(hubUrl !== '' ? { hubUrl } : {}),
     });
-    emit(result);
+    if (parsed.json) {
+      emit(result);
+    } else {
+      const lines = [
+        result.message,
+        `config:   ${result.configPath}`,
+        ...(result.targetPath !== undefined ? [`active:   ${result.targetPath}`] : []),
+      ];
+      io.out(`${lines.join('\n')}\n`);
+    }
     return result.ok ? 0 : 1;
   }
   if (action === 'uninstall') {
     const result = await uninstallNodeService(cliEntryPath, dataDir);
-    emit(result);
+    if (parsed.json) emit(result);
+    else io.out(`${result.message}\n`);
     return result.ok ? 0 : 1;
   }
   const status = await getNodeServiceStatus(cliEntryPath, dataDir);
-  emit(status);
+  if (parsed.json) {
+    emit(status);
+  } else {
+    const lines = [
+      `platform:  ${status.platform}`,
+      `installed: ${status.installed === null ? 'unknown (query failed)' : status.installed ? 'yes' : 'no'}`,
+      `running:   ${status.running}`,
+      `config:    ${status.configPath}`,
+      ...(status.detail !== undefined && status.detail !== '' ? [`detail:    ${status.detail}`] : []),
+    ];
+    io.out(`${lines.join('\n')}\n`);
+  }
   return 0;
 }

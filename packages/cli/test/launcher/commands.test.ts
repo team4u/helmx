@@ -4,8 +4,8 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { useTempDir, sanitizedHostEnv } from '@helmx/test-kit/node';
 import { readCurrentRelease } from '@helmx/env-io';
+import { defaultHubUpdateCore } from '@helmx/env-io/hub-payload';
 import { cmdCheck, cmdStart, cmdStop, cmdRestart, cmdUpdate, readLocalHubSnapshot } from '../../src/launcher/commands.js';
-import { defaultUpdateCore } from '../../src/launcher/update-core.js';
 import { readPidRecord } from '../../src/launcher/records.js';
 import {
   captureIo,
@@ -28,7 +28,7 @@ function ioWith(root: string) {
 
 test('the production update core is really bound to the shared engine', { timeout: 60_000 }, async (t) => {
   const root = useTempDir(t, 'helmx-launcher-realcore-');
-  const core = defaultUpdateCore();
+  const core = defaultHubUpdateCore();
   // Real engine staging semantics behind the port: immutable `<uuid>` candidate, engine-format
   // `.complete` marker, entries resolved inside the release.
   const staged = await core.stageRelease(root, '1.0.0', async (stagingDir) => {

@@ -303,7 +303,7 @@ test('providers set sends full array; credentials set/delete use REST paths', { 
   const set = await runCliCaptured(['providers', 'set', '--input', providers, '--json'], env)
   assert.equal(set.code, 0, set.err)
   const hit = hub.recorded.hits.find((h) => h.method === 'PUT' && h.path === '/api/providers')!
-  assert.ok(Array.isArray(hit.body))
+  assert.ok(hit.body !== null && typeof hit.body === 'object' && Array.isArray((hit.body as { providers?: unknown }).providers))
 
   const cred = await runCliCaptured(['credentials', 'set', 'openai', '--value', 'sk-1', '--json'], env)
   assert.equal(cred.code, 0, cred.err)
@@ -1574,7 +1574,7 @@ test('send --wait: uses ?wait=1; --json returns full result, human mode prints a
   const result = {
     conversationId: 7,
     submissionId: 'sub-9',
-    text: '你好',
+    text: 'answer body',
     entry: {
       id: 'e1',
       kind: 'pi.assistant',
