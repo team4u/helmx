@@ -12,12 +12,16 @@ import type {
 } from '@helmx/protocol'
 import { resolveTargetString } from '../src/lib/types.js'
 import {
-  type AgentStanding,
   ARCHIVED_TAG,
+  archiveConversationTags,
+  isConversationArchived,
+  restoreConversationTags,
+} from '../src/conversation/archive-model.js'
+import {
+  type AgentStanding,
   activeConversationIdsOf,
   activeProfileIdOf,
   activeProfileIdsOf,
-  archiveConversationTags,
   buildAgentStandings,
   buildArchivedConversationList,
   collectEnabledPluginIds,
@@ -35,10 +39,8 @@ import {
   isAgentStandbyActive,
   isConversationActive,
   isConversationArchivable,
-  isConversationArchived,
   isConversationDeletable,
   isHumanSelectableProfile,
-  restoreConversationTags,
   isProfileVisible,
   isSkillVisible,
   partitionSidebarUi,

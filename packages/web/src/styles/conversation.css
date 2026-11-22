@@ -1880,7 +1880,7 @@ pre {
   padding: 10px 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  background: var(--bg-surface, var(--bg));
+  background: var(--bg);
   transition: border-color 120ms ease, background 120ms ease;
 }
 .artifact-card:hover {

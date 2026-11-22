@@ -608,7 +608,7 @@
 .helmx-table td,
 .table-wrap td {
   padding: 8px 10px;
-  border-bottom: 1px solid var(--border-subtle, var(--border));
+  border-bottom: 1px solid var(--border);
   color: var(--fg);
   vertical-align: middle;
   font-size: 12.5px;

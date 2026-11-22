@@ -1,9 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { assetsApi, type ModelDescriptor } from '../lib/api.js'
-import { DetailDrawer, HelmxIcon } from '@helmx/plugin-client'
+import { ConfirmDialog, DetailDrawer, HelmxIcon } from '@helmx/plugin-client'
 import { useOptionalModels, useOptionalStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
-import { ConfirmDialog } from '../ui/AlertDialog.js'
 import {
   type ProviderItem,
   type ProviderModelItem,

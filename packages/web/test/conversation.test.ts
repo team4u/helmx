@@ -13,7 +13,7 @@ import {
   patchConversationArchived,
   patchConversationsArchived,
 } from '../src/shell/archive-ops.js'
-import { ARCHIVED_TAG } from '../src/shell/sidebar-model.js'
+import { ARCHIVED_TAG } from '../src/conversation/archive-model.js'
 import {
   buildTimelineItems,
   collectToolCallsByName,

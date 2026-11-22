@@ -10,13 +10,8 @@ import {
   argsTextToArgs,
   argsToText,
   buildProfileSavePayload,
-  createDraft,
-  editProfileField,
-  editRuntime,
-  isDraftDirty,
   normalizeRuntime,
-  textToTags,
-} from '../src/modals/profile-editor-model.js'
+} from '../src/profiles/profile-center-model.js'
 
 // ---------------------------------------------------------------------------
 // Plugin config form: the secret mask must never overwrite the real key
@@ -98,8 +93,8 @@ test('secretConfigured decides the placeholder hint purely from the raw server v
 })
 
 // ---------------------------------------------------------------------------
-// ProfileEditorModal：PUT 整体替换语义的完整基础配置 + system 按需提交
-//（真实链路：routes.ts PUT /profiles/:id → profiles.save → 整体重写 profile.json；
+// ProfileDetailDrawer：PUT 整体替换语义的完整基础配置 + system 按需提交
+//（真实链路：profile-routes.ts PUT /profiles/:id → profiles.save → 整体重写 profile.json；
 //  省 system 表示不动 SYSTEM.md；MEMORY.md 由 builtin:memory 自治，见 profile-binding 组合测试）
 // ---------------------------------------------------------------------------
 
@@ -117,10 +112,29 @@ function baseProfile(overrides: Partial<Profile> = {}): Profile {
   }
 }
 
+function payloadFromProfile(
+  profile: Profile,
+  overrides: Partial<Parameters<typeof buildProfileSavePayload>[0]> = {},
+) {
+  return buildProfileSavePayload({
+    id: profile.id,
+    name: profile.name,
+    model: profile.model,
+    thinkingLevel: profile.thinkingLevel,
+    nodeId: profile.nodeId,
+    cwd: profile.cwd,
+    restrictToCwd: profile.restrictToCwd,
+    system: profile.system,
+    skills: profile.skills,
+    runtime: profile.runtime,
+    source: profile,
+    isNew: false,
+    ...overrides,
+  })
+}
+
 test('仅改展示名：载荷仍携带完整基础配置，不丢节点/目录/运行时；system 省略', { timeout: 60_000 }, () => {
-  const draft = createDraft(baseProfile())
-  const next = editProfileField(draft, { name: '重构工人' })
-  const payload = buildProfileSavePayload(next, { isNew: false })
+  const payload = payloadFromProfile(baseProfile(), { name: '重构工人' })
   assert.equal(payload.name, '重构工人')
   assert.equal(payload.model, 'zhipu/glm-4.6', 'PUT 整体替换：未改的 model 必须随载荷保留')
   assert.equal(payload.nodeId, 'gpu-node', '只改名不丢执行节点')
@@ -130,10 +144,8 @@ test('仅改展示名：载荷仍携带完整基础配置，不丢节点/目录/
   assert.equal('system' in payload, false, '未编辑 system 时必须省略')
 })
 
-test('未做任何修改：载荷为完整规范化基础配置，dirty 为 false', { timeout: 60_000 }, () => {
-  const draft = createDraft(baseProfile())
-  assert.equal(isDraftDirty(draft), false)
-  const payload = buildProfileSavePayload(draft, { isNew: false })
+test('未做任何修改：载荷为完整规范化基础配置', { timeout: 60_000 }, () => {
+  const payload = payloadFromProfile(baseProfile())
   assert.deepEqual(payload, {
     id: 'coder',
     name: '代码工人',
@@ -146,9 +158,7 @@ test('未做任何修改：载荷为完整规范化基础配置，dirty 为 fals
 })
 
 test('基线无可选字段：载荷仍提交骨架（tags 空数组），不携带 undefined 键', { timeout: 60_000 }, () => {
-  const draft = createDraft({ id: 'bare', tags: undefined })
-  assert.equal(isDraftDirty(draft), false)
-  const payload = buildProfileSavePayload(draft, { isNew: false })
+  const payload = payloadFromProfile({ id: 'bare', tags: undefined })
   assert.deepEqual(payload, { id: 'bare', tags: [] })
   assert.equal('nodeId' in payload, false)
   assert.equal('cwd' in payload, false)
@@ -157,28 +167,29 @@ test('基线无可选字段：载荷仍提交骨架（tags 空数组），不携
   assert.equal('memory' in payload, false)
 })
 
-test('载荷永不携带 memory（MEMORY.md 由 builtin:memory 插件自治管理）', { timeout: 60_000 }, () => {
-  const draft = createDraft(baseProfile())
-  const payload = buildProfileSavePayload(draft, { isNew: false })
+test('载荷永不携带 memory 且不泄漏 UI 扩展字段', { timeout: 60_000 }, () => {
+  const enriched = baseProfile({ description: 'ui desc', defaultModel: 'zhipu/glm-4.6', isSystem: false })
+  const payload = payloadFromProfile(enriched)
   assert.equal('memory' in payload, false)
-  const editedSystem = {
-    ...draft,
-    profile: { ...draft.profile, system: '# SYSTEM\n新提示词' },
-    editedFields: new Set<'system'>(['system']),
-  }
-  const payload2 = buildProfileSavePayload(editedSystem, { isNew: false })
+  assert.equal('description' in payload, false)
+  assert.equal('defaultModel' in payload, false)
+  assert.equal('isSystem' in payload, false)
+  const payload2 = payloadFromProfile(enriched, { system: '# SYSTEM\n新提示词', includeSystem: true })
+  assert.equal(payload2.system, '# SYSTEM\n新提示词')
   assert.equal('memory' in payload2, false)
 })
 
 test('新建 Profile：提交完整基础配置 + 当前 system 全文', { timeout: 60_000 }, () => {
-  const draft = createDraft({ ...baseProfile(), id: 'reviewer', system: '# 新提示词' })
-  const payload = buildProfileSavePayload(draft, { isNew: true })
+  const payload = payloadFromProfile(
+    { ...baseProfile(), id: 'reviewer', system: '# 新提示词' },
+    { isNew: true, source: null },
+  )
   assert.equal(payload.id, 'reviewer')
   assert.equal(payload.name, '代码工人')
   assert.equal(payload.model, 'zhipu/glm-4.6')
   assert.equal(payload.nodeId, 'gpu-node')
   assert.equal(payload.cwd, '/srv/work')
-  assert.deepEqual(payload.tags, ['worker'])
+  assert.equal('tags' in payload, false)
   assert.deepEqual(payload.runtime, { kind: 'herdr', agent: 'agy', nodeId: 'ops-box', workspace: '/srv/herdr' })
   assert.equal(payload.system, '# 新提示词')
   assert.equal('memory' in payload, false)
@@ -219,22 +230,19 @@ test('normalizeRuntime：runtime 整体可被清空（关闭 Herdr 运行时）'
 })
 
 test('runtime 随载荷完整规范化提交；关闭（undefined）时才省略', { timeout: 60_000 }, () => {
-  const draft = createDraft(baseProfile({ runtime: { kind: 'herdr', agent: 'agy', nodeId: '  ' } }))
+  const base = baseProfile({ runtime: { kind: 'herdr', agent: 'agy', nodeId: '  ' } })
   // 未修改的 runtime 也随完整载荷提交（规范化后空白 nodeId 省略）。
-  const unchanged = buildProfileSavePayload(draft, { isNew: false })
+  const unchanged = payloadFromProfile(base)
   assert.deepEqual(unchanged.runtime, { kind: 'herdr', agent: 'agy' })
 
-  const edited = editRuntime(draft, { kind: 'herdr', agent: 'agy', nodeId: '  ', args: ['--title', '周报 草稿'] })
-  assert.equal(isDraftDirty(edited), true)
-  const payload = buildProfileSavePayload(edited, { isNew: false })
+  const payload = payloadFromProfile(base, {
+    runtime: { kind: 'herdr', agent: 'agy', nodeId: '  ', args: ['--title', '周报 草稿'] },
+  })
   assert.deepEqual(payload.runtime, { kind: 'herdr', agent: 'agy', args: ['--title', '周报 草稿'] })
 })
 
 test('关闭外部运行时：载荷省略 runtime 键，整体替换即删除', { timeout: 60_000 }, () => {
-  const draft = createDraft(baseProfile())
-  const closed = editRuntime(draft, undefined)
-  assert.equal(isDraftDirty(closed), true)
-  const payload = buildProfileSavePayload(closed, { isNew: false })
+  const payload = payloadFromProfile(baseProfile(), { runtime: undefined })
   assert.equal('runtime' in payload, false)
   assert.equal(payload.nodeId, 'gpu-node', '关闭 runtime 不影响顶层执行节点')
 })
@@ -243,87 +251,48 @@ test('关闭外部运行时：载荷省略 runtime 键，整体替换即删除',
 // Profile 顶层 nodeId / cwd（普通会话执行默认节点与工作目录，与 runtime.nodeId 不同层级）
 // ---------------------------------------------------------------------------
 
-test('顶层 nodeId / cwd 修改进入载荷并置 dirty；清空归一为省略（删除覆盖，回退 local）', { timeout: 60_000 }, () => {
-  const draft = createDraft(baseProfile())
-  // 未修改：不 dirty。
-  assert.equal(isDraftDirty(draft), false)
-
-  // 修改：进入载荷并置 dirty。
-  const edited = editProfileField(draft, { nodeId: 'gpu-node-2', cwd: '/srv/work2' })
-  assert.equal(isDraftDirty(edited), true)
-  const payload = buildProfileSavePayload(edited, { isNew: false })
+test('顶层 nodeId / cwd 修改进入载荷；清空归一为省略（删除覆盖，回退 local）', { timeout: 60_000 }, () => {
+  const base = baseProfile()
+  const payload = payloadFromProfile(base, { nodeId: 'gpu-node-2', cwd: '/srv/work2' })
   assert.equal(payload.nodeId, 'gpu-node-2')
   assert.equal(payload.cwd, '/srv/work2')
   assert.equal(payload.model, 'zhipu/glm-4.6')
 
   // 清空（空白归一为省略）：整体替换语义下删除覆盖，节点回退本机 local。
-  const blank = editProfileField(draft, { nodeId: '  ', cwd: '' })
-  assert.equal(isDraftDirty(blank), true)
-  const blankPayload = buildProfileSavePayload(blank, { isNew: false })
+  const blankPayload = payloadFromProfile(base, { nodeId: '  ', cwd: '' })
   assert.equal('nodeId' in blankPayload, false, '清空 nodeId 即从 profile.json 删除该键')
   assert.equal('cwd' in blankPayload, false, '清空 cwd 即从 profile.json 删除该键')
   assert.equal(blankPayload.name, '代码工人', '清空节点不影响其他字段')
-})
-
-test('顶层 nodeId / cwd 与基线同值时不视为 dirty', { timeout: 60_000 }, () => {
-  const base = baseProfile({ nodeId: 'gpu-node', cwd: '/srv/work' })
-  const draft = createDraft(base)
-  assert.equal(isDraftDirty(draft), false)
-  const resubmitted = editProfileField(draft, { nodeId: 'gpu-node', cwd: '/srv/work' })
-  assert.equal(isDraftDirty(resubmitted), false)
-  const payload = buildProfileSavePayload(resubmitted, { isNew: false })
-  assert.equal(payload.nodeId, 'gpu-node')
-  assert.equal(payload.cwd, '/srv/work')
-  assert.deepEqual(payload.runtime, { kind: 'herdr', agent: 'agy', nodeId: 'ops-box', workspace: '/srv/herdr' })
 })
 
 // ---------------------------------------------------------------------------
 // tags：普通标签编辑，不涉及生命周期语义
 // ---------------------------------------------------------------------------
 
-test('textToTags 逗号分隔解析（coder 等角色提示就是普通 tag）', { timeout: 60_000 }, () => {
-  assert.deepEqual(textToTags('worker, coder'), ['worker', 'coder'])
-  assert.deepEqual(textToTags(' a , , b '), ['a', 'b'])
-  assert.deepEqual(textToTags(''), [])
-})
-
 test('tags 修改随完整载荷提交；清空时提交空数组（整体替换语义可清空）', { timeout: 60_000 }, () => {
-  const draft = createDraft(baseProfile())
-  const edited = editProfileField(draft, { tags: ['worker', 'coder'] })
-  const payload = buildProfileSavePayload(edited, { isNew: false })
+  const base = baseProfile()
+  const payload = payloadFromProfile(base, { tags: ['worker', 'coder'] })
   assert.deepEqual(payload.tags, ['worker', 'coder'])
 
-  const cleared = editProfileField(draft, { tags: [] })
-  const clearedPayload = buildProfileSavePayload(cleared, { isNew: false })
+  const clearedPayload = payloadFromProfile(base, { tags: [] })
   assert.deepEqual(clearedPayload.tags, [], 'PUT 整体替换：空数组即从磁盘清空 tags')
   assert.equal(clearedPayload.name, '代码工人')
 })
 
 test('model 清空与修改：trim 后空串归一为省略（删除覆盖，回退默认模型）', { timeout: 60_000 }, () => {
-  const draft = createDraft(baseProfile({ model: 'zhipu/glm-4.6' }))
-  const cleared = buildProfileSavePayload(editProfileField(draft, { model: '  ' }), { isNew: false })
+  const base = baseProfile({ model: 'zhipu/glm-4.6' })
+  const cleared = payloadFromProfile(base, { model: '  ' })
   assert.equal('model' in cleared, false)
 
-  const changed = buildProfileSavePayload(editProfileField(draft, { model: 'zhipu/glm-5' }), { isNew: false })
+  const changed = payloadFromProfile(base, { model: 'zhipu/glm-5' })
   assert.equal(changed.model, 'zhipu/glm-5')
 })
 
-test('载荷永不携带 system 以外的 Profile 大文本快照（防 Object.assign 泄漏）', { timeout: 60_000 }, () => {
-  // draft.profile 携带加载时的大文本快照；未编辑时载荷绝不含该键。
-  const payload = buildProfileSavePayload(createDraft(baseProfile()), { isNew: false })
+test('载荷永不携带未编辑的 system 大文本快照（防 Object.assign 泄漏）', { timeout: 60_000 }, () => {
+  const base = baseProfile()
+  const payload = payloadFromProfile(base)
   assert.equal('system' in payload, false)
   // 编辑其他字段也不会把大文本带出。
-  const edited = editProfileField(createDraft(baseProfile()), { name: '重构工人' })
-  const editedPayload = buildProfileSavePayload(edited, { isNew: false })
+  const editedPayload = payloadFromProfile(base, { name: '重构工人' })
   assert.equal('system' in editedPayload, false)
-})
-
-test('大文本字段一经编辑即 dirty（即使内容改回原文仍提交，保守不丢数据）', { timeout: 60_000 }, () => {
-  const draft = createDraft(baseProfile())
-  const edited: typeof draft = {
-    ...draft,
-    profile: { ...draft.profile, system: draft.profile.system },
-    editedFields: new Set(['system']),
-  }
-  assert.equal(isDraftDirty(edited), true)
 })

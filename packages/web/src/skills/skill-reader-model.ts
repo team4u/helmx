@@ -12,9 +12,6 @@ import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog
 /** Main skill file name (read path convention is the empty string; displayed as SKILL.md). */
 export const SKILL_MAIN_FILENAME = 'SKILL.md'
 
-/** Markdown heading for the skill metadata table (English compatibility fallback; rendering goes through the translator). */
-export const SKILL_FRONTMATTER_TABLE_HEADING = 'Skill metadata'
-
 /** One skill file entry in the reader. */
 export interface SkillFileEntry {
   /** Read path: the empty string means the main SKILL.md */

@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useSyncExternalStore } from 'react'
+import { createContext, useCallback, useContext, useSyncExternalStore } from 'react'
 import type {
   ActionManifest,
   ArtifactMetadata,
@@ -21,8 +21,6 @@ import type {
   HelmxExternalStore,
   HelmxStoreActions,
   LocationTargetsSlice,
-  NavSlice,
-  PluginHostPortSlice,
   PluginsUiSlice,
   PrefsSlice,
   ProfilesSlice,
@@ -33,11 +31,9 @@ import type {
 import type { SessionDocKey } from './session-docs.js'
 import type {
   ActiveModal,
-  FocusedPanel,
   GroupedUiSpecs,
   HelmxStoreValue,
   ResolvedTarget,
-  ThemeMode,
   ToastNotice,
 } from './types.js'
 import type { WorkspaceLocationState } from './url-hash-model.js'
@@ -185,14 +181,6 @@ export function useOptionalLocale(): HelmxLocale | undefined {
   return useDomainSlice('locale', (s) => s.getLocale(), () => undefined)
 }
 
-export function useThemeMode(): ThemeMode {
-  return useDomainSlice('theme', (s) => s.getPrefsSlice().theme)
-}
-
-export function useQuietNotifyEnabled(): boolean {
-  return useDomainSlice('quietNotify', (s) => s.getPrefsSlice().quietNotifyEnabled)
-}
-
 export function useProfilesSlice(): ProfilesSlice {
   return useDomainSlice('profiles', (s) => s.getProfilesSlice())
 }
@@ -279,10 +267,6 @@ export function usePluginDocsState(): Record<string, unknown> {
   return useDomainSlice('pluginDocsMap', (s) => s.getPluginDocsMap())
 }
 
-export function useConversationDetailsMap(): Record<number, ConversationDetail> {
-  return useDomainSlice('conversationDetailsMap', (s) => s.getConversationDetailsMap())
-}
-
 export function useLocationTargets(): LocationTargetsSlice {
   return useDomainSlice('locationTargets', (s) => s.getLocationTargetsSlice())
 }
@@ -293,10 +277,6 @@ export function usePrimaryTarget(): ResolvedTarget {
 
 export function useSplitTarget(): ResolvedTarget | null {
   return useDomainSlice('splitTarget', (s) => s.getSplitTarget())
-}
-
-export function useFocusedPanel(): FocusedPanel {
-  return useDomainSlice('focusedPanel', (s) => s.getFocusedPanel())
 }
 
 export function useSidebarCollapsed(): boolean {
@@ -321,14 +301,6 @@ export function useHighlightedEntry(): { conversationId: number; entryId: string
 
 export function useNotices(): ToastNotice[] {
   return useDomainSlice('notices', (s) => s.getNotices())
-}
-
-export function useNavSlice(): NavSlice {
-  return useDomainSlice('nav', (s) => s.getNavSlice())
-}
-
-export function usePluginHostPortSlice(): PluginHostPortSlice {
-  return useDomainSlice('pluginHostPort', (s) => s.getPluginHostPortSlice())
 }
 
 // ---- Per-Key / Per-Conversation Hooks -------------------------------------
@@ -439,37 +411,6 @@ function cacheSame(prev: Record<string, unknown>, next: Record<string, unknown>)
   return true
 }
 
-/**
- * Batch-subscribe multiple public docs of one plugin, returning a `{ [docName]: docValue }` map.
- */
-export function usePluginDocsMap(
-  pluginId: string | undefined,
-  docNames: string[] | undefined,
-): Record<string, unknown> {
-  const authenticated = useAuthenticated()
-  const pluginDocs = usePluginDocsState()
-  const { ensurePluginDoc } = useStoreActions()
-  const namesKey = JSON.stringify(docNames ?? [])
-  useEffect(() => {
-    if (!pluginId || !authenticated) return
-    for (const name of JSON.parse(namesKey) as string[]) {
-      if (!Object.hasOwn(pluginDocs, `${pluginId}/${name}`)) void ensurePluginDoc(pluginId, name)
-    }
-  }, [pluginId, namesKey, authenticated, ensurePluginDoc, pluginDocs])
-
-  return useMemo(() => {
-    if (!pluginId || !docNames || docNames.length === 0) return EMPTY_SESSION_DOCS_MAP
-    const map: Record<string, unknown> = {}
-    for (const name of docNames) {
-      const key = `${pluginId}/${name}`
-      if (Object.hasOwn(pluginDocs, key)) {
-        map[name] = pluginDocs[key]
-      }
-    }
-    return map
-  }, [pluginId, docNames, pluginDocs])
-}
-
 export type { SessionDocKey }
 export type {
   AuthSlice,
@@ -477,8 +418,6 @@ export type {
   HelmxExternalStore,
   HelmxStoreActions,
   LocationTargetsSlice,
-  NavSlice,
-  PluginHostPortSlice,
   PluginsUiSlice,
   PrefsSlice,
   ProfilesSlice,

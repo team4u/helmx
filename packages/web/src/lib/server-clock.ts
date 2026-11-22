@@ -50,10 +50,6 @@ export function observeServerEpoch(epochMs: number): void {
   serverClock.observeServerEpoch(epochMs)
 }
 
-export function serverClockOffsetMs(): number {
-  return serverClock.offsetMs()
-}
-
 export function serverNow(): number {
   return serverClock.now()
 }

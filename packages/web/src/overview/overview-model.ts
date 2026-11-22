@@ -22,7 +22,7 @@ import {
   composeHonestTreeSummary,
   type AttentionBucket,
 } from '../shell/attention-model.js'
-import { ARCHIVED_TAG } from '../shell/sidebar-model.js'
+import { ARCHIVED_TAG } from '../conversation/archive-model.js'
 
 /** 总览卡片桶：态势三桶 + 安静（无任何信号的树，仅出现在「全部」筛选）。 */
 export type OverviewCardBucket = AttentionBucket | 'quiet'

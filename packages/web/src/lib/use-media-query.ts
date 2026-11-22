@@ -13,16 +13,6 @@ function subscribeMediaQuery(query: string, listener: () => void): () => void {
   return () => mql.removeEventListener('change', listener)
 }
 
-/** 当前视口是否匹配指定媒体查询（无 window 环境恒为 false；有 window 时服务端渲染同读现场）。 */
-export function useMediaQuery(query: string): boolean {
-  const snapshot = () => (typeof window === 'undefined' ? false : window.matchMedia(query).matches)
-  return useSyncExternalStore(
-    (listener) => subscribeMediaQuery(query, listener),
-    snapshot,
-    snapshot,
-  )
-}
-
 /** 当前是否移动端视口（移动抽屉形态语义的总开关；与 isCompactMobileViewport 同口径）。 */
 export function useIsMobileViewport(): boolean {
   return useSyncExternalStore(

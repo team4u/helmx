@@ -288,3 +288,131 @@ test('样式边界：统一批量操作栏 .batch-bar 族与 .btn-danger-sm 完�
     }
   }
 })
+
+/** 运行时由 JS / Radix 动态注入的 CSS 自定义属性白名单（带明确来源说明，防僵尸登记）。 */
+const RUNTIME_CSS_VAR_ALLOWLIST: Readonly<Record<string, string>> = {
+  '--palette-vvh': 'CommandPaletteModal.tsx sets --palette-vvh dynamically from visualViewport.height',
+  '--dialog-layer-z': '@helmx/plugin-client Dialog/AlertDialog sets --dialog-layer-z inline for nested overlays',
+  '--radix-select-trigger-width': 'Radix Select runtime CSS custom property',
+  '--radix-select-content-available-width': 'Radix Select runtime CSS custom property',
+  '--radix-select-content-available-height': 'Radix Select runtime CSS custom property',
+}
+
+function listCssFiles(dir: string): string[] {
+  const out: string[] = []
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name)
+    if (entry.isDirectory()) out.push(...listCssFiles(full))
+    else if (entry.name.endsWith('.css')) out.push(full)
+  }
+  return out.sort()
+}
+
+function stripCssComments(css: string): string {
+  return css.replace(/\/\*[\s\S]*?\*\//g, (match) => match.replace(/[^\n]/g, ' '))
+}
+
+function extractCssVarRefs(text: string): Array<{ name: string; line: number }> {
+  const refs: Array<{ name: string; line: number }> = []
+  const lines = text.split('\n')
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!
+    let idx = 0
+    while ((idx = line.indexOf('var(', idx)) !== -1) {
+      let depth = 1
+      let j = idx + 4
+      while (j < line.length && depth > 0) {
+        if (line[j] === '(') depth++
+        else if (line[j] === ')') depth--
+        j++
+      }
+      const inside = line.slice(idx + 4, j - 1).trim()
+      const comma = inside.indexOf(',')
+      const name = (comma === -1 ? inside : inside.slice(0, comma)).trim()
+      if (name.startsWith('--')) refs.push({ name, line: i + 1 })
+      idx += 4
+    }
+  }
+  return refs
+}
+
+test('样式边界：Web 宿主 CSS 与 TSX 内全部 var(--token) 必须已在宿主 CSS 定义或登记为运行时注入属性', { timeout: 60_000 }, () => {
+  const webSrcDir = join(__dirname, '../src')
+  const cssFiles = listCssFiles(webSrcDir)
+  assert.ok(cssFiles.length > 0, '应能枚举宿主 CSS 文件')
+
+  const definedTokens = new Set<string>()
+  const strippedCssByFile = new Map<string, string>()
+  for (const file of cssFiles) {
+    const stripped = stripCssComments(readFileSync(file, 'utf8'))
+    strippedCssByFile.set(file, stripped)
+    for (const match of stripped.matchAll(/(--[a-zA-Z0-9_-]+)\s*:/g)) {
+      definedTokens.add(match[1]!)
+    }
+  }
+  assert.ok(definedTokens.size > 50, 'tokens.css 应定义设计系统 CSS token 集')
+
+  const referencedTokens = new Set<string>()
+  const violations: string[] = []
+  for (const [file, stripped] of strippedCssByFile.entries()) {
+    const rel = file.slice(webSrcDir.length + 1)
+    for (const ref of extractCssVarRefs(stripped)) {
+      referencedTokens.add(ref.name)
+      if (definedTokens.has(ref.name)) continue
+      if (ref.name in RUNTIME_CSS_VAR_ALLOWLIST) continue
+      violations.push(`${rel}:${ref.line}: undefined CSS variable ${ref.name}`)
+    }
+  }
+
+  for (const file of listSourceFiles(webSrcDir)) {
+    const rel = file.slice(webSrcDir.length + 1)
+    const content = readFileSync(file, 'utf8')
+    for (const ref of extractCssVarRefs(content)) {
+      referencedTokens.add(ref.name)
+      if (definedTokens.has(ref.name)) continue
+      if (ref.name in RUNTIME_CSS_VAR_ALLOWLIST) continue
+      violations.push(`${rel}:${ref.line}: undefined CSS variable ${ref.name}`)
+    }
+  }
+
+  assert.deepEqual(
+    violations,
+    [],
+    `发现未定义的 CSS 变量（如 --danger / --border-subtle 等失效 token）：\n${violations.join('\n')}`,
+  )
+
+  for (const [name, reason] of Object.entries(RUNTIME_CSS_VAR_ALLOWLIST)) {
+    assert.ok(reason.trim().length > 0, `运行时 CSS 属性 ${name} 登记必须写明缘由`)
+    assert.ok(referencedTokens.has(name), `运行时 CSS 属性 ${name} 已不再被引用，应移出白名单`)
+  }
+})
+
+test('样式边界：tokens.css 明暗主题覆盖对称（dark 主题不漏定义 light 色彩/阴影 token）', { timeout: 60_000 }, () => {
+  const tokensCss = stripCssComments(readFileSync(join(STYLES_DIR, 'tokens.css'), 'utf8'))
+  const lightBlock = tokensCss.match(/:root,\s*:root\[data-theme='light'\]\s*\{([\s\S]*?)\n\}/)?.[1] ?? ''
+  const darkBlock = tokensCss.match(/:root\[data-theme='dark'\]\s*\{([\s\S]*?)\n\}/)?.[1] ?? ''
+  assert.ok(lightBlock !== '' && darkBlock !== '', 'tokens.css 必须同时声明 light 与 dark 主题块')
+
+  const extractDefs = (block: string) =>
+    new Set([...block.matchAll(/(--[a-zA-Z0-9_-]+)\s*:/g)].map((m) => m[1]!))
+  const light = extractDefs(lightBlock)
+  const dark = extractDefs(darkBlock)
+
+  // :root 自身匹配任意 data-theme，因此主题无关的基础圆角与字体变量无需在 dark 块重复声明。
+  const themeInvariantTokens = new Set([
+    '--radius-xs',
+    '--radius-sm',
+    '--radius-md',
+    '--radius-lg',
+    '--radius-pill',
+    '--font-sans',
+    '--font-mono',
+    '--font',
+    '--code',
+  ])
+
+  const missingInDark = [...light].filter((t) => !dark.has(t) && !themeInvariantTokens.has(t))
+  const extraInDark = [...dark].filter((t) => !light.has(t))
+  assert.deepEqual(missingInDark, [], `dark 主题缺少 light 主题变量：${missingInDark.join(', ')}`)
+  assert.deepEqual(extraInDark, [], `dark 主题多出未在 light 声明的变量：${extraInDark.join(', ')}`)
+})

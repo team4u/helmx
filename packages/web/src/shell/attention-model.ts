@@ -27,7 +27,8 @@ import {
   type ConversationBackgroundIndex,
 } from './background-activity-model.js'
 import { resolveNotificationRootId } from './quiet-notify-model.js'
-import { collectEnabledPluginIds, isConversationArchived, isProfileVisible } from './sidebar-model.js'
+import { isConversationArchived } from '../conversation/archive-model.js'
+import { collectEnabledPluginIds, isProfileVisible } from './sidebar-model.js'
 import type { PluginActivityLike } from '../lib/live-state.js'
 
 /** 态势三桶：需关注 > 运行中 > 未读完成。 */

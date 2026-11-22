@@ -55,14 +55,6 @@ export function getPluginDescription(
   return t('plugins.desc.default')
 }
 
-/** 故障阶段面向用户的可读文案（PluginDiagnosticError.stage）。 */
-export const PLUGIN_ERROR_STAGE_LABELS: Record<string, string> = {
-  scan: 'Manifest/entry resolution (scan)',
-  load: 'Module loading (load)',
-  define: 'Definition registration (define)',
-  enable: 'Enable activation (enable)',
-}
-
 export function pluginErrorStageLabel(
   stage?: string,
   t: WebMessageTranslator = englishWebTranslator,

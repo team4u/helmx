@@ -2,11 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } fr
 import { conversationsApi } from '../lib/api.js'
 import type { ConversationSummary } from '@helmx/protocol/browser'
 import { archiveBatchNotice, patchConversationsArchived } from './archive-ops.js'
-import { HelmxIcon, Checkbox, SearchBox } from '@helmx/plugin-client'
+import { ConfirmDialog, HelmxIcon, Checkbox, SearchBox } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { Tooltip } from '../ui/Tooltip.js'
 import { ConversationRowActionsMenu } from '../ui/ConversationRowActionsMenu.js'
-import { ConfirmDialog } from '../ui/AlertDialog.js'
 import {
   AGENT_SUB_LIST_PREVIEW,
   activeConversationIdsOf,

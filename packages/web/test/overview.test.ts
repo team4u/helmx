@@ -17,7 +17,8 @@ import { act } from 'react'
 import type { Root } from 'react-dom/client'
 import { renderToString } from 'react-dom/server'
 import type { ConversationSummary } from '@helmx/protocol'
-import { ARCHIVED_TAG, type ResolvedSidebarBadge, type SidebarViewItem } from '../src/shell/sidebar-model.js'
+import { ARCHIVED_TAG } from '../src/conversation/archive-model.js'
+import type { ResolvedSidebarBadge, SidebarViewItem } from '../src/shell/sidebar-model.js'
 import type { ConversationBackgroundIndex } from '../src/shell/background-activity-model.js'
 import {
   buildOverviewCards,
