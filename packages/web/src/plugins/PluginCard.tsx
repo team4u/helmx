@@ -171,24 +171,51 @@ export function PluginCard({
         </div>
 
         <div className="plugin-card-actions">
-          {primaryScreen !== null && (
-            <button
-              type="button"
-              className="btn btn-xs plugin-card-open-btn"
-              title={t('plugins.card.openViewTitle')}
-              aria-label={t('plugins.card.openViewAria', { name })}
-              onClick={(e) => {
-                e.stopPropagation()
-                actions?.openTarget({
-                  kind: 'screen',
-                  pluginId: primaryScreen.pluginId,
-                  screenId: primaryScreen.screenId,
-                })
-              }}
-            >
-              <HelmxIcon name="play" size={10} />
-              <span>{t('plugins.openView')}</span>
-            </button>
+          {primaryScreen !== null && actions !== null && (
+            <>
+              <button
+                type="button"
+                className="btn btn-xs plugin-card-open-btn"
+                title={t('plugins.card.openViewTitle')}
+                aria-label={t('plugins.card.openViewAria', { name })}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  actions.openTarget({
+                    kind: 'screen',
+                    pluginId: primaryScreen.pluginId,
+                    screenId: primaryScreen.screenId,
+                  })
+                }}
+                onKeyDown={(e) => {
+                  e.stopPropagation()
+                }}
+              >
+                <HelmxIcon name="play" size={10} />
+                <span>{t('plugins.openView')}</span>
+              </button>
+              <button
+                type="button"
+                className="btn btn-xs split-toggle-btn plugin-card-split-btn"
+                title={t('plugins.card.openSplitTitle')}
+                aria-label={t('plugins.card.openSplitAria', { name })}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  actions.openTarget(
+                    {
+                      kind: 'screen',
+                      pluginId: primaryScreen.pluginId,
+                      screenId: primaryScreen.screenId,
+                    },
+                    { split: true },
+                  )
+                }}
+                onKeyDown={(e) => {
+                  e.stopPropagation()
+                }}
+              >
+                <HelmxIcon name="columns" size={10} />
+              </button>
+            </>
           )}
           <div
             className="plugin-card-switch-wrap"

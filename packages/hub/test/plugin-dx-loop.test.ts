@@ -474,6 +474,73 @@ test('受管包 HTTP 路由：install（默认停用与 enable:true / body 边�
   assert.equal((await env.call('POST', '/api/plugins/http-rm/remove')).status, 404)
 })
 
+test('受管包同源本地目录幂等重装：热更新代码、保留既有 ctx.doc 数据并确保启用，异源同 ID 仍 409 拒绝', { timeout: 60_000 }, async (t) => {
+  const srcParent = useTempDir(t, 'helmx-pkg-idempotent-')
+  const writeStatefulPkg = (parent: string, version: string, tag: string): string => {
+    const dir = join(parent, 'stateful-app')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'plugin.json'), JSON.stringify({ id: 'stateful-app', version, main: 'index.mjs' }, null, 2))
+    writeFileSync(
+      join(dir, 'index.mjs'),
+      `export default {
+  id: 'stateful-app',
+  version: ${JSON.stringify(version)},
+  definePlugin(ctx) {
+    const notes = ctx.doc('notes', { items: [] }, { public: true })
+    ctx.action({
+      id: 'add_note',
+      description: 'Append note',
+      inputSchema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'], additionalProperties: false },
+      outputSchema: { type: 'object', properties: { count: { type: 'number' }, tag: { type: 'string' } }, required: ['count', 'tag'], additionalProperties: false },
+      async handler(input) {
+        notes.update((cur) => ({ items: [...cur.items, input.text] }))
+        await notes.flush()
+        return { count: notes.get().items.length, tag: ${JSON.stringify(tag)} }
+      },
+    })
+  },
+}
+`,
+    )
+    return dir
+  }
+
+  const srcA = writeStatefulPkg(join(srcParent, 'dir-a'), '1.0.0', 'v1')
+  const first = await env.call('POST', '/api/plugins/install', { source: srcA, enable: true })
+  assert.equal(first.status, 200)
+  assert.equal(first.body.summary.enabled, true)
+
+  const added = await env.call('POST', '/api/actions/stateful-app/add_note', { input: { text: 'keep-me' } })
+  assert.equal(added.status, 200)
+  assert.deepEqual(added.body, { count: 1, tag: 'v1' })
+
+  // 先停用再修改同源目录到 v2，随后以不带 enable 的 POST /api/plugins/install 重装：热更新、确保启用且保留既有 ctx.doc
+  await env.call('POST', '/api/plugins/stateful-app/disable')
+  writeStatefulPkg(join(srcParent, 'dir-a'), '2.0.0', 'v2')
+  const second = await env.call('POST', '/api/plugins/install', { source: srcA })
+  assert.equal(second.status, 200)
+  assert.equal(second.body.record.id, first.body.record.id)
+  assert.equal(second.body.record.version, '2.0.0')
+  assert.equal(second.body.summary.version, '2.0.0')
+  assert.equal(second.body.summary.enabled, true)
+
+  const docAfter = await env.call('GET', '/api/plugins/stateful-app/docs/notes')
+  assert.equal(docAfter.status, 200)
+  assert.deepEqual(docAfter.body.value, { items: ['keep-me'] }, '同源重装必须保留既有 ctx.doc 数据')
+
+  const added2 = await env.call('POST', '/api/actions/stateful-app/add_note', { input: { text: 'after-v2' } })
+  assert.equal(added2.status, 200)
+  assert.deepEqual(added2.body, { count: 2, tag: 'v2' })
+
+  // 异源同 ID 本地目录：诚实拒绝 409 plugin_package_already_installed，不覆盖既有实例
+  const srcB = writeStatefulPkg(join(srcParent, 'dir-b'), '3.0.0', 'v3')
+  const conflict = await env.call('POST', '/api/plugins/install', { source: srcB, enable: true })
+  assert.equal(conflict.status, 409)
+  assert.equal(conflict.body.error.code, 'plugin_package_already_installed')
+
+  await env.call('POST', '/api/plugins/stateful-app/remove')
+})
+
 test('受管包跨重启恢复：config.json.pluginPackages 持久驱动 managed 映射与卸载能力', { timeout: 60_000 }, async (t) => {
   const dataDir = join(useTempDir(t, 'helmx-pkg-restart-'), 'hub')
   const srcParent = useTempDir(t, 'helmx-pkg-restart-src-')

@@ -648,7 +648,7 @@ export interface HelmxHostApi {
    */
   readonly openTunnel: HelmxHostOpenTunnelPort
   /**
-   * 宿主插件治理端口（受管包生命周期；编排插件如 builtin:apps 消费）。
+   * 宿主插件治理端口（受管包生命周期；供外部或编排插件调用）。
    * 后端未接线包管理器时 doctor/install/update/remove 显式 501；
    * 自指 update/remove/disable 一律 409 拒绝（防生命周期队列自等待）。
    */

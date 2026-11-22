@@ -77,10 +77,19 @@ export const pluginsMessages = {
   },
   'plugins.card.openViewTitle': { en: 'Open plugin view', 'zh-CN': '打开插件视图' },
   'plugins.card.openViewAria': { en: 'Open {name} view', 'zh-CN': '打开 {name} 视图' },
+  'plugins.card.openSplitTitle': {
+    en: 'Open side-by-side in right split',
+    'zh-CN': '在右侧分屏并排打开',
+  },
+  'plugins.card.openSplitAria': {
+    en: 'Open {name} in right split',
+    'zh-CN': '在右侧分屏打开 {name}',
+  },
   'plugins.card.switchAria': { en: '{name} switch', 'zh-CN': '{name} 开关' },
 
   // PluginCenter
   'plugins.center.title': { en: 'Plugin Center', 'zh-CN': '扩展插件中心' },
+  'plugins.center.tabViews': { en: 'With views', 'zh-CN': '应用视图' },
   'plugins.center.installTitle': {
     en: 'Install external plugins from npm, Git or a local path',
     'zh-CN': '从 npm、Git 或本地路径安装外部插件',

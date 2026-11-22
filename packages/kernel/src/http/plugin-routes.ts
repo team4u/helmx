@@ -60,7 +60,13 @@ export async function handlePluginsDomain(
     const body = await readJsonBody(ctx.request)
     assertBodySchema(PLUGIN_INSTALL_BODY_SCHEMA, body, 'plugins install body')
     const source = body.source as string
-    return jsonOk(redactor, await kernel.plugins.installPluginPackage(source, body.enable === true ? { enable: true } : {}))
+    return jsonOk(
+      redactor,
+      await kernel.plugins.installPluginPackage(
+        source,
+        body.enable !== undefined ? { enable: body.enable as boolean } : {},
+      ),
+    )
   }
   const pluginId = requireIdParam(second ?? '', 'pluginId')
   // Reserved core management segments in position 3: enable/disable/config; dynamic routes live under routes/.

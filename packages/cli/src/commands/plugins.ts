@@ -3,7 +3,7 @@
  * (DX loop), install/update/remove (managed package management), and actions list.
  * In addition to --input <json>, config supports repeatable --set key=value (values parsed
  * as JSON boolean/number when valid, otherwise string). plugins init scaffolds local
- * plugins using minimal/full/app templates (app artifacts pass helmx apps validate directly).
+ * plugins using minimal/full/app templates (app artifacts declare a Screen and pass helmx plugins doctor directly).
  */
 import {
   HelmxError,
@@ -501,14 +501,14 @@ export function pluginsCommands(): CommandSpec[] {
   cmds.push({
     path: ['plugins', 'init'],
     description:
-      'Local scaffold: generate an external plugin skeleton in the target directory without contacting Hub; --template app passes helmx apps validate',
+      'Local scaffold: generate an external plugin skeleton in the target directory without contacting Hub; --template app declares a Screen and passes helmx plugins doctor',
     flags: [
       { name: 'dir', type: 'string', help: 'target parent directory (defaults to <dataDir>/installed-plugins; must exist or be creatable)' },
       { name: 'name', type: 'string', help: 'plugin directory name and default id (alphanumeric plus - _, defaults to sample-plugin)' },
       {
         name: 'template',
         type: 'string',
-        help: 'skeleton template: minimal (backend ping action only) | full (doc/action/workbench panel) | app (full-stack micro-app: doc/actions/screen + sidebar item, passes helmx apps validate); defaults to full',
+        help: 'skeleton template: minimal (backend ping action only) | full (doc/action/workbench panel) | app (full-stack micro-app: doc/actions/screen + sidebar item, passes helmx plugins doctor); defaults to full',
       },
       { name: 'force', type: 'boolean', help: 'proceed even if target directory is non-empty (rejected by default to prevent overwriting)' },
     ],
@@ -541,7 +541,7 @@ export function pluginsCommands(): CommandSpec[] {
   cmds.push({
     path: ['plugins', 'install'],
     description:
-      'Install and register an external plugin package from npm/git/local path (POST /api/plugins/install; disabled by default unless --enable). source is resolved on the Hub host; enabled plugins run trusted code in-process with no sandbox',
+      'Install and register an external plugin package from npm/git/local path (POST /api/plugins/install; disabled by default unless --enable; reinstalling the same canonical local directory performs an idempotent hot update preserving ctx.doc data). source is resolved on the Hub host; enabled plugins run trusted code in-process with no sandbox',
     flags: [{ name: 'enable', type: 'boolean', help: 'enable immediately after install (registered as disabled by default)' }],
     positional: '<source>',
     async run(ctx: CommandContext) {
@@ -810,7 +810,7 @@ async function runPluginsInit(ctx: CommandContext): Promise<void> {
     targetExisted,
     nextSteps:
       template === 'app'
-        ? [`helmx plugins doctor ${target}`, `helmx apps validate ${target}`, `helmx apps publish ${target}`]
+        ? [`helmx plugins doctor ${target}`, `helmx plugins install ${target} --enable`]
         : [`helmx plugins doctor ${target}`, 'helmx plugins rescan', `helmx plugins enable ${name}`],
   }
   if (ctx.json) {

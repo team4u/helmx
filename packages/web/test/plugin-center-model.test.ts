@@ -159,6 +159,7 @@ test('summarizePlugins: 空数组统计全零', { timeout: 60_000 }, () => {
   const stats = summarizePlugins([])
   assert.deepEqual(stats, {
     total: 0,
+    withViews: 0,
     enabled: 0,
     disabled: 0,
     failed: 0,
@@ -167,7 +168,7 @@ test('summarizePlugins: 空数组统计全零', { timeout: 60_000 }, () => {
   })
 })
 
-test('summarizePlugins: 正确统计总数、启停数、工具数与动作数', { timeout: 60_000 }, () => {
+test('summarizePlugins: 正确统计总数、应用视图数、启停数、工具数与动作数', { timeout: 60_000 }, () => {
   const plugins: PluginSummary[] = [
     makePlugin({
       id: 'builtin:profile',
@@ -191,12 +192,49 @@ test('summarizePlugins: 正确统计总数、启停数、工具数与动作数',
   const stats = summarizePlugins(plugins)
   assert.deepEqual(stats, {
     total: 3,
+    withViews: 0,
     enabled: 2,
     disabled: 1,
     failed: 0,
     totalTools: 4,
     totalActions: 4,
   })
+})
+
+test('filterPlugins & summarizePlugins: views 筛选与 withViews 统计仅计入活跃且声明 ctx.ui.screen 的插件', { timeout: 60_000 }, () => {
+  const plugins: PluginSummary[] = [
+    makePlugin({ id: 'desk-app', name: 'Desk App', enabled: true }),
+    makePlugin({ id: 'builtin:triggers', name: 'Triggers', enabled: true }),
+    makePlugin({ id: 'disabled-app', name: 'Disabled App', enabled: false }),
+    makePlugin({
+      id: 'failed-app',
+      name: 'Failed App',
+      enabled: true,
+      status: 'failed',
+      error: { code: 'plugin_enable_failed', message: 'boom', stage: 'enable' },
+    }),
+    makePlugin({ id: 'backend-only', name: 'Backend Only', enabled: true }),
+  ]
+  const groupedUi = {
+    screens: [
+      { pluginId: 'desk-app', spec: { id: 'main', label: 'Desk', client: { module: 'index.tsx', export: 'Main' } } },
+      { pluginId: 'builtin:triggers', spec: { id: 'main', label: 'Triggers', client: { module: 'index.tsx', export: 'Triggers' } } },
+      { pluginId: 'disabled-app', spec: { id: 'main', label: 'Disabled', client: { module: 'index.tsx', export: 'Disabled' } } },
+      { pluginId: 'failed-app', spec: { id: 'main', label: 'Failed', client: { module: 'index.tsx', export: 'Failed' } } },
+    ],
+  }
+  const stats = summarizePlugins(plugins, groupedUi)
+  assert.equal(stats.withViews, 2)
+  assert.deepEqual(
+    filterPlugins(plugins, { status: 'views' }, 'en', groupedUi).map((p) => p.id),
+    ['desk-app', 'builtin:triggers'],
+  )
+  assert.deepEqual(
+    filterPlugins(plugins, { status: 'views', query: 'desk' }, 'en', groupedUi).map((p) => p.id),
+    ['desk-app'],
+  )
+  // 无 groupedUi 事实时不伪造视图归属
+  assert.deepEqual(filterPlugins(plugins, { status: 'views' }, 'en'), [])
 })
 
 test('isPluginFailed: status === failed 或携带 error 即故障态', { timeout: 60_000 }, () => {
@@ -266,10 +304,12 @@ test('pluginStatusTabLabel: en 与 zh-CN 状态筛选标签映射', { timeout: 6
   const zh = createWebTranslator('zh-CN')
 
   assert.equal(pluginStatusTabLabel('all'), 'All')
+  assert.equal(pluginStatusTabLabel('views', en), 'With views')
   assert.equal(pluginStatusTabLabel('enabled', en), 'Enabled')
   assert.equal(pluginStatusTabLabel('disabled', en), 'Disabled')
 
   assert.equal(pluginStatusTabLabel('all', zh), '全部')
+  assert.equal(pluginStatusTabLabel('views', zh), '应用视图')
   assert.equal(pluginStatusTabLabel('enabled', zh), '已启用')
   assert.equal(pluginStatusTabLabel('disabled', zh), '已停用')
 })

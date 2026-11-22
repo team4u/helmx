@@ -521,13 +521,13 @@ const { extractRailQuickEntries } = await import('../src/shell/sidebar-model.js'
 
 function sidebarItemContribution(overrides: { pluginId?: string; spec?: Record<string, unknown> } = {}): PluginUiContribution {
   return {
-    pluginId: overrides.pluginId ?? 'builtin:apps',
+    pluginId: overrides.pluginId ?? 'demo-desk',
     surface: 'sidebar.item',
     spec: {
       id: 'app-center',
       label: { en: 'App Center', 'zh-CN': '应用中心' },
       icon: 'check-square',
-      target: 'screen:builtin:apps/board',
+      target: 'screen:demo-desk/board',
       order: 5,
       quickEntry: true,
       ...overrides.spec,
@@ -537,7 +537,7 @@ function sidebarItemContribution(overrides: { pluginId?: string; spec?: Record<s
 
 function screenContribution(overrides: { pluginId?: string; spec?: Record<string, unknown> } = {}): PluginUiContribution {
   return {
-    pluginId: overrides.pluginId ?? 'builtin:apps',
+    pluginId: overrides.pluginId ?? 'demo-desk',
     surface: 'screen',
     spec: { id: 'board', label: { en: 'App Center', 'zh-CN': '应用中心' }, icon: 'check-square', ...overrides.spec },
   }
@@ -553,7 +553,7 @@ test('extractRailQuickEntries: only screen-backed quickEntry items pass; missing
     }),
     sidebarItemContribution({ spec: { id: 'no-target', label: { en: 'No Target' }, quickEntry: false } }),
     sidebarItemContribution({ spec: { id: 'conv-target', label: { en: 'Conv' }, target: 'conversation:1', quickEntry: false } }),
-    sidebarItemContribution({ spec: { id: 'ghost-screen', label: { en: 'Ghost' }, target: 'screen:builtin:apps/ghost', quickEntry: false } }),
+    sidebarItemContribution({ spec: { id: 'ghost-screen', label: { en: 'Ghost' }, target: 'screen:demo-desk/ghost', quickEntry: false } }),
   ]
   const screens = [screenContribution(), screenContribution({ pluginId: 'other', spec: { id: 'view', label: { en: 'Other View' } } })]
   const qualifiedItems = items.map((item) => ({ pluginId: item.pluginId, spec: item.spec as SidebarItemSpec }))
@@ -570,7 +570,7 @@ test('extractRailQuickEntries: only screen-backed quickEntry items pass; missing
 
 test('Sidebar renders rail quick entries and disables with the plugin contributions (store.live SSE path)', { timeout: 60_000 }, async () => {
   const store = sidebarStore({
-    plugins: [{ id: 'builtin:apps', name: 'Apps', version: '0.0.0', enabled: true, locked: false, hooks: [], actions: [], tools: [] }],
+    plugins: [{ id: 'demo-desk', name: 'Apps', version: '0.0.0', enabled: true, locked: false, hooks: [], actions: [], tools: [] }],
     conversations: [conv({ id: 50, title: '当前查看', profileId: 'coder' })],
     primaryTarget: { kind: 'conversation', conversationId: 50 },
     uiContributions: [sidebarItemContribution(), screenContribution()],
@@ -590,7 +590,7 @@ test('Sidebar renders rail quick entries and disables with the plugin contributi
       quickBtn.click()
     })
     const primary = store.getPrimaryTarget()
-    assert.ok(primary.kind === 'screen' && primary.pluginId === 'builtin:apps' && primary.screenId === 'board', 'clicking navigates via the standard store routing')
+    assert.ok(primary.kind === 'screen' && primary.pluginId === 'demo-desk' && primary.screenId === 'board', 'clicking navigates via the standard store routing')
 
     // Simulate the SSE path of a disabled plugin: contributions vanish from the live state -> zero residue.
     await act(async () => {
@@ -638,7 +638,7 @@ test('the overview entry mounts only in the conversations space (mobile drawer i
             conv({ id: 2, title: '在跑的调研', profileId: 'coder', status: 'working', createdAt: 8000, updatedAt: 8000 }),
             conv({ id: 50, title: '当前查看', profileId: 'coder', status: 'idle' }),
           ],
-          primaryTarget: { kind: 'screen', pluginId: 'builtin:apps', screenId: 'app-center' },
+          primaryTarget: { kind: 'screen', pluginId: 'demo-desk', screenId: 'app-center' },
         }),
       )
     } finally {
@@ -670,7 +670,7 @@ test('CommandPaletteModal: all plugin views are searchable rows and open via the
   globalThis.fetch = (async () =>
     new Response(JSON.stringify([]), { status: 200, headers: { 'content-type': 'application/json' } })) as typeof fetch
   const store = sidebarStore({
-    plugins: [{ id: 'builtin:apps', name: { en: 'Apps', 'zh-CN': '应用' }, version: '0.0.0', enabled: true, locked: false, hooks: [], actions: [], tools: [] }],
+    plugins: [{ id: 'demo-desk', name: { en: 'Apps', 'zh-CN': '应用' }, version: '0.0.0', enabled: true, locked: false, hooks: [], actions: [], tools: [] }],
     conversations: [conv({ id: 50, title: '当前查看', profileId: 'coder' })],
     primaryTarget: { kind: 'conversation', conversationId: 50 },
     uiContributions: [sidebarItemContribution(), screenContribution()],
@@ -737,12 +737,12 @@ const TASK_BADGE_SPEC: SidebarItemBadgeSpec = {
 
 function viewItem(overrides: Partial<SidebarViewItem> = {}): SidebarViewItem {
   return {
-    key: 'builtin:apps/app-center',
-    pluginId: 'builtin:apps',
+    key: 'demo-desk/app-center',
+    pluginId: 'demo-desk',
     label: 'App Center',
     icon: 'check-square',
     order: 5,
-    target: { kind: 'screen', pluginId: 'builtin:apps', screenId: 'app-center' },
+    target: { kind: 'screen', pluginId: 'demo-desk', screenId: 'app-center' },
     badge: TASK_BADGE_SPEC,
     ...overrides,
   }
@@ -813,13 +813,13 @@ test('resolveSidebarItemBadge: count badge, tone fallback, quiet dot, LocalizedT
 test('collectSidebarBadgeDocs: dedupes plugin/doc refs and skips badge-less items', { timeout: 60_000 }, () => {
   const refs = collectSidebarBadgeDocs([
     viewItem(),
-    viewItem({ key: 'builtin:apps/app-center-2' }), // 同插件同 doc：去重
+    viewItem({ key: 'demo-desk/app-center-2' }), // 同插件同 doc：去重
     viewItem({ key: 'other/view', pluginId: 'other' }),
     viewItem({ key: 'plain/view', badge: undefined }),
   ])
   assert.deepEqual(
     refs.map((r) => `${r.pluginId}/${r.doc}`),
-    ['builtin:apps/app-center', 'other/app-center'],
+    ['demo-desk/app-center', 'other/app-center'],
   )
 })
 
@@ -835,11 +835,11 @@ function badgeScenarioStore(overrides: { doc?: Record<string, unknown>; specBadg
     }
   }
   return sidebarStore({
-    plugins: [{ id: 'builtin:apps', name: 'Apps', version: '0.0.0', enabled: true, locked: false, hooks: [], actions: [], tools: [] }],
+    plugins: [{ id: 'demo-desk', name: 'Apps', version: '0.0.0', enabled: true, locked: false, hooks: [], actions: [], tools: [] }],
     conversations: [conv({ id: 50, title: '当前查看', profileId: 'coder' })],
-    primaryTarget: { kind: 'screen', pluginId: 'builtin:apps', screenId: 'app-center' },
+    primaryTarget: { kind: 'screen', pluginId: 'demo-desk', screenId: 'app-center' },
     uiContributions: [sidebarItemContribution({ spec }), screenContribution()],
-    pluginDocs: overrides.doc !== undefined ? { 'builtin:apps/app-center': overrides.doc } : {},
+    pluginDocs: overrides.doc !== undefined ? { 'demo-desk/app-center': overrides.doc } : {},
   })
 }
 
@@ -896,7 +896,7 @@ test('useSidebarBadges discovers and loads the badge doc itself; plugin disable 
       root = createRoot(container)
       root.render(e(HelmxExternalStoreContext.Provider, { value: store }, e(Sidebar)))
     })
-    assert.deepEqual(docUrls, ['/api/plugins/builtin%3Aapps/docs/app-center'], 'the sidebar hook loads the declared badge doc on demand')
+    assert.deepEqual(docUrls, ['/api/plugins/demo-desk/docs/app-center'], 'the sidebar hook loads the declared badge doc on demand')
     assert.ok(container.querySelector('.rail-quick-badge') !== null, 'the fetched doc drives the rendered badge')
 
     // Simulate the SSE path of a disabled plugin: contributions vanish -> badge residue zeroed.

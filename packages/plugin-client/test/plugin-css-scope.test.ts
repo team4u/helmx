@@ -50,11 +50,11 @@ test('PluginScope SSR: renders display:contents anchor inside plugin context and
   const inside = renderToString(
     e(
       PluginClientContext.Provider,
-      { value: makePluginCtx('builtin:apps') },
+      { value: makePluginCtx('builtin:triggers') },
       e(PluginScope, null, e('span', { className: 'app-chip' }, 'App')),
     ),
   )
-  assert.match(inside, /data-plugin-id="builtin:apps"/)
+  assert.match(inside, /data-plugin-id="builtin:triggers"/)
   assert.match(inside, /display:contents/)
 
   const explicit = renderToString(

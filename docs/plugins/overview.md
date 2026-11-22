@@ -8,14 +8,13 @@
 
 | 插件 ID | 名称 | 职责一句话 | 默认状态 | locked |
 | :--- | :--- | :--- | :--- | :--- |
-| `builtin:profile` | 角色与技能底座 | 按会话 Profile 注入 SYSTEM.md / AGENTS.md 与技能目录，提供 `load_skill` 工具 | 启用 | 是（常驻不可停用） |
+| `builtin:profile` | 角色与技能底座 | 按会话 Profile 注入 SYSTEM.md / AGENTS.md 与技能目录，自举 `helmx-cli` / `app-builder` 技能并提供 `load_skill` 工具 | 启用 | 是（常驻不可停用） |
 | `builtin:workflow` | 工作流与子代理编排 | `subagent` / `SubagentWorkflow` 工具、DSL 引擎与账本恢复 | 启用 | 否 |
 | `builtin:worktree` | 受管工作树 | 受管 Git Worktree 分配、持久租约与持有锁、`cleanup_worktree` 工具与 `worktrees` CLI | 启用 | 否 |
 | `builtin:swarm` | Swarm 对等协同看板 | 扁平对等序号黑板、正交唤醒、`turn_settled` 纯事件防掉棒自愈与自适应协同看板 | 启用 | 否 |
 | `builtin:memory` | 长期记忆 | 按 Profile 管理 MEMORY.md 注入与启停，提供 `update_memory` 工具与每日 Dream 自动整理（`dream` / `dream_status` / `dream_configure`） | 启用 | 否 |
 | `builtin:json-render` | JSON 卡片渲染 | 接管 ```ui 代码围栏渲染声明式 JSON Spec 卡片，自举 `generative-ui` 技能 | 启用 | 否 |
 | `builtin:mermaid` | Mermaid 图表 | 接管 ```mermaid 围栏，把 Mermaid 文本渲染为矢量图表 | 启用 | 否 |
-| `builtin:apps` | 应用中心 | 全栈微应用目录与 `validate/publish/list/update_meta/remove` 动作 | 启用 | 否 |
 | `builtin:triggers` | 触发器 | Cron 定时与 Webhook 签名入站连接器 | 启用 | 否 |
 | `builtin:herdr` | Herdr 终端 | 拦截 `agent_spawn` 驱动本机/远端 Herdr CLI Agent，带 CAS 审批桥 | 停用 | 否 |
 | `builtin:superagent` | SuperAgent 中枢 | 双层中枢（总控路由 + 驻留 Worker）与两层巡检看门狗 | 停用 | 否 |
@@ -123,7 +122,7 @@
 
 ## 相关文档
 
-- 各内置插件深度文档：[workflow](workflow.md) · [worktree](worktree.md) · [swarm](swarm.md) · [profile](profile.md) · [memory](memory.md) · [apps](apps.md) · [herdr](herdr.md) · [superagent](superagent.md) · [triggers](triggers.md) · [magpie](magpie.md) · [json-render](json-render.md) · [mermaid](mermaid.md) · [token-speed](token-speed.md) · [tiers](tiers.md)
+- 各内置插件深度文档：[workflow](workflow.md) · [worktree](worktree.md) · [swarm](swarm.md) · [profile](profile.md) · [memory](memory.md) · [herdr](herdr.md) · [superagent](superagent.md) · [triggers](triggers.md) · [magpie](magpie.md) · [json-render](json-render.md) · [mermaid](mermaid.md) · [token-speed](token-speed.md) · [tiers](tiers.md)
 - [插件开发实战](plugin-development.md)：从 `helmx plugins init` 到 doctor / rescan / enable / reload 的完整闭环
 - [生命周期 Hook 与全界面扩展点](../architecture/extension-points.md)：7 个 Hook 与 16 个 UI surface 的逐项契约
 - [微内核架构总览](../architecture/overview.md)：内核四块机制与包依赖方向

@@ -68,14 +68,11 @@ test('样式边界：StatusLight 统一外壳与 sr-only 文本归属 primitives
 /**
  * 宿主样式分片不得选择内置插件私有类名（CSS ownership 单向边界）：
  * 插件视图的壳结构必须复用公共设计系统类（.screen-header / .screen-title /
- * .search-box / .helmx-table 等），宿主绝不点名插件私有类做定向补丁——
- * 曾经的 `.screen-host-stage .apps-center-topbar .apps-center-title` 标题抑制
- * 补丁已通过把 apps 中心顶栏迁移到标准壳类消除。
+ * .search-box / .helmx-table 等），宿主绝不点名插件私有类做定向补丁。
  * 新增内置插件私有类前缀时同步登记此清单；公共词汇（helmx-/screen-/callout/
  * badge/btn/kv/table/stack/cell/loading/primary-/plugin- 等）不属插件私有。
  */
 const PLUGIN_PRIVATE_CLASS_PREFIXES = [
-  'apps-', 'app-card', 'app-detail', // builtin:apps
   'workflow-', 'subagent-', 'execution-', 'wf-', // builtin:workflow
   'herdr-', 'hd-', // builtin:herdr
   'sa-', // builtin:superagent
@@ -115,8 +112,8 @@ const SDK_SRC_DIR = join(__dirname, '../../plugin-client/src')
 
 /** 显式登记的 SDK 语义类（在 DOM 中使用、宿主 CSS 故意不定义；视觉由并列类承担）。 */
 const SDK_SEMANTIC_CLASS_ALLOWLIST: Readonly<Record<string, string>> = {
-  // 架构复审裁决（board #67）：detail drawer 元信息行语义标记，在用三处
-  // （web SkillDetailDrawer / workflow WorkflowLibraryDrawer / apps client），
+  // 架构复审裁决（board #67）：detail drawer 元信息行语义标记，在用两处
+  // （web SkillDetailDrawer / workflow WorkflowLibraryDrawer），
   // 视觉由并列的 mono / text-subtle 承担；如需专属视觉，定义单独提交并移出本登记。
   'primary-drawer-id': 'detail drawer meta-line semantic marker; visuals carried by sibling mono/text-subtle',
   // 架构复审裁决（board #67）：空态第二行语义标记（swarm workbench 面板与 SDK
