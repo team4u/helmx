@@ -3,38 +3,37 @@
  * machine installs with one `npm install -g @helmx/node` (bin `helmx-node`, single-sourced from
  * packages/node/package.json).
  *
- * Why a single-file bundle with four external dependencies (unlike the CLI artifact's zero-dependency
+ * Why a single-file bundle with two external dependencies (unlike the CLI artifact's zero-dependency
  * bundle): the node daemon's runtime closure spans @helmx/node + @helmx/env-io (update engine included)
- * + @helmx/protocol — all private workspace packages, inlined by esbuild — plus four packages that
- * cannot be inlined honestly: @earendil-works/chord, @earendil-works/pi-durable (process-wide SDKs
- * whose instances must be shared with any host embedding them) and birpc / ws (plain runtime
- * libraries kept external by the same closure contract the Hub payload pins). Those four land in
- * `dependencies` as the exact versions pnpm actually installed in this repository — never ^/~
- * floating ranges — because the daemon's dual-package self-upgrade binds @helmx/node +
- * @helmx/cli in lockstep against exact versions.
+ * + @helmx/protocol — all private workspace packages — plus the pure-JS subpaths
+ * `@earendil-works/pi-durable/env/node` and `@earendil-works/chord/context` (which only touch `node:*`
+ * builtins and `@earendil-works/pi-telemetry`, zero LLM SDKs or WASM), all inlined by esbuild. Only
+ * `birpc` and `ws` stay external and land in `dependencies` as the exact versions pnpm actually
+ * installed in this repository — never ^/~ floating ranges — because the daemon's dual-package
+ * self-upgrade binds @helmx/node + @helmx/cli in lockstep against exact versions.
  *
  * Bundle input: packages/node/dist/cli.js (the full daemon CLI: connect / start / stop / restart /
  * status / upgrade / doctor / service). esbuild's metafile is the authority for two hard gates:
  * no external @helmx/* import may survive (the workspace packages are private and unpublished — a
  * leaked import would crash at global-install time), and every non-builtin external reference must
- * normalize to exactly the four-package whitelist (a fifth dependency means the closure drifted).
+ * normalize to exactly the two-package whitelist (a third dependency means the closure drifted).
  *
  * Output layout (dist-node/ is the publish package root; release runs npm pack/publish inside):
  *   dist/cli.js            bundled daemon entry (shebang + single-file ESM; the bin target)
  *   package.json           publish manifest (name defaults to @helmx/node, overridable via
- *                          HELMX_NODE_PACKAGE; bin helmx-node → ./dist/cli.js; dependencies = the four
+ *                          HELMX_NODE_PACKAGE; bin helmx-node → ./dist/cli.js; dependencies = the two
  *                          external exact-version pins)
  *   LICENSE, THIRD_PARTY_NOTICES.md
  */
 import { build as esbuildBundle } from 'esbuild';
 import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { resolveDepRealDir, scanPeerOverrides } from './dep-closure.mjs';
+import { resolveDepRealDir } from './dep-closure.mjs';
 
 const SHEBANG = '#!/usr/bin/env node';
 
 /** Exactly the packages that stay external in the node daemon bundle (everything else is inlined). */
-const EXTERNAL_DEPS = ['@earendil-works/chord', '@earendil-works/pi-durable', 'birpc', 'ws'];
+const EXTERNAL_DEPS = ['birpc', 'ws'];
 
 /** Publish node package name (overridable via HELMX_NODE_PACKAGE, mirroring HELMX_CLI_PACKAGE). */
 export const nodePackageName = process.env.HELMX_NODE_PACKAGE ?? '@helmx/node';
@@ -48,7 +47,7 @@ function packageNameOf(specifier) {
 /**
  * Assembles the node daemon publish package. Exits the process with a diagnostics list when any
  * artifact-side contract is broken (missing build inputs, a wrong bin shape in the workspace package,
- * dependency resolution failure, or a bundle that leaks external imports outside the four-package
+ * dependency resolution failure, or a bundle that leaks external imports outside the two-package
  * whitelist). Invoked by build.mjs after the CLI artifact assembly; publish order stays
  * payload → cli → node (see docs/releasing.md).
  */
@@ -91,30 +90,13 @@ export async function assembleNodeArtifact({ repoRoot, version, enginesNode }) {
     dependencies[name] = resolved.pkgJson.version;
   }
 
-  // npm resolves peers strictly (ERESOLVE) while the repository's pnpm install allows wider peer
-  // ranges. Overrides cannot help here: npm only honors `overrides` in the install root's manifest,
-  // never in a package being installed (`npm i -g @helmx/node` ships overrides that do nothing —
-  // proven by 0.1.1 warning despite carrying them). The published manifest pins the exact versions
-  // pnpm installed here, so the real contract is that those versions satisfy every peer declaration
-  // in the closure (chord 1.6.0 relaxed its peers to ranges, so caret specs satisfy them without
-  // workspace pins); make any residual conflict a hard build failure instead of shipping an inert field.
-  const peerOverrides = scanPeerOverrides(EXTERNAL_DEPS.map((name) => ({ name, version: dependencies[name], fromPkgDir: nodePkgDir })));
-  if (peerOverrides.size > 0) {
-    const conflicts = [...peerOverrides.entries()].map(([name, version]) => `${name}@${version}`).sort().join(', ');
-    console.error(
-      `[payload] node external dependency peers conflict with the installed pins (${conflicts}): npm ignores overrides of a globally installed package,` +
-        ' so realign the repository dependencies with the peers of the four externals (e.g. a chord peer re-pin) before publishing',
-    );
-    process.exit(1);
-  }
-
   rmSync(stagingDir, { recursive: true, force: true });
   mkdirSync(path.join(stagingDir, 'dist'), { recursive: true });
 
-  // Node builtins stay external automatically for platform=node; the four whitelist packages stay
-  // external in root and subpath form (chord/context, pi-durable/env/...); everything else
-  // (node + env-io incl. the update engine + protocol + typebox) is inlined with legal comments
-  // preserved.
+  // Node builtins stay external automatically for platform=node; the two whitelist packages (`birpc`, `ws`)
+  // stay external in root and subpath form; everything else (node + env-io incl. the update engine +
+  // protocol + typebox + pure-JS pi-durable/env/node & chord/context subpaths) is inlined with legal
+  // comments preserved.
   const bundleResult = await esbuildBundle({
     entryPoints: [path.join(nodePkgDir, 'dist/cli.js')],
     bundle: true,
@@ -136,8 +118,8 @@ export async function assembleNodeArtifact({ repoRoot, version, enginesNode }) {
   // Metafile hard gates (the authority — same rationale as the CLI artifact: regex-scanning bundle
   // text would false-positive on string-literal sample code): ① no external @helmx/* import survives
   // (workspace packages are private; a leaked one breaks every global install); ② every non-builtin
-  // external import normalizes into the four-package whitelist — a fifth external means the closure
-  // drifted and the manifest would under-declare runtime dependencies; ③ none of the four whitelist
+  // external import normalizes into the two-package whitelist — a third external means the closure
+  // drifted and the manifest would under-declare runtime dependencies; ③ none of the two whitelist
   // packages may appear as a bundled input (an external misconfiguration would silently inline them
   // and the exact-version dependency pins would stop describing reality).
   const unresolvedHelmx = new Set();
@@ -154,7 +136,7 @@ export async function assembleNodeArtifact({ repoRoot, version, enginesNode }) {
   if (unresolvedHelmx.size > 0 || outsideWhitelist.length > 0) {
     const lines = [];
     if (unresolvedHelmx.size > 0) lines.push(`- external @helmx/* imports still referenced: ${[...unresolvedHelmx].sort().join(', ')}`);
-    if (outsideWhitelist.length > 0) lines.push(`- external imports outside the four-package whitelist: ${outsideWhitelist.sort().join(', ')}`);
+    if (outsideWhitelist.length > 0) lines.push(`- external imports outside the two-package whitelist: ${outsideWhitelist.sort().join(', ')}`);
     console.error(`[payload] node bundle violates the external-dependency contract:\n${lines.join('\n')}`);
     process.exit(1);
   }

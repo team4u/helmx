@@ -1,24 +1,10 @@
 /**
  * PluginHost UI registration validation and action binding checks.
  */
-import { HelmxError } from '@helmx/protocol';
+import { HelmxError, isPlainObject } from '@helmx/protocol';
 import type { UiRegistry } from './ui-registry.js';
 import type { CapabilityRegistry } from './capability-registry.js';
 import type { PluginState } from './types.js';
-import { isPlainObject } from '@helmx/protocol';
-
-export function assertUiDocsRegistered(
-  pluginId: string,
-  uiRegistry: UiRegistry,
-  hasPublicDoc: (name: string) => boolean,
-  hasPublicSessionDoc: (name: string) => boolean,
-): void {
-  uiRegistry.assertUiDocsRegistered(
-    pluginId,
-    hasPublicDoc,
-    hasPublicSessionDoc,
-  );
-}
 
 /**
  * Validates `composer.completer` action source bindings at definition end and enable commit:

@@ -24,7 +24,6 @@ import type {
   HostModelsSlice,
   LocaleTranslator,
   PluginSlotContributionSpec,
-  ScreenLocationSnapshot,
   UsePluginsResult,
   WhenBusy,
 } from '@helmx/protocol/browser'
@@ -50,27 +49,6 @@ export interface PluginSlotPortItem {
   pluginId: string
   contributionId: string
   spec: PluginSlotContributionSpec
-}
-
-/** One conversation's background in-flight entry (same verdict as the host sidebar ring). */
-export interface ConversationBackgroundEntry {
-  /** A background task is in flight (workbench badge tone = 'accent', or context compaction). */
-  active: boolean
-  /** Run summary copy (badge footerText / compaction copy, deduplicated; may be empty). */
-  summary: string
-}
-
-/**
- * Host-standard conversation background snapshot: the per-conversation
- * in-flight index plus an honest unknown gate — while any needed badge doc has
- * not produced its first load, background facts are unknowable and consumers
- * must render "unknown", never "no background work".
- */
-export interface ConversationBackgroundSnapshot {
-  /** true while needed badge docs are still loading (or the host provides no aggregation): facts are unknown. */
-  unknown: boolean
-  /** Per-conversation in-flight index (key: conversationId). */
-  byConversation: ReadonlyMap<number, ConversationBackgroundEntry>
 }
 
 /** SDK MarkdownViewProps (the props contract the host MarkdownView implementation must satisfy). */
@@ -164,18 +142,6 @@ export interface PluginClientHostPort {
   /** Subscribe to plugin registry / UI contribution revisions. */
   subscribePlugins(listener: () => void): () => void
 
-  // ---- Conversation background in-flight activity (optional centralized derived slice) ----
-  /**
-   * One-shot read of the host-standard conversation background in-flight snapshot
-   * (`{ unknown, byConversation }`: workbench panel per-conversation badges with
-   * tone = 'accent' plus context compaction). Absent method or `unknown: true`
-   * while needed badge docs are still loading = background facts are unknown,
-   * never fabricated as "no work".
-   */
-  getConversationBackground?(): ConversationBackgroundSnapshot
-  /** Subscribe to semantic revisions of the conversation background snapshot. */
-  subscribeConversationBackground?(listener: () => void): () => void
-
   // ---- Model catalog (optional capability; all members reference-stable across renders) ----
   /**
    * One-shot read of the host model catalog slice (normalized entries plus
@@ -193,18 +159,6 @@ export interface PluginClientHostPort {
    * refresh; per-provider refresh errors surface verbatim in `errors`.
    */
   refreshModels?(): Promise<{ errors?: Record<string, string> }>
-
-  // ---- Navigation location (optional capability; URL hash single source of truth) ----
-  /**
-   * One-shot read of the host navigation location (primary/split pane as
-   * structured screen facts — undefined members are truth, not loading state).
-   * `undefined` = the host has not wired the capability. Reactive reads go
-   * through the useScreenLocation shared hook; writing params stays with
-   * ScreenProps.setParams of the owning screen.
-   */
-  getScreenLocation?(): ScreenLocationSnapshot | undefined
-  /** Subscribe to location revisions (listener fired after getScreenLocation() would return a new reference). */
-  subscribeScreenLocation?(listener: () => void): () => void
 
   // ---- Plugin docs ----
   /** Keyed read of a plugin public doc (`${pluginId}/${docName}`; undefined when absent). */
@@ -267,18 +221,3 @@ export function usePluginClientHost(): PluginClientHostPort {
   }
   return port
 }
-
-/**
- * Capability-handle slice of the host port (Pick keeps it automatically in sync
- * with the main interface — no second signature to maintain). Mounted alongside
- * the stable host port so handle-only consumers (ModelPickerControl,
- * useHostModels, useScreenLocation) can also mount in isolated handle-only
- * environments while adopting capabilities additively.
- */
-export type PluginClientHostHandles = Pick<
-  PluginClientHostPort,
-  'getModels' | 'subscribeModels' | 'refreshModels' | 'getScreenLocation' | 'subscribeScreenLocation'
->
-
-/** Stable host capability handles context (null outside the host Provider, same honesty rule as the main port). */
-export const PluginClientHostHandlesContext = createContext<PluginClientHostHandles | null>(null)

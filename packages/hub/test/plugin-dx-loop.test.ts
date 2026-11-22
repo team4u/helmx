@@ -380,15 +380,16 @@ test('DX HTTP 路由契约：POST /api/plugins/doctor | rescan | :id/reload 鉴�
   )
 
   // POST /api/plugins/doctor
-  const okDoc = await env.call('POST', '/api/plugins/doctor', { dir: dirPath })
+  const okDoc = await env.call('POST', '/api/plugins/doctor', { path: dirPath })
   assert.equal(okDoc.status, 200)
   assert.equal(okDoc.body.ok, true)
   assert.equal(okDoc.body.pluginId, 'dx-http-pl')
   assert.equal((await env.call('POST', '/api/plugins/doctor', {})).status, 400)
-  assert.equal((await env.call('POST', '/api/plugins/doctor', { dir: 'relative/path' })).status, 400)
-  assert.equal((await env.call('POST', '/api/plugins/doctor', { dir: dirPath, force: true })).status, 400)
+  assert.equal((await env.call('POST', '/api/plugins/doctor', { dir: dirPath })).status, 400)
+  assert.equal((await env.call('POST', '/api/plugins/doctor', { path: 'relative/path' })).status, 400)
+  assert.equal((await env.call('POST', '/api/plugins/doctor', { path: dirPath, force: true })).status, 400)
   assert.equal((await env.call('POST', '/api/plugins/doctor', undefined, { rawBody: 'not json' })).status, 400)
-  assert.equal((await env.call('POST', '/api/plugins/doctor', { dir: dirPath }, { auth: false })).status, 401)
+  assert.equal((await env.call('POST', '/api/plugins/doctor', { path: dirPath }, { auth: false })).status, 401)
 
   // POST /api/plugins/rescan
   writeMinimalPlugin(pluginsDir, 'dx-http-rescanned')

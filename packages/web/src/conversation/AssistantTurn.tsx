@@ -48,17 +48,20 @@ export interface AssistantTurnViewProps {
   processShortcut?: ProcessShortcutCommand
   /** 从回合末条目分叉新会话（ConversationTimeline 统一实例化的动作服务）。 */
   onForkFromHere: (entryId: string) => Promise<void>
+  /** 一键重新生成最新已完成助手回合（重发其对应的最后一条可编辑人类消息）。 */
+  onRegenerate?: () => Promise<void>
 }
 
 export function AssistantTurnView(props: AssistantTurnViewProps) {
   return <ToolActivityProvider><AssistantTurnContent {...props} /></ToolActivityProvider>
 }
 
-function AssistantTurnContent({ turn, conversation, isLatestTurn = false, anchorEntry, processShortcut, onForkFromHere }: AssistantTurnViewProps) {
+function AssistantTurnContent({ turn, conversation, isLatestTurn = false, anchorEntry, processShortcut, onForkFromHere, onRegenerate }: AssistantTurnViewProps) {
   const groupedUi = useGroupedUi()
   const { t } = useWebLocale()
   const activeToolCallIds = useContext(ToolActivityContext)?.activeToolCallIds
   const [forking, setForking] = useState(false)
+  const [regenerating, setRegenerating] = useState(false)
   // 流式正文提示：live 回合的最后一个文本段是仍在增长的真 live 文本（流式增量
   // 总并入末段），传 streaming 启用 MarkdownView 流式渲染路径；已结算回合与
   // 其他静态 Markdown 不启用。
@@ -83,6 +86,16 @@ function AssistantTurnContent({ turn, conversation, isLatestTurn = false, anchor
       await onForkFromHere(entryId)
     } finally {
       setForking(false)
+    }
+  }
+
+  const regenerateTurn = async (): Promise<void> => {
+    if (onRegenerate === undefined || regenerating) return
+    setRegenerating(true)
+    try {
+      await onRegenerate()
+    } finally {
+      setRegenerating(false)
     }
   }
 
@@ -195,6 +208,18 @@ function AssistantTurnContent({ turn, conversation, isLatestTurn = false, anchor
                   ))
                 : null}
               {lastText !== '' ? <CopyButton text={lastText} /> : null}
+              {isLatestTurn && onRegenerate !== undefined ? (
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  title={t('conv.turn.regenerate')}
+                  aria-label={t('conv.turn.regenerate')}
+                  disabled={regenerating}
+                  onClick={() => void regenerateTurn()}
+                >
+                  <HelmxIcon name={regenerating ? 'loader' : 'rotate-cw'} size={12} className={regenerating ? 'spin-slow' : undefined} />
+                </button>
+              ) : null}
               <button
                 type="button"
                 className="btn btn-ghost btn-sm"

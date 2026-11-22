@@ -117,6 +117,33 @@ export function printValue(io: Io, value: unknown, json: boolean): void {
   for (const [key, val] of entries) io.out(`${key.padEnd(width)}  ${toCell(val)}\n`)
 }
 
+/** Resolve a LocalizedText value (or plain string) into a single human-readable string. */
+export function resolveDisplayString(value: unknown): string {
+  const parsed = parseLocalizedText(value)
+  if (parsed !== undefined) return typeof parsed === 'string' ? parsed : humanDisplayCopy(parsed)
+  return toCell(value)
+}
+
+export interface TableColumn<T> {
+  label: string
+  value: (row: T) => string
+}
+
+/** Render an aligned human-readable table with curated columns (truncating overly long cells cleanly). */
+export function printTableColumns<T>(io: Io, rows: readonly T[], columns: readonly TableColumn<T>[]): void {
+  if (rows.length === 0) {
+    io.out('(empty)\n')
+    return
+  }
+  const cells = rows.map((row) => columns.map((col) => truncate(col.value(row))))
+  const widths = columns.map((col, i) => Math.min(80, Math.max(col.label.length, ...cells.map((r) => r[i]!.length))))
+  io.out(columns.map((col, i) => col.label.padEnd(widths[i]!)).join('  ') + '\n')
+  io.out(widths.map((w) => '-'.repeat(w)).join('  ') + '\n')
+  for (const row of cells) {
+    io.out(row.map((cell, i) => cell.padEnd(widths[i]!)).join('  ') + '\n')
+  }
+}
+
 /** Raw text output (for skills read / text artifacts), ensuring a trailing newline. */
 export function printText(io: Io, text: string): void {
   io.out(text.endsWith('\n') ? text : `${text}\n`)

@@ -82,6 +82,7 @@ export interface AgentStandbyPaneProps {
  */
 export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit }: AgentStandbyPaneProps) {
   const { profiles, assetsLoaded } = useProfilesSlice()
+  const hostModels = useHostModels()
   const plugins = usePlugins()
   const conversations = useConversations()
   const groupedUi = useGroupedUi()
@@ -369,6 +370,13 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
 
   const label = profile?.name || profileId
   const envError = standbyEnvError(draft, t)
+  const hasUsableModel = useMemo(() => {
+    if (hostModels === undefined) return true
+    if (hostModels.models.some((m) => m.available && m.disabled !== true)) return true
+    if ((hostModels.modelTiers ?? []).some((tier) => tier.available && tier.disabled !== true)) return true
+    return false
+  }, [hostModels])
+  const showZeroModelCta = assetsLoaded && profile !== undefined && profile.runtime === undefined && !hasUsableModel
 
   return (
     <div className="helmx-pane agent-standby-pane" data-agent={profileId}>
@@ -421,6 +429,25 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
               <span className="agent-standby-intro-name">{label}</span>
               <span className="agent-standby-intro-hint">{t('composer.standby.introHint')}</span>
             </div>
+            {showZeroModelCta ? (
+              <div className="callout callout-warn" role="status">
+                <HelmxIcon name="alert-triangle" size={14} />
+                <div className="flex-col-xs flex-1">
+                  <strong>{t('composer.standby.noModelsTitle')}</strong>
+                  <span className="callout-text">{t('composer.standby.noModelsHint')}</span>
+                  <div>
+                    <button
+                      type="button"
+                      className="btn btn-primary btn-xs"
+                      onClick={() => openTarget({ kind: 'models' }, isSplit ? { split: true } : undefined)}
+                    >
+                      <HelmxIcon name="key" size={12} />
+                      <span>{t('composer.standby.configureModels')}</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
             {profile.starters !== undefined && profile.starters.length > 0 ? (
               <div className="timeline-starters">
                 {profile.starters.map((starter, index) => (
@@ -733,6 +760,7 @@ function StandbyComposer({
               slashItems={slashMenuItems}
               onPick={applySlashPick}
               onClose={closeSlashPopover}
+              anchorRef={composerBoxRef}
             />
           ) : null}
           <CompletionPopover

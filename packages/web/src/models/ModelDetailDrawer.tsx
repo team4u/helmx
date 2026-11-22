@@ -1,9 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { assetsApi, type ModelDescriptor } from '../lib/api.js'
-import { ConfirmDialog, DetailDrawer, HelmxIcon } from '@helmx/plugin-client'
+import { ConfirmDialog, DetailDrawer, HelmxIcon, Select } from '@helmx/plugin-client'
 import { useOptionalModels, useOptionalStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import {
+  isProviderFilterEligible,
+  parseCustomModelIds,
+  validateCustomGatewayInput,
   type ProviderItem,
   type ProviderModelItem,
 } from './model-center-model.js'
@@ -14,16 +17,38 @@ import {
  */
 const CHIP_RENDER_LIMIT = 80
 
+export interface ProviderSavePayload {
+  apiKey?: string
+  baseUrl?: string
+  label?: string
+  protocol?: 'openai' | 'anthropic'
+  customModelIds?: string[]
+  models?: ProviderModelItem[]
+}
+
+export interface CustomGatewayCreateInput {
+  id: string
+  label?: string
+  protocol: 'openai' | 'anthropic'
+  baseUrl: string
+  models: string[]
+  apiKey?: string
+}
+
 export interface ModelDetailDrawerProps {
   provider: ProviderItem | null
+  isNewCustom?: boolean
+  existingProviderIds?: ReadonlyArray<string>
   open: boolean
   onClose: () => void
   inline?: boolean
   availableModels?: ModelDescriptor[]
   onSave?: (
     providerId: string,
-    data: { apiKey?: string; baseUrl?: string; models?: ProviderModelItem[] },
+    data: ProviderSavePayload,
   ) => Promise<void> | void
+  onCreateCustomGateway?: (input: CustomGatewayCreateInput) => Promise<void> | void
+  onDeleteCustomGateway?: (providerId: string) => Promise<void> | void
   onTestConnection?: (
     providerId: string,
     baseUrl?: string,
@@ -34,17 +59,21 @@ export interface ModelDetailDrawerProps {
  * Provider details & credentials drawer of the Models & Credentials Center:
  * - built on Radix UI Dialog primitives as a 540px right slide-over;
  * - renders the API-key secure input, service endpoint, dynamic catalog
- *   refresh and per-model routing toggles;
- * - credential deletion is guarded by a ConfirmDialog second confirmation;
+ *   refresh, custom-gateway CRUD and per-model routing toggles;
+ * - credential and custom-gateway deletion are guarded by ConfirmDialog;
  * - strictly zero Emoji; follows Fast Refresh and WAI-ARIA primitives.
  */
 export function ModelDetailDrawer({
   provider,
+  isNewCustom = false,
+  existingProviderIds = [],
   open,
   onClose,
   inline = false,
   availableModels,
   onSave,
+  onCreateCustomGateway,
+  onDeleteCustomGateway,
   onTestConnection,
 }: ModelDetailDrawerProps): React.JSX.Element {
   const storeModels = useOptionalModels()
@@ -52,7 +81,11 @@ export function ModelDetailDrawer({
   const { t } = useWebLocale()
   const catalogModels = availableModels ?? storeModels ?? []
 
-  // Regular provider form state
+  // Provider / custom-gateway form state
+  const [customId, setCustomId] = useState('')
+  const [customLabel, setCustomLabel] = useState(() => provider?.name ?? '')
+  const [customProtocol, setCustomProtocol] = useState<'openai' | 'anthropic'>(() => provider?.protocol ?? 'openai')
+  const [customModelsText, setCustomModelsText] = useState(() => (provider?.gatewayModels ?? []).join('\n'))
   const [apiKey, setApiKey] = useState('')
   const [baseUrl, setBaseUrl] = useState(() => provider?.baseUrl ?? '')
   const [models, setModels] = useState<ProviderModelItem[]>(() =>
@@ -69,17 +102,17 @@ export function ModelDetailDrawer({
   const [saveSuccess, setSaveSuccess] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
+  const [deleteGatewayConfirmOpen, setDeleteGatewayConfirmOpen] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [modelFilter, setModelFilter] = useState('')
   const [isExpanded, setIsExpanded] = useState(false)
 
-  // Endpoint editability: only custom gateway (providers.json) endpoints can
-  // actually be persisted from this UI. Plugin gateway endpoints (pluginId
-  // set, e.g. builtin:magpie) are owned by the plugin configuration, and
-  // built-in provider endpoints are fixed — both render read-only, so there
-  // is never an editable-looking input whose save silently does nothing (the
-  // root cause of endpoints bouncing back to the default address).
-  const endpointEditable = provider?.custom === true
+  // Endpoint editability: only custom gateways (providers.json) can persist
+  // endpoint/protocol/model-id changes from this UI. Plugin gateway endpoints
+  // are owned by plugin configuration, and built-in endpoints are fixed.
+  const endpointEditable = isNewCustom || provider?.custom === true
+  const canTestConnection = Boolean(!isNewCustom && provider && (onTestConnection || provider.dynamic))
+  const filterEligible = isProviderFilterEligible(provider, catalogModels)
   const endpointHint =
     endpointEditable === true
       ? t('models.endpoint.hintCustom')
@@ -87,9 +120,38 @@ export function ModelDetailDrawer({
         ? t('models.endpoint.hintPlugin', { pluginId: provider.pluginId })
         : t('models.endpoint.hintBuiltIn')
 
-  // Sync local form state whenever the selected provider changes
+  const protocolOptions = useMemo(
+    () => [
+      { value: 'openai', label: t('models.custom.protocolOpenai') },
+      { value: 'anthropic', label: t('models.custom.protocolAnthropic') },
+    ],
+    [t],
+  )
+
+  // Sync local form state whenever the selected provider or mode changes
   useEffect(() => {
+    if (isNewCustom) {
+      setCustomId('')
+      setCustomLabel('')
+      setCustomProtocol('openai')
+      setCustomModelsText('')
+      setApiKey('')
+      setBaseUrl('')
+      setModels([])
+      setTestResult(null)
+      setSaveError(null)
+      setSaveSuccess(false)
+      setModelFilter('')
+      setIsExpanded(false)
+      return
+    }
     if (provider) {
+      setCustomId(provider.id)
+      setCustomLabel(provider.name ?? '')
+      setCustomProtocol(provider.protocol ?? 'openai')
+      setCustomModelsText(
+        (provider.gatewayModels ?? provider.models?.map((m) => m.id) ?? []).join('\n'),
+      )
       setApiKey('')
       setBaseUrl(provider.baseUrl ?? '')
       setModels(provider.models ? provider.models.map((m) => ({ ...m })) : [])
@@ -99,6 +161,10 @@ export function ModelDetailDrawer({
       setModelFilter('')
       setIsExpanded(false)
     } else {
+      setCustomId('')
+      setCustomLabel('')
+      setCustomProtocol('openai')
+      setCustomModelsText('')
       setApiKey('')
       setBaseUrl('')
       setModels([])
@@ -108,7 +174,7 @@ export function ModelDetailDrawer({
       setModelFilter('')
       setIsExpanded(false)
     }
-  }, [provider])
+  }, [provider, isNewCustom])
 
   // Enabled model ids and the filtered list
   const enabledModelIds = useMemo(
@@ -170,9 +236,10 @@ export function ModelDetailDrawer({
     )
   }
 
-  // Connectivity test
+  // Connectivity test (only offered when a real probe exists: dynamic provider
+  // catalog refresh or an explicit onTestConnection handler; never fakes a pass).
   const handleTest = async () => {
-    if (!provider) return
+    if (!provider || !canTestConnection) return
     setTesting(true)
     setTestResult(null)
     setSaveError(null)
@@ -196,19 +263,6 @@ export function ModelDetailDrawer({
             success: true,
             latencyMs,
             message: t('models.test.ok'),
-          })
-        }
-      } else {
-        const isKeyPresent = Boolean(apiKey.trim() || provider.configured)
-        if (!isKeyPresent && provider.type === 'commercial') {
-          setTestResult({
-            success: false,
-            message: t('models.test.noKey'),
-          })
-        } else {
-          setTestResult({
-            success: true,
-            message: t('models.test.validated'),
           })
         }
       }
@@ -281,16 +335,74 @@ export function ModelDetailDrawer({
     }
   }
 
-  // Save the regular provider configuration
+  const handleDeleteCustomGateway = async () => {
+    if (!provider || provider.custom !== true || !onDeleteCustomGateway) return
+    setDeleting(true)
+    setSaveError(null)
+    try {
+      await onDeleteCustomGateway(provider.id)
+      setDeleteGatewayConfirmOpen(false)
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setDeleting(false)
+    }
+  }
+
+  // Save the regular provider or create/update a custom gateway
   const handleSaveProvider = async () => {
-    if (!provider) return
-    // The custom gateway endpoint is a required providers.json field: saving
-    // an empty value is explicitly rejected — never silently keep the old
-    // value and pretend the save succeeded.
-    if (provider.custom === true && !baseUrl.trim()) {
-      setSaveSuccess(false)
-      setSaveError(t('models.errors.customGatewayEndpointEmpty'))
+    if (isNewCustom) {
+      const validationError = validateCustomGatewayInput(
+        {
+          id: customId,
+          baseUrl,
+          modelsText: customModelsText,
+          isNew: true,
+          existingIds: existingProviderIds,
+        },
+        t,
+      )
+      if (validationError !== null) {
+        setSaveSuccess(false)
+        setSaveError(validationError)
+        return
+      }
+      if (!onCreateCustomGateway) return
+      setSaving(true)
+      setSaveError(null)
+      try {
+        await onCreateCustomGateway({
+          id: customId.trim().toLowerCase(),
+          label: customLabel.trim() || undefined,
+          protocol: customProtocol,
+          baseUrl: baseUrl.trim(),
+          models: parseCustomModelIds(customModelsText),
+          apiKey: apiKey.trim() ? apiKey.trim() : undefined,
+        })
+      } catch (err) {
+        setSaveError(err instanceof Error ? err.message : String(err))
+      } finally {
+        setSaving(false)
+      }
       return
+    }
+
+    if (!provider) return
+    if (provider.custom === true) {
+      const validationError = validateCustomGatewayInput(
+        {
+          id: provider.id,
+          baseUrl,
+          modelsText: customModelsText,
+          isNew: false,
+        },
+        t,
+      )
+      if (validationError !== null) {
+        setSaveSuccess(false)
+        setSaveError(validationError)
+        return
+      }
     }
     setSaving(true)
     setSaveError(null)
@@ -299,7 +411,14 @@ export function ModelDetailDrawer({
         await onSave(provider.id, {
           apiKey: apiKey.trim() ? apiKey.trim() : undefined,
           baseUrl: baseUrl.trim() ? baseUrl.trim() : undefined,
-          models,
+          ...(provider.custom === true
+            ? {
+                label: customLabel.trim(),
+                protocol: customProtocol,
+                customModelIds: parseCustomModelIds(customModelsText),
+              }
+            : {}),
+          ...(filterEligible ? { models } : {}),
         })
       } else if (apiKey.trim()) {
         await assetsApi.setCredential(provider.id, apiKey.trim())
@@ -322,24 +441,31 @@ export function ModelDetailDrawer({
         open={open}
         inline={inline}
         onClose={onClose}
-        title={provider?.name || t('models.drawer.titleFallback')}
+        title={isNewCustom ? t('models.custom.drawerTitle') : (provider?.name || t('models.drawer.titleFallback'))}
         titleClassName="break-word"
         titleExtra={
-          <>
-            {provider?.configured ? (
-              <span className="badge badge-ok">{t('models.configured')}</span>
-            ) : (
-              <span className="badge badge-neutral">{t('models.notConfigured')}</span>
-            )}
-            {provider?.dynamic && <span className="badge badge-neutral">{t('models.dynamicSyncBadge')}</span>}
-          </>
+          isNewCustom ? (
+            <span className="badge badge-neutral">{t('models.customBadge')}</span>
+          ) : (
+            <>
+              {provider?.configured ? (
+                <span className="badge badge-ok">{t('models.configured')}</span>
+              ) : (
+                <span className="badge badge-neutral">{t('models.notConfigured')}</span>
+              )}
+              {provider?.dynamic && <span className="badge badge-neutral">{t('models.dynamicSyncBadge')}</span>}
+              {provider?.custom && <span className="badge badge-neutral">{t('models.customBadge')}</span>}
+            </>
+          )
         }
-        meta={provider?.id}
+        meta={isNewCustom ? undefined : provider?.id}
         metaClassName="text-subtle break-word"
         aria-label={
-          provider
-            ? t('models.drawer.ariaSelected', { name: provider.name })
-            : t('models.drawer.ariaDefault')
+          isNewCustom
+            ? t('models.custom.drawerTitle')
+            : provider
+              ? t('models.drawer.ariaSelected', { name: provider.name })
+              : t('models.drawer.ariaDefault')
         }
         closeLabel={t('common.close')}
         footer={
@@ -361,15 +487,21 @@ export function ModelDetailDrawer({
               type="button"
               className="btn btn-primary"
               onClick={handleSaveProvider}
-              disabled={saving || !provider}
+              disabled={saving || (!isNewCustom && !provider)}
             >
               <HelmxIcon name="check" size={14} />
-              <span>{saving ? t('models.saving') : t('models.saveConfig')}</span>
+              <span>
+                {saving
+                  ? t('models.saving')
+                  : isNewCustom
+                    ? t('models.custom.createAction')
+                    : t('models.saveConfig')}
+              </span>
             </button>
           </div>
         }
       >
-              {!provider ? (
+              {!isNewCustom && !provider ? (
                 <div className="primary-center-empty">
                   <div className="primary-center-empty-text">{t('models.drawer.noSelection')}</div>
                 </div>
@@ -382,7 +514,7 @@ export function ModelDetailDrawer({
                         <HelmxIcon name="key" size={14} />
                         <span className="section-flat-title">{t('models.drawer.credentialsSection')}</span>
                       </div>
-                      {provider.dynamic && (
+                      {!isNewCustom && provider?.dynamic && (
                         <button
                           type="button"
                           className="btn btn-xs btn-ghost"
@@ -400,11 +532,64 @@ export function ModelDetailDrawer({
                       )}
                     </div>
                     <div className="form-grid">
+                      {isNewCustom && (
+                        <>
+                          <label htmlFor="model-drawer-custom-id" className="form-grid-label">
+                            {t('models.custom.idLabel')}
+                          </label>
+                          <div className="flex-col-xs">
+                            <input
+                              id="model-drawer-custom-id"
+                              type="text"
+                              className="input mono"
+                              value={customId}
+                              onChange={(e) => setCustomId(e.target.value)}
+                              placeholder={t('models.custom.idPlaceholder')}
+                              autoComplete="off"
+                            />
+                          </div>
+                        </>
+                      )}
+
+                      {endpointEditable && (
+                        <>
+                          <label htmlFor="model-drawer-custom-label" className="form-grid-label">
+                            {t('models.custom.labelLabel')}
+                          </label>
+                          <div className="flex-col-xs">
+                            <input
+                              id="model-drawer-custom-label"
+                              type="text"
+                              className="input"
+                              value={customLabel}
+                              onChange={(e) => setCustomLabel(e.target.value)}
+                              placeholder={t('models.custom.labelPlaceholder')}
+                              autoComplete="off"
+                            />
+                          </div>
+
+                          <label htmlFor="model-drawer-custom-protocol" className="form-grid-label">
+                            {t('models.custom.protocolLabel')}
+                          </label>
+                          <div className="flex-col-xs">
+                            <Select
+                              id="model-drawer-custom-protocol"
+                              value={customProtocol}
+                              options={protocolOptions}
+                              inline={inline}
+                              onChange={(e) =>
+                                setCustomProtocol(e.target.value === 'anthropic' ? 'anthropic' : 'openai')
+                              }
+                            />
+                          </div>
+                        </>
+                      )}
+
                       <label htmlFor="model-drawer-api-key" className="form-grid-label">
                         {t('models.apiKey')}
                       </label>
                       <div className="flex-col-xs">
-                        {provider.pluginId ? (
+                        {!isNewCustom && provider?.pluginId ? (
                           <>
                             <div className="form-grid-value" title={t('models.apiKey.pluginKeyTitle')}>
                               {t('models.apiKey.pluginManaged', { pluginId: provider.pluginId })}
@@ -412,6 +597,18 @@ export function ModelDetailDrawer({
                             <span className="text-subtle">
                               {t('models.apiKey.pluginManagedHint')}
                             </span>
+                            {actions ? (
+                              <div>
+                                <button
+                                  type="button"
+                                  className="btn btn-xs btn-secondary"
+                                  onClick={() => actions.openTarget({ kind: 'plugins', pluginId: provider.pluginId! })}
+                                >
+                                  <HelmxIcon name="puzzle" size={12} />
+                                  <span>{t('models.plugin.openSettings', { pluginId: provider.pluginId })}</span>
+                                </button>
+                              </div>
+                            ) : null}
                           </>
                         ) : (
                           <>
@@ -422,7 +619,7 @@ export function ModelDetailDrawer({
                               value={apiKey}
                               onChange={(e) => setApiKey(e.target.value)}
                               placeholder={
-                                provider.configured
+                                !isNewCustom && provider?.configured
                                   ? t('models.apiKey.placeholderConfigured')
                                   : t('models.apiKey.placeholderEnter')
                               }
@@ -447,45 +644,83 @@ export function ModelDetailDrawer({
                             value={baseUrl}
                             onChange={(e) => setBaseUrl(e.target.value)}
                             placeholder={
-                              provider.baseUrl ||
-                              (provider.type === 'local'
+                              provider?.baseUrl ||
+                              (provider?.type === 'local'
                                 ? 'http://127.0.0.1:11434'
                                 : t('models.endpoint.defaultUrlPlaceholder'))
                             }
                           />
                         ) : (
                           <div className="form-grid-value mono break-word" title={t('models.endpoint.readOnlyTitle')}>
-                            {provider.baseUrl || '—'}
+                            {provider?.baseUrl || '—'}
                           </div>
                         )}
                         <span className="text-subtle">{endpointHint}</span>
                       </div>
-                    </div>
 
-                    {/* Connectivity test and secret deletion */}
-                    <div className="flex-row-between flex-row-wrap">
-                      <button
-                        type="button"
-                        className="btn btn-sm"
-                        onClick={handleTest}
-                        disabled={testing}
-                      >
-                        <HelmxIcon name="activity" size={12} />
-                        <span>{testing ? t('models.test.testing') : t('models.test.action')}</span>
-                      </button>
-
-                      {provider.configured && (
-                        <button
-                          type="button"
-                          className="btn btn-sm btn-ghost text-err"
-                          onClick={() => setDeleteConfirmOpen(true)}
-                          disabled={deleting}
-                        >
-                          <HelmxIcon name="trash" size={12} />
-                          <span>{t('models.credentials.delete')}</span>
-                        </button>
+                      {endpointEditable && (
+                        <>
+                          <label htmlFor="model-drawer-custom-models" className="form-grid-label form-grid-align-start">
+                            {t('models.custom.modelsLabel')}
+                          </label>
+                          <div className="flex-col-xs">
+                            <textarea
+                              id="model-drawer-custom-models"
+                              className="input mono"
+                              rows={4}
+                              value={customModelsText}
+                              onChange={(e) => setCustomModelsText(e.target.value)}
+                              placeholder={t('models.custom.modelsPlaceholder')}
+                            />
+                            <span className="text-subtle">{t('models.custom.modelsHint')}</span>
+                          </div>
+                        </>
                       )}
                     </div>
+
+                    {/* Connectivity test and destructive actions */}
+                    {!isNewCustom && provider && (canTestConnection || provider.configured || (provider.custom === true && onDeleteCustomGateway)) && (
+                      <div className="flex-row-between flex-row-wrap">
+                        <div className="flex-row">
+                          {canTestConnection && (
+                            <button
+                              type="button"
+                              className="btn btn-sm"
+                              onClick={handleTest}
+                              disabled={testing}
+                            >
+                              <HelmxIcon name="activity" size={12} />
+                              <span>{testing ? t('models.test.testing') : t('models.test.action')}</span>
+                            </button>
+                          )}
+                        </div>
+
+                        <div className="flex-row">
+                          {provider.configured && !provider.pluginId && (
+                            <button
+                              type="button"
+                              className="btn btn-sm btn-ghost text-err"
+                              onClick={() => setDeleteConfirmOpen(true)}
+                              disabled={deleting}
+                            >
+                              <HelmxIcon name="trash" size={12} />
+                              <span>{t('models.credentials.delete')}</span>
+                            </button>
+                          )}
+                          {provider.custom === true && onDeleteCustomGateway && (
+                            <button
+                              type="button"
+                              className="btn btn-sm btn-ghost text-err"
+                              onClick={() => setDeleteGatewayConfirmOpen(true)}
+                              disabled={deleting}
+                            >
+                              <HelmxIcon name="trash" size={12} />
+                              <span>{t('models.custom.deleteAction')}</span>
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    )}
 
                     {testResult && (
                       <div
@@ -506,133 +741,138 @@ export function ModelDetailDrawer({
                   </div>
 
                   {/* Model list management (model chips interactions) */}
-                  <div className="section-flat">
-                    <div className="section-flat-header flex-row-between">
-                      <div className="flex-row">
-                        <HelmxIcon name="cpu" size={14} />
-                        <span className="section-flat-title">{t('models.models.section')}</span>
-                      </div>
-                      <span className="badge badge-neutral mono tabular-nums">
-                        {t('models.models.countBadge', {
-                          enabled: enabledModelIds.length,
-                          total: models.length,
-                        })}
-                      </span>
-                    </div>
-
-                    <p className="text-subtle">
-                      {t('models.models.hint')}
-                    </p>
-
-                    {models.length === 0 ? (
-                      <div className="text-subtle">
-                        {provider.dynamic
-                          ? t('models.models.emptyDynamic')
-                          : t('models.models.emptyStatic')}
-                      </div>
-                    ) : (
-                      <div className="models model-chips-container">
-                        {/* Action toolbar: filter search and bulk controls */}
-                        <div className="mbulk model-chips-toolbar">
-                          <div className="search-box flex-1">
-                            <HelmxIcon name="search" size={13} />
-                            <input
-                              type="text"
-                              placeholder={t('models.models.filterPlaceholder')}
-                              value={modelFilter}
-                              onChange={(e) => setModelFilter(e.target.value)}
-                              aria-label={t('models.models.filterAria')}
-                            />
-                          </div>
-                          <div className="model-chips-actions">
-                            <button
-                              type="button"
-                              className="text action"
-                              onClick={handleSelectAll}
-                              title={hasModelFilter ? t('models.models.enableMatchesTitle') : t('models.models.enableAll')}
-                            >
-                              {hasModelFilter
-                                ? t('models.models.enableMatches', { count: filteredModels.length })
-                                : t('models.models.enableAll')}
-                            </button>
-                            <button
-                              type="button"
-                              className="text action"
-                              onClick={handleClearAll}
-                              title={hasModelFilter ? t('models.models.disableMatchesTitle') : t('models.models.disableAll')}
-                            >
-                              {hasModelFilter
-                                ? t('models.models.disableMatches', { count: filteredModels.length })
-                                : t('models.models.disableAll')}
-                            </button>
-                          </div>
+                  {!isNewCustom && provider && (
+                    <div className="section-flat">
+                      <div className="section-flat-header flex-row-between">
+                        <div className="flex-row">
+                          <HelmxIcon name="cpu" size={14} />
+                          <span className="section-flat-title">{t('models.models.section')}</span>
                         </div>
+                        <span className="badge badge-neutral mono tabular-nums">
+                          {t('models.models.countBadge', {
+                            enabled: enabledModelIds.length,
+                            total: models.length,
+                          })}
+                        </span>
+                      </div>
 
-                        {/* Flat pill cluster (frameless, airy white tiles) */}
-                        <div
-                          className={`mchips model-drawer-tags-wrap ${isExpanded ? 'open is-expanded' : ''}`}
-                          role="group"
-                          aria-label={t('models.models.selectAria')}
-                        >
-                          {visibleModels.length === 0 ? (
-                            <span className="text-subtle">
-                              {t('models.models.noMatches')}
-                            </span>
-                          ) : (
-                            visibleModels.map((model) => {
-                              const isChecked = Boolean(model.enabled)
-                              return (
-                                <button
-                                  key={model.id}
-                                  type="button"
-                                  role="checkbox"
-                                  aria-checked={isChecked}
-                                  className={`mchip pick model-drawer-tag ${isChecked ? 'on active' : ''}`}
-                                  onClick={() => handleToggleModel(model.id)}
-                                  title={t(
-                                    isChecked
-                                      ? 'models.models.chipTitleDisable'
-                                      : 'models.models.chipTitleEnable',
-                                    { name: model.name, id: model.id },
-                                  )}
-                                >
-                                  <span className="mchip-check" aria-hidden="true">
-                                    <HelmxIcon name="check" size={10} />
-                                  </span>
-                                  <span>{model.name}</span>
-                                  {model.tags?.map((tag) => (
-                                    <span key={tag} className="badge mi-effort mchip-tag mtell">
-                                      {tag}
+                      <p className="text-subtle">
+                        {filterEligible ? t('models.models.hint') : t('models.models.filterRequiresConfig')}
+                      </p>
+
+                      {models.length === 0 ? (
+                        <div className="text-subtle">
+                          {provider.dynamic
+                            ? t('models.models.emptyDynamic')
+                            : t('models.models.emptyStatic')}
+                        </div>
+                      ) : (
+                        <div className="models model-chips-container">
+                          {/* Action toolbar: filter search and bulk controls */}
+                          <div className="mbulk model-chips-toolbar">
+                            <div className="search-box flex-1">
+                              <HelmxIcon name="search" size={13} />
+                              <input
+                                type="text"
+                                placeholder={t('models.models.filterPlaceholder')}
+                                value={modelFilter}
+                                onChange={(e) => setModelFilter(e.target.value)}
+                                aria-label={t('models.models.filterAria')}
+                              />
+                            </div>
+                            <div className="model-chips-actions">
+                              <button
+                                type="button"
+                                className="text action"
+                                disabled={!filterEligible}
+                                onClick={handleSelectAll}
+                                title={hasModelFilter ? t('models.models.enableMatchesTitle') : t('models.models.enableAll')}
+                              >
+                                {hasModelFilter
+                                  ? t('models.models.enableMatches', { count: filteredModels.length })
+                                  : t('models.models.enableAll')}
+                              </button>
+                              <button
+                                type="button"
+                                className="text action"
+                                disabled={!filterEligible}
+                                onClick={handleClearAll}
+                                title={hasModelFilter ? t('models.models.disableMatchesTitle') : t('models.models.disableAll')}
+                              >
+                                {hasModelFilter
+                                  ? t('models.models.disableMatches', { count: filteredModels.length })
+                                  : t('models.models.disableAll')}
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* Flat pill cluster (frameless, airy white tiles) */}
+                          <div
+                            className={`mchips model-drawer-tags-wrap ${isExpanded ? 'open is-expanded' : ''}`}
+                            role="group"
+                            aria-label={t('models.models.selectAria')}
+                          >
+                            {visibleModels.length === 0 ? (
+                              <span className="text-subtle">
+                                {t('models.models.noMatches')}
+                              </span>
+                            ) : (
+                              visibleModels.map((model) => {
+                                const isChecked = Boolean(model.enabled)
+                                return (
+                                  <button
+                                    key={model.id}
+                                    type="button"
+                                    role="checkbox"
+                                    aria-checked={isChecked}
+                                    disabled={!filterEligible}
+                                    className={`mchip pick model-drawer-tag ${isChecked ? 'on active' : ''}`}
+                                    onClick={() => handleToggleModel(model.id)}
+                                    title={t(
+                                      isChecked
+                                        ? 'models.models.chipTitleDisable'
+                                        : 'models.models.chipTitleEnable',
+                                      { name: model.name, id: model.id },
+                                    )}
+                                  >
+                                    <span className="mchip-check" aria-hidden="true">
+                                      <HelmxIcon name="check" size={10} />
                                     </span>
-                                  ))}
-                                </button>
-                              )
-                            })
+                                    <span>{model.name}</span>
+                                    {model.tags?.map((tag) => (
+                                      <span key={tag} className="badge mi-effort mchip-tag mtell">
+                                        {tag}
+                                      </span>
+                                    ))}
+                                  </button>
+                                )
+                              })
+                            )}
+                          </div>
+
+                          {/* Expand/collapse full-width button */}
+                          {models.length > 12 && (
+                            <button
+                              type="button"
+                              className="mchips-fold"
+                              onClick={() => setIsExpanded((prev) => !prev)}
+                              aria-expanded={isExpanded}
+                              title={isExpanded ? t('models.models.collapseList') : t('models.models.expandAll')}
+                            >
+                              <span>
+                                {isExpanded
+                                  ? t('models.models.collapseList')
+                                  : hiddenModelCount > 0
+                                    ? t('models.models.expandAllHidden', { count: hiddenModelCount })
+                                    : t('models.models.expandAll')}
+                              </span>
+                              <HelmxIcon name={isExpanded ? 'chevron-up' : 'chevron-down'} size={12} />
+                            </button>
                           )}
                         </div>
-
-                        {/* Expand/collapse full-width button */}
-                        {models.length > 12 && (
-                          <button
-                            type="button"
-                            className="mchips-fold"
-                            onClick={() => setIsExpanded((prev) => !prev)}
-                            aria-expanded={isExpanded}
-                            title={isExpanded ? t('models.models.collapseList') : t('models.models.expandAll')}
-                          >
-                            <span>
-                              {isExpanded
-                                ? t('models.models.collapseList')
-                                : hiddenModelCount > 0
-                                  ? t('models.models.expandAllHidden', { count: hiddenModelCount })
-                                  : t('models.models.expandAll')}
-                            </span>
-                            <HelmxIcon name={isExpanded ? 'chevron-up' : 'chevron-down'} size={12} />
-                          </button>
-                        )}
-                      </div>
-                    )}
-                  </div>
+                      )}
+                    </div>
+                  )}
                 </>
               )}
       </DetailDrawer>
@@ -651,6 +891,22 @@ export function ModelDetailDrawer({
         inline={inline}
         onConfirm={handleDeleteCredential}
         onCancel={() => setDeleteConfirmOpen(false)}
+      />
+
+      {/* Delete custom gateway confirmation dialog */}
+      <ConfirmDialog
+        open={deleteGatewayConfirmOpen}
+        onOpenChange={setDeleteGatewayConfirmOpen}
+        title={t('models.custom.deleteConfirmTitle')}
+        description={t('models.custom.deleteConfirmBody', {
+          name: provider?.name ?? provider?.id ?? t('models.confirm.thisProvider'),
+        })}
+        confirmText={t('models.confirm.confirm')}
+        cancelText={t('common.cancel')}
+        danger
+        inline={inline}
+        onConfirm={handleDeleteCustomGateway}
+        onCancel={() => setDeleteGatewayConfirmOpen(false)}
       />
     </>
   )

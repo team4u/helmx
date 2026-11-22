@@ -14,41 +14,79 @@ import { flagValue, parseFlags, type FlagSpec } from '../args.js'
 import type { Io } from '../options.js'
 import type { CommandContext, CommandSpec } from './shared.js'
 import { assertNoExtraPositionals, parseNoFlags, printResult, requirePositional } from './shared.js'
-import { printText } from '../output.js'
+import { printTableColumns, printText } from '../output.js'
 
-/** Fixed columns for nodes list in human mode (raw records may have more fields; show only 6 key columns). */
-const NODE_COLUMNS: ReadonlyArray<{ key: keyof NodeInfo; label: string }> = [
-  { key: 'id', label: 'id' },
-  { key: 'kind', label: 'kind' },
-  { key: 'online', label: 'online' },
-  { key: 'version', label: 'version' },
-  { key: 'hostname', label: 'hostname' },
-  { key: 'platform', label: 'platform' },
-]
+function formatGiB(bytes: number): string {
+  const gib = bytes / (1024 ** 3)
+  return gib >= 10 ? `${Math.round(gib)}G` : `${gib.toFixed(1)}G`
+}
+
+function formatNodeHealth(node: NodeInfo): string {
+  if (!node.online) return '-'
+  const h = node.health
+  if (!h) return 'ok'
+  const parts: string[] = []
+  if (Array.isArray(h.loadAvg) && Number.isFinite(h.loadAvg[0])) {
+    parts.push(`load ${h.loadAvg[0].toFixed(2)}`)
+  }
+  if (Number.isFinite(h.memTotalBytes) && h.memTotalBytes > 0 && Number.isFinite(h.memFreeBytes)) {
+    const used = Math.max(0, h.memTotalBytes - h.memFreeBytes)
+    parts.push(`mem ${formatGiB(used)}/${formatGiB(h.memTotalBytes)}`)
+  }
+  if (
+    typeof h.diskTotalBytes === 'number' &&
+    h.diskTotalBytes > 0 &&
+    typeof h.diskFreeBytes === 'number'
+  ) {
+    const used = Math.max(0, h.diskTotalBytes - h.diskFreeBytes)
+    parts.push(`disk ${formatGiB(used)}/${formatGiB(h.diskTotalBytes)}`)
+  }
+  return parts.length > 0 ? parts.join(' | ') : 'ok'
+}
 
 function printNodesTable(io: Io, nodes: NodeInfo[]): void {
-  if (nodes.length === 0) {
-    io.out('(empty)\n')
-    return
-  }
-  const rows = nodes.map((n) => NODE_COLUMNS.map(({ key }) => (n[key] === undefined ? '' : String(n[key]))))
-  const widths = NODE_COLUMNS.map(({ label }, i) => Math.max(label.length, ...rows.map((r) => r[i]!.length)))
-  io.out(NODE_COLUMNS.map(({ label }, i) => label.padEnd(widths[i]!)).join('  ') + '\n')
-  io.out(widths.map((w) => '-'.repeat(w)).join('  ') + '\n')
-  for (const row of rows) {
-    io.out(row.map((cell, i) => cell.padEnd(widths[i]!)).join('  ') + '\n')
+  printTableColumns(io, nodes, [
+    { label: 'id', value: (n) => n.id },
+    { label: 'kind', value: (n) => n.kind },
+    { label: 'online', value: (n) => String(n.online) },
+    { label: 'version', value: (n) => n.version ?? '' },
+    { label: 'hostname', value: (n) => n.hostname ?? '' },
+    { label: 'platform', value: (n) => n.platform ?? '' },
+    { label: 'health', value: (n) => formatNodeHealth(n) },
+  ])
+}
+
+function isLoopbackUrl(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.replace(/^\[|\]$/g, '').toLowerCase()
+    return host === 'localhost' || host === '127.0.0.1' || host === '::1'
+  } catch {
+    return false
   }
 }
 
-/** Human output for nodes issue: plaintext token is shown once, so highlight it prominently. */
-function printIssuedToken(io: Io, issued: NodeIssuedToken): void {
-  printText(io, [
+/** Human output for nodes issue: plaintext token is shown once, so provide copy-pasteable onboarding commands. */
+function printIssuedToken(io: Io, issued: NodeIssuedToken, hubUrl: string): void {
+  const lines = [
     `Access token for node ${issued.nodeId} (shown once; server only stores its digest):`,
     '',
     `  ${issued.token}`,
     '',
-    'Run on the managed machine: helmx-node connect <hubUrl> --token <token>',
-  ].join('\n'))
+    'Run on the managed machine:',
+    `  helmx-node start -d --hub '${hubUrl}' --token '${issued.token}'`,
+    '',
+    'Optional next steps on the managed machine:',
+    '  helmx-node doctor            # verify identity permissions and Hub reachability',
+    '  helmx-node service install   # auto-start on boot (launchd / systemd --user / schtasks)',
+  ]
+  if (isLoopbackUrl(hubUrl)) {
+    lines.push(
+      '',
+      `Warning: ${hubUrl} is a loopback address and is unreachable from remote machines.`,
+      'Replace --hub with a reachable Hub URL (e.g. start the Hub with HELMX_HOST=0.0.0.0 or front it with a TLS reverse proxy).',
+    )
+  }
+  printText(io, lines.join('\n'))
 }
 
 /** Human output for upgrade check: current/latest versions, update availability, and quarantined version. */
@@ -277,7 +315,7 @@ export function nodesCommands(): CommandSpec[] {
         printResult(ctx, issued)
         return
       }
-      printIssuedToken(ctx.io, issued)
+      printIssuedToken(ctx.io, issued, hub.baseUrl)
     },
   })
 
@@ -352,48 +390,53 @@ export function nodesCommands(): CommandSpec[] {
 
   cmds.push({
     path: ['nodes', 'forward'],
-    description: 'Foreground local TCP port forwarding (POST /api/nodes/:id/forward; press Ctrl-C to exit and close)',
+    description: 'Foreground Hub-host TCP port forwarding to a node (POST /api/nodes/:id/forward; listener binds on the Hub host; press Ctrl-C to close)',
     flags: [
       { name: 'current', type: 'boolean', help: 'read HELMX_NODE_ID as the target node' },
     ],
-    positional: '[<nodeId>] <listenHost:listenPort> [<targetHost>:]<targetPort>',
+    positional: '[<nodeId>] <[listenHost:]listenPort> <[targetHost:]targetPort>',
     async run(ctx: CommandContext) {
       const FORWARD_FLAGS: readonly FlagSpec[] = [
         { name: 'current', type: 'boolean', help: 'read HELMX_NODE_ID as the target node' },
       ]
       const parsed = parseFlags(FORWARD_FLAGS, ctx.args)
-      // Positional layout: [<nodeId>] <listenHost:listenPort> [<targetHost>:]<targetPort>.
-      // nodeId is optional: if the first positional contains ':', it is the listen address (and nodeId resolves via --current).
+      // Positional layout: [<nodeId>] <[listenHost:]listenPort> <[targetHost:]targetPort>.
+      // Bare listenPort defaults listenHost to 127.0.0.1 on the Hub host.
+      const useCurrent = parsed.flags.get('current') === true
       let nodeId: string
       let listenIndex = 0
-      const first = parsed.positionals[0]
-      if (first !== undefined && !first.includes(':')) {
-        const current = parsed.flags.get('current') === true
-        if (current) throw new CliError('nodeId and --current are mutually exclusive', 'invalid_flag_value')
-        if (first.trim() === '') throw new CliError('nodeId must be a non-empty node ID', 'invalid_id')
-        nodeId = first
-        listenIndex = 1
-      } else {
-        const current = parsed.flags.get('current') === true
-        if (!current) throw new CliError('missing node target: provide <nodeId> or --current (reads HELMX_NODE_ID)', 'missing_node_target')
+      if (useCurrent) {
+        if (parsed.positionals.length >= 3) {
+          throw new CliError('nodeId and --current are mutually exclusive', 'invalid_flag_value')
+        }
         const raw = ctx.env['HELMX_NODE_ID']
         if (!raw || !raw.trim()) {
           throw new CliError('--current requires HELMX_NODE_ID to be set', 'current_node_missing')
         }
         nodeId = raw.trim()
+        listenIndex = 0
+      } else {
+        const first = parsed.positionals[0]
+        const looksLikeEndpoint = first === undefined || first.includes(':') || /^\d+$/.test(first)
+        if (looksLikeEndpoint) {
+          throw new CliError('missing node target: provide <nodeId> or --current (reads HELMX_NODE_ID)', 'missing_node_target')
+        }
+        if (first.trim() === '') throw new CliError('nodeId must be a non-empty node ID', 'invalid_id')
+        nodeId = first
+        listenIndex = 1
       }
-      const listenRaw = requirePositional(parsed.positionals, listenIndex, 'listenHost:listenPort')
+      const listenRaw = requirePositional(parsed.positionals, listenIndex, '[listenHost:]listenPort')
       const targetRaw = requirePositional(parsed.positionals, listenIndex + 1, '[targetHost:]targetPort')
       assertNoExtraPositionals(parsed.positionals, listenIndex + 2)
-      const listen = parseEndpoint(listenRaw, '<listenHost:listenPort>', false)
-      if (listen.host === undefined) throw new CliError('listen address must include an explicit host (e.g. 127.0.0.1:8080)', 'invalid_flag_value')
+      const listen = parseEndpoint(listenRaw, '<[listenHost:]listenPort>', true)
+      const listenHost = listen.host ?? '127.0.0.1'
       const target = parseEndpoint(targetRaw, '<[targetHost:]targetPort>', true)
       const hub = await ctx.hub()
-      // Create the forwarder (listener lives only for the duration of this command; Hub foreground lease auto-stops if the event stream is never attached).
+      // Create the forwarder (listener lives on the Hub host only for the duration of this command; Hub foreground lease auto-stops if the event stream is never attached).
       const created = await hub.post<NodeForwardSession>(
         `/api/nodes/${encodeURIComponent(nodeId)}/forward`,
         {
-          listenHost: listen.host,
+          listenHost,
           listenPort: listen.port,
           targetPort: target.port,
           ...(target.host === undefined ? {} : { targetHost: target.host }),
@@ -428,7 +471,7 @@ export function nodesCommands(): CommandSpec[] {
       let hubStopped = false
       if (!ctx.json) {
         printText(ctx.io, [
-          `Forwarding established: ${forward.listenHost}:${forward.listenPort} -> ${nodeId} ${target.host ?? '127.0.0.1'}:${target.port}`,
+          `Forwarding established on Hub host (${hub.baseUrl}): ${forward.listenHost}:${forward.listenPort} -> node ${nodeId} ${target.host ?? '127.0.0.1'}:${target.port}`,
           'Press Ctrl-C to exit and close forwarding.',
         ].join('\n'))
       }

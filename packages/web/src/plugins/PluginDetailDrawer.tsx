@@ -18,14 +18,9 @@ import {
   AlertDialogOverlay,
   AlertDialogPortal,
   AlertDialogTitle,
+  DetailDrawer,
   EmptyState,
   HelmxIcon,
-  Dialog,
-  DialogClose,
-  DialogContent,
-  DialogOverlay,
-  DialogPortal,
-  DialogTitle,
   ModelPickerControl,
   MultiSelect,
   Select,
@@ -530,91 +525,126 @@ export function PluginDetailDrawer({
       : []
   const primaryScreen = pluginScreens[0] ?? null
 
+  const pluginTitle =
+    (plugin !== null ? resolveLocalizedText(plugin.name, locale) : '') ||
+    plugin?.id ||
+    t('plugins.drawer.titleFallback')
+
   return (
-    <Dialog
+    <DetailDrawer
       open={open}
       inline={inline}
-      onOpenChange={(isOpen) => {
-        if (!isOpen) onClose()
-      }}
-    >
-      <DialogPortal inline={inline}>
-        <DialogOverlay className="modal-backdrop plugin-drawer-backdrop" />
-        <DialogContent
-          className="plugin-drawer-content"
-          role="dialog"
-          aria-label={
-            plugin
-              ? t('plugins.drawer.ariaSelected', {
-                  name: resolveLocalizedText(plugin.name, locale) || plugin.id,
-                })
-              : t('plugins.drawer.titleFallback')
-          }
-        >
-          {/* Header metadata */}
-          <div className="plugin-drawer-header">
-            <div className="plugin-drawer-header-left">
-              <div className="plugin-drawer-title-col">
-                <div className="plugin-drawer-title-row">
-                  <DialogTitle className="plugin-drawer-title">
-                    {(plugin !== null ? resolveLocalizedText(plugin.name, locale) : '') ||
-                      plugin?.id ||
-                      t('plugins.drawer.titleFallback')}
-                  </DialogTitle>
-                  {versionLabel && (
-                    <span className="badge badge-neutral mono" title={t('plugins.card.versionTitle', { version: versionLabel })}>
-                      {versionLabel}
-                    </span>
-                  )}
-                  {plugin?.locked && (
-                    <span className="badge badge-warn" title={t('plugins.card.lockedTitle')}>
-                      <HelmxIcon name="lock" size={10} />
-                      <span>{t('plugins.resident')}</span>
-                    </span>
-                  )}
-                  {plugin?.dependencies && plugin.dependencies.length > 0 && (
-                    <span
-                      className="badge badge-neutral"
-                      title={t('plugins.drawer.dependenciesTitle', {
-                        deps: plugin.dependencies.join(t('plugins.desc.listSeparator')),
-                      })}
-                    >
-                      <HelmxIcon name="network" size={10} />
-                      <span>{t('plugins.drawer.dependenciesCount', { count: plugin.dependencies.length })}</span>
-                    </span>
-                  )}
-                </div>
-                {plugin && <div className="plugin-drawer-id mono">{plugin.id}</div>}
-                {plugin && (
-                  <div className="plugin-drawer-desc">{getPluginDescription(plugin, locale, t)}</div>
-                )}
-                {plugin && isPluginFailed(plugin) && plugin.error && (
-                  <div className="plugin-drawer-failed-note" role="note">
-                    <span className="badge badge-err">{t('plugins.drawer.failedToLoad')}</span>
-                    <span className="mono selectable">
-                      {t('plugins.drawer.failedNoteDetail', {
-                        code: plugin.error.code,
-                        message: plugin.error.message,
-                        stage: plugin.error.stage,
-                      })}
-                    </span>
-                  </div>
-                )}
+      onClose={onClose}
+      title={pluginTitle}
+      titleClassName="break-word"
+      titleExtra={
+        <>
+          {versionLabel && (
+            <span className="badge badge-neutral mono" title={t('plugins.card.versionTitle', { version: versionLabel })}>
+              {versionLabel}
+            </span>
+          )}
+          {plugin?.locked && (
+            <span className="badge badge-warn" title={t('plugins.card.lockedTitle')}>
+              <HelmxIcon name="lock" size={10} />
+              <span>{t('plugins.resident')}</span>
+            </span>
+          )}
+          {plugin?.dependencies && plugin.dependencies.length > 0 && (
+            <span
+              className="badge badge-neutral"
+              title={t('plugins.drawer.dependenciesTitle', {
+                deps: plugin.dependencies.join(t('plugins.desc.listSeparator')),
+              })}
+            >
+              <HelmxIcon name="network" size={10} />
+              <span>{t('plugins.drawer.dependenciesCount', { count: plugin.dependencies.length })}</span>
+            </span>
+          )}
+        </>
+      }
+      meta={plugin?.id}
+      metaClassName="text-subtle break-word"
+      belowTitle={
+        plugin ? (
+          <>
+            <div className="plugin-drawer-desc">{getPluginDescription(plugin, locale, t)}</div>
+            {isPluginFailed(plugin) && plugin.error && (
+              <div className="plugin-drawer-failed-note" role="note">
+                <span className="badge badge-err">{t('plugins.drawer.failedToLoad')}</span>
+                <span className="mono selectable">
+                  {t('plugins.drawer.failedNoteDetail', {
+                    code: plugin.error.code,
+                    message: plugin.error.message,
+                    stage: plugin.error.stage,
+                  })}
+                </span>
               </div>
-            </div>
-            <DialogClose asChild>
-              <button
-                className="btn btn-ghost btn-icon-sm plugin-drawer-close-btn"
-                aria-label={t('common.close')}
-                title={t('common.close')}
+            )}
+          </>
+        ) : undefined
+      }
+      aria-label={
+        plugin
+          ? t('plugins.drawer.ariaSelected', {
+              name: resolveLocalizedText(plugin.name, locale) || plugin.id,
+            })
+          : t('plugins.drawer.titleFallback')
+      }
+      closeLabel={t('common.close')}
+      aux={
+        <AlertDialog
+          open={confirmRemoveOpen && Boolean(plugin?.managed)}
+          inline={inline}
+          onOpenChange={(isOpen) => {
+            if (!isOpen && packageOp !== 'removing') setConfirmRemoveOpen(false)
+          }}
+        >
+          <AlertDialogPortal inline={inline}>
+            <AlertDialogOverlay className="modal-backdrop">
+              <AlertDialogContent
+                className="modal plugin-remove-confirm"
+                role="alertdialog"
+                aria-label={t('plugins.package.confirmUninstallAria')}
               >
-                <HelmxIcon name="x" size={14} />
-              </button>
-            </DialogClose>
-          </div>
-
-          {/* Drawer body */}
-          <div className="plugin-drawer-body">
+                <div className="modal-header">
+                  <AlertDialogTitle className="modal-title">{t('plugins.package.uninstallPlugin')}</AlertDialogTitle>
+                </div>
+                <div className="modal-body">
+                  <AlertDialogDescription className="plugin-remove-confirm-desc">
+                    {t('plugins.package.confirmUninstallBody', {
+                      name: (plugin !== null ? resolveLocalizedText(plugin.name, locale) : '') || plugin?.id || '',
+                      id: plugin?.id ?? '',
+                    })}
+                  </AlertDialogDescription>
+                </div>
+                <div className="modal-footer">
+                  <AlertDialogCancel asChild>
+                    <button
+                      className="btn btn-ghost btn-sm"
+                      disabled={packageOp === 'removing'}
+                      onClick={() => setConfirmRemoveOpen(false)}
+                    >
+                      {t('common.cancel')}
+                    </button>
+                  </AlertDialogCancel>
+                  <AlertDialogAction asChild>
+                    <button
+                      className="btn btn-danger btn-sm"
+                      disabled={packageOp === 'removing'}
+                      onClick={() => void handleRemovePackage()}
+                    >
+                      <HelmxIcon name="trash-2" size={12} />
+                      <span>{packageOp === 'removing' ? t('plugins.package.uninstalling') : t('plugins.package.confirmUninstall')}</span>
+                    </button>
+                  </AlertDialogAction>
+                </div>
+              </AlertDialogContent>
+            </AlertDialogOverlay>
+          </AlertDialogPortal>
+        </AlertDialog>
+      }
+    >
             {!plugin ? (
               <EmptyState>{t('plugins.drawer.noSelection')}</EmptyState>
             ) : (
@@ -933,61 +963,6 @@ export function PluginDetailDrawer({
                 )}
               </>
             )}
-          </div>
-        </DialogContent>
-      </DialogPortal>
-
-      {/* Uninstall danger confirmation: Radix AlertDialog (inline rendering matches the drawer for test assertions) */}
-      <AlertDialog
-        open={confirmRemoveOpen && Boolean(plugin?.managed)}
-        inline={inline}
-        onOpenChange={(isOpen) => {
-          if (!isOpen && packageOp !== 'removing') setConfirmRemoveOpen(false)
-        }}
-      >
-        <AlertDialogPortal inline={inline}>
-          <AlertDialogOverlay className="modal-backdrop">
-            <AlertDialogContent
-              className="modal plugin-remove-confirm"
-              role="alertdialog"
-              aria-label={t('plugins.package.confirmUninstallAria')}
-            >
-            <div className="modal-header">
-              <AlertDialogTitle className="modal-title">{t('plugins.package.uninstallPlugin')}</AlertDialogTitle>
-            </div>
-            <div className="modal-body">
-              <AlertDialogDescription className="plugin-remove-confirm-desc">
-                {t('plugins.package.confirmUninstallBody', {
-                  name: (plugin !== null ? resolveLocalizedText(plugin.name, locale) : '') || plugin?.id || '',
-                  id: plugin?.id ?? '',
-                })}
-              </AlertDialogDescription>
-            </div>
-            <div className="modal-footer">
-              <AlertDialogCancel asChild>
-                <button
-                  className="btn btn-ghost btn-sm"
-                  disabled={packageOp === 'removing'}
-                  onClick={() => setConfirmRemoveOpen(false)}
-                >
-                  {t('common.cancel')}
-                </button>
-              </AlertDialogCancel>
-              <AlertDialogAction asChild>
-                <button
-                  className="btn btn-danger btn-sm"
-                  disabled={packageOp === 'removing'}
-                  onClick={() => void handleRemovePackage()}
-                >
-                  <HelmxIcon name="trash-2" size={12} />
-                  <span>{packageOp === 'removing' ? t('plugins.package.uninstalling') : t('plugins.package.confirmUninstall')}</span>
-                </button>
-              </AlertDialogAction>
-            </div>
-          </AlertDialogContent>
-        </AlertDialogOverlay>
-      </AlertDialogPortal>
-      </AlertDialog>
-    </Dialog>
+    </DetailDrawer>
   )
 }

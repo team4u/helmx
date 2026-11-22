@@ -18,10 +18,13 @@ import {
   buildProviderFilterTabs,
   DEFAULT_PROVIDERS,
   filterProviders,
+  isProviderFilterEligible,
+  parseCustomModelIds,
   sortProvidersConfiguredFirst,
   summarizeCardModels,
   summarizeProviders,
   UNSET_MODEL_VALUE,
+  validateCustomGatewayInput,
   type ProviderItem,
 } from '../src/models/model-center-model.js'
 import { ModelDetailDrawer } from '../src/models/ModelDetailDrawer.js'
@@ -41,7 +44,7 @@ const EMOJI_REGEX =
 // 1. model-center-model pure-function tests
 // ---------------------------------------------------------------------------
 
-test('model-center-model: default provider list covers the 9 mainstream presets with valid metadata', { timeout: 60_000 }, () => {
+test('model-center-model: default provider list covers the 8 mainstream presets without a broken static custom placeholder', { timeout: 60_000 }, () => {
   const ids = DEFAULT_PROVIDERS.map((p) => p.id)
   const expectedIds = [
     'anthropic',
@@ -52,18 +55,41 @@ test('model-center-model: default provider list covers the 9 mainstream presets 
     'openrouter',
     'mistral',
     'groq',
-    'custom',
   ]
 
   for (const expected of expectedIds) {
     assert.equal(ids.includes(expected), true, `default list must include provider ${expected}`)
   }
+  assert.equal(ids.includes('custom'), false, 'broken read-only static custom placeholder must not exist')
 
   const ollama = DEFAULT_PROVIDERS.find((p) => p.id === 'ollama')
   assert.equal(Boolean(ollama?.baseUrl), true)
 
   const anthropic = DEFAULT_PROVIDERS.find((p) => p.id === 'anthropic')
   assert.equal(anthropic?.models && anthropic.models.length > 0, true)
+
+  // Custom gateway helpers & filter eligibility
+  assert.deepEqual(parseCustomModelIds('gpt-4o, claude-3\nqwen-72b, gpt-4o'), ['gpt-4o', 'claude-3', 'qwen-72b'])
+  assert.equal(
+    validateCustomGatewayInput({ id: 'vllm-local', baseUrl: 'http://127.0.0.1:8000/v1', modelsText: 'qwen-72b', isNew: true, existingIds: [] }),
+    null,
+  )
+  assert.notEqual(
+    validateCustomGatewayInput({ id: 'BAD ID', baseUrl: 'http://127.0.0.1:8000/v1', modelsText: 'qwen-72b', isNew: true, existingIds: [] }),
+    null,
+  )
+  assert.equal(
+    isProviderFilterEligible({ id: 'openai', name: 'OpenAI', configured: false, modelsCount: 2 }, []),
+    false,
+    'unconfigured static preset with no runtime catalog models is not filter-eligible',
+  )
+  assert.equal(
+    isProviderFilterEligible(
+      { id: 'openai', name: 'OpenAI', configured: true, modelsCount: 1 },
+      [{ id: 'openai/gpt-4o', provider: 'openai', modelId: 'gpt-4o', available: true, thinkingLevels: ['off'] }],
+    ),
+    true,
+  )
 })
 
 test('model-center-model: static presets hardcode zero plugin providers (plugin gateways come only from the live backend catalog)', { timeout: 60_000 }, () => {
@@ -367,13 +393,11 @@ test('buildDefaultModelOptions: disabled models are not regular options; a disab
 test('model-center-model zh-CN: preset builders resolve descriptions, tags and option annotations through the zh translator', { timeout: 60_000 }, () => {
   const zh = createWebTranslator('zh-CN')
 
-  // Preset provider descriptions, model tags and the custom preset name
+  // Preset provider descriptions and model tags
   const providers = buildDefaultProviders(zh)
   const anthropic = providers.find((p) => p.id === 'anthropic')
   assert.equal(anthropic?.description, 'Claude 系列前沿模型，支持超长上下文窗口与深度逻辑推理。')
   assert.deepEqual(anthropic?.models?.[0]?.tags, ['混合推理', '代码', '200K'])
-  const custom = providers.find((p) => p.id === 'custom')
-  assert.equal(custom?.name, '自定义 OpenAI 兼容接口')
 
   // Filter pills reuse common.all and the domain configured label
   assert.deepEqual(
@@ -549,8 +573,8 @@ test('ModelDetailDrawer SSR: inline={true} renders the credentials form, connect
   assert.match(html, /https:\/\/api\.openai\.com\/v1/)
   assert.match(html, /built in and cannot be changed/)
 
-  // 3. Test connection button
-  assert.match(html, /Test connection/)
+  // 3. Static unprobeable providers must not show a fake Test connection button
+  assert.doesNotMatch(html, /Test connection/, 'unprobeable static provider must not render a fake Test connection button')
 
   // 4. Model list and flat model chips
   assert.match(html, /Models and routing control/)
@@ -649,12 +673,12 @@ test('ModelCenter SSR: target with providerId opens the matching detail drawer',
     e(HostStoreProviders, { value: store }, e(ModelCenter, { inlineDrawer: true })),
   )
 
-  // Drawer open with Anthropic details
+  // Drawer open with Anthropic details (static unprobeable provider has no fake Test connection button)
   assert.match(html, /class="[^"]*primary-drawer-content[^"]*"/)
   assert.match(html, /Claude 3\.7 Sonnet/)
   assert.match(html, /Hybrid reasoning/)
   assert.match(html, /API key/)
-  assert.match(html, /Test connection/)
+  assert.doesNotMatch(html, /Test connection/)
 
   // Zero Emoji
   assert.equal(EMOJI_REGEX.test(html), false)
@@ -1185,9 +1209,9 @@ test('ModelCenter zh-CN: renders center chrome, preset cards, drawer copy and in
   assert.match(html, /Claude 系列前沿模型，支持超长上下文窗口与深度逻辑推理。/)
   assert.match(html, /混合推理/)
 
-  // Detail drawer copy localized
+  // Detail drawer copy localized (static unprobeable provider omits fake test button)
   assert.match(html, /凭证与连接设置/)
-  assert.match(html, /测试连接/)
+  assert.doesNotMatch(html, /测试连接/)
   assert.match(html, /模型清单与路由控制/)
 
   assert.equal(EMOJI_REGEX.test(html), false)

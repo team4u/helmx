@@ -15,6 +15,11 @@ export const modelsMessages = {
     'zh-CN': '重新从所有供应商拉取最新模型目录',
   },
   'models.refreshing': { en: 'Refreshing...', 'zh-CN': '刷新中...' },
+  'models.addCustomGateway': { en: 'Add custom gateway', 'zh-CN': '添加自定义网关' },
+  'models.addCustomGatewayTitle': {
+    en: 'Register a custom OpenAI- or Anthropic-compatible model gateway',
+    'zh-CN': '登记自定义 OpenAI 或 Anthropic 兼容模型网关',
+  },
   'models.viewsAria': { en: 'Model center views', 'zh-CN': '模型中心视图' },
   'models.tab.providers': { en: 'Providers', 'zh-CN': '供应商' },
   'models.tab.defaults': { en: 'Global default', 'zh-CN': '全局默认' },
@@ -79,6 +84,16 @@ export const modelsMessages = {
     en: 'Local credentials of {name} removed successfully.',
     'zh-CN': '{name} 的本地凭证已成功移除。',
   },
+  'models.notice.customCreated': { en: 'Custom gateway added', 'zh-CN': '自定义网关已添加' },
+  'models.notice.customCreatedBody': {
+    en: '{name} ({id}) saved to providers.json.',
+    'zh-CN': '{name}（{id}）已保存到 providers.json。',
+  },
+  'models.notice.customDeleted': { en: 'Custom gateway deleted', 'zh-CN': '自定义网关已删除' },
+  'models.notice.customDeletedBody': {
+    en: '{name} removed from providers.json.',
+    'zh-CN': '{name} 已从 providers.json 移除。',
+  },
 
   // Global default model status row (compact header strip)
   'models.defaults.notSet': { en: 'Not set', 'zh-CN': '未设置' },
@@ -130,6 +145,10 @@ export const modelsMessages = {
   'models.apiKey.pluginManagedHint': {
     en: 'This key is set in the plugin configuration in the plugin center, not stored in the kernel credential vault; filling it in here has no effect.',
     'zh-CN': '该密钥经插件中心对应插件的配置项设置，不存入内核凭据库；在此填写不会生效。',
+  },
+  'models.plugin.openSettings': {
+    en: 'Configure plugin {pluginId}',
+    'zh-CN': '前往配置插件 {pluginId}',
   },
   'models.apiKey.placeholderConfigured': {
     en: 'Configured (leave empty to keep unchanged)',
@@ -194,6 +213,10 @@ export const modelsMessages = {
     en: 'Click a pill to toggle a model; disabled models are marked in the catalog and cannot be picked in conversations.',
     'zh-CN': '点击胶囊药丸切换模型启用状态，未启用的模型将在目录中标记停用，且会话无法选用。',
   },
+  'models.models.filterRequiresConfig': {
+    en: 'Save credentials or sync the catalog first; preset preview models cannot be toggled before the provider is registered in the catalog.',
+    'zh-CN': '请先保存凭证或同步目录；供应商进入目录前，预置预览模型不支持单独开关。',
+  },
   'models.models.emptyDynamic': {
     en: 'This dynamic provider can fetch available models via Refresh catalog above.',
     'zh-CN': '该动态供应商可通过上方「刷新目录」拉取可用模型。',
@@ -240,6 +263,50 @@ export const modelsMessages = {
   'models.errors.customGatewayEndpointEmpty': {
     en: 'The custom gateway endpoint cannot be empty.',
     'zh-CN': '自定义网关的服务端点不能为空。',
+  },
+  'models.errors.customGatewayIdRequired': {
+    en: 'Enter a gateway ID (lowercase letters, digits, dots, underscores or hyphens).',
+    'zh-CN': '请填写网关 ID（小写字母、数字、点、下划线或连字符）。',
+  },
+  'models.errors.customGatewayIdInvalid': {
+    en: 'Gateway ID must start with a lowercase letter or digit and use only a-z, 0-9, ., _, or - (max 64 chars).',
+    'zh-CN': '网关 ID 须以小写字母或数字开头，仅允许 a-z、0-9、.、_、-（最多 64 字符）。',
+  },
+  'models.errors.customGatewayIdDuplicate': {
+    en: 'Provider ID "{id}" already exists.',
+    'zh-CN': '供应商 ID「{id}」已存在。',
+  },
+  'models.errors.customGatewayUrlInvalid': {
+    en: 'Endpoint must be an http:// or https:// URL.',
+    'zh-CN': '服务端点必须是 http:// 或 https:// 地址。',
+  },
+  'models.errors.customGatewayModelsRequired': {
+    en: 'Provide at least one model ID (one per line or comma-separated).',
+    'zh-CN': '请至少填写一个模型 ID（每行一个或用逗号分隔）。',
+  },
+  'models.custom.drawerTitle': { en: 'New custom gateway', 'zh-CN': '新建自定义网关' },
+  'models.custom.idLabel': { en: 'Gateway ID', 'zh-CN': '网关 ID' },
+  'models.custom.idPlaceholder': { en: 'e.g. local-vllm', 'zh-CN': '例如 local-vllm' },
+  'models.custom.labelLabel': { en: 'Display name', 'zh-CN': '显示名称' },
+  'models.custom.labelPlaceholder': { en: 'Optional friendly name', 'zh-CN': '可选显示名称' },
+  'models.custom.protocolLabel': { en: 'Protocol', 'zh-CN': '接口协议' },
+  'models.custom.protocolOpenai': { en: 'OpenAI-compatible', 'zh-CN': 'OpenAI 兼容协议' },
+  'models.custom.protocolAnthropic': { en: 'Anthropic-compatible', 'zh-CN': 'Anthropic 兼容协议' },
+  'models.custom.modelsLabel': { en: 'Exposed model IDs', 'zh-CN': '暴露模型 ID 列表' },
+  'models.custom.modelsPlaceholder': {
+    en: 'One model ID per line or comma-separated, e.g.\nqwen2.5-72b\ndeepseek-r1',
+    'zh-CN': '每行一个或逗号分隔，例如：\nqwen2.5-72b\ndeepseek-r1',
+  },
+  'models.custom.modelsHint': {
+    en: 'Model IDs served by this custom gateway (saved to providers.json).',
+    'zh-CN': '该自定义网关提供的模型 ID 清单（保存至 providers.json）。',
+  },
+  'models.custom.createAction': { en: 'Create gateway', 'zh-CN': '创建网关' },
+  'models.custom.deleteAction': { en: 'Delete gateway', 'zh-CN': '删除网关' },
+  'models.custom.deleteConfirmTitle': { en: 'Delete custom gateway', 'zh-CN': '确认删除自定义网关' },
+  'models.custom.deleteConfirmBody': {
+    en: 'Delete custom gateway {name}? Models exposed by this gateway will no longer be available.',
+    'zh-CN': '确定删除自定义网关 {name} 吗？删除后该网关提供的模型将不再可用。',
   },
 
   // Delete-credentials confirmation dialog

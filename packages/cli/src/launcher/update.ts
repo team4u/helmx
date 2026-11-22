@@ -40,6 +40,7 @@ import {
   writeCurrentRelease,
   type CurrentReleaseRecord,
 } from '@helmx/env-io';
+import { defaultHubUpdateCore, stageHubRelease, type HubUpdateCore } from '@helmx/env-io/hub-payload';
 import { defaultHubDataDir, pathsOf, resolveBlockedCooldownMs } from './layout.js';
 import {
   isBlockedActive,
@@ -49,10 +50,8 @@ import {
   type LaunchConfig,
 } from './records.js';
 import { isAliveOf, UsageError, type LauncherIo } from './io.js';
-import { startHubLocked, stopHubLocked, withLifecycleLock } from './process.js';
-import { defaultUpdateCore, type UpdateCore } from './update-core.js';
+import { startHubLocked, stopHubGracefulLocked, withLifecycleLock } from './process.js';
 import { readHubActivityGate, type HubActivityGate } from './activity.js';
-import { stageHubRelease } from './staging.js';
 
 export interface PerformUpdateOptions {
   io: LauncherIo;
@@ -72,7 +71,7 @@ export interface PerformUpdateOptions {
   launchFlags?: LaunchConfig;
   fetchFn?: typeof fetch;
   /** Test seam: port-shaped fake standing in for the real adapter (registry/npm seams). */
-  core?: UpdateCore;
+  core?: HubUpdateCore;
   /**
    * Lifecycle driver overriding the record-based detached start/stop (the supervised `run`
    * command injects one that holds the spawned `ChildProcess`). Absent = default record flow.
@@ -129,7 +128,7 @@ async function resolveTargetVersion(options: PerformUpdateOptions): Promise<stri
     return options.targetVersion;
   }
   if (options.targetVersion !== undefined) return options.targetVersion;
-  const core = options.core ?? defaultUpdateCore();
+  const core = options.core ?? defaultHubUpdateCore();
   const latest = await core.fetchLatestVersion(options.pkgName, {
     ...(options.registryUrl !== undefined ? { registryUrl: options.registryUrl } : {}),
     ...(options.fetchFn !== undefined ? { fetchFn: options.fetchFn } : {}),
@@ -163,7 +162,7 @@ function throwActivityUnverifiable(gate: HubActivityGate & { kind: 'unknown' }):
 export async function performHubUpdate(options: PerformUpdateOptions): Promise<UpdateOutcome> {
   const { io, root } = options;
   const paths = pathsOf(root);
-  const core = options.core ?? defaultUpdateCore();
+  const core = options.core ?? defaultHubUpdateCore();
   return await withUpdateLock(root, async () => {
     const targetVersion = await resolveTargetVersion(options);
     if (!isStrictSemver(targetVersion)) {
@@ -246,10 +245,11 @@ export async function performHubUpdate(options: PerformUpdateOptions): Promise<U
         }
       }
       if (wasRunning) {
-        // Stop before any state changes: a failed stop aborts the update with current.json intact.
+        // Stop before any state changes: control channel first (uniform across Linux/macOS/Windows),
+        // falling back to pid-record identity proof; a failed stop aborts with current.json intact.
         if (options.driver !== undefined) await options.driver.stop();
         else {
-          await stopHubLocked(root, io, {
+          await stopHubGracefulLocked(root, io, {
             ...(options.stopTimeoutMs !== undefined ? { stopTimeoutMs: options.stopTimeoutMs } : {}),
             ...(options.fetchFn !== undefined ? { fetchFn: options.fetchFn } : {}),
           });
@@ -349,9 +349,9 @@ export async function checkHubUpgrade(options: {
   registryUrl?: string;
   tag?: string;
   fetchFn?: typeof fetch;
-  core?: UpdateCore;
+  core?: HubUpdateCore;
 }): Promise<HubUpgradeCheckResult> {
-  const core = options.core ?? defaultUpdateCore();
+  const core = options.core ?? defaultHubUpdateCore();
   const latestVersion = await core.fetchLatestVersion(options.pkgName, {
     ...(options.registryUrl !== undefined ? { registryUrl: options.registryUrl } : {}),
     ...(options.fetchFn !== undefined ? { fetchFn: options.fetchFn } : {}),

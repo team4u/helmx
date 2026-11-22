@@ -738,6 +738,9 @@ test('builtin:apps 插件行为', { timeout: 60_000 }, async (t) => {
           const m = /managedByPlugin:\s*(\S+)/.exec(asset.skillMd)
           skillCalls.push({ id: asset.id, managedBy: m?.[1] })
           assert.ok(asset.skillMd.includes("clientRoot: './client'"), 'app-builder SKILL.md 应强调 clientRoot: ./client')
+          assert.ok(asset.skillMd.includes('builtin:apps.validate'), 'app-builder SKILL.md 应指引通过 run_action 调用 builtin:apps.validate')
+          assert.ok(asset.skillMd.includes('builtin:apps.publish'), 'app-builder SKILL.md 应指引通过 run_action 调用 builtin:apps.publish')
+          assert.ok(asset.skillMd.includes('builtin:apps.list'), 'app-builder SKILL.md 应指引通过 run_action 调用 builtin:apps.list')
           for (const sym of ['Screen', 'ScreenSection', 'DataTable', 'KvGrid', 'usePluginContext', 'usePluginDoc', 'usePluginSessionDoc', 'usePlugins']) {
             assert.ok(asset.skillMd.includes(sym), `app-builder SKILL.md 应涵盖 @helmx/plugin-client 共享符号 ${sym}`)
           }
@@ -750,6 +753,13 @@ test('builtin:apps 插件行为', { timeout: 60_000 }, async (t) => {
     const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: backend, docs: new MemoryDocStore() })
     await host.register(createAppsPlugin(), { enabled: true })
     assert.deepEqual(skillCalls, [{ id: APP_BUILDER_SKILL_ID, managedBy: APPS_PLUGIN_ID }])
+    const appsActions = host.listActions().filter((a) => a.pluginId === APPS_PLUGIN_ID)
+    assert.deepEqual(appsActions.map((a) => a.id).sort(), ['list', 'publish', 'remove', 'update_meta', 'validate'])
+    for (const action of appsActions) {
+      assert.equal(action.exposeToPrompt, false, `builtin:apps.${action.id} 经 Skill-First 不常驻 <available_actions>`)
+      assert.notEqual(action.exposeAsTool, true, `builtin:apps.${action.id} 不常驻直投工具（经 run_action 按需调用）`)
+    }
+    assert.equal(host.listTools().filter((tool) => tool.sourcePluginId === APPS_PLUGIN_ID).length, 0)
     await host.dispose()
     rmSync(dataDir, { recursive: true, force: true })
   })

@@ -17,15 +17,13 @@
 import type { ChildProcess } from 'node:child_process';
 import fsp from 'node:fs/promises';
 import process from 'node:process';
-import { controlRequest, CONTROL_STOP_TIMEOUT_MS, killProcessTree, readHubControlRecord } from '@helmx/env-io';
-import { readCurrentRelease } from '@helmx/env-io';
-import { DEFAULTS, defaultHubDataDir, pathsOf } from './layout.js';
-import { readPidRecord, readLaunchConfig, removePidFileIfMatch, resolveEffectiveLaunchConfig, type LaunchConfig } from './records.js';
+import { killProcessTree, readCurrentRelease, readLogFrom, readLogTailBounded, waitForPidExit } from '@helmx/env-io';
+import type { HubUpdateCore } from '@helmx/env-io/hub-payload';
+import { DEFAULTS, pathsOf } from './layout.js';
+import { readPidRecord, removePidFileIfMatch, type LaunchConfig } from './records.js';
 import { isAliveOf, UsageError, type LauncherIo } from './io.js';
 import { startHub, stopHubGraceful } from './process.js';
 import { performHubUpdate } from './update.js';
-
-import type { UpdateCore } from './update-core.js';
 
 export interface RunHubOptions {
   io: LauncherIo;
@@ -36,7 +34,7 @@ export interface RunHubOptions {
   tag?: string;
   /** Launch flags for the hub start (initial only — no restarts happen here). */
   launchFlags?: LaunchConfig;
-  core?: UpdateCore;
+  core?: HubUpdateCore;
   fetchFn?: typeof fetch;
   healthTimeoutMs?: number;
   pollMs?: number;
@@ -55,36 +53,13 @@ interface FollowState {
   child?: ChildProcess;
 }
 
-/** Read the last `maxLines` of a log file for shutdown diagnostics. */
-async function readLogTail(logFile: string, maxLines: number): Promise<string> {
-  try {
-    const text = await fsp.readFile(logFile, 'utf8');
-    const lines = text.split('\n').filter((line) => line !== '');
-    return lines.slice(-maxLines).join('\n');
-  } catch {
-    return '';
-  }
-}
-
-/** Stream log increments to the operator until the hub process is gone. */
+/** Stream log increments to the operator until the hub process is gone (byte-offset, UTF-8 safe). */
 async function followLog(state: FollowState, io: LauncherIo, isAlive: (pid: number) => boolean): Promise<void> {
   for (;;) {
     if (!isAlive(state.pid)) return;
-    let size = 0;
-    try {
-      size = (await fsp.stat(state.logPath)).size;
-    } catch {
-      await new Promise((resolve) => setTimeout(resolve, DEFAULTS.healthPollMs));
-      continue;
-    }
-    if (size > state.logOffset) {
-      const text = await fsp.readFile(state.logPath, 'utf8').then(
-        (content) => content.slice(state.logOffset),
-        () => '',
-      );
-      state.logOffset += Buffer.byteLength(text, 'utf8');
-      if (text !== '') io.out(text);
-    }
+    const chunk = await readLogFrom(state.logPath, state.logOffset);
+    state.logOffset = chunk.offset;
+    if (chunk.text !== '') io.out(chunk.text);
     await new Promise((resolve) => setTimeout(resolve, DEFAULTS.healthPollMs));
   }
 }
@@ -96,9 +71,9 @@ async function stopHeldChild(child: ChildProcess, pid: number, root: string, isA
   } catch {
     // already dead — the exit wait below decides
   }
-  if (!(await waitForExitPidLocal(pid, stopTimeoutMs, isAlive))) {
+  if (!(await waitForPidExit(pid, stopTimeoutMs, isAlive))) {
     killProcessTree(pid);
-    if (!(await waitForExitPidLocal(pid, DEFAULTS.stopEscalationWaitMs, isAlive))) {
+    if (!(await waitForPidExit(pid, DEFAULTS.stopEscalationWaitMs, isAlive))) {
       throw new Error(`hub pid ${pid} did not exit within ${stopTimeoutMs}ms graceful budget plus escalation`);
     }
   }
@@ -106,22 +81,6 @@ async function stopHeldChild(child: ChildProcess, pid: number, root: string, isA
   if (record !== null && record.pid === pid) {
     await removePidFileIfMatch(root, record);
   }
-}
-
-function waitForExitPidLocal(pid: number, timeoutMs: number, isAlive: (pid: number) => boolean): Promise<boolean> {
-  return new Promise((resolve) => {
-    const started = Date.now();
-    const timer = setInterval(() => {
-      if (!isAlive(pid)) {
-        clearInterval(timer);
-        resolve(true);
-      } else if (Date.now() - started >= timeoutMs) {
-        clearInterval(timer);
-        resolve(false);
-      }
-    }, 100);
-    timer.unref?.();
-  });
 }
 
 /** The foreground run. Resolves with the process exit code when the operator stops it or the hub dies. */
@@ -226,7 +185,7 @@ export async function runHubForeground(options: RunHubOptions): Promise<number> 
     exitCode = 1;
     exitMessage = `the hub process exited (pid ${state.pid}); inspect ${state.logPath}`;
     io.err(`${exitMessage}\n`);
-    const tail = await readLogTail(state.logPath, 40);
+    const tail = await readLogTailBounded(state.logPath, 40);
     if (tail !== '') io.err(`--- ${state.logPath} last 40 lines ---\n${tail}\n`);
   } else {
     // Stop order: a hub this process spawned is stopped through the held handle (the strongest
@@ -264,23 +223,4 @@ export async function runHubForeground(options: RunHubOptions): Promise<number> 
     process.off('SIGTERM', onSignal);
   }
   return exitCode;
-}
-
-/** Resolve the data directory a running hub would have written `hub-control.json` into. */
-export async function resolveControlDataDir(root: string, io: LauncherIo): Promise<string | undefined> {
-  const record = await readPidRecord(root);
-  if (record?.dataDir !== undefined) return record.dataDir;
-  const effective = resolveEffectiveLaunchConfig({ env: io.env, saved: await readLaunchConfig(root) });
-  if (effective.dataDir !== undefined) return effective.dataDir;
-  return defaultHubDataDir(io.env);
-}
-
-/** One verified control-channel stop attempt; `false` = channel unavailable or rejected. */
-export async function tryControlChannelStop(dataDir: string, timeoutMs: number = CONTROL_STOP_TIMEOUT_MS): Promise<boolean> {
-  const control = await readHubControlRecord(dataDir).catch(() => null);
-  if (control === null) return false;
-  const reply = await controlRequest(control.endpoint, { type: 'stop', instanceId: control.instanceId }, timeoutMs, {
-    instanceId: control.instanceId,
-  });
-  return reply !== null && reply.ok === true;
 }

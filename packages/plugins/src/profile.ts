@@ -185,8 +185,9 @@ export function createProfilePlugin(): PluginDefinition {
       const listAvailableSkills = async (
         profileId: string,
         conversation: { nodeId?: string; cwd: string },
+        prefetchedProfile?: Promise<Awaited<ReturnType<typeof profiles.get>>>,
       ): Promise<{ available: SkillSummary[]; nodeUnavailable?: string }> => {
-        const profile = await profiles.get(profileId)
+        const profile = await (prefetchedProfile ?? profiles.get(profileId))
         if (profile === undefined) {
           throw new HelmxError('profile_not_found', `conversation-bound profile '${profileId}' does not exist (the skill catalog cannot be filtered by Profile)`, 500, { profileId })
         }
@@ -204,11 +205,12 @@ export function createProfilePlugin(): PluginDefinition {
         // re-read live every turn; file edits take effect on the next turn; the explicit-explanation
         // policy for read failures or a remote node going offline lives in profile/agents-md.ts.
         // Node skills rescan every turn the same way (see listAvailableSkills).
+        const profilePromise = profiles.get(profileId);
         const [rawSystem, skillCatalog, agentsMd, profileRecord] = await Promise.all([
           readSystemOrEmpty(profileId),
-          listAvailableSkills(profileId, turn.conversation),
+          listAvailableSkills(profileId, turn.conversation, profilePromise),
           computeAgentsMdSection(ctx.host, turn.conversation.nodeId, turn.conversation.cwd),
-          profiles.get(profileId),
+          profilePromise,
         ]);
         const sections = [...turn.sections];
         if (rawSystem.trim()) sections.push({ id: 'profile.system', text: rawSystem });

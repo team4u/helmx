@@ -8,16 +8,13 @@
  * 生成式 UI（```ui 代码块）手册由 builtin:json-render 插件自举的
  * generative-ui 技能提供，随插件启停进入/离开可用技能目录。
  */
-import { existsSync, readFileSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import {
-  HelmxError,
   PLUGIN_UI_METHOD_NAMES,
   RESERVED_SLASH_COMMANDS,
   PLUGIN_HOOK_NAMES,
   type PluginSkillAsset,
 } from '@helmx/protocol'
+import { loadManagedSkillAsset, renderSkillTemplate } from '../asset-paths.js'
 
 /** 托管本技能资产与自举 Profile 的插件 ID（SKILL.md frontmatter managedByPlugin 值）。 */
 export const PROFILE_MANAGED_BY = 'builtin:profile'
@@ -25,59 +22,7 @@ export const PROFILE_MANAGED_BY = 'builtin:profile'
 /** 系统级内置技能 ID（SYSTEM.md Layer 0 指引的 load_skill 目标）。 */
 export const HELMX_CLI_SKILL_ID = 'helmx-cli'
 
-/**
- * 技能文本模板插值引擎：将 `{{KEY}}` 严格替换为 `vars[KEY]`。
- * 遇未定义 key 或替换后残留任何 `{{...}}` 占位符一律显式抛出 HelmxError('unreplaced_skill_placeholder')。
- */
-export function renderSkillTemplate(
-  template: string,
-  vars: Readonly<Record<string, string>>,
-): string {
-  const rendered = template.replace(/\{\{\s*([A-Za-z0-9_]+)\s*\}\}/g, (_match, key: string) => {
-    const val = vars[key]
-    if (val === undefined) {
-      throw new HelmxError(
-        'unreplaced_skill_placeholder',
-        `技能模板存在未定义占位符: {{${key}}}`,
-        500,
-        { key },
-      )
-    }
-    return val
-  })
-
-  const remaining = rendered.match(/\{\{[^}]*\}\}/)
-  if (remaining !== null) {
-    throw new HelmxError(
-      'unreplaced_skill_placeholder',
-      `技能模板渲染后仍残留未替换占位符: ${remaining[0]}`,
-      500,
-      { placeholder: remaining[0] },
-    )
-  }
-
-  return rendered
-}
-
-/** 解析 profile skill 资产目录（兼容 src 与 dist 运行时）。 */
-function resolveProfileSkillDir(): string {
-  const here = dirname(fileURLToPath(import.meta.url))
-  const candidate1 = join(here, 'skill')
-  if (existsSync(candidate1)) return candidate1
-
-  const pkgRoot = resolve(here, '../..')
-  const candidate2 = join(pkgRoot, 'src', 'profile', 'skill')
-  if (existsSync(candidate2)) return candidate2
-
-  throw new HelmxError(
-    'profile_skill_asset_missing',
-    `内置 profile 技能资产目录未找到（tried: "${candidate1}", "${candidate2}"）`,
-    500,
-    { paths: [candidate1, candidate2] },
-  )
-}
-
-const skillDir = resolveProfileSkillDir()
+export { renderSkillTemplate }
 
 const skillVars: Record<string, string> = {
   SKILL_ID: HELMX_CLI_SKILL_ID,
@@ -88,27 +33,16 @@ const skillVars: Record<string, string> = {
   RESERVED_SLASH_COMMANDS: RESERVED_SLASH_COMMANDS.join('/'),
 }
 
-export const HELMX_CLI_SKILL_MD = renderSkillTemplate(
-  readFileSync(join(skillDir, 'SKILL.md'), 'utf-8'),
-  skillVars,
-)
-
-export const HELMX_CLI_SKILL_AND_PLUGIN_DEV_MD = renderSkillTemplate(
-  readFileSync(join(skillDir, 'references', 'skill-and-plugin-dev.md'), 'utf-8'),
-  skillVars,
-)
-
-const HELMX_CLI_PLUGIN_CLIENT_CODE_SPLITTING_MD = renderSkillTemplate(
-  readFileSync(join(skillDir, 'references', 'plugin-client-code-splitting.md'), 'utf-8'),
-  skillVars,
-)
-
 /** 汇总资产：id + SKILL.md + 2 个 references。SkillService.ensureSkill 受管覆盖同步。 */
-export const HELMX_CLI_SKILL_ASSET: PluginSkillAsset = {
-  id: HELMX_CLI_SKILL_ID,
-  skillMd: HELMX_CLI_SKILL_MD,
-  references: {
-    'skill-and-plugin-dev.md': HELMX_CLI_SKILL_AND_PLUGIN_DEV_MD,
-    'plugin-client-code-splitting.md': HELMX_CLI_PLUGIN_CLIENT_CODE_SPLITTING_MD,
-  },
-}
+export const HELMX_CLI_SKILL_ASSET: PluginSkillAsset = loadManagedSkillAsset({
+  pluginId: PROFILE_MANAGED_BY,
+  skillId: HELMX_CLI_SKILL_ID,
+  relativeDir: 'profile/skill',
+  missingErrorCode: 'profile_skill_asset_missing',
+  references: ['skill-and-plugin-dev.md', 'plugin-client-code-splitting.md'],
+  transform: (raw) => renderSkillTemplate(raw, skillVars),
+})
+
+export const HELMX_CLI_SKILL_MD = HELMX_CLI_SKILL_ASSET.skillMd
+
+export const HELMX_CLI_SKILL_AND_PLUGIN_DEV_MD = HELMX_CLI_SKILL_ASSET.references!['skill-and-plugin-dev.md']!

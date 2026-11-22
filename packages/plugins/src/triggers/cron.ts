@@ -607,6 +607,7 @@ export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clo
   ctx.action({
     id: 'cron_list',
     description: 'List all cron jobs (incl. lastRunAt/nextRunAt/lastError scheduling state)',
+    exposeToPrompt: false,
     idempotent: true,
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     outputSchema: {
@@ -621,24 +622,20 @@ export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clo
 
   ctx.action({
     id: 'cron_create',
-    description: 'Create a cron job (standard five fields: min hour day month weekday; id/schedule/text required; timezone defaults to UTC)',
-    promptGuidelines: [
-      'schedule is a standard five-field periodic cron (min hour day month weekday, e.g. "*/30 * * * *"), not an arbitrary shell timer: triggering only delivers the text to the target conversation',
-      'timezone uses an IANA zone name (e.g. Asia/Shanghai; defaults to UTC); set targetConversationId or targetProfileId per the user intent (mutually exclusive); when unspecified, trigger routing resolves the target',
-      'text will be delivered to the target conversation in the future; spell out the task content and necessary conditions, avoiding reliance on implicit here-and-now information',
-    ],
+    description: 'Create a periodic cron job (5-field schedule, IANA timezone defaulting to UTC; delivers text to target conversation)',
+    exposeToPrompt: false,
     inputSchema: {
       type: 'object',
       properties: {
         id: { type: 'string', pattern: '^[A-Za-z0-9_-]{1,64}$' },
-        schedule: { type: 'string' },
-        text: { type: 'string', minLength: 1 },
+        schedule: { type: 'string', description: 'Standard 5-field cron expression (min hour day month weekday, e.g. "*/30 * * * *")' },
+        text: { type: 'string', minLength: 1, description: 'Self-contained task text delivered to the target conversation when triggered' },
         description: { type: 'string', maxLength: 500 },
-        timezone: { type: 'string' },
+        timezone: { type: 'string', description: 'IANA timezone name (e.g. Asia/Shanghai; defaults to UTC)' },
         enabled: { type: 'boolean' },
         catchUp: { type: 'boolean' },
-        targetConversationId: { type: 'integer', minimum: 1 },
-        targetProfileId: { type: 'string', minLength: 1 },
+        targetConversationId: { type: 'integer', minimum: 1, description: 'Explicit target conversation ID (mutually exclusive with targetProfileId)' },
+        targetProfileId: { type: 'string', minLength: 1, description: 'Target Profile ID for trigger routing (mutually exclusive with targetConversationId)' },
         threadKey: { type: 'string', minLength: 1 },
       },
       required: ['id', 'schedule', 'text'],
@@ -677,6 +674,7 @@ export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clo
   ctx.action({
     id: 'cron_delete',
     description: 'Delete a cron job (in-flight deliveries end naturally; nothing revives)',
+    exposeToPrompt: false,
     inputSchema: {
       type: 'object',
       properties: { id: { type: 'string', pattern: '^[A-Za-z0-9_-]{1,64}$' } },
@@ -707,6 +705,7 @@ export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clo
   ctx.action({
     id: 'cron_trigger',
     description: 'Manually trigger a cron job once now (a real delivery; failures throw without affecting later scheduled runs)',
+    exposeToPrompt: false,
     inputSchema: {
       type: 'object',
       properties: { id: { type: 'string', pattern: '^[A-Za-z0-9_-]{1,64}$' } },

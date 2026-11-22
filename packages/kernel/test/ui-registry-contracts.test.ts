@@ -161,8 +161,6 @@ test('composerCompleter: doc/sessionDoc sources still enforce safe source shape 
       }, 'composerCompleter'),
     isHelmxError('invalid_ui_spec'),
   );
-  // assertUiDocsRegistered is a hook stub: no longer checks completer doc sources at end of define phase
-  ui.assertUiDocsRegistered('p1', () => false, () => false);
 });
 
 // ---------------------------------------------------------------------------

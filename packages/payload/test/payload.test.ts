@@ -43,15 +43,16 @@
  *    before a release ships.
  *
  * The same assembly also produces the node daemon artifact (dist-node/, the remote-machine install
- * target: bin helmx-node → dist/cli.js; @helmx/node + @helmx/env-io + @helmx/protocol inlined, exactly
- * four external exact-version dependencies):
+ * target: bin helmx-node → dist/cli.js; @helmx/node + @helmx/env-io + @helmx/protocol and pure-JS
+ * pi-durable/env/node + chord/context subpaths inlined, exactly two external exact-version
+ * dependencies: birpc / ws):
  * 9. node assembly contract: shebang single-file bundle, bin/name/version/engines (name overridable
  *    via HELMX_NODE_PACKAGE, bin single-sourced from packages/node/package.json), dependencies
- *    exactly the four external packages pinned to the repository's installed versions (never
- *    floating ranges), peers satisfied by those pins (no inert overrides field), exact files whitelist;
+ *    exactly the two external packages pinned to the repository's installed versions (never
+ *    floating ranges), exact files whitelist;
  * 10. node bundle runs for real (`helmx-node --help` on an isolated data dir; `restart --json`
  *    without a bound identity reports an honest error envelope) and installs from a real tarball
- *    via `npm install -g` into an isolated prefix (network-gated like the payload e2e: the four
+ *    via `npm install -g` into an isolated prefix (network-gated like the payload e2e: the two
  *    external dependencies download from the registry — PAYLOAD_NPM_SMOKE=1).
  *
  * These live in this single file on purpose: the runner executes test files as separate concurrent
@@ -150,17 +151,32 @@ function assertMirrored(srcDir: string, stagedDir: string) {
   }
 }
 
-/** Expected built-in plugin runtime asset placement: every client/skill/assets subdirectory present on the src side also appears on the dist side. */
+/** Matches build-only / redundant artifacts excluded from runtime `.tgz` archives. */
+function isExcludedRuntimeDistFile(rel: string): boolean {
+  return rel.endsWith('.js.map') || rel.endsWith('.d.ts') || rel.endsWith('.d.ts.map') || rel.endsWith('.gz');
+}
+
+/** Expected built-in plugin runtime asset placement: every skill/assets subdirectory present on the src side also appears on the dist side (raw client/ TSX is excluded; prebuilt dist-client/ is served instead). */
 function expectedAssetDirs() {
   const builtinSrc = path.join(repoRoot, 'packages/plugins/src');
-  const expected = [];
+  const expected: string[] = [];
   for (const ent of readdirSync(builtinSrc, { withFileTypes: true })) {
     if (!ent.isDirectory()) continue;
-    for (const sub of ['client', 'skill', 'assets']) {
+    for (const sub of ['skill', 'assets']) {
       if (existsSync(path.join(builtinSrc, ent.name, sub))) expected.push(`${ent.name}/${sub}`);
     }
   }
   return expected.sort();
+}
+
+/** Built-in plugin directory names that declare client UI (`packages/plugins/src/<name>/client`). */
+function expectedClientPluginNames(): string[] {
+  const builtinSrc = path.join(repoRoot, 'packages/plugins/src');
+  const out: string[] = [];
+  for (const ent of readdirSync(builtinSrc, { withFileTypes: true })) {
+    if (ent.isDirectory() && existsSync(path.join(builtinSrc, ent.name, 'client'))) out.push(ent.name);
+  }
+  return out.sort();
 }
 
 test('payload assembly: missing build artifacts are rebuilt on demand, then build.mjs succeeds', { timeout: 600_000 }, () => {
@@ -307,12 +323,19 @@ test('payload layout: six tgz-only archives mirror the repo dist trees, assets p
   assert.equal(existsSync(path.join(stagingDir, 'plugin-client')), false, 'plugin-client source must not be shipped in server payload');
   assert.equal(existsSync(path.join(stagingDir, 'plugin-client.tgz')), false, 'plugin-client.tgz must not be shipped in server payload');
 
-  // Every archive is a complete package: manifest at the package root plus every repository dist
-  // file mirrored as a package/dist member (subset check, no byte-count coincidence assertions).
+  // Every archive is a complete runtime package: manifest at the package root plus every runtime
+  // dist file mirrored as a package/dist member, excluding build-only/redundant `.js.map`, `.d.ts`,
+  // `.d.ts.map`, and `.gz` files.
   for (const dir of ARCHIVED_PKGS) {
-    const members = new Set(tgzMembers(path.join(stagingDir, `${dir}.tgz`)));
+    const memberList = tgzMembers(path.join(stagingDir, `${dir}.tgz`));
+    const members = new Set(memberList);
     assert.ok(members.has('package/package.json'), `${dir}.tgz must carry package/package.json`);
+    for (const member of memberList) {
+      assert.ok(!isExcludedRuntimeDistFile(member), `${dir}.tgz must not pack excluded artifact: ${member}`);
+    }
     for (const rel of walkFiles(path.join(repoRoot, 'packages', dir, 'dist'))) {
+      if (isExcludedRuntimeDistFile(rel)) continue;
+      if (dir === 'plugins' && /^[^/]+\/client\//.test(rel)) continue;
       assert.ok(members.has(`package/dist/${rel}`), `${dir}.tgz is missing dist file: ${rel}`);
     }
   }
@@ -325,9 +348,10 @@ test('payload layout: six tgz-only archives mirror the repo dist trees, assets p
     'kernel.tgz must carry the kernel dist HTTP layer dist/http/hub.js',
   );
 
-  // Built-in plugin runtime assets live inside plugins.tgz (the first probe location of every
-  // plugin resolver after npm materializes the archive under node_modules).
-  const pluginsMembers = new Set(tgzMembers(path.join(stagingDir, 'plugins.tgz')));
+  // Built-in plugin runtime assets (`skill/`, `assets/`, and prebuilt `dist-client/`) live inside
+  // plugins.tgz; raw `client/` TSX sources are excluded because prebuilt `dist-client/` is mandatory.
+  const pluginsMemberList = tgzMembers(path.join(stagingDir, 'plugins.tgz'));
+  const pluginsMembers = new Set(pluginsMemberList);
   for (const rel of expectedAssetDirs()) {
     assert.ok(
       existsSync(path.join(repoRoot, 'packages/plugins/src', rel)),
@@ -338,18 +362,25 @@ test('payload layout: six tgz-only archives mirror the repo dist trees, assets p
       assert.ok(pluginsMembers.has(`package/dist/${rel}/${file}`), `plugins.tgz must pack built-in plugin asset: ${rel}/${file}`);
     }
   }
-  const clients = expectedAssetDirs().filter((rel) => rel.endsWith('/client'));
-  assert.ok(clients.length >= 9, `unexpected built-in plugin client directory count: ${clients.length}`);
-  for (const rel of clients) {
-    const pluginName = rel.split('/')[0]!;
+  const clientPlugins = expectedClientPluginNames();
+  assert.ok(clientPlugins.length >= 9, `unexpected built-in plugin client directory count: ${clientPlugins.length}`);
+  for (const pluginName of clientPlugins) {
     assert.ok(
       pluginsMembers.has(`package/dist/${pluginName}/dist-client/manifest.json`),
       `plugins.tgz must pack the prebuilt dist-client manifest for ${pluginName}`,
     );
+    assert.ok(
+      !pluginsMemberList.some((m) => m.startsWith(`package/dist/${pluginName}/client/`)),
+      `plugins.tgz must not pack raw client TSX sources for ${pluginName}`,
+    );
   }
 
-  // cli (self-contained bundle + tsc audit outputs) and web dist mirror directly at the payload root.
-  assertMirrored(path.join(repoRoot, 'packages/cli/dist'), path.join(stagingDir, 'cli/dist'));
+  // cli (single self-contained bundle only, no loose tsc outputs) and web dist sit at the payload root.
+  assert.deepEqual(
+    walkFiles(path.join(stagingDir, 'cli/dist')),
+    ['index.js'],
+    'payload cli/dist must ship only the self-contained index.js bundle',
+  );
   assertMirrored(path.join(repoRoot, 'packages/web/dist'), path.join(stagingDir, 'web/dist'));
   assert.ok(existsSync(path.join(stagingDir, 'web/dist/index.html')), 'web dist is missing index.html');
 
@@ -567,11 +598,11 @@ test('cli tarball acceptance: npm pack → npm install -g into an isolated prefi
 });
 
 // ---------------------------------------------------------------------------
-// Node daemon artifact (dist-node): the remote-machine install target with exactly four external
-// exact-version dependencies.
+// Node daemon artifact (dist-node): the remote-machine install target with exactly two external
+// exact-version dependencies (`birpc`, `ws`).
 // ---------------------------------------------------------------------------
 
-test('node artifact assembly contract: dist-node is a four-external-dependency publish package with a shebang single-file bundle', { timeout: 60_000 }, () => {
+test('node artifact assembly contract: dist-node is a two-external-dependency publish package with a shebang single-file bundle', { timeout: 60_000 }, () => {
   const pkg = JSON.parse(readFileSync(path.join(nodeStagingDir, 'package.json'), 'utf-8'));
   assert.equal(pkg.name, nodePackageName);
   const payloadPkg = JSON.parse(readFileSync(path.join(payloadPkgRoot, 'package.json'), 'utf-8'));
@@ -590,10 +621,13 @@ test('node artifact assembly contract: dist-node is a four-external-dependency p
   assert.deepEqual(nodePkg.bin, { 'helmx-node': './dist/cli.js' }, 'the workspace node package must declare exactly one bin entry: helmx-node → ./dist/cli.js');
   assert.deepEqual(pkg.bin, { 'helmx-node': './dist/cli.js' }, 'the bin shape is single-sourced from the node workspace package');
 
-  // the dual-package self-upgrade contract: dependencies are exactly the four external packages at
-  // the repository's installed versions — no fifth dependency, no floating ranges.
-  const EXTERNAL_DEPS = ['@earendil-works/chord', '@earendil-works/pi-durable', 'birpc', 'ws'];
-  assert.deepEqual(Object.keys(pkg.dependencies ?? {}).sort(), [...EXTERNAL_DEPS].sort(), 'the node artifact must declare exactly the four external dependencies');
+  // the dual-package self-upgrade contract: dependencies are exactly the two external packages at
+  // the repository's installed versions — pure-JS pi-durable/env/node & chord/context subpaths are
+  // inlined so remote installs never pull LLM SDKs or WASM.
+  const EXTERNAL_DEPS = ['birpc', 'ws'];
+  assert.deepEqual(Object.keys(pkg.dependencies ?? {}).sort(), [...EXTERNAL_DEPS].sort(), 'the node artifact must declare exactly the two external dependencies');
+  assert.equal(pkg.dependencies?.['@earendil-works/chord'], undefined, '@earendil-works/chord must be inlined, not an external dependency');
+  assert.equal(pkg.dependencies?.['@earendil-works/pi-durable'], undefined, '@earendil-works/pi-durable must be inlined, not an external dependency');
   for (const name of EXTERNAL_DEPS) {
     const spec = pkg.dependencies[name];
     assert.match(spec, /^\d/, `node external dependency ${name} must be an exact version, got ${spec}`);
@@ -602,11 +636,7 @@ test('node artifact assembly contract: dist-node is a four-external-dependency p
     );
     assert.equal(realPkgJson.version, spec, `${name} repository-installed version disagrees with the dist-node contract`);
   }
-  // Peer alignment is a build-time hard gate, not a shipped field: npm only honors `overrides` in
-  // the install root's manifest, never in a package being installed (0.1.1 shipped inert overrides
-  // and still warned ERESOLVE on `npm i -g`). The four exact pins must satisfy every peer in the
-  // closure and no overrides may be declared.
-  assert.equal(pkg.overrides, undefined, 'node artifact must fix peer conflicts at pin time (realign with the externals\' peer declarations), not ship inert overrides');
+  assert.equal(pkg.overrides, undefined, 'node artifact must not ship inert overrides');
 
   const bundle = readFileSync(path.join(nodeStagingDir, 'dist/cli.js'), 'utf-8');
   assert.ok(bundle.startsWith('#!/usr/bin/env node'), 'the bundle must keep the shebang to work as a bin target');
@@ -652,10 +682,10 @@ test('node bundle: help and honest error paths run for real from the single file
   }
 });
 
-test('node tarball acceptance: npm pack → npm install -g into an isolated prefix → installed bin runs with its four dependencies', {
+test('node tarball acceptance: npm pack → npm install -g into an isolated prefix → installed bin runs with its two dependencies', {
   timeout: 240_000,
   skip: process.env.PAYLOAD_NPM_SMOKE !== '1'
-    ? 'the real npm network acceptance runs as a dedicated CI step with PAYLOAD_NPM_SMOKE=1 (the four external dependencies download from the registry)'
+    ? 'the real npm network acceptance runs as a dedicated CI step with PAYLOAD_NPM_SMOKE=1 (the two external dependencies download from the registry)'
     : process.platform === 'win32'
       ? 'bin link execution via shebang is verified on POSIX lanes'
       : false,

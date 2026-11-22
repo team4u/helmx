@@ -53,7 +53,6 @@ export interface ProfileDetailDrawerProps {
 interface FormState {
   id: string
   name: string
-  description: string
   model: string
   thinkingLevel: string
   /** 绑定的默认计算节点 ID；空串 = 未绑定（回退本机 local）。 */
@@ -78,7 +77,6 @@ function createInitialForm(profile: Profile | null, isNew: boolean): FormState {
     return {
       id: '',
       name: '',
-      description: '',
       model: '',
       thinkingLevel: '',
       nodeId: '',
@@ -99,7 +97,6 @@ function createInitialForm(profile: Profile | null, isNew: boolean): FormState {
   return {
     id: profile.id,
     name: profile.name ?? '',
-    description: profile.description ?? '',
     model: resolveProfileModel(profile) ?? '',
     thinkingLevel: profile.thinkingLevel ?? '',
     nodeId: profile.nodeId ?? '',
@@ -177,7 +174,6 @@ export function ProfileDetailDrawer({
             const next: FormState = {
               ...prev,
               name: detail.name ?? prev.name,
-              description: detail.description ?? prev.description,
               model: resolveProfileModel(detail) ?? prev.model,
               thinkingLevel: detail.thinkingLevel ?? '',
               nodeId: detail.nodeId ?? prev.nodeId,
@@ -228,7 +224,6 @@ export function ProfileDetailDrawer({
       return (
         form.id.trim() !== '' ||
         form.name.trim() !== '' ||
-        form.description.trim() !== '' ||
         form.model.trim() !== '' ||
         form.thinkingLevel !== '' ||
         form.nodeId.trim() !== '' ||
@@ -244,7 +239,6 @@ export function ProfileDetailDrawer({
 
     if (form.id !== baseline.id) return true
     if (form.name !== baseline.name) return true
-    if (form.description !== baseline.description) return true
     if (form.model !== baseline.model) return true
     if (form.thinkingLevel !== baseline.thinkingLevel) return true
     if (form.nodeId !== baseline.nodeId) return true
@@ -567,25 +561,6 @@ export function ProfileDetailDrawer({
                     value={form.name}
                     onChange={(e) =>
                       setForm((prev) => ({ ...prev, name: e.target.value }))
-                    }
-                  />
-                </div>
-
-                <label
-                  htmlFor="profile-form-desc"
-                  className="form-grid-label form-grid-align-start"
-                >
-                  {t('profiles.drawer.field.description')}
-                </label>
-                <div className="form-grid-value">
-                  <textarea
-                    id="profile-form-desc"
-                    className="input profile-desc-textarea"
-                    rows={3}
-                    placeholder={t('profiles.drawer.field.descriptionPlaceholder')}
-                    value={form.description}
-                    onChange={(e) =>
-                      setForm((prev) => ({ ...prev, description: e.target.value }))
                     }
                   />
                 </div>

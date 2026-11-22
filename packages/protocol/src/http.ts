@@ -86,6 +86,7 @@ export const CORE_CLI_COMMAND_PATHS = [
   'setup',
   'login',
   'status',
+  'doctor',
   'start',
   'stop',
   'restart',

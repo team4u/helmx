@@ -90,6 +90,19 @@ export function createWorktreePlugin(): PluginDefinition {
         await isolation.aroundSpawn(request, next)
       }, { priority: 200 })
 
+      // ---- before_turn: omit cleanup_worktree when no managed worktrees are active ----
+      ctx.hook.onBeforeTurn((turn) => {
+        if (isolation.allocator.list().some((record) => record.status === 'active')) return
+        if (!turn.tools.some((tool) => tool.name === 'cleanup_worktree')) return
+        return {
+          action: 'transform',
+          value: {
+            ...turn,
+            tools: turn.tools.filter((tool) => tool.name !== 'cleanup_worktree'),
+          },
+        }
+      })
+
       // ---- 会话删除：裁剪绑定与已 removed 记录（保留 active 记录与租约） ----
       ctx.host.onEvent('conversation.deleted', (raw) => {
         const record = raw === null || typeof raw !== 'object' ? undefined : (raw as Record<string, unknown>)

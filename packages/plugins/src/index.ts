@@ -1,5 +1,5 @@
 /**
- * @helmx/plugins 聚合出口：十三个内置插件的生产者侧工厂与公开契约。
+ * @helmx/plugins 聚合出口：十四个内置插件的生产者侧工厂与公开契约。
  *
  * 消费方向（包拓扑铁律）：本包只依赖 @helmx/protocol 与外部 SDK，绝不依赖
  * @helmx/kernel 实现；产品组合（注册顺序与缺省启停）由 @helmx/hub 负责。
@@ -18,7 +18,7 @@ export {
   SUPERAGENT_PROFILE_ID,
   WATCHDOG_PROFILE_ID,
 } from './superagent.js';
-export { createTriggersPlugin, TRIGGERS_PLUGIN_ID } from './triggers.js';
+export { createTriggersPlugin, TRIGGERS_PLUGIN_ID, TRIGGERS_SKILL_ID } from './triggers.js';
 export {
   createAppsPlugin,
   APPS_PLUGIN_ID,

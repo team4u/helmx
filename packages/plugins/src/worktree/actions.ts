@@ -165,6 +165,7 @@ export function registerWorktreeActions(ctx: HelmxPluginContext, deps: WorktreeA
   ctx.action({
     id: 'list_worktrees',
     description: 'List managed Git worktree registrations (including metadata of cleaned-up records)',
+    exposeToPrompt: false,
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     outputSchema: {
       type: 'object',
@@ -181,6 +182,7 @@ export function registerWorktreeActions(ctx: HelmxPluginContext, deps: WorktreeA
   ctx.action({
     id: 'inspect_worktree',
     description: 'Read-only inspection of one managed Git worktree: registration metadata plus a real read-only git probe on the target node (status/stats/capped diff preview); only registered records can be inspected',
+    exposeToPrompt: false,
     inputSchema: {
       type: 'object',
       properties: {

@@ -42,9 +42,13 @@
   border-color: var(--border-strong);
 }
 
-.helmx-select-trigger:focus-visible,
-.helmx-select-trigger:focus {
+.helmx-select-trigger:focus:not(:focus-visible) {
   outline: none;
+}
+
+.helmx-select-trigger:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .helmx-select-trigger:disabled {
@@ -1094,8 +1098,6 @@ button.attachment-chip:disabled {
 .composer-busy-menu-item.helmx-dropdown-item-danger:hover:not(:disabled) {
   background: var(--err-bg);
 }
-.composer-extras > summary { list-style: none; }
-.composer-extras > summary::-webkit-details-marker { display: none; }
 .composer-extras-popover .composer-pill-item { display: flex; padding: 4px; }
 .composer-extras-popover .composer-pill-item > * { max-width: 100%; }
 .composer-popover.composer-model-popover {

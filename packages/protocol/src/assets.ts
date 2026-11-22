@@ -100,7 +100,7 @@ export function isSkillAvailable(
 export const MODEL_TIER_PREFIX = 'tier' as const
 
 /** Allowed model tier identifier pattern (lowercase slug, 1..63 chars). */
-export const MODEL_TIER_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,62}$/
+const MODEL_TIER_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,62}$/
 
 /** Maximum Unicode code-point / char length of a tier routing description. */
 export const MODEL_TIER_DESCRIPTION_MAX_LENGTH = 240

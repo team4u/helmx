@@ -37,7 +37,7 @@ function waitExit(child: ChildProcess): Promise<number | null> {
   });
 }
 
-/** Boot the real hub entry and wait for its control record to appear. */
+/** Boot the real hub entry and wait for its `Helmx Hub:` readiness banner, then immediately assert the control record exists (zero post-banner race). */
 async function bootHub(t: import('node:test').TestContext): Promise<{ child: ChildProcess; dataDir: string; record: HubControlRecord }> {
   const root = makeTempRoot(t);
   const dataDir = path.join(root, 'data');
@@ -52,23 +52,27 @@ async function bootHub(t: import('node:test').TestContext): Promise<{ child: Chi
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
+  let stdout = '';
   let stderr = '';
+  child.stdout?.on('data', (chunk: Buffer) => {
+    stdout += chunk.toString('utf8');
+  });
   child.stderr?.on('data', (chunk: Buffer) => {
     stderr += chunk.toString('utf8');
+    stderrText.set(child, stderr);
   });
   stderrText.set(child, stderr);
   t.after(() => {
     if (child.exitCode === null) child.kill('SIGKILL');
   });
-  let record: HubControlRecord | null = null;
   await waitFor(
-    async () => {
-      record = await readHubControlRecord(dataDir).catch(() => null);
-      return record !== null && record.pid === child.pid;
-    },
-    { timeoutMs: 60_000, intervalMs: 250, message: `hub control record did not appear (stderr: ${stderr.slice(-400)})` },
+    () => stdout.includes('Helmx Hub:'),
+    { timeoutMs: 60_000, intervalMs: 50, message: `hub readiness banner did not appear (stderr: ${stderr.slice(-400)})` },
   );
-  return { child, dataDir, record: record! };
+  // Control server must already be bound and recorded BEFORE the readiness banner is printed.
+  const record = await readHubControlRecord(dataDir);
+  assert.ok(record !== null && record.pid === child.pid, 'hub-control.json must already exist when Helmx Hub: banner prints');
+  return { child, dataDir, record };
 }
 
 test('hub main writes hub-control.json and answers verified status/stop over the control channel', { timeout: 120_000 }, async (t) => {

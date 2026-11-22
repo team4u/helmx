@@ -20,10 +20,11 @@ interface AskSourceInfo {
 interface TerminalSnapshot {
   source: 'context' | 'description'
   text: string
+  prefix?: string
 }
 
 /** Extract the terminal snapshot (last 40 lines) from the ask extension field
- * terminalSnapshot or from the description. */
+ * terminalSnapshot or from a fenced block in description (stripping fence lines). */
 function extractTerminalSnapshot(ask: AskSpec): TerminalSnapshot | undefined {
   const extra = ask as AskSpec & { context?: { terminalSnapshot?: unknown } }
   const fromContext = extra.context?.terminalSnapshot
@@ -33,8 +34,19 @@ function extractTerminalSnapshot(ask: AskSpec): TerminalSnapshot | undefined {
   const desc = ask.description ?? ''
   const marker = desc.indexOf('```')
   if (marker !== -1) {
-    const body = desc.slice(marker + 3)
-    if (body.trim() !== '') return { source: 'description', text: lastLines(body, 40) }
+    const prefix = desc.slice(0, marker).trim()
+    let body = desc.slice(marker + 3)
+    const firstNewline = body.indexOf('\n')
+    if (firstNewline !== -1) {
+      body = body.slice(firstNewline + 1)
+    }
+    const closing = body.lastIndexOf('```')
+    if (closing !== -1) {
+      body = body.slice(0, closing)
+    }
+    if (body.trim() !== '') {
+      return { source: 'description', text: lastLines(body, 40), ...(prefix !== '' ? { prefix } : {}) }
+    }
   }
   return undefined
 }
@@ -135,20 +147,25 @@ function AskCard({ ask, source }: { ask: AskSpec; source?: AskSourceInfo }) {
   const [snapshotOpen, setSnapshotOpen] = useState(false)
   const snapshot = useMemo(() => extractTerminalSnapshot(ask), [ask])
 
+  const isSingleConfirm = ask.fields.length === 1 && ask.fields[0]?.type === 'confirm'
   const missingRequired = ask.fields
     .filter((f) => f.required === true)
     .filter((f) => (answers[f.name] ?? '').trim() === '')
 
-  const submit = async (): Promise<void> => {
+  const submitAnswers = async (payload: Record<string, string>): Promise<void> => {
     setSubmitting('answer')
     setError(null)
     try {
-      await asksApi.answer(ask.id, answers, ask.expectedStateSeq)
+      await asksApi.answer(ask.id, payload, ask.expectedStateSeq)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
       setSubmitting(null)
     }
+  }
+
+  const submit = async (): Promise<void> => {
+    await submitAnswers(answers)
   }
 
   const cancel = async (): Promise<void> => {
@@ -163,8 +180,20 @@ function AskCard({ ask, source }: { ask: AskSpec; source?: AskSourceInfo }) {
     }
   }
 
+  const visibleDescription =
+    snapshot?.source === 'description'
+      ? snapshot.prefix
+      : ask.description?.trim() ? ask.description : undefined
+
   return (
-    <div className="ask-dock">
+    <form
+      className="ask-dock"
+      onSubmit={(e) => {
+        e.preventDefault()
+        if (isSingleConfirm || submitting !== null || missingRequired.length > 0) return
+        void submit()
+      }}
+    >
       <div className="ask-dock-header">
         <StatusLight status="blocked" label={t('composer.ask.awaitingApproval')} />
         <span className="ask-dock-title">{ask.title}</span>
@@ -217,14 +246,9 @@ function AskCard({ ask, source }: { ask: AskSpec; source?: AskSourceInfo }) {
           </button>
         ) : null}
       </div>
-      {ask.description !== undefined && snapshot === undefined ? (
+      {visibleDescription !== undefined ? (
         <div className="ask-dock-desc">
-          {ask.description}
-        </div>
-      ) : null}
-      {ask.description !== undefined && snapshot !== undefined && snapshot.source === 'description' ? (
-        <div className="ask-dock-desc">
-          {ask.description.slice(0, ask.description.indexOf('```')).trim()}
+          {visibleDescription}
         </div>
       ) : null}
       {snapshot !== undefined ? (
@@ -257,7 +281,13 @@ function AskCard({ ask, source }: { ask: AskSpec; source?: AskSourceInfo }) {
                 field={field}
                 value={answers[field.name] ?? ''}
                 disabled={submitting !== null}
-                onChange={(v) => setAnswers((prev) => ({ ...prev, [field.name]: v }))}
+                onChange={(v) => {
+                  const next = { ...answers, [field.name]: v }
+                  setAnswers(next)
+                  if (isSingleConfirm) {
+                    void submitAnswers({ [field.name]: v })
+                  }
+                }}
               />
             </div>
           ))}
@@ -273,17 +303,18 @@ function AskCard({ ask, source }: { ask: AskSpec; source?: AskSourceInfo }) {
         <button type="button" className="btn" disabled={submitting !== null} onClick={() => void cancel()}>
           {t('common.cancel')}
         </button>
-        <button
-          type="button"
-          className="btn btn-primary"
-          disabled={submitting !== null || missingRequired.length > 0}
-          onClick={() => void submit()}
-        >
-          <HelmxIcon name={submitting === 'answer' ? 'loader' : 'check'} size={12} />
-          {t('composer.ask.submit')}
-        </button>
+        {!isSingleConfirm ? (
+          <button
+            type="submit"
+            className="btn btn-primary"
+            disabled={submitting !== null || missingRequired.length > 0}
+          >
+            <HelmxIcon name={submitting === 'answer' ? 'loader' : 'check'} size={12} />
+            {t('composer.ask.submit')}
+          </button>
+        ) : null}
       </div>
-    </div>
+    </form>
   )
 }
 

@@ -16,7 +16,10 @@ import { NODE_CONTROL_PRODUCT } from '../control.js';
 import fsp from 'node:fs/promises';
 import process from 'node:process';
 import { randomBytes } from 'node:crypto';
+import { readLogTailBounded } from '@helmx/env-io';
 import { UpgradeCommitUnconfirmedError, type PreparedNodeReplacement, type StagedNodeRelease } from './upgrader.js';
+
+export { readLogTailBounded };
 
 /** Candidate ready timeout, sized to cover backoff reconnects if the Hub is briefly unreachable. */
 export const CANDIDATE_READY_TIMEOUT_MS = 150_000;
@@ -95,25 +98,6 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
 
 const asString = (value: unknown): string | undefined => (typeof value === 'string' ? value : undefined);
-
-/** Read at most the last 64 KiB of `logFile` and return up to `maxLines` lines. */
-export async function readLogTailBounded(logFile: string, maxLines: number): Promise<string> {
-  const maxBytes = 64 * 1024;
-  try {
-    const handle = await fsp.open(logFile, 'r');
-    try {
-      const size = await handle.stat().then((stat) => stat.size).catch(() => 0);
-      const readBytes = Math.min(size, maxBytes);
-      const buffer = Buffer.alloc(readBytes);
-      if (readBytes > 0) await handle.read(buffer, 0, readBytes, size - readBytes);
-      return buffer.toString('utf8').split('\n').filter((line) => line !== '').slice(-maxLines).join('\n');
-    } finally {
-      await handle.close().catch(() => undefined);
-    }
-  } catch {
-    return '';
-  }
-}
 
 /**
  * Spawn a controlled candidate daemon from the staged release, wait for real Hub registration,

@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { createHelmx } from './app.js';
 import { hubActivityFilePath, startActivityHeartbeat, startHub } from '@helmx/kernel';
 import { resolveWebDistOption } from './web-dist.js';
-import { hubPackageVersion, startHubControlServer, readHubControlRecord, type HubControlHandle } from './control.js';
+import { hubPackageVersion, startHubControlServer, type HubControlHandle } from './control.js';
 import { startHubUpdater } from './updater.js';
 import { createHubUpdateRoutes } from './updater-routes.js';
 import { loadHubChangelog } from './changelog.js';
@@ -32,6 +32,8 @@ const app = await createHelmx({
   autoStart: false,
 });
 let hub: Awaited<ReturnType<typeof startHub>> | undefined;
+let heartbeat: ReturnType<typeof startActivityHeartbeat> | undefined;
+let updater: ReturnType<typeof startHubUpdater> | undefined;
 try {
   // Background updater + product update routes (`/api/hub-update/*`): silent check/stage only —
   // switching is always an explicit act (`helmx update` or the Web UI apply). Inactive unless the
@@ -42,7 +44,7 @@ try {
   const hubVersion = hubPackageVersion();
   const changelog = await loadHubChangelog(process.env, dirname(fileURLToPath(import.meta.url)));
   const { upgradedFrom } = await recordRunVersion(app.kernel.dataDir, hubVersion);
-  const updater = startHubUpdater({
+  updater = startHubUpdater({
     root: process.env.HELMX_HUB_INSTALL_ROOT && process.env.HELMX_HUB_INSTALL_ROOT !== '' ? process.env.HELMX_HUB_INSTALL_ROOT : undefined,
     pkgName: process.env.HELMX_PAYLOAD_PACKAGE ?? '@helmx/hub',
     env: process.env,
@@ -63,12 +65,13 @@ try {
   });
   // Recovery + scheduler resume happen only after the socket is listening (`503 hub_starting` gate
   // covers API requests arriving in between; the readiness banner below still prints only when the
-  // Hub is fully started, preserving the launcher's listen-line readiness contract).
+  // Hub is fully started and its control channel is listening, preserving the launcher's listen-line
+  // readiness contract with zero post-start stop/apply race).
   await app.kernel.start();
   // Activity heartbeat (process-private update busy-gate signal; see activity-heartbeat.ts). Started
   // only after the server is listening so the recorded port is the real bound one; stopped first on
   // shutdown so no stale record outlives this instance.
-  const heartbeat = startActivityHeartbeat({
+  heartbeat = startActivityHeartbeat({
     file: hubActivityFilePath(app.kernel.dataDir),
     port,
     ...(launchId !== undefined ? { launchId } : {}),
@@ -78,8 +81,8 @@ try {
       process.stderr.write(`[hub] activity heartbeat write failed: ${error instanceof Error ? error.message : String(error)}\n`);
     },
   });
-  process.stdout.write(`Helmx Hub: ${hub.url}\nData directory: ${app.kernel.dataDir}\n`);
   const listeningHub = hub;
+  const activeHeartbeat = heartbeat;
   let stopping = false;
   let control: HubControlHandle | undefined;
   // Graceful shutdown order: heartbeat -> HTTP listener -> kernel -> control channel. The control
@@ -91,7 +94,7 @@ try {
     const heldControl = control;
     try {
       try {
-        await heartbeat.stop();
+        await activeHeartbeat.stop();
       } finally {
         try {
           await listeningHub.close();
@@ -107,20 +110,24 @@ try {
     }
   };
   // Control channel (cross-platform verified stop/restart; record lives under the data directory).
-  // Failure to listen is fatal honesty: without it `helmx stop` cannot address this Hub, so we
-  // refuse to serve as an unstoppable process instead of degrading silently.
+  // Started BEFORE printing the readiness banner so `helmx stop` / `helmx update` arriving immediately
+  // after `start -d` never races `hub-control.json`. Failure to listen is fatal honesty: without it
+  // `helmx stop` cannot address this Hub, so we refuse to serve as an unstoppable process.
   control = await startHubControlServer({
     dataDir: app.kernel.dataDir,
-    version: hubPackageVersion(),
+    version: hubVersion,
     port: listeningHub.url !== null ? Number(new URL(listeningHub.url).port) : port,
     requestStop: stop,
   });
   process.once('SIGINT', stop);
   process.once('SIGTERM', stop);
+  process.stdout.write(`Helmx Hub: ${hub.url}\nData directory: ${app.kernel.dataDir}\n`);
 } catch (error) {
-  // The listener may already be open when a later step (kernel.start / heartbeat) failed: close it
-  // before the kernel so no half-started listener outlives the process.
+  // The listener / heartbeat / updater may already be active when a later step (kernel.start / control)
+  // failed: close them cleanly before the kernel so no half-started listener or stale record outlives the process.
+  if (heartbeat !== undefined) await heartbeat.stop().catch(() => undefined);
   if (hub !== undefined) await hub.close().catch(() => undefined);
   await app.close();
+  await updater?.stop().catch(() => undefined);
   throw error;
 }

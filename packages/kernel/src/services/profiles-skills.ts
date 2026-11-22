@@ -18,6 +18,7 @@ import {
   parseSkillFrontmatter,
   type Profile,
   type ProfileChangedEvent,
+  type ProfileRuntime,
   type ProfileStarterPrompt,
   type SkillSummary,
 } from '@helmx/protocol'
@@ -43,8 +44,19 @@ export { assertSkillId, assertSafeSkillRelativePath, parseSkillFrontmatter } fro
 
 export const DEFAULT_PROFILE_ID = 'assistant'
 const DEFAULT_PROFILE_NAME = 'person assist'
-/** Valid thinking level enum values (aligned with pi-ai ModelThinkingLevel; declared independently so schema stays dependency-free). */
-const THINKING_LEVELS = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
+/** Valid thinking level enum values (aligned with pi-ai ModelThinkingLevel; single source shared with HTTP validation). */
+export const PROFILE_THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
+const THINKING_LEVELS = new Set<string>(PROFILE_THINKING_LEVELS)
+/** Generic external runtime identifier format (zero hardcoded plugin enums in kernel). */
+export const PROFILE_RUNTIME_KIND_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/
+
+/**
+ * Cross-platform absolute path check: POSIX `/`, Windows drive `^[a-zA-Z]:[\\/]` and UNC `^\\\\[^\\]+\\[^\\]+`.
+ * Evaluates remote/Windows target path shape independently of the Hub host OS.
+ */
+export function isCrossPlatformAbsolutePath(p: string): boolean {
+  return p.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(p) || /^\\\\[^\\]+\\[^\\]+/.test(p)
+}
 
 /**
  * Layer 0 resident system prompt (top of the three-tier progressive disclosure): declares only identity and managed helmx
@@ -71,6 +83,19 @@ function profileDir(dataDir: string, id: string): string {
   return join(dataDir, 'profiles', id)
 }
 
+export interface ProfileValidationOptions {
+  /** Optional subject prefix (e.g. `profile 'foo' `) prepended to error messages. */
+  prefix?: string
+  /** Error sink; defaults to throwing a plain `Error` (HTTP boundary supplies `ValidationError`). */
+  fail?: (message: string) => never
+  /** Whether `runtime.env` accepts an empty object `{}` (HTTP boundary allows it; service boundary requires non-empty). */
+  allowEmptyRuntimeEnv?: boolean
+}
+
+const defaultFail = (message: string): never => {
+  throw new Error(message)
+}
+
 /** Unicode code-point length (surrogate pairs count as 1, matching visual display width; canonical across contract). */
 function codePointLength(text: string): number {
   let count = 0
@@ -80,25 +105,102 @@ function codePointLength(text: string): number {
 
 /** Validate a single starter prompt at the boundary: label is normalized by trimming, prompt preserves original text;
  * unknown fields are rejected (starters are user-editable data; silently dropping fields causes data loss in UI saves). */
-function validateProfileStarter(item: unknown, at: string): ProfileStarterPrompt {
-  if (!isJsonObject(item)) throw new Error(`${at} must be { label, prompt } object`)
-  const label = item['label']
-  const prompt = item['prompt']
-  if (Object.keys(item).some((key) => key !== 'label' && key !== 'prompt')) {
-    throw new Error(`${at} may only accept label and prompt fields`)
+function validateProfileStarter(item: unknown, at: string, fail: (message: string) => never): ProfileStarterPrompt {
+  if (!isJsonObject(item)) fail(`${at} must be { label, prompt } object`)
+  const obj = item as Record<string, unknown>
+  const label = obj['label']
+  const prompt = obj['prompt']
+  if (Object.keys(obj).some((key) => key !== 'label' && key !== 'prompt')) {
+    fail(`${at} may only accept label and prompt fields`)
   }
-  if (typeof label !== 'string') throw new Error(`${at}.label must be a string`)
-  const normalizedLabel = label.trim()
-  if (codePointLength(normalizedLabel) === 0) throw new Error(`${at}.label cannot be empty after trimming`)
+  if (typeof label !== 'string') fail(`${at}.label must be a string`)
+  const normalizedLabel = (label as string).trim()
+  if (codePointLength(normalizedLabel) === 0) fail(`${at}.label cannot be empty after trimming`)
   if (codePointLength(normalizedLabel) > PROFILE_STARTER_LABEL_MAX_LENGTH) {
-    throw new Error(`${at}.label at most ${PROFILE_STARTER_LABEL_MAX_LENGTH} Unicode code points`)
+    fail(`${at}.label at most ${PROFILE_STARTER_LABEL_MAX_LENGTH} Unicode code points`)
   }
-  if (typeof prompt !== 'string') throw new Error(`${at}.prompt must be a string`)
-  if (prompt.trim() === '') throw new Error(`${at}.prompt cannot be pure whitespace`)
-  if (codePointLength(prompt) > PROFILE_STARTER_PROMPT_MAX_LENGTH) {
-    throw new Error(`${at}.prompt at most ${PROFILE_STARTER_PROMPT_MAX_LENGTH} Unicode code points (preserves original text without truncation)`)
+  if (typeof prompt !== 'string') fail(`${at}.prompt must be a string`)
+  const promptText = prompt as string
+  if (promptText.trim() === '') fail(`${at}.prompt cannot be pure whitespace`)
+  if (codePointLength(promptText) > PROFILE_STARTER_PROMPT_MAX_LENGTH) {
+    fail(`${at}.prompt at most ${PROFILE_STARTER_PROMPT_MAX_LENGTH} Unicode code points (preserves original text without truncation)`)
   }
-  return { label: normalizedLabel, prompt }
+  return { label: normalizedLabel, prompt: promptText }
+}
+
+/** Shared Profile starters validation (used by both ProfileService and HTTP parseProfileBody). */
+export function validateProfileStarters(raw: unknown, opts: ProfileValidationOptions = {}): ProfileStarterPrompt[] {
+  const prefix = opts.prefix ?? ''
+  const fail = opts.fail ?? defaultFail
+  if (!Array.isArray(raw)) {
+    fail(`${prefix}starters must be an array of { label, prompt } objects`)
+  }
+  const items = raw as unknown[]
+  if (items.length > PROFILE_STARTERS_MAX_ITEMS) {
+    fail(`${prefix}starters at most ${PROFILE_STARTERS_MAX_ITEMS} items`)
+  }
+  return items.map((item, index) => validateProfileStarter(item, `${prefix}starters[${index}]`, fail))
+}
+
+/** Shared Profile runtime validation (used by both ProfileService and HTTP parseProfileBody). */
+export function validateProfileRuntime(raw: unknown, opts: ProfileValidationOptions = {}): ProfileRuntime {
+  const prefix = opts.prefix ?? ''
+  const fail = opts.fail ?? defaultFail
+  if (!isJsonObject(raw)) fail(`${prefix}runtime must be an object`)
+  const runtime = raw as Record<string, unknown>
+  const runtimeKeys = new Set(['kind', 'agent', 'args', 'nodeId', 'workspace', 'env'])
+  for (const key of Object.keys(runtime)) {
+    if (!runtimeKeys.has(key)) fail(`${prefix}runtime contains unknown field '${key}'; refusing to ignore execution target`)
+  }
+  const kind = runtime['kind']
+  const agent = runtime['agent']
+  // Zero plugin enum hardcoding in kernel: kind only validates external runtime identifier format (lowercase namespace
+  // identifier, e.g. 'herdr' / 'docker'); whether a plugin handles it is decided by the agent_spawn hook pipeline.
+  if (typeof kind !== 'string' || !PROFILE_RUNTIME_KIND_PATTERN.test(kind)) {
+    fail(`${prefix}runtime.kind must be an external runtime identifier (starts with a-z, may contain a-z 0-9 _ -, length 1..32)`)
+  }
+  if (typeof agent !== 'string' || agent === '') {
+    fail(`${prefix}runtime.agent cannot be empty`)
+  }
+  const args = runtime['args']
+  if (args !== undefined && (!Array.isArray(args) || args.some((a) => typeof a !== 'string'))) {
+    fail(`${prefix}runtime.args must be a string array`)
+  }
+  const nodeId = runtime['nodeId']
+  if (nodeId !== undefined && (typeof nodeId !== 'string' || nodeId === '')) {
+    fail(`${prefix}runtime.nodeId must be a non-empty string when present (target compute node ID)`)
+  }
+  const workspace = runtime['workspace']
+  if (workspace !== undefined) {
+    if (typeof workspace !== 'string' || workspace === '') {
+      fail(`${prefix}runtime.workspace must be a non-empty string when present (absolute path)`)
+    }
+    if (!isCrossPlatformAbsolutePath(workspace as string)) {
+      fail(`${prefix}runtime.workspace must be a cross-platform absolute path (POSIX /, Windows drive, or UNC), got '${workspace}'`)
+    }
+  }
+  const env = runtime['env']
+  if (env !== undefined) {
+    if (!isJsonObject(env) || (!opts.allowEmptyRuntimeEnv && Object.keys(env).length === 0)) {
+      fail(`${prefix}runtime.env must be a non-empty object when present`)
+    }
+    for (const [name, value] of Object.entries(env as Record<string, unknown>)) {
+      if (!isValidEnvName(name)) {
+        fail(`${prefix}runtime.env key '${name}' must be a valid environment variable name`)
+      }
+      if (typeof value !== 'string') {
+        fail(`${prefix}runtime.env['${name}'] must be a string (store secrets in credentials/secret stash, not in profile)`)
+      }
+    }
+  }
+  return {
+    kind: kind as string,
+    agent: agent as string,
+    ...(args !== undefined ? { args: [...(args as string[])] } : {}),
+    ...(nodeId !== undefined ? { nodeId: nodeId as string } : {}),
+    ...(workspace !== undefined ? { workspace: workspace as string } : {}),
+    ...(env !== undefined ? { env: { ...(env as Record<string, string>) } } : {}),
+  }
 }
 
 /** Validate Profile input at the boundary (shared by create/update); returns the normalized persistable shape. */
@@ -108,44 +210,45 @@ export function validateProfileInput(input: unknown): Profile {
   if (typeof id !== 'string' || !isValidProfileId(id)) {
     throw new Error(`illegal profile id: ${String(id)} (only allows a-z 0-9 and hyphen)`)
   }
+  const prefix = `profile '${id}' `
   const profile: Profile = { id }
   const name = input['name']
   if (name !== undefined) {
     if (typeof name !== 'string' || name.trim() === '') {
-      throw new Error(`profile '${id}' name cannot be empty`)
+      throw new Error(`${prefix}name cannot be empty`)
     }
     profile.name = name
   }
   const model = input['model']
   if (model !== undefined) {
-    if (typeof model !== 'string') throw new Error(`profile '${id}' model must be a string`)
+    if (typeof model !== 'string') throw new Error(`${prefix}model must be a string`)
     profile.model = model
   }
   const thinkingLevel = input['thinkingLevel']
   if (thinkingLevel !== undefined) {
     if (typeof thinkingLevel !== 'string' || !THINKING_LEVELS.has(thinkingLevel)) {
-      throw new Error(`profile '${id}' thinkingLevel is invalid (valid values: ${[...THINKING_LEVELS].join(' | ')})`)
+      throw new Error(`${prefix}thinkingLevel is invalid (valid values: ${[...THINKING_LEVELS].join(' | ')})`)
     }
     profile.thinkingLevel = thinkingLevel
   }
   const nodeId = input['nodeId']
   if (nodeId !== undefined) {
     if (typeof nodeId !== 'string' || nodeId === '') {
-      throw new Error(`profile '${id}' nodeId must be a non-empty string when present (compute node ID)`)
+      throw new Error(`${prefix}nodeId must be a non-empty string when present (compute node ID)`)
     }
     profile.nodeId = nodeId
   }
   const cwd = input['cwd']
   if (cwd !== undefined) {
     if (typeof cwd !== 'string' || cwd === '') {
-      throw new Error(`profile '${id}' cwd must be a non-empty string when present (target platform absolute path)`)
+      throw new Error(`${prefix}cwd must be a non-empty string when present (target platform absolute path)`)
     }
     profile.cwd = cwd
   }
   const tags = input['tags']
   if (tags !== undefined) {
     if (!Array.isArray(tags) || tags.some((t) => typeof t !== 'string')) {
-      throw new Error(`profile '${id}' tags must be a string array`)
+      throw new Error(`${prefix}tags must be a string array`)
     }
     profile.tags = [...tags] as string[]
   }
@@ -155,7 +258,7 @@ export function validateProfileInput(input: unknown): Profile {
   const skills = input['skills']
   if (skills !== undefined) {
     if (!Array.isArray(skills) || skills.some((s) => typeof s !== 'string')) {
-      throw new Error(`profile '${id}' skills must be a string array (skill ID allowlist; defaults to all enabled, empty array disables all)`)
+      throw new Error(`${prefix}skills must be a string array (skill ID allowlist; defaults to all enabled, empty array disables all)`)
     }
     const deduped: string[] = []
     for (const skillId of skills) {
@@ -169,97 +272,32 @@ export function validateProfileInput(input: unknown): Profile {
   // An empty array [] is explicitly persisted (meaning "cleared custom starters, fall back to host defaults"); omitted leaves field unset.
   const starters = input['starters']
   if (starters !== undefined) {
-    if (!Array.isArray(starters)) {
-      throw new Error(`profile '${id}' starters must be an array of { label, prompt } objects`)
-    }
-    if (starters.length > PROFILE_STARTERS_MAX_ITEMS) {
-      throw new Error(`profile '${id}' starters at most ${PROFILE_STARTERS_MAX_ITEMS} items`)
-    }
-    profile.starters = starters.map((item, index) => validateProfileStarter(item, `profile '${id}' starters[${index}]`))
+    profile.starters = validateProfileStarters(starters, { prefix })
   }
   const managedByPlugin = input['managedByPlugin']
   if (managedByPlugin !== undefined) {
     if (typeof managedByPlugin !== 'string' || managedByPlugin.trim() === '') {
-      throw new Error(`profile '${id}' managedByPlugin must be a non-empty string when present (owning plugin ID)`)
+      throw new Error(`${prefix}managedByPlugin must be a non-empty string when present (owning plugin ID)`)
     }
     profile.managedByPlugin = managedByPlugin
   }
   const humanSelectable = input['humanSelectable']
   if (humanSelectable !== undefined) {
     if (typeof humanSelectable !== 'boolean') {
-      throw new Error(`profile '${id}' humanSelectable must be a boolean when present (false for singleton system roles, defaults to true)`)
+      throw new Error(`${prefix}humanSelectable must be a boolean when present (false for singleton system roles, defaults to true)`)
     }
     profile.humanSelectable = humanSelectable
   }
   const restrictToCwd = input['restrictToCwd']
   if (restrictToCwd !== undefined) {
     if (typeof restrictToCwd !== 'boolean') {
-      throw new Error(`profile '${id}' restrictToCwd must be a boolean when present (cwd guardrail for file tools, defaults to false)`)
+      throw new Error(`${prefix}restrictToCwd must be a boolean when present (cwd guardrail for file tools, defaults to false)`)
     }
     profile.restrictToCwd = restrictToCwd
   }
   const runtime = input['runtime']
   if (runtime !== undefined) {
-    if (!isJsonObject(runtime)) throw new Error(`profile '${id}' runtime must be an object`)
-    const runtimeKeys = new Set(['kind', 'agent', 'args', 'nodeId', 'workspace', 'env'])
-    for (const key of Object.keys(runtime)) {
-      if (!runtimeKeys.has(key)) throw new Error(`profile '${id}' runtime contains unknown field '${key}'; refusing to ignore execution target`)
-    }
-    const kind = runtime['kind']
-    const agent = runtime['agent']
-    // Zero plugin enum hardcoding in kernel: kind only validates external runtime identifier format (lowercase namespace
-    // identifier, e.g. 'herdr' / 'docker'); whether a plugin handles it is decided by the agent_spawn hook pipeline.
-    if (typeof kind !== 'string' || !/^[a-z][a-z0-9_-]{0,31}$/.test(kind)) {
-      throw new Error(`profile '${id}' runtime.kind must be an external runtime identifier (starts with a-z, may contain a-z 0-9 _ -, length 1..32)`)
-    }
-    if (typeof agent !== 'string' || agent === '') {
-      throw new Error(`profile '${id}' runtime.agent cannot be empty`)
-    }
-    const args = runtime['args']
-    if (args !== undefined && (!Array.isArray(args) || args.some((a) => typeof a !== 'string'))) {
-      throw new Error(`profile '${id}' runtime.args must be a string array`)
-    }
-    const nodeId = runtime['nodeId']
-    if (nodeId !== undefined && (typeof nodeId !== 'string' || nodeId === '')) {
-      throw new Error(`profile '${id}' runtime.nodeId must be a non-empty string when present (target compute node ID)`)
-    }
-    const workspace = runtime['workspace']
-    if (workspace !== undefined) {
-      if (typeof workspace !== 'string' || workspace === '') {
-        throw new Error(`profile '${id}' runtime.workspace must be a non-empty string when present (absolute path)`)
-      }
-      // Cross-platform absolute paths (same semantics as isAbsoluteTargetPath in runtime/tools):
-      // POSIX `/`, Windows drive `C:\\` / `C:/`, UNC `\\\\server\\share`.
-      if (!(
-        workspace.startsWith('/') ||
-        /^[a-zA-Z]:[\\/]/.test(workspace) ||
-        /^\\\\[^\\]+\\[^\\]+/.test(workspace)
-      )) {
-        throw new Error(`profile '${id}' runtime.workspace must be a cross-platform absolute path (POSIX /, Windows drive, or UNC), got '${workspace}'`)
-      }
-    }
-    const env = runtime['env']
-    if (env !== undefined) {
-      if (!isJsonObject(env) || Object.keys(env).length === 0) {
-        throw new Error(`profile '${id}' runtime.env must be a non-empty object when present`)
-      }
-      for (const [name, value] of Object.entries(env)) {
-        if (!isValidEnvName(name)) {
-          throw new Error(`profile '${id}' runtime.env key '${name}' must be a valid environment variable name`)
-        }
-        if (typeof value !== 'string') {
-          throw new Error(`profile '${id}' runtime.env['${name}'] must be a string (store secrets in credentials/secret stash, not in profile)`)
-        }
-      }
-    }
-    profile.runtime = {
-      kind,
-      agent,
-      ...(args !== undefined ? { args } : {}),
-      ...(nodeId !== undefined ? { nodeId } : {}),
-      ...(workspace !== undefined ? { workspace } : {}),
-      ...(env !== undefined ? { env: { ...(env as Record<string, string>) } } : {}),
-    }
+    profile.runtime = validateProfileRuntime(runtime, { prefix })
   }
   return profile
 }

@@ -15,14 +15,10 @@
 .version-banner .btn { flex-shrink: 0; }
 .mobile-nav-toggle, .sidebar-backdrop, .mobile-sidebar-close { display: none; }
 .nav-open { border: 0; background: transparent; padding: 0; color: inherit; font: inherit; cursor: pointer; text-align: left; min-height: 22px; }
-button:focus,
-button:focus-visible,
-a:focus,
-a:focus-visible,
-[tabindex]:focus,
-[tabindex]:focus-visible,
-[role="button"]:focus,
-[role="button"]:focus-visible { outline: none; }
+button:focus:not(:focus-visible),
+a:focus:not(:focus-visible),
+[tabindex]:focus:not(:focus-visible),
+[role="button"]:focus:not(:focus-visible) { outline: none; }
 button, a, input, select, textarea { touch-action: manipulation; }
 .msg-human-row:focus, .msg-ai-block:focus { outline: none; }
 .msg-human-row:focus-within .msg-hover-bar,
@@ -120,7 +116,9 @@ button, a, input, select, textarea { touch-action: manipulation; }
   .split-toggle-btn:not(.split-active),
   .sidebar-split-action,
   .sidebar-split-btn,
-  .pane-split-btn {
+  .pane-split-btn,
+  .drawer-stack-split-btn,
+  .pending-asks-split-btn {
     display: none !important;
   }
   .desktop-sidebar-collapse-btn,
@@ -259,21 +257,24 @@ button, a, input, select, textarea { touch-action: manipulation; }
     border-top: 1px solid var(--border);
     padding-top: 8px;
   }
-  .helmx-panes > .helmx-pane > .pane-topbar,
-  .helmx-primary-pane .helmx-pane > .pane-topbar { padding-left: max(48px, calc(env(safe-area-inset-left) + 44px)); }
-  /* 一级中心（角色/模型/技能/节点/插件）顶栏同样为左上角悬浮汉堡让位 */
-  .primary-center-topbar { padding-left: max(48px, calc(env(safe-area-inset-left) + 44px)); }
-  /* 快捷导航簇让位（在其后覆盖，同特异性靠源顺序决胜）：会话/中心顶栏标题
-     左缘再退一档——总览按钮常驻 + quickEntry 按钮随 shell 属性出现，标题
-     省略绝不遮按钮。 */
+  /* 默认只为左上角固定汉堡按钮让位；总览入口（mq-overview-on）与 quickEntry
+     （mq-quick-on）各自按真实可见状态叠加让位宽度，避免在总览页出现无用的左侧空洞。 */
   .helmx-panes > .helmx-pane > .pane-topbar,
   .helmx-primary-pane .helmx-pane > .pane-topbar,
   .primary-center-topbar {
-    padding-left: max(88px, calc(env(safe-area-inset-left) + 84px));
+    padding-left: max(48px, calc(env(safe-area-inset-left) + 44px));
   }
+  .helmx-shell.mq-overview-on .helmx-panes > .helmx-pane > .pane-topbar,
+  .helmx-shell.mq-overview-on .helmx-primary-pane .helmx-pane > .pane-topbar,
+  .helmx-shell.mq-overview-on .primary-center-topbar,
   .helmx-shell.mq-quick-on .helmx-panes > .helmx-pane > .pane-topbar,
   .helmx-shell.mq-quick-on .helmx-primary-pane .helmx-pane > .pane-topbar,
   .helmx-shell.mq-quick-on .primary-center-topbar {
+    padding-left: max(88px, calc(env(safe-area-inset-left) + 84px));
+  }
+  .helmx-shell.mq-overview-on.mq-quick-on .helmx-panes > .helmx-pane > .pane-topbar,
+  .helmx-shell.mq-overview-on.mq-quick-on .helmx-primary-pane .helmx-pane > .pane-topbar,
+  .helmx-shell.mq-overview-on.mq-quick-on .primary-center-topbar {
     padding-left: max(122px, calc(env(safe-area-inset-left) + 118px));
   }
   /* 移动端重连浮动胶囊避开左上角固定 .mobile-nav-toggle 并尊重顶部安全区 */

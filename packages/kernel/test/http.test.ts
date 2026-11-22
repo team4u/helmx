@@ -1354,24 +1354,25 @@ test('profiles DELETE protects default assistant profile (rejects via bound conv
   assert.ok(del.status === 403 || del.status === 409, `assistant deletion must be rejected (actual ${del.status})`)
 })
 
-test('providers PUT accepts raw array (CLI convention) and { providers } wrapper', { timeout: 60_000 }, async () => {
+test('providers PUT accepts canonical { providers } body and rejects raw arrays or invalid payloads', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
   const array = [
     { id: 'groq', protocol: 'openai', baseUrl: 'https://api.groq.com/v1', models: ['llama-3.3-70b'], enabled: true },
   ]
-  const putRaw = await call(handler, 'PUT', '/api/providers', { body: array })
-  assert.equal(putRaw.status, 200)
+  const putWrapped = await call(handler, 'PUT', '/api/providers', { body: { providers: array } })
+  assert.equal(putWrapped.status, 200)
   const list1 = await call(handler, 'GET', '/api/providers')
   assert.ok(Array.isArray(list1.body))
   assert.equal(list1.body[0].id, 'groq')
-  const putWrapped = await call(handler, 'PUT', '/api/providers', { body: { providers: array } })
-  assert.equal(putWrapped.status, 200)
-  // Invalid entries inside raw array still return 400 (no relaxed validation for array shorthand)
+  // Raw array compatibility shim removed: must return 400
+  const putRaw = await call(handler, 'PUT', '/api/providers', { body: array })
+  assert.equal(putRaw.status, 400)
+  // Invalid entries return 400
   const bad = await call(handler, 'PUT', '/api/providers', {
-    body: [{ id: 'x', protocol: 'grpc', baseUrl: 'ftp://x', models: [], enabled: true }],
+    body: { providers: [{ id: 'x', protocol: 'grpc', baseUrl: 'ftp://x', models: [], enabled: true }] },
   })
   assert.equal(bad.status, 400)
-  // Non-array and non-object return 400
+  // Non-object returns 400
   const notObj = await call(handler, 'PUT', '/api/providers', { body: 'nope' })
   assert.equal(notObj.status, 400)
 })

@@ -24,7 +24,9 @@
  */
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import { controlRequest, readHubControlRecord } from '@helmx/env-io';
 import { HUB_ACTIVITY_FILENAME, isHubActivityBusy, type HubActivityCounts, type HubActivityFile } from '@helmx/protocol';
+import { DEFAULTS } from './layout.js';
 import { readProcessStartTime, type HubPidRecord } from './records.js';
 import { isAliveOf, type LauncherIo } from './io.js';
 
@@ -118,8 +120,28 @@ export async function readHubActivityGate(
   const unknown = (detail: string): HubActivityGate => ({ kind: 'unknown', detail });
 
   if (record.launchId === undefined) return unknown('pid record has no activity launch identity');
+  let verifiedControlPid: number | undefined;
   if (record.startTime === undefined) {
-    if (!options?.ownsWrapper) return unknown(`pid record for ${record.pid} carries no process start-time proof`);
+    if (!options?.ownsWrapper) {
+      // On platforms without `/proc` (macOS/Windows) or pid records lacking startTime, verify
+      // Hub identity over the `0600` control channel (`hub-control.json` + instanceId secret).
+      // Still fail-closed if the control channel is absent or does not answer.
+      const control = await readHubControlRecord(dataDir).catch(() => null);
+      if (control !== null) {
+        const reply = await controlRequest(
+          control.endpoint,
+          { type: 'status', instanceId: control.instanceId },
+          DEFAULTS.identityProbeTimeoutMs,
+          { instanceId: control.instanceId },
+        );
+        if (reply !== null && reply.ok === true && typeof reply.pid === 'number' && reply.pid > 0) {
+          verifiedControlPid = reply.pid;
+        }
+      }
+      if (verifiedControlPid === undefined) {
+        return unknown(`pid record for ${record.pid} carries no process start-time proof (and Hub control channel could not verify identity)`);
+      }
+    }
   } else if (await readStartTime(record.pid) !== record.startTime) {
     return unknown(`recorded wrapper pid ${record.pid} fails its start-time proof`);
   }
@@ -147,6 +169,11 @@ export async function readHubActivityGate(
   if (activity.pid !== record.pid && activity.ppid !== record.pid) {
     return unknown(
       `activity file was written by pid ${activity.pid} (child of ${activity.ppid}), which is neither the recorded hub process ${record.pid} nor its direct child`,
+    );
+  }
+  if (verifiedControlPid !== undefined && activity.pid !== verifiedControlPid) {
+    return unknown(
+      `activity writer pid ${activity.pid} does not match control-channel verified hub pid ${verifiedControlPid}`,
     );
   }
 

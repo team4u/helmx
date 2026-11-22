@@ -16,7 +16,6 @@ import { HelmxIcon, TooltipProvider } from '@helmx/plugin-client'
 import { ModalFocusScope } from './shell/ModalFocusScope.js'
 import { ConversationPane } from './conversation/ConversationPane.js'
 import { ConversationWindowStage } from './conversation/ConversationWindowStage.js'
-import { AgentStandbyPane } from './conversation/AgentStandbyPane.js'
 import { standbyDraftKey } from './conversation/standby-model.js'
 import { DrawerStackShell } from './conversation/DrawerStackShell.js'
 import { useWebLocale } from './i18n/use-web-locale.js'
@@ -40,7 +39,6 @@ import {
 } from './lib/url-hash-model.js'
 import { isSameResolvedTarget } from './lib/types.js'
 import { ScreenHost } from './screens/ScreenHost.js'
-import { ConversationOverview } from './overview/ConversationOverview.js'
 import { AuthGate } from './shell/AuthGate.js'
 import { Sidebar } from './shell/Sidebar.js'
 import { ToastOverlay } from './shell/ToastOverlay.js'
@@ -146,6 +144,12 @@ function lazyWithRetry<P extends object>(
   }
 }
 
+const AgentStandbyPane = lazyWithRetry(() =>
+  lazy(() => import('./conversation/AgentStandbyPane.js').then((m) => ({ default: m.AgentStandbyPane }))),
+)
+const ConversationOverview = lazyWithRetry(() =>
+  lazy(() => import('./overview/ConversationOverview.js').then((m) => ({ default: m.ConversationOverview }))),
+)
 const ModelCenter = lazyWithRetry(() =>
   lazy(() => import('./models/ModelCenter.js').then((m) => ({ default: m.ModelCenter }))),
 )
@@ -305,13 +309,14 @@ function HelmxShellInner({
   // 移动端快捷导航簇的 quickEntry 按钮仅在「不在该视图上」时渲染（主屏已停在
   // 入口目标时就地隐藏）；顶栏左让位宽度（mq-quick-on）跟随真实可见性，而非
   // 插件是否声明了 quickEntry。
+  const mobileOverviewVisible = primaryTarget.kind !== 'overview'
   const mobileQuickEntryVisible =
     firstQuickEntry !== null && !isSameResolvedTarget(primaryTarget, firstQuickEntry.target)
 
   return (
     <LazyRetryContext.Provider value={versionWatch.clearPreloadError}>
       <div
-        className={`helmx-shell${sidebarOpen ? ' sidebar-open' : ''}${sidebarCollapsed ? ' sidebar-collapsed' : ''}${mobileQuickEntryVisible ? ' mq-quick-on' : ''}`}
+        className={`helmx-shell${sidebarOpen ? ' sidebar-open' : ''}${sidebarCollapsed ? ' sidebar-collapsed' : ''}${mobileOverviewVisible ? ' mq-overview-on' : ''}${mobileQuickEntryVisible ? ' mq-quick-on' : ''}`}
         onClick={(event) => {
           const target = event.target as HTMLElement
           if (target.closest('.nav-item')) {

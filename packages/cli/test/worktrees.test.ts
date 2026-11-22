@@ -218,11 +218,14 @@ test('passes through server error messages (dirty worktree 409) and lists dynami
   assert.equal(human.code, 1)
   assert.match(human.err, /uncommitted changes/)
 
-  // Help lists the dynamic action command and flags
+  // Top-level help lists the dynamic action concisely; command help lists its flags
   const help = await runCliCaptured(['--help'], env)
   assert.equal(help.code, 0)
   assert.match(help.out, /worktrees cleanup/)
-  assert.match(help.out, /--delete-branch/)
-  assert.match(help.out, /--merged-into/)
-  assert.match(help.out, /--node-id/)
+
+  const cmdHelp = await runCliCaptured(['worktrees', 'cleanup', '--help'], env)
+  assert.equal(cmdHelp.code, 0)
+  assert.match(cmdHelp.out, /--delete-branch/)
+  assert.match(cmdHelp.out, /--merged-into/)
+  assert.match(cmdHelp.out, /--node-id/)
 })

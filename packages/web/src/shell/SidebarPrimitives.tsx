@@ -240,7 +240,7 @@ export function PendingAsksPanel({ store }: { store: SidebarStoreView }) {
                   {t('shell.asks.handleInMain')}
                 </button>
                 <button
-                  className="btn btn-sm"
+                  className="btn btn-sm pending-asks-split-btn"
                   onClick={() => {
                     setExpanded(false)
                     store.openTarget(

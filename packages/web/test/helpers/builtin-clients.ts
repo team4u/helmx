@@ -14,7 +14,7 @@ export interface BuiltinClientStubOptions {
   docs?: Record<string, unknown>
   /** 非敏感插件配置投影（usePluginConfig 返回值，缺省在无真实宿主时回落空对象）。 */
   config?: Record<string, unknown>
-  /** 宿主模型目录切片（显式提供时覆盖；缺省优先读真实 PluginClientHostHandlesContext）。 */
+  /** 宿主模型目录切片（显式提供时覆盖；缺省优先读真实 PluginClientHostContext）。 */
   hostModels?: HostModelsSlice
 }
 
@@ -51,10 +51,10 @@ const sharedPluginClientNamespace = {
     return stub.config ?? EMPTY_CONFIG
   },
   useHostModels: () => {
-    const handles = useContext(HelmxPluginClient.PluginClientHostHandlesContext)
+    const host = useContext(HelmxPluginClient.PluginClientHostContext)
     const live = useSyncExternalStore(
-      handles?.subscribeModels ?? NOOP_SUBSCRIBE,
-      handles?.getModels ?? UNDEFINED_SNAPSHOT,
+      host?.subscribeModels ?? NOOP_SUBSCRIBE,
+      host?.getModels ?? UNDEFINED_SNAPSHOT,
       UNDEFINED_SNAPSHOT,
     )
     if (realHooks) return live

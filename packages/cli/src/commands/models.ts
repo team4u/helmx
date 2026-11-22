@@ -2,6 +2,7 @@
 import type { ModelCatalog, ModelProviderSummary, ModelProvidersRefreshResult, SetModelFilterBody } from '@helmx/protocol'
 import { parseFlags, type FlagSpec } from '../args.js'
 import { CliError } from '../errors.js'
+import { printTableColumns } from '../output.js'
 import { assertNoExtraPositionals, printResult } from './shared.js'
 import type { CommandContext, CommandSpec } from './shared.js'
 
@@ -114,7 +115,18 @@ export function modelsCommands(): CommandSpec[] {
       async run(ctx: CommandContext) {
         parseFlags([], ctx.args)
         const hub = await ctx.hub()
-        printResult(ctx, await hub.get<ModelProviderSummary[]>('/api/models/providers'))
+        const providers = await hub.get<ModelProviderSummary[]>('/api/models/providers')
+        if (ctx.json || !Array.isArray(providers)) {
+          printResult(ctx, providers)
+          return
+        }
+        printTableColumns(ctx.io, providers, [
+          { label: 'id', value: (p) => p.id },
+          { label: 'name', value: (p) => p.name },
+          { label: 'models', value: (p) => String(p.modelCount) },
+          { label: 'auth', value: (p) => p.authMethods.map((m) => m.label || m.type).join(', ') },
+          { label: 'dynamic', value: (p) => (p.dynamic === true ? 'yes' : 'no') },
+        ])
       },
     },
     {

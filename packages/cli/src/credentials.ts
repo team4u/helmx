@@ -9,12 +9,11 @@
  * (see hub-client).
  */
 import fsp from 'node:fs/promises'
-import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import os from 'node:os'
 import process from 'node:process'
 import { CliError } from './errors.js'
-import { atomicWriteFile } from '@helmx/env-io'
+import { atomicWriteFile, withCrossProcessFileLock } from '@helmx/env-io'
 
 export interface CliCredential {
   hubUrl?: string
@@ -59,116 +58,6 @@ function parseCliTokenFile(text: string, file: string): CliCredential {
     throw new CliError('Invalid CLI credentials token: must be a string', 'credentials_unreadable')
   }
   return { hubUrl: record['hubUrl'] as string | undefined, token: record['token'] as string | undefined }
-}
-
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (err) {
-    return (err as NodeJS.ErrnoException).code === 'EPERM'
-  }
-}
-
-/**
- * Exclusive lock: write full owner metadata to a temp file and atomically publish `cli-token.lock` via `fs.link` (first token is PID).
- * `link` is as atomic and exclusive as `open('wx')`, while ensuring readers never observe an empty or half-written lock file.
- * Stale locks are broken only once the owner PID is confirmed dead (never by age alone, since a valid holder may simply be slow).
- * Returns a release callback that removes only the lock owned by this call.
- */
-async function acquireCliTokenLock(lockFile: string): Promise<() => Promise<void>> {
-  const owner = `${process.pid} ${randomUUID()}`
-  const deadline = Date.now() + LOCK_WAIT_MS
-  const publish = async (): Promise<boolean> => {
-    // Write and flush temp file first, then publish atomically with link; link failure (EEXIST = held by another process; EXDEV/ENOSYS etc. handled by fallback)
-    const tmp = `${lockFile}.${process.pid}.${Date.now()}-${Math.random().toString(36).slice(2)}.tmp`
-    try {
-      const handle = await fsp.open(tmp, 'w', 0o600)
-      try {
-        await handle.writeFile(`${owner}\n`)
-        await handle.sync()
-      } finally {
-        await handle.close()
-      }
-      await fsp.link(tmp, lockFile)
-      return true
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code
-      if (code === 'EEXIST') return false
-      if (code === 'EXDEV' || code === 'ENOSYS' || code === 'EPERM' || code === 'EINVAL') {
-        // Filesystems without hard-link support: fall back to open('wx') (empty-window race guarded by reader-side settle grace)
-        try {
-          await fsp.writeFile(lockFile, `${owner}\n`, { flag: 'wx', mode: 0o600 })
-          return true
-        } catch (fallbackErr) {
-          if ((fallbackErr as NodeJS.ErrnoException).code === 'EEXIST') return false
-          throw fallbackErr
-        }
-      }
-      throw err
-    } finally {
-      await fsp.rm(tmp, { force: true }).catch(() => {})
-    }
-  }
-  for (;;) {
-    let held = false
-    try {
-      held = await publish()
-    } catch (err) {
-      throw new CliError(
-        `cannot create CLI credentials lock file (${lockFile}): ${err instanceof Error ? err.message : String(err)}`,
-        'credentials_lock_failed',
-      )
-    }
-    if (held) {
-      return async () => {
-        try {
-          const raw = await fsp.readFile(lockFile, 'utf8')
-          if (raw.trim() === owner) await fsp.rm(lockFile, { force: true })
-        } catch {
-          /* if release fails, stale detection will clean it up after holder exits */
-        }
-      }
-    }
-    let stale = false
-    let pending = false
-    try {
-      const raw = await fsp.readFile(lockFile, 'utf8')
-      const head = raw.trim().split(/\s+/)[0] ?? ''
-      if (!/^\d+$/.test(head)) {
-        // Empty or truncated lock: legacy fallback or crash remnant. Treat recently created files as mid-write,
-        // wait briefly and re-read; only declare corrupt after the settle grace window expires.
-        const stat = await fsp.stat(lockFile)
-        if (Date.now() - stat.mtimeMs < LOCK_SETTLE_GRACE_MS) {
-          pending = true
-        } else {
-          throw new CliError(
-            `CLI credentials lock file is corrupt (${lockFile}): cannot determine owner`,
-            'credentials_lock_broken',
-          )
-        }
-      } else {
-        const pid = Number(head)
-        if (!isProcessAlive(pid)) stale = true
-      }
-    } catch (err) {
-      if (err instanceof CliError) throw err
-      // Only ENOENT means the lock was released; permission/I/O errors must never be treated as unlocked or delete another's lock.
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue
-      throw new CliError(
-        `cannot read CLI credentials lock file (${lockFile}): ${err instanceof Error ? err.message : String(err)}`,
-        'credentials_lock_failed',
-      )
-    }
-    if (stale) {
-      await fsp.rm(lockFile, { force: true }).catch(() => {})
-      continue
-    }
-    if (Date.now() > deadline) {
-      throw new CliError(`timed out waiting for CLI credentials lock (${lockFile})`, 'credentials_lock_timeout')
-    }
-    await new Promise((resolve) => setTimeout(resolve, pending ? LOCK_POLL_MS * 4 : LOCK_POLL_MS))
-  }
 }
 
 /**
@@ -229,11 +118,24 @@ export async function updateCliCredentials(dataDir: string, cli: CliCredential):
   // Create dataDir before acquiring the lock so both lock and token files have a parent directory (ENOENT on first run)
   await fsp.mkdir(dataDir, { recursive: true })
   const file = credentialsPath(dataDir)
-  const unlock = await acquireCliTokenLock(`${file}.lock`)
-  try {
-    await atomicWrite0600(file, `${JSON.stringify(cli, null, 2)}\n`)
-    await ensureMode0600(file)
-  } finally {
-    await unlock()
-  }
+  await withCrossProcessFileLock(
+    `${file}.lock`,
+    async () => {
+      await atomicWrite0600(file, `${JSON.stringify(cli, null, 2)}\n`)
+      await ensureMode0600(file)
+    },
+    {
+      waitMs: LOCK_WAIT_MS,
+      pollMs: LOCK_POLL_MS,
+      settleGraceMs: LOCK_SETTLE_GRACE_MS,
+      onBusy: (lockFile) => new CliError(`timed out waiting for CLI credentials lock (${lockFile})`, 'credentials_lock_timeout'),
+      onCorrupt: (lockFile) =>
+        new CliError(`CLI credentials lock file is corrupt (${lockFile}): cannot determine owner`, 'credentials_lock_broken'),
+      onError: (lockFile, err, phase) =>
+        new CliError(
+          `cannot ${phase === 'create' ? 'create' : 'read'} CLI credentials lock file (${lockFile}): ${err instanceof Error ? err.message : String(err)}`,
+          'credentials_lock_failed',
+        ),
+    },
+  )
 }

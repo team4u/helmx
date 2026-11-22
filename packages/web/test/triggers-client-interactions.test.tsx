@@ -167,15 +167,52 @@ describe("triggers-client-interactions", () => {
         assert.equal(b.disabled, false, `完成后恢复可点：${b.textContent}`)
       }
       const del = [...host.querySelectorAll<HTMLButtonElement>('button')].filter((b) => b.textContent?.includes('Delete'))
+      // First click opens ConfirmDialog without calling cron_delete immediately; Cancel aborts cleanly
       await act(async () => {
         del[0]!.click()
+      })
+      assert.equal(spy.actionCalls.length, 1, 'clicking Delete must open confirmation dialog before calling cron_delete')
+      let confirmDialog = document.body.querySelector('[role="alertdialog"]')
+      assert.ok(confirmDialog !== null, 'cron Delete opens AlertDialog confirmation')
+      const cancelBtn = [...confirmDialog.querySelectorAll<HTMLButtonElement>('button')].find((b) =>
+        b.textContent?.includes('Cancel'),
+      )
+      assert.ok(cancelBtn !== undefined)
+      await act(async () => {
+        cancelBtn.click()
+      })
+      assert.equal(spy.actionCalls.length, 1, 'cancelling confirmation dialog must not invoke cron_delete')
+
+      // Confirm cron delete
+      await act(async () => {
+        del[0]!.click()
+      })
+      confirmDialog = document.body.querySelector('[role="alertdialog"]')
+      assert.ok(confirmDialog !== null)
+      const confirmCronBtn = [...confirmDialog.querySelectorAll<HTMLButtonElement>('button')].find((b) =>
+        b.className.includes('btn-danger'),
+      )
+      assert.ok(confirmCronBtn !== undefined)
+      await act(async () => {
+        confirmCronBtn.click()
       })
       assert.deepEqual(spy.actionCalls[1], { actionId: 'cron_delete', input: { id: 'daily-report' } }, '触发 cron_delete')
       await act(async () => {
         release?.()
       })
+
+      // Confirm webhook delete
       await act(async () => {
         del[2]!.click()
+      })
+      confirmDialog = document.body.querySelector('[role="alertdialog"]')
+      assert.ok(confirmDialog !== null, 'webhook Delete opens AlertDialog confirmation')
+      const confirmWhBtn = [...confirmDialog.querySelectorAll<HTMLButtonElement>('button')].find((b) =>
+        b.className.includes('btn-danger'),
+      )
+      assert.ok(confirmWhBtn !== undefined)
+      await act(async () => {
+        confirmWhBtn.click()
       })
       assert.deepEqual(spy.actionCalls[2], { actionId: 'webhook_delete', input: { id: 'ci' } }, '触发 webhook_delete')
       await act(async () => {

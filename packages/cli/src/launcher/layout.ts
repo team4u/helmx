@@ -10,6 +10,10 @@
  */
 import os from 'node:os';
 import path from 'node:path';
+import { assertInstallIsolation, resolveRegistryUrlForEnv } from '@helmx/env-io/hub-payload';
+
+export { assertInstallIsolation };
+export const resolveRegistryUrl = resolveRegistryUrlForEnv;
 
 export const DEFAULT_PAYLOAD_PACKAGE = '@helmx/hub';
 export const DEFAULT_NPM_REGISTRY = 'https://registry.npmjs.org';
@@ -88,15 +92,6 @@ export function resolvePayloadPackageName(env: NodeJS.ProcessEnv): string {
   return value;
 }
 
-/** npm registry URL (explicit > `HELMX_NPM_REGISTRY` from the passed env > official). */
-export function resolveRegistryUrl(env: NodeJS.ProcessEnv, explicit?: string): string {
-  const value = explicit ?? env.HELMX_NPM_REGISTRY ?? DEFAULT_NPM_REGISTRY;
-  if (!/^https?:\/\//.test(value)) {
-    throw new Error(`invalid npm registry URL: "${value}" (expected http(s)://…)`);
-  }
-  return value.replace(/\/+$/, '');
-}
-
 /** Blocked-version cooldown override (env `HELMX_UPGRADE_BLOCK_COOLDOWN_MS`, positive integer). */
 export function resolveBlockedCooldownMs(env: NodeJS.ProcessEnv): number {
   const raw = env.HELMX_UPGRADE_BLOCK_COOLDOWN_MS;
@@ -106,22 +101,6 @@ export function resolveBlockedCooldownMs(env: NodeJS.ProcessEnv): number {
     throw new Error(`invalid HELMX_UPGRADE_BLOCK_COOLDOWN_MS: "${raw}" (expected a positive integer)`);
   }
   return parsed;
-}
-
-/** Supervised-run update-check interval override (env `HELMX_HUB_UPDATE_INTERVAL_MS`, positive integer). */
-export function resolveUpdateIntervalMs(env: NodeJS.ProcessEnv): number {
-  const raw = env.HELMX_HUB_UPDATE_INTERVAL_MS;
-  if (raw === undefined || raw === '') return DEFAULTS.updateIntervalMs;
-  const parsed = Number(raw);
-  if (!Number.isInteger(parsed) || parsed <= 0) {
-    throw new Error(`invalid HELMX_HUB_UPDATE_INTERVAL_MS: "${raw}" (expected a positive integer)`);
-  }
-  return parsed;
-}
-
-/** npm dist-tag channel for supervised runs (env `HELMX_HUB_UPDATE_TAG`, default `latest`). */
-export function resolveUpdateTag(env: NodeJS.ProcessEnv): string {
-  return assertDistTag(env.HELMX_HUB_UPDATE_TAG && env.HELMX_HUB_UPDATE_TAG !== '' ? env.HELMX_HUB_UPDATE_TAG : 'latest');
 }
 
 /**
@@ -137,28 +116,4 @@ export function assertDistTag(tag: string): string {
     throw new Error(`"${tag}" looks like a version, not a dist-tag; pass --version for exact-version updates`);
   }
   return tag;
-}
-
-/** Directory of a package inside an npm `node_modules` layout (`@scope/name` → `@scope/name`). */
-export function packageModulesDir(modulesRoot: string, pkgName: string): string {
-  return path.join(modulesRoot, ...pkgName.split('/'));
-}
-
-/**
- * Program/data separation guard: the launcher install root (releases, records, logs — written and
- * replaced by updates) must never overlap the Hub's data directory (conversations, plugins,
- * credentials — user data). Nesting in either direction is rejected explicitly: an update wiping
- * or restaging inside user data, or the Hub writing state into release directories, would both be
- * silent data corruption. The Hub's implicit default (`~/.helmx`) applies when `dataDir` is unset.
- */
-export function assertInstallIsolation(installRoot: string, dataDir: string | undefined, env: NodeJS.ProcessEnv): void {
-  const explicit = dataDir ?? (env.HELMX_DATA_DIR !== undefined && env.HELMX_DATA_DIR !== '' ? env.HELMX_DATA_DIR : undefined);
-  const data = path.resolve(explicit ?? path.join(os.homedir(), '.helmx'));
-  const program = path.resolve(installRoot);
-  const nested = (a: string, b: string): boolean => a === b || a.startsWith(b + path.sep);
-  if (nested(program, data) || nested(data, program)) {
-    throw new Error(
-      `install root (${program}) and Hub data directory (${data}) must not overlap: program releases/state and user data are strictly separate trees (check HELMX_HUB_INSTALL_ROOT vs HELMX_DATA_DIR/--data-dir)`,
-    );
-  }
 }

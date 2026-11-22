@@ -166,7 +166,7 @@ export interface PluginHost {
     options?: { chunk?: string; hash?: string },
   ): Promise<{ code: string; contentHash: string; gzipped?: Uint8Array; exports?: string[] }>
   /**
-   * Static self-check of external plugin source (`POST /api/plugins/doctor`, body `{ path?, dir?, id? }`):
+   * Static self-check of external plugin source (`POST /api/plugins/doctor`, body `{ path?, id? }`):
    * runs real import in an isolated sandbox, registers against a temporary host, and compiles client code;
    * plugin defects are returned inside `report.checks` without throwing. `id` resolves an existing plugin's
    * source directory; `path`/`dir` are absolute directory paths (`dir` is an alias for `path`). Missing or

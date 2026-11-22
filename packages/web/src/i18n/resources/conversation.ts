@@ -62,6 +62,9 @@ export const conversationMessages = {
     'zh-CN': '模型或服务请求未成功，未产生回答。',
   },
   'conv.turnFailed.editLatest': { en: 'Edit and resend the latest message', 'zh-CN': '编辑并重发最近一条消息' },
+  'conv.turnFailed.retryNow': { en: 'Retry', 'zh-CN': '立即重试' },
+  'conv.turnFailed.retryTitle': { en: 'Retry the latest message immediately', 'zh-CN': '立即重发最近一条消息' },
+  'conv.turnFailed.retryFailedTitle': { en: 'Retry failed', 'zh-CN': '重试失败' },
 
   // --- Timeline leading states -------------------------------------------------
   'conv.timeline.loadingHistory': { en: 'Loading history…', 'zh-CN': '正在加载历史…' },
@@ -108,6 +111,7 @@ export const conversationMessages = {
   'conv.turn.completedAt': { en: 'Completed at {time}', 'zh-CN': '完成于 {time}' },
   'conv.turn.took': { en: 'Took {duration}', 'zh-CN': '耗时 {duration}' },
   'conv.turn.forkFromHere': { en: 'Fork a new conversation from here', 'zh-CN': '从此处分叉新会话' },
+  'conv.turn.regenerate': { en: 'Regenerate response', 'zh-CN': '重新生成回复' },
 
   // --- Conversation pane header / errors ---------------------------------------------
   'conv.pane.loadFailed': { en: 'Conversation #{id} failed to load: {error}', 'zh-CN': '会话 #{id} 加载失败：{error}' },

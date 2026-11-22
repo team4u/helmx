@@ -2683,13 +2683,17 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
       assert.equal(releaseManifest!.visibility, 'internal', 'release_worktree_hold 必须声明 visibility: internal')
       assert.ok(!acquireManifest!.exposeAsTool, 'acquire_worktree 不得暴露为独立模型工具')
       assert.ok(!releaseManifest!.exposeAsTool, 'release_worktree_hold 不得暴露为独立模型工具')
-      // 公开动作保持 visibility: 'public'；cleanup_worktree 通过 exposeAsTool 单点暴露工具。
+      // 公开动作保持 visibility: 'public'；cleanup_worktree 通过 exposeAsTool 单点暴露工具，
+      // list_worktrees / inspect_worktree 经 Skill-First 隐藏出 <available_actions>（exposeToPrompt: false，仍可经 run_action/CLI 调用）。
       const publicActions = host.listActions().filter((a) => a.pluginId === 'builtin:worktree')
       for (const id of ['cleanup_worktree', 'list_worktrees', 'inspect_worktree']) {
         const manifest = publicActions.find((a) => a.id === id)
         assert.ok(manifest !== undefined, `应注册 ${id} 动作`)
         assert.equal(manifest!.visibility, 'public', `${id} 是公开动作`)
-        assert.notEqual(manifest!.exposeToPrompt, false, `${id} 是公开动作，不得关闭目录暴露`)
+      }
+      for (const id of ['list_worktrees', 'inspect_worktree']) {
+        const manifest = publicActions.find((a) => a.id === id)
+        assert.equal(manifest!.exposeToPrompt, false, `${id} 经 Skill-First 不常驻 <available_actions>`)
       }
       const cleanupManifest = publicActions.find((a) => a.id === 'cleanup_worktree')
       assert.equal(cleanupManifest?.exposeAsTool, true)
