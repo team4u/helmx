@@ -26,6 +26,8 @@ import { assertValidId, jsonClone } from './shared.js'
 export interface PluginDocStore {
   get<T>(key: string, initial: T): T;
   set<T>(key: string, value: T): void;
+  /** Optional fast path accepting pre-validated, pre-serialized JSON directly (avoids double stringify/parse). */
+  setJson?(key: string, valueJson: string): void;
   /** Delete all global documents belonging to a plugin (`${pluginId}:` prefix); used for uninstall cleanup. */
   deletePlugin(pluginId: string): void;
   /** Wait for all queued writes to be durably persisted (in-memory mirror updates do not guarantee flush; rejects on failure). */
@@ -266,11 +268,16 @@ export class PluginDocRegistry {
     const readCurrent = (): TState =>
       this.readDocValue(pluginId, name, durable, normalizedInitial) as TState;
 
-    const writeNext = (safe: TState): void => {
-      // Enforce payload limit before touching storage/memory or emitting public events.
-      this.serializeBoundedJson(pluginId, 'doc', name, safe);
+    const writeNext = (next: TState): void => {
+      const safe = jsonClone(next);
+      // Enforce payload limit in a single serialization pass and forward the serialized JSON straight to durable storage.
+      const json = this.serializeBoundedJson(pluginId, 'doc', name, safe);
       if (durable) {
-        store.set(key, safe);
+        if (store.setJson !== undefined) {
+          store.setJson(key, json);
+        } else {
+          store.set(key, safe);
+        }
         if (isPublic) this.emitDocUpdated(pluginId, name, safe);
       } else {
         this.setTransientDoc(pluginId, name, safe);
@@ -285,11 +292,11 @@ export class PluginDocRegistry {
       },
       set: (next) => {
         assertUsable();
-        writeNext(jsonClone(next));
+        writeNext(next);
       },
       update: (fn) => {
         assertUsable();
-        writeNext(jsonClone(fn(readCurrent())));
+        writeNext(fn(readCurrent()));
       },
       flush: async () => {
         assertUsable();

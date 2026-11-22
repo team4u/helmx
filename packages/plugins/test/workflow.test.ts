@@ -2303,7 +2303,7 @@ describe('WorkflowService', () => {
     }
   })
 
-  it('host-adapter：DSL 原位重挂对外部 executionId 透传 nodeId，对原生 conversationId 省略 nodeId', timeout, async () => {
+  it('host-adapter：DSL 原位重挂对原生 conversationId 省略 nodeId 和 cwd', timeout, async () => {
     const reattachDir = mkdtempSync(join(tmpdir(), 'wf-dsl-reattach-nodeid-'))
     const { agentJournalKey } = await import('../src/workflow/engine/journal.js')
     const spawns: Array<Record<string, unknown>> = []
@@ -2314,7 +2314,6 @@ describe('WorkflowService', () => {
         spawns.push(req as unknown as Record<string, unknown>)
         req.onResolved?.({
           nodeId: req.nodeId ?? 'gpu-2',
-          ...(req.reattach?.executionId !== undefined ? { executionId: req.reattach.executionId } : {}),
           ...(req.reattach?.conversationId !== undefined ? { conversationId: req.reattach.conversationId } : {}),
           effectiveCwd: '/srv/work',
         })
@@ -2325,10 +2324,8 @@ describe('WorkflowService', () => {
     const runId = 'wf_host_reattach1'
     const script =
       META('host-reattach-nodeid') +
-      'const a = await agent("ext-job", { label: "ext", agentType: "herdr:pi", nodeId: "gpu-2", cwd: "/srv/work" })\n' +
       'const b = await agent("nat-job", { label: "nat", nodeId: "gpu-2", cwd: "/srv/work" })\n' +
-      'return [a, b]'
-    const extKey = agentJournalKey({ prompt: 'ext-job', label: 'ext', agentType: 'herdr:pi', nodeId: 'gpu-2', cwd: '/srv/work' })
+      'return [b]'
     const natKey = agentJournalKey({ prompt: 'nat-job', label: 'nat', nodeId: 'gpu-2', cwd: '/srv/work' })
     const artifactsDir = join(reattachDir, 'artifacts', '1')
     mkdirSync(artifactsDir, { recursive: true })
@@ -2341,25 +2338,12 @@ describe('WorkflowService', () => {
           seq: 0,
           type: 'agent_started',
           index: 0,
-          key: extKey,
+          key: natKey,
           attempt: 1,
           invocationIndex: 0,
           scopePath: 'root',
           scopeCallIndex: 0,
           requestId: `helmx:spawn:${runId}:root:0:1`,
-          execution: { nodeId: 'gpu-2', executionId: 'pane-55', effectiveCwd: '/srv/work' },
-        }),
-        JSON.stringify({
-          v: 1,
-          seq: 1,
-          type: 'agent_started',
-          index: 1,
-          key: natKey,
-          attempt: 1,
-          invocationIndex: 1,
-          scopePath: 'root',
-          scopeCallIndex: 1,
-          requestId: `helmx:spawn:${runId}:root:1:1`,
           execution: { nodeId: 'gpu-2', conversationId: 502, effectiveCwd: '/srv/work' },
         }),
       ].join('\n') + '\n',
@@ -2388,14 +2372,11 @@ describe('WorkflowService', () => {
       await service.init()
       const res = await service.wait(runId)
       assert.equal(service.getRun(runId).status, 'completed', service.getRun(runId).error)
-      assert.deepEqual(res, ['ok:ext-job', 'ok:nat-job'])
-      assert.equal(spawns.length, 2)
-      assert.deepEqual(spawns[0]!['reattach'], { executionId: 'pane-55', effectiveCwd: '/srv/work' })
-      assert.equal(spawns[0]!['nodeId'], 'gpu-2', '外部 executionId 重挂必须经 host-adapter 透传 nodeId')
-      assert.equal(spawns[0]!['cwd'], undefined, '重挂不透传 cwd')
-      assert.deepEqual(spawns[1]!['reattach'], { conversationId: 502, effectiveCwd: '/srv/work' })
-      assert.equal(spawns[1]!['nodeId'], undefined, '原生 conversationId 重挂不得透传 nodeId')
-      assert.equal(spawns[1]!['cwd'], undefined)
+      assert.deepEqual(res, ['ok:nat-job'])
+      assert.equal(spawns.length, 1)
+      assert.deepEqual(spawns[0]!['reattach'], { conversationId: 502, effectiveCwd: '/srv/work' })
+      assert.equal(spawns[0]!['nodeId'], undefined, '原生 conversationId 重挂不得透传 nodeId')
+      assert.equal(spawns[0]!['cwd'], undefined)
     } finally {
       await service.close()
       rmSync(reattachDir, { recursive: true, force: true })

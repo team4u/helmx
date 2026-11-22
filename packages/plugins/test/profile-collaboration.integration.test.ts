@@ -58,7 +58,6 @@ import assert from 'node:assert/strict'
 
 const REVIEWER_SIGN = 'REVIEWER-SIGN-c6d9f2'
 const TESTER_SIGN = 'TESTER-SIGN-a41f77'
-const INTERNAL_SIGN = 'INTERNAL-SIGN-2e77b1'
 const ORPHAN_SIGN = 'ORPHAN-SIGN-88ab03'
 
 interface CapturedRequest {
@@ -99,13 +98,6 @@ async function makeCollabEnv(): Promise<CollabEnv> {
     id: 'tester',
     name: '测试验证员',
     system: `# 测试验证员\n\n你负责运行测试并验证行为是否符合预期。${TESTER_SIGN}\n`,
-  })
-  // humanSelectable:false 内部角色：不应出现在人类可点名目录。
-  await kernel.profiles.save({
-    id: 'internal-ops',
-    name: '内部调度',
-    humanSelectable: false,
-    system: `# 内部调度\n\n内部常驻调度角色，不应出现在点名目录。${INTERNAL_SIGN}\n`,
   })
   // 所属插件未启用的受管角色：不应被目录推荐。
   await kernel.profiles.save({
@@ -460,7 +452,6 @@ test('协作4: 点名委派真链路——subagent(agentType reviewer) 派生真
     assert.ok(catalog !== undefined, '父会话模型上下文应含 <available_profiles> 协作目录')
     assert.ok(catalog!.includes('@reviewer'), '目录应含 @reviewer 点名格式')
     assert.ok(catalog!.includes(REVIEWER_SIGN), '目录应含 reviewer 职责摘要（SYSTEM 首个非标题自然段提取）')
-    assert.ok(!catalog!.includes(INTERNAL_SIGN), '目录不得含 humanSelectable:false 内部角色')
     assert.ok(!catalog!.includes(ORPHAN_SIGN), '目录不得含停用插件托管角色')
     assert.ok(!catalog!.includes('@assistant'), '目录不得含当前会话自身 Profile')
     assert.ok(parentLast.userTexts.some((t) => t.includes('让 @reviewer 审查')), '父会话应保留原始点名输入')

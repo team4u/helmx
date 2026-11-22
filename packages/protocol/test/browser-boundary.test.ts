@@ -33,9 +33,6 @@ test('@helmx/protocol/browser: export declarations aligned with the root entry\'
     'PLUGIN_CLIENT_SHARED_EXPORTS',
     'PLUGIN_UI_METHOD_NAMES',
     'KNOWN_PLUGIN_UI_SURFACES',
-    'UI_ACTION_SURFACES',
-    'UI_ACTION_PLACEMENTS',
-    'UI_ACTION_ROLES',
     'SIDEBAR_BADGE_TONES',
     'SIDEBAR_ITEM_BADGE_FIELDS',
     'WORKBENCH_PANEL_BADGE_FIELDS',
@@ -95,7 +92,6 @@ test('@helmx/protocol/browser: export declarations aligned with the root entry\'
   const serverOnlyRuntimeExports = [
     'UI_SPEC_PATTERNS',
     'UI_SPEC_SCHEMAS',
-    'assertPluginManifestProjection',
     'compareCodeUnit',
     'validatePluginConfigFieldSchema',
     'validatePluginConfigFieldValue',

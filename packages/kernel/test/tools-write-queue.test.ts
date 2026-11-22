@@ -60,7 +60,6 @@ async function makeRealDeps(dir: string): Promise<HelmxToolDeps> {
     dataDir: dir,
     defaultCwd: dir,
     hubUrl: 'http://127.0.0.1:3202',
-    stashEnvFor: (id) => stash.envFor(id),
     redact: (t) => stash.redact(t),
     artifacts,
   }

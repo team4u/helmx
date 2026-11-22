@@ -112,17 +112,6 @@ export interface SidebarItemSpec extends UiSpecBase {
   quickEntry?: boolean
 }
 
-export interface SidebarSectionSpec extends UiSpecBase {
-  label: LocalizedText
-  icon?: string
-  /** Conversation filter tag inside the group (e.g. 'worker'). */
-  filterTag?: string
-  /** Whether the group is collapsible and its default collapsed state (e.g. the archived group). */
-  collapsible?: boolean
-  defaultCollapsed?: boolean
-  order?: number
-}
-
 // 2. screen (full-screen custom view, supports left/right split view side by side)
 export interface ScreenSpec extends UiSpecBase {
   label: LocalizedText
@@ -171,13 +160,7 @@ export interface ToolViewSpec extends UiSpecBase {
   replaceRow?: boolean
 }
 
-// 5. composer.pill & composer.widget
-export interface ComposerPillSpec extends UiSpecBase {
-  label: LocalizedText
-  icon?: string
-}
-
-export interface ComposerWidgetSpec extends UiSpecBase {}
+// 5. composer.completer
 /**
  * Completions only insert text; they never execute commands carried by
  * candidates. Item labels are runtime data produced by plugin actions/docs
@@ -221,29 +204,6 @@ export interface ComposerCompleterSpec extends Omit<UiSpecBase, 'client'> {
   trigger: ComposerCompleterTrigger
   priority?: number
   source: ComposerCompletionSource
-}
-
-/** Exact MIME values or type/*; extensions are dot-prefixed lowercase suffixes (including multi-segment suffixes). The two matchers are OR-combined. */
-export interface ArtifactPreviewerSpec extends UiSpecBase {
-  label: LocalizedText
-  icon?: string
-  priority?: number
-  mimeTypes?: string[]
-  extensions?: string[]
-}
-
-/** Preview components run on the main site and are trusted plugin code; blob content is not trusted HTML. */
-export interface ArtifactPreviewerProps {
-  artifactId: string
-  conversationId?: number
-  /** Default when name metadata is not loaded; never passes artifactId off as the file name. */
-  name?: string
-  mimeType: string
-  size: number
-  /** Lifecycle is managed by the host; plugins must not revoke it themselves. */
-  blobUrl: string
-  /** Decodes at most 1 MiB of text content; null for binary or over-limit content. */
-  text: string | null
 }
 
 // 6. workbench.panel (conversation-aware right-drawer panel)
@@ -303,54 +263,6 @@ export interface CommandSpec extends UiSpecBase {
 export interface SettingsPanelSpec extends UiSpecBase {
   label: LocalizedText
   order?: number
-}
-
-/** External Profile runtime metadata; the form structure is driven by the host's generic ProfileRuntime contract. */
-export interface ProfileRuntimeUiSpec {
-  id: string
-  kind: string
-  label: LocalizedText
-  icon?: string
-  /** Display copy describing the runtime (resolved by the active UI locale). */
-  description?: LocalizedText
-  agentSuggestions?: string[]
-  order?: number
-}
-
-/** Single source of truth mapping UI action targets to registered plugin UI surface names. */
-export const UI_ACTION_SURFACES = {
-  'conversation:header': 'conversation.header.action',
-  'conversation:row': 'conversation.row.action',
-  'timeline:entry': 'timeline.entry.action',
-} as const
-
-export type UiActionTarget = keyof typeof UI_ACTION_SURFACES
-export type UiActionSurface = (typeof UI_ACTION_SURFACES)[UiActionTarget]
-
-/** Allowed placements for `conversation:header` UI actions. */
-export const UI_ACTION_PLACEMENTS = ['toolbar', 'menu'] as const
-export type UiActionPlacement = (typeof UI_ACTION_PLACEMENTS)[number]
-
-/** Allowed message roles for `timeline:entry` UI actions. */
-export const UI_ACTION_ROLES = ['user', 'assistant'] as const
-export type UiActionRole = (typeof UI_ACTION_ROLES)[number]
-
-/** Unified UI action declaration: one shape serves three micro slots (distinguished by target), no more duplicated methods. */
-export interface UiActionSpec extends UiSpecBase {
-  target: UiActionTarget
-  label: LocalizedText
-  icon?: string
-  order?: number
-  /** conversation:header only: 'toolbar' renders direct buttons, 'menu' (default) folds into the dropdown. */
-  placement?: UiActionPlacement
-  /** Plugin action delegated to the host for execution (mutually exclusive with client; missing both is rejected at the registration boundary). */
-  actionId?: string
-  actionPluginId?: string
-  input?: Record<string, unknown>
-  /** timeline:entry only: entry kinds to take over (default matches all). */
-  kinds?: string[]
-  /** timeline:entry only: text message roles to take over. */
-  roles?: UiActionRole[]
 }
 
 /** Injects content into a named sub-slot of another plugin. */
@@ -495,21 +407,14 @@ export interface OverviewCardMetaSlotProps {
 /** ctx.ui: base extension surface plus fine-grained composition extension surfaces. */
 export interface PluginUiRegistry {
   sidebarItem(spec: SidebarItemSpec): void
-  sidebarSection(spec: SidebarSectionSpec): void
   screen(spec: ScreenSpec): void
   timelineRenderer(spec: TimelineRendererSpec): void
   markdownCodeBlock(spec: MarkdownCodeBlockSpec): void
   toolView(spec: ToolViewSpec): void
-  composerPill(spec: ComposerPillSpec): void
-  composerWidget(spec: ComposerWidgetSpec): void
   composerCompleter(spec: ComposerCompleterSpec): void
-  artifactPreviewer(spec: ArtifactPreviewerSpec): void
   workbenchPanel(spec: WorkbenchPanelSpec): void
   command(spec: CommandSpec): void
   settingsPanel(spec: SettingsPanelSpec): void
-  profileRuntime(spec: ProfileRuntimeUiSpec): void
-  /** Unified UI action registration (three micro slots: conversation:header / conversation:row / timeline:entry). */
-  action(spec: UiActionSpec): void
   slot(spec: PluginSlotContributionSpec): void
 }
 
@@ -619,44 +524,28 @@ export interface PluginUiContribution {
  */
 export type KnownPluginUiContribution =
   | { pluginId: string; surface: 'sidebar.item'; spec: SidebarItemSpec }
-  | { pluginId: string; surface: 'sidebar.section'; spec: SidebarSectionSpec }
   | { pluginId: string; surface: 'screen'; spec: ScreenSpec }
   | { pluginId: string; surface: 'timeline.renderer'; spec: TimelineRendererSpec }
   | { pluginId: string; surface: 'markdown.codeBlock'; spec: MarkdownCodeBlockSpec }
   | { pluginId: string; surface: 'tool.view'; spec: ToolViewSpec }
-  | { pluginId: string; surface: 'composer.pill'; spec: ComposerPillSpec }
-  | { pluginId: string; surface: 'composer.widget'; spec: ComposerWidgetSpec }
   | { pluginId: string; surface: 'composer.completer'; spec: ComposerCompleterSpec }
-  | { pluginId: string; surface: 'artifact.previewer'; spec: ArtifactPreviewerSpec }
   | { pluginId: string; surface: 'workbench.panel'; spec: WorkbenchPanelSpec }
   | { pluginId: string; surface: 'commandPalette' | 'command'; spec: CommandSpec }
   | { pluginId: string; surface: 'settings.panel'; spec: SettingsPanelSpec }
-  | { pluginId: string; surface: 'profile.runtime'; spec: ProfileRuntimeUiSpec }
-  | { pluginId: string; surface: 'conversation.header.action'; spec: UiActionSpec }
-  | { pluginId: string; surface: 'conversation.row.action'; spec: UiActionSpec }
-  | { pluginId: string; surface: 'timeline.entry.action'; spec: UiActionSpec }
   | { pluginId: string; surface: 'plugin.slot'; spec: PluginSlotContributionSpec }
 
 /** Single source of truth of known UI contribution surfaces (bi-directionally locked with KnownPluginUiContribution). */
 export const KNOWN_PLUGIN_UI_SURFACES = [
   'sidebar.item',
-  'sidebar.section',
   'screen',
   'timeline.renderer',
   'markdown.codeBlock',
   'tool.view',
-  'composer.pill',
-  'composer.widget',
   'composer.completer',
-  'artifact.previewer',
   'workbench.panel',
   'commandPalette',
   'command',
   'settings.panel',
-  'profile.runtime',
-  'conversation.header.action',
-  'conversation.row.action',
-  'timeline.entry.action',
   'plugin.slot',
 ] as const satisfies readonly KnownPluginUiContribution['surface'][]
 
@@ -834,36 +723,6 @@ export interface HostModelsSlice extends Omit<ModelCatalog, 'models' | 'thinking
   models: ReadonlyArray<HostModelEntry>
 }
 
-/** One pane of the host navigation location resolved from the URL hash (single source of truth). */
-export interface ScreenLocationPane {
-  /** Owning plugin of the screen currently shown in this pane. */
-  pluginId: string
-  /** Screen ID currently shown in this pane. */
-  screenId: string
-  /** This pane's screen params (sp.* for the primary pane, ssp.* for the split pane). */
-  params: Readonly<Record<string, string>>
-}
-
-/**
- * useScreenLocation(): reactive read-only snapshot of where the host has
- * navigated (global location awareness for sidebar widgets / drawer panels;
- * in-screen param scope stays with ScreenProps / the in-screen useScreenParams
- * hook). Structured members carry truth, not loading state: `screen`
- * undefined = the primary pane is not a plugin screen (conversation, overview,
- * ...), `split` undefined = no split pane open — the hash is a synchronous
- * truth with no loading state to fake. The hook returns `undefined` only when
- * the host has not wired the capability (additive adoption). Writing params
- * stays with ScreenProps.setParams of the owning screen (no second write
- * path, hash stays the single source of truth).
- */
-export interface ScreenLocationSnapshot {
-  /** Primary pane when it shows a plugin screen; undefined when it does not. */
-  screen?: ScreenLocationPane
-  /** Split pane when a split view is open; undefined when none is. */
-  split?: ScreenLocationPane
-
-}
-
 /** Execution status of a timeline tool call summary. */
 export type TimelineToolCallStatus = 'running' | 'done' | 'error'
 
@@ -895,20 +754,14 @@ export interface PluginClientModuleInfo {
 /** Single source of truth of all ctx.ui registration method names (bi-directionally locked with the PluginUiRegistry interface). */
 export const PLUGIN_UI_METHOD_NAMES = [
   'sidebarItem',
-  'sidebarSection',
   'screen',
   'timelineRenderer',
   'markdownCodeBlock',
   'toolView',
-  'composerPill',
-  'composerWidget',
   'composerCompleter',
-  'artifactPreviewer',
   'workbenchPanel',
   'command',
   'settingsPanel',
-  'profileRuntime',
-  'action',
   'slot',
 ] as const satisfies readonly (keyof PluginUiRegistry)[]
 

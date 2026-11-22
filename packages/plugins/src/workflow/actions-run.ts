@@ -102,14 +102,12 @@ export function registerWorkflowRunActions(
   // 授权证明与守卫细节见 ./steer.ts：caller → run → target 全程
   // 沿真实会话父链推导；仅 kind=subagent + running 的运行可插话：原生节点
   // （conversationId）经 ctx.host.submitInputGuarded 内核原子复核归属与
-  // CAS 水位（human 红线执行层兜底）；外部节点（controls.steer + executionId
-  // + nodeId）动态 invokeAction 委托目标插件动作（零硬编码插件 ID，混合
-  // 候选歧义拒绝）；DSL 工作流与未回传控制引用的外部执行显式拒绝。
+  // CAS 水位（human 红线执行层兜底）；DSL 工作流显式拒绝。
   // 控制动作非幂等：超时/断线不重试不伪造成功；steered 仅代表投递成功。
   ctx.action({
     id: 'steer',
     description:
-      'Add mid-run guidance to a running background subagent: native sub-conversations go through the kernel guarded port with atomic ownership and CAS watermark rechecks; external executions are delegated to the node controls.steer plugin action, honestly reporting guardLevel (preflight is a pre-send check, cas is an atomic recheck at the commit point). Only runs with kind=subagent and status=running are supported; DSL workflows, external executions without control references, and human ownership are rejected. Within a conversation only the initiating conversation itself or its ancestors may steer. steered=true only means delivery succeeded, not that the guidance was executed; timeouts and disconnects are not retried automatically.',
+      'Add mid-run guidance to a running background subagent: native sub-conversations go through the kernel guarded port with atomic ownership and CAS watermark rechecks. Only runs with kind=subagent and status=running are supported; DSL workflows and human ownership are rejected. Within a conversation only the initiating conversation itself or its ancestors may steer. steered=true only means delivery succeeded, not that the guidance was executed; timeouts and disconnects are not retried automatically.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -121,39 +119,21 @@ export function registerWorkflowRunActions(
     },
     outputSchema: {
       type: 'object',
-      oneOf: [
-        {
-          properties: {
-            steered: { type: 'boolean', const: true },
-            runId: { type: 'string' },
-            targetKind: { type: 'string', const: 'native' },
-            conversationId: { type: 'number', description: 'Steered native sub-conversation ID' },
-            ownership: { type: 'string', enum: ['bot', 'helmx'] },
-            stateChangeSeq: { type: 'number', description: 'Authoritative watermark that passed the recheck at commit' },
-            guardLevel: { type: 'string', const: 'cas', description: 'Guard level (kernel CAS recheck)' },
-          },
-          required: ['steered', 'runId', 'targetKind', 'conversationId', 'ownership', 'stateChangeSeq', 'guardLevel'],
-          additionalProperties: false,
-        },
-        {
-          properties: {
-            steered: { type: 'boolean', const: true },
-            runId: { type: 'string' },
-            targetKind: { type: 'string', const: 'external' },
-            executionId: { type: 'string', description: 'Steered external execution identifier' },
-            nodeId: { type: 'string', description: 'External execution node' },
-            ownership: { type: 'string', const: 'helmx' },
-            stateChangeSeq: { type: 'number', minimum: 0, description: 'Authoritative watermark observed at the preflight or commit-point recheck' },
-            guardLevel: { type: 'string', enum: ['preflight', 'cas'], description: 'Guard level actually applied by the execution plugin' },
-          },
-          required: ['steered', 'runId', 'targetKind', 'executionId', 'nodeId', 'ownership', 'stateChangeSeq', 'guardLevel'],
-          additionalProperties: false,
-        },
-      ],
+      properties: {
+        steered: { type: 'boolean', const: true },
+        runId: { type: 'string' },
+        targetKind: { type: 'string', const: 'native' },
+        conversationId: { type: 'number', description: 'Steered native sub-conversation ID' },
+        ownership: { type: 'string', const: 'helmx' },
+        stateChangeSeq: { type: 'number', description: 'Authoritative watermark that passed the recheck at commit' },
+        guardLevel: { type: 'string', const: 'cas', description: 'Guard level (kernel CAS recheck)' },
+      },
+      required: ['steered', 'runId', 'targetKind', 'conversationId', 'ownership', 'stateChangeSeq', 'guardLevel'],
+      additionalProperties: false,
     },
     cli: {
       command: ['workflows', 'steer'],
-      description: 'Steer a running background subagent back on course (native and external (e.g. Herdr) executions route by node; external targets without server-side atomic guard support are explicitly rejected)',
+      description: 'Steer a running background subagent back on course',
       positional: [{ field: 'runId', required: true }],
     },
     exposeAsTool: true,
@@ -167,8 +147,6 @@ export function registerWorkflowRunActions(
           getConversationOwnership: (id) => ctx.host.getConversationOwnership(id),
           submitInputGuarded: (id, prompt, opts, guard) =>
             ctx.host.submitInputGuarded(id, prompt, opts, guard),
-          invokeAction: (pluginId, actionId, invokeInput, invokeContext) =>
-            ctx.host.invokeAction(pluginId, actionId, invokeInput, invokeContext),
         },
         { runId, text },
         {

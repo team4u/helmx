@@ -80,7 +80,6 @@ export const TRIGGERS_KV_CATCH_UP: LocalizedText = { en: 'Catch-up', 'zh-CN': '�
 export const TRIGGERS_KV_DELIVERY_TARGET: LocalizedText = { en: 'Delivery target', 'zh-CN': '投递目标' }
 export const TRIGGERS_KV_LAST_RUN: LocalizedText = { en: 'Last run', 'zh-CN': '上次运行' }
 export const TRIGGERS_KV_NEXT_RUN: LocalizedText = { en: 'Next run', 'zh-CN': '下次运行' }
-export const TRIGGERS_KV_THREAD_KEY: LocalizedText = { en: 'ThreadKey', 'zh-CN': 'ThreadKey' }
 export const TRIGGERS_KV_SECRET_STATE: LocalizedText = { en: 'Secret state', 'zh-CN': 'Secret 状态' }
 export const TRIGGERS_KV_CREATED: LocalizedText = { en: 'Created', 'zh-CN': '创建时间' }
 export const TRIGGERS_COMMAND_SECTION: LocalizedText = { en: 'Trigger command', 'zh-CN': '触发指令' }
@@ -124,8 +123,5 @@ export function triggerTargetConversation(conversationId: number, locale: HelmxL
 }
 export function triggerTargetProfile(profileId: string, locale: HelmxLocale): string {
   return resolveLocalizedText({ en: `Profile ${profileId}`, 'zh-CN': `角色 ${profileId}` }, locale)
-}
-export function triggerTargetThreadKey(threadKey: string, locale: HelmxLocale): string {
-  return resolveLocalizedText({ en: `ThreadKey ${threadKey}`, 'zh-CN': `ThreadKey ${threadKey}` }, locale)
 }
 export const TRIGGER_TARGET_DEFAULT: LocalizedText = { en: 'Default routing', 'zh-CN': '默认路由' }

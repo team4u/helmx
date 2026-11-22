@@ -41,12 +41,11 @@ test('opening a binary reader concurrently with dispose leaks no handles', { tim
   }
 })
 
-test('socketPath tunnel destroys peer cleanly on dispose during WS tunnel handshake', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helmx-uds-handshake-race-')
-  const endpoint = join(dir, 'pending.sock')
+test('TCP tunnel destroys peer cleanly on dispose during WS tunnel handshake', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helmx-tcp-handshake-race-')
   const sockets = new Set<net.Socket>()
   const connected = deferred()
-  const uds = net.createServer((socket) => {
+  const tcp = net.createServer((socket) => {
     sockets.add(socket)
     socket.on('error', () => undefined)
     socket.once('close', () => sockets.delete(socket))
@@ -57,8 +56,9 @@ test('socketPath tunnel destroys peer cleanly on dispose during WS tunnel handsh
     openTunnelStream: () => new Promise<PassThrough>(() => undefined),
   })
   try {
-    await new Promise<void>((resolve, reject) => { uds.once('error', reject); uds.listen(endpoint, resolve) })
-    const opening = rpc.nodeTunnelOpen({ tunnelId: 'uds-race-1', socketPath: endpoint, timeoutMs: 30_000 })
+    await new Promise<void>((resolve, reject) => { tcp.once('error', reject); tcp.listen(0, '127.0.0.1', resolve) })
+    const port = (tcp.address() as net.AddressInfo).port
+    const opening = rpc.nodeTunnelOpen({ tunnelId: 'tcp-race-1', host: '127.0.0.1', port, timeoutMs: 30_000 })
     await connected.promise
     await rpc.dispose()
     const result = await opening
@@ -68,16 +68,15 @@ test('socketPath tunnel destroys peer cleanly on dispose during WS tunnel handsh
   } finally {
     await rpc.dispose()
     for (const socket of sockets) socket.destroy()
-    await new Promise<void>((resolve) => uds.close(() => resolve()))
+    await new Promise<void>((resolve) => tcp.close(() => resolve()))
   }
 })
 
-test('socketPath tunnel abort cancels pending handshake and cleans up active count', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helmx-uds-abort-race-')
-  const endpoint = join(dir, 'abort.sock')
+test('TCP tunnel abort cancels pending handshake and cleans up active count', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helmx-tcp-abort-race-')
   const sockets = new Set<net.Socket>()
   const connected = deferred()
-  const uds = net.createServer((socket) => {
+  const tcp = net.createServer((socket) => {
     sockets.add(socket)
     socket.on('error', () => undefined)
     socket.once('close', () => sockets.delete(socket))
@@ -88,11 +87,12 @@ test('socketPath tunnel abort cancels pending handshake and cleans up active cou
     openTunnelStream: () => new Promise<PassThrough>(() => undefined),
   })
   try {
-    await new Promise<void>((resolve, reject) => { uds.once('error', reject); uds.listen(endpoint, resolve) })
-    const opening = rpc.nodeTunnelOpen({ tunnelId: 'uds-abort-1', socketPath: endpoint, timeoutMs: 30_000 })
+    await new Promise<void>((resolve, reject) => { tcp.once('error', reject); tcp.listen(0, '127.0.0.1', resolve) })
+    const port = (tcp.address() as net.AddressInfo).port
+    const opening = rpc.nodeTunnelOpen({ tunnelId: 'tcp-abort-1', host: '127.0.0.1', port, timeoutMs: 30_000 })
     await connected.promise
     assert.equal(rpc.getActiveTunnelCount(), 1)
-    await rpc.nodeTunnelAbort('uds-abort-1')
+    await rpc.nodeTunnelAbort('tcp-abort-1')
     const result = await opening
     assert.equal(result.ok, false)
     if (!result.ok) assert.equal(result.error.code, 'aborted')
@@ -100,6 +100,6 @@ test('socketPath tunnel abort cancels pending handshake and cleans up active cou
   } finally {
     await rpc.dispose()
     for (const socket of sockets) socket.destroy()
-    await new Promise<void>((resolve) => uds.close(() => resolve()))
+    await new Promise<void>((resolve) => tcp.close(() => resolve()))
   }
 })

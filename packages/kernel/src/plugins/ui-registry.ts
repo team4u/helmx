@@ -37,14 +37,10 @@ import {
 import { isPlainObject } from '@helmx/protocol'
 import { assertConversationScope, jsonClone } from './shared.js'
 import {
-  UI_ACTION_SURFACES,
   validateUiSpecEarly,
   validateUiSpecLate,
   type UiSpecContext,
 } from './ui-spec-validators.js';
-
-/** Mapping from the three UI action targets to registry surfaces (shared by plugin-context and validation; defined in ui-spec-validators.ts). */
-export { UI_ACTION_SURFACES } from './ui-spec-validators.js';
 
 /** Result of reading and validating a prebuilt `dist-client/manifest.json`. */
 interface LoadedPrebuiltClientManifest {
@@ -497,8 +493,6 @@ export class UiRegistry {
 
   /**
    * Final cross-plugin uniqueness check across all enabled plugins (including `pending`):
-   * - `profile.runtime` `kind` must be unique (duplicate kinds would make the Profile runtime list ambiguous,
-   *   so conflicts reject explicitly instead of being swallowed by registration order);
    * - `commandPalette` `slash` must be unique (`/completion` triggers must map unambiguously).
    *
    * Called by `PluginHost` at the synchronous enable commit point (`enabled = true`): checks during `define`
@@ -508,25 +502,12 @@ export class UiRegistry {
    * iterating it directly so the final sweep checks it once without reporting self-collisions.
    */
   assertCrossPluginUnique(pluginId: string, activePluginIds: Iterable<string>): void {
-    const kindOwners = new Map<string, string>();
     const slashOwners = new Map<string, string>();
     const sweep = (ownerPluginId: string): void => {
       const list = this.ui.get(ownerPluginId);
       if (!list) return;
       for (const u of list) {
-        const spec = u.spec as { kind?: unknown; slash?: unknown };
-        if (u.surface === 'profile.runtime' && typeof spec.kind === 'string') {
-          const prev = kindOwners.get(spec.kind);
-          if (prev !== undefined) {
-            throw new HelmxError(
-              'duplicate_profile_runtime_kind',
-              `plugin ${ownerPluginId} declaration profile.runtime kind "${spec.kind}" already by plugin ${prev} occupy`,
-              409,
-              { pluginId: ownerPluginId, kind: spec.kind, ownerPluginId: prev },
-            );
-          }
-          kindOwners.set(spec.kind, ownerPluginId);
-        }
+        const spec = u.spec as { slash?: unknown };
         if (u.surface === 'commandPalette' && typeof spec.slash === 'string') {
           const prev = slashOwners.get(spec.slash);
           if (prev !== undefined) {
@@ -562,19 +543,6 @@ export class UiRegistry {
       for (const u of list) out.push({ ...u, spec: structuredClone(u.spec) });
     }
     return out;
-  }
-
-  /** this plugin declaration all profile.runtime kind(deactivate preflight host reference probe source). */
-  getProfileRuntimeKinds(pluginId: string): string[] {
-    const list = this.ui.get(pluginId);
-    if (!list) return [];
-    const kinds: string[] = [];
-    for (const u of list) {
-      if (u.surface !== 'profile.runtime') continue;
-      const kind = (u.spec as { kind?: unknown }).kind;
-      if (typeof kind === 'string' && kind.length > 0) kinds.push(kind);
-    }
-    return kinds;
   }
 
   getUiByPlugin(pluginId: string): PluginUiContribution[] {

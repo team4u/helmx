@@ -9,7 +9,7 @@
  * Never introduce a second env assembly path here.
  */
 import { createHash } from 'node:crypto'
-import { composeExecutionEnv, MANAGED_EXEC_ENV_VARS } from '../../env/scoped-env.js'
+import { composeExecutionEnv } from '../../env/scoped-env.js'
 import type { HelmxToolDeps } from '../tool-deps.js'
 
 /** Assemble tool env: `process.env < options.env < managed vars` (pinned overrides; see `buildManagedEnv`). */
@@ -45,18 +45,10 @@ export function executionScopeHash(
   return `helmx-${digest.slice(0, 24)}`
 }
 
-/** Uppercase set of managed identity var names: neither stash nor profile may supply them in any casing
- * (Windows env names are case-insensitive, so lowercase aliases could hijack canonical reads in children). */
-const MANAGED_ENV_UPPER = new Set<string>(MANAGED_EXEC_ENV_VARS.map((name) => name.toUpperCase()))
-
 /**
- * Host-managed env vars (excluding `process.env`): conversation `SecretStash` injections + pinned overrides
- * for `HELMX_ENV` / `HELMX_HUB_URL` / `HELMX_CONVERSATION_ID` / `HELMX_CWD` / `HELMX_EXECUTION_SCOPE` /
- * `HELMX_DATA_DIR` (local only) / managed `HELMX_TOKEN` (omitted when no managed token exists).
- * Any stash keys matching managed identity vars (case-insensitively) are stripped; managed values are injected
- * solely under canonical uppercase names. Shared by local and remote assembly.
- * `options.stashEnv` can override default conversation secrets (used by external spawns for least privilege:
- * passing `{}` omits all conversation secrets while keeping `HELMX_*`).
+ * Host-managed env vars (excluding `process.env`): pinned overrides for `HELMX_ENV` / `HELMX_HUB_URL` /
+ * `HELMX_CONVERSATION_ID` / `HELMX_CWD` / `HELMX_EXECUTION_SCOPE` / `HELMX_DATA_DIR` (local only) /
+ * managed `HELMX_TOKEN` (omitted when no managed token exists). Shared by local and remote assembly.
  * Remote-specific semantics:
  * - `HELMX_HUB_URL` uses only the node's reported callback URL (omits key when unreported rather than falling
  *   back to `deps.hubUrl`, which may be local 127.0.0.1 and unreachable remotely);
@@ -69,27 +61,12 @@ export function buildManagedEnv(
   cwd: string,
   conversationId?: number,
   nodeId: string = 'local',
-  options: { stashEnv?: Record<string, string> } = {},
 ): Record<string, string> {
-  const stashEnv =
-    options.stashEnv !== undefined
-      ? options.stashEnv
-      : conversationId === undefined
-        ? {}
-        : deps.stashEnvFor(conversationId)
-  // Stash must never carry managed identity variables in any casing; strip aliases like `helmx_execution_scope`
-  // or `Helmx_Cwd` before injecting canonical overrides. Uses object spread (`DefineOwnProperty`) + `delete`
-  // to avoid prototype pollution on `__proto__`.
-  const safeStashEnv: Record<string, string> = { ...stashEnv }
-  for (const key of Object.keys(stashEnv)) {
-    if (MANAGED_ENV_UPPER.has(key.toUpperCase())) delete safeStashEnv[key]
-  }
   const managedToken = deps.processToken?.()
   // Guard remote callback URL: use only registered node's reported hubUrl, else omit (never fall back to local Hub URL).
   const nodeHubUrl = nodeId !== 'local' ? deps.envFabric?.getNodeHubUrl(nodeId) : undefined
   const hubUrl = nodeId === 'local' ? deps.hubUrl : nodeHubUrl
   const env: Record<string, string> = {
-    ...safeStashEnv,
     HELMX_ENV: '1',
     ...(hubUrl !== undefined ? { HELMX_HUB_URL: hubUrl } : {}),
     HELMX_CONVERSATION_ID: String(conversationId ?? 0),

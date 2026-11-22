@@ -1,6 +1,6 @@
 # EnvFabric 跨平台执行底座
 
-本文面向需要理解或调试跨节点执行的读者：插件开发者（经 `ctx.host.execEnv / runGate / nodeIpc / nodeFetch / openTunnel` 使用底座）、节点运维者（部署 `helmx-node`、管理令牌与升级）、以及排查「命令到底在哪台机器上执行」的工程师。EnvFabric 负责会话绑定节点上的命令、文件、产物登记、验收门禁、插件受管执行、文件互斥、本机 IPC 桥与节点透传隧道；Hub 产物读取和插件动作调用保留在 Hub 内，不会伪装成节点执行。会话如何绑定 `(nodeId, cwd)` 见 [pi-durable 集成](pi-durable.md)；工作流如何消费这些端口见 [DSL 手册](../workflows/dsl-guide.md)。
+本文面向需要理解或调试跨节点执行的读者：插件开发者（经 `ctx.host.execEnv / runGate / nodeIpc / openTunnel` 使用底座）、节点运维者（部署 `helmx-node`、管理令牌与升级）、以及排查「命令到底在哪台机器上执行」的工程师。EnvFabric 负责会话绑定节点上的命令、文件、产物登记、验收门禁、插件受管执行、文件互斥、本机 IPC 桥与节点透传隧道；Hub 产物读取和插件动作调用保留在 Hub 内，不会伪装成节点执行。会话如何绑定 `(nodeId, cwd)` 见 [pi-durable 集成](pi-durable.md)；工作流如何消费这些端口见 [DSL 手册](../workflows/dsl-guide.md)。
 
 ## 架构定位与执行环境分层
 
@@ -29,9 +29,9 @@ flowchart TD
 
 两条执行路径的分工：`local` 节点（`DEFAULT_NODE_ID = 'local'`）直接复用 pi-durable 的 `NodeExecutionEnv`（进程内调用，无 RPC 开销）；远端节点经 `RemoteExecutionEnv` 走 `NodeRegistry` 的 WebSocket + birpc 通道。
 
-缓存生命周期有明确边界——**有会话靶点**（带 `conversationId` 的 `envForTarget`）按 `(conversationId, nodeId, cwd)` 缓存底座，会话删除或修改 nodeId/cwd 时驱逐（驱逐只移除缓存条目、绝不杀在途命令，在途操作仍持有旧实例引用并自然完成）；**无会话靶点**（herdr 文件交接、gate、无会话 HTTP exec）每次创建全新短生命周期实例，用后即弃，绝不进缓存。未知节点返回 Remote env（操作时等待重连），**绝不静默回落 local**——远端节点离线时操作显式抛 `409 node_offline` 或挂起等待重连（可取消）。
+缓存生命周期有明确边界——**有会话靶点**（带 `conversationId` 的 `envForTarget`）按 `(conversationId, nodeId, cwd)` 缓存底座，会话删除或修改 nodeId/cwd 时驱逐（驱逐只移除缓存条目、绝不杀在途命令，在途操作仍持有旧实例引用并自然完成）；**无会话靶点**（gate、无会话 HTTP exec 等）每次创建全新短生命周期实例，用后即弃，绝不进缓存。未知节点返回 Remote env（操作时等待重连），**绝不静默回落 local**——远端节点离线时操作显式抛 `409 node_offline` 或挂起等待重连（可取消）。
 
-`ScopedExecutionEnv` 负责每条命令的环境变量现场合成（fail-closed）：继承宿主 `process.env` 的真实 `PATH/HOME` 工具链，但受管 `HELMX_*` 变量（含 `HELMX_HUB_URL / HELMX_CONVERSATION_ID / HELMX_CWD / HELMX_DATA_DIR / HELMX_NODE_ID / HELMX_TOKEN / HELMX_EXECUTION_SCOPE` 等及大小写变体）一律先剥除，再由 `envOptions` 回调注入权威值。机密服务在 fabric 外部，fabric 只消费回调结果，自身不持有机密。`ctx.host.buildSpawnEnv(conversationId, cwd, nodeId, options?)` 把同一受管合成规则暴露给插件的外部 spawn，但外部窗格采用最小授权：缺省不携带任何父会话 stash 机密，仅显式 `options.secretNames` 逐名注入（需现存，缺失显式报错）。
+`ScopedExecutionEnv` 负责每条命令的环境变量现场合成（fail-closed）：继承宿主 `process.env` 的真实 `PATH/HOME` 工具链，但受管 `HELMX_*` 变量（含 `HELMX_HUB_URL / HELMX_CONVERSATION_ID / HELMX_CWD / HELMX_DATA_DIR / HELMX_NODE_ID / HELMX_TOKEN / HELMX_EXECUTION_SCOPE` 等及大小写变体）一律先剥除，再由 `envOptions` 回调注入权威值。机密服务在 fabric 外部，fabric 只消费回调结果，自身不持有机密。
 
 `HELMX_EXECUTION_SCOPE` 是由数据目录、会话 ID、节点与工作目录计算的稳定资源命名锚点（不含令牌或机密）：同一坐标下多次命令得到相同值，供外部工具命名会话使用；它不自动配置外部工具，也不承诺隔离其常驻进程。文件工具在结果中返回解析后的绝对路径和实际节点；shell 命令自行 `cd` 不会改写会话绑定目录。
 
@@ -65,7 +65,7 @@ sequenceDiagram
 
 认证设计要点：Hub 仅存储令牌的 SHA-256 哈希，明文只在签发响应中返回一次；令牌在 WebSocket 建立后的 RPC 载荷中传输，禁止拼接在 URL 中（防代理与访问日志泄露）；比对使用常量时间算法防时序侧信道。`NodeRegistry` 的安全语义：未提供 authenticate 回调时拒绝一切注册（fail-closed 缺省拒绝）；连接对象完全就绪（鉴权通过 + rpc 绑定）后才登记并唤醒等待者；同 nodeId 新连接顶掉旧连接时真正断开旧 socket 与 rpc（不只删 Map，防半开连接继续发事件）；心跳与输出事件只接受已注册连接，未注册连接不能保活别人的节点或伪造其他节点的输出。
 
-**SSH 边界**：Helmx 不在任何节点上部署 SSH 桥接脚本。需要在目标机器上连接本机 Unix Socket 或 Windows Named Pipe 的插件（如 `builtin:herdr`）经下文的 IPC 桥走同一节点通道，跨节点统一拓扑。
+**SSH 边界**：Helmx 不在任何节点上部署 SSH 桥接脚本。需要在目标机器上连接本机 Unix Socket 或 Windows Named Pipe 的插件经下文的 IPC 桥走同一节点通道，跨节点统一拓扑。
 
 ## 受管 Shell：流式输出、溢出落盘与精准取消
 
@@ -94,8 +94,7 @@ sequenceDiagram
 
 - local 底座 key 前缀恒为 `node:local`，远端为 `remote:<nodeId>`——不同节点同形路径天然不同 key，互不阻塞；
 - canonical 经 realpath 解析软链别名（不同写法指向同一文件共享一把锁）；新文件取「最近存在祖先的 canonical + 剩余段」，保证创建 write 与后续 edit 同 key；
-- 只锁读-改-写窗口，不锁无关文件、不阻塞纯读；同一异步链（AsyncLocalStorage 传播）对同一 key 嵌套入队立即显式报错 `file_mutation_queue_reentrant`，绝不静默挂死；
-- 插件经 `ctx.host.withFileMutationQueue({ nodeId, cwd, path }, fn)` 进入同一队列，与内核 write/edit 共享串行化——同一文件不丢更新。
+- 只锁读-改-写窗口，不锁无关文件、不阻塞纯读；同一异步链（AsyncLocalStorage 传播）对同一 key 嵌套入队立即显式报错 `file_mutation_queue_reentrant`，绝不静默挂死。
 
 诚实边界：该互斥**只约束经过本队列的受管操作**。同步 Shell 命令与外部编辑器直接写文件不受它保证；它不是跨进程/跨 Hub 的分布式锁（当前部署模型一个节点只接一个 Hub）；可信插件仍可直接 `node:fs` 或 bash 绕过。并发场景中不要假设文件互斥能阻止进程外的写入。
 
@@ -116,8 +115,7 @@ ipcSubscribe({ endpoint?, session?, line }, onLine, onClosed): Promise<() => voi
 
 远端节点上常驻着推理或业务服务（本机 loopback 或节点可达的任意 TCP 目标）。这类服务往往不对外开端口、所在机器的 IP 还会漂移，Hub 无法按地址直连。节点透传隧道复用既有反向连接拓扑，按需建立 Hub 到目标节点视角 `host:port` 的任意 TCP 字节通道：
 
-- **`ctx.host.openTunnel(nodeId, { host?, port })` 是一等公民原语**：返回原始 Node.js `Duplex`（任意协议字节流；host 由目标节点解析与连接，省略默认 `127.0.0.1`；`local` 节点为 Hub 进程内 `net.connect` 直连）。活动隧道纳入插件在途任务跟踪（停用预检可见；停用/dispose 统一销毁不泄漏）；
-- **`ctx.host.nodeFetch(nodeId)` 是其上的 HTTP/HTTPS 适配层**：支持任意 host 与 `http`/`https`（HTTPS 在隧道 Duplex 上叠 `tls.connect`，`servername`/证书校验遵循 Node 默认链），保留 Response streaming、SSE、取消传播与状态码语义。4xx/5xx 是上游正常响应，原样构造 `Response` 交还调用方；只有建隧道失败、socket 异常中断、超时才抛错；
+- **`ctx.host.openTunnel(nodeId, { host?, port })` 是 TCP-only 一等公民原语**：返回原始 Node.js `Duplex`（任意 TCP 协议字节流；host 由目标节点解析与连接，省略默认 `127.0.0.1`；`local` 节点为 Hub 进程内 `net.connect` 直连）。活动隧道纳入插件在途任务跟踪（停用预检可见；停用/dispose 统一销毁不泄漏）；
 - **Hub 侧前台端口转发**（`pnpm helmx nodes forward`）在命令运行期于 Hub 主机按需监听，把本地端口逐连接转发到目标节点视角的 `host:port`，退出即关闭。
 
 ### 握手时序
@@ -175,7 +173,7 @@ sequenceDiagram
 | token 位置 | 在 WebSocket 建立后的首帧载荷中传输，不进 URL Query，与 `/ws/node` 同一条纪律 |
 | 首帧限长 | 握手阶段首帧载荷不超过 4096 字节，超限立即关闭，防未认证客户端发送超大帧耗尽 Hub 内存；数据期单消息上限由 WS 服务端配置界定 |
 | 端口暴露 | 隧道传输复用 Hub 原有 HTTP server；只有显式使用 CLI 转发时才创建额外监听器，且监听位于 Hub 主机、仅在命令运行期间存在。绑定 `0.0.0.0` 等非回环地址会将目标服务暴露给相应网络，应用协议认证不由隧道补充 |
-| 加密范围 | Hub 与节点之间仅 `wss://` 提供该段 TLS。TCP 原语不自动加密应用载荷；调用方可叠加 TLS。`nodeFetch` 的 HTTPS 在 Hub 与目标服务之间建立 TLS |
+| 加密范围 | Hub 与节点之间仅 `wss://` 提供该段 TLS。TCP 原语不自动加密应用载荷；调用方可按需在 Duplex 上叠加 TLS |
 
 ### Hub 侧前台端口转发
 

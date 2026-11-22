@@ -29,7 +29,7 @@ import { isAncestorOrSelf } from '../lineage.js'
 /** detach 所需宿主端口（ctx.host 子集；注入确定性 fake 即可全覆盖测试）。 */
 export interface DetachHostPorts {
   getConversation(id: number): ConversationSummary
-  getConversationOwnership(id: number): 'helmx' | 'bot' | 'human'
+  getConversationOwnership(id: number): 'helmx' | 'human'
 }
 
 /** 引擎 detach 入口（WorkflowService.detachForegroundRun 子集）。 */

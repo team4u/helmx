@@ -59,7 +59,7 @@ class FakeBackend extends PluginHostBackendFixtureBase {
   updateConversation(id: number): Promise<ConversationSummary> { return Promise.resolve(this.getConversation(id)) }
   abortConversation(): Promise<void> { return Promise.resolve() }
   getConversationActivity(): { consecutiveErrors: number } { return { consecutiveErrors: 0 } }
-  getConversationOwnership(): 'helmx' | 'bot' | 'human' { return 'human' }
+  getConversationOwnership(): 'helmx' | 'human' { return 'human' }
   spawnAgent(): Promise<unknown> { return Promise.resolve('spawned') }
   runGate(): Promise<{ ok: boolean; output: string }> { return Promise.resolve({ ok: true, output: '' }) }
   cleanupWorktree(): Promise<{ removed: boolean; worktreeId: string; path: string; branch: string; nodeId: string; branchDeleted: boolean }> {
@@ -68,7 +68,6 @@ class FakeBackend extends PluginHostBackendFixtureBase {
   invokeAction(): Promise<unknown> { return Promise.resolve({}) }
   prepareAction(): { idempotent: boolean } { return { idempotent: false } }
   execEnv(): Promise<never> { return Promise.reject(new HelmxError('unsupported', '本 fixture 不执行节点命令', 501)) }
-  withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') }
   listActions(): never[] { return [] }
   manageConversation(): () => void { return () => {} }
   markConversationOwnership(): void {}

@@ -4,12 +4,10 @@
  *
  * Responsibilities:
  * 1. `installKernelTools`: constructs `bash`/`read`/`write`/`edit`/`read_artifact`/`register_artifact` and the
- *    `run_action` meta-tool, wrapped uniformly via `wrapToolExecute` to honor `tool_call` `handled` takeovers;
+ *    `run_action` meta-tool, wrapped uniformly via `wrapToolExecute` to enforce abort propagation;
  * 2. `installPluginTools`: converts `DerivedToolSpec` entries from `PluginHost.listTools()` into SDK tool
  *    extensions and installs them into the registry (replacing stale `helmx-plugins` tools in place), with
- *    outbound results redacted and formatted via `pluginToolResult`;
- * 3. Shares the `handledToolCalls` Map with `HookBridge` for tool-level interception short-circuiting without
- *    circular dependencies.
+ *    outbound results redacted and formatted via `pluginToolResult`.
  */
 
 import type { Context } from '@earendil-works/chord/context'
@@ -29,7 +27,6 @@ import {
 } from '@helmx/protocol'
 import type { ConversationSummary, JsonSchema } from '@helmx/protocol'
 import type { DerivedToolSpec, PluginHost } from '../plugins/index.js'
-import type { HandledToolCallEntry } from './hook-bridge.js'
 import { createRunActionTool, type KernelToolHost } from './kernel-tools.js'
 import { actionToolResult, pluginToolResult } from './runtime-helpers.js'
 import { throwIfToolAborted, type HelmxToolDeps } from './tool-deps.js'
@@ -50,7 +47,6 @@ interface RuntimeToolRegistryOptions {
   readonly getPluginHost: () => PluginHostToolTarget | undefined
   readonly isArtifactAuthorized: (conversationId: number, artifactConversationId: number) => boolean
   readonly redact: (text: string) => string
-  readonly handledToolCalls: Map<string, HandledToolCallEntry>
   /** Conversation summary lookup (used for `run_action` `describe` scope checks). */
   readonly getConversation: (conversationId: number) => ConversationSummary
 }
@@ -60,23 +56,16 @@ type PluginToolApi = Pick<ToolExecutionApi, 'conversationId'> & {
   output?: (chunk: string) => void
 }
 
-/** Kernel/plugin tool execution wrapper: returns `tool_call` `handled` takeover results first without running the tool. */
+/** Kernel/plugin tool execution wrapper: ensures aborted calls always rethrow instead of returning masked errors. */
 export function wrapToolExecute<
   TArgs,
   TApi extends { callId?: string },
   TContext extends { abortSignal?: AbortSignal },
   TResult,
 >(
-  handledToolCalls: Map<string, HandledToolCallEntry>,
   execute: (args: TArgs, api: TApi, context: TContext) => Promise<TResult>,
-): (args: TArgs, api: TApi, context: TContext) => Promise<TResult | HandledToolCallEntry['result']> {
+): (args: TArgs, api: TApi, context: TContext) => Promise<TResult> {
   return async (args, api, context) => {
-    const callId = api.callId
-    const handled = callId !== undefined ? handledToolCalls.get(callId) : undefined
-    if (handled !== undefined) {
-      handledToolCalls.delete(callId!)
-      return handled.result
-    }
     const result = await execute(args, api, context)
     // If a tool implementation swallowed or converted an abort (e.g. returned `{ isError: true }`), rethrow
     // uniformly here so pi-durable `ToolTask` enters its interrupted / `writeAtClose()` revert-to-pending branch.
@@ -90,10 +79,9 @@ export function wrapToolExecute<
  * `Extension.tools` array boundary.
  */
 function wrapToolRegistration<TParameters extends object, TDetails extends JsonValue>(
-  handledToolCalls: Map<string, HandledToolCallEntry>,
   tool: ToolRegistration<TParameters, TDetails>,
 ): ToolRegistration {
-  const execute = wrapToolExecute(handledToolCalls, tool.execute.bind(tool))
+  const execute = wrapToolExecute(tool.execute.bind(tool))
   return {
     ...tool,
     execute,
@@ -141,7 +129,7 @@ export class RuntimeToolRegistry {
    * plugins). `subagent` / `SubagentWorkflow` are provided by `builtin:workflow`; `cleanup_worktree` by `builtin:worktree`.
    */
   installKernelTools(): void {
-    const { registry, toolDeps, getPluginHost, isArtifactAuthorized, redact, handledToolCalls, getConversation } = this.options
+    const { registry, toolDeps, getPluginHost, isArtifactAuthorized, redact, getConversation } = this.options
     const toolHost: KernelToolHost = {
       invokePluginAction: async (
         pluginId: string,
@@ -195,18 +183,17 @@ export class RuntimeToolRegistry {
       redact: (text: string) => redact(text),
     }
     const kernelTools: ToolRegistration[] = [
-      wrapToolRegistration(handledToolCalls, createBashTool(toolDeps)),
-      wrapToolRegistration(handledToolCalls, createReadTool(toolDeps)),
-      wrapToolRegistration(handledToolCalls, createWriteTool(toolDeps)),
-      wrapToolRegistration(handledToolCalls, createEditTool(toolDeps)),
+      wrapToolRegistration(createBashTool(toolDeps)),
+      wrapToolRegistration(createReadTool(toolDeps)),
+      wrapToolRegistration(createWriteTool(toolDeps)),
+      wrapToolRegistration(createEditTool(toolDeps)),
       wrapToolRegistration(
-        handledToolCalls,
         createReadArtifactTool(toolDeps, (convId: number, artifactConvId: number) =>
           isArtifactAuthorized(convId, artifactConvId),
         ),
       ),
-      wrapToolRegistration(handledToolCalls, createRegisterArtifactTool(toolDeps)),
-      wrapToolRegistration(handledToolCalls, createRunActionTool(toolHost)),
+      wrapToolRegistration(createRegisterArtifactTool(toolDeps)),
+      wrapToolRegistration(createRunActionTool(toolHost)),
     ]
     this.kernelToolSchemas.clear()
     for (const tool of kernelTools) {
@@ -229,7 +216,7 @@ export class RuntimeToolRegistry {
    * and post-settlement calls are silently ignored per SDK contract.
    */
   installPluginTools(specs: DerivedToolSpec[]): void {
-    const { registry, getPluginHost, redact, handledToolCalls } = this.options
+    const { registry, getPluginHost, redact } = this.options
     const host = getPluginHost()
     if (!host) return
     this.pluginToolSchemas.clear()
@@ -296,7 +283,7 @@ export class RuntimeToolRegistry {
           }) as ToolExecutionResult
         },
       })
-      return wrapToolRegistration(handledToolCalls, raw)
+      return wrapToolRegistration(raw)
     })
     registry.install(defineExtension({ name: 'helmx-plugins', tools }))
   }

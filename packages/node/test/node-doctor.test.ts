@@ -439,7 +439,7 @@ test('doctor reports hub error truthfully when Hub is unreachable', { timeout: 6
     await writeNodeIdentity(dir, { nodeId: 'doctor-dead-node', token: 'doctor-dead-node:secret-1', hubUrl: 'http://127.0.0.1:1' });
     const report = await runNodeDoctor({
       dataDir: dir,
-      env: { ...sanitizedHostEnv(), HERDR_SOCKET_PATH: path.join(dir, 'no.sock') },
+      env: sanitizedHostEnv(),
       connectTimeoutMs: 2_000,
       checkPrivilege: async () => ({ isRoot: false, passwordlessSudo: false }),
     });
@@ -447,47 +447,6 @@ test('doctor reports hub error truthfully when Hub is unreachable', { timeout: 6
     const hubCheck = report.checks.find((c) => c.id === 'hub');
     assert.equal(hubCheck?.status, 'error');
   } finally {
-    await fs.rm(dir, { recursive: true, force: true });
-  }
-});
-
-test('doctor reports ok when herdr_ipc is reachable and info when unreachable', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helmx-node-doctor-ipc-');
-  const token = 'doctor-ipc-node:secret-1';
-  const hub = await startDoctorHub(token);
-  const sockets = new Set<net.Socket>();
-  const ipcServer = net.createServer((socket) => {
-    sockets.add(socket);
-    socket.once('close', () => sockets.delete(socket));
-  });
-  const sockPath = path.join(dir, 'herdr.sock');
-  await new Promise<void>((resolve) => ipcServer.listen(sockPath, resolve));
-  try {
-    await writeNodeIdentity(dir, { nodeId: 'doctor-ipc-node', token, hubUrl: hub.url });
-    // Reachable: ok
-    const reachable = await runNodeDoctor({
-      dataDir: dir,
-      env: { ...sanitizedHostEnv(), HERDR_SOCKET_PATH: sockPath },
-      checkPrivilege: async () => ({ isRoot: false, passwordlessSudo: false }),
-    });
-    const ipcOk = reachable.checks.find((c) => c.id === 'herdr_ipc');
-    assert.equal(ipcOk?.status, 'ok', JSON.stringify(reachable.checks));
-    assert.equal((ipcOk?.details as { endpoint?: string } | undefined)?.endpoint, sockPath);
-
-    // Unreachable: info (optional capability does not block overall health)
-    const missing = await runNodeDoctor({
-      dataDir: dir,
-      env: { ...sanitizedHostEnv(), HERDR_SOCKET_PATH: path.join(dir, 'missing.sock') },
-      checkPrivilege: async () => ({ isRoot: false, passwordlessSudo: false }),
-    });
-    const ipcInfo = missing.checks.find((c) => c.id === 'herdr_ipc');
-    assert.equal(ipcInfo?.status, 'info');
-    assert.match(ipcInfo?.message ?? '', /Herdr IPC not detected/);
-    assert.equal(missing.ok, true, 'info check must not mark overall ok=false');
-  } finally {
-    for (const socket of sockets) socket.destroy();
-    await new Promise<void>((resolve) => ipcServer.close(() => resolve()));
-    await hub.close();
     await fs.rm(dir, { recursive: true, force: true });
   }
 });

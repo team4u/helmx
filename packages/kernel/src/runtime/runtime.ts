@@ -30,7 +30,6 @@ import {
   type EnvExecRequest,
   type EnvExecResponse,
   type ExternalTriggerEnvelope,
-  type GuardedMutationExpectation,
   type MaybePromise,
   type ModelCatalog,
   type ModelProvidersRefreshResult,
@@ -126,13 +125,6 @@ export class KernelRuntime {
   private closed = false
   #fatalError: HelmxError | undefined
   private fatalStorageNotified = false
-  private readonly handledToolCalls = new Map<
-    string,
-    {
-      conversationId: number | undefined
-      result: { output: Array<{ type: 'text'; text: string }>; isError: boolean }
-    }
-  >()
   private settledInflight: Promise<void> = Promise.resolve()
   readonly nodes: NodeManager
   readonly conversations: ConversationService
@@ -144,6 +136,7 @@ export class KernelRuntime {
   readonly documentStore: {
     get<T>(key: string, initial: T): T
     set<T>(key: string, value: T): void
+    setJson(key: string, valueJson: string): void
     deletePlugin(pluginId: string): void
     flush(): Promise<void>
   }
@@ -194,7 +187,6 @@ export class KernelRuntime {
     this.svc = assembleRuntimeServices(this, init, {
       store: this.store,
       stashService: this.stashService,
-      handledToolCalls: this.handledToolCalls,
       dispatchTurnSettled: (payload, consumed) => this.dispatchTurnSettled(payload, consumed),
       onSettleInflight: (run) => {
         // Absorb errors per run: teardown awaits `settledInflight()` three times; any unhandled rejection
@@ -516,7 +508,6 @@ export class KernelRuntime {
       // the scheduler has already left its paused state.
       this.#started = true
       if (this.pluginHost) await this.pluginHost.reconcile()
-      await this.emitHostEvent('runtime.started', {}, { broadcast: false })
     })()
     this.startPromise = attempt
     try {
@@ -533,15 +524,6 @@ export class KernelRuntime {
       throw new HelmxError('validation_error', `Hub URL must be a non-empty string: ${String(url)}`, 400)
     }
     this.hubUrlValue = url
-  }
-
-  buildSpawnEnv(
-    conversationId: number,
-    cwd: string,
-    nodeId?: string,
-    options?: { secretNames?: string[] },
-  ): Record<string, string> {
-    return this.agentSpawn.buildSpawnEnv(conversationId, cwd, nodeId, options)
   }
 
   // ------------------------------------------------------------------
@@ -641,14 +623,6 @@ export class KernelRuntime {
 
   private async dispatchTurnSettled(payload: TurnSettledPayload, consumed: ConversationInput[]): Promise<void> {
     const convId = payload.conversation.id
-    for (const [id, entry] of this.handledToolCalls) {
-      if (entry.conversationId === convId) this.handledToolCalls.delete(id)
-    }
-    // Reclaim turn-scoped secrets at this turn's authoritative settlement point (unified across completed/failed/aborted;
-    // `settledRuns` prevents duplicate firing): must run before entering hook chain so newly registered turn secrets
-    // generated inside `turn_settled` receive a higher counter (for the next turn) and are not swept away here; stops
-    // injection only while keeping old `byUuid` values redacted.
-    this.stashService.settleTurn(convId)
     const turnEvent: TurnSettledPayload = { ...payload, inputs: consumed }
     try {
       const outcome = await this.svc.hookBridge.runHookChain('turn_settled', turnEvent)
@@ -791,30 +765,12 @@ export class KernelRuntime {
     return this.conversations.resetConversation(id, opts)
   }
 
-  async resetConversationGuarded(
-    id: number,
-    opts?: { handoff?: string },
-    guard?: GuardedMutationExpectation,
-  ): Promise<ConversationSummary> {
-    this.assertWritable()
-    return this.conversations.resetConversationGuarded(id, opts, guard)
-  }
-
   async compactConversation(
     id: number,
     opts?: { instructions?: string },
   ): Promise<{ taskId: number; conversation: ConversationSummary }> {
     this.assertWritable()
     return this.conversations.compactConversation(id, opts)
-  }
-
-  async compactConversationGuarded(
-    id: number,
-    opts?: { instructions?: string },
-    guard?: GuardedMutationExpectation,
-  ): Promise<{ taskId: number; conversation: ConversationSummary }> {
-    this.assertWritable()
-    return this.conversations.compactConversationGuarded(id, opts, guard)
   }
 
   async forkConversation(
@@ -903,11 +859,6 @@ export class KernelRuntime {
   // Directory coordinate lookups
   // ------------------------------------------------------------------
 
-  async skillDirectory(id: string): Promise<string> {
-    // Plugin-bootstrapped skills always target the writable `dataDir`; shared roots are read-only via `SkillService.readFile`.
-    return this.svc.skillsSvc.directory(id)
-  }
-
   async profileDirectory(id: string): Promise<string> {
     return profileDirectoryHelper(this.dataDir, id)
   }
@@ -941,10 +892,6 @@ export class KernelRuntime {
   async cancelAsk(id: string, reason?: 'cancelled' | 'superseded'): Promise<void> {
     this.assertWritable()
     await this.svc.asks.cancelAsk(id, reason ?? 'cancelled')
-  }
-
-  registerAskSeqResolver(resolver: (askId: string) => MaybePromise<number | undefined>): () => void {
-    return this.svc.asks.registerSeqResolver(resolver)
   }
 
   // ------------------------------------------------------------------

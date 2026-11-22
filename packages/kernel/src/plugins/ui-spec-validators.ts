@@ -16,25 +16,16 @@ import {
   HelmxError,
   RESERVED_SLASH_COMMANDS,
   SIDEBAR_ITEM_BADGE_FIELDS,
-  UI_ACTION_SURFACES,
   UI_SPEC_PATTERNS,
   UI_SPEC_SCHEMAS,
   WORKBENCH_PANEL_BADGE_FIELDS,
   isPlainObject,
   parseNonEmptyLocalizedText,
   type PluginUiContribution,
-  type UiActionSpec,
 } from '@helmx/protocol';
-
-/** Re-exported from `@helmx/protocol` (shared by plugin-context and validation). */
-export { UI_ACTION_SURFACES };
 
 /** Host-reserved command slash triggers (`skill:` prefix is also reserved). */
 const RESERVED_COMMAND_SLASH: ReadonlySet<string> = new Set(RESERVED_SLASH_COMMANDS);
-
-const UI_ACTION_TARGET_BY_SURFACE: Readonly<Record<string, UiActionSpec['target']>> = Object.fromEntries(
-  (Object.keys(UI_ACTION_SURFACES) as Array<UiActionSpec['target']>).map((key) => [UI_ACTION_SURFACES[key], key]),
-);
 
 const UNSAFE_TOP_LEVEL_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
@@ -104,69 +95,6 @@ function assertUniqueStrings(
 // Early phase validators
 // ---------------------------------------------------------------------------
 
-const UI_ACTION_CHECKERS: Readonly<Record<UiActionSpec['target'], Validator<TProperties, TObject>>> = {
-  'conversation:header': Compile(UI_SPEC_SCHEMAS.uiAction['conversation:header']),
-  'conversation:row': Compile(UI_SPEC_SCHEMAS.uiAction['conversation:row']),
-  'timeline:entry': Compile(UI_SPEC_SCHEMAS.uiAction['timeline:entry']),
-};
-
-function validateUiActionSpec(spec: Record<string, unknown>, id: string, ctx: UiSpecContext): void {
-  const { pluginId } = ctx;
-  const target = UI_ACTION_TARGET_BY_SURFACE[ctx.surface];
-  if (target === undefined) return;
-  if (spec['actionId'] === undefined && spec['client'] === undefined) {
-    throw new HelmxError(
-      'invalid_ui_spec',
-      `plugin ${pluginId} ui.action(${target}) must provide at least one of actionId or client`,
-      400,
-      { pluginId, id },
-    );
-  }
-  runCompiledUiSchema(UI_ACTION_CHECKERS[target], spec, id, ctx, (errors) => {
-    const err = findErrorByPathPrefix(errors, ['/actionId', '/actionPluginId', '/placement', '/kinds', '/roles']);
-    const p = err?.instancePath ?? '';
-    if (p.startsWith('/actionId')) {
-      return {
-        message: `plugin ${pluginId} ui.action actionId must be a non-empty action ID without dots (use actionPluginId for cross-plugin actions)`,
-        details: { pluginId, id },
-      };
-    }
-    if (p.startsWith('/actionPluginId')) {
-      return { message: `plugin ${pluginId} ui.action actionPluginId must be a non-empty plugin ID`, details: { pluginId, id } };
-    }
-    if (p.startsWith('/placement')) {
-      return {
-        message:
-          target !== 'conversation:header'
-            ? `plugin ${pluginId} ui.action(${target}) disallows placement (only conversation:header supports placement)`
-            : `plugin ${pluginId} ui.action placement only allows 'toolbar' | 'menu'`,
-        details: { pluginId, id },
-      };
-    }
-    if (p.startsWith('/kinds')) {
-      return {
-        message:
-          target !== 'timeline:entry'
-            ? `plugin ${pluginId} ui.action(${target}) disallows kinds (only timeline:entry supports kinds)`
-            : `plugin ${pluginId} ui.action(timeline:entry) kinds must be a non-empty string array`,
-        details: { pluginId, id },
-      };
-    }
-    if (p.startsWith('/roles')) {
-      return {
-        message:
-          target !== 'timeline:entry'
-            ? `plugin ${pluginId} ui.action(${target}) disallows roles (only timeline:entry supports roles)`
-            : `plugin ${pluginId} ui.action(timeline:entry) roles only allows a non-empty array of 'user' | 'assistant'`,
-        details: { pluginId, id },
-      };
-    }
-    return { message: `plugin ${pluginId} ui.action(${target}) invalid spec: ${err?.message ?? 'unknown'}`, details: { pluginId, id } };
-  });
-  // `target` duplicates the registered surface name; strip to avoid storage ambiguity.
-  delete spec['target'];
-}
-
 const COMMAND_PALETTE_CHECKER = Compile(UI_SPEC_SCHEMAS.commandPalette);
 
 function validateCommandPaletteSpec(spec: Record<string, unknown>, id: string, ctx: UiSpecContext): void {
@@ -214,38 +142,6 @@ function validateCommandPaletteSpec(spec: Record<string, unknown>, id: string, c
       400,
       { pluginId, id },
     );
-  }
-}
-
-const PROFILE_RUNTIME_KIND_CHECKER = Compile(UI_SPEC_SCHEMAS.profileRuntimeKind);
-const PROFILE_RUNTIME_SUGGESTIONS_CHECKER = Compile(UI_SPEC_SCHEMAS.profileRuntimeSuggestions);
-
-function validateProfileRuntimeSpec(spec: Record<string, unknown>, id: string, ctx: UiSpecContext): void {
-  const { pluginId } = ctx;
-  runCompiledUiSchema(PROFILE_RUNTIME_KIND_CHECKER, spec, id, ctx, () => ({
-    message: `plugin ${pluginId} ui.profileRuntime  kind must match /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/`,
-    details: { pluginId, id, kind: String(spec['kind']) },
-  }));
-  if (parseNonEmptyLocalizedText(spec['label']) === undefined) {
-    throw new HelmxError('invalid_ui_spec', `plugin ${pluginId} ui.profileRuntime need to non-empty display label`, 400, {
-      pluginId,
-      id,
-    });
-  }
-  runCompiledUiSchema(PROFILE_RUNTIME_SUGGESTIONS_CHECKER, spec, id, ctx, () => ({
-    message: `plugin ${pluginId} ui.profileRuntime  agentSuggestions must be non-empty string array`,
-    details: { pluginId, id },
-  }));
-  const kind = spec['kind'] as string;
-  for (const u of ctx.siblings) {
-    if (u.surface === 'profile.runtime' && (u.spec as { kind?: unknown }).kind === kind) {
-      throw new HelmxError(
-        'duplicate_profile_runtime_kind',
-        `plugin ${pluginId} duplicate declaration profile.runtime kind "${kind}"`,
-        409,
-        { pluginId, kind },
-      );
-    }
   }
 }
 
@@ -339,47 +235,6 @@ function validateToolViewSpec(spec: Record<string, unknown>, id: string, ctx: Ui
     }
     return { message: `plugin ${pluginId} ui.toolView  toolNames must be non-empty string array`, details: { pluginId, id } };
   });
-}
-
-const ARTIFACT_PREVIEWER_CHECKER = Compile(UI_SPEC_SCHEMAS.artifactPreviewer);
-
-const ARTIFACT_MATCH_EXPECT: Readonly<Record<'mimeTypes' | 'extensions', string>> = {
-  mimeTypes: 'only allows lowercase exact type/subtype or type/* wildcards; disallows */*, parameters, globs, and uppercase',
-  extensions: 'only allows lowercase dot-prefixed suffixes (e.g. .md, .tar.gz) without path separators or wildcards',
-};
-
-function validateArtifactPreviewerSpec(spec: Record<string, unknown>, id: string, ctx: UiSpecContext): void {
-  const { pluginId, fnName } = ctx;
-  if (parseNonEmptyLocalizedText(spec['label']) === undefined) {
-    throw new HelmxError('invalid_ui_spec', `plugin ${pluginId} ui.artifactPreviewer need to non-empty display label`, 400, {
-      pluginId,
-      id,
-    });
-  }
-  runCompiledUiSchema(ARTIFACT_PREVIEWER_CHECKER, spec, id, ctx, (errors) => {
-    const err = findErrorByPathPrefix(errors, ['/mimeTypes', '/extensions']);
-    const field: 'mimeTypes' | 'extensions' = err?.instancePath.startsWith('/extensions') ? 'extensions' : 'mimeTypes';
-    const seg = err?.instancePath.slice(`/${field}/`.length);
-    if (seg !== undefined && seg !== '' && /^\d+$/.test(seg)) {
-      const value = (spec[field] as unknown[])[Number(seg)];
-      if (typeof value === 'string') {
-        return {
-          message: `plugin ${pluginId} ui.${fnName}  ${field} items "${value}" illegal (${ARTIFACT_MATCH_EXPECT[field]})`,
-          details: { pluginId, id, field, value },
-        };
-      }
-    }
-    return {
-      message: `plugin ${pluginId} ui.${fnName}  ${field} must be non-empty string array`,
-      details: { pluginId, id, field },
-    };
-  });
-  for (const field of ['mimeTypes', 'extensions'] as const) {
-    const list = spec[field] as string[] | undefined;
-    if (list !== undefined) {
-      assertUniqueStrings(list, pluginId, `ui.${fnName}  ${field} contains duplicate items`, { pluginId, id, field });
-    }
-  }
 }
 
 const COMPLETER_TRIGGER_AND_SOURCE_CHECKER = Compile(UI_SPEC_SCHEMAS.composerCompleter);
@@ -570,11 +425,7 @@ function validateSidebarItemSpec(spec: Record<string, unknown>, id: string, ctx:
 // ---------------------------------------------------------------------------
 
 const EARLY_VALIDATORS: Readonly<Record<string, UiSpecValidator>> = {
-  [UI_ACTION_SURFACES['conversation:header']]: validateUiActionSpec,
-  [UI_ACTION_SURFACES['conversation:row']]: validateUiActionSpec,
-  [UI_ACTION_SURFACES['timeline:entry']]: validateUiActionSpec,
   commandPalette: validateCommandPaletteSpec,
-  'profile.runtime': validateProfileRuntimeSpec,
   'plugin.slot': validateSlotSpec,
 };
 
@@ -583,7 +434,6 @@ const LATE_VALIDATORS: Readonly<Record<string, UiSpecValidator>> = {
   'timeline.renderer': validateTimelineRendererSpec,
   'markdown.codeBlock': validateMarkdownCodeBlockSpec,
   'tool.view': validateToolViewSpec,
-  'artifact.previewer': validateArtifactPreviewerSpec,
   'composer.completer': validateComposerCompleterSpec,
   'workbench.panel': validateWorkbenchPanelSpec,
 };

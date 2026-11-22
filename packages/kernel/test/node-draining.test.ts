@@ -36,7 +36,7 @@ async function registerFakeNode(registry: NodeRegistry, nodeId: string, rpc: Rec
   return socket
 }
 
-test('fabric.openTunnel (socketPath): draining rejection throws HelmxError node_draining (503)', { timeout: 60_000 }, async () => {
+test('fabric.openTunnel (TCP): draining rejection throws HelmxError node_draining (503)', { timeout: 60_000 }, async () => {
   const fabric = createEnvFabric({ authenticate: () => true })
   try {
     const socket = await registerFakeNode(fabric.registry, 'drain-node', {
@@ -47,35 +47,10 @@ test('fabric.openTunnel (socketPath): draining rejection throws HelmxError node_
       nodeTunnelAbort: async () => undefined,
     })
     await assert.rejects(
-      fabric.openTunnel('drain-node', { socketPath: '/tmp/herdr.sock' }),
+      fabric.openTunnel('drain-node', { host: '127.0.0.1', port: 8080 }),
       (error: unknown) =>
         error instanceof HelmxError && error.code === 'node_draining' && error.status === 503 && /draining/.test(error.message),
     )
-    socket.close()
-  } finally {
-    await fabric.dispose()
-  }
-})
-
-test('fabric.getNodeHostEnv: read-only discovery passes through target node env snapshot while draining', { timeout: 60_000 }, async () => {
-  const fabric = createEnvFabric({ authenticate: () => true })
-  try {
-    const socket = await registerFakeNode(fabric.registry, 'drain-env-node', {
-      nodeHostEnv: async () => ({
-        ok: true,
-        value: {
-          platform: 'win32',
-          homeDir: 'C:\\Users\\dev',
-          tempDir: 'C:\\Users\\dev\\AppData\\Local\\Temp',
-          dirs: { appData: 'C:\\Users\\dev\\AppData\\Roaming', userProfile: 'C:\\Users\\dev' },
-          env: { HERDR_SOCKET_PATH: '\\\\.\\pipe\\herdr-dev' },
-        },
-      }),
-    })
-    const snapshot = await fabric.getNodeHostEnv('drain-env-node', { envKeys: ['HERDR_SOCKET_PATH'] })
-    assert.equal(snapshot.platform, 'win32')
-    assert.equal(snapshot.dirs.appData, 'C:\\Users\\dev\\AppData\\Roaming')
-    assert.equal(snapshot.env['HERDR_SOCKET_PATH'], '\\\\.\\pipe\\herdr-dev')
     socket.close()
   } finally {
     await fabric.dispose()

@@ -17,6 +17,7 @@ import type {
   ConversationInit,
   ConversationInputResult,
   ConversationListFilter,
+  ConversationOwnership,
   ConversationPatch,
   ConversationSubmissionInfo,
   ConversationSummary,
@@ -75,12 +76,10 @@ interface ConversationServiceOptions {
   readonly cancelAsksByConversation: (id: number) => Promise<void>
   /** Supersede pending asks before in-place rewrite+resend (host injects asks.listPendingByConversation + cancelAsk). */
   readonly cancelPendingAsksForRewrite: (id: number) => Promise<void>
-  /** Clean up leftover handled tool calls (backstop on delete/abort). */
-  readonly evictHandledToolCalls: (conversationId: number) => void
-  /** Ownership annotation (restores 'human' as backstop on delete; host-injected). */
-  readonly markOwnership: (id: number, owner: 'helmx' | 'bot' | 'human') => void
+  /** Ownership annotation (host-injected). */
+  readonly markOwnership: (id: number, owner: ConversationOwnership) => void
   /** Current ownership lookup (for summary projection). */
-  readonly ownershipOf: (id: number) => 'helmx' | 'bot' | 'human'
+  readonly ownershipOf: (id: number) => ConversationOwnership
   /** Input hook pipeline (host HookBridge.runHookChain). */
   readonly runInputHook: (payload: unknown) => Promise<{ action: string; value?: unknown; reason?: string; result?: unknown } | undefined>
   /** Shutdown guard (isClosed). */
@@ -196,7 +195,6 @@ export class ConversationService {
       isClosed: this.o.isClosed,
       alignConversationModel: (id) => this.alignConversationModel(id),
       withOwnership: (summary) => this.withOwnership(summary),
-      assertMutationGuard: (id, guard) => this.assertMutationGuard(id, guard),
     })
 
     this.detailOps = new ConversationDetailService({
@@ -265,12 +263,11 @@ export class ConversationService {
     }
     if (
       guard.expectedOwnership !== undefined &&
-      guard.expectedOwnership !== 'bot' &&
       guard.expectedOwnership !== 'helmx'
     ) {
       throw new HelmxError(
         'validation_error',
-        `expectedOwnership only allows 'bot' | 'helmx' (automation invariant forbids human): got ${String(guard.expectedOwnership)}`,
+        `expectedOwnership only allows 'helmx' (automation invariant forbids human): got ${String(guard.expectedOwnership)}`,
         400,
         { expectedOwnership: guard.expectedOwnership },
       )
@@ -370,7 +367,6 @@ export class ConversationService {
       await conversation.abort(BACKGROUND_CONTEXT)
       if (wasBusy) this.tracker.settleAborted(id)
       else this.tracker.clearQueuedTracking(id)
-      this.o.evictHandledToolCalls(id)
     })
   }
 
@@ -785,13 +781,9 @@ export class ConversationService {
     // rather than being swallowed into fake success.
     await this.o.cancelAsksByConversation(id)
     await this.artifactsSvc.deleteConversation(id)
-    // Reclaim in-memory secrets synchronously (including old values retained for redaction): deleted conversations free everything.
-    this.stash.clear(id)
     this.tracker.stopObserving(id)
     this.store.deleteConv(id)
-    this.o.evictHandledToolCalls(id)
     this.o.evictConversationBase(id)
-    this.o.markOwnership(id, 'human')
     this.events.publish('conversation.deleted', { conversationId: id })
   }
 
@@ -1089,7 +1081,6 @@ export class ConversationService {
     await conversation.abort(BACKGROUND_CONTEXT)
     if (wasBusy) this.tracker.settleAborted(id)
     else this.tracker.clearQueuedTracking(id)
-    this.o.evictHandledToolCalls(id)
   }
 
   // ------------------------------------------------------------------
@@ -1101,41 +1092,12 @@ export class ConversationService {
     return this.contextOps.resetConversation(id, opts)
   }
 
-  /**
-   * Automated guarded reset: guard shape validated up front (fail-fast), then the whole fetch + re-check +
-   * irreversible SDK reset runs inside the per-conversation mutation gate (serialized with guarded abort/submit);
-   * the synchronous ownership/CAS re-check fires right before the SDK reset call via contextOps.
-   */
-  async resetConversationGuarded(
-    id: number,
-    opts?: { handoff?: string },
-    guard: GuardedMutationExpectation = {},
-  ): Promise<ConversationSummary> {
-    this.assertWritable()
-    this.assertGuardShape(guard)
-    return this.withMutationGate(id, () => this.contextOps.resetConversation(id, opts, guard))
-  }
-
   async compactConversation(
     id: number,
     opts?: { instructions?: string },
   ): Promise<{ taskId: number; conversation: ConversationSummary }> {
     this.assertWritable()
     return this.contextOps.compactConversation(id, opts)
-  }
-
-  /**
-   * Automated guarded compaction: same serial-domain + pre-enqueue re-check invariants as resetConversationGuarded;
-   * a failed re-check never enqueues the background compaction task.
-   */
-  async compactConversationGuarded(
-    id: number,
-    opts?: { instructions?: string },
-    guard: GuardedMutationExpectation = {},
-  ): Promise<{ taskId: number; conversation: ConversationSummary }> {
-    this.assertWritable()
-    this.assertGuardShape(guard)
-    return this.withMutationGate(id, () => this.contextOps.compactConversation(id, opts, guard))
   }
 
   async forkConversation(

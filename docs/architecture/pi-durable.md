@@ -37,7 +37,7 @@ stateDiagram-v2
 
 每次提交的 `helmx.input` entry 附着输入来源 `origin: 'human' | 'agent' | 'trigger'`，从 CLI/HTTP 一路透传到 `turn_settled` 钩子，供插件区分人类直连输入与代理/外部触发输入（例如 `builtin:memory` 的每日 Dream 仅从 `origin === 'human'` 的输入采集长期记忆候选）。
 
-会话归属权 `ownedBy: 'human' | 'bot' | 'helmx'`（缺省 `human`）是自动化红线的唯一可信判定来源：对 `bot/helmx` 归属的后台会话允许自动恢复或中止；对 `human` 的人类直连会话或 Herdr 终端窗格**严禁发送任何按键或中止指令**，仅允许只读诊断与通知。未标记一律按 `human` 对待。
+会话归属权 `ownedBy: 'human' | 'helmx'`（缺省 `human`，持久化在 `helmx_conversations.owned_by` 列，O(1) 读写）是自动化红线的唯一可信判定来源：对 `helmx` 归属的后台会话允许自动恢复或中止；对 `human` 的人类直连会话**严禁自动化发送输入或中止指令**，仅允许只读诊断与通知。未标记一律按 `human` 对待。
 
 ### guarded 端口：人类会话保护的执行层落地
 
@@ -52,7 +52,7 @@ stateDiagram-v2
 | 分组 | 表 | 用途 |
 | :--- | :--- | :--- |
 | pi-durable 原生 | `pi_*`（SDK 管理） | 会话骨架与消息/事件流水 |
-| Helmx 扩展 | `helmx_conversations` | 会话元数据：title、profile_id、tags、parent_conversation_id、node_id、cwd、model、thinking_level、unread、pinned、state_change_seq、completion_seq |
+| Helmx 扩展 | `helmx_conversations` | 会话元数据：title、profile_id、tags、parent_conversation_id、owned_by、node_id、cwd、model、thinking_level、unread、pinned、state_change_seq、completion_seq |
 | Helmx 扩展 | `helmx_conversation_tool_links` | 子会话与父工具调用 ID 关联 |
 | Helmx 扩展 | `helmx_asks` | AskDoc 审批（spec、status、expected_state_seq） |
 | Helmx 扩展 | `helmx_artifacts` | 产物索引（path、mime_type、size；按 conversation_id 索引） |
@@ -66,44 +66,26 @@ stateDiagram-v2
 
 `helmx_conversation_fts(conversation_id UNINDEXED, entry_id UNINDEXED, title, body, tokenize='trigram')` 是**可重建的派生索引**，不是权威数据：`body` 只索引脱敏后的纯文本（secret 值永不入库），启动期检测 `sqlite_master` DDL 与 `helmx_seq('fts_schema_version')` 版本水位，仅在分词器 DDL 变更或上次重建中断时自动执行一次原子重建，常态重启不重复全表扫描，绝不允许向其写入 `pi_*` 表语义。全文检索入口为 `GET /api/search?q=` 与 `pnpm helmx search <query>`：多词按空格拆分执行 **AND** 语义（引号转义防语法注入；超过 1000 字符或 32 个去重词项在边界显式返回 `400 validation_error`，绝不静默截断查询词）；>= 3 码点词项走 FTS5 `trigram` 倒排索引与 `bm25`（标题加权）排序，< 3 码点短词（如两字中文与短英文词）诚实走 `instr(lower(...))` 精确子串过滤并在混合查询中叠加于 `trigram` 候选集之上；结果按每会话上限（默认 2 条，同会话内正文命中优先于纯标题命中）去重截断，返回纯文本 `snippet`、会话 `title` 与 UTF-16 安全偏移 `highlights`（零 HTML / 控制哨兵泄露；纯标题命中省略 `entryId` 且每会话折叠为一条会话级导航，避免定位到不含查询词的无关消息）。
 
-## SecretStash：纯内存机密隔离
+## SecretStash：全局纯内存明文脱敏
 
-机密值只存在于 Hub 进程内存（`StashedSecret` 对象，按 `conversationId` 命名空间隔离），持久层与模型上下文仅见到 `[REDACTED:stash:<uuid>]` 占位符。生命周期：用户或插件登记机密 → stash 生成 UUID 占位符 → 数据库/日志/时间线/FTS 全部只落占位符 → EnvFabric 执行命令前现场还原注入环境变量（`HELMX_SECRET_*` 或登记时指定的环境变量名）→ 命令输出出站前过全局脱敏（占位符与已登记明文替换 `[REDACTED]`）。
-
-`AskDoc` 字段标记 `secret: true` 时，用户提交的答案直接进入 stash，持久层仅存占位符；可选 `secretLifetime: { ttlMs?, scope? }`（仅 secret 字段允许，`ttlMs` 为不超 24h 的正 safe integer，`scope` 为 `conversation`（缺省）/ `turn`）声明生命周期。插件私有 secrets 持久化于 `credentials.json` 的 `pluginSecrets.<pluginId>`（恒 0600），明文不进入公共文档、事件或模型上下文。
-
-**生命周期：停止注入 != 停止脱敏。** TTL 到期（读路径按注入 clock 惰性判定，无定时器）或 `turn` 作用域的回合结算（`completed | failed | aborted` 统一漏斗，按「出生结算序」精确归属——回合内登记属本回合，结算后落地/late hook 登记属下一回合，idle 不清扫）后，秘密仅从注入环境移除；`byUuid` 旧值（含同名覆盖前的旧值）永久保留用于全部输出脱敏（含跨 chunk 流式）。会话删除时 `stash.clear(conversationId)` 一并回收脱敏旧值。`addRedaction(value)` 登记全局逐值脱敏（如内核受管 `HELMX_TOKEN`）：非环境变量、不计入统计、不随 `clear` 清除；多个登记可叠放同一值，全部解除后才停止脱敏。
+`SecretStash` 是纯内存的全局明文脱敏器（`addRedaction(value)`、`redact(text)`、`createStreamingRedactor()`、`clear()`）：已登记的凭据与受管令牌（如 `HELMX_TOKEN`、模型供应商 API Key、插件配置 `secret: true` 字段）在写入工具输出、日志、产物文本、时间线、FTS 索引与 SSE 事件前统一替换为 `[REDACTED]`，支持跨 chunk 流式脱敏；多个登记可引用计数叠放同一值，全部释放后才停止脱敏。插件私有 secrets 持久化于 `credentials.json` 的 `pluginSecrets.<pluginId>`（恒 0600），明文不进入公共文档、事件或模型上下文。
 
 ### 诚实安全边界
 
-stash 防的是**持久化泄漏与上下文泄漏**：提示词注入、日志落盘、数据库文件被读取都拿不到明文。但它**不承诺对可信代码零泄漏**：任意 Shell 命令与进程内插件（含全栈微应用）天然拥有宿主权限，可以读环境变量、扫描进程内存——这是可信代码的固有权限，本模块不设防也不应宣称设防。同理，TTL/回合结束无法从已启动的子进程撤回已注入的环境变量，只保证后续 spawn 不再注入。
+`SecretStash` 防的是**持久化泄漏与上下文泄漏**：提示词注入、日志落盘、数据库文件被读取都拿不到已登记明文。但它**不承诺对可信代码零泄漏**：任意 Shell 命令与进程内插件（含全栈微应用）天然拥有宿主权限，可以读环境变量、扫描进程内存——这是可信代码的固有权限，本模块不设防也不应宣称设防。
 
 ## AskDoc：CAS 乐观锁审批
 
-智能体需要人类授权时创建 `AskDoc` 并把会话置为 `blocked`。字段类型支持 `text`（文本输入）、`select`（单选列表）与 `confirm`（确认框）；`secret: true` 标记的答案走 SecretStash。`ctx.host.createAsk(spec)` 返回 Promise，正常三态终局（`answered / cancelled / superseded`）均 resolve，只有验证/I/O/宿主失败才 reject——调用方无需区分「人取消了」与「系统坏了」。
+智能体或插件需要人类确认时创建 `AskDoc` 并把会话置为 `blocked`。字段类型支持 `text`（文本输入）、`select`（单选列表）与 `confirm`（确认框）。`ctx.host.createAsk(spec)` 返回 Promise，正常三态终局（`answered / cancelled / superseded`）均 resolve，只有验证/I/O/宿主失败才 reject——调用方无需区分「人取消了」与「系统坏了」。
 
-### expectedStateSeq 防双端竞态
+### expectedStateSeq 防竞态
 
-同一智能体可能同时连接 Web 控制台与 Herdr 终端窗格：人类在终端直接按键处理时，底层 `stateChangeSeq` 已推进，而 Web 端的审批卡片仍是旧水位——若无保护，Web 端迟到的提交会向终端重复发送回车。
+`AskDoc` 可携带持久化水位 `spec.expectedStateSeq` 防止迟到提交覆盖最新状态：
 
-```mermaid
-sequenceDiagram
-    participant Agent as 智能体会话
-    participant Hub as Hub
-    participant Web as Web 控制台
-    participant Terminal as Herdr 终端窗格
-
-    Agent->>Hub: createAsk（记录 expectedStateSeq = N）
-    Hub->>Hub: 会话置 blocked，推送审批卡片
-    Terminal->>Terminal: 人类直接按键处理
-    Terminal->>Hub: 按键上报（stateChangeSeq 推进至 N+1）
-    Web->>Hub: POST /api/asks/:id/answer（expectedStateSeq = N）
-    Hub->>Hub: CAS 校验失败（N < 当前水位）
-    Hub-->>Web: AskDoc 流转为 superseded 销单
-    Note over Hub: 不向终端重复发送任何按键
-```
-
-CAS 以持久化的 `spec.expectedStateSeq` 为准：客户端提供的不同 seq 返回 `409 ask_state_conflict`；已结算审批再操作返回 `409 ask_already_settled`。当前水位无法解析时返回 `ask_state_unavailable`。CAS 水位的解析可注册异步 resolver（`ctx.host.registerAskSeqResolver`）——Herdr 场景下真实水位需经远端 IO 现查，而非创建时快照；声明的 expectedStateSeq 无 resolver 命中时显式拒绝校验，不猜测。`pnpm helmx asks answer --expected-state-seq N` 在 CLI 侧提供同一保护。对 `ownedBy: 'human'` 会话的终端窗格，任何自动化路径（含 superseded 流转）都不得发送按键，这是归属权红线的直接推论；Herdr 的 `agent.send_keys` 强制要求服务端 `send_keys_expected_state_seq` 能力门禁。
+- 客户端提交审批时若提供的 `expectedStateSeq` 与审批记录不一致，返回 `409 ask_state_conflict`；
+- 会话当前 `stateChangeSeq` 已推进超过 `expectedStateSeq` 时，审批自动流转 `superseded` 销单，绝不重复提交；
+- 已结算审批再操作返回 `409 ask_already_settled`；
+- `pnpm helmx asks answer --expected-state-seq N` 在 CLI 侧提供同一保护。
 
 ## EventHub SSE：快照、事件代与短断线续传
 

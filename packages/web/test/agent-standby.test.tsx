@@ -546,13 +546,10 @@ describe("agent-standby", () => {
     assert.equal(cwdInput?.value, '/remote/work', 'the standby environment bar inherited the remote directory')
   })
 
-  test('unavailable states shown honestly: non-human-selectable and plugin-disabled profiles', { timeout: 60_000 }, async () => {
-    await mount('#/a/singleton')
-    assert.ok(document.body.textContent?.includes('This profile does not support manual new conversations'), 'the resident singleton reports explicit unavailability')
+  test('unavailable states shown honestly: plugin-disabled profile', { timeout: 60_000 }, async () => {
+    await mount('#/a/managed')
+    assert.ok(document.body.textContent?.includes('This profile does not support manual new conversations'), 'a profile managed by a disabled plugin reports explicit unavailability')
     assert.equal(document.querySelectorAll('textarea').length, 0, 'no draft input renders')
-    await act(async () => { navigateHash('#/a/managed') })
-    await waitForCondition(() => window.location.hash === '#/a/managed')
-    assert.ok(document.body.textContent?.includes('This profile does not support manual new conversations'), 'a profile managed by a disabled plugin is equally unavailable')
     assert.equal(state.createCalls.length, 0)
   })
 

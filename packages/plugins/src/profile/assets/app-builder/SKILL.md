@@ -58,7 +58,7 @@ Frontend `client/index.tsx` (host shared SDK, import directly without installing
 - Styling defaults to zero private CSS: compose layout with SDK primitives (`Screen` header `actions`, `ScreenSection` `titleExtra`, `DataTable`, `KvGrid`) and host public classes (`.input`, `.btn btn-primary`, `.stack-row`, `.loading-state`, `.callout`); add a scoped `client/styles.css` (bundled via `import './styles.css'`) only when the host vocabulary is genuinely insufficient, limit it to your own class names, and keep colors on host CSS variables (`var(--bg-elevated)`, `var(--border)` etc.) to stay dark/light adaptive; never write the host's `styles.css`;
 - Component files export only components and types (Fast Refresh); the `module` path and named `export` referenced by `client` must match reality (`helmx plugins doctor` validates compiled artifact exports).
 
-Full runnable template: `load_skill({ skillId: "app-builder", path: "references/fullstack-template.md" })`; for advanced extension points (backend lifecycle hooks, `composerCompleter`, `artifactPreviewer`, workbench panels, etc.), consult `load_skill({ skillId: "helmx-cli", path: "references/skill-and-plugin-dev.md" })` on demand.
+Full runnable template: `load_skill({ skillId: "app-builder", path: "references/fullstack-template.md" })`; for advanced extension points (backend lifecycle hooks, `composerCompleter`, workbench panels, etc.), consult `load_skill({ skillId: "helmx-cli", path: "references/skill-and-plugin-dev.md" })` on demand.
 
 ### 3. Mandatory static self-check (Zero-Broken-App)
 

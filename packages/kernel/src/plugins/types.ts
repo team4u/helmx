@@ -2,24 +2,16 @@
  * PluginHost type and interface definitions.
  */
 import type {
-  BackendPluginsLifecyclePort,
   ConversationSubmissionInfo,
-  ConversationSummary,
   GuardedMutationExpectation,
   HelmxHostApi,
   HelmxHostNodeIpcPort,
-  HelmxHostNodeFetchPort,
   HelmxHostOpenTunnelPort,
   HookName,
   PluginBuildProvider,
-  MaybePromise,
   ModelCatalog,
-  ModelProvidersRefreshResult,
   ModelTierRegistration,
   ModelTierSpec,
-  NodeHostEnv,
-  NodeHostEnvQuery,
-  NodePathUsage,
   PluginConfigFieldSchema,
   PluginDefinition,
   PluginDiagnosticError,
@@ -60,14 +52,13 @@ export interface PluginProviderPort {
  * Shape policy: members identical to `HelmxHostApi` are reused via `Pick` (preserving `MaybePromise<void>`
  * awaitable contracts on `onEvent`/`emitEvent` without manual signature drift or `Omit`/Proxy indirection).
  * Divergent members are declared explicitly:
- * 1. Scoped by `pluginId`: `secrets` / `setPluginConfig` / `skills.ensureSkill` / `manageConversation`
+ * 1. Scoped by `pluginId`: `secrets` / `skills.ensureSkill` / `manageConversation`
  *    (returned release callback is wrapped by `PluginHost` for idempotency);
  * 2. Normalized shape: `isClosing` is a zero-arg function (exposed as a getter on `ctx.host`);
  * 3. Optional connections (when unwired, `ctx.host` rejects explicitly with 501, never silently falling back):
- *    `nodeIpc` / `getNodeHostEnv` / `nodeFetch` / `openTunnel` / `plugins` / `getConversationSubmission` / `abortConversationGuarded` /
- *    `submitInputGuarded` / `resetConversationGuarded` / `compactConversationGuarded`;
+ *    `nodeIpc` / `openTunnel` / `getConversationSubmission` / `abortConversationGuarded` / `submitInputGuarded`;
  * 4. Served directly by `PluginHost` (not forwarded to backend): `listPlugins` / `listUi` /
- *    `listActions` / `invokeAction` / `prepareAction` / `setConfig`.
+ *    `listActions` / `invokeAction` / `prepareAction`.
  */
 export interface PluginHostBackend
   extends Pick<
@@ -84,7 +75,6 @@ export interface PluginHostBackend
     | 'abortConversation'
     | 'getConversationOwnership'
     | 'markConversationOwnership'
-    | 'buildSpawnEnv'
     | 'spawnAgent'
     | 'runGate'
     | 'resolveSpawnTarget'
@@ -97,20 +87,16 @@ export interface PluginHostBackend
     | 'completeText'
     | 'executionEnv'
     | 'execEnv'
-    | 'withFileMutationQueue'
     | 'listArtifacts'
-    | 'createArtifact'
-    | 'getArtifact'
     | 'createAsk'
     | 'cancelAsk'
-    | 'registerAskSeqResolver'
     | 'onEvent'
     | 'emitEvent'
   > {
   /** Host closing status (backing `ctx.host.isClosing` getter). */
   isClosing(): boolean
   /** Skill catalog port; `ensureSkill` tags the owning `pluginId`. */
-  skills: Pick<HelmxHostApi['skills'], 'list' | 'readFile' | 'directory'> & {
+  skills: Pick<HelmxHostApi['skills'], 'list' | 'readFile'> & {
     ensureSkill(asset: PluginSkillAsset, pluginId: string): Promise<void>
   }
   /** Plugin-private secrets backend (`PluginHost` scopes keys by `pluginId`). */
@@ -120,18 +106,10 @@ export interface PluginHostBackend
     delete(pluginId: string, key: string): Promise<void>
     addRedaction(value: string): () => void
   }
-  /** Plugin configuration writer (validated against schema by `PluginHost` before forwarding). */
-  setPluginConfig(pluginId: string, value: Record<string, unknown>): Promise<void>
   /** Node status/metadata port (EnvFabric channel; 501 when unwired). `nodePlatform` is reported by `NodeRegistry` or `undefined` if unknown. */
   nodeIpc?: HelmxHostNodeIpcPort
-  /** Read-only target-node host environment discovery port (`EnvFabric.getNodeHostEnv`; 501 when unwired, never falls back to Hub local env). */
-  getNodeHostEnv?(nodeId: string, query?: NodeHostEnvQuery, signal?: AbortSignal): Promise<NodeHostEnv>
-  /** Node-local HTTP fetch port (`EnvFabric.nodeFetch`; 501 when unwired, never falls back to local). */
-  nodeFetch?: HelmxHostNodeFetchPort
-  /** TCP / controlled socketPath passthrough tunnel port (`EnvFabric.openTunnel`; 501 when unwired). */
+  /** TCP passthrough tunnel port (`EnvFabric.openTunnel`; 501 when unwired). */
   openTunnel?: HelmxHostOpenTunnelPort
-  /** Host plugin governance backend (`ctx.host.plugins`; write operations fail with 501 when unwired). */
-  plugins?: BackendPluginsLifecyclePort
   /** Read-only durable submission lookup by `(conversationId, requestId)` (501 when unwired). */
   getConversationSubmission?(
     id: number,
@@ -146,18 +124,6 @@ export interface PluginHostBackend
   ): Promise<void>
   /** Guarded abort port (includes scheduler-paused durability path; 501 when unwired). */
   abortConversationGuarded?(id: number, guard: GuardedMutationExpectation): Promise<void>
-  /** Guarded context reset port (kernel atomic ownership/seq check; 501 when unwired). */
-  resetConversationGuarded?(
-    id: number,
-    opts?: { handoff?: string },
-    guard?: GuardedMutationExpectation,
-  ): Promise<ConversationSummary>
-  /** Guarded manual compaction port (kernel atomic ownership/seq check; 501 when unwired). */
-  compactConversationGuarded?(
-    id: number,
-    opts?: { instructions?: string },
-    guard?: GuardedMutationExpectation,
-  ): Promise<{ taskId: number; conversation: ConversationSummary }>
   /** Claims exclusive management over conversation `id` for `pluginId`; returns release function. */
   manageConversation(id: number, pluginId: string): () => void
   /** Optional: read current model catalog snapshot (501 when unwired). */
@@ -228,7 +194,6 @@ export const STOP_WINDOW_HOST_CALLS: ReadonlySet<string> = new Set([
   'host.nodeIpc.isOnline',
   'host.nodeIpc.getNodeHubUrl',
   'host.nodeIpc.nodePlatform',
-  'host.getNodeHostEnv',
   'host.openTunnel',
 ]);
 

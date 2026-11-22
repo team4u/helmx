@@ -23,7 +23,7 @@ import { join } from 'node:path'
 import { HelmxError, type AgentExecutionInfo, type AgentSpawnRequest, type ConversationSummary, type MaybePromise } from '@helmx/protocol'
 import type { WorkflowRunSummary } from '../src/contracts.js'
 import { WORKFLOW_PLUGIN_ID } from '../src/contracts.js'
-import { steerBackgroundSubagent, parseExternalSteerResult } from '../src/workflow/steer.js'
+import { steerBackgroundSubagent } from '../src/workflow/steer.js'
 import { isAncestorOrSelf } from '../src/lineage.js'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import { createHelmx } from '../../hub/src/app.js'
@@ -46,24 +46,14 @@ interface RecordedSteer {
   guard: Record<string, unknown>
 }
 
-interface RecordedDelegation {
-  pluginId: string
-  actionId: string
-  input: Record<string, unknown>
-  context: { conversationId?: number; signal?: AbortSignal }
-}
-
 interface PurePorts {
   runs: Map<string, WorkflowRunSummary>
   conversations: Map<number, ConversationSummary>
-  ownership: Map<number, 'helmx' | 'bot' | 'human'>
+  ownership: Map<number, 'helmx' | 'human'>
   cancelling: Set<number>
   submitted: RecordedSteer[]
-  delegations: RecordedDelegation[]
   /** 可编程 submitInputGuarded 行为（缺省成功）。 */
   submitBehavior?: (call: RecordedSteer) => void
-  /** 可编程外部委托行为（缺省返回合法 ExternalSteerResult）。 */
-  invokeBehavior?: (call: RecordedDelegation) => unknown
 }
 
 function conv(id: number, parent: number | undefined, seq = 7): ConversationSummary {
@@ -101,24 +91,6 @@ function subagentRun(over: Partial<WorkflowRunSummary> = {}): WorkflowRunSummary
   }
 }
 
-/** 外部 herdr 形态的 run 节点（controls.steer + executionId + nodeId）。 */
-function externalRun(over: Partial<WorkflowRunSummary> = {}): WorkflowRunSummary {
-  return subagentRun({
-    nodes: [
-      {
-        id: 'subagent-0',
-        kind: 'agent',
-        label: 'subagent:herdr:agy',
-        status: 'running',
-        nodeId: 'local',
-        executionId: 'ws:p9',
-        controls: { steer: { pluginId: 'builtin:herdr', actionId: 'steer' } },
-      },
-    ],
-    ...over,
-  })
-}
-
 function makePurePorts(): PurePorts {
   return {
     runs: new Map(),
@@ -131,7 +103,6 @@ function makePurePorts(): PurePorts {
     ownership: new Map([[42, 'helmx']]),
     cancelling: new Set(),
     submitted: [],
-    delegations: [],
   }
 }
 
@@ -148,7 +119,7 @@ function portsOf(p: PurePorts) {
       if (found === undefined) throw new HelmxError('not_found', `会话不存在: ${id}`, 404, { conversationId: id })
       return found
     },
-    getConversationOwnership(id: number): 'helmx' | 'bot' | 'human' {
+    getConversationOwnership(id: number): 'helmx' | 'human' {
       return p.ownership.get(id) ?? 'human'
     },
     async submitInputGuarded(
@@ -161,25 +132,6 @@ function portsOf(p: PurePorts) {
       p.submitBehavior?.(call)
       p.submitted.push(call)
       return { submissionId: 's-1' }
-    },
-    async invokeAction(
-      pluginId: string,
-      actionId: string,
-      input: unknown,
-      context?: { conversationId?: number; signal?: AbortSignal },
-    ): Promise<unknown> {
-      const call = { pluginId, actionId, input: input as Record<string, unknown>, context: context ?? {} }
-      const result = p.invokeBehavior !== undefined ? p.invokeBehavior(call) : {
-        steered: true as const,
-        executionId: 'ws:p9',
-        nodeId: 'local',
-        stateChangeSeq: 12,
-        ownership: 'helmx' as const,
-        guardLevel: 'cas' as const,
-      }
-      if (result instanceof HelmxError || result instanceof Error) throw result
-      p.delegations.push(call)
-      return result
     },
   }
 }
@@ -209,7 +161,7 @@ describe('steerBackgroundSubagent 纯逻辑（原生路径）', () => {
   it('成功插话：run 发起会话为 caller，提交参数与守卫事实完整', timeout, async () => {
     const p = makePurePorts()
     p.runs.set('wf_run0000000001', subagentRun())
-    p.ownership.set(42, 'bot')
+    p.ownership.set(42, 'helmx')
     const out = await steerBackgroundSubagent(
       portsOf(p),
       { runId: 'wf_run0000000001', text: '  请优先补测试  ' },
@@ -220,7 +172,7 @@ describe('steerBackgroundSubagent 纯逻辑（原生路径）', () => {
       runId: 'wf_run0000000001',
       targetKind: 'native',
       conversationId: 42,
-      ownership: 'bot',
+      ownership: 'helmx',
       stateChangeSeq: 7,
       guardLevel: 'cas',
     })
@@ -235,8 +187,7 @@ describe('steerBackgroundSubagent 纯逻辑（原生路径）', () => {
       whenIdle: 'reject',
       meta: { kind: 'subagent_steer', runId: 'wf_run0000000001' },
     })
-    assert.deepEqual(call.guard, { expectedOwnership: 'bot', expectedStateSeq: 7 })
-    assert.equal(p.delegations.length, 0, '原生路径不得触发外部委托')
+    assert.deepEqual(call.guard, { expectedOwnership: 'helmx', expectedStateSeq: 7 })
   })
 
   it('无会话上下文（人工 HTTP/CLI）放行；caller 为 run 发起会话的祖先放行', timeout, async () => {
@@ -295,7 +246,6 @@ describe('steerBackgroundSubagent 纯逻辑（原生路径）', () => {
       409,
     )
     assert.equal(p.submitted.length, 0)
-    assert.equal(p.delegations.length, 0)
   })
 
   it('run 仍 running 但子会话已结束（Gate 在途），拒绝启动额外回合', timeout, async () => {
@@ -446,247 +396,6 @@ describe('steerBackgroundSubagent 纯逻辑（原生路径）', () => {
 })
 
 // ---------------------------------------------------------------------------
-// 纯逻辑：steerBackgroundSubagent（外部执行委托路径）
-// ---------------------------------------------------------------------------
-
-describe('steerBackgroundSubagent 纯逻辑（外部委托路径）', () => {
-  it('成功委托：标准输入完整、原 context（含 signal）透传、联合结果可辨识', timeout, async () => {
-    const p = makePurePorts()
-    p.runs.set('wf_ext', externalRun())
-    const signal = AbortSignal.abort()
-    const out = await steerBackgroundSubagent(
-      portsOf(p),
-      { runId: 'wf_ext', text: '改用方案B' },
-      { conversationId: 1, signal },
-    )
-    assert.deepEqual(out, {
-      steered: true,
-      runId: 'wf_ext',
-      targetKind: 'external',
-      executionId: 'ws:p9',
-      nodeId: 'local',
-      ownership: 'helmx',
-      stateChangeSeq: 12,
-      guardLevel: 'cas',
-    })
-    assert.equal(p.delegations.length, 1)
-    const call = p.delegations[0]!
-    assert.equal(call.pluginId, 'builtin:herdr', '委托目标完全来自记录（零硬编码路由）')
-    assert.equal(call.actionId, 'steer')
-    assert.deepEqual(call.input, {
-      executionId: 'ws:p9',
-      nodeId: 'local',
-      workflowRunId: 'wf_ext',
-      parentConversationId: 1,
-      text: '改用方案B',
-    })
-    assert.equal(call.context.conversationId, 1, '原 caller 上下文透传（不伪造）')
-    assert.equal(call.context.signal, signal, '取消信号透传到委托动作')
-    assert.equal(p.submitted.length, 0, '外部路径不得触发原生子会话提交')
-  })
-
-  it('外部 preflight 结果如实透传，不能升级标记为 CAS', timeout, async () => {
-    const p = makePurePorts()
-    p.runs.set('wf_ext', externalRun())
-    p.invokeBehavior = () => ({
-      steered: true, executionId: 'ws:p9', nodeId: 'local',
-      stateChangeSeq: 17, ownership: 'helmx', guardLevel: 'preflight',
-    })
-    const out = await steerBackgroundSubagent(portsOf(p), { runId: 'wf_ext', text: '补充指导' }, { conversationId: 1 })
-    assert.equal(out.targetKind, 'external')
-    assert.equal(out.guardLevel, 'preflight')
-    assert.equal(out.stateChangeSeq, 17)
-    assert.equal(p.delegations.length, 1)
-    assert.equal(p.submitted.length, 0)
-  })
-
-  it('人工 HTTP/CLI（无会话上下文）可委托外部执行', timeout, async () => {
-    const p = makePurePorts()
-    p.runs.set('wf_ext', externalRun())
-    await steerBackgroundSubagent(portsOf(p), { runId: 'wf_ext', text: 'ok' }, {})
-    assert.equal(p.delegations.length, 1)
-    assert.equal(p.delegations[0]!.context.conversationId, undefined)
-  })
-
-  it('跨树 caller 对外部执行同样拒绝（委托前授权）', timeout, async () => {
-    const p = makePurePorts()
-    p.runs.set('wf_ext', externalRun())
-    await rejectsWith(
-      () => steerBackgroundSubagent(portsOf(p), { runId: 'wf_ext', text: 'x' }, { conversationId: 2 }),
-      'steer_out_of_scope',
-      403,
-    )
-    assert.equal(p.delegations.length, 0)
-  })
-
-  it('run 取消窗口内拒绝外部委托', timeout, async () => {
-    const p = makePurePorts()
-    p.runs.set('wf_ext', externalRun())
-    p.cancelling.add(1)
-    await rejectsWith(
-      () => steerBackgroundSubagent(portsOf(p), { runId: 'wf_ext', text: 'x' }, {}),
-      'steer_run_cancelling',
-      409,
-    )
-    assert.equal(p.delegations.length, 0)
-  })
-
-  it('混合 native + external 候选歧义拒绝（不优先 native 吞掉 external）', timeout, async () => {
-    const p = makePurePorts()
-    p.runs.set('wf_mixed', subagentRun({
-      nodes: [
-        { id: 'a', kind: 'agent', label: 'native', status: 'running', conversationId: 42 },
-        {
-          id: 'b', kind: 'agent', label: 'herdr', status: 'running', nodeId: 'local', executionId: 'ws:p9',
-          controls: { steer: { pluginId: 'builtin:herdr', actionId: 'steer' } },
-        },
-      ],
-    }))
-    await rejectsWith(
-      () => steerBackgroundSubagent(portsOf(p), { runId: 'wf_mixed', text: 'x' }, {}),
-      'steer_ambiguous_subagent',
-      409,
-    )
-    assert.equal(p.submitted.length, 0)
-    assert.equal(p.delegations.length, 0)
-  })
-
-  it('同一节点同时登记原生子会话与外部控制引用：歧义拒绝', timeout, async () => {
-    const p = makePurePorts()
-    p.runs.set('wf_both', subagentRun({
-      nodes: [
-        {
-          id: 'a', kind: 'agent', label: 'both', status: 'running', conversationId: 42,
-          nodeId: 'local', executionId: 'ws:p9',
-          controls: { steer: { pluginId: 'builtin:herdr', actionId: 'steer' } },
-        },
-      ],
-    }))
-    await rejectsWith(
-      () => steerBackgroundSubagent(portsOf(p), { runId: 'wf_both', text: 'x' }, {}),
-      'steer_ambiguous_subagent',
-      409,
-    )
-    assert.equal(p.submitted.length, 0)
-    assert.equal(p.delegations.length, 0)
-  })
-
-  it('多个外部候选歧义拒绝', timeout, async () => {
-    const p = makePurePorts()
-    p.runs.set('wf_multi-ext', externalRun({
-      nodes: [
-        { id: 'a', kind: 'agent', label: 'x', status: 'running', nodeId: 'local', executionId: 'ws:p1', controls: { steer: { pluginId: 'builtin:herdr', actionId: 'steer' } } },
-        { id: 'b', kind: 'agent', label: 'y', status: 'running', nodeId: 'local', executionId: 'ws:p2', controls: { steer: { pluginId: 'builtin:herdr', actionId: 'steer' } } },
-      ],
-    }))
-    await rejectsWith(
-      () => steerBackgroundSubagent(portsOf(p), { runId: 'wf_multi-ext', text: 'x' }, {}),
-      'steer_ambiguous_subagent',
-      409,
-    )
-    assert.equal(p.delegations.length, 0)
-  })
-
-  it('controls.steer 引用非法（空 pluginId/actionId）：显式拒绝', timeout, async () => {
-    const p = makePurePorts()
-    p.runs.set('wf_badref', externalRun({
-      nodes: [{
-        id: 'subagent-0', kind: 'agent', label: 'x', status: 'running', nodeId: 'local', executionId: 'ws:p9',
-        controls: { steer: { pluginId: '   ', actionId: 'steer' } },
-      }],
-    }))
-    await rejectsWith(
-      () => steerBackgroundSubagent(portsOf(p), { runId: 'wf_badref', text: 'x' }, {}),
-      'steer_delegate_invalid',
-      502,
-    )
-    assert.equal(p.delegations.length, 0)
-  })
-
-  it('委托产物核销：steered/executionId/nodeId/ownership/guardLevel/seq 逐字段拒绝', timeout, async () => {
-    const bad: Array<[string, unknown]> = [
-      ['steered 非 true', { steered: false, executionId: 'ws:p9', nodeId: 'local', stateChangeSeq: 1, ownership: 'helmx', guardLevel: 'cas' }],
-      ['executionId 不一致', { steered: true, executionId: 'ws:other', nodeId: 'local', stateChangeSeq: 1, ownership: 'helmx', guardLevel: 'cas' }],
-      ['nodeId 不一致', { steered: true, executionId: 'ws:p9', nodeId: 'node-x', stateChangeSeq: 1, ownership: 'helmx', guardLevel: 'cas' }],
-      ['ownership 非 helmx', { steered: true, executionId: 'ws:p9', nodeId: 'local', stateChangeSeq: 1, ownership: 'bot', guardLevel: 'cas' }],
-      ['guardLevel 非法', { steered: true, executionId: 'ws:p9', nodeId: 'local', stateChangeSeq: 1, ownership: 'helmx', guardLevel: 'none' }],
-      ['guardLevel 缺失', { steered: true, executionId: 'ws:p9', nodeId: 'local', stateChangeSeq: 1, ownership: 'helmx' }],
-      ['seq 负数', { steered: true, executionId: 'ws:p9', nodeId: 'local', stateChangeSeq: -1, ownership: 'helmx', guardLevel: 'cas' }],
-      ['seq 非整数', { steered: true, executionId: 'ws:p9', nodeId: 'local', stateChangeSeq: 1.5, ownership: 'helmx', guardLevel: 'cas' }],
-      ['seq 缺失', { steered: true, executionId: 'ws:p9', nodeId: 'local', ownership: 'helmx', guardLevel: 'cas' }],
-      ['未知字段', { steered: true, executionId: 'ws:p9', nodeId: 'local', stateChangeSeq: 1, ownership: 'helmx', guardLevel: 'cas', extra: 1 }],
-      ['非对象', null],
-    ]
-    for (const [reason, payload] of bad) {
-      const p = makePurePorts()
-      p.runs.set('wf_ext', externalRun())
-      p.invokeBehavior = () => payload
-      await rejectsWith(
-        () => steerBackgroundSubagent(portsOf(p), { runId: 'wf_ext', text: 'x' }, {}),
-        'steer_delegate_invalid',
-        502,
-      )
-      assert.equal(p.submitted.length, 0, `${reason}：不产生原生提交`)
-    }
-  })
-
-  it('委托插件不可用（unknown_action 等）原样透传，绝不重试或伪造成功', timeout, async () => {
-    const p = makePurePorts()
-    p.runs.set('wf_ext', externalRun())
-    let attempts = 0
-    p.invokeBehavior = () => {
-      attempts += 1
-      throw new HelmxError('unknown_action', "插件 builtin:herdr 未声明动作 steer（插件停用或能力缺失）", 404, {
-        pluginId: 'builtin:herdr', actionId: 'steer',
-      })
-    }
-    await rejectsWith(
-      () => steerBackgroundSubagent(portsOf(p), { runId: 'wf_ext', text: 'x' }, {}),
-      'unknown_action',
-      404,
-    )
-    assert.equal(attempts, 1, '控制动作非幂等：单次失败后不自动重试')
-  })
-
-  it('委托超时/断线真实错误透传且不重试', timeout, async () => {
-    const p = makePurePorts()
-    p.runs.set('wf_ext', externalRun())
-    let attempts = 0
-    p.invokeBehavior = () => {
-      attempts += 1
-      throw new HelmxError('herdr_timeout', 'prompt 响应超时（投递结果不确定）', 504)
-    }
-    await rejectsWith(
-      () => steerBackgroundSubagent(portsOf(p), { runId: 'wf_ext', text: 'x' }, {}),
-      'herdr_timeout',
-      504,
-    )
-    assert.equal(attempts, 1)
-  })
-})
-
-describe('parseExternalSteerResult（独立边界校验）', () => {
-  const expected = { executionId: 'ws:p9', nodeId: 'local', pluginId: 'p', actionId: 'a' }
-  it('合法产物通过并提取水位', timeout, () => {
-    assert.deepEqual(
-      parseExternalSteerResult({ steered: true, executionId: 'ws:p9', nodeId: 'local', stateChangeSeq: 3, ownership: 'helmx', guardLevel: 'cas' }, expected),
-      { stateChangeSeq: 3, guardLevel: 'cas' },
-    )
-  })
-  it('preflight 产物通过且保留预检级别', timeout, () => {
-    assert.deepEqual(
-      parseExternalSteerResult({ steered: true, executionId: 'ws:p9', nodeId: 'local', stateChangeSeq: 4, ownership: 'helmx', guardLevel: 'preflight' }, expected),
-      { stateChangeSeq: 4, guardLevel: 'preflight' },
-    )
-  })
-  it('坏产物显式拒绝', timeout, () => {
-    assert.throws(() => parseExternalSteerResult(undefined, expected), HelmxError)
-    assert.throws(() => parseExternalSteerResult([], expected), HelmxError)
-    assert.throws(() => parseExternalSteerResult({ steered: 'true' }, expected), HelmxError)
-  })
-})
-
-// ---------------------------------------------------------------------------
 // 纯逻辑：isAncestorOrSelf
 // ---------------------------------------------------------------------------
 
@@ -732,7 +441,7 @@ class SteerFakeBackend extends PluginHostBackendFixtureBase {
     this.conversations.set(1, conv(1, undefined, 3))
     this.conversations.set(2, conv(2, undefined, 5))
     this.conversations.set(42, conv(42, 1, 7))
-    this.ownership.set(42, 'bot')
+    this.ownership.set(42, 'helmx')
   }
 
   async spawnAgent(request: AgentSpawnRequest): Promise<unknown> {
@@ -759,8 +468,8 @@ class SteerFakeBackend extends PluginHostBackendFixtureBase {
     return found
   }
 
-  getConversationOwnership(id: number): 'helmx' | 'bot' | 'human' {
-    return (this.ownership.get(id) ?? 'human') as 'helmx' | 'bot' | 'human'
+  getConversationOwnership(id: number): 'helmx' | 'human' {
+    return (this.ownership.get(id) ?? 'human') as 'helmx' | 'human'
   }
 
   // 注意：宿主 host-api 对 guarded 端口采用解绑调用（const port = backend
@@ -890,8 +599,8 @@ describe('workflow 插件 steer 动作（端到端）', () => {
     assert.equal(manifest.exposeAsTool, true, 'steer 应 exposeAsTool 直投 Agent 工具')
     assert.deepEqual(manifest.cli?.command, ['workflows', 'steer'])
     assert.deepEqual(manifest.cli?.positional, [{ field: 'runId', required: true }])
-    const oneOf = (manifest.outputSchema as { oneOf?: unknown[] }).oneOf
-    assert.ok(Array.isArray(oneOf) && oneOf.length === 2, '输出 Schema 应为 native/external oneOf 双分支')
+    const schema = manifest.outputSchema as { properties?: Record<string, unknown> }
+    assert.ok(schema.properties?.['targetKind'] !== undefined, '输出 Schema 应为 native steer 输出对象')
     await host.dispose()
   })
 
@@ -908,7 +617,7 @@ describe('workflow 插件 steer 动作（端到端）', () => {
       runId,
       targetKind: 'native',
       conversationId: 42,
-      ownership: 'bot',
+      ownership: 'helmx',
       stateChangeSeq: 7,
       guardLevel: 'cas',
     })
@@ -923,7 +632,7 @@ describe('workflow 插件 steer 动作（端到端）', () => {
       whenIdle: 'reject',
       meta: { kind: 'subagent_steer', runId },
     })
-    assert.deepEqual(call.guard, { expectedOwnership: 'bot', expectedStateSeq: 7 })
+    assert.deepEqual(call.guard, { expectedOwnership: 'helmx', expectedStateSeq: 7 })
     await host.dispose()
   })
 
@@ -952,7 +661,7 @@ describe('workflow 插件 steer 动作（端到端）', () => {
     await host.dispose()
   })
 
-  it('子会话归属 human 时拒绝（红线），恢复 bot 后可插话', timeout, async () => {
+  it('子会话归属 human 时拒绝（红线），恢复 helmx 后可插话', timeout, async () => {
     const { host, backend, runId } = await setup()
     backend.ownership.set(42, 'human')
     await rejectsWith(
@@ -961,7 +670,7 @@ describe('workflow 插件 steer 动作（端到端）', () => {
       403,
     )
     assert.equal(backend.submitted.length, 0)
-    backend.ownership.set(42, 'bot')
+    backend.ownership.set(42, 'helmx')
     const out = (await host.invokeAction(
       WORKFLOW_PLUGIN_ID,
       'steer',

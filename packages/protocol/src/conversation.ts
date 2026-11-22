@@ -44,6 +44,9 @@ export interface ConversationContextUsage {
   compacting?: boolean
 }
 
+/** Conversation ownership: human-owned (default; automation red-line) vs helmx-owned background/managed session. */
+export type ConversationOwnership = 'human' | 'helmx'
+
 /** Generic conversation summary used in conversation lists / SSE snapshots. */
 export interface ConversationSummary {
   id: number
@@ -55,8 +58,8 @@ export interface ConversationSummary {
   parentConversationId?: number
   /** Parent-conversation tool call ID that derived this sub-conversation or most recently resumed it (lets the frontend link the sub-conversation immediately while the subagent runs). */
   parentToolCallId?: string
-  /** Conversation ownership (default 'human'; resident/background conversations created by plugins or the kernel are marked 'helmx' | 'bot'). */
-  ownedBy?: 'human' | 'helmx' | 'bot'
+  /** Conversation ownership (default 'human'; background/managed conversations created by plugins or the kernel are marked 'helmx'). */
+  ownedBy?: ConversationOwnership
   /** Bound compute node ID (defaults to 'local'). */
   nodeId?: string
   /** Absolute working directory path from the target node's perspective. */

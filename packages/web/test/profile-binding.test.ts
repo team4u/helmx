@@ -28,16 +28,16 @@ async function detailOf(svc: ProfileService, id: string): Promise<Profile> {
   return { ...profile, system: await svc.getSystem(id) }
 }
 
-test('Profile 文件资产拒绝未知运行时靶点字段，不静默回到本机', { timeout: 60_000 }, async () => {
+test('Profile 文件资产拒绝未知字段，不静默忽略', { timeout: 60_000 }, async () => {
   const dir = await mkdtemp(join(tmpdir(), 'helmx-profile-invalid-target-'))
   try {
     const service = new ProfileService(dir)
-    const invalid = { id: 'old-target', runtime: { kind: 'herdr', agent: 'pi', machine: 'remote-box' } }
-    await assert.rejects(service.save(invalid), /unknown field.*machine/)
+    const invalid = { id: 'old-target', runtime: { kind: 'herdr', agent: 'pi', machine: 'remote-box' } } as unknown as Profile
+    await assert.rejects(service.save(invalid), /unknown field.*runtime/)
     const profileDir = join(dir, 'profiles', 'old-target')
     await mkdir(profileDir, { recursive: true })
     await writeFile(join(profileDir, 'profile.json'), JSON.stringify(invalid))
-    await assert.rejects(service.get('old-target'), /unknown field.*machine/)
+    await assert.rejects(service.get('old-target'), /unknown field.*runtime/)
   } finally { await rm(dir, { recursive: true, force: true }) }
 })
 
@@ -47,16 +47,14 @@ test('只改 name 的载荷保存后完整保留执行配置；MEMORY.md 不受 
     const svc = new ProfileService(dir)
     const memoryStore = new MemoryStore(createProfileFileHost(dir, svc))
 
-    // 初始落盘：完整配置（含执行节点/目录/运行时/tags）。
+    // 初始落盘：完整配置（含执行节点/目录/tags）。
     const initial = await svc.save({
       id: 'coder',
       name: '代码工人',
       managedByPlugin: 'community:reporter',
-      humanSelectable: false,
       model: 'zhipu/glm-4.6',
       nodeId: 'gpu-node',
       cwd: '/srv/work',
-      runtime: { kind: 'herdr', agent: 'pi', nodeId: 'terminal-node' },
       tags: ['worker'],
       system: '# SYSTEM\n基础提示词',
     })
@@ -81,7 +79,6 @@ test('只改 name 的载荷保存后完整保留执行配置；MEMORY.md 不受 
       restrictToCwd: detail.restrictToCwd,
       skills: detail.skills,
       starters: detail.starters,
-      runtime: detail.runtime,
       source: detail,
       isNew: false,
       includeSystem: false,
@@ -89,11 +86,9 @@ test('只改 name 的载荷保存后完整保留执行配置；MEMORY.md 不受 
     // 载荷层断言：完整基础配置 + 大文本省略；无 memory 字段（契约已删）。
     assert.equal(payload.name, '重构工人')
     assert.equal(payload.managedByPlugin, 'community:reporter')
-    assert.equal(payload.humanSelectable, false)
     assert.equal(payload.model, 'zhipu/glm-4.6')
     assert.equal(payload.nodeId, 'gpu-node')
     assert.equal(payload.cwd, '/srv/work')
-    assert.deepEqual(payload.runtime, { kind: 'herdr', agent: 'pi', nodeId: 'terminal-node' })
     assert.deepEqual(payload.tags, ['worker'])
     assert.equal('system' in payload, false)
     assert.equal('memory' in payload, false)
@@ -104,11 +99,9 @@ test('只改 name 的载荷保存后完整保留执行配置；MEMORY.md 不受 
     const after = await detailOf(svc, 'coder')
     assert.equal(after.name, '重构工人', '展示名已更新')
     assert.equal(after.managedByPlugin, 'community:reporter', '编辑保存后不丢插件归属')
-    assert.equal(after.humanSelectable, false, '编辑保存后不把常驻专属 Profile 变成可选角色')
     assert.equal(after.model, 'zhipu/glm-4.6', '只改名不丢 model')
     assert.equal(after.nodeId, 'gpu-node', '只改名不丢节点绑定')
     assert.equal(after.cwd, '/srv/work', '只改名不丢工作目录')
-    assert.deepEqual(after.runtime, { kind: 'herdr', agent: 'pi', nodeId: 'terminal-node' })
     assert.deepEqual(after.tags, ['worker'], '只改名不丢 tags')
     assert.equal(after.system, '# SYSTEM\n基础提示词', 'system 文件未被旧快照覆盖')
     assert.equal(
@@ -162,11 +155,12 @@ test('Profile 契约删除 memory 字段后请求携带 memory 被边界拒绝',
       () => parseProfileBody({ id: 'writer', name: '写手', memory: '# MEMORY' } as never, { requireId: true }),
       /memory/,
     )
-    // 服务层边界静默剥离未知键（历史行为）：memory 不落 profile.json、
-    // 不触发 MEMORY.md 写入（用户可见边界在 HTTP 层显式 400）。
+    // 服务层与 HTTP 边界一致：未知字段 memory 被显式拒绝，不落 profile.json、不触发 MEMORY.md 写入。
     const svc = new ProfileService(dir)
-    const saved = await svc.save({ id: 'writer', name: '写手', tags: [], memory: '# MEMORY' } as never)
-    assert.equal('memory' in saved, false)
+    await assert.rejects(
+      () => svc.save({ id: 'writer', name: '写手', tags: [], memory: '# MEMORY' } as never),
+      /unknown field.*memory/,
+    )
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

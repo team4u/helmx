@@ -49,7 +49,6 @@ import { RuntimeTriggerDispatcher } from './runtime-triggers.js'
 import { RuntimeAgentSpawn } from './runtime-agent-spawn.js'
 import { trustedPlatformFromEnvFabric } from './target-cwd.js'
 import { RuntimeOwnershipManager } from './runtime-ownership.js'
-import { createGlobalDocumentStore } from './runtime-host-backend.js'
 import type { KernelRuntime } from './runtime.js'
 import type { BootstrappedKernelContext } from './runtime-bootstrap.js'
 
@@ -106,7 +105,6 @@ export function assembleRuntimeServices(
   options: {
     store: HelmxStore
     stashService: SecretStash
-    handledToolCalls: Map<string, { conversationId: number | undefined; result: { output: Array<{ type: 'text'; text: string }>; isError: boolean } }>
     dispatchTurnSettled(payload: TurnSettledPayload, consumed: ConversationInput[]): Promise<void>
     onSettleInflight(run: Promise<void>): void
     safeSummary(id: number): ConversationSummary | undefined
@@ -224,7 +222,6 @@ export function assembleRuntimeServices(
     dataDir: init.dataDir,
     defaultCwd: init.cwd,
     get hubUrl(): string { return runtime.hubUrl },
-    stashEnvFor: (id) => options.stashService.envFor(id),
     redact: (t) => options.stashService.redact(t),
     processToken: () => runtime.processToken,
     artifacts: artifactsSvc,
@@ -261,7 +258,6 @@ export function assembleRuntimeServices(
   // ---- Conversation ownership management ----
   const ownership = new RuntimeOwnershipManager({
     store: options.store,
-    documentStore: createGlobalDocumentStore(options.store),
     events,
     conversations: {
       summaryWithOwnership: (id) => conversations.summaryWithOwnership(id),
@@ -310,7 +306,6 @@ export function assembleRuntimeServices(
   // ---- Async approval service ----
   asks = new AskService({
     store: options.store,
-    stash: options.stashService,
     validateConversation: (id) => options.store.getConv(id) !== undefined,
     onEvent: (type, payload) => events.publish(type, payload),
     onConvPendingChanged: (id) => {
@@ -322,9 +317,8 @@ export function assembleRuntimeServices(
   const hookBridge = new HookBridge({
     registry: init.registry,
     pluginHost: () => runtime.plugins,
-    handledToolCalls: options.handledToolCalls,
-    prepareToolResult: (conversationId, result) =>
-      prepareToolResultWith(artifactsSvc, (t) => options.stashService.redact(t), conversationId, result),
+    prepareToolResult: (conversationId, result, guardOptions) =>
+      prepareToolResultWith(artifactsSvc, (t) => options.stashService.redact(t), conversationId, result, guardOptions),
     safeSummary: (id) => options.safeSummary(id),
     currentRunInputs: (id) => tracker.currentRunInputs(id),
     redact: (t) => options.stashService.redact(t),
@@ -351,11 +345,6 @@ export function assembleRuntimeServices(
     cancelPendingAsksForRewrite: async (id) => {
       const pendingAsks = asks.listPendingByConversation(id)
       await Promise.all(pendingAsks.map((ask) => asks.cancelAsk(ask.id, 'superseded')))
-    },
-    evictHandledToolCalls: (convId) => {
-      for (const [id, entry] of options.handledToolCalls) {
-        if (entry.conversationId === convId) options.handledToolCalls.delete(id)
-      }
     },
     markOwnership: (id, owner) => ownership.markOwnership(id, owner),
     ownershipOf: (id) => ownership.getOwnership(id),
@@ -392,7 +381,6 @@ export function assembleRuntimeServices(
   // ---- Trigger dispatch ----
   const triggers = new RuntimeTriggerDispatcher({
     store: options.store,
-    hookBridge,
     getConversation: (id) => runtime.getConversation(id),
     getConversationOwnership: (id) => ownership.getOwnership(id),
     createConversation: (cInit) => options.createConversation(cInit),
@@ -407,7 +395,6 @@ export function assembleRuntimeServices(
     isArtifactAuthorized: (convId, artifactConvId) =>
       conversations.isArtifactAuthorized(convId, artifactConvId),
     redact: (t) => options.stashService.redact(t),
-    handledToolCalls: options.handledToolCalls,
     getConversation: (id) => runtime.getConversation(id),
   })
 

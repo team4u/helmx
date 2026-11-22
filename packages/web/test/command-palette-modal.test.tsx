@@ -95,16 +95,15 @@ describe("command-palette-modal", () => {
     return [...document.querySelectorAll<HTMLButtonElement>('.palette-listbox [data-idx].nav-item')]
   }
 
-  test('CommandPaletteModal empty state: grouped headers, removes per-plugin detail noise, exposes overview & dynamic humanSelectable profiles', { timeout: 60_000 }, async () => {
+  test('CommandPaletteModal empty state: grouped headers, removes per-plugin detail noise, exposes overview & visible profiles', { timeout: 60_000 }, async () => {
     const plugins: PluginSummary[] = [
       { id: 'builtin:memory', name: { en: 'Memory', 'zh-CN': '记忆' }, version: '1.0.0', enabled: true, locked: false, hooks: [], actions: ['get'], tools: [] },
       { id: 'ext:disabled', name: 'Disabled Plugin', version: '1.0.0', enabled: false, locked: false, hooks: [], actions: [], tools: [] },
     ]
     const profiles: Profile[] = [
-      { id: 'assistant', name: 'Assistant', humanSelectable: true },
-      { id: 'coder', name: 'Coder', humanSelectable: true },
-      { id: 'watchdog', name: 'Watchdog', humanSelectable: false },
-      { id: 'hidden-plugin-role', name: 'Hidden Role', managedByPlugin: 'ext:disabled', humanSelectable: true },
+      { id: 'assistant', name: 'Assistant' },
+      { id: 'coder', name: 'Coder' },
+      { id: 'hidden-plugin-role', name: 'Hidden Role', managedByPlugin: 'ext:disabled' },
     ]
     const store = makeTestStore({
       plugins,
@@ -137,12 +136,11 @@ describe("command-palette-modal", () => {
     const labels = options.map((o) => o.textContent ?? '')
     // Per-plugin detail rows are gone
     assert.equal(labels.some((l) => l.includes('Plugin: Memory') || l.includes('View and configure')), false)
-    // Overview & humanSelectable profiles appear
+    // Overview & visible profiles appear
     assert.equal(labels.some((l) => l.includes('Open conversation overview')), true)
     assert.equal(labels.some((l) => l.includes('Open agent: Assistant')), true)
     assert.equal(labels.some((l) => l.includes('Open agent: Coder')), true)
-    // Non-humanSelectable & disabled-plugin profiles are excluded
-    assert.equal(labels.some((l) => l.includes('Watchdog')), false)
+    // Disabled-plugin profiles are excluded
     assert.equal(labels.some((l) => l.includes('Hidden Role')), false)
 
     // First actionable option [data-idx="0"] is selected initially and ArrowDown moves directly to [data-idx="1"]
@@ -156,7 +154,7 @@ describe("command-palette-modal", () => {
   test('CommandPaletteModal navigation follows focusedPanel on Enter and targets split on Mod+Enter without splitting action commands', { timeout: 60_000 }, async () => {
     const opened: Array<{ target: unknown; opts: unknown }> = []
     const store = makeTestStore({
-      profiles: [{ id: 'coder', name: 'Coder', humanSelectable: true }],
+      profiles: [{ id: 'coder', name: 'Coder' }],
       conversations: [
         makeConv(1, { title: 'Primary conv', profileId: 'coder' }),
         makeConv(2, { title: 'Split conv', profileId: 'coder' }),
@@ -197,7 +195,7 @@ describe("command-palette-modal", () => {
 
     // 2) FocusedPanel='primary' + Mod+Enter opens in split while preserving focusedPanel='primary'
     const storePrimary = makeTestStore({
-      profiles: [{ id: 'coder', name: 'Coder', humanSelectable: true }],
+      profiles: [{ id: 'coder', name: 'Coder' }],
       conversations: [makeConv(1, { title: 'Primary conv', profileId: 'coder' })],
       primaryTarget: { kind: 'conversation', conversationId: 1 },
       splitTarget: null,

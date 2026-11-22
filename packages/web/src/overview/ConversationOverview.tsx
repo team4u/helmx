@@ -69,7 +69,7 @@ import { ConversationRowActionsMenu } from '../ui/ConversationRowActionsMenu.js'
 import { conversationsApi } from '../lib/api.js'
 import { isConversationArchived } from '../conversation/archive-model.js'
 import { ConversationStatusDot, RemoteNodeTag } from '../shell/SidebarPrimitives.js'
-import { buildAgentStandings, partitionSidebarUi, isConversationArchivable, type AgentStanding } from '../shell/sidebar-model.js'
+import { buildAgentStandings, isConversationArchivable, type AgentStanding } from '../shell/sidebar-model.js'
 import { archiveBatchNotice, patchConversationsArchived } from '../shell/archive-ops.js'
 import { useGlobalAttention } from '../shell/use-attention-indicator.js'
 import { formatDurationMs, formatFullTimestamp, formatStopwatchMs } from '../lib/format.js'
@@ -449,15 +449,9 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
     if (repair !== null) setScreenParams(repair, { split: isSplit === true })
   }, [overviewParams, isSplit, setScreenParams])
 
-  // 来源判定与侧栏同源（sidebarSection filterTag，零插件 ID 特判）：
-  // 插件停用后其 section 贡献消失，卡片自然回到「常规对话」一侧。
-  const { sectionTags } = useMemo(
-    () => partitionSidebarUi(groupedUi.sidebarItems, groupedUi.sidebarSections),
-    [groupedUi.sidebarItems, groupedUi.sidebarSections],
-  )
   const cards = useMemo(
-    () => buildOverviewCards({ conversations, background, profiles, plugins, t, sectionTags }),
-    [conversations, background, profiles, plugins, t, sectionTags],
+    () => buildOverviewCards({ conversations, background, profiles, plugins, t }),
+    [conversations, background, profiles, plugins, t],
   )
   const visibleCards = useMemo(
     () =>
@@ -539,13 +533,12 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
     [cards, profileFilter, nodeFilter, sourceFilter, queryFilter],
   )
 
-  // 批量管理口径与侧栏批量模式同界：仅人类自有、未被插件 sidebarSection
-  // 接管的根会话可勾选（isConversationArchivable ⇒ 可归档且可删除）；托管
-  // 与 bot 会话不参与批量，保护语义与侧栏勾选框一致。且收起分节内的卡片
-  // 不可见，不得进入可勾选与有效选择集。
+  // 批量管理口径与侧栏批量模式同界：仅人类自有的根会话可勾选（isConversationArchivable
+  // ⇒ 可归档且可删除）；托管会话不参与批量，保护语义与侧栏勾选框一致。且收起分节内的
+  // 卡片不可见，不得进入可勾选与有效选择集。
   const isCardSelectable = useMemo(
-    () => (conv: ConversationSummary) => isConversationArchivable(conv, sectionTags),
-    [sectionTags],
+    () => (conv: ConversationSummary) => isConversationArchivable(conv),
+    [],
   )
   const selectableCardIds = useMemo(
     () => renderedCards.filter((card) => isCardSelectable(card.root)).map((card) => card.root.id),
@@ -693,7 +686,6 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
       conversations,
       plugins,
       sidebarItems: groupedUi.sidebarItems,
-      sidebarSections: groupedUi.sidebarSections,
       locale,
     })
     const creatable = standings.filter((standing) => standing.canCreateConversation)
@@ -712,7 +704,7 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
       if (b.profileId === latestRootProfileId) return 1
       return a.order - b.order || a.profileId.localeCompare(b.profileId)
     })
-  }, [profiles, conversations, plugins, groupedUi.sidebarItems, groupedUi.sidebarSections, locale])
+  }, [profiles, conversations, plugins, groupedUi.sidebarItems, locale])
 
   const openNewTopic = (profileId: string): void => {
     openTarget({ kind: 'agent', profileId }, isSplit ? { split: true } : undefined)

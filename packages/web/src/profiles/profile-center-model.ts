@@ -1,22 +1,16 @@
 import type {
   ConversationSummary,
-  HelmxLocale,
   PluginSummary,
   Profile as ProtocolProfile,
-  ProfileRuntime,
-  ProfileRuntimeUiSpec,
   ProfileStarterPrompt,
 } from '@helmx/protocol/browser'
 import {
-  DEFAULT_HELMX_LOCALE,
   PROFILE_STARTERS_MAX_ITEMS,
   PROFILE_STARTER_LABEL_MAX_LENGTH,
   PROFILE_STARTER_PROMPT_MAX_LENGTH,
-  resolveLocalizedText,
 } from '@helmx/protocol/browser'
 import { assetsApi } from '../lib/api.js'
 import { isPluginSummaryActive } from '../lib/live-state.js'
-import type { QualifiedUiSpec } from '../lib/types.js'
 import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 
 declare module '@helmx/protocol/browser' {
@@ -30,60 +24,17 @@ declare module '@helmx/protocol/browser' {
 export type { Profile } from '@helmx/protocol/browser'
 import type { Profile } from '@helmx/protocol/browser'
 
-export type ProfileCategoryTab = 'all' | 'system' | 'custom' | `runtime:${string}`
+export type ProfileCategoryTab = 'all' | 'system' | 'custom'
 
-const RUNTIME_TAB_PREFIX = 'runtime:'
-
-export function runtimeCategoryTabKey(kind: string): ProfileCategoryTab {
-  return `${RUNTIME_TAB_PREFIX}${kind}`
-}
-
-/** Deduplicate registered `ctx.ui.profileRuntime` specs by `spec.kind` (first wins, preserving order). */
-export function dedupeProfileRuntimeSpecs(
-  runtimeSpecs: ReadonlyArray<QualifiedUiSpec<ProfileRuntimeUiSpec>>,
-): Array<QualifiedUiSpec<ProfileRuntimeUiSpec>> {
-  const seen = new Set<string>()
-  const out: Array<QualifiedUiSpec<ProfileRuntimeUiSpec>> = []
-  for (const item of runtimeSpecs) {
-    const kind = item.spec.kind.trim()
-    if (!kind || seen.has(kind)) continue
-    seen.add(kind)
-    out.push(item)
-  }
-  return out
-}
-
-/** Resolve the registered `ProfileRuntimeUiSpec` matching a `Profile.runtime.kind`. */
-export function findProfileRuntimeSpec(
-  kind: string | undefined,
-  runtimeSpecs: ReadonlyArray<QualifiedUiSpec<ProfileRuntimeUiSpec>>,
-): QualifiedUiSpec<ProfileRuntimeUiSpec> | undefined {
-  if (!kind) return undefined
-  return runtimeSpecs.find((item) => item.spec.kind === kind)
-}
-
-/**
- * Build localized category tabs for ProfileCenter:
- * base tabs (`all`, `system`, `custom`) plus dynamic tabs contributed by enabled
- * plugins via `ctx.ui.profileRuntime` (disabling the plugin removes its tab).
- */
+/** Build localized category tabs for ProfileCenter (`all`, `system`, `custom`). */
 export function buildProfileCategoryTabs(
-  runtimeSpecs: ReadonlyArray<QualifiedUiSpec<ProfileRuntimeUiSpec>> = [],
-  locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
   t: WebMessageTranslator = englishWebTranslator,
 ): Array<{ key: ProfileCategoryTab; label: string }> {
-  const tabs: Array<{ key: ProfileCategoryTab; label: string }> = [
+  return [
     { key: 'all', label: t('common.all') },
     { key: 'system', label: t('common.builtIn') },
     { key: 'custom', label: t('profiles.tab.custom') },
   ]
-  for (const item of dedupeProfileRuntimeSpecs(runtimeSpecs)) {
-    tabs.push({
-      key: runtimeCategoryTabKey(item.spec.kind),
-      label: resolveLocalizedText(item.spec.label, locale),
-    })
-  }
-  return tabs
 }
 
 /** Whether the profile is a protected built-in or plugin-managed profile. */
@@ -126,12 +77,6 @@ export function filterProfiles(
     if (categoryTab === 'custom' && isSystemProfile(p)) {
       return false
     }
-    if (categoryTab.startsWith(RUNTIME_TAB_PREFIX)) {
-      const targetKind = categoryTab.slice(RUNTIME_TAB_PREFIX.length)
-      if (p.runtime?.kind !== targetKind) {
-        return false
-      }
-    }
 
     // 2. Search match: profile.id, profile.name, profile.description,
     //    profile.tags, profile.defaultModel, profile.system, profile.skills
@@ -152,23 +97,16 @@ export function filterProfiles(
   })
 }
 
-export interface ProfileCategoryCounts extends Record<string, number> {
+export interface ProfileCategoryCounts {
   all: number
   system: number
   custom: number
 }
 
-/** Count profiles per category tab (dynamic runtime tabs driven by `ctx.ui.profileRuntime`). */
-export function buildProfileCategoryCounts(
-  profiles: Profile[],
-  runtimeSpecs: ReadonlyArray<QualifiedUiSpec<ProfileRuntimeUiSpec>> = [],
-): ProfileCategoryCounts {
+/** Count profiles per category tab. */
+export function buildProfileCategoryCounts(profiles: Profile[]): ProfileCategoryCounts {
   let systemCount = 0
   let customCount = 0
-  const runtimeCounts = new Map<string, number>()
-  for (const item of dedupeProfileRuntimeSpecs(runtimeSpecs)) {
-    runtimeCounts.set(item.spec.kind, 0)
-  }
 
   for (const p of profiles) {
     if (isSystemProfile(p)) {
@@ -176,21 +114,13 @@ export function buildProfileCategoryCounts(
     } else {
       customCount++
     }
-    const kind = p.runtime?.kind
-    if (kind !== undefined && runtimeCounts.has(kind)) {
-      runtimeCounts.set(kind, (runtimeCounts.get(kind) ?? 0) + 1)
-    }
   }
 
-  const counts: ProfileCategoryCounts = {
+  return {
     all: profiles.length,
     system: systemCount,
     custom: customCount,
   }
-  for (const [kind, count] of runtimeCounts.entries()) {
-    counts[runtimeCategoryTabKey(kind)] = count
-  }
-  return counts
 }
 
 /** Summarize profile counts. */
@@ -438,57 +368,8 @@ export const profilesApi = {
 }
 
 // ---------------------------------------------------------------------------
-// Profile form normalization, runtime editing helpers & PUT save payload
+// Profile form normalization & PUT save payload
 // ---------------------------------------------------------------------------
-
-export interface EnvPair {
-  key: string
-  value: string
-}
-
-export function envToPairs(env: Record<string, string> | undefined): EnvPair[] {
-  return Object.entries(env ?? {}).map(([key, value]) => ({ key, value }))
-}
-
-export function pairsToEnv(pairs: EnvPair[]): Record<string, string> | undefined {
-  const env: Record<string, string> = {}
-  for (const p of pairs) {
-    const k = p.key.trim()
-    if (k) env[k] = p.value
-  }
-  return Object.keys(env).length > 0 ? env : undefined
-}
-
-/** Multi-line args editor text -> args array: one argument per line, trimming only edges while keeping internal spaces. */
-export function argsTextToArgs(text: string): string[] {
-  return text
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-}
-
-/** Args array -> multi-line editor text. */
-export function argsToText(args: string[] | undefined): string {
-  return (args ?? []).join('\n')
-}
-
-/**
- * Normalize `ProfileRuntime`: blank `nodeId`/`workspace` collapse to omitted;
- * empty `env`/`args` collapse to omitted; `args` keeps internal whitespace.
- */
-export function normalizeRuntime(runtime: ProfileRuntime | undefined): ProfileRuntime | undefined {
-  if (runtime === undefined) return undefined
-  const normalized: ProfileRuntime = { kind: runtime.kind.trim(), agent: runtime.agent.trim() }
-  const args = (runtime.args ?? []).map((a) => a.trim()).filter((a) => a.length > 0)
-  if (args.length > 0) normalized.args = args
-  const nodeId = runtime.nodeId?.trim()
-  if (nodeId) normalized.nodeId = nodeId
-  const workspace = runtime.workspace?.trim()
-  if (workspace) normalized.workspace = workspace
-  const env = pairsToEnv(envToPairs(runtime.env))
-  if (env) normalized.env = env
-  return normalized
-}
 
 export interface ProfileSaveInput {
   id: string
@@ -502,9 +383,8 @@ export interface ProfileSaveInput {
   /** `undefined` = all available skills; `[]` = explicitly none; non-empty = allowlist. */
   skills?: string[]
   starters?: StarterDraft[]
-  runtime?: ProfileRuntime
   tags?: string[]
-  /** Previous full profile snapshot for PUT whole-replacement passthrough (`tags`, `managedByPlugin`, `humanSelectable`). */
+  /** Previous full profile snapshot for PUT whole-replacement passthrough (`tags`, `managedByPlugin`). */
   source?: Profile | null
   isNew: boolean
   /** Omit `system` on update unless explicitly edited so concurrent `SYSTEM.md` writes stay intact. */
@@ -516,8 +396,7 @@ export interface ProfileSaveInput {
  * - only valid protocol fields are written (never leaking UI-only augmented props like `description`);
  * - blank scalar overrides (`name`, `model`, `thinkingLevel`, `nodeId`, `cwd`) are omitted so PUT deletes them;
  * - `skills` preserves the three-state distinction (`undefined` omitted, `[]` kept as empty array, allowlist kept verbatim);
- * - `runtime` is normalized and omitted when cleared (`undefined`);
- * - `!isNew` preserves `tags`, `managedByPlugin`, and `humanSelectable` from `source`;
+ * - `!isNew` preserves `tags` and `managedByPlugin` from `source`;
  * - `system` is emitted only for new profiles or when explicitly edited (`includeSystem: true`).
  */
 export function buildProfileSavePayload(input: ProfileSaveInput): Profile {
@@ -534,7 +413,6 @@ export function buildProfileSavePayload(input: ProfileSaveInput): Profile {
   }
 
   if (source?.managedByPlugin !== undefined) payload.managedByPlugin = source.managedByPlugin
-  if (source?.humanSelectable !== undefined) payload.humanSelectable = source.humanSelectable
 
   const name = input.name?.trim()
   if (name) payload.name = name
@@ -553,9 +431,6 @@ export function buildProfileSavePayload(input: ProfileSaveInput): Profile {
 
   if (input.restrictToCwd !== undefined) payload.restrictToCwd = input.restrictToCwd
   if (input.skills !== undefined) payload.skills = [...input.skills]
-
-  const runtime = normalizeRuntime(input.runtime)
-  if (runtime !== undefined) payload.runtime = runtime
 
   if (input.starters !== undefined) {
     if (input.starters.length > 0) {

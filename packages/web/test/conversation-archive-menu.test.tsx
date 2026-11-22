@@ -425,16 +425,16 @@ describe("conversation-archive-menu", () => {
     assert.deepEqual(observed?.primary, { kind: 'conversation', conversationId: 2 }, '迟到迁移不得覆盖用户的新导航')
   })
 
-  test('明细菜单归档资格：bot 托管与子代理派生会话不渲染归档项', { timeout: 60_000 }, async () => {
+  test('明细菜单归档资格：helmx 托管与子代理派生会话不渲染归档项', { timeout: 60_000 }, async () => {
     conversations = [
-      summary(1, { ownedBy: 'bot' }),
+      summary(1, { ownedBy: 'helmx' }),
       summary(2, { parentConversationId: 1 }),
     ]
     await mount('#/c/1')
     await openMenu()
     const archiveItem = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')]
       .find((el) => el.textContent?.includes('Archive conversation'))
-    assert.ok(archiveItem === undefined, 'bot 托管会话不得提供归档入口')
+    assert.ok(archiveItem === undefined, 'helmx 托管会话不得提供归档入口')
 
     window.history.replaceState(null, '', '#/c/2')
     await act(async () => {

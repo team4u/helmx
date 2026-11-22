@@ -6,24 +6,20 @@
  * 2. `privilege`: warns if running as root or with passwordless `sudo -n true` (Agent bash runs
  *    with the daemon's privileges);
  * 3. `hub`: performs a `/ws/node?nodeId=<id>` WebSocket handshake to measure RTT and closes
- *    immediately **without sending `register`** (which would evict a live daemon session);
- * 4. `herdr_ipc`: probes the local Herdr IPC socket (`info` when absent, since it is optional).
+ *    immediately **without sending `register`** (which would evict a live daemon session).
  */
 
-import net from 'node:net';
-import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import { WebSocket } from 'ws';
-import { WINDOWS_LOCAL_PIPE_PREFIX } from '@helmx/protocol';
 import { readNodeIdentity, resolveNodeDataDir } from './index.js';
 
 export type NodeDoctorCheckStatus = 'ok' | 'warn' | 'error' | 'info';
 
 export interface NodeDoctorCheck {
-  id: 'identity' | 'privilege' | 'hub' | 'herdr_ipc';
+  id: 'identity' | 'privilege' | 'hub';
   status: NodeDoctorCheckStatus;
   message: string;
   details?: Record<string, unknown>;
@@ -48,7 +44,6 @@ export interface NodeDoctorOptions {
 }
 
 const SUDO_PROBE_TIMEOUT_MS = 1_500;
-const HERDR_IPC_PROBE_TIMEOUT_MS = 1_000;
 
 /** Run `sudo -n true` non-interactively; timeouts and failures report `false`. */
 async function probePasswordlessSudo(env: NodeJS.ProcessEnv): Promise<boolean> {
@@ -234,49 +229,6 @@ async function checkHub(hubUrl: string, nodeId: string, connectTimeoutMs: number
   });
 }
 
-/** Derive the default local Herdr IPC socket/pipe path for the optional `helmx-node doctor` probe. */
-function defaultLocalHerdrEndpoint(env: NodeJS.ProcessEnv): string {
-  const override = env['HERDR_SOCKET_PATH'];
-  if (override !== undefined && override !== '') return override;
-  const xdg = env['XDG_CONFIG_HOME'];
-  if (process.platform === 'win32') {
-    const base =
-      (xdg !== undefined && xdg !== '' ? xdg : undefined) ??
-      (env['APPDATA'] !== undefined && env['APPDATA'] !== '' ? env['APPDATA'] : undefined) ??
-      (env['USERPROFILE'] !== undefined && env['USERPROFILE'] !== '' ? `${env['USERPROFILE']}\\AppData\\Roaming` : undefined) ??
-      (env['HOME'] !== undefined && env['HOME'] !== '' ? `${env['HOME']}\\.config` : os.tmpdir());
-    return `${WINDOWS_LOCAL_PIPE_PREFIX}${base}\\herdr\\herdr.sock`;
-  }
-  const base = xdg !== undefined && xdg !== '' ? xdg : path.join(os.homedir(), '.config');
-  return path.join(base, 'herdr', 'herdr.sock');
-}
-
-/** Probe local Herdr IPC socket reachability (`info` when absent, since Herdr is optional). */
-async function checkHerdrIpc(env: NodeJS.ProcessEnv): Promise<NodeDoctorCheck> {
-  const endpoint = defaultLocalHerdrEndpoint(env);
-  return await new Promise<NodeDoctorCheck>((resolve) => {
-    let settled = false;
-    const socket = net.connect(endpoint);
-    const finish = (check: NodeDoctorCheck): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      socket.destroy();
-      resolve(check);
-    };
-    const timer = setTimeout(
-      () => finish({ id: 'herdr_ipc', status: 'info', message: 'running Herdr IPC not detected (optional capability; does not affect core node execution)', details: { endpoint } }),
-      HERDR_IPC_PROBE_TIMEOUT_MS,
-    );
-    socket.once('connect', () => {
-      finish({ id: 'herdr_ipc', status: 'ok', message: `Herdr IPC reachable (${endpoint})`, details: { endpoint } });
-    });
-    socket.once('error', () => {
-      finish({ id: 'herdr_ipc', status: 'info', message: 'running Herdr IPC not detected (optional capability; does not affect core node execution)', details: { endpoint } });
-    });
-  });
-}
-
 /**
  * Run read-only diagnostics and return a report (`ok` is true iff no check has status `'error'`).
  * `hubUrl` precedence: explicit option -> `env.HELMX_HUB_URL` -> `identity.hubUrl`.
@@ -311,8 +263,6 @@ export async function runNodeDoctor(options: NodeDoctorOptions = {}): Promise<No
   } else {
     checks.push(await checkHub(hubUrl, identity.nodeId, connectTimeoutMs));
   }
-
-  checks.push(await checkHerdrIpc(env));
 
   return {
     ok: !checks.some((check) => check.status === 'error'),

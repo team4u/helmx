@@ -17,7 +17,7 @@ import type {
   ConversationPatch,
   ConversationSummary,
 } from '@helmx/protocol'
-import { HelmxError, isValidEnvName, isValidNodeId, NODE_ID_PATTERN } from '@helmx/protocol'
+import { HelmxError, isValidNodeId, NODE_ID_PATTERN } from '@helmx/protocol'
 import type { ConversationOwnership } from './runtime-ownership.js'
 import type { Harness, Registry } from '@earendil-works/pi-durable'
 import type { EnvFabric } from '../env/index.js'
@@ -56,7 +56,7 @@ import { cwdScopeViolationText } from './tools/cwd-scope.js'
 import { validateJsonSchema, type StructuredOutputSession } from './structured-output.js'
 import type { HelmxStore } from './store.js'
 import type { HelmxToolDeps } from './tool-deps.js'
-import { buildManagedEnv, runGate } from './tools.js'
+import { runGate } from './tools.js'
 import type { Profile, SecretStash } from '../services/index.js'
 
 /** Trim a raw `Profile` down to the core fields consumed by native spawn execution. */
@@ -66,36 +66,7 @@ function toResolvedProfile(profile: Profile): ResolvedProfile {
     ...(profile.thinkingLevel ? { thinkingLevel: profile.thinkingLevel } : {}),
     ...(profile.cwd !== undefined ? { cwd: profile.cwd } : {}),
     ...(profile.nodeId !== undefined ? { nodeId: profile.nodeId } : {}),
-    ...(profile.runtime !== undefined ? { runtime: profile.runtime } : {}),
   }
-}
-
-/**
- * Boundary validation for `secretNames` (shared by spawn requests and `buildSpawnEnv`): string array where
- * every item is a non-empty valid env var name with no duplicates; `undefined` (no grants) is allowed.
- * Invalid shapes fail explicitly.
- */
-function validateSecretNames(secretNames: string[] | undefined): string[] {
-  if (secretNames === undefined) return []
-  if (!Array.isArray(secretNames)) {
-    throw new HelmxError('validation_error', `secretNames must be a string array (received ${typeof secretNames})`, 400)
-  }
-  const seen = new Set<string>()
-  for (const name of secretNames) {
-    if (typeof name !== 'string' || name === '' || !isValidEnvName(name)) {
-      throw new HelmxError(
-        'validation_error',
-        `secretNames contains invalid secret name '${String(name)}' (must be a non-empty valid environment variable name)`,
-        400,
-        { name },
-      )
-    }
-    if (seen.has(name)) {
-      throw new HelmxError('validation_error', `Duplicate entry in secretNames: ${name}`, 400, { name })
-    }
-    seen.add(name)
-  }
-  return [...secretNames]
 }
 
 interface RuntimeAgentSpawnDeps {
@@ -129,49 +100,6 @@ export class RuntimeAgentSpawn {
   constructor(private readonly deps: RuntimeAgentSpawnDeps) {}
 
   /**
-   * Construct managed child process environment variables:
-   * never inherits host `process.env` (target machine owns its environment; host `PATH`/`HOME` etc. must not leak).
-   * Carries zero parent stash secrets by default (least privilege for external panes); injects secrets only by explicit
-   * `secretNames`: each requested name must currently exist in the parent conversation's stash (unexpired/unrevoked),
-   * failing explicitly with 404 if missing rather than silently falling back to empty injection.
-   */
-  buildSpawnEnv(
-    conversationId: number,
-    cwd: string,
-    nodeId?: string,
-    options?: { secretNames?: string[] },
-  ): Record<string, string> {
-    if (!Number.isInteger(conversationId) || conversationId <= 0) {
-      throw new HelmxError(
-        'validation_error',
-        `buildSpawnEnv requires a positive integer conversationId (received ${String(conversationId)})`,
-        400,
-        { conversationId },
-      )
-    }
-    if (typeof cwd !== 'string' || cwd === '') {
-      throw new HelmxError('validation_error', `buildSpawnEnv requires a non-empty cwd (received ${String(cwd)})`, 400, {
-        cwd,
-      })
-    }
-    const names = validateSecretNames(options?.secretNames)
-    // Sample once and inspect actually returned keys (atomic check at one clock instant):
-    // doing has() then envFor() in two steps could cross a TTL expiry boundary and silently drop a secret.
-    const stashEnv = this.deps.stashService.envFor(conversationId, names)
-    const missing = names.filter((name) => !Object.hasOwn(stashEnv, name))
-    if (missing.length > 0) {
-      throw new HelmxError(
-        'secret_not_found',
-        `Secrets missing (or grant disabled) in conversation ${conversationId} stash: ${missing.join(', ')}; check secret names and lifecycle (TTL/turn scope)`,
-        404,
-        { conversationId, missing },
-      )
-    }
-    const resolvedNodeId = nodeId ?? this.deps.store.getConv(conversationId)?.nodeId ?? 'local'
-    return buildManagedEnv(this.deps.toolDeps, cwd, conversationId, resolvedNodeId, { stashEnv })
-  }
-
-  /**
    * Subagent spawning: `agent_spawn` around pipeline (continuation) -> default native subagent.
    * Kernel has zero Git/worktree semantics: isolation and execution environment policies are handled by plugins
    * via `next(finalReq)`; kernel enforces common guarantees only (meta envelope / schema / gate reporting /
@@ -179,7 +107,6 @@ export class RuntimeAgentSpawn {
    */
   async spawnAgent(request: AgentSpawnRequest): Promise<unknown> {
     if (request.schema !== undefined) assertSchemaCompilable(request.schema)
-    validateSecretNames(request.secretNames)
     // Envelope boundary (synchronous, before hook chains and awaits): `meta` must be a JSON-safe
     // namespaced object; kernel does not validate business contents (each plugin boundary handles its own).
     sanitizeAgentNamespacedMeta(request.meta, {
@@ -207,46 +134,28 @@ export class RuntimeAgentSpawn {
         }
       } else if (request.reattach !== undefined) {
         const reattachConvId = request.reattach.conversationId
-        const reattachExecId = request.reattach.executionId
-        if (reattachConvId !== undefined) {
-          const child = this.deps.store.getConv(reattachConvId)
-          if (child === undefined || child.parentConversationId !== request.parentConversationId) {
-            throw new HelmxError(
-              'not_found',
-              `Reattach target child conversation ${reattachConvId} does not exist or does not belong to parent conversation ${request.parentConversationId}; refusing to create a new conversation instead`,
-              404,
-              { conversationId: reattachConvId, parentConversationId: request.parentConversationId },
-            )
-          }
-          if (
-            isSpawnConversationInTurn(this.deps.harness, reattachConvId) ||
-            [...this.activeSpawnExecutions.values()].some(
-              (info) =>
-                info.conversationId === reattachConvId ||
-                (reattachExecId !== undefined && info.executionId === reattachExecId),
-            )
-          ) {
-            throw new HelmxError('subagent_in_use', `Child conversation ${reattachConvId} still has an active reattach or execution in flight; concurrent reattach is not allowed`, 409, {
-              conversationId: reattachConvId,
-            })
-          }
-          this.activeSpawnExecutions.set(token, {
+        const child = this.deps.store.getConv(reattachConvId)
+        if (child === undefined || child.parentConversationId !== request.parentConversationId) {
+          throw new HelmxError(
+            'not_found',
+            `Reattach target child conversation ${reattachConvId} does not exist or does not belong to parent conversation ${request.parentConversationId}; refusing to create a new conversation instead`,
+            404,
+            { conversationId: reattachConvId, parentConversationId: request.parentConversationId },
+          )
+        }
+        if (
+          isSpawnConversationInTurn(this.deps.harness, reattachConvId) ||
+          [...this.activeSpawnExecutions.values()].some((info) => info.conversationId === reattachConvId)
+        ) {
+          throw new HelmxError('subagent_in_use', `Child conversation ${reattachConvId} still has an active reattach or execution in flight; concurrent reattach is not allowed`, 409, {
             conversationId: reattachConvId,
-            nodeId: child.nodeId ?? 'local',
-            effectiveCwd: request.reattach.effectiveCwd ?? child.cwd,
-            ...(reattachExecId !== undefined ? { executionId: reattachExecId } : {}),
-          })
-        } else if (reattachExecId !== undefined) {
-          if ([...this.activeSpawnExecutions.values()].some((info) => info.executionId === reattachExecId)) {
-            throw new HelmxError('subagent_in_use', `External execution ${reattachExecId} still has an active reattach or execution in flight; concurrent reattach is not allowed`, 409, {
-              executionId: reattachExecId,
-            })
-          }
-          this.activeSpawnExecutions.set(token, {
-            executionId: reattachExecId,
-            ...(request.reattach.effectiveCwd !== undefined ? { effectiveCwd: request.reattach.effectiveCwd } : {}),
           })
         }
+        this.activeSpawnExecutions.set(token, {
+          conversationId: reattachConvId,
+          nodeId: child.nodeId ?? 'local',
+          effectiveCwd: request.reattach.effectiveCwd ?? child.cwd,
+        })
       }
       const originalResolved = request.onResolved
       let execution: AgentExecutionInfo | undefined
@@ -359,14 +268,6 @@ export class RuntimeAgentSpawn {
         { agentType: effectiveProfileId },
       )
     }
-    if (profile.runtime !== undefined) {
-      throw new HelmxError(
-        'unsupported_runtime',
-        `Profile '${effectiveProfileId}' declares external runtime kind='${profile.runtime.kind}' (agent '${profile.runtime.agent}'); fork is only supported for native Profile sub-conversations`,
-        400,
-        { agentType: effectiveProfileId, runtimeKind: profile.runtime.kind },
-      )
-    }
     return resolveCleanForkAnchor(this.deps.harness, request.parentConversationId)
   }
 
@@ -403,18 +304,6 @@ export class RuntimeAgentSpawn {
         finalRequest.attachments !== undefined && finalRequest.attachments.length > 0
           ? await this.deps.conversations.resolveAuthorizedAttachments(finalRequest.parentConversationId, finalRequest.attachments)
           : undefined
-
-      // Honesty boundary for native execution: native child conversations isolate their tool env to their own stash
-      // and do not inherit parent secret grants — reject non-empty `secretNames` here when not handled by an external
-      // runtime hook rather than silently pretending secrets were granted; empty arrays impose no grant and pass through.
-      if (finalRequest.secretNames !== undefined && finalRequest.secretNames.length > 0) {
-        throw new HelmxError(
-          'unsupported_secret_grant',
-          `Native execution does not support secretNames grants (${finalRequest.secretNames.join(', ')}): native child conversations do not inherit the parent conversation's stash; secret injection is only supported by external runtimes (e.g., builtin:herdr panes) — switch agentType or remove the grant`,
-          400,
-          { secretNames: [...finalRequest.secretNames] },
-        )
-      }
 
       return runNativeSpawn(
         this.buildNativeSpawnDeps(finalRequest, resolvedAttachments, resolvedAnchor),
@@ -512,6 +401,7 @@ export class RuntimeAgentSpawn {
           tags,
           parentConversationId: parentId,
           ...(parentToolCallId !== undefined && parentToolCallId !== '' ? { parentToolCallId } : {}),
+          ownedBy: 'helmx',
           nodeId: nodeId ?? resolveSpawnTargetNodeId(profile?.nodeId, parentMeta?.nodeId, forkSameProfile, finalRequest.nodeId),
           cwd: childCwd,
           model: modelMirror,

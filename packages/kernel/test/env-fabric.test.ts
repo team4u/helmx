@@ -161,43 +161,6 @@ describe('EnvFabric node connectivity and remote execution', { timeout: 60_000 }
     }
   })
 
-  it('node tunnel: real HTTP/SSE and POST request body byte-for-byte via remote loopback', { timeout: 60_000 }, async () => {
-    const nodeData = await mkdtemp(join(rootDir, 'tunnel-node-'))
-    const targetBodies: string[] = []
-    const target = http.createServer((req, res) => {
-      const chunks: Buffer[] = []
-      req.on('data', (chunk: Buffer) => chunks.push(chunk))
-      req.on('end', () => {
-        targetBodies.push(Buffer.concat(chunks).toString('utf8'))
-        res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8' })
-        res.write('data: 你好\\n\\n')
-        setTimeout(() => {
-          res.end('data: 世界\\n\\n')
-        }, 10)
-      })
-    })
-    await new Promise<void>((resolve) => target.listen(0, '127.0.0.1', resolve))
-    const targetPort = (target.address() as { port: number }).port
-    const hub = await startFabricHub((nodeId, token) => nodeId === 'tunnel-node' && token === 'tunnel-node:secret')
-    const daemon = await startNode({ url: hub.baseUrl, nodeId: 'tunnel-node', token: 'tunnel-node:secret', dataDir: nodeData })
-    try {
-      assert.equal(await daemon.waitUntilRegistered(10_000), true)
-      const response = await hub.fabric.nodeFetch('tunnel-node')(`http://127.0.0.1:${targetPort}/v1/chat/completions`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ message: 'request body:你好,世界' }),
-      })
-      assert.equal(response.status, 200)
-      assert.equal(await response.text(), 'data: 你好\\n\\ndata: 世界\\n\\n')
-      assert.deepEqual(targetBodies, ['{"message":"request body:你好,世界"}'])
-    } finally {
-      await daemon.close()
-      await hub.close()
-      await new Promise<void>((resolve) => target.close(() => resolve()))
-      await cleanupDir(nodeData)
-    }
-  })
-
   it('remote file I/O + real envFlushFile forwarding + streaming exec + abort propagation', { timeout: 60_000 }, async () => {
     const nodeData = await mkdtemp(join(rootDir, 'rw-node-'))
     const workDir = await mkdtemp(join(rootDir, 'rw-work-'))

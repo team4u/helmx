@@ -1,10 +1,9 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ComposerScopeProps, ConversationSummary } from '@helmx/protocol/browser'
-import { COMPOSER_DOCK_SLOT, COMPOSER_STATUS_SLOT, resolveLocalizedText } from '@helmx/protocol/browser'
+import { COMPOSER_DOCK_SLOT, COMPOSER_STATUS_SLOT } from '@helmx/protocol/browser'
 import { conversationsApi } from '../lib/api.js'
 import { buildSlashMenuItems, pluginSlashCommandsFor } from '../lib/commands-model.js'
-import { HelmxIcon, PluginSlot, Popover, PopoverContent, PopoverTrigger, Tooltip, useSharedNowMs } from '@helmx/plugin-client'
-import { matchesUiScope } from '../lib/types.js'
+import { HelmxIcon, PluginSlot, Tooltip, useSharedNowMs } from '@helmx/plugin-client'
 import {
   useConversationDetail,
   useGroupedUi,
@@ -19,7 +18,6 @@ import { collectEnabledPluginIds } from '../shell/sidebar-model.js'
 import { conversationSkillScope } from '../skills/skill-scope-model.js'
 import { useScopedSkillCatalog } from '../skills/use-scoped-skills.js'
 import { slashMenuSkillsWithScope } from './slash-menu-skills.js'
-import { PluginUiView } from '../ui/PluginUiView.js'
 import { AskDock } from './AskDock.js'
 import { CompletionPopover } from './CompletionPopover.js'
 import { CommandPopover } from './CommandPopover.js'
@@ -117,8 +115,6 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const dragDepthRef = useRef(0)
   const [dragging, setDragging] = useState(false)
-  const [extrasOpen, setExtrasOpen] = useState(false)
-  const [widgetsExpanded, setWidgetsExpanded] = useState(false)
   const [slashMenuItems, setSlashMenuItems] = useState<Array<{ id: string; label: string; hint?: string; apply?: string; run?: () => void }>>([])
 
   const compacting = conversation.contextUsage?.compacting === true
@@ -172,9 +168,6 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
     dirtyKey: composerDirtyKey,
     dirtySink,
   })
-
-  const widgets = groupedUi.composerWidgets.filter((w) => matchesUiScope(conversation, w.spec.scope))
-  const pills = groupedUi.composerPills.filter((p) => matchesUiScope(conversation, p.spec.scope))
 
   useLayoutEffect(() => {
     autoGrowTextarea(textareaRef.current)
@@ -332,22 +325,6 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
   return (
     <div className="composer-shell">
       <div className="composer-inner">
-        {widgets.length > 0 && (!isMobile || widgetsExpanded) ? (
-          <div className="composer-widgets">
-            {widgets.map((w) => (
-              <div key={`${w.pluginId}/${w.spec.id}`} className="composer-widget-item">
-                <PluginUiView
-                  pluginId={w.pluginId}
-                  spec={w.spec}
-                  conversationId={conversation.id}
-                  label={t('conv.composer.widgetLabel', { id: w.spec.id })}
-                  slotProps={{ conversation, composer }}
-                  composer={composer}
-                />
-              </div>
-            ))}
-          </div>
-        ) : null}
         {/* Reserved slot at the top of the host composer: in-flight orchestration activity renders directly above the AskDock (never tucked into the more menu on desktop or mobile); collapses to zero height when idle. */}
         <PluginSlot
           ownerPluginId="builtin:composer"
@@ -477,77 +454,6 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
                   if (files.length > 0) void uploadFiles(files)
                 }}
               />
-              {!isMobile ? (
-                <span className="composer-pills">
-                  {pills.map((p) => (
-                    <span key={`${p.pluginId}/${p.spec.id}`} className="composer-pill-item">
-                      <PluginUiView
-                        pluginId={p.pluginId}
-                        spec={p.spec}
-                        conversationId={conversation.id}
-                        label={t('conv.composer.pillLabel', { id: p.spec.id })}
-                        slotProps={{ conversation, composer }}
-                        composer={composer}
-                      />
-                    </span>
-                  ))}
-                </span>
-              ) : pills.length > 0 || widgets.length > 0 ? (
-                <Popover open={extrasOpen} onOpenChange={setExtrasOpen}>
-                  <PopoverTrigger asChild>
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-sm composer-icon-button composer-extras"
-                      aria-label={t('conv.composer.toolsLabel')}
-                      title={t('conv.composer.toolsLabel')}
-                    >
-                      <HelmxIcon name="more" size={18} />
-                    </button>
-                  </PopoverTrigger>
-                  <PopoverContent
-                    portalled
-                    side="top"
-                    align="start"
-                    sideOffset={8}
-                    className="composer-popover composer-extras-popover"
-                    onEscapeKeyDown={(event) => event.stopPropagation()}
-                  >
-                    {pills.map((p) => (
-                      <div key={`${p.pluginId}/${p.spec.id}`} className="composer-pill-item">
-                        <PluginUiView
-                          pluginId={p.pluginId}
-                          spec={p.spec}
-                          conversationId={conversation.id}
-                          label={t('conv.composer.pillLabel', { id: p.spec.id })}
-                          slotProps={{ conversation, composer }}
-                          composer={composer}
-                        />
-                      </div>
-                    ))}
-                    {widgets.length > 0 ? (
-                      <button
-                        type="button"
-                        className="popover-item"
-                        aria-expanded={widgetsExpanded}
-                        onClick={() => {
-                          setWidgetsExpanded((v) => !v)
-                          setExtrasOpen(false)
-                        }}
-                      >
-                        <HelmxIcon name="layers" size={15} />
-                        {(() => {
-                          const target = widgets.length === 1
-                            ? resolveLocalizedText(widgets[0]!.spec.title ?? '', locale) || t('conv.composer.panels')
-                            : t('conv.composer.panelsCount', { count: widgets.length })
-                          return widgetsExpanded
-                            ? t('conv.composer.collapsePanels', { target })
-                            : t('conv.composer.viewPanels', { target })
-                        })()}
-                      </button>
-                    ) : null}
-                  </PopoverContent>
-                </Popover>
-              ) : null}
             </div>
             <ComposerSendControls
               working={working}

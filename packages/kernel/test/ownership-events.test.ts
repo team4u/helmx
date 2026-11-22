@@ -44,24 +44,3 @@ test('late tracker summary after deletion never publishes upsert or resurrects c
     await rm(dataDir, { recursive: true, force: true })
   }
 })
-
-test('unreadable ownership document must never fabricate human summary event', { timeout: 60_000 }, async () => {
-  const dataDir = await mkdtemp(join(tmpdir(), 'helmx-ownership-error-'))
-  const kernel = await KernelRuntime.open({ dataDir, cwd: dataDir, autoResume: false })
-  try {
-    const conversation = await kernel.createConversation({ title: 'ownership error' })
-    const frames: HelmxEventFrame[] = []
-    const unsubscribe = kernel.events.subscribe((frame) => frames.push(frame))
-    try {
-      kernel.documentStore.set('conversation-ownership', null)
-      assert.throws(() => summaryCallback(kernel)(conversation))
-      assert.equal(frames.filter((frame) => frame.event.type === 'conversation.upsert').length, 0)
-    } finally {
-      kernel.documentStore.set('conversation-ownership', {})
-      unsubscribe()
-    }
-  } finally {
-    await kernel.close()
-    await rm(dataDir, { recursive: true, force: true })
-  }
-})

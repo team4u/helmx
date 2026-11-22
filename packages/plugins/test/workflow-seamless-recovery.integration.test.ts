@@ -1132,46 +1132,12 @@ test('安全红线：crashRecoveries > 3 熔断、secret_grant_expired_on_restar
   assert.equal(tripped.resumable, false, '熔断记录不得可续跑')
   await sTrip.close()
 
-  // 2) secretNames 授予且崩溃于 onResolved 前：落盘不含 secretNames，重启诚实标 failed(secret_grant_expired_on_restart)
-  const secretDir = useTempDir(t, 'helmx-secret-redline-')
+  // 2) HELMX_AUTO_RECOVER=0 逃生阀与非法配置校验
   const sDocs = new Map<string, unknown>()
   const sState: WorkflowStateStore = {
     get: <T>(k: string, init: T) => (sDocs.has(k) ? structuredClone(sDocs.get(k) as T) : init),
     set: (k, v) => { sDocs.set(k, structuredClone(v)) },
   }
-  const enterPreResolve = deferred<void>()
-  const preResolveHost: WorkflowServiceHost = {
-    ...makeMockHost(),
-    spawnAgent: async () => {
-      enterPreResolve.resolve()
-      return await new Promise<never>(() => {})
-    },
-  }
-  const sSecret1 = new WorkflowService({ dataDir: secretDir, state: sState, host: preResolveHost })
-  void sSecret1.startBackgroundAgent({
-    parentConversationId: 1,
-    prompt: 'use secret',
-    agentType: 'herdr:claude',
-    secretNames: ['PROD_API_TOKEN'],
-  })
-  await enterPreResolve.promise
-  const idxEntries = sState.get<Array<{ id: string }>>('workflow/runs', [])
-  assert.equal(idxEntries.length, 1)
-  const secretRunId = idxEntries[0]!.id
-  const secretRawText = readFileSync(join(secretDir, 'artifacts', '1', `workflow-${secretRunId}.record.json`), 'utf8')
-  assert.equal(secretRawText.includes('PROD_API_TOKEN'), false, '磁盘记录严禁包含 secretNames 名称或明文')
-  const secretRec = JSON.parse(secretRawText) as { subagentSpec?: { hadSecretGrant?: boolean } }
-  assert.equal(secretRec.subagentSpec?.hadSecretGrant, true)
-
-  const sSecret2 = new WorkflowService({ dataDir: secretDir, state: sState, host: makeMockHost() })
-  await sSecret2.init()
-  const secretSummary = sSecret2.getRun(secretRunId)
-  assert.equal(secretSummary.status, 'failed')
-  assert.match(secretSummary.error ?? '', /secret_grant_expired_on_restart/)
-  await sSecret2.close()
-  await sSecret1.close()
-
-  // 3) HELMX_AUTO_RECOVER=0 逃生阀与非法配置校验
   const envDir = useTempDir(t, 'helmx-env-valve-')
   const prevEnv = process.env.HELMX_AUTO_RECOVER
   process.env.HELMX_AUTO_RECOVER = '0'

@@ -344,64 +344,6 @@ test('triggers5: cron 目标路由——显式会话直投；启用 trigger 路�
       0,
       '显式目标事件不得同时进 #1',
     )
-
-    // 5b. 启用 trigger hook 路由插件：默认目标事件经 transform 改投指定会话
-    const routerConv = await kernel.createConversation({ title: '路由目标会话', profileId: 'assistant' })
-    const routerId = routerConv.id
-    await kernel.plugins.register(
-      {
-        id: 'test:trigger-router',
-        name: 'Test Trigger Router',
-        definePlugin(ctx) {
-          ctx.hook.onTrigger((envelope) => {
-            if (envelope.targetConversationId !== undefined) return { action: 'continue' }
-            return { action: 'transform', value: { ...envelope, targetConversationId: routerId } }
-          })
-        },
-      },
-      { enabled: false },
-    )
-    await kernel.plugins.enable('test:trigger-router')
-
-    await kernel.plugins.invokeAction(TRIGGERS, 'cron_create', {
-      id: 'to-router',
-      schedule: '0 0 * * *',
-      enabled: false,
-      text: '应进路由会话的默认事件',
-    })
-    env.faux.setResponses([fauxAssistantMessage('路由会话收到')])
-    await kernel.plugins.invokeAction(TRIGGERS, 'cron_trigger', { id: 'to-router' })
-    await kernel.waitForIdle(routerId)
-    const routerJson = await lastInputJson(env, routerId)
-    assert.match(routerJson, /cron:to-router/)
-    assert.match(routerJson, /应进路由会话的默认事件/)
-    // #1 不得收到（trigger hook transform 改投路由会话）
-    const rootAfter = await kernel.getConversationDetail(ROOT_CONVERSATION_ID, { limit: 20 })
-    assert.equal(
-      rootAfter.entries.filter((e) => e.kind === 'helmx.input' && JSON.stringify(e.data).includes('应进路由会话的默认事件')).length,
-      0,
-      '路由插件启用后默认事件必须进路由会话而非 #1',
-    )
-
-    // 5c. 显式目标在路由插件启用期间仍直达（不被路由钩子覆盖）
-    const target2 = await kernel.createConversation({ title: '显式目标二', profileId: 'assistant' })
-    await kernel.plugins.invokeAction(TRIGGERS, 'cron_create', {
-      id: 'direct-hit-2',
-      schedule: '0 0 * * *',
-      enabled: false,
-      text: '路由插件期间的显式直达',
-      targetConversationId: target2.id,
-    })
-    env.faux.setResponses([fauxAssistantMessage('目标二收到')])
-    await kernel.plugins.invokeAction(TRIGGERS, 'cron_trigger', { id: 'direct-hit-2' })
-    await kernel.waitForIdle(target2.id)
-    assert.match(await lastInputJson(env, target2.id), /路由插件期间的显式直达/)
-    const routerAfter = await kernel.getConversationDetail(routerId, { limit: 30 })
-    assert.equal(
-      routerAfter.entries.filter((e) => e.kind === 'helmx.input' && JSON.stringify(e.data).includes('路由插件期间的显式直达')).length,
-      0,
-      '显式目标事件不得被改投路由会话',
-    )
   } finally {
     await env.close()
   }

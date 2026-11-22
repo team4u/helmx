@@ -63,68 +63,30 @@ function doctorBackend(): PluginHostBackend {
       501,
     );
   };
-  const port = new Proxy({} as Record<string, never>, {
-    get: (_t, prop) => unavailable(`host.<port>.${String(prop)}`),
-  });
-  return {
+  const port = (name: string) =>
+    new Proxy({} as Record<string, never>, {
+      get: (_t, prop) => () => unavailable(`host.${name}.${String(prop)}`),
+    });
+  const overrides: Record<PropertyKey, unknown> = {
     isClosing: () => false,
     redact: (text: string) => text,
-    profiles: port as never,
-    skills: port as never,
+    profiles: port('profiles'),
+    skills: port('skills'),
+    secrets: port('secrets'),
     nodeIpc: undefined,
-    getNodeHostEnv: undefined,
-    nodeFetch: undefined,
     openTunnel: undefined,
-    secrets: port as never,
-    setPluginConfig: () => unavailable('host.setConfig'),
-    dispatchTrigger: () => unavailable('host.dispatchTrigger'),
-    submitInput: () => unavailable('host.submitInput'),
-    submitInputGuarded: () => unavailable('host.submitInputGuarded') as never as Promise<void>,
-    createConversation: () => unavailable('host.createConversation'),
-    forkConversation: () => unavailable('host.forkConversation'),
-    listConversations: () => unavailable('host.listConversations'),
-    getConversation: () => unavailable('host.getConversation'),
-    getConversationDetail: () => unavailable('host.getConversationDetail'),
-    getConversationSubmission: () =>
-      unavailable('host.getConversationSubmission') as never as Promise<
-        import('@helmx/protocol').ConversationSubmissionInfo | undefined
-      >,
-    updateConversation: () => unavailable('host.updateConversation'),
-    abortConversation: () => unavailable('host.abortConversation'),
-    abortConversationGuarded: () => unavailable('host.abortConversationGuarded') as never as Promise<void>,
-    resetConversationGuarded: () =>
-      unavailable('host.resetConversationGuarded') as never as Promise<import('@helmx/protocol').ConversationSummary>,
-    compactConversationGuarded: () =>
-      unavailable('host.compactConversationGuarded') as never as Promise<{
-        taskId: number
-        conversation: import('@helmx/protocol').ConversationSummary
-      }>,
-    getConversationOwnership: () => unavailable('host.getConversationOwnership'),
-    markConversationOwnership: () => unavailable('host.markConversationOwnership'),
-    listArtifacts: () => unavailable('host.listArtifacts'),
-    createArtifact: () => unavailable('host.createArtifact'),
-    getArtifact: () => unavailable('host.getArtifact'),
-    completeText: () => unavailable('host.completeText'),
-    executionEnv: () => unavailable('host.executionEnv'),
-    buildSpawnEnv: () => unavailable('host.buildSpawnEnv'),
-    spawnAgent: () => unavailable('host.spawnAgent'),
-    runGate: () => unavailable('host.runGate'),
-    resolveSpawnTarget: () => unavailable('host.resolveSpawnTarget'),
     listActiveSpawnExecutions: () => [],
-    inspectNodePathUsage: () => unavailable('host.inspectNodePathUsage'),
-    refreshModels: () => unavailable('host.refreshModels'),
-    createAsk: () => unavailable('host.createAsk'),
-    cancelAsk: () => unavailable('host.cancelAsk'),
-    registerAskSeqResolver: () => unavailable('host.registerAskSeqResolver'),
-    onEvent: () => unavailable('host.onEvent'),
     // Event emission fires at registration completion (plugin.changed): safe no-op with no SSE consumers.
     emitEvent: () => {},
-    manageConversation: () => unavailable('host.manageConversation'),
-    execEnv: () => unavailable('host.execEnv'),
     withFileLock: <T,>(_path: string, fn: () => Promise<T>): Promise<T> => fn(),
-    atomicWriteFile: () => unavailable('host.atomicWriteFile'),
-    withFileMutationQueue: <T,>(_target: never, fn: () => Promise<T>): Promise<T> => fn(),
   };
+  return new Proxy(overrides, {
+    get(target, prop) {
+      if (Reflect.has(target, prop)) return Reflect.get(target, prop);
+      if (typeof prop === 'symbol' || prop === 'then') return undefined;
+      return () => unavailable(`host.${prop}`);
+    },
+  }) as unknown as PluginHostBackend;
 }
 
 /** Normalizes a thrown error into a serializable doctor diagnostic object. */

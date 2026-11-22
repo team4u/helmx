@@ -1,12 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { ArtifactMetadata, ArtifactPreviewerProps } from '@helmx/protocol/browser'
-import { resolveLocalizedText } from '@helmx/protocol/browser'
 import { artifactsApi } from '../lib/api.js'
-import { HelmxIcon, Select, SegmentedControl } from '@helmx/plugin-client'
+import { SegmentedControl } from '@helmx/plugin-client'
 import {
   useConversationArtifacts,
-  useConversationSummary,
-  useGroupedUi,
   useStoreActions,
 } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
@@ -14,10 +10,7 @@ import { detectLanguage } from './code-language.js'
 import { FilePreviewBody } from './FilePreviewBody.js'
 import { MarkdownOutlinePopover } from './MarkdownOutlinePopover.js'
 import { PreviewModalShell } from './PreviewModalShell.js'
-import { formatBytes } from '../lib/format.js'
-import { PluginUiView } from '../ui/PluginUiView.js'
-import { collectArtifactPreviewers } from './artifact-preview-model.js'
-import { isMarkdown, looksLikeText, MAX_PREVIEW_TEXT_BYTES, shouldDecodeText } from './artifact-preview-text.js'
+import { isMarkdown, looksLikeText, shouldDecodeText } from './artifact-preview-text.js'
 import { useFilePreviewText, useMarkdownOutlineSync, type FilePreviewLoadState } from './use-file-preview.js'
 
 export interface ArtifactPreviewModalProps {
@@ -28,45 +21,16 @@ export interface ArtifactPreviewModalProps {
   inline?: boolean
 }
 
-/** 插件预览器选择：'default' 为宿主默认渲染。 */
-type PreviewerChoice = 'default' | string
-
-/** 命中产物元数据时合成给插件组件的标准 Props（协议 ArtifactPreviewerProps）。 */
-function buildPreviewerProps(
-  artifactId: string,
-  conversationId: number | undefined,
-  meta: ArtifactMetadata | undefined,
-  mime: string,
-  size: number,
-  blobUrl: string,
-  text: string | null,
-): ArtifactPreviewerProps {
-  return {
-    artifactId,
-    conversationId,
-    name: meta?.name,
-    mimeType: mime,
-    size,
-    blobUrl,
-    text,
-  }
-}
-
 /**
- * 产物智能预览：插件 artifact.previewer 贡献（双轨）+ 宿主默认渲染兜底。
- * - 插件命中需真实会话上下文（scope）与已加载元数据；多命中可切换，可手动切回默认；
- * - text 只解码 ≤1MiB 文本（超限显式说明，不截断伪装）；切换产物/插件移除时
- *   有效回退，ObjectURL 及时回收，绝不让旧 blob/text/name 混入新产物。
+ * 产物预览弹窗：宿主默认渲染（图片 / 音视频 / PDF / Markdown / 代码高亮 / 纯文本），
+ * 文本仅解码 ≤1MiB（超限显式说明，不截断伪装），ObjectURL 及时回收。
  */
 export function ArtifactPreviewModal({ artifactId, conversationId, onClose, inline }: ArtifactPreviewModalProps) {
   const convArtifacts = useConversationArtifacts(conversationId)
-  const conversation = useConversationSummary(conversationId)
-  const groupedUi = useGroupedUi()
   const { loadConversationArtifacts, pushNotice } = useStoreActions()
-  const { locale, t } = useWebLocale()
+  const { t } = useWebLocale()
   const [state, setState] = useState<FilePreviewLoadState>({ phase: 'loading' })
   const [view, setView] = useState<'rich' | 'source'>('rich')
-  const [previewer, setPreviewer] = useState<PreviewerChoice | null>(null)
   const modalBodyRef = useRef<HTMLDivElement | null>(null)
   const markdownPreviewRef = useRef<HTMLDivElement | null>(null)
   const artifactsLoaded = conversationId !== undefined && convArtifacts !== undefined
@@ -115,36 +79,6 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose, inli
   const loadedBlob = state.phase === 'loaded' ? state.blob : undefined
   const { text, textState } = useFilePreviewText(loadedBlob, meta, mime)
 
-  // 插件命中判定用已加载的真实元数据（名称未知不猜）；加载中/失败不给插件命中。
-  const metaName = meta?.name
-  const pluginMatchInput = useMemo(
-    () =>
-      state.phase === 'loaded'
-        ? { name: metaName, mimeType: mime }
-        : undefined,
-    [state.phase, metaName, mime],
-  )
-
-  const matchedPreviewers = useMemo(
-    () =>
-      pluginMatchInput === undefined
-        ? []
-        : collectArtifactPreviewers(groupedUi.artifactPreviewers, pluginMatchInput, conversation),
-    [groupedUi.artifactPreviewers, pluginMatchInput, conversation],
-  )
-
-  // 选择回退：未手动选择时默认取命中首位（priority 最高）；已选择项不在命中列表
-  // （产物切换 / 插件停用移除 / scope 失配）时回落默认渲染。
-  const previewerKey = (p: { pluginId: string; spec: { id: string } }): string => `${p.pluginId}/${p.spec.id}`
-  const effectivePreviewer: PreviewerChoice =
-    previewer !== null && matchedPreviewers.some((p) => previewerKey(p) === previewer)
-      ? previewer
-      : previewer === null && matchedPreviewers.length > 0
-        ? previewerKey(matchedPreviewers[0]!)
-        : 'default'
-
-  const selected = matchedPreviewers.find((p) => previewerKey(p) === effectivePreviewer)
-
   const name = meta?.name ?? artifactId
 
   const isImage = mime.startsWith('image/')
@@ -163,7 +97,7 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose, inli
 
   const { markdownOutline, activeMarkdownHeading, jumpToMarkdownHeading } = useMarkdownOutlineSync({
     markdown,
-    active: view === 'rich' && selected === undefined,
+    active: view === 'rich',
     text,
     modalBodyRef,
     markdownPreviewRef,
@@ -189,31 +123,14 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose, inli
       modalBodyRef={modalBodyRef}
       headerActions={
         <>
-          {matchedPreviewers.length > 0 ? (
-            <Select<PreviewerChoice>
-              size="sm"
-              value={effectivePreviewer}
-              onChange={(e) => setPreviewer(e.target.value)}
-              aria-label={t('conv.artifact.previewModeAria')}
-              className="artifact-previewer-select"
-              options={[
-                { value: 'default', label: t('conv.artifact.defaultPreview') },
-                ...matchedPreviewers.map((p) => ({
-                  value: `${p.pluginId}/${p.spec.id}`,
-                  label: resolveLocalizedText(p.spec.label, locale),
-                  meta: p.spec.title !== undefined ? resolveLocalizedText(p.spec.title, locale) : undefined,
-                })),
-              ]}
-            />
-          ) : null}
-          {markdown && effectivePreviewer === 'default' && view === 'rich' && markdownOutline.length > 0 ? (
+          {markdown && view === 'rich' && markdownOutline.length > 0 ? (
             <MarkdownOutlinePopover
               text={text ?? ''}
               activeHeadingIndex={activeMarkdownHeading}
               onSelectHeading={jumpToMarkdownHeading}
             />
           ) : null}
-          {markdown && effectivePreviewer === 'default' ? (
+          {markdown ? (
             <SegmentedControl<'rich' | 'source'>
               value={view}
               onValueChange={(v) => setView(v)}
@@ -227,44 +144,7 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose, inli
         </>
       }
     >
-      {state.phase === 'loaded' && selected !== undefined ? (
-        <>
-          <div className="artifact-plugin-view">
-            <PluginUiView
-              pluginId={selected.pluginId}
-              spec={selected.spec}
-              conversationId={conversationId}
-              slotProps={{
-                ...buildPreviewerProps(
-                  artifactId,
-                  conversationId,
-                  meta,
-                  mime,
-                  state.blob.size,
-                  state.blobUrl,
-                  text,
-                ),
-              }}
-              label={t('conv.attachment.previewName', { name: resolveLocalizedText(selected.spec.label, locale) })}
-            />
-          </div>
-          {textState === 'exceeded' ? (
-            <div className="callout">{t('conv.artifact.textExceededPlugin', { limit: formatBytes(MAX_PREVIEW_TEXT_BYTES) })}</div>
-          ) : null}
-          <div>
-            <button
-              type="button"
-              className="btn btn-sm"
-              onClick={() => setPreviewer('default')}
-              title={t('conv.artifact.switchDefaultTitle')}
-            >
-              <HelmxIcon name="rotate-ccw" size={12} />
-              {t('conv.artifact.defaultPreview')}
-            </button>
-          </div>
-        </>
-      ) : null}
-      {state.phase === 'loaded' && selected === undefined ? (
+      {state.phase === 'loaded' ? (
         <FilePreviewBody
           name={name}
           mime={mime}

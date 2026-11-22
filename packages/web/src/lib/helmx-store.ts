@@ -21,8 +21,6 @@ import type {
   PluginUiContribution,
   Profile,
   ProviderConfig,
-  ScreenLocationPane,
-  ScreenLocationSnapshot,
   SkillSummary,
   UsePluginsResult,
 } from '@helmx/protocol/browser'
@@ -132,7 +130,6 @@ import {
 
 const ESC_ABORT_NOTICE_ID = 'esc-abort-confirm'
 const EMPTY_PENDING_ASKS: AskSpec[] = Object.freeze([]) as unknown as AskSpec[]
-const EMPTY_SCREEN_PARAMS: Readonly<Record<string, string>> = Object.freeze({})
 const EMPTY_BADGE_DOCS: ReadonlyArray<BackgroundBadgeDocRef> = Object.freeze([])
 const EMPTY_PENDING_BADGE_DOCS: ReadonlySet<string> = new Set<string>()
 const EMPTY_BACKGROUND_INDEX: ConversationBackgroundIndex = new Map()
@@ -314,7 +311,6 @@ export type StoreDomainKey =
   | 'workbench'
   | 'activeModal'
   | 'locationState'
-  | 'screenLocation'
   | 'conversationBackground'
   | 'highlightedEntry'
   | 'notices'
@@ -433,53 +429,6 @@ function shallowEqualAuth(a: AuthSlice, b: AuthSlice): boolean {
   )
 }
 
-function sameStringRecord(a: Readonly<Record<string, string>>, b: Readonly<Record<string, string>>): boolean {
-  if (a === b) return true
-  const aKeys = Object.keys(a)
-  const bKeys = Object.keys(b)
-  if (aKeys.length !== bKeys.length) return false
-  for (const key of aKeys) {
-    if (!Object.hasOwn(b, key) || a[key] !== b[key]) return false
-  }
-  return true
-}
-
-function toScreenLocationPane(target: ResolvedTarget | null): ScreenLocationPane | undefined {
-  if (target === null || target.kind !== 'screen') return undefined
-  const rawParams = target.params
-  const params =
-    rawParams === undefined || Object.keys(rawParams).length === 0
-      ? EMPTY_SCREEN_PARAMS
-      : Object.freeze({ ...rawParams })
-  return Object.freeze({
-    pluginId: target.pluginId,
-    screenId: target.screenId,
-    params,
-  })
-}
-
-function buildScreenLocationSnapshot(
-  primaryTarget: ResolvedTarget,
-  splitTarget: ResolvedTarget | null,
-): ScreenLocationSnapshot {
-  const screen = toScreenLocationPane(primaryTarget)
-  const split = toScreenLocationPane(splitTarget)
-  const snapshot: ScreenLocationSnapshot = {}
-  if (screen !== undefined) snapshot.screen = screen
-  if (split !== undefined) snapshot.split = split
-  return Object.freeze(snapshot)
-}
-
-function isSameScreenLocationPane(a: ScreenLocationPane | undefined, b: ScreenLocationPane | undefined): boolean {
-  if (a === b) return true
-  if (a === undefined || b === undefined) return false
-  return a.pluginId === b.pluginId && a.screenId === b.screenId && sameStringRecord(a.params, b.params)
-}
-
-function isSameScreenLocationSnapshot(a: ScreenLocationSnapshot, b: ScreenLocationSnapshot): boolean {
-  return isSameScreenLocationPane(a.screen, b.screen) && isSameScreenLocationPane(a.split, b.split)
-}
-
 function isSameAskArray(a: ReadonlyArray<AskSpec>, b: ReadonlyArray<AskSpec>): boolean {
   if (a === b) return true
   if (a.length !== b.length) return false
@@ -576,7 +525,6 @@ export class HelmxExternalStore {
   private locationTargetsSlice: LocationTargetsSlice
   private workbenchSlice: WorkbenchSlice
   private locationStateCache: WorkspaceLocationState
-  private screenLocationSnapshot: ScreenLocationSnapshot
   private backgroundBadgeDocKeys = new Set<string>()
   private conversationBackgroundSlice: ConversationBackgroundSlice = {
     badgeDocs: EMPTY_BADGE_DOCS,
@@ -656,10 +604,6 @@ export class HelmxExternalStore {
       drawerStack: this.navState.drawerStack,
       activeModal: this.navState.activeModal,
     }
-    this.screenLocationSnapshot = buildScreenLocationSnapshot(
-      this.navState.primaryTarget,
-      this.navState.splitTarget,
-    )
     this.spaceMemory = {}
     this.rememberSpaceTarget(bootLocation.primaryTarget)
     this.lastSyncedLocation = { current: bootLocation }
@@ -837,7 +781,6 @@ export class HelmxExternalStore {
   getWorkbenchSlice = (): WorkbenchSlice => this.workbenchSlice
   getActiveModal = (): ActiveModal => this.navState.activeModal
   getLocationState = (): WorkspaceLocationState => this.locationStateCache
-  getScreenLocation = (): ScreenLocationSnapshot => this.screenLocationSnapshot
   getConversationBackgroundSlice = (): ConversationBackgroundSlice => this.conversationBackgroundSlice
   getHighlightedEntry = (): { conversationId: number; entryId: string } | null => this.navState.highlightedEntry
   getNotices = (): ToastNotice[] => this.noticesState
@@ -1372,13 +1315,6 @@ export class HelmxExternalStore {
         activeModal: next.activeModal,
       }
       plan.domains.add('locationState')
-    }
-    if (primaryChanged || splitChanged) {
-      const nextScreenLocation = buildScreenLocationSnapshot(next.primaryTarget, next.splitTarget)
-      if (!isSameScreenLocationSnapshot(this.screenLocationSnapshot, nextScreenLocation)) {
-        this.screenLocationSnapshot = nextScreenLocation
-        plan.domains.add('screenLocation')
-      }
     }
     if (highlightChanged) {
       plan.domains.add('highlightedEntry')

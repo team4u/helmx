@@ -677,7 +677,6 @@ export class PluginHost {
         tracker: this.tracker,
         options: this.options,
         plugins: this.plugins,
-        setConfig: (id, val) => this.setConfig(id, val),
         list: () => this.list(),
         listUi: () => this.listUi(),
         listActions: () => this.listActions(),
@@ -698,7 +697,8 @@ export class PluginHost {
   }
 
   private emitDocUpdated(pluginId: string, name: string, value: unknown): void {
-    const doc: PublicPluginDoc = { pluginId, name, value: jsonClone(value) };
+    // Caller (`PluginDocRegistry`) already supplies an isolated JSON-safe snapshot.
+    const doc: PublicPluginDoc = { pluginId, name, value };
     this.options.host.emitEvent('plugin.doc.updated', { type: 'plugin.doc.updated', doc });
   }
 

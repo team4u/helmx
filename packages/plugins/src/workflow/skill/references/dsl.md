@@ -39,7 +39,7 @@ Supported options:
 
 - `label`: display name and the local continuation handle;
 - `phase`: phase assignment;
-- `agentType`: Profile ID or external runtime such as `herdr:agy`;
+- `agentType`: Profile ID;
 - `model`, `effort`: execution overrides;
 - `isolation: "worktree"`: independent managed Git worktree;
 - `nodeId`: target compute node ID (overrides Profile/parent node; explicit `"local"` switches back to the Hub host; remote nodes require `cwd` or a compatible Profile `cwd`);

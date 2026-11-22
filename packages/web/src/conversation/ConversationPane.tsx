@@ -22,7 +22,6 @@ import {
   isConversationArchivable,
   isConversationDeletable,
   isHumanSelectableProfile,
-  partitionSidebarUi,
 } from '../shell/sidebar-model.js'
 import { patchConversationArchived } from '../shell/archive-ops.js'
 import {
@@ -47,8 +46,6 @@ import { ConversationTimeline, type OutlineScrollRequest } from './ConversationT
 import { buildConversationOutline } from './outline-model.js'
 import { resolveActiveWorkbenchTab, summarizeWorkbenchBadge } from './workbench-model.js'
 import { useWorkbenchTabs } from './workbench-hooks.js'
-import { matchConversationActions, splitConversationHeaderActions } from './action-model.js'
-import { PluginMicroAction } from '../ui/PluginMicroAction.js'
 import { buildTimelineItems, type EditRequestTarget } from './timeline-model.js'
 import { conversationDurationNeedsLiveClock } from './conversation-duration-model.js'
 import {
@@ -311,13 +308,8 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
     isHumanSelectableProfile(profile, enabledPluginIds) &&
     (conversation.ownedBy ?? 'human') === 'human'
 
-  // 插件微插槽 conversation.header.action：placement='toolbar' 直出顶栏按钮组，
-  // 其余（缺省 'menu'）收纳进「更多操作」下拉菜单；均按 scope 过滤当前会话。
-  const headerActions = matchConversationActions(groupedUi.uiActions, 'conversation:header', conversation)
-  const { toolbar: toolbarActions, menu: menuActions } = splitConversationHeaderActions(headerActions)
   const archived = isConversationArchived(conversation)
-  const sidebarPartition = partitionSidebarUi([], groupedUi.sidebarSections)
-  const canManageArchive = isConversationArchivable(conversation, sidebarPartition.sectionTags)
+  const canManageArchive = isConversationArchivable(conversation)
 
   const saveTitle = async (): Promise<void> => {
     const next = titleDraft.trim()
@@ -458,15 +450,6 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
               <span className="pane-action-label">{t('conv.pane.newTopic')}</span>
             </button>
           ) : null}
-          {toolbarActions.map((action) => (
-            <PluginMicroAction
-              key={`header:${action.pluginId}/${action.spec.id}`}
-              action={action}
-              variant="toolbar"
-              conversationId={conversation.id}
-              slotProps={{ conversation }}
-            />
-          ))}
           {(workbenchCount > 0 || hasWorkbenchPanel || hasAnyArtifacts) ? (
             <button
               type="button"
@@ -599,22 +582,6 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
                         {archived ? t('conv.pane.restoreConversation') : t('conv.pane.archiveConversation')}
                       </span>
                     </DropdownMenuItem>
-                  )}
-                  {menuActions.length > 0 && (
-                    <>
-                      <DropdownMenuSeparator className="popover-separator" />
-                      {menuActions.map((action) => (
-                        <PluginMicroAction
-                          key={`header-menu:${action.pluginId}/${action.spec.id}`}
-                          action={action}
-                          variant="menu"
-                          inDropdown
-                          conversationId={conversation.id}
-                          slotProps={{ conversation }}
-                          onInvoked={() => setMoreOpen(false)}
-                        />
-                      ))}
-                    </>
                   )}
                   <DropdownMenuSeparator className="popover-separator" />
                   <DropdownMenuItem

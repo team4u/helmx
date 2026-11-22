@@ -16,7 +16,6 @@ import {
   reattachWithWorktree,
   resumeWithWorktree,
   spawnWithWorktree,
-  trackWithoutPreallocation,
   type IsolationSpawnContext,
 } from './isolation-spawn.js'
 
@@ -44,10 +43,6 @@ export interface AcquireWorktreeResult {
   nodeId: string
 }
 
-function isExternalRuntimeAgentType(agentType: string | undefined): boolean {
-  return agentType !== undefined && agentType.includes(':')
-}
-
 export interface WorktreeIsolationDeps {
   host: {
     resolveSpawnTarget(input: {
@@ -66,9 +61,6 @@ export interface WorktreeIsolationDeps {
     listActiveSpawnExecutions(): AgentExecutionInfo[]
     redact(text: string): string
     getConversation(id: number): { cwd: string; nodeId?: string; status: string; profileId?: string }
-    profiles?: {
-      get(id: string): Promise<{ runtime?: unknown } | undefined>
-    }
     readonly isClosing?: boolean
   }
   docStore: { get<T>(key: string, initial: T): T; set<T>(key: string, value: T): void; flush(): Promise<void> }
@@ -168,14 +160,14 @@ export class WorktreeIsolation {
       )
     }
     if (request.reattach !== undefined) {
-      if (request.reattach.conversationId !== undefined && request.reattach.executionId === undefined) {
+      if (request.reattach.conversationId !== undefined) {
         const existing = this.allocator.getForConversation(request.reattach.conversationId)
         if (existing !== undefined) {
           return reattachWithWorktree(this.spawnCtx(), request, existing, next)
         }
-        return trackWithoutPreallocation(this.spawnCtx(), { ...request, isolation: undefined }, next)
+        return next({ ...request, isolation: undefined })
       }
-      return trackWithoutPreallocation(this.spawnCtx(), request, next)
+      return next(request)
     }
     const resumeChildId = request.resume !== undefined ? this.store.resolveResumeChildId(request) : undefined
     if (resumeChildId !== undefined) {
@@ -193,42 +185,12 @@ export class WorktreeIsolation {
       }
     }
     if (request.isolation === 'worktree') {
-      if (isExternalRuntimeAgentType(request.agentType)) {
-        if (request.fork === true) {
-          throw new HelmxError(
-            'unsupported_runtime',
-            `fork 仅支持原生 Profile 子会话，不支持外部运行时 '${request.agentType}'`,
-            400,
-            { agentType: request.agentType },
-          )
-        }
-        return trackWithoutPreallocation(this.spawnCtx(), request, next)
-      }
-      if (this.deps.host.profiles !== undefined) {
-        const targetProfileId =
-          request.agentType ||
-          (request.fork === true
-            ? (this.deps.host.getConversation(request.parentConversationId).profileId ?? 'assistant')
-            : 'assistant')
-        const profile = await this.deps.host.profiles.get(targetProfileId)
-        if (profile?.runtime !== undefined) {
-          if (request.fork === true) {
-            throw new HelmxError(
-              'unsupported_runtime',
-              `Profile '${targetProfileId}' 声明外部运行时，fork 仅支持原生 Profile 子会话`,
-              400,
-              { agentType: targetProfileId },
-            )
-          }
-          return trackWithoutPreallocation(this.spawnCtx(), request, next)
-        }
-      }
       if (request.resume !== undefined && resumeChildId === undefined) {
-        return trackWithoutPreallocation(this.spawnCtx(), request, next)
+        return next(request)
       }
       return spawnWithWorktree(this.spawnCtx(), request, next)
     }
-    return trackWithoutPreallocation(this.spawnCtx(), request, next)
+    return next(request)
   }
 
   reconcileStoppedNativeLeases(): Promise<number> {

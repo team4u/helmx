@@ -1,8 +1,8 @@
 /**
- * Hook bridge: maps SDK `GenerationTask` / `ToolTask` hooks to helmx's 7 lifecycle hook pipelines.
+ * Hook bridge: maps SDK `GenerationTask` / `ToolTask` hooks to helmx's lifecycle hook pipelines.
  *
- * Extracted from `runtime.ts`. Bridges `tool_call`, `tool_result`, and `before_turn` into `PluginHost.runHook`;
- * terminal cleanup (`handled` takeover leftovers) for `turn_settled` is injected by the host via callbacks.
+ * Extracted from `runtime.ts`. Bridges `before_turn` into `PluginHost.runHook` and enforces the single
+ * outbound tool-result boundary (schema validation, redaction, and artifact spill) on `ToolTask.afterTool`.
  */
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { Message } from '@earendil-works/pi-ai'
@@ -12,7 +12,6 @@ import {
   defineExtension,
   hook,
   type Extension,
-  type JsonObject,
   type ToolExecutionResult,
 } from '@earendil-works/pi-durable'
 import type {
@@ -22,11 +21,8 @@ import type {
   HookPayloadMap,
   HookResult,
   JsonSchema,
-  PluginToolResultEnvelope,
-  PluginToolTextBlock,
 } from '@helmx/protocol'
 import {
-  HelmxError,
   KERNEL_TOOL_PRESENTATION_META_SCHEMAS,
   matchesConversationScope,
 } from '@helmx/protocol'
@@ -42,11 +38,9 @@ import {
 import {
   assertSafeMessageSurgery,
   guardToolExecutionResult,
-  parseHookToolResult,
   projectToolPromptSections,
   sectionsEqual,
   systemSectionsOf,
-  toolResultOf,
   withSections,
   withToolDeclarations,
   type GuardToolResultOptions,
@@ -65,24 +59,16 @@ type HookDecision =
   | { action: 'handled'; result?: unknown }
   | { action: 'block'; reason: string }
 
-/** Cached `tool_call` `handled` takeover entry (consumed by execution-layer wrapper; `conversationId` tracks owner for safety cleanup). */
-export interface HandledToolCallEntry {
-  conversationId: number | undefined
-  result: {
-    output: Array<PluginToolTextBlock>
-    isError: boolean
-    structuredOutput?: unknown
-    details?: Record<string, unknown>
-  }
-}
-
 interface HookBridgeOptions {
   readonly registry: { install(extension: Extension): void }
   /** Lazily resolved `PluginHost` (may not exist yet during initialization). */
   readonly pluginHost: () => PluginHost | undefined
-  readonly handledToolCalls: Map<string, HandledToolCallEntry>
-  /** Unified outbound tool-result processor (spill boundary + redaction; host implementation). */
-  readonly prepareToolResult: (conversationId: number, result: ToolExecutionResult) => Promise<ToolExecutionResult>
+  /** Unified outbound tool-result processor (single schema/budget guard + redaction + spill boundary). */
+  readonly prepareToolResult: (
+    conversationId: number,
+    result: ToolExecutionResult,
+    options?: GuardToolResultOptions,
+  ) => Promise<ToolExecutionResult>
   /** Optional explicit schema resolver (defaults to live pluginHost + registered kernel tools). */
   readonly getToolSchemas?: (toolName: string) => ToolSchemaEntry | undefined
   /** Safe conversation summary lookup (returns `undefined` if missing/corrupted -> skips `before_turn`). */
@@ -110,88 +96,17 @@ export class HookBridge {
         name: 'helmx-hook-bridge',
         hooks: [
           hook(ToolTask, {
-            /** `tool_call`: transform args or block execution. */
-            beforeTool: async (call, api) => {
-              const outcome = await this.runHookChain('tool_call', {
-                conversationId: api.conversationId,
-                callId: call.id,
-                toolName: call.name,
-                input: call.arguments,
-              })
-              if (outcome?.action === 'block') {
-                return { block: this.options.redact(outcome.reason ?? 'blocked') }
-              }
-              if (outcome?.action === 'handled') {
-                // Takeover: cache result for the execution wrapper (`wrapToolCalls`) and track conversationId
-                // so terminal/abort/delete hooks can clean up any unconsumed leftover entries.
-                this.options.handledToolCalls.set(call.id, {
-                  conversationId: api.conversationId,
-                  result: toolResultOf(outcome.result),
-                })
-                return undefined
-              }
-              if (outcome?.action === 'transform') {
-                return outcome.value.input !== undefined
-                  ? { arguments: outcome.value.input as JsonObject }
-                  : undefined
-              }
-              return undefined
-            },
-            /** All final tool outputs pass through the same redaction, schema, budget, and spill boundary before persistence. */
+            /** All final tool outputs pass once through the redaction, schema, budget, and spill boundary before persistence. */
             afterTool: async (call, result, api) => {
-              this.options.handledToolCalls.delete(call.id)
               try {
-                const hookResult: PluginToolResultEnvelope = {
-                  ...(result.output !== undefined ? { output: result.output as PluginToolTextBlock[] } : {}),
-                  ...(result.structuredOutput !== undefined ? { structuredOutput: result.structuredOutput } : {}),
-                  ...(result.details !== undefined
-                    ? { presentationMeta: result.details as Record<string, unknown> }
-                    : {}),
-                  ...(result.isError !== undefined ? { isError: result.isError } : {}),
-                }
-                const outcome = await this.runHookChain('tool_result', {
-                  conversationId: api.conversationId,
-                  callId: call.id,
-                  toolName: call.name,
-                  input: call.arguments,
-                  result: hookResult,
-                })
-                let effective = result
-                if (outcome?.action === 'transform') {
-                  const parsed = parseHookToolResult(outcome.value.result, 'tool_result transform')
-                  if (!parsed.ok) {
-                    throw new HelmxError(
-                      'invalid_hook_result',
-                      `tool_result must return a valid tool result: ${parsed.reason}`,
-                      500,
-                    )
-                  }
-                  effective = {
-                    ...(result.diagnostics !== undefined ? { diagnostics: result.diagnostics } : {}),
-                    ...(result.usage !== undefined ? { usage: result.usage } : {}),
-                    ...(result.control !== undefined ? { control: result.control } : {}),
-                    ...parsed.result,
-                  } as ToolExecutionResult
-                } else if (outcome?.action === 'handled') {
-                  const parsed = parseHookToolResult(outcome.result, 'tool_result handled')
-                  if (!parsed.ok) {
-                    throw new HelmxError(
-                      'invalid_hook_result',
-                      `tool_result handled payload is not a valid tool result: ${parsed.reason}`,
-                      500,
-                    )
-                  }
-                  effective = parsed.result as ToolExecutionResult
-                }
                 const schemas = this.resolveToolSchemas(call.name)
-                const guarded = guardToolExecutionResult(effective, this.options.redact, {
+                return await this.options.prepareToolResult(api.conversationId, result, {
                   toolName: call.name,
                   callId: call.id,
                   structuredOutputSchema: schemas.structuredOutputSchema,
                   presentationMetaSchema: schemas.presentationMetaSchema,
                   enforceSchemas: true,
                 })
-                return await this.options.prepareToolResult(api.conversationId, guarded)
               } catch (error) {
                 return {
                   isError: true,

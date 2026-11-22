@@ -41,7 +41,7 @@ Commands:
   restart                               Restart background daemon (stops cleanly before starting replacement)
   status                                Show identity binding, background process, and runtime state summary
   upgrade [--check] [--version <ver>]   Self-upgrade (--check only queries; executing requires a managed daemon)
-  doctor                                Read-only diagnostics (identity 0600 / privileges / Hub reachability / Herdr IPC)
+  doctor                                Read-only diagnostics (identity 0600 / privileges / Hub reachability)
   service install|uninstall|status      Manage OS startup service (launchd / systemd --user / schtasks)
 
 Options:
@@ -56,7 +56,7 @@ Options:
   --force                Force upgrade (bypass downgrade guard, cooldown, and same-version check)
   --help, -h             Show this help
 
-Environment variables: HELMX_DATA_DIR (default ~/.helmx), HELMX_HUB_URL, HERDR_SOCKET_PATH
+Environment variables: HELMX_DATA_DIR (default ~/.helmx), HELMX_HUB_URL
 `;
 
 const VALUE_FLAGS = ['token', 'hub', 'data-dir', 'version', 'registry'] as const;

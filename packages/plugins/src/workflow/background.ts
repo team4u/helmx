@@ -20,7 +20,7 @@ export const BACKGROUND_REPORT_RENDERER = 'workflow:background-report'
 
 /** background 缺省判定的权威归属端口（内核 getConversationOwnership）。 */
 interface BackgroundPolicyDeps {
-  getConversationOwnership(id: number): 'helmx' | 'bot' | 'human'
+  getConversationOwnership(id: number): 'helmx' | 'human'
 }
 
 /**

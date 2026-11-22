@@ -285,38 +285,6 @@ async function startHerdrLikeServer(
   };
 }
 
-test('nodeHostEnv reports target node platform, dirs, and requested non-secret env vars', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('helmx-node-hostenv-');
-  const server = createNodeEnvRpcServer({
-    defaultCwd: dir,
-    hostEnvContext: {
-      platform: 'win32',
-      homeDir: 'C:\\Users\\alice',
-      tempDir: 'C:\\Users\\alice\\AppData\\Local\\Temp',
-      getEnv: (name) => ({
-        APPDATA: 'C:\\Users\\alice\\AppData\\Roaming',
-        HERDR_SOCKET_PATH: '\\\\.\\pipe\\herdr-alice',
-      })[name],
-    },
-  });
-  t.after(async () => {
-    await server.dispose();
-    await fs.rm(dir, { recursive: true, force: true });
-  });
-
-  const ok = await server.nodeHostEnv({ envKeys: ['HERDR_SOCKET_PATH'] });
-  assert.equal(ok.ok, true);
-  if (ok.ok) {
-    assert.equal(ok.value.platform, 'win32');
-    assert.equal(ok.value.dirs.appData, 'C:\\Users\\alice\\AppData\\Roaming');
-    assert.equal(ok.value.env['HERDR_SOCKET_PATH'], '\\\\.\\pipe\\herdr-alice');
-  }
-
-  const bad = await server.nodeHostEnv({ envKeys: ['HELMX_TOKEN'] });
-  assert.equal(bad.ok, false);
-  assert.equal(!bad.ok && bad.error.code, 'invalid');
-});
-
 test('ipc fixture isolates in-flight write errors after peer disconnect', { timeout: 60_000 }, async () => {
   let writes = 0;
   const srv = await startHerdrLikeServer((line, socket) => {
@@ -536,17 +504,6 @@ test('createNodeDaemon: register + heartbeat + reverse envExec/envReadTextFile/n
     hubUrl: hub.url,
     identity: { nodeId: 'work-a', token },
     dataDir: dir,
-    envServer: {
-      hostEnvContext: {
-        platform: 'win32',
-        homeDir: 'C:\\Users\\remote',
-        tempDir: 'C:\\Users\\remote\\AppData\\Local\\Temp',
-        getEnv: (k) => ({
-          APPDATA: 'C:\\Users\\remote\\AppData\\Roaming',
-          HERDR_SOCKET_PATH: 'C:\\Users\\remote\\herdr.sock',
-        })[k],
-      },
-    },
   });
   try {
     assert.equal(await daemon.waitUntilRegistered(10_000), true, 'should finish registration');
@@ -583,15 +540,6 @@ test('createNodeDaemon: register + heartbeat + reverse envExec/envReadTextFile/n
     // onEnvExecOutput is pushed asynchronously: wait until output arrives
     await waitFor(() => execOutputs.map((e) => e.text).join('').includes('via-hub-exec'), 10_000, 'reverse envExec output delivery');
     assert.match(execOutputs.map((e) => e.text).join(''), /via-hub-exec/);
-
-    // Reverse nodeHostEnv: Hub reads target-node platform/dirs/env over WS without using Hub's local env
-    const hostEnv = await rpc!.nodeHostEnv!({ envKeys: ['HERDR_SOCKET_PATH'] });
-    assert.equal(hostEnv.ok, true, hostEnv.ok ? '' : hostEnv.error.message);
-    if (hostEnv.ok) {
-      assert.equal(hostEnv.value.platform, 'win32');
-      assert.equal(hostEnv.value.dirs.appData, 'C:\\Users\\remote\\AppData\\Roaming');
-      assert.equal(hostEnv.value.env['HERDR_SOCKET_PATH'], 'C:\\Users\\remote\\herdr.sock');
-    }
   } finally {
     await daemon.close();
     await hub.close();

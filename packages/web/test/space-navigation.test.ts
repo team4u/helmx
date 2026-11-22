@@ -159,7 +159,6 @@ test('defaultSpaceTarget: settings returns the profile center; views takes the f
 test('defaultSpaceTarget: conversations prefers the profile of the latest unarchived root conversation and filters disabled-plugin profiles', { timeout: 60_000 }, () => {
   const profiles = [
     makeProfile('disabled-plugin-bot', { managedByPlugin: 'plugin:off' }),
-    makeProfile('system-singleton', { humanSelectable: false }),
     makeProfile('assistant'),
     makeProfile('reviewer'),
   ]
@@ -204,19 +203,10 @@ test('defaultSpaceTarget: conversations prefers the profile of the latest unarch
     { kind: 'agent', profileId: 'loading-profile' },
   )
 
-  // with no valid root conversation: skip disabled-plugin-managed profiles, preferring humanSelectable !== false
+  // with no valid root conversation: skip disabled-plugin-managed profiles
   assert.deepEqual(
     defaultSpaceTarget('conversations', makeInput({ conversations: [], profiles, plugins })),
     { kind: 'agent', profileId: 'assistant' },
-  )
-
-  // with only a humanSelectable=false visible profile left, fall back to it
-  assert.deepEqual(
-    defaultSpaceTarget('conversations', makeInput({
-      profiles: [makeProfile('disabled-plugin-bot', { managedByPlugin: 'plugin:off' }), makeProfile('system-singleton', { humanSelectable: false })],
-      plugins,
-    })),
-    { kind: 'agent', profileId: 'system-singleton' },
   )
 
   // no usable profile at all returns null

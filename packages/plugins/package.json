@@ -30,14 +30,6 @@
       "types": "./dist/worktree.d.ts",
       "import": "./dist/worktree.js"
     },
-    "./herdr": {
-      "types": "./dist/herdr.d.ts",
-      "import": "./dist/herdr.js"
-    },
-    "./herdr/contracts": {
-      "types": "./dist/herdr/contracts.d.ts",
-      "import": "./dist/herdr/contracts.js"
-    },
     "./swarm": {
       "types": "./dist/swarm.d.ts",
       "import": "./dist/swarm.js"

@@ -279,7 +279,8 @@ describe('workspace file reader & HTTP GET /api/conversations/:id/files/content'
 
   it('redacts SecretStash secrets from .env, .ts, and extensionless text files while preserving binary PNG bytes', { timeout: 60_000 }, async () => {
     const secretVal = 'sk-workspace-secret-token-xyz-987654'
-    const placeholder = kernel.stash.put(convId, 'WS_TEST_SECRET', secretVal)
+    kernel.stash.addRedaction(secretVal)
+    const placeholder = '[REDACTED]'
 
     await writeFile(join(workspaceDir, '.env'), `WS_TEST_SECRET=${secretVal}\nPUBLIC=ok\n`, 'utf8')
     await writeFile(join(workspaceDir, 'secret.ts'), `const key = "${secretVal}"\n`, 'utf8')

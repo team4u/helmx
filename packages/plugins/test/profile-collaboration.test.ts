@@ -35,7 +35,6 @@ import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin
 import { createProfilePlugin } from '../src/profile.js'
 import {
   PROFILE_SUMMARY_MAX_CODEPOINTS,
-  activeRuntimeKinds,
   describeHint,
   describePosition,
   extractSystemSummary,
@@ -122,9 +121,6 @@ function makeControlledBackend(): ControlledBackend {
       throw new HelmxError('unsupported', 'test', 400)
     },
     async cancelAsk() {},
-    registerAskSeqResolver() {
-      return () => {}
-    },
     onEvent() {
       return () => {}
     },
@@ -145,14 +141,12 @@ function makeControlledBackend(): ControlledBackend {
   return backend
 }
 
-/** 声明 profile.runtime UI 贡献的第三方运行时插件（kind 通用，不假设插件 id）。 */
-function makeRuntimePlugin(id: string, kind: string): PluginDefinition {
+/** 占位插件（验证 managedByPlugin 随插件启停显示/隐藏）。 */
+function makeManagedPlugin(id: string): PluginDefinition {
   return {
     id,
-    name: `runtime ${kind}`,
-    definePlugin(ctx) {
-      ctx.ui.profileRuntime({ id: kind, kind, label: `外部 ${kind} 运行时` })
-    },
+    name: `managed ${id}`,
+    definePlugin() {},
   }
 }
 
@@ -215,7 +209,7 @@ async function seedProfile(
   input: Partial<Profile> & { id: string },
   systemMd?: string,
 ): Promise<void> {
-  await profiles.save({ humanSelectable: true, tags: [], ...input } as never)
+  await profiles.save({ tags: [], ...input } as never)
   if (systemMd !== undefined) {
     writeFileSync(join(dataDir, 'profiles', input.id, 'SYSTEM.md'), systemMd)
   }
@@ -280,92 +274,63 @@ test('extractSystemSummary 与 truncateCodePoints：100 码点截断（代理对
 // 纯函数：目录排除规则与渲染
 // ---------------------------------------------------------------------------
 
-const RUNTIME_KINDS = new Set(['herdr'])
-
-test('isCollaborationCandidate：排除自身 / humanSelectable:false / 托管插件停用 / runtime 无接管', { timeout: 60_000 }, () => {
+test('isCollaborationCandidate：排除自身与托管插件停用 Profile', { timeout: 60_000 }, () => {
   const base = { id: 'coder', name: 'Coder' } as Profile
-  assert.equal(isCollaborationCandidate({ ...base, id: 'assistant' }, 'assistant', new Set(), RUNTIME_KINDS), false, '排除自身')
-  assert.equal(isCollaborationCandidate({ ...base, humanSelectable: false }, 'assistant', new Set(), RUNTIME_KINDS), false)
+  assert.equal(isCollaborationCandidate({ ...base, id: 'assistant' }, 'assistant', new Set()), false, '排除自身')
   assert.equal(
-    isCollaborationCandidate({ ...base, managedByPlugin: 'ext:managed-plugin' }, 'assistant', new Set(), RUNTIME_KINDS),
+    isCollaborationCandidate({ ...base, managedByPlugin: 'ext:managed-plugin' }, 'assistant', new Set()),
     false,
     '托管插件未启用',
   )
   assert.equal(
-    isCollaborationCandidate({ ...base, managedByPlugin: 'ext:managed-plugin' }, 'assistant', new Set(['ext:managed-plugin']), RUNTIME_KINDS),
+    isCollaborationCandidate({ ...base, managedByPlugin: 'ext:managed-plugin' }, 'assistant', new Set(['ext:managed-plugin'])),
     true,
     '托管插件已启用',
   )
-  assert.equal(
-    isCollaborationCandidate({ ...base, runtime: { kind: 'herdr', agent: 'agy' } }, 'assistant', new Set(), new Set<string>()),
-    false,
-    'runtime.kind 无接管贡献',
-  )
-  assert.equal(
-    isCollaborationCandidate({ ...base, runtime: { kind: 'herdr', agent: 'agy' } }, 'assistant', new Set(), RUNTIME_KINDS),
-    true,
-    'runtime.kind 已有接管贡献',
-  )
-  assert.equal(isCollaborationCandidate(base, 'assistant', new Set(), RUNTIME_KINDS), true, '普通 Profile 通过')
+  assert.equal(isCollaborationCandidate(base, 'assistant', new Set()), true, '普通 Profile 通过')
 })
 
-test('activeRuntimeKinds：只认 profile.runtime surface 的 kind 字符串', { timeout: 60_000 }, () => {
-  const ui: PluginUiContribution[] = [
-    { pluginId: 'builtin:herdr', surface: 'profile.runtime', spec: { kind: 'herdr', label: 'x' } },
-    { pluginId: 'p2', surface: 'profile.runtime', spec: { kind: 'other', label: 'y' } },
-    { pluginId: 'p3', surface: 'screen', spec: { kind: 'not-a-runtime' } },
-    { pluginId: 'p4', surface: 'profile.runtime', spec: { label: 'kind 缺失' } },
-  ]
-  assert.deepEqual([...activeRuntimeKinds(ui)].sort(), ['herdr', 'other'])
-})
-
-test('toCatalogEntry：runtime 标注与 workspace 覆盖 cwd；describePosition 继承语义', { timeout: 60_000 }, () => {
+test('toCatalogEntry 与 describePosition 继承语义', { timeout: 60_000 }, () => {
   const native = toCatalogEntry({ id: 'coder', name: 'Coder' } as Profile)
-  assert.equal(native.runtimeKind, 'native')
   assert.equal(describePosition(native), undefined, '无显式配置 → 继承（不谎报 local）')
 
-  const external = toCatalogEntry({
+  const pinned = toCatalogEntry({
     id: 'ops',
     name: 'Ops',
     nodeId: 'node-a',
     cwd: '/top/cwd',
-    runtime: { kind: 'herdr', agent: 'agy', workspace: '/ws/override' },
   } as Profile)
-  assert.equal(external.runtimeKind, 'herdr')
-  assert.equal(external.cwd, '/ws/override', 'runtime.workspace 覆盖顶层 cwd')
-  assert.equal(describePosition(external), 'node-a · /ws/override')
+  assert.equal(pinned.cwd, '/top/cwd')
+  assert.equal(describePosition(pinned), 'node-a · /top/cwd')
 
   const nodeOnly = toCatalogEntry({ id: 'n', name: 'N', nodeId: 'node-b' } as Profile)
   assert.equal(describePosition(nodeOnly), 'node-b · 继承当前会话目录', '部分显式时明确标注继承项')
   assert.ok(describeHint({ ...nodeOnly, summary: undefined }).includes('node-b'), 'hint 含显式节点')
   assert.ok(
-    describeHint({ id: 'p', name: 'P', runtimeKind: 'native', summary: undefined }).includes(
+    describeHint({ id: 'p', name: 'P', summary: undefined }).includes(
       '继承当前会话节点与目录',
     ),
     '全继承时 hint 明确标注',
   )
 })
 
-test('renderProfileCatalogSection：动态字段 XML 转义 + runtime 标注 + 边界指引', { timeout: 60_000 }, () => {
+test('renderProfileCatalogSection：动态字段 XML 转义与边界指引', { timeout: 60_000 }, () => {
   const section = renderProfileCatalogSection(
     [
-      { id: 'coder', name: 'C&A<>"', runtimeKind: 'native', summary: '专&注<迁移>' },
-      { id: 'ops', name: 'Ops', runtimeKind: 'herdr', nodeId: 'node-a', cwd: '/ws' },
+      { id: 'coder', name: 'C&A<>"', summary: '专&注<迁移>' },
+      { id: 'ops', name: 'Ops', nodeId: 'node-a', cwd: '/ws' },
     ],
     { dispatchToolNames: ['subagent'] },
   )
   assert.ok(section.includes('id="coder" name="C&amp;A&lt;&gt;&quot;"'))
   assert.ok(section.includes('专&amp;注&lt;迁移&gt;'), '摘要正文转义')
-  assert.ok(section.includes('runtime="native"'))
-  assert.ok(section.includes('runtime="external:herdr"'))
   assert.ok(section.includes('at="node-a · /ws"'))
   assert.ok(section.includes('不自动读取对方 SYSTEM/MEMORY 全文'))
   assert.ok(section.includes('当前会话有权使用的产物'))
   assert.ok(section.includes('没有自动文件同步'))
-  assert.ok(section.includes('external 运行时生命周期由其插件管理'))
   assert.ok(!/\p{Extended_Pictographic}/u.test(section), '无 Emoji')
 
-  const noTools = renderProfileCatalogSection([{ id: 'x', name: 'X', runtimeKind: 'native' }], {
+  const noTools = renderProfileCatalogSection([{ id: 'x', name: 'X' }], {
     dispatchToolNames: [],
   })
   assert.ok(noTools.includes('本回合无派工工具'))
@@ -484,20 +449,14 @@ function sectionsOf(result: { action: string; value?: unknown }, turn: TurnLike)
   return result.action === 'transform' ? (result.value as TurnLike).sections : turn.sections
 }
 
-test('before_turn：托管插件停用隐藏其 Profile；runtime 无接管贡献不进目录', { timeout: 60_000 }, async () => {
-  const runtimePlugin = makeRuntimePlugin('test:rt', 'customrt')
-  const env = await makeEnv([runtimePlugin, createWorkflowPlugin()], true)
+test('before_turn：托管插件停用隐藏其 Profile', { timeout: 60_000 }, async () => {
+  const managedPlugin = makeManagedPlugin('test:rt')
+  const env = await makeEnv([managedPlugin, createWorkflowPlugin()], true)
   try {
     await seedProfile(env.profiles, env.dataDir, {
       id: 'custom-worker',
-      name: '自定义运行时工人',
+      name: '托管插件工人',
       managedByPlugin: 'test:rt',
-      runtime: { kind: 'customrt', agent: 'cli-x' },
-    })
-    await seedProfile(env.profiles, env.dataDir, {
-      id: 'orphan-rt',
-      name: '无接管运行时',
-      runtime: { kind: 'noplugin', agent: 'cli-y' },
     })
     const turn = {
       conversation: makeConversation(1),
@@ -508,20 +467,16 @@ test('before_turn：托管插件停用隐藏其 Profile；runtime 无接管贡�
     }
     const first = await env.host.runHook('before_turn', turn as never)
     const catalog = sectionsOf(first, turn).find((s) => s.id === 'profile.catalog')
-    if (catalog === undefined) throw new Error('启用runtime Profile后应保留profile.catalog')
-    assert.ok(catalog.text.includes('id="custom-worker"'), '接管插件启用的 runtime Profile 进入目录')
-    assert.ok(catalog.text.includes('runtime="external:customrt"'))
-    assert.ok(!catalog.text.includes('orphan-rt'), '无接管贡献的 runtime Profile 不进目录（不误导原生调用）')
+    if (catalog === undefined) throw new Error('启用托管插件 Profile 后应保留 profile.catalog')
+    assert.ok(catalog.text.includes('id="custom-worker"'), '启用插件的托管 Profile 进入目录')
 
-    // 接管插件停用：托管 Profile 随之隐藏；仅剩被排除的 orphan 后目录为空 → 不再注入。
-    // （custom-worker 绑定 runtime kind 为本插件声明的 profile_runtime 占用 → force 知情停用）
-    await env.host.disable('test:rt', { force: true })
+    await env.host.disable('test:rt')
     const after = await env.host.runHook('before_turn', { ...turn, sections: [] } as never)
     const afterSections = after.action === 'transform' ? after.value.sections : turn.sections
     const afterCatalog = afterSections.find((s: { id: string }) => s.id === 'profile.catalog')
     assert.ok(
       afterCatalog === undefined || !afterCatalog.text.includes('custom-worker'),
-      '接管插件停用后隐藏其托管 Profile（目录为空时不注入）',
+      '托管插件停用后隐藏其托管 Profile（目录为空时不注入）',
     )
   } finally {
     await env.close()
@@ -544,7 +499,7 @@ test('before_turn：候选 SYSTEM 缺失不告警不伪造；IO 错误显式上�
     const result = await env.host.runHook('before_turn', turn as never)
     const catalog = sectionsOf(result, turn).find((s) => s.id === 'profile.catalog')
     assert.ok(catalog, '候选缺 SYSTEM 不阻断目录注入')
-    assert.ok(/<profile id="coder" name="编码" mention="@coder" runtime="native"( at="[^"]*")?><\/profile>/.test(catalog.text), 'summary 空元素（不伪造）')
+    assert.ok(/<profile id="coder" name="编码" mention="@coder"( at="[^"]*")?><\/profile>/.test(catalog.text), 'summary 空元素（不伪造）')
     assert.equal(env.backend.notifications.length, 0, '候选缺失不告警（告警纪律只针对当前会话资产）')
 
     // 当前会话自身 SYSTEM 缺失仍走既有告警（回归保护）

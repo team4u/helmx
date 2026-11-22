@@ -655,47 +655,6 @@ test('collapsed standing row: representative idle/done renders exactly one backg
   assert.equal(countStatusLights(doneHtml), 1, 'the standing row shows a single background hollow ring')
 })
 
-test('sidebar.section group conversation rows obey the same single-light semantics', { timeout: 60_000 }, () => {
-  // idle + background in flight: hollow ring only
-  const idleStore = sidebarStore({
-    conversations: [
-      conv({ id: 20, title: 'Worker A', profileId: 'coder', tags: ['worker'], status: 'idle' }),
-      conv({ id: 50, title: '别处', profileId: 'assistant' }),
-    ],
-    primaryTarget: { kind: 'conversation', conversationId: 50 },
-    uiContributions: [
-      panelContribution(),
-      { pluginId: 'builtin:superagent', surface: 'sidebar.section', spec: { id: 'workers', label: '后台 Worker', filterTag: 'worker' } },
-    ],
-    pluginDocs: {
-      'builtin:workflow/run-badges': badgesDoc({ '20': { count: 1, tone: 'accent', footerText: '1 Running' } }),
-    },
-  })
-  const idleHtml = renderSidebar(idleStore)
-  assert.ok(idleHtml.includes('后台 Worker'), 'the group renders')
-  assert.ok(idleHtml.includes('title="Idle · background task: 1 Running"'), 'group conversation row: hollow ring + summary')
-
-  // working + background in flight: main status light only, no background class
-  const workingStore = sidebarStore({
-    conversations: [
-      conv({ id: 20, title: 'Worker A', profileId: 'coder', tags: ['worker'], status: 'working', doing: '执行任务' }),
-      conv({ id: 50, title: '别处', profileId: 'assistant' }),
-    ],
-    primaryTarget: { kind: 'conversation', conversationId: 50 },
-    uiContributions: [
-      panelContribution(),
-      { pluginId: 'builtin:superagent', surface: 'sidebar.section', spec: { id: 'workers', label: '后台 Worker', filterTag: 'worker' } },
-    ],
-    pluginDocs: {
-      'builtin:workflow/run-badges': badgesDoc({ '20': { count: 1, tone: 'accent', footerText: '1 Running' } }),
-    },
-  })
-  const workingHtml = renderSidebar(workingStore)
-  assert.ok(workingHtml.includes('class="status-dot status-dot-working"'), 'group conversation rows keep the main status light')
-  assert.ok(!workingHtml.includes('status-dot-background'), 'group conversation rows never pair with the background hollow ring')
-  assert.ok(!workingHtml.includes('background task'), 'the tooltip appends no background summary')
-})
-
 test('plugin disabled (contributions gone) or only neutral history counts left: no in-flight indicator at all', { timeout: 60_000 }, () => {
   const conversations = [
     conv({ id: 1, title: '主会话', profileId: 'assistant', createdAt: 9000, updatedAt: 9000 }),
@@ -967,64 +926,6 @@ function findNavRow(html: string, label: string): Element {
   assert.ok(match, `sidebar row titled "${label}" not found`)
   return match
 }
-
-test('sidebar.section conversation rows in split presence: a splitTarget hit renders .nav-item-split and the Split micro badge; focusing split switches .nav-item-active.nav-item-focused', { timeout: 60_000 }, () => {
-  const contributions: PluginUiContribution[] = [
-    {
-      pluginId: 'builtin:superagent',
-      surface: 'sidebar.section',
-      spec: { id: 'workers', label: '后台 Worker', filterTag: 'worker' },
-    },
-  ]
-  const conversations = [
-    conv({ id: 20, title: 'Worker A', profileId: 'coder', tags: ['worker'] }),
-    conv({ id: 21, title: 'Worker B', profileId: 'coder', tags: ['worker'] }),
-    conv({ id: 50, title: '主控会话', profileId: 'assistant' }),
-  ]
-
-  const splitSecondaryHtml = renderSidebar(
-    sidebarStore({
-      conversations,
-      primaryTarget: { kind: 'conversation', conversationId: 50 },
-      splitTarget: { kind: 'conversation', conversationId: 20 },
-      uiContributions: contributions,
-    }),
-  )
-  const workerSecondary = findNavRow(splitSecondaryHtml, 'Worker A')
-  assert.equal(workerSecondary.classList.contains('nav-item-split'), true)
-  assert.equal(workerSecondary.classList.contains('nav-item-active'), false)
-  assert.equal(workerSecondary.classList.contains('nav-item-focused'), false)
-  assert.equal(workerSecondary.querySelector('.nav-item-main')?.getAttribute('aria-current'), null)
-  const secondaryMeta = workerSecondary.querySelector('.nav-item-meta')
-  assert.ok(secondaryMeta, 'Worker A must render .nav-item-meta')
-  const secondaryTag = secondaryMeta.children[0]
-  assert.equal(secondaryTag?.className, 'nav-pane-tag', 'the paneTag must lead .nav-item-meta')
-  assert.equal(secondaryTag?.textContent, 'Split')
-  assert.equal(secondaryTag?.getAttribute('title'), 'Open in split view')
-  assert.equal(secondaryMeta.children[1]?.textContent, '#20')
-
-  const workerOther = findNavRow(splitSecondaryHtml, 'Worker B')
-  assert.equal(workerOther.classList.contains('nav-item-split'), false)
-  assert.equal(workerOther.classList.contains('nav-item-active'), false)
-  assert.ok(workerOther.querySelector('.nav-pane-tag') === null)
-
-  const splitFocusedHtml = renderSidebar(
-    sidebarStore({
-      conversations,
-      primaryTarget: { kind: 'conversation', conversationId: 50 },
-      splitTarget: { kind: 'conversation', conversationId: 20 },
-      focusedPanel: 'split',
-      uiContributions: contributions,
-    }),
-  )
-  const workerFocused = findNavRow(splitFocusedHtml, 'Worker A')
-  assert.equal(workerFocused.classList.contains('nav-item-active'), true)
-  assert.equal(workerFocused.classList.contains('nav-item-focused'), true)
-  assert.equal(workerFocused.classList.contains('nav-item-split'), false)
-  assert.equal(workerFocused.querySelector('.nav-item-main')?.getAttribute('aria-current'), 'page')
-  assert.equal(workerFocused.querySelector('.nav-pane-tag')?.textContent, 'Split')
-  assert.equal(workerFocused.querySelector('.nav-pane-tag')?.getAttribute('title'), 'Open in split view')
-})
 
 test('ViewNavGroup and SettingsNavGroup split double-open: main/split highlights, focus ticks and .nav-pane-tag (single screen adds no Settings meta)', { timeout: 60_000 }, () => {
   const viewContributions: PluginUiContribution[] = [

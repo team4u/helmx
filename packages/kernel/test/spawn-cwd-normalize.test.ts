@@ -77,7 +77,6 @@ async function openSpawnEnv(options: {
     dataDir,
     defaultCwd: '/tmp/helmx-spawn-default',
     hubUrl: 'http://127.0.0.1:3200',
-    stashEnvFor: (id) => stash.envFor(id),
     redact: (t) => stash.redact(t),
     artifacts: new ArtifactService(dataDir, { get: () => undefined, list: () => [], put: () => {}, deleteByConversation: () => {} } as never),
     // Construct platform fact stub (remote registry; local injects Hub platform explicitly).

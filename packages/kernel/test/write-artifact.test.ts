@@ -44,7 +44,6 @@ describe('write tool artifact registration behavior', { timeout: 60_000 }, () =>
       dataDir: dir,
       defaultCwd: dir,
       hubUrl: 'http://127.0.0.1:3202',
-      stashEnvFor: () => ({}),
       redact: (t) => stash.redact(t),
       artifacts,
     }
@@ -80,7 +79,6 @@ describe('write tool artifact registration behavior', { timeout: 60_000 }, () =>
       dataDir: dir,
       defaultCwd: dir,
       hubUrl: 'http://127.0.0.1:3202',
-      stashEnvFor: () => ({}),
       redact: (t) => stash.redact(t),
       artifacts,
     }
@@ -126,7 +124,6 @@ describe('write tool artifact registration behavior', { timeout: 60_000 }, () =>
       dataDir: dir,
       defaultCwd: dir,
       hubUrl: 'http://127.0.0.1:3202',
-      stashEnvFor: () => ({}),
       redact: (t) => stash.redact(t),
       artifacts,
     }
@@ -176,7 +173,6 @@ describe('write tool artifact registration behavior', { timeout: 60_000 }, () =>
       evictConversation: () => undefined,
       debugBaseCount: () => 0,
       debugBases: () => [],
-      getNodeHostEnv: () => { throw new Error('not used') },
       dispose: () => Promise.resolve(),
     } as never
 
@@ -184,7 +180,6 @@ describe('write tool artifact registration behavior', { timeout: 60_000 }, () =>
       dataDir: dir,
       defaultCwd: '/remote/workspace',
       hubUrl: 'http://127.0.0.1:3202',
-      stashEnvFor: () => ({}),
       redact: (t) => stash.redact(t),
       artifacts,
       envFabric: stubFabric,

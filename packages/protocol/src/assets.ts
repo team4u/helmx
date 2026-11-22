@@ -18,8 +18,7 @@ export const PROFILE_STARTER_PROMPT_MAX_LENGTH = 4000
 /**
  * Conversation Profile: `~/.helmx/profiles/<id>/profile.json` + SYSTEM.md.
  * MEMORY.md long-term memory is self-managed by the builtin:memory plugin (not part
- * of the Profile contract). `runtime` is the protocol-layer config shape (e.g.
- * binding a Herdr CLI); the actual driving lives in builtin:herdr.
+ * of the Profile contract).
  */
 export interface Profile {
   id: string
@@ -32,15 +31,11 @@ export interface Profile {
   nodeId?: string
   /** Default working directory of the Profile. */
   cwd?: string
-  /** External execution config when invoked as a subagent / workflow node; durable conversations are still carried by pi-durable. */
-  runtime?: ProfileRuntime
   tags?: string[]
   /** Loadable skill allowlist; defaults to all available skills, an empty array disables all. A disabled plugin's managed skills are always unavailable. */
   skills?: string[]
   /** Plugin ID that bootstrapped or manages this Profile (the frontend may hide it when that plugin is not enabled). */
   managedByPlugin?: string
-  /** Whether humans can select this Profile in the "new conversation" dropdown; resident singleton roles set false; defaults to true. */
-  humanSelectable?: boolean
   /**
    * Guardrail: restrict model-driven file tools (`read`/`write`/`edit`/`register_artifact`) and explicit
    * subagent `cwd` to the conversation's own working directory (defaults to false = unrestricted).
@@ -53,20 +48,6 @@ export interface Profile {
   starters?: ProfileStarterPrompt[]
   /** Full SYSTEM.md text (read/written by detail endpoints; never written into profile.json). */
   system?: string
-}
-
-/** External agent runtime config bound to a Profile (e.g. 'herdr', driven by the corresponding plugin). */
-export interface ProfileRuntime {
-  kind: string
-  /** External CLI agent identifier, e.g. 'agy' | 'claude' | 'codex' | 'pi'. */
-  agent: string
-  args?: string[]
-  /** Target compute node identifier (defaults to local 'local'). */
-  nodeId?: string
-  /** Conversation working directory (absolute path); decided by the runtime when absent. */
-  workspace?: string
-  /** Environment variable overrides injected into the subprocess. */
-  env?: Record<string, string>
 }
 
 /** Skill catalog summary: dataDir root `~/.helmx/skills/<id>/` (SKILL.md + references/*.md), machine-level shared source `~/.agents/skills/<id>/` (source='agents'), or the conversation node's own workspace source `<cwd>/.helmx/skills/<id>/` (source='node'; discovered and loaded read-only on the node, never copied into the Hub dataDir). */

@@ -71,7 +71,6 @@ const { createRoot } = ReactDOMClient
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const WORKFLOW_CLIENT_DIR = resolve(__dirname, '../src/workflow/client')
-const HERDR_CLIENT_DIR = resolve(__dirname, '../src/herdr/client')
 
 interface WorkflowClientModule {
   WorkflowActiveTray: React.ComponentType<Record<string, unknown>>
@@ -1108,9 +1107,9 @@ describe('Workflow 三区零重复与无损呈现', () => {
     assert.doesNotMatch(iconSrc, /from 'lucide-react'/, 'WorkflowIcon 不得私建 lucide-react 映射表')
     assert.match(iconSrc, /<HelmxIcon\b/, 'WorkflowIcon 应直接委托 <HelmxIcon />')
 
-    // 2. 全量扫描 workflow/client/*.tsx 与 herdr/client/*.tsx：零 Emoji、零 callout--warn、仅导出组件与 TS 类型
+    // 2. 全量扫描 workflow/client/*.tsx：零 Emoji、零 callout--warn、仅导出组件与 TS 类型
     const emojiRe = /\p{Extended_Pictographic}/u
-    for (const dir of [WORKFLOW_CLIENT_DIR, HERDR_CLIENT_DIR]) {
+    for (const dir of [WORKFLOW_CLIENT_DIR]) {
       const files = await readdir(dir)
       for (const file of files) {
         if (!file.endsWith('.tsx')) continue

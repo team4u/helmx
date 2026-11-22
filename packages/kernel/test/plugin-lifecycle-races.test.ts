@@ -65,16 +65,14 @@ function makeHostApi(events: string[]): PluginHostBackend {
     markConversationOwnership: () => {},
     createAsk: async () => ({ id: 'ask-1', status: 'answered' as const, answers: {} }),
     cancelAsk: async () => {},
-    registerAskSeqResolver: () => () => {},
     onEvent: () => () => {},
     abortConversation: async () => {},
-    getConversationOwnership(): 'helmx' | 'bot' | 'human' {
+    getConversationOwnership(): 'helmx' | 'human' {
       return 'human'
     },
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
     execEnv: async () => { throw new HelmxError('unsupported', 'this fixture does not execute node commands', 501) },
-    withFileMutationQueue(): Promise<never> { throw new Error('this fixture does not support file mutation queue') },
     emitEvent: (type) => {
       events.push(`event:${type}`);
     },
@@ -111,7 +109,7 @@ function fullPlugin(id: string, marks: string[]): PluginDefinition {
     definePlugin: (ctx) => {
       ctx.configSchema({ endpoint: { type: 'string', label: 'Endpoint' } });
       ctx.ui.sidebarItem({ id: 'nav', label: 'Navigation' });
-      ctx.hook.onTrigger(() => {
+      ctx.hook.onInput(() => {
         marks.push('hook-ran');
         return { action: 'continue' as const };
       });
@@ -136,8 +134,8 @@ function fullPlugin(id: string, marks: string[]): PluginDefinition {
   };
 }
 
-function triggerPayload(id = 'e1') {
-  return { id, source: 'test', text: 'x', createdAt: 1 };
+function inputPayload(id = 'e1') {
+  return { conversationId: 1, input: { id, text: 'x', origin: 'human' as const, whenBusy: 'steer' as const, createdAt: 1 } };
 }
 
 let dataDir: string;
@@ -203,7 +201,7 @@ test('enable persistence window: service already started while actions reject, h
     assert.deepEqual(marks, ['svc-start'], 'service has started before persistence completes');
     await assertRejectsCode(() => host.invokeAction('builtin:herdr', 'ping', {}), 'plugin_disabled');
     marks.length = 0;
-    const r = await host.runHook('trigger', triggerPayload());
+    const r = await host.runHook('input', inputPayload());
     assert.equal(r.action, 'continue');
     assert.deepEqual(marks, [], 'hook handlers never run inside the suspension window');
     assert.deepEqual(host.listUi(), [], 'UI is not exposed inside the suspension window');
@@ -216,7 +214,7 @@ test('enable persistence window: service already started while actions reject, h
   // After commit: actions work, hooks run, UI is exposed, and state is persisted true
   assert.deepEqual(await host.invokeAction('builtin:herdr', 'ping', {}), { ok: true });
   marks.length = 0;
-  const r2 = await host.runHook('trigger', triggerPayload());
+  const r2 = await host.runHook('input', inputPayload());
   assert.equal(r2.action, 'transform');
   assert.deepEqual(marks, ['hook-ran']);
   assert.equal(host.listUi().length, 1);
@@ -293,7 +291,7 @@ test('getEnabled throws: register leaves zero leftovers (registry / dataDir / ho
   assert.equal(host.list().length, 0, 'zero leftovers in plugin registry');
   assert.equal(existsSync(join(dataDir, 'plugins', pluginDataDirName('p:boom'))), false, 'plugin data directory not created');
   assert.deepEqual(events.filter((e) => e.startsWith('manage:')), [], 'no host assets acquired');
-  const r = await host.runHook('trigger', triggerPayload());
+  const r = await host.runHook('input', inputPayload());
   assert.equal(r.action, 'continue', 'zero leftovers in hook pipeline');
 
   // Non-HelmxError exceptions: wrapped as plugin_registration_failed while preserving original message
@@ -476,7 +474,7 @@ test('writing when plugins field is corrupt throws config_corrupt explicitly wit
   assert.equal(raw['plugins'], 'corrupt', 'corrupt content preserved as-is');
 });
 
-test('concurrent HTTP host.setConfig and plugin ctx.host.setConfig share instance serialization without clobbering or materializing defaults', { timeout: 60_000 }, async () => {
+test('concurrent host.setConfig writes share instance serialization without clobbering or materializing defaults', { timeout: 60_000 }, async () => {
   const credDir = join(dataDir, 'cred-concurrent');
   mkdirSync(credDir, { recursive: true });
   const cfg = new InterposingConfigService(dataDir);
@@ -484,7 +482,6 @@ test('concurrent HTTP host.setConfig and plugin ctx.host.setConfig share instanc
   await store.load();
 
   const host = makeHost(store);
-  let pluginSetConfig!: (patch: Record<string, unknown>) => Promise<void>;
   await host.register({
     id: 'p:concurrent-cfg',
     definePlugin: (ctx) => {
@@ -494,11 +491,10 @@ test('concurrent HTTP host.setConfig and plugin ctx.host.setConfig share instanc
         endpoint: { type: 'string' },
         apiKey: { type: 'string', secret: true },
       });
-      pluginSetConfig = (patch) => ctx.host.setConfig(patch);
     },
   }, { enabled: true });
 
-  // Interpose a concurrent HTTP write while plugin ctx.host.setConfig is in flight:
+  // Interpose a concurrent write while the first host.setConfig is in flight:
   // both patches apply incrementally and neither materializes schema defaults onto disk.
   const firstEntered = deferred<void>();
   const releaseFirst = deferred<void>();
@@ -507,11 +503,11 @@ test('concurrent HTTP host.setConfig and plugin ctx.host.setConfig share instanc
     await releaseFirst.promise;
   };
 
-  const pluginWrite = pluginSetConfig({ endpoint: 'https://plugin.local' });
+  const firstWrite = host.setConfig('p:concurrent-cfg', { endpoint: 'https://plugin.local' });
   await firstEntered.promise;
   const httpWrite = host.setConfig('p:concurrent-cfg', { retries: 7, apiKey: 'secret-from-http' });
   releaseFirst.resolve();
-  await Promise.all([pluginWrite, httpWrite]);
+  await Promise.all([firstWrite, httpWrite]);
 
   const raw = JSON.parse(readFileSync(join(dataDir, 'config.json'), 'utf8')) as {
     plugins?: Record<string, Record<string, unknown>>;
@@ -535,7 +531,7 @@ test('concurrent HTTP host.setConfig and plugin ctx.host.setConfig share instanc
     apiKey: 'secret-from-http',
   });
 
-  // Secret-only patch via ctx.host.setConfig preserves external plain-field edits on disk without overwriting config.json.
+  // Secret-only patch via host.setConfig preserves external plain-field edits on disk without overwriting config.json.
   const externalCfg = new ConfigService(dataDir);
   await externalCfg.updateBy((cur) => ({
     ...cur,
@@ -544,7 +540,7 @@ test('concurrent HTTP host.setConfig and plugin ctx.host.setConfig share instanc
       'p:concurrent-cfg': { endpoint: 'https://external-edit.local', retries: 9 },
     },
   }));
-  await pluginSetConfig({ apiKey: 'rotated-secret' });
+  await host.setConfig('p:concurrent-cfg', { apiKey: 'rotated-secret' });
   const afterSecretRaw = JSON.parse(readFileSync(join(dataDir, 'config.json'), 'utf8')) as {
     plugins?: Record<string, Record<string, unknown>>;
   };
@@ -800,13 +796,9 @@ test('hook gate: failed-while-enabled plugin skips regular and agent_spawn aroun
       id: 'p:dep',
       dependencies: ['p:base'],
       definePlugin: (ctx) => {
-        ctx.hook.onTrigger((payload) => {
-          marks.push(`dep:trigger:${payload.id}`);
-          return { action: 'transform', value: { ...payload, text: `${payload.text}+dep` } };
-        });
         ctx.hook.onInput((payload) => {
           marks.push(`dep:input:${payload.input.id}`);
-          return { action: 'block', reason: 'dep blocked' };
+          return { action: 'transform', value: { ...payload, input: { ...payload.input, text: `${payload.input.text}+dep` } } };
         });
         ctx.hook.onAgentSpawn(async (req, next) => {
           marks.push(`dep:spawn-before:${req.prompt}`);
@@ -818,9 +810,9 @@ test('hook gate: failed-while-enabled plugin skips regular and agent_spawn aroun
     await host.register({
       id: 'p:other',
       definePlugin: (ctx) => {
-        ctx.hook.onTrigger((payload) => {
-          marks.push(`other:trigger:${payload.id}`);
-          return { action: 'transform', value: { ...payload, text: `${payload.text}+other` } };
+        ctx.hook.onInput((payload) => {
+          marks.push(`other:input:${payload.input.id}`);
+          return { action: 'transform', value: { ...payload, input: { ...payload.input, text: `${payload.input.text}+other` } } };
         });
         ctx.hook.onAgentSpawn(async (req, next) => {
           marks.push(`other:spawn-before:${req.prompt}`);
@@ -831,9 +823,9 @@ test('hook gate: failed-while-enabled plugin skips regular and agent_spawn aroun
     }, { enabled: true });
 
     // Pre-check: active dependent participates in regular and around hooks.
-    const activeTrigger = await host.runHook('trigger', triggerPayload('t1'));
-    assert.equal(activeTrigger.action, 'transform');
-    assert.equal((activeTrigger as { action: 'transform'; value: { text: string } }).value.text, 'x+dep+other');
+    const activeInput = await host.runHook('input', inputPayload('t1'));
+    assert.equal(activeInput.action, 'transform');
+    assert.equal((activeInput as { action: 'transform'; value: { input: { text: string } } }).value.input.text, 'x+dep+other');
     const activeSpawn = await host.runHookAround('agent_spawn', spawnPayload('s1'), async (req) => ({ finalPrompt: req.prompt }));
     assert.deepEqual(activeSpawn, { finalPrompt: 's1+dep+other' });
 
@@ -846,16 +838,10 @@ test('hook gate: failed-while-enabled plugin skips regular and agent_spawn aroun
 
     // Failed dependent must be skipped across regular hooks (shared and solo) and around hooks.
     marks.length = 0;
-    const failedTrigger = await host.runHook('trigger', triggerPayload('t2'));
-    assert.equal(failedTrigger.action, 'transform');
-    assert.equal((failedTrigger as { action: 'transform'; value: { text: string } }).value.text, 'x+other');
-    assert.deepEqual(marks, ['other:trigger:t2']);
-
-    const failedInput = await host.runHook('input', {
-      conversationId: 1,
-      input: { id: 'in-1', text: 'hello', origin: 'human', whenBusy: 'steer', createdAt: 1 },
-    });
-    assert.deepEqual(failedInput, { action: 'continue' });
+    const failedInput = await host.runHook('input', inputPayload('t2'));
+    assert.equal(failedInput.action, 'transform');
+    assert.equal((failedInput as { action: 'transform'; value: { input: { text: string } } }).value.input.text, 'x+other');
+    assert.deepEqual(marks, ['other:input:t2']);
 
     marks.length = 0;
     const failedSpawn = await host.runHookAround('agent_spawn', spawnPayload('s2'), async (req) => ({ finalPrompt: req.prompt }));
@@ -870,18 +856,12 @@ test('hook gate: failed-while-enabled plugin skips regular and agent_spawn aroun
     assert.equal(host.get('p:dep')?.status, 'active');
 
     marks.length = 0;
-    const recoveredTrigger = await host.runHook('trigger', triggerPayload('t3'));
-    assert.equal(recoveredTrigger.action, 'transform');
-    assert.equal((recoveredTrigger as { action: 'transform'; value: { text: string } }).value.text, 'x+other+dep');
-    const recoveredInput = await host.runHook('input', {
-      conversationId: 1,
-      input: { id: 'in-2', text: 'hello', origin: 'human', whenBusy: 'steer', createdAt: 2 },
-    });
-    assert.deepEqual(recoveredInput, { action: 'block', reason: 'dep blocked' });
+    const recoveredInput = await host.runHook('input', inputPayload('t3'));
+    assert.equal(recoveredInput.action, 'transform');
+    assert.equal((recoveredInput as { action: 'transform'; value: { input: { text: string } } }).value.input.text, 'x+other+dep');
     const recoveredSpawn = await host.runHookAround('agent_spawn', spawnPayload('s3'), async (req) => ({ finalPrompt: req.prompt }));
     assert.deepEqual(recoveredSpawn, { finalPrompt: 's3+other+dep' });
-    assert.ok(marks.includes('dep:trigger:t3'));
-    assert.ok(marks.includes('dep:input:in-2'));
+    assert.ok(marks.includes('dep:input:t3'));
     assert.ok(marks.includes('dep:spawn-before:s3+other'));
     assert.ok(marks.includes('dep:spawn-after'));
   } finally {
@@ -892,8 +872,8 @@ test('hook gate: failed-while-enabled plugin skips regular and agent_spawn aroun
 test('hook gate: in-flight hooks keep owned live-task protection when dependent fails, block new hook dispatches, and deactivating window excludes hooks', { timeout: 60_000 }, async () => {
   const host = makeHost();
   try {
-    const triggerEntered = deferred<void>();
-    const triggerRelease = deferred<void>();
+    const inputEntered = deferred<void>();
+    const inputRelease = deferred<void>();
     const spawnEntered = deferred<void>();
     const spawnRelease = deferred<void>();
     const stopEntered = deferred<void>();
@@ -908,11 +888,11 @@ test('hook gate: in-flight hooks keep owned live-task protection when dependent 
       id: 'p:dep',
       dependencies: ['p:base'],
       definePlugin: (ctx) => {
-        ctx.hook.onTrigger(async (payload) => {
-          ran.push(`trigger:${payload.id}`);
+        ctx.hook.onInput(async (payload) => {
+          ran.push(`input:${payload.input.id}`);
           if (holdHooks) {
-            triggerEntered.resolve();
-            await triggerRelease.promise;
+            inputEntered.resolve();
+            await inputRelease.promise;
           }
           return { action: 'continue' as const };
         });
@@ -938,9 +918,9 @@ test('hook gate: in-flight hooks keep owned live-task protection when dependent 
     }, { enabled: true });
 
     // Start two in-flight hooks (regular + around) while active.
-    const inflightTrigger = host.runHook('trigger', triggerPayload('inflight-1'));
+    const inflightInput = host.runHook('input', inputPayload('inflight-1'));
     const inflightSpawn = host.runHookAround('agent_spawn', spawnPayload('inflight-s1'), async (req) => ({ prompt: req.prompt }));
-    await Promise.all([triggerEntered.promise, spawnEntered.promise]);
+    await Promise.all([inputEntered.promise, spawnEntered.promise]);
     assert.equal(host.activeTaskCount('p:dep'), 2);
 
     // Force-disable base while dep hooks are in-flight: dep becomes failed, yet owned live-task guard still holds.
@@ -950,17 +930,17 @@ test('hook gate: in-flight hooks keep owned live-task protection when dependent 
     await assertRejectsCode(() => host.disable('p:dep', { force: true }), 'plugin_has_live_tasks', 409);
 
     // New hook dispatches while failed must skip p:dep and never add live tasks.
-    const blockedTrigger = await host.runHook('trigger', triggerPayload('after-fail'));
-    assert.deepEqual(blockedTrigger, { action: 'continue' });
+    const blockedInput = await host.runHook('input', inputPayload('after-fail'));
+    assert.deepEqual(blockedInput, { action: 'continue' });
     const blockedSpawn = await host.runHookAround('agent_spawn', spawnPayload('after-fail-s'), async (req) => ({ fallback: req.prompt }));
     assert.deepEqual(blockedSpawn, { fallback: 'after-fail-s' });
-    assert.deepEqual(ran, ['trigger:inflight-1', 'spawn:inflight-s1']);
+    assert.deepEqual(ran, ['input:inflight-1', 'spawn:inflight-s1']);
     assert.equal(host.activeTaskCount('p:dep'), 2);
 
     // Completing in-flight hooks releases tracked tasks cleanly via finally.
-    triggerRelease.resolve();
+    inputRelease.resolve();
     spawnRelease.resolve();
-    await inflightTrigger;
+    await inflightInput;
     assert.deepEqual(await inflightSpawn, { prompt: 'inflight-s1' });
     assert.equal(host.activeTaskCount('p:dep'), 0);
 
@@ -975,8 +955,8 @@ test('hook gate: in-flight hooks keep owned live-task protection when dependent 
     const disabling = host.disable('p:dep');
     await stopEntered.promise;
     try {
-      const midTrigger = await host.runHook('trigger', triggerPayload('mid-deactivate'));
-      assert.deepEqual(midTrigger, { action: 'continue' });
+      const midInput = await host.runHook('input', inputPayload('mid-deactivate'));
+      assert.deepEqual(midInput, { action: 'continue' });
       const midSpawn = await host.runHookAround('agent_spawn', spawnPayload('mid-deactivate-s'), async (req) => ({ ok: req.prompt }));
       assert.deepEqual(midSpawn, { ok: 'mid-deactivate-s' });
       assert.deepEqual(ran, [], 'hooks must not execute during phase=deactivating');

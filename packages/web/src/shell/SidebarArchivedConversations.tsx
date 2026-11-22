@@ -22,7 +22,6 @@ import { Checkbox, ConfirmDialog, HelmxIcon, Tooltip } from '@helmx/plugin-clien
 import { conversationsApi } from '../lib/api.js'
 import {
   useConversations,
-  useGroupedUi,
   useLocationTargets,
   usePlugins,
   useProfilesSlice,
@@ -136,7 +135,6 @@ export function ArchivedConversationsGroup({
   const conversations = useConversations()
   const { profiles } = useProfilesSlice()
   const plugins = usePlugins()
-  const groupedUi = useGroupedUi()
   const locationTargets = useLocationTargets()
   const { openTarget, pushNotice } = useStoreActions()
   const { t } = useWebLocale()
@@ -146,9 +144,8 @@ export function ArchivedConversationsGroup({
         conversations,
         profiles,
         plugins,
-        sidebarSections: groupedUi.sidebarSections,
       }),
-    [conversations, profiles, plugins, groupedUi.sidebarSections],
+    [conversations, profiles, plugins],
   )
 
   const activeConversationIds = activeConversationIdsOf(locationTargets)

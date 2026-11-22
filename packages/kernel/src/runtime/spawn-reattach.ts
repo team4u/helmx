@@ -28,9 +28,24 @@ const ENTRY_SCAN_PAGE_SIZE = 256
  * - `reattach.conversationId` must be a positive safe integer paired with a non-empty `requestId` (for submission deduplication).
  */
 export function assertSpawnRequestModes(
-  request: Pick<AgentSpawnRequest, 'fork' | 'resume' | 'reattach' | 'requestId' | 'nodeId'>,
+  request: Pick<AgentSpawnRequest, 'fork' | 'resume' | 'reattach' | 'requestId' | 'nodeId' | 'gateTimeoutMs'>,
 ): void {
   assertSpawnForkFields(request)
+  if (request.gateTimeoutMs !== undefined) {
+    if (
+      typeof request.gateTimeoutMs !== 'number' ||
+      !Number.isSafeInteger(request.gateTimeoutMs) ||
+      request.gateTimeoutMs <= 0 ||
+      request.gateTimeoutMs > 600_000
+    ) {
+      throw new HelmxError(
+        'validation_error',
+        `gateTimeoutMs must be a positive safe integer <= 600000 (received ${String(request.gateTimeoutMs)})`,
+        400,
+        { gateTimeoutMs: request.gateTimeoutMs },
+      )
+    }
+  }
   if (request.nodeId !== undefined) {
     if (!isValidNodeId(request.nodeId)) {
       throw new HelmxError(
@@ -65,7 +80,7 @@ export function assertSpawnRequestModes(
     throw new HelmxError('validation_error', 'reattach must be a plain object', 400)
   }
   for (const key of Object.keys(raw)) {
-    if (key !== 'conversationId' && key !== 'executionId' && key !== 'effectiveCwd') {
+    if (key !== 'conversationId' && key !== 'effectiveCwd') {
       throw new HelmxError('validation_error', `reattach contains unknown field "${key}"`, 400, { field: key })
     }
   }
@@ -84,25 +99,13 @@ export function assertSpawnRequestModes(
       400,
     )
   }
-  if (raw.conversationId !== undefined) {
-    if (typeof raw.conversationId !== 'number' || !Number.isSafeInteger(raw.conversationId) || raw.conversationId <= 0) {
-      throw new HelmxError(
-        'validation_error',
-        `reattach.conversationId must be a positive safe integer (received ${String(raw.conversationId)})`,
-        400,
-        { conversationId: raw.conversationId },
-      )
-    }
-  }
-  if (raw.executionId !== undefined) {
-    if (typeof raw.executionId !== 'string' || raw.executionId.length === 0) {
-      throw new HelmxError(
-        'validation_error',
-        `reattach.executionId must be a non-empty string (received ${String(raw.executionId)})`,
-        400,
-        { executionId: raw.executionId },
-      )
-    }
+  if (typeof raw.conversationId !== 'number' || !Number.isSafeInteger(raw.conversationId) || raw.conversationId <= 0) {
+    throw new HelmxError(
+      'validation_error',
+      `reattach.conversationId must be a positive safe integer (received ${String(raw.conversationId)})`,
+      400,
+      { conversationId: raw.conversationId },
+    )
   }
   if (raw.effectiveCwd !== undefined) {
     if (typeof raw.effectiveCwd !== 'string' || !isAbsoluteAgentPath(raw.effectiveCwd)) {
@@ -113,9 +116,6 @@ export function assertSpawnRequestModes(
         { effectiveCwd: raw.effectiveCwd },
       )
     }
-  }
-  if (raw.conversationId === undefined && raw.executionId === undefined) {
-    throw new HelmxError('validation_error', 'reattach requires at least conversationId or executionId', 400)
   }
 }
 

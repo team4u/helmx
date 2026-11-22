@@ -47,7 +47,6 @@ import {
   atomicWriteJson,
   ensureDataDir,
   isPrivateMode,
-  parsePlaceholder,
   readJsonFile,
   readTextFile,
   resolveDataDir,
@@ -178,9 +177,11 @@ test('profiles: save never reads or writes MEMORY.md (memory owned by builtin:me
   await profiles.save({ id: 'writer', name: 'writer', tags: [] })
   const entries = await readdir(join(dataDir, 'profiles', 'writer'))
   assert.ok(!entries.includes('MEMORY.md'), 'ProfileService.save must not create MEMORY.md')
-  // Legacy memory field is silently stripped at service layer (HTTP layer rejects via rejectUnknownKeys 400).
-  const saved = await profiles.save({ id: 'writer2', name: 'writer2', tags: [], memory: '# old field' } as never)
-  assert.equal('memory' in saved, false, 'memory must not enter Profile contract')
+  // Legacy memory field is rejected explicitly at ProfileService boundary (no silent stripping).
+  await assert.rejects(
+    () => profiles.save({ id: 'writer2', name: 'writer2', tags: [], memory: '# old field' } as never),
+    /unknown field 'memory'/i,
+  )
   assert.ok(!existsSync(join(dataDir, 'profiles', 'writer2', 'MEMORY.md')))
 })
 
@@ -264,20 +265,17 @@ test('skills: strictly rejects absolute paths, .. traversal, backslashes, and sy
   await assert.rejects(() => skills.readFile('../demo'), /illegal skill id/)
 })
 
-test('profiles: SYSTEM_DEFAULT Layer 0 contains helmx-cli guidance and HELMX_CONVERSATION_ID without generative UI component catalogs', { timeout: 60_000 }, async () => {
+test('profiles: SYSTEM_DEFAULT Layer 0 retains artifact rule without hardcoded plugin names or UI catalogs', { timeout: 60_000 }, async () => {
   const dataDir = await freshDataDir()
   const profiles = new ProfileService(dataDir)
   await profiles.ensureDefault()
   const system = await profiles.getSystem('assistant')
   assert.ok(system.includes('# System Prompt'))
-  assert.ok(system.includes('helmx-cli'), 'must guide loading helmx-cli skill')
-  assert.ok(system.includes('HELMX_CONVERSATION_ID'), 'must document managed environment vars')
-  assert.ok(system.includes('load_skill'), 'must reference load_skill for on-demand loading')
   for (const component of ['MetricGrid', 'CheckboxGroup', 'ActionBar', 'BarList', 'KeyValueList', 'Accordion', 'helmx:action', 'helmx:open', 'helmx:send']) {
     assert.ok(!system.includes(component), `SYSTEM_DEFAULT must not contain Layer 2 details: ${component}`)
   }
-  for (const name of ['generative-ui', 'app-builder']) {
-    assert.ok(!system.includes(name), `SYSTEM_DEFAULT must not hardcode optional extension skills: ${name}`)
+  for (const name of ['helmx-cli', 'load_skill', 'generative-ui', 'app-builder']) {
+    assert.ok(!system.includes(name), `SYSTEM_DEFAULT must not hardcode plugin skills or tools: ${name}`)
   }
   assert.ok(system.includes('artifact:<id>'), 'must retain artifact registration and inline render rule')
 })
@@ -723,64 +721,19 @@ test('watcher: missing directory emits explicit error via onError rather than fa
 // ---------------------------------------------------------------------------
 // SecretStash
 // ---------------------------------------------------------------------------
-test('stash: put returns REDACTED placeholder, envFor injects values, redaction isolated per conversation', { timeout: 60_000 }, async () => {
-  const stash = new SecretStash()
-  const ph = stash.put(1, 'GITHUB_TOKEN', 'ghp_secret_value_111')
-  assert.ok(ph.startsWith('[REDACTED:stash:'))
-  assert.ok(ph.endsWith(']'))
-  const uuid = parsePlaceholder(ph)
-  assert.notEqual(uuid, null)
-
-  assert.deepEqual(stash.envFor(1), { GITHUB_TOKEN: 'ghp_secret_value_111' })
-  assert.deepEqual(stash.envFor(2), {})
-
-  assert.throws(() => stash.put(1, '1BAD NAME', 'x'), /valid environment variable name/)
-
-  // Overwriting same key keeps previous value in redaction table too.
-  const nextValue = 'replacement-example-value'
-  const ph2 = stash.put(1, 'GITHUB_TOKEN', nextValue)
-  assert.notEqual(ph, ph2)
-  assert.equal(stash.redact(ph), ph)
-  assert.equal(stash.redact(ph2), ph2)
-  assert.equal(stash.redact(nextValue, 1), ph2)
-  assert.equal(stash.redact('ghp_secret_value_111', 1), ph)
-  stash.put(2, 'GITHUB_TOKEN', 'other-example-value')
-  stash.put(2, 'OTHER_KEY', 'other_value')
-  assert.equal(stash.redact(ph2, 2), ph2)
-  assert.equal(stash.redact(nextValue, 2), nextValue)
-  assert.equal(stash.redact(`token=${nextValue} done`, 1), `token=${ph2} done`)
-  assert.equal(stash.redact(`token=${nextValue} done`), `token=${ph2} done`)
-  const special = 'example.*+?^${}()|[]\\value'
-  const specialMarker = stash.put(1, 'REGEX_VALUE', special)
-  assert.equal(stash.redact(special), specialMarker)
-
-  stash.clear(1)
-  assert.deepEqual(stash.envFor(1), {})
-  assert.deepEqual(stash.envFor(2), { GITHUB_TOKEN: 'other-example-value', OTHER_KEY: 'other_value' })
-  stash.clear()
-  assert.equal(stash.stats().secrets, 0)
-})
-
-test('stash: addRedaction global per-value redaction — non-env, ignored by stats/clear(id), ref-counted', { timeout: 60_000 }, async () => {
+test('stash: addRedaction global literal redaction, regex-special characters, ref-counted release, and clear', { timeout: 60_000 }, async () => {
   const stash = new SecretStash()
   const managed = 'managed-token-value-abc123'
-  const release = stash.addRedaction(managed)
-  void release
-
-  const stashPh = stash.put(1, 'MY_KEY', 'session-secret-value')
+  stash.addRedaction(managed)
   assert.equal(stash.redact(`token=${managed}`), 'token=[REDACTED]')
-  assert.equal(stash.redact(`token=${managed}`, 1), 'token=[REDACTED]')
-  assert.equal(stash.redact(`token=${managed}`, 99), 'token=[REDACTED]')
-  assert.equal(stash.redact(`session=${'session-secret-value'} managed=${managed}`), `session=${stashPh} managed=[REDACTED]`)
+  assert.equal(stash.redact('[REDACTED]'), '[REDACTED]')
 
-  assert.deepEqual(stash.envFor(1), { MY_KEY: 'session-secret-value' })
-  assert.deepEqual(stash.envFor(2), {})
-  assert.equal(stash.stats().secrets, 1)
+  const special = 'example.*+?^${}()|[]\\value'
+  stash.addRedaction(special)
+  assert.equal(stash.redact(`x=${special}`), 'x=[REDACTED]')
 
-  stash.clear(1)
-  assert.equal(stash.redact(managed), '[REDACTED]')
   stash.clear()
-  assert.equal(stash.redact(managed), managed, 'clear() must also clear global registrations')
+  assert.equal(stash.redact(managed), managed, 'clear() must clear global registrations')
 
   const r1 = stash.addRedaction(managed)
   const r2 = stash.addRedaction(managed)
@@ -793,11 +746,10 @@ test('stash: addRedaction global per-value redaction — non-env, ignored by sta
   assert.throws(() => stash.addRedaction(''), /non-empty/)
 })
 
-test('stash: global redaction takes precedence, idempotent markers, and stale release handles stay isolated', { timeout: 60_000 }, () => {
+test('stash: idempotent markers and stale release handles stay isolated', { timeout: 60_000 }, () => {
   const stash = new SecretStash()
   const value = 'internal-example-for-redaction'
   const releaseOld = stash.addRedaction(value)
-  stash.put(1, 'EXAMPLE', value)
   assert.equal(stash.redact(value), '[REDACTED]')
 
   stash.clear()
@@ -1038,7 +990,8 @@ test('artifacts: spill 32KiB threshold, 4KiB UTF-8 safe preview, secret redactio
   assert.notEqual(r4.artifact, undefined)
   assert.ok(!r4.text.includes('\uFFFD'), 'UTF-8 truncation must not split multibyte characters')
 
-  const placeholder = stash.put(9, 'MY_KEY', 'super-secret-value')
+  stash.addRedaction('super-secret-value')
+  const placeholder = '[REDACTED]'
   const leak = `prefix${placeholder} super-secret-value` + 'q'.repeat(33 * 1024)
   const r5 = await artifacts.spill(9, 'call-5', leak)
   assert.ok(r5.artifact !== undefined)
@@ -1071,12 +1024,12 @@ test('artifacts: redacts text artifacts on register, preserves binary bytes, and
   const artifacts = new ArtifactService(dataDir, repository, stash)
 
   const secretValue = 'live-secret-token-for-register-test'
-  stash.put(1, 'MY_SECRET', secretValue)
+  stash.addRedaction(secretValue)
   const srcText = await tempSourceFile(`report header.\nsecret=${secretValue}\nreport tail.\n`)
   const meta = await artifacts.register(1, srcText, { name: 'report.md' })
   const stored = await readFile(join(dataDir, meta.path), 'utf8')
   assert.ok(!stored.includes(secretValue), 'registered text artifact must not keep plaintext secrets')
-  assert.ok(stored.includes('[REDACTED:stash:'), 'redacted artifact must carry placeholder')
+  assert.ok(stored.includes('[REDACTED]'), 'redacted artifact must carry placeholder')
   assert.ok(stored.includes('report header.'), 'non-secret text stays intact')
   const readBack = await artifacts.readContent(meta.id)
   assert.ok(!readBack.includes(secretValue))

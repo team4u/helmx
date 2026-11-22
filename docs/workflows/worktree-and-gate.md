@@ -4,20 +4,18 @@
 
 ## WorktreeIsolation：经 agent_spawn 包裹的隔离生命周期
 
-插件在 `agent_spawn` 管道上挂载一个 priority 200 的 around（continuation）钩子。priority 数值越大越外层：它位于 `builtin:workflow` 深度守卫（priority 300）之内、先于外部运行时接管器（如 `builtin:herdr` 的 priority 100）执行，因此无论是原生派生还是外部运行时的执行，都同样被租约与登记包裹。钩子只对两类派生介入，其余零开销透传：
+插件在 `agent_spawn` 管道上挂载一个 priority 200 的 around（continuation）钩子。priority 数值越大越外层：它位于 `builtin:workflow` 深度守卫（priority 300）之内，包裹隔离派生与续接。钩子只对两类派生介入，其余零开销透传：
 
 ```mermaid
 flowchart TD
     Spawn["agent_spawn 请求"] --> Resume{"resume 续接？"}
     Resume -->|"已绑定隔离树"| Reuse["严格沿用原树（禁止中途迁移节点/cwd）"]
     Resume -->|"无旧绑定但请求 isolation"| Reject["显式拒绝 resume_cwd_conflict"]
-    Resume -->|"普通 resume / 普通派生"| Track["不预分配：仅回填登记与租约"]
-    Spawn -->|"新建 + isolation: 'worktree'"| Ext{"外部运行时 agentType 含 ':'？"}
-    Ext -->|"是"| Track
-    Ext -->|"否"| Alloc["WorktreeAllocator 预分配 → 改写 cwd 为隔离树 → next → 终态收敛"]
+    Resume -->|"普通 resume / 普通派生"| Track["不预分配：透传执行"]
+    Spawn -->|"新建 + isolation: 'worktree'"| Alloc["WorktreeAllocator 预分配 → 改写 cwd 为隔离树 → next → 终态收敛"]
 ```
 
-原生分配路径（`isolation: 'worktree'` 且非外部运行时）的完整时序：先经宿主 `resolveSpawnTarget` 解析真实最终节点（显式 Profile 绑定节点 > 父会话节点 > `local`）与源目录，再在目标节点对源 `cwd` 执行 Git 派生，把最终请求的 `cwd` 改写为隔离树并清除 `isolation` 标记后调 `next` 进入真实执行链。
+原生分配路径（`isolation: 'worktree'`）的完整时序：先经宿主 `resolveSpawnTarget` 解析真实最终节点（显式 `request.nodeId` > Profile 绑定节点 > 父会话节点 > `local`）与源目录，再在目标节点对源 `cwd` 执行 Git 派生，把最终请求的 `cwd` 改写为隔离树并清除 `isolation` 标记后调 `next` 进入真实执行链。
 
 ### 分配细节
 
@@ -38,17 +36,15 @@ flowchart TD
 | `parentWorktreeId` | 源目录本身是受管 Worktree 时记录其 ID，标识父子关系 |
 | `dirtySource` | 派生时源工作区是否含未提交修改 |
 | `conversationId` / `executionId` | 绑定的子会话与执行标识（`onResolved` 回填） |
-| `origin` | `'native'`（引擎分配）或 `'external'`（外部运行时回传登记） |
+| `origin` | `'native'`（受管 Worktree 分配器创建） |
 | `status` | `'active'` / `'removed'`；`branchDeleted` 单独记录分支删除状态 |
-
-外部运行时（`agentType` 含 `:` 的形态）不预分配——外部运行时自行决定隔离方式（如 Herdr 的 `worktree.create`）；插件只在其 `onResolved` 回传 worktree 时统一登记，使 cleanup 对两类记录一视同仁。
 
 ### durable 租约（fail-closed）
 
 工作树占用采用持久租约保护，安全红线是「不能证明停止就不能清理」：
 
 - **占位先于副作用**：`git worktree add` 执行之前，先在租约文档持久登记占位并落盘。进程在此之后崩溃，重启后该占位仍在——清理时无法证明没有执行启动，会以 `worktree_execution_unknown` 显式阻塞，交人工确认。
-- **释放仅限确认停止的状态**：执行确认成功；执行确认从未启动（`next` 调用前就抛错，此时占位自身可证明无执行）；或原生子会话的回合以失败收场（门禁未过、回合超时、Schema 校验失败、被中止/取消）且宿主确认该会话已停止。第三种情形的判定仅覆盖原生子会话：释放本次运行租约，同时保留 Worktree 记录与子会话映射，供下一轮 `resume` 续接或后续 `cleanup_worktree` 清理；`resume` 成功完成时顺带清掉该登记下残留的旧租约。外部执行（Herdr 等远端进程）启动与否不可证明，失败或取消后仍保留租约 fail-closed。特别地，Herdr 窗格回合超时只保存诊断并保留窗格，不关窗、不代发按键；后续 `resume` 在任何 prompt 发送前以权威 `agent.get` 复核，仅 `idle` / `done` 放行续接，其余状态一律显式拒绝，不新建窗格、不重发 `agent.start`。
+- **释放仅限确认停止的状态**：执行确认成功；执行确认从未启动（`next` 调用前就抛错，此时占位自身可证明无执行）；或原生子会话的回合以失败收场（门禁未过、回合超时、Schema 校验失败、被中止/取消）且宿主确认该会话已停止。此时释放本次运行租约，同时保留 Worktree 记录与子会话映射，供下一轮 `resume` 续接或后续 `cleanup_worktree` 清理；`resume` 成功完成时顺带清掉该登记下残留的旧租约。
 - **未知状态保留租约**：进程崩溃后重启、`onResolved` 失败、外部进程可能已启动但未回填标识，均保留租约并以 `worktree_execution_unknown` 阻塞清理，交人工确认。
 - **元数据机密检查**：将要落库的路径/分支/仓路径字段若包含已登记机密，以 `worktree_metadata_secret` 拒绝持久化（诊断输出使用脱敏值）。
 
@@ -84,7 +80,7 @@ sequenceDiagram
 
 宿主执行的门禁有独立超时：`agent()` 的 `gateTimeoutMs` 选项（`1_000 .. 600_000` 整数，默认 `120_000` 毫秒）传给宿主 `runGate`。超时由宿主终止整个进程组，返回 `timedOut: true` 与 `exitCode: null`。门禁未过时的失败在 `details` 中附带 `exitCode`、`timedOut` 与输出尾部，供失败重试时定位缺陷。
 
-宿主自跑 fallback 的工作目录只使用引擎确认过的值（执行环境回传的 `cwd` 或父会话 `cwd`），绝不猜测远端目录；宿主缺 `runGate` 能力则显式失败该调用。外部执行环境（如 Herdr 远端窗格）在其对应工作目录中执行同一命令并经 `onGateResult` 回报，回报优先采纳。`gateTimeoutMs` 只约束宿主侧执行；外部运行时是否支持门禁超时以其自身能力为准——当前 `builtin:herdr` 不支持，携带 `gateTimeoutMs` 的 Herdr 运行时请求（新建与已登记 resume）在进入建窗/续接前以 `unsupported_runtime` 显式拒绝（原生执行行不受影响）；需要限时验收时请在 `gate` 命令内自行包装超时（如 `timeout <秒> <命令>`）。
+宿主自跑 fallback 的工作目录只使用引擎确认过的值（执行环境回传的 `cwd` 或父会话 `cwd`），绝不猜测远端目录；宿主缺 `runGate` 能力则显式失败该调用。
 
 ## 安全回收
 

@@ -142,17 +142,15 @@ function makeHarness(startMs: number, docSeed?: CronDoc): Harness {
       markConversationOwnership: () => {},
       createAsk: async () => ({}) as never,
       cancelAsk: async () => {},
-      registerAskSeqResolver: () => () => {},
       onEvent: () => () => {},
     abortConversation: async () => {},
-    getConversationOwnership(): 'helmx' | 'bot' | 'human' {
+    getConversationOwnership(): 'helmx' | 'human' {
       return 'human'
     },
     isClosing: () => false,
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
     execEnv: async () => { throw new HelmxError('unsupported', '本 fixture 不执行节点命令', 501) },
-    withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') },
       emitEvent: (type, payload) => {
         events.push({ type, payload })
       },
@@ -337,11 +335,10 @@ test('decideTick：未启用/未来 noop；准点与单时段错过均 fire；�
 })
 
 test('buildCronEnvelope：source/id 稳定、目标字段透传', { timeout: 60_000 }, () => {
-  const env = buildCronEnvelope(seedJob({ id: 'x', threadKey: 'tk', targetConversationId: 7 }), T0_5)
+  const env = buildCronEnvelope(seedJob({ id: 'x', targetConversationId: 7 }), T0_5)
   assert.equal(env.source, 'cron:x')
   assert.equal(env.id, `cron:x:${T0_5}`)
   assert.equal(env.createdAt, T0_5)
-  assert.equal(env.threadKey, 'tk')
   assert.equal(env.targetConversationId, 7)
 })
 
@@ -408,7 +405,7 @@ test('cron_create：非法输入在动作边界拒绝；无未来时点拒绝创
   )
 })
 
-test('cron_trigger：真实投递（targetProfileId/threadKey 透传）；失败抛错不假成功', { timeout: 60_000 }, async () => {
+test('cron_trigger：真实投递（targetProfileId 透传）；失败抛错不假成功', { timeout: 60_000 }, async () => {
   const h = track(makeHarness(T0))
   await ready(h)
   await h.host.invokeAction('builtin:triggers', 'cron_create', {
@@ -416,7 +413,6 @@ test('cron_trigger：真实投递（targetProfileId/threadKey 透传）；失败
     schedule: '0 * * * *',
     text: 'report',
     targetProfileId: 'analyst',
-    threadKey: 'tk-1',
   })
   const out = (await h.host.invokeAction('builtin:triggers', 'cron_trigger', { id: 'rep' })) as {
     triggered: boolean
@@ -425,7 +421,6 @@ test('cron_trigger：真实投递（targetProfileId/threadKey 透传）；失败
   assert.equal(h.dispatched.length, 1)
   assert.equal(h.dispatched[0]!.envelope.source, 'cron:rep')
   assert.equal(h.dispatched[0]!.targetProfileId, 'analyst')
-  assert.equal(h.dispatched[0]!.envelope.threadKey, 'tk-1')
 
   await assert.rejects(
     h.host.invokeAction('builtin:triggers', 'cron_trigger', { id: 'nope' }),

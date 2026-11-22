@@ -12,65 +12,12 @@ import { exec as execCb } from 'node:child_process';
 import { sleep as delay } from '@helmx/test-kit';
 import { makeTempDir as tempDir, waitFor as kitWaitFor } from '@helmx/test-kit/node';
 import {
-  collectNodeHostEnv,
   createNodeEnvRpcServer,
 } from '../src/daemon/env-rpc-server.js';
 
 /** Poll until observable condition holds (instead of fixed sleeps), failing explicitly on timeout. */
 const waitFor = (condition: () => boolean | Promise<boolean>, timeoutMs: number, what: string): Promise<void> =>
   kitWaitFor(condition, { timeoutMs, message: `wait timed out: ${what}` });
-
-/** Start a Unix socket JSON-line server (herdr-style test double). */
-function startLineServer(
-  dir: string,
-  name: string,
-  handler: (line: string, socket: net.Socket) => void,
-): { path: string; close(): Promise<void> } {
-  const sockPath = path.join(dir, `${name}.sock`);
-  const sockets = new Set<net.Socket>();
-  const server = net.createServer((socket) => {
-    sockets.add(socket);
-    socket.once('close', () => sockets.delete(socket));
-    let buffer = '';
-    socket.on('data', (chunk: Buffer) => {
-      buffer += chunk.toString('utf8');
-      let nl: number;
-      while ((nl = buffer.indexOf('\n')) !== -1) {
-        const line = buffer.slice(0, nl);
-        buffer = buffer.slice(nl + 1);
-        handler(line, socket);
-      }
-    });
-  });
-  void server.listen(sockPath).once('error', () => undefined);
-  return {
-    path: sockPath,
-    close: () =>
-      new Promise<void>((resolve) => {
-        server.close(() => resolve());
-        for (const s of sockets) s.destroy();
-        void fs.rm(sockPath, { force: true }).catch(() => undefined);
-      }),
-  };
-}
-
-/** Wait until the Unix socket accepts connections (`listen` is asynchronous). */
-async function waitListening(sockPath: string, timeoutMs = 5_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    const ok = await new Promise<boolean>((resolve) => {
-      const s = net.connect(sockPath);
-      s.once('connect', () => {
-        s.destroy();
-        resolve(true);
-      });
-      s.once('error', () => resolve(false));
-    });
-    if (ok) return;
-    if (Date.now() > deadline) throw new Error(`socket never listened: ${sockPath}`);
-    await delay(30);
-  }
-}
 
 // ---------------------------------------------------------------------------
 // 1. envFlushFile (required protocol primitive): real file / missing / post-dispose
@@ -408,107 +355,7 @@ test('dispose tracks draining waiters per call so rejected duplicate execId neve
 });
 
 // ---------------------------------------------------------------------------
-// 7. Target-node host env discovery (`nodeHostEnv`): Linux/Windows shapes & security boundaries
-// ---------------------------------------------------------------------------
-
-test('nodeHostEnv reports Linux and Windows target host env shapes and requested non-secret keys', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('host-env-win-');
-  const winServer = createNodeEnvRpcServer({
-    defaultCwd: dir,
-    hostEnvContext: {
-      platform: 'win32',
-      homeDir: 'C:\\Users\\dev',
-      tempDir: 'C:\\Users\\dev\\AppData\\Local\\Temp',
-      getEnv: (name) => ({
-        APPDATA: 'C:\\Users\\dev\\AppData\\Roaming',
-        USERPROFILE: 'C:\\Users\\dev',
-        HERDR_SOCKET_PATH: 'C:\\custom\\herdr.sock',
-        HELMX_TOKEN: 'secret-should-never-leak',
-      })[name],
-    },
-  });
-  const linuxServer = createNodeEnvRpcServer({
-    defaultCwd: dir,
-    hostEnvContext: {
-      platform: 'linux',
-      homeDir: '/home/bob',
-      tempDir: '/tmp',
-      getEnv: (name) => ({
-        XDG_CONFIG_HOME: '/home/bob/.xdg',
-        HOME: '/home/bob',
-      })[name],
-    },
-  });
-  t.after(async () => {
-    await winServer.dispose();
-    await linuxServer.dispose();
-    await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
-  });
-
-  const winRes = await winServer.nodeHostEnv({ envKeys: ['HERDR_SOCKET_PATH'] });
-  assert.equal(winRes.ok, true);
-  if (winRes.ok) {
-    assert.equal(winRes.value.platform, 'win32');
-    assert.equal(winRes.value.homeDir, 'C:\\Users\\dev');
-    assert.equal(winRes.value.dirs.appData, 'C:\\Users\\dev\\AppData\\Roaming');
-    assert.equal(winRes.value.dirs.userProfile, 'C:\\Users\\dev');
-    assert.deepEqual(winRes.value.env, { HERDR_SOCKET_PATH: 'C:\\custom\\herdr.sock' });
-  }
-
-  const linuxRes = await linuxServer.nodeHostEnv();
-  assert.equal(linuxRes.ok, true);
-  if (linuxRes.ok) {
-    assert.equal(linuxRes.value.platform, 'linux');
-    assert.equal(linuxRes.value.dirs.xdgConfigHome, '/home/bob/.xdg');
-    assert.equal(linuxRes.value.dirs.home, '/home/bob');
-    assert.deepEqual(linuxRes.value.env, {});
-  }
-
-  const pure = collectNodeHostEnv(['HERDR_SOCKET_PATH'], {
-    platform: 'win32',
-    homeDir: 'C:\\Users\\u',
-    tempDir: 'T:\\tmp',
-    getEnv: (k) => (k === 'HERDR_SOCKET_PATH' ? '\\\\.\\pipe\\herdr-pure' : undefined),
-  });
-  assert.equal(pure.env['HERDR_SOCKET_PATH'], '\\\\.\\pipe\\herdr-pure');
-});
-
-test('nodeHostEnv rejects sensitive env keys, unknown fields, and disposed servers; remains available during draining', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('host-env-guard-');
-  const server = createNodeEnvRpcServer({ defaultCwd: dir });
-  t.after(async () => {
-    await server.dispose();
-    await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
-  });
-
-  for (const bad of [
-    { envKeys: ['HELMX_TOKEN'] },
-    { envKeys: ['HELMX_EXECUTION_SCOPE'] },
-    { envKeys: ['AWS_SECRET_ACCESS_KEY'] },
-    { envKeys: ['OPENAI_API_KEY'] },
-    { envKeys: ['bad-lowercase'] },
-    { extra: 1 },
-    [],
-    null,
-  ]) {
-    const res = await server.nodeHostEnv(bad as never);
-    assert.equal(res.ok, false, `should reject ${JSON.stringify(bad)}`);
-    assert.equal(!res.ok && res.error.code, 'invalid');
-  }
-
-  server.setDraining(true);
-  const duringDrain = await server.nodeHostEnv({ envKeys: ['HERDR_SOCKET_PATH'] });
-  assert.equal(duringDrain.ok, true);
-  server.setDraining(false);
-
-  await server.dispose();
-  const afterDispose = await server.nodeHostEnv({});
-  assert.equal(afterDispose.ok, false);
-  assert.equal(!afterDispose.ok && afterDispose.error.code, 'aborted');
-});
-
-// ---------------------------------------------------------------------------
-// 8. dispose & upgrade draining for exec and socketPath tunnels
+// 7. dispose & upgrade draining for exec and TCP tunnels
 // ---------------------------------------------------------------------------
 
 test('dispose waits for active exec calls to settle with zero active entries on return', { timeout: 60_000 }, async (t) => {
@@ -529,13 +376,24 @@ test('dispose waits for active exec calls to settle with zero active entries on 
   assert.equal(!r.ok && r.error.code, 'aborted');
 });
 
-test('upgrade draining covers socketPath tunnels: rejects new tunnels while active UDS tunnel continues and cleans up on dispose', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('drain-uds-');
-  const echo = startLineServer(dir, 'echo', (line, socket) => socket.write(`${line}-ok\n`));
-  t.after(async () => {
-    await echo.close();
+test('upgrade draining covers TCP tunnels: rejects new tunnels while active tunnel continues and cleans up on dispose', { timeout: 60_000 }, async (t) => {
+  const dir = await tempDir('drain-tcp-');
+  const sockets = new Set<net.Socket>();
+  const echoServer = net.createServer((socket) => {
+    sockets.add(socket);
+    socket.on('error', () => undefined);
+    socket.once('close', () => sockets.delete(socket));
+    socket.on('data', (chunk) => socket.write(chunk));
   });
-  await waitListening(echo.path);
+  await new Promise<void>((resolve, reject) => {
+    echoServer.once('error', reject);
+    echoServer.listen(0, '127.0.0.1', resolve);
+  });
+  const port = (echoServer.address() as net.AddressInfo).port;
+  t.after(async () => {
+    for (const s of sockets) s.destroy();
+    await new Promise<void>((resolve) => echoServer.close(() => resolve()));
+  });
   const streams: PassThrough[] = [];
   const server = createNodeEnvRpcServer({
     defaultCwd: dir,
@@ -550,19 +408,19 @@ test('upgrade draining covers socketPath tunnels: rejects new tunnels while acti
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
   });
 
-  const active = await server.nodeTunnelOpen({ tunnelId: 'uds-live', socketPath: echo.path });
+  const active = await server.nodeTunnelOpen({ tunnelId: 'tcp-live', host: '127.0.0.1', port });
   assert.equal(active.ok, true);
   assert.equal(server.getActiveTunnelCount(), 1);
 
   server.setDraining(true);
-  const rejected = await server.nodeTunnelOpen({ tunnelId: 'uds-drain', socketPath: echo.path });
+  const rejected = await server.nodeTunnelOpen({ tunnelId: 'tcp-drain', host: '127.0.0.1', port });
   assert.equal(rejected.ok, false);
   assert.equal(!rejected.ok && rejected.error.code, 'node_draining');
   assert.match(!rejected.ok ? rejected.error.message : '', /draining/);
-  assert.equal(server.getActiveTunnelCount(), 1, 'draining does not kill existing active UDS tunnel');
+  assert.equal(server.getActiveTunnelCount(), 1, 'draining does not kill existing active TCP tunnel');
 
   server.setDraining(false);
-  const resumed = await server.nodeTunnelOpen({ tunnelId: 'uds-resumed', socketPath: echo.path });
+  const resumed = await server.nodeTunnelOpen({ tunnelId: 'tcp-resumed', host: '127.0.0.1', port });
   assert.equal(resumed.ok, true);
   assert.equal(server.getActiveTunnelCount(), 2);
 

@@ -195,9 +195,9 @@ describe('turn settlement unread governance', { timeout: 60_000 }, () => {
         },
       })
 
-      // Register a secret in parent stash + upload a PNG image attachment on parent conversation.
+      // Register a secret in redactor + upload a PNG image attachment on parent conversation.
       const secretVal = 'sk-spawn-secret-value-42'
-      kernel.stash.put(1, 'SPAWN_SECRET', secretVal)
+      kernel.stash.addRedaction(secretVal)
       const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
       const pngMeta = await kernel.artifacts.writeUploaded(1, {
         name: 'diagram.png',

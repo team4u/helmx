@@ -128,20 +128,8 @@ function makeStubFabric(env: ReturnType<typeof makeRecordingEnv>['env']): EnvFab
     evictConversation: () => undefined,
     debugBaseCount: () => 0,
     debugBases: () => [],
-    getNodeHostEnv: () => {
-      throw new Error('test does not use getNodeHostEnv')
-    },
     dispose: () => Promise.resolve(),
   } as never
-}
-
-/** Recording fabric matching createEnvFabric's wiring: delegates withFileMutationQueue to the same queue module. */
-function makeRecordingFabric(env: ReturnType<typeof makeRecordingEnv>['env']): EnvFabric {
-  return {
-    ...makeStubFabric(env),
-    withFileMutationQueue: ((target: { nodeId: string; cwd: string; path: string }, fn: () => Promise<unknown>, signal?: AbortSignal) =>
-      envWithFileMutationQueue(env as never, target.path, fn as never, signal === undefined ? BACKGROUND_CONTEXT : withAbortSignal(signal, BACKGROUND_CONTEXT))) as never,
-  }
 }
 
 async function makeDeps(dir: string, options: { envFabric?: EnvFabric; nodeIdOf?: (id: number) => string } = {}): Promise<HelmxToolDeps> {
@@ -152,7 +140,6 @@ async function makeDeps(dir: string, options: { envFabric?: EnvFabric; nodeIdOf?
     dataDir: dir,
     defaultCwd: dir,
     hubUrl: 'http://127.0.0.1:3202',
-    stashEnvFor: () => ({}),
     redact: (t) => stash.redact(t),
     artifacts,
     ...(options.envFabric !== undefined ? { envFabric: options.envFabric } : {}),
@@ -590,7 +577,7 @@ describe('kernel write/edit and queue', { timeout: 60_000 }, () => {
     // Remote read/write latency window would tear updates without mutual exclusion.
     const recorder = makeRecordingEnv(files, new Map([[target, 40]]))
     const deps = await makeDeps(join(dir, 'deps'), {
-      envFabric: makeRecordingFabric(recorder.env),
+      envFabric: makeStubFabric(recorder.env),
       nodeIdOf: () => 'test-node',
     })
     // Built-in edit acquires queue around full read-compute-write cycle, sharing lock with plugin queue calls.
@@ -625,40 +612,6 @@ describe('kernel write/edit and queue', { timeout: 60_000 }, () => {
     for (let k = 1; k <= 5; k += 1) {
       assert.ok(final.includes(`P${k}\n`), `P${k} append must persist cleanly via shared queue: ${JSON.stringify(final)}`)
     }
-  })
-
-  test('EnvFabric.withFileMutationQueue: local node and built-in write share mutex exclusion', { timeout: 60_000 }, async () => {
-    const dir = join(rootDir, 'fabric-local')
-    mkdirSync(dir, { recursive: true })
-    const fabric = makeFabric()
-    const deps = await makeDeps(join(dir, 'deps'), { envFabric: fabric })
-    const file = join(dir, 'shared.txt')
-    writeFileSync(file, 'v0')
-    const writeTool = createWriteTool(deps)
-
-    // Plugin-style API: reads, yields inside lock window, then writes.
-    const pluginBump = fabric.withFileMutationQueue(
-      { nodeId: 'local', cwd: dir, path: file },
-      async () => {
-        const cur = readFileSync(file, 'utf8')
-        await delay(80)
-        writeFileSync(file, `${cur}+p`)
-        return 'ok'
-      },
-    )
-    const builtinWrite = writeTool.execute(
-      { path: file, content: 'v1' },
-      makeApi(dir),
-      BACKGROUND_CONTEXT,
-    ).then((r) => {
-      assert.equal(!!r.isError, false, JSON.stringify(r.output))
-    })
-    // Built-in write is full overwrite: serializing both tasks always leaves either v1+p or v1
-    // (or v0+p if plugin acquired later without overlap? Wait: write overwrites, so v1 or v1+p or v0+p;
-    // key invariant is zero torn writes between plugin's read and write).
-    await Promise.all([pluginBump, builtinWrite])
-    const final = readFileSync(file, 'utf8')
-    assert.ok(final === 'v1' || final === 'v0+p' || final === 'v1+p', `valid serialized outcome: ${final}`)
   })
 })
 

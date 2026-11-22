@@ -376,7 +376,7 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
     if ((hostModels.modelTiers ?? []).some((tier) => tier.available && tier.disabled !== true)) return true
     return false
   }, [hostModels])
-  const showZeroModelCta = assetsLoaded && profile !== undefined && profile.runtime === undefined && !hasUsableModel
+  const showZeroModelCta = assetsLoaded && profile !== undefined && !hasUsableModel
 
   return (
     <div className="helmx-pane agent-standby-pane" data-agent={profileId}>

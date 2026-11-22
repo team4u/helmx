@@ -48,14 +48,6 @@ export function assertTriggerId(kind: 'cron' | 'webhook', id: string): string {
   return id
 }
 
-/** threadKey: 1..200 chars. */
-export function assertThreadKey(key: string): string {
-  if (key.length === 0 || key.length > 200) {
-    throw new HelmxError('validation_error', `invalid threadKey (1..200 chars, got ${key.length})`, 400, {})
-  }
-  return key
-}
-
 /** Description text cap (a doc readability boundary). */
 export const MAX_DESCRIPTION = 500
 
@@ -82,7 +74,6 @@ export interface WebhookMeta {
   description?: string
   targetConversationId?: number
   targetProfileId?: string
-  threadKey?: string
   createdAt: number
 }
 
@@ -124,9 +115,6 @@ function assertWebhookMeta(raw: unknown): void {
   if (raw.targetConversationId !== undefined && raw.targetProfileId !== undefined) {
     throw docCorrupt(`entry ${raw.id} must not carry both targetConversationId and targetProfileId`)
   }
-  if (raw.threadKey !== undefined && (typeof raw.threadKey !== 'string' || raw.threadKey.length === 0 || raw.threadKey.length > 200)) {
-    throw docCorrupt(`entry ${raw.id} threadKey is invalid (1..200 chars)`)
-  }
   if (!isFiniteTime(raw.createdAt)) throw docCorrupt(`entry ${raw.id} createdAt is invalid`)
   // Secret red line: the doc never contains a secret field (validated on read; historical pollution errors explicitly)
   if ('secret' in raw) {
@@ -151,14 +139,13 @@ export function assertWebhooksDoc(value: unknown): WebhooksDoc {
 
 /** Metadata redaction view: action/doc outputs strip through this uniformly (the current shape is the full set; the funnel anticipates future fields). */
 export function webhookPublicMeta(meta: WebhookMeta): WebhookMeta {
-  const { id, hasSecret, description, targetConversationId, targetProfileId, threadKey, createdAt } = meta
+  const { id, hasSecret, description, targetConversationId, targetProfileId, createdAt } = meta
   return {
     id,
     hasSecret,
     ...(description !== undefined ? { description } : {}),
     ...(targetConversationId !== undefined ? { targetConversationId } : {}),
     ...(targetProfileId !== undefined ? { targetProfileId } : {}),
-    ...(threadKey !== undefined ? { threadKey } : {}),
     createdAt,
   }
 }

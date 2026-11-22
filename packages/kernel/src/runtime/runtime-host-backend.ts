@@ -4,7 +4,7 @@
  * Responsibilities:
  * - Wrap `KernelRuntime` capabilities (`profiles`, `skills`, `secrets`, `nodeIpc`, `conversations`,
  *   `asks`, `actions`, etc.) into the strongly-typed `PluginHostBackend` interface required by `PluginHost`;
- * - Construct the `PluginSessionDocStore` per-conversation durable persistence layer;
+ * - Construct the `PluginDocStore` and `PluginSessionDocStore` durable persistence layers (single-pass JSON writes);
  * - Normalize boundary errors consistently (e.g., `normalizeProfileBoundaryError`, `FileNotFoundError -> 404 not_found`).
  */
 
@@ -18,23 +18,6 @@ import type { KernelRuntime } from './runtime.js'
 function normalizeProfileBoundaryError(id: string, err: unknown): unknown {
   if (isValidProfileId(id)) return err
   return new HelmxError('validation_error', `Invalid Profile ID: ${String(id)}`, 400, { profileId: id })
-}
-
-/**
- * Look up the plugin manifest after enable/disable: the real lifecycle step already completed inside `PluginHost`,
- * so this only reads back the result; a missing manifest indicates inconsistent host state and fails loudly without fabricating one.
- */
-function requirePluginSummary(runtime: KernelRuntime, pluginId: string) {
-  const summary = runtime.plugins.list().find((p) => p.id === pluginId)
-  if (!summary) {
-    throw new HelmxError(
-      'plugin_enable_failed',
-      `Plugin '${pluginId}' not found in host manifest after lifecycle operation (inconsistent internal state)`,
-      500,
-      { pluginId },
-    )
-  }
-  return summary
 }
 
 /**
@@ -65,7 +48,6 @@ export function createPluginHostBackend(runtime: KernelRuntime): PluginHostBacke
     skills: {
       list: () => runtime.skills.list(),
       readFile: (skillId, path) => runtime.skills.readFile(skillId, path),
-      directory: (id) => runtime.skillDirectory(id),
       ensureSkill: (asset, pluginId) => runtime.ensurePluginSkill(asset, pluginId),
     },
     secrets: {
@@ -74,37 +56,12 @@ export function createPluginHostBackend(runtime: KernelRuntime): PluginHostBacke
       delete: (pluginId, key) => runtime.credentials.deletePluginSecret(pluginId, key),
       addRedaction: (value) => runtime.stash.addRedaction(value),
     },
-    setPluginConfig: (pluginId, value) =>
-      runtime.pluginConfigStore.set(pluginId, value, runtime.plugins.getConfigSchema(pluginId) ?? {}),
     nodeIpc: {
       isOnline: (nodeId) => runtime.envFabric.isOnline(nodeId),
       getNodeHubUrl: (nodeId) => runtime.envFabric.getNodeHubUrl(nodeId),
-      // Authoritative node platform (reported on NodeRegistry registration; local -> process.platform):
-      // used by plugins to normalize cwd per target node platform (undefined when remote is unregistered/unreported;
-      // consumers must neither guess nor rewrite). Routed through the sole EnvFabric.nodePlatformOf read-only port
-      // rather than duplicating platform lookup logic here.
       nodePlatform: (nodeId) => runtime.envFabric.nodePlatformOf(nodeId),
     },
-    getNodeHostEnv: (nodeId, query, signal) => runtime.envFabric.getNodeHostEnv(nodeId, query, signal),
-    nodeFetch: (nodeId) => runtime.envFabric.nodeFetch(nodeId),
     openTunnel: (nodeId, target, signal) => runtime.envFabric.openTunnel(nodeId, target, signal),
-    // Host plugin governance ports: delegate directly to PluginHost's public methods (sharing the same chain
-    // as HTTP management: per-plugin lifecycle queue, active-task tracking, locked/in-use protection, avoiding a
-    // second package management implementation). Returns the latest manifest after enable/disable.
-    plugins: {
-      doctorPlugin: (target) => runtime.plugins.doctorExternalPlugin(target),
-      installPlugin: (source, options) => runtime.plugins.installPluginPackage(source, options),
-      updatePlugin: (pluginId) => runtime.plugins.updatePluginPackage(pluginId),
-      removePlugin: (pluginId) => runtime.plugins.removePluginPackage(pluginId),
-      enablePlugin: async (pluginId) => {
-        await runtime.plugins.enable(pluginId)
-        return requirePluginSummary(runtime, pluginId)
-      },
-      disablePlugin: async (pluginId, options) => {
-        await runtime.plugins.disable(pluginId, options)
-        return requirePluginSummary(runtime, pluginId)
-      },
-    },
     dispatchTrigger: (event) => runtime.dispatchTrigger(event),
     submitInput: async (id, text, opts) => {
       await runtime.submitInput(id, text, opts)
@@ -118,32 +75,11 @@ export function createPluginHostBackend(runtime: KernelRuntime): PluginHostBacke
     updateConversation: (id, patch) => runtime.updateConversation(id, patch),
     abortConversation: (id) => runtime.abortConversation(id),
     abortConversationGuarded: (id, guard) => runtime.abortConversationGuarded(id, guard),
-    resetConversationGuarded: (id, opts, guard) => runtime.resetConversationGuarded(id, opts, guard),
-    compactConversationGuarded: (id, opts, guard) => runtime.compactConversationGuarded(id, opts, guard),
     submitInputGuarded: async (id, text, opts, guard) => {
       await runtime.submitInputGuarded(id, text, opts, guard)
     },
     getConversationOwnership: (id) => runtime.getConversationOwnership(id),
     listArtifacts: (conversationId) => Promise.resolve(runtime.artifacts.list(conversationId)),
-    createArtifact: async (conversationId, input) => {
-      // Same existence semantics as submitInput's requireConv: summary lookup is the authoritative
-      // in-memory check wired as writeUploaded's re-check (closes the orphan-artifact race against
-      // concurrent conversation deletion).
-      const exists = (id: number): boolean => {
-        try {
-          runtime.getConversation(id)
-          return true
-        } catch (err) {
-          if (err instanceof HelmxError && err.code === 'not_found') return false
-          throw err
-        }
-      }
-      if (!exists(conversationId)) {
-        throw new HelmxError('not_found', `conversation not found: ${conversationId}`, 404, { conversationId })
-      }
-      return runtime.artifacts.writeUploaded(conversationId, input, { conversationExists: exists })
-    },
-    getArtifact: (artifactId, conversationId) => runtime.resolveAuthorizedAttachment(conversationId, artifactId),
     redact: (text) => runtime.stash.redact(text),
     refreshModels: (options) => runtime.refreshModels(options),
     listModels: () => runtime.listModels(),
@@ -156,8 +92,6 @@ export function createPluginHostBackend(runtime: KernelRuntime): PluginHostBacke
     atomicWriteFile: (path, content) => atomicWriteFile(path, content),
     completeText: (input) => runtime.completeConversationText(input),
     executionEnv: (nodeId, cwd) => runtime.envFabric.envFor(nodeId, cwd),
-    buildSpawnEnv: (conversationId, cwd, nodeId, options) =>
-      runtime.agentSpawn.buildSpawnEnv(conversationId, cwd, nodeId, options),
     spawnAgent: (request) => runtime.agentSpawn.spawnAgent(request),
     runGate: (command, options) => runtime.agentSpawn.runGate(command, options),
     resolveSpawnTarget: (input) => runtime.agentSpawn.resolveSpawnTarget(input),
@@ -167,7 +101,6 @@ export function createPluginHostBackend(runtime: KernelRuntime): PluginHostBacke
     markConversationOwnership: (id, owner) => runtime.markConversationOwnership(id, owner),
     createAsk: (spec) => runtime.createAsk(spec),
     cancelAsk: (askId, reason) => runtime.cancelAsk(askId, reason),
-    registerAskSeqResolver: (resolver) => runtime.registerAskSeqResolver(resolver),
     execEnv: async (req, opts) => {
       const res = await runtime.execEnv(req, undefined, opts?.signal)
       return {
@@ -175,19 +108,18 @@ export function createPluginHostBackend(runtime: KernelRuntime): PluginHostBacke
         output: runtime.stash.redact(res.output),
       }
     },
-    withFileMutationQueue: (target, fn, opts) =>
-      runtime.envFabric.withFileMutationQueue(target, fn, opts?.signal),
     onEvent: (type, listener) => runtime.onEvent(type, listener),
     emitEvent: (type, payload, options) => runtime.emitHostEvent(type, payload, options),
   }
 }
 
 /**
- * Construct the global durable document store port (shared by `PluginHost` docs and kernel metadata).
+ * Construct the global durable document store port (shared by `PluginHost` docs).
  */
 export function createGlobalDocumentStore(store: HelmxStore): {
   get<T>(key: string, initial: T): T
   set<T>(key: string, value: T): void
+  setJson(key: string, valueJson: string): void
   deletePlugin(pluginId: string): void
   flush(): Promise<void>
 } {
@@ -198,7 +130,10 @@ export function createGlobalDocumentStore(store: HelmxStore): {
       return JSON.parse(raw) as T
     },
     set: <T>(key: string, value: T): void => {
-      store.putPluginDoc('__global', key, JSON.stringify(value))
+      store.putPluginDoc('__global', key, JSON.stringify(value), { prevalidated: true })
+    },
+    setJson: (key: string, valueJson: string): void => {
+      store.putPluginDoc('__global', key, valueJson, { prevalidated: true })
     },
     deletePlugin: (pluginId: string): void => {
       store.deleteGlobalPluginDocs(pluginId)
@@ -215,7 +150,7 @@ export function createPluginSessionDocStore(store: HelmxStore): PluginSessionDoc
     get: (pluginId, name, conversationId) =>
       store.getPluginSessionDoc(pluginId, name, conversationId),
     put: (pluginId, name, conversationId, valueJson) =>
-      store.putPluginSessionDoc(pluginId, name, conversationId, valueJson),
+      store.putPluginSessionDoc(pluginId, name, conversationId, valueJson, { prevalidated: true }),
     delete: (pluginId, name, conversationId) =>
       store.deletePluginSessionDoc(pluginId, name, conversationId),
     deletePlugin: (pluginId) => store.deletePluginSessionDocs(pluginId),

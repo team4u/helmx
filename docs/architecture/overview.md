@@ -9,7 +9,7 @@ Hub 负责把产品接起来。`@helmx/kernel` 管理会话、节点执行、模
 | 机制 | 核心内容 | 明确不包含 |
 | :--- | :--- | :--- |
 | `pi-durable` 持久会话 | 通用 `Conversation(nodeId, cwd)` 五态状态机、`state.sqlite` + FTS5 派生索引、`AskDoc` 审批流、`SecretStash` 机密隔离、纯文件资产热重载、原生 `spawnAgent` 子会话派生（`agent_spawn` Hook 管道 + 默认执行行） | 编排引擎（`builtin:workflow`）、Worktree 租约（`builtin:worktree`） |
-| `EnvFabric` + `NodeRegistry` | `/ws/node` 反向 WebSocket 网关、`/ws/node-tunnel` 节点任意 TCP 透传隧道（`openTunnel` 原语 + `nodeFetch` 适配层）、内建 `local` 节点 + 远端 `@helmx/node` 守护进程、`bash / read / write / edit` 内核工具与 `runGate` / `env exec` 宿主端口、按 `nodeId + canonicalPath` 的文件互斥 | 终端主控逻辑（`builtin:herdr`） |
+| `EnvFabric` + `NodeRegistry` | `/ws/node` 反向 WebSocket 网关、`/ws/node-tunnel` 节点任意 TCP 透传隧道（TCP-only `openTunnel` 原语）、内建 `local` 节点 + 远端 `@helmx/node` 守护进程、`bash / read / write / edit` 内核工具与 `runGate` / `env exec` 宿主端口、按 `nodeId + canonicalPath` 的文件互斥 | 外部终端主控逻辑 |
 | Model 与 Auth | 模型供应商接入、模型禁用过滤、凭据（`credentials.json`）与令牌管理 | 业务级模型路由策略（`builtin:magpie`） |
 | `PluginHost` | 唯一强类型插件宿主 `definePlugin(ctx)`：生命周期 Hook、动作/工具/路由注册、doc 持久化、服务协调 | 任何具体插件的功能实现 |
 
@@ -27,7 +27,6 @@ flowchart TD
         Swarm["builtin:swarm 对等协同黑板"]
         Profile["builtin:profile 角色技能底座"]
         Memory["builtin:memory 长期记忆"]
-        Herdr["builtin:herdr 终端主控"]
         Others["builtin:triggers / magpie / json-render / mermaid / token-speed / tiers"]
         External["外部插件"]
     end
@@ -56,7 +55,7 @@ export interface ConversationSummary {
   title: string
   profileId: string        // 身份：提示词 / 记忆 / 技能 / 模型
   tags: string[]           // 运行态：生命周期与分组标记
-  ownedBy?: 'human' | 'helmx' | 'bot'  // 归属权（自动化红线的判定依据）
+  ownedBy?: 'human' | 'helmx'  // 归属权（自动化红线的判定依据，持久化在 helmx_conversations.owned_by）
   nodeId?: string          // 绑定计算节点（缺省 'local'）
   cwd: string              // 目标节点视角工作目录
   status: ConversationStatus
@@ -114,8 +113,8 @@ flowchart TD
 `@helmx/hub` 的 `createHelmx()`（`packages/hub/src/app.ts`）只做三件事：
 
 1. **注入构建实现**：默认注入 `@helmx/plugin-build` 的 provider（client.tsx 编译 + 外部 TS 转译），调用方可整体替换；内核机制与构建工具分离。
-2. **注册内置插件并设定启停**：`builtin:profile`（locked 常驻）、`builtin:workflow`、`builtin:worktree`、`builtin:swarm`、`builtin:memory`、`builtin:json-render`、`builtin:mermaid`、`builtin:triggers`、`builtin:magpie`、`builtin:token-speed`、`builtin:tiers` 十一个默认启用；`builtin:herdr` 一个默认停用。其中 `builtin:workflow` 固定先于 `builtin:worktree` 注册：`runtime.started` 监听器按注册顺序执行，先收敛遗留子会话再回收崩溃租约。随后从数据目录加载外部插件。启停规则和各插件的用途见 [内置插件清单](../plugins/overview.md#当前状态)。
-3. **统一启动**：全部插件注册后执行 `kernel.start()`——先按依赖拓扑对全体服务 `prepare()`，再依次 `start()`，最后恢复 SDK 调度器。
+2. **注册内置插件并设定启停**：`builtin:profile`（locked 常驻）、`builtin:workflow`、`builtin:worktree`、`builtin:swarm`、`builtin:memory`、`builtin:json-render`、`builtin:mermaid`、`builtin:triggers`、`builtin:magpie`、`builtin:token-speed`、`builtin:tiers` 十一个内置插件全部默认启用。启动后由统一的 `service.reconcile()` 按依赖拓扑与 `reconcileAfter` 软序执行恢复对账（`builtin:workflow` 先收敛遗留子会话，随后 `builtin:worktree` 回收崩溃租约、`builtin:swarm` 完成协作组对账）。随后从数据目录加载外部插件。启停规则和各插件的用途见 [内置插件清单](../plugins/overview.md#当前状态)。
+3. **统一启动**：全部插件注册后执行 `kernel.start()`——先按依赖拓扑对全体服务 `prepare()`，再依次 `start()`，恢复 SDK 调度器后统一执行 `reconcile()`。
 
 直接使用 `KernelRuntime.open()` 时不隐式注册任何内置插件，可独立验证内核机制；使用 `createHelmx()` 得到完整产品。Web 静态目录托管属于产品层：直接使用内核 HTTP handler 时缺省只服务 API，提供 `webDistDir` 才启用静态托管。
 

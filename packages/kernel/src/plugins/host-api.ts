@@ -5,7 +5,6 @@
 import {
   HelmxError,
   type ActionManifest,
-  type BackendPluginsLifecyclePort,
   type HelmxHostApi,
   type HelmxHostOpenTunnelPort,
   type NodeTunnelTarget,
@@ -29,7 +28,6 @@ export interface HostApiDependencies {
   tracker: PluginTaskTracker;
   options: PluginHostOptions;
   plugins: Map<string, PluginState>;
-  setConfig(pluginId: string, value: Record<string, unknown>): Promise<void>;
   list(): PluginSummary[];
   listUi(): PluginUiContribution[];
   listActions(): ActionManifest[];
@@ -47,14 +45,6 @@ export interface HostApiDependencies {
   ): { idempotent: boolean };
   assertContextUsable(state: PluginState, epoch: number, what: string): void;
 }
-
-/**
- * Deterministic resource accounting for `nodeFetch` Response bodies (no GC-based fallback):
- * - Consumed to EOF, canceled via `body.cancel()`/`reader.cancel()`, failed on stream error, or aborted
- *   on host `dispose()`/`close` -> decrements active task counter;
- * - Abandoned without consuming or canceling -> keeps counter alive, blocking `disable`/`reload` with
- *   `409 plugin_has_live_tasks`. Headers alone do not settle the task (SSE streams stay tracked throughout).
- */
 
 /**
  * Controlled `ExecutionEnv` proxy: validates epoch on every method call (invalidated on disable/re-enable)
@@ -135,81 +125,6 @@ export function wrapHostApi(
       };
     };
 
-  /**
-   * Constructs `ctx.host.plugins`: reads share `PluginHost` state, writes share lifecycle/task/package ports,
-   * self-targeted `update`/`remove`/`disable` fail before entering the plugin queue, and results are redacted.
-   */
-  const assertPluginsPort = (what: string): BackendPluginsLifecyclePort => {
-    guard(`host.plugins.${what}`);
-    if (backend.plugins === undefined) {
-      throw new HelmxError(
-        'not_supported',
-        `Current host has not wired the plugin governance port (host.plugins.${what} unavailable)`,
-        501,
-        { what },
-      );
-    }
-    return backend.plugins;
-  };
-
-  const assertNotSelfTarget = (op: 'update' | 'remove' | 'disable', targetPluginId: string): void => {
-    if (targetPluginId !== pluginId) return;
-    throw new HelmxError(
-      'plugin_self_lifecycle_forbidden',
-      `Plugin ${pluginId} cannot ${op} itself from its own task (would deadlock the lifecycle queue); trigger from HTTP/CLI or another plugin`,
-      409,
-      { pluginId, op },
-    );
-  };
-
-  const redactPluginOpResult = <T,>(value: T): T => {
-    const redactText = deps.options.redactText;
-    return redactText ? (redactJsonValue(value, redactText) as T) : value;
-  };
-
-  const backendPlugins = backend.plugins as
-    | (BackendPluginsLifecyclePort & {
-        /** Test/alternate backends may expose their own read snapshots; runtime falls back to PluginHost. */
-        list?: () => PluginSummary[]
-        listUi?: () => PluginUiContribution[]
-      })
-    | undefined
-
-  const pluginsPort: HelmxHostApi['plugins'] = {
-    list: () => {
-      guard('host.plugins.list');
-      return backendPlugins?.list?.() ?? deps.list();
-    },
-    listUi: () => {
-      guard('host.plugins.listUi');
-      return backendPlugins?.listUi?.() ?? deps.listUi();
-    },
-    doctor: (target) =>
-      tracked('host.plugins.doctor', async () =>
-        redactPluginOpResult(await assertPluginsPort('doctor').doctorPlugin(target))),
-    install: (source, options) =>
-      tracked('host.plugins.install', async () =>
-        redactPluginOpResult(await assertPluginsPort('install').installPlugin(source, options))),
-    update: (targetPluginId) => {
-      assertNotSelfTarget('update', targetPluginId);
-      return tracked('host.plugins.update', async () =>
-        redactPluginOpResult(await assertPluginsPort('update').updatePlugin(targetPluginId)));
-    },
-    remove: (targetPluginId) => {
-      assertNotSelfTarget('remove', targetPluginId);
-      return tracked('host.plugins.remove', async () =>
-        redactPluginOpResult(await assertPluginsPort('remove').removePlugin(targetPluginId)));
-    },
-    enable: (targetPluginId) =>
-      tracked('host.plugins.enable', async () =>
-        assertPluginsPort('enable').enablePlugin(targetPluginId)),
-    disable: (targetPluginId, options) => {
-      assertNotSelfTarget('disable', targetPluginId);
-      return tracked('host.plugins.disable', async () =>
-        assertPluginsPort('disable').disablePlugin(targetPluginId, options));
-    },
-  };
-
   return {
     get isClosing() {
       return backend.isClosing();
@@ -228,7 +143,6 @@ export function wrapHostApi(
     skills: {
       list: () => tracked('host.skills.list', () => backend.skills.list()),
       readFile: (skillId, path) => tracked('host.skills.readFile', () => backend.skills.readFile(skillId, path)),
-      directory: (id) => tracked('host.skills.directory', () => backend.skills.directory(id)),
       ensureSkill: (asset) => tracked('host.skills.ensureSkill', () => backend.skills.ensureSkill(asset, pluginId)),
     },
 
@@ -263,23 +177,7 @@ export function wrapHostApi(
             : {}),
         },
 
-    // 3.4 getNodeHostEnv: epoch-guarded, tracked read-only target-node host env discovery (never falls back to Hub local env).
-    getNodeHostEnv: (nodeId, query, signal) =>
-      tracked('host.getNodeHostEnv', () => {
-        if (backend.getNodeHostEnv === undefined) {
-          return Promise.reject(
-            new HelmxError(
-              'node_host_env_not_supported',
-              `Current host has not wired the node host env port (host.getNodeHostEnv(${nodeId}) unavailable); refusing to fall back to Hub local env`,
-              501,
-              { nodeId },
-            ),
-          );
-        }
-        return Promise.resolve(backend.getNodeHostEnv(nodeId, query, signal));
-      }),
-
-    // 3.6 openTunnel: tracks active Duplex tunnels until close/error/destroy (`disable` rejects with 409).
+    // 3.5 openTunnel: tracks active TCP Duplex tunnels until close/error/destroy (`disable` rejects with 409).
     openTunnel: backend.openTunnel === undefined
       ? ((nodeId: string): Promise<never> => {
           guard('host.openTunnel');
@@ -327,109 +225,6 @@ export function wrapHostApi(
           }
         }) as HelmxHostOpenTunnelPort,
 
-    // 3.5 nodeFetch: epoch-guarded fetch tracking response body streams until EOF/cancel/error/dispose.
-    nodeFetch: backend.nodeFetch === undefined
-      ? ((nodeId: string): typeof fetch => {
-          guard(`host.nodeFetch:${nodeId}`);
-          throw new HelmxError(
-            'node_tunnel_not_supported',
-            `Current host has not wired the node fetch port (host.nodeFetch(${nodeId}) unavailable)`,
-            501,
-            { nodeId },
-          );
-        })
-      : ((nodeId: string): typeof fetch => {
-          guard(`host.nodeFetch:${nodeId}`);
-          const raw = backend.nodeFetch!(nodeId);
-          const what = `host.nodeFetch.call:${nodeId}`;
-          const controlled = ((input: Parameters<typeof fetch>[0], init?: RequestInit) => {
-            guard(what);
-            deps.tracker.begin(pluginId, what);
-            let ended = false;
-            let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
-            const hostClose = new AbortController();
-            const end = (): void => {
-              if (ended) return;
-              ended = true;
-              deps.tracker.end(pluginId, what);
-              state.hostReleases.delete(release);
-            };
-            let released = false;
-            const release = (): void => {
-              if (released) return;
-              released = true;
-              hostClose.abort(
-                new HelmxError(
-                  'plugin_host_disposed',
-                  'host already destroy:nodeFetch in-flight request determinism cancel (owned cleanup)',
-                  503,
-                ),
-              );
-              // Fallback cleanup for abandoned bodies: immediately close the task counter and best-effort cancel the underlying reader.
-              if (reader !== undefined) reader.cancel(hostClose.signal.reason).catch(() => {});
-              end();
-            };
-            // Register before the first await so host dispose triggers it while draining `hostReleases`.
-            state.hostReleases.add(release);
-            // Standard fetch override semantics: `init.signal` overrides `Request.signal`, and explicit `null`
-            // clears the inherited signal (aborting the overridden `Request.signal` must not cancel this call).
-            const callerSignal: AbortSignal | null | undefined =
-              init?.signal !== undefined
-                ? init.signal
-                : input instanceof Request
-                  ? input.signal
-                  : undefined;
-            const callSignal =
-              callerSignal != null
-                ? AbortSignal.any([callerSignal, hostClose.signal])
-                : hostClose.signal;
-            const callInit: RequestInit = { ...init, signal: callSignal };
-            return Promise.resolve().then(() => raw(input, callInit)).then((response) => {
-              if (response.body === null) {
-                end();
-                return response;
-              }
-              try {
-                reader = response.body.getReader();
-                const trackedBody = new ReadableStream<Uint8Array>({
-                  async pull(controller) {
-                    try {
-                      const { done, value } = await reader!.read();
-                      if (done) { end(); controller.close(); return; }
-                      if (value !== undefined) controller.enqueue(value);
-                    } catch (error) {
-                      end();
-                      controller.error(error);
-                    }
-                  },
-                  async cancel(reason) {
-                    try {
-                      await reader!.cancel(reason);
-                    } finally {
-                      end();
-                    }
-                  },
-                });
-                const wrapped = new Response(trackedBody, {
-                  status: response.status,
-                  statusText: response.statusText,
-                  headers: response.headers,
-                });
-                return wrapped;
-              } catch (error) {
-                // Stream wrapping failed (e.g. body already locked): best-effort cancel the underlying stream and close the counter so nothing leaks.
-                response.body.cancel().catch(() => {});
-                end();
-                throw error;
-              }
-            }, (error) => {
-              end();
-              throw error;
-            }) as ReturnType<typeof fetch>;
-          }) as typeof fetch;
-          return controlled;
-        }),
-
     // 4. secrets
     secrets: {
       get: (key) => tracked('host.secrets.get', () => backend.secrets.get(pluginId, key)),
@@ -439,11 +234,7 @@ export function wrapHostApi(
         acquire('host.secrets.addRedaction')(() => backend.secrets.addRedaction(value)),
     },
 
-    // 5. configuration & plugins
-    // Delegate incremental patches straight to PluginHost.setConfig -> instance-level PluginConfigStore.set
-    // (shares serialization with HTTP PUT /api/plugins/:id/config and never materializes schema defaults).
-    setConfig: (patch) => tracked('host.setConfig', () => deps.setConfig(pluginId, patch)),
-    plugins: pluginsPort,
+    // 5. plugins & models
     listPlugins: () => {
       guard('host.listPlugins');
       return deps.list();
@@ -519,17 +310,6 @@ export function wrapHostApi(
         Promise.resolve(backend.execEnv(req, opts)),
       );
     },
-    withFileMutationQueue: async <T>(
-      target: { nodeId: string; cwd: string; path: string },
-      fn: () => Promise<T>,
-      opts?: { signal?: AbortSignal },
-    ): Promise<T> =>
-      deps.tracker.withTask(pluginId, `host.fileQueue:${target.nodeId}`, async () =>
-        backend.withFileMutationQueue<T>(target, async () => {
-          deps.assertContextUsable(state, epoch, 'host.withFileMutationQueue(locked)');
-          return fn();
-        }, opts),
-      ),
     inspectNodePathUsage: (input) => tracked('host.inspectNodePathUsage', () => backend.inspectNodePathUsage(input)),
 
     // 7. triggers & inputs
@@ -607,36 +387,6 @@ export function wrapHostApi(
         Promise.resolve(port(id, mutationGuard)),
       );
     },
-    resetConversationGuarded: (id, opts, mutationGuard) => {
-      guard('host.resetConversationGuarded');
-      const port = backend.resetConversationGuarded;
-      if (port === undefined) {
-        throw new HelmxError(
-          'not_supported',
-          'Current host has not wired guarded context reset (host.resetConversationGuarded)',
-          501,
-          { conversationId: id },
-        );
-      }
-      return deps.tracker.withTask(pluginId, 'host.resetConversationGuarded', () =>
-        Promise.resolve(port(id, opts, mutationGuard)),
-      );
-    },
-    compactConversationGuarded: (id, opts, mutationGuard) => {
-      guard('host.compactConversationGuarded');
-      const port = backend.compactConversationGuarded;
-      if (port === undefined) {
-        throw new HelmxError(
-          'not_supported',
-          'Current host has not wired guarded manual compaction (host.compactConversationGuarded)',
-          501,
-          { conversationId: id },
-        );
-      }
-      return deps.tracker.withTask(pluginId, 'host.compactConversationGuarded', () =>
-        Promise.resolve(port(id, opts, mutationGuard)),
-      );
-    },
     getConversationOwnership: (id) => {
       guard('host.getConversationOwnership');
       return backend.getConversationOwnership(id);
@@ -649,10 +399,6 @@ export function wrapHostApi(
     },
 
     // 9. agents & spawn
-    buildSpawnEnv: (conversationId, cwd, nodeId, options) => {
-      guard('host.buildSpawnEnv');
-      return backend.buildSpawnEnv(conversationId, cwd, nodeId, options);
-    },
     spawnAgent: (request) => {
       guard('host.spawnAgent');
       return deps.tracker.withTask(pluginId, 'host.spawnAgent', () =>
@@ -668,10 +414,6 @@ export function wrapHostApi(
 
     // 10. artifacts & text completion
     listArtifacts: (conversationId) => tracked('host.listArtifacts', () => backend.listArtifacts(conversationId)),
-    createArtifact: (conversationId, input) =>
-      tracked('host.createArtifact', () => backend.createArtifact(conversationId, input)),
-    getArtifact: (artifactId, conversationId) =>
-      tracked('host.getArtifact', () => backend.getArtifact(artifactId, conversationId)),
     completeText: (input) => tracked('host.completeText', () => backend.completeText(input)),
 
     // 11. actions
@@ -695,8 +437,6 @@ export function wrapHostApi(
     // 12. asks
     createAsk: (spec) => tracked('host.createAsk', () => backend.createAsk(spec)),
     cancelAsk: (askId, reason) => tracked('host.cancelAsk', () => backend.cancelAsk(askId, reason)),
-    registerAskSeqResolver: (resolver) =>
-      acquire('host.registerAskSeqResolver')(() => backend.registerAskSeqResolver(resolver)),
 
     // 13. events
     onEvent: (type, listener) =>

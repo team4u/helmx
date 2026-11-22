@@ -434,8 +434,8 @@ test('核心协同 3：SecretStash 跨层零泄漏（SQLite/模型请求/SSE/JSO
   // 1. 双引号 + 换行机密值零入库、零进模型、零进 SSE 帧
   const secConv = await kernel.createConversation({ title: 'secret-e2e' })
   const SECRET_TRICKY = ['quote"', 'line'].join('\n')
-  const placeholder = kernel.services.stash.put(secConv.id, 'TRICKY_TOKEN', SECRET_TRICKY)
-  assert.match(placeholder, /^\[REDACTED:stash:[0-9a-f-]{36}\]$/)
+  const placeholder = '[REDACTED]'
+  kernel.services.stash.addRedaction(SECRET_TRICKY)
 
   capturedRequests.length = 0
   faux.setResponses([captureStep()])
@@ -444,8 +444,6 @@ test('核心协同 3：SecretStash 跨层零泄漏（SQLite/模型请求/SSE/JSO
   const req = capturedRequests[0]!
   assert.ok(req.userTexts.join('\n').includes(placeholder))
   assert.ok(!(req.systemSections.join('\n') + req.userTexts.join('\n')).includes(SECRET_TRICKY))
-  assert.equal(kernel.services.stash.envFor(secConv.id)['TRICKY_TOKEN'], SECRET_TRICKY)
-  assert.equal(kernel.services.stash.envFor(999)['TRICKY_TOKEN'], undefined)
 
   const frames: string[] = []
   const off = kernel.events.subscribe((frame) => frames.push(JSON.stringify(frame)))
@@ -457,8 +455,6 @@ test('核心协同 3：SecretStash 跨层零泄漏（SQLite/模型请求/SSE/JSO
 
   const redacted = redactJsonValue({ text: `prefix ${SECRET_TRICKY} ${placeholder}` }, (t) => kernel.services.stash.redact(t)) as { text: string }
   assert.ok(!redacted.text.includes('line') && !redacted.text.includes('quote') && redacted.text.includes(placeholder))
-  kernel.services.stash.clear(secConv.id)
-  assert.equal(kernel.services.stash.envFor(secConv.id)['TRICKY_TOKEN'], undefined)
 
   // 2. ctx.action / ctx.tool 共享 Schema 校验、合法 null 返回与在途任务阻断停用
   const calls: string[] = []
@@ -651,7 +647,8 @@ test('核心闭环 3 & 4：CLI --meta -> turn_settled、游标分页、SSE 增�
 
   // ctx.doc 公私边界与脱敏增量、manageConversation 托管保护、scope 工具与 run_action 门禁
   const DOC_SECRET = 'align-doc-secret-blue'
-  const docPlaceholder = kernel.services.stash.put(metaConv.id, 'DOC_SECRET', DOC_SECRET)
+  const docPlaceholder = '[REDACTED]'
+  kernel.services.stash.addRedaction(DOC_SECRET)
   const managedConv = await kernel.createConversation({ title: 'managed-conv' })
   let updatePubDoc!: (fn: (v: { note: string; secret: string }) => { note: string; secret: string }) => void
 
@@ -783,7 +780,7 @@ test('核心闭环 5：agent_spawn 外部后端 handled 接管（onResolved / on
     const node = (await inspectRun(started.id)).run.nodes?.find((n) => n.kind === 'agent')!
     assert.equal(node.executionId, execId)
     assert.equal(node.effectiveCwd, execDir)
-    assert.equal(node.worktree?.id, `local:${execDir}`)
+    assert.equal(node.worktree?.path, execDir)
     assert.equal(node.gate?.ok, true)
     assert.equal(readFileSync(join(gateDir, 'count'), 'utf8'), 'x')
     assert.equal(settleCount, 1)
@@ -918,7 +915,8 @@ test('HTTP 与 CLI 真实鉴权往返闭环：setup/login、cli-token、?wait=1�
     assert.equal((await call('POST', '/api/actions/builtin:memory/get', { input: { profileId: '../outside' }, conversationId: convId })).status, 400)
     assert.equal((await call('POST', '/api/actions/test:probe/echo', { input: { text: 123 } })).status, 400)
 
-    probeState.placeholder = kernel.services.stash.put(convId, 'TRICKY_TOKEN', SECRET_TRICKY)
+    probeState.placeholder = '[REDACTED]'
+    kernel.services.stash.addRedaction(SECRET_TRICKY)
     const echoRes = await call('POST', '/api/actions/test:probe/echo', { input: { text: 'prefix' } })
     assert.ok(!echoRes.raw.includes(SECRET_TRICKY) && !echoRes.raw.includes('quote\\"') && echoRes.raw.includes(probeState.placeholder))
 

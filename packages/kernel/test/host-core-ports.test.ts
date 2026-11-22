@@ -15,14 +15,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { PassThrough } from 'node:stream'
-import http from 'node:http'
 import net from 'node:net'
 import { setTimeout as delay } from 'node:timers/promises'
 import {
   HelmxError,
   type HelmxHostApi,
-  type NodeHostEnv,
-  type NodeHostEnvQuery,
   type NodeTunnelTarget,
   type PluginDefinition,
 } from '@helmx/protocol'
@@ -34,7 +31,7 @@ import { projectToolPromptSections } from '../src/runtime/runtime-helpers.js'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
-import { MemoryDocStore, deferred, makeConversationSummary, makeFauxModels, useTempDir } from './helpers.js'
+import { MemoryDocStore, makeConversationSummary, makeFauxModels, useTempDir } from './helpers.js'
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
 import { KernelRuntime } from '../src/runtime/index.js'
 
@@ -55,11 +52,8 @@ interface OpenTunnelStub {
 }
 
 function makeBackend(over: {
-  /** getNodeHostEnv stub (wires ctx.host.getNodeHostEnv when supplied). */
-  getNodeHostEnv?: (nodeId: string, query?: NodeHostEnvQuery, signal?: AbortSignal) => Promise<NodeHostEnv>
   /** openTunnel stub (wires ctx.host.openTunnel when supplied). */
   openTunnel?: OpenTunnelStub
-  nodeFetch?: (nodeId: string) => typeof fetch
 }): PluginHostBackend {
   return {
     ...createPluginHostBackendFixture(),
@@ -74,12 +68,6 @@ function makeBackend(over: {
     skills: {
       list: async () => [],
       readFile: async () => '',
-      directory: async (id) => {
-        if (!/^[a-z0-9][a-z0-9-]*$/.test(id)) {
-          throw new HelmxError('validation_error', `invalid skill id: ${id}`, 400, { skillId: id })
-        }
-        return `/data/skills/${id}`
-      },
       ensureSkill: async () => {},
     },
     secrets: {
@@ -88,12 +76,10 @@ function makeBackend(over: {
       delete: async () => {},
       addRedaction: () => () => {},
     },
-    setPluginConfig: async () => {},
     nodeIpc: {
       isOnline: () => true,
       getNodeHubUrl: () => undefined,
     },
-    ...(over.getNodeHostEnv === undefined ? {} : { getNodeHostEnv: over.getNodeHostEnv }),
     dispatchTrigger: async () => {},
     submitInput: async () => {},
     createConversation: async (init) => ({ ...makeConversation(42), title: init.title ?? 'new' }),
@@ -109,7 +95,6 @@ function makeBackend(over: {
     abortConversation: async () => {},
     getConversationOwnership: () => 'helmx',
     listArtifacts: async () => [],
-    getArtifact: async () => { throw new HelmxError('not_found', 'no artifact', 404) },
     refreshModels: async () => ({ providers: [], aborted: false, errors: {}, models: [], providerCatalog: [] }),
     withFileLock: async (_p, fn) => fn(),
     atomicWriteFile: async () => {},
@@ -118,17 +103,14 @@ function makeBackend(over: {
       readTextFile: async () => 'content',
       exec: async () => ({ code: 0, stdout: '', stderr: '' }),
     }) as never,
-    buildSpawnEnv: () => ({}),
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
     manageConversation: () => () => {},
     markConversationOwnership: () => {},
     createAsk: async () => ({ id: 'a', status: 'answered', answers: {} }),
     cancelAsk: async () => {},
-    registerAskSeqResolver: () => () => {},
     onEvent: () => () => {},
     emitEvent: () => {},
-    ...(over.nodeFetch === undefined ? {} : { nodeFetch: over.nodeFetch }),
     ...(over.openTunnel !== undefined
       ? {
           openTunnel: (nodeId: string, target: NodeTunnelTarget, signal?: AbortSignal) => {
@@ -183,10 +165,9 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
       () => captured!.skills.list(),
       () => captured!.secrets.get('k'),
       () => captured!.nodeIpc.isOnline('local'),
-      () => captured!.getNodeHostEnv('local'),
       () => captured!.completeText({ conversationId: 1, systemPrompt: '', text: '' }),
       () => captured!.forkConversation(1, { entryId: 1 }),
-      () => captured!.createArtifact(1, { name: 'a.txt', bytes: new TextEncoder().encode('x') }),
+      () => captured!.listArtifacts(1),
       () => captured!.refreshModels(),
       () => captured!.redact('x'),
       () => captured!.executionEnv('local', '/tmp').canonicalPath('/tmp/x', BACKGROUND_CONTEXT),
@@ -249,57 +230,7 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
     )
   })
 
-  await t.test('getNodeHostEnv: unwired rejects 501, wired tracks live tasks and forwards query/signal', { timeout: 60_000 }, async () => {
-    const unwiredHost = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: makeBackend({}), docs: new MemoryDocStore() })
-    let unwiredApi: HelmxHostApi | undefined
-    await unwiredHost.register({ id: 'p:env-unwired', definePlugin(ctx) { unwiredApi = ctx.host } }, { enabled: true })
-    await assert.rejects(
-      unwiredApi!.getNodeHostEnv('remote-1', { envKeys: ['HERDR_SOCKET_PATH'] }),
-      (err: unknown) => err instanceof HelmxError && err.code === 'node_host_env_not_supported' && err.status === 501,
-    )
-    await unwiredHost.dispose()
-
-    const gate = deferred<NodeHostEnv>()
-    const seen: Array<{ nodeId: string; query?: NodeHostEnvQuery; signal?: AbortSignal }> = []
-    const wiredHost = new PluginHost({
-      buildProvider: createPluginBuildProvider(),
-      dataDir,
-      host: makeBackend({
-        getNodeHostEnv: (nodeId, query, signal) => {
-          seen.push({ nodeId, query, signal })
-          return gate.promise
-        },
-      }),
-      docs: new MemoryDocStore(),
-    })
-    let wiredApi: HelmxHostApi | undefined
-    await wiredHost.register({ id: 'p:env-wired', definePlugin(ctx) { wiredApi = ctx.host } }, { enabled: true })
-    const ac = new AbortController()
-    const pending = wiredApi!.getNodeHostEnv('win-node', { envKeys: ['HERDR_SOCKET_PATH'] }, ac.signal)
-    assert.equal(seen.length, 1)
-    assert.deepEqual(seen[0], { nodeId: 'win-node', query: { envKeys: ['HERDR_SOCKET_PATH'] }, signal: ac.signal })
-    await assert.rejects(
-      wiredHost.disable('p:env-wired'),
-      (err: unknown) => err instanceof HelmxError && err.code === 'plugin_has_live_tasks' && err.status === 409,
-    )
-    const snapshot: NodeHostEnv = {
-      platform: 'win32',
-      homeDir: 'C:\\Users\\worker',
-      tempDir: 'C:\\Temp',
-      dirs: { appData: 'C:\\Users\\worker\\AppData\\Roaming' },
-      env: { HERDR_SOCKET_PATH: '\\\\.\\pipe\\herdr' },
-    }
-    gate.resolve(snapshot)
-    assert.deepEqual(await pending, snapshot)
-    await wiredHost.disable('p:env-wired')
-    await assert.rejects(
-      async () => wiredApi!.getNodeHostEnv('win-node'),
-      (err: unknown) => err instanceof HelmxError && err.code === 'plugin_context_expired',
-    )
-    await wiredHost.dispose()
-  })
-
-  await t.test('openTunnel lifecycle tracking: TCP + socketPath targets block disable while active, closing unblocks, failures never leak count', { timeout: 60_000 }, async () => {
+  await t.test('openTunnel lifecycle tracking: TCP targets block disable while active, closing unblocks, failures never leak count', { timeout: 60_000 }, async () => {
     const stub: OpenTunnelStub = { calls: [], delayMs: 20, duplexes: [], failures: [] }
     const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: makeBackend({ openTunnel: stub }), docs: new MemoryDocStore() })
     let hostApi: Parameters<NonNullable<Parameters<typeof host.register>[0]['definePlugin']>>[0]['host'] | undefined
@@ -326,12 +257,8 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
       (err: unknown) => err instanceof HelmxError && err.code === 'plugin_has_live_tasks',
       'disable must return 409 while Duplex is active instead of dropping counter on setup resolve',
     )
-    // 2b) Controlled socketPath target forwards verbatim and shares the same Duplex lifecycle tracking.
-    const udsDuplex = await hostApi!.openTunnel('remote-1', { socketPath: '/run/herdr.sock' })
-    assert.deepEqual(stub.calls[1]?.target, { socketPath: '/run/herdr.sock' })
     // 3) Duplex closes: task settles once all tunnels close and disable succeeds again.
     duplex.destroy()
-    udsDuplex.destroy()
     await new Promise((r) => setTimeout(r, 30))
     await host.disable('p:tunnel')
 
@@ -354,295 +281,6 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
     await host.unregister('p:tunnel').catch(() => {})
     await host.unregister('p:tunnel2').catch(() => {})
     void host.dispose()
-  })
-
-  await t.test('nodeFetch: preserves slow-consumer backpressure, releases task on cancel, sync throws never leak count', { timeout: 60_000 }, async () => {
-    let pulls = 0
-    let cancelled = false
-    const raw = (() => Promise.resolve(new Response(new ReadableStream<Uint8Array>({
-      pull(controller) {
-        pulls += 1
-        controller.enqueue(new Uint8Array(32))
-        if (pulls === 64) controller.close()
-      },
-      cancel() { cancelled = true },
-    }, { highWaterMark: 0 })))) as typeof fetch
-    const backend = makeBackend({ nodeFetch: () => raw })
-    const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: backend, docs: new MemoryDocStore() })
-    let api!: HelmxHostApi
-    await host.register({ id: 'p:fetch-flow', definePlugin(ctx) { api = ctx.host } }, { enabled: true })
-    try {
-      const response = await api.nodeFetch('remote-1')('http://example.test')
-      await new Promise<void>((resolve) => setImmediate(resolve))
-      assert.ok(pulls <= 1, `must not drain response continuously while unconsumed (pulled ${pulls} times)`)
-      await assert.rejects(host.disable('p:fetch-flow'), { code: 'plugin_has_live_tasks' })
-      await response.body!.cancel()
-      assert.equal(cancelled, true)
-      await host.disable('p:fetch-flow')
-
-      const failure = new Error('sync fetch failed')
-      backend.nodeFetch = () => (() => { throw failure }) as typeof fetch
-      await host.register({ id: 'p:fetch-throw', definePlugin(ctx) { api = ctx.host } }, { enabled: true })
-      await assert.rejects(api.nodeFetch('remote-1')('http://example.test'), failure)
-      await host.disable('p:fetch-throw')
-    } finally {
-      await host.dispose()
-    }
-  })
-
-  await t.test('nodeFetch: response body wrapping failure (pre-locked stream) finishes counter without leaking', { timeout: 60_000 }, async () => {
-    const source = new ReadableStream<Uint8Array>({
-      start(controller) { controller.enqueue(new Uint8Array(4)) },
-    })
-    const raw = (async () => {
-      const response = new Response(source, { status: 200 })
-      // Pre-lock response.body so wrapper's getReader() throws deterministically
-      void response.body!.getReader()
-      return response
-    }) as typeof fetch
-    const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: makeBackend({ nodeFetch: () => raw }), docs: new MemoryDocStore() })
-    let api!: HelmxHostApi
-    await host.register({
-      id: 'p:fetch-wrap-fail',
-      definePlugin: (ctx) => { api = ctx.host },
-    }, { enabled: true })
-    try {
-      await assert.rejects(api.nodeFetch('remote-1')('http://example.test'))
-      // Exception in body wrapper must finish live-task counter so disable succeeds cleanly
-      await host.disable('p:fetch-wrap-fail')
-    } finally {
-      await host.dispose()
-    }
-  })
-
-  await t.test('nodeFetch: abandoned Response stays deterministically busy (disable 409) until explicit cancel (no GC fallback)', { timeout: 60_000 }, async () => {
-    // Contract removes FinalizationRegistry safety net for deterministic resource ownership: plugins receiving
-    // a Response must consume or cancel it; abandoned responses keep in-flight tasks visible (hard blocking
-    // disable/reload) instead of masking leaks behind non-deterministic GC timing.
-    const raw = (() => Promise.resolve(new Response(new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new Uint8Array(32))
-        // Never closes: simulates long SSE stream (headers arriving must not settle task).
-      },
-      cancel() {},
-    }, { highWaterMark: 0 })))) as typeof fetch
-    const backend = makeBackend({ nodeFetch: () => raw })
-    const host = new PluginHost({ dataDir, host: backend, docs: new MemoryDocStore() })
-    let api!: HelmxHostApi
-    await host.register({ id: 'p:fetch-abandon', definePlugin(ctx) { api = ctx.host } }, { enabled: true })
-    try {
-      const response = await api.nodeFetch('remote-1')('http://example.test')
-      assert.equal(response.status, 200, 'resolves as soon as headers arrive without waiting for body')
-      // Abandoned: inspect only status without consuming or canceling.
-      void response
-      await new Promise<void>((resolve) => setImmediate(resolve))
-      await assert.rejects(host.disable('p:fetch-abandon'), { code: 'plugin_has_live_tasks' })
-      await new Promise<void>((resolve) => setImmediate(resolve))
-      // Still 409 across multiple event-loop turns (deterministic occupancy, not transient GC timing).
-      await assert.rejects(host.disable('p:fetch-abandon'), { code: 'plugin_has_live_tasks' })
-      // Only convergence path: explicit cancel (draining to EOF works identically, covered elsewhere).
-      await response.body!.cancel()
-      await host.disable('p:fetch-abandon')
-    } finally {
-      await host.dispose()
-    }
-  })
-
-  await t.test('nodeFetch deterministic host-close ownership: local unending bodies & pre-header requests abort cleanly on dispose', { timeout: 60_000 }, async () => {
-    // Local path delegates to globalThis.fetch outside EnvFabric.close's remote tunnel teardown, so deterministic
-    // cancellation relies on per-call AbortController (host dispose triggers abort while normal disable rejects 409).
-    let socketClosed = 0
-    let headersSent = 0
-    const server = http.createServer((req, res) => {
-      headersSent += 1
-      if (req.url === '/pending') {
-        // Never responds with headers (hangs pre-headers).
-        return
-      }
-      res.writeHead(200, { 'content-type': 'text/event-stream' })
-      res.write('data: a\n\n')
-      // Unending SSE stream.
-      const timer = setInterval(() => res.write('data: x\n\n'), 50)
-      res.on('close', () => { clearInterval(timer); socketClosed += 1 })
-    })
-    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
-    const base = `http://127.0.0.1:${(server.address() as net.AddressInfo).port}`
-    const backend = makeBackend({ nodeFetch: () => globalThis.fetch as typeof fetch })
-    const host = new PluginHost({ dataDir, host: backend, docs: new MemoryDocStore() })
-    let api!: HelmxHostApi
-    await host.register({ id: 'p:fetch-dispose', definePlugin(ctx) { api = ctx.host } }, { enabled: true })
-    try {
-      // --- Unending local body: abandoned (unconsumed/uncanceled); dispose actually closes connection ---
-      const response = await api.nodeFetch('local')(`${base}/stream`)
-      assert.equal(response.status, 200)
-      await new Promise<void>((resolve) => setImmediate(resolve))
-      // Normal disable rejects 409 deterministically and must never abort the active stream (only dispose aborts).
-      await assert.rejects(host.disable('p:fetch-dispose'), { code: 'plugin_has_live_tasks' })
-      const reader0 = response.body!.getReader()
-      const chunk = await reader0.read()
-      assert.ok(!chunk.done, '409 disable rejection must not abort in-flight stream')
-
-      await host.dispose()
-      // Dispose fires cleanup: cancels underlying request (closing server socket).
-      for (let i = 0; i < 100 && socketClosed === 0; i += 1) await delay(20)
-      assert.ok(socketClosed >= 1, `local in-flight request must cancel on host dispose (server sockets closed: ${socketClosed})`)
-
-      // --- Pre-header pending request: dispose rejects fetch promise with abort error ---
-      const host2 = new PluginHost({ dataDir, host: makeBackend({ nodeFetch: () => globalThis.fetch as typeof fetch }), docs: new MemoryDocStore() })
-      let api2!: HelmxHostApi
-      await host2.register({ id: 'p:fetch-pending', definePlugin(ctx) { api2 = ctx.host } }, { enabled: true })
-      const pending = api2.nodeFetch('local')(`${base}/pending`)
-      await delay(50) // request sent, headers not yet returned
-      const disposed = host2.dispose()
-      await assert.rejects(() => pending, (error: unknown) => {
-        // Cleanup aborts using host disposal reason; undici rejects with signal.reason
-        // (deterministic ownership); compatible layers may rethrow AbortError.
-        if (error instanceof HelmxError && error.code === 'plugin_host_disposed') return true
-        const name = error instanceof Error ? error.name : String(error)
-        return name === 'AbortError' || /abort/i.test(String((error as { message?: string }).message ?? name))
-      })
-      await disposed
-      assert.ok(headersSent >= 2, 'both requests reached the server')
-    } finally {
-      await new Promise<void>((resolve) => server.close(() => resolve()))
-    }
-  })
-
-  await t.test('nodeFetch abort signal override semantics: init.signal overrides Request.signal, explicit null clears it, host dispose still aborts', { timeout: 60_000 }, async () => {
-    // Matches standard fetch semantics (only combines with host-owned signal via AbortSignal.any, never with stale overridden Request.signal):
-    let socketClosed = 0
-    const server = http.createServer((req, res) => {
-      if (req.url === '/pending') return // never sends headers
-      res.writeHead(200, { 'content-type': 'text/event-stream' })
-      res.write('data: a\n\n')
-      const timer = setInterval(() => res.write('data: x\n\n'), 50)
-      res.on('close', () => { clearInterval(timer); socketClosed += 1 })
-    })
-    server.on('clientError', () => undefined)
-    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
-    const base = `http://127.0.0.1:${(server.address() as net.AddressInfo).port}`
-    const backend = makeBackend({ nodeFetch: () => globalThis.fetch as typeof fetch })
-    const host = new PluginHost({ dataDir, host: backend, docs: new MemoryDocStore() })
-    let api!: HelmxHostApi
-    await host.register({ id: 'p:fetch-signal', definePlugin(ctx) { api = ctx.host } }, { enabled: true })
-    try {
-      // 1) Request's original signal is aborted, but init supplies an active signal: request must succeed
-      // (naive merging of both signals would wrongly abort via the overridden signal).
-      const stale = new AbortController()
-      stale.abort()
-      const fresh = new AbortController()
-      const overridden = await api.nodeFetch('local')(new Request(`${base}/stream`, { signal: stale.signal }), { signal: fresh.signal })
-      assert.equal(overridden.status, 200, 'init.signal override prevents aborted Request.signal from canceling request')
-      const r1 = overridden.body!.getReader()
-      const chunk1 = await r1.read()
-      assert.ok(!chunk1.done && chunk1.value !== undefined, 'stream reads normally when override signal is not aborted')
-      await r1.cancel()
-
-      // 2) Overriding init signal aborts: cancels genuinely (pre-header request rejects with AbortError).
-      const caller = new AbortController()
-      const pending = api.nodeFetch('local')(`${base}/pending`, { signal: caller.signal })
-      await delay(50)
-      caller.abort()
-      await assert.rejects(() => pending, (error: unknown) => {
-        const name = error instanceof Error ? error.name : String(error)
-        return name === 'AbortError' || /abort/i.test(String((error as { message?: string }).message ?? name))
-      })
-
-      // 3) init.signal = null clears inherited aborted Request signal: request runs normally,
-      // and abandoned body still cancels deterministically on host dispose.
-      const aborted = new AbortController()
-      aborted.abort()
-      const cleared = await api.nodeFetch('local')(new Request(`${base}/stream`, { signal: aborted.signal }), { signal: null })
-      assert.equal(cleared.status, 200, 'explicit null clears inherited aborted Request signal')
-      void cleared // abandoned (neither consumed nor canceled)
-      await new Promise<void>((resolve) => setImmediate(resolve))
-      await host.dispose()
-      for (let i = 0; i < 100 && socketClosed === 0; i += 1) await delay(20)
-      assert.ok(socketClosed >= 1, `host dispose still aborts in-flight requests even after signal:null (closed ${socketClosed})`)
-    } finally {
-      await new Promise<void>((resolve) => server.close(() => resolve()))
-    }
-  })
-
-  await t.test('setConfig: delegates incremental patches to instance PluginConfigStore without materializing defaults or cross-host contention', { timeout: 60_000 }, async () => {
-    const storedA = new Map<string, Record<string, unknown>>()
-    const receivedPatches: Array<Record<string, unknown>> = []
-    const firstWriteGate = deferred<void>()
-    let backendSetPluginConfigCalled = false
-    let writeCount = 0
-
-    const storeA = {
-      get: (id: string) => ({ ...(storedA.get(id) ?? {}) }),
-      set: async (id: string, patch: Record<string, unknown>) => {
-        writeCount += 1
-        receivedPatches.push({ ...patch })
-        // Pause first write to fabricate an overlapping window between plugin ctx.host.setConfig and HTTP host.setConfig.
-        if (writeCount === 1) await firstWriteGate.promise
-        const next = { ...(storedA.get(id) ?? {}) }
-        for (const [k, v] of Object.entries(patch)) {
-          if (v === null) delete next[k]
-          else next[k] = v
-        }
-        storedA.set(id, next)
-      },
-    }
-    const backend: PluginHostBackend = {
-      ...makeBackend({}),
-      setPluginConfig: async () => {
-        backendSetPluginConfigCalled = true
-      },
-    }
-    const hostA = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: backend, docs: new MemoryDocStore(), config: storeA })
-
-    // Second independent PluginHost instance with the exact same pluginId must never be blocked by hostA's in-flight write.
-    const storedB = new Map<string, Record<string, unknown>>()
-    const storeB = {
-      get: (id: string) => ({ ...(storedB.get(id) ?? {}) }),
-      set: (id: string, patch: Record<string, unknown>) => {
-        storedB.set(id, { ...(storedB.get(id) ?? {}), ...patch })
-      },
-    }
-    const hostB = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: makeBackend({}), docs: new MemoryDocStore(), config: storeB })
-
-    let apiA!: HelmxHostApi
-    let apiB!: HelmxHostApi
-    const def = (capture: (api: HelmxHostApi) => void) => ({
-      id: 'p:cfg',
-      definePlugin: (ctx: { configSchema: (s: Record<string, { type: 'number' | 'string'; default?: number | string }>) => void; host: HelmxHostApi }) => {
-        ctx.configSchema({
-          a: { type: 'number' },
-          b: { type: 'number' },
-          keepDefault: { type: 'string', default: 'from-schema' },
-        })
-        capture(ctx.host)
-      },
-    })
-    await hostA.register(def((api) => { apiA = api }), { enabled: true })
-    await hostB.register(def((api) => { apiB = api }), { enabled: true })
-    try {
-      // Interleave plugin ctx.host.setConfig({ a: 1 }) with HTTP-path hostA.setConfig('p:cfg', { b: 2 })
-      const wPlugin = apiA.setConfig({ a: 1 })
-      await new Promise<void>((resolve) => setImmediate(resolve))
-      const wHttp = hostA.setConfig('p:cfg', { b: 2 })
-      await new Promise<void>((resolve) => setImmediate(resolve))
-
-      // While hostA's p:cfg write is blocked on firstWriteGate, hostB's p:cfg write completes immediately (no module-level chain).
-      await apiB.setConfig({ a: 99 })
-      assert.deepEqual(storedB.get('p:cfg'), { a: 99 }, 'second PluginHost instance must not be blocked or materialize defaults')
-
-      firstWriteGate.resolve()
-      await Promise.all([wPlugin, wHttp])
-
-      assert.equal(backendSetPluginConfigCalled, false, 'ctx.host.setConfig must go directly through PluginConfigStore, not backend.setPluginConfig')
-      assert.deepEqual(receivedPatches, [{ a: 1 }, { b: 2 }], 'only incremental patches reach PluginConfigStore (defaults never materialized)')
-      assert.deepEqual(storedA.get('p:cfg'), { a: 1, b: 2 })
-      assert.equal('keepDefault' in (storedA.get('p:cfg') ?? {}), false, 'schema default must never be materialized into store')
-      assert.equal(hostA.getConfigSources('p:cfg').keepDefault, 'default')
-      assert.equal(hostA.getConfig('p:cfg').keepDefault, 'from-schema')
-    } finally {
-      await hostA.dispose()
-      await hostB.dispose()
-    }
   })
 
   await t.test('openTunnel: host dispose destroys active and late-arriving Duplexes', { timeout: 60_000 }, async () => {
@@ -890,18 +528,8 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
         title: 'sibling conversation',
       })
 
-      // Boundary rejections before any write: missing conversation, invalid filename.
-      await assert.rejects(
-        () => realHost!.createArtifact(999999, { name: 'a.txt', bytes: new TextEncoder().encode('x') }),
-        (err: unknown) => err instanceof HelmxError && err.status === 404 && err.code === 'not_found',
-      )
-      await assert.rejects(
-        () => realHost!.createArtifact(conv.id, { name: '../evil', bytes: new TextEncoder().encode('x') }),
-        (err: unknown) => err instanceof HelmxError && err.status === 400 && err.code === 'validation_error',
-      )
-
       // Happy path: text artifact + image artifact, both visible via listArtifacts.
-      const textMeta = await realHost!.createArtifact(conv.id, {
+      const textMeta = await runtime.artifacts.writeUploaded(conv.id, {
         name: 'note.md',
         mimeType: 'text/markdown',
         bytes: new TextEncoder().encode('# relay note'),
@@ -909,7 +537,7 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
       assert.equal(textMeta.kind, 'upload')
       assert.equal(textMeta.conversationId, conv.id)
       const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3])
-      const imageMeta = await realHost!.createArtifact(conv.id, {
+      const imageMeta = await runtime.artifacts.writeUploaded(conv.id, {
         name: 'photo.png',
         mimeType: 'image/png',
         bytes: pngBytes,
@@ -921,7 +549,7 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
       )
 
       // Attachment authorization: sibling-conversation artifact and unknown IDs are rejected.
-      const siblingMeta = await realHost!.createArtifact(other.id, {
+      const siblingMeta = await runtime.artifacts.writeUploaded(other.id, {
         name: 'private.txt',
         bytes: new TextEncoder().encode('sibling only'),
       })
@@ -960,12 +588,8 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
         `model transcript carried the attachment manifest (timeline: ${timelineText.slice(0, 2000)})`,
       )
 
-      // Deletion mid-flight safety: creating into a just-deleted conversation rejects 404, never orphans.
+      // Deletion mid-flight safety: querying a just-deleted conversation rejects 404.
       await runtime.deleteConversation(other.id)
-      await assert.rejects(
-        () => realHost!.createArtifact(other.id, { name: 'late.txt', bytes: new TextEncoder().encode('x') }),
-        (err: unknown) => err instanceof HelmxError && err.status === 404 && err.code === 'not_found',
-      )
 
       // Durable submission lookup by requestId: uncommitted -> undefined, committed -> done, bad requestId -> 400, missing conv -> 404.
       const reqId = 'host-core-ports:req-1'
@@ -988,7 +612,7 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
       await runtime.plugins.disable('p:attach-real')
       // Wrap async: the epoch guard throws synchronously before entering the async backend call.
       await assert.rejects(
-        async () => realHost!.createArtifact(conv.id, { name: 'late.txt', bytes: new TextEncoder().encode('x') }),
+        async () => realHost!.listArtifacts(conv.id),
         (err: unknown) => err instanceof HelmxError && err.status === 409 && err.code === 'plugin_context_expired',
       )
     } finally {
@@ -996,7 +620,7 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
     }
   })
 
-  await t.test('ctx.host.getNodeHostEnv + openTunnel({ socketPath }): real KernelRuntime wiring end-to-end', { timeout: 60_000 }, async (sub) => {
+  await t.test('ctx.host.openTunnel({ host, port }): real KernelRuntime wiring end-to-end', { timeout: 60_000 }, async (sub) => {
     const rtDir = useTempDir(sub, 'helmx-host-env-rt-')
     const { models } = makeFauxModels()
     const runtime = await KernelRuntime.open({
@@ -1006,11 +630,11 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
       models,
       model: 'faux/faux-1',
     })
-    const sockPath = `${rtDir}/echo.sock`
-    const uds = net.createServer((socket) => {
+    const tcp = net.createServer((socket) => {
       socket.on('data', (chunk) => socket.end(chunk))
     })
-    await new Promise<void>((resolve) => uds.listen(sockPath, resolve))
+    await new Promise<void>((resolve) => tcp.listen(0, '127.0.0.1', resolve))
+    const port = (tcp.address() as net.AddressInfo).port
     try {
       let realHost: HelmxHostApi | undefined
       await runtime.plugins.register({
@@ -1021,33 +645,24 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
       }, { enabled: true })
       assert.ok(realHost)
 
-      const localEnv = await realHost!.getNodeHostEnv('local', { envKeys: ['PATH'] })
-      assert.equal(localEnv.platform, process.platform)
-      assert.ok(localEnv.homeDir.length > 0)
-      assert.ok(localEnv.tempDir.length > 0)
-      await assert.rejects(
-        () => realHost!.getNodeHostEnv('offline-node'),
-        (err: unknown) => err instanceof HelmxError && err.code === 'node_offline' && err.status === 409,
-      )
-
-      const stream = await realHost!.openTunnel('local', { socketPath: sockPath })
+      const stream = await realHost!.openTunnel('local', { host: '127.0.0.1', port })
       const echoed = await new Promise<string>((resolve, reject) => {
         const chunks: Buffer[] = []
         stream.on('data', (c: Buffer) => chunks.push(c))
         stream.once('end', () => resolve(Buffer.concat(chunks).toString('utf8')))
         stream.once('error', reject)
-        stream.write('ping-uds')
+        stream.write('ping-tcp')
       })
-      assert.equal(echoed, 'ping-uds')
+      assert.equal(echoed, 'ping-tcp')
       stream.destroy()
       await delay(20)
       await runtime.plugins.disable('p:env-rt')
       await assert.rejects(
-        async () => realHost!.getNodeHostEnv('local'),
+        async () => realHost!.openTunnel('local', { host: '127.0.0.1', port }),
         (err: unknown) => err instanceof HelmxError && err.code === 'plugin_context_expired' && err.status === 409,
       )
     } finally {
-      await new Promise<void>((resolve) => uds.close(() => resolve()))
+      await new Promise<void>((resolve) => tcp.close(() => resolve()))
       await runtime.close()
     }
   })

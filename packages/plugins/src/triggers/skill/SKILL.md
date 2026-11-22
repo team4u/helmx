@@ -11,7 +11,7 @@ Use `builtin:triggers` to schedule recurring prompts (`cron_*`) or inspect/delet
 ## Cron actions (`run_action`)
 
 - `builtin:triggers.cron_list` (`{}`) — list all cron jobs with `nextRunAt` / `lastRunAt` / `lastError`. CLI: `helmx cron list --json`.
-- `builtin:triggers.cron_create` (`{ id, schedule, text, timezone?, description?, enabled?, catchUp?, targetConversationId?, targetProfileId?, threadKey? }`) — create a periodic cron job. CLI: `helmx cron create`.
+- `builtin:triggers.cron_create` (`{ id, schedule, text, timezone?, description?, enabled?, catchUp?, targetConversationId?, targetProfileId? }`) — create a periodic cron job. CLI: `helmx cron create`.
 - `builtin:triggers.cron_delete` (`{ id }`) — delete a cron job. CLI: `helmx cron delete`.
 - `builtin:triggers.cron_trigger` (`{ id }`) — manually deliver one trigger immediately. CLI: `helmx cron trigger`.
 

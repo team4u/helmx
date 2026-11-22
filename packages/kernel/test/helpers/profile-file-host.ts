@@ -2,22 +2,13 @@ import { join } from 'node:path'
 import { HelmxError, assertProfileId, type HelmxHostApi } from '@helmx/protocol'
 import { atomicWriteFile, FileNotFoundError } from '../../src/services/atomic-file.js'
 import { withFileLock } from '../../src/services/file-lock.js'
-import { assertSkillId, ProfileService, SkillService } from '../../src/services/profiles-skills.js'
+import { ProfileService, SkillService } from '../../src/services/profiles-skills.js'
 
 function validateId(id: string): void {
   try {
     assertProfileId(id)
   } catch (error) {
     throw new HelmxError('validation_error', error instanceof Error ? error.message : String(error), 400, { profileId: id })
-  }
-}
-
-/** Align skill id validation boundary (mirrors kernel skillDirectory: invalid id -> HelmxError 400). */
-function validateSkillId(id: string): void {
-  try {
-    assertSkillId(id)
-  } catch (error) {
-    throw new HelmxError('validation_error', `Invalid skill id: ${error instanceof Error ? error.message : String(error)}`, 400, { skillId: id })
   }
 }
 
@@ -53,10 +44,6 @@ export function createProfileFileHost(
     skills: {
       list: () => skills.list(),
       readFile: (id, path) => skills.readFile(id, path),
-      async directory(id) {
-        validateSkillId(id)
-        return join(dataDir, 'skills', id)
-      },
       ensureSkill: (asset) => skills.ensureSkill(asset),
     },
     atomicWriteFile,

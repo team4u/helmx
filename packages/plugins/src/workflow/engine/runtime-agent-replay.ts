@@ -15,7 +15,7 @@ import type { WorkflowAgentEntry } from './progress.js'
 import type { ReplayResult, StartedAgentEntry } from './replay.js'
 import type { AgentCallPayload, CompletedChild } from './runtime-types.js'
 import type { AgentCallContext } from './runtime-agent-handler.js'
-import { agentRetryPrompt, applySchema, derivedLabel, isValidAttachments, isValidSecretNames, MAX_AGENT_ATTEMPTS, preview, readCallScope, scopedResumeKey } from './runtime-validation.js'
+import { agentRetryPrompt, applySchema, derivedLabel, isValidAttachments, MAX_AGENT_ATTEMPTS, preview, readCallScope, scopedResumeKey } from './runtime-validation.js'
 
 /** All mutable state handed to the live attempt ring after replay adjudication (base has absorbed execution/gate; the live ring keeps updating in place; the attempt-* fields keep evolving inside the live ring). */
 export interface AgentLiveState {
@@ -147,11 +147,6 @@ export async function resolveAgentReplayCall(ctx: AgentCallContext, callId: numb
     ctx.respond(callId, false, undefined, 'agent() opts.attachments must be an array of non-empty string artifact IDs.', true)
     return { kind: 'responded' }
   }
-  // Same as above: secretNames is a secret-grant field; invalid shapes are rejected explicitly at the boundary (not silently dropped).
-  if (payload.secretNames !== undefined && !isValidSecretNames(payload.secretNames)) {
-    ctx.respond(callId, false, undefined, 'agent() opts.secretNames must be an array of non-empty string secret env names.', true)
-    return { kind: 'responded' }
-  }
   // Same as above: maxSubagentDepth is a policy-grant field; invalid values are rejected explicitly at the
   // boundary (no clamping, no silent dropping); sent down only for fresh spawns, while resume keeps the registered facts.
   if (
@@ -243,7 +238,6 @@ export async function resolveAgentReplayCall(ctx: AgentCallContext, callId: numb
     resume: payload.resume,
     attachments: payload.attachments,
     maxSubagentDepth: payload.maxSubagentDepth,
-    secretNames: payload.secretNames,
     cwd: payload.cwd,
     nodeId: payload.nodeId,
     schema: payload.schema !== undefined ? JSON.stringify(payload.schema) : undefined,

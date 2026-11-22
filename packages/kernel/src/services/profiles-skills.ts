@@ -1,6 +1,6 @@
 /**
  * ProfileService: manages `profiles/<id>/` (profile.json + SYSTEM.md).
- * Profile schema conforms to @helmx/protocol (id required; name/model/runtime/tags optional).
+ * Profile schema conforms to @helmx/protocol (id required; name/model/tags optional).
  * An empty or omitted model means unconfigured—runtime reports an explicit error rather than fabricating a default model in the service layer.
  * Long-term MEMORY.md is autonomously managed by the builtin:memory plugin and does not belong here.
  */
@@ -13,12 +13,10 @@ import {
   assertSkillId,
   assertSafeSkillRelativePath,
   isJsonObject,
-  isValidEnvName,
   isValidProfileId,
   parseSkillFrontmatter,
   type Profile,
   type ProfileChangedEvent,
-  type ProfileRuntime,
   type ProfileStarterPrompt,
   type SkillSummary,
 } from '@helmx/protocol'
@@ -47,8 +45,6 @@ const DEFAULT_PROFILE_NAME = 'person assist'
 /** Valid thinking level enum values (aligned with pi-ai ModelThinkingLevel; single source shared with HTTP validation). */
 export const PROFILE_THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
 const THINKING_LEVELS = new Set<string>(PROFILE_THINKING_LEVELS)
-/** Generic external runtime identifier format (zero hardcoded plugin enums in kernel). */
-export const PROFILE_RUNTIME_KIND_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/
 
 /**
  * Cross-platform absolute path check: POSIX `/`, Windows drive `^[a-zA-Z]:[\\/]` and UNC `^\\\\[^\\]+\\[^\\]+`.
@@ -59,19 +55,15 @@ export function isCrossPlatformAbsolutePath(p: string): boolean {
 }
 
 /**
- * Layer 0 resident system prompt (top of the three-tier progressive disclosure): declares only identity and managed helmx
- * CLI awareness; command tables, generative UI component references, and other working details live in Layer 1/2
- * (skills/helmx-cli) instead of remaining permanently resident (skill catalog descriptions still carry minimal cost).
- * update_memory instructions are dynamically injected by the builtin:memory plugin based on the Profile toggle.
+ * Default resident system prompt (kernel-only, zero hardcoded plugin/skill/worktree copy).
+ * Enabled plugins dynamically inject their own capabilities (skills, memory, etc.) via hooks.
  */
 export const SYSTEM_DEFAULT = [
   '# System Prompt',
   '',
   'You are a personal assistant running on the Helmx microkernel.',
   '',
-  '1. Managed bash provides the `helmx` CLI and conversation identity `HELMX_CONVERSATION_ID`; invoke commands with `--current` and `--json`.',
-  '2. When `helmx-cli` is in the currently available skills directory, call `load_skill({ skillId: "helmx-cli" })` and read its references on demand before operating Helmx or answering host capability questions, verifying capabilities through command help and live state; skip this step if the skill is not in the currently available directory.',
-  '3. Use Markdown for normal replies; extended output formats such as interactive cards or reusable micro-apps follow the currently available skill directory for this turn: when a skill description declares such a capability, call `load_skill` first to load its guide before outputting, and fall back to normal Markdown without referencing nonexistent guides if missing from the directory. When generating files for users to view on Web, register artifacts via `write(..., artifact: true)`, `register_artifact({ path })`, or `helmx artifacts put <path> --current`, and render them directly in your reply using `[filename](artifact:<id>)` or `![image](artifact:<id>)`. When an external command produces files, use an absolute output path on the target node and verify the expected file exists and is registered before delivering or cleaning up the source worktree.',
+  'Use Markdown for normal replies. When generating files for users to view on Web, register artifacts via `write(..., artifact: true)` or `register_artifact({ path })`, and link them in your reply using `[filename](artifact:<id>)` or `![image](artifact:<id>)`.',
   '',
 ].join('\n')
 
@@ -88,8 +80,6 @@ export interface ProfileValidationOptions {
   prefix?: string
   /** Error sink; defaults to throwing a plain `Error` (HTTP boundary supplies `ValidationError`). */
   fail?: (message: string) => never
-  /** Whether `runtime.env` accepts an empty object `{}` (HTTP boundary allows it; service boundary requires non-empty). */
-  allowEmptyRuntimeEnv?: boolean
 }
 
 const defaultFail = (message: string): never => {
@@ -142,66 +132,20 @@ export function validateProfileStarters(raw: unknown, opts: ProfileValidationOpt
   return items.map((item, index) => validateProfileStarter(item, `${prefix}starters[${index}]`, fail))
 }
 
-/** Shared Profile runtime validation (used by both ProfileService and HTTP parseProfileBody). */
-export function validateProfileRuntime(raw: unknown, opts: ProfileValidationOptions = {}): ProfileRuntime {
-  const prefix = opts.prefix ?? ''
-  const fail = opts.fail ?? defaultFail
-  if (!isJsonObject(raw)) fail(`${prefix}runtime must be an object`)
-  const runtime = raw as Record<string, unknown>
-  const runtimeKeys = new Set(['kind', 'agent', 'args', 'nodeId', 'workspace', 'env'])
-  for (const key of Object.keys(runtime)) {
-    if (!runtimeKeys.has(key)) fail(`${prefix}runtime contains unknown field '${key}'; refusing to ignore execution target`)
-  }
-  const kind = runtime['kind']
-  const agent = runtime['agent']
-  // Zero plugin enum hardcoding in kernel: kind only validates external runtime identifier format (lowercase namespace
-  // identifier, e.g. 'herdr' / 'docker'); whether a plugin handles it is decided by the agent_spawn hook pipeline.
-  if (typeof kind !== 'string' || !PROFILE_RUNTIME_KIND_PATTERN.test(kind)) {
-    fail(`${prefix}runtime.kind must be an external runtime identifier (starts with a-z, may contain a-z 0-9 _ -, length 1..32)`)
-  }
-  if (typeof agent !== 'string' || agent === '') {
-    fail(`${prefix}runtime.agent cannot be empty`)
-  }
-  const args = runtime['args']
-  if (args !== undefined && (!Array.isArray(args) || args.some((a) => typeof a !== 'string'))) {
-    fail(`${prefix}runtime.args must be a string array`)
-  }
-  const nodeId = runtime['nodeId']
-  if (nodeId !== undefined && (typeof nodeId !== 'string' || nodeId === '')) {
-    fail(`${prefix}runtime.nodeId must be a non-empty string when present (target compute node ID)`)
-  }
-  const workspace = runtime['workspace']
-  if (workspace !== undefined) {
-    if (typeof workspace !== 'string' || workspace === '') {
-      fail(`${prefix}runtime.workspace must be a non-empty string when present (absolute path)`)
-    }
-    if (!isCrossPlatformAbsolutePath(workspace as string)) {
-      fail(`${prefix}runtime.workspace must be a cross-platform absolute path (POSIX /, Windows drive, or UNC), got '${workspace}'`)
-    }
-  }
-  const env = runtime['env']
-  if (env !== undefined) {
-    if (!isJsonObject(env) || (!opts.allowEmptyRuntimeEnv && Object.keys(env).length === 0)) {
-      fail(`${prefix}runtime.env must be a non-empty object when present`)
-    }
-    for (const [name, value] of Object.entries(env as Record<string, unknown>)) {
-      if (!isValidEnvName(name)) {
-        fail(`${prefix}runtime.env key '${name}' must be a valid environment variable name`)
-      }
-      if (typeof value !== 'string') {
-        fail(`${prefix}runtime.env['${name}'] must be a string (store secrets in credentials/secret stash, not in profile)`)
-      }
-    }
-  }
-  return {
-    kind: kind as string,
-    agent: agent as string,
-    ...(args !== undefined ? { args: [...(args as string[])] } : {}),
-    ...(nodeId !== undefined ? { nodeId: nodeId as string } : {}),
-    ...(workspace !== undefined ? { workspace: workspace as string } : {}),
-    ...(env !== undefined ? { env: { ...(env as Record<string, string>) } } : {}),
-  }
-}
+const ALLOWED_PROFILE_KEYS = new Set([
+  'id',
+  'name',
+  'model',
+  'thinkingLevel',
+  'nodeId',
+  'cwd',
+  'tags',
+  'skills',
+  'starters',
+  'managedByPlugin',
+  'restrictToCwd',
+  'system',
+])
 
 /** Validate Profile input at the boundary (shared by create/update); returns the normalized persistable shape. */
 export function validateProfileInput(input: unknown): Profile {
@@ -211,6 +155,11 @@ export function validateProfileInput(input: unknown): Profile {
     throw new Error(`illegal profile id: ${String(id)} (only allows a-z 0-9 and hyphen)`)
   }
   const prefix = `profile '${id}' `
+  for (const key of Object.keys(input)) {
+    if (!ALLOWED_PROFILE_KEYS.has(key)) {
+      throw new Error(`${prefix}contains unknown field '${key}'`)
+    }
+  }
   const profile: Profile = { id }
   const name = input['name']
   if (name !== undefined) {
@@ -281,23 +230,12 @@ export function validateProfileInput(input: unknown): Profile {
     }
     profile.managedByPlugin = managedByPlugin
   }
-  const humanSelectable = input['humanSelectable']
-  if (humanSelectable !== undefined) {
-    if (typeof humanSelectable !== 'boolean') {
-      throw new Error(`${prefix}humanSelectable must be a boolean when present (false for singleton system roles, defaults to true)`)
-    }
-    profile.humanSelectable = humanSelectable
-  }
   const restrictToCwd = input['restrictToCwd']
   if (restrictToCwd !== undefined) {
     if (typeof restrictToCwd !== 'boolean') {
       throw new Error(`${prefix}restrictToCwd must be a boolean when present (cwd guardrail for file tools, defaults to false)`)
     }
     profile.restrictToCwd = restrictToCwd
-  }
-  const runtime = input['runtime']
-  if (runtime !== undefined) {
-    profile.runtime = validateProfileRuntime(runtime, { prefix })
   }
   return profile
 }
@@ -760,23 +698,6 @@ export class SkillService {
         { skillId },
       )
     }
-  }
-
-  /** Resolve skill asset directory coordinates (for host port, e.g. plugin bootstrap file completion): always points to
-   * dataDir/skills/<id>, never resolving to an external source, preventing plugin startup side effects from modifying shared roots.
-   * This is not a path permission boundary for generic commands; does not mkdir, leaving directory creation to callers. */
-  async directory(id: string): Promise<string> {
-    try {
-      assertSkillId(id)
-    } catch (err) {
-      throw new HelmxError(
-        'validation_error',
-        `Invalid skill id: ${err instanceof Error ? err.message : String(err)}`,
-        400,
-        { skillId: id },
-      )
-    }
-    return join(this.dataDir, 'skills', id)
   }
 
   /** Resolve the real path of the skills root (throws if missing; never lenient). */

@@ -1,14 +1,10 @@
 import type {
   ActionManifest,
   ArtifactMetadata,
-  ArtifactPreviewerSpec,
   AskSpec,
   CommandSpec,
-  ComposerPillSpec,
   ComposerCompleterSpec,
-  ComposerWidgetSpec,
   MarkdownCodeBlockSpec,
-  UiActionSpec,
   ConversationDetail,
   ConversationEntry,
   ConversationLive,
@@ -20,14 +16,12 @@ import type {
   NotificationEvent,
   PluginSummary,
   PluginSlotContributionSpec,
-  ProfileRuntimeUiSpec,
   PluginUiContribution,
   Profile,
   ProviderConfig,
   ScreenSpec,
   SettingsPanelSpec,
   SidebarItemSpec,
-  SidebarSectionSpec,
   SkillSummary,
   TimelineRendererSpec,
   ToolViewSpec,
@@ -79,25 +73,16 @@ export interface QualifiedUiSpec<T> {
   spec: T
 }
 
-/** UI action contribution (groupUiContributions restores target semantics by surface). */
-export type QualifiedUiActionSpec = QualifiedUiSpec<UiActionSpec> & { target: UiActionSpec['target'] }
-
 export interface GroupedUiSpecs {
   sidebarItems: Array<QualifiedUiSpec<SidebarItemSpec>>
-  sidebarSections: Array<QualifiedUiSpec<SidebarSectionSpec>>
   screens: Array<QualifiedUiSpec<ScreenSpec>>
   timelineRenderers: Array<QualifiedUiSpec<TimelineRendererSpec>>
   markdownCodeBlocks: Array<QualifiedUiSpec<MarkdownCodeBlockSpec>>
   toolViews: Array<QualifiedUiSpec<ToolViewSpec>>
-  composerPills: Array<QualifiedUiSpec<ComposerPillSpec>>
-  composerWidgets: Array<QualifiedUiSpec<ComposerWidgetSpec>>
   composerCompleters: Array<QualifiedUiSpec<ComposerCompleterSpec>>
-  artifactPreviewers: Array<QualifiedUiSpec<ArtifactPreviewerSpec>>
   workbenchPanels: Array<QualifiedUiSpec<WorkbenchPanelSpec>>
   commands: Array<QualifiedUiSpec<CommandSpec>>
   settingsPanels: Array<QualifiedUiSpec<SettingsPanelSpec>>
-  profileRuntimes: Array<QualifiedUiSpec<ProfileRuntimeUiSpec>>
-  uiActions: QualifiedUiActionSpec[]
   pluginSlots: Array<QualifiedUiSpec<PluginSlotContributionSpec>>
 }
 
@@ -120,20 +105,14 @@ export function matchesUiScope(
 export function groupUiContributions(contributions: PluginUiContribution[]): GroupedUiSpecs {
   const grouped: GroupedUiSpecs = {
     sidebarItems: [],
-    sidebarSections: [],
     screens: [],
     timelineRenderers: [],
     markdownCodeBlocks: [],
     toolViews: [],
-    composerPills: [],
-    composerWidgets: [],
     composerCompleters: [],
-    artifactPreviewers: [],
     workbenchPanels: [],
     commands: [],
     settingsPanels: [],
-    profileRuntimes: [],
-    uiActions: [],
     pluginSlots: [],
   }
   for (const item of contributions) {
@@ -142,9 +121,6 @@ export function groupUiContributions(contributions: PluginUiContribution[]): Gro
     switch (known.surface) {
       case 'sidebar.item':
         grouped.sidebarItems.push({ pluginId: known.pluginId, spec: known.spec })
-        break
-      case 'sidebar.section':
-        grouped.sidebarSections.push({ pluginId: known.pluginId, spec: known.spec })
         break
       case 'screen':
         grouped.screens.push({ pluginId: known.pluginId, spec: known.spec })
@@ -158,17 +134,8 @@ export function groupUiContributions(contributions: PluginUiContribution[]): Gro
       case 'tool.view':
         grouped.toolViews.push({ pluginId: known.pluginId, spec: known.spec })
         break
-      case 'composer.pill':
-        grouped.composerPills.push({ pluginId: known.pluginId, spec: known.spec })
-        break
-      case 'composer.widget':
-        grouped.composerWidgets.push({ pluginId: known.pluginId, spec: known.spec })
-        break
       case 'composer.completer':
         grouped.composerCompleters.push({ pluginId: known.pluginId, spec: known.spec })
-        break
-      case 'artifact.previewer':
-        grouped.artifactPreviewers.push({ pluginId: known.pluginId, spec: known.spec })
         break
       case 'workbench.panel':
         grouped.workbenchPanels.push({ pluginId: known.pluginId, spec: known.spec })
@@ -176,18 +143,6 @@ export function groupUiContributions(contributions: PluginUiContribution[]): Gro
       case 'commandPalette':
       case 'command':
         grouped.commands.push({ pluginId: known.pluginId, spec: known.spec })
-        break
-      case 'profile.runtime':
-        grouped.profileRuntimes.push({ pluginId: known.pluginId, spec: known.spec })
-        break
-      case 'conversation.header.action':
-        grouped.uiActions.push({ pluginId: known.pluginId, spec: known.spec, target: 'conversation:header' })
-        break
-      case 'conversation.row.action':
-        grouped.uiActions.push({ pluginId: known.pluginId, spec: known.spec, target: 'conversation:row' })
-        break
-      case 'timeline.entry.action':
-        grouped.uiActions.push({ pluginId: known.pluginId, spec: known.spec, target: 'timeline:entry' })
         break
       case 'plugin.slot':
         grouped.pluginSlots.push({ pluginId: known.pluginId, spec: known.spec })
@@ -199,14 +154,8 @@ export function groupUiContributions(contributions: PluginUiContribution[]): Gro
   }
   const sidebarOrder = (spec: SidebarItemSpec): number => spec.order ?? 100
   grouped.sidebarItems.sort((a, b) => sidebarOrder(a.spec) - sidebarOrder(b.spec))
-  grouped.sidebarSections.sort((a, b) => (a.spec.order ?? 100) - (b.spec.order ?? 100))
   grouped.workbenchPanels.sort((a, b) => (a.spec.order ?? 100) - (b.spec.order ?? 100))
   grouped.settingsPanels.sort((a, b) => (a.spec.order ?? 100) - (b.spec.order ?? 100))
-  grouped.profileRuntimes.sort((a, b) => (a.spec.order ?? 100) - (b.spec.order ?? 100))
-  grouped.uiActions.sort((a, b) => {
-    if (a.target !== b.target) return a.target.localeCompare(b.target)
-    return (a.spec.order ?? 100) - (b.spec.order ?? 100)
-  })
   return grouped
 }
 
@@ -216,7 +165,7 @@ export function groupUiContributions(contributions: PluginUiContribution[]): Gro
  * - 'conversation:profile:assistant' -> finds the resident or latest conversation of that profileId
  * - 'conversation:tag:worker' -> finds the latest conversation carrying that tag
  * - 'agent:assistant' -> opens that agent's standby page (the conversation is created on first send)
- * - 'screen:builtin:herdr/overview' -> opens a full-screen plugin view
+ * - 'screen:builtin:triggers/manager' -> opens a full-screen plugin view
  * - 'screen:<pluginId>/<screenId>?k1=v1&k2=v2' -> opens a full-screen plugin view with route params
  *
  * Screen query strings are parsed strictly: invalid percent-encoding, empty

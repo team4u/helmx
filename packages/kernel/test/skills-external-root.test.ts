@@ -181,33 +181,6 @@ test('external: path traversal and symlink escapes inside skill are rejected (sa
   await assert.rejects(() => skills.readFile('another-link'), /symlink|out of bounds/)
 })
 
-test('external: directory() always points to writable dataDir, and invalid id throws HelmxError 400', { timeout: 60_000 }, async () => {
-  const dataDir = await freshDir('dir-data')
-  const ext = await freshDir('dir-ext')
-  await seedSkill(join(dataDir, 'skills'), 'data-skill')
-  await seedSkill(ext, 'ext-skill')
-  const skills = new SkillService(dataDir, { externalRoots: [ext] })
-
-  // 1. Existing dataDir entry still returns dataDir asset location
-  assert.equal(await skills.directory('data-skill'), join(dataDir, 'skills', 'data-skill'))
-  // 2. Even when present only in external root, returns dataDir write target: plugin callers
-  //    may write files and must never mutate shared read-only external directory
-  const externalShadow = join(dataDir, 'skills', 'ext-skill')
-  assert.equal(await skills.directory('ext-skill'), externalShadow)
-  // 3. Skill missing everywhere still returns default dataDir path without creating it
-  const absent = join(dataDir, 'skills', 'not-created')
-  assert.equal(await skills.directory('not-created'), absent)
-  // Invalid id -> HelmxError 400 (consistent with original skillDirectoryHelper behavior)
-  await assert.rejects(() => skills.directory('../evil'), (err: unknown) => {
-    assert.ok(err instanceof HelmxError)
-    assert.equal(err.code, 'validation_error')
-    assert.equal(err.status, 400)
-    return true
-  })
-  // directory() returns write target and never follows external root directories
-  assert.notEqual(await skills.directory('ext-skill'), join(ext, 'ext-skill'))
-})
-
 test('external: corrupt dataDir frontmatter still throws (strict semantics without fallback)', { timeout: 60_000 }, async () => {
   const dataDir = await freshDir('strict-data')
   await seedSkill(join(dataDir, 'skills'), 'broken', {

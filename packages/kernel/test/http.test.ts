@@ -29,7 +29,7 @@ import {
 } from '../src/services/index.js'
 import { PluginHost, type PluginHostBackend } from '../src/plugins/index.js'
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
-import { HelmxError, assertPluginManifestProjection, type ConversationDetail, type ConversationEntry, type ConversationInputResult, type ConversationPatch, type ConversationSummary, type AskSpec, type PluginManifestProjection, type PluginSummary, type HelmxPluginContext } from '@helmx/protocol'
+import { HelmxError, type ConversationDetail, type ConversationEntry, type ConversationInputResult, type ConversationPatch, type ConversationSummary, type AskSpec, type PluginManifestProjection, type PluginSummary, type HelmxPluginContext } from '@helmx/protocol'
 import { createHubHandler, startHub } from '../src/http/index.js'
 import type { EventHub, KernelRuntimeLike } from '../src/http/index.js'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
@@ -326,16 +326,14 @@ function hostApiForPluginHost(): PluginHostBackend {
     markConversationOwnership: () => {},
     createAsk: async () => ({ id: 'ask-1', status: 'answered', answers: {} }),
     cancelAsk: async () => {},
-    registerAskSeqResolver: () => () => {},
     onEvent: () => () => {},
     abortConversation: async () => {},
-    getConversationOwnership(): 'helmx' | 'bot' | 'human' {
+    getConversationOwnership(): 'helmx' | 'human' {
       return 'human'
     },
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
     execEnv: async () => { throw new HelmxError('unsupported', 'this fixture does not execute node commands', 501) },
-    withFileMutationQueue(): Promise<never> { throw new Error('this fixture does not support file mutation queue') },
     emitEvent: () => {},
   }
 }
@@ -1080,7 +1078,6 @@ test('profiles CRUD (real ProfileService + system online read/write; memory cont
     body: {
       id: 'researcher',
       name: 'Researcher',
-      runtime: { kind: 'herdr', agent: 'agy' },
       system: '# Researcher system prompt\nBe rigorous.',
     },
   })
@@ -1251,7 +1248,6 @@ test('profiles hosting protection: managedByPlugin blocks delete/tamper; POST ca
     id: 'hub-managed',
     name: 'managed hub',
     managedByPlugin: 'builtin:superagent',
-    humanSelectable: false,
   })
   // DELETE: managed Profile -> 403 (even without conversation binding; pure hosting protection)
   const del = await call(handler, 'DELETE', '/api/profiles/hub-managed')
@@ -1273,7 +1269,7 @@ test('profiles hosting protection: managedByPlugin blocks delete/tamper; POST ca
 
   // PUT preserving exact managedByPlugin value: allowed (keeps editing other fields intact)
   const putKeep = await call(handler, 'PUT', '/api/profiles/hub-managed', {
-    body: { name: 'managed hub renamed', managedByPlugin: 'builtin:superagent', humanSelectable: false },
+    body: { name: 'managed hub renamed', managedByPlugin: 'builtin:superagent' },
   })
   assert.equal(putKeep.status, 200)
   assert.equal(putKeep.body.name, 'managed hub renamed')
@@ -1306,45 +1302,17 @@ test('profiles hosting protection: managedByPlugin blocks delete/tamper; POST ca
   }
 })
 
-test('profiles runtime nodeId/workspace/env: valid round-trip persists; malformed shapes return 400', { timeout: 60_000 }, async () => {
+test('profiles reject removed runtime field at HTTP boundary with 400 validation_error', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
-  const ok = await call(handler, 'POST', '/api/profiles', {
+  const res = await call(handler, 'POST', '/api/profiles', {
     body: {
       id: 'ops-runner',
       name: 'Ops Runner',
-      runtime: {
-        kind: 'herdr',
-        agent: 'pi',
-        nodeId: 'ops-box',
-        workspace: '/srv/ops',
-        env: { HELMX_ENV_ROLE: 'worker', LANG: 'C' },
-      },
+      runtime: { kind: 'herdr', agent: 'pi' },
     },
   })
-  assert.equal(ok.status, 201)
-  const got = await call(handler, 'GET', '/api/profiles/ops-runner')
-  assert.deepEqual(got.body.runtime, {
-    kind: 'herdr',
-    agent: 'pi',
-    nodeId: 'ops-box',
-    workspace: '/srv/ops',
-    env: { HELMX_ENV_ROLE: 'worker', LANG: 'C' },
-  })
-
-  const cases: Array<{ runtime: unknown; why: string }> = [
-    { runtime: { kind: 'herdr', agent: 'pi', nodeId: '' }, why: 'empty nodeId string' },
-    { runtime: { kind: 'herdr', agent: 'pi', workspace: '' }, why: 'empty workspace string' },
-    { runtime: { kind: 'herdr', agent: 'pi', env: { K: 1 } }, why: 'non-string env value' },
-    { runtime: { kind: 'herdr', agent: 'pi', env: { '': 'v' } }, why: 'empty env key' },
-    { runtime: { kind: 'herdr', agent: 'pi', env: ['a'] }, why: 'array env' },
-    { runtime: { kind: 'herdr', agent: 'pi', bogus: 1 }, why: 'unknown runtime key' },
-    { runtime: { kind: 'herdr', agent: 'pi', nodeId: 42 }, why: 'non-string nodeId' },
-  ]
-  for (const c of cases) {
-    const res = await call(handler, 'POST', '/api/profiles', { body: { id: 'bad-profile', runtime: c.runtime } })
-    assert.equal(res.status, 400, `${c.why} should return 400`)
-    assert.equal(res.body.error.code, 'validation_error', c.why)
-  }
+  assert.equal(res.status, 400)
+  assert.equal(res.body.error.code, 'validation_error')
 })
 
 test('profiles DELETE protects default assistant profile (rejects via bound conversation or default lock, never 200)', { timeout: 60_000 }, async () => {
@@ -1823,7 +1791,7 @@ test('GET /api/plugins/:id/manifest returns validated read-only projection with 
   const { handler } = makeHandlers()
   const res = await call(handler, 'GET', '/api/plugins/builtin%3Atriggers/manifest')
   assert.equal(res.status, 200)
-  const manifest = assertPluginManifestProjection(res.body) as PluginManifestProjection
+  const manifest = res.body as PluginManifestProjection
   assert.equal(manifest.id, 'builtin:triggers')
   assert.equal(manifest.status, 'active')
   assert.deepEqual(manifest.actions.map((a) => a.id), ['echo'])
@@ -1978,7 +1946,8 @@ test('HTTP /api/actions enforces action visibility: GET omits internal; POST rej
 test('outbound JSON recursive redaction: catches quoted/multiline secrets without unredacting markers', { timeout: 60_000 }, async () => {
   const kernel = makeKernel()
   const trickySecret = 'sk-"quoted"\nline-break\ttab'
-  const placeholder = stash.put(ROOT_CONVERSATION_ID, 'TRICKY_KEY', trickySecret)
+  stash.addRedaction(trickySecret)
+  const placeholder = '[REDACTED]'
   // search result contains both raw secret and nested marker structures
   ;(kernel as { search: (q: string) => Promise<unknown[]> }).search = async () => [
     { conversationId: 1, snippet: `prefix ${trickySecret} middle [marker]${placeholder} end` },
@@ -1991,13 +1960,12 @@ test('outbound JSON recursive redaction: catches quoted/multiline secrets withou
   assert.ok(!res.text.includes('line-break\\ttab'.replace('\\\\', '\\')))
   // Markers keep redacted representation (never converted back to plaintext)
   assert.ok(res.text.includes(placeholder))
-  assert.ok(res.text.includes('[REDACTED:stash:'))
 })
 
 test('error.details also redacted', { timeout: 60_000 }, async () => {
   const kernel = makeKernel()
   const secret = 'err-detail-secret-123'
-  stash.put(ROOT_CONVERSATION_ID, 'ERR_KEY', secret)
+  stash.addRedaction(secret)
   ;(kernel as { search: (q: string) => Promise<unknown[]> }).search = async () => {
     throw new HelmxError('search_failed', 'search failed', 500, { trace: secret })
   }

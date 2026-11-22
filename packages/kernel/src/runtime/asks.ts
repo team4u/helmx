@@ -1,39 +1,25 @@
 /**
- * AskService: AskDoc lifecycle + CAS optimistic locking + secret stashing + external seq resolver registration.
+ * AskService: lean AskDoc lifecycle + client-vs-stored expectedStateSeq optimistic check.
  *
  * Key semantics (honesty first):
- * - createAsk performs full validation first (field types / unique names / valid secret env names / pre-allocated ID shape &
+ * - createAsk performs full validation first (field types / unique names / pre-allocated ID shape &
  *   uniqueness / conversation existence via validateConversation port), rejecting invalid input before writing to store;
  * - createAsk returns AskResult: all three terminal states (answered/cancelled/superseded) resolve
  *   (answers is {} on cancel/superseded, so cancellation never masquerades as user approval); only validation/IO/host failures reject;
  * - waiters register BEFORE any visible side effects (putAsk/publish): if an ask.upsert subscriber synchronously calls
- *   cancel/answer inside its callback, the promise still settles (previously registering after publish caused permanently hanging promises);
- *   on publish/write failure, waiters are reclaimed synchronously without leaving dangling promises or fake successes;
+ *   cancel/answer inside its callback, the promise still settles;
  * - true persistence boundary sits at the end of the store chain: create and settle await store.flushPublic() before resolving or
- *   publishing terminal events; if SQL fails (mirror written but flush failed), createAsk rejects explicitly with store_flush_failed—
- *   never returning a fake answered result. Any failure in terminal putAsk (including sync mirror rejection), flush, callback, or event
- *   publish extracts and settles all waiters with {failure} (no hangs, no fake terminal states) before rethrowing;
- *   cancelByConversation attempts to cancel all pending asks and rejects if any fails (never swallows IO errors);
- * - envName preserves declared casing (no toUpperCase folding); post-mapping collisions within a conversation are rejected explicitly;
- * - answer validation rejects unknown fields, non-strings, out-of-range select options, and invalid confirm values; empty secret values
- *   are not stashed (stashing empty plaintext would break redaction);
- * - CAS validates against persisted spec.expectedStateSeq: a mismatched seq from the client returns 409 (never silently overrides watermark),
- *   and any mismatch (including regression) against the target's current seq settles as superseded;
- *   a CAS watermark without a matching registered resolver yields ask_state_unavailable (never pretends verification passed);
- * - after restart, pending asks remain and emit diagnostic notifications; expired secret stash references are noted honestly
- *   (never pretending plaintext can still be recovered).
+ *   publishing terminal events; if SQL fails, createAsk rejects explicitly with store_flush_failed;
+ * - answer validation rejects unknown fields, non-strings, out-of-range select options, and invalid confirm values;
+ * - CAS validates client-supplied expectedStateSeq against persisted spec.expectedStateSeq (mismatched seq -> 409);
+ * - after restart, pending asks remain and emit diagnostic notifications.
  */
 
-import type { AskCreateSpec, AskFieldSpec, AskResult, AskSpec } from '@helmx/protocol'
-import { HelmxError, type MaybePromise, isValidEnvName } from '@helmx/protocol'
-import { validateSecretLifetime } from '../services/secret-stash.js'
+import type { AskCreateSpec, AskResult, AskSpec } from '@helmx/protocol'
+import { HelmxError } from '@helmx/protocol'
 import { randomUUID } from 'node:crypto'
 
 import type { HelmxStore } from './store.js'
-import type { SecretStash } from '../services/secret-stash.js'
-
-/** External target seq resolver (e.g., registered by herdr plugin): askId -> target current seq. May be async (real watermark requires remote IO). */
-type AskSeqResolver = (askId: string) => MaybePromise<number | undefined>
 
 interface AskSettled {
   askId: string
@@ -46,8 +32,6 @@ type WaiterOutcome = AskSettled | { failure: unknown }
 
 export class AskService {
   private readonly store: HelmxStore
-  private readonly stash: SecretStash
-  private readonly seqResolvers = new Set<AskSeqResolver>()
   private readonly waiters = new Map<string, Array<(outcome: WaiterOutcome) => void>>()
   private readonly onEvent: (type: string, payload: unknown) => void
   private readonly onConvPendingChanged: (conversationId: number) => void
@@ -56,22 +40,14 @@ export class AskService {
 
   constructor(options: {
     store: HelmxStore
-    stash: SecretStash
     onEvent: (type: string, payload: unknown) => void
     onConvPendingChanged: (conversationId: number) => void
     validateConversation?: (conversationId: number) => boolean | Promise<boolean>
   }) {
     this.store = options.store
-    this.stash = options.stash
     this.onEvent = options.onEvent
     this.onConvPendingChanged = options.onConvPendingChanged
     this.validateConversation = options.validateConversation
-  }
-
-  /** Register a CAS target seq resolver for external components such as herdr. */
-  registerSeqResolver(resolver: AskSeqResolver): () => void {
-    this.seqResolvers.add(resolver)
-    return () => this.seqResolvers.delete(resolver)
   }
 
   listAsks(status?: string): AskSpec[] {
@@ -92,11 +68,11 @@ export class AskService {
   }
 
   /**
-   * Create an AskDoc and wait for its terminal state. All three states resolve to AskResult (for answered,
-   * secret fields in answers hold stash markers; for cancelled/superseded, answers is {} so callers distinguish via
-   * status and cancellations never impersonate approval). Rejects only on validation/IO/host failures.
+   * Create an AskDoc and wait for its terminal state. All three states resolve to AskResult (for cancelled/superseded,
+   * answers is {} so callers distinguish via status and cancellations never impersonate approval). Rejects only on
+   * validation/IO/host failures.
    *
-   * spec.id may be pre-allocated (for external correlation and deduplication) and never overwrites an existing ID (including settled approvals).
+   * spec.id may be pre-allocated (for correlation and deduplication) and never overwrites an existing ID (including settled approvals).
    */
   async createAsk(spec: AskCreateSpec): Promise<AskResult> {
     validateAskSpec(spec)
@@ -128,8 +104,6 @@ export class AskService {
 
     // Waiters must register before any visible side effects: an ask.upsert subscriber might synchronously cancel/answer
     // inside its event callback (settle notifies synchronously), so late registration would hang the promise forever.
-    // push removes itself once: normal terminal states resolve, while failure (put/flush/publish error) rejects with
-    // the exact error—preserving caller diagnostics without unhandled rejections.
     let push!: (outcome: WaiterOutcome) => void
     const settled = new Promise<AskResult>((resolve, reject) => {
       let done = false
@@ -157,8 +131,7 @@ export class AskService {
       this.waiters.set(id, list)
     })
 
-    // Propagate async initialization failure so the createAsk promise rejects (no hangs, no fake success);
-    // settled is returned and observed directly without leaking an unhandled rejection.
+    // Propagate async initialization failure so the createAsk promise rejects (no hangs, no fake success).
     void (async () => {
       try {
         this.store.putAsk({
@@ -182,11 +155,7 @@ export class AskService {
     return settled
   }
 
-  /**
-   * Submit answers: CAS check -> value validation -> stash secrets -> settle.
-   * Resolvers may be async (real watermarks require remote IO): after waiting, re-read the row before any terminal
-   * side effect; concurrent settlement or edits during the await reject or re-evaluate against authoritative state.
-   */
+  /** Submit answers: watermark check -> value validation -> settle. */
   async answerAsk(
     id: string,
     answers: Record<string, string>,
@@ -198,7 +167,7 @@ export class AskService {
       throw new HelmxError('ask_already_settled', `AskDoc is already in ${row.status} state`, 409)
     }
 
-    // Client-supplied seq differs from persisted watermark -> 409 stale view (never silently overwrite to bypass CAS).
+    // Client-supplied seq differs from persisted watermark -> 409 stale view (never silently overwrite).
     if (expectedStateSeq !== undefined && row.expectedStateSeq !== undefined && expectedStateSeq !== row.expectedStateSeq) {
       throw new HelmxError(
         'ask_state_conflict',
@@ -208,44 +177,12 @@ export class AskService {
       )
     }
 
-    // CAS: check target's current seq against persisted spec.expectedStateSeq. Since the resolver may be async,
-    // an interleaving concurrency window exists—re-read the row on return and defer to current authoritative state.
-    let spec: AskSpec
-    if (row.expectedStateSeq !== undefined) {
-      const current = await this.resolveTargetSeq(id)
-      const fresh = this.recheckPendingRow(id, row)
-      if (fresh.expectedStateSeq !== undefined) {
-        if (current === undefined) {
-          // CAS watermark declared but no resolver matched: target state is unknowable, so never pretend validation passed.
-          throw new HelmxError(
-            'ask_state_unavailable',
-            `AskDoc ${id} declares expectedStateSeq=${fresh.expectedStateSeq}, but no registered seq resolver matched; cannot validate target state`,
-            409,
-            { askId: id, expectedStateSeq: fresh.expectedStateSeq },
-          )
-        }
-        // Any target seq mismatch (including regression) supersedes the ask: target state already diverged from creation.
-        if (current !== fresh.expectedStateSeq) {
-          return this.settle(id, 'superseded')
-        }
-      }
-      spec = JSON.parse(fresh.specJson) as AskSpec
-    } else {
-      // No CAS watermark and fully synchronous path with zero awaits: preserve original synchronous behavior.
-      spec = JSON.parse(row.specJson) as AskSpec
-    }
-
+    const spec = JSON.parse(row.specJson) as AskSpec
     validateAnswersAgainstFields(spec, answers)
 
-    // Stash secret values (skip empty values since empty plaintext breaks redaction); persistence and events store only markers.
-    // Pass secretLifetime verbatim so SecretStash handles TTL/turn scope uniformly (keeps redacting old values after injection stops).
     const stored: Record<string, string> = {}
     for (const field of spec.fields) {
-      const value = answers[field.name] ?? ''
-      stored[field.name] =
-        field.secret && value !== ''
-          ? this.stash.put(spec.conversationId, envNameOf(field), value, field.secretLifetime)
-          : value
+      stored[field.name] = answers[field.name] ?? ''
     }
     return this.settle(id, 'answered', { answers: stored })
   }
@@ -259,17 +196,14 @@ export class AskService {
     return this.settle(id, reason)
   }
 
-  /** Startup diagnostics: emit notifications for leftover pending asks (never silently swallow); note expired secret references honestly. */
+  /** Startup diagnostics: emit notifications for leftover pending asks (never silently swallow). */
   reportOrphans(): void {
     const pending = this.listAsks('pending')
     for (const ask of pending) {
-      const hasSecret = ask.fields.some((f) => f.secret)
       this.onEvent('notification', {
         level: 'warning',
         title: 'Pending AskDoc remaining after restart',
-        body:
-          `AskDoc ${ask.id} (conversation ${ask.conversationId}) did not settle before process restart and remains pending for manual action` +
-          (hasSecret ? '; note: stash references for its secret fields expired across the restart, so old markers cannot recover plaintext until answered again' : ''),
+        body: `AskDoc ${ask.id} (conversation ${ask.conversationId}) did not settle before process restart and remains pending for manual action`,
         conversationId: ask.conversationId,
       })
     }
@@ -282,46 +216,6 @@ export class AskService {
   async cancelByConversation(conversationId: number, reason: 'cancelled' | 'superseded' = 'cancelled'): Promise<void> {
     const pending = this.listPendingByConversation(conversationId)
     await Promise.all(pending.map((ask) => this.settle(ask.id, reason)))
-  }
-
-  /** Re-read row after awaiting an async resolver: deleted -> 404; no longer pending -> 409. */
-  private recheckPendingRow(id: string, stale: { expectedStateSeq?: number }): { expectedStateSeq?: number; specJson: string } {
-    const now = this.store.getAsk(id)
-    if (!now) throw new HelmxError('not_found', `AskDoc not found: ${id}`, 404)
-    if (now.status !== 'pending') {
-      throw new HelmxError('ask_already_settled', `AskDoc was already settled as ${now.status} while waiting for seq resolver`, 409, {
-        askId: id,
-        settledStatus: now.status,
-      })
-    }
-    if (stale.expectedStateSeq !== now.expectedStateSeq) {
-      throw new HelmxError(
-        'ask_state_conflict',
-        `persisted AskDoc watermark changed from ${stale.expectedStateSeq} to ${now.expectedStateSeq} while waiting for seq resolver; deferring to new authoritative state`,
-        409,
-        { askId: id, previousSeq: stale.expectedStateSeq, storedSeq: now.expectedStateSeq },
-      )
-    }
-    return now
-  }
-
-  private async resolveTargetSeq(askId: string): Promise<number | undefined> {
-    for (const resolver of this.seqResolvers) {
-      // Fail explicitly if resolver returns an invalid value (NaN/negative/fraction/unsafe/bad type): seq is authoritative
-      // CAS state and must never be truncated, defaulted to 0, or silently treated as unresolved.
-      const value = await resolver(askId)
-      if (value === undefined) continue
-      if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || !Number.isSafeInteger(value)) {
-        throw new HelmxError(
-          'ask_seq_resolver_invalid',
-          `seq resolver returned an invalid watermark for AskDoc ${askId} (must be a non-negative safe integer)`,
-          500,
-          { askId, resolvedType: value === null ? 'null' : typeof value },
-        )
-      }
-      return value
-    }
-    return undefined
   }
 
   private async settle(
@@ -360,18 +254,6 @@ export class AskService {
       throw error
     }
   }
-}
-
-/** Env var name for a secret field: preserve declared field.name; reject invalid names instead of silently normalizing. */
-function envNameOf(field: AskFieldSpec): string {
-  if (!isValidEnvName(field.name)) {
-    throw new HelmxError(
-      'validation_error',
-      `secret field name '${field.name}' is not a valid environment variable name (requires [A-Za-z_][A-Za-z0-9_]*; never auto-uppercases or merges)`,
-      400,
-    )
-  }
-  return field.name
 }
 
 /** Full boundary validation for AskCreateSpec (rejects every invalid shape before persisting). */
@@ -435,35 +317,6 @@ function validateAskSpec(spec: AskCreateSpec): void {
         throw new HelmxError('validation_error', `select field '${field.name}' requires non-empty options (each with a non-empty string value)`)
       }
     }
-    if (field.secret === true) {
-      // Validate env var name at declaration time (uses envName or name).
-      envNameOf(field)
-    }
-    // secretLifetime is only permitted on secret fields; reject bad shape/enum/cap at boundary (no silent fallback).
-    if (field.secretLifetime !== undefined) {
-      if (field.secret !== true) {
-        throw new HelmxError(
-          'validation_error',
-          `field '${field.name}' declares secretLifetime without secret: true (lifetime only constrains secret fields)`,
-          400,
-        )
-      }
-      validateSecretLifetime(field.secretLifetime, `secretLifetime of field '${field.name}'`)
-    }
-  }
-  // Explicitly reject secret env var collisions within a conversation (preserving casing keeps 'api_key' and 'API_KEY' distinct).
-  const secretEnvNames = new Map<string, string>()
-  for (const field of spec.fields) {
-    if (field.secret !== true) continue
-    const env = envNameOf(field)
-    const existing = secretEnvNames.get(env)
-    if (existing !== undefined) {
-      throw new HelmxError(
-        'validation_error',
-        `secret fields '${existing}' and '${field.name}' map to the same environment variable '${env}'; refusing merge/overwrite`,
-      )
-    }
-    secretEnvNames.set(env, field.name)
   }
 }
 

@@ -497,6 +497,10 @@ describe('EventHub.publish event shapes', { timeout: 60_000 }, () => {
       /conversation\.upsert/,
     )
     assert.throws(
+      () => hub.publish('conversation.upsert', { ...summary(1, 'x'), ownedBy: 'bot' as never }),
+      /conversation\.upsert/,
+    )
+    assert.throws(
       () => hub.publish('conversation.upsert', { ...summary(1, 'x'), parentConversationId: '7' as never }),
       /conversation\.upsert/,
     )
@@ -507,7 +511,7 @@ describe('EventHub.publish event shapes', { timeout: 60_000 }, () => {
     // Valid summary with optional fields passes unaffected.
     hub.publish('conversation.upsert', {
       ...summary(4, 'ok'),
-      ownedBy: 'bot',
+      ownedBy: 'helmx',
       parentConversationId: 1,
       doing: 'bash: pnpm test',
     })
@@ -549,33 +553,9 @@ describe('EventHub.publish event shapes', { timeout: 60_000 }, () => {
     )
     assert.equal(hub.seq, 1, 'invalid input must not advance seq')
     assert.deepEqual(persistedSeqs, [1])
-    hub.publish('ask.upsert', { ...baseAsk, expectedStateSeq: 7, ownerPluginId: 'builtin:herdr' })
+    hub.publish('ask.upsert', { ...baseAsk, expectedStateSeq: 7, ownerPluginId: 'builtin:workflow' })
     hub.publish('ask.upsert', { ...baseAsk, id: 'ask-2', status: 'answered' as never })
     assert.equal(hub.seq, 3)
-  })
-
-  it('ask.upsert validates secretLifetime consistently; invalid metadata never enters resume ring', { timeout: 60_000 }, () => {
-    const { hub, persistedSeqs } = makeFixture()
-    const ask = { id: 'lifetime-ask', conversationId: 1, title: 'secret', status: 'pending', createdAt: 1 }
-    for (const secretLifetime of [{ ttlMs: 0 }, { scope: 'unknown' }, { ttl: 100 }, new Date()]) {
-      assert.throws(() => hub.publish('ask.upsert', {
-        ...ask,
-        fields: [{ name: 'TOKEN', label: 'Token', type: 'text', secret: true, secretLifetime }],
-      }), /secretLifetime|non-JSON objects/)
-    }
-    assert.throws(() => hub.publish('ask.upsert', {
-      ...ask,
-      fields: [{ name: 'plain', label: 'Plain', type: 'text', secretLifetime: { scope: 'turn' } }],
-    }), /secretLifetime/)
-    assert.equal(hub.seq, 0)
-    assert.deepEqual(persistedSeqs, [])
-    let seen: unknown
-    const unsubscribe = hub.subscribe((frame) => { seen = frame.event })
-    const fields = [{ name: 'TOKEN', label: 'Token', type: 'text', secret: true, secretLifetime: { ttlMs: 100, scope: 'turn' } }]
-    hub.publish('ask.upsert', { ...ask, fields })
-    assert.deepEqual(seen, { type: 'ask.upsert', ask: { ...ask, fields } })
-    unsubscribe()
-    hub.close()
   })
 
   it('notification rejects invalid payloads without advancing seq (never coerces level/title)', { timeout: 60_000 }, () => {
@@ -698,8 +678,6 @@ describe('EventHub.publish event shapes', { timeout: 60_000 }, () => {
       cwd: '/root/code/helm',
       tags: ['team-a'],
       skills: ['git-commit'],
-      runtime: { kind: 'herdr', agent: 'agy' },
-      humanSelectable: true,
       restrictToCwd: false,
     }
     // Enveloped form (ProfileService publish form: {type, profile}).
@@ -715,7 +693,7 @@ describe('EventHub.publish event shapes', { timeout: 60_000 }, () => {
     assert.equal(e1.type, 'profile.changed')
     assert.equal(e1.profile.id, 'researcher')
     assert.equal(e1.profile.name, 'Researcher')
-    assert.equal(e1.profile.runtime?.kind, 'herdr', 'full Profile including runtime is preserved')
+    assert.deepEqual(e1.profile.skills, ['git-commit'], 'full Profile fields are preserved')
     assert.equal('removed' in e1, false, 'omits removed when unset')
     const e2 = frames[1]?.event
     assert.ok(e2 && 'profile' in e2)
@@ -743,10 +721,6 @@ describe('EventHub.publish event shapes', { timeout: 60_000 }, () => {
     )
     assert.throws(
       () => hub.publish('profile.changed', { profile: { id: 'x', skills: [7 as never] } }),
-      /profile\.changed/,
-    )
-    assert.throws(
-      () => hub.publish('profile.changed', { profile: { id: 'x', humanSelectable: 'yes' as never } }),
       /profile\.changed/,
     )
     assert.throws(

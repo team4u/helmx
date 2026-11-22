@@ -14,6 +14,7 @@ import type {
   ConversationInit,
   ConversationInput,
   ConversationListFilter,
+  ConversationOwnership,
   ConversationPatch,
   ConversationScope,
   ConversationSubmissionInfo,
@@ -27,8 +28,6 @@ import type { Profile, SkillSummary, ModelCatalog, ModelProvidersRefreshResult, 
 import type {
   EnvExecRequest,
   EnvExecResponse,
-  NodeHostEnv,
-  NodeHostEnvQuery,
   NodePathUsage,
   NodeTunnelTarget,
 } from './env-rpc.js'
@@ -48,21 +47,16 @@ import type {
   PluginActionVisibility,
   PluginConfigFieldSchema,
   PluginDocOptions,
-  PluginDoctorReport,
   PluginInUseItem,
-  PluginInstallResult,
   PluginPromptFields,
-  PluginRemoveResult,
   PluginSummary,
-  PluginToolResultEnvelope,
   PluginToolTextBlock,
-  PluginUpdateResult,
 } from './plugin-dto.js'
 
 export * from './plugin-dto.js'
 
 // ---------------------------------------------------------------------------
-// Hook 管道：8 个挂载点（tool_call / tool_result 分列）
+// Hook 管道：4 个挂载点（input / before_turn / agent_spawn / turn_settled）
 // ---------------------------------------------------------------------------
 
 /** input 钩子载荷。 */
@@ -82,27 +76,10 @@ export interface BeforeTurnHookPayload {
   messages: Array<Record<string, unknown>>
 }
 
-export interface ToolCallHookPayload {
-  conversationId: number
-  callId: string
-  toolName: string
-  input: Record<string, unknown>
-}
-
-export interface ToolResultHookPayload {
-  conversationId: number
-  callId: string
-  toolName: string
-  input: Record<string, unknown>
-  result: PluginToolResultEnvelope
-}
-
 /**
  * 子代理派生请求：agent_spawn 钩子载荷。
- * agentType 为普通 Profile ID 时内核默认走 pi-durable 原生子会话；
- * 为 'herdr:<kind>' 时由 builtin:herdr 拦截接管。
- * isolation/worktree 等执行环境要求由插件层经 next(request) 改写最终请求
- * 兑现（内核零 Git 语义，不按业务分支）。
+ * 内核默认走 pi-durable 原生子会话；isolation/worktree 等执行环境要求由插件层经
+ * next(request) 改写最终请求兑现（内核零 Git 语义，不按业务分支）。
  */
 export interface AgentSpawnRequest {
   parentConversationId: number
@@ -116,7 +93,7 @@ export interface AgentSpawnRequest {
   title?: string
   /** 编排宿主分配的稳定调用标识，用于续接与取消。 */
   agentId?: string
-  /** Profile ID 或 'herdr:<kind>' 外部运行时标识。 */
+  /** Profile ID（原生子会话）。 */
   agentType?: string
   model?: string
   effort?: string
@@ -128,8 +105,7 @@ export interface AgentSpawnRequest {
    */
   isolation?: string
   /**
-   * 执行环境确定后回传（原生子会话或外部运行时均适用）；
-   * 编排宿主据此把 conversationId / worktree 等元数据写回节点状态。
+   * 执行环境确定后回传；编排宿主据此把 conversationId / worktree 等元数据写回节点状态。
    */
   onResolved?: (info: AgentExecutionInfo) => void
   /** gate 命令由实际执行环境内恰好一次执行后回传结果；宿主引擎可免二次执行。 */
@@ -158,8 +134,7 @@ export interface AgentSpawnRequest {
   /**
    * 单次门禁命令超时毫秒数（可选，缺省由执行方默认 120_000，上限 600_000）。
    * 原生执行行的 runGate 消费：超时终止整个进程组并按门禁失败如实回传
-   * （AgentGateResult.exitCode=null、timedOut=true）；外部运行时（如 herdr）
-   * 按自身执行环境解释同一语义。
+   * （AgentGateResult.exitCode=null、timedOut=true）。
    */
   gateTimeoutMs?: number
   /** 续接既有子代理的标识。 */
@@ -172,49 +147,27 @@ export interface AgentSpawnRequest {
   requestId?: string
   /**
    * Optional cross-restart in-place reattach target (mutually exclusive with `resume` and
-   * `fork`): references a child conversation or external execution handle created before restart
-   * so the caller can wait for its in-flight turn to settle and run schema/gate verification.
+   * `fork`): references a native child conversation created before restart so the caller
+   * can wait for its in-flight turn to settle and run schema/gate verification.
    */
   reattach?: {
-    conversationId?: number
-    executionId?: string
+    conversationId: number
     effectiveCwd?: string
   }
   /**
    * 从父会话当前已完成上下文分叉派生原生子会话（可选，缺省 false；与 resume 互斥）。
-   * 仅原生 Profile 子会话支持；外部运行时显式拒绝（400 unsupported_runtime）。
    */
   fork?: boolean
   /** 随本次子代理派生传递的产物 ID 列表。 */
   attachments?: string[]
-  /**
-   * 显式授予外部运行时（如 herdr 窗格）注入的父会话机密环境变量名列表。
-   * 缺省不携带任何父会话机密（最小授权；受管 HELMX_* 不受影响）；逐名授予，
-   * 名字需在父会话 SecretStash 内现存，缺失在 spawn 边界显式拒绝。仅外部
-   * 运行时消费：原生子会话工具环境按子会话自身 stash 计算，无法承接本授予——
-   * agent_spawn 钩子未接管（无外部运行时）而非空 secretNames 到达原生执行行时
-   * 显式拒绝（unsupported_secret_grant），绝不假装子代理已取得机密；空数组
-   * 等同未授予。按次授予，resume 不自动沿用。
-   */
-  secretNames?: string[]
   /** 取消信号，由宿主注入。 */
   signal?: AbortSignal
 }
 
-/*
- * 外部执行 steer 委托契约（ExternalSteerRequest / ExternalSteerResult 与
- * 执行控制引用 AgentExecutionControls）属插件层业务，已迁至内置插件包共享
- * 契约模块（packages/plugins/src/contracts.ts；workflow 编排层
- * 与外部执行插件（如 builtin:herdr）共同消费）；protocol 不再出口。
- */
-
 /** 每个钩子的完整载荷类型映射。 */
 export interface HookPayloadMap {
-  trigger: ExternalTriggerEnvelope
   input: InputHookPayload
   before_turn: BeforeTurnHookPayload
-  tool_call: ToolCallHookPayload
-  tool_result: ToolResultHookPayload
   agent_spawn: AgentSpawnRequest
   turn_settled: TurnSettledPayload
 }
@@ -224,7 +177,7 @@ export interface HookPayloadMap {
  * - continue  放行
  * - transform 原地改写载荷交由后续处理器与内核消费
  * - handled   短路接管，终止默认行为（result 为接管产物）
- * - block     门控拦截（仅部分钩子允许，由 host 运行时校验）
+ * - block     门控拦截（仅 input 允许，由 host 运行时校验）
  */
 export type HookResult<TPayload, TResult = unknown> =
   | { action: 'continue' }
@@ -235,7 +188,7 @@ export type HookResult<TPayload, TResult = unknown> =
 /** 同步或异步处理器；返回 void 等价于 continue。
  *
  * agent_spawn 额外提供受控 continuation（第二参数 next）：
- * - 不调用 next 而返回 handled = 完全接管（既有语义不变，如 builtin:herdr）；
+ * - 不调用 next 而返回 handled = 完全接管；
  * - await next(finalRequest) = around 包裹：宿主恰好一次执行后续管道与默认
  *   原生执行行（finalRequest 为 transform 后的最终请求）；插件可在 next 前
  *   分配资源、在 next 后按成败收敛（finally 语义）；
@@ -249,11 +202,8 @@ export type HookHandler<K extends HookName> = K extends 'agent_spawn'
     ) => MaybePromise<HookResult<HookPayloadMap[K]> | void> | Promise<unknown>
   : (payload: HookPayloadMap[K]) => MaybePromise<HookResult<HookPayloadMap[K]> | void>
 
-export type TriggerHookHandler = HookHandler<'trigger'>
 export type InputHookHandler = HookHandler<'input'>
 export type BeforeTurnHookHandler = HookHandler<'before_turn'>
-export type ToolCallHookHandler = HookHandler<'tool_call'>
-export type ToolResultHookHandler = HookHandler<'tool_result'>
 export type AgentSpawnHookHandler = HookHandler<'agent_spawn'>
 export type TurnSettledHookHandler = HookHandler<'turn_settled'>
 
@@ -263,11 +213,8 @@ export interface HookOptions {
 }
 
 export interface PluginHookRegistry {
-  onTrigger(fn: TriggerHookHandler, opts?: HookOptions): void
   onInput(fn: InputHookHandler, opts?: HookOptions): void
   onBeforeTurn(fn: BeforeTurnHookHandler, opts?: HookOptions): void
-  onToolCall(fn: ToolCallHookHandler, opts?: HookOptions): void
-  onToolResult(fn: ToolResultHookHandler, opts?: HookOptions): void
   onAgentSpawn(fn: AgentSpawnHookHandler, opts?: HookOptions): void
   onTurnSettled(fn: TurnSettledHookHandler, opts?: HookOptions): void
 }
@@ -494,18 +441,12 @@ export interface HelmxHostProfilesPort {
   directory(id: string): Promise<string>
 }
 
-/** 插件自举的技能包资产（SKILL.md + references 子文件内容；与 kernel services 同形）。 */
 /** 插件可用的技能数据端口（读 + 受管自举）。 */
 export interface HelmxHostSkillsPort {
   /** 全部技能摘要（含 references 相对路径）。 */
   list(): Promise<SkillSummary[]>
   /** 读取技能内相对路径文件（SKILL.md / references/...）；穿越/绝对路径/软链均拒绝。 */
   readFile(skillId: string, path?: string): Promise<string>
-  /**
-   * 技能目录的磁盘绝对路径（仅 id 边界校验 + 坐标返回；目录可能尚不存在，
-   * 宿主不 mkdir；调用方自管逐文件幂等补齐，不覆盖用户资产）。
-   */
-  directory(id: string): Promise<string>
   /**
    * 受管自举技能包：以声明版本为准逐文件覆盖，缺失补齐；登记受管后常规
    * 写入口统一 403。边界非法（id/相对路径）整体拒绝，不产生部分文件。
@@ -529,7 +470,7 @@ export interface HelmxHostSecretsPort {
   addRedaction(value: string): () => void
 }
 
-/** 节点只读状态与元信息端口（经内核 EnvFabric 查询在线状态、可达 Hub URL 与可信平台；跨节点通信统一走 openTunnel + getNodeHostEnv）。 */
+/** 节点只读状态与元信息端口（经内核 EnvFabric 查询在线状态、可达 Hub URL 与可信平台）。 */
 export interface HelmxHostNodeIpcPort {
   /** 节点是否在线（'local' 恒 true）。 */
   isOnline(nodeId: string): boolean
@@ -540,74 +481,14 @@ export interface HelmxHostNodeIpcPort {
 }
 
 /**
- * 节点本机 HTTP fetch 端口（EnvFabric.nodeFetch 的插件面）：local 返回
- * globalThis.fetch；远端支持任意 host 与 http/https，经节点透传隧道转发，
- * 绝不回退 local。每次调用的返回函数均已纳入插件在途任务跟踪与周期
- * 守卫（新流在停用/停止窗口拒绝）。
- */
-export interface HelmxHostNodeFetchPort {
-  /** 取目标节点的 fetch（可直接调用：fetch(input, init)）。 */
-  (nodeId: string): typeof fetch
-}
-
-/**
  * 节点透传隧道端口（EnvFabric.openTunnel 的插件面）：建立到目标节点
- * TCP `host:port` 或受控本地端点 `socketPath`（POSIX UDS `/...` 或本机
- * Windows Named Pipe `\\.\pipe\...`）的任意 Duplex 双工流。生命周期受插件
- * 在途任务跟踪：建立计入在途任务；返回的 Duplex 关闭（close/error/destroy）
- * 即结束任务——插件停用预检可见活动隧道，停用/宿主 dispose 时统一销毁不泄漏。
+ * TCP `host:port` 的任意 Duplex 双工流。生命周期受插件在途任务跟踪：
+ * 建立计入在途任务；返回的 Duplex 关闭（close/error/destroy）即结束任务——
+ * 插件停用预检可见活动隧道，停用/宿主 dispose 时统一销毁不泄漏。
  */
 export interface HelmxHostOpenTunnelPort {
-  /** 建立 TCP 或受控 socketPath 透传隧道（TCP 模式 host 缺省 127.0.0.1，由目标节点解析连接）。 */
+  /** 建立 TCP 透传隧道（host 缺省 127.0.0.1，由目标节点解析连接）。 */
   (nodeId: string, target: NodeTunnelTarget, signal?: AbortSignal): Promise<Duplex>
-}
-
-/**
- * 宿主后端的插件治理端口（PluginHostBackend.plugins 的形状；类型层上拆窄：
- * 只读入口复用 HelmxHostApi 既有 listPlugins/listUi 成员；写面聚合在
- * doctorPlugin/installPlugin/updatePlugin/removePlugin/enablePlugin/disablePlugin
- * 六个与 PluginHost 公共方法同语义的后端成员）。宿主可整体不接线
- * （undefined：轻量测试宿主），接线后修改操作沿用宿主现有生命周期队列、
- * 在途任务跟踪与 locked/在途保护，不引入第二套包管理器。
- */
-export interface BackendPluginsLifecyclePort {
-  /** 四阶段静态自检（目录绝对路径或已注册外部插件 id 择一；与 POST /api/plugins/doctor 同链）。 */
-  doctorPlugin(target: { dir?: string; id?: string }): Promise<PluginDoctorReport>
-  /** 受管安装（npm/git/local source；默认 disabled，enable: true 安装后启用）。 */
-  installPlugin(source: string, options?: { enable?: boolean }): Promise<PluginInstallResult>
-  /** 受管更新（重取 source + doctor 预检 + 原子热重载，保持启用状态）。 */
-  updatePlugin(pluginId: string): Promise<PluginUpdateResult>
-  /** 受管卸载（内置 403 / 在途任务 409 / 持久占用非 force 409）。 */
-  removePlugin(pluginId: string): Promise<PluginRemoveResult>
-  /** 启用已注册插件；返回启用后清单。 */
-  enablePlugin(pluginId: string): Promise<PluginSummary>
-  /** 停用已注册插件（locked 403 / 在途任务 409 / 持久占用非 force 409）；返回停用后清单。 */
-  disablePlugin(pluginId: string, options?: { force?: boolean }): Promise<PluginSummary>
-}
-
-/**
- * 插件可用的宿主插件治理端口（ctx.host.plugins）：读面与 ctx.host.listPlugins/
- * listUi 同源；写面为受管包生命周期。所有异步修改操作计入调用方插件的
- * 在途任务跟踪（停用预检可见）；结构化结果出站前经宿主统一脱敏，
- * 不把机密或源码内容无界带出。
- */
-export interface HelmxHostPluginsPort {
-  /** 当前全部已注册插件摘要（与 listPlugins() 同源；只读快照）。 */
-  list(): PluginSummary[]
-  /** 当前全部已启用插件的 UI 贡献清单（与 listUi() 同源；只读快照）。 */
-  listUi(): PluginUiContribution[]
-  /** 静态自检：dir 为目录绝对路径，或 id 指向已注册外部插件（择一）；register 通过时报告携带 screens（真实 ctx.ui.screen 声明的视图 id）。 */
-  doctor(target: { dir?: string; id?: string }): Promise<PluginDoctorReport>
-  /** 受管安装外部插件包；enable: true 时安装后立即启用。 */
-  install(source: string, options?: { enable?: boolean }): Promise<PluginInstallResult>
-  /** 受管更新（保持启用状态与已有 ctx.doc 数据）。 */
-  update(pluginId: string): Promise<PluginUpdateResult>
-  /** 受管卸载（内置插件 403，在途任务 409）。 */
-  remove(pluginId: string): Promise<PluginRemoveResult>
-  /** 启用已注册插件；返回启用后清单。 */
-  enable(pluginId: string): Promise<PluginSummary>
-  /** 停用已注册插件（locked 403，在途任务 409，持久占用非 force 409）。 */
-  disable(pluginId: string, options?: { force?: boolean }): Promise<PluginSummary>
 }
 
 /** Registration handle returned by `ctx.host.registerModelTiers`. */
@@ -628,38 +509,14 @@ export interface HelmxHostApi {
   readonly skills: HelmxHostSkillsPort
   /** 插件私有 secrets（pluginId 命名空间；不进文档/事件/模型上下文）。 */
   readonly secrets: HelmxHostSecretsPort
-  /** 节点在线状态与元信息查询端口（EnvFabric；跨节点数据/控制流走 openTunnel + getNodeHostEnv）。 */
+  /** 节点在线状态与元信息查询端口（EnvFabric）。 */
   readonly nodeIpc: HelmxHostNodeIpcPort
   /**
-   * 目标节点只读主机环境发现（platform / homeDir / tempDir / 标准目录与显式请求的非敏感 env 键）：
-   * 用于按目标节点视角推导 UDS / Windows Named Pipe 等本地端点，绝不回退 Hub 本机环境；
-   * 后端未接线时显式拒绝 501 `node_host_env_not_supported`。
-   */
-  getNodeHostEnv(nodeId: string, query?: NodeHostEnvQuery, signal?: AbortSignal): Promise<NodeHostEnv>
-  /**
-   * 节点 HTTP(S) fetch 适配层（基于 openTunnel；任意 host 的 http/https，
-   * 模型/插件经此访问目标节点视角的服务）。未接线时调用显式报 501，
-   * 绝不回退 local。
-   */
-  readonly nodeFetch: HelmxHostNodeFetchPort
-  /**
-   * 任意 TCP / 受控 socketPath 透传隧道（进程内调用获得原始 Duplex）：local 进程内直连；
+   * 任意 TCP 透传隧道（进程内调用获得原始 Duplex）：local 进程内直连；
    * 远端复用既有节点隧道传输。未接线时调用显式报 501，绝不回退 local。
    * 活动隧道纳入插件在途任务跟踪（停用预检可见；停用/dispose 不泄漏）。
    */
   readonly openTunnel: HelmxHostOpenTunnelPort
-  /**
-   * 宿主插件治理端口（受管包生命周期；供外部或编排插件调用）。
-   * 后端未接线包管理器时 doctor/install/update/remove 显式 501；
-   * 自指 update/remove/disable 一律 409 拒绝（防生命周期队列自等待）。
-   */
-  readonly plugins: HelmxHostPluginsPort
-  /**
-   * 更新本插件自身配置（不可改其他插件）：与 HTTP PUT /api/plugins/:id/config
-   * 同一校验与持久化链（configSchema 边界校验；secret 字段落 credentials.json）。
-   * 值为增量合并（未提供字段保留现值）；未知字段拒绝。
-   */
-  setConfig(patch: Record<string, unknown>): Promise<void>
   dispatchTrigger(event: ExternalTriggerEnvelope): Promise<void>
   submitInput(
     conversationId: number,
@@ -737,66 +594,12 @@ export interface HelmxHostApi {
    * 第一个不可逆动作（SDK abort 调用）前同步复核会话存在性、归属（严禁
    * human）与可选 CAS 水位；复核失败抛 404 not_found / 409 ownership_conflict
    * / 409 state_seq_conflict 且绝不发起中止。
-   *
-   * 相位自适应（通用取消机制，无专用恢复方法）：
-   * - SDK 调度器已运行：SDK Conversation.abort + 等待会话空闲（既有语义）。
-   * - 调度器仍处 paused（全局服务 prepare 屏障、resume 之前）：对会话名下
-   *   的全部存活 SDK 任务只提交持久 abort 标记（harness.abortTask），不唤醒
-   *   调度器、不等待结算——恢复编排（如 workflow 的 prepareRecovery）据此
-   *   在调度器启动前持久取消自己登记的中断子会话，且逐个不可逆动作前同步
-   *   复核归属（human 一律拒绝）。内核绝不批量取消任意会话：目标会话永远
-   *   由调用方逐个显式给出。
    */
   abortConversationGuarded(id: number, guard: GuardedMutationExpectation): Promise<void>
-  /**
-   * 自动化 guarded 上下文重置（Watchdog 红线内核执行层）：在会话串行域内、
-   * 于第一个不可逆动作（SDK reset 调用）前同步复核会话存在性、归属（严禁
-   * human）与可选 CAS 水位；复核失败抛 404 not_found / 409 ownership_conflict
-   * / 409 state_seq_conflict 且绝不发起重置。handoff 经内核统一脱敏后成为
-   * 重置后首条用户消息；成功后推进 stateChangeSeq、触发上下文用量重算并
-   * 广播 conversation.upsert（与 POST /api/conversations/:id/reset 同源）。
-   * guard 缺省时仅强制 human 红线（与 submitInputGuarded 同口径）。
-   */
-  resetConversationGuarded(
-    id: number,
-    opts?: { handoff?: string },
-    guard?: GuardedMutationExpectation,
-  ): Promise<ConversationSummary>
-  /**
-   * 自动化 guarded 手动压缩（Watchdog 红线内核执行层）：入队后台压缩任务前
-   * 在会话串行域内同步复核会话存在性、归属（严禁 human）与可选 CAS 水位，
-   * 复核失败绝不入队；instructions 经内核统一脱敏。返回后台任务 ID 与更新
-   * 后的会话摘要——压缩是异步后台任务，完成时序经 conversation.upsert /
-   * 上下文用量事件对账（与 POST /api/conversations/:id/compact 同源）。
-   * guard 缺省时仅强制 human 红线（与 submitInputGuarded 同口径）。
-   */
-  compactConversationGuarded(
-    id: number,
-    opts?: { instructions?: string },
-    guard?: GuardedMutationExpectation,
-  ): Promise<{ taskId: number; conversation: ConversationSummary }>
   /** 会话归属权现读（Watchdog 红线判定唯一可信来源；未标记一律 human）。 */
-  getConversationOwnership(id: number): 'helmx' | 'bot' | 'human'
+  getConversationOwnership(id: number): ConversationOwnership
   /** 列出会话产物元数据（本会话全部；明文内容不进返回值）。 */
   listArtifacts(conversationId: number): Promise<ArtifactMetadata[]>
-  /**
-   * 以内存字节写入会话产物（kind 'upload'）：与 HTTP 上传同一条服务链
-   * （文件名边界校验、15 MiB 上限、文本 MIME 过 SecretStash 脱敏）；目标会话
-   * 不存在抛 404。返回元数据供 submitInput / submitInputGuarded 的
-   * attachments 挂载（产物须属于目标会话或其祖先链）。
-   */
-  createArtifact(
-    conversationId: number,
-    input: { name: string; bytes: Uint8Array; mimeType?: string },
-  ): Promise<ArtifactMetadata>
-  /**
-   * 授权读取单个产物（存在 + 属于会话或父链；越权 403、不存在 404）：
-   * 返回轻量元数据 + 绝对路径（内容读取由调用方在目标节点执行）。
-   */
-  getArtifact(
-    artifactId: string,
-    conversationId: number,
-  ): Promise<{ id: string; name: string; mimeType: string; size: number; absPath: string }>
   /**
    * 全局文本脱敏（SecretStash 明文 -> marker）：诊断/日志出站前、以及插件
    * 持久化自身元数据（如含路径/分支的工作树记录）前统一过此脱敏，防已
@@ -834,25 +637,13 @@ export interface HelmxHostApi {
   /** 原子写文件（临时文件 + rename；通用机制，失败显式拒绝）。 */
   atomicWriteFile(path: string, content: string): Promise<void>
   /**
-   * 外部 spawn 环境变量（受管 HELMX_* 回连集合；绝不携带宿主 process.env）。
-   * 缺省不携带任何父会话 SecretStash 机密（外部窗格最小授权）；仅当显式传
-   * secretNames 时逐名注入（需在父会话 stash 内现存，缺失显式抛错）。
-   * nodeId 为实际选定目标节点。
-   */
-  buildSpawnEnv(
-    conversationId: number,
-    cwd: string,
-    nodeId: string,
-    options?: { secretNames?: string[] },
-  ): Record<string, string>
-  /**
    * 声明插件对本会话的管理权（如 builtin:swarm 的活跃成员会话）：
    * 受管期间会话删除保护（409 conversation_managed_by_plugin），
    * 返回释放函数；插件停用/回滚时宿主自动释放。
    */
   manageConversation(id: number): () => void
   /** 标记会话归属权；'human' 会话严禁自动按键/中止（Watchdog 红线）。 */
-  markConversationOwnership(id: number, owner: 'helmx' | 'bot' | 'human'): void
+  markConversationOwnership(id: number, owner: ConversationOwnership): void
   /** 派生或续接子代理（经过 agent_spawn Hook 管道 + 原生子会话底座）。 */
   spawnAgent(request: AgentSpawnRequest): Promise<unknown>
   /** 在目标节点/会话工作目录执行验证门禁命令。 */
@@ -868,7 +659,7 @@ export interface HelmxHostApi {
     },
   ): Promise<{ ok: boolean; output: string; exitCode?: number | null; timedOut?: boolean }>
   /**
-   * 经内核 EnvFabric 跨节点执行命令（复用 local / 远端 @helmx/node 通道、SecretStash 注入与脱敏）。
+   * 经内核 EnvFabric 跨节点执行命令（复用 local / 远端 @helmx/node 通道与脱敏）。
    * 靶点解析优先级：显式 nodeId/cwd > conversationId 绑定 (nodeId, cwd) > 'local'/Hub cwd。
    * 远端节点离线时显式抛 409 node_offline，绝不静默回退本机。
    */
@@ -876,19 +667,6 @@ export interface HelmxHostApi {
     req: Omit<EnvExecRequest, 'stream'>,
     opts?: { signal?: AbortSignal },
   ): Promise<EnvExecResponse>
-  /**
-   * 文件互斥队列（宿主节点通道）：在目标节点 (nodeId, cwd) 内按 canonical 路径
-   * 串行执行 fn（读-改-写窗口整体持锁），与内核 write/edit 工具共享同一进程级
-   * 队列——同一文件不丢更新；其他文件、其他节点互不等待。锁语义与 pi-durable
-   * 的 withFileMutationQueue 对齐：不是对 bash 或其他进程的锁；不可重入
-   * （fn 内嵌套对同一文件入队立即显式报错，绝不静默挂死）。
-   * 必选能力：后端必须实现（测试 fixture 可显式 throw 不支持）。
-   */
-  withFileMutationQueue<T>(
-    target: { nodeId: string; cwd: string; path: string },
-    fn: () => Promise<T>,
-    opts?: { signal?: AbortSignal },
-  ): Promise<T>
   /**
    * 动作前置校验（与 invokeAction 同源的 prepare/preflight）：校验插件状态、
    * 会话 scope 与 inputSchema（无 handler 副作用），并返回定义端 idempotent。
@@ -903,23 +681,7 @@ export interface HelmxHostApi {
   ): { idempotent: boolean }
   /**
    * 通用 spawn 靶点解析（机制，零业务语义）：按与原生执行行同一权威链
-   * 解析源目录与目标节点，并返回父会话 cwd 供插件层在分配资源前解析源目录：
-   * - 节点链：显式 `requestNodeId` 最高优先（显式 `'local'` 可覆盖远端父会话或 Profile）；
-   *   未指定时，普通/跨角色 fork 为 `显式 profile.nodeId > 父会话绑定节点 > 'local'`，
-   *   同角色 fork（fork=true 且使用父会话同一 Profile）为 `父会话绑定节点 > profile.nodeId > 'local'`；
-   * - 跨节点 cwd 隔离：`profile.cwd` 仅在 `profile.nodeId === undefined || profile.nodeId === nodeId` 时可用，
-   *   父会话 `cwd` 仅在 `(parent.nodeId ?? 'local') === nodeId` 时可用，`defaultCwd` 仅用于 `'local'`；
-   *   目标为远端节点且无可用 `cwd` 时显式抛 400 validation_error。
-   * - 链实现由内核唯一提取函数提供（原生子会话派生与本端口同源），插件不得自行复制规则。
-   * 返回值是内核权威事实；节点离线校验不在本端口（由 execEnv/gate 各自执行）。
-   *
-   * 为何按需求值而非预归一化进请求字段：agent_spawn around 链上任一前置
-   * 插件可经 next(finalRequest) 改写 cwd/nodeId/agentType，continuation（如
-   * worktree 预分配）必须按改写后的当前请求解析靶点，管道入口快照必然
-   * 过期；原生执行行在链收敛后重新走同一权威链（cwd 可能已被改写为隔离
-   * 树路径）。且 request.cwd === undefined 承载「走继承链」的显式语义
-   * （resume 严格沿用原子会话 cwd，绝不重算），预填即破坏。故本端口是
-   * 同一纯函数在链上任意时点的按需求值，不缓存、不驻留请求字段。
+   * 解析源目录与目标节点，并返回父会话 cwd 供插件层在分配资源前解析源目录。
    */
   resolveSpawnTarget(input: {
     parentConversationId: number
@@ -939,14 +701,7 @@ export interface HelmxHostApi {
    */
   listActiveSpawnExecutions(): AgentExecutionInfo[]
   /**
-   * 目标节点进程占用快照（删除前诊断面，通用机制、零业务语义）：目标节点
-   * 上 cwd 或打开 fd 引用目标绝对路径（含子目录，路径分量边界匹配）的
-   * 进程清单（PID/进程名/引用路径；绝不读 cmdline/environ）。快照不完整
-   * （权限不足/扫描上限）时 complete=false，调用方必须 fail-closed，绝不
-   * 当作 0 占用。节点离线 / 守护进程版本不支持 / 平台不支持均显式 reject
-   * （HelmxError），绝不静默回退本机扫描。这是诊断快照而非跨进程互斥：
-   * 扫描之后新启动的进程不在保护范围；内核也绝不基于此自动终止任何进程。
-   * Linux /proc 扫描实现在 @helmx/env-io（kernel 与 @helmx/node 共享同一实现）。
+   * 目标节点进程占用快照（删除前诊断面，通用机制、零业务语义）。
    */
   inspectNodePathUsage(input: {
     nodeId: string
@@ -964,7 +719,7 @@ export interface HelmxHostApi {
   listActions(): ActionManifest[]
   /** 当前插件清单（含启停状态；只读快照）。 */
   listPlugins(): PluginSummary[]
-  /** 当前全部 UI 贡献清单（仅已启用插件；只读快照，供 Profile 目录 runtime 声明事实）。 */
+  /** 当前全部 UI 贡献清单（仅已启用插件；只读快照）。 */
   listUi(): PluginUiContribution[]
   /**
    * 刷新动态模型目录（与 POST /api/models/refresh 同链路；options 现有形状）。
@@ -990,12 +745,10 @@ export interface HelmxHostApi {
   ): ModelTierRegistration
   /**
    * 创建 AskDoc 并等待终态：正常三态（answered/cancelled/superseded）均 resolve，
-   * 只有验证/I/O/宿主失败才 reject。secret 字段答案为 stash 引用。
+   * 只有验证/I/O/宿主失败才 reject。
    */
   createAsk(spec: AskCreateSpec): Promise<AskResult>
   cancelAsk(askId: string, reason?: 'cancelled' | 'superseded'): Promise<void>
-  /** 注册 askId -> 当前 stateChangeSeq 解析器（AskDoc CAS 乐观锁用，可为异步——真实水位需远端 IO）；返回注销函数。 */
-  registerAskSeqResolver(resolver: (askId: string) => MaybePromise<number | undefined>): () => void
   /** 订阅宿主通用事件（真实 EventHub 广播事件与 broadcast:false 进程内事件；
    * 含 'conversation.entry' 等 core 事件，payload 为 HelmxEvent 形状）；
    * 插件停用时自动解除。监听器可异步，发布方会等待其完成。 */

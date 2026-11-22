@@ -192,12 +192,6 @@ export function isValidAttachments(value: unknown): value is string[] {
   return value.every((id) => typeof id === 'string' && id.trim() !== '')
 }
 
-/** secretNames isomorphic boundary check: a non-empty string array (env-var name shape is uniformly validated at the kernel spawn boundary). */
-export function isValidSecretNames(value: unknown): value is string[] {
-  if (!Array.isArray(value)) return false
-  return value.every((name) => typeof name === 'string' && name.trim() !== '')
-}
-
 /**
  * The resume registration key of the scopeId namespace (root scope = 0; an omitted scopeId counts as root,
  * consistent with the legacy bare-label semantics -- calls without a scope all land in the root namespace).

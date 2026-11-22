@@ -204,7 +204,7 @@ test('spawnAgent reattach strong boundary validation: mutual exclusion, invalid 
         parentConversationId: 1,
         prompt: 'empty object',
         requestId: 'req-empty',
-        reattach: {},
+        reattach: {} as never,
       }),
     (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
   )
@@ -246,16 +246,16 @@ test('spawnAgent reattach strong boundary validation: mutual exclusion, invalid 
     )
   }
 
-  // 4) executionId-only reaching native runner (no external runtime plugin claimed it): explicit unsupported_runtime
+  // 4) unknown reattach key (executionId removed) rejects with validation_error
   await assert.rejects(
     () =>
       runtime.spawnAgent({
         parentConversationId: 1,
         prompt: 'external reattach',
         requestId: 'req-exec-only',
-        reattach: { executionId: 'pane-1' },
+        reattach: { executionId: 'pane-1' } as never,
       }),
-    (err: unknown) => err instanceof HelmxError && err.code === 'unsupported_runtime' && err.status === 400,
+    (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
   )
 
   assert.equal(runtime.listConversations().length, convCountBefore, 'rejected paths must never create conversations')

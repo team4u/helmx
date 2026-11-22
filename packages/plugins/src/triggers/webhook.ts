@@ -31,7 +31,6 @@ import {
   MAX_DESCRIPTION,
   TRIGGERS_PLUGIN_ID,
   assertDescription,
-  assertThreadKey,
   assertTriggerId,
   assertWebhookSecret,
   assertWebhooksDoc,
@@ -94,7 +93,6 @@ interface CreateWebhookInput {
   secret: string
   targetConversationId?: number
   targetProfileId?: string
-  threadKey?: string
 }
 
 /**
@@ -246,7 +244,6 @@ export function registerWebhook(
     if (input.targetProfileId !== undefined && (typeof input.targetProfileId !== 'string' || input.targetProfileId.length === 0)) {
       throw new HelmxError('validation_error', 'targetProfileId must be a non-empty string', 400, {})
     }
-    const threadKey = input.threadKey === undefined ? undefined : assertThreadKey(input.threadKey)
     // targetProfileId is existence-checked at creation (fail-fast: no dead endpoint pointing at a
     // nonexistent role; delivery still live-checks, guarding against post-creation Profile deletion).
     if (input.targetProfileId !== undefined) {
@@ -266,7 +263,6 @@ export function registerWebhook(
       ...(description !== undefined ? { description } : {}),
       ...(input.targetConversationId !== undefined ? { targetConversationId: input.targetConversationId } : {}),
       ...(input.targetProfileId !== undefined ? { targetProfileId: input.targetProfileId } : {}),
-      ...(threadKey !== undefined ? { threadKey } : {}),
       createdAt: Date.now(),
     }
     return enqueueMutation(async () => {
@@ -426,7 +422,6 @@ export function registerWebhook(
             id: `webhook:${id}:${randomUUID()}`,
             source: `webhook:${id}`,
             text,
-            ...(metaAtDispatch.threadKey !== undefined ? { threadKey: metaAtDispatch.threadKey } : {}),
             ...(metaAtDispatch.targetConversationId !== undefined ? { targetConversationId: metaAtDispatch.targetConversationId } : {}),
             createdAt: Date.now(),
           },
@@ -457,7 +452,6 @@ export function registerWebhook(
         secret: { type: 'string', minLength: 1, maxLength: 512 },
         targetConversationId: { type: 'integer', minimum: 1 },
         targetProfileId: { type: 'string', minLength: 1, maxLength: 64 },
-        threadKey: { type: 'string', minLength: 1, maxLength: 200 },
       },
       required: ['id', 'secret'],
       additionalProperties: false,

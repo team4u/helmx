@@ -25,24 +25,6 @@ import type { HelmxStore } from './store.js'
 import { requireModelRef } from './models.js'
 
 // ---------------------------------------------------------------------------
-// Common serialization / escaping
-// ---------------------------------------------------------------------------
-
-/** Strip an existing `<external_event>` wrapper (prevents double wrapping after trigger transforms; preserves trailing appended text). */
-export function stripEnvelope(text: string): string {
-  const match = /[\s\S]*?<external_event[^>]*>\n([\s\S]*?)\n<\/external_event>([\s\S]*)/.exec(text)
-  if (match === null) return text
-  const body = match[1] ?? ''
-  const tail = match[2] ?? ''
-  const unescaped = body
-    .replaceAll('&lt;', '<')
-    .replaceAll('&gt;', '>')
-    .replaceAll('&quot;', '"')
-    .replaceAll('&amp;', '&')
-  return tail.trim() === '' ? unescaped : `${unescaped}${tail}`
-}
-
-// ---------------------------------------------------------------------------
 // Conversation existence 404 (shared across 15+ call sites)
 // ---------------------------------------------------------------------------
 
@@ -648,81 +630,6 @@ export function actionToolResult(
     }
   }
   return result
-}
-
-export interface NormalizedHookToolResult {
-  output: Array<PluginToolTextBlock>
-  structuredOutput?: JsonValue
-  details?: Record<string, unknown>
-  isError?: boolean
-}
-
-/**
- * Parse a `tool_result` (`transform`/`handled`) or `tool_call` (`handled`) hook return payload into SDK
- * `ToolExecutionResult` shape, mapping `presentationMeta` -> `details` and rejecting legacy raw `details`.
- */
-export function parseHookToolResult(
-  value: unknown,
-  where = 'hook tool result',
-): { ok: true; result: NormalizedHookToolResult } | { ok: false; reason: string } {
-  if (!isPlainObject(value)) {
-    return { ok: false, reason: `${where} must be a plain object` }
-  }
-  if (value['details'] !== undefined) {
-    return {
-      ok: false,
-      reason: `${where} must use presentationMeta instead of legacy details`,
-    }
-  }
-  const hasOutput = value['output'] !== undefined
-  const hasStructured = value['structuredOutput'] !== undefined
-  const hasPresentationMeta = value['presentationMeta'] !== undefined
-  const hasError = value['isError'] !== undefined
-  if (!hasOutput && !hasStructured && !hasPresentationMeta && !hasError) {
-    return {
-      ok: false,
-      reason: `${where} must declare at least one of output, structuredOutput, presentationMeta, or isError`,
-    }
-  }
-  if (hasError && typeof value['isError'] !== 'boolean') {
-    return { ok: false, reason: `${where} isError must be a boolean` }
-  }
-  if (hasPresentationMeta && !isPlainObject(value['presentationMeta'])) {
-    return { ok: false, reason: `${where} presentationMeta must be a plain JSON object` }
-  }
-  let output: Array<PluginToolTextBlock>
-  try {
-    output = normalizeTextBlocks(value['output'], where)
-  } catch (err) {
-    return { ok: false, reason: err instanceof Error ? err.message : String(err) }
-  }
-  const result: NormalizedHookToolResult = { output }
-  if (hasStructured) result.structuredOutput = value['structuredOutput'] as JsonValue
-  if (hasPresentationMeta) result.details = value['presentationMeta'] as Record<string, unknown>
-  if (hasError) result.isError = value['isError'] as boolean
-  return { ok: true, result }
-}
-
-/** Convert `tool_call` `handled` takeover payload -> valid `ToolExecutionResult` (invalid shape becomes explicit error result). */
-export function toolResultOf(handled: unknown): {
-  output: Array<PluginToolTextBlock>
-  isError: boolean
-  structuredOutput?: unknown
-  details?: Record<string, unknown>
-} {
-  const parsed = parseHookToolResult(handled, 'tool_call handled hook')
-  if (parsed.ok) {
-    return {
-      output: parsed.result.output,
-      isError: parsed.result.isError === true,
-      ...(parsed.result.structuredOutput !== undefined ? { structuredOutput: parsed.result.structuredOutput } : {}),
-      ...(parsed.result.details !== undefined ? { details: parsed.result.details } : {}),
-    }
-  }
-  return {
-    output: [{ type: 'text', text: `tool_call handled hook returned an invalid result shape: ${parsed.reason}` }],
-    isError: true,
-  }
 }
 
 /**

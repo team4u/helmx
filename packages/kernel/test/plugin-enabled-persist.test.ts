@@ -65,10 +65,9 @@ function makeHostApi(events: string[]): PluginHostBackend & { __payload: Array<{
     markConversationOwnership: () => {},
     createAsk: async () => ({ id: 'ask-1', status: 'answered' as const, answers: {} }),
     cancelAsk: async () => {},
-    registerAskSeqResolver: () => () => {},
     onEvent: () => () => {},
     abortConversation: async () => {},
-    getConversationOwnership(): 'helmx' | 'bot' | 'human' {
+    getConversationOwnership(): 'helmx' | 'human' {
       return 'human'
     },
     spawnAgent: async () => ({}),
@@ -138,7 +137,7 @@ function servicePlugin(
     definePlugin: (ctx) => {
       ctx.configSchema({ endpoint: { type: 'string', label: 'Endpoint' } });
       ctx.ui.sidebarItem({ id: 'nav', label: 'Navigation' });
-      ctx.hook.onTrigger(() => ({ action: 'continue' as const }));
+      ctx.hook.onInput(() => ({ action: 'continue' as const }));
       ctx.action({
         id: 'ping',
         description: 'probe',
@@ -202,11 +201,9 @@ test('enabled:false registration runs declarations for schema without starting s
   // Action/tool invocation rejects while disabled
   await assertRejectsCode(() => host.invokeAction('builtin:herdr', 'ping', {}), 'plugin_disabled');
   // runHook passes through unaffected
-  const r = await host.runHook('trigger', {
-    id: 'e1',
-    source: 'test',
-    text: 'x',
-    createdAt: 1,
+  const r = await host.runHook('input', {
+    conversationId: 1,
+    input: { id: 'i1', text: 'x', origin: 'human', createdAt: 1 },
   });
   assert.equal(r.action, 'continue');
   // Registration emits plugin.changed(enabled:false / ui:[])

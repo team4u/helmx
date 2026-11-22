@@ -155,8 +155,9 @@ export async function handleAgentCall(ctx: AgentCallContext, callId: number, pay
 
     let result: WorkflowSpawnResult
     try {
+      const reattachConvId = currentReattach?.execution.conversationId
       result =
-        currentReattach !== undefined
+        currentReattach !== undefined && reattachConvId !== undefined
           ? await ctx.host.spawnAgent({
               agentId,
               index: attemptIndex,
@@ -172,21 +173,12 @@ export async function handleAgentCall(ctx: AgentCallContext, callId: number, pay
               ...(payload.phaseTitle !== undefined ? { phaseTitle: payload.phaseTitle } : {}),
               ...(payload.gate !== undefined ? { gate: payload.gate } : {}),
               ...(payload.attachments !== undefined ? { attachments: payload.attachments } : {}),
-              ...(currentReattach.execution.executionId !== undefined &&
-              (currentReattach.execution.nodeId ?? nodeId) !== undefined
-                ? { nodeId: currentReattach.execution.nodeId ?? nodeId }
-                : {}),
               ...(payload.cwd !== undefined ? { cwd: payload.cwd } : {}),
               ...(payload.timeoutMs !== undefined ? { timeoutMs: payload.timeoutMs } : {}),
               ...(payload.gateTimeoutMs !== undefined ? { gateTimeoutMs: payload.gateTimeoutMs } : {}),
               requestId: currentReattach.requestId,
               reattach: {
-                ...(currentReattach.execution.conversationId !== undefined
-                  ? { conversationId: currentReattach.execution.conversationId }
-                  : {}),
-                ...(currentReattach.execution.executionId !== undefined
-                  ? { executionId: currentReattach.execution.executionId }
-                  : {}),
+                conversationId: reattachConvId,
                 ...(currentReattach.execution.effectiveCwd !== undefined
                   ? { effectiveCwd: currentReattach.execution.effectiveCwd }
                   : {}),
@@ -221,7 +213,6 @@ export async function handleAgentCall(ctx: AgentCallContext, callId: number, pay
                 ...(payload.phaseTitle !== undefined ? { phaseTitle: payload.phaseTitle } : {}),
                 ...(payload.gate !== undefined ? { gate: payload.gate } : {}),
                 ...(payload.attachments !== undefined ? { attachments: payload.attachments } : {}),
-                ...(payload.secretNames !== undefined ? { secretNames: payload.secretNames } : {}),
                 ...(nodeId !== undefined ? { nodeId } : {}),
                 ...(payload.cwd !== undefined ? { cwd: payload.cwd } : {}),
                 ...(payload.timeoutMs !== undefined ? { timeoutMs: payload.timeoutMs } : {}),

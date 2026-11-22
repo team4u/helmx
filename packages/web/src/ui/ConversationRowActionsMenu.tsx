@@ -16,7 +16,7 @@
  * - Trigger 点击不冒泡（不触发所在行切换会话）；
  * - scope 过滤由 action-model.matchConversationActions 按实际会话判定。
  */
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ConversationSummary } from '@helmx/protocol/browser'
 import {
@@ -30,19 +30,16 @@ import {
   HelmxIcon,
 } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
-import { useGroupedUi, useStoreActions } from '../lib/store-context.js'
+import { useStoreActions } from '../lib/store-context.js'
 import { conversationsApi } from '../lib/api.js'
-import { PluginMicroAction } from './PluginMicroAction.js'
-import { matchConversationActions } from '../conversation/action-model.js'
 import { isConversationArchived } from '../conversation/archive-model.js'
 import { patchConversationArchived } from '../shell/archive-ops.js'
 import {
   isConversationArchivable,
   isConversationDeletable,
-  partitionSidebarUi,
 } from '../shell/sidebar-model.js'
 
-/** 调用方注入的通用前置菜单动作（渲染于宿主归档/插件/删除动作之前）。 */
+/** 调用方注入的通用前置菜单动作（渲染于宿主归档/删除动作之前）。 */
 export interface RowMenuPrependItem {
   key: string
   icon: string
@@ -60,10 +57,9 @@ export function ConversationRowActionsMenu({
    * 侧栏会话行保持默认 false（删除走会话面板），总览卡等大操作面开启。 */
   enableDelete?: boolean
   /** 通用前置动作（视图速览/分屏等）：仅 prependItems 时菜单也渲染；
-   * 其后还有任何宿主/插件/删除动作时自动补一条分隔线。 */
+   * 其后还有任何宿主/删除动作时自动补一条分隔线。 */
   prependItems?: ReadonlyArray<RowMenuPrependItem>
 }): ReactNode {
-  const groupedUi = useGroupedUi()
   const { pushNotice } = useStoreActions()
   const { t } = useWebLocale()
   const [open, setOpen] = useState(false)
@@ -71,25 +67,19 @@ export function ConversationRowActionsMenu({
   const [deleting, setDeleting] = useState(false)
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
 
-  const actions = matchConversationActions(groupedUi.uiActions, 'conversation:row', conversation)
-
   // 宿主归档动作可达性：人类自有的根会话可归档；已归档会话始终提供恢复
   // （当前会话若已归档，仍须提供恢复入口）。
-  const { sectionTags } = useMemo(
-    () => partitionSidebarUi([], groupedUi.sidebarSections),
-    [groupedUi.sidebarSections],
-  )
   const archived = isConversationArchived(conversation)
-  const hostArchiveAction: 'archive' | 'restore' | null = isConversationArchivable(conversation, sectionTags)
+  const hostArchiveAction: 'archive' | 'restore' | null = isConversationArchivable(conversation)
     ? archived
       ? 'restore'
       : 'archive'
     : null
   const canDelete = enableDelete && isConversationDeletable(conversation)
   const hasPrependItems = prependItems !== undefined && prependItems.length > 0
-  const hasFollowingActions = hostArchiveAction !== null || actions.length > 0 || canDelete
+  const hasFollowingActions = hostArchiveAction !== null || canDelete
 
-  if (!hasPrependItems && actions.length === 0 && hostArchiveAction === null && !canDelete) return null
+  if (!hasPrependItems && hostArchiveAction === null && !canDelete) return null
 
   const runHostArchiveAction = async (): Promise<void> => {
     if (archiving || hostArchiveAction === null) return
@@ -180,17 +170,6 @@ export function ConversationRowActionsMenu({
               </span>
             </DropdownMenuItem>
           )}
-          {actions.map((action) => (
-            <PluginMicroAction
-              key={`row:${action.pluginId}/${action.spec.id}`}
-              action={action}
-              variant="menu"
-              inDropdown
-              conversationId={conversation.id}
-              slotProps={{ conversation }}
-              onInvoked={() => setOpen(false)}
-            />
-          ))}
           {canDelete && (
             <>
               <DropdownMenuSeparator className="popover-separator" />

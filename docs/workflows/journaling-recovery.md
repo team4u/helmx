@@ -24,7 +24,7 @@
 
 `index` 是本次 run 内的全局尝试/动作位次，`invocationIndex` 用于把多次尝试折叠到同一进度节点；恢复时重新分配这些审计序号。`seq` 是落盘物理单调序号；`key` 是调用载荷的哈希摘要。缺少必需 scope 字段的账本不属于当前格式，不提供旧格式读取或迁移。
 
-**Key 计算**（SHA-256，取 32 位十六进制）：agent 的 Key 覆盖 `prompt`、`label`、`model`、`agentType`、`effort`、`isolation`、`gate`、`resume`、`attachments`（原样序列化，不去重不排序——ID 或次序变化都是不同调用；未提供与空数组语义不同，不归一化）、`schema` 的序列化形式、`maxSubagentDepth`、`secretNames`（机密授予槽；DSL `agent()` 不支持该选项，此槽仅预留恒为空占位）、`cwd` 与 `nodeId`，采用带版本标记的固定槽 canonical 形态（新增字段只追加在版本号之后，杜绝槽位碰撞）。`timeoutMs` 与 `gateTimeoutMs` 只限制执行时限，不改变调用身份，不记入 Key；`maxAttempts` 的每次尝试各占一条独立 `index` 记录，不做归并。action 的 Key 覆盖全限定 `actionId` 与序列化后的输入。任何参数微调都会改变 Key，防止误用过期缓存。自动重试的失败原因先经宿主脱敏，再生成本次尝试的重试提示词（原文追加 `[attempt N failed]` 失败块）与 Key——重试提示词不同，每次尝试的 Key 也不同。
+**Key 计算**（SHA-256，取 32 位十六进制）：agent 的 Key 覆盖 `prompt`、`label`、`model`、`agentType`、`effort`、`isolation`、`gate`、`resume`、`attachments`（原样序列化，不去重不排序——ID 或次序变化都是不同调用；未提供与空数组语义不同，不归一化）、`schema` 的序列化形式、`maxSubagentDepth`、`cwd` 与 `nodeId`，采用带版本标记的固定槽 canonical 形态（新增字段只追加在版本号之后，杜绝槽位碰撞）。`timeoutMs` 与 `gateTimeoutMs` 只限制执行时限，不改变调用身份，不记入 Key；`maxAttempts` 的每次尝试各占一条独立 `index` 记录，不做归并。action 的 Key 覆盖全限定 `actionId` 与序列化后的输入。任何参数微调都会改变 Key，防止误用过期缓存。自动重试的失败原因先经宿主脱敏，再生成本次尝试的重试提示词（原文追加 `[attempt N failed]` 失败块）与 Key——重试提示词不同，每次尝试的 Key 也不同。
 
 当前 Key 版本为 **v4**（固定槽 15 个，含 `cwd` 与 `nodeId`）。无条件占位使每次版本变更后全部调用 Key 与旧账本失配——开发阶段无迁移，旧账本安全降级为断链重跑，不存在「未携带新字段则 key 不变」的兼容承诺。不符合当前契约的开发账本应清理后新建运行。
 
@@ -88,16 +88,16 @@ flowchart TD
 
 **优雅关停（`ctx.host.isClosing === true && effectiveAutoRecover`）**：引擎调用 `workflows.suspend()`——终止进程内 Worker 与本地等待句柄，**不**调用 `abortConversationGuarded`、**不**改写终态、**不**触发 `onRunSettled` / 父会话通知，对在途 `RunRecord` 落盘 `suspendedCleanly: true`（保持 `status: 'running'`）并维持 Worktree `running` 租约 fail-closed 保留。单插件停用（`ctx.host.isClosing === false`）或关闭自动恢复时完整保留既有 `close()` 中止落盘 `aborted` 语义。
 
-**阶段一 `prepareRecovery`（全局 prepare 屏障内）**：扫描全部 `pendingChildCleanup === true` 的已终态记录，以及（当自动恢复关闭、或运行触发 `crashRecoveries > 3` 熔断 / `actionUncertain` / `secret_grant_expired_on_restart` 不可原位恢复时）对应 `running` 记录的遗留子会话，经 `abortConversationGuarded` 落持久 abort 标记；可原位恢复的健康 `running` 记录不中止子会话，保留给 `harness.resume()` 与原位重挂。
+**阶段一 `prepareRecovery`（全局 prepare 屏障内）**：扫描全部 `pendingChildCleanup === true` 的已终态记录，以及（当自动恢复关闭、或运行触发 `crashRecoveries > 3` 熔断 / `actionUncertain` 不可原位恢复时）对应 `running` 记录的遗留子会话，经 `abortConversationGuarded` 落持久 abort 标记；可原位恢复的健康 `running` 记录不中止子会话，保留给 `harness.resume()` 与原位重挂。
 
 **阶段二 `init`（服务 start）**：
 - 若 `suspendedCleanly === true`：清除标记且不递增 `crashRecoveries`；若为异常崩溃（无 `suspendedCleanly`）：先递增 `crashRecoveries` 并落盘，`crashRecoveries > 3` 时触发 `[crash_recovery_limit]` 熔断（守卫中止子会话并标 `failed`）；
-- 健康后台单子代理（`kind === 'subagent'`）：若崩溃于 `onResolved` 前且 `subagentSpec.hadSecretGrant === true`（内存机密已失效），诚实标 `failed (secret_grant_expired_on_restart)`；否则凭原 `runId`、`requestId` 与 `reattach` 原位重挂（原生 `conversationId` 于 `harness.resume()` 前同步等待 `onResolved` 就位结构化输出与 Worktree 租约，外部 `executionId` 于 `runtime.started` 放行）；
+- 健康后台单子代理（`kind === 'subagent'`）：凭原 `runId`、`requestId` 与 `reattach` 原位重挂（原生 `conversationId` 于 `harness.resume()` 前同步等待 `onResolved` 就位结构化输出与 Worktree 租约）；
 - 健康 DSL 工作流：沿用原 `runId` 启动 Worker，以 `initialSeq = maxExistingSeq + 1`、`inPlaceResume: true` 追加打开原账本（已落盘终态 0 Token 重放且不重复追加），遇到未配对终态的 `agent_started` 行时以原 `requestId` + `reattach` 原位重挂完成后继续执行；
 - `subagent` 与 `SubagentWorkflow` 模型工具均声明 `replay: 'safe'` 并按受信 `(conversationId, callId)` 幂等重放，重启恢复 `ToolTask` 时继续等待原 run 或直接返回终态结果，不重复派生。
 - 已达成终态且未发送父会话汇报的后台运行仍由 outbox 补发（`notifiedAt` 防重复）。
 
-**阶段三 `runtime.started`（`harness.resume()` 后启动收尾）**：放行外部运行时与 pre-resolve 重挂，等待待收敛的遗留子会话结算至 `idle`（`awaitPreparedChildrenSettled`），随后回收可证明已停止的原生 Worktree 崩溃租约（外部 `executionId` 租约与活跃重挂租约保持 fail-closed 保留）。
+**阶段三 `service.reconcile()`（`harness.resume()` 后统一启动对账）**：按拓扑与 `reconcileAfter` 软序执行：先由 `builtin:workflow` 放行 pre-resolve 重挂并等待待收敛的遗留子会话结算至 `idle`（`awaitPreparedChildrenSettled`），随后 `builtin:worktree` 回收可证明已停止的原生 Worktree 崩溃租约（活跃重挂租约保持 fail-closed 保留），`builtin:swarm` 完成协作组对账。
 
 对于已因重启熔断或历史原因处于 `failed` 的任务，开发者可单条或批量续跑：
 

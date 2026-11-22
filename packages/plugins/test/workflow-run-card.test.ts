@@ -797,7 +797,6 @@ test('canDetachForegroundRun：仅运行中前台同步 + 发起会话 + human�
   assert.equal(m.canDetachForegroundRun(fg, { conversationId: 1, ownedBy: 'human' }), true)
   assert.equal(m.canDetachForegroundRun(fg, { conversationId: 1 }), true)
   assert.equal(m.canDetachForegroundRun(fg, { conversationId: 1, ownedBy: 'helmx' }), false)
-  assert.equal(m.canDetachForegroundRun(fg, { conversationId: 1, ownedBy: 'bot' }), false)
   assert.equal(m.canDetachForegroundRun(fg, { conversationId: 2 }), false)
   assert.equal(m.canDetachForegroundRun(fg, undefined), false)
   assert.equal(m.canDetachForegroundRun(run({ id: 'wf_d', status: 'running', syncForeground: true, detachedAt: 1, conversationId: 1 }), { conversationId: 1 }), false)
@@ -820,7 +819,7 @@ test('SSR：前台同步 run 仅在查看会话即发起会话且 human 归属�
   )
   assert.ok(humanViewer.includes('Move to background'))
 
-  for (const ownedBy of ['helmx', 'bot'] as const) {
+  for (const ownedBy of ['helmx'] as const) {
     const automationViewer = await renderWorkflowWorkbench(
       { runs: [run({ id: 'wf_fg_a', status: 'running', syncForeground: true, parentToolCallId: 'call-fg-a', nodes: [node({ id: 'a', status: 'running' })] })] },
       [{ ...summary(1, 'working'), ownedBy }],

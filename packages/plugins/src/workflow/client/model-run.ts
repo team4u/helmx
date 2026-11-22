@@ -405,7 +405,6 @@ export function canDetachForegroundRun(run: WorkflowRunSummary, viewer: DetachVi
     run.syncForeground === true &&
     run.detachedAt === undefined &&
     viewer?.conversationId === run.conversationId &&
-    viewer.ownedBy !== 'bot' &&
     viewer.ownedBy !== 'helmx'
   )
 }

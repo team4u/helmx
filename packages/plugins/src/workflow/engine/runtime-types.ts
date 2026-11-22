@@ -49,13 +49,6 @@ export interface WorkflowSpawnRequest {
   /** The artifact ID list passed by the script's agent({ attachments }) (passed through as-is; the host validates existence/authorization). */
   attachments?: string[]
   /**
-   * The secret environment variable names passed by the script's agent({ secretNames }): explicitly
-   * granted to external runtimes for injecting parent-conversation stash secrets (no secrets carried by
-   * default; name existence is validated at the kernel spawn boundary). Participates in the journal
-   * fingerprint: a grant change means a different call.
-   */
-  secretNames?: string[]
-  /**
    * Explicitly sets this agent subagent's absolute depth cap in the task tree (1..HARD_MAX_SUBAGENT_DEPTH);
    * defaults to inheriting the parent conversation's effective cap. Participates in the journal fingerprint:
    * an authorization change mismatches this call and the following prefix, avoiding reusing cached results
@@ -253,8 +246,6 @@ interface AgentCallPayload extends ReplayScope {
   attachments?: string[]
   /** The derivation depth cap explicitly granted to this agent subtree (validated on the worker side; re-validated at the host boundary). */
   maxSubagentDepth?: number
-  /** Parent-conversation secret env var names explicitly granted for external runtime injection (re-validated at the host boundary; sent down only on fresh spawns). */
-  secretNames?: string[]
   nodeId?: string
   cwd?: string
   timeoutMs?: number

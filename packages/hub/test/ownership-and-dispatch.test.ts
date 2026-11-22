@@ -13,7 +13,7 @@ const TEST_MANAGED_PLUGIN_ID = 'test:managed-assets'
 
 let env: HubTestEnv
 
-function makeManagedAssetsPlugin(onStarted?: (ids: { routerId: number; helperId: number }) => void): PluginDefinition {
+function makeManagedAssetsPlugin(dataDir: string, onStarted?: (ids: { routerId: number; helperId: number }) => void): PluginDefinition {
   return {
     id: TEST_MANAGED_PLUGIN_ID,
     name: 'Test Managed Assets',
@@ -37,7 +37,6 @@ function makeManagedAssetsPlugin(onStarted?: (ids: { routerId: number; helperId:
                 tags: [id],
                 skills,
                 managedByPlugin: TEST_MANAGED_PLUGIN_ID,
-                humanSelectable: false,
                 system,
               })
             } else if (!existsSync(join(dir, 'SYSTEM.md'))) {
@@ -50,7 +49,7 @@ function makeManagedAssetsPlugin(onStarted?: (ids: { routerId: number; helperId:
           await ensureProfile('managed-helper', 'Managed Helper', ['managed-playbooks'], '# Managed Helper\n')
 
           // 技能目录同理：未自定义 SKILL.md 时走 ensureSkill，否则仅补齐缺失 references
-          const skillDir = await ctx.host.skills.directory('managed-playbooks')
+          const skillDir = join(dataDir, 'skills', 'managed-playbooks')
           if (!existsSync(join(skillDir, 'SKILL.md'))) {
             await ctx.host.skills.ensureSkill({
               id: 'managed-playbooks',
@@ -141,9 +140,9 @@ test('ownedBy 实时投射与事件广播及插件受管 Profile/Skill 自举标
     off()
   }
 
-  // 2. 启用受管资产插件：受管会话归属 helmx，自举 Profile/Skill 携带 managedByPlugin 与 humanSelectable=false
+  // 2. 启用受管资产插件：受管会话归属 helmx，自举 Profile/Skill 携带 managedByPlugin
   let createdIds: { routerId: number; helperId: number } | undefined
-  await kernel.plugins.register(makeManagedAssetsPlugin((ids) => { createdIds = ids }), { enabled: false })
+  await kernel.plugins.register(makeManagedAssetsPlugin(env.dataDir, (ids) => { createdIds = ids }), { enabled: false })
   await kernel.plugins.enable(TEST_MANAGED_PLUGIN_ID)
   try {
     assert.ok(createdIds)
@@ -156,21 +155,18 @@ test('ownedBy 实时投射与事件广播及插件受管 Profile/Skill 自举标
 
     const hubJson = JSON.parse(
       readFileSync(join(env.dataDir, 'profiles', 'managed-hub', 'profile.json'), 'utf8'),
-    ) as { managedByPlugin?: string; humanSelectable?: boolean; skills?: string[] }
+    ) as { managedByPlugin?: string; skills?: string[] }
     assert.equal(hubJson.managedByPlugin, TEST_MANAGED_PLUGIN_ID)
-    assert.equal(hubJson.humanSelectable, false)
     assert.deepEqual(hubJson.skills, [])
 
     const helperJson = JSON.parse(
       readFileSync(join(env.dataDir, 'profiles', 'managed-helper', 'profile.json'), 'utf8'),
-    ) as { managedByPlugin?: string; humanSelectable?: boolean; skills?: string[] }
+    ) as { managedByPlugin?: string; skills?: string[] }
     assert.equal(helperJson.managedByPlugin, TEST_MANAGED_PLUGIN_ID)
-    assert.equal(helperJson.humanSelectable, false)
     assert.deepEqual(helperJson.skills, ['managed-playbooks'])
 
     const profiles = await kernel.profiles.list()
     assert.equal(profiles.find((p) => p.id === 'assistant')?.managedByPlugin, 'builtin:profile')
-    assert.equal(profiles.find((p) => p.id === 'assistant')?.humanSelectable, undefined)
     assert.match(
       readFileSync(join(env.dataDir, 'skills', 'managed-playbooks', 'SKILL.md'), 'utf8'),
       new RegExp(`^managedByPlugin: ${TEST_MANAGED_PLUGIN_ID}$`, 'm'),
@@ -196,7 +192,7 @@ test('既有自定义 Profile/Skill 逐字节保持且仅补齐缺失文件（pa
     mkdirSync(join(custom.dataDir, 'skills', 'managed-playbooks'), { recursive: true })
     writeFileSync(join(custom.dataDir, 'skills', 'managed-playbooks', 'SKILL.md'), skillMdRaw)
 
-    await custom.kernel.plugins.register(makeManagedAssetsPlugin(), { enabled: false })
+    await custom.kernel.plugins.register(makeManagedAssetsPlugin(custom.dataDir), { enabled: false })
     await custom.kernel.plugins.enable(TEST_MANAGED_PLUGIN_ID)
     assert.equal(readFileSync(join(custom.dataDir, 'profiles', 'managed-hub', 'profile.json'), 'utf8'), profileJsonRaw)
     assert.equal(readFileSync(join(custom.dataDir, 'profiles', 'managed-hub', 'SYSTEM.md'), 'utf8'), systemMdRaw)
@@ -205,7 +201,6 @@ test('既有自定义 Profile/Skill 逐字节保持且仅补齐缺失文件（pa
 
     const userP = (await custom.kernel.profiles.list()).find((p) => p.id === 'managed-hub')
     assert.equal(userP?.managedByPlugin, undefined)
-    assert.equal(userP?.humanSelectable, undefined)
     assert.equal(userP?.name, 'I custom hub')
     assert.equal((await custom.kernel.skills.list()).find((s) => s.id === 'managed-playbooks')?.managedByPlugin, undefined)
 
@@ -215,10 +210,8 @@ test('既有自定义 Profile/Skill 逐字节保持且仅补齐缺失文件（pa
     )
     const helperJson = JSON.parse(readFileSync(join(custom.dataDir, 'profiles', 'managed-helper', 'profile.json'), 'utf8')) as {
       managedByPlugin?: string
-      humanSelectable?: boolean
     }
     assert.equal(helperJson.managedByPlugin, TEST_MANAGED_PLUGIN_ID)
-    assert.equal(helperJson.humanSelectable, false)
 
     await custom.kernel.plugins.disable(TEST_MANAGED_PLUGIN_ID)
     await custom.kernel.plugins.enable(TEST_MANAGED_PLUGIN_ID)

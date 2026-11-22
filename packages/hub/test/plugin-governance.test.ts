@@ -7,7 +7,6 @@
  */
 import { createPluginBuildProvider } from '@helmx/plugin-build'
 import {
-  assertPluginManifestProjection,
   HelmxError,
   type ConversationSummary,
   type Profile,
@@ -278,12 +277,11 @@ test('PluginHost 治理：内置注册严格抛错、手动启用失败透传、
     assert.equal((err.details as { serviceId: string }).serviceId, 'svc')
   }
 
-  // 4. 宿主通用引用探针（profile_runtime / profile_model / conversation_model）与 liveTasks 硬阻断
+  // 4. 宿主通用引用探针（profile_model / conversation_model）与 liveTasks 硬阻断
   const livePanes = new Set<string>(['win-1'])
   await fixture.host.register({
     id: 'ext:runtime',
     definePlugin: (ctx) => {
-      ctx.ui.profileRuntime({ id: 'rt', kind: 'myrt', label: 'external runtime' })
       ctx.provider({
         id: 'prov-a',
         name: 'Prov A',
@@ -304,13 +302,12 @@ test('PluginHost 治理：内置注册严格抛错、手动启用失败透传、
   await rejectsCode(fixture.host.disable('ext:runtime', { force: true }), 'plugin_has_live_tasks', 409)
   livePanes.clear()
 
-  fixture.backend.profileStore.set('coder', { id: 'coder', name: 'encode role', runtime: { kind: 'myrt', agent: 'pi' } })
   fixture.backend.profileStore.set('writer', { id: 'writer', name: 'write act role', model: 'prov-a/some-model' })
   fixture.backend.conversationStore.push(makeConversation(9, 'prov-a/another'))
 
   const refErr = await rejectsCode(fixture.host.disable('ext:runtime'), 'plugin_in_use', 409)
   const usages = (refErr.details as { usages: Array<{ kind: string; id: string; label: string }> }).usages
-  assert.deepEqual(usages.map((u) => `${u.kind}:${u.id}`).sort(), ['conversation_model:9', 'profile_model:writer', 'profile_runtime:coder'])
+  assert.deepEqual(usages.map((u) => `${u.kind}:${u.id}`).sort(), ['conversation_model:9', 'profile_model:writer'])
   await fixture.host.disable('ext:runtime', { force: true })
 
   // 5. PluginSummary active / disabled / failed 与重注册清空错误
@@ -439,15 +436,13 @@ test('插件配置分层：磁盘不固化 default、sources 三态溯源、null
   await rejectsCode(store.set('ext:req', { token: 42 }, reqSchema), 'validation_error', 400)
 })
 
-test('createHelmx 全部 12 个内置插件的只读契约投影均通过严格校验并完整暴露 presentationMetaSchema', { timeout: 60_000 }, async (t) => {
+test('createHelmx 全部 11 个内置插件的只读契约投影完整暴露 presentationMetaSchema', { timeout: 60_000 }, async (t) => {
   const dataDir = useTempDir(t, 'helmx-hub-manifests-')
   const { app, kernel } = await createHubTestApp({ dataDir, cwd: dataDir })
   try {
     const initial = kernel.plugins.listManifests()
-    assert.equal(initial.length, 12)
-    for (const manifest of initial) {
-      assertPluginManifestProjection(manifest)
-    }
+    assert.equal(initial.length, 11)
+    assert.ok(initial.every((m) => m.id.startsWith('builtin:') && m.status === 'active'))
 
     const wfManifest = kernel.plugins.getManifest('builtin:workflow')
     assert.ok(wfManifest.tools.some((tool) => tool.name === 'subagent' && tool.presentationMetaSchema !== undefined))
@@ -475,11 +470,6 @@ test('createHelmx 全部 12 个内置插件的只读契约投影均通过严格�
 
     const tiersManifest = kernel.plugins.getManifest('builtin:tiers')
     assert.equal(tiersManifest.actions.find((a) => a.id === 'replace')?.visibility, 'ui')
-
-    // Default-disabled builtin:herdr still yields a strictly valid manifest projection.
-    const herdrManifest = kernel.plugins.getManifest('builtin:herdr')
-    assertPluginManifestProjection(herdrManifest)
-    assert.equal(herdrManifest.status, 'disabled')
   } finally {
     await app.close()
   }

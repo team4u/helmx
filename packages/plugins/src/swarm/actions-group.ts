@@ -194,7 +194,7 @@ export function resolveCoordinatorGroup(
 
 export function checkCoordinatorEligibility(
   conv: ConversationSummary,
-  ownership: 'human' | 'bot' | 'helmx' | string,
+  ownership: 'human' | 'helmx' | string,
 ): { code: 'validation_error' | 'conversation_scope_violation'; message: string; status: 400 | 403; details: Record<string, unknown> } | undefined {
   if (conv.parentConversationId !== undefined) {
     return {

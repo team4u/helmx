@@ -1,9 +1,6 @@
 import { useContext, useMemo, useState } from 'react'
 import type { ConversationEntry, ConversationSummary } from '@helmx/protocol/browser'
 import { CopyButton, HelmxIcon, ToolActivityContext, Tooltip, useSharedNowMs } from '@helmx/plugin-client'
-import { useGroupedUi } from '../lib/store-context.js'
-import { PluginMicroAction } from '../ui/PluginMicroAction.js'
-import { matchTimelineEntryActions, timelineEntryActionContextOf } from './action-model.js'
 import { MarkdownView } from './MarkdownView.js'
 import { StepGroup, TraceRow } from './TimelineRows.js'
 import { ToolActivityProvider } from './ToolActivityProvider.js'
@@ -69,12 +66,10 @@ function AssistantTurnContent({
   conversation,
   isLatestTurn = false,
   isTrailingTurn,
-  anchorEntry,
   processShortcut,
   onForkFromHere,
   onRegenerate,
 }: AssistantTurnViewProps) {
-  const groupedUi = useGroupedUi()
   const { t } = useWebLocale()
   const activeToolCallIds = useContext(ToolActivityContext)?.activeToolCallIds
   const [forking, setForking] = useState(false)
@@ -138,16 +133,6 @@ function AssistantTurnContent({
   const liveTiming = liveTrackActive ? resolveConversationTiming(conversation, liveNowMs) : undefined
 
   const isBusy = isAssistantTurnBusy(turn, conversation, { isLatestTurn, activeToolCallIds })
-  // 插件微插槽 timeline.entry.action：锚点必须是真实持久化 pi.assistant 条目；
-  // live 回合（尚无落库锚点）不渲染，绝不拿 pi.tool-result 或 key 伪造。
-  const entryActions =
-    !isBusy && anchorEntry !== undefined
-      ? matchTimelineEntryActions(
-          groupedUi.uiActions,
-          conversation,
-          timelineEntryActionContextOf(anchorEntry),
-        )
-      : []
 
   const timeMs = turn.settledAt ?? turn.startedAt
   const displayTime = formatMessageTime(timeMs)
@@ -273,18 +258,6 @@ function AssistantTurnContent({
           ) : null}
           {showHoverBar ? (
             <span className="msg-hover-bar">
-              {anchorEntry !== undefined
-                ? entryActions.map((action) => (
-                    <PluginMicroAction
-                      key={`entry:${action.pluginId}/${action.spec.id}`}
-                      action={action}
-                      variant="hover"
-                      conversationId={conversation.id}
-                      entryId={anchorEntry.id}
-                      slotProps={{ conversationId: conversation.id, entry: anchorEntry }}
-                    />
-                  ))
-                : null}
               {lastText !== '' ? <CopyButton text={lastText} /> : null}
               {isLatestTurn && onRegenerate !== undefined ? (
                 <button

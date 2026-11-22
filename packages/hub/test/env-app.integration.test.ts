@@ -4,12 +4,10 @@
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import assert from 'node:assert/strict'
 import { access, mkdir, readFile } from 'node:fs/promises'
-import { createServer, type Socket } from 'node:net'
 import { join } from 'node:path'
 import { after, before, test } from 'node:test'
 import { runCli } from '../../cli/src/index.js'
 import { createNodeDaemon, type NodeDaemon } from '../../node/src/index.js'
-import { createHerdrTransport } from '../../plugins/src/herdr/transport.js'
 import {
   cleanupDir,
   makeTempDir,
@@ -211,12 +209,12 @@ test('HTTP /api/env/exec 参数边界校验与本机受管 Shell helmx 包装器
   assert.equal(JSON.parse(result.output).authenticated, true)
 })
 
-test('节点全链路贯通：Herdr 停用时 CLI、真实模型工具、Gate 与 Profile 子代理均在绑定节点执行', { timeout: 60_000 }, async () => {
+test('节点全链路贯通：CLI、真实模型工具、Gate 与 Profile 子代理均在绑定节点执行', { timeout: 60_000 }, async () => {
   const wsDir = join(env.remoteCwd, 'tools-ws')
   await mkdir(wsDir, { recursive: true })
   const kernel = env.hubEnv.kernel
 
-  assert.equal(kernel.plugins.list().find((p) => p.id === 'builtin:herdr')?.enabled, false)
+  assert.equal(kernel.plugins.list().find((p) => p.id === 'builtin:herdr'), undefined)
   const listed = await env.cli(['nodes', 'list', '--json'])
   assert.equal(listed.code, 0, listed.err)
   assert.ok(JSON.parse(listed.out).some((n: { id: string; online: boolean }) => n.id === 'integration-node' && n.online))
@@ -307,17 +305,16 @@ test('流式执行与跨节点取消：实时输出、跨 chunk 机密脱敏、�
   assert.doesNotMatch(firstChunk, /finished|"type":"exit"/)
   await reader.cancel()
 
-  // 2. 跨 chunk 机密脱敏、会话隔离与 NDJSON 终态
+  // 2. 跨 chunk 机密脱敏与 NDJSON 终态
   const conv = await kernel.createConversation({ nodeId: 'integration-node', cwd: streamDir })
-  const other = await kernel.createConversation({ nodeId: 'integration-node', cwd: streamDir })
   const secret = 'node-secret-across-chunks-7b0139'
-  kernel.stash.put(conv.id, 'NODE_TEST_SECRET', secret)
+  kernel.stash.addRedaction(secret)
   const redactedRes = await env.request('/api/env/exec', {
     conversationId: conv.id,
     stream: true,
     command: [
       process.execPath, '-e',
-      'process.stdout.write(process.env.NODE_TEST_SECRET.slice(0, 13)); setTimeout(() => process.stdout.write(process.env.NODE_TEST_SECRET.slice(13)), 50)',
+      `process.stdout.write(${JSON.stringify(secret.slice(0, 13))}); setTimeout(() => process.stdout.write(${JSON.stringify(secret.slice(13))}), 50)`,
     ],
   })
   assert.equal(redactedRes.status, 200)
@@ -328,13 +325,8 @@ test('流式执行与跨节点取消：实时输出、跨 chunk 机密脱敏、�
   const text = frames.filter((frame) => frame.type === 'output').map((frame) => frame.text).join('')
   assert.equal(text.includes(secret), false)
   assert.equal(text.includes(secret.slice(0, 13)), false)
-  assert.match(text, /REDACTED/)
+  assert.match(text, /\[REDACTED\]/)
 
-  const isolated = await env.request('/api/env/exec', {
-    conversationId: other.id,
-    command: [process.execPath, '-e', 'process.stdout.write(process.env.NODE_TEST_SECRET ?? "absent")'],
-  })
-  assert.equal((await isolated.json() as { output: string }).output, 'absent')
   const stored = await readFile(join(env.hubDir, 'state.sqlite'))
   assert.equal(stored.includes(Buffer.from(secret)), false)
   assert.equal(stored.includes(Buffer.from(env.nodeToken)), false)
@@ -358,53 +350,6 @@ test('流式执行与跨节点取消：实时输出、跨 chunk 机密脱敏、�
   const beforeLen = await readFile(heartbeatPath, 'utf8')
   await new Promise((resolve) => setTimeout(resolve, 150))
   assert.equal(await readFile(heartbeatPath, 'utf8'), beforeLen)
-})
-
-test('Herdr 传输复用真实节点 IPC，订阅 ACK 只消费一次且断线/取消正确传播', { timeout: 60_000 }, async () => {
-  const sockets = new Set<Socket>()
-  const socketPath = join(env.nodeDir, 'herdr.sock')
-  const calls: string[] = []
-  const ipc = createServer((socket) => {
-    sockets.add(socket)
-    socket.on('close', () => sockets.delete(socket))
-    let bytes = Buffer.alloc(0)
-    socket.on('data', (chunk: Buffer) => {
-      bytes = Buffer.concat([bytes, chunk])
-      const newline = bytes.indexOf(10)
-      if (newline < 0) return
-      const request = JSON.parse(bytes.subarray(0, newline).toString('utf8'))
-      bytes = bytes.subarray(newline + 1)
-      calls.push(request.method)
-      if (request.method === 'events.subscribe') {
-        socket.write(JSON.stringify({ id: request.id, result: { type: 'subscription_started' } }) + '\n')
-        socket.write(JSON.stringify({ event: 'pane_created', data: { pane_id: 'remote-pane' } }) + '\n')
-      } else {
-        socket.end(JSON.stringify({ id: request.id, result: { source: 'remote-node-ipc' } }) + '\n')
-      }
-    })
-  })
-  let release: (() => void) | undefined
-  try {
-    await new Promise<void>((resolve, reject) => { ipc.once('error', reject); ipc.listen(socketPath, resolve) })
-    const transport = createHerdrTransport({ nodeChannel: env.hubEnv.kernel.envFabric })
-    assert.deepEqual(await transport.call({ nodeId: 'integration-node', socketPath }, 'session.snapshot', {}), { source: 'remote-node-ipc' })
-    const events: unknown[] = []
-    const errors: unknown[] = []
-    release = await transport.subscribe({ nodeId: 'integration-node', socketPath }, (event) => events.push(event), (error) => errors.push(error))
-    await eventually(() => events.length === 1, '节点消费 ACK 后 Herdr 收到首帧事件')
-    assert.deepEqual(events, [{ type: 'pane.created', paneId: 'remote-pane' }])
-    assert.deepEqual(errors, [])
-    assert.deepEqual(calls, ['session.snapshot', 'events.subscribe'])
-    for (const socket of sockets) socket.end()
-    await eventually(() => errors.length === 1, '节点 IPC 断开传播到订阅')
-    release()
-    release = undefined
-    await eventually(() => sockets.size === 0, '取消订阅关闭节点 IPC socket')
-  } finally {
-    release?.()
-    for (const socket of sockets) socket.destroy()
-    await new Promise<void>((resolve) => ipc.close(() => resolve()))
-  }
 })
 
 test('Workflow + Worktree 动态远端 nodeId：本地父会话通过 subagent 与 DSL agent({ nodeId, cwd, isolation: worktree }) 在线分配远端工作树并执行远端 gate', { timeout: 60_000 }, async () => {

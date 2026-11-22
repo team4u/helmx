@@ -4,7 +4,7 @@
  */
 import test, { beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { HelmxError, type ConversationSummary, type EnvExecResponse, type MaybePromise, type PluginDefinition } from '@helmx/protocol';
+import { HelmxError, type ConversationSummary, type EnvExecResponse, type PluginDefinition } from '@helmx/protocol';
 import { PluginHost } from '../src/plugins/index.js';
 import { PluginHostBackendFixtureBase } from './helpers/plugin-host-backend.js';
 import { createPluginBuildProvider } from '@helmx/plugin-build';
@@ -30,7 +30,6 @@ class FakeBackend extends PluginHostBackendFixtureBase {
   events: Array<{ type: string; payload: unknown }> = [];
   /** Conversation management lock records: `(conversationId, pluginId)` present while active. */
   managed = new Map<string, { conversationId: number; pluginId: string }>();
-  askSeqResolvers = new Set<(askId: string) => MaybePromise<number | undefined>>();
   workflowListeners = new Set<(run: unknown) => void | Promise<void>>();
 
   constructor() {
@@ -64,7 +63,7 @@ class FakeBackend extends PluginHostBackendFixtureBase {
   abortConversation(): Promise<void> {
     return Promise.resolve();
   }
-  getConversationOwnership(): 'helmx' | 'bot' | 'human' {
+  getConversationOwnership(): 'helmx' | 'human' {
     return 'human';
   }
   spawnAgent(): Promise<unknown> {
@@ -84,7 +83,6 @@ class FakeBackend extends PluginHostBackendFixtureBase {
   execEnv(): Promise<EnvExecResponse> {
     return Promise.reject(new HelmxError('unsupported', 'this fixture does not execute node commands', 501));
   }
-  withFileMutationQueue(): Promise<never> { throw new Error('this fixture does not support file mutation queue') }
   listActions(): [] {
     return [];
   }
@@ -96,7 +94,7 @@ class FakeBackend extends PluginHostBackendFixtureBase {
       this.managed.delete(key);
     };
   }
-  markConversationOwnership(id: number, owner: 'helmx' | 'bot' | 'human'): void {
+  markConversationOwnership(id: number, owner: 'helmx' | 'human'): void {
     void id;
     void owner;
   }
@@ -105,12 +103,6 @@ class FakeBackend extends PluginHostBackendFixtureBase {
   }
   cancelAsk(): Promise<void> {
     return Promise.resolve();
-  }
-  registerAskSeqResolver(resolver: (askId: string) => MaybePromise<number | undefined>): () => void {
-    this.askSeqResolvers.add(resolver);
-    return () => {
-      this.askSeqResolvers.delete(resolver);
-    };
   }
   onEvent(_type: string, listener: (payload: unknown) => void | Promise<void>): () => void {
     this.workflowListeners.add(listener);
@@ -586,16 +578,14 @@ test('register/enable failure leaks zero host lifecycle assets (definePlugin thr
         definePlugin: (ctx) => {
           void ctx.host.manageConversation(2);
           void ctx.host.onEvent('workflow.settled', () => {});
-          void ctx.host.registerAskSeqResolver(() => undefined);
           throw new Error('definePlugin crash');
         },
       }),
     'plugin_registration_failed',
   );
-  // All three lifecycle asset categories rolled back cleanly
+  // Both lifecycle asset categories rolled back cleanly
   assert.equal(backend.managed.size, 0);
   assert.equal(backend.workflowListeners.size, 0);
-  assert.equal(backend.askSeqResolvers.size, 0);
 
   // Enable failure rolls back identically (driven via service.start failure after register+disable)
   let failStart = false;
@@ -657,31 +647,27 @@ test('onEvent(workflow.settled): auto-unsubscribes on disable and counts in-flig
   settledRuns = [];
 });
 
-test('registerAskSeqResolver unsubscribes on disable; stale-epoch ctx rejects host lifecycle acquisitions', { timeout: 60_000 }, async () => {
+test('stale-epoch ctx rejects host lifecycle acquisitions on disable', { timeout: 60_000 }, async () => {
   const host = makeHost();
   let stolenHost: Parameters<NonNullable<PluginDefinition['definePlugin']>>[0]['host'] | undefined;
   await host.register({
     id: 'p:seq',
     definePlugin: (ctx) => {
-      void ctx.host.registerAskSeqResolver(() => 11);
       stolenHost = ctx.host;
     },
   });
-  assert.equal(backend.askSeqResolvers.size, 1);
   await host.disable('p:seq');
-  assert.equal(backend.askSeqResolvers.size, 0);
 
   // Stale handle immediately expired on disable (409 plugin_context_expired)
   throwsCode(() => stolenHost!.manageConversation(1), 'plugin_context_expired');
   throwsCode(() => stolenHost!.onEvent('workflow.settled', () => {}), 'plugin_context_expired');
-  throwsCode(() => stolenHost!.registerAskSeqResolver(() => undefined), 'plugin_context_expired');
 });
 
 test('ctx.host wrapper forwards updateConversation / markConversationOwnership / createAsk cleanly', { timeout: 60_000 }, async () => {
   const host = makeHost();
   const marked: Array<{ id: number; owner: string }> = [];
   const origMark = backend.markConversationOwnership.bind(backend);
-  backend.markConversationOwnership = (id: number, owner: 'helmx' | 'bot' | 'human') => {
+  backend.markConversationOwnership = (id: number, owner: 'helmx' | 'human') => {
     marked.push({ id, owner });
     origMark(id, owner);
   };
@@ -689,7 +675,7 @@ test('ctx.host wrapper forwards updateConversation / markConversationOwnership /
     id: 'p:fwd',
     definePlugin: (ctx) => {
       void ctx.host.updateConversation(1, { title: 'renamed' });
-      ctx.host.markConversationOwnership(5, 'bot');
+      ctx.host.markConversationOwnership(5, 'helmx');
       void ctx.host.createAsk({
         conversationId: 1,
         title: 'confirm',
@@ -698,7 +684,7 @@ test('ctx.host wrapper forwards updateConversation / markConversationOwnership /
     },
   });
   assert.equal(host.list().length, 1);
-  assert.deepEqual(marked, [{ id: 5, owner: 'bot' }]);
+  assert.deepEqual(marked, [{ id: 5, owner: 'helmx' }]);
 });
 
 // ---------------------------------------------------------------------------

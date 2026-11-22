@@ -114,8 +114,6 @@ export interface ResolvedProfile {
   cwd?: string
   /** Profile's default bound compute node (defaults to `'local'`). */
   nodeId?: string
-  /** External runtime declaration (e.g. `herdr`): unsupported by native execution; fails explicitly. */
-  runtime?: { kind: string; agent: string; args?: string[] }
 }
 
 /**
@@ -523,13 +521,6 @@ function assertSpawnRequestShape(request: AgentSpawnRequest): void {
       400,
     )
   }
-  if (request.reattach !== undefined && request.reattach.conversationId === undefined) {
-    throw new HelmxError(
-      'unsupported_runtime',
-      `Native subagent runner cannot reattach solely by executionId='${request.reattach.executionId ?? ''}' (requires the corresponding external runtime plugin to handle it)`,
-      400,
-    )
-  }
   if (request.effort !== undefined && !THINKING_LEVELS.has(request.effort)) {
     throw new HelmxError(
       'validation_error',
@@ -565,7 +556,7 @@ function resolveSpawnResume(deps: NativeSpawnDeps, request: AgentSpawnRequest): 
   return { childId, isResume: true, existing }
 }
 
-/** Profile resolution: 404 when missing; 400 when declaring an external runtime unclaimed by a plugin (never falls back silently to native). */
+/** Profile resolution: 404 when missing. */
 async function resolveProfileForSpawn(deps: NativeSpawnDeps, profileId: string): Promise<ResolvedProfile> {
   const profile = await deps.resolveProfile(profileId)
   if (profile === undefined) {
@@ -573,15 +564,6 @@ async function resolveProfileForSpawn(deps: NativeSpawnDeps, profileId: string):
       'not_found',
       `agentType '${profileId}' is not a registered Profile (profiles/${profileId} not found)`,
       404,
-    )
-  }
-  if (profile.runtime) {
-    // Profile explicitly declares an external runtime (such as herdr) without an active plugin handler -> refuse fallback.
-    throw new HelmxError(
-      'unsupported_runtime',
-      `Profile '${profileId}' declares runtime.kind='${profile.runtime.kind}' (agent '${profile.runtime.agent}'), ` +
-        `which requires its plugin to handle it; unsupported by the native subagent runner`,
-      400,
     )
   }
   return profile

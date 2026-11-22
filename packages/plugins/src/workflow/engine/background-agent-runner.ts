@@ -20,7 +20,6 @@ import {
   type JsonSchema,
 } from '@helmx/protocol'
 import {
-  extractWorkflowExecutionMeta,
   extractWorktreeExecutionMeta,
   parseWorkflowSpawnMeta,
   withWorkflowSpawnMeta,
@@ -127,8 +126,6 @@ function createSubagentSession(params: SubagentSessionParams) {
     if (info.effectiveCwd !== undefined) node.effectiveCwd = info.effectiveCwd
     const wtExecMeta = extractWorktreeExecutionMeta(info)
     if (wtExecMeta.worktree !== undefined) node.worktree = wtExecMeta.worktree
-    const wfExecMeta = extractWorkflowExecutionMeta(info)
-    if (wfExecMeta.controls !== undefined) node.controls = wfExecMeta.controls
     record.subagentMeta = {
       ...(agentType !== undefined && agentType !== '' ? { agentType } : {}),
       execution: redactJsonValue(info, svc.redact) as typeof info,
@@ -281,7 +278,6 @@ export async function startBackgroundAgent(
   const journalPath = svc.runs.journalPathFor(request.parentConversationId, runId)
   const agentIdForProto = request.agentId ?? `${runId}:subagent-0`
   const deterministicRequestId = request.requestId ?? `helmx:spawn:${runId}`
-  const hadSecretGrant = Array.isArray(request.secretNames) && request.secretNames.length > 0
   const spawnMeta = parseWorkflowSpawnMeta(request.meta)
   const subagentSpec: PersistedSubagentSpec = {
     agentId: agentIdForProto,
@@ -303,7 +299,6 @@ export async function startBackgroundAgent(
     ...(request.attachments !== undefined
       ? { attachments: request.attachments.map((item) => svc.redact(item)) }
       : {}),
-    ...(hadSecretGrant ? { hadSecretGrant: true } : {}),
   }
 
   const node: WorkflowNodeState = {
@@ -484,8 +479,9 @@ export function reattachBackgroundAgent(
   const runId = record.id
   const spec = record.subagentSpec!
   const exec = record.subagentMeta?.execution
-  const hasHandle = exec?.conversationId !== undefined || exec?.executionId !== undefined
-  const isNativeReattach = hasHandle && exec?.executionId === undefined && exec?.conversationId !== undefined
+  const convId = exec?.conversationId
+  const hasHandle = convId !== undefined
+  const isNativeReattach = hasHandle
   const existingNode = record.nodes?.[0]
   const node: WorkflowNodeState =
     existingNode !== undefined
@@ -524,14 +520,10 @@ export function reattachBackgroundAgent(
     ...(spec.gate !== undefined ? { gate: spec.gate } : {}),
     ...(spec.gateTimeoutMs !== undefined ? { gateTimeoutMs: spec.gateTimeoutMs } : {}),
     ...(spec.schema !== undefined ? { schema: spec.schema } : {}),
-    ...(hasHandle
+    ...(convId !== undefined
       ? {
-          ...(!isNativeReattach && (exec?.nodeId ?? spec.nodeId) !== undefined
-            ? { nodeId: exec?.nodeId ?? spec.nodeId }
-            : {}),
           reattach: {
-            ...(exec?.conversationId !== undefined ? { conversationId: exec.conversationId } : {}),
-            ...(exec?.executionId !== undefined ? { executionId: exec.executionId } : {}),
+            conversationId: convId,
             ...(exec?.effectiveCwd !== undefined ? { effectiveCwd: exec.effectiveCwd } : {}),
           },
         }

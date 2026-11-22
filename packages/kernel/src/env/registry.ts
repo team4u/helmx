@@ -25,7 +25,6 @@ import type { Duplex } from 'node:stream'
 import type { WebSocket as WsSocket } from 'ws'
 import type { BirpcReturn } from 'birpc'
 import {
-  classifyControlledSocketPath,
   HelmxError,
   type EnvExecOutputEvent,
   type NodeEnvRpcFunctions,
@@ -152,10 +151,11 @@ interface Waiter {
 /* Tunnel table (`PendingTunnel`/`ActiveTunnel`) and upgrade waiters (`UpgradeWaiter`,
  * `UpgradeWaiterHandle`) live in `tunnel-table.ts` / `upgrade-waiters.ts`. */
 
-/** Normalized tunnel target produced by boundary validation (TCP host:port or controlled local socketPath/Named Pipe). */
-export type NormalizedTunnelTarget =
-  | { kind: 'tcp'; host: string | undefined; port: number }
-  | { kind: 'socket'; socketPath: string }
+/** Normalized TCP tunnel target produced by boundary validation (`host:port`). */
+export interface NormalizedTunnelTarget {
+  host: string | undefined
+  port: number
+}
 
 const safeEqual = (a: string, b: string): boolean => {
   const ba = Buffer.from(a, 'utf8')
@@ -164,37 +164,27 @@ const safeEqual = (a: string, b: string): boolean => {
 }
 
 /**
- * Validate tunnel target at boundary:
- * - TCP target: `port` must be a safe integer in `1..65535`; `host` (if present) must be non-empty <= 255 chars
- *   without control chars or whitespace;
- * - Local socket/Named Pipe target: `socketPath` must pass `classifyControlledSocketPath` (POSIX absolute path
- *   `/...` or local Windows Named Pipe `\\.\pipe\...`, rejecting relative paths, traversal, remote UNC pipes,
- *   and raw Windows marker file paths);
- * - Mixing `socketPath` with `host`/`port` or passing unknown fields fails explicitly with `validation_error` (400).
+ * Validate TCP tunnel target at boundary:
+ * - `port` must be a safe integer in `1..65535`;
+ * - `host` (if present) must be non-empty <= 255 chars without control chars or whitespace;
+ * - Unknown fields fail explicitly with `validation_error` (400).
  */
 export function normalizeTunnelTarget(target: NodeTunnelTarget): NormalizedTunnelTarget {
   if (target === null || typeof target !== 'object' || Array.isArray(target)) {
-    throw new HelmxError('validation_error', 'tunnel target must be a { host?, port } or { socketPath } object', 400)
+    throw new HelmxError('validation_error', 'tunnel target must be a { host?, port } object', 400)
   }
   const raw = target as unknown as Record<string, unknown>
-  const hasSocketPath = raw['socketPath'] !== undefined
-  const hasTcpField = raw['port'] !== undefined || raw['host'] !== undefined
-  if (hasSocketPath && hasTcpField) {
-    throw new HelmxError('validation_error', 'tunnel target cannot mix socketPath with host/port', 400)
-  }
-  if (hasSocketPath) {
-    const checked = classifyControlledSocketPath(raw['socketPath'])
-    if (!checked.ok) {
-      throw new HelmxError('validation_error', checked.message, 400, { socketPath: raw['socketPath'] })
+  for (const key of Object.keys(raw)) {
+    if (key !== 'host' && key !== 'port') {
+      throw new HelmxError('validation_error', `tunnel target contains unknown field '${key}' (only { host?, port } allowed)`, 400, { key })
     }
-    return { kind: 'socket', socketPath: checked.socketPath }
   }
   const host = raw['host']
   const port = raw['port']
   if (typeof port !== 'number' || !Number.isSafeInteger(port) || port < 1 || port > 65535) {
     throw new HelmxError('validation_error', 'tunnel target port must be an integer between 1 and 65535', 400, { port })
   }
-  if (host === undefined) return { kind: 'tcp', host: undefined, port }
+  if (host === undefined) return { host: undefined, port }
   if (
     typeof host !== 'string' ||
     host.length === 0 ||
@@ -210,7 +200,7 @@ export function normalizeTunnelTarget(target: NodeTunnelTarget): NormalizedTunne
   ) {
     throw new HelmxError('validation_error', 'tunnel target host must be a non-empty string without whitespace or control characters (<= 255 characters)', 400, { host })
   }
-  return { kind: 'tcp', host, port }
+  return { host, port }
 }
 
 /** Timing-safe token validator callback (token store persists `sha256(wholeToken)` in hex). */
@@ -444,14 +434,12 @@ export class NodeRegistry {
     const tunnelId = randomUUID()
     const epoch = this.#epochOf(nodeId)
     const timeoutMs = 10_000
-    const openInput: NodeTunnelOpenInput =
-      normalized.kind === 'socket'
-        ? { tunnelId, socketPath: normalized.socketPath }
-        : { tunnelId, ...(normalized.host === undefined ? {} : { host: normalized.host }), port: normalized.port }
-    const targetDetails =
-      normalized.kind === 'socket'
-        ? { nodeId, tunnelId, socketPath: normalized.socketPath }
-        : { nodeId, tunnelId, port: normalized.port }
+    const openInput: NodeTunnelOpenInput = {
+      tunnelId,
+      ...(normalized.host === undefined ? {} : { host: normalized.host }),
+      port: normalized.port,
+    }
+    const targetDetails = { nodeId, tunnelId, port: normalized.port }
 
     /** Best-effort notification to node to cancel pending connect (fault-tolerant so broken sockets/unsupported daemons don't block local cleanup). */
     const abortNode = (): void => {

@@ -64,9 +64,7 @@ import {
   timelineAnchorId,
   type ContainmentExclusions,
 } from './timeline-containment-model.js'
-import { matchTimelineEntryActions, timelineEntryActionContextOf } from './action-model.js'
 import { LazyMount } from '../ui/LazyMount.js'
-import { PluginMicroAction } from '../ui/PluginMicroAction.js'
 import {
   formatBytes,
   formatFullTimestamp,
@@ -228,36 +226,22 @@ function queuedModeText(mode: 'steer' | 'followUp', t: WebMessageTranslator): st
 function HumanMessage({
   item,
   conversation,
-  anchorEntry,
   onRequestEdit,
   onForkFromHere,
   onWithdrawQueuedEdit,
 }: {
   item: HumanInputItem
   conversation: ConversationSummary
-  /** Real persisted entry for item.entryId; undefined while queued (no persistent anchor). */
-  anchorEntry?: ConversationEntry
   onRequestEdit: (target: EditRequestTarget) => void
   /** Fork a new conversation from this message (action service instantiated once by ConversationTimeline). */
   onForkFromHere: (entryId: string) => Promise<void>
   /** Withdraw the queued input and switch to editing (withdrawn -> prefill the text; persisted -> edit in place). */
   onWithdrawQueuedEdit: (subId: string, target: EditRequestTarget) => Promise<void>
 }) {
-  const groupedUi = useGroupedUi()
   const { pushNotice } = useStoreActions()
   const { t } = useWebLocale()
   const [forking, setForking] = useState(false)
   const [withdrawing, setWithdrawing] = useState(false)
-  // Plugin micro-slot timeline.entry.action: filtered by conversation scope + the real entry's kind/role;
-  // not rendered while queued (no persistent anchor) or when the id is outside the loaded detail set (paged window) — never fabricate a placeholder entry.
-  const entryActions =
-    anchorEntry !== undefined
-      ? matchTimelineEntryActions(
-          groupedUi.uiActions,
-          conversation,
-          timelineEntryActionContextOf(anchorEntry),
-        )
-      : []
 
   const humanTime = formatMessageTime(item.createdAt)
   const humanFullTime = formatFullTimestamp(item.createdAt)
@@ -359,18 +343,6 @@ function HumanMessage({
       ) : null}
       <div className="msg-human-footer">
         <span className="msg-hover-bar">
-          {anchorEntry !== undefined
-            ? entryActions.map((action) => (
-                <PluginMicroAction
-                  key={`entry:${action.pluginId}/${action.spec.id}`}
-                  action={action}
-                  variant="hover"
-                  conversationId={conversation.id}
-                  entryId={anchorEntry.id}
-                  slotProps={{ conversationId: conversation.id, entry: anchorEntry }}
-                />
-              ))
-            : null}
           <CopyButton text={item.text} />
           {item.origin === 'human' ? (
             <button
@@ -466,19 +438,7 @@ function ContextDivider({ item }: { item: DividerItem }) {
 }
 
 function PluginCard({ item, conversationId }: { item: PluginCardItem; conversationId: number }) {
-  const conversation = useConversationSummary(conversationId)
-  const groupedUi = useGroupedUi()
   const { t } = useWebLocale()
-  // timeline.renderer custom entries also consume timeline.entry.action: matched by the real entry kind;
-  // custom kinds have no user/assistant role, so actions declaring roles never match.
-  const entryActions =
-    conversation !== undefined
-      ? matchTimelineEntryActions(
-          groupedUi.uiActions,
-          conversation,
-          timelineEntryActionContextOf(item.entry),
-        )
-      : []
   return (
     <div className="plugin-card">
       <PluginUiView
@@ -488,20 +448,6 @@ function PluginCard({ item, conversationId }: { item: PluginCardItem; conversati
         label={t('conv.timeline.cardsLabel')}
         slotProps={{ entry: item.entry, conversationId }}
       />
-      {entryActions.length > 0 ? (
-        <span className="plugin-card-hover-bar">
-          {entryActions.map((action) => (
-            <PluginMicroAction
-              key={`entry:${action.pluginId}/${action.spec.id}`}
-              action={action}
-              variant="hover"
-              conversationId={conversationId}
-              entryId={item.entry.id}
-              slotProps={{ conversationId, entry: item.entry }}
-            />
-          ))}
-        </span>
-      ) : null}
     </div>
   )
 }
@@ -1410,7 +1356,6 @@ export function ConversationTimeline({
                 <HumanMessage
                   item={item}
                   conversation={conversation}
-                  anchorEntry={activeEntriesById.get(item.entryId)}
                   onRequestEdit={onRequestEdit}
                   onForkFromHere={entryActions.forkFromHere}
                   onWithdrawQueuedEdit={entryActions.withdrawQueuedForEdit}

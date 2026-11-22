@@ -81,7 +81,7 @@ export function parseWorktreeInspectResult(raw: unknown): WorktreeInspectView | 
   const status = rec['status'] ?? 'active'
   if (status !== 'active' && status !== 'removed') return undefined
   const origin = rec['origin'] ?? 'native'
-  if (origin !== 'native' && origin !== 'external') return undefined
+  if (origin !== 'native') return undefined
   if (typeof result['exists'] !== 'boolean') return undefined
   const dirtyFilesRaw = result['dirtyFiles']
   if (!Array.isArray(dirtyFilesRaw) || dirtyFilesRaw.some((l) => typeof l !== 'string')) return undefined

@@ -51,10 +51,9 @@ const backend: PluginHostBackend = {
   markConversationOwnership: () => {},
   createAsk: async () => ({ id: 'ask-1', status: 'answered', answers: {} }),
   cancelAsk: async () => {},
-  registerAskSeqResolver: () => () => {},
   onEvent: () => () => {},
   abortConversation: async () => {},
-  getConversationOwnership(): 'helmx' | 'bot' | 'human' {
+  getConversationOwnership(): 'helmx' | 'human' {
     return 'human'
   },
   spawnAgent: async () => ({}),

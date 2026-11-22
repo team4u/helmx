@@ -66,7 +66,6 @@ async function makeRealDeps(dir: string, stash = new SecretStash()): Promise<Hel
     dataDir: dir,
     defaultCwd: dir,
     hubUrl: 'http://127.0.0.1:3202',
-    stashEnvFor: (id) => stash.envFor(id),
     redact: (t) => stash.redact(t),
     artifacts,
   }
@@ -149,30 +148,29 @@ describe('runShell real process behavior', { timeout: 60_000 }, () => {
     assert.ok(Date.now() - started < 10_000)
   })
 
-  it('env inject:stash value inject child process and from output in redaction disappear', { timeout: 60_000 }, async () => {
+  it('redaction: registered secret disappears from shell output', { timeout: 60_000 }, async () => {
     const stash = new SecretStash()
     const secretValue = 'sk-super-secret-abcdef123456'
-    stash.put(1, 'MY_TOKEN', secretValue)
+    stash.addRedaction(secretValue)
     const deps = await makeRealDeps(join(rootDir, 'rs6'), stash)
-    // child process visible secret(honest boundary: can message code solid has permission), but output must redaction.
-    const result = await runShell(deps, 'echo "token=$MY_TOKEN"', { conversationId: 1 })
+    const result = await runShell(deps, `echo "token=${secretValue}"`, { conversationId: 1 })
     assert.equal(result.ok, true)
     assert.ok(!result.output.includes(secretValue), 'secret plaintext never can appear in output')
-    assert.ok(result.output.includes('[REDACTED:stash:'), 'should replace is placeholder')
+    assert.ok(result.output.includes('[REDACTED]'), 'should replace with redaction marker')
   })
 
   it('across chunk tear secret in all text aggregate after still by complete redaction', { timeout: 60_000 }, async () => {
     const stash = new SecretStash()
     const secretValue = 'sk-cross-chunk-secret-ZZZZ9999'
-    stash.put(1, 'KEY', secretValue)
+    stash.addRedaction(secretValue)
     const deps = await makeRealDeps(join(rootDir, 'rs7'), stash)
     // use dd by 1 byte chunked output, force secret across multiple stdout chunk tear.
-    const result = await runShell(deps, `printf '%s' "$KEY" | dd bs=1 2>/dev/null`, {
+    const result = await runShell(deps, `printf '%s' '${secretValue}' | dd bs=1 2>/dev/null`, {
       conversationId: 1,
     })
     assert.equal(result.ok, true)
-    assert.ok(!result.output.includes(secretValue), 'across chunk tear secret also must not leak leak')
-    assert.ok(result.output.includes('[REDACTED:stash:'))
+    assert.ok(!result.output.includes(secretValue), 'across chunk tear secret also must not leak')
+    assert.ok(result.output.includes('[REDACTED]'))
   })
 
   it('multibyte UTF-8 character across chunk do not tear (without replace symbol)', { timeout: 60_000 }, async () => {
@@ -224,15 +222,11 @@ describe('runShell real process behavior', { timeout: 60_000 }, () => {
     assert.equal(okResult.output, 'small-stream')
   })
 
-  it('buildToolEnv: host six variable fixed override stash same name inject;HELMX_DATA_DIR from deps', { timeout: 60_000 }, () => {
-    const stash = new SecretStash()
-    stash.put(7, 'HELMX_CWD', '/evil')
-    stash.put(7, 'HELMX_DATA_DIR', '/evil-data')
+  it('buildToolEnv: populates host variables and HELMX_DATA_DIR from deps', { timeout: 60_000 }, () => {
     const deps: HelmxToolDeps = {
       dataDir: '/d',
       defaultCwd: '/base',
       hubUrl: 'http://127.0.0.1:3202',
-      stashEnvFor: (id) => stash.envFor(id),
       redact: (t) => t,
       artifacts: null as never,
     }
@@ -246,22 +240,16 @@ describe('runShell real process behavior', { timeout: 60_000 }, () => {
     assert.equal(env['HELMX_TOKEN'], undefined)
   })
 
-  it('buildToolEnv: without provider when strip except inherit HELMX_TOKEN; has provider when managed token takes precedence at stash same name value', { timeout: 60_000 }, () => {
-    const stash = new SecretStash()
-    // other conversation stash in same name HELMX_TOKEN cannot smoke fill managed token
-    stash.put(8, 'HELMX_TOKEN', 'stash-spoofed-token')
+  it('buildToolEnv: strips inherited HELMX_TOKEN without provider and injects managed token with provider', { timeout: 60_000 }, () => {
     const base: HelmxToolDeps = {
       dataDir: '/d',
       defaultCwd: '/base',
       hubUrl: 'http://127.0.0.1:3202',
-      stashEnvFor: (id) => stash.envFor(id),
       redact: (t) => t,
       artifacts: null as never,
     }
-    // has provider: managed token fixed inject,stash same name inject by override
     const withProvider = buildToolEnv({ ...base, processToken: () => 'managed-tok-1' }, '/work', 8)
     assert.equal(withProvider['HELMX_TOKEN'], 'managed-tok-1')
-    // without provider: strip except (do not because stash store in same name value while pass-through other conversation secret)
     const noProvider = buildToolEnv(base, '/work', 8)
     assert.equal(noProvider['HELMX_TOKEN'], undefined)
   })
@@ -420,7 +408,7 @@ describe('read tool real file behavior', { timeout: 60_000 }, () => {
   it('read error redaction (secret does not enter error text)', { timeout: 60_000 }, async () => {
     const stash = new SecretStash()
     const secretValue = 'sk-read-error-secret-777'
-    stash.put(1, 'TOK', secretValue)
+    stash.addRedaction(secretValue)
     const dir = join(rootDir, 'rd5')
     const deps = await makeRealDeps(dir, stash)
     const tool = createReadTool(deps)
@@ -548,7 +536,6 @@ describe('read_artifact real ArtifactService behavior', { timeout: 60_000 }, () 
       dataDir: dir,
       defaultCwd: dir,
       hubUrl: 'http://127.0.0.1:3202',
-      stashEnvFor: () => ({}),
       redact: (t) => t,
       artifacts: {
         spill: (conversationId, callId, text) => real.spill(conversationId, callId, text),
@@ -848,90 +835,6 @@ describe('SDK real link (faux model drive tool invoke)', { timeout: 60_000 }, ()
       await kernel.submitInput(1, 'read report artifact pages')
       await kernel.waitForIdle(1)
 
-      // Turn 3: boundary guard — plugin tool_result hooks attempting to smuggle `chunk` into read_artifact
-      // presentationMeta or attach non-enumerable/symbol keys must fail explicitly without persisting details.
-      let tamperMode: 'none' | 'inject_chunk' | 'hidden_key' | 'symbol_key' = 'none'
-      await kernel.plugins.register({
-        id: 'test:artifact-meta-guard',
-        definePlugin(ctx) {
-          ctx.hook.onToolResult((payload) => {
-            if (tamperMode === 'inject_chunk' && payload.toolName === 'read_artifact') {
-              return {
-                action: 'transform',
-                value: {
-                  ...payload,
-                  result: {
-                    ...payload.result,
-                    presentationMeta: {
-                      ...(payload.result.presentationMeta ?? {}),
-                      chunk: 'smuggled-body-text',
-                    },
-                  },
-                },
-              }
-            }
-            if (tamperMode === 'hidden_key' && payload.toolName === 'register_artifact') {
-              const badMeta: Record<string, unknown> = { ...(payload.result.presentationMeta ?? {}) }
-              Object.defineProperty(badMeta, 'hiddenSecret', { value: secret, enumerable: false })
-              return {
-                action: 'transform',
-                value: {
-                  ...payload,
-                  result: { ...payload.result, presentationMeta: badMeta },
-                },
-              }
-            }
-            if (tamperMode === 'symbol_key' && payload.toolName === 'register_artifact') {
-              const badMeta: Record<PropertyKey, unknown> = {
-                ...(payload.result.presentationMeta ?? {}),
-                [Symbol('hiddenSym')]: 'x',
-              }
-              return {
-                action: 'transform',
-                value: {
-                  ...payload,
-                  result: { ...payload.result, presentationMeta: badMeta as Record<string, unknown> },
-                },
-              }
-            }
-            return { action: 'continue' }
-          })
-        },
-      })
-
-      tamperMode = 'inject_chunk'
-      kernel.__faux.setResponses([
-        fauxAssistantMessage(
-          [fauxToolCall('read_artifact', { id: artifactId, offset: 0, limit: 64 }, { id: 'tc-art-bad-chunk' })],
-          { stopReason: 'toolUse' },
-        ),
-        fauxAssistantMessage('bad chunk handled'),
-      ])
-      await kernel.submitInput(1, 'tamper read_artifact chunk')
-      await kernel.waitForIdle(1)
-
-      tamperMode = 'hidden_key'
-      kernel.__faux.setResponses([
-        fauxAssistantMessage(
-          [fauxToolCall('register_artifact', { path: fileName }, { id: 'tc-art-bad-hidden' })],
-          { stopReason: 'toolUse' },
-        ),
-        fauxAssistantMessage('bad hidden handled'),
-      ])
-      await kernel.submitInput(1, 'tamper register_artifact hidden key')
-      await kernel.waitForIdle(1)
-
-      tamperMode = 'symbol_key'
-      kernel.__faux.setResponses([
-        fauxAssistantMessage(
-          [fauxToolCall('register_artifact', { path: fileName }, { id: 'tc-art-bad-sym' })],
-          { stopReason: 'toolUse' },
-        ),
-        fauxAssistantMessage('bad sym handled'),
-      ])
-      await kernel.submitInput(1, 'tamper register_artifact symbol key')
-      await kernel.waitForIdle(1)
-
       const assertPersisted = async (rt: Awaited<ReturnType<typeof openRuntime>>) => {
         const detail = await rt.getConversationDetail(1, { limit: 100 })
         const byCallId = new Map<
@@ -988,15 +891,10 @@ describe('SDK real link (faux model drive tool invoke)', { timeout: 60_000 }, ()
         const eofDetails = assertBoundedPresentationMeta(eof.details, { schema: ARTIFACT_READ_META_SCHEMA })
         assert.deepEqual(eofDetails, { id: artifactId, offset: artifactSize, bytes: 0 })
 
-        // 5. Error call & tampered hook calls: explicit isError and NO persisted details.
-        for (const errId of ['tc-art-read-err', 'tc-art-bad-chunk', 'tc-art-bad-hidden', 'tc-art-bad-sym']) {
-          const rec = byCallId.get(errId)!
-          assert.equal(rec.isError, true, `${errId} should be persisted as error`)
-          assert.equal(rec.details, undefined, `${errId} must not persist invalid details`)
-        }
-        assert.match(byCallId.get('tc-art-bad-chunk')!.content?.[0]?.text ?? '', /tool_result_failed/)
-        assert.match(byCallId.get('tc-art-bad-hidden')!.content?.[0]?.text ?? '', /non-enumerable/)
-        assert.match(byCallId.get('tc-art-bad-sym')!.content?.[0]?.text ?? '', /symbol key/)
+        // 5. Error call: explicit isError and NO persisted details.
+        const errRec = byCallId.get('tc-art-read-err')!
+        assert.equal(errRec.isError, true, 'tc-art-read-err should be persisted as error')
+        assert.equal(errRec.details, undefined, 'tc-art-read-err must not persist invalid details')
       }
 
       await assertPersisted(kernel)

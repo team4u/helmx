@@ -22,9 +22,7 @@ import {
 } from '@helmx/protocol'
 import {
   isCrossPlatformAbsolutePath,
-  PROFILE_RUNTIME_KIND_PATTERN,
   PROFILE_THINKING_LEVELS,
-  validateProfileRuntime,
   validateProfileStarters,
 } from '../services/profiles-skills.js'
 
@@ -353,21 +351,6 @@ const PROFILE_STARTER_SCHEMA = Type.Object(
   { additionalProperties: false },
 )
 
-const PROFILE_RUNTIME_SCHEMA = Type.Object(
-  {
-    // Kernel has zero hardcoded plugin enums: kind only checks the external runtime identifier format.
-    kind: Type.String({ pattern: PROFILE_RUNTIME_KIND_PATTERN.source }),
-    agent: NonEmptyString,
-    args: Type.Optional(Type.Array(Type.String())),
-    nodeId: Type.Optional(NonEmptyString),
-    workspace: Type.Optional(NonEmptyString),
-    env: Type.Optional(
-      Type.Object({}, { propertyNames: NonEmptyString, additionalProperties: Type.String() }),
-    ),
-  },
-  { additionalProperties: false },
-)
-
 const PROFILE_COMMON_PROPS = {
   name: Type.Optional(Type.String()),
   model: Type.Optional(Type.String()),
@@ -377,9 +360,7 @@ const PROFILE_COMMON_PROPS = {
   tags: Type.Optional(Type.Array(NonEmptyString)),
   skills: Type.Optional(Type.Array(Type.String({ pattern: SKILL_ID_PATTERN.source }))),
   starters: Type.Optional(Type.Array(PROFILE_STARTER_SCHEMA)),
-  runtime: Type.Optional(PROFILE_RUNTIME_SCHEMA),
   managedByPlugin: Type.Optional(Type.String()),
-  humanSelectable: Type.Optional(Type.Boolean()),
   restrictToCwd: Type.Optional(Type.Boolean()),
   system: Type.Optional(Type.String()),
 }
@@ -419,9 +400,6 @@ export function parseProfileBody(body: Record<string, unknown>, opts: { requireI
   const starters = parsed.starters !== undefined
     ? validateProfileStarters(parsed.starters, { fail: throwValidationError })
     : undefined
-  const runtime = parsed.runtime !== undefined
-    ? validateProfileRuntime(parsed.runtime, { fail: throwValidationError, allowEmptyRuntimeEnv: true })
-    : undefined
 
   const profile: Profile = { ...(parsed.id !== undefined ? { id: parsed.id } : {}) } as Profile
   if (parsed.name !== undefined) profile.name = parsed.name
@@ -430,10 +408,8 @@ export function parseProfileBody(body: Record<string, unknown>, opts: { requireI
   if (parsed.nodeId !== undefined) profile.nodeId = parsed.nodeId
   if (parsed.cwd !== undefined) profile.cwd = parsed.cwd
   if (parsed.tags !== undefined) profile.tags = [...parsed.tags]
-  if (runtime !== undefined) profile.runtime = runtime
   if (parsed.skills !== undefined) profile.skills = [...new Set(parsed.skills)]
   if (parsed.managedByPlugin !== undefined) profile.managedByPlugin = parsed.managedByPlugin
-  if (parsed.humanSelectable !== undefined) profile.humanSelectable = parsed.humanSelectable
   if (parsed.restrictToCwd !== undefined) profile.restrictToCwd = parsed.restrictToCwd
   if (starters !== undefined) profile.starters = starters
   if (parsed.system !== undefined) profile.system = parsed.system

@@ -7,7 +7,7 @@
 
 import net from 'node:net';
 import type { Duplex } from 'node:stream';
-import { classifyControlledSocketPath, type RpcEnvError, type RpcResult } from '@helmx/protocol';
+import type { RpcEnvError, RpcResult } from '@helmx/protocol';
 import { drainingRejection, invalidInput, isRecord, rpcFail } from './env-rpc-shared.js';
 
 const TUNNEL_OPEN_DEFAULT_MS = 15_000;
@@ -91,7 +91,7 @@ export function createTunnelHandler(options: TunnelHandlerOptions): TunnelHandle
   const nodeTunnelOpenCore = async (raw: unknown): Promise<RpcResult<null>> => {
     if (!isRecord(raw) || Array.isArray(raw)) return invalidInput('nodeTunnelOpen input must be a plain object');
     const unknownFields = Object.keys(raw).filter(
-      (key) => key !== 'tunnelId' && key !== 'port' && key !== 'timeoutMs' && key !== 'host' && key !== 'socketPath',
+      (key) => key !== 'tunnelId' && key !== 'port' && key !== 'timeoutMs' && key !== 'host',
     );
     if (unknownFields.length > 0) {
       return invalidInput(`nodeTunnelOpen rejects unknown field(s): ${unknownFields.join(', ')}`);
@@ -100,29 +100,15 @@ export function createTunnelHandler(options: TunnelHandlerOptions): TunnelHandle
     if (typeof tunnelId !== 'string' || tunnelId.length === 0 || tunnelId.length > 128) {
       return invalidInput('nodeTunnelOpen tunnelId must be a string of 1..128 characters');
     }
-    const hasSocketPath = raw['socketPath'] !== undefined;
-    const hasTcpField = raw['port'] !== undefined || raw['host'] !== undefined;
-    if (hasSocketPath && hasTcpField) {
-      return invalidInput('nodeTunnelOpen target cannot mix socketPath with host/port');
+    const port = raw['port'];
+    if (typeof port !== 'number' || !Number.isSafeInteger(port) || port < 1 || port > 65535) {
+      return invalidInput('nodeTunnelOpen port must be a safe integer within 1..65535');
     }
-
-    let dialTarget: { kind: 'tcp'; host: string; port: number; label: string } | { kind: 'socket'; socketPath: string; label: string };
-    if (hasSocketPath) {
-      const checked = classifyControlledSocketPath(raw['socketPath']);
-      if (!checked.ok) return invalidInput(`nodeTunnelOpen ${checked.message}`);
-      dialTarget = { kind: 'socket', socketPath: checked.socketPath, label: checked.socketPath };
-    } else {
-      const port = raw['port'];
-      if (typeof port !== 'number' || !Number.isSafeInteger(port) || port < 1 || port > 65535) {
-        return invalidInput('nodeTunnelOpen port must be a safe integer within 1..65535');
-      }
-      let host: string;
-      try {
-        host = assertValidTunnelHost(raw['host']) ?? TUNNEL_DEFAULT_HOST;
-      } catch (error) {
-        return rpcFail(error);
-      }
-      dialTarget = { kind: 'tcp', host, port, label: `${host}:${port}` };
+    let host: string;
+    try {
+      host = assertValidTunnelHost(raw['host']) ?? TUNNEL_DEFAULT_HOST;
+    } catch (error) {
+      return rpcFail(error);
     }
     const rawTimeout = raw['timeoutMs'];
     if (rawTimeout !== undefined && (typeof rawTimeout !== 'number' || !Number.isFinite(rawTimeout) || rawTimeout <= 0)) {
@@ -147,10 +133,8 @@ export function createTunnelHandler(options: TunnelHandlerOptions): TunnelHandle
     }
     // Single overall budget spanning target socket connect + WS handshake.
     const budgetMs = typeof rawTimeout === 'number' ? Math.floor(rawTimeout) : TUNNEL_OPEN_DEFAULT_MS;
-    const target = dialTarget.label;
-    const tcp = dialTarget.kind === 'socket'
-      ? net.connect({ path: dialTarget.socketPath })
-      : net.connect({ host: dialTarget.host, port: dialTarget.port });
+    const target = `${host}:${port}`;
+    const tcp = net.connect({ host, port });
     const tunnel = newTunnel(tunnelId, tcp);
     let settled = false;
     let settleResult: (result: RpcResult<null>) => void = () => undefined;
@@ -163,9 +147,7 @@ export function createTunnelHandler(options: TunnelHandlerOptions): TunnelHandle
     };
     const connectFailed = (detail: string): RpcEnvError => ({
       code: 'connect_failed',
-      message: dialTarget.kind === 'socket'
-        ? `tunnel socket connect to ${target} failed: ${detail}`
-        : `tunnel TCP connect to ${target} failed: ${detail}`,
+      message: `tunnel TCP connect to ${target} failed: ${detail}`,
     });
     const budgetTimer = setTimeout(() => {
       settleOnce({ ok: false, error: { code: 'timeout', message: `tunnel open timed out after ${budgetMs}ms (${target})` } });
