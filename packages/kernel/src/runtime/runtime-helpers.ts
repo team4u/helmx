@@ -18,7 +18,6 @@ import {
   safeResultText,
   validateOrThrow,
 } from '@helmx/protocol'
-import { redactJsonValue } from '../redact.js'
 import type { ConvMeta } from './store.js'
 import { getCurrentTools } from '@earendil-works/pi-ai/utils/transcript'
 import type { HelmxStore } from './store.js'
@@ -77,10 +76,334 @@ export interface GuardToolResultOptions extends ToolResultSchemaOptions {
   enforceSchemas?: boolean
 }
 
+const FORBIDDEN_ENVELOPE_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
+const ALLOWED_TOOL_RESULT_KEYS = new Set([
+  'output',
+  'structuredOutput',
+  'isError',
+  'details',
+  'diagnostics',
+  'usage',
+  'control',
+])
+const TEXT_CONTENT_KEYS = new Set(['type', 'text', 'textSignature'])
+const IMAGE_CONTENT_KEYS = new Set(['type', 'data', 'mimeType'])
+const DIAGNOSTIC_KEYS = new Set(['severity', 'message', 'code'])
+const DIAGNOSTIC_SEVERITIES = new Set(['info', 'warn', 'error'])
+const USAGE_REQUIRED_NUMBER_KEYS = ['input', 'output', 'cacheRead', 'cacheWrite', 'totalTokens'] as const
+const USAGE_OPTIONAL_NUMBER_KEYS = ['cacheWrite1h', 'reasoning'] as const
+const USAGE_KEYS = new Set<string>([...USAGE_REQUIRED_NUMBER_KEYS, ...USAGE_OPTIONAL_NUMBER_KEYS, 'cost'])
+const USAGE_COST_REQUIRED_NUMBER_KEYS = ['input', 'output', 'cacheRead', 'cacheWrite', 'total'] as const
+const USAGE_COST_KEYS = new Set<string>([...USAGE_COST_REQUIRED_NUMBER_KEYS, 'totalFromProvider'])
+const CONTROL_KEYS = new Set(['addTools', 'terminate', 'handoff'])
+
 function formatToolWhere(options?: { toolName?: string; callId?: string }): string {
   return options?.toolName !== undefined
     ? `tool ${options.toolName}${options?.callId !== undefined ? `(callId=${options.callId})` : ''}`
     : 'plugin tool'
+}
+
+/**
+ * Strictly validate, redact, and deep-clone a raw JS value as faithful JSON without calling `JSON.stringify`:
+ * rejects `undefined`, symbols, functions, `bigint`, non-finite numbers, cycles, sparse arrays, non-plain arrays
+ * or objects (including custom prototypes / class instances with `toJSON`), extra own properties on arrays,
+ * symbol own keys, non-enumerable or accessor own properties, `toJSON` disguises, and forbidden prototype keys
+ * (`__proto__`, `constructor`, `prototype`, before and after redaction).
+ */
+function assertStrictToolResultJson(
+  value: unknown,
+  redact: (text: string) => string,
+  where: string,
+  rootPath: string,
+): unknown {
+  const visiting = new WeakSet<object>()
+
+  function visit(current: unknown, path: string): unknown {
+    if (current === null || typeof current === 'boolean') return current
+    if (typeof current === 'string') return redact(current)
+    if (typeof current === 'number') {
+      if (!Number.isFinite(current)) {
+        throw new HelmxError('invalid_tool_result', `${where} ${path} contains a non-finite number`, 500, { path })
+      }
+      return current
+    }
+    if (typeof current !== 'object') {
+      throw new HelmxError(
+        'invalid_tool_result',
+        `${where} ${path} contains a non-JSON value (${typeof current})`,
+        500,
+        { path },
+      )
+    }
+    if (visiting.has(current)) {
+      throw new HelmxError('invalid_tool_result', `${where} ${path} contains a circular reference`, 500, { path })
+    }
+    visiting.add(current)
+    try {
+      if (Array.isArray(current)) {
+        if (Object.getPrototypeOf(current) !== Array.prototype) {
+          throw new HelmxError('invalid_tool_result', `${where} ${path} contains a non-plain array`, 500, { path })
+        }
+        for (const rawKey of Reflect.ownKeys(current)) {
+          if (rawKey === 'length') continue
+          if (typeof rawKey !== 'string') {
+            throw new HelmxError(
+              'invalid_tool_result',
+              `${where} ${path} contains a symbol key (${redact(String(rawKey))}) on array`,
+              500,
+              { path },
+            )
+          }
+          if (FORBIDDEN_ENVELOPE_KEYS.has(rawKey)) {
+            throw new HelmxError(
+              'invalid_tool_result',
+              `${where} ${path} contains forbidden prototype key "${rawKey}"`,
+              500,
+              { path, key: rawKey },
+            )
+          }
+          const idx = Number(rawKey)
+          if (!Number.isInteger(idx) || idx < 0 || idx >= current.length || String(idx) !== rawKey) {
+            const safeKey = redact(rawKey)
+            throw new HelmxError(
+              'invalid_tool_result',
+              `${where} ${path} contains an extra own property "${safeKey}" on array`,
+              500,
+              { path, key: safeKey },
+            )
+          }
+        }
+        const out: unknown[] = []
+        for (let i = 0; i < current.length; i += 1) {
+          const desc = Object.getOwnPropertyDescriptor(current, i)
+          if (desc === undefined) {
+            throw new HelmxError(
+              'invalid_tool_result',
+              `${where} ${path}[${i}] contains a sparse array hole`,
+              500,
+              { path: `${path}[${i}]` },
+            )
+          }
+          if (!desc.enumerable || desc.get !== undefined || desc.set !== undefined) {
+            throw new HelmxError(
+              'invalid_tool_result',
+              `${where} ${path}[${i}] contains a non-enumerable or accessor array element`,
+              500,
+              { path: `${path}[${i}]` },
+            )
+          }
+          out.push(visit(desc.value, `${path}[${i}]`))
+        }
+        return out
+      }
+      if (!isPlainObject(current)) {
+        throw new HelmxError('invalid_tool_result', `${where} ${path} contains a non-plain object`, 500, { path })
+      }
+      const out: Record<string, unknown> = {}
+      const seenKeys = new Set<string>()
+      for (const rawKey of Reflect.ownKeys(current)) {
+        if (typeof rawKey !== 'string') {
+          throw new HelmxError(
+            'invalid_tool_result',
+            `${where} ${path} contains a symbol key (${redact(String(rawKey))})`,
+            500,
+            { path },
+          )
+        }
+        const desc = Object.getOwnPropertyDescriptor(current, rawKey)
+        if (desc === undefined || !desc.enumerable) {
+          const safeKey = redact(rawKey)
+          throw new HelmxError(
+            'invalid_tool_result',
+            `${where} ${path} contains a non-enumerable property "${safeKey}"`,
+            500,
+            { path, key: safeKey },
+          )
+        }
+        if (desc.get !== undefined || desc.set !== undefined) {
+          const safeKey = redact(rawKey)
+          throw new HelmxError(
+            'invalid_tool_result',
+            `${where} ${path} contains an accessor property "${safeKey}"`,
+            500,
+            { path, key: safeKey },
+          )
+        }
+        if (FORBIDDEN_ENVELOPE_KEYS.has(rawKey)) {
+          throw new HelmxError(
+            'invalid_tool_result',
+            `${where} ${path} contains forbidden prototype key "${rawKey}"`,
+            500,
+            { path, key: rawKey },
+          )
+        }
+        const key = redact(rawKey)
+        if (FORBIDDEN_ENVELOPE_KEYS.has(key)) {
+          throw new HelmxError(
+            'invalid_tool_result',
+            `${where} ${path} contains forbidden prototype key "${key}"`,
+            500,
+            { path, key },
+          )
+        }
+        if (seenKeys.has(key)) {
+          throw new HelmxError(
+            'redacted_key_conflict',
+            `${where} ${path} redacted fields collide at ${path}.${key}`,
+            500,
+            { path, key },
+          )
+        }
+        seenKeys.add(key)
+        out[key] = visit(desc.value, `${path}.${key}`)
+      }
+      return out
+    } finally {
+      visiting.delete(current)
+    }
+  }
+
+  return visit(value, rootPath)
+}
+
+function assertOnlyAllowedKeys(
+  record: Record<string, unknown>,
+  allowed: ReadonlySet<string>,
+  where: string,
+  path: string,
+): void {
+  for (const key of Object.keys(record)) {
+    if (!allowed.has(key)) {
+      throw new HelmxError('invalid_tool_result', `${where} ${path} contains unsupported field "${key}"`, 500, {
+        path,
+        key,
+      })
+    }
+  }
+}
+
+function validateOutputField(
+  raw: unknown,
+  redact: (text: string) => string,
+  where: string,
+): NonNullable<ToolExecutionResult['output']> {
+  const safe = assertStrictToolResultJson(raw, redact, where, 'output')
+  if (!Array.isArray(safe)) {
+    throw new HelmxError('invalid_tool_result', `${where} output must be an array of content blocks`, 500)
+  }
+  for (let i = 0; i < safe.length; i += 1) {
+    const block = safe[i]
+    const blockPath = `output[${i}]`
+    if (!isPlainObject(block)) {
+      throw new HelmxError('invalid_tool_result', `${where} ${blockPath} must be a plain content block object`, 500)
+    }
+    if (block['type'] === 'text') {
+      assertOnlyAllowedKeys(block, TEXT_CONTENT_KEYS, where, blockPath)
+      if (typeof block['text'] !== 'string') {
+        throw new HelmxError('invalid_tool_result', `${where} ${blockPath}.text must be a string`, 500)
+      }
+      if ('textSignature' in block && typeof block['textSignature'] !== 'string') {
+        throw new HelmxError('invalid_tool_result', `${where} ${blockPath}.textSignature must be a string`, 500)
+      }
+    } else if (block['type'] === 'image') {
+      assertOnlyAllowedKeys(block, IMAGE_CONTENT_KEYS, where, blockPath)
+      if (typeof block['data'] !== 'string' || typeof block['mimeType'] !== 'string') {
+        throw new HelmxError('invalid_tool_result', `${where} ${blockPath} image block requires string data and mimeType`, 500)
+      }
+    } else {
+      throw new HelmxError('invalid_tool_result', `${where} ${blockPath} only accepts text or image content blocks`, 500)
+    }
+  }
+  return safe as NonNullable<ToolExecutionResult['output']>
+}
+
+function validateDiagnosticsField(
+  raw: unknown,
+  redact: (text: string) => string,
+  where: string,
+): NonNullable<ToolExecutionResult['diagnostics']> {
+  const safe = assertStrictToolResultJson(raw, redact, where, 'diagnostics')
+  if (!Array.isArray(safe)) {
+    throw new HelmxError('invalid_tool_result', `${where} diagnostics must be an array of ToolDiagnostic entries`, 500)
+  }
+  for (let i = 0; i < safe.length; i += 1) {
+    const entry = safe[i]
+    const entryPath = `diagnostics[${i}]`
+    if (!isPlainObject(entry)) {
+      throw new HelmxError('invalid_tool_result', `${where} ${entryPath} must be a plain object`, 500)
+    }
+    assertOnlyAllowedKeys(entry, DIAGNOSTIC_KEYS, where, entryPath)
+    if (typeof entry['severity'] !== 'string' || !DIAGNOSTIC_SEVERITIES.has(entry['severity'])) {
+      throw new HelmxError('invalid_tool_result', `${where} ${entryPath}.severity must be info, warn, or error`, 500)
+    }
+    if (typeof entry['message'] !== 'string') {
+      throw new HelmxError('invalid_tool_result', `${where} ${entryPath}.message must be a string`, 500)
+    }
+    if ('code' in entry && typeof entry['code'] !== 'string') {
+      throw new HelmxError('invalid_tool_result', `${where} ${entryPath}.code must be a string`, 500)
+    }
+  }
+  return safe as NonNullable<ToolExecutionResult['diagnostics']>
+}
+
+function validateUsageField(
+  raw: unknown,
+  redact: (text: string) => string,
+  where: string,
+): NonNullable<ToolExecutionResult['usage']> {
+  const safe = assertStrictToolResultJson(raw, redact, where, 'usage')
+  if (!isPlainObject(safe)) {
+    throw new HelmxError('invalid_tool_result', `${where} usage must be a plain object`, 500)
+  }
+  assertOnlyAllowedKeys(safe, USAGE_KEYS, where, 'usage')
+  for (const key of USAGE_REQUIRED_NUMBER_KEYS) {
+    if (typeof safe[key] !== 'number') {
+      throw new HelmxError('invalid_tool_result', `${where} usage.${key} must be a finite number`, 500)
+    }
+  }
+  for (const key of USAGE_OPTIONAL_NUMBER_KEYS) {
+    if (key in safe && typeof safe[key] !== 'number') {
+      throw new HelmxError('invalid_tool_result', `${where} usage.${key} must be a finite number`, 500)
+    }
+  }
+  const cost = safe['cost']
+  if (!isPlainObject(cost)) {
+    throw new HelmxError('invalid_tool_result', `${where} usage.cost must be a plain object`, 500)
+  }
+  assertOnlyAllowedKeys(cost, USAGE_COST_KEYS, where, 'usage.cost')
+  for (const key of USAGE_COST_REQUIRED_NUMBER_KEYS) {
+    if (typeof cost[key] !== 'number') {
+      throw new HelmxError('invalid_tool_result', `${where} usage.cost.${key} must be a finite number`, 500)
+    }
+  }
+  if ('totalFromProvider' in cost && typeof cost['totalFromProvider'] !== 'boolean') {
+    throw new HelmxError('invalid_tool_result', `${where} usage.cost.totalFromProvider must be a boolean`, 500)
+  }
+  return safe as unknown as NonNullable<ToolExecutionResult['usage']>
+}
+
+function validateControlField(
+  raw: unknown,
+  redact: (text: string) => string,
+  where: string,
+): NonNullable<ToolExecutionResult['control']> {
+  const safe = assertStrictToolResultJson(raw, redact, where, 'control')
+  if (!isPlainObject(safe)) {
+    throw new HelmxError('invalid_tool_result', `${where} control must be a plain object`, 500)
+  }
+  assertOnlyAllowedKeys(safe, CONTROL_KEYS, where, 'control')
+  if ('addTools' in safe) {
+    if (!Array.isArray(safe['addTools']) || safe['addTools'].some((item) => typeof item !== 'string')) {
+      throw new HelmxError('invalid_tool_result', `${where} control.addTools must be an array of strings`, 500)
+    }
+  }
+  if ('terminate' in safe && typeof safe['terminate'] !== 'boolean') {
+    throw new HelmxError('invalid_tool_result', `${where} control.terminate must be a boolean`, 500)
+  }
+  if ('handoff' in safe && typeof safe['handoff'] !== 'string') {
+    throw new HelmxError('invalid_tool_result', `${where} control.handoff must be a string`, 500)
+  }
+  return safe as NonNullable<ToolExecutionResult['control']>
 }
 
 function validateAndRedactStructuredOutput(
@@ -100,9 +423,9 @@ function validateAndRedactStructuredOutput(
         500,
       )
     }
-    return redactJsonValue(raw, redact)
+    return assertStrictToolResultJson(raw, redact, options.where, 'structuredOutput')
   }
-  const redacted = redactJsonValue(raw, redact)
+  const redacted = assertStrictToolResultJson(raw, redact, options.where, 'structuredOutput')
   validateOrThrow(
     options.structuredOutputSchema,
     redacted,
@@ -397,10 +720,13 @@ export function normalizeToolResult(value: unknown): NormalizedHookToolResult | 
 /**
  * Single outbound guard before tool result persistence (`HookBridge.afterTool` and `prepareToolResultWith`).
  *
- * Validates and redacts `details` (`presentationMeta`) and `structuredOutput` BEFORE any `JSON.stringify` so
- * non-finite numbers, `undefined`, cycles, non-plain objects, and prototype keys can never be silently coerced
- * or stripped. Enforces bounded `presentationMeta` (64 KiB / depth 12 / 2000 nodes) on every result, and enforces
- * declared `presentationMetaSchema` / `structuredOutputSchema` when `enforceSchemas: true`.
+ * Strictly validates and redacts EVERY field of the SDK `ToolExecutionResult` envelope (`output`, `isError`,
+ * `diagnostics`, `usage`, `control`, `structuredOutput`, `details`) directly from the raw JS object WITHOUT any
+ * `JSON.stringify` / `JSON.parse` pre-normalization: `undefined`, symbols, functions, `bigint`, non-finite
+ * numbers, cycles, sparse arrays, non-plain objects, non-enumerable/accessor properties, `toJSON` disguises,
+ * forbidden prototype keys, and unsupported fields all fail explicitly with `invalid_tool_result` (never
+ * silently stripped or coerced). Enforces bounded `presentationMeta` (64 KiB / depth 12 / 2000 nodes) on every
+ * result, and enforces declared `presentationMetaSchema` / `structuredOutputSchema` when `enforceSchemas: true`.
  */
 export function guardToolExecutionResult(
   result: ToolExecutionResult,
@@ -409,36 +735,107 @@ export function guardToolExecutionResult(
 ): ToolExecutionResult {
   const where = formatToolWhere(options)
   const requireSchema = options?.enforceSchemas === true
-  const { details: rawDetails, structuredOutput: rawStructured, ...rest } = result
 
+  if (!isPlainObject(result)) {
+    throw new HelmxError('invalid_tool_result', `${where} result must be a plain JSON object`, 500)
+  }
+
+  let safeOutput: ToolExecutionResult['output']
+  let safeIsError: boolean | undefined
+  let safeDiagnostics: ToolExecutionResult['diagnostics']
+  let safeUsage: ToolExecutionResult['usage']
+  let safeControl: ToolExecutionResult['control']
   let safeDetails: Record<string, unknown> | undefined
-  if (rawDetails !== undefined) {
-    safeDetails = validateAndRedactPresentationMeta(rawDetails, redact, {
-      presentationMetaSchema: options?.presentationMetaSchema,
-      requireSchema,
-      where,
-    })
-  }
-
   let safeStructured: unknown
-  if (rawStructured !== undefined) {
-    safeStructured = validateAndRedactStructuredOutput(rawStructured, redact, {
-      structuredOutputSchema: options?.structuredOutputSchema,
-      requireSchema,
-      where,
-    })
-  }
+  let hasStructured = false
 
-  // Remaining SDK envelope fields (`output`, `isError`, `diagnostics`, `usage`, `control`):
-  // apply JSON omission semantics for optional undefined keys, then redact every string.
-  const safeRest = redactJsonValue(JSON.parse(JSON.stringify(rest)), redact) as Omit<
-    ToolExecutionResult,
-    'details' | 'structuredOutput'
-  >
+  for (const rawKey of Reflect.ownKeys(result)) {
+    if (typeof rawKey !== 'string') {
+      throw new HelmxError(
+        'invalid_tool_result',
+        `${where} result contains a symbol key (${redact(String(rawKey))})`,
+        500,
+      )
+    }
+    const desc = Object.getOwnPropertyDescriptor(result, rawKey)
+    if (desc === undefined || !desc.enumerable) {
+      throw new HelmxError(
+        'invalid_tool_result',
+        `${where} result contains a non-enumerable property "${redact(rawKey)}"`,
+        500,
+      )
+    }
+    if (desc.get !== undefined || desc.set !== undefined) {
+      throw new HelmxError(
+        'invalid_tool_result',
+        `${where} result contains an accessor property "${redact(rawKey)}"`,
+        500,
+      )
+    }
+    if (FORBIDDEN_ENVELOPE_KEYS.has(rawKey)) {
+      throw new HelmxError(
+        'invalid_tool_result',
+        `${where} result contains forbidden prototype key "${rawKey}"`,
+        500,
+      )
+    }
+    if (!ALLOWED_TOOL_RESULT_KEYS.has(rawKey)) {
+      throw new HelmxError(
+        'invalid_tool_result',
+        `${where} result contains unsupported field "${redact(rawKey)}"`,
+        500,
+      )
+    }
+
+    const rawValue = desc.value
+    switch (rawKey) {
+      case 'details':
+        // `pi-durable` `finalResult` always spreads `details: result.details === undefined ? reported.details : result.details`,
+        // producing own key `details: undefined` when no presentationMeta was emitted.
+        if (rawValue !== undefined) {
+          safeDetails = validateAndRedactPresentationMeta(rawValue, redact, {
+            presentationMetaSchema: options?.presentationMetaSchema,
+            requireSchema,
+            where,
+          })
+        }
+        break
+      case 'structuredOutput':
+        safeStructured = validateAndRedactStructuredOutput(rawValue, redact, {
+          structuredOutputSchema: options?.structuredOutputSchema,
+          requireSchema,
+          where,
+        })
+        hasStructured = true
+        break
+      case 'output':
+        safeOutput = validateOutputField(rawValue, redact, where)
+        break
+      case 'isError':
+        if (typeof rawValue !== 'boolean') {
+          throw new HelmxError('invalid_tool_result', `${where} isError must be a boolean`, 500)
+        }
+        safeIsError = rawValue
+        break
+      case 'diagnostics':
+        safeDiagnostics = validateDiagnosticsField(rawValue, redact, where)
+        break
+      case 'usage':
+        safeUsage = validateUsageField(rawValue, redact, where)
+        break
+      case 'control':
+        safeControl = validateControlField(rawValue, redact, where)
+        break
+    }
+  }
 
   return {
-    ...safeRest,
-    ...(safeStructured !== undefined ? { structuredOutput: safeStructured as JsonValue } : {}),
+    ...(safeOutput !== undefined ? { output: safeOutput } : {}),
+    ...(safeIsError !== undefined ? { isError: safeIsError } : {}),
+    ...(safeDiagnostics !== undefined ? { diagnostics: safeDiagnostics } : {}),
+    ...(safeUsage !== undefined ? { usage: safeUsage } : {}),
+    ...(safeControl !== undefined ? { control: safeControl } : {}),
+    ...(hasStructured ? { structuredOutput: safeStructured as JsonValue } : {}),
     ...(safeDetails !== undefined ? { details: safeDetails as JsonValue } : {}),
   }
 }

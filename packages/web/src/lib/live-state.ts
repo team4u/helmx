@@ -35,9 +35,12 @@ function omit<T>(record: Record<string, T>, key: string): Record<string, T> {
   return Object.fromEntries(Object.entries(record).filter(([name]) => name !== key))
 }
 
-/** 统一插件活跃谓词：仅当 enabled 且 status 非 disabled/failed 时视为活跃。 */
-export function isPluginSummaryActive(plugin: PluginSummary): boolean {
-  return plugin.enabled && (plugin.status === undefined || plugin.status === 'active')
+/** 判定插件运行活跃态所需的最小摘要切片（避免调用方被无关元数据字段耦合）。 */
+export type PluginActivityLike = Pick<PluginSummary, 'enabled' | 'status' | 'error'>
+
+/** 统一插件活跃谓词：仅当 enabled 且 status 非 disabled/failed（且无残留故障 error）时视为活跃。 */
+export function isPluginSummaryActive(plugin: PluginActivityLike): boolean {
+  return plugin.enabled && (plugin.status === undefined || plugin.status === 'active') && plugin.error === undefined
 }
 
 export function sameClientHashes(

@@ -223,6 +223,60 @@ test('defaultSpaceTarget: conversations prefers the profile of the latest unarch
   assert.equal(defaultSpaceTarget('conversations', makeInput()), null)
 })
 
+test('space-navigation: enabled=true 且 status=failed 的插件托管 Profile、根会话与 Screen 均不计入活跃可见/导航目标', { timeout: 60_000 }, () => {
+  const plugins = [
+    {
+      id: 'plugin:failed',
+      enabled: true,
+      status: 'failed' as const,
+      error: { code: 'plugin_dependency_not_enabled', message: 'dep off', stage: 'enable' as const },
+    },
+    { id: 'plugin:ok', enabled: true, status: 'active' as const },
+  ]
+  const profiles = [
+    makeProfile('failed-bot', { managedByPlugin: 'plugin:failed' }),
+    makeProfile('ok-bot', { managedByPlugin: 'plugin:ok' }),
+  ]
+  const grouped = groupUiContributions([
+    { pluginId: 'plugin:failed', surface: 'screen', spec: { id: 'broken-board', label: '故障面板' } },
+    { pluginId: 'plugin:failed', surface: 'sidebar.item', spec: { id: 'broken-nav', label: '故障入口', target: 'screen:plugin:failed/broken-board', order: 1 } },
+    { pluginId: 'plugin:ok', surface: 'screen', spec: { id: 'ok-board', label: '正常面板' } },
+    { pluginId: 'plugin:ok', surface: 'sidebar.item', spec: { id: 'ok-nav', label: '正常入口', target: 'screen:plugin:ok/ok-board', order: 2 } },
+  ])
+
+  // 1) 仅有 failed 插件托管 Profile 的根会话时，不视为存在可见根会话
+  assert.equal(
+    hasVisibleConversationRoots({
+      conversations: [makeConversation({ id: 1, profileId: 'failed-bot', updatedAt: 100 })],
+      profiles,
+      plugins,
+    }),
+    false,
+  )
+
+  // 2) isSpaceTargetAvailable：failed 插件的 agent 与 screen 均不可用，active 插件可用
+  const input = makeInput({
+    conversations: [makeConversation({ id: 1, profileId: 'failed-bot', updatedAt: 100 })],
+    profiles,
+    plugins,
+    grouped,
+  })
+  assert.equal(isSpaceTargetAvailable({ kind: 'agent', profileId: 'failed-bot' }, input), false)
+  assert.equal(isSpaceTargetAvailable({ kind: 'agent', profileId: 'ok-bot' }, input), true)
+  assert.equal(isSpaceTargetAvailable({ kind: 'screen', pluginId: 'plugin:failed', screenId: 'broken-board' }, input), false)
+  assert.equal(isSpaceTargetAvailable({ kind: 'screen', pluginId: 'plugin:ok', screenId: 'ok-board' }, input), true)
+
+  // 3) defaultSpaceTarget：对话空间跳过 failed-bot（即使其拥有最新根会话），视图空间跳过 failed 插件 Screen
+  assert.deepEqual(defaultSpaceTarget('conversations', input), { kind: 'agent', profileId: 'ok-bot' })
+  assert.deepEqual(defaultSpaceTarget('views', input), { kind: 'screen', pluginId: 'plugin:ok', screenId: 'ok-board' })
+
+  // 4) 没有任何活跃 Profile 时返回 null（不退回 failed-bot）
+  assert.equal(
+    defaultSpaceTarget('conversations', makeInput({ profiles: [makeProfile('failed-bot', { managedByPlugin: 'plugin:failed' })], plugins })),
+    null,
+  )
+})
+
 test('resolveSpaceSwitch: same space no-op; valid memory first; stale memory cleared with a default fallback or unavailable', { timeout: 60_000 }, () => {
   const input = makeInput({
     conversations: [makeConversation({ id: 1, profileId: 'assistant', updatedAt: 10 })],

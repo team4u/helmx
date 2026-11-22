@@ -23,6 +23,7 @@ import {
 } from '../src/runtime/hook-bridge.js'
 import {
   actionToolResult,
+  guardToolExecutionResult,
   pluginToolResult,
   toolResultOf,
 } from '../src/runtime/runtime-helpers.js'
@@ -1010,5 +1011,206 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
       () => prepareToolResultWith(artifacts, redact, 1, { output: [{ type: 'text', text: 'ok' }], details: JSON.parse('{"__proto__":1}') }),
       (err: unknown) => err instanceof HelmxError && err.code === 'invalid_tool_result',
     )
+  })
+
+  it('guardToolExecutionResult: validates and redacts rest envelope fields without JSON.stringify, preserving output/diagnostics/usage/control and rejecting non-JSON disguises', { timeout: 60_000 }, () => {
+    const redact = (s: string) => s.replaceAll('SECRET', '[REDACTED]')
+
+    // 1. Valid complete envelope (output text+image, isError, diagnostics, usage, control, structuredOutput, details)
+    const guarded = guardToolExecutionResult(
+      {
+        output: [
+          { type: 'text', text: 'hello SECRET', textSignature: 'sig-SECRET' },
+          { type: 'image', data: 'base64-SECRET', mimeType: 'image/png' },
+        ],
+        isError: false,
+        diagnostics: [
+          { severity: 'info', message: 'info SECRET' },
+          { severity: 'warn', message: 'warn SECRET', code: 'CODE_SECRET' },
+          { severity: 'error', message: 'err' },
+        ],
+        usage: {
+          input: 12,
+          output: 8,
+          cacheRead: 2,
+          cacheWrite: 1,
+          cacheWrite1h: 1,
+          reasoning: 3,
+          totalTokens: 23,
+          cost: { input: 0.01, output: 0.02, cacheRead: 0, cacheWrite: 0, total: 0.03, totalFromProvider: true },
+        },
+        control: {
+          addTools: ['tool_SECRET'],
+          terminate: false,
+          handoff: 'continue with SECRET',
+        },
+        structuredOutput: { ok: true, token: 'SECRET' },
+        details: { badge: 'ok SECRET' },
+      },
+      redact,
+      {
+        toolName: 'full_tool',
+        callId: 'call-1',
+        structuredOutputSchema: { type: 'object', properties: { ok: { type: 'boolean' }, token: { type: 'string' } }, required: ['ok', 'token'], additionalProperties: false },
+        presentationMetaSchema: { type: 'object', properties: { badge: { type: 'string' } }, required: ['badge'], additionalProperties: false },
+        enforceSchemas: true,
+      },
+    )
+    assert.deepEqual(guarded, {
+      output: [
+        { type: 'text', text: 'hello [REDACTED]', textSignature: 'sig-[REDACTED]' },
+        { type: 'image', data: 'base64-[REDACTED]', mimeType: 'image/png' },
+      ],
+      isError: false,
+      diagnostics: [
+        { severity: 'info', message: 'info [REDACTED]' },
+        { severity: 'warn', message: 'warn [REDACTED]', code: 'CODE_[REDACTED]' },
+        { severity: 'error', message: 'err' },
+      ],
+      usage: {
+        input: 12,
+        output: 8,
+        cacheRead: 2,
+        cacheWrite: 1,
+        cacheWrite1h: 1,
+        reasoning: 3,
+        totalTokens: 23,
+        cost: { input: 0.01, output: 0.02, cacheRead: 0, cacheWrite: 0, total: 0.03, totalFromProvider: true },
+      },
+      control: {
+        addTools: ['tool_[REDACTED]'],
+        terminate: false,
+        handoff: 'continue with [REDACTED]',
+      },
+      structuredOutput: { ok: true, token: '[REDACTED]' },
+      details: { badge: 'ok [REDACTED]' },
+    })
+
+    // pi-durable finalResult spreads `details: undefined` when no presentationMeta is emitted; must stay valid.
+    const withoutDetails = guardToolExecutionResult(
+      { output: [{ type: 'text', text: 'ok' }], details: undefined, diagnostics: [] },
+      redact,
+    )
+    assert.deepEqual(withoutDetails, { output: [{ type: 'text', text: 'ok' }], diagnostics: [] })
+    assert.equal('details' in withoutDetails, false)
+
+    // 2. Every non-JSON / disguised / dangerous rest-field payload must fail explicitly with invalid_tool_result.
+    let getterOrToJsonInvoked = false
+    const makeGetterObj = (key: string, enumerable: boolean) => {
+      const o: Record<string, unknown> = { type: 'text', text: 'ok' }
+      Object.defineProperty(o, key, {
+        get() {
+          getterOrToJsonInvoked = true
+          return 'forged'
+        },
+        enumerable,
+      })
+      return o
+    }
+
+    class DisguisedBlock {
+      toJSON() {
+        getterOrToJsonInvoked = true
+        return { type: 'text', text: 'forged' }
+      }
+    }
+    class DisguisedResult {
+      toJSON() {
+        getterOrToJsonInvoked = true
+        return { output: [{ type: 'text', text: 'forged' }] }
+      }
+    }
+    const plainWithToJson = {
+      type: 'text',
+      text: 'ok',
+      toJSON() {
+        getterOrToJsonInvoked = true
+        return { type: 'text', text: 'forged' }
+      },
+    }
+    const nonEnumToJson = { type: 'text', text: 'ok' }
+    Object.defineProperty(nonEnumToJson, 'toJSON', {
+      value: () => {
+        getterOrToJsonInvoked = true
+        return { type: 'text', text: 'forged' }
+      },
+      enumerable: false,
+    })
+
+    const cyclicDiag: Record<string, unknown> = { severity: 'warn', message: 'loop' }
+    cyclicDiag['self'] = cyclicDiag
+
+    const nonEnumRoot: Record<string, unknown> = { output: [{ type: 'text', text: 'ok' }] }
+    Object.defineProperty(nonEnumRoot, 'SECRET_HIDDEN', { value: 'SECRET', enumerable: false })
+
+    const symRoot: Record<PropertyKey, unknown> = { output: [{ type: 'text', text: 'ok' }] }
+    symRoot[Symbol('SECRET_SYM')] = 'x'
+
+    const symNested: Record<PropertyKey, unknown> = { severity: 'info', message: 'ok' }
+    symNested[Symbol('nested')] = 1
+
+    // eslint-disable-next-line no-sparse-arrays
+    const sparseOutput = [, { type: 'text', text: 'ok' }]
+    const extraPropArray = [{ type: 'text', text: 'ok' }] as unknown[] & { extra?: string }
+    extraPropArray.extra = 'sneaky'
+    const protoKeyArray = [{ type: 'text', text: 'ok' }]
+    Object.defineProperty(protoKeyArray, '__proto__', { value: { polluted: true }, enumerable: false })
+    const getterElemArray = [{ type: 'text', text: 'ok' }]
+    Object.defineProperty(getterElemArray, '0', {
+      get() {
+        getterOrToJsonInvoked = true
+        return { type: 'text', text: 'forged' }
+      },
+      enumerable: true,
+    })
+
+    const badPayloads: Array<{ label: string; value: unknown }> = [
+      { label: 'non-plain result (class with toJSON)', value: new DisguisedResult() },
+      { label: 'null result', value: null },
+      { label: 'undefined top-level output', value: { output: undefined } },
+      { label: 'undefined top-level isError', value: { output: [], isError: undefined } },
+      { label: 'undefined nested output property', value: { output: [{ type: 'text', text: 'ok', textSignature: undefined }] } },
+      { label: 'undefined nested diagnostic code', value: { diagnostics: [{ severity: 'warn', message: 'm', code: undefined }] } },
+      { label: 'symbol value in output', value: { output: [{ type: 'text', text: Symbol('s') }] } },
+      { label: 'symbol own key on root', value: symRoot },
+      { label: 'symbol own key on nested diagnostic', value: { diagnostics: [symNested] } },
+      { label: 'function value in output', value: { output: [{ type: 'text', text: () => 'x' }] } },
+      { label: 'bigint in usage', value: { usage: { input: 10n, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 11, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } } },
+      { label: 'NaN in usage', value: { usage: { input: Number.NaN, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 1, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } } },
+      { label: 'Infinity in usage cost', value: { usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: Number.POSITIVE_INFINITY } } } },
+      { label: 'circular reference in diagnostics', value: { diagnostics: [cyclicDiag] } },
+      { label: 'non-enumerable root key', value: nonEnumRoot },
+      { label: 'enumerable getter on output block', value: { output: [makeGetterObj('textSignature', true)] } },
+      { label: 'non-enumerable getter on output block', value: { output: [makeGetterObj('lazy', false)] } },
+      { label: 'enumerable getter on array element', value: { output: getterElemArray } },
+      { label: 'prototype key __proto__ on root', value: JSON.parse('{"output":[],"__proto__":1}') },
+      { label: 'prototype key constructor in diagnostics', value: { diagnostics: [{ severity: 'warn', message: 'm', constructor: {} }] } },
+      { label: 'prototype key prototype in control', value: { control: { terminate: true, prototype: {} } } },
+      { label: 'prototype key on output array', value: { output: protoKeyArray } },
+      { label: 'toJSON method on plain object', value: { output: [plainWithToJson] } },
+      { label: 'non-enumerable toJSON on plain object', value: { output: [nonEnumToJson] } },
+      { label: 'class instance with toJSON in output', value: { output: [new DisguisedBlock()] } },
+      { label: 'Date (builtin toJSON) in output', value: { output: [new Date()] } },
+      { label: 'sparse array hole in output', value: { output: sparseOutput } },
+      { label: 'extra own property on output array', value: { output: extraPropArray } },
+      { label: 'unsupported top-level field', value: { output: [], forged: 'SECRET' } },
+      { label: 'unsupported field in diagnostic', value: { diagnostics: [{ severity: 'info', message: 'ok', extra: 1 }] } },
+      { label: 'non-finite structuredOutput without schema', value: { output: [], structuredOutput: { n: Number.NEGATIVE_INFINITY } } },
+    ]
+
+    for (const c of badPayloads) {
+      assert.throws(
+        () => guardToolExecutionResult(c.value as never, redact, { toolName: 'test_tool' }),
+        (err: unknown) => {
+          assert.ok(err instanceof HelmxError, `${c.label}: expected HelmxError, got ${String(err)}`)
+          assert.equal(err.code, 'invalid_tool_result', `${c.label}: expected invalid_tool_result, got ${err.code}`)
+          assert.equal(err.status, 500, `${c.label}: expected status 500`)
+          assert.equal(err.message.includes('SECRET'), false, `${c.label}: error message leaked secret: ${err.message}`)
+          return true
+        },
+        `${c.label}: must throw invalid_tool_result`,
+      )
+    }
+    assert.equal(getterOrToJsonInvoked, false, 'getters and toJSON disguises must never be invoked during guard')
   })
 })

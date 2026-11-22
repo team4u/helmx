@@ -11,6 +11,7 @@ import {
   PROFILE_STARTER_PROMPT_MAX_LENGTH,
 } from '@helmx/protocol/browser'
 import { assetsApi } from '../lib/api.js'
+import { isPluginSummaryActive } from '../lib/live-state.js'
 import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 
 declare module '@helmx/protocol/browser' {
@@ -310,7 +311,7 @@ export function summarizeProfileActivity(
   const managingPlugin = profile.managedByPlugin
     ? plugins.find((plugin) => plugin.id === profile.managedByPlugin)
     : undefined
-  const managingPluginDisabled = Boolean(managingPlugin && !managingPlugin.enabled)
+  const managingPluginDisabled = Boolean(managingPlugin && !isPluginSummaryActive(managingPlugin))
 
   if (managingPluginDisabled) {
     return {

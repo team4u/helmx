@@ -168,12 +168,17 @@ interface AppCenterStats {
   pinned: number
 }
 
+/** Consistent active-runtime predicate for app plugin summaries (enabled=true with status='failed' is NOT active). */
+export function isAppPluginActive(plugin: Pick<PluginSummary, 'enabled' | 'status' | 'error'>): boolean {
+  return plugin.enabled && (plugin.status === undefined || plugin.status === 'active') && plugin.error === undefined
+}
+
 export function summarizeAppItems(items: AppItem[]): AppCenterStats {
   let ready = 0
   let stopped = 0
   let pinned = 0
   for (const item of items) {
-    if (item.plugin.enabled) ready++
+    if (isAppPluginActive(item.plugin)) ready++
     else stopped++
     if (item.catalog?.pinned === true) pinned++
   }

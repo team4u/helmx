@@ -213,7 +213,7 @@ test('isPluginFailed: status === failed 或携带 error 即故障态', { timeout
 })
 
 test('summarizePlugins: 正确统计 failed 数量（status 与 error 双入口去重）', { timeout: 60_000 }, () => {
-  const stats = summarizePlugins([
+  const plugins = [
     makePlugin({ id: 'ok-1', enabled: true }),
     makePlugin({ id: 'ok-2', enabled: false }),
     makePlugin({
@@ -233,11 +233,21 @@ test('summarizePlugins: 正确统计 failed 数量（status 与 error 双入口�
       status: 'failed',
       error: { code: 'plugin_dependency_not_enabled', message: '依赖被强停', stage: 'enable' },
     }),
-  ])
+  ]
+  const stats = summarizePlugins(plugins)
+  // enabled=true 但 status=failed 不计入活跃启用数，归入未激活并计入 failed；筛选与统计口径一致
   assert.equal(stats.total, 5)
-  assert.equal(stats.enabled, 2)
-  assert.equal(stats.disabled, 3)
+  assert.equal(stats.enabled, 1)
+  assert.equal(stats.disabled, 4)
   assert.equal(stats.failed, 3)
+  assert.deepEqual(
+    filterPlugins(plugins, { status: 'enabled' }, 'en').map((p) => p.id),
+    ['ok-1'],
+  )
+  assert.deepEqual(
+    filterPlugins(plugins, { status: 'disabled' }, 'en').map((p) => p.id),
+    ['ok-2', 'bad-1', 'bad-2', 'bad-dep'],
+  )
   assert.equal(
     isPluginFailed(
       makePlugin({

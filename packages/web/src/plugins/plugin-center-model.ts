@@ -7,6 +7,7 @@
 import type { HelmxLocale, PluginSummary } from '@helmx/protocol/browser'
 import { resolveLocalizedText } from '@helmx/protocol/browser'
 import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
+import { isPluginSummaryActive } from '../lib/live-state.js'
 
 export type PluginStatusFilter = 'all' | 'enabled' | 'disabled'
 
@@ -63,9 +64,10 @@ export function filterPlugins(
   const status = filter.status ?? 'all'
 
   return plugins.filter((plugin) => {
-    // 1. 状态筛选
-    if (status === 'enabled' && !plugin.enabled) return false
-    if (status === 'disabled' && plugin.enabled) return false
+    // 1. 状态筛选（与 live-state 统一活跃谓词对齐：enabled=true 但 status=failed 不计入已启用/活跃）
+    const active = isPluginSummaryActive(plugin)
+    if (status === 'enabled' && !active) return false
+    if (status === 'disabled' && active) return false
 
     // 2. 关键字搜索匹配（name / id / tools / actions）
     if (query) {
@@ -104,7 +106,7 @@ export function summarizePlugins(plugins: PluginSummary[]): PluginSummaryStats {
   let totalActions = 0
 
   for (const plugin of plugins) {
-    if (plugin.enabled) {
+    if (isPluginSummaryActive(plugin)) {
       enabled++
     } else {
       disabled++

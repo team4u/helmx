@@ -773,6 +773,27 @@ test('profile-center-model: effective model / global inheritance, node cwd and a
   assert.equal(disabledActivity.managingPluginDisabled, true)
   assert.equal(disabledActivity.stateKind, 'plugin-disabled')
   assert.equal(disabledActivity.stateLabel, 'Plugin disabled')
+
+  // enabled=true 但 status=failed 同样视为托管插件未活跃
+  const failedEnabledActivity = summarizeProfileActivity(
+    { id: 'herdr-worker', managedByPlugin: 'builtin:herdr' },
+    [],
+    [
+      {
+        id: 'builtin:herdr',
+        name: 'Herdr',
+        enabled: true,
+        status: 'failed',
+        error: { code: 'plugin_dependency_not_enabled', message: 'dep off', stage: 'enable' },
+        locked: false,
+        tools: [],
+        actions: [],
+        hooks: [],
+      },
+    ],
+  )
+  assert.equal(failedEnabledActivity.managingPluginDisabled, true)
+  assert.equal(failedEnabledActivity.stateKind, 'plugin-disabled')
 })
 
 test('ProfileCard: inherited model, node and cwd, conversation count, bottom-right conversation action with stopPropagation', { timeout: 60_000 }, async () => {

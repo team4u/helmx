@@ -18,6 +18,7 @@ import type {
   SkillSummary,
 } from '@helmx/protocol/browser'
 import { parseLocalizedText, resolveLocalizedText } from '@helmx/protocol/browser'
+import { isPluginSummaryActive, type PluginActivityLike } from '../lib/live-state.js'
 import type { HelmxStoreValue, QualifiedUiSpec, ResolvedTarget } from '../lib/types.js'
 import { resolveTargetString } from '../lib/types.js'
 import { ARCHIVED_TAG, isConversationArchived } from '../conversation/archive-model.js'
@@ -104,7 +105,7 @@ export interface ArchivedConversationListItem {
 export function buildArchivedConversationList(input: {
   conversations: ConversationSummary[]
   profiles: Profile[]
-  plugins?: ReadonlyArray<{ id: string; enabled: boolean }>
+  plugins?: ReadonlyArray<{ id: string } & PluginActivityLike>
   sidebarSections?: Array<QualifiedUiSpec<SidebarSectionSpec>>
 }): ArchivedConversationListItem[] {
   const { conversations, profiles, plugins = [], sidebarSections = [] } = input
@@ -163,7 +164,7 @@ export interface SidebarViewItem {
 export interface AgentStandingsInput {
   profiles: Profile[]
   conversations: ConversationSummary[]
-  plugins: ReadonlyArray<{ id: string; enabled: boolean }>
+  plugins: ReadonlyArray<{ id: string } & PluginActivityLike>
   sidebarItems?: Array<QualifiedUiSpec<SidebarItemSpec>>
   sidebarSections?: Array<QualifiedUiSpec<SidebarSectionSpec>>
   /** 显示名解析 locale（sidebar.item label 属 LocalizedText 显示元数据）。 */
@@ -462,11 +463,11 @@ export function composeSidebarBadgeLabel(label: string, badge: ResolvedSidebarBa
 // 插件痕迹清理：ownedBy / parentConversationId 归一 + 插件自举资产可见性
 // ---------------------------------------------------------------------------
 
-/** 收集已启用插件 ID 集合（资产可见性判定的统一输入）。 */
+/** 收集处于活跃运行态的插件 ID 集合（资产可见性与导航判定的统一输入；enabled=true 且 status='failed' 不计入）。 */
 export function collectEnabledPluginIds(
-  plugins: ReadonlyArray<{ id: string; enabled: boolean }>,
+  plugins: ReadonlyArray<{ id: string } & PluginActivityLike>,
 ): Set<string> {
-  return new Set(plugins.filter((p) => p.enabled).map((p) => p.id))
+  return new Set(plugins.filter((p) => isPluginSummaryActive(p)).map((p) => p.id))
 }
 
 /** 插件自举/托管的 Profile 在对应插件未启用时隐藏（Profile 编辑器列表消费）。 */

@@ -637,13 +637,27 @@ test('isSkillVisible：仅依据 managedByPlugin 字段过滤（任意插件 id�
   assert.equal(isSkillVisible(herdrManaged, enabled), true)
 })
 
-test('collectEnabledPluginIds 仅收集启用插件', { timeout: 60_000 }, () => {
+test('collectEnabledPluginIds 仅收集处于活跃运行态的插件（排除 disabled 与 enabled=true 但 status=failed/带 error）', { timeout: 60_000 }, () => {
   const ids = collectEnabledPluginIds([
     { id: 'builtin:profile', enabled: true },
     { id: 'builtin:herdr', enabled: false },
-    { id: 'builtin:superagent', enabled: true },
+    { id: 'builtin:superagent', enabled: true, status: 'active' },
+    {
+      id: 'ext:dep-failed',
+      enabled: true,
+      status: 'failed',
+      error: { code: 'plugin_dependency_not_enabled', message: 'dep off', stage: 'enable' },
+    },
+    {
+      id: 'ext:error-only',
+      enabled: true,
+      error: { code: 'plugin_enable_failed', message: 'boom', stage: 'enable' },
+    },
   ])
   assert.deepEqual([...ids].sort(), ['builtin:profile', 'builtin:superagent'])
+  assert.equal(isProfileVisible({ id: 'p-fail', name: 'Fail', managedByPlugin: 'ext:dep-failed' }, ids), false)
+  assert.equal(isSkillVisible({ id: 's-fail', name: 'FailSkill', references: [], managedByPlugin: 'ext:dep-failed' }, ids), false)
+  assert.equal(isProfileVisible({ id: 'p-ok', name: 'Ok', managedByPlugin: 'builtin:superagent' }, ids), true)
 })
 
 // ---------------------------------------------------------------------------

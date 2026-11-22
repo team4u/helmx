@@ -45,6 +45,7 @@ import {
   appScreenTarget,
   filterAppItems,
   formatAppTabParam,
+  isAppPluginActive,
   mergeAppItems,
   normalizeAppCategory,
   parseAppTabParam,
@@ -132,8 +133,9 @@ function AppCard({
   const locale = usePluginLocale()
   const t = usePluginTranslator()
   const { plugin, screens, catalog } = item
+  const active = isAppPluginActive(plugin)
   const target = appScreenTarget(item)
-  const isReady = plugin.enabled && target !== null
+  const isReady = active && target !== null
   const versionLabel = plugin.version ? `v${plugin.version.replace(/^v/, '')}` : null
   const iconName = catalog?.icon ?? 'layout-grid'
   const categoryLabel = appCategoryLabel(normalizeAppCategory(catalog?.category), locale)
@@ -142,7 +144,7 @@ function AppCard({
 
   return (
     <div
-      className={`app-card${plugin.enabled ? '' : ' is-disabled'}`}
+      className={`app-card${active ? '' : ' is-disabled'}`}
       data-app-id={plugin.id}
       role="button"
       tabIndex={0}
@@ -173,8 +175,8 @@ function AppCard({
               </span>
             )}
             <StatusLight
-              status={plugin.enabled ? 'online' : 'idle'}
-              label={t(plugin.enabled ? APP_STATUS_READY : APP_STATUS_STOPPED)}
+              status={active ? 'online' : 'idle'}
+              label={t(active ? APP_STATUS_READY : APP_STATUS_STOPPED)}
             />
           </div>
           <div className="app-card-id" title={plugin.id}>
@@ -341,8 +343,8 @@ function AppDetailDrawer({
                     </span>
                   )}
                   <StatusLight
-                    status={plugin.enabled ? 'online' : 'idle'}
-                    label={t(plugin.enabled ? APP_STATUS_READY : APP_STATUS_STOPPED)}
+                    status={isAppPluginActive(plugin) ? 'online' : 'idle'}
+                    label={t(isAppPluginActive(plugin) ? APP_STATUS_READY : APP_STATUS_STOPPED)}
                   />
                 </div>
                 <div className="primary-drawer-id mono">{plugin.id}</div>
@@ -514,7 +516,7 @@ function AppDetailDrawer({
                 <button
                   type="button"
                   className="btn btn-sm"
-                  disabled={originConversationId === undefined || iterateTarget === null || !plugin.enabled}
+                  disabled={originConversationId === undefined || iterateTarget === null || !isAppPluginActive(plugin)}
                   title={
                     originConversationId === undefined
                       ? t(APP_ITERATE_DISABLED_TITLE)

@@ -849,17 +849,29 @@ test('formatSemanticToolAction：常见工具语义化（bash / Read / Edit / Wr
   assert.deepEqual(formatSemanticToolAction('no_input_tool', undefined), { tag: 'no_input_tool', text: 'no_input_tool' })
 })
 
-test('extractSubagentResultPreview：structuredOutput / JSON 信封优先，不刮取尾注', { timeout: 60_000 }, () => {
+test('extractSubagentResultPreview：仅消费 presentationMeta 或纯文本预览，严禁对 resultText 做 JSON.parse 兜底', { timeout: 60_000 }, () => {
   assert.equal(extractSubagentResultPreview(undefined), undefined)
   assert.equal(extractSubagentResultPreview('   '), undefined)
   assert.equal(
-    extractSubagentResultPreview('ignored text', { ok: true, result: '来自结构化输出' }),
-    '来自结构化输出',
+    extractSubagentResultPreview('ignored text', { ok: true, result: '来自 presentationMeta' }),
+    '来自 presentationMeta',
   )
-  assert.equal(extractSubagentResultPreview(JSON.stringify({ ok: true, result: '任务完成，共修复 3 处' })), '任务完成，共修复 3 处')
-  assert.equal(extractSubagentResultPreview(JSON.stringify({ output: '产出首行\n第二行' })), '产出首行')
-  assert.equal(extractSubagentResultPreview(JSON.stringify({ summary: '总结' })), '总结')
-  assert.equal(extractSubagentResultPreview(JSON.stringify({ other: 1 })), '{"other":1}')
+  assert.equal(
+    extractSubagentResultPreview('ignored text', { output: '产出首行\n第二行' }),
+    '产出首行',
+  )
+  assert.equal(
+    extractSubagentResultPreview('ignored text', { summary: '总结' }),
+    '总结',
+  )
+  // 仅有执行索引的 presentationMeta 不把 JSON 倾倒到副栏，回落纯文本 resultText
+  assert.equal(
+    extractSubagentResultPreview('纯文本结论', { ok: true, runId: 'wf_1', execution: { conversationId: 11 } }),
+    '纯文本结论',
+  )
+  // JSON 外观的 resultText 不再做旧信封 JSON.parse，严格按纯文本首行预览处理
+  const rawEnvelopeText = JSON.stringify({ ok: true, result: '任务完成，共修复 3 处' })
+  assert.equal(extractSubagentResultPreview(rawEnvelopeText), rawEnvelopeText)
   assert.equal(extractSubagentResultPreview('结论：全部通过\n第二行'), '结论：全部通过')
   assert.equal(extractSubagentResultPreview('纯文本结论'), '纯文本结论')
   // 已彻底废弃 [subagent ...] 尾注语法，按普通文本处理。
@@ -939,9 +951,10 @@ test('resolveSubagentHeaderSnippet：error 优先后台 run 失败，其次父�
     resolveSubagentHeaderSnippet({ badgeStatus: 'error', toolSummary: { presentationMeta: { ok: false, error: '结构化超时' } } }),
     { kind: 'error', tag: 'Failed', text: '结构化超时' },
   )
+  // 不再对 resultText 做旧 JSON 信封解析：未标记 isError 且无 presentationMeta 时回落通用错误文案
   assert.deepEqual(
     resolveSubagentHeaderSnippet({ badgeStatus: 'error', toolSummary: { resultText: JSON.stringify({ ok: false, error: '执行超时' }) } }),
-    { kind: 'error', tag: 'Failed', text: '执行超时' },
+    { kind: 'error', tag: 'Error', text: 'Subagent execution error' },
   )
   assert.deepEqual(
     resolveSubagentHeaderSnippet({ badgeStatus: 'error', toolSummary: { isError: true, resultText: '命令失败：退出码 2\n第二行' } }),
@@ -1029,7 +1042,7 @@ test('resolveSubagentHeaderSnippet：working 后台 Gate 验收期与兜底启�
   )
 })
 
-test('resolveSubagentHeaderSnippet：done 取 entries 结论 > structuredOutput/resultText > 后台 run 产出 > undefined', { timeout: 60_000 }, () => {
+test('resolveSubagentHeaderSnippet：done 取后台 run 产出 > entries 结论 > presentationMeta / 纯文本 resultText > undefined', { timeout: 60_000 }, () => {
   const entries = [
     { id: '1', kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: '最终结论：全部通过' }], stopReason: 'stop' }] },
   ]
@@ -1038,13 +1051,22 @@ test('resolveSubagentHeaderSnippet：done 取 entries 结论 > structuredOutput/
     { kind: 'done', text: '最终结论：全部通过' },
   )
   assert.deepEqual(
-    resolveSubagentHeaderSnippet({ badgeStatus: 'done', toolSummary: { resultText: JSON.stringify({ ok: true, result: '修复完成' }) } }),
+    resolveSubagentHeaderSnippet({ badgeStatus: 'done', toolSummary: { presentationMeta: { ok: true, summary: '修复完成' } } }),
     { kind: 'done', text: '修复完成' },
+  )
+  assert.deepEqual(
+    resolveSubagentHeaderSnippet({ badgeStatus: 'done', toolSummary: { resultText: '纯文本修复完成' } }),
+    { kind: 'done', text: '纯文本修复完成' },
   )
   const doneRun = bgRun({ status: 'completed', nodes: [{ id: 'n1', kind: 'agent', status: 'done', output: '产出结论文本' }] })
   assert.deepEqual(
     resolveSubagentHeaderSnippet({ badgeStatus: 'done', backgroundRun: doneRun }),
     { kind: 'done', text: '产出结论文本' },
+  )
+  const structuredRun = bgRun({ status: 'completed', result: { summary: '后台结构化产出' } })
+  assert.deepEqual(
+    resolveSubagentHeaderSnippet({ badgeStatus: 'done', backgroundRun: structuredRun }),
+    { kind: 'done', text: '后台结构化产出' },
   )
   assert.equal(resolveSubagentHeaderSnippet({ badgeStatus: 'done' }), undefined)
 })
@@ -1074,7 +1096,7 @@ test('toolSummary 注入：折叠态头部显示任务标题、独立总耗时�
     toolSummary: {
       prompt: '修复构建失败',
       durationMs: 95_000,
-      resultText: JSON.stringify({ ok: true, result: '构建已恢复，测试 42 通过' }),
+      resultText: '构建已恢复，测试 42 通过',
     },
   })
   assert.ok(html.includes('修复构建失败'), '折叠态头部应显示任务标题')

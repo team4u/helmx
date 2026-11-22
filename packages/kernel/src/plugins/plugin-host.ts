@@ -355,7 +355,7 @@ export class PluginHost {
     if (!s) return undefined;
     return {
       identity: s,
-      enabled: s.enabled && s.lastError === undefined,
+      enabled: isPluginStateActive(s),
       phase: s.phase,
       epoch: s.epoch,
       clientRoot: s.definition.clientRoot,

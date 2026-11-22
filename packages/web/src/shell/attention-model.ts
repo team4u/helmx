@@ -28,6 +28,7 @@ import {
 } from './background-activity-model.js'
 import { resolveNotificationRootId } from './quiet-notify-model.js'
 import { collectEnabledPluginIds, isConversationArchived, isProfileVisible } from './sidebar-model.js'
+import type { PluginActivityLike } from '../lib/live-state.js'
 
 /** 态势三桶：需关注 > 运行中 > 未读完成。 */
 export type AttentionBucket = 'needs_attention' | 'running' | 'unread_done'
@@ -96,7 +97,7 @@ export function aggregateAttentionTrees(input: {
   conversations: ReadonlyArray<ConversationSummary>
   background: ConversationBackgroundIndex
   profiles: ReadonlyArray<Profile>
-  plugins: ReadonlyArray<{ id: string; enabled: boolean }>
+  plugins: ReadonlyArray<{ id: string } & PluginActivityLike>
 }): AttentionTreeAggregate[] {
   const byId = new Map<number, ConversationSummary>(
     input.conversations.map((conversation) => [conversation.id, conversation] as const),
@@ -193,7 +194,7 @@ export function buildAttentionModel(input: {
   conversations: ReadonlyArray<ConversationSummary>
   background: ConversationBackgroundIndex
   profiles: ReadonlyArray<Profile>
-  plugins: ReadonlyArray<{ id: string; enabled: boolean }>
+  plugins: ReadonlyArray<{ id: string } & PluginActivityLike>
   /** 当前主屏/分屏正在查看的会话 ID（成员级排除；缺省不排除任何信号）。 */
   viewedConversationIds?: ReadonlySet<number>
   /** Locale translator（后代运行计数文案）；缺省英文桥接。 */
