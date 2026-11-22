@@ -10,7 +10,7 @@
 
 import { HelmxError, isValidProfileId } from '@helmx/protocol'
 import { FileNotFoundError, atomicWriteFile, withFileLock } from '../services/index.js'
-import type { PluginHostBackend, PluginSessionDocStore } from '../plugins/index.js'
+import type { PluginHostBackend, PluginKvStore, PluginSessionDocStore } from '../plugins/index.js'
 import type { HelmxStore } from './store.js'
 import type { KernelRuntime } from './runtime.js'
 
@@ -83,7 +83,6 @@ export function createPluginHostBackend(runtime: KernelRuntime): PluginHostBacke
     redact: (text) => runtime.stash.redact(text),
     refreshModels: (options) => runtime.refreshModels(options),
     listModels: () => runtime.listModels(),
-    registerModelTiers: (pluginId, getTiers) => runtime.registerModelTiers(pluginId, getTiers),
     withFileLock: <T>(path: string, fn: () => Promise<T>, opts?: { signal?: AbortSignal }) =>
       withFileLock(path, async () => {
         opts?.signal?.throwIfAborted()
@@ -156,6 +155,22 @@ export function createPluginSessionDocStore(store: HelmxStore): PluginSessionDoc
     deletePlugin: (pluginId) => store.deletePluginSessionDocs(pluginId),
     listConversationIds: (pluginId, name) =>
       store.listPluginSessionDocConversations(pluginId, name),
+    flush: () => store.flushPublic(),
+  }
+}
+
+/**
+ * Construct the per-plugin keyed KV storage layer required by `PluginHost` (`PluginKvStore`).
+ */
+export function createPluginKvStore(store: HelmxStore): PluginKvStore {
+  return {
+    get: (pluginId, namespace, key) => store.getPluginKv(pluginId, namespace, key),
+    put: (pluginId, namespace, key, valueJson) =>
+      store.putPluginKv(pluginId, namespace, key, valueJson, { prevalidated: true }),
+    delete: (pluginId, namespace, key) => store.deletePluginKvKey(pluginId, namespace, key),
+    list: (pluginId, namespace, opts) => store.listPluginKv(pluginId, namespace, opts),
+    clearNamespace: (pluginId, namespace) => store.clearPluginKvNamespace(pluginId, namespace),
+    deletePlugin: (pluginId) => store.deletePluginKv(pluginId),
     flush: () => store.flushPublic(),
   }
 }

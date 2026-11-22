@@ -846,7 +846,7 @@ test('failed-while-enabled 插件：托管 skill/load_skill、托管 Profile 与
   }
 })
 
-test('before_turn 与 list_mentionable：仅启用 Swarm（含 swarm_dispatch_worker、无 workflow）时仍暴露协作目录', { timeout: 60_000 }, async () => {
+test('before_turn 与 list_mentionable：仅启用 Swarm（经 helmx.dispatch-tools 声明 swarm_dispatch_worker、无 workflow）时仍暴露协作目录', { timeout: 60_000 }, async () => {
   const swarmLikePlugin: PluginDefinition = {
     id: 'test:swarm-dispatch',
     name: 'Swarm Dispatch Fixture',
@@ -857,6 +857,7 @@ test('before_turn 与 list_mentionable：仅启用 Swarm（含 swarm_dispatch_wo
         inputSchema: { type: 'object', properties: {} },
         execute: () => ({ ok: true }),
       })
+      ctx.provide('helmx.dispatch-tools', { toolNames: ['swarm_dispatch_worker'] })
     },
   }
   const env = await makeEnv([swarmLikePlugin], true)
@@ -888,6 +889,57 @@ test('before_turn 与 list_mentionable：仅启用 Swarm（含 swarm_dispatch_wo
     const disabledTurn = { ...turn, sections: [], tools: [] }
     const afterDisable = await env.host.runHook('before_turn', disabledTurn as never)
     assert.equal(sectionsOf(afterDisable, disabledTurn).find((s) => s.id === 'profile.catalog'), undefined)
+  } finally {
+    await env.close()
+  }
+})
+
+test('before_turn 与 list_mentionable：任意第三方插件通过 helmx.dispatch-tools 声明自定义派工工具即解锁协作目录（零硬编码）', { timeout: 60_000 }, async () => {
+  const customDispatchPlugin: PluginDefinition = {
+    id: 'ext:custom-dispatcher',
+    name: 'Custom Dispatcher',
+    definePlugin(ctx) {
+      ctx.tool({
+        name: 'custom_delegate_task',
+        description: 'Delegate task to another profile',
+        inputSchema: { type: 'object', properties: {} },
+        execute: () => ({ ok: true }),
+      })
+      ctx.provide('helmx.dispatch-tools', { toolNames: ['custom_delegate_task'] })
+    },
+  }
+  const env = await makeEnv([customDispatchPlugin], true)
+  try {
+    await seedProfile(env.profiles, env.dataDir, { id: 'analyst', name: '分析专家' }, '# Analyst\n数据分析。')
+    const turn = {
+      conversation: makeConversation(1),
+      sections: [],
+      tools: [tool('custom_delegate_task')],
+      inputs: [],
+      messages: [],
+    }
+    const result = await env.host.runHook('before_turn', turn as never)
+    const catalog = sectionsOf(result, turn).find((s) => s.id === 'profile.catalog')
+    assert.ok(catalog, '第三方 helmx.dispatch-tools 提供方应解锁 <available_profiles>')
+    assert.ok(catalog.text.includes('custom_delegate_task'))
+    assert.ok(catalog.text.includes('id="analyst"'))
+
+    const mentionable = (await env.host.invokeAction(
+      'builtin:profile',
+      'list_mentionable',
+      { query: '' },
+      { conversationId: 1 },
+    )) as { items: Array<{ id: string }> }
+    assert.deepEqual(mentionable.items.map((i) => i.id), ['analyst'])
+
+    await env.host.disable('ext:custom-dispatcher')
+    const afterDisable = (await env.host.invokeAction(
+      'builtin:profile',
+      'list_mentionable',
+      { query: '' },
+      { conversationId: 1 },
+    )) as { items: Array<{ id: string }> }
+    assert.deepEqual(afterDisable.items, [], '停用后能力自动释放，不再暴露协作目录')
   } finally {
     await env.close()
   }

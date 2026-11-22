@@ -1,7 +1,7 @@
 /**
  * builtin:swarm — on-demand single-board multi-agent peer collaboration plugin.
  */
-import { HelmxError, type ConversationSummary, type MaybePromise, type PluginDefinition } from '@helmx/protocol'
+import { HelmxError, type ConversationSummary, type DispatchToolsCapability, type MaybePromise, type PluginDefinition } from '@helmx/protocol'
 import { loadManagedSkillAsset, resolvePluginClientAssets } from './asset-paths.js'
 import {
   BOARD_BADGES_DOC_NAME,
@@ -116,6 +116,9 @@ export function createSwarmPlugin(): PluginDefinition {
       coordinatorRef = coordinator
 
       registerSwarmActions(ctx, coordinator)
+      ctx.provide<DispatchToolsCapability>('helmx.dispatch-tools', {
+        toolNames: ['swarm_dispatch_worker'],
+      })
       registerSwarmHooks(ctx, coordinator)
       registerSwarmUi(ctx)
 

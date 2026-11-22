@@ -659,12 +659,14 @@ test('integration: KernelRuntime.start() aligns initial & recovered tier convers
         ctx.service({
           id: 'mount-only',
           prepare() {
-            ctx.host.registerModelTiers(() => ({
-              custom: { model: 'faux/fast', thinkingLevel: 'low' },
-            }))
+            ctx.provide('helmx.model-tiers', {
+              getTiers: () => ({
+                custom: { model: 'faux/fast', thinkingLevel: 'low' },
+              }),
+            })
           },
           start() {
-            // Deliberately does NOT call notifyChanged(); kernel.start() must converge deferred boot alignment itself.
+            // Deliberately omits onChanged(); kernel.start() must converge deferred boot alignment itself.
           },
           stop() {},
         })

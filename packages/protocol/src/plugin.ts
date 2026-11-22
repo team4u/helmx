@@ -396,14 +396,78 @@ export interface PluginServiceSpec {
   inUse?(): MaybePromise<PluginInUseItem[]>
 }
 
+/**
+ * 插件间类型化能力共享条目（ctx.provide / ctx.consume）。
+ */
+export interface ProvidedCapability<T = unknown> {
+  readonly pluginId: string
+  readonly impl: T
+}
+
+/** Well-known `'helmx.dispatch-tools'` capability contract: declares tool names unlocking cross-Profile collaboration catalogs. */
+export interface DispatchToolsCapability {
+  readonly toolNames: readonly string[]
+}
+
+/** Well-known `'helmx.model-tiers'` capability contract: provides a live model-tier table consumed by kernel ModelRegistry. */
+export interface ModelTiersCapability {
+  getTiers(): Readonly<Record<string, ModelTierSpec>>
+  /**
+   * Optional subscription invoked whenever the provider's tier table mutates.
+   * Returning an unsubscribe callback allows kernel consumers to clean up on disable/dispose.
+   */
+  onChanged?(listener: () => MaybePromise<void>): (() => void) | void
+}
+
+/** Options for `ctx.kv(namespace).list(...)`. */
+export interface PluginKvListOptions {
+  prefix?: string
+  limit?: number
+  cursor?: string
+}
+
+/** Single item returned by `ctx.kv(namespace).list(...)`. */
+export interface PluginKvEntry<T = unknown> {
+  key: string
+  value: T
+  updatedAt: number
+}
+
+/** Paginated result returned by `ctx.kv(namespace).list(...)`. */
+export interface PluginKvListResult<T = unknown> {
+  items: Array<PluginKvEntry<T>>
+  nextCursor?: string
+}
+
+/**
+ * Per-plugin keyed KV storage handle backed by `state.sqlite` (`helmx_plugin_kv`).
+ * Each entry is redacted via SecretStash before persisting and bounded (256 KiB UTF-8 JSON);
+ * avoids whole-namespace serialization.
+ */
+export interface PluginKvHandle<T = unknown> {
+  get(key: string): T | undefined
+  set(key: string, value: T): void
+  delete(key: string): boolean
+  list(opts?: PluginKvListOptions): PluginKvListResult<T>
+  clear(): void
+  flush(): Promise<void>
+}
+
+export type PluginRouteMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD'
+
+/** Matched route parameters passed as the optional 2nd argument to `PluginRouteSpec.handler`. */
+export interface PluginRouteContext {
+  readonly params: Readonly<Record<string, string>>
+}
+
 /** Web Standard 原始路由（Request/Response 为 DOM lib 类型）。 */
 export interface PluginRouteSpec {
-  method: 'GET' | 'POST' | 'PUT' | 'DELETE'
+  method: PluginRouteMethod
   /** 以插件 ID 为前缀挂载的相对路径。 */
   path: string
   /** true 时跳过 Token 鉴权（webhook 回调等）。 */
   public?: boolean
-  handler(req: Request): MaybePromise<Response>
+  handler(req: Request, ctx: PluginRouteContext): MaybePromise<Response>
 }
 
 /** 插件自举受管技能资产（ctx.host.skills.ensureSkill 入参；形状与内核 BuiltinSkillAsset 同构）。 */
@@ -489,14 +553,6 @@ export interface HelmxHostNodeIpcPort {
 export interface HelmxHostOpenTunnelPort {
   /** 建立 TCP 透传隧道（host 缺省 127.0.0.1，由目标节点解析连接）。 */
   (nodeId: string, target: NodeTunnelTarget, signal?: AbortSignal): Promise<Duplex>
-}
-
-/** Registration handle returned by `ctx.host.registerModelTiers`. */
-export interface ModelTierRegistration {
-  /** Notify kernel that the mounted tier table changed (emits `models.changed` and aligns inheriting conversations). */
-  notifyChanged(): Promise<void>
-  /** Unmount this plugin's tier table from kernel (idempotent; auto-released on plugin disable/stop). */
-  release(): void
 }
 
 /** ctx.host：插件可调用的宿主内核能力（插件拿到的实现已绑定其 pluginId，不可伪造他人身份）。 */
@@ -736,14 +792,6 @@ export interface HelmxHostApi {
    */
   listModels(): Promise<ModelCatalog>
   /**
-   * 向内核 ModelRegistry 挂载本插件持有的运行时模型档位表（`tier/<id> -> ModelTierSpec`）。
-   * 返回幂等句柄（插件停用/停止时宿主自动调用 release 卸载）；档位变更后调 notifyChanged()
-   * 广播 models.changed 并对齐继承档位的会话。
-   */
-  registerModelTiers(
-    getTiers: () => Readonly<Record<string, ModelTierSpec>>,
-  ): ModelTierRegistration
-  /**
    * 创建 AskDoc 并等待终态：正常三态（answered/cancelled/superseded）均 resolve，
    * 只有验证/I/O/宿主失败才 reject。
    */
@@ -787,6 +835,20 @@ export interface HelmxPluginContext<TConfig = Record<string, unknown>> {
 
   /** 按会话隔离的文档，不进入全局首帧或全局 SSE；文档名不得与 doc 重复。 */
   sessionDoc<TState>(name: string, initial: TState, opts?: PluginDocOptions): PluginSessionDocHandle<TState>
+
+  /** 轻量插件专属键值存储（state.sqlite `helmx_plugin_kv`），按条目独立读写、自动脱敏并受单条大小上限约束。 */
+  kv<T = unknown>(namespace: string): PluginKvHandle<T>
+
+  /**
+   * 向能力注册表提供类型化实现，供其他插件（`ctx.consume`）及内核子系统消费。
+   * 返回幂等释放函数；插件停用、停止或回滚时宿主自动释放。
+   */
+  provide<T>(capabilityId: string, impl: T): () => void
+
+  /**
+   * 只读读取当前所有活跃插件在 `capabilityId` 下提供的能力实现。
+   */
+  consume<T>(capabilityId: string): ReadonlyArray<ProvidedCapability<T>>
 
   /** 后台服务（随插件启停生命周期管理）。 */
   service(spec: PluginServiceSpec): void

@@ -56,7 +56,7 @@
  * - ./workflow/actions.ts: the 11 actions (reused across five ends; the worktrees family moved to builtin:worktree)
  * - ./workflow/ui.ts: frontend UI extension point declarations
  */
-import type { PluginDefinition } from '@helmx/protocol'
+import type { DispatchToolsCapability, PluginDefinition } from '@helmx/protocol'
 import { resolvePluginClientAssets } from './asset-paths.js'
 import {
   WORKFLOW_PLUGIN_ID,
@@ -258,6 +258,9 @@ export function createWorkflowPlugin(): PluginDefinition {
         assertCanSpawn: (conversationId) => registry.assertCanSpawn(conversationId),
         resolveBackground: (conversationId, explicit) => backgroundPolicy.resolveBackground(conversationId, explicit),
         syncRunsDoc: () => projection.sync(),
+      })
+      ctx.provide<DispatchToolsCapability>('helmx.dispatch-tools', {
+        toolNames: ['subagent', 'SubagentWorkflow'],
       })
 
       // ---- Actions (reused across five ends: HTTP / CLI / run_action / Workflow / Web UI) ----

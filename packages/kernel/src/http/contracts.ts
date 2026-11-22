@@ -42,6 +42,8 @@ import type {
   PluginReloadResult,
   PluginRemoveResult,
   PluginRescanResult,
+  PluginRouteContext,
+  PluginRouteMethod,
   PluginStatus,
   PluginSummary,
   PluginUpdateResult,
@@ -101,11 +103,11 @@ export interface EventHub {
 
 interface PluginRouteInfo {
   pluginId: string
-  method: 'GET' | 'POST' | 'PUT' | 'DELETE'
-  /** Full mount path (e.g. '/api/plugins/<id>/webhook/:t'); enforced to use the plugin's dedicated prefix on registration. */
+  method: PluginRouteMethod
+  /** Full mount path (e.g. '/api/plugins/<id>/routes/webhook/:t'); enforced to use the plugin's dedicated prefix on registration. */
   path: string
   public?: boolean
-  handler(req: Request): Response | Promise<Response>
+  handler(req: Request, ctx?: PluginRouteContext): Response | Promise<Response>
 }
 
 export interface PluginHost {

@@ -11,6 +11,7 @@ import {
 } from '@helmx/protocol';
 import { registerPluginTsRoot } from './backend-ts-loader.js';
 import type { PluginDocRegistry } from './doc-registry.js';
+import type { PluginKvRegistry } from './kv-registry.js';
 import { assertDoctorTargetDir } from './doctor-target.js';
 import {
   findSourceDirByPluginId,
@@ -43,6 +44,7 @@ export interface DxCoordinatorDeps {
   tracker: PluginTaskTracker;
   providers?: PluginProviderPort;
   docRegistry: PluginDocRegistry;
+  kvRegistry: PluginKvRegistry;
   host: DxReloadHostPort;
 }
 
@@ -203,8 +205,11 @@ export function createPackageManagerHost(deps: DxCoordinatorDeps): PackageManage
       return { wasEnabled };
     },
     purgePluginPersistentData: async (pluginId) => {
-      // Await durable DELETE flush; failures reject so directory/install record stay intact for retry.
-      await deps.docRegistry.purgePlugin(pluginId);
+      // Await durable DELETE flush for docs, sessionDocs, and KV; failures reject so directory/install record stay intact for retry.
+      await Promise.all([
+        deps.docRegistry.purgePlugin(pluginId),
+        deps.kvRegistry.purgePlugin(pluginId),
+      ]);
     },
     listSummaries: () => deps.host.list(),
   };

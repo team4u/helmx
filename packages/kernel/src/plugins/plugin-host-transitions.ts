@@ -13,6 +13,7 @@ import {
   type PluginSummary,
 } from '@helmx/protocol';
 import type { CapabilityRegistry } from './capability-registry.js';
+import type { CapabilityServiceRegistry } from './capability-service-registry.js';
 import type { PluginDocRegistry } from './doc-registry.js';
 import type { HookPipeline } from './hooks.js';
 import {
@@ -34,6 +35,7 @@ import { assertUiCompleterActionBindings } from './ui-validation.js';
 export interface PluginHostRegistries {
   pipelines: ReadonlyMap<HookName, HookPipeline<HookName>>;
   capabilityRegistry: CapabilityRegistry;
+  capabilityServiceRegistry: CapabilityServiceRegistry;
   uiRegistry: UiRegistry;
   docRegistry: PluginDocRegistry;
 }
@@ -57,11 +59,16 @@ export function requirePlugin(
 
 export function removePluginRegistries(
   pluginId: string,
-  registries: Pick<PluginHostRegistries, 'capabilityRegistry' | 'uiRegistry' | 'docRegistry'>,
+  registries: Pick<PluginHostRegistries, 'capabilityRegistry' | 'capabilityServiceRegistry' | 'uiRegistry' | 'docRegistry'>,
+  notifyCapabilities = true,
 ): void {
   registries.capabilityRegistry.removePlugin(pluginId);
+  const affectedCapabilities = registries.capabilityServiceRegistry.removePlugin(pluginId);
   registries.uiRegistry.removePlugin(pluginId);
   registries.docRegistry.removePlugin(pluginId);
+  if (notifyCapabilities && affectedCapabilities.length > 0) {
+    registries.capabilityServiceRegistry.notifyChanged(affectedCapabilities);
+  }
 }
 
 export function clearPluginRegistrations(
@@ -76,7 +83,7 @@ export function clearPluginRegistrations(
   state.services.length = 0;
   state.providers.length = 0;
   state.hostReleases.clear();
-  removePluginRegistries(pluginId, registries);
+  removePluginRegistries(pluginId, registries, state.enabled);
 }
 
 export async function teardownPluginState(
@@ -109,11 +116,15 @@ export async function rollbackIsolatedPlugin(
 
 export function purgePluginEntries(
   pluginId: string,
-  ctx: Pick<PluginTransitionContext, 'plugins' | 'tracker' | 'capabilityRegistry' | 'uiRegistry' | 'docRegistry'>,
+  ctx: Pick<
+    PluginTransitionContext,
+    'plugins' | 'tracker' | 'capabilityRegistry' | 'capabilityServiceRegistry' | 'uiRegistry' | 'docRegistry'
+  >,
 ): void {
+  const wasEnabled = ctx.plugins.get(pluginId)?.enabled === true;
   ctx.plugins.delete(pluginId);
   ctx.tracker.removePlugin(pluginId);
-  removePluginRegistries(pluginId, ctx);
+  removePluginRegistries(pluginId, ctx, wasEnabled);
 }
 
 export async function rollbackAndRemovePlugin(

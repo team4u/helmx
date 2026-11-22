@@ -108,9 +108,13 @@ function assertEnableCommitChecks(state: PluginState, ctx: PluginLifecycleContex
   assertDependenciesSatisfied(ctx.plugins, pluginId, state.dependencies);
 }
 
-function commitEnabled(state: PluginState): void {
+function commitEnabled(state: PluginState, ctx: PluginLifecycleContext): void {
   state.enabled = true;
   state.phase = 'idle';
+  const provided = ctx.capabilityServiceRegistry.getProvidedCapabilityIds(state.definition.id);
+  if (provided.length > 0) {
+    ctx.capabilityServiceRegistry.notifyChanged(provided);
+  }
 }
 
 export async function runRegisterTransaction(
@@ -177,7 +181,7 @@ export async function runRegisterTransaction(
       await precompilePluginClientModules(state, ctx);
       await registerProviders(state, ctx.providers);
       await activatePluginServices(state, ctx.servicesStarted, ctx.servicesReconciled);
-      commitEnabled(state);
+      commitEnabled(state, ctx);
     } catch (err) {
       await handleRegisterFailure(state, seq, err, { isolate, stage: 'enable', stopServices: true }, ctx);
       return;
@@ -253,8 +257,8 @@ export async function runEnableTransaction(
     persistedEnabled = true;
     // Commit enablement and idle phase in the same synchronous block to avoid TOCTOU races with concurrent disables.
     assertEnableCommitChecks(state, ctx);
-    commitEnabled(state);
     state.lastError = undefined;
+    commitEnabled(state, ctx);
   } catch (err) {
     await rollbackEnablePlugin(state, prevConfigSchema, err, persistedEnabled, ctx);
   }
@@ -298,7 +302,13 @@ export async function runDisableTransaction(
   state.phase = 'idle';
   state.lastError = undefined;
   if (options.force === true) {
-    markDependentsBroken(ctx.plugins, pluginId, (dep) => ctx.emitPluginChanged(dep));
+    markDependentsBroken(ctx.plugins, pluginId, (dep) => {
+      const provided = ctx.capabilityServiceRegistry.getProvidedCapabilityIds(dep.definition.id);
+      if (provided.length > 0) {
+        ctx.capabilityServiceRegistry.notifyChanged(provided);
+      }
+      ctx.emitPluginChanged(dep);
+    });
   }
   let persistError: { err: unknown } | undefined;
   try {

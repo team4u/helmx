@@ -86,6 +86,14 @@ CREATE TABLE IF NOT EXISTS helmx_plugin_session_docs (
 );
 CREATE INDEX IF NOT EXISTS helmx_plugin_session_docs_conv
   ON helmx_plugin_session_docs (conversation_id);
+CREATE TABLE IF NOT EXISTS helmx_plugin_kv (
+  plugin_id TEXT NOT NULL,
+  namespace TEXT NOT NULL,
+  key TEXT NOT NULL,
+  value_json TEXT NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (plugin_id, namespace, key)
+);
 CREATE TABLE IF NOT EXISTS helmx_seq (
   key TEXT PRIMARY KEY,
   value INTEGER NOT NULL

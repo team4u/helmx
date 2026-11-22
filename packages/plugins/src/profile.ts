@@ -22,7 +22,7 @@
  * - the left-sidebar assistant Profile standing navigation (conversation:profile:assistant, not
  *   dependent on any particular conversation existing).
  */
-import { HelmxError, escapeXml, isAbsoluteTargetPath, isPluginSummaryActive, isSkillAvailable, pathRulesForShape, targetPathShape, type HelmxHostProfilesPort, type JsonSchema, type PluginDefinition, type Profile, type SkillSummary } from '@helmx/protocol';
+import { HelmxError, escapeXml, isAbsoluteTargetPath, isPluginSummaryActive, isSkillAvailable, pathRulesForShape, targetPathShape, type DispatchToolsCapability, type HelmxHostProfilesPort, type JsonSchema, type PluginDefinition, type Profile, type SkillSummary } from '@helmx/protocol';
 import {
   APP_BUILDER_SKILL_ASSET,
   HELMX_CLI_SKILL_ASSET,
@@ -283,21 +283,34 @@ export function createProfilePlugin(): PluginDefinition {
       }
 
       /**
-       * Known delegation / dispatch tool names whose presence unlocks the Profile collaboration
-       * catalog (workflow's subagent/SubagentWorkflow and swarm's swarm_dispatch_worker).
+       * Collect delegation / dispatch tool names dynamically from active plugins providing
+       * `'helmx.dispatch-tools'` via `ctx.provide` (zero hardcoded tool or plugin names).
        */
-      const DISPATCH_TOOL_NAMES = ['subagent', 'SubagentWorkflow', 'swarm_dispatch_worker'] as const
-      const DISPATCH_TOOL_SET: ReadonlySet<string> = new Set(DISPATCH_TOOL_NAMES)
+      const collectProvidedDispatchTools = (activePluginIds?: ReadonlySet<string>): string[] => {
+        const seen = new Set<string>()
+        const names: string[] = []
+        for (const entry of ctx.consume<DispatchToolsCapability>('helmx.dispatch-tools')) {
+          if (activePluginIds !== undefined && !activePluginIds.has(entry.pluginId)) continue
+          const toolNames = entry.impl?.toolNames
+          if (!Array.isArray(toolNames)) continue
+          for (const name of toolNames) {
+            if (typeof name === 'string' && name.length > 0 && !seen.has(name)) {
+              seen.add(name)
+              names.push(name)
+            }
+          }
+        }
+        return names
+      }
 
       /**
        * Unified computation of the collaboration catalog (the completion action and the
        * before_turn injection share the same fact source):
        * - exclude self / managed plugins disabled (see catalog.ts rules);
-       * - decide purely by whether the turn still has dispatch tools: builtin:workflow strips
-       *   subagent/SubagentWorkflow for managed subagents at the depth cap (orchestration leaves)
-       *   at a higher-priority hook, so this naturally returns empty -- no blanket exclusion by
-       *   parentConversationId (fork / Swarm workers also have parent chains yet should keep
-       *   full collaboration ability; level-1 subagents keep dispatch tools by default and also get the catalog);
+       * - decide purely by active `'helmx.dispatch-tools'` capability providers and whether the
+       *   turn still has dispatch tools: builtin:workflow strips subagent/SubagentWorkflow for
+       *   managed subagents at the depth cap (orchestration leaves) at a higher-priority hook,
+       *   so this naturally returns empty -- no blanket exclusion by parentConversationId;
        * - re-read the Profile catalog and plugin state live on every call (edits/toggles take effect next turn).
        */
       const computeCatalog = async (currentProfileId: string): Promise<ProfileCatalogEntry[]> => {
@@ -305,10 +318,10 @@ export function createProfilePlugin(): PluginDefinition {
           profiles.list(),
           ctx.host.listPlugins(),
         ])
-        if (!pluginSummaries.some((plugin) => isPluginSummaryActive(plugin) && plugin.tools.some((name) => DISPATCH_TOOL_SET.has(name)))) {
+        const activePluginIds = new Set(pluginSummaries.filter(isPluginSummaryActive).map((p) => p.id))
+        if (collectProvidedDispatchTools(activePluginIds).length === 0) {
           return []
         }
-        const activePluginIds = new Set(pluginSummaries.filter(isPluginSummaryActive).map((p) => p.id))
         const candidates = allProfiles.filter((p) => isCollaborationCandidate(p, currentProfileId, activePluginIds))
         return Promise.all(
           candidates.map(async (profile) => ({
@@ -325,7 +338,7 @@ export function createProfilePlugin(): PluginDefinition {
        * routing mode stripping subagent) -- the completion action falls back to a separate judgment when it cannot see the turn's tools (see the action implementation).
        */
       const dispatchToolNames = (tools: readonly { name: string }[]): string[] =>
-        DISPATCH_TOOL_NAMES.filter((name) => tools.some((t) => t.name === name))
+        collectProvidedDispatchTools().filter((name) => tools.some((t) => t.name === name))
 
       ctx.hook.onBeforeTurn(
         async (turn) => {

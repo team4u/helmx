@@ -312,11 +312,18 @@ it('spawn creates child clamped by target model capability; resume also clamps e
 it('tier preset thinking clamping and empty-string fallback stay aligned between ConversationService and spawnAgent', { timeout: 60_000 }, async (t) => {
   const { kernel, models, capB } = await fixture(t)
   await kernel.setDefaultModel('faux-cap-a/model-a', 'medium')
-  // Register a tier targeting model-b (supports up to high) with preset thinkingLevel 'max':
+  // Provide a tier targeting model-b (supports up to high) with preset thinkingLevel 'max' via capability registry:
   // both ConversationService.createConversation and spawnAgent must clamp to 'high' and persist 'high' override.
-  kernel.registerModelTiers('test:tiers', () => ({
-    heavy: { model: 'faux-cap-b/model-b', thinkingLevel: 'max' },
-  }))
+  await kernel.plugins.register({
+    id: 'test:tiers',
+    definePlugin(ctx) {
+      ctx.provide('helmx.model-tiers', {
+        getTiers: () => ({
+          heavy: { model: 'faux-cap-b/model-b', thinkingLevel: 'max' },
+        }),
+      })
+    },
+  })
   const conv = await kernel.createConversation({ model: 'tier/heavy' })
   await assertThinking(kernel, conv.id, 'high', 'high')
 

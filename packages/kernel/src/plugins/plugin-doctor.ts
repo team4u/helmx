@@ -15,6 +15,7 @@ import { tmpdir } from 'node:os';
 import {
   HelmxError,
   clientNpmRootsOf,
+  compareCodeUnit,
   type PluginBuildProvider,
   type PluginDefinition,
   type PluginDoctorCheck,
@@ -22,7 +23,7 @@ import {
   type PluginManifestProjection,
   type PluginSummary,
 } from '@helmx/protocol';
-import { PluginHost, type PluginHostBackend } from './plugin-host.js';
+import { PluginHost, type PluginHostBackend, type PluginKvStore } from './plugin-host.js';
 import { dryRunManifestSinks } from './plugin-host-lifecycle.js';
 import { nextPluginGeneration, registerPluginTsRoot } from './backend-ts-loader.js';
 import {
@@ -46,6 +47,51 @@ class DoctorDocStore {
     for (const key of [...this.values.keys()]) {
       if (key.startsWith(prefix) && !key.slice(prefix.length).includes(':')) this.values.delete(key);
     }
+  }
+  async flush(): Promise<void> {}
+}
+
+/** Ephemeral in-memory KV store used during `doctor` registration checks (touches no durable storage). */
+class DoctorKvStore implements PluginKvStore {
+  private values = new Map<string, Map<string, Map<string, { valueJson: string; updatedAt: number }>>>();
+  get(pluginId: string, namespace: string, key: string) {
+    const entry = this.values.get(pluginId)?.get(namespace)?.get(key);
+    return entry ? { ...entry } : undefined;
+  }
+  put(pluginId: string, namespace: string, key: string, valueJson: string): number {
+    let byNs = this.values.get(pluginId);
+    if (!byNs) {
+      byNs = new Map();
+      this.values.set(pluginId, byNs);
+    }
+    let byKey = byNs.get(namespace);
+    if (!byKey) {
+      byKey = new Map();
+      byNs.set(namespace, byKey);
+    }
+    const updatedAt = Date.now();
+    byKey.set(key, { valueJson, updatedAt });
+    return updatedAt;
+  }
+  delete(pluginId: string, namespace: string, key: string): boolean {
+    return this.values.get(pluginId)?.get(namespace)?.delete(key) ?? false;
+  }
+  list(pluginId: string, namespace: string, opts?: { prefix?: string; limit?: number; cursor?: string }) {
+    const byKey = this.values.get(pluginId)?.get(namespace);
+    if (!byKey) return { items: [] };
+    const keys = [...byKey.keys()]
+      .filter((k) => (opts?.prefix === undefined || k.startsWith(opts.prefix)) && (opts?.cursor === undefined || compareCodeUnit(k, opts.cursor) > 0))
+      .sort(compareCodeUnit);
+    const hasMore = opts?.limit !== undefined && keys.length > opts.limit;
+    const pageKeys = hasMore ? keys.slice(0, opts.limit) : keys;
+    const items = pageKeys.map((key) => ({ key, ...byKey.get(key)! }));
+    return { items, ...(hasMore && items.length > 0 ? { nextCursor: items[items.length - 1]!.key } : {}) };
+  }
+  clearNamespace(pluginId: string, namespace: string): void {
+    this.values.get(pluginId)?.delete(namespace);
+  }
+  deletePlugin(pluginId: string): void {
+    this.values.delete(pluginId);
   }
   async flush(): Promise<void> {}
 }
@@ -178,6 +224,7 @@ async function doctorPluginDirInternal(
           dataDir: scratch,
           host: doctorBackend(),
           docs: new DoctorDocStore(),
+          kv: new DoctorKvStore(),
           deferServices: true,
           buildProvider: options.buildProvider,
         });

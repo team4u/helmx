@@ -17,10 +17,13 @@ import {
   type ConversationScope,
   type ConversationSummary,
   type JsonSchema,
+  type MaybePromise,
   type PluginActionContext,
   type PluginActionSpec,
   type PluginActionToolSpec,
   type PluginActionVisibility,
+  type PluginRouteContext,
+  type PluginRouteMethod,
   type PluginRouteSpec,
   type PluginToolContext,
   type PluginToolSpec,
@@ -73,8 +76,27 @@ export interface DerivedToolSpec {
   qualifiedId?: string;
 }
 
-export interface PluginRouteEntry extends PluginRouteSpec {
+export interface PluginRouteEntry extends Omit<PluginRouteSpec, 'handler'> {
   pluginId: string;
+  handler(req: Request, ctx?: PluginRouteContext): MaybePromise<Response>;
+}
+
+const VALID_ROUTE_METHODS: ReadonlySet<PluginRouteMethod> = new Set([
+  'GET',
+  'POST',
+  'PUT',
+  'PATCH',
+  'DELETE',
+  'HEAD',
+]);
+const ROUTE_PARAM_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_-]*$/;
+const UNSAFE_PARAM_NAMES: ReadonlySet<string> = new Set(['__proto__', 'constructor', 'prototype']);
+const EMPTY_ROUTE_CONTEXT: PluginRouteContext = Object.freeze({ params: Object.freeze({}) });
+
+interface StoredPluginRoute {
+  entry: PluginRouteEntry;
+  relativePath: string;
+  signature: string;
 }
 
 /** Provider-safe tool name constraint (OpenAI function naming subset across providers). */
@@ -266,7 +288,7 @@ export interface CapabilityExecutionOptions {
 export class CapabilityRegistry {
   private actions = new Map<string, Map<string, ActionEntry>>();
   private tools = new Map<string, Map<string, ToolEntry>>();
-  private routes = new Map<string, PluginRouteEntry[]>();
+  private routes = new Map<string, StoredPluginRoute[]>();
 
   registerAction<TIn, TOut>(pluginId: string, spec: PluginActionSpec<TIn, TOut>): void {
     assertValidId('action', spec.id);
@@ -677,6 +699,14 @@ export class CapabilityRegistry {
   }
 
   registerRoute(pluginId: string, spec: PluginRouteSpec): void {
+    if (typeof spec.method !== 'string' || !VALID_ROUTE_METHODS.has(spec.method)) {
+      throw new HelmxError(
+        'validation_error',
+        `Plugin ${pluginId} route method ${String(spec.method)} is unsupported (allowed: ${[...VALID_ROUTE_METHODS].join(', ')})`,
+        400,
+        { pluginId, method: String(spec.method) },
+      );
+    }
     if (typeof spec.path !== 'string' || !spec.path.startsWith('/')) {
       throw new HelmxError(
         'invalid_route_path',
@@ -701,6 +731,8 @@ export class CapabilityRegistry {
         400,
       );
     }
+    const seenParams = new Set<string>();
+    const signatureParts: string[] = [];
     for (const seg of spec.path.slice(1).split('/')) {
       if (seg.length === 0) {
         throw new HelmxError(
@@ -717,17 +749,69 @@ export class CapabilityRegistry {
           400,
         );
       }
+      if (decoded.startsWith(':')) {
+        const paramName = decoded.slice(1);
+        if (!ROUTE_PARAM_NAME_PATTERN.test(paramName) || UNSAFE_PARAM_NAMES.has(paramName)) {
+          throw new HelmxError(
+            'validation_error',
+            `Plugin ${pluginId} route ${spec.method} ${spec.path} contains invalid path parameter segment '${decoded}'`,
+            400,
+            { pluginId, method: spec.method, path: spec.path, segment: decoded },
+          );
+        }
+        if (seenParams.has(paramName)) {
+          throw new HelmxError(
+            'validation_error',
+            `Plugin ${pluginId} route ${spec.method} ${spec.path} declares duplicate path parameter ':${paramName}'`,
+            400,
+            { pluginId, method: spec.method, path: spec.path, param: paramName },
+          );
+        }
+        seenParams.add(paramName);
+        signatureParts.push(':');
+      } else {
+        signatureParts.push(decoded);
+      }
     }
     if (typeof spec.handler !== 'function') {
       throw new HelmxError('invalid_route_handler', `Plugin ${pluginId} route ${spec.path} is missing handler`, 400);
     }
 
+    const signature = signatureParts.join('\0');
     let pluginRoutes = this.routes.get(pluginId);
     if (!pluginRoutes) {
       pluginRoutes = [];
       this.routes.set(pluginId, pluginRoutes);
     }
-    pluginRoutes.push({ ...spec, path: `${pluginRoutePrefix(pluginId)}${spec.path}`, pluginId });
+    const conflicting = pluginRoutes.find(
+      (existing) => existing.entry.method === spec.method && existing.signature === signature,
+    );
+    if (conflicting !== undefined) {
+      throw new HelmxError(
+        'validation_error',
+        `Plugin ${pluginId} route ${spec.method} ${spec.path} conflicts with existing route ${conflicting.entry.method} ${conflicting.relativePath}`,
+        400,
+        {
+          pluginId,
+          method: spec.method,
+          path: spec.path,
+          conflictingPath: conflicting.relativePath,
+        },
+      );
+    }
+    const rawHandler = spec.handler;
+    const wrappedHandler: PluginRouteEntry['handler'] = (req, ctx = EMPTY_ROUTE_CONTEXT) =>
+      rawHandler(req, ctx);
+    pluginRoutes.push({
+      relativePath: spec.path,
+      signature,
+      entry: {
+        ...spec,
+        handler: wrappedHandler,
+        path: `${pluginRoutePrefix(pluginId)}${spec.path}`,
+        pluginId,
+      },
+    });
   }
 
   getActionIds(pluginId: string): string[] {
@@ -859,7 +943,7 @@ export class CapabilityRegistry {
     for (const pluginId of activePluginIds) {
       const pluginRoutes = this.routes.get(pluginId);
       if (!pluginRoutes) continue;
-      for (const r of pluginRoutes) out.push({ ...r });
+      for (const r of pluginRoutes) out.push({ ...r.entry });
     }
     return out;
   }

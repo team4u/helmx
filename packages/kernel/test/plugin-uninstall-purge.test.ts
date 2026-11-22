@@ -25,6 +25,7 @@ import { openHelmxDatabase } from '../src/runtime/sqlite.js'
 import { HelmxStore } from '../src/runtime/store.js'
 import {
   createGlobalDocumentStore,
+  createPluginKvStore,
   createPluginSessionDocStore,
 } from '../src/runtime/runtime-host-backend.js'
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
@@ -81,6 +82,7 @@ function makeHost(handle: StoreHandle, dataDir: string): PluginHost {
     host: backend,
     docs: createGlobalDocumentStore(handle.store),
     sessionDocs: createPluginSessionDocStore(handle.store),
+    kv: createPluginKvStore(handle.store),
   })
 }
 
@@ -95,18 +97,21 @@ test('purgePluginPersistentData: clears all global and session docs from SQLite 
       definePlugin: (ctx) => {
         ctx.doc('records', { n: 0 }).set({ n: 1 })
         ctx.sessionDoc<{ ids: string[] }>('runs', { ids: [] }).set(1, { ids: ['r1'] })
+        ctx.kv<{ count: number }>('cache').set('k1', { count: 7 })
       },
     })
     await host.register({
       id: 'demo:sub',
       definePlugin: (ctx) => {
         ctx.doc('records', { n: 0 }).set({ n: 9 })
+        ctx.kv<{ count: number }>('cache').set('k1', { count: 9 })
       },
     })
     await host.register({
       id: 'other',
       definePlugin: (ctx) => {
         ctx.doc('records', { n: 0 }).set({ n: 2 })
+        ctx.kv<{ count: number }>('cache').set('k1', { count: 2 })
       },
     })
     await handle.store.flushPublic()
@@ -120,12 +125,15 @@ test('purgePluginPersistentData: clears all global and session docs from SQLite 
 
     assert.equal(handle.store.getPluginDoc('__global', 'demo:records'), undefined, 'target plugin global doc should be deleted')
     assert.equal(handle.store.getPluginSessionDoc('demo', 'runs', 1), undefined, 'target plugin session doc should be deleted')
+    assert.equal(handle.store.getPluginKv('demo', 'cache', 'k1'), undefined, 'target plugin KV entries should be deleted')
     assert.equal(
       handle.store.getPluginDoc('__global', 'demo:sub:records'),
       '{"n":9}',
       'colon-namespaced plugin (demo:sub) data must not be collaterally deleted by demo purge',
     )
+    assert.equal(handle.store.getPluginKv('demo:sub', 'cache', 'k1')?.valueJson, '{"count":9}')
     assert.equal(handle.store.getPluginDoc('__global', 'other:records'), '{"n":2}', 'other plugins remain untouched')
+    assert.equal(handle.store.getPluginKv('other', 'cache', 'k1')?.valueJson, '{"count":2}')
     assert.equal(
       handle.store.getPluginDoc('__global', 'conversation-ownership'),
       '{"1":"human"}',
@@ -137,7 +145,9 @@ test('purgePluginPersistentData: clears all global and session docs from SQLite 
     const reopened = await openStore(base)
     assert.equal(reopened.store.getPluginDoc('__global', 'demo:records'), undefined, 'must not resurrect after restart')
     assert.equal(reopened.store.getPluginSessionDoc('demo', 'runs', 1), undefined, 'must not resurrect after restart')
+    assert.equal(reopened.store.getPluginKv('demo', 'cache', 'k1'), undefined, 'KV must not resurrect after restart')
     assert.equal(reopened.store.getPluginDoc('__global', 'demo:sub:records'), '{"n":9}')
+    assert.equal(reopened.store.getPluginKv('demo:sub', 'cache', 'k1')?.valueJson, '{"count":9}')
     await reopened.close()
   } finally {
     await cleanupDir(base)

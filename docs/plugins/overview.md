@@ -37,9 +37,11 @@
 | `ctx.hook` | 注册 4 个生命周期 Hook | `input / before_turn / agent_spawn / turn_settled`，支持 `priority` |
 | `ctx.action(spec)` | 注册五端复用动作 | 强类型 `inputSchema` / `outputSchema`；可选 `cli.command` / `exposeAsTool` / `promptSnippet` / `promptGuidelines` / `scope` / `idempotent` |
 | `ctx.tool(spec)` | 注册仅对模型可见的工具 | 同样支持 `scope` 与提示词投射字段 |
-| `ctx.route(spec)` | 挂载 Web Standard 原始 HTTP 路由 | `public: true` 跳过 Token 鉴权（webhook 回调用） |
+| `ctx.route(spec)` | 挂载 Web Standard 原始 HTTP 路由 | 支持 `GET / POST / PUT / PATCH / DELETE / HEAD`；提取 `:param` 经第二参数 `{ params }` 透传；注册期拒绝重复/结构冲突路由（`400 validation_error`）；自动对 `text/*`、`application/json`、`*+json`（及流式 `text/event-stream`）响应执行 SecretStash 脱敏并零缓冲跳过二进制流；`public: true` 跳过 Token 鉴权 |
 | `ctx.doc(name, initial, opts)` | 声明全局持久文档 | state.sqlite；`public: true` 进全局首帧与 SSE 广播 |
 | `ctx.sessionDoc(name, initial, opts)` | 按会话分片的持久文档 | 不进全局首帧/全局 SSE，专用 SSE 按需订阅 |
+| `ctx.kv<T>(namespace)` | 轻量插件专属键值存储 | state.sqlite `helmx_plugin_kv`；按条目独立 `get / set / delete / list(prefix/limit/cursor) / clear / flush`（无整命名空间序列化），写入自动过 SecretStash 脱敏、单条上限 256 KiB（超限 `413 plugin_kv_too_large`），受 epoch 守卫，卸载清理 |
+| `ctx.provide<T>(id, impl)` / `ctx.consume<T>(id)` | 类型化插件间能力注册与发现 | `id` 边界强校验（`^[a-z0-9][a-z0-9._-]{0,63}$`）；停用/停止/回滚自动释放；`consume` 仅返回活跃插件实现；内核子系统亦通过 `PluginHost.consumeCapability` 消费（如 `helmx.dispatch-tools` 与 `helmx.model-tiers`） |
 | `ctx.service(spec)` | 注册后台长驻服务 | `prepare / start / reconcile / stop / liveTasks / inUse` |
 | `ctx.provider(provider)` | 注册模型供应商网关 | 启用时挂载、停用后注销，宿主统一协调 |
 | `ctx.ui` | 前端扩展点注册表（10 个 surface） | 见[扩展点详解](../architecture/extension-points.md) |
@@ -80,7 +82,7 @@
 
 ## 配置与数据边界
 
-- **专属数据目录**：每个插件分配 `<dataDir>/plugins/<id>/`，`ctx.doc` / `ctx.sessionDoc` 在 state.sqlite 中按插件划分命名空间。文档是紧凑状态而非数据仓库：单文档 JSON 序列化超过 **2 MiB** 即显式拒绝（`413 plugin_doc_too_large`），大体量内容应落盘为文件资产。
+- **专属数据目录与键值存储**：每个插件分配 `<dataDir>/plugins/<id>/`，`ctx.doc` / `ctx.sessionDoc` 与 `ctx.kv` 在 `state.sqlite` 中按插件严格隔离。文档是紧凑状态而非数据仓库：单文档 JSON 序列化超过 **2 MiB** 即显式拒绝（`413 plugin_doc_too_large`）；需要按 key 独立读写或前缀分页检索的轻量持久化状态（缓存、游标、条目索引）使用 `ctx.kv<T>(namespace)`（落盘 `helmx_plugin_kv`，写入自动过 SecretStash 脱敏，单条上限 **256 KiB**、超限显式 `413 plugin_kv_too_large`，免整命名空间重序列化；停用保留数据、卸载随 `purgePluginPersistentData` 一并清空）。大体量二进制内容应落盘为文件资产。
 - **公共与私有文档**：`public: true` 的 `ctx.doc` 进入全局 SSE 首帧 `pluginDocs` 并广播更新；`ctx.sessionDoc` 按会话分片、经专用 SSE 按需订阅（`builtin:workflow` 的 `runs` 与 `builtin:token-speed` 的 `speed` 即此形态）。公共文档禁止包含未脱敏机密。
 - **配置与机密**：`ctx.configSchema` 声明 `secret: true` 的字段自动分离到 `credentials.json` 的 `pluginSecrets.<pluginId>`（恒 0600）并注册 SecretStash 脱敏；插件配置经插件中心或 `helmx plugins config <id>` 同权读写。
 - **只读契约自省（`PluginManifestProjection`）**：宿主直接基于既有 `CapabilityRegistry`、`UiRegistry`、`PluginDocRegistry` 与 `PluginState` 按需投影单一插件的完整能力契约（经 `GET /api/plugins/:id/manifest`、`helmx plugins manifest <id>`，或在 `doctor` `register` dry-run 阶段随 `PluginDoctorReport.manifest` 返回）；按 UTF-16 code unit / 规范 Hook 序确定性排序，在边界处强校验，绝不执行 Provider 或动作处理器、绝不暴露运行期配置值、`secret: true` 默认值或私有文档。
