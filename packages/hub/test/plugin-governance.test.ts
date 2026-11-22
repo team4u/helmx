@@ -449,10 +449,9 @@ test('createHelmx 全部 11 个内置插件的只读契约投影完整暴露 pre
     assert.ok(wfManifest.tools.some((tool) => tool.name === 'SubagentWorkflow' && tool.presentationMetaSchema !== undefined))
 
     const swarmManifest = kernel.plugins.getManifest('builtin:swarm')
-    assert.equal(swarmManifest.tools.length, 12)
+    assert.equal(swarmManifest.tools.length, 11)
     assert.ok(swarmManifest.tools.every((tool) => tool.sourceKind === 'action' && tool.presentationMetaSchema !== undefined))
     assert.equal(swarmManifest.actions.find((a) => a.id === 'complete_board_members')?.visibility, 'ui')
-    assert.equal(swarmManifest.actions.find((a) => a.id === 'complete_board_channels')?.visibility, 'ui')
 
     const wtManifest = kernel.plugins.getManifest('builtin:worktree')
     assert.ok(

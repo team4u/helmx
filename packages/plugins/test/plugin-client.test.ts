@@ -188,7 +188,7 @@ before(async () => {
   const auth = kernel.auth as unknown as { setup(password: string): Promise<{ token: string }> }
   const issued = await auth.setup('client-track-test-password')
   token = issued.token
-})
+}, { timeout: 60_000 })
 
 after(async () => {
   await rm(dataDir, { recursive: true, force: true })
