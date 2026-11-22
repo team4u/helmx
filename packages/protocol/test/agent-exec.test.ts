@@ -11,7 +11,15 @@
  */
 import { strict as assert } from 'node:assert'
 import { describe, it } from 'node:test'
-import { HelmxError, sanitizeAgentExecutionInfo, sanitizeAgentGateResult, sanitizeAgentNamespacedMeta } from '../src/index.js'
+import {
+  HelmxError,
+  isValidNodeId,
+  NODE_ID_PATTERN,
+  NODE_ID_REGEX,
+  sanitizeAgentExecutionInfo,
+  sanitizeAgentGateResult,
+  sanitizeAgentNamespacedMeta,
+} from '../src/index.js'
 
 const timeout = { timeout: 60_000 } as const
 const ctx = { agentId: 'agent-x' }
@@ -213,5 +221,44 @@ describe('sanitizeAgentNamespacedMeta (standalone entry, same contract)', () => 
     assert.deepEqual(sanitizeAgentNamespacedMeta(undefined, ctx), {})
     const out = sanitizeAgentNamespacedMeta({ p: { a: [1, { b: null }] } }, ctx)
     assert.deepEqual(out, { p: { a: [1, { b: null }] } })
+  })
+})
+
+describe('NODE_ID_PATTERN / NODE_ID_REGEX / isValidNodeId (authoritative compute node ID contract)', () => {
+  it('exports aligned pattern/regex constants and accepts valid node IDs including local and max length 128', timeout, () => {
+    assert.equal(NODE_ID_PATTERN, '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$')
+    assert.equal(NODE_ID_REGEX.source, NODE_ID_PATTERN)
+    const schemaRegex = new RegExp(NODE_ID_PATTERN)
+    for (const valid of ['local', 'a', '0', 'node-1', 'gpu_01.east', `n${'x'.repeat(127)}`]) {
+      assert.equal(isValidNodeId(valid), true, `expected valid nodeId: ${valid}`)
+      assert.equal(NODE_ID_REGEX.test(valid), true)
+      assert.equal(schemaRegex.test(valid), true)
+    }
+  })
+
+  it('rejects empty strings, leading punctuation, invalid chars, >128 length, and non-strings', timeout, () => {
+    const invalid: unknown[] = [
+      '',
+      ' ',
+      ' local',
+      'local ',
+      '-bad',
+      '.bad',
+      '_bad',
+      'a/b',
+      'a:b',
+      'a b',
+      'node\n1',
+      `n${'x'.repeat(128)}`,
+      null,
+      undefined,
+      123,
+      true,
+      {},
+      ['local'],
+    ]
+    for (const bad of invalid) {
+      assert.equal(isValidNodeId(bad), false, `expected invalid nodeId: ${String(bad)}`)
+    }
   })
 })

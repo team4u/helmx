@@ -2,7 +2,7 @@
  * Node domain routes: /api/nodes (list/issue/remove/upgrade/port-forwarding) and
  * POST /api/env/exec (cross-node command execution, NDJSON streaming or single JSON response).
  */
-import { HelmxError, isStrictSemver, stripSemverVPrefix } from '@helmx/protocol'
+import { HelmxError, isStrictSemver, isValidNodeId, stripSemverVPrefix } from '@helmx/protocol'
 import type { EnvExecStreamFrame, JsonSchema } from '@helmx/protocol'
 import { redactJsonValue } from '../redact.js'
 import { isAbsoluteTargetPath } from '@helmx/protocol'
@@ -195,7 +195,7 @@ const ENV_EXEC_BODY_SCHEMA: JsonSchema = {
 /** Node ID path segment: starts with ASCII alphanumeric, may contain . _ - (matches issue validation). */
 function requireNodeSegment(raw: string): string {
   const decoded = decodeSegment(raw)
-  if (!new RegExp(`^${NODE_ID_PATTERN_SOURCE}$`).test(decoded)) {
+  if (!isValidNodeId(decoded)) {
     throw new ValidationError('nodeId must match /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/ (starts with an alphanumeric character, may contain . _ -)')
   }
   return decoded

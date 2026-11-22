@@ -9,6 +9,7 @@
 import { Type, type Static, type TSchema } from 'typebox'
 import {
   HelmxError,
+  NODE_ID_PATTERN,
   SKILL_ID_PATTERN,
   validateOrThrow,
   type ConversationInit,
@@ -29,7 +30,7 @@ import {
 
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 /** Node ID rule (starts with an ASCII letter or digit; may contain . _ -, length 1..128). */
-export const NODE_ID_PATTERN_SOURCE = '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$'
+export const NODE_ID_PATTERN_SOURCE = NODE_ID_PATTERN
 /** Safe positive integer upper bound: matches Number.isSafeInteger (schema integer does not check safe bounds). */
 const MAX_SAFE_INTEGER = 9007199254740991
 const MODEL_REF_PATTERN = /^[^/\s]+\/[^\s]+$/

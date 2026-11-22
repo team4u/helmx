@@ -925,6 +925,37 @@ describe('KernelRuntime.spawnAgent({ fork: true }) integration contracts', { tim
       const crossChild = kernel.listConversations({ parentConversationId: parent.id }).find((c) => !beforeIds.has(c.id))!
       assert.equal(crossChild.nodeId, 'node-profile')
       assert.equal(crossChild.cwd, crossCwd)
+      beforeIds.add(crossChild.id)
+
+      // 5. Explicit requestNodeId='local' overrides remote parent + remote Profile even under fork:true (falls back to local dir).
+      const localOverrideTarget = await hostApi.resolveSpawnTarget({
+        parentConversationId: parent.id,
+        requestNodeId: 'local',
+        fork: true,
+      })
+      assert.equal(localOverrideTarget.nodeId, 'local')
+      assert.equal(localOverrideTarget.sourceCwd, dir)
+      await kernel.spawnAgent({
+        parentConversationId: parent.id,
+        nodeId: 'local',
+        fork: true,
+        prompt: 'explicit local override on remote fork',
+      })
+      const localChild = kernel.listConversations({ parentConversationId: parent.id }).find((c) => !beforeIds.has(c.id))!
+      assert.equal(localChild.nodeId, 'local')
+      assert.equal(localChild.cwd, dir)
+      beforeIds.add(localChild.id)
+
+      // 6. Explicit requestNodeId='node-profile' overrides remote parent ('node-parent') under fork:true; uses matching Profile cwd.
+      await kernel.spawnAgent({
+        parentConversationId: parent.id,
+        nodeId: 'node-profile',
+        fork: true,
+        prompt: 'explicit node-profile override on remote fork',
+      })
+      const explicitRemoteChild = kernel.listConversations({ parentConversationId: parent.id }).find((c) => !beforeIds.has(c.id))!
+      assert.equal(explicitRemoteChild.nodeId, 'node-profile')
+      assert.equal(explicitRemoteChild.cwd, profileCwd)
     } finally {
       await daemonParent?.close().catch(() => {})
       await daemonProfile?.close().catch(() => {})
@@ -1014,7 +1045,13 @@ describe('KernelRuntime.spawnAgent({ fork: true }) integration contracts', { tim
         runtime: { kind: 'herdr', agent: 'agy' },
       })
 
-      let mode: 'bad-type' | 'flip-to-empty' | 'flip-to-herdr-prof' | 'retarget-empty-parent' = 'bad-type'
+      let mode:
+        | 'bad-type'
+        | 'bad-node-type'
+        | 'bad-node-syntax'
+        | 'flip-to-empty'
+        | 'flip-to-herdr-prof'
+        | 'retarget-empty-parent' = 'bad-type'
       let downstreamHits = 0
       await kernel.plugins.register({
         id: 'test:transform-upstream',
@@ -1023,6 +1060,12 @@ describe('KernelRuntime.spawnAgent({ fork: true }) integration contracts', { tim
             (req) => {
               if (mode === 'bad-type') {
                 return { action: 'transform', value: { ...req, fork: 'yes' as never } }
+              }
+              if (mode === 'bad-node-type') {
+                return { action: 'transform', value: { ...req, nodeId: 123 as never } }
+              }
+              if (mode === 'bad-node-syntax') {
+                return { action: 'transform', value: { ...req, nodeId: '../bad' } }
               }
               if (mode === 'flip-to-empty') {
                 return { action: 'transform', value: { ...req, fork: true } }
@@ -1051,7 +1094,19 @@ describe('KernelRuntime.spawnAgent({ fork: true }) integration contracts', { tim
         () => kernel.spawnAgent({ parentConversationId: 1, prompt: 'non-boolean injection' }),
         'invalid_hook_result',
       )
+      mode = 'bad-node-type'
+      await assertRejectsCode(
+        () => kernel.spawnAgent({ parentConversationId: 1, prompt: 'non-string nodeId injection' }),
+        'invalid_hook_result',
+      )
       assert.equal(downstreamHits, 0, 'payload validation failure must abort inside the hook pipeline before reaching downstream hooks')
+
+      mode = 'bad-node-syntax'
+      await assertRejectsCode(
+        () => kernel.spawnAgent({ parentConversationId: 1, prompt: 'invalid nodeId syntax transform' }),
+        'validation_error',
+        400,
+      )
 
       mode = 'flip-to-empty'
       await assertRejectsCode(

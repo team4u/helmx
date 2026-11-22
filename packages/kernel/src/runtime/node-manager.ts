@@ -10,7 +10,7 @@ import { hostname, loadavg, freemem, totalmem, uptime } from 'node:os'
 import { access, chmod, mkdir, readFile, statfs, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { HelmxError, type EnvExecRequest, type EnvExecResponse, type NodeEnvRpcFunctions, type NodeHealthSnapshot, type NodeInfo, type NodeIssuedToken, type NodeUpgradeCheckInput, type NodeUpgradeCheckResult, type NodeUpgradeResult, type RpcResult } from '@helmx/protocol'
+import { HelmxError, isValidNodeId, type EnvExecRequest, type EnvExecResponse, type NodeEnvRpcFunctions, type NodeHealthSnapshot, type NodeInfo, type NodeIssuedToken, type NodeUpgradeCheckInput, type NodeUpgradeCheckResult, type NodeUpgradeResult, type RpcResult } from '@helmx/protocol'
 import { sha256hex, type EnvFabric } from '../env/index.js'
 import type { ConfigService } from '../services/index.js'
 import type { SecretStash } from '../services/index.js'
@@ -127,7 +127,7 @@ export class NodeManager {
     if (nodeId === 'local') {
       throw new HelmxError('cannot_issue_local', 'local is a built-in node and does not need an access token', 400, { nodeId })
     }
-    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(nodeId)) {
+    if (!isValidNodeId(nodeId)) {
       throw new HelmxError(
         'validation_error',
         'nodeId must match /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/ ' +

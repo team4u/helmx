@@ -16,6 +16,17 @@ import { HelmxError } from './error.js'
 import { sanitizeAgentNamespacedMeta } from './meta.js'
 import type { AgentExecutionInfo, AgentGateResult } from './plugin-dto.js'
 
+/** Authoritative JSON Schema `pattern` for compute node IDs (includes `'local'`). */
+export const NODE_ID_PATTERN = '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$'
+
+/** Authoritative RegExp matching valid compute node IDs (includes `'local'`). */
+export const NODE_ID_REGEX = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
+
+/** Validate that `value` is a syntactically valid compute node ID string (including `'local'`). */
+export function isValidNodeId(value: unknown): value is string {
+  return typeof value === 'string' && NODE_ID_REGEX.test(value)
+}
+
 /** Whether the target path is absolute (POSIX leading /, Windows drive-absolute, or UNC leading backslash root). */
 export function isAbsoluteAgentPath(p: string): boolean {
   return (

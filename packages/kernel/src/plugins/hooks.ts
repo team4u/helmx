@@ -193,6 +193,7 @@ const PAYLOAD_CHECKS: Record<HookName, PayloadCheck> = {
       optString(v, 'agentType') ??
       optString(v, 'model') ??
       optString(v, 'effort') ??
+      optString(v, 'nodeId') ??
       optString(v, 'cwd') ??
       optString(v, 'gate') ??
       optString(v, 'resume') ??

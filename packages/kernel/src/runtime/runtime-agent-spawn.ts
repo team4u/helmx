@@ -17,7 +17,7 @@ import type {
   ConversationPatch,
   ConversationSummary,
 } from '@helmx/protocol'
-import { HelmxError, isValidEnvName } from '@helmx/protocol'
+import { HelmxError, isValidEnvName, isValidNodeId, NODE_ID_PATTERN } from '@helmx/protocol'
 import type { ConversationOwnership } from './runtime-ownership.js'
 import type { Harness, Registry } from '@earendil-works/pi-durable'
 import type { EnvFabric } from '../env/index.js'
@@ -29,7 +29,7 @@ import type { HookBridge } from './hook-bridge.js'
 import type { ModelRegistry } from './model-registry.js'
 import { resolveDefaultModelRef } from './models.js'
 import type { ResolvedAttachmentItem } from './conversation-attachments.js'
-import { normalizeSessionCwd, trustedPlatformFromEnvFabric } from './target-cwd.js'
+import { normalizeSessionCwd, resolveTargetPlatform, trustedPlatformFromEnvFabric } from './target-cwd.js'
 import {
   assertSpawnForkFields,
   resolveCleanForkAnchor,
@@ -288,22 +288,44 @@ export class RuntimeAgentSpawn {
 
   /**
    * `Profile.restrictToCwd` guardrail at the spawn entry: when the parent conversation's Profile restricts
-   * to its cwd, an explicitly requested `cwd` (a model-directed choice) must stay inside that cwd. Runs
-   * before the `agent_spawn` hook chain: host/plugin-directed rewrites afterwards (workflow worktree
-   * isolation assigning a managed worktree as the child cwd) are trusted capabilities, not model choices.
+   * to its cwd, an explicitly requested `nodeId` must stay on the parent's node and an explicitly requested
+   * `cwd` (model-directed choices) must stay inside that cwd. Runs before the `agent_spawn` hook chain:
+   * host/plugin-directed rewrites afterwards (workflow worktree isolation assigning a managed worktree as
+   * the child cwd) are trusted capabilities, not model choices.
    */
   private async assertSpawnCwdScope(request: AgentSpawnRequest): Promise<void> {
-    if (request.cwd === undefined || this.deps.toolDeps.restrictToCwdOf === undefined) return
+    if (
+      (request.cwd === undefined && request.nodeId === undefined) ||
+      this.deps.toolDeps.restrictToCwdOf === undefined
+    ) {
+      return
+    }
     const parent = this.deps.store.getConv(request.parentConversationId)
     if (parent === undefined) return // missing parents reject later in the pipeline with their own explicit errors
     if (!(await this.deps.toolDeps.restrictToCwdOf(request.parentConversationId))) return
-    const violation = cwdScopeViolationText(request.cwd, parent.cwd)
-    if (violation !== undefined) {
-      throw new HelmxError('path_outside_workspace', violation, 403, {
-        parentConversationId: request.parentConversationId,
-        requestedCwd: request.cwd,
-        parentCwd: parent.cwd,
-      })
+    const parentNodeId = parent.nodeId ?? 'local'
+    if (request.nodeId !== undefined && request.nodeId !== parentNodeId) {
+      throw new HelmxError(
+        'path_outside_workspace',
+        `path_outside_workspace: requested nodeId '${request.nodeId}' differs from parent conversation node '${parentNodeId}'; ` +
+          'this conversation is restricted to its working directory (Profile.restrictToCwd)',
+        403,
+        {
+          parentConversationId: request.parentConversationId,
+          requestedNodeId: request.nodeId,
+          parentNodeId,
+        },
+      )
+    }
+    if (request.cwd !== undefined) {
+      const violation = cwdScopeViolationText(request.cwd, parent.cwd)
+      if (violation !== undefined) {
+        throw new HelmxError('path_outside_workspace', violation, 403, {
+          parentConversationId: request.parentConversationId,
+          requestedCwd: request.cwd,
+          parentCwd: parent.cwd,
+        })
+      }
     }
   }
 
@@ -490,7 +512,7 @@ export class RuntimeAgentSpawn {
           tags,
           parentConversationId: parentId,
           ...(parentToolCallId !== undefined && parentToolCallId !== '' ? { parentToolCallId } : {}),
-          nodeId: nodeId ?? resolveSpawnTargetNodeId(profile?.nodeId, parentMeta?.nodeId, forkSameProfile),
+          nodeId: nodeId ?? resolveSpawnTargetNodeId(profile?.nodeId, parentMeta?.nodeId, forkSameProfile, finalRequest.nodeId),
           cwd: childCwd,
           model: modelMirror,
           thinkingLevel: thinkingLevel ?? '',
@@ -576,9 +598,18 @@ export class RuntimeAgentSpawn {
   async resolveSpawnTarget(input: {
     parentConversationId: number
     profileId?: string
+    requestNodeId?: string
     requestCwd?: string
     fork?: boolean
   }): Promise<{ nodeId: string; sourceCwd: string; parentCwd: string | undefined }> {
+    if (input.requestNodeId !== undefined && !isValidNodeId(input.requestNodeId)) {
+      throw new HelmxError(
+        'validation_error',
+        `requestNodeId must match ${NODE_ID_PATTERN} (received ${String(input.requestNodeId)})`,
+        400,
+        { requestNodeId: input.requestNodeId },
+      )
+    }
     const parent = this.deps.store.getConv(input.parentConversationId)
     if (parent === undefined) {
       throw new HelmxError('not_found', `Parent conversation ${input.parentConversationId} not found; cannot resolve spawn target`, 404, {
@@ -590,11 +621,52 @@ export class RuntimeAgentSpawn {
     if (profile === undefined) {
       throw new HelmxError('not_found', `agentType '${profileId}' is not a registered Profile (profiles/${profileId} not found)`, 404)
     }
-    // Consolidate source cwd by target node platform (same-profile fork uses request > parent > profile > Hub default;
-    // otherwise request > profile > parent > Hub default): worktree source dirs receive the normalized path;
-    // unmappable POSIX cwds on win32 targets fail explicitly; unknown remote platforms pass through verbatim.
-    // `parentCwd` preserves the parent conversation snapshot verbatim.
+    const restricted =
+      this.deps.toolDeps.restrictToCwdOf !== undefined &&
+      (await this.deps.toolDeps.restrictToCwdOf(input.parentConversationId))
+    if (restricted) {
+      const parentNodeId = parent.nodeId ?? 'local'
+      const resolvedNodeId = resolveSpawnTargetNodeId(
+        profile.nodeId,
+        parent.nodeId,
+        forkSameProfile,
+        input.requestNodeId,
+      )
+      if (resolvedNodeId !== parentNodeId) {
+        throw new HelmxError(
+          'path_outside_workspace',
+          `path_outside_workspace: resolved spawn target node '${resolvedNodeId}' differs from parent conversation node '${parentNodeId}'; ` +
+            'this conversation is restricted to its working directory (Profile.restrictToCwd)',
+          403,
+          {
+            parentConversationId: input.parentConversationId,
+            resolvedNodeId,
+            parentNodeId,
+            ...(input.requestNodeId !== undefined ? { requestedNodeId: input.requestNodeId } : {}),
+          },
+        )
+      }
+      if (input.requestCwd !== undefined && parent.cwd !== undefined) {
+        const parentPlatform = resolveTargetPlatform(
+          parentNodeId,
+          trustedPlatformFromEnvFabric(this.deps.envFabric),
+        )
+        const violation = cwdScopeViolationText(input.requestCwd, parent.cwd, parentPlatform)
+        if (violation !== undefined) {
+          throw new HelmxError('path_outside_workspace', violation, 403, {
+            parentConversationId: input.parentConversationId,
+            requestedCwd: input.requestCwd,
+            parentCwd: parent.cwd,
+          })
+        }
+      }
+    }
+    // Consolidate source cwd by target node platform (requestNodeId > fork/profile/parent node chain;
+    // cross-node cwd isolation prevents leaking foreign parent/profile paths across nodes): worktree
+    // source dirs receive the normalized path; unmappable POSIX cwds on win32 targets fail explicitly;
+    // unknown remote platforms pass through verbatim. `parentCwd` preserves the parent snapshot verbatim.
     const { nodeId, sourceCwd } = resolveSpawnTargetChain({
+      requestNodeId: input.requestNodeId,
       profileNodeId: profile.nodeId,
       parentNodeId: parent.nodeId,
       requestCwd: input.requestCwd,

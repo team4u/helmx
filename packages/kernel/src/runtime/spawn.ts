@@ -645,6 +645,7 @@ function resolveSpawnTargetForRequest(
     childCwd = summary!.cwd
   } else {
     const chain = resolveSpawnTargetChain({
+      requestNodeId: request.nodeId,
       profileNodeId: profile.nodeId,
       parentNodeId: parentSummary?.nodeId,
       requestCwd: request.cwd,

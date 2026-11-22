@@ -143,6 +143,13 @@ export interface AgentSpawnRequest {
    * 命名空间。
    */
   meta?: AgentNamespacedMeta
+  /**
+   * 可选目标计算节点 ID（如 `'local'` 或已注册远端节点；与 `resume` 互斥）。
+   * 显式传入时优先级最高（显式 `'local'` 可覆盖远端父会话或 Profile 绑定）；
+   * 跨节点派生时抑制其他节点的父会话 `cwd` 与节点不匹配的 `Profile.cwd`，
+   * 目标为远端节点且无可用 `cwd` 时显式拒绝（400 validation_error）。
+   */
+  nodeId?: string
   cwd?: string
   /** 结构化输出 JSON Schema（文件交接时强制落盘校验）。 */
   schema?: JsonSchema
@@ -903,15 +910,17 @@ export interface HelmxHostApi {
   /**
    * 通用 spawn 靶点解析（机制，零业务语义）：按与原生执行行同一权威链
    * 解析源目录与目标节点，并返回父会话 cwd 供插件层在分配资源前解析源目录：
-   * - 普通或跨角色 fork：cwd 链 `request.cwd > profile.cwd > 父会话 cwd`，
-   *   节点链 `显式 profile.nodeId > 父会话绑定节点 > 'local'`；
-   * - 同角色 fork（fork=true 且使用父会话同一 Profile）：cwd 链
-   *   `request.cwd > 父会话 cwd > profile.cwd`，节点链 `父会话绑定节点 > profile.nodeId > 'local'`。
-   * 链实现由内核唯一提取函数提供（原生子会话派生与本端口同源），插件不得自行复制规则。
+   * - 节点链：显式 `requestNodeId` 最高优先（显式 `'local'` 可覆盖远端父会话或 Profile）；
+   *   未指定时，普通/跨角色 fork 为 `显式 profile.nodeId > 父会话绑定节点 > 'local'`，
+   *   同角色 fork（fork=true 且使用父会话同一 Profile）为 `父会话绑定节点 > profile.nodeId > 'local'`；
+   * - 跨节点 cwd 隔离：`profile.cwd` 仅在 `profile.nodeId === undefined || profile.nodeId === nodeId` 时可用，
+   *   父会话 `cwd` 仅在 `(parent.nodeId ?? 'local') === nodeId` 时可用，`defaultCwd` 仅用于 `'local'`；
+   *   目标为远端节点且无可用 `cwd` 时显式抛 400 validation_error。
+   * - 链实现由内核唯一提取函数提供（原生子会话派生与本端口同源），插件不得自行复制规则。
    * 返回值是内核权威事实；节点离线校验不在本端口（由 execEnv/gate 各自执行）。
    *
    * 为何按需求值而非预归一化进请求字段：agent_spawn around 链上任一前置
-   * 插件可经 next(finalRequest) 改写 cwd/agentType，continuation（如
+   * 插件可经 next(finalRequest) 改写 cwd/nodeId/agentType，continuation（如
    * worktree 预分配）必须按改写后的当前请求解析靶点，管道入口快照必然
    * 过期；原生执行行在链收敛后重新走同一权威链（cwd 可能已被改写为隔离
    * 树路径）。且 request.cwd === undefined 承载「走继承链」的显式语义
@@ -922,6 +931,8 @@ export interface HelmxHostApi {
     parentConversationId: number
     /** Profile ID（非 fork 缺省 'assistant'；fork=true 缺省继承父会话 profileId）；Profile 不存在时抛 not_found。 */
     profileId?: string
+    /** 显式请求目标计算节点 ID（优先级最高；显式 `'local'` 可覆盖远端父会话或 Profile 绑定）。 */
+    requestNodeId?: string
     /** 显式请求 cwd（优先于 Profile/父会话 cwd）。 */
     requestCwd?: string
     /** 是否按上下文分叉派生规则解析（缺省 false）。 */

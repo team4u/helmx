@@ -27,7 +27,7 @@ import type {
   SearchHit,
   WhenBusy,
 } from '@helmx/protocol'
-import { HelmxError } from '@helmx/protocol'
+import { HelmxError, isValidNodeId, NODE_ID_PATTERN } from '@helmx/protocol'
 import type { ArtifactService as SvcArtifactService, ProfileService, SecretStash, Profile } from '../services/index.js'
 import type { ConversationTracker } from './conversations.js'
 import type { EventHub } from './events.js'
@@ -565,10 +565,26 @@ export class ConversationService {
       : undefined
     const parentMeta =
       init.parentConversationId !== undefined ? this.store.getConv(init.parentConversationId) : undefined
+    if (init.nodeId !== undefined && !isValidNodeId(init.nodeId)) {
+      throw new HelmxError(
+        'validation_error',
+        `nodeId must match ${NODE_ID_PATTERN} (received ${String(init.nodeId)})`,
+        400,
+        { nodeId: init.nodeId },
+      )
+    }
     const nodeId =
       init.nodeId ?? profile?.nodeId ?? parentMeta?.nodeId ?? 'local'
 
-    const inheritedCwd = init.cwd ?? profile?.cwd ?? parentMeta?.cwd
+    const usableProfileCwd =
+      profile !== undefined && (profile.nodeId === undefined || profile.nodeId === nodeId)
+        ? profile.cwd
+        : undefined
+    const usableParentCwd =
+      parentMeta !== undefined && (parentMeta.nodeId ?? 'local') === nodeId
+        ? parentMeta.cwd
+        : undefined
+    const inheritedCwd = init.cwd ?? usableProfileCwd ?? usableParentCwd
     /** Normalize cwd for the target node platform consistently (zero disk IO; prevents invalid POSIX paths from entering DB). */
     const platformSource = this.o.trustedPlatformOf ?? trustedPlatformFromEnvFabric(undefined)
     const normalizeCwd = (raw: string): string =>

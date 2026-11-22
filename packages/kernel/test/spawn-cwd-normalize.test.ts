@@ -24,6 +24,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { runNativeSpawn, type NativeSpawnDeps } from '../src/runtime/spawn.js'
 import { RuntimeAgentSpawn } from '../src/runtime/runtime-agent-spawn.js'
+import { resolveSpawnTargetChain, resolveSpawnTargetNodeId } from '../src/runtime/spawn-target.js'
 import type { TrustedPlatformHost } from '../src/runtime/target-cwd.js'
 import { ArtifactService, SecretStash } from '../src/services/index.js'
 import type { EnvFabric } from '../src/env/index.js'
@@ -305,15 +306,19 @@ test('resume: explicit cwd is passed through updateConversation port (normalized
 function spawnTargetResolver(options: {
   platforms: Record<string, string>
   hubPlatform?: string
-  parent: { cwd?: string; nodeId?: string }
+  parent: { cwd?: string; nodeId?: string; profileId?: string }
   profiles?: Record<string, { cwd?: string; nodeId?: string }>
+  restricted?: boolean
 }) {
   const conversations = {
     readProfile: async (id: string) => options.profiles?.[id] ?? {},
   }
   const spawn = new RuntimeAgentSpawn({
     store: { getConv: () => options.parent } as never,
-    toolDeps: { defaultCwd: '/tmp/helmx-fallback' } as never,
+    toolDeps: {
+      defaultCwd: '/tmp/helmx-fallback',
+      ...(options.restricted !== undefined ? { restrictToCwdOf: async () => options.restricted! } : {}),
+    } as never,
     harness: {} as never,
     registry: {} as never,
     tracker: {} as never,
@@ -328,7 +333,7 @@ function spawnTargetResolver(options: {
     }) as never,
     markConversationOwnership: () => undefined,
   })
-  return (input: { parentConversationId: number; profileId?: string; requestCwd?: string }) =>
+  return (input: { parentConversationId: number; profileId?: string; requestNodeId?: string; requestCwd?: string; fork?: boolean }) =>
     spawn.resolveSpawnTarget(input)
 }
 
@@ -363,9 +368,16 @@ test('resolveSpawnTarget: unmappable POSIX sourceCwd on remote win32 target reje
 // ---------------------------------------------------------------------------
 
 /** Minimal spawnAgent fixture: store/hookBridge stubs; the sentinel proves execution passed the guard. */
-function spawnEntryGuard(options: { restricted: boolean; parentCwd: string }) {
+function spawnEntryGuard(options: { restricted: boolean; parentCwd: string; parentNodeId?: string }) {
   const spawn = new RuntimeAgentSpawn({
-    store: { getConv: () => ({ id: 1, cwd: options.parentCwd, profileId: 'worker' }) } as never,
+    store: {
+      getConv: () => ({
+        id: 1,
+        cwd: options.parentCwd,
+        profileId: 'worker',
+        ...(options.parentNodeId !== undefined ? { nodeId: options.parentNodeId } : {}),
+      }),
+    } as never,
     toolDeps: { defaultCwd: '/tmp/helmx-fallback', restrictToCwdOf: async () => options.restricted } as never,
     harness: {} as never,
     registry: {} as never,
@@ -417,4 +429,317 @@ test('spawnAgent guard: inside cwd / unrestricted parent / absent cwd all pass t
   const unrestricted = spawnEntryGuard({ restricted: false, parentCwd: '/tmp/helmx/repo' })
   await assert.rejects(unrestricted({ parentConversationId: 1, prompt: 'x', cwd: '/etc' }), /past-guard/)
   await assert.rejects(restricted({ parentConversationId: 1, prompt: 'x' }), /past-guard/)
+})
+
+// ---------------------------------------------------------------------------
+// Dynamic nodeId precedence, cross-node cwd isolation, validation, and restrictToCwd guardrails
+// ---------------------------------------------------------------------------
+
+test('resolveSpawnTargetNodeId & resolveSpawnTargetChain: requestNodeId precedence and cross-node cwd isolation', { timeout: 60_000 }, () => {
+  const identity = (cwd: string) => cwd
+
+  // 1. Explicit requestNodeId always wins, including explicit 'local' overriding remote parent/Profile and forkSameProfile.
+  assert.equal(resolveSpawnTargetNodeId('node-prof', 'node-parent', false, 'node-req'), 'node-req')
+  assert.equal(resolveSpawnTargetNodeId('node-prof', 'node-parent', true, 'node-req'), 'node-req')
+  assert.equal(resolveSpawnTargetNodeId('node-prof', 'node-parent', false, 'local'), 'local')
+  assert.equal(resolveSpawnTargetNodeId('node-prof', 'node-parent', true, 'local'), 'local')
+
+  // 2. Local parent -> remote target without requestCwd or compatible profileCwd rejects 400 (suppresses parentCwd and defaultCwd).
+  assert.throws(
+    () =>
+      resolveSpawnTargetChain({
+        requestNodeId: 'gpu-1',
+        parentNodeId: 'local',
+        parentCwd: '/local/repo',
+        defaultCwd: '/hub/default',
+        normalize: identity,
+      }),
+    (e: unknown) => e instanceof HelmxError && e.code === 'validation_error' && e.status === 400 && (e.details as { nodeId?: string })?.nodeId === 'gpu-1',
+  )
+
+  // 3. Mismatched profile.nodeId suppresses profileCwd; mismatched parentNodeId suppresses parentCwd.
+  assert.throws(
+    () =>
+      resolveSpawnTargetChain({
+        requestNodeId: 'gpu-2',
+        profileNodeId: 'gpu-1',
+        profileCwd: '/gpu1/prof',
+        parentNodeId: 'gpu-1',
+        parentCwd: '/gpu1/parent',
+        defaultCwd: '/hub/default',
+        forkSameProfile: true,
+        normalize: identity,
+      }),
+    (e: unknown) => e instanceof HelmxError && e.code === 'validation_error' && e.status === 400,
+  )
+
+  // 4. Compatible profileCwd (profileNodeId === undefined OR profileNodeId === nodeId) is eligible on remote nodes.
+  assert.deepEqual(
+    resolveSpawnTargetChain({
+      requestNodeId: 'gpu-2',
+      profileNodeId: undefined,
+      profileCwd: '/portable/ws',
+      parentNodeId: 'local',
+      parentCwd: '/local/parent',
+      defaultCwd: '/hub/default',
+      normalize: identity,
+    }),
+    { nodeId: 'gpu-2', sourceCwd: '/portable/ws' },
+  )
+  assert.deepEqual(
+    resolveSpawnTargetChain({
+      requestNodeId: 'gpu-2',
+      profileNodeId: 'gpu-2',
+      profileCwd: '/gpu2/ws',
+      parentNodeId: 'gpu-1',
+      parentCwd: '/gpu1/parent',
+      defaultCwd: '/hub/default',
+      forkSameProfile: true,
+      normalize: identity,
+    }),
+    { nodeId: 'gpu-2', sourceCwd: '/gpu2/ws' },
+  )
+
+  // 5. Explicit requestNodeId='local' overrides remote parent/Profile, suppresses foreign cwds, and falls back to defaultCwd.
+  assert.deepEqual(
+    resolveSpawnTargetChain({
+      requestNodeId: 'local',
+      profileNodeId: 'gpu-1',
+      profileCwd: '/gpu1/prof',
+      parentNodeId: 'gpu-1',
+      parentCwd: '/gpu1/parent',
+      defaultCwd: '/hub/default',
+      forkSameProfile: true,
+      normalize: identity,
+    }),
+    { nodeId: 'local', sourceCwd: '/hub/default' },
+  )
+
+  // 6. Explicit requestCwd succeeds on cross-node spawn even when forkSameProfile=true.
+  assert.deepEqual(
+    resolveSpawnTargetChain({
+      requestNodeId: 'gpu-2',
+      profileNodeId: 'gpu-1',
+      profileCwd: '/gpu1/prof',
+      parentNodeId: 'gpu-1',
+      parentCwd: '/gpu1/parent',
+      requestCwd: '/gpu2/explicit',
+      defaultCwd: '/hub/default',
+      forkSameProfile: true,
+      normalize: identity,
+    }),
+    { nodeId: 'gpu-2', sourceCwd: '/gpu2/explicit' },
+  )
+})
+
+test('runNativeSpawn: dynamic nodeId override, explicit local fallback, remote missing cwd 400, and resume+nodeId / invalid nodeId 400', { timeout: 60_000 }, async () => {
+  const env = await openSpawnEnv({
+    hubPlatform: 'linux',
+    platforms: { 'win-build': 'win32' },
+    profiles: {
+      assistant: {},
+      'remote-win': { nodeId: 'win-build', cwd: 'C:\\prof-dir' },
+    },
+  })
+  try {
+    // 1. Dynamic remote nodeId on default local profile + WSL path normalization.
+    env.faux.setResponses([fauxAssistantMessage('ok-remote')])
+    let resolved: { nodeId?: string; effectiveCwd?: string; conversationId?: number } | undefined
+    await runNativeSpawn(env.deps, {
+      parentConversationId: 1,
+      prompt: 'run on win',
+      nodeId: 'win-build',
+      cwd: '/mnt/c/work/proj',
+      onResolved: (info: unknown) => {
+        resolved = info as { nodeId?: string; effectiveCwd?: string; conversationId?: number }
+      },
+    })
+    assert.equal(resolved?.nodeId, 'win-build')
+    assert.equal(resolved?.effectiveCwd, 'C:\\work\\proj')
+    const remoteChildId = resolved!.conversationId!
+    assert.equal(env.mirrors.get(remoteChildId)?.nodeId, 'win-build')
+    assert.equal(env.mirrors.get(remoteChildId)?.cwd, 'C:\\work\\proj')
+
+    // 2. Explicit nodeId='local' overrides remote Profile and suppresses remote profileCwd (falls back to defaultCwd).
+    env.faux.setResponses([fauxAssistantMessage('ok-local')])
+    let resolvedLocal: { nodeId?: string; effectiveCwd?: string } | undefined
+    await runNativeSpawn(env.deps, {
+      parentConversationId: 1,
+      agentType: 'remote-win',
+      prompt: 'force local',
+      nodeId: 'local',
+      onResolved: (info: unknown) => {
+        resolvedLocal = info as { nodeId?: string; effectiveCwd?: string }
+      },
+    })
+    assert.equal(resolvedLocal?.nodeId, 'local')
+    assert.equal(resolvedLocal?.effectiveCwd, '/tmp/helmx-spawn-default')
+
+    // 3. Remote nodeId without cwd rejects 400 validation_error without creating a conversation.
+    const countBefore = env.mirrors.size
+    await assert.rejects(
+      runNativeSpawn(env.deps, {
+        parentConversationId: 1,
+        prompt: 'missing remote cwd',
+        nodeId: 'win-build',
+      }),
+      (e: unknown) => e instanceof HelmxError && e.code === 'validation_error' && e.status === 400,
+    )
+    assert.equal(env.mirrors.size, countBefore)
+
+    // 4. resume + nodeId rejects 400 validation_error (mutually exclusive).
+    await assert.rejects(
+      runNativeSpawn(env.deps, {
+        parentConversationId: 1,
+        prompt: 'switch node on resume',
+        resume: String(remoteChildId),
+        nodeId: 'local',
+      }),
+      (e: unknown) =>
+        e instanceof HelmxError &&
+        e.code === 'validation_error' &&
+        e.status === 400 &&
+        e.message.includes('nodeId and resume are mutually exclusive') &&
+        (e.details as { nodeId?: string; resume?: string })?.nodeId === 'local' &&
+        (e.details as { nodeId?: string; resume?: string })?.resume === String(remoteChildId),
+    )
+
+    // 5. Invalid nodeId rejects 400 validation_error.
+    for (const bad of ['', '-bad', '../escape', 'a b', 123 as never]) {
+      await assert.rejects(
+        runNativeSpawn(env.deps, {
+          parentConversationId: 1,
+          prompt: 'bad node',
+          nodeId: bad,
+        }),
+        (e: unknown) => e instanceof HelmxError && e.code === 'validation_error' && e.status === 400,
+      )
+    }
+  } finally {
+    await env.close()
+  }
+})
+
+test('spawnAgent entry guard: rejects invalid nodeId, resume+nodeId, and restrictToCwd cross-node before hooks', { timeout: 60_000 }, async () => {
+  const restrictedLocal = spawnEntryGuard({ restricted: true, parentCwd: '/tmp/helmx/repo' })
+  // Invalid nodeId and resume+nodeId reject 400 before hooks (never reach past-guard).
+  await assert.rejects(
+    restrictedLocal({ parentConversationId: 1, prompt: 'x', nodeId: '../bad' }),
+    (e: unknown) => e instanceof HelmxError && e.code === 'validation_error' && e.status === 400,
+  )
+  await assert.rejects(
+    restrictedLocal({ parentConversationId: 1, prompt: 'x', resume: '2', nodeId: 'local' }),
+    (e: unknown) =>
+      e instanceof HelmxError &&
+      e.code === 'validation_error' &&
+      e.status === 400 &&
+      e.message.includes('mutually exclusive'),
+  )
+
+  // restrictToCwd=true rejects cross-node request.nodeId with 403 path_outside_workspace (local -> remote).
+  await assert.rejects(
+    restrictedLocal({ parentConversationId: 1, prompt: 'x', nodeId: 'gpu-1' }),
+    (e: unknown) =>
+      e instanceof HelmxError &&
+      e.code === 'path_outside_workspace' &&
+      e.status === 403 &&
+      (e.details as { requestedNodeId?: string; parentNodeId?: string })?.requestedNodeId === 'gpu-1' &&
+      (e.details as { requestedNodeId?: string; parentNodeId?: string })?.parentNodeId === 'local',
+  )
+  // Same-node explicit nodeId passes guard (reaches past-guard sentinel).
+  await assert.rejects(restrictedLocal({ parentConversationId: 1, prompt: 'x', nodeId: 'local' }), /past-guard/)
+
+  // restrictToCwd=true also rejects remote -> local escape.
+  const restrictedRemote = spawnEntryGuard({ restricted: true, parentCwd: '/srv/repo', parentNodeId: 'gpu-1' })
+  await assert.rejects(
+    restrictedRemote({ parentConversationId: 1, prompt: 'x', nodeId: 'local' }),
+    (e: unknown) =>
+      e instanceof HelmxError &&
+      e.code === 'path_outside_workspace' &&
+      e.status === 403 &&
+      (e.details as { requestedNodeId?: string; parentNodeId?: string })?.requestedNodeId === 'local' &&
+      (e.details as { requestedNodeId?: string; parentNodeId?: string })?.parentNodeId === 'gpu-1',
+  )
+  await assert.rejects(restrictedRemote({ parentConversationId: 1, prompt: 'x', nodeId: 'gpu-1' }), /past-guard/)
+
+  // Unrestricted parent allows cross-node request.nodeId.
+  const unrestricted = spawnEntryGuard({ restricted: false, parentCwd: '/tmp/helmx/repo' })
+  await assert.rejects(unrestricted({ parentConversationId: 1, prompt: 'x', nodeId: 'gpu-1' }), /past-guard/)
+})
+
+test('resolveSpawnTarget: validates requestNodeId and enforces restrictToCwd against cross-node (requestNodeId or remote profile) and out-of-cwd', { timeout: 60_000 }, async () => {
+  const restricted = spawnTargetResolver({
+    platforms: { 'gpu-1': 'linux', 'win-build': 'win32' },
+    hubPlatform: 'linux',
+    parent: { cwd: '/tmp/helmx/repo', nodeId: 'local', profileId: 'assistant' },
+    profiles: {
+      assistant: {},
+      'remote-prof': { nodeId: 'gpu-1', cwd: '/srv/work' },
+    },
+    restricted: true,
+  })
+
+  // 1. Invalid requestNodeId -> 400 validation_error.
+  await assert.rejects(
+    restricted({ parentConversationId: 1, requestNodeId: 'bad/node' }),
+    (e: unknown) => e instanceof HelmxError && e.code === 'validation_error' && e.status === 400,
+  )
+
+  // 2. Cross-node via requestNodeId (even without requestCwd) -> 403 path_outside_workspace.
+  await assert.rejects(
+    restricted({ parentConversationId: 1, requestNodeId: 'gpu-1' }),
+    (e: unknown) => e instanceof HelmxError && e.code === 'path_outside_workspace' && e.status === 403,
+  )
+
+  // 3. Cross-node via remote profileId (even without requestNodeId) -> 403 path_outside_workspace.
+  await assert.rejects(
+    restricted({ parentConversationId: 1, profileId: 'remote-prof' }),
+    (e: unknown) => e instanceof HelmxError && e.code === 'path_outside_workspace' && e.status === 403,
+  )
+
+  // 4. Same-node out-of-cwd requestCwd -> 403 path_outside_workspace.
+  await assert.rejects(
+    restricted({ parentConversationId: 1, requestNodeId: 'local', requestCwd: '/etc' }),
+    (e: unknown) => e instanceof HelmxError && e.code === 'path_outside_workspace' && e.status === 403,
+  )
+  await assert.rejects(
+    restricted({ parentConversationId: 1, requestCwd: '../outside' }),
+    (e: unknown) => e instanceof HelmxError && e.code === 'path_outside_workspace' && e.status === 403,
+  )
+
+  // 5. Same-node inside-cwd passes.
+  assert.deepEqual(
+    await restricted({ parentConversationId: 1, requestNodeId: 'local', requestCwd: '/tmp/helmx/repo/sub' }),
+    { nodeId: 'local', sourceCwd: '/tmp/helmx/repo/sub', parentCwd: '/tmp/helmx/repo' },
+  )
+
+  // 6. Same-node win32 WSL path escape normalizes and rejects with 403 path_outside_workspace.
+  const restrictedWin = spawnTargetResolver({
+    platforms: { 'win-build': 'win32' },
+    parent: { cwd: 'C:\\repo', nodeId: 'win-build', profileId: 'assistant' },
+    restricted: true,
+  })
+  await assert.rejects(
+    restrictedWin({ parentConversationId: 1, requestCwd: '/mnt/c/outside' }),
+    (e: unknown) => e instanceof HelmxError && e.code === 'path_outside_workspace' && e.status === 403,
+  )
+  assert.deepEqual(
+    await restrictedWin({ parentConversationId: 1, requestCwd: '/mnt/c/repo/sub' }),
+    { nodeId: 'win-build', sourceCwd: 'C:\\repo\\sub', parentCwd: 'C:\\repo' },
+  )
+
+  // 7. Unrestricted parent allows cross-node requestNodeId and explicit 'local' override.
+  const unrestricted = spawnTargetResolver({
+    platforms: { 'gpu-1': 'linux' },
+    hubPlatform: 'linux',
+    parent: { cwd: '/srv/parent', nodeId: 'gpu-1', profileId: 'remote-prof' },
+    profiles: {
+      'remote-prof': { nodeId: 'gpu-1', cwd: '/srv/prof' },
+    },
+    restricted: false,
+  })
+  assert.deepEqual(
+    await unrestricted({ parentConversationId: 1, requestNodeId: 'local', fork: true }),
+    { nodeId: 'local', sourceCwd: '/tmp/helmx-fallback', parentCwd: '/srv/parent' },
+  )
 })

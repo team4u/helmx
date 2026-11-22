@@ -2522,4 +2522,79 @@ describe('KernelRuntime start and close concurrency', { timeout: 60_000 }, () =>
       await k4.close()
     }
   })
+
+  it('createConversation isolates cwd across nodes (suppresses mismatched profile.cwd and foreign parent cwd; allows node-agnostic profile.cwd and local fallback)', { timeout: 60_000 }, async () => {
+    const dir = join(root, 'create-conv-cross-node')
+    const kernel = await openRuntime(dir)
+    try {
+      await kernel.services.profiles.save({
+        id: 'node-a-prof',
+        name: 'node A profile',
+        nodeId: 'node-a',
+        cwd: '/node-a/prof',
+      })
+      await kernel.services.profiles.save({
+        id: 'portable-prof',
+        name: 'portable profile',
+        cwd: '/portable/ws',
+      })
+
+      const localParent = await kernel.createConversation({ title: 'local parent', cwd: dir })
+      const remoteParent = await kernel.createConversation({
+        title: 'remote parent',
+        nodeId: 'node-a',
+        cwd: '/node-a/parent',
+      })
+
+      // 1. Invalid init.nodeId rejects 400 validation_error.
+      await assert.rejects(
+        kernel.createConversation({ nodeId: '../bad', cwd: '/work' }),
+        (e: unknown) => e instanceof HelmxError && e.code === 'validation_error' && e.status === 400,
+      )
+
+      // 2. Local parent -> remote init.nodeId without explicit cwd rejects 400 (must NOT inherit local parent cwd).
+      await assert.rejects(
+        kernel.createConversation({ parentConversationId: localParent.id, nodeId: 'node-b' }),
+        (e: unknown) => e instanceof HelmxError && e.code === 'validation_error' && e.status === 400,
+      )
+
+      // 3. Profile pinned to node-a + parent on node-a, but init.nodeId='node-b' -> both cwds suppressed -> 400.
+      await assert.rejects(
+        kernel.createConversation({
+          profileId: 'node-a-prof',
+          parentConversationId: remoteParent.id,
+          nodeId: 'node-b',
+        }),
+        (e: unknown) => e instanceof HelmxError && e.code === 'validation_error' && e.status === 400,
+      )
+
+      // 4. Node-agnostic profile (profile.nodeId === undefined) provides eligible cwd for remote node.
+      const portable = await kernel.createConversation({
+        profileId: 'portable-prof',
+        parentConversationId: localParent.id,
+        nodeId: 'node-b',
+      })
+      assert.equal(portable.nodeId, 'node-b')
+      assert.equal(portable.cwd, '/portable/ws')
+
+      // 5. Same-node parent provides eligible cwd when profile has no cwd.
+      const sameNodeChild = await kernel.createConversation({
+        parentConversationId: remoteParent.id,
+        nodeId: 'node-a',
+      })
+      assert.equal(sameNodeChild.nodeId, 'node-a')
+      assert.equal(sameNodeChild.cwd, '/node-a/parent')
+
+      // 6. Explicit init.nodeId='local' overrides remote profile/parent, suppresses foreign cwds, and falls back to local defaultCwd.
+      const localOverride = await kernel.createConversation({
+        profileId: 'node-a-prof',
+        parentConversationId: remoteParent.id,
+        nodeId: 'local',
+      })
+      assert.equal(localOverride.nodeId, 'local')
+      assert.equal(localOverride.cwd, dir)
+    } finally {
+      await kernel.close()
+    }
+  })
 })
