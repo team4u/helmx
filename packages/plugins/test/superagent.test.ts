@@ -28,6 +28,7 @@ import {
   type ToolViewProps,
 } from '@helmx/protocol'
 import { createHelmx } from '../../hub/src/app.js'
+import { actionToolResult } from '../../kernel/src/runtime/runtime-helpers.js'
 import { MemoryStore } from '../src/memory/store.js'
 import {
   CLIENT_SHARED_GLOBALS,
@@ -1331,30 +1332,39 @@ test('superagent20: dispatch_worker 工具声明 structuredOutputSchema 并分�
 
     const dispatchSpec = kernel.plugins.listTools().find((tool) => tool.name === 'dispatch_worker')
     assert.ok(dispatchSpec, 'dispatch_worker tool must be registered')
+    assert.equal(dispatchSpec.sourceKind, 'action')
     assert.ok(dispatchSpec.structuredOutputSchema !== undefined, 'dispatch_worker must declare structuredOutputSchema')
 
     env.faux.setResponses([
       fauxAssistantMessage('Worker task done'),
       fauxAssistantMessage('Router received report'),
     ])
-    const toolRes = (await kernel.plugins.executeTool(
+    const raw = (await kernel.plugins.executeTool(
       'dispatch_worker',
       { prompt: 'Check presentationMeta separation', profileId: 'assistant' },
       { conversationId: routerId },
-    )) as {
-      output: string
-      structuredOutput: { workerConversationId: number }
-      presentationMeta: { workerConversationId: number }
-    }
-
-    assert.equal(typeof toolRes.output, 'string')
-    assert.ok(Number.isInteger(toolRes.structuredOutput.workerConversationId))
-    assert.deepEqual(toolRes.presentationMeta, {
-      workerConversationId: toolRes.structuredOutput.workerConversationId,
+    )) as { workerConversationId: number }
+    const normalized = actionToolResult(
+      raw,
+      { prompt: 'Check presentationMeta separation', profileId: 'assistant' },
+      (text) => text,
+      {
+        structuredOutputSchema: dispatchSpec.structuredOutputSchema,
+        presentationMetaSchema: dispatchSpec.presentationMetaSchema,
+        projectPresentationMeta: dispatchSpec.projectPresentationMeta,
+        formatOutput: dispatchSpec.formatOutput,
+        toolName: dispatchSpec.name,
+      },
+    )
+    const structuredOutput = normalized.structuredOutput as { workerConversationId: number }
+    assert.equal(normalized.output[0]!.text, `Dispatched background worker #${raw.workerConversationId}.`)
+    assert.ok(Number.isInteger(structuredOutput.workerConversationId))
+    assert.deepEqual(normalized.details, {
+      workerConversationId: structuredOutput.workerConversationId,
     })
-    validateOrThrow(dispatchSpec.structuredOutputSchema, toolRes.structuredOutput, 'dispatch_worker structuredOutput')
+    validateOrThrow(dispatchSpec.structuredOutputSchema, structuredOutput, 'dispatch_worker structuredOutput')
 
-    await kernel.waitForIdle(toolRes.structuredOutput.workerConversationId)
+    await kernel.waitForIdle(structuredOutput.workerConversationId)
     await kernel.waitForIdle(routerId)
   } finally {
     await env.close()

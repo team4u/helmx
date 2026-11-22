@@ -292,6 +292,24 @@ test('assertPluginManifestProjection enforces strict sorting, JSON safety, and l
   assertInvalid((m) => { m['hooks'] = ['turn_settled', 'trigger'] }, 'unsorted hooks')
   assertInvalid((m) => { m['actions'] = [...(m['actions'] as unknown[])].reverse() }, 'unsorted actions')
   assertInvalid((m) => { (m['actions'] as Array<Record<string, unknown>>)[0]!['pluginId'] = 'other' }, 'mismatched action pluginId')
+  assertInvalid((m) => { (m['actions'] as Array<Record<string, unknown>>)[0]!['visibility'] = 'private' }, 'invalid action visibility')
+  assertInvalid((m) => { (m['actions'] as Array<Record<string, unknown>>)[0]!['visibility'] = 'ui' }, 'ui action with exposeAsTool=true')
+  assertInvalid((m) => { (m['actions'] as Array<Record<string, unknown>>)[0]!['visibility'] = 'internal' }, 'internal action with exposeAsTool=true')
+  assertInvalid((m) => {
+    const z = (m['actions'] as Array<Record<string, unknown>>)[1]!
+    z['visibility'] = 'ui'
+    z['exposeToPrompt'] = true
+  }, 'ui action with exposeToPrompt=true')
+  assertInvalid((m) => {
+    const z = (m['actions'] as Array<Record<string, unknown>>)[1]!
+    z['visibility'] = 'internal'
+    z['exposeToPrompt'] = true
+  }, 'internal action with exposeToPrompt=true')
+  for (const vis of ['public', 'ui', 'internal'] as const) {
+    const ok = makeValid()
+    ;(ok['actions'] as Array<Record<string, unknown>>)[1]!['visibility'] = vis
+    assert.equal(assertPluginManifestProjection(ok).actions[1]?.visibility, vis)
+  }
   assertInvalid((m) => { delete (m['actions'] as Array<Record<string, unknown>>)[0]!['toolName'] }, 'missing toolName when exposeAsTool=true')
   assertInvalid((m) => { (m['actions'] as Array<Record<string, unknown>>)[1]!['toolName'] = 'extra' }, 'unexpected toolName when exposeAsTool!=true')
   assertInvalid((m) => { (m['actions'] as Array<Record<string, unknown>>)[1]!['presentationMetaSchema'] = { type: 'object' } }, 'unexpected action presentationMetaSchema when exposeAsTool!=true')

@@ -2,9 +2,7 @@ import {
   HelmxError,
   assertProfileId,
   type HelmxPluginContext,
-  type JsonSchema,
-  type PluginToolContext,
-  type PluginToolSpec,
+  type PluginActionContext,
 } from '@helmx/protocol'
 import {
   ROUTER_TOOL_SCOPE,
@@ -368,26 +366,6 @@ export function registerSuperAgentActions(
     return { routerMode: applied.routerMode }
   }
 
-  // ---- ctx.tool：精确短名（scope + 执行期二次校验双保险） ----
-  const registerRouterTool = <TIn>(spec: {
-    name: string
-    description: string
-    inputSchema: Record<string, unknown>
-    structuredOutputSchema?: JsonSchema
-    presentationMetaSchema?: JsonSchema
-    execute: (input: TIn, context: PluginToolContext) => unknown
-  }): void => {
-    ctx.tool({
-      name: spec.name,
-      description: spec.description,
-      inputSchema: spec.inputSchema,
-      ...(spec.structuredOutputSchema !== undefined ? { structuredOutputSchema: spec.structuredOutputSchema } : {}),
-      ...(spec.presentationMetaSchema !== undefined ? { presentationMetaSchema: spec.presentationMetaSchema } : {}),
-      scope: ROUTER_TOOL_SCOPE,
-      execute: (input: never, context: PluginToolContext) => spec.execute(input as TIn, context),
-    })
-  }
-
   const dispatchWorkerOutputSchema: Record<string, unknown> = {
     type: 'object',
     properties: { workerConversationId: workerIdSchema },
@@ -395,63 +373,22 @@ export function registerSuperAgentActions(
     additionalProperties: false,
   }
 
-  registerRouterTool({
-    name: 'dispatch_worker',
-    description:
-      'Spawn a background worker conversation to execute a task without blocking (returns workerConversationId immediately, without waiting for the model turn to finish). Optionally pin an expert Profile via profileId and bind an event subscription via threadKey.',
-    inputSchema: dispatchInputSchema,
-    structuredOutputSchema: dispatchWorkerOutputSchema,
-    presentationMetaSchema: dispatchWorkerOutputSchema,
-    execute: async (input: DispatchInput, context) => {
-      const res = await dispatchWorker(input, context.conversationId)
-      return {
-        output: `Dispatched background worker #${res.workerConversationId}.`,
-        structuredOutput: res,
-        presentationMeta: { workerConversationId: res.workerConversationId },
-      }
-    },
-  })
-  registerRouterTool({
-    name: 'inspect_worker',
-    description: 'Read a background worker\'s recent timeline summary and artifact list.',
-    inputSchema: workerIdInputSchema,
-    execute: (input: { workerConversationId: number }, context) => inspectWorker(input, context.conversationId),
-  })
-  registerRouterTool({
-    name: 'recall_context',
-    description: 'Search the RecallGraph memory graph (filters historical task-summary nodes by keywords, multiple words AND-combined).',
-    inputSchema: {
-      type: 'object',
-      properties: { query: { type: 'string' }, limit: { type: 'integer', minimum: 1, maximum: 100 } },
-      additionalProperties: false,
-    },
-    execute: (input: { query?: string; limit?: number }, context) => recallContext(input, context.conversationId),
-  })
-  registerRouterTool({
-    name: 'subscribe_thread',
-    description: 'Bind a threadKey event subscription to the given background worker (conflicts are explicitly rejected, never preempted).',
-    inputSchema: {
-      type: 'object',
-      properties: { threadKey: { type: 'string', minLength: 1, maxLength: 200 }, workerConversationId: workerIdSchema },
-      required: ['threadKey', 'workerConversationId'],
-      additionalProperties: false,
-    },
-    execute: (input: { threadKey: string; workerConversationId: number }, context) =>
-      subscribeThread(input, context.conversationId),
-  })
-
-  // ---- ctx.action：HTTP/CLI/Workflow 五端复用同 handler ----
+  // ---- ctx.action：单点声明（HTTP / CLI / Workflow / Web + exposeAsTool 直投路由工具） ----
   ctx.action({
     id: 'dispatch_worker',
     description: 'Spawn a background worker without blocking (hub conversation or manual HTTP/CLI calls).',
     inputSchema: dispatchInputSchema,
-    outputSchema: {
-      type: 'object',
-      properties: { workerConversationId: { type: 'number' } },
-      required: ['workerConversationId'],
-      additionalProperties: false,
+    outputSchema: dispatchWorkerOutputSchema,
+    scope: ROUTER_TOOL_SCOPE,
+    exposeAsTool: {
+      name: 'dispatch_worker',
+      description:
+        'Spawn a background worker conversation to execute a task without blocking (returns workerConversationId immediately, without waiting for the model turn to finish). Optionally pin an expert Profile via profileId and bind an event subscription via threadKey.',
+      formatOutput: (_input, res) => `Dispatched background worker #${res.workerConversationId}.`,
     },
-    handler: (input: DispatchInput, context) => dispatchWorker(input, context.conversationId),
+    presentationMetaSchema: dispatchWorkerOutputSchema,
+    projectPresentationMeta: (_input, res) => ({ workerConversationId: res.workerConversationId }),
+    handler: (input: DispatchInput, context: PluginActionContext) => dispatchWorker(input, context.conversationId),
   })
   ctx.action({
     id: 'inspect_worker',
@@ -459,6 +396,11 @@ export function registerSuperAgentActions(
     idempotent: true,
     inputSchema: workerIdInputSchema,
     outputSchema: { type: 'object' },
+    scope: ROUTER_TOOL_SCOPE,
+    exposeAsTool: {
+      name: 'inspect_worker',
+      description: 'Read a background worker\'s recent timeline summary and artifact list.',
+    },
     handler: (input: { workerConversationId: number }, context) => inspectWorker(input, context.conversationId),
   })
   ctx.action({
@@ -471,6 +413,12 @@ export function registerSuperAgentActions(
       additionalProperties: false,
     },
     outputSchema: { type: 'object' },
+    scope: ROUTER_TOOL_SCOPE,
+    exposeAsTool: {
+      name: 'recall_context',
+      description:
+        'Search the RecallGraph memory graph (filters historical task-summary nodes by keywords, multiple words AND-combined).',
+    },
     handler: (input: { query?: string; limit?: number }, context) => recallContext(input, context.conversationId),
   })
   ctx.action({
@@ -483,6 +431,12 @@ export function registerSuperAgentActions(
       additionalProperties: false,
     },
     outputSchema: { type: 'object' },
+    scope: ROUTER_TOOL_SCOPE,
+    exposeAsTool: {
+      name: 'subscribe_thread',
+      description:
+        'Bind a threadKey event subscription to the given background worker (conflicts are explicitly rejected, never preempted).',
+    },
     handler: (input: { threadKey: string; workerConversationId: number }, context) =>
       subscribeThread(input, context.conversationId),
   })

@@ -151,7 +151,7 @@ export class RuntimeToolRegistry {
       ) => {
         const host = getPluginHost()
         if (!host) throw new HelmxError('runtime_not_initialized', 'plugin host not initialized', 503)
-        return host.invokeAction(pluginId, actionId, input, context)
+        return host.invokeAction(pluginId, actionId, input, context, { surface: 'run_action' })
       },
       describePluginAction: async (
         pluginId: string,
@@ -171,6 +171,14 @@ export class RuntimeToolRegistry {
             `Plugin '${pluginId}' does not declare action '${actionId}' (or is disabled)`,
             404,
             { pluginId, actionId },
+          )
+        }
+        if (manifest.visibility === 'ui' || manifest.visibility === 'internal') {
+          throw new HelmxError(
+            'action_visibility_forbidden',
+            `Action '${pluginId}.${actionId}' has visibility '${manifest.visibility}' and cannot be inspected via run_action`,
+            403,
+            { pluginId, actionId, visibility: manifest.visibility },
           )
         }
         // Do not leak schemas to out-of-scope conversations: reject with the exact same code as execution.
@@ -274,6 +282,7 @@ export class RuntimeToolRegistry {
               structuredOutputSchema: spec.structuredOutputSchema,
               presentationMetaSchema: spec.presentationMetaSchema,
               projectPresentationMeta: spec.projectPresentationMeta,
+              formatOutput: spec.formatOutput,
               toolName: spec.name,
               ...(callId !== undefined ? { callId } : {}),
             }) as ToolExecutionResult

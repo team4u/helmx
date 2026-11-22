@@ -382,12 +382,18 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
         profileId: 'assistant',
         cwd: env1.repoDir,
       })
-      const swarmWt = (await env1.app.kernel.plugins.invokeAction('builtin:worktree', 'acquire_worktree', {
-        conversationId: wtSwarmConv.id,
-        parentConversationId: coord.id,
-        requestCwd: env1.repoDir,
-        hold: { pluginId: SWARM_PLUGIN_ID, holdId: 'orphan-crash-hold', label: 'Orphaned swarm hold' },
-      })) as { worktreeId: string }
+      const swarmWt = (await env1.app.kernel.plugins.invokeAction(
+        'builtin:worktree',
+        'acquire_worktree',
+        {
+          conversationId: wtSwarmConv.id,
+          parentConversationId: coord.id,
+          requestCwd: env1.repoDir,
+          hold: { holdId: 'orphan-crash-hold', label: 'Orphaned swarm hold' },
+        },
+        {},
+        { surface: 'plugin', callerPluginId: SWARM_PLUGIN_ID },
+      )) as { worktreeId: string }
       swarmOrphanWtId = swarmWt.worktreeId
 
       const wtWorkflowConv = await env1.app.kernel.createConversation({
@@ -395,12 +401,18 @@ describe('builtin:swarm crash replay & boot reconciliation', () => {
         profileId: 'assistant',
         cwd: env1.repoDir,
       })
-      const workflowWt = (await env1.app.kernel.plugins.invokeAction('builtin:worktree', 'acquire_worktree', {
-        conversationId: wtWorkflowConv.id,
-        parentConversationId: coord.id,
-        requestCwd: env1.repoDir,
-        hold: { pluginId: 'builtin:workflow', holdId: 'foreign-hold', label: 'Foreign workflow hold' },
-      })) as { worktreeId: string }
+      const workflowWt = (await env1.app.kernel.plugins.invokeAction(
+        'builtin:worktree',
+        'acquire_worktree',
+        {
+          conversationId: wtWorkflowConv.id,
+          parentConversationId: coord.id,
+          requestCwd: env1.repoDir,
+          hold: { holdId: 'foreign-hold', label: 'Foreign workflow hold' },
+        },
+        {},
+        { surface: 'plugin', callerPluginId: 'builtin:workflow' },
+      )) as { worktreeId: string }
       workflowWtId = workflowWt.worktreeId
       const created2 = (await env1.app.kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
         title: 'Partial Tail Squad',

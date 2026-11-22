@@ -18,6 +18,7 @@ import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/provid
 import { HelmxError } from '@helmx/protocol'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { createHelmx } from '../../hub/src/app.js'
+import { actionToolResult } from '../../kernel/src/runtime/runtime-helpers.js'
 import {
   createGitTemplate,
   deferred,
@@ -941,11 +942,32 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
       })) as { groupId: string }
 
       // 1) First-class swarm_manage_channel tool creates subchannel; waking empty subchannel fails closed with 409 swarm_channel_empty
-      const chToolRes = (await kernel.plugins.executeTool(
+      const execSwarmDerived = async <TOut>(
+        toolName: string,
+        input: Record<string, unknown>,
+        ctx: { conversationId: number; callId?: string },
+      ): Promise<{ output: string; structuredOutput: TOut }> => {
+        const spec = kernel.plugins.listTools().find((t) => t.name === toolName)
+        assert.ok(spec && spec.sourceKind === 'action', `expected derived action tool ${toolName}`)
+        const raw = await kernel.plugins.executeTool(toolName, input, ctx)
+        const normalized = actionToolResult(raw, input, (text) => text, {
+          structuredOutputSchema: spec.structuredOutputSchema,
+          presentationMetaSchema: spec.presentationMetaSchema,
+          projectPresentationMeta: spec.projectPresentationMeta,
+          formatOutput: spec.formatOutput,
+          toolName: spec.name,
+        })
+        return {
+          output: normalized.output.map((b) => b.text).join(''),
+          structuredOutput: normalized.structuredOutput as TOut,
+        }
+      }
+
+      const chToolRes = await execSwarmDerived<{ channels: Array<{ name: string }> }>(
         'swarm_manage_channel',
         { groupId, op: 'create', channel: 'empty-ch', topic: 'No members yet' },
         { conversationId: coord.id },
-      )) as { output: string; structuredOutput: { channels: Array<{ name: string }> } }
+      )
       assert.match(chToolRes.output, /#empty-ch/)
       assert.ok(chToolRes.structuredOutput.channels.some((c) => c.name === 'empty-ch'))
 
@@ -991,11 +1013,11 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
       await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
       await kernel.waitForIdle(coord.id)
 
-      const switchToolRes = (await kernel.plugins.executeTool(
+      const switchToolRes = await execSwarmDerived<{ model: string; effort?: string; postSeq?: number }>(
         'swarm_switch_worker_model',
         { groupId, name: 'alpha', model: 'faux/faux-2', effort: 'high', prompt: 'Continue task on stronger model.' },
         { conversationId: coord.id, callId: 'call-switch-resume-1' },
-      )) as { output: string; structuredOutput: { model: string; effort?: string; postSeq?: number } }
+      )
       assert.equal(switchToolRes.structuredOutput.model, 'faux/faux-2')
       assert.equal(switchToolRes.structuredOutput.effort, 'high')
       assert.ok(typeof switchToolRes.structuredOutput.postSeq === 'number')
@@ -1004,11 +1026,11 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
       assert.equal(kernel.getConversation(alpha.workerConversationId).thinkingLevel, 'high')
 
       // Replay with same callId must deduplicate and return the same postSeq without waking twice
-      const replayRes = (await kernel.plugins.executeTool(
+      const replayRes = await execSwarmDerived<{ postSeq?: number }>(
         'swarm_switch_worker_model',
         { groupId, name: 'alpha', model: 'faux/faux-2', effort: 'high', prompt: 'Continue task on stronger model.' },
         { conversationId: coord.id, callId: 'call-switch-resume-1' },
-      )) as { structuredOutput: { postSeq?: number } }
+      )
       assert.equal(replayRes.structuredOutput.postSeq, switchToolRes.structuredOutput.postSeq)
 
       await waitFor(() => resumedOnNewModel)
@@ -1017,11 +1039,11 @@ describe('builtin:swarm board routing, settlement & self-healing', () => {
       await kernel.waitForIdle(coord.id)
 
       // board_status text summary surfaces member model=
-      const statusTool = (await kernel.plugins.executeTool(
+      const statusTool = await execSwarmDerived<Record<string, unknown>>(
         'swarm_board_status',
         { groupId },
         { conversationId: coord.id },
-      )) as { output: string }
+      )
       assert.match(statusTool.output, /model=faux\/faux-2/)
 
       // 3) 0-Token peer-to-peer hop circuit breaker (maxPeerHopsWithoutCoordinator = 2):

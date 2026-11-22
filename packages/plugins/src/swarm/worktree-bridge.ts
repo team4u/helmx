@@ -6,7 +6,7 @@
  */
 import type { HelmxPluginContext } from '@helmx/protocol'
 import { WORKTREE_PLUGIN_ID, type WorktreeInspectResult } from '../contracts.js'
-import { SWARM_PLUGIN_ID, type GroupMemberState, type WorktreeHandoffSnapshot } from './contracts.js'
+import { type GroupMemberState, type WorktreeHandoffSnapshot } from './contracts.js'
 
 export { WORKTREE_PLUGIN_ID }
 
@@ -96,7 +96,6 @@ export async function releaseWorktreeHoldById(
     'release_worktree_hold',
     {
       worktreeId,
-      pluginId: SWARM_PLUGIN_ID,
       holdId,
     },
     signal !== undefined ? { signal } : undefined,

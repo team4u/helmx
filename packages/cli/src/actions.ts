@@ -416,7 +416,20 @@ interface DynamicCommand {
 
 /** Convert an ActionManifest into a dynamic CLI CommandSpec (validating path and cli extensions). */
 export function dynamicCommandOf(manifest: ActionManifest): DynamicCommand {
-  if (manifest.cli?.hidden === true) throw new CliError('hidden', 'hidden_action')
+  if (
+    manifest.visibility !== undefined &&
+    manifest.visibility !== 'public' &&
+    manifest.visibility !== 'ui' &&
+    manifest.visibility !== 'internal'
+  ) {
+    throw new CliError(
+      `action ${manifest.pluginId}.${manifest.id} has invalid visibility "${String(manifest.visibility)}"`,
+      'invalid_manifest',
+    )
+  }
+  if (manifest.cli?.hidden === true || manifest.visibility === 'ui' || manifest.visibility === 'internal') {
+    throw new CliError('hidden', 'hidden_action')
+  }
   const segments = manifest.cli?.command ?? [stripBuiltin(manifest.pluginId), manifest.id]
   if (segments.length === 0) throw new CliError(`action ${manifest.pluginId}.${manifest.id} has an empty cli.command path`, 'invalid_command_path')
   for (const seg of segments) {

@@ -3302,3 +3302,101 @@ test('doctorPluginDir captures validated PluginManifestProjection during dry-run
   assert.equal(regCheck?.error?.code, 'duplicate_tool_name');
   assert.equal(badReport.manifest, undefined, 'failed register must not emit partial manifest');
 });
+
+test('PluginHost: ctx.host.invokeAction stamps unforgeable callerPluginId and enforces action visibility', { timeout: 60_000 }, async () => {
+  const host = makeHost();
+  try {
+    await host.register({
+      id: 'sec:provider',
+      definePlugin(ctx) {
+        ctx.action({
+          id: 'internal_op',
+          description: 'Plugin-internal operation',
+          visibility: 'internal',
+          inputSchema: { type: 'object', properties: { tag: { type: 'string' } }, required: ['tag'] },
+          outputSchema: {
+            type: 'object',
+            properties: { caller: { type: 'string' }, tag: { type: 'string' } },
+            required: ['caller', 'tag'],
+          },
+          handler(input: { tag: string }, actionCtx) {
+            if (!actionCtx.callerPluginId) {
+              throw new HelmxError('missing_caller', 'callerPluginId missing', 500);
+            }
+            return { caller: actionCtx.callerPluginId, tag: input.tag };
+          },
+        });
+        ctx.action({
+          id: 'ui_op',
+          description: 'UI-facing operation',
+          visibility: 'ui',
+          inputSchema: { type: 'object' },
+          outputSchema: { type: 'object', properties: { caller: { type: ['string', 'null'] } }, required: ['caller'] },
+          handler(_input, actionCtx) {
+            return { caller: actionCtx.callerPluginId ?? null };
+          },
+        });
+      },
+    });
+
+    await host.register({
+      id: 'sec:consumer',
+      definePlugin(ctx) {
+        ctx.action({
+          id: 'delegate_internal',
+          description: 'Delegates to sec:provider.internal_op via ctx.host.invokeAction',
+          inputSchema: { type: 'object', properties: { tag: { type: 'string' } }, required: ['tag'] },
+          outputSchema: {
+            type: 'object',
+            properties: { caller: { type: 'string' }, tag: { type: 'string' } },
+            required: ['caller', 'tag'],
+          },
+          async handler(input: { tag: string }) {
+            // Even attempting to forge callerPluginId in context is ignored by PluginHost
+            return (await ctx.host.invokeAction('sec:provider', 'internal_op', input, {
+              callerPluginId: 'evil:spoof',
+            } as never)) as { caller: string; tag: string };
+          },
+        });
+      },
+    });
+
+    // Manifest projection carries visibility and passes strict protocol validation
+    const manifest = host.getManifest('sec:provider');
+    assertPluginManifestProjection(manifest);
+    assert.equal(manifest.actions.find((a) => a.id === 'internal_op')?.visibility, 'internal');
+    assert.equal(manifest.actions.find((a) => a.id === 'ui_op')?.visibility, 'ui');
+
+    // Direct host.invokeAction (defaults to surface: 'http') rejects internal even with spoofed context
+    await assertRejectsCode(
+      () =>
+        host.invokeAction(
+          'sec:provider',
+          'internal_op',
+          { tag: 'direct' },
+          { callerPluginId: 'sec:consumer' } as never,
+        ),
+      'action_visibility_forbidden',
+    );
+    await assertRejectsCode(
+      () => host.invokeAction('sec:provider', 'internal_op', { tag: 'ra' }, {}, { surface: 'run_action' }),
+      'action_visibility_forbidden',
+    );
+
+    // Real plugin-to-plugin invocation via ctx.host.invokeAction succeeds and stamps genuine callerPluginId
+    const delegated = (await host.invokeAction('sec:consumer', 'delegate_internal', { tag: 'ok' })) as {
+      caller: string;
+      tag: string;
+    };
+    assert.deepEqual(delegated, { caller: 'sec:consumer', tag: 'ok' });
+
+    // UI action allowed on HTTP (callerPluginId=null), rejected on run_action
+    assert.deepEqual(await host.invokeAction('sec:provider', 'ui_op', {}), { caller: null });
+    await assertRejectsCode(
+      () => host.invokeAction('sec:provider', 'ui_op', {}, {}, { surface: 'run_action' }),
+      'action_visibility_forbidden',
+    );
+  } finally {
+    await host.dispose();
+  }
+});

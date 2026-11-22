@@ -45,6 +45,8 @@ import type { PluginPackageManagerStore } from './package-store.js';
 import { PluginDocRegistry } from './doc-registry.js';
 import {
   CapabilityRegistry,
+  type ActionCallerIdentity,
+  type ActionInvocationSurface,
   type DerivedToolSpec,
   type PluginRouteEntry,
   parseQualifiedActionId,
@@ -99,6 +101,8 @@ import {
 export type { PluginDocStore, PluginSessionDocStore, PluginDocRegistryOptions } from './doc-registry.js';
 export { PLUGIN_DOC_MAX_JSON_BYTES } from './doc-registry.js';
 export {
+  type ActionCallerIdentity,
+  type ActionInvocationSurface,
   type DerivedToolSpec,
   type PluginRouteEntry,
   PROVIDER_SAFE_TOOL_NAME,
@@ -445,6 +449,7 @@ export class PluginHost {
     actionId: string,
     input: unknown,
     context: PluginActionContext = {},
+    caller: ActionCallerIdentity = { surface: 'http' },
   ): { idempotent: boolean } {
     this.assertNotDisposed();
     return this.capabilityRegistry.prepareAction(
@@ -452,7 +457,7 @@ export class PluginHost {
       actionId,
       input,
       context,
-      this.getCapabilityExecutionOptions(),
+      { ...this.getCapabilityExecutionOptions(), caller },
     );
   }
 
@@ -461,6 +466,7 @@ export class PluginHost {
     actionId: string,
     input: unknown,
     context: PluginActionContext = {},
+    caller: ActionCallerIdentity = { surface: 'http' },
   ): Promise<unknown> {
     this.assertNotDisposed();
     return this.capabilityRegistry.invokeAction(
@@ -468,7 +474,7 @@ export class PluginHost {
       actionId,
       input,
       context,
-      this.getCapabilityExecutionOptions(),
+      { ...this.getCapabilityExecutionOptions(), caller },
     );
   }
 
@@ -621,8 +627,10 @@ export class PluginHost {
         list: () => this.list(),
         listUi: () => this.listUi(),
         listActions: () => this.listActions(),
-        invokeAction: (target, action, input, ctx) => this.invokeAction(target, action, input, ctx),
-        prepareAction: (target, action, input, ctx) => this.prepareAction(target, action, input, ctx),
+        invokeAction: (target, action, input, ctx) =>
+          this.invokeAction(target, action, input, ctx, { surface: 'plugin', callerPluginId: state.definition.id }),
+        prepareAction: (target, action, input, ctx) =>
+          this.prepareAction(target, action, input, ctx, { surface: 'plugin', callerPluginId: state.definition.id }),
         assertContextUsable: (s, ep, what) => this.assertContextUsable(s, ep, what),
       },
       assertNotDisposed: () => this.assertNotDisposed(),

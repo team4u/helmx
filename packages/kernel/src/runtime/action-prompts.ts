@@ -27,6 +27,7 @@ export interface ActionDirectoryEntry {
  * commands are never advertised.
  */
 export function actionCliCommand(manifest: ActionManifest): string | undefined {
+  if (manifest.visibility === 'ui' || manifest.visibility === 'internal') return undefined
   if (manifest.cli?.hidden === true) return undefined
   const command = manifest.cli?.command ?? [manifest.pluginId.replace(/^builtin:/, ''), manifest.id]
   return `helmx ${command.join(' ')}`

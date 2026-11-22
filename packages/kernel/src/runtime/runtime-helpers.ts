@@ -66,6 +66,7 @@ export interface ToolResultSchemaOptions {
 
 export interface ActionToolResultOptions extends ToolResultSchemaOptions {
   projectPresentationMeta?: (input: unknown, output: unknown) => Record<string, unknown> | undefined
+  formatOutput?: (input: unknown, output: unknown) => string | PluginToolTextBlock[]
 }
 
 export interface GuardToolResultOptions extends ToolResultSchemaOptions {
@@ -609,7 +610,20 @@ export function actionToolResult(
   details?: Record<string, unknown>
 } {
   const where = formatToolWhere(options)
-  const output: Array<PluginToolTextBlock> = [{ type: 'text', text: safeResultText(raw, redact) }]
+  let output: Array<PluginToolTextBlock>
+  if (options?.formatOutput !== undefined) {
+    const formatted = options.formatOutput(input, raw)
+    if (formatted === undefined) {
+      throw new HelmxError(
+        'invalid_tool_result',
+        `${where} formatOutput must return a string or an array of { type: 'text', text }`,
+        500,
+      )
+    }
+    output = normalizeTextBlocks(formatted, where, redact)
+  } else {
+    output = [{ type: 'text', text: safeResultText(raw, redact) }]
+  }
   const result: {
     output: Array<PluginToolTextBlock>
     structuredOutput?: unknown

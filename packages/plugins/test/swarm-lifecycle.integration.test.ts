@@ -28,6 +28,7 @@ import {
 import { waitFor } from '@helmx/test-kit'
 import { useTempDir } from '@helmx/test-kit/node'
 import { createGitTemplate } from '@helmx/test-kit/git'
+import { actionToolResult } from '../../kernel/src/runtime/runtime-helpers.js'
 import {
   WORKFLOW_ID,
   WORKTREE_ID,
@@ -479,20 +480,24 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
       })) as { groupId: string }
       let noSkillCoordSection = ''
       let availableActionsInCoordTurn = ''
+      let coordToolsInTurn: string[] = []
       env.faux.setResponses([
         (ctx) => {
           const meta = captureRequestMeta(ctx.messages as unknown as Record<string, unknown>[])
           noSkillCoordSection = meta.sectionsById['swarm.active_group'] ?? ''
           availableActionsInCoordTurn = meta.sectionsById['prompt.actions'] ?? ''
+          coordToolsInTurn = meta.toolNames
           return fauxAssistantMessage('Noted without skill.')
         },
       ])
       await kernel.submitInput(noSkillCoord.id, 'Check sections')
       await kernel.waitForIdle(noSkillCoord.id)
       assert.equal(noSkillCoordSection.includes('load_skill('), false)
-      assert.equal(availableActionsInCoordTurn.includes('complete_board_members'), false, 'exposeToPrompt:false hides UI completer from <available_actions>')
+      assert.equal(availableActionsInCoordTurn.includes('complete_board_members'), false, 'visibility:ui hides UI completer from <available_actions>')
+      assert.equal(availableActionsInCoordTurn.includes('complete_board_channels'), false, 'visibility:ui hides UI channel completer from <available_actions>')
       assert.equal(availableActionsInCoordTurn.includes('list_mentionable'), false, 'exposeToPrompt:false hides profile @ completer')
-      assert.match(availableActionsInCoordTurn, /manage_channel/, 'coordinator manages channels via run_action catalog')
+      assert.ok(coordToolsInTurn.includes('swarm_manage_channel'), 'coordinator manages channels directly via exposeAsTool derived tool')
+      assert.equal(availableActionsInCoordTurn.includes('builtin:swarm.manage_channel'), false, 'exposeAsTool action is not duplicated in <available_actions>')
       await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'close_group', { groupId: noSkillGroupId }, { conversationId: noSkillCoord.id })
 
       // 2) Dispatch validation & flat forkFrom & structuredOutput tool envelope
@@ -550,14 +555,23 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
         'forkFrom peer must keep flat parentConversationId pointing to coordinator',
       )
 
-      // Tool call envelope verification: swarm_board_status exposes concise text + structuredOutput object
-      const toolRes = (await kernel.plugins.executeTool(
+      // Derived action tool envelope verification: swarm_board_status formats concise text + validated structuredOutput
+      const statusSpec = kernel.plugins.listTools().find((t) => t.name === 'swarm_board_status')
+      assert.ok(statusSpec && statusSpec.sourceKind === 'action')
+      const rawStatus = await kernel.plugins.executeTool(
         'swarm_board_status',
         { groupId },
         { conversationId: coord.id },
-      )) as { output: string; structuredOutput: BoardViewDoc }
-      assert.ok(typeof toolRes.output === 'string' && toolRes.output.includes('Flat Squad'))
-      assert.equal(toolRes.structuredOutput.group.id, groupId)
+      )
+      const toolRes = actionToolResult(rawStatus, { groupId }, (text) => text, {
+        structuredOutputSchema: statusSpec.structuredOutputSchema,
+        presentationMetaSchema: statusSpec.presentationMetaSchema,
+        projectPresentationMeta: statusSpec.projectPresentationMeta,
+        formatOutput: statusSpec.formatOutput,
+        toolName: statusSpec.name,
+      })
+      assert.ok(toolRes.output[0]!.text.includes('Flat Squad'))
+      assert.equal((toolRes.structuredOutput as BoardViewDoc).group.id, groupId)
 
       await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
       await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'close_group', { groupId }, { conversationId: coord.id })
@@ -693,30 +707,52 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
       const kernel = env.app.kernel
       const coord = await kernel.createConversation({ title: 'Meta Coord', profileId: 'assistant', cwd: env.repoDir })
 
-      const created = (await kernel.plugins.executeTool(
+      const execSwarmDerived = async <TOut>(
+        toolName: string,
+        input: Record<string, unknown>,
+        ctx: { conversationId: number; callId?: string },
+      ): Promise<{ output: string; structuredOutput: TOut; presentationMeta: Record<string, unknown> }> => {
+        const spec = kernel.plugins.listTools().find((t) => t.name === toolName)
+        assert.ok(spec && spec.sourceKind === 'action', `expected derived action tool ${toolName}`)
+        const raw = await kernel.plugins.executeTool(toolName, input, ctx)
+        const normalized = actionToolResult(raw, input, (text) => text, {
+          structuredOutputSchema: spec.structuredOutputSchema,
+          presentationMetaSchema: spec.presentationMetaSchema,
+          projectPresentationMeta: spec.projectPresentationMeta,
+          formatOutput: spec.formatOutput,
+          toolName: spec.name,
+        })
+        return {
+          output: normalized.output.map((b) => b.text).join(''),
+          structuredOutput: normalized.structuredOutput as TOut,
+          presentationMeta: normalized.details ?? {},
+        }
+      }
+
+      const created = await execSwarmDerived<{ groupId: string; group: { title: string } }>(
         'swarm_create_group',
         { title: 'Presentation Squad', objective: 'Separate structuredOutput from UI meta' },
         { conversationId: coord.id },
-      )) as { output: string; structuredOutput: { groupId: string; group: { title: string } }; presentationMeta: Record<string, unknown> }
+      )
       const groupId = created.structuredOutput.groupId
       assert.equal(created.structuredOutput.group.title, 'Presentation Squad')
       validateOrThrow(swarmToolPresentationMetaSchema, created.presentationMeta, 'swarm_create_group meta')
       assert.deepEqual(created.presentationMeta, { groupId, groupTitle: 'Presentation Squad' })
 
-      const updated = (await kernel.plugins.executeTool(
+      const updated = await execSwarmDerived<{ group: { title: string } }>(
         'swarm_update_group',
         { groupId, title: 'Presentation Squad v2' },
         { conversationId: coord.id },
-      )) as { structuredOutput: { group: { title: string } }; presentationMeta: Record<string, unknown> }
+      )
       assert.equal(updated.structuredOutput.group.title, 'Presentation Squad v2')
       validateOrThrow(swarmToolPresentationMetaSchema, updated.presentationMeta, 'swarm_update_group meta')
       assert.deepEqual(updated.presentationMeta, { groupId, groupTitle: 'Presentation Squad v2' })
 
-      const managedCh = (await kernel.plugins.executeTool(
+      const managedCh = await execSwarmDerived<{ channels: Array<{ name: string }> }>(
         'swarm_manage_channel',
         { groupId, op: 'create', channel: 'review', topic: 'Review channel' },
         { conversationId: coord.id },
-      )) as { structuredOutput: { channels: Array<{ name: string }> }; presentationMeta: Record<string, unknown> }
+      )
       assert.ok(managedCh.structuredOutput.channels.some((c) => c.name === 'review'))
       validateOrThrow(swarmToolPresentationMetaSchema, managedCh.presentationMeta, 'swarm_manage_channel meta')
       assert.deepEqual(managedCh.presentationMeta, { groupId })
@@ -729,14 +765,16 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
         fauxAssistantMessage('Worker alpha settled'),
         fauxAssistantMessage('Coordinator noted'),
       ])
-      const dispatched = (await kernel.plugins.executeTool(
+      const dispatched = await execSwarmDerived<{
+        workerConversationId: number
+        groupId: string
+        name: string
+        postSeq: number
+      }>(
         'swarm_dispatch_worker',
         { groupId, name: 'alpha', prompt: 'Inspect meta separation', isolation: 'inherit' },
         { conversationId: coord.id },
-      )) as {
-        structuredOutput: { workerConversationId: number; groupId: string; name: string; postSeq: number }
-        presentationMeta: Record<string, unknown>
-      }
+      )
       const workerId = dispatched.structuredOutput.workerConversationId
       assert.equal(dispatched.structuredOutput.name, 'alpha')
       validateOrThrow(swarmToolPresentationMetaSchema, dispatched.presentationMeta, 'swarm_dispatch_worker meta')
@@ -752,11 +790,11 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
       await kernel.waitForIdle(coord.id)
 
       const longBody = `Detailed handoff payload ${'x'.repeat(2048)}`
-      const posted = (await kernel.plugins.executeTool(
+      const posted = await execSwarmDerived<{ post: BoardPost }>(
         'swarm_board_post',
         { groupId, to: ['alpha'], kind: 'handoff', wake: false, body: longBody },
         { conversationId: coord.id },
-      )) as { structuredOutput: { post: BoardPost }; presentationMeta: Record<string, unknown> }
+      )
       assert.equal(posted.structuredOutput.post.body, longBody, 'programmatic structuredOutput preserves full post body')
       validateOrThrow(swarmToolPresentationMetaSchema, posted.presentationMeta, 'swarm_board_post meta')
       assert.deepEqual(posted.presentationMeta, {
@@ -765,11 +803,11 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
         seq: posted.structuredOutput.post.seq,
       })
 
-      const readRes = (await kernel.plugins.executeTool(
+      const readRes = await execSwarmDerived<{ posts: BoardPost[]; headSeq: number }>(
         'swarm_board_read',
         { groupId, limit: 20 },
         { conversationId: coord.id },
-      )) as { structuredOutput: { posts: BoardPost[]; headSeq: number }; presentationMeta: Record<string, unknown> }
+      )
       assert.ok(readRes.structuredOutput.posts.length >= 2)
       validateOrThrow(swarmToolPresentationMetaSchema, readRes.presentationMeta, 'swarm_board_read meta')
       assert.deepEqual(readRes.presentationMeta, {
@@ -778,11 +816,11 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
         postCount: readRes.structuredOutput.posts.length,
       })
 
-      const statusRes = (await kernel.plugins.executeTool(
+      const statusRes = await execSwarmDerived<BoardViewDoc>(
         'swarm_board_status',
         { groupId },
         { conversationId: coord.id },
-      )) as { structuredOutput: BoardViewDoc; presentationMeta: Record<string, unknown> }
+      )
       assert.ok(Array.isArray(statusRes.structuredOutput.members) && statusRes.structuredOutput.members.length === 1)
       assert.ok(Array.isArray(statusRes.structuredOutput.posts))
       validateOrThrow(swarmToolPresentationMetaSchema, statusRes.presentationMeta, 'swarm_board_status meta')
@@ -795,11 +833,11 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
 
       await kernel.waitForIdle(workerId)
 
-      const aborted = (await kernel.plugins.executeTool(
+      const aborted = await execSwarmDerived<{ aborted: boolean; workerConversationId: number; name: string }>(
         'swarm_abort_worker',
         { workerConversationId: workerId },
         { conversationId: coord.id },
-      )) as { structuredOutput: { aborted: boolean; workerConversationId: number; name: string }; presentationMeta: Record<string, unknown> }
+      )
       assert.equal(aborted.structuredOutput.aborted, false)
       validateOrThrow(swarmToolPresentationMetaSchema, aborted.presentationMeta, 'swarm_abort_worker meta')
       assert.deepEqual(aborted.presentationMeta, {
@@ -808,11 +846,11 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
         aborted: false,
       })
 
-      const switched = (await kernel.plugins.executeTool(
+      const switched = await execSwarmDerived<{ workerConversationId: number; model: string; name: string }>(
         'swarm_switch_worker_model',
         { workerConversationId: workerId, model: 'faux/faux-2' },
         { conversationId: coord.id },
-      )) as { structuredOutput: { workerConversationId: number; model: string; name: string }; presentationMeta: Record<string, unknown> }
+      )
       assert.equal(switched.structuredOutput.model, 'faux/faux-2')
       validateOrThrow(swarmToolPresentationMetaSchema, switched.presentationMeta, 'swarm_switch_worker_model meta')
       assert.deepEqual(switched.presentationMeta, {
@@ -821,14 +859,11 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
         model: 'faux/faux-2',
       })
 
-      const inspected = (await kernel.plugins.executeTool(
+      const inspected = await execSwarmDerived<{ conversationId: number; recentEntries: unknown[]; artifacts: unknown[] }>(
         'swarm_inspect_worker',
         { workerConversationId: workerId },
         { conversationId: coord.id },
-      )) as {
-        structuredOutput: { conversationId: number; recentEntries: unknown[]; artifacts: unknown[] }
-        presentationMeta: Record<string, unknown>
-      }
+      )
       assert.ok(Array.isArray(inspected.structuredOutput.recentEntries))
       validateOrThrow(swarmToolPresentationMetaSchema, inspected.presentationMeta, 'swarm_inspect_worker meta')
       assert.deepEqual(inspected.presentationMeta, {
@@ -837,11 +872,11 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
         memberName: 'alpha',
       })
 
-      const archived = (await kernel.plugins.executeTool(
+      const archived = await execSwarmDerived<{ archived: boolean; workerConversationId: number }>(
         'swarm_archive_worker',
         { workerConversationId: workerId },
         { conversationId: coord.id },
-      )) as { structuredOutput: { archived: boolean; workerConversationId: number }; presentationMeta: Record<string, unknown> }
+      )
       assert.equal(archived.structuredOutput.archived, true)
       validateOrThrow(swarmToolPresentationMetaSchema, archived.presentationMeta, 'swarm_archive_worker meta')
       assert.deepEqual(archived.presentationMeta, {
@@ -849,11 +884,11 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
         archived: true,
       })
 
-      const closed = (await kernel.plugins.executeTool(
+      const closed = await execSwarmDerived<{ closed: boolean; groupId: string; retainedWorktrees: unknown[] }>(
         'swarm_close_group',
         { groupId },
         { conversationId: coord.id },
-      )) as { structuredOutput: { closed: boolean; groupId: string; retainedWorktrees: unknown[] }; presentationMeta: Record<string, unknown> }
+      )
       assert.equal(closed.structuredOutput.closed, true)
       validateOrThrow(swarmToolPresentationMetaSchema, closed.presentationMeta, 'swarm_close_group meta')
       assert.deepEqual(closed.presentationMeta, {

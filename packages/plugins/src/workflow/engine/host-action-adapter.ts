@@ -52,7 +52,9 @@ export function resolveActionId(
 
   const manifests = host.listActions()
   if (qualified === BUILTIN_ENV_EXEC_ACTION) {
-    const sameShort = manifests.filter((m) => m.id === BUILTIN_ENV_EXEC_ACTION)
+    const sameShort = manifests.filter(
+      (m) => m.id === BUILTIN_ENV_EXEC_ACTION && (m.visibility ?? 'public') === 'public',
+    )
     if (sameShort.length === 0) {
       return {
         pluginId: BUILTIN_ENV_EXEC_PLUGIN,
@@ -68,23 +70,41 @@ export function resolveActionId(
     )
   }
 
-  // 1) 全限定精确匹配。
+  // 1) 全限定精确匹配（非 public 动作拒绝由 Workflow DSL 调用，防绕过 ui/internal 可见性边界）。
   for (const manifest of manifests) {
     if (`${manifest.pluginId}.${manifest.id}` === qualified) {
+      if (manifest.visibility === 'ui' || manifest.visibility === 'internal') {
+        throw new HelmxError(
+          'action_visibility_forbidden',
+          `动作 "${qualified}" 可见性为 '${manifest.visibility}'，禁止在工作流脚本中调用`,
+          403,
+          { pluginId: manifest.pluginId, actionId: manifest.id, visibility: manifest.visibility },
+        )
+      }
       return { pluginId: manifest.pluginId, actionId: manifest.id }
     }
   }
-  // 2) 裸短 id：唯一时允许，歧义拒绝。
+  // 2) 裸短 id：仅匹配 public 动作；若仅命中非 public 动作则显式 403 拒绝。
   const sameShort = manifests.filter((m) => m.id === qualified)
-  if (sameShort.length === 1) {
-    return { pluginId: sameShort[0]!.pluginId, actionId: sameShort[0]!.id }
+  const publicShort = sameShort.filter((m) => (m.visibility ?? 'public') === 'public')
+  if (publicShort.length === 1) {
+    return { pluginId: publicShort[0]!.pluginId, actionId: publicShort[0]!.id }
   }
-  if (sameShort.length > 1) {
+  if (publicShort.length > 1) {
     throw new HelmxError(
       'ambiguous_action',
-      `动作短 id "${qualified}" 命中多个插件，请用全限定 id：${sameShort.map((m) => `${m.pluginId}.${m.id}`).join(', ')}`,
+      `动作短 id "${qualified}" 命中多个插件，请用全限定 id：${publicShort.map((m) => `${m.pluginId}.${m.id}`).join(', ')}`,
       400,
       { qualified },
+    )
+  }
+  if (sameShort.length > 0) {
+    const blocked = sameShort[0]!
+    throw new HelmxError(
+      'action_visibility_forbidden',
+      `动作 "${blocked.pluginId}.${blocked.id}" 可见性为 '${blocked.visibility}'，禁止在工作流脚本中调用`,
+      403,
+      { pluginId: blocked.pluginId, actionId: blocked.id, visibility: blocked.visibility },
     )
   }
   throw new HelmxError('unknown_action', `未注册的动作：${qualified}`, 404, { qualified })

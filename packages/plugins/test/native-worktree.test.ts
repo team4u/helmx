@@ -49,7 +49,8 @@ import { extractWorkflowExecutionMeta, extractWorktreeExecutionMeta } from '../s
 import { WorktreeIsolation, type WorktreeIsolationDeps } from '../src/worktree/isolation.js'
 import { createWorkflowPlugin } from '../src/workflow.js'
 import { createWorktreePlugin } from '../src/worktree.js'
-import { cleanupPresentationMetaSchema } from '../src/worktree/tools.js'
+import { cleanupPresentationMetaSchema } from '../src/worktree/actions.js'
+import { actionToolResult } from '../../kernel/src/runtime/runtime-helpers.js'
 import { PluginHost, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
 import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin-host-backend.js'
 import { ArtifactService, SecretStash } from '../../kernel/src/services/index.js'
@@ -749,10 +750,9 @@ async function executeCleanupTool(
   docs: Map<string, unknown>,
   input: Record<string, unknown>,
 ): Promise<{
-  output?: Array<{ type: string; text?: string }>
-  structuredOutput?: Record<string, unknown>
+  output: Array<{ type: string; text: string }>
+  structuredOutput: Record<string, unknown>
   presentationMeta?: Record<string, unknown>
-  isError?: boolean
 }> {
   const dataDir = mkdtempSync(join(tmpdir(), 'helmx-wf-tool-'))
   const localExec = async (
@@ -839,13 +839,21 @@ async function executeCleanupTool(
   try {
     await host.register(createWorkflowPlugin())
     await host.register(createWorktreePlugin())
-    const result = (await host.executeTool('cleanup_worktree', input, { conversationId: 1 })) as {
-      output?: Array<{ type: string; text?: string }>
-      structuredOutput?: Record<string, unknown>
-      presentationMeta?: Record<string, unknown>
-      isError?: boolean
+    const spec = host.listTools().find((t) => t.name === 'cleanup_worktree')
+    assert.ok(spec, 'cleanup_worktree derived tool must be registered')
+    const raw = await host.executeTool('cleanup_worktree', input, { conversationId: 1 })
+    const normalized = actionToolResult(raw, input, (text) => text, {
+      structuredOutputSchema: spec.structuredOutputSchema,
+      presentationMetaSchema: spec.presentationMetaSchema,
+      projectPresentationMeta: spec.projectPresentationMeta,
+      formatOutput: spec.formatOutput,
+      toolName: spec.name,
+    })
+    return {
+      output: normalized.output,
+      structuredOutput: normalized.structuredOutput as Record<string, unknown>,
+      presentationMeta: normalized.details,
     }
-    return result
   } finally {
     await host.dispose().catch(() => {})
     rmSync(dataDir, { recursive: true, force: true })
@@ -1033,28 +1041,23 @@ describe('cleanup_worktree', { timeout: 60_000 }, () => {
       writeFileSync(join(record!.path, 'wip.txt'), 'dirty\n')
       th.markIdle(childId)
 
-      const dirty = await executeCleanupTool(th.docs, {
-        conversationId: childId,
-      })
-      assert.equal(dirty.isError, true, '脏工作区应返回错误')
-      const dirtyText = (dirty.output as Array<{ text: string }>)[0]!.text
-      assert.ok(dirtyText.includes('worktree_dirty') || dirtyText.includes('未提交修改'), `错误应含指引：${dirtyText}`)
-      assert.equal(dirty.structuredOutput?.['ok'], false)
-      validateOrThrow(cleanupPresentationMetaSchema, dirty.presentationMeta, 'cleanup error presentationMeta')
-      assert.equal(dirty.presentationMeta?.['ok'], false)
-      assert.ok(typeof dirty.presentationMeta?.['error'] === 'string' && dirty.presentationMeta['error'].length <= 512)
+      await assert.rejects(
+        () => executeCleanupTool(th.docs, { conversationId: childId }),
+        (err: unknown) =>
+          err instanceof HelmxError &&
+          err.code === 'worktree_dirty' &&
+          (err.message.includes('worktree_dirty') || err.message.includes('未提交修改')),
+      )
 
       const ok = await executeCleanupTool(th.docs, {
         conversationId: childId,
         deleteBranch: true,
         force: true,
       })
-      assert.equal(ok.isError, undefined)
-      assert.equal(ok.structuredOutput?.['ok'], true)
       assert.equal(ok.structuredOutput?.['removed'], true)
+      assert.ok(ok.output[0]!.text.includes('已移除受管 worktree'))
       validateOrThrow(cleanupPresentationMetaSchema, ok.presentationMeta, 'cleanup success presentationMeta')
       assert.deepEqual(ok.presentationMeta, {
-        ok: true,
         removed: true,
         worktreeId: record!.id,
         path: record!.path,
@@ -1092,15 +1095,14 @@ describe('cleanup_worktree', { timeout: 60_000 }, () => {
         deleteBranch: true,
         force: true,
       })
-      assert.equal(res.isError, undefined)
-      assert.equal(res.structuredOutput?.['ok'], true)
+      assert.equal(res.structuredOutput?.['removed'], true)
       assert.equal(res.structuredOutput?.['removedReason'], 'directory_missing_forced')
       assert.ok(typeof res.structuredOutput?.['prune'] === 'object', 'programmatic structuredOutput keeps prune object')
+      assert.ok(res.output[0]!.text.includes('目录缺失恢复路径'))
 
       validateOrThrow(cleanupPresentationMetaSchema, res.presentationMeta, 'cleanup prune meta')
       assert.equal(res.presentationMeta?.['prune'], undefined, 'presentationMeta must NOT carry raw prune object/output')
       assert.deepEqual(res.presentationMeta, {
-        ok: true,
         removed: true,
         worktreeId: record!.id,
         path: record!.path,
@@ -1635,9 +1637,7 @@ describe('cleanup_worktree 工具 schema 扩展', { timeout: 60_000 }, () => {
     try {
       const record = await allocator.allocate({ nodeId: 'local', sourceCwd: repo, parentConversationId: 1 })
       const ok = await executeCleanupTool(docs, { worktreeId: record.id, deleteBranch: true })
-      assert.equal(ok.isError, undefined)
-      const so = ok.structuredOutput as { ok: boolean; removed: boolean; worktreeId: string; branchDeleted: boolean }
-      assert.equal(so.ok, true)
+      const so = ok.structuredOutput as { removed: boolean; worktreeId: string; branchDeleted: boolean }
       assert.equal(so.removed, true)
       assert.equal(so.worktreeId, record.id)
       assert.equal(so.branchDeleted, true)
@@ -2666,7 +2666,7 @@ async function openWorkflowPluginHost(options: {
 }
 
 describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_worktree_hold', { timeout: 60_000 }, () => {
-  it('动作元数据与边界校验：cli.hidden=true、exposeAsTool=false，非法入参显式 400 validation_error', {
+  it('动作元数据与边界校验：visibility=internal、exposeAsTool=false、HTTP/run_action 403，非法入参显式 400 validation_error', {
     timeout: 60_000,
   }, async () => {
     const dir = join(rootDir, 't22-meta')
@@ -2679,47 +2679,77 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
       const releaseManifest = actions.find((a) => a.id === 'release_worktree_hold')
       assert.ok(acquireManifest, '应注册 acquire_worktree 动作')
       assert.ok(releaseManifest, '应注册 release_worktree_hold 动作')
-      assert.equal(acquireManifest!.cli?.hidden, true, 'acquire_worktree 必须隐藏 CLI 映射')
-      assert.equal(releaseManifest!.cli?.hidden, true, 'release_worktree_hold 必须隐藏 CLI 映射')
+      assert.equal(acquireManifest!.visibility, 'internal', 'acquire_worktree 必须声明 visibility: internal')
+      assert.equal(releaseManifest!.visibility, 'internal', 'release_worktree_hold 必须声明 visibility: internal')
       assert.ok(!acquireManifest!.exposeAsTool, 'acquire_worktree 不得暴露为独立模型工具')
       assert.ok(!releaseManifest!.exposeAsTool, 'release_worktree_hold 不得暴露为独立模型工具')
-      // 内部跨插件动作不进模型 <available_actions> 目录（exposeToPrompt: false；
-      // 内核 renderActionDirectory 对该标记跳过，此处锁定登记事实防回归）。
-      assert.equal(acquireManifest!.exposeToPrompt, false, 'acquire_worktree 不得出现在模型动作目录')
-      assert.equal(releaseManifest!.exposeToPrompt, false, 'release_worktree_hold 不得出现在模型动作目录')
-      // 公开动作仍在目录（未显式关闭 exposeToPrompt）。
+      // 公开动作保持 visibility: 'public'；cleanup_worktree 通过 exposeAsTool 单点暴露工具。
       const publicActions = host.listActions().filter((a) => a.pluginId === 'builtin:worktree')
       for (const id of ['cleanup_worktree', 'list_worktrees', 'inspect_worktree']) {
         const manifest = publicActions.find((a) => a.id === id)
         assert.ok(manifest !== undefined, `应注册 ${id} 动作`)
+        assert.equal(manifest!.visibility, 'public', `${id} 是公开动作`)
         assert.notEqual(manifest!.exposeToPrompt, false, `${id} 是公开动作，不得关闭目录暴露`)
       }
+      const cleanupManifest = publicActions.find((a) => a.id === 'cleanup_worktree')
+      assert.equal(cleanupManifest?.exposeAsTool, true)
+      assert.equal(cleanupManifest?.toolName, 'cleanup_worktree')
 
       const toolNames = host.listTools().map((t) => t.name)
+      assert.ok(toolNames.includes('cleanup_worktree'))
       assert.ok(!toolNames.includes('acquire_worktree'))
       assert.ok(!toolNames.includes('release_worktree_hold'))
 
-      // Schema 强校验：缺失必填、未知字段、空白字符串、非正整数会话 ID 均返 400 validation_error。
+      // 可见性硬门禁：HTTP（默认）与 run_action（含企图在 context 伪造 callerPluginId）一律 403 action_visibility_forbidden。
+      for (const surface of ['http', 'run_action'] as const) {
+        await assert.rejects(
+          () =>
+            host.invokeAction(
+              'builtin:worktree',
+              'acquire_worktree',
+              { conversationId: 2, parentConversationId: 1, hold: { holdId: 'h', label: 'l' } },
+              { callerPluginId: 'builtin:swarm' } as never,
+              { surface },
+            ),
+          (err: unknown) => err instanceof HelmxError && err.code === 'action_visibility_forbidden' && err.status === 403,
+        )
+        await assert.rejects(
+          () =>
+            host.invokeAction(
+              'builtin:worktree',
+              'release_worktree_hold',
+              { worktreeId: 'local:/wt', holdId: 'h' },
+              { callerPluginId: 'builtin:swarm' } as never,
+              { surface },
+            ),
+          (err: unknown) => err instanceof HelmxError && err.code === 'action_visibility_forbidden' && err.status === 403,
+        )
+      }
+
+      const pluginCaller = { surface: 'plugin' as const, callerPluginId: 'builtin:superagent' }
+      // Schema 强校验：缺失必填、未知字段（含旧自报 pluginId）、空白字符串、非正整数会话 ID 均返 400 validation_error。
       for (const badAcquire of [
         {},
-        { conversationId: 0, parentConversationId: 1, hold: { pluginId: 'p', holdId: 'h', label: 'l' } },
-        { conversationId: 2, parentConversationId: 1, hold: { pluginId: '   ', holdId: 'h', label: 'l' } },
-        { conversationId: 2, parentConversationId: 1, hold: { pluginId: 'p', holdId: 'h', label: 'l', extra: 1 } },
-        { conversationId: 2, parentConversationId: 1, bogus: true, hold: { pluginId: 'p', holdId: 'h', label: 'l' } },
+        { conversationId: 0, parentConversationId: 1, hold: { holdId: 'h', label: 'l' } },
+        { conversationId: 2, parentConversationId: 1, hold: { holdId: '   ', label: 'l' } },
+        { conversationId: 2, parentConversationId: 1, hold: { pluginId: 'spoof', holdId: 'h', label: 'l' } },
+        { conversationId: 2, parentConversationId: 1, hold: { holdId: 'h', label: 'l', extra: 1 } },
+        { conversationId: 2, parentConversationId: 1, bogus: true, hold: { holdId: 'h', label: 'l' } },
       ]) {
         await assert.rejects(
-          () => host.invokeAction('builtin:worktree', 'acquire_worktree', badAcquire),
+          () => host.invokeAction('builtin:worktree', 'acquire_worktree', badAcquire, {}, pluginCaller),
           (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
         )
       }
       for (const badRelease of [
         {},
-        { worktreeId: 'local:/wt', pluginId: 'p' },
-        { worktreeId: '   ', pluginId: 'p', holdId: 'h' },
-        { worktreeId: 'local:/wt', pluginId: 'p', holdId: 'h', extra: true },
+        { worktreeId: 'local:/wt' },
+        { worktreeId: '   ', holdId: 'h' },
+        { worktreeId: 'local:/wt', pluginId: 'spoof', holdId: 'h' },
+        { worktreeId: 'local:/wt', holdId: 'h', extra: true },
       ]) {
         await assert.rejects(
-          () => host.invokeAction('builtin:worktree', 'release_worktree_hold', badRelease),
+          () => host.invokeAction('builtin:worktree', 'release_worktree_hold', badRelease, {}, pluginCaller),
           (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
         )
       }
@@ -2750,17 +2780,23 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
     })
     try {
       const headCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim()
-      const acquired = (await host.invokeAction('builtin:worktree', 'acquire_worktree', {
-        conversationId: 12,
-        parentConversationId: 1,
-        profileId: 'coder',
-        fork: true,
-        hold: {
-          pluginId: 'builtin:superagent',
-          holdId: 'grp-alpha:author',
-          label: 'collab group "Alpha" worker @author',
+      const superagentCaller = { surface: 'plugin' as const, callerPluginId: 'builtin:superagent' }
+      const acquired = (await host.invokeAction(
+        'builtin:worktree',
+        'acquire_worktree',
+        {
+          conversationId: 12,
+          parentConversationId: 1,
+          profileId: 'coder',
+          fork: true,
+          hold: {
+            holdId: 'grp-alpha:author',
+            label: 'collab group "Alpha" worker @author',
+          },
         },
-      })) as {
+        {},
+        superagentCaller,
+      )) as {
         worktreeId: string
         path: string
         branch: string
@@ -2811,13 +2847,17 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
           },
         )
       }
-      const toolAttempt = await executeCleanupTool(docs, { worktreeId: acquired.worktreeId, force: true })
-      assert.equal(toolAttempt.isError, true)
-      assert.ok(
-        String((toolAttempt.structuredOutput as { error?: string })?.error ?? '').includes(
-          'collab group "Alpha" worker @author',
-        ),
-        'cleanup_worktree 工具错误输出同样应透出 hold.label',
+      await assert.rejects(
+        () => executeCleanupTool(docs, { worktreeId: acquired.worktreeId, force: true }),
+        (err: unknown) => {
+          assert.ok(err instanceof HelmxError)
+          assert.equal(err.code, 'worktree_in_use')
+          assert.ok(
+            err.message.includes('collab group "Alpha" worker @author'),
+            'cleanup_worktree 工具错误输出同样应透出 hold.label',
+          )
+          return true
+        },
       )
       assert.ok(existsSync(acquired.path), '持锁期间目录绝不可被移除')
 
@@ -2839,20 +2879,31 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
       )
 
       // release_worktree_hold：未知 worktreeId 幂等返 { released: false }。
-      const missingRelease = (await host.invokeAction('builtin:worktree', 'release_worktree_hold', {
-        worktreeId: 'local:/nonexistent-wt',
-        pluginId: 'builtin:superagent',
-        holdId: 'grp-alpha:author',
-      })) as { released: boolean }
+      const missingRelease = (await host.invokeAction(
+        'builtin:worktree',
+        'release_worktree_hold',
+        {
+          worktreeId: 'local:/nonexistent-wt',
+          holdId: 'grp-alpha:author',
+        },
+        {},
+        superagentCaller,
+      )) as { released: boolean }
       assert.deepEqual(missingRelease, { released: false })
 
-      // release_worktree_hold：pluginId 或 holdId 不一致显式抛 409 worktree_hold_mismatch，锁不丢失。
+      // release_worktree_hold：调用方插件 ID 或 holdId 不一致显式抛 409 worktree_hold_mismatch，锁不丢失。
       for (const mismatch of [
-        { worktreeId: acquired.worktreeId, pluginId: 'other:plugin', holdId: 'grp-alpha:author' },
-        { worktreeId: acquired.worktreeId, pluginId: 'builtin:superagent', holdId: 'grp-alpha:verifier' },
+        {
+          input: { worktreeId: acquired.worktreeId, holdId: 'grp-alpha:author' },
+          caller: { surface: 'plugin' as const, callerPluginId: 'other:plugin' },
+        },
+        {
+          input: { worktreeId: acquired.worktreeId, holdId: 'grp-alpha:verifier' },
+          caller: superagentCaller,
+        },
       ]) {
         await assert.rejects(
-          () => host.invokeAction('builtin:worktree', 'release_worktree_hold', mismatch),
+          () => host.invokeAction('builtin:worktree', 'release_worktree_hold', mismatch.input, {}, mismatch.caller),
           (err: unknown) =>
             err instanceof HelmxError && err.code === 'worktree_hold_mismatch' && err.status === 409,
         )
@@ -2861,20 +2912,30 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
 
       // release_worktree_hold：精确匹配清除 hold 并 flush；重复调用幂等返 { released: false }。
       const flushesBeforeRelease = flushes
-      const released = (await host.invokeAction('builtin:worktree', 'release_worktree_hold', {
-        worktreeId: acquired.worktreeId,
-        pluginId: 'builtin:superagent',
-        holdId: 'grp-alpha:author',
-      })) as { released: boolean }
+      const released = (await host.invokeAction(
+        'builtin:worktree',
+        'release_worktree_hold',
+        {
+          worktreeId: acquired.worktreeId,
+          holdId: 'grp-alpha:author',
+        },
+        {},
+        superagentCaller,
+      )) as { released: boolean }
       assert.deepEqual(released, { released: true })
       assert.ok(flushes > flushesBeforeRelease, '释放 hold 必须触发 docStore.flush')
       assert.equal(rawRecords(docs).find((r) => r.id === acquired.worktreeId)?.hold, undefined)
 
-      const releasedAgain = (await host.invokeAction('builtin:worktree', 'release_worktree_hold', {
-        worktreeId: acquired.worktreeId,
-        pluginId: 'builtin:superagent',
-        holdId: 'grp-alpha:author',
-      })) as { released: boolean }
+      const releasedAgain = (await host.invokeAction(
+        'builtin:worktree',
+        'release_worktree_hold',
+        {
+          worktreeId: acquired.worktreeId,
+          holdId: 'grp-alpha:author',
+        },
+        {},
+        superagentCaller,
+      )) as { released: boolean }
       assert.deepEqual(releasedAgain, { released: false })
 
       // 释放后：非 force 仍受脏文件保护（worktree_dirty），传 force: true 可正常清理（Linux）且插件可正常停用。
@@ -2926,21 +2987,33 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
       assert.deepEqual(ids, ['acquire_worktree', 'cleanup_worktree', 'inspect_worktree', 'list_worktrees', 'release_worktree_hold'])
       assert.ok(host.listTools().some((t) => t.name === 'cleanup_worktree'), '独立注册即提供 cleanup_worktree 工具')
 
-      const acquired = (await host.invokeAction('builtin:worktree', 'acquire_worktree', {
-        conversationId: 30,
-        parentConversationId: 1,
-        requestCwd: repo,
-        hold: { pluginId: 'builtin:superagent', holdId: 'solo:worker', label: 'standalone hold' },
-      })) as { worktreeId: string; path: string }
+      const soloCaller = { surface: 'plugin' as const, callerPluginId: 'builtin:superagent' }
+      const acquired = (await host.invokeAction(
+        'builtin:worktree',
+        'acquire_worktree',
+        {
+          conversationId: 30,
+          parentConversationId: 1,
+          requestCwd: repo,
+          hold: { holdId: 'solo:worker', label: 'standalone hold' },
+        },
+        {},
+        soloCaller,
+      )) as { worktreeId: string; path: string }
       await assert.rejects(
         () => host.disable('builtin:worktree'),
         (err: unknown) => err instanceof HelmxError && err.code === 'plugin_in_use' && err.status === 409,
       )
-      const released = (await host.invokeAction('builtin:worktree', 'release_worktree_hold', {
-        worktreeId: acquired.worktreeId,
-        pluginId: 'builtin:superagent',
-        holdId: 'solo:worker',
-      })) as { released: boolean }
+      const released = (await host.invokeAction(
+        'builtin:worktree',
+        'release_worktree_hold',
+        {
+          worktreeId: acquired.worktreeId,
+          holdId: 'solo:worker',
+        },
+        {},
+        soloCaller,
+      )) as { released: boolean }
       assert.equal(released.released, true)
       try {
         const cleaned = (await host.invokeAction('builtin:worktree', 'cleanup_worktree', {
@@ -3029,18 +3102,24 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
       stash,
     })
     try {
-      // 1) pluginId 或 holdId 含机密：在 git worktree add 之前显式抛 400 worktree_metadata_secret，不产生任何目录或记录。
-      for (const badHold of [
-        { pluginId: `plugin-${secretVal}`, holdId: 'h1', label: 'clean' },
-        { pluginId: 'builtin:superagent', holdId: `grp:${secretVal}`, label: 'clean' },
+      // 1) callerPluginId 或 holdId 含机密：在 git worktree add 之前显式抛 400 worktree_metadata_secret，不产生任何目录或记录。
+      for (const badCase of [
+        { callerPluginId: `plugin-${secretVal}`, hold: { holdId: 'h1', label: 'clean' } },
+        { callerPluginId: 'builtin:superagent', hold: { holdId: `grp:${secretVal}`, label: 'clean' } },
       ]) {
         await assert.rejects(
           () =>
-            host.invokeAction('builtin:worktree', 'acquire_worktree', {
-              conversationId: 30,
-              parentConversationId: 1,
-              hold: badHold,
-            }),
+            host.invokeAction(
+              'builtin:worktree',
+              'acquire_worktree',
+              {
+                conversationId: 30,
+                parentConversationId: 1,
+                hold: badCase.hold,
+              },
+              {},
+              { surface: 'plugin', callerPluginId: badCase.callerPluginId },
+            ),
           (err: unknown) => {
             assert.ok(err instanceof HelmxError)
             assert.equal(err.code, 'worktree_metadata_secret')
@@ -3054,15 +3133,20 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
       assert.equal(existsSync(join(dir, '.helmx-worktrees')), false, '机密前置拦截不得创建孤儿 worktree 目录')
 
       // 2) hold.label 含机密：写入前经 redact 脱敏，落盘原始 JSON 零明文泄漏。
-      const acquired = (await host.invokeAction('builtin:worktree', 'acquire_worktree', {
-        conversationId: 31,
-        parentConversationId: 1,
-        hold: {
-          pluginId: 'builtin:superagent',
-          holdId: 'grp-sec:author',
-          label: `group ${secretVal} author`,
+      const acquired = (await host.invokeAction(
+        'builtin:worktree',
+        'acquire_worktree',
+        {
+          conversationId: 31,
+          parentConversationId: 1,
+          hold: {
+            holdId: 'grp-sec:author',
+            label: `group ${secretVal} author`,
+          },
         },
-      })) as { worktreeId: string; path: string }
+        {},
+        { surface: 'plugin', callerPluginId: 'builtin:superagent' },
+      )) as { worktreeId: string; path: string }
       const rawJson = JSON.stringify(docs.get('builtin:worktree:worktree-state'))
       assert.ok(!rawJson.includes(secretVal), 'worktree-state 原始落库 JSON 不得含明文机密')
       const storedRecord = rawRecords(docs).find((r) => r.id === acquired.worktreeId)!

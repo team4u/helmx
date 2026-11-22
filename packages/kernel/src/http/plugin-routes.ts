@@ -175,7 +175,11 @@ export async function handleActionsDomain(
   const third = segments[2]
   const fourth = segments[3]
   if (second === undefined && method === 'GET') {
-    return jsonOk(redactor, await kernel.plugins.listActions())
+    const actions = await kernel.plugins.listActions()
+    return jsonOk(
+      redactor,
+      actions.filter((action) => action.visibility !== 'internal'),
+    )
   }
   const pluginId = requireIdParam(second ?? '', 'pluginId')
   const actionId = requireIdParam(third ?? '', 'actionId')

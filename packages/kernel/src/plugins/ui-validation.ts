@@ -57,6 +57,14 @@ export function assertUiCompleterActionBindings(
           { pluginId, id: String((u.spec as { id?: unknown }).id), targetPluginId, actionId },
         );
       }
+      if (binding.visibility === 'internal') {
+        throw new HelmxError(
+          'invalid_ui_spec',
+          `Plugin ${pluginId} completion source action ${targetPluginId}.${actionId} has visibility 'internal' and cannot be invoked from UI`,
+          400,
+          { pluginId, id: String((u.spec as { id?: unknown }).id), targetPluginId, actionId },
+        );
+      }
       if (!binding.idempotent) {
         throw new HelmxError(
           'invalid_ui_spec',
@@ -72,6 +80,14 @@ export function assertUiCompleterActionBindings(
       throw new HelmxError(
         'invalid_ui_spec',
         `Plugin ${pluginId} completion source references undeclared action ${actionId}`,
+        400,
+        { pluginId, id: String((u.spec as { id?: unknown }).id), actionId },
+      );
+    }
+    if (binding.visibility === 'internal') {
+      throw new HelmxError(
+        'invalid_ui_spec',
+        `Plugin ${pluginId} completion source action ${actionId} has visibility 'internal' and cannot be invoked from UI`,
         400,
         { pluginId, id: String((u.spec as { id?: unknown }).id), actionId },
       );

@@ -19,7 +19,6 @@ import {
   type PluginActionContext,
   type PluginDocHandle,
   type PluginServiceSpec,
-  type PluginToolContext,
   type ToolCallHookPayload,
   type TurnSettledPayload,
 } from '@helmx/protocol'
@@ -82,7 +81,6 @@ export interface SuperAgentRuntimeController {
   startWatchdog(): Promise<void>
   stopWatchdog(): Promise<void>
   invokeAction(id: string, input: unknown, context: PluginActionContext): MaybePromise<unknown>
-  executeTool(name: string, input: unknown, context: PluginToolContext): MaybePromise<unknown>
   runTrigger(envelope: ExternalTriggerEnvelope): MaybePromise<HookResult<ExternalTriggerEnvelope> | void>
   runCoreBeforeTurn(turn: BeforeTurnHookPayload): MaybePromise<HookResult<BeforeTurnHookPayload> | void>
   runCoreToolCall(payload: ToolCallHookPayload): MaybePromise<HookResult<ToolCallHookPayload> | void>
@@ -325,9 +323,8 @@ export function createSuperAgentRuntime(
     rewindEpochs,
   }
 
-  // Capture action/tool/hook/watchdog-service handlers registered by existing submodules without duplicating logic.
+  // Capture action/hook/watchdog-service handlers registered by existing submodules without duplicating logic.
   const actionHandlers = new Map<string, (input: unknown, context: PluginActionContext) => unknown>()
-  const toolExecutors = new Map<string, (input: unknown, context: PluginToolContext) => unknown>()
   const triggerHooks: Array<HookHandler<'trigger'>> = []
   const beforeTurnHooks: Array<HookHandler<'before_turn'>> = []
   const toolCallHooks: Array<HookHandler<'tool_call'>> = []
@@ -357,9 +354,7 @@ export function createSuperAgentRuntime(
     action: (spec) => {
       actionHandlers.set(spec.id, spec.handler as (input: unknown, context: PluginActionContext) => unknown)
     },
-    tool: (spec) => {
-      toolExecutors.set(spec.name, spec.execute as (input: unknown, context: PluginToolContext) => unknown)
-    },
+    tool: () => unexpectedRegistration('tool'),
     hook: {
       onTrigger: (fn) => { triggerHooks.push(fn) },
       onInput: () => unexpectedRegistration('hook.onInput'),
@@ -483,13 +478,6 @@ export function createSuperAgentRuntime(
         throw new HelmxError('not_found', `Unknown superagent action: ${id}`, 404, { pluginId: SUPERAGENT_PLUGIN_ID, id })
       }
       return handler(input, context)
-    },
-    executeTool(name: string, input: unknown, context: PluginToolContext): MaybePromise<unknown> {
-      const execute = toolExecutors.get(name)
-      if (execute === undefined) {
-        throw new HelmxError('not_found', `Unknown superagent tool: ${name}`, 404, { pluginId: SUPERAGENT_PLUGIN_ID, name })
-      }
-      return execute(input, context)
     },
     runTrigger: (envelope) => coreTriggerHook(envelope),
     runCoreBeforeTurn: (turn) => coreBeforeTurnHook(turn),

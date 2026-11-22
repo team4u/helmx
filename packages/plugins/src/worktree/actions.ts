@@ -1,30 +1,91 @@
 /**
  * builtin:worktree 受管 Worktree 动作（cleanup_worktree / list_worktrees / inspect_worktree，
- * 以及内部隐藏动作 acquire_worktree / release_worktree_hold）。
+ * 以及内部跨插件动作 acquire_worktree / release_worktree_hold）。
+ *
+ * - cleanup_worktree 通过 `exposeAsTool` 单点声明直投模型工具（`name: 'cleanup_worktree'`、
+ *   `formatOutput` 摘要文本、`presentationMetaSchema` + `projectPresentationMeta` 有界 UI 索引），
+ *   五端复用同一 handler，彻底消除 `ctx.tool` + `ctx.action` 重复声明；
+ * - acquire_worktree / release_worktree_hold 声明 `visibility: 'internal'`，拒绝 HTTP /
+ *   `run_action` / Workflow DSL，仅允许插件经 `ctx.host.invokeAction` 调用，且持久锁归属插件 ID
+ *   完全取自宿主盖章注入、不可伪造的 `context.callerPluginId`。
  */
-import { HelmxError, type HelmxPluginContext } from '@helmx/protocol'
+import { HelmxError, type HelmxPluginContext, type JsonSchema, type PluginActionContext } from '@helmx/protocol'
+import type { CleanupResult } from './worktree.js'
 import type { WorktreeIsolation } from './isolation.js'
 
 export interface WorktreeActionDeps {
   isolation: WorktreeIsolation
 }
 
+/** UI 持久化索引：有界标量/坐标字段，剔除可能冗长的 prune.output 原文。 */
+export const cleanupPresentationMetaSchema: JsonSchema = {
+  type: 'object',
+  properties: {
+    removed: { type: 'boolean' },
+    worktreeId: { type: 'string', maxLength: 4096 },
+    path: { type: 'string', maxLength: 4096 },
+    branch: { type: 'string', maxLength: 512 },
+    nodeId: { type: 'string', maxLength: 256 },
+    branchDeleted: { type: 'boolean' },
+    removedReason: { type: 'string', enum: ['directory_missing_forced'] },
+    pruneRan: { type: 'boolean' },
+    pruneOk: { type: 'boolean' },
+  },
+  required: ['removed', 'worktreeId', 'path', 'branch', 'nodeId', 'branchDeleted'],
+  additionalProperties: false,
+}
+
+function boundIndexText(value: string, maxChars: number): string {
+  if (value.length <= maxChars) return value
+  return `${value.slice(0, maxChars - 1)}…`
+}
+
+function formatCleanupSummary(result: CleanupResult): string {
+  const pruneNote =
+    result.prune === undefined
+      ? ''
+      : result.prune.ran
+        ? result.prune.ok
+          ? '；已在主仓执行 git worktree prune 收敛 git 侧残留登记'
+          : `；git worktree prune 失败（git 侧残留登记可能仍在，请人工核对）：${result.prune.output ?? ''}`
+        : `；${result.prune.output ?? '未执行 git worktree prune'}`
+  if (result.removed) {
+    return result.removedReason === 'directory_missing_forced'
+      ? `已按目录缺失恢复路径清除受管 worktree 登记 ${result.path}（branch: ${result.branch}，节点 ${result.nodeId}${result.branchDeleted ? '，分支已删除' : '，分支保留'}${pruneNote}）`
+      : `已移除受管 worktree ${result.path}（branch: ${result.branch}，节点 ${result.nodeId}${result.branchDeleted ? '，分支已删除' : '，分支保留'}）`
+  }
+  return `受管 worktree ${result.path} 此前已清理（幂等跳过；branch: ${result.branch}${result.branchDeleted ? '，分支已删除' : ''}）`
+}
+
+function requireCallerPluginId(context: PluginActionContext, actionId: string): string {
+  const caller = context.callerPluginId
+  if (typeof caller !== 'string' || caller.trim().length === 0) {
+    throw new HelmxError(
+      'action_visibility_forbidden',
+      `Action builtin:worktree.${actionId} requires an authenticated plugin caller (ctx.host.invokeAction)`,
+      403,
+      { pluginId: 'builtin:worktree', actionId },
+    )
+  }
+  return caller
+}
+
 export function registerWorktreeActions(ctx: HelmxPluginContext, deps: WorktreeActionDeps): void {
   const { isolation } = deps
 
-  ctx.action({
+  ctx.action<Record<string, unknown>, CleanupResult>({
     id: 'cleanup_worktree',
     description: 'Clean up a managed Git worktree',
     inputSchema: {
       type: 'object',
       properties: {
-        worktreeId: { type: 'string', description: 'Managed worktree registration ID (mutually exclusive with conversationId/path)' },
-        conversationId: { type: 'number', minimum: 1, description: 'Sub-conversation ID (mutually exclusive with worktreeId/path)' },
-        path: { type: 'string', description: 'Worktree absolute path (may attach nodeId to disambiguate)' },
-        nodeId: { type: 'string', description: 'Target node ID (only combinable with path)' },
+        worktreeId: { type: 'string', description: 'Managed worktree registration ID (node:path; exact selector, mutually exclusive with conversationId/path/nodeId)' },
+        conversationId: { type: 'number', minimum: 1, description: 'Sub-conversation ID (mutually exclusive with path)' },
+        path: { type: 'string', description: 'Worktree absolute path (mutually exclusive with conversationId; same-name paths across nodes need nodeId)' },
+        nodeId: { type: 'string', description: 'Target node ID (only combinable with path, disambiguating same-name paths across nodes)' },
         deleteBranch: { type: 'boolean', description: 'Also delete the helmx/spawn-* branch (kept by default)' },
         mergedInto: { type: 'string', description: 'Target branch or commit already merged into; defaults to the recorded baseBranch, falling back to the main worktree HEAD' },
-        force: { type: 'boolean', description: 'Force cleanup (dirty worktrees are refused by default)' },
+        force: { type: 'boolean', description: 'Force cleanup (only bypasses the uncommitted-changes/unmerged-commits protection; never bypasses occupancy/ownership/locked checks)' },
       },
       additionalProperties: false,
     },
@@ -58,32 +119,43 @@ export function registerWorktreeActions(ctx: HelmxPluginContext, deps: WorktreeA
       additionalProperties: false,
     },
     cli: { command: ['worktrees', 'cleanup'], description: 'Clean up a managed Git worktree' },
+    exposeAsTool: {
+      name: 'cleanup_worktree',
+      description:
+        "Clean up one managed isolated Git worktree (the workspace of a sub-conversation spawned with isolation: 'worktree'). Locate it by worktreeId (node:path), conversationId, or worktree path (may attach nodeId to disambiguate); refused by default when the workspace has uncommitted changes or unmerged commits (inspect/merge first, or pass force: true; force cannot bypass occupancy/ownership/locked checks); optionally pass deleteBranch: true to also delete the helmx/spawn-* branch (branch deletion failures can be retried). Only worktrees registered by helmx are cleaned; unregistered directories are never touched.",
+      formatOutput: (_input, result) => formatCleanupSummary(result),
+    },
+    presentationMetaSchema: cleanupPresentationMetaSchema,
+    projectPresentationMeta: (_input, result) => ({
+      removed: result.removed,
+      worktreeId: boundIndexText(result.worktreeId, 4096),
+      path: boundIndexText(result.path, 4096),
+      branch: boundIndexText(result.branch, 512),
+      nodeId: boundIndexText(result.nodeId, 256),
+      branchDeleted: result.branchDeleted,
+      ...(result.removedReason !== undefined ? { removedReason: result.removedReason } : {}),
+      ...(result.prune !== undefined ? { pruneRan: result.prune.ran, pruneOk: result.prune.ok } : {}),
+    }),
     async handler(input, context) {
-      const a = input as Record<string, unknown>
-      if (
-        a['conversationId'] !== undefined &&
-        context.conversationId !== undefined &&
-        a['conversationId'] !== context.conversationId
-      ) {
-        throw new HelmxError(
-          'validation_error',
-          `conversationId 冲突：输入指定 ${String(a['conversationId'])} 与调用上下文 ${context.conversationId} 不一致，请显式统一`,
-          400,
-          { inputConversationId: a['conversationId'], contextConversationId: context.conversationId },
-        )
-      }
-      const hasExplicit = a['worktreeId'] !== undefined || a['path'] !== undefined || a['conversationId'] !== undefined
+      // --current / 工具调用缺省语义：未传任何显式选择器时以当前会话为选择器（子会话清理自身 worktree）；
+      // 显式传 conversationId（如父会话清理子会话 worktree）或 worktreeId/path 时永不被调用上下文覆盖。
+      const hasExplicit =
+        input['worktreeId'] !== undefined || input['path'] !== undefined || input['conversationId'] !== undefined
       const selectorConversationId =
-        a['conversationId'] !== undefined ? Number(a['conversationId']) : hasExplicit ? undefined : context.conversationId
+        input['conversationId'] !== undefined
+          ? Number(input['conversationId'])
+          : hasExplicit
+            ? undefined
+            : context.conversationId
       return isolation.cleanup(
         {
-          ...(a['worktreeId'] !== undefined ? { worktreeId: String(a['worktreeId']) } : {}),
+          ...(input['worktreeId'] !== undefined ? { worktreeId: String(input['worktreeId']) } : {}),
           ...(selectorConversationId !== undefined ? { conversationId: selectorConversationId } : {}),
-          ...(a['path'] !== undefined ? { path: String(a['path']) } : {}),
-          ...(a['nodeId'] !== undefined ? { nodeId: String(a['nodeId']) } : {}),
-          ...(a['deleteBranch'] !== undefined ? { deleteBranch: a['deleteBranch'] === true } : {}),
-          ...(a['mergedInto'] !== undefined ? { mergedInto: String(a['mergedInto']) } : {}),
-          ...(a['force'] !== undefined ? { force: a['force'] === true } : {}),
+          ...(input['path'] !== undefined ? { path: String(input['path']) } : {}),
+          ...(input['nodeId'] !== undefined ? { nodeId: String(input['nodeId']) } : {}),
+          ...(input['deleteBranch'] !== undefined ? { deleteBranch: input['deleteBranch'] === true } : {}),
+          ...(input['mergedInto'] !== undefined ? { mergedInto: String(input['mergedInto']) } : {}),
+          ...(input['force'] !== undefined ? { force: input['force'] === true } : {}),
         },
         context.signal,
       )
@@ -164,7 +236,8 @@ export function registerWorktreeActions(ctx: HelmxPluginContext, deps: WorktreeA
 
   ctx.action({
     id: 'acquire_worktree',
-    description: 'Allocate a managed Git worktree for a worker conversation and attach a durable plugin hold',
+    description: 'Allocate a managed Git worktree for a worker conversation and attach a durable plugin hold owned by the calling plugin',
+    visibility: 'internal',
     inputSchema: {
       type: 'object',
       properties: {
@@ -197,12 +270,6 @@ export function registerWorktreeActions(ctx: HelmxPluginContext, deps: WorktreeA
         hold: {
           type: 'object',
           properties: {
-            pluginId: {
-              type: 'string',
-              minLength: 1,
-              pattern: '\\S',
-              description: 'Owning plugin ID holding the durable worktree lock',
-            },
             holdId: {
               type: 'string',
               minLength: 1,
@@ -216,7 +283,7 @@ export function registerWorktreeActions(ctx: HelmxPluginContext, deps: WorktreeA
               description: 'Human-readable hold diagnostic label (redacted before persistence)',
             },
           },
-          required: ['pluginId', 'holdId', 'label'],
+          required: ['holdId', 'label'],
           additionalProperties: false,
         },
       },
@@ -235,17 +302,15 @@ export function registerWorktreeActions(ctx: HelmxPluginContext, deps: WorktreeA
       required: ['worktreeId', 'path', 'branch', 'baseCommit', 'nodeId'],
       additionalProperties: false,
     },
-    cli: { hidden: true },
-    exposeAsTool: false,
-    exposeToPrompt: false,
     async handler(input, context) {
+      const callerPluginId = requireCallerPluginId(context, 'acquire_worktree')
       const a = input as {
         conversationId: number
         parentConversationId: number
         profileId?: string
         requestCwd?: string
         fork?: boolean
-        hold: { pluginId: string; holdId: string; label: string }
+        hold: { holdId: string; label: string }
       }
       return isolation.acquireWorktree(
         {
@@ -255,7 +320,7 @@ export function registerWorktreeActions(ctx: HelmxPluginContext, deps: WorktreeA
           ...(a.requestCwd !== undefined ? { requestCwd: a.requestCwd } : {}),
           ...(a.fork !== undefined ? { fork: a.fork } : {}),
           hold: {
-            pluginId: a.hold.pluginId,
+            pluginId: callerPluginId,
             holdId: a.hold.holdId,
             label: a.hold.label,
           },
@@ -267,7 +332,8 @@ export function registerWorktreeActions(ctx: HelmxPluginContext, deps: WorktreeA
 
   ctx.action({
     id: 'release_worktree_hold',
-    description: 'Release a durable plugin hold on a managed Git worktree',
+    description: 'Release a durable plugin hold owned by the calling plugin on a managed Git worktree',
+    visibility: 'internal',
     inputSchema: {
       type: 'object',
       properties: {
@@ -277,12 +343,6 @@ export function registerWorktreeActions(ctx: HelmxPluginContext, deps: WorktreeA
           pattern: '\\S',
           description: 'Managed worktree registration ID (node:path)',
         },
-        pluginId: {
-          type: 'string',
-          minLength: 1,
-          pattern: '\\S',
-          description: 'Owning plugin ID expected on the active hold',
-        },
         holdId: {
           type: 'string',
           minLength: 1,
@@ -290,7 +350,7 @@ export function registerWorktreeActions(ctx: HelmxPluginContext, deps: WorktreeA
           description: 'Stable hold identifier expected on the active hold',
         },
       },
-      required: ['worktreeId', 'pluginId', 'holdId'],
+      required: ['worktreeId', 'holdId'],
       additionalProperties: false,
     },
     outputSchema: {
@@ -301,14 +361,12 @@ export function registerWorktreeActions(ctx: HelmxPluginContext, deps: WorktreeA
       required: ['released'],
       additionalProperties: false,
     },
-    cli: { hidden: true },
-    exposeAsTool: false,
-    exposeToPrompt: false,
-    async handler(input) {
-      const a = input as { worktreeId: string; pluginId: string; holdId: string }
+    async handler(input, context) {
+      const callerPluginId = requireCallerPluginId(context, 'release_worktree_hold')
+      const a = input as { worktreeId: string; holdId: string }
       return isolation.releaseWorktreeHold({
         worktreeId: a.worktreeId,
-        pluginId: a.pluginId,
+        pluginId: callerPluginId,
         holdId: a.holdId,
       })
     },
