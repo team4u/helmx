@@ -4,7 +4,7 @@
 
 设计严格遵循**机制与策略分离**：
 
-- **内核（`@helmx/kernel`）只保留极薄解引用原语**：`ModelRegistry` 保留 `tier` 命名空间，接收插件通过 `ctx.host.registerModelTiers` 挂载的内存解析表；在会话创建/改模型、`spawnAgent` / `fork`、上下文压缩与 `completeText` 处将 `tier/<id>` 一次性解引用并固化为真实 `provider/modelId`（保护进行中会话的 Prompt Cache，且停用插件或切换模板后既有会话继续无损运行）。
+- **内核（`@helmx/kernel`）只保留极薄解引用原语**：`ModelRegistry` 保留 `tier` 命名空间，经插件宿主能力注册表消费插件通过 `ctx.provide('helmx.model-tiers', ...)` 提供的实时档位解析表（含变更通知与停用自动释放）；在会话创建/改模型、`spawnAgent` / `fork`、上下文压缩与 `completeText` 处将 `tier/<id>` 一次性解引用并固化为真实 `provider/modelId`（保护进行中会话的 Prompt Cache，且停用插件或切换模板后既有会话继续无损运行）。
 - **策略、模板、提示词与界面全部在本插件内闭环**：`builtin:workflow` 与 `builtin:swarm` 零修改、零档位硬编码；停用 `builtin:tiers` 时档位映射、设置界面、动作、CLI 命令、目录注入与受管技能即时全部退场。
 
 ## 核心行为
