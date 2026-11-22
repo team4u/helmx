@@ -1,111 +1,28 @@
-/**
- * builtin:tiers client.tsx components (component exports only, Fast Refresh contract):
- * - TiersManagerScreen: full-stage semantic model tiers editor + custom preset template manager;
- * - TiersSettingsPanel: compact overview inside Plugin Detail Drawer with quick open action.
- *
- * Strictly reuses @helmx/plugin-client Radix primitives (`ModelPickerControl` with `allowTiers={false}`
- * and integrated inline thinking-level chips, `Screen`, `ScreenSection`, `ScreenToolbar`, `KvGrid`,
- * `EmptyState`, `Callout`, `HelmxIcon`), zero native `<select>`, zero Emoji.
- */
-import { useEffect, useMemo, useRef, useState } from 'react'
-import type { ReactNode } from 'react'
+/** builtin:tiers client.tsx components (Fast Refresh compliant: component exports only). */
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { ScreenProps } from '@helmx/protocol'
 import {
-  Callout,
-  ConfirmDialog,
-  EmptyState,
-  HelmxIcon,
-  KvGrid,
-  ModelPickerControl,
-  Screen,
-  ScreenSection,
-  ScreenToolbar,
-  formatModelShortName,
-  formatTime,
-  useHostModels,
-  usePluginContext,
-  usePluginDoc,
-  usePluginLocale,
-  usePluginTranslator,
+  Callout, ConfirmDialog, EmptyState, HelmxIcon, KvGrid, ModelPickerControl, Screen, ScreenSection, ScreenToolbar,
+  formatModelShortName, formatTime, useHostModels, usePluginContext, usePluginDoc, usePluginLocale, usePluginTranslator,
 } from '@helmx/plugin-client'
 import {
-  TIERS_PLUGIN_ID,
-  TIERS_SCREEN_ID,
-  TIERS_STATE_DOC,
-  buildStarterDraftRows,
-  isDraftDirty,
-  parseTiersStateDoc,
-  resolveTierRowStatus,
-  tiersRecordToDraftRows,
-  validateDraftRows,
-  type TierDraftRow,
-  type TierTemplateView,
+  TIERS_PLUGIN_ID, TIERS_SCREEN_ID, TIERS_STATE_DOC, buildStarterDraftRows, isDraftDirty, parseTiersStateDoc,
+  resolveTierRowStatus, tiersRecordToDraftRows, validateDraftRows, type TierDraftRow, type TierTemplateView,
 } from './models.ts'
 import {
-  TIERS_ACTIVE_SECTION,
-  TIERS_ADD_ROW,
-  TIERS_CANCEL,
-  TIERS_CLEAR_MODEL,
-  TIERS_COL_ACTIONS,
-  TIERS_COL_ROSTER,
-  TIERS_COL_TEMPLATE,
-  TIERS_COL_UPDATED,
-  TIERS_DISCARD,
-  TIERS_EMPTY_HINT,
-  TIERS_EMPTY_TITLE,
-  TIERS_ERR_DUPLICATE_ID,
-  TIERS_ERR_ID_REQUIRED,
-  TIERS_ERR_MODEL_REQUIRED,
-  TIERS_ERR_TEMPLATE_FIELDS,
-  TIERS_FIELD_DESCRIPTION,
-  TIERS_FIELD_DESCRIPTION_PLACEHOLDER,
-  TIERS_FIELD_ID,
-  TIERS_FIELD_ID_PLACEHOLDER,
-  TIERS_FIELD_MODEL,
-  TIERS_FILL_STARTER,
-  TIERS_LOADING,
-  TIERS_PICK_MODEL,
-  TIERS_REMOVE_ROW,
-  TIERS_SAVED_NOTICE,
-  TIERS_SAVE_ALL,
-  TIERS_SAVING,
-  TIERS_SCREEN_SUBTITLE,
-  TIERS_SCREEN_TITLE,
-  TIERS_SETTINGS_HINT,
-  TIERS_SETTINGS_KV_ACTIVE,
-  TIERS_SETTINGS_KV_TEMPLATE,
-  TIERS_SETTINGS_KV_TEMPLATES,
-  TIERS_SETTINGS_NONE,
-  TIERS_SETTINGS_OPEN,
-  TIERS_STATUS_AVAILABLE,
-  TIERS_STATUS_DISABLED,
-  TIERS_STATUS_DRAFT,
-  TIERS_STATUS_UNAVAILABLE,
-  TIERS_TEMPLATES_SECTION,
-  TIERS_TEMPLATE_ACTIVE_BADGE,
-  TIERS_TEMPLATE_APPLY,
-  TIERS_TEMPLATE_DELETE,
-  TIERS_TEMPLATE_DELETE_CONFIRM_TITLE,
-  TIERS_TEMPLATE_DESC_LABEL,
-  TIERS_TEMPLATE_DESC_PLACEHOLDER,
-  TIERS_TEMPLATE_EMPTY,
-  TIERS_TEMPLATE_ID_LABEL,
-  TIERS_TEMPLATE_ID_PLACEHOLDER,
-  TIERS_TEMPLATE_NAME_LABEL,
-  TIERS_TEMPLATE_NAME_PLACEHOLDER,
-  TIERS_TEMPLATE_SAVE_BTN,
-  TIERS_TEMPLATE_SAVE_TITLE,
-  TIERS_UNSAVED_BADGE,
-  buildTiersPickerCopy,
-  tiersActionFailed,
-  tiersPickModelWithHint,
-  tiersTemplateAppliedNotice,
-  tiersTemplateDeleteConfirmBody,
-  tiersTemplateSavedNotice,
+  TIERS_COPY as C, buildTiersPickerCopy, tiersActionFailed, tiersPickModelWithHint,
+  tiersTemplateAppliedNotice, tiersTemplateDeleteConfirmBody, tiersTemplateSavedNotice,
 } from './copy.ts'
 import './styles.css'
 
-/** Full-stage Model Tiers & Preset Templates manager (`#/s/builtin:tiers/main`). */
+const STATUS_BADGE = {
+  available: { tone: 'badge-ok', copy: C.statusAvailable },
+  disabled: { tone: 'badge-warn', copy: C.statusDisabled },
+  unavailable: { tone: 'badge-warn', copy: C.statusUnavailable },
+  draft: { tone: 'badge-neutral', copy: C.statusDraft },
+} as const
+const VALIDATION_ERROR_COPY = { id_required: C.errIdRequired, duplicate_id: C.errDuplicateId, model_required: C.errModelRequired } as const
+
 export function TiersManagerScreen(_props: ScreenProps): ReactNode {
   const ctx = usePluginContext()
   const locale = usePluginLocale()
@@ -121,145 +38,54 @@ export function TiersManagerScreen(_props: ScreenProps): ReactNode {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
-
-  const [tplId, setTplId] = useState('')
-  const [tplName, setTplName] = useState('')
-  const [tplDesc, setTplDesc] = useState('')
-  const [pendingDeleteTemplate, setPendingDeleteTemplate] = useState<TierTemplateView | null>(null)
+  const [tplForm, setTplForm] = useState({ id: '', name: '', desc: '' })
+  const [pendingDelete, setPendingDelete] = useState<TierTemplateView | null>(null)
   const nextRowCounter = useRef(1)
   const dirtyRef = useRef(false)
 
   const dirty = initialized && isDraftDirty(draft, parsed.tiers)
   dirtyRef.current = dirty
 
-  // Sync incoming doc snapshots into the editor when not dirty (e.g. initial load or template switch).
   useEffect(() => {
-    if (rawDoc === undefined) return
-    if (!initialized || !dirtyRef.current) {
+    if (rawDoc !== undefined && (!initialized || !dirtyRef.current)) {
       setDraft(tiersRecordToDraftRows(parsed.tiers))
       setInitialized(true)
     }
   }, [rawDoc, parsed.tiers, initialized])
 
-  const updateRow = (key: string, patch: Partial<TierDraftRow>): void => {
-    setError(null)
-    setNotice(null)
-    setDraft((prev) => prev.map((row) => (row.key === key ? { ...row, ...patch } : row)))
+  const mutateDraft = (updater: (prev: TierDraftRow[]) => TierDraftRow[]): void => { setError(null); setNotice(null); setDraft(updater) }
+
+  const runAction = async (fn: () => Promise<string | void>): Promise<void> => {
+    setError(null); setNotice(null); setBusy(true)
+    try { const msg = await fn(); if (msg) setNotice(msg) } catch (err) { setError(tiersActionFailed(err, locale)) } finally { setBusy(false) }
   }
 
-  const addEmptyRow = (): void => {
-    setError(null)
-    setNotice(null)
-    const seq = nextRowCounter.current++
-    setDraft((prev) => [
-      ...prev,
-      { key: `new:${seq}`, id: '', model: '', thinkingLevel: '', description: '' },
-    ])
-  }
-
-  const fillStarter = (): void => {
-    setError(null)
-    setNotice(null)
-    setDraft(buildStarterDraftRows(locale))
-    setInitialized(true)
-  }
-
-  const removeRow = (key: string): void => {
-    setError(null)
-    setNotice(null)
-    setDraft((prev) => prev.filter((row) => row.key !== key))
-  }
-
-  const discardEdits = (): void => {
-    setError(null)
-    setNotice(null)
-    setDraft(tiersRecordToDraftRows(parsed.tiers))
-  }
-
-  const saveAll = async (): Promise<void> => {
-    setError(null)
-    setNotice(null)
+  const saveAll = (): Promise<void> => {
     const checked = validateDraftRows(draft)
-    if (!checked.ok) {
-      if (checked.code === 'id_required') setError(t(TIERS_ERR_ID_REQUIRED))
-      else if (checked.code === 'duplicate_id') setError(t(TIERS_ERR_DUPLICATE_ID))
-      else setError(t(TIERS_ERR_MODEL_REQUIRED))
-      return
-    }
-    setBusy(true)
-    try {
+    if (!checked.ok) { setNotice(null); setError(t(VALIDATION_ERROR_COPY[checked.code])); return Promise.resolve() }
+    return runAction(async () => {
       await ctx.callAction('replace', { tiers: checked.tiers })
       setDraft(tiersRecordToDraftRows(checked.tiers))
-      setNotice(t(TIERS_SAVED_NOTICE))
-    } catch (err) {
-      setError(tiersActionFailed(err, locale))
-    } finally {
-      setBusy(false)
-    }
+      return t(C.savedNotice)
+    })
   }
 
-  const handleSaveTemplate = async (): Promise<void> => {
-    setError(null)
-    setNotice(null)
-    const id = tplId.trim()
-    const name = tplName.trim()
-    if (id === '' || name === '') {
-      setError(t(TIERS_ERR_TEMPLATE_FIELDS))
-      return
-    }
-    setBusy(true)
-    try {
-      await ctx.callAction('save_template', {
-        id,
-        name,
-        ...(tplDesc.trim() !== '' ? { description: tplDesc.trim() } : {}),
-      })
-      setTplId('')
-      setTplName('')
-      setTplDesc('')
-      setNotice(tiersTemplateSavedNotice(name, locale))
-    } catch (err) {
-      setError(tiersActionFailed(err, locale))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const handleApplyTemplate = async (tpl: TierTemplateView): Promise<void> => {
-    setError(null)
-    setNotice(null)
-    setBusy(true)
-    try {
-      await ctx.callAction('apply_template', { id: tpl.id })
-      setDraft(tiersRecordToDraftRows(tpl.tiers))
-      setNotice(tiersTemplateAppliedNotice(tpl.name, locale))
-    } catch (err) {
-      setError(tiersActionFailed(err, locale))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const handleDeleteTemplate = async (id: string): Promise<void> => {
-    setError(null)
-    setNotice(null)
-    setBusy(true)
-    try {
-      await ctx.callAction('delete_template', { id })
-    } catch (err) {
-      setError(tiersActionFailed(err, locale))
-    } finally {
-      setBusy(false)
-    }
+  const handleSaveTemplate = (): Promise<void> => {
+    const id = tplForm.id.trim()
+    const name = tplForm.name.trim()
+    const desc = tplForm.desc.trim()
+    if (!id || !name) { setNotice(null); setError(t(C.errTemplateFields)); return Promise.resolve() }
+    return runAction(async () => {
+      await ctx.callAction('save_template', { id, name, ...(desc ? { description: desc } : {}) })
+      setTplForm({ id: '', name: '', desc: '' })
+      return tiersTemplateSavedNotice(name, locale)
+    })
   }
 
   if (rawDoc === undefined) {
     return (
-      <Screen title={t(TIERS_SCREEN_TITLE)} subtitle={t(TIERS_SCREEN_SUBTITLE)}>
-        <div className="loading-state" role="status">
-          <HelmxIcon name="loader" size={14} className="spin-slow" />
-          <span>{t(TIERS_LOADING)}</span>
-        </div>
+      <Screen title={t(C.screenTitle)} subtitle={t(C.screenSubtitle)}>
+        <div className="loading-state" role="status"><HelmxIcon name="loader" size={14} className="spin-slow" /><span>{t(C.loading)}</span></div>
       </Screen>
     )
   }
@@ -267,149 +93,82 @@ export function TiersManagerScreen(_props: ScreenProps): ReactNode {
   const savedCount = Object.keys(parsed.tiers).length
 
   return (
-    <Screen title={t(TIERS_SCREEN_TITLE)} subtitle={t(TIERS_SCREEN_SUBTITLE)}>
+    <Screen title={t(C.screenTitle)} subtitle={t(C.screenSubtitle)}>
       <ScreenToolbar
         actions={
           <>
-            {dirty ? <span className="badge badge-warn">{t(TIERS_UNSAVED_BADGE)}</span> : null}
-            {draft.length === 0 ? (
-              <button
-                type="button"
-                className="btn btn-secondary btn-sm"
-                disabled={busy}
-                onClick={fillStarter}
-              >
-                <HelmxIcon name="sparkles" size={13} />
-                <span>{t(TIERS_FILL_STARTER)}</span>
+            {dirty && <span className="badge badge-warn">{t(C.unsavedBadge)}</span>}
+            {draft.length === 0 && (
+              <button type="button" className="btn btn-secondary btn-sm" disabled={busy} onClick={() => { mutateDraft(() => buildStarterDraftRows(locale)); setInitialized(true) }}>
+                <HelmxIcon name="sparkles" size={13} /><span>{t(C.fillStarter)}</span>
               </button>
-            ) : null}
-            <button type="button" className="btn btn-secondary btn-sm" disabled={busy} onClick={addEmptyRow}>
-              <HelmxIcon name="plus" size={13} />
-              <span>{t(TIERS_ADD_ROW)}</span>
+            )}
+            <button type="button" className="btn btn-secondary btn-sm" disabled={busy} onClick={() => mutateDraft((prev) => [...prev, { key: `new:${nextRowCounter.current++}`, id: '', model: '', thinkingLevel: '', description: '' }])}>
+              <HelmxIcon name="plus" size={13} /><span>{t(C.addRow)}</span>
             </button>
-            {dirty ? (
-              <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={discardEdits}>
-                <span>{t(TIERS_DISCARD)}</span>
-              </button>
-            ) : null}
-            <button
-              type="button"
-              className="btn btn-primary btn-sm"
-              disabled={busy || !dirty}
-              onClick={() => void saveAll()}
-            >
-              <HelmxIcon name="check" size={13} />
-              <span>{busy ? t(TIERS_SAVING) : t(TIERS_SAVE_ALL)}</span>
+            {dirty && <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={() => mutateDraft(() => tiersRecordToDraftRows(parsed.tiers))}><span>{t(C.discard)}</span></button>}
+            <button type="button" className="btn btn-primary btn-sm" disabled={busy || !dirty} onClick={() => void saveAll()}>
+              <HelmxIcon name="check" size={13} /><span>{busy ? t(C.saving) : t(C.saveAll)}</span>
             </button>
           </>
         }
       >
-        <span className="text-muted text-sm">
-          {t(TIERS_ACTIVE_SECTION)} ({draft.length})
-        </span>
+        <span className="text-muted text-sm">{t(C.activeSection)} ({draft.length})</span>
       </ScreenToolbar>
 
-      {error !== null ? <Callout tone="err">{error}</Callout> : null}
-      {notice !== null ? <Callout tone="ok">{notice}</Callout> : null}
+      {error && <Callout tone="err">{error}</Callout>}
+      {notice && <Callout tone="ok">{notice}</Callout>}
 
-      <ScreenSection title={t(TIERS_ACTIVE_SECTION)}>
+      <ScreenSection title={t(C.activeSection)}>
         {draft.length === 0 ? (
-          <EmptyState
-            icon="layers"
-            title={t(TIERS_EMPTY_TITLE)}
-            hint={t(TIERS_EMPTY_HINT)}
-          />
+          <EmptyState icon="layers" title={t(C.emptyTitle)} hint={t(C.emptyHint)} />
         ) : (
           <div className="tiers-list">
             {draft.map((row) => {
-              const status = resolveTierRowStatus(row.model, models)
-              const placeholder =
-                row.model === '' && row.thinkingLevel !== ''
-                  ? tiersPickModelWithHint(row.thinkingLevel, locale)
-                  : t(TIERS_PICK_MODEL)
-              const buttonTitle =
-                row.model !== ''
-                  ? row.thinkingLevel !== ''
-                    ? `${row.model} · ${row.thinkingLevel}`
-                    : row.model
-                  : placeholder
-              const statusBadge =
-                status === 'available'
-                  ? { tone: 'badge-ok', label: t(TIERS_STATUS_AVAILABLE) }
-                  : status === 'disabled'
-                    ? { tone: 'badge-warn', label: t(TIERS_STATUS_DISABLED) }
-                    : status === 'unavailable'
-                      ? { tone: 'badge-warn', label: t(TIERS_STATUS_UNAVAILABLE) }
-                      : { tone: 'badge-neutral', label: t(TIERS_STATUS_DRAFT) }
-
+              const badge = STATUS_BADGE[resolveTierRowStatus(row.model, models)]
+              const placeholder = !row.model && row.thinkingLevel ? tiersPickModelWithHint(row.thinkingLevel, locale) : t(C.pickModel)
+              const buttonTitle = row.model ? (row.thinkingLevel ? `${row.model} · ${row.thinkingLevel}` : row.model) : placeholder
+              const patch = (p: Partial<TierDraftRow>) => mutateDraft((prev) => prev.map((r) => (r.key === row.key ? { ...r, ...p } : r)))
               return (
                 <div key={row.key} className="tiers-card">
                   <div className="tiers-card-top">
                     <label className="tiers-field">
-                      <span className="tiers-field-label">{t(TIERS_FIELD_ID)}</span>
+                      <span className="tiers-field-label">{t(C.fieldId)}</span>
                       <div className="tiers-id-wrap">
                         <span className="mono tiers-id-prefix">tier/</span>
-                        <input
-                          type="text"
-                          className="input mono"
-                          value={row.id}
-                          disabled={busy}
-                          placeholder={t(TIERS_FIELD_ID_PLACEHOLDER)}
-                          onChange={(e) => updateRow(row.key, { id: e.target.value })}
-                        />
+                        <input type="text" className="input mono" value={row.id} disabled={busy} placeholder={t(C.fieldIdPlaceholder)} onChange={(e) => patch({ id: e.target.value })} />
                       </div>
                     </label>
-
                     <div className="tiers-field">
-                      <span className="tiers-field-label">{t(TIERS_FIELD_MODEL)}</span>
+                      <span className="tiers-field-label">{t(C.fieldModel)}</span>
                       <ModelPickerControl
-                        buttonAriaLabel={`${t(TIERS_FIELD_MODEL)}${row.id.trim() !== '' ? ` · tier/${row.id.trim()}` : ''}`}
+                        buttonAriaLabel={`${t(C.fieldModel)}${row.id.trim() ? ` · tier/${row.id.trim()}` : ''}`}
                         effectiveModel={row.model || undefined}
                         activeThinkingLevel={row.thinkingLevel}
                         placeholderLabel={placeholder}
                         buttonTitle={buttonTitle}
-                        resetLabel={t(TIERS_CLEAR_MODEL)}
-                        resetTitle={t(TIERS_CLEAR_MODEL)}
+                        resetLabel={t(C.clearModel)}
+                        resetTitle={t(C.clearModel)}
                         popoverSide="bottom"
                         enableShortcut={false}
                         allowTiers={false}
                         disabled={busy}
                         copy={pickerCopy}
                         onNotice={(msg, tone) => ctx.notify(msg, tone)}
-                        onApply={(model, level) =>
-                          updateRow(row.key, { model, thinkingLevel: level ?? '' })
-                        }
-                        onResetDefault={() =>
-                          updateRow(row.key, { model: '', thinkingLevel: '' })
-                        }
+                        onApply={(model, level) => patch({ model, thinkingLevel: level ?? '' })}
+                        onResetDefault={() => patch({ model: '', thinkingLevel: '' })}
                       />
                     </div>
-
                     <div className="tiers-card-actions">
-                      <span className={`badge ${statusBadge.tone}`}>{statusBadge.label}</span>
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-sm"
-                        disabled={busy}
-                        onClick={() => removeRow(row.key)}
-                      >
-                        <HelmxIcon name="trash-2" size={13} />
-                        <span>{t(TIERS_REMOVE_ROW)}</span>
+                      <span className={`badge ${badge.tone}`}>{t(badge.copy)}</span>
+                      <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={() => mutateDraft((prev) => prev.filter((r) => r.key !== row.key))}>
+                        <HelmxIcon name="trash-2" size={13} /><span>{t(C.removeRow)}</span>
                       </button>
                     </div>
                   </div>
-
                   <label className="tiers-field">
-                    <span className="tiers-field-label">{t(TIERS_FIELD_DESCRIPTION)}</span>
-                    <input
-                      type="text"
-                      className="input"
-                      maxLength={240}
-                      value={row.description}
-                      disabled={busy}
-                      placeholder={t(TIERS_FIELD_DESCRIPTION_PLACEHOLDER)}
-                      onChange={(e) => updateRow(row.key, { description: e.target.value })}
-                    />
+                    <span className="tiers-field-label">{t(C.fieldDescription)}</span>
+                    <input type="text" className="input" maxLength={240} value={row.description} disabled={busy} placeholder={t(C.fieldDescriptionPlaceholder)} onChange={(e) => patch({ description: e.target.value })} />
                   </label>
                 </div>
               )
@@ -418,118 +177,67 @@ export function TiersManagerScreen(_props: ScreenProps): ReactNode {
         )}
       </ScreenSection>
 
-      <ScreenSection title={t(TIERS_TEMPLATES_SECTION)}>
-        <p className="text-muted text-sm">{t(TIERS_TEMPLATE_SAVE_TITLE)}</p>
+      <ScreenSection title={t(C.templatesSection)}>
+        <p className="text-muted text-sm">{t(C.templateSaveTitle)}</p>
         <div className="tiers-template-form">
-          <label className="tiers-field">
-            <span className="tiers-field-label">{t(TIERS_TEMPLATE_ID_LABEL)}</span>
-            <input
-              type="text"
-              className="input mono"
-              value={tplId}
-              disabled={busy || savedCount === 0}
-              placeholder={t(TIERS_TEMPLATE_ID_PLACEHOLDER)}
-              onChange={(e) => setTplId(e.target.value)}
-            />
-          </label>
-          <label className="tiers-field">
-            <span className="tiers-field-label">{t(TIERS_TEMPLATE_NAME_LABEL)}</span>
-            <input
-              type="text"
-              className="input"
-              value={tplName}
-              disabled={busy || savedCount === 0}
-              placeholder={t(TIERS_TEMPLATE_NAME_PLACEHOLDER)}
-              onChange={(e) => setTplName(e.target.value)}
-            />
-          </label>
-          <label className="tiers-field">
-            <span className="tiers-field-label">{t(TIERS_TEMPLATE_DESC_LABEL)}</span>
-            <input
-              type="text"
-              className="input"
-              value={tplDesc}
-              disabled={busy || savedCount === 0}
-              placeholder={t(TIERS_TEMPLATE_DESC_PLACEHOLDER)}
-              onChange={(e) => setTplDesc(e.target.value)}
-            />
-          </label>
-          <button
-            type="button"
-            className="btn btn-secondary btn-sm"
-            disabled={busy || savedCount === 0}
-            onClick={() => void handleSaveTemplate()}
-          >
-            <HelmxIcon name="layers" size={13} />
-            <span>{t(TIERS_TEMPLATE_SAVE_BTN)}</span>
+          {([['id', C.templateIdLabel, C.templateIdPlaceholder, 'input mono'], ['name', C.templateNameLabel, C.templateNamePlaceholder, 'input'], ['desc', C.templateDescLabel, C.templateDescPlaceholder, 'input']] as const).map(([field, label, ph, cls]) => (
+            <label key={field} className="tiers-field">
+              <span className="tiers-field-label">{t(label)}</span>
+              <input type="text" className={cls} value={tplForm[field]} disabled={busy || savedCount === 0} placeholder={t(ph)} onChange={(e) => setTplForm((prev) => ({ ...prev, [field]: e.target.value }))} />
+            </label>
+          ))}
+          <button type="button" className="btn btn-secondary btn-sm" disabled={busy || savedCount === 0} onClick={() => void handleSaveTemplate()}>
+            <HelmxIcon name="layers" size={13} /><span>{t(C.templateSaveBtn)}</span>
           </button>
         </div>
 
         {parsed.templates.length === 0 ? (
-          <p className="text-subtle text-sm">{t(TIERS_TEMPLATE_EMPTY)}</p>
+          <p className="text-subtle text-sm">{t(C.templateEmpty)}</p>
         ) : (
           <div className="helmx-table-wrap">
             <table className="helmx-table">
               <thead>
-                <tr>
-                  <th>{t(TIERS_COL_TEMPLATE)}</th>
-                  <th>{t(TIERS_COL_ROSTER)}</th>
-                  <th>{t(TIERS_COL_UPDATED)}</th>
-                  <th>{t(TIERS_COL_ACTIONS)}</th>
-                </tr>
+                <tr><th>{t(C.colTemplate)}</th><th>{t(C.colRoster)}</th><th>{t(C.colUpdated)}</th><th>{t(C.colActions)}</th></tr>
               </thead>
               <tbody>
-                {parsed.templates.map((tpl) => {
-                  const isActive = parsed.activeTemplate === tpl.id
-                  const entries = Object.entries(tpl.tiers)
-                  return (
-                    <tr key={tpl.id}>
-                      <td>
-                        <div className="flex-col-xs">
-                          <span className="flex-row">
-                            <strong>{tpl.name}</strong>
-                            {isActive ? (
-                              <span className="badge badge-ok">{t(TIERS_TEMPLATE_ACTIVE_BADGE)}</span>
-                            ) : null}
+                {parsed.templates.map((tpl) => (
+                  <tr key={tpl.id}>
+                    <td>
+                      <div className="flex-col-xs">
+                        <span className="flex-row"><strong>{tpl.name}</strong>{parsed.activeTemplate === tpl.id && <span className="badge badge-ok">{t(C.templateActiveBadge)}</span>}</span>
+                        <span className="mono text-subtle text-xs">{tpl.id}</span>
+                        {tpl.description && <span className="text-subtle text-xs">{tpl.description}</span>}
+                      </div>
+                    </td>
+                    <td>
+                      <div className="tiers-roster-pills">
+                        {Object.entries(tpl.tiers).map(([tid, spec]) => (
+                          <span key={tid} className="badge badge-neutral mono" title={spec.model}>
+                            tier/{tid} → {formatModelShortName(spec.model)}{spec.thinkingLevel ? ` · ${spec.thinkingLevel}` : ''}
                           </span>
-                          <span className="mono text-subtle text-xs">{tpl.id}</span>
-                          {tpl.description ? <span className="text-subtle text-xs">{tpl.description}</span> : null}
-                        </div>
-                      </td>
-                      <td>
-                        <div className="tiers-roster-pills">
-                          {entries.map(([tid, spec]) => (
-                            <span key={tid} className="badge badge-neutral mono" title={spec.model}>
-                              tier/{tid} → {formatModelShortName(spec.model)}
-                              {spec.thinkingLevel ? ` · ${spec.thinkingLevel}` : ''}
-                            </span>
-                          ))}
-                        </div>
-                      </td>
-                      <td className="mono text-xs">{tpl.updatedAt > 0 ? formatTime(tpl.updatedAt) : '—'}</td>
-                      <td>
-                        <div className="tiers-row-actions">
-                          <button
-                            type="button"
-                            className="btn btn-secondary btn-sm"
-                            disabled={busy}
-                            onClick={() => void handleApplyTemplate(tpl)}
-                          >
-                            <span>{t(TIERS_TEMPLATE_APPLY)}</span>
-                          </button>
-                          <button
-                            type="button"
-                            className="btn btn-ghost btn-sm"
-                            disabled={busy}
-                            onClick={() => setPendingDeleteTemplate(tpl)}
-                          >
-                            <span>{t(TIERS_TEMPLATE_DELETE)}</span>
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  )
-                })}
+                        ))}
+                      </div>
+                    </td>
+                    <td className="mono text-xs">{tpl.updatedAt > 0 ? formatTime(tpl.updatedAt) : '—'}</td>
+                    <td>
+                      <div className="tiers-row-actions">
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-sm"
+                          disabled={busy}
+                          onClick={() => void runAction(async () => {
+                            await ctx.callAction('apply_template', { id: tpl.id })
+                            setDraft(tiersRecordToDraftRows(tpl.tiers))
+                            return tiersTemplateAppliedNotice(tpl.name, locale)
+                          })}
+                        >
+                          <span>{t(C.templateApply)}</span>
+                        </button>
+                        <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={() => setPendingDelete(tpl)}><span>{t(C.templateDelete)}</span></button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
@@ -537,69 +245,46 @@ export function TiersManagerScreen(_props: ScreenProps): ReactNode {
       </ScreenSection>
 
       <ConfirmDialog
-        open={pendingDeleteTemplate !== null}
-        onOpenChange={(open) => {
-          if (!open) setPendingDeleteTemplate(null)
-        }}
-        title={t(TIERS_TEMPLATE_DELETE_CONFIRM_TITLE)}
-        description={
-          pendingDeleteTemplate !== null
-            ? tiersTemplateDeleteConfirmBody(pendingDeleteTemplate.name, pendingDeleteTemplate.id, locale)
-            : ''
-        }
-        confirmText={t(TIERS_TEMPLATE_DELETE)}
-        cancelText={t(TIERS_CANCEL)}
+        open={pendingDelete !== null}
+        onOpenChange={(open) => { if (!open) setPendingDelete(null) }}
+        title={t(C.templateDeleteConfirmTitle)}
+        description={pendingDelete ? tiersTemplateDeleteConfirmBody(pendingDelete.name, pendingDelete.id, locale) : ''}
+        confirmText={t(C.templateDelete)}
+        cancelText={t(C.cancel)}
         danger
         onConfirm={() => {
-          const target = pendingDeleteTemplate
-          setPendingDeleteTemplate(null)
-          if (target !== null) void handleDeleteTemplate(target.id)
+          const target = pendingDelete
+          setPendingDelete(null)
+          if (target) void runAction(() => ctx.callAction('delete_template', { id: target.id }).then(() => undefined))
         }}
-        onCancel={() => setPendingDeleteTemplate(null)}
+        onCancel={() => setPendingDelete(null)}
       />
     </Screen>
   )
 }
 
-/** Compact settings panel inside the Plugin Detail Drawer for `builtin:tiers`. */
 export function TiersSettingsPanel(): ReactNode {
   const ctx = usePluginContext()
   const t = usePluginTranslator()
   const rawDoc = usePluginDoc(TIERS_STATE_DOC)
   const parsed = useMemo(() => parseTiersStateDoc(rawDoc), [rawDoc])
-
   if (rawDoc === undefined) {
-    return (
-      <div className="loading-state" role="status">
-        <HelmxIcon name="loader" size={12} className="spin-slow" />
-        <span>{t(TIERS_LOADING)}</span>
-      </div>
-    )
+    return <div className="loading-state" role="status"><HelmxIcon name="loader" size={12} className="spin-slow" /><span>{t(C.loading)}</span></div>
   }
-
-  const activeTemplateObj = parsed.templates.find((tpl) => tpl.id === parsed.activeTemplate)
-
+  const activeTemplate = parsed.templates.find((tpl) => tpl.id === parsed.activeTemplate)
   return (
     <div className="tiers-settings-body">
-      <p className="text-muted text-sm">{t(TIERS_SETTINGS_HINT)}</p>
+      <p className="text-muted text-sm">{t(C.settingsHint)}</p>
       <KvGrid
         items={[
-          { key: t(TIERS_SETTINGS_KV_ACTIVE), value: String(Object.keys(parsed.tiers).length) },
-          { key: t(TIERS_SETTINGS_KV_TEMPLATES), value: String(parsed.templates.length) },
-          {
-            key: t(TIERS_SETTINGS_KV_TEMPLATE),
-            value: activeTemplateObj ? activeTemplateObj.name : t(TIERS_SETTINGS_NONE),
-          },
+          { key: t(C.settingsKvActive), value: String(Object.keys(parsed.tiers).length) },
+          { key: t(C.settingsKvTemplates), value: String(parsed.templates.length) },
+          { key: t(C.settingsKvTemplate), value: activeTemplate ? activeTemplate.name : t(C.settingsNone) },
         ]}
       />
       <div>
-        <button
-          type="button"
-          className="btn btn-secondary btn-sm"
-          onClick={() => ctx.openScreen(`screen:${TIERS_PLUGIN_ID}/${TIERS_SCREEN_ID}`)}
-        >
-          <HelmxIcon name="layers" size={13} />
-          <span>{t(TIERS_SETTINGS_OPEN)}</span>
+        <button type="button" className="btn btn-secondary btn-sm" onClick={() => ctx.openScreen(`screen:${TIERS_PLUGIN_ID}/${TIERS_SCREEN_ID}`)}>
+          <HelmxIcon name="layers" size={13} /><span>{t(C.settingsOpen)}</span>
         </button>
       </div>
     </div>

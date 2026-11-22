@@ -1,47 +1,13 @@
 /**
- * builtin:memory plugin client.tsx components (component exports only, Fast
- * Refresh contract):
- * - ProfileMemorySection: the single-profile long-term memory block (enable
- *   switch + MEMORY.md editor + save) injected into the
- *   builtin:profile/detail-section sub-slot.
- *
- * Data does not depend on public docs (memory content is disk-authoritative):
- * pulled on demand via ctx.callAction('get') for the current profile's
- * content and switch; toggling goes through 'configure', saving through 'set'.
- *
- * Display copy resolves from copy.ts against the active host locale (no
- * independent language state, no localStorage); backend error messages pass
- * through unchanged.
+ * builtin:memory client component (Fast Refresh compliant: component exports only).
+ * Renders per-Profile MEMORY.md editor, toggle switch, and Dream status/controls in the profile detail drawer.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ProfileDetailSlotProps } from '@helmx/protocol'
 import { HelmxIcon, Switch, usePluginContext, usePluginLocale, usePluginTranslator } from '@helmx/plugin-client'
 import {
-  MEMORY_DIRTY_HINT,
-  MEMORY_DISABLED_HINT,
-  MEMORY_DREAM_DRAFT_KEPT,
-  MEMORY_DREAM_GLOBAL_HINT,
-  MEMORY_DREAM_LOAD_FAILED,
-  MEMORY_DREAM_MALFORMED,
-  MEMORY_DREAM_PAUSE,
-  MEMORY_DREAM_REFRESH_FAILED,
-  MEMORY_DREAM_RESUME,
-  MEMORY_DREAM_RUN,
-  MEMORY_DREAM_RUNNING,
-  MEMORY_DREAM_STATUS_LOADING,
-  MEMORY_DREAM_TITLE,
-  MEMORY_LOAD_FAILED,
-  MEMORY_LOADING,
-  MEMORY_NEW_PROFILE_HINT,
-  MEMORY_NOT_LOADED,
-  MEMORY_PLACEHOLDER,
-  MEMORY_RETRY,
-  MEMORY_SAVE,
-  MEMORY_SAVING,
-  MEMORY_SECTION_TITLE,
-  MEMORY_SWITCH_LABEL,
-  MEMORY_TEXTAREA_LABEL,
+  MEMORY_COPY as C,
   memoryCharCount,
   memoryDreamCandidates,
   memoryDreamLastError,
@@ -63,15 +29,37 @@ interface MemoryGetResult {
 
 type Operation = 'load' | 'toggle' | 'save'
 type DreamOperation = 'status' | 'run' | 'auto' | 'refresh'
-/** Outcome of the post-dream editor refresh (the content GET after an applied run). */
-type DreamRefreshOutcome = 'updated' | 'kept-dirty' | 'switched' | 'failed'
-interface Versioned<T> {
+
+interface PanelState {
   profileId: string
   generation: number
-  value: T
+  memory: MemoryGetResult | null
+  draft: string | null
+  error: string | null
+  busy: Operation | null
+  dreamStatus: DreamStatusResult | null
+  dreamNotice: string | null
+  dreamError: string | null
+  dreamBusy: DreamOperation | null
+  dreamRefreshFailed: boolean
 }
 
-/** Single-profile long-term memory block (profile detail drawer sub-slot). */
+const emptyPanel = (profileId: string, generation: number, loading = false): PanelState => ({
+  profileId,
+  generation,
+  memory: null,
+  draft: null,
+  error: null,
+  busy: loading ? 'load' : null,
+  dreamStatus: null,
+  dreamNotice: null,
+  dreamError: null,
+  dreamBusy: loading ? 'status' : null,
+  dreamRefreshFailed: false,
+})
+
+const errorMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err))
+
 export function ProfileMemorySection(props: ProfileDetailSlotProps): ReactNode {
   const ctx = usePluginContext()
   const locale = usePluginLocale()
@@ -79,70 +67,70 @@ export function ProfileMemorySection(props: ProfileDetailSlotProps): ReactNode {
   const { profileId, isNew, disabled } = props
   const effectiveId = isNew ? '' : profileId.trim()
 
-  const [state, setState] = useState<Versioned<MemoryGetResult> | null>(null)
-  const [draft, setDraft] = useState<Versioned<string> | null>(null)
-  const [error, setError] = useState<Versioned<string> | null>(null)
-  const [busy, setBusy] = useState<Versioned<Operation> | null>(null)
-  const [dreamStatus, setDreamStatus] = useState<Versioned<DreamStatusResult> | null>(null)
-  const [dreamNotice, setDreamNotice] = useState<Versioned<string> | null>(null)
-  const [dreamError, setDreamError] = useState<Versioned<string> | null>(null)
-  const [dreamBusy, setDreamBusy] = useState<Versioned<DreamOperation> | null>(null)
-  const [dreamRefreshFailed, setDreamRefreshFailed] = useState<Versioned<true> | null>(null)
+  const [panel, setPanel] = useState<PanelState>(() => emptyPanel('', 0))
   const generation = useRef(0)
-  const requestGeneration = useRef(0)
+  const requestGen = useRef(0)
   const dreamStatusReq = useRef(0)
   const mounted = useRef(false)
   const currentProfile = useRef(effectiveId)
-  const draftRef = useRef<Versioned<string> | null>(null)
-  const stateRef = useRef<Versioned<MemoryGetResult> | null>(null)
+  const panelRef = useRef(panel)
   const callAction = useRef(ctx.callAction)
 
-  // PluginUiView may rebuild ctx as the store updates; update the delegated
-  // references, but never let their identity trigger a reload.
   currentProfile.current = effectiveId
   callAction.current = ctx.callAction
+  panelRef.current = panel
 
-  /** Mirror `state` into a ref so async flows (dream refresh) read the latest known server content. */
-  const applyState = useCallback((next: Versioned<MemoryGetResult> | null): void => {
-    stateRef.current = next
-    setState(next)
+  const isCurrent = useCallback(
+    (targetId: string, token: number, reqToken = requestGen.current) =>
+      mounted.current && currentProfile.current === targetId && generation.current === token && requestGen.current === reqToken,
+    [],
+  )
+
+  const patchPanel = useCallback((targetId: string, token: number, patch: Partial<PanelState> | ((prev: PanelState) => Partial<PanelState>)) => {
+    setPanel((prev) => {
+      if (prev.profileId !== targetId || prev.generation !== token) return prev
+      const next = { ...prev, ...(typeof patch === 'function' ? patch(prev) : patch) }
+      panelRef.current = next
+      return next
+    })
   }, [])
 
-  const isCurrent = useCallback((targetId: string, token: number, requestToken = requestGeneration.current) =>
-    mounted.current && currentProfile.current === targetId && generation.current === token && requestGeneration.current === requestToken,
-  [])
-
-  const load = useCallback(async (targetId: string, token: number, existingRequestToken?: number): Promise<void> => {
-    if (!isCurrent(targetId, token, existingRequestToken)) return
-    // Check the profile lifecycle first: an old entry must not invalidate a
-    // newer profile's load by bumping the request generation.
-    const requestToken = existingRequestToken ?? ++requestGeneration.current
-    setBusy({ profileId: targetId, generation: token, value: 'load' })
-    setError(null)
+  const load = useCallback(async (targetId: string, token: number, existingReq?: number): Promise<void> => {
+    if (!isCurrent(targetId, token, existingReq)) return
+    const req = existingReq ?? ++requestGen.current
+    patchPanel(targetId, token, { busy: 'load', error: null })
     try {
-      const result = await callAction.current('get', { profileId: targetId }) as MemoryGetResult
-      if (!isCurrent(targetId, token, requestToken)) return
-      applyState({ profileId: targetId, generation: token, value: result })
-      const existingDraft = draftRef.current
-      if (existingDraft?.profileId !== targetId || existingDraft.generation !== token) {
-        const nextDraft = { profileId: targetId, generation: token, value: result.content }
-        draftRef.current = nextDraft
-        setDraft(nextDraft)
-      }
+      const result = (await callAction.current('get', { profileId: targetId })) as MemoryGetResult
+      if (!isCurrent(targetId, token, req)) return
+      patchPanel(targetId, token, (prev) => ({ memory: result, draft: prev.draft ?? result.content }))
     } catch (err) {
-      if (!isCurrent(targetId, token, requestToken)) return
-      // If configure succeeded but the refresh failed, the stale `enabled`
-      // value is no longer the current server-side fact either.
-      applyState(null)
-      setError({
-        profileId: targetId,
-        generation: token,
-        value: err instanceof Error ? err.message : String(err),
-      })
+      if (!isCurrent(targetId, token, req)) return
+      patchPanel(targetId, token, { memory: null, error: errorMessage(err) })
     } finally {
-      if (isCurrent(targetId, token, requestToken)) setBusy(null)
+      if (isCurrent(targetId, token, req)) patchPanel(targetId, token, { busy: null })
     }
-  }, [applyState, isCurrent])
+  }, [isCurrent, patchPanel])
+
+  const loadDreamStatus = useCallback(async (targetId: string, token: number): Promise<void> => {
+    if (!isCurrent(targetId, token)) return
+    const req = ++dreamStatusReq.current
+    try {
+      const result = (await callAction.current('dream_status', { profileId: targetId })) as unknown
+      if (!isCurrent(targetId, token) || dreamStatusReq.current !== req) return
+      if (!isDreamStatusResult(result)) {
+        patchPanel(targetId, token, { dreamStatus: null, dreamError: t(C.dreamMalformed) })
+        return
+      }
+      patchPanel(targetId, token, { dreamStatus: result, dreamError: null })
+    } catch (err) {
+      if (!isCurrent(targetId, token) || dreamStatusReq.current !== req) return
+      patchPanel(targetId, token, { dreamStatus: null, dreamError: errorMessage(err) })
+    } finally {
+      if (isCurrent(targetId, token) && dreamStatusReq.current === req) {
+        patchPanel(targetId, token, (prev) => (prev.dreamBusy === 'status' ? { dreamBusy: null } : {}))
+      }
+    }
+  }, [isCurrent, patchPanel, t])
 
   useEffect(() => {
     mounted.current = true
@@ -152,288 +140,179 @@ export function ProfileMemorySection(props: ProfileDetailSlotProps): ReactNode {
     }
   }, [])
 
-  /** Dream sub-block: status fetch / manual run / pause-resume auto consolidation. */
-  const loadDreamStatus = useCallback(async (targetId: string, token: number): Promise<void> => {
-    if (!isCurrent(targetId, token)) return
-    // Sequence dream status requests: only the latest response may paint, so a
-    // slow earlier fetch cannot roll the meta row back to stale facts.
-    const req = ++dreamStatusReq.current
-    try {
-      const result = await callAction.current('dream_status', { profileId: targetId }) as unknown
-      if (!isCurrent(targetId, token) || dreamStatusReq.current !== req) return
-      if (!isDreamStatusResult(result)) {
-        // Guard the consumed boundary: a malformed payload must surface as an
-        // honest "status unavailable" state, never crash the memory section.
-        setDreamStatus(null)
-        setDreamError({ profileId: targetId, generation: token, value: t(MEMORY_DREAM_MALFORMED) })
-        return
-      }
-      setDreamStatus({ profileId: targetId, generation: token, value: result })
-      setDreamError(null)
-    } catch (err) {
-      if (!isCurrent(targetId, token) || dreamStatusReq.current !== req) return
-      setDreamStatus(null)
-      setDreamError({ profileId: targetId, generation: token, value: err instanceof Error ? err.message : String(err) })
-    } finally {
-      if (isCurrent(targetId, token) && dreamStatusReq.current === req) {
-        setDreamBusy((current) => (current?.value === 'status' ? null : current))
-      }
-    }
-  }, [isCurrent, t])
-
   useEffect(() => {
-    if (effectiveId === '') {
-      applyState(null)
-      setError(null)
-      setBusy(null)
-      draftRef.current = null
-      setDraft(null)
-      setDreamStatus(null)
-      setDreamNotice(null)
-      setDreamError(null)
-      setDreamBusy(null)
-      setDreamRefreshFailed(null)
-      return
-    }
-
     const token = ++generation.current
-    applyState(null)
-    setError(null)
-    setBusy({ profileId: effectiveId, generation: token, value: 'load' })
-    draftRef.current = null
-    setDraft(null)
-    setDreamStatus(null)
-    setDreamNotice(null)
-    setDreamError(null)
-    setDreamBusy({ profileId: effectiveId, generation: token, value: 'status' })
-    setDreamRefreshFailed(null)
-    void load(effectiveId, token)
-    void loadDreamStatus(effectiveId, token)
-
+    const initial = emptyPanel(effectiveId, token, effectiveId !== '')
+    panelRef.current = initial
+    setPanel(initial)
+    if (effectiveId !== '') {
+      void load(effectiveId, token)
+      void loadDreamStatus(effectiveId, token)
+    }
     return () => {
       if (generation.current === token) generation.current += 1
     }
-  }, [effectiveId, applyState, load, loadDreamStatus])
+  }, [effectiveId, load, loadDreamStatus])
 
-  /**
-   * After a dream applied on the server, refresh the editor baseline: a clean
-   * editor follows the new content, while a dirty draft (unsaved keystrokes)
-   * is preserved — the run notice explains that saving it would replace the
-   * organized memory. A failed refresh never fabricates content: it raises the
-   * explicit refresh-failed state so the user can retry the reload.
-   */
-  const refreshMemoryAfterDream = useCallback(
-    async (targetId: string, token: number): Promise<DreamRefreshOutcome> => {
-      try {
-        const fresh = await callAction.current('get', { profileId: targetId }) as MemoryGetResult
-        if (!isCurrent(targetId, token)) return 'switched'
-        const known = stateRef.current
-        const draft = draftRef.current
-        const dirty =
-          known !== null &&
-          known.profileId === targetId &&
-          known.generation === token &&
-          draft?.profileId === targetId &&
-          draft.generation === token &&
-          draft.value !== known.value.content
-        applyState({ profileId: targetId, generation: token, value: fresh })
-        setDreamRefreshFailed(null)
-        if (dirty) return 'kept-dirty'
-        const nextDraft = { profileId: targetId, generation: token, value: fresh.content }
-        draftRef.current = nextDraft
-        setDraft(nextDraft)
-        return 'updated'
-      } catch {
-        if (!isCurrent(targetId, token)) return 'switched'
-        setDreamRefreshFailed({ profileId: targetId, generation: token, value: true })
-        return 'failed'
-      }
-    },
-    [applyState, isCurrent],
-  )
+  const refreshMemoryAfterDream = useCallback(async (targetId: string, token: number): Promise<'updated' | 'kept-dirty' | 'switched' | 'failed'> => {
+    try {
+      const fresh = (await callAction.current('get', { profileId: targetId })) as MemoryGetResult
+      if (!isCurrent(targetId, token)) return 'switched'
+      const cur = panelRef.current
+      const dirty = cur.profileId === targetId && cur.generation === token && cur.memory !== null && cur.draft !== null && cur.draft !== cur.memory.content
+      patchPanel(targetId, token, { memory: fresh, dreamRefreshFailed: false, ...(dirty ? {} : { draft: fresh.content }) })
+      return dirty ? 'kept-dirty' : 'updated'
+    } catch {
+      if (!isCurrent(targetId, token)) return 'switched'
+      patchPanel(targetId, token, { dreamRefreshFailed: true })
+      return 'failed'
+    }
+  }, [isCurrent, patchPanel])
+
+  const view = panel.profileId === effectiveId && panel.generation === generation.current ? panel : emptyPanel(effectiveId, generation.current)
 
   const handleDreamRun = async () => {
     const targetId = effectiveId
     const token = generation.current
-    // Bidirectional exclusion with save/toggle/load: the run spans the model
-    // call, the CAS write-back and the content refresh — forking a memory
-    // write into that window would race the refresh baseline.
-    if (targetId === '' || dreamBusy !== null || busy !== null) return
-    setDreamBusy({ profileId: targetId, generation: token, value: 'run' })
-    setDreamNotice(null)
-    setDreamError(null)
+    if (targetId === '' || view.dreamBusy !== null || view.busy !== null) return
+    patchPanel(targetId, token, { dreamBusy: 'run', dreamNotice: null, dreamError: null })
     try {
-      const result = await callAction.current('dream', { profileId: targetId }) as DreamRunResult
+      const result = (await callAction.current('dream', { profileId: targetId })) as DreamRunResult
       if (!isCurrent(targetId, token)) return
       let notice = memoryDreamRunResult(result, locale)
-      if (result.applied) {
-        const outcome = await refreshMemoryAfterDream(targetId, token)
-        if (outcome === 'kept-dirty') notice = `${notice} ${t(MEMORY_DREAM_DRAFT_KEPT)}`
+      if (result.applied && (await refreshMemoryAfterDream(targetId, token)) === 'kept-dirty') {
+        notice = `${notice} ${t(C.dreamDraftKept)}`
       }
       if (!isCurrent(targetId, token)) return
-      setDreamNotice({ profileId: targetId, generation: token, value: notice })
+      patchPanel(targetId, token, { dreamNotice: notice })
       await loadDreamStatus(targetId, token)
     } catch (err) {
       if (!isCurrent(targetId, token)) return
-      setDreamError({ profileId: targetId, generation: token, value: err instanceof Error ? err.message : String(err) })
+      patchPanel(targetId, token, { dreamError: errorMessage(err) })
     } finally {
-      if (isCurrent(targetId, token)) setDreamBusy(null)
+      if (isCurrent(targetId, token)) patchPanel(targetId, token, { dreamBusy: null })
     }
   }
 
-  /** Retry the post-dream content reload after a refresh failure (plain read, same dirty-draft protection). */
   const handleDreamRefreshRetry = async () => {
     const targetId = effectiveId
     const token = generation.current
-    if (targetId === '' || dreamBusy !== null || busy !== null) return
-    setDreamBusy({ profileId: targetId, generation: token, value: 'refresh' })
+    if (targetId === '' || view.dreamBusy !== null || view.busy !== null) return
+    patchPanel(targetId, token, { dreamBusy: 'refresh' })
     try {
       await refreshMemoryAfterDream(targetId, token)
     } finally {
-      if (isCurrent(targetId, token)) setDreamBusy(null)
+      if (isCurrent(targetId, token)) patchPanel(targetId, token, { dreamBusy: null })
     }
   }
 
   const handleDreamAutoToggle = async () => {
     const targetId = effectiveId
     const token = generation.current
-    const currentConfig = dreamStatus?.profileId === targetId && dreamStatus.generation === token ? dreamStatus.value.config : null
-    if (targetId === '' || currentConfig === null || dreamBusy !== null) return
-    setDreamBusy({ profileId: targetId, generation: token, value: 'auto' })
-    setDreamNotice(null)
-    setDreamError(null)
+    if (targetId === '' || view.dreamStatus === null || view.dreamBusy !== null) return
+    patchPanel(targetId, token, { dreamBusy: 'auto', dreamNotice: null, dreamError: null })
     try {
-      await callAction.current('dream_configure', { enabled: !currentConfig.enabled })
+      await callAction.current('dream_configure', { enabled: !view.dreamStatus.config.enabled })
       await loadDreamStatus(targetId, token)
     } catch (err) {
       if (!isCurrent(targetId, token)) return
-      setDreamError({ profileId: targetId, generation: token, value: err instanceof Error ? err.message : String(err) })
+      patchPanel(targetId, token, { dreamError: errorMessage(err) })
     } finally {
-      if (isCurrent(targetId, token)) setDreamBusy(null)
+      if (isCurrent(targetId, token)) patchPanel(targetId, token, { dreamBusy: null })
     }
   }
 
   const handleToggle = async (next: boolean) => {
     const targetId = effectiveId
     const token = generation.current
-    if (targetId === '' || state?.profileId !== targetId || state.generation !== token || busy !== null || dreamBusy !== null) return
-    const requestToken = ++requestGeneration.current
-    setBusy({ profileId: targetId, generation: token, value: 'toggle' })
-    setError(null)
+    if (targetId === '' || view.memory === null || view.busy !== null || view.dreamBusy !== null) return
+    const req = ++requestGen.current
+    patchPanel(targetId, token, { busy: 'toggle', error: null })
     try {
       await callAction.current('configure', { profileId: targetId, enabled: next })
-      if (!isCurrent(targetId, token, requestToken)) return
-      await load(targetId, token, requestToken)
-      // The switch takes effect immediately; content editing saves
-      // independently and never rolls back with the switch.
+      if (!isCurrent(targetId, token, req)) return
+      await load(targetId, token, req)
     } catch (err) {
-      if (!isCurrent(targetId, token, requestToken)) return
-      setError({ profileId: targetId, generation: token, value: err instanceof Error ? err.message : String(err) })
+      if (!isCurrent(targetId, token, req)) return
+      patchPanel(targetId, token, { error: errorMessage(err) })
     } finally {
-      if (isCurrent(targetId, token, requestToken)) setBusy(null)
+      if (isCurrent(targetId, token, req)) patchPanel(targetId, token, { busy: null })
     }
   }
 
   const handleSave = async () => {
     const targetId = effectiveId
     const token = generation.current
-    const submittedText = draft?.profileId === targetId && draft.generation === token ? draft.value : null
-    if (targetId === '' || submittedText === null || busy !== null || dreamBusy !== null) return
-    const requestToken = ++requestGeneration.current
-    setBusy({ profileId: targetId, generation: token, value: 'save' })
-    setError(null)
+    const submittedText = view.draft
+    if (targetId === '' || submittedText === null || view.busy !== null || view.dreamBusy !== null) return
+    const req = ++requestGen.current
+    patchPanel(targetId, token, { busy: 'save', error: null })
     try {
       await callAction.current('set', { profileId: targetId, text: submittedText, mode: 'replace' })
-      if (!isCurrent(targetId, token, requestToken)) return
-      const fresh = await callAction.current('get', { profileId: targetId }) as MemoryGetResult
-      if (!isCurrent(targetId, token, requestToken)) return
-      applyState({ profileId: targetId, generation: token, value: fresh })
-      const currentDraft = draftRef.current
-      if (
-        currentDraft?.profileId === targetId &&
-        currentDraft.generation === token &&
-        currentDraft.value === submittedText
-      ) {
-        const nextDraft = { profileId: targetId, generation: token, value: fresh.content }
-        draftRef.current = nextDraft
-        setDraft(nextDraft)
-      }
+      if (!isCurrent(targetId, token, req)) return
+      const fresh = (await callAction.current('get', { profileId: targetId })) as MemoryGetResult
+      if (!isCurrent(targetId, token, req)) return
+      patchPanel(targetId, token, (prev) => ({
+        memory: fresh,
+        ...(prev.draft === submittedText ? { draft: fresh.content } : {}),
+      }))
     } catch (err) {
-      if (!isCurrent(targetId, token, requestToken)) return
-      setError({ profileId: targetId, generation: token, value: err instanceof Error ? err.message : String(err) })
+      if (!isCurrent(targetId, token, req)) return
+      patchPanel(targetId, token, { error: errorMessage(err) })
     } finally {
-      if (isCurrent(targetId, token, requestToken)) setBusy(null)
+      if (isCurrent(targetId, token, req)) patchPanel(targetId, token, { busy: null })
     }
   }
 
   if (isNew) {
     return (
       <section className="section-flat">
-        <div className="section-flat-header">
-          <span className="section-flat-title">{t(MEMORY_SECTION_TITLE)}</span>
-        </div>
-        <div className="text-subtle text-xs">{t(MEMORY_NEW_PROFILE_HINT)}</div>
+        <div className="section-flat-header"><span className="section-flat-title">{t(C.sectionTitle)}</span></div>
+        <div className="text-subtle text-xs">{t(C.newProfileHint)}</div>
       </section>
     )
   }
-
   if (effectiveId === '') return null
 
   const token = generation.current
-  const currentState = state?.profileId === effectiveId && state.generation === token ? state.value : null
-  const currentDraft = draft?.profileId === effectiveId && draft.generation === token ? draft.value : null
-  const currentError = error?.profileId === effectiveId && error.generation === token ? error.value : null
-  const currentBusy = busy?.profileId === effectiveId && busy.generation === token ? busy.value : null
-  const currentDreamBusy = dreamBusy?.profileId === effectiveId && dreamBusy.generation === token ? dreamBusy.value : null
-  // While a dream run spans the model call, CAS write-back and the content
-  // refresh, Save and the enable switch must not fork a concurrent memory
-  // write into that window; the textarea itself stays editable (drafts form
-  // freely and are protected by the refresh's dirty-draft preservation).
-  const dreamLocksContent = currentDreamBusy === 'run' || currentDreamBusy === 'refresh'
-  const effectiveDraft = currentDraft ?? currentState?.content ?? ''
-  const dirty = currentDraft !== null && currentDraft !== currentState?.content
+  const dreamLocksContent = view.dreamBusy === 'run' || view.dreamBusy === 'refresh'
+  const effectiveDraft = view.draft ?? view.memory?.content ?? ''
+  const dirty = view.draft !== null && view.draft !== view.memory?.content
 
   return (
     <section className="section-flat">
       <div className="section-flat-header memory-section-header">
-        <span className="section-flat-title">{t(MEMORY_SECTION_TITLE)}</span>
-        {currentState !== null && (
+        <span className="section-flat-title">{t(C.sectionTitle)}</span>
+        {view.memory !== null && (
           <Switch
-            checked={currentState.enabled}
-            disabled={disabled || currentBusy !== null || dreamLocksContent}
+            checked={view.memory.enabled}
+            disabled={disabled || view.busy !== null || dreamLocksContent}
             onChange={(next) => void handleToggle(next)}
-            label={t(MEMORY_SWITCH_LABEL)}
+            label={t(C.switchLabel)}
           />
         )}
       </div>
 
-      {currentError !== null && (
-        <div className="badge badge-warn memory-section-error" role="alert">
-          <span>{currentError}</span>
-        </div>
+      {view.error !== null && (
+        <div className="badge badge-warn memory-section-error" role="alert"><span>{view.error}</span></div>
       )}
 
-      {currentState === null ? (
+      {view.memory === null ? (
         <div className="memory-section-load">
-          {currentBusy === 'load' && <HelmxIcon name="loader" size={12} className="spin-slow" />}
-          {currentError === null ? (
-            <span>{currentBusy === 'load' ? t(MEMORY_LOADING) : t(MEMORY_NOT_LOADED)}</span>
+          {view.busy === 'load' && <HelmxIcon name="loader" size={12} className="spin-slow" />}
+          {view.error === null ? (
+            <span>{view.busy === 'load' ? t(C.loading) : t(C.notLoaded)}</span>
           ) : (
             <>
-              <span>{t(MEMORY_LOAD_FAILED)}</span>
-              <button
-                type="button"
-                className="btn btn-secondary btn-sm"
-                disabled={currentBusy !== null}
-                onClick={() => void load(effectiveId, token)}
-              >
-                {t(MEMORY_RETRY)}
+              <span>{t(C.loadFailed)}</span>
+              <button type="button" className="btn btn-secondary btn-sm" disabled={view.busy !== null} onClick={() => void load(effectiveId, token)}>
+                {t(C.retry)}
               </button>
             </>
           )}
         </div>
-      ) : !currentState.enabled ? (
-        <div className="text-subtle text-xs">{t(MEMORY_DISABLED_HINT)}</div>
+      ) : !view.memory.enabled ? (
+        <div className="text-subtle text-xs">{t(C.disabledHint)}</div>
       ) : (
         <>
           <div className="flex-row-between memory-section-meta">
@@ -445,40 +324,33 @@ export function ProfileMemorySection(props: ProfileDetailSlotProps): ReactNode {
           <textarea
             className="input mono memory-section-textarea"
             rows={8}
-            placeholder={t(MEMORY_PLACEHOLDER)}
+            placeholder={t(C.placeholder)}
             value={effectiveDraft}
             disabled={disabled}
-            onChange={(e) => {
-              const nextDraft = { profileId: effectiveId, generation: token, value: e.target.value }
-              draftRef.current = nextDraft
-              setDraft(nextDraft)
-            }}
-            aria-label={t(MEMORY_TEXTAREA_LABEL)}
+            onChange={(e) => patchPanel(effectiveId, token, { draft: e.target.value })}
+            aria-label={t(C.textareaLabel)}
           />
           <div className="flex-row memory-section-actions">
             <button
               type="button"
               className="btn btn-primary btn-sm"
-              disabled={disabled || currentBusy !== null || dreamLocksContent || !dirty}
+              disabled={disabled || view.busy !== null || dreamLocksContent || !dirty}
               onClick={() => void handleSave()}
             >
-              {currentBusy === 'save' ? <HelmxIcon name="loader" size={13} className="spin-slow" /> : <HelmxIcon name="save" size={13} />}
-              <span>{currentBusy === 'save' ? t(MEMORY_SAVING) : t(MEMORY_SAVE)}</span>
+              {view.busy === 'save' ? <HelmxIcon name="loader" size={13} className="spin-slow" /> : <HelmxIcon name="save" size={13} />}
+              <span>{view.busy === 'save' ? t(C.saving) : t(C.save)}</span>
             </button>
-            {dirty && <span className="text-subtle text-xs">{t(MEMORY_DIRTY_HINT)}</span>}
+            {dirty && <span className="text-subtle text-xs">{t(C.dirtyHint)}</span>}
           </div>
           <MemoryDreamBlock
             targetId={effectiveId}
-            token={token}
             disabled={disabled}
-            status={dreamStatus?.profileId === effectiveId && dreamStatus.generation === token ? dreamStatus.value : null}
-            notice={dreamNotice?.profileId === effectiveId && dreamNotice.generation === token ? dreamNotice.value : null}
-            error={dreamError?.profileId === effectiveId && dreamError.generation === token ? dreamError.value : null}
-            busy={currentDreamBusy}
-            refreshFailed={
-              dreamRefreshFailed !== null && dreamRefreshFailed.profileId === effectiveId && dreamRefreshFailed.generation === token
-            }
-            memoryBusy={currentBusy !== null}
+            status={view.dreamStatus}
+            notice={view.dreamNotice}
+            error={view.dreamError}
+            busy={view.dreamBusy}
+            refreshFailed={view.dreamRefreshFailed}
+            memoryBusy={view.busy !== null}
             onRun={() => void handleDreamRun()}
             onAutoToggle={() => void handleDreamAutoToggle()}
             onRefreshRetry={() => void handleDreamRefreshRetry()}
@@ -491,7 +363,6 @@ export function ProfileMemorySection(props: ProfileDetailSlotProps): ReactNode {
 
 interface MemoryDreamBlockProps {
   targetId: string
-  token: number
   disabled: boolean
   status: DreamStatusResult | null
   notice: string | null
@@ -504,16 +375,12 @@ interface MemoryDreamBlockProps {
   onRefreshRetry: () => void
 }
 
-/** Dream sub-block: schedule line + status pills + manual run / pause-resume buttons. */
 function MemoryDreamBlock(props: MemoryDreamBlockProps): ReactNode {
   const t = usePluginTranslator()
   const locale = usePluginLocale()
   const { status, notice, error, busy, disabled } = props
   const row = status?.profiles.find((p) => p.profileId === props.targetId)
   const autoConfig = status?.config ?? null
-  // While the status is still loading the run button stays disabled; once the
-  // status read has failed the copy explicitly promises that a manual run
-  // still works, so the button must be usable in that state too.
   const statusLoading = status === null && error === null
   const lastError = row?.lastRun?.error
   return (
@@ -521,7 +388,7 @@ function MemoryDreamBlock(props: MemoryDreamBlockProps): ReactNode {
       <div className="flex-row-between memory-section-header">
         <span className="text-subtle text-xs memory-dream-title">
           <HelmxIcon name="moon-star" size={12} />
-          <span>{t(MEMORY_DREAM_TITLE)}</span>
+          <span>{t(C.dreamTitle)}</span>
         </span>
         <div className="flex-row memory-dream-actions">
           <button
@@ -531,16 +398,11 @@ function MemoryDreamBlock(props: MemoryDreamBlockProps): ReactNode {
             onClick={props.onRun}
           >
             {busy === 'run' ? <HelmxIcon name="loader" size={13} className="spin-slow" /> : <HelmxIcon name="moon-star" size={13} />}
-            <span>{busy === 'run' ? t(MEMORY_DREAM_RUNNING) : t(MEMORY_DREAM_RUN)}</span>
+            <span>{busy === 'run' ? t(C.dreamRunning) : t(C.dreamRun)}</span>
           </button>
           {autoConfig !== null && (
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
-              disabled={disabled || busy !== null}
-              onClick={props.onAutoToggle}
-            >
-              <span>{autoConfig.enabled ? t(MEMORY_DREAM_PAUSE) : t(MEMORY_DREAM_RESUME)}</span>
+            <button type="button" className="btn btn-ghost btn-sm" disabled={disabled || busy !== null} onClick={props.onAutoToggle}>
+              <span>{autoConfig.enabled ? t(C.dreamPause) : t(C.dreamResume)}</span>
             </button>
           )}
         </div>
@@ -549,41 +411,26 @@ function MemoryDreamBlock(props: MemoryDreamBlockProps): ReactNode {
         {autoConfig !== null ? (
           <>
             <span className="mono">{memoryDreamSchedule(autoConfig, locale)}</span>
-            {autoConfig.enabled && status?.nextRunAt !== undefined && (
-              <span className="text-subtle">{memoryDreamNextRun(status.nextRunAt, locale)}</span>
-            )}
+            {autoConfig.enabled && status?.nextRunAt !== undefined && <span className="text-subtle">{memoryDreamNextRun(status.nextRunAt, locale)}</span>}
             {row !== undefined && <span className="text-subtle">{memoryDreamCandidates(row.candidateCount, locale)}</span>}
             {row?.lastRun !== undefined && <span className="text-subtle">{memoryDreamLastRun(row.lastRun, locale)}</span>}
           </>
-        ) : error !== null ? (
-          <span className="text-subtle">{t(MEMORY_DREAM_LOAD_FAILED)}</span>
         ) : (
-          <span className="text-subtle">{t(MEMORY_DREAM_STATUS_LOADING)}</span>
+          <span className="text-subtle">{t(error !== null ? C.dreamLoadFailed : C.dreamStatusLoading)}</span>
         )}
       </div>
-      {lastError !== undefined && lastError !== '' && (
-        <div className="text-subtle text-xs memory-dream-diag">{memoryDreamLastError(lastError, locale)}</div>
-      )}
+      {lastError && <div className="text-subtle text-xs memory-dream-diag">{memoryDreamLastError(lastError, locale)}</div>}
       {props.refreshFailed && (
         <div className="memory-dream-refresh-error" role="alert">
-          <span>{t(MEMORY_DREAM_REFRESH_FAILED)}</span>
-          <button
-            type="button"
-            className="btn btn-secondary btn-sm"
-            disabled={disabled || busy !== null || props.memoryBusy}
-            onClick={props.onRefreshRetry}
-          >
-            {t(MEMORY_RETRY)}
+          <span>{t(C.dreamRefreshFailed)}</span>
+          <button type="button" className="btn btn-secondary btn-sm" disabled={disabled || busy !== null || props.memoryBusy} onClick={props.onRefreshRetry}>
+            {t(C.retry)}
           </button>
         </div>
       )}
       {notice !== null && <div className="text-subtle text-xs memory-dream-notice">{notice}</div>}
-      {error !== null && (
-        <div className="badge badge-warn memory-section-error" role="alert">
-          <span>{error}</span>
-        </div>
-      )}
-      <div className="text-subtle text-xs">{t(MEMORY_DREAM_GLOBAL_HINT)}</div>
+      {error !== null && <div className="badge badge-warn memory-section-error" role="alert"><span>{error}</span></div>}
+      <div className="text-subtle text-xs">{t(C.dreamGlobalHint)}</div>
     </div>
   )
 }

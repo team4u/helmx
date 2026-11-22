@@ -76,15 +76,12 @@ function makeBackend(): PluginHostBackend & {
       throw new HelmxError('unsupported', 'test', 400)
     },
     async cancelAsk() {},
-    registerAskSeqResolver() {
-      return () => {}
-    },
     onEvent() {
       return () => {}
     },
     async abortConversation() {},
-    getConversationOwnership(): 'helmx' | 'bot' | 'human' {
-      return 'human'
+    getConversationOwnership() {
+      return 'human' as const
     },
     async spawnAgent() {
       return {}
