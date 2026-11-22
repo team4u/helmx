@@ -20,7 +20,7 @@ import {
   isLifecycleTeardownError,
   type BoardPost,
   type CollabGroupRecord,
-  type MemberLiveState,
+  type MemberLiveSnapshot,
   type SwarmCoordinator,
 } from './contracts.js'
 import {
@@ -57,7 +57,7 @@ export interface WakeDispatcherPorts {
   ) => Promise<T>
   readonly reportLockPath: (groupId: string) => string
   readonly wakeupLockPath: (groupId: string, memberName: string) => string
-  readonly resolveMemberLive: (conversationId: number) => { liveState: MemberLiveState; model?: string }
+  readonly resolveMemberLive: (conversationId: number) => MemberLiveSnapshot
   readonly getBusyActiveMemberNames: (group: CollabGroupRecord, excludeConvId?: number) => Set<string>
 }
 

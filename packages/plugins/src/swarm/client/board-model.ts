@@ -62,6 +62,8 @@ export interface GroupMemberState {
   lastWakeTaskSeq?: number
   silentExitNudgeSeq?: number
   lastOutboundEdge?: { seq: number; to: string[]; kind: BoardPostKind }
+  runDurationMs?: number
+  turnCount?: number
   createdAt: number
   archivedAt?: number
 }
@@ -69,6 +71,10 @@ export interface GroupMemberState {
 export interface BoardMemberView extends GroupMemberState {
   liveState: MemberLiveState
   model?: string
+  runDurationMs?: number
+  runStartedAt?: number
+  pendingAskSince?: number
+  turnCount?: number
 }
 
 export interface WorktreeHandoffSnapshot {
@@ -251,6 +257,14 @@ function isFiniteNumber(v: unknown): v is number {
   return typeof v === 'number' && Number.isFinite(v)
 }
 
+function parseOptionalNonNegFinite(v: unknown): number | undefined {
+  return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : undefined
+}
+
+function parseOptionalNonNegInt(v: unknown): number | undefined {
+  return isNonNegInt(v) ? v : undefined
+}
+
 function isNonEmptyStringArray(v: unknown): v is string[] {
   return Array.isArray(v) && v.every(isNonEmptyString)
 }
@@ -385,6 +399,10 @@ function parseMemberViewStrict(m: unknown): BoardMemberView | undefined {
   if (m.model !== undefined && typeof m.model !== 'string') return undefined
   const lastOutboundEdge = parseMemberOutboundEdge(m.lastOutboundEdge)
   if (lastOutboundEdge === 'invalid') return undefined
+  const runDurationMs = parseOptionalNonNegFinite(m.runDurationMs)
+  const runStartedAt = parseOptionalNonNegFinite(m.runStartedAt)
+  const pendingAskSince = parseOptionalNonNegFinite(m.pendingAskSince)
+  const turnCount = parseOptionalNonNegInt(m.turnCount)
 
   return {
     name: m.name,
@@ -403,6 +421,10 @@ function parseMemberViewStrict(m: unknown): BoardMemberView | undefined {
     ...(m.lastWakeTaskSeq !== undefined ? { lastWakeTaskSeq: m.lastWakeTaskSeq } : {}),
     ...(m.silentExitNudgeSeq !== undefined ? { silentExitNudgeSeq: m.silentExitNudgeSeq } : {}),
     ...(lastOutboundEdge !== undefined ? { lastOutboundEdge } : {}),
+    ...(runDurationMs !== undefined ? { runDurationMs } : {}),
+    ...(runStartedAt !== undefined ? { runStartedAt } : {}),
+    ...(pendingAskSince !== undefined ? { pendingAskSince } : {}),
+    ...(turnCount !== undefined ? { turnCount } : {}),
     createdAt: m.createdAt,
     ...(m.archivedAt !== undefined ? { archivedAt: m.archivedAt } : {}),
     liveState: m.liveState as MemberLiveState,
