@@ -1,49 +1,28 @@
 /**
  * Update orchestration: the launcher-owned commit sequence with candidate readiness gating and
- * rollback. Product policy lives here (cooldowns, stop-before-commit ordering, restart, blocked
- * bookkeeping); every generic mechanism — registry lookup, verified staging, immutable
- * `releases/`, `current.json`/`update-blocked.json` state, `upgrade.lock` — comes from
- * the shared update engine in `@helmx/env-io`.
+ * rollback. Product policy lives here (activity busy gate, CLI usage errors); every generic
+ * mechanism — registry lookup, verified staging, immutable `releases/`, `current.json` /
+ * `update-blocked.json` state, `upgrade.lock`, cooldown check, and commit→start→rollback —
+ * comes from `@helmx/env-io`.
  *
- * Flow (engine `upgrade.lock` critical section; the stop→commit→start tail additionally holds
- *   `lifecycle.lock` so start/stop/update never interleave):
+ * Flow (`upgrade.lock` critical section; stop→commit→start holds `lifecycle.lock` atomically):
  *   resolve target (explicit --version | registry dist-tag) → blocked-cooldown gate
- *   → same-version no-op → downgrade guard
- *   → stage candidate through the engine (SRI-verified download + safe unpack + npm
- *     install + `start.mjs check` + `manifest.nodeEngines` gate; the staged candidate is cached
- *     and survives a deferral)
- *   → [if running] activity check (inside the lifecycle lock, immediately
- *     before the stop decision — see `activityGateOf`) → graceful stop (identity-verified;
- *     failure aborts before any state change)
- *   → atomically commit `current.json` (engine state ops)
- *   → [if it was running or bootstrapping] start the candidate and gate on its own listen line
- *       └─ on failure: restore the previous `current.json` verbatim, restart the previous
- *          release, write `update-blocked.json`, and surface the full diagnostic chain (never a
- *          silent fallback)
- *   → clear any blocked marker on success.
- *
- * Process control goes through the injected `HubLifecycleDriver` when present (the supervised
- * `run` command holds its own `ChildProcess`); the default driver is the pid-record flow above.
- *
- * Two Hubs are never started against the same data directory concurrently: the stop completes
- * before the commit, and the start path itself refuses to double-start. The short stop→start
- * window is honest downtime, not a zero-downtime canary.
+ *   → same-version no-op → downgrade guard → stage candidate (survives deferral)
+ *   → [if running] activity check → graceful stop (control channel first, pid-proof fallback)
+ *   → `commitAndSwitchHubRelease` (atomic `current.json` → start candidate → rollback + blocked on failure).
  */
 import { compareStrictSemver, isStrictSemver, type HubActivityCounts } from '@helmx/protocol';
 import {
-  clearBlockedRelease,
-  deleteCurrentRelease,
+  commitAndSwitchHubRelease,
+  isBlockedVersionActive,
   readBlockedRelease,
   readCurrentRelease,
+  resolveBlockedCooldownMs,
   withUpdateLock,
-  writeBlockedRelease,
-  writeCurrentRelease,
-  type CurrentReleaseRecord,
 } from '@helmx/env-io';
 import { defaultHubUpdateCore, stageHubRelease, type HubUpdateCore } from '@helmx/env-io/hub-payload';
-import { defaultHubDataDir, pathsOf, resolveBlockedCooldownMs } from './layout.js';
+import { defaultHubDataDir, pathsOf } from './layout.js';
 import {
-  isBlockedActive,
   readLaunchConfig,
   readPidRecord,
   resolveEffectiveLaunchConfig,
@@ -72,31 +51,10 @@ export interface PerformUpdateOptions {
   fetchFn?: typeof fetch;
   /** Test seam: port-shaped fake standing in for the real adapter (registry/npm seams). */
   core?: HubUpdateCore;
-  /**
-   * Lifecycle driver overriding the record-based detached start/stop (the supervised `run`
-   * command injects one that holds the spawned `ChildProcess`). Absent = default record flow.
-   */
-  driver?: HubLifecycleDriver;
   healthTimeoutMs?: number;
   pollMs?: number;
   stopTimeoutMs?: number;
   payloadCheckTimeoutMs?: number;
-}
-
-/**
- * Process-control seam behind the update orchestration. The default implementation talks to the
- * pid record (detached hubs started by earlier launcher runs); a supervising caller injects its
- * own so every stop/start/rollback in the sequence targets the process it holds.
- */
-export interface HubLifecycleDriver {
-  /** Whether a hub controlled by this driver is currently running. */
-  isRunning(): Promise<boolean>;
-  /** Whether the supervisor still holds the child handle for this wrapper pid. */
-  ownsProcess(pid: number): boolean;
-  /** Stop that hub (graceful, then escalated). Must throw on failure. */
-  stop(): Promise<void>;
-  /** Start the committed release and gate on its readiness. */
-  start(): Promise<{ pid: number; url: string }>;
 }
 
 export interface UpdateOutcome {
@@ -144,12 +102,8 @@ async function resolveTargetVersion(options: PerformUpdateOptions): Promise<stri
 async function activityGateOf(options: PerformUpdateOptions): Promise<HubActivityGate> {
   const record = await readPidRecord(options.root);
   if (record === null) return { kind: 'unknown', detail: 'the running hub has no pid record' };
-  const ownsWrapper = options.driver?.ownsProcess(record.pid) === true;
-  if (options.driver !== undefined && !ownsWrapper) {
-    return { kind: 'unknown', detail: 'the pid record does not match the supervised Hub process' };
-  }
   const dataDir = record.dataDir ?? defaultHubDataDir(options.io.env);
-  return readHubActivityGate(record, dataDir, options.io, { ownsWrapper });
+  return readHubActivityGate(record, dataDir, options.io);
 }
 
 function throwActivityUnverifiable(gate: HubActivityGate & { kind: 'unknown' }): never {
@@ -174,13 +128,11 @@ export async function performHubUpdate(options: PerformUpdateOptions): Promise<U
 
     const blocked = await readBlockedRelease(root);
     if (
-      blocked !== null &&
-      blocked.version === targetVersion &&
       options.force !== true &&
-      isBlockedActive(blocked, new Date(), resolveBlockedCooldownMs(io.env))
+      isBlockedVersionActive(blocked, targetVersion, new Date(), resolveBlockedCooldownMs(io.env))
     ) {
       throw new UsageError(
-        `update to ${targetVersion} is blocked since ${blocked.at} (reason: ${blocked.reason}); wait for the cooldown, pick another --version, or pass --force`,
+        `update to ${targetVersion} is blocked since ${blocked!.at} (reason: ${blocked!.reason}); wait for the cooldown, pick another --version, or pass --force`,
         'update_blocked_cooldown',
       );
     }
@@ -218,19 +170,12 @@ export async function performHubUpdate(options: PerformUpdateOptions): Promise<U
       ...(options.payloadCheckTimeoutMs !== undefined ? { payloadCheckTimeoutMs: options.payloadCheckTimeoutMs } : {}),
     });
 
-    // One atomic lifecycle section: the wasRunning decision, the stop of the old hub, the
-    // pointer commit, the candidate start (and its rollback) never interleave with concurrent
-    // start/stop commands on the same machine (#77 lifecycle-lock requirement).
+    // One atomic lifecycle section: wasRunning, stop, commit, candidate start (and rollback)
+    // never interleave with concurrent start/stop commands on the same machine.
     return await withLifecycleLock(root, async (): Promise<UpdateOutcome> => {
-      const wasRunning = options.driver !== undefined
-        ? await options.driver.isRunning()
-        : await (async () => {
-            const pidRecord = await readPidRecord(root);
-            return pidRecord !== null && isAliveOf(io)(pidRecord.pid);
-          })();
+      const pidRecord = await readPidRecord(root);
+      const wasRunning = pidRecord !== null && isAliveOf(io)(pidRecord.pid);
       if (wasRunning && options.force !== true) {
-        // Stage first so busy hubs can reuse the verified candidate. Sample activity under the
-        // lifecycle lock immediately before stopping the current process.
         const gate = await activityGateOf(options);
         if (gate.kind === 'unknown') throwActivityUnverifiable(gate);
         if (gate.kind === 'busy') {
@@ -245,91 +190,52 @@ export async function performHubUpdate(options: PerformUpdateOptions): Promise<U
         }
       }
       if (wasRunning) {
-        // Stop before any state changes: control channel first (uniform across Linux/macOS/Windows),
-        // falling back to pid-record identity proof; a failed stop aborts with current.json intact.
-        if (options.driver !== undefined) await options.driver.stop();
-        else {
-          await stopHubGracefulLocked(root, io, {
-            ...(options.stopTimeoutMs !== undefined ? { stopTimeoutMs: options.stopTimeoutMs } : {}),
-            ...(options.fetchFn !== undefined ? { fetchFn: options.fetchFn } : {}),
-          });
-        }
+        await stopHubGracefulLocked(root, io, {
+          ...(options.stopTimeoutMs !== undefined ? { stopTimeoutMs: options.stopTimeoutMs } : {}),
+          ...(options.fetchFn !== undefined ? { fetchFn: options.fetchFn } : {}),
+        });
       }
 
-      const previousRecord: CurrentReleaseRecord | null = current;
-      await writeCurrentRelease(root, {
-        version: targetVersion,
-        updatedAt: new Date().toISOString(),
-        entries: { entryPath: staged.entryPath },
-      });
-
-      if (!wasRunning && options.startIfNotRunning !== true) {
-        await clearBlockedRelease(root);
-        return { previousVersion, targetVersion, changed: true, restarted: false, started: false };
-      }
-
-      try {
-        const started =
-          options.driver !== undefined
-            ? await options.driver.start()
-            : await startHubLocked(root, io, {
-                ...(options.launchFlags !== undefined ? { flags: options.launchFlags } : {}),
-                ...(options.healthTimeoutMs !== undefined ? { healthTimeoutMs: options.healthTimeoutMs } : {}),
-                ...(options.pollMs !== undefined ? { pollMs: options.pollMs } : {}),
-                ...(options.fetchFn !== undefined ? { fetchFn: options.fetchFn } : {}),
-              });
-        await clearBlockedRelease(root);
-        return {
-          previousVersion,
-          targetVersion,
-          changed: true,
-          restarted: wasRunning,
-          started: !wasRunning,
-          pid: started.pid,
-          url: started.url,
-        };
-      } catch (healthError) {
-        // A concurrently started hub is not a candidate failure: keep the committed pointer, skip
-        // the blocked marker, and surface the race explicitly (the user started something mid-update).
-        if (healthError instanceof UsageError && healthError.code === 'hub_already_running') {
-          await clearBlockedRelease(root);
-          throw new UsageError(
-            `current.json was committed to ${targetVersion}, but another hub instance was started concurrently and was not restarted by this update; stop or restart it manually when convenient`,
-            'update_race_with_start',
-          );
-        }
-        const reason = healthError instanceof Error ? healthError.message : String(healthError);
-        const rollbackNotes: string[] = [`candidate ${targetVersion} failed to become ready: ${reason}`];
-        // Roll the pointer back before restarting anything (verbatim engine record restore).
-        if (previousRecord !== null) await writeCurrentRelease(root, previousRecord);
-        else await deleteCurrentRelease(root);
-        if (wasRunning) {
-          try {
-            const oldStart =
-              options.driver !== undefined
-                ? await options.driver.start()
-                : await startHubLocked(root, io, {
-                    ...(options.launchFlags !== undefined ? { flags: options.launchFlags } : {}),
-                    ...(options.healthTimeoutMs !== undefined ? { healthTimeoutMs: options.healthTimeoutMs } : {}),
-                    ...(options.pollMs !== undefined ? { pollMs: options.pollMs } : {}),
-                    ...(options.fetchFn !== undefined ? { fetchFn: options.fetchFn } : {}),
-                  });
-            rollbackNotes.push(`rolled back to ${previousRecord?.version ?? '?'} (pid ${oldStart.pid}, ${oldStart.url})`);
-          } catch (oldError) {
-            rollbackNotes.push(
-              `ROLLBACK INCOMPLETE: previous release ${previousVersion ?? '(none)'} failed to restart: ${
-                oldError instanceof Error ? oldError.message : String(oldError)
-              } (current.json restored${previousRecord !== null ? ` to ${previousRecord.version}` : ' to empty'}; start it manually after investigating ${paths.hubLogPath})`,
+      const startOpts = {
+        ...(options.launchFlags !== undefined ? { flags: options.launchFlags } : {}),
+        ...(options.healthTimeoutMs !== undefined ? { healthTimeoutMs: options.healthTimeoutMs } : {}),
+        ...(options.pollMs !== undefined ? { pollMs: options.pollMs } : {}),
+        ...(options.fetchFn !== undefined ? { fetchFn: options.fetchFn } : {}),
+      };
+      const { started } = await commitAndSwitchHubRelease({
+        root,
+        targetVersion,
+        targetEntryPath: staged.entryPath,
+        previousRecord: current,
+        shouldStart: wasRunning || options.startIfNotRunning === true,
+        restartPreviousOnRollback: wasRunning,
+        logPathHint: paths.hubLogPath,
+        startRelease: () => startHubLocked(root, io, startOpts),
+        formatRestored: (oldStart, prev) => `rolled back to ${prev.version} (pid ${oldStart.pid}, ${oldStart.url})`,
+        onStartError: (healthError) => {
+          // A concurrently started hub is not a candidate failure: keep the committed pointer.
+          if (healthError instanceof UsageError && healthError.code === 'hub_already_running') {
+            return new UsageError(
+              `current.json was committed to ${targetVersion}, but another hub instance was started concurrently and was not restarted by this update; stop or restart it manually when convenient`,
+              'update_race_with_start',
             );
           }
-        }
-        await writeBlockedRelease(root, {
-          version: targetVersion,
-          reason: `candidate readiness failed: ${reason.slice(0, 500)}`,
-          at: new Date().toISOString(),
-        });
-        throw new Error(rollbackNotes.join('\n'));
+          return 'rollback';
+        },
+      });
+
+      if (started === undefined) {
+        return { previousVersion, targetVersion, changed: true, restarted: false, started: false };
       }
+      return {
+        previousVersion,
+        targetVersion,
+        changed: true,
+        restarted: wasRunning,
+        started: !wasRunning,
+        pid: started.pid,
+        url: started.url,
+      };
     });
   });
 }

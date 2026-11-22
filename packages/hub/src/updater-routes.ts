@@ -10,9 +10,9 @@ import path from 'node:path';
 import process from 'node:process';
 import { errorResponse, jsonOk, type ProductRouteHandler } from '@helmx/kernel';
 import { isHubActivityBusy, type HubActivityCounts } from '@helmx/protocol';
-import { readBlockedRelease } from '@helmx/env-io';
+import { isBlockedVersionActive, isStrictSemver, readBlockedRelease, resolveBlockedCooldownMs } from '@helmx/env-io';
 import { readUpdateReady, type UpdateReadyRecord } from '@helmx/env-io/hub-payload';
-import { isBlockedVersionActive, type HubUpdaterHandle } from './updater.js';
+import type { HubUpdaterHandle } from './updater.js';
 import { readHubControlRecord } from './control.js';
 import { sliceChangelog, type ChangelogSection, type LoadedChangelog } from './changelog.js';
 
@@ -72,7 +72,7 @@ export function createHubUpdateRoutes(deps: HubUpdateRoutesDeps): ProductRouteHa
         return errorResponse(undefined, 405, 'method_not_allowed', 'changelog is read-only; use GET');
       }
       const from = url.searchParams.get('from') ?? undefined;
-      if (from !== undefined && !/^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/.test(from)) {
+      if (from !== undefined && !isStrictSemver(from)) {
         return errorResponse(undefined, 400, 'invalid_from', 'from must be a strict SemVer version such as 1.2.3');
       }
       if (!deps.changelog.available) {
@@ -137,7 +137,7 @@ export function createHubUpdateRoutes(deps: HubUpdateRoutesDeps): ProductRouteHa
       return errorResponse(undefined, 409, 'no_staged_update', 'no staged update is waiting; run helmx update (or wait for the background check) first');
     }
     const blocked = await readBlockedRelease(deps.root);
-    if (isBlockedVersionActive(blocked, ready.version, new Date())) {
+    if (isBlockedVersionActive(blocked, ready.version, new Date(), resolveBlockedCooldownMs())) {
       return errorResponse(undefined, 409, 'update_blocked_cooldown', `version ${ready.version} is blocked (${blocked!.reason}) and inside the retry cooldown`);
     }
     const counts = deps.kernel.activitySnapshot();

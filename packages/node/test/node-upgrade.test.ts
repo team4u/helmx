@@ -1,19 +1,9 @@
 /**
- * Node-side regressions for the node self-upgrade adapter (npm artifacts default to
- * `@helmx/node` + `@helmx/cli`) over the shared update engine re-exported
- * from `@helmx/env-io`.
- *
- * Everything here locks Node external behavior only: own version resolution
- * (`getNodeVersion` / `resolveEffectiveNodeVersion`), the launcher-compatible flat
- * `current.json` disk contract, dual-package name wiring (`HELMX_NPM_PACKAGE` /
- * `HELMX_NPM_PACKAGE`), staged-entry adaptation (`StagedNodeRelease`), delegation
- * of engine hooks through `performNodeUpgrade`, verbatim rollback of the flat record
- * on commit failure, and error-class identity with the shared engine module.
- *
- * The generic engine mechanics (semver wrappers, registry allowlist, staging and
- * `.complete` cache revalidation, drain gate, cooldown, rollback ordering,
- * cross-process lock, npm process-group kill) are covered by
- * `packages/env-io/test/update/update-engine.test.ts` and deliberately not duplicated here.
+ * Node-side regressions for the node self-upgrade policy over the shared update engine in
+ * `@helmx/env-io`: own version resolution (`getNodeVersion` / `resolveEffectiveNodeVersion`),
+ * unified canonical `current.json` (`CurrentReleaseRecord`), package name wiring
+ * (`HELMX_NPM_PACKAGE`), engine hook delegation through `performNodeUpgrade`, verbatim rollback
+ * on commit failure, and error-class identity with `@helmx/env-io`.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -56,7 +46,7 @@ function makeReplacement(pid: number, opts?: { commitError?: Error; abortError?:
 }
 
 /** stageExtractor: create a fake package layout inside stagingDir. */
-async function fakeExtractor(stagingDir: string, _version: string): Promise<{ entryPath: string }> {
+async function fakeExtractor(stagingDir: string, _version: string): Promise<Record<string, string>> {
   const nodePkgDir = path.join(stagingDir, 'node_modules', ...NODE_PACKAGE_NAME.split('/'));
   await fs.mkdir(path.join(nodePkgDir, 'dist'), { recursive: true });
   await fs.writeFile(path.join(nodePkgDir, 'dist', 'cli.js'), '#!/usr/bin/env node\n', 'utf8');
@@ -134,38 +124,32 @@ test('getNodeVersion: reads package.json and honors HELMX_VERSION_OVERRIDE', { t
 test('resolveEffectiveNodeVersion: prefers current.json and falls back to own package version', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helmx-node-upgrade-');
   assert.equal(await resolveEffectiveNodeVersion(dir), getNodeVersion());
-  await writeCurrentRelease(dir, { version: '3.2.1', entryPath: '/x/dist/cli.js', updatedAt: new Date().toISOString() });
+  await writeCurrentRelease(dir, {
+    version: '3.2.1',
+    updatedAt: new Date().toISOString(),
+    entries: { entryPath: '/x/dist/cli.js' },
+  });
   assert.equal(await resolveEffectiveNodeVersion(dir), '3.2.1');
   await fs.rm(dir, { recursive: true, force: true });
 });
 
 // ---------------------------------------------------------------------------
-// 2. Flat current.json disk contract (launcher compatibility)
+// 2. Unified canonical current.json contract (shared with @helmx/env-io)
 // ---------------------------------------------------------------------------
 
-test('flat current.json: ENOENT returns null, atomic 0600 writes round-trip, optional cliBinDir stays absent, idempotent delete', { timeout: 60_000 }, async () => {
+test('canonical current.json: ENOENT returns null, atomic 0600 writes round-trip, idempotent delete', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helmx-node-upgrade-');
   assert.equal(await readCurrentRelease(dir), null);
 
   await writeCurrentRelease(dir, {
     version: '1.0.0',
-    entryPath: '/a/dist/cli.js',
     updatedAt: '2026-01-01T00:00:00.000Z',
-    cliBinDir: '/a/node_modules/.bin',
+    entries: { entryPath: '/a/dist/cli.js' },
   });
   const current = await readCurrentRelease(dir);
   assert.equal(current?.version, '1.0.0');
-  assert.equal(current?.entryPath, '/a/dist/cli.js');
-  assert.equal(current?.cliBinDir, '/a/node_modules/.bin');
-  // Windows lacks POSIX mode bits (NTFS uses ACLs), skip 0600 mode assertion.
+  assert.equal(current?.entries['entryPath'], '/a/dist/cli.js');
   if (process.platform !== 'win32') assert.equal(rawFs.statSync(path.join(dir, 'current.json')).mode & 0o777, 0o600);
-
-  // An already-installed launcher treats cliBinDir as optional; absent must stay absent on disk
-  await writeCurrentRelease(dir, { version: '1.1.0', entryPath: '/b/dist/cli.js', updatedAt: '2026-01-02T00:00:00.000Z' });
-  const bare = await readCurrentRelease(dir);
-  assert.equal(bare?.cliBinDir, undefined);
-  const raw = JSON.parse(await fs.readFile(path.join(dir, 'current.json'), 'utf8')) as Record<string, unknown>;
-  assert.ok(!('cliBinDir' in raw), 'absent cliBinDir must not be serialized as an explicit field');
 
   await deleteCurrentRelease(dir);
   assert.equal(await readCurrentRelease(dir), null);
@@ -173,23 +157,22 @@ test('flat current.json: ENOENT returns null, atomic 0600 writes round-trip, opt
   await fs.rm(dir, { recursive: true, force: true });
 });
 
-test('flat current.json: corrupt or incomplete records throw explicitly rather than returning null', { timeout: 60_000 }, async () => {
+test('canonical current.json: corrupt or incomplete records throw explicitly rather than returning null', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helmx-node-upgrade-');
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(path.join(dir, 'current.json'), '{ not json', 'utf8');
   await assert.rejects(() => readCurrentRelease(dir), /corrupt/);
   await fs.writeFile(path.join(dir, 'current.json'), JSON.stringify({ version: '1.0.0' }), 'utf8');
-  await assert.rejects(() => readCurrentRelease(dir), /entryPath/);
-  // Writes validate the same contract before anything reaches the launcher
+  await assert.rejects(() => readCurrentRelease(dir), /updatedAt/);
   await assert.rejects(
-    () => writeCurrentRelease(dir, { version: '', entryPath: 'x', updatedAt: 't' } as never),
+    () => writeCurrentRelease(dir, { version: '', updatedAt: 't', entries: { entryPath: 'x' } }),
     /version/,
   );
   await fs.rm(dir, { recursive: true, force: true });
 });
 
 // ---------------------------------------------------------------------------
-// 3. Node adapter wiring over the shared update engine
+// 3. Node wiring over the shared update engine
 // ---------------------------------------------------------------------------
 
 test('checkNodeUpgrade: queries the @helmx/node package latest and falls back to getNodeVersion', { timeout: 60_000 }, async () => {
@@ -200,7 +183,6 @@ test('checkNodeUpgrade: queries the @helmx/node package latest and falls back to
   assert.equal(result.updateAvailable, true);
   assert.match(urls[0]!, /@helmx%2Fnode\/latest|@helmx\/node\/latest/);
 
-  // Fall back to getNodeVersion when current.json is absent and currentVersion is omitted
   const dir2 = await tempDir('helmx-node-upgrade-');
   const result2 = await checkNodeUpgrade(dir2, { fetchFn: makeRegistryFetch('0.0.1').fetchFn });
   assert.equal(result2.currentVersion, getNodeVersion());
@@ -214,16 +196,14 @@ test('single package name: HELMX_NPM_PACKAGE drives registry URL and staged layo
   const prevNodePkg = process.env.HELMX_NPM_PACKAGE;
   process.env.HELMX_NPM_PACKAGE = '@custom/node';
   try {
-    // Latest check queries the overridden node package
     const { fetchFn, urls } = makeRegistryFetch('2.0.0');
     const check = await checkNodeUpgrade(dir, { currentVersion: '1.0.0', fetchFn });
     assert.equal(check.latestVersion, '2.0.0');
     assert.match(urls[0]!, /@custom%2Fnode\/latest|@custom\/node\/latest/);
 
-    // npm-origin cache revalidation validates overridden package through the staged layout
     await makeNpmReleaseCache(dir, '2.0.0', '@custom/node');
     const staged = await stageReleaseFromNpm(dir, '2.0.0', { fetchFn: offlineFetch });
-    assert.ok(staged.entryPath.endsWith(path.join('node_modules', '@custom', 'node', 'dist', 'cli.js')), staged.entryPath);
+    assert.ok(staged.entries['entryPath']!.endsWith(path.join('node_modules', '@custom', 'node', 'dist', 'cli.js')), staged.entries['entryPath']);
   } finally {
     if (prevNodePkg === undefined) delete process.env.HELMX_NPM_PACKAGE;
     else process.env.HELMX_NPM_PACKAGE = prevNodePkg;
@@ -231,7 +211,7 @@ test('single package name: HELMX_NPM_PACKAGE drives registry URL and staged layo
   await fs.rm(dir, { recursive: true, force: true });
 });
 
-test('performNodeUpgrade: success path delegates engine hooks and adapts staged entries into the flat current.json', { timeout: 60_000 }, async () => {
+test('performNodeUpgrade: success path delegates engine hooks and writes canonical current.json', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helmx-node-upgrade-');
   const log: UpgradeLog = { draining: [], execCount: { value: 0 }, shutdownPids: [] };
   const { replacement, calls } = makeReplacement(4242);
@@ -251,33 +231,28 @@ test('performNodeUpgrade: success path delegates engine hooks and adapts staged 
   });
 
   assert.deepEqual(result, { ok: true, previousVersion: '1.0.0', targetVersion: '1.2.3', upgraded: true, pid: 4242 });
-  assert.deepEqual(calls, ['commit:4242']); // commit exactly once; never abort on success path
-  // The Node adapter hands prepareReplacement a StagedNodeRelease with adapted entry fields
+  assert.deepEqual(calls, ['commit:4242']);
   assert.equal(releases[0]?.version, '1.2.3');
-  assert.ok(await fs.access(releases[0]!.entryPath).then(() => true, () => false), 'adapted entryPath must exist on disk');
-  assert.equal(releases[0]?.cliBinDir, undefined);
+  const stagedEntry = releases[0]?.entries['entryPath'];
+  assert.ok(stagedEntry !== undefined && (await fs.access(stagedEntry).then(() => true, () => false)), 'staged entryPath must exist on disk');
   assert.ok(contexts[0]?.attemptId);
   assert.equal(contexts[0]?.previousVersion, '1.0.0');
   assert.equal(contexts[0]?.targetVersion, '1.2.3');
-  // Delegated hooks fire through the shared engine
   assert.deepEqual(log.shutdownPids, [4242]);
-  assert.deepEqual(log.draining, [true]); // keep draining after success (old host is exiting)
-  // current.json stays in the flat launcher contract with adapted entry fields
+  assert.deepEqual(log.draining, [true]);
   const current = await readCurrentRelease(dir);
   assert.equal(current?.version, '1.2.3');
-  assert.equal(current?.entryPath, releases[0]?.entryPath);
-  assert.equal(current?.cliBinDir, undefined);
+  assert.equal(current?.entries['entryPath'], stagedEntry);
   assert.equal(await readBlockedRelease(dir), null);
   await fs.rm(dir, { recursive: true, force: true });
 });
 
-test('performNodeUpgrade: commit failure restores the previous flat current.json record verbatim', { timeout: 60_000 }, async () => {
+test('performNodeUpgrade: commit failure restores the previous canonical current.json record verbatim', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helmx-node-upgrade-');
   const originalCurrent = {
     version: '1.0.0',
-    entryPath: '/old/dist/cli.js',
     updatedAt: '2026-01-01T00:00:00.000Z',
-    cliBinDir: '/old/node_modules/.bin',
+    entries: { entryPath: '/old/dist/cli.js' },
   };
   await writeCurrentRelease(dir, originalCurrent);
   const log: UpgradeLog = { draining: [], execCount: { value: 0 }, shutdownPids: [] };
@@ -295,8 +270,7 @@ test('performNodeUpgrade: commit failure restores the previous flat current.json
     /rolled back[\s\S]*activate handshake timeout/,
   );
   assert.deepEqual(calls, ['commit:321', 'abort:321'], 'commit failure must abort replacement');
-  // The rollback crosses the Node codec: the launcher keeps reading the exact previous flat record
-  assert.deepEqual(await readCurrentRelease(dir), originalCurrent, 'flat current.json must be restored verbatim');
+  assert.deepEqual(await readCurrentRelease(dir), originalCurrent, 'current.json must be restored verbatim');
   assert.equal((await readBlockedRelease(dir))?.version, '1.4.0');
   assert.deepEqual(log.draining, [true, false], 'drain gate must be released on failure');
   await fs.rm(dir, { recursive: true, force: true });
@@ -304,7 +278,6 @@ test('performNodeUpgrade: commit failure restores the previous flat current.json
 
 test('adapter rejects with the shared update-engine error classes (instanceof identity)', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helmx-node-upgrade-');
-  // Downgrade guard through the Node wrapper throws the shared UpgradeRejectedError
   await assert.rejects(
     () =>
       performNodeUpgrade(dir, {
@@ -315,7 +288,6 @@ test('adapter rejects with the shared update-engine error classes (instanceof id
       }),
     UpgradeRejectedError,
   );
-  // Invalid target version through staging rejects with the same shared class
   await assert.rejects(() => stageReleaseFromNpm(dir, 'not-semver', { stageExtractor: fakeExtractor }), UpgradeRejectedError);
   await fs.rm(dir, { recursive: true, force: true });
 });

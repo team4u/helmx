@@ -7,6 +7,7 @@
  */
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import { atomicWriteJson } from '@helmx/env-io';
 
 interface RunVersionRecord {
   version: string;
@@ -45,9 +46,6 @@ export async function recordRunVersion(dataDir: string, version: string): Promis
   const previous = await readLastRunVersion(dataDir);
   const upgradedFrom = previous !== null && previous !== version ? previous : null;
   const record: RunVersionRecord = { version, since: new Date().toISOString() };
-  let text = JSON.stringify(record, null, 2);
-  if (!text.endsWith('\n')) text += '\n';
-  await fsp.mkdir(dataDir, { recursive: true }).catch(() => undefined);
-  await fsp.writeFile(runVersionPath(dataDir), text, { mode: 0o600 });
+  await atomicWriteJson(runVersionPath(dataDir), record, { mode: 0o600 });
   return { upgradedFrom };
 }

@@ -2,17 +2,24 @@
  * Install-root layout and product defaults for the Hub launcher.
  *
  * Program state is strictly separated from user data: releases, current/blocked pointers (via
- * the env-io update-engine state ops), the pid record, and logs live under the launcher install root
+ * `@helmx/env-io`), the pid record, and logs live under the launcher install root
  * (default `~/.helmx-hub`, env `HELMX_HUB_INSTALL_ROOT`), while the Hub's own `~/.helmx`
- * (`HELMX_DATA_DIR`) data directory and plugin state are never written by the launcher. The
- * launcher binary itself is a stable external install and is never overwritten by the releases it
- * manages (launcher self-update is explicitly out of scope).
+ * (`HELMX_DATA_DIR`) data directory and plugin state are never written by the launcher.
  */
 import os from 'node:os';
 import path from 'node:path';
+import {
+  assertDistTag,
+  DEFAULT_BLOCKED_COOLDOWN_MS,
+  hubLaunchConfigPath,
+  hubLifecycleLockPath,
+  hubLogPath,
+  hubPidPath,
+  resolveBlockedCooldownMs,
+} from '@helmx/env-io';
 import { assertInstallIsolation, resolveRegistryUrlForEnv } from '@helmx/env-io/hub-payload';
 
-export { assertInstallIsolation };
+export { assertDistTag, assertInstallIsolation, resolveBlockedCooldownMs };
 export const resolveRegistryUrl = resolveRegistryUrlForEnv;
 
 export const DEFAULT_PAYLOAD_PACKAGE = '@helmx/hub';
@@ -31,15 +38,14 @@ export const DEFAULTS = {
   /** Wait after escalation before declaring the process unstoppable. */
   stopEscalationWaitMs: 10_000,
   /** Cooldown before the same blocked version may be retried (env `HELMX_UPGRADE_BLOCK_COOLDOWN_MS`). */
-  blockedCooldownMs: 30 * 60_000,
+  blockedCooldownMs: DEFAULT_BLOCKED_COOLDOWN_MS,
   /** npm install inside a staged candidate (run through the engine's npm runner). */
   npmInstallTimeoutMs: 300_000,
   /** `node start.mjs check` self-verification budget inside staging. */
   payloadCheckTimeoutMs: 120_000,
   /** Short probe used to verify hub identity before signalling a pid. */
   identityProbeTimeoutMs: 2_000,
-  /** Supervised `run` update-check interval (env `HELMX_HUB_UPDATE_INTERVAL_MS`). Short by design:
-   * a busy hub defers each cycle (activity gate), so frequent checks converge quickly once idle. */
+  /** Update-check interval default (env `HELMX_HUB_UPDATE_INTERVAL_MS`). */
   updateIntervalMs: 15 * 60 * 1000,
 } as const;
 
@@ -58,11 +64,11 @@ export function pathsOf(root: string): LauncherPaths {
   return {
     root,
     releasesDir: path.join(root, 'releases'),
-    pidPath: path.join(root, 'hub.pid'),
-    launchConfigPath: path.join(root, 'launch.json'),
+    pidPath: hubPidPath(root),
+    launchConfigPath: hubLaunchConfigPath(root),
     logDir: path.join(root, 'logs'),
-    hubLogPath: path.join(root, 'logs', 'hub.log'),
-    lifecycleLockPath: path.join(root, 'lifecycle.lock'),
+    hubLogPath: hubLogPath(root),
+    lifecycleLockPath: hubLifecycleLockPath(root),
   };
 }
 
@@ -74,8 +80,7 @@ export function resolveInstallRoot(env: NodeJS.ProcessEnv): string {
 
 /**
  * The Hub's data directory when no explicit value is configured (mirrors the kernel's
- * `resolveDataDir`: `HELMX_DATA_DIR` when non-empty, else `~/.helmx`). Used for the program/data
- * separation guard; the launched Hub process itself owns the real resolution.
+ * `resolveDataDir`: `HELMX_DATA_DIR` when non-empty, else `~/.helmx`).
  */
 export function defaultHubDataDir(env: NodeJS.ProcessEnv): string {
   const fromEnv = env.HELMX_DATA_DIR;
@@ -90,30 +95,4 @@ export function resolvePayloadPackageName(env: NodeJS.ProcessEnv): string {
     throw new Error(`invalid payload package name: "${value}"`);
   }
   return value;
-}
-
-/** Blocked-version cooldown override (env `HELMX_UPGRADE_BLOCK_COOLDOWN_MS`, positive integer). */
-export function resolveBlockedCooldownMs(env: NodeJS.ProcessEnv): number {
-  const raw = env.HELMX_UPGRADE_BLOCK_COOLDOWN_MS;
-  if (raw === undefined || raw === '') return DEFAULTS.blockedCooldownMs;
-  const parsed = Number(raw);
-  if (!Number.isInteger(parsed) || parsed <= 0) {
-    throw new Error(`invalid HELMX_UPGRADE_BLOCK_COOLDOWN_MS: "${raw}" (expected a positive integer)`);
-  }
-  return parsed;
-}
-
-/**
- * Validate an npm dist-tag segment. Mirrors the shared engine's rule (a single path-safe segment,
- * version-shaped values belong to the exact-version channel) so misconfiguration fails at the CLI
- * boundary with the launcher's own message; the engine re-validates at query time.
- */
-export function assertDistTag(tag: string): string {
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(tag)) {
-    throw new Error(`invalid dist-tag "${tag}" (expected a single npm dist-tag segment such as "latest" or "beta")`);
-  }
-  if (/^\d+\.\d+\.\d+(-[\w.-]+)?(\+[\w.-]+)?$/.test(tag)) {
-    throw new Error(`"${tag}" looks like a version, not a dist-tag; pass --version for exact-version updates`);
-  }
-  return tag;
 }

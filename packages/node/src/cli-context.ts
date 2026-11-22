@@ -3,11 +3,9 @@
  * Pure mechanism with no command-specific business logic, shared by `cli.ts` and `commands/*`
  * without introducing horizontal dependencies between command modules.
  */
-import { randomBytes } from 'node:crypto';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import process from 'node:process';
-import { isProcessAlive, waitForPidExit } from '@helmx/env-io';
+import { atomicWriteJson, isProcessAlive, waitForPidExit } from '@helmx/env-io';
 
 /** Injectable I/O hooks allowing tests to swap real process spawning and stdio. */
 export interface NodeCliIo {
@@ -100,17 +98,12 @@ export async function readPidRecord(dataDir: string): Promise<PidRecord | null> 
   return { pid: record.pid, instanceId: record.instanceId, endpoint: record.endpoint };
 }
 
-/** Atomically write the PID record (`0600` via sibling temp file + rename; chmod failure on POSIX throws explicitly). */
+/** Atomically write the PID record (`0600` via sibling temp + fsync + chmod + rename). */
 export async function writePidRecord(dataDir: string, record: PidRecord): Promise<void> {
-  await fsp.mkdir(dataDir, { recursive: true });
   const target = pidPath(dataDir);
-  const temp = `${target}.${randomBytes(6).toString('hex')}.tmp`;
   try {
-    await fsp.writeFile(temp, `${JSON.stringify(record)}\n`, { encoding: 'utf8', mode: 0o600 });
-    await fsp.rename(temp, target);
-    if (process.platform !== 'win32') await fsp.chmod(target, 0o600);
+    await atomicWriteJson(target, record, { mode: 0o600 });
   } catch (error) {
-    await fsp.unlink(temp).catch(() => undefined);
     throw new Error(`failed to write pid file (${target}): ${error instanceof Error ? error.message : String(error)}`);
   }
 }

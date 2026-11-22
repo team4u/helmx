@@ -235,8 +235,8 @@ async function writeCandidateScript(dir: string): Promise<string> {
 }
 
 /** Build a StagedNodeRelease pointing at the candidate fixture script. */
-function fixtureRelease(scriptPath: string, cliBinDir: string): StagedNodeRelease {
-  return { version: '9.9.9', releaseDir: path.dirname(scriptPath), entryPath: scriptPath, cliBinDir };
+function fixtureRelease(scriptPath: string): StagedNodeRelease {
+  return { version: '9.9.9', releaseDir: path.dirname(scriptPath), entries: { entryPath: scriptPath } };
 }
 
 // ---------------------------------------------------------------------------
@@ -279,11 +279,9 @@ async function prepareWithFixture(options: {
   const scriptPath = await writeCandidateScript(options.dir);
   const store = memoryPidStore();
   if (options.oldRecord !== undefined) await store.writePidRecord(options.oldRecord);
-  const cliBinDir = path.join(options.dir, 'cli-bin');
-  await fs.mkdir(cliBinDir, { recursive: true });
   try {
     const replacement = await prepareNodeReplacement(
-      fixtureRelease(scriptPath, cliBinDir),
+      fixtureRelease(scriptPath),
       { attemptId: 'attempt-test-1', previousVersion: '0.1.0', targetVersion: '9.9.9' },
       {
         dataDir: options.dir,
@@ -955,7 +953,7 @@ test('status prefers live control-channel version and falls back to current.json
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(
     path.join(dir, 'current.json'),
-    `${JSON.stringify({ version: '0.0.1-current', entryPath: '/nonexistent/cli.js', updatedAt: new Date().toISOString() })}\n`,
+    `${JSON.stringify({ version: '0.0.1-current', updatedAt: new Date().toISOString(), entries: { entryPath: '/nonexistent/cli.js' } })}\n`,
     'utf8',
   );
   await writePidRecordRaw(dir, { pid: process.pid, instanceId, endpoint: control.endpoint });

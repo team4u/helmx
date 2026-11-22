@@ -2,24 +2,24 @@
  * Atomic release state files under a state directory (kept separate from user data):
  * `current.json` (active release pointer) and `update-blocked.json` (failure cooldown).
  *
- * Honesty rules identical to the original helmx-node engine: corruption and I/O errors
- * throw explicitly; `null` is returned only on `ENOENT`. Writes are atomic (`0600`,
- * temp file + rename) via the package's own atomic-write helper.
- *
- * The state directory is owned by exactly one consumer (product); consumers that must
- * keep a different on-disk `current.json` shape (e.g. the already-installed helmx-node
- * launcher reads flat `entryPath`/`cliBinDir` fields) inject an `UpdateStateOps` codec
- * instead of sharing this module's default format.
+ * Honesty rules: corruption and I/O errors throw explicitly; `null` is returned only on `ENOENT`.
+ * Writes are atomic (`0600`, temp file + fsync + rename) via the package's atomic-write helper.
+ * All products (`@helmx/node` daemon, Hub launcher, Hub updater, payload handoff) share this
+ * canonical schema with zero per-product disk adapters.
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import process from 'node:process';
 import { atomicWriteJson } from '../atomic-write.js';
+
+/** Default failure cooldown suppressing retries of a blocked version (30 minutes). */
+export const DEFAULT_BLOCKED_COOLDOWN_MS = 30 * 60_000;
 
 /** Active release pointer (`current.json`). `entries` holds consumer-defined absolute entry paths. */
 export interface CurrentReleaseRecord {
   version: string;
   updatedAt: string;
-  /** Consumer-defined entry points into the active release directory (e.g. `entryPath`, `cliBinDir`). */
+  /** Consumer-defined entry points into the active release directory (e.g. `entryPath`). */
   entries: Record<string, string>;
 }
 
@@ -31,25 +31,8 @@ export interface BlockedReleaseRecord {
 }
 
 /**
- * Disk codec for `current.json`: the engine works purely on the canonical
- * `CurrentReleaseRecord` and crosses this boundary only when touching disk. The default
- * implementation reads/writes the shared `entries` format; consumers with an existing
- * on-disk contract (helmx-node's flat `entryPath`/`cliBinDir` launcher format) inject
- * their own codec so already-installed binaries keep working. Blocked-record shape is
- * identical across consumers and is not injectable.
- */
-export interface UpdateStateOps {
-  /** Disk state -> canonical record; `null` only on `ENOENT`, corruption throws explicitly. */
-  readCurrent(stateDir: string): Promise<CurrentReleaseRecord | null>;
-  /** Canonical record -> consumer disk format (also used verbatim for rollback restore). */
-  writeCurrent(stateDir: string, record: CurrentReleaseRecord): Promise<void>;
-  deleteCurrent(stateDir: string): Promise<void>;
-}
-
-/**
  * Read and validate a JSON state file: `null` only on `ENOENT`; unreadable/corrupt files
- * throw explicit errors carrying the path and label. Exported so consumer codecs compose
- * their own validation on top of the single read/corruption-wrapping implementation.
+ * throw explicit errors carrying the path and label.
  */
 export async function readStateJson<T>(filePath: string, validate: (raw: unknown) => T, label: string): Promise<T | null> {
   let raw: string;
@@ -113,6 +96,46 @@ function validateBlockedRecord(raw: unknown): BlockedReleaseRecord {
     reason: requireString(rec, 'reason'),
     at: requireString(rec, 'at'),
   };
+}
+
+/** Extract a required non-empty entry path from a release record, failing explicitly if missing. */
+export function requireReleaseEntry(
+  record: Pick<CurrentReleaseRecord, 'entries'>,
+  key: string,
+  context = 'current.json',
+): string {
+  const value = record.entries[key];
+  if (typeof value !== 'string' || value === '') {
+    throw new Error(`${context} entries.${key} is missing or invalid (got ${JSON.stringify(record.entries)})`);
+  }
+  return value;
+}
+
+/** Blocked-version cooldown override (`HELMX_UPGRADE_BLOCK_COOLDOWN_MS`, positive integer ms). */
+export function resolveBlockedCooldownMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.HELMX_UPGRADE_BLOCK_COOLDOWN_MS;
+  if (raw === undefined || raw === '') return DEFAULT_BLOCKED_COOLDOWN_MS;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`invalid HELMX_UPGRADE_BLOCK_COOLDOWN_MS: "${raw}" (expected a positive integer)`);
+  }
+  return parsed;
+}
+
+/**
+ * True while `blocked` still suppresses attempts at `version` within `cooldownMs`.
+ * Fail-closed: an unparseable timestamp keeps blocking rather than guessing.
+ */
+export function isBlockedVersionActive(
+  blocked: Pick<BlockedReleaseRecord, 'version' | 'at'> | null,
+  version: string,
+  now: Date = new Date(),
+  cooldownMs: number = DEFAULT_BLOCKED_COOLDOWN_MS,
+): boolean {
+  if (blocked === null || blocked.version !== version) return false;
+  const at = Date.parse(blocked.at);
+  if (!Number.isFinite(at)) return true;
+  return now.getTime() - at < cooldownMs;
 }
 
 const currentReleasePath = (stateDir: string) => path.join(stateDir, 'current.json');

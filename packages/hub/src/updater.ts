@@ -12,11 +12,23 @@
  * the running Hub (the busy gate lives in the apply step, where a restart actually happens).
  */
 import process from 'node:process';
-import { readBlockedRelease, readCurrentRelease } from '@helmx/env-io';
-import { readUpdateReady, stageHubRelease, writeUpdateReady, defaultHubUpdateCore, resolveRegistryUrlForEnv, type HubUpdateCore } from '@helmx/env-io/hub-payload';
+import {
+  assertDistTag,
+  isBlockedVersionActive,
+  readBlockedRelease,
+  readCurrentRelease,
+  resolveBlockedCooldownMs,
+} from '@helmx/env-io';
 
-/** Blocked-release cooldown (mirrors the launcher's `HELMX_UPGRADE_BLOCK_COOLDOWN_MS` default). */
-const BLOCKED_COOLDOWN_MS = 30 * 60_000;
+export { isBlockedVersionActive };
+import {
+  defaultHubUpdateCore,
+  readUpdateReady,
+  resolveRegistryUrlForEnv,
+  stageHubRelease,
+  writeUpdateReady,
+  type HubUpdateCore,
+} from '@helmx/env-io/hub-payload';
 
 export interface HubUpdateStatus {
   active: boolean;
@@ -68,13 +80,10 @@ export function resolveUpdaterConfig(options: { root?: string; env: NodeJS.Proce
   if (root === undefined || root === '') return null;
   const rawInterval = options.intervalMs ?? parseInterval(options.env.HELMX_HUB_UPDATE_INTERVAL_MS);
   if (rawInterval === 0) return null;
-  const channel = options.channel ?? (options.env.HELMX_HUB_UPDATE_TAG && options.env.HELMX_HUB_UPDATE_TAG !== '' ? options.env.HELMX_HUB_UPDATE_TAG : 'latest');
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(channel)) {
-    throw new Error(`invalid HELMX_HUB_UPDATE_TAG: "${channel}" (expected a dist-tag segment such as latest or beta)`);
-  }
-  if (/^\d+\.\d+\.\d+(-[\w.-]+)?(\+[\w.-]+)?$/.test(channel)) {
-    throw new Error(`invalid HELMX_HUB_UPDATE_TAG: "${channel}" looks like a version, not a dist-tag`);
-  }
+  const rawChannel =
+    options.channel ??
+    (options.env.HELMX_HUB_UPDATE_TAG && options.env.HELMX_HUB_UPDATE_TAG !== '' ? options.env.HELMX_HUB_UPDATE_TAG : 'latest');
+  const channel = assertDistTag(rawChannel, 'HELMX_HUB_UPDATE_TAG');
   return { root, channel, intervalMs: rawInterval, registryUrl: resolveRegistryUrlForEnv(options.env) };
 }
 
@@ -87,26 +96,13 @@ function parseInterval(raw: string | undefined): number {
   return parsed;
 }
 
-/** Cooldown gate: a blocked version is not restaged until the cooldown passes. */
-export function isBlockedVersionActive(
-  blocked: { version: string; at: string } | null,
-  version: string,
-  now: Date,
-  cooldownMs: number = BLOCKED_COOLDOWN_MS,
-): boolean {
-  if (blocked === null || blocked.version !== version) return false;
-  const at = Date.parse(blocked.at);
-  if (!Number.isFinite(at)) return true; // unparseable: keep blocking rather than guessing
-  return now.getTime() - at < cooldownMs;
-}
-
 /** Start the background check/stage loop; returns `null` when inactive. */
 export function startHubUpdater(options: HubUpdaterOptions): HubUpdaterHandle | null {
   const config = resolveUpdaterConfig({ root: options.root, env: options.env, intervalMs: options.intervalMs, channel: options.channel });
   if (config === null) return null;
   const core = options.core ?? defaultHubUpdateCore();
+  const cooldownMs = resolveBlockedCooldownMs(options.env);
   const log = options.log ?? ((line: string) => process.stderr.write(`[hub-updater] ${line}\n`));
-  // Default staging binding (env-io `stageHubRelease` with this updater's resolved config).
   const defaultStage = async (request: { version: string; pkgName: string }): Promise<{ version: string; entryPath: string; releaseDir: string }> =>
     await stageHubRelease({
       env: options.env,
@@ -151,7 +147,7 @@ export function startHubUpdater(options: HubUpdaterOptions): HubUpdaterHandle | 
         state.lastError = null;
         return;
       }
-      if (isBlockedVersionActive(blocked, latest, new Date())) {
+      if (isBlockedVersionActive(blocked, latest, new Date(), cooldownMs)) {
         state.lastError = null;
         return; // cooldown: the blocked version is not retried until it passes
       }

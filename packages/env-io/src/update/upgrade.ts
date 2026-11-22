@@ -8,56 +8,40 @@
  * candidate may already have committed upstream.
  *
  * Product policy (what counts as in-flight work, how a replacement is spawned and
- * confirmed) is injected; the mechanism (lock, cooldown, drain gate, commit order)
- * lives here. `upgrade.lock` gives cross-process exclusion. `current.json` crosses disk
- * through the source's `UpdateStateOps` codec (default: shared `entries` format), so a
- * consumer can keep a pre-existing on-disk contract for already-installed binaries.
+ * confirmed) is injected; the mechanism (lock with dead-PID stale recovery, cooldown,
+ * drain gate, commit order) lives here. `upgrade.lock` gives cross-process exclusion.
  */
-import fs, { type FileHandle } from 'node:fs/promises';
 import path from 'node:path';
-import process from 'node:process';
 import { randomUUID } from 'node:crypto';
-import { isStrictSemver } from '@helmx/protocol';
+import { withCrossProcessFileLock } from '../process-utils.js';
 import { UpgradeCommitUnconfirmedError, UpgradeRejectedError } from './errors.js';
-import { compareSemver, normalizeTargetVersion } from './semver.js';
+import { assertStrictSemver, compareSemver, normalizeTargetVersion } from './semver.js';
 import { fetchLatestVersion, resolveRegistryUrl } from './registry.js';
 import {
   clearBlockedRelease,
+  deleteCurrentRelease,
+  isBlockedVersionActive,
   readBlockedRelease,
   readCurrentRelease,
+  resolveBlockedCooldownMs,
   writeBlockedRelease,
   writeCurrentRelease,
-  deleteCurrentRelease,
   type BlockedReleaseRecord,
-  type CurrentReleaseRecord,
-  type UpdateStateOps,
 } from './state.js';
 import { stageRelease, type ReleaseLayout, type StageExtractor, type StagedRelease } from './staging.js';
 
 const DRAIN_POLL_INTERVAL_MS = 50;
 const DEFAULT_DRAIN_TIMEOUT_MS = 30_000;
 
-/** Failure cooldown for a rejected version; overridable via `HELMX_UPGRADE_BLOCK_COOLDOWN_MS`. */
-const UPGRADE_BLOCK_COOLDOWN_MS = (): number => {
-  const raw = Number(process.env.HELMX_UPGRADE_BLOCK_COOLDOWN_MS);
-  return Number.isFinite(raw) && raw >= 0 ? raw : 30 * 60 * 1000;
-};
-
-/** What is being updated: which registry package decides `latest`, plus the staging layout. */
+/** What is being updated: which registry package decides `latest`, plus fallback version hook. */
 export interface UpdateSource {
   /** Registry package queried for the `latest` dist-tag (Node: `@helmx/node`; Hub: the payload package). */
   packageName: string;
   /**
    * Current-version fallback when `current.json` is absent and no explicit `currentVersion`
-   * was passed (e.g. reading the running launcher's own `package.json`).
+   * was passed (e.g. reading the running package's own `package.json`).
    */
   getFallbackVersion?: () => string;
-  /**
-   * Disk codec for `current.json`; defaults to the shared `entries` format. Consumers with a
-   * pre-existing on-disk contract (helmx-node's flat `entryPath`/`cliBinDir` launcher format)
-   * inject their own so already-installed binaries keep reading the records they know.
-   */
-  stateOps?: UpdateStateOps;
 }
 
 export interface UpdateSpec extends UpdateSource {
@@ -132,12 +116,10 @@ export async function checkForUpdate(
   const registryUrl = resolveRegistryUrl(options?.registryUrl);
   const fetchImpl = options?.fetchFn ?? fetch;
 
-  const latestVersion = await fetchLatestVersion(registryUrl, source.packageName, fetchImpl, options?.tag ?? 'latest');
-  if (!isStrictSemver(latestVersion)) {
-    throw new UpgradeRejectedError(
-      `invalid SemVer version (latest): "${latestVersion}" (expected strict x.y.z[-pre][+build] without v prefix)`,
-    );
-  }
+  const latestVersion = assertStrictSemver(
+    await fetchLatestVersion(registryUrl, source.packageName, fetchImpl, options?.tag ?? 'latest'),
+    'latest',
+  );
 
   const currentVersion = await resolveCurrentVersion(stateDir, source, options?.currentVersion, 'checkForUpdate');
   const blocked = (await readBlockedRelease(stateDir)) || undefined;
@@ -150,14 +132,6 @@ export async function checkForUpdate(
   };
 }
 
-const DEFAULT_STATE_OPS: UpdateStateOps = {
-  readCurrent: readCurrentRelease,
-  writeCurrent: writeCurrentRelease,
-  deleteCurrent: deleteCurrentRelease,
-};
-
-const stateOpsOf = (source: UpdateSource): UpdateStateOps => source.stateOps ?? DEFAULT_STATE_OPS;
-
 async function resolveCurrentVersion(
   stateDir: string,
   source: UpdateSource,
@@ -165,7 +139,7 @@ async function resolveCurrentVersion(
   label: string,
 ): Promise<string> {
   if (explicit !== undefined && explicit !== '') return explicit;
-  const current = await stateOpsOf(source).readCurrent(stateDir);
+  const current = await readCurrentRelease(stateDir);
   if (current !== null) return current.version;
   if (source.getFallbackVersion !== undefined) return source.getFallbackVersion();
   throw new UpgradeRejectedError(
@@ -173,29 +147,31 @@ async function resolveCurrentVersion(
   );
 }
 
-/** Cross-process exclusive update lock (`upgrade.lock`, `O_CREAT|O_EXCL`). */
-export async function withUpdateLock<T>(stateDir: string, fn: () => Promise<T>): Promise<T> {
+/**
+ * Cross-process exclusive update lock (`upgrade.lock`) backed by `withCrossProcessFileLock`:
+ * atomic publish, confirmed-dead PID stale recovery (never deadlocks after SIGKILL),
+ * owner-checked CAS release, and fail-closed preservation of live or corrupt lock files.
+ */
+export async function withUpdateLock<T>(
+  stateDir: string,
+  fn: () => Promise<T>,
+  options?: { isAlive?: (pid: number) => boolean },
+): Promise<T> {
   const lockPath = path.join(stateDir, 'upgrade.lock');
-  await fs.mkdir(stateDir, { recursive: true });
-  let handle: FileHandle;
-  try {
-    handle = await fs.open(lockPath, 'wx', 0o600);
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === 'EEXIST') {
-      throw new UpgradeRejectedError(`upgrade already in progress (lock file exists: ${lockPath})`);
-    }
-    throw new Error(
-      `failed to create upgrade lock (${lockPath}): ${code ?? (error instanceof Error ? error.message : String(error))}`,
+  const busyError = (file: string, ownerPid?: number): Error =>
+    new UpgradeRejectedError(
+      `upgrade already in progress (${ownerPid !== undefined ? `held by pid ${ownerPid}, ` : ''}lock file exists: ${file})`,
     );
-  }
-  try {
-    await handle.write(`${process.pid} ${new Date().toISOString()}\n`);
-    return await fn();
-  } finally {
-    await handle.close().catch(() => undefined);
-    await fs.rm(lockPath, { force: true }).catch(() => undefined);
-  }
+  return withCrossProcessFileLock(lockPath, fn, {
+    waitMs: 0,
+    ...(options?.isAlive !== undefined ? { isAlive: options.isAlive } : {}),
+    onBusy: busyError,
+    onCorrupt: (file) => busyError(file),
+    onError: (file, error, phase) =>
+      new Error(
+        `failed to ${phase} upgrade lock (${file}): ${(error as NodeJS.ErrnoException)?.code ?? (error instanceof Error ? error.message : String(error))}`,
+      ),
+  });
 }
 
 /**
@@ -241,18 +217,16 @@ export async function performUpdate(
     }
 
     const blocked = await readBlockedRelease(stateDir);
-    if (blocked && blocked.version === targetVersion && !options?.force) {
-      const blockedAtMs = Date.parse(blocked.at);
-      const withinCooldown = Number.isFinite(blockedAtMs) && Date.now() - blockedAtMs < UPGRADE_BLOCK_COOLDOWN_MS();
-      if (withinCooldown) {
-        throw new UpgradeRejectedError(
-          `version ${targetVersion} is in failure cooldown, rejecting retry: ${blocked.reason} (blocked at ${blocked.at})`,
-        );
-      }
+    if (
+      !options?.force &&
+      isBlockedVersionActive(blocked, targetVersion, new Date(), resolveBlockedCooldownMs())
+    ) {
+      throw new UpgradeRejectedError(
+        `version ${targetVersion} is in failure cooldown, rejecting retry: ${blocked!.reason} (blocked at ${blocked!.at})`,
+      );
     }
 
-    const state = stateOpsOf(spec);
-    const existingCurrent = await state.readCurrent(stateDir);
+    const existingCurrent = await readCurrentRelease(stateDir);
 
     const attemptId = options?.attemptId ?? randomUUID();
     let committed = false;
@@ -307,7 +281,7 @@ export async function performUpdate(
       }
 
       try {
-        await state.writeCurrent(stateDir, {
+        await writeCurrentRelease(stateDir, {
           version: targetVersion,
           entries: staged.entries,
           updatedAt: new Date().toISOString(),
@@ -333,10 +307,10 @@ export async function performUpdate(
         }
         try {
           if (existingCurrent) {
-            await state.writeCurrent(stateDir, existingCurrent);
+            await writeCurrentRelease(stateDir, existingCurrent);
             rollbackNotes.push(`current.json restored to ${existingCurrent.version}`);
           } else {
-            await state.deleteCurrent(stateDir);
+            await deleteCurrentRelease(stateDir);
             rollbackNotes.push('current.json deleted (was absent)');
           }
         } catch (restoreError) {
