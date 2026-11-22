@@ -57,6 +57,7 @@ const FACTORIES: ReadonlyArray<() => PluginDefinition> = [
 interface RecordedAction {
   id?: string
   description?: unknown
+  exposeAsTool?: boolean | { name?: string; description?: unknown }
   promptSnippet?: unknown
   promptGuidelines?: unknown
   cli?: { description?: unknown } | undefined
@@ -192,6 +193,11 @@ test('执行文案：action/tool 注册描述固定英文纯 string（不本地�
       const where = `${definition.id} action#${String(action.id)}`
       assert.ok(typeof action.description === 'string' && action.description.length > 0, `${where}.description 必须是非空纯 string`)
       assert.equal(HAN.test(action.description), false, `${where}.description 必须固定英文`)
+      if (typeof action.exposeAsTool === 'object' && action.exposeAsTool !== null && action.exposeAsTool.description !== undefined) {
+        const toolDesc = action.exposeAsTool.description
+        assert.ok(typeof toolDesc === 'string' && toolDesc.length > 0, `${where} exposeAsTool.description 必须是非空纯 string`)
+        assert.equal(HAN.test(toolDesc), false, `${where} exposeAsTool.description 必须固定英文`)
+      }
       const cliDescription = action.cli?.description
       if (cliDescription !== undefined) {
         assert.ok(typeof cliDescription === 'string', `${where} cli.description 必须是纯 string`)
@@ -312,7 +318,7 @@ test('懒加载边界：herdr 与 superagent 停用态注册不加载重型运�
   const repoRoot = join(testDir, '..', '..', '..')
   const dataDir = useTempDir(t, 'helmx-lazy-plugins-')
 
-  // 1) 声明元数据同步采集仍完整暴露（herdr 4 动作；superagent 10 动作 + 7 工具）
+  // 1) 声明元数据同步采集仍完整暴露（herdr 4 动作；superagent 10 动作中 7 个单点 exposeAsTool 派生模型工具）
   const registrations = recordAllPlugins()
   const herdrReg = registrations.find((r) => r.definition.id === 'builtin:herdr')!
   assert.deepEqual(herdrReg.actions.map((a) => a.id).sort(), ['focus', 'list', 'read', 'steer'])
@@ -332,18 +338,20 @@ test('懒加载边界：herdr 与 superagent 停用态注册不加载重型运�
       'watchdog_tick',
     ],
   )
-  assert.deepEqual(
-    saReg.tools.map((tool) => tool.name).sort(),
-    [
-      'dispatch_worker',
-      'inspect_worker',
-      'recall_context',
-      'subscribe_thread',
-      'watchdog_abort',
-      'watchdog_inspect',
-      'watchdog_recover',
-    ],
-  )
+  assert.deepEqual(saReg.tools, [])
+  const saExposedTools = saReg.actions
+    .filter((a) => a.exposeAsTool !== undefined && a.exposeAsTool !== false)
+    .map((a) => (typeof a.exposeAsTool === 'object' && a.exposeAsTool.name !== undefined ? a.exposeAsTool.name : a.id))
+    .sort()
+  assert.deepEqual(saExposedTools, [
+    'dispatch_worker',
+    'inspect_worker',
+    'recall_context',
+    'subscribe_thread',
+    'watchdog_abort',
+    'watchdog_inspect',
+    'watchdog_recover',
+  ])
 
   // 2) 子进程实测（src/ 必跑；若 dist/ 已构建则同步验证构建产物）：enabled:false 注册后重型子模块未进入 Node 模块加载集
   const modes: Array<'src' | 'dist'> = ['src']

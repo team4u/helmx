@@ -391,6 +391,20 @@ export interface PluginToolResultEnvelope {
   isError?: boolean
 }
 
+/**
+ * Action visibility tier controlling which invocation surfaces can discover and call the action:
+ * - `'public'` (default): exposed on HTTP (`/api/actions`), CLI, Web UI, `run_action`, `<available_actions>`,
+ *   Workflow DSL, and `ctx.host.invokeAction`.
+ * - `'ui'`: UI/HTTP-facing action (e.g. composer completers, UI editors). Reachable via HTTP (`/api/actions`,
+ *   Web `ctx.callAction`, `GET /api/actions` manifest for UI validation) and `ctx.host.invokeAction`; hidden
+ *   from CLI top-level commands and `<available_actions>`, and rejected by `run_action` (execute & describe),
+ *   Workflow DSL, and `exposeAsTool`.
+ * - `'internal'`: plugin-to-plugin internal contract ONLY. Callable solely via `ctx.host.invokeAction` (with
+ *   host-stamped unforgeable `callerPluginId`). Omitted from `GET /api/actions` and rejected on HTTP,
+ *   `run_action`, Workflow DSL, `exposeAsTool`, and `composer.completer` UI bindings.
+ */
+export type PluginActionVisibility = 'public' | 'ui' | 'internal'
+
 /** Serializable manifest of a single registered action, consumed by CLI / Web / Workflow. */
 export interface ActionManifest extends PluginPromptFields {
   pluginId: string
@@ -403,16 +417,20 @@ export interface ActionManifest extends PluginPromptFields {
   description: ExecutionText
   inputSchema: JsonSchema
   outputSchema: JsonSchema
+  /** Action visibility tier (defaults to `'public'` when omitted). */
+  visibility?: PluginActionVisibility
   exposeAsTool?: boolean
+  /** Resolved provider-safe model tool name when `exposeAsTool === true` (omitted otherwise). */
+  toolName?: string
   /**
-   * Optional bounded UI presentation metadata schema declared when `exposeAsTool: true`
+   * Optional bounded UI presentation metadata schema declared when `exposeAsTool` is enabled
    * (persisted to `pi.tool-result.model[0].details` for replay; never enters model prompt).
    */
   presentationMetaSchema?: JsonSchema
   /**
-   * Whether this non-tool action is advertised in the `<available_actions>` prompt catalog (default true).
-   * UI-only actions (such as composer completers) set `false` to save system prompt tokens while staying
-   * callable via HTTP / CLI / UI completer sources.
+   * Whether this non-tool public action is advertised in the `<available_actions>` prompt catalog (default true).
+   * Public actions with dedicated CLI/HTTP paths (such as `skill_catalog`) may set `false` to save system prompt
+   * tokens; UI-only and internal actions should declare `visibility: 'ui' | 'internal'` instead.
    */
   exposeToPrompt?: boolean
   /**

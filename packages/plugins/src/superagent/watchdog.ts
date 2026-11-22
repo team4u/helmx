@@ -123,7 +123,7 @@ export function registerSuperAgentWatchdog(
   // ---- 执行层强守卫：turn_settled 自监控 + before_turn 白名单 + tool_call 阻断 --
   registerWatchdogSessionGuards(ctx, runtime, { activity, notify })
 
-  // ---- 模型工具（ctx.tool 精确短名）+ 同名 ctx.action（HTTP/CLI 复用） --------
+  // ---- 单点 ctx.action + exposeAsTool（HTTP/CLI 与 watchdog 专属模型工具复用） --
   registerWatchdogTools(ctx, runtime, { notify, externalProbes: lastExternalProbes })
 
   // ---------------------------------------------------------------------------

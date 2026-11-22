@@ -339,8 +339,7 @@ export function createTiersPlugin(): PluginDefinition {
       ctx.action({
         id: 'replace',
         description: 'Atomically replace the entire active model tiers table (primarily used by the Model Tiers UI editor)',
-        exposeToPrompt: false,
-        cli: { hidden: true },
+        visibility: 'ui',
         inputSchema: {
           type: 'object',
           required: ['tiers'],

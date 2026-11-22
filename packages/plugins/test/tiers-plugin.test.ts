@@ -127,6 +127,16 @@ test('integration: default enabled, managed skill, reserved namespace, CRUD acti
     const emptyCatalog = await kernel.listModels()
     assert.equal(emptyCatalog.modelTiers, undefined)
 
+    // 2b. Internal UI bulk-replace action carries visibility: 'ui' (allowed via HTTP, blocked via run_action)
+    const replaceManifest = kernel.plugins
+      .listActions()
+      .find((a) => a.pluginId === TIERS_PLUGIN_ID && a.id === 'replace')
+    assert.equal(replaceManifest?.visibility, 'ui')
+    await assertRejectsCode(
+      () => kernel.plugins.invokeAction(TIERS_PLUGIN_ID, 'replace', { tiers: {} }, {}, { surface: 'run_action' }),
+      'action_visibility_forbidden',
+    )
+
     // 3. Reserved namespace 'tier' cannot be disabled, given per-model thinking, or registered as a provider
     await assertRejectsCode(() => kernel.setDisabledModels('tier', ['scout']), 'validation_error')
     await assertRejectsCode(() => kernel.setModelThinkingDefault('tier/scout', 'high'), 'validation_error')

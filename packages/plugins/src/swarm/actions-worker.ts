@@ -404,7 +404,6 @@ export function createWorkerHandlers(
               ...(requestedCwd !== undefined ? { requestCwd: requestedCwd } : {}),
               ...(sourceConversationId !== undefined ? { fork: true } : {}),
               hold: {
-                pluginId: SWARM_PLUGIN_ID,
                 holdId: `${admission.groupId}:${memberName}`,
                 label: `Swarm group "${admission.groupTitle}" (${admission.groupId}) member @${memberName} (#${created.id})`,
               },

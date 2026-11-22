@@ -16,10 +16,12 @@ import {
   type PluginSessionDocStore,
 } from '../src/plugins/doc-registry.js';
 import {
+  actionToolAlias,
   CapabilityRegistry,
   type CapabilityExecutionOptions,
 } from '../src/plugins/capability-registry.js';
 import { UiRegistry } from '../src/plugins/ui-registry.js';
+import { assertUiCompleterActionBindings } from '../src/plugins/ui-validation.js';
 import { PluginTaskTracker } from '../src/plugins/tracking.js';
 import { MemoryDocStore } from './helpers.js';
 
@@ -475,7 +477,7 @@ test('CapabilityRegistry: tool/action declaration, list projection, and scope va
   });
 
   assert.deepEqual(cap.getActionIds('p1'), ['doSomething']);
-  assert.deepEqual(cap.getToolNames('p1'), ['customTool']);
+  assert.deepEqual(cap.getToolNames('p1'), ['customTool', actionToolAlias('p1', 'doSomething')]);
 
   const actions = cap.listActions(['p1']);
   assert.equal(actions.length, 1);
@@ -711,4 +713,301 @@ test('UiRegistry: listUi preserves activePluginIds iteration order or internal m
   assert.equal(defaultList.length, 2);
   assert.equal(defaultList[0]!.pluginId, 'B');
   assert.equal(defaultList[1]!.pluginId, 'A');
+});
+
+test('CapabilityRegistry: visibility registration validation, enforcement matrix, and unforgeable callerPluginId/callId', { timeout: 60_000 }, async () => {
+  const cap = new CapabilityRegistry();
+  const tracker = new PluginTaskTracker();
+  const fakeConv = {
+    id: 1,
+    title: 'c',
+    profileId: 'assistant',
+    model: 'm',
+    status: 'idle',
+    nodeId: 'local',
+    cwd: '/',
+    tags: [],
+    createdAt: 0,
+    updatedAt: 0,
+  } as unknown as ConversationSummary;
+
+  const baseOpts = (caller?: CapabilityExecutionOptions['caller']): CapabilityExecutionOptions => ({
+    assertActive: () => {},
+    getConversation: () => fakeConv,
+    tracker,
+    isPluginRegistered: () => true,
+    ...(caller !== undefined ? { caller } : {}),
+  });
+
+  // Registration boundary checks
+  assert.throws(
+    () =>
+      cap.registerAction('p1', {
+        id: 'badVis',
+        description: 'bad',
+        inputSchema: { type: 'object' },
+        outputSchema: { type: 'object' },
+        visibility: 'secret' as never,
+        handler: () => ({}),
+      }),
+    (err: unknown) => err instanceof HelmxError && err.code === 'invalid_action_spec' && err.status === 400,
+  );
+  for (const vis of ['ui', 'internal'] as const) {
+    assert.throws(
+      () =>
+        cap.registerAction('p1', {
+          id: `bad_${vis}_tool`,
+          description: 'bad',
+          inputSchema: { type: 'object' },
+          outputSchema: { type: 'object' },
+          visibility: vis,
+          exposeAsTool: true,
+          handler: () => ({}),
+        }),
+      (err: unknown) => err instanceof HelmxError && err.code === 'invalid_action_spec',
+    );
+    assert.throws(
+      () =>
+        cap.registerAction('p1', {
+          id: `bad_${vis}_prompt`,
+          description: 'bad',
+          inputSchema: { type: 'object' },
+          outputSchema: { type: 'object' },
+          visibility: vis,
+          exposeToPrompt: true,
+          handler: () => ({}),
+        }),
+      (err: unknown) => err instanceof HelmxError && err.code === 'invalid_action_spec',
+    );
+    assert.throws(
+      () =>
+        cap.registerAction('p1', {
+          id: `bad_${vis}_cli`,
+          description: 'bad',
+          inputSchema: { type: 'object' },
+          outputSchema: { type: 'object' },
+          visibility: vis,
+          cli: { command: ['p1', 'x'] },
+          handler: () => ({}),
+        }),
+      (err: unknown) => err instanceof HelmxError && err.code === 'invalid_action_spec',
+    );
+  }
+
+  // Register public / ui / internal actions capturing received effective context
+  const seenContexts: Array<{ action: string; callerPluginId: unknown; callId: unknown }> = [];
+  for (const vis of ['public', 'ui', 'internal'] as const) {
+    cap.registerAction('p1', {
+      id: `act_${vis}`,
+      description: `${vis} action`,
+      inputSchema: { type: 'object' },
+      outputSchema: { type: 'object' },
+      visibility: vis,
+      ...(vis === 'public' ? { exposeAsTool: { name: 'pub_tool' } } : {}),
+      handler: (_input, ctx) => {
+        seenContexts.push({ action: `act_${vis}`, callerPluginId: ctx.callerPluginId, callId: ctx.callId });
+        return { callerPluginId: ctx.callerPluginId ?? null, callId: ctx.callId ?? null };
+      },
+    });
+  }
+
+  // 1) public: allowed on http/run_action/tool/plugin; forged callerPluginId ignored; callId forwarded only on tool
+  const pubHttp = (await cap.invokeAction(
+    'p1',
+    'act_public',
+    {},
+    { callerPluginId: 'spoof', callId: 'spoof-call' },
+    baseOpts({ surface: 'http' }),
+  )) as { callerPluginId: string | null; callId: string | null };
+  assert.deepEqual(pubHttp, { callerPluginId: null, callId: null });
+
+  const pubPlugin = (await cap.invokeAction(
+    'p1',
+    'act_public',
+    {},
+    { callerPluginId: 'spoof', callId: 'spoof-call' },
+    baseOpts({ surface: 'plugin', callerPluginId: 'trusted:caller' }),
+  )) as { callerPluginId: string | null; callId: string | null };
+  assert.deepEqual(pubPlugin, { callerPluginId: 'trusted:caller', callId: null });
+
+  const pubTool = (await cap.executeTool(
+    'pub_tool',
+    {},
+    { conversationId: 1, callId: 'real-call-42' },
+    baseOpts(),
+  )) as { callerPluginId: string | null; callId: string | null };
+  assert.deepEqual(pubTool, { callerPluginId: null, callId: 'real-call-42' });
+
+  // 2) ui: allowed on http & plugin, rejected on run_action & tool
+  const uiHttp = (await cap.invokeAction('p1', 'act_ui', {}, { callerPluginId: 'spoof' }, baseOpts())) as {
+    callerPluginId: string | null;
+  };
+  assert.equal(uiHttp.callerPluginId, null);
+  const uiPlugin = (await cap.invokeAction(
+    'p1',
+    'act_ui',
+    {},
+    {},
+    baseOpts({ surface: 'plugin', callerPluginId: 'ui:peer' }),
+  )) as { callerPluginId: string | null };
+  assert.equal(uiPlugin.callerPluginId, 'ui:peer');
+  for (const surface of ['run_action', 'tool'] as const) {
+    await assert.rejects(
+      () => cap.invokeAction('p1', 'act_ui', {}, {}, baseOpts({ surface })),
+      (err: unknown) => err instanceof HelmxError && err.code === 'action_visibility_forbidden' && err.status === 403,
+    );
+  }
+
+  // 3) internal: allowed ONLY on plugin surface with non-empty callerPluginId
+  for (const badCaller of [
+    undefined,
+    { surface: 'http' as const },
+    { surface: 'run_action' as const },
+    { surface: 'tool' as const },
+    { surface: 'plugin' as const },
+    { surface: 'plugin' as const, callerPluginId: '   ' },
+  ]) {
+    await assert.rejects(
+      () => cap.invokeAction('p1', 'act_internal', {}, { callerPluginId: 'spoof' }, baseOpts(badCaller)),
+      (err: unknown) => err instanceof HelmxError && err.code === 'action_visibility_forbidden' && err.status === 403,
+    );
+  }
+  const intOk = (await cap.invokeAction(
+    'p1',
+    'act_internal',
+    {},
+    { callerPluginId: 'spoof', callId: 'spoof-call' },
+    baseOpts({ surface: 'plugin', callerPluginId: 'builtin:swarm' }),
+  )) as { callerPluginId: string | null; callId: string | null };
+  assert.deepEqual(intOk, { callerPluginId: 'builtin:swarm', callId: null });
+});
+
+test('CapabilityRegistry: exposeAsTool object form validates options and derives explicit tool spec', { timeout: 60_000 }, async () => {
+  const cap = new CapabilityRegistry();
+  const tracker = new PluginTaskTracker();
+  const fakeConv = {
+    id: 1,
+    title: 'c',
+    profileId: 'assistant',
+    model: 'm',
+    status: 'idle',
+    nodeId: 'local',
+    cwd: '/',
+    tags: [],
+    createdAt: 0,
+    updatedAt: 0,
+  } as unknown as ConversationSummary;
+  const opts: CapabilityExecutionOptions = {
+    assertActive: () => {},
+    getConversation: () => fakeConv,
+    tracker,
+    isPluginRegistered: () => true,
+  };
+
+  // Invalid exposeAsTool specs rejected at registration
+  for (const badExpose of [
+    'yes',
+    [],
+    { unknownKey: true },
+    { name: 'bad.name' },
+    { name: 'bad:name' },
+    { name: '' },
+    { description: '   ' },
+    { replay: 'always' },
+    { formatOutput: 'not-a-fn' },
+  ]) {
+    assert.throws(
+      () =>
+        cap.registerAction('p1', {
+          id: 'bad',
+          description: 'desc',
+          inputSchema: { type: 'object' },
+          outputSchema: { type: 'object' },
+          exposeAsTool: badExpose as never,
+          handler: () => ({}),
+        }),
+      (err: unknown) =>
+        err instanceof HelmxError &&
+        (err.code === 'invalid_action_spec' || err.code === 'invalid_identifier') &&
+        err.status === 400,
+    );
+  }
+
+  // Valid object form: explicit name, description override, replay:'safe', formatOutput
+  cap.registerAction<{ who: string }, { greeted: string }>('p1', {
+    id: 'greet',
+    description: 'Action description',
+    inputSchema: { type: 'object', properties: { who: { type: 'string' } }, required: ['who'] },
+    outputSchema: { type: 'object', properties: { greeted: { type: 'string' } }, required: ['greeted'] },
+    exposeAsTool: {
+      name: 'friendly_greet',
+      description: 'Model tool description',
+      replay: 'safe',
+      formatOutput: (_input, output) => `Hi ${output.greeted}!`,
+    },
+    handler: (input) => ({ greeted: input.who }),
+  });
+
+  const manifest = cap.listActions(['p1']).find((a) => a.id === 'greet');
+  assert.equal(manifest?.visibility, 'public');
+  assert.equal(manifest?.exposeAsTool, true);
+  assert.equal(manifest?.toolName, 'friendly_greet');
+
+  const tool = cap.listTools(['p1']).find((t) => t.name === 'friendly_greet');
+  assert.ok(tool);
+  assert.equal(tool.description, 'Model tool description');
+  assert.equal(tool.replay, 'safe');
+  assert.equal(tool.sourceKind, 'action');
+  assert.equal(tool.qualifiedId, 'p1.greet');
+  assert.equal(tool.formatOutput?.({ who: 'Ada' }, { greeted: 'Ada' }), 'Hi Ada!');
+
+  assert.deepEqual(cap.getToolNames('p1'), ['friendly_greet']);
+  assert.deepEqual(await cap.executeTool('friendly_greet', { who: 'Ada' }, { conversationId: 1 }, opts), {
+    greeted: 'Ada',
+  });
+  assert.deepEqual(await cap.executeTool('p1.greet', { who: 'Lin' }, { conversationId: 1 }, opts), {
+    greeted: 'Lin',
+  });
+});
+
+test('assertUiCompleterActionBindings rejects internal actions while allowing ui/public actions', { timeout: 60_000 }, () => {
+  const cap = new CapabilityRegistry();
+  const ui = new UiRegistry();
+  cap.registerAction('p1', {
+    id: 'ui_comp',
+    description: 'UI completer',
+    inputSchema: { type: 'object' },
+    outputSchema: { type: 'object' },
+    visibility: 'ui',
+    idempotent: true,
+    handler: () => ({}),
+  });
+  cap.registerAction('p1', {
+    id: 'internal_op',
+    description: 'Internal op',
+    inputSchema: { type: 'object' },
+    outputSchema: { type: 'object' },
+    visibility: 'internal',
+    idempotent: true,
+    handler: () => ({}),
+  });
+
+  ui.registerUi(
+    'p1',
+    'composer.completer',
+    { id: 'c_ui', trigger: '@', label: 'UI completer', source: { kind: 'action', actionId: 'ui_comp' } },
+    'composerCompleter',
+  );
+  assert.doesNotThrow(() => assertUiCompleterActionBindings('p1', ui, cap, new Map(), false));
+
+  ui.registerUi(
+    'p1',
+    'composer.completer',
+    { id: 'c_internal', trigger: '#', label: 'Internal completer', source: { kind: 'action', actionId: 'internal_op' } },
+    'composerCompleter',
+  );
+  assert.throws(
+    () => assertUiCompleterActionBindings('p1', ui, cap, new Map(), false),
+    (err: unknown) => err instanceof HelmxError && err.code === 'invalid_ui_spec' && err.status === 400,
+  );
 });

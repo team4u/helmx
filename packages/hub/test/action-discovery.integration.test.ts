@@ -423,24 +423,47 @@ test('describe 模式：真实 run_action 返回完整嵌套 Schema 且不执行
   }
 })
 
-test('builtin:worktree 内部跨插件动作不进 <available_actions>：acquire/release 隐藏，公开动作列目录', { timeout: 60_000 }, async () => {
+test('builtin:worktree 内部动作与 builtin:tiers UI 动作不进 <available_actions> 且在 run_action 被 403 硬拦截；cleanup_worktree 直投工具不重复列目录', { timeout: 60_000 }, async () => {
   const conv = await env.kernel.createConversation({ title: 'worktree-actions-directory' })
   requests.length = 0
   env.faux.setResponses([capture()])
   await submitAndWait(conv.id, 'show actions')
-  const section = actionsSection(requests[0]!)!
+  const req = requests[0]!
+  const section = actionsSection(req)!
   assert.ok(section.includes('<available_actions>'), 'run_action 在场时应渲染动作目录')
-  // 内部跨插件动作（swarm 经 invokeAction 消费）绝不进入模型提示词目录。
+  // internal 动作（worktree.acquire_worktree / release_worktree_hold）与 ui 动作（tiers.replace）绝不进入模型目录。
   assert.ok(!section.includes('acquire_worktree'), 'acquire_worktree 不得出现在 <available_actions>')
   assert.ok(!section.includes('release_worktree_hold'), 'release_worktree_hold 不得出现在 <available_actions>')
-  // 公开动作（CLI/HTTP/AI 五端复用）保持目录可见，且归属 builtin:worktree。
-  assert.ok(section.includes('builtin:worktree.cleanup_worktree'))
+  assert.ok(!section.includes('builtin:tiers.replace'), 'tiers.replace (visibility: ui) 不得出现在 <available_actions>')
+  // cleanup_worktree 通过 exposeAsTool 直投精确工具名，不再重复进入 <available_actions>。
+  assert.ok(req.toolNames.includes('cleanup_worktree'), 'cleanup_worktree 应作为精确模型工具直接暴露')
+  assert.ok(!section.includes('builtin:worktree.cleanup_worktree'), 'cleanup_worktree 已直投工具，不得重复出现在 <available_actions>')
+  // 其余公开动作仍保持目录可见。
   assert.ok(section.includes('builtin:worktree.list_worktrees'))
   assert.ok(section.includes('builtin:worktree.inspect_worktree'))
   // 全部请求段均不得泄漏内部动作名（防跨段残留）。
-  for (const [id, text] of Object.entries(requests[0]!.sectionsById)) {
+  for (const [id, text] of Object.entries(req.sectionsById)) {
     if (id === 'prompt.actions') continue
     assert.ok(!(text ?? '').includes('acquire_worktree'), `段 ${id} 不得泄漏 acquire_worktree`)
     assert.ok(!(text ?? '').includes('release_worktree_hold'), `段 ${id} 不得泄漏 release_worktree_hold`)
   }
+
+  // run_action 执行与 describe 均必须硬拒 internal 与 ui 动作（403 action_visibility_forbidden），绝不泄漏 schema 或触发副作用。
+  const guardConv = await env.kernel.createConversation({ title: 'visibility-guard-run-action' })
+  env.faux.setResponses([
+    toolCallStep('run_action', { actionId: 'builtin:worktree.acquire_worktree', describe: true }),
+    toolCallStep('run_action', {
+      actionId: 'builtin:worktree.acquire_worktree',
+      input: { conversationId: guardConv.id, parentConversationId: 1, hold: { holdId: 'x', label: 'y' } },
+    }),
+    toolCallStep('run_action', { actionId: 'builtin:worktree.release_worktree_hold', input: { worktreeId: 'local:/x', holdId: 'h' } }),
+    toolCallStep('run_action', { actionId: 'builtin:tiers.replace', describe: true }),
+    toolCallStep('run_action', { actionId: 'builtin:tiers.replace', input: { tiers: {} } }),
+    capture(),
+  ])
+  await submitAndWait(guardConv.id, 'probe forbidden actions')
+  const resultTexts = toolResultTexts((await env.kernel.getConversationDetail(guardConv.id)).entries)
+  assert.ok(resultTexts.includes("visibility 'internal'"), `run_action 应拒绝 internal 动作：${resultTexts}`)
+  assert.ok(resultTexts.includes("visibility 'ui'"), `run_action 应拒绝 ui 动作：${resultTexts}`)
+  assert.ok(!resultTexts.includes('parentConversationId'), 'describe 拒绝 internal 时不得泄漏 inputSchema')
 })

@@ -333,6 +333,7 @@ export class HookBridge {
     if (!requestNames.has('run_action') || !finalNames.has('run_action')) return undefined
     const entries: ActionDirectoryEntry[] = []
     for (const manifest of host.listActions()) {
+      if (manifest.visibility === 'ui' || manifest.visibility === 'internal') continue
       if (manifest.exposeAsTool === true) continue
       if (manifest.exposeToPrompt === false) continue
       if (!matchesConversationScope(manifest.scope, summary)) continue

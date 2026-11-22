@@ -14,8 +14,8 @@ import {
   type ConversationScope,
   type HelmxPluginContext,
   type JsonSchema,
+  type PluginActionToolSpec,
   type PluginDefinition,
-  type PluginToolSpec,
 } from '@helmx/protocol'
 import { resolvePluginClientAssets } from './asset-paths.js'
 import {
@@ -179,15 +179,6 @@ const DISPATCH_WORKER_OUTPUT_SCHEMA: Record<string, unknown> = {
   additionalProperties: false,
 }
 
-interface DeclarativeToolSpec {
-  name: string
-  description: string
-  inputSchema: Record<string, unknown>
-  structuredOutputSchema?: JsonSchema
-  presentationMetaSchema?: JsonSchema
-  scope: ConversationScope
-}
-
 interface DeclarativeActionSpec {
   id: string
   description: string
@@ -195,70 +186,29 @@ interface DeclarativeActionSpec {
   inputSchema: Record<string, unknown>
   outputSchema: Record<string, unknown>
   scope?: ConversationScope
+  exposeAsTool?: PluginActionToolSpec<unknown, unknown>
+  presentationMetaSchema?: JsonSchema
+  projectPresentationMeta?: (input: unknown, output: unknown) => Record<string, unknown> | undefined
 }
-
-const TOOL_SPECS: ReadonlyArray<DeclarativeToolSpec> = [
-  {
-    name: 'dispatch_worker',
-    description:
-      'Spawn a background worker conversation to execute a task without blocking (returns workerConversationId immediately, without waiting for the model turn to finish). Optionally pin an expert Profile via profileId and bind an event subscription via threadKey.',
-    inputSchema: DISPATCH_INPUT_SCHEMA,
-    structuredOutputSchema: DISPATCH_WORKER_OUTPUT_SCHEMA,
-    presentationMetaSchema: DISPATCH_WORKER_OUTPUT_SCHEMA,
-    scope: ROUTER_TOOL_SCOPE,
-  },
-  {
-    name: 'inspect_worker',
-    description: "Read a background worker's recent timeline summary and artifact list.",
-    inputSchema: WORKER_ID_INPUT_SCHEMA,
-    scope: ROUTER_TOOL_SCOPE,
-  },
-  {
-    name: 'recall_context',
-    description: 'Search the RecallGraph memory graph (filters historical task-summary nodes by keywords, multiple words AND-combined).',
-    inputSchema: RECALL_INPUT_SCHEMA,
-    scope: ROUTER_TOOL_SCOPE,
-  },
-  {
-    name: 'subscribe_thread',
-    description: 'Bind a threadKey event subscription to the given background worker (conflicts are explicitly rejected, never preempted).',
-    inputSchema: SUBSCRIBE_INPUT_SCHEMA,
-    scope: ROUTER_TOOL_SCOPE,
-  },
-  {
-    name: 'watchdog_inspect',
-    description:
-      'Read the real details of an inspection target: conversationId returns the native conversation summary and recent timeline (ownership checked live); probe returns the latest external-target probe facts (read-only; never pretends to control external panes).',
-    inputSchema: WATCHDOG_INSPECT_SCHEMA,
-    scope: WATCHDOG_SCOPE,
-  },
-  {
-    name: 'watchdog_recover',
-    description:
-      'Submit a recovery hint to an owned (helmx/bot) native conversation (agent origin, without waiting for a model turn); ownership is atomically rechecked at the effect point via the kernel guarded port; human targets are rejected.',
-    inputSchema: WATCHDOG_RECOVER_SCHEMA,
-    scope: WATCHDOG_SCOPE,
-  },
-  {
-    name: 'watchdog_abort',
-    description:
-      'Abort an owned (helmx/bot) native conversation; ownership is atomically rechecked at the effect point via the kernel guarded port; human/root/hub/watchdog-itself are rejected. External panes can only be aborted indirectly via their owned parent conversation.',
-    inputSchema: WATCHDOG_ABORT_SCHEMA,
-    scope: WATCHDOG_SCOPE,
-  },
-]
 
 const ACTION_SPECS: ReadonlyArray<DeclarativeActionSpec> = [
   {
     id: 'dispatch_worker',
     description: 'Spawn a background worker without blocking (hub conversation or manual HTTP/CLI calls).',
     inputSchema: DISPATCH_INPUT_SCHEMA,
-    outputSchema: {
-      type: 'object',
-      properties: { workerConversationId: { type: 'number' } },
-      required: ['workerConversationId'],
-      additionalProperties: false,
+    outputSchema: DISPATCH_WORKER_OUTPUT_SCHEMA,
+    scope: ROUTER_TOOL_SCOPE,
+    exposeAsTool: {
+      name: 'dispatch_worker',
+      description:
+        'Spawn a background worker conversation to execute a task without blocking (returns workerConversationId immediately, without waiting for the model turn to finish). Optionally pin an expert Profile via profileId and bind an event subscription via threadKey.',
+      formatOutput: (_input, out) =>
+        `Dispatched background worker #${(out as { workerConversationId: number }).workerConversationId}.`,
     },
+    presentationMetaSchema: DISPATCH_WORKER_OUTPUT_SCHEMA,
+    projectPresentationMeta: (_input, out) => ({
+      workerConversationId: (out as { workerConversationId: number }).workerConversationId,
+    }),
   },
   {
     id: 'inspect_worker',
@@ -266,6 +216,11 @@ const ACTION_SPECS: ReadonlyArray<DeclarativeActionSpec> = [
     idempotent: true,
     inputSchema: WORKER_ID_INPUT_SCHEMA,
     outputSchema: { type: 'object' },
+    scope: ROUTER_TOOL_SCOPE,
+    exposeAsTool: {
+      name: 'inspect_worker',
+      description: "Read a background worker's recent timeline summary and artifact list.",
+    },
   },
   {
     id: 'recall_context',
@@ -273,12 +228,24 @@ const ACTION_SPECS: ReadonlyArray<DeclarativeActionSpec> = [
     idempotent: true,
     inputSchema: RECALL_INPUT_SCHEMA,
     outputSchema: { type: 'object' },
+    scope: ROUTER_TOOL_SCOPE,
+    exposeAsTool: {
+      name: 'recall_context',
+      description:
+        'Search the RecallGraph memory graph (filters historical task-summary nodes by keywords, multiple words AND-combined).',
+    },
   },
   {
     id: 'subscribe_thread',
     description: 'Bind a threadKey event subscription to the given background worker.',
     inputSchema: SUBSCRIBE_INPUT_SCHEMA,
     outputSchema: { type: 'object' },
+    scope: ROUTER_TOOL_SCOPE,
+    exposeAsTool: {
+      name: 'subscribe_thread',
+      description:
+        'Bind a threadKey event subscription to the given background worker (conflicts are explicitly rejected, never preempted).',
+    },
   },
   {
     id: 'archive_worker',
@@ -314,6 +281,11 @@ const ACTION_SPECS: ReadonlyArray<DeclarativeActionSpec> = [
     inputSchema: WATCHDOG_INSPECT_SCHEMA,
     outputSchema: WATCHDOG_INSPECT_OUTPUT_SCHEMA,
     scope: WATCHDOG_SCOPE,
+    exposeAsTool: {
+      name: 'watchdog_inspect',
+      description:
+        'Read the real details of an inspection target: conversationId returns the native conversation summary and recent timeline (ownership checked live); probe returns the latest external-target probe facts (read-only; never pretends to control external panes).',
+    },
   },
   {
     id: 'watchdog_recover',
@@ -321,6 +293,11 @@ const ACTION_SPECS: ReadonlyArray<DeclarativeActionSpec> = [
     inputSchema: WATCHDOG_RECOVER_SCHEMA,
     outputSchema: WATCHDOG_MUTATION_OUTPUT_SCHEMA,
     scope: WATCHDOG_SCOPE,
+    exposeAsTool: {
+      name: 'watchdog_recover',
+      description:
+        'Submit a recovery hint to an owned (helmx/bot) native conversation (agent origin, without waiting for a model turn); ownership is atomically rechecked at the effect point via the kernel guarded port; human targets are rejected.',
+    },
   },
   {
     id: 'watchdog_abort',
@@ -328,6 +305,11 @@ const ACTION_SPECS: ReadonlyArray<DeclarativeActionSpec> = [
     inputSchema: WATCHDOG_ABORT_SCHEMA,
     outputSchema: WATCHDOG_MUTATION_OUTPUT_SCHEMA,
     scope: WATCHDOG_SCOPE,
+    exposeAsTool: {
+      name: 'watchdog_abort',
+      description:
+        'Abort an owned (helmx/bot) native conversation; ownership is atomically rechecked at the effect point via the kernel guarded port; human/root/hub/watchdog-itself are rejected. External panes can only be aborted indirectly via their owned parent conversation.',
+    },
   },
   {
     id: 'watchdog_tick',
@@ -363,17 +345,6 @@ function registerDeclarativeCapabilities(
   ctx: HelmxPluginContext,
   ensureRuntime: () => Promise<SuperAgentRuntimeController>,
 ): void {
-  for (const spec of TOOL_SPECS) {
-    ctx.tool({
-      name: spec.name,
-      description: spec.description,
-      inputSchema: spec.inputSchema,
-      ...(spec.structuredOutputSchema !== undefined ? { structuredOutputSchema: spec.structuredOutputSchema } : {}),
-      ...(spec.presentationMetaSchema !== undefined ? { presentationMetaSchema: spec.presentationMetaSchema } : {}),
-      scope: spec.scope,
-      execute: async (input, context) => (await ensureRuntime()).executeTool(spec.name, input, context),
-    })
-  }
   for (const spec of ACTION_SPECS) {
     ctx.action({
       id: spec.id,
@@ -382,6 +353,9 @@ function registerDeclarativeCapabilities(
       inputSchema: spec.inputSchema,
       outputSchema: spec.outputSchema,
       ...(spec.scope !== undefined ? { scope: spec.scope } : {}),
+      ...(spec.exposeAsTool !== undefined ? { exposeAsTool: spec.exposeAsTool } : {}),
+      ...(spec.presentationMetaSchema !== undefined ? { presentationMetaSchema: spec.presentationMetaSchema } : {}),
+      ...(spec.projectPresentationMeta !== undefined ? { projectPresentationMeta: spec.projectPresentationMeta } : {}),
       handler: async (input, context) => (await ensureRuntime()).invokeAction(spec.id, input, context),
     })
   }

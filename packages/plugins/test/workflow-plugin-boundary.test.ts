@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { HelmxError, type ConversationSummary, type MaybePromise, type PluginDefinition, type PluginToolContext } from '@helmx/protocol'
 import { WORKFLOW_PLUGIN_ID } from '../src/contracts.js'
+import { resolveActionId } from '../src/workflow/engine/host-action-adapter.js'
 import { PluginHost } from '../../kernel/src/plugins/index.js'
 import { PluginHostBackendFixtureBase } from '../../kernel/test/helpers/plugin-host-backend.js'
 import { pluginToolResult } from '../../kernel/src/runtime/runtime-helpers.js'
@@ -622,45 +623,36 @@ function seedManagedWorktree(docStore: MemoryDocStore): void {
   })
 }
 
-test('cleanup_worktree 工具：错误分支仅 ok:false+error，绝不伪造空 worktreeId/path/branch/nodeId', { timeout: 60_000 }, async () => {
-  // 新契约：cleanup 由插件 WorktreeAllocator 经 ctx.host.execEnv 真实执行 git，
-  // 宿主 cleanupWorktree 端口已删除；execEnv 失败 → 错误信封（ok:false+error）。
+test('cleanup_worktree 工具：execEnv 失败真实抛错，绝不吞错或伪造空 metadata', { timeout: 60_000 }, async () => {
+  // 新契约：cleanup_worktree 通过 ctx.action + exposeAsTool 单点声明；
+  // execEnv 失败 → 显式抛出真实 HelmxError（不伪造空 worktreeId/path/branch/nodeId）。
   const host = makeHost()
   seedManagedWorktree(docs)
   const { createWorkflowPlugin } = await import('../src/workflow.js')
   const { createWorktreePlugin } = await import('../src/worktree.js')
   await host.register(createWorkflowPlugin())
   await host.register(createWorktreePlugin())
-  const raw = (await host.executeTool('cleanup_worktree', { conversationId: 1 }, {
-    conversationId: 1,
-    callId: 'call-1',
-  })) as { isError?: boolean; structuredOutput?: Record<string, unknown> }
-  assert.equal(raw.isError, true)
-  assert.deepEqual(Object.keys(raw.structuredOutput ?? {}).sort(), ['error', 'ok'])
-  assert.equal(raw.structuredOutput?.['ok'], false)
-  // 真实诊断透传：execEnv 的 git 失败输出必须出现在 error 里（不伪造、不吞）。
-  assert.ok(String(raw.structuredOutput?.['error']).includes('not a git repository'))
+  const spec = host.listTools().find((t) => t.name === 'cleanup_worktree')
+  assert.ok(spec && spec.sourceKind === 'action', 'cleanup_worktree must be derived from action')
+  await assert.rejects(
+    () =>
+      host.executeTool('cleanup_worktree', { conversationId: 1 }, {
+        conversationId: 1,
+        callId: 'call-1',
+      }),
+    (err: unknown) => err instanceof Error && err.message.includes('not a git repository'),
+  )
   await host.dispose()
 })
 
-test('cleanup_worktree 工具错误信封：structuredOutput 仅 { ok:false, error }，无伪造 metadata', { timeout: 60_000 }, async () => {
-  // 无登记选择器未命中：not_found 诊断同样只走 ok:false+error 信封。
+test('cleanup_worktree 工具：无登记选择器未命中显式抛 404 not_found，不伪造 metadata', { timeout: 60_000 }, async () => {
   const host = makeHost()
   const { createWorktreePlugin } = await import('../src/worktree.js')
   await host.register(createWorktreePlugin())
-  const raw = (await host.executeTool('cleanup_worktree', { conversationId: 2 }, toolContext())) as {
-    output: Array<{ type: string; text: string }>
-    isError?: boolean
-    structuredOutput?: Record<string, unknown>
-  }
-  assert.equal(raw.isError, true)
-  assert.deepEqual(
-    Object.keys(raw.structuredOutput ?? {}).sort(),
-    ['error', 'ok'],
-    `错误信封字段必须仅 ok/error（实际 ${JSON.stringify(raw.structuredOutput)}）`,
+  await assert.rejects(
+    () => host.executeTool('cleanup_worktree', { conversationId: 2 }, toolContext()),
+    (err: unknown) => err instanceof HelmxError && err.code === 'not_found' && err.status === 404 && err.message.includes('未找到'),
   )
-  assert.equal(raw.structuredOutput?.['ok'], false)
-  assert.ok(String(raw.structuredOutput?.['error']).includes('未找到'), `error 保留真实诊断（实际 ${JSON.stringify(raw.structuredOutput)}）`)
   await host.dispose()
 })
 
@@ -879,4 +871,68 @@ test('save 动作 fromRunId：内联 run 固化为定义（经真实插件 recor
   } finally {
     await host.dispose()
   }
+})
+
+test('Workflow DSL resolveActionId 拦截 visibility=ui/internal（全限定与短 id 均 403 action_visibility_forbidden）', { timeout: 60_000 }, () => {
+  const host = {
+    listActions: () => [
+      {
+        pluginId: 'builtin:worktree',
+        id: 'acquire_worktree',
+        description: 'internal',
+        inputSchema: { type: 'object' },
+        outputSchema: { type: 'object' },
+        visibility: 'internal' as const,
+      },
+      {
+        pluginId: 'builtin:tiers',
+        id: 'replace',
+        description: 'ui replace',
+        inputSchema: { type: 'object' },
+        outputSchema: { type: 'object' },
+        visibility: 'ui' as const,
+      },
+      {
+        pluginId: 'builtin:demo',
+        id: 'shared_name',
+        description: 'public shared',
+        inputSchema: { type: 'object' },
+        outputSchema: { type: 'object' },
+        visibility: 'public' as const,
+      },
+      {
+        pluginId: 'builtin:hidden',
+        id: 'shared_name',
+        description: 'internal shared',
+        inputSchema: { type: 'object' },
+        outputSchema: { type: 'object' },
+        visibility: 'internal' as const,
+      },
+    ],
+  } as unknown as Parameters<typeof resolveActionId>[0]
+
+  // Qualified and bare short IDs for internal / ui actions reject with 403 action_visibility_forbidden
+  for (const blocked of [
+    'builtin:worktree.acquire_worktree',
+    'acquire_worktree',
+    'builtin:tiers.replace',
+    'replace',
+    'builtin:hidden.shared_name',
+  ]) {
+    assert.throws(
+      () => resolveActionId(host, blocked),
+      (err: unknown) => err instanceof HelmxError && err.code === 'action_visibility_forbidden' && err.status === 403,
+      `Workflow DSL must reject ${blocked}`,
+    )
+  }
+
+  // Bare short ID resolves to the single public action without false ambiguity from an internal peer
+  assert.deepEqual(resolveActionId(host, 'shared_name'), {
+    pluginId: 'builtin:demo',
+    actionId: 'shared_name',
+  })
+  assert.deepEqual(resolveActionId(host, 'builtin:demo.shared_name'), {
+    pluginId: 'builtin:demo',
+    actionId: 'shared_name',
+  })
 })

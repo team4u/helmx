@@ -33,7 +33,7 @@ import type {
 } from './env-rpc.js'
 import type { PluginUiContribution, PluginUiRegistry } from './ui.js'
 import type { AgentNamespacedMeta } from './meta.js'
-import type { LocalizedText } from './locale.js'
+import type { ExecutionText, LocalizedText } from './locale.js'
 import type {
   ActionManifest,
   AgentExecutionInfo,
@@ -44,6 +44,7 @@ import type {
   JsonSchema,
   MaybePromise,
   PluginActionCliSpec,
+  PluginActionVisibility,
   PluginConfigFieldSchema,
   PluginDocOptions,
   PluginDoctorReport,
@@ -53,6 +54,7 @@ import type {
   PluginRemoveResult,
   PluginSummary,
   PluginToolResultEnvelope,
+  PluginToolTextBlock,
   PluginUpdateResult,
 } from './plugin-dto.js'
 
@@ -274,12 +276,40 @@ export interface PluginHookRegistry {
 
 /**
  * 动作调用上下文：人工 HTTP/CLI 可无 conversationId；
- * 模型路径（run_action 元工具）与 Workflow 路径必须携带 conversationId，
+ * 模型路径（run_action 元工具 / exposeAsTool 派生工具）与 Workflow 路径携带 conversationId，
  * 供宿主校验 scope（防绕过会话作用域）。
  */
 export interface PluginActionContext {
   conversationId?: number
   signal?: AbortSignal
+  /**
+   * 宿主在 `ctx.host.invokeAction` 跨插件调用通道上盖章注入的调用方插件 ID（不可伪造）：
+   * 内核严格忽略调用方自填的 `context.callerPluginId`，仅在受信任插件通道上写入真实调用插件 ID；
+   * HTTP / CLI / `run_action` / 派生工具路径上恒为 `undefined`。
+   */
+  readonly callerPluginId?: string
+  /**
+   * 经 `exposeAsTool` 派生工具路径调用时宿主透传的 SDK tool callId（用于幂等重放去重）；
+   * HTTP / CLI / `run_action` / `ctx.host.invokeAction` 路径上恒为 `undefined`。
+   */
+  readonly callId?: string
+}
+
+/**
+ * `ctx.action` 派生直投模型工具的结构化配置（单点声明消除 `ctx.tool` + `ctx.action` 重复注册）。
+ */
+export interface PluginActionToolSpec<TIn = unknown, TOut = unknown> {
+  /** 显式 provider-safe 模型工具名（`/^[A-Za-z0-9_-]{1,64}$/`）；缺省自动生成确定性哈希别名。 */
+  name?: string
+  /** 可选的模型侧工具描述覆写（缺省复用动作的 `description`）。执行文案，须保持语言稳定。 */
+  description?: ExecutionText
+  /** 跨重启工具重放安全性（透传至 SDK `defineTool({ replay })`，缺省 `'unsafe'`）。 */
+  replay?: 'safe' | 'unsafe'
+  /**
+   * 可选的模型可读文本格式化纯函数：将 `(input, output)` 转为工具 `output` 文本信道；
+   * `handler` 继续返回经 `outputSchema` 校验的裸业务对象（透传至 `structuredOutput` 与 HTTP/CLI/Workflow/Web）。
+   */
+  formatOutput?(input: TIn, output: TOut): string | PluginToolTextBlock[]
 }
 
 export interface PluginActionSpec<TIn, TOut> extends PluginPromptFields {
@@ -288,23 +318,33 @@ export interface PluginActionSpec<TIn, TOut> extends PluginPromptFields {
   description: string
   inputSchema: JsonSchema
   outputSchema: JsonSchema
+  /**
+   * 可信可见性级别（默认 `'public'`）：
+   * - `'public'`：HTTP / CLI / Web / `run_action` / Workflow / `ctx.host.invokeAction` 全端可达；
+   * - `'ui'`：仅限 Web UI / HTTP 与插件间调用；隐藏出 CLI 与 `<available_actions>`，拒绝 `run_action`（执行与 describe）、Workflow DSL 与 `exposeAsTool`；
+   * - `'internal'`：仅限插件间 `ctx.host.invokeAction`（携宿主盖章 `callerPluginId`）；不进 `GET /api/actions`，拒绝 HTTP、`run_action`、Workflow DSL、`exposeAsTool` 与 `composer.completer` 绑定。
+   */
+  visibility?: PluginActionVisibility
   /** CLI 暴露微调；缺省自动挂载为 `helmx <plugin> <action>`。 */
   cli?: PluginActionCliSpec
-  /** true 直接注入模型工具列表；否则经元工具 run_action 按需调用。 */
-  exposeAsTool?: boolean
   /**
-   * 可选的有界展示元数据 Schema（仅在 `exposeAsTool: true` 时合法，否则注册期显式拒绝）。
+   * `true` 或结构化配置对象直接注入模型工具列表（不再重复进入 `<available_actions>`）；
+   * 缺省/`false` 经元工具 `run_action` 按需调用。仅 `visibility: 'public'` 可启用。
+   */
+  exposeAsTool?: boolean | PluginActionToolSpec<NoInfer<TIn>, NoInfer<TOut>>
+  /**
+   * 可选的有界展示元数据 Schema（仅在启用 `exposeAsTool` 时合法，否则注册期显式拒绝）。
    * 对应由 `projectPresentationMeta` 投影并写入 `pi.tool-result.model[0].details` 的 UI 重放元数据，绝不进入模型提示词。
    */
   presentationMetaSchema?: JsonSchema
   /**
-   * 可选纯投影函数（仅在 `exposeAsTool: true` 且声明 `presentationMetaSchema` 时合法）：
+   * 可选纯投影函数（仅在启用 `exposeAsTool` 且声明 `presentationMetaSchema` 时合法）：
    * 保持动作五端返回裸业务对象契约不变，同时为直投模型工具派生有界 UI 展示元数据。
    */
-  projectPresentationMeta?(input: TIn, output: TOut): Record<string, unknown> | undefined
+  projectPresentationMeta?(input: NoInfer<TIn>, output: NoInfer<TOut>): Record<string, unknown> | undefined
   /**
-   * 非直暴工具动作是否展示于 `<available_actions>` 系统提示词目录（默认 true）。
-   * 仅供 UI 补全等内部界面消费者调用的动作可设为 `false`，保留 HTTP / CLI / invokeAction 入口而不挤占模型上下文。
+   * 非直暴工具公开动作是否展示于 `<available_actions>` 系统提示词目录（默认 true）。
+   * 仅供界面或内部插件消费的动作应声明 `visibility: 'ui' | 'internal'`，而非仅靠 `exposeToPrompt: false`。
    */
   exposeToPrompt?: boolean
   /**

@@ -19,9 +19,12 @@ import {
   type JsonSchema,
   type PluginActionContext,
   type PluginActionSpec,
+  type PluginActionToolSpec,
+  type PluginActionVisibility,
   type PluginRouteSpec,
   type PluginToolContext,
   type PluginToolSpec,
+  type PluginToolTextBlock,
   isJsonObject,
   isPlainObject,
 } from '@helmx/protocol';
@@ -34,6 +37,16 @@ import {
   jsonClone,
 } from './shared.js'
 
+/** Trusted invocation surface for action visibility enforcement. */
+export type ActionInvocationSurface = 'http' | 'run_action' | 'tool' | 'plugin';
+
+/** Host-trusted caller identity (never read from user-supplied `PluginActionContext`). */
+export interface ActionCallerIdentity {
+  readonly surface: ActionInvocationSurface;
+  /** Host-stamped calling plugin ID; ONLY honored when `surface === 'plugin'`. */
+  readonly callerPluginId?: string;
+}
+
 export interface DerivedToolSpec {
   name: string;
   description: string;
@@ -44,7 +57,9 @@ export interface DerivedToolSpec {
   presentationMetaSchema?: JsonSchema;
   /** Pure projection function forwarded for `exposeAsTool` actions when declared (never serialized). */
   projectPresentationMeta?: (input: unknown, output: unknown) => Record<string, unknown> | undefined;
-  /** Cross-restart tool replay safety (forwarded when declared on ctx.tool; defaults to 'unsafe'). */
+  /** Pure model-facing output formatter forwarded for `exposeAsTool` actions when declared (never serialized). */
+  formatOutput?: (input: unknown, output: unknown) => string | PluginToolTextBlock[];
+  /** Cross-restart tool replay safety (forwarded from `ctx.tool` or `exposeAsTool` action; defaults to 'unsafe'). */
   replay?: 'safe' | 'unsafe';
   /** Conversation scope visibility constraint (forwarded when declared). */
   scope?: ConversationScope;
@@ -93,14 +108,21 @@ export function parseQualifiedActionId(qualified: string): { pluginId: string; a
   return { pluginId: qualified.slice(0, dot), actionId: qualified.slice(dot + 1) };
 }
 
+const VALID_ACTION_VISIBILITIES = new Set<PluginActionVisibility>(['public', 'ui', 'internal']);
+const ALLOWED_EXPOSE_AS_TOOL_KEYS = new Set(['name', 'description', 'replay', 'formatOutput']);
+
 interface ActionEntry {
   pluginId: string;
   id: string;
   description: string;
   inputSchema: JsonSchema;
   outputSchema: JsonSchema;
+  visibility: PluginActionVisibility;
   cli?: PluginActionSpec<unknown, unknown>['cli'];
   exposeAsTool: boolean;
+  toolDescription?: string;
+  toolReplay?: 'safe' | 'unsafe';
+  formatOutput?: (input: never, output: never) => string | PluginToolTextBlock[];
   presentationMetaSchema?: JsonSchema;
   projectPresentationMeta?: (input: never, output: never) => Record<string, unknown> | undefined;
   exposeToPrompt?: boolean;
@@ -182,6 +204,33 @@ function cloneScope(scope: ConversationScope): ConversationScope {
   };
 }
 
+function assertVisibilityAllows(entry: ActionEntry, caller: ActionCallerIdentity): void {
+  const { visibility } = entry;
+  if (visibility === 'public') return;
+  if (visibility === 'ui') {
+    if (caller.surface === 'http' || caller.surface === 'plugin') return;
+    throw new HelmxError(
+      'action_visibility_forbidden',
+      `Action ${entry.pluginId}.${entry.id} has visibility 'ui' and cannot be invoked from ${caller.surface}`,
+      403,
+      { pluginId: entry.pluginId, actionId: entry.id, visibility, surface: caller.surface },
+    );
+  }
+  if (
+    caller.surface === 'plugin' &&
+    typeof caller.callerPluginId === 'string' &&
+    caller.callerPluginId.trim().length > 0
+  ) {
+    return;
+  }
+  throw new HelmxError(
+    'action_visibility_forbidden',
+    `Action ${entry.pluginId}.${entry.id} has visibility 'internal' and can only be invoked via ctx.host.invokeAction by a plugin`,
+    403,
+    { pluginId: entry.pluginId, actionId: entry.id, visibility, surface: caller.surface },
+  );
+}
+
 function toManifest(entry: ActionEntry): ActionManifest {
   const manifest: ActionManifest = {
     pluginId: entry.pluginId,
@@ -189,7 +238,9 @@ function toManifest(entry: ActionEntry): ActionManifest {
     description: entry.description,
     inputSchema: entry.inputSchema,
     outputSchema: entry.outputSchema,
+    visibility: entry.visibility,
     exposeAsTool: entry.exposeAsTool,
+    ...(entry.exposeAsTool ? { toolName: entry.toolAlias } : {}),
     ...(entry.presentationMetaSchema !== undefined ? { presentationMetaSchema: entry.presentationMetaSchema } : {}),
     ...(entry.exposeToPrompt !== undefined ? { exposeToPrompt: entry.exposeToPrompt } : {}),
     ...(entry.scope !== undefined ? { scope: cloneScope(entry.scope) } : {}),
@@ -208,6 +259,8 @@ export interface CapabilityExecutionOptions {
   getConversation: (id: number) => ConversationSummary;
   tracker: PluginTaskTracker;
   isPluginRegistered: (pluginId: string) => boolean;
+  /** Trusted invocation surface and host-stamped callerPluginId (defaults to fail-closed `{ surface: 'http' }`). */
+  caller?: ActionCallerIdentity;
 }
 
 export class CapabilityRegistry {
@@ -358,19 +411,134 @@ export class CapabilityRegistry {
       );
     }
     assertConversationScope(pluginId, `Plugin ${pluginId} action ${spec.id}`, spec.scope);
+    if (
+      spec.visibility !== undefined &&
+      (typeof spec.visibility !== 'string' || !VALID_ACTION_VISIBILITIES.has(spec.visibility))
+    ) {
+      throw new HelmxError(
+        'invalid_action_spec',
+        `Plugin ${pluginId} action ${spec.id} visibility must be 'public' | 'ui' | 'internal'`,
+        400,
+      );
+    }
+    const visibility: PluginActionVisibility = spec.visibility ?? 'public';
+
+    let exposeAsToolEnabled = false;
+    let explicitToolName: string | undefined;
+    let toolDescription: string | undefined;
+    let toolReplay: 'safe' | 'unsafe' | undefined;
+    let formatOutput: ((input: never, output: never) => string | PluginToolTextBlock[]) | undefined;
+    if (spec.exposeAsTool === undefined || spec.exposeAsTool === false) {
+      exposeAsToolEnabled = false;
+    } else if (spec.exposeAsTool === true) {
+      exposeAsToolEnabled = true;
+    } else if (isPlainObject(spec.exposeAsTool)) {
+      const toolCfg = spec.exposeAsTool as PluginActionToolSpec<TIn, TOut> & Record<string, unknown>;
+      for (const key of Object.keys(toolCfg)) {
+        if (!ALLOWED_EXPOSE_AS_TOOL_KEYS.has(key)) {
+          throw new HelmxError(
+            'invalid_action_spec',
+            `Plugin ${pluginId} action ${spec.id} exposeAsTool contains unsupported key "${key}" (allowed: name, description, replay, formatOutput)`,
+            400,
+          );
+        }
+      }
+      if (toolCfg.name !== undefined) {
+        if (typeof toolCfg.name !== 'string') {
+          throw new HelmxError(
+            'invalid_action_spec',
+            `Plugin ${pluginId} action ${spec.id} exposeAsTool.name must be a string`,
+            400,
+          );
+        }
+        assertValidId('tool', toolCfg.name);
+        if (!PROVIDER_SAFE_TOOL_NAME.test(toolCfg.name)) {
+          throw new HelmxError(
+            'invalid_action_spec',
+            `Plugin ${pluginId} action ${spec.id} exposeAsTool.name "${toolCfg.name}" must match ${PROVIDER_SAFE_TOOL_NAME.source} (provider function naming constraint)`,
+            400,
+          );
+        }
+        explicitToolName = toolCfg.name;
+      }
+      if (toolCfg.description !== undefined) {
+        if (typeof toolCfg.description !== 'string' || toolCfg.description.trim().length === 0) {
+          throw new HelmxError(
+            'invalid_action_spec',
+            `Plugin ${pluginId} action ${spec.id} exposeAsTool.description must be a non-empty non-whitespace string`,
+            400,
+          );
+        }
+        toolDescription = toolCfg.description;
+      }
+      if (toolCfg.replay !== undefined) {
+        if (toolCfg.replay !== 'safe' && toolCfg.replay !== 'unsafe') {
+          throw new HelmxError(
+            'invalid_action_spec',
+            `Plugin ${pluginId} action ${spec.id} exposeAsTool.replay must be 'safe' | 'unsafe' (received ${String(toolCfg.replay)})`,
+            400,
+          );
+        }
+        toolReplay = toolCfg.replay;
+      }
+      if (toolCfg.formatOutput !== undefined) {
+        if (typeof toolCfg.formatOutput !== 'function') {
+          throw new HelmxError(
+            'invalid_action_spec',
+            `Plugin ${pluginId} action ${spec.id} exposeAsTool.formatOutput must be a function`,
+            400,
+          );
+        }
+        formatOutput = toolCfg.formatOutput as (input: never, output: never) => string | PluginToolTextBlock[];
+      }
+      exposeAsToolEnabled = true;
+    } else {
+      throw new HelmxError(
+        'invalid_action_spec',
+        `Plugin ${pluginId} action ${spec.id} exposeAsTool must be a boolean or plain options object`,
+        400,
+      );
+    }
+
     if (spec.exposeToPrompt !== undefined && typeof spec.exposeToPrompt !== 'boolean') {
       throw new HelmxError('invalid_action_spec', `Plugin ${pluginId} action ${spec.id} exposeToPrompt must be a boolean`, 400);
+    }
+    if (visibility !== 'public') {
+      if (exposeAsToolEnabled) {
+        throw new HelmxError(
+          'invalid_action_spec',
+          `Plugin ${pluginId} action ${spec.id} with visibility '${visibility}' cannot enable exposeAsTool`,
+          400,
+        );
+      }
+      if (spec.exposeToPrompt === true) {
+        throw new HelmxError(
+          'invalid_action_spec',
+          `Plugin ${pluginId} action ${spec.id} with visibility '${visibility}' cannot set exposeToPrompt: true`,
+          400,
+        );
+      }
+      if (
+        spec.cli !== undefined &&
+        (spec.cli.hidden === false || spec.cli.command !== undefined || spec.cli.positional !== undefined)
+      ) {
+        throw new HelmxError(
+          'invalid_action_spec',
+          `Plugin ${pluginId} action ${spec.id} with visibility '${visibility}' cannot expose CLI command/positional options`,
+          400,
+        );
+      }
     }
     if (spec.idempotent !== undefined && typeof spec.idempotent !== 'boolean') {
       throw new HelmxError('validation_error', `Plugin ${pluginId} action ${spec.id} idempotent must be a boolean`, 400);
     }
     if (
-      spec.exposeAsTool !== true &&
+      !exposeAsToolEnabled &&
       (spec.presentationMetaSchema !== undefined || spec.projectPresentationMeta !== undefined)
     ) {
       throw new HelmxError(
         'invalid_action_spec',
-        `Plugin ${pluginId} action ${spec.id} may only declare presentationMetaSchema/projectPresentationMeta when exposeAsTool is true`,
+        `Plugin ${pluginId} action ${spec.id} may only declare presentationMetaSchema/projectPresentationMeta when exposeAsTool is enabled`,
         400,
       );
     }
@@ -420,8 +588,12 @@ export class CapabilityRegistry {
       description: spec.description,
       inputSchema: spec.inputSchema,
       outputSchema: spec.outputSchema,
+      visibility,
       cli: spec.cli,
-      exposeAsTool: spec.exposeAsTool === true,
+      exposeAsTool: exposeAsToolEnabled,
+      ...(toolDescription !== undefined ? { toolDescription } : {}),
+      ...(toolReplay !== undefined ? { toolReplay } : {}),
+      ...(formatOutput !== undefined ? { formatOutput } : {}),
       ...(spec.presentationMetaSchema !== undefined ? { presentationMetaSchema: spec.presentationMetaSchema } : {}),
       ...(spec.projectPresentationMeta !== undefined
         ? {
@@ -435,7 +607,7 @@ export class CapabilityRegistry {
       ...(spec.idempotent !== undefined ? { idempotent: spec.idempotent } : {}),
       ...(prompt.promptSnippet !== undefined ? { promptSnippet: prompt.promptSnippet } : {}),
       ...(prompt.promptGuidelines !== undefined ? { promptGuidelines: prompt.promptGuidelines } : {}),
-      toolAlias: actionToolAlias(pluginId, spec.id),
+      toolAlias: explicitToolName ?? actionToolAlias(pluginId, spec.id),
       ...(spec.scope !== undefined ? { scope: spec.scope } : {}),
       handler: spec.handler as (input: never, context: PluginActionContext) => unknown,
     });
@@ -564,17 +736,28 @@ export class CapabilityRegistry {
   }
 
   getToolNames(pluginId: string): string[] {
+    const names: string[] = [];
     const list = this.tools.get(pluginId);
-    return list ? [...list.keys()] : [];
+    if (list) names.push(...list.keys());
+    const actions = this.actions.get(pluginId);
+    if (actions) {
+      for (const action of actions.values()) {
+        if (action.exposeAsTool) names.push(action.toolAlias);
+      }
+    }
+    return names;
   }
 
   /**
-   * Read-only action binding lookup (used to validate action existence and `idempotent` flags referenced by UI specs).
-   * Returns `undefined` when undeclared without triggering any registration side effects.
+   * Read-only action binding lookup (used to validate action existence, `idempotent`, and `visibility`
+   * flags referenced by UI specs). Returns `undefined` when undeclared without triggering registration side effects.
    */
-  getActionBinding(pluginId: string, actionId: string): { idempotent: boolean } | undefined {
+  getActionBinding(
+    pluginId: string,
+    actionId: string,
+  ): { idempotent: boolean; visibility: PluginActionVisibility } | undefined {
     const entry = this.actions.get(pluginId)?.get(actionId);
-    return entry ? { idempotent: entry.idempotent === true } : undefined;
+    return entry ? { idempotent: entry.idempotent === true, visibility: entry.visibility } : undefined;
   }
 
   listActions(activePluginIds: Iterable<string>): ActionManifest[] {
@@ -624,7 +807,7 @@ export class CapabilityRegistry {
           if (conversation !== undefined && !matchesConversationScope(action.scope, conversation)) continue;
           out.push({
             name: action.toolAlias,
-            description: action.description,
+            description: action.toolDescription ?? action.description,
             inputSchema: action.inputSchema,
             structuredOutputSchema: action.outputSchema,
             ...(action.presentationMetaSchema !== undefined
@@ -638,6 +821,15 @@ export class CapabilityRegistry {
                   ) => Record<string, unknown> | undefined,
                 }
               : {}),
+            ...(action.formatOutput !== undefined
+              ? {
+                  formatOutput: action.formatOutput as (
+                    input: unknown,
+                    output: unknown,
+                  ) => string | PluginToolTextBlock[],
+                }
+              : {}),
+            ...(action.toolReplay !== undefined ? { replay: action.toolReplay } : {}),
             ...(action.scope !== undefined ? { scope: cloneScope(action.scope) } : {}),
             ...(action.promptSnippet !== undefined ? { promptSnippet: action.promptSnippet } : {}),
             ...(action.promptGuidelines !== undefined
@@ -677,7 +869,7 @@ export class CapabilityRegistry {
     actionId: string,
     input: unknown,
     context: PluginActionContext,
-    options: Pick<CapabilityExecutionOptions, 'assertActive' | 'getConversation'>,
+    options: Pick<CapabilityExecutionOptions, 'assertActive' | 'getConversation' | 'caller'>,
   ): { idempotent: boolean } {
     options.assertActive(pluginId);
     const actions = this.actions.get(pluginId);
@@ -685,6 +877,8 @@ export class CapabilityRegistry {
     if (!entry) {
       throw new HelmxError('unknown_action', `Plugin ${pluginId} action ${actionId} is not declared (not declaration)`, 404, { pluginId, actionId });
     }
+    const caller: ActionCallerIdentity = options.caller ?? { surface: 'http' };
+    assertVisibilityAllows(entry, caller);
     assertScopeAllows(pluginId, `Action ${pluginId}.${actionId}`, entry.scope, context.conversationId, options.getConversation);
     validatePluginInput(pluginId, actionId, entry.inputSchema, input);
     return { idempotent: entry.idempotent === true };
@@ -695,12 +889,29 @@ export class CapabilityRegistry {
     actionId: string,
     input: unknown,
     context: PluginActionContext,
-    options: Pick<CapabilityExecutionOptions, 'assertActive' | 'getConversation' | 'tracker'>,
+    options: Pick<CapabilityExecutionOptions, 'assertActive' | 'getConversation' | 'tracker' | 'caller'>,
   ): Promise<unknown> {
     this.prepareAction(pluginId, actionId, input, context, options);
     const entry = this.actions.get(pluginId)!.get(actionId)!;
+    const caller: ActionCallerIdentity = options.caller ?? { surface: 'http' };
+    // Construct a fresh sanitized context: never trust caller-supplied `callerPluginId` or `callId`.
+    // `callerPluginId` is stamped exclusively from the host-trusted plugin invocation channel.
+    const effectiveContext: PluginActionContext = {
+      ...(context.conversationId !== undefined ? { conversationId: context.conversationId } : {}),
+      ...(context.signal !== undefined ? { signal: context.signal } : {}),
+      ...(caller.surface === 'plugin' &&
+      typeof caller.callerPluginId === 'string' &&
+      caller.callerPluginId.trim().length > 0
+        ? { callerPluginId: caller.callerPluginId }
+        : {}),
+      ...(caller.surface === 'tool' &&
+      typeof context.callId === 'string' &&
+      context.callId.trim().length > 0
+        ? { callId: context.callId }
+        : {}),
+    };
     const raw = await options.tracker.withTask(pluginId, `action:${pluginId}.${actionId}`, () =>
-      Promise.resolve(entry.handler(input as never, context)),
+      Promise.resolve(entry.handler(input as never, effectiveContext)),
     );
     validatePluginOutput(pluginId, actionId, entry.outputSchema, raw);
     return jsonClone(raw);
@@ -728,26 +939,26 @@ export class CapabilityRegistry {
     name: string,
     options: CapabilityExecutionOptions,
   ): { pluginId: string; spec: PluginToolSpec } | undefined {
-    // 1. ctx.tool direct throw name (provider-safe, without '.')
+    // 1. ctx.tool direct name (provider-safe, without '.')
     for (const [pluginId, pluginTools] of this.tools) {
       if (!options.isPluginRegistered(pluginId)) continue;
       const direct = pluginTools.get(name);
       if (direct) return { pluginId, spec: direct.spec };
     }
-    // 2. all limit set action name pluginId.actionId(pluginId can contains ':', take first '.' split)
+    // 2. fully-qualified action name pluginId.actionId (pluginId may contain ':', split on first '.')
     const dot = name.indexOf('.');
     if (dot > 0) {
       const pluginId = name.slice(0, dot);
       const actionId = name.slice(dot + 1);
       if (options.isPluginRegistered(pluginId)) {
-        const spec = this.derivedToolSpec(pluginId, actionId, name, options);
+        const spec = this.derivedToolSpec(pluginId, actionId, name, 'id', options);
         if (spec) return spec;
       }
     }
-    // 3. provider-safe alias (excludes '.', must scan exposeAsTool action)
+    // 3. provider-safe tool name / alias (excludes '.', scans exposeAsTool actions by resolved toolAlias)
     for (const pluginId of this.actions.keys()) {
       if (!options.isPluginRegistered(pluginId)) continue;
-      const spec = this.derivedToolSpec(pluginId, name, name, options);
+      const spec = this.derivedToolSpec(pluginId, name, name, 'alias', options);
       if (spec) return spec;
     }
     return undefined;
@@ -757,24 +968,26 @@ export class CapabilityRegistry {
     pluginId: string,
     key: string,
     displayName: string,
+    matchBy: 'id' | 'alias',
     options: CapabilityExecutionOptions,
   ): { pluginId: string; spec: PluginToolSpec } | undefined {
     const actions = this.actions.get(pluginId);
     if (!actions) return undefined;
     for (const action of actions.values()) {
-      const match = action.exposeAsTool && (action.id === key || action.toolAlias === key);
+      const match = action.exposeAsTool && (matchBy === 'id' ? action.id === key : action.toolAlias === key);
       if (!match) continue;
       const actionId = action.id;
       return {
         pluginId,
         spec: {
           name: displayName,
-          description: action.description,
+          description: action.toolDescription ?? action.description,
           inputSchema: action.inputSchema,
           structuredOutputSchema: action.outputSchema,
           ...(action.presentationMetaSchema !== undefined
             ? { presentationMetaSchema: action.presentationMetaSchema }
             : {}),
+          ...(action.toolReplay !== undefined ? { replay: action.toolReplay } : {}),
           ...(action.scope !== undefined ? { scope: action.scope } : {}),
           execute: (input: unknown, ctx: PluginToolContext) =>
             this.invokeAction(
@@ -783,9 +996,10 @@ export class CapabilityRegistry {
               input,
               {
                 conversationId: ctx.conversationId,
+                ...(ctx.callId !== undefined ? { callId: ctx.callId } : {}),
                 signal: ctx.signal,
               },
-              options,
+              { ...options, caller: { surface: 'tool' } },
             ),
         },
       };

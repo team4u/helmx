@@ -1910,6 +1910,66 @@ test('real actions: invocation 200; raw null return is not wrapped into {ok:true
   assert.deepEqual(echo.body, { echoed: 'hi' })
 })
 
+test('HTTP /api/actions enforces action visibility: GET omits internal; POST rejects internal (403) and allows ui/public', { timeout: 60_000 }, async () => {
+  await pluginHost.register({
+    id: 'builtin:vischeck',
+    name: 'vischeck',
+    definePlugin(ctx: HelmxPluginContext) {
+      ctx.action({
+        id: 'pub',
+        description: 'public action',
+        inputSchema: { type: 'object' },
+        outputSchema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] },
+        handler: () => ({ ok: true }),
+      })
+      ctx.action({
+        id: 'ui-only',
+        description: 'ui action',
+        visibility: 'ui',
+        inputSchema: { type: 'object' },
+        outputSchema: {
+          type: 'object',
+          properties: { ok: { type: 'boolean' }, caller: { type: ['string', 'null'] } },
+          required: ['ok', 'caller'],
+        },
+        handler: (_input, actionCtx) => ({ ok: true, caller: actionCtx.callerPluginId ?? null }),
+      })
+      ctx.action({
+        id: 'internal-only',
+        description: 'internal action',
+        visibility: 'internal',
+        inputSchema: { type: 'object' },
+        outputSchema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] },
+        handler: () => ({ ok: true }),
+      })
+    },
+  })
+  const { handler } = makeHandlers()
+
+  const listed = await call(handler, 'GET', '/api/actions')
+  assert.equal(listed.status, 200)
+  const visActions = (listed.body as Array<{ pluginId: string; id: string; visibility?: string }>).filter(
+    (a) => a.pluginId === 'builtin:vischeck',
+  )
+  assert.deepEqual(
+    visActions.map((a) => ({ id: a.id, visibility: a.visibility })),
+    [
+      { id: 'pub', visibility: 'public' },
+      { id: 'ui-only', visibility: 'ui' },
+    ],
+  )
+
+  const uiRes = await call(handler, 'POST', '/api/actions/builtin%3Avischeck/ui-only', { body: { input: {} } })
+  assert.equal(uiRes.status, 200)
+  assert.deepEqual(uiRes.body, { ok: true, caller: null })
+
+  const internalRes = await call(handler, 'POST', '/api/actions/builtin%3Avischeck/internal-only', {
+    body: { input: {} },
+  })
+  assert.equal(internalRes.status, 403)
+  assert.equal(internalRes.body.error.code, 'action_visibility_forbidden')
+})
+
 // ---------------------------------------------------------------------------
 // Outbound JSON stash redaction
 // ---------------------------------------------------------------------------

@@ -1,11 +1,10 @@
 /**
- * builtin:superagent Watchdog 模型工具与同名动作注册（原 watchdog 闭包的
- * 工具/动作注册段）。
+ * builtin:superagent Watchdog 单点动作与派生模型工具注册（原 watchdog 闭包的
+ * 动作注册段）。
  *
- * - ctx.tool 注册 watchdog_inspect / watchdog_recover / watchdog_abort
- *   （scope profileIds:['watchdog']，执行核对实际 watchdogId）；
- * - 同名 ctx.action 复用同一 handler 供 HTTP/CLI（不 exposeAsTool，避免重复
- *   工具）；人工 HTTP/CLI（无 conversationId）放行，目标所有权守卫照样生效；
+ * - 单点 ctx.action + exposeAsTool 注册 watchdog_inspect / watchdog_recover /
+ *   watchdog_abort（scope profileIds:['watchdog']，执行核对实际 watchdogId；
+ *   人工 HTTP/CLI 无 conversationId 放行，目标所有权守卫照样生效）；
  * - watchdog_tick 手动动作（HTTP/CLI/Agent Tool 同权）与定时 tick 共用唯一
  *   singleflight 入口：重入返回在途轮真实结果（注册顺序在 ctx.service 之后，
  *   与拆分前一致）。
@@ -317,44 +316,8 @@ export function registerWatchdogTools(
     additionalProperties: false,
   } as const
 
-  ctx.tool<{ conversationId?: number; probe?: { targetKind: 'external'; nodeId?: string; targetId: string } }>({
-    name: WATCHDOG_TOOL_INSPECT,
-    description:
-      'Read the real details of an inspection target: conversationId returns the native conversation summary and recent timeline (ownership checked live); probe returns the latest external-target probe facts (read-only; never pretends to control external panes).',
-    inputSchema: inspectSchema,
-    scope: { profileIds: [WATCHDOG_PROFILE_ID] },
-    async execute(input, context) {
-      assertToolCaller(runtime, context.conversationId)
-      return inspectCore(input)
-    },
-  })
-
-  ctx.tool<{ conversationId: number; hint: string; expectedStateSeq?: number }>({
-    name: WATCHDOG_TOOL_RECOVER,
-    description:
-      'Submit a recovery hint to an owned (helmx/bot) native conversation (agent origin, without waiting for a model turn); ownership is atomically rechecked at the effect point via the kernel guarded port; human targets are rejected.',
-    inputSchema: recoverSchema,
-    scope: { profileIds: [WATCHDOG_PROFILE_ID] },
-    async execute(input, context) {
-      assertToolCaller(runtime, context.conversationId)
-      return recoverCore(input, `tool:${WATCHDOG_TOOL_RECOVER}:${input.conversationId}`)
-    },
-  })
-
-  ctx.tool<{ conversationId: number; reason?: string; expectedStateSeq?: number }>({
-    name: WATCHDOG_TOOL_ABORT,
-    description:
-      'Abort an owned (helmx/bot) native conversation; ownership is atomically rechecked at the effect point via the kernel guarded port; human/root/hub/watchdog-itself are rejected. External panes can only be aborted indirectly via their owned parent conversation.',
-    inputSchema: abortSchema,
-    scope: { profileIds: [WATCHDOG_PROFILE_ID] },
-    async execute(input, context) {
-      assertToolCaller(runtime, context.conversationId)
-      return abortCore(input, `tool:${WATCHDOG_TOOL_ABORT}:${input.conversationId}`)
-    },
-  })
-
-  // 同名 ctx.action 复用同一核心：HTTP/CLI 自动映射 `helmx superagent watchdog_*`，
-  // 人工调用无会话上下文放行（目标所有权守卫照样生效），不 exposeAsTool 防重复工具。
+  // 单点 ctx.action + exposeAsTool：HTTP / CLI (`helmx superagent watchdog_*`) 与 watchdog 专属模型工具同源复用，
+  // 人工 HTTP/CLI 调用无会话上下文放行（目标所有权守卫照样生效）；带会话上下文须为实际巡检会话。
   ctx.action<{ conversationId?: number; probe?: { targetKind: 'external'; nodeId?: string; targetId: string } }, Record<string, unknown>>({
     id: WATCHDOG_TOOL_INSPECT,
     description: 'Read the real details of an inspection target (native conversation or the latest external probe facts, read-only)',
@@ -362,6 +325,11 @@ export function registerWatchdogTools(
     inputSchema: inspectSchema,
     outputSchema: inspectOutputSchema,
     scope: { profileIds: [WATCHDOG_PROFILE_ID] },
+    exposeAsTool: {
+      name: WATCHDOG_TOOL_INSPECT,
+      description:
+        'Read the real details of an inspection target: conversationId returns the native conversation summary and recent timeline (ownership checked live); probe returns the latest external-target probe facts (read-only; never pretends to control external panes).',
+    },
     handler(input, context) {
       assertActionCaller(runtime, context)
       return inspectCore(input)
@@ -374,9 +342,15 @@ export function registerWatchdogTools(
     inputSchema: recoverSchema,
     outputSchema: mutationOutputSchema,
     scope: { profileIds: [WATCHDOG_PROFILE_ID] },
+    exposeAsTool: {
+      name: WATCHDOG_TOOL_RECOVER,
+      description:
+        'Submit a recovery hint to an owned (helmx/bot) native conversation (agent origin, without waiting for a model turn); ownership is atomically rechecked at the effect point via the kernel guarded port; human targets are rejected.',
+    },
     async handler(input, context) {
       assertActionCaller(runtime, context)
-      return recoverCore(input, `action:${WATCHDOG_TOOL_RECOVER}:${input.conversationId}`)
+      const source = context.callId !== undefined ? `tool:${WATCHDOG_TOOL_RECOVER}` : `action:${WATCHDOG_TOOL_RECOVER}`
+      return recoverCore(input, `${source}:${input.conversationId}`)
     },
   })
 
@@ -386,9 +360,15 @@ export function registerWatchdogTools(
     inputSchema: abortSchema,
     outputSchema: mutationOutputSchema,
     scope: { profileIds: [WATCHDOG_PROFILE_ID] },
+    exposeAsTool: {
+      name: WATCHDOG_TOOL_ABORT,
+      description:
+        'Abort an owned (helmx/bot) native conversation; ownership is atomically rechecked at the effect point via the kernel guarded port; human/root/hub/watchdog-itself are rejected. External panes can only be aborted indirectly via their owned parent conversation.',
+    },
     async handler(input, context) {
       assertActionCaller(runtime, context)
-      return abortCore(input, `action:${WATCHDOG_TOOL_ABORT}:${input.conversationId}`)
+      const source = context.callId !== undefined ? `tool:${WATCHDOG_TOOL_ABORT}` : `action:${WATCHDOG_TOOL_ABORT}`
+      return abortCore(input, `${source}:${input.conversationId}`)
     },
   })
 }

@@ -328,6 +328,7 @@ const ACTION_KEYS = new Set([
   'description',
   'inputSchema',
   'outputSchema',
+  'visibility',
   'exposeAsTool',
   'presentationMetaSchema',
   'exposeToPrompt',
@@ -481,9 +482,20 @@ export function assertPluginManifestProjection(value: unknown): PluginManifestPr
     assertNonEmptyString(a['description'], `${label}.description`)
     if (!isJsonObject(a['inputSchema'])) throw invalidManifest(`${label}.inputSchema must be an object`)
     if (!isJsonObject(a['outputSchema'])) throw invalidManifest(`${label}.outputSchema must be an object`)
+    if (a['visibility'] !== undefined && a['visibility'] !== 'public' && a['visibility'] !== 'ui' && a['visibility'] !== 'internal') {
+      throw invalidManifest(`${label}.visibility must be 'public' | 'ui' | 'internal'`)
+    }
     for (const boolField of ['exposeAsTool', 'exposeToPrompt', 'idempotent'] as const) {
       if (a[boolField] !== undefined && typeof a[boolField] !== 'boolean') {
         throw invalidManifest(`${label}.${boolField} must be a boolean`)
+      }
+    }
+    if (a['visibility'] === 'ui' || a['visibility'] === 'internal') {
+      if (a['exposeAsTool'] === true) {
+        throw invalidManifest(`${label}.exposeAsTool cannot be true when visibility is '${a['visibility']}'`)
+      }
+      if (a['exposeToPrompt'] === true) {
+        throw invalidManifest(`${label}.exposeToPrompt cannot be true when visibility is '${a['visibility']}'`)
       }
     }
     if (a['cli'] !== undefined) assertActionCliSpec(a['cli'], `${label}.cli`)

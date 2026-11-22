@@ -16,6 +16,8 @@ import {
   CapabilityRegistry,
   actionToolAlias,
 } from '../src/plugins/capability-registry.js';
+import { actionCliCommand } from '../src/runtime/action-prompts.js';
+import { actionToolResult } from '../src/runtime/runtime-helpers.js';
 
 function fakeConversation(tags: string[]): ConversationSummary {
   return {
@@ -220,4 +222,71 @@ test('exposeToPrompt rejects non-booleans at registration and preserves boolean 
   cap.registerAction('p', baseAction({ id: 'hidden', exposeToPrompt: false }));
   const hidden = cap.listActions(['p']).find((m) => m.id === 'hidden');
   assert.equal(hidden?.exposeToPrompt, false);
+});
+
+test('actionCliCommand suppresses ui and internal visibility actions while advertising public actions', { timeout: 60_000 }, () => {
+  const cap = new CapabilityRegistry();
+  cap.registerAction('builtin:demo', baseAction({ id: 'pub', visibility: 'public' }));
+  cap.registerAction('builtin:demo', baseAction({ id: 'ui_act', visibility: 'ui' }));
+  cap.registerAction('builtin:demo', baseAction({ id: 'int_act', visibility: 'internal' }));
+
+  const byId = new Map(cap.listActions(['builtin:demo']).map((m) => [m.id, m]));
+  assert.equal(actionCliCommand(byId.get('pub')!), 'helmx demo pub');
+  assert.equal(actionCliCommand(byId.get('ui_act')!), undefined);
+  assert.equal(actionCliCommand(byId.get('int_act')!), undefined);
+});
+
+test('actionToolResult supports formatOutput with redaction, validation, and three-channel separation', { timeout: 60_000 }, () => {
+  const redact = (text: string) => text.replaceAll('SECRET_TOKEN', '[REDACTED]');
+  const outputSchema = {
+    type: 'object',
+    properties: { id: { type: 'string' }, note: { type: 'string' } },
+    required: ['id', 'note'],
+    additionalProperties: false,
+  };
+  const presentationMetaSchema = {
+    type: 'object',
+    properties: { id: { type: 'string' } },
+    required: ['id'],
+    additionalProperties: false,
+  };
+
+  // String formatOutput: redacted model text + redacted structuredOutput + bounded presentationMeta
+  const strRes = actionToolResult({ id: 'item-1', note: 'val=SECRET_TOKEN' }, { q: '1' }, redact, {
+    toolName: 'demo_tool',
+    structuredOutputSchema: outputSchema,
+    presentationMetaSchema,
+    projectPresentationMeta: (_input, out) => ({ id: (out as { id: string }).id }),
+    formatOutput: (_input, out) => `Formatted ${(out as { id: string; note: string }).id}: ${(out as { note: string }).note}`,
+  });
+  assert.deepEqual(strRes.output, [{ type: 'text', text: 'Formatted item-1: val=[REDACTED]' }]);
+  assert.deepEqual(strRes.structuredOutput, { id: 'item-1', note: 'val=[REDACTED]' });
+  assert.deepEqual(strRes.details, { id: 'item-1' });
+
+  // Text-block array formatOutput
+  const arrRes = actionToolResult({ id: 'item-2', note: 'ok' }, {}, redact, {
+    toolName: 'demo_tool',
+    structuredOutputSchema: outputSchema,
+    formatOutput: () => [{ type: 'text', text: 'line SECRET_TOKEN' }],
+  });
+  assert.deepEqual(arrRes.output, [{ type: 'text', text: 'line [REDACTED]' }]);
+  assert.equal(arrRes.details, undefined);
+
+  // Undefined or malformed formatOutput return fails explicitly with 500 invalid_tool_result
+  assert.throws(
+    () =>
+      actionToolResult({ id: 'item-3', note: 'ok' }, {}, redact, {
+        toolName: 'demo_tool',
+        formatOutput: () => undefined as unknown as string,
+      }),
+    (err: unknown) => err instanceof HelmxError && err.code === 'invalid_tool_result' && err.status === 500,
+  );
+  assert.throws(
+    () =>
+      actionToolResult({ id: 'item-3', note: 'ok' }, {}, redact, {
+        toolName: 'demo_tool',
+        formatOutput: () => [{ type: 'image', data: 'abc' }] as never,
+      }),
+    (err: unknown) => err instanceof HelmxError && err.code === 'invalid_tool_result' && err.status === 500,
+  );
 });

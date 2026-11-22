@@ -668,3 +668,68 @@ test('action output: human rendering resolves nested LocalizedText display copy;
   assert.ok(rh.out.includes('visits'), rh.out)
   assert.ok(!rh.out.includes('"zh-CN"'), `raw localized map must not leak into human output:\n${rh.out}`)
 })
+
+test('action visibility: ui and internal actions are hidden from dynamic CLI commands; invalid visibility fails explicitly', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helmx-cli-vis-')
+  const hub = await startActionsHub(
+    [
+      {
+        pluginId: 'builtin:gadget',
+        id: 'deploy',
+        description: 'Public deploy',
+        visibility: 'public',
+        inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+        outputSchema: { type: 'object' },
+      },
+      {
+        pluginId: 'builtin:gadget',
+        id: 'ui_edit',
+        description: 'UI only action',
+        visibility: 'ui',
+        inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+        outputSchema: { type: 'object' },
+      },
+      {
+        pluginId: 'builtin:gadget',
+        id: 'internal_sync',
+        description: 'Internal only action',
+        visibility: 'internal',
+        inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+        outputSchema: { type: 'object' },
+      },
+    ],
+    {},
+    t,
+  )
+  const env = makeCliEnv(hub.url, dir)
+
+  // public action mounts normally
+  const ok = await runCliCaptured(['gadget', 'deploy', '--json'], env)
+  assert.equal(ok.code, 0, ok.err)
+
+  // ui and internal actions are hidden from dynamic CLI dispatch
+  for (const hiddenId of ['ui_edit', 'internal_sync']) {
+    const r = await runCliCaptured(['gadget', hiddenId, '--json'], env)
+    assert.equal(r.code, 1)
+    assert.equal(parseCliError(r).code, 'unknown_command')
+  }
+
+  // invalid visibility value in manifest fails explicitly at CLI boundary
+  const badHub = await startActionsHub(
+    [
+      {
+        pluginId: 'builtin:gadget',
+        id: 'broken',
+        description: 'Invalid visibility',
+        visibility: 'secret',
+        inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+        outputSchema: { type: 'object' },
+      },
+    ],
+    {},
+    t,
+  )
+  const badRes = await runCliCaptured(['gadget', 'broken', '--json'], makeCliEnv(badHub.url, dir))
+  assert.equal(badRes.code, 1)
+  assert.equal(parseCliError(badRes).code, 'invalid_manifest')
+})

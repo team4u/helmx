@@ -20,7 +20,7 @@ import {
   type PluginStatus,
 } from '@helmx/protocol';
 import { redactJsonValue } from '../redact.js';
-import { actionToolAlias, type CapabilityRegistry } from './capability-registry.js';
+import type { CapabilityRegistry } from './capability-registry.js';
 import type { PluginDocRegistry } from './doc-registry.js';
 import { isPluginStateActive } from './lifecycle-helpers.js';
 import { jsonClone } from './shared.js';
@@ -98,12 +98,7 @@ export function buildPluginManifestProjection(
   const actions: PluginManifestAction[] = includeRegistrations
     ? capabilityRegistry
         .listActions([pluginId])
-        .map((manifest): PluginManifestAction => ({
-          ...jsonClone(manifest),
-          ...(manifest.exposeAsTool === true
-            ? { toolName: actionToolAlias(pluginId, manifest.id) }
-            : {}),
-        }))
+        .map((manifest): PluginManifestAction => jsonClone(manifest))
         .sort((a, b) => compareCodeUnit(a.id, b.id))
     : [];
 

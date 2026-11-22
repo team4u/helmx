@@ -455,16 +455,34 @@ test('createHelmx 全部 14 个内置插件的只读契约投影均通过严格�
 
     const swarmManifest = kernel.plugins.getManifest('builtin:swarm')
     assert.equal(swarmManifest.tools.length, 12)
-    assert.ok(swarmManifest.tools.every((tool) => tool.presentationMetaSchema !== undefined))
+    assert.ok(swarmManifest.tools.every((tool) => tool.sourceKind === 'action' && tool.presentationMetaSchema !== undefined))
+    assert.equal(swarmManifest.actions.find((a) => a.id === 'complete_board_members')?.visibility, 'ui')
+    assert.equal(swarmManifest.actions.find((a) => a.id === 'complete_board_channels')?.visibility, 'ui')
 
     const wtManifest = kernel.plugins.getManifest('builtin:worktree')
-    assert.ok(wtManifest.tools.some((tool) => tool.name === 'cleanup_worktree' && tool.presentationMetaSchema !== undefined))
+    assert.ok(
+      wtManifest.tools.some(
+        (tool) =>
+          tool.name === 'cleanup_worktree' &&
+          tool.sourceKind === 'action' &&
+          tool.qualifiedId === 'builtin:worktree.cleanup_worktree' &&
+          tool.presentationMetaSchema !== undefined,
+      ),
+    )
+    assert.equal(wtManifest.actions.find((a) => a.id === 'cleanup_worktree')?.toolName, 'cleanup_worktree')
+    assert.equal(wtManifest.actions.find((a) => a.id === 'acquire_worktree')?.visibility, 'internal')
+    assert.equal(wtManifest.actions.find((a) => a.id === 'release_worktree_hold')?.visibility, 'internal')
+
+    const tiersManifest = kernel.plugins.getManifest('builtin:tiers')
+    assert.equal(tiersManifest.actions.find((a) => a.id === 'replace')?.visibility, 'ui')
 
     // Enabling default-disabled builtin:superagent also yields a strictly valid manifest with presentationMetaSchema.
     await kernel.plugins.enable('builtin:superagent')
     const saManifest = kernel.plugins.getManifest('builtin:superagent')
     assertPluginManifestProjection(saManifest)
     assert.equal(saManifest.status, 'active')
+    assert.equal(saManifest.tools.length, 7)
+    assert.ok(saManifest.tools.every((tool) => tool.sourceKind === 'action'))
     assert.ok(saManifest.tools.some((tool) => tool.name === 'dispatch_worker' && tool.presentationMetaSchema !== undefined))
   } finally {
     await app.close()

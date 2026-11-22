@@ -25,7 +25,6 @@ import type { PluginDefinition } from '@helmx/protocol'
 import { WORKFLOW_PLUGIN_ID, WORKTREE_PLUGIN_ID } from './contracts.js'
 import { WorktreeIsolation } from './worktree/isolation.js'
 import { registerWorktreeActions } from './worktree/actions.js'
-import { registerWorktreeTools } from './worktree/tools.js'
 
 export { WORKTREE_PLUGIN_ID }
 
@@ -126,10 +125,7 @@ export function createWorktreePlugin(): PluginDefinition {
         },
       })
 
-      // ---- Model tool: cleanup_worktree ----
-      registerWorktreeTools(ctx, { isolation })
-
-      // ---- Actions (reused across five ends: HTTP / CLI / run_action / Workflow / Web UI) ----
+      // ---- Actions (single-point declaration: cleanup_worktree derives model tool via exposeAsTool; acquire/release are internal) ----
       registerWorktreeActions(ctx, { isolation })
     },
   }
