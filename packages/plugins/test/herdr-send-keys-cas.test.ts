@@ -367,7 +367,7 @@ test('远端无 socket 事件权威轮询销单 + 创建 Ask 入库晚于首次�
   try {
     env1.transport.promptStatus = 'blocked'
     env1.transport.emit = () => {}
-    obs1 = spawnHerdrDirect(env1, { agentType: 'herdr:pi@remote-host', signal: c1.signal }).catch((e: unknown) => e)
+    obs1 = spawnHerdrDirect(env1, { agentType: 'herdr:pi@remote-host', cwd: env1.parentCwd, signal: c1.signal }).catch((e: unknown) => e)
     await waitFor(() => env1.backend.createdAsks.length === 1)
     const pane = [...env1.transport.panes.values()][0]!
     const firstId = String(env1.backend.createdAsks[0]!['id'])
@@ -401,7 +401,7 @@ test('远端无 socket 事件权威轮询销单 + 创建 Ask 入库晚于首次�
   try {
     scriptHerdrSuccess(env2, 'terminal-completed')
     env2.transport.promptStatus = 'blocked'
-    obs2 = spawnHerdrDirect(env2, { agentType: 'herdr:pi@remote-host', signal: c2.signal }).catch((e: unknown) => e)
+    obs2 = spawnHerdrDirect(env2, { agentType: 'herdr:pi@remote-host', cwd: env2.parentCwd, signal: c2.signal }).catch((e: unknown) => e)
     await waitFor(() => creating)
     const pane = [...env2.transport.panes.values()][0]!
     pane.seq += 1

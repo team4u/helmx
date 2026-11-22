@@ -15,7 +15,7 @@
 - **显式前缀**：`agentType` 为 `herdr:<kind>` 或 `herdr:<kind>@<nodeId>`（含 `@local` 显式本机）。kind 不做枚举硬编码、交由 Herdr 校验（实测全集 23 种：pi、claude、codex、gemini、cursor、devin、agy、cline、omp、mastracode、opencode、copilot、kimi、kiro、droid、amp、grok、hermes、kilo、qodercli、qwen、maki、muse；`profileRuntime.agentSuggestions` 候选同源）；
 - **Profile 绑定**：`agentType` 为已存在 Profile ID 且 `profile.runtime.kind === 'herdr'`（`runtime.agent` 指定 kind，可附 `runtime.nodeId` / `runtime.workspace` / `runtime.args` / `runtime.env`）。
 
-非上述两种返回 `continue` 交还内核原生执行行。节点选定优先级链：显式 `@nodeId` > `runtime.nodeId` > Profile 顶层 `nodeId` > 父会话绑定节点 > 本机。CLI 私有参数仅来自 `runtime.args` 原样透传，非法输入显式抛错，绝不猜测私有 flag。
+非上述两种返回 `continue` 交还内核原生执行行。节点选定优先级链：显式 `request.nodeId`（含 `'local'`） > `@nodeId` / `runtime.nodeId` > Profile 顶层 `nodeId` > 父会话绑定节点 > 本机；其中 `agentType` 显式带 `@<node>` 且与 `request.nodeId` 指向不同节点时显式抛 `400 validation_error`，`resume` 与 `request.nodeId` 互斥（`400 validation_error`）。跨节点派生严格执行 `cwd` 隔离：仅当 Profile 未绑定节点或绑定节点与最终目标节点一致时继承 `workspace` / `Profile.cwd`，仅当父会话节点与目标节点一致时继承父会话 `cwd`，绝不把本机或其他节点的路径透传到异节点。CLI 私有参数仅来自 `runtime.args` 原样透传，非法输入显式抛错，绝不猜测私有 flag。
 
 完整执行行为是八段序列：**建窗（普通 `tab.create` 或 worktree 模式 `worktree.create` + 补建带 env 的 tab 两步）、`agent.start`、权威就绪等待、`agent.prompt --wait`、blocked 审批桥、文件交接（含一次自愈）、gate 恰好一次、双轨保活清理**。启动序列遵守真实服务端语义：`agent.start` 可能返回 `unknown + launch_pending`，必须 `agent.wait` 权威就绪后再投递，不把 unknown 当终态失败、不提前 prompt。
 

@@ -209,7 +209,7 @@ export class ReattachCoordinator {
           { executionId: pane.paneId },
         )
       }
-      return explicitRouting
+      return { ...explicitRouting, nodeId: targetNodeId(pane.target) ?? 'local' }
     }
     if (pane.routing.profileId !== undefined) {
       const resolved = await resolveSpawnRouting(pane.routing.profileId, this.port.profiles)

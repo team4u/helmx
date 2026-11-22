@@ -4,9 +4,9 @@
 
 ## 分配与持有
 
-- **分配**：`agent_spawn` around 钩子（priority 200）包裹整个派生。原生派生先在目标节点从主仓切出 `helmx/spawn-*` 分支再改写 `cwd`；外部运行时（如 `builtin:herdr`）自行创建，插件只在其回传时统一登记。目录建在主仓同级 `.helmx-worktrees/` 下，不嵌套。
+- **分配**：`agent_spawn` around 钩子（priority 200）包裹整个派生。原生派生按 `resolveSpawnTarget`（支持动态 `request.nodeId` 覆盖）在目标节点从主仓切出 `helmx/spawn-*` 分支再改写 `cwd`；续接已有隔离子会话（`resume`）不支持传 `nodeId`（`400 validation_error`）；外部运行时（如 `builtin:herdr`）自行创建，插件只在其回传时统一登记。目录建在主仓同级 `.helmx-worktrees/` 下，不嵌套。
 - **租约**：`git worktree add` 执行前先持久登记占位。进程崩溃后无法证明执行已停止时，清理显式拒绝（`worktree_execution_unknown`），交人工确认。
-- **持有锁（hold）**：跨插件长占用（如 Swarm 协作期）通过 `acquire_worktree` / `release_worktree_hold` 两个内部动作加 `ManagedWorktreeHold` 持久保护。这两个动作不进模型 `<available_actions>` 目录，仅供插件间互调。
+- **持有锁（hold）**：跨插件长占用（如 Swarm 协作期）通过 `acquire_worktree`（支持可选 `requestNodeId` 动态指定目标节点） / `release_worktree_hold` 两个内部动作加 `ManagedWorktreeHold` 持久保护。这两个动作不进模型 `<available_actions>` 目录，仅供插件间互调。
 - **执行描述**：派生结果把 worktree 描述写入 execution meta 的 `builtin:worktree` 命名空间，与 `builtin:workflow` 的 `controls` 正交，编排脚本可据此续接、合入或清理。
 
 ## 工具与动作

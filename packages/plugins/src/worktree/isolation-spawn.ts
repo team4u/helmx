@@ -7,6 +7,8 @@
  */
 import {
   HelmxError,
+  isValidNodeId,
+  NODE_ID_PATTERN,
   redactJsonValue,
   sanitizeAgentExecutionInfo as sanitizeExecutionInfo,
   type AgentExecutionInfo,
@@ -81,6 +83,14 @@ export async function spawnWithWorktree(
   request: AgentSpawnRequest,
   next: (finalRequest: AgentSpawnRequest) => Promise<unknown>,
 ): Promise<unknown> {
+  if (request.nodeId !== undefined && !isValidNodeId(request.nodeId)) {
+    throw new HelmxError(
+      'validation_error',
+      `nodeId must match ${NODE_ID_PATTERN} (received ${String(request.nodeId)})`,
+      400,
+      { nodeId: request.nodeId },
+    )
+  }
   const explicitProfileId = request.agentType !== undefined && request.agentType !== '' ? request.agentType : undefined
   const target = await ctx.deps.host.resolveSpawnTarget({
     parentConversationId: request.parentConversationId,
@@ -92,6 +102,7 @@ export async function spawnWithWorktree(
       : {
           profileId: explicitProfileId ?? 'assistant',
         }),
+    ...(request.nodeId !== undefined ? { requestNodeId: request.nodeId } : {}),
     ...(request.cwd !== undefined ? { requestCwd: request.cwd } : {}),
   })
 
@@ -150,6 +161,14 @@ export async function resumeWithWorktree(
   record: ManagedWorktreeRecord,
   next: (finalRequest: AgentSpawnRequest) => Promise<unknown>,
 ): Promise<unknown> {
+  if (request.nodeId !== undefined) {
+    throw new HelmxError(
+      'validation_error',
+      'nodeId and resume are mutually exclusive: cannot switch compute node when resuming an existing subagent',
+      400,
+      { nodeId: request.nodeId, resume: request.resume },
+    )
+  }
   if (record.status === 'removed') {
     throw new HelmxError('worktree_missing', `子会话绑定的隔离 worktree '${record.path}' 已被清理（branch: ${record.branch}）`, 409)
   }

@@ -6,7 +6,7 @@
  * - `aroundSpawn` 编排新建 / resume / reattach / 外部运行时回填；
  * - `pruneConversation` 在会话删除时裁剪绑定与已 `removed` 记录（保留 `active` 记录与租约）。
  */
-import { HelmxError, type AgentExecutionInfo, type AgentSpawnRequest, type NodePathUsage } from '@helmx/protocol'
+import { HelmxError, isValidNodeId, NODE_ID_PATTERN, type AgentExecutionInfo, type AgentSpawnRequest, type NodePathUsage } from '@helmx/protocol'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { FileError, type ExecutionEnv, type Result } from '@earendil-works/pi-durable/env'
 import { WorktreeAllocator, type ManagedWorktreeRecord } from './worktree.js'
@@ -26,6 +26,7 @@ export interface AcquireWorktreeInput {
   conversationId: number
   parentConversationId: number
   profileId?: string
+  requestNodeId?: string
   requestCwd?: string
   fork?: boolean
   hold: {
@@ -52,6 +53,7 @@ export interface WorktreeIsolationDeps {
     resolveSpawnTarget(input: {
       parentConversationId: number
       profileId?: string
+      requestNodeId?: string
       requestCwd?: string
       fork?: boolean
     }): Promise<{ nodeId: string; sourceCwd: string; parentCwd: string | undefined }>
@@ -277,6 +279,14 @@ export class WorktreeIsolation {
     if (input.profileId !== undefined && (typeof input.profileId !== 'string' || input.profileId.trim() === '')) {
       throw new HelmxError('validation_error', 'profileId 必须为非空字符串', 400, { profileId: input.profileId })
     }
+    if (input.requestNodeId !== undefined && !isValidNodeId(input.requestNodeId)) {
+      throw new HelmxError(
+        'validation_error',
+        `requestNodeId 必须匹配 ${NODE_ID_PATTERN}（收到 ${String(input.requestNodeId)}）`,
+        400,
+        { requestNodeId: input.requestNodeId },
+      )
+    }
     if (input.requestCwd !== undefined && (typeof input.requestCwd !== 'string' || input.requestCwd.trim() === '')) {
       throw new HelmxError('validation_error', 'requestCwd 必须为非空字符串', 400, { requestCwd: input.requestCwd })
     }
@@ -294,6 +304,7 @@ export class WorktreeIsolation {
     const target = await this.deps.host.resolveSpawnTarget({
       parentConversationId: input.parentConversationId,
       ...(input.profileId !== undefined ? { profileId: input.profileId } : {}),
+      ...(input.requestNodeId !== undefined ? { requestNodeId: input.requestNodeId } : {}),
       ...(input.requestCwd !== undefined ? { requestCwd: input.requestCwd } : {}),
       ...(input.fork !== undefined ? { fork: input.fork } : {}),
     })

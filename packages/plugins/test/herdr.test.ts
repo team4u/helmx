@@ -411,7 +411,7 @@ test('远端节点: 全部调用走 nodeId target、剥除 loopback HUB_URL/TOKE
   const env = await makeEnv()
   try {
     scriptSuccess(env, 'remote-ok')
-    await spawnDirect(env, { agentType: 'herdr:agy@remote-node', gate: 'exit 0' })
+    await spawnDirect(env, { agentType: 'herdr:agy@remote-node', cwd: env.parentCwd, gate: 'exit 0' })
     for (const call of env.transport.calls) {
       // 订阅与对账契约只承诺本机 socket。
       if (call.method === 'events.subscribe' || call.method === 'session.snapshot') continue
@@ -437,6 +437,7 @@ test('远端 Profile 显式配置可达 HELMX_HUB_URL 时保留回连变量', { 
   try {
     env.profiles.set('far', {
       id: 'far',
+      cwd: env.parentCwd,
       runtime: { kind: 'herdr', agent: 'agy', nodeId: 'remote-node', env: { HELMX_HUB_URL: 'http://10.0.0.5:3202' } },
     })
     scriptSuccess(env, 'far-ok')
@@ -2008,7 +2009,7 @@ test('清理纪律：settled 幂等、abort+settle 单飞、身份变化与人�
   const env3 = await makeEnv()
   try {
     scriptSuccess(env3, 'remote-ok')
-    await spawnDirect(env3, { agentType: 'herdr:agy@remote-node' })
+    await spawnDirect(env3, { agentType: 'herdr:agy@remote-node', cwd: env3.parentCwd })
     await assert.rejects(env3.host.disable('builtin:herdr'), (e: unknown) => (e as HelmxError).code === 'plugin_has_live_tasks')
     await env3.host.dispose()
     assert.ok(env3.transport.calls.some((c) => c.method === 'tab.close' && c.target.nodeId === 'remote-node'))

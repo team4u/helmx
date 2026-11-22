@@ -2554,6 +2554,7 @@ async function openWorkflowPluginHost(options: {
   onResolveSpawnTarget?: (input: {
     parentConversationId: number
     profileId?: string
+    requestNodeId?: string
     requestCwd?: string
     fork?: boolean
   }) => void
@@ -2601,7 +2602,7 @@ async function openWorkflowPluginHost(options: {
     resolveSpawnTarget: async (input) => {
       options.onResolveSpawnTarget?.(input)
       return {
-        nodeId: 'local',
+        nodeId: input.requestNodeId ?? 'local',
         sourceCwd: input.requestCwd ?? options.repoDir,
         parentCwd: options.repoDir,
       }
@@ -2739,6 +2740,10 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
         { conversationId: 2, parentConversationId: 1, hold: { pluginId: 'spoof', holdId: 'h', label: 'l' } },
         { conversationId: 2, parentConversationId: 1, hold: { holdId: 'h', label: 'l', extra: 1 } },
         { conversationId: 2, parentConversationId: 1, bogus: true, hold: { holdId: 'h', label: 'l' } },
+        { conversationId: 2, parentConversationId: 1, requestNodeId: '', hold: { holdId: 'h', label: 'l' } },
+        { conversationId: 2, parentConversationId: 1, requestNodeId: 'bad node', hold: { holdId: 'h', label: 'l' } },
+        { conversationId: 2, parentConversationId: 1, requestNodeId: '../escape', hold: { holdId: 'h', label: 'l' } },
+        { conversationId: 2, parentConversationId: 1, requestNodeId: 'a'.repeat(129), hold: { holdId: 'h', label: 'l' } },
       ]) {
         await assert.rejects(
           () => host.invokeAction('builtin:worktree', 'acquire_worktree', badAcquire, {}, pluginCaller),
@@ -3632,5 +3637,215 @@ describe('WorktreeIsolation：外部运行时租约与并发窗口保护', { tim
       },
     )
     assert.equal(leaseCount(handle.docStore), 0, 'neverStarted 路径必须释放占位租约')
+  })
+
+  it('动态 nodeId：spawnWithWorktree / acquire_worktree 透传 requestNodeId、非法 nodeId 与 resume+nodeId 显式 400 validation_error', {
+    timeout: 60_000,
+  }, async () => {
+    const dir = join(rootDir, 't24-dyn-node')
+    const repo = makeGitRepo(join(dir, 'repo'))
+    const docs = new Map<string, unknown>()
+    const resolvedTargets: Array<Record<string, unknown>> = []
+    const { host, close } = await openWorkflowPluginHost({
+      repoDir: repo,
+      dataDir: join(dir, 'data'),
+      docs,
+      onResolveSpawnTarget: (input) => {
+        resolvedTargets.push({ ...input })
+      },
+    })
+    try {
+      // 1) acquire_worktree 透传有效 requestNodeId 到 resolveSpawnTarget 并落库对应 nodeId。
+      const caller = { surface: 'plugin' as const, callerPluginId: 'builtin:swarm' }
+      const acquired = (await host.invokeAction(
+        'builtin:worktree',
+        'acquire_worktree',
+        {
+          conversationId: 88,
+          parentConversationId: 1,
+          profileId: 'coder',
+          requestNodeId: 'gpu-box',
+          requestCwd: repo,
+          hold: { holdId: 'grp-dyn:worker', label: 'dynamic node worker' },
+        },
+        {},
+        caller,
+      )) as { worktreeId: string; path: string; nodeId: string }
+      assert.equal(acquired.nodeId, 'gpu-box')
+      assert.equal(acquired.worktreeId, `gpu-box:${acquired.path}`)
+      assert.deepEqual(resolvedTargets, [
+        {
+          parentConversationId: 1,
+          profileId: 'coder',
+          requestNodeId: 'gpu-box',
+          requestCwd: repo,
+        },
+      ])
+
+      // 2) 直接调用 isolation.acquireWorktree 校验非法 requestNodeId（在 resolveSpawnTarget 与 git 前 400）。
+      const directResolved: Array<Record<string, unknown>> = []
+      const directDocs = new Map<string, unknown>()
+      const directIsolation = new WorktreeIsolation({
+        host: {
+          resolveSpawnTarget: async (input) => {
+            directResolved.push({ ...input })
+            return {
+              nodeId: input.requestNodeId ?? 'local',
+              sourceCwd: input.requestCwd ?? repo,
+              parentCwd: repo,
+            }
+          },
+          execEnv: async (req) => {
+            const env = new NodeExecutionEnv({ cwd: req.cwd ?? repo })
+            let output = ''
+            const r = await env.exec(
+              req.command as string | readonly string[],
+              {
+                ...(req.cwd !== undefined ? { cwd: req.cwd } : {}),
+                onOutput: (t: string) => {
+                  output += t
+                },
+              },
+              BACKGROUND_CONTEXT,
+            )
+            if (!r.ok) return { ok: false, exitCode: null, output, timedOut: r.error.code === 'timeout' }
+            return { ok: r.value.exitCode === 0, exitCode: r.value.exitCode, output, timedOut: false }
+          },
+          executionEnv: (_nodeId, cwd) => new NodeExecutionEnv({ cwd }),
+          inspectNodePathUsage: (input) => bareFabricOf().inspectPathUsage(input.nodeId, input.path, input.signal),
+          listActiveSpawnExecutions: () => [],
+          redact: (text) => text,
+          getConversation: () => ({ cwd: repo, nodeId: 'local', status: 'idle', profileId: 'assistant' }),
+        },
+        docStore: {
+          get<T>(key: string, initial: T): T {
+            return (directDocs.get(key) as T | undefined) ?? initial
+          },
+          set<T>(key: string, value: T): void {
+            directDocs.set(key, structuredClone(value))
+          },
+          flush: async () => {},
+        },
+      })
+      for (const badNodeId of ['', 'bad node', '../escape']) {
+        await assert.rejects(
+          () =>
+            directIsolation.acquireWorktree({
+              conversationId: 90,
+              parentConversationId: 1,
+              requestNodeId: badNodeId,
+              hold: { pluginId: 'builtin:swarm', holdId: 'h', label: 'l' },
+            }),
+          (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
+        )
+      }
+      assert.equal(directResolved.length, 0, '非法 requestNodeId 不得触发 resolveSpawnTarget')
+
+      // 3) spawnWithWorktree 透传动态 request.nodeId（不传时不注入 requestNodeId 键），并拒绝非法 request.nodeId。
+      await assert.rejects(
+        () =>
+          directIsolation.aroundSpawn(
+            {
+              parentConversationId: 1,
+              prompt: '非法节点',
+              isolation: 'worktree',
+              nodeId: 'bad node',
+            } as never,
+            async () => 'unreachable',
+          ),
+        (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
+      )
+      assert.equal(directResolved.length, 0)
+
+      let seenFinalRequest: AgentSpawnRequest | undefined
+      let resolvedInfo: AgentExecutionInfo | undefined
+      const spawnRes = await directIsolation.aroundSpawn(
+        {
+          parentConversationId: 1,
+          prompt: '远端动态节点任务',
+          isolation: 'worktree',
+          nodeId: 'build-node',
+          cwd: repo,
+          onResolved: (info: AgentExecutionInfo) => {
+            resolvedInfo = info
+          },
+        } as never,
+        async (final) => {
+          seenFinalRequest = final as AgentSpawnRequest
+          seenFinalRequest.onResolved?.({ conversationId: 55, nodeId: 'build-node' })
+          return 'spawn-ok'
+        },
+      )
+      assert.equal(spawnRes, 'spawn-ok')
+      assert.deepEqual(directResolved, [
+        {
+          parentConversationId: 1,
+          profileId: 'assistant',
+          requestNodeId: 'build-node',
+          requestCwd: repo,
+        },
+      ])
+      assert.equal(seenFinalRequest?.nodeId, 'build-node')
+      assert.equal(resolvedInfo?.nodeId, 'build-node')
+      assert.ok(extractWorktreeExecutionMeta(resolvedInfo!).worktree?.id?.startsWith('build-node:'))
+
+      // 未传 request.nodeId 时，resolveSpawnTarget 入参不含 requestNodeId 键。
+      directResolved.length = 0
+      await directIsolation.aroundSpawn(
+        {
+          parentConversationId: 1,
+          prompt: '省略 nodeId 任务',
+          isolation: 'worktree',
+          cwd: repo,
+        } as never,
+        async (final) => {
+          ;(final as AgentSpawnRequest).onResolved?.({ conversationId: 56, nodeId: 'local' })
+          return 'omitted-ok'
+        },
+      )
+      assert.deepEqual(directResolved, [
+        {
+          parentConversationId: 1,
+          profileId: 'assistant',
+          requestCwd: repo,
+        },
+      ])
+      assert.equal('requestNodeId' in directResolved[0]!, false)
+
+      // 4) resumeWithWorktree 携带 request.nodeId 显式 400 validation_error（零租约残留、零 next 调用）。
+      let nextCalled = false
+      for (const nodeId of ['local', 'build-node', 'other-node']) {
+        await assert.rejects(
+          () =>
+            directIsolation.aroundSpawn(
+              {
+                parentConversationId: 1,
+                prompt: '续接并切换节点',
+                resume: '55',
+                nodeId,
+                onResolved: () => {},
+              } as never,
+              async () => {
+                nextCalled = true
+                return 'unreachable'
+              },
+            ),
+          (err: unknown) =>
+            err instanceof HelmxError &&
+            err.code === 'validation_error' &&
+            err.status === 400 &&
+            err.message.includes('nodeId and resume are mutually exclusive'),
+        )
+      }
+      assert.equal(nextCalled, false)
+      assert.equal(
+        Object.keys((directDocs.get('worktree-leases') as Record<string, unknown> | undefined) ?? {}).length,
+        0,
+        'resume+nodeId 拒绝不得残留租约',
+      )
+    } finally {
+      await close()
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

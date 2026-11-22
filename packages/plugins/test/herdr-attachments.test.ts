@@ -53,6 +53,7 @@ describe('herdr 跨机附件诚实门禁与提示词注入', () => {
     await assert.rejects(
       spawnHerdrDirect(plainEnv, {
         agentType: 'herdr:agy@remote-node',
+        cwd: plainEnv.parentCwd,
         attachments: ['art-id-1', 'art-id-2'],
       }),
       (err: unknown) => {
@@ -69,6 +70,7 @@ describe('herdr 跨机附件诚实门禁与提示词注入', () => {
     )
     plainEnv.profiles.set('far-broken', {
       id: 'far-broken',
+      cwd: plainEnv.parentCwd,
       runtime: { kind: 'herdr', agent: 'agy', nodeId: 'remote-node' },
     })
     await assert.rejects(
@@ -82,6 +84,7 @@ describe('herdr 跨机附件诚实门禁与提示词注入', () => {
     // resume 远端窗格在撤销可达 HELMX_HUB_URL 后携带附件同样拒绝。
     plainEnv.profiles.set('far-resume', {
       id: 'far-resume',
+      cwd: plainEnv.parentCwd,
       runtime: { kind: 'herdr', agent: 'agy', nodeId: 'remote-node', env: { HELMX_HUB_URL: 'http://10.0.0.5:3202' } },
     })
     scriptHerdrSuccess(plainEnv, 'first-ok')
@@ -89,6 +92,7 @@ describe('herdr 跨机附件诚实门禁与提示词注入', () => {
     const paneId = [...plainEnv.transport.panes.keys()].at(-1)!
     plainEnv.profiles.set('far-resume', {
       id: 'far-resume',
+      cwd: plainEnv.parentCwd,
       runtime: { kind: 'herdr', agent: 'agy', nodeId: 'remote-node' },
     })
     await assert.rejects(
@@ -115,6 +119,7 @@ describe('herdr 跨机附件诚实门禁与提示词注入', () => {
     artifactLookups.length = 0
     artifactEnv.profiles.set('far', {
       id: 'far',
+      cwd: artifactEnv.parentCwd,
       runtime: { kind: 'herdr', agent: 'agy', nodeId: 'remote-node', env: { HELMX_HUB_URL: 'http://10.0.0.5:3202' } },
     })
     scriptHerdrSuccess(artifactEnv, 'remote-ok')
@@ -136,26 +141,27 @@ describe('herdr 跨机附件诚实门禁与提示词注入', () => {
 
   test('节点通道 hubUrl：可达/loopback 自动放行并注入回连，非法 URL 拒绝，Profile 显式 URL 优先', { timeout: 60_000 }, async () => {
     scriptHerdrSuccess(artifactEnv, 'hub-ok')
-    assert.equal(await spawnHerdrDirect(artifactEnv, { agentType: 'herdr:agy@build-01', attachments: ['art-x'] }), 'hub-ok')
+    assert.equal(await spawnHerdrDirect(artifactEnv, { agentType: 'herdr:agy@build-01', cwd: artifactEnv.parentCwd, attachments: ['art-x'] }), 'hub-ok')
     const env01 = artifactEnv.transport.calls.findLast((c) => c.method === 'tab.create')!.params['env'] as Record<string, string>
     assert.equal(env01['HELMX_HUB_URL'], 'http://10.0.0.7:3202')
     assert.equal(env01['HELMX_TOKEN'], 'SECRET-TOKEN')
 
     scriptHerdrSuccess(artifactEnv, 'node-loopback-ok')
-    assert.equal(await spawnHerdrDirect(artifactEnv, { agentType: 'herdr:agy@build-02', attachments: ['art-x'] }), 'node-loopback-ok')
+    assert.equal(await spawnHerdrDirect(artifactEnv, { agentType: 'herdr:agy@build-02', cwd: artifactEnv.parentCwd, attachments: ['art-x'] }), 'node-loopback-ok')
     const env02 = artifactEnv.transport.calls.findLast((c) => c.method === 'tab.create')!.params['env'] as Record<string, string>
     assert.equal(env02['HELMX_HUB_URL'], 'http://127.0.0.1:3202')
     assert.equal(env02['HELMX_TOKEN'], 'SECRET-TOKEN')
 
     const beforeBad = artifactEnv.transport.calls.filter((c) => c.method === 'tab.create').length
     await assert.rejects(
-      spawnHerdrDirect(artifactEnv, { agentType: 'herdr:agy@build-bad', attachments: ['a1'] }),
+      spawnHerdrDirect(artifactEnv, { agentType: 'herdr:agy@build-bad', cwd: artifactEnv.parentCwd, attachments: ['a1'] }),
       (err: unknown) => (err as HelmxError).code === 'remote_hub_unreachable_for_artifacts',
     )
     assert.equal(artifactEnv.transport.calls.filter((c) => c.method === 'tab.create').length, beforeBad)
 
     artifactEnv.profiles.set('explicit-url', {
       id: 'explicit-url',
+      cwd: artifactEnv.parentCwd,
       runtime: { kind: 'herdr', agent: 'agy', nodeId: 'build-03', env: { HELMX_HUB_URL: 'http://10.9.9.9:3202' } },
     })
     scriptHerdrSuccess(artifactEnv, 'explicit-ok')

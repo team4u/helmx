@@ -1,6 +1,6 @@
 import { posix, win32 } from 'node:path'
 import type { Duplex } from 'node:stream'
-import { HelmxError, type NodeHostEnv } from '@helmx/protocol'
+import { HelmxError, isValidNodeId, type NodeHostEnv } from '@helmx/protocol'
 import {
   collectLocalNodeHostEnv,
   isPipePath,
@@ -27,6 +27,7 @@ import { checkAborted, contextOf, HerdrTransportError } from './transport-shared
 
 // Split re-exports: handoff-file IO and shared error primitives live in sibling submodules;
 // consumers importing these symbols from transport.js remain unaffected.
+export { isValidNodeId } from '@helmx/protocol'
 export { MAX_OUTPUT_BYTES, isAbsoluteAnyPath, isWindowsShapedPath, pathContains } from './transport-output.js'
 export { HerdrTransportError } from './transport-shared.js'
 
@@ -95,8 +96,6 @@ const WIRE_EVENT_TYPES = new Map<string, HerdrEvent['type']>(
 const SUBSCRIBE_ACK_TIMEOUT_MS = 15_000
 /** Single request ID used uniformly on every one-shot Duplex connection (local and remote). */
 const CALL_REQUEST_ID = '1'
-/** Node ID as a single safe token (incl. 'local'; empty strings and oversize values rejected explicitly). */
-const NODE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 const HERDR_ENV_KEYS = ['HERDR_SOCKET_PATH'] as const
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -116,14 +115,6 @@ export function isValidSessionName(name: string): boolean {
   if (name.length === 0 || name.length > 64) return false
   if (name === '.' || name === '..') return false
   return /^[A-Za-z0-9._-]+$/.test(name)
-}
-
-/**
- * Node ID as a single safe token: starts alphanumeric, may contain `.` `_` `-`, length 1..128.
- * Empty strings and illegal characters are rejected explicitly (never silently treat an empty string as local).
- */
-export function isValidNodeId(name: string): boolean {
-  return NODE_ID_PATTERN.test(name)
 }
 
 function assertTarget(target: HerdrTarget): void {

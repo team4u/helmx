@@ -51,6 +51,7 @@ import {
 } from './rpc.js'
 import {
   assertNoUnsupportedOverrides,
+  assertRequestNodeId,
   buildAgentName,
   buildOutputFileName,
   buildSpawnPaneEnv,
@@ -321,6 +322,7 @@ export class HerdrExecutor {
         // runtime resume never silently creates a fresh continuation pane.
         const routing = await resolveSpawnRouting(request.agentType, this.deps.profiles)
         if (routing === undefined) return { action: 'continue' }
+        this.assertNoNodeIdOnResume(request)
         this.assertNoFork(request)
         this.assertNoGateTimeout(request)
         throw new HelmxError(
@@ -330,7 +332,8 @@ export class HerdrExecutor {
           { resumeRef: request.resume },
         )
       }
-      // Continuation of a registered Herdr pane: identify as a managed resume first, then reject fork/gateTimeoutMs.
+      // Continuation of a registered Herdr pane: identify as a managed resume first, then reject nodeId/fork/gateTimeoutMs.
+      this.assertNoNodeIdOnResume(request)
       this.assertNoFork(request)
       this.assertNoGateTimeout(request)
       const outcome = await this.resumeInto(request, candidates)
@@ -369,7 +372,18 @@ export class HerdrExecutor {
       }
       this.assertReattachRequestValid(request, false)
       let pane: ManagedPane | undefined
-      if (candidates.length === 1) {
+      if (request.nodeId !== undefined) {
+        const requestedNode = targetNodeId({ nodeId: request.nodeId })
+        pane = this.registry.get(requestedNode, executionId)
+        if (pane === undefined) {
+          throw new HelmxError(
+            'herdr_reattach_missing',
+            `无法重挂窗格 ${executionId}@${requestedNode ?? 'local'}：受管窗格记录不存在`,
+            404,
+            { executionId, nodeId: requestedNode ?? 'local' },
+          )
+        }
+      } else if (candidates.length === 1) {
         pane = candidates[0]
       } else {
         const parentNodeId = targetNodeId({ nodeId: this.parentNodeIdOrThrow(request.parentConversationId) })
@@ -411,6 +425,7 @@ export class HerdrExecutor {
         resume: request.resume,
       })
     }
+    assertRequestNodeId(request.nodeId)
     if (request.fork !== undefined && request.fork !== false) {
       if (typeof request.fork !== 'boolean') {
         throw new HelmxError('validation_error', `fork 必须为 boolean（收到 ${typeof request.fork}）`, 400, {
@@ -473,15 +488,48 @@ export class HerdrExecutor {
     )
   }
 
+  /** Explicit request.nodeId + resume mutual-exclusion rejection (matches kernel assertSpawnRequestModes). */
+  private assertNoNodeIdOnResume(request: AgentSpawnRequest): void {
+    if (request.nodeId === undefined) return
+    assertRequestNodeId(request.nodeId)
+    throw new HelmxError(
+      'validation_error',
+      'nodeId and resume are mutually exclusive: cannot switch compute node when resuming an existing subagent',
+      400,
+      { nodeId: request.nodeId, resume: request.resume },
+    )
+  }
+
   /**
-   * Node selection: explicit/Profile designation (routing.nodeId, incl. 'local') wins; otherwise inherit
-   * the parent conversation's bound node (parentNodeIdOf; undefined = local).
+   * Node selection: request.nodeId (incl. explicit 'local') > routing.nodeId (@node / Profile.runtime.nodeId /
+   * Profile.nodeId) > parent conversation's bound node > local.
+   * When agentType explicitly specified `@<atNode>` AND request.nodeId targets a different node, reject explicitly
+   * with 400 validation_error (conflicting explicit node targets).
    * The target HerdrTarget's socketPath/session inherits the frozen local connection config only when the target is
    * local (remote targets carry only nodeId; the endpoint is resolved by the target node itself).
    */
   private resolveSpawnTarget(request: AgentSpawnRequest, routing: SpawnRouting): HerdrTarget {
+    const requestedNodeId = assertRequestNodeId(request.nodeId)
+    if (
+      routing.explicitAtNode === true &&
+      routing.nodeId !== undefined &&
+      requestedNodeId !== undefined &&
+      targetNodeId({ nodeId: routing.nodeId }) !== targetNodeId({ nodeId: requestedNodeId })
+    ) {
+      throw new HelmxError(
+        'validation_error',
+        `conflicting explicit target nodes: agentType specifies '@${routing.nodeId}' while request.nodeId specifies '${requestedNodeId}'`,
+        400,
+        { agentTypeNodeId: routing.nodeId, requestNodeId: requestedNodeId },
+      )
+    }
     const parentNodeId = this.parentNodeIdOrThrow(request.parentConversationId)
-    const nodeId = routing.nodeId !== undefined ? targetNodeId({ nodeId: routing.nodeId }) : targetNodeId({ nodeId: parentNodeId })
+    const nodeId =
+      requestedNodeId !== undefined
+        ? targetNodeId({ nodeId: requestedNodeId })
+        : routing.nodeId !== undefined
+          ? targetNodeId({ nodeId: routing.nodeId })
+          : targetNodeId({ nodeId: parentNodeId })
     if (nodeId === undefined) return this.localTargetOf()
     return { nodeId }
   }
@@ -519,18 +567,24 @@ export class HerdrExecutor {
 
   private async spawnNew(request: AgentSpawnRequest, routing: SpawnRouting, target: HerdrTarget, existing?: ManagedPane): Promise<unknown> {
     if (existing === undefined) {
-      // New pane: cwd resolution chain request.cwd > profile.workspace > parent cwd;
-      // reject explicitly when the chain ends without a real cwd (never guess the process cwd, and never let a remote pane default into the Hub directory).
+      // New pane: cwd resolution chain request.cwd > compatible profile.workspace > same-node parent cwd;
+      // reject explicitly when the chain ends without a real cwd (never guess the process cwd, and never pass a
+      // foreign node's cwd to a different machine).
       // After resolution, normalize against the target node's platform (local = process.platform; remote trusts only
       // NodeRegistry registration reports; without trusted info, pass through unchanged).
       const parentCwd = this.parentCwdOrThrow(request.parentConversationId)
-      const cwd = resolveCwd(request.cwd, routing, parentCwd, this.platformOfTarget(target))
+      const parentNodeId = this.parentNodeIdOrThrow(request.parentConversationId)
+      const effectiveNodeId = targetNodeId(target) ?? 'local'
+      const cwd = resolveCwd(request.cwd, routing, parentCwd, this.platformOfTarget(target), {
+        targetNodeId: effectiveNodeId,
+        parentNodeId,
+      })
       if (cwd === '') {
         throw new HelmxError(
           'validation_error',
-          `cannot resolve the herdr pane working directory (none of request.cwd / profile.workspace / parent conversation ${request.parentConversationId} cwd provides an absolute path); specify cwd explicitly in the spawn request or bind a real working directory to the parent conversation/Profile`,
+          `cannot resolve the herdr pane working directory for target node '${effectiveNodeId}' (none of request.cwd, compatible profile.workspace, or same-node parent conversation ${request.parentConversationId} cwd provides an absolute path; cross-node cwd is not inherited); specify cwd explicitly in the spawn request or bind a matching Profile workspace/cwd`,
           400,
-          { parentConversationId: request.parentConversationId },
+          { parentConversationId: request.parentConversationId, nodeId: effectiveNodeId },
         )
       }
       existing = await this.createManagedPane(request, routing, target, cwd)

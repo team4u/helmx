@@ -9,7 +9,7 @@
  *   `run_action` / Workflow DSL，仅允许插件经 `ctx.host.invokeAction` 调用，且持久锁归属插件 ID
  *   完全取自宿主盖章注入、不可伪造的 `context.callerPluginId`。
  */
-import { HelmxError, type HelmxPluginContext, type JsonSchema, type PluginActionContext } from '@helmx/protocol'
+import { HelmxError, NODE_ID_PATTERN, type HelmxPluginContext, type JsonSchema, type PluginActionContext } from '@helmx/protocol'
 import type { CleanupResult } from './worktree.js'
 import type { WorktreeIsolation } from './isolation.js'
 
@@ -259,6 +259,13 @@ export function registerWorktreeActions(ctx: HelmxPluginContext, deps: WorktreeA
           pattern: '\\S',
           description: 'Optional worker profile ID for spawn target resolution',
         },
+        requestNodeId: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 128,
+          pattern: NODE_ID_PATTERN,
+          description: 'Optional explicit target node ID override',
+        },
         requestCwd: {
           type: 'string',
           minLength: 1,
@@ -310,6 +317,7 @@ export function registerWorktreeActions(ctx: HelmxPluginContext, deps: WorktreeA
         conversationId: number
         parentConversationId: number
         profileId?: string
+        requestNodeId?: string
         requestCwd?: string
         fork?: boolean
         hold: { holdId: string; label: string }
@@ -319,6 +327,7 @@ export function registerWorktreeActions(ctx: HelmxPluginContext, deps: WorktreeA
           conversationId: a.conversationId,
           parentConversationId: a.parentConversationId,
           ...(a.profileId !== undefined ? { profileId: a.profileId } : {}),
+          ...(a.requestNodeId !== undefined ? { requestNodeId: a.requestNodeId } : {}),
           ...(a.requestCwd !== undefined ? { requestCwd: a.requestCwd } : {}),
           ...(a.fork !== undefined ? { fork: a.fork } : {}),
           hold: {

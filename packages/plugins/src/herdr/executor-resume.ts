@@ -20,6 +20,7 @@ import { nodeIdOf, paneStateKey, targetOf, type ManagedPane, type PaneRegistry }
 import type { HerdrAgentInfo } from './rpc.js'
 import {
   assertNoUnsupportedOverrides,
+  assertRequestNodeId,
   buildOutputFileName,
   HashShort,
   resolveSpawnRouting,
@@ -65,6 +66,15 @@ export class ResumeCoordinator {
    * Returning undefined means the ref is not recorded by this plugin (hand back to the kernel's native resume).
    */
   async resumeInto(request: AgentSpawnRequest, candidates: ManagedPane[]): Promise<unknown> {
+    if (request.nodeId !== undefined) {
+      assertRequestNodeId(request.nodeId)
+      throw new HelmxError(
+        'validation_error',
+        'nodeId and resume are mutually exclusive: cannot switch compute node when resuming an existing subagent',
+        400,
+        { nodeId: request.nodeId, resume: request.resume },
+      )
+    }
     const resumeRef = request.resume!
     if (candidates.length > 1) {
       throw new HelmxError(

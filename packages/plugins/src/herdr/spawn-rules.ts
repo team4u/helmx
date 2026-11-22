@@ -5,16 +5,24 @@
  * All invalid inputs throw HelmxError explicitly here (validation_error / not_found / unsupported_runtime),
  * never silently ignoring fields or guessing private CLI flags.
  *
- * nodeId priority chain (high -> low; an explicit 'local' overrides with "local" semantics and folds into
- * an explicitLocal marker instead of collapsing to undefined -- child spawns of remote parent conversations do not silently inherit):
- * 1. explicit agentType prefix `herdr:<kind>@<node>` (incl. @local);
- * 2. Profile.runtime.nodeId (incl. 'local');
+ * nodeId priority chain (high -> low; an explicit 'local' overrides with "local" semantics without collapsing away):
+ * 1. explicit request.nodeId (incl. 'local'; conflicts with a different explicit `@<node>` suffix on agentType -> 400);
+ * 2. explicit agentType prefix `herdr:<kind>@<node>` (incl. @local) / Profile.runtime.nodeId (incl. 'local');
  * 3. Profile top-level nodeId (the Profile's regular node binding);
  * 4. the parent conversation's bound node (injected by the Executor as parentNodeId; defaults to local).
  */
 
-import { HelmxError, isAbsoluteTargetPath, isValidEnvName, normalizeTargetPath, type Profile, type TargetPlatform } from '@helmx/protocol'
-import { isValidNodeId } from './transport.js'
+import {
+  HelmxError,
+  isAbsoluteTargetPath,
+  isValidEnvName,
+  isValidNodeId,
+  NODE_ID_PATTERN,
+  normalizeTargetPath,
+  type Profile,
+  type TargetPlatform,
+} from '@helmx/protocol'
+import { targetNodeId } from './contracts.js'
 import { OUTPUT_FILE_PATTERN } from './transport-output.js'
 
 /** Herdr CLI Agent kind identifier (e.g. agy/claude/codex/pi; no hardcoded enumeration -- validated by Herdr). */
@@ -27,6 +35,11 @@ export interface SpawnRouting {
    * 'local' = explicitly local (overrides a remote parent node; never silently inherited).
    */
   nodeId?: string
+  /**
+   * Whether `nodeId` came from an explicit `@<node>` suffix on `agentType` (e.g. `herdr:claude@node-a`)
+   * rather than a Profile default (`Profile.runtime.nodeId` / `Profile.nodeId`).
+   */
+  explicitAtNode?: boolean
   /** CLI private arguments: only from Profile.runtime.args (passed through as-is). */
   args: string[]
   /** Profile-configured working directory (absolute-path semantics, incl. runtime.workspace and Profile.cwd). */
@@ -35,6 +48,20 @@ export interface SpawnRouting {
   profileEnv: Record<string, string>
   /** The matched profileId (present for Profile entry; used for diagnostics). */
   profileId?: string
+}
+
+/** Validate an optional request.nodeId override on AgentSpawnRequest (400 validation_error on invalid tokens). */
+export function assertRequestNodeId(nodeId: unknown): string | undefined {
+  if (nodeId === undefined) return undefined
+  if (!isValidNodeId(nodeId)) {
+    throw new HelmxError(
+      'validation_error',
+      `nodeId must match ${NODE_ID_PATTERN} (received ${String(nodeId)})`,
+      400,
+      { nodeId },
+    )
+  }
+  return nodeId
 }
 
 /** nodeId validation (uniform strict token; 'local' is legal). */
@@ -146,7 +173,13 @@ function parseHerdrPrefix(agentType: string): SpawnRouting {
   if (nodeIdRaw !== undefined) {
     nodeId = assertNodeId(nodeIdRaw, { agentType })
   }
-  return { kind, nodeId, args: [], profileEnv: {} }
+  return {
+    kind,
+    nodeId,
+    ...(nodeId !== undefined ? { explicitAtNode: true } : {}),
+    args: [],
+    profileEnv: {},
+  }
 }
 
 /**
@@ -183,10 +216,20 @@ function normalizeCwdForPlatform(cwd: string, platform: TargetPlatform | undefin
   return result.path
 }
 
+/** Cross-node cwd isolation context for `resolveCwd`. */
+export interface ResolveCwdNodeContext {
+  /** Resolved effective target node ID ('local' or remote node ID). */
+  targetNodeId?: string
+  /** Parent conversation's bound node ID (undefined or 'local' means local). */
+  parentNodeId?: string
+}
+
 /**
- * cwd resolution chain: request.cwd (must be absolute) > Profile.workspace (runtime.workspace
- * > Profile.cwd) > the parent conversation's cwd (fetched live via getConversation).
- * Returning '' (empty string) means the chain ended without a real cwd; the caller rejects explicitly (never guess the process cwd).
+ * cwd resolution chain with cross-node isolation:
+ * request.cwd (must be absolute) > compatible Profile.workspace (only when routing.nodeId is undefined or matches
+ * effectiveNodeId) > same-node parent conversation cwd (only when parentNodeId matches effectiveNodeId).
+ * Returning '' (empty string) means the chain ended without a real cwd; the caller rejects explicitly (never guess the process cwd
+ * and never leak a foreign node's cwd onto a different machine).
  *
  * The hit result is converged by the target node's platform before any pane-creation side effect (platform undefined means
  * no trusted info about the target node's platform: pass through, no guessing or rewriting; local is resolved by
@@ -197,17 +240,29 @@ export function resolveCwd(
   routing: SpawnRouting | undefined,
   parentCwd: string | undefined,
   platform?: TargetPlatform,
+  nodeContext?: ResolveCwdNodeContext,
 ): string {
+  const effectiveNodeId =
+    targetNodeId({ nodeId: nodeContext?.targetNodeId ?? routing?.nodeId }) ?? 'local'
+  const routingNodeId =
+    routing?.nodeId !== undefined ? (targetNodeId({ nodeId: routing.nodeId }) ?? 'local') : undefined
+  const usableWorkspace =
+    routing?.workspace !== undefined && (routingNodeId === undefined || routingNodeId === effectiveNodeId)
+      ? routing.workspace
+      : undefined
+  const effectiveParentNodeId = targetNodeId({ nodeId: nodeContext?.parentNodeId }) ?? 'local'
+  const usableParentCwd = effectiveParentNodeId === effectiveNodeId ? parentCwd : undefined
+
   let cwd: string
   if (requestCwd !== undefined) {
     if (!isAbsolutePath(requestCwd)) {
       throw new HelmxError('validation_error', `spawn cwd must be an absolute path: '${requestCwd}'`, 400, { cwd: requestCwd })
     }
     cwd = requestCwd
-  } else if (routing?.workspace !== undefined) {
-    cwd = routing.workspace
-  } else if (parentCwd !== undefined && isAbsolutePath(parentCwd)) {
-    cwd = parentCwd
+  } else if (usableWorkspace !== undefined) {
+    cwd = usableWorkspace
+  } else if (usableParentCwd !== undefined && isAbsolutePath(usableParentCwd)) {
+    cwd = usableParentCwd
   } else {
     return ''
   }

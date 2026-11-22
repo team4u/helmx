@@ -35,11 +35,43 @@ import {
 // resolveCwd / normalizeStartupTimeoutMs（纯函数与插件注册边界）
 // ---------------------------------------------------------------------------
 
-test('resolveCwd：platform 未知（undefined）——链语义与透传保持', { timeout: 60_000 }, () => {
+test('resolveCwd：platform 未知（undefined）——跨节点 cwd 隔离、同节点继承与透传保持', { timeout: 60_000 }, () => {
   const routing: SpawnRouting = { kind: 'agy', nodeId: 'win-build', args: [], profileEnv: {} }
   assert.equal(resolveCwd('/mnt/c/work', routing, undefined, undefined), '/mnt/c/work')
-  assert.equal(resolveCwd(undefined, routing, '/home/parent', undefined), '/home/parent')
+  assert.equal(
+    resolveCwd(undefined, routing, '/home/parent', undefined),
+    '',
+    '目标节点 win-build 与默认父节点 local 不一致时不得继承 parentCwd',
+  )
+  assert.equal(
+    resolveCwd(undefined, routing, '/home/parent', undefined, { targetNodeId: 'win-build', parentNodeId: 'win-build' }),
+    '/home/parent',
+    '目标节点与父节点一致时继承 parentCwd',
+  )
   assert.equal(resolveCwd(undefined, undefined, undefined, undefined), '', '链尾空串语义保持')
+  // Profile.workspace 跨节点隔离：仅当 routing.nodeId 未绑定或与目标节点一致时继承。
+  const boundProfile: SpawnRouting = { kind: 'agy', nodeId: 'node-a', workspace: '/srv/node-a', args: [], profileEnv: {} }
+  assert.equal(
+    resolveCwd(undefined, boundProfile, '/home/local', undefined, { targetNodeId: 'node-b', parentNodeId: 'local' }),
+    '',
+    '目标节点 node-b 与 Profile(node-a) 及父节点(local) 均异节点时双方 cwd 均不继承',
+  )
+  assert.equal(
+    resolveCwd(undefined, boundProfile, '/home/local', undefined, { targetNodeId: 'local', parentNodeId: 'local' }),
+    '/home/local',
+    'request.nodeId=local 覆盖远端 Profile 时抑制 Profile.workspace，仅继承同节点 parentCwd',
+  )
+  assert.equal(
+    resolveCwd(undefined, boundProfile, '/home/local', undefined, { targetNodeId: 'node-a', parentNodeId: 'local' }),
+    '/srv/node-a',
+    '目标节点与 Profile 绑定节点一致时继承 Profile.workspace',
+  )
+  const agnosticProfile: SpawnRouting = { kind: 'agy', workspace: '/srv/shared', args: [], profileEnv: {} }
+  assert.equal(
+    resolveCwd(undefined, agnosticProfile, '/home/local', undefined, { targetNodeId: 'node-b', parentNodeId: 'local' }),
+    '/srv/shared',
+    '未绑定节点的 Profile.workspace 可在任意目标节点继承',
+  )
   assert.throws(
     () => resolveCwd('relative/ws', routing, undefined, undefined),
     (e: unknown) => e instanceof HelmxError && e.code === 'validation_error',

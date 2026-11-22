@@ -33,7 +33,7 @@ test('节点继承与覆盖：父远端继承、显式 @local 覆盖、runtime.n
     assert.equal(env.spawnEnvLog.at(-1)!.nodeId, 'build-farm')
 
     scriptHerdrSuccess(env, 'local-override')
-    assert.equal(await spawnHerdrDirect(env, { agentType: 'herdr:agy@local' }), 'local-override')
+    assert.equal(await spawnHerdrDirect(env, { agentType: 'herdr:agy@local', cwd: env.parentCwd }), 'local-override')
     const localCreate = env.transport.calls.findLast((c) => c.method === 'tab.create')!
     assert.equal(localCreate.target.nodeId, undefined)
     assert.equal(env.spawnEnvLog.at(-1)!.nodeId, 'local')
@@ -41,18 +41,18 @@ test('节点继承与覆盖：父远端继承、显式 @local 覆盖、runtime.n
     assert.equal(localEnv['HELMX_HUB_URL'], 'http://127.0.0.1:3202')
     assert.equal(localEnv['HELMX_TOKEN'], 'SECRET-TOKEN')
 
-    env.profiles.set('top-node', { id: 'top-node', nodeId: 'profile-top', runtime: { kind: 'herdr', agent: 'agy' } })
+    env.profiles.set('top-node', { id: 'top-node', nodeId: 'profile-top', cwd: env.parentCwd, runtime: { kind: 'herdr', agent: 'agy' } })
     scriptHerdrSuccess(env, 'a')
     await spawnHerdrDirect(env, { agentType: 'top-node' })
     assert.deepEqual(env.transport.calls.findLast((c) => c.method === 'tab.create')!.target, { nodeId: 'profile-top' })
 
-    env.profiles.set('rt-node', { id: 'rt-node', nodeId: 'profile-top', runtime: { kind: 'herdr', agent: 'agy', nodeId: 'runtime-node' } })
+    env.profiles.set('rt-node', { id: 'rt-node', nodeId: 'profile-top', runtime: { kind: 'herdr', agent: 'agy', nodeId: 'runtime-node', workspace: env.parentCwd } })
     scriptHerdrSuccess(env, 'b')
     await spawnHerdrDirect(env, { agentType: 'rt-node' })
     assert.deepEqual(env.transport.calls.findLast((c) => c.method === 'tab.create')!.target, { nodeId: 'runtime-node' })
 
     scriptHerdrSuccess(env, 'c')
-    await spawnHerdrDirect(env, { agentType: 'herdr:agy@explicit-node' })
+    await spawnHerdrDirect(env, { agentType: 'herdr:agy@explicit-node', cwd: env.parentCwd })
     assert.deepEqual(env.transport.calls.findLast((c) => c.method === 'tab.create')!.target, { nodeId: 'explicit-node' })
   } finally {
     await env.close()
@@ -204,12 +204,12 @@ test('受管 HELMX_* 权威、远端非法 HELMX_HUB_URL 拒绝、worktree 第�
     // 2) 远端 Profile 非法 HELMX_HUB_URL 拒绝；合法可达 URL 保留回连。
     env.profiles.set('badurl', {
       id: 'badurl',
-      runtime: { kind: 'herdr', agent: 'agy', nodeId: 'remote-node', env: { HELMX_HUB_URL: 'ftp://x' } },
+      runtime: { kind: 'herdr', agent: 'agy', nodeId: 'remote-node', workspace: env.parentCwd, env: { HELMX_HUB_URL: 'ftp://x' } },
     })
     await assert.rejects(spawnHerdrDirect(env, { agentType: 'badurl' }), (e: unknown) => (e as HelmxError).code === 'validation_error')
     env.profiles.set('goodurl', {
       id: 'goodurl',
-      runtime: { kind: 'herdr', agent: 'agy', nodeId: 'remote-node', env: { HELMX_HUB_URL: 'http://10.0.0.5:3202' } },
+      runtime: { kind: 'herdr', agent: 'agy', nodeId: 'remote-node', workspace: env.parentCwd, env: { HELMX_HUB_URL: 'http://10.0.0.5:3202' } },
     } as Profile)
     scriptHerdrSuccess(env, 'far-ok')
     await spawnHerdrDirect(env, { agentType: 'goodurl' })
@@ -231,5 +231,191 @@ test('受管 HELMX_* 权威、远端非法 HELMX_HUB_URL 拒绝、worktree 第�
     assert.equal(env.gateLog.at(-1)!.env?.['HELMX_CWD'], wtPath)
   } finally {
     await env.close()
+  }
+})
+
+test('动态 request.nodeId 优先级覆盖（含 local）、@node 冲突 400、跨节点 cwd 隔离 400 与 resume+nodeId 400', { timeout: 60_000 }, async () => {
+  const env = await openHerdrUnitEnv({ conversationOverrides: { nodeId: 'build-farm' } })
+  const localCwd = mkdtempSync(join(tmpdir(), 'helmx-herdr-local-cwd-'))
+  const remoteCwd = mkdtempSync(join(tmpdir(), 'helmx-herdr-remote-cwd-'))
+  const profileWs = mkdtempSync(join(tmpdir(), 'helmx-herdr-profile-ws-'))
+  try {
+    // 1) request.nodeId='local' 覆盖远端父节点；不传 cwd 时跨节点抑制远端 parentCwd -> 400 零建窗。
+    const createsBefore = env.transport.calls.filter((c) => c.method === 'tab.create').length
+    await assert.rejects(
+      spawnHerdrDirect(env, { agentType: 'herdr:agy', nodeId: 'local' }),
+      (e: unknown) => e instanceof HelmxError && e.code === 'validation_error' && e.status === 400,
+    )
+    await assert.rejects(
+      spawnHerdrDirect(env, { agentType: 'herdr:agy@local' }),
+      (e: unknown) => e instanceof HelmxError && e.code === 'validation_error' && e.status === 400,
+    )
+    assert.equal(env.transport.calls.filter((c) => c.method === 'tab.create').length, createsBefore)
+
+    scriptHerdrSuccess(env, 'dyn-local-ok')
+    assert.equal(
+      await spawnHerdrDirect(env, { agentType: 'herdr:agy', nodeId: 'local', cwd: localCwd }),
+      'dyn-local-ok',
+    )
+    const localCreate = env.transport.calls.findLast((c) => c.method === 'tab.create')!
+    assert.equal(localCreate.target.nodeId, undefined)
+    assert.equal(localCreate.params['cwd'], localCwd)
+    assert.equal(env.spawnEnvLog.at(-1)!.nodeId, 'local')
+
+    // 2) request.nodeId 覆盖 Profile.runtime.nodeId，且抑制不匹配节点的 Profile.workspace。
+    env.profiles.set('bound-a', {
+      id: 'bound-a',
+      runtime: { kind: 'herdr', agent: 'agy', nodeId: 'node-a', workspace: profileWs },
+    })
+    const createsBeforeSuppress = env.transport.calls.filter((c) => c.method === 'tab.create').length
+    await assert.rejects(
+      spawnHerdrDirect(env, { agentType: 'bound-a', nodeId: 'node-b' }),
+      (e: unknown) => e instanceof HelmxError && e.code === 'validation_error' && e.status === 400,
+    )
+    assert.equal(env.transport.calls.filter((c) => c.method === 'tab.create').length, createsBeforeSuppress)
+
+    scriptHerdrSuccess(env, 'override-profile-ok')
+    assert.equal(
+      await spawnHerdrDirect(env, { agentType: 'bound-a', nodeId: 'node-b', cwd: remoteCwd }),
+      'override-profile-ok',
+    )
+    const overrideCreate = env.transport.calls.findLast((c) => c.method === 'tab.create')!
+    assert.deepEqual(overrideCreate.target, { nodeId: 'node-b' })
+    assert.equal(overrideCreate.params['cwd'], remoteCwd)
+
+    // 3) 显式 @<atNode> 与不同 request.nodeId 冲突 -> 400 validation_error；相同节点放行。
+    const createsBeforeConflict = env.transport.calls.filter((c) => c.method === 'tab.create').length
+    for (const conflict of [
+      { agentType: 'herdr:agy@node-a', nodeId: 'node-b', cwd: remoteCwd },
+      { agentType: 'herdr:agy@node-a', nodeId: 'local', cwd: localCwd },
+      { agentType: 'herdr:agy@local', nodeId: 'node-a', cwd: remoteCwd },
+      { agentType: 'herdr:agy', nodeId: '', cwd: localCwd },
+      { agentType: 'herdr:agy', nodeId: 'bad node', cwd: localCwd },
+      { agentType: 'herdr:agy', nodeId: '../escape', cwd: localCwd },
+    ]) {
+      await assert.rejects(
+        spawnHerdrDirect(env, conflict),
+        (e: unknown) => e instanceof HelmxError && e.code === 'validation_error' && e.status === 400,
+      )
+    }
+    assert.equal(env.transport.calls.filter((c) => c.method === 'tab.create').length, createsBeforeConflict)
+
+    scriptHerdrSuccess(env, 'same-at-ok')
+    assert.equal(
+      await spawnHerdrDirect(env, { agentType: 'herdr:agy@node-a', nodeId: 'node-a', cwd: remoteCwd }),
+      'same-at-ok',
+    )
+    assert.deepEqual(env.transport.calls.findLast((c) => c.method === 'tab.create')!.target, { nodeId: 'node-a' })
+
+    scriptHerdrSuccess(env, 'same-local-ok')
+    assert.equal(
+      await spawnHerdrDirect(env, { agentType: 'herdr:agy@local', nodeId: 'local', cwd: localCwd }),
+      'same-local-ok',
+    )
+    assert.equal(env.transport.calls.findLast((c) => c.method === 'tab.create')!.target.nodeId, undefined)
+
+    // 4) resume + request.nodeId 互斥 -> 400 validation_error（既有窗格与未知 herdr ref 均拒绝）。
+    const existingPaneId = [...env.transport.panes.keys()].at(-1)!
+    await assert.rejects(
+      spawnHerdrDirect(env, { resume: existingPaneId, nodeId: 'local' }),
+      (e: unknown) => e instanceof HelmxError && e.code === 'validation_error' && e.status === 400,
+    )
+    await assert.rejects(
+      spawnHerdrDirect(env, { resume: existingPaneId, nodeId: 'node-b' }),
+      (e: unknown) => e instanceof HelmxError && e.code === 'validation_error' && e.status === 400,
+    )
+    await assert.rejects(
+      spawnHerdrDirect(env, { agentType: 'herdr:agy', resume: 'nonexistent-pane', nodeId: 'node-b' }),
+      (e: unknown) => e instanceof HelmxError && e.code === 'validation_error' && e.status === 400,
+    )
+  } finally {
+    await env.close()
+    for (const dir of [localCwd, remoteCwd, profileWs]) rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('本地父会话下 request.nodeId=local 覆盖远端 Profile 时抑制远端 workspace 并继承本地 parentCwd；reattach 遵循 request.nodeId', { timeout: 60_000 }, async () => {
+  const docs = new MemoryDocStore()
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-herdr-reattach-node-'))
+  const socketPath = join(dataDir, 'herdr.sock')
+  const remoteWorkDir = mkdtempSync(join(tmpdir(), 'helmx-herdr-reattach-wt-'))
+  const outputFile = 'wf-out-reattach1.md'
+  docs.set('builtin:herdr:managed', {
+    version: 1,
+    panes: [
+      {
+        target: { socketPath },
+        routing: { kind: 'pi' },
+        paneId: 'w1:p9',
+        tabId: 'w1:t9',
+        effectiveCwd: dataDir,
+        agentName: 'helmx-wf-local9',
+        parentConversationId: 1,
+        outcome: 'running',
+        outputFileName: 'wf-out-local9.md',
+        createdAt: 1,
+      },
+      {
+        target: { nodeId: 'node-reattach' },
+        routing: { kind: 'pi' },
+        paneId: 'w1:p9',
+        tabId: 'w1:t9',
+        effectiveCwd: remoteWorkDir,
+        agentName: 'helmx-wf-remote9',
+        parentConversationId: 1,
+        outcome: 'running',
+        outputFileName: outputFile,
+        createdAt: 2,
+      },
+    ],
+  })
+  const env = await openHerdrUnitEnv({ docs, dataDir, socketPath, localTarget: { socketPath } })
+  try {
+    // 1) 本地父会话 + 远端 Profile + request.nodeId='local'：抑制远端 workspace，继承本地 parentCwd。
+    env.profiles.set('far-profile', {
+      id: 'far-profile',
+      runtime: { kind: 'herdr', agent: 'agy', nodeId: 'node-a', workspace: '/srv/foreign-only' },
+    })
+    scriptHerdrSuccess(env, 'fallback-local-parent')
+    assert.equal(
+      await spawnHerdrDirect(env, { agentType: 'far-profile', nodeId: 'local' }),
+      'fallback-local-parent',
+    )
+    const createCall = env.transport.calls.findLast((c) => c.method === 'tab.create')!
+    assert.equal(createCall.target.nodeId, undefined)
+    assert.equal(createCall.params['cwd'], env.parentCwd)
+
+    // 2) reattach 无 agentType 遇跨节点同名 executionId，携带 request.nodeId 精确命中远端窗格。
+    env.transport.outputFiles.set(`${remoteWorkDir}/.helmx/${outputFile}`, 'reattached-remote-result')
+    await assert.rejects(
+      spawnHerdrDirect(env, {
+        agentType: 'herdr:pi@node-a',
+        nodeId: 'node-reattach',
+        reattach: { executionId: 'w1:p9' },
+      }),
+      (e: unknown) => e instanceof HelmxError && e.code === 'validation_error' && e.status === 400,
+    )
+    await assert.rejects(
+      spawnHerdrDirect(env, {
+        nodeId: 'bad node',
+        reattach: { executionId: 'w1:p9' },
+      }),
+      (e: unknown) => e instanceof HelmxError && e.code === 'validation_error' && e.status === 400,
+    )
+    await assert.rejects(
+      spawnHerdrDirect(env, {
+        nodeId: 'missing-node',
+        reattach: { executionId: 'w1:p9' },
+      }),
+      (e: unknown) => e instanceof HelmxError && e.code === 'herdr_reattach_missing' && e.status === 404,
+    )
+    const reattached = await spawnHerdrDirect(env, {
+      nodeId: 'node-reattach',
+      reattach: { executionId: 'w1:p9' },
+    })
+    assert.equal(reattached, 'reattached-remote-result')
+  } finally {
+    await env.close()
+    rmSync(remoteWorkDir, { recursive: true, force: true })
   }
 })
