@@ -26,8 +26,6 @@ import type {
   NodeEnvRpcFunctions,
   NodeHealthSnapshot,
   NodeHeartbeatInput,
-  NodeIpcClosedEvent,
-  NodeIpcEvent,
   NodeRegisterInput,
   NodeRegisterResult,
   NodeUpgradeCheckInput,
@@ -57,8 +55,6 @@ export interface HubSideFunctions {
   register(input: NodeRegisterInput): Promise<NodeRegisterResult>;
   heartbeat(nodeId: string, input?: NodeHeartbeatInput): Promise<boolean>;
   onEnvExecOutput(event: EnvExecOutputEvent): Promise<void> | void;
-  onIpcEvent?(event: NodeIpcEvent): Promise<void> | void;
-  onIpcClosed?(event: NodeIpcClosedEvent): Promise<void> | void;
 }
 
 export interface NodeIdentity {
@@ -73,7 +69,7 @@ export interface NodeDaemonOptions {
   identity: NodeIdentity;
   dataDir: string;
   /** Env RPC server options (`defaultCwd` defaults to `dataDir`). */
-  envServer?: Omit<NodeEnvRpcServerOptions, 'defaultCwd' | 'onExecOutput' | 'onIpcEvent' | 'onIpcClosed'>;
+  envServer?: Omit<NodeEnvRpcServerOptions, 'defaultCwd' | 'onExecOutput'>;
   /** Base reconnect delay in ms (defaults to 500). */
   reconnectBaseDelayMs?: number;
   /**
@@ -711,8 +707,6 @@ export async function createNodeDaemon(options: NodeDaemonOptions): Promise<Node
       ...envServer,
       shellEnv: baseShellEnv,
       onExecOutput: (event) => pushEvent('onEnvExecOutput', event),
-      onIpcEvent: (event) => pushEvent('onIpcEvent', event),
-      onIpcClosed: (event) => pushEvent('onIpcClosed', event),
       openTunnelStream: (tunnelId: string, signal?: AbortSignal) => {
         const gen = genHandle.current;
         if (gen === undefined) {
@@ -777,7 +771,7 @@ export async function createNodeDaemon(options: NodeDaemonOptions): Promise<Node
       scheduleReconnect();
     };
 
-    function pushEvent(method: 'onEnvExecOutput' | 'onIpcEvent' | 'onIpcClosed', event: EnvExecOutputEvent | NodeIpcEvent | NodeIpcClosedEvent): void {
+    function pushEvent(method: 'onEnvExecOutput', event: EnvExecOutputEvent): void {
       if (generation !== gen) return;
       const fn = gen.hubRpc[method];
       if (!fn) {
@@ -987,8 +981,7 @@ export async function createNodeDaemon(options: NodeDaemonOptions): Promise<Node
           prepareReplacement: options.prepareUpgradeReplacement,
           getActiveExecCount: () =>
             (generation?.server.getActiveExecCount() ?? 0) +
-            (generation?.server.getActiveTunnelCount() ?? 0) +
-            (generation?.server.getActiveIpcCallCount() ?? 0),
+            (generation?.server.getActiveTunnelCount() ?? 0),
           setDraining: applyDraining,
           onScheduleShutdown: options.onUpgradeReplaced,
         });

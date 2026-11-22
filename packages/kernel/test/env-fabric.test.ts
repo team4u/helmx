@@ -309,8 +309,6 @@ describe('EnvFabric node connectivity and remote execution', { timeout: 60_000 }
       }, HubConnectionLocal>(
         {
           onEnvExecOutput: () => undefined,
-          onIpcEvent: () => undefined,
-          onIpcClosed: () => undefined,
         },
         {
           post: (data) => {

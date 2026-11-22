@@ -1,7 +1,11 @@
-import { homedir } from 'node:os'
 import { posix, win32 } from 'node:path'
-import type { Socket } from 'node:net'
-import { connectHerdrEndpoint } from './local-node-channel.js'
+import type { Duplex } from 'node:stream'
+import { HelmxError, type NodeHostEnv } from '@helmx/protocol'
+import {
+  collectLocalNodeHostEnv,
+  isPipePath,
+  windowsPipeNameOf,
+} from './local-node-channel.js'
 import type {
   HerdrCallOptions,
   HerdrEvent,
@@ -11,40 +15,42 @@ import type {
   HerdrTransport,
 } from './contracts.js'
 import { targetNodeId } from './contracts.js'
-import { assertSafeOutputName, isWindowsShapedPath, readLocalOutput, readNodeOutput, removeLocalOutput, removeNodeOutput } from './transport-output.js'
-import { runLocalGate, runNodeGate } from './transport-gate.js'
-import { checkAborted, HerdrTransportError } from './transport-shared.js'
+import {
+  assertSafeOutputName,
+  isWindowsShapedPath,
+  readLocalOutput,
+  readNodeOutput,
+  removeLocalOutput,
+  removeNodeOutput,
+} from './transport-output.js'
+import { checkAborted, contextOf, HerdrTransportError } from './transport-shared.js'
 
-// Split re-exports: handoff-file IO and Gate execution moved to sibling submodules; existing consumers
-// importing the exported symbols from transport.js (executor / local-node-channel / tests) are unchanged.
+// Split re-exports: handoff-file IO and shared error primitives live in sibling submodules;
+// consumers importing these symbols from transport.js remain unaffected.
 export { MAX_OUTPUT_BYTES, isAbsoluteAnyPath, isWindowsShapedPath, pathContains } from './transport-output.js'
-export { MAX_GATE_OUTPUT_BYTES } from './transport-gate.js'
 export { HerdrTransportError } from './transport-shared.js'
 
 /**
- * Minimal NDJSON transport for the official Herdr line-protocol IPC.
+ * Unified Duplex NDJSON transport for the official Herdr line-protocol IPC (local & remote).
  *
  * Wire contract (herdr 0.9.5 / protocol 22, verified via `herdr api schema --json` and server source):
- * - one request per connection: write a line `{"id","method","params"}`, read a line `{"id","result"}` or
- *   `{"id","error":{"code","message"}}`, then the connection ends.
- * - `events.subscribe`: first replies with the `{"id","result":{"type":"subscription_started"}}` ack,
- *   afterwards each line is a bare event frame `{"event","data"}` with no id.
+ * - one request per connection: write `{"id","method","params"}\n`, read `{"id","result"}` or
+ *   `{"id","error":{"code","message"}}\n`, then close the stream;
+ * - `events.subscribe`: first replies with `{"id","result":{"type":"subscription_started"}}` ack
+ *   (validated exclusively here in `builtin:herdr`, never inside the generic `@helmx/node` daemon),
+ *   followed by bare event frames `{"event","data"}` with no `id`.
  *
- * Secret discipline: environment variables travel only inside JSON params (tab.create's env object), never
- * into any process command line. Remote nodes always forward the single-line JSON request via `HerdrNodeChannel`
- * (the kernel EnvFabric node channel); tasks and secret contents never appear in any argv.
- *
- * Local endpoint resolution (aligned with herdr source `config/io.rs` + `session.rs` + `ipc.rs`;
- * XDG_CONFIG_HOME takes precedence over platform dirs):
- * - Unix: `${XDG_CONFIG_HOME ?? ~/.config}/herdr[/sessions/<name>]/herdr.sock` (a UDS file);
- * - Windows: `${XDG_CONFIG_HOME ?? %APPDATA% ?? USERPROFILE/AppData/Roaming}/herdr/.../herdr.sock`
- *   it is only a marker file -- the real endpoint is a Named Pipe (at connect time, join per the
- *   interprocess pathcvt rules with the `\\.\\pipe\\` prefix; never treat the marker file path as a connectable endpoint).
- *
- * Remote endpoint discipline (cross-platform/cross-machine): only the **explicit** target.socketPath (optional)
- * and session travel to the remote; HERDR_SOCKET_PATH / config dirs / endpoint form (UDS vs pipe) are all resolved
- * by the target node itself. Never impose the Hub-local resolveSocketPath() result or endpointKind on the
- * remote (that would send a Linux Hub's ~/.config path to a Windows target).
+ * Cross-node endpoint discipline (zero Hub-local guessing):
+ * - Explicit `target.socketPath`: classified purely by path shape (POSIX UDS `/...`, Windows marker
+ *   `C:\...\herdr.sock` -> verified on target node + converted to `\\.\pipe\...`, or explicit pipe
+ *   `\\.\pipe\...`);
+ * - Omitted `target.socketPath`: target node's actual `NodeHostEnv` (platform, homeDir, tempDir,
+ *   standard dirs, `HERDR_SOCKET_PATH`) is queried via `HerdrNodeChannel.getNodeHostEnv` (or local
+ *   host facts when `nodeId === 'local'`), then resolved with `resolveHerdrEndpointFromHostEnv`
+ *   matching Herdr's `config/io.rs` precedence. Hub NEVER derives a remote Windows/Linux endpoint
+ *   from Hub's local environment, and NEVER silently falls back to local on offline/unsupported nodes.
+ * - Both local and remote connections yield a connected `Duplex` and share the single `callOverDuplex`
+ *   and `subscribeOverDuplex` NDJSON implementations.
  */
 
 interface HerdrTransportOptions {
@@ -83,16 +89,15 @@ const SUBSCRIPTION_TYPES = [
   'tab.closed',
   'workspace.closed',
 ] as const
-// The global EventEnvelope names use snake_case; the dedicated status events use dots.
-// Subscription requests still use dots uniformly; normalization to internal HerdrEvent names happens only at the receive boundary.
 const WIRE_EVENT_TYPES = new Map<string, HerdrEvent['type']>(
   SUBSCRIPTION_TYPES.map((type) => [type.replace('.', '_'), type] as const),
 )
 const SUBSCRIBE_ACK_TIMEOUT_MS = 15_000
-/** Single-line request ID for remote RPC: wire validation must match it exactly. */
-const REMOTE_RPC_ID = 'helmx-remote-1'
+/** Single request ID used uniformly on every one-shot Duplex connection (local and remote). */
+const CALL_REQUEST_ID = '1'
 /** Node ID as a single safe token (incl. 'local'; empty strings and oversize values rejected explicitly). */
 const NODE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
+const HERDR_ENV_KEYS = ['HERDR_SOCKET_PATH'] as const
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
@@ -106,14 +111,16 @@ function describeTarget(target: HerdrTarget): string {
   return 'herdr local default session'
 }
 
-/** The session name becomes a socket path segment; character whitelist (aligned with herdr's validate_name). */
+/** Session name character allowlist matching Herdr's `validate_name`: 1..64 chars, not `.`/`..`, `[A-Za-z0-9._-]`. */
 export function isValidSessionName(name: string): boolean {
-  return /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(name)
+  if (name.length === 0 || name.length > 64) return false
+  if (name === '.' || name === '..') return false
+  return /^[A-Za-z0-9._-]+$/.test(name)
 }
 
 /**
  * Node ID as a single safe token: starts alphanumeric, may contain `.` `_` `-`, length 1..128.
- * Empty strings and illegal characters are rejected explicitly (never silently treat an empty string as local -- that is silent degradation).
+ * Empty strings and illegal characters are rejected explicitly (never silently treat an empty string as local).
  */
 export function isValidNodeId(name: string): boolean {
   return NODE_ID_PATTERN.test(name)
@@ -128,23 +135,98 @@ function assertTarget(target: HerdrTarget): void {
   }
 }
 
+/** Target-node resolved Herdr IPC endpoint (connectable tunnel path + optional Windows marker file). */
+export interface ResolvedHerdrEndpoint {
+  /** Connectable tunnel socketPath: POSIX UDS (`/...`) or Windows Named Pipe (`\\.\pipe\...`). */
+  connectPath: string
+  /**
+   * Windows on-disk marker file (`C:\...\herdr.sock`) that must exist on the target node before
+   * opening the Named Pipe (`undefined` for POSIX UDS paths and explicit full pipe paths).
+   */
+  markerPath?: string
+  /** Transport endpoint kind inferred from target platform or path shape. */
+  kind: 'unix-socket' | 'named-pipe'
+}
+
 /**
- * Local Herdr IPC endpoint path resolution (local node only; remote nodes resolve themselves):
- * target.socketPath > HERDR_SOCKET_PATH > session dir (session or default).
- * On Unix this is the UDS file itself; on Windows it is the named pipe's marker file (at connect time
- * it must be converted to the pipe name; never connect directly to the file path).
+ * Pure path-shape classification of a raw Herdr endpoint path (explicit `socketPath` or `HERDR_SOCKET_PATH`):
+ * - Full pipe path (`\\.\pipe\...` or `\\HOST\pipe\...`): already connectable, no marker file check;
+ * - Windows path shape (`C:\...\herdr.sock`, `C:/...`, `\\srv\share\...`): marker file on disk,
+ *   real connectable endpoint is `windowsPipeNameOf(rawPath)`;
+ * - Anything else (POSIX path): Unix Domain Socket directly.
+ */
+export function classifyHerdrEndpoint(rawPath: string): ResolvedHerdrEndpoint {
+  const winNormalized = rawPath.replaceAll('/', '\\')
+  if (isPipePath(winNormalized)) {
+    return { connectPath: winNormalized, kind: 'named-pipe' }
+  }
+  if (isWindowsShapedPath(rawPath)) {
+    return { connectPath: windowsPipeNameOf(rawPath), markerPath: rawPath, kind: 'named-pipe' }
+  }
+  return { connectPath: rawPath, kind: 'unix-socket' }
+}
+
+/**
+ * Pure target-node Herdr endpoint derivation from the TARGET node's `NodeHostEnv` (matching Herdr's
+ * `config/io.rs` + `session.rs` + `interprocess` 2.4.2 pathcvt rules):
+ * - Precedence: `target.socketPath` > target `HERDR_SOCKET_PATH` > target config dir + session;
+ * - On `win32`: `XDG_CONFIG_HOME` > `APPDATA` > `USERPROFILE\AppData\Roaming` > `HOME\.config` > `tempDir`,
+ *   producing a `markerPath` (`...\herdr.sock`) and a Named Pipe `connectPath` (`\\.\pipe\...`);
+ * - On POSIX (`linux`/`darwin`/etc.): `XDG_CONFIG_HOME` > `HOME/.config` > `homeDir/.config` > `tempDir`,
+ *   producing a Unix socket `connectPath`.
+ */
+export function resolveHerdrEndpointFromHostEnv(
+  target: HerdrTarget,
+  hostEnv: NodeHostEnv,
+): ResolvedHerdrEndpoint {
+  if (target.socketPath !== undefined && target.socketPath !== '') {
+    return classifyHerdrEndpoint(target.socketPath)
+  }
+  const envSocket = hostEnv.env['HERDR_SOCKET_PATH']
+  if (envSocket !== undefined && envSocket !== '') {
+    return classifyHerdrEndpoint(envSocket)
+  }
+  const session = target.session !== undefined && target.session !== '' ? target.session : undefined
+  if (session !== undefined && !isValidSessionName(session)) {
+    throw new HerdrTransportError('herdr_invalid_target', `invalid session name: ${session}`, describeTarget(target))
+  }
+  const relative = session === undefined
+    ? ['herdr', 'herdr.sock']
+    : ['herdr', 'sessions', session, 'herdr.sock']
+
+  if (hostEnv.platform === 'win32') {
+    const base =
+      hostEnv.dirs.xdgConfigHome ??
+      hostEnv.dirs.appData ??
+      (hostEnv.dirs.userProfile !== undefined ? `${hostEnv.dirs.userProfile}\\AppData\\Roaming` : undefined) ??
+      (hostEnv.dirs.home !== undefined ? `${hostEnv.dirs.home}\\.config` : undefined) ??
+      hostEnv.tempDir
+    const markerPath = [base, ...relative].join('\\')
+    return {
+      connectPath: windowsPipeNameOf(markerPath),
+      markerPath,
+      kind: 'named-pipe',
+    }
+  }
+
+  const base =
+    hostEnv.dirs.xdgConfigHome ??
+    (hostEnv.dirs.home !== undefined ? posix.join(hostEnv.dirs.home, '.config') : undefined) ??
+    (hostEnv.homeDir !== '' ? posix.join(hostEnv.homeDir, '.config') : hostEnv.tempDir)
+  return {
+    connectPath: posix.join(base, ...relative),
+    kind: 'unix-socket',
+  }
+}
+
+/**
+ * Local Herdr IPC endpoint path resolution (local Hub host ONLY; remote nodes always resolve from
+ * the target node's `NodeHostEnv` via `resolveHerdrEndpointFromHostEnv`):
+ * returns the UDS path on POSIX, or the marker file / explicit pipe path on Windows.
  */
 export function resolveSocketPath(target: HerdrTarget): string {
-  if (target.socketPath) return target.socketPath
-  if (process.env.HERDR_SOCKET_PATH) return process.env.HERDR_SOCKET_PATH
-  if (process.platform === 'win32') {
-    const configHome = process.env.XDG_CONFIG_HOME ?? process.env.APPDATA ?? win32.join(homedir(), 'AppData', 'Roaming')
-    if (target.session) return win32.join(configHome, 'herdr', 'sessions', target.session, 'herdr.sock')
-    return win32.join(configHome, 'herdr', 'herdr.sock')
-  }
-  const configHome = process.env.XDG_CONFIG_HOME ?? posix.join(process.env.HOME ?? homedir(), '.config')
-  if (target.session) return posix.join(configHome, 'herdr', 'sessions', target.session, 'herdr.sock')
-  return posix.join(configHome, 'herdr', 'herdr.sock')
+  const resolved = resolveHerdrEndpointFromHostEnv(target, collectLocalNodeHostEnv(HERDR_ENV_KEYS))
+  return resolved.markerPath ?? resolved.connectPath
 }
 
 /** Long session/wait-style requests: no client deadline without an explicit timeoutMs; terminated by signal or the server's wait timeout. */
@@ -172,15 +254,14 @@ function timeoutPromise(ms: number, target: string): { promise: Promise<never>; 
 // --------------------------------------------------------------- frame decoding --
 
 /**
- * NDJSON frame decoder: find \n boundaries by bytes; an incomplete UTF-8 tail stays in the byte buffer;
- * string decoding uses an incremental TextDecoder; subclasses can reuse it for deterministic byte-by-byte regression.
- * Limits are per frame (limitBytes), not cumulative per connection.
+ * NDJSON frame decoder: find `\n` boundaries by bytes; an incomplete UTF-8 tail stays in the byte buffer;
+ * string decoding uses an incremental TextDecoder; limits are per frame (`limitBytes`), not cumulative.
  */
 export class LineAssembler {
   private buffer: Buffer = Buffer.alloc(0)
   private decoder = new TextDecoder('utf-8', { fatal: true })
 
-  /** Feed an arbitrarily split chunk; returns the lines completed this time (without \n). Over-limit/invalid UTF-8 throws. */
+  /** Feed an arbitrarily split chunk; returns the lines completed this time (without `\n`). Over-limit/invalid UTF-8 throws. */
   push(chunk: Buffer, limitBytes = MAX_FRAME_BYTES): string[] {
     this.buffer = this.buffer.length === 0 ? chunk : Buffer.concat([this.buffer, chunk])
     if (this.buffer.includes(0)) {
@@ -189,7 +270,9 @@ export class LineAssembler {
     const lines: string[] = []
     let index: number
     while ((index = this.buffer.indexOf(0x0a)) >= 0) {
-      const frame = this.buffer.subarray(0, index)
+      let frameEnd = index
+      if (frameEnd > 0 && this.buffer[frameEnd - 1] === 0x0d) frameEnd -= 1 // strip optional CR
+      const frame = this.buffer.subarray(0, frameEnd)
       this.buffer = this.buffer.subarray(index + 1)
       if (frame.length > limitBytes) {
         throw new HerdrTransportError('herdr_frame_too_large', `frame exceeded ${limitBytes} bytes`, 'herdr socket')
@@ -205,7 +288,8 @@ export class LineAssembler {
   /** EOF: leftover bytes are treated as the last frame; incomplete UTF-8 is a protocol error. */
   flush(): string[] {
     if (this.buffer.length === 0) return []
-    const rest = this.buffer
+    let rest = this.buffer
+    if (rest.length > 0 && rest[rest.length - 1] === 0x0d) rest = rest.subarray(0, rest.length - 1)
     this.buffer = Buffer.alloc(0)
     return [this.decode(rest)]
   }
@@ -214,7 +298,7 @@ export class LineAssembler {
     try {
       return this.decoder.decode(frame, { stream: false })
     } catch (cause) {
-      throw new HerdrTransportError('herdr_protocol', 'invalid UTF-8 in frame', 'herdr socket', { cause })
+      throw new HerdrTransportError('herdr_protocol', 'invalid UTF-8 in socket frame', 'herdr socket', { cause })
     }
   }
 }
@@ -226,7 +310,6 @@ function parseJsonLine(line: string, target: string): Record<string, unknown> | 
   try {
     parsed = JSON.parse(trimmed)
   } catch {
-    // Redact the whole thing first, then take the preview, so a bad frame's raw text cannot leak secrets.
     throw new HerdrTransportError('herdr_protocol', 'invalid JSON line', target)
   }
   if (!isObject(parsed)) {
@@ -238,181 +321,376 @@ function parseJsonLine(line: string, target: string): Record<string, unknown> | 
 function checkWireError(envelope: Record<string, unknown>, target: string, redact: (s: string) => string): void {
   if (envelope['error'] !== undefined && envelope['error'] !== null) {
     const body = isObject(envelope['error']) ? envelope['error'] : {}
-    raiseWireError(body, target, redact)
+    const code = typeof body['code'] === 'string' && body['code'] ? body['code'] : 'herdr_error'
+    const message = typeof body['message'] === 'string' && body['message']
+      ? redact(body['message'])
+      : 'herdr returned an error without a message'
+    throw new HerdrTransportError(code, `${code}: ${message}`, target)
   }
 }
 
-function raiseWireError(error: { code?: unknown; message?: unknown }, target: string, redact: (s: string) => string): never {
-  const code = typeof error.code === 'string' && error.code ? error.code : 'herdr_error'
-  const message = typeof error.message === 'string' && error.message ? redact(error.message) : 'herdr returned an error without a message'
-  throw new HerdrTransportError(code, `${code}: ${message}`, target)
-}
-
-// --------------------------------------------------------- local socket RPC --
+// ------------------------------------------------ endpoint resolution & Duplex open --
 
 /**
- * Establish a connection to the local Herdr IPC endpoint:
- * - Unix path: connect straight to the UDS file;
- * - Windows-shaped path (drive letter/UNC, incl. a full pipe path): the on-disk herdr.sock is only a
- *   marker file; the real endpoint is the `\\.\\pipe\\` named pipe -- first confirm the marker file exists
- *   (absent means herdr_unreachable, same semantics as UDS ENOENT), then convert to the pipe name and connect;
- *   never treat the marker file path as a connectable endpoint.
+ * Remote channel precondition: remote nodes must explicitly have an online `HerdrNodeChannel`.
+ * Missing channel or offline node fails loudly with `herdr_node_unavailable` / `herdr_node_offline`,
+ * never silently falling back to the local Hub host.
  */
-async function openLocalHerdrSocket(socketPath: string, target: string, signal?: AbortSignal): Promise<Socket> {
-  const net = await import('node:net')
-  checkAborted(signal, target)
-  if (!isWindowsShapedPath(socketPath)) {
-    const socket = net.connect(socketPath)
-    socket.setNoDelay(true)
-    return socket
+function requireChannel(nodeChannel: HerdrNodeChannel | undefined, nodeId: string, target: string): HerdrNodeChannel {
+  if (nodeChannel === undefined) {
+    throw new HerdrTransportError(
+      'herdr_node_unavailable',
+      `remote node '${nodeId}' requires an injected node channel (EnvFabric) and will never fall back to local`,
+      target,
+    )
   }
-  // Already a full pipe path: no marker to check; convert and connect directly (the pipe name is the endpoint).
-  if (!/^\\\\(\.|[^\\]+)\\pipe\\/.test(socketPath.replaceAll('/', '\\'))) {
-    const fs = await import('node:fs/promises')
-    try {
-      await fs.stat(socketPath)
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code
-      if (code === 'ENOENT' || code === 'ENOTDIR' || code === 'EACCES' || code === 'EPERM') {
-        throw new HerdrTransportError(
-          'herdr_unreachable',
-          `herdr marker file does not exist (${code ?? 'stat failed'}): ${socketPath}; confirm the local Windows herdr is running`,
-          target,
-          { cause: err },
-        )
-      }
-      throw new HerdrTransportError('herdr_io', `cannot access the herdr marker file: ${socketPath} (${code ?? String(err)})`, target, { cause: err })
-    }
-    checkAborted(signal, target)
+  if (!nodeChannel.isOnline(nodeId)) {
+    throw new HerdrTransportError('herdr_node_offline', `node '${nodeId}' is offline`, target)
   }
-  const socket = connectHerdrEndpoint(socketPath, 'named-pipe')
-  socket.setNoDelay(true)
-  return socket
+  return nodeChannel
 }
 
-/** One request per connection: destroy the connection as soon as the first complete response line arrives. */
-async function callLocal(
-  socketPath: string,
-  target: string,
+/** Map node-channel / tunnel HelmxErrors honestly to HerdrTransportError codes (never silently swallowed). */
+function mapChannelError(error: unknown, targetLabel: string, redact: (s: string) => string): HerdrTransportError {
+  if (error instanceof HerdrTransportError) return error
+  if (error instanceof HelmxError) {
+    const message = redact(error.message)
+    switch (error.code) {
+      case 'node_offline':
+        return new HerdrTransportError('herdr_node_offline', message, targetLabel, { cause: error })
+      case 'node_draining':
+        return new HerdrTransportError('node_draining', message, targetLabel, { cause: error })
+      case 'aborted':
+        return new HerdrTransportError('herdr_aborted', message, targetLabel, { cause: error })
+      case 'node_tunnel_timeout':
+      case 'timeout':
+        return new HerdrTransportError('herdr_timeout', message, targetLabel, { cause: error })
+      case 'node_tunnel_connect_failed':
+        return new HerdrTransportError('herdr_socket', message, targetLabel, { cause: error })
+      case 'validation_error':
+        return new HerdrTransportError('herdr_invalid_target', message, targetLabel, { cause: error })
+      default:
+        return new HerdrTransportError('herdr_node_error', `${error.code}: ${message}`, targetLabel, { cause: error })
+    }
+  }
+  const message = redact(error instanceof Error ? error.message : String(error))
+  return new HerdrTransportError('herdr_node_error', message, targetLabel, { cause: error })
+}
+
+/** Confirm the Windows marker file exists on the ACTUAL target node (local fs or remote ExecutionEnv). */
+async function verifyWindowsMarker(
+  markerPath: string,
+  nodeId: string | undefined,
+  channel: HerdrNodeChannel | undefined,
+  targetLabel: string,
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  checkAborted(signal, targetLabel)
+  if (nodeId !== undefined) {
+    const env = channel!.envFor(nodeId, win32.dirname(markerPath))
+    const info = await env.fileInfo(markerPath, contextOf(signal, targetLabel))
+    if (info.ok) return
+    const code = info.error.code
+    if (code === 'aborted') {
+      throw new HerdrTransportError('herdr_aborted', 'operation aborted', targetLabel)
+    }
+    if (code === 'not_found' || code === 'not_directory' || code === 'permission_denied') {
+      throw new HerdrTransportError(
+        'herdr_unreachable',
+        `herdr marker file does not exist (${code}): ${markerPath}; confirm Windows herdr is running on node '${nodeId}'`,
+        targetLabel,
+      )
+    }
+    throw new HerdrTransportError(
+      'herdr_io',
+      `cannot access remote herdr marker file ${markerPath} (${code}: ${info.error.message})`,
+      targetLabel,
+    )
+  }
+
+  const fs = await import('node:fs/promises')
+  try {
+    await fs.stat(markerPath)
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code
+    if (code === 'ENOENT' || code === 'ENOTDIR' || code === 'EACCES' || code === 'EPERM') {
+      throw new HerdrTransportError(
+        'herdr_unreachable',
+        `herdr marker file does not exist (${code ?? 'stat failed'}): ${markerPath}; confirm the local Windows herdr is running`,
+        targetLabel,
+        { cause: err },
+      )
+    }
+    throw new HerdrTransportError(
+      'herdr_io',
+      `cannot access the herdr marker file: ${markerPath} (${code ?? String(err)})`,
+      targetLabel,
+      { cause: err },
+    )
+  }
+  checkAborted(signal, targetLabel)
+}
+
+/** Local direct connect returning a connected Duplex (same post-connect invariant as `openTunnel`). */
+async function openLocalDuplex(
+  connectPath: string,
+  targetLabel: string,
+  signal: AbortSignal | undefined,
+  redact: (s: string) => string,
+): Promise<Duplex> {
+  checkAborted(signal, targetLabel)
+  const net = await import('node:net')
+  return await new Promise<Duplex>((resolve, reject) => {
+    const socket = net.connect(connectPath)
+    let settled = false
+    const onAbort = (): void => {
+      if (settled) return
+      settled = true
+      signal?.removeEventListener('abort', onAbort)
+      socket.destroy()
+      reject(new HerdrTransportError('herdr_aborted', 'operation aborted', targetLabel))
+    }
+    signal?.addEventListener('abort', onAbort, { once: true })
+    socket.once('connect', () => {
+      if (settled) return
+      if (signal?.aborted) { onAbort(); return }
+      settled = true
+      signal?.removeEventListener('abort', onAbort)
+      socket.setNoDelay(true)
+      resolve(socket)
+    })
+    socket.once('error', (err: Error) => {
+      if (settled) return
+      settled = true
+      signal?.removeEventListener('abort', onAbort)
+      socket.destroy()
+      reject(new HerdrTransportError('herdr_socket', `socket error: ${redact(err.message)}`, targetLabel, { cause: err }))
+    })
+  })
+}
+
+/**
+ * Resolve the target-node endpoint and open a connected Duplex stream (uniform entry for local & remote):
+ * - Local: derives endpoint from Hub local host env (when `socketPath` omitted), verifies Windows marker
+ *   locally if needed, and connects locally via `net.connect`;
+ * - Remote: queries target node's `NodeHostEnv` (when `socketPath` omitted — NEVER Hub local env!),
+ *   verifies Windows marker on the remote node if needed, and opens a raw Duplex via `openTunnel({ socketPath })`.
+ */
+async function openHerdrDuplex(
+  target: HerdrTarget,
+  nodeId: string | undefined,
+  nodeChannel: HerdrNodeChannel | undefined,
+  targetLabel: string,
+  signal: AbortSignal | undefined,
+  redact: (s: string) => string,
+): Promise<Duplex> {
+  checkAborted(signal, targetLabel)
+  let channel: HerdrNodeChannel | undefined
+  let resolved: ResolvedHerdrEndpoint
+
+  if (nodeId !== undefined) {
+    channel = requireChannel(nodeChannel, nodeId, targetLabel)
+    if (target.socketPath !== undefined && target.socketPath !== '') {
+      resolved = classifyHerdrEndpoint(target.socketPath)
+    } else {
+      let hostEnv: NodeHostEnv
+      try {
+        hostEnv = await channel.getNodeHostEnv(nodeId, { envKeys: HERDR_ENV_KEYS }, signal)
+      } catch (error) {
+        throw mapChannelError(error, targetLabel, redact)
+      }
+      resolved = resolveHerdrEndpointFromHostEnv(target, hostEnv)
+    }
+  } else {
+    resolved =
+      target.socketPath !== undefined && target.socketPath !== ''
+        ? classifyHerdrEndpoint(target.socketPath)
+        : resolveHerdrEndpointFromHostEnv(target, collectLocalNodeHostEnv(HERDR_ENV_KEYS))
+  }
+
+  if (resolved.markerPath !== undefined) {
+    await verifyWindowsMarker(resolved.markerPath, nodeId, channel, targetLabel, signal)
+  }
+
+  if (nodeId !== undefined) {
+    try {
+      return await channel!.openTunnel(nodeId, { socketPath: resolved.connectPath }, signal)
+    } catch (error) {
+      throw mapChannelError(error, targetLabel, redact)
+    }
+  }
+  return await openLocalDuplex(resolved.connectPath, targetLabel, signal, redact)
+}
+
+// -------------------------------------------------- unified Duplex NDJSON RPC --
+
+/**
+ * Unified one-shot NDJSON RPC over any connected Duplex (local UDS/Named Pipe or remote `openTunnel`):
+ * writes `{"id":"1","method","params"}\n`, reads the first complete response line with `LineAssembler`,
+ * validates `id` and wire error, and destroys the Duplex immediately on settle/abort/timeout.
+ */
+async function callOverDuplex(
+  duplex: Duplex,
+  targetLabel: string,
   method: string,
   params: Record<string, unknown>,
   options: HerdrCallOptions | undefined,
   redact: (s: string) => string,
 ): Promise<unknown> {
   const signal = options?.signal
-  checkAborted(signal, target)
-
-  const socket = await openLocalHerdrSocket(socketPath, target, signal)
   const assembler = new LineAssembler()
   const timeoutMs = resolveCallTimeoutMs(method, params, options)
-  const timer = timeoutMs === undefined ? undefined : timeoutPromise(timeoutMs, target)
-  const requestId = '1'
+  const timer = timeoutMs === undefined ? undefined : timeoutPromise(timeoutMs, targetLabel)
 
   const firstLine = new Promise<string>((resolve, reject) => {
-    const settle = (outcome: Promise<string>) => {
-      socket.end()
-      outcome.then(resolve, reject)
+    let settled = false
+    const done = (fn: () => void): void => {
+      if (settled) return
+      settled = true
+      fn()
     }
-    socket.on('data', (chunk: Buffer) => {
+    duplex.on('data', (chunk: Buffer | string) => {
+      const buf = typeof chunk === 'string' ? Buffer.from(chunk, 'utf8') : chunk
       let lines: string[]
       try {
-        lines = assembler.push(chunk)
+        lines = assembler.push(buf)
       } catch (err) {
-        settle(Promise.reject(err))
+        done(() => reject(err))
         return
       }
-      if (lines[0] !== undefined) settle(Promise.resolve(lines[0]))
+      if (lines.length > 0) {
+        done(() => resolve(lines[0]!))
+      }
     })
-    socket.once('close', () => {
-      let lines: string[]
+    duplex.once('end', () => {
+      let rest: string[]
       try {
-        lines = assembler.flush()
+        rest = assembler.flush()
       } catch (err) {
-        reject(err)
+        done(() => reject(err))
         return
       }
-      if (lines[0] !== undefined) resolve(lines[0])
-      else reject(new HerdrTransportError('herdr_disconnected', 'socket closed before response', target))
+      if (rest.length > 0) done(() => resolve(rest[0]!))
+      else done(() => reject(new HerdrTransportError('herdr_disconnected', 'socket closed before response', targetLabel)))
     })
-    socket.once('error', (err) => {
-      reject(new HerdrTransportError('herdr_socket', `socket error: ${redact(err.message)}`, target, { cause: err }))
+    duplex.once('error', (err: Error) => {
+      done(() => reject(new HerdrTransportError('herdr_socket', `socket error: ${redact(err.message)}`, targetLabel, { cause: err })))
+    })
+    duplex.once('close', () => {
+      done(() => reject(new HerdrTransportError('herdr_disconnected', 'socket closed before response', targetLabel)))
     })
   })
+  // Prevent unhandledRejection when timeout/abort races ahead of stream close.
+  firstLine.catch(() => undefined)
 
-  // Active abort settle: thoroughly destroy our side of the socket (incl. the read side), not relying on the peer closing first;
-  // an agent.wait without a deadline must also be terminated immediately by abort.
-  let onAbort: () => void = () => {}
-  const abortRejection = new Promise<never>((_, reject) => {
+  let onAbort: (() => void) | undefined
+  const abortPromise = new Promise<never>((_resolve, reject) => {
     onAbort = () => {
-      socket.destroy()
-      reject(new HerdrTransportError('herdr_aborted', 'call aborted', target))
+      duplex.destroy()
+      reject(new HerdrTransportError('herdr_aborted', 'call aborted', targetLabel))
     }
+    if (signal?.aborted) onAbort()
+    else signal?.addEventListener('abort', onAbort, { once: true })
   })
-  signal?.addEventListener('abort', onAbort, { once: true })
+  abortPromise.catch(() => undefined)
+
+  const request = { id: CALL_REQUEST_ID, method, params }
+  if (!signal?.aborted) {
+    duplex.write(`${JSON.stringify(request)}\n`)
+  }
+
   let line: string
   try {
-    socket.write(`${JSON.stringify({ id: requestId, method, params })}\n`)
-    const racers: Promise<string>[] = [firstLine, abortRejection]
-    if (timer) racers.push(timer.promise)
+    const racers: Promise<string>[] = [firstLine, abortPromise]
+    if (timer !== undefined) racers.push(timer.promise)
     line = await Promise.race(racers)
   } finally {
     timer?.clear()
-    signal?.removeEventListener('abort', onAbort)
-    socket.destroy()
+    if (onAbort !== undefined) signal?.removeEventListener('abort', onAbort)
+    duplex.destroy()
   }
-  const envelope = parseJsonLine(line, target)
-  if (!envelope) throw new HerdrTransportError('herdr_protocol', 'empty response line', target)
-  if (envelope['id'] !== requestId) {
-    // A missing or wrong id is a peer protocol violation; never treated as success.
-    throw new HerdrTransportError('herdr_protocol', 'response id missing or mismatched', target)
+
+  const envelope = parseJsonLine(line, targetLabel)
+  if (!envelope) throw new HerdrTransportError('herdr_protocol', 'empty response line', targetLabel)
+  if (envelope['id'] !== CALL_REQUEST_ID) {
+    throw new HerdrTransportError('herdr_protocol', 'response id missing or mismatched', targetLabel)
   }
   if (envelope['result'] === undefined && envelope['error'] === undefined) {
-    throw new HerdrTransportError('herdr_protocol', 'response has neither result nor error', target)
+    throw new HerdrTransportError('herdr_protocol', 'response has neither result nor error', targetLabel)
   }
-  checkWireError(envelope, target, redact)
+  checkWireError(envelope, targetLabel, redact)
   return envelope['result']
 }
 
-// ------------------------------------------------------- local event subscription --
+// --------------------------------------------- unified Duplex NDJSON subscribe --
 
 /**
- * Subscription stream: after the ack, each line is a bare event frame.
- * A single finalizer guarantees resources are cleaned once and errors reported once; when the ack and events arrive in the same chunk, lines are processed in order.
- * options.paneIds appends a {type:'pane.agent_status_changed',pane_id} filter subscription per deduped pane;
- * an abort of options.signal at any moment closes this socket: the pending-ack Promise settles immediately with herdr_aborted,
- * while in the normal streaming phase it just closes silently, not reported as a new error to onError.
+ * Unified NDJSON event subscription over any connected Duplex (local or remote):
+ * validates the `events.subscribe` -> `{"id":"sub","result":{"type":"subscription_started"}}` handshake
+ * directly in `builtin:herdr`, then dispatches bare event frames via `onEvent`. Single finalizer
+ * guarantees resources are destroyed once and errors reported at most once.
  */
-async function subscribeLocal(
-  socketPath: string,
-  target: string,
+async function subscribeOverDuplex(
+  duplex: Duplex,
+  targetLabel: string,
+  paneIds: string[],
   onEvent: (event: HerdrEvent) => void,
   onError: (error: unknown) => void,
   redact: (s: string) => string,
-  options?: HerdrSubscribeOptions,
-  subscribeAckTimeoutMs: number = SUBSCRIBE_ACK_TIMEOUT_MS,
+  signal: AbortSignal | undefined,
+  subscribeAckTimeoutMs: number,
 ): Promise<() => void> {
-  const signal = options?.signal
-  checkAborted(signal, target)
-  // Subscription set: global topology events + one status filter subscription per deduped paneId.
-  const paneIds = [...new Set(options?.paneIds ?? [])]
-  const invalidPaneId = paneIds.find((paneId) => typeof paneId !== 'string' || paneId === '')
-  if (invalidPaneId !== undefined) {
-    throw new HerdrTransportError('herdr_invalid_subscription', `invalid pane id in subscription options: ${String(invalidPaneId)}`, target)
-  }
-  const socket = await openLocalHerdrSocket(socketPath, target, signal)
   const assembler = new LineAssembler()
-
   let stopped = false
   let terminated = false
   let acked = false
   let terminate: (error: unknown) => void = () => {}
 
-  /** The single finalization path: gracefully close the socket (send FIN, avoiding a hung server connection); errors are reported once. */
   function failOnce(error: unknown): void {
     if (terminated) return
     terminated = true
-    socket.destroy()
+    duplex.destroy()
     terminate(error)
+  }
+
+  function dispatchEventFrame(frame: Record<string, unknown>): boolean {
+    try {
+      const wireType = frame['event']
+      if (typeof wireType !== 'string') return true
+      const type = wireType === PANE_STATUS_EVENT_TYPE ? wireType : WIRE_EVENT_TYPES.get(wireType)
+      if (type === undefined) return true
+      const data = isObject(frame['data']) ? frame['data'] : {}
+      if (type === 'tab.closed' || type === 'workspace.closed') {
+        const workspaceId = data['workspace_id']
+        const tabId = data['tab_id']
+        if (
+          typeof workspaceId !== 'string' || workspaceId === '' ||
+          (type === 'tab.closed' && (typeof tabId !== 'string' || tabId === ''))
+        ) {
+          failOnce(new HerdrTransportError('herdr_protocol', `event ${type} missing topology identity`, targetLabel))
+          return false
+        }
+        if (type === 'tab.closed') onEvent({ type, workspaceId, tabId: tabId as string })
+        else onEvent({ type, workspaceId })
+        return true
+      }
+      const pane = isObject(data['pane']) ? data['pane'] : undefined
+      const paneId =
+        typeof data['pane_id'] === 'string' && data['pane_id'] !== ''
+          ? data['pane_id']
+          : typeof pane?.['pane_id'] === 'string' && pane['pane_id'] !== ''
+            ? (pane['pane_id'] as string)
+            : undefined
+      if (!paneId) {
+        failOnce(new HerdrTransportError('herdr_protocol', `event ${String(type)} missing pane identity`, targetLabel))
+        return false
+      }
+      onEvent({ type, paneId })
+      return true
+    } catch (err) {
+      failOnce(err)
+      return false
+    }
   }
 
   const ack = new Promise<void>((resolve, reject) => {
@@ -435,19 +713,23 @@ async function subscribeLocal(
       for (const line of lines) {
         let envelope: Record<string, unknown> | undefined
         try {
-          envelope = parseJsonLine(line, target)
+          envelope = parseJsonLine(line, targetLabel)
         } catch (err) {
           failOnce(err)
           return
         }
         if (!envelope) continue
         if (envelope['event'] !== undefined) {
-          // Event frames arriving before the ack: still dispatched in order, not dropped.
+          // Event frames arriving before or after the ACK are dispatched in order, never dropped.
           if (!dispatchEventFrame(envelope)) return
           continue
         }
+        if (acked) {
+          failOnce(new HerdrTransportError('herdr_protocol', 'unexpected post-ack response frame on subscription stream', targetLabel))
+          return
+        }
         if (envelope['id'] !== 'sub') {
-          failOnce(new HerdrTransportError('herdr_protocol', 'subscription response id missing or mismatched', target))
+          failOnce(new HerdrTransportError('herdr_protocol', 'subscription response id missing or mismatched', targetLabel))
           return
         }
         if (envelope['error'] !== undefined && envelope['error'] !== null) {
@@ -455,7 +737,7 @@ async function subscribeLocal(
           const code = typeof body['code'] === 'string' && body['code'] ? body['code'] : 'herdr_error'
           const message =
             typeof body['message'] === 'string' && body['message'] ? redact(body['message']) : 'herdr returned an error without a message'
-          failOnce(new HerdrTransportError(code, `${code}: ${message}`, target))
+          failOnce(new HerdrTransportError(code, `${code}: ${message}`, targetLabel))
           return
         }
         if (envelope['result'] !== undefined) {
@@ -463,56 +745,81 @@ async function subscribeLocal(
           const type = isObject(result) ? result['type'] : undefined
           if (type === 'subscription_started') {
             succeed()
-            continue // later lines of the same chunk continue as events
+            continue
           }
-          failOnce(new HerdrTransportError('herdr_protocol', 'unexpected subscription ack result', target))
+          failOnce(new HerdrTransportError('herdr_protocol', 'unexpected subscription ack result', targetLabel))
           return
         }
+        failOnce(new HerdrTransportError('herdr_protocol', 'subscription response has neither result nor error', targetLabel))
+        return
       }
     }
 
-    socket.on('data', (chunk: Buffer) => {
+    duplex.on('data', (chunk: Buffer | string) => {
       if (terminated || stopped) return
+      const buf = typeof chunk === 'string' ? Buffer.from(chunk, 'utf8') : chunk
       let lines: string[]
       try {
-        lines = assembler.push(chunk)
+        lines = assembler.push(buf)
       } catch (err) {
         failOnce(err)
         return
       }
       handleLines(lines)
     })
-    socket.once('error', (err) => {
-      failOnce(new HerdrTransportError('herdr_socket', `socket error: ${redact(err.message)}`, target, { cause: err }))
+    duplex.once('end', () => {
+      if (stopped) return
+      let rest: string[]
+      try {
+        rest = assembler.flush()
+      } catch (err) {
+        failOnce(err)
+        return
+      }
+      if (rest.length > 0) handleLines(rest)
+      if (!terminated && !stopped) {
+        failOnce(
+          new HerdrTransportError(
+            'herdr_disconnected',
+            acked ? 'subscription socket closed' : 'subscription socket closed before ack',
+            targetLabel,
+          ),
+        )
+      }
     })
-    socket.once('close', () => {
-      if (stopped) return // an active close from stop()/abort is not an error
-      failOnce(new HerdrTransportError('herdr_disconnected', terminated ? 'subscription socket closed' : 'subscription socket closed before ack', target))
+    duplex.once('error', (err: Error) => {
+      failOnce(new HerdrTransportError('herdr_socket', `socket error: ${redact(err.message)}`, targetLabel, { cause: err }))
+    })
+    duplex.once('close', () => {
+      if (stopped) return
+      failOnce(
+        new HerdrTransportError(
+          'herdr_disconnected',
+          acked ? 'subscription socket closed' : 'subscription socket closed before ack',
+          targetLabel,
+        ),
+      )
     })
   })
 
   const subscriptions: Array<Record<string, unknown>> = SUBSCRIPTION_TYPES.map((type) => ({ type }))
   for (const paneId of paneIds) subscriptions.push({ type: PANE_STATUS_EVENT_TYPE, pane_id: paneId })
-
   const request = { id: 'sub', method: SUBSCRIPTION_METHOD, params: { subscriptions } }
-  socket.write(`${JSON.stringify(request)}\n`)
+  if (!signal?.aborted) {
+    duplex.write(`${JSON.stringify(request)}\n`)
+  }
 
-  // Active abort settle: reject the pending Promise in the ack phase, close silently in the normal streaming phase;
-  // neither reports abort as a new error to onError.
   const onAbort = () => {
     if (terminated) return
     stopped = true
     terminated = true
-    socket.destroy()
-    if (!acked) terminate(new HerdrTransportError('herdr_aborted', 'subscription aborted', target))
+    duplex.destroy()
+    if (!acked) terminate(new HerdrTransportError('herdr_aborted', 'subscription aborted', targetLabel))
   }
   signal?.addEventListener('abort', onAbort, { once: true })
-  // Compensation for the window between checkAborted and addEventListener where abort already fired (abort events do not fire retroactively).
   if (signal?.aborted) onAbort()
 
-  // Ack deadline: whichever path fails (timeout/bad frame/disconnect) must close the socket via failOnce,
-  // otherwise the server connection hangs and close listeners leak.
-  const ackTimer = timeoutPromise(subscribeAckTimeoutMs, target)
+  const ackTimer = timeoutPromise(subscribeAckTimeoutMs, targetLabel)
   try {
     await Promise.race([
       ack,
@@ -525,135 +832,19 @@ async function subscribeLocal(
       ),
     ])
   } catch (err) {
-    // The rejection path's caller never gets stop(): clean up the abort listener here so it doesn't leak.
     signal?.removeEventListener('abort', onAbort)
     throw err
   } finally {
     ackTimer.clear()
   }
 
-  /**
-   * Event frame -> {type, paneId}; pane.created/updated carries the full PaneInfo (official
-   * EventData); closed/exited/focused/agent_status_changed use the pane_id field;
-   * moved takes data.pane.pane_id (the new ID; the old ID is realigned by re-fetching the snapshot).
-   * Bad frames are reported through the finalizer and stop the subscription.
-   */
-  function dispatchEventFrame(frame: Record<string, unknown>): boolean {
-    try {
-      const wireType = frame['event']
-      if (typeof wireType !== 'string') return true
-      const type = wireType === PANE_STATUS_EVENT_TYPE ? wireType : WIRE_EVENT_TYPES.get(wireType)
-      if (type === undefined) return true
-      const data = isObject(frame['data']) ? frame['data'] : {}
-      if (type === 'tab.closed' || type === 'workspace.closed') {
-        const workspaceId = data['workspace_id']
-        const tabId = data['tab_id']
-        if (typeof workspaceId !== 'string' || workspaceId === '' ||
-            (type === 'tab.closed' && (typeof tabId !== 'string' || tabId === ''))) {
-          failOnce(new HerdrTransportError('herdr_protocol', `event ${type} missing topology identity`, target))
-          return false
-        }
-        if (type === 'tab.closed') onEvent({ type, workspaceId, tabId: tabId as string })
-        else onEvent({ type, workspaceId })
-        return true
-      }
-      const pane = isObject(data['pane']) ? data['pane'] : undefined
-      const paneId =
-        typeof data['pane_id'] === 'string' && data['pane_id'] !== ''
-          ? data['pane_id']
-          : typeof pane?.['pane_id'] === 'string' && pane['pane_id'] !== ''
-            ? (pane['pane_id'] as string)
-            : undefined
-      if (!paneId) {
-        failOnce(new HerdrTransportError('herdr_protocol', `event ${String(type)} missing pane identity`, target))
-        return false
-      }
-      onEvent({ type, paneId })
-      return true
-    } catch (err) {
-      failOnce(err)
-      return false
-    }
-  }
-
   return () => {
+    if (stopped) return
     stopped = true
+    terminated = true
     signal?.removeEventListener('abort', onAbort)
-    // A normal unsubscribe sends FIN so the peer releases the subscription promptly; destroy the read side after the write side ends, avoiding a lingering socket.
-    socket.end(() => socket.destroy())
+    duplex.destroy()
   }
-}
-
-// ------------------------------------------------------------ remote node channel --
-
-/**
- * Resolve the channel needed for remote calls: when EnvFabric is not injected (nodeChannel missing),
- * explicitly herdr_node_unavailable; an offline node is explicitly herdr_node_offline. Never fall back to local.
- */
-function requireChannel(nodeChannel: HerdrNodeChannel | undefined, nodeId: string, target: string): HerdrNodeChannel {
-  if (nodeChannel === undefined) {
-    throw new HerdrTransportError(
-      'herdr_node_unavailable',
-      `node '${nodeId}' has no HerdrNodeChannel (EnvFabric not injected); remote Herdr calls are unavailable and never fall back to local`,
-      target,
-    )
-  }
-  if (!nodeChannel.isOnline(nodeId)) {
-    throw new HerdrTransportError('herdr_node_offline', `node '${nodeId}' is offline`, target)
-  }
-  return nodeChannel
-}
-
-/** Channel-layer error codes -> transport error codes (timeouts/cancellation/IO typed honestly; no swallowed errors). */
-function raiseChannelError(code: string, message: string, target: string): never {
-  const mapped =
-    code === 'timeout' ? 'herdr_timeout'
-    : code === 'aborted' ? 'herdr_aborted'
-    : code === 'not_found' ? 'herdr_output_missing'
-    : code === 'permission_denied' ? 'herdr_io'
-    : 'herdr_node_error'
-  throw new HerdrTransportError(mapped, `${code}: ${message}`, target)
-}
-
-/**
- * Remote RPC: a single-line JSON reaches the target node's local Herdr IPC via the node channel.
- * Only the explicit target.socketPath (optional) and session travel -- the endpoint path/form is resolved by
- * the target node itself (local resolveSocketPath/endpointKind are never sent down).
- * Secrets exist only inside the JSON structure, never in any command-line argv.
- */
-async function callRemote(
-  nodeChannel: HerdrNodeChannel,
-  nodeId: string,
-  target: HerdrTarget,
-  targetLabel: string,
-  method: string,
-  params: Record<string, unknown>,
-  options: HerdrCallOptions | undefined,
-  redact: (s: string) => string,
-): Promise<unknown> {
-  const line = JSON.stringify({ id: REMOTE_RPC_ID, method, params })
-  const timeoutMs = resolveCallTimeoutMs(method, params, options)
-  const result = await nodeChannel.ipcCall(
-    nodeId,
-    {
-      ...(target.socketPath !== undefined ? { endpoint: target.socketPath } : {}),
-      ...(target.session !== undefined ? { session: target.session } : {}),
-      line,
-      timeoutMs,
-    },
-    options?.signal,
-  )
-  if (!result.ok) raiseChannelError(result.error.code, result.error.message, targetLabel)
-  const envelope = parseJsonLine(result.value, targetLabel)
-  if (!envelope) throw new HerdrTransportError('herdr_protocol', 'empty response line', targetLabel)
-  if (envelope['id'] !== REMOTE_RPC_ID) {
-    throw new HerdrTransportError('herdr_protocol', 'response id missing or mismatched', targetLabel)
-  }
-  if (envelope['result'] === undefined && envelope['error'] === undefined) {
-    throw new HerdrTransportError('herdr_protocol', 'response has neither result nor error', targetLabel)
-  }
-  checkWireError(envelope, targetLabel, redact)
-  return envelope['result']
 }
 
 // ------------------------------------------------------------- factories --
@@ -661,15 +852,54 @@ async function callRemote(
 export function createHerdrTransport(factoryOptions?: HerdrTransportOptions): HerdrTransport {
   const redact = factoryOptions?.redact ?? ((text: string) => text)
   const nodeChannel = factoryOptions?.nodeChannel
+  const subscribeAckTimeoutMs = factoryOptions?.subscribeAckTimeoutMs ?? SUBSCRIBE_ACK_TIMEOUT_MS
 
-  async function call(target: HerdrTarget, method: string, params: Record<string, unknown>, callOptions?: HerdrCallOptions): Promise<unknown> {
+  async function call(
+    target: HerdrTarget,
+    method: string,
+    params: Record<string, unknown>,
+    callOptions?: HerdrCallOptions,
+  ): Promise<unknown> {
     assertTarget(target)
+    const targetLabel = describeTarget(target)
     const nodeId = targetNodeId(target)
-    if (nodeId !== undefined) {
-      const channel = requireChannel(nodeChannel, nodeId, describeTarget(target))
-      return callRemote(channel, nodeId, target, describeTarget(target), method, params, callOptions, redact)
+    const timeoutMs = resolveCallTimeoutMs(method, params, callOptions)
+    let timedOut = false
+    let deadlineTimer: NodeJS.Timeout | undefined
+    const openController = timeoutMs === undefined ? undefined : new AbortController()
+    let onCallerAbort: (() => void) | undefined
+    if (openController !== undefined && timeoutMs !== undefined) {
+      if (callOptions?.signal !== undefined) {
+        onCallerAbort = () => openController.abort()
+        if (callOptions.signal.aborted) openController.abort()
+        else callOptions.signal.addEventListener('abort', onCallerAbort, { once: true })
+      }
+      deadlineTimer = setTimeout(() => {
+        timedOut = true
+        openController.abort()
+      }, timeoutMs)
+      deadlineTimer.unref?.()
     }
-    return callLocal(resolveSocketPath(target), describeTarget(target), method, params, callOptions, redact)
+    let duplex: Duplex
+    try {
+      duplex = await openHerdrDuplex(
+        target,
+        nodeId,
+        nodeChannel,
+        targetLabel,
+        openController?.signal ?? callOptions?.signal,
+        redact,
+      )
+    } catch (error) {
+      if (timedOut && !(callOptions?.signal?.aborted)) {
+        throw new HerdrTransportError('herdr_timeout', `no response within ${timeoutMs}ms`, targetLabel, { cause: error })
+      }
+      throw error
+    } finally {
+      if (deadlineTimer !== undefined) clearTimeout(deadlineTimer)
+      if (onCallerAbort !== undefined) callOptions?.signal?.removeEventListener('abort', onCallerAbort)
+    }
+    return await callOverDuplex(duplex, targetLabel, method, params, callOptions, redact)
   }
 
   return {
@@ -695,195 +925,28 @@ export function createHerdrTransport(factoryOptions?: HerdrTransportOptions): He
       }
       await removeLocalOutput(cwd, fileName, signal, describeTarget(target), redact)
     },
-    async runGate(target, command, cwd, signal, env) {
-      assertTarget(target)
-      const nodeId = targetNodeId(target)
-      if (nodeId !== undefined) {
-        const channel = requireChannel(nodeChannel, nodeId, describeTarget(target))
-        return runNodeGate(channel, nodeId, describeTarget(target), command, cwd, signal, env, redact)
-      }
-      return runLocalGate(command, cwd, signal, env, describeTarget(target), redact)
-    },
     async subscribe(target, onEvent, onError, options) {
       assertTarget(target)
-      const nodeId = targetNodeId(target)
-      if (nodeId !== undefined) {
-        const channel = requireChannel(nodeChannel, nodeId, describeTarget(target))
-        if (channel.ipcSubscribe !== undefined) {
-          return subscribeNode(channel, nodeId, target, onEvent, onError, options)
-        }
-        // The channel does not support event forwarding: fail explicitly, never silently degrade to no events.
-        return Promise.reject(
-          new HerdrTransportError('herdr_subscribe_unsupported', `node channel for '${nodeId}' does not stream events`, describeTarget(target)),
-        )
+      const targetLabel = describeTarget(target)
+      const signal = options?.signal
+      checkAborted(signal, targetLabel)
+      const paneIds = [...new Set(options?.paneIds ?? [])]
+      const invalidPaneId = paneIds.find((paneId) => typeof paneId !== 'string' || paneId === '')
+      if (invalidPaneId !== undefined) {
+        throw new HerdrTransportError('herdr_invalid_subscription', `invalid pane id in subscription options: ${String(invalidPaneId)}`, targetLabel)
       }
-      return subscribeLocal(resolveSocketPath(target), describeTarget(target), onEvent, onError, redact, options, factoryOptions?.subscribeAckTimeoutMs)
+      const nodeId = targetNodeId(target)
+      const duplex = await openHerdrDuplex(target, nodeId, nodeChannel, targetLabel, signal, redact)
+      return await subscribeOverDuplex(
+        duplex,
+        targetLabel,
+        paneIds,
+        onEvent,
+        onError,
+        redact,
+        signal,
+        subscribeAckTimeoutMs,
+      )
     },
   }
-}
-
-/**
- * Remote event subscription (via the channel's ipcSubscribe).
- *
- * Contract: the channel consumes and validates the subscription ACK itself before the Promise resolves;
- * resolving means the subscription is ready, after which onLine only pushes bare event frames -- this function
- * waits for no second ACK and sets no ack timer. Events may arrive before the Promise resolves (buffered and
- * dispatched in order, not dropped). stop/abort/stream close all finalize once and release the subscription; callbacks at most once.
- */
-function subscribeNode(
-  channel: HerdrNodeChannel,
-  nodeId: string,
-  target: HerdrTarget,
-  onEvent: (event: HerdrEvent) => void,
-  onError: (error: unknown) => void,
-  options?: HerdrSubscribeOptions,
-): Promise<() => void> {
-  const targetLabel = describeTarget(target)
-  const signal = options?.signal
-  checkAborted(signal, targetLabel)
-  const paneIds = [...new Set(options?.paneIds ?? [])]
-  const subscriptions: Array<Record<string, unknown>> = SUBSCRIPTION_TYPES.map((type) => ({ type }))
-  for (const paneId of paneIds) subscriptions.push({ type: PANE_STATUS_EVENT_TYPE, pane_id: paneId })
-  const request = { id: 'sub', method: SUBSCRIPTION_METHOD, params: { subscriptions } }
-
-  return new Promise<() => void>((resolve, reject) => {
-    let stopped = false
-    let settled = false
-    let release: (() => void) | undefined
-    /** The single finalization path: release the subscription, remove the abort listener; errors reported once. */
-    const finish = (error: unknown): void => {
-      if (settled) return
-      settled = true
-      stopped = true
-      signal?.removeEventListener('abort', onAbort)
-      try {
-        release?.()
-      } catch (releaseError) {
-        // Release failures merge honestly into the finalization error; never silently swallowed.
-        onError(releaseError)
-      }
-      if (error !== undefined) onError(error)
-    }
-    const onAbort = () => finish(undefined)
-
-    // Events may arrive before the ipcSubscribe Promise resolves: buffered, then dispatched in order once resolved.
-    const earlyLines: string[] = []
-    let ready = false
-
-    /** Event frame parsing follows the same rules as the local subscription; bad frames finalize the whole stream. */
-    const handleEventFrame = (frame: Record<string, unknown>): void => {
-      try {
-        const wireType = frame['event']
-        if (typeof wireType !== 'string') return
-        const type = wireType === PANE_STATUS_EVENT_TYPE ? wireType : WIRE_EVENT_TYPES.get(wireType)
-        if (type === undefined) return
-        const data = isObject(frame['data']) ? frame['data'] : {}
-        if (type === 'tab.closed' || type === 'workspace.closed') {
-          const workspaceId = data['workspace_id']
-          const tabId = data['tab_id']
-          if (typeof workspaceId !== 'string' || workspaceId === '' ||
-              (type === 'tab.closed' && (typeof tabId !== 'string' || tabId === ''))) {
-            finish(new HerdrTransportError('herdr_protocol', `event ${type} missing topology identity`, targetLabel))
-            return
-          }
-          if (type === 'tab.closed') onEvent({ type, workspaceId, tabId: tabId as string })
-          else onEvent({ type, workspaceId })
-          return
-        }
-        const pane = isObject(data['pane']) ? data['pane'] : undefined
-        const paneId =
-          typeof data['pane_id'] === 'string' && data['pane_id'] !== ''
-            ? data['pane_id']
-            : typeof pane?.['pane_id'] === 'string' && pane['pane_id'] !== ''
-              ? (pane['pane_id'] as string)
-              : undefined
-        if (!paneId) {
-          finish(new HerdrTransportError('herdr_protocol', `event ${String(type)} missing pane identity`, targetLabel))
-          return
-        }
-        onEvent({ type, paneId })
-      } catch (err) {
-        finish(err)
-      }
-    }
-
-    const handleLine = (line: string): void => {
-      if (stopped) return
-      let envelope: Record<string, unknown> | undefined
-      try {
-        envelope = parseJsonLine(line, targetLabel)
-      } catch (err) {
-        finish(err)
-        return
-      }
-      if (envelope === undefined) return
-      if (envelope['event'] !== undefined) {
-        handleEventFrame(envelope)
-        return
-      }
-      // The ACK was consumed and validated at the channel layer; an id frame arriving after resolve is a channel
-      // implementation violation -- finalize honestly (not silently dropped, not treated as success).
-      finish(new HerdrTransportError('herdr_protocol', 'unexpected post-ack response frame on subscription stream', targetLabel))
-    }
-
-    signal?.addEventListener('abort', onAbort, { once: true })
-    if (signal?.aborted) {
-      onAbort()
-      reject(new HerdrTransportError('herdr_aborted', 'subscription aborted', targetLabel))
-      return
-    }
-
-    channel
-      .ipcSubscribe!(
-        nodeId,
-        {
-          ...(target.socketPath !== undefined ? { endpoint: target.socketPath } : {}),
-          ...(target.session !== undefined ? { session: target.session } : {}),
-          line: JSON.stringify(request),
-        },
-        (line) => {
-          if (stopped) return
-          if (!ready) {
-            earlyLines.push(line)
-            return
-          }
-          handleLine(line)
-        },
-        (error) => {
-          finish(
-            error === undefined
-              ? new HerdrTransportError('herdr_disconnected', 'subscription stream closed', targetLabel)
-              : new HerdrTransportError('herdr_disconnected', `subscription stream closed: ${error}`, targetLabel),
-          )
-        },
-        signal,
-      )
-      .then(
-        (stop) => {
-          if (stopped) {
-            // abort vs resolve race: already finalized; this is only a fallback release.
-            try {
-              stop()
-            } catch {
-              /* finish already reported an error; a release failure is not reported twice */
-            }
-            return
-          }
-          release = stop
-          ready = true
-          resolve(() => finish(undefined))
-          for (const line of earlyLines) {
-            if (stopped) break
-            handleLine(line)
-          }
-          earlyLines.length = 0
-        },
-        (error: unknown) => {
-          signal?.removeEventListener('abort', onAbort)
-          settled = true
-          stopped = true
-          reject(error)
-        },
-      )
-  })
 }

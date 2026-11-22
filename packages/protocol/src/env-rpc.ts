@@ -3,10 +3,10 @@
  *
  * Aligned with `@earendil-works/pi-durable/env`'s `ExecutionEnv` (FileSystem + Shell);
  * binary content is always base64; errors are returned as the `RpcEnvError` structure
- * instead of being thrown. Also provides a generic local-machine IPC bridge
- * (`ipcCall` / `ipcSubscribe`) so optional plugins (e.g. `builtin:herdr`) can reuse
- * the node channel to reach Unix Sockets or Windows Named Pipes on the target
- * machine, eliminating SSH+Python entirely.
+ * instead of being thrown. Local IPC transports (Unix Domain Sockets / Windows Named Pipes)
+ * share the generic passthrough tunnel (`nodeTunnelOpen`) paired with read-only target-node
+ * host environment discovery (`nodeHostEnv`), keeping plugin-specific wire handshakes out
+ * of the generic node daemon.
  */
 
 /** Default local compute node ID (in-process with the Hub, zero network overhead). */
@@ -208,9 +208,9 @@ export interface RpcLineScan {
 }
 
 /**
- * Unified RPC error envelope: drain-period rejections of ipcCall / ipcSubscribe
- * carry `node_draining` through this union (from the RpcExecutionErrorCode /
- * NodeTunnelErrorCode branches; file operations are not drained).
+ * Unified RPC error envelope: drain-period rejections of `envExec` and `nodeTunnelOpen`
+ * carry `node_draining` through this union (file operations and read-only discovery RPCs
+ * such as `envPathUsage` / `nodeHostEnv` are not drained).
  */
 export interface RpcEnvError {
   code: RpcFileErrorCode | RpcExecutionErrorCode | NodeTunnelErrorCode
@@ -325,43 +325,262 @@ export interface EnvExecOk {
   spillPath?: string
 }
 
-/** Single line-protocol IPC request on the node's local machine (Unix Socket / Windows Named Pipe). */
+/**
+ * Legacy type kept exported solely while untouched `protocol/src/plugin.ts` still imports it;
+ * remove together with `HelmxHostNodeIpcPort.call/subscribe` during Host API integration.
+ */
 export interface NodeIpcCallInput {
   callId?: string
-  /** Explicit socket / pipe path; by default resolved from `session` to the node-local default path. */
   endpoint?: string
   session?: string
-  /** The single-line JSON payload to send (without the trailing newline). */
   line: string
   timeoutMs?: number
 }
 
-/** Streaming line-protocol IPC subscription request on the node's local machine. */
-export interface NodeIpcSubscribeInput {
-  subscribeId: string
-  endpoint?: string
-  session?: string
-  /** Initial handshake request line (without the trailing newline). */
-  line: string
+/** Local Windows Named Pipe namespace prefix (local host `.` only; remote UNC/SMB pipes are forbidden). */
+export const WINDOWS_LOCAL_PIPE_PREFIX = '\\\\.\\pipe\\'
+
+const CONTROLLED_SOCKET_PATH_MAX_CHARS = 1024
+
+/**
+ * Controlled local socket / Windows Named Pipe classification and boundary validation (shared by Hub
+ * and node daemon so both enforce identical rules without drift):
+ * - POSIX Unix Domain Socket: absolute path starting with single `/` (not `//`, not ending in `/`,
+ *   no `.` or `..` traversal segments);
+ * - Windows Named Pipe: strictly local `\\.\pipe\<name>` (non-empty `<name>`, no leading slash,
+ *   no `..` segments; remote UNC SMB pipes `\\HOST\pipe\...` and raw Windows marker file paths
+ *   `C:\...\herdr.sock` are rejected explicitly).
+ */
+export function classifyControlledSocketPath(
+  raw: unknown,
+): { ok: true; kind: 'unix-socket' | 'named-pipe'; socketPath: string } | { ok: false; message: string } {
+  if (typeof raw !== 'string' || raw.length === 0 || raw.length > CONTROLLED_SOCKET_PATH_MAX_CHARS) {
+    return {
+      ok: false,
+      message: `tunnel socketPath must be a non-empty string of 1..${CONTROLLED_SOCKET_PATH_MAX_CHARS} characters`,
+    }
+  }
+  if (raw.trim() !== raw) {
+    return { ok: false, message: 'tunnel socketPath must not have leading or trailing whitespace' }
+  }
+  for (let i = 0; i < raw.length; i++) {
+    const code = raw.charCodeAt(i)
+    if (code < 0x20 || code === 0x7f) {
+      return { ok: false, message: 'tunnel socketPath must not contain control characters' }
+    }
+  }
+  if (raw.startsWith(WINDOWS_LOCAL_PIPE_PREFIX)) {
+    const name = raw.slice(WINDOWS_LOCAL_PIPE_PREFIX.length)
+    if (name.length === 0 || name.startsWith('\\') || name.startsWith('/')) {
+      return { ok: false, message: 'tunnel Named Pipe path must have a non-empty local pipe name after \\\\.\\pipe\\' }
+    }
+    if (name.split(/[\\/]/).some((seg) => seg === '..')) {
+      return { ok: false, message: 'tunnel Named Pipe path must not contain .. traversal segments' }
+    }
+    return { ok: true, kind: 'named-pipe', socketPath: raw }
+  }
+  if (raw.startsWith('/')) {
+    if (raw.length === 1 || raw.startsWith('//') || raw.endsWith('/')) {
+      return { ok: false, message: 'tunnel Unix socketPath must be a single-leading-slash absolute file path' }
+    }
+    if (raw.split('/').some((seg) => seg === '.' || seg === '..')) {
+      return { ok: false, message: 'tunnel Unix socketPath must not contain . or .. traversal segments' }
+    }
+    return { ok: true, kind: 'unix-socket', socketPath: raw }
+  }
+  return {
+    ok: false,
+    message: 'tunnel socketPath must be an absolute POSIX socket path (/...) or local Windows Named Pipe (\\\\.\\pipe\\...)',
+  }
 }
 
-/** Tunnel target (host+port): the host is resolved and connected on the node side (defaults to 127.0.0.1 when omitted). */
-export interface NodeTunnelTarget {
+/**
+ * Read-only target-node host environment discovery query (`nodeHostEnv` RPC / `EnvFabric.getNodeHostEnv`).
+ * Allows Hub and optional plugins (such as `builtin:herdr`) to derive target-node-local endpoints
+ * (UDS / Windows Named Pipe) using the TARGET node's actual OS, home/temp/config directories, and
+ * explicitly requested non-secret env variables — never deriving remote endpoints from Hub's host env.
+ */
+export interface NodeHostEnvQuery {
+  /**
+   * Optional list of non-secret environment variable names to inspect on the target node
+   * (e.g. `['HERDR_SOCKET_PATH']`; at most 16 valid uppercase identifiers).
+   * Managed credentials (`HELMX_TOKEN`, `HELMX_EXECUTION_SCOPE`) and secret-like keys are rejected.
+   */
+  envKeys?: readonly string[]
+}
+
+/** Standard platform directory environment variables present on a node (omitted when unset/empty). */
+export interface NodeHostDirs {
+  xdgConfigHome?: string
+  xdgStateHome?: string
+  xdgRuntimeDir?: string
+  appData?: string
+  localAppData?: string
+  userProfile?: string
+  home?: string
+}
+
+/** Read-only host environment facts collected on the target node. */
+export interface NodeHostEnv {
+  /** Target node `process.platform` (e.g. `'linux' | 'darwin' | 'win32'`). */
+  platform: string
+  /** Target node `os.homedir()`. */
+  homeDir: string
+  /** Target node `os.tmpdir()`. */
+  tempDir: string
+  /** Standard platform directory env vars present on the target node. */
+  dirs: NodeHostDirs
+  /** Requested non-secret env vars present on the target node (omitted when unset/empty). */
+  env: Record<string, string>
+}
+
+const NODE_HOST_ENV_MAX_KEYS = 16
+const NODE_HOST_ENV_KEY_PATTERN = /^[A-Z][A-Z0-9_]{0,63}$/
+const NODE_HOST_ENV_SENSITIVE_PATTERN = /(?:^|_)(?:SECRET|TOKEN|KEY|PASSWORD|PASSWD|CREDENTIAL|AUTH|COOKIE|PRIVATE)(?:_|$)/i
+const NODE_HOST_ENV_FORBIDDEN_KEYS = new Set(['HELMX_TOKEN', 'HELMX_EXECUTION_SCOPE'])
+const NODE_HOST_DIR_KEYS: ReadonlyArray<keyof NodeHostDirs> = [
+  'xdgConfigHome',
+  'xdgStateHome',
+  'xdgRuntimeDir',
+  'appData',
+  'localAppData',
+  'userProfile',
+  'home',
+]
+const NODE_HOST_VALUE_MAX_CHARS = 4096
+
+/** Validate a `NodeHostEnvQuery` at both Hub and node daemon boundaries (rejects unknown fields and sensitive keys). */
+export function validateNodeHostEnvQuery(
+  raw: unknown,
+): { ok: true; envKeys: string[] } | { ok: false; message: string } {
+  if (raw === undefined || raw === null) return { ok: true, envKeys: [] }
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    return { ok: false, message: 'nodeHostEnv query must be a plain object' }
+  }
+  const obj = raw as Record<string, unknown>
+  const unknown = Object.keys(obj).filter((key) => key !== 'envKeys')
+  if (unknown.length > 0) {
+    return { ok: false, message: `nodeHostEnv query rejects unknown field(s): ${unknown.join(', ')}` }
+  }
+  const rawKeys = obj['envKeys']
+  if (rawKeys === undefined) return { ok: true, envKeys: [] }
+  if (!Array.isArray(rawKeys)) {
+    return { ok: false, message: 'nodeHostEnv envKeys must be an array of env variable names' }
+  }
+  if (rawKeys.length > NODE_HOST_ENV_MAX_KEYS) {
+    return { ok: false, message: `nodeHostEnv envKeys exceeds limit of ${NODE_HOST_ENV_MAX_KEYS}` }
+  }
+  const deduped: string[] = []
+  const seen = new Set<string>()
+  for (const item of rawKeys) {
+    if (typeof item !== 'string' || !NODE_HOST_ENV_KEY_PATTERN.test(item)) {
+      return {
+        ok: false,
+        message: `nodeHostEnv invalid env key ${JSON.stringify(item)} (must match /^[A-Z][A-Z0-9_]{0,63}$/)`,
+      }
+    }
+    if (NODE_HOST_ENV_FORBIDDEN_KEYS.has(item) || NODE_HOST_ENV_SENSITIVE_PATTERN.test(item)) {
+      return { ok: false, message: `nodeHostEnv refuses sensitive env key: ${item}` }
+    }
+    if (!seen.has(item)) {
+      seen.add(item)
+      deduped.push(item)
+    }
+  }
+  return { ok: true, envKeys: deduped }
+}
+
+const isBoundedNonControlString = (value: unknown, allowEmpty = false): value is string => {
+  if (typeof value !== 'string') return false
+  if (!allowEmpty && value.length === 0) return false
+  if (value.length > NODE_HOST_VALUE_MAX_CHARS) return false
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i)
+    if (code < 0x20 || code === 0x7f) return false
+  }
+  return true
+}
+
+/** Strict RPC-boundary validation of a `NodeHostEnv` snapshot returned by a remote node. */
+export function validateNodeHostEnvSnapshot(
+  raw: unknown,
+  allowedEnvKeys: readonly string[] = [],
+): { ok: true; value: NodeHostEnv } | { ok: false; message: string } {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    return { ok: false, message: 'snapshot is not a plain object' }
+  }
+  const v = raw as Record<string, unknown>
+  if (!isBoundedNonControlString(v['platform'])) return { ok: false, message: 'platform must be a non-empty string' }
+  if (!isBoundedNonControlString(v['homeDir'], true)) return { ok: false, message: 'homeDir must be a valid string' }
+  if (!isBoundedNonControlString(v['tempDir'])) return { ok: false, message: 'tempDir must be a non-empty string' }
+  if (typeof v['dirs'] !== 'object' || v['dirs'] === null || Array.isArray(v['dirs'])) {
+    return { ok: false, message: 'dirs must be a plain object' }
+  }
+  const rawDirs = v['dirs'] as Record<string, unknown>
+  const allowedDirKeys = new Set<string>(NODE_HOST_DIR_KEYS)
+  const dirs: NodeHostDirs = {}
+  for (const [k, val] of Object.entries(rawDirs)) {
+    if (!allowedDirKeys.has(k)) return { ok: false, message: `dirs contains unknown field: ${k}` }
+    if (val === undefined) continue
+    if (!isBoundedNonControlString(val)) return { ok: false, message: `dirs.${k} must be a non-empty string` }
+    dirs[k as keyof NodeHostDirs] = val
+  }
+  if (typeof v['env'] !== 'object' || v['env'] === null || Array.isArray(v['env'])) {
+    return { ok: false, message: 'env must be a plain object' }
+  }
+  const allowedEnv = new Set<string>(allowedEnvKeys)
+  const env: Record<string, string> = {}
+  for (const [k, val] of Object.entries(v['env'] as Record<string, unknown>)) {
+    if (!allowedEnv.has(k)) return { ok: false, message: `env contains unrequested key: ${k}` }
+    if (val === undefined) continue
+    if (!isBoundedNonControlString(val)) return { ok: false, message: `env.${k} must be a non-empty string` }
+    env[k] = val
+  }
+  return {
+    ok: true,
+    value: {
+      platform: v['platform'],
+      homeDir: v['homeDir'],
+      tempDir: v['tempDir'],
+      dirs,
+      env,
+    },
+  }
+}
+
+/** TCP tunnel target (host+port): the host is resolved and connected on the node side (defaults to 127.0.0.1 when omitted). */
+export interface NodeTcpTunnelTarget {
   /** Target host (IP or hostname; resolved/connected by the node, the Hub does not resolve on its behalf). */
   host?: string
   /** Target port (1..65535). */
   port: number
+  socketPath?: never
 }
 
-/** Node passthrough tunnel: the Hub asks the node to upgrade a WS, in place, into a byte pipe to the target host:port. */
-export interface NodeTunnelOpenInput extends NodeTunnelTarget {
+/** Controlled local IPC socket / Windows Named Pipe tunnel target on the target node. */
+export interface NodeSocketTunnelTarget {
+  /**
+   * Controlled absolute POSIX Unix Domain Socket path (`/...`) or local Windows Named Pipe (`\\.\pipe\...`).
+   * Relative paths, `..` traversal, control chars, raw Windows marker paths, and remote UNC pipes are rejected.
+   */
+  socketPath: string
+  host?: never
+  port?: never
+}
+
+/** Tunnel target: mutually exclusive TCP (`{ host?, port }`) or controlled local socket/Named Pipe (`{ socketPath }`). */
+export type NodeTunnelTarget = NodeTcpTunnelTarget | NodeSocketTunnelTarget
+
+/** Common header fields for `nodeTunnelOpen` RPC. */
+export interface NodeTunnelOpenBase {
   /** Tunnel ID (randomUUID; consumed once with the standalone gateway hello authentication). */
   tunnelId: string
-  /** Target port (1..65535; inherited from NodeTunnelTarget). */
-  port: number
   /** Node-side connection timeout (milliseconds); default decided by the node implementation. */
   timeoutMs?: number
 }
+
+/** Node passthrough tunnel: the Hub asks the node to upgrade a WS, in place, into a byte pipe to target TCP or local socket/Named Pipe. */
+export type NodeTunnelOpenInput = NodeTunnelOpenBase & NodeTunnelTarget
 
 /** Standalone gateway (/ws/node-tunnel) first-frame JSON authentication payload (no type field; ≤ 4096 bytes). */
 export interface NodeTunnelHello {
@@ -392,16 +611,6 @@ export type NodeTunnelErrorCode =
 export type NodeTunnelControl =
   | { type: 'ok' }
   | { type: 'error'; code: NodeTunnelErrorCode; message: string }
-
-export interface NodeIpcEvent {
-  subscribeId: string
-  line: string
-}
-
-export interface NodeIpcClosedEvent {
-  subscribeId: string
-  error?: string
-}
 
 /** Remote function set implemented on the node side (`@helmx/node`) and called by the Hub side (`@helmx/kernel`). */
 export interface NodeEnvRpcFunctions {
@@ -467,21 +676,21 @@ export interface NodeEnvRpcFunctions {
   envAbortExec(execId: string): Promise<void>
   envCleanup(cwd?: string): Promise<void>
 
-  /** Single node-local IPC call (for optional plugins such as builtin:herdr to reach local Unix Sockets / Named Pipes across nodes). */
-  ipcCall?(input: NodeIpcCallInput): Promise<RpcResult<string>>
-  /** Cancel an in-flight node-local IPC call (destroys the underlying socket immediately). */
-  ipcAbortCall?(callId: string): Promise<void>
-  /** Establish a node-local IPC event subscription stream (subsequent lines arrive via the HubEnvStreamFunctions.onIpcEvent callback). */
-  ipcSubscribe?(input: NodeIpcSubscribeInput): Promise<RpcResult<null>>
-  /** Stop a node-local IPC event subscription stream. */
-  ipcUnsubscribe?(subscribeId: string): Promise<void>
+  /**
+   * Read-only target-node host environment discovery (platform, homeDir, tempDir, standard config
+   * dirs, and explicitly requested non-secret env keys). Used by Hub/plugins to derive target-node
+   * IPC endpoints without relying on Hub's local environment or embedding plugin protocol logic in
+   * the generic daemon. Older daemons lack this method (optional): callers must fail explicitly,
+   * never silently falling back to Hub's local env. Not rejected during upgrade draining.
+   */
+  nodeHostEnv?(input?: NodeHostEnvQuery): Promise<RpcResult<NodeHostEnv>>
 
   /** Check whether the node has an available update (the node queries the npm registry). */
   nodeCheckUpgrade?(input: NodeUpgradeCheckInput): Promise<RpcResult<NodeUpgradeCheckResult>>
   /** Trigger node self-upgrade (drain in-flight commands → pull package + integrity check → canary-launch the replacement daemon → auto-rollback on failure). */
   nodeUpgrade?(input: NodeUpgradeRpcInput): Promise<RpcResult<NodeUpgradeResult>>
 
-  /** Ask the node to listen on a local port and wait for the standalone gateway to dial back (the byte pipe goes direct once established via /ws/node-tunnel). */
+  /** Ask the node to connect to a local TCP host:port or controlled socketPath/Named Pipe and bridge it via `/ws/node-tunnel`. */
   nodeTunnelOpen?(input: NodeTunnelOpenInput): Promise<RpcResult<null>>
   /** Cancel an in-flight tunnel setup (best-effort notification to the node to release the ready listener after a Hub-side cancel/timeout; must be fault-tolerant). */
   nodeTunnelAbort?(tunnelId: string): Promise<void>
@@ -490,6 +699,4 @@ export interface NodeEnvRpcFunctions {
 /** Streaming event function set implemented by the Hub side and called back by the node. */
 export interface HubEnvStreamFunctions {
   onEnvExecOutput(event: EnvExecOutputEvent): void
-  onIpcEvent?(event: NodeIpcEvent): void
-  onIpcClosed?(event: NodeIpcClosedEvent): void
 }

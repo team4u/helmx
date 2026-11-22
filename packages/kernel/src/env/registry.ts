@@ -24,19 +24,19 @@ import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import type { Duplex } from 'node:stream'
 import type { WebSocket as WsSocket } from 'ws'
 import type { BirpcReturn } from 'birpc'
-import type {
-  EnvExecOutputEvent,
-  NodeEnvRpcFunctions,
-  NodeHealthSnapshot,
-  NodeHeartbeatInput,
-  NodeIpcClosedEvent,
-  NodeIpcEvent,
-  NodeRegisterInput,
-  NodeTunnelHello,
-  NodeTunnelTarget,
+import {
+  classifyControlledSocketPath,
+  HelmxError,
+  type EnvExecOutputEvent,
+  type NodeEnvRpcFunctions,
+  type NodeHealthSnapshot,
+  type NodeHeartbeatInput,
+  type NodeRegisterInput,
+  type NodeTunnelHello,
+  type NodeTunnelOpenInput,
+  type NodeTunnelTarget,
 } from '@helmx/protocol'
 import type { Context } from '@earendil-works/chord/context'
-import { HelmxError } from '@helmx/protocol'
 import { TunnelTable, tunnelRpcFailureOf, type PendingTunnel } from './tunnel-table.js'
 import {
   UpgradeWaiterSet,
@@ -122,8 +122,6 @@ export interface NodeConnection {
 /** Hub-side local functions (one instance per connection, bound to that connection's registered identity). */
 export interface HubConnectionLocal {
   onEnvExecOutput(event: EnvExecOutputEvent): void
-  onIpcEvent(event: NodeIpcEvent): void
-  onIpcClosed(event: NodeIpcClosedEvent): void
 }
 
 export interface RegisterOutcome {
@@ -154,11 +152,10 @@ interface Waiter {
 /* Tunnel table (`PendingTunnel`/`ActiveTunnel`) and upgrade waiters (`UpgradeWaiter`,
  * `UpgradeWaiterHandle`) live in `tunnel-table.ts` / `upgrade-waiters.ts`. */
 
-/** IPC subscription callback pair. */
-interface IpcSink {
-  onEvent: (line: string) => void
-  onClosed: (error?: string) => void
-}
+/** Normalized tunnel target produced by boundary validation (TCP host:port or controlled local socketPath/Named Pipe). */
+export type NormalizedTunnelTarget =
+  | { kind: 'tcp'; host: string | undefined; port: number }
+  | { kind: 'socket'; socketPath: string }
 
 const safeEqual = (a: string, b: string): boolean => {
   const ba = Buffer.from(a, 'utf8')
@@ -166,16 +163,38 @@ const safeEqual = (a: string, b: string): boolean => {
   return ba.length === bb.length && timingSafeEqual(ba, bb)
 }
 
-/** Validate tunnel target at boundary: port must be 1..65535 safe integer; host (if present) must be non-empty, <=255 chars, without control chars or whitespace (invalid fails with HelmxError `validation_error`, never silently mutated). */
-export function normalizeTunnelTarget(target: NodeTunnelTarget): { host: string | undefined; port: number } {
-  if (target === null || typeof target !== 'object') {
-    throw new HelmxError('validation_error', 'tunnel target must be a { host?, port } object', 400)
+/**
+ * Validate tunnel target at boundary:
+ * - TCP target: `port` must be a safe integer in `1..65535`; `host` (if present) must be non-empty <= 255 chars
+ *   without control chars or whitespace;
+ * - Local socket/Named Pipe target: `socketPath` must pass `classifyControlledSocketPath` (POSIX absolute path
+ *   `/...` or local Windows Named Pipe `\\.\pipe\...`, rejecting relative paths, traversal, remote UNC pipes,
+ *   and raw Windows marker file paths);
+ * - Mixing `socketPath` with `host`/`port` or passing unknown fields fails explicitly with `validation_error` (400).
+ */
+export function normalizeTunnelTarget(target: NodeTunnelTarget): NormalizedTunnelTarget {
+  if (target === null || typeof target !== 'object' || Array.isArray(target)) {
+    throw new HelmxError('validation_error', 'tunnel target must be a { host?, port } or { socketPath } object', 400)
   }
-  const { host, port } = target as Partial<NodeTunnelTarget>
+  const raw = target as unknown as Record<string, unknown>
+  const hasSocketPath = raw['socketPath'] !== undefined
+  const hasTcpField = raw['port'] !== undefined || raw['host'] !== undefined
+  if (hasSocketPath && hasTcpField) {
+    throw new HelmxError('validation_error', 'tunnel target cannot mix socketPath with host/port', 400)
+  }
+  if (hasSocketPath) {
+    const checked = classifyControlledSocketPath(raw['socketPath'])
+    if (!checked.ok) {
+      throw new HelmxError('validation_error', checked.message, 400, { socketPath: raw['socketPath'] })
+    }
+    return { kind: 'socket', socketPath: checked.socketPath }
+  }
+  const host = raw['host']
+  const port = raw['port']
   if (typeof port !== 'number' || !Number.isSafeInteger(port) || port < 1 || port > 65535) {
     throw new HelmxError('validation_error', 'tunnel target port must be an integer between 1 and 65535', 400, { port })
   }
-  if (host === undefined) return { host: undefined, port }
+  if (host === undefined) return { kind: 'tcp', host: undefined, port }
   if (
     typeof host !== 'string' ||
     host.length === 0 ||
@@ -191,7 +210,7 @@ export function normalizeTunnelTarget(target: NodeTunnelTarget): { host: string 
   ) {
     throw new HelmxError('validation_error', 'tunnel target host must be a non-empty string without whitespace or control characters (<= 255 characters)', 400, { host })
   }
-  return { host, port }
+  return { kind: 'tcp', host, port }
 }
 
 /** Timing-safe token validator callback (token store persists `sha256(wholeToken)` in hex). */
@@ -218,8 +237,6 @@ export class NodeRegistry {
   readonly #nodeChangedListeners = new Set<(nodeId: string, online: boolean) => void>()
   /** Output sink list per node (multiple env instances on the same node). */
   readonly #outputSinks = new Map<string, Set<(event: EnvExecOutputEvent) => void>>()
-  /** IPC subscription routing: `nodeId -> subscribeId -> sink`. */
-  readonly #ipcSinks = new Map<string, Map<string, IpcSink>>()
   /** Node revocation epoch: incremented on every evict/disconnect/replace; checked after async auth wakes up. */
   readonly #nodeEpoch = new Map<string, number>()
   /** Passthrough tunnel table (pending/active maps and bulk finalization; see `tunnel-table.ts`). */
@@ -271,37 +288,10 @@ export class NodeRegistry {
     this.#outputSinks.get(nodeId)?.delete(sink)
   }
 
-  /** Register an IPC subscription sink (routed strictly by `nodeId + subscribeId`). */
-  addIpcSink(nodeId: string, subscribeId: string, sink: IpcSink): void {
-    let map = this.#ipcSinks.get(nodeId)
-    if (map === undefined) {
-      map = new Map()
-      this.#ipcSinks.set(nodeId, map)
-    }
-    map.set(subscribeId, sink)
-  }
-
-  removeIpcSink(nodeId: string, subscribeId: string): void {
-    this.#ipcSinks.get(nodeId)?.delete(subscribeId)
-  }
-
-  #dispatchIpcEvent(nodeId: string, event: NodeIpcEvent): void {
-    this.#ipcSinks.get(nodeId)?.get(event.subscribeId)?.onEvent(event.line)
-  }
-
-  #dispatchIpcClosed(nodeId: string, event: NodeIpcClosedEvent): void {
-    const map = this.#ipcSinks.get(nodeId)
-    if (map === undefined) return
-    const sink = map.get(event.subscribeId)
-    if (sink === undefined) return
-    map.delete(event.subscribeId)
-    sink.onClosed(event.error)
-  }
-
   /**
    * WS node connection registration entrypoint (invoked at the connection layer by `ws-gateway`;
    * gateway creates the birpc proxy and passes `attach`, binding Hub-side local callbacks for
-   * output/heartbeat/IPC events strictly to this connection). Publishes **atomically** once auth
+   * output/heartbeat strictly to this connection). Publishes **atomically** once auth
    * passes and the proxy is bound.
    */
   async register(
@@ -352,14 +342,6 @@ export class NodeRegistry {
       onEnvExecOutput: (event) => {
         if (!isLive()) return // late output after revocation/replacement must not pollute the new generation
         this.#dispatchOutput(nodeId, event)
-      },
-      onIpcEvent: (event) => {
-        if (!isLive()) return
-        this.#dispatchIpcEvent(nodeId, event)
-      },
-      onIpcClosed: (event) => {
-        if (!isLive()) return
-        this.#dispatchIpcClosed(nodeId, event)
       },
     })
 
@@ -447,7 +429,7 @@ export class NodeRegistry {
    * blocking rejection on network replies) and cleans up pending/active entries synchronously without leaking.
    */
   async openTunnel(nodeId: string, target: NodeTunnelTarget, signal?: AbortSignal): Promise<Duplex> {
-    const { host, port } = normalizeTunnelTarget(target)
+    const normalized = normalizeTunnelTarget(target)
     if (this.#closed) {
       throw new HelmxError('node_offline', `node ${nodeId} is offline; cannot establish tunnel`, 409, { nodeId })
     }
@@ -462,6 +444,14 @@ export class NodeRegistry {
     const tunnelId = randomUUID()
     const epoch = this.#epochOf(nodeId)
     const timeoutMs = 10_000
+    const openInput: NodeTunnelOpenInput =
+      normalized.kind === 'socket'
+        ? { tunnelId, socketPath: normalized.socketPath }
+        : { tunnelId, ...(normalized.host === undefined ? {} : { host: normalized.host }), port: normalized.port }
+    const targetDetails =
+      normalized.kind === 'socket'
+        ? { nodeId, tunnelId, socketPath: normalized.socketPath }
+        : { nodeId, tunnelId, port: normalized.port }
 
     /** Best-effort notification to node to cancel pending connect (fault-tolerant so broken sockets/unsupported daemons don't block local cleanup). */
     const abortNode = (): void => {
@@ -525,7 +515,7 @@ export class NodeRegistry {
 
     // Reconcile RPC result in the background without blocking (`slow`/`closed` RPCs won't stall timeout/abort);
     // only failures prior to settlement reject early, with rejections observed to prevent unhandled errors.
-    void open({ tunnelId, ...(host === undefined ? {} : { host }), port }).then(
+    void open(openInput).then(
       (result) => {
         if (pending.settled) return
         if (result.ok) return
@@ -535,7 +525,7 @@ export class NodeRegistry {
           code,
           `node ${nodeId} failed to establish tunnel: ${result.error.message}`,
           status,
-          { nodeId, tunnelId, port },
+          targetDetails,
         ))
       },
       (error: unknown) => {
@@ -545,7 +535,7 @@ export class NodeRegistry {
           'node_tunnel_connect_failed',
           `node ${nodeId} tunnel RPC failed: ${error instanceof Error ? error.message : String(error)}`,
           502,
-          { nodeId, tunnelId, port },
+          targetDetails,
         ))
       },
     )
@@ -666,19 +656,6 @@ export class NodeRegistry {
         // ignore.
       }
     }
-    // Terminate all IPC subscriptions for this node on disconnect (event source is gone).
-    const ipcMap = this.#ipcSinks.get(nodeId)
-    if (ipcMap !== undefined) {
-      const sinks = [...ipcMap.values()]
-      ipcMap.clear()
-      for (const sink of sinks) {
-        try {
-          sink.onClosed(`node ${nodeId} disconnected`)
-        } catch {
-          // Subscriber callback error must not affect other subscriptions.
-        }
-      }
-    }
     // Reject all pending tunnels and destroy all active tunnel duplexes for this node on disconnect:
     // tunnel lifetime is tied to this connection's generation (epoch), so replacement invalidates it without leaks.
     this.#tunnels.finalize((owner) => owner === nodeId, {
@@ -786,7 +763,6 @@ export class NodeRegistry {
       waiter.resolve(undefined)
     }
     this.#outputSinks.clear()
-    this.#ipcSinks.clear()
     this.#nodeEpoch.clear()
     this.#nodeChangedListeners.clear()
   }

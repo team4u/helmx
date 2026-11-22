@@ -128,11 +128,8 @@ function makeStubFabric(env: ReturnType<typeof makeRecordingEnv>['env']): EnvFab
     evictConversation: () => undefined,
     debugBaseCount: () => 0,
     debugBases: () => [],
-    ipcCall: () => {
-      throw new Error('test does not use ipcCall')
-    },
-    ipcSubscribe: () => {
-      throw new Error('test does not use ipcSubscribe')
+    getNodeHostEnv: () => {
+      throw new Error('test does not use getNodeHostEnv')
     },
     dispose: () => Promise.resolve(),
   } as never

@@ -620,11 +620,11 @@ describe('herdr transport subscribe', () => {
     await close(server)
   })
 
-  it('远端 subscribe 在通道不支持事件流时显式拒绝，不静默降级', { timeout: 60_000 }, async () => {
+  it('远端 subscribe 在节点离线时显式拒绝，不静默降级', { timeout: 60_000 }, async () => {
     const transport = createHerdrTransport({ nodeChannel: new MutableNodeChannel() })
     await assert.rejects(
       transport.subscribe({ nodeId: 'build-box' }, () => {}, () => {}),
-      (err: unknown) => err instanceof HerdrTransportError && (err.code === 'herdr_subscribe_unsupported' || err.code === 'herdr_node_offline'),
+      (err: unknown) => err instanceof HerdrTransportError && err.code === 'herdr_node_offline',
     )
   })
 
@@ -851,99 +851,6 @@ describe('herdr transport output files', () => {
   }
 })
 
-describe('herdr transport local gate', () => {
-  it('本机 transport Gate 在传入的 cwd 实际执行', { timeout: 60_000 }, async (t) => {
-    const root = await tempRoot(t)
-    const result = await createHerdrTransport().runGate({}, 'pwd', root)
-    assert.deepEqual(result, { ok: true, output: `${root}\n` })
-  })
-
-  it('exit 非零 ok=false 且保留输出', { timeout: 60_000 }, async () => {
-    const transport = createHerdrTransport()
-    const result = await withTimeout(transport.runGate({}, 'echo boom >&2; exit 3', process.cwd()))
-    assert.equal(result.ok, false)
-    assert.ok(result.output.includes('boom'))
-  })
-
-  it('env 经第 5 参数注入且不继承宿主环境', { timeout: 60_000 }, async () => {
-    const transport = createHerdrTransport()
-    const result = await withTimeout(
-      transport.runGate({}, 'test "$GATE_SECRET" = "g-123" && test -z "$HOME" && echo clean', process.cwd(), undefined, { GATE_SECRET: 'g-123' }),
-    )
-    assert.ok(result.ok, result.output)
-    assert.ok(result.output.includes('clean'))
-  })
-
-  it('abort 终止 gate', { timeout: 60_000 }, async () => {
-    const transport = createHerdrTransport()
-    const controller = new AbortController()
-    const pending = transport.runGate({}, 'sleep 30', process.cwd(), controller.signal)
-    const timer = setTimeout(() => controller.abort(), 80)
-    try {
-      await assert.rejects(withTimeout(pending), { code: 'herdr_aborted' })
-    } finally {
-      clearTimeout(timer)
-    }
-  })
-
-  it('超限输出 ok=false 且明确报限额', { timeout: 60_000 }, async () => {
-    const transport = createHerdrTransport({ subscribeAckTimeoutMs: 250 })
-    // 1MiB+ 输出：限额内成功保留完整；超出则显式失败。此处生成 1.1MiB。
-    const result = await transport.runGate({}, 'head -c 1150000 /dev/zero | tr "\\0" "x"', process.cwd())
-    if (result.ok) {
-      assert.ok(result.output.length > 1_000_000, '限额内输出必须完整保留')
-    } else {
-      assert.ok(result.output.includes('exceeded'), '超限必须明确说明而非截断')
-    }
-  })
-
-  it('Gate 主进程已退出时 abort 仍清理持有管道的自有子进程', { timeout: 60_000 }, async (t) => {
-    const root = await tempRoot(t)
-    const controller = new AbortController()
-    const pending = createHerdrTransport().runGate({}, 'sleep 300 & printf "%s %s" "$$" "$!" > processes; exit 0', root, controller.signal)
-    const observed = pending.then((result) => ({ result }), (error: unknown) => ({ error }))
-    let group = 0
-    let child = 0
-    let timer: NodeJS.Timeout | undefined
-    try {
-      const deadline = Date.now() + 5_000
-      for (;;) {
-        try {
-          ;[group, child] = (await readFile(join(root, 'processes'), 'utf8')).trim().split(' ').map(Number) as [number, number]
-          if (group > 1 && child > 1) {
-            try { process.kill(group, 0) } catch (error) {
-              if ((error as NodeJS.ErrnoException).code === 'ESRCH') break
-              throw error
-            }
-          }
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-        }
-        assert.ok(Date.now() < deadline, '应先证实 Gate 主进程已退出')
-        await new Promise((resolve) => setTimeout(resolve, 10))
-      }
-      process.kill(child, 0)
-      controller.abort()
-      const outcome = await Promise.race([
-        observed,
-        new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), 1_000) }),
-      ])
-      assert.ok(outcome, '主进程退出后仍须杀掉自有子进程并结算')
-      assert.ok('error' in outcome)
-      assert.equal((outcome.error as { code?: string }).code, 'herdr_aborted')
-    } finally {
-      clearTimeout(timer)
-      controller.abort()
-      if (group > 1 && child > 1) {
-        try { process.kill(-group, 'SIGKILL') } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
-        }
-      }
-      await observed
-    }
-  })
-})
-
 describe('herdr transport remote (node channel)', () => {
   it('nodeId 与 session 校验拒绝注入', { timeout: 60_000 }, () => {
     // 新契约：单一安全 token /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/（含 'local'）。
@@ -970,7 +877,7 @@ describe('herdr transport remote (node channel)', () => {
   it('call 经节点通道完成 NDJSON 往返且机密只在 JSON 结构内', { timeout: 60_000 }, async (t) => {
     const fixture = await nodeFixture(t, (request, socket) => {
       const req = request as { id: string; method: string; params: { env?: Record<string, string> } }
-      assert.equal(req.id, 'helmx-remote-1')
+      assert.equal(req.id, '1')
       assert.equal(req.method, 'tab.create')
       assert.equal(req.params.env?.['HELMX_TOKEN'], secret())
       socket.end(`${JSON.stringify({ id: req.id, result: { type: 'tab_created', tab: { tab_id: 'w1:t2' } } })}\n`)

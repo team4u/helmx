@@ -57,8 +57,6 @@ export function attachNodeWsGateway(server: HttpServer, options: NodeWsGatewayOp
       },
       heartbeat: (nodeId: string, input?: NodeHeartbeatInput) => registry.noteHeartbeat(nodeId, ws, input),
       onEnvExecOutput: (event: Parameters<HubConnectionLocal['onEnvExecOutput']>[0]) => callbacks?.onEnvExecOutput(event),
-      onIpcEvent: (event: Parameters<HubConnectionLocal['onIpcEvent']>[0]) => callbacks?.onIpcEvent(event),
-      onIpcClosed: (event: Parameters<HubConnectionLocal['onIpcClosed']>[0]) => callbacks?.onIpcClosed(event),
     }
     const rpc = createBirpc<NodeSideFunctions, typeof local>(local, {
       post: (data) => {

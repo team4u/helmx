@@ -52,6 +52,7 @@ function loadHerdrRuntimeModule(): Promise<HerdrRuntimeModule> {
 export function createHerdrPlugin(
   timingOverrides?: Pick<
     HerdrPluginDependencies,
+    | 'nodeChannel'
     | 'pollIntervalMs'
     | 'blockedBackoffBaseMs'
     | 'blockedBackoffCapMs'

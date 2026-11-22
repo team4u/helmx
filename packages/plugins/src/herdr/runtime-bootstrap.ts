@@ -37,6 +37,7 @@ import { createHerdrTransport, isValidSessionName, resolveSocketPath } from './t
 
 type HerdrTimingOverrides = Pick<
   HerdrPluginDependencies,
+  | 'nodeChannel'
   | 'pollIntervalMs'
   | 'blockedBackoffBaseMs'
   | 'blockedBackoffCapMs'
@@ -78,10 +79,10 @@ export function createHerdrRuntime(options: CreateHerdrRuntimeOptions): HerdrRun
   const depsRef: { current?: HerdrPluginDependencies } = {}
   const transportRef: { current?: HerdrTransport } = {}
   function resolveDeps(): HerdrPluginDependencies {
-    const nodeChannel = nodeChannelFromHost(hostApi)
+    const nodeChannel = timingOverrides?.nodeChannel ?? nodeChannelFromHost(hostApi)
     transportRef.current ??= createHerdrTransport({ redact: (text) => hostApi.redact(text), nodeChannel })
     depsRef.current = {
-      ...assembleHerdrDepsFromHost(hostApi, { transport: transportRef.current }),
+      ...assembleHerdrDepsFromHost(hostApi, { transport: transportRef.current, nodeChannel }),
       ...timingOverrides,
     }
     return depsRef.current

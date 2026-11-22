@@ -213,10 +213,7 @@ function makeFabric(options: {
     evictConversation: () => undefined,
     debugBaseCount: () => 0,
     debugBases: () => [],
-    ipcCall: () => {
-      throw new Error('测试不使用')
-    },
-    ipcSubscribe: () => {
+    getNodeHostEnv: () => {
       throw new Error('测试不使用')
     },
     dispose: () => Promise.resolve(),

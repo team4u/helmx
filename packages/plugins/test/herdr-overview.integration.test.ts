@@ -150,9 +150,6 @@ function herdrFixture(initial: FixturePane[] = []) {
     async removeOutput() {
       throw new Error('overview 测试不应删除交接文件')
     },
-    async runGate() {
-      throw new Error('overview 测试不应执行 Gate')
-    },
     async subscribe(
       target: HerdrTarget,
       onEvent: (event: HerdrEvent) => void,

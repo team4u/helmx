@@ -3,6 +3,7 @@ import { test } from 'node:test'
 import net from 'node:net'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { PassThrough } from 'node:stream'
 import { deferred } from '@helmx/test-kit'
 import { useTempDir } from '@helmx/test-kit/node'
 import { createNodeEnvRpcServer } from '../src/daemon/env-rpc-server.js'
@@ -40,57 +41,65 @@ test('opening a binary reader concurrently with dispose leaks no handles', { tim
   }
 })
 
-test('confirmed IPC subscription sends exactly one closed notification on disconnect', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helmx-ipc-close-')
-  const endpoint = join(dir, 'close.sock')
-  let peer: net.Socket | undefined
-  const ipc = net.createServer((socket) => {
-    peer = socket
-    socket.on('error', () => undefined)
-    socket.once('data', () => socket.write('{"result":{"type":"subscription_started"}}\n'))
-  })
-  const notices: unknown[] = []
-  const notification = deferred()
-  const rpc = createNodeEnvRpcServer({ defaultCwd: dir, onIpcClosed: (event) => { notices.push(event); notification.resolve() } })
-  try {
-    await new Promise<void>((resolve, reject) => { ipc.once('error', reject); ipc.listen(endpoint, resolve) })
-    assert.equal((await rpc.ipcSubscribe!({ endpoint, subscribeId: 's1', line: '{}' })).ok, true)
-    peer!.end()
-    await notification.promise
-    assert.deepEqual(notices, [{ subscribeId: 's1' }])
-    assert.equal(rpc.getActiveIpcSubscriptionCount(), 0)
-  } finally {
-    await rpc.dispose()
-    peer?.destroy()
-    await new Promise<void>((resolve) => ipc.close(() => resolve()))
-  }
-})
-
-test('uncorrelated IPC calls and pre-ACK subscriptions still clean up owned connections', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helmx-ipc-race-')
+test('socketPath tunnel destroys peer cleanly on dispose during WS tunnel handshake', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helmx-uds-handshake-race-')
   const endpoint = join(dir, 'pending.sock')
   const sockets = new Set<net.Socket>()
-  const bothConnected = deferred()
-  const ipc = net.createServer((socket) => {
+  const connected = deferred()
+  const uds = net.createServer((socket) => {
     sockets.add(socket)
     socket.on('error', () => undefined)
     socket.once('close', () => sockets.delete(socket))
-    if (sockets.size === 2) bothConnected.resolve()
+    connected.resolve()
   })
-  const rpc = createNodeEnvRpcServer({ defaultCwd: dir })
+  const rpc = createNodeEnvRpcServer({
+    defaultCwd: dir,
+    openTunnelStream: () => new Promise<PassThrough>(() => undefined),
+  })
   try {
-    await new Promise<void>((resolve, reject) => { ipc.once('error', reject); ipc.listen(endpoint, resolve) })
-    const call = rpc.ipcCall!({ endpoint, line: '{}' })
-    const subscription = rpc.ipcSubscribe!({ endpoint, subscribeId: 'pending-ack', line: '{}' })
-    await bothConnected.promise
+    await new Promise<void>((resolve, reject) => { uds.once('error', reject); uds.listen(endpoint, resolve) })
+    const opening = rpc.nodeTunnelOpen({ tunnelId: 'uds-race-1', socketPath: endpoint, timeoutMs: 30_000 })
+    await connected.promise
     await rpc.dispose()
-    assert.equal((await call).ok, false)
-    assert.equal((await subscription).ok, false)
-    assert.equal(rpc.getActiveIpcSubscriptionCount(), 0)
-    assert.equal(rpc.getActiveIpcCallCount(), 0)
+    const result = await opening
+    assert.equal(result.ok, false)
+    if (!result.ok) assert.equal(result.error.code, 'aborted')
+    assert.equal(rpc.getActiveTunnelCount(), 0)
   } finally {
     await rpc.dispose()
     for (const socket of sockets) socket.destroy()
-    await new Promise<void>((resolve) => ipc.close(() => resolve()))
+    await new Promise<void>((resolve) => uds.close(() => resolve()))
+  }
+})
+
+test('socketPath tunnel abort cancels pending handshake and cleans up active count', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helmx-uds-abort-race-')
+  const endpoint = join(dir, 'abort.sock')
+  const sockets = new Set<net.Socket>()
+  const connected = deferred()
+  const uds = net.createServer((socket) => {
+    sockets.add(socket)
+    socket.on('error', () => undefined)
+    socket.once('close', () => sockets.delete(socket))
+    connected.resolve()
+  })
+  const rpc = createNodeEnvRpcServer({
+    defaultCwd: dir,
+    openTunnelStream: () => new Promise<PassThrough>(() => undefined),
+  })
+  try {
+    await new Promise<void>((resolve, reject) => { uds.once('error', reject); uds.listen(endpoint, resolve) })
+    const opening = rpc.nodeTunnelOpen({ tunnelId: 'uds-abort-1', socketPath: endpoint, timeoutMs: 30_000 })
+    await connected.promise
+    assert.equal(rpc.getActiveTunnelCount(), 1)
+    await rpc.nodeTunnelAbort('uds-abort-1')
+    const result = await opening
+    assert.equal(result.ok, false)
+    if (!result.ok) assert.equal(result.error.code, 'aborted')
+    assert.equal(rpc.getActiveTunnelCount(), 0)
+  } finally {
+    await rpc.dispose()
+    for (const socket of sockets) socket.destroy()
+    await new Promise<void>((resolve) => uds.close(() => resolve()))
   }
 })

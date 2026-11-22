@@ -1,5 +1,13 @@
+import type { Duplex } from 'node:stream'
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env'
-import type { AgentGateResult, AskFieldOption, Profile, RpcResult } from '@helmx/protocol'
+import type {
+  AgentGateResult,
+  AskFieldOption,
+  NodeHostEnv,
+  NodeHostEnvQuery,
+  NodeTunnelTarget,
+  Profile,
+} from '@helmx/protocol'
 import type { BlockedSnapshotAnalysis } from './prompt-options.js'
 
 /** One server, selected consistently for commands, files and event subscriptions. */
@@ -20,18 +28,14 @@ export function targetNodeId(target: HerdrTarget | undefined): string | undefine
 }
 
 /**
- * Cross-node channel: provided by the kernel EnvFabric public ports (nodeIpc / executionEnv) or a test
- * fixture; transport uses it to connect to the local Herdr IPC on the target node, read/write handoff files
- * and run Gates (thoroughly replacing ssh + python3 scripts).
- *
- * Endpoint semantics (the remote node resolves itself; never carry the Hub-local platform/dirs):
- * - `endpoint` is passed only when the target explicitly gives a socketPath (optional);
- * - `session` passes an explicit session name (optional);
- * - the target node itself resolves HERDR_SOCKET_PATH / platform config dirs and the endpoint form (UDS or
- *   Named Pipe); the Hub never imposes its local resolveSocketPath or endpointKind on the remote.
- *
- * Cancellation semantics: all methods accept a plain AbortSignal (same shape as the host public ports);
- * transport-internal file/command operations still derive via the SDK Context (see HerdrNodeEnv).
+ * Cross-node channel: provided by kernel EnvFabric (`getNodeHostEnv` / `openTunnel` / `envFor`)
+ * or a test fixture. Both local and remote Herdr connections use the exact same two generic
+ * primitives:
+ * 1. `getNodeHostEnv`: discover target-node OS/dirs/non-secret env vars when no explicit `socketPath`
+ *    is configured — Hub never derives remote Linux/Windows endpoints from Hub's local environment;
+ * 2. `openTunnel`: obtain a raw Duplex byte stream to the resolved controlled Unix Domain Socket
+ *    or local Windows Named Pipe on the target node, speaking unified NDJSON in `builtin:herdr`
+ *    with zero Herdr business handshake in `@helmx/node`.
  */
 export interface HerdrNodeChannel {
   /** Whether the node is online ('local' is always true). */
@@ -44,35 +48,27 @@ export interface HerdrNodeChannel {
    * node's platform. When absent the remote platform is unknown (no guessing, no rewriting).
    */
   nodePlatform?(nodeId: string): string | undefined
-  /** Execute a single local Herdr line-protocol IPC request on the target node (supports signal cancellation; cancels the underlying connection immediately). */
-  ipcCall(
-    nodeId: string,
-    input: { endpoint?: string; session?: string; line: string; timeoutMs?: number },
-    signal?: AbortSignal,
-  ): Promise<RpcResult<string>>
-  /** Get the file and command execution environment on the target node. */
-  envFor(nodeId: string, cwd: string): HerdrNodeEnv
   /**
-   * Optional: remote node IPC event stream subscription.
-   * A successful Promise resolve means the subscription request was confirmed by the target node (the ACK is consumed
-   * and validated at the channel layer); afterwards onLine pushes only bare event frames, never a second fabricated ACK.
+   * Read target-node host path and non-secret env facts (platform/homeDir/tempDir/standard dirs +
+   * explicitly requested env keys) for target-side endpoint derivation.
    */
-  ipcSubscribe?(
-    nodeId: string,
-    input: { endpoint?: string; session?: string; line: string },
-    onLine: (line: string) => void,
-    onClosed: (error?: string) => void,
-    signal?: AbortSignal,
-  ): Promise<() => void>
+  getNodeHostEnv(nodeId: string, query?: NodeHostEnvQuery, signal?: AbortSignal): Promise<NodeHostEnv>
+  /**
+   * Open a raw Duplex stream to a controlled Unix Domain Socket (`/...`) or local Windows Named Pipe
+   * (`\\.\pipe\...`) on the target node.
+   */
+  openTunnel(nodeId: string, target: NodeTunnelTarget, signal?: AbortSignal): Promise<Duplex>
+  /** Get the file execution environment on the target node (handoff files + Windows marker stat). */
+  envFor(nodeId: string, cwd: string): HerdrNodeEnv
 }
 
 /**
- * The env contract of `HerdrNodeChannel.envFor`: a Pick of the SDK `ExecutionEnv` core subset.
+ * The env contract of `HerdrNodeChannel.envFor`: a Pick of the SDK `ExecutionEnv` file subset.
  * NodeExecutionEnv / the host executionEnv port structures are assignable (no as-masking).
  */
 export type HerdrNodeEnv = Pick<
   ExecutionEnv,
-  'canonicalPath' | 'fileInfo' | 'readTextFile' | 'remove' | 'exec'
+  'canonicalPath' | 'fileInfo' | 'readTextFile' | 'remove'
 >
 
 export interface HerdrCallOptions {
@@ -106,8 +102,7 @@ export interface HerdrTransport {
   call(target: HerdrTarget, method: string, params: Record<string, unknown>, options?: HerdrCallOptions): Promise<unknown>
   readOutput(target: HerdrTarget, cwd: string, fileName: string, signal?: AbortSignal): Promise<string>
   removeOutput(target: HerdrTarget, cwd: string, fileName: string, signal?: AbortSignal): Promise<void>
-  runGate(target: HerdrTarget, command: string, cwd: string, signal?: AbortSignal, env?: Record<string, string>): Promise<AgentGateResult>
-  /** Local event subscription. Errors terminate the stream and are reported to the owner. */
+  /** Event subscription (unified Duplex NDJSON for local and remote). Errors terminate the stream and are reported to the owner. */
   subscribe(
     target: HerdrTarget,
     onEvent: (event: HerdrEvent) => void,
@@ -133,7 +128,18 @@ export interface HerdrPluginDependencies {
     options?: { secretNames?: string[] },
   ): Record<string, string>
   redact(text: string): string
-  runLocalGate(command: string, options: { cwd?: string; conversationId?: number; signal?: AbortSignal; env?: Record<string, string> }): Promise<AgentGateResult>
+  /** Unified Gate execution delegated directly to `ctx.host.runGate` for both local and remote nodes. */
+  runGate(
+    command: string,
+    options: {
+      cwd?: string
+      conversationId?: number
+      nodeId?: string
+      signal?: AbortSignal
+      env?: Record<string, string>
+      gateTimeoutMs?: number
+    },
+  ): Promise<AgentGateResult>
   /** Attachment artifact metadata resolution (incl. authorization checks; nonexistent/unauthorized throws HelmxError). Optional injection. */
   getArtifact?: (
     id: string,

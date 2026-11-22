@@ -234,7 +234,7 @@ export class HerdrExecutor {
       waitUntilSettled: (request, pane, initial) => this.waitUntilSettled(request, pane, initial),
       project: (pane, token) => this.project(pane, token),
       markFailed: (pane, note) => this.markFailed(pane, note),
-      runLocalGate: deps.runLocalGate,
+      runGate: deps.runGate,
       mdStableRecheckMs: deps.mdStableRecheckMs,
     })
     this.resumeCoordinator = new ResumeCoordinator({
@@ -458,8 +458,8 @@ export class HerdrExecutor {
   /**
    * Explicit gateTimeoutMs rejection for Herdr runtimes (called only after the request is identified as a Herdr-handled path:
    * herdr-runtime new spawn / registered resume; native passthrough never passes here,
-   * unaffected). Contract fact: the local dependency runLocalGate's options expose no gate timeout
-   * parameter, and the remote transport.runGate has no timeout channel -- accepting the option would silently drop external
+   * unaffected). Contract fact: `ctx.host.runGate` exposes no gate timeout parameter yet, so
+   * accepting the option would silently drop external timeout semantics.
    * timeout semantics, so we reject honestly and offer alternatives (see the Gate chapter of
    * docs/workflows/worktree-and-gate.md).
    */
@@ -467,7 +467,7 @@ export class HerdrExecutor {
     if (request.gateTimeoutMs === undefined) return
     throw new HelmxError(
       'unsupported_runtime',
-      'gateTimeoutMs is not supported for Herdr runtimes (neither the local dependency contract runLocalGate nor the remote transport.runGate exposes a gate timeout parameter, so timeout semantics cannot be honored honestly); implement the timeout inside the gate command yourself (e.g. wrap the command with timeout) or remove the option',
+      'gateTimeoutMs is not supported for Herdr runtimes (RuntimeAgentSpawn.runGate does not forward gateTimeoutMs to shell-exec timeoutMs yet, so timeout semantics cannot be honored honestly); implement the timeout inside the gate command yourself (e.g. wrap the command with timeout) or remove the option',
       400,
       { gateTimeoutMs: request.gateTimeoutMs },
     )

@@ -7,13 +7,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import net from 'node:net';
+import { PassThrough } from 'node:stream';
 import { exec as execCb } from 'node:child_process';
 import { sleep as delay } from '@helmx/test-kit';
 import { makeTempDir as tempDir, waitFor as kitWaitFor } from '@helmx/test-kit/node';
 import {
+  collectNodeHostEnv,
   createNodeEnvRpcServer,
-  MAX_IPC_FRAME_BYTES,
-  resolveHerdrIpcEndpoint,
 } from '../src/daemon/env-rpc-server.js';
 
 /** Poll until observable condition holds (instead of fixed sleeps), failing explicitly on timeout. */
@@ -408,301 +408,107 @@ test('dispose tracks draining waiters per call so rejected duplicate execId neve
 });
 
 // ---------------------------------------------------------------------------
-// 7. IPC injection boundaries: multi-line/CR/NUL payloads, bad callId/timeout rejected
+// 7. Target-node host env discovery (`nodeHostEnv`): Linux/Windows shapes & security boundaries
 // ---------------------------------------------------------------------------
 
-test('ipcCall enforces single-line payloads and rejects newline injection', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('ipc-inject-');
-  const received: string[] = [];
-  const srv = startLineServer(dir, 'herdr', (line) => received.push(line));
-  t.after(async () => {
-    await srv.close();
+test('nodeHostEnv reports Linux and Windows target host env shapes and requested non-secret keys', { timeout: 60_000 }, async (t) => {
+  const dir = await tempDir('host-env-win-');
+  const winServer = createNodeEnvRpcServer({
+    defaultCwd: dir,
+    hostEnvContext: {
+      platform: 'win32',
+      homeDir: 'C:\\Users\\dev',
+      tempDir: 'C:\\Users\\dev\\AppData\\Local\\Temp',
+      getEnv: (name) => ({
+        APPDATA: 'C:\\Users\\dev\\AppData\\Roaming',
+        USERPROFILE: 'C:\\Users\\dev',
+        HERDR_SOCKET_PATH: 'C:\\custom\\herdr.sock',
+        HELMX_TOKEN: 'secret-should-never-leak',
+      })[name],
+    },
   });
+  const linuxServer = createNodeEnvRpcServer({
+    defaultCwd: dir,
+    hostEnvContext: {
+      platform: 'linux',
+      homeDir: '/home/bob',
+      tempDir: '/tmp',
+      getEnv: (name) => ({
+        XDG_CONFIG_HOME: '/home/bob/.xdg',
+        HOME: '/home/bob',
+      })[name],
+    },
+  });
+  t.after(async () => {
+    await winServer.dispose();
+    await linuxServer.dispose();
+    await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
+  });
+
+  const winRes = await winServer.nodeHostEnv({ envKeys: ['HERDR_SOCKET_PATH'] });
+  assert.equal(winRes.ok, true);
+  if (winRes.ok) {
+    assert.equal(winRes.value.platform, 'win32');
+    assert.equal(winRes.value.homeDir, 'C:\\Users\\dev');
+    assert.equal(winRes.value.dirs.appData, 'C:\\Users\\dev\\AppData\\Roaming');
+    assert.equal(winRes.value.dirs.userProfile, 'C:\\Users\\dev');
+    assert.deepEqual(winRes.value.env, { HERDR_SOCKET_PATH: 'C:\\custom\\herdr.sock' });
+  }
+
+  const linuxRes = await linuxServer.nodeHostEnv();
+  assert.equal(linuxRes.ok, true);
+  if (linuxRes.ok) {
+    assert.equal(linuxRes.value.platform, 'linux');
+    assert.equal(linuxRes.value.dirs.xdgConfigHome, '/home/bob/.xdg');
+    assert.equal(linuxRes.value.dirs.home, '/home/bob');
+    assert.deepEqual(linuxRes.value.env, {});
+  }
+
+  const pure = collectNodeHostEnv(['HERDR_SOCKET_PATH'], {
+    platform: 'win32',
+    homeDir: 'C:\\Users\\u',
+    tempDir: 'T:\\tmp',
+    getEnv: (k) => (k === 'HERDR_SOCKET_PATH' ? '\\\\.\\pipe\\herdr-pure' : undefined),
+  });
+  assert.equal(pure.env['HERDR_SOCKET_PATH'], '\\\\.\\pipe\\herdr-pure');
+});
+
+test('nodeHostEnv rejects sensitive env keys, unknown fields, and disposed servers; remains available during draining', { timeout: 60_000 }, async (t) => {
+  const dir = await tempDir('host-env-guard-');
   const server = createNodeEnvRpcServer({ defaultCwd: dir });
   t.after(async () => {
     await server.dispose();
+    await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
   });
 
-  // Pre-fix bug: embedded newline injected a second request frame
-  const injected = await server.ipcCall!({
-    endpoint: srv.path,
-    line: '{"id":"1","method":"a"}\n{"id":"2","method":"evil"}',
-    timeoutMs: 2_000,
-  });
-  assert.equal(injected.ok, false);
-  assert.equal(!injected.ok && injected.error.code, 'invalid');
-  assert.match(!injected.ok ? injected.error.message : '', /single line/i);
-
-  // CR also rejected
-  const cr = await server.ipcCall!({ endpoint: srv.path, line: 'a\rb', timeoutMs: 2_000 });
-  assert.equal(cr.ok, false);
-  assert.equal(!cr.ok && cr.error.code, 'invalid');
-
-  // NUL rejected
-  const nul = await server.ipcCall!({ endpoint: srv.path, line: 'a\u0000b', timeoutMs: 2_000 });
-  assert.equal(nul.ok, false);
-  assert.equal(!nul.ok && nul.error.code, 'invalid');
-
-  // Non-empty validation
-  const emptyLine = await server.ipcCall!({ endpoint: srv.path, line: '', timeoutMs: 2_000 });
-  assert.equal(emptyLine.ok, false);
-  assert.equal(!emptyLine.ok && emptyLine.error.code, 'invalid');
-
-  // Invalid callId
-  const badId = await server.ipcCall!({ callId: 'x'.repeat(129), endpoint: srv.path, line: 'ok', timeoutMs: 2_000 });
-  assert.equal(badId.ok, false);
-  assert.equal(!badId.ok && badId.error.code, 'invalid');
-
-  // Invalid timeoutMs (negative/NaN)
-  const negTimeout = await server.ipcCall!({ endpoint: srv.path, line: 'ok', timeoutMs: -5 });
-  assert.equal(negTimeout.ok, false);
-  assert.equal(!negTimeout.ok && negTimeout.error.code, 'invalid');
-  const nanTimeout = await server.ipcCall!({ endpoint: srv.path, line: 'ok', timeoutMs: Number.NaN });
-  assert.equal(nanTimeout.ok, false);
-  assert.equal(!nanTimeout.ok && nanTimeout.error.code, 'invalid');
-
-  // Valid single-line round-trip succeeds
-  const respSrv = startLineServer(dir, 'resp', (line, socket) => {
-    socket.write(`${JSON.stringify({ id: line, result: 'ok' })}\n`);
-  });
-  try {
-    await waitListening(respSrv.path);
-    const ok = await server.ipcCall!({ endpoint: respSrv.path, line: 'single', timeoutMs: 3_000 });
-    assert.equal(ok.ok, true);
-  } finally {
-    await respSrv.close();
+  for (const bad of [
+    { envKeys: ['HELMX_TOKEN'] },
+    { envKeys: ['HELMX_EXECUTION_SCOPE'] },
+    { envKeys: ['AWS_SECRET_ACCESS_KEY'] },
+    { envKeys: ['OPENAI_API_KEY'] },
+    { envKeys: ['bad-lowercase'] },
+    { extra: 1 },
+    [],
+    null,
+  ]) {
+    const res = await server.nodeHostEnv(bad as never);
+    assert.equal(res.ok, false, `should reject ${JSON.stringify(bad)}`);
+    assert.equal(!res.ok && res.error.code, 'invalid');
   }
-});
 
-test('ipcSubscribe parses ACK structurally so substring matches in data frames are rejected as non-ACK', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('ack-strict-');
-  const events: string[] = [];
-  // Pre-fix bug: line.includes('"subscription_started"') mistook a data frame containing that substring
-  // for an ACK. Server sends a data frame embedding the substring before the real ACK.
-  const srv = startLineServer(dir, 'tricky', (_line, socket) => {
-    socket.write(`${JSON.stringify({ event: 'note', detail: 'saw "subscription_started" text' })}\n`);
-    socket.write(`${JSON.stringify({ id: 'sub', result: { type: 'subscription_started' } })}\n`);
-    socket.write(`${JSON.stringify({ event: 'real' })}\n`);
-  });
-  t.after(async () => {
-    await srv.close();
-  });
-  const server = createNodeEnvRpcServer({
-    defaultCwd: dir,
-    onIpcEvent: (e) => events.push(e.line),
-  });
-  t.after(async () => {
-    await server.dispose();
-  });
+  server.setDraining(true);
+  const duringDrain = await server.nodeHostEnv({ envKeys: ['HERDR_SOCKET_PATH'] });
+  assert.equal(duringDrain.ok, true);
+  server.setDraining(false);
 
-  // First response line is a data frame containing ACK substring: protocol requires first line to be ACK,
-  // so reject explicitly as unexpected instead of falsely succeeding or swallowing a data frame.
-  const ack = await server.ipcSubscribe!({ subscribeId: 's1', endpoint: srv.path, line: 'req' });
-  assert.equal(ack.ok, false, 'data frame carrying ACK substring as first line must be rejected');
-  assert.match(!ack.ok ? ack.error.message : '', /unexpected/);
-  assert.equal(events.length, 0, 'must not swallow misparsed data frame as ACK');
-
-  // Control: genuine ACK on first line works as expected
-  const goodSrv = startLineServer(dir, 'good', (line, socket) => {
-    socket.write(`${JSON.stringify({ id: line, result: { type: 'subscription_started' } })}\n`);
-    socket.write(`${JSON.stringify({ event: 'real' })}\n`);
-  });
-  try {
-    await waitListening(goodSrv.path);
-    const good = await server.ipcSubscribe!({ subscribeId: 's1b', endpoint: goodSrv.path, line: 'req' });
-    assert.equal(good.ok, true, good.ok ? '' : good.error.message);
-    await waitFor(() => events.some((l) => JSON.parse(l).event === 'real'), 5_000, 'event forwarded after real ACK');
-    assert.ok(events.some((l) => JSON.parse(l).event === 'real'), 'event should forward after genuine ACK');
-  } finally {
-    await goodSrv.close();
-  }
-});
-
-test('ipcSubscribe rejects NUL bytes in event frames and invokes onIpcClosed', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('ev-nul-');
-  const closed: { id: string; error?: string }[] = [];
-  const srv = startLineServer(dir, 'nul', (_line, socket) => {
-    socket.write(`${JSON.stringify({ id: 'sub', result: { type: 'subscription_started' } })}\n`);
-    socket.write(Buffer.concat([Buffer.from('{"event":"bad","x":"'), Buffer.from([0x00]), Buffer.from('"}\n')]));
-    socket.write(`${JSON.stringify({ event: 'after' })}\n`);
-  });
-  t.after(async () => {
-    await srv.close();
-  });
-  const server = createNodeEnvRpcServer({
-    defaultCwd: dir,
-    onIpcClosed: (e) => closed.push({ id: e.subscribeId, error: e.error }),
-  });
-  t.after(async () => {
-    await server.dispose();
-  });
-
-  const ack = await server.ipcSubscribe!({ subscribeId: 's2', endpoint: srv.path, line: 'req' });
-  assert.equal(ack.ok, true);
-  await waitFor(() => server.getActiveIpcSubscriptionCount() === 0, 5_000, 'subscription closes after invalid frame');
-  assert.equal(server.getActiveIpcSubscriptionCount(), 0, 'subscription should close after invalid frame');
-  const closedEvent = closed.find((c) => c.id === 's2');
-  assert.ok(closedEvent !== undefined, 'onIpcClosed should be notified');
-  assert.match(closedEvent?.error ?? '', /NUL/);
+  await server.dispose();
+  const afterDispose = await server.nodeHostEnv({});
+  assert.equal(afterDispose.ok, false);
+  assert.equal(!afterDispose.ok && afterDispose.error.code, 'aborted');
 });
 
 // ---------------------------------------------------------------------------
-// 8. ipcCall idle timeout fallback: silent server (no reply/close) times out via injected short value
-// ---------------------------------------------------------------------------
-
-test('ipcCall without timeoutMs uses idle timeout fallback (injected 300ms)', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('idle-');
-  const srv = startLineServer(dir, 'silent', () => undefined);
-  t.after(async () => {
-    await srv.close();
-  });
-  // Inject a short idle timeout to exercise the real missing-timeoutMs path rather than only asserting types.
-  const server = createNodeEnvRpcServer({ defaultCwd: dir, ipcCallIdleTimeoutMs: 300 });
-  t.after(async () => {
-    await server.dispose();
-  });
-
-  const start = Date.now();
-  const r = await server.ipcCall!({ endpoint: srv.path, line: 'req' }); // no timeoutMs
-  const elapsed = Date.now() - start;
-  assert.equal(r.ok, false);
-  assert.equal(!r.ok && r.error.code, 'timeout');
-  assert.match(!r.ok ? r.error.message : '', /300ms/);
-  assert.ok(elapsed >= 250 && elapsed < 5_000, `fallback should fire near 300ms (actual ${elapsed}ms)`);
-  assert.equal(server.getActiveIpcCallCount(), 0);
-});
-
-test('ipcCall timeoutMs:0 also uses idle fallback and tracks active socket', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('idle2-');
-  const srv = startLineServer(dir, 'silent2', () => undefined);
-  t.after(async () => {
-    await srv.close();
-  });
-  const server = createNodeEnvRpcServer({ defaultCwd: dir, ipcCallIdleTimeoutMs: 200 });
-  t.after(async () => {
-    await server.dispose();
-  });
-
-  // Pre-fix bug: timeoutMs:0 skipped setting any timer (`timeoutMs > 0`) and hung forever;
-  // now 0 and omitted share the same idle fallback.
-  const pending = server.ipcCall!({ callId: 'c0', endpoint: srv.path, line: 'req', timeoutMs: 0 });
-  await delay(80);
-  assert.equal(server.getActiveIpcCallCount(), 1, 'timeoutMs:0 must also register active socket');
-  const r = await pending;
-  assert.equal(r.ok, false);
-  assert.equal(!r.ok && r.error.code, 'timeout');
-  assert.equal(server.getActiveIpcCallCount(), 0);
-
-  // ipcAbortCall cancels pending call immediately
-  const pending2 = server.ipcCall!({ callId: 'c1', endpoint: srv.path, line: 'req', timeoutMs: 60_000 });
-  await delay(80);
-  assert.equal(server.getActiveIpcCallCount(), 1);
-  await server.ipcAbortCall!('c1');
-  const r2 = await pending2;
-  assert.equal(r2.ok, false);
-  assert.equal(server.getActiveIpcCallCount(), 0);
-});
-
-// ---------------------------------------------------------------------------
-// 9. Endpoint resolution (pure function + injected platform): session allowlist / Windows pipe prefix
-// ---------------------------------------------------------------------------
-
-test('resolveHerdrIpcEndpoint session validation matches herdr validate_name', { timeout: 60_000 }, () => {
-  // herdr allows alphanumeric plus . _ - (any leading char, <=64 bytes, not ./..)
-  // Pre-fix bug: allowlist omitted `.` and required a leading letter, rejecting `'a.b-c_d'`.
-  const dotted = resolveHerdrIpcEndpoint(
-    { session: 'a.b-c_d' },
-    { platform: 'linux', homeDir: '/home/u', getEnv: () => undefined },
-  );
-  assert.match(dotted, /sessions[/]a\.b-c_d[/]herdr\.sock$/);
-  const numeric = resolveHerdrIpcEndpoint(
-    { session: '2nd-work' },
-    { platform: 'linux', homeDir: '/home/u', getEnv: () => undefined },
-  );
-  assert.match(numeric, /sessions[/]2nd-work[/]herdr\.sock$/);
-
-  // Reject path traversal, empty, overlong, invalid characters, and ./..
-  for (const bad of ['../evil', 'a/b', 'a b', '.', '..', 'x'.repeat(65), 'a#b']) {
-    assert.throws(
-      () => resolveHerdrIpcEndpoint({ session: bad }, { platform: 'linux', homeDir: '/home/u', getEnv: () => undefined }),
-      { message: /session/i },
-      `session ${JSON.stringify(bad)} should reject`,
-    );
-  }
-});
-
-test('resolveHerdrIpcEndpoint win32 prepends \\\\.\\pipe\\ preserving colons and backslashes in config dir', { timeout: 60_000 }, () => {
-  const noEnv = () => undefined;
-
-  // Matches interprocess 2.4.2 map_generic_namespaced_osstr + pathcvt:
-  // pipe name = '\\.\pipe\' + herdr config dir path string with colons and backslashes intact.
-  const appdata = resolveHerdrIpcEndpoint(
-    {},
-    { platform: 'win32', getEnv: (n) => (n === 'APPDATA' ? 'C:\\Users\\dev\\AppData\\Roaming' : undefined) },
-  );
-  assert.equal(appdata, '\\\\.\\pipe\\C:\\Users\\dev\\AppData\\Roaming\\herdr\\herdr.sock');
-
-  const withSession = resolveHerdrIpcEndpoint(
-    { session: 'work' },
-    { platform: 'win32', getEnv: (n) => (n === 'APPDATA' ? 'C:\\Users\\dev\\AppData\\Roaming' : undefined) },
-  );
-  assert.equal(withSession, '\\\\.\\pipe\\C:\\Users\\dev\\AppData\\Roaming\\herdr\\sessions\\work\\herdr.sock');
-
-  // XDG_CONFIG_HOME precedes APPDATA (matching herdr config_dir)
-  const xdg = resolveHerdrIpcEndpoint(
-    {},
-    {
-      platform: 'win32',
-      getEnv: (n) =>
-        n === 'XDG_CONFIG_HOME' ? 'D:\\xdg' : n === 'APPDATA' ? 'C:\\Users\\dev\\AppData\\Roaming' : undefined,
-    },
-  );
-  assert.equal(xdg, '\\\\.\\pipe\\D:\\xdg\\herdr\\herdr.sock');
-
-  // Missing APPDATA falls back to USERPROFILE\AppData\Roaming (matching herdr platform_config_dir)
-  const userProfile = resolveHerdrIpcEndpoint(
-    {},
-    { platform: 'win32', getEnv: (n) => (n === 'USERPROFILE' ? 'C:\\Users\\dev' : undefined) },
-  );
-  assert.equal(userProfile, '\\\\.\\pipe\\C:\\Users\\dev\\AppData\\Roaming\\herdr\\herdr.sock');
-
-  // Then falls back to HOME/.config > temp
-  const homeFallback = resolveHerdrIpcEndpoint(
-    {},
-    { platform: 'win32', homeDir: '/ignored', tempDir: 'T:\\tmp', getEnv: (n) => (n === 'HOME' ? 'C:\\Users\\dev' : undefined) },
-  );
-  assert.equal(homeFallback, '\\\\.\\pipe\\C:\\Users\\dev\\.config\\herdr\\herdr.sock');
-  const tempFallback = resolveHerdrIpcEndpoint(
-    {},
-    { platform: 'win32', homeDir: '/ignored', tempDir: 'T:\\tmp', getEnv: noEnv },
-  );
-  assert.equal(tempFallback, '\\\\.\\pipe\\T:\\tmp\\herdr\\herdr.sock');
-
-  // HERDR_SOCKET_PATH overrides default derivation verbatim without pipe prefix
-  const envOverride = resolveHerdrIpcEndpoint(
-    {},
-    { platform: 'win32', getEnv: (n) => (n === 'HERDR_SOCKET_PATH' ? 'E:\\custom.sock' : undefined) },
-  );
-  assert.equal(envOverride, 'E:\\custom.sock');
-
-  // Explicit full pipe endpoint returned verbatim
-  const explicit = resolveHerdrIpcEndpoint(
-    { endpoint: '\\\\.\\pipe\\my-custom' },
-    { platform: 'win32', getEnv: noEnv },
-  );
-  assert.equal(explicit, '\\\\.\\pipe\\my-custom');
-
-  // Unix platforms ignore Windows pipe prefix logic
-  const unix = resolveHerdrIpcEndpoint(
-    {},
-    { platform: 'linux', homeDir: '/home/u', getEnv: noEnv },
-  );
-  assert.equal(unix, '/home/u/.config/herdr/herdr.sock');
-  assert.ok(!unix.includes('pipe'));
-});
-
-// ---------------------------------------------------------------------------
-// 10. dispose draining: all active exec/ipcCall/subscriptions settle before dispose returns
+// 8. dispose & upgrade draining for exec and socketPath tunnels
 // ---------------------------------------------------------------------------
 
 test('dispose waits for active exec calls to settle with zero active entries on return', { timeout: 60_000 }, async (t) => {
@@ -717,120 +523,52 @@ test('dispose waits for active exec calls to settle with zero active entries on 
   await delay(250);
   assert.equal(server.getActiveExecCount(), 1);
   await server.dispose();
-  // Pre-fix bug: dispose did not await in-flight promises so active count could still be 1.
   assert.equal(server.getActiveExecCount(), 0, 'in-flight exec must be settled and cleaned up before dispose returns');
   const r = await slow;
   assert.equal(r.ok, false);
   assert.equal(!r.ok && r.error.code, 'aborted');
 });
 
-test('dispose destroys in-flight ipcCall sockets and rejects waiting promises immediately', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('disp-ipc-');
-  const srv = startLineServer(dir, 'hold', () => undefined);
-  t.after(async () => {
-    await srv.close();
-  });
-  const server = createNodeEnvRpcServer({ defaultCwd: dir });
-  t.after(async () => {
-    await server.dispose();
-  });
-
-  const pending = server.ipcCall!({ callId: 'c9', endpoint: srv.path, line: 'req', timeoutMs: 60_000 });
-  await delay(150);
-  assert.equal(server.getActiveIpcCallCount(), 1);
-  await server.dispose();
-  const r = await pending;
-  assert.equal(r.ok, false, 'in-flight ipcCall must not hang after dispose');
-  assert.equal(server.getActiveIpcCallCount(), 0);
-});
-
-test('dispose destroys active subscriptions and stops event delivery', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('disp-sub-');
-  const events: string[] = [];
-  let pushTimer: NodeJS.Timeout | undefined;
-  const srv = startLineServer(dir, 'push', (line, socket) => {
-    socket.on('error', () => { if (pushTimer) clearInterval(pushTimer) });
-    socket.write(`${JSON.stringify({ id: line, result: { type: 'subscription_started' } })}\n`);
-    let seq = 0;
-    pushTimer = setInterval(() => {
-      if (socket.destroyed || socket.writableEnded) return;
-      seq += 1;
-      socket.write(`${JSON.stringify({ event: 'tick', seq })}\n`);
-    }, 50);
-    socket.once('close', () => {
-      if (pushTimer !== undefined) clearInterval(pushTimer);
-    });
-  });
-  t.after(async () => {
-    if (pushTimer !== undefined) clearInterval(pushTimer);
-    await srv.close();
-  });
-  const server = createNodeEnvRpcServer({
-    defaultCwd: dir,
-    onIpcEvent: (e) => events.push(e.line),
-  });
-  t.after(async () => {
-    await server.dispose();
-  });
-
-  const ack = await server.ipcSubscribe!({ subscribeId: 'sd', endpoint: srv.path, line: 'req' });
-  assert.equal(ack.ok, true);
-  await waitFor(() => events.length > 0, 5_000, 'events arrive before dispose');
-  const before = events.length;
-  assert.ok(before > 0, 'should receive events before dispose');
-  await server.dispose();
-  await delay(200);
-  assert.equal(events.length, before, 'no more events delivered after dispose');
-  assert.equal(server.getActiveIpcSubscriptionCount(), 0);
-});
-
-// ---------------------------------------------------------------------------
-// 11. Upgrade draining includes IPC: draining rejects new calls/subscriptions while active calls drain cleanly
-// ---------------------------------------------------------------------------
-
-test('upgrade draining covers IPC: rejects new call/subscribe while draining active calls', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('drain-ipc-');
-  // Silent holding server simulates long-waiting `herdr:agy --wait`
-  const hold = startLineServer(dir, 'hold', () => undefined);
-  // Echo server verifies acceptance resumes once draining is lifted
+test('upgrade draining covers socketPath tunnels: rejects new tunnels while active UDS tunnel continues and cleans up on dispose', { timeout: 60_000 }, async (t) => {
+  const dir = await tempDir('drain-uds-');
   const echo = startLineServer(dir, 'echo', (line, socket) => socket.write(`${line}-ok\n`));
   t.after(async () => {
-    await hold.close();
     await echo.close();
   });
-  const server = createNodeEnvRpcServer({ defaultCwd: dir });
+  await waitListening(echo.path);
+  const streams: PassThrough[] = [];
+  const server = createNodeEnvRpcServer({
+    defaultCwd: dir,
+    openTunnelStream: async () => {
+      const s = new PassThrough();
+      streams.push(s);
+      return s;
+    },
+  });
   t.after(async () => {
     await server.dispose();
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
   });
-  await waitListening(hold.path);
-  await waitListening(echo.path);
 
-  // One-shot in-flight calls without callId still count toward draining during upgrades.
-  const pending = server.ipcCall!({ endpoint: hold.path, line: 'wait-req', timeoutMs: 250 });
-  await waitFor(() => server.getActiveIpcCallCount() === 1, 2_000, 'in-flight IPC call counts toward draining');
+  const active = await server.nodeTunnelOpen({ tunnelId: 'uds-live', socketPath: echo.path });
+  assert.equal(active.ok, true);
+  assert.equal(server.getActiveTunnelCount(), 1);
 
   server.setDraining(true);
-  const rejectedCall = await server.ipcCall!({ endpoint: echo.path, line: 'new-call', timeoutMs: 1_000 });
-  assert.equal(rejectedCall.ok, false);
-  assert.equal(!rejectedCall.ok && rejectedCall.error.code, 'node_draining');
-  assert.match(!rejectedCall.ok ? rejectedCall.error.message : '', /draining/);
+  const rejected = await server.nodeTunnelOpen({ tunnelId: 'uds-drain', socketPath: echo.path });
+  assert.equal(rejected.ok, false);
+  assert.equal(!rejected.ok && rejected.error.code, 'node_draining');
+  assert.match(!rejected.ok ? rejected.error.message : '', /draining/);
+  assert.equal(server.getActiveTunnelCount(), 1, 'draining does not kill existing active UDS tunnel');
 
-  const rejectedSub = await server.ipcSubscribe!({ subscribeId: 's-drain', endpoint: echo.path, line: 'new-sub' });
-  assert.equal(rejectedSub.ok, false);
-  assert.equal(!rejectedSub.ok && rejectedSub.error.code, 'node_draining');
-  assert.match(!rejectedSub.ok ? rejectedSub.error.message : '', /draining/);
-
-  // Draining does not force-kill active calls: natural timeout zeroes the counter
-  const settled = await pending;
-  assert.equal(settled.ok, false);
-  assert.equal(!settled.ok && settled.error.code, 'timeout');
-  assert.equal(server.getActiveIpcCallCount(), 0, 'drain counter resets to zero when active call settles');
-
-  // Re-accepts after rollback clears draining
   server.setDraining(false);
-  const okAgain = await server.ipcCall!({ endpoint: echo.path, line: 'after', timeoutMs: 2_000 });
-  assert.equal(okAgain.ok, true);
+  const resumed = await server.nodeTunnelOpen({ tunnelId: 'uds-resumed', socketPath: echo.path });
+  assert.equal(resumed.ok, true);
+  assert.equal(server.getActiveTunnelCount(), 2);
+
+  await server.dispose();
+  assert.equal(server.getActiveTunnelCount(), 0);
+  for (const s of streams) assert.equal(s.destroyed, true);
 });
 
 test('envCleanup rejects explicitly when draining or disposed (process-tree cwd cleanup)', { timeout: 60_000 }, async (t) => {
@@ -853,36 +591,10 @@ test('envCleanup rejects explicitly when draining or disposed (process-tree cwd 
   );
 
   server.setDraining(false);
-  await server.envCleanup!(dir); // Normal path succeeds
+  await server.envCleanup!(dir);
 
   await server.dispose();
   await assert.rejects(() => server.envCleanup!(dir), /disposed/);
-});
-
-// ---------------------------------------------------------------------------
-// 12. LineAssembler length limit: oversized complete lines never bypass per-frame cap
-// ---------------------------------------------------------------------------
-
-test('ipcCall per-frame limit rejects oversized complete newline-terminated lines', { timeout: 60_000 }, async (t) => {
-  assert.equal(MAX_IPC_FRAME_BYTES, 32 * 1024 * 1024, 'default per-frame limit must be 32 MiB');
-  const dir = await tempDir('ipc-frame-limit-');
-  const frameLimitBytes = 64 * 1024;
-  // Return an oversized line + '\n' (pre-fix bug never checked complete-line length; uses injected limit to avoid 32 MiB alloc)
-  const srv = startLineServer(dir, 'bigline', (_line, socket) => {
-    socket.write(Buffer.concat([Buffer.alloc(frameLimitBytes + 1, 0x61), Buffer.from('\n')]));
-  });
-  t.after(async () => {
-    await srv.close();
-  });
-  const server = createNodeEnvRpcServer({ defaultCwd: dir, maxIpcFrameBytes: frameLimitBytes });
-  t.after(async () => {
-    await server.dispose();
-    await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
-  });
-
-  const result = await server.ipcCall!({ endpoint: srv.path, line: 'q', timeoutMs: 30_000 });
-  assert.equal(result.ok, false, 'oversized complete line must be rejected');
-  assert.match(!result.ok ? result.error.message : '', /exceeds/);
 });
 
 // ---------------------------------------------------------------------------

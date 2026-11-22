@@ -15,9 +15,11 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import http from 'node:http'
 import net from 'node:net'
+import path from 'node:path'
 import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
 import { setTimeout as delay } from 'node:timers/promises'
+import { useTempDir } from '@helmx/test-kit/node'
 import { WebSocket } from 'ws'
 import type { WebSocket as WsSocket } from 'ws'
 import { HelmxError } from '@helmx/protocol'
@@ -354,5 +356,164 @@ test('tunnel gateway: silent connection without hello closes after first-frame t
     await gateway.close()
     await new Promise<void>((resolve) => server.close(() => resolve()))
     await registry.close()
+  }
+})
+
+test('openTunnel socketPath: validates controlled paths, forwards POSIX/Windows socketPath verbatim, and bridges local UDS', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helmx-kernel-socket-tunnel-')
+  const sockPath = path.join(dir, 'echo.sock')
+  const uds = net.createServer((socket) => {
+    socket.on('data', (chunk) => socket.write(chunk))
+  })
+  await new Promise<void>((resolve) => uds.listen(sockPath, resolve))
+  const fabric = createEnvFabric({ authenticate: () => true })
+  try {
+    // Local UDS tunnel works end-to-end.
+    const localStream = await fabric.openTunnel('local', { socketPath: sockPath })
+    localStream.write('hello-uds\n')
+    const echoed = await new Promise<string>((resolve) => {
+      let buf = ''
+      localStream.on('data', (chunk: Buffer | string) => {
+        buf += chunk.toString()
+        if (buf.includes('\n')) resolve(buf)
+      })
+    })
+    assert.equal(echoed, 'hello-uds\n')
+    localStream.destroy()
+
+    // Controlled socketPath boundary rejects relative, traversal, UNC pipes, raw Windows markers, and mixed targets.
+    for (const badTarget of [
+      { socketPath: 'relative.sock' },
+      { socketPath: '/tmp/../escape.sock' },
+      { socketPath: '\\\\server\\pipe\\remote' },
+      { socketPath: 'C:\\Users\\dev\\AppData\\Roaming\\herdr\\herdr.sock' },
+      { socketPath: '/tmp/a.sock', port: 8080 } as never,
+    ]) {
+      await assert.rejects(
+        fabric.openTunnel('local', badTarget),
+        (error: unknown) => error instanceof HelmxError && error.code === 'validation_error' && error.status === 400,
+        `expected validation_error for ${JSON.stringify(badTarget)}`,
+      )
+    }
+
+    // Remote controlled Windows Named Pipe passes validation and is forwarded verbatim to nodeTunnelOpen.
+    const receivedInputs: Array<Record<string, unknown>> = []
+    const remoteSocket = new FakeSocket()
+    await fabric.registry.register(
+      remoteSocket as unknown as WsSocket,
+      { nodeId: 'win-box', token: 'win-box:secret', hostname: 'win', platform: 'win32' },
+      () => ({
+        $close() {},
+        nodeTunnelOpen: async (input: Record<string, unknown>) => {
+          receivedInputs.push(input)
+          return { ok: true, value: null }
+        },
+        nodeTunnelAbort: async () => undefined,
+      }) as never,
+    )
+    const pipePath = '\\\\.\\pipe\\C:\\Users\\dev\\AppData\\Roaming\\herdr\\herdr.sock'
+    const pending = fabric.openTunnel('win-box', { socketPath: pipePath })
+    await delay(20)
+    assert.equal(receivedInputs.length, 1)
+    assert.equal(receivedInputs[0]?.socketPath, pipePath)
+    assert.equal(receivedInputs[0]?.port, undefined)
+    const tunnelId = String(receivedInputs[0]?.tunnelId ?? '')
+    assert.equal(await fabric.registry.acceptTunnel('win-box', 'win-box:secret', tunnelId), true)
+    const bridge = new PassThrough()
+    fabric.registry.grantTunnel(tunnelId, bridge)
+    const remoteStream = await pending
+    assert.ok(remoteStream === bridge)
+    bridge.destroy()
+    remoteSocket.close()
+  } finally {
+    await fabric.dispose()
+    await new Promise<void>((resolve) => uds.close(() => resolve()))
+  }
+})
+
+test('fabric.getNodeHostEnv: returns target node env without Hub-local fallback and enforces honest errors', { timeout: 60_000 }, async () => {
+  const fabric = createEnvFabric({
+    authenticate: () => true,
+    localHostEnv: {
+      homeDir: '/hub-home',
+      tempDir: '/hub-tmp',
+      getEnv: (k) => (k === 'HERDR_SOCKET_PATH' ? '/hub-only.sock' : undefined),
+    },
+  })
+  try {
+    // Local node uses localHostEnv context.
+    const localEnv = await fabric.getNodeHostEnv('local', { envKeys: ['HERDR_SOCKET_PATH'] })
+    assert.equal(localEnv.platform, process.platform)
+    assert.equal(localEnv.homeDir, '/hub-home')
+    assert.equal(localEnv.env['HERDR_SOCKET_PATH'], '/hub-only.sock')
+
+    // Sensitive keys rejected at Hub boundary before touching local or remote env.
+    await assert.rejects(
+      fabric.getNodeHostEnv('local', { envKeys: ['HELMX_TOKEN'] }),
+      (error: unknown) => error instanceof HelmxError && error.code === 'validation_error' && error.status === 400,
+    )
+
+    // Offline remote node MUST fail with 409 node_offline, never falling back to Hub-local env.
+    await assert.rejects(
+      fabric.getNodeHostEnv('offline-win', { envKeys: ['HERDR_SOCKET_PATH'] }),
+      (error: unknown) => error instanceof HelmxError && error.code === 'node_offline' && error.status === 409,
+    )
+
+    // Legacy remote daemon lacking nodeHostEnv RPC fails explicitly with 501.
+    const legacySocket = await registerFakeNode(fabric.registry, 'legacy-node')
+    await assert.rejects(
+      fabric.getNodeHostEnv('legacy-node', { envKeys: ['HERDR_SOCKET_PATH'] }),
+      (error: unknown) => error instanceof HelmxError && error.code === 'node_host_env_not_supported' && error.status === 501,
+    )
+    legacySocket.close()
+
+    // Remote Windows node returns its own target env (completely distinct from Hub Linux env).
+    const winSocket = new FakeSocket()
+    await fabric.registry.register(
+      winSocket as unknown as WsSocket,
+      { nodeId: 'win-remote', token: 'win-remote:secret', hostname: 'win', platform: 'win32' },
+      () => ({
+        $close() {},
+        nodeHostEnv: async () => ({
+          ok: true,
+          value: {
+            platform: 'win32',
+            homeDir: 'C:\\Users\\alice',
+            tempDir: 'C:\\Users\\alice\\AppData\\Local\\Temp',
+            dirs: {
+              appData: 'C:\\Users\\alice\\AppData\\Roaming',
+              userProfile: 'C:\\Users\\alice',
+            },
+            env: {},
+          },
+        }),
+      }) as never,
+    )
+    const remoteEnv = await fabric.getNodeHostEnv('win-remote', { envKeys: ['HERDR_SOCKET_PATH'] })
+    assert.equal(remoteEnv.platform, 'win32')
+    assert.equal(remoteEnv.dirs.appData, 'C:\\Users\\alice\\AppData\\Roaming')
+    assert.equal(remoteEnv.env['HERDR_SOCKET_PATH'], undefined, 'must not inherit Hub HERDR_SOCKET_PATH')
+    winSocket.close()
+
+    // Malformed remote snapshot rejected explicitly with 502 node_host_env_failed.
+    const badSocket = new FakeSocket()
+    await fabric.registry.register(
+      badSocket as unknown as WsSocket,
+      { nodeId: 'bad-env-node', token: 'bad-env-node:secret', hostname: 'bad', platform: 'linux' },
+      () => ({
+        $close() {},
+        nodeHostEnv: async () => ({
+          ok: true,
+          value: { platform: 'plan9', homeDir: '', tempDir: '', dirs: {}, env: {} },
+        }),
+      }) as never,
+    )
+    await assert.rejects(
+      fabric.getNodeHostEnv('bad-env-node'),
+      (error: unknown) => error instanceof HelmxError && error.code === 'node_host_env_failed' && error.status === 502,
+    )
+    badSocket.close()
+  } finally {
+    await fabric.dispose()
   }
 })

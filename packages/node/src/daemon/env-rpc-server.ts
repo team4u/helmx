@@ -3,9 +3,10 @@
  *
  * File and shell operations are handled by `LocalExecutionEnv` (our thin adapter over
  * `@earendil-works/pi-durable/env/node`'s `NodeExecutionEnv`, see `./local-env.ts`), scoped
- * per `cwd`, with `readerId` handles and per-exec `AbortController`s. Herdr IPC (`ipcCall` /
- * `ipcSubscribe`) and TCP tunneling (`nodeTunnelOpen` / `nodeTunnelAbort`) are delegated to
- * `./env-rpc-ipc.ts` and `./env-rpc-tunnel.ts` with centralized admission/draining guards.
+ * per `cwd`, with `readerId` handles and per-exec `AbortController`s. Target-node host
+ * environment discovery (`nodeHostEnv`) and passthrough tunneling (`nodeTunnelOpen` /
+ * `nodeTunnelAbort`, supporting both TCP and controlled socketPath/Named Pipe) are delegated
+ * to `./env-rpc-ipc.ts` and `./env-rpc-tunnel.ts` with centralized admission/draining guards.
  *
  * Error semantics: requests rejected due to upgrade draining return `node_draining`, while
  * user/host cancellation, generation retirement, and disposal return `aborted`.
@@ -25,18 +26,18 @@ import type {
   EnvExecOk,
   EnvExecOutputEvent,
   NodeEnvRpcFunctions,
-  NodeIpcClosedEvent,
-  NodeIpcEvent,
+  NodeHostEnv,
+  NodeHostEnvQuery,
   NodePathUsage,
   NodeTunnelOpenInput,
   RpcResult,
 } from '@helmx/protocol';
 import { drainingRejection, invalidInput, isRecord, rpcFail } from './env-rpc-shared.js';
-import { createIpcBridge, resolveHerdrIpcEndpoint } from './env-rpc-ipc.js';
+import { createHostEnvHandler, type NodeHostEnvContext } from './env-rpc-ipc.js';
 import { createTunnelHandler } from './env-rpc-tunnel.js';
 
-export { MAX_IPC_FRAME_BYTES, resolveHerdrIpcEndpoint } from './env-rpc-ipc.js';
-export type { IpcEndpointContext } from './env-rpc-ipc.js';
+export { collectNodeHostEnv } from './env-rpc-ipc.js';
+export type { NodeHostEnvContext } from './env-rpc-ipc.js';
 
 export interface NodeEnvRpcServerOptions {
   /** Base directory for relative paths (daemon data directory). */
@@ -47,14 +48,8 @@ export interface NodeEnvRpcServerOptions {
   shellEnv?: Record<string, string | undefined>;
   /** Maximum characters per streamed output chunk (>= 1; defaults to 256 KiB chars). */
   maxOutputChunkChars?: number;
-  /** Callback forwarding Herdr IPC subscription events back to the Hub (`onIpcEvent`). */
-  onIpcEvent?: (event: NodeIpcEvent) => void;
-  /** Callback forwarding Herdr IPC subscription closures back to the Hub (`onIpcClosed`). */
-  onIpcClosed?: (event: NodeIpcClosedEvent) => void;
-  /** Optional idle timeout for `ipcCall`; omitted so long Herdr calls obey caller timeout/abort. */
-  ipcCallIdleTimeoutMs?: number;
-  /** Optional single-frame byte cap for Herdr IPC (defaults to `MAX_IPC_FRAME_BYTES = 32 MiB`). */
-  maxIpcFrameBytes?: number;
+  /** Injectable host environment context for `nodeHostEnv` (tests override platform/dirs/env deterministically). */
+  hostEnvContext?: NodeHostEnvContext;
   /** Test/managed-host overrides for `envPathUsage` scanning. */
   pathUsage?: {
     procRoot?: string;
@@ -117,27 +112,25 @@ const safeChunkEnd = (text: string, offset: number, limit: number): number => {
 
 /** `NodeEnvRpcFunctions` extended with lifecycle control (`dispose`, `setDraining`) and introspection. */
 export interface NodeEnvRpcServer extends NodeEnvRpcFunctions {
+  nodeHostEnv(input?: NodeHostEnvQuery): Promise<RpcResult<NodeHostEnv>>;
   nodeTunnelOpen(input: NodeTunnelOpenInput): Promise<RpcResult<null>>;
   nodeTunnelAbort(tunnelId: string): Promise<void>;
-  /** Close all open readers, abort active commands, and tear down IPC/tunnel sockets. Idempotent. */
+  /** Close all open readers, abort active commands, and tear down tunnel sockets. Idempotent. */
   dispose(): Promise<void>;
-  /** Enable/disable drain mode (rejects new exec/IPC/tunnel calls with `node_draining`; existing work continues). */
+  /** Enable/disable drain mode (rejects new exec/tunnel calls with `node_draining`; existing work continues). */
   setDraining(value: boolean): void;
   getActiveExecCount(): number;
   getOpenReaderCount(): number;
-  getActiveIpcCallCount(): number;
-  getActiveIpcSubscriptionCount(): number;
   getActiveTunnelCount(): number;
 }
 
 /** Void-returning RPCs that throw directly via birpc instead of wrapping in `RpcResult`. */
-const VOID_RPC_METHODS = new Set(['envAbortExec', 'envCleanup', 'ipcAbortCall', 'ipcUnsubscribe', 'nodeTunnelAbort']);
+const VOID_RPC_METHODS = new Set(['envAbortExec', 'envCleanup', 'nodeTunnelAbort']);
 
-const ADMIT_POLICIES: Record<string, { drainingWhat?: string; tracked?: 'exec' | 'ipc' }> = {
+const ADMIT_POLICIES: Record<string, { drainingWhat?: string; tracked?: 'exec'; optionalInput?: boolean }> = {
   envExec: { drainingWhat: 'commands', tracked: 'exec' },
   nodeTunnelOpen: { drainingWhat: 'tunnels' },
-  ipcCall: { drainingWhat: 'IPC calls', tracked: 'ipc' },
-  ipcSubscribe: { drainingWhat: 'IPC subscriptions' },
+  nodeHostEnv: { optionalInput: true },
 };
 
 export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEnvRpcServer {
@@ -146,10 +139,6 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
   const maxOutputChunkChars = typeof rawChunkLimit === 'number' && Number.isFinite(rawChunkLimit) && rawChunkLimit >= 1
     ? Math.floor(rawChunkLimit)
     : 256 * 1024;
-  const ipcIdleTimeoutMs = typeof options.ipcCallIdleTimeoutMs === 'number' &&
-    Number.isFinite(options.ipcCallIdleTimeoutMs) && options.ipcCallIdleTimeoutMs > 0
-    ? options.ipcCallIdleTimeoutMs
-    : undefined;
   const abortDrainGraceMs = typeof options.abortDrainGraceMs === 'number' &&
     Number.isFinite(options.abortDrainGraceMs) && options.abortDrainGraceMs >= 0
     ? options.abortDrainGraceMs
@@ -204,11 +193,8 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
   type RunningExec = { controller: AbortController };
   const running = new Map<string, RunningExec>();
 
-  const ipc = createIpcBridge({
-    onIpcEvent: options.onIpcEvent,
-    onIpcClosed: options.onIpcClosed,
-    ipcCallIdleTimeoutMs: ipcIdleTimeoutMs,
-    maxIpcFrameBytes: options.maxIpcFrameBytes,
+  const hostEnv = createHostEnvHandler({
+    context: options.hostEnvContext,
     isDisposed: () => disposed,
   });
   const tunnels = createTunnelHandler({
@@ -552,23 +538,24 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
       );
     },
 
-    ipcCall: ipc.ipcCall,
-    ipcAbortCall: ipc.ipcAbortCall,
-    ipcSubscribe: ipc.ipcSubscribe,
-    ipcUnsubscribe: ipc.ipcUnsubscribe,
   };
   const rpcFunctions: NodeEnvRpcFunctions = Object.assign(rpc, {
+    nodeHostEnv: (input?: NodeHostEnvQuery): Promise<RpcResult<NodeHostEnv>> => hostEnv.nodeHostEnv(input),
     nodeTunnelOpen: (input: NodeTunnelOpenInput): Promise<RpcResult<null>> => tunnels.nodeTunnelOpen(input),
     nodeTunnelAbort: tunnels.nodeTunnelAbort,
   });
 
   const guardRpcMethod = (
     original: (...args: unknown[]) => Promise<RpcResult<unknown>>,
-    admit: { drainingWhat?: string; tracker?: <T>(promise: Promise<T>) => Promise<T> },
+    admit: { drainingWhat?: string; tracker?: <T>(promise: Promise<T>) => Promise<T>; optionalInput?: boolean },
   ): ((...args: unknown[]) => Promise<RpcResult<unknown>>) =>
     async (...args: unknown[]): Promise<RpcResult<unknown>> => {
       if (disposed) return { ok: false, error: { code: 'aborted', message: 'server disposed' } };
-      if (!args[0] || typeof args[0] !== 'object' || Array.isArray(args[0])) return invalidInput('RPC input must be an object');
+      const input = args[0];
+      const missingAllowed = admit.optionalInput === true && input === undefined;
+      if (!missingAllowed && (!input || typeof input !== 'object' || Array.isArray(input))) {
+        return invalidInput('RPC input must be an object');
+      }
       if (admit.drainingWhat !== undefined && draining) {
         return { ok: false, error: drainingRejection(admit.drainingWhat) };
       }
@@ -596,13 +583,11 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
     const original = guarded[key];
     if (typeof original !== 'function') continue;
     const admit = ADMIT_POLICIES[key];
-    const tracker =
-      admit?.tracked === 'exec' ? trackExec
-      : admit?.tracked === 'ipc' ? ipc.trackIpc
-      : undefined;
+    const tracker = admit?.tracked === 'exec' ? trackExec : undefined;
     guarded[key] = guardRpcMethod(original as (...args: unknown[]) => Promise<RpcResult<unknown>>, {
       drainingWhat: admit?.drainingWhat,
       tracker,
+      optionalInput: admit?.optionalInput,
     });
   }
 
@@ -613,7 +598,6 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
     disposal = (async () => {
       for (const exec of running.values()) exec.controller.abort(new Error('connection closed'));
       tunnels.destroyAllTunnels();
-      ipc.destroySockets();
       await Promise.allSettled([...pendingOperations, ...execWaiters, ...tunnels.getTunnelWaiters()]);
       const handles = [...readers.values()];
       readers.clear();
@@ -627,15 +611,11 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
 
   return Object.assign(rpcFunctions, {
     dispose,
-    resolveIpcEndpoint: (input: { endpoint?: string; session?: string }): string =>
-      resolveHerdrIpcEndpoint(input),
     setDraining: (value: boolean): void => {
       draining = value === true;
     },
     getActiveExecCount: () => execWaiters.size,
     getOpenReaderCount: () => readers.size,
-    getActiveIpcCallCount: () => ipc.getActiveCallCount(),
-    getActiveIpcSubscriptionCount: () => ipc.getActiveSubscriptionCount(),
     getActiveTunnelCount: () => tunnels.getActiveTunnelCount(),
   }) as NodeEnvRpcServer;
 }

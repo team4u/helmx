@@ -619,9 +619,6 @@ describe('HerdrExecutor.assertNoFork 防御性拒绝', { timeout: 60_000 }, () =
         return ''
       },
       async removeOutput() {},
-      async runGate(): Promise<AgentGateResult> {
-        return { ok: true, output: '' }
-      },
       async subscribe(_target, _onEvent, _onError) {
         return () => {}
       },
@@ -629,7 +626,10 @@ describe('HerdrExecutor.assertNoFork 防御性拒绝', { timeout: 60_000 }, () =
     const nodeChannel: HerdrNodeChannel = {
       isOnline: () => true,
       getNodeHubUrl: () => 'http://127.0.0.1:3202',
-      ipcCall: () => {
+      getNodeHostEnv: () => {
+        throw new HelmxError('unsupported', 'stub', 501)
+      },
+      openTunnel: () => {
         throw new HelmxError('unsupported', 'stub', 501)
       },
       envFor: () => {
@@ -663,7 +663,7 @@ describe('HerdrExecutor.assertNoFork 防御性拒绝', { timeout: 60_000 }, () =
         profiles: { get: async (id) => profiles.get(id) },
         buildSpawnEnv: (_conversationId, cwd) => ({ HELMX_CWD: cwd }),
         redact: (t) => t,
-        runLocalGate: async () => ({ ok: true, output: '' }),
+        runGate: async () => ({ ok: true, output: '' }),
         nodeChannel,
         transport,
       },

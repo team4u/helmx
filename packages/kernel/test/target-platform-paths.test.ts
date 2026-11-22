@@ -155,10 +155,7 @@ function makePlatformFabric(options: {
     evictConversation: () => undefined,
     debugBaseCount: () => 0,
     debugBases: () => [],
-    ipcCall: () => {
-      throw new Error('not used in test')
-    },
-    ipcSubscribe: () => {
+    getNodeHostEnv: () => {
       throw new Error('not used in test')
     },
     dispose: () => Promise.resolve(),
@@ -666,7 +663,7 @@ describe('EnvFabric.nodePlatformOf: minimal read-only port for registered platfo
       { register(input: NodeRegisterInput): Promise<NodeRegisterResult> },
       HubConnectionLocal
     >(
-      { onEnvExecOutput: () => undefined, onIpcEvent: () => undefined, onIpcClosed: () => undefined },
+      { onEnvExecOutput: () => undefined },
       {
         post: (data) => {
           if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(data))

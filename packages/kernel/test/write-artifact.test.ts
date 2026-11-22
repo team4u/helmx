@@ -176,8 +176,7 @@ describe('write tool artifact registration behavior', { timeout: 60_000 }, () =>
       evictConversation: () => undefined,
       debugBaseCount: () => 0,
       debugBases: () => [],
-      ipcCall: () => { throw new Error('not used') },
-      ipcSubscribe: () => { throw new Error('not used') },
+      getNodeHostEnv: () => { throw new Error('not used') },
       dispose: () => Promise.resolve(),
     } as never
 
