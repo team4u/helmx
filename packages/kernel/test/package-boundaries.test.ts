@@ -250,14 +250,25 @@ test('browser sources and @helmx/protocol/browser transitive closure never impor
   assert.ok(existsSync(browserEntry), 'missing @helmx/protocol/browser entry file')
 
   const protocolPluginFile = resolve(packagesDir, 'protocol/src/plugin.ts')
+  const protocolUiSchemasFile = resolve(packagesDir, 'protocol/src/ui-schemas.ts')
+  const protocolServiceFile = resolve(packagesDir, 'protocol/src/plugin-service.ts')
   const browserClosure = collectTransitiveLocalSources(browserEntry)
   if (browserClosure.has(protocolPluginFile)) {
     violations.push('protocol/src/browser.ts transitive closure must not reach protocol/src/plugin.ts')
+  }
+  if (browserClosure.has(protocolUiSchemasFile)) {
+    violations.push('protocol/src/browser.ts transitive closure must not reach protocol/src/ui-schemas.ts')
+  }
+  if (browserClosure.has(protocolServiceFile)) {
+    violations.push('protocol/src/browser.ts transitive closure must not reach protocol/src/plugin-service.ts')
   }
   for (const file of browserClosure) {
     for (const { specifier } of imports(file)) {
       const problem = isForbiddenBrowserRuntimeImport(specifier)
       if (problem) violations.push(`${relative(packagesDir, file)}: ${problem}`)
+      if (specifier === 'typebox' || specifier === 'typebox/compile') {
+        violations.push(`${relative(packagesDir, file)}: browser entry must not import server-side schema builder/compiler ${specifier}`)
+      }
     }
   }
 

@@ -57,6 +57,7 @@ export interface PluginLifecycleContext extends PluginTransitionContext {
   host: PluginHostBackend;
   providers?: PluginProviderPort;
   servicesStarted: boolean;
+  servicesReconciled: boolean;
   redactText?: (text: string) => string;
   createPluginContext: (state: PluginState, epoch: number) => HelmxPluginContext;
   getPluginLifecycle: ClientLifecycleLookup['getPluginLifecycle'];
@@ -175,7 +176,7 @@ export async function runRegisterTransaction(
       ctx.ensureTransientSessionDocListener?.(pluginId);
       await precompilePluginClientModules(state, ctx);
       await registerProviders(state, ctx.providers);
-      await activatePluginServices(state, ctx.servicesStarted);
+      await activatePluginServices(state, ctx.servicesStarted, ctx.servicesReconciled);
       commitEnabled(state);
     } catch (err) {
       await handleRegisterFailure(state, seq, err, { isolate, stage: 'enable', stopServices: true }, ctx);
@@ -247,7 +248,7 @@ export async function runEnableTransaction(
     ctx.ensureTransientSessionDocListener?.(pluginId);
     await precompilePluginClientModules(state, ctx);
     await registerProviders(state, ctx.providers);
-    await activatePluginServices(state, ctx.servicesStarted);
+    await activatePluginServices(state, ctx.servicesStarted, ctx.servicesReconciled);
     await persistEnabled(ctx.configStore, state, true);
     persistedEnabled = true;
     // Commit enablement and idle phase in the same synchronous block to avoid TOCTOU races with concurrent disables.

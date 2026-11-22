@@ -1,9 +1,11 @@
 /**
- * Plugin service start barrier (`prepare -> start`, with fault isolation for external plugins) and reverse-topology shutdown.
+ * Plugin service start & reconcile barriers (`prepare -> start -> reconcile`, with fault isolation for external plugins) and reverse-topology shutdown.
  */
 import { HelmxError } from '@helmx/protocol';
 import {
   prepareServices,
+  reconcileServiceBarrier,
+  reconcileServices,
   startServiceBarrier,
   startServices,
   stopServicesQuietly,
@@ -14,10 +16,14 @@ import type { PluginState } from './types.js';
 export async function activatePluginServices(
   state: PluginState,
   servicesStarted: boolean,
+  servicesReconciled = false,
 ): Promise<void> {
   if (!servicesStarted) return;
   await prepareServices(state);
   await startServices(state);
+  if (servicesReconciled) {
+    await reconcileServices(state);
+  }
 }
 
 /** Atomic rollback when a non-isolated barrier step fails; ignores stop errors to preserve original diagnostics. */
@@ -65,6 +71,31 @@ export async function runServiceStartBarrier(
     } catch (err) {
       if (state.isolateFailure !== true) {
         await rollbackStartBarrier(prepared.slice(0, startedIdx));
+        throw err;
+      }
+      await onIsolatedFailure(state, err);
+    }
+  }
+}
+
+/**
+ * Global post-startup reconciliation barrier: runs each active plugin's `reconcile()` in
+ * topological order (`dependencies` + active soft `reconcileAfter`). External isolated plugins
+ * transition to `failed` on error without blocking the host; built-in failures propagate explicitly.
+ */
+export async function runServiceReconcileBarrier(
+  enabledInReconcileOrder: PluginState[],
+  onIsolatedFailure: (state: PluginState, err: unknown) => Promise<void>,
+): Promise<void> {
+  if (!enabledInReconcileOrder.some((s) => s.isolateFailure === true)) {
+    await reconcileServiceBarrier(enabledInReconcileOrder);
+    return;
+  }
+  for (const state of enabledInReconcileOrder) {
+    try {
+      await reconcileServices(state);
+    } catch (err) {
+      if (state.isolateFailure !== true) {
         throw err;
       }
       await onIsolatedFailure(state, err);

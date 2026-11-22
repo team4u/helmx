@@ -69,8 +69,12 @@ import {
   isPluginStateActive,
 } from './lifecycle-helpers.js';
 import { PluginHostGate } from './plugin-host-gate.js';
-import { enabledStatesInDependencyOrder } from './plugin-host-deps.js';
-import { runServiceStartBarrier, stopEnabledPluginServices } from './plugin-host-barrier.js';
+import { enabledStatesInDependencyOrder, enabledStatesInReconcileOrder } from './plugin-host-deps.js';
+import {
+  runServiceReconcileBarrier,
+  runServiceStartBarrier,
+  stopEnabledPluginServices,
+} from './plugin-host-barrier.js';
 import { dispatchPluginHook, dispatchPluginHookAround } from './plugin-host-hooks.js';
 import {
   registerFailedPlaceholder,
@@ -126,7 +130,9 @@ export class PluginHost {
   private disposed = false;
   private registerSeq = 0;
   private servicesStarted: boolean;
+  private servicesReconciled = false;
   private startPromise?: Promise<void>;
+  private reconcilePromise?: Promise<void>;
   private gate = new PluginHostGate();
   private packageManager?: PluginPackageManager;
   private packageStore?: PluginPackageManagerStore;
@@ -229,6 +235,33 @@ export class PluginHost {
     }
   }
 
+  async reconcile(): Promise<void> {
+    this.assertNotDisposed();
+    if (this.servicesReconciled) return;
+    if (this.reconcilePromise) return this.reconcilePromise;
+    const run = this.gate.withWriteLock(async () => {
+      if (this.servicesReconciled) return;
+      if (!this.servicesStarted) {
+        throw new HelmxError(
+          'plugin_host_not_started',
+          'Cannot run PluginHost.reconcile() before PluginHost.start() has started services',
+          409,
+        );
+      }
+      await runServiceReconcileBarrier(
+        enabledStatesInReconcileOrder(this.plugins),
+        (state, err) => rollbackIsolatedPlugin(state, err, 'enable', this.lifecycleContext()),
+      );
+      this.servicesReconciled = true;
+    });
+    this.reconcilePromise = run;
+    try {
+      await run;
+    } finally {
+      this.reconcilePromise = undefined;
+    }
+  }
+
   async stop(): Promise<void> {
     this.assertNotDisposed();
     await this.gate.withWriteLock(async () => {
@@ -237,6 +270,7 @@ export class PluginHost {
         await stopEnabledPluginServices(enabledStatesInDependencyOrder(this.plugins));
       } finally {
         this.servicesStarted = false;
+        this.servicesReconciled = false;
       }
     });
   }
@@ -601,6 +635,7 @@ export class PluginHost {
       host: this.options.host,
       providers: this.options.providers,
       servicesStarted: this.servicesStarted,
+      servicesReconciled: this.servicesReconciled,
       redactText: (text) => this.redactProjectionText(text),
       emitPluginChanged: (state) => this.emitPluginChanged(state),
       createPluginContext: (state, epoch) => this.createContext(state, epoch),
@@ -668,7 +703,7 @@ export class PluginHost {
     const merged: Record<string, unknown> = {};
     for (const [key, field] of Object.entries(schema)) {
       if (field.default !== undefined) {
-        merged[key] = field.secret === true ? String(field.default) : field.default;
+        merged[key] = field.secret === true ? String(field.default) : jsonClone(field.default);
       }
     }
     return { ...merged, ...stored };

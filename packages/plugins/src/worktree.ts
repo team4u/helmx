@@ -11,20 +11,18 @@
  *   depth guard (300) and before external-runtime takers like builtin:herdr (100);
  * - the cleanup_worktree model tool and the worktrees CLI action family
  *   (cleanup / list / inspect) plus the internal hidden acquire/release actions;
- * - lifecycle: service 'worktree' flushes the private doc on stop and reports active
- *   holds via inUse()（409 plugin_in_use 保护）. Registration-order invariant: the
- *   composition root registers builtin:workflow BEFORE this plugin so that the
- *   runtime.started listeners run in that order（KernelRuntime awaits each listener）:
- *   workflow first converges leftover child conversations to idle, only then does
- *   this plugin reconcile crashed native leases（otherwise still-settling children
- *   would be misjudged as stopped and their leases wrongly reclaimed）.
+ * - lifecycle: service 'worktree' declares `reconcileAfter: [WORKFLOW_PLUGIN_ID]` and
+ *   runs `reconcile()` to reclaim crashed native leases after workflow's `reconcile()`
+ *   converges leftover child conversations to idle (topological reconcile ordering,
+ *   independent of Hub registration order; ignored when workflow is disabled/absent),
+ *   flushes the private doc on stop, and reports active holds via inUse()（409 plugin_in_use）.
  *
  * Disabling this plugin makes cleanup_worktree / worktrees CLI disappear immediately
  * （no phantom tools）; a spawn still requesting isolation: 'worktree' then fails
  * explicitly with unsupported_runtime at the kernel boundary（never silently degraded）.
  */
 import type { PluginDefinition } from '@helmx/protocol'
-import { WORKTREE_PLUGIN_ID } from './contracts.js'
+import { WORKFLOW_PLUGIN_ID, WORKTREE_PLUGIN_ID } from './contracts.js'
 import { WorktreeIsolation } from './worktree/isolation.js'
 import { registerWorktreeActions } from './worktree/actions.js'
 import { registerWorktreeTools } from './worktree/tools.js'
@@ -102,19 +100,17 @@ export function createWorktreePlugin(): PluginDefinition {
         }
       })
 
-      // ---- 启动后回收可证明已无执行的原生 Worktree 崩溃租约 ----
-      // Why注册顺序约束：组合根必须先注册 builtin:workflow 再注册本插件——
-      // KernelRuntime.start() 按监听器注册顺序逐个 await；workflow 的监听器
-      // 先等恢复收集的遗留子会话收敛 idle，本插件随后才扫崩溃租约（否则会把
-      // 仍在收敛的子会话误判为已停止而漏回收/误回收）。
-      ctx.host.onEvent('runtime.started', async () => {
-        await isolation.reconcileStoppedNativeLeases()
-      })
-
-      // ---- service：受管工作树生命周期（flush 持久层；活跃 hold 阻止停用） ----
+      // ---- service：受管工作树生命周期（拓扑序 reconcile 回收崩溃租约；flush 持久层；活跃 hold 阻止停用） ----
+      // reconcileAfter: [WORKFLOW_PLUGIN_ID] 为软顺序边：若 builtin:workflow 处于活跃态，
+      // 宿主在 reconcile 拓扑序中保证先完成 workflow 遗留子会话收敛再回收原生 Worktree 崩溃租约
+      //（不再依赖 Hub 注册顺序）；若 workflow 未注册或停用则自动忽略，不引入硬启停依赖。
       ctx.service({
         id: 'worktree',
+        reconcileAfter: [WORKFLOW_PLUGIN_ID],
         start() {},
+        async reconcile() {
+          await isolation.reconcileStoppedNativeLeases()
+        },
         async stop() {
           await worktreeDocs.flush()
         },

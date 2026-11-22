@@ -484,3 +484,222 @@ test('concurrent mixed register/enable/disable operations settle cleanly without
   await host.dispose()
   await host2.dispose()
 })
+
+// ---------------------------------------------------------------------------
+// Explicit reconcile lifecycle phase & topological ordering (hard + soft edges)
+// ---------------------------------------------------------------------------
+
+test('reconcile phase runs in topological order (hard dependencies + soft reconcileAfter) independent of registration order', { timeout: 60_000 }, async () => {
+  const order: string[] = []
+  const host = makeHost({ deferServices: true })
+
+  // Register consumer ('worktree-like') BEFORE peer ('workflow-like') — soft reconcileAfter must still order peer first.
+  await host.register({
+    id: 'peer:consumer',
+    definePlugin: (ctx) => {
+      ctx.service({
+        id: 'consumer-svc',
+        prepare() { order.push('prepare:consumer') },
+        start() { order.push('start:consumer') },
+        reconcileAfter: ['peer:provider', 'peer:absent', 'peer:disabled'],
+        async reconcile() {
+          order.push('reconcile:consumer')
+        },
+        stop() { order.push('stop:consumer') },
+      })
+    },
+  })
+  await host.register({
+    id: 'peer:disabled',
+    definePlugin: (ctx) => {
+      ctx.configSchema({
+        mode: { type: 'string', enum: ['a', 'b'], default: 'a' },
+      })
+      ctx.service({
+        id: 'disabled-svc',
+        start() { order.push('start:disabled') },
+        reconcile() { order.push('reconcile:disabled') },
+        stop() {},
+      })
+    },
+  }, { enabled: false })
+  await host.register({
+    id: 'peer:provider',
+    definePlugin: (ctx) => {
+      ctx.service({
+        id: 'provider-svc',
+        prepare() { order.push('prepare:provider') },
+        start() { order.push('start:provider') },
+        async reconcile() {
+          order.push('reconcile:provider')
+        },
+        stop() { order.push('stop:provider') },
+      })
+    },
+  })
+  await host.register({
+    id: 'peer:dependent',
+    dependencies: ['peer:consumer'],
+    definePlugin: (ctx) => {
+      ctx.service({
+        id: 'dependent-svc',
+        prepare() { order.push('prepare:dependent') },
+        start() { order.push('start:dependent') },
+        reconcile() { order.push('reconcile:dependent') },
+        stop() { order.push('stop:dependent') },
+      })
+    },
+  })
+
+  // Calling reconcile before start must fail explicitly.
+  await assertRejectsCode(() => host.reconcile(), 'plugin_host_not_started', 409)
+
+  await host.start()
+  await host.reconcile()
+  // Second reconcile call is an idempotent no-op.
+  await host.reconcile()
+
+  assert.deepEqual(order, [
+    'prepare:consumer',
+    'prepare:provider',
+    'prepare:dependent',
+    'start:consumer',
+    'start:provider',
+    'start:dependent',
+    'reconcile:provider',
+    'reconcile:consumer',
+    'reconcile:dependent',
+  ])
+
+  // Disabled plugin retains its configSchema and manifest configFields projection across reconcile.
+  assert.deepEqual(host.getConfigSchema('peer:disabled'), {
+    mode: { type: 'string', enum: ['a', 'b'], default: 'a' },
+  })
+  assert.deepEqual(host.getManifest('peer:disabled').configFields, [
+    { key: 'mode', type: 'string', secret: false, required: false, enum: ['a', 'b'], default: 'a' },
+  ])
+
+  // Soft reconcileAfter creates ZERO hard coupling: disabling peer:provider is NOT blocked by peer:consumer.
+  await host.disable('peer:provider')
+  assert.equal(host.get('peer:provider')?.enabled, false)
+  assert.equal(host.get('peer:consumer')?.enabled, true)
+  assert.equal(host.get('peer:consumer')?.status, 'active')
+
+  // Stop -> start -> reconcile resets reconciled state and runs again cleanly.
+  order.length = 0
+  await host.stop()
+  await host.start()
+  await host.reconcile()
+  assert.deepEqual(order, [
+    'stop:dependent',
+    'stop:consumer',
+    'start:consumer',
+    'start:dependent',
+    'reconcile:consumer',
+    'reconcile:dependent',
+  ])
+
+  // Hot-enabling after reconcile runs prepare -> start -> reconcile immediately.
+  order.length = 0
+  await host.enable('peer:disabled')
+  assert.deepEqual(order, ['start:disabled', 'reconcile:disabled'])
+
+  await host.dispose()
+})
+
+test('reconcile validates service specs, rejects cycles explicitly, and isolates external reconcile failures', { timeout: 60_000 }, async () => {
+  const host = makeHost({ deferServices: true })
+
+  // Invalid reconcile / reconcileAfter declarations fail at registration boundary.
+  await assertRejectsCode(
+    () =>
+      host.register({
+        id: 'bad:reconcile-fn',
+        definePlugin: (ctx) => {
+          ctx.service({ id: 's', start() {}, stop() {}, reconcile: 'nope' as unknown as () => void })
+        },
+      }),
+    'invalid_service_spec',
+    400,
+  )
+  await assertRejectsCode(
+    () =>
+      host.register({
+        id: 'bad:reconcile-after',
+        definePlugin: (ctx) => {
+          ctx.service({ id: 's', start() {}, stop() {}, reconcileAfter: ['bad@^1'] })
+        },
+      }),
+    'invalid_service_spec',
+    400,
+  )
+  await assertRejectsCode(
+    () =>
+      host.register({
+        id: 'bad:self-reconcile',
+        definePlugin: (ctx) => {
+          ctx.service({ id: 's', start() {}, stop() {}, reconcileAfter: ['bad:self-reconcile'] })
+        },
+      }),
+    'plugin_dependency_cycle',
+    409,
+  )
+
+  // Cross-plugin reconcileAfter cycle fails explicitly at reconcile time with plugin_dependency_cycle.
+  const cycHost = makeHost({ deferServices: true })
+  await cycHost.register({
+    id: 'cyc:a',
+    definePlugin: (ctx) => {
+      ctx.service({ id: 's', start() {}, stop() {}, reconcileAfter: ['cyc:b'], reconcile() {} })
+    },
+  })
+  await cycHost.register({
+    id: 'cyc:b',
+    definePlugin: (ctx) => {
+      ctx.service({ id: 's', start() {}, stop() {}, reconcileAfter: ['cyc:a'], reconcile() {} })
+    },
+  })
+  await cycHost.start()
+  await assertRejectsCode(() => cycHost.reconcile(), 'plugin_dependency_cycle', 409)
+  await cycHost.dispose()
+
+  // External isolated plugin failing during reconcile transitions to failed without blocking built-in reconcile.
+  const ran: string[] = []
+  await host.register(
+    {
+      id: 'ext:bad-reconcile',
+      definePlugin: (ctx) => {
+        ctx.service({
+          id: 'ext-svc',
+          start() {},
+          stop() {},
+          reconcile() {
+            throw new Error('external reconcile boom')
+          },
+        })
+      },
+    },
+    { isolateFailure: true },
+  )
+  await host.register({
+    id: 'builtin:good-reconcile',
+    definePlugin: (ctx) => {
+      ctx.service({
+        id: 'good-svc',
+        start() {},
+        stop() {},
+        reconcile() {
+          ran.push('good')
+        },
+      })
+    },
+  })
+  await host.start()
+  await host.reconcile()
+  assert.deepEqual(ran, ['good'])
+  const failedExt = host.get('ext:bad-reconcile')
+  assert.equal(failedExt?.status, 'failed')
+  assert.equal(failedExt?.error?.code, 'plugin_service_reconcile_failed')
+
+  await host.dispose()
+})

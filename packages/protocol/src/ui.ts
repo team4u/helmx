@@ -48,7 +48,8 @@ export interface UiSpecBase {
  * activity rail, mobile quick nav and sidebar view rows). Plugins put one of
  * these strings into the doc field referenced by `SidebarItemBadgeSpec.toneField`.
  */
-export type SidebarBadgeTone = 'error' | 'warn' | 'accent' | 'ok' | 'neutral'
+export const SIDEBAR_BADGE_TONES = ['error', 'warn', 'accent', 'ok', 'neutral'] as const
+export type SidebarBadgeTone = (typeof SIDEBAR_BADGE_TONES)[number]
 
 /**
  * Sidebar item attention badge: a generic doc-driven declaration (zero plugin-id
@@ -70,6 +71,22 @@ export interface SidebarItemBadgeSpec {
   /** Optional LocalizedText or plain string summary field on the doc appended to the button tooltip / aria-label. */
   summaryField?: string
 }
+
+/** Single source of truth of allowed top-level keys on `SidebarItemBadgeSpec`. */
+export const SIDEBAR_ITEM_BADGE_FIELDS = [
+  'doc',
+  'countField',
+  'toneField',
+  'dotField',
+  'summaryField',
+] as const satisfies readonly (keyof SidebarItemBadgeSpec)[]
+
+export type SidebarItemBadgeField = (typeof SIDEBAR_ITEM_BADGE_FIELDS)[number]
+
+type _AssertAllSidebarBadgeFieldsListed =
+  Exclude<keyof SidebarItemBadgeSpec, SidebarItemBadgeField> extends never ? true : never
+const _assertAllSidebarBadgeFieldsListed: _AssertAllSidebarBadgeFieldsListed = true
+void _assertAllSidebarBadgeFieldsListed
 
 export interface SidebarItemSpec extends UiSpecBase {
   label: LocalizedText
@@ -185,15 +202,23 @@ export interface ComposerCompletionResult {
   items: ComposerCompletionItem[]
 }
 
+/** Allowed composer completer trigger prefixes ('/' is reserved for host commands and skills). */
+export const COMPOSER_COMPLETER_TRIGGERS = ['@', '#', ':'] as const
+export type ComposerCompleterTrigger = (typeof COMPOSER_COMPLETER_TRIGGERS)[number]
+
+/** Document source kinds supported by `ComposerCompletionSource`. */
+export const COMPOSER_COMPLETER_DOC_KINDS = ['doc', 'sessionDoc'] as const
+export type ComposerCompleterDocKind = (typeof COMPOSER_COMPLETER_DOC_KINDS)[number]
+
 /** Document sources only read the contributing plugin's own public docs; itemsField is the top-level array field name. */
 export type ComposerCompletionSource =
   | { kind: 'action'; actionId: string; actionPluginId?: string }
-  | { kind: 'doc' | 'sessionDoc'; name: string; itemsField: string }
+  | { kind: ComposerCompleterDocKind; name: string; itemsField: string }
 
 /** Completions are rendered uniformly by the host and accept no client callbacks or views. '/' is reserved for commands and skills. */
 export interface ComposerCompleterSpec extends Omit<UiSpecBase, 'client'> {
   label: LocalizedText
-  trigger: '@' | '#' | ':'
+  trigger: ComposerCompleterTrigger
   priority?: number
   source: ComposerCompletionSource
 }
@@ -237,6 +262,21 @@ export interface WorkbenchPanelBadgeSpec {
   byConversationField?: string
 }
 
+/** Single source of truth of allowed top-level keys on `WorkbenchPanelBadgeSpec`. */
+export const WORKBENCH_PANEL_BADGE_FIELDS = [
+  'doc',
+  'countField',
+  'toneField',
+  'byConversationField',
+] as const satisfies readonly (keyof WorkbenchPanelBadgeSpec)[]
+
+export type WorkbenchPanelBadgeField = (typeof WORKBENCH_PANEL_BADGE_FIELDS)[number]
+
+type _AssertAllWorkbenchBadgeFieldsListed =
+  Exclude<keyof WorkbenchPanelBadgeSpec, WorkbenchPanelBadgeField> extends never ? true : never
+const _assertAllWorkbenchBadgeFieldsListed: _AssertAllWorkbenchBadgeFieldsListed = true
+void _assertAllWorkbenchBadgeFieldsListed
+
 export interface WorkbenchPanelSpec extends UiSpecBase {
   label: LocalizedText
   icon?: string
@@ -277,14 +317,32 @@ export interface ProfileRuntimeUiSpec {
   order?: number
 }
 
+/** Single source of truth mapping UI action targets to registered plugin UI surface names. */
+export const UI_ACTION_SURFACES = {
+  'conversation:header': 'conversation.header.action',
+  'conversation:row': 'conversation.row.action',
+  'timeline:entry': 'timeline.entry.action',
+} as const
+
+export type UiActionTarget = keyof typeof UI_ACTION_SURFACES
+export type UiActionSurface = (typeof UI_ACTION_SURFACES)[UiActionTarget]
+
+/** Allowed placements for `conversation:header` UI actions. */
+export const UI_ACTION_PLACEMENTS = ['toolbar', 'menu'] as const
+export type UiActionPlacement = (typeof UI_ACTION_PLACEMENTS)[number]
+
+/** Allowed message roles for `timeline:entry` UI actions. */
+export const UI_ACTION_ROLES = ['user', 'assistant'] as const
+export type UiActionRole = (typeof UI_ACTION_ROLES)[number]
+
 /** Unified UI action declaration: one shape serves three micro slots (distinguished by target), no more duplicated methods. */
 export interface UiActionSpec extends UiSpecBase {
-  target: 'conversation:header' | 'conversation:row' | 'timeline:entry'
+  target: UiActionTarget
   label: LocalizedText
   icon?: string
   order?: number
   /** conversation:header only: 'toolbar' renders direct buttons, 'menu' (default) folds into the dropdown. */
-  placement?: 'toolbar' | 'menu'
+  placement?: UiActionPlacement
   /** Plugin action delegated to the host for execution (mutually exclusive with client; missing both is rejected at the registration boundary). */
   actionId?: string
   actionPluginId?: string
@@ -292,7 +350,7 @@ export interface UiActionSpec extends UiSpecBase {
   /** timeline:entry only: entry kinds to take over (default matches all). */
   kinds?: string[]
   /** timeline:entry only: text message roles to take over. */
-  roles?: Array<'user' | 'assistant'>
+  roles?: UiActionRole[]
 }
 
 /** Injects content into a named sub-slot of another plugin. */

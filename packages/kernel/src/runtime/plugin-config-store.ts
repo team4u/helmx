@@ -17,16 +17,19 @@
 import {
   HelmxError,
   isJsonObject,
+  validatePluginConfigFieldValue,
   type PluginConfigFieldSchema,
 } from '@helmx/protocol'
 import type { PluginConfigStore } from '../plugins/plugin-host.js'
 import type { ConfigService } from '../services/config.js'
 import type { CredentialService } from '../services/credentials.js'
 
-const TYPE_OF: Record<PluginConfigFieldSchema['type'], 'string' | 'number' | 'boolean'> = {
-  string: 'string',
-  number: 'number',
-  boolean: 'boolean',
+function clonePlainBucket(bucket: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(bucket)) {
+    out[k] = Array.isArray(v) ? [...v] : v
+  }
+  return out
 }
 
 function invalid(pluginId: string, message: string): HelmxError {
@@ -73,7 +76,7 @@ export class HelmxPluginConfigStore implements PluginConfigStore {
         throw new HelmxError('config_corrupt', 'config.json field "plugins" has invalid structure (expected object)', 500)
       }
       for (const [id, value] of Object.entries(plugins)) {
-        if (isJsonObject(value)) this.mirror.plain.set(id, { ...value })
+        if (isJsonObject(value)) this.mirror.plain.set(id, clonePlainBucket(value))
       }
     }
     const pluginEnabled = cfg['pluginEnabled']
@@ -104,7 +107,8 @@ export class HelmxPluginConfigStore implements PluginConfigStore {
 
   /** Merged effective config: non-secret (`config.json`) + secrets (`credentials.json`, overriding same-named fields). */
   get(pluginId: string): Record<string, unknown> {
-    return { ...(this.mirror.plain.get(pluginId) ?? {}), ...(this.mirror.secrets.get(pluginId) ?? {}) }
+    const plain = this.mirror.plain.get(pluginId)
+    return { ...(plain !== undefined ? clonePlainBucket(plain) : {}), ...(this.mirror.secrets.get(pluginId) ?? {}) }
   }
 
   set(
@@ -127,7 +131,7 @@ export class HelmxPluginConfigStore implements PluginConfigStore {
     const existingPlain = this.mirror.plain.get(pluginId) ?? {}
     const existingSecrets = this.mirror.secrets.get(pluginId) ?? {}
     /** Final post-write state (required-field check evaluates merged final state). */
-    const nextPlain: Record<string, unknown> = { ...existingPlain }
+    const nextPlain: Record<string, unknown> = clonePlainBucket(existingPlain)
     const nextSecrets: Record<string, string> = { ...existingSecrets }
     /** Incremental plain-field mutations applied inside ConfigService's file lock. */
     const writePlain: Record<string, unknown> = {}
@@ -149,21 +153,16 @@ export class HelmxPluginConfigStore implements PluginConfigStore {
         }
         continue
       }
-      const expected = TYPE_OF[field.type]
+      const reason = validatePluginConfigFieldValue(field, fieldValue)
+      if (reason !== undefined) {
+        throw invalid(pluginId, `field '${key}' ${reason}`)
+      }
       if (field.secret === true) {
-        if (typeof fieldValue !== 'string') throw invalid(pluginId, `field '${key}' is secret and must be a string`)
-        nextSecrets[key] = fieldValue
-      } else if (typeof fieldValue !== expected) {
-        throw invalid(pluginId, `field '${key}' must be of type ${expected}`)
+        nextSecrets[key] = fieldValue as string
       } else {
-        if (typeof fieldValue === 'number') {
-          if (!Number.isFinite(fieldValue)) throw invalid(pluginId, `field '${key}' must be a finite number`)
-          if (field.integer === true && !Number.isInteger(fieldValue)) throw invalid(pluginId, `field '${key}' must be an integer`)
-          if (field.minimum !== undefined && fieldValue < field.minimum) throw invalid(pluginId, `field '${key}' must be >= ${field.minimum}`)
-          if (field.maximum !== undefined && fieldValue > field.maximum) throw invalid(pluginId, `field '${key}' must be <= ${field.maximum}`)
-        }
-        nextPlain[key] = fieldValue
-        writePlain[key] = fieldValue
+        const cloned = Array.isArray(fieldValue) ? [...(fieldValue as string[])] : fieldValue
+        nextPlain[key] = cloned
+        writePlain[key] = cloned
       }
     }
 
@@ -174,7 +173,9 @@ export class HelmxPluginConfigStore implements PluginConfigStore {
       const stored = field.secret === true ? nextSecrets[key] : nextPlain[key]
       const empty = field.secret === true
         ? typeof stored !== 'string' || stored.length === 0
-        : stored === undefined || stored === null || stored === ''
+        : field.type === 'string[]'
+          ? !Array.isArray(stored) || stored.length === 0
+          : stored === undefined || stored === null || stored === ''
       if (empty) throw invalid(pluginId, `missing required field '${key}'`)
     }
 
@@ -197,7 +198,7 @@ export class HelmxPluginConfigStore implements PluginConfigStore {
           committedPlain = undefined
         } else {
           merged[pluginId] = bucket
-          committedPlain = { ...bucket }
+          committedPlain = clonePlainBucket(bucket)
         }
         return { ...current, plugins: merged }
       })

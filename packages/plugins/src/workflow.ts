@@ -226,6 +226,13 @@ export function createWorkflowPlugin(): PluginDefinition {
           await workflows.init()
           projection.sync()
         },
+        async reconcile() {
+          // Recovery phase three (after harness.resume(), ordered topologically before peer reconcilers
+          // such as builtin:worktree via `reconcileAfter`): release deferred external reattaches and wait
+          // for prepared leftover native child conversations to settle to idle.
+          workflows.startDeferredReattaches()
+          await workflows.awaitPreparedChildrenSettled()
+        },
         async stop() {
           // Controlled stop: first set stopping to intercept runtime background callbacks, then await engine
           // suspend/close and flush durable private records. Public runs and run-badges are transient in-memory

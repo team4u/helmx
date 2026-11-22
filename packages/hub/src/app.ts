@@ -40,11 +40,10 @@ export async function createHelmx(options: HelmxOptions = {}) {
   });
   try {
     // Default-enabled (12): profile (locked), workflow, worktree, swarm, memory, json-render, mermaid, apps, triggers, magpie, token-speed, tiers.
+    // Post-startup recovery ordering (workflow child-session convergence before worktree crashed-lease
+    // reclamation) is enforced by PluginHost.reconcile() topological order via service.reconcileAfter,
+    // independent of plugin registration order here.
     await kernel.plugins.register(createProfilePlugin());
-    // Registration-order invariant: workflow MUST be registered before worktree. KernelRuntime.start() awaits
-    // runtime.started listeners in registration order: workflow first converges leftover child conversations to
-    // idle (awaitPreparedChildrenSettled), only then worktree reconciles crashed native leases (otherwise
-    // still-settling children would be misjudged as stopped and their leases wrongly reclaimed).
     await kernel.plugins.register(createWorkflowPlugin());
     await kernel.plugins.register(createWorktreePlugin());
     await kernel.plugins.register(createSwarmPlugin());

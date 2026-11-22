@@ -207,8 +207,14 @@ test('runtime.close() during streaming preserves continuity: GenerationTask retu
     definePlugin(ctx) {
       ctx.service({
         id: 'order-probe',
+        prepare() {
+          lifecycleOrder.push('plugin.prepare')
+        },
         start() {
           lifecycleOrder.push('plugin.start')
+        },
+        reconcile() {
+          lifecycleOrder.push('plugin.reconcile')
         },
         stop() {},
       })
@@ -219,7 +225,7 @@ test('runtime.close() during streaming preserves continuity: GenerationTask retu
   })
 
   await runtime1.start()
-  assert.deepEqual(lifecycleOrder, ['plugin.start', 'runtime.started'])
+  assert.deepEqual(lifecycleOrder, ['plugin.prepare', 'plugin.start', 'plugin.reconcile', 'runtime.started'])
   assert.equal(leakedToEvents.length, 0, 'runtime.started is an internal event (broadcast: false) and must not leak to external SSE')
 
   // Slow streaming generation: verify conversation enters working and emits partial tokens before graceful close.

@@ -137,3 +137,27 @@ export function enabledStatesInDependencyOrder(
     (s) => s.dependencies,
   );
 }
+
+/**
+ * Returns active enabled plugins in reconcile topological order:
+ * hard `dependencies` + active soft `service.reconcileAfter` edges (unregistered/disabled soft targets
+ * are ignored so optional peer ordering never creates hard enable/disable coupling), preserving
+ * registration order within each layer. Throws `plugin_dependency_cycle` if edges form a cycle.
+ */
+export function enabledStatesInReconcileOrder(
+  plugins: ReadonlyMap<string, PluginState>,
+): PluginState[] {
+  return topoSortByDependencies(
+    [...plugins.values()].filter((s) => isPluginStateActive(s)),
+    (s) => s.definition.id,
+    (s) => {
+      const edges = new Set<string>(s.dependencies);
+      for (const svc of s.services) {
+        if (svc.reconcileAfter !== undefined) {
+          for (const target of svc.reconcileAfter) edges.add(target);
+        }
+      }
+      return [...edges];
+    },
+  );
+}
