@@ -87,6 +87,14 @@ function optString(o: Record<string, unknown>, k: string): string | null {
   return o[k] === undefined || typeof o[k] === 'string' ? null : `field ${k} must be a string if present`;
 }
 
+function optNonNegativeInt(o: Record<string, unknown>, k: string): string | null {
+  const v = o[k];
+  if (v === undefined) return null;
+  return typeof v === 'number' && Number.isSafeInteger(v) && v >= 0
+    ? null
+    : `field ${k} must be a non-negative integer if present`;
+}
+
 type PayloadCheck = (v: unknown) => string | null;
 
 function checkConversationSummary(v: unknown): string | null {
@@ -106,6 +114,9 @@ function checkConversationSummary(v: unknown): string | null {
     (typeof v.unread === 'boolean' ? null : 'field unread must be a boolean') ??
     (typeof v.pinned === 'boolean' ? null : 'field pinned must be a boolean') ??
     reqNonNegativeInt(v, 'pendingAskCount') ??
+    optNonNegativeInt(v, 'runDurationMs') ??
+    optNonNegativeInt(v, 'runStartedAt') ??
+    optNonNegativeInt(v, 'pendingAskSince') ??
     reqNonNegativeInt(v, 'createdAt') ??
     reqNonNegativeInt(v, 'updatedAt')
   );

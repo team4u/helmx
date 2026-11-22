@@ -11,6 +11,7 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { waitFor } from '@helmx/test-kit'
 import type { ConversationSummary, PluginClientContext as PluginClientContextType, WorkbenchPanelProps } from '@helmx/protocol'
 import type { WorkflowNodeState, WorkflowRunSummary } from '../src/contracts.js'
 import {
@@ -1154,4 +1155,165 @@ test('SSR：WorkflowToolView 通过 presentationMeta 关联后台句柄与 run�
     conversationId: 1,
   })
   assert.ok(!noFallbackHtml.includes('Dispatched to background'), '删除 props.result JSON.parse 兜底后不得误认后台句柄')
+})
+
+test('WorkflowRunCard 时间观测：阶段耗时、日志相对偏移、settledAt 完成时间与并行算力 Tooltip 拆解', { timeout: 60_000 }, async () => {
+  mountSharedPluginNamespaces({ realHooks: true })
+  try {
+    const t0 = 1_700_000_000_000
+    const settledRun = run({
+      id: 'wf_time_obs',
+      name: '并行观测流水线',
+      kind: 'workflow',
+      status: 'completed',
+      parentToolCallId: 'call_time_obs',
+      createdAt: t0,
+      settledAt: t0 + 102_000,
+      updatedAt: t0 + 500_000,
+      phases: [
+        { title: '调研', detail: '并行收集' },
+        { title: '验收' },
+      ],
+      progress: [
+        { at: t0 + 5_000, kind: 'log', message: '拉起并行调研' },
+        { at: t0 + 102_000, kind: 'log', message: '调研汇总完毕' },
+      ],
+      nodes: [
+        node({
+          id: 'r1',
+          kind: 'action',
+          status: 'done',
+          label: '检索 A',
+          phaseTitle: '调研',
+          startedAt: t0,
+          settledAt: t0 + 60_000,
+          durationMs: 60_000,
+        }),
+        node({
+          id: 'r2',
+          kind: 'action',
+          status: 'done',
+          label: '检索 B',
+          phaseTitle: '调研',
+          startedAt: t0 + 2_000,
+          settledAt: t0 + 102_000,
+          durationMs: 100_000,
+        }),
+      ],
+    })
+    const h = createWorkflowHostHarness({
+      conversationId: 1,
+      locale: 'zh-CN',
+      runsByConversation: { 1: [settledRun] },
+    })
+    const wbMod = await importWorkflowClientModule('workbench.tsx', undefined, { realHooks: true, scope: 'time-obs' })
+    const Panel = wbMod['WorkflowWorkbenchPanel'] as (p: WorkbenchPanelProps) => React.ReactElement
+    const mounted = h.mountNode(
+      e(SDK.TooltipProvider, {
+        delayDuration: 0,
+        children: e(Panel, { conversation: summary(1, 'idle') }),
+      }),
+    )
+    try {
+      const cardText = mounted.container.textContent ?? ''
+      // 1) Run 耗时锚定 settledAt (102s = 1m42s)，不受 updatedAt (500s) 漂移
+      const runElapsed = mounted.container.querySelector('.workflow-run-elapsed')
+      assert.ok(runElapsed !== null, '工作流卡头应渲染独立耗时节点')
+      assert.equal(runElapsed.textContent, '1m42s')
+      // 2) kv-grid 展示「完成时间」行（run.settledAt 存在）
+      assert.ok(cardText.includes('完成时间'), 'kv-grid 应展示完成时间')
+      assert.ok(cardText.includes(SDK.formatCompactTimestamp(t0 + 102_000)))
+      // 3) 阶段头展示阶段耗时（1. 调研 (2/2) · 1m42s），空阶段不伪造耗时
+      const phaseHeaders = [...mounted.container.querySelectorAll('.workflow-phase-header')]
+      assert.equal(phaseHeaders.length, 2)
+      assert.ok(
+        phaseHeaders[0]!.textContent?.includes('1. 调研 (2/2)') &&
+          phaseHeaders[0]!.querySelector('.workflow-phase-elapsed')?.textContent?.includes('1m42s'),
+        `阶段头应展示阶段耗时，实际：${phaseHeaders[0]!.textContent}`,
+      )
+      assert.ok(phaseHeaders[1]!.querySelector('.workflow-phase-elapsed') === null, '无有效边界的空阶段不得伪造耗时')
+      // 4) 日志行前置 +MM:SS 相对偏移且 title 携带完整时刻
+      const offsets = [...mounted.container.querySelectorAll('.workflow-log-offset')]
+      assert.equal(offsets.length, 2)
+      assert.equal(offsets[0]!.textContent, '+00:05')
+      assert.equal(offsets[0]!.getAttribute('title'), SDK.formatCompactTimestamp(t0 + 5_000))
+      assert.equal(offsets[1]!.textContent, '+01:42')
+      assert.equal(offsets[1]!.getAttribute('title'), SDK.formatCompactTimestamp(t0 + 102_000))
+      // 5) Radix Tooltip 触发器挂载在耗时 span 上（未嵌套 button），悬浮展开拆解墙钟 vs 节点累计并行算力与起止时刻
+      assert.equal(runElapsed.hasAttribute('data-state'), true, '耗时应包裹在 Radix Tooltip Trigger 下')
+      await act(async () => {
+        runElapsed.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerType: 'mouse' }))
+      })
+      await waitFor(() => document.body.querySelector('.workflow-timing-tooltip') !== null)
+      const tooltipEl = document.body.querySelector('.workflow-timing-tooltip')
+      assert.ok(tooltipEl !== null, '悬浮耗时应展开 Radix Tooltip')
+      const tipText = tooltipEl.textContent ?? ''
+      assert.ok(tipText.includes('端到端总耗时：1m42s'), `Tooltip 应展示端到端总耗时，实际：${tipText}`)
+      assert.ok(tipText.includes('节点累计 2m40s（含并行）'), `Tooltip 应展示多节点并行累计算力，实际：${tipText}`)
+      assert.ok(tipText.includes(`开始：${SDK.formatCompactTimestamp(t0)}`), 'Tooltip 应展示开始时刻')
+      assert.ok(tipText.includes(`结束：${SDK.formatCompactTimestamp(t0 + 102_000)}`), 'Tooltip 应展示结束时刻')
+    } finally {
+      mounted.unmount()
+    }
+
+    // 时间线追踪行 WorkflowToolView 同样包裹 Radix Tooltip 拆解墙钟与并行算力
+    const tvMod = await importWorkflowClientModule('tool-views.tsx', undefined, { realHooks: true, scope: 'time-obs-tv' })
+    const WorkflowToolViewComp = tvMod['WorkflowToolView'] as (p: Record<string, unknown>) => React.ReactElement
+    const tvMount = h.mountNode(
+      e(SDK.TooltipProvider, {
+        delayDuration: 0,
+        children: e(WorkflowToolViewComp, {
+          callId: 'call_time_obs',
+          toolName: 'SubagentWorkflow',
+          status: 'done',
+          conversationId: 1,
+        }),
+      }),
+    )
+    try {
+      const traceDuration = tvMount.container.querySelector('.trace-duration')
+      assert.ok(traceDuration !== null, 'WorkflowToolView 应渲染耗时')
+      assert.equal(traceDuration.textContent, '1m42s')
+      await act(async () => {
+        traceDuration.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerType: 'mouse' }))
+      })
+      await waitFor(() => document.body.querySelector('.workflow-timing-tooltip') !== null)
+      const tvTipText = document.body.querySelector('.workflow-timing-tooltip')?.textContent ?? ''
+      assert.ok(tvTipText.includes('端到端总耗时：1m42s'), `WorkflowToolView Tooltip 应展示墙钟耗时，实际：${tvTipText}`)
+      assert.ok(tvTipText.includes('节点累计 2m40s（含并行）'), `WorkflowToolView Tooltip 应展示多节点累计耗时，实际：${tvTipText}`)
+    } finally {
+      tvMount.unmount()
+    }
+
+    // 运行中阶段与 Run 头随校准时钟以整秒秒表（formatStopwatchMs）跳动
+    const liveRun = run({
+      id: 'wf_time_live',
+      name: '运行中流水线',
+      kind: 'workflow',
+      status: 'running',
+      createdAt: t0,
+      updatedAt: t0 + 1_000,
+      phases: [{ title: '构建' }],
+      nodes: [
+        node({ id: 'b1', kind: 'action', status: 'running', label: '编译', phaseTitle: '构建', startedAt: t0 + 4_000 }),
+      ],
+    })
+    const liveH = createWorkflowHostHarness({
+      conversationId: 1,
+      runsByConversation: { 1: [liveRun] },
+    })
+    liveH.port.getServerNow = () => t0 + 69_700
+    const liveMount = liveH.mountNode(e(Panel, { conversation: summary(1, 'working') }))
+    try {
+      assert.equal(liveMount.container.querySelector('.workflow-run-elapsed')?.textContent, '1m09s')
+      assert.ok(
+        liveMount.container.querySelector('.workflow-phase-elapsed')?.textContent?.includes('1m05s'),
+        '运行中阶段耗时应随校准时钟按整秒秒表展示',
+      )
+    } finally {
+      liveMount.unmount()
+    }
+  } finally {
+    mountSharedPluginNamespaces({ realHooks: false })
+  }
 })

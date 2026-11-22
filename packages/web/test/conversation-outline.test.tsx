@@ -540,4 +540,80 @@ describe("conversation-outline", () => {
     assert.ok(host.querySelector('.conversation-outline-mode') === null)
     assert.equal(labels().length, 5)
   })
+
+  test('ConversationPane 顶栏浮层展示创建时间/累计运行/已结算轮次/实时计时，大纲顶栏与助手行展示单轮与累计耗时', { timeout: 60_000 }, async () => {
+    const createdAt = new Date(2026, 10, 10, 14, 0, 0).getTime()
+    const now = Date.now()
+    const conv: ConversationSummary = {
+      ...makeConv(20),
+      status: 'working',
+      runDurationMs: 65_000,
+      runStartedAt: now - 10_400,
+      completionSeq: 2,
+      createdAt,
+      updatedAt: now,
+    }
+    const entries: ConversationEntry[] = [
+      { id: '1', kind: 'helmx.input', data: { id: 'q1', text: '第一轮问题', origin: 'human' }, createdAt },
+      {
+        id: '2',
+        kind: 'pi.assistant',
+        model: [
+          {
+            role: 'assistant',
+            timestamp: createdAt + 1000,
+            durationMs: 4200,
+            content: [{ type: 'text', text: '第一轮纯正文回答。' }],
+          },
+        ],
+      },
+      { id: '3', kind: 'helmx.input', data: { id: 'q2', text: '第二轮问题', origin: 'human' }, createdAt: createdAt + 10_000 },
+    ]
+    const store = makeTestStore({
+      locale: 'zh-CN',
+      conversations: [conv],
+      conversationDetails: { 20: { ...conv, entries } },
+    })
+
+    host = document.createElement('div')
+    document.body.appendChild(host)
+    await act(async () => {
+      root = createRoot(host!)
+      root.render(e(HostStoreProviders, { value: store }, e(ConversationPane, { conversationId: 20 })))
+    })
+
+    // 1. 打开顶栏标题信息浮层，校验时间观测字段
+    const titleBtn = host.querySelector<HTMLButtonElement>('.pane-title-btn')
+    assert.ok(titleBtn !== null)
+    await act(async () => {
+      titleBtn.click()
+    })
+    const metaGrid = document.querySelector<HTMLElement>('.pane-title-popover-meta')
+    assert.ok(metaGrid !== null, 'title metadata popover opens')
+    assert.match(metaGrid.textContent ?? '', /创建时间/)
+    assert.match(metaGrid.textContent ?? '', /2026-11-10 14:00:00/)
+    assert.match(metaGrid.textContent ?? '', /累计运行/)
+    assert.match(metaGrid.textContent ?? '', /1m15s/)
+    assert.match(metaGrid.textContent ?? '', /当前运行/)
+    assert.match(metaGrid.textContent ?? '', /10s/)
+    assert.match(metaGrid.textContent ?? '', /已结算轮次/)
+    assert.match(metaGrid.textContent ?? '', /2/)
+
+    // 关闭标题浮层并打开大纲浮层
+    await act(async () => {
+      titleBtn.click()
+    })
+    const outlineBtn = host.querySelector<HTMLButtonElement>('.conversation-outline-trigger')
+    assert.ok(outlineBtn !== null)
+    await act(async () => {
+      outlineBtn.click()
+    })
+    const summaryEl = document.querySelector<HTMLElement>('.conversation-outline-summary')
+    assert.ok(summaryEl !== null, 'outline header renders cumulative summary when totalRunMs > 0')
+    assert.match(summaryEl.textContent ?? '', /共 2 轮 · 累计 1m15s/)
+
+    const assistantDuration = document.querySelector<HTMLElement>('.conversation-outline-assistant .conversation-outline-duration')
+    assert.ok(assistantDuration !== null, 'settled assistant outline row renders turn duration')
+    assert.equal(assistantDuration.textContent, '4.2s')
+  })
 })

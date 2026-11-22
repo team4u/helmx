@@ -504,6 +504,7 @@ export class RuntimeAgentSpawn {
           pinned: false,
           stateChangeSeq: 1,
           completionSeq: 0,
+          runDurationMs: 0,
           createdAt: now,
           updatedAt: now,
         })

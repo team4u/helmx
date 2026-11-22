@@ -7,7 +7,14 @@
  */
 import { Fragment, useState } from 'react'
 import type { ReactNode } from 'react'
-import { StatusLight, formatDurationMs, resolveLocalizedText, usePluginContext, usePluginLocale } from '@helmx/plugin-client'
+import {
+  StatusLight,
+  formatDurationMs,
+  formatStopwatchMs,
+  resolveLocalizedText,
+  usePluginContext,
+  usePluginLocale,
+} from '@helmx/plugin-client'
 import { useElapsedNowMs } from './hooks.ts'
 import { Icon } from './WorkflowIcon.tsx'
 import { executionLightStatus } from './model-execution-status.ts'
@@ -37,7 +44,14 @@ export function ExecutionChildrenRows({ nodes }: { nodes: ExecutionNode[] }): Re
   const needsTick = nodes.some(
     (node) =>
       node.runNode?.status === 'running' ||
-      (node.runNode === undefined && node.run?.status === 'running'),
+      (node.runNode === undefined && node.run?.status === 'running') ||
+      (node.runNode === undefined &&
+        node.run === undefined &&
+        node.summary !== undefined &&
+        (node.summary.status === 'working' ||
+          node.summary.status === 'blocked' ||
+          (node.summary.pendingAskCount ?? 0) > 0) &&
+        (node.summary.runStartedAt !== undefined || node.summary.pendingAskSince !== undefined)),
   )
   const nowMs = useElapsedNowMs(needsTick)
   if (nodes.length === 0) return null
@@ -69,6 +83,15 @@ export function ExecutionChildrenRows({ nodes }: { nodes: ExecutionNode[] }): Re
         // freezes at the persisted duration; omitted honestly without a
         // current-turn boundary).
         const elapsedMs = resolveExecutionNodeElapsedMs(node, nowMs)
+        const isLiveElapsed =
+          node.runNode !== undefined
+            ? node.runNode.status === 'running'
+            : node.run !== undefined
+              ? node.run.status === 'running'
+              : node.summary !== undefined &&
+                (node.summary.status === 'working' ||
+                  node.summary.status === 'blocked' ||
+                  (node.summary.pendingAskCount ?? 0) > 0)
         return (
           <Fragment key={node.key}>
             <div
@@ -134,7 +157,9 @@ export function ExecutionChildrenRows({ nodes }: { nodes: ExecutionNode[] }): Re
               ) : null}
               <span className="execution-child-right">
                 {elapsedMs !== undefined ? (
-                  <span className="execution-child-elapsed tabular-nums">{formatDurationMs(elapsedMs)}</span>
+                  <span className="execution-child-elapsed tabular-nums">
+                    {isLiveElapsed ? formatStopwatchMs(elapsedMs) : formatDurationMs(elapsedMs)}
+                  </span>
                 ) : null}
                 {descendantApprovals > 0 ? (
                   <span className="badge badge-warn">{execApprovalBadge(descendantApprovals, locale)}</span>

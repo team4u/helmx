@@ -245,6 +245,12 @@
   text-overflow: ellipsis;
 }
 
+.helmx-tooltip-content.helmx-tooltip-multiline {
+  white-space: pre-line;
+  overflow: visible;
+  text-overflow: clip;
+}
+
 .helmx-tooltip-arrow {
   fill: var(--bg-elevated);
   stroke: var(--border-strong);

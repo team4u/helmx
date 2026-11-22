@@ -336,3 +336,145 @@ test('ConversationTimeline：含工具调用的多段回合，复制按钮只复
     }
   }
 })
+
+test('ConversationTimeline：运行中/阻塞回合与首 token 前等待行显示校准秒表，工具行使用共享整秒秒表，缺起点不编造', { timeout: 60_000 }, async () => {
+  const { observeServerEpoch, resetServerClock } = await import('../src/lib/server-clock.js')
+  const now = Date.now()
+  // 模拟服务端比本机慢 5s，校准后 serverNow() ≈ now - 5000
+  resetServerClock()
+  observeServerEpoch(now - 5_000)
+
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = createRoot(host)
+  try {
+    // 1. 首 token 前等待行（working + 无 live 回合）：带 runStartedAt 显示「生成中 · 12s」
+    const waitingConv: ConversationSummary = {
+      id: 1,
+      title: '首 token 等待',
+      profileId: 'default',
+      tags: [],
+      cwd: '/workspace',
+      model: '',
+      thinkingLevel: '',
+      status: 'working',
+      stateChangeSeq: 1,
+      completionSeq: 0,
+      unread: false,
+      pinned: false,
+      pendingAskCount: 0,
+      runStartedAt: now - 5_000 - 12_400,
+      createdAt: 100,
+      updatedAt: 200,
+    }
+    await act(async () => {
+      root.render(
+        e(
+          HostStoreProviders,
+          { value: makeMockStore({ conversations: [waitingConv], locale: 'zh-CN' }) },
+          e(ConversationTimeline, {
+            conversation: waitingConv,
+            detailEntries: [{ id: '1', kind: 'helmx.input', data: { text: '开始', origin: 'human' } }],
+            onRequestEdit: () => {},
+          }),
+        ),
+      )
+    })
+    const waitingEl = host.querySelector<HTMLElement>('.msg-live-waiting')
+    assert.ok(waitingEl !== null)
+    assert.match(waitingEl.textContent ?? '', /生成中 · 12s/)
+
+    // 2. 运行中回合（turn.live）+ 运行中工具（RunningElapsed 共享整秒秒表，无 .0s 抖动）
+    const toolStartedAt = now - 5_000 - 7_800
+    const liveEntries: ConversationEntry[] = [
+      { id: '1', kind: 'helmx.input', data: { text: '执行命令', origin: 'human' } },
+      {
+        id: '2',
+        kind: 'pi.assistant',
+        model: [
+          {
+            role: 'assistant',
+            timestamp: toolStartedAt - 2_000,
+            durationMs: 2_000,
+            content: [{ type: 'toolCall', id: 'call_run', name: 'bash', arguments: { command: 'sleep 10' } }],
+          },
+        ],
+      },
+    ]
+    await act(async () => {
+      root.render(
+        e(
+          HostStoreProviders,
+          { value: makeMockStore({ conversations: [waitingConv], locale: 'zh-CN' }) },
+          e(ConversationTimeline, {
+            conversation: waitingConv,
+            detailEntries: liveEntries,
+            live: {
+              conversationId: 1,
+              text: '正在处理',
+              tools: [{ callId: 'call_run', toolName: 'bash', status: 'running' }],
+              updatedAt: now - 5_000,
+            },
+            onRequestEdit: () => {},
+          }),
+        ),
+      )
+    })
+    const liveIndicator = host.querySelector<HTMLElement>('.msg-live-indicator')
+    assert.ok(liveIndicator !== null)
+    assert.match(liveIndicator.textContent ?? '', /生成中 · 12s/)
+    const toolRight = host.querySelector<HTMLElement>('.trace-row-right')
+    assert.ok(toolRight !== null)
+    assert.match(toolRight.textContent ?? '', /\b7s\b/, 'RunningElapsed uses whole-second formatStopwatchMs without .0s')
+    assert.doesNotMatch(toolRight.textContent ?? '', /7\.\ds/)
+
+    // 3. blocked 审批等待回合：warn 语义 + 「等待审批 · 15s」
+    const blockedConv: ConversationSummary = {
+      ...waitingConv,
+      status: 'blocked',
+      pendingAskCount: 1,
+      pendingAskSince: now - 5_000 - 15_400,
+    }
+    await act(async () => {
+      root.render(
+        e(
+          HostStoreProviders,
+          { value: makeMockStore({ conversations: [blockedConv], locale: 'zh-CN' }) },
+          e(ConversationTimeline, {
+            conversation: blockedConv,
+            detailEntries: liveEntries,
+            onRequestEdit: () => {},
+          }),
+        ),
+      )
+    })
+    const blockedIndicator = host.querySelector<HTMLElement>('.msg-live-indicator-warn')
+    assert.ok(blockedIndicator !== null, 'blocked turn renders warn live indicator')
+    assert.match(blockedIndicator.textContent ?? '', /等待审批 · 15s/)
+
+    // 4. 缺起点时不编造秒表
+    const unanchoredConv: ConversationSummary = {
+      ...waitingConv,
+      runStartedAt: undefined,
+    }
+    await act(async () => {
+      root.render(
+        e(
+          HostStoreProviders,
+          { value: makeMockStore({ conversations: [unanchoredConv], locale: 'zh-CN' }) },
+          e(ConversationTimeline, {
+            conversation: unanchoredConv,
+            detailEntries: liveEntries,
+            live: { conversationId: 1, text: '无起点', tools: [], updatedAt: now - 5_000 },
+            onRequestEdit: () => {},
+          }),
+        ),
+      )
+    })
+    assert.ok(host.querySelector('.msg-live-elapsed') === null, 'missing runStartedAt must not fabricate 0s')
+  } finally {
+    resetServerClock()
+    act(() => root.unmount())
+    host.remove()
+  }
+})

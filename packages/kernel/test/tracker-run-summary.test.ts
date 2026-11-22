@@ -289,6 +289,12 @@ describe('emitRunSummary: real-time summary on run start and doing semantic chan
         )
         const idleAfterAbort = recorded2.frames.filter((f) => f.status === 'idle')
         assert.equal(idleAfterAbort.length, 1, `aborted terminal state must be emitted once: ${JSON.stringify(recorded2.frames)}`)
+        const afterAbortSummary = kernel.getConversation(1)
+        assert.equal(afterAbortSummary.runStartedAt, undefined, 'aborted conversation must clear runStartedAt')
+        assert.ok(
+          typeof afterAbortSummary.runDurationMs === 'number' && afterAbortSummary.runDurationMs >= 0,
+          `aborted conversation must carry non-negative runDurationMs, got ${String(afterAbortSummary.runDurationMs)}`,
+        )
       } finally {
         recorded2.stop()
       }
@@ -337,6 +343,110 @@ describe('emitRunSummary: real-time summary on run start and doing semantic chan
         await kernel.waitForIdle(1).catch(() => {})
       } finally {
         recorded.stop()
+      }
+    } finally {
+      await kernel.close()
+    }
+  })
+
+  it('pendingAskSince tracks earliest pending AskDoc, advances when earliest settles, and clears when all settle', { timeout: 60_000 }, async () => {
+    const kernel = await openRuntime('pending-ask-since')
+    try {
+      const upserts: ConversationSummary[] = []
+      const stop = kernel.events.subscribe((frame: HelmxEventFrame) => {
+        if (frame.event.type !== 'conversation.upsert') return
+        const conv = (frame.event as { conversation?: ConversationSummary }).conversation
+        if (conv?.id === 1) upserts.push(conv)
+      })
+      try {
+        assert.equal(kernel.getConversation(1).pendingAskSince, undefined)
+
+        const ask1P = kernel.createAsk({
+          id: 'ask-first',
+          conversationId: 1,
+          title: 'first approval',
+          fields: [{ name: 'confirm', label: 'confirm', type: 'confirm' }],
+        })
+        void ask1P.catch(() => {})
+        await waitFor(() => kernel.getConversation(1).pendingAskCount === 1)
+        const ask1 = kernel.listAsks('pending').find((a) => a.id === 'ask-first')!
+        assert.equal(kernel.getConversation(1).status, 'blocked')
+        assert.equal(kernel.getConversation(1).pendingAskSince, ask1.createdAt)
+
+        // Ensure second ask has a strictly later createdAt timestamp.
+        await new Promise((r) => setTimeout(r, 15))
+        const ask2P = kernel.createAsk({
+          id: 'ask-second',
+          conversationId: 1,
+          title: 'second approval',
+          fields: [{ name: 'confirm', label: 'confirm', type: 'confirm' }],
+        })
+        void ask2P.catch(() => {})
+        await waitFor(() => kernel.getConversation(1).pendingAskCount === 2)
+        const ask2 = kernel.listAsks('pending').find((a) => a.id === 'ask-second')!
+        assert.ok(ask2.createdAt > ask1.createdAt)
+        assert.equal(
+          kernel.getConversation(1).pendingAskSince,
+          ask1.createdAt,
+          'pendingAskSince must keep earliest pending ask timestamp when newer asks arrive',
+        )
+
+        // Settling the earliest ask must advance pendingAskSince to ask2.createdAt and push an upsert.
+        await kernel.answerAsk('ask-first', { confirm: 'true' })
+        await waitFor(() => kernel.getConversation(1).pendingAskCount === 1)
+        assert.equal(kernel.getConversation(1).pendingAskSince, ask2.createdAt)
+        assert.ok(
+          upserts.some((u) => u.pendingAskCount === 1 && u.pendingAskSince === ask2.createdAt),
+          'conversation.upsert must carry updated pendingAskSince when earliest ask settles',
+        )
+
+        // Settling the last pending ask clears pendingAskSince.
+        await kernel.answerAsk('ask-second', { confirm: 'true' })
+        await waitFor(() => kernel.getConversation(1).pendingAskCount === 0)
+        assert.equal(kernel.getConversation(1).pendingAskSince, undefined)
+        const finalUpsert = upserts[upserts.length - 1]!
+        assert.equal(finalUpsert.pendingAskCount, 0)
+        assert.equal(finalUpsert.pendingAskSince, undefined)
+
+        // Concurrent settle + create: even when pendingAskCount stays 1 across an interleaved flush window,
+        // pendingAskSince must advance to the newly created ask and emit a conversation.upsert.
+        const ask3P = kernel.createAsk({
+          id: 'ask-swap-old',
+          conversationId: 1,
+          title: 'old approval',
+          fields: [{ name: 'confirm', label: 'confirm', type: 'confirm' }],
+        })
+        void ask3P.catch(() => {})
+        await waitFor(() => kernel.getConversation(1).pendingAskCount === 1)
+        const askOld = kernel.listAsks('pending').find((a) => a.id === 'ask-swap-old')!
+        assert.equal(kernel.getConversation(1).pendingAskSince, askOld.createdAt)
+        const upsertsBeforeSwap = upserts.length
+        const seqBeforeSwap = kernel.getConversation(1).stateChangeSeq
+
+        await new Promise((r) => setTimeout(r, 15))
+        // Fire answerAsk(old) and createAsk(new) concurrently in the same tick.
+        const askNewP = kernel.createAsk({
+          id: 'ask-swap-new',
+          conversationId: 1,
+          title: 'new approval',
+          fields: [{ name: 'confirm', label: 'confirm', type: 'confirm' }],
+        })
+        void askNewP.catch(() => {})
+        await kernel.answerAsk('ask-swap-old', { confirm: 'true' })
+        await waitFor(() => kernel.listAsks('pending').some((a) => a.id === 'ask-swap-new'))
+        const askNew = kernel.listAsks('pending').find((a) => a.id === 'ask-swap-new')!
+        assert.ok(askNew.createdAt > askOld.createdAt)
+        await waitFor(() =>
+          upserts.slice(upsertsBeforeSwap).some((u) => u.pendingAskCount === 1 && u.pendingAskSince === askNew.createdAt),
+        )
+        assert.equal(kernel.getConversation(1).pendingAskCount, 1)
+        assert.equal(kernel.getConversation(1).pendingAskSince, askNew.createdAt)
+        assert.ok(kernel.getConversation(1).stateChangeSeq > seqBeforeSwap)
+
+        await kernel.answerAsk('ask-swap-new', { confirm: 'true' })
+        await waitFor(() => kernel.getConversation(1).pendingAskCount === 0)
+      } finally {
+        stop()
       }
     } finally {
       await kernel.close()

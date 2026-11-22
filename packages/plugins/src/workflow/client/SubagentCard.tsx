@@ -7,7 +7,15 @@ import { useMemo } from 'react'
 import type { ReactNode, RefObject } from 'react'
 import type { ToolViewProps } from '@helmx/protocol'
 import type { WorkflowRunSummary } from '../../contracts.js'
-import { ToolCallDetails, useConversation, usePluginContext, usePluginLocale, formatDurationMs, resolveLocalizedText } from '@helmx/plugin-client'
+import {
+  ToolCallDetails,
+  useConversation,
+  usePluginContext,
+  usePluginLocale,
+  formatDurationMs,
+  formatStopwatchMs,
+  resolveLocalizedText,
+} from '@helmx/plugin-client'
 import { ExecutionCard } from './ExecutionCard.tsx'
 import { ExecutionChildrenRows } from './ExecutionChildrenRows.tsx'
 import { Icon } from './WorkflowIcon.tsx'
@@ -174,19 +182,21 @@ export function SubagentLiveCard(props: {
   const effectiveStatus: ExecutionNodeStatus =
     descendants.total > 0 ? aggregateExecutionStatuses([selfBadge.status, descendants.status]) : selfBadge.status
 
-  const elapsedActive =
-    selfBadge.status === 'working' || selfBadge.status === 'blocked' ||
-    descendants.running > 0 || descendants.blocked > 0
-  const nowMs = useElapsedNowMs(elapsedActive)
+  const selfActive = selfBadge.status === 'working' || selfBadge.status === 'blocked'
+  const nowMs = useElapsedNowMs(selfActive)
   const fallbackStartedAt = startedAt ?? latestTurnStartedAt(detail?.entries)
   const elapsedMs = resolveSubagentElapsedMs({
     ...(backgroundRun !== undefined ? { backgroundRun } : {}),
+    ...(summary !== undefined ? { summary } : {}),
     ...(toolSummary !== undefined ? { toolSummary } : {}),
     ...(fallbackStartedAt !== undefined ? { startedAt: fallbackStartedAt } : {}),
     nowMs,
-    status: elapsedActive ? 'working' : effectiveStatus,
+    status: selfActive ? selfBadge.status : effectiveStatus,
   })
-  const elapsedText = elapsedMs !== undefined ? formatDurationMs(elapsedMs) : undefined
+  const elapsedText =
+    elapsedMs !== undefined
+      ? (selfActive ? formatStopwatchMs(elapsedMs) : formatDurationMs(elapsedMs))
+      : undefined
 
   const wt = worktree ?? backgroundRun?.nodes?.find((n) => n.worktree !== undefined)?.worktree
   const inspectNodeId =

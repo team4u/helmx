@@ -307,6 +307,7 @@ export async function ensureInitialConversation(deps: {
       pinned: false,
       stateChangeSeq: 1,
       completionSeq: 0,
+      runDurationMs: 0,
       createdAt: Date.now(),
       updatedAt: Date.now(),
     })
@@ -348,6 +349,7 @@ export async function recoverExistingConversations(deps: {
       pinned: false,
       stateChangeSeq: 1,
       completionSeq: 0,
+      runDurationMs: 0,
       createdAt: now,
       updatedAt: now,
     })

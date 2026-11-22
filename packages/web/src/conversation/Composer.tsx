@@ -3,7 +3,7 @@ import type { ComposerScopeProps, ConversationSummary } from '@helmx/protocol/br
 import { COMPOSER_DOCK_SLOT, COMPOSER_STATUS_SLOT, resolveLocalizedText } from '@helmx/protocol/browser'
 import { conversationsApi } from '../lib/api.js'
 import { buildSlashMenuItems, pluginSlashCommandsFor } from '../lib/commands-model.js'
-import { HelmxIcon, PluginSlot, Popover, PopoverContent, PopoverTrigger, Tooltip } from '@helmx/plugin-client'
+import { HelmxIcon, PluginSlot, Popover, PopoverContent, PopoverTrigger, Tooltip, useSharedNowMs } from '@helmx/plugin-client'
 import { matchesUiScope } from '../lib/types.js'
 import {
   useConversationDetail,
@@ -44,6 +44,10 @@ import {
 } from './keybindings-model.js'
 import { lastEditableHumanInput } from './timeline-model.js'
 import { contextUsageLabel } from './context-usage-model.js'
+import {
+  conversationDurationLabel,
+  conversationDurationNeedsLiveClock,
+} from './conversation-duration-model.js'
 import { formatBytes } from '../lib/format.js'
 
 export interface ComposerProps {
@@ -75,6 +79,28 @@ function ContextUsageStatus({ conversation }: { conversation: ConversationSummar
     >
       {label !== null ? <span className="mono tabular-nums">{label.text}</span> : null}
     </span>
+  )
+}
+
+function ConversationDurationStatus({ conversation }: { conversation: ConversationSummary }) {
+  const { t } = useWebLocale()
+  const liveActive = conversationDurationNeedsLiveClock(conversation)
+  const nowMs = useSharedNowMs(liveActive)
+  const label = conversationDurationLabel(conversation, nowMs, t)
+  if (label === null) return null
+  const statusEl = (
+    <span
+      className={`composer-duration-status${label.tone === 'warn' ? ' composer-duration-status-warn' : ''}`}
+      title={label.tooltip || undefined}
+    >
+      <span className="mono tabular-nums">{label.text}</span>
+    </span>
+  )
+  if (label.tooltip === '') return statusEl
+  return (
+    <Tooltip content={label.tooltip} side="top" className="helmx-tooltip-multiline">
+      {statusEl}
+    </Tooltip>
   )
 }
 
@@ -541,6 +567,7 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
             clip or crowd controls; collapses to zero height when empty. */}
         <div className="composer-status-row">
           <ContextUsageStatus conversation={conversation} />
+          <ConversationDurationStatus conversation={conversation} />
           <PluginSlot
             ownerPluginId="builtin:composer"
             name={COMPOSER_STATUS_SLOT}

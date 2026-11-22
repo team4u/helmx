@@ -14,7 +14,7 @@ import {
   type BoardBadgesDoc,
   type BoardPost,
   type CollabGroupRecord,
-  type MemberLiveState,
+  type MemberLiveSnapshot,
   type SwarmCoordinator,
   type SwarmWorkerPointer,
 } from './contracts.js'
@@ -27,7 +27,7 @@ export interface ProjectionPorts {
   readonly getAllGroups: () => CollabGroupRecord[]
   /** 未懒加载 board.jsonl 的组返回 undefined（不写空黑板假投影）。 */
   readonly getPosts: (groupId: string) => readonly BoardPost[] | undefined
-  readonly resolveMemberLive: (conversationId: number) => { liveState: MemberLiveState; model?: string }
+  readonly resolveMemberLive: (conversationId: number) => MemberLiveSnapshot
 }
 
 /** 索引 / 看板 / 角标投影能力（由 group-store 组合根装配后使用）。 */

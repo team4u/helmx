@@ -41,6 +41,8 @@ CREATE TABLE IF NOT EXISTS helmx_conversations (
   pinned INTEGER NOT NULL DEFAULT 0,
   state_change_seq INTEGER NOT NULL DEFAULT 1,
   completion_seq INTEGER NOT NULL DEFAULT 0,
+  run_duration_ms INTEGER NOT NULL DEFAULT 0,
+  run_started_at INTEGER,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );

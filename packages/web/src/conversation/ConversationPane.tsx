@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { conversationsApi } from '../lib/api.js'
-import type { ConversationAttachmentRef, ConversationEntry } from '@helmx/protocol/browser'
+import type { ConversationAttachmentRef, ConversationEntry, ConversationSummary } from '@helmx/protocol/browser'
 import {
   ConfirmDialog,
   DropdownMenu,
@@ -14,6 +14,7 @@ import {
   PopoverContent,
   PopoverTrigger,
   Tooltip,
+  useSharedNowMs,
 } from '@helmx/plugin-client'
 import { isConversationArchived } from '../conversation/archive-model.js'
 import {
@@ -49,8 +50,64 @@ import { useWorkbenchTabs } from './workbench-hooks.js'
 import { matchConversationActions, splitConversationHeaderActions } from './action-model.js'
 import { PluginMicroAction } from '../ui/PluginMicroAction.js'
 import { buildTimelineItems, type EditRequestTarget } from './timeline-model.js'
+import { conversationDurationNeedsLiveClock } from './conversation-duration-model.js'
+import {
+  formatDurationMs,
+  formatFullTimestamp,
+  formatStopwatchMs,
+  resolveConversationTiming,
+} from '../lib/format.js'
 
 const EMPTY_ENTRIES: ReadonlyArray<ConversationEntry> = []
+
+/** 顶栏标题浮层内的时间与耗时明细：仅在 Popover 打开并挂载时订阅共享时钟，关闭即零定时器。 */
+function ConversationTitleTimingMeta({ conversation }: { conversation: ConversationSummary }) {
+  const { t } = useWebLocale()
+  const liveActive = conversationDurationNeedsLiveClock(conversation)
+  const nowMs = useSharedNowMs(liveActive)
+  const timing = resolveConversationTiming(conversation, nowMs)
+  const createdText = formatFullTimestamp(conversation.createdAt)
+  return (
+    <>
+      {createdText !== '' ? (
+        <>
+          <span className="kv-key">{t('conv.pane.metaCreatedAt')}</span>
+          <span className="kv-val mono tabular-nums">{createdText}</span>
+        </>
+      ) : null}
+      {timing.totalRunMs !== undefined && timing.totalRunMs > 0 ? (
+        <>
+          <span className="kv-key">{t('conv.pane.metaTotalRun')}</span>
+          <span className="kv-val mono tabular-nums">
+            {timing.currentRunMs !== undefined
+              ? formatStopwatchMs(timing.totalRunMs)
+              : formatDurationMs(timing.totalRunMs)}
+          </span>
+        </>
+      ) : null}
+      {timing.currentRunMs !== undefined ? (
+        <>
+          <span className="kv-key">{t('conv.pane.metaCurrentRun')}</span>
+          <span className="kv-val mono tabular-nums">{formatStopwatchMs(timing.currentRunMs)}</span>
+        </>
+      ) : null}
+      {timing.waitingMs !== undefined ? (
+        <>
+          <span className="kv-key">{t('conv.pane.metaWaitingApproval')}</span>
+          <span className="kv-val mono tabular-nums pane-title-meta-warn">
+            {formatStopwatchMs(timing.waitingMs)}
+          </span>
+        </>
+      ) : null}
+      {conversation.completionSeq > 0 ? (
+        <>
+          <span className="kv-key">{t('conv.pane.metaSettledTurns')}</span>
+          <span className="kv-val mono tabular-nums">{conversation.completionSeq}</span>
+        </>
+      ) : null}
+    </>
+  )
+}
 
 export interface ConversationPaneProps {
   conversationId: number
@@ -364,6 +421,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
                       <span className="kv-val mono">{conversation.model}</span>
                     </>
                   ) : null}
+                  <ConversationTitleTimingMeta conversation={conversation} />
                 </div>
               </PopoverContent>
             </Popover>
@@ -377,6 +435,9 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
           <ConversationOutlinePopover
             nodes={outlineNodes}
             activeEntryId={activeOutlineEntryId}
+            totalRunMs={conversation.runDurationMs}
+            liveTiming={conversation}
+            summaryTurnCount={conversation.completionSeq > 0 ? conversation.completionSeq : undefined}
             hasEarlierHistory={Boolean(detail?.nextCursor)}
             loadingEarlierHistory={loadingOlderOutline}
             onLoadEarlierHistory={loadEarlierForOutline}

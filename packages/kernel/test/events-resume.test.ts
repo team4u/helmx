@@ -120,22 +120,40 @@ function publishNotes(hub: EventHub, count: number, opts?: { bodyLength?: number
 describe('EventHub resume: same-process catch-up', { timeout: 60_000 }, () => {
   it('zero-event resume: afterSeq == headSeq starts with resumed frame, followed by normal live frames', { timeout: 60_000 }, async () => {
     const { hub } = makeHub({ bootId: 'b1' })
+    const beforeSnap = Date.now()
     const first = connect(hub, 'http://x/api/events')
     await waitFor(() => first.frames.length >= 1)
+    const afterSnap = Date.now()
     const snap = first.frames[0]?.data as HelmxSnapshot
     assert.equal(snap.bootId, 'b1')
     assert.equal(snap.seq, 0)
+    assert.ok(
+      typeof snap.serverTime === 'number' &&
+        Number.isSafeInteger(snap.serverTime) &&
+        snap.serverTime >= beforeSnap &&
+        snap.serverTime <= afterSnap,
+      `snapshot must carry recent serverTime in [${beforeSnap}, ${afterSnap}], got ${String(snap.serverTime)}`,
+    )
     await first.abort()
 
+    const beforeResume = Date.now()
     const resumed = connect(hub, eventsUrl(0, 'b1'))
     await waitFor(() => resumed.frames.length >= 1)
+    const afterResume = Date.now()
+    const resumedData = resumed.frames[0]?.data as HelmxResumedFrame
+    assert.equal(resumed.frames[0]?.event, 'resumed')
+    assert.ok(
+      typeof resumedData.serverTime === 'number' &&
+        Number.isSafeInteger(resumedData.serverTime) &&
+        resumedData.serverTime >= beforeResume &&
+        resumedData.serverTime <= afterResume,
+      `resumed frame must carry recent serverTime in [${beforeResume}, ${afterResume}], got ${String(resumedData.serverTime)}`,
+    )
+    const { serverTime: _serverTime, ...resumedRest } = resumedData
     assert.deepEqual(
-      resumed.frames[0],
-      {
-        event: 'resumed',
-        data: { bootId: 'b1', seq: 0, headSeq: 0, conversationLives: [] } satisfies HelmxResumedFrame,
-      },
-      'zero-catch-up resume must start with resumed {bootId, seq, headSeq, conversationLives}',
+      resumedRest,
+      { bootId: 'b1', seq: 0, headSeq: 0, conversationLives: [] } satisfies HelmxResumedFrame,
+      'zero-catch-up resume must start with resumed {bootId, seq, headSeq, conversationLives, serverTime}',
     )
     hub.publish('notification', { level: 'info', title: 'live after zero catch-up' })
     await waitFor(() => resumed.frames.some((f) => f.event === 'notification'))
@@ -149,7 +167,10 @@ describe('EventHub resume: same-process catch-up', { timeout: 60_000 }, () => {
     const { hub } = makeHub({ bootId: 'b1', initialSeq: 7 })
     const resumed = connect(hub, eventsUrl(7, 'b1'))
     await waitFor(() => resumed.frames.length >= 1)
-    assert.deepEqual(resumed.frames[0]?.data, { bootId: 'b1', seq: 7, headSeq: 7, conversationLives: [] })
+    const data = resumed.frames[0]?.data as HelmxResumedFrame
+    assert.equal(typeof data.serverTime, 'number')
+    const { serverTime: _st, ...rest } = data
+    assert.deepEqual(rest, { bootId: 'b1', seq: 7, headSeq: 7, conversationLives: [] })
     await resumed.abort()
   })
 
@@ -163,7 +184,10 @@ describe('EventHub resume: same-process catch-up', { timeout: 60_000 }, () => {
     await waitFor(() => resumed.frames.filter((f) => f.event === 'notification').length >= 7)
     await resumed.abort()
 
-    assert.deepEqual(resumed.frames[0]?.data, { bootId: 'b1', seq: 0, headSeq: 5, conversationLives: [] })
+    const data = resumed.frames[0]?.data as HelmxResumedFrame
+    assert.equal(typeof data.serverTime, 'number')
+    const { serverTime: _st, ...rest } = data
+    assert.deepEqual(rest, { bootId: 'b1', seq: 0, headSeq: 5, conversationLives: [] })
     const notes = resumed.frames.filter((f) => f.event === 'notification').map((f) => (f.data as HelmxEventFrame).seq)
     assert.deepEqual(notes, [1, 2, 3, 4, 5, 6, 7], 'buffered 6..7 seamlessly join replayed 1..5 in exact sequence')
     const titles = resumed.frames
@@ -207,7 +231,10 @@ describe('EventHub resume: cross-process and gap snapshot fallback', { timeout: 
     const covered = connect(hub, eventsUrl(2, 'b1'))
     await waitFor(() => covered.frames.filter((f) => f.event === 'notification').length >= 3)
     await covered.abort()
-    assert.deepEqual(covered.frames[0]?.data, { bootId: 'b1', seq: 2, headSeq: 5, conversationLives: [] })
+    const coveredData = covered.frames[0]?.data as HelmxResumedFrame
+    assert.equal(typeof coveredData.serverTime, 'number')
+    const { serverTime: _coveredSt, ...coveredRest } = coveredData
+    assert.deepEqual(coveredRest, { bootId: 'b1', seq: 2, headSeq: 5, conversationLives: [] })
     assert.deepEqual(
       covered.frames.filter((f) => f.event === 'notification').map((f) => (f.data as HelmxEventFrame).seq),
       [3, 4, 5],
@@ -401,7 +428,10 @@ describe('EventHub publish persistence ordering and ring contiguity', { timeout:
     const resumed = connect(hub, eventsUrl(0, 'b1'))
     await waitFor(() => resumed.frames.filter((f) => f.event === 'notification').length >= 2)
     await resumed.abort()
-    assert.deepEqual(resumed.frames[0]?.data, { bootId: 'b1', seq: 0, headSeq: 2, conversationLives: [] })
+    const resumedHead = resumed.frames[0]?.data as HelmxResumedFrame
+    assert.equal(typeof resumedHead.serverTime, 'number')
+    const { serverTime: _resumedSt, ...resumedHeadRest } = resumedHead
+    assert.deepEqual(resumedHeadRest, { bootId: 'b1', seq: 0, headSeq: 2, conversationLives: [] })
     assert.deepEqual(
       resumed.frames.filter((f) => f.event === 'notification').map((f) => (f.data as HelmxEventFrame).seq),
       [1, 2],
@@ -446,7 +476,10 @@ describe('EventHub publish persistence ordering and ring contiguity', { timeout:
     const covered = connect(hub, eventsUrl(2, 'b1'))
     await waitFor(() => covered.frames.filter((f) => f.event === 'notification').length >= 1)
     await covered.abort()
-    assert.deepEqual(covered.frames[0]?.data, { bootId: 'b1', seq: 2, headSeq: 3, conversationLives: [] })
+    const coveredHead = covered.frames[0]?.data as HelmxResumedFrame
+    assert.equal(typeof coveredHead.serverTime, 'number')
+    const { serverTime: _coveredHeadSt, ...coveredHeadRest } = coveredHead
+    assert.deepEqual(coveredHeadRest, { bootId: 'b1', seq: 2, headSeq: 3, conversationLives: [] })
     assert.deepEqual(
       covered.frames.filter((f) => f.event === 'notification').map((f) => (f.data as HelmxEventFrame).seq),
       [3],

@@ -31,7 +31,7 @@ import {
   HelmxIcon,
   SegmentedControl,
   StatusLight,
-  formatDurationMs,
+  Tooltip,
   formatModelShortName,
   resolveLocalizedText,
   useConversations,
@@ -52,6 +52,11 @@ import {
   type BoardViewDoc,
 } from './board-model.ts'
 import { buildSwarmPanelModel } from './model-panel.ts'
+import {
+  resolveGroupTimingView,
+  resolvePanelMemberTimingView,
+  resolvePostTimeDisplay,
+} from './model-timing.ts'
 import {
   useElapsedNowMs,
   useSwarmBoardPeekPost,
@@ -266,14 +271,19 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
     }
   }, [highlightedSeq, model?.recentPosts])
 
-  const groupElapsedActive = model !== undefined && model.status !== 'completed' && effectiveBoard !== undefined && effectiveBoard.group.createdAt > 0
-  const nowMs = useElapsedNowMs(groupElapsedActive)
-  const groupElapsed =
-    nowMs !== undefined &&
+  const hasLiveMember =
     effectiveBoard !== undefined &&
-    effectiveBoard.group.createdAt > 0 &&
-    nowMs >= effectiveBoard.group.createdAt
-      ? formatDurationMs(nowMs - effectiveBoard.group.createdAt)
+    effectiveBoard.group.status === 'active' &&
+    effectiveBoard.members.some(
+      (m) => m.lifecycle === 'active' && (m.liveState === 'working' || m.liveState === 'blocked'),
+    )
+  const timerActive =
+    effectiveBoard !== undefined &&
+    ((effectiveBoard.group.status === 'active' && effectiveBoard.group.createdAt > 0) || hasLiveMember)
+  const nowMs = useElapsedNowMs(timerActive)
+  const groupTiming =
+    effectiveBoard !== undefined
+      ? resolveGroupTimingView(effectiveBoard, conversations, nowMs, locale)
       : undefined
 
   if (conversationId === undefined || (link === undefined && !hasArchivedSwarmTag)) {
@@ -431,8 +441,10 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
           <span className="badge badge-neutral tabular-nums">
             {`${model.progress.done}/${model.progress.total}`}
           </span>
-          {groupElapsed !== undefined ? (
-            <span className="sw-panel-elapsed tabular-nums">{groupElapsed}</span>
+          {groupTiming !== undefined ? (
+            <Tooltip content={groupTiming.tooltip} className="sw-timing-tooltip">
+              <span className="sw-panel-elapsed tabular-nums">{groupTiming.label}</span>
+            </Tooltip>
           ) : null}
         </span>
         <span className="stack-row sw-panel-head-actions">
@@ -492,6 +504,12 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
                 isCoordinatorActiveGroup &&
                 row.lifecycle === 'active' &&
                 (row.liveState === 'working' || row.liveState === 'blocked')
+              const memberTiming = resolvePanelMemberTimingView(
+                row,
+                effectiveBoard.group.status,
+                nowMs,
+                locale,
+              )
               return (
                 <div key={row.name} className="sw-panel-member-item">
                   <button
@@ -517,6 +535,15 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
                       ) : null}
                       {row.doing !== undefined ? (
                         <span className="sw-panel-member-doing" title={row.doing}>{row.doing}</span>
+                      ) : null}
+                      {memberTiming !== undefined ? (
+                        <Tooltip content={memberTiming.tooltip} className="sw-timing-tooltip">
+                          <span
+                            className={`sw-panel-member-elapsed mono tabular-nums${memberTiming.tone === 'warn' ? ' sw-panel-member-elapsed-warn' : ''}`}
+                          >
+                            {memberTiming.label}
+                          </span>
+                        </Tooltip>
                       ) : null}
                     </span>
                     <span className="sw-panel-member-activity" title={activityText}>
@@ -643,6 +670,7 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
             {model.recentPosts.map((post) => {
               const refs = extractPostRefs(post)
               const isHighlighted = highlightedSeq === post.seq
+              const postTime = resolvePostTimeDisplay(post.createdAt, effectiveBoard.group.createdAt)
               return (
                 <li
                   key={post.seq}
@@ -659,7 +687,19 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
                       {' -> '}
                       {panelPostTargets(post)}
                     </span>
-                    <span className="sw-panel-post-seq tabular-nums">{`#${post.seq}`}</span>
+                    <span className="sw-panel-post-meta">
+                      {postTime !== undefined ? (
+                        <Tooltip content={postTime.fullTimestamp} className="sw-timing-tooltip">
+                          <span
+                            className="sw-panel-post-time mono tabular-nums"
+                            aria-label={postTime.fullTimestamp}
+                          >
+                            {postTime.label}
+                          </span>
+                        </Tooltip>
+                      ) : null}
+                      <span className="sw-panel-post-seq tabular-nums">{`#${post.seq}`}</span>
+                    </span>
                   </div>
                   <PostBodyText
                     body={post.body}

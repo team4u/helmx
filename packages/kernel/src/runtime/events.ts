@@ -313,7 +313,7 @@ export class EventHub {
   currentSnapshot(): HelmxSnapshot {
     const snap = this.snapshot()
     const redacted = redactJsonValue(pruneUndefined(snap, new WeakSet()), (t) => this.redact(t)) as HelmxSnapshot
-    return { ...redacted, seq: Math.max(snap.seq, this.seqValue), bootId: this.bootId }
+    return { ...redacted, seq: Math.max(snap.seq, this.seqValue), bootId: this.bootId, serverTime: Date.now() }
   }
 
   /** Subscribe to incremental frames; returns an unsubscribe function (HTTP layer consumes response(); this entrypoint serves programmatic callers and tests). */
@@ -407,6 +407,7 @@ export class EventHub {
         seq: resume.afterSeq,
         headSeq: liveSeq,
         conversationLives: [...this.latestLives.values()],
+        serverTime: Date.now(),
       }
       handshake = encodeSseChunk('resumed', resumedFrame)
       replay = this.ring.filter((entry) => entry.seq > resume.afterSeq).map((entry) => entry.chunk)

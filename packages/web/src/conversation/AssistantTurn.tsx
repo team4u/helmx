@@ -1,6 +1,6 @@
 import { useContext, useMemo, useState } from 'react'
 import type { ConversationEntry, ConversationSummary } from '@helmx/protocol/browser'
-import { CopyButton, HelmxIcon, ToolActivityContext, Tooltip } from '@helmx/plugin-client'
+import { CopyButton, HelmxIcon, ToolActivityContext, Tooltip, useSharedNowMs } from '@helmx/plugin-client'
 import { useGroupedUi } from '../lib/store-context.js'
 import { PluginMicroAction } from '../ui/PluginMicroAction.js'
 import { matchTimelineEntryActions, timelineEntryActionContextOf } from './action-model.js'
@@ -8,7 +8,13 @@ import { MarkdownView } from './MarkdownView.js'
 import { StepGroup, TraceRow } from './TimelineRows.js'
 import { ToolActivityProvider } from './ToolActivityProvider.js'
 import { isAssistantTurnBusy, assistantModelFullLabel, assistantModelShortLabel, type AssistantModelIdentity, type AssistantTurn, type ProcessShortcutCommand } from './timeline-model.js'
-import { formatDurationMs, formatFullTimestamp, formatMessageTime } from '../lib/format.js'
+import {
+  formatDurationMs,
+  formatFullTimestamp,
+  formatMessageTime,
+  formatStopwatchMs,
+  resolveConversationTiming,
+} from '../lib/format.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 
 // ---------------------------------------------------------------------------
@@ -42,6 +48,8 @@ export interface AssistantTurnViewProps {
   turn: AssistantTurn
   conversation: ConversationSummary
   isLatestTurn?: boolean
+  /** 是否为当前时间线末尾（忽略排队输入）的助手回合，用于在 blocked 态承接等待审批秒表。 */
+  isTrailingTurn?: boolean
   /** 回合锚点对应的真实持久化 pi.assistant 条目（见 resolveAssistantAnchorEntry）。 */
   anchorEntry?: ConversationEntry
   /** Ctrl+O 过程步骤折叠指令（仅最新含过程步骤回合传入）。 */
@@ -56,7 +64,16 @@ export function AssistantTurnView(props: AssistantTurnViewProps) {
   return <ToolActivityProvider><AssistantTurnContent {...props} /></ToolActivityProvider>
 }
 
-function AssistantTurnContent({ turn, conversation, isLatestTurn = false, anchorEntry, processShortcut, onForkFromHere, onRegenerate }: AssistantTurnViewProps) {
+function AssistantTurnContent({
+  turn,
+  conversation,
+  isLatestTurn = false,
+  isTrailingTurn,
+  anchorEntry,
+  processShortcut,
+  onForkFromHere,
+  onRegenerate,
+}: AssistantTurnViewProps) {
   const groupedUi = useGroupedUi()
   const { t } = useWebLocale()
   const activeToolCallIds = useContext(ToolActivityContext)?.activeToolCallIds
@@ -99,6 +116,27 @@ function AssistantTurnContent({ turn, conversation, isLatestTurn = false, anchor
     }
   }
 
+  const effectiveTrailing = isTrailingTurn ?? isLatestTurn
+  const hasPendingAsk =
+    typeof conversation.pendingAskCount === 'number' &&
+    Number.isFinite(conversation.pendingAskCount) &&
+    conversation.pendingAskCount > 0
+  const isConversationBlocked = conversation.status === 'blocked' || hasPendingAsk
+  const liveTrackActive = turn.live || (effectiveTrailing && isConversationBlocked)
+  const needsLiveClock =
+    liveTrackActive &&
+    (isConversationBlocked
+      ? (conversation.pendingAskCount === undefined || hasPendingAsk) &&
+        typeof conversation.pendingAskSince === 'number' &&
+        Number.isFinite(conversation.pendingAskSince) &&
+        conversation.pendingAskSince >= 0
+      : conversation.status === 'working' &&
+        typeof conversation.runStartedAt === 'number' &&
+        Number.isFinite(conversation.runStartedAt) &&
+        conversation.runStartedAt >= 0)
+  const liveNowMs = useSharedNowMs(needsLiveClock)
+  const liveTiming = liveTrackActive ? resolveConversationTiming(conversation, liveNowMs) : undefined
+
   const isBusy = isAssistantTurnBusy(turn, conversation, { isLatestTurn, activeToolCallIds })
   // 插件微插槽 timeline.entry.action：锚点必须是真实持久化 pi.assistant 条目；
   // live 回合（尚无落库锚点）不渲染，绝不拿 pi.tool-result 或 key 伪造。
@@ -116,14 +154,30 @@ function AssistantTurnContent({ turn, conversation, isLatestTurn = false, anchor
   const durationText = turn.durationMs !== undefined && turn.durationMs > 0 ? formatDurationMs(turn.durationMs) : ''
   const hasTimeInfo = !isBusy && (displayTime !== '' || durationText !== '')
   const fullTimestamp = formatFullTimestamp(timeMs)
-  let tooltipText = ''
+  let baseTooltipText = ''
   if (fullTimestamp !== '' && durationText !== '') {
-    tooltipText = t('conv.turn.completedAtTook', { time: fullTimestamp, duration: durationText })
+    baseTooltipText = t('conv.turn.completedAtTook', { time: fullTimestamp, duration: durationText })
   } else if (fullTimestamp !== '') {
-    tooltipText = t('conv.turn.completedAt', { time: fullTimestamp })
+    baseTooltipText = t('conv.turn.completedAt', { time: fullTimestamp })
   } else if (durationText !== '') {
-    tooltipText = t('conv.turn.took', { duration: durationText })
+    baseTooltipText = t('conv.turn.took', { duration: durationText })
   }
+  const hasModelDuration = turn.modelDurationMs !== undefined && turn.modelDurationMs > 0
+  const hasToolDuration = turn.toolDurationMs !== undefined && turn.toolDurationMs > 0
+  const showBreakdown =
+    hasToolDuration ||
+    (hasModelDuration && turn.durationMs !== undefined && turn.durationMs !== turn.modelDurationMs)
+  const breakdownParts: string[] = []
+  if (showBreakdown) {
+    if (hasModelDuration) {
+      breakdownParts.push(t('conv.turn.modelDuration', { duration: formatDurationMs(turn.modelDurationMs) }))
+    }
+    if (hasToolDuration) {
+      breakdownParts.push(t('conv.turn.toolsDuration', { duration: formatDurationMs(turn.toolDurationMs) }))
+    }
+  }
+  const tooltipLines = [baseTooltipText, breakdownParts.join(' · ')].filter((line) => line !== '')
+  const tooltipText = tooltipLines.join('\n')
 
   const showHoverBar = !isBusy && (lastText !== '' || turn.entryIds.length > 0)
   // 实际生成模型标签：仅来自本回合已落库 pi.assistant 的可信身份；busy（live/
@@ -131,6 +185,10 @@ function AssistantTurnContent({ turn, conversation, isLatestTurn = false, anchor
   const modelFull = turn.model !== undefined ? assistantModelFullLabel(turn.model, t) : ''
   const modelShort = turn.model !== undefined ? assistantModelShortLabel(turn.model) : ''
   const showModelTag = !isBusy && modelShort !== ''
+
+  const showBlockedStopwatch = liveTiming?.isBlocked === true && liveTiming.waitingMs !== undefined
+  const showWorkingStopwatch =
+    !showBlockedStopwatch && turn.live && liveTiming?.currentRunMs !== undefined
 
   return (
     <div className="msg-ai-block" tabIndex={0}>
@@ -165,13 +223,33 @@ function AssistantTurnContent({ turn, conversation, isLatestTurn = false, anchor
           />
         )
       })}
-      {turn.live ? (
+      {showBlockedStopwatch ? (
+        <span
+          className="msg-origin-tag msg-live-indicator msg-live-indicator-warn"
+          aria-label={t('conv.turn.awaitingApproval')}
+          role="status"
+        >
+          <HelmxIcon name="clock" size={11} />
+          <span className="msg-live-meta">
+            <span className="msg-live-label">{t('conv.turn.awaitingApproval')}</span>
+            <span className="msg-live-sep" aria-hidden="true">{' · '}</span>
+            <span className="msg-live-elapsed mono tabular-nums">{formatStopwatchMs(liveTiming.waitingMs)}</span>
+          </span>
+        </span>
+      ) : turn.live ? (
         <span className="msg-origin-tag msg-live-indicator" aria-label={t('conv.timeline.generating')} role="status">
           <span className="msg-live-dots" aria-hidden="true">
             <span />
             <span />
             <span />
           </span>
+          {showWorkingStopwatch ? (
+            <span className="msg-live-meta">
+              <span className="msg-live-label">{t('conv.turn.generatingShort')}</span>
+              <span className="msg-live-sep" aria-hidden="true">{' · '}</span>
+              <span className="msg-live-elapsed mono tabular-nums">{formatStopwatchMs(liveTiming.currentRunMs)}</span>
+            </span>
+          ) : null}
         </span>
       ) : null}
       {hasTimeInfo || showHoverBar || showModelTag ? (
@@ -185,11 +263,11 @@ function AssistantTurnContent({ turn, conversation, isLatestTurn = false, anchor
             </Tooltip>
           ) : null}
           {hasTimeInfo ? (
-            <Tooltip content={tooltipText}>
+            <Tooltip content={tooltipText} className={tooltipLines.length > 1 ? 'helmx-tooltip-multiline' : undefined}>
               <span className="msg-time-meta" title={tooltipText}>
                 {displayTime !== '' ? <span>{displayTime}</span> : null}
                 {displayTime !== '' && durationText !== '' ? <span className="msg-time-sep">·</span> : null}
-                {durationText !== '' ? <span>{t('conv.turn.took', { duration: durationText })}</span> : null}
+                {durationText !== '' ? <span className="tabular-nums">{t('conv.turn.took', { duration: durationText })}</span> : null}
               </span>
             </Tooltip>
           ) : null}

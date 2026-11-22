@@ -3,7 +3,13 @@
  * task titles, total duration and the second-layer dynamic subline (zero
  * React/DOM dependencies).
  */
-import { DEFAULT_HELMX_LOCALE, resolveLocalizedText, type HelmxLocale } from '@helmx/plugin-client'
+import {
+  DEFAULT_HELMX_LOCALE,
+  resolveConversationTiming,
+  resolveLocalizedText,
+  type ConversationTimingInput,
+  type HelmxLocale,
+} from '@helmx/plugin-client'
 import type {
   AskSpec,
   ConversationEntry,
@@ -230,6 +236,7 @@ export function resolveExternalSubagentTaskTitle(
 export function resolveSubagentElapsedMs(input: {
   backgroundRun?: WorkflowRunSummary
   toolSummary?: SubagentParentToolSummary
+  summary?: ConversationTimingInput
   startedAt?: number
   nowMs?: number
   status?: SubagentCardStatus
@@ -238,16 +245,27 @@ export function resolveSubagentElapsedMs(input: {
     const start = input.backgroundRun?.status === 'running'
       ? input.backgroundRun.createdAt
       : input.startedAt ?? input.toolSummary?.startedAt
-    return start !== undefined && Number.isFinite(start) && input.nowMs !== undefined && input.nowMs >= start
-      ? input.nowMs - start
-      : undefined
+    if (start !== undefined && Number.isFinite(start)) {
+      return input.nowMs !== undefined && Number.isFinite(input.nowMs) && input.nowMs >= start
+        ? input.nowMs - start
+        : undefined
+    }
+    if (input.backgroundRun === undefined && input.summary !== undefined) {
+      const timing = resolveConversationTiming(input.summary, input.nowMs)
+      if (input.status === 'blocked' || timing.isBlocked) {
+        return timing.currentRunMs ?? timing.waitingMs
+      }
+      return timing.currentRunMs
+    }
+    return undefined
   }
   if (input.backgroundRun !== undefined) {
     const nodeDuration = input.backgroundRun.nodes?.[0]?.durationMs
     if (input.backgroundRun.status === 'running') {
       return nodeDuration !== undefined && Number.isFinite(nodeDuration) && nodeDuration >= 0 ? nodeDuration : undefined
     }
-    const elapsed = nodeDuration ?? input.backgroundRun.updatedAt - input.backgroundRun.createdAt
+    const endAt = input.backgroundRun.settledAt ?? input.backgroundRun.updatedAt
+    const elapsed = nodeDuration ?? endAt - input.backgroundRun.createdAt
     return elapsed !== undefined && Number.isFinite(elapsed) && elapsed >= 0 ? elapsed : undefined
   }
   const execInfo = parseSubagentExecutionInfo(input.toolSummary?.presentationMeta)

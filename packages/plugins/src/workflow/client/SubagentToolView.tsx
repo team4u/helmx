@@ -16,6 +16,7 @@ import {
   StatusLight,
   ToolCallDetails,
   formatDurationMs,
+  formatStopwatchMs,
   resolveLocalizedText,
   useConversation,
   useConversations,
@@ -177,8 +178,10 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
       childSummary?.status === 'blocked' ||
       (isBgHandle && backgroundRun === undefined && handleStatus === 'blocked'))
 
+  const isBlocked = isLatest && (hasPendingAsk || childSummary?.status === 'blocked' || badge.status === 'blocked')
+  const isLiveElapsed = isLatest && (isWorking || isBlocked)
   useToolActivity(props.callId, isActiveForActivity)
-  const nowMs = useElapsedNowMs(isWorking || hasPendingAsk)
+  const nowMs = useElapsedNowMs(isLiveElapsed)
 
   const rawPrompt =
     parentToolSummary.prompt ??
@@ -202,6 +205,7 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
     if (childId !== undefined) {
       return resolveSubagentElapsedMs({
         ...(backgroundRun !== undefined ? { backgroundRun } : {}),
+        ...(childSummary !== undefined ? { summary: childSummary } : {}),
         toolSummary: parentToolSummary,
         ...(fallbackStartedAt !== undefined ? { startedAt: fallbackStartedAt } : {}),
         nowMs,
@@ -220,6 +224,7 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
     isLatest,
     childId,
     backgroundRun,
+    childSummary,
     parentToolSummary,
     fallbackStartedAt,
     nowMs,
@@ -334,7 +339,11 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
             </span>
           ) : null}
           <StatusLight status={badgeLightStatus} label={badgeLightLabel} />
-          {elapsedMs !== undefined ? <span className="trace-duration tabular-nums">{formatDurationMs(elapsedMs)}</span> : null}
+          {elapsedMs !== undefined ? (
+            <span className="trace-duration tabular-nums">
+              {isLiveElapsed ? formatStopwatchMs(elapsedMs) : formatDurationMs(elapsedMs)}
+            </span>
+          ) : null}
           <Icon
             name={canOpenChildDrawer ? 'external-link' : canOpenWorkbenchRun ? 'chevron-right' : detailsOpen ? 'chevron-down' : 'chevron-right'}
             size={11}

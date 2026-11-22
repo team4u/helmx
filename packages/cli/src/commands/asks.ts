@@ -2,6 +2,8 @@
 import type { AskSpec } from '@helmx/protocol'
 import { CliError } from '../errors.js'
 import { flagValue, parseFlags } from '../args.js'
+import { printTableColumns } from '../output.js'
+import { formatAskWaiting } from '../timing.js'
 import type { CommandContext, CommandSpec } from './shared.js'
 import { assertNoExtraPositionals, parseNoFlags, printResult, requirePositional } from './shared.js'
 
@@ -14,7 +16,19 @@ export function asksCommands(): CommandSpec[] {
     async run(ctx: CommandContext) {
       parseNoFlags(ctx)
       const hub = await ctx.hub()
-      printResult(ctx, await hub.get<AskSpec[]>('/api/asks'))
+      const list = await hub.get<AskSpec[]>('/api/asks')
+      if (ctx.json || !Array.isArray(list)) {
+        printResult(ctx, list)
+        return
+      }
+      const nowMs = Date.now()
+      printTableColumns(ctx.io, list, [
+        { label: 'id', value: (a) => a.id ?? '' },
+        { label: 'conversation', value: (a) => (typeof a.conversationId === 'number' ? `#${a.conversationId}` : '') },
+        { label: 'status', value: (a) => a.status ?? '' },
+        { label: 'waiting', value: (a) => formatAskWaiting(a, nowMs) },
+        { label: 'title', value: (a) => a.title ?? '' },
+      ])
     },
   })
 

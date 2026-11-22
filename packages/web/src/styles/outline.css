@@ -65,6 +65,17 @@
   padding: 0 2px;
 }
 
+.conversation-outline-summary {
+  padding: 0 8px 2px;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--fg-muted);
+  flex-shrink: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .conversation-outline-earlier-btn {
   width: 100%;
   justify-content: center;
@@ -140,6 +151,19 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.conversation-outline-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.conversation-outline-duration {
+  font-size: 11px;
+  color: var(--fg-muted);
+  flex-shrink: 0;
 }
 
 .conversation-outline-time {

@@ -64,7 +64,11 @@ async function executeRunSettlement(
     ) {
       record.pendingChildCleanup = true
     }
-    record.updatedAt = Date.now()
+    const now = Date.now()
+    record.updatedAt = now
+    if (!suspending && record.status !== 'running' && record.settledAt === undefined) {
+      record.settledAt = now
+    }
     run.summary = svc.summaryOf(record)
 
     try {

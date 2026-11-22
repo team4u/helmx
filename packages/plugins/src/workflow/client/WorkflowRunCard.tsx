@@ -14,6 +14,8 @@ import type { WorkflowRunSummary } from '../../contracts.js'
 import {
   formatCompactTimestamp,
   formatDurationMs,
+  formatOffsetMs,
+  formatStopwatchMs,
   MarkdownText,
   PopoverClose,
   PopoverContent,
@@ -22,6 +24,7 @@ import {
   resolveLocalizedText,
   StatusLight,
   ToolCallDetails,
+  Tooltip,
   type LocalizedText,
   useConversations,
   usePluginContext,
@@ -41,10 +44,11 @@ import {
   extractWorkflowLogs,
   formatNodeOutputPreview,
   isBackgroundWorkflowResultHandle,
-  resolveRunElapsedMs,
+  resolvePhaseElapsedMs,
   resolveWorkflowRunDisplayName,
   resolveWorkflowRunForTool,
   resolveWorkflowToolFallbackLabel,
+  summarizeWorkflowTiming,
 } from './model-run.ts'
 import type { DetachViewerScope } from './model-run.ts'
 import { readToolPresentationMeta } from './model-subagent-link.ts'
@@ -108,9 +112,14 @@ import {
   RUN_KV_CREATED_AT,
   RUN_KV_RUN_ID,
   RUN_KV_SELF_STATUS,
+  RUN_KV_SETTLED_AT,
   RUN_KV_SAVED_DEF,
   RUN_KV_SOURCE_RUN,
   RUN_KV_UPDATED_AT,
+  runTimingNodeTotalLine,
+  runTimingSettledLine,
+  runTimingStartedLine,
+  runTimingWallLine,
   RUN_NO_NODES,
   RUN_RESULT_LOADING,
   RUN_RESULT_SECTION,
@@ -120,6 +129,43 @@ import {
   RUN_CARD_WORKBENCH_DETAILS,
   runStatusLabel,
 } from './copy.ts'
+
+function WorkflowRunElapsedWithTooltip(props: {
+  run: WorkflowRunSummary
+  nowMs: number | undefined
+  className?: string
+}): ReactNode {
+  const locale = usePluginLocale()
+  const { run, nowMs, className } = props
+  const timing = summarizeWorkflowTiming(run, nowMs)
+  if (timing.wallElapsedMs === undefined) return null
+  const live = run.status === 'running'
+  const wallText = live ? formatStopwatchMs(timing.wallElapsedMs) : formatDurationMs(timing.wallElapsedMs)
+  if (wallText === '') return null
+  const nodeTotalText =
+    timing.measuredNodeCount > 1 && timing.nodeTotalDurationMs !== undefined
+      ? (live ? formatStopwatchMs(timing.nodeTotalDurationMs) : formatDurationMs(timing.nodeTotalDurationMs))
+      : undefined
+  const tooltipContent = (
+    <div className="workflow-timing-tooltip tabular-nums">
+      <div>{runTimingWallLine(wallText, locale)}</div>
+      {nodeTotalText !== undefined && nodeTotalText !== '' ? (
+        <div>{runTimingNodeTotalLine(nodeTotalText, locale)}</div>
+      ) : null}
+      {timing.startedAt !== undefined ? (
+        <div>{runTimingStartedLine(formatCompactTimestamp(timing.startedAt), locale)}</div>
+      ) : null}
+      {timing.settledAt !== undefined ? (
+        <div>{runTimingSettledLine(formatCompactTimestamp(timing.settledAt), locale)}</div>
+      ) : null}
+    </div>
+  )
+  return (
+    <Tooltip content={tooltipContent}>
+      <span className={className}>{wallText}</span>
+    </Tooltip>
+  )
+}
 
 function WorkflowReplayForm(props: {
   run: WorkflowRunSummary
@@ -272,9 +318,8 @@ export function WorkflowToolView(props: ToolViewProps): ReactNode {
   const resultText = typeof props.result === 'string' ? props.result : undefined
   const isBgHandle = run === undefined && isBackgroundWorkflowResultHandle(presentationMeta)
 
-  const elapsedMs = useMemo(() => {
-    if (run !== undefined) return resolveRunElapsedMs(run, nowMs)
-    if (isBgHandle) return undefined
+  const fallbackElapsedMs = useMemo(() => {
+    if (run !== undefined || isBgHandle) return undefined
     if (props.status === 'running' && props.startedAt !== undefined && nowMs !== undefined) return Math.max(0, nowMs - props.startedAt)
     return props.durationMs
   }, [run, nowMs, isBgHandle, props.status, props.startedAt, props.durationMs])
@@ -318,7 +363,11 @@ export function WorkflowToolView(props: ToolViewProps): ReactNode {
           </span>
           <span className="trace-row-right workflow-trace-right">
             <StatusLight status={lightStatus} label={badgeText} />
-            {elapsedMs !== undefined ? <span className="trace-duration tabular-nums">{formatDurationMs(elapsedMs)}</span> : null}
+            {fallbackElapsedMs !== undefined ? (
+              <span className="trace-duration tabular-nums">
+                {toolActive ? formatStopwatchMs(fallbackElapsedMs) : formatDurationMs(fallbackElapsedMs)}
+              </span>
+            ) : null}
             <Icon name={detailsOpen ? 'chevron-down' : 'chevron-right'} size={11} />
           </span>
         </button>
@@ -383,7 +432,7 @@ export function WorkflowToolView(props: ToolViewProps): ReactNode {
             }
             label={statusBadgeText}
           />
-          {elapsedMs !== undefined ? <span className="trace-duration tabular-nums">{formatDurationMs(elapsedMs)}</span> : null}
+          <WorkflowRunElapsedWithTooltip run={run} nowMs={nowMs} className="trace-duration tabular-nums" />
           <Icon name="chevron-right" size={11} />
         </span>
       </button>
@@ -425,8 +474,8 @@ export function WorkflowRunCardBody(props: {
   const selfRunStatus = executionRunStatus(run)
   const effectiveStatus = effectiveRunNodeStatus(run, subtree)
 
-  const nowMs = useElapsedNowMs(run.status === 'running')
-  const elapsedMs = resolveRunElapsedMs(run, nowMs)
+  const hasRunningPhase = sections.some((s) => s.status === 'running')
+  const nowMs = useElapsedNowMs(run.status === 'running' || hasRunningPhase)
 
   const guarded = (dispatch: () => Promise<unknown>, failMessage: string): void => {
     if (inFlight.current) return
@@ -533,7 +582,7 @@ export function WorkflowRunCardBody(props: {
             {nodes.length > 0 ? <span>{runCardNodesStat(done, nodes.length, locale)}</span> : null}
             {deeperCount > 0 ? <span>{runCardSubtreeStat(subtree.done, subtree.total, locale)}</span> : null}
             {tokens > 0 ? <span>{runCardTokensStat(tokens, locale)}</span> : null}
-            {elapsedMs !== undefined ? <span>{formatDurationMs(elapsedMs)}</span> : null}
+            <WorkflowRunElapsedWithTooltip run={run} nowMs={nowMs} className="workflow-run-elapsed" />
           </span>
           {descendantApprovals > 0 ? (
             <span
@@ -652,6 +701,12 @@ export function WorkflowRunCardBody(props: {
             <span className="kv-val mono">{run.id}</span>
             <span className="kv-key">{resolveLocalizedText(RUN_KV_CREATED_AT, locale)}</span>
             <span className="kv-val tabular-nums">{formatCompactTimestamp(run.createdAt)}</span>
+            {run.settledAt !== undefined ? (
+              <>
+                <span className="kv-key">{resolveLocalizedText(RUN_KV_SETTLED_AT, locale)}</span>
+                <span className="kv-val tabular-nums">{formatCompactTimestamp(run.settledAt)}</span>
+              </>
+            ) : null}
             <span className="kv-key">{resolveLocalizedText(RUN_KV_UPDATED_AT, locale)}</span>
             <span className="kv-val tabular-nums">{formatCompactTimestamp(run.updatedAt)}</span>
             {effectiveStatus !== selfRunStatus ? (
@@ -675,39 +730,60 @@ export function WorkflowRunCardBody(props: {
           </div>
           {logs.length > 0 ? (
             <div className="workflow-log-list">
-              {logs.map((log) => (
-                <div key={log.key} className="workflow-log-line">
-                  <Icon name="terminal" size={11} />
-                  <span className="workflow-log-text">{log.message}</span>
-                </div>
-              ))}
+              {logs.map((log) => {
+                const offsetText = formatOffsetMs(log.at - run.createdAt)
+                return (
+                  <div key={log.key} className="workflow-log-line">
+                    {offsetText !== '' ? (
+                      <span
+                        className="workflow-log-offset mono tabular-nums"
+                        title={formatCompactTimestamp(log.at)}
+                      >
+                        {offsetText}
+                      </span>
+                    ) : null}
+                    <Icon name="terminal" size={11} />
+                    <span className="workflow-log-text">{log.message}</span>
+                  </div>
+                )
+              })}
             </div>
           ) : null}
           <div className="workflow-node-list">
-            {sections.map((section) => (
-              <div key={section.key} className="workflow-phase-group">
-                {section.title !== '' ? (
-                  <div className="workflow-phase-header">
-                    <span
-                      className={`phase-segment${section.status === 'running' ? ' phase-segment-active' : section.status === 'done' ? ' phase-segment-done' : section.status === 'failed' ? ' phase-segment-failed' : ''}`}
-                      title={section.detail ?? section.title}
-                    >
-                      <Icon name={PHASE_ICON[section.status]} size={11} className={section.status === 'running' ? SPIN : undefined} />
-                      {`${section.index + 1}. ${section.title}`}
-                      {` (${section.doneCount}/${section.totalCount})`}
-                    </span>
-                  </div>
-                ) : null}
-                {section.nodes.map((node) => (
-                  <WorkflowNodeCard
-                    key={node.id}
-                    node={node}
-                    runConversationId={run.conversationId}
-                    childNodes={childNodes.find((child) => child.runNode?.id === node.id)?.children}
-                  />
-                ))}
-              </div>
-            ))}
+            {sections.map((section) => {
+              const phaseElapsedMs = resolvePhaseElapsedMs(section, nowMs)
+              const phaseElapsedText =
+                phaseElapsedMs !== undefined
+                  ? (section.status === 'running' ? formatStopwatchMs(phaseElapsedMs) : formatDurationMs(phaseElapsedMs))
+                  : undefined
+              return (
+                <div key={section.key} className="workflow-phase-group">
+                  {section.title !== '' ? (
+                    <div className="workflow-phase-header">
+                      <span
+                        className={`phase-segment${section.status === 'running' ? ' phase-segment-active' : section.status === 'done' ? ' phase-segment-done' : section.status === 'failed' ? ' phase-segment-failed' : ''}`}
+                        title={section.detail ?? section.title}
+                      >
+                        <Icon name={PHASE_ICON[section.status]} size={11} className={section.status === 'running' ? SPIN : undefined} />
+                        {`${section.index + 1}. ${section.title}`}
+                        {` (${section.doneCount}/${section.totalCount})`}
+                        {phaseElapsedText !== undefined && phaseElapsedText !== '' ? (
+                          <span className="workflow-phase-elapsed tabular-nums">{` · ${phaseElapsedText}`}</span>
+                        ) : null}
+                      </span>
+                    </div>
+                  ) : null}
+                  {section.nodes.map((node) => (
+                    <WorkflowNodeCard
+                      key={node.id}
+                      node={node}
+                      runConversationId={run.conversationId}
+                      childNodes={childNodes.find((child) => child.runNode?.id === node.id)?.children}
+                    />
+                  ))}
+                </div>
+              )
+            })}
             {nodes.length === 0 ? <div className="workflow-phase-empty">{resolveLocalizedText(RUN_NO_NODES, locale)}</div> : null}
           </div>
           <WorkflowRunResultBox

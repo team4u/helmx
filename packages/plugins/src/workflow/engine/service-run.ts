@@ -115,7 +115,10 @@ export async function startWorkflowRun(
     }
     if (replayFrom.kind === 'subagent') {
       if (replayFrom.status === 'running') {
+        const now = Date.now()
         replayFrom.status = 'failed'
+        replayFrom.updatedAt = now
+        if (replayFrom.settledAt === undefined) replayFrom.settledAt = now
         replayFrom.errorCode = 'interrupted'
         replayFrom.error = 'run interrupted（可经 resumeFromRunId 续接）'
         svc.writeRecord(replayFrom)
@@ -192,7 +195,10 @@ export async function startWorkflowRun(
       return started.run
     }
     if (replayFrom.status === 'running') {
+      const now = Date.now()
       replayFrom.status = 'failed'
+      replayFrom.updatedAt = now
+      if (replayFrom.settledAt === undefined) replayFrom.settledAt = now
       replayFrom.errorCode = 'interrupted'
       replayFrom.error = 'run interrupted（账本完好，可经 resumeFromRunId 恢复）'
       svc.writeRecord(replayFrom)

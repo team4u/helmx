@@ -84,11 +84,14 @@ export {
   formatWorkflowNodeStats,
   resolveRunElapsedMs,
   resolveNodeElapsedMs,
+  resolvePhaseElapsedMs,
+  summarizeWorkflowTiming,
 } from './model-run.ts'
 export type {
   NodeSummaryText,
   WorkflowPhaseSection,
   WorkflowLogLine,
+  WorkflowTimingSummary,
   DetachViewerScope,
   ResumeFailedSummaryView,
 } from './model-run.ts'

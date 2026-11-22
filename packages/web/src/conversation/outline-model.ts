@@ -70,6 +70,8 @@ export interface OutlineAssistantNode {
   status?: OutlineAssistantStatus
   /** Turn time (settledAt ?? startedAt); omitted when not captured. */
   createdAt?: number
+  /** Settled turn total duration (ms); omitted while live or when not captured. */
+  durationMs?: number
   /** Key of the nearest preceding human question node (kept as parent context when this node matches a search). */
   parentHumanKey?: string
 }
@@ -402,6 +404,9 @@ function appendAssistantNodes(
           ...(turn.settledAt !== undefined || turn.startedAt !== undefined
             ? { createdAt: turn.settledAt ?? turn.startedAt }
             : {}),
+          ...(!turn.live && turn.durationMs !== undefined && turn.durationMs > 0
+            ? { durationMs: turn.durationMs }
+            : {}),
           ...(parentHumanKey !== undefined ? { parentHumanKey } : {}),
         })
       }
@@ -424,6 +429,9 @@ function appendAssistantNodes(
       status,
       ...(turn.settledAt !== undefined || turn.startedAt !== undefined
         ? { createdAt: turn.settledAt ?? turn.startedAt }
+        : {}),
+      ...(!turn.live && turn.durationMs !== undefined && turn.durationMs > 0
+        ? { durationMs: turn.durationMs }
         : {}),
       ...(parentHumanKey !== undefined ? { parentHumanKey } : {}),
     })

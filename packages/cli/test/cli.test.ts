@@ -13,6 +13,14 @@ import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { updateCliCredentials } from '../src/credentials.js'
 import { CliError } from '../src/errors.js'
+import {
+  formatAskWaiting,
+  formatConversationTiming,
+  formatDurationMs,
+  formatStopwatchMs,
+  projectConversationForHuman,
+  resolveConversationTiming,
+} from '../src/timing.js'
 import { withTimeout } from '@helmx/test-kit'
 import {
   deferred,
@@ -1892,4 +1900,335 @@ test('helmx update/start help and flag validation work offline', { timeout: 60_0
   assert.equal(badFlag.code, 1)
   assert.equal(JSON.parse(badFlag.err).error.code, 'unknown_flag')
   assert.equal(requests, 0)
+})
+
+test('CLI timing helpers: deterministic duration/stopwatch formatting, honest conversation timing, and human projection', { timeout: 60_000 }, () => {
+  // formatDurationMs: settled tiers without carry artifacts
+  assert.equal(formatDurationMs(undefined), '')
+  assert.equal(formatDurationMs(-1), '')
+  assert.equal(formatDurationMs(Number.NaN), '')
+  assert.equal(formatDurationMs(0), '0ms')
+  assert.equal(formatDurationMs(450), '450ms')
+  assert.equal(formatDurationMs(999), '999ms')
+  assert.equal(formatDurationMs(1_000), '1.0s')
+  assert.equal(formatDurationMs(12_400), '12.4s')
+  assert.equal(formatDurationMs(59_949), '59.9s')
+  assert.equal(formatDurationMs(59_950), '1m0s')
+  assert.equal(formatDurationMs(135_000), '2m15s')
+  assert.equal(formatDurationMs(3_599_499), '59m59s')
+  assert.equal(formatDurationMs(3_599_500), '1h0m')
+  assert.equal(formatDurationMs(7_620_000), '2h7m')
+
+  // formatStopwatchMs: live whole-second flooring with zero-padded minor units
+  assert.equal(formatStopwatchMs(undefined), '')
+  assert.equal(formatStopwatchMs(-50), '')
+  assert.equal(formatStopwatchMs(0), '0s')
+  assert.equal(formatStopwatchMs(999), '0s')
+  assert.equal(formatStopwatchMs(45_999), '45s')
+  assert.equal(formatStopwatchMs(60_000), '1m00s')
+  assert.equal(formatStopwatchMs(65_999), '1m05s')
+  assert.equal(formatStopwatchMs(3_599_999), '59m59s')
+  assert.equal(formatStopwatchMs(3_600_000), '1h00m')
+  assert.equal(formatStopwatchMs(3_900_000), '1h05m')
+
+  const now = 1_000_000
+
+  // Blocked with pendingAskSince: waiting only vs waiting + prior cumulative run
+  assert.equal(
+    formatConversationTiming({ status: 'blocked', pendingAskCount: 1, pendingAskSince: now - 90_000, runDurationMs: 0 }, now),
+    'waiting 1m30s',
+  )
+  assert.equal(
+    formatConversationTiming(
+      { status: 'blocked', pendingAskCount: 1, pendingAskSince: now - 45_000, runStartedAt: now - 70_000, runDurationMs: 240_000 },
+      now,
+    ),
+    'waiting 45s (total 5m10s)',
+  )
+  assert.equal(
+    formatConversationTiming({ status: 'blocked', pendingAskCount: 1, pendingAskSince: now - 45_000, runDurationMs: 240_000 }, now),
+    'waiting 45s (total 4m0s)',
+  )
+  // Blocked without pendingAskSince never fabricates waiting 0s; falls back to active run or empty
+  assert.equal(
+    formatConversationTiming({ status: 'blocked', runStartedAt: now - 30_000, runDurationMs: 0 }, now),
+    'running 30s',
+  )
+  assert.equal(
+    formatConversationTiming({ status: 'blocked', pendingAskCount: 0, pendingAskSince: now - 45_000, runDurationMs: 0 }, now),
+    '',
+  )
+
+  // Working with runStartedAt: current turn only vs current + cumulative
+  assert.equal(
+    formatConversationTiming({ status: 'working', runStartedAt: now - 23_000, runDurationMs: 0 }, now),
+    'running 23s',
+  )
+  assert.equal(
+    formatConversationTiming({ status: 'working', runStartedAt: now - 23_000, runDurationMs: 202_000 }, now),
+    'running 23s (total 3m45s)',
+  )
+  // Clock skew clamps cleanly to 0s (never negative) when runStartedAt IS present
+  assert.equal(
+    formatConversationTiming({ status: 'working', runStartedAt: now + 500, runDurationMs: 0 }, now),
+    'running 0s',
+  )
+  // Working without runStartedAt never fabricates 0s
+  assert.equal(formatConversationTiming({ status: 'working', runDurationMs: 0 }, now), '')
+  assert.equal(formatConversationTiming({ status: 'working', runDurationMs: 90_000 }, now), 'total 1m30s')
+
+  // Idle / done / error: ignores stale live anchors and omits zero/absent duration
+  assert.equal(
+    formatConversationTiming({ status: 'done', runDurationMs: 135_000, runStartedAt: now - 5_000, pendingAskSince: now - 2_000 }, now),
+    'total 2m15s',
+  )
+  assert.equal(formatConversationTiming({ status: 'idle', runDurationMs: 450 }, now), 'total 450ms')
+  assert.equal(formatConversationTiming({ status: 'error', runDurationMs: 12_400 }, now), 'total 12.4s')
+  assert.equal(formatConversationTiming({ status: 'idle', runDurationMs: 0 }, now), '')
+  assert.equal(formatConversationTiming({ status: 'done' }, now), '')
+  assert.deepEqual(resolveConversationTiming({ status: 'idle', runDurationMs: 0, pendingAskCount: 0 }, now), {
+    settledRunMs: 0,
+    isRunning: false,
+    isBlocked: false,
+  })
+
+  // projectConversationForHuman: places timing right after status, drops raw ms/epoch keys, omits when empty
+  const activeProjected = projectConversationForHuman(
+    { id: 1, title: 't', status: 'working', runDurationMs: 202_000, runStartedAt: now - 23_000, entries: [] },
+    now,
+  )
+  assert.deepEqual(Object.keys(activeProjected), ['id', 'title', 'status', 'timing', 'entries'])
+  assert.equal(activeProjected.timing, 'running 23s (total 3m45s)')
+
+  const idleProjected = projectConversationForHuman(
+    { id: 2, title: 'fresh', status: 'idle', runDurationMs: 0, entries: [] },
+    now,
+  )
+  assert.deepEqual(Object.keys(idleProjected), ['id', 'title', 'status', 'entries'])
+  assert.equal('timing' in idleProjected, false)
+
+  // formatAskWaiting: pending asks only, omits missing/zero timestamps
+  assert.equal(formatAskWaiting({ status: 'pending', createdAt: now - 65_000 }, now), '1m05s')
+  assert.equal(formatAskWaiting({ status: 'answered', createdAt: now - 65_000 }, now), '')
+  assert.equal(formatAskWaiting({ status: 'pending', createdAt: 0 }, now), '')
+  assert.equal(formatAskWaiting({ status: 'pending' }, now), '')
+})
+
+test('conversations list and get: human timing observability without fabricating 0s, and verbatim --json passthrough', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helmx-cli-timing-')
+  const baseNow = Date.now()
+  const blockedWaitOnly = makeConversationSummary({
+    id: 1,
+    title: 'Approve deploy',
+    status: 'blocked',
+    pendingAskCount: 1,
+    pendingAskSince: baseNow - 125_000,
+    runDurationMs: 0,
+  })
+  const blockedWithHistory = makeConversationSummary({
+    id: 2,
+    title: 'Review migration',
+    status: 'blocked',
+    pendingAskCount: 1,
+    pendingAskSince: baseNow - 45_000,
+    runStartedAt: baseNow - 70_000,
+    runDurationMs: 240_000,
+  })
+  const workingFresh = makeConversationSummary({
+    id: 3,
+    title: 'Indexing repo',
+    status: 'working',
+    runStartedAt: baseNow - 25_000,
+    runDurationMs: 0,
+  })
+  const workingWithHistory = makeConversationSummary({
+    id: 4,
+    title: 'Fix auth bug',
+    status: 'working',
+    runStartedAt: baseNow - 25_000,
+    runDurationMs: 200_000,
+  })
+  const doneWithHistory = makeConversationSummary({
+    id: 5,
+    title: 'Audit logs',
+    status: 'done',
+    runDurationMs: 135_000,
+  })
+  const idleEmpty = makeConversationSummary({
+    id: 6,
+    title: 'Fresh chat',
+    status: 'idle',
+    runDurationMs: 0,
+  })
+  const workingNoAnchor = makeConversationSummary({
+    id: 7,
+    title: 'Missing start anchor',
+    status: 'working',
+    runDurationMs: 0,
+  })
+
+  const listPayload = [
+    blockedWaitOnly,
+    blockedWithHistory,
+    workingFresh,
+    workingWithHistory,
+    doneWithHistory,
+    idleEmpty,
+    workingNoAnchor,
+  ]
+
+  const hub = await startMockHub(
+    {
+      'GET /api/conversations': () => ({ body: listPayload }),
+      'GET /api/conversations/1': () => ({ body: { ...blockedWaitOnly, entries: [] } }),
+      'GET /api/conversations/4': () => ({ body: { ...workingWithHistory, entries: [], nextCursor: 'cur-4' } }),
+      'GET /api/conversations/5': () => ({ body: { ...doneWithHistory, entries: [] } }),
+      'GET /api/conversations/6': () => ({ body: { ...idleEmpty, entries: [] } }),
+    },
+    { autoRegisterCleanup: t },
+  )
+  const env = makeCliEnv(hub.url, dir)
+
+  // 1. conversations list (human)
+  const listHuman = await runCliCaptured(['conversations', 'list'], env)
+  assert.equal(listHuman.code, 0, listHuman.err)
+  const listLines = listHuman.out.trim().split('\n')
+  assert.match(listLines[0]!, /^id\s+status\s+timing\s+profile\s+node\s+title/)
+  const rowOf = (title: string): string => {
+    const found = listLines.find((line) => line.includes(title))
+    assert.ok(found, `missing row for "${title}" in:\n${listHuman.out}`)
+    return found
+  }
+  assert.match(rowOf('Approve deploy'), /blocked\s+waiting 2m\d\ds\s+/)
+  assert.match(rowOf('Review migration'), /blocked\s+waiting (?:4\ds|5\ds|1m\d\ds) \(total 5m\d\ds\)/)
+  assert.match(rowOf('Indexing repo'), /working\s+running (?:2\ds|3\ds)\s+assistant/)
+  assert.doesNotMatch(rowOf('Indexing repo'), /total/)
+  assert.match(rowOf('Fix auth bug'), /working\s+running (?:2\ds|3\ds) \(total 3m[45]\ds\)/)
+  assert.match(rowOf('Audit logs'), /done\s+total 2m15s\s+/)
+  // Rows with no timing data must leave timing blank and never fabricate 0s
+  for (const title of ['Fresh chat', 'Missing start anchor']) {
+    const row = rowOf(title)
+    assert.doesNotMatch(row, /\b0s\b|\b0ms\b|waiting|running|total/, `row "${title}" must omit timing: ${row}`)
+  }
+
+  // 2. conversations list (--json) preserves all new timing fields verbatim
+  const listJson = await runCliCaptured(['conversations', 'list', '--json'], env)
+  assert.equal(listJson.code, 0, listJson.err)
+  const parsedList = JSON.parse(listJson.out) as Array<Record<string, unknown>>
+  assert.equal(parsedList[0]?.['pendingAskSince'], blockedWaitOnly.pendingAskSince)
+  assert.equal(parsedList[0]?.['runDurationMs'], 0)
+  assert.equal(parsedList[1]?.['pendingAskSince'], blockedWithHistory.pendingAskSince)
+  assert.equal(parsedList[1]?.['runStartedAt'], blockedWithHistory.runStartedAt)
+  assert.equal(parsedList[1]?.['runDurationMs'], 240_000)
+  assert.equal(parsedList[3]?.['runStartedAt'], workingWithHistory.runStartedAt)
+  assert.equal(parsedList[3]?.['runDurationMs'], 200_000)
+
+  // 3. conversations get (human & --json)
+  const getBlocked = await runCliCaptured(['conversations', 'get', '1'], env)
+  assert.equal(getBlocked.code, 0, getBlocked.err)
+  assert.match(getBlocked.out, /timing\s+waiting 2m\d\ds/)
+  assert.doesNotMatch(getBlocked.out, /^pendingAskSince\b/m)
+  assert.doesNotMatch(getBlocked.out, /^runDurationMs\b/m)
+
+  const getWorking = await runCliCaptured(['conversations', 'get', '4'], env)
+  assert.equal(getWorking.code, 0, getWorking.err)
+  assert.match(getWorking.out, /timing\s+running (?:2\ds|3\ds) \(total 3m[45]\ds\)/)
+  assert.doesNotMatch(getWorking.out, /^runStartedAt\b/m)
+
+  const getDone = await runCliCaptured(['conversations', 'get', '5'], env)
+  assert.equal(getDone.code, 0, getDone.err)
+  assert.match(getDone.out, /timing\s+total 2m15s/)
+
+  const getIdle = await runCliCaptured(['conversations', 'get', '6'], env)
+  assert.equal(getIdle.code, 0, getIdle.err)
+  assert.doesNotMatch(getIdle.out, /^timing\b/m)
+  assert.doesNotMatch(getIdle.out, /^runDurationMs\b/m)
+  assert.doesNotMatch(getIdle.out, /\b0s\b/)
+
+  const getWorkingJson = await runCliCaptured(['conversations', 'get', '4', '--json'], env)
+  assert.equal(getWorkingJson.code, 0, getWorkingJson.err)
+  const parsedDetail = JSON.parse(getWorkingJson.out) as Record<string, unknown>
+  assert.equal(parsedDetail['runStartedAt'], workingWithHistory.runStartedAt)
+  assert.equal(parsedDetail['runDurationMs'], 200_000)
+  assert.equal(parsedDetail['nextCursor'], 'cur-4')
+
+  const getBlockedJson = await runCliCaptured(['conversations', 'get', '1', '--json'], env)
+  assert.equal(getBlockedJson.code, 0, getBlockedJson.err)
+  const parsedBlocked = JSON.parse(getBlockedJson.out) as Record<string, unknown>
+  assert.equal(parsedBlocked['pendingAskSince'], blockedWaitOnly.pendingAskSince)
+  assert.equal(parsedBlocked['runDurationMs'], 0)
+})
+
+test('conversations watch and asks list: surface timing honestly in human mode and keep --json intact', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helmx-cli-watch-asks-timing-')
+  const baseNow = Date.now()
+  const activeConv = makeConversationSummary({
+    id: 21,
+    title: 'release',
+    status: 'working',
+    runStartedAt: baseNow - 30_000,
+    runDurationMs: 120_000,
+  })
+  const settledConv = { ...activeConv, status: 'done' as const, runStartedAt: undefined, runDurationMs: 155_000 }
+  const hub = await startMockHub(
+    {
+      'GET /api/events': (_body, _req, res) => {
+        res.writeHead(200, { 'content-type': 'text/event-stream' })
+        res.write(
+          `event: snapshot\ndata: ${JSON.stringify({ bootId: 'b1', seq: 1, serverTime: baseNow, conversations: [activeConv], pendingAsks: [], plugins: [] })}\n\n`,
+        )
+        res.write(
+          `event: conversation.upsert\ndata: ${JSON.stringify({ seq: 2, event: { type: 'conversation.upsert', conversation: settledConv } })}\n\n`,
+        )
+        res.end()
+        return null
+      },
+      'GET /api/asks': () => ({
+        body: [
+          { id: 'ask-1', conversationId: 21, title: 'Confirm prod deploy', fields: [], status: 'pending', createdAt: baseNow - 75_000 },
+          { id: 'ask-2', conversationId: 22, title: 'Legacy ask without time', fields: [], status: 'pending', createdAt: 0 },
+        ],
+      }),
+    },
+    { autoRegisterCleanup: t },
+  )
+  const env = makeCliEnv(hub.url, dir)
+
+  // conversations watch (human) surfaces initial live timing and final settled total
+  const watchHuman = await runCliCaptured(['conversations', 'watch', '21'], env)
+  assert.equal(watchHuman.code, 0, watchHuman.err)
+  assert.match(watchHuman.out, /watching #21 release \(working\) — running (?:3\ds|4\ds) \(total 2m\d\ds\)/)
+  assert.match(watchHuman.out, /settled: done \(in [^,]+, total 2m35s\)/)
+
+  // conversations watch (--json) preserves timing fields on watch.conversation and result.runDurationMs
+  const watchJson = await runCliCaptured(['conversations', 'watch', '21', '--json'], env)
+  assert.equal(watchJson.code, 0, watchJson.err)
+  const watchFrames = watchJson.out.trim().split('\n').map((l) => JSON.parse(l) as Record<string, unknown>)
+  const initialConv = watchFrames[0]?.['conversation'] as Record<string, unknown>
+  assert.equal(initialConv['runStartedAt'], activeConv.runStartedAt)
+  assert.equal(initialConv['runDurationMs'], 120_000)
+  const finalFrame = watchFrames.at(-1) as Record<string, unknown>
+  assert.equal(finalFrame['type'], 'result')
+  assert.equal(finalFrame['runDurationMs'], 155_000)
+
+  // events watch (human) appends timing on conversation.upsert when present
+  const eventsHuman = await runCliCaptured(['events', 'watch'], env)
+  assert.equal(eventsHuman.code, 0, eventsHuman.err)
+  assert.match(eventsHuman.out, /conversation\.upsert\s+#21 release \(done\) — total 2m35s/)
+
+  // asks list (human & --json)
+  const asksHuman = await runCliCaptured(['asks', 'list'], env)
+  assert.equal(asksHuman.code, 0, asksHuman.err)
+  const askLines = asksHuman.out.trim().split('\n')
+  assert.match(askLines[0]!, /^id\s+conversation\s+status\s+waiting\s+title/)
+  const ask1Row = askLines.find((l) => l.includes('ask-1'))!
+  assert.match(ask1Row, /#21\s+pending\s+1m\d\ds\s+Confirm prod deploy/)
+  const ask2Row = askLines.find((l) => l.includes('ask-2'))!
+  assert.doesNotMatch(ask2Row, /\b0s\b/, `missing createdAt must omit waiting time: ${ask2Row}`)
+
+  const asksJson = await runCliCaptured(['asks', 'list', '--json'], env)
+  assert.equal(asksJson.code, 0, asksJson.err)
+  const parsedAsks = JSON.parse(asksJson.out) as Array<Record<string, unknown>>
+  assert.equal(parsedAsks.length, 2)
+  assert.equal(parsedAsks[0]?.['createdAt'], baseNow - 75_000)
 })

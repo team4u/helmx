@@ -292,6 +292,12 @@ describe('WorkflowService listRuns integrity', () => {
         wantProblem: 'entry 0 updatedAt is not a finite number',
       },
       {
+        name: 'invalid settledAt',
+        value: [entry({ id: 'wf_d1d1d1d1d1d1', settledAt: -5 })],
+        wantRunId: 'wf_d1d1d1d1d1d1',
+        wantProblem: 'entry 0 settledAt is not a non-negative finite number',
+      },
+      {
         name: 'invalid autoResumeCount',
         value: [entry({ id: 'wf_e0e0e0e0e0e0', autoResumeCount: -1 })],
         wantRunId: 'wf_e0e0e0e0e0e0',
@@ -495,10 +501,21 @@ describe('WorkflowService listRuns integrity', () => {
     )
 
     // 合法形状（布尔 + 有限数值）正常读回：不因新增字段误伤既有记录。
-    writeRecordFile(dataDir, { ...record, syncForeground: true, detachedAt: 1_700_000_000_000 })
+    writeRecordFile(dataDir, { ...record, syncForeground: true, detachedAt: 1_700_000_000_000, settledAt: 1_700_000_005_000 })
     const summary = service.getRun(victim)
     assert.equal(summary.syncForeground, true)
     assert.equal(summary.detachedAt, 1_700_000_000_000)
+    assert.equal(summary.settledAt, 1_700_000_005_000)
+
+    // settledAt 非法（负数 / 非数值）显式报 workflow_record_corrupt。
+    writeRecordFile(dataDir, { ...record, settledAt: -1 })
+    assert.throws(
+      () => service.getRun(victim),
+      (error: unknown) =>
+        error instanceof HelmxError &&
+        error.code === 'workflow_record_corrupt' &&
+        error.message.includes('settledAt'),
+    )
 
     // errorCode 非字符串显式报 workflow_record_corrupt；合法失败记录透传 errorCode 与 resumable。
     writeRecordFile(dataDir, { ...record, errorCode: 123 })
