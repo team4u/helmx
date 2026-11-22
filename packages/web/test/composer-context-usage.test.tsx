@@ -453,7 +453,7 @@ test('AgentStandbyPane mounts COMPOSER_STATUS_SLOT below .composer-box with effe
   }
 })
 
-test('conversationDurationLabel：首轮去重、第 2 轮累加、blocked 等待审批、空闲态与 Tooltip 拆解', { timeout: 60_000 }, async () => {
+test('conversationDurationLabel：生成中不重复展示本轮、第 2 轮起仅实时累计、blocked 等待审批、空闲态与 Tooltip 拆解', { timeout: 60_000 }, async () => {
   const { conversationDurationLabel, conversationDurationNeedsLiveClock } = await import(
     '../src/conversation/conversation-duration-model.js'
   )
@@ -468,27 +468,31 @@ test('conversationDurationLabel：首轮去重、第 2 轮累加、blocked 等�
   assert.equal(conversationDurationNeedsLiveClock({ status: 'idle', runDurationMs: 0 }), false)
   assert.equal(conversationDurationLabel({ status: 'idle', runDurationMs: 0 }, now, tZh), null)
 
-  // 2. working 第 1 轮（settledRunMs === 0）：首轮去重，仅显示「本轮 12s」
-  const round1 = conversationDurationLabel(
-    {
-      status: 'working',
-      runDurationMs: 0,
-      runStartedAt: now - 12_300,
-      completionSeq: 0,
-      createdAt,
-      updatedAt: now,
-    },
-    now,
-    tZh,
+  // 2. working 第 1 轮（settledRunMs === 0）：本轮秒表归时间线独占，状态行不重复展示 -> null
+  //    （共享时钟需求仍为 true：标题浮层等活跃消费者继续订阅）
+  assert.equal(conversationDurationNeedsLiveClock({
+    status: 'working',
+    runDurationMs: 0,
+    runStartedAt: now - 12_300,
+  }), true)
+  assert.equal(
+    conversationDurationLabel(
+      {
+        status: 'working',
+        runDurationMs: 0,
+        runStartedAt: now - 12_300,
+        completionSeq: 0,
+        createdAt,
+        updatedAt: now,
+      },
+      now,
+      tZh,
+    ),
+    null,
   )
-  assert.ok(round1 !== null)
-  assert.equal(round1.text, '本轮 12s')
-  assert.equal(round1.tone, 'default')
-  assert.match(round1.tooltip, /本轮运行：12s/)
-  assert.match(round1.tooltip, /创建于：2026-11-10 14:00:00/)
-  assert.match(round1.tooltip, /会话跨度：2m00s/)
 
-  // 3. working 第 2 轮起（settledRunMs > 0）：显示「本轮 12s · 累计 1m12s」
+  // 3. working 第 2 轮起（settledRunMs > 0）：紧凑文本仅显示实时「累计」（已结算 + 在途），
+  //    本轮运行降级到 Tooltip 拆解
   const round2 = conversationDurationLabel(
     {
       status: 'working',
@@ -502,9 +506,13 @@ test('conversationDurationLabel：首轮去重、第 2 轮累加、blocked 等�
     tZh,
   )
   assert.ok(round2 !== null)
-  assert.equal(round2.text, '本轮 12s · 累计 1m12s')
+  assert.equal(round2.text, '累计 1m12s')
+  assert.equal(round2.tone, 'default')
   assert.match(round2.tooltip, /累计运行：1m12s/)
+  assert.match(round2.tooltip, /本轮运行：12s/)
   assert.match(round2.tooltip, /已结算轮次：1/)
+  assert.match(round2.tooltip, /创建于：2026-11-10 14:00:00/)
+  assert.match(round2.tooltip, /会话跨度：2m00s/)
 
   // 4. blocked 等待审批（warn 语义；无累计仅「等待审批 15s」，有累计附「· 累计 1m20s」）
   const blockedOnly = conversationDurationLabel(
