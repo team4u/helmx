@@ -788,16 +788,18 @@ test('magpie19: UI spec 无 Emoji、scope 绑定 magpie、client 轨道组件导
     assert.deepEqual(panel.label, { en: 'Magpie Gateway', 'zh-CN': 'Magpie 网关' }, 'settingsPanel label 为 en+zh-CN 双语资源')
     assert.equal(panel.json, undefined, 'settingsPanel 不再声明 JSON Spec（单轨 client）')
     assert.equal(panel.docs, undefined, 'settingsPanel 不再声明 docs（组件 usePluginDoc 自主订阅）')
-    assert.equal(panel.client!.module, 'index.tsx')
+    assert.equal(panel.client!.module, 'settings.tsx')
     assert.equal(panel.client!.export, 'MagpieSettingsPanel')
 
-    // 真实编译：clientRoot 内 index.tsx 可编译为浏览器 ESM（面板含刷新按钮由 web 端 DOM 测试覆盖）
+    // 真实编译：clientRoot 内按 surface 拆分的模块均可独立编译为浏览器 ESM
     const clientRoot = join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'magpie', 'client')
     const cacheDir = mkdtempSync(join(tmpdir(), 'helmx-magpie-client-'))
     try {
-      const { code } = await compilePluginClientModule(MAGPIE, clientRoot, 'index.tsx', cacheDir)
-      assert.ok(code.length > 0, '编译产物非空')
-      assert.doesNotMatch(code, /\p{Extended_Pictographic}/u, '编译产物不含 Emoji')
+      for (const entry of ['composer-quota.tsx', 'settings.tsx']) {
+        const { code } = await compilePluginClientModule(MAGPIE, clientRoot, entry, cacheDir)
+        assert.ok(code.length > 0, `${entry} 编译产物非空`)
+        assert.doesNotMatch(code, /\p{Extended_Pictographic}/u, `${entry} 编译产物不含 Emoji`)
+      }
     } finally {
       rmSync(cacheDir, { recursive: true, force: true })
     }

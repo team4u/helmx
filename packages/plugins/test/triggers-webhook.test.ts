@@ -307,7 +307,7 @@ test('工厂注册：cron/webhook 动作、路由与声明式贡献完整注册'
   assert.ok(ui.some((u) => u.surface === 'settings.panel'))
   // screen 贡献指向 client.tsx 组件（doc 订阅由插件 client 经 plugin-client-sdk 完成）
   const screen = ui.find((u) => u.surface === 'screen')!.spec as { client: { module: string; export: string } }
-  assert.equal(screen.client.module, 'index.tsx')
+  assert.equal(screen.client.module, 'manager.tsx')
   assert.equal(screen.client.export, 'TriggersManagerScreen')
   await h.host.dispose()
   rmSync(h.dataDir, { recursive: true, force: true })

@@ -15,14 +15,20 @@ import {
   act,
   createRoot,
   importWorkflowClientModule as baseImportWorkflowClientModule,
+  importWorkflowSurfaces,
   mountSharedPluginNamespaces,
   setWorkflowClientStub,
 } from './helpers/workflow-client-harness.js'
 
-// Isolate this file's bundled workbench-focus singleton from other workflow DOM test files
-// when running in shared DOM shard workers (`--test-isolation=none`).
-const importWorkflowClientModule = (moduleRef = 'index.tsx') =>
-  baseImportWorkflowClientModule(moduleRef, undefined, { realHooks: false, scope: 'interactions' })
+// Load split per-surface production entrypoints (active-tray / tool-views / workbench)
+// under a file-scoped ESM fragment so shared DOM shard workers stay isolated.
+const importWorkflowClientModule = (moduleRef?: string) =>
+  moduleRef === undefined
+    ? importWorkflowSurfaces(['active-tray.tsx', 'tool-views.tsx', 'workbench.tsx'], undefined, {
+        realHooks: false,
+        scope: 'interactions',
+      })
+    : baseImportWorkflowClientModule(moduleRef, undefined, { realHooks: false, scope: 'interactions' })
 
 const e = React.createElement
 const { PluginClientContext, resolveLocalizedText } = SDK
@@ -148,7 +154,7 @@ test('时间线单行与工作台整卡均点击触发 openConversationDrawer（
         : { summary: undefined, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} },
   })
   const spy = makeSpyCtx()
-  const mod = await importWorkflowClientModule('index.tsx')
+  const mod = await importWorkflowClientModule()
   const SubagentToolView = mod['SubagentToolView'] as (p: Record<string, unknown>) => React.ReactElement
   const SubagentLiveCard = mod['SubagentLiveCard'] as (p: Record<string, unknown>) => React.ReactElement
   const { host, rerender, unmount } = await mountClient(
@@ -338,7 +344,7 @@ test('工作流时间线点击定位工作台，工作台节点内嵌子代理�
         : { summary: undefined, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} },
   })
   const spy = makeSpyCtx()
-  const mod = await importWorkflowClientModule('index.tsx')
+  const mod = await importWorkflowClientModule()
   const WorkflowToolView = mod['WorkflowToolView'] as (p: Record<string, unknown>) => React.ReactElement
   const Panel = mod['WorkflowWorkbenchPanel'] as (p: Record<string, unknown>) => React.ReactElement
   const { host, rerender, unmount } = await mountClient(
@@ -391,7 +397,7 @@ test('中止 / 清理按钮 stopPropagation：点击按钮不触发整卡打开�
     actionCalls.push([actionId, input, options?.pluginId])
     return undefined
   }
-  const mod = await importWorkflowClientModule('index.tsx')
+  const mod = await importWorkflowClientModule()
   const Panel = mod['WorkflowWorkbenchPanel'] as (p: Record<string, unknown>) => React.ReactElement
   const { host, unmount } = await mountClient(
     spy,
@@ -573,7 +579,7 @@ test('后台子代理卡单卡「恢复」：点击派发 run 续接参数、防
       rejectRun = reject
     })
   }
-  const mod = await importWorkflowClientModule('index.tsx')
+  const mod = await importWorkflowClientModule()
   const Card = mod['SubagentLiveCard'] as React.ComponentType<Record<string, unknown>>
   const { host, rerender, unmount } = await mountClient(
     spy,
@@ -775,7 +781,7 @@ test('工作台顶栏「恢复失败 (N)」显隐、防连点、resume_failed �
       resolveBatch = resolve
     })
   }
-  const mod = await importWorkflowClientModule('index.tsx')
+  const mod = await importWorkflowClientModule()
   const Panel = mod['WorkflowWorkbenchPanel'] as React.ComponentType<Record<string, unknown>>
   const { host, rerender, unmount } = await mountClient(
     spy,
@@ -878,7 +884,7 @@ test('WorkflowActiveTray：展开行主显可读任务名并次显 #id，回退�
     conversation: () => ({ summary: undefined, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} }),
   })
   const spy = makeSpyCtx()
-  const mod = await importWorkflowClientModule('index.tsx')
+  const mod = await importWorkflowClientModule()
   const Tray = mod['WorkflowActiveTray'] as React.ComponentType<Record<string, unknown>>
   const { host, unmount } = await mountClient(spy, e(Tray, { conversation: summary(1, 'working') }))
   try {
@@ -919,7 +925,7 @@ test('SubagentToolView：.trace-tool-name 主显任务名、次显 #id 与 @prof
     conversation: () => ({ summary: undefined, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} }),
   })
   const spy = makeSpyCtx()
-  const mod = await importWorkflowClientModule('index.tsx')
+  const mod = await importWorkflowClientModule()
   const SubagentToolView = mod['SubagentToolView'] as React.ComponentType<Record<string, unknown>>
   const { host, rerender, unmount } = await mountClient(
     spy,
@@ -978,7 +984,7 @@ test('WorkflowActiveTray 清亮化：横栏主体真实按钮切换、Workbench 
     conversation: () => ({ summary: undefined, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} }),
   })
   const spy = makeSpyCtx()
-  const mod = await importWorkflowClientModule('index.tsx')
+  const mod = await importWorkflowClientModule()
   const Tray = mod['WorkflowActiveTray'] as React.ComponentType<Record<string, unknown>>
   const { host, unmount } = await mountClient(spy, e(Tray, { conversation: summary(1, 'working') }))
   try {
@@ -1045,7 +1051,7 @@ test('WorkflowActiveTray 清亮化：展开行主体真实按钮进抽屉/工作
     conversation: () => ({ summary: undefined, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} }),
   })
   const spy = makeSpyCtx()
-  const mod = await importWorkflowClientModule('index.tsx')
+  const mod = await importWorkflowClientModule()
   const Tray = mod['WorkflowActiveTray'] as React.ComponentType<Record<string, unknown>>
   const { host, unmount } = await mountClient(spy, e(Tray, { conversation: summary(1, 'working') }))
   try {
@@ -1123,7 +1129,7 @@ test('WorkflowActiveTray 展开行两层布局：标题/编号主行、实际执
     },
   })
   const spy = makeSpyCtx()
-  const mod = await importWorkflowClientModule('index.tsx')
+  const mod = await importWorkflowClientModule()
   const Tray = mod['WorkflowActiveTray'] as React.ComponentType<Record<string, unknown>>
   const { host, rerender, unmount } = await mountClient(spy, e(Tray, { conversation: summary(1, 'working') }))
   try {
@@ -1241,7 +1247,7 @@ test('WorkflowActiveTray 顶栏：收起优先审批与可见任务数，展开�
         : { summary: undefined, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} },
   })
   const spy = makeSpyCtx()
-  const mod = await importWorkflowClientModule('index.tsx')
+  const mod = await importWorkflowClientModule()
   const Tray = mod['WorkflowActiveTray'] as React.ComponentType<Record<string, unknown>>
   const { host, unmount } = await mountClient(spy, e(Tray, { conversation: summary(1, 'working') }))
   try {
@@ -1287,7 +1293,7 @@ test('WorkflowRunCardBody 头部整块可点展开：主体真实按钮切换，
     conversation: () => ({ summary: undefined, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} }),
   })
   const spy = makeSpyCtx()
-  const mod = await importWorkflowClientModule('index.tsx')
+  const mod = await importWorkflowClientModule()
   const Panel = mod['WorkflowWorkbenchPanel'] as React.ComponentType<Record<string, unknown>>
   const { host, unmount } = await mountClient(spy, e(Panel, { conversation: summary(1, 'idle') }))
   try {
@@ -1337,7 +1343,7 @@ test('执行卡结构：动作区位于导航按钮之外，点击主体打开�
     conversation: () => ({ summary: undefined, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} }),
   })
   const spy = makeSpyCtx()
-  const mod = await importWorkflowClientModule('index.tsx')
+  const mod = await importWorkflowClientModule()
   const Panel = mod['WorkflowWorkbenchPanel'] as React.ComponentType<Record<string, unknown>>
   const { host, unmount } = await mountClient(spy, e(Panel, { conversation: summary(1, 'working') }))
   try {

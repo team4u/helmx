@@ -1,6 +1,7 @@
 import * as React from 'react'
 import * as PopoverPrimitive from '@radix-ui/react-popover'
 import { useOverlayChildStyle } from './overlay-stack.js'
+import { usePluginScopeId } from './plugin-scope.js'
 
 export interface PopoverPortalProps extends PopoverPrimitive.PopoverPortalProps {}
 
@@ -37,11 +38,13 @@ export const PopoverContent = React.forwardRef<
   PopoverContentProps
 >(({ className = '', align = 'center', sideOffset = 6, portalled = false, children, style, ...props }, ref) => {
   const layeredStyle = useOverlayChildStyle(style)
+  const pluginScopeId = usePluginScopeId()
   const content = (
     <PopoverPrimitive.Content
       ref={ref}
       align={align}
       sideOffset={sideOffset}
+      data-plugin-id={pluginScopeId}
       className={`helmx-popover-content ${className}`.trim()}
       style={layeredStyle}
       {...props}

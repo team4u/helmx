@@ -14,24 +14,24 @@ export function registerWorkflowUi(ctx: HelmxPluginContext): void {
     id: 'background-report',
     kinds: ['helmx.input'],
     matchMeta: { renderer: BACKGROUND_REPORT_RENDERER },
-    client: { module: 'index.tsx', export: 'BackgroundReportCard' },
+    client: { module: 'background-report.tsx', export: 'BackgroundReportCard' },
   })
   ctx.ui.toolView({
     id: 'subagent-card',
     toolNames: ['subagent'],
     replaceRow: true,
-    client: { module: 'index.tsx', export: 'SubagentToolView' },
+    client: { module: 'tool-views.tsx', export: 'SubagentToolView' },
   })
   ctx.ui.toolView({
     id: 'workflow-card',
     toolNames: ['SubagentWorkflow'],
     replaceRow: true,
-    client: { module: 'index.tsx', export: 'WorkflowToolView' },
+    client: { module: 'tool-views.tsx', export: 'WorkflowToolView' },
   })
   ctx.ui.slot({
     id: 'active-tray',
     target: COMPOSER_DOCK_SLOT,
-    client: { module: 'index.tsx', export: 'WorkflowActiveTray' },
+    client: { module: 'active-tray.tsx', export: 'WorkflowActiveTray' },
   })
   ctx.ui.workbenchPanel({
     id: 'tasks',
@@ -39,7 +39,7 @@ export function registerWorkflowUi(ctx: HelmxPluginContext): void {
     icon: 'git-branch',
     order: 10,
     badge: { doc: WORKFLOW_RUN_BADGES_DOC, byConversationField: 'byConversation' },
-    client: { module: 'index.tsx', export: 'WorkflowWorkbenchPanel' },
+    client: { module: 'workbench.tsx', export: 'WorkflowWorkbenchPanel' },
   })
   // 工作流库：跨会话可复用资产的独立视图空间（定义管理不属会话 workbench）。
   ctx.ui.sidebarItem({
@@ -53,6 +53,6 @@ export function registerWorkflowUi(ctx: HelmxPluginContext): void {
     id: 'library',
     label: { en: 'Workflow Library', 'zh-CN': '工作流库' },
     icon: 'workflow',
-    client: { module: 'index.tsx', export: 'WorkflowLibraryScreen' },
+    client: { module: 'library.tsx', export: 'WorkflowLibraryScreen' },
   })
 }

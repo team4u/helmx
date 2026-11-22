@@ -51,37 +51,37 @@ export function registerSuperAgentUi(ctx: HelmxPluginContext): void {
     id: 'superagent-router-status',
     title: { en: 'Hub Status', 'zh-CN': '中枢态势' },
     scope: ROUTER_TOOL_SCOPE,
-    client: { module: 'index.tsx', export: 'SuperAgentComposerWidget' },
+    client: { module: 'composer.tsx', export: 'SuperAgentComposerWidget' },
   })
   ctx.ui.composerPill({
     id: 'superagent-router-mode',
     label: { en: 'Hub Routing', 'zh-CN': '中枢路由' },
     title: { en: 'Router convergence mode', 'zh-CN': '中枢路由收敛模式' },
     scope: ROUTER_TOOL_SCOPE,
-    client: { module: 'index.tsx', export: 'SuperAgentRouterModePill' },
+    client: { module: 'composer.tsx', export: 'SuperAgentRouterModePill' },
   })
   ctx.ui.toolView({
     id: 'superagent-dispatch',
     title: { en: 'Dispatch Status', 'zh-CN': '派工状态' },
     toolNames: ['dispatch_worker'],
-    client: { module: 'index.tsx', export: 'SuperAgentDispatchToolView' },
+    client: { module: 'timeline.tsx', export: 'SuperAgentDispatchToolView' },
   })
   ctx.ui.timelineRenderer({
     id: 'superagent-worker-report',
     title: { en: 'Worker Report Card', 'zh-CN': 'Worker 汇报卡' },
     matchMeta: { renderer: WORKER_REPORT_RENDERER },
-    client: { module: 'index.tsx', export: 'SuperAgentWorkerReportCard' },
+    client: { module: 'timeline.tsx', export: 'SuperAgentWorkerReportCard' },
   })
   ctx.ui.screen({
     id: RECALL_DOC_NAME,
     label: { en: 'Memory & Subscriptions Graph', 'zh-CN': '记忆与订阅图谱' },
     icon: 'git-fork',
-    client: { module: 'index.tsx', export: 'SuperAgentRecallScreen' },
+    client: { module: 'recall-screen.tsx', export: 'SuperAgentRecallScreen' },
   })
   ctx.ui.settingsPanel({
     id: 'superagent-settings',
     label: { en: 'SuperAgent Hub', 'zh-CN': 'SuperAgent 中枢' },
     order: 30,
-    client: { module: 'index.tsx', export: 'SuperAgentSettingsPanel' },
+    client: { module: 'settings.tsx', export: 'SuperAgentSettingsPanel' },
   })
 }

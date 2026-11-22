@@ -396,17 +396,19 @@ describe("apps-client-interactions", () => {
     const overlay = document.body.querySelector('.primary-drawer-backdrop')
     assert.ok(overlay, '遮罩层必须绑定 .primary-drawer-backdrop 通用层级规范')
 
-    // 4. 底栏删除按钮：点击后进入二次确认状态
+    // 4. 底栏删除按钮：点击后弹出共享 ConfirmDialog（role="alertdialog"）进入二次确认
     const deleteBtn = Array.from(drawer.querySelectorAll('button')).find((b) => b.getAttribute('aria-label') === 'Uninstall and delete app')
     assert.ok(deleteBtn, '底栏应存在删除按钮')
 
     await act(async () => {
       deleteBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     })
-    assert.match(drawer.textContent ?? '', /Uninstall and delete this app\?/, '点击删除后展示确认文案')
+    const confirmDialog = document.body.querySelector('[role="alertdialog"]')
+    assert.ok(confirmDialog, '点击删除后应弹出 ConfirmDialog (alertdialog)')
+    assert.match(confirmDialog.textContent ?? '', /Uninstall and delete this app\?/, 'ConfirmDialog 应展示确认文案')
 
     // 5. 点击「确认删除」调用 remove 动作
-    const confirmDeleteBtn = Array.from(drawer.querySelectorAll('button')).find((b) => b.textContent?.includes('Delete'))
+    const confirmDeleteBtn = Array.from(confirmDialog.querySelectorAll('button')).find((b) => b.textContent?.includes('Delete'))
     assert.ok(confirmDeleteBtn, '应出现确认删除按钮')
 
     await act(async () => {

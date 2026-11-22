@@ -18,6 +18,7 @@ import * as RadixAlertDialog from '@radix-ui/react-alert-dialog'
 import { usePluginTranslator } from '../i18n.js'
 import { uiCopy } from '../ui-copy.js'
 import { OverlayLayerContext, useOverlayLayer } from './overlay-stack.js'
+import { usePluginScopeId } from './plugin-scope.js'
 
 const AlertDialogInlineContext = React.createContext<boolean>(false)
 
@@ -89,12 +90,14 @@ export const AlertDialogOverlay = React.forwardRef<
   AlertDialogOverlayProps
 >(function AlertDialogOverlay({ className, style, ...props }, ref) {
   const layer = React.useContext(OverlayLayerContext)
+  const pluginScopeId = usePluginScopeId()
   const layeredStyle = layer === null
     ? style
     : ({ ...style, zIndex: layer.overlayZIndex, '--dialog-layer-z': layer.overlayZIndex } as React.CSSProperties)
   return (
     <RadixAlertDialog.Overlay
       ref={ref}
+      data-plugin-id={pluginScopeId}
       className={className ?? 'modal-backdrop'}
       style={layeredStyle}
       {...props}
@@ -114,12 +117,14 @@ export const AlertDialogContent = React.forwardRef<
   AlertDialogContentProps
 >(function AlertDialogContent({ className, style, ...props }, ref) {
   const layer = React.useContext(OverlayLayerContext)
+  const pluginScopeId = usePluginScopeId()
   const layeredStyle = layer === null
     ? style
     : ({ ...style, zIndex: layer.contentZIndex, '--dialog-layer-z': layer.contentZIndex } as React.CSSProperties)
   return (
     <RadixAlertDialog.Content
       ref={ref}
+      data-plugin-id={pluginScopeId}
       className={className ?? 'modal'}
       style={layeredStyle}
       {...props}
@@ -227,6 +232,8 @@ export interface ConfirmDialogProps {
   confirmText?: string
   cancelText?: string
   danger?: boolean
+  /** Disables action buttons while an async confirmation action is in flight. */
+  pending?: boolean
   onConfirm: () => void
   onCancel?: () => void
   inline?: boolean
@@ -247,6 +254,7 @@ export function ConfirmDialog({
   confirmText,
   cancelText,
   danger = false,
+  pending = false,
   onConfirm,
   onCancel,
   inline,
@@ -266,7 +274,7 @@ export function ConfirmDialog({
               border: '1px solid var(--border)',
             }}
             onEscapeKeyDown={() => {
-              onCancel?.()
+              if (!pending) onCancel?.()
             }}
           >
             <div className="modal-header">
@@ -290,6 +298,7 @@ export function ConfirmDialog({
                 <button
                   type="button"
                   className="btn btn-ghost btn-sm"
+                  disabled={pending}
                   onClick={() => {
                     onCancel?.()
                   }}
@@ -301,6 +310,7 @@ export function ConfirmDialog({
                 <button
                   type="button"
                   className={`btn btn-sm ${danger ? 'btn-danger' : 'btn-primary'}`}
+                  disabled={pending}
                   onClick={() => {
                     onConfirm()
                   }}

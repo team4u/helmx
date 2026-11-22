@@ -23,6 +23,7 @@ import * as HelmxPluginClient from '../src/index.js'
 import { Screen, ScreenSection, ScreenToolbar, DataTable, KvGrid } from '../src/primitives.js'
 import { StatusLight } from '../src/ui/StatusLight.js'
 import { normalizeStatusLightTone, statusLightDotClass } from '../src/ui/status-light-model.js'
+import { PluginClientContext } from '../src/plugin-context.js'
 
 const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React
@@ -265,4 +266,41 @@ test('normalizeStatusLightTone: alias families collapse into the seven honest to
   assert.equal(normalizeStatusLightTone('queued'), 'pending')
   assert.equal(normalizeStatusLightTone(undefined), 'pending')
   assert.equal(normalizeStatusLightTone(''), 'pending')
+})
+
+test('Screen: layout defaults to contained, supports full-bleed, and stamps data-plugin-id inside plugin context only', { timeout: 60_000 }, () => {
+  const hostDefault = renderToString(e(Screen, { title: 'Overview' }, e('div', null, 'Body')))
+  assert.match(hostDefault, /data-screen-layout="contained"/)
+  assert.doesNotMatch(hostDefault, /data-plugin-id/, 'host Screen outside plugin context must omit data-plugin-id')
+
+  const fullBleed = renderToString(e(Screen, { layout: 'full-bleed', className: 'canvas-screen' }, e('div', null, 'Canvas')))
+  assert.match(fullBleed, /data-screen-layout="full-bleed"/)
+  assert.match(fullBleed, /class="screen-container canvas-screen"/)
+
+  const pluginCtx = {
+    pluginId: 'builtin:herdr',
+    callAction: async () => ({}),
+    submitInput: async () => {},
+    openScreen: () => {},
+    openSplitScreen: () => {},
+    openConversationDrawer: () => {},
+    openArtifact: () => {},
+    openWorkbench: () => {},
+    closeWorkbench: () => {},
+    notify: () => {},
+    getPluginDoc: async () => undefined,
+    getPluginSessionDoc: async () => undefined,
+    theme: 'dark' as const,
+    locale: 'en' as const,
+    translate: (text: unknown) => (typeof text === 'string' ? text : ''),
+  }
+  const pluginScreen = renderToString(
+    e(
+      PluginClientContext.Provider,
+      { value: pluginCtx },
+      e(Screen, { layout: 'full-bleed' }, e('div', null, 'Grid')),
+    ),
+  )
+  assert.match(pluginScreen, /data-screen-layout="full-bleed"/)
+  assert.match(pluginScreen, /data-plugin-id="builtin:herdr"/)
 })

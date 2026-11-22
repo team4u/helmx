@@ -108,8 +108,16 @@ export function mountSharedPluginNamespaces(options: { realHooks?: boolean } = {
   syncSharedPluginGlobals(options.realHooks === true)
 }
 
+export const WORKFLOW_SURFACE_MODULES = [
+  'active-tray.tsx',
+  'background-report.tsx',
+  'tool-views.tsx',
+  'workbench.tsx',
+  'library.tsx',
+] as const
+
 export async function importWorkflowClientModule(
-  moduleRef = 'index.tsx',
+  moduleRef: string,
   cacheDir = WORKFLOW_CLIENT_CACHE_DIR,
   options?: { realHooks?: boolean; scope?: string },
 ): Promise<Record<string, unknown>> {
@@ -119,11 +127,23 @@ export async function importWorkflowClientModule(
   const { code } = await compilePluginClientModule('builtin:workflow', WORKFLOW_CLIENT_ROOT, moduleRef, cacheDir)
   const fragment = options?.scope ? `${mode}-${mountGen}-${options.scope}` : `${mode}-${mountGen}`
   // Keep #stub and #real (and per-file mountGen / scoped) module instances distinct in Node's ESM cache because
-  // compiled bundles destructure @helmx/plugin-client hooks and hold workbench-focus state at module load time.
+  // compiled bundles destructure @helmx/plugin-client hooks at module load time.
   return (await import(`data:text/javascript;base64,${Buffer.from(code, 'utf8').toString('base64')}#${fragment}`)) as Record<
     string,
     unknown
   >
+}
+
+/** Compiles and loads the requested per-surface workflow entry modules independently, merging their component exports. */
+export async function importWorkflowSurfaces(
+  modules: ReadonlyArray<(typeof WORKFLOW_SURFACE_MODULES)[number]> = WORKFLOW_SURFACE_MODULES,
+  cacheDir = WORKFLOW_CLIENT_CACHE_DIR,
+  options?: { realHooks?: boolean; scope?: string },
+): Promise<Record<string, unknown>> {
+  const loaded = await Promise.all(
+    modules.map((m) => importWorkflowClientModule(m, cacheDir, options)),
+  )
+  return Object.assign({}, ...loaded) as Record<string, unknown>
 }
 
 export async function importWorkflowModels(

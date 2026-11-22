@@ -5,11 +5,8 @@
  * .stack-row / the Callout component, etc.); this file keeps only the Herdr overview dual-endpoint responsive layout and container breakpoint adaptation.
  */
 .herdr-overview {
-  width: 100%;
-  height: 100%;
-  overflow-y: auto;
+  gap: 0;
   overflow-x: hidden;
-  box-sizing: border-box;
   container-type: inline-size;
   container-name: herdr-overview;
 }
@@ -254,12 +251,8 @@
   font-size: 12px;
 }
 
-/* Terminal snapshot modal: host .modal defaults to 680px; desktop widens to reading width, narrow screens hug the viewport */
-.herdr-snapshot-modal {
-  max-width: min(860px, calc(100vw - 24px));
-}
-
-.herdr-snapshot-modal .code-block-pre {
+/* Terminal snapshot drawer body: preserve preformatted wrapping inside DetailDrawer */
+.herdr-snapshot-drawer .code-block-pre {
   background: var(--bg-subtle);
   border-radius: var(--radius-sm);
   white-space: pre-wrap;

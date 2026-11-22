@@ -22,7 +22,7 @@ import {
 const e = React.createElement
 
 mountSharedPluginNamespaces({ realHooks: true })
-const mod = await importWorkflowClientModule()
+const mod = await importWorkflowClientModule('tool-views.tsx')
 const SubagentToolView = mod['SubagentToolView'] as React.ComponentType<Record<string, unknown>>
 const WorkflowToolView = mod['WorkflowToolView'] as React.ComponentType<Record<string, unknown>>
 

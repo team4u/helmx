@@ -17,20 +17,19 @@
  */
 import { useMemo, useState } from 'react'
 import './styles.css'
-import type { CSSProperties, ReactNode } from 'react'
+import type { ReactNode } from 'react'
 import type { ScreenProps } from '@helmx/protocol'
 import {
   Callout,
-  Dialog,
-  DialogClose,
-  DialogContent,
-  DialogOverlay,
-  DialogPortal,
-  DialogTitle,
-  StatusLight,
-  formatCompactTimestamp,
+  DetailDrawer,
+  HelmxIcon,
+  LoadingState,
+  Screen,
   ScreenToolbar,
   Select,
+  StatusLight,
+  formatCompactTimestamp,
+  usePluginAction,
   usePluginContext,
   usePluginDoc,
   usePluginLocale,
@@ -97,43 +96,6 @@ import {
   herdrSnapshotTitle,
   herdrStatusFilterOptions,
 } from './copy.ts'
-import {
-  Check,
-  ChevronDown,
-  Circle,
-  Loader2,
-  MessageSquare,
-  RefreshCw,
-  RotateCcw,
-  Terminal,
-  X,
-} from 'lucide-react'
-
-function Icon({
-  name,
-  size = 12,
-  className,
-  style,
-}: {
-  name: string
-  size?: number
-  className?: string
-  style?: CSSProperties
-}): ReactNode {
-  const map: Record<string, typeof Terminal> = {
-    check: Check,
-    circle: Circle,
-    'chevron-down': ChevronDown,
-    loader: Loader2,
-    'message-square': MessageSquare,
-    'refresh-cw': RefreshCw,
-    'rotate-ccw': RotateCcw,
-    terminal: Terminal,
-    x: X,
-  }
-  const Cmp = map[name] ?? Circle
-  return <Cmp size={size} strokeWidth={1.75} className={className} style={style} />
-}
 
 /** Host Radix Select filter (reuses the @helmx/plugin-client shared primitive; zero native <select>). */
 function FilterSelect({
@@ -167,9 +129,12 @@ export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
   const doc = usePluginDoc<OverviewDoc>('overview')
 
   const filters = useMemo(() => parseFilters(params), [params])
-  const [busyPane, setBusyPane] = useState<string | null>(null)
   const [snapshot, setSnapshot] = useState<{ title: string; text: string } | null>(null)
   const [managedMap, setManagedMap] = useState<Record<string, number>>({})
+  const paneAction = usePluginAction({
+    notifyError: true,
+    formatError: (error) => herdrActionFailed(error instanceof Error ? error.message : String(error), locale),
+  })
 
   const panes = doc?.panes ?? []
   const nodes = useMemo(() => collectNodes(panes), [panes])
@@ -187,51 +152,51 @@ export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
     setParams(filtersToParamsPatch({ ...filters, [key]: next }))
   }
 
-  const invokeWithGuard = async (paneKey: string, fn: () => Promise<void>) => {
-    if (busyPane !== null) return
-    setBusyPane(paneKey)
-    try {
-      await fn()
-    } catch (error) {
-      ctx.notify(
-        herdrActionFailed(error instanceof Error ? error.message : String(error), locale),
-        'error',
-      )
-    } finally {
-      setBusyPane(null)
-    }
-  }
-
   const focusPane = (row: OverviewPaneRow) => {
     if (isHumanOwnedPane(row)) return
-    return invokeWithGuard(`focus:${paneRowKey(row)}`, async () => {
-      await ctx.callAction('focus', {
+    return paneAction.run(
+      'focus',
+      {
         paneId: row.paneId,
         ...(row.nodeId !== 'local' ? { nodeId: row.nodeId } : {}),
-      })
-    })
+      },
+      { key: `focus:${paneRowKey(row)}` },
+    )
   }
 
   const readPane = (row: OverviewPaneRow) => {
     if (isHumanOwnedPane(row)) return
-    return invokeWithGuard(`read:${paneRowKey(row)}`, async () => {
-      const result = await ctx.callAction('read', {
+    return paneAction.run(
+      'read',
+      {
         paneId: row.paneId,
         lines: 40,
         ...(row.nodeId !== 'local' ? { nodeId: row.nodeId } : {}),
-      })
-      setSnapshot({
-        title: `${row.paneId}@${row.nodeId}${row.agentName !== undefined ? ` (${row.agentName})` : ''}`,
-        text: parseReadText(result),
-      })
-    })
+      },
+      {
+        key: `read:${paneRowKey(row)}`,
+        onSuccess: (result) => {
+          setSnapshot({
+            title: `${row.paneId}@${row.nodeId}${row.agentName !== undefined ? ` (${row.agentName})` : ''}`,
+            text: parseReadText(result),
+          })
+        },
+      },
+    )
   }
 
   /** parentConversationId of managed panes, fetched once via the list action (explicit action, no per-row polling). */
   const loadManagedMap = () =>
-    invokeWithGuard('list', async () => {
-      setManagedMap(parseManagedMap(await ctx.callAction('list', {})))
-    })
+    paneAction.run(
+      'list',
+      {},
+      {
+        key: 'list',
+        onSuccess: (result) => {
+          setManagedMap(parseManagedMap(result))
+        },
+      },
+    )
 
   const renderManagedActions = (row: OverviewPaneRow, key: string, parentConversationId: number | undefined): ReactNode => {
     if (isHumanOwnedPane(row)) {
@@ -253,10 +218,10 @@ export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
           <button
             type="button"
             className="btn btn-sm"
-            disabled={busyPane !== null}
+            disabled={paneAction.pending}
             onClick={() => void focusPane(row)}
           >
-            {busyPane === `focus:${key}` ? <Icon name="loader" size={11} /> : null}
+            {paneAction.pendingKey === `focus:${key}` ? <HelmxIcon name="loader" size={11} className="spin-slow" /> : null}
             {t(HDR_ACTION_FOCUS)}
           </button>
         ) : null}
@@ -264,10 +229,10 @@ export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
           <button
             type="button"
             className="btn btn-sm"
-            disabled={busyPane !== null}
+            disabled={paneAction.pending}
             onClick={() => void readPane(row)}
           >
-            {busyPane === `read:${key}` ? <Icon name="loader" size={11} /> : null}
+            {paneAction.pendingKey === `read:${key}` ? <HelmxIcon name="loader" size={11} className="spin-slow" /> : null}
             {t(HDR_ACTION_SNAPSHOT)}
           </button>
         ) : null}
@@ -283,7 +248,7 @@ export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
               else ctx.openScreen(`conversation:${parentConversationId}`)
             }}
           >
-            <Icon name="message-square" size={11} />
+            <HelmxIcon name="message-square" size={11} />
             {t(HDR_ACTION_OPEN_LINKED)}
           </button>
         ) : null}
@@ -292,7 +257,7 @@ export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
   }
 
   return (
-    <div className="herdr-overview">
+    <Screen layout="full-bleed" className="herdr-overview">
       <div className="herdr-overview-toolbar">
         <div className="herdr-toolbar-stats">
           <span className="badge badge-neutral">{t(HDR_STAT_PANES)} {stats.total}</span>
@@ -301,8 +266,8 @@ export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
           <span className="badge badge-neutral">{t(HDR_STAT_NODES)} {stats.nodes}</span>
         </div>
         <div className="herdr-toolbar-actions">
-          <button type="button" className="btn btn-sm" onClick={() => void loadManagedMap()}>
-            <Icon name="refresh-cw" size={12} />
+          <button type="button" className="btn btn-sm" disabled={paneAction.pending} onClick={() => void loadManagedMap()}>
+            <HelmxIcon name="refresh-cw" size={12} />
             {t(HDR_REFRESH_LINKS)}
           </button>
           <button
@@ -311,7 +276,7 @@ export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
             disabled={doc === undefined}
             onClick={() => void ctx.getPluginDoc('overview')}
           >
-            <Icon name="rotate-ccw" size={12} />
+            <HelmxIcon name="rotate-ccw" size={12} />
             {t(HDR_REFETCH)}
           </button>
         </div>
@@ -369,8 +334,8 @@ export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
               <tbody>
                 {doc === undefined ? (
                   <tr>
-                    <td colSpan={9} className="herdr-muted">
-                      {t(HDR_LOADING_DOC)}
+                    <td colSpan={9}>
+                      <LoadingState label={t(HDR_LOADING_DOC)} />
                     </td>
                   </tr>
                 ) : filtered.length === 0 ? (
@@ -432,7 +397,9 @@ export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
 
           <div className="herdr-mobile-cards" aria-label={t(HDR_PANE_LIST_ARIA)}>
             {doc === undefined ? (
-              <div className="herdr-mobile-empty">{t(HDR_LOADING_DOC)}</div>
+              <div className="herdr-mobile-empty">
+                <LoadingState label={t(HDR_LOADING_DOC)} />
+              </div>
             ) : filtered.length === 0 ? (
               <div className="herdr-mobile-empty">{t(HDR_NO_MATCH)}</div>
             ) : (
@@ -494,27 +461,19 @@ export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
       </div>
 
       {snapshot !== null && (
-        <Dialog open onOpenChange={(open) => { if (!open) setSnapshot(null) }}>
-          <DialogPortal>
-            <DialogOverlay className="modal-backdrop">
-              <DialogContent className="modal herdr-snapshot-modal" aria-label={t(HDR_SNAPSHOT_ARIA)}>
-                <div className="modal-header">
-                  <DialogTitle className="modal-title mono">{herdrSnapshotTitle(snapshot.title, locale)}</DialogTitle>
-                  <DialogClose asChild>
-                    <button type="button" className="btn btn-sm btn-ghost">
-                      <Icon name="x" size={12} />
-                      {t(HDR_CLOSE)}
-                    </button>
-                  </DialogClose>
-                </div>
-                <div className="modal-body">
-                  <pre className="code-block-pre selectable">{snapshot.text}</pre>
-                </div>
-              </DialogContent>
-            </DialogOverlay>
-          </DialogPortal>
-        </Dialog>
+        <DetailDrawer
+          open
+          onClose={() => setSnapshot(null)}
+          className="herdr-snapshot-drawer"
+          icon={<HelmxIcon name="terminal" size={16} />}
+          title={herdrSnapshotTitle(snapshot.title, locale)}
+          titleClassName="mono"
+          aria-label={t(HDR_SNAPSHOT_ARIA)}
+          closeLabel={t(HDR_CLOSE)}
+        >
+          <pre className="code-block-pre selectable">{snapshot.text}</pre>
+        </DetailDrawer>
       )}
-    </div>
+    </Screen>
   )
 }

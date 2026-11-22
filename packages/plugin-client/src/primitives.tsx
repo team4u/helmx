@@ -10,9 +10,10 @@
  *   Fast Refresh rule).
  */
 import { Children, Fragment, isValidElement, type ReactElement, type ReactNode } from 'react'
-import { HelmxIcon } from './icons.js'
 import { usePluginTranslator } from './i18n.js'
 import { uiCopy } from './ui-copy.js'
+import { LoadingState } from './ui/LoadingState.js'
+import { usePluginScopeId } from './ui/plugin-scope.js'
 
 function joinClass(...parts: Array<string | undefined>): string {
   return parts.filter(Boolean).join(' ')
@@ -22,9 +23,18 @@ function joinClass(...parts: Array<string | undefined>): string {
 // Screen: page container / header / title / subtitle
 // ---------------------------------------------------------------------------
 
+/**
+ * Page layout mode contract shared between Screen and the host ScreenHost stage:
+ * - 'contained' (default): standard centered max-width reading/management flow;
+ * - 'full-bleed': edge-to-edge full-width workspace (wide tables, split views, canvases).
+ */
+export type ScreenLayout = 'contained' | 'full-bleed'
+
 export interface ScreenProps {
   /** Extra container class name (extension point for custom layouts). */
   className?: string
+  /** Page layout mode ('contained' default, or 'full-bleed' for edge-to-edge screens). */
+  layout?: ScreenLayout
   /** Page header content: defaults to the title/subtitle/actions composition. */
   header?: ReactNode
   /** Main title text; use a custom header when an icon is needed. */
@@ -40,12 +50,19 @@ export interface ScreenProps {
  * Full-screen page container: unified vertical scrolling, spacing and header
  * layout. header/title/subtitle/actions are composable — passing header ignores
  * the other three; when none is passed, no header is rendered.
+ * Stamps data-screen-layout (contained | full-bleed) and, when rendered inside
+ * a plugin PluginClientContext, data-plugin-id so scoped plugin CSS matches.
  */
 export function Screen(props: ScreenProps): ReactNode {
-  const { className, header, title, subtitle, actions, children } = props
+  const { className, layout = 'contained', header, title, subtitle, actions, children } = props
+  const pluginScopeId = usePluginScopeId()
   const hasHeader = header !== undefined || title !== undefined || subtitle !== undefined || actions !== undefined
   return (
-    <div className={joinClass('screen-container', className)}>
+    <div
+      className={joinClass('screen-container', className)}
+      data-screen-layout={layout}
+      data-plugin-id={pluginScopeId}
+    >
       {hasHeader &&
         (header !== undefined ? (
           header
@@ -220,10 +237,7 @@ export function DataTable(props: DataTableProps): ReactNode {
           <tbody>
             <tr>
               <td colSpan={colSpan}>
-                <div className="loading-state" role="status">
-                  <HelmxIcon name="loader" size={12} className="spin-slow" />
-                  <span>{loadingLabel}</span>
-                </div>
+                <LoadingState label={loadingLabel} />
               </td>
             </tr>
           </tbody>

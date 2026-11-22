@@ -6,6 +6,7 @@ import { uiCopy } from '../ui-copy.js'
 import { Checkbox } from './Checkbox.js'
 import { Popover, PopoverContent, PopoverTrigger } from './Popover.js'
 import { useOverlayChildStyle } from './overlay-stack.js'
+import { usePluginScopeId } from './plugin-scope.js'
 import type {
   MultiSelectChangeEvent,
   SelectChangeEvent,
@@ -122,6 +123,7 @@ function SingleSelectInner<T extends string = string>({
   const selectedOption = options.find((opt) => opt.value === value)
   const popperSide = direction === 'up' ? 'top' : direction === 'down' ? 'bottom' : undefined
   const layeredPopoverStyle = useOverlayChildStyle()
+  const pluginScopeId = usePluginScopeId()
 
   const displayedLabel = (
     <span className={`helmx-select-label${selectedOption ? '' : ' helmx-select-placeholder'}`}>
@@ -173,6 +175,7 @@ function SingleSelectInner<T extends string = string>({
               side={popperSide}
               sideOffset={4}
               avoidCollisions
+              data-plugin-id={pluginScopeId}
               className={`helmx-select-popover dropdown-panel${popoverClassName ? ` ${popoverClassName}` : ''}`}
               style={layeredPopoverStyle}
             >

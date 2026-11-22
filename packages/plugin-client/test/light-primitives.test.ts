@@ -28,6 +28,18 @@ const { act } = await import('react')
 const { renderToString } = await import('react-dom/server')
 const { createRoot } = await import('react-dom/client')
 const { SearchBox } = await import('../src/ui/SearchBox.js')
+const { LoadingState } = await import('../src/ui/LoadingState.js')
+const { Tooltip } = await import('../src/ui/Tooltip.js')
+const {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+} = await import('../src/ui/DropdownMenu.js')
+const { usePluginAction } = await import('../src/ui/use-plugin-action.js')
+const { PluginClientContext } = await import('../src/plugin-context.js')
 const { EmptyState } = await import('../src/ui/EmptyState.js')
 const { ThinkingLevelControl } = await import('../src/ui/ThinkingLevelControl.js')
 const { ConfirmDialog } = await import('../src/ui/AlertDialog.js')
@@ -292,6 +304,208 @@ test('ConfirmDialog DOM: cancel and confirm buttons invoke their handlers and cl
   assert.ok(events.includes('cancel'), 'cancel handler fires')
   assert.ok(events.includes('confirm'), 'confirm handler fires')
   assert.ok(events.includes('open:false'), 'button closes funnel through onOpenChange(false)')
+
+  await act(async () => {
+    root.unmount()
+  })
+  container.remove()
+})
+
+test('ConfirmDialog SSR: pending=true disables both cancel and confirm buttons', { timeout: 60_000 }, () => {
+  const html = renderToString(
+    e(ConfirmDialog, {
+      open: true,
+      inline: true,
+      pending: true,
+      danger: true,
+      onOpenChange: () => {},
+      title: 'Delete item?',
+      onConfirm: () => {},
+    }),
+  )
+  const disabledMatches = html.match(/disabled=""/g) ?? []
+  assert.equal(disabledMatches.length, 2, 'both cancel and confirm buttons should be disabled when pending')
+})
+
+test('LoadingState SSR: renders unified .loading-state with spinning loader and locale default copy', { timeout: 60_000 }, () => {
+  const defaultHtml = renderToString(e(LoadingState, {}))
+  assert.match(defaultHtml, /class="loading-state"/)
+  assert.match(defaultHtml, /role="status"/)
+  assert.match(defaultHtml, /spin-slow/)
+  assert.match(defaultHtml, /Loading/)
+
+  const customHtml = renderToString(e(LoadingState, { label: 'Fetching quotas…', iconSize: 14, className: 'my-load' }))
+  assert.match(customHtml, /class="loading-state my-load"/)
+  assert.match(customHtml, /Fetching quotas…/)
+})
+
+test('Tooltip SSR: renders trigger directly when disabled/empty and stamps data-plugin-id only inside plugin context', { timeout: 60_000 }, () => {
+  const disabledHtml = renderToString(
+    e(Tooltip, { content: 'Help', disabled: true }, e('button', { type: 'button' }, 'Info')),
+  )
+  assert.match(disabledHtml, /Info/)
+  assert.doesNotMatch(disabledHtml, /helmx-tooltip-content/)
+
+  const hostHtml = renderToString(
+    e(Tooltip, { content: 'Shortcut help', open: true, inline: true }, e('button', { type: 'button' }, 'Info')),
+  )
+  assert.match(hostHtml, /helmx-tooltip-content/)
+  assert.match(hostHtml, /Shortcut help/)
+  assert.doesNotMatch(hostHtml, /data-plugin-id/, 'host tooltips omit data-plugin-id')
+
+  const pluginCtx = {
+    pluginId: 'builtin:demo',
+    callAction: async () => ({}),
+    submitInput: async () => {},
+    openScreen: () => {},
+    openSplitScreen: () => {},
+    openConversationDrawer: () => {},
+    openArtifact: () => {},
+    openWorkbench: () => {},
+    closeWorkbench: () => {},
+    notify: () => {},
+    getPluginDoc: async () => undefined,
+    getPluginSessionDoc: async () => undefined,
+    theme: 'dark' as const,
+    locale: 'en' as const,
+    translate: (text: unknown) => (typeof text === 'string' ? text : ''),
+  }
+  const pluginHtml = renderToString(
+    e(
+      PluginClientContext.Provider,
+      { value: pluginCtx },
+      e(Tooltip, { content: 'Plugin tip', open: true, inline: true }, e('button', { type: 'button' }, 'Run')),
+    ),
+  )
+  assert.match(pluginHtml, /data-plugin-id="builtin:demo"/, 'plugin tooltips stamp data-plugin-id on portalled content')
+})
+
+test('DropdownMenu SSR: renders host overlay classes and stamps data-plugin-id inside plugin context', { timeout: 60_000 }, () => {
+  const pluginCtx = {
+    pluginId: 'builtin:menu-demo',
+    callAction: async () => ({}),
+    submitInput: async () => {},
+    openScreen: () => {},
+    openSplitScreen: () => {},
+    openConversationDrawer: () => {},
+    openArtifact: () => {},
+    openWorkbench: () => {},
+    closeWorkbench: () => {},
+    notify: () => {},
+    getPluginDoc: async () => undefined,
+    getPluginSessionDoc: async () => undefined,
+    theme: 'dark' as const,
+    locale: 'en' as const,
+    translate: (text: unknown) => (typeof text === 'string' ? text : ''),
+  }
+  const html = renderToString(
+    e(
+      PluginClientContext.Provider,
+      { value: pluginCtx },
+      e(
+        DropdownMenu,
+        { open: true },
+        e(DropdownMenuTrigger, { asChild: true }, e('button', { type: 'button' }, 'More')),
+        e(
+          DropdownMenuContent,
+          { portalled: true, inline: true },
+          e(DropdownMenuLabel, null, 'Actions'),
+          e(DropdownMenuItem, null, 'Inspect'),
+          e(DropdownMenuSeparator, null),
+          e(DropdownMenuItem, { danger: true }, 'Delete'),
+        ),
+      ),
+    ),
+  )
+  assert.match(html, /helmx-dropdown-content/)
+  assert.match(html, /data-plugin-id="builtin:menu-demo"/)
+  assert.match(html, /helmx-dropdown-label/)
+  assert.match(html, /helmx-dropdown-item-danger/)
+  assert.match(html, /helmx-dropdown-separator/)
+})
+
+test('usePluginAction DOM: synchronous mutex prevents double submit, exposes pendingKey/error/clearError, and forwards notifyError + options', { timeout: 60_000 }, async () => {
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = createRoot(container)
+
+  const calls: Array<{ actionId: string; input: unknown; options: unknown }> = []
+  const notices: Array<{ msg: string; tone: string | undefined }> = []
+  let resolveFirst: ((val: unknown) => void) | undefined
+  let shouldFail = false
+
+  const pluginCtx = {
+    pluginId: 'builtin:act-demo',
+    callAction: async (actionId: string, input: unknown, options?: unknown) => {
+      calls.push({ actionId, input, options })
+      if (shouldFail) throw new Error('boom from server')
+      return await new Promise((resolve) => {
+        resolveFirst = resolve
+      })
+    },
+    submitInput: async () => {},
+    openScreen: () => {},
+    openSplitScreen: () => {},
+    openConversationDrawer: () => {},
+    openArtifact: () => {},
+    openWorkbench: () => {},
+    closeWorkbench: () => {},
+    notify: (msg: string, tone?: string) => {
+      notices.push({ msg, tone })
+    },
+    getPluginDoc: async () => undefined,
+    getPluginSessionDoc: async () => undefined,
+    theme: 'dark' as const,
+    locale: 'en' as const,
+    translate: (text: unknown) => (typeof text === 'string' ? text : ''),
+  }
+
+  let api: ReturnType<typeof usePluginAction> | undefined
+  function Harness() {
+    api = usePluginAction({
+      notifyError: true,
+      formatError: (err, id) => `${id}: ${err instanceof Error ? err.message : String(err)}`,
+    })
+    return e('div', { 'data-pending': String(api.pending), 'data-key': api.pendingKey ?? '', 'data-err': api.error ?? '' })
+  }
+
+  await act(async () => {
+    root.render(e(PluginClientContext.Provider, { value: pluginCtx }, e(Harness)))
+  })
+
+  // Fire two calls synchronously in the same tick: second must be dropped by the ref mutex
+  let p1: Promise<unknown> | undefined
+  let p2: Promise<unknown> | undefined
+  await act(async () => {
+    p1 = api!.run('refresh', { force: true }, { key: 'row:1', pluginId: 'ext:other', conversationId: 42 })
+    p2 = api!.run('refresh', { force: true }, { key: 'row:2' })
+  })
+  assert.equal(calls.length, 1, 'second concurrent run call must be dropped by synchronous mutex')
+  assert.deepEqual(calls[0], { actionId: 'refresh', input: { force: true }, options: { pluginId: 'ext:other', conversationId: 42 } })
+  assert.equal(await p2, undefined)
+  assert.equal(container.querySelector('div')?.getAttribute('data-pending'), 'true')
+  assert.equal(container.querySelector('div')?.getAttribute('data-key'), 'row:1')
+
+  await act(async () => {
+    resolveFirst?.({ ok: true })
+    await p1
+  })
+  assert.equal(container.querySelector('div')?.getAttribute('data-pending'), 'false')
+  assert.equal(container.querySelector('div')?.getAttribute('data-key'), '')
+
+  // Error path: formats error, populates error state, and notifies via ctx.notify
+  shouldFail = true
+  await act(async () => {
+    const res = await api!.run('remove', { id: 'x' })
+    assert.equal(res, undefined)
+  })
+  assert.equal(container.querySelector('div')?.getAttribute('data-err'), 'remove: boom from server')
+  assert.deepEqual(notices, [{ msg: 'remove: boom from server', tone: 'error' }])
+
+  await act(async () => {
+    api!.clearError()
+  })
+  assert.equal(container.querySelector('div')?.getAttribute('data-err'), '')
 
   await act(async () => {
     root.unmount()

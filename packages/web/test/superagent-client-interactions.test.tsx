@@ -45,14 +45,19 @@ describe("superagent-client-interactions", () => {
 
   before(async () => {
     mountSharedPluginNamespaces()
-    const mod = await importBuiltinClientModule('builtin:superagent')
+    const [composerMod, timelineMod, recallMod, settingsMod] = await Promise.all([
+      importBuiltinClientModule('builtin:superagent', 'composer.tsx'),
+      importBuiltinClientModule('builtin:superagent', 'timeline.tsx'),
+      importBuiltinClientModule('builtin:superagent', 'recall-screen.tsx'),
+      importBuiltinClientModule('builtin:superagent', 'settings.tsx'),
+    ])
     components = {
-      SuperAgentComposerWidget: mod['SuperAgentComposerWidget'] as Components['SuperAgentComposerWidget'],
-      SuperAgentRouterModePill: mod['SuperAgentRouterModePill'] as Components['SuperAgentRouterModePill'],
-      SuperAgentDispatchToolView: mod['SuperAgentDispatchToolView'] as Components['SuperAgentDispatchToolView'],
-      SuperAgentWorkerReportCard: mod['SuperAgentWorkerReportCard'] as Components['SuperAgentWorkerReportCard'],
-      SuperAgentRecallScreen: mod['SuperAgentRecallScreen'] as Components['SuperAgentRecallScreen'],
-      SuperAgentSettingsPanel: mod['SuperAgentSettingsPanel'] as Components['SuperAgentSettingsPanel'],
+      SuperAgentComposerWidget: composerMod['SuperAgentComposerWidget'] as Components['SuperAgentComposerWidget'],
+      SuperAgentRouterModePill: composerMod['SuperAgentRouterModePill'] as Components['SuperAgentRouterModePill'],
+      SuperAgentDispatchToolView: timelineMod['SuperAgentDispatchToolView'] as Components['SuperAgentDispatchToolView'],
+      SuperAgentWorkerReportCard: timelineMod['SuperAgentWorkerReportCard'] as Components['SuperAgentWorkerReportCard'],
+      SuperAgentRecallScreen: recallMod['SuperAgentRecallScreen'] as Components['SuperAgentRecallScreen'],
+      SuperAgentSettingsPanel: settingsMod['SuperAgentSettingsPanel'] as Components['SuperAgentSettingsPanel'],
     }
   }, { timeout: 60_000 })
 

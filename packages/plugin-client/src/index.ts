@@ -69,17 +69,14 @@ export type { TimelineToolCallStatus, TimelineToolCallSummary } from '@helmx/pro
 export { ModelPickerControl } from './ui/ModelPicker.js'
 export type { ModelPickerControlProps } from './ui/ModelPicker.js'
 export {
-  DEFAULT_MODEL_PICKER_COPY,
   formatModelRowDisplay,
   formatModelShortName,
-  formatModelPickerCopy,
   initialModelActiveIndex,
   resolveEffectiveThinkingLevel,
   stepActiveIndex,
   HELMX_SHORTCUT_EVENT,
   resolveElementPanel,
   isShortcutPanelMatch,
-  usePanelShortcut,
 } from './ui/model-picker-model.js'
 export type { ModelRowDisplay, HelmxPanel, HelmxShortcutEventDetail, ModelPickerControlCopy } from './ui/model-picker-model.js'
 
@@ -88,7 +85,7 @@ export { Switch } from './ui/Switch.js'
 export type { SwitchProps } from './ui/Switch.js'
 export { Checkbox } from './ui/Checkbox.js'
 export type { CheckboxProps } from './ui/Checkbox.js'
-export { Select, SelectPortal } from './ui/Select.js'
+export { Select } from './ui/Select.js'
 export type { SelectProps, SelectOption, SelectChangeEvent, MultiSelectChangeEvent, BaseSelectProps, SingleSelectProps, MultiSelectProps } from './ui/Select.js'
 export { MultiSelect } from './ui/Select.js'
 export { findNextSelectableIndex } from './ui/select-model.js'
@@ -97,17 +94,64 @@ export type { TabsProps, TabsListProps, TabsTriggerProps, TabsContentProps, Tabs
 export { Dialog, DialogPortal, DialogOverlay, DialogContent, DialogTitle, DialogDescription, DialogClose, DialogTrigger } from './ui/Dialog.js'
 export type { DialogProps, DialogPortalProps, DialogOverlayProps, DialogContentProps, DialogTitleProps, DialogDescriptionProps, DialogCloseProps, DialogTriggerProps } from './ui/Dialog.js'
 export { Popover, PopoverPortal, PopoverRoot, PopoverTrigger, PopoverAnchor, PopoverClose, PopoverContent, PopoverArrow } from './ui/Popover.js'
-export { OverlayLayerContext, useOverlayChildStyle, useOverlayLayer } from './ui/overlay-stack.js'
-export type { OverlayLayer } from './ui/overlay-stack.js'
+export {
+  Tooltip,
+  TooltipProvider,
+  TooltipRoot,
+  TooltipTrigger,
+  TooltipPortal,
+  TooltipContent,
+  TooltipArrow,
+} from './ui/Tooltip.js'
+export type {
+  TooltipProps,
+  TooltipProviderProps,
+  TooltipPortalProps,
+  TooltipContentProps,
+  TooltipArrowProps,
+} from './ui/Tooltip.js'
+export {
+  DropdownMenu,
+  DropdownMenuRoot,
+  DropdownMenuTrigger,
+  DropdownMenuPortal,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuLabel,
+  DropdownMenuGroup,
+  DropdownMenuArrow,
+} from './ui/DropdownMenu.js'
+export type {
+  DropdownMenuPortalProps,
+  DropdownMenuContentProps,
+  DropdownMenuItemProps,
+  DropdownMenuSeparatorProps,
+  DropdownMenuLabelProps,
+  DropdownMenuArrowProps,
+} from './ui/DropdownMenu.js'
+export { useOverlayChildStyle } from './ui/overlay-stack.js'
 export { ViewBoundary } from './ui/ViewBoundary.js'
 export { StatusLight } from './ui/StatusLight.js'
 export type { StatusLightProps } from './ui/StatusLight.js'
-export { normalizeStatusLightTone, statusLightDotClass } from './ui/status-light-model.js'
+export { normalizeStatusLightTone } from './ui/status-light-model.js'
 export type { StatusLightTone } from './ui/status-light-model.js'
 export { SearchBox } from './ui/SearchBox.js'
 export type { SearchBoxProps } from './ui/SearchBox.js'
 export { EmptyState } from './ui/EmptyState.js'
 export type { EmptyStateProps } from './ui/EmptyState.js'
+export { LoadingState } from './ui/LoadingState.js'
+export type { LoadingStateProps } from './ui/LoadingState.js'
+export { usePluginAction } from './ui/use-plugin-action.js'
+export type {
+  UsePluginActionOptions,
+  RunPluginActionOptions,
+  UsePluginActionResult,
+} from './ui/use-plugin-action.js'
+export { PluginScope } from './ui/PluginScope.js'
+export type { PluginScopeProps } from './ui/PluginScope.js'
+export { usePluginScopeId } from './ui/plugin-scope.js'
+export { scopePluginCss } from './ui/plugin-css-scope.js'
 export { ThinkingLevelControl } from './ui/ThinkingLevelControl.js'
 export type { ThinkingLevelControlProps } from './ui/ThinkingLevelControl.js'
 export { AlertDialog, AlertDialogPortal, AlertDialogOverlay, AlertDialogContent, AlertDialogTitle, AlertDialogDescription, AlertDialogAction, AlertDialogCancel, AlertDialogTrigger } from './ui/AlertDialog.js'
@@ -127,7 +171,7 @@ export { ConfirmDialog } from './ui/AlertDialog.js'
 
 // ---- Lightweight layout primitives and hints ----
 export { Screen, ScreenSection, ScreenToolbar, DataTable, KvGrid } from './primitives.js'
-export type { ScreenProps, ScreenSectionProps, ScreenToolbarProps, DataTableProps, KvGridProps } from './primitives.js'
+export type { ScreenLayout, ScreenProps, ScreenSectionProps, ScreenToolbarProps, DataTableProps, KvGridProps } from './primitives.js'
 export { Callout } from './callout.js'
 export type { CalloutProps } from './callout.js'
 export { DetailDrawer } from './ui/DetailDrawer.js'

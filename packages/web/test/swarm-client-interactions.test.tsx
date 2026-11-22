@@ -71,14 +71,19 @@ describe("swarm-client-interactions", () => {
 
   before(async () => {
     mountSharedPluginNamespaces({ realHooks: true })
-    const mod = await importBuiltinClientModule('builtin:swarm')
-    rawModule = mod
+    const [toolViewMod, activeTrayMod, workbenchMod, receiptsMod] = await Promise.all([
+      importBuiltinClientModule('builtin:swarm', 'tool-view.tsx'),
+      importBuiltinClientModule('builtin:swarm', 'active-tray.tsx'),
+      importBuiltinClientModule('builtin:swarm', 'workbench.tsx'),
+      importBuiltinClientModule('builtin:swarm', 'board-receipts.tsx'),
+    ])
+    rawModule = { ...toolViewMod, ...activeTrayMod, ...workbenchMod, ...receiptsMod }
     components = {
-      SwarmToolView: mod['SwarmToolView'] as SwarmClientComponents['SwarmToolView'],
-      SwarmActiveTray: mod['SwarmActiveTray'] as SwarmClientComponents['SwarmActiveTray'],
-      SwarmWorkbenchPanel: mod['SwarmWorkbenchPanel'] as SwarmClientComponents['SwarmWorkbenchPanel'],
-      SwarmBoardReportPill: mod['SwarmBoardReportPill'] as SwarmClientComponents['SwarmBoardReportPill'],
-      SwarmBoardWakeupPill: mod['SwarmBoardWakeupPill'] as SwarmClientComponents['SwarmBoardWakeupPill'],
+      SwarmToolView: toolViewMod['SwarmToolView'] as SwarmClientComponents['SwarmToolView'],
+      SwarmActiveTray: activeTrayMod['SwarmActiveTray'] as SwarmClientComponents['SwarmActiveTray'],
+      SwarmWorkbenchPanel: workbenchMod['SwarmWorkbenchPanel'] as SwarmClientComponents['SwarmWorkbenchPanel'],
+      SwarmBoardReportPill: receiptsMod['SwarmBoardReportPill'] as SwarmClientComponents['SwarmBoardReportPill'],
+      SwarmBoardWakeupPill: receiptsMod['SwarmBoardWakeupPill'] as SwarmClientComponents['SwarmBoardWakeupPill'],
     }
   }, { timeout: 60_000 })
 

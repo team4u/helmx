@@ -45,9 +45,12 @@ describe("magpie-client-interactions", () => {
 
   before(async () => {
     mountSharedPluginNamespaces()
-    const mod = await importBuiltinClientModule('builtin:magpie')
-    MagpieSettingsPanel = mod['MagpieSettingsPanel'] as () => React.ReactElement
-    MagpieComposerQuotaStatus = mod['MagpieComposerQuotaStatus'] as (props: ComposerStatusSlotProps) => React.ReactElement | null
+    const [settingsMod, quotaMod] = await Promise.all([
+      importBuiltinClientModule('builtin:magpie', 'settings.tsx'),
+      importBuiltinClientModule('builtin:magpie', 'composer-quota.tsx'),
+    ])
+    MagpieSettingsPanel = settingsMod['MagpieSettingsPanel'] as () => React.ReactElement
+    MagpieComposerQuotaStatus = quotaMod['MagpieComposerQuotaStatus'] as (props: ComposerStatusSlotProps) => React.ReactElement | null
   }, { timeout: 60_000 })
 
   interface SpyCtx extends PluginClientContextType {
