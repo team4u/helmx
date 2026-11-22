@@ -1295,3 +1295,103 @@ test('PluginConfigForm：format="node"/"profile" 渲染宿主节点与 Profile �
     container.remove()
   }
 })
+
+test('PluginConfigForm：支持 string[]（自由多行与 enum MultiSelect）及 enum Select 渲染与提交', { timeout: 60_000 }, async () => {
+  const savedPayloads: Array<Record<string, unknown>> = []
+  const originalSetConfig = pluginsApi.setConfig
+  pluginsApi.setConfig = async (_id, values) => {
+    savedPayloads.push(values)
+    return { ok: true }
+  }
+
+  const config: PluginConfigResponse = {
+    schema: {
+      paths: { type: 'string[]', label: '监听路径', default: ['/a'] },
+      scopes: { type: 'string[]', label: '权限范围', enum: ['read', 'write', 'admin'], default: ['read'] },
+      level: { type: 'number', label: '并发档位', enum: [1, 2, 4], default: 2 },
+    },
+    values: {
+      paths: ['/a', '/b'],
+      scopes: ['read'],
+      level: 2,
+    },
+    sources: {
+      paths: 'configured',
+      scopes: 'default',
+      level: 'default',
+    },
+  }
+
+  const store = makeTestStore({})
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = ReactDOMClient.createRoot(container)
+  try {
+    await act(async () => {
+      root.render(
+        e(
+          HostStoreProviders,
+          { value: store },
+          e(PluginConfigForm, {
+            pluginId: 'test:array-enum',
+            locale: 'zh-CN',
+            config,
+            inline: true,
+            onSaved: () => {},
+          }),
+        ),
+      )
+    })
+
+    // 1. 自由 string[] 渲染为 textarea 且按行回显
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement | null
+    assert.ok(textarea !== null, 'freeform string[] field must render a textarea')
+    assert.equal(textarea.value, '/a\n/b')
+
+    // 编辑多行文本（包含空行与前后空格，保存时应清理空行并提交 string[]）
+    const taSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set
+    const taTracker = (textarea as unknown as { _valueTracker?: { getValue(): string; setValue(v: string): void } })._valueTracker
+    await act(async () => {
+      const prev = taTracker?.getValue() ?? ''
+      taSetter?.call(textarea, '/a\n  /c  \n\n')
+      taTracker?.setValue(prev)
+      textarea.dispatchEvent(new Event('input', { bubbles: true }))
+      textarea.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+
+    // 2. enum number 渲染为 Select（切换为 4）
+    const levelTrigger = container.querySelector('button[aria-label="并发档位"]') as HTMLButtonElement | null
+    assert.ok(levelTrigger !== null, 'enum number field must render Select trigger')
+    await act(async () => {
+      levelTrigger.click()
+    })
+    const opt4 = Array.from(container.querySelectorAll('[role="option"]')).find((el) => el.textContent?.trim() === '4') as HTMLElement | undefined
+    assert.ok(opt4 !== undefined)
+    await act(async () => {
+      opt4.click()
+    })
+
+    // 3. enum string[] 渲染为 MultiSelect 触发按钮
+    const scopesTrigger = container.querySelector('button[aria-label="权限范围"]') as HTMLButtonElement | null
+    assert.ok(scopesTrigger !== null, 'enum string[] field must render MultiSelect trigger')
+
+    // 4. 保存：paths 为清理后的 string[]，scopes 为 ['read']，level 为 number 4
+    const saveBtn = Array.from(container.querySelectorAll('button')).find((b) => (b.textContent ?? '').includes('保存配置'))
+    assert.ok(saveBtn !== undefined)
+    await act(async () => {
+      saveBtn.click()
+    })
+    assert.equal(savedPayloads.length, 1)
+    assert.deepEqual(savedPayloads[0], {
+      paths: ['/a', '/c'],
+      scopes: ['read'],
+      level: 4,
+    })
+  } finally {
+    pluginsApi.setConfig = originalSetConfig
+    await act(async () => {
+      root.unmount()
+    })
+    container.remove()
+  }
+})

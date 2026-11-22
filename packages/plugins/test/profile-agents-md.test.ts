@@ -89,12 +89,6 @@ function makeBackend(opts: BackendOptions = {}): ControlledBackend {
     envCalls,
     nodeIpc: {
       isOnline: opts.online ?? (() => true),
-      call: () => {
-        throw new HelmxError('node_ipc_unavailable', '测试桩不提供 nodeIpc.call', 501)
-      },
-      subscribe: () => {
-        throw new HelmxError('node_ipc_unavailable', '测试桩不提供 nodeIpc.subscribe', 501)
-      },
     },
     executionEnv(nodeId: string, cwd: string) {
       envCalls.push({ nodeId, cwd })

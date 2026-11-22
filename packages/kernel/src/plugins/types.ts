@@ -17,6 +17,8 @@ import type {
   ModelProvidersRefreshResult,
   ModelTierRegistration,
   ModelTierSpec,
+  NodeHostEnv,
+  NodeHostEnvQuery,
   NodePathUsage,
   PluginConfigFieldSchema,
   PluginDefinition,
@@ -62,7 +64,7 @@ export interface PluginProviderPort {
  *    (returned release callback is wrapped by `PluginHost` for idempotency);
  * 2. Normalized shape: `isClosing` is a zero-arg function (exposed as a getter on `ctx.host`);
  * 3. Optional connections (when unwired, `ctx.host` rejects explicitly with 501, never silently falling back):
- *    `nodeIpc` / `nodeFetch` / `openTunnel` / `plugins` / `getConversationSubmission` / `abortConversationGuarded` /
+ *    `nodeIpc` / `getNodeHostEnv` / `nodeFetch` / `openTunnel` / `plugins` / `getConversationSubmission` / `abortConversationGuarded` /
  *    `submitInputGuarded` / `resetConversationGuarded` / `compactConversationGuarded`;
  * 4. Served directly by `PluginHost` (not forwarded to backend): `listPlugins` / `listUi` /
  *    `listActions` / `invokeAction` / `prepareAction` / `setConfig`.
@@ -120,11 +122,13 @@ export interface PluginHostBackend
   }
   /** Plugin configuration writer (validated against schema by `PluginHost` before forwarding). */
   setPluginConfig(pluginId: string, value: Record<string, unknown>): Promise<void>
-  /** Node IPC port (EnvFabric channel; 501 when unwired). `nodePlatform` is reported by `NodeRegistry` or `undefined` if unknown. */
+  /** Node status/metadata port (EnvFabric channel; 501 when unwired). `nodePlatform` is reported by `NodeRegistry` or `undefined` if unknown. */
   nodeIpc?: HelmxHostNodeIpcPort
+  /** Read-only target-node host environment discovery port (`EnvFabric.getNodeHostEnv`; 501 when unwired, never falls back to Hub local env). */
+  getNodeHostEnv?(nodeId: string, query?: NodeHostEnvQuery, signal?: AbortSignal): Promise<NodeHostEnv>
   /** Node-local HTTP fetch port (`EnvFabric.nodeFetch`; 501 when unwired, never falls back to local). */
   nodeFetch?: HelmxHostNodeFetchPort
-  /** Arbitrary TCP passthrough tunnel port (`EnvFabric.openTunnel`; 501 when unwired). */
+  /** TCP / controlled socketPath passthrough tunnel port (`EnvFabric.openTunnel`; 501 when unwired). */
   openTunnel?: HelmxHostOpenTunnelPort
   /** Host plugin governance backend (`ctx.host.plugins`; write operations fail with 501 when unwired). */
   plugins?: BackendPluginsLifecyclePort
@@ -211,7 +215,7 @@ export type PluginPhase = 'idle' | 'defining' | 'deactivating';
 
 /**
  * Subset of `ctx.host` calls permitted inside the controlled service shutdown window (`stopWindow === true`):
- * reads, cancellations, node cleanup IPC, and final events. New-work entry points remain rejected.
+ * reads, cancellations, node cleanup tunnels/env discovery, and final events. New-work entry points remain rejected.
  */
 export const STOP_WINDOW_HOST_CALLS: ReadonlySet<string> = new Set([
   'host.listConversations',
@@ -222,7 +226,10 @@ export const STOP_WINDOW_HOST_CALLS: ReadonlySet<string> = new Set([
   'host.emitEvent',
   'host.redact',
   'host.nodeIpc.isOnline',
-  'host.nodeIpc.call',
+  'host.nodeIpc.getNodeHubUrl',
+  'host.nodeIpc.nodePlatform',
+  'host.getNodeHostEnv',
+  'host.openTunnel',
 ]);
 
 /** Persistent resource usage item reported during pre-disable checks (matches protocol `PluginInUseItem`). */

@@ -17,6 +17,7 @@
  */
 import type { ComponentType } from 'react'
 import { PLUGIN_CLIENT_CSS_EXPORT, type PluginSummary } from '@helmx/protocol/browser'
+import { scopePluginCss } from '@helmx/plugin-client'
 import { getStoredToken } from './api.js'
 import { isPluginSummaryActive } from './live-state.js'
 
@@ -149,18 +150,19 @@ function applyPluginClientCss(
     existing?.remove()
     return
   }
+  const scopedCss = scopePluginCss(css, pluginId)
   if (existing === null) {
     const style = document.createElement('style')
     style.setAttribute('data-helmx-plugin-css', key)
     style.setAttribute('data-helmx-plugin-css-plugin', pluginId)
     style.setAttribute('data-helmx-plugin-css-hash', contentHash)
-    style.textContent = css
+    style.textContent = scopedCss
     document.head.appendChild(style)
     return
   }
-  if (existing.getAttribute('data-helmx-plugin-css-hash') === contentHash && existing.textContent === css) return
+  if (existing.getAttribute('data-helmx-plugin-css-hash') === contentHash && existing.textContent === scopedCss) return
   existing.setAttribute('data-helmx-plugin-css-hash', contentHash)
-  existing.textContent = css
+  existing.textContent = scopedCss
 }
 
 function deleteChunksByPrefix(prefix: string): void {

@@ -868,7 +868,8 @@ button.attachment-chip:disabled {
   line-height: 1.4;
   user-select: none;
 }
-.composer-status-row:not(:has(.composer-context-status)):not(:has(.composer-status-slot:not(:empty))) {
+.composer-status-row:not(:has(.composer-context-status)):not(:has(.composer-status-slot:not(:empty))),
+.composer-status-row:not(:has(.composer-context-status)):has([data-plugin-id]):not(:has([data-plugin-id]:not(:empty))) {
   display: none;
 }
 /* 上下文用量只读状态：不可点击，仅色调差异。
@@ -896,11 +897,13 @@ button.attachment-chip:disabled {
 .composer-status-row .composer-status-slot {
   display: contents;
 }
-.composer-status-row .composer-status-slot > * {
+.composer-status-row .composer-status-slot > *,
+.composer-status-row .composer-status-slot > [data-plugin-id] > * {
   min-width: 0;
   max-width: 100%;
 }
-.composer-status-row .composer-status-slot:empty {
+.composer-status-row .composer-status-slot:empty,
+.composer-status-row .composer-status-slot:has([data-plugin-id]):not(:has([data-plugin-id]:not(:empty))) {
   display: none;
 }
 

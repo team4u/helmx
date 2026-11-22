@@ -325,18 +325,6 @@ export interface EnvExecOk {
   spillPath?: string
 }
 
-/**
- * Legacy type kept exported solely while untouched `protocol/src/plugin.ts` still imports it;
- * remove together with `HelmxHostNodeIpcPort.call/subscribe` during Host API integration.
- */
-export interface NodeIpcCallInput {
-  callId?: string
-  endpoint?: string
-  session?: string
-  line: string
-  timeoutMs?: number
-}
-
 /** Local Windows Named Pipe namespace prefix (local host `.` only; remote UNC/SMB pipes are forbidden). */
 export const WINDOWS_LOCAL_PIPE_PREFIX = '\\\\.\\pipe\\'
 

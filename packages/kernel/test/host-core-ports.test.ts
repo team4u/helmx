@@ -1,9 +1,9 @@
 /**
  * Focused tests for microkernel host public mechanisms (core commit scope):
- * - epoch guard: wrapHostApi sub-ports (profiles/skills/secrets/nodeIpc/executionEnv proxies)
+ * - epoch guard: wrapHostApi sub-ports (profiles/skills/secrets/nodeIpc/getNodeHostEnv/executionEnv proxies)
  *   invalidate stale handles (409) after disable/restart while fresh cycle handles work;
- * - nodeIpc.subscribe race: release before subscribe finishes aborts/stops cleanly on arrival
- *   without leaking, and setup failures return via the Promise (never swallowed by void);
+ * - getNodeHostEnv + openTunnel(NodeTunnelTarget): unwired 501, tracked live tasks, epoch guard,
+ *   and socketPath target forwarding;
  * - onUpdate: forwards partials via bounded output (redacted), silently drops late partials
  *   after settle;
  * - prompt projection: only active tools enter prompt.tools.* sections without ghost residues;
@@ -18,7 +18,14 @@ import { PassThrough } from 'node:stream'
 import http from 'node:http'
 import net from 'node:net'
 import { setTimeout as delay } from 'node:timers/promises'
-import { HelmxError, type HelmxHostApi, type PluginDefinition } from '@helmx/protocol'
+import {
+  HelmxError,
+  type HelmxHostApi,
+  type NodeHostEnv,
+  type NodeHostEnvQuery,
+  type NodeTunnelTarget,
+  type PluginDefinition,
+} from '@helmx/protocol'
 import {
   PluginHost,
   type PluginHostBackend,
@@ -39,28 +46,21 @@ function makeConversation(id: number) {
   return makeConversationSummary({ id })
 }
 
-interface NodeIpcCalls {
-  subscribeStarted: Array<{ nodeId: string; signal: AbortSignal }>
-  stopCalls: number
-}
-
 /** Stub for openTunnel: delivers a controllable Duplex after delay; logs calls and failures. */
 interface OpenTunnelStub {
-  calls: Array<{ nodeId: string; target: { host?: string; port: number }; signal: AbortSignal | undefined }>
+  calls: Array<{ nodeId: string; target: NodeTunnelTarget; signal: AbortSignal | undefined }>
   delayMs: number
   duplexes: PassThrough[]
   failures: Array<Error | undefined>
 }
 
 function makeBackend(over: {
-  nodeIpcCalls?: NodeIpcCalls
-  /** Pre-connect delay before subscribe resolves (default 10ms, simulates slow setup). */
-  subscribeDelayMs?: number
+  /** getNodeHostEnv stub (wires ctx.host.getNodeHostEnv when supplied). */
+  getNodeHostEnv?: (nodeId: string, query?: NodeHostEnvQuery, signal?: AbortSignal) => Promise<NodeHostEnv>
   /** openTunnel stub (wires ctx.host.openTunnel when supplied). */
   openTunnel?: OpenTunnelStub
   nodeFetch?: (nodeId: string) => typeof fetch
 }): PluginHostBackend {
-  const calls = over.nodeIpcCalls ?? { subscribeStarted: [], stopCalls: 0 }
   return {
     ...createPluginHostBackendFixture(),
     listActiveSpawnExecutions: () => [],
@@ -92,20 +92,8 @@ function makeBackend(over: {
     nodeIpc: {
       isOnline: () => true,
       getNodeHubUrl: () => undefined,
-      call: async () => ({ ok: true, value: '' }),
-      subscribe: (nodeId, input, onLine, _onClosed, signal) =>
-        new Promise<() => void>((resolve) => {
-          calls.subscribeStarted.push({ nodeId, signal: signal! })
-          setTimeout(() => {
-            // Simulates subscribe establishment: returns stop callback.
-            resolve(() => {
-              calls.stopCalls += 1
-            })
-            // Emits one event line after setup to exercise the channel.
-            onLine(`event:${nodeId}`)
-          }, over.subscribeDelayMs ?? 10)
-        }),
     },
+    ...(over.getNodeHostEnv === undefined ? {} : { getNodeHostEnv: over.getNodeHostEnv }),
     dispatchTrigger: async () => {},
     submitInput: async () => {},
     createConversation: async (init) => ({ ...makeConversation(42), title: init.title ?? 'new' }),
@@ -143,7 +131,7 @@ function makeBackend(over: {
     ...(over.nodeFetch === undefined ? {} : { nodeFetch: over.nodeFetch }),
     ...(over.openTunnel !== undefined
       ? {
-          openTunnel: ((nodeId: string, target: { host?: string; port: number }, signal?: AbortSignal) => {
+          openTunnel: (nodeId: string, target: NodeTunnelTarget, signal?: AbortSignal) => {
             const stub = over.openTunnel!
             stub.calls.push({ nodeId, target, signal })
             return new Promise<PassThrough>((resolve, reject) => {
@@ -164,7 +152,7 @@ function makeBackend(over: {
                 { once: true },
               )
             })
-          }) as never,
+          },
         }
       : {}),
   }
@@ -195,6 +183,7 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
       () => captured!.skills.list(),
       () => captured!.secrets.get('k'),
       () => captured!.nodeIpc.isOnline('local'),
+      () => captured!.getNodeHostEnv('local'),
       () => captured!.completeText({ conversationId: 1, systemPrompt: '', text: '' }),
       () => captured!.forkConversation(1, { entryId: 1 }),
       () => captured!.createArtifact(1, { name: 'a.txt', bytes: new TextEncoder().encode('x') }),
@@ -260,45 +249,57 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
     )
   })
 
-  await t.test('nodeIpc.subscribe race: release before setup finishes aborts/stops late-arriving subscriptions', { timeout: 60_000 }, async () => {
-    const calls: NodeIpcCalls = { subscribeStarted: [], stopCalls: 0 }
-    const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: makeBackend({ nodeIpcCalls: calls, subscribeDelayMs: 30 }), docs: new MemoryDocStore() })
-    let release: (() => void) | undefined
-    const def: PluginDefinition = {
-      id: 'p:ipc',
-      definePlugin(ctx) {
-        // Subscribe right on register so disable triggers cleanup before/during setup.
-        void ctx.host.nodeIpc.subscribe('remote-1', { line: '{"method":"subscribe"}' }, () => {}, () => {})
-          .then((stop) => { release = stop })
-          .catch(() => {})
-      },
+  await t.test('getNodeHostEnv: unwired rejects 501, wired tracks live tasks and forwards query/signal', { timeout: 60_000 }, async () => {
+    const unwiredHost = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: makeBackend({}), docs: new MemoryDocStore() })
+    let unwiredApi: HelmxHostApi | undefined
+    await unwiredHost.register({ id: 'p:env-unwired', definePlugin(ctx) { unwiredApi = ctx.host } }, { enabled: true })
+    await assert.rejects(
+      unwiredApi!.getNodeHostEnv('remote-1', { envKeys: ['HERDR_SOCKET_PATH'] }),
+      (err: unknown) => err instanceof HelmxError && err.code === 'node_host_env_not_supported' && err.status === 501,
+    )
+    await unwiredHost.dispose()
+
+    const gate = deferred<NodeHostEnv>()
+    const seen: Array<{ nodeId: string; query?: NodeHostEnvQuery; signal?: AbortSignal }> = []
+    const wiredHost = new PluginHost({
+      buildProvider: createPluginBuildProvider(),
+      dataDir,
+      host: makeBackend({
+        getNodeHostEnv: (nodeId, query, signal) => {
+          seen.push({ nodeId, query, signal })
+          return gate.promise
+        },
+      }),
+      docs: new MemoryDocStore(),
+    })
+    let wiredApi: HelmxHostApi | undefined
+    await wiredHost.register({ id: 'p:env-wired', definePlugin(ctx) { wiredApi = ctx.host } }, { enabled: true })
+    const ac = new AbortController()
+    const pending = wiredApi!.getNodeHostEnv('win-node', { envKeys: ['HERDR_SOCKET_PATH'] }, ac.signal)
+    assert.equal(seen.length, 1)
+    assert.deepEqual(seen[0], { nodeId: 'win-node', query: { envKeys: ['HERDR_SOCKET_PATH'] }, signal: ac.signal })
+    await assert.rejects(
+      wiredHost.disable('p:env-wired'),
+      (err: unknown) => err instanceof HelmxError && err.code === 'plugin_has_live_tasks' && err.status === 409,
+    )
+    const snapshot: NodeHostEnv = {
+      platform: 'win32',
+      homeDir: 'C:\\Users\\worker',
+      tempDir: 'C:\\Temp',
+      dirs: { appData: 'C:\\Users\\worker\\AppData\\Roaming' },
+      env: { HERDR_SOCKET_PATH: '\\\\.\\pipe\\herdr' },
     }
-    // Alternatively obtain release cleanly inside service.start.
-    const defSubscribe: PluginDefinition = {
-      id: 'p:ipc2',
-      definePlugin(ctx) {
-        ctx.service({
-          id: 's',
-          async start() {
-            const stop = await ctx.host.nodeIpc.subscribe('remote-1', { line: '{"m":1}' }, () => {}, () => {})
-            release = stop
-          },
-          async stop() {},
-        })
-      },
-    }
-    await host.register(defSubscribe, { enabled: true })
-    assert.ok(release, 'service.start should yield an unsubscribe handle')
-    // Disabling triggers release wrapper (abort + stop).
-    await host.disable('p:ipc2')
-    // Wait for delayed setup path to settle.
-    await new Promise((r) => setTimeout(r, 80))
-    assert.equal(calls.stopCalls >= 1, true, 'disable should invoke backend stop immediately or on late completion')
-    await host.unregister('p:ipc2').catch(() => {})
-    void def
+    gate.resolve(snapshot)
+    assert.deepEqual(await pending, snapshot)
+    await wiredHost.disable('p:env-wired')
+    await assert.rejects(
+      async () => wiredApi!.getNodeHostEnv('win-node'),
+      (err: unknown) => err instanceof HelmxError && err.code === 'plugin_context_expired',
+    )
+    await wiredHost.dispose()
   })
 
-  await t.test('openTunnel lifecycle tracking: active Duplex blocks disable, closing unblocks, failures never leak count', { timeout: 60_000 }, async () => {
+  await t.test('openTunnel lifecycle tracking: TCP + socketPath targets block disable while active, closing unblocks, failures never leak count', { timeout: 60_000 }, async () => {
     const stub: OpenTunnelStub = { calls: [], delayMs: 20, duplexes: [], failures: [] }
     const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: makeBackend({ openTunnel: stub }), docs: new MemoryDocStore() })
     let hostApi: Parameters<NonNullable<Parameters<typeof host.register>[0]['definePlugin']>>[0]['host'] | undefined
@@ -325,8 +326,12 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
       (err: unknown) => err instanceof HelmxError && err.code === 'plugin_has_live_tasks',
       'disable must return 409 while Duplex is active instead of dropping counter on setup resolve',
     )
-    // 3) Duplex closes: task settles once and disable succeeds again.
+    // 2b) Controlled socketPath target forwards verbatim and shares the same Duplex lifecycle tracking.
+    const udsDuplex = await hostApi!.openTunnel('remote-1', { socketPath: '/run/herdr.sock' })
+    assert.deepEqual(stub.calls[1]?.target, { socketPath: '/run/herdr.sock' })
+    // 3) Duplex closes: task settles once all tunnels close and disable succeeds again.
     duplex.destroy()
+    udsDuplex.destroy()
     await new Promise((r) => setTimeout(r, 30))
     await host.disable('p:tunnel')
 
@@ -987,6 +992,62 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
         (err: unknown) => err instanceof HelmxError && err.status === 409 && err.code === 'plugin_context_expired',
       )
     } finally {
+      await runtime.close()
+    }
+  })
+
+  await t.test('ctx.host.getNodeHostEnv + openTunnel({ socketPath }): real KernelRuntime wiring end-to-end', { timeout: 60_000 }, async (sub) => {
+    const rtDir = useTempDir(sub, 'helmx-host-env-rt-')
+    const { models } = makeFauxModels()
+    const runtime = await KernelRuntime.open({
+      buildProvider: createPluginBuildProvider(),
+      dataDir: rtDir,
+      cwd: rtDir,
+      models,
+      model: 'faux/faux-1',
+    })
+    const sockPath = `${rtDir}/echo.sock`
+    const uds = net.createServer((socket) => {
+      socket.on('data', (chunk) => socket.end(chunk))
+    })
+    await new Promise<void>((resolve) => uds.listen(sockPath, resolve))
+    try {
+      let realHost: HelmxHostApi | undefined
+      await runtime.plugins.register({
+        id: 'p:env-rt',
+        definePlugin(ctx) {
+          realHost = ctx.host
+        },
+      }, { enabled: true })
+      assert.ok(realHost)
+
+      const localEnv = await realHost!.getNodeHostEnv('local', { envKeys: ['PATH'] })
+      assert.equal(localEnv.platform, process.platform)
+      assert.ok(localEnv.homeDir.length > 0)
+      assert.ok(localEnv.tempDir.length > 0)
+      await assert.rejects(
+        () => realHost!.getNodeHostEnv('offline-node'),
+        (err: unknown) => err instanceof HelmxError && err.code === 'node_offline' && err.status === 409,
+      )
+
+      const stream = await realHost!.openTunnel('local', { socketPath: sockPath })
+      const echoed = await new Promise<string>((resolve, reject) => {
+        const chunks: Buffer[] = []
+        stream.on('data', (c: Buffer) => chunks.push(c))
+        stream.once('end', () => resolve(Buffer.concat(chunks).toString('utf8')))
+        stream.once('error', reject)
+        stream.write('ping-uds')
+      })
+      assert.equal(echoed, 'ping-uds')
+      stream.destroy()
+      await delay(20)
+      await runtime.plugins.disable('p:env-rt')
+      await assert.rejects(
+        async () => realHost!.getNodeHostEnv('local'),
+        (err: unknown) => err instanceof HelmxError && err.code === 'plugin_context_expired' && err.status === 409,
+      )
+    } finally {
+      await new Promise<void>((resolve) => uds.close(() => resolve()))
       await runtime.close()
     }
   })

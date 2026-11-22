@@ -12,7 +12,7 @@
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import type { ComponentType, ReactNode } from 'react'
 import type { ClientComponentRef, ComposerController } from '@helmx/protocol/browser'
-import { HelmxIcon, createPluginClientContext, PluginClientContext, usePluginClientHost, ViewBoundary } from '@helmx/plugin-client'
+import { HelmxIcon, createPluginClientContext, PluginClientContext, PluginScope, usePluginClientHost, ViewBoundary } from '@helmx/plugin-client'
 import { isPluginSummaryActive } from '../lib/live-state.js'
 import { getCachedClientComponent, getPluginClientCacheRevision, loadPluginClientModule, PluginClientError, requireClientExport, subscribePluginClientCacheInvalidation } from '../lib/plugin-client.js'
 import { usePlugins } from '../lib/store-context.js'
@@ -144,7 +144,9 @@ function ClientPluginUiView({
   return (
     <ViewBoundary label={label ?? t('ui.pluginUi.boundaryLabel')}>
       <PluginClientContext.Provider value={ctx}>
-        <client.Component {...(slotProps ?? {})} />
+        <PluginScope>
+          <client.Component {...(slotProps ?? {})} />
+        </PluginScope>
       </PluginClientContext.Provider>
     </ViewBoundary>
   )

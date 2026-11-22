@@ -8,6 +8,7 @@ import {
   type BackendPluginsLifecyclePort,
   type HelmxHostApi,
   type HelmxHostOpenTunnelPort,
+  type NodeTunnelTarget,
   type PluginActionContext,
   type PluginSummary,
   type PluginUiContribution,
@@ -231,19 +232,11 @@ export function wrapHostApi(
       ensureSkill: (asset) => tracked('host.skills.ensureSkill', () => backend.skills.ensureSkill(asset, pluginId)),
     },
 
-    // 3. nodeIpc (`nodePlatform` is optional: NodeRegistry reports known platforms, undefined when offline/unreported).
+    // 3. nodeIpc (read-only node reachability/metadata; `nodePlatform` is reported by NodeRegistry or undefined when offline/unreported).
     nodeIpc: backend.nodeIpc === undefined
       ? {
           isOnline: () => {
             guard('host.nodeIpc.isOnline');
-            throw new HelmxError('node_ipc_unavailable', 'Host does not provide a node IPC channel (EnvFabric not wired)', 501);
-          },
-          call: () => {
-            guard('host.nodeIpc.call');
-            throw new HelmxError('node_ipc_unavailable', 'Host does not provide a node IPC channel (EnvFabric not wired)', 501);
-          },
-          subscribe: () => {
-            guard('host.nodeIpc.subscribe');
             throw new HelmxError('node_ipc_unavailable', 'Host does not provide a node IPC channel (EnvFabric not wired)', 501);
           },
         }
@@ -268,51 +261,28 @@ export function wrapHostApi(
                 },
               }
             : {}),
-          call: (nodeId, input, signal) =>
-            tracked(`host.nodeIpc.call`, () => backend.nodeIpc!.call(nodeId, input, signal)),
-          subscribe: (nodeId, input, onLine, onClosed, signal) => {
-            guard('host.nodeIpc.subscribe');
-            const controller = new AbortController();
-            let backendStop: (() => void) | undefined;
-            let reaped = false;
-            const onExternalAbort = () => release();
-            const reap = (): void => {
-              if (reaped) return;
-              reaped = true;
-              signal?.removeEventListener('abort', onExternalAbort);
-              const stop = backendStop;
-              backendStop = undefined;
-              stop?.();
-            };
-            const release = acquire('host.nodeIpc.subscribe')(() => () => {
-              controller.abort(signal?.aborted ? signal.reason : undefined);
-              reap();
-            });
-            if (signal?.aborted) onExternalAbort();
-            else signal?.addEventListener('abort', onExternalAbort, { once: true });
-            const establish = deps.tracker.withTask(pluginId, 'host.nodeIpc.subscribe', async () => {
-              const unsubscribe = await backend.nodeIpc!.subscribe(
-                nodeId,
-                input,
-                onLine,
-                onClosed,
-                controller.signal,
-              );
-              if (reaped) {
-                unsubscribe();
-                return release;
-              }
-              backendStop = unsubscribe;
-              return release;
-            });
-            return establish;
-          },
         },
+
+    // 3.4 getNodeHostEnv: epoch-guarded, tracked read-only target-node host env discovery (never falls back to Hub local env).
+    getNodeHostEnv: (nodeId, query, signal) =>
+      tracked('host.getNodeHostEnv', () => {
+        if (backend.getNodeHostEnv === undefined) {
+          return Promise.reject(
+            new HelmxError(
+              'node_host_env_not_supported',
+              `Current host has not wired the node host env port (host.getNodeHostEnv(${nodeId}) unavailable); refusing to fall back to Hub local env`,
+              501,
+              { nodeId },
+            ),
+          );
+        }
+        return Promise.resolve(backend.getNodeHostEnv(nodeId, query, signal));
+      }),
 
     // 3.6 openTunnel: tracks active Duplex tunnels until close/error/destroy (`disable` rejects with 409).
     openTunnel: backend.openTunnel === undefined
       ? ((nodeId: string): Promise<never> => {
-          guard(`host.openTunnel:${nodeId}`);
+          guard('host.openTunnel');
           throw new HelmxError(
             'node_tunnel_not_supported',
             `Current host has not wired the node tunnel port (host.openTunnel(${nodeId}) unavailable)`,
@@ -320,8 +290,8 @@ export function wrapHostApi(
             { nodeId },
           );
         })
-      : (async (nodeId: string, target: { host?: string; port: number }, signal?: AbortSignal) => {
-          guard(`host.openTunnel:${nodeId}`);
+      : (async (nodeId: string, target: NodeTunnelTarget, signal?: AbortSignal) => {
+          guard('host.openTunnel');
           const what = `host.openTunnel:${nodeId}`;
           // Begin tracking before dialing rather than around the connect promise so liveTasks covers the Duplex lifetime.
           deps.tracker.begin(pluginId, what);
@@ -343,7 +313,7 @@ export function wrapHostApi(
             duplex.once('close', onClosed);
             duplex.once('error', onClosed);
             try {
-              guard(what);
+              guard('host.openTunnel');
             } catch (error) {
               duplex.destroy();
               throw error;

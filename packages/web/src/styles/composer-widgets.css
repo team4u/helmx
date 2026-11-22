@@ -104,7 +104,8 @@
   flex-direction: column;
   gap: 6px;
 }
-.composer-dock-slot:empty {
+.composer-dock-slot:empty,
+.composer-dock-slot:has([data-plugin-id]):not(:has([data-plugin-id]:not(:empty))) {
   display: none;
 }
 

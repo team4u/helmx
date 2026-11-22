@@ -56,7 +56,8 @@ test('HerdrTransport 不暴露独立 runGate，assembleHerdrDepsFromHost 直接�
     },
     getArtifact: async () => { throw new Error('unused') },
     completeText: async () => '',
-    nodeIpc: { isOnline: () => true, call: async () => ({ ok: false, error: { code: 'unknown', message: '' } }), subscribe: async () => () => {} },
+    nodeIpc: { isOnline: () => true },
+    getNodeHostEnv: async () => { throw new Error('unused') },
     openTunnel: async () => { throw new Error('unused') },
     executionEnv: () => { throw new Error('unused') },
   } as unknown as HelmxHostApi

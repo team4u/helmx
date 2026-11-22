@@ -3,26 +3,27 @@
  *
  * 1. Cleanup calls succeed during disable/dispose: within `service.stop`, the `STOP_WINDOW_HOST_CALLS`
  *    cleanup subset (`listConversations` / `getConversation` / `abortConversation` /
- *    `cancelAsk` / `emitEvent` / `redact` / `nodeIpc.call` / `nodeIpc.isOnline`) passes through,
- *    including calls after `await` and during `dispose()` after `disposed` is already flagged;
+ *    `cancelAsk` / `emitEvent` / `redact` / `nodeIpc.isOnline` / `getNodeHostEnv` / `openTunnel`)
+ *    passes through, including calls after `await` and during `dispose()` after `disposed` is already flagged;
  * 2. New work is blocked inside the window: `spawnAgent` / `submitInput` / `createConversation` /
- *    `dispatchTrigger` / `createAsk` / `execEnv` / `completeText` / `withFileLock` all reject with
- *    `409 plugin_context_expired` (never reaching the I/O backend);
- * 3. After `stop()` returns, the window closes and all calls on the old `ctx` reject;
+ *    `dispatchTrigger` / `createAsk` / `execEnv` / `completeText` / `withFileLock` / `nodeFetch` all
+ *    reject with `409 plugin_context_expired` (never reaching the I/O backend);
+ * 3. After `stop()` returns, the window closes and all calls on the old `ctx` reject (and any
+ *    stop-window tunnel left open is destroyed by teardown resource release);
  * 4. Epoch isolation: after re-enabling, old `ctx` handles reject while new `ctx` handles work;
- * 5. Backend I/O errors thrown during cleanup propagate directly without being swallowed by the window;
- * 6. `nodeIpc.subscribe` stop-handle lifecycle: stop wrapper returned to caller is idempotent
- *    after deactivation, external `AbortSignal` unsubscribes and removes the abort listener,
- *    late-established subscriptions abort at most once, and establish errors settle on the Promise.
+ * 5. Backend I/O errors thrown during cleanup propagate directly without being swallowed by the window.
  *
  * runner: tsx --test; every test requires explicit timeout: 60_000 to guard against deadlocks.
  */
 import test, { beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
+import { PassThrough } from 'node:stream'
 import {
   HelmxError,
   type ConversationSummary,
   type EnvExecResponse,
+  type NodeHostEnv,
+  type NodeTunnelTarget,
   type PluginDefinition,
   type PluginDocHandle,
 } from '@helmx/protocol'
@@ -40,36 +41,6 @@ function isContextExpired(err: unknown): boolean {
   return err instanceof HelmxError && err.code === 'plugin_context_expired'
 }
 
-/** Captures abort listener counts via `addEventListener` / `removeEventListener` wrappers. */
-class ListenerCountingSignalController {
-  readonly controller = new AbortController()
-  private added = 0
-  private removed = 0
-  constructor() {
-    const signal = this.controller.signal as unknown as {
-      addEventListener: (type: string, listener: never, options?: unknown) => void
-      removeEventListener: (type: string, listener: never, options?: unknown) => void
-    }
-    const originalAdd = signal.addEventListener.bind(signal)
-    const originalRemove = signal.removeEventListener.bind(signal)
-    signal.addEventListener = (type, listener, options) => {
-      if (type === 'abort' && typeof listener === 'function') this.added += 1
-      return originalAdd(type, listener, options)
-    }
-    signal.removeEventListener = (type, listener, options) => {
-      if (type === 'abort' && typeof listener === 'function') this.removed += 1
-      return originalRemove(type, listener, options)
-    }
-  }
-  get signal(): AbortSignal {
-    return this.controller.signal
-  }
-  /** Number of dangling abort listeners (`added - removed`; should be `0` when leak-free). */
-  get activeListeners(): number {
-    return this.added - this.removed
-  }
-}
-
 function makeConversation(id: number): ConversationSummary {
   return makeConversationSummary({ id })
 }
@@ -82,15 +53,10 @@ function makeConversation(id: number): ConversationSummary {
 class StopWindowBackend implements PluginHostBackend {
   readonly conversations = new Map<number, ConversationSummary>([[1, makeConversation(1)]])
   readonly cleanCalls: string[] = []
+  readonly openedTunnels: PassThrough[] = []
   /** When set, the next recorded backend call (after the guard passes) throws this error. */
   failNext: unknown
   private listeners = new Map<string, Set<(payload: unknown) => unknown>>()
-  private ipcStopCalls = 0
-  readonly ipc = {
-    subscribeStarted: [] as Array<{ nodeId: string; signal: AbortSignal }>,
-    stopCalls: () => this.ipcStopCalls,
-    subscribeDelayMs: 0,
-  }
 
   private record(call: string): void {
     this.cleanCalls.push(call)
@@ -277,29 +243,27 @@ class StopWindowBackend implements PluginHostBackend {
       return nodeId === 'local' || nodeId === 'remote-1'
     },
     getNodeHubUrl: () => undefined,
-    call: async (nodeId: string): Promise<{ ok: true; value: string }> => {
-      this.record('nodeIpc.call')
-      return { ok: true, value: `echo:${nodeId}` }
-    },
-    subscribe: (
-      nodeId: string,
-      _input: { endpoint?: string; session?: string; line: string },
-      _onLine: (line: string) => void,
-      _onClosed: (error?: string) => void,
-      signal: AbortSignal,
-    ) =>
-      new Promise<() => void>((resolve) => {
-        this.ipc.subscribeStarted.push({ nodeId, signal })
-        setTimeout(
-          () => {
-            resolve(() => {
-              this.record('nodeIpc.subscribe.stop')
-              this.ipcStopCalls += 1
-            })
-          },
-          this.ipc.subscribeDelayMs,
-        )
-      }),
+    nodePlatform: () => 'linux',
+  }
+  async getNodeHostEnv(nodeId: string): Promise<NodeHostEnv> {
+    this.record('getNodeHostEnv')
+    return {
+      platform: 'linux',
+      homeDir: `/home/${nodeId}`,
+      tempDir: '/tmp',
+      dirs: {},
+      env: {},
+    }
+  }
+  async openTunnel(_nodeId: string, _target: NodeTunnelTarget): Promise<PassThrough> {
+    this.record('openTunnel')
+    const stream = new PassThrough()
+    this.openedTunnels.push(stream)
+    return stream
+  }
+  nodeFetch = (): typeof fetch => {
+    this.record('nodeFetch')
+    return (async () => new Response('ok')) as typeof fetch
   }
 }
 
@@ -375,7 +339,8 @@ test('disable stop window allows cleanup subset (reads / cancels / IPC cleanup /
       { label: 'cancelAsk', run: (host) => host.cancelAsk('ask-1', 'cancelled').then(() => ok.push('cancelAsk')) },
       { label: 'redact', run: (host) => { host.redact('secret'); ok.push('redact') } },
       { label: 'nodeIpc.isOnline', run: (host) => { assert.equal(host.nodeIpc.isOnline('remote-1'), true); ok.push('nodeIpc.isOnline') } },
-      { label: 'nodeIpc.call', run: (host) => host.nodeIpc.call('remote-1', { line: '{"method":"cleanup"}' }).then((r) => { assert.equal(r.ok, true); ok.push('nodeIpc.call') }) },
+      { label: 'getNodeHostEnv', run: (host) => host.getNodeHostEnv('remote-1').then((env) => { assert.equal(env.platform, 'linux'); ok.push('getNodeHostEnv') }) },
+      { label: 'openTunnel', run: (host) => host.openTunnel('remote-1', { socketPath: '/run/herdr.sock' }).then((stream) => { stream.destroy(); ok.push('openTunnel') }) },
       { label: 'doc.final.write', run: async (host) => void (await Promise.resolve(host)) },
     ],
     captured,
@@ -390,7 +355,8 @@ test('disable stop window allows cleanup subset (reads / cancels / IPC cleanup /
     'cancelAsk',
     'redact',
     'nodeIpc.isOnline',
-    'nodeIpc.call',
+    'getNodeHostEnv',
+    'openTunnel',
     'emitEvent:probe.stopped',
   ]) {
     assert.ok(
@@ -405,7 +371,8 @@ test('disable stop window allows cleanup subset (reads / cancels / IPC cleanup /
     'cancelAsk',
     'redact',
     'nodeIpc.isOnline',
-    'nodeIpc.call',
+    'getNodeHostEnv',
+    'openTunnel',
   ])
   await host.dispose()
 })
@@ -433,8 +400,11 @@ test('dispose stop window permits cleanup subset (including final doc writes and
           seen.push('abortConversation')
           assert.equal(ctx.host.nodeIpc.isOnline('remote-1'), true)
           seen.push('nodeIpc.isOnline')
-          await ctx.host.nodeIpc.call('remote-1', { line: '{"method":"teardown"}' })
-          seen.push('nodeIpc.call')
+          await ctx.host.getNodeHostEnv('remote-1')
+          seen.push('getNodeHostEnv')
+          // Intentionally leave cleanup tunnel open to verify teardown hostReleases destroys it on stop exit.
+          await ctx.host.openTunnel('remote-1', { socketPath: '/run/herdr.sock' })
+          seen.push('openTunnel')
           finalDoc.set({ phase: 'stopped' })
           seen.push('doc.set')
           ctx.host.emitEvent('notification', { type: 'notification', level: 'info', title: 'stopped', body: 'bye' })
@@ -452,10 +422,13 @@ test('dispose stop window permits cleanup subset (including final doc writes and
     'cancelAsk',
     'abortConversation',
     'nodeIpc.isOnline',
-    'nodeIpc.call',
+    'getNodeHostEnv',
+    'openTunnel',
     'doc.set',
     'emitEvent',
   ])
+  assert.equal(backend.openedTunnels.length, 1)
+  assert.equal(backend.openedTunnels[0]?.destroyed, true, 'teardown must destroy any stop-window tunnel left open')
 })
 
 test('stop window blocks new work (spawn/submitInput/createConversation/dispatchTrigger/createAsk/execEnv/completeText/withFileLock/reset+compact guarded) with zero backend calls', { timeout: 60_000 }, async () => {
@@ -481,7 +454,7 @@ test('stop window blocks new work (spawn/submitInput/createConversation/dispatch
             { label: 'getConversationSubmission', run: () => ctx.host.getConversationSubmission(1, 'req-late') },
             { label: 'completeText', run: () => ctx.host.completeText({ conversationId: 1, systemPrompt: '', text: '' } as never) },
             { label: 'withFileLock', run: () => ctx.host.withFileLock('/tmp/late', async () => 1) },
-            { label: 'nodeIpc.subscribe', run: () => ctx.host.nodeIpc.subscribe('remote-1', { line: '{}' }, () => {}, () => {}) },
+            { label: 'nodeFetch', run: () => ctx.host.nodeFetch('remote-1') },
           ]
           for (const attempt of attempts) {
             try {
@@ -514,7 +487,7 @@ test('stop window blocks new work (spawn/submitInput/createConversation/dispatch
     'getConversationSubmission',
     'completeText',
     'withFileLock',
-    'nodeIpc.subscribe',
+    'nodeFetch',
   ])
   // New work entries all reject at the guard layer: backend sees zero calls here.
   assert.deepEqual(backend.cleanCalls.filter((c) => !c.startsWith('emitEvent:')), [], 'new work calls must never reach backend')
@@ -534,7 +507,8 @@ test('stop window closes after stop returns: any old ctx call (including cleanup
     () => captured.handles!.host.cancelAsk('a', 'cancelled'),
     () => captured.handles!.host.emitEvent('x', { type: 'x' }),
     () => captured.handles!.host.nodeIpc.isOnline('remote-1'),
-    () => captured.handles!.host.nodeIpc.call('remote-1', { line: '{}' }),
+    () => captured.handles!.host.getNodeHostEnv('remote-1'),
+    () => captured.handles!.host.openTunnel('remote-1', { socketPath: '/run/herdr.sock' }),
     () => captured.handles!.host.redact('x'),
     () => captured.handles!.doc.set({ phase: 'late' }),
   ]
@@ -574,7 +548,7 @@ test('cleanup I/O failures thrown inside stop preserve original error in stop di
         id: 'svc',
         start() {},
         async stop() {
-          await ctx.host.nodeIpc.call('remote-9', { line: '{"method":"cleanup"}' })
+          await ctx.host.getNodeHostEnv('remote-9')
         },
       })
     },
@@ -599,133 +573,5 @@ test('cleanup I/O failures thrown inside stop preserve original error in stop di
   // State is disabled even after stop failure (does not stay enabled because stop threw).
   const summary = host.list().find((p) => p.id === 'test:stop-io')
   assert.equal(summary?.enabled, false)
-  await host.dispose()
-})
-
-// ---------------------------------------------------------------------------
-// nodeIpc.subscribe stop-handle lifecycle
-// ---------------------------------------------------------------------------
-
-test('subscribe stop handle is tracked and idempotent when manually called after disable', { timeout: 60_000 }, async () => {
-  let release: (() => void) | undefined
-  const def: PluginDefinition = {
-    id: 'test:ipc-acquire',
-    definePlugin(ctx) {
-      ctx.service({
-        id: 's',
-        async start() {
-          release = await ctx.host.nodeIpc.subscribe('remote-1', { line: '{"m":1}' }, () => {}, () => {})
-        },
-        async stop() {},
-      })
-    },
-  }
-  const host = makeHost()
-  await host.register(def)
-  assert.ok(release, 'unsubscribe handle must be present after start')
-  await host.disable('test:ipc-acquire') // disable triggers abort
-  assert.equal(backend.ipc.stopCalls(), 1, 'disable must trigger backend unsubscribe once')
-  release!() // caller manually calls returned stop: wrapper must be idempotent without double-unsubscribing
-  assert.equal(backend.ipc.stopCalls(), 1, 'idempotent: manual call must not double-unsubscribe')
-  await host.unregister('test:ipc-acquire').catch(() => {})
-})
-
-test('subscribe external signal abort unsubscribes once and removes abort listener without leaking', { timeout: 60_000 }, async () => {
-  const counting = new ListenerCountingSignalController()
-  const def: PluginDefinition = {
-    id: 'test:ipc-signal',
-    definePlugin(ctx) {
-      ctx.service({
-        id: 's',
-        async start() {
-          await ctx.host.nodeIpc.subscribe('remote-1', { line: '{"m":1}' }, () => {}, () => {}, counting.signal)
-        },
-        async stop() {},
-      })
-    },
-  }
-  const host = makeHost()
-  await host.register(def)
-  await new Promise((resolve) => setTimeout(resolve, 30)) // allow subscribe to establish
-  assert.equal(backend.ipc.stopCalls(), 0, 'must not unsubscribe after establish before abort')
-  assert.ok(counting.activeListeners >= 1, 'abort listener must remain attached on external signal while subscribed')
-  counting.controller.abort('external') // external abort -> single abort point cancels
-  await new Promise((resolve) => setTimeout(resolve, 30))
-  assert.equal(backend.ipc.stopCalls(), 1, 'external abort must trigger backend unsubscribe once')
-  assert.equal(
-    counting.activeListeners,
-    0,
-    'abort listener on external signal must be removed after cancel (no leaks)',
-  )
-  await host.disable('test:ipc-signal') // disable cleanup is idempotent without double-unsubscribing
-  assert.equal(backend.ipc.stopCalls(), 1, 'subsequent disable after cancel must not unsubscribe again')
-  await host.unregister('test:ipc-signal').catch(() => {})
-})
-
-test('subscribe during stop window is rejected by guard and never reaches backend', { timeout: 60_000 }, async () => {
-  backend.ipc.subscribeDelayMs = 40
-  let release: (() => void) | undefined
-  const def: PluginDefinition = {
-    id: 'test:ipc-late',
-    definePlugin(ctx) {
-      ctx.service({
-        id: 's',
-        async start() {},
-        async stop() {
-          // subscribe inside stop window counts as new work (not in STOP_WINDOW_HOST_CALLS):
-          // guard rejects it and backend never sees it (verified via subscribeStarted).
-          let guardErr: unknown
-          try {
-            await ctx.host.nodeIpc.subscribe('remote-1', { line: '{"m":1}' }, () => {}, () => {})
-          } catch (err) {
-            guardErr = err
-          }
-          assert.ok(isContextExpired(guardErr), `subscribe inside stop window expected plugin_context_expired, got: ${String(guardErr)}`)
-          await new Promise((resolve) => setTimeout(resolve, 10))
-        },
-      })
-    },
-  }
-  const host = makeHost()
-  await host.register(def)
-  await host.disable('test:ipc-late')
-  assert.equal(backend.ipc.subscribeStarted.length, 0, 'subscribe inside stop window must be rejected before reaching backend')
-  await host.unregister('test:ipc-late').catch(() => {})
-})
-
-test('late subscribe establishment after external signal aborts immediately cuts once and resolves caller', { timeout: 60_000 }, async () => {
-  // Release before establishment race (driven deterministically without preflight gate): subscribe establish is slow (60ms),
-  // external signal aborts at 10ms before backend resolves; the instant establish resolves it must be cut once,
-  // and the caller Promise receives an idempotent no-op stop wrapper.
-  backend.ipc.subscribeDelayMs = 60
-  const counting = new ListenerCountingSignalController()
-  let established: boolean | undefined
-  const def: PluginDefinition = {
-    id: 'test:ipc-early',
-    definePlugin(ctx) {
-      ctx.service({
-        id: 's',
-        async start() {
-          ctx.host.nodeIpc
-            .subscribe('remote-1', { line: '{"m":1}' }, () => {}, () => {}, counting.signal)
-            .then(() => {
-              established = true
-            })
-            .catch(() => {})
-        },
-        async stop() {},
-      })
-    },
-  }
-  const host = makeHost()
-  await host.register(def)
-  await new Promise((resolve) => setTimeout(resolve, 10)) // subscribe is still establishing
-  assert.equal(backend.ipc.stopCalls(), 0)
-  counting.controller.abort('early') // aborted before establishment finishes
-  await new Promise((resolve) => setTimeout(resolve, 120)) // late establishment settles
-  assert.equal(backend.ipc.stopCalls(), 1, 'late-established subscription must be cut once immediately')
-  assert.equal(established, true, 'caller await on subscribe must still settle normally (never swallowed or hung)')
-  await host.disable('test:ipc-early') // disable cleanup stays idempotent
-  assert.equal(backend.ipc.stopCalls(), 1)
   await host.dispose()
 })

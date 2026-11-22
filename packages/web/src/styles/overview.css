@@ -344,7 +344,8 @@
   gap: 4px;
 }
 
-.overview-card-meta-slot:empty {
+.overview-card-meta-slot:empty,
+.overview-card-meta-slot:has([data-plugin-id]):not(:has([data-plugin-id]:not(:empty))) {
   display: none;
 }
 

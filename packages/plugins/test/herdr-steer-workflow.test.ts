@@ -302,8 +302,6 @@ async function makeEnv(): Promise<Env> {
     },
     nodeIpc: {
       isOnline: () => true,
-      call: async () => { throw new HelmxError('unsupported', 'fixture 无节点 IPC', 501) },
-      subscribe: async () => { throw new HelmxError('unsupported', 'fixture 无节点 IPC 订阅', 501) },
     },
     buildSpawnEnv: (_conversationId: number, cwd: string) => ({ HELMX_TOKEN: 'SECRET-TOKEN', HELMX_CWD: cwd }),
     createAsk: async () => new Promise(() => {}),

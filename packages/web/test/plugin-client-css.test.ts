@@ -8,6 +8,8 @@
 import './helpers/register-happy-dom.js'
 import assert from 'node:assert/strict'
 import { describe, afterEach, test } from 'node:test'
+import React, { act } from 'react'
+import { scopePluginCss } from '@helmx/plugin-client'
 import {
   loadPluginClientModule,
   seedPluginClientModule,
@@ -19,6 +21,16 @@ import {
   getPluginClientCacheRevision,
   PluginClientError,
 } from '../src/lib/plugin-client.js'
+import { ensureHappyDom } from './helpers/dom-harness.js'
+import { makeTestStore } from './helpers/store.js'
+
+ensureHappyDom()
+;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
+const { createRoot } = await import('react-dom/client')
+const { Dialog, DialogContent, DialogPortal, DialogTitle } = await import('@helmx/plugin-client')
+const { PluginUiView } = await import('../src/ui/PluginUiView.js')
+const { CodeBlockRenderer } = await import('../src/conversation/CodeBlockRenderer.js')
+const { HostStoreProviders } = await import('./helpers/host-store.js')
 
 
 const originalFetch = globalThis.fetch
@@ -107,7 +119,7 @@ describe("plugin-client-css", () => {
     assert.ok(style instanceof HTMLStyleElement, '模块装载成功后必须注入样式节点')
     assert.equal(style.getAttribute('data-helmx-plugin-css-plugin'), 'p')
     assert.equal(style.getAttribute('data-helmx-plugin-css-hash'), 'h1')
-    assert.equal(style.textContent, '.a { color: red }')
+    assert.equal(style.textContent, scopePluginCss('.a { color: red }', 'p'))
     assert.ok(style.isConnected && document.head.contains(style), '样式节点应挂载在 head')
     // resolved 缓存发布不晚于样式装载：同步命中时样式必已在页面上
     assert.equal(getCachedClientComponent('p', 'index.tsx', 'Panel'), loaded.module.Panel)
@@ -145,7 +157,7 @@ describe("plugin-client-css", () => {
     const v2 = pluginStyle('p', 'index.tsx')
     assert.ok(v2 === v1, '同入口更新复用同一节点')
     assert.ok(v2 !== null)
-    assert.equal(v2.textContent, '.v2 { color: blue }')
+    assert.equal(v2.textContent, scopePluginCss('.v2 { color: blue }', 'p'))
     assert.equal(v2.getAttribute('data-helmx-plugin-css-hash'), 'h2')
 
     serveModule(PANEL_EXPORT, 'h3')
@@ -154,7 +166,7 @@ describe("plugin-client-css", () => {
 
     serveModule(`${cssExport('.v4 { color: green }')}${PANEL_EXPORT}`, 'h4')
     await loadPluginClientModule('p', 'index.tsx')
-    assert.equal(pluginStyle('p', 'index.tsx')?.textContent, '.v4 { color: green }')
+    assert.equal(pluginStyle('p', 'index.tsx')?.textContent, scopePluginCss('.v4 { color: green }', 'p'))
 
     serveModule(`${cssExport('')}${PANEL_EXPORT}`, 'h5')
     await loadPluginClientModule('p', 'index.tsx')
@@ -177,7 +189,7 @@ describe("plugin-client-css", () => {
 
     serveModule(`${cssExport('.a { color: red }')}${PANEL_EXPORT}`, 'h1')
     await loadPluginClientModule('p', 'index.tsx')
-    assert.equal(pluginStyle('p', 'index.tsx')?.textContent, '.a { color: red }', '重新启用后样式恢复')
+    assert.equal(pluginStyle('p', 'index.tsx')?.textContent, scopePluginCss('.a { color: red }', 'p'), '重新启用后样式恢复')
 
     resetPluginClientCache()
     assert.equal(allPluginStyles().length, 0, 'reset（登出/快照重建）必须回收全部插件样式')
@@ -211,12 +223,12 @@ describe("plugin-client-css", () => {
     serveModule(`${cssExport('.new { color: blue }')}${PANEL_EXPORT}`, 'h2')
     await loadPluginClientModule('p', 'index.tsx')
     const fresh = pluginStyle('p', 'index.tsx')
-    assert.equal(fresh?.textContent, '.new { color: blue }')
+    assert.equal(fresh?.textContent, scopePluginCss('.new { color: blue }', 'p'))
 
     resumeStale()
     await assertInvalidated(stale)
     assert.ok(pluginStyle('p', 'index.tsx') === fresh, '旧 epoch 完成不得拆除新 epoch 的样式节点')
-    assert.equal(fresh?.textContent, '.new { color: blue }', '旧 epoch 完成不得改写新 epoch 的样式文本')
+    assert.equal(fresh?.textContent, scopePluginCss('.new { color: blue }', 'p'), '旧 epoch 完成不得改写新 epoch 的样式文本')
     assert.equal(fresh?.getAttribute('data-helmx-plugin-css-hash'), 'h2')
     assert.equal(allPluginStyles().length, 1)
 
@@ -244,7 +256,7 @@ describe("plugin-client-css", () => {
     serveModule(`${cssExport('.fixed { color: green }')}${PANEL_EXPORT}`, 'same')
     const retried = await loadPluginClientModule('p', 'index.tsx')
     assert.equal(retried.module.__helmxClientCss, '.fixed { color: green }')
-    assert.equal(pluginStyle('p', 'index.tsx')?.textContent, '.fixed { color: green }', '同 hash 重试成功后正常装载')
+    assert.equal(pluginStyle('p', 'index.tsx')?.textContent, scopePluginCss('.fixed { color: green }', 'p'), '同 hash 重试成功后正常装载')
   })
 
   test('保留导出非字符串属非法契约：显式报错、不装样式、缓存可重试', { timeout: 60_000 }, async () => {
@@ -261,7 +273,7 @@ describe("plugin-client-css", () => {
 
     serveModule(`${cssExport('.ok { color: red }')}${PANEL_EXPORT}`, 'h1')
     await loadPluginClientModule('p', 'index.tsx')
-    assert.equal(pluginStyle('p', 'index.tsx')?.textContent, '.ok { color: red }')
+    assert.equal(pluginStyle('p', 'index.tsx')?.textContent, scopePluginCss('.ok { color: red }', 'p'))
   })
 
   test('requireClientExport 的可用导出清单隐藏保留 CSS 字段', { timeout: 60_000 }, () => {
@@ -276,19 +288,19 @@ describe("plugin-client-css", () => {
   test('seedPluginClientModule 遵循同一样式契约：装载、按新种子更新、非法类型显式报错', { timeout: 60_000 }, () => {
     const panel = () => null
     seedPluginClientModule('p', 'index.tsx', { Panel: panel, __helmxClientCss: '.seed1 { color: red }' })
-    assert.equal(pluginStyle('p', 'index.tsx')?.textContent, '.seed1 { color: red }')
+    assert.equal(pluginStyle('p', 'index.tsx')?.textContent, scopePluginCss('.seed1 { color: red }', 'p'))
     assert.equal(pluginStyle('p', 'index.tsx')?.getAttribute('data-helmx-plugin-css-hash'), 'seeded')
     const node = pluginStyle('p', 'index.tsx')
     seedPluginClientModule('p', 'index.tsx', { Panel: panel, __helmxClientCss: '.reseeded { color: green }' })
     assert.ok(pluginStyle('p', 'index.tsx') === node, '默认 seeded hash 相同也应按新命名空间原位更新')
-    assert.equal(node?.textContent, '.reseeded { color: green }')
+    assert.equal(node?.textContent, scopePluginCss('.reseeded { color: green }', 'p'))
 
     // 无样式导出的新种子移除旧样式
     seedPluginClientModule('p', 'index.tsx', { Panel: panel }, 'seed2')
     assert.ok(pluginStyle('p', 'index.tsx') === null)
 
     seedPluginClientModule('p', 'index.tsx', { Panel: panel, __helmxClientCss: '.seed3 { color: blue }' }, 'seed3')
-    assert.equal(pluginStyle('p', 'index.tsx')?.textContent, '.seed3 { color: blue }')
+    assert.equal(pluginStyle('p', 'index.tsx')?.textContent, scopePluginCss('.seed3 { color: blue }', 'p'))
 
     assert.throws(
       () => seedPluginClientModule('p', 'other.tsx', { Panel: panel, __helmxClientCss: [] }),
@@ -351,5 +363,121 @@ describe("plugin-client-css", () => {
     unsubscribe()
     evictPluginClientCache('p')
     assert.equal(notified.length, 2, '退订后不得再收到通知')
+  })
+
+  test('生产宿主样式作用域隔离：PluginUiView 与 CodeBlockRenderer 挂 <PluginScope>，SDK Portal 自动带 data-plugin-id 且跨插件/宿主零串扰', { timeout: 60_000 }, async () => {
+    const AlphaPanel = () =>
+      React.createElement(
+        React.Fragment,
+        null,
+        React.createElement('div', { className: 'shared-card', 'data-testid': 'alpha-card' }, 'Alpha'),
+        React.createElement(
+          Dialog,
+          { open: true },
+          React.createElement(
+            DialogPortal,
+            null,
+            React.createElement(
+              DialogContent,
+              { className: 'shared-modal', 'aria-describedby': undefined },
+              React.createElement(DialogTitle, null, 'Alpha Modal'),
+              React.createElement('span', { className: 'shared-card', 'data-testid': 'alpha-portal-card' }, 'Modal'),
+            ),
+          ),
+        ),
+      )
+    const BetaPanel = () =>
+      React.createElement('div', { className: 'shared-card', 'data-testid': 'beta-card' }, 'Beta')
+    const CodePanel = ({ code }: { code: string }) =>
+      React.createElement('div', { className: 'shared-card', 'data-testid': 'code-card' }, code)
+
+    seedPluginClientModule('p:alpha', 'index.tsx', {
+      AlphaPanel,
+      __helmxClientCss: '.shared-card { color: rgb(255, 0, 0); } .shared-modal { color: rgb(10, 20, 30); }',
+    }, 'h-alpha')
+    seedPluginClientModule('p:beta', 'index.tsx', {
+      BetaPanel,
+      __helmxClientCss: '.shared-card { color: rgb(0, 0, 255); }',
+    }, 'h-beta')
+    seedPluginClientModule('p:code', 'code.tsx', {
+      CodePanel,
+      __helmxClientCss: '.shared-card { color: rgb(0, 128, 0); }',
+    }, 'h-code')
+
+    const store = makeTestStore({
+      plugins: [
+        { id: 'p:alpha', name: 'Alpha', locked: false, enabled: true, status: 'active', hooks: [], actions: [], tools: [], clientHashes: { 'index.tsx': 'h-alpha' } },
+        { id: 'p:beta', name: 'Beta', locked: false, enabled: true, status: 'active', hooks: [], actions: [], tools: [], clientHashes: { 'index.tsx': 'h-beta' } },
+        { id: 'p:code', name: 'Code', locked: false, enabled: true, status: 'active', hooks: [], actions: [], tools: [], clientHashes: { 'code.tsx': 'h-code' } },
+      ],
+      uiContributions: [
+        {
+          pluginId: 'p:code',
+          surface: 'markdown.codeBlock',
+          spec: { id: 'p-code-block', languages: ['xlang'], client: { module: 'code.tsx', export: 'CodePanel' } },
+        },
+      ],
+    })
+
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    try {
+      await act(async () => {
+        root.render(
+          React.createElement(
+            HostStoreProviders,
+            { value: store },
+            React.createElement('div', { className: 'shared-card', 'data-testid': 'host-card' }, 'Host'),
+            React.createElement(PluginUiView, {
+              pluginId: 'p:alpha',
+              spec: { client: { module: 'index.tsx', export: 'AlphaPanel' } },
+            }),
+            React.createElement(PluginUiView, {
+              pluginId: 'p:beta',
+              spec: { client: { module: 'index.tsx', export: 'BetaPanel' } },
+            }),
+            React.createElement(CodeBlockRenderer, { language: 'xlang', code: 'hello' }),
+          ),
+        )
+      })
+
+      const hostCard = container.querySelector('[data-testid="host-card"]') as HTMLElement | null
+      const alphaCard = container.querySelector('[data-testid="alpha-card"]') as HTMLElement | null
+      const betaCard = container.querySelector('[data-testid="beta-card"]') as HTMLElement | null
+      const codeCard = container.querySelector('[data-testid="code-card"]') as HTMLElement | null
+      const alphaModal = document.body.querySelector('.shared-modal') as HTMLElement | null
+      const alphaPortalCard = document.body.querySelector('[data-testid="alpha-portal-card"]') as HTMLElement | null
+
+      assert.ok(hostCard && alphaCard && betaCard && codeCard && alphaModal && alphaPortalCard)
+
+      // 1. PluginUiView 和 CodeBlockRenderer 均用 layout-transparent <PluginScope> 标记 data-plugin-id
+      const alphaScope = alphaCard.parentElement as HTMLElement | null
+      const betaScope = betaCard.parentElement as HTMLElement | null
+      const codeScope = codeCard.parentElement as HTMLElement | null
+      assert.equal(alphaScope?.getAttribute('data-plugin-id'), 'p:alpha')
+      assert.equal(alphaScope?.style.display, 'contents')
+      assert.equal(betaScope?.getAttribute('data-plugin-id'), 'p:beta')
+      assert.equal(codeScope?.getAttribute('data-plugin-id'), 'p:code')
+      assert.ok(hostCard.closest('[data-plugin-id]') === null, '宿主普通元素不得带 data-plugin-id')
+
+      // 2. SDK Portal (DialogContent) 自动打标 data-plugin-id，避免重复包壳
+      assert.equal(alphaModal.getAttribute('data-plugin-id'), 'p:alpha')
+
+      // 3. 真实样式计算：各插件同名 .shared-card 互不串扰、不污染宿主且在 Portal 中生效
+      assert.equal(getComputedStyle(alphaCard).color, 'rgb(255, 0, 0)')
+      assert.equal(getComputedStyle(alphaModal).color, 'rgb(10, 20, 30)')
+      assert.equal(getComputedStyle(alphaPortalCard).color, 'rgb(255, 0, 0)')
+      assert.equal(getComputedStyle(betaCard).color, 'rgb(0, 0, 255)')
+      assert.equal(getComputedStyle(codeCard).color, 'rgb(0, 128, 0)')
+      assert.notEqual(getComputedStyle(hostCard).color, 'rgb(255, 0, 0)')
+      assert.notEqual(getComputedStyle(hostCard).color, 'rgb(0, 0, 255)')
+      assert.notEqual(getComputedStyle(hostCard).color, 'rgb(0, 128, 0)')
+    } finally {
+      await act(async () => {
+        root.unmount()
+      })
+      container.remove()
+    }
   })
 })

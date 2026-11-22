@@ -12,11 +12,31 @@
  *    the field is only submitted when the user types a new value.
  */
 
-import type { NodeInfo, PluginConfigFieldSchema, PluginConfigFieldSource, Profile } from '@helmx/protocol/browser'
+import type {
+  NodeInfo,
+  PluginConfigFieldSchema,
+  PluginConfigFieldSource,
+  PluginConfigFieldValue,
+  Profile,
+} from '@helmx/protocol/browser'
 import type { SelectOption } from '@helmx/plugin-client'
 import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 
-export type ConfigValue = string | number | boolean
+export type ConfigValue = PluginConfigFieldValue
+
+/** Parse multiline textarea text into trimmed non-empty string[] entries. */
+export function parseStringArrayInput(raw: string): string[] {
+  return raw
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+}
+
+/** Format string[] entries for multiline textarea display (one item per line). */
+export function formatStringArrayInput(value: ConfigValue | undefined): string {
+  if (Array.isArray(value)) return value.join('\n')
+  return value === undefined ? '' : String(value)
+}
 
 /** Initial form values: secrets always empty; non-secrets echo the server value or the schema default. */
 export function configFieldInitialValue(
@@ -24,11 +44,20 @@ export function configFieldInitialValue(
   raw: unknown,
 ): ConfigValue {
   if (schemaField.secret === true) return ''
+  if (schemaField.type === 'string[]') {
+    if (Array.isArray(raw)) {
+      return raw.map((item) => (typeof item === 'string' ? item : String(item)))
+    }
+    if (Array.isArray(schemaField.default)) return [...schemaField.default]
+    return []
+  }
   if (raw !== undefined && raw !== null) {
     if (typeof raw === 'string' || typeof raw === 'number' || typeof raw === 'boolean') return raw
     return String(raw)
   }
-  if (schemaField.default !== undefined) return schemaField.default
+  if (schemaField.default !== undefined) {
+    return Array.isArray(schemaField.default) ? [...schemaField.default] : schemaField.default
+  }
   return schemaField.type === 'boolean' ? false : schemaField.type === 'number' ? 0 : ''
 }
 
@@ -57,7 +86,19 @@ export function buildPluginConfigPayload(
       if (trimmed.length > 0 && trimmed !== SECRET_MASK) payload[key] = trimmed
       continue
     }
-    if (value !== undefined) payload[key] = value
+    if (value === undefined) continue
+    if (field.type === 'string[]') {
+      if (Array.isArray(value)) {
+        payload[key] =
+          field.enum !== undefined
+            ? [...value]
+            : value.map((item) => item.trim()).filter((item) => item.length > 0)
+      } else {
+        payload[key] = parseStringArrayInput(String(value))
+      }
+      continue
+    }
+    payload[key] = value
   }
   return payload
 }
@@ -126,6 +167,26 @@ export function buildProfileConfigOptions(
     })
   }
   appendMissingReference(list, currentProfile, tt)
+  return list
+}
+
+/**
+ * Select / MultiSelect options for configSchema `enum` declarations.
+ * Preserves any persisted-but-unlisted value honestly instead of silently dropping it.
+ */
+export function buildEnumConfigOptions(
+  enumValues: readonly (string | number)[],
+  currentValues: readonly (string | number)[] = [],
+  t?: WebMessageTranslator,
+): SelectOption<string>[] {
+  const tt = t ?? englishWebTranslator
+  const list: SelectOption<string>[] = enumValues.map((entry) => {
+    const value = String(entry)
+    return { value, label: value }
+  })
+  for (const current of currentValues) {
+    appendMissingReference(list, String(current), tt)
+  }
   return list
 }
 

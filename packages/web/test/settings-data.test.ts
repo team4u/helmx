@@ -2,8 +2,11 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { PluginConfigFieldSchema, Profile } from '@helmx/protocol'
 import {
+  buildEnumConfigOptions,
   buildPluginConfigPayload,
   configFieldInitialValue,
+  formatStringArrayInput,
+  parseStringArrayInput,
   secretConfigured,
 } from '../src/modals/plugin-config-form-model.js'
 import {
@@ -90,6 +93,53 @@ test('secretConfigured decides the placeholder hint purely from the raw server v
   assert.equal(secretConfigured(''), false)
   assert.equal(secretConfigured(undefined), false)
   assert.equal(secretConfigured(123), false)
+})
+
+test('string[] and enum fields: initial value cloning, payload building, and enum option fallback', { timeout: 60_000 }, () => {
+  const defaultTags = ['alpha', 'beta']
+  const schema: Record<string, PluginConfigFieldSchema> = {
+    tags: { type: 'string[]', default: defaultTags },
+    scopes: { type: 'string[]', enum: ['read', 'write', 'admin'], default: ['read'] },
+    mode: { type: 'string', enum: ['fast', 'safe'], default: 'safe' },
+  }
+
+  // 1. Initial value: echoes server array (defensively cloned), falls back to cloned default or []
+  const rawServer = ['one', 'two']
+  const fromServer = configFieldInitialValue(schema.tags!, rawServer)
+  assert.deepEqual(fromServer, ['one', 'two'])
+  assert.notEqual(fromServer, rawServer, 'initial string[] value must be defensively cloned')
+
+  const fromDefault = configFieldInitialValue(schema.tags!, undefined)
+  assert.deepEqual(fromDefault, ['alpha', 'beta'])
+  assert.notEqual(fromDefault, defaultTags, 'default string[] value must be defensively cloned')
+
+  assert.deepEqual(configFieldInitialValue({ type: 'string[]' }, undefined), [])
+
+  // 2. Formatting and parsing multiline freeform string[] drafts
+  assert.equal(formatStringArrayInput(['a', 'b']), 'a\nb')
+  assert.equal(formatStringArrayInput(undefined), '')
+  assert.deepEqual(parseStringArrayInput(' alpha \n\n beta \r\n '), ['alpha', 'beta'])
+  assert.deepEqual(parseStringArrayInput('   \n  '), [])
+
+  // 3. Payload building: trims/drops blank lines on freeform string[], clones enum string[] losslessly
+  const scopesDraft = ['read', 'write']
+  const payload = buildPluginConfigPayload(schema, {
+    tags: ['  x  ', '', '  ', 'y'],
+    scopes: scopesDraft,
+    mode: 'fast',
+  })
+  assert.deepEqual(payload, {
+    tags: ['x', 'y'],
+    scopes: ['read', 'write'],
+    mode: 'fast',
+  })
+  scopesDraft.push('admin')
+  assert.deepEqual(payload.scopes, ['read', 'write'], 'payload string[] must not alias caller array')
+
+  // 4. Enum options preserve persisted-but-unlisted values honestly
+  const options = buildEnumConfigOptions(['read', 'write'], ['read', 'legacy'])
+  assert.deepEqual(options.map((o) => o.value), ['read', 'write', 'legacy'])
+  assert.match(String(options[2]!.label), /legacy/)
 })
 
 // ---------------------------------------------------------------------------

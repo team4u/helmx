@@ -27,9 +27,10 @@ import type { Profile, SkillSummary, ModelCatalog, ModelProvidersRefreshResult, 
 import type {
   EnvExecRequest,
   EnvExecResponse,
-  NodeIpcCallInput,
+  NodeHostEnv,
+  NodeHostEnvQuery,
   NodePathUsage,
-  RpcResult,
+  NodeTunnelTarget,
 } from './env-rpc.js'
 import type { PluginUiContribution, PluginUiRegistry } from './ui.js'
 import type { AgentNamespacedMeta } from './meta.js'
@@ -527,7 +528,7 @@ export interface HelmxHostSecretsPort {
   addRedaction(value: string): () => void
 }
 
-/** 节点 IPC 机制端口（经内核 EnvFabric 跨节点 Unix Socket / Named Pipe；不静默回退本机）。 */
+/** 节点只读状态与元信息端口（经内核 EnvFabric 查询在线状态、可达 Hub URL 与可信平台；跨节点通信统一走 openTunnel + getNodeHostEnv）。 */
 export interface HelmxHostNodeIpcPort {
   /** 节点是否在线（'local' 恒 true）。 */
   isOnline(nodeId: string): boolean
@@ -535,20 +536,6 @@ export interface HelmxHostNodeIpcPort {
   getNodeHubUrl?(nodeId: string): string | undefined
   /** 节点注册时上报的可信平台（如 win32 / linux / darwin）；未上报或离线返回 undefined。 */
   nodePlatform?(nodeId: string): string | undefined
-  /** 单次行协议 IPC 调用；节点不支持或离线时显式报错。 */
-  call(
-    nodeId: string,
-    input: { endpoint?: string; session?: string; line: string; timeoutMs?: number },
-    signal?: AbortSignal,
-  ): Promise<RpcResult<string>>
-  /** 流式行协议 IPC 订阅；返回停止函数。节点不支持时抛错。 */
-  subscribe(
-    nodeId: string,
-    input: { endpoint?: string; session?: string; line: string },
-    onLine: (line: string) => void,
-    onClosed: (error?: string) => void,
-    signal?: AbortSignal,
-  ): Promise<() => void>
 }
 
 /**
@@ -564,14 +551,14 @@ export interface HelmxHostNodeFetchPort {
 
 /**
  * 节点透传隧道端口（EnvFabric.openTunnel 的插件面）：建立到目标节点
- * host:port 的任意 TCP Duplex（进程内调用获得原始双工流）。生命周期
- * 受插件在途任务跟踪：建立计入在途任务；返回的 Duplex 关闭（close/error/
- * destroy）即结束任务——插件停用预检可见活动隧道，停用/宿主 dispose 时
- * 统一销毁不泄漏。
+ * TCP `host:port` 或受控本地端点 `socketPath`（POSIX UDS `/...` 或本机
+ * Windows Named Pipe `\\.\pipe\...`）的任意 Duplex 双工流。生命周期受插件
+ * 在途任务跟踪：建立计入在途任务；返回的 Duplex 关闭（close/error/destroy）
+ * 即结束任务——插件停用预检可见活动隧道，停用/宿主 dispose 时统一销毁不泄漏。
  */
 export interface HelmxHostOpenTunnelPort {
-  /** 建立任意 TCP 隧道；host 缺省 127.0.0.1（由目标节点解析连接）。 */
-  (nodeId: string, target: { host?: string; port: number }, signal?: AbortSignal): Promise<Duplex>
+  /** 建立 TCP 或受控 socketPath 透传隧道（TCP 模式 host 缺省 127.0.0.1，由目标节点解析连接）。 */
+  (nodeId: string, target: NodeTunnelTarget, signal?: AbortSignal): Promise<Duplex>
 }
 
 /**
@@ -640,8 +627,14 @@ export interface HelmxHostApi {
   readonly skills: HelmxHostSkillsPort
   /** 插件私有 secrets（pluginId 命名空间；不进文档/事件/模型上下文）。 */
   readonly secrets: HelmxHostSecretsPort
-  /** 跨节点 IPC 机制端口（EnvFabric；herdr 等外部运行时桥接用）。 */
+  /** 节点在线状态与元信息查询端口（EnvFabric；跨节点数据/控制流走 openTunnel + getNodeHostEnv）。 */
   readonly nodeIpc: HelmxHostNodeIpcPort
+  /**
+   * 目标节点只读主机环境发现（platform / homeDir / tempDir / 标准目录与显式请求的非敏感 env 键）：
+   * 用于按目标节点视角推导 UDS / Windows Named Pipe 等本地端点，绝不回退 Hub 本机环境；
+   * 后端未接线时显式拒绝 501 `node_host_env_not_supported`。
+   */
+  getNodeHostEnv(nodeId: string, query?: NodeHostEnvQuery, signal?: AbortSignal): Promise<NodeHostEnv>
   /**
    * 节点 HTTP(S) fetch 适配层（基于 openTunnel；任意 host 的 http/https，
    * 模型/插件经此访问目标节点视角的服务）。未接线时调用显式报 501，
@@ -649,7 +642,7 @@ export interface HelmxHostApi {
    */
   readonly nodeFetch: HelmxHostNodeFetchPort
   /**
-   * 任意 TCP 透传隧道（进程内调用获得原始 Duplex）：local 进程内直连；
+   * 任意 TCP / 受控 socketPath 透传隧道（进程内调用获得原始 Duplex）：local 进程内直连；
    * 远端复用既有节点隧道传输。未接线时调用显式报 501，绝不回退 local。
    * 活动隧道纳入插件在途任务跟踪（停用预检可见；停用/dispose 不泄漏）。
    */

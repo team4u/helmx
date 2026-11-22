@@ -700,8 +700,6 @@ export class HerdrFakeBackend implements PluginHostBackend {
   nodeIpc: HelmxHostNodeIpcPort = {
     isOnline: () => true,
     getNodeHubUrl: () => undefined,
-    call: async () => { throw new HelmxError('unsupported', '本 fixture 无节点 IPC', 501) },
-    subscribe: async () => { throw new HelmxError('unsupported', '本 fixture 无节点 IPC', 501) },
   }
   redact = (text: string) => text.replaceAll('SECRET-TOKEN', '[REDACTED]').replaceAll('SECRET-VALUE', '[REDACTED]')
   buildSpawnEnv = (conversationId: number, cwd: string, nodeId: string) => {
@@ -962,8 +960,6 @@ export async function openHerdrUnitEnv<TTransport extends HerdrTransport = Stand
   backend.nodeIpc = {
     isOnline: (nodeId: string) => hubUrls === undefined || nodeId === 'local' || nodeId in hubUrls || nodeId === 'remote-node',
     getNodeHubUrl: (nodeId: string) => hubUrls?.[nodeId],
-    call: async () => { throw new HelmxError('unsupported', 'legacy nodeIpc.call removed; use openTunnel', 501) },
-    subscribe: async () => { throw new HelmxError('unsupported', 'legacy nodeIpc.subscribe removed; use openTunnel', 501) },
   }
   const servedChannel = createServedNodeChannel({
     dataDir,

@@ -8,7 +8,7 @@
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react'
 import type { ComponentType } from 'react'
 import type { MarkdownCodeBlockProps } from '@helmx/protocol/browser'
-import { CopyButton, createPluginClientContext, HelmxIcon, PluginClientContext, usePluginClientHost, ViewBoundary } from '@helmx/plugin-client'
+import { CopyButton, createPluginClientContext, HelmxIcon, PluginClientContext, PluginScope, usePluginClientHost, ViewBoundary } from '@helmx/plugin-client'
 import { isPluginSummaryActive } from '../lib/live-state.js'
 import { usePluginsUi } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
@@ -161,7 +161,9 @@ function PluginCodeBlock(props: {
   return (
     <ViewBoundary label={t('conv.codeblock.viewBoundary', { language })}>
       <PluginClientContext.Provider value={ctx}>
-        <Component language={language} code={code} conversationId={conversationId} />
+        <PluginScope>
+          <Component language={language} code={code} conversationId={conversationId} />
+        </PluginScope>
       </PluginClientContext.Provider>
     </ViewBoundary>
   )

@@ -91,29 +91,56 @@ test('startupTimeoutMs 非法值显式 validation_error；父会话不存在时 
 // 平台事实接线（host-ports 能力检测 / LocalNodeChannel）
 // ---------------------------------------------------------------------------
 
-test('nodeChannelFromHost 与 LocalNodeChannel：能力存在透传、缺席省略、远端不猜', { timeout: 60_000 }, () => {
+test('nodeChannelFromHost 与 LocalNodeChannel：能力存在透传、缺席省略、远端不猜，直接接线 getNodeHostEnv 与 openTunnel(NodeTunnelTarget)', { timeout: 60_000 }, async () => {
   const calls: string[] = []
+  const envCalls: Array<{ nodeId: string; query?: unknown; signal?: AbortSignal }> = []
+  const tunnelCalls: Array<{ nodeId: string; target: unknown; signal?: AbortSignal }> = []
+  const stubEnv = {
+    platform: 'win32',
+    homeDir: 'C:\\Users\\ci',
+    tempDir: 'C:\\Temp',
+    dirs: { appData: 'C:\\Users\\ci\\AppData\\Roaming' },
+    env: { HERDR_SOCKET_PATH: '\\\\.\\pipe\\herdr' },
+  }
+  const fakeDuplex = {} as never
   const withPlatform = nodeChannelFromHost({
     nodeIpc: {
       isOnline: () => true,
-      call: (() => { throw new Error('unreachable') }) as never,
-      subscribe: (() => { throw new Error('unreachable') }) as never,
       nodePlatform: (nodeId: string) => {
         calls.push(nodeId)
         return nodeId === 'win-build' ? 'win32' : undefined
       },
     },
+    getNodeHostEnv: async (nodeId: string, query?: unknown, signal?: AbortSignal) => {
+      envCalls.push({ nodeId, query, signal })
+      return stubEnv
+    },
+    openTunnel: async (nodeId: string, target: unknown, signal?: AbortSignal) => {
+      tunnelCalls.push({ nodeId, target, signal })
+      return fakeDuplex
+    },
     executionEnv: (() => { throw new Error('unreachable') }) as never,
   } as never)
   assert.equal(withPlatform.nodePlatform?.('win-build'), 'win32')
   assert.deepEqual(calls, ['win-build'])
+  const ac = new AbortController()
+  assert.deepEqual(
+    await withPlatform.getNodeHostEnv('win-build', { envKeys: ['HERDR_SOCKET_PATH'] }, ac.signal),
+    stubEnv,
+  )
+  assert.deepEqual(envCalls, [{ nodeId: 'win-build', query: { envKeys: ['HERDR_SOCKET_PATH'] }, signal: ac.signal }])
+  assert.equal(
+    await withPlatform.openTunnel('win-build', { socketPath: '\\\\.\\pipe\\herdr' }, ac.signal),
+    fakeDuplex,
+  )
+  assert.deepEqual(tunnelCalls, [{ nodeId: 'win-build', target: { socketPath: '\\\\.\\pipe\\herdr' }, signal: ac.signal }])
 
   const without = nodeChannelFromHost({
     nodeIpc: {
       isOnline: () => true,
-      call: (() => { throw new Error('unreachable') }) as never,
-      subscribe: (() => { throw new Error('unreachable') }) as never,
     },
+    getNodeHostEnv: (() => { throw new Error('unreachable') }) as never,
+    openTunnel: (() => { throw new Error('unreachable') }) as never,
     executionEnv: (() => { throw new Error('unreachable') }) as never,
   } as never)
   assert.equal(without.nodePlatform, undefined)

@@ -27,6 +27,7 @@ import {
   DialogPortal,
   DialogTitle,
   ModelPickerControl,
+  MultiSelect,
   Select,
   Switch,
 } from '@helmx/plugin-client'
@@ -41,12 +42,14 @@ import {
   pluginSourceDisplayText,
 } from './plugin-package-model.js'
 import {
+  buildEnumConfigOptions,
   buildNodeConfigOptions,
   buildPluginConfigPayload,
   buildProfileConfigOptions,
   buildResetFieldPayload,
   canResetConfigField,
   configFieldInitialValue,
+  formatStringArrayInput,
   secretConfigured,
   type ConfigValue,
 } from '../modals/plugin-config-form-model.js'
@@ -189,6 +192,59 @@ export function PluginConfigForm({
                     checked={values[key] === true}
                     onChange={(checked) => setValues((prev) => ({ ...prev, [key]: checked }))}
                     label={values[key] === true ? t('plugins.config.switchOn') : t('plugins.config.switchOff')}
+                  />
+                ) : schema.type === 'string[]' && schema.enum !== undefined ? (
+                  <MultiSelect
+                    id={fieldId}
+                    inline={inline}
+                    popoverClassName="helmx-select-popover-wide"
+                    aria-label={
+                      schema.label !== undefined ? resolveLocalizedText(schema.label, locale) || key : key
+                    }
+                    value={Array.isArray(values[key]) ? values[key] : []}
+                    options={buildEnumConfigOptions(
+                      schema.enum,
+                      Array.isArray(values[key]) ? values[key] : [],
+                      t,
+                    )}
+                    onValuesChange={(next) => setValues((prev) => ({ ...prev, [key]: next }))}
+                  />
+                ) : schema.type === 'string[]' ? (
+                  <textarea
+                    id={fieldId}
+                    className="input"
+                    rows={3}
+                    placeholder={
+                      schema.description !== undefined
+                        ? resolveLocalizedText(schema.description, locale)
+                        : undefined
+                    }
+                    value={formatStringArrayInput(values[key])}
+                    onChange={(e) => {
+                      const raw = e.target.value
+                      setValues((prev) => ({ ...prev, [key]: raw === '' ? [] : raw.split(/\r?\n/) }))
+                    }}
+                  />
+                ) : schema.enum !== undefined ? (
+                  <Select
+                    id={fieldId}
+                    inline={inline}
+                    popoverClassName="helmx-select-popover-wide"
+                    aria-label={
+                      schema.label !== undefined ? resolveLocalizedText(schema.label, locale) || key : key
+                    }
+                    value={String(values[key] ?? '')}
+                    options={buildEnumConfigOptions(
+                      schema.enum,
+                      typeof values[key] === 'string' || typeof values[key] === 'number' ? [values[key]] : [],
+                      t,
+                    )}
+                    onChange={(event) =>
+                      setValues((prev) => ({
+                        ...prev,
+                        [key]: schema.type === 'number' ? Number(event.target.value) : event.target.value,
+                      }))
+                    }
                   />
                 ) : schema.type === 'number' ? (
                   <input
