@@ -1,99 +1,57 @@
-/**
- * Pure display model for the builtin:token-speed rate badge (no component
- * exports, Fast Refresh friendly).
- *
- * Honesty discipline:
- * - Every rate is an approximation observed from throttled live frames (75ms
- *   frames × 100ms partial commits) — even when the settled token count is
- *   reconciled against provider usage, the timing is still a frame-level
- *   approximation, so the badge shows a plain rounded integer (product copy:
- *   no ≈ prefix, no decimals) and the approximation disclosure lives in the
- *   tooltip prose ("throttled-frame approximation, not exact server decode
- *   time") — never implying exact server decode timing;
- * - Tool pauses and streaming gaps keep the last valid rate of the turn (tool
- *   execution is not counted as decode time, and the tooltip says the timer is
- *   paused); when nothing measurable has accumulated yet, render nothing at
- *   all — never fake a rate with 0.0 tok/s;
- * - Tooltips must distinguish "live sliding-window observation", "paused while
- *   tools run" and "settled reconciliation", and disclose honestly: excludes
- *   TTFT and tool execution time, the accounting basis (provider / estimate /
- *   mixed), and that the TTFT origin is the plugin's first observation (not
- *   the exact request start).
- *
- * All display copy is resolved from copy.ts against the explicit locale
- * parameter (defaults to the en locale so existing English assertions stay
- * valid); execution-facing payloads never change with locale.
- */
-import { DEFAULT_HELMX_LOCALE, type HelmxLocale } from '@helmx/plugin-client'
-import {
-  tokenSpeedLiveTitle,
-  tokenSpeedSettledTitle,
-  tokenSpeedSourceLabel,
-  tokenSpeedToolsTitle,
-  tokenSpeedTtftSuffix,
-} from './copy.ts'
+/** Pure display model and copy for the builtin:token-speed badge (Fast Refresh friendly). */
+import { DEFAULT_HELMX_LOCALE, resolveLocalizedText, type HelmxLocale, type LocalizedText } from '@helmx/plugin-client'
 
-interface SpeedLabel {
-  /** Compact read-only text (mono/tabular, e.g. `52 tok/s`). */
-  text: string
-  /** Hover explanation (discloses the accounting basis). */
-  title: string
+const SOURCE_LABELS: Record<string, LocalizedText> = {
+  provider: { en: 'provider usage', 'zh-CN': '供应商 usage' },
+  mixed: { en: 'provider usage + char estimate mixed', 'zh-CN': '供应商 usage + 字符估算混合' },
+  estimate: { en: 'char estimate (chars/4)', 'zh-CN': '字符估算（chars/4）' },
 }
 
-/** Seconds label: one decimal below 10s, integer above. */
-function secondsLabel(ms: number): string {
-  const seconds = ms / 1000
-  return seconds < 10 ? `${seconds.toFixed(1)}s` : `${Math.round(seconds)}s`
-}
+const loc = (en: string, zh: string, locale: HelmxLocale): string => resolveLocalizedText({ en, 'zh-CN': zh }, locale)
+const secLabel = (ms: number): string => (ms / 1000 < 10 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms / 1000)}s`)
 
-/** Rate badge copy; returns null when there is no reliable rate (render nothing). */
 export function tokenSpeedLabelOf(
-  status: {
-    phase: 'decoding' | 'tools' | 'settled'
-    tps?: number
-    outputTokens: number
-    decodeMs: number
-    source: string
-    ttftMs?: number
-    windowMs: number
-  },
+  status: { phase: 'decoding' | 'tools' | 'settled'; tps?: number; outputTokens: number; decodeMs: number; source: string; ttftMs?: number; windowMs: number },
   locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
-): SpeedLabel | null {
+): { text: string; title: string } | null {
   const tps = status.tps
   if (typeof tps !== 'number' || !Number.isFinite(tps) || tps <= 0) return null
+  const tpsText = String(Math.max(1, Math.round(tps)))
   const tokens = Math.max(1, Math.round(status.outputTokens))
-  const source = tokenSpeedSourceLabel(status.source, locale)
-  const decode = secondsLabel(status.decodeMs)
+  const decode = secLabel(status.decodeMs)
+  const source = resolveLocalizedText(SOURCE_LABELS[status.source] ?? SOURCE_LABELS.estimate!, locale)
   const ttft =
     typeof status.ttftMs === 'number' && Number.isFinite(status.ttftMs) && status.ttftMs >= 0
-      ? tokenSpeedTtftSuffix(Math.round(status.ttftMs), locale)
+      ? loc(`; TTFT ${Math.round(status.ttftMs)}ms (first observed by the plugin, not the exact request start)`, `；首字延迟 ${Math.round(status.ttftMs)}ms（起点为插件首次观测，非请求精确起点）`, locale)
       : ''
-  // 整数展示：四舍五入后下限钳到 1 —— 正实测速率绝不渲染成 "0 tok/s"（0 意味着没有可测量速率，那应返回 null）。
-  const tpsText = String(Math.max(1, Math.round(tps)))
+  const text = `${tpsText} tok/s`
   if (status.phase === 'settled') {
     return {
-      text: `${tpsText} tok/s`,
-      title: tokenSpeedSettledTitle({ tps: tpsText, tokens, decode, source, ttft }, locale),
+      text,
+      title: loc(
+        `Last turn decode ${tpsText} tok/s (settled total ${tokens} tok, observed net decode time ${decode}, basis ${source}; rate only counts responses whose token counts and durations can be paired; time is a throttled-frame approximation, not exact server decode time; excludes TTFT and tool execution${ttft})`,
+        `最近回合解码 ${tpsText} tok/s（对账累计 ${tokens} tok，观测解码净耗时 ${decode}，口径 ${source}；速率仅统计计数与时长可配对的响应；时间为节流帧观测近似，非服务器精确解码时间；不含首字延迟与工具执行${ttft}）`,
+        locale,
+      ),
     }
   }
   if (status.phase === 'tools') {
     return {
-      text: `${tpsText} tok/s`,
-      title: tokenSpeedToolsTitle({ tps: tpsText, source, tokens, decode, ttft }, locale),
+      text,
+      title: loc(
+        `Timer paused during tools · latest decode ${tpsText} tok/s (basis ${source}; tool execution time is not counted as decode time; ${tokens} tok generated / ${decode} observed decode${ttft})`,
+        `工具执行暂停计时 · 最近解码 ${tpsText} tok/s（口径 ${source}；工具执行耗时不计入解码时间；已生成 ${tokens} tok / 观测解码 ${decode}${ttft}）`,
+        locale,
+      ),
     }
   }
-  const windowSeconds = status.windowMs / 1000
+  const winSec = status.windowMs / 1000
+  const win = winSec.toFixed(winSec < 10 ? 1 : 0)
   return {
-    text: `${tpsText} tok/s`,
-    title: tokenSpeedLiveTitle(
-      {
-        tps: tpsText,
-        window: windowSeconds.toFixed(windowSeconds < 10 ? 1 : 0),
-        source,
-        tokens,
-        decode,
-        ttft,
-      },
+    text,
+    title: loc(
+      `Live decode ${tpsText} tok/s (${win}s sliding-window streaming rate, basis ${source}; time is a throttled-frame approximation, not exact server decode time; excludes TTFT and tool execution; ${tokens} tok generated / ${decode} observed decode${ttft})`,
+      `实时解码 ${tpsText} tok/s（${win}s 滑动窗口流式观测速率，口径 ${source}；时间为节流帧观测近似，非服务器精确解码时间；不含首字延迟与工具执行；已生成 ${tokens} tok / 观测解码 ${decode}${ttft}）`,
       locale,
     ),
   }

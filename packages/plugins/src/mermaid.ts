@@ -1,10 +1,4 @@
-/**
- * builtin:mermaid: the Mermaid diagram rendering plugin (enabled by default, disableable).
- *
- * Responsibilities: register the markdown.codeBlock extension (language: mermaid); the client component
- * bundles mermaid into the compiled artifact via a controlled npm dependency (resolution root = the plugin
- * package root, version pinned by pnpm-lock; the kernel knows nothing about the chart library, and the host's browser code preloads nothing).
- */
+/** builtin:mermaid: registers the ```mermaid markdown.codeBlock renderer with build-time mermaid bundling. */
 import { existsSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -13,7 +7,6 @@ import { resolvePluginClientAssets } from './asset-paths.js'
 
 const MERMAID_PLUGIN_ID = 'builtin:mermaid'
 
-/** Find the resolution root of the declared dependency by Node's node_modules walk-up rules from the plugin package location. */
 function resolvePluginsPackageRoot(): string {
   let root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
   for (;;) {
@@ -37,8 +30,7 @@ export function createMermaidPlugin(): PluginDefinition {
     icon: 'git-branch',
     version: '0.1.0',
     ...assets,
-    // Prebuilt dist-client bundles mermaid into static chunks, so runtime node_modules/mermaid is only
-    // needed when running in source-compile mode (dev tsx or build-time precompilation).
+    // Prebuilt dist-client bundles mermaid into static chunks; runtime npmDependencies is only needed in source-compile mode.
     ...(assets.prebuiltClientDir === undefined ? { npmDependencies: { mermaid: resolvePluginsPackageRoot() } } : {}),
     definePlugin(ctx) {
       ctx.ui.markdownCodeBlock({

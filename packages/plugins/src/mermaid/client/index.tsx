@@ -1,53 +1,29 @@
-/**
- * builtin:mermaid client components: ```mermaid code-block rendering.
- *
- * - mermaid is loaded on demand via dynamic import('mermaid') (split into an
- *   async chunk rather than bundled into the main client entry), and bundled
- *   as a controlled npm dependency (the kernel only provides the resolution
- *   root and boundary checks);
- * - code changes debounce at 250ms, theme switches and manual retries repaint
- *   immediately without unnecessary wait;
- * - generation guard: cache hits also advance the generation, so late async
- *   render results after unmount/parameter changes are always discarded
- *   (never overwrite a cache-hit state); render/load failures show diagnostics,
- *   retry button, and copyable source explicitly, never silently swap in dirty text.
- *
- * Display copy resolves from copy.ts against the active host locale (no
- * independent language state, no localStorage).
- */
+/** builtin:mermaid client component: on-demand ```mermaid code-block rendering with lazy fullscreen modal. */
 import { useEffect, useRef, useState, type ComponentType, type ReactNode } from 'react'
-import { HelmxIcon, CopyButton, Callout, LoadingState, usePluginContext, usePluginTranslator } from '@helmx/plugin-client'
+import { Callout, CopyButton, HelmxIcon, LoadingState, usePluginContext, usePluginTranslator } from '@helmx/plugin-client'
 import type { MarkdownCodeBlockProps } from '@helmx/protocol'
 import { loadMermaid } from './mermaid-loader.ts'
 import { getMermaidConfig } from './mermaid-theme.ts'
-import {
-  MERMAID_COPY_SOURCE,
-  MERMAID_RENDERING,
-  MERMAID_RENDER_FAILED,
-  MERMAID_RETRY,
-  MERMAID_ZOOM_IN,
-} from './copy.ts'
+import { MERMAID_COPY as C } from './copy.ts'
 import './styles.css'
 
-type MermaidPreviewModalComponent = ComponentType<{
-  code: string
-  svg: string | null
-  onClose: () => void
-}>
+type ModalComponent = ComponentType<{ code: string; svg: string | null; onClose: () => void }>
 
-let cachedPreviewModal: MermaidPreviewModalComponent | null = null
+let cachedModal: ModalComponent | null = null
+const CACHE_LIMIT = 200
+const svgCache = new Map<string, string>()
 
-function LazyMermaidPreviewModal({
-  code,
-  svg,
-  onClose,
-}: {
-  code: string
-  svg: string | null
-  onClose: () => void
-}): ReactNode {
+function cacheSvg(key: string, svg: string): void {
+  if (svgCache.size >= CACHE_LIMIT) {
+    const oldest = svgCache.keys().next().value
+    if (oldest !== undefined) svgCache.delete(oldest)
+  }
+  svgCache.set(key, svg)
+}
+
+function LazyMermaidPreviewModal({ code, svg, onClose }: { code: string; svg: string | null; onClose: () => void }): ReactNode {
   const t = usePluginTranslator()
-  const [Modal, setModal] = useState<MermaidPreviewModalComponent | null>(() => cachedPreviewModal)
+  const [Modal, setModal] = useState<ModalComponent | null>(() => cachedModal)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [attempt, setAttempt] = useState(0)
 
@@ -58,102 +34,64 @@ function LazyMermaidPreviewModal({
     void import('./MermaidPreviewModal.tsx')
       .then((mod) => {
         if (!active) return
-        const cmp = mod.MermaidPreviewModal as MermaidPreviewModalComponent
-        cachedPreviewModal = cmp
-        setModal(() => cmp)
+        cachedModal = mod.MermaidPreviewModal as ModalComponent
+        setModal(() => cachedModal)
       })
       .catch((err: unknown) => {
-        if (!active) return
-        setLoadError(err instanceof Error ? err.message : String(err))
+        if (active) setLoadError(err instanceof Error ? err.message : String(err))
       })
-    return () => {
-      active = false
-    }
+    return () => { active = false }
   }, [Modal, attempt])
 
-  if (Modal !== null) {
-    return <Modal code={code} svg={svg} onClose={onClose} />
-  }
+  if (Modal !== null) return <Modal code={code} svg={svg} onClose={onClose} />
   if (loadError !== null) {
     return (
-      <Callout tone="err" title={t(MERMAID_RENDER_FAILED)}>
+      <Callout tone="err" title={t(C.renderFailed)}>
         <div className="mermaid-error-body">
           <span className="selectable">{loadError}</span>
           <div className="mermaid-error-actions">
-            <button
-              type="button"
-              className="btn btn-sm"
-              onClick={() => setAttempt((n) => n + 1)}
-            >
+            <button type="button" className="btn btn-sm" onClick={() => setAttempt((n) => n + 1)}>
               <HelmxIcon name="refresh-cw" size={12} />
-              {t(MERMAID_RETRY)}
+              {t(C.retry)}
             </button>
           </div>
         </div>
       </Callout>
     )
   }
-  return <LoadingState label={t(MERMAID_RENDERING)} />
-}
-
-const MERMAID_CACHE_LIMIT = 200
-const mermaidSvgCache = new Map<string, string>()
-
-function mermaidCacheKey(theme: string, code: string): string {
-  return `${theme}:${code}`
-}
-
-function setCachedSvg(key: string, svg: string): void {
-  if (mermaidSvgCache.size >= MERMAID_CACHE_LIMIT) {
-    const first = mermaidSvgCache.keys().next().value
-    if (first !== undefined) mermaidSvgCache.delete(first)
-  }
-  mermaidSvgCache.set(key, svg)
+  return <LoadingState label={t(C.rendering)} />
 }
 
 export function MermaidCodeBlock({ code }: MarkdownCodeBlockProps): ReactNode {
   const { theme } = usePluginContext()
   const t = usePluginTranslator()
-  const cacheKey = mermaidCacheKey(theme, code)
-  const [svg, setSvg] = useState<string | null>(() => mermaidSvgCache.get(cacheKey) ?? null)
+  const [svg, setSvg] = useState<string | null>(() => svgCache.get(`${theme}:${code}`) ?? null)
   const [error, setError] = useState<string | null>(null)
   const [zoomOpen, setZoomOpen] = useState(false)
   const [retryCount, setRetryCount] = useState(0)
-  // Monotonic generation: any render-parameter change (including the
-  // cache-hit path) invalidates stale async results of older generations.
   const seqRef = useRef(0)
   const aliveRef = useRef(true)
-  const lastCodeRef = useRef(code)
-  const lastRetryRef = useRef(retryCount)
+  const prevRef = useRef({ code, retryCount })
 
   useEffect(() => {
     aliveRef.current = true
     const seq = ++seqRef.current
     const isStale = (): boolean => !aliveRef.current || seqRef.current !== seq
+    const codeChanged = prevRef.current.code !== code
+    const retryRequested = prevRef.current.retryCount !== retryCount
+    prevRef.current = { code, retryCount }
 
-    const codeChanged = lastCodeRef.current !== code
-    const retryRequested = lastRetryRef.current !== retryCount
-    lastCodeRef.current = code
-    lastRetryRef.current = retryCount
-
-    const currentKey = mermaidCacheKey(theme, code)
-    const cached = mermaidSvgCache.get(currentKey)
+    const key = `${theme}:${code}`
+    const cached = svgCache.get(key)
     if (cached) {
       setSvg(cached)
       setError(null)
-      return () => {
-        aliveRef.current = false
-      }
+      return () => { aliveRef.current = false }
     }
-
-    if (codeChanged || retryRequested) {
-      setSvg(null)
-    }
+    if (codeChanged || retryRequested) setSvg(null)
     setError(null)
 
-    const delay = codeChanged ? 250 : 0
-    let timer: ReturnType<typeof setTimeout> | null = null
-    timer = setTimeout(() => {
+    const timer = setTimeout(() => {
       void (async () => {
         try {
           const mermaid = await loadMermaid()
@@ -161,9 +99,7 @@ export function MermaidCodeBlock({ code }: MarkdownCodeBlockProps): ReactNode {
           mermaid.initialize(getMermaidConfig(theme))
           const id = `helmx-mermaid-${theme}-${seq}-${Math.random().toString(36).slice(2, 8)}`
           const { svg: rendered } = await mermaid.render(id, code)
-          setCachedSvg(currentKey, rendered)
-          // Generation / liveness check: late results are always discarded
-          // (unmounted / parameters changed / a newer cache hit).
+          cacheSvg(key, rendered)
           if (!isStale()) {
             setSvg(rendered)
             setError(null)
@@ -175,10 +111,10 @@ export function MermaidCodeBlock({ code }: MarkdownCodeBlockProps): ReactNode {
           }
         }
       })()
-    }, delay)
+    }, codeChanged ? 250 : 0)
     return () => {
       aliveRef.current = false
-      if (timer !== null) clearTimeout(timer)
+      clearTimeout(timer)
     }
   }, [code, theme, retryCount])
 
@@ -187,58 +123,36 @@ export function MermaidCodeBlock({ code }: MarkdownCodeBlockProps): ReactNode {
       <div className="code-block-header">
         <span>mermaid</span>
         <span className="code-block-header-actions">
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm"
-            onClick={() => setZoomOpen(true)}
-            title={t(MERMAID_ZOOM_IN)}
-          >
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => setZoomOpen(true)} title={t(C.zoomIn)}>
             <HelmxIcon name="maximize" size={12} />
-            {t(MERMAID_ZOOM_IN)}
+            {t(C.zoomIn)}
           </button>
-          <CopyButton text={code} label={t(MERMAID_COPY_SOURCE)} />
+          <CopyButton text={code} label={t(C.copySource)} />
         </span>
       </div>
       <div className="mermaid-body selectable">
         {svg !== null ? (
-          <div
-            className="mermaid-svg-host"
-            // strict mode disables user scripts and HTML tags; only inject the
-            // Mermaid-transformed SVG.
-            dangerouslySetInnerHTML={{ __html: svg }}
-          />
+          <div className="mermaid-svg-host" dangerouslySetInnerHTML={{ __html: svg }} />
         ) : error !== null ? (
-          <Callout tone="err" title={t(MERMAID_RENDER_FAILED)}>
+          <Callout tone="err" title={t(C.renderFailed)}>
             <div className="mermaid-error-body">
               <span className="selectable">{error}</span>
               <div className="mermaid-error-actions">
-                <button
-                  type="button"
-                  className="btn btn-sm"
-                  onClick={() => {
-                    setError(null)
-                    setSvg(null)
-                    setRetryCount((n) => n + 1)
-                  }}
-                >
+                <button type="button" className="btn btn-sm" onClick={() => { setError(null); setSvg(null); setRetryCount((n) => n + 1) }}>
                   <HelmxIcon name="refresh-cw" size={12} />
-                  {t(MERMAID_RETRY)}
+                  {t(C.retry)}
                 </button>
               </div>
-              <pre className="code-block-pre code-block-pre-flush selectable">
-                <code>{code}</code>
-              </pre>
+              <pre className="code-block-pre code-block-pre-flush selectable"><code>{code}</code></pre>
             </div>
           </Callout>
         ) : (
           <div className="mermaid-placeholder">
             <div className="mermaid-loading-row">
               <HelmxIcon name="loader" size={13} className="spin-slow" />
-              <span>{t(MERMAID_RENDERING)}</span>
+              <span>{t(C.rendering)}</span>
             </div>
-            <pre className="code-block-pre code-block-pre-flush selectable" style={{ opacity: 0.5 }}>
-              <code>{code}</code>
-            </pre>
+            <pre className="code-block-pre code-block-pre-flush selectable mermaid-source-dim"><code>{code}</code></pre>
           </div>
         )}
       </div>

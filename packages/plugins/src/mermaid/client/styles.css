@@ -1,171 +1,43 @@
-/*
- * builtin:mermaid plugin styles (compiled into the preserved __helmxClientCss export; the host manages injection and reclamation).
- * Reuses host design tokens and generic modal classes (.modal/.modal-fullscreen, etc.); keeps only Mermaid-diagram-specific rules.
- */
-
-.mermaid-body {
-  background: transparent;
-  padding: 10px 12px;
-  overflow-x: auto;
+/* builtin:mermaid plugin-specific diagram & fullscreen preview styles (scoped cleanly, no !important). */
+.mermaid-body { background: transparent; padding: 10px 12px; overflow-x: auto; }
+.mermaid-body .mermaid-svg-host svg { max-width: 100%; height: auto; overflow: visible; }
+.mermaid-body foreignObject, .mermaid-modal-stage .mermaid-svg-layer foreignObject { overflow: visible; }
+.mermaid-body foreignObject > div, .mermaid-modal-stage .mermaid-svg-layer foreignObject > div {
+  width: 100%; max-width: 100%; height: 100%; white-space: normal; word-break: break-word; box-sizing: border-box;
 }
-
-.mermaid-body svg {
-  max-width: 100%;
-  height: auto;
+.mermaid-body .nodeLabel, .mermaid-body .edgeLabel,
+.mermaid-modal-stage .mermaid-svg-layer .nodeLabel, .mermaid-modal-stage .mermaid-svg-layer .edgeLabel {
+  display: inline-block; line-height: 1.4;
 }
+.mermaid-body .nodeLabel p, .mermaid-modal-stage .mermaid-svg-layer .nodeLabel p { margin: 0; padding: 0; line-height: 1.4; }
 
-/* Mermaid node-text anti-truncation and outer-frame protection:
- * 1. svg and foreignObject get overflow: visible so top titles (e.g. subgraph captions) and edges are not clipped by the viewBox;
- * 2. the inner foreignObject div overrides Mermaid's hard-coded 120px max-width so multi-line text uses the full container width;
- * 3. label line-height is compact and centered with outer paragraph margins zeroed, preventing line-spacing overflow from truncating text.
- */
-.mermaid-body svg,
-.mermaid-svg-layer svg {
-  overflow: visible !important;
-}
-
-.mermaid-body foreignObject,
-.mermaid-svg-layer foreignObject {
-  overflow: visible !important;
-}
-
-.mermaid-body foreignObject > div,
-.mermaid-svg-layer foreignObject > div {
-  width: 100% !important;
-  max-width: 100% !important;
-  height: 100% !important;
-  white-space: normal !important;
-  word-break: break-word !important;
-  box-sizing: border-box !important;
-}
-
-.mermaid-body .nodeLabel,
-.mermaid-svg-layer .nodeLabel,
-.mermaid-body .edgeLabel,
-.mermaid-svg-layer .edgeLabel {
-  display: inline-block !important;
-  line-height: 1.4 !important;
-}
-
-.mermaid-body .nodeLabel p,
-.mermaid-svg-layer .nodeLabel p {
-  margin: 0 !important;
-  padding: 0 !important;
-  line-height: 1.4 !important;
-}
-
-.mermaid-source-pre {
-  padding: 14px;
-  height: 100%;
-  overflow: auto;
-  margin: 0;
-}
-
-.mermaid-modal-stage,
-.mermaid-transform-plane,
-.mermaid-svg-layer,
-.mermaid-svg-layer * {
-  touch-action: none !important;
-  -webkit-touch-callout: none !important;
-}
+.mermaid-source-pre { padding: 14px; height: 100%; overflow: auto; margin: 0; }
+.mermaid-source-dim { opacity: 0.5; }
+.mermaid-loading-row { display: flex; gap: 6px; align-items: center; font-size: 12px; color: var(--fg-secondary); padding: 4px 0 8px; }
+.mermaid-error-body { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; min-width: 0; }
+.mermaid-error-actions { display: flex; align-items: center; gap: 8px; }
 
 .mermaid-modal-stage {
-  flex: 1;
-  width: 100%;
-  height: 100%;
-  min-height: 0;
-  overflow: hidden;
-  position: relative;
-  background: var(--bg);
-  user-select: none !important;
-  -webkit-user-select: none !important;
-  overscroll-behavior: none !important;
+  flex: 1; width: 100%; height: 100%; min-height: 0; overflow: hidden; position: relative;
+  background: var(--bg); cursor: grab; user-select: none; -webkit-user-select: none;
+  touch-action: none; overscroll-behavior: none;
 }
-
+.mermaid-modal-stage.is-dragging { cursor: grabbing; }
 .mermaid-transform-plane {
-  transform-origin: top center;
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding-top: 32px;
-  padding-bottom: 64px;
-  pointer-events: none;
-  touch-action: none;
-  will-change: transform;
+  transform-origin: top center; position: absolute; inset: 0 0 auto 0;
+  display: flex; flex-direction: column; align-items: center; padding: 32px 24px 64px;
+  pointer-events: none; will-change: transform;
 }
-
-.mermaid-svg-layer {
-  display: block;
-  background: transparent;
-  max-width: none;
-  pointer-events: auto;
-  touch-action: none;
-  user-select: none;
-  -webkit-user-select: none;
-}
-
-.mermaid-svg-layer svg {
-  width: 100% !important;
-  height: 100% !important;
-  max-width: none !important;
-  max-height: none !important;
-  display: block !important;
-}
-
-.mermaid-loading-row {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-  font-size: 12px;
-  color: var(--fg-secondary);
-  padding: 4px 0 8px;
-}
-
-.mermaid-error-body {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-top: 4px;
-  min-width: 0;
-}
-
-.mermaid-error-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
+.mermaid-modal-stage .mermaid-svg-layer { display: inline-block; background: transparent; pointer-events: auto; }
+.mermaid-modal-stage .mermaid-svg-layer svg { display: block; max-width: none; height: auto; overflow: visible; }
 
 .mermaid-modal-status {
-  flex: 1;
-  width: 100%;
-  height: 100%;
-  min-height: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-  background: var(--bg);
+  flex: 1; width: 100%; height: 100%; min-height: 0; display: flex;
+  align-items: center; justify-content: center; padding: 24px; background: var(--bg);
 }
+.mermaid-modal-status .callout { max-width: 560px; width: 100%; }
+.mermaid-status-hint { display: inline-flex; align-items: center; gap: 6px; color: var(--fg-muted); font-size: 12px; }
 
-.mermaid-modal-status .callout {
-  max-width: 560px;
-  width: 100%;
-}
-
-.mermaid-status-hint {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--fg-muted);
-  font-size: 12px;
-}
-
-
-/* Preview modal responsive rules (mobile wrapping; injected with the plugin) */
 .mermaid-modal-header { display: flex; align-items: center; justify-content: space-between; gap: 8px 12px; }
 .mermaid-modal-title { min-width: 0; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mermaid-modal-actions { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
@@ -177,4 +49,3 @@
   .mermaid-modal-close { order: 2; margin-left: auto; }
   .mermaid-modal-actions { order: 3; width: 100%; display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-start; }
 }
-

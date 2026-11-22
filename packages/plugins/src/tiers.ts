@@ -1,118 +1,50 @@
-/**
- * builtin:tiers: semantic model tiers (`tier/<id>`) and reusable preset templates.
- *
- * Responsibilities (all policy & UX live here; kernel keeps only thin dereferencing):
- * - Mounts the active tier table into kernel ModelRegistry via `ctx.host.registerModelTiers`
- *   during `prepare()` (auto-unmounted on plugin disable; in-use check blocks accidental disable
- *   when global defaults or Profiles still reference `tier/*`);
- * - Bootstraps the managed skill `model-tiers` (orchestration patterns & template playbook);
- * - Optionally injects a compact `<available_model_tiers>` index via `before_turn` (only when
- *   usable non-disabled tiers exist and `autoInjectCatalog !== false`; zero tool-name hardcoding);
- * - Exposes `list / set / remove / replace / save_template / apply_template / delete_template`
- *   via `ctx.action` (auto-mapped to HTTP, `helmx tiers ...` CLI, and Agent actions);
- * - Contributes `TiersManagerScreen` (full-stage tier & template editor) and `TiersSettingsPanel`.
- */
+/** builtin:tiers: semantic model tiers (`tier/<id>`) and reusable preset templates. */
 import {
-  HelmxError,
-  MODEL_TIER_DESCRIPTION_MAX_LENGTH,
-  type ModelTierCatalogEntry,
-  type ModelTierRegistration,
-  type ModelTierSpec,
-  type PluginDefinition,
+  HelmxError, MODEL_TIER_DESCRIPTION_MAX_LENGTH,
+  type ModelTierRegistration, type ModelTierSpec, type PluginDefinition,
 } from '@helmx/protocol'
 import { resolvePluginClientAssets } from './asset-paths.js'
 import { readTiersSkillAsset } from './tiers/assets.js'
 import {
-  MAX_TIERS_COUNT,
-  MODEL_TIERS_SKILL_ID,
-  TIERS_PLUGIN_ID,
-  TIERS_SCREEN_ID,
-  TIERS_STATE_DOC,
-  TIER_TEMPLATE_DESCRIPTION_MAX_LENGTH,
-  TIER_TEMPLATE_NAME_MAX_LENGTH,
-  TIER_THINKING_LEVELS,
-  createEmptyTiersState,
-  type TierTemplate,
-  type TiersPluginConfig,
-  type TiersStateDoc,
+  MAX_TIERS_COUNT, MODEL_TIERS_SKILL_ID, TIERS_PLUGIN_ID, TIERS_SCREEN_ID, TIERS_STATE_DOC,
+  TIER_TEMPLATE_DESCRIPTION_MAX_LENGTH, TIER_TEMPLATE_NAME_MAX_LENGTH, TIER_THINKING_LEVELS,
+  createEmptyTiersState, type TierTemplate, type TiersPluginConfig, type TiersStateDoc,
 } from './tiers/contracts.js'
 import {
-  assertConcreteModelRef,
-  assertRemovedTiersNotInUse,
-  assertTargetModelNotDisabled,
-  assertTemplateCapacity,
-  assertTemplateId,
-  assertTierId,
-  findTierReferences,
-  normalizeTemplateMeta,
-  normalizeTierSpec,
-  normalizeTiersRecord,
-  projectTierEntries,
-  renderModelTiersCatalogSection,
-  sanitizeStateDoc,
+  assertConcreteModelRef, assertRemovedTiersNotInUse, assertTargetModelNotDisabled, assertTemplateCapacity,
+  assertTemplateId, assertTierId, findTierReferences, normalizeTemplateMeta, normalizeTierSpec,
+  normalizeTiersRecord, projectTierEntries, renderModelTiersCatalogSection, sanitizeStateDoc,
 } from './tiers/validation.js'
 
 export {
-  TIERS_PLUGIN_ID,
-  TIERS_STATE_DOC,
-  TIERS_SCREEN_ID,
-  MODEL_TIERS_SKILL_ID,
-  TIER_THINKING_LEVELS,
-  type TierTemplate,
-  type TiersStateDoc,
-  type TiersPluginConfig,
+  TIERS_PLUGIN_ID, TIERS_STATE_DOC, TIERS_SCREEN_ID, MODEL_TIERS_SKILL_ID, TIER_THINKING_LEVELS,
+  type TierTemplate, type TiersStateDoc, type TiersPluginConfig,
 }
 
-const TIER_ENTRY_OUTPUT_SCHEMA = {
-  type: 'object',
-  required: ['id', 'model', 'available'],
+const ID_PROP = { type: 'string', minLength: 1, maxLength: 63 } as const
+const TIER_SPEC_SCHEMA = {
+  type: 'object', required: ['model'], additionalProperties: false,
+  properties: { model: { type: 'string', minLength: 1 }, thinkingLevel: { type: 'string' }, description: { type: 'string', maxLength: MODEL_TIER_DESCRIPTION_MAX_LENGTH } },
+} as const
+const TIER_ENTRY_SCHEMA = {
+  type: 'object', required: ['id', 'model', 'available'], additionalProperties: false,
   properties: {
-    id: { type: 'string' },
-    model: { type: 'string' },
-    thinkingLevel: { type: 'string' },
-    description: { type: 'string' },
-    available: { type: 'boolean' },
-    disabled: { type: 'boolean' },
+    id: { type: 'string' }, model: { type: 'string' }, thinkingLevel: { type: 'string' },
+    description: { type: 'string' }, available: { type: 'boolean' }, disabled: { type: 'boolean' },
     thinkingLevels: { type: 'array', items: { type: 'string' } },
   },
-  additionalProperties: false,
 } as const
-
-const TIER_SPEC_INPUT_SCHEMA = {
-  type: 'object',
-  required: ['model'],
-  properties: {
-    model: { type: 'string', minLength: 1 },
-    thinkingLevel: { type: 'string' },
-    description: { type: 'string', maxLength: MODEL_TIER_DESCRIPTION_MAX_LENGTH },
-  },
-  additionalProperties: false,
+const TEMPLATE_SCHEMA = {
+  type: 'object', required: ['id', 'name', 'tiers', 'updatedAt'], additionalProperties: false,
+  properties: { id: { type: 'string' }, name: { type: 'string' }, description: { type: 'string' }, tiers: { type: 'object', additionalProperties: TIER_SPEC_SCHEMA }, updatedAt: { type: 'number' } },
 } as const
-
-const TEMPLATE_OUTPUT_SCHEMA = {
-  type: 'object',
-  required: ['id', 'name', 'tiers', 'updatedAt'],
-  properties: {
-    id: { type: 'string' },
-    name: { type: 'string' },
-    description: { type: 'string' },
-    tiers: { type: 'object', additionalProperties: TIER_SPEC_INPUT_SCHEMA },
-    updatedAt: { type: 'number' },
-  },
-  additionalProperties: false,
-} as const
-
 const LIST_OUTPUT_SCHEMA = {
-  type: 'object',
-  required: ['tiers', 'templates', 'autoInjectCatalog'],
-  properties: {
-    tiers: { type: 'array', items: TIER_ENTRY_OUTPUT_SCHEMA },
-    templates: { type: 'array', items: TEMPLATE_OUTPUT_SCHEMA },
-    activeTemplate: { type: 'string' },
-    autoInjectCatalog: { type: 'boolean' },
-  },
-  additionalProperties: false,
+  type: 'object', required: ['tiers', 'templates', 'autoInjectCatalog'], additionalProperties: false,
+  properties: { tiers: { type: 'array', items: TIER_ENTRY_SCHEMA }, templates: { type: 'array', items: TEMPLATE_SCHEMA }, activeTemplate: { type: 'string' }, autoInjectCatalog: { type: 'boolean' } },
 } as const
+
+const sortTemplates = (templates: Readonly<Record<string, TierTemplate>>): TierTemplate[] =>
+  Object.values(templates).sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
 
 export function createTiersPlugin(): PluginDefinition {
   return {
@@ -147,46 +79,40 @@ export function createTiersPlugin(): PluginDefinition {
         writeChain = run.then(() => undefined, () => undefined)
         return run
       }
-
       const readState = (): TiersStateDoc => sanitizeStateDoc(stateDoc.get())
-
-      const autoInjectEnabled = (): boolean => {
-        const cfg = ctx.getConfig() as TiersPluginConfig
-        return cfg.autoInjectCatalog !== false
+      const autoInjectEnabled = (): boolean => (ctx.getConfig() as TiersPluginConfig).autoInjectCatalog !== false
+      const persist = async (next: TiersStateDoc, notifyTiers = true): Promise<void> => {
+        stateDoc.set(next)
+        await stateDoc.flush()
+        if (notifyTiers) await registration?.notifyChanged()
       }
 
-      const buildListPayload = async (): Promise<{
-        tiers: ModelTierCatalogEntry[]
-        templates: TierTemplate[]
-        activeTemplate?: string
-        autoInjectCatalog: boolean
-      }> => {
+      const buildListPayload = async () => {
         const state = readState()
-        const catalog = await ctx.host.listModels()
-        const tiers = projectTierEntries(state.tiers, catalog)
-        const templates = Object.values(state.templates).sort(
-          (a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id),
-        )
         return {
-          tiers,
-          templates,
-          ...(state.activeTemplate !== undefined ? { activeTemplate: state.activeTemplate } : {}),
+          tiers: projectTierEntries(state.tiers, await ctx.host.listModels()),
+          templates: sortTemplates(state.templates),
+          ...(state.activeTemplate ? { activeTemplate: state.activeTemplate } : {}),
           autoInjectCatalog: autoInjectEnabled(),
         }
       }
 
-      // Mount active tiers in `prepare()` so `defaultModel` / `Profile.model` targeting `tier/<id>`
-      // resolve cleanly before services start and before the SDK scheduler resumes conversations.
+      const applyRoster = async (nextTiers: Record<string, ModelTierSpec>, opts: { force?: boolean; activeTemplate?: string }) => {
+        const current = readState()
+        const removed = new Set(Object.keys(current.tiers).filter((id) => !Object.hasOwn(nextTiers, id)))
+        const [catalog, profiles] = await Promise.all([ctx.host.listModels(), ctx.host.profiles.list()])
+        for (const spec of Object.values(nextTiers)) assertTargetModelNotDisabled(catalog, spec.model)
+        assertRemovedTiersNotInUse(removed, catalog, profiles, opts.force)
+        await persist({ tiers: nextTiers, templates: current.templates, ...(opts.activeTemplate ? { activeTemplate: opts.activeTemplate } : {}) })
+        return buildListPayload()
+      }
+
       ctx.service({
         id: 'tiers-runtime',
-        prepare() {
-          registration = ctx.host.registerModelTiers(() => readState().tiers)
-        },
+        prepare() { registration = ctx.host.registerModelTiers(() => readState().tiers) },
         async start() {
           await ctx.host.skills.ensureSkill(readTiersSkillAsset())
-          if (Object.keys(readState().tiers).length > 0) {
-            await registration?.notifyChanged()
-          }
+          if (Object.keys(readState().tiers).length > 0) await registration?.notifyChanged()
         },
         async stop() {
           await writeChain
@@ -195,12 +121,8 @@ export function createTiersPlugin(): PluginDefinition {
           reg?.release()
         },
         async inUse() {
-          const state = readState()
-          if (Object.keys(state.tiers).length === 0) return []
-          const [catalog, profiles] = await Promise.all([
-            ctx.host.listModels(),
-            ctx.host.profiles.list(),
-          ])
+          if (Object.keys(readState().tiers).length === 0) return []
+          const [catalog, profiles] = await Promise.all([ctx.host.listModels(), ctx.host.profiles.list()])
           return findTierReferences(catalog, profiles)
         },
       })
@@ -209,20 +131,9 @@ export function createTiersPlugin(): PluginDefinition {
         if (!autoInjectEnabled()) return { action: 'continue' }
         const state = readState()
         if (Object.keys(state.tiers).length === 0) return { action: 'continue' }
-        const catalog = await ctx.host.listModels()
-        const entries = projectTierEntries(state.tiers, catalog)
-        const text = renderModelTiersCatalogSection(entries)
-        if (text === undefined) return { action: 'continue' }
-        return {
-          action: 'transform',
-          value: {
-            ...turn,
-            sections: [...turn.sections, { id: 'tiers.catalog', text }],
-          },
-        }
+        const text = renderModelTiersCatalogSection(projectTierEntries(state.tiers, await ctx.host.listModels()))
+        return text ? { action: 'transform', value: { ...turn, sections: [...turn.sections, { id: 'tiers.catalog', text }] } } : { action: 'continue' }
       })
-
-      // ---- Actions (HTTP / CLI `helmx tiers ...` / Agent run_action) ----
 
       ctx.action({
         id: 'list',
@@ -231,7 +142,7 @@ export function createTiersPlugin(): PluginDefinition {
         idempotent: true,
         inputSchema: { type: 'object', properties: {}, additionalProperties: false },
         outputSchema: LIST_OUTPUT_SCHEMA,
-        handler: async () => buildListPayload(),
+        handler: buildListPayload,
       })
 
       ctx.action({
@@ -239,207 +150,81 @@ export function createTiersPlugin(): PluginDefinition {
         description: 'Create or update one model tier binding (tier/<id> -> concrete provider/model, optional thinkingLevel and description)',
         exposeToPrompt: false,
         inputSchema: {
-          type: 'object',
-          required: ['id', 'model'],
-          properties: {
-            id: { type: 'string', minLength: 1, maxLength: 63 },
-            model: { type: 'string', minLength: 1 },
-            thinkingLevel: { type: 'string', enum: ['', ...TIER_THINKING_LEVELS] },
-            description: { type: 'string', maxLength: MODEL_TIER_DESCRIPTION_MAX_LENGTH },
-          },
-          additionalProperties: false,
+          type: 'object', required: ['id', 'model'], additionalProperties: false,
+          properties: { id: ID_PROP, model: { type: 'string', minLength: 1 }, thinkingLevel: { type: 'string', enum: ['', ...TIER_THINKING_LEVELS] }, description: { type: 'string', maxLength: MODEL_TIER_DESCRIPTION_MAX_LENGTH } },
         },
-        outputSchema: {
-          type: 'object',
-          required: ['tier', 'tiers'],
-          properties: {
-            tier: TIER_ENTRY_OUTPUT_SCHEMA,
-            tiers: { type: 'array', items: TIER_ENTRY_OUTPUT_SCHEMA },
-          },
-          additionalProperties: false,
-        },
-        handler: async (input: { id: string; model: string; thinkingLevel?: string; description?: string }) =>
+        outputSchema: { type: 'object', required: ['tier', 'tiers'], additionalProperties: false, properties: { tier: TIER_ENTRY_SCHEMA, tiers: { type: 'array', items: TIER_ENTRY_SCHEMA } } },
+        handler: (input: { id: string; model: string; thinkingLevel?: string; description?: string }) =>
           enqueueWrite(async () => {
             const id = assertTierId(input.id)
-            const spec = normalizeTierSpec(
-              {
-                model: assertConcreteModelRef(input.model),
-                ...(input.thinkingLevel !== undefined ? { thinkingLevel: input.thinkingLevel } : {}),
-                ...(input.description !== undefined ? { description: input.description } : {}),
-              },
-              id,
-            )
-            const catalog = await ctx.host.listModels()
-            assertTargetModelNotDisabled(catalog, spec.model)
-            const current = readState()
-            const isNew = !Object.prototype.hasOwnProperty.call(current.tiers, id)
-            if (isNew && Object.keys(current.tiers).length >= MAX_TIERS_COUNT) {
-              throw new HelmxError('validation_error', `At most ${MAX_TIERS_COUNT} model tiers are allowed`, 400, {
-                maxTiers: MAX_TIERS_COUNT,
-              })
+            const spec = normalizeTierSpec({ model: assertConcreteModelRef(input.model), ...(input.thinkingLevel !== undefined ? { thinkingLevel: input.thinkingLevel } : {}), ...(input.description !== undefined ? { description: input.description } : {}) }, id)
+            assertTargetModelNotDisabled(await ctx.host.listModels(), spec.model)
+            const cur = readState()
+            if (!Object.hasOwn(cur.tiers, id) && Object.keys(cur.tiers).length >= MAX_TIERS_COUNT) {
+              throw new HelmxError('validation_error', `At most ${MAX_TIERS_COUNT} model tiers are allowed`, 400, { maxTiers: MAX_TIERS_COUNT })
             }
-            const nextTiers: Record<string, ModelTierSpec> = { ...current.tiers, [id]: spec }
-            stateDoc.set({
-              tiers: nextTiers,
-              templates: current.templates,
-            })
-            await stateDoc.flush()
-            await registration?.notifyChanged()
-            const refreshed = await ctx.host.listModels()
-            const projected = projectTierEntries(nextTiers, refreshed)
-            const tier = projected.find((entry) => entry.id === id)!
-            return { tier, tiers: projected }
+            const nextTiers = { ...cur.tiers, [id]: spec }
+            await persist({ tiers: nextTiers, templates: cur.templates })
+            const tiers = projectTierEntries(nextTiers, await ctx.host.listModels())
+            return { tier: tiers.find((e) => e.id === id)!, tiers }
           }),
       })
 
       ctx.action({
         id: 'remove',
-        description: 'Delete a model tier binding (rejects with 409 model_tier_in_use if referenced by defaults or Profiles unless force: true)',
+        description: 'Delete a model tier binding (rejects with 409 model_tier_in_use if referenced unless force: true)',
         exposeToPrompt: false,
-        inputSchema: {
-          type: 'object',
-          required: ['id'],
-          properties: {
-            id: { type: 'string', minLength: 1, maxLength: 63 },
-            force: { type: 'boolean' },
-          },
-          additionalProperties: false,
-        },
-        outputSchema: {
-          type: 'object',
-          required: ['removed', 'tiers'],
-          properties: {
-            removed: { type: 'string' },
-            tiers: { type: 'array', items: TIER_ENTRY_OUTPUT_SCHEMA },
-          },
-          additionalProperties: false,
-        },
-        handler: async (input: { id: string; force?: boolean }) =>
+        inputSchema: { type: 'object', required: ['id'], additionalProperties: false, properties: { id: ID_PROP, force: { type: 'boolean' } } },
+        outputSchema: { type: 'object', required: ['removed', 'tiers'], additionalProperties: false, properties: { removed: { type: 'string' }, tiers: { type: 'array', items: TIER_ENTRY_SCHEMA } } },
+        handler: (input: { id: string; force?: boolean }) =>
           enqueueWrite(async () => {
             const id = assertTierId(input.id)
-            const current = readState()
-            if (!Object.prototype.hasOwnProperty.call(current.tiers, id)) {
-              throw new HelmxError('model_tier_not_found', `Model tier '${id}' does not exist`, 404, { id })
-            }
-            const [catalog, profiles] = await Promise.all([
-              ctx.host.listModels(),
-              ctx.host.profiles.list(),
-            ])
+            const cur = readState()
+            if (!Object.hasOwn(cur.tiers, id)) throw new HelmxError('model_tier_not_found', `Model tier '${id}' does not exist`, 404, { id })
+            const [catalog, profiles] = await Promise.all([ctx.host.listModels(), ctx.host.profiles.list()])
             assertRemovedTiersNotInUse(new Set([id]), catalog, profiles, input.force)
-            const nextTiers = { ...current.tiers }
+            const nextTiers = { ...cur.tiers }
             delete nextTiers[id]
-            stateDoc.set({
-              tiers: nextTiers,
-              templates: current.templates,
-            })
-            await stateDoc.flush()
-            await registration?.notifyChanged()
-            const refreshed = await ctx.host.listModels()
-            return { removed: id, tiers: projectTierEntries(nextTiers, refreshed) }
+            await persist({ tiers: nextTiers, templates: cur.templates })
+            return { removed: id, tiers: projectTierEntries(nextTiers, await ctx.host.listModels()) }
           }),
       })
 
       ctx.action({
         id: 'replace',
-        description: 'Atomically replace the entire active model tiers table (primarily used by the Model Tiers UI editor)',
+        description: 'Atomically replace the entire active model tiers table (used by the Model Tiers UI editor)',
         visibility: 'ui',
-        inputSchema: {
-          type: 'object',
-          required: ['tiers'],
-          properties: {
-            tiers: { type: 'object', additionalProperties: TIER_SPEC_INPUT_SCHEMA },
-            force: { type: 'boolean' },
-          },
-          additionalProperties: false,
-        },
+        inputSchema: { type: 'object', required: ['tiers'], additionalProperties: false, properties: { tiers: { type: 'object', additionalProperties: TIER_SPEC_SCHEMA }, force: { type: 'boolean' } } },
         outputSchema: LIST_OUTPUT_SCHEMA,
-        handler: async (input: { tiers: Record<string, ModelTierSpec>; force?: boolean }) =>
-          enqueueWrite(async () => {
-            const nextTiers = normalizeTiersRecord(input.tiers)
-            const current = readState()
-            const removed = new Set(
-              Object.keys(current.tiers).filter((id) => !Object.prototype.hasOwnProperty.call(nextTiers, id)),
-            )
-            const [catalog, profiles] = await Promise.all([
-              ctx.host.listModels(),
-              ctx.host.profiles.list(),
-            ])
-            for (const spec of Object.values(nextTiers)) {
-              assertTargetModelNotDisabled(catalog, spec.model)
-            }
-            assertRemovedTiersNotInUse(removed, catalog, profiles, input.force)
-            stateDoc.set({
-              tiers: nextTiers,
-              templates: current.templates,
-            })
-            await stateDoc.flush()
-            await registration?.notifyChanged()
-            return buildListPayload()
-          }),
+        handler: (input: { tiers: Record<string, ModelTierSpec>; force?: boolean }) =>
+          enqueueWrite(() => applyRoster(normalizeTiersRecord(input.tiers), { force: input.force })),
       })
 
       ctx.action({
         id: 'save_template',
-        description: 'Save a reusable tier preset template (defaults to snapshotting the currently active tiers when tiers is omitted)',
+        description: 'Save a reusable tier preset template (defaults to snapshotting active tiers when tiers is omitted)',
         exposeToPrompt: false,
         cli: { command: ['tiers', 'save-template'] },
         inputSchema: {
-          type: 'object',
-          required: ['id', 'name'],
-          properties: {
-            id: { type: 'string', minLength: 1, maxLength: 63 },
-            name: { type: 'string', minLength: 1, maxLength: TIER_TEMPLATE_NAME_MAX_LENGTH },
-            description: { type: 'string', maxLength: TIER_TEMPLATE_DESCRIPTION_MAX_LENGTH },
-            tiers: { type: 'object', additionalProperties: TIER_SPEC_INPUT_SCHEMA },
-          },
-          additionalProperties: false,
+          type: 'object', required: ['id', 'name'], additionalProperties: false,
+          properties: { id: ID_PROP, name: { type: 'string', minLength: 1, maxLength: TIER_TEMPLATE_NAME_MAX_LENGTH }, description: { type: 'string', maxLength: TIER_TEMPLATE_DESCRIPTION_MAX_LENGTH }, tiers: { type: 'object', additionalProperties: TIER_SPEC_SCHEMA } },
         },
-        outputSchema: {
-          type: 'object',
-          required: ['template', 'templates'],
-          properties: {
-            template: TEMPLATE_OUTPUT_SCHEMA,
-            templates: { type: 'array', items: TEMPLATE_OUTPUT_SCHEMA },
-          },
-          additionalProperties: false,
-        },
-        handler: async (input: {
-          id: string
-          name: string
-          description?: string
-          tiers?: Record<string, ModelTierSpec>
-        }) =>
+        outputSchema: { type: 'object', required: ['template', 'templates'], additionalProperties: false, properties: { template: TEMPLATE_SCHEMA, templates: { type: 'array', items: TEMPLATE_SCHEMA } } },
+        handler: (input: { id: string; name: string; description?: string; tiers?: Record<string, ModelTierSpec> }) =>
           enqueueWrite(async () => {
             const id = assertTemplateId(input.id)
             const meta = normalizeTemplateMeta({ name: input.name, description: input.description })
-            const current = readState()
-            assertTemplateCapacity(current.templates, id)
-            const sourceTiers = input.tiers !== undefined ? normalizeTiersRecord(input.tiers) : { ...current.tiers }
+            const cur = readState()
+            assertTemplateCapacity(cur.templates, id)
+            const sourceTiers = input.tiers !== undefined ? normalizeTiersRecord(input.tiers) : { ...cur.tiers }
             if (Object.keys(sourceTiers).length === 0) {
-              throw new HelmxError(
-                'validation_error',
-                'Cannot save an empty tier template: configure at least one tier first or pass tiers explicitly',
-                400,
-              )
+              throw new HelmxError('validation_error', 'Cannot save an empty tier template: configure at least one tier first or pass tiers explicitly', 400)
             }
-            const template: TierTemplate = {
-              id,
-              name: meta.name,
-              ...(meta.description !== undefined ? { description: meta.description } : {}),
-              tiers: sourceTiers,
-              updatedAt: Date.now(),
-            }
-            const nextTemplates = { ...current.templates, [id]: template }
-            stateDoc.set({
-              tiers: current.tiers,
-              templates: nextTemplates,
-              ...(input.tiers === undefined ? { activeTemplate: id } : current.activeTemplate ? { activeTemplate: current.activeTemplate } : {}),
-            })
-            await stateDoc.flush()
-            const templates = Object.values(nextTemplates).sort(
-              (a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id),
-            )
-            return { template, templates }
+            const template: TierTemplate = { id, ...meta, tiers: sourceTiers, updatedAt: Date.now() }
+            const nextTemplates = { ...cur.templates, [id]: template }
+            const activeTemplate = input.tiers === undefined ? id : cur.activeTemplate
+            await persist({ tiers: cur.tiers, templates: nextTemplates, ...(activeTemplate ? { activeTemplate } : {}) }, false)
+            return { template, templates: sortTemplates(nextTemplates) }
           }),
       })
 
@@ -448,44 +233,14 @@ export function createTiersPlugin(): PluginDefinition {
         description: 'Switch the active model tiers roster to a saved preset template in one step',
         exposeToPrompt: false,
         cli: { command: ['tiers', 'apply-template'] },
-        inputSchema: {
-          type: 'object',
-          required: ['id'],
-          properties: {
-            id: { type: 'string', minLength: 1, maxLength: 63 },
-            force: { type: 'boolean' },
-          },
-          additionalProperties: false,
-        },
+        inputSchema: { type: 'object', required: ['id'], additionalProperties: false, properties: { id: ID_PROP, force: { type: 'boolean' } } },
         outputSchema: LIST_OUTPUT_SCHEMA,
-        handler: async (input: { id: string; force?: boolean }) =>
+        handler: (input: { id: string; force?: boolean }) =>
           enqueueWrite(async () => {
             const id = assertTemplateId(input.id)
-            const current = readState()
-            const template = current.templates[id]
-            if (template === undefined) {
-              throw new HelmxError('tier_template_not_found', `Tier template '${id}' does not exist`, 404, { id })
-            }
-            const nextTiers = normalizeTiersRecord(template.tiers)
-            const removed = new Set(
-              Object.keys(current.tiers).filter((tid) => !Object.prototype.hasOwnProperty.call(nextTiers, tid)),
-            )
-            const [catalog, profiles] = await Promise.all([
-              ctx.host.listModels(),
-              ctx.host.profiles.list(),
-            ])
-            for (const spec of Object.values(nextTiers)) {
-              assertTargetModelNotDisabled(catalog, spec.model)
-            }
-            assertRemovedTiersNotInUse(removed, catalog, profiles, input.force)
-            stateDoc.set({
-              tiers: nextTiers,
-              templates: current.templates,
-              activeTemplate: id,
-            })
-            await stateDoc.flush()
-            await registration?.notifyChanged()
-            return buildListPayload()
+            const tpl = readState().templates[id]
+            if (!tpl) throw new HelmxError('tier_template_not_found', `Tier template '${id}' does not exist`, 404, { id })
+            return applyRoster(normalizeTiersRecord(tpl.tiers), { force: input.force, activeTemplate: id })
           }),
       })
 
@@ -494,70 +249,24 @@ export function createTiersPlugin(): PluginDefinition {
         description: 'Delete a saved tier preset template (does not affect currently active tiers)',
         exposeToPrompt: false,
         cli: { command: ['tiers', 'delete-template'] },
-        inputSchema: {
-          type: 'object',
-          required: ['id'],
-          properties: {
-            id: { type: 'string', minLength: 1, maxLength: 63 },
-          },
-          additionalProperties: false,
-        },
-        outputSchema: {
-          type: 'object',
-          required: ['deleted', 'templates'],
-          properties: {
-            deleted: { type: 'string' },
-            templates: { type: 'array', items: TEMPLATE_OUTPUT_SCHEMA },
-          },
-          additionalProperties: false,
-        },
-        handler: async (input: { id: string }) =>
+        inputSchema: { type: 'object', required: ['id'], additionalProperties: false, properties: { id: ID_PROP } },
+        outputSchema: { type: 'object', required: ['deleted', 'templates'], additionalProperties: false, properties: { deleted: { type: 'string' }, templates: { type: 'array', items: TEMPLATE_SCHEMA } } },
+        handler: (input: { id: string }) =>
           enqueueWrite(async () => {
             const id = assertTemplateId(input.id)
-            const current = readState()
-            if (!Object.prototype.hasOwnProperty.call(current.templates, id)) {
-              throw new HelmxError('tier_template_not_found', `Tier template '${id}' does not exist`, 404, { id })
-            }
-            const nextTemplates = { ...current.templates }
+            const cur = readState()
+            if (!Object.hasOwn(cur.templates, id)) throw new HelmxError('tier_template_not_found', `Tier template '${id}' does not exist`, 404, { id })
+            const nextTemplates = { ...cur.templates }
             delete nextTemplates[id]
-            stateDoc.set({
-              tiers: current.tiers,
-              templates: nextTemplates,
-              ...(current.activeTemplate !== undefined && current.activeTemplate !== id
-                ? { activeTemplate: current.activeTemplate }
-                : {}),
-            })
-            await stateDoc.flush()
-            const templates = Object.values(nextTemplates).sort(
-              (a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id),
-            )
-            return { deleted: id, templates }
+            await persist({ tiers: cur.tiers, templates: nextTemplates, ...(cur.activeTemplate && cur.activeTemplate !== id ? { activeTemplate: cur.activeTemplate } : {}) }, false)
+            return { deleted: id, templates: sortTemplates(nextTemplates) }
           }),
       })
 
-      // ---- Declarative UI (client.tsx React track; zero Emoji, Lucide icons) ----
-
-      ctx.ui.sidebarItem({
-        id: 'tiers-manager',
-        label: { en: 'Model Tiers', 'zh-CN': '模型档位' },
-        icon: 'layers',
-        target: `screen:${TIERS_PLUGIN_ID}/${TIERS_SCREEN_ID}`,
-        order: 16,
-      })
-
-      ctx.ui.screen({
-        id: TIERS_SCREEN_ID,
-        label: { en: 'Model Tiers', 'zh-CN': '模型档位' },
-        icon: 'layers',
-        client: { module: 'index.tsx', export: 'TiersManagerScreen' },
-      })
-
-      ctx.ui.settingsPanel({
-        id: 'tiers-settings',
-        label: { en: 'Model Tiers', 'zh-CN': '模型档位' },
-        order: 26,
-        client: { module: 'index.tsx', export: 'TiersSettingsPanel' },
-      })
+      const label = { en: 'Model Tiers', 'zh-CN': '模型档位' }
+      ctx.ui.sidebarItem({ id: 'tiers-manager', label, icon: 'layers', target: `screen:${TIERS_PLUGIN_ID}/${TIERS_SCREEN_ID}`, order: 16 })
+      ctx.ui.screen({ id: TIERS_SCREEN_ID, label, icon: 'layers', client: { module: 'index.tsx', export: 'TiersManagerScreen' } })
+      ctx.ui.settingsPanel({ id: 'tiers-settings', label, order: 26, client: { module: 'index.tsx', export: 'TiersSettingsPanel' } })
     },
   }
 }
