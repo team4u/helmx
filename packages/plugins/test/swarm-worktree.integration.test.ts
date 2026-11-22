@@ -17,6 +17,8 @@ import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/provid
 import { HelmxError } from '@helmx/protocol'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { createHelmx } from '../../hub/src/app.js'
+import { startHub } from '../../kernel/src/http/index.js'
+import { createNodeDaemon, type NodeDaemon } from '../../node/src/index.js'
 import {
   createGitTemplate,
   makeFauxProvider,
@@ -724,6 +726,215 @@ describe('builtin:swarm worktree isolation, handoff & close_group recovery', () 
       assert.equal(app.kernel.getConversation(seeded.workerId).tags.includes(WORKER_TAG), false)
     } finally {
       await app.close()
+    }
+  })
+
+  test('swarm-int18: Swarm + Worktree remote dynamic nodeId allocates real worktrees via acquire_worktree, records member.nodeId & worktreeId, and preserves remote nodeId in retainedWorktrees on archive_worker & close_group', { timeout: 60_000 }, async (t) => {
+    const root = useTempDir(t, 'helmx-swarm-remote-wt-')
+    const env = await openSwarmEnv(root, gitTemplate)
+    const remoteRepoDir = join(root, 'remote-repo')
+    gitTemplate.cloneTo(remoteRepoDir)
+    const nodeDataDir = join(root, 'node-data')
+    mkdirSync(nodeDataDir, { recursive: true })
+
+    let hub: Awaited<ReturnType<typeof startHub>> | undefined
+    let daemon: NodeDaemon | undefined
+    try {
+      const { kernel } = env.app
+      hub = await startHub({ kernel: kernel as never, port: 0 })
+      const issued = await kernel.issueNodeToken('remote-wt-node')
+      daemon = await createNodeDaemon({
+        hubUrl: hub.url,
+        identity: { nodeId: 'remote-wt-node', token: issued.token },
+        dataDir: nodeDataDir,
+        envServer: { shellEnv: { HELMX_NODE_TEST_ORIGIN: 'remote-wt-exec' } },
+        reconnectBaseDelayMs: 50,
+        log: () => undefined,
+      })
+      assert.equal(await daemon.waitUntilRegistered(5_000), true)
+      assert.equal(kernel.envFabric.isOnline('remote-wt-node'), true)
+
+      const coord = await kernel.createConversation({
+        title: 'Local Coord Dispatching Remote Worktrees',
+        profileId: 'assistant',
+        cwd: env.repoDir,
+      })
+      assert.equal(coord.nodeId, 'local')
+
+      const { groupId } = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'create_group',
+        { title: 'Remote Worktree Squad', objective: 'Allocate isolated worktrees on remote-wt-node', conversationId: coord.id },
+      )) as { groupId: string }
+
+      setSwarmRoleResponses(env.faux, {
+        remote_a: [
+          fauxAssistantMessage(
+            [
+              fauxToolCall('bash', {
+                command:
+                  'test "$HELMX_NODE_TEST_ORIGIN" = remote-wt-exec && printf "a:%s\\n" "$HELMX_NODE_TEST_ORIGIN" > remote-a.txt && git add remote-a.txt && git commit -m "feat: remote-a"',
+              }),
+            ],
+            { stopReason: 'toolUse' },
+          ),
+          fauxAssistantMessage(
+            [fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', body: 'Committed remote-a.txt on remote-wt-node.' })],
+            { stopReason: 'toolUse' },
+          ),
+          fauxAssistantMessage('remote_a settled.'),
+        ],
+        remote_b: [
+          fauxAssistantMessage(
+            [
+              fauxToolCall('bash', {
+                command:
+                  'test "$HELMX_NODE_TEST_ORIGIN" = remote-wt-exec && printf "b:%s\\n" "$HELMX_NODE_TEST_ORIGIN" > remote-b.txt && git add remote-b.txt && git commit -m "feat: remote-b"',
+              }),
+            ],
+            { stopReason: 'toolUse' },
+          ),
+          fauxAssistantMessage(
+            [fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', body: 'Committed remote-b.txt on remote-wt-node.' })],
+            { stopReason: 'toolUse' },
+          ),
+          fauxAssistantMessage('remote_b settled.'),
+        ],
+        coordinator: [
+          fauxAssistantMessage('Coordinator received remote_a completion.'),
+          fauxAssistantMessage('Coordinator received remote_b completion.'),
+        ],
+      })
+
+      const workerA = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'dispatch_worker',
+        {
+          groupId,
+          name: 'remote_a',
+          prompt: 'Commit remote-a.txt in an isolated remote worktree.',
+          nodeId: 'remote-wt-node',
+          cwd: remoteRepoDir,
+          isolation: 'worktree',
+        },
+        { conversationId: coord.id },
+      )) as { workerConversationId: number; worktreeId: string }
+
+      await kernel.waitForIdle(workerA.workerConversationId)
+      await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+      await kernel.waitForIdle(coord.id)
+
+      const workerB = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'dispatch_worker',
+        {
+          groupId,
+          name: 'remote_b',
+          prompt: 'Commit remote-b.txt in an isolated remote worktree.',
+          nodeId: 'remote-wt-node',
+          cwd: remoteRepoDir,
+          isolation: 'worktree',
+        },
+        { conversationId: coord.id },
+      )) as { workerConversationId: number; worktreeId: string }
+
+      await kernel.waitForIdle(workerB.workerConversationId)
+      await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+      await kernel.waitForIdle(coord.id)
+
+      assert.ok(workerA.worktreeId.startsWith('remote-wt-node:'), `workerA worktreeId should target remote-wt-node: ${workerA.worktreeId}`)
+      assert.ok(workerB.worktreeId.startsWith('remote-wt-node:'), `workerB worktreeId should target remote-wt-node: ${workerB.worktreeId}`)
+      const wtPathA = workerA.worktreeId.slice('remote-wt-node:'.length)
+      const wtPathB = workerB.worktreeId.slice('remote-wt-node:'.length)
+
+      const convA = kernel.getConversation(workerA.workerConversationId)
+      const convB = kernel.getConversation(workerB.workerConversationId)
+      assert.equal(convA.nodeId, 'remote-wt-node')
+      assert.equal(convA.cwd, wtPathA)
+      assert.equal(convB.nodeId, 'remote-wt-node')
+      assert.equal(convB.cwd, wtPathB)
+      assert.equal(readFileSync(join(wtPathA, 'remote-a.txt'), 'utf8').trim(), 'a:remote-wt-exec')
+      assert.equal(readFileSync(join(wtPathB, 'remote-b.txt'), 'utf8').trim(), 'b:remote-wt-exec')
+
+      // board_status records real member.nodeId & member.worktreeId
+      const liveStatus = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'board_status',
+        { groupId },
+        { conversationId: coord.id },
+      )) as BoardViewDoc
+      const memberA = liveStatus.members.find((m) => m.name === 'remote_a')
+      const memberB = liveStatus.members.find((m) => m.name === 'remote_b')
+      assert.equal(memberA?.nodeId, 'remote-wt-node')
+      assert.equal(memberA?.worktreeId, workerA.worktreeId)
+      assert.equal(memberB?.nodeId, 'remote-wt-node')
+      assert.equal(memberB?.worktreeId, workerB.worktreeId)
+
+      // inspect_worktree on builtin:worktree confirms remote allocation & 1 unmerged commit
+      const inspectedA = (await kernel.plugins.invokeAction(WORKTREE_ID, 'inspect_worktree', {
+        worktreeId: workerA.worktreeId,
+        diff: false,
+      })) as { exists: boolean; commitsAhead?: number; record?: { nodeId: string } }
+      assert.equal(inspectedA.exists, true)
+      assert.equal(inspectedA.commitsAhead, 1)
+      assert.equal(inspectedA.record?.nodeId, 'remote-wt-node')
+
+      // archive_worker({ keepWorktree: true }) preserves remote_a with nodeId: 'remote-wt-node'
+      await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'archive_worker',
+        { groupId, name: 'remote_a', keepWorktree: true },
+        { conversationId: coord.id },
+      )
+      const afterArchive = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'board_status',
+        { groupId },
+        { conversationId: coord.id },
+      )) as BoardViewDoc
+      assert.equal(afterArchive.group.retainedWorktrees?.length, 1)
+      assert.equal(afterArchive.group.retainedWorktrees?.[0]?.memberName, 'remote_a')
+      assert.equal(afterArchive.group.retainedWorktrees?.[0]?.nodeId, 'remote-wt-node')
+      assert.equal(afterArchive.group.retainedWorktrees?.[0]?.worktreeId, workerA.worktreeId)
+      assert.equal(afterArchive.group.retainedWorktrees?.[0]?.commitsAhead, 1)
+
+      // close_group({ keepWorktree: true }) preserves BOTH remote_a and remote_b with nodeId: 'remote-wt-node'
+      const closed = (await kernel.plugins.invokeAction(
+        SWARM_PLUGIN_ID,
+        'close_group',
+        { groupId, keepWorktree: true, summary: 'Retain both remote worktrees' },
+        { conversationId: coord.id },
+      )) as {
+        closed: boolean
+        retainedWorktrees: Array<{ memberName: string; nodeId: string; worktreeId: string; branch: string; path: string; commitsAhead: number }>
+      }
+      assert.equal(closed.closed, true)
+      assert.equal(closed.retainedWorktrees.length, 2)
+      const byMember = new Map(closed.retainedWorktrees.map((w) => [w.memberName, w]))
+      assert.equal(byMember.get('remote_a')?.nodeId, 'remote-wt-node')
+      assert.equal(byMember.get('remote_a')?.worktreeId, workerA.worktreeId)
+      assert.equal(byMember.get('remote_a')?.commitsAhead, 1)
+      assert.equal(byMember.get('remote_b')?.nodeId, 'remote-wt-node')
+      assert.equal(byMember.get('remote_b')?.worktreeId, workerB.worktreeId)
+      assert.equal(byMember.get('remote_b')?.commitsAhead, 1)
+
+      // Clean up both retained remote worktrees cleanly via builtin:worktree
+      for (const wtId of [workerA.worktreeId, workerB.worktreeId]) {
+        const cleaned = (await kernel.plugins.invokeAction(WORKTREE_ID, 'cleanup_worktree', {
+          worktreeId: wtId,
+          force: true,
+          deleteBranch: true,
+        })) as { removed: boolean; nodeId: string; branchDeleted: boolean }
+        assert.equal(cleaned.removed, true)
+        assert.equal(cleaned.nodeId, 'remote-wt-node')
+        assert.equal(cleaned.branchDeleted, true)
+      }
+      assert.equal(existsSync(wtPathA), false)
+      assert.equal(existsSync(wtPathB), false)
+    } finally {
+      await daemon?.close()
+      await hub?.close()
+      await env.close()
     }
   })
 })

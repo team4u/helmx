@@ -32,9 +32,13 @@ import {
   type PluginDefinition,
 } from '@helmx/protocol'
 import { KernelRuntime } from '../../kernel/src/runtime/index.js'
+import { startHub } from '../../kernel/src/http/index.js'
 import { PluginHost, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
 import { hostBackendStub } from '../../kernel/test/helpers/host-backend-stub.js'
+import { createNodeDaemon, type NodeDaemon } from '../../node/src/index.js'
+import type { WorkflowRunSummary } from '../src/contracts.js'
 import { createHerdrPlugin } from '../src/herdr.js'
+import { createWorkflowPlugin } from '../src/workflow.js'
 import { EMPTY_MANAGED_DOC, PaneRegistry, type ManagedDoc } from '../src/herdr/panes.js'
 import type { HerdrTarget } from '../src/herdr/contracts.js'
 import {
@@ -1097,10 +1101,10 @@ test('Herdr 启动对账：builtin:workflow 处于 enabled=true, status=failed �
         id: 'inspect',
         description: 'stub inspect',
         inputSchema: { type: 'object', properties: { runId: { type: 'string' } }, required: ['runId'] },
-        outputSchema: { type: 'object', properties: { status: { type: 'string' } } },
+        outputSchema: { type: 'object', properties: { run: { type: 'object' } }, required: ['run'] },
         handler: async () => {
           inspectCalls += 1
-          return { status: 'running' }
+          return { run: { status: 'running' } }
         },
       })
     },
@@ -1119,4 +1123,200 @@ test('Herdr 启动对账：builtin:workflow 处于 enabled=true, status=failed �
   // reconcile() 应将 failed workflow 视为不活跃 -> 立即回收该空闲 keepalive 孤儿窗格；reconcileWorkflowOrphansAfterStartup 亦不得调 inspect
   await waitFor(() => transport.calls.filter((c) => c.method === 'tab.close').length === 1)
   assert.equal(inspectCalls, 0, 'builtin:workflow 处于 failed 状态时不得调用其 inspect 动作')
+})
+
+test('Workflow + Herdr 远端动态 nodeId 与跨重启外部 executionId reattach：subagent 与 DSL agent 均路由远端节点并在重启后携带 nodeId 命中远端窗格', { timeout: 60_000 }, async (t) => {
+  const defer = useCleanupStack(t)
+  const dataDir = useTempDir(t, 'helmx-wf-herdr-remote-data-')
+  const localWorkDir = useTempDir(t, 'helmx-wf-herdr-local-work-')
+  const remoteWorkDir = useTempDir(t, 'helmx-wf-herdr-remote-work-')
+  const nodeDataDir = useTempDir(t, 'helmx-wf-herdr-node-data-')
+  const sockDir = useTempDir(t, 'helmx-wf-herdr-sock-')
+  const localSocketPath = join(sockDir, 'local-herdr.sock')
+  const remoteSocketPath = join(sockDir, 'remote-herdr.sock')
+
+  const localTransport = new RestartFakeTransport()
+  const remoteTransport = new RestartFakeTransport()
+  const localServer = await serveTransport(localTransport, localSocketPath)
+  const remoteServer = await serveTransport(remoteTransport, remoteSocketPath)
+  defer(async () => {
+    localTransport.closed = true
+    remoteTransport.closed = true
+    await localServer.close()
+    await remoteServer.close()
+  })
+
+  let hub: Awaited<ReturnType<typeof startHub>> | undefined
+  let daemon: NodeDaemon | undefined
+  const closeRemoteStack = async () => {
+    const d = daemon
+    const h = hub
+    daemon = undefined
+    hub = undefined
+    await d?.close()
+    await h?.close()
+  }
+  defer(closeRemoteStack)
+
+  const openRemoteStack = async (opts: { configureFirst?: boolean; nodeToken?: string }) => {
+    const kernel = await openKernelWithHerdr(defer, dataDir, localWorkDir, localSocketPath, {
+      configureFirst: opts.configureFirst,
+      prePlugins: [createWorkflowPlugin()],
+      autoStart: false,
+    })
+    const token = opts.nodeToken ?? (await kernel.issueNodeToken('remote-herdr-node')).token
+    hub = await startHub({ kernel: kernel as never, port: 0 })
+    daemon = await createNodeDaemon({
+      hubUrl: hub.url,
+      identity: { nodeId: 'remote-herdr-node', token },
+      dataDir: nodeDataDir,
+      envServer: {
+        hostEnvContext: {
+          getEnv: (name) => (name === 'HERDR_SOCKET_PATH' ? remoteSocketPath : undefined),
+        },
+      },
+      reconnectBaseDelayMs: 50,
+      log: () => undefined,
+    })
+    assert.equal(await daemon.waitUntilRegistered(5_000), true)
+    assert.equal(kernel.envFabric.isOnline('remote-herdr-node'), true)
+    await kernel.start()
+    return { kernel, token }
+  }
+
+  // ---- Phase 1: DSL agent({ agentType: 'herdr:pi', nodeId: 'remote-herdr-node', cwd: remoteWorkDir }) completes on remote node ----
+  remoteTransport.promptStatus = 'done'
+  remoteTransport.onPrompt = (pane, text) => {
+    mkdirSync(join(pane.cwd, '.helmx'), { recursive: true })
+    writeFileSync(join(pane.cwd, '.helmx', fileNameOf(text)), 'dsl-remote-direct-ok', 'utf8')
+  }
+
+  const phase1 = await openRemoteStack({ configureFirst: true })
+  const { token: nodeToken } = phase1
+  let kernel = phase1.kernel
+
+  const directScript =
+    'export const meta = { name: "wf-herdr-remote-direct", description: "remote direct" }\n' +
+    `return await agent("direct remote herdr task", { agentType: "herdr:pi", nodeId: "remote-herdr-node", cwd: ${JSON.stringify(remoteWorkDir)} })`
+  const { run: directRun } = (await kernel.plugins.invokeAction('builtin:workflow', 'run', {
+    conversationId: 1,
+    script: directScript,
+    wait: true,
+  })) as { run: WorkflowRunSummary }
+  assert.equal(directRun.status, 'completed', directRun.error ?? JSON.stringify(directRun.nodes))
+  assert.equal(directRun.result, 'dsl-remote-direct-ok', JSON.stringify(directRun.nodes))
+  assert.equal(localTransport.calls.filter((c) => c.method === 'tab.create').length, 0, 'local Herdr must not receive remote nodeId spawns')
+  assert.equal(remoteTransport.calls.filter((c) => c.method === 'tab.create').length, 1)
+  assert.equal(remoteTransport.calls.findLast((c) => c.method === 'tab.create')?.params['cwd'], remoteWorkDir)
+
+  // ---- Phase 2: In-flight background subagent AND DSL agent on remote-herdr-node -> close() -> restart external executionId reattach ----
+  const captured = new Map<string, { paneId: string; tabId: string; handoffFile: string }>()
+  remoteTransport.promptStatus = 'working'
+  remoteTransport.onPrompt = (pane, text) => {
+    const tag = text.includes('BG_REMOTE_REATTACH') ? 'bg' : text.includes('DSL_REMOTE_REATTACH') ? 'dsl' : 'other'
+    captured.set(tag, { paneId: pane.paneId, tabId: pane.tabId, handoffFile: fileNameOf(text) })
+  }
+
+  // 2a) Background subagent tool with dynamic remote nodeId
+  const bgToolOut = (await kernel.plugins.executeTool(
+    'subagent',
+    {
+      prompt: 'BG_REMOTE_REATTACH',
+      agentType: 'herdr:pi',
+      nodeId: 'remote-herdr-node',
+      cwd: remoteWorkDir,
+      background: true,
+    },
+    { conversationId: 1, callId: 'call-wf-herdr-remote-bg' },
+  )) as {
+    structuredOutput: {
+      ok: boolean
+      background: boolean
+      runId: string
+      execution?: { executionId?: string; nodeId?: string; effectiveCwd?: string }
+    }
+  }
+  assert.equal(bgToolOut.structuredOutput.ok, true)
+  assert.equal(bgToolOut.structuredOutput.background, true)
+  const bgRunId = bgToolOut.structuredOutput.runId
+  assert.equal(bgToolOut.structuredOutput.execution?.nodeId, 'remote-herdr-node')
+  assert.equal(bgToolOut.structuredOutput.execution?.effectiveCwd, remoteWorkDir)
+
+  // 2b) Workflow DSL agent with dynamic remote nodeId (async start, suspends while pane is working)
+  const dslReattachScript =
+    'export const meta = { name: "wf-herdr-remote-reattach", description: "remote dsl reattach" }\n' +
+    `return await agent("DSL_REMOTE_REATTACH", { agentType: "herdr:pi", nodeId: "remote-herdr-node", cwd: ${JSON.stringify(remoteWorkDir)} })`
+  const { run: dslRunBefore } = (await kernel.plugins.invokeAction('builtin:workflow', 'run', {
+    conversationId: 1,
+    script: dslReattachScript,
+  })) as { run: WorkflowRunSummary }
+  const dslRunId = dslRunBefore.id
+
+  await waitFor(() => captured.has('bg') && captured.has('dsl'), { timeoutMs: 10_000 })
+  const bgInfo = captured.get('bg')!
+  const dslInfo = captured.get('dsl')!
+  assert.equal(bgToolOut.structuredOutput.execution?.executionId, bgInfo.paneId)
+  // Wait for DSL workflow journal agent_started to capture executionId before shutdown
+  await waitFor(async () => {
+    const inspected = (await kernel.plugins.invokeAction('builtin:workflow', 'inspect', { runId: dslRunId })) as {
+      run: WorkflowRunSummary
+    }
+    return inspected.run.nodes?.some((n) => n.executionId === dslInfo.paneId) === true
+  }, { timeoutMs: 10_000 })
+
+  // Graceful Hub shutdown: remote panes stay alive (zero tab.close), workflow suspends both runs cleanly
+  await kernel.close()
+  await closeRemoteStack()
+  assert.equal(remoteTransport.tabs.get(bgInfo.tabId)?.closed, false, 'shutdown must keep remote bg Herdr pane alive')
+  assert.equal(remoteTransport.tabs.get(dslInfo.tabId)?.closed, false, 'shutdown must keep remote DSL Herdr pane alive')
+
+  // During restart window: both remote CLI panes write their handoff outputs and settle to done
+  mkdirSync(join(remoteWorkDir, '.helmx'), { recursive: true })
+  writeFileSync(join(remoteWorkDir, '.helmx', bgInfo.handoffFile), 'bg-remote-herdr-reattached-ok', 'utf8')
+  writeFileSync(join(remoteWorkDir, '.helmx', dslInfo.handoffFile), 'dsl-remote-herdr-reattached-ok', 'utf8')
+  remoteTransport.advancePane(bgInfo.paneId, 'done')
+  remoteTransport.advancePane(dslInfo.paneId, 'done')
+  await remoteServer.drain()
+
+  const remoteCreatesBeforeRestart = remoteTransport.calls.filter((c) => c.method === 'tab.create').length
+
+  // Restart Hub with remote-herdr-node online: workflow auto-recovers BOTH runs via external executionId reattach + nodeId
+  const phase2 = await openRemoteStack({ nodeToken })
+  kernel = phase2.kernel
+
+  await waitFor(async () => {
+    const bgInspected = (await kernel.plugins.invokeAction('builtin:workflow', 'inspect', { runId: bgRunId })) as {
+      run: WorkflowRunSummary
+    }
+    const dslInspected = (await kernel.plugins.invokeAction('builtin:workflow', 'inspect', { runId: dslRunId })) as {
+      run: WorkflowRunSummary
+    }
+    return bgInspected.run.status !== 'running' && dslInspected.run.status !== 'running'
+  }, { timeoutMs: 20_000 })
+
+  const bgFinal = ((await kernel.plugins.invokeAction('builtin:workflow', 'inspect', { runId: bgRunId })) as {
+    run: WorkflowRunSummary
+  }).run
+  const dslFinal = ((await kernel.plugins.invokeAction('builtin:workflow', 'inspect', { runId: dslRunId })) as {
+    run: WorkflowRunSummary
+  }).run
+
+  assert.equal(bgFinal.status, 'completed', `background subagent remote reattach failed: ${bgFinal.error ?? ''}`)
+  assert.equal(bgFinal.result, 'bg-remote-herdr-reattached-ok')
+  assert.equal(dslFinal.status, 'completed', `DSL agent remote reattach failed: ${dslFinal.error ?? ''}`)
+  assert.equal(
+    dslFinal.result,
+    'dsl-remote-herdr-reattached-ok',
+    `dslFinal=${JSON.stringify(dslFinal)}`,
+  )
+
+  // Zero duplicate pane spawns on either local or remote Herdr
+  assert.equal(localTransport.calls.filter((c) => c.method === 'tab.create').length, 0)
+  assert.equal(
+    remoteTransport.calls.filter((c) => c.method === 'tab.create').length,
+    remoteCreatesBeforeRestart,
+    'external reattach must reuse existing remote panes without spawning new tabs',
+  )
+  // Wait for parent #1 background report turn to settle before closing kernel
+  await waitFor(() => kernel.getConversation(1).status !== 'working', { timeoutMs: 10_000 })
 })

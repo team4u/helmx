@@ -494,10 +494,10 @@ export function createHerdrRuntime(options: CreateHerdrRuntimeOptions): HerdrRun
       if (executor.isActiveTask(pane)) continue
       let runStatus: string | undefined
       try {
-        const summary = (await ctx.host.invokeAction('builtin:workflow', 'inspect', {
+        const result = (await ctx.host.invokeAction('builtin:workflow', 'inspect', {
           runId: pane.workflowRunId,
-        })) as { status?: string } | undefined
-        runStatus = summary?.status
+        })) as { run?: { status?: string } } | undefined
+        runStatus = typeof result?.run?.status === 'string' ? result.run.status : undefined
       } catch (error) {
         if (error instanceof HelmxError && error.code === 'not_found') {
           runStatus = 'not_found'
@@ -505,7 +505,7 @@ export function createHerdrRuntime(options: CreateHerdrRuntimeOptions): HerdrRun
           continue
         }
       }
-      if (runStatus === 'running') continue
+      if (runStatus === undefined || runStatus === 'running') continue
       if (pane.outcome === 'keepalive') {
         await executor.closePane(pane, 'workflow-settled').catch((error) => {
           host.notify(

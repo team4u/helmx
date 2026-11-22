@@ -407,6 +407,110 @@ test('Herdr 传输复用真实节点 IPC，订阅 ACK 只消费一次且断线/�
   }
 })
 
+test('Workflow + Worktree 动态远端 nodeId：本地父会话通过 subagent 与 DSL agent({ nodeId, cwd, isolation: worktree }) 在线分配远端工作树并执行远端 gate', { timeout: 60_000 }, async () => {
+  const dynRepoDir = join(env.remoteCwd, 'dyn-wt-repo')
+  await mkdir(dynRepoDir, { recursive: true })
+  const initRepo = await env.cli([
+    'env', 'exec', '--node', 'integration-node', '--cwd', dynRepoDir, '--json', '--',
+    'git init . && git config user.email test@helmx.local && git config user.name HelmxTest && printf dyn-base > base.txt && git add base.txt && git commit -m base',
+  ])
+  assert.equal(initRepo.code, 0, initRepo.err)
+  assert.equal(JSON.parse(initRepo.out).ok, true, initRepo.out)
+
+  const kernel = env.hubEnv.kernel
+  const localParent = await kernel.createConversation({
+    title: 'Local Dynamic Node Parent',
+    nodeId: 'local',
+    cwd: env.hubDir,
+  })
+  assert.equal(localParent.nodeId, 'local')
+
+  // 1) subagent tool: local parent dynamically targets integration-node + isolation: 'worktree'
+  env.hubEnv.faux.setResponses([fauxAssistantMessage('subagent-remote-wt-done')])
+  const subOut = (await kernel.plugins.executeTool(
+    'subagent',
+    {
+      prompt: 'Run isolated subagent on integration-node',
+      nodeId: 'integration-node',
+      cwd: dynRepoDir,
+      isolation: 'worktree',
+      background: false,
+      gate: 'test "$HELMX_NODE_TEST_ORIGIN" = remote-executor && printf "subagent:%s" "$HELMX_NODE_TEST_ORIGIN" > subagent-gate.txt',
+    },
+    { conversationId: localParent.id, callId: 'call-dyn-node-subagent' },
+  )) as {
+    structuredOutput: {
+      ok: boolean
+      result?: unknown
+      execution?: { conversationId?: number; nodeId?: string; effectiveCwd?: string; worktree?: { id?: string; path?: string; branch?: string } }
+    }
+  }
+  assert.equal(subOut.structuredOutput.ok, true)
+  assert.equal(subOut.structuredOutput.result, 'subagent-remote-wt-done')
+  assert.equal(subOut.structuredOutput.execution?.nodeId, 'integration-node')
+  const subWtId = subOut.structuredOutput.execution?.worktree?.id
+  const subWtPath = subOut.structuredOutput.execution?.worktree?.path
+  const subChildId = subOut.structuredOutput.execution?.conversationId
+  assert.ok(subWtId && subWtId.startsWith('integration-node:'), `subagent worktreeId must target integration-node: ${String(subWtId)}`)
+  assert.ok(subWtPath && subWtId === `integration-node:${subWtPath}`)
+  assert.ok(subChildId)
+  const subChild = kernel.getConversation(subChildId)
+  assert.equal(subChild.nodeId, 'integration-node')
+  assert.equal(subChild.cwd, subWtPath)
+  assert.equal(await readFile(join(subWtPath, 'subagent-gate.txt'), 'utf8'), 'subagent:remote-executor')
+
+  // 2) Workflow DSL agent.withMeta({ nodeId, cwd, isolation: 'worktree', gate }) from local parent
+  env.hubEnv.faux.setResponses([fauxAssistantMessage('dsl-remote-wt-done')])
+  const dslScript =
+    'export const meta = { name: "dyn-node-wt-dsl", description: "Workflow DSL remote worktree" }\n' +
+    `const r = await agent.withMeta("Run DSL isolated agent on integration-node", { nodeId: "integration-node", cwd: ${JSON.stringify(dynRepoDir)}, isolation: "worktree", gate: 'test "$HELMX_NODE_TEST_ORIGIN" = remote-executor && printf "dsl:%s" "$HELMX_NODE_TEST_ORIGIN" > dsl-gate.txt' })\n` +
+    'return r'
+
+  const { run: dslRun } = (await kernel.plugins.invokeAction('builtin:workflow', 'run', {
+    conversationId: localParent.id,
+    script: dslScript,
+    wait: true,
+  })) as {
+    run: {
+      status: string
+      error?: string
+      result?: {
+        ok: boolean
+        output?: unknown
+        execution?: { conversationId?: number; nodeId?: string; effectiveCwd?: string; worktree?: { id?: string; path?: string } }
+      }
+    }
+  }
+  assert.equal(dslRun.status, 'completed', dslRun.error)
+  assert.equal(dslRun.result?.ok, true)
+  assert.equal(dslRun.result?.output, 'dsl-remote-wt-done')
+  assert.equal(dslRun.result?.execution?.nodeId, 'integration-node')
+  const dslWtId = dslRun.result?.execution?.worktree?.id
+  const dslWtPath = dslRun.result?.execution?.worktree?.path
+  const dslChildId = dslRun.result?.execution?.conversationId
+  assert.ok(dslWtId && dslWtId.startsWith('integration-node:'), `DSL worktreeId must target integration-node: ${String(dslWtId)}`)
+  assert.ok(dslWtPath && dslWtId === `integration-node:${dslWtPath}`)
+  assert.notEqual(dslWtPath, subWtPath, 'subagent and DSL runs allocate distinct remote worktrees')
+  assert.ok(dslChildId)
+  const dslChild = kernel.getConversation(dslChildId)
+  assert.equal(dslChild.nodeId, 'integration-node')
+  assert.equal(dslChild.cwd, dslWtPath)
+  assert.equal(await readFile(join(dslWtPath, 'dsl-gate.txt'), 'utf8'), 'dsl:remote-executor')
+
+  // Clean up both allocated remote worktrees via builtin:worktree
+  for (const [wtId, wtPath] of [[subWtId, subWtPath], [dslWtId, dslWtPath]] as const) {
+    const cleaned = (await kernel.plugins.invokeAction('builtin:worktree', 'cleanup_worktree', {
+      worktreeId: wtId,
+      force: true,
+      deleteBranch: true,
+    })) as { removed: boolean; nodeId: string; branchDeleted: boolean }
+    assert.equal(cleaned.removed, true)
+    assert.equal(cleaned.nodeId, 'integration-node')
+    assert.equal(cleaned.branchDeleted, true)
+    await assert.rejects(access(wtPath), { code: 'ENOENT' })
+  }
+})
+
 test('节点断线与撤销：在途命令结果 unknown、重连绝不重放、移除后离线拒绝且不回落本机执行', { timeout: 60_000 }, async () => {
   const discDir = join(env.remoteCwd, 'disc-ws')
   await mkdir(discDir, { recursive: true })
