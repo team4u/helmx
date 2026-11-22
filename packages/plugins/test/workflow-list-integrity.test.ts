@@ -469,36 +469,9 @@ describe('WorkflowService listRuns integrity', () => {
     const victim = index[0]!.id
     const record = readRecordFile(dataDir, victim)
 
-    // syncForeground is not a boolean：绝不 TS 强转当有效前台标记。
-    writeRecordFile(dataDir, { ...record, syncForeground: 'yes' })
-    assert.throws(
-      () => service.getRun(victim),
-      (error: unknown) => {
-        assert.ok(error instanceof HelmxError)
-        assert.equal(error.code, 'workflow_record_corrupt')
-        assert.equal(error.status, 500)
-        assert.ok(error.message.includes('syncForeground'), `message should name the problem: ${error.message}`)
-        return true
-      },
-    )
-
-    // detachedAt 非数值（字符串时间戳等）：同 corrupt，不伪造 detach 事实。
-    writeRecordFile(dataDir, { ...record, syncForeground: true, detachedAt: '2024-01-01T00:00:00Z' })
-    assert.throws(
-      () => service.listRuns(),
-      (error: unknown) => {
-        assert.ok(error instanceof HelmxError)
-        assert.equal(error.code, 'workflow_record_corrupt')
-        assert.equal((error.details as { runId?: string }).runId, victim)
-        return true
-      },
-    )
-
-    // 合法形状（布尔 + 有限数值）正常读回：不因新增字段误伤既有记录。
-    writeRecordFile(dataDir, { ...record, syncForeground: true, detachedAt: 1_700_000_000_000, settledAt: 1_700_000_005_000 })
+    // 合法形状（有限数值 settledAt）正常读回。
+    writeRecordFile(dataDir, { ...record, settledAt: 1_700_000_005_000 })
     const summary = service.getRun(victim)
-    assert.equal(summary.syncForeground, true)
-    assert.equal(summary.detachedAt, 1_700_000_000_000)
     assert.equal(summary.settledAt, 1_700_000_005_000)
 
     // settledAt 非法（负数 / 非数值）显式报 workflow_record_corrupt。

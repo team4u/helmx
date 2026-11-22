@@ -11,12 +11,75 @@
 
 import { cpus } from 'node:os'
 import { Script } from 'node:vm'
+import { assertSchemaCompilable, validateOrThrow, type JsonSchema } from '@helmx/protocol'
 import { hasValidScopeIdentity, type JournalAgentExecution } from './journal.js'
-import type { CompiledSchema } from './json-schema.js'
 import { extractMeta, type WorkflowMeta } from './meta.js'
 import type { WorkflowAgentEntry } from './progress.js'
 import type { ReplayScope } from './replay.js'
 import type { WorkflowGateResult, WorkflowHost, WorkflowSpawnResult } from './runtime-types.js'
+
+const MAX_SCHEMA_BYTES = 64 * 1024
+
+export interface CompiledSchema {
+  readonly schema: Record<string, unknown>
+  check(value: unknown): true | string
+}
+
+export type SchemaCompilation =
+  | { ok: true; compiled: CompiledSchema }
+  | { ok: false; message: string }
+
+/** Compile and smoke-check a bare JSON Schema via `@helmx/protocol`'s shared validator. */
+export function compileJsonSchema(schema: unknown): SchemaCompilation {
+  if (typeof schema !== 'object' || schema === null || Array.isArray(schema)) {
+    return { ok: false, message: 'agent() opts.schema must be a JSON Schema object.' }
+  }
+  const root = schema as Record<string, unknown>
+  if (root['type'] !== 'object') {
+    return {
+      ok: false,
+      message:
+        'agent() opts.schema must have `type: "object"` at its root — it becomes the structured-output contract, ' +
+        'and a non-object root is not something a model can be asked to fill.',
+    }
+  }
+  let serialized: string
+  try {
+    serialized = JSON.stringify(root)
+  } catch {
+    return { ok: false, message: 'agent() opts.schema must be JSON-serializable.' }
+  }
+  if (serialized.length > MAX_SCHEMA_BYTES) {
+    return {
+      ok: false,
+      message: `agent() opts.schema is too large (${serialized.length} bytes; the limit is ${MAX_SCHEMA_BYTES}).`,
+    }
+  }
+  try {
+    assertSchemaCompilable(root as JsonSchema)
+  } catch (error) {
+    return {
+      ok: false,
+      message: `agent() opts.schema is not a schema this runtime can validate: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    }
+  }
+  return {
+    ok: true,
+    compiled: {
+      schema: root,
+      check(value: unknown): true | string {
+        try {
+          validateOrThrow(root as JsonSchema, value, 'schema mismatch')
+          return true
+        } catch (error) {
+          return error instanceof Error ? error.message.replace(/^schema mismatch:\s*/, '') : String(error)
+        }
+      },
+    },
+  }
+}
 
 /** Script length cap (512KB). */
 export const MAX_SCRIPT_LENGTH = 524_288

@@ -23,7 +23,7 @@ Use `builtin:workflow` for focused task delegation and deterministic multi-agent
 - For a one-off inline script, set `meta.name` or pass a short `label` so the run is identifiable in the task panel.
 - A human-owned conversation defaults workflow and subagent starts to background. Return the running handle and continue the conversation; do not sleep or poll. The terminal result is delivered as a steer follow-up.
 - An automation-owned conversation defaults to synchronous execution. Do not request `background: true` there; it is rejected to prevent early settlement.
-- Use `background: false` only when the next model step depends on the real result. A foreground run can be detached while it is waiting.
+- Use `background: false` only when the next model step depends on the real result.
 - Treat a returned run handle as started, not completed. Wait for the terminal-state report before claiming success.
 - Batch results may contain `null` after a branch failure. Check every result and report partial failure explicitly.
 - Keep prompts and results JSON-serializable. Do not pass secrets into scripts or claim that a failed or uncertain execution succeeded.

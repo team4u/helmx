@@ -21,8 +21,11 @@ import {
   createRoot,
   importWorkflowClientModule,
   importWorkflowModels,
+  importWorktreeClientModule,
+  importWorktreeModels,
   mountSharedPluginNamespaces,
   setWorkflowClientStub,
+  type WorktreeSlotComponents,
 } from './helpers/workflow-client-harness.js'
 
 const e = React.createElement
@@ -30,6 +33,8 @@ const { PluginClientContext, resolveLocalizedText } = SDK
 
 mountSharedPluginNamespaces()
 const m = await importWorkflowModels()
+const wt = await importWorktreeModels()
+const worktreeSlots = (await importWorktreeClientModule('slots.tsx')) as WorktreeSlotComponents
 // happy-dom 已知不派发 React onChange：受控输入统一直接调用元素上挂载的
 // __reactProps$.onChange（真实受控更新路径，不依赖事件系统探针）。
 
@@ -102,7 +107,7 @@ const INSPECT_RAW = {
 }
 
 test('parseWorktreeInspectResult：合法形状完整解析；非法形状返回 undefined 不伪造', { timeout: 60_000 }, () => {
-  const parsed = m.parseWorktreeInspectResult(INSPECT_RAW)
+  const parsed = wt.parseWorktreeInspectResult(INSPECT_RAW)
   assert.ok(parsed !== undefined)
   assert.equal(parsed!.worktreeId, 'local:/repo/.helmx-worktrees/app-ab12cd34')
   assert.equal(parsed!.dirtyFileCount, 2)
@@ -110,16 +115,16 @@ test('parseWorktreeInspectResult：合法形状完整解析；非法形状返回
   assert.equal(parsed!.diffBase, 'baseCommit')
   assert.equal(parsed!.branchChanged, undefined)
 
-  const changed = m.parseWorktreeInspectResult({
+  const changed = wt.parseWorktreeInspectResult({
     ...INSPECT_RAW,
     currentBranch: 'main',
     branchChanged: true,
   })
   assert.equal(changed!.branchChanged, true)
 
-  assert.equal(m.parseWorktreeInspectResult(undefined), undefined)
-  assert.equal(m.parseWorktreeInspectResult('x'), undefined)
-  assert.equal(m.parseWorktreeInspectResult({ exists: true }), undefined, '缺 record 结构必须拒绝')
+  assert.equal(wt.parseWorktreeInspectResult(undefined), undefined)
+  assert.equal(wt.parseWorktreeInspectResult('x'), undefined)
+  assert.equal(wt.parseWorktreeInspectResult({ exists: true }), undefined, '缺 record 结构必须拒绝')
 })
 
 test('parseWorktreeInspectResult：必需字段缺失/类型错位/枚举非法一律拒收，不降级成已清理或无变更', { timeout: 60_000 }, () => {
@@ -128,31 +133,31 @@ test('parseWorktreeInspectResult：必需字段缺失/类型错位/枚举非法�
     delete copy[key]
     return copy
   }
-  assert.equal(m.parseWorktreeInspectResult(without('exists')), undefined)
-  assert.equal(m.parseWorktreeInspectResult({ ...INSPECT_RAW, exists: 'yes' }), undefined)
-  assert.equal(m.parseWorktreeInspectResult(without('dirtyFiles')), undefined)
-  assert.equal(m.parseWorktreeInspectResult({ ...INSPECT_RAW, dirtyFiles: ['?? a', 42] }), undefined)
-  assert.equal(m.parseWorktreeInspectResult(without('dirtyFileCount')), undefined)
-  assert.equal(m.parseWorktreeInspectResult({ ...INSPECT_RAW, dirtyFileCount: -1 }), undefined)
-  assert.equal(m.parseWorktreeInspectResult({ ...INSPECT_RAW, dirtyFileCount: 1.5 }), undefined)
-  assert.equal(m.parseWorktreeInspectResult({ ...INSPECT_RAW, dirtyFileCount: 3 }), undefined)
-  const truncated = m.parseWorktreeInspectResult({
+  assert.equal(wt.parseWorktreeInspectResult(without('exists')), undefined)
+  assert.equal(wt.parseWorktreeInspectResult({ ...INSPECT_RAW, exists: 'yes' }), undefined)
+  assert.equal(wt.parseWorktreeInspectResult(without('dirtyFiles')), undefined)
+  assert.equal(wt.parseWorktreeInspectResult({ ...INSPECT_RAW, dirtyFiles: ['?? a', 42] }), undefined)
+  assert.equal(wt.parseWorktreeInspectResult(without('dirtyFileCount')), undefined)
+  assert.equal(wt.parseWorktreeInspectResult({ ...INSPECT_RAW, dirtyFileCount: -1 }), undefined)
+  assert.equal(wt.parseWorktreeInspectResult({ ...INSPECT_RAW, dirtyFileCount: 1.5 }), undefined)
+  assert.equal(wt.parseWorktreeInspectResult({ ...INSPECT_RAW, dirtyFileCount: 3 }), undefined)
+  const truncated = wt.parseWorktreeInspectResult({
     ...INSPECT_RAW,
     dirtyFiles: INSPECT_RAW.dirtyFiles.slice(0, 1),
     dirtyFilesTruncated: true,
   })
   assert.ok(truncated !== undefined, '截断时计数(2) > 列表长度(1) 合法')
   assert.equal(truncated!.dirtyFileCount, 2)
-  assert.equal(m.parseWorktreeInspectResult(without('dirtyFilesTruncated')), undefined)
-  assert.equal(m.parseWorktreeInspectResult(without('diffTruncated')), undefined)
-  assert.equal(m.parseWorktreeInspectResult(without('diffBase')), undefined)
-  assert.equal(m.parseWorktreeInspectResult({ ...INSPECT_RAW, diffBase: 'main' }), undefined)
-  assert.equal(m.parseWorktreeInspectResult({ ...INSPECT_RAW, record: { ...INSPECT_RAW.record, status: 'weird' } }), undefined)
-  assert.equal(m.parseWorktreeInspectResult({ ...INSPECT_RAW, record: { ...INSPECT_RAW.record, origin: 'weird' } }), undefined)
-  assert.equal(m.parseWorktreeInspectResult({ ...INSPECT_RAW, unavailableReason: 'whatever' }), undefined)
-  assert.equal(m.parseWorktreeInspectResult({ ...INSPECT_RAW, commitsAhead: -2 }), undefined)
-  assert.equal(m.parseWorktreeInspectResult({ ...INSPECT_RAW, branchChanged: 'yes' }), undefined)
-  const noBase = m.parseWorktreeInspectResult({
+  assert.equal(wt.parseWorktreeInspectResult(without('dirtyFilesTruncated')), undefined)
+  assert.equal(wt.parseWorktreeInspectResult(without('diffTruncated')), undefined)
+  assert.equal(wt.parseWorktreeInspectResult(without('diffBase')), undefined)
+  assert.equal(wt.parseWorktreeInspectResult({ ...INSPECT_RAW, diffBase: 'main' }), undefined)
+  assert.equal(wt.parseWorktreeInspectResult({ ...INSPECT_RAW, record: { ...INSPECT_RAW.record, status: 'weird' } }), undefined)
+  assert.equal(wt.parseWorktreeInspectResult({ ...INSPECT_RAW, record: { ...INSPECT_RAW.record, origin: 'weird' } }), undefined)
+  assert.equal(wt.parseWorktreeInspectResult({ ...INSPECT_RAW, unavailableReason: 'whatever' }), undefined)
+  assert.equal(wt.parseWorktreeInspectResult({ ...INSPECT_RAW, commitsAhead: -2 }), undefined)
+  assert.equal(wt.parseWorktreeInspectResult({ ...INSPECT_RAW, branchChanged: 'yes' }), undefined)
+  const noBase = wt.parseWorktreeInspectResult({
     ...INSPECT_RAW,
     record: { ...INSPECT_RAW.record, baseCommit: '' },
     diffBase: 'HEAD',
@@ -164,12 +169,12 @@ test('parseWorktreeInspectResult：必需字段缺失/类型错位/枚举非法�
 
 test('buildWorktreeSelector：登记 ID 优先；无 ID 时 path+nodeId 消歧', { timeout: 60_000 }, () => {
   assert.deepEqual(
-    m.buildWorktreeSelector({ id: 'local:/a', path: '/a' }, 'local'),
+    wt.buildWorktreeSelector({ id: 'local:/a', path: '/a' }, 'local'),
     { worktreeId: 'local:/a' },
   )
-  assert.deepEqual(m.buildWorktreeSelector({ path: '/a' }, 'local'), { path: '/a', nodeId: 'local' })
-  assert.deepEqual(m.buildWorktreeSelector({ path: '/a' }, undefined), { path: '/a' })
-  assert.deepEqual(m.buildWorktreeSelector({ id: '  ', path: '/a' }, 'local'), { path: '/a', nodeId: 'local' }, '空白 ID 视为无 ID')
+  assert.deepEqual(wt.buildWorktreeSelector({ path: '/a' }, 'local'), { path: '/a', nodeId: 'local' })
+  assert.deepEqual(wt.buildWorktreeSelector({ path: '/a' }, undefined), { path: '/a' })
+  assert.deepEqual(wt.buildWorktreeSelector({ id: '  ', path: '/a' }, 'local'), { path: '/a', nodeId: 'local' }, '空白 ID 视为无 ID')
 })
 
 test('buildWorktreeReviewRequest：含坐标与检视统计；分支不一致显式警示', { timeout: 60_000 }, () => {
@@ -179,9 +184,9 @@ test('buildWorktreeReviewRequest：含坐标与检视统计；分支不一致显
     nodeId: 'local',
     baseCommit: '5f1e9c0aaa',
     taskLabel: '修复构建',
-    inspect: m.parseWorktreeInspectResult(INSPECT_RAW),
+    inspect: wt.parseWorktreeInspectResult(INSPECT_RAW),
   }
-  const text = m.buildWorktreeReviewRequest(input)
+  const text = wt.buildWorktreeReviewRequest(input)
   assert.match(text, /\/repo\/\.helmx-worktrees\/app-ab12cd34/)
   assert.match(text, /\(node local\)/)
   assert.match(text, /helmx\/spawn-ab12cd34/)
@@ -190,22 +195,22 @@ test('buildWorktreeReviewRequest：含坐标与检视统计；分支不一致显
   assert.match(text, /Commits ahead of base: 1/)
   assert.match(text, /Review read-only first/)
 
-  const zhText = m.buildWorktreeReviewRequest(input, 'zh-CN')
+  const zhText = wt.buildWorktreeReviewRequest(input, 'zh-CN')
   assert.match(zhText, /节点 local/)
   assert.match(zhText, /未提交修改：2 个文件/)
   assert.match(zhText, /领先基线提交：1 个/)
   assert.match(zhText, /只读复核/)
 
-  const mismatched = m.buildWorktreeReviewRequest({
+  const mismatched = wt.buildWorktreeReviewRequest({
     path: '/w',
     branch: 'helmx/spawn-x',
-    inspect: m.parseWorktreeInspectResult({ ...INSPECT_RAW, currentBranch: 'main', branchChanged: true }),
+    inspect: wt.parseWorktreeInspectResult({ ...INSPECT_RAW, currentBranch: 'main', branchChanged: true }),
   })
   assert.match(mismatched, /currently on branch main, which differs from the registered branch/)
-  const zhMismatched = m.buildWorktreeReviewRequest({
+  const zhMismatched = wt.buildWorktreeReviewRequest({
     path: '/w',
     branch: 'helmx/spawn-x',
-    inspect: m.parseWorktreeInspectResult({ ...INSPECT_RAW, currentBranch: 'main', branchChanged: true }),
+    inspect: wt.parseWorktreeInspectResult({ ...INSPECT_RAW, currentBranch: 'main', branchChanged: true }),
   }, 'zh-CN')
   assert.match(zhMismatched, /当前分支 main 与登记分支不一致/)
 })
@@ -477,6 +482,7 @@ test('节点卡改动概览：检视渲染与审阅；completed run 提供「重
     docValue: { runs: [completedRun] },
     conversations: [],
     conversation: () => ({ summary: undefined, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} }),
+    worktreeSlots,
   })
   const ctx = makeRecordingCtx({
     inspect_worktree: INSPECT_RAW,
@@ -551,6 +557,7 @@ test('检视失败显式呈现：错误可见且可重试，绝不伪造空统�
     docValue: { runs: [failedRun] },
     conversations: [],
     conversation: () => ({ summary: undefined, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} }),
+    worktreeSlots,
   })
   const ctx = makeRecordingCtx({})
   ctx.callAction = async (action: string, input?: unknown) => {
@@ -640,6 +647,7 @@ test('工作台重放双击防重复：在途 ref 拦截，同拍连点只发一
     docValue: { runs: [completedRun] },
     conversations: [],
     conversation: () => ({ summary: undefined, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} }),
+    worktreeSlots,
   })
   let resolveRun: ((value: unknown) => void) | undefined
   const ctx = makeRecordingCtx({})
@@ -692,6 +700,7 @@ test('独立子代理卡检视：有工作树时提供入口；点击不触发�
       id === 11
         ? { summary: child, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} }
         : { summary: undefined, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} },
+    worktreeSlots,
   })
   const ctx = makeRecordingCtx({ inspect_worktree: INSPECT_RAW })
   const mod = await importWorkflowClientModule('workbench.tsx')
@@ -750,6 +759,7 @@ test('独立子代理卡检视：无登记 ID 时用 path+子会话节点消歧�
       id === 12
         ? { summary: child, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} }
         : { summary: undefined, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} },
+    worktreeSlots,
   })
   const ctx = makeRecordingCtx({ inspect_worktree: INSPECT_RAW })
   const mod = await importWorkflowClientModule('workbench.tsx')
@@ -791,6 +801,7 @@ test('工作流节点卡不重复渲染检视节：节点外层一处，子代�
       id === 12
         ? { summary: child, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} }
         : { summary: undefined, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} },
+    worktreeSlots,
   })
   const ctx = makeRecordingCtx({})
   const mod = await importWorkflowClientModule('workbench.tsx')
@@ -801,6 +812,41 @@ test('工作流节点卡不重复渲染检视节：节点外层一处，子代�
   )
   try {
     assert.equal(host.querySelectorAll('.worktree-inspect').length, 1, 'workflow 节点卡只在外层渲染检视节，避免重复')
+  } finally {
+    unmount()
+  }
+})
+
+test('禁用 builtin:worktree（无工作树插槽贡献）时工作台与子代理卡不渲染任何工作树检视或清理按钮', { timeout: 60_000 }, async () => {
+  const child = { ...workbenchConversation(), id: 15, title: '子会话 15', parentConversationId: 1, parentToolCallId: 'call-wt-off', cwd: '/wt' }
+  const bgRun = run({
+    id: 'wf_bg_wt_off',
+    kind: 'subagent',
+    name: '后台任务',
+    status: 'completed',
+    parentToolCallId: 'call-wt-off',
+    createdAt: 1,
+    updatedAt: 2,
+    nodes: [{ id: 'n1', kind: 'agent', status: 'done', conversationId: 15, worktree: { path: '/wt/off', branch: 'helmx/off', id: 'local:/wt/off' } }],
+  })
+  setWorkflowClientStub({
+    docValue: { runs: [bgRun] },
+    conversations: [child],
+    conversation: (id) =>
+      id === 15
+        ? { summary: child, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} }
+        : { summary: undefined, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} },
+    worktreeSlots: false,
+  })
+  const ctx = makeRecordingCtx({})
+  const mod = await importWorkflowClientModule('workbench.tsx')
+  const Panel = mod['WorkflowWorkbenchPanel'] as (p: WorkbenchPanelProps) => React.ReactElement
+  const { host, unmount } = await mountClient(ctx, e(Panel, { conversation: workbenchConversation() }))
+  try {
+    assert.equal(host.querySelectorAll('.worktree-inspect').length, 0, '停用 builtin:worktree 后不渲染工作树检视节')
+    assert.ok(host.querySelector('[aria-label="Clean up isolated worktree"]') === null, '停用 builtin:worktree 后不渲染工作树清理按钮')
+    assert.ok(!host.textContent!.includes('Change overview'))
+    assert.ok(!host.textContent!.includes('Clean up worktree'))
   } finally {
     unmount()
   }

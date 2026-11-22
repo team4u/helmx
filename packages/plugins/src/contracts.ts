@@ -41,12 +41,10 @@ export interface SavedWorkflowDetail extends SavedWorkflowSummary {
   script: string
 }
 
-/** builtin:workflow/save 动作入参：script / fromRunId 恰好提供一个。 */
+/** builtin:workflow/save 动作入参。 */
 export interface WorkflowSaveRequest {
-  /** 完整脚本源码（与 fromRunId 二选一）。 */
-  script?: string
-  /** 把既有运行持久化的脚本源固化为定义（与 script 二选一；不可用于 subagent run）。 */
-  fromRunId?: string
+  /** 完整脚本源码。 */
+  script: string
   /** 保存名称；缺省用 meta.name，与 meta.name 不一致时显式拒绝。 */
   name?: string
   /** 覆盖同名定义（默认拒绝，显式 true 才覆盖）。 */
@@ -185,13 +183,6 @@ export interface WorkflowRunSummary {
    * HTTP/CLI/Web 仅透传展示，不据其做任何重放决策。
    */
   journalIoErrors?: string[]
-  /**
-   * 前台同步标记：经同步工具（background:false / 自动化缺省）启动的 run，
-   * 父回合工具调用正阻塞等待；此状态下可被 detach 动作转入后台。
-   */
-  syncForeground?: boolean
-  /** detach 转后台时间戳（转后台即视为后台 run，不可再次 detach）。 */
-  detachedAt?: number
 }
 
 /**

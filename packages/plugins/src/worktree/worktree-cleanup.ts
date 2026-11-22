@@ -1,8 +1,7 @@
 /**
  * 受管 worktree 清理状态机：
- * - `cleanupWorktree`：选择器解析已登记记录 + 占用检查 + per-repo 串行锁 + 锁内权威归属与 realpath 校验 +
- *   脏工作区/未合入保护 + 进程占用检查 + `git worktree remove` / `git branch -d|-D`（分支删除失败先固化 removed 可重试）；
- * - `assertPathUnusedByProcesses`：删除前进程占用快照检查（`force` 不可绕过，只诊断拒绝不自动杀进程）。
+ * 选择器解析 + 占用/持有锁拦截 + per-repo 串行锁 + 权威归属与 realpath 校验 +
+ * 脏工作区/未合入保护 + 进程占用检查 + git worktree remove / branch 删除。
  */
 import { HelmxError, type NodePathUsage } from '@helmx/protocol'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -17,18 +16,13 @@ import {
   pruneWorktreeRegistrations,
   resolveMergeReferenceHead,
   resolveRepoAuthority,
-  type RepoAuthority,
 } from './worktree-git.js'
 import { validateWorktreeSelector, type ManagedWorktreeRecord, type WorktreeStore } from './worktree-store.js'
 import { ownerMismatchError } from './worktree-inspect.js'
 import type { CleanupInput, CleanupResult, WorktreeAllocatorDeps } from './worktree.js'
 
-const MANAGED_BRANCH_PREFIXES = ['helmx/spawn-', 'helmx/wf-'] as const
+const MANAGED_BRANCH_PREFIX = 'helmx/spawn-'
 
-/**
- * 持久持有锁占用拦截（force 不可绕过）：目标记录自身或同节点路径重叠的
- * active 记录携带 hold 时，显式抛 409 worktree_in_use 并透出脱敏后的 hold.label。
- */
 function assertWorktreeNotHeld(
   store: WorktreeStore,
   redact: (text: string) => string,
@@ -66,6 +60,41 @@ function assertWorktreeNotHeld(
   )
 }
 
+function assertWorktreeUnoccupied(
+  deps: Pick<WorktreeAllocatorDeps, 'isConversationWorking' | 'isPathInUse'>,
+  store: WorktreeStore,
+  redact: (text: string) => string,
+  record: ManagedWorktreeRecord,
+): void {
+  assertWorktreeNotHeld(store, redact, record)
+  const checkWorking = deps.isConversationWorking ?? ((id) => store.isConversationWorking(id))
+  const checkPathInUse = deps.isPathInUse ?? ((n, p) => store.isPathInUse(n, p))
+  if (record.conversationId !== undefined) {
+    let working = false
+    try {
+      working = checkWorking(record.conversationId)
+    } catch (err) {
+      if (!(err instanceof HelmxError && err.code === 'not_found')) throw err
+    }
+    if (working) {
+      throw new HelmxError(
+        'worktree_in_use',
+        `worktree '${record.path}' 关联的子代理仍在运行中，拒绝清理`,
+        409,
+        { path: record.path, conversationId: record.conversationId },
+      )
+    }
+  }
+  if (checkPathInUse(record.nodeId, record.path)) {
+    throw new HelmxError(
+      'worktree_in_use',
+      `worktree '${record.path}'（节点 ${record.nodeId}）仍被引用，拒绝清理`,
+      409,
+      { path: record.path, nodeId: record.nodeId },
+    )
+  }
+}
+
 async function assertPathUnusedByProcesses(
   deps: Pick<WorktreeAllocatorDeps, 'inspectPathUsage'>,
   redact: (text: string) => string,
@@ -93,11 +122,12 @@ async function assertPathUnusedByProcesses(
       usage = await probe(record.nodeId, record.path, signal)
     }
   } catch (error) {
-    const cause = error instanceof HelmxError
-      ? `${error.code}: ${error.message}`
-      : error instanceof Error
-        ? error.message
-        : String(error)
+    const cause =
+      error instanceof HelmxError
+        ? `${error.code}: ${error.message}`
+        : error instanceof Error
+          ? error.message
+          : String(error)
     throw new HelmxError(
       'worktree_process_check_failed',
       `无法完成 worktree '${record.path}'（节点 ${record.nodeId}）的进程占用扫描（${redact(cause)}），不能证明 0 占用，清理中止（force 也不可绕过）`,
@@ -143,15 +173,27 @@ async function assertPathUnusedByProcesses(
   }
 }
 
-/**
- * 目录缺失下的 force 登记清除（保守恢复路径）：
- * - 二次复核目录确不存在（复核期间目录重现则显式拒绝，请改走常规清理）；
- * - 分支按 mergedInto/merged 规则处置（默认保留分支只清登记；deleteBranch 才删且沿用 force 语义，
- *   删除失败不阻断登记清除——如实留 branchDeleteError 供后续重试）；
- * - 在主仓执行 `git worktree prune` 收敛 git 侧残留登记（结果如实上报，不静默吞掉）；
- * - 记录置 removed 并留 `removedReason: 'directory_missing_forced'`。
- * 占用（hold/在途会话/进程）与受管分支前缀校验已在上游 cleanupWorktree 主流程完成，此处不重复。
- */
+async function deleteBranchAgainstAuthority(
+  deps: WorktreeAllocatorDeps,
+  record: ManagedWorktreeRecord,
+  mainPath: string,
+  mainHead: string,
+  input: CleanupInput,
+): Promise<{ deleted: boolean; failureOutput?: string }> {
+  const referenceHead = await resolveMergeReferenceHead(
+    deps,
+    record.nodeId,
+    mainPath,
+    mainHead,
+    input.mergedInto,
+    record.baseBranch,
+    input.signal,
+  )
+  const merged =
+    (await countUnmergedCommits(deps, record.nodeId, mainPath, referenceHead, record.branch, input.signal)) === 0
+  return deleteManagedBranch(deps, record.nodeId, mainPath, record.branch, input.force === true || merged, input.signal)
+}
+
 async function forceClearMissingRegistration(
   deps: WorktreeAllocatorDeps,
   store: WorktreeStore,
@@ -160,7 +202,6 @@ async function forceClearMissingRegistration(
   record: ManagedWorktreeRecord,
   input: CleanupInput,
 ): Promise<CleanupResult> {
-  // 二次复核：与外部操作竞争时如实拒绝，绝不基于过期事实清登记。
   if (await dirExistsOnNode(deps, record.nodeId, record.path)) {
     throw new HelmxError(
       'worktree_missing',
@@ -173,78 +214,39 @@ async function forceClearMissingRegistration(
   let branchDeleted = record.branchDeleted === true
   let alreadyRemoved = false
   let prune: CleanupResult['prune'] | undefined
-  if (record.repoRoot !== '') {
-    const authority = await resolveRepoAuthority(deps, record.nodeId, record.repoRoot, input.signal)
-    await withRepoLock(record.nodeId, authority.canonicalCommonDir, async () => {
-      const fresh = store.findById(record.id)
-      if (fresh === undefined) {
-        throw new HelmxError('not_found', `受管 worktree 记录 ${record.id} 不存在（文档状态不一致）`, 404, { id: record.id })
-      }
-      if (fresh.status === 'removed') {
-        alreadyRemoved = true
-        branchDeleted = fresh.branchDeleted === true
-        return
-      }
-      // 先 prune 收敛 git 侧残留登记：残留登记会让分支保持「已检出」状态，
-      // git branch -d/-D 均拒绝删除；prune 后分支处置才能按规则执行。
-      const pruned = await pruneWorktreeRegistrations(deps, fresh.nodeId, authority.mainPath, input.signal)
-      prune = {
-        ran: true,
-        ok: pruned.ok,
-        ...(pruned.output !== '' ? { output: redact(pruned.output) } : {}),
-      }
-      if (input.deleteBranch === true && !branchDeleted) {
-        const referenceHead = await resolveMergeReferenceHead(
-          deps,
-          fresh.nodeId,
-          authority.mainPath,
-          authority.entries[0]!.head,
-          input.mergedInto,
-          fresh.baseBranch,
-          input.signal,
-        )
-        const mergedIntoReference =
-          (await countUnmergedCommits(deps, fresh.nodeId, authority.mainPath, referenceHead, fresh.branch, input.signal)) === 0
-        const del = await deleteManagedBranch(
-          deps,
-          fresh.nodeId,
-          authority.mainPath,
-          fresh.branch,
-          input.force === true || mergedIntoReference,
-          input.signal,
-        )
-        branchDeleted = del.deleted
-        if (!del.deleted) {
-          // 分支删除失败：不阻断登记清除（目录已确证缺失），但如实留诊断供重试。
-          store.updateRecord(fresh.id, (r) => ({
-            ...r,
-            branchDeleted: false,
-            branchDeleteError: (del.failureOutput ?? '').slice(0, 2000),
-          }))
-        }
-      }
-      store.updateRecord(fresh.id, (r) => {
-        const base = { ...r, status: 'removed' as const, removedAt: Date.now(), removedReason: 'directory_missing_forced' as const }
-        if (input.deleteBranch !== true) return base
-        if (!branchDeleted) return { ...base, branchDeleted: false }
-        const { branchDeleteError: _previousError, ...clean } = r
-        return { ...clean, status: 'removed' as const, removedAt: Date.now(), removedReason: 'directory_missing_forced' as const, branchDeleted: true }
-      })
-    })
-  } else {
-    // external 记录未解析过主仓（repoRoot 为空）：无锚点不执行 prune 与分支处置，仅清登记并如实报告。
-    store.updateRecord(record.id, (r) => ({
-      ...r,
-      status: 'removed' as const,
-      removedAt: Date.now(),
-      removedReason: 'directory_missing_forced' as const,
-    }))
-    prune = {
-      ran: false,
-      ok: false,
-      output: '记录未登记主仓路径（repoRoot 为空），未执行 git worktree prune 与分支处置；git 侧残留请人工核对',
+  const authority = await resolveRepoAuthority(deps, record.nodeId, record.repoRoot, input.signal)
+  await withRepoLock(record.nodeId, authority.canonicalCommonDir, async () => {
+    const fresh = store.findById(record.id)
+    if (fresh === undefined) {
+      throw new HelmxError('not_found', `受管 worktree 记录 ${record.id} 不存在（文档状态不一致）`, 404, { id: record.id })
     }
-  }
+    if (fresh.status === 'removed') {
+      alreadyRemoved = true
+      branchDeleted = fresh.branchDeleted === true
+      return
+    }
+    const pruned = await pruneWorktreeRegistrations(deps, fresh.nodeId, authority.mainPath, input.signal)
+    prune = { ran: true, ok: pruned.ok, ...(pruned.output !== '' ? { output: redact(pruned.output) } : {}) }
+    if (input.deleteBranch === true && !branchDeleted) {
+      const del = await deleteBranchAgainstAuthority(deps, fresh, authority.mainPath, authority.entries[0]!.head, input)
+      branchDeleted = del.deleted
+      if (!del.deleted) {
+        store.updateRecord(fresh.id, (r) => ({
+          ...r,
+          branchDeleted: false,
+          branchDeleteError: (del.failureOutput ?? '').slice(0, 2000),
+        }))
+      }
+    }
+    store.updateRecord(fresh.id, (r) => {
+      const removedAt = Date.now()
+      const base = { ...r, status: 'removed' as const, removedAt, removedReason: 'directory_missing_forced' as const }
+      if (input.deleteBranch !== true) return base
+      if (!branchDeleted) return { ...base, branchDeleted: false }
+      const { branchDeleteError: _ignored, ...clean } = r
+      return { ...clean, status: 'removed' as const, removedAt, removedReason: 'directory_missing_forced' as const, branchDeleted: true }
+    })
+  })
   return {
     removed: !alreadyRemoved,
     worktreeId: record.id,
@@ -265,31 +267,30 @@ export async function cleanupWorktree(
   input: CleanupInput,
 ): Promise<CleanupResult> {
   validateWorktreeSelector(input, 'cleanup')
-  if (input.mergedInto !== undefined) {
-    if (
-      typeof input.mergedInto !== 'string' ||
+  if (
+    input.mergedInto !== undefined &&
+    (typeof input.mergedInto !== 'string' ||
       input.mergedInto === '' ||
       /[\s\u0000-\u001f]/.test(input.mergedInto) ||
       input.mergedInto.includes('..') ||
       input.mergedInto.includes('~') ||
       input.mergedInto.includes('^') ||
       input.mergedInto.includes(':') ||
-      input.mergedInto.startsWith('-')
-    ) {
-      throw new HelmxError(
-        'validation_error',
-        'mergedInto 必须是不含空白与范围操作符（.. ~ ^ :）且不以 - 开头的非空分支/提交名',
-        400,
-        { mergedInto: input.mergedInto },
-      )
-    }
+      input.mergedInto.startsWith('-'))
+  ) {
+    throw new HelmxError(
+      'validation_error',
+      'mergedInto 必须是不含空白与范围操作符（.. ~ ^ :）且不以 - 开头的非空分支/提交名',
+      400,
+      { mergedInto: input.mergedInto },
+    )
   }
 
   const record = store.resolveRecord(input, 'cleanup')
-  if (!MANAGED_BRANCH_PREFIXES.some((prefix) => record.branch.startsWith(prefix))) {
+  if (!record.branch.startsWith(MANAGED_BRANCH_PREFIX)) {
     throw new HelmxError(
       'validation_error',
-      `受管 worktree '${record.path}' 的分支 '${record.branch}' 不在 helmx 受管前缀（helmx/spawn- | helmx/wf-）内，拒绝清理`,
+      `受管 worktree '${record.path}' 的分支 '${record.branch}' 不在 helmx 受管前缀（${MANAGED_BRANCH_PREFIX}）内，拒绝清理`,
       400,
       { path: record.path, branch: record.branch },
     )
@@ -298,89 +299,34 @@ export async function cleanupWorktree(
   if (record.status === 'removed') {
     let branchDeleted = record.branchDeleted === true
     if (input.deleteBranch === true && !branchDeleted) {
-      if (record.repoRoot === '') {
-        throw new HelmxError(
-          'branch_delete_failed',
-          `记录 ${record.id} 缺少主仓路径，无法重试删除分支 ${record.branch}（请人工核对）`,
-          502,
-          { worktreeId: record.id, branch: record.branch },
-        )
-      }
       const authority = await resolveRepoAuthority(deps, record.nodeId, record.repoRoot, input.signal)
       await withRepoLock(record.nodeId, authority.canonicalCommonDir, async () => {
-        const referenceHead = await resolveMergeReferenceHead(
-          deps,
-          record.nodeId,
-          authority.mainPath,
-          authority.entries[0]!.head,
-          input.mergedInto,
-          record.baseBranch,
-          input.signal,
-        )
-        const mergedIntoReference =
-          (await countUnmergedCommits(deps, record.nodeId, authority.mainPath, referenceHead, record.branch, input.signal)) === 0
-        const del = await deleteManagedBranch(
-          deps,
-          record.nodeId,
-          authority.mainPath,
-          record.branch,
-          input.force === true || mergedIntoReference,
-          input.signal,
-        )
+        const del = await deleteBranchAgainstAuthority(deps, record, authority.mainPath, authority.entries[0]!.head, input)
         branchDeleted = del.deleted
         if (del.deleted) {
           store.updateRecord(record.id, (r) => {
-            const { branchDeleteError: _previousError, ...clean } = r
+            const { branchDeleteError: _ignored, ...clean } = r
             return { ...clean, branchDeleted: true }
           })
-        } else {
-          store.updateRecord(record.id, (r) => ({
-            ...r,
-            branchDeleted: false,
-            branchDeleteError: (del.failureOutput ?? '').slice(0, 2000),
-          }))
-          throw new HelmxError(
-            'branch_delete_failed',
-            `重试删除分支 ${record.branch} 失败（登记保持 removed，可再次重试）：\n${(del.failureOutput ?? '').trim()}`,
-            502,
-            { worktreeId: record.id, branch: record.branch, output: (del.failureOutput ?? '').slice(0, 2000) },
-          )
+          return
         }
+        store.updateRecord(record.id, (r) => ({
+          ...r,
+          branchDeleted: false,
+          branchDeleteError: (del.failureOutput ?? '').slice(0, 2000),
+        }))
+        throw new HelmxError(
+          'branch_delete_failed',
+          `重试删除分支 ${record.branch} 失败（登记保持 removed，可再次重试）：\n${(del.failureOutput ?? '').trim()}`,
+          502,
+          { worktreeId: record.id, branch: record.branch, output: (del.failureOutput ?? '').slice(0, 2000) },
+        )
       })
     }
     return { removed: false, worktreeId: record.id, path: record.path, branch: record.branch, nodeId: record.nodeId, branchDeleted }
   }
 
-  assertWorktreeNotHeld(store, redact, record)
-  const checkWorking = deps.isConversationWorking ?? ((id) => store.isConversationWorking(id))
-  const checkPathInUse = deps.isPathInUse ?? ((n, p) => store.isPathInUse(n, p))
-  const isConvActive = (id: number | undefined): boolean => {
-    if (id === undefined) return false
-    try {
-      return checkWorking(id)
-    } catch (err) {
-      // 会话已删除（not_found）不可能在运行，允许清理其遗留孤儿 worktree；其他读取错误继续 fail-closed 上抛
-      if (err instanceof HelmxError && err.code === 'not_found') return false
-      throw err
-    }
-  }
-
-  if (isConvActive(record.conversationId)) {
-    throw new HelmxError(
-      'worktree_in_use',
-      `worktree '${record.path}' 关联的子代理仍在运行中，拒绝清理`,
-      409,
-      { path: record.path, conversationId: record.conversationId },
-    )
-  }
-  if (checkPathInUse(record.nodeId, record.path)) {
-    throw new HelmxError(
-      'worktree_in_use',
-      `worktree '${record.path}'（节点 ${record.nodeId}）仍被引用，拒绝清理`,
-      409,
-      { path: record.path, nodeId: record.nodeId },
-    )
-  }
+  assertWorktreeUnoccupied(deps, store, redact, record)
 
   if (!(await dirExistsOnNode(deps, record.nodeId, record.path))) {
     if (input.force !== true) {
@@ -394,16 +340,9 @@ export async function cleanupWorktree(
     return forceClearMissingRegistration(deps, store, redact, withRepoLock, record, input)
   }
 
-  let authority: RepoAuthority
-  if (record.repoRoot !== '') {
-    authority = await resolveRepoAuthority(deps, record.nodeId, record.repoRoot, input.signal)
-  } else {
-    authority = await resolveRepoAuthority(deps, record.nodeId, record.path, input.signal)
-    store.assertMetadataSecretFree({ repoRoot: authority.mainPath }, { nodeId: record.nodeId })
-    store.updateRecord(record.id, (r) => ({ ...r, repoRoot: authority.mainPath }))
-  }
-
+  const authority = await resolveRepoAuthority(deps, record.nodeId, record.repoRoot, input.signal)
   let outcome: { removed: boolean; branchDeleted: boolean } | undefined
+
   await withRepoLock(record.nodeId, authority.canonicalCommonDir, async () => {
     const fresh = store.findById(record.id)
     if (fresh === undefined) {
@@ -413,25 +352,9 @@ export async function cleanupWorktree(
       outcome = { removed: false, branchDeleted: fresh.branchDeleted === true }
       return
     }
-    assertWorktreeNotHeld(store, redact, fresh)
-    if (isConvActive(fresh.conversationId)) {
-      throw new HelmxError(
-        'worktree_in_use',
-        `worktree '${fresh.path}' 关联的子代理仍在运行中，拒绝清理`,
-        409,
-        { path: fresh.path, conversationId: fresh.conversationId },
-      )
-    }
-    if (checkPathInUse(fresh.nodeId, fresh.path)) {
-      throw new HelmxError(
-        'worktree_in_use',
-        `worktree '${fresh.path}'（节点 ${fresh.nodeId}）仍被引用，拒绝清理`,
-        409,
-        { path: fresh.path, nodeId: fresh.nodeId },
-      )
-    }
+    assertWorktreeUnoccupied(deps, store, redact, fresh)
 
-    const locked = await resolveRepoAuthority(deps, fresh.nodeId, fresh.repoRoot !== '' ? fresh.repoRoot : fresh.path, input.signal)
+    const locked = await resolveRepoAuthority(deps, fresh.nodeId, fresh.repoRoot, input.signal)
     const entries = locked.entries
     const mainEntry = entries[0]!
     const match = matchWorktreeEntry(entries, fresh.path)
@@ -493,18 +416,9 @@ export async function cleanupWorktree(
       }
     }
 
-    let dirtyFiles: string[] = []
     let unmergedCommits = 0
     if (input.force !== true) {
-      // 口径与 git worktree remove 对齐：gitignored 产物按定义可弃、不计入阻断；
-      // 阻断性脏判定只覆盖未提交修改与未跟踪（非 ignored）文件。
-      const status = await gitExec(
-        deps,
-        fresh.nodeId,
-        fresh.path,
-        ['status', '--porcelain', '--untracked-files=all'],
-        input.signal,
-      )
+      const status = await gitExec(deps, fresh.nodeId, fresh.path, ['status', '--porcelain', '--untracked-files=all'], input.signal)
       if (!status.ok) {
         throw new HelmxError(
           'worktree_check_failed',
@@ -513,11 +427,7 @@ export async function cleanupWorktree(
           { worktreeId: fresh.id, path: fresh.path, output: status.output.slice(0, 2000) },
         )
       }
-      dirtyFiles = status.output
-        .trim()
-        .split('\n')
-        .map((l) => l.trim())
-        .filter((l) => l !== '')
+      const dirtyFiles = status.output.trim().split('\n').map((l) => l.trim()).filter((l) => l !== '')
       const referenceHead = await resolveMergeReferenceHead(
         deps,
         fresh.nodeId,
@@ -585,22 +495,21 @@ export async function cleanupWorktree(
     }
     store.updateRecord(fresh.id, (r) => {
       if (input.deleteBranch !== true) return { ...r, status: 'removed' as const, removedAt: Date.now() }
-      const { branchDeleteError: _previousError, ...clean } = r
+      const { branchDeleteError: _ignored, ...clean } = r
       return { ...clean, status: 'removed' as const, removedAt: Date.now(), branchDeleted: true }
     })
     outcome = { removed: true, branchDeleted }
   })
 
-  const result = outcome
-  if (result === undefined) {
+  if (outcome === undefined) {
     throw new HelmxError('worktree_check_failed', '清理未产生结果（内部状态不一致）', 500, { worktreeId: record.id })
   }
   return {
-    removed: result.removed,
+    removed: outcome.removed,
     worktreeId: record.id,
     path: record.path,
     branch: record.branch,
     nodeId: record.nodeId,
-    branchDeleted: result.branchDeleted,
+    branchDeleted: outcome.branchDeleted,
   }
 }

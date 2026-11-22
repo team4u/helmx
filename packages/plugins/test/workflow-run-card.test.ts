@@ -792,64 +792,6 @@ test('SSR：running 工作流显示中止按钮与执行中徽章', { timeout: 6
   assert.ok(!html.includes('Move to background'))
 })
 
-test('canDetachForegroundRun：仅运行中前台同步 + 发起会话 + human（或缺省）查看方可见', { timeout: 60_000 }, () => {
-  const fg = run({ id: 'wf_fg', status: 'running', syncForeground: true, conversationId: 1 })
-  assert.equal(m.canDetachForegroundRun(fg, { conversationId: 1, ownedBy: 'human' }), true)
-  assert.equal(m.canDetachForegroundRun(fg, { conversationId: 1 }), true)
-  assert.equal(m.canDetachForegroundRun(fg, { conversationId: 1, ownedBy: 'helmx' }), false)
-  assert.equal(m.canDetachForegroundRun(fg, { conversationId: 2 }), false)
-  assert.equal(m.canDetachForegroundRun(fg, undefined), false)
-  assert.equal(m.canDetachForegroundRun(run({ id: 'wf_d', status: 'running', syncForeground: true, detachedAt: 1, conversationId: 1 }), { conversationId: 1 }), false)
-  assert.equal(m.canDetachForegroundRun(run({ id: 'wf_t', status: 'completed', syncForeground: true, conversationId: 1 }), { conversationId: 1 }), false)
-  assert.equal(m.canDetachForegroundRun(run({ id: 'wf_b', status: 'running', conversationId: 1 }), { conversationId: 1 }), false)
-})
-
-test('SSR：前台同步 run 仅在查看会话即发起会话且 human 归属时显示「转入后台」', { timeout: 60_000 }, async () => {
-  const visible = await renderWorkflowWorkbench(
-    { runs: [run({ id: 'wf_fg', status: 'running', syncForeground: true, parentToolCallId: 'call-fg', nodes: [node({ id: 'a', status: 'running' })] })] },
-    [],
-    summary(1, 'working'),
-  )
-  assert.ok(visible.includes('Move to background'))
-
-  const humanViewer = await renderWorkflowWorkbench(
-    { runs: [run({ id: 'wf_fg_h', status: 'running', syncForeground: true, parentToolCallId: 'call-fg-h', nodes: [node({ id: 'a', status: 'running' })] })] },
-    [{ ...summary(1, 'working'), ownedBy: 'human' }],
-    { ...summary(1, 'working'), ownedBy: 'human' },
-  )
-  assert.ok(humanViewer.includes('Move to background'))
-
-  for (const ownedBy of ['helmx'] as const) {
-    const automationViewer = await renderWorkflowWorkbench(
-      { runs: [run({ id: 'wf_fg_a', status: 'running', syncForeground: true, parentToolCallId: 'call-fg-a', nodes: [node({ id: 'a', status: 'running' })] })] },
-      [{ ...summary(1, 'working'), ownedBy }],
-      { ...summary(1, 'working'), ownedBy },
-    )
-    assert.ok(!automationViewer.includes('Move to background'))
-  }
-
-  const detached = await renderWorkflowWorkbench(
-    { runs: [run({ id: 'wf_fg2', status: 'running', syncForeground: true, detachedAt: 123, parentToolCallId: 'call-fg2', nodes: [node({ id: 'a', status: 'running' })] })] },
-    [],
-    summary(1, 'working'),
-  )
-  assert.ok(!detached.includes('Move to background'))
-
-  const otherConv = await renderWorkflowWorkbench(
-    { runs: [run({ id: 'wf_fg3', conversationId: 2, status: 'running', syncForeground: true, parentToolCallId: 'call-fg3', nodes: [node({ id: 'a', status: 'running' })] })] },
-    [summary(1, 'working'), summary(2, 'working', 1)],
-    summary(1, 'working'),
-  )
-  assert.ok(!otherConv.includes('Move to background'))
-
-  const settled = await renderWorkflowWorkbench(
-    { runs: [run({ id: 'wf_fg4', status: 'completed', syncForeground: true, parentToolCallId: 'call-fg4', nodes: [node({ id: 'a', status: 'done' })] })] },
-    [],
-    summary(1, 'working'),
-  )
-  assert.ok(!settled.includes('Move to background'))
-})
-
 test('SSR：WorkflowWorkbenchPanel 空态显示占位文案', { timeout: 60_000 }, async () => {
   setWorkflowClientStub({})
   const mod = await importWorkflowClientModule('workbench.tsx')

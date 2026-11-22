@@ -21,7 +21,6 @@ import {
   type ExecutionApprovalItem,
   type ExecutionFrontlineItem,
 } from './model-execution-view.ts'
-import { canDetachForegroundRun, type DetachViewerScope } from './model-run.ts'
 
 export interface ActiveTrayItem {
   key: string
@@ -45,7 +44,6 @@ export interface ActiveTrayItem {
   startedAt?: number
   pendingAskSince?: number
   canAbort: boolean
-  canDetach: boolean
 }
 
 export interface ActiveTraySummary {
@@ -131,7 +129,6 @@ export function buildActiveTraySummary(
     rootConversationId: number
     conversations: ReadonlyArray<ConversationSummary>
     runs: ReadonlyArray<WorkflowRunSummary>
-    viewer?: DetachViewerScope
   },
   locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
 ): ActiveTraySummary {
@@ -238,7 +235,6 @@ export function buildActiveTraySummary(
       ...(startedAt !== undefined ? { startedAt } : {}),
       ...(pendingAskSince !== undefined ? { pendingAskSince } : {}),
       canAbort: node.run?.status === 'running',
-      canDetach: node.run !== undefined && canDetachForegroundRun(node.run, input.viewer),
     }
   })
 

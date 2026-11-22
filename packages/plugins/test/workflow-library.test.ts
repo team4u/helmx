@@ -63,21 +63,6 @@ const GOOD_SCRIPT = [
   'return 1',
 ].join('\n')
 
-/** 合法 RunRecord（save fromRunId 读取路径）。 */
-function runRecord(over: Record<string, unknown> = {}): Record<string, unknown> {
-  return {
-    id: 'wf_seed1',
-    name: 'seed',
-    conversationId: 1,
-    status: 'completed',
-    createdAt: 1,
-    updatedAt: 2,
-    kind: 'workflow',
-    journalPath: '/tmp/none.jsonl',
-    ...over,
-  }
-}
-
 let root: string
 
 before(async () => {
@@ -200,14 +185,14 @@ describe('WorkflowService.save：script 源', { timeout: 60_000 }, () => {
     }
   })
 
-  it('名称安全：路径穿越 / 非法字符拒绝；script 与 fromRunId 同时给或都不给拒绝', timeout, async () => {
+  it('名称安全：路径穿越 / 非法字符拒绝；空 script 拒绝', timeout, async () => {
     const dataDir = join(root, 'save-safe')
     const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
     try {
       assertHelmxError(() => service.save({ script: GOOD_SCRIPT, name: '../escape' }), 'validation_error', /invalid/)
       assertHelmxError(() => service.save({ script: GOOD_SCRIPT, name: 'a/b' }), 'validation_error')
-      assertHelmxError(() => service.save({ script: GOOD_SCRIPT, fromRunId: 'wf_x' }), 'validation_error', /exactly one of/)
-      assertHelmxError(() => service.save({}), 'validation_error', /exactly one of/)
+      assertHelmxError(() => service.save({ script: '' }), 'validation_error', /script/)
+      assertHelmxError(() => service.save({ script: '   ' }), 'validation_error', /script/)
     } finally {
       await service.close()
     }
@@ -230,69 +215,6 @@ describe('WorkflowService.save：script 源', { timeout: 60_000 }, () => {
       assertHelmxError(() => service.get('hijack'), 'validation_error', /symlink/)
     } finally {
       await service.close()
-    }
-  })
-})
-
-describe('WorkflowService.save：fromRunId 源', { timeout: 60_000 }, () => {
-  function seededService(dir: string, record: Record<string, unknown>): WorkflowService {
-    const dataDir = join(root, dir)
-    // 新契约：完整体落 dataDir/artifacts/1/workflow-<runId>.record.json，records doc 只存轻量索引。
-    const recordDir = join(dataDir, 'artifacts', '1')
-    mkdirSync(recordDir, { recursive: true })
-    writeFileSync(join(recordDir, 'workflow-wf_seed1.record.json'), JSON.stringify(runRecord(record)), 'utf-8')
-    return new WorkflowService({
-      dataDir,
-      host,
-      state: makeStateStore({
-        'workflow/runs': [{ id: 'wf_seed1', conversationId: 1, status: 'completed', createdAt: 1, updatedAt: 2 }],
-      }),
-    })
-  }
-
-  it('内联脚本 run 固化为定义（缺省名用 meta.name）', timeout, async () => {
-    const service = seededService('fromrun-inline', { script: GOOD_SCRIPT })
-    try {
-      const result = service.save({ fromRunId: 'wf_seed1' })
-      assert.equal(result.created, true)
-      assert.equal(result.workflow.name, 'release')
-      assert.equal(result.workflow.description, '发布流程')
-    } finally {
-      await service.close()
-    }
-  })
-
-  it('scriptPath run 重读文件源；显式 name 仍须与 meta.name 一致', timeout, async () => {
-    const sourceFile = join(root, 'fromrun-path-source.js')
-    writeFileSync(sourceFile, GOOD_SCRIPT, 'utf-8')
-    const service = seededService('fromrun-path', { scriptPath: sourceFile, savedName: 'release' })
-    try {
-      const result = service.save({ fromRunId: 'wf_seed1' })
-      assert.equal(result.workflow.name, 'release')
-      assertHelmxError(() => service.save({ fromRunId: 'wf_seed1', name: 'renamed' }), 'validation_error', /meta\.name/)
-    } finally {
-      await service.close()
-    }
-  })
-
-  it('subagent run 拒绝；无脚本源拒绝；不存在 run 404', timeout, async () => {
-    const service = seededService('fromrun-subagent', { kind: 'subagent' })
-    try {
-      assertHelmxError(() => service.save({ fromRunId: 'wf_seed1' }), 'validation_error', /subagent/)
-    } finally {
-      await service.close()
-    }
-    const noSource = seededService('fromrun-nosource', {})
-    try {
-      assertHelmxError(() => noSource.save({ fromRunId: 'wf_seed1' }), 'validation_error', /script source/)
-    } finally {
-      await noSource.close()
-    }
-    const missing = new WorkflowService({ dataDir: join(root, 'fromrun-missing'), host, state: makeStateStore() })
-    try {
-      assertHelmxError(() => missing.save({ fromRunId: 'wf_nope' }), 'not_found')
-    } finally {
-      await missing.close()
     }
   })
 })

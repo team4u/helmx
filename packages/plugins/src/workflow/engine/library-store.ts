@@ -5,8 +5,7 @@
  * - name safety (SAFE_NAME guards path traversal) + symlink-escape rejection (realpath must resolve
  *   back to the same-name position inside the workflows directory);
  * - overwrite refused by default (409 workflow_already_exists); atomic writes (temp file in the same
- *   directory + fsync; creation claims the path atomically via link, overwrite swaps atomically via rename);
- * - save(fromRunId) resolves script sources via the injected loadRunRecord callback into the run store.
+ *   directory + fsync; creation claims the path atomically via link, overwrite swaps atomically via rename).
  */
 
 import { randomUUID } from 'node:crypto'
@@ -77,26 +76,15 @@ function summaryFromSource(
   }
 }
 
-/** The persisted-record slice needed by save(fromRunId) to resolve script sources (compatible with the run store's RunRecord). */
-export interface RunScriptSourceRecord {
-  kind?: 'workflow' | 'subagent'
-  script?: string
-  scriptPath?: string
-}
-
 export interface WorkflowLibraryOptions {
   dataDir: string
-  /** Run-record read slice (not_found etc. thrown as-is by the run store). */
-  loadRunRecord(runId: string): RunScriptSourceRecord
 }
 
 export class WorkflowLibrary {
   private readonly dataDir: string
-  private readonly loadRunRecord: (runId: string) => RunScriptSourceRecord
 
   constructor(options: WorkflowLibraryOptions) {
     this.dataDir = options.dataDir
-    this.loadRunRecord = options.loadRunRecord
   }
 
   workflowsDir(): string {
@@ -153,52 +141,18 @@ export class WorkflowLibrary {
   }
 
   /**
-   * Save a workflow definition (exactly one of script / fromRunId):
-   * - strict boundary validation + validateScript's full checks + the pure syntax precheck with the
-   *   worker's exact shape (compile-only, zero side effects);
+   * Save a workflow definition from script source:
+   * - strict boundary validation + validateScript's full checks + the pure syntax precheck;
    * - name safety (SAFE_NAME guards path traversal); an explicit name disagreeing with meta.name is rejected;
    * - overwrite refused by default (409 workflow_already_exists); only overwrite: true overwrites;
-   * - atomic write: temp file in the same directory + fsync; creation claims the path atomically via
-   *   link (exactly one of concurrent same-name creations succeeds), overwrite swaps atomically via rename;
-   * - symlink-escape defense: when the target exists, its realpath must still be at the same-name position inside the workflows directory.
+   * - atomic write: temp file + fsync + link (create) or rename (overwrite);
+   * - symlink-escape defense: when the target exists, its realpath must stay inside the workflows directory.
    */
   save(request: WorkflowSaveRequest): WorkflowSaveResult {
-    const sources = [request.script, request.fromRunId].filter((v) => v !== undefined)
-    if (sources.length !== 1) {
-      throw new HelmxError(
-        'validation_error',
-        'save requires exactly one of script or fromRunId',
-        400,
-        { provided: sources.length },
-      )
+    if (typeof request.script !== 'string' || request.script.trim().length === 0) {
+      throw new HelmxError('validation_error', 'save requires a non-empty script string', 400)
     }
-
-    let script: string
-    if (request.script !== undefined) {
-      script = request.script
-    } else {
-      const record = this.loadRunRecord(request.fromRunId!)
-      if (record.kind === 'subagent') {
-        throw new HelmxError(
-          'validation_error',
-          `run ${request.fromRunId} is a background subagent with no workflow script to save`,
-          400,
-          { runId: request.fromRunId, kind: 'subagent' },
-        )
-      }
-      if (record.script !== undefined) {
-        script = record.script
-      } else if (record.scriptPath !== undefined) {
-        script = this.readScriptFile(record.scriptPath)
-      } else {
-        throw new HelmxError(
-          'validation_error',
-          `run ${request.fromRunId} persisted no script source (no inline script or scriptPath); cannot save`,
-          400,
-          { runId: request.fromRunId },
-        )
-      }
-    }
+    const script = request.script
 
     let meta: WorkflowMeta
     try {

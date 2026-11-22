@@ -8,6 +8,7 @@ import type { ReactNode, RefObject } from 'react'
 import type { ToolViewProps } from '@helmx/protocol'
 import type { WorkflowRunSummary } from '../../contracts.js'
 import {
+  PluginSlot,
   ToolCallDetails,
   useConversation,
   usePluginContext,
@@ -25,7 +26,6 @@ import {
   SubagentCardSublines,
 } from './SubagentCardDetails.tsx'
 import { useElapsedNowMs, useStreamFollow } from './hooks.ts'
-import { WorktreeInspectSection } from './WorktreeInspectSection.tsx'
 import { aggregateExecutionNodes } from './model-execution-tree.ts'
 import type { ExecutionNode } from './model-execution-tree.ts'
 import { aggregateExecutionStatuses } from './model-execution-status.ts'
@@ -40,7 +40,6 @@ import {
   resolveSubagentTaskTitle,
   subagentBadge,
 } from './model-subagent-card.ts'
-import type { DetachViewerScope } from './model-run.ts'
 import type { SubagentBadge } from './model-subagent-card.ts'
 import {
   cardOpenChildLabel,
@@ -116,7 +115,6 @@ export function SubagentLiveCard(props: {
   expanded?: boolean
   callDetails?: Pick<ToolViewProps, 'input' | 'result' | 'artifactRef'>
   childNodes?: ExecutionNode[]
-  viewer?: DetachViewerScope
 }) {
   const ctx = usePluginContext()
   const locale = usePluginLocale()
@@ -254,7 +252,6 @@ export function SubagentLiveCard(props: {
           inspectNodeId={inspectNodeId}
           detailError={detailError}
           onReload={() => conv.reload()}
-          viewer={props.viewer}
         />
       }
       snippet={
@@ -276,19 +273,21 @@ export function SubagentLiveCard(props: {
         />
       ) : null}
       {props.worktreeInspect !== undefined && wt !== undefined ? (
-        <div className="subagent-inspect-slot">
-          <WorktreeInspectSection
-            worktree={{
+        <PluginSlot
+          name="worktree-inspect"
+          className="subagent-inspect-slot"
+          slotProps={{
+            worktree: {
               path: wt.path,
               branch: wt.branch,
               ...(wt.id !== undefined && wt.id !== '' ? { id: wt.id } : {}),
-            }}
-            nodeId={inspectNodeId}
-            baseCommit={wt.baseCommit}
-            taskLabel={taskTitle}
-            parentConversationId={props.worktreeInspect.parentConversationId}
-          />
-        </div>
+            },
+            nodeId: inspectNodeId,
+            baseCommit: wt.baseCommit,
+            taskLabel: taskTitle,
+            parentConversationId: props.worktreeInspect.parentConversationId,
+          }}
+        />
       ) : null}
     </ExecutionCard>
   )

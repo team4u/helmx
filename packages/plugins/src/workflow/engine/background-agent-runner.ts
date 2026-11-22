@@ -26,7 +26,7 @@ import {
   type WorkflowNodeState,
   type WorkflowRunSummary,
 } from '../../contracts.js'
-import { resolveForegroundWaiters, type ActiveRun } from './active-run.js'
+import type { ActiveRun } from './active-run.js'
 import { createSubagentSettler, type SubagentRawOutcome } from './run-settle.js'
 import { backgroundChildIds, newRunId, type PersistedSubagentSpec, type RunRecord } from './run-store.js'
 import { redactNodes, redactSummaryNodes, toSummary } from './run-summary.js'
@@ -77,7 +77,6 @@ function createSubagentSession(params: SubagentSessionParams) {
     pendingAborts: new Set(),
     pendingExecs: new Set(),
     childConversations: new Set(params.initialChildren),
-    foregroundWaiters: new Set(),
     lastPersistAt: now,
     lastNodeEventAt: now,
   }
@@ -200,7 +199,7 @@ function finalizeSubagentOutcome(
   return effective
 }
 
-function deriveSubagentNameFromPrompt(prompt: string, redact: (text: string) => string): string | undefined {
+export function deriveSubagentNameFromPrompt(prompt: string, redact: (text: string) => string): string | undefined {
   const withoutContract = prompt.replace(/<structured_output_contract>[\s\S]*?<\/structured_output_contract>/g, '')
   for (const rawLine of withoutContract.split(/\r?\n/)) {
     const cleaned = rawLine
@@ -218,7 +217,7 @@ function deriveSubagentNameFromPrompt(prompt: string, redact: (text: string) => 
   return undefined
 }
 
-/** 启动后台或前台同步单子代理。 */
+/** 启动后台单子代理（同步 subagent 直接走 ctx.host.spawnAgent，不建 WorkflowRun）。 */
 export async function startBackgroundAgent(
   svc: WorkflowServiceContext,
   request: AgentSpawnRequest,
@@ -226,7 +225,6 @@ export async function startBackgroundAgent(
     parentToolCallId?: string
     label?: string
     notifyParentOnSettle?: boolean
-    foreground?: boolean
     preassigned?: {
       runId: string
       replayedFrom: string
@@ -256,7 +254,6 @@ export async function startBackgroundAgent(
 
   const runId = options?.preassigned?.runId ?? newRunId()
   const createdAt = Date.now()
-  const foreground = options?.foreground === true
   const parentToolCallId =
     options?.parentToolCallId !== undefined && options.parentToolCallId !== ''
       ? options.parentToolCallId
@@ -322,8 +319,7 @@ export async function startBackgroundAgent(
     createdAt,
     updatedAt: createdAt,
     kind: 'subagent',
-    notifyParentOnSettle: options?.notifyParentOnSettle ?? !foreground,
-    ...(foreground ? { syncForeground: true } : {}),
+    notifyParentOnSettle: options?.notifyParentOnSettle ?? true,
     ...(options?.preassigned !== undefined
       ? {
           replayedFrom: options.preassigned.replayedFrom,
@@ -389,7 +385,6 @@ export async function startBackgroundAgent(
     options?.preassigned?.onPersistFailed?.()
     svc.active.delete(runId)
     resolveDone()
-    resolveForegroundWaiters(run, 'settled')
     throw persistError
   }
   svc.emitEventSafe('workflow.updated', { run: redactSummaryNodes(svc.redact, { ...run.summary }) })
@@ -411,21 +406,15 @@ export async function startBackgroundAgent(
   const parentSignal = request.signal
   const onParentAbort = (): void => {
     if (settler.isSettled() || svc.isRunSuspending(run)) return
-    if (foreground || !session.hasResolvedFired()) abort.abort()
+    if (!session.hasResolvedFired()) abort.abort()
   }
-  const detachedBeforeBind = record.detachedAt !== undefined
-  let detachParentSignal: () => void = () => {}
-  if (!detachedBeforeBind) {
-    parentSignal?.addEventListener('abort', onParentAbort, { once: true })
-    detachParentSignal = (): void => {
-      parentSignal?.removeEventListener('abort', onParentAbort)
-    }
-    cleanupParentSignal = detachParentSignal
-    if (foreground) run.unbindForegroundSignal = detachParentSignal
+  parentSignal?.addEventListener('abort', onParentAbort, { once: true })
+  const detachParentSignal = (): void => {
+    parentSignal?.removeEventListener('abort', onParentAbort)
   }
+  cleanupParentSignal = detachParentSignal
 
-  if (svc.isClosed() || svc.host.isHostClosing?.() === true) abort.abort()
-  else if (!detachedBeforeBind && parentSignal?.aborted) abort.abort()
+  if (svc.isClosed() || svc.host.isHostClosing?.() === true || parentSignal?.aborted) abort.abort()
 
   const spawnPromise = (async () => {
     if (abort.signal.aborted) throw new HelmxError('aborted', '后台子代理启动期间已取消', 409)
@@ -453,7 +442,7 @@ export async function startBackgroundAgent(
     throw preResolveFailure
   }
 
-  if (!foreground) detachParentSignal()
+  detachParentSignal()
 
   try {
     svc.writeRecord(record)

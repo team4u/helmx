@@ -12,6 +12,7 @@ export {
   type WorkflowServiceOptions,
   type WorkflowStateStore,
 } from './service.js'
+export { createWorkflowEngineHost } from './host-adapter.js'
 export {
   runWorkflow,
   normalizeWorkflowArgs,
@@ -44,7 +45,7 @@ export {
   type JournalReadResult,
   type AgentJournalKeyInput,
 } from './journal.js'
-export { compileJsonSchema, type CompiledSchema, type SchemaCompilation } from './json-schema.js'
+export { compileJsonSchema, type CompiledSchema, type SchemaCompilation } from './runtime-validation.js'
 export {
   collapse,
   stats,

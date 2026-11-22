@@ -394,21 +394,6 @@ export function parseResumeFailedResult(raw: unknown): ResumeFailedSummaryView |
   return { resumedCount: resumed.length, skippedCount: skipped.length }
 }
 
-export interface DetachViewerScope {
-  conversationId?: number
-  ownedBy?: string
-}
-
-export function canDetachForegroundRun(run: WorkflowRunSummary, viewer: DetachViewerScope | undefined): boolean {
-  return (
-    run.status === 'running' &&
-    run.syncForeground === true &&
-    run.detachedAt === undefined &&
-    viewer?.conversationId === run.conversationId &&
-    viewer.ownedBy !== 'helmx'
-  )
-}
-
 export function canReplayWorkflowRun(run: WorkflowRunSummary): boolean {
   return run.kind !== 'subagent' && run.status === 'completed'
 }

@@ -417,45 +417,43 @@ describe('worker-source goal()', () => {
  * ------------------------------------------------------------------------- */
 
 describe('worker-source workflow() nesting and scopeId', () => {
-  it('exports MAX_WORKFLOW_NESTING_DEPTH = 4', timeout, () => {
-    assert.equal(MAX_WORKFLOW_NESTING_DEPTH, 4)
+  it('exports MAX_WORKFLOW_NESTING_DEPTH = 2', timeout, () => {
+    assert.equal(MAX_WORKFLOW_NESTING_DEPTH, 2)
   })
 
-  it('allows 4 nested workflow levels and assigns incrementing scopeIds', timeout, async () => {
+  it('allows 2 nested workflow levels and assigns incrementing scopeIds', timeout, async () => {
     const outcome = await runWorkerSource('return await workflow("a")', {
       workflows: {
         a: 'return await workflow("b")',
-        b: 'return await workflow("c")',
-        c: 'return await agent("deep")',
+        b: 'return await agent("deep")',
       },
     })
     assert.equal(outcome.status, 'complete')
     assert.equal(outcome.value, 'ok:deep')
     assert.equal(outcome.agentCalls.length, 1)
-    // 根 scope 0 → a=1 → b=2 → c=3：第 4 层内的 agent 调用携带 scopeId 3。
-    assert.equal(outcome.agentCalls[0]?.scopeId, 3)
+    // 根 scope 0 → a=1 → b=2：第 2 层内的 agent 调用携带 scopeId 2。
+    assert.equal(outcome.agentCalls[0]?.scopeId, 2)
   })
 
-  it('rejects a 5th nesting level', timeout, async () => {
+  it('rejects a 3rd nesting level', timeout, async () => {
     const outcome = await runWorkerSource('return await workflow("a")', {
-      workflows: {
-        a: 'return await workflow("b")',
-        b: 'return await workflow("c")',
-        c: 'return await workflow("d")',
-        d: 'return await workflow("e")',
-      },
-    })
-    assert.equal(outcome.status, 'error')
-    assert.match(outcome.error ?? '', /workflow\(\) cannot be nested more than 4 levels deep/)
-  })
-
-  it('keeps the 256 nested-call cap (total, orthogonal to depth)', timeout, async () => {
-    const outcome = await runWorkerSource('return await workflow("a")', {
-      nestedCap: 2,
       workflows: {
         a: 'return await workflow("b")',
         b: 'return await workflow("c")',
         c: 'return 1',
+      },
+    })
+    assert.equal(outcome.status, 'error')
+    assert.match(outcome.error ?? '', /workflow\(\) cannot be nested more than 2 levels deep/)
+  })
+
+  it('keeps the 256 nested-call cap (total, orthogonal to depth)', timeout, async () => {
+    const outcome = await runWorkerSource('await workflow("a"); await workflow("b"); return await workflow("c")', {
+      nestedCap: 2,
+      workflows: {
+        a: 'return 1',
+        b: 'return 2',
+        c: 'return 3',
       },
     })
     assert.equal(outcome.status, 'error')

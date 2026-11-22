@@ -1,9 +1,12 @@
 /**
  * builtin:workflow 模型工具 subagent（自 tools.ts 拆出）。
  *
- * 派生子代理（原生 Profile / 外部运行时）：入参逐项强校验（非法值显式
- * 拒绝、绝不静默丢弃）、background 缺省按权威 ownership 判定、执行元数据
- * （conversationId / executionId / worktree）独立于业务 result 回报。
+ * 派生子代理（原生 Profile / 外部运行时）：
+ * - 同步路径（background !== true）：直接调用 ctx.host.spawnAgent，不建 WorkflowRun /
+ *   不写盘 / 不写账本；跨优雅重启重放时按 (parentConversationId, parentToolCallId)
+ *   查找既有子会话并走 reattach，零重复派生；
+ * - 后台路径（background === true）：走 workflows.startBackgroundAgent 建持久后台
+ *   WorkflowRun，完成后幂等 steer 汇报给父会话。
  */
 import {
   NODE_ID_PATTERN,
@@ -18,9 +21,8 @@ import {
   HARD_MAX_SUBAGENT_DEPTH,
   withWorkflowSpawnMeta,
 } from '../contracts.js'
+import { deriveSubagentNameFromPrompt } from './engine/background-agent-runner.js'
 import { executionOf } from './tool-result.js'
-import type { WorkflowService } from './engine/index.js'
-import type { BackgroundPolicy } from './background.js'
 import type { WorkflowToolDeps } from './tools.js'
 
 /** subagent 工具 effort 合法枚举（与内核原生 spawn 执行行同源）。 */
@@ -85,7 +87,6 @@ const subagentPresentationMetaSchema = {
   additionalProperties: false,
 } as const
 
-/** 提取 UI 渲染所需的轻量 execution 索引，剔除内部多余 worktree 元字段。 */
 function presentationExecutionOf(info: AgentExecutionInfo): Record<string, unknown> | undefined {
   const full = executionOf(info)
   const out: Record<string, unknown> = {}
@@ -105,15 +106,9 @@ function presentationExecutionOf(info: AgentExecutionInfo): Record<string, unkno
   return Object.keys(out).length > 0 ? out : undefined
 }
 
-/** 工具错误信封：文本 + structuredOutput.ok=false + 轻量 presentationMeta（isError）。 */
-function envelopeError(text: string, result: string): {
-  output: Array<{ type: 'text'; text: string }>
-  isError: boolean
-  structuredOutput: unknown
-  presentationMeta: Record<string, unknown>
-} {
+function envelopeError(text: string, result: string) {
   return {
-    output: [{ type: 'text', text }],
+    output: [{ type: 'text' as const, text }],
     isError: true,
     structuredOutput: { ok: false, result },
     presentationMeta: { ok: false },
@@ -205,7 +200,10 @@ export function registerSubagentTool(
         }
       }
       if (a['isolation'] !== undefined && a['isolation'] !== 'worktree') {
-        return envelopeError(`subagent_failed: isolation 仅允许 'worktree'（收到 ${JSON.stringify(a['isolation'])}），不合法值绝不静默丢弃`, `invalid isolation: ${JSON.stringify(a['isolation'])}`)
+        return envelopeError(
+          `subagent_failed: isolation 仅允许 'worktree'（收到 ${JSON.stringify(a['isolation'])}），不合法值绝不静默丢弃`,
+          `invalid isolation: ${JSON.stringify(a['isolation'])}`,
+        )
       }
       if (a['attachments'] !== undefined) {
         const list = a['attachments']
@@ -241,7 +239,6 @@ export function registerSubagentTool(
         }
         nodeId = a['nodeId']
       }
-      // background 缺省与显式拒绝（权威 ownership 判定，非角色枚举）。
       const backgroundChoice = resolveBackground(
         context.conversationId,
         a['background'] === undefined ? undefined : a['background'] === true,
@@ -263,7 +260,7 @@ export function registerSubagentTool(
         }
         const execMeta = effectiveExec !== undefined ? presentationExecutionOf(effectiveExec) : undefined
         return {
-          output: [{ type: 'text', text: safeResultText(payload) }],
+          output: [{ type: 'text' as const, text: safeResultText(payload) }],
           structuredOutput: payload,
           presentationMeta: {
             ok: true,
@@ -275,121 +272,40 @@ export function registerSubagentTool(
         }
       }
 
-      const formatTerminalResult = (runId: string, initialExec?: AgentExecutionInfo) => {
-        const final = workflows.getRun(runId)
-        const resolvedInfo = resolved ?? initialExec ?? workflows.loadRunRecord(runId).subagentMeta?.execution
-        const execMeta = resolvedInfo !== undefined ? presentationExecutionOf(resolvedInfo) : undefined
-        if (final.status === 'completed') {
-          const payload = {
-            ok: true,
-            result: final.result,
-            ...(resolvedInfo !== undefined ? { execution: executionOf(resolvedInfo) } : {}),
-          }
-          return {
-            output: [{ type: 'text', text: safeResultText(payload) }],
-            structuredOutput: payload,
-            presentationMeta: {
-              ok: true,
-              runId: final.id,
-              status: final.status,
-              ...(execMeta !== undefined ? { execution: execMeta } : {}),
-            },
-          }
-        }
-        const message = final.error ?? `子代理运行 ${runId} 终态为 ${final.status}`
-        return {
-          output: [{ type: 'text', text: `subagent_failed: ${message}` }],
-          isError: true,
-          structuredOutput: {
-            ok: false,
-            result: message,
-            ...(resolvedInfo !== undefined ? { execution: executionOf(resolvedInfo) } : {}),
-          },
-          presentationMeta: {
-            ok: false,
-            runId: final.id,
-            status: final.status,
-            ...(execMeta !== undefined ? { execution: execMeta } : {}),
-          },
-        }
-      }
-
-      const waitForegroundRunAndFormat = async (runId: string, initialExec?: AgentExecutionInfo, attachAbortOnReplay = false) => {
-        const current = workflows.getRun(runId)
-        if (current.detachedAt !== undefined) {
-          syncRunsDoc()
-          return formatBackgroundHandle(runId, initialExec)
-        }
-        if (current.status !== 'running') {
-          syncRunsDoc()
-          return formatTerminalResult(runId, initialExec)
-        }
-        const onAbort = () => {
-          if (workflows.isAutoRecoverOnRestart() && workflows.isHostClosing()) return
-          void workflows.abort(runId).catch(() => {})
-        }
-        if (attachAbortOnReplay) {
-          context.signal?.addEventListener('abort', onAbort, { once: true })
-          if (context.signal?.aborted) onAbort()
-        }
-        try {
-          const outcome = await workflows.waitForeground(runId, {
-            ...(attachAbortOnReplay
-              ? { onDetached: () => context.signal?.removeEventListener('abort', onAbort) }
-              : {}),
-            ...(context.signal !== undefined ? { signal: context.signal } : {}),
-          })
-          if (outcome === 'detached') {
-            syncRunsDoc()
-            return formatBackgroundHandle(runId, initialExec)
-          }
-          return formatTerminalResult(runId, initialExec)
-        } finally {
-          if (attachAbortOnReplay) context.signal?.removeEventListener('abort', onAbort)
-        }
-      }
-
       try {
-        // 跨重启/工具重放幂等：以受信 (conversationId, callId) 查既有 Run，绝不重复派生。
-        if (typeof context.callId === 'string' && context.callId !== '') {
-          const existing = workflows.findRunByParentToolCall(context.conversationId, context.callId)
-          if (existing !== undefined) {
-            if (backgroundChoice.background || existing.detachedAt !== undefined) {
+        if (backgroundChoice.background) {
+          if (typeof context.callId === 'string' && context.callId !== '') {
+            const existing = workflows.findRunByParentToolCall(context.conversationId, context.callId)
+            if (existing !== undefined) {
               syncRunsDoc()
               return formatBackgroundHandle(existing.id, existing.subagentMeta?.execution)
             }
-            return await waitForegroundRunAndFormat(existing.id, existing.subagentMeta?.execution, true)
           }
-        }
-
-        // 嵌套深度前置拒绝（防线二）：达到子树上限的会话是叶子，不创建任何后台 run。
-        assertCanSpawn(context.conversationId)
-        const request: AgentSpawnRequest = {
-          parentConversationId: context.conversationId,
-          ...(context.callId !== undefined ? { parentToolCallId: context.callId } : {}),
-          prompt: String(a['prompt']),
-          ...(label !== undefined && a['resume'] === undefined ? { title: label } : {}),
-          ...(a['agentType'] !== undefined ? { agentType: String(a['agentType']) } : {}),
-          ...(nodeId !== undefined ? { nodeId } : {}),
-          ...(a['cwd'] !== undefined ? { cwd: String(a['cwd']) } : {}),
-          ...(a['fork'] === true ? { fork: true } : {}),
-          ...(a['isolation'] !== undefined ? { isolation: 'worktree' } : {}),
-          ...(a['schema'] !== undefined ? { schema: a['schema'] as Record<string, unknown> } : {}),
-          ...(a['gate'] !== undefined ? { gate: String(a['gate']) } : {}),
-          ...(a['resume'] !== undefined ? { resume: String(a['resume']) } : {}),
-          ...(a['model'] !== undefined ? { model: String(a['model']) } : {}),
-          ...(a['effort'] !== undefined ? { effort: String(a['effort']) } : {}),
-          ...(a['maxSubagentDepth'] !== undefined
-            ? { meta: withWorkflowSpawnMeta(undefined, { maxSubagentDepth: Number(a['maxSubagentDepth']) }) }
-            : {}),
-          ...(Array.isArray(a['attachments']) ? { attachments: a['attachments'] as string[] } : {}),
-          onResolved: (info) => {
-            resolved = info
-          },
-          signal: context.signal,
-        }
-
-        if (backgroundChoice.background) {
+          assertCanSpawn(context.conversationId)
+          const request: AgentSpawnRequest = {
+            parentConversationId: context.conversationId,
+            ...(context.callId !== undefined ? { parentToolCallId: context.callId } : {}),
+            prompt: String(a['prompt']),
+            ...(label !== undefined && a['resume'] === undefined ? { title: label } : {}),
+            ...(a['agentType'] !== undefined ? { agentType: String(a['agentType']) } : {}),
+            ...(nodeId !== undefined ? { nodeId } : {}),
+            ...(a['cwd'] !== undefined ? { cwd: String(a['cwd']) } : {}),
+            ...(a['fork'] === true ? { fork: true } : {}),
+            ...(a['isolation'] !== undefined ? { isolation: 'worktree' } : {}),
+            ...(a['schema'] !== undefined ? { schema: a['schema'] as Record<string, unknown> } : {}),
+            ...(a['gate'] !== undefined ? { gate: String(a['gate']) } : {}),
+            ...(a['resume'] !== undefined ? { resume: String(a['resume']) } : {}),
+            ...(a['model'] !== undefined ? { model: String(a['model']) } : {}),
+            ...(a['effort'] !== undefined ? { effort: String(a['effort']) } : {}),
+            ...(a['maxSubagentDepth'] !== undefined
+              ? { meta: withWorkflowSpawnMeta(undefined, { maxSubagentDepth: Number(a['maxSubagentDepth']) }) }
+              : {}),
+            ...(Array.isArray(a['attachments']) ? { attachments: a['attachments'] as string[] } : {}),
+            onResolved: (info) => {
+              resolved = info
+            },
+            signal: context.signal,
+          }
           const started = await workflows.startBackgroundAgent(request, {
             parentToolCallId: context.callId,
             ...(label !== undefined ? { label } : {}),
@@ -398,30 +314,85 @@ export function registerSubagentTool(
           syncRunsDoc()
           return formatBackgroundHandle(started.run.id, started.execution)
         }
-        // 同步路径统一走受管后台单子代理启动：从启动起即有 durable WorkflowRun
-        //（foreground 模式：record 标记 syncForeground、notifyParentOnSettle
-        // 初始 false、父 signal 绑定至 detach 或终态），等待 detach 唤醒或终态；
-        // 不再裸调 ctx.host.spawnAgent（生命周期与 SubagentWorkflow 同构，
-        // UI/动作可按 runId detach 转后台）。
-        const started = await workflows.startBackgroundAgent(request, {
-          parentToolCallId: context.callId,
-          ...(label !== undefined ? { label } : {}),
-          notifyParentOnSettle: false,
-          foreground: true,
-        })
-        syncRunsDoc()
-        return await waitForegroundRunAndFormat(started.run.id, started.execution, false)
+
+        // Synchronous path: call ctx.host.spawnAgent directly without creating WorkflowRun records/journals.
+        // On graceful-restart replay, reattach to an existing child conversation matching (parentConversationId, callId).
+        const hasCallId = typeof context.callId === 'string' && context.callId !== ''
+        const existingChild =
+          hasCallId && a['resume'] === undefined
+            ? ctx.host
+                .listConversations()
+                .find((c) => c.parentConversationId === context.conversationId && c.parentToolCallId === context.callId)
+            : undefined
+        if (existingChild === undefined) {
+          assertCanSpawn(context.conversationId)
+        }
+        const requestId = hasCallId ? `helmx:spawn:${context.conversationId}:${context.callId}` : undefined
+        const redact = (text: string) => ctx.host.redact(text)
+        const syncTitle =
+          existingChild === undefined && a['resume'] === undefined
+            ? label !== undefined
+              ? redact(label)
+              : deriveSubagentNameFromPrompt(String(a['prompt']), redact)
+            : undefined
+        const syncRequest: AgentSpawnRequest = {
+          parentConversationId: context.conversationId,
+          ...(context.callId !== undefined ? { parentToolCallId: context.callId } : {}),
+          ...(requestId !== undefined ? { requestId } : {}),
+          prompt: String(a['prompt']),
+          ...(a['agentType'] !== undefined ? { agentType: String(a['agentType']) } : {}),
+          ...(a['isolation'] !== undefined ? { isolation: 'worktree' } : {}),
+          ...(a['schema'] !== undefined ? { schema: a['schema'] as Record<string, unknown> } : {}),
+          ...(a['gate'] !== undefined ? { gate: String(a['gate']) } : {}),
+          ...(a['maxSubagentDepth'] !== undefined
+            ? { meta: withWorkflowSpawnMeta(undefined, { maxSubagentDepth: Number(a['maxSubagentDepth']) }) }
+            : {}),
+          ...(existingChild !== undefined
+            ? {
+                reattach: {
+                  conversationId: existingChild.id,
+                  ...(existingChild.cwd !== '' ? { effectiveCwd: existingChild.cwd } : {}),
+                },
+              }
+            : {
+                ...(syncTitle !== undefined ? { title: syncTitle } : {}),
+                ...(nodeId !== undefined ? { nodeId } : {}),
+                ...(a['cwd'] !== undefined ? { cwd: String(a['cwd']) } : {}),
+                ...(a['fork'] === true ? { fork: true } : {}),
+                ...(a['resume'] !== undefined ? { resume: String(a['resume']) } : {}),
+                ...(a['model'] !== undefined ? { model: String(a['model']) } : {}),
+                ...(a['effort'] !== undefined ? { effort: String(a['effort']) } : {}),
+                ...(Array.isArray(a['attachments']) ? { attachments: a['attachments'] as string[] } : {}),
+              }),
+          onResolved: (info) => {
+            resolved = info
+          },
+          signal: context.signal,
+        }
+        const raw = await ctx.host.spawnAgent(syncRequest)
+        const payload = {
+          ok: true,
+          result: raw,
+          ...(resolved !== undefined ? { execution: executionOf(resolved) } : {}),
+        }
+        const execMeta = resolved !== undefined ? presentationExecutionOf(resolved) : undefined
+        return {
+          output: [{ type: 'text' as const, text: safeResultText(payload) }],
+          structuredOutput: payload,
+          presentationMeta: {
+            ok: true,
+            status: 'completed',
+            ...(execMeta !== undefined ? { execution: execMeta } : {}),
+          },
+        }
       } catch (error) {
-        // 宿主优雅关停挂起期间父回合 abortSignal 触发：必须原样上抛拒绝，让
-        // pi-durable 保持 ToolTask 未结算并在重启后按 replay: 'safe' 幂等重放，
-        // 绝不能吞错伪装成已结算的失败 tool_result。
         if (workflows.isHostClosing() && workflows.isAutoRecoverOnRestart() && context.signal?.aborted) {
           throw error
         }
         const message = error instanceof Error ? error.message : String(error)
         const execMeta = resolved !== undefined ? presentationExecutionOf(resolved) : undefined
         return {
-          output: [{ type: 'text', text: `subagent_failed: ${message}` }],
+          output: [{ type: 'text' as const, text: `subagent_failed: ${message}` }],
           isError: true,
           structuredOutput: {
             ok: false,
@@ -434,8 +405,6 @@ export function registerSubagentTool(
             ...(execMeta !== undefined ? { execution: execMeta } : {}),
           },
         }
-      } finally {
-        syncRunsDoc()
       }
     },
   })

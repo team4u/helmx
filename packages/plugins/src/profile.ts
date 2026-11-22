@@ -283,6 +283,13 @@ export function createProfilePlugin(): PluginDefinition {
       }
 
       /**
+       * Known delegation / dispatch tool names whose presence unlocks the Profile collaboration
+       * catalog (workflow's subagent/SubagentWorkflow and swarm's swarm_dispatch_worker).
+       */
+      const DISPATCH_TOOL_NAMES = ['subagent', 'SubagentWorkflow', 'swarm_dispatch_worker'] as const
+      const DISPATCH_TOOL_SET: ReadonlySet<string> = new Set(DISPATCH_TOOL_NAMES)
+
+      /**
        * Unified computation of the collaboration catalog (the completion action and the
        * before_turn injection share the same fact source):
        * - exclude self / managed plugins disabled (see catalog.ts rules);
@@ -298,8 +305,7 @@ export function createProfilePlugin(): PluginDefinition {
           profiles.list(),
           ctx.host.listPlugins(),
         ])
-        const dispatchTools = new Set(['subagent', 'SubagentWorkflow'])
-        if (!pluginSummaries.some((plugin) => isPluginSummaryActive(plugin) && plugin.tools.some((name) => dispatchTools.has(name)))) {
+        if (!pluginSummaries.some((plugin) => isPluginSummaryActive(plugin) && plugin.tools.some((name) => DISPATCH_TOOL_SET.has(name)))) {
           return []
         }
         const activePluginIds = new Set(pluginSummaries.filter(isPluginSummaryActive).map((p) => p.id))
@@ -319,7 +325,7 @@ export function createProfilePlugin(): PluginDefinition {
        * routing mode stripping subagent) -- the completion action falls back to a separate judgment when it cannot see the turn's tools (see the action implementation).
        */
       const dispatchToolNames = (tools: readonly { name: string }[]): string[] =>
-        ['subagent', 'SubagentWorkflow'].filter((name) => tools.some((t) => t.name === name))
+        DISPATCH_TOOL_NAMES.filter((name) => tools.some((t) => t.name === name))
 
       ctx.hook.onBeforeTurn(
         async (turn) => {

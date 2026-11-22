@@ -1,16 +1,11 @@
 /**
- * builtin:workflow 运行族动作（自 actions.ts 按域拆出）。
- *
- * 3 个动作：
- * - run：启动工作流运行（会话目标显式优先、上下文冲突拒绝、深度前置拦截、
- *   wait 终态等待）；
- * - steer：后台子代理安全插话（授权证明与守卫细节见 ./steer.ts）；
- * - detach：前台同步 run 转后台（授权与状态纪律见 ./detach.ts）。
+ * builtin:workflow 运行族动作（自 actions.ts 按域拆出）：run / steer / resume_failed。
  */
 import { HelmxError, type HelmxPluginContext } from '@helmx/protocol'
 import { steerBackgroundSubagent } from './steer.js'
-import { detachForegroundSyncRun } from './detach.js'
 import type { WorkflowActionDeps } from './actions.js'
+
+export const WORKFLOW_STEER_TOOL_NAME = 'workflow_steer' as const
 
 export function registerWorkflowRunActions(
   ctx: HelmxPluginContext,
@@ -136,7 +131,7 @@ export function registerWorkflowRunActions(
       description: 'Steer a running background subagent back on course',
       positional: [{ field: 'runId', required: true }],
     },
-    exposeAsTool: true,
+    exposeAsTool: { name: WORKFLOW_STEER_TOOL_NAME },
     async handler(input, context) {
       const { runId, text } = input as { runId: string; text: string }
       return steerBackgroundSubagent(
@@ -156,61 +151,6 @@ export function registerWorkflowRunActions(
           ...(context.signal !== undefined ? { signal: context.signal } : {}),
         },
       )
-    },
-  })
-
-  // ---- 动作 detach：前台同步 run 转后台（同步工具阻塞等待的唯一放行口） ----
-  // 授权与状态纪律见 ./detach.ts：仅前台同步标记（record.syncForeground）且
-  // running 的 run；run 发起会话必须 human-owned（自动化同步等待是防早结算
-  // 策略，一律拒绝）；会话上下文调用须为发起会话自身或祖先。引擎在同步
-  // 临界段原子置位 detachedAt/notifyParentOnSettle 并唤醒阻塞中的工具调用
-  // （立即返回后台句柄），自然完成与 detach 竞态只能有一个终态/通知路径。
-  ctx.action({
-    id: 'detach',
-    description:
-      'Move a running foreground-sync run (the subagent / SubagentWorkflow synchronous-wait path) into the background: the blocked tool call immediately returns a background handle, the run keeps executing and reports via a steer follow-up on settle. Only runs marked foreground-sync and running can be moved (background-started and already-detached runs are rejected); the initiating conversation must be human-owned — synchronous waiting is the fixed policy for automated (bot/helmx) conversations, which are refused; within a conversation only the initiating conversation itself or its ancestors may call.',
-    exposeToPrompt: false,
-    inputSchema: {
-      type: 'object',
-      properties: {
-        runId: { type: 'string', description: 'Foreground-sync run ID (a run started by a synchronous tool call)' },
-      },
-      required: ['runId'],
-      additionalProperties: false,
-    },
-    outputSchema: {
-      type: 'object',
-      properties: {
-        detached: { type: 'boolean', const: true },
-        runId: { type: 'string' },
-        run: { type: 'object' },
-      },
-      required: ['detached', 'runId', 'run'],
-      additionalProperties: false,
-    },
-    cli: {
-      command: ['workflows', 'detach'],
-      description: 'Move a running foreground-sync run into the background (the blocked tool call immediately returns a background handle)',
-      positional: [{ field: 'runId', required: true }],
-    },
-    async handler(input, context) {
-      const { runId } = input as { runId: string }
-      const output = await detachForegroundSyncRun(
-        {
-          getRun: (id) => workflows.getRun(id),
-          detach: (id) => workflows.detachForegroundRun(id),
-          getConversation: (id) => ctx.host.getConversation(id),
-          getConversationOwnership: (id) => ctx.host.getConversationOwnership(id),
-        },
-        { runId },
-        {
-          ...(context.conversationId !== undefined
-            ? { conversationId: context.conversationId }
-            : {}),
-        },
-      )
-      syncRunsDoc()
-      return output
     },
   })
 

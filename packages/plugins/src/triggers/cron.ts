@@ -1,49 +1,34 @@
 /**
  * builtin:triggers -- the cron scheduling module.
  *
- * Responsibilities: scheduled delivery driven by standard five-field cron expressions (cron-parser).
- * - Runtime state persists in the public doc `crons` (pure JSON; lastRunAt/nextRunAt advance with claims);
- * - Persistent claim: at a schedule point, first advance nextRunAt and await doc.flush() for a real
- *   flush, then deliver. At most one delivery attempt per schedule point; a crash after the claim is
- *   flushed but before delivery completes loses that attempt (honest semantics: persistent claim and
- *   async input submission do not form an atomic transaction; exactly-once is not promised);
- * - catchUp:true merges missed intervals into one catch-up run after restart;
- *   false jumps to a future point (the jump also claims+flushes, preventing recompute-back after restart);
- * - single-flight: only one in-flight tick per concurrent job;
- * - dispatch failures write lastError honestly and emit a notification event, never faking success;
- *   no retry within the schedule point (at-mostast-once semantics); the next point schedules normally;
- * - Error-path invariant: a timer is consumed the moment it fires; any tick exception (evaluation/flush)
- *   must reschedule via finally -- a job never permanently stalls on a transient fault before restart;
- *
- * Timers are managed solely through the ctx.service lifecycle; the kernel is untouched.
+ * Uses `durable-scheduler.ts` primitives (`SchedulerClock`, `TimerHandle`, `defaultSchedulerClock`,
+ * `parseNextCronTime`, `advanceCronAfterFire`, `armChunkedTimer`) for cron parsing, 24.8-day
+ * chunked timer arming, and injectable clocks while managing multi-job state in the public `crons`
+ * doc with `(id, rev)` generation guards, claim-flush-before-dispatch, single catch-up, and
+ * decision-failure retry backoff.
  */
 
 import { CronExpressionParser } from 'cron-parser'
 import { randomUUID } from 'node:crypto'
 import { HelmxError, type ExternalTriggerEnvelope, type HelmxPluginContext } from '@helmx/protocol'
-
-// ---------------------------------------------------------------------------
-// Constants and types
-// ---------------------------------------------------------------------------
+import {
+  advanceCronAfterFire,
+  armChunkedTimer,
+  defaultSchedulerClock,
+  parseNextCronTime,
+  type SchedulerClock,
+  type TimerHandle,
+} from '../durable-scheduler.js'
 
 const CRON_DOC_NAME = 'crons'
-
-/** Five-field cron; the ID charset is tightened (dots forbidden, avoiding ambiguity with fully-qualified action names). */
 const ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/
-
-/** setTimeout cap (2^31-1 ms ~= 24.8 days); larger delays fire in the window first, then reschedule. */
-const MAX_TIMEOUT_MS = 2_147_483_647
-
-/** Retry backoff floor after a scheduling-decision failure: with a persistently broken expression etc.,
- * rescheduling by an expired nextRunAt degrades into a hot loop spamming notifications; retry after one floor interval, auto-recovering once fixed. */
 const DECISION_RETRY_FLOOR_MS = 60_000
+
+export type CronClock = SchedulerClock
 
 export interface CronJob {
   id: string
-  /**
-   * Creation generation (randomUUID): claim/lastError write-backs are checked against (id, rev),
-   * preventing an in-flight tick from polluting a same-id job rebuilt after delete. A rebuild changes the generation.
-   */
+  /** Creation generation (randomUUID) checked on claim/lastError write-backs against (id, rev). */
   rev: string
   description?: string
   /** Standard five-field cron expression (min hour day month weekday). */
@@ -57,11 +42,8 @@ export interface CronJob {
   catchUp: boolean
   targetConversationId?: number
   targetProfileId?: string
-  /** The planned time of the most recent claim (the schedule point, not delivery completion). */
   lastRunAt?: number
-  /** The next planned trigger time (epoch ms). */
   nextRunAt?: number
-  /** Explicit diagnostics of the most recent delivery failure. */
   lastError?: string
 }
 
@@ -71,79 +53,77 @@ export interface CronDoc {
 }
 
 interface CronDeps {
-  /** Delivery entry (shared dispatch helper: validates the Profile, resolves/creates the conversation, then enters the trigger pipeline). */
   dispatchTrigger(event: ExternalTriggerEnvelope, targetProfileId?: string): Promise<void>
 }
 
-/** Timer primitive abstraction (tests inject a controllable clock; defaults to Date.now/setTimeout+unref). */
-export interface CronClock {
-  now(): number
-  setTimeout(fn: () => void, ms: number): CronTimerHandle
-}
-
-interface CronTimerHandle {
-  clear(): void
-}
-
-/** Internal handle returned by register (for tests; business code must not rely on it). */
 interface CronRuntime {
-  /** Run one scheduling scan of all enabled jobs immediately (without waiting for timers). */
   tickNow(): Promise<void>
-  /** Wait for all in-flight ticks to finish (test teardown after driving timers). */
   settle(): Promise<void>
 }
 
 // ---------------------------------------------------------------------------
-// Pure functions: validation / time computation / doc parsing (exported for tests)
+// Validation, time computation & doc parsing
 // ---------------------------------------------------------------------------
 
-/** Validate a five-field cron expression and IANA timezone; invalid throws HelmxError (cron-parser messages pass through). */
+function failValidation(message: string, field: string, extra?: Record<string, unknown>): never {
+  throw new HelmxError('validation_error', message, 400, { field, ...extra })
+}
+
+function failCorrupt(message: string, details?: Record<string, unknown>): never {
+  throw new HelmxError('cron_doc_corrupt', `crons doc corrupted: ${message}`, 500, details)
+}
+
+/** Validate a five-field cron expression and IANA timezone. */
 export function assertValidSchedule(schedule: string, timezone: string): void {
   if (typeof schedule !== 'string' || schedule.trim().length === 0) {
-    throw new HelmxError('validation_error', 'cron schedule must not be empty (standard five fields: min hour day month weekday)', 400, {
-      field: 'schedule',
-    })
+    failValidation('cron schedule must not be empty (standard five fields: min hour day month weekday)', 'schedule')
   }
   const fields = schedule.trim().split(/\s+/)
   if (fields.length !== 5) {
-    throw new HelmxError(
-      'validation_error',
+    failValidation(
       `cron schedule must be standard five fields (min hour day month weekday); got ${fields.length}: ${schedule}`,
-      400,
-      { field: 'schedule', schedule },
+      'schedule',
+      { schedule },
     )
   }
   if (typeof timezone !== 'string' || timezone.length === 0) {
-    throw new HelmxError('validation_error', 'cron timezone must not be empty (an IANA zone name; defaults to UTC)', 400, {
-      field: 'timezone',
-    })
+    failValidation('cron timezone must not be empty (an IANA zone name; defaults to UTC)', 'timezone')
   }
   try {
-    // cron-parser defers invalid-timezone errors to evaluation (CronDate Invalid Date), and
-    // hasNext() silently returns false for a bad timezone -- the validation boundary must evaluate one point directly
+    // Evaluate `.next()` directly because cron-parser defers invalid-timezone errors until iteration.
     CronExpressionParser.parse(schedule, { tz: timezone }).next()
   } catch (err) {
-    throw new HelmxError(
-      'validation_error',
-      `invalid cron schedule: ${err instanceof Error ? err.message : String(err)}`,
-      400,
-      { field: 'schedule', schedule, timezone },
-    )
+    failValidation(`invalid cron schedule: ${err instanceof Error ? err.message : String(err)}`, 'schedule', {
+      schedule,
+      timezone,
+    })
   }
 }
 
-/** Compute the next planned time strictly after afterMs; undefined when there is no future point. */
+/** Compute the next planned time strictly after `afterMs`; undefined when no future point exists. */
 export function nextFireTime(schedule: string, timezone: string, afterMs: number): number | undefined {
   try {
-    const iter = CronExpressionParser.parse(schedule, { currentDate: new Date(afterMs), tz: timezone })
-    if (!iter.hasNext()) return undefined
-    return iter.next().getTime()
+    return parseNextCronTime(schedule, timezone, afterMs)
   } catch (err) {
     throw new HelmxError(
       'cron_next_time_unavailable',
       `failed to compute the next cron time (schedule=${schedule} tz=${timezone}): ${err instanceof Error ? err.message : String(err)}`,
       500,
       { schedule, timezone, afterMs },
+    )
+  }
+}
+
+/** Compute the next planned point after a fire, jumping past downtime instead of replaying interval by interval. */
+export function advanceAfterFire(schedule: string, timezone: string, fireAt: number, now: number): number | undefined {
+  try {
+    return advanceCronAfterFire(schedule, timezone, fireAt, now)
+  } catch (err) {
+    throw new HelmxError(
+      'cron_next_time_unavailable',
+      `failed to compute the next cron time (schedule=${schedule} tz=${timezone}): ${err instanceof Error ? err.message : String(err)}`,
+      500,
+      { schedule, timezone, afterMs: fireAt },
     )
   }
 }
@@ -161,20 +141,13 @@ export function normalizeCronInput(input: {
   targetProfileId?: string
 }): CronJob {
   if (typeof input.id !== 'string' || !ID_PATTERN.test(input.id)) {
-    throw new HelmxError(
-      'validation_error',
-      `invalid cron id (1..64 chars, alphanumeric _ - allowed, dots forbidden): ${String(input.id)}`,
-      400,
-      { field: 'id' },
-    )
+    failValidation(`invalid cron id (1..64 chars, alphanumeric _ - allowed, dots forbidden): ${String(input.id)}`, 'id')
   }
   if (typeof input.text !== 'string' || input.text.trim().length === 0) {
-    throw new HelmxError('validation_error', 'cron text must not be empty (the payload text delivered at trigger time)', 400, { field: 'text' })
+    failValidation('cron text must not be empty (the payload text delivered at trigger time)', 'text')
   }
   if (input.description !== undefined && (typeof input.description !== 'string' || input.description.length > 500)) {
-    throw new HelmxError('validation_error', 'cron description must be a string of at most 500 chars', 400, {
-      field: 'description',
-    })
+    failValidation('cron description must be a string of at most 500 chars', 'description')
   }
   const timezone = input.timezone ?? 'UTC'
   assertValidSchedule(input.schedule, timezone)
@@ -182,26 +155,22 @@ export function normalizeCronInput(input: {
   const hasConv = input.targetConversationId !== undefined
   const hasProfile = input.targetProfileId !== undefined
   if (hasConv && hasProfile) {
-    throw new HelmxError(
-      'validation_error',
+    failValidation(
       'targetConversationId and targetProfileId are mutually exclusive: direct conversation delivery and per-Profile resolution cannot both be set',
-      400,
-      { field: 'targetConversationId/targetProfileId' },
+      'targetConversationId/targetProfileId',
     )
   }
   if (hasConv && (!Number.isInteger(input.targetConversationId) || (input.targetConversationId as number) <= 0)) {
-    throw new HelmxError('validation_error', 'targetConversationId must be a positive integer conversation ID', 400, {
-      field: 'targetConversationId',
-    })
+    failValidation('targetConversationId must be a positive integer conversation ID', 'targetConversationId')
   }
   if (hasProfile && (typeof input.targetProfileId !== 'string' || input.targetProfileId.length === 0)) {
-    throw new HelmxError('validation_error', 'targetProfileId must be a non-empty string', 400, { field: 'targetProfileId' })
+    failValidation('targetProfileId must be a non-empty string', 'targetProfileId')
   }
   if (input.enabled !== undefined && typeof input.enabled !== 'boolean') {
-    throw new HelmxError('validation_error', 'enabled must be a boolean', 400, { field: 'enabled' })
+    failValidation('enabled must be a boolean', 'enabled')
   }
   if (input.catchUp !== undefined && typeof input.catchUp !== 'boolean') {
-    throw new HelmxError('validation_error', 'catchUp must be a boolean', 400, { field: 'catchUp' })
+    failValidation('catchUp must be a boolean', 'catchUp')
   }
 
   return {
@@ -218,102 +187,63 @@ export function normalizeCronInput(input: {
   }
 }
 
-/**
- * Strictly validate the persisted doc: bad data throws HelmxError explicitly (cron_doc_corrupt); never silently resets.
- * Unknown fields are ignored (forward evolution); known-field type/constraint errors must be rejected.
- */
+/** Strictly validate the persisted `crons` doc; corrupted data throws `cron_doc_corrupt`. */
 export function parseCronDoc(raw: unknown): CronDoc {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
-    throw new HelmxError('cron_doc_corrupt', 'crons doc corrupted: the root must be an object', 500, { actual: String(raw) })
+    failCorrupt('the root must be an object', { actual: String(raw) })
   }
   const doc = raw as Record<string, unknown>
-  if (doc.version !== 1) {
-    throw new HelmxError('cron_doc_corrupt', `crons doc corrupted: invalid version: ${String(doc.version)} (expected 1)`, 500, {
-      version: doc.version,
-    })
-  }
-  if (!Array.isArray(doc.jobs)) {
-    throw new HelmxError('cron_doc_corrupt', 'crons doc corrupted: jobs must be an array', 500, { actual: typeof doc.jobs })
-  }
+  if (doc.version !== 1) failCorrupt(`invalid version: ${String(doc.version)} (expected 1)`, { version: doc.version })
+  if (!Array.isArray(doc.jobs)) failCorrupt('jobs must be an array', { actual: typeof doc.jobs })
   const seen = new Set<string>()
-  const jobs = doc.jobs.map((rawJob, index) => parseCronJob(rawJob, index, seen))
-  return { version: 1, jobs }
+  return { version: 1, jobs: doc.jobs.map((rawJob, index) => parseCronJob(rawJob, index, seen)) }
 }
 
 function parseCronJob(rawJob: unknown, index: number, seen: Set<string>): CronJob {
   const where = `jobs[${index}]`
   if (rawJob === null || typeof rawJob !== 'object' || Array.isArray(rawJob)) {
-    throw new HelmxError('cron_doc_corrupt', `crons doc corrupted: ${where} must be an object`, 500, { index })
+    failCorrupt(`${where} must be an object`, { index })
   }
   const job = rawJob as Record<string, unknown>
   if (typeof job.id !== 'string' || !ID_PATTERN.test(job.id)) {
-    throw new HelmxError('cron_doc_corrupt', `crons doc corrupted: invalid ${where}.id: ${String(job.id)}`, 500, { index })
+    failCorrupt(`invalid ${where}.id: ${String(job.id)}`, { index })
   }
+  const id = job.id
   if (typeof job.rev !== 'string' || job.rev.length === 0) {
-    throw new HelmxError('cron_doc_corrupt', `crons doc corrupted: ${where} (${job.id}) is missing the creation generation rev`, 500, {
-      index,
-      id: job.id,
-    })
+    failCorrupt(`${where} (${id}) is missing the creation generation rev`, { index, id })
   }
-  if (seen.has(job.id)) {
-    throw new HelmxError('cron_doc_corrupt', `crons doc corrupted: duplicate ${where}.id: ${job.id}`, 500, { index })
-  }
-  seen.add(job.id)
+  if (seen.has(id)) failCorrupt(`duplicate ${where}.id: ${id}`, { index })
+  seen.add(id)
   if (typeof job.schedule !== 'string' || typeof job.text !== 'string') {
-    throw new HelmxError('cron_doc_corrupt', `crons doc corrupted: ${where} (${job.id}) is missing schedule/text`, 500, {
-      index,
-      id: job.id,
-    })
+    failCorrupt(`${where} (${id}) is missing schedule/text`, { index, id })
   }
   if (typeof job.timezone !== 'string' || job.timezone.length === 0) {
-    throw new HelmxError('cron_doc_corrupt', `crons doc corrupted: ${where} (${job.id}) has an invalid timezone`, 500, {
-      index,
-      id: job.id,
-    })
+    failCorrupt(`${where} (${id}) has an invalid timezone`, { index, id })
   }
   if (typeof job.enabled !== 'boolean' || typeof job.catchUp !== 'boolean') {
-    throw new HelmxError('cron_doc_corrupt', `crons doc corrupted: ${where} (${job.id}) enabled/catchUp must be booleans`, 500, {
-      index,
-      id: job.id,
-    })
+    failCorrupt(`${where} (${id}) enabled/catchUp must be booleans`, { index, id })
   }
   for (const field of ['description', 'targetProfileId', 'lastError'] as const) {
     if (job[field] !== undefined && typeof job[field] !== 'string') {
-      throw new HelmxError('cron_doc_corrupt', `crons doc corrupted: ${where} (${job.id}) has an invalid ${field} type`, 500, {
-        index,
-        id: job.id,
-        field,
-      })
+      failCorrupt(`${where} (${id}) has an invalid ${field} type`, { index, id, field })
     }
   }
   if (
     job.targetConversationId !== undefined &&
     (!Number.isInteger(job.targetConversationId) || (job.targetConversationId as number) <= 0)
   ) {
-    throw new HelmxError('cron_doc_corrupt', `crons doc corrupted: ${where} (${job.id}) has an invalid targetConversationId`, 500, {
-      index,
-      id: job.id,
-    })
+    failCorrupt(`${where} (${id}) has an invalid targetConversationId`, { index, id })
   }
   if (job.targetConversationId !== undefined && job.targetProfileId !== undefined) {
-    throw new HelmxError(
-      'cron_doc_corrupt',
-      `crons doc corrupted: ${where} (${job.id}) targetConversationId and targetProfileId are mutually exclusive`,
-      500,
-      { index, id: job.id },
-    )
+    failCorrupt(`${where} (${id}) targetConversationId and targetProfileId are mutually exclusive`, { index, id })
   }
   for (const field of ['lastRunAt', 'nextRunAt'] as const) {
     if (job[field] !== undefined && (typeof job[field] !== 'number' || !Number.isFinite(job[field]))) {
-      throw new HelmxError('cron_doc_corrupt', `crons doc corrupted: ${where} (${job.id}) ${field} must be finite numbers`, 500, {
-        index,
-        id: job.id,
-        field,
-      })
+      failCorrupt(`${where} (${id}) ${field} must be finite numbers`, { index, id, field })
     }
   }
   return {
-    id: job.id,
+    id,
     rev: job.rev,
     ...(job.description !== undefined ? { description: job.description as string } : {}),
     schedule: job.schedule,
@@ -330,35 +260,21 @@ function parseCronJob(rawJob: unknown, index: number, seen: Set<string>): CronJo
 }
 
 // ---------------------------------------------------------------------------
-// Pure functions: scheduling decisions and envelope construction (exported for tests)
+// Scheduling decision & envelope construction
 // ---------------------------------------------------------------------------
 
-/** One job's decision within a tick. */
 type TickDecision =
   | { action: 'fire'; at: number }
   | { action: 'skip-to-future'; from: number; to: number }
   | { action: 'noop' }
 
-/**
- * Decide a job's action at now:
- * - disabled / nextRunAt missing or in the future: noop;
- * - due (nextRunAt <= now):
- *   - only one interval missed (the next point after nextRunAt is still in the future, incl. on-time firing) -> fire
- *     that planned point (catchUp semantics likewise fire);
- *   - multiple intervals missed (downtime) and catchUp=false -> jump to the first point after now;
- *   - multiple intervals missed and catchUp=true -> still catch up only the most recent one (at=nextRunAt),
- *     then advanceAfterFire jumps to the future; history is not replayed interval by interval.
- */
 export function decideTick(job: CronJob, now: number): TickDecision {
-  if (!job.enabled) return { action: 'noop' }
+  if (!job.enabled || job.nextRunAt === undefined || job.nextRunAt > now) return { action: 'noop' }
   const next = job.nextRunAt
-  if (next === undefined || next > now) return { action: 'noop' }
   const subsequent = nextFireTime(job.schedule, job.timezone, next)
-  const missedMultiple = subsequent !== undefined && subsequent <= now
-  if (!missedMultiple || job.catchUp) return { action: 'fire', at: next }
+  if (subsequent === undefined || subsequent > now || job.catchUp) return { action: 'fire', at: next }
   const future = nextFireTime(job.schedule, job.timezone, now)
   if (future === undefined || future <= now) {
-    // nextFireTime strictly increases, so this is theoretically unreachable; defensively error explicitly instead of silence
     throw new HelmxError(
       'cron_schedule_stalled',
       `cron job ${job.id} cannot jump to a future point (schedule=${job.schedule} tz=${job.timezone})`,
@@ -369,19 +285,6 @@ export function decideTick(job: CronJob, now: number): TickDecision {
   return { action: 'skip-to-future', from: next, to: future }
 }
 
-/**
- * The next planned point after a fire: candidate = the first point after fireAt; if it still falls before now
- * (multiple intervals missed during downtime), jump to the first point after now -- catchUp runs once only,
- * never replaying history interval by interval.
- */
-export function advanceAfterFire(schedule: string, timezone: string, fireAt: number, now: number): number | undefined {
-  const candidate = nextFireTime(schedule, timezone, fireAt)
-  if (candidate === undefined) return undefined
-  if (candidate > now) return candidate
-  return nextFireTime(schedule, timezone, now)
-}
-
-/** Envelope construction (pure): source is fixed 'cron:<id>'; the id embeds the planned point (stable per point). */
 export function buildCronEnvelope(job: CronJob, fireAt: number): ExternalTriggerEnvelope {
   return {
     id: `cron:${job.id}:${fireAt}`,
@@ -392,7 +295,6 @@ export function buildCronEnvelope(job: CronJob, fireAt: number): ExternalTrigger
   }
 }
 
-/** Clear the lastError field (cannot assign undefined: the doc storage rejects undefined-valued keys). */
 function clearLastError(job: CronJob): CronJob {
   const { lastError: _ignored, ...rest } = job
   void _ignored
@@ -400,63 +302,37 @@ function clearLastError(job: CronJob): CronJob {
 }
 
 // ---------------------------------------------------------------------------
-// Registration entry
+// Scheduler registration
 // ---------------------------------------------------------------------------
 
-/**
- * Register cron scheduling: the public doc + 4 actions (cron_list/create/delete/trigger) +
- * the timer service. The main plugin calls it inside definePlugin; deps.dispatchTrigger is the shared
- * delivery helper (validates the Profile, resolves/creates the conversation, then enters
- * ctx.host.dispatchTrigger -- already defanged by the kernel).
- */
 export function registerCron(ctx: HelmxPluginContext, deps: CronDeps): CronRuntime {
-  return createCronScheduler(ctx, deps, defaultClock())
+  return createCronScheduler(ctx, deps, defaultSchedulerClock())
 }
 
-/** Internal test entry: controllable clock injection (runtime has no injection need; defaults to the real clock). */
 export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clock: CronClock): CronRuntime {
   const doc = ctx.doc<CronDoc>(CRON_DOC_NAME, { version: 1, jobs: [] }, { public: true })
-
   let stopping = false
-  /** single-flight: job id -> in-flight scheduling Promise. */
   const inflight = new Map<string, Promise<void>>()
-  const timers = new Map<string, CronTimerHandle>()
+  const timers = new Map<string, TimerHandle>()
 
-  const logDiagnostic = (message: string): void => {
-    console.error(`[cron] ${message}`)
-  }
-
-  /** Explicit error reporting: a notification event + stderr (each best-effort; failures do not recurse). */
+  const log = (message: string): void => console.error(`[cron] ${message}`)
   const emitError = (title: string, detail: unknown): void => {
     const message = detail instanceof Error ? detail.message : String(detail)
     try {
       ctx.host.emitEvent('notification', { type: 'notification', level: 'error', title, body: `[cron] ${message}` })
     } catch (eventErr) {
-      logDiagnostic(`notification event publish failed: ${eventErr instanceof Error ? eventErr.message : String(eventErr)}`)
+      log(`notification event publish failed: ${eventErr instanceof Error ? eventErr.message : String(eventErr)}`)
     }
-    logDiagnostic(`${title}：${message}`)
+    log(`${title}：${message}`)
   }
 
-  /** Read and strictly validate the doc; bad data throws explicitly, never silently resetting. */
   const readDoc = (): CronDoc => parseCronDoc(doc.get())
-
-  /** Write back + really flush (doc.flush drains this store's queued writes); persistence failures throw explicitly. */
   const writeDoc = async (next: CronDoc): Promise<void> => {
     doc.set(next)
     await doc.flush()
   }
 
-  /**
-   * Write a single job back by (id, rev) and flush: a missing id or rev mismatch (rebuilt after delete with a new
-   * generation) refuses the write and returns false -- an old tick's claim/lastError never pollutes or revives a
-   * new job. The read-modify-write completes within the synchronous segment (no await before doc.set),
-   * naturally serialized within the event loop.
-   */
-  const tryUpdateJob = async (
-    id: string,
-    rev: string,
-    mutate: (job: CronJob) => CronJob,
-  ): Promise<boolean> => {
+  const tryUpdateJob = async (id: string, rev: string, mutate: (job: CronJob) => CronJob): Promise<boolean> => {
     const current = readDoc()
     const index = current.jobs.findIndex((j) => j.id === id)
     if (index < 0 || current.jobs[index]!.rev !== rev) return false
@@ -466,19 +342,8 @@ export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clo
     return true
   }
 
-  /**
-   * One scheduling pass for one job (single-flight guaranteed by tickJob).
-   * Order: persistent claim (advance lastRunAt/nextRunAt + flush) -> dispatch;
-   * a failed claim flush never delivers (otherwise the crash window duplicates deliveries).
-   * Invariant: the timer is consumed by timers.delete at the start of the fire callback; every exit of this
-   * method (incl. escaping exceptions) must reschedule -- guaranteed uniformly by finally (decision failures take
-   * the backoff floor, preventing a hot loop on an expired nextRunAt); otherwise one transient evaluation/flush
-   * exception permanently stalls the job (a single notification, no recovery before restart). Deleted/disabled/
-   * shutting-down jobs naturally do not schedule as scheduleJob re-reads the doc; delete/disable semantics are unaffected.
-   */
   const runJobTick = async (id: string): Promise<void> => {
     if (stopping) return
-    // When the decision-failure path already reschedules with backoff, finally does not reschedule again by nextRunAt.
     let rescheduledByBackoff = false
     try {
       let job: CronJob | undefined
@@ -495,54 +360,39 @@ export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clo
       }
       if (decision.action === 'noop') return
       if (decision.action === 'skip-to-future') {
-        // catchUp=false: missed intervals jump straight to the future; also claim+flush against restart-jump-back.
-        // lastRunAt stays (no real delivery happened; no fabricated run record).
-        // When tryUpdateJob throws (flush failure), the exception propagates and the timer callback notifies as a
-        // backstop; the doc.set mirror has advanced, and finally reschedules by the next point -- the job does not stall.
         await tryUpdateJob(id, job.rev, (j) => ({ ...j, nextRunAt: decision.to }))
         return
       }
-      // fire: claim (clear lastError, record lastRunAt, advance nextRunAt) -> flush -> dispatch
+
       const fireAt = decision.at
       let claimed: boolean
       try {
-        claimed = await tryUpdateJob(
-          id,
-          job.rev,
-          (j) =>
-            clearLastError({
-              ...j,
-              lastRunAt: fireAt,
-              nextRunAt: advanceAfterFire(j.schedule, j.timezone, fireAt, clock.now()),
-            }),
+        claimed = await tryUpdateJob(id, job.rev, (j) =>
+          clearLastError({
+            ...j,
+            lastRunAt: fireAt,
+            nextRunAt: advanceAfterFire(j.schedule, j.timezone, fireAt, clock.now()),
+          }),
         )
       } catch (err) {
-        // Claim not flushed: never deliver (otherwise the crash window duplicates deliveries)
         emitError(`cron job ${id} claim persistence failed; not delivering this time`, err)
         return
       }
       if (!claimed || stopping) return
-      // The task may be deleted or rebuilt while flush yields; re-check the creation generation before delivering.
       if (!readDoc().jobs.some((current) => current.id === id && current.rev === job.rev && current.enabled)) return
+
       try {
         await deps.dispatchTrigger(buildCronEnvelope(job, fireAt), job.targetProfileId)
       } catch (err) {
-        // Delivery failure: write lastError + notification honestly; no retry within this point; the next point proceeds normally.
-        // (id, rev) check: if the job was deleted and rebuilt during dispatch, never write the old failure onto the new job.
         const message = err instanceof Error ? err.message : String(err)
         try {
           const written = await tryUpdateJob(id, job.rev, (j) => ({
             ...j,
             lastError: `delivery failed @${new Date(fireAt).toISOString()}: ${message}`,
           }))
-          if (!written) {
-            logDiagnostic(`cron job ${id} delivery failed, but the job was deleted/rebuilt; lastError not written back (generation changed)`)
-          }
+          if (!written) log(`cron job ${id} delivery failed, but generation changed; lastError not written back`)
         } catch (writeErr) {
-          // A lastError flush failure does not mask the original delivery failure (rescheduling is guaranteed by finally; nothing escapes).
-          logDiagnostic(
-            `cron job ${id} delivery failed and the lastError flush also failed: ${writeErr instanceof Error ? writeErr.message : String(writeErr)}`,
-          )
+          log(`cron job ${id} lastError flush also failed: ${writeErr instanceof Error ? writeErr.message : String(writeErr)}`)
         }
         emitError(`cron job ${id} delivery failed`, err)
       }
@@ -551,7 +401,6 @@ export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clo
     }
   }
 
-  /** single-flight: concurrent ticks of one job run only one; later arrivals reuse the in-flight Promise. */
   const tickJob = (id: string): Promise<void> => {
     const existing = inflight.get(id)
     if (existing) return existing
@@ -560,8 +409,6 @@ export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clo
     return task
   }
 
-  /** Reschedule one job's timer; disabled/deleted jobs do not schedule; notBefore is the lower bound of the trigger time
-   * (for decision-failure backoff, preventing a hot loop on an expired nextRunAt). */
   const scheduleJob = (id: string, notBefore?: number): void => {
     if (stopping) return
     timers.get(id)?.clear()
@@ -584,17 +431,22 @@ export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clo
       )
       return
     }
-    const at = notBefore === undefined ? job.nextRunAt : Math.max(job.nextRunAt, notBefore)
-    const delayMs = Math.max(0, at - clock.now())
-    // Ultra-long delays wake within the safe window first, then reschedule (an undued decision is a noop reschedule); unref'd so it never blocks exit
-    const handle = clock.setTimeout(() => {
-      timers.delete(id)
-      void tickJob(id).catch((err) => emitError(`cron job ${id} tick exception`, err))
-    }, Math.min(delayMs, MAX_TIMEOUT_MS))
-    timers.set(id, handle)
+    const targetAt = notBefore === undefined ? job.nextRunAt : Math.max(job.nextRunAt, notBefore)
+    timers.set(
+      id,
+      armChunkedTimer(clock, targetAt, () => {
+        timers.delete(id)
+        void tickJob(id).catch((err) => emitError(`cron job ${id} tick exception`, err))
+      }),
+    )
   }
 
-  // ---- actions: HTTP / CLI / Agent Tool / Workflow -- equal on five ends ----
+  const idInputSchema = {
+    type: 'object',
+    properties: { id: { type: 'string', pattern: '^[A-Za-z0-9_-]{1,64}$' } },
+    required: ['id'],
+    additionalProperties: false,
+  } as const
 
   ctx.action({
     id: 'cron_list',
@@ -609,7 +461,7 @@ export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clo
       additionalProperties: false,
     },
     cli: { command: ['cron', 'list'] },
-    handler: () => ({ jobs: readDoc().jobs.map((job) => jsonClone(job)) }),
+    handler: () => ({ jobs: readDoc().jobs.map((job) => structuredClone(job)) }),
   })
 
   ctx.action({
@@ -641,8 +493,7 @@ export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clo
     cli: { command: ['cron', 'create'] },
     handler: async (input: Record<string, unknown>) => {
       const job = normalizeCronInput(input as Parameters<typeof normalizeCronInput>[0])
-      const now = clock.now()
-      const nextRunAt = nextFireTime(job.schedule, job.timezone, now)
+      const nextRunAt = nextFireTime(job.schedule, job.timezone, clock.now())
       if (nextRunAt === undefined) {
         throw new HelmxError(
           'cron_no_next_time',
@@ -658,7 +509,7 @@ export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clo
       const created: CronJob = { ...job, nextRunAt }
       await writeDoc({ version: 1, jobs: [...current.jobs, created] })
       if (created.enabled) scheduleJob(created.id)
-      return { job: jsonClone(created) }
+      return { job: structuredClone(created) }
     },
   })
 
@@ -666,12 +517,7 @@ export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clo
     id: 'cron_delete',
     description: 'Delete a cron job (in-flight deliveries end naturally; nothing revives)',
     exposeToPrompt: false,
-    inputSchema: {
-      type: 'object',
-      properties: { id: { type: 'string', pattern: '^[A-Za-z0-9_-]{1,64}$' } },
-      required: ['id'],
-      additionalProperties: false,
-    },
+    inputSchema: idInputSchema,
     outputSchema: {
       type: 'object',
       properties: { deleted: { type: 'boolean' } },
@@ -684,8 +530,6 @@ export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clo
       if (!current.jobs.some((j) => j.id === input.id)) {
         throw new HelmxError('not_found', `cron job does not exist: ${input.id}`, 404, { id: input.id })
       }
-      // Stop the timer first, then persist the deletion; a concurrent tick's (id, rev) check silently ends on a
-      // generation change -- a deleted job can never revive
       timers.get(input.id)?.clear()
       timers.delete(input.id)
       await writeDoc({ version: 1, jobs: current.jobs.filter((j) => j.id !== input.id) })
@@ -697,12 +541,7 @@ export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clo
     id: 'cron_trigger',
     description: 'Manually trigger a cron job once now (a real delivery; failures throw without affecting later scheduled runs)',
     exposeToPrompt: false,
-    inputSchema: {
-      type: 'object',
-      properties: { id: { type: 'string', pattern: '^[A-Za-z0-9_-]{1,64}$' } },
-      required: ['id'],
-      additionalProperties: false,
-    },
+    inputSchema: idInputSchema,
     outputSchema: {
       type: 'object',
       properties: { triggered: { type: 'boolean' } },
@@ -711,46 +550,35 @@ export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clo
     },
     cli: { command: ['cron', 'trigger'] },
     handler: async (input: { id: string }) => {
-      // Manual triggering only reads a snapshot + delivers for real, writing no doc: no claim/lastError write-back,
-      // hence no delete+create same-id pollution surface; the deletion race is backstopped by the read-time existence check.
       const job = readDoc().jobs.find((j) => j.id === input.id)
       if (!job) throw new HelmxError('not_found', `cron job does not exist: ${input.id}`, 404, { id: input.id })
-      const envelope = { ...buildCronEnvelope(job, clock.now()), id: `cron:${job.id}:manual:${randomUUID()}` }
-      await deps.dispatchTrigger(envelope, job.targetProfileId)
+      await deps.dispatchTrigger(
+        { ...buildCronEnvelope(job, clock.now()), id: `cron:${job.id}:manual:${randomUUID()}` },
+        job.targetProfileId,
+      )
       return { triggered: true }
     },
   })
 
-  // ---- service: timer lifecycle (stop cancels timers and waits for in-flight deliveries) ----
-
   ctx.service({
     id: 'cron-scheduler',
-    liveTasks() {
-      return [...inflight.keys()].map((id) => `cron-dispatch:${id}`)
-    },
-    /** Persistent occupancy declaration: enabled cron jobs are occupancy items of the disable precheck (plugin_in_use). */
-    inUse() {
-      const jobs = parseCronDoc(doc.get()).jobs.filter((j) => j.enabled)
-      return jobs.map((j) => ({
-        kind: 'cron_job',
-        id: j.id,
-        label: `cron job "${j.id}" (${j.schedule})`,
-      }))
-    },
+    liveTasks: () => [...inflight.keys()].map((id) => `cron-dispatch:${id}`),
+    inUse: () =>
+      parseCronDoc(doc.get())
+        .jobs.filter((j) => j.enabled)
+        .map((j) => ({ kind: 'cron_job', id: j.id, label: `cron job "${j.id}" (${j.schedule})` })),
     async start() {
       stopping = false
       try {
         const current = readDoc()
-        // Validate all plans at the startup boundary; on failure publish no timer and never pretend enablement succeeded.
         for (const job of current.jobs) {
           assertValidSchedule(job.schedule, job.timezone)
           if (job.enabled && job.nextRunAt === undefined) {
-            throw new HelmxError('cron_doc_corrupt', `enabled cron job ${job.id} is missing nextRunAt`, 500, { id: job.id })
+            failCorrupt(`enabled cron job ${job.id} is missing nextRunAt`, { id: job.id })
           }
         }
         const now = clock.now()
         for (const job of current.jobs) {
-          // Restart and ordinary timer jitter handled separately: catchUp=false catches up none of the missed points.
           if (job.enabled && !job.catchUp && job.nextRunAt !== undefined && job.nextRunAt < now) {
             const nextRunAt = nextFireTime(job.schedule, job.timezone, now)
             if (nextRunAt === undefined) {
@@ -769,10 +597,7 @@ export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clo
       stopping = true
       for (const handle of timers.values()) handle.clear()
       timers.clear()
-      // Wait for in-flight dispatches to finish within bounds (liveTasks already made the host 409-block before disable;
-      // this is a backstop wait, eliminating post-stop deliveries)
-      const pending = [...inflight.values()]
-      if (pending.length > 0) await Promise.allSettled(pending)
+      if (inflight.size > 0) await Promise.allSettled([...inflight.values()])
     },
   })
 
@@ -782,31 +607,10 @@ export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clo
       await Promise.all(current.jobs.filter((j) => j.enabled).map((j) => tickJob(j.id)))
     },
     async settle() {
-      // Loop-wait until nothing is in flight (yielding one macrotask per round, covering the chained async segments
-      // dispatch -> lastError write-back -> reschedule in failure paths)
       for (let i = 0; i < 100 && inflight.size > 0; i++) {
         await Promise.allSettled([...inflight.values()])
         await new Promise((resolve) => setImmediate(resolve))
       }
-    },
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Utilities
-// ---------------------------------------------------------------------------
-
-function jsonClone<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value)) as T
-}
-
-function defaultClock(): CronClock {
-  return {
-    now: () => Date.now(),
-    setTimeout: (fn, ms) => {
-      const timer = setTimeout(fn, ms)
-      timer.unref?.()
-      return { clear: () => clearTimeout(timer) }
     },
   }
 }

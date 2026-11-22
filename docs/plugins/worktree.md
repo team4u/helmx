@@ -21,9 +21,16 @@
 
 `cleanup_worktree` 动作对会话目标有显式冲突校验：输入 `conversationId` 与调用上下文同时存在且不一致时显式 `400 validation_error`。无任何显式选择器时以当前会话为选择器。
 
+## 前端贡献
+
+本插件通过 `ctx.ui.slot` 向 `builtin:workflow` 贡献两处 UI 插槽（客户端源码位于 `packages/plugins/src/worktree/client/`）：
+
+- **`worktree-inspect`**（目标 `builtin:workflow/worktree-inspect`）：可折叠工作树只读改动概览（调用 `inspect_worktree` 与「让主会话审阅并合入」请求生成）；
+- **`worktree-cleanup`**（目标 `builtin:workflow/worktree-cleanup`）：受管工作树清理按钮（调用 `cleanup_worktree`）。
+
 ## 停用语义
 
-- 停用后 `cleanup_worktree` 工具与 `worktrees` CLI 即时消失，不留幻影提示词。
+- 停用后 `cleanup_worktree` 工具、`worktrees` CLI 与上述前端工作树检视/清理插槽即时消失，不留幻影提示词或失效按钮。
 - 仍有活跃 `ManagedWorktreeHold` 时停用被拒（`409 plugin_in_use`）；`--force` 可越过，磁盘登记保留。
 - 停用期间工作树登记与租约不清除，重新启用后 cleanup 仍可定位。此时请求 `isolation: 'worktree'` 在内核边界显式失败（`unsupported_runtime`），不静默降级；非隔离的 `subagent` 派生不受影响。
 
@@ -36,7 +43,7 @@
 | 内容 | 位置 |
 | :--- | :--- |
 | 插件入口（组装与文档声明） | `packages/plugins/src/worktree.ts` |
-| 隔离 / 分配 / 清理 / 检视 / 动作 / 工具 | `packages/plugins/src/worktree/`（`isolation*.ts`、`worktree*.ts`、`actions.ts`、`tools.ts`） |
+| 隔离 / 分配 / 清理 / 检视 / 动作 / 工具 / 前端插槽 | `packages/plugins/src/worktree/`（`isolation*.ts`、`worktree*.ts`、`actions.ts`、`tools.ts`、`client/`） |
 | 共享契约（meta 命名空间与执行描述） | `packages/plugins/src/contracts.ts` |
 | 主要测试 | `packages/plugins/test/native-worktree.test.ts`、`worktree-process-usage.test.ts`、`contracts.test.ts`、`packages/hub/test/worktree-inspect.integration.test.ts`、`worktree-runtime.integration.test.ts` |
 

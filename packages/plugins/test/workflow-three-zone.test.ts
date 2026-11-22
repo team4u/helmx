@@ -71,6 +71,7 @@ const { createRoot } = ReactDOMClient
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const WORKFLOW_CLIENT_DIR = resolve(__dirname, '../src/workflow/client')
+const WORKTREE_CLIENT_DIR = resolve(__dirname, '../src/worktree/client')
 
 interface WorkflowClientModule {
   WorkflowActiveTray: React.ComponentType<Record<string, unknown>>
@@ -84,8 +85,14 @@ interface WorkflowClientModule {
   [PLUGIN_CLIENT_CSS_EXPORT]?: string
 }
 
+interface WorktreeSlotsModule {
+  WorktreeInspectSlot: React.ComponentType<Record<string, unknown>>
+  WorktreeCleanupSlot: React.ComponentType<Record<string, unknown>>
+}
+
 let tempDir: string
 let mod: WorkflowClientModule
+let wtSlots: WorktreeSlotsModule
 
 interface HostStubLog {
   actions: Array<{ pluginId: string; actionId: string; input: unknown }>
@@ -212,13 +219,6 @@ function createHostHarness(init: {
       if (init.onAction !== undefined) {
         return await init.onAction(pluginId, actionId, input)
       }
-      if (actionId === 'save') {
-        const fromRunId = (input as { fromRunId?: string })?.fromRunId ?? 'wf_x'
-        return {
-          created: true,
-          workflow: { name: `saved-${fromRunId}`, path: `/tmp/${fromRunId}.js`, updatedAt: 1, size: 10 },
-        }
-      }
       return { ok: true }
     },
     submitConversationInput: async () => undefined,
@@ -242,8 +242,26 @@ function createHostHarness(init: {
       log.loadDetailCalls.push(convId)
     },
     slots: {
-      collectItems: () => [],
-      renderItem: () => null,
+      collectItems: (qualified) => {
+        if (qualified === 'builtin:workflow/worktree-inspect' && wtSlots?.WorktreeInspectSlot !== undefined) {
+          return [{ pluginId: 'builtin:worktree', contributionId: 'worktree-inspect', spec: { id: 'worktree-inspect', target: qualified, client: { module: 'slots.tsx', export: 'WorktreeInspectSlot' } } }]
+        }
+        if (qualified === 'builtin:workflow/worktree-cleanup' && wtSlots?.WorktreeCleanupSlot !== undefined) {
+          return [{ pluginId: 'builtin:worktree', contributionId: 'worktree-cleanup', spec: { id: 'worktree-cleanup', target: qualified, client: { module: 'slots.tsx', export: 'WorktreeCleanupSlot' } } }]
+        }
+        return []
+      },
+      renderItem: (item, options) => {
+        const Component =
+          item.contributionId === 'worktree-inspect'
+            ? wtSlots?.WorktreeInspectSlot
+            : item.contributionId === 'worktree-cleanup'
+              ? wtSlots?.WorktreeCleanupSlot
+              : undefined
+        if (Component === undefined) return null
+        const wtCtx = SDK.createPluginClientContext(port, 'builtin:worktree', options.conversationId ?? init.conversationId)
+        return e(SDK.PluginClientContext.Provider, { value: wtCtx }, e(Component, options.slotProps ?? {}))
+      },
     },
     markdown: {
       view: ({ text }) => e('div', { 'data-testid': 'markdown-view' }, text),
@@ -333,6 +351,10 @@ describe('Workflow 三区零重复与无损呈现', () => {
       ),
     )
     mod = Object.assign({}, ...mods) as WorkflowClientModule
+    const wtBundle = await compilePluginClientModule('builtin:worktree', WORKTREE_CLIENT_DIR, 'slots.tsx', tempDir)
+    wtSlots = (await import(
+      `data:text/javascript;base64,${Buffer.from(wtBundle.code, 'utf8').toString('base64')}#three-zone-wt`,
+    )) as unknown as WorktreeSlotsModule
   })
 
   after(async () => {
@@ -345,7 +367,6 @@ describe('Workflow 三区零重复与无损呈现', () => {
       conversationId: 1,
       status: 'running',
       kind: 'workflow',
-      syncForeground: true,
       createdAt: 1_700_000_000_000,
       updatedAt: 1_700_000_005_000,
       nodes: [
@@ -421,14 +442,15 @@ describe('Workflow 三区零重复与无损呈现', () => {
       const list = mounted.container.querySelector('.workflow-active-tray-list')
       assert.ok(list !== null, '展开后应显示并发在途任务列表')
 
-      // 验证「转入后台」与「中止」按钮调用正确 action
+      // 验证「中止」按钮调用正确 action（不渲染已移除的 Move to background）
       const buttons = [...list.querySelectorAll('button')]
-      const detachBtn = buttons.find((b) => b.textContent?.includes('Move to background'))
-      assert.ok(detachBtn !== undefined, '前台同步 human 会话应允许转入后台')
+      assert.equal(buttons.some((b) => b.textContent?.includes('Move to background')), false)
+      const abortBtn = buttons.find((b) => b.textContent?.includes('Abort'))
+      assert.ok(abortBtn !== undefined, '运行中工作流应提供中止按钮')
       await act(async () => {
-        detachBtn.click()
+        abortBtn.click()
       })
-      assert.equal(harness.log.actions.at(-1)?.actionId, 'detach')
+      assert.equal(harness.log.actions.at(-1)?.actionId, 'abort')
       assert.deepEqual(harness.log.actions.at(-1)?.input, { runId: 'wf_tray_1' })
 
       const wbBtn = [...mounted.container.querySelectorAll('.workflow-active-tray-bar button')].find((b) =>
@@ -933,20 +955,14 @@ describe('Workflow 三区零重复与无损呈现', () => {
       assert.ok(!wbMount.container.textContent?.includes('remote-b:/srv/standalone'), '工作台独立子会话卡不重复展示对话详情中的 nodeId:cwd')
       assert.ok(wbMount.container.textContent?.includes('从 entries 提取的任务首行标题'), '工作台 SubagentLiveCard 应从 detail.entries 提取任务标题')
 
-      // 低频操作（重放 / 保存为工作流）收纳入 Radix Popover `···`
+      // 低频操作（重放）收纳入 Radix Popover `···`
       const moreBtn = focusedWrap.querySelector('button[aria-label="More actions"]') as HTMLButtonElement | null
       assert.ok(moreBtn !== null, '工作流卡应有 ··· 更多操作 Popover 按钮')
-      assert.equal(focusedWrap.textContent?.includes('Save as workflow'), false, '收起态不应铺满低频按钮')
       act(() => {
         moreBtn.click()
       })
-      const saveBtn = [...focusedWrap.querySelectorAll('button')].find((b) => b.textContent?.includes('Save as workflow'))
-      assert.ok(saveBtn !== undefined, '打开更多操作 Popover 后应包含「保存为工作流」')
-      await act(async () => {
-        saveBtn.click()
-      })
-      assert.equal(harness.log.actions.at(-1)?.actionId, 'save')
-      assert.deepEqual(harness.log.actions.at(-1)?.input, { fromRunId: 'wf_target' })
+      const replayBtn = [...focusedWrap.querySelectorAll('button')].find((b) => b.textContent?.includes('Replay'))
+      assert.ok(replayBtn !== undefined, '打开更多操作 Popover 后应包含「重放」')
     } finally {
       wbMount.unmount()
     }

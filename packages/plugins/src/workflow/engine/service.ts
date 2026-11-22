@@ -64,7 +64,6 @@ import { isAutoRecoverEnvDisabled } from '../config.js'
 import { StartupRecovery } from './service-recovery.js'
 import { startWorkflowRun } from './service-run.js'
 import { startBackgroundAgent as launchBackgroundAgent } from './background-agent-runner.js'
-import { detachForegroundRun as detachRun, waitForegroundRun } from './run-detach.js'
 
 export {
   BUILTIN_ENV_EXEC_PLUGIN,
@@ -109,10 +108,7 @@ export class WorkflowService {
       this.externalRuntimeReadyGate = Promise.resolve()
     }
     this.runs = new RunStore({ dataDir: options.dataDir, state: options.state })
-    this.library = new WorkflowLibrary({
-      dataDir: options.dataDir,
-      loadRunRecord: (runId) => this.runs.load(runId),
-    })
+    this.library = new WorkflowLibrary({ dataDir: options.dataDir })
     this.cancellation = new CancellationTracker({
       active: this.active,
       parentConversationOf: (id) => this.host.getConversation(id).parentConversationId,
@@ -190,7 +186,7 @@ export class WorkflowService {
     return this.library.get(name)
   }
 
-  /** Save a workflow definition (exactly one of script / fromRunId; boundary validation and atomic writes in library-store.save). */
+  /** Save a workflow definition from script source (boundary validation and atomic writes in library-store.save). */
   save(request: WorkflowSaveRequest): WorkflowSaveResult {
     return this.library.save(request)
   }
@@ -204,13 +200,11 @@ export class WorkflowService {
 
   /**
    * Start a workflow run: executes in the background, returns the summary immediately (no waiting).
-   * context.foreground=true marks a foreground synchronous run (record.syncForeground, detachable
-   * to the background).
    * @throws HelmxError validation_error / not_found / workflow_action_uncertain / journal_read_failed。
    */
   async run(
     request: WorkflowRunRequest,
-    context?: { parentToolCallId?: string; notifyParentOnSettle?: boolean; foreground?: boolean },
+    context?: { parentToolCallId?: string; notifyParentOnSettle?: boolean },
   ): Promise<WorkflowRunSummary> {
     return startWorkflowRun(this.ctx, request, context)
   }
@@ -219,9 +213,7 @@ export class WorkflowService {
 
   /**
    * Start a background single-subagent: reuses the run record / persistence / abort / wait / getRun /
-   * onRunSettled / restart recovery, but bypasses the DSL engine (timing discipline in background-agent-runner).
-   * options.foreground=true is the foreground synchronous mode (the synchronous subagent tool): the record
-   * marks syncForeground, notifyParentOnSettle defaults to false, and the parent signal binds until detach/terminal.
+   * onRunSettled / restart recovery, bypassing the DSL engine.
    */
   async startBackgroundAgent(
     request: AgentSpawnRequest,
@@ -229,41 +221,12 @@ export class WorkflowService {
       parentToolCallId?: string
       label?: string
       notifyParentOnSettle?: boolean
-      foreground?: boolean
     },
   ): Promise<{
     run: WorkflowRunSummary
     execution?: AgentExecutionInfo
   }> {
     return launchBackgroundAgent(this.ctx, request, options)
-  }
-
-  // Detach of foreground synchronous runs (implemented in run-detach)
-
-  /**
-   * Foreground synchronous wait (used inside the synchronous tool's execute): resolves as 'detached' (the
-   * detach action moved it to the background, and the tool immediately returns a background handle) or
-   * 'settled' (the run's terminal state; settleError throws with wait()'s semantics).
-   * hooks.onDetached runs synchronously inside the detach critical section (the tool side unbinds the parent
-   * signal listener; after detaching, the parent turn's signal no longer kills the run).
-   */
-  async waitForeground(
-    runId: string,
-    hooks?: { onDetached?: () => void },
-  ): Promise<'detached' | 'settled'> {
-    return waitForegroundRun(this.ctx, runId, hooks)
-  }
-
-  /**
-   * Atomically move a running foreground synchronous run to the background (the detach action entry;
-   * the synchronous critical section lives in run-detach): set detachedAt/notifyParentOnSettle, persist,
-   * unbind the parent signal (engine binding + waiter onDetached) and wake the waiters, then await the
-   * state-store flush (failures throw detach_flush_failed honestly, without rolling back the persisted record).
-   * Explicitly rejected when the state/foreground markers don't qualify.
-   */
-  async detachForegroundRun(runId: string): Promise<WorkflowRunSummary> {
-    this.assertNotClosed()
-    return detachRun(this.ctx, runId)
   }
 
   // getRun / wait / abort

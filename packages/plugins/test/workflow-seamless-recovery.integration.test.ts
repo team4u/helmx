@@ -751,8 +751,12 @@ test('T3: 同步 subagent 与同步 SubagentWorkflow 在父回合 ToolTask 执�
 
       await enteredChildHold.promise
       const runsBeforeClose = ((await k1.plugins.invokeAction('builtin:workflow', 'runs', {})) as { runs: WorkflowRunSummary[] }).runs
-      assert.equal(runsBeforeClose.length, 1)
-      const originalRunId = runsBeforeClose[0]!.id
+      if (mode === 'subagent') {
+        assert.equal(runsBeforeClose.length, 0, '同步 subagent 直走 spawnAgent，不创建 WorkflowRun 账本')
+      } else {
+        assert.equal(runsBeforeClose.length, 1)
+      }
+      const originalRunId = runsBeforeClose[0]?.id
       const convCountBeforeClose = k1.listConversations().length
 
       await k1.close()
@@ -799,9 +803,13 @@ test('T3: 同步 subagent 与同步 SubagentWorkflow 在父回合 ToolTask 执�
       assert.equal(k2.getConversation(parentConv.id).status, 'done')
 
       const runsAfter = ((await k2.plugins.invokeAction('builtin:workflow', 'runs', {})) as { runs: WorkflowRunSummary[] }).runs
-      assert.equal(runsAfter.length, 1, `${mode} 同步重放绝不得新建第二个 Run`)
-      assert.equal(runsAfter[0]!.id, originalRunId)
-      assert.equal(runsAfter[0]!.status, 'completed')
+      if (mode === 'subagent') {
+        assert.equal(runsAfter.length, 0, '同步 subagent 跨重启重放仍不创建 WorkflowRun')
+      } else {
+        assert.equal(runsAfter.length, 1, `${mode} 同步重放绝不得新建第二个 Run`)
+        assert.equal(runsAfter[0]!.id, originalRunId)
+        assert.equal(runsAfter[0]!.status, 'completed')
+      }
       assert.equal(k2.listConversations().length, convCountBeforeClose, `${mode} 同步重放绝不得派生第二个子会话`)
 
       assert.equal(

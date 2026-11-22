@@ -80,7 +80,6 @@ export {
   listResumableFailedRuns,
   parseResumeFailedResult,
   canReplayWorkflowRun,
-  canDetachForegroundRun,
   formatWorkflowNodeStats,
   resolveRunElapsedMs,
   resolveNodeElapsedMs,
@@ -92,20 +91,13 @@ export type {
   WorkflowPhaseSection,
   WorkflowLogLine,
   WorkflowTimingSummary,
-  DetachViewerScope,
   ResumeFailedSummaryView,
 } from './model-run.ts'
-
-// Managed worktree read-only inspection (model-worktree.ts)
-export { parseWorktreeInspectResult, buildWorktreeSelector, buildWorktreeReviewRequest } from './model-worktree.ts'
-export type { WorktreeInspectView } from './model-worktree.ts'
 
 // Workflow library strict parsing and args parsing (model-library.ts)
 export {
   parseSavedWorkflowList,
   parseWorkflowDetail,
-  parseWorkflowSaveResult,
-  canSaveRunAsWorkflow,
   buildWorkflowEditRequest,
   parseWorkflowArgsInput,
 } from './model-library.ts'

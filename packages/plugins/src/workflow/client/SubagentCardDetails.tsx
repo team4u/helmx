@@ -9,11 +9,10 @@
  */
 import { useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { StatusLight, resolveLocalizedText, usePluginContext, usePluginLocale, usePluginTranslator } from '@helmx/plugin-client'
+import { PluginSlot, StatusLight, resolveLocalizedText, usePluginContext, usePluginLocale, usePluginTranslator } from '@helmx/plugin-client'
 import type { WorkflowRunSummary } from '../../contracts.js'
 import { Icon } from './WorkflowIcon.tsx'
-import { buildWorktreeSelector } from './model-worktree.ts'
-import { canDetachForegroundRun, canResumeSubagentRun, type DetachViewerScope } from './model-run.ts'
+import { canResumeSubagentRun } from './model-run.ts'
 import { executionLightStatus, type ExecutionAggregate, type ExecutionNodeStatus } from './model-execution-status.ts'
 import type { SubagentBadge, SubagentHeaderSnippet } from './model-subagent-card.ts'
 import type { ExecutionApprovalItem, ExecutionFrontlineItem } from './model-execution-view.ts'
@@ -21,16 +20,6 @@ import {
   ACTION_ABORT,
   ACTION_ABORT_BG_TITLE,
   actionAbortFailed,
-  ACTION_CLEANUP_WORKTREE,
-  ACTION_CLEANUP_WORKTREE_ARIA,
-  ACTION_CLEANUP_WORKTREE_TITLE,
-  actionCleanupDone,
-  actionCleanupFailed,
-  ACTION_DETACH,
-  ACTION_DETACH_SUBAGENT_ARIA,
-  ACTION_DETACH_SUBAGENT_TITLE,
-  actionDetachDone,
-  actionDetachFailed,
   ACTION_RETRY,
   ACTION_RETRY_TITLE,
   ACTION_RESUME_SUBAGENT,
@@ -132,21 +121,19 @@ export function SubagentCardHeading(props: {
   )
 }
 
-/** Header action bar: abort background task / foreground-sync to background / resume failed task / clean up isolated worktree / reload details (clicks never bubble into whole-card navigation). */
+/** Header action bar: abort background task / resume failed task / clean up isolated worktree (via builtin:worktree slot) / reload details. */
 export function SubagentCardActions(props: {
   backgroundRun: WorkflowRunSummary | undefined
   worktree: { path: string; branch: string; id?: string } | undefined
   inspectNodeId: string | undefined
   detailError: string | undefined
   onReload: () => void
-  viewer: DetachViewerScope | undefined
   hasExecutionHandle?: boolean
 }): ReactNode {
   const ctx = usePluginContext()
   const locale = usePluginLocale()
   const t = usePluginTranslator()
   const { backgroundRun, worktree, inspectNodeId, detailError } = props
-  const [cleaning, setCleaning] = useState(false)
   const [resuming, setResuming] = useState(false)
   const resumeInFlight = useRef(false)
   return (
@@ -166,24 +153,6 @@ export function SubagentCardActions(props: {
         >
           <Icon name="square" size={11} />
           <span className="subagent-action-label">{t(ACTION_ABORT)}</span>
-        </button>
-      ) : null}
-      {backgroundRun !== undefined && canDetachForegroundRun(backgroundRun, props.viewer) ? (
-        <button
-          type="button"
-          className="btn btn-xs"
-          title={t(ACTION_DETACH_SUBAGENT_TITLE)}
-          aria-label={t(ACTION_DETACH_SUBAGENT_ARIA)}
-          onClick={(e) => {
-            e.stopPropagation()
-            void ctx
-              .callAction('detach', { runId: backgroundRun.id })
-              .then(() => ctx.notify(actionDetachDone(backgroundRun.id, locale)))
-              .catch((err: unknown) => ctx.notify(actionDetachFailed(err instanceof Error ? err.message : String(err), locale), 'error'))
-          }}
-        >
-          <Icon name="arrow-down-to-line" size={11} />
-          <span className="subagent-action-label">{t(ACTION_DETACH)}</span>
         </button>
       ) : null}
       {backgroundRun !== undefined && canResumeSubagentRun(backgroundRun, props.hasExecutionHandle ?? true) ? (
@@ -218,26 +187,15 @@ export function SubagentCardActions(props: {
         </button>
       ) : null}
       {worktree !== undefined ? (
-        <button
-          type="button"
-          className="btn btn-xs"
-          disabled={cleaning}
-          title={t(ACTION_CLEANUP_WORKTREE_TITLE)}
-          aria-label={t(ACTION_CLEANUP_WORKTREE_ARIA)}
-          onClick={(e) => {
-            e.stopPropagation()
-            if (cleaning) return
-            setCleaning(true)
-            ctx
-              .callAction('cleanup_worktree', buildWorktreeSelector(worktree, inspectNodeId), { pluginId: 'builtin:worktree' })
-              .then(() => ctx.notify(actionCleanupDone(worktree.branch, locale)))
-              .catch((err: unknown) => ctx.notify(actionCleanupFailed(err instanceof Error ? err.message : String(err), locale), 'error'))
-              .finally(() => setCleaning(false))
+        <PluginSlot
+          name="worktree-cleanup"
+          inline
+          slotProps={{
+            worktree,
+            ...(inspectNodeId !== undefined ? { nodeId: inspectNodeId } : {}),
+            compact: true,
           }}
-        >
-          <Icon name="rotate-cw" size={11} className={cleaning ? SPIN : undefined} />
-          <span className="subagent-action-label">{t(ACTION_CLEANUP_WORKTREE)}</span>
-        </button>
+        />
       ) : null}
       {detailError !== undefined ? (
         <button

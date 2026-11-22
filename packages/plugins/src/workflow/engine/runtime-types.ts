@@ -3,7 +3,7 @@
  */
 
 import type { AgentExecutionInfo, AgentGateResult, AgentSpawnRequest } from '@helmx/protocol'
-import type { CompiledSchema } from './json-schema.js'
+import type { CompiledSchema } from './runtime-validation.js'
 import type { WorkflowMeta } from './meta.js'
 import type { JournalWriteInput, WorkflowJournalEntry } from './journal.js'
 import type { WorkflowEntry } from './progress.js'

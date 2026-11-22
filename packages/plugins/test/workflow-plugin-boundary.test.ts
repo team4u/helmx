@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { HelmxError, type ConversationSummary, type MaybePromise, type PluginDefinition, type PluginToolContext } from '@helmx/protocol'
 import { WORKFLOW_PLUGIN_ID } from '../src/contracts.js'
-import { resolveActionId } from '../src/workflow/engine/host-action-adapter.js'
+import { resolveActionId } from '../src/workflow/engine/host-adapter.js'
 import { PluginHost } from '../../kernel/src/plugins/index.js'
 import { PluginHostBackendFixtureBase } from '../../kernel/test/helpers/plugin-host-backend.js'
 import { pluginToolResult } from '../../kernel/src/runtime/runtime-helpers.js'
@@ -742,31 +742,25 @@ test('工作流库动作注册：get/save/delete 三动作登记且 CLI 映射�
   assert.deepEqual(byId.get('save')!.cli?.command, ['workflows', 'save'])
   assert.deepEqual(byId.get('save')!.cli?.positional, [{ field: 'name', readFileInto: 'script' }])
   assert.deepEqual(byId.get('delete')!.cli?.command, ['workflows', 'delete'])
+  assert.equal(byId.has('detach'), false, 'detach 动作已移除')
   await host.dispose()
 })
 
-test('detach 动作注册：CLI 映射 helmx workflows detach <runId>，输入 schema 收紧 additionalProperties', { timeout: 60_000 }, async () => {
+test('builtin:worktree 注册工作树检视与清理 UI 插槽（指向 builtin:workflow）', { timeout: 60_000 }, async () => {
   const host = makeHost()
-  const { createWorkflowPlugin } = await import('../src/workflow.js')
-  await host.register(createWorkflowPlugin())
+  const { createWorktreePlugin } = await import('../src/worktree.js')
+  await host.register(createWorktreePlugin())
   try {
-    const manifests = host.listActions().filter((m) => m.pluginId === WORKFLOW_PLUGIN_ID)
-    const detach = manifests.find((m) => m.id === 'detach')
-    assert.ok(detach, '应注册 detach 动作')
-    assert.deepEqual(detach!.cli?.command, ['workflows', 'detach'])
-    assert.deepEqual(detach!.cli?.positional, [{ field: 'runId', required: true }])
-    const inputSchema = detach!.inputSchema as Record<string, unknown>
-    assert.equal(inputSchema['additionalProperties'], false, '输入 schema 必须收紧 additionalProperties')
-    assert.deepEqual(inputSchema['required'], ['runId'])
-    // 边界：未知字段显式拒绝（validation_error），绝不静默丢弃。
-    await assert.rejects(
-      () => host.invokeAction(WORKFLOW_PLUGIN_ID, 'detach', { runId: 'wf_x', bogus: 1 }),
-      (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
-    )
-    // 未知 run 404 透传（真实 WorkflowService 无该记录）。
-    await assert.rejects(
-      () => host.invokeAction(WORKFLOW_PLUGIN_ID, 'detach', { runId: 'wf_nonexistent' }),
-      (err: unknown) => err instanceof HelmxError && err.code === 'not_found' && err.status === 404,
+    const slots = host
+      .listUi()
+      .filter((u) => u.pluginId === 'builtin:worktree' && u.surface === 'plugin.slot')
+      .map((u) => u.spec as { id: string; target: string; client?: { module: string; export: string } })
+    assert.deepEqual(
+      slots.map((s) => [s.id, s.target, s.client?.module, s.client?.export]),
+      [
+        ['worktree-inspect', 'builtin:workflow/worktree-inspect', 'slots.tsx', 'WorktreeInspectSlot'],
+        ['worktree-cleanup', 'builtin:workflow/worktree-cleanup', 'slots.tsx', 'WorktreeCleanupSlot'],
+      ],
     )
   } finally {
     await host.dispose()
@@ -834,40 +828,6 @@ test('工作流库动作全链路：save 真实写入 → list 携带文件事�
     )
     const after = (await host.invokeAction(WORKFLOW_PLUGIN_ID, 'list', {})) as { workflows: unknown[] }
     assert.deepEqual(after.workflows, [])
-  } finally {
-    await host.dispose()
-  }
-})
-
-test('save 动作 fromRunId：内联 run 固化为定义（经真实插件 records doc 种子）', { timeout: 60_000 }, async () => {
-  // 预置插件私有 records 文档：一条 completed 内联 workflow run。
-  docs.set('builtin:workflow:records', {
-    'workflow/runs': [{ id: 'wf_inline1', conversationId: 1, status: 'completed', createdAt: 1, updatedAt: 2 }],
-  })
-  const artifactsDir = join(dataDir, 'plugins', 'builtin%3Aworkflow', 'artifacts', '1')
-  mkdirSync(artifactsDir, { recursive: true })
-  writeFileSync(join(artifactsDir, 'workflow-wf_inline1.record.json'), JSON.stringify({
-    id: 'wf_inline1',
-    name: 'inline',
-    conversationId: 1,
-    status: 'completed',
-    createdAt: 1,
-    updatedAt: 2,
-    kind: 'workflow',
-    script: 'export const meta = { name: "fromrun", description: "固化" }\nreturn 1',
-    journalPath: '/tmp/none.jsonl',
-  }))
-  const host = makeHost()
-  const { createWorkflowPlugin } = await import('../src/workflow.js')
-  await host.register(createWorkflowPlugin())
-  try {
-    const saved = (await host.invokeAction(WORKFLOW_PLUGIN_ID, 'save', { fromRunId: 'wf_inline1' })) as {
-      created: boolean
-      workflow: { name: string; description?: string }
-    }
-    assert.equal(saved.created, true)
-    assert.equal(saved.workflow.name, 'fromrun')
-    assert.equal(saved.workflow.description, '固化')
   } finally {
     await host.dispose()
   }

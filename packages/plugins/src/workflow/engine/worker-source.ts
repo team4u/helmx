@@ -13,7 +13,7 @@ import type { WorktreeExecutionDescriptor } from '../../contracts.js'
 import type { WorkflowGateResult } from './runtime-types.js'
 
 /** workflow() 嵌套深度上限：根 scope 为 0 层，整棵工作流树最多 4 层（与 256 总量上限正交）。 */
-export const MAX_WORKFLOW_NESTING_DEPTH = 4
+export const MAX_WORKFLOW_NESTING_DEPTH = 2
 
 export type AgentWithMetaGateResult = WorkflowGateResult
 export type AgentWithMetaWorktree = WorktreeExecutionDescriptor

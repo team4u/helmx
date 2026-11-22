@@ -16,8 +16,10 @@ import {
   createRoot,
   importWorkflowClientModule as baseImportWorkflowClientModule,
   importWorkflowSurfaces,
+  importWorktreeClientModule,
   mountSharedPluginNamespaces,
   setWorkflowClientStub,
+  type WorktreeSlotComponents,
 } from './helpers/workflow-client-harness.js'
 
 // Load split per-surface production entrypoints (active-tray / tool-views / workbench)
@@ -383,6 +385,7 @@ test('中止 / 清理按钮 stopPropagation：点击按钮不触发整卡打开�
     status: 'running', createdAt: 1, updatedAt: 2, parentToolCallId: 'call-bg',
     nodes: [{ id: 'n', kind: 'agent', status: 'running', conversationId: 11, worktree: { path: '/wt/x', branch: 'helmx/x' } }],
   }
+  const worktreeSlots = (await importWorktreeClientModule('slots.tsx', undefined, { realHooks: false, scope: 'interactions-wt' })) as WorktreeSlotComponents
   setWorkflowClientStub({
     docValue: { runs: [bgRun] },
     conversations: [child11],
@@ -390,6 +393,7 @@ test('中止 / 清理按钮 stopPropagation：点击按钮不触发整卡打开�
       id === 11
         ? { summary: child11, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} }
         : { summary: undefined, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} },
+    worktreeSlots,
   })
   const actionCalls: Array<[string, unknown, string | undefined]> = []
   const spy = makeSpyCtx()
@@ -484,64 +488,6 @@ test('工具输出从未返回到对象再到文本时保留 hook 顺序，调�
     assert.deepEqual(artifacts, ['art_full'])
     await rerender(e(Details, { result: '完成' }))
     assert.match(host.textContent!, /完成/)
-  } finally {
-    unmount()
-  }
-})
-
-test('前台同步运行卡「转入后台」点击调用 detach 动作（工作流卡与子代理卡），不打开抽屉', { timeout: 60_000 }, async () => {
-  const fgRun = {
-    id: 'wf_fg_x',
-    name: '同步工作流',
-    conversationId: 1,
-    kind: 'workflow' as const,
-    status: 'running' as const,
-    syncForeground: true,
-    createdAt: 1,
-    updatedAt: 2,
-    parentToolCallId: 'call-fg-x',
-    nodes: [{ id: 'a', kind: 'agent' as const, status: 'running' as const }],
-  }
-  const spy = makeSpyCtx()
-  const mod = await importWorkflowClientModule('WorkflowRunCard.tsx')
-  const Body = mod['WorkflowRunCardBody'] as React.ComponentType<Record<string, unknown>>
-  const { host, unmount } = await mountClient(
-    spy,
-    e(Body, {
-      run: fgRun, cardOpen: false, onToggleCard: () => {}, resultOpen: false, onToggleResult: () => {},
-      viewer: { conversationId: 1 },
-    }),
-  )
-  try {
-    const detach = [...host.querySelectorAll('button')].find((b) => b.textContent?.includes('Move to background')) as HTMLElement | undefined
-    assert.ok(detach !== undefined, '前台同步工作流卡应渲染转入后台按钮')
-    await act(async () => { detach!.click() })
-    assert.deepEqual(spy.actionCalls, [{ actionId: 'detach', input: { runId: 'wf_fg_x' } }], '点击必须调用 detach 动作并携带 runId')
-    assert.deepEqual(spy.drawerCalls, [], '点击转入后台不得打开抽屉')
-
-    // 子代理卡（后台 run 为前台同步）：动作栏按钮同样调用 detach。
-    const child = { ...summary(11, 'working'), parentConversationId: 1, parentToolCallId: 'compact-fg' }
-    setWorkflowClientStub({ conversations: [child] })
-    const spy2 = makeSpyCtx()
-    const indexMod = await importWorkflowClientModule()
-    const Card = indexMod['SubagentLiveCard'] as React.ComponentType<Record<string, unknown>>
-    const sub = await mountClient(
-      spy2,
-      e(Card, {
-        childConversationId: 11, toolStatus: 'running',
-        backgroundRun: { ...fgRun, id: 'wf_fg_sub', kind: 'subagent' },
-        viewer: { conversationId: 1, ownedBy: 'human' },
-      }),
-    )
-    try {
-      const btn = [...sub.host.querySelectorAll('button')].find((b) => b.textContent?.includes('Move to background')) as HTMLElement | undefined
-      assert.ok(btn !== undefined, '前台同步子代理卡应渲染转入后台按钮')
-      await act(async () => { btn!.click() })
-      assert.deepEqual(spy2.actionCalls, [{ actionId: 'detach', input: { runId: 'wf_fg_sub' } }])
-      assert.deepEqual(spy2.drawerCalls, [])
-    } finally {
-      sub.unmount()
-    }
   } finally {
     unmount()
   }

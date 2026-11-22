@@ -56,12 +56,21 @@ export { SDK }
 const HERE = dirname(fileURLToPath(import.meta.url))
 export const WORKFLOW_CLIENT_ROOT = resolve(HERE, '../../src/workflow/client')
 export const WORKFLOW_CLIENT_CACHE_DIR = resolve(HERE, '../../../../node_modules/.cache/helmx-test-workflow-clients')
+export const WORKTREE_CLIENT_ROOT = resolve(HERE, '../../src/worktree/client')
+export const WORKTREE_CLIENT_CACHE_DIR = resolve(HERE, '../../../../node_modules/.cache/helmx-test-worktree-clients')
 mkdirSync(WORKFLOW_CLIENT_CACHE_DIR, { recursive: true })
+mkdirSync(WORKTREE_CLIENT_CACHE_DIR, { recursive: true })
+
+export interface WorktreeSlotComponents {
+  WorktreeInspectSlot?: ReactTypes.ComponentType<Record<string, unknown>>
+  WorktreeCleanupSlot?: ReactTypes.ComponentType<Record<string, unknown>>
+}
 
 export interface WorkflowClientStubOptions {
   docValue?: unknown
   conversations?: unknown[]
   conversation?: (id: number | undefined, options?: { includeDetail?: boolean }) => Record<string, unknown>
+  worktreeSlots?: WorktreeSlotComponents | false
 }
 
 let stub: WorkflowClientStubOptions = {}
@@ -119,6 +128,34 @@ const stubPluginClientNamespace = {
       loadError: undefined,
       reload: () => {},
     },
+  PluginSlot: (props: SDKTypes.PluginSlotProps) => {
+    const slots = stub.worktreeSlots
+    if (slots === undefined || slots === false) {
+      return props.fallback !== undefined ? React.createElement(React.Fragment, null, props.fallback) : null
+    }
+    const shortName = props.name.includes('/') ? props.name.slice(props.name.indexOf('/') + 1) : props.name
+    const Component =
+      shortName === 'worktree-inspect'
+        ? slots.WorktreeInspectSlot
+        : shortName === 'worktree-cleanup'
+          ? slots.WorktreeCleanupSlot
+          : undefined
+    if (Component === undefined) {
+      return props.fallback !== undefined ? React.createElement(React.Fragment, null, props.fallback) : null
+    }
+    const Container = props.inline === true ? 'span' : 'div'
+    const normalizedClassName =
+      props.className !== undefined && props.className.trim().length > 0 ? props.className : undefined
+    return React.createElement(
+      Container,
+      {
+        className: normalizedClassName,
+        style: normalizedClassName === undefined ? { display: 'contents' as const } : undefined,
+        'data-helmx-slot': props.name.includes('/') ? props.name : `builtin:workflow/${props.name}`,
+      },
+      React.createElement(Component, props.slotProps ?? {}),
+    )
+  },
 }
 
 export function mountSharedPluginNamespaces(options: { realHooks?: boolean } = {}): void {
@@ -171,6 +208,28 @@ export async function importWorkflowModels(
   return (await importWorkflowClientModule('models.ts', cacheDir)) as unknown as typeof import('../../src/workflow/client/models.ts')
 }
 
+export async function importWorktreeClientModule(
+  moduleRef = 'slots.tsx',
+  cacheDir = WORKTREE_CLIENT_CACHE_DIR,
+  options?: { realHooks?: boolean; scope?: string },
+): Promise<Record<string, unknown>> {
+  const mode: 'real' | 'stub' =
+    options?.realHooks !== undefined ? (options.realHooks ? 'real' : 'stub') : currentHookMode
+  syncSharedPluginGlobals(mode === 'real')
+  const { code } = await compilePluginClientModule('builtin:worktree', WORKTREE_CLIENT_ROOT, moduleRef, cacheDir)
+  const fragment = options?.scope ? `${mode}-${mountGen}-${options.scope}` : `${mode}-${mountGen}`
+  return (await import(`data:text/javascript;base64,${Buffer.from(code, 'utf8').toString('base64')}#${fragment}`)) as Record<
+    string,
+    unknown
+  >
+}
+
+export async function importWorktreeModels(
+  cacheDir = WORKTREE_CLIENT_CACHE_DIR,
+): Promise<typeof import('../../src/worktree/client/model-worktree.ts')> {
+  return (await importWorktreeClientModule('model-worktree.ts', cacheDir)) as unknown as typeof import('../../src/worktree/client/model-worktree.ts')
+}
+
 export function makeConvSummary(
   id: number,
   overrides: Partial<ConversationSummary> = {},
@@ -217,6 +276,7 @@ export function createWorkflowHostHarness(init: {
   pluginDocs?: Record<string, unknown>
   timelineToolCalls?: SDKTypes.TimelineToolCallsInput
   locale?: SDKTypes.HelmxLocale
+  worktreeSlots?: WorktreeSlotComponents
   onAction?: (pluginId: string, actionId: string, input: unknown) => Promise<unknown> | unknown
 }) {
   const activeToolCallIds = new Set<string>()
@@ -338,8 +398,33 @@ export function createWorkflowHostHarness(init: {
       log.loadDetailCalls.push(convId)
     },
     slots: {
-      collectItems: () => [],
-      renderItem: () => null,
+      collectItems: (qualified) => {
+        const ws = init.worktreeSlots
+        if (ws === undefined) return []
+        if (qualified === 'builtin:workflow/worktree-inspect' && ws.WorktreeInspectSlot !== undefined) {
+          return [{ pluginId: 'builtin:worktree', contributionId: 'worktree-inspect', spec: { id: 'worktree-inspect', target: qualified, client: { module: 'slots.tsx', export: 'WorktreeInspectSlot' } } }]
+        }
+        if (qualified === 'builtin:workflow/worktree-cleanup' && ws.WorktreeCleanupSlot !== undefined) {
+          return [{ pluginId: 'builtin:worktree', contributionId: 'worktree-cleanup', spec: { id: 'worktree-cleanup', target: qualified, client: { module: 'slots.tsx', export: 'WorktreeCleanupSlot' } } }]
+        }
+        return []
+      },
+      renderItem: (item, options) => {
+        const ws = init.worktreeSlots
+        const Component =
+          item.contributionId === 'worktree-inspect'
+            ? ws?.WorktreeInspectSlot
+            : item.contributionId === 'worktree-cleanup'
+              ? ws?.WorktreeCleanupSlot
+              : undefined
+        if (Component === undefined) return null
+        const worktreeCtx = SDK.createPluginClientContext(basePort, 'builtin:worktree', options.conversationId ?? init.conversationId)
+        return React.createElement(
+          SDK.PluginClientContext.Provider,
+          { value: worktreeCtx },
+          React.createElement(Component, options.slotProps ?? {}),
+        )
+      },
     },
     markdown: {
       view: ({ text }) => React.createElement('div', { 'data-testid': 'markdown-view' }, text),

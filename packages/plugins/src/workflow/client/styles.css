@@ -321,3 +321,244 @@
 .execution-child-clickable:active {
   background: var(--bg-active, var(--bg-hover));
 }
+
+/* Slot wrapper for builtin:worktree inspect contribution inside standalone subagent cards */
+.subagent-inspect-slot {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* Timeline single-row trace & background report card styles */
+.workflow-trace-row-btn .trace-tool-name,
+.workflow-trace-toggle .trace-tool-name {
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workflow-trace-id {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-subtle);
+}
+
+.workflow-trace-badge {
+  height: 18px;
+  line-height: 16px;
+  padding: 0 5px;
+  font-size: 10.5px;
+  flex-shrink: 0;
+}
+
+.workflow-trace-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.workflow-trace-error {
+  color: var(--err);
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.workflow-trace-toggle {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  min-width: 0;
+  flex: 1;
+}
+
+.workflow-trace-row-btn {
+  width: 100%;
+  background: transparent;
+  border: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.workflow-trace-row-btn:hover {
+  background: var(--bg-hover);
+}
+
+.workflow-trace-row-btn .trace-row-left {
+  min-width: 0;
+  flex: 1;
+}
+
+.workflow-report-expanded {
+  gap: 8px;
+}
+
+.workflow-report-meta-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.workflow-report-task-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Execution tree child rows */
+.execution-children {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0 8px 6px 26px;
+  padding-left: 8px;
+  border-left: 2px solid var(--border);
+}
+
+.execution-child-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 2px 6px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-xs);
+  font-size: 11.5px;
+  color: var(--fg-secondary);
+  background: var(--bg-elevated);
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.execution-child-row > svg { flex-shrink: 0; }
+
+.execution-child-id {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--fg-subtle);
+}
+
+.execution-child-title {
+  flex-shrink: 1;
+  font-weight: 500;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.execution-child-doing {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-muted);
+}
+
+.execution-child-right {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.execution-child-right .badge {
+  font-size: 10px;
+  line-height: 16px;
+  padding: 0 5px;
+}
+
+.execution-child-count,
+.execution-child-elapsed {
+  font-size: 10.5px;
+  color: var(--fg-subtle);
+  font-variant-numeric: tabular-nums;
+}
+
+.execution-child-elapsed { font-family: var(--font-mono); }
+
+.execution-child-blocked .execution-child-title,
+.execution-child-blocked .execution-child-doing {
+  color: var(--warn);
+}
+
+.execution-child-expand { color: var(--fg-subtle); }
+.execution-children .execution-children { margin: 0 0 2px 14px; }
+.execution-frontline .subagent-live-subline-tag { color: var(--accent); }
+
+/* Subagent expanded live stream */
+.subagent-live-stream {
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.subagent-stream-line {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.subagent-stream-tag {
+  flex-shrink: 0;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  padding: 0 6px;
+  line-height: 16px;
+  user-select: none;
+}
+
+.subagent-stream-body {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.subagent-stream-prompt .subagent-stream-body {
+  color: var(--fg);
+  font-weight: 500;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  white-space: pre-wrap;
+}
+
+.subagent-stream-thinking { color: var(--fg-muted); }
+.subagent-stream-thinking .subagent-stream-body { font-style: italic; white-space: pre-wrap; }
+
+.subagent-stream-tool {
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+
+.subagent-stream-tool > svg { flex-shrink: 0; align-self: center; }
+.subagent-stream-error { color: var(--fg-muted); }
+.subagent-stream-empty { align-items: center; color: var(--fg-muted); gap: 7px; }
+.subagent-stream-empty > svg { align-self: center; }

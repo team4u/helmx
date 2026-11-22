@@ -35,10 +35,9 @@ import { WorkflowNodeCard } from './WorkflowNodeCards.tsx'
 import { useElapsedNowMs, useInspectedRunResult, usePluginSessionDoc } from './hooks.ts'
 import { Icon } from './WorkflowIcon.tsx'
 import { cleanInlineMarkdown, stringifyPretty } from './model-format.ts'
-import { canSaveRunAsWorkflow, parseWorkflowArgsInput, parseWorkflowSaveResult } from './model-library.ts'
+import { parseWorkflowArgsInput } from './model-library.ts'
 import {
   buildWorkflowPhaseSections,
-  canDetachForegroundRun,
   canReplayWorkflowRun,
   canResumeWorkflowRun,
   extractWorkflowLogs,
@@ -50,7 +49,6 @@ import {
   resolveWorkflowToolFallbackLabel,
   summarizeWorkflowTiming,
 } from './model-run.ts'
-import type { DetachViewerScope } from './model-run.ts'
 import { readToolPresentationMeta } from './model-subagent-link.ts'
 import { aggregateExecutionNodes, buildExecutionTree, buildLeafNodesForRun } from './model-execution-tree.ts'
 import type { ExecutionNode } from './model-execution-tree.ts'
@@ -59,8 +57,6 @@ import { effectiveRunNodeStatus, executionLightStatus, executionRunStatus } from
 import { requestWorkbenchRunFocus } from './workbench-focus.ts'
 import {
   ACTION_ABORT,
-  ACTION_DETACH,
-  actionDetachDone,
   approvalsBadge,
   approvalsTitle,
   selfAggregateTitle,
@@ -76,7 +72,6 @@ import {
   REPLAY_SUBMIT_TITLE,
   RUN_CARD_ABORT_FAILED,
   RUN_CARD_CACHED_REPLAY,
-  RUN_CARD_DETACH_FAILED,
   runCardAriaLabel,
   RUN_CARD_COLLAPSE_TITLE,
   RUN_CARD_EXPAND_TITLE,
@@ -88,11 +83,6 @@ import {
   RUN_CARD_RESUME,
   RUN_CARD_RESUME_FAILED,
   RUN_CARD_RESUME_TITLE,
-  runCardSaveCreated,
-  runCardSaveInvalidResult,
-  runCardSaveOverwritten,
-  RUN_CARD_SAVE_AS,
-  RUN_CARD_SAVE_FAILED,
   runCardSavedBadgeTitle,
   RUN_CARD_SAVED_BADGE,
   runCardSubtreeStat,
@@ -123,7 +113,6 @@ import {
   RUN_NO_NODES,
   RUN_RESULT_LOADING,
   RUN_RESULT_SECTION,
-  RUN_CARD_DETACH_TITLE,
   RUN_CARD_MORE_ARIA,
   RUN_CARD_MORE_TITLE,
   RUN_CARD_WORKBENCH_DETAILS,
@@ -448,7 +437,6 @@ export function WorkflowRunCardBody(props: {
   onToggleResult: () => void
   toolProps?: { input?: unknown; result?: unknown; artifactRef?: string }
   inWorkbench: boolean
-  viewer?: DetachViewerScope
   childNodes?: ExecutionNode[]
 }): ReactNode {
   const ctx = usePluginContext()
@@ -491,15 +479,6 @@ export function WorkflowRunCardBody(props: {
   const abort = (): void => {
     guarded(() => ctx.callAction('abort', { runId: run.id }), resolveLocalizedText(RUN_CARD_ABORT_FAILED, locale))
   }
-  const detach = (): void => {
-    guarded(
-      () =>
-        ctx
-          .callAction('detach', { runId: run.id })
-          .then(() => ctx.notify(actionDetachDone(run.id, locale))),
-      resolveLocalizedText(RUN_CARD_DETACH_FAILED, locale),
-    )
-  }
   const resume = (): void => {
     guarded(
       () => ctx.callAction('run', { resumeFromRunId: run.id, conversationId: run.conversationId }),
@@ -525,25 +504,6 @@ export function WorkflowRunCardBody(props: {
       resolveLocalizedText(RUN_CARD_REPLAY_FAILED, locale),
     )
   }
-  const saveAsWorkflow = (): void => {
-    guarded(
-      () =>
-        ctx
-          .callAction('save', { fromRunId: run.id })
-          .then((raw) => {
-            const parsed = parseWorkflowSaveResult(raw)
-            if (parsed === undefined) {
-              throw new Error(runCardSaveInvalidResult(locale))
-            }
-            ctx.notify(
-              parsed.created
-                ? runCardSaveCreated(parsed.workflow.name, locale)
-                : runCardSaveOverwritten(parsed.workflow.name, locale),
-            )
-          }),
-      resolveLocalizedText(RUN_CARD_SAVE_FAILED, locale),
-    )
-  }
 
   const displayName = resolveWorkflowRunDisplayName(run)
 
@@ -551,7 +511,7 @@ export function WorkflowRunCardBody(props: {
     <section className="card workflow-run-card" aria-label={runCardAriaLabel(displayName, locale)}>
       <div className="stack-row workflow-run-header">
         {/* 整块非动作头部即展开开关：真实 button 覆盖主信息位（灯/名称/统计），
-            中止 / detach / 恢复 / 工作台等动作控件为右侧同级 sibling，无嵌套交互。 */}
+            中止 / 恢复 / 工作台等动作控件为右侧同级 sibling，无嵌套交互。 */}
         <button
           type="button"
           className="workflow-run-header-main"
@@ -599,25 +559,13 @@ export function WorkflowRunCardBody(props: {
             {resolveLocalizedText(ACTION_ABORT, locale)}
           </button>
         ) : null}
-        {canDetachForegroundRun(run, props.viewer) ? (
-          <button
-            type="button"
-            className="btn btn-sm"
-            disabled={busy}
-            onClick={detach}
-            title={resolveLocalizedText(RUN_CARD_DETACH_TITLE, locale)}
-          >
-            <Icon name="arrow-down-to-line" size={11} />
-            {resolveLocalizedText(ACTION_DETACH, locale)}
-          </button>
-        ) : null}
         {canResumeWorkflowRun(run) ? (
           <button type="button" className="btn btn-sm" disabled={busy} onClick={resume} title={resolveLocalizedText(RUN_CARD_RESUME_TITLE, locale)}>
             <Icon name="rotate-cw" size={11} />
             {resolveLocalizedText(RUN_CARD_RESUME, locale)}
           </button>
         ) : null}
-        {canReplayWorkflowRun(run) || canSaveRunAsWorkflow(run) ? (
+        {canReplayWorkflowRun(run) ? (
           <PopoverRoot>
             <PopoverTrigger asChild>
               <button
@@ -632,35 +580,20 @@ export function WorkflowRunCardBody(props: {
             </PopoverTrigger>
             <PopoverContent align="end" className="workflow-run-menu-popover">
               <div className="workflow-run-menu">
-                {canReplayWorkflowRun(run) ? (
-                  <PopoverClose asChild>
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-sm workflow-run-menu-item"
-                      disabled={busy}
-                      onClick={() => {
-                        setReplayOpen((v) => !v)
-                        setReplayError(undefined)
-                      }}
-                    >
-                      <Icon name="rotate-cw" size={11} />
-                      {resolveLocalizedText(RUN_CARD_REPLAY, locale)}
-                    </button>
-                  </PopoverClose>
-                ) : null}
-                {canSaveRunAsWorkflow(run) ? (
-                  <PopoverClose asChild>
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-sm workflow-run-menu-item"
-                      disabled={busy}
-                      onClick={saveAsWorkflow}
-                    >
-                      <Icon name="check" size={11} />
-                      {resolveLocalizedText(RUN_CARD_SAVE_AS, locale)}
-                    </button>
-                  </PopoverClose>
-                ) : null}
+                <PopoverClose asChild>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm workflow-run-menu-item"
+                    disabled={busy}
+                    onClick={() => {
+                      setReplayOpen((v) => !v)
+                      setReplayError(undefined)
+                    }}
+                  >
+                    <Icon name="rotate-cw" size={11} />
+                    {resolveLocalizedText(RUN_CARD_REPLAY, locale)}
+                  </button>
+                </PopoverClose>
               </div>
             </PopoverContent>
           </PopoverRoot>

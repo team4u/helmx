@@ -1,10 +1,7 @@
 /**
- * Managed-worktree read-only change-overview styles: inspect section and the subagent-card embedded inspect entry.
- *
- * Merged by the compiler into the plugin style-text export; injected after the host confirms loading, reclaimed on disable/uninstall.
+ * builtin:worktree managed-worktree read-only change overview styles.
  */
 
-/* Managed-worktree read-only change overview (inspect_worktree result display) */
 .worktree-inspect {
   display: flex;
   flex-direction: column;
@@ -35,6 +32,12 @@
   gap: 4px;
 }
 
+.worktree-inspect-empty {
+  font-size: 11px;
+  color: var(--fg-subtle);
+  padding: 2px 0 2px 17px;
+}
+
 .worktree-inspect-files {
   margin: 0;
   max-height: 120px;
@@ -51,17 +54,9 @@
   color: var(--fg-muted);
 }
 
-/* Standalone subagent-card embedded inspect entry: clicks do not bubble to whole-card navigation (button keyboard activation unaffected) */
-.subagent-inspect-slot {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
 .worktree-inspect-actions {
   display: flex;
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
 }
-

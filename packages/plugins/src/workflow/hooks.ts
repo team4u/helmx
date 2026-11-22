@@ -11,6 +11,7 @@
 import { HelmxError, type HelmxPluginContext } from '@helmx/protocol'
 import { HARD_MAX_SUBAGENT_DEPTH, WORKFLOW_PLUGIN_ID, parseWorkflowSpawnMeta } from '../contracts.js'
 import { isAncestorOrSelf } from '../lineage.js'
+import { WORKFLOW_STEER_TOOL_NAME } from './actions-run.js'
 import type { WorkflowService } from './engine/index.js'
 import type { ManagedSubagentRegistry } from './depth.js'
 import type { RunsProjection } from './projection.js'
@@ -129,13 +130,10 @@ export function registerWorkflowHooks(ctx: HelmxPluginContext, deps: WorkflowHoo
       drop.add('SubagentWorkflow')
     }
     if (!hasActiveSteerableSubagent(turn.conversation.id)) {
+      drop.add(WORKFLOW_STEER_TOOL_NAME)
+      drop.add(`${WORKFLOW_PLUGIN_ID}.steer`)
       const steerToolName = resolveSteerToolName()
       if (steerToolName !== undefined) drop.add(steerToolName)
-      for (const tool of turn.tools) {
-        if (tool.name === 'builtin:workflow.steer' || /^workflow_steer_[0-9a-f]{8}$/.test(tool.name)) {
-          drop.add(tool.name)
-        }
-      }
     }
     if (drop.size === 0) return
     const tools = turn.tools.filter((t) => !drop.has(t.name))

@@ -5,7 +5,6 @@
  */
 import { DEFAULT_HELMX_LOCALE, type HelmxLocale } from '@helmx/plugin-client'
 import type { ConversationSummary } from '@helmx/protocol'
-import type { WorkflowRunSummary } from '../../contracts.js'
 import { firstLineOf, inspectString } from './model-format.ts'
 import { libArgsInvalidJson, workflowEditDescriptionLine, workflowEditRequestLines } from './copy.ts'
 
@@ -114,21 +113,6 @@ export function parseWorkflowDetail(raw: unknown): SavedWorkflowDetailView | und
   const script = (workflow as Record<string, unknown>)['script']
   if (typeof script !== 'string' || script === '') return undefined
   return { ...entry, script }
-}
-
-/** Strictly parse the save action result: created requires a boolean, workflow a valid summary. */
-export function parseWorkflowSaveResult(raw: unknown): { created: boolean; workflow: SavedWorkflowView } | undefined {
-  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return undefined
-  const record = raw as Record<string, unknown>
-  if (typeof record['created'] !== 'boolean') return undefined
-  const workflow = parseSavedWorkflowEntry(record['workflow'])
-  if (workflow === undefined) return undefined
-  return { created: record['created'], workflow }
-}
-
-/** One-click save availability for an inline run: non-subagent and not started from a saved definition. */
-export function canSaveRunAsWorkflow(run: Pick<WorkflowRunSummary, 'kind' | 'savedName'>): boolean {
-  return run.kind !== 'subagent' && run.savedName === undefined
 }
 
 /**

@@ -7,6 +7,7 @@
  * （cleanup_worktree 已迁至 builtin:worktree 的 worktree/tools.ts。）
  */
 import {
+  HelmxError,
   safeResultText,
   type HelmxPluginContext,
 } from '@helmx/protocol'
@@ -162,12 +163,8 @@ export function registerWorkflowTools(ctx: HelmxPluginContext, deps: WorkflowToo
         }
       }
 
-      const waitAndFinishForeground = async (runId: string) => {
+      const waitAndFinishSync = async (runId: string) => {
         const current = workflows.getRun(runId)
-        if (current.detachedAt !== undefined) {
-          syncRunsDoc()
-          return workflowBackgroundHandle(current)
-        }
         if (current.status !== 'running') {
           syncRunsDoc()
           return workflowResultEnvelope(current)
@@ -179,13 +176,9 @@ export function registerWorkflowTools(ctx: HelmxPluginContext, deps: WorkflowToo
         context.signal?.addEventListener('abort', onAbort, { once: true })
         if (context.signal?.aborted) onAbort()
         try {
-          const outcome = await workflows.waitForeground(runId, {
-            onDetached: () => context.signal?.removeEventListener('abort', onAbort),
-            ...(context.signal !== undefined ? { signal: context.signal } : {}),
-          })
-          if (outcome === 'detached') {
-            syncRunsDoc()
-            return workflowBackgroundHandle(workflows.getRun(runId))
+          await workflows.wait(runId)
+          if (workflows.isHostClosing() && workflows.isAutoRecoverOnRestart() && context.signal?.aborted) {
+            throw new HelmxError('aborted', '宿主优雅关停挂起，等待重启后重放', 409)
           }
           return workflowResultEnvelope(workflows.getRun(runId))
         } finally {
@@ -199,11 +192,11 @@ export function registerWorkflowTools(ctx: HelmxPluginContext, deps: WorkflowToo
         if (typeof context.callId === 'string' && context.callId !== '') {
           const existing = workflows.findRunByParentToolCall(context.conversationId, context.callId)
           if (existing !== undefined) {
-            if (backgroundChoice.background || existing.detachedAt !== undefined) {
+            if (backgroundChoice.background) {
               syncRunsDoc()
               return workflowBackgroundHandle(workflows.getRun(existing.id))
             }
-            return await waitAndFinishForeground(existing.id)
+            return await waitAndFinishSync(existing.id)
           }
         }
 
@@ -220,21 +213,14 @@ export function registerWorkflowTools(ctx: HelmxPluginContext, deps: WorkflowToo
         if (a['resumeFromRunId'] !== undefined) input['resumeFromRunId'] = String(a['resumeFromRunId'])
         const runContext = {
           ...(context.callId !== undefined ? { parentToolCallId: context.callId } : {}),
-          // 仅后台启动的 run 参与父会话通知与重启恢复的守卫中止。
-          ...(backgroundChoice.background ? { notifyParentOnSettle: true } : {}),
-          // 同步启动：前台同步标记（syncForeground）——同步工具阻塞等待期间可
-          // 被 detach 动作按 runId 转后台；通知链在 detach 置位后才接入。
-          ...(backgroundChoice.background ? {} : { foreground: true }),
+          notifyParentOnSettle: backgroundChoice.background,
         }
         const started = await workflows.run({ ...input, conversationId: context.conversationId }, runContext)
         if (backgroundChoice.background) {
-          // 后台模式：durable running 快照落盘即返回，不绑定父回合 signal
-          //（父回合结束不误杀；中止仅经 abort(runId)/级联取消）；完成后经
-          // notifyParentOnSettle outbox 向父会话幂等 steer 汇报。
           syncRunsDoc()
           return workflowBackgroundHandle(started)
         }
-        return await waitAndFinishForeground(started.id)
+        return await waitAndFinishSync(started.id)
       } catch (error) {
         // 宿主优雅关停挂起期间父回合 abortSignal 触发：必须原样上抛拒绝，让
         // pi-durable 保持 ToolTask 未结算并在重启后按 replay: 'safe' 幂等重放。

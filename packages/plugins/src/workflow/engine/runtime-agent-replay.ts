@@ -9,13 +9,12 @@
 
 import { isValidNodeId, NODE_ID_PATTERN } from '@helmx/protocol'
 import { agentJournalKey, type AgentJournalKeyInput, type JournalScope, type JournalWriteInput } from './journal.js'
-import { compileJsonSchema, type CompiledSchema } from './json-schema.js'
 import { HARD_MAX_SUBAGENT_DEPTH } from '../../contracts.js'
 import type { WorkflowAgentEntry } from './progress.js'
 import type { ReplayResult, StartedAgentEntry } from './replay.js'
 import type { AgentCallPayload, CompletedChild } from './runtime-types.js'
 import type { AgentCallContext } from './runtime-agent-handler.js'
-import { agentRetryPrompt, applySchema, derivedLabel, isValidAttachments, MAX_AGENT_ATTEMPTS, preview, readCallScope, scopedResumeKey } from './runtime-validation.js'
+import { agentRetryPrompt, applySchema, compileJsonSchema, derivedLabel, isValidAttachments, MAX_AGENT_ATTEMPTS, preview, readCallScope, scopedResumeKey, type CompiledSchema } from './runtime-validation.js'
 
 /** All mutable state handed to the live attempt ring after replay adjudication (base has absorbed execution/gate; the live ring keeps updating in place; the attempt-* fields keep evolving inside the live ring). */
 export interface AgentLiveState {

@@ -913,9 +913,17 @@ test('外部子代理执行元数据的工具正文与持久结果统一脱敏',
 describe('subagent / SubagentWorkflow 工具 presentationMeta 轻量投影与 Schema 边界', { timeout: 60_000 }, () => {
   type RegisteredTool = PluginToolSpec & { presentationMetaSchema?: JsonSchema }
 
-  function captureWorkflowTools(workflowsStub: Record<string, unknown>): Map<string, RegisteredTool> {
+  function captureWorkflowTools(
+    workflowsStub: Record<string, unknown>,
+    hostStub: Record<string, unknown> = {},
+  ): Map<string, RegisteredTool> {
     const tools = new Map<string, RegisteredTool>()
     const ctx = {
+      host: {
+        listConversations: () => [],
+        redact: (text: string) => text,
+        ...hostStub,
+      },
       tool(spec: RegisteredTool) {
         tools.set(spec.name, spec)
       },
@@ -952,27 +960,35 @@ describe('subagent / SubagentWorkflow 工具 presentationMeta 轻量投影与 Sc
       name: 'subagent',
       conversationId: 1,
       kind: 'subagent' as const,
-      status: 'completed' as const,
+      status: 'running' as const,
       createdAt: 1,
       updatedAt: 2,
       result: largeResult,
     }
-    let currentRun = runRecord
-    const tools = captureWorkflowTools({
-      findRunByParentToolCall: () => undefined,
-      startBackgroundAgent: async () => ({ run: currentRun, execution }),
-      getRun: () => currentRun,
-      loadRunRecord: () => ({ id: currentRun.id, subagentMeta: { execution } }),
-      waitForeground: async () => 'settled',
-      isHostClosing: () => false,
-      isAutoRecoverOnRestart: () => false,
-    })
+    let syncOutcome: { ok: true; value: string } | { ok: false; error: string } = { ok: true, value: largeResult }
+    const tools = captureWorkflowTools(
+      {
+        findRunByParentToolCall: () => undefined,
+        startBackgroundAgent: async () => ({ run: runRecord, execution }),
+        getRun: () => runRecord,
+        loadRunRecord: () => ({ id: runRecord.id, subagentMeta: { execution } }),
+        isHostClosing: () => false,
+        isAutoRecoverOnRestart: () => false,
+      },
+      {
+        spawnAgent: async (req: AgentSpawnRequest) => {
+          req.onResolved?.(execution)
+          if (!syncOutcome.ok) throw new Error(syncOutcome.error)
+          return syncOutcome.value
+        },
+      },
+    )
 
     const subagentTool = tools.get('subagent')!
     assert.ok(subagentTool.structuredOutputSchema, '应声明 structuredOutputSchema')
     assert.ok(subagentTool.presentationMetaSchema, '应声明 presentationMetaSchema')
 
-    // 1) 同步终态（含 40KB result）
+    // 1) 同步终态（含 40KB result；直走 ctx.host.spawnAgent，不创建 WorkflowRun）
     const settled = (await subagentTool.execute(
       { prompt: '大载荷子代理', background: false },
       { conversationId: 1, callId: 'call_sa_1' },
@@ -982,7 +998,6 @@ describe('subagent / SubagentWorkflow 工具 presentationMeta 轻量投影与 Sc
     validateOrThrow(subagentTool.presentationMetaSchema!, settled.presentationMeta, 'subagent.presentationMeta')
     assert.deepEqual(settled.presentationMeta, {
       ok: true,
-      runId: 'wf_sub_1',
       status: 'completed',
       execution: {
         nodeId: 'local',
@@ -994,17 +1009,17 @@ describe('subagent / SubagentWorkflow 工具 presentationMeta 轻量投影与 Sc
     assert.ok(JSON.stringify(settled.presentationMeta).length < 512)
 
     // 2) 后台句柄
-    currentRun = { ...runRecord, status: 'running' as never }
     const bg = (await subagentTool.execute(
       { prompt: '后台子代理', background: true },
       { conversationId: 1, callId: 'call_sa_bg' },
     )) as { structuredOutput: Record<string, unknown>; presentationMeta: Record<string, unknown> }
     validateOrThrow(subagentTool.presentationMetaSchema!, bg.presentationMeta, 'subagent.bg.presentationMeta')
     assert.equal(bg.presentationMeta['background'], true)
+    assert.equal(bg.presentationMeta['runId'], 'wf_sub_1')
     assert.equal('result' in bg.presentationMeta, false)
 
     // 3) 失败终态 + 参数前置校验错误
-    currentRun = { ...runRecord, status: 'failed' as never, error: largeResult } as never
+    syncOutcome = { ok: false, error: largeResult }
     const failed = (await subagentTool.execute(
       { prompt: '失败子代理', background: false },
       { conversationId: 1, callId: 'call_sa_fail' },

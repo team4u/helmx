@@ -15,19 +15,13 @@ const t2 = <A, B>(fn: (a: A, b: B) => LocalizedText) => (a: A, b: B, locale: Hel
 const t3 = <A, B, C>(fn: (a: A, b: B, c: C) => LocalizedText) => (a: A, b: B, c: C, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string =>
   resolveLocalizedText(fn(a, b, c), locale)
 
-// ---------------------------------------------------------------------------
-// Visual presentation maps (merged from presentation.ts)
-// ---------------------------------------------------------------------------
-
+// Visual presentation maps
 export const SPIN = 'spin-slow'
 export const PHASE_ICON: Record<WorkflowPhaseSection['status'], string> = {
   pending: 'circle', running: 'loader', done: 'check', failed: 'x',
 }
 
-// ---------------------------------------------------------------------------
 // Shared status labels
-// ---------------------------------------------------------------------------
-
 const RUN_STATUS_LABELS: Record<string, LocalizedText> = {
   running: L('Running', '执行中'),
   completed: L('Completed', '已完成'),
@@ -71,14 +65,9 @@ export const executionStatusLabel = (status: string, locale: HelmxLocale = DEFAU
   resolveLocalizedText(EXECUTION_STATUS_LABELS[status] ?? status, locale)
 export const subagentBadgeLabel = (key: SubagentBadgeLabelKey, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string =>
   resolveLocalizedText(SUBAGENT_BADGE_LABELS[key], locale)
-export const runFailureFallbackLabel = t1((isTrueBackground: boolean) =>
-  isTrueBackground ? L('Background run failed', '后台执行失败') : L('Execution failed', '执行失败'),
-)
+export const runFailureFallbackLabel = t0('Background run failed', '后台执行失败')
 
-// ---------------------------------------------------------------------------
-// Timeline trace rows (SubagentToolView / WorkflowToolView)
-// ---------------------------------------------------------------------------
-
+// Timeline trace rows
 export const TRACE_SUBAGENT_TOOL_NAME = L('Subagent', '子代理')
 export const TRACE_EXTERNAL_TOOL_NAME = L('External agent', '外部代理')
 export const traceSubagentWithId = t1((id: number) => L(`Subagent #${id}`, `子代理 #${id}`))
@@ -105,10 +94,7 @@ export const traceNodeProgress = t2((done: number, total: number) => L(`${done}/
 export const traceActiveNode = t1((label: string) => L(`In progress: ${label}`, `进行中: ${label}`))
 export const traceResumeFallbackLabel = t1((runId: string) => L(`Resume ${runId}`, `恢复 ${runId}`))
 
-// ---------------------------------------------------------------------------
 // Background report card
-// ---------------------------------------------------------------------------
-
 export const REPORT_INVALID_TITLE = L('Background report', '后台汇报')
 export const REPORT_SUBAGENT_TITLE = L('Subagent report', '子代理汇报')
 export const REPORT_WORKFLOW_TITLE = L('Workflow report', '工作流汇报')
@@ -130,10 +116,7 @@ export const REPORT_RESULT_SECTION = L('Result body', '结果正文')
 export const REPORT_NO_RESULT = L('This run reported no result data.', '本次运行未携带结果数据。')
 export const REPORT_OTHER_TASKS_SECTION = L('Other in-flight tasks at delivery (snapshot)', '投递时其余在途任务（快照）')
 
-// ---------------------------------------------------------------------------
 // Subagent live card & stream
-// ---------------------------------------------------------------------------
-
 export const cardOpenChildLabel = t1((id: number) => L(`Open subagent #${id} drawer`, `打开子会话 #${id} 抽屉`))
 export const cardOpenChildTooltip = t0('Click to open the subagent drawer', '点击打开子会话抽屉')
 export const cardSubagentHeading = t1((id: number) => L(`Subagent #${id}`, `子会话 #${id}`))
@@ -152,27 +135,6 @@ export const approvalsBadge = t1((count: number) => L(`Approvals ${count}`, `审
 export const ACTION_ABORT = L('Abort', '中止')
 export const ACTION_ABORT_BG_TITLE = L('Abort this background subagent task', '中止该后台子代理任务')
 export const actionAbortFailed = t1((err: string) => L(`Failed to abort background subagent: ${err}`, `中止后台子代理失败：${err}`))
-export const ACTION_DETACH = L('Move to background', '转入后台')
-export const ACTION_DETACH_SUBAGENT_TITLE = L(
-  'Move this foreground-sync subagent to the background: the blocked call immediately returns a background handle, and a follow-up report arrives on completion',
-  '把该前台同步子代理转入后台：阻塞中的调用立即返回后台句柄，完成后自动 followUp 汇报',
-)
-export const ACTION_DETACH_SUBAGENT_ARIA = L('Move this foreground-sync subagent to the background', '把该前台同步子代理转入后台')
-export const actionDetachDone = t1((runId: string) =>
-  L(
-    `Moved to background (run ${runId}): the current call receives a background handle and a report will follow on completion`,
-    `已转入后台（运行 ${runId}）：当前调用将收到后台句柄，完成后自动汇报`,
-  ),
-)
-export const actionDetachFailed = t1((err: string) => L(`Failed to move to background: ${err}`, `转入后台失败：${err}`))
-export const ACTION_CLEANUP_WORKTREE = L('Clean up worktree', '清理工作树')
-export const ACTION_CLEANUP_WORKTREE_TITLE = L(
-  'Clean up the isolated worktree (registered ID first for precise targeting, avoiding same-path ambiguity across nodes)',
-  '清理隔离工作树（优先登记 ID 精确定位，避免跨节点同名路径歧义）',
-)
-export const ACTION_CLEANUP_WORKTREE_ARIA = L('Clean up isolated worktree', '清理隔离工作树')
-export const actionCleanupDone = t1((branch: string) => L(`Cleaned up isolated worktree ${branch}`, `已清理隔离工作树 ${branch}`))
-export const actionCleanupFailed = t1((err: string) => L(`Failed to clean up worktree: ${err}`, `清理工作树失败：${err}`))
 export const BADGE_CACHED = L('Cached', '已缓存')
 export const ACTION_RESUME_SUBAGENT = L('Resume', '恢复')
 export const ACTION_RESUME_SUBAGENT_TITLE = L('Resume this failed or aborted background subagent task', '恢复该失败或中止的后台子代理任务')
@@ -210,16 +172,8 @@ export const TOOL_TAG_FIND = L('Find', '查找')
 export const statToolSteps = t1((steps: number) => L(`${steps} tools loaded`, `已载 ${steps} 次工具`))
 export const summarizeJsonMoreSuffix = t1((count: number) => L(` (+${count} more)`, ` 等 ${count} 项`))
 
-// ---------------------------------------------------------------------------
 // External run summary
-// ---------------------------------------------------------------------------
-
 export const EXTERNAL_TITLE = L('External agent', '外部代理')
-export const ACTION_DETACH_EXTERNAL_TITLE = L(
-  'Move this foreground-sync external run to the background: the blocked call immediately returns a background handle, and a follow-up report arrives on completion',
-  '把该前台同步外部执行转入后台：阻塞中的调用立即返回后台句柄，完成后自动 followUp 汇报',
-)
-export const ACTION_DETACH_EXTERNAL_ARIA = L('Move this foreground-sync external run to the background', '把该前台同步外部执行转入后台')
 const EXTERNAL_IDLE_STATE: Record<'active' | 'error' | 'settled', LocalizedText> = {
   active: L('in progress', '进行中'),
   error: L('error', '异常'),
@@ -234,15 +188,10 @@ export const externalNodeFailedLabel = t1((error: string) => L(`Node failed: ${e
 export const externalRunningNodes = t1((count: number) => L(`${count} node${count > 1 ? 's' : ''} running`, `${count} 个节点执行中`))
 export const externalErrorJoiner = t0(': ', '：')
 
-// ---------------------------------------------------------------------------
 // Workbench run card / node cards / replay form
-// ---------------------------------------------------------------------------
-
 export const RUN_CARD_ABORT_FAILED = L('Failed to abort workflow', '中止工作流失败')
-export const RUN_CARD_DETACH_FAILED = L('Failed to move to background', '转入后台失败')
 export const RUN_CARD_RESUME_FAILED = L('Failed to resume from checkpoint', '断点恢复失败')
 export const RUN_CARD_REPLAY_FAILED = L('Failed to replay', '重放失败')
-export const RUN_CARD_SAVE_FAILED = L('Failed to save workflow', '保存工作流失败')
 export const runCardAriaLabel = t1((name: string) => L(`Workflow: ${name}`, `工作流：${name}`))
 export const RUN_CARD_COLLAPSE_TITLE = L('Collapse workflow card', '收起工作流卡')
 export const RUN_CARD_EXPAND_TITLE = L('Expand workflow card', '展开工作流卡')
@@ -258,25 +207,12 @@ export const runCardTokensStat = t1((tokens: number) => L(`${tokens.toLocaleStri
 export const RUN_CARD_MORE_ARIA = L('More actions', '更多操作')
 export const RUN_CARD_MORE_TITLE = L('More workflow actions', '更多工作流操作')
 export const RUN_CARD_REPLAY = L('Replay', '重放')
-export const RUN_CARD_SAVE_AS = L('Save as workflow', '保存为工作流')
 export const RUN_CARD_WORKBENCH_DETAILS = L('Workbench details', '工作台详情')
-export const RUN_CARD_DETACH_TITLE = L(
-  'Move this foreground-sync run to the background: the blocked tool call immediately returns a background handle, and a follow-up report arrives when the run completes',
-  '把该前台同步运行转入后台：阻塞中的工具调用立即返回后台句柄，运行完成后自动 followUp 汇报',
-)
 export const RUN_CARD_RESUME = L('Resume from checkpoint', '断点恢复')
 export const RUN_CARD_RESUME_TITLE = L(
   "Resume from this run's journal checkpoint: replays the completed prefix and only re-runs failed/incomplete nodes (keeps the original script and args; no parameter or target changes)",
   '从同 run 的 journal 断点恢复：重放已完成前缀，仅重跑失败/未完成节点（沿用原脚本与 args；不支持改参换目标）',
 )
-export const runCardSaveInvalidResult = t0(
-  'Save returned an invalid shape (unexpected action payload)',
-  '保存返回结构不合法（动作返回非预期形状）',
-)
-export const runCardSaveCreated = t1((name: string) =>
-  L(`Saved as workflow definition ${name} (visible in the workflow library)`, `已保存为工作流定义 ${name}（可在工作流库查看）`),
-)
-export const runCardSaveOverwritten = t1((name: string) => L(`Overwrote workflow definition ${name}`, `已覆盖工作流定义 ${name}`))
 export const runCardReplayAccepted = t1((runId: string) =>
   L(
     `Replay accepted (source run ${runId}; the new run keeps the original conversation and script source)`,
@@ -361,10 +297,7 @@ export const NODE_SKIPPED = L('Skipped', '已跳过')
 export const NODE_QUEUED = L('Queued…', '排队等待执行…')
 export const DEFAULT_PHASE_TITLE = L('Default phase', '默认阶段')
 
-// ---------------------------------------------------------------------------
 // Workflow library
-// ---------------------------------------------------------------------------
-
 export const LIB_SCREEN_TITLE = L('Workflow library', '工作流库')
 export const LIB_SCREEN_SUBTITLE = t2((count: number, isSplit: boolean) =>
   L(`${count} reusable orchestration assets${isSplit ? ' · split view' : ''}`, `跨会话可复用编排资产 ${count} 个${isSplit ? ' · 分屏' : ''}`),
@@ -379,8 +312,8 @@ export const LIB_LOADING = L('Loading workflow library…', '工作流目录读�
 export const LIB_LOAD_FAILED = t1((error: string) => L(`Failed to load the workflow library: ${error}`, `读取工作流目录失败：${error}`))
 export const LIB_RETRY = L('Retry', '重试')
 export const LIB_EMPTY = L(
-  'No saved workflows yet. After running SubagentWorkflow inline in a conversation, use "Save as workflow", or let the AI / CLI call the workflow save action to persist a definition.',
-  '暂无已保存工作流。在会话中用 SubagentWorkflow 内联运行后点「保存为工作流」，或让 AI / CLI 调用 workflow save 保存定义。',
+  'No saved workflows yet. Ask the AI or use the CLI workflow save action to persist a reusable definition.',
+  '暂无已保存工作流。可让 AI 或 CLI 调用 workflow save 保存可复用定义。',
 )
 export const LIB_NO_MATCH = t1((query: string) => L(`No workflows match "${query}"`, `未找到匹配「${query}」的工作流`))
 export const libListInvalid = t0(
@@ -464,128 +397,7 @@ export function workflowEditRequestLines(name: string, descriptionLine: string |
 }
 export const workflowEditDescriptionLine = t1((description: string) => L(`- Current description: ${description}`, `- 当前描述：${description}`))
 
-// ---------------------------------------------------------------------------
-// Worktree inspect section
-// ---------------------------------------------------------------------------
-
-export const wtInspectInvalid = t0(
-  'Inspection result has an invalid shape (unexpected action payload; refusing to fabricate a view)',
-  '检视结果结构不合法（动作返回非预期形状，拒绝伪造展示）',
-)
-export const wtSubmitFailed = t1((err: string) => L(`Failed to submit the review request: ${err}`, `提交审阅请求失败：${err}`))
-export const WT_SUBMITTED = L('Review request submitted to the main conversation', '已向主会话提交工作树审阅请求')
-export const WT_UNAVAILABLE_REMOVED = L('Registration cleaned up (the worktree has been removed)', '登记已清理（工作树已被移除）')
-export const WT_UNAVAILABLE_MISSING = L(
-  'Directory no longer exists (confirmed by a real probe on the node; the registration is kept)',
-  '目录已不存在（节点真实探测证实；登记仍保留）',
-)
-export const wtUnavailableCta = t1((reason: string) =>
-  L(`${reason}; git inspection is unavailable. Showing registration metadata only.`, `${reason}，无法执行 git 检视；仅展示登记元数据。`),
-)
-export const WT_COLLAPSE_TITLE = L('Collapse the worktree change overview', '收起工作树改动概览')
-export const WT_EXPAND_TITLE = L(
-  'Expand the read-only worktree change overview (real git inspection on the target node)',
-  '展开工作树只读改动概览（目标节点真实 git 检视）',
-)
-export const WT_OVERVIEW = L('Change overview', '改动概览')
-export const WT_REINSPECT_TITLE = L('Re-inspect (read-only)', '重新检视（只读）')
-export const WT_REFRESH = L('Refresh', '刷新')
-export const WT_INSPECTING = L('Read-only inspection on the target node…', '目标节点只读检视中…')
-export const WT_RETRY = L('Retry', '重试')
-export const wtInspectFailed = t1((error: string) => L(`Read-only inspection failed: ${error}`, `只读检视失败：${error}`))
-export const WT_KV_BRANCH = L('Branch', '分支')
-export const wtBranchMismatchBadgeTitle = t1((branch: string) =>
-  L(`Registered branch ${branch}; the worktree may have been switched`, `登记分支 ${branch}；工作树可能已被改签`),
-)
-export const WT_BRANCH_MISMATCH = L('Differs from registration', '与登记不一致')
-export const WT_KV_BASE = L('Base', '基线')
-export const wtBaseValue = t2((baseCommit: string, diffBase: string) => {
-  const short = baseCommit.slice(0, 12)
-  return L(
-    `${short} (${diffBase === 'HEAD' ? 'no base, against HEAD' : 'registered base'})`,
-    `${short}（${diffBase === 'HEAD' ? '无基线，按 HEAD' : '登记基线'}）`,
-  )
-})
-export const WT_NO_BASE = L('No registered base (uncommitted changes inspected against HEAD)', '无登记基线（按 HEAD 检视未提交改动）')
-export const WT_KV_DIRTY = L('Uncommitted changes', '未提交修改')
-export function wtDirtyCount(count: number, truncated: boolean, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
-  const suffix = truncated
-    ? resolveLocalizedText(L(' (list truncated; showing the first items)', '（列表已截断，仅显示前若干项）'), locale)
-    : ''
-  return resolveLocalizedText(L(`${count} file${count > 1 ? 's' : ''}${suffix}`, `${count} 个文件${suffix}`), locale)
-}
-export const WT_KV_AHEAD = L('Commits ahead of base', '领先基线提交')
-export const wtAheadCount = t1((count: number) => L(`${count}`, `${count} 个`))
-export const WT_KV_HEAD = L('Current HEAD', '当前 HEAD')
-export const WT_NO_DIRTY = L('No uncommitted changes in the worktree', '工作区无未提交修改')
-export const WT_DIFF_NOTE = L('The diff covers tracked files only; untracked files are in the status list.', 'Diff 仅包含已跟踪文件；未跟踪文件见状态列表。')
-export const wtDiffStatSection = t1((diffBase: string) =>
-  L(`Diff stats (vs ${diffBase === 'HEAD' ? 'HEAD' : 'base'})`, `Diff 统计（相对${diffBase === 'HEAD' ? ' HEAD' : '基线'}）`),
-)
-export const WT_DIFF_PREVIEW_SECTION = L('Diff preview (read-only, capped)', 'Diff 预览（只读，有上限）')
-export const WT_DIFF_TRUNCATED = L('Truncated', '已截断')
-export const WT_NO_DIFF = L('No tracked-file diff', '无已跟踪文件 diff')
-export const WT_REVIEW_BUTTON = L('Ask the main conversation to review and merge', '让主会话审阅并合入')
-export const WT_REVIEW_TITLE = L(
-  'Submit a review-and-merge request to the main conversation (actual inspection and merging are done there)',
-  '向主会话提交审阅与合入请求（实际检视与合入由主会话执行）',
-)
-export const WT_COPY_REVIEW = L('Copy review request', '复制审阅请求文本')
-
-export function worktreeReviewLines(
-  input: {
-    path: string
-    branch: string
-    nodeId?: string
-    baseCommit?: string
-    taskLine?: string
-    inspectLine?: (locale: HelmxLocale) => string[]
-  },
-  locale: HelmxLocale,
-): string[] {
-  const nodeSuffix = input.nodeId !== undefined && input.nodeId !== ''
-    ? resolveLocalizedText(L(` (node ${input.nodeId})`, `（节点 ${input.nodeId}）`), locale)
-    : ''
-  const baseSuffix = input.baseCommit !== undefined && input.baseCommit !== ''
-    ? resolveLocalizedText(L(` (based on commit ${input.baseCommit.slice(0, 12)})`, `（基于提交 ${input.baseCommit.slice(0, 12)}）`), locale)
-    : ''
-  if (locale === 'zh-CN') {
-    return [
-      '请审阅并合入以下受管工作树的改动（数据来自只读检视，实际内容请在目标节点以 git 复核）：',
-      `- 工作树：${input.path}${nodeSuffix}`,
-      `- 分支：${input.branch}${baseSuffix}`,
-      ...(input.taskLine !== undefined ? [input.taskLine] : []),
-      ...(input.inspectLine !== undefined ? input.inspectLine(locale) : []),
-      '请先只读复核（git diff / status），确认后合入主工作树；需要丢弃或清理工作树时请明确说明，不要静默 force 清理。',
-    ]
-  }
-  return [
-    'Please review and merge the changes of the following managed worktree (data comes from a read-only inspection; verify the actual content with git on the target node):',
-    `- Worktree: ${input.path}${nodeSuffix}`,
-    `- Branch: ${input.branch}${baseSuffix}`,
-    ...(input.taskLine !== undefined ? [input.taskLine] : []),
-    ...(input.inspectLine !== undefined ? input.inspectLine(locale) : []),
-    'Review read-only first (git diff / status) and merge into the main worktree after confirming; state explicitly if the worktree should be discarded or cleaned up — never force-clean silently.',
-  ]
-}
-export const wtReviewTaskLine = t1((task: string) => L(`- Task: ${task}`, `- 任务：${task}`))
-export function wtReviewInspectMissing(removed: boolean, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
-  const reason = resolveLocalizedText(removed ? L('registration cleaned up', '登记已清理') : L('directory missing', '不存在'), locale)
-  return resolveLocalizedText(L(`- Inspection: ${reason}; nothing to inspect`, `- 检视：目录${reason}，无可检视改动`), locale)
-}
-export const wtReviewDirtyLine = t1((count: number) => L(`- Uncommitted changes: ${count} file${count > 1 ? 's' : ''}`, `- 未提交修改：${count} 个文件`))
-export const wtReviewAheadLine = t1((count: number) => L(`- Commits ahead of base: ${count}`, `- 领先基线提交：${count} 个`))
-export const wtReviewBranchChanged = t1((currentBranch: string) =>
-  L(
-    `- Note: the worktree is currently on branch ${currentBranch}, which differs from the registered branch — it may have been switched; verify ownership first`,
-    `- 注意：工作树当前分支 ${currentBranch} 与登记分支不一致，可能已被改签，请先核实归属`,
-  ),
-)
-
-// ---------------------------------------------------------------------------
 // Active tray / execution tree rows / workbench panel
-// ---------------------------------------------------------------------------
-
 export function trayCount(blocked: number, running: number, active: number, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
   if (blocked > 0) {
     return running > 0
@@ -599,27 +411,18 @@ export const TRAY_COLLAPSE = L('Collapse', '收起')
 export const TRAY_EXPAND = L('Expand', '展开')
 export function trayToggleLabel(expanded: boolean, countText: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
   return resolveLocalizedText(
-    L(
-      `${expanded ? 'Collapse' : 'Expand'} in-flight tasks — ${countText}`,
-      `${expanded ? '收起' : '展开'}在途任务 — ${countText}`,
-    ),
+    L(`${expanded ? 'Collapse' : 'Expand'} in-flight tasks — ${countText}`, `${expanded ? '收起' : '展开'}在途任务 — ${countText}`),
     locale,
   )
 }
 export const TRAY_WORKBENCH = L('Workbench', '工作台')
-export function trayRowOpenConversationLabel(id: number, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
-  return resolveLocalizedText(L(`Open conversation #${id} drawer`, `打开会话 #${id} 抽屉`), locale)
-}
-export function trayRowOpenRunLabel(runId: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
-  return resolveLocalizedText(L(`Open run ${runId} in workbench`, `在工作台打开运行 ${runId}`), locale)
-}
-export function trayActionFailed(action: 'abort' | 'detach', err: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
-  const label = resolveLocalizedText(action === 'abort' ? ACTION_ABORT : ACTION_DETACH, locale)
+export const trayRowOpenConversationLabel = t1((id: number) => L(`Open conversation #${id} drawer`, `打开会话 #${id} 抽屉`))
+export const trayRowOpenRunLabel = t1((runId: string) => L(`Open run ${runId} in workbench`, `在工作台打开运行 ${runId}`))
+export function trayActionFailed(err: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  const label = resolveLocalizedText(ACTION_ABORT, locale)
   return resolveLocalizedText(L(`${label} failed: ${err}`, `${label}失败：${err}`), locale)
 }
-export const trayAwaitingApprovalElapsed = t1((duration: string) =>
-  L(`Awaiting approval ${duration}`, `等待审批 ${duration}`),
-)
+export const trayAwaitingApprovalElapsed = t1((duration: string) => L(`Awaiting approval ${duration}`, `等待审批 ${duration}`))
 
 export const execOpenConversationLabel = t1((id: number) => L(`Open conversation #${id} drawer`, `打开会话 #${id} 抽屉`))
 export const execCollapseChildrenLabel = t1((title: string) => L(`Collapse direct children of ${title}`, `收起 ${title} 直系子项`))
@@ -636,6 +439,18 @@ export const EXEC_EXTERNAL_FALLBACK = L('External run', '外部执行')
 export const execFrontlineConversation = t1((id: number) => L(`#${id} running`, `#${id} 执行中`))
 export const execFrontlineContainer = t1((label: string) => L(`${label} running`, `${label} 执行中`))
 export const execApprovalItem = t1((id: number) => L(`#${id} awaiting approval`, `#${id} 等待审批`))
+export function execFrontlineNamed(
+  name: string,
+  id: number,
+  doing: string | undefined,
+  locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
+): string {
+  if (doing !== undefined && doing !== '') return `${name} (#${id}) · ${doing}`
+  return resolveLocalizedText(L(`${name} (#${id}) running`, `${name} (#${id}) 执行中`), locale)
+}
+export const execApprovalItemNamed = t2((name: string, id: number) =>
+  L(`${name} (#${id}) awaiting approval`, `${name} (#${id}) 等待审批`),
+)
 
 export const WORKBENCH_HEAD_TITLE = L('Current conversation tasks', '当前会话任务')
 export const WORKBENCH_LIBRARY = L('Workflow library', '工作流库')
@@ -676,17 +491,3 @@ export const workbenchResumeStarted = t2((resumedCount: number, skippedCount: nu
       ),
 )
 export const workbenchResumeFailed = t1((err: string) => L(`Batch resume failed: ${err}`, `批量恢复失败：${err}`))
-export function execFrontlineNamed(
-  name: string,
-  id: number,
-  doing: string | undefined,
-  locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
-): string {
-  if (doing !== undefined && doing !== '') {
-    return `${name} (#${id}) · ${doing}`
-  }
-  return resolveLocalizedText(L(`${name} (#${id}) running`, `${name} (#${id}) 执行中`), locale)
-}
-export const execApprovalItemNamed = t2((name: string, id: number) =>
-  L(`${name} (#${id}) awaiting approval`, `${name} (#${id}) 等待审批`),
-)

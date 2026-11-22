@@ -845,3 +845,50 @@ test('failed-while-enabled 插件：托管 skill/load_skill、托管 Profile 与
     await env.close()
   }
 })
+
+test('before_turn 与 list_mentionable：仅启用 Swarm（含 swarm_dispatch_worker、无 workflow）时仍暴露协作目录', { timeout: 60_000 }, async () => {
+  const swarmLikePlugin: PluginDefinition = {
+    id: 'test:swarm-dispatch',
+    name: 'Swarm Dispatch Fixture',
+    definePlugin(ctx) {
+      ctx.tool({
+        name: 'swarm_dispatch_worker',
+        description: 'Dispatch a swarm worker',
+        inputSchema: { type: 'object', properties: {} },
+        execute: () => ({ ok: true }),
+      })
+    },
+  }
+  const env = await makeEnv([swarmLikePlugin], true)
+  try {
+    await seedProfile(env.profiles, env.dataDir, { id: 'reviewer', name: '评审专家' }, '# Reviewer\n负责代码评审。')
+    const turn = {
+      conversation: makeConversation(1),
+      sections: [],
+      tools: [tool('swarm_dispatch_worker')],
+      inputs: [],
+      messages: [],
+    }
+    const result = await env.host.runHook('before_turn', turn as never)
+    const catalog = sectionsOf(result, turn).find((s) => s.id === 'profile.catalog')
+    assert.ok(catalog, '仅有 swarm_dispatch_worker 时应注入 <available_profiles>')
+    assert.ok(catalog.text.includes('id="reviewer"'))
+    assert.ok(catalog.text.includes('swarm_dispatch_worker'))
+    assert.ok(catalog.text.includes('profileId'))
+
+    const mentionable = (await env.host.invokeAction(
+      'builtin:profile',
+      'list_mentionable',
+      { query: '' },
+      { conversationId: 1 },
+    )) as { items: Array<{ id: string }> }
+    assert.deepEqual(mentionable.items.map((i) => i.id), ['reviewer'])
+
+    await env.host.disable('test:swarm-dispatch')
+    const disabledTurn = { ...turn, sections: [], tools: [] }
+    const afterDisable = await env.host.runHook('before_turn', disabledTurn as never)
+    assert.equal(sectionsOf(afterDisable, disabledTurn).find((s) => s.id === 'profile.catalog'), undefined)
+  } finally {
+    await env.close()
+  }
+})

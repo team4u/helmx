@@ -15,7 +15,7 @@
 
 import { HelmxError, redactJsonValue, type AgentExecutionInfo } from '@helmx/protocol'
 import type { WorkflowNodeState } from '../../contracts.js'
-import { resolveForegroundWaiters, type ActiveRun } from './active-run.js'
+import type { ActiveRun } from './active-run.js'
 import { classifyRunFailureCode } from './run-resumability.js'
 import { backgroundChildIds } from './run-store.js'
 import { nodesFromProgress, redactNodes } from './run-summary.js'
@@ -148,9 +148,7 @@ async function executeRunSettlement(
     svc.emitEventSafe('workflow.updated', { run: { ...run.summary } })
     if (settleFailure !== undefined) recordSettleError(settleFailure)
     spec.cleanupParentSignal?.()
-    run.unbindForegroundSignal = undefined
     spec.resolveDone?.()
-    resolveForegroundWaiters(run, 'settled')
   }
 }
 

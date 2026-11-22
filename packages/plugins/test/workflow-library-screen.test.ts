@@ -11,8 +11,7 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import type { ConversationSummary, PluginClientContext as PluginClientContextType, ScreenProps, WorkbenchPanelProps } from '@helmx/protocol'
-import type { WorkflowRunSummary } from '../src/contracts.js'
+import type { PluginClientContext as PluginClientContextType, ScreenProps } from '@helmx/protocol'
 import {
   React,
   SDK,
@@ -82,25 +81,6 @@ test('parseWorkflowDetail：合法详情解析；缺 script / 空 script / 条�
   assert.equal(m.parseWorkflowDetail({ workflow: { ...entry, script: '' } }), undefined, '空 script 拒绝')
   assert.equal(m.parseWorkflowDetail({ workflow: 42 }), undefined)
   assert.equal(m.parseWorkflowDetail(undefined), undefined)
-})
-
-test('parseWorkflowSaveResult：created 必需 boolean，workflow 必需合法摘要', { timeout: 60_000 }, () => {
-  const ok = m.parseWorkflowSaveResult({ created: true, workflow: LIST_RAW.workflows[0] })
-  assert.ok(ok !== undefined)
-  assert.equal(ok!.created, true)
-  assert.equal(ok!.workflow.name, 'release')
-
-  assert.equal(m.parseWorkflowSaveResult({ workflow: LIST_RAW.workflows[0] }), undefined)
-  assert.equal(m.parseWorkflowSaveResult({ created: 'yes', workflow: LIST_RAW.workflows[0] }), undefined)
-  assert.equal(m.parseWorkflowSaveResult({ created: true }), undefined)
-})
-
-test('canSaveRunAsWorkflow：非 subagent 且无 savedName 才可保存；已保存定义/子代理/后台不显示', { timeout: 60_000 }, () => {
-  const base = { id: 'wf_1', name: 'n', conversationId: 1, status: 'completed', createdAt: 1, updatedAt: 2 } as WorkflowRunSummary
-  assert.equal(m.canSaveRunAsWorkflow(base), true, '内联 DSL run 可一键保存')
-  assert.equal(m.canSaveRunAsWorkflow({ ...base, savedName: 'release' } satisfies WorkflowRunSummary), false, '已保存定义发起的 run 不再提供保存入口')
-  assert.equal(m.canSaveRunAsWorkflow({ ...base, kind: 'subagent' } satisfies WorkflowRunSummary), false)
-  assert.equal(m.canSaveRunAsWorkflow({ ...base, kind: 'workflow' } satisfies WorkflowRunSummary), true)
 })
 
 test('buildWorkflowEditRequest：含名称与 get/save 能力指引，不伪造 Web 编辑', { timeout: 60_000 }, () => {
@@ -325,83 +305,6 @@ test('详情抽屉：深链 wf 参数直开；get 只读源码渲染、无编辑
     assert.equal(ctx.calls.filter((c) => c.action === 'list').length >= 2, true, '删除后重新读取目录')
     assert.ok(props.setParamsCalls.some((p) => p['wf'] === undefined), '删除后清理 wf 深链参数')
     void host
-  } finally {
-    unmount()
-  }
-})
-
-test('运行卡「保存为工作流」：内联 run 显示并调用 save fromRunId；已保存定义与 subagent 不显示', { timeout: 60_000 }, async () => {
-  const inlineRun: WorkflowRunSummary = {
-    id: 'wf_inline',
-    name: '内联任务',
-    conversationId: 1,
-    status: 'completed',
-    createdAt: 1,
-    updatedAt: 2,
-    parentToolCallId: 'wf_call',
-    nodes: [],
-  }
-  const savedRun: WorkflowRunSummary = { ...inlineRun, id: 'wf_saved', savedName: 'release' }
-  const subagentRun: WorkflowRunSummary = { ...inlineRun, id: 'wf_bg', kind: 'subagent', status: 'running' }
-  setWorkflowClientStub({
-    docValue: { runs: [inlineRun, savedRun, subagentRun] },
-    conversations: [],
-    conversation: () => ({ summary: undefined, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} }),
-  })
-  const ctx = makeRecordingCtx({
-    save: { created: true, workflow: { name: 'inline-task', updatedAt: 1, size: 10, description: 'd' } },
-  })
-  const mod = await importWorkflowClientModule('workbench.tsx')
-  const Panel = mod['WorkflowWorkbenchPanel'] as (p: WorkbenchPanelProps) => React.ReactElement
-  const conversation: ConversationSummary = {
-    id: 1,
-    title: '主会话',
-    profileId: 'assistant',
-    tags: [],
-    cwd: '/tmp/repo',
-    model: '',
-    thinkingLevel: '',
-    status: 'idle',
-    stateChangeSeq: 1,
-    completionSeq: 0,
-    unread: false,
-    pinned: false,
-    pendingAskCount: 0,
-    createdAt: 0,
-    updatedAt: 0,
-  }
-  const { host, unmount } = await mountClient(ctx, e(Panel, { conversation }))
-  try {
-    const inlineWrap = host.querySelector<HTMLElement>('[data-run-id="wf_inline"]')
-    const savedWrap = host.querySelector<HTMLElement>('[data-run-id="wf_saved"]')
-    const subagentWrap = host.querySelector<HTMLElement>('[data-run-id="wf_bg"]')
-    assert.ok(inlineWrap !== null && savedWrap !== null && subagentWrap !== null, '三个 run 均应在工作台渲染')
-
-    // subagent running run 只有中止，无更多操作与保存入口；completed savedRun 有更多操作（重放）但无保存入口。
-    assert.ok(subagentWrap.querySelector('button[aria-label="More actions"]') === null)
-    const savedMore = savedWrap.querySelector<HTMLButtonElement>('button[aria-label="More actions"]')
-    assert.ok(savedMore !== null)
-    act(() => {
-      savedMore.click()
-    })
-    assert.equal([...savedWrap.querySelectorAll('button')].filter((b) => (b.textContent ?? '').includes('Save as workflow')).length, 0)
-    act(() => {
-      savedMore.click()
-    })
-
-    // inline completed run 打开 ··· 更多操作后仅此处提供「保存为工作流」。
-    const inlineMore = inlineWrap.querySelector<HTMLButtonElement>('button[aria-label="More actions"]')
-    assert.ok(inlineMore !== null)
-    act(() => {
-      inlineMore.click()
-    })
-    const saveButtons = [...host.querySelectorAll('button')].filter((b) => (b.textContent ?? '').includes('Save as workflow'))
-    assert.equal(saveButtons.length, 1, '只有内联 run 提供保存入口（已保存定义与 subagent 不显示）')
-    await act(async () => {
-      saveButtons[0]!.click()
-    })
-    assert.deepEqual(ctx.calls.find((c) => c.action === 'save')!.input, { fromRunId: 'wf_inline' })
-    assert.ok(ctx.notices.some((n) => n.message.includes('Saved as workflow definition inline-task')), '保存成功通知携带真实名称')
   } finally {
     unmount()
   }

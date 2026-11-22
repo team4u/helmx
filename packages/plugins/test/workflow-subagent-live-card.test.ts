@@ -212,19 +212,12 @@ test('subagentBadge：子会话 working 时带真后台 run 标注为后台运�
   assert.deepEqual(subagentBadge('blocked', 'running', { status: 'running' }), { status: 'blocked', label: 'Awaiting approval', badge: 'badge-warn' })
 })
 
-test('subagentBadge：前台同步 run（syncForeground 未 detach）显示执行中，不自称后台；detachedAt 置位即真后台', { timeout: 60_000 }, () => {
-  const fg: SubagentRunView = { status: 'running', syncForeground: true }
-  assert.deepEqual(subagentBadge('working', 'done', fg), { status: 'working', label: 'Running', badge: 'badge-accent' })
-  assert.deepEqual(subagentBadge('working', 'unknown', fg), { status: 'working', label: 'Running', badge: 'badge-accent' })
-  assert.deepEqual(subagentBadge('idle', 'done', fg), { status: 'working', label: 'Running', badge: 'badge-accent' })
-  assert.deepEqual(subagentBadge('done', 'done', fg), { status: 'working', label: 'Running', badge: 'badge-accent' })
-  assert.deepEqual(subagentBadge(undefined, 'done', fg), { status: 'working', label: 'Running', badge: 'badge-accent' })
-  assert.deepEqual(subagentBadge('blocked', 'running', fg), { status: 'blocked', label: 'Awaiting approval', badge: 'badge-warn' })
-  const detached: SubagentRunView = { status: 'running', syncForeground: true, detachedAt: 5 }
-  assert.deepEqual(subagentBadge('working', 'done', detached), { status: 'working', label: 'Running in background', badge: 'badge-accent' })
-  assert.deepEqual(subagentBadge('idle', 'done', detached), { status: 'working', label: 'Running in background', badge: 'badge-accent' })
-  assert.deepEqual(subagentBadge('working', 'done', { status: 'running' }), { status: 'working', label: 'Running in background', badge: 'badge-accent' })
-  assert.deepEqual(subagentBadge('idle', 'done', { status: 'running' }), { status: 'working', label: 'Running in background', badge: 'badge-accent' })
+test('subagentBadge：有 backgroundRun 时显示后台运行中，无 backgroundRun 时显示执行中', { timeout: 60_000 }, () => {
+  const bg: SubagentRunView = { status: 'running' }
+  assert.deepEqual(subagentBadge('working', 'done', bg), { status: 'working', label: 'Running in background', badge: 'badge-accent' })
+  assert.deepEqual(subagentBadge('idle', 'done', bg), { status: 'working', label: 'Running in background', badge: 'badge-accent' })
+  assert.deepEqual(subagentBadge('working', 'running'), { status: 'working', label: 'Running', badge: 'badge-accent' })
+  assert.deepEqual(subagentBadge('blocked', 'running', bg), { status: 'blocked', label: 'Awaiting approval', badge: 'badge-warn' })
 })
 
 // ---------------------------------------------------------------------------
@@ -339,75 +332,16 @@ test('backgroundRun failed：副栏渲染错误提示，不被子会话旧 idle 
   assert.ok(html.includes('Error'), '徽章应显示异常态')
 })
 
-test('前台同步 run：查看会话即发起会话且 human 归属显示「转入后台」；automation / 后台 / 已转后台 / 非本会话不显示', { timeout: 60_000 }, () => {
-  const baseOpts: RenderOpts = {
-    conversations: [summary(11, 'working')],
-    conversationDetails: { 11: { ...summary(11, 'working'), entries: [] } },
-  }
-  const visible = renderCard('running', {
-    ...baseOpts,
-    backgroundRun: bgRun({ status: 'running', syncForeground: true }),
-    viewer: { conversationId: 1 },
-  })
-  assert.ok(visible.includes('Move to background'), '前台同步 running run 应显示转入后台按钮')
-  assert.ok(visible.includes('Running'), '前台同步卡徽章应显示执行中')
-  assert.ok(!visible.includes('Running in background'), '前台同步卡不得显示后台运行中')
-
-  assert.ok(
-    renderCard('running', {
-      ...baseOpts,
-      backgroundRun: bgRun({ status: 'running', syncForeground: true }),
-      viewer: { conversationId: 1, ownedBy: 'human' },
-    }).includes('Move to background'),
-    'human 查看方应显示转入后台按钮',
-  )
-  for (const ownedBy of ['helmx'] as const) {
-    assert.ok(
-      !renderCard('running', {
-        ...baseOpts,
-        backgroundRun: bgRun({ status: 'running', syncForeground: true }),
-        viewer: { conversationId: 1, ownedBy },
-      }).includes('Move to background'),
-      `automation（${ownedBy}）查看方不得显示转入后台按钮`,
-    )
-  }
-
-  const background = renderCard('running', {
-    ...baseOpts,
-    backgroundRun: bgRun({ status: 'running' }),
-    viewer: { conversationId: 1 },
-  })
-  assert.ok(!background.includes('Move to background'), '普通后台 run 不得显示转入后台按钮')
-
-  const detached = renderCard('running', {
-    ...baseOpts,
-    backgroundRun: bgRun({ status: 'running', syncForeground: true, detachedAt: 5 }),
-    viewer: { conversationId: 1 },
-  })
-  assert.ok(!detached.includes('Move to background'), '已转后台的 run 不得再显示转入后台按钮')
-
-  const otherViewer = renderCard('running', {
-    ...baseOpts,
-    backgroundRun: bgRun({ status: 'running', syncForeground: true }),
-    viewer: { conversationId: 2 },
-  })
-  assert.ok(!otherViewer.includes('Move to background'), '查看会话非发起会话时不得显示转入后台按钮')
-})
-
-test('前台同步 run gate/结算期：子会话 idle 不假完成，徽章执行中且不自称后台', { timeout: 60_000 }, () => {
+test('后台 run gate/结算期：子会话 idle 不假完成，徽章仍显示后台运行中', { timeout: 60_000 }, () => {
   const html = renderCard('done', {
     conversations: [summary(11, 'idle')],
     conversationDetails: { 11: { ...summary(11, 'idle'), entries: [] } },
     backgroundRun: bgRun({
       status: 'running',
-      syncForeground: true,
       nodes: [{ id: 'g1', kind: 'agent', status: 'running', gateCommand: 'pnpm test' }],
     }),
-    viewer: { conversationId: 1 },
   })
-  assert.ok(html.includes('Move to background'), '前台同步 running run 应显示转入后台按钮')
-  assert.ok(html.includes('Running'), 'gate/结算期徽章应显示执行中')
-  assert.ok(!html.includes('Running in background'), '前台同步卡不得显示后台运行中')
+  assert.ok(html.includes('Running in background'), 'gate/结算期徽章应显示后台运行中')
   assert.ok(!html.includes('Done'), 'run 未结算不得假完成')
 })
 
@@ -1071,27 +1005,12 @@ test('resolveSubagentHeaderSnippet：error 优先后台 run 失败，其次父�
     { kind: 'error', tag: 'Background run failed', text: '测试失败：期望 3 得到 2' },
   )
   assert.deepEqual(
-    resolveSubagentHeaderSnippet({ badgeStatus: 'error', backgroundRun: bgRun({ status: 'failed', syncForeground: true }) }),
-    { kind: 'error', tag: 'Execution failed', text: 'Execution failed' },
-  )
-  assert.deepEqual(
-    resolveSubagentHeaderSnippet({ badgeStatus: 'error', backgroundRun: bgRun({ status: 'failed', syncForeground: true }) }, 'zh-CN'),
-    { kind: 'error', tag: '执行失败', text: '执行失败' },
-  )
-  assert.deepEqual(
-    resolveSubagentHeaderSnippet({ badgeStatus: 'error', backgroundRun: bgRun({ status: 'failed', syncForeground: true, error: 'gate 验收失败：退出码 1' }) }),
-    { kind: 'error', tag: 'Execution failed', text: 'gate 验收失败：退出码 1' },
-  )
-  assert.deepEqual(
-    resolveSubagentHeaderSnippet({
-      badgeStatus: 'error',
-      backgroundRun: bgRun({ status: 'failed', syncForeground: true, nodes: [{ id: 'n1', kind: 'agent', status: 'failed' }] }),
-    }),
-    { kind: 'error', tag: 'Execution failed', text: 'Execution failed' },
-  )
-  assert.deepEqual(
-    resolveSubagentHeaderSnippet({ badgeStatus: 'error', backgroundRun: bgRun({ status: 'failed', syncForeground: true, detachedAt: 5 }) }),
+    resolveSubagentHeaderSnippet({ badgeStatus: 'error', backgroundRun: bgRun({ status: 'failed' }) }),
     { kind: 'error', tag: 'Background run failed', text: 'Background run failed' },
+  )
+  assert.deepEqual(
+    resolveSubagentHeaderSnippet({ badgeStatus: 'error', backgroundRun: bgRun({ status: 'failed' }) }, 'zh-CN'),
+    { kind: 'error', tag: '后台执行失败', text: '后台执行失败' },
   )
   assert.deepEqual(
     resolveSubagentHeaderSnippet({ badgeStatus: 'error', toolSummary: { presentationMeta: { ok: false, error: '结构化超时' } } }),
@@ -1336,17 +1255,12 @@ test('ExternalRunSummary：显示 run 总耗时（锚定 settledAt）与每个�
   }
 })
 
-test('ExternalRunSummary：前台同步 run 失败兜底为执行失败，真后台与已 detach 保持后台执行失败', { timeout: 60_000 }, () => {
+test('ExternalRunSummary：失败 run 兜底为后台执行失败，携带 error 时拼接展示', { timeout: 60_000 }, () => {
   const h = createWorkflowHostHarness({ conversationId: 1 })
   const render = (run: WorkflowRunSummary): string => h.renderSsr(e(ExternalRunSummary, { run, toolStatus: 'error' }))
-  const fg = render(bgRun({ status: 'failed', syncForeground: true }))
-  assert.ok(fg.includes('Execution failed'), '前台同步失败应显示执行失败')
-  assert.ok(!fg.includes('Background run failed'), '前台同步失败不得自称后台执行失败')
-  assert.ok(render(bgRun({ status: 'failed' })).includes('Background run failed'), '真后台失败保持后台执行失败')
-  assert.ok(render(bgRun({ status: 'failed', syncForeground: true, detachedAt: 5 })).includes('Background run failed'), '已 detach 的失败 run 保持后台执行失败')
+  assert.ok(render(bgRun({ status: 'failed' })).includes('Background run failed'))
   assert.ok(
-    render(bgRun({ status: 'failed', syncForeground: true, error: 'gate 退出码 1' })).includes('Execution failed: gate 退出码 1'),
-    '前台同步失败带 error 时显示「Execution failed: <error>」',
+    render(bgRun({ status: 'failed', error: 'gate 退出码 1' })).includes('Background run failed: gate 退出码 1'),
   )
 })
 

@@ -21,7 +21,7 @@ import {
   runWorkflow,
   type WorkflowRunResult,
 } from './runtime.js'
-import { resolveForegroundWaiters, type ActiveRun } from './active-run.js'
+import type { ActiveRun } from './active-run.js'
 import { inspectRunResumability } from './run-resumability.js'
 import { backgroundChildIds, newRunId, type RunRecord } from './run-store.js'
 import { redactSummaryNodes, toSummary } from './run-summary.js'
@@ -82,7 +82,7 @@ async function claimResumeTakeover(
 export async function startWorkflowRun(
   svc: WorkflowServiceContext,
   request: WorkflowRunRequest,
-  context?: { parentToolCallId?: string; notifyParentOnSettle?: boolean; foreground?: boolean },
+  context?: { parentToolCallId?: string; notifyParentOnSettle?: boolean },
 ): Promise<WorkflowRunSummary> {
   svc.assertNotClosed()
   await svc.init()
@@ -161,7 +161,6 @@ export async function startWorkflowRun(
       const spec = replayFrom.subagentSpec!
       const nextRunId = newRunId()
       const releaseTakeover = await claimResumeTakeover(svc, replayFrom, nextRunId)
-      const foregroundContext = context?.foreground === true
       const spawnReq: AgentSpawnRequest = {
         parentConversationId: replayFrom.conversationId,
         prompt: SUBAGENT_RESUME_PROMPT,
@@ -182,8 +181,7 @@ export async function startWorkflowRun(
           : replayFrom.name !== ''
             ? { label: replayFrom.name }
             : {}),
-        foreground: foregroundContext,
-        notifyParentOnSettle: foregroundContext ? false : (context?.notifyParentOnSettle ?? true),
+        notifyParentOnSettle: context?.notifyParentOnSettle ?? true,
         preassigned: {
           runId: nextRunId,
           replayedFrom: replayFrom.id,
@@ -316,9 +314,12 @@ export async function startWorkflowRun(
   const abort = new AbortController()
   const createdAt = Date.now()
   const meta = svc.library.peekMeta(script)
-  const foregroundContext = context?.foreground === true
   const scriptBase = scriptPath !== undefined ? basename(scriptPath, '.js') : undefined
   const fallbackScriptName = scriptBase !== undefined && scriptBase !== '' ? scriptBase : undefined
+
+  const notifyParentOnSettle =
+    context?.notifyParentOnSettle === true ||
+    (context?.notifyParentOnSettle === undefined && replayFrom?.notifyParentOnSettle === true)
 
   const record: RunRecord = {
     id: runId,
@@ -329,11 +330,7 @@ export async function startWorkflowRun(
     createdAt,
     updatedAt: createdAt,
     kind: 'workflow',
-    ...(!foregroundContext &&
-      (context?.notifyParentOnSettle === true || replayFrom?.notifyParentOnSettle === true)
-      ? { notifyParentOnSettle: true }
-      : {}),
-    ...(foregroundContext ? { syncForeground: true } : {}),
+    ...(notifyParentOnSettle ? { notifyParentOnSettle: true } : {}),
     ...(meta?.description !== undefined ? { description: svc.redact(meta.description) } : {}),
     ...(meta?.phases !== undefined
       ? { phases: redactJsonValue(meta.phases, svc.redact) as RunRecord['phases'] }
@@ -365,7 +362,6 @@ export async function startWorkflowRun(
     pendingAborts: new Set(),
     pendingExecs: new Set(),
     childConversations: new Set(),
-    foregroundWaiters: new Set(),
     lastPersistAt: createdAt,
     lastNodeEventAt: createdAt,
   }
@@ -388,7 +384,6 @@ export async function startWorkflowRun(
     await writer.close().catch(() => {})
     svc.active.delete(runId)
     resolveRunDone()
-    resolveForegroundWaiters(run, 'settled')
     throw error
   }
   svc.emitEventSafe('workflow.updated', { run: redactSummaryNodes(svc.redact, { ...run.summary }) })
@@ -473,7 +468,6 @@ export function resumeWorkflowInPlace(
     pendingAborts: new Set(),
     pendingExecs: new Set(),
     childConversations: new Set(backgroundChildIds(record)),
-    foregroundWaiters: new Set(),
     lastPersistAt: Date.now(),
     lastNodeEventAt: Date.now(),
   }

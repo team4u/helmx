@@ -1,15 +1,12 @@
 /**
- * Background task summary component for external runtimes (e.g. Herdr panes):
- * shown honestly when there is no native subagent, without fabricating a
- * subagent entry. Running foreground-sync runs carry a "Move to background"
- * action (detach).
+ * Background task summary component for external runtimes without a native
+ * subagent conversation (shown honestly without fabricating a child drawer).
  */
 import type { ReactNode } from 'react'
 import {
   StatusLight,
   formatDurationMs,
   formatStopwatchMs,
-  usePluginContext,
   usePluginLocale,
   usePluginTranslator,
 } from '@helmx/plugin-client'
@@ -19,18 +16,8 @@ import { Icon } from './WorkflowIcon.tsx'
 import { isPlaceholderNodeLabel, isPlaceholderRunName } from './model-format.ts'
 import { executionLightStatus } from './model-execution-status.ts'
 import { subagentBadge, runFailureFallbackLabel } from './model-subagent-card.ts'
+import { resolveNodeElapsedMs, resolveRunElapsedMs } from './model-run.ts'
 import {
-  canDetachForegroundRun,
-  resolveNodeElapsedMs,
-  resolveRunElapsedMs,
-  type DetachViewerScope,
-} from './model-run.ts'
-import {
-  ACTION_DETACH,
-  ACTION_DETACH_EXTERNAL_ARIA,
-  ACTION_DETACH_EXTERNAL_TITLE,
-  actionDetachDone,
-  actionDetachFailed,
   EXTERNAL_TITLE,
   externalBackgroundTaskLabel,
   nodeStatusLabel,
@@ -47,28 +34,20 @@ export function ExternalRunSummary(props: {
   worktree?: { path: string; branch: string }
   toolStatus: 'running' | 'done' | 'error'
   executionId?: string
-  /** Viewer scope (conversation + ownership): foreground-sync run "Move to background" visibility check. */
-  viewer?: DetachViewerScope
 }): ReactNode {
-  const ctx = usePluginContext()
   const locale = usePluginLocale()
   const t = usePluginTranslator()
   const { run, worktree, toolStatus, executionId } = props
   const nodes = run?.nodes ?? []
   const running = nodes.filter((n) => n.status === 'running').length
   const failed = nodes.find((n) => n.status === 'failed')
-  // Error line of a failed/aborted run: the fallback label distinguishes
-  // foreground sync (execution failed) from true background (background run
-  // failed); the error text is joined honestly (without one only the label
-  // remains, never duplicated twice).
-  const runError = run !== undefined && (run.status === 'failed' || run.status === 'aborted')
-    ? [runFailureFallbackLabel(run, locale), run.error].filter(Boolean).join(externalErrorJoiner(locale))
-    : undefined
+  const runError =
+    run !== undefined && (run.status === 'failed' || run.status === 'aborted')
+      ? [runFailureFallbackLabel(locale), run.error].filter(Boolean).join(externalErrorJoiner(locale))
+      : undefined
   const badge = subagentBadge(undefined, toolStatus, run, undefined, locale)
   const active = badge.status === 'working'
   const failedState = badge.status === 'error'
-  // Run total duration: advances with the stopwatch while running, freezes at
-  // createdAt → settledAt/updatedAt when finished; omitted honestly without run data.
   const nowMs = useElapsedNowMs((active && run?.status === 'running') || running > 0)
   const elapsedMs = run !== undefined ? resolveRunElapsedMs(run, nowMs) : undefined
   const primaryTitle =
@@ -77,6 +56,8 @@ export function ExternalRunSummary(props: {
       : !isPlaceholderNodeLabel(nodes[0]?.label)
         ? nodes[0]!.label!.trim()
         : undefined
+  const lightStatus = executionLightStatus(badge.status, run, failed !== undefined)
+
   return (
     <div className="subagent-live-card subagent-external-card">
       <div className="subagent-live-header">
@@ -92,36 +73,14 @@ export function ExternalRunSummary(props: {
             {worktree.branch}
           </span>
         ) : null}
-        {(() => {
-          const lightStatus = executionLightStatus(badge.status, run, failed !== undefined)
-          return (
-            <StatusLight
-              status={lightStatus}
-              label={lightStatus === 'aborted' ? runStatusLabel('aborted', locale) : badge.label}
-            />
-          )
-        })()}
+        <StatusLight
+          status={lightStatus}
+          label={lightStatus === 'aborted' ? runStatusLabel('aborted', locale) : badge.label}
+        />
         {elapsedMs !== undefined ? (
           <span className="subagent-live-elapsed tabular-nums">
             {run?.status === 'running' ? formatStopwatchMs(elapsedMs) : formatDurationMs(elapsedMs)}
           </span>
-        ) : null}
-        {run !== undefined && canDetachForegroundRun(run, props.viewer) ? (
-          <button
-            type="button"
-            className="btn btn-xs"
-            title={t(ACTION_DETACH_EXTERNAL_TITLE)}
-            aria-label={t(ACTION_DETACH_EXTERNAL_ARIA)}
-            onClick={() => {
-              void ctx
-                .callAction('detach', { runId: run.id })
-                .then(() => ctx.notify(actionDetachDone(run.id, locale)))
-                .catch((err: unknown) => ctx.notify(actionDetachFailed(err instanceof Error ? err.message : String(err), locale), 'error'))
-            }}
-          >
-            <Icon name="arrow-down-to-line" size={11} />
-            <span className="subagent-action-label">{t(ACTION_DETACH)}</span>
-          </button>
         ) : null}
       </div>
       <div className="subagent-live-stream subagent-external-body">
@@ -162,7 +121,9 @@ export function ExternalRunSummary(props: {
             <span className="subagent-stream-body">{externalNodeFailedLabel(failed.error, locale)}</span>
           </div>
         ) : null}
-        {running > 0 ? <div className="subagent-stream-line subagent-stream-empty">{externalRunningNodes(running, locale)}</div> : null}
+        {running > 0 ? (
+          <div className="subagent-stream-line subagent-stream-empty">{externalRunningNodes(running, locale)}</div>
+        ) : null}
       </div>
     </div>
   )

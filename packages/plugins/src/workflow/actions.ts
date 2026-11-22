@@ -76,16 +76,16 @@ export function registerWorkflowActions(ctx: HelmxPluginContext, deps: WorkflowA
 
   ctx.action({
     id: 'save',
-    description: 'Save a workflow definition as a cross-conversation asset (script or fromRunId, exactly one; the default name comes from meta.name; overwriting is refused unless overwrite: true)',
+    description: 'Save a workflow definition as a cross-conversation asset from script source (the default name comes from meta.name; overwriting is refused unless overwrite: true)',
     exposeToPrompt: false,
     inputSchema: {
       type: 'object',
       properties: {
-        script: { type: 'string', description: 'Full script source (exactly one of script / fromRunId)' },
-        fromRunId: { type: 'string', description: 'Persist the script source of an existing run as a definition (exactly one of script / fromRunId; not available for background subagent runs)' },
+        script: { type: 'string', minLength: 1, description: 'Full script source' },
         name: { type: 'string', description: 'Save name (optional; defaults to meta.name; rejected when it disagrees with meta.name)' },
         overwrite: { type: 'boolean', description: 'Overwrite a definition with the same name (refused by default)' },
       },
+      required: ['script'],
       additionalProperties: false,
     },
     outputSchema: {
@@ -99,14 +99,13 @@ export function registerWorkflowActions(ctx: HelmxPluginContext, deps: WorkflowA
     },
     cli: {
       command: ['workflows', 'save'],
-      description: 'Save a workflow definition (positional is a local script file or target name; --from-run-id persists an existing run)',
+      description: 'Save a workflow definition (positional is a local script file or target name)',
       positional: [{ field: 'name', readFileInto: 'script' }],
     },
     async handler(input) {
       const a = input as Record<string, unknown>
       return workflows.save({
-        ...(a['script'] !== undefined ? { script: String(a['script']) } : {}),
-        ...(a['fromRunId'] !== undefined ? { fromRunId: String(a['fromRunId']) } : {}),
+        script: String(a['script']),
         ...(a['name'] !== undefined ? { name: String(a['name']) } : {}),
         ...(a['overwrite'] !== undefined ? { overwrite: a['overwrite'] === true } : {}),
       })

@@ -1,8 +1,5 @@
 /**
- * `agent_spawn` 隔离生命周期流程：
- * - `spawnWithWorktree`：新建 + `isolation: 'worktree'`（副作用前落盘占位租约 -> 分配 -> 改写 cwd -> `next` -> 终态收敛）；
- * - `resumeWithWorktree`：续接已绑定隔离树的子会话（占位租约前置防并发清理，禁止切换节点或 cwd）；
- * - `reattachWithWorktree`：跨重启原位恢复原生隔离工作树（复用记录与租约，不重复注入上下文）。
+ * `agent_spawn` 隔离生命周期流程：新建 / resume / reattach 共享统一元数据注入与租约收尾。
  */
 import {
   HelmxError,
@@ -49,18 +46,48 @@ function toExecutionDescriptor(record: ManagedWorktreeRecord): WorktreeExecution
     id: record.id,
     ...(record.repoRoot !== '' ? { repoRoot: record.repoRoot } : {}),
     ...(record.baseCommit !== '' ? { baseCommit: record.baseCommit, dirtySource: record.dirtySource } : {}),
-    ...(record.baseBranch !== undefined && record.baseBranch !== '' ? { baseBranch: record.baseBranch } : []),
+    ...(record.baseBranch !== undefined && record.baseBranch !== '' ? { baseBranch: record.baseBranch } : {}),
     ...(record.parentWorktreeId !== undefined && record.parentWorktreeId !== ''
       ? { parentWorktreeId: record.parentWorktreeId }
       : {}),
   }
 }
 
-function withWorktreeExecutionMeta(
-  info: AgentExecutionInfo,
-  worktree: WorktreeExecutionDescriptor,
-): AgentExecutionInfo {
-  return { ...info, meta: worktreeExecutionMeta({ worktree }, info.meta) }
+function makeOnResolved(params: {
+  ctx: IsolationSpawnContext
+  request: AgentSpawnRequest
+  record: ManagedWorktreeRecord
+  fallbackNodeId: string
+  leaseToken: string
+  bindConversation?: boolean
+  flushOnResolve?: boolean
+  onCapture: (info: AgentExecutionInfo) => void
+}): (raw: unknown) => void {
+  const descriptor = toExecutionDescriptor(params.record)
+  return (raw: unknown) => {
+    const info = sanitizeExecutionInfo(raw, { agentId: params.request.agentId ?? 'subagent' })
+    const enriched: AgentExecutionInfo = {
+      ...info,
+      nodeId: info.nodeId ?? params.fallbackNodeId,
+      meta: worktreeExecutionMeta({ worktree: descriptor }, info.meta),
+    }
+    if (params.bindConversation && info.conversationId !== undefined) {
+      params.ctx.allocator.bindConversation(params.record.path, params.record.nodeId, info.conversationId)
+      params.ctx.store.recordAgentBinding(params.request.agentId, info.conversationId, params.request.parentConversationId)
+    }
+    params.ctx.store.updateLease(params.leaseToken, enriched)
+    if (params.flushOnResolve) {
+      void params.ctx.deps.docStore.flush().catch((flushError: unknown) => {
+        process.stderr.write(
+          `builtin:worktree: worktree ${params.record.id} 绑定落盘失败: ${
+            flushError instanceof Error ? flushError.message : String(flushError)
+          }\n`,
+        )
+      })
+    }
+    params.onCapture(enriched)
+    params.request.onResolved?.(enriched)
+  }
 }
 
 async function settleFailedNativeSpawn(
@@ -76,30 +103,32 @@ async function settleFailedNativeSpawn(
   ).catch(() => {})
 }
 
+async function clearStaleLeasesBestEffort(ctx: IsolationSpawnContext, worktreeId: string): Promise<void> {
+  await ctx.store.clearStaleLeases(worktreeId).catch((error: unknown) => {
+    process.stderr.write(
+      `builtin:worktree: worktree ${worktreeId} 残留租约清理失败: ${
+        error instanceof Error ? error.message : String(error)
+      }\n`,
+    )
+  })
+}
+
 export async function spawnWithWorktree(
   ctx: IsolationSpawnContext,
   request: AgentSpawnRequest,
   next: (finalRequest: AgentSpawnRequest) => Promise<unknown>,
 ): Promise<unknown> {
   if (request.nodeId !== undefined && !isValidNodeId(request.nodeId)) {
-    throw new HelmxError(
-      'validation_error',
-      `nodeId must match ${NODE_ID_PATTERN} (received ${String(request.nodeId)})`,
-      400,
-      { nodeId: request.nodeId },
-    )
+    throw new HelmxError('validation_error', `nodeId must match ${NODE_ID_PATTERN} (received ${String(request.nodeId)})`, 400, {
+      nodeId: request.nodeId,
+    })
   }
   const explicitProfileId = request.agentType !== undefined && request.agentType !== '' ? request.agentType : undefined
   const target = await ctx.deps.host.resolveSpawnTarget({
     parentConversationId: request.parentConversationId,
     ...(request.fork === true
-      ? {
-          fork: true,
-          ...(explicitProfileId !== undefined ? { profileId: explicitProfileId } : {}),
-        }
-      : {
-          profileId: explicitProfileId ?? 'assistant',
-        }),
+      ? { fork: true, ...(explicitProfileId !== undefined ? { profileId: explicitProfileId } : {}) }
+      : { profileId: explicitProfileId ?? 'assistant' }),
     ...(request.nodeId !== undefined ? { requestNodeId: request.nodeId } : {}),
     ...(request.cwd !== undefined ? { requestCwd: request.cwd } : {}),
   })
@@ -117,33 +146,25 @@ export async function spawnWithWorktree(
         leaseToken = await ctx.store.openPendingLease({ nodeId: pending.nodeId, path: pending.path })
       },
     })
-    const descriptor = toExecutionDescriptor(record)
-    const finalRequest: AgentSpawnRequest = {
+    enteredNext = true
+    const result = await next({
       ...request,
       cwd: record.path,
       isolation: undefined,
       prompt: `${request.prompt}${worktreeContextPrompt(record)}`,
-      onResolved: (raw) => {
-        const info = sanitizeExecutionInfo(raw, { agentId: request.agentId ?? 'subagent' })
-        const enriched = withWorktreeExecutionMeta({ ...info, nodeId: info.nodeId ?? target.nodeId }, descriptor)
-        if (info.conversationId !== undefined) {
-          ctx.allocator.bindConversation(record.path, record.nodeId, info.conversationId)
-          ctx.store.recordAgentBinding(request.agentId, info.conversationId, request.parentConversationId)
-        }
-        ctx.store.updateLease(leaseToken, enriched)
-        void ctx.deps.docStore.flush().catch((flushError: unknown) => {
-          process.stderr.write(
-            `builtin:worktree: worktree ${record.id} 绑定落盘失败: ${
-              flushError instanceof Error ? flushError.message : String(flushError)
-            }\n`,
-          )
-        })
-        execution = enriched
-        request.onResolved?.(enriched)
-      },
-    }
-    enteredNext = true
-    const result = await next(finalRequest)
+      onResolved: makeOnResolved({
+        ctx,
+        request,
+        record,
+        fallbackNodeId: target.nodeId,
+        leaseToken,
+        bindConversation: true,
+        flushOnResolve: true,
+        onCapture: (info) => {
+          execution = info
+        },
+      }),
+    })
     await ctx.store.settleLease(leaseToken, true, false)
     return result
   } catch (error) {
@@ -186,39 +207,30 @@ export async function resumeWithWorktree(
     )
   }
 
-  const leaseToken = await ctx.store.openPendingLease({
-    nodeId: record.nodeId,
-    path: record.path,
-    worktreeId: record.id,
-  })
+  const leaseToken = await ctx.store.openPendingLease({ nodeId: record.nodeId, path: record.path, worktreeId: record.id })
   let enteredNext = false
   let execution: AgentExecutionInfo | undefined
   try {
     await ctx.allocator.verifyForResume(record, request.cwd, request.signal)
-    const descriptor = toExecutionDescriptor(record)
-    const finalRequest: AgentSpawnRequest = {
+    enteredNext = true
+    const result = await next({
       ...request,
       cwd: record.path,
       isolation: undefined,
       prompt: `${request.prompt}${worktreeContextPrompt(record)}`,
-      onResolved: (raw) => {
-        const info = sanitizeExecutionInfo(raw, { agentId: request.agentId ?? 'subagent' })
-        const enriched = withWorktreeExecutionMeta({ ...info, nodeId: info.nodeId ?? record.nodeId }, descriptor)
-        ctx.store.updateLease(leaseToken, enriched)
-        execution = enriched
-        request.onResolved?.(enriched)
-      },
-    }
-    enteredNext = true
-    const result = await next(finalRequest)
-    await ctx.store.settleLease(leaseToken, true, false)
-    await ctx.store.clearStaleLeases(record.id).catch((error: unknown) => {
-      process.stderr.write(
-        `builtin:worktree: worktree ${record.id} 残留租约清理失败（后续 cleanup 可能被 worktree_execution_unknown 阻塞，可重试 resume 或人工核对）: ${
-          error instanceof Error ? error.message : String(error)
-        }\n`,
-      )
+      onResolved: makeOnResolved({
+        ctx,
+        request,
+        record,
+        fallbackNodeId: record.nodeId,
+        leaseToken,
+        onCapture: (info) => {
+          execution = info
+        },
+      }),
     })
+    await ctx.store.settleLease(leaseToken, true, false)
+    await clearStaleLeasesBestEffort(ctx, record.id)
     return result
   } catch (error) {
     await settleFailedNativeSpawn(ctx, leaseToken, enteredNext, execution)
@@ -239,39 +251,30 @@ export async function reattachWithWorktree(
   const leaseToken = await ctx.store.acquireReattachLease(
     { worktreeId: record.id, nodeId: record.nodeId, path: record.path },
     { ...(convId !== undefined ? { conversationId: convId } : {}) },
-    {
-      nodeId: record.nodeId,
-      ...(convId !== undefined ? { conversationId: convId } : {}),
-      effectiveCwd: record.path,
-    },
+    { nodeId: record.nodeId, ...(convId !== undefined ? { conversationId: convId } : {}), effectiveCwd: record.path },
   )
   let enteredNext = false
   let execution: AgentExecutionInfo | undefined
   try {
     await ctx.allocator.verifyForResume(record, undefined, request.signal)
-    const descriptor = toExecutionDescriptor(record)
-    const finalRequest: AgentSpawnRequest = {
+    enteredNext = true
+    const result = await next({
       ...request,
       isolation: undefined,
-      onResolved: (raw) => {
-        const info = sanitizeExecutionInfo(raw, { agentId: request.agentId ?? 'subagent' })
-        const enriched = withWorktreeExecutionMeta({ ...info, nodeId: info.nodeId ?? record.nodeId }, descriptor)
-        ctx.store.updateLease(leaseToken, enriched)
-        void ctx.deps.docStore.flush().catch(() => {})
-        execution = enriched
-        request.onResolved?.(enriched)
-      },
-    }
-    enteredNext = true
-    const result = await next(finalRequest)
-    await ctx.store.settleLease(leaseToken, true, false)
-    await ctx.store.clearStaleLeases(record.id).catch((error: unknown) => {
-      process.stderr.write(
-        `builtin:worktree: worktree ${record.id} 残留租约清理失败: ${
-          error instanceof Error ? error.message : String(error)
-        }\n`,
-      )
+      onResolved: makeOnResolved({
+        ctx,
+        request,
+        record,
+        fallbackNodeId: record.nodeId,
+        leaseToken,
+        flushOnResolve: true,
+        onCapture: (info) => {
+          execution = info
+        },
+      }),
     })
+    await ctx.store.settleLease(leaseToken, true, false)
+    await clearStaleLeasesBestEffort(ctx, record.id)
     return result
   } catch (error) {
     if (enteredNext && ctx.deps.host.isClosing !== true) {

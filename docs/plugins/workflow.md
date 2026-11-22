@@ -4,36 +4,35 @@
 
 受管工作树的分配与清理由 [`builtin:worktree`](worktree.md) 提供：`isolation: 'worktree'` 请求经 `agent_spawn` 管道由其兑现，无插件兑现而到达原生执行路径时显式返回 `unsupported_runtime`。 [工作树与门禁](../workflows/worktree-and-gate.md)
 
-### 模型工具（2 个）
+### 模型工具（2 个，外加动态 `workflow_steer`）
 
 - **`subagent`**：派生子代理。支持 `fork: true` 从父会话上下文分叉、`nodeId` 动态目标计算节点覆写（显式 `'local'` 可切回本机，远端节点需兼容 `cwd`，与 `resume` 互斥）、`isolation: 'worktree'` 隔离工作树、`resume` 续接（凭 `execution.conversationId` / `executionId`）、`schema` 结构化输出、`gate` 验收命令、`model` / `effort` 覆盖、`maxSubagentDepth` 显式授予派生深度；
 - **`SubagentWorkflow`**：确定性 DSL 编排（内联 `script` / `scriptPath` / 已保存 `name`），journal 账本支持 `resumeFromRunId` 断点恢复。
 
-后台策略按**当前会话归属**判定：human 会话缺省后台（终态后幂等汇报自动到达父会话，禁止 sleep 轮询）、显式 `background: false` 同步等待；`helmx` 自动化会话缺省同步、显式 `background: true` 拒绝。`helmx workflows run` 动作与模型工具的 `background` 是不同参数、不同入口。
+后台策略按**当前会话归属**判定：human 会话缺省后台（终态后幂等汇报自动到达父会话，禁止 sleep 轮询）、显式 `background: false` 同步等待；`helmx` 自动化会话缺省同步、显式 `background: true` 拒绝。同步 `subagent` 直接经内核 `ctx.host.spawnAgent` 执行并按 `(parentConversationId, parentToolCallId)` 幂等续接，不创建 `WorkflowRun` 磁盘账本记录；后台 `subagent` 与 `SubagentWorkflow` 由引擎账本持久化跟踪。`helmx workflows run` 动作与模型工具的 `background` 是不同参数、不同入口。
 
-### 动作（11 个，五端复用）
+### 动作（10 个，五端复用）
 
 | 动作 | CLI 映射 | 说明 |
 | :--- | :--- | :--- |
 | `list` | `helmx workflows list` | 列出已保存定义（每条携带真实文件事实 `updatedAt` / `size`；元数据非法条目保留并附 `metadataError`） |
 | `get` | `helmx workflows get <name>` | 读取完整定义（只读源码 + 元数据；Web/AI 只读，不提供编辑） |
-| `save` | `helmx workflows save [nameOrFile]` | `script`（位置参数为本地脚本文件时自动读入）或 `--from-run-id` 二选一；缺省名用 `meta.name`；默认拒绝覆盖，`--overwrite` 才覆盖；保存前语法预检，原子写入 |
+| `save` | `helmx workflows save <fileOrScript>` | 直接提供 `script`（位置参数为本地脚本文件时自动读入）；缺省名用 `meta.name`；默认拒绝覆盖，`--overwrite` 才覆盖；保存前语法预检，原子写入 |
 | `delete` | `helmx workflows delete <name>` | 删除定义文件（历史运行记录不受影响）；防目录外符号链接 |
 | `run` | `helmx workflows run [nameOrFile]` | 启动运行；新 run 必须显式指定会话（CLI `--current` 或 `--conversation-id`）；`--wait` 同步等终态；`--resume-from-run-id` 同时支持失败 DSL 工作流与具可续接句柄的 `failed/aborted` 单子代理 |
 | `runs` | `helmx workflows runs` | 列出运行记录，支持按会话过滤 |
 | `inspect` | `helmx workflows inspect <runId>` | 单个运行详情（节点状态 + 进度时间线） |
 | `abort` | `helmx workflows abort <runId>` | 中止运行中的工作流或后台子代理 |
-| `steer` | `helmx workflows steer <runId> --text` | 向在途后台子代理插话纠偏；经内核 guarded 端口按归属与 CAS 水位提交（`guardLevel: 'cas'`）；`steered=true` 仅代表投递成功 |
-| `detach` | `helmx workflows detach <runId>` | 把运行中的**前台同步** run 转入后台：阻塞中的工具调用立即返回后台句柄，终态 followUp 汇报；仅 running 且前台同步标记的 run 可转，run 发起会话必须 human-owned |
+| `steer` | `helmx workflows steer <runId> --text` | 向在途后台子代理插话纠偏（通过 `exposeAsTool: { name: 'workflow_steer' }` 仅在存在在途后台子代理时暴露给模型）；经内核 guarded 端口按归属与 CAS 水位提交（`guardLevel: 'cas'`）；`steered=true` 仅代表投递成功 |
 | `resume_failed` | `helmx workflows resume-failed` | 批量续接指定会话（`--conversation-id` / `--current`）或全局（`--all`）下所有可恢复的 `failed` 工作流与后台单子代理；不可恢复项如实记入 `skipped` |
 
 `run` 与 `resume_failed` 对会话目标有显式冲突校验：输入 `conversationId` 与调用上下文同时存在且不一致时显式 `400 validation_error`；`resume_failed` 同时要求 `conversationId` 与 `all: true` 互斥。`worktrees` 命令族（清理 / 登记 / 检视）由 [`builtin:worktree`](worktree.md) 提供。
 
 ### 前端贡献
 
-- `toolView`：`subagent-card`（`replaceRow: true`）与 `workflow-card`（`replaceRow: true`，含「保存为工作流」「断点恢复」「重放」入口）；时间线单行与折叠 `SubagentLiveCard` 通过 `includeDetail: false` 跳过子会话全量详情拉取，仅展开态按需加载；子代理与工作流视图直接消费宿主持久化到 `details` 的有界 `presentationMeta`（配合 `useTimelineToolCalls('subagent')` 按工具名分片订阅续接关系，零 `JSON.parse` / `[subagent ...]` 尾注文本刮取），并使用宿主共享 1Hz 时钟 `useSharedNowMs`；
+- `toolView`：`subagent-card`（`replaceRow: true`）与 `workflow-card`（`replaceRow: true`，含「断点恢复」「重放」入口）；时间线单行与折叠 `SubagentLiveCard` 通过 `includeDetail: false` 跳过子会话全量详情拉取，仅展开态按需加载；子代理与工作流视图直接消费宿主持久化到 `details` 的有界 `presentationMeta`（配合 `useTimelineToolCalls('subagent')` 按工具名分片订阅续接关系，零 `JSON.parse` / `[subagent ...]` 尾注文本刮取），并使用宿主共享 1Hz 时钟 `useSharedNowMs`；
 - `timelineRenderer` `background-report`：后台结算汇报折叠卡，直接解析入口 `data.meta.report` 结构化载荷；
-- `slot` `active-tray`（Composer 停靠区）与 `workbenchPanel` `tasks`（badge 绑定 `run-badges`，工作台与停靠区统一以 `runs` 为唯一执行树根来源，人类 `fork` 与 Swarm 成员会话不进入工作流树；运行卡折叠仅渲染 `resultPreview`，点击展开才调 `inspect` 按需拉取并缓存完整 `result`）；
+- `slot` `active-tray`（Composer 停靠区）与 `workbenchPanel` `tasks`（badge 绑定 `run-badges`，工作台与停靠区统一以 `runs` 为唯一执行树根来源，人类 `fork` 与 Swarm 成员会话不进入工作流树；运行卡折叠仅渲染 `resultPreview`，点击展开才调 `inspect` 按需拉取并缓存完整 `result`）；工作树只读检视与清理按钮经 `<PluginSlot name="worktree-inspect" />` / `<PluginSlot name="worktree-cleanup" />` 开放给 [`builtin:worktree`](worktree.md) 贡献，停用 `builtin:worktree` 时自动隐去；
 - `sidebarItem` + `screen` `library`：工作流库全屏视图（只读浏览、显式选择目标会话运行、两步确认删除；无编辑器，「让 AI 修改」仅提供可复制请求文本）。
 
 ## 配置与数据边界
@@ -55,7 +54,7 @@
 
 工作流定义文件唯一存储真源是 `<ctx.dataDir>/workflows/<name>.js`。引擎经 `emitEvent` 发布 `workflow.updated`（全局仅状态失效提示）与 `workflow.settled`（完整 summary，`broadcast: false` 进程内分发）。
 
-**嵌套深度契约**：受管子代理（经 `subagent` / 编排引擎 / 任何 `agent_spawn` 管道派生、`onResolved` 回传 `conversationId` 的子会话）默认可嵌套 2 层，达到子树上限即编排叶子。三道防线：`before_turn` 剥离叶子回合的派工工具、工具/动作入口前置拒绝（`403 subagent_depth_exceeded`）、`agent_spawn` 钩子（priority 300）兜底。会话级 `conversations fork` 与 Swarm 成员不进登记表、不受限。DSL `workflow()` 脚本组合深度保持一层限制，与子代理层级分别计数。
+**嵌套深度契约**：受管子代理（经 `subagent` / 编排引擎 / 任何 `agent_spawn` 管道派生、`onResolved` 回传 `conversationId` 的子会话）默认可嵌套 2 层，达到子树上限即编排叶子。三道防线：`before_turn` 剥离叶子回合的派工工具、工具/动作入口前置拒绝（`403 subagent_depth_exceeded`）、`agent_spawn` 钩子（priority 300）兜底。会话级 `conversations fork` 与 Swarm 成员不进登记表、不受限。DSL `workflow()` 脚本组合深度上限为 2 层（`MAX_WORKFLOW_NESTING_DEPTH = 2`），与子代理层级分别计数。
 
 ## 停用与失败语义
 
@@ -73,7 +72,7 @@
 | 引擎 / 钩子 / 动作 / 工具 / UI | `packages/plugins/src/workflow/`（`engine/`、`hooks.ts`、`actions.ts`、`tools.ts`、`ui.ts`） |
 | 插件配置 Schema | `packages/plugins/src/workflow/config.ts` |
 | 共享契约（run/doc/meta 形状） | `packages/plugins/src/contracts.ts` |
-| 主要测试 | `packages/plugins/test/workflow*.test.ts`（引擎、恢复重放、steer、detach、abort 级联、库管理及迁移至此的客户端模型/组件/样式/工作树检视测试）、`workflow-shutdown.integration.test.ts`、`background-restart.integration.test.ts` |
+| 主要测试 | `packages/plugins/test/workflow*.test.ts`（引擎、恢复重放、steer、abort 级联、库管理及客户端模型/组件/样式/插槽检视测试）、`workflow-shutdown.integration.test.ts`、`background-restart.integration.test.ts` |
 
 ## 相关文档
 

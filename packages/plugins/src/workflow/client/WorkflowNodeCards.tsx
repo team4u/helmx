@@ -9,23 +9,21 @@
  *   external run) as flat two-layer cards;
  * - WorkflowNodeDetail: structured details of conversation-less nodes.
  */
-import { useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import type { ReactNode } from 'react'
 import type { WorkflowNodeState } from '../../contracts.js'
 import {
+  PluginSlot,
   StatusLight,
   formatCompactTimestamp,
   formatDurationMs,
   formatStopwatchMs,
   resolveLocalizedText,
-  usePluginContext,
   usePluginLocale,
 } from '@helmx/plugin-client'
 import { useElapsedNowMs } from './hooks.ts'
 import { Icon } from './WorkflowIcon.tsx'
 import { SubagentLiveCard } from './SubagentCard.tsx'
-import { WorktreeInspectSection } from './WorktreeInspectSection.tsx'
-import { buildWorktreeSelector } from './model-worktree.ts'
 import { isPlaceholderNodeLabel, stringifyPretty } from './model-format.ts'
 import {
   formatWorkflowNodeStats,
@@ -34,9 +32,6 @@ import {
   resolveNodeSummaryText,
 } from './model-run.ts'
 import {
-  ACTION_CLEANUP_WORKTREE,
-  actionCleanupDone,
-  actionCleanupFailed,
   BADGE_CACHED,
   NODE_BADGE_ACTION,
   NODE_BADGE_EXTERNAL,
@@ -57,7 +52,6 @@ import {
   nodeStatusLabel,
   NODE_TAG_ERROR,
   NODE_TAG_OUTPUT,
-  SPIN,
   worktreeBadgeTitle,
 } from './copy.ts'
 import type { ExecutionNode } from './model-execution-tree.ts'
@@ -105,16 +99,19 @@ function WorkflowSubagentNodeCard(props: { node: WorkflowNodeState; runConversat
       ) : null}
       {node.error !== undefined ? <p className="callout callout--error">{node.error}</p> : null}
       {node.worktree !== undefined ? (
-        <WorktreeInspectSection
-          worktree={{
-            path: node.worktree.path,
-            branch: node.worktree.branch,
-            ...(node.worktree.id !== undefined ? { id: node.worktree.id } : {}),
+        <PluginSlot
+          name="worktree-inspect"
+          slotProps={{
+            worktree: {
+              path: node.worktree.path,
+              branch: node.worktree.branch,
+              ...(node.worktree.id !== undefined ? { id: node.worktree.id } : {}),
+            },
+            nodeId: node.nodeId,
+            baseCommit: node.worktree.baseCommit,
+            taskLabel: !isPlaceholderNodeLabel(node.label) ? node.label : undefined,
+            parentConversationId: props.runConversationId,
           }}
-          nodeId={node.nodeId}
-          baseCommit={node.worktree.baseCommit}
-          taskLabel={!isPlaceholderNodeLabel(node.label) ? node.label : undefined}
-          parentConversationId={props.runConversationId}
         />
       ) : null}
     </div>
@@ -177,16 +174,19 @@ function WorkflowExecutionNodeCard(props: { node: WorkflowNodeState; runConversa
       ) : null}
       {hasNodeExtraDetail(node) ? <WorkflowNodeDetail node={node} /> : null}
       {node.worktree !== undefined ? (
-        <WorktreeInspectSection
-          worktree={{
-            path: node.worktree.path,
-            branch: node.worktree.branch,
-            ...(node.worktree.id !== undefined ? { id: node.worktree.id } : {}),
+        <PluginSlot
+          name="worktree-inspect"
+          slotProps={{
+            worktree: {
+              path: node.worktree.path,
+              branch: node.worktree.branch,
+              ...(node.worktree.id !== undefined ? { id: node.worktree.id } : {}),
+            },
+            nodeId: node.nodeId,
+            baseCommit: node.worktree.baseCommit,
+            taskLabel: !isPlaceholderNodeLabel(node.label) ? node.label : undefined,
+            parentConversationId: props.runConversationId,
           }}
-          nodeId={node.nodeId}
-          baseCommit={node.worktree.baseCommit}
-          taskLabel={!isPlaceholderNodeLabel(node.label) ? node.label : undefined}
-          parentConversationId={props.runConversationId}
         />
       ) : null}
     </div>
@@ -204,9 +204,7 @@ export function WorkflowNodeCard(props: { node: WorkflowNodeState; runConversati
 
 /** Structured details of nodes without a native subagent. */
 function WorkflowNodeDetail({ node }: { node: WorkflowNodeState }): ReactNode {
-  const ctx = usePluginContext()
   const locale = usePluginLocale()
-  const [cleaning, setCleaning] = useState(false)
   const rows: Array<[string, string, boolean]> = []
   if (node.startedAt !== undefined) rows.push([resolveLocalizedText(NODE_KV_STARTED_AT, locale), formatCompactTimestamp(node.startedAt), true])
   if (node.agentType !== undefined) rows.push([resolveLocalizedText(NODE_KV_BACKEND, locale), node.agentType, false])
@@ -261,25 +259,14 @@ function WorkflowNodeDetail({ node }: { node: WorkflowNodeState }): ReactNode {
         </div>
       ) : null}
       {node.worktree !== undefined ? (
-        <button
-          type="button"
-          className="btn btn-xs"
-          disabled={cleaning}
-          onClick={() => {
-            if (cleaning) return
-            setCleaning(true)
-            ctx
-              .callAction('cleanup_worktree', buildWorktreeSelector(node.worktree!, node.nodeId), { pluginId: 'builtin:worktree' })
-              .then(() => ctx.notify(actionCleanupDone(node.worktree!.branch, locale)))
-              .catch((err: unknown) =>
-                ctx.notify(actionCleanupFailed(err instanceof Error ? err.message : String(err), locale), 'error'),
-              )
-              .finally(() => setCleaning(false))
+        <PluginSlot
+          name="worktree-cleanup"
+          inline
+          slotProps={{
+            worktree: node.worktree,
+            ...(node.nodeId !== undefined ? { nodeId: node.nodeId } : {}),
           }}
-        >
-          <Icon name="rotate-cw" size={11} className={cleaning ? SPIN : undefined} />
-          {resolveLocalizedText(ACTION_CLEANUP_WORKTREE, locale)}
-        </button>
+        />
       ) : null}
     </div>
   )

@@ -27,7 +27,7 @@ import { steerBackgroundSubagent } from '../src/workflow/steer.js'
 import { isAncestorOrSelf } from '../src/lineage.js'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import { createHelmx } from '../../hub/src/app.js'
-import { actionToolAlias } from '../../kernel/src/plugins/capability-registry.js'
+import { WORKFLOW_STEER_TOOL_NAME } from '../src/workflow/actions-run.js'
 import { PluginHost } from '../../kernel/src/plugins/index.js'
 import { PluginHostBackendFixtureBase } from '../../kernel/test/helpers/plugin-host-backend.js'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
@@ -636,10 +636,9 @@ describe('workflow 插件 steer 动作（端到端）', () => {
     await host.dispose()
   })
 
-  it('exposeAsTool 派生工具双路径（全限定名与 provider-safe 别名）可达', timeout, async () => {
+  it('exposeAsTool 派生工具双路径（全限定名与固定工具名 workflow_steer）可达', timeout, async () => {
     const { host, backend, runId } = await setup()
-    const alias = actionToolAlias(WORKFLOW_PLUGIN_ID, 'steer')
-    for (const name of ['builtin:workflow.steer', alias]) {
+    for (const name of ['builtin:workflow.steer', WORKFLOW_STEER_TOOL_NAME]) {
       const out = (await host.executeTool(name, { runId, text: '换个思路' }, { conversationId: 1, callId: 'c2' })) as Record<string, unknown>
       assert.equal(out['steered'], true, `${name} 应解析到 steer 动作`)
       assert.equal(out['conversationId'], 42)
@@ -722,10 +721,9 @@ describe('workflow 插件 steer 动作（端到端）', () => {
     })
     const { createWorkflowPlugin } = await import('../src/workflow.js')
     await host.register(createWorkflowPlugin())
-    const steerAlias = actionToolAlias(WORKFLOW_PLUGIN_ID, 'steer')
     const baseTools = [
       { name: 'subagent', description: 'subagent', inputSchema: { type: 'object' }, execute: () => ({}) },
-      { name: steerAlias, description: 'steer', inputSchema: { type: 'object' }, execute: () => ({}) },
+      { name: WORKFLOW_STEER_TOOL_NAME, description: 'steer', inputSchema: { type: 'object' }, execute: () => ({}) },
     ]
     const runBeforeTurn = async (conversationId: number) => {
       const outcome = await host.runHook('before_turn', {
@@ -751,7 +749,7 @@ describe('workflow 插件 steer 动作（端到端）', () => {
     )) as { structuredOutput?: { runId?: string } }
     const runId = started.structuredOutput!.runId!
 
-    assert.deepEqual(await runBeforeTurn(1), ['subagent', steerAlias], '发起会话在途子代理期间保留 steer 工具')
+    assert.deepEqual(await runBeforeTurn(1), ['subagent', WORKFLOW_STEER_TOOL_NAME], '发起会话在途子代理期间保留 steer 工具')
     assert.deepEqual(await runBeforeTurn(2), ['subagent'], '无关会话仍省略 steer 工具')
 
     await host.invokeAction(WORKFLOW_PLUGIN_ID, 'abort', { runId })

@@ -8,13 +8,12 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { WorkbenchPanelProps } from '@helmx/protocol'
 import type { WorkflowRunSummary } from '../../contracts.js'
-import { resolveLocalizedText, useConversations, usePluginContext, usePluginLocale } from '@helmx/plugin-client'
+import { PluginSlot, resolveLocalizedText, useConversations, usePluginContext, usePluginLocale } from '@helmx/plugin-client'
 import { usePluginSessionDoc } from './hooks.ts'
 import { Icon } from './WorkflowIcon.tsx'
 import { WorkflowRunCardBody, WorkflowRunResultBox } from './WorkflowRunCard.tsx'
 import { SubagentLiveCard } from './SubagentCard.tsx'
 import { ExternalRunSummary } from './ExternalRunSummary.tsx'
-import { WorktreeInspectSection } from './WorktreeInspectSection.tsx'
 import { buildExecutionTree } from './model-execution-tree.ts'
 import type { ExecutionNode } from './model-execution-tree.ts'
 import { executionToolStatus } from './model-execution-status.ts'
@@ -107,17 +106,6 @@ export function WorkflowWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): Re
     }
     clearWorkbenchRunFocus(conversationId, focusedRunId)
   }, [focusedRunId, tree, conversationId])
-
-  const viewerScope = useMemo(
-    () =>
-      conversationId !== undefined
-        ? {
-            conversationId,
-            ownedBy: conversations.find((c) => c.id === conversationId)?.ownedBy,
-          }
-        : undefined,
-    [conversationId, conversations],
-  )
 
   const resumableRuns = useMemo(
     () => (conversationId !== undefined ? listResumableFailedRuns(runs, conversationId) : []),
@@ -233,7 +221,6 @@ export function WorkflowWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): Re
                       }))
                     }
                     inWorkbench
-                    viewer={viewerScope}
                   />
                 </div>
               )
@@ -252,7 +239,6 @@ export function WorkflowWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): Re
                 >
                   <ExternalSubagentWorkbenchCard
                     run={run}
-                    viewer={viewerScope}
                     resultOpen={resultOpen}
                     onToggleResult={() =>
                       setResultOpenIds((prev) => ({
@@ -286,7 +272,6 @@ export function WorkflowWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): Re
                     worktree={worktreeNode?.worktree}
                     childNodes={node.children}
                     expanded={false}
-                    viewer={viewerScope}
                     worktreeInspect={{
                       parentConversationId: conversationId,
                       ...(inspectNodeId !== undefined ? { nodeId: inspectNodeId } : {}),
@@ -306,12 +291,10 @@ export function WorkflowWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): Re
 
 function ExternalSubagentWorkbenchCard({
   run,
-  viewer,
   resultOpen,
   onToggleResult,
 }: {
   run: WorkflowRunSummary
-  viewer: { conversationId: number; ownedBy?: string } | undefined
   resultOpen: boolean
   onToggleResult: () => void
 }): ReactNode {
@@ -328,7 +311,6 @@ function ExternalSubagentWorkbenchCard({
         worktree={worktree}
         toolStatus={toolStatus}
         executionId={executionId}
-        viewer={viewer}
       />
       <WorkflowRunResultBox
         run={run}
@@ -338,16 +320,19 @@ function ExternalSubagentWorkbenchCard({
         renderStringAsMarkdown
       />
       {worktree !== undefined ? (
-        <WorktreeInspectSection
-          worktree={{
-            path: worktree.path,
-            branch: worktree.branch,
-            ...(worktree.id !== undefined && worktree.id !== '' ? { id: worktree.id } : {}),
+        <PluginSlot
+          name="worktree-inspect"
+          slotProps={{
+            worktree: {
+              path: worktree.path,
+              branch: worktree.branch,
+              ...(worktree.id !== undefined && worktree.id !== '' ? { id: worktree.id } : {}),
+            },
+            nodeId: worktreeNode?.nodeId,
+            baseCommit: worktree.baseCommit,
+            taskLabel: resolveWorkflowRunDisplayName(run),
+            parentConversationId: run.conversationId,
           }}
-          nodeId={worktreeNode?.nodeId}
-          baseCommit={worktree.baseCommit}
-          taskLabel={resolveWorkflowRunDisplayName(run)}
-          parentConversationId={run.conversationId}
         />
       ) : null}
     </div>

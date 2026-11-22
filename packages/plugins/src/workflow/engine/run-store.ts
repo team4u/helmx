@@ -117,14 +117,6 @@ export interface RunRecord {
   /** The background subagent's Profile and execution-environment metadata (completed after onResolved returns). */
   subagentMeta?: { agentType?: string; execution?: AgentExecutionInfo }
   /**
-   * Foreground-synchronous marker: runs started via the synchronous tool (background:false / automation
-   * default). The parent turn's tool call blocks waiting (engine foregroundWaiters) and can be atomically
-   * moved to the background by the detach action (detaching sets notifyParentOnSettle + detachedAt).
-   */
-  syncForeground?: boolean
-  /** Detach-to-background timestamp (idempotent marker: an already-detached run rejects another detach). */
-  detachedAt?: number
-  /**
    * Private recovery metadata: the set of sub-conversation IDs this run derived (persisted as onResolved
    * registers them; writeRecord merges from the active run's childConversations uniformly, preventing stale
    * copies from overwriting). Background-run crash recovery (prepareRecovery/init guarded aborts) uses this
@@ -256,15 +248,6 @@ function runRecordProblem(record: unknown): string | undefined {
   }
   if (r['error'] !== undefined && typeof r['error'] !== 'string') return 'error is not a string'
   if (r['errorCode'] !== undefined && typeof r['errorCode'] !== 'string') return 'errorCode is not a string'
-  if (r['syncForeground'] !== undefined && typeof r['syncForeground'] !== 'boolean') {
-    return 'syncForeground is not a boolean'
-  }
-  if (
-    r['detachedAt'] !== undefined &&
-    (typeof r['detachedAt'] !== 'number' || !Number.isFinite(r['detachedAt']) || r['detachedAt'] < 0)
-  ) {
-    return 'detachedAt is not a non-negative finite number'
-  }
   if (r['resumedByRunId'] !== undefined && (typeof r['resumedByRunId'] !== 'string' || r['resumedByRunId'] === '')) {
     return 'resumedByRunId is not a non-empty string'
   }

@@ -48,8 +48,6 @@ import { resolveSubagentHeaderSnippet } from './model-subagent-card.ts'
 import { requestWorkbenchRunFocus } from './workbench-focus.ts'
 import {
   ACTION_ABORT,
-  ACTION_DETACH,
-  actionDetachDone,
   execConversationTitle,
   executionStatusLabel,
   TRAY_COLLAPSE,
@@ -141,7 +139,7 @@ function WorkflowActiveTrayRow(props: {
   runs: ReadonlyArray<WorkflowRunSummary>
   nowMs: number | undefined
   busy: boolean
-  onAction: (key: string, actionId: string, runId: string, successMessage?: string) => void
+  onAbort: (runId: string) => void
 }): ReactNode {
   const ctx = usePluginContext()
   const locale = usePluginLocale()
@@ -159,9 +157,6 @@ function WorkflowActiveTrayRow(props: {
         : undefined
   const isFallbackConvTitle =
     item.conversationId !== undefined && item.title === execConversationTitle(item.conversationId, locale)
-  // Row detail entry: conversation rows open the drawer, other rows focus the
-  // run in the workbench. Detach / abort live in the trailing sibling action
-  // group (no nested interactives); the activity target never changes this.
   const openRow = (): void => {
     if (item.conversationId !== undefined) {
       ctx.openConversationDrawer(item.conversationId)
@@ -180,33 +175,16 @@ function WorkflowActiveTrayRow(props: {
         ? trayRowOpenRunLabel(item.runId, locale)
         : item.title
   const rowActions =
-    (item.canDetach && item.runId !== undefined) || (item.canAbort && item.runId !== undefined) ? (
-      <>
-        {item.canDetach && item.runId !== undefined ? (
-          <button
-            type="button"
-            className="btn btn-xs"
-            disabled={props.busy}
-            onClick={() =>
-              props.onAction(`detach:${item.runId}`, 'detach', item.runId!, actionDetachDone(item.runId!, locale))
-            }
-          >
-            <Icon name="arrow-down-to-line" size={11} />
-            <span>{resolveLocalizedText(ACTION_DETACH, locale)}</span>
-          </button>
-        ) : null}
-        {item.canAbort && item.runId !== undefined ? (
-          <button
-            type="button"
-            className="btn btn-xs btn-danger"
-            disabled={props.busy}
-            onClick={() => props.onAction(`abort:${item.runId}`, 'abort', item.runId!)}
-          >
-            <Icon name="square" size={11} />
-            <span>{resolveLocalizedText(ACTION_ABORT, locale)}</span>
-          </button>
-        ) : null}
-      </>
+    item.canAbort && item.runId !== undefined ? (
+      <button
+        type="button"
+        className="btn btn-xs btn-danger"
+        disabled={props.busy}
+        onClick={() => props.onAbort(item.runId!)}
+      >
+        <Icon name="square" size={11} />
+        <span>{resolveLocalizedText(ACTION_ABORT, locale)}</span>
+      </button>
     ) : undefined
 
   return (
@@ -256,10 +234,6 @@ export function WorkflowActiveTray(props: Partial<ComposerScopeProps>): ReactNod
     setExpanded(false)
   }, [conversationId])
 
-  const ownedBy =
-    props.conversation?.ownedBy ??
-    conversations.find((c) => c.id === conversationId)?.ownedBy
-
   const summary = useMemo(
     () =>
       conversationId === undefined
@@ -269,11 +243,10 @@ export function WorkflowActiveTray(props: Partial<ComposerScopeProps>): ReactNod
               rootConversationId: conversationId,
               conversations,
               runs,
-              viewer: { conversationId, ownedBy },
             },
             locale,
           ),
-    [conversationId, conversations, runs, ownedBy, locale],
+    [conversationId, conversations, runs, locale],
   )
 
   const hasTimer =
@@ -286,19 +259,13 @@ export function WorkflowActiveTray(props: Partial<ComposerScopeProps>): ReactNod
     return null
   }
 
-  const runAction = (key: string, actionId: string, runId: string, successMessage?: string): void => {
+  const abortRun = (runId: string): void => {
     if (busyKey !== undefined) return
-    setBusyKey(key)
+    setBusyKey(`abort:${runId}`)
     void ctx
-      .callAction(actionId, { runId })
-      .then(() => {
-        if (successMessage !== undefined) ctx.notify(successMessage)
-      })
+      .callAction('abort', { runId })
       .catch((err: unknown) => {
-        ctx.notify(
-          trayActionFailed(actionId === 'abort' ? 'abort' : 'detach', err instanceof Error ? err.message : String(err), locale),
-          'error',
-        )
+        ctx.notify(trayActionFailed(err instanceof Error ? err.message : String(err), locale), 'error')
       })
       .finally(() => {
         setBusyKey(undefined)
@@ -380,7 +347,7 @@ export function WorkflowActiveTray(props: Partial<ComposerScopeProps>): ReactNod
           runs={runs}
           nowMs={nowMs}
           busy={busyKey !== undefined}
-          onAction={runAction}
+          onAbort={abortRun}
         />
       ))}
     </DockTray>

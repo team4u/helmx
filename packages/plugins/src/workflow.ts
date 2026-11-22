@@ -66,7 +66,7 @@ import {
   type WorkflowRunBadgesDocState,
   type WorkflowRunSessionDocState,
 } from './contracts.js'
-import { WorkflowService } from './workflow/engine/index.js'
+import { createWorkflowEngineHost, WorkflowService } from './workflow/engine/index.js'
 import {
   isEffectiveAutoRecover,
   readAutoRecoverOnRestart,
@@ -77,7 +77,6 @@ import {
 import { createManagedSubagentRegistry, type ManagedSubagentEntry } from './workflow/depth.js'
 import { createRunsProjection } from './workflow/projection.js'
 import { createBackgroundPolicy, createBackgroundReporter } from './workflow/background.js'
-import { createWorkflowEngineHost } from './workflow/engine-host.js'
 import { registerWorkflowHooks } from './workflow/hooks.js'
 import { registerWorkflowTools } from './workflow/tools.js'
 import { registerWorkflowActions } from './workflow/actions.js'
@@ -158,14 +157,14 @@ export function createWorkflowPlugin(): PluginDefinition {
       // For the final flush during stop to be writable, the engine holds a direct reference to this cycle's doc
       // handle (this closure guarantees no further external writes before stop returns); handles of old cycles
       // (epoch already advanced) are rejected at the ctx.doc boundary, preventing post-disable leftover writes.
+      // `ctx.doc` already deep-clones on get/set/update; no extra structuredClone needed.
       const stateStore = {
         get<T>(key: string, initial: T): T {
-          const all = records.get()
-          const raw = all[key]
-          return raw === undefined ? initial : (structuredClone(raw) as T)
+          const raw = records.get()[key]
+          return raw === undefined ? initial : (raw as T)
         },
         set<T>(key: string, value: T): void {
-          records.update((current) => ({ ...current, [key]: structuredClone(value) }))
+          records.update((current) => ({ ...current, [key]: value }))
         },
         flush: (): Promise<void> => records.flush(),
       }

@@ -53,14 +53,10 @@ export interface SubagentBadge {
   badge: string
 }
 
-export type SubagentRunView = Pick<WorkflowRunSummary, 'status' | 'syncForeground' | 'detachedAt'>
+export type SubagentRunView = Pick<WorkflowRunSummary, 'status'>
 
-function isTrueBackgroundRun(run: SubagentRunView): boolean {
-  return !(run.syncForeground === true && run.detachedAt === undefined)
-}
-
-export function runFailureFallbackLabel(run: SubagentRunView, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
-  return runFailureFallbackCopy(isTrueBackgroundRun(run), locale)
+export function runFailureFallbackLabel(locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  return runFailureFallbackCopy(locale)
 }
 
 export function subagentBadge(
@@ -70,7 +66,7 @@ export function subagentBadge(
   options?: { isBackgroundHandle?: boolean; handleStatus?: string },
   locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
 ): SubagentBadge {
-  const trueBackground = run !== undefined && isTrueBackgroundRun(run)
+  const trueBackground = run !== undefined
   const label = (key: SubagentBadgeLabelKey): string => subagentBadgeLabel(key, locale)
   if (summaryStatus === 'blocked') return { status: 'blocked', label: label('blocked'), badge: 'badge-warn' }
   if (summaryStatus === 'working') {
@@ -328,7 +324,7 @@ function errorTextFromToolSummary(toolSummary: SubagentParentToolSummary | undef
 }
 
 function backgroundRunError(backgroundRun: WorkflowRunSummary, locale: HelmxLocale): string | undefined {
-  const fallback = runFailureFallbackLabel(backgroundRun, locale)
+  const fallback = runFailureFallbackLabel(locale)
   if (backgroundRun.error !== undefined && backgroundRun.error.trim() !== '') {
     return firstLineOf(backgroundRun.error, 100)
   }
@@ -421,7 +417,7 @@ export function resolveSubagentHeaderSnippet(
     if (input.backgroundRun?.status === 'failed' || input.backgroundRun?.status === 'aborted') {
       const failText = input.backgroundRun.status === 'aborted'
         ? subagentBadgeLabel('aborted', locale)
-        : runFailureFallbackLabel(input.backgroundRun, locale)
+        : runFailureFallbackLabel(locale)
       return {
         kind: 'error',
         tag: failText,
