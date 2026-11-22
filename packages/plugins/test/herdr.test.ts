@@ -39,7 +39,6 @@ import { createHerdrPlugin } from '../src/herdr.js'
 import { extractWorktreeExecutionMeta } from '../src/contracts.js'
 import { EMPTY_MANAGED_DOC } from '../src/herdr/panes.js'
 import type { HerdrEvent, HerdrTarget, HerdrTransport } from '../src/herdr/contracts.js'
-import type { DiagnosticsCollection } from '../src/diagnostics.js'
 import {
   HERDR_FAST_TEST_TIMINGS,
   HerdrFakeBackend as FakeBackend,
@@ -1401,7 +1400,7 @@ test('单测E-8: 无 AI 选项（端口未注入）时自动补 allow-enter 并�
 })
 
 // ---------------------------------------------------------------------------
-// 探针短超时、并发采集与断线退避自愈
+// 订阅断线退避自愈
 // ---------------------------------------------------------------------------
 
 interface ProbeFakePane {
@@ -1567,99 +1566,7 @@ async function makeHerdrProbeEnv(
   }
 }
 
-async function runHerdrTick(env: HerdrProbeEnv): Promise<DiagnosticsCollection> {
-  const payload: DiagnosticsCollection = { timestamp: Date.now(), conversations: [], probes: [] }
-  await env.backend.emitEvent('diagnostics.collect', payload)
-  return payload
-}
-
-test('herdr tick：远端探针走 openTunnel({ socketPath }) 到达受控服务器，且 agent.get 带 5s 短超时', { timeout: 60_000 }, async () => {
-  const env = await makeHerdrProbeEnv([
-    { paneId: 'w:p1', agentName: 'helmx-wf-a', cwd: '/tmp/a', status: 'working', seq: 5 },
-  ])
-  try {
-    const payload = await runHerdrTick(env)
-    assert.equal(payload.probes.length, 1)
-    assert.ok(
-      env.tunnelOpens.some((t) => t.nodeId === HERDR_REMOTE_NODE && typeof t.socketPath === 'string' && t.socketPath.endsWith('.sock')),
-      '远端探针应经 openTunnel({ socketPath }) 到达受控服务器',
-    )
-    // 验证探针采集器调用 transport.call('agent.get', ..., { timeoutMs: 5_000 }) 的显式短超时契约
-    const { HerdrProbeCollector } = await import('../src/herdr/probes.js')
-    const { AskCoordinator } = await import('../src/herdr/asks.js')
-    const { PaneRegistry } = await import('../src/herdr/panes.js')
-    const seenTimeouts: Array<{ method: string; timeoutMs?: number }> = []
-    let doc: import('../src/herdr/panes.js').ManagedDoc = {
-      version: 1,
-      panes: [{
-        target: { nodeId: HERDR_REMOTE_NODE },
-        paneId: 'w:p1',
-        tabId: 't-1',
-        effectiveCwd: '/tmp/a',
-        agentName: 'helmx-wf-a',
-        routing: { kind: 'agy' },
-        parentConversationId: 3,
-        outcome: 'keepalive',
-        createdAt: 1,
-      }],
-    }
-    const registry = new PaneRegistry({ get: () => doc, set: (next) => { doc = next } }, doc)
-    const collector = new HerdrProbeCollector({
-      asks: new AskCoordinator(() => undefined),
-      registry: () => registry,
-      overview: () => undefined,
-      executor: () => undefined,
-      localTarget: () => ({}),
-      settleUnmanaged: () => {},
-      cancelAskQuietly: async () => {},
-      transport: () => ({
-        async call(_t, method, _params, opts) {
-          seenTimeouts.push({ method, timeoutMs: opts?.timeoutMs })
-          return { type: 'agent_info', agent: { pane_id: 'w:p1', name: 'helmx-wf-a', status: 'working', state_change_seq: 5 } }
-        },
-        async readOutput() { return '' },
-        async removeOutput() {},
-        async subscribe() { return () => {} },
-      }),
-      signal: () => new AbortController().signal,
-    })
-    let listener: ((payload: unknown) => Promise<void> | void) | undefined
-    collector.register({
-      onEvent(_type, cb) {
-        listener = cb
-        return () => {}
-      },
-    })
-    const directPayload: DiagnosticsCollection = { timestamp: Date.now(), conversations: [], probes: [] }
-    await listener!(directPayload)
-    assert.deepEqual(seenTimeouts, [{ method: 'agent.get', timeoutMs: 5_000 }])
-  } finally {
-    await env.close()
-  }
-})
-
-test('herdr tick：5 个 100ms 探针并发采集（串行 500ms 应压到 350ms 内）', { timeout: 60_000 }, async () => {
-  const panes = Array.from({ length: 5 }, (_, i) => ({
-    paneId: `w:p${i + 1}`,
-    agentName: `helmx-wf-${i + 1}`,
-    cwd: `/tmp/${i + 1}`,
-    status: 'working',
-    seq: 1,
-  }))
-  const env = await makeHerdrProbeEnv(panes)
-  try {
-    env.transport.agentGetDelayMs = 100
-    const start = Date.now()
-    const payload = await runHerdrTick(env)
-    const elapsed = Date.now() - start
-    assert.equal(payload.probes.length, 5)
-    assert.ok(elapsed < 350, `并发采集应在 350ms 内完成（实际 ${elapsed}ms，疑似串行）`)
-  } finally {
-    await env.close()
-  }
-})
-
-test('herdr 订阅断线：onError 后自动退避重连（watchdogEnabled 无关）', { timeout: 60_000 }, async () => {
+test('herdr 订阅断线：onError 后自动退避重连', { timeout: 60_000 }, async () => {
   const env = await makeHerdrProbeEnv([
     { paneId: 'w:p1', agentName: 'helmx-wf-a', cwd: '/tmp/a', status: 'working', seq: 1 },
   ])
@@ -1694,24 +1601,6 @@ test('herdr 订阅重连后的流再次断线仍继续退避重试', { timeout: 
       env.transport.subscribeCount >= before + 2,
       `多次断线应持续重连（before=${before} after=${env.transport.subscribeCount}）`,
     )
-  } finally {
-    await env.close()
-  }
-})
-
-test('herdr tick：归属变化窗格结算移除后不再产出 probe', { timeout: 60_000 }, async () => {
-  const env = await makeHerdrProbeEnv([
-    { paneId: 'w:p1', agentName: 'helmx-wf-a', cwd: '/tmp/a', status: 'working', seq: 1 },
-  ])
-  try {
-    const first = await runHerdrTick(env)
-    assert.equal(first.probes.length, 1)
-    env.transport.panes.get('w:p1')!.name = 'human-agent'
-    const second = await runHerdrTick(env)
-    assert.equal(second.probes.length, 0, '归属变化窗格应结算移除，不再产出 probe')
-    env.transport.panes.get('w:p1')!.name = 'helmx-wf-a'
-    const third = await runHerdrTick(env)
-    assert.equal(third.probes.length, 0)
   } finally {
     await env.close()
   }

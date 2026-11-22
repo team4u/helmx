@@ -6,12 +6,10 @@
  *   worktree 隔离的 around 200 归 builtin:worktree 插件注册）；
  * - before_turn：达到子树上限的受管子代理回合剥离派工工具（防线一）；
  * - turn_settled（outcome=aborted）：级联取消该会话子树内属于它的 run；
- * - 宿主事件：conversation.upsert / conversation.deleted 触发 runs 重投影；
- *   diagnostics.collect 追加可安全续跑的后台失败 Run 探针（Watchdog 面）。
+ * - 宿主事件：conversation.upsert / conversation.deleted 触发 runs 重投影。
  */
 import { HelmxError, type HelmxPluginContext } from '@helmx/protocol'
 import { HARD_MAX_SUBAGENT_DEPTH, WORKFLOW_PLUGIN_ID, parseWorkflowSpawnMeta } from '../contracts.js'
-import { DIAGNOSTICS_COLLECT_EVENT, appendProbes, parseCollection } from '../diagnostics.js'
 import { isAncestorOrSelf } from '../lineage.js'
 import type { WorkflowService } from './engine/index.js'
 import type { ManagedSubagentRegistry } from './depth.js'
@@ -185,29 +183,5 @@ export function registerWorkflowHooks(ctx: HelmxPluginContext, deps: WorkflowHoo
       }
     }
     projection.reprojectOnConversationDeleted()
-  })
-
-  // 只把账本已证明可安全续跑的后台失败 Run 交给 Watchdog。
-  ctx.host.onEvent(DIAGNOSTICS_COLLECT_EVENT, (raw) => {
-    if (projection.isStopping()) return
-    const collection = parseCollection(raw)
-    appendProbes(
-      collection,
-      workflows.listAutoResumeCandidates(3).map((run) => ({
-        targetKind: 'external' as const,
-        targetId: `workflow:${run.runId}`,
-        nodeId: 'local',
-        ownedBy: 'helmx' as const,
-        status: 'error',
-        stateChangeSeq: run.autoResumeCount,
-        facts: {
-          kind: 'workflow_run',
-          runId: run.runId,
-          conversationId: run.conversationId,
-          failedAt: run.failedAt,
-          autoResumeCount: run.autoResumeCount,
-        },
-      })),
-    )
   })
 }

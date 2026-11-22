@@ -45,7 +45,7 @@ export const MAX_MEMORY_CHARS = 4_000
 /**
  * Only top-level conversations (`parentConversationId === undefined`) participate in `MEMORY.md`
  * injection and `update_memory`. Delegated child sessions (subagents, workflow agents, swarm
- * workers, superagent workers) receive only the task context passed by their parent, stay lean
+ * workers) receive only the task context passed by their parent, stay lean
  * without paying per-turn memory token tax, and cannot concurrently mutate Profile-wide memory.
  */
 export function isMemorySessionEligible(

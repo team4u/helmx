@@ -6,7 +6,7 @@
  *   authoritative point, see memory/store.ts); the on-disk full text is the single authority, never entering public docs;
  * - the private ctx.doc('state') persists compact state: disabledProfiles (per-Profile switch)
  *   and initializedProfiles (distinguishing "never initialized" from "initialized then deleted" across restarts);
- * - before_turn: with a Profile's memory off OR on child sessions (subagents, workflow/swarm/superagent
+ * - before_turn: with a Profile's memory off OR on child sessions (subagents, workflow/swarm
  *   workers), read no file, inject no section, and strip the update_memory tool;
  *   on top-level conversations with memory on, inject memory.content / memory.guide / memory.assets-missing;
  * - the update_memory tool: the execute entry re-checks both top-level session eligibility (403) and the per-Profile switch (403);

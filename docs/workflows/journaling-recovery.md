@@ -10,7 +10,7 @@
 <Hub 数据目录>/plugins/builtin%3Aworkflow/artifacts/<conversationId>/workflow-<runId>.jsonl
 ```
 
-默认数据目录下示例：`~/.helmx/plugins/builtin%3Aworkflow/artifacts/42/workflow-wf_1a2b3c4d5e6f.jsonl`（`runId` 形如 `wf_<12 位十六进制>`）。运行索引（轻量字段：`id`、`conversationId`、`status`、`createdAt`、`updatedAt`、`notifyParentOnSettle`、`autoResumeCount`、`resumedByRunId`）持久化在插件私有 `records` 文档（Hub 的 `state.sqlite` 插件文档表）；每个 run 的完整记录经原子写（`.tmp` + `fsync` + `rename`）存为 `<插件数据目录>/artifacts/<conversationId>/workflow-<runId>.record.json`。Web 界面摘要经按会话分片的 `runs` 投影订阅；进度树中节点的 `prompt`、`gate.output` 与 `error` 只保留最多 1024 字符的截断预览，完整内容以子会话与账本为准。经 `workflow()` 嵌套的整棵工作流树共用同一份账本与本次运行的全局审计序号；恢复身份按各工作流的稳定 scope 路径与局部调用序号区分。
+默认数据目录下示例：`~/.helmx/plugins/builtin%3Aworkflow/artifacts/42/workflow-wf_1a2b3c4d5e6f.jsonl`（`runId` 形如 `wf_<12 位十六进制>`）。运行索引（轻量字段：`id`、`conversationId`、`status`、`createdAt`、`updatedAt`、`notifyParentOnSettle`、`resumedByRunId`）持久化在插件私有 `records` 文档（Hub 的 `state.sqlite` 插件文档表）；每个 run 的完整记录经原子写（`.tmp` + `fsync` + `rename`）存为 `<插件数据目录>/artifacts/<conversationId>/workflow-<runId>.record.json`。Web 界面摘要经按会话分片的 `runs` 投影订阅；进度树中节点的 `prompt`、`gate.output` 与 `error` 只保留最多 1024 字符的截断预览，完整内容以子会话与账本为准。经 `workflow()` 嵌套的整棵工作流树共用同一份账本与本次运行的全局审计序号；恢复身份按各工作流的稳定 scope 路径与局部调用序号区分。
 
 每行一个 JSON 对象，三类事件行：
 
@@ -110,21 +110,7 @@ pnpm helmx workflows resume-failed --current
 pnpm helmx workflows resume-failed --all
 ```
 
-恢复执行继承原 run 的 `args`（显式传入可覆盖），已成功前缀的智能体调用零 Token 瞬间返回，自中断点起实时接续。
-
-## 失败 run 的自动断点续跑
-
-上游模型接口长时间故障时，后台运行的 workflow run 可能用完重试次数变为 `failed`。`builtin:workflow`（默认启用）在每次 `diagnostics.collect` 巡检事件中上报满足以下全部条件的 run 为待续跑候选：
-
-- `status === 'failed'` 且 `notifyParentOnSettle === true`（后台任务）；
-- 未被新 run 接替（`resumedByRunId` 为空）；
-- 失败原因不是语法错误、参数校验错误或 `workflow_action_uncertain`；
-- 账本无不确定副作用，且至少有一条成功记录，或有一条带原生子会话句柄的失败尝试记录；
-- 累计自动续跑次数 `autoResumeCount` 小于 3。
-
-候选扫描遇到单条 run 记录损坏或文件缺失时，输出含 run ID 的诊断并跳过该条，保留其他健康候选；面向用户的 `listRuns` 仍显式报错。索引本身的形状损坏以 `workflow_index_corrupt` 拒绝读取、启动恢复和写入，不将损坏索引当空列表。
-
-**消费方是 `builtin:superagent` 的巡检服务（默认停用）**：该插件未启用时自动续跑不发生，失败 run 保留 `failed` 终态等待人工 `--resume-from-run-id`。启用后，Watchdog 按巡检周期（15 秒一次）消费探针，按 `autoResumeCount` 等待冷却时间（第 0 次等 2 分钟，第 1 次等 5 分钟，第 2 次等 15 分钟），冷却期满调用 `workflow.run({ resumeFromRunId })` 从断点续跑，并把原 run 的 `resumedByRunId` 指向新 run 防止重复触发；新 run 的 `autoResumeCount` 在原值上递增。每轮巡检最多恢复 1 个 run，按 `failedAt` 从早到晚排序——网关刚恢复时避免同时唤醒多个大工作流再次压垮接口。人工续跑与自动续跑走同一入口，末尾失败目标按新恢复轮获得重试预算；成功兄弟节点继续复用；自动机制只额外限制冷却与续跑次数。
+恢复执行继承原 run 的 `args`（显式传入可覆盖），已成功前缀的智能体调用零 Token 瞬间返回，自中断点起实时接续。单卡恢复与批量 `resume_failed` 共享同一接管防重契约：原 run 的 `resumedByRunId` 指向新 run 后，禁止重复续跑；索引本身形状损坏时以 `workflow_index_corrupt` 显式拒绝读取、启动恢复和写入，不将损坏索引当空列表。
 
 ## 边界与约束
 

@@ -464,9 +464,9 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
   }, async () => {
     const { record, allocator, fabric } = await allocateCleanWorktree('hold-then-proc')
     allocator.setHold(record.id, {
-      pluginId: 'builtin:superagent',
+      pluginId: 'builtin:swarm',
       holdId: 'grp-proc:verifier',
-      label: 'superagent group #7 @verifier',
+      label: 'swarm group #7 @verifier',
     })
     let procScans = 0
     const origInspect = fabric.inspectPathUsage.bind(fabric)
@@ -482,7 +482,7 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
         assert.ok(err instanceof HelmxError)
         assert.equal(err.code, 'worktree_in_use')
         assert.equal(err.status, 409)
-        assert.ok(err.message.includes('superagent group #7 @verifier'))
+        assert.ok(err.message.includes('swarm group #7 @verifier'))
         return true
       },
     )
@@ -490,7 +490,7 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
     assert.equal(existsSync(record.path), true)
 
     // 释放持久锁后，进程 cwd 占用检查继续阻断 force 清理；进程退出后可正常移除。
-    assert.equal(allocator.releaseHold(record.id, 'builtin:superagent', 'grp-proc:verifier'), true)
+    assert.equal(allocator.releaseHold(record.id, 'builtin:swarm', 'grp-proc:verifier'), true)
     if (!PROCESS_SCAN_ON) {
       await assert.rejects(
         () => allocator.cleanup({ worktreeId: record.id, force: true }),

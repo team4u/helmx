@@ -287,12 +287,12 @@ test('isCollaborationCandidate：排除自身 / humanSelectable:false / 托管�
   assert.equal(isCollaborationCandidate({ ...base, id: 'assistant' }, 'assistant', new Set(), RUNTIME_KINDS), false, '排除自身')
   assert.equal(isCollaborationCandidate({ ...base, humanSelectable: false }, 'assistant', new Set(), RUNTIME_KINDS), false)
   assert.equal(
-    isCollaborationCandidate({ ...base, managedByPlugin: 'builtin:superagent' }, 'assistant', new Set(), RUNTIME_KINDS),
+    isCollaborationCandidate({ ...base, managedByPlugin: 'ext:managed-plugin' }, 'assistant', new Set(), RUNTIME_KINDS),
     false,
     '托管插件未启用',
   )
   assert.equal(
-    isCollaborationCandidate({ ...base, managedByPlugin: 'builtin:superagent' }, 'assistant', new Set(['builtin:superagent']), RUNTIME_KINDS),
+    isCollaborationCandidate({ ...base, managedByPlugin: 'ext:managed-plugin' }, 'assistant', new Set(['ext:managed-plugin']), RUNTIME_KINDS),
     true,
     '托管插件已启用',
   )
@@ -424,7 +424,7 @@ test('before_turn：子会话不再一刀切排除；无派工工具不注入（
     assert.ok(topLevelSections.some((s) => s.id === 'profile.catalog'))
     assert.ok(topLevelSections.find((s) => s.id === 'profile.skills')?.text.includes('<skill id="workflow">'), '启用 workflow 时目录应暴露插件技能')
 
-    // 子会话（parentConversationId 存在，如 fork / SuperAgent worker）有工具同样
+    // 子会话（parentConversationId 存在，如 fork / Swarm worker）有工具同样
     // 注入：不再按父链一刀切（真正子代理由 builtin:workflow 钩子剥离工具后
     // 在此自然不注入）。
     const subTurn = {
@@ -603,7 +603,7 @@ test('list_mentionable：上下文会话为真实身份来源；Workflow 启停�
     assert.ok(enabled.items.some((i) => i.id === 'coder'), 'Workflow 重新启用后候选恢复')
 
     // 无上下文 + 显式 conversationId：真实 getConversation 校验。补全面不再
-    // 按父链排除（fork / SuperAgent worker 同样有父链但应保留协作能力；真正
+    // 按父链排除（fork / Swarm worker 同样有父链但应保留协作能力；真正
     // 子代理的回合级剥离由 builtin:workflow 钩子完成），有插件即有候选。
     const subCtx = (await env.host.invokeAction('builtin:profile', 'list_mentionable', { conversationId: 2 })) as {
       items: Array<{ id: string }>

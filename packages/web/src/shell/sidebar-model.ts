@@ -134,7 +134,7 @@ export function buildArchivedConversationList(input: {
 
 /** 左栏一级「智能体站位」：每个 Agent 一个固定站位，下挂其名下有效对话。 */
 export interface AgentStanding {
-  /** Agent 对应的 Profile ID（如 'assistant' | 'superagent' | 'watchdog' | 自定义 id）。 */
+  /** Agent 对应的 Profile ID（如 'assistant' | 自定义 id）。 */
   profileId: string
   /** 左栏展示名（优先 sidebar.item 的 label -> profile.name -> profile.id）。 */
   label: string

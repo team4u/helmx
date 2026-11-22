@@ -48,7 +48,7 @@ export function assertTriggerId(kind: 'cron' | 'webhook', id: string): string {
   return id
 }
 
-/** threadKey: 1..200 chars (consistent with the superagent subscription constraint). */
+/** threadKey: 1..200 chars. */
 export function assertThreadKey(key: string): string {
   if (key.length === 0 || key.length > 200) {
     throw new HelmxError('validation_error', `invalid threadKey (1..200 chars, got ${key.length})`, 400, {})

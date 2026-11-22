@@ -63,6 +63,5 @@ Cron 与 Webhook 共用 `delivery.ts` 投递 helper：`targetConversationId` 优
 
 ## 相关文档
 
-- [SuperAgent 双层中枢](superagent.md)：`threadKey` 直通路由与 `mutedSources` 的消费方
 - [插件系统设计与契约](overview.md)：`ctx.route` 公开路由与 `inUse` 停用预检
 - [CLI 命令参考](../cli/reference.md)：`helmx cron` / `helmx webhook` 动态命令

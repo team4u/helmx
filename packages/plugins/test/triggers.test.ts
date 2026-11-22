@@ -318,13 +318,13 @@ test('triggers4: cron_trigger 手动触发——信封进入 #1、origin=trigger
   }
 })
 
-test('triggers5: cron 目标路由——显式会话直投；启用 superagent 后默认走中枢', { timeout: 60_000 }, async () => {
+test('triggers5: cron 目标路由——显式会话直投；启用 trigger 路由插件后默认改投目标会话且不覆盖显式目标', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     requireTriggersRegistered(env)
     const kernel = env.app.kernel
 
-    // 5a. 显式 targetConversationId：直投目标会话（superagent 修复后不得覆盖）
+    // 5a. 显式 targetConversationId：直投目标会话
     const target = await kernel.createConversation({ title: '触发目标', profileId: 'assistant' })
     await kernel.plugins.invokeAction(TRIGGERS, 'cron_create', {
       id: 'direct-hit',
@@ -337,7 +337,7 @@ test('triggers5: cron 目标路由——显式会话直投；启用 superagent �
     await kernel.plugins.invokeAction(TRIGGERS, 'cron_trigger', { id: 'direct-hit' })
     await kernel.waitForIdle(target.id)
     assert.match(await lastInputJson(env, target.id), /直达目标会话的事件/)
-    // 未启用 superagent：#1 不收到该事件
+    // 未启用路由插件：#1 不收到该事件
     const rootDetail = await kernel.getConversationDetail(ROOT_CONVERSATION_ID, { limit: 20 })
     assert.equal(
       rootDetail.entries.filter((e) => e.kind === 'helmx.input' && JSON.stringify(e.data).includes('直达目标会话的事件')).length,
@@ -345,52 +345,62 @@ test('triggers5: cron 目标路由——显式会话直投；启用 superagent �
       '显式目标事件不得同时进 #1',
     )
 
-    // 5b. 启用 superagent：默认目标事件改投中枢（muted/threadKey/target 优先级由 superagent 决定）
-    await kernel.plugins.enable('builtin:superagent')
-    const index = kernel.plugins.getPublicDoc('builtin:superagent', 'index').value as {
-      routerConversationId?: number
-    }
-    const routerId = index.routerConversationId
-    assert.ok(typeof routerId === 'number', 'superagent 启用后应有中枢会话')
+    // 5b. 启用 trigger hook 路由插件：默认目标事件经 transform 改投指定会话
+    const routerConv = await kernel.createConversation({ title: '路由目标会话', profileId: 'assistant' })
+    const routerId = routerConv.id
+    await kernel.plugins.register(
+      {
+        id: 'test:trigger-router',
+        name: 'Test Trigger Router',
+        definePlugin(ctx) {
+          ctx.hook.onTrigger((envelope) => {
+            if (envelope.targetConversationId !== undefined) return { action: 'continue' }
+            return { action: 'transform', value: { ...envelope, targetConversationId: routerId } }
+          })
+        },
+      },
+      { enabled: false },
+    )
+    await kernel.plugins.enable('test:trigger-router')
 
     await kernel.plugins.invokeAction(TRIGGERS, 'cron_create', {
       id: 'to-router',
       schedule: '0 0 * * *',
       enabled: false,
-      text: '应进中枢的默认事件',
+      text: '应进路由会话的默认事件',
     })
-    env.faux.setResponses([fauxAssistantMessage('中枢收到')])
+    env.faux.setResponses([fauxAssistantMessage('路由会话收到')])
     await kernel.plugins.invokeAction(TRIGGERS, 'cron_trigger', { id: 'to-router' })
     await kernel.waitForIdle(routerId)
     const routerJson = await lastInputJson(env, routerId)
     assert.match(routerJson, /cron:to-router/)
-    assert.match(routerJson, /应进中枢的默认事件/)
-    // #1 不得收到（superagent transform 改投中枢）
+    assert.match(routerJson, /应进路由会话的默认事件/)
+    // #1 不得收到（trigger hook transform 改投路由会话）
     const rootAfter = await kernel.getConversationDetail(ROOT_CONVERSATION_ID, { limit: 20 })
     assert.equal(
-      rootAfter.entries.filter((e) => e.kind === 'helmx.input' && JSON.stringify(e.data).includes('应进中枢的默认事件')).length,
+      rootAfter.entries.filter((e) => e.kind === 'helmx.input' && JSON.stringify(e.data).includes('应进路由会话的默认事件')).length,
       0,
-      'superagent 启用后默认事件必须进中枢而非 #1',
+      '路由插件启用后默认事件必须进路由会话而非 #1',
     )
 
-    // 5c. 显式目标在 superagent 启用期间仍直达（不被中枢路由覆盖）
+    // 5c. 显式目标在路由插件启用期间仍直达（不被路由钩子覆盖）
     const target2 = await kernel.createConversation({ title: '显式目标二', profileId: 'assistant' })
     await kernel.plugins.invokeAction(TRIGGERS, 'cron_create', {
       id: 'direct-hit-2',
       schedule: '0 0 * * *',
       enabled: false,
-      text: 'superagent 期间的显式直达',
+      text: '路由插件期间的显式直达',
       targetConversationId: target2.id,
     })
     env.faux.setResponses([fauxAssistantMessage('目标二收到')])
     await kernel.plugins.invokeAction(TRIGGERS, 'cron_trigger', { id: 'direct-hit-2' })
     await kernel.waitForIdle(target2.id)
-    assert.match(await lastInputJson(env, target2.id), /superagent 期间的显式直达/)
+    assert.match(await lastInputJson(env, target2.id), /路由插件期间的显式直达/)
     const routerAfter = await kernel.getConversationDetail(routerId, { limit: 30 })
     assert.equal(
-      routerAfter.entries.filter((e) => e.kind === 'helmx.input' && JSON.stringify(e.data).includes('superagent 期间的显式直达')).length,
+      routerAfter.entries.filter((e) => e.kind === 'helmx.input' && JSON.stringify(e.data).includes('路由插件期间的显式直达')).length,
       0,
-      '显式目标事件不得被改投中枢',
+      '显式目标事件不得被改投路由会话',
     )
   } finally {
     await env.close()

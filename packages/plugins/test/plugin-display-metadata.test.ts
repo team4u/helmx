@@ -7,7 +7,7 @@
  *   promptGuidelines、cli.description 与 input/outputSchema 内全部
  *   description 机器描述）固定英文：类型为纯 string（不得变 LocalizedText）
  *   且不含中文字符；
- * - 采集方式：对 13 个内置插件工厂以全透传录制 ctx 执行 definePlugin，
+ * - 采集方式：对 12 个内置插件工厂以全透传录制 ctx 执行 definePlugin，
  *   只读登记事实，不 mock 行为（getConfig 返回空对象触发缺省路径）。
  */
 import { test } from 'node:test'
@@ -28,7 +28,6 @@ import { createJsonRenderPlugin } from '../src/json-render.js'
 import { createMermaidPlugin } from '../src/mermaid.js'
 import { createTriggersPlugin } from '../src/triggers.js'
 import { createHerdrPlugin } from '../src/herdr.js'
-import { createSuperAgentPlugin } from '../src/superagent.js'
 import { createMagpiePlugin } from '../src/magpie.js'
 import { createTokenSpeedPlugin } from '../src/token-speed.js'
 import { createTiersPlugin } from '../src/tiers.js'
@@ -46,7 +45,6 @@ const FACTORIES: ReadonlyArray<() => PluginDefinition> = [
   createMermaidPlugin,
   createTriggersPlugin,
   createHerdrPlugin,
-  createSuperAgentPlugin,
   createMagpiePlugin,
   createTokenSpeedPlugin,
   createTiersPlugin,
@@ -161,7 +159,7 @@ function assertEnglishSchemaDescriptions(where: string, node: unknown): void {
 
 test('显示元数据：全部内置插件 name/description 与 UI/configSchema 文案为 en+zh-CN 双语资源', timeout, () => {
   const registrations = recordAllPlugins()
-  assert.equal(registrations.length, 13, '内置插件工厂数量')
+  assert.equal(registrations.length, 12, '内置插件工厂数量')
   for (const { definition, ui, configSchema } of registrations) {
     assertFullyLocalized(`${definition.id} definition.name`, definition.name)
     assertFullyLocalized(`${definition.id} definition.description`, definition.description)
@@ -230,17 +228,11 @@ const FORBIDDEN_LAZY_SUBMODULES = [
   'herdr/overview',
   'herdr/asks',
   'herdr/metadata',
-  'herdr/probes',
   'herdr/rpc',
   'herdr/panes',
   'herdr/spawn-rules',
   'herdr/host-ports',
   'herdr/approval-bridge',
-  'superagent/runtime-bootstrap',
-  'superagent/watchdog',
-  'superagent/actions',
-  'superagent/hooks',
-  'superagent/assets',
 ]
 
 function runLazyProbeSubprocess(opts: {
@@ -261,7 +253,6 @@ function runLazyProbeSubprocess(opts: {
     });
     const { PluginHost } = await import(${JSON.stringify(`./packages/kernel/${baseDir}/plugins/plugin-host.${ext}`)});
     const { createHerdrPlugin } = await import(${JSON.stringify(`./packages/plugins/${baseDir}/herdr.${ext}`)});
-    const { createSuperAgentPlugin } = await import(${JSON.stringify(`./packages/plugins/${baseDir}/superagent.${ext}`)});
     const docs = new Map();
     const host = new PluginHost({
       dataDir: ${JSON.stringify(opts.dataDir)},
@@ -278,11 +269,9 @@ function runLazyProbeSubprocess(opts: {
       },
     });
     await host.register(createHerdrPlugin(), { enabled: false });
-    await host.register(createSuperAgentPlugin(), { enabled: false });
     const summary = host.list().map((p) => ({ id: p.id, enabled: p.enabled, status: p.status }));
     const configKeys = {
       herdr: Object.keys(host.getConfigSources('builtin:herdr')).sort(),
-      superagent: Object.keys(host.getConfigSources('builtin:superagent')).sort(),
     };
     await host.dispose();
     console.log(JSON.stringify({
@@ -311,51 +300,20 @@ function runLazyProbeSubprocess(opts: {
   }
 }
 
-test('懒加载边界：herdr 与 superagent 停用态注册不加载重型运行时子模块且保留完整声明元数据', timeout, (t) => {
+test('懒加载边界：herdr 停用态注册不加载重型运行时子模块且保留完整声明元数据', timeout, (t) => {
   const testDir = dirname(fileURLToPath(import.meta.url))
   const repoRoot = join(testDir, '..', '..', '..')
   const dataDir = useTempDir(t, 'helmx-lazy-plugins-')
 
-  // 1) 声明元数据同步采集仍完整暴露（herdr 4 动作；superagent 10 动作中 7 个单点 exposeAsTool 派生模型工具）
+  // 1) 声明元数据同步采集仍完整暴露（herdr 4 动作）
   const registrations = recordAllPlugins()
   const herdrReg = registrations.find((r) => r.definition.id === 'builtin:herdr')!
   assert.deepEqual(herdrReg.actions.map((a) => a.id).sort(), ['focus', 'list', 'read', 'steer'])
-  const saReg = registrations.find((r) => r.definition.id === 'builtin:superagent')!
-  assert.deepEqual(
-    saReg.actions.map((a) => a.id).sort(),
-    [
-      'archive_worker',
-      'dispatch_worker',
-      'inspect_worker',
-      'recall_context',
-      'set_router_mode',
-      'subscribe_thread',
-      'watchdog_abort',
-      'watchdog_inspect',
-      'watchdog_recover',
-      'watchdog_tick',
-    ],
-  )
-  assert.deepEqual(saReg.tools, [])
-  const saExposedTools = saReg.actions
-    .filter((a) => a.exposeAsTool !== undefined && a.exposeAsTool !== false)
-    .map((a) => (typeof a.exposeAsTool === 'object' && a.exposeAsTool.name !== undefined ? a.exposeAsTool.name : a.id))
-    .sort()
-  assert.deepEqual(saExposedTools, [
-    'dispatch_worker',
-    'inspect_worker',
-    'recall_context',
-    'subscribe_thread',
-    'watchdog_abort',
-    'watchdog_inspect',
-    'watchdog_recover',
-  ])
 
   // 2) 子进程实测（src/ 必跑；若 dist/ 已构建则同步验证构建产物）：enabled:false 注册后重型子模块未进入 Node 模块加载集
   const modes: Array<'src' | 'dist'> = ['src']
   if (
     existsSync(join(repoRoot, 'packages/plugins/dist/herdr.js')) &&
-    existsSync(join(repoRoot, 'packages/plugins/dist/superagent.js')) &&
     existsSync(join(repoRoot, 'packages/kernel/dist/plugins/plugin-host.js'))
   ) {
     modes.push('dist')
@@ -365,17 +323,8 @@ test('懒加载边界：herdr 与 superagent 停用态注册不加载重型运�
     const result = runLazyProbeSubprocess({ mode, repoRoot, dataDir: join(dataDir, mode) })
     assert.deepEqual(result.summary, [
       { id: 'builtin:herdr', enabled: false, status: 'disabled' },
-      { id: 'builtin:superagent', enabled: false, status: 'disabled' },
     ])
     assert.deepEqual(result.configKeys['herdr'], ['session', 'socketPath', 'startupTimeoutMs'])
-    assert.deepEqual(result.configKeys['superagent'], [
-      'abortAfterMs',
-      'errorThreshold',
-      'mutedSources',
-      'routerMode',
-      'stalledAfterMs',
-      'watchdogEnabled',
-    ])
     for (const forbidden of FORBIDDEN_LAZY_SUBMODULES) {
       const hit = result.loadedPluginsModules.find((url) => url.includes(forbidden))
       assert.equal(hit, undefined, `[${mode}] 停用态注册不得加载重型子模块 ${forbidden}（实际命中：${String(hit)}）`)

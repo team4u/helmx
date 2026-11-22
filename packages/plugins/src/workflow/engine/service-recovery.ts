@@ -1,11 +1,10 @@
 /**
- * service-recovery.ts — 启动恢复与自动续跑候选。
+ * service-recovery.ts — 启动恢复。
  *
  * StartupRecovery 承载：
  * - prepareRecovery（阶段一屏障）：跨重启遗留 running run 的子会话先落持久
  *   abort 标记（paused 相位），绝不带未落标记启动调度器；
- * - init（阶段二）：原位续跑或标 failed（附结构化 errorCode）、通知 outbox 补发；
- * - listAutoResumeCandidates：满足自动断点续跑条件的后台工作流候选。
+ * - init（阶段二）：原位续跑或标 failed（附结构化 errorCode）、通知 outbox 补发。
  *
  * 全部可恢复性判定统一经 run-resumability.ts 的 inspectRunResumability。
  */
@@ -20,13 +19,6 @@ import {
 import { reattachBackgroundAgent } from './background-agent-runner.js'
 import { resumeWorkflowInPlace } from './service-run.js'
 import type { WorkflowServiceContext } from './service-context.js'
-
-export interface WorkflowAutoResumeCandidate {
-  runId: string
-  conversationId: number
-  failedAt: number
-  autoResumeCount: number
-}
 
 export class StartupRecovery {
   private recovered = false
@@ -319,44 +311,5 @@ export class StartupRecovery {
     })()
     this.settlementPromise = run
     return run
-  }
-
-  /** 返回满足自动断点续跑条件的后台工作流。 */
-  listAutoResumeCandidates(maxAttempts = 3): WorkflowAutoResumeCandidate[] {
-    if (!Number.isInteger(maxAttempts) || maxAttempts < 1) {
-      throw new HelmxError('validation_error', 'maxAttempts 必须是正整数', 400, { maxAttempts })
-    }
-    const index = this.svc.runs.readIndex()
-    const baseCtx = this.svc.resumabilityContext()
-    const candidates: WorkflowAutoResumeCandidate[] = []
-    for (const entry of index) {
-      let record: RunRecord
-      try {
-        record = this.svc.runs.loadByEntry(entry)
-      } catch (error) {
-        process.stderr.write(`workflow auto-resume: skip ${entry.id}: ${errorMessage(error)}\n`)
-        continue
-      }
-      const verdict = inspectRunResumability(
-        record,
-        {
-          ...baseCtx,
-          onTakeoverInspectError: (runId, takeoverId, error) => {
-            process.stderr.write(
-              `workflow auto-resume: skip ${runId}: takeover ${takeoverId} unusable: ${errorMessage(error)}\n`,
-            )
-          },
-        },
-        { mode: 'watchdog_auto', maxAutoResumeAttempts: maxAttempts },
-      )
-      if (!verdict.resumable) continue
-      candidates.push({
-        runId: record.id,
-        conversationId: record.conversationId,
-        failedAt: record.settledAt ?? record.updatedAt,
-        autoResumeCount: record.autoResumeCount ?? 0,
-      })
-    }
-    return candidates.sort((a, b) => a.failedAt - b.failedAt)
   }
 }

@@ -38,10 +38,6 @@
       "types": "./dist/herdr/contracts.d.ts",
       "import": "./dist/herdr/contracts.js"
     },
-    "./superagent": {
-      "types": "./dist/superagent.d.ts",
-      "import": "./dist/superagent.js"
-    },
     "./swarm": {
       "types": "./dist/swarm.d.ts",
       "import": "./dist/swarm.js"

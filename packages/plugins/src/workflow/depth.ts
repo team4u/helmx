@@ -5,7 +5,7 @@
  * - 受管子代理登记表（插件私有 doc `subagent-conversations`，跨重启持久的
  *   事实来源）：「workflow 子代理」= 经 agent_spawn 管道成功派生、onResolved
  *   回传 conversationId 的子会话（本插件 subagent 工具与编排引擎是当前全部
- *   调用方）。fork 会话与 SuperAgent worker（经 createConversation 创建，
+ *   调用方）。fork 会话与 Swarm worker（经 createConversation 创建，
  *   不经 spawn 管道）天然不进表——嵌套限制绝不以 parentConversationId 或
  *   tags 一刀切，也不依赖 ownership 猜测；
  * - 嵌套深度契约：受管子代理默认可嵌套 DEFAULT_MAX_SUBAGENT_DEPTH（2）层

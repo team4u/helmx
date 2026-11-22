@@ -32,7 +32,7 @@
 
 ### 安全表达式求值器
 
-属性值支持数据绑定表达式，求值器是**纯路径解析器**——无 `eval`、无 `Function`、无任意 JS 执行。三种语法：花括号点路径（`{$docs.index.workers}`、`{$row.conversationId}`、`{$value}`）、花括号方括号字符串键（`{$docs["recall-graph"].nodes[0]}`）、斜杠 JSON Pointer（`/$docs/index/routerConversationId`）。求值域限定 `$docs`（插件公开文档）、`$sessionDocs`、`$data`、`$row`、`$value`；原型链路径（`__proto__` / `constructor` / `prototype`）天然返回 undefined。整串恰为单个表达式时保持底层 JS 类型不强转字符串；花括号内非 `$` 开头视为普通文本。
+属性值支持数据绑定表达式，求值器是**纯路径解析器**——无 `eval`、无 `Function`、无任意 JS 执行。三种语法：花括号点路径（`{$docs.index.items}`、`{$row.conversationId}`、`{$value}`）、花括号方括号字符串键（`{$docs["cron-jobs"].items[0]}`）、斜杠 JSON Pointer（`/$docs/status/summaryText`）。求值域限定 `$docs`（插件公开文档）、`$sessionDocs`、`$data`、`$row`、`$value`；原型链路径（`__proto__` / `constructor` / `prototype`）天然返回 undefined。整串恰为单个表达式时保持底层 JS 类型不强转字符串；花括号内非 `$` 开头视为普通文本。
 
 ### 三大声明式动作指令
 

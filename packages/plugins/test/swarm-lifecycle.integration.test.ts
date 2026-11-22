@@ -68,15 +68,7 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
         'builtin:swarm must NOT create any global resident conversations on boot',
       )
 
-      // 2) Coexistence with builtin:superagent AND idle workflow-disable freedom:
-      //    - Enabling builtin:superagent alongside default-enabled builtin:swarm passes listTools() with zero duplicate_tool_name!
-      await kernel.plugins.enable('builtin:superagent')
-      const coexistingToolNames = kernel.plugins.listTools().map((tool) => tool.name)
-      assert.ok(coexistingToolNames.includes('dispatch_worker'), 'superagent dispatch_worker coexists cleanly')
-      assert.ok(coexistingToolNames.includes('swarm_dispatch_worker'), 'swarm_dispatch_worker coexists cleanly')
-      assert.ok(coexistingToolNames.includes('swarm_board_post'), 'swarm_board_post coexists cleanly')
-      await kernel.plugins.disable('builtin:superagent')
-
+      // 2) Idle workflow/worktree disable freedom:
       //    - Idle builtin:swarm has NO static dependency on builtin:workflow / builtin:worktree -> disabling & re-enabling both succeeds!
       await kernel.plugins.disable(WORKFLOW_ID)
       assert.equal(kernel.plugins.list().find((p) => p.id === WORKFLOW_ID)?.enabled, false)

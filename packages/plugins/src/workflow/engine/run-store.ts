@@ -62,10 +62,8 @@ export interface RunIndexEntry {
   updatedAt: number
   /** Authoritative terminal settlement timestamp (epoch ms); never overwritten by later metadata writes. */
   settledAt?: number
-  /** Background-start marker (inherited by resume'd new runs; used by diagnostics/probe decisions). */
+  /** Background-start marker (inherited by resumed new runs). */
   notifyParentOnSettle?: boolean
-  /** Current cumulative auto-resume count (initial default = 0; +1 on each resumeFromRunId takeover). */
-  autoResumeCount?: number
   /** The new run ID that took over this failed run (prevents duplicate resumption; default = not taken over). */
   resumedByRunId?: string
 }
@@ -139,8 +137,6 @@ export interface RunRecord {
    * reverted to pending via writeAtClose(); setting true tells the next startup's prepareRecovery()/init()
    */
   pendingChildCleanup?: boolean
-  /** Current cumulative auto-resume count (+1 on resume takeover; kept in sync with the index). */
-  autoResumeCount?: number
   /** The new run ID that took over this failed run (prevents duplicate resumption; in sync with the index). */
   resumedByRunId?: string
   /** 宿主优雅关停主动挂起标记：下次启动恢复清零且不计入异常崩溃次数。 */
@@ -215,12 +211,6 @@ function runIndexProblem(raw: unknown): { problem: string; runId: string } | und
     if (e['notifyParentOnSettle'] !== undefined && typeof e['notifyParentOnSettle'] !== 'boolean') {
       return { problem: `entry ${i} notifyParentOnSettle is not a boolean`, runId }
     }
-    if (
-      e['autoResumeCount'] !== undefined &&
-      (!Number.isInteger(e['autoResumeCount']) || (e['autoResumeCount'] as number) < 0)
-    ) {
-      return { problem: `entry ${i} autoResumeCount is not a non-negative integer`, runId }
-    }
     if (e['resumedByRunId'] !== undefined && (typeof e['resumedByRunId'] !== 'string' || e['resumedByRunId'] === '')) {
       return { problem: `entry ${i} resumedByRunId is not a non-empty string`, runId }
     }
@@ -274,12 +264,6 @@ function runRecordProblem(record: unknown): string | undefined {
     (typeof r['detachedAt'] !== 'number' || !Number.isFinite(r['detachedAt']) || r['detachedAt'] < 0)
   ) {
     return 'detachedAt is not a non-negative finite number'
-  }
-  if (
-    r['autoResumeCount'] !== undefined &&
-    (!Number.isInteger(r['autoResumeCount']) || (r['autoResumeCount'] as number) < 0)
-  ) {
-    return 'autoResumeCount is not a non-negative integer'
   }
   if (r['resumedByRunId'] !== undefined && (typeof r['resumedByRunId'] !== 'string' || r['resumedByRunId'] === '')) {
     return 'resumedByRunId is not a non-empty string'
@@ -407,7 +391,7 @@ export class RunStore {
   /**
    * Write a run record (§4.3): the full RunRecord lands atomically in a file (.tmp + fsync + rename),
    * and the records doc only maintains a lightweight index (id/conversationId/status/createdAt/updatedAt/
-   * notifyParentOnSettle/autoResumeCount/resumedByRunId). Order discipline: read-validate the index
+   * notifyParentOnSettle/resumedByRunId). Order discipline: read-validate the index
    * first, then write the file, then update the index -- when the index is corrupted, never continue
    * writing files (avoiding overwriting persisted facts under an unknown global state, which only adds
    * inconsistency surfaces); on file-write failure the index is untouched (no intermediate state where
@@ -424,7 +408,6 @@ export class RunStore {
       updatedAt: record.updatedAt,
       ...(record.settledAt !== undefined ? { settledAt: record.settledAt } : {}),
       ...(record.notifyParentOnSettle === true ? { notifyParentOnSettle: true } : {}),
-      ...(record.autoResumeCount !== undefined ? { autoResumeCount: record.autoResumeCount } : {}),
       ...(record.resumedByRunId !== undefined ? { resumedByRunId: record.resumedByRunId } : {}),
     }
     const at = index.findIndex((candidate) => candidate.id === record.id)

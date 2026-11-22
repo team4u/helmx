@@ -35,7 +35,7 @@
 | 需求已经聊清楚，想交给独立会话执行并等它回报 | 用 [`subagent`](../plugins/workflow.md) 派一个子代理。 |
 | 分工会变，成员需要来回审查和修改 | 用 [Swarm](../plugins/swarm.md) 在看板上交接。 |
 | 流程已经稳定，需要反复运行或从失败处续跑 | 写一个 [JavaScript 工作流](first-workflow.md)，把检查、测试和汇总的顺序写进脚本。 |
-| 任务长期由定时器或外部事件送来，需要后台分派和巡检 | 按需启用 [SuperAgent](../plugins/superagent.md)，并根据需要配置 [Cron 或 Webhook](../plugins/triggers.md)。 |
+| 任务需要按定时计划或外部 Webhook 触发 | 配置 [Cron 或 Webhook](../plugins/triggers.md)，按需定向到指定会话或角色。 |
 
 工作流可以从现有示例开始。多视角审查见 [cross-review.js](../workflows/examples/cross-review.js)，单模块的拆分和验收见 [module-dev.js](../workflows/examples/module-dev.js)，多个模块并行开发见 [arch-master.js](../workflows/examples/arch-master.js)。后两个示例包含写入和合入步骤，运行前先读脚本并确认目标会话的节点、仓库和分支。
 

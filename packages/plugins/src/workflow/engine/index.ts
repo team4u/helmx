@@ -11,7 +11,6 @@ export {
   type WorkflowServiceHost,
   type WorkflowServiceOptions,
   type WorkflowStateStore,
-  type WorkflowAutoResumeCandidate,
 } from './service.js'
 export {
   runWorkflow,

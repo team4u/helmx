@@ -6,7 +6,7 @@
  *   自己触发的守卫中止、成功出口撤销计时器）；
  * - RunRecord 完整体原子落 dataDir/artifacts/<convId>/workflow-<runId>.record.json，
  *   records doc 仅存轻量索引；resume 新 run 接管（resumedByRunId 防重复、
- *   autoResumeCount 累计、notifyParentOnSettle 继承；幽灵标记需四面无痕才可重接管）；
+ *   notifyParentOnSettle 继承；幽灵标记需四面无痕才可重接管）；
  * - 跨重启 resume：手工 seed 失败 attempt 行（attempt=1 + execution.conversationId，
  *   invocationIndex=0 前向兼容），resumeRef 直传 conversationId 字符串到
  *   AgentSpawnRequest.resume；
@@ -264,10 +264,10 @@ test('run 完成后跨重启可从文件读回摘要', timeout, async (t) => {
 })
 
 // ---------------------------------------------------------------------------
-// §3.2 resume 接管：resumedByRunId 防重复、autoResumeCount 累计、notify 继承
+// §3.2 resume 接管：resumedByRunId 防重复、notify 继承
 // ---------------------------------------------------------------------------
 
-test('resumeFromRunId：新 run 接管原 run（resumedByRunId/autoResumeCount/notify 继承），重复 resume 409', timeout, async (t) => {
+test('resumeFromRunId：新 run 接管原 run（resumedByRunId/notify 继承），重复 resume 409', timeout, async (t) => {
   const env = makeEnv(t, async () => '结果')
   const first = await env.service.run(
     {
@@ -282,13 +282,11 @@ test('resumeFromRunId：新 run 接管原 run（resumedByRunId/autoResumeCount/n
   // 原 run 被接管。
   const firstFile = readRecordFile(env.dataDir, 3, first.id)
   assert.equal(firstFile['resumedByRunId'], second.id)
-  // 新 run 继承后台标记并累计续跑次数。
+  // 新 run 继承后台标记。
   const secondFile = readRecordFile(env.dataDir, 3, second.id)
   assert.equal(secondFile['notifyParentOnSettle'], true)
-  assert.equal(secondFile['autoResumeCount'], 1)
   const index = env.docs.get('workflow/runs') as Array<Record<string, unknown>>
   assert.equal(index.find((e) => e['id'] === first.id)?.['resumedByRunId'], second.id, '索引同步接管标记')
-  assert.equal(index.find((e) => e['id'] === second.id)?.['autoResumeCount'], 1, '索引同步续跑计数')
   // 防重复：同一源 run 二次 resume 显式 409。
   await assert.rejects(
     () => env.service.run({ resumeFromRunId: first.id }),

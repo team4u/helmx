@@ -27,7 +27,6 @@ flowchart TD
         Swarm["builtin:swarm 对等协同黑板"]
         Profile["builtin:profile 角色技能底座"]
         Memory["builtin:memory 长期记忆"]
-        Superagent["builtin:superagent 双层中枢"]
         Herdr["builtin:herdr 终端主控"]
         Others["builtin:triggers / magpie / json-render / mermaid / token-speed / tiers"]
         External["外部插件"]
@@ -40,7 +39,7 @@ flowchart TD
 - **编排引擎**：`subagent` / `SubagentWorkflow` 两个模型工具与 DSL 编排引擎（`packages/plugins/src/workflow/engine`）由 `builtin:workflow` 插件承载。
 - **Worktree 管理**：受管 Git Worktree 的分配、租约、持有锁与安全清理由 `builtin:worktree` 插件承载（与 `builtin:workflow` 零静态依赖，仅经共享契约与 execution meta 命名空间协作）。内核对 Git 零语义——`AgentSpawnRequest.isolation` 等执行环境要求由插件层经 `agent_spawn` continuation 改写请求兑现，无插件兑现而原样到达原生执行行时显式返回 `unsupported_runtime`。
 - **角色与技能**：`SYSTEM.md` 注入、技能目录与 `load_skill` 工具由 `builtin:profile`（常驻不可卸载）提供；`builtin:memory` 自管 `profiles/<id>/MEMORY.md`。内核对「角色」这个概念零感知。
-- **巡检定时器**：内核不提供 `watchdog` 定时器，也不存在 `watchdog_tick` Hook。周期性任务一律由插件自管服务调度——`builtin:superagent` 用自有 `ctx.service` 驱动巡检周期，`builtin:herdr` 通过通用进程内事件采集终端诊断。
+- **巡检定时器**：内核不提供 `watchdog` 定时器，也不存在 `watchdog_tick` Hook。周期性任务一律由插件自管服务调度（例如 `builtin:triggers` 的 Cron 调度或 `builtin:memory` 的每日 Dream 整理）。
 - **声明式 JSON 渲染与 Mermaid**：分别由 `builtin:json-render` 与 `builtin:mermaid` 插件提供，停用后相关围栏回退普通代码块。
 
 ## 零业务角色硬编码
@@ -65,7 +64,7 @@ export interface ConversationSummary {
 }
 ```
 
-工程收益是直接的：新增一种智能体角色只需创建 Profile 与（可选的）插件，内核代码与数据库结构零改动。`builtin:superagent` 是典型实践——它首次启用时动态创建中枢与巡检两个常驻会话，ID 持久化于插件自有 doc，内核将它们视为普通会话，路由、派生与巡检逻辑完全由插件 Hook 与自有服务驱动。
+工程收益是直接的：新增一种智能体角色或协作模式只需创建 Profile 与（可选的）插件，内核代码与数据库结构零改动。`builtin:swarm` 是典型实践——它按需给顶层主控与成员会话挂载 `swarm-coordinator` / `swarm-worker` 标签，内核将它们视为普通会话，看板、唤醒与自愈逻辑完全由插件 Hook 与自有服务驱动。
 
 ## 单向包依赖拓扑
 
@@ -115,7 +114,7 @@ flowchart TD
 `@helmx/hub` 的 `createHelmx()`（`packages/hub/src/app.ts`）只做三件事：
 
 1. **注入构建实现**：默认注入 `@helmx/plugin-build` 的 provider（client.tsx 编译 + 外部 TS 转译），调用方可整体替换；内核机制与构建工具分离。
-2. **注册内置插件并设定启停**：`builtin:profile`（locked 常驻）、`builtin:workflow`、`builtin:worktree`、`builtin:swarm`、`builtin:memory`、`builtin:json-render`、`builtin:mermaid`、`builtin:triggers`、`builtin:magpie`、`builtin:token-speed`、`builtin:tiers` 十一个默认启用；`builtin:herdr`、`builtin:superagent` 两个默认停用。其中 `builtin:workflow` 固定先于 `builtin:worktree` 注册：`runtime.started` 监听器按注册顺序执行，先收敛遗留子会话再回收崩溃租约。随后从数据目录加载外部插件。启停规则和各插件的用途见 [内置插件清单](../plugins/overview.md#当前状态)。
+2. **注册内置插件并设定启停**：`builtin:profile`（locked 常驻）、`builtin:workflow`、`builtin:worktree`、`builtin:swarm`、`builtin:memory`、`builtin:json-render`、`builtin:mermaid`、`builtin:triggers`、`builtin:magpie`、`builtin:token-speed`、`builtin:tiers` 十一个默认启用；`builtin:herdr` 一个默认停用。其中 `builtin:workflow` 固定先于 `builtin:worktree` 注册：`runtime.started` 监听器按注册顺序执行，先收敛遗留子会话再回收崩溃租约。随后从数据目录加载外部插件。启停规则和各插件的用途见 [内置插件清单](../plugins/overview.md#当前状态)。
 3. **统一启动**：全部插件注册后执行 `kernel.start()`——先按依赖拓扑对全体服务 `prepare()`，再依次 `start()`，最后恢复 SDK 调度器。
 
 直接使用 `KernelRuntime.open()` 时不隐式注册任何内置插件，可独立验证内核机制；使用 `createHelmx()` 得到完整产品。Web 静态目录托管属于产品层：直接使用内核 HTTP handler 时缺省只服务 API，提供 `webDistDir` 才启用静态托管。

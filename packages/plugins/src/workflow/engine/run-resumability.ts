@@ -8,13 +8,12 @@
  *   磁盘手工测试夹具保留单点最小回退识别；
  * - inspectRunResumability：引擎唯一权威可续跑判定函数，统一服务于：
  *   1) summary.resumable 与 resume_failed 批量续跑（mode='failed'）；
- *   2) Watchdog 自动断点续跑候选（mode='watchdog_auto'）；
- *   3) 启动恢复原位续跑预判与执行（mode='startup_in_place'）；
- *   4) resumeFromRunId 显式续接校验（mode='explicit_resume'）。
+ *   2) 启动恢复原位续跑预判与执行（mode='startup_in_place'）；
+ *   3) resumeFromRunId 显式续接校验（mode='explicit_resume'）。
  */
 
 import { HelmxError } from '@helmx/protocol'
-import { readJournal, type JournalReadResult, type WorkflowJournalEntry } from './journal.js'
+import { readJournal, type JournalReadResult } from './journal.js'
 import { WorkflowMetaError } from './meta.js'
 import type { RunRecord } from './run-store.js'
 import { WorkflowRuntimeError } from './runtime-validation.js'
@@ -78,18 +77,6 @@ export function nonRetryableFailureCodeOf(
   return undefined
 }
 
-export function hasSafeJournalReplayAnchor(entries: readonly WorkflowJournalEntry[]): boolean {
-  return entries.some((line) =>
-    line.type === 'action'
-      ? line.ok
-      : line.type === 'agent' &&
-        (line.ok ||
-          (line.attempt !== undefined &&
-            line.execution?.conversationId !== undefined &&
-            line.execution.executionId === undefined)),
-  )
-}
-
 export interface ResumabilityContext {
   inspectTakeover?(
     takeoverRunId: string,
@@ -100,8 +87,7 @@ export interface ResumabilityContext {
 }
 
 export interface InspectResumabilityOptions {
-  mode?: 'failed' | 'watchdog_auto' | 'startup_in_place' | 'explicit_resume'
-  maxAutoResumeAttempts?: number
+  mode?: 'failed' | 'startup_in_place' | 'explicit_resume'
   /** startup_in_place 预检阶段尚未递增 crashRecoveries 时置 true。 */
   preIncrementCrashCheck?: boolean
   /** explicit_resume 调用方已显式传入 name/script/scriptPath 时置 true。 */
@@ -306,21 +292,9 @@ export function inspectRunResumability(
     }
   }
 
-  // 'failed' 与 'watchdog_auto' 共用基础门槛
+  // mode === 'failed'（summary.resumable 与 resume_failed 批量恢复）
   if (record.status !== 'failed') {
     return { resumable: false, code: 'not_failed', reason: `状态为 ${record.status}（非 failed）` }
-  }
-  if (mode === 'watchdog_auto') {
-    if (record.kind === 'subagent') {
-      return { resumable: false, code: 'subagent_not_auto_resumed', reason: '单子代理不进入工作流自动断点续跑候选' }
-    }
-    if (record.notifyParentOnSettle !== true) {
-      return { resumable: false, code: 'not_background', reason: '非后台工作流' }
-    }
-    const maxAttempts = options.maxAutoResumeAttempts ?? 3
-    if ((record.autoResumeCount ?? 0) >= maxAttempts) {
-      return { resumable: false, code: 'max_attempts_reached', reason: '自动续跑次数已达上限' }
-    }
   }
 
   const badCode = nonRetryableFailureCodeOf(record)
@@ -351,24 +325,6 @@ export function inspectRunResumability(
     }
   }
 
-  if (mode === 'watchdog_auto') {
-    const journal = readJournal(record.journalPath)
-    if (
-      journal.readFailed !== undefined ||
-      journal.actionUncertain ||
-      !hasSafeJournalReplayAnchor(journal.entries)
-    ) {
-      return {
-        resumable: false,
-        code: journal.actionUncertain ? 'workflow_action_uncertain' : 'no_replay_anchor',
-        reason: '账本存在不确定副作用或缺少可安全恢复锚点',
-        journal,
-      }
-    }
-    return { resumable: true, journal }
-  }
-
-  // mode === 'failed'（summary.resumable 与 resume_failed 批量恢复）
   if (record.kind === 'subagent') {
     const exec = record.subagentMeta?.execution
     const hasHandle = exec?.conversationId !== undefined || exec?.executionId !== undefined

@@ -352,7 +352,8 @@ test('核心协同 2：load_skill 读取与路径防护、Profile skills 白名�
   )
   writeSkill(dataDir, 'alpha-guide', '---\nname: Alpha manual\ndescription: A\n---\n# Alpha', { 'intro.md': 'Alpha quote say: only blank name single.' })
   writeSkill(dataDir, 'beta-guide', '---\nname: Beta manual\ndescription: B\n---\n# Beta', {})
-  writeSkill(dataDir, 'managed-guide', '---\nname: hosting manual\ndescription: hosting\nmanagedByPlugin: builtin:superagent\n---\n# hosting', {})
+  await host.register({ id: 'test:managed-skill', name: 'Managed Skill Test', definePlugin() {} }, { enabled: false })
+  writeSkill(dataDir, 'managed-guide', '---\nname: hosting manual\ndescription: hosting\nmanagedByPlugin: test:managed-skill\n---\n# hosting', {})
 
   const defaultConv = await kernel.createConversation({ title: 'skill-default' })
   assert.ok(((await host.executeTool('load_skill', { skillId: 'deploy-playbook' }, { conversationId: defaultConv.id })) as { text: string }).text.includes('deploy'))
@@ -406,7 +407,7 @@ test('核心协同 2：load_skill 读取与路径防护、Profile skills 白名�
   assert.ok(catW.includes('id="alpha-guide"'))
   for (const absent of ['beta-guide', 'helmx-cli', 'managed-guide']) assert.ok(!catW.includes(`id="${absent}"`))
 
-  await host.enable('builtin:superagent')
+  await host.enable('test:managed-skill')
   try {
     assert.ok(((await host.executeTool('load_skill', { skillId: 'managed-guide' }, { conversationId: convWhite.id })) as { text: string }).text.includes('hosting'))
     capturedRequests.length = 0
@@ -415,7 +416,7 @@ test('核心协同 2：load_skill 读取与路径防护、Profile skills 白名�
     await kernel.waitForIdle(convWhite.id)
     assert.ok(capturedRequests[0]!.systemSections.find((s) => s.includes('<available_skills>'))?.includes('id="managed-guide"'))
   } finally {
-    await host.disable('builtin:superagent')
+    await host.disable('test:managed-skill')
   }
 
   await kernel.profiles.save({ id: 'white-profile', name: 'whitelist', tags: [], skills: [] })

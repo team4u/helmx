@@ -1,5 +1,5 @@
 /**
- * 插件返修第 5 批（第二批 commit 未尽事项的行为级回归）：
+ * 插件行为级边界回归：
  *
  * 1. profiles-skills：MEMORY.md 大小防线收敛到 ProfileService.updateMemory
  *    文件锁内（合并后检查）——跨实例并发 append 不可能叠加突破上限；
@@ -7,15 +7,10 @@
  * 2. assistant：update_memory 并发（同 Profile 双会话）最终内容 ≤ 上限且
  *    超限方显式 memory_limit_exceeded；资产缺失时向模型注入显式
  *    assets-missing 节（不沉默换人格）+ 每文件独立告警去重与恢复后可重新告警；
- * 3. superagent：dispatch_worker 建会话后的副作用（markOwnership/updateIndex/
- *    updateSubscriptions）任一步失败同样完整回滚（不残留僵尸/不锁死 threadKey）；
- * 4. watchdog：外部探针目标瞬时缺失（网络抖动/单 tick 未采到）即便总量超限
- *    也不淘汰近期动作过的去重键（防危险动作重放）；足够陈旧（at 早于门槛）
- *    才允许淘汰；abort 调用失败撤销去重标记后下一 tick 可重试（不永久丢失
- *    也不记假成功）。
+ * 3. profile：restrictToCwd 开启时注入 workspace_boundary 边界声明。
  *
- * 组合纪律：真实插件代码路径 + 受控 PluginHost backend（失败注入需要确定性
- * 边界）；profile 边界用真实 ProfileService 临时目录验证纯文件行为。
+ * 组合纪律：真实插件代码路径 + 受控 PluginHost backend；profile 边界用真实
+ * ProfileService 临时目录验证纯文件行为。
  */
 
 import test from 'node:test'
@@ -25,14 +20,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { HelmxError, type ConversationSummary } from '@helmx/protocol'
-import type { DiagnosticsCollection, WatchdogProbe } from '../src/diagnostics.js'
 import { PluginHost, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
 import { hostBackendStub } from '../../kernel/test/helpers/host-backend-stub.js'
 import { createProfilePlugin } from '../src/profile.js'
 import { createMemoryPlugin, MAX_MEMORY_CHARS as MEM_MAX, MemoryStore } from '../src/memory.js'
 import { createProfileFileHost } from '../../kernel/test/helpers/profile-file-host.js'
 import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin-host-backend.js'
-import { createSuperAgentPlugin } from '../src/superagent.js'
 import { ProfileService } from '../../kernel/src/services/index.js'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { MemoryDocStore, makeConversationSummary } from './helpers/plugin-test-env.js'
@@ -62,7 +55,7 @@ function makeControlledBackend(dataDir: string): ControlledBackend & PluginHostB
   // 真实 ProfileService/SkillService（临时目录）：自举资产走真实文件路径。
   // profiles/skills 子端口复用 createProfileFileHost 的公共适配（含
   // FileNotFoundError -> HelmxError not_found 的边界转换，插件侧据此判定
-  // 资产缺失；superagent 等插件经 ctx.host.profiles/skills 消费）。
+  // 资产缺失）。
   const fileHost = createProfileFileHost(dataDir)
   const rawBackend: ControlledBackend & Partial<PluginHostBackend> = {
     ...createPluginHostBackendFixture(),
@@ -347,395 +340,6 @@ test('memory：权限/IO 错误不被吞（仅 FileNotFoundError 走缺失路径
     assert.equal(backend.notifications.filter((n) => n.title.includes('缺失')).length, 0)
   } finally {
     rmSync(dataDir, { recursive: true, force: true })
-  }
-})
-
-// ---------------------------------------------------------------------------
-// 3. superagent：副作用序列失败（markOwnership/updateIndex）同样完整回滚
-// ---------------------------------------------------------------------------
-
-interface SuperAgentEnv {
-  host: PluginHost
-  backend: ControlledBackend & Pick<PluginHostBackend, 'emitEvent' | 'markConversationOwnership'>
-  docs: MemoryDocStore
-  close(): Promise<void>
-}
-
-async function makeSuperAgentEnv(): Promise<SuperAgentEnv> {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-superagent-roll-'))
-  const backend = makeControlledBackend(dataDir)
-  const docs = new MemoryDocStore()
-  await new ProfileService(dataDir).ensureDefault()
-  // Host 直接持有受控 backend 本体（不 clone）：测试对 backend 的失败注入
-  // （markConversationOwnership 覆盖 / submitRejector）与插件消费的
-  // ctx.host 必须是同一对象。
-  const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: backend, docs })
-  await host.register(createSuperAgentPlugin(), { enabled: true })
-  return {
-    host,
-    backend,
-    docs,
-    async close() {
-      await host.dispose().catch(() => {})
-      rmSync(dataDir, { recursive: true, force: true })
-    },
-  }
-}
-
-function readDoc<T>(env: SuperAgentEnv, name: string): T {
-  return env.docs.store.get(`builtin:superagent:${name}`) as T
-}
-
-test('superagent：markOwnership 失败（首个副作用）也完整回滚：无僵尸、threadKey 不锁死、空会话归档', { timeout: 60_000 }, async () => {
-  const env = await makeSuperAgentEnv()
-  try {
-    // 注入：所有新建 worker 的归属标记写入都失败（createConversation 之后第一步）。
-    env.backend.failMarkOwnershipFor.clear()
-    const originalMark = env.backend.markConversationOwnership.bind(env.backend)
-    ;(env.backend as unknown as { markConversationOwnership: typeof originalMark }).markConversationOwnership = (id, owner) => {
-      const summary = env.backend.conversations.get(id)
-      if (summary?.tags.includes('worker')) {
-        throw new HelmxError('document_store_failed', '测试注入：归属标记写入失败', 500)
-      }
-      originalMark(id, owner)
-    }
-
-    await assert.rejects(
-      () => env.host.invokeAction('builtin:superagent', 'dispatch_worker', { prompt: '任务', threadKey: 'tk-1' }, undefined),
-      (err: unknown) => err instanceof HelmxError && err.code === 'document_store_failed',
-    )
-
-    // 回滚 1：index 无 worker 残留。
-    const index = readDoc<{ workers: Array<{ conversationId: number }> }>(env, 'index')
-    assert.equal(index.workers.length, 0, '副作用失败后 index 不得残留 worker')
-
-    // 回滚 2：threadKey 未被锁死——恢复正常后同 key 派工成功。
-    ;(env.backend as unknown as { markConversationOwnership: typeof originalMark }).markConversationOwnership = originalMark
-    const retry = (await env.host.invokeAction(
-      'builtin:superagent',
-      'dispatch_worker',
-      { prompt: '重试', threadKey: 'tk-1' },
-      undefined,
-    )) as { workerConversationId: number }
-    assert.ok(Number.isInteger(retry.workerConversationId), '同 threadKey 重试应成功')
-
-    // 回滚 3：失败会话打上 worker-archived（空会话不进活跃集，保留审计）。
-    const archived = [...env.backend.conversations.values()].filter((c) => c.tags.includes('worker-archived'))
-    assert.equal(archived.length, 1, '失败派工的空会话应归档')
-
-    // 回滚 4：显式错误通知（不静默）。
-    assert.ok(
-      env.backend.notifications.some((n) => n.title.includes('派工提交失败') || n.title.includes('回滚')),
-      '副作用失败应显式通知',
-    )
-
-    // 回滚 5：subscriptions 只含成功那次。
-    const subs = readDoc<{ subscriptions: Array<{ threadKey: string; workerConversationId: number }> }>(env, 'subscriptions')
-    assert.equal(subs.subscriptions.length, 1)
-    assert.equal(subs.subscriptions[0]!.workerConversationId, retry.workerConversationId)
-  } finally {
-    await env.close()
-  }
-})
-
-test('superagent：submitInput 失败（既有第一批场景回归）不误删活跃任务、不重建重复回滚', { timeout: 60_000 }, async () => {
-  const env = await makeSuperAgentEnv()
-  try {
-    // 先派一个成功 Worker（活跃任务），再注入后续提交失败。
-    const ok = (await env.host.invokeAction('builtin:superagent', 'dispatch_worker', { prompt: '正常任务' }, undefined)) as {
-      workerConversationId: number
-    }
-    env.backend.submitRejector = (conversationId) => {
-      if (conversationId === ok.workerConversationId) return undefined // 活跃 Worker 不受影响
-      const summary = env.backend.conversations.get(conversationId)
-      if (summary?.tags.includes('worker')) {
-        return new HelmxError('conversation_not_accepting', '测试注入：提交被拒绝', 409)
-      }
-      return undefined
-    }
-    await assert.rejects(() =>
-      env.host.invokeAction('builtin:superagent', 'dispatch_worker', { prompt: '会失败' }, undefined))
-    // 活跃 Worker 仍在 index（回滚只清失败者）。
-    const index = readDoc<{ workers: Array<{ conversationId: number }> }>(env, 'index')
-    assert.ok(
-      index.workers.some((w) => w.conversationId === ok.workerConversationId),
-      '成功 Worker 不受失败派工回滚影响',
-    )
-    assert.equal(index.workers.length, 1)
-  } finally {
-    await env.close()
-  }
-})
-
-// ---------------------------------------------------------------------------
-// 4. watchdog：外部键淘汰陈旧门槛 + abort 失败重试语义
-// ---------------------------------------------------------------------------
-
-interface WatchdogRecorded {
-  notifications: Array<{ level: string; title: string; body: string }>
-  aborts: number[]
-  abortErrors: Array<number>
-  submits: Array<{ conversationId: number; text: string; origin?: string }>
-}
-
-async function makeWatchdogHarness(opts: {
-  ownership?: (id: number) => 'helmx' | 'bot' | 'human'
-} = {}) {
-  const recorded: WatchdogRecorded = { notifications: [], aborts: [], abortErrors: [], submits: [] }
-  /** 测试可变注入：true 时 abortConversation 拒绝（模拟调用失败；插件消费 ctx.host.abortConversation）。 */
-  let abortShouldFail = false
-  const routerId = 100
-  const watchdogId = 200
-  const conversations = new Map<number, ConversationSummary>()
-  const eventListeners = new Map<string, Array<(payload: unknown) => unknown>>()
-  conversations.set(watchdogId, makeConversation(watchdogId, { profileId: 'watchdog', title: '巡检看门狗' }))
-  conversations.set(routerId, makeConversation(routerId, { profileId: 'superagent', title: 'SuperAgent 中枢' }))
-  conversations.set(1, makeConversation(1, { title: 'Personal Assistant' }))
-  const docs = new MemoryDocStore()
-  const backend: PluginHostBackend = {
-    ...createPluginHostBackendFixture(),
-    dispatchTrigger: async () => {},
-    submitInput: async (conversationId, text, o) => {
-      recorded.submits.push({ conversationId, text, origin: o?.origin })
-    },
-    createConversation: async (init) => {
-      const id = conversations.size + 1
-      const summary = makeConversation(id, { title: init.title ?? 'new', profileId: init.profileId ?? 'assistant' })
-      conversations.set(id, summary)
-      return summary
-    },
-    listConversations: () => [...conversations.values()],
-    getConversation: (id) => {
-      const found = conversations.get(id)
-      if (!found) throw new HelmxError('not_found', `会话不存在：${id}`, 404, { conversationId: id })
-      return found
-    },
-    updateConversation: async (id) => conversations.get(id) ?? makeConversation(id),
-    manageConversation: () => () => {},
-    markConversationOwnership: () => {},
-    createAsk: async () => ({ id: 'ask-1', status: 'cancelled', answers: {} }),
-    cancelAsk: async () => {},
-    registerAskSeqResolver: () => () => {},
-    onEvent: (type, listener) => {
-      const list = eventListeners.get(type) ?? []
-      list.push(listener)
-      eventListeners.set(type, list)
-      return () => {
-        const cur = eventListeners.get(type) ?? []
-        const idx = cur.indexOf(listener)
-        if (idx >= 0) cur.splice(idx, 1)
-      }
-    },
-    getConversationOwnership: (id) => opts.ownership?.(id) ?? (id === 1 ? 'human' : 'helmx'),
-    abortConversation: async (id) => {
-      if (abortShouldFail) {
-        recorded.abortErrors.push(id)
-        throw new HelmxError('abort_failed', '测试注入：abort 调用失败', 500)
-      }
-      recorded.aborts.push(id)
-    },
-    abortConversationGuarded: async (id, guard) => {
-      // 内核同构复核（存在性 + 归属 + 水位）后与普通 abort 同一注入通道。
-      const conv = conversations.get(id)
-      if (!conv) throw new HelmxError('not_found', `会话不存在：${id}`, 404, { conversationId: id })
-      const ownedBy = opts.ownership?.(id) ?? (id === 1 ? 'human' : 'helmx')
-      if (ownedBy === 'human' || (guard?.expectedOwnership !== undefined && ownedBy !== guard.expectedOwnership)) {
-        throw new HelmxError('ownership_conflict', `会话 ${id} 当前归属 ${ownedBy}`, 409, { conversationId: id })
-      }
-      if (guard?.expectedStateSeq !== undefined && conv.stateChangeSeq !== guard.expectedStateSeq) {
-        throw new HelmxError('state_seq_conflict', `会话 ${id} 水位不一致`, 409, { conversationId: id })
-      }
-      if (abortShouldFail) {
-        recorded.abortErrors.push(id)
-        throw new HelmxError('abort_failed', '测试注入：abort 调用失败', 500)
-      }
-      recorded.aborts.push(id)
-    },
-    spawnAgent: async () => ({}),
-    runGate: async () => ({ ok: true, output: '' }),
-    execEnv: async () => { throw new HelmxError('unsupported', '本 fixture 不执行节点命令', 501) },
-    emitEvent: async (type, payload) => {
-      if (type === 'notification') {
-        const p = payload as { level?: string; title?: string; body?: string }
-        recorded.notifications.push({ level: p.level ?? 'info', title: p.title ?? '', body: p.body ?? '' })
-      }
-      if (type === 'diagnostics.collect') {
-        for (const listener of [...(eventListeners.get(type) ?? [])]) {
-          await listener(payload)
-        }
-      }
-    },
-  }
-  const host = new PluginHost({ buildProvider: createPluginBuildProvider(),
-    dataDir: mkdtempSync(join(tmpdir(), 'helmx-wd-evict-')),
-    host: backend,
-    docs,
-  })
-  const config = {
-    routerMode: true,
-    mutedSources: '',
-    watchdogEnabled: true,
-    stalledAfterMs: 60_000,
-    abortAfterMs: 600_000,
-    errorThreshold: 3,
-  }
-  const { registerSuperAgentWatchdog } = await import('../src/superagent/watchdog.js')
-  await host.register({
-    id: 'builtin:superagent',
-    name: 'SuperAgent',
-    definePlugin(ctx) {
-      registerSuperAgentWatchdog(ctx, {
-        getConfig: () => config,
-        getRouterConversationId: () => routerId,
-        getWatchdogConversationId: () => watchdogId,
-        track: async <T,>(label: string, task: () => Promise<T>) => task(),
-      } as never)
-    },
-  })
-  return {
-    host,
-    recorded,
-    conversations,
-    docs,
-    config,
-    setAbortShouldFail(value: boolean) {
-      abortShouldFail = value
-    },
-    async tick(probes: WatchdogProbe[]) {
-      // 真实链路：手动 tick 动作（探针经采集事件注入；runTick 会另行构造
-      // 全部原生会话探针——本 harness 预置会话为 idle，无自动处置）。
-      const release = backend.onEvent('diagnostics.collect', (raw) => {
-        const collection = raw as DiagnosticsCollection
-        collection.probes.push(...structuredClone(probes))
-      })
-      try {
-        await host.invokeAction('builtin:superagent', 'watchdog_tick', {})
-      } finally {
-        release()
-      }
-      await new Promise((resolve) => setImmediate(resolve))
-    },
-    /** 直改去重文档（构造淘汰场景：预置大量陈旧/新鲜外部键）。 */
-    dedupStore: docs,
-  }
-}
-
-function externalProbe(nodeId: string, paneId: string, over: Partial<WatchdogProbe> = {}): WatchdogProbe {
-  return {
-    targetId: paneId,
-    targetKind: 'external',
-    nodeId,
-    ownedBy: 'helmx',
-    stateChangeSeq: 10,
-    status: 'working',
-    facts: { kind: 'herdr', parentConversationId: 300, pendingAskCount: 0 },
-    ...over,
-  }
-}
-
-test('watchdog：外部目标瞬时缺失（探针未采到）不淘汰近期动作过的去重键', { timeout: 60_000 }, async () => {
-  const h = await makeWatchdogHarness()
-  try {
-    // 目标 pane-active 在 tick1 出现并触发 notify（working 超长停滞通知）。
-    h.config.abortAfterMs = 600_000
-    const probe = externalProbe('local', 'pane-active', { stalledMs: 700_000, status: 'working' })
-    await h.tick([probe])
-    // 构造总量超限：预置 300 个「陈旧」外部键（at 早于 24h 门槛）——只有它们可淘汰。
-    const staleAt = Date.now() - 25 * 60 * 60 * 1000
-    const fired: Record<string, Record<string, { seq: number; at: number }>> = {}
-    for (let i = 0; i < 300; i++) {
-      fired[JSON.stringify(['external', 'local', `pane-stale-${i}`])] = { notify: { seq: 5, at: staleAt } }
-    }
-    const existing = (h.dedupStore.get('builtin:superagent:watchdog-dedup', { version: 1, fired: {} })) as {
-      version: 1
-      fired: Record<string, Record<string, { seq: number; at: number }>>
-    }
-    // 保留 pane-active 的真实标记（tick1 写入，at = 刚刚）。
-    const activeKey = JSON.stringify(['external', 'local', 'pane-active'])
-    const activeMark = existing.fired[activeKey]
-    assert.ok(activeMark !== undefined, '前置：pane-active 已有去重标记')
-    h.dedupStore.set('builtin:superagent:watchdog-dedup', { version: 1, fired: { ...fired, [activeKey]: activeMark } })
-
-    // tick2：pane-active 瞬时缺失（网络抖动/单 tick 未采到），其余探针为空。
-    await h.tick([])
-
-    const after = (h.dedupStore.get('builtin:superagent:watchdog-dedup', { version: 1, fired: {} })) as {
-      fired: Record<string, Record<string, { seq: number; at: number }>>
-    }
-    // 近期动作过的活跃键绝不被淘汰（防同水位重放通知/唤醒）。
-    assert.ok(after.fired[activeKey] !== undefined, '近期动作过的外部键不得因瞬时缺失被淘汰')
-    // 陈旧键按预算收敛（总量 ≤ 256 后停止淘汰）。
-    const remaining = Object.keys(after.fired).length
-    assert.ok(remaining <= 256, `陈旧键应收敛到预算内（实际 ${remaining}）`)
-  } finally {
-    await h.host.dispose().catch(() => {})
-  }
-})
-
-test('watchdog：足够陈旧的外部键（无动作超 24h 且持续缺失）才允许淘汰', { timeout: 60_000 }, async () => {
-  const h = await makeWatchdogHarness()
-  try {
-    const staleAt = Date.now() - 25 * 60 * 60 * 1000
-    const fired: Record<string, Record<string, { seq: number; at: number }>> = {}
-    for (let i = 0; i < 300; i++) {
-      fired[JSON.stringify(['external', 'local', `pane-old-${i}`])] = { notify: { seq: 5, at: staleAt } }
-    }
-    h.dedupStore.set('builtin:superagent:watchdog-dedup', { version: 1, fired })
-    await h.tick([]) // 持续缺失 + 超限 + 足够陈旧 → 淘汰最旧直至预算内
-    const after = (h.dedupStore.get('builtin:superagent:watchdog-dedup', { version: 1, fired: {} })) as {
-      fired: Record<string, unknown>
-    }
-    assert.ok(Object.keys(after.fired).length <= 256, '陈旧超限外部键应被淘汰收敛')
-  } finally {
-    await h.host.dispose().catch(() => {})
-  }
-})
-
-test('watchdog：abort 调用失败撤销去重标记——下一 tick 同水位可重试且不记假成功', { timeout: 60_000 }, async () => {
-  const h = await makeWatchdogHarness()
-  try {
-    h.config.abortAfterMs = 600_000
-    h.setAbortShouldFail(true)
-    // native 会话 55：超长停滞触发 auto_abort；注入 abort 首次失败。
-    h.conversations.set(55, makeConversation(55, { status: 'working', stateChangeSeq: 10 }))
-    await h.tick([
-      {
-        targetId: '55',
-        targetKind: 'conversation',
-        conversationId: 55,
-        ownedBy: 'helmx',
-        status: 'working',
-        stateChangeSeq: 10,
-        stalledMs: 700_000,
-        facts: { pendingAskCount: 0 },
-      } as WatchdogProbe,
-    ])
-    // 首次 abort 失败：显式错误通知（含「已撤销去重标记，下一轮巡检可重试」）。
-    assert.deepEqual(h.recorded.abortErrors, [55], 'abort 应调用过且失败')
-    assert.equal(h.recorded.aborts.length, 0, '未记假成功')
-    const failNote = h.recorded.notifications.find((n) => n.title.includes('自动中止失败'))
-    assert.ok(failNote !== undefined, 'abort 失败应显式通知')
-    assert.ok(failNote.body.includes('撤销'), '通知应说明已撤销去重标记')
-
-    // 第二 tick 同水位：重试 abort（此时不再注入失败）→ 真实执行。
-    h.setAbortShouldFail(false)
-    await h.tick([
-      {
-        targetId: '55',
-        targetKind: 'conversation',
-        conversationId: 55,
-        ownedBy: 'helmx',
-        status: 'working',
-        stateChangeSeq: 10,
-        stalledMs: 800_000,
-        facts: { pendingAskCount: 0 },
-      } as WatchdogProbe,
-    ])
-    assert.deepEqual(h.recorded.aborts, [55], '撤销标记后下一 tick 应重试 abort')
-    const okNote = h.recorded.notifications.find((n) => n.title.includes('已自动中止'))
-    assert.ok(okNote !== undefined, '重试成功后如实通知')
-  } finally {
-    await h.host.dispose().catch(() => {})
   }
 })
 

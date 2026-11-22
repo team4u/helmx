@@ -414,16 +414,6 @@ function cliEnv(env: Env): NodeJS.ProcessEnv {
   }
 }
 
-/** 触发一轮 diagnostics.collect 采集（与 superagent runTick 分发同款载荷）。 */
-async function triggerCollect(kernel: { emitHostEvent(type: string, payload: unknown, options?: { broadcast?: boolean }): unknown; listConversations(): Array<{ id: number; profileId: string }> }): Promise<void> {
-  const collection = {
-    timestamp: Date.now(),
-    conversations: kernel.listConversations().map((c) => ({ id: c.id, profileId: c.profileId })),
-    probes: [],
-  }
-  await kernel.emitHostEvent('diagnostics.collect', collection, { broadcast: false })
-}
-
 /** 启用插件并等待首次 overview doc 投射完成。 */
 async function enableAndWait(env: Env, fixture: ReturnType<typeof herdrFixture>): Promise<OverviewShape> {
   const res = await fixtureHttp(env.base, env.token, 'POST', `/api/plugins/${encodeURIComponent(PLUGIN_ID)}/enable`)
@@ -565,31 +555,6 @@ test('HO2: SSE 先等 snapshot，随后创建/更新/焦点/move/closed 事件�
 })
 
 // ---------------------------------------------------------------------------
-// HO3: 无事件同 seq cwd 变化经真实 watchdogTick 刷新
-// ---------------------------------------------------------------------------
-
-test('HO3: 无事件、同 seq 的 cwd 变化经 kernel.watchdogTick 重取快照后在 doc 可见', { timeout: 60_000 }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'helmx-ho3-'))
-  const fixture = herdrFixture([pane('human-agent', { agentStatus: 'working', seq: 5, agentName: 'claude-main', cwd: '/old' })])
-  const env = await openEnv(dir, fixture.transport)
-  try {
-    const doc = await enableAndWait(env, fixture)
-    assert.equal(doc.panes.find((p) => p.paneId === 'human-agent')?.cwd, '/old')
-
-    // 官方 cd 不发事件、不推进 seq：仅改 cwd 后直接跑真实 tick
-    fixture.state.panes.get('human-agent')!.cwd = '/new/after/cd'
-    const before = fixture.snapshotCalls()
-    await triggerCollect(env.app.kernel)
-    const after = await waitForOverview(env.base, env.token, (d) => d.panes.find((p) => p.paneId === 'human-agent')?.cwd === '/new/after/cd')
-    assert.ok(fixture.snapshotCalls() > before, 'watchdogTick 应触发 session.snapshot 重取')
-    assert.equal(after.panes.find((p) => p.paneId === 'human-agent')?.stateChangeSeq, 5, 'cwd 变化不推进 seq')
-  } finally {
-    await env.close()
-    rmSync(dir, { recursive: true, force: true })
-  }
-})
-
-// ---------------------------------------------------------------------------
 // HO4: human 红线——blocked 人类窗格不建 Ask/不发键/不回收；停用不误关 human
 // ---------------------------------------------------------------------------
 
@@ -609,10 +574,6 @@ test('HO4: 人类窗格 blocked 只如实投射状态，不产生 Ask、不发�
     fixture.emit({ type: 'pane.updated', paneId: 'human-blocked' })
     await waitForOverview(env.base, env.token, (d) => d.panes.some((p) => p.paneId === 'human-blocked'))
     assert.equal((await readOverview(env.base, env.token)).value!.asks?.length ?? 0, 0)
-
-    // 真实 tick：Watchdog 对 human 窗格只读采集
-    await triggerCollect(env.app.kernel)
-    assert.equal((await readOverview(env.base, env.token)).value!.asks?.length ?? 0, 0, 'watchdogTick 不得对 human 产生 Ask/probe 动作')
     const mutating = fixture.calls.filter((c) => !['session.snapshot', 'agent.get', 'events.subscribe'].includes(c.method))
     assert.deepEqual(mutating, [], 'human 窗格存在时不得出现任何变更类 RPC（send_keys/close 等）')
 
@@ -654,11 +615,10 @@ test('HO5: snapshot 读取失败与订阅断开都显式置 stale+error 并保�
     fixture.emit({ type: 'pane.updated', paneId: 'human-agent' })
     await waitForOverview(env.base, env.token, (d) => d.stale === false && d.error === undefined)
 
-    // 订阅断开：同样显式 stale（经通知暴露），恢复路径由重取对齐
+    // 订阅断开：同样显式 stale（经通知暴露），断线退避重连成功后自动重取快照对齐
     fixture.breakSubscriptions()
     const afterBreak = await waitForOverview(env.base, env.token, (d) => d.stale && Boolean(d.error))
     assert.deepEqual(afterBreak.panes.map((p) => p.paneId), lastGood, '断开后保留最后成功数据，不伪造空表')
-    await triggerCollect(env.app.kernel)
     await waitForOverview(env.base, env.token, (d) => !d.stale && d.error === undefined)
   } finally {
     await env.close()

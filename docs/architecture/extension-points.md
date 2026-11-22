@@ -48,7 +48,7 @@ export type HookName =
 
 四种控制流的语义：`continue` 放行；`transform` 原地改写载荷交由后续处理器与内核消费；`handled` 短路接管并终止默认行为；`block` 门控拦截并附带显式 reason（仅 `tool_call` 与 `input` 允许）。非法产物——缺 action、未知 action、该钩子不允许的组合、`transform` 缺 value、`block` 缺 reason——在宿主处显式抛 `invalid_hook_result`，绝不静默当 continue。
 
-内核不内置巡检定时器，也不存在 `watchdog_tick` Hook：周期性巡检由插件自管服务调度，终端侧诊断由 `builtin:herdr` 经通用进程内事件（`diagnostics.collect`）采集。
+内核不内置巡检定时器，也不存在 `watchdog_tick` Hook：周期性任务一律由插件自管服务调度。
 
 ### agent_spawn 的 around 包装器
 
@@ -68,7 +68,7 @@ export type HookName =
 
 | 方法 | surface | 说明 |
 | :--- | :--- | :--- |
-| `sidebarItem(spec)` | `sidebar.item` | 左栏导航项；`target` 如 `'conversation:1'`、`'screen:builtin:superagent/recall-graph'`；`quickEntry: true` 且目标为 screen 时，宿主在折叠 Rail / 移动抽屉常驻一键入口（目标 screen 必须实际存在，插件停用后随贡献即时消失） |
+| `sidebarItem(spec)` | `sidebar.item` | 左栏导航项；`target` 如 `'conversation:1'`、`'screen:builtin:triggers/triggers'`；`quickEntry: true` 且目标为 screen 时，宿主在折叠 Rail / 移动抽屉常驻一键入口（目标 screen 必须实际存在，插件停用后随贡献即时消失） |
 | `sidebarSection(spec)` | `sidebar.section` | 可折叠分组；`filterTag` 过滤会话 |
 | `screen(spec)` | `screen` | 全屏自定义视图，支持左右 Split View 并排展示 |
 | `timelineRenderer(spec)` | `timeline.renderer` | 按 `kinds`（entry kind 列表）与 `matchMeta`（`data.renderer` 匹配，AND 组合）接管时间线条目 |

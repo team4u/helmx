@@ -39,7 +39,7 @@ helmx start
 
 ## 文档
 
-- 定时跑任务或接收外部事件，见 [Cron 与 Webhook](docs/plugins/triggers.md) 和 [SuperAgent](docs/plugins/superagent.md)。
+- 定时跑任务或接收外部事件，见 [Cron 与 Webhook](docs/plugins/triggers.md)。
 - 想把经常做的事做成浏览器里能直接打开的工具（在插件中心按应用视图筛选与打开），见 [插件开发](docs/plugins/plugin-development.md)。
 - [文档目录](docs/README.md) 收录了 [CLI 手册](docs/cli/reference.md)、[架构说明](docs/architecture/overview.md) 和其他参考资料。
 

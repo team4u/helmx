@@ -1,18 +1,105 @@
 /**
- * 归属权实时投射、受管自举资产与 dispatch_worker 跨平台派工集成验证（共享主实例 + 用户既有资产独立实例）。
+ * 归属权实时投射、受管自举资产与既有用户自定义资产保护集成验证（共享主实例 + 用户既有资产独立实例）。
  */
-import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
-import { HelmxError, type HelmxEventFrame } from '@helmx/protocol'
+import { type HelmxEventFrame, type PluginDefinition } from '@helmx/protocol'
 import assert from 'node:assert/strict'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { DatabaseSync } from 'node:sqlite'
 import { after, before, test } from 'node:test'
 import { openHubTestEnv, type HubTestEnv } from './helpers/hub-test-env.js'
 
 const ROOT_CONVERSATION_ID = 1 as const
+const TEST_MANAGED_PLUGIN_ID = 'test:managed-assets'
 
 let env: HubTestEnv
+
+function makeManagedAssetsPlugin(onStarted?: (ids: { routerId: number; helperId: number }) => void): PluginDefinition {
+  return {
+    id: TEST_MANAGED_PLUGIN_ID,
+    name: 'Test Managed Assets',
+    definePlugin(ctx) {
+      let releases: Array<() => void> = []
+      ctx.service({
+        id: 'managed-assets-bootstrap',
+        async start() {
+          // 仅对缺失的 Profile 写入托管定义，避免覆盖既有用户自定义 Profile（逐文件幂等补齐）
+          const ensureProfile = async (
+            id: string,
+            name: string,
+            skills: string[],
+            system: string,
+          ) => {
+            const dir = await ctx.host.profiles.directory(id)
+            if (!existsSync(join(dir, 'profile.json'))) {
+              await ctx.host.profiles.save({
+                id,
+                name,
+                tags: [id],
+                skills,
+                managedByPlugin: TEST_MANAGED_PLUGIN_ID,
+                humanSelectable: false,
+                system,
+              })
+            } else if (!existsSync(join(dir, 'SYSTEM.md'))) {
+              mkdirSync(dir, { recursive: true })
+              writeFileSync(join(dir, 'SYSTEM.md'), system)
+            }
+          }
+
+          await ensureProfile('managed-hub', 'Managed Hub', [], '# Managed Hub\n')
+          await ensureProfile('managed-helper', 'Managed Helper', ['managed-playbooks'], '# Managed Helper\n')
+
+          // 技能目录同理：未自定义 SKILL.md 时走 ensureSkill，否则仅补齐缺失 references
+          const skillDir = await ctx.host.skills.directory('managed-playbooks')
+          if (!existsSync(join(skillDir, 'SKILL.md'))) {
+            await ctx.host.skills.ensureSkill({
+              id: 'managed-playbooks',
+              skillMd: [
+                '---',
+                'name: managed-playbooks',
+                'description: Managed playbooks for integration test',
+                `managedByPlugin: ${TEST_MANAGED_PLUGIN_ID}`,
+                '---',
+                '',
+                '# Managed Playbooks',
+                '',
+              ].join('\n'),
+              references: {
+                'recovery.md': '# Recovery Reference\n',
+              },
+            })
+          } else {
+            const refPath = join(skillDir, 'references', 'recovery.md')
+            if (!existsSync(refPath)) {
+              mkdirSync(join(skillDir, 'references'), { recursive: true })
+              writeFileSync(refPath, '# Recovery Reference\n')
+            }
+          }
+
+          const router = await ctx.host.createConversation({
+            title: 'Managed Hub',
+            profileId: 'managed-hub',
+          })
+          ctx.host.markConversationOwnership(router.id, 'helmx')
+          const helper = await ctx.host.createConversation({
+            title: 'Managed Helper',
+            profileId: 'managed-helper',
+          })
+          ctx.host.markConversationOwnership(helper.id, 'helmx')
+          releases = [
+            ctx.host.manageConversation(router.id),
+            ctx.host.manageConversation(helper.id),
+          ]
+          onStarted?.({ routerId: router.id, helperId: helper.id })
+        },
+        async stop() {
+          for (const release of releases) release()
+          releases = []
+        },
+      })
+    },
+  }
+}
 
 before(async () => {
   env = await openHubTestEnv({ prefix: 'helmx-ownership-' })
@@ -22,22 +109,7 @@ after(async () => {
   await env?.close()
 }, { timeout: 60_000 })
 
-async function residentIds(target: HubTestEnv): Promise<{ router?: number; watchdog?: number }> {
-  await target.kernel.documentStore.flush()
-  const db = new DatabaseSync(join(target.dataDir, 'state.sqlite'), { readOnly: true })
-  try {
-    const row = db
-      .prepare("SELECT value FROM helmx_plugin_docs WHERE plugin_id = '__global' AND name = 'builtin:superagent:index'")
-      .get() as { value: string } | undefined
-    assert.ok(row)
-    const doc = JSON.parse(row.value) as { routerConversationId?: number; watchdogConversationId?: number }
-    return { router: doc.routerConversationId, watchdog: doc.watchdogConversationId }
-  } finally {
-    db.close()
-  }
-}
-
-test('ownedBy 实时投射与事件广播、superagent 新自举资产标记及 dispatch_worker 跨平台派工与参数校验', { timeout: 60_000 }, async () => {
+test('ownedBy 实时投射与事件广播及插件受管 Profile/Skill 自举标记', { timeout: 60_000 }, async () => {
   const { kernel } = env
 
   // 1. 普通会话与初始 #1 恒为 human；markConversationOwnership 幂等与变更广播
@@ -69,114 +141,89 @@ test('ownedBy 实时投射与事件广播、superagent 新自举资产标记及 
     off()
   }
 
-  // 2. 启用 builtin:superagent：常驻 router/watchdog 为 helmx，新自举 Profile/Skill 携带受管标记
-  await kernel.plugins.enable('builtin:superagent')
-  const ids = await residentIds(env)
-  assert.ok(ids.router && ids.watchdog)
-  assert.equal(kernel.getConversation(ids.router).ownedBy, 'helmx')
-  assert.equal(kernel.getConversation(ids.watchdog).ownedBy, 'helmx')
-  const listed = new Map(kernel.listConversations().map((s) => [s.id, s.ownedBy]))
-  assert.equal(listed.get(ids.router), 'helmx')
-  assert.equal(listed.get(ids.watchdog), 'helmx')
-  assert.equal(listed.get(ROOT_CONVERSATION_ID), 'human')
+  // 2. 启用受管资产插件：受管会话归属 helmx，自举 Profile/Skill 携带 managedByPlugin 与 humanSelectable=false
+  let createdIds: { routerId: number; helperId: number } | undefined
+  await kernel.plugins.register(makeManagedAssetsPlugin((ids) => { createdIds = ids }), { enabled: false })
+  await kernel.plugins.enable(TEST_MANAGED_PLUGIN_ID)
+  try {
+    assert.ok(createdIds)
+    assert.equal(kernel.getConversation(createdIds.routerId).ownedBy, 'helmx')
+    assert.equal(kernel.getConversation(createdIds.helperId).ownedBy, 'helmx')
+    const listed = new Map(kernel.listConversations().map((s) => [s.id, s.ownedBy]))
+    assert.equal(listed.get(createdIds.routerId), 'helmx')
+    assert.equal(listed.get(createdIds.helperId), 'helmx')
+    assert.equal(listed.get(ROOT_CONVERSATION_ID), 'human')
 
-  const superagentJson = JSON.parse(
-    readFileSync(join(env.dataDir, 'profiles', 'superagent', 'profile.json'), 'utf8'),
-  ) as { managedByPlugin?: string; humanSelectable?: boolean; skills?: string[] }
-  assert.equal(superagentJson.managedByPlugin, 'builtin:superagent')
-  assert.equal(superagentJson.humanSelectable, false)
-  assert.deepEqual(superagentJson.skills, [])
+    const hubJson = JSON.parse(
+      readFileSync(join(env.dataDir, 'profiles', 'managed-hub', 'profile.json'), 'utf8'),
+    ) as { managedByPlugin?: string; humanSelectable?: boolean; skills?: string[] }
+    assert.equal(hubJson.managedByPlugin, TEST_MANAGED_PLUGIN_ID)
+    assert.equal(hubJson.humanSelectable, false)
+    assert.deepEqual(hubJson.skills, [])
 
-  const watchdogJson = JSON.parse(
-    readFileSync(join(env.dataDir, 'profiles', 'watchdog', 'profile.json'), 'utf8'),
-  ) as { managedByPlugin?: string; humanSelectable?: boolean; skills?: string[] }
-  assert.equal(watchdogJson.managedByPlugin, 'builtin:superagent')
-  assert.equal(watchdogJson.humanSelectable, false)
-  assert.deepEqual(watchdogJson.skills, ['watchdog-playbooks'])
+    const helperJson = JSON.parse(
+      readFileSync(join(env.dataDir, 'profiles', 'managed-helper', 'profile.json'), 'utf8'),
+    ) as { managedByPlugin?: string; humanSelectable?: boolean; skills?: string[] }
+    assert.equal(helperJson.managedByPlugin, TEST_MANAGED_PLUGIN_ID)
+    assert.equal(helperJson.humanSelectable, false)
+    assert.deepEqual(helperJson.skills, ['managed-playbooks'])
 
-  const profiles = await kernel.profiles.list()
-  assert.equal(profiles.find((p) => p.id === 'assistant')?.managedByPlugin, 'builtin:profile')
-  assert.equal(profiles.find((p) => p.id === 'assistant')?.humanSelectable, undefined)
-  assert.match(readFileSync(join(env.dataDir, 'skills', 'watchdog-playbooks', 'SKILL.md'), 'utf8'), /^managedByPlugin: builtin:superagent$/m)
-  assert.equal((await kernel.skills.list()).find((s) => s.id === 'watchdog-playbooks')?.managedByPlugin, 'builtin:superagent')
-
-  // 3. dispatch_worker 归属权（helmx）、显式 nodeId 与跨平台 cwd（POSIX / 盘符反斜杠与正斜杠 / UNC / 远端节点）
-  env.faux.setResponses(Array.from({ length: 12 }, () => fauxAssistantMessage('receives')))
-  for (const c of [
-    { input: { prompt: 'ownership verify task' }, expectNode: 'local' },
-    { input: { prompt: 'POSIX', nodeId: 'local', cwd: '/tmp/posix-worker' }, expectNode: 'local', expectCwd: '/tmp/posix-worker' },
-    { input: { prompt: 'Win', cwd: 'C:\\repo\\app' }, expectCwd: 'C:\\repo\\app' },
-    { input: { prompt: 'WinFwd', cwd: 'C:/repo/app' }, expectCwd: 'C:/repo/app' },
-    { input: { prompt: 'UNC', cwd: '\\\\server\\share\\repo' }, expectCwd: '\\\\server\\share\\repo' },
-    { input: { prompt: 'Remote', nodeId: 'remote-node-1', cwd: 'C:\\remote\\workspace' }, expectNode: 'remote-node-1', expectCwd: 'C:\\remote\\workspace' },
-  ]) {
-    const dispatched = (await kernel.plugins.invokeAction('builtin:superagent', 'dispatch_worker', c.input)) as {
-      workerConversationId: number
-    }
-    const summary = kernel.getConversation(dispatched.workerConversationId)
-    assert.equal(summary.ownedBy, 'helmx')
-    if (c.expectNode !== undefined) assert.equal(summary.nodeId, c.expectNode)
-    if (c.expectCwd !== undefined) assert.equal(summary.cwd, c.expectCwd)
-    await kernel.waitForIdle(dispatched.workerConversationId)
-  }
-
-  // 4. 非法相对 cwd 与非法 nodeId 显式拒绝
-  for (const badCwd of ['repo/app', 'C:repo']) {
-    await assert.rejects(
-      () => kernel.plugins.invokeAction('builtin:superagent', 'dispatch_worker', { prompt: 'x', cwd: badCwd }),
-      (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && /跨平台绝对路径/.test(err.message),
+    const profiles = await kernel.profiles.list()
+    assert.equal(profiles.find((p) => p.id === 'assistant')?.managedByPlugin, 'builtin:profile')
+    assert.equal(profiles.find((p) => p.id === 'assistant')?.humanSelectable, undefined)
+    assert.match(
+      readFileSync(join(env.dataDir, 'skills', 'managed-playbooks', 'SKILL.md'), 'utf8'),
+      new RegExp(`^managedByPlugin: ${TEST_MANAGED_PLUGIN_ID}$`, 'm'),
     )
-  }
-  for (const badNodeId of ['a b', 'a/b']) {
-    await assert.rejects(
-      () => kernel.plugins.invokeAction('builtin:superagent', 'dispatch_worker', { prompt: 'x', nodeId: badNodeId }),
-      (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && /nodeId/.test(err.message),
-    )
+    assert.equal((await kernel.skills.list()).find((s) => s.id === 'managed-playbooks')?.managedByPlugin, TEST_MANAGED_PLUGIN_ID)
+  } finally {
+    await kernel.plugins.disable(TEST_MANAGED_PLUGIN_ID)
   }
 })
 
 test('既有自定义 Profile/Skill 逐字节保持且仅补齐缺失文件（partial-start 幂等，零迁移回填）', { timeout: 60_000 }, async () => {
   const custom = await openHubTestEnv({ prefix: 'helmx-ownership-custom-' })
   try {
-    const profileJsonRaw = JSON.stringify({ id: 'superagent', name: 'I router hub', model: 'faux/faux-1' }, null, 2) + '\n'
-    const systemMdRaw = '# I router hub hint\n'
+    const profileJsonRaw = JSON.stringify({ id: 'managed-hub', name: 'I custom hub', model: 'faux/faux-1' }, null, 2) + '\n'
+    const systemMdRaw = '# I custom hub hint\n'
     const memoryMdRaw = '# Memory\n\nuser memory\n'
-    const skillMdRaw = ['---', 'name: watchdog-playbooks', 'description: I self define manual', '---', '', '# I manual body text', ''].join('\n')
+    const skillMdRaw = ['---', 'name: managed-playbooks', 'description: I self define manual', '---', '', '# I manual body text', ''].join('\n')
 
-    mkdirSync(join(custom.dataDir, 'profiles', 'superagent'), { recursive: true })
-    writeFileSync(join(custom.dataDir, 'profiles', 'superagent', 'profile.json'), profileJsonRaw)
-    writeFileSync(join(custom.dataDir, 'profiles', 'superagent', 'SYSTEM.md'), systemMdRaw)
-    writeFileSync(join(custom.dataDir, 'profiles', 'superagent', 'MEMORY.md'), memoryMdRaw)
-    mkdirSync(join(custom.dataDir, 'skills', 'watchdog-playbooks'), { recursive: true })
-    writeFileSync(join(custom.dataDir, 'skills', 'watchdog-playbooks', 'SKILL.md'), skillMdRaw)
+    mkdirSync(join(custom.dataDir, 'profiles', 'managed-hub'), { recursive: true })
+    writeFileSync(join(custom.dataDir, 'profiles', 'managed-hub', 'profile.json'), profileJsonRaw)
+    writeFileSync(join(custom.dataDir, 'profiles', 'managed-hub', 'SYSTEM.md'), systemMdRaw)
+    writeFileSync(join(custom.dataDir, 'profiles', 'managed-hub', 'MEMORY.md'), memoryMdRaw)
+    mkdirSync(join(custom.dataDir, 'skills', 'managed-playbooks'), { recursive: true })
+    writeFileSync(join(custom.dataDir, 'skills', 'managed-playbooks', 'SKILL.md'), skillMdRaw)
 
-    await custom.kernel.plugins.enable('builtin:superagent')
-    assert.equal(readFileSync(join(custom.dataDir, 'profiles', 'superagent', 'profile.json'), 'utf8'), profileJsonRaw)
-    assert.equal(readFileSync(join(custom.dataDir, 'profiles', 'superagent', 'SYSTEM.md'), 'utf8'), systemMdRaw)
-    assert.equal(readFileSync(join(custom.dataDir, 'profiles', 'superagent', 'MEMORY.md'), 'utf8'), memoryMdRaw)
-    assert.equal(readFileSync(join(custom.dataDir, 'skills', 'watchdog-playbooks', 'SKILL.md'), 'utf8'), skillMdRaw)
+    await custom.kernel.plugins.register(makeManagedAssetsPlugin(), { enabled: false })
+    await custom.kernel.plugins.enable(TEST_MANAGED_PLUGIN_ID)
+    assert.equal(readFileSync(join(custom.dataDir, 'profiles', 'managed-hub', 'profile.json'), 'utf8'), profileJsonRaw)
+    assert.equal(readFileSync(join(custom.dataDir, 'profiles', 'managed-hub', 'SYSTEM.md'), 'utf8'), systemMdRaw)
+    assert.equal(readFileSync(join(custom.dataDir, 'profiles', 'managed-hub', 'MEMORY.md'), 'utf8'), memoryMdRaw)
+    assert.equal(readFileSync(join(custom.dataDir, 'skills', 'managed-playbooks', 'SKILL.md'), 'utf8'), skillMdRaw)
 
-    const userP = (await custom.kernel.profiles.list()).find((p) => p.id === 'superagent')
+    const userP = (await custom.kernel.profiles.list()).find((p) => p.id === 'managed-hub')
     assert.equal(userP?.managedByPlugin, undefined)
     assert.equal(userP?.humanSelectable, undefined)
-    assert.equal(userP?.name, 'I router hub')
-    assert.equal((await custom.kernel.skills.list()).find((s) => s.id === 'watchdog-playbooks')?.managedByPlugin, undefined)
+    assert.equal(userP?.name, 'I custom hub')
+    assert.equal((await custom.kernel.skills.list()).find((s) => s.id === 'managed-playbooks')?.managedByPlugin, undefined)
 
     assert.match(
-      readFileSync(join(custom.dataDir, 'skills', 'watchdog-playbooks', 'references', 'herdr-stalled.md'), 'utf8'),
-      /Handling Stalled Herdr Terminal Panes/,
+      readFileSync(join(custom.dataDir, 'skills', 'managed-playbooks', 'references', 'recovery.md'), 'utf8'),
+      /Recovery Reference/,
     )
-    const watchdogJson = JSON.parse(readFileSync(join(custom.dataDir, 'profiles', 'watchdog', 'profile.json'), 'utf8')) as {
+    const helperJson = JSON.parse(readFileSync(join(custom.dataDir, 'profiles', 'managed-helper', 'profile.json'), 'utf8')) as {
       managedByPlugin?: string
       humanSelectable?: boolean
     }
-    assert.equal(watchdogJson.managedByPlugin, 'builtin:superagent')
-    assert.equal(watchdogJson.humanSelectable, false)
+    assert.equal(helperJson.managedByPlugin, TEST_MANAGED_PLUGIN_ID)
+    assert.equal(helperJson.humanSelectable, false)
 
-    await custom.kernel.plugins.disable('builtin:superagent')
-    await custom.kernel.plugins.enable('builtin:superagent')
-    assert.equal(readFileSync(join(custom.dataDir, 'profiles', 'superagent', 'profile.json'), 'utf8'), profileJsonRaw)
-    assert.equal(readFileSync(join(custom.dataDir, 'skills', 'watchdog-playbooks', 'SKILL.md'), 'utf8'), skillMdRaw)
+    await custom.kernel.plugins.disable(TEST_MANAGED_PLUGIN_ID)
+    await custom.kernel.plugins.enable(TEST_MANAGED_PLUGIN_ID)
+    assert.equal(readFileSync(join(custom.dataDir, 'profiles', 'managed-hub', 'profile.json'), 'utf8'), profileJsonRaw)
+    assert.equal(readFileSync(join(custom.dataDir, 'skills', 'managed-playbooks', 'SKILL.md'), 'utf8'), skillMdRaw)
   } finally {
     await custom.close()
   }

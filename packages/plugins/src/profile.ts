@@ -292,7 +292,7 @@ export function createProfilePlugin(): PluginDefinition {
        * - decide purely by whether the turn still has dispatch tools: builtin:workflow strips
        *   subagent/SubagentWorkflow for managed subagents at the depth cap (orchestration leaves)
        *   at a higher-priority hook, so this naturally returns empty -- no blanket exclusion by
-       * parentConversationId (fork / SuperAgent workers also have parent chains yet should keep
+       * parentConversationId (fork / Swarm workers also have parent chains yet should keep
        *   full collaboration ability; level-1 subagents keep dispatch tools by default and also get the catalog);
        * - re-read the Profile catalog and plugin state live on every call (edits/toggles take effect next turn).
        */
@@ -331,7 +331,7 @@ export function createProfilePlugin(): PluginDefinition {
           // Turns without available dispatch tools get no catalog (avoiding teaching calls to
           // nonexistent tools; depth-capped leaf subagents had their dispatch tools stripped by the
           // builtin:workflow hook, converging naturally here). The post-convergence tools are
-          // read-only here; no exclusion by parentConversationId (fork / SuperAgent workers also
+          // read-only here; no exclusion by parentConversationId (fork / Swarm workers also
           // have parent chains and should keep collaboration ability; level-1 subagents keep dispatch tools by default and also get the catalog).
           const tools = dispatchToolNames(turn.tools)
           if (tools.length === 0) return { action: 'continue' }
