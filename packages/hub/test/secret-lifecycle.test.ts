@@ -319,7 +319,7 @@ function makePaneEnv(dataDir: string, options: { clock?: () => number; onPrompte
   const spawnBackend = spawnEnvBackend(stash, { token: 'managed-token', nodeHubUrl: 'http://10.0.0.5:3202' })
   const profiles = new Map<string, Profile>([[
     'ci-runner',
-    { id: 'ci-runner', runtime: { kind: 'herdr', agent: 'agy', nodeId: 'node-a', env: { CI_FLAG: 'profile-yes', DEPLOY_TOKEN: 'profile-deploy', HELMX_CWD: '/hijack' } } } as Profile,
+    { id: 'ci-runner', runtime: { kind: 'herdr', agent: 'agy', nodeId: 'node-a', workspace: dataDir, env: { CI_FLAG: 'profile-yes', DEPLOY_TOKEN: 'profile-deploy', HELMX_CWD: '/hijack' } } } as Profile,
   ]])
   let doc: ManagedDoc = { ...EMPTY_MANAGED_DOC, panes: [] }
   const registry = new PaneRegistry({ get: () => doc, set: (next) => { doc = next } }, doc)
