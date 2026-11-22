@@ -91,14 +91,12 @@ export function useBatchConversationDelete({
   }, [exitBatchMode])
 
   const toggleBatchMode = useCallback(() => {
-    setBatchModeState((prev) => {
-      if (prev) {
-        setRawSelectedIds(new Set())
-        setConfirmSnapshotIds(null)
-      }
-      return !prev
-    })
-  }, [])
+    if (batchMode) {
+      exitBatchMode()
+    } else {
+      setBatchModeState(true)
+    }
+  }, [batchMode, exitBatchMode])
 
   const toggleSelect = useCallback((id: number) => {
     setRawSelectedIds((prev) => {

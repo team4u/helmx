@@ -13,9 +13,8 @@ import type { ComponentType, ReactNode } from 'react'
 import type { ClientComponentRef, ComposerController } from '@helmx/protocol/browser'
 import { HelmxIcon, createPluginClientContext, PluginClientContext, PluginScope, usePluginClientHost, ViewBoundary } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
-import { isPluginSummaryActive } from '../lib/live-state.js'
 import { getCachedClientComponent, getPluginClientCacheRevision, loadPluginClientModule, PluginClientError, requireClientExport, subscribePluginClientCacheInvalidation } from '../lib/plugin-client.js'
-import { usePluginSummary } from '../lib/store-context.js'
+import { usePluginClientHash } from '../lib/store-context.js'
 
 export interface PluginUiViewProps {
   pluginId: string
@@ -38,20 +37,16 @@ type ClientState =
 
 export function PluginUiView(props: PluginUiViewProps): ReactNode {
   const { pluginId, spec } = props
-  const plugin = usePluginSummary(pluginId)
+  const clientRef = spec.client
+  const expectedHash = usePluginClientHash(pluginId, clientRef?.module)
   const revision = useSyncExternalStore(
     subscribePluginClientCacheInvalidation,
     () => getPluginClientCacheRevision(pluginId),
     () => getPluginClientCacheRevision(pluginId),
   )
-  const clientRef = spec.client
   if (clientRef === undefined) {
     return <MissingTrackError pluginId={pluginId} />
   }
-  const expectedHash =
-    plugin !== undefined && isPluginSummaryActive(plugin)
-      ? plugin.clientHashes?.[clientRef.module]
-      : undefined
   // Snapshot rebuilds / per-plugin reconciliation invalidate the cache too:
   // mounted views must reload instead of keeping the old component (or losing its styles).
   return (

@@ -15,6 +15,7 @@ import type {
   SkillSummary,
 } from '@helmx/protocol/browser'
 import type { ModelCatalogDefaults, ModelDescriptor } from './api.js'
+import { isPluginSummaryActive } from './live-state.js'
 import type {
   AuthSlice,
   CatalogSlice,
@@ -367,6 +368,34 @@ export function usePluginDoc(pluginId: string | undefined, docName: string | und
 
 export function usePluginSummary(pluginId: string | undefined): PluginSummary | undefined {
   return useKeyedSlice(subscribePluginById, readPluginById, pluginId, undefined)
+}
+
+/**
+ * Selective subscription to only a single plugin module's active `clientHashes[moduleRef]`:
+ * avoids re-rendering mounted plugin views when unrelated plugins update OR when the same
+ * plugin changes non-hash metadata (name, publicConfig, etc.).
+ */
+export function usePluginClientHash(
+  pluginId: string,
+  moduleRef: string | undefined,
+): string | undefined {
+  const external = useContext(HelmxExternalStoreContext)
+  const subscribe = useCallback(
+    (listener: () => void) =>
+      external !== null && moduleRef !== undefined ? external.subscribePlugin(pluginId, listener) : NOOP_UNSUBSCRIBE,
+    [external, pluginId, moduleRef],
+  )
+  const getSnapshot = (): string | undefined | typeof UNSET => {
+    if (external === null) return UNSET
+    if (moduleRef === undefined) return undefined
+    const plugin = external.getPluginSummary(pluginId)
+    return plugin !== undefined && isPluginSummaryActive(plugin)
+      ? plugin.clientHashes?.[moduleRef]
+      : undefined
+  }
+  const value = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
+  if (value !== UNSET) return value
+  throw new Error('useHelmxStore must be called inside <HelmxStoreProvider>')
 }
 
 // ---------------------------------------------------------------------------

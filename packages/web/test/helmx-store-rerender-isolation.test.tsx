@@ -30,7 +30,7 @@ import { PluginUiView } from '../src/ui/PluginUiView.js'
 import { useWebLocale } from '../src/i18n/use-web-locale.js'
 import { applySnapshot, applyTransientLiveFrame, emptyLiveState } from '../src/lib/live-state.js'
 import type { HelmxStoreValue } from '../src/lib/types.js'
-import { resetPluginClientCache } from '../src/lib/plugin-client.js'
+import { resetPluginClientCache, seedPluginClientModule } from '../src/lib/plugin-client.js'
 import { ConversationPane } from '../src/conversation/ConversationPane.js'
 import { ConversationTimeline } from '../src/conversation/ConversationTimeline.js'
 import { CommandPaletteModal } from '../src/modals/CommandPaletteModal.js'
@@ -709,7 +709,11 @@ describe("helmx-store-rerender-isolation", () => {
       drawerStack: [],
       activeModal: null,
     })
-    store.updateLive((prev) => applySnapshot(prev, makeSnapshot()))
+    const snap = makeSnapshot()
+    snap.plugins = snap.plugins.map((p) =>
+      p.id === 'test:plugin' ? { ...p, clientHashes: { 'ctx-probe.tsx': 'seeded' } } : p,
+    )
+    store.updateLive((prev) => applySnapshot(prev, snap))
 
     let pluginARenders = 0
     let pluginBRenders = 0
@@ -726,41 +730,45 @@ describe("helmx-store-rerender-isolation", () => {
       return <div data-testid="plugin-b-summary">{typeof summary?.name === 'string' ? summary.name : ''}</div>
     }
 
-    // 验证 PluginUiView 不会因无关插件变化而重渲染（missing-client 路径同样挂载在 PluginUiView 上）
+    const CtxCapture = ({ bump }: { bump?: number }): React.ReactNode => {
+      const ctx = usePluginContext()
+      seenContexts.push(ctx)
+      return <span data-bump={bump ?? 0}>{ctx.pluginId}</span>
+    }
+    seedPluginClientModule('test:plugin', 'ctx-probe.tsx', { CtxCapture })
+
+    // 验证 PluginUiView 不会因无关插件变化而重渲染，且在重渲染时保持 PluginClientContext 引用稳定
     let uiViewRenders = 0
-    const spec = {}
+    const spec = { client: { module: 'ctx-probe.tsx', export: 'CtxCapture' } }
     const host = document.createElement('div')
     document.body.appendChild(host)
     let root: Root | undefined
     mountedCleanups.push(async () => {
       const r = root
       if (r !== undefined) await act(async () => { r.unmount() })
+      resetPluginClientCache()
       store.dispose()
       host.remove()
     })
 
-    const CtxCapture = ({ pluginId, bump }: { pluginId: string; bump: number }): React.ReactNode => {
-      const ctx = usePluginContext()
-      seenContexts.push(ctx)
-      return <span data-bump={bump}>{pluginId}</span>
-    }
-    void CtxCapture
+    const renderTree = (bump: number): React.JSX.Element => (
+      <HelmxExternalStoreContext.Provider value={store}>
+        <PluginClientHostBridge store={store}>
+          <PluginAProbe />
+          <PluginBProbe />
+          <React.Profiler id="plugin-ui-view-a" onRender={() => { uiViewRenders++ }}>
+            <PluginUiView pluginId="test:plugin" spec={spec} slotProps={{ bump }} />
+          </React.Profiler>
+        </PluginClientHostBridge>
+      </HelmxExternalStoreContext.Provider>
+    )
 
     await act(async () => {
       root = createRoot(host)
-      root.render(
-        <HelmxExternalStoreContext.Provider value={store}>
-          <PluginClientHostBridge store={store}>
-            <PluginAProbe />
-            <PluginBProbe />
-            <React.Profiler id="plugin-ui-view-a" onRender={() => { uiViewRenders++ }}>
-              <PluginUiView pluginId="test:plugin" spec={spec} />
-            </React.Profiler>
-          </PluginClientHostBridge>
-        </HelmxExternalStoreContext.Provider>,
-      )
+      root.render(renderTree(1))
     })
 
+    assert.equal(seenContexts.length, 1, '首次挂载应捕获一次 PluginClientContext')
     pluginARenders = 0
     pluginBRenders = 0
     uiViewRenders = 0
@@ -777,8 +785,9 @@ describe("helmx-store-rerender-isolation", () => {
     assert.equal(pluginBRenders, 1, '目标变更插件订阅者应重渲染')
     assert.equal(pluginARenders, 0, '无关插件订阅者不得因其他插件更新而重渲染')
     assert.equal(uiViewRenders, 0, 'PluginUiView 不得因无关插件更新而级联重渲染')
+    assert.equal(seenContexts.length, 1, '无关插件更新不得触发目标插件视图重新渲染')
 
-    // 更新 test:plugin 自身：PluginAProbe 与 PluginUiView('test:plugin') 精准响应
+    // 更新 test:plugin 自身非 hash 元数据：PluginAProbe 精准响应；PluginUiView 仅订阅 expectedHash，hash 未变则零重渲染
     await act(async () => {
       store.updateLive((prev) => ({
         ...prev,
@@ -788,7 +797,30 @@ describe("helmx-store-rerender-isolation", () => {
       }))
     })
     assert.equal(pluginARenders, 1)
-    assert.equal(uiViewRenders, 1)
     assert.equal(pluginBRenders, 1, '反向隔离：builtin:profile 不应因 test:plugin 更新而重渲染')
+    assert.equal(uiViewRenders, 0, '同插件仅元信息变化且 expectedHash 未变时，PluginUiView 保持零重渲染')
+    assert.equal(seenContexts.length, 1)
+
+    // 父组件变更 slotProps 重渲染 PluginUiView：子插件视图重渲染且 memoized PluginClientContext 引用恒定
+    await act(async () => {
+      root!.render(renderTree(2))
+    })
+    assert.equal(seenContexts.length, 2, '父级 slotProps 变更后子插件视图重新渲染')
+    assert.ok(seenContexts[0] === seenContexts[1], 'PluginUiView 重渲染时必须复用同一个 memoized PluginClientContext')
+
+    // 同一插件 clientHashes 实际变化：PluginUiView 精准响应新 hash 并加载新版本组件
+    seedPluginClientModule('test:plugin', 'ctx-probe.tsx', { CtxCapture }, 'seeded-v2')
+    uiViewRenders = 0
+    await act(async () => {
+      store.updateLive((prev) => ({
+        ...prev,
+        plugins: prev.plugins.map((p) =>
+          p.id === 'test:plugin' ? { ...p, clientHashes: { 'ctx-probe.tsx': 'seeded-v2' } } : p,
+        ),
+      }))
+    })
+    assert.ok(uiViewRenders >= 1, '目标模块 expectedHash 变化时 PluginUiView 必须响应更新')
+    assert.equal(seenContexts.length, 3)
+    assert.ok(seenContexts[0] === seenContexts[2], '同 pluginId 换 hash 期间 memoized PluginClientContext 引用保持稳定')
   })
 })

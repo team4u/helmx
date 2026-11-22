@@ -192,6 +192,9 @@ export function ProfileDetailDrawer({
           if (activeFetchIdRef.current !== targetId) return
           setError(err instanceof Error ? err.message : String(err))
         })
+      return () => {
+        activeFetchIdRef.current = null
+      }
     }
   }, [open, profile, isNew])
 
