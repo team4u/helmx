@@ -128,40 +128,21 @@ export const shellMessages = {
   },
   'shell.batch.bulkDeleteError': { en: 'Bulk delete error', 'zh-CN': '批量删除异常' },
 
-  // Agents group in the sidebar
-  'shell.agents.groupTitle': { en: 'Agents', 'zh-CN': '智能体' },
+  // New topic & bulk management copy (shared by sidebar working set and overview)
   'shell.agents.newTopicUnder': { en: 'Start a new topic under {label}', 'zh-CN': '在 {label} 下开始新话题' },
-  'shell.agents.expandTopics': { en: 'Expand {label} topics', 'zh-CN': '展开 {label} 的话题列表' },
-  'shell.agents.collapseTopics': { en: 'Collapse {label} topics', 'zh-CN': '收起 {label} 的话题列表' },
-  'shell.agents.showMore': { en: 'Show more ({count} more)', 'zh-CN': '展开更多 (剩余 {count} 条)' },
-  'shell.agents.protectedTitle': {
-    en: 'Protected conversations cannot be deleted',
-    'zh-CN': '受保护会话不可删除',
-  },
   'shell.agents.collapseFilters': { en: 'Collapse filters', 'zh-CN': '收起筛选' },
-  'shell.agents.filter': { en: 'Filter agents and topics', 'zh-CN': '筛选智能体与话题' },
-  'shell.agents.filterPlaceholder': { en: 'Filter agents or topics...', 'zh-CN': '筛选智能体或话题...' },
   'shell.agents.exitBulk': { en: 'Exit bulk management', 'zh-CN': '退出批量管理' },
   'shell.agents.manageBulk': { en: 'Manage conversations in bulk', 'zh-CN': '批量管理会话' },
   'shell.agents.clearFilter': { en: 'Clear filter', 'zh-CN': '清空筛选' },
   'shell.agents.archiving': { en: 'Archiving...', 'zh-CN': '归档中...' },
   'shell.agents.archiveCount': { en: 'Archive ({count})', 'zh-CN': '归档 ({count})' },
-  'shell.agents.noMatch': { en: 'No matching agents or topics', 'zh-CN': '没有匹配的智能体或话题' },
 
-  // Archived conversations group in the sidebar
+  // Archived conversations copy (overview archived tab + bulk restore)
   'shell.archived.groupTitle': { en: 'Archived', 'zh-CN': '已归档' },
-  'shell.archived.collapseGroup': { en: 'Collapse archived group', 'zh-CN': '收起已归档分组' },
-  'shell.archived.expandGroup': { en: 'Expand archived group', 'zh-CN': '展开已归档分组' },
-  'shell.archived.owningAgent': { en: 'Owning agent: {label}', 'zh-CN': '归属智能体：{label}' },
-  'shell.archived.exitBulk': { en: 'Exit bulk management', 'zh-CN': '退出批量管理' },
-  'shell.archived.manageBulk': {
-    en: 'Manage archived conversations in bulk',
-    'zh-CN': '批量管理已归档会话',
-  },
   'shell.archived.restoring': { en: 'Restoring...', 'zh-CN': '恢复中...' },
   'shell.archived.restoreCount': { en: 'Restore ({count})', 'zh-CN': '恢复 ({count})' },
 
-  // Sidebar primitives: status dots, node tags, pane tags, pending approvals
+  // Sidebar primitives: status dots, node tags, pane tags
   'shell.status.working': { en: 'Running', 'zh-CN': '运行中' },
   'shell.status.blocked': { en: 'Awaiting confirmation', 'zh-CN': '等待确认' },
   'shell.status.done': { en: 'Completed', 'zh-CN': '已完成' },
@@ -176,13 +157,6 @@ export const shellMessages = {
   'shell.pane.split': { en: 'Open in split view', 'zh-CN': '分屏打开' },
   'shell.pane.both': { en: 'Open in both main and split views', 'zh-CN': '主屏与分屏均打开' },
   'shell.node.title': { en: 'Node: {id}', 'zh-CN': '运行节点：{id}' },
-  'shell.asks.submitted': { en: 'Approval submitted', 'zh-CN': '审批已提交' },
-  'shell.asks.submitFailed': { en: 'Approval submission failed', 'zh-CN': '审批提交失败' },
-  'shell.asks.expand': { en: 'Expand pending approval list', 'zh-CN': '展开待审批列表' },
-  'shell.asks.pending': { en: 'Pending ({count})', 'zh-CN': '待确认 ({count})' },
-  'shell.asks.handleInMain': { en: 'Handle in main view', 'zh-CN': '主屏处理' },
-  'shell.asks.sideBySide': { en: 'Side by side in right split', 'zh-CN': '右屏并排' },
-  'shell.asks.approve': { en: 'Approve', 'zh-CN': '批准' },
 
   // Conversation background activity summaries and status-light tooltips
   'shell.background.compacting': { en: 'Compacting context', 'zh-CN': '上下文精简中' },
@@ -255,6 +229,7 @@ export const shellMessages = {
   'shell.overview.filterNeeds': { en: 'Needs attention', 'zh-CN': '需处理' },
   'shell.overview.filterRunning': { en: 'Running', 'zh-CN': '进行中' },
   'shell.overview.filterUnread': { en: 'Unread', 'zh-CN': '未读' },
+  'shell.overview.filterArchived': { en: 'Archived', 'zh-CN': '已归档' },
   'shell.overview.profileFilter': { en: 'All agents', 'zh-CN': '全部角色' },
   'shell.overview.profileFilterLabel': { en: 'Filter by agent', 'zh-CN': '按角色筛选' },
   'shell.overview.nodeFilter': { en: 'All nodes', 'zh-CN': '全部节点' },
@@ -268,9 +243,18 @@ export const shellMessages = {
     en: '{count} of {total} conversation groups',
     'zh-CN': '{count} / {total} 个会话组',
   },
+  'shell.overview.statsArchived': { en: '{count} archived conversations', 'zh-CN': '{count} 个已归档会话' },
+  'shell.overview.statsArchivedFiltered': {
+    en: '{count} of {total} archived conversations',
+    'zh-CN': '{count} / {total} 个已归档会话',
+  },
   'shell.overview.emptySystem': {
     en: 'No conversations yet. Start one with New topic.',
     'zh-CN': '还没有会话，从「新话题」开始。',
+  },
+  'shell.overview.emptyArchived': {
+    en: 'No archived conversations',
+    'zh-CN': '暂无已归档会话',
   },
   'shell.overview.emptyFiltered': {
     en: 'No conversations match the current filters',
@@ -308,34 +292,34 @@ export const shellMessages = {
     'zh-CN': '托管或受保护会话不参与批量管理',
   },
 
-  // Sidebar conversation display mode switcher & compact overview list
-  'shell.sidebar.convModeLabel': {
-    en: 'Conversation list display mode',
-    'zh-CN': '会话列表展示模式',
+  // Sidebar conversation working set & quick switcher
+  'shell.sidebar.workingSetTitle': {
+    en: 'Working set',
+    'zh-CN': '工作集',
   },
-  'shell.sidebar.convModeAgentsTooltip': {
-    en: 'Group conversations by agent',
-    'zh-CN': '按智能体分组展示会话',
+  'shell.sidebar.sectionRecent': {
+    en: 'Recent',
+    'zh-CN': '近期',
   },
-  'shell.sidebar.convModeOverview': {
-    en: 'Overview',
-    'zh-CN': '总览',
+  'shell.sidebar.viewAllConversations': {
+    en: 'View all {count} conversations',
+    'zh-CN': '查看全部 {count} 个会话',
   },
-  'shell.sidebar.convModeOverviewTooltip': {
-    en: 'Show compact status overview list for quick switching',
-    'zh-CN': '以会话总览精简列表展示，便于快速切换',
+  'shell.sidebar.viewMatchesInOverview': {
+    en: 'Open matches in overview',
+    'zh-CN': '在会话总览中查看匹配',
   },
   'shell.sidebar.overviewFilter': {
     en: 'Filter conversations',
     'zh-CN': '筛选会话',
   },
   'shell.sidebar.overviewFilterPlaceholder': {
-    en: 'Filter conversations or status...',
-    'zh-CN': '筛选会话、角色或状态...',
+    en: 'Filter conversations, agents or nodes...',
+    'zh-CN': '筛选会话、角色或节点...',
   },
   'shell.sidebar.overviewEmpty': {
-    en: 'No active conversations yet',
-    'zh-CN': '暂无活跃会话',
+    en: 'No conversations yet',
+    'zh-CN': '暂无会话',
   },
   'shell.sidebar.overviewExpandSub': {
     en: 'Show {count} more sub-conversations',

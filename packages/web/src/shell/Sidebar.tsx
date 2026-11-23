@@ -1,11 +1,10 @@
 import { useMemo, type ReactNode } from 'react'
-import { HelmxIcon, SegmentedControl, Tooltip } from '@helmx/plugin-client'
+import { HelmxIcon, Tooltip } from '@helmx/plugin-client'
 import {
   useAuthConnection,
   useConversations,
   useGroupedUi,
   useLocationTargets,
-  usePendingAsks,
   usePlugins,
   useProfilesSlice,
   useStoreActions,
@@ -19,7 +18,6 @@ import {
   resolveTargetString,
   CENTER_TARGETS,
   spaceForTarget,
-  type SidebarConversationMode,
   type SidebarSpace,
 } from '../lib/types.js'
 import { readBrowserNotificationPermission } from '../lib/browser-notification.js'
@@ -36,14 +34,11 @@ import {
   type SidebarStoreView,
   type SidebarViewItem,
 } from './sidebar-model.js'
-import { AgentStandingsGroup } from './SidebarAgentStandings.js'
-import { ArchivedConversationsGroup } from './SidebarArchivedConversations.js'
-import { SidebarOverviewList } from './SidebarOverviewList.js'
+import { SidebarConversationList } from './SidebarConversationList.js'
 import { useGlobalAttention } from './use-attention-indicator.js'
 import { useSidebarBadges } from './use-sidebar-badges.js'
 import {
   HoverIconButton,
-  PendingAsksPanel,
   SidebarPaneTag,
   StatusDot,
 } from './SidebarPrimitives.js'
@@ -55,8 +50,6 @@ function ViewNavGroup({ store }: { store: SidebarStoreView }) {
     () => extractSidebarViews(store.groupedUi.sidebarItems, store.conversations, locale),
     [store.groupedUi.sidebarItems, store.conversations, locale],
   )
-  // 视图项徽标（sidebar.item badge 声明）：doc 发现与按需加载内聚在 Hook，
-  // 无信号不进映射；插件停用后贡献消失即归零，零插件 ID 特判。
   const viewBadges = useSidebarBadges(viewItems)
   const clientItems = store.groupedUi.sidebarItems.filter(
     (item) => item.spec.client !== undefined && resolveTargetString(item.spec.target ?? '', store.conversations) === null,
@@ -147,9 +140,6 @@ const CENTER_LABEL_KEYS: Record<
   plugins: 'shell.center.plugins',
 }
 
-/** 侧栏空间由主屏目标唯一推导（spaceForTarget，lib/types.ts），不进 URL；
- * Rail 点击经 store.openSpace 直接导航该空间的主舞台目标（含会话内空间记忆）。 */
-
 const SPACE_ICONS: Record<SidebarSpace, string> = {
   conversations: 'message-square',
   views: 'layout-grid',
@@ -185,11 +175,8 @@ function RailChangelogButton(): ReactNode {
 }
 
 /**
- * Activity Rail（48px）：仅空间切换（对话/视图/设置）+ 主题按钮与 changelog 入口。
- * 桌面与移动抽屉共用；空间按钮直接导航主舞台到对应空间的最近目标（store.openSpace），
- * 系统中心入口收敛到「设置」空间内的纵向列表。
- * 空间按钮本身不携带任何徽标：全局态势感知收敛到下方「会话总览」直达按钮的
- * tone 灯点（同源 indicator；总览页已有逐会话指示灯，入口计数冗余）。
+ * Activity Rail（48px）：空间切换（对话/视图/设置）+ 插件快捷入口 + 主题与 changelog 入口。
+ * 桌面与移动抽屉共用；三空间一律按 spaceForTarget(primaryTarget) 唯一高亮（含 #/overview 归属对话空间）。
  */
 function ActivityRail({
   sseConnected,
@@ -215,8 +202,6 @@ function ActivityRail({
   onNavigate?: () => void
 }) {
   const { t } = useWebLocale()
-  // 快捷入口徽标（sidebar.item badge 声明）：与移动端快捷簇 / 视图行同源
-  // 解析；doc 按需加载内聚在 Hook（ensurePluginDoc 幂等）。
   const quickEntryBadges = useSidebarBadges(quickEntries)
   const expandWithShortcut = t('shell.sidebar.expandNavWithShortcut', { shortcut: formatModShortcut('B') })
   const themeTooltip =
@@ -233,9 +218,6 @@ function ActivityRail({
       : themePreference === 'light'
         ? t('shell.theme.light')
         : t('shell.theme.dark')
-  // 主屏是否停在总览：空间按钮高亮的归属判定（总览无 Rail 入口，由侧栏
-  // 头部搜索钮旁的总览入口承载；主屏停总览时空间按钮一律不亮）。
-  const onOverviewPrimary = store.primaryTarget?.kind === 'overview'
 
   return (
     <nav className="activity-rail" aria-label={t('shell.sidebar.mainNavigation')}>
@@ -256,9 +238,7 @@ function ActivityRail({
       <div className="activity-rail-spaces">
         {(Object.keys(SPACE_LABEL_KEYS) as SidebarSpace[]).map((key) => {
           const spaceLabel = t(SPACE_LABEL_KEYS[key])
-          // 高亮只认主屏归属：主屏停在总览时空间按钮一律不亮（总览入口在
-          // 侧栏头部，Rail 不再有总览按钮，杜绝双入口双高亮）。
-          const spaceActive = space === key && !onOverviewPrimary
+          const spaceActive = space === key
           return (
             <Tooltip content={spaceLabel} side="right" key={key}>
               <button
@@ -326,15 +306,13 @@ function ActivityRail({
             />
           </button>
         </Tooltip>
-        {/* 已安装版本 changelog（随包分发的 CHANGELOG.md，离线可读）：主题钮下方的常驻入口 */}
         <RailChangelogButton />
       </div>
     </nav>
   )
 }
 
-/** 设置空间导航：系统中心纵向列表，行结构与智能体站位行同构
- * （nav-item-main 图标文本），保证两个空间的左缘视觉统一。 */
+/** 设置空间导航：系统中心纵向列表，行结构与对话/视图空间一级导航项同构。 */
 function SettingsNavGroup({ store, onNavigate }: { store: SidebarStoreView; onNavigate?: () => void }) {
   const { t } = useWebLocale()
   return (
@@ -377,19 +355,17 @@ function SettingsNavGroup({ store, onNavigate }: { store: SidebarStoreView; onNa
 
 export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
   const { sseConnected } = useAuthConnection()
-  const { theme, themePreference, locale, quietNotifyEnabled, sidebarConvMode } = useThemePreferencesState()
+  const { theme, themePreference, locale, quietNotifyEnabled } = useThemePreferencesState()
   const { primaryTarget, splitTarget, focusedPanel } = useLocationTargets()
   const groupedUi = useGroupedUi()
   const plugins = usePlugins()
   const conversations = useConversations()
-  const pendingAsks = usePendingAsks()
   const { profiles } = useProfilesSlice()
   const {
     openTarget,
     pushNotice,
     openSpace,
     setQuietNotify,
-    setSidebarConvMode,
     setActiveModal,
     toggleSidebarCollapsed,
     toggleTheme,
@@ -405,7 +381,6 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
       profiles,
       plugins,
       groupedUi,
-      pendingAsks,
       locale,
       openTarget,
       pushNotice,
@@ -418,26 +393,15 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
       profiles,
       plugins,
       groupedUi,
-      pendingAsks,
       locale,
       openTarget,
       pushNotice,
     ],
   )
 
-  // 侧栏空间由主屏目标唯一推导（不进 URL）；Rail 点击经 openSpace 直接导航
-  // 该空间最近的主舞台目标，URL 即该空间真实锚点，刷新/前进/后退天然可还原。
   const space = spaceForTarget(primaryTarget)
-
-  // 全局并发态势（总览入口脉冲灯点 + Rail/移动端快捷导航的总览灯点 + 后台在途
-  // 索引 + 正在查看会话集合）：badge doc 的按需加载内聚在 Hook（ensurePluginDoc
-  // 幂等，移动端合着抽屉也不漏后台任务）。插件停用后其 UI 贡献与 doc 均从 store
-  // 消失，态势自然归零。
   const { indicator: attentionIndicator, background, viewedConversationIds } = useGlobalAttention()
 
-  // 插件全局快捷入口（sidebar.item quickEntry，最薄通用声明）：仅收当前启用
-  // 插件确实注册了的 screen（插件停用后贡献即时消失，入口零残留）；点击走标准
-  // store 路由并收起移动抽屉——PC 折叠 Rail 与移动抽屉同源一键直达。
   const railQuickEntries = useMemo(
     () =>
       extractRailQuickEntries(
@@ -449,8 +413,6 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
     [groupedUi.sidebarItems, groupedUi.screens, conversations, locale],
   )
 
-  // 后台浏览器通知开关：权限现场读取（浏览器设置可随时收回），
-  // 偏好开而权限未授予时如实提示，绝不静默装作已开启。
   const quietNotifyTooltip = !quietNotifyEnabled
     ? t('shell.quietNotify.off')
     : readBrowserNotificationPermission() !== 'granted'
@@ -464,34 +426,8 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
         ? t('shell.sidebar.viewsHeader')
         : t('shell.sidebar.spaceHeaderSettings')
 
-  const convModeSwitcher = (
-    <SegmentedControl<SidebarConversationMode>
-      className="sidebar-conv-mode-switch"
-      value={sidebarConvMode}
-      onValueChange={setSidebarConvMode}
-      aria-label={t('shell.sidebar.convModeLabel')}
-      items={[
-        {
-          value: 'agents',
-          label: <span>{t('shell.agents.groupTitle')}</span>,
-          title: t('shell.sidebar.convModeAgentsTooltip'),
-        },
-        {
-          value: 'overview',
-          label: <span>{t('shell.sidebar.convModeOverview')}</span>,
-          title: t('shell.sidebar.convModeOverviewTooltip'),
-        },
-      ]}
-    />
-  )
-
   return (
     <aside className="helmx-sidebar">
-      {/* Mobile drawer: stays expanded after switching spaces — the secondary list of the space
-          (settings list / views list / agent list) renders naturally inside the drawer and closes it
-          only when the user picks a concrete item (items carry onNavigate / the App nav-item close
-          channel); closing here would whisk the user to the first target before they see the menu.
-      The desktop sidebar is persistent; behavior unchanged. */}
       <ActivityRail
         sseConnected={sseConnected}
         theme={theme}
@@ -539,27 +475,6 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
                 <HelmxIcon name="search" size={13} />
               </button>
             </Tooltip>
-            {space === 'conversations' && (
-              <Tooltip content={t('shell.overview.railTooltip')} side="bottom">
-                <button
-                  type="button"
-                  className={`btn btn-sm btn-icon sidebar-overview-open-btn${primaryTarget.kind === 'overview' ? ' is-active' : ''}`}
-                  aria-label={t('shell.overview.railTooltip')}
-                  aria-current={primaryTarget.kind === 'overview' ? 'page' : undefined}
-                  onClick={() => {
-                    openTarget({ kind: 'overview' })
-                    onClose?.()
-                  }}
-                >
-                  <HelmxIcon name="activity" size={13} />
-                  {attentionIndicator.totalCount > 0 && attentionIndicator.tone !== null && (
-                    <span className="overview-count-badge" data-tone={attentionIndicator.tone}>
-                      {sidebarBadgeCountLabel(attentionIndicator.totalCount)}
-                    </span>
-                  )}
-                </button>
-              </Tooltip>
-            )}
             <Tooltip content={collapseWithShortcut} side="bottom">
               <button
                 type="button"
@@ -586,29 +501,14 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
         </div>
 
         <div className="sidebar-scroll">
-          {/* 全屏会话总览入口收敛在侧栏头部搜索钮旁（仅对话空间）；
-              下方对话列表支持在「智能体分组」与「总览精简列表」两种展示模式间切换。 */}
           {space === 'conversations' ? (
-            <>
-              <PendingAsksPanel store={sidebarStore} />
-              {sidebarConvMode === 'overview' ? (
-                <SidebarOverviewList
-                  store={sidebarStore}
-                  background={background}
-                  viewedConversationIds={viewedConversationIds}
-                  headerLeading={convModeSwitcher}
-                  onNavigate={onClose}
-                />
-              ) : (
-                <AgentStandingsGroup
-                  store={sidebarStore}
-                  background={background}
-                  headerLeading={convModeSwitcher}
-                  onNavigate={onClose}
-                />
-              )}
-              <ArchivedConversationsGroup background={background} onNavigate={onClose} />
-            </>
+            <SidebarConversationList
+              store={sidebarStore}
+              background={background}
+              attentionIndicator={attentionIndicator}
+              viewedConversationIds={viewedConversationIds}
+              onNavigate={onClose}
+            />
           ) : space === 'views' ? (
             <ViewNavGroup store={sidebarStore} />
           ) : (

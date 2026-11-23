@@ -118,8 +118,7 @@ button, a, input, select, textarea { touch-action: manipulation; }
   .sidebar-split-action,
   .sidebar-split-btn,
   .pane-split-btn,
-  .drawer-stack-split-btn,
-  .pending-asks-split-btn {
+  .drawer-stack-split-btn {
     display: none !important;
   }
   .desktop-sidebar-collapse-btn,

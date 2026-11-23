@@ -74,6 +74,7 @@ import { useBatchConversationDelete } from '../shell/use-batch-conversation-dele
 import { useGlobalAttention } from '../shell/use-attention-indicator.js'
 import { formatDurationMs, formatFullTimestamp, formatStopwatchMs } from '../lib/format.js'
 import {
+  buildArchivedOverviewCards,
   buildNewTopicCandidates,
   buildOverviewCards,
   filterOverviewCards,
@@ -213,7 +214,7 @@ function OverviewCardView({
   // 普通模式不覆写 aria-label——可访问名称直接由内容组成（状态灯可读标签 +
   // 标题 + #id），异常/等待人类事实原样进入读屏。
   const buttonLabel = batchMode ? `${cardTitleText} · ${t('shell.overview.batchToggleCard')}` : openLabel
-  const collapseDescendantsByDefault = card.bucket === 'quiet'
+  const collapseDescendantsByDefault = card.bucket === 'quiet' || card.bucket === 'archived'
   const shownDescendants = expanded
     ? card.descendants
     : collapseDescendantsByDefault
@@ -279,6 +280,19 @@ function OverviewCardView({
         </button>
         {!batchMode && (
           <span className="overview-card-actions" onClick={(e) => e.stopPropagation()}>
+            <Tooltip content={t('shell.overview.drawerPeek')} side="top">
+              <button
+                type="button"
+                className="btn btn-ghost btn-icon-xs overview-card-peek-btn"
+                aria-label={t('shell.overview.drawerPeek')}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onDrawerPeek(card.targetConversationId)
+                }}
+              >
+                <HelmxIcon name="panel-right" size={13} />
+              </button>
+            </Tooltip>
             <ConversationRowActionsMenu
               conversation={card.root}
               enableDelete
@@ -447,16 +461,23 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
     () => buildOverviewCards({ conversations, background, profiles, plugins, t }),
     [conversations, background, profiles, plugins, t],
   )
+  const archivedCards = useMemo(
+    () => buildArchivedOverviewCards({ conversations, background, profiles, plugins }),
+    [conversations, background, profiles, plugins],
+  )
+  const isArchivedView = bucketFilter === 'archived'
+  const showArchivedTab = archivedCards.length > 0 || isArchivedView
+  const activePoolCards = isArchivedView ? archivedCards : cards
   const visibleCards = useMemo(
     () =>
-      filterOverviewCards(cards, {
-        bucket: bucketFilter,
+      filterOverviewCards(activePoolCards, {
+        bucket: isArchivedView ? 'all' : bucketFilter,
         profileId: profileFilter,
         nodeId: nodeFilter,
-        source: sourceFilter,
+        source: isArchivedView ? 'all' : sourceFilter,
         query: queryFilter,
       }),
-    [cards, bucketFilter, profileFilter, nodeFilter, sourceFilter, queryFilter],
+    [activePoolCards, isArchivedView, bucketFilter, profileFilter, nodeFilter, sourceFilter, queryFilter],
   )
   const showSectionHeaders = overviewShouldShowSectionHeaders(filter)
   const cardGroups = useMemo(
@@ -502,29 +523,33 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
   )
   const overviewNowMs = useSharedNowMs(overviewNeedsLiveClock)
   const dataReady = conversations.length > 0 || (assetsLoaded && sseConnected)
-  const profileOptions = useMemo(() => overviewProfileOptions(cards), [cards])
-  const nodeOptions = useMemo(() => overviewNodeOptions(cards), [cards])
-  // 来源筛选仅在存在托管卡片（或已选非 all，防困住）时展示：无托管会话时
-  // 不添无效控件，保持工具栏零噪音。
-  const showSourceFilter = sourceFilter !== 'all' || cards.some((card) => card.managed)
-  const anyFilterActive =
-    bucketFilter !== 'all' ||
+  const allKnownCards = useMemo(() => [...cards, ...archivedCards], [cards, archivedCards])
+  const profileOptions = useMemo(() => overviewProfileOptions(allKnownCards), [allKnownCards])
+  const nodeOptions = useMemo(() => overviewNodeOptions(allKnownCards), [allKnownCards])
+  // 来源筛选仅在非已归档视图且存在托管卡片（或已选非 all，防困住）时展示。
+  const showSourceFilter = !isArchivedView && (sourceFilter !== 'all' || cards.some((card) => card.managed))
+  const anySubFilterActive =
     profileFilter !== '' ||
     nodeFilter !== '' ||
-    sourceFilter !== 'all' ||
+    (!isArchivedView && sourceFilter !== 'all') ||
     queryFilter.trim() !== ''
+  const anyFilterActive = bucketFilter !== 'all' || anySubFilterActive
 
   // 桶计数在角色/节点/来源/搜索上下文内统计：徽标如实表达「切到该桶后
   // 剩几张卡」，避免全量计数与当前上下文错位造成误解。
   const bucketCounts = useMemo(
     () =>
-      overviewBucketCounts(cards, {
-        profileId: profileFilter,
-        nodeId: nodeFilter,
-        source: sourceFilter,
-        query: queryFilter,
-      }),
-    [cards, profileFilter, nodeFilter, sourceFilter, queryFilter],
+      overviewBucketCounts(
+        cards,
+        {
+          profileId: profileFilter,
+          nodeId: nodeFilter,
+          source: sourceFilter,
+          query: queryFilter,
+        },
+        archivedCards,
+      ),
+    [cards, archivedCards, profileFilter, nodeFilter, sourceFilter, queryFilter],
   )
 
   // 批量管理勾选口径：人类自有根会话（可归档可删除）与空闲自动化历史会话
@@ -568,16 +593,17 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
     })
   }
 
-  /** 批量归档：逐会话 PATCH 宿主归档 tag + allSettled 聚合（部分失败不掩盖成功）。 */
+  /** 批量归档或恢复：逐会话 PATCH 宿主归档 tag + allSettled 聚合（部分失败不掩盖成功）。 */
   const executeBatchArchive = async (): Promise<void> => {
     if (batch.selectedIds.size === 0 || archiving || batch.deleting) return
     setArchiving(true)
     try {
-      const convs = cards
+      const targetArchived = !isArchivedView
+      const convs = activePoolCards
         .filter((card) => batch.selectedIds.has(card.root.id) && isConversationArchivable(card.root))
         .map((card) => card.root)
-      const outcome = await patchConversationsArchived(convs, true)
-      pushNotice(archiveBatchNotice(true, outcome, t))
+      const outcome = await patchConversationsArchived(convs, targetArchived)
+      pushNotice(archiveBatchNotice(targetArchived, outcome, t))
       batch.exitBatchMode()
     } finally {
       setArchiving(false)
@@ -632,9 +658,13 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
             <span>{t('shell.overview.title')}</span>
           </div>
           <span className="primary-center-subtitle tabular-nums">
-            {anyFilterActive
-              ? t('shell.overview.statsFiltered', { count: visibleCards.length, total: cards.length })
-              : t('shell.overview.stats', { count: visibleCards.length })}
+            {isArchivedView
+              ? anySubFilterActive
+                ? t('shell.overview.statsArchivedFiltered', { count: visibleCards.length, total: archivedCards.length })
+                : t('shell.overview.statsArchived', { count: visibleCards.length })
+              : anyFilterActive
+                ? t('shell.overview.statsFiltered', { count: visibleCards.length, total: cards.length })
+                : t('shell.overview.stats', { count: visibleCards.length })}
           </span>
         </div>
         <div className="primary-center-topbar-actions pane-actions">
@@ -714,6 +744,9 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
             { value: 'needs_attention', label: t('shell.overview.filterNeeds'), badge: <span className="tabular-nums">{bucketCounts.needs_attention}</span> },
             { value: 'running', label: t('shell.overview.filterRunning'), badge: <span className="tabular-nums">{bucketCounts.running}</span> },
             { value: 'unread_done', label: t('shell.overview.filterUnread'), badge: <span className="tabular-nums">{bucketCounts.unread_done}</span> },
+            ...(showArchivedTab
+              ? [{ value: 'archived' as const, label: t('shell.overview.filterArchived'), badge: <span className="tabular-nums">{bucketCounts.archived}</span> }]
+              : []),
           ]}
         />
         <div className="overview-filter-selects">
@@ -820,7 +853,13 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
                   disabled={effectiveArchivableSelectedIds.length === 0 || batch.deleting || archiving}
                   onClick={() => void executeBatchArchive()}
                 >
-                  {archiving ? t('shell.agents.archiving') : t('shell.agents.archiveCount', { count: effectiveArchivableSelectedIds.length })}
+                  {isArchivedView
+                    ? archiving
+                      ? t('shell.archived.restoring')
+                      : t('shell.archived.restoreCount', { count: effectiveArchivableSelectedIds.length })
+                    : archiving
+                      ? t('shell.agents.archiving')
+                      : t('shell.agents.archiveCount', { count: effectiveArchivableSelectedIds.length })}
                 </button>
               }
               confirmOpen={batch.confirmOpen}
@@ -837,7 +876,20 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
           </div>
         ) : visibleCards.length === 0 ? (
           <div className="overview-grid">
-            {cards.length === 0 ? (
+            {isArchivedView && archivedCards.length === 0 ? (
+              <div className="overview-empty">
+                <span>{t('shell.overview.emptyArchived')}</span>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm overview-clear-filters"
+                  onClick={() =>
+                    applyFilterParam({ bucket: undefined, profile: undefined, node: undefined, source: undefined, q: undefined })
+                  }
+                >
+                  {t('shell.overview.clearFilters')}
+                </button>
+              </div>
+            ) : !isArchivedView && cards.length === 0 ? (
               <div className="overview-empty">{t('shell.overview.emptySystem')}</div>
             ) : (
               <div className="overview-empty">

@@ -5,12 +5,10 @@
  */
 import type { HelmxLocale } from '@helmx/protocol/browser'
 import { normalizeLocaleTag } from '@helmx/protocol/browser'
-import type { LocalePreference, SidebarConversationMode, ThemeMode, ThemePreference } from './types.js'
-
+import type { LocalePreference, ThemeMode, ThemePreference } from './types.js'
 export const THEME_STORAGE_KEY = 'helmx:theme'
 export const QUIET_NOTIFY_STORAGE_KEY = 'helmx:quiet-notify'
 export const LOCALE_STORAGE_KEY = 'helmx:locale'
-export const SIDEBAR_CONV_MODE_STORAGE_KEY = 'helmx:sidebar-conv-mode'
 
 /** Read the persisted theme preference; falls back to 'system' when storage is unavailable or the value is invalid. */
 export function getStoredPreference(storage?: Pick<Storage, 'getItem'>): ThemePreference {
@@ -199,36 +197,5 @@ export function resolveTheme(pref: ThemePreference, systemTheme?: ThemeMode): Th
 export function applyDocumentTheme(theme: ThemeMode): void {
   if (typeof document !== 'undefined') {
     document.documentElement.dataset.theme = theme
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Sidebar conversation list mode preference (localStorage 'helmx:sidebar-conv-mode')
-// ---------------------------------------------------------------------------
-
-/** Read the persisted sidebar conversation list mode; falls back to 'agents' when absent, invalid, or storage is unavailable. */
-export function getStoredSidebarConvMode(storage?: Pick<Storage, 'getItem'>): SidebarConversationMode {
-  try {
-    const store = storage ?? localStorage
-    return store.getItem(SIDEBAR_CONV_MODE_STORAGE_KEY) === 'overview' ? 'overview' : 'agents'
-  } catch {
-    return 'agents'
-  }
-}
-
-/** Persist the sidebar conversation list mode; 'agents' (default) removes the explicit key. */
-export function persistSidebarConvMode(
-  mode: SidebarConversationMode,
-  storage?: Pick<Storage, 'setItem' | 'removeItem'>,
-): void {
-  try {
-    const store = storage ?? localStorage
-    if (mode === 'overview') {
-      store.setItem(SIDEBAR_CONV_MODE_STORAGE_KEY, 'overview')
-    } else {
-      store.removeItem(SIDEBAR_CONV_MODE_STORAGE_KEY)
-    }
-  } catch {
-    /* The in-memory preference still applies to this session. */
   }
 }

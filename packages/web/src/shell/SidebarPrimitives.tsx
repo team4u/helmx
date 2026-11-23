@@ -1,15 +1,12 @@
-import { useState } from 'react'
-import type { AskSpec, ConversationSummary } from '@helmx/protocol/browser'
-import { asksApi } from '../lib/api.js'
+import type { ConversationSummary } from '@helmx/protocol/browser'
 import { HelmxIcon, Tooltip } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import type { WebMessageTranslator } from '../i18n/catalog.js'
-import { sidebarPaneTagLabel, type SidebarStoreView, type SidebarTargetPresence } from './sidebar-model.js'
+import { sidebarPaneTagLabel, type SidebarTargetPresence } from './sidebar-model.js'
 import {
   backgroundAwareStatusTooltip,
   resolveStatusLight,
   type ConversationBackgroundActivity,
-  type StandingStatusIndicator,
 } from './background-activity-model.js'
 
 export function StatusDot({ connected }: { connected: boolean }) {
@@ -109,23 +106,6 @@ export function ConversationStatusDot({
   )
 }
 
-/** The agent standing row's single collapsed-state light: the representative
- *  conversation's status light first (working/blocked/error exclusive, hiding
- *  the whole standing's background ring); when the representative is idle/done
- *  and any conversation under it has background work, only the hollow ring shows. */
-export function StandingStatusDot({ indicator }: { indicator: StandingStatusIndicator }) {
-  const rep = indicator.representative
-  return (
-    <StatusLightDot
-      status={rep.status}
-      doing={rep.doing}
-      lastError={rep.lastError}
-      backgroundActive={indicator.backgroundActive}
-      backgroundSummary={indicator.backgroundSummary}
-    />
-  )
-}
-
 /** Compact read-only marker for remote conversations: non-local rows at a glance. */
 export function RemoteNodeTag({ nodeId }: { nodeId: string }) {
   const { t } = useWebLocale()
@@ -159,120 +139,5 @@ export function SidebarPaneTag({ paneTag }: { paneTag: SidebarTargetPresence['pa
     <span className="nav-pane-tag" title={paneTagTitle(t, paneTag)}>
       {sidebarPaneTagLabel(paneTag, t)}
     </span>
-  )
-}
-
-/** Global pending-approval amber pill with the quick-approval flyout. */
-export function PendingAsksPanel({ store }: { store: SidebarStoreView }) {
-  const { t } = useWebLocale()
-  const [expanded, setExpanded] = useState(false)
-  const [busyAskId, setBusyAskId] = useState<string | null>(null)
-  const asks = store.pendingAsks
-
-  if (asks.length === 0) return null
-
-  const isSimpleConfirm = (ask: AskSpec) =>
-    ask.fields.length === 1 && ask.fields[0]?.type === 'confirm'
-
-  const answerConfirm = async (ask: AskSpec, value: boolean) => {
-    const field = ask.fields[0]
-    if (!field) return
-    setBusyAskId(ask.id)
-    try {
-      await asksApi.answer(ask.id, { [field.name]: value ? 'true' : 'false' }, ask.expectedStateSeq)
-      store.pushNotice({
-        type: 'notification',
-        level: 'info',
-        title: t('shell.asks.submitted'),
-        body: `${ask.title} #${ask.conversationId}`,
-      })
-    } catch (err) {
-      store.pushNotice({
-        type: 'notification',
-        level: 'error',
-        title: t('shell.asks.submitFailed'),
-        body: err instanceof Error ? err.message : String(err),
-      })
-    } finally {
-      setBusyAskId(null)
-    }
-  }
-
-  return (
-    <div className="sidebar-group pending-asks-group">
-      <button
-        className={`badge badge-warn pending-asks-toggle${expanded ? ' badge-err' : ''}`}
-        title={t('shell.asks.expand')}
-        onClick={() => setExpanded((v) => !v)}
-      >
-        <span className="pending-asks-toggle-label">
-          <HelmxIcon name="alert-triangle" size={12} />
-          {t('shell.asks.pending', { count: asks.length })}
-        </span>
-        <HelmxIcon name={expanded ? 'chevron-down' : 'chevron-right'} size={12} />
-      </button>
-      {expanded && (
-        <div className="list pending-asks-list">
-          {asks.map((ask) => (
-            <div key={ask.id} className="row pending-asks-row">
-              <div className="pending-asks-row-head">
-                <span className="pending-asks-title">
-                  {ask.title}
-                </span>
-                <span className="badge badge-neutral tabular-nums">#{ask.conversationId}</span>
-              </div>
-              {ask.description && (
-                <div className="pending-asks-desc">
-                  {ask.description}
-                </div>
-              )}
-              <div className="pending-asks-actions">
-                <button
-                  className="btn btn-sm"
-                  onClick={() => {
-                    setExpanded(false)
-                    store.openTarget({ kind: 'conversation', conversationId: ask.conversationId })
-                  }}
-                >
-                  {t('shell.asks.handleInMain')}
-                </button>
-                <button
-                  className="btn btn-sm pending-asks-split-btn"
-                  onClick={() => {
-                    setExpanded(false)
-                    store.openTarget(
-                      { kind: 'conversation', conversationId: ask.conversationId },
-                      { split: true },
-                    )
-                  }}
-                >
-                  {t('shell.asks.sideBySide')}
-                </button>
-                {isSimpleConfirm(ask) && (
-                  <>
-                    <button
-                      className="btn btn-sm btn-primary"
-                      disabled={busyAskId === ask.id}
-                      onClick={() => void answerConfirm(ask, true)}
-                    >
-                      <HelmxIcon name="check" size={12} />
-                      {t('shell.asks.approve')}
-                    </button>
-                    <button
-                      className="btn btn-sm btn-danger"
-                      disabled={busyAskId === ask.id}
-                      onClick={() => void answerConfirm(ask, false)}
-                    >
-                      <HelmxIcon name="x" size={12} />
-                      {t('common.cancel')}
-                    </button>
-                  </>
-                )}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
   )
 }

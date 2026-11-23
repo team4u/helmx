@@ -343,25 +343,18 @@ function attentionScenarioStore(): HelmxExternalStore {
   })
 }
 
-test('Sidebar header keeps the overview icon button next to the command palette search, with the same-source count badge', { timeout: 60_000 }, () => {
+test('Sidebar places the overview entry at the top of the conversations list with the same-source count badge (no duplicate header icon)', { timeout: 60_000 }, () => {
   const html = renderSidebar(attentionScenarioStore())
-  const btnIdx = html.indexOf('sidebar-overview-open-btn')
-  const headerIdx = html.indexOf('sidebar-header')
+  assert.ok(!html.includes('sidebar-overview-open-btn'), 'the duplicate header overview icon button is gone')
+  const entryIdx = html.indexOf('sidebar-overview-entry')
   const scrollIdx = html.indexOf('sidebar-scroll')
-  const searchIdx = html.indexOf('aria-label="Open Cmd K global search')
-  assert.ok(searchIdx > 0, 'the command palette search button renders')
-  assert.ok(btnIdx > 0, 'the overview header button renders')
-  assert.ok(headerIdx > 0 && btnIdx > headerIdx && (scrollIdx < 0 || btnIdx < scrollIdx), 'the button lives in the sidebar header, not the list body')
-  assert.ok(btnIdx > searchIdx && btnIdx - searchIdx < 900, 'the button sits right after the command palette search button')
-  const btn = html.match(/<button[^>]*class="[^"]*sidebar-overview-open-btn[^"]*"[^>]*>/)?.[0] ?? ''
-  assert.ok(btn !== '', 'the button carries its stable class hook')
-  // 同源计数徽标：有信号时随钮渲染（overview-count-badge 同一词汇与事实
-  // 源，计数 = 有信号的树数）；全安静时零徽标（不装忙）。
-  const btnEnd = html.indexOf('</button>', btnIdx)
-  const btnInner = html.slice(btnIdx, btnEnd < 0 ? undefined : btnEnd)
-  assert.ok(btnInner.includes('overview-count-badge'), 'the same-source count badge rides the header button when a tree has a signal')
-  assert.ok(btnInner.includes('data-tone="error"'), 'the badge states the honest top tone (error leads the scenario)')
-  assert.ok(btnInner.includes('>2<'), 'the badge states the honest signal-tree count (error tree + working tree)')
+  assert.ok(scrollIdx > 0 && entryIdx > scrollIdx, 'the overview entry lives at the top of the conversations sidebar list')
+  const entryEnd = html.indexOf('sidebar-new-topic-btn', entryIdx)
+  const entryHtml = html.slice(entryIdx, entryEnd < 0 ? undefined : entryEnd)
+  assert.ok(entryHtml.includes('sidebar-overview-entry-badge'), 'the same-source count badge rides the overview nav row when a tree has a signal')
+  assert.ok(entryHtml.includes('data-tone="error"'), 'the badge states the honest top tone (error leads the scenario)')
+  assert.ok(entryHtml.includes('>2<'), 'the badge states the honest signal-tree count (error tree + working tree)')
+
   const quietHtml = renderSidebar(
     sidebarStore({
       conversations: [
@@ -371,16 +364,13 @@ test('Sidebar header keeps the overview icon button next to the command palette 
       primaryTarget: { kind: 'conversation', conversationId: 50 },
     }),
   )
-  const quietBtnStart = quietHtml.indexOf('sidebar-overview-open-btn')
-  const quietBtnEnd = quietHtml.indexOf('</button>', quietBtnStart)
-  const quietInner = quietHtml.slice(quietBtnStart, quietBtnEnd < 0 ? undefined : quietBtnEnd)
-  assert.ok(quietBtnStart > 0 && !quietInner.includes('overview-count-badge'), 'no count badge without any signal (honest quiet)')
-  assert.ok(!html.includes('sidebar-overview-entry'), 'the pulse entry row is gone for good')
+  assert.ok(quietHtml.includes('sidebar-overview-entry'), 'the overview entry renders even when all trees are quiet')
+  assert.ok(!quietHtml.includes('sidebar-overview-entry-badge'), 'no count badge without any signal (honest quiet)')
   assert.ok(!html.includes('sidebar-attention-group'), 'the legacy flat attention group is gone for good')
   assert.ok(!html.includes('attention-row'), 'no legacy attention row residue')
 })
 
-test('interaction: clicking the header overview button opens #/overview and lights the button active', { timeout: 60_000 }, async () => {
+test('interaction: clicking the top overview nav row opens #/overview and lights both the row and conversations rail icon active', { timeout: 60_000 }, async () => {
   const store = attentionScenarioStore()
   const container = document.createElement('div')
   document.body.appendChild(container)
@@ -390,21 +380,20 @@ test('interaction: clicking the header overview button opens #/overview and ligh
       root = createRoot(container)
       root.render(e(HelmxExternalStoreContext.Provider, { value: store }, e(Sidebar)))
     })
-    const btn = container.querySelector<HTMLButtonElement>('.sidebar-overview-open-btn')
-    assert.ok(btn !== null, 'the header overview button renders')
-    // 主屏不在总览：无激活态（不点亮、无 aria-current）。
-    assert.ok(btn.classList.contains('is-active') === false, 'the button stays inert outside the overview stage')
+    const entryRow = container.querySelector<HTMLElement>('.sidebar-overview-entry')
+    const btn = entryRow?.querySelector<HTMLButtonElement>('.nav-item-main') ?? null
+    assert.ok(entryRow !== null && btn !== null, 'the top overview nav row renders')
+    assert.ok(entryRow.classList.contains('nav-item-active') === false, 'the row stays inert outside the overview stage')
     assert.ok(btn.getAttribute('aria-current') === null, 'no aria-current outside the overview stage')
     await act(async () => {
       btn.click()
     })
     const primary = store.getPrimaryTarget()
-    assert.ok(primary.kind === 'overview', 'clicking the header button navigates to the overview stage')
-    // 主屏停在总览：入口点亮（is-active + aria-current="page"），用户在大堂时
-    // 一眼知道自己在大堂。
-    const btnAfter = container.querySelector<HTMLButtonElement>('.sidebar-overview-open-btn')
-    assert.ok(btnAfter !== null)
-    assert.ok(btnAfter.classList.contains('is-active') === true, 'the button lights up while the overview is the primary stage')
+    assert.ok(primary.kind === 'overview', 'clicking navigates to the overview stage')
+    const entryAfter = container.querySelector<HTMLElement>('.sidebar-overview-entry')
+    const btnAfter = entryAfter?.querySelector<HTMLButtonElement>('.nav-item-main') ?? null
+    assert.ok(entryAfter !== null && btnAfter !== null)
+    assert.ok(entryAfter.classList.contains('nav-item-active') === true, 'the row lights up while the overview is the primary stage')
     assert.ok(btnAfter.getAttribute('aria-current') === 'page', 'the active button carries aria-current="page"')
   } finally {
     await act(async () => {
@@ -645,8 +634,8 @@ test('the overview entry mounts only in the conversations space (mobile drawer i
       restore?.()
     }
   }
-  assert.ok(!htmlInViewsSpace(true).includes('sidebar-overview-open-btn'), 'mobile: the views space keeps its own header without the overview button')
-  assert.ok(!htmlInViewsSpace(false).includes('sidebar-overview-open-btn'), 'desktop: the views space stays clean')
+  assert.ok(!htmlInViewsSpace(true).includes('sidebar-overview-entry'), 'mobile: the views space keeps its own list without the overview entry')
+  assert.ok(!htmlInViewsSpace(false).includes('sidebar-overview-entry'), 'desktop: the views space stays clean')
   const restoreMobile = stubMobileMatchMedia()
   try {
     const html = renderSidebar(
@@ -655,7 +644,7 @@ test('the overview entry mounts only in the conversations space (mobile drawer i
         primaryTarget: { kind: 'conversation', conversationId: 2 },
       }),
     )
-    assert.ok(html.includes('sidebar-overview-open-btn'), 'the conversations space (mobile drawer included) still shows the overview header button')
+    assert.ok(html.includes('sidebar-overview-entry'), 'the conversations space (mobile drawer included) shows the top overview nav row')
   } finally {
     restoreMobile()
   }

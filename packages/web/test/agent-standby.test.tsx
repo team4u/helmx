@@ -353,24 +353,29 @@ describe("agent-standby", () => {
     assert.equal(state.createCalls.length, 0, 'visiting the standby pane must not pre-create a conversation')
   })
 
-  test('sidebar new-entry: the agent-row plus enters standby; zero-conversation standby agents stay flat and active', { timeout: 60_000 }, async () => {
+  test('sidebar new-topic entry: multi-profile dropdown enters standby without pre-creating; standby highlights the new-topic row', { timeout: 60_000 }, async () => {
     await mount('#/c/1')
-    clickButton('button[aria-label="Start a new topic under 个人助理"]')
+    const newTopicTrigger = document.querySelector<HTMLButtonElement>('.sidebar-new-topic-btn')
+    assert.ok(newTopicTrigger, 'sidebar renders the permanent New topic entry')
+    await act(async () => {
+      newTopicTrigger!.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, cancelable: true }))
+    })
     await settle()
-    assert.equal(window.location.hash, '#/a/assistant', 'the plus enters the standby state')
+    const assistantItem = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')]
+      .find((el) => el.textContent?.includes('个人助理'))
+    assert.ok(assistantItem, 'multi-profile dropdown lists the agent candidates')
+    await act(async () => { assistantItem!.click() })
+    await settle()
+    assert.equal(window.location.hash, '#/a/assistant', 'picking an agent enters its standby page')
     assert.ok(document.querySelector('.agent-standby-pane'), 'renders the standby pane')
-    assert.equal(state.createCalls.length, 0, 'the plus must not pre-create a conversation')
+    assert.ok(document.querySelector('.sidebar-new-topic-btn')?.className.includes('is-active'), 'new-topic entry highlights while on standby')
+    assert.equal(state.createCalls.length, 0, 'entering standby must not pre-create a conversation')
 
-    // When a zero-conversation agent is selected (deep link / navigation): flat and visible,
-      // staying active, never buried in a collapsed idle group
+    // Navigating to a zero-conversation agent standby keeps the standby pane and new-topic active state intact
     await act(async () => { navigateHash('#/a/coder') })
     await waitForCondition(() => window.location.hash === '#/a/coder')
-    const coderRow = [...document.querySelectorAll<HTMLButtonElement>('.nav-item-main')]
-      .find((btn) => btn.textContent?.includes('编码专员'))
-    assert.ok(coderRow, 'the zero-conversation standby agent stays flat and visible in the sidebar')
-    const standing = coderRow!.closest('.agent-standing')
-    const row = standing?.querySelector('.agent-standing-row')
-    assert.ok(row?.className.includes('nav-item-active'), 'the standby agent row stays active')
+    assert.ok(document.querySelector('.agent-standby-pane'), 'zero-conversation agent renders standby pane')
+    assert.ok(document.querySelector('.sidebar-new-topic-btn')?.className.includes('is-active'), 'new-topic entry stays active on standby')
     assert.equal(state.createCalls.length, 0)
   })
 
@@ -521,7 +526,7 @@ describe("agent-standby", () => {
     act(() => { typeInto(input, '等待期切走') })
     await act(async () => { pressEnter(input) })
     // The user switches to an existing conversation while in flight
-    const convRow = [...document.querySelectorAll<HTMLButtonElement>('.nav-item-sub .nav-item-main')]
+    const convRow = [...document.querySelectorAll<HTMLButtonElement>('.sidebar-overview-item .sidebar-overview-open')]
       .find((btn) => btn.textContent?.includes('会话 1'))
     assert.ok(convRow, 'the sidebar has the historical conversation row')
     await act(async () => { convRow!.click() })
@@ -642,64 +647,33 @@ describe("agent-standby", () => {
     assert.deepEqual(state.createCalls[0], { profileId: 'assistant' }, 'after restoring defaults, create carries no model')
   })
 
-  test('agent-name entry with history: clicking the standing row enters standby rather than an old conversation and stays active with the list expanded', { timeout: 60_000 }, async () => {
-    await mount('#/c/1')
-    // assistant owns historical conversations with the list expanded (the accordion follows the current conversation)
-    assert.ok(document.querySelector('.agent-conversations-list'), 'the topic list is expanded')
-    const nameBtn = [...document.querySelectorAll<HTMLButtonElement>('.nav-item-main')]
-      .find((btn) => btn.textContent?.includes('个人助理'))
-    assert.ok(nameBtn, 'the agent standing row exists')
-    await act(async () => { nameBtn!.click() })
-    await settle()
-    assert.equal(window.location.hash, '#/a/assistant', 'the name entry enters standby, not an old conversation')
-    assert.ok(document.querySelector('.agent-standby-pane'), 'renders the standby pane')
-    // The list stays expanded (following the standby target); the standing row stays active with aria-current
-    assert.ok(document.querySelector('.agent-conversations-list'), 'the topic list stays expanded')
-    const row = nameBtn!.closest('.agent-standing')?.querySelector('.agent-standing-row')
-    assert.ok(row?.className.includes('nav-item-active'), 'with the list expanded the standby row stays active')
-    assert.equal(nameBtn!.getAttribute('aria-current'), 'page')
-    assert.equal(state.createCalls.length, 0)
-  })
-
-  test('sidebar has no collapse button; standby lights the parent row / entering a conversation lights the child row: clicking an agent expands its topic list', { timeout: 60_000 }, async () => {
+  test('sidebar conversation row vs standby state: entering a conversation lights the working-set row; entering standby lights the new-topic row and survives SSE updates', { timeout: 60_000 }, async () => {
     state.conversations.push(summary(5, { profileId: 'coder' }))
     await mount('#/c/1')
-    // The collapse/expand button is removed: clicking the agent name is the only expand entry
-    assert.equal(document.querySelectorAll('.agent-collapse-btn').length, 0, 'no collapse/expand button renders')
 
-    // Entering a conversation lights the child row only: the owning agent standing row (parent) shows
-    // just the faint branch state without active background/aria-current; the current conversation
-    // child row (child) is the only one lit
-    const standings0 = [...document.querySelectorAll('.agent-standing')]
-    const assistant0 = standings0.find((el) => el.querySelector('.nav-item-label')?.textContent === '个人助理')
-    const assistant0Row = assistant0?.querySelector('.agent-standing-row')
-    assert.ok(assistant0Row?.className.includes('agent-standing-row-branch'), 'the owning agent standing row shows the faint branch state (parent)')
-    assert.ok(!assistant0Row?.className.includes('nav-item-active'), 'inside a conversation the parent standing row gets no active background')
-    assert.equal(assistant0Row?.querySelector('.nav-item-main')?.getAttribute('aria-current'), null, 'inside a conversation the parent standing row gets no aria-current')
-    const activeSub = assistant0?.querySelector('.nav-item-sub.nav-item-active')
-    assert.ok(activeSub?.textContent?.includes('会话 1'), 'the current conversation child row is the only one lit (child)')
-    assert.equal(activeSub?.querySelector('.nav-item-main')?.getAttribute('aria-current'), 'page', 'the current conversation child row carries aria-current')
+    // Entering a conversation lights only the matching working-set row; new-topic entry stays inert
+    const activeConvRow = document.querySelector('.sidebar-overview-item.nav-item-active')
+    assert.ok(activeConvRow?.textContent?.includes('会话 1'), 'the current conversation row lights up in the working set')
+    assert.equal(activeConvRow?.querySelector('.sidebar-overview-open')?.getAttribute('aria-current'), 'page')
+    assert.ok(!document.querySelector('.sidebar-new-topic-btn')?.className.includes('is-active'))
 
-    // Clicking another agent (编码专员): enters its standby and expands its topic list; the parent standing
-    // row lights up while child rows do not; the previous agent collapses and drops the faint branch state
-    const coderName = [...document.querySelectorAll('.agent-standing-row .nav-item-main')]
-      .find((btn) => btn.textContent?.includes('编码专员')) as HTMLButtonElement
-    await act(async () => { coderName.click() })
+    // Selecting coder from the New topic dropdown enters #/a/coder without pre-creating
+    const newTopicBtn = document.querySelector<HTMLButtonElement>('.sidebar-new-topic-btn')!
+    await act(async () => {
+      newTopicBtn.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, cancelable: true }))
+    })
     await settle()
-    assert.equal(window.location.hash, '#/a/coder', 'clicking the agent enters its standby')
+    const coderItem = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')]
+      .find((el) => el.textContent?.includes('编码专员'))!
+    await act(async () => { coderItem.click() })
+    await settle()
+    assert.equal(window.location.hash, '#/a/coder', 'picking coder enters its standby page')
     assert.equal(state.createCalls.length, 0, 'no conversation pre-created')
-    const standings = [...document.querySelectorAll('.agent-standing')]
-    const coder = standings.find((el) => el.querySelector('.nav-item-label')?.textContent === '编码专员')
-    const assistant = standings.find((el) => el.querySelector('.nav-item-label')?.textContent === '个人助理')
-    assert.ok(coder?.querySelector('.agent-conversations-list'), 'the 编码专员 topic list expands with the target')
-    assert.ok(coder?.querySelector('.agent-standing-row')?.className.includes('nav-item-active'), 'the standby agent standing row lights up')
-    assert.ok(!coder?.querySelector('.agent-standing-row')?.className.includes('agent-standing-row-branch'), 'the standby parent row carries no faint branch state')
-    assert.ok(coder?.querySelector('.nav-item-sub.nav-item-active') === null, 'in standby the child conversation rows do not light up')
-    assert.ok(!assistant?.querySelector('.agent-conversations-list'), 'the previous agent topic list collapses')
-    assert.ok(!assistant?.querySelector('.agent-standing-row')?.className.includes('nav-item-active'), 'the previous agent no longer lights up')
-    assert.ok(!assistant?.querySelector('.agent-standing-row')?.className.includes('agent-standing-row-branch'), 'the previous agent drops the faint branch state')
+    assert.ok(document.querySelector('.sidebar-new-topic-btn')?.className.includes('is-active'), 'new-topic entry lights up in standby')
+    assert.equal(document.querySelector('.sidebar-new-topic-btn')?.getAttribute('aria-current'), 'page')
+    assert.ok(document.querySelector('.sidebar-overview-item.nav-item-active') === null, 'no conversation row lights up in standby')
 
-    // SSE live updates: expansion and highlighting derive solely from the target, undisturbed
+    // SSE live updates preserve the standby highlight
     await act(async () => {
       sendEvent?.(eventFrame(++eventSeq, {
         type: 'conversation.upsert',
@@ -707,10 +681,7 @@ describe("agent-standby", () => {
       }))
     })
     await settle()
-    const coderAfter = [...document.querySelectorAll('.agent-standing')]
-      .find((el) => el.querySelector('.nav-item-label')?.textContent === '编码专员')
-    assert.ok(coderAfter?.querySelector('.agent-conversations-list'), 'after the live update expansion still follows the target')
-    assert.ok(coderAfter?.querySelector('.agent-standing-row')?.className.includes('nav-item-active'), 'after the live update the highlight persists')
+    assert.ok(document.querySelector('.sidebar-new-topic-btn')?.className.includes('is-active'), 'after live updates the standby highlight persists')
   })
 
   test('real-conversation Composer /new: enters standby inheriting the environment, no reset, no create', { timeout: 60_000 }, async () => {

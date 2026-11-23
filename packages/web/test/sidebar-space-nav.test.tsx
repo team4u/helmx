@@ -331,52 +331,85 @@ test('空间记忆：打开 settings 项 / agent / screen 分别更新所在空�
   }
 })
 
-test('总览不占对话空间记忆位：boot 直达后点「对话」落缺省待命页，会话内进总览再点「对话」回到该会话', { timeout: 60_000 }, async (t) => {
+test('总览属于对话空间一级目的地：切空间保留记忆，同空间点「对话」原地保持不变', { timeout: 60_000 }, async (t) => {
   stubFetch()
   t.after(() => (globalThis.fetch as unknown as { restore: () => void }).restore())
-  // 1) 刷新在 #/overview（冷启动落总览后的真实场景）：boot 初始化不得把
-  // overview 写进对话空间记忆——点「对话」Rail 必须落到缺省待命页，
-  // 而不是原地不动（旧 bug：boot 记忆被 overview 劫持，按钮看似失灵）。
+  // 1) 刷新直达 #/overview：overview 属于 conversations 空间并写入对话空间记忆；
+  // 同空间点「对话」为 no-op，切去设置空间再点「对话」回到 #/overview。
   resetLocation('#/overview')
   const app = mountApp()
   try {
     await app.settle()
     assert.equal(app.probe().target, 'overview', 'boot 直达总览')
+    const beforeSameSpaceClick = app.probe().historyLength
     await act(async () => {
       app.rail('conversations')
     })
     await app.settle()
-    assert.equal(app.probe().target, 'a/assistant', '从总览点「对话」落到缺省待命页（最新根会话所属角色）')
+    assert.equal(app.probe().target, 'overview', '已在对话空间时再点「对话」保持总览不动')
+    assert.equal(app.probe().historyLength, beforeSameSpaceClick, '同空间点击不额外 push 历史')
 
-    // 2) 进入真实会话后跳去总览再点「对话」：记忆的是会话而非总览。
+    await act(async () => {
+      app.rail('settings')
+    })
+    await app.settle()
+    assert.equal(app.probe().target, 'settings/profiles', '切到设置空间')
+
+    await act(async () => {
+      app.rail('conversations')
+    })
+    await app.settle()
+    assert.equal(app.probe().target, 'overview', '切去设置再回「对话」恢复被记忆的 #/overview')
+
+    // 2) 进入真实会话后切空间记忆 c/1；再进入总览后切空间记忆更新为 overview。
     await act(async () => {
       app.openTarget({ kind: 'conversation', conversationId: 1 })
     })
     await app.settle()
     assert.equal(app.probe().target, 'c/1')
     await act(async () => {
-      app.openTarget({ kind: 'overview' })
+      app.rail('settings')
     })
     await app.settle()
-    assert.equal(app.probe().target, 'overview', '会话内经入口进总览')
     await act(async () => {
       app.rail('conversations')
     })
     await app.settle()
-    assert.equal(app.probe().target, 'c/1', '再点「对话」回到上一个会话（总览不劫持记忆）')
+    assert.equal(app.probe().target, 'c/1', '离开会话后回「对话」恢复 c/1')
 
-    // 3) hashchange 外部同步（浏览器前进/后退）进总览同样不写记忆。
-    resetLocation('#/c/1')
+    await act(async () => {
+      app.openTarget({ kind: 'overview' })
+    })
+    await app.settle()
+    assert.equal(app.probe().target, 'overview', '会话内经侧栏入口进总览')
+    await act(async () => {
+      app.rail('settings')
+    })
+    await app.settle()
+    await act(async () => {
+      app.rail('conversations')
+    })
+    await app.settle()
+    assert.equal(app.probe().target, 'overview', '进入总览后切空间再回「对话」恢复总览')
+
+    // 3) hashchange 外部同步（浏览器前进/后退）进总览同样更新对话空间记忆。
+    await act(async () => {
+      app.openTarget({ kind: 'conversation', conversationId: 1 })
+    })
     await app.settle()
     window.history.pushState(null, '', '#/overview')
     window.dispatchEvent(new Event('hashchange'))
     await app.settle()
     assert.equal(app.probe().target, 'overview', 'hashchange 同步进总览')
     await act(async () => {
+      app.rail('settings')
+    })
+    await app.settle()
+    await act(async () => {
       app.rail('conversations')
     })
     await app.settle()
-    assert.equal(app.probe().target, 'c/1', '外部同步进总览后点「对话」仍回到会话')
+    assert.equal(app.probe().target, 'overview', '外部同步进总览后跨空间返回恢复总览')
   } finally {
     app.unmount()
   }

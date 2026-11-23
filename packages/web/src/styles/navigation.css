@@ -1,5 +1,5 @@
 /* ==========================================================================
- * 左栏导航：智能体站位、会话行与状态点
+ * 左栏导航：对话工作集、视图/设置导航与状态点
  * 本文件为宿主样式分片，全局级联顺序由 src/styles.css 的 @import 顺序决定。
  * ========================================================================== */
 /* ==========================================================================
@@ -22,7 +22,7 @@
   padding: 8px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 12px;
 }
 
 .sidebar-group {
@@ -44,27 +44,6 @@
   text-transform: uppercase;
 }
 
-/* 可折叠分组头部主按钮：头部行内还需容纳次要操作按钮（如已归档分组的批量
-   restore entry); the header itself is no longer a button and the main toggle takes the flexible left area. */
-.sidebar-group-header-toggle {
-  flex: 1;
-  min-width: 0;
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 5px;
-  padding: 0;
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  color: inherit;
-  font: inherit;
-  font-weight: inherit;
-  letter-spacing: inherit;
-  text-transform: inherit;
-}
-
 .sidebar-group-header-actions {
   display: inline-flex;
   align-items: center;
@@ -72,12 +51,62 @@
   flex-shrink: 0;
 }
 
-/* 已归档分组行内的归属智能体徽标：防长名撑破行宽。 */
-.archived-profile-label {
-  max-width: 96px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+/* 对话空间顶部一级导航区（会话总览 + 新话题）：细分隔线与下方工作集区隔。 */
+.sidebar-conv-primary-nav {
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line-2);
+}
+
+.sidebar-action-row {
+  min-height: 32px;
+  height: auto;
+  flex-shrink: 0;
+  padding: 5px 8px;
+  position: relative;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--fg-secondary);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  font-size: 13px;
+  transition: background 120ms ease, color 120ms ease;
+  width: 100%;
+}
+
+.sidebar-action-row:hover,
+.sidebar-action-row[aria-expanded="true"] {
+  background: var(--nav-hover-bg);
+  color: var(--fg);
+}
+
+.sidebar-action-row.is-active,
+.sidebar-action-row.is-active:hover {
+  background: var(--nav-active-bg);
+  color: var(--nav-active-fg);
+  box-shadow: var(--seg-edge);
+  font-weight: 500;
+}
+
+.sidebar-action-row.is-split,
+.sidebar-action-row.is-split:hover {
+  background: var(--nav-split-bg);
+  color: var(--fg);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.sidebar-action-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.sidebar-new-topic-chevron {
+  flex-shrink: 0;
+  color: var(--fg-subtle);
 }
 
 .nav-item {
@@ -121,23 +150,12 @@
   color: var(--fg);
 }
 
-/* 归属父行弱态：子会话激活而父站位未进入待命态时，提亮文字，无卡片底与阴影 */
-.agent-standing-row-branch {
-  color: var(--fg);
-}
-
-.sidebar-context .nav-item.agent-standing-row-branch {
-  color: var(--fg);
-}
-
-/* 智能体会话列表统一采用极简纸面分阶：Hover 轻垫层、Active 实底微垫层（无投影、无竖线），
- * 让父行待命、子会话选中与精简总览列表保持同一视觉语言，且不与 Hover 撞色。 */
-.sidebar-context .agent-standing-group .nav-item:hover,
+/* 工作集会话列表采用极简纸面分阶：Hover 轻垫层、Active 实底微垫层（无投影、无竖线），
+ * 让对话行选中态克制且不与 Hover 撞色。 */
 .sidebar-context .sidebar-overview-group .nav-item:hover {
   --nav-row-bg: var(--nav-list-hover-bg);
 }
 
-.sidebar-context .agent-standing-group .nav-item:not(.nav-item-active):not(.nav-item-split):has(.nav-item-row-actions [aria-expanded="true"]),
 .sidebar-context .sidebar-overview-group .nav-item:not(.nav-item-active):not(.nav-item-split):has(.nav-item-row-actions [aria-expanded="true"]) {
   --nav-row-bg: var(--nav-list-hover-bg);
   color: var(--fg);
@@ -164,7 +182,7 @@
   font-weight: 500;
 }
 
-/* 唯一高亮实心卡片：待命亮父行、进会话亮子行 */
+/* 唯一高亮实心卡片：总览入口/视图/设置一级项 */
 .nav-item-active:hover,
 .nav-item-active {
   --nav-row-bg: var(--nav-active-bg);
@@ -187,9 +205,7 @@
   color: var(--nav-active-muted);
 }
 
-/* 智能体会话列表与侧栏精简总览选中态：统一扁平纸面高亮，无投影、无边框、无左侧竖线 */
-.sidebar-context .agent-standing-group .nav-item.nav-item-active:hover,
-.sidebar-context .agent-standing-group .nav-item.nav-item-active,
+/* 侧栏工作集选中态：统一扁平纸面高亮，无投影、无边框、无左侧竖线 */
 .sidebar-context .sidebar-overview-group .nav-item.nav-item-active:hover,
 .sidebar-context .sidebar-overview-group .nav-item.nav-item-active,
 .sidebar-context .nav-item.nav-item-sub.nav-item-active:hover,
@@ -256,7 +272,7 @@
 }
 
 /* 仅带灯槽的行使用 6px 间距（8 + 10 + 6 = 24px），与展开子列表左缘齐平；
- * 设置导航/视图行不渲染 nav-status-slot，保持 .nav-item-main 基础 8px gap。 */
+ * 设置导航/视图/总览行不渲染 nav-status-slot，保持 .nav-item-main 基础 8px gap。 */
 .nav-item-main:has(> .nav-status-slot) {
   gap: 6px;
 }
@@ -271,9 +287,8 @@
   flex-shrink: 0;
 }
 
-/* 左栏「视图」行徽标（sidebar.item badge 声明）：计数用宿主 badge 语义类
- * （badge-err/warn/accent/ok/neutral，行内紧凑高度），静默灯点用独立小圆点；
- * 悬停动作浮现时不淡出——注意力事实常驻可见。 */
+/* 左栏一级项徽标（视图徽标与总览态势计数徽标）：计数用宿主 badge 语义类，
+ * 静默灯点用独立小圆点；悬停动作浮现时不淡出——注意力事实常驻可见。 */
 .sidebar-view-badge {
   height: 16px;
   padding: 0 5px;
@@ -294,87 +309,6 @@
 .sidebar-view-badge-dot[data-tone='ok'] { background: var(--ok); }
 .sidebar-view-badge-dot[data-tone='neutral'] { background: var(--fg-muted); }
 
-/* 智能体站位：一级 Agent 行 + 轻缩进二级历史会话子列表（去树线，给标题留足宽度） */
-.agent-standing {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.agent-standing-open {
-  margin: 2px 0 6px;
-}
-
-.agent-standing-row {
-  min-height: 30px;
-  padding: 4px 8px;
-}
-
-.agent-standing-row .nav-status-slot {
-  width: 14px;
-}
-
-.agent-standing-toggle {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  width: 18px;
-  height: 18px;
-  margin-left: -2px;
-  padding: 0;
-  border: none;
-  border-radius: var(--radius-xs);
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-}
-
-.agent-standing-toggle:hover {
-  background: var(--bg-hover);
-}
-
-.agent-standing-chevron {
-  color: var(--fg-subtle);
-  transition: color 120ms ease;
-}
-
-.agent-standing-row:hover .agent-standing-chevron,
-.agent-standing-row.agent-standing-row-branch .agent-standing-chevron,
-.agent-standing-row.nav-item-active .agent-standing-chevron,
-.agent-standing-row.nav-item-split .agent-standing-chevron {
-  color: var(--fg-muted);
-}
-
-.agent-standing-row .nav-item-label {
-  font-weight: 600;
-}
-
-.agent-standing-count {
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--fg-muted);
-  padding: 0 2px;
-  line-height: 1;
-}
-
-.agent-standing-group .agent-conversations-list {
-  margin: 1px 0 0;
-  padding-left: 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-
-.agent-standing-group .nav-item-sub .nav-status-slot {
-  width: 8px;
-}
-
-.agent-standing-group .status-dot {
-  width: 6px;
-  height: 6px;
-}
-
 .nav-item-sub,
 .nav-item-sub.nav-item-active,
 .nav-item-sub.nav-item-split,
@@ -392,23 +326,16 @@
 
 .nav-item-sub .nav-item-label,
 .nav-item-sub.nav-item-active .nav-item-label,
-.nav-item-sub.nav-item-split .nav-item-label,
-.sidebar-conversation-row .nav-item-label,
-.sidebar-conversation-row.nav-item-active .nav-item-label,
-.sidebar-conversation-row.nav-item-split .nav-item-label {
+.nav-item-sub.nav-item-split .nav-item-label {
   font-weight: 400;
-}
-
-.nav-item-sub .nav-item-label {
   font-size: 12.5px;
 }
 
-/* 行级悬停操作（子会话重命名/删除、站位与视图行的分屏按钮与新建按钮）：
- * 桌面端悬停设备下所有行（含激活/分屏行）统一仅在悬停、键盘焦点或菜单展开时绝对定位浮出，
- * 避免激活后尾部常驻图标挤压标题宽度；并通过隐藏同位 meta 防止与 .nav-pane-tag 碰撞。 */
+/* 行级悬停操作（会话操作菜单、总览与视图行的分屏按钮）：
+ * 桌面端悬停设备下所有行统一仅在悬停、键盘焦点或菜单展开时绝对定位浮出，
+ * 避免尾部常驻图标挤压标题宽度；并通过隐藏同位 meta 防止与 .nav-pane-tag 碰撞。 */
 .nav-item-row-actions,
-.sidebar-split-action,
-.agent-new-conv-btn {
+.sidebar-split-action {
   display: inline-flex;
   align-items: center;
   gap: 2px;
@@ -468,46 +395,11 @@
   .nav-item:is(:has(.nav-item-row-actions:not(:empty)), :has(.sidebar-split-action)):is(:hover, :has(:focus-visible), :has([aria-expanded="true"])) .nav-item-meta > :not(.nav-item-row-actions):not(.sidebar-split-action):not(.sidebar-view-badge):not(.sidebar-view-badge-dot) {
     opacity: 0;
   }
-
-  .agent-standing-row:has(.agent-new-conv-btn) .agent-new-conv-btn {
-    position: absolute;
-    right: 6px;
-    top: 50%;
-    transform: translateY(-50%);
-    display: inline-flex;
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity 100ms ease, background 120ms ease, color 120ms ease;
-  }
-
-  .agent-standing-row:has(.agent-new-conv-btn):hover .agent-new-conv-btn:not(:hover) {
-    background: var(--nav-row-bg, var(--nav-hover-bg));
-  }
-
-  .agent-standing-row:has(.agent-new-conv-btn):not(.nav-item-active):not(.nav-item-split):has(:focus-visible):not(:hover) .agent-new-conv-btn:not(:hover) {
-    background: var(--bg-subtle);
-  }
-
-  .agent-standing-row:has(.agent-new-conv-btn) .nav-item-meta > :not(.agent-new-conv-btn) {
-    transition: opacity 100ms ease;
-  }
-
-  .agent-standing-row:has(.agent-new-conv-btn):hover .agent-new-conv-btn,
-  .agent-standing-row:has(.agent-new-conv-btn):has(:focus-visible) .agent-new-conv-btn {
-    opacity: 1;
-    pointer-events: auto;
-  }
-
-  .agent-standing-row:has(.agent-new-conv-btn):hover .nav-item-meta > :not(.agent-new-conv-btn),
-  .agent-standing-row:has(.agent-new-conv-btn):has(:focus-visible) .nav-item-meta > :not(.agent-new-conv-btn) {
-    opacity: 0;
-  }
 }
 
 @media (hover: none) {
   .nav-item-row-actions,
-  .sidebar-split-action,
-  .agent-new-conv-btn {
+  .sidebar-split-action {
     position: static;
     transform: none;
     display: inline-flex;
@@ -523,40 +415,6 @@
   }
 }
 
-.agent-standing .nav-item-sub .nav-item-meta > .tabular-nums {
-  display: none;
-}
-
-.agent-list-toggle {
-  align-self: flex-start;
-  height: 24px;
-  margin-left: 16px;
-  padding: 0 6px;
-  font-size: 11.5px;
-  color: var(--fg-muted);
-}
-
-.nav-item .agent-new-conv-btn {
-  color: var(--fg-muted);
-}
-
-.sidebar-batch-bar {
-  /* 壳结构/中性底色复用公共 .batch-bar 原语；侧栏仅保留与列表的间距 */
-  margin-bottom: 6px;
-}
-
-.sidebar-batch-checkbox {
-  margin: 0 6px 0 0;
-  cursor: pointer;
-  flex-shrink: 0;
-}
-
-.sidebar-batch-checkbox:disabled {
-  cursor: not-allowed;
-  opacity: 0.4;
-}
-
-/* 系统中心入口已收敛到「设置」空间，sidebar-footer 不再使用（保留类名仅供外部扩展降级）。 */
 .sidebar-theme-toggle,
 .sidebar-locale-toggle,
 .sidebar-changelog-toggle {
@@ -566,7 +424,7 @@
   flex-shrink: 0;
 }
 
-/* 对话空间紧凑搜索：过滤智能体（命中会话标题时保留整行） */
+/* 对话空间紧凑搜索：突破工作集近期上限，检索全量未归档会话 */
 .sidebar-search {
   display: flex;
   align-items: center;
@@ -644,84 +502,6 @@
   color: var(--fg-muted);
 }
 
-/* --------------------------------------------------------------------------
- * 全局待审批浮层（PendingAsksPanel）
- * 复合选择器（.sidebar-group/.badge/.list/.row 前缀）保证覆盖级联顺序在后的
- * primitives.css 基础原语规则，视觉与原内联样式完全一致。
- * -------------------------------------------------------------------------- */
-
-.sidebar-group.pending-asks-group {
-  gap: 4px;
-}
-
-.badge.pending-asks-toggle {
-  width: 100%;
-  justify-content: space-between;
-  height: 26px;
-  cursor: pointer;
-}
-
-.pending-asks-toggle-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.list.pending-asks-list {
-  box-shadow: var(--shadow-md);
-}
-
-.row.pending-asks-row {
-  align-items: flex-start;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.pending-asks-row-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  width: 100%;
-  gap: 8px;
-}
-
-.pending-asks-title {
-  font-size: 12.5px;
-  font-weight: 500;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.pending-asks-desc {
-  font-size: 11.5px;
-  color: var(--fg-muted);
-  white-space: normal;
-  word-break: break-word;
-}
-
-.pending-asks-actions {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
-/* 侧栏头部总览入口（命令面板搜索钮旁）：挂 overview-count-badge 同源计数
- * 徽标（绝对定位锚点需要 relative 宿主），与移动端总览按钮同一事实源；
- * 主屏停在 #/overview 时点亮激活态（accent 词汇，aria-current 同步）——
- * 用户在大堂时一眼知道自己在大堂。 */
-.sidebar-overview-open-btn {
-  position: relative;
-}
-
-.sidebar-overview-open-btn.is-active {
-  color: var(--accent);
-  background: var(--accent-bg);
-}
-
-/* 话题切换已回归左栏手风琴（仅展开当前智能体），顶栏恢复单行标题。 */
-
 .activity-rail-brand {
   position: relative;
   width: 34px;
@@ -753,34 +533,8 @@
 }
 
 /* --------------------------------------------------------------------------
- * 对话列表展示模式切换（智能体 / 总览）与侧栏精简总览列表
+ * 侧栏会话工作集列表
  * -------------------------------------------------------------------------- */
-
-.agent-standing-group > .sidebar-group-header:has(.sidebar-conv-mode-switch),
-.sidebar-overview-group > .sidebar-group-header {
-  height: auto;
-  min-height: 26px;
-  padding: 0 2px 2px 4px;
-  gap: 6px;
-  text-transform: none;
-  letter-spacing: 0;
-}
-
-.sidebar-conv-mode-switch {
-  padding: 2px;
-  gap: 1px;
-  border-radius: 6px;
-}
-
-.sidebar-conv-mode-switch .segmented-control-btn {
-  height: 20px;
-  padding: 0 8px;
-  font-size: 11.5px;
-  font-weight: 500;
-  border-radius: 4px;
-  text-transform: none;
-  letter-spacing: 0;
-}
 
 .sidebar-overview-sections {
   display: flex;
@@ -875,11 +629,6 @@
 .sidebar-overview-item-branch,
 .sidebar-context .nav-item.sidebar-overview-item-branch {
   color: var(--fg);
-}
-
-.sidebar-overview-item.is-selected {
-  --nav-row-bg: color-mix(in srgb, var(--accent) 10%, transparent);
-  background: var(--nav-row-bg);
 }
 
 .sidebar-overview-head {
@@ -1060,9 +809,32 @@
   color: var(--fg-muted);
 }
 
-.sidebar-overview-empty-action {
-  gap: 4px;
+/* 侧栏底部「查看全部 / 在会话总览中查看匹配」入口 */
+.sidebar-view-all-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  width: 100%;
+  margin-top: 6px;
+  padding: 6px 8px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+  transition: background 120ms ease, color 120ms ease;
 }
 
+.sidebar-view-all-btn:hover {
+  background: var(--nav-list-hover-bg);
+  color: var(--fg);
+}
 
-
+.sidebar-view-all-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}

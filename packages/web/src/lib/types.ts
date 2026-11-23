@@ -36,7 +36,6 @@ export type { SessionDocKey }
 export type ThemeMode = 'light' | 'dark'
 export type ThemePreference = 'system' | 'light' | 'dark'
 export type LocalePreference = 'auto' | HelmxLocale
-export type SidebarConversationMode = 'agents' | 'overview'
 export type FocusedPanel = 'primary' | 'split'
 
 /** Screen param key: non-empty, limited to letters/digits/dot/underscore/hyphen (a stable sub-key inside the URL query namespace). */
@@ -392,8 +391,6 @@ export interface HelmxStoreValue {
   localePreference: LocalePreference
   /** Background browser notification preference (localStorage persisted; delivered only when permission is granted). */
   quietNotifyEnabled: boolean
-  /** Sidebar conversation list display mode ('agents' grouped by profile standings | 'overview' compact triage list; localStorage persisted, not in the URL). */
-  sidebarConvMode: SidebarConversationMode
 
   // Core realtime data
   conversations: ConversationSummary[]
@@ -457,8 +454,6 @@ export interface HelmxStoreValue {
   setLocalePreference(pref: LocalePreference): void
   /** When enabling, requests browser notification permission first; on denial stays disabled with a toast notice; disabling takes effect immediately. */
   setQuietNotify(on: boolean): Promise<void>
-  /** Sets the sidebar conversation list display mode and persists it to localStorage. */
-  setSidebarConvMode(mode: SidebarConversationMode): void
   checkAuth(): Promise<void>
   onAuthenticated(token: string): Promise<void>
   logout(): void

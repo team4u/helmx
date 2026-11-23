@@ -3,7 +3,7 @@
  * `.status-dot` 通用状态灯词汇（base / working / blocked / done / error /
  * background + keyframes + prefers-reduced-motion）是宿主公共设计系统资产，
  * 被 @helmx/plugin-client 的 StatusLight 共享，必须完整归属 primitives.css；
- * navigation.css 只允许保留导航专有覆盖（如 .agent-standing-group 的 6px 小点），
+ * navigation.css 只允许保留导航专有覆盖（如 .sidebar-overview-group 的 6px 小点），
  * 避免「共享原语依赖导航私有样式」的架构漂移与级联回归。
  */
 import assert from 'node:assert/strict'
@@ -47,13 +47,13 @@ test('样式边界：通用状态灯词汇完整归属 primitives.css（base/色
   assert.ok(!navigation.includes('prefers-reduced-motion'), 'navigation.css 不再携带状态灯减动效规则')
 })
 
-test('样式边界：navigation.css 仅保留导航专有状态点覆盖（agent-standing-group 小点）', { timeout: 60_000 }, () => {
+test('样式边界：navigation.css 仅保留导航专有状态点覆盖（sidebar-overview-group 小点）', { timeout: 60_000 }, () => {
   assert.ok(
-    ownsRule(navigation, '.agent-standing-group .status-dot'),
+    ownsRule(navigation, '.sidebar-overview-group .status-dot'),
     '导航专属 6px 小点覆盖保留在 navigation.css',
   )
   assert.ok(
-    !ownsRule(primitives, '.agent-standing-group .status-dot'),
+    !ownsRule(primitives, '.sidebar-overview-group .status-dot'),
     '导航专属覆盖不得漂移进公共分片',
   )
 })

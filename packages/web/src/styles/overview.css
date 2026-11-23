@@ -207,13 +207,15 @@
   border-color: color-mix(in srgb, var(--accent) 45%, var(--border-strong));
 }
 
-/* 动静密度分层：安静卡底色退回 subtle、线框降权、标题降半档字重，突出上方活跃态势。 */
-.overview-card-quiet {
+/* 动静密度分层：安静卡与已归档卡底色退回 subtle、线框降权、标题降半档字重，突出上方活跃态势。 */
+.overview-card-quiet,
+.overview-card-archived {
   background: var(--bg-subtle);
   border-color: var(--line-2);
 }
 
-.overview-card-quiet .overview-card-title {
+.overview-card-quiet .overview-card-title,
+.overview-card-archived .overview-card-title {
   font-weight: 500;
 }
 
@@ -265,11 +267,12 @@
   cursor: pointer;
 }
 
-/* 卡面右侧「更多操作」菜单（与侧栏会话行同源 ConversationRowActionsMenu）：
+/* 卡面右侧快捷动作区（抽屉速览按钮 + 「更多操作」菜单）：
  * 悬停设备上悬停卡片时浮现（触控设备常显），菜单展开期间保持可见。 */
 .overview-card-actions {
   display: inline-flex;
   align-items: center;
+  gap: 2px;
   flex-shrink: 0;
 }
 

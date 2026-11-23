@@ -33,14 +33,12 @@ import { conversationStatusDotClass, conversationStatusTooltip } from '../src/sh
 import {
   backgroundAwareStatusTooltip,
   collectBackgroundBadgeDocs,
-  resolveAgentSubListPreview,
   resolveStandingStatusIndicator,
   resolveStatusLight,
   summarizeConversationBackgroundActivity,
   type ConversationBackgroundIndex,
 } from '../src/shell/background-activity-model.js'
 import { makeTestStore, HelmxExternalStoreContext, type TestStoreOverrides } from './helpers/store.js'
-import { useHelmxStore } from '../src/lib/store-context.js'
 import type { HelmxExternalStore } from '../src/lib/helmx-store.js'
 
 const e = React.createElement
@@ -49,7 +47,6 @@ const e = React.createElement
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 
 const { Sidebar } = await import('../src/shell/Sidebar.js')
-const { AgentStandingsGroup } = await import('../src/shell/SidebarAgentStandings.js')
 
 function conv(partial: Partial<ConversationSummary> & { id: number }): ConversationSummary {
   return {
@@ -251,91 +248,8 @@ test('contextUsage.compacting=true marks background in flight and merges the com
 })
 
 // ---------------------------------------------------------------------------
-// Pure layer: level-one standing aggregation, single-light priority and tooltip composition
+// Pure layer: representative status aggregation, single-light priority and tooltip composition
 // ---------------------------------------------------------------------------
-
-test('agent sub-list collapsed preview always retains the current and in-flight conversations', { timeout: 60_000 }, () => {
-  const conversations = Array.from({ length: 8 }, (_, index) => conv({ id: index + 1 }))
-  conversations[5] = conv({ id: 6, status: 'working' })
-  conversations[6] = conv({ id: 7, status: 'idle' })
-  conversations[7] = conv({ id: 8, status: 'done' })
-  const preview = resolveAgentSubListPreview({
-    conversations,
-    showAll: false,
-    activeId: 8,
-    background: new Map([[7, { active: true, summary: '工作流运行中' }]]),
-  })
-  assert.deepEqual(preview.visible.map((item) => item.id), [1, 2, 3, 4, 5, 6, 7, 8])
-  assert.equal(preview.hiddenCount, 0)
-
-  const activePreview = resolveAgentSubListPreview({
-    conversations,
-    showAll: false,
-    activeId: 8,
-    background: new Map(),
-  })
-  assert.equal(activePreview.visible.length, conversations.length, 'existing behavior: an active conversation beyond the preview expands the whole group')
-
-  const idlePreview = resolveAgentSubListPreview({
-    conversations,
-    showAll: false,
-    activeId: null,
-    background: new Map(),
-  })
-  assert.deepEqual(idlePreview.visible.map((item) => item.id), [1, 2, 3, 4, 5, 6])
-  assert.equal(idlePreview.hiddenCount, 2)
-  assert.equal(resolveAgentSubListPreview({ conversations, showAll: true, activeId: null, background: new Map() }).hiddenCount, 0)
-
-  // the collapsed preview retains a compacting conversation (even idle and positioned after the 5th row)
-  const compactingConvs = Array.from({ length: 8 }, (_, index) => conv({ id: index + 1 }))
-  compactingConvs[6] = conv({ id: 7, status: 'idle', contextUsage: { tokens: 1500, compacting: true } })
-  const compactingBg = summarize({ contributions: [], conversations: compactingConvs })
-  const compactingPreview = resolveAgentSubListPreview({
-    conversations: compactingConvs,
-    showAll: false,
-    activeId: null,
-    background: compactingBg,
-  })
-  assert.deepEqual(compactingPreview.visible.map((item) => item.id), [1, 2, 3, 4, 5, 7])
-  assert.equal(compactingPreview.hiddenCount, 2)
-})
-
-test('resolveAgentSubListPreview: any conversation in activeIds beyond the preview count expands the whole group (split protection)', { timeout: 60_000 }, () => {
-  const conversations = Array.from({ length: 8 }, (_, index) => conv({ id: index + 1 }))
-
-  // primary active within the first 5 (id=1), split active deep down (id=7, index=6): the whole group expands so the split conversation is never hidden
-  const splitDeep = resolveAgentSubListPreview({
-    conversations,
-    showAll: false,
-    activeId: 1,
-    activeIds: new Set([1, 7]),
-    background: new Map(),
-  })
-  assert.deepEqual(splitDeep.visible.map((item) => item.id), [1, 2, 3, 4, 5, 6, 7, 8])
-  assert.equal(splitDeep.hiddenCount, 0)
-
-  // passing only activeIds (activeId=null) hitting a deep conversation (id=8) likewise expands the whole group
-  const onlySetDeep = resolveAgentSubListPreview({
-    conversations,
-    showAll: false,
-    activeId: null,
-    activeIds: new Set([8]),
-    background: new Map(),
-  })
-  assert.deepEqual(onlySetDeep.visible.map((item) => item.id), [1, 2, 3, 4, 5, 6, 7, 8])
-  assert.equal(onlySetDeep.hiddenCount, 0)
-
-  // with every activeIds entry inside the first 5, folding behaves normally
-  const bothShallow = resolveAgentSubListPreview({
-    conversations,
-    showAll: false,
-    activeId: 1,
-    activeIds: new Set([1, 3]),
-    background: new Map(),
-  })
-  assert.deepEqual(bothShallow.visible.map((item) => item.id), [1, 2, 3, 4, 5])
-  assert.equal(bothShallow.hiddenCount, 3)
-})
 
 test('standing aggregation priority error > blocked > working > done > idle; ties keep the list head (pinned-first order)', { timeout: 60_000 }, () => {
   const conversations = [
@@ -535,10 +449,10 @@ test('done conversation + background in flight: the green dot yields and only th
   assert.equal(countStatusLights(html), 1, 'the collapsed standing row carries exactly one light')
 })
 
-test('no background work: the five states stay as-is (done green dot, idle no light)', { timeout: 60_000 }, () => {
+test('no background work: unread done keeps its green dot; read done and idle render no light', { timeout: 60_000 }, () => {
   const store = sidebarStore({
     conversations: [
-      conv({ id: 1, title: '主会话', profileId: 'assistant', status: 'done', createdAt: 9000, updatedAt: 9000 }),
+      conv({ id: 1, title: '主会话', profileId: 'assistant', status: 'done', unread: true, createdAt: 9000, updatedAt: 9000 }),
       conv({ id: 2, title: '闲置话题', profileId: 'assistant' }),
       conv({ id: 50, title: '别处', profileId: 'coder' }),
     ],
@@ -549,110 +463,59 @@ test('no background work: the five states stay as-is (done green dot, idle no li
     },
   })
   const html = renderSidebar(store)
-  assert.ok(html.includes('class="status-dot status-dot-done"'), 'done keeps its green dot with nothing in flight')
+  assert.ok(html.includes('class="status-dot status-dot-done"'), 'unread done keeps its green dot with nothing in flight')
   assert.ok(!html.includes('status-dot-background'), 'neutral history counts must not light the hollow ring')
-  assert.equal(countStatusLights(html), 1, 'one light for the done conversation, none for idle')
+  assert.equal(countStatusLights(html), 1, 'one light for the unread done conversation, none for idle')
 })
 
-test('expanded state: the standing row does not duplicate the indicator; each child conversation row keeps its own light', { timeout: 60_000 }, () => {
+test('working set rows: each root row carries its own single status light (done / background hollow ring / error)', { timeout: 60_000 }, () => {
   const store = sidebarStore({
     conversations: [
-      conv({ id: 1, title: '主会话', profileId: 'assistant', status: 'done', createdAt: 9000, updatedAt: 9000 }),
+      conv({ id: 1, title: '主会话', profileId: 'assistant', status: 'done', unread: true, createdAt: 9000, updatedAt: 9000 }),
       conv({ id: 2, title: '后台话题', profileId: 'assistant' }),
       conv({ id: 3, title: '失败话题', profileId: 'assistant', status: 'error', lastError: 'model_error: boom' }),
+      conv({ id: 50, title: '别处', profileId: 'coder' }),
     ],
-    primaryTarget: { kind: 'conversation', conversationId: 1 },
+    primaryTarget: { kind: 'conversation', conversationId: 50 },
     uiContributions: [panelContribution()],
     pluginDocs: {
       'builtin:workflow/run-badges': badgesDoc({ '2': { count: 1, tone: 'accent', footerText: '1 Running' } }),
     },
   })
   const html = renderSidebar(store)
-  assert.ok(html.includes('agent-conversations-list'), 'the current agent expands its topic sub-list')
-  assert.ok(html.includes('title="Idle · background task: 1 Running"'), 'the idle child row shows the background hollow ring')
-  assert.ok(html.includes('class="status-dot status-dot-error"'), 'the error child row shows its own status light')
-  assert.ok(html.includes('class="status-dot status-dot-done"'), 'the done child row keeps its green dot')
-  // each of the three child rows carries one light (done green dot / background hollow ring / error status light); the standing row duplicates none
-  assert.equal(countStatusLights(html), 3, 'expanded state: exactly one light per child row, none on the standing row')
-  assert.equal(
-    (html.match(/status-dot-background/g) ?? []).length,
-    1,
-    'the background hollow ring appears exactly once on its own child row (attention rows excluded)',
-  )
+  assert.ok(html.includes('title="Idle · background task: 1 Running"'), 'the idle row with background work shows the hollow ring')
+  assert.ok(html.includes('class="status-dot status-dot-error"'), 'the error row shows its own status light')
+  assert.ok(html.includes('class="status-dot status-dot-done"'), 'the unread done row keeps its green dot')
+  assert.equal(countStatusLights(html), 3, 'exactly one light per active/unread root row')
+  assert.equal((html.match(/status-dot-background/g) ?? []).length, 1)
 })
 
-test('collapsed standing row: non-primary background in flight + representative working/blocked/error hides the background ring', { timeout: 60_000 }, () => {
-  // primary idle + secondary in error: the standing row surfaces error (representative = the secondary)
-  const errorStore = sidebarStore({
+test('working set root trees: error, blocked and background in-flight each render single-light semantics on their own tree row', { timeout: 60_000 }, () => {
+  const store = sidebarStore({
     conversations: [
-      conv({ id: 1, title: '主会话', profileId: 'assistant', createdAt: 9000, updatedAt: 9000 }),
-      conv({ id: 2, title: '失败话题', profileId: 'assistant', status: 'error', lastError: 'model_error: boom' }),
-      conv({ id: 50, title: '别处', profileId: 'coder' }),
-    ],
-    primaryTarget: { kind: 'conversation', conversationId: 50 },
-  })
-  const errorHtml = renderSidebar(errorStore)
-  assert.ok(errorHtml.includes('class="status-dot status-dot-error"'), 'a secondary conversation in error must surface')
-  assert.ok(errorHtml.includes('title="Error: model_error: boom"'))
-  assert.ok(!errorHtml.includes('status-dot-background'), 'no in-flight badge means no hollow ring')
-
-  // primary idle + secondary background in flight + another secondary blocked: the status light is exclusive, hiding the whole standing's background ring
-  const blockedStore = sidebarStore({
-    conversations: [
-      conv({ id: 1, title: '主会话', profileId: 'assistant', createdAt: 9000, updatedAt: 9000 }),
-      conv({ id: 2, title: '后台话题', profileId: 'assistant' }),
-      conv({ id: 3, title: '阻塞话题', profileId: 'assistant', status: 'blocked' }),
+      conv({ id: 1, title: '出错话题', profileId: 'assistant', status: 'error', lastError: 'model_error: boom', createdAt: 9000, updatedAt: 9000 }),
+      conv({ id: 2, title: '后台话题', profileId: 'assistant', status: 'idle', createdAt: 8000, updatedAt: 8000 }),
+      conv({ id: 3, title: '阻塞话题', profileId: 'assistant', status: 'blocked', createdAt: 7000, updatedAt: 7000 }),
       conv({ id: 50, title: '别处', profileId: 'coder' }),
     ],
     primaryTarget: { kind: 'conversation', conversationId: 50 },
     uiContributions: [panelContribution()],
     pluginDocs: {
-      'builtin:workflow/run-badges': badgesDoc({ '2': { count: 4, tone: 'accent', footerText: '4 Running' } }),
+      'builtin:workflow/run-badges': badgesDoc({
+        '2': { count: 4, tone: 'accent', footerText: '4 Running' },
+        '3': { count: 2, tone: 'accent', footerText: '2 Running' },
+      }),
     },
   })
-  const blockedHtml = renderSidebar(blockedStore)
-  assert.ok(blockedHtml.includes('class="status-dot status-dot-blocked"'), 'the representative blocked status light surfaces')
-  assert.ok(!blockedHtml.includes('status-dot-background'), 'with the representative blocked, the whole standing background ring hides')
-  assert.ok(!blockedHtml.includes('background task'), 'the tooltip shows only the representative status')
-})
-
-test('collapsed standing row: representative idle/done renders exactly one background hollow ring (non-primary background surfaced)', { timeout: 60_000 }, () => {
-  // primary idle + secondary background in flight: the standing row shows a single hollow ring (the representative stays the primary)
-  const idleStore = sidebarStore({
-    conversations: [
-      conv({ id: 1, title: '主会话', profileId: 'assistant', createdAt: 9000, updatedAt: 9000 }),
-      conv({ id: 2, title: '后台话题', profileId: 'assistant' }),
-      conv({ id: 50, title: '别处', profileId: 'coder' }),
-    ],
-    primaryTarget: { kind: 'conversation', conversationId: 50 },
-    uiContributions: [panelContribution()],
-    pluginDocs: {
-      'builtin:workflow/run-badges': badgesDoc({ '2': { count: 4, tone: 'accent', footerText: '4 Running' } }),
-    },
-  })
-  const idleHtml = renderSidebar(idleStore)
-  assert.ok(idleHtml.includes('class="status-dot status-dot-background"'), 'a non-primary conversation background in flight surfaces onto the standing row')
-  assert.ok(idleHtml.includes('title="Idle · background task: 4 Running"'))
-  assert.equal(countStatusLights(idleHtml), 1, 'the standing row shows a single background hollow ring with no parallel base dot')
-
-  // primary done + secondary background in flight: the done green dot yields; likewise a single hollow ring
-  const doneStore = sidebarStore({
-    conversations: [
-      conv({ id: 1, title: '主会话', profileId: 'assistant', status: 'done', createdAt: 9000, updatedAt: 9000 }),
-      conv({ id: 2, title: '后台话题', profileId: 'assistant' }),
-      conv({ id: 50, title: '别处', profileId: 'coder' }),
-    ],
-    primaryTarget: { kind: 'conversation', conversationId: 50 },
-    uiContributions: [panelContribution()],
-    pluginDocs: {
-      'builtin:workflow/run-badges': badgesDoc({ '2': { count: 2, tone: 'accent', footerText: '2 Running' } }),
-    },
-  })
-  const doneHtml = renderSidebar(doneStore)
-  assert.ok(!doneHtml.includes('class="status-dot status-dot-done"'), 'the representative done green dot yields')
-  assert.ok(doneHtml.includes('class="status-dot status-dot-background"'), 'only the background hollow ring renders')
-  assert.ok(doneHtml.includes('title="Completed · background task: 2 Running"'))
-  assert.equal(countStatusLights(doneHtml), 1, 'the standing row shows a single background hollow ring')
+  const html = renderSidebar(store)
+  assert.ok(html.includes('class="status-dot status-dot-error"'))
+  assert.ok(html.includes('title="Error: model_error: boom"'))
+  assert.ok(html.includes('class="status-dot status-dot-blocked"'))
+  assert.ok(html.includes('class="status-dot status-dot-background"'))
+  assert.ok(html.includes('title="Idle · background task: 4 Running"'))
+  // Blocked conversation #3 keeps its exclusive blocked dot (background ring does not render on #3)
+  assert.equal((html.match(/status-dot-background/g) ?? []).length, 1)
+  assert.equal(countStatusLights(html), 3)
 })
 
 test('plugin disabled (contributions gone) or only neutral history counts left: no in-flight indicator at all', { timeout: 60_000 }, () => {
@@ -685,11 +548,11 @@ function dotBeforeLabel(html: string, title: string): boolean {
   return /<span class="nav-status-slot"><span class="status-dot /.test(html.slice(rowStart, labelIdx))
 }
 
-test('leading fixed light slot: working/done/idle+background lights all sit before the title inside nav-status-slot', { timeout: 60_000 }, () => {
+test('leading fixed light slot: working/unread-done/idle+background lights all sit before the title inside nav-status-slot', { timeout: 60_000 }, () => {
   const store = sidebarStore({
     conversations: [
       conv({ id: 1, title: '当前在跑', profileId: 'assistant', status: 'working', doing: '正在思考方案' }),
-      conv({ id: 2, title: 'Completed', profileId: 'assistant', status: 'done' }),
+      conv({ id: 2, title: 'Completed', profileId: 'assistant', status: 'done', unread: true }),
       conv({ id: 3, title: '纯空闲', profileId: 'assistant' }),
       conv({ id: 4, title: '后台在跑', profileId: 'assistant' }),
     ],
@@ -701,37 +564,17 @@ test('leading fixed light slot: working/done/idle+background lights all sit befo
   })
   const html = renderSidebar(store)
   assert.ok(dotBeforeLabel(html, '当前在跑'), 'the working status light precedes the title')
-  assert.ok(dotBeforeLabel(html, 'Completed'), 'the done status light precedes the title')
+  assert.ok(dotBeforeLabel(html, 'Completed'), 'the unread done status light precedes the title')
   assert.ok(dotBeforeLabel(html, '后台在跑'), 'the background hollow-ring light precedes the title')
   // idle empty slot: no light renders but the slot stays so wrapped titles keep alignment
   assert.ok(
     html.includes('<span class="nav-status-slot"></span><span class="nav-item-label">纯空闲</span>'),
     'the idle row keeps its empty slot (no light renders, the slot remains)',
   )
-  // slot count matches row count: every conversation row (nav-item-sub) and every standing row carries exactly one nav-status-slot
-  const scoped = html
-  const subRows = (scoped.match(/class="nav-item nav-item-sub/g) ?? []).length
-  const standingRows = (scoped.match(/class="nav-item agent-standing-row/g) ?? []).length
-  const slots = (scoped.match(/class="nav-status-slot"/g) ?? []).length
-  assert.equal(subRows, 4, 'all four conversation child rows render')
-  assert.equal(slots, subRows + standingRows, 'every conversation row has a light slot (idle empty slots count too); standing rows have slots as well')
-})
-
-test('collapsed standing light leads the row: the standing indicator renders inside nav-status-slot before the name', { timeout: 60_000 }, () => {
-  const store = sidebarStore({
-    conversations: [
-      conv({ id: 1, title: '在跑', profileId: 'coder', status: 'working', doing: '重构中' }),
-      conv({ id: 50, title: '别处', profileId: 'assistant' }),
-    ],
-    primaryTarget: { kind: 'conversation', conversationId: 50 },
-  })
-  const html = renderSidebar(store)
-  // collapsed standing row: a nav-status-slot precedes the name and holds the representative's status light
-  const labelIdx = html.indexOf('>编码专员</span>')
-  assert.ok(labelIdx > 0, 'the collapsed standing row renders')
-  const rowStart = html.lastIndexOf('<div class="nav-item agent-standing-row', labelIdx)
-  const head = html.slice(rowStart, labelIdx)
-  assert.match(head, /<span class="nav-status-slot"><span class="status-dot status-dot-working"/, 'the standing indicator sits in the fixed light slot before the name')
+  const treeRows = (html.match(/sidebar-overview-item /g) ?? []).length
+  const slots = (html.match(/class="nav-status-slot"/g) ?? []).length
+  assert.equal(treeRows, 4, 'all four working-set rows render')
+  assert.equal(slots, treeRows, 'every working-set conversation row carries exactly one nav-status-slot')
 })
 
 
@@ -1031,90 +874,30 @@ test('ViewNavGroup and SettingsNavGroup split double-open: main/split highlights
   assert.equal(profilesBothRow.querySelector('.nav-pane-tag')?.getAttribute('title'), 'Open in both main and split views')
 })
 
-test('ArchivedConversationsGroup split hit on an archived conversation: auto-expands and renders .nav-item-split / .nav-item-active.nav-item-focused and .nav-pane-tag', { timeout: 60_000 }, () => {
-  const conversations = [
-    conv({ id: 1, title: '活跃会话', profileId: 'assistant' }),
-    conv({ id: 77, title: '已归档历史', profileId: 'assistant', tags: [ARCHIVED_TAG] }),
-  ]
-
-  const splitSecondaryHtml = renderSidebar(
-    sidebarStore({
-      conversations,
-      primaryTarget: { kind: 'conversation', conversationId: 1 },
-      splitTarget: { kind: 'conversation', conversationId: 77 },
-    }),
-  )
-  const secondaryHost = document.createElement('div')
-  secondaryHost.innerHTML = splitSecondaryHtml
-  assert.equal(
-    secondaryHost.querySelector('.archived-conversations-group .sidebar-group-header-toggle')?.getAttribute('aria-expanded'),
-    'true',
-    'the group auto-expands when splitTarget points at an archived conversation',
-  )
-  const archivedSecondary = findNavRow(splitSecondaryHtml, '已归档历史')
-  assert.equal(archivedSecondary.classList.contains('nav-item-sub'), true)
-  assert.equal(archivedSecondary.classList.contains('nav-item-split'), true)
-  assert.equal(archivedSecondary.classList.contains('nav-item-active'), false)
-  assert.equal(archivedSecondary.classList.contains('nav-item-focused'), false)
-  assert.equal(archivedSecondary.querySelector('.nav-item-main')?.getAttribute('aria-current'), null)
-  const metaChildren = [...(archivedSecondary.querySelector('.nav-item-meta')?.children ?? [])]
-  assert.equal(metaChildren[0]?.className, 'nav-pane-tag', 'the paneTag must precede the archived-profile-label')
-  assert.equal(metaChildren[0]?.textContent, 'Split')
-  assert.equal(metaChildren[0]?.getAttribute('title'), 'Open in split view')
-  assert.equal(metaChildren[1]?.classList.contains('archived-profile-label'), true)
-
-  const splitFocusedHtml = renderSidebar(
-    sidebarStore({
-      conversations,
-      primaryTarget: { kind: 'conversation', conversationId: 1 },
-      splitTarget: { kind: 'conversation', conversationId: 77 },
-      focusedPanel: 'split',
-    }),
-  )
-  const archivedFocused = findNavRow(splitFocusedHtml, '已归档历史')
-  assert.equal(archivedFocused.classList.contains('nav-item-sub'), true)
-  assert.equal(archivedFocused.classList.contains('nav-item-active'), true)
-  assert.equal(archivedFocused.classList.contains('nav-item-focused'), true)
-  assert.equal(archivedFocused.classList.contains('nav-item-split'), false)
-  assert.equal(archivedFocused.querySelector('.nav-item-main')?.getAttribute('aria-current'), 'page')
-  assert.equal(archivedFocused.querySelector('.nav-pane-tag')?.textContent, 'Split')
-
-  const sameArchivedHtml = renderSidebar(
-    sidebarStore({
-      conversations,
-      primaryTarget: { kind: 'conversation', conversationId: 77 },
-      splitTarget: { kind: 'conversation', conversationId: 77 },
-    }),
-  )
-  const archivedBoth = findNavRow(sameArchivedHtml, '已归档历史')
-  assert.equal(archivedBoth.classList.contains('nav-item-active'), true)
-  assert.equal(archivedBoth.classList.contains('nav-item-focused'), true)
-  assert.equal(archivedBoth.querySelector('.nav-pane-tag')?.textContent, 'Main·Split')
-  assert.equal(archivedBoth.querySelector('.nav-pane-tag')?.getAttribute('title'), 'Open in both main and split views')
-})
-
 // ---------------------------------------------------------------------------
 // Locale wiring: shell chrome copy follows the active store locale
 // ---------------------------------------------------------------------------
 
-test('zh-CN sidebar render: agents group shows Chinese chrome copy', { timeout: 60_000 }, () => {
-  const store = sidebarStore({ locale: 'zh-CN' })
+test('zh-CN sidebar render: conversations working set shows Chinese chrome copy (no archived sidebar group)', { timeout: 60_000 }, () => {
+  const store = sidebarStore({
+    locale: 'zh-CN',
+    conversations: [
+      conv({ id: 1, title: '活跃会话', profileId: 'assistant' }),
+      conv({ id: 77, title: '已归档历史', profileId: 'assistant', tags: [ARCHIVED_TAG] }),
+    ],
+  })
   const html = renderSidebar(store)
-  assert.ok(html.includes('<span>智能体</span>'), 'agents group title renders the zh-CN catalog copy')
-  assert.ok(html.includes('筛选智能体与话题'), 'filter tooltip/aria-label renders zh-CN')
-  assert.ok(html.includes('批量管理会话'), 'bulk-manage title renders zh-CN')
-  assert.ok(!html.includes('<span>Agents</span>'), 'no leftover English group title under zh-CN')
+  assert.ok(html.includes('>会话总览</span>'), 'top overview entry renders zh-CN copy')
+  assert.ok(html.includes('<span>工作集</span>'), 'working set group title renders zh-CN copy')
+  assert.ok(html.includes('筛选会话'), 'filter tooltip/aria-label renders zh-CN')
+  assert.ok(!html.includes('已归档历史'), 'archived conversations are governed in #/overview, not duplicated in the sidebar')
+  assert.ok(!html.includes('<span>Working set</span>'), 'no leftover English group title under zh-CN')
 })
 
-test('AgentStandingsGroup switches copy immediately on setLocale (en -> zh-CN -> en)', { timeout: 60_000 }, async () => {
-  // 真实 store.setLocale 驱动 prefs 领域订阅：Shell 铨印文案原位切换（与生产同一链路）。
+test('SidebarConversationList switches copy immediately on setLocale (en -> zh-CN -> en)', { timeout: 60_000 }, async () => {
   const store = sidebarStore({ locale: 'en' })
-  function StandingsView(): React.JSX.Element {
-    const view = useHelmxStore()
-    return e(AgentStandingsGroup, { store: view, background: new Map() })
-  }
   function Harness(): React.JSX.Element {
-    return e(HelmxExternalStoreContext.Provider, { value: store }, e(StandingsView))
+    return e(HelmxExternalStoreContext.Provider, { value: store }, e(Sidebar))
   }
 
   const host = document.createElement('div')
@@ -1122,19 +905,19 @@ test('AgentStandingsGroup switches copy immediately on setLocale (en -> zh-CN ->
   const root: Root = createRoot(host)
   try {
     await act(async () => { root.render(e(Harness)) })
-    const groupTitle = host.querySelector('.sidebar-group-header > span')
-    assert.ok(groupTitle !== null, 'agents group header renders')
-    assert.equal(groupTitle.textContent, 'Agents', 'renders the en catalog copy by default')
+    const groupTitle = host.querySelector('.sidebar-overview-group .sidebar-group-header > span')
+    assert.ok(groupTitle !== null, 'working set group header renders')
+    assert.equal(groupTitle.textContent, 'Working set', 'renders the en catalog copy by default')
 
     await act(async () => { store.setLocale('zh-CN') })
     assert.equal(store.getPrefsSlice().locale, 'zh-CN')
-    const groupTitleZh = host.querySelector('.sidebar-group-header > span')
+    const groupTitleZh = host.querySelector('.sidebar-overview-group .sidebar-group-header > span')
     assert.ok(groupTitleZh !== null)
-    assert.equal(groupTitleZh.textContent, '智能体', 'locale switch re-renders shell chrome in place')
+    assert.equal(groupTitleZh.textContent, '工作集', 'locale switch re-renders shell chrome in place')
 
     await act(async () => { store.setLocale('en') })
     assert.equal(store.getPrefsSlice().locale, 'en')
-    assert.equal(host.querySelector('.sidebar-group-header > span')?.textContent, 'Agents', 'switching back to en restores English immediately')
+    assert.equal(host.querySelector('.sidebar-overview-group .sidebar-group-header > span')?.textContent, 'Working set', 'switching back to en restores English immediately')
   } finally {
     localStorage.removeItem('helmx:locale')
     await act(async () => { root.unmount() })

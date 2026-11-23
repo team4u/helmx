@@ -104,42 +104,8 @@ export function filterBulkSelectableConversations(
   return conversations.filter(isConversationBulkSelectable)
 }
 
-/** 归档分组条目：会话 + 归属智能体展示名（供分组内辨识）。 */
-export interface ArchivedConversationListItem {
-  conv: ConversationSummary
-  profileLabel: string
-}
-
-/**
- * 构建「已归档」分组条目：仅收人类自有根会话，沿用 Agent 站位同一暴露规则
- * （有父链 / helmx 托管 / 已停用插件托管 Profile 的会话绝不进入，即使带宿主归档 tag），
- * 按 createdAt 倒序（同刻按 id 倒序），排序键与普通列表一致。Profile 可见性与 Agent 站位保持一致。
- */
-export function buildArchivedConversationList(input: {
-  conversations: ConversationSummary[]
-  profiles: Profile[]
-  plugins?: ReadonlyArray<{ id: string } & PluginActivityLike>
-}): ArchivedConversationListItem[] {
-  const { conversations, profiles, plugins = [] } = input
-  const enabledPluginIds = collectEnabledPluginIds(plugins)
-  const visibleProfileIds = new Set(
-    profiles.filter((profile) => isProfileVisible(profile, enabledPluginIds)).map((profile) => profile.id),
-  )
-  const profileNames = new Map(profiles.map((p) => [p.id, p.name] as const))
-  return conversations
-    .filter((c) => {
-      if (!isConversationArchived(c)) return false
-      if (c.parentConversationId !== undefined) return false
-      if ((c.ownedBy ?? 'human') !== 'human') return false
-      if (profiles.some((profile) => profile.id === c.profileId) && !visibleProfileIds.has(c.profileId)) return false
-      return true
-    })
-    .sort((a, b) => b.createdAt - a.createdAt || b.id - a.id)
-    .map((conv) => ({ conv, profileLabel: profileNames.get(conv.profileId) ?? conv.profileId }))
-}
-
 // ---------------------------------------------------------------------------
-// 智能体站位（Agent Standings）
+// 智能体站位（Agent Standings，供「新话题」候选角色排序消费）
 // ---------------------------------------------------------------------------
 
 /** 左栏一级「智能体站位」：每个 Agent 一个固定站位，下挂其名下有效对话。 */
@@ -178,9 +144,6 @@ export interface AgentStandingsInput {
   /** 显示名解析 locale（sidebar.item label 属 LocalizedText 显示元数据）。 */
   locale: HelmxLocale
 }
-
-/** Agent 名下二级历史会话子列表默认显示条数（超出可展开）。 */
-export const AGENT_SUB_LIST_PREVIEW = 5
 
 /** 左栏展示名的 pin 元信息（按 profileId 归集；label 为未解析的 LocalizedText 显示元数据）。 */
 interface SidebarPinMeta {
@@ -602,45 +565,6 @@ export function filterDeletableConversations(conversations: ConversationSummary[
 }
 
 // ---------------------------------------------------------------------------
-// 智能体站位深度搜索过滤
-// ---------------------------------------------------------------------------
-
-/**
- * 深度过滤智能体站位：
- * - 搜索智能体 label / profileId 命中时保留该智能体及其完整 conversations；
- * - 仅命中名下部分会话标题 / #id 时，只保留命中的 conversations 供 UI 自动展开精确定位；
- * - 均未命中则过滤掉该智能体。
- */
-export function filterAgentStandings(
-  standings: AgentStanding[],
-  query: string,
-): AgentStanding[] {
-  const q = query.trim().toLowerCase()
-  if (!q) return standings
-  const idMatch = /^#?(\d+)$/.exec(q)
-  const numericId = idMatch ? Number(idMatch[1]) : null
-  const result: AgentStanding[] = []
-  for (const agent of standings) {
-    const agentSelfMatches =
-      agent.label.toLowerCase().includes(q) ||
-      agent.profileId.toLowerCase().includes(q)
-    if (agentSelfMatches) {
-      result.push(agent)
-      continue
-    }
-    const matchingConvs = agent.conversations.filter(
-      (c) =>
-        c.title.toLowerCase().includes(q) ||
-        (numericId !== null && c.id === numericId),
-    )
-    if (matchingConvs.length > 0) {
-      result.push({ ...agent, conversations: matchingConvs })
-    }
-  }
-  return result
-}
-
-// ---------------------------------------------------------------------------
 // 侧栏交互辅助：分屏在场/焦点推导、激活态与待命入口（无 React 依赖，Sidebar 各子组件共用）
 // ---------------------------------------------------------------------------
 
@@ -727,68 +651,6 @@ export function getConversationPresence(
   )
 }
 
-/** 推导指定 Agent 待命入口在主屏/分屏中的在场与焦点状态。 */
-export function getAgentStandbyPresence(
-  store: Pick<HelmxStoreValue, 'primaryTarget' | 'splitTarget' | 'focusedPanel'>,
-  profileId: string,
-): SidebarTargetPresence {
-  return resolveSidebarTargetPresence(
-    store,
-    (t) => t.kind === 'agent' && t.profileId === profileId,
-  )
-}
-
-/** 会话行是否属于当前激活目标（单屏为主屏，分屏为当前聚焦面板）。 */
-export function isConversationActive(
-  store: Pick<HelmxStoreValue, 'primaryTarget' | 'splitTarget' | 'focusedPanel'>,
-  convId: number,
-): boolean {
-  return getConversationPresence(store, convId).active
-}
-
-/** 该 Agent 的待命页是否正被主屏或分屏查看。 */
-export function isAgentStandbyActive(
-  store: Pick<HelmxStoreValue, 'primaryTarget' | 'splitTarget'>,
-  profileId: string,
-): boolean {
-  return (
-    (store.primaryTarget.kind === 'agent' && store.primaryTarget.profileId === profileId) ||
-    (store.splitTarget?.kind === 'agent' && store.splitTarget.profileId === profileId)
-  )
-}
-
-/** 解析单个目标对应的 profileId（待命页直接读取；会话从会话列表查找；其余返回 null）。 */
-function profileIdForTarget(
-  target: ResolvedTarget | null,
-  conversations: ReadonlyArray<Pick<ConversationSummary, 'id' | 'profileId'>>,
-): string | null {
-  if (target === null) return null
-  if (target.kind === 'agent') return target.profileId
-  if (target.kind === 'conversation') {
-    return conversations.find((c) => c.id === target.conversationId)?.profileId ?? null
-  }
-  return null
-}
-
-/** 收集主屏与分屏正在查看目标各自对应的 profileId（按主屏优先顺序插入 Set）。 */
-export function activeProfileIdsOf(
-  store: Pick<HelmxStoreValue, 'primaryTarget' | 'splitTarget' | 'conversations'>,
-): Set<string> {
-  const ids = new Set<string>()
-  const primaryPid = profileIdForTarget(store.primaryTarget, store.conversations)
-  if (primaryPid !== null) ids.add(primaryPid)
-  const splitPid = profileIdForTarget(store.splitTarget, store.conversations)
-  if (splitPid !== null) ids.add(splitPid)
-  return ids
-}
-
-/** 话题列表展开推导：当前主屏/分屏会话或待命页所属的首个 profileId（无则 null）。 */
-export function activeProfileIdOf(
-  store: Pick<HelmxStoreValue, 'primaryTarget' | 'splitTarget' | 'conversations'>,
-): string | null {
-  return activeProfileIdsOf(store).values().next().value ?? null
-}
-
 /** 收集主屏与分屏中正在查看的会话 ID 集合。 */
 export function activeConversationIdsOf(
   store: Pick<HelmxStoreValue, 'primaryTarget' | 'splitTarget'>,
@@ -808,7 +670,6 @@ export type SidebarStoreView = Pick<
   | 'profiles'
   | 'plugins'
   | 'groupedUi'
-  | 'pendingAsks'
   | 'locale'
   | 'openTarget'
   | 'pushNotice'

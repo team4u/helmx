@@ -20,7 +20,6 @@ import type {
   HelmxStoreValue,
   LocalePreference,
   ResolvedTarget,
-  SidebarConversationMode,
   ThemeMode,
   ThemePreference,
 } from '../types.js'
@@ -46,7 +45,6 @@ export interface PrefsSlice {
   locale: HelmxLocale
   localePreference: LocalePreference
   quietNotifyEnabled: boolean
-  sidebarConvMode: SidebarConversationMode
 }
 
 export interface ProfilesSlice {
@@ -128,7 +126,6 @@ export type HelmxStoreActions = Pick<
   | 'setLocale'
   | 'setLocalePreference'
   | 'setQuietNotify'
-  | 'setSidebarConvMode'
   | 'checkAuth'
   | 'onAuthenticated'
   | 'logout'
@@ -176,7 +173,6 @@ export type StoreDomainKey =
   | 'locale'
   | 'theme'
   | 'quietNotify'
-  | 'sidebarConvMode'
   | 'catalog'
   | 'profiles'
   | 'hostProfiles'

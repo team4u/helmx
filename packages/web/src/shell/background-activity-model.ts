@@ -37,7 +37,7 @@ import type { QualifiedUiSpec } from '../lib/types.js'
 import { matchesUiScope } from '../lib/types.js'
 import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 import { resolveWorkbenchPanelBadge } from '../conversation/workbench-model.js'
-import { AGENT_SUB_LIST_PREVIEW, conversationStatusDotClass, conversationStatusTooltip } from './sidebar-model.js'
+import { conversationStatusDotClass, conversationStatusTooltip } from './sidebar-model.js'
 
 /** Separator for summary fragments (matching the workbench footer join style). */
 const SUMMARY_SEPARATOR = ' · '
@@ -197,69 +197,6 @@ export function resolveStandingStatusIndicator(
     if (activity.summary !== '' && !parts.includes(activity.summary)) parts.push(activity.summary)
   }
   return { representative, backgroundActive, backgroundSummary: parts.join(SUMMARY_SEPARATOR) }
-}
-
-/**
- * Conversation in-flight verdict (for collapsed-preview retention): the main
- * turn is working/blocked, or background work is in flight (badge tone =
- * accent or contextUsage.compacting = true). Reuses this model's background
- * index instead of re-implementing the background-activity verdict.
- */
-export function isConversationInFlight(
-  conv: Pick<ConversationSummary, 'id' | 'status'>,
-  background: ConversationBackgroundIndex,
-): boolean {
-  return (
-    conv.status === 'working' ||
-    conv.status === 'blocked' ||
-    background.get(conv.id)?.active === true
-  )
-}
-
-/** Collapsed-preview slice result for an agent sub-list. */
-export interface AgentSubListPreview {
-  /** Conversations to render in the collapsed state (original order kept, no re-sorting). */
-  visible: ConversationSummary[]
-  /** Number of conversations hidden by collapsing (drives the "show more" button). */
-  hiddenCount: number
-}
-
-/**
- * Collapsed-preview slice for an agent sub-list: by default only the first
- * AGENT_SUB_LIST_PREVIEW rows render, but three row classes never disappear
- * behind the fold — currently active conversations (the union of activeId and
- * activeIds, including split-view doubles), working/blocked conversations, and
- * background in-flight conversations (in-flight work must be visible; burying
- * it behind "show more" would mislead users into thinking things are idle).
- * showAll renders everything. Pure function, shared by components and tests.
- */
-export function resolveAgentSubListPreview(input: {
-  conversations: ReadonlyArray<ConversationSummary>
-  showAll: boolean
-  /** Currently active conversation id (single-screen or focused-panel target; null when none). */
-  activeId: number | null
-  /** Set of multi-active conversation ids in split view (all main+split conversations are protected from fold-hiding). */
-  activeIds?: ReadonlySet<number>
-  background: ConversationBackgroundIndex
-}): AgentSubListPreview {
-  const { conversations, showAll, activeId, activeIds, background } = input
-  const activeSet = new Set<number>(activeIds)
-  if (activeId !== null) activeSet.add(activeId)
-  const list = [...conversations]
-  if (
-    showAll ||
-    list.length <= AGENT_SUB_LIST_PREVIEW ||
-    list.some((conv, index) => index >= AGENT_SUB_LIST_PREVIEW && activeSet.has(conv.id))
-  ) {
-    return { visible: list, hiddenCount: 0 }
-  }
-  const visible = list.filter(
-    (conv, index) =>
-      index < AGENT_SUB_LIST_PREVIEW ||
-      activeSet.has(conv.id) ||
-      isConversationInFlight(conv, background),
-  )
-  return { visible, hiddenCount: list.length - visible.length }
 }
 
 /** Full class name of the background in-flight hollow ring (shares the status-dot base class). */

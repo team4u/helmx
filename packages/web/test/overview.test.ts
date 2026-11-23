@@ -21,8 +21,10 @@ import { ARCHIVED_TAG } from '../src/conversation/archive-model.js'
 import type { ResolvedSidebarBadge, SidebarViewItem } from '../src/shell/sidebar-model.js'
 import type { ConversationBackgroundIndex } from '../src/shell/background-activity-model.js'
 import {
+  buildArchivedOverviewCards,
   buildNewTopicCandidates,
   buildOverviewCards,
+  buildSidebarWorkingSet,
   filterOverviewCards,
   groupOverviewCards,
   isOverviewDescendantActive,
@@ -41,6 +43,7 @@ import {
   resolveSidebarOverviewPrimaryTarget,
   sidebarOverviewCardsNeedLiveClock,
   OVERVIEW_DESCENDANT_LIMIT,
+  SIDEBAR_RECENT_QUIET_LIMIT,
 } from '../src/overview/overview-model.js'
 import { formatLocationHash, hashHasPrimaryTarget, parseLocationHash, shouldPushLocationHistory } from '../src/lib/url-hash-model.js'
 import { spaceForTarget } from '../src/lib/types.js'
@@ -246,18 +249,35 @@ test('overviewBucketCounts: bucket badges count inside the profile/node/source/q
   ])
   assert.deepEqual(
     overviewBucketCounts(cards),
-    { all: 3, needs_attention: 1, running: 1, unread_done: 0 },
+    { all: 3, needs_attention: 1, running: 1, unread_done: 0, archived: 0 },
     'no context: every bucket badge reflects the full card set',
   )
   assert.deepEqual(
     overviewBucketCounts(cards, { profileId: 'coder' }),
-    { all: 2, needs_attention: 0, running: 1, unread_done: 0 },
+    { all: 2, needs_attention: 0, running: 1, unread_done: 0, archived: 0 },
     'inside the coder context the needs-attention badge honestly reads zero (the assistant tree is out of context)',
   )
   assert.deepEqual(
     overviewBucketCounts(cards, { query: '安静' }),
-    { all: 1, needs_attention: 0, running: 0, unread_done: 0 },
+    { all: 1, needs_attention: 0, running: 0, unread_done: 0, archived: 0 },
     'query context scopes the badges as well',
+  )
+  const archivedCards = buildArchivedOverviewCards({
+    conversations: [
+      conv({ id: 9, title: '已归档调研', profileId: 'coder', tags: [ARCHIVED_TAG], createdAt: 5000 }),
+      conv({ id: 10, title: '已归档助理', profileId: 'assistant', tags: [ARCHIVED_TAG], createdAt: 4000 }),
+    ],
+    background: new Map(),
+    profiles: [
+      { id: 'assistant', name: '个人助理' },
+      { id: 'coder', name: '编码专员' },
+    ],
+    plugins: [],
+  })
+  assert.deepEqual(
+    overviewBucketCounts(cards, { profileId: 'coder' }, archivedCards),
+    { all: 2, needs_attention: 0, running: 1, unread_done: 0, archived: 1 },
+    'archived count respects the active profile/node/query context without inflating all',
   )
 })
 
@@ -278,6 +298,8 @@ test('parseOverviewFilterParams / overviewFilterParamsRepair: deep-link params p
     query: '调研',
     groupBy: 'profile',
   }, 'every known key parses verbatim')
+  assert.equal(parseOverviewFilterParams({ bucket: 'archived' }).bucket, 'archived', 'archived is a canonical bucket filter')
+  assert.equal(overviewFilterParamsRepair({ bucket: 'archived' }), null, 'archived bucket requires no repair')
   assert.equal(parseOverviewFilterParams({ bucket: 'bogus' }).bucket, 'all', 'an invalid bucket value falls back to all (hash-model invalid-segment philosophy)')
   assert.equal(parseOverviewFilterParams({ bucket: 'all' }).bucket, 'all', 'the redundant all value parses as the default')
   assert.equal(parseOverviewFilterParams({ source: 'weird' }).source, 'all', 'an invalid source value falls back to all')
@@ -553,7 +575,7 @@ test('ConversationOverview renders the card grid with honest facts and directly 
     assert.ok(store.getNavSlice().activeModal === null, 'chip clicks never open the conversation drawer')
 
     // 卡片 `...` 菜单收进速览/分屏：抽屉速览打开 conversation-drawer 模态。
-    const menuTrigger = cards[0]!.querySelector<HTMLButtonElement>('.overview-card-actions button')
+    const menuTrigger = cards[0]!.querySelector<HTMLButtonElement>('.overview-card-actions button[aria-haspopup="menu"]')
     assert.ok(menuTrigger !== null, 'the card actions menu renders')
     await act(async () => {
       menuTrigger.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, cancelable: true }))
@@ -838,7 +860,7 @@ test('ConversationOverview card meta slot: contributions render with tree props;
   }
 })
 
-test('Sidebar overview entry: the rail button is gone; the header button opens #/overview with the same-source count badge', { timeout: 60_000 }, async () => {
+test('Sidebar overview entry: top primary nav row opens #/overview with the same-source count badge and belongs to conversations space', { timeout: 60_000 }, async () => {
   const store = overviewStore({
     conversations: [
       conv({ id: 2, title: '在跑的调研', profileId: 'coder', status: 'working', createdAt: 8000, updatedAt: 8000 }),
@@ -854,16 +876,18 @@ test('Sidebar overview entry: the rail button is gone; the header button opens #
       root = createRoot(container)
       root.render(e(HelmxExternalStoreContext.Provider, { value: store }, e(Sidebar)))
     })
-    // Rail 总览按钮整特性删除：入口唯一收敛到侧栏头部（对话空间）。
+    // Rail 总览按钮与侧栏头部重复小图标均已移除，唯一收敛到对话空间顶置导航行
     assert.ok(container.querySelector('.rail-overview-btn') === null, 'the rail overview button is gone for good')
-    const overviewBtn = container.querySelector<HTMLButtonElement>('.sidebar-overview-open-btn')
-    assert.ok(overviewBtn !== null, 'the host overview entry renders in the sidebar header')
+    assert.ok(container.querySelector('.sidebar-overview-open-btn') === null, 'the duplicate header icon button is gone')
+    const overviewRow = container.querySelector<HTMLElement>('.sidebar-overview-entry')
+    const overviewBtn = overviewRow?.querySelector<HTMLButtonElement>('.nav-item-main') ?? null
+    assert.ok(overviewRow !== null && overviewBtn !== null, 'the top overview nav row renders in conversations space')
     assert.ok(
       overviewBtn.getAttribute('aria-label')?.includes('Conversation overview'),
-      'the tooltip label states the overview',
+      'the nav row label states the overview',
     )
-    const badge = overviewBtn.querySelector<HTMLElement>('.overview-count-badge[data-tone="running"]')
-    assert.ok(badge !== null, 'the same-source attention count badge rides the button')
+    const badge = overviewRow.querySelector<HTMLElement>('.sidebar-overview-entry-badge[data-tone="running"]')
+    assert.ok(badge !== null, 'the same-source attention count badge rides the overview row')
     assert.ok(badge.textContent === '1', 'the badge states the honest signal-tree count (1 working tree)')
     await act(async () => {
       overviewBtn.click()
@@ -871,32 +895,19 @@ test('Sidebar overview entry: the rail button is gone; the header button opens #
     const primary = store.getPrimaryTarget()
     assert.ok(primary.kind === 'overview', 'clicking navigates to the overview stage')
 
-    // 主屏停总览时空间按钮一律不亮（Rail 已无总览按钮，双高亮无从谈起）。
-    const spaceBtns = [...container.querySelectorAll<HTMLButtonElement>('.rail-space-btn')]
-    assert.ok(spaceBtns.length === 3, 'three space buttons render')
-    for (const btn of spaceBtns) {
-      assert.ok(
-        !btn.classList.contains('rail-btn-active'),
-        `space button stays unlit on the overview stage (got: ${btn.getAttribute('aria-label')})`,
-      )
-    }
+    // 主屏停总览时，对话空间 Rail 图标保持激活高亮（与 views / settings 同构）
+    const convSpaceBtn = container.querySelector<HTMLButtonElement>('button[aria-label="Conversations space"]')
+    assert.ok(convSpaceBtn?.classList.contains('rail-btn-active'), 'conversations rail button stays active on #/overview')
 
-    // 总览不占对话空间记忆位：从总览点「对话」空间按钮跳回记忆的会话目标，
-    // 绝不 no-op、绝不被总览劫持。
+    // 切去设置再点回对话空间：从空间记忆原样恢复 #/overview
     await act(async () => {
-      store.openTarget({ kind: 'conversation', conversationId: 50 })
+      store.openSpace('settings')
     })
-    await act(async () => {
-      store.openTarget({ kind: 'overview' })
-    })
+    assert.equal(store.getPrimaryTarget().kind, 'profiles')
     await act(async () => {
       store.openSpace('conversations')
     })
-    const jumped = store.getPrimaryTarget()
-    assert.ok(
-      jumped.kind === 'conversation' && jumped.conversationId === 50,
-      'the conversations space button jumps back to the remembered conversation target',
-    )
+    assert.equal(store.getPrimaryTarget().kind, 'overview', 'returning to conversations restores remembered #/overview')
   } finally {
     await act(async () => {
       root?.unmount()
@@ -911,8 +922,8 @@ test('Sidebar overview entry: the rail button is gone; the header button opens #
   })
   const html = renderToString(e(HelmxExternalStoreContext.Provider, { value: quiet }, e(Sidebar)))
   assert.ok(!html.includes('rail-overview-btn'), 'the rail overview button never renders')
-  assert.ok(html.includes('sidebar-overview-open-btn'), 'the header entry always renders in the conversations space')
-  assert.ok(!html.includes('overview-count-badge'), 'no count badge without any signal')
+  assert.ok(html.includes('sidebar-overview-entry'), 'the top overview nav row always renders in conversations space')
+  assert.ok(!html.includes('sidebar-overview-entry-badge'), 'no count badge without any signal')
 })
 
 // ---------------------------------------------------------------------------
@@ -1499,11 +1510,11 @@ test('ConversationOverview card actions menu: archive and delete for human roots
   try {
     const humanCard = cardById(mount.container, 1)
     const helmxCard = cardById(mount.container, 4)
-    assert.ok(humanCard?.querySelector('.overview-card-actions button') !== null, 'the human root card renders the "..." menu trigger')
+    assert.ok(humanCard?.querySelector('.overview-card-actions button[aria-haspopup="menu"]') !== null, 'the human root card renders the "..." menu trigger')
     // helmx 根：宿主归档/删除不参与，但只读视图动作（抽屉速览/右分屏）照常提供。
-    assert.ok(helmxCard?.querySelector('.overview-card-actions button') !== null, 'the helmx root card still renders the "..." menu (view-only actions)')
+    assert.ok(helmxCard?.querySelector('.overview-card-actions button[aria-haspopup="menu"]') !== null, 'the helmx root card still renders the "..." menu (view-only actions)')
 
-    const trigger = humanCard?.querySelector<HTMLButtonElement>('.overview-card-actions button')
+    const trigger = humanCard?.querySelector<HTMLButtonElement>('.overview-card-actions button[aria-haspopup="menu"]')
     assert.ok(trigger !== null)
     await act(async () => {
       trigger!.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, cancelable: true }))
@@ -1860,7 +1871,7 @@ test('ConversationOverview protected card keeps the view-only menu actions (peek
       root = createRoot(container)
       root.render(e(HostStoreProviders, { value: store }, e(ConversationOverview)))
     })
-    const menuTrigger = container.querySelector<HTMLButtonElement>('.overview-card-actions button')
+    const menuTrigger = container.querySelector<HTMLButtonElement>('.overview-card-actions button[aria-haspopup="menu"]')
     assert.ok(menuTrigger !== null, 'the managed card still renders its actions menu (prepend view actions)')
     await act(async () => {
       menuTrigger.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, cancelable: true }))
@@ -2400,4 +2411,95 @@ test('sidebarOverviewCardsNeedLiveClock: returns false for quiet trees and true 
     sidebarOverviewCardsNeedLiveClock(childOnlyCards, new Map([[4, childOnlyCards[0]!.descendants]])),
     true,
   )
+})
+
+test('buildSidebarWorkingSet: keeps all active trees, caps quiet by updatedAt desc, preserves viewed quiet root/descendant, and bypasses cap when searching', { timeout: 60_000 }, () => {
+  const quietList = Array.from({ length: SIDEBAR_RECENT_QUIET_LIMIT + 4 }, (_, index) => {
+    const id = 100 + index
+    // Make id=100 have the oldest createdAt but newest updatedAt (should lead Recent)
+    const updatedAt = id === 100 ? 999_999 : id * 1000
+    return conv({ id, title: `安静对话 ${id}`, status: 'idle', createdAt: id * 1000, updatedAt })
+  })
+  const cards = buildCards([
+    conv({ id: 1, title: '审批中', status: 'blocked', pendingAskCount: 1, createdAt: 100, updatedAt: 100 }),
+    conv({ id: 2, title: '运行中', status: 'working', createdAt: 200, updatedAt: 200 }),
+    ...quietList,
+    // Child under oldest quiet #101 (outside top 8 by updatedAt)
+    conv({ id: 901, parentConversationId: 101, title: '深层安静子会话', status: 'idle', createdAt: 101_100, updatedAt: 101_100 }),
+  ])
+
+  const defaultWs = buildSidebarWorkingSet({ cards, activeConversationIds: new Set() })
+  assert.equal(defaultWs.searchActive, false)
+  assert.equal(defaultWs.totalRootCount, SIDEBAR_RECENT_QUIET_LIMIT + 6)
+  assert.equal(defaultWs.omittedQuietCount, 4)
+  assert.deepEqual(defaultWs.cards.slice(0, 2).map((c) => c.root.id), [1, 2], 'active trees stay first in canonical order')
+  assert.equal(defaultWs.cards[2]?.root.id, 100, 'quiet trees sort by updatedAt desc so recently finished chats lead')
+  assert.equal(defaultWs.cards.length, 2 + SIDEBAR_RECENT_QUIET_LIMIT)
+
+  // Active descendant #901 preserves its quiet root #101 beyond the cap
+  const withViewedChild = buildSidebarWorkingSet({ cards, activeConversationIds: new Set([901]) })
+  assert.equal(withViewedChild.cards.some((c) => c.root.id === 101), true, 'quiet root with viewed descendant is preserved')
+  assert.equal(withViewedChild.omittedQuietCount, 3)
+
+  // Search bypasses cap and finds omitted quiet tree #102
+  const searchWs = buildSidebarWorkingSet({ cards, activeConversationIds: new Set(), query: '安静对话 102' })
+  assert.equal(searchWs.searchActive, true)
+  assert.equal(searchWs.omittedQuietCount, 0)
+  assert.deepEqual(searchWs.cards.map((c) => c.root.id), [102])
+})
+
+test('ConversationOverview archived tab & quick drawer-peek button: archived tab appears conditionally and direct peek opens drawer', { timeout: 60_000 }, async () => {
+  // 1) No archived conversations: Archived segment does not render
+  const noArchivedStore = overviewStore({
+    conversations: [
+      conv({ id: 1, title: '进行中任务', profileId: 'coder', status: 'working', createdAt: 9000, updatedAt: 9000 }),
+    ],
+    primaryTarget: { kind: 'overview' },
+  })
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  let root: Root | undefined
+  try {
+    await act(async () => {
+      root = createRoot(container)
+      root.render(e(HostStoreProviders, { value: noArchivedStore }, e(ConversationOverview)))
+    })
+    assert.ok(!container.textContent?.includes('Archived'), 'Archived segment stays absent when zero archived conversations exist')
+
+    // Quick drawer peek icon button on card directly pushes conversation drawer without navigating primaryTarget
+    const peekBtn = container.querySelector<HTMLButtonElement>('.overview-card-peek-btn')
+    assert.ok(peekBtn !== null, 'card renders direct drawer-peek icon button')
+    await act(async () => {
+      peekBtn.click()
+    })
+    assert.equal(noArchivedStore.getPrimaryTarget().kind, 'overview', 'drawer peek keeps user on overview')
+    assert.deepEqual(noArchivedStore.getDrawerStack(), [{ kind: 'conversation', conversationId: 1 }])
+
+    // 2) Add archived conversation via live update -> Archived tab appears and switches cleanly
+    await act(async () => {
+      noArchivedStore.updateLive((prev) => ({
+        ...prev,
+        conversations: [
+          ...prev.conversations,
+          conv({ id: 77, title: '已归档历史项目', profileId: 'assistant', tags: [ARCHIVED_TAG], createdAt: 5000, updatedAt: 5000 }),
+        ],
+      }))
+    })
+    assert.equal(container.querySelectorAll('.overview-card').length, 1, 'All tab excludes archived conversations')
+    const archivedTabBtn = [...container.querySelectorAll<HTMLButtonElement>('.segmented-control-btn')].find((b) =>
+      b.textContent?.includes('Archived'),
+    )
+    assert.ok(archivedTabBtn !== undefined, 'Archived tab surfaces when archived conversations exist')
+    await act(async () => {
+      archivedTabBtn.click()
+    })
+    assert.deepEqual(noArchivedStore.getPrimaryTarget(), { kind: 'overview', params: { bucket: 'archived' } })
+    assert.equal(container.querySelectorAll('.overview-card').length, 1)
+    assert.ok(container.querySelector('.overview-card')?.textContent?.includes('已归档历史项目'))
+  } finally {
+    await act(async () => {
+      root?.unmount()
+    })
+    container.remove()
+  }
 })

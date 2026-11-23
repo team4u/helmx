@@ -119,11 +119,10 @@ export function createStoreNavActions(
   }
 
   /**
-   * 空间记忆写入的唯一入口：总览是有专属入口的顶层目的地，不占对话空间记忆位——
-   * boot 初始化、程序导航与 hashchange 同步全部经此收敛。
+   * 空间记忆写入的唯一入口：boot 初始化、程序导航与 hashchange 同步全部经此收敛；
+   * `#/overview` 归属 conversations 空间，切去设置/视图再点回对话可原地恢复总览。
    */
   const rememberSpaceTarget = (target: ResolvedTarget): void => {
-    if (target.kind === 'overview') return
     spaceMemory[spaceForTarget(target)] = target
   }
 

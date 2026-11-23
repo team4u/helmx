@@ -2,24 +2,29 @@
  * 会话总览纯函数层（零 React / DOM 依赖，可直接单测）。
  *
  * 复用态势模型的唯一树聚合口径（aggregateAttentionTrees：根树聚合、暴露
- * 边界、代表位、直达目标、后台聚合），在其上扩展「全部」视图需要的安静树，
- * 并提供 全部/需处理/进行中/未读 与 角色/节点 筛选。排序纪律与态势一致：
- * 桶序（需关注 > 运行中 > 未读完成 > 安静）内按 root.createdAt 倒序
- * （同刻 id 倒序），绝不用 updatedAt 防流式跳卡。只读视图：本层不产生任何
- * 副作用与编造事实，摘要复用 composeHonestTreeSummary。
+ * 边界、代表位、直达目标、后台聚合），在其上扩展「全部」视图需要的安静树、
+ * 「已归档」治理卡片与侧栏工作集切片，并提供 全部/需处理/进行中/未读/已归档
+ * 与角色/节点/来源/搜索筛选。排序纪律：
+ * - 总览大盘：桶序（需关注 > 运行中 > 未读完成 > 安静）内按 root.createdAt 倒序
+ *   （同刻 id 倒序），绝不用 updatedAt 防流式跳卡；已归档同样按 createdAt 倒序；
+ * - 侧栏工作集：活跃三桶全量展示（不截断、createdAt 倒序不跳行），安静近期区按
+ *   updatedAt 倒序取前 SIDEBAR_RECENT_QUIET_LIMIT 条并对当前主/分屏在场会话保底。
  *
  * 灯位口径（与侧栏会话行通用统一）：卡面灯 = 根会话自身状态 + 树级后台
  * 在途聚合，经同一 resolveStatusLight 单灯裁决——representative 仅用于
- * 诚实摘要与桶位推导，绝不充当卡面灯位（防「侧栏空心蓝、总览无灯」的
- * 代表位/行语义分叉）。
+ * 诚实摘要与桶位推导，绝不充当卡面灯位。
  */
 
 import type { ConversationSummary, Profile } from '@helmx/protocol/browser'
 import { isConversationArchived } from '../conversation/archive-model.js'
 import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
+import type { PluginActivityLike } from '../lib/live-state.js'
 import type { ConversationBackgroundIndex } from '../shell/background-activity-model.js'
+import { resolveNotificationRootId } from '../shell/quiet-notify-model.js'
 import {
   buildAgentStandings,
+  collectEnabledPluginIds,
+  isProfileVisible,
   type AgentStanding,
   type AgentStandingsInput,
 } from '../shell/sidebar-model.js'
@@ -29,11 +34,11 @@ import {
   type AttentionBucket,
 } from '../shell/attention-model.js'
 
-/** 总览卡片桶：态势三桶 + 安静（无任何信号的树，仅出现在「全部」筛选）。 */
-export type OverviewCardBucket = AttentionBucket | 'quiet'
+/** 总览卡片桶：态势三桶 + 安静 + 已归档（已归档独立在 archived 筛选页，不混入「全部」）。 */
+export type OverviewCardBucket = AttentionBucket | 'quiet' | 'archived'
 
 /** 总览桶筛选值。 */
-export type OverviewBucketFilter = 'all' | AttentionBucket
+export type OverviewBucketFilter = 'all' | AttentionBucket | 'archived'
 
 /** 总览来源筛选值：全部 / 常规对话 / 托管会话（托管 = 插件 sidebarSection 接管）。 */
 export type OverviewSourceFilter = 'all' | 'regular' | 'managed'
@@ -46,6 +51,7 @@ const CARD_BUCKET_ORDER: Record<OverviewCardBucket, number> = {
   running: 1,
   unread_done: 2,
   quiet: 3,
+  archived: 4,
 }
 
 const ORDERED_BUCKETS: readonly OverviewCardBucket[] = [
@@ -53,6 +59,7 @@ const ORDERED_BUCKETS: readonly OverviewCardBucket[] = [
   'running',
   'unread_done',
   'quiet',
+  'archived',
 ]
 
 const BUCKET_SECTION_LABEL_KEYS: Record<
@@ -61,11 +68,13 @@ const BUCKET_SECTION_LABEL_KEYS: Record<
   | 'shell.overview.sectionRunning'
   | 'shell.overview.sectionUnread'
   | 'shell.overview.sectionQuiet'
+  | 'shell.archived.groupTitle'
 > = {
   needs_attention: 'shell.overview.sectionNeeds',
   running: 'shell.overview.sectionRunning',
   unread_done: 'shell.overview.sectionUnread',
   quiet: 'shell.overview.sectionQuiet',
+  archived: 'shell.archived.groupTitle',
 }
 
 /** 分组后的总览分节：携带稳定 key（用于折叠态与 React key）、语义标签与同序卡片集。 */
@@ -114,6 +123,9 @@ export interface OverviewDescendant {
 /** 卡内后代芯片默认上限（超出折叠为「还有 N 个」）。 */
 export const OVERVIEW_DESCENDANT_LIMIT = 5
 
+/** 侧栏工作集「近期」安静根会话默认上限（活跃三桶永不截断，当前在场安静树保底显示）。 */
+export const SIDEBAR_RECENT_QUIET_LIMIT = 8
+
 /** 判断单条后代会话是否带有活跃或需关注信号（working / blocked / error / 待答 Ask / 后台在途）。 */
 export function isOverviewDescendantActive(descendant: OverviewDescendant): boolean {
   const { conv, backgroundActive } = descendant
@@ -126,20 +138,39 @@ export function isOverviewDescendantActive(descendant: OverviewDescendant): bool
   )
 }
 
+function sortOverviewDescendants(
+  members: ReadonlyArray<ConversationSummary>,
+  rootId: number,
+  background: ConversationBackgroundIndex,
+): OverviewDescendant[] {
+  return members
+    .filter((member) => member.id !== rootId)
+    .map((member) => {
+      const entry: OverviewDescendant = {
+        conv: member,
+        backgroundActive: background.get(member.id)?.active === true,
+      }
+      return { entry, signal: isOverviewDescendantActive(entry) }
+    })
+    .sort((a, b) => {
+      if (a.signal !== b.signal) return a.signal ? -1 : 1
+      return b.entry.conv.createdAt - a.entry.conv.createdAt || b.entry.conv.id - a.entry.conv.id
+    })
+    .map((item) => item.entry)
+}
+
 /**
- * 构建总览卡片（全部根树，含安静树）：排序为桶序 + root.createdAt 倒序。
+ * 构建总览卡片（全部未归档根树，含安静树）：排序为桶序 + root.createdAt 倒序。
  * 后代芯片排序：有信号的（working/blocked/error/后台在途）优先，其后按
  * createdAt 倒序；`descendants` 携带全量确定性排序结果，卡内展示截断由
  * 视图层按 OVERVIEW_DESCENDANT_LIMIT 切片（展开后同序展示剩余后代，
  * 绝不重排），hiddenDescendantCount 如实给出被截断数量。
- * sectionTags（插件 sidebarSection filterTag 集合，与侧栏同源）存在时，
- * 根会话带任一非归档命中标签的树归为 managed（托管会话）。
  */
 export function buildOverviewCards(input: {
   conversations: ReadonlyArray<ConversationSummary>
   background: ConversationBackgroundIndex
   profiles: ReadonlyArray<Profile>
-  plugins: ReadonlyArray<{ id: string; enabled: boolean }>
+  plugins: ReadonlyArray<{ id: string } & PluginActivityLike>
   /** Locale translator（摘要与后代计数文案）；缺省英文桥接。 */
   t?: WebMessageTranslator
 }): OverviewCard[] {
@@ -147,19 +178,7 @@ export function buildOverviewCards(input: {
   const profileNames = new Map(input.profiles.map((profile) => [profile.id, profile.name] as const))
   const cards: OverviewCard[] = []
   for (const aggregate of aggregateAttentionTrees(input)) {
-    const descendantsAll = aggregate.members
-      .filter((member) => member.id !== aggregate.root.id)
-      .map((member) => {
-        const entry: OverviewDescendant = {
-          conv: member,
-          backgroundActive: input.background.get(member.id)?.active === true,
-        }
-        return { entry, signal: isOverviewDescendantActive(entry) }
-      })
-      .sort((a, b) => {
-        if (a.signal !== b.signal) return a.signal ? -1 : 1
-        return b.entry.conv.createdAt - a.entry.conv.createdAt || b.entry.conv.id - a.entry.conv.id
-      })
+    const descendants = sortOverviewDescendants(aggregate.members, aggregate.root.id, input.background)
     cards.push({
       root: aggregate.root,
       bucket: aggregate.bucket ?? 'quiet',
@@ -180,8 +199,8 @@ export function buildOverviewCards(input: {
       }),
       managed: false,
       memberIds: aggregate.members.map((member) => member.id),
-      descendants: descendantsAll.map((item) => item.entry),
-      hiddenDescendantCount: Math.max(0, descendantsAll.length - OVERVIEW_DESCENDANT_LIMIT),
+      descendants,
+      hiddenDescendantCount: Math.max(0, descendants.length - OVERVIEW_DESCENDANT_LIMIT),
     })
   }
   return cards.sort(
@@ -193,7 +212,65 @@ export function buildOverviewCards(input: {
 }
 
 /**
- * 推导「新话题」候选角色列表（全屏总览与侧栏总览模式共用）：
+ * 构建「已归档」总览卡片（仅收人类自有已归档根会话树，沿用同源 Profile 可见性边界）：
+ * - 有父链 / 非 human 归属 / 所属 Profile 被已停用或失败插件托管的会话绝不进入；
+ * - 保留子树成员与后代芯片（默认折叠为「N 个子会话」）；
+ * - 按 root.createdAt 倒序（同刻 id 倒序），供 `#/overview?sp.bucket=archived` 治理与批量恢复/删除。
+ */
+export function buildArchivedOverviewCards(input: {
+  conversations: ReadonlyArray<ConversationSummary>
+  background: ConversationBackgroundIndex
+  profiles: ReadonlyArray<Profile>
+  plugins: ReadonlyArray<{ id: string } & PluginActivityLike>
+}): OverviewCard[] {
+  const byId = new Map<number, ConversationSummary>(
+    input.conversations.map((conversation) => [conversation.id, conversation] as const),
+  )
+  const enabledPluginIds = collectEnabledPluginIds(input.plugins)
+  const profileNames = new Map(input.profiles.map((profile) => [profile.id, profile.name] as const))
+
+  const trees = new Map<number, ConversationSummary[]>()
+  for (const conversation of input.conversations) {
+    const rootId = resolveNotificationRootId(byId, conversation.id)
+    const members = trees.get(rootId)
+    if (members) members.push(conversation)
+    else trees.set(rootId, [conversation])
+  }
+
+  const cards: OverviewCard[] = []
+  for (const [rootId, members] of trees) {
+    const root = byId.get(rootId)
+    if (root === undefined) continue
+    if (!isConversationArchived(root)) continue
+    if (root.parentConversationId !== undefined) continue
+    if ((root.ownedBy ?? 'human') !== 'human') continue
+    const rootProfile = input.profiles.find((profile) => profile.id === root.profileId)
+    if (rootProfile !== undefined && !isProfileVisible(rootProfile, enabledPluginIds)) continue
+
+    const descendants = sortOverviewDescendants(members, root.id, input.background)
+    cards.push({
+      root,
+      bucket: 'archived',
+      hasWaiting: false,
+      hasError: false,
+      representative: root,
+      backgroundActive: false,
+      backgroundSummary: '',
+      activeDescendantCount: 0,
+      targetConversationId: root.id,
+      profileLabel: profileNames.get(root.profileId) ?? root.profileId,
+      summaryText: '',
+      managed: false,
+      memberIds: members.map((member) => member.id),
+      descendants,
+      hiddenDescendantCount: Math.max(0, descendants.length - OVERVIEW_DESCENDANT_LIMIT),
+    })
+  }
+  return cards.sort((a, b) => b.root.createdAt - a.root.createdAt || b.root.id - a.root.id)
+}
+
+/**
+ * 推导「新话题」候选角色列表（全屏总览与侧栏工作集共用）：
  * 仅保留人类可新建对话的可见角色，最近活跃的未归档根会话所属角色置顶，
  * 其余按站位 order 与 profileId 字典序稳定排列。
  */
@@ -286,12 +363,13 @@ export function filterOverviewCards(
 /**
  * 桶筛选计数（在角色/节点/来源/搜索上下文内统计）：分段器徽标展示
  * 「切到该桶后还剩几张卡」，避免全量计数与当前上下文错位造成误解；
- * all = 上下文过滤后的卡总数。
+ * all = 未归档上下文过滤后的卡总数；archived = 已归档在同角色/节点/搜索上下文内的卡数。
  */
 export function overviewBucketCounts(
   cards: ReadonlyArray<OverviewCard>,
   context: { profileId?: string; nodeId?: string; source?: OverviewSourceFilter; query?: string } = {},
-): { all: number; needs_attention: number; running: number; unread_done: number } {
+  archivedCards: ReadonlyArray<OverviewCard> = [],
+): { all: number; needs_attention: number; running: number; unread_done: number; archived: number } {
   const scoped = filterOverviewCards(cards, {
     bucket: 'all',
     profileId: context.profileId ?? '',
@@ -299,9 +377,26 @@ export function overviewBucketCounts(
     ...(context.source !== undefined ? { source: context.source } : {}),
     ...(context.query !== undefined ? { query: context.query } : {}),
   })
-  const counts = { all: scoped.length, needs_attention: 0, running: 0, unread_done: 0 }
+  const scopedArchived =
+    archivedCards.length === 0
+      ? []
+      : filterOverviewCards(archivedCards, {
+          bucket: 'all',
+          profileId: context.profileId ?? '',
+          nodeId: context.nodeId ?? '',
+          ...(context.query !== undefined ? { query: context.query } : {}),
+        })
+  const counts = {
+    all: scoped.length,
+    needs_attention: 0,
+    running: 0,
+    unread_done: 0,
+    archived: scopedArchived.length,
+  }
   for (const card of scoped) {
-    if (card.bucket !== 'quiet') counts[card.bucket] += 1
+    if (card.bucket === 'needs_attention' || card.bucket === 'running' || card.bucket === 'unread_done') {
+      counts[card.bucket] += 1
+    }
   }
   return counts
 }
@@ -329,7 +424,7 @@ export function overviewNodeOptions(cards: ReadonlyArray<OverviewCard>): string[
 
 /**
  * 将已筛选的总览卡片按指定维度分组为纵向分节：
- * - status：按 canonical 桶序（needs_attention > running > unread_done > quiet），空桶直接省略；
+ * - status：按 canonical 桶序（needs_attention > running > unread_done > quiet > archived），空桶直接省略；
  * - profile：按卡片首次出现顺序建组（因卡片已按桶序 + createdAt 倒序排列，含活跃态势的
  *   角色自然置顶，且流式期间不跳组），组内保持原序；
  * - node：同上，按节点（'local' 归一本机）建组并保持组内原序。
@@ -405,7 +500,7 @@ export function groupOverviewCards(
 
 /**
  * 是否展示分组节头：当筛选器已经把当前分组维度收敛为单一值（如按状态分组且
- * 已选中具体单桶，或按角色/节点分组且已选中对应单值）时直接平铺卡片，避免
+ * 已选中具体单桶含 archived，或按角色/节点分组且已选中对应单值）时直接平铺卡片，避免
  * 重复包一层同义单节头。
  */
 export function overviewShouldShowSectionHeaders(
@@ -444,7 +539,7 @@ const OVERVIEW_DEFAULT_FILTER: OverviewFilterState = {
   groupBy: 'status',
 }
 
-const VALID_BUCKET_FILTERS = new Set<string>(['needs_attention', 'running', 'unread_done'])
+const VALID_BUCKET_FILTERS = new Set<string>(['needs_attention', 'running', 'unread_done', 'archived'])
 const VALID_SOURCE_FILTERS = new Set<string>(['regular', 'managed'])
 const VALID_GROUP_BY = new Set<string>(['profile', 'node'])
 
@@ -508,7 +603,7 @@ export interface OverviewCardTiming {
   waitingMs?: number
   /** `running` 桶的当前运行耗时（ms；根在途取根 runStartedAt，否则取活跃后代最早 runStartedAt）。 */
   runningMs?: number
-  /** `unread_done` / `quiet` 桶的根累计已结算运行耗时（ms；仅 > 0 时存在）。 */
+  /** `unread_done` / `quiet` / `archived` 桶的根累计已结算运行耗时（ms；仅 > 0 时存在）。 */
   settledRunMs?: number
 }
 
@@ -586,7 +681,7 @@ export function resolveOverviewCardTiming(card: OverviewCard, nowMs?: number): O
     const since = resolveOverviewCardRunStartedAt(card)
     return since !== undefined && hasNow ? { runningMs: Math.max(0, nowMs - since) } : {}
   }
-  if (card.bucket === 'unread_done' || card.bucket === 'quiet') {
+  if (card.bucket === 'unread_done' || card.bucket === 'quiet' || card.bucket === 'archived') {
     const runDurationMs = card.root.runDurationMs
     return typeof runDurationMs === 'number' && Number.isFinite(runDurationMs) && runDurationMs > 0
       ? { settledRunMs: runDurationMs }
@@ -615,9 +710,10 @@ export function overviewCardsNeedLiveClock(
     if (resolveOverviewCardWaitingSince(card) !== undefined) return true
     if (resolveOverviewCardRunStartedAt(card) !== undefined) return true
     const expanded = expandedCardIds?.has(card.root.id) === true
+    const collapseByDefault = card.bucket === 'quiet' || card.bucket === 'archived'
     const shownDescendants = expanded
       ? card.descendants
-      : card.bucket === 'quiet'
+      : collapseByDefault
         ? []
         : card.descendants.slice(0, OVERVIEW_DESCENDANT_LIMIT)
     for (const descendant of shownDescendants) {
@@ -628,8 +724,93 @@ export function overviewCardsNeedLiveClock(
 }
 
 // ---------------------------------------------------------------------------
-// 侧栏精简总览列表纯函数（窄栏后代展示切片、主项直达裁决与秒表门控）
+// 侧栏工作集纯函数（活跃全量 + 近期截断/在场保底、后代展示切片、直达裁决与秒表门控）
 // ---------------------------------------------------------------------------
+
+/** 侧栏工作集切片结果。 */
+export interface SidebarWorkingSet {
+  /** 侧栏应展示的根会话树集合（非搜索态：活跃全量 + 近期截断与在场保底；搜索态：全量命中）。 */
+  cards: OverviewCard[]
+  /** 全量未归档根会话树总数（供底部「查看全部 N 个会话」入口展示）。 */
+  totalRootCount: number
+  /** 被近期上限省略的安静根会话树数量（搜索态或未超限时为 0）。 */
+  omittedQuietCount: number
+  /** 当前是否处于搜索态（搜索突破工作集上限）。 */
+  searchActive: boolean
+}
+
+function cardMatchesActiveConversation(
+  card: OverviewCard,
+  activeConversationIds: ReadonlySet<number>,
+): boolean {
+  if (activeConversationIds.has(card.root.id)) return true
+  return card.descendants.some((descendant) => activeConversationIds.has(descendant.conv.id))
+}
+
+/**
+ * 构建侧栏工作集切片：
+ * - 搜索激活时直接检索全量未归档根树，不受近期上限限制；
+ * - 默认工作集态：
+ *   1) 活跃三桶（needs_attention / running / unread_done）全量保留、顺序沿用 createdAt 倒序（流式不跳行）；
+ *   2) 安静根树（quiet）按 updatedAt 倒序（同刻 createdAt / id 倒序）取前 recentLimit 条，
+ *      确保刚聊完的会话自然置顶；
+ *   3) 若主屏或分屏当前正在查看超出前 recentLimit 条的安静根树（或其后代），保底追加到工作集末尾，
+ *      防止正在查看的会话在侧栏中失踪。
+ */
+export function buildSidebarWorkingSet(input: {
+  cards: ReadonlyArray<OverviewCard>
+  activeConversationIds: ReadonlySet<number>
+  query?: string
+  recentLimit?: number
+}): SidebarWorkingSet {
+  const { cards, activeConversationIds, query = '', recentLimit = SIDEBAR_RECENT_QUIET_LIMIT } = input
+  const totalRootCount = cards.length
+  const trimmedQuery = query.trim()
+  if (trimmedQuery !== '') {
+    const matched = filterOverviewCards(cards, {
+      bucket: 'all',
+      profileId: '',
+      nodeId: '',
+      query: trimmedQuery,
+    })
+    return {
+      cards: matched,
+      totalRootCount,
+      omittedQuietCount: 0,
+      searchActive: true,
+    }
+  }
+
+  const activeCards: OverviewCard[] = []
+  const quietCards: OverviewCard[] = []
+  for (const card of cards) {
+    if (card.bucket === 'quiet') quietCards.push(card)
+    else activeCards.push(card)
+  }
+
+  const sortedQuiet = [...quietCards].sort(
+    (a, b) =>
+      b.root.updatedAt - a.root.updatedAt ||
+      b.root.createdAt - a.root.createdAt ||
+      b.root.id - a.root.id,
+  )
+
+  const cap = Math.max(0, recentLimit)
+  const keptQuiet: OverviewCard[] = []
+  for (let i = 0; i < sortedQuiet.length; i += 1) {
+    const card = sortedQuiet[i]!
+    if (i < cap || cardMatchesActiveConversation(card, activeConversationIds)) {
+      keptQuiet.push(card)
+    }
+  }
+
+  return {
+    cards: [...activeCards, ...keptQuiet],
+    totalRootCount,
+    omittedQuietCount: sortedQuiet.length - keptQuiet.length,
+    searchActive: false,
+  }
+}
 
 /** 侧栏总览单棵树的后代展示切片。 */
 export interface SidebarOverviewDescendantsSlice {
@@ -642,7 +823,7 @@ export interface SidebarOverviewDescendantsSlice {
 }
 
 /**
- * 解析侧栏精简总览中单棵树的后代子行切片：
+ * 解析侧栏工作集中单棵树的后代子行切片：
  * - 手动展开（expanded=true）时展示全量后代；
  * - 未手动展开时，自动浮现活跃/待处理后代、当前主/分屏正在查看的后代、
  *   以及搜索激活时直接命中的后代；安静历史后代收拢计入 hiddenCount，
@@ -683,7 +864,7 @@ export function resolveSidebarOverviewDescendants(input: {
 }
 
 /**
- * 侧栏总览主项点击直达目标裁决：
+ * 侧栏工作集主项点击直达目标裁决：
  * - 当树内存在等待审批的子会话且该子会话已作为独立子行展现在下方时，
  *   主项固定打开根会话（父行进父、子行进子，避免进了审批子会话后点不回根会话）；
  * - 否则回落 card.targetConversationId（一键直达待审批现场或根会话）。
@@ -702,7 +883,7 @@ export function resolveSidebarOverviewPrimaryTarget(
 }
 
 /**
- * 侧栏精简总览实时秒表门控：仅检查当前可见（未折叠分节）卡片及其可见子行，
+ * 侧栏工作集实时秒表门控：仅检查当前可见（未折叠分节）卡片及其可见子行，
  * 全员安静/已完成或所在分节被折叠时返回 false（零定时器开销）。
  */
 export function sidebarOverviewCardsNeedLiveClock(

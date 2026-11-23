@@ -25,7 +25,7 @@ import { ARCHIVED_TAG } from '../src/conversation/archive-model.js'
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
 const { createRoot } = await import('react-dom/client')
 const { ConversationPane } = await import('../src/conversation/ConversationPane.js')
-const { ArchivedConversationsGroup } = await import('../src/shell/SidebarArchivedConversations.js')
+const { ConversationOverview } = await import('../src/overview/ConversationOverview.js')
 const { HelmxStoreProvider } = await import('../src/lib/HelmxStoreProvider.js')
 const { useHelmxStore } = await import('../src/lib/store-context.js')
 const e = React.createElement
@@ -164,14 +164,14 @@ function App(): React.ReactNode {
         })
       : null
   const topDrawer = store.drawerStack[store.drawerStack.length - 1]
-  // 折叠组仅随专用用例挂载：它不参与菜单交互断言，归档迁移经 SSE 推送驱动。
   return e(React.Fragment, null,
-    pane(store.primaryTarget, `primary:${store.primaryTarget.kind === 'conversation' ? store.primaryTarget.conversationId : 'other'}`),
+    store.primaryTarget.kind === 'overview'
+      ? e(ConversationOverview, { key: 'primary:overview' })
+      : pane(store.primaryTarget, `primary:${store.primaryTarget.kind === 'conversation' ? store.primaryTarget.conversationId : 'other'}`),
     pane(store.splitTarget, `split:${store.splitTarget?.kind === 'conversation' ? store.splitTarget.conversationId : 'other'}`, { isSplit: true }),
     topDrawer?.kind === 'conversation'
       ? pane({ kind: 'conversation', conversationId: topDrawer.conversationId }, `drawer:${topDrawer.conversationId}`, { isDrawer: true })
       : null,
-    e(ArchivedConversationsGroup, { background: new Map() }),
   )
 }
 
@@ -291,11 +291,6 @@ describe("conversation-archive-menu", () => {
     assert.equal(last.method, 'replace')
     assert.equal(last.hash, `#/a/assistant?cwd=${encodeURIComponent('/tmp')}`)
     assert.equal(window.location.hash, `#/a/assistant?cwd=${encodeURIComponent('/tmp')}`)
-    const archivedGroup = document.querySelector<HTMLButtonElement>(
-      '.archived-conversations-group .sidebar-group-header-toggle',
-    )
-    assert.ok(archivedGroup, 'the archived sidebar group should render after the archive')
-    assert.equal(archivedGroup.getAttribute('aria-expanded'), 'false', 'the archived group stays collapsed after navigation')
   })
 
   test('明细菜单归档远端主屏会话：待命目标继承节点与目录，不悄悄切回本机', { timeout: 60_000 }, async () => {
@@ -349,32 +344,32 @@ describe("conversation-archive-menu", () => {
     assert.ok(observed?.notices.some((n) => n.title === 'Conversations restored'), '恢复成功应有通知')
   })
 
-  test('归档分组全选后批量删除：确认后单次 bulk-delete，列表随 conversation.deleted 清空', { timeout: 60_000 }, async () => {
+  test('总览已归档页全选后支持批量恢复与批量删除：确认后单次 bulk-delete，列表随 conversation.deleted 清空', { timeout: 60_000 }, async () => {
     conversations = [summary(1), summary(2, { tags: [ARCHIVED_TAG] }), summary(3, { tags: [ARCHIVED_TAG] })]
-    await mount('#/c/1')
+    await mount('#/overview?sp.bucket=archived')
 
-    // 展开归档分组 → 进入批量管理
-    const groupToggle = document.querySelector<HTMLButtonElement>('.archived-conversations-group .sidebar-group-header-toggle')
-    assert.ok(groupToggle, '应渲染归档分组头部')
-    await act(async () => { groupToggle!.click() })
-    await settle()
-    const batchToggle = document.querySelector<HTMLButtonElement>(
-      '.archived-conversations-group button[aria-label="Manage archived conversations in bulk"]',
-    )
-    assert.ok(batchToggle, '归档分组应有批量管理入口')
+    assert.equal(document.querySelectorAll('.overview-card').length, 2, '已归档页仅渲染 2 张已归档卡片')
+
+    const batchToggle = document.querySelector<HTMLButtonElement>('button.overview-batch-toggle')
+    assert.ok(batchToggle, '总览应有批量管理入口')
     await act(async () => { batchToggle!.click() })
     await settle()
 
-    const barButtons = () => [...document.querySelectorAll<HTMLButtonElement>('.sidebar-batch-bar .batch-bar-actions .btn')]
+    const barButtons = () => [...document.querySelectorAll<HTMLButtonElement>('.overview-batch-bar .batch-bar-actions .btn')]
+    const restoreBtn = barButtons().find((b) => b.textContent?.startsWith('Restore'))
     const deleteBtn = barButtons().find((b) => b.textContent?.startsWith('Delete'))
+    assert.ok(restoreBtn, '已归档页批量栏应渲染恢复按钮')
     assert.ok(deleteBtn, '批量栏应渲染删除按钮')
+    assert.equal(restoreBtn!.disabled, true, '未选择时恢复按钮应禁用')
     assert.equal(deleteBtn!.disabled, true, '未选择时删除按钮应禁用')
 
-    // 全选仅覆盖归档条目（不含当前主屏未归档会话 1）
+    // 全选仅覆盖归档条目（不含未归档会话 1）
     const selectAll = barButtons().find((b) => b.textContent === 'Select all')
     assert.ok(selectAll, '批量栏应渲染全选按钮')
     await act(async () => { selectAll!.click() })
     await settle()
+    assert.equal(restoreBtn!.disabled, false, '全选后恢复按钮应可用')
+    assert.equal(restoreBtn!.textContent, 'Restore (2)')
     assert.equal(deleteBtn!.disabled, false, '全选后删除按钮应可用')
     assert.equal(deleteBtn!.textContent, 'Delete (2)')
 
@@ -391,7 +386,7 @@ describe("conversation-archive-menu", () => {
     assert.deepEqual(deleteRequests, [], '取消确认不得发起删除请求')
     assert.ok(document.querySelector('[role="alertdialog"]') === null, '取消后对话框关闭')
 
-    // 确认删除：逐会话 DELETE + SSE 移除，分组清空且不导航
+    // 确认删除：单次 bulk-delete + SSE 移除，归档页呈现空态
     await act(async () => { deleteBtn!.click() })
     await settle()
     const confirm = [...document.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')]
@@ -401,9 +396,31 @@ describe("conversation-archive-menu", () => {
     await settle()
 
     assert.deepEqual(deleteRequests, ['/api/conversations/bulk-delete'], '应对全部选中归档会话发起单次 bulk-delete 请求')
-    assert.ok(document.querySelector('.archived-conversations-group') === null, '删除 SSE 后归档分组应清空消失')
-    assert.deepEqual(observed?.primary, { kind: 'conversation', conversationId: 1 }, '删除非当前目标会话不得导航')
+    assert.equal(document.querySelectorAll('.overview-card').length, 0, '删除 SSE 后已归档卡片应清空')
+    assert.ok(document.body.textContent?.includes('No archived conversations'), '删除完毕后展示空已归档态')
     assert.ok(observed?.notices.some((n) => n.title === 'Bulk delete completed'), '批量删除成功应有通知')
+  })
+
+  test('总览已归档页批量恢复：发送去掉 helmx:archived 的 PATCH 并弹出恢复通知', { timeout: 60_000 }, async () => {
+    conversations = [summary(1), summary(2, { tags: ['keep', ARCHIVED_TAG] })]
+    await mount('#/overview?sp.bucket=archived')
+
+    const batchToggle = document.querySelector<HTMLButtonElement>('button.overview-batch-toggle')!
+    await act(async () => { batchToggle.click() })
+    await settle()
+    const selectAll = [...document.querySelectorAll<HTMLButtonElement>('.overview-batch-bar .batch-bar-actions .btn')]
+      .find((b) => b.textContent === 'Select all')!
+    await act(async () => { selectAll.click() })
+    await settle()
+    const restoreBtn = [...document.querySelectorAll<HTMLButtonElement>('.overview-batch-bar .batch-bar-actions .btn')]
+      .find((b) => b.textContent?.startsWith('Restore'))!
+    await act(async () => { restoreBtn.click() })
+    await settle()
+
+    assert.deepEqual(patchRequests, [
+      { url: '/api/conversations/2', method: 'PATCH', body: { tags: ['keep'] } },
+    ])
+    assert.ok(observed?.notices.some((n) => n.title === 'Bulk Restore completed'), '批量恢复成功应有通知')
   })
 
   test('SSE 推送归档非当前打开会话：仅列表更新，不导航', { timeout: 60_000 }, async () => {
