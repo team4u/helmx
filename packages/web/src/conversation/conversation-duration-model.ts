@@ -29,7 +29,7 @@ export interface ConversationDurationLabel {
   text: string
   /** Semantic tone: warn while awaiting approval; default otherwise. */
   tone: ConversationDurationTone
-  /** Multi-line hover breakdown shown inside Radix Tooltip. */
+  /** Multi-line hover breakdown shown in the native title tooltip. */
   tooltip: string
 }
 

@@ -1,7 +1,7 @@
 import { useCallback, useId, useMemo, useRef } from 'react'
 import type { ComposerScopeProps, ConversationSummary } from '@helmx/protocol/browser'
 import { COMPOSER_DOCK_SLOT, COMPOSER_STATUS_SLOT } from '@helmx/protocol/browser'
-import { HelmxIcon, PluginSlot, Tooltip, useSharedNowMs } from '@helmx/plugin-client'
+import { HelmxIcon, PluginSlot, useSharedNowMs } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { conversationsApi } from '../lib/api.js'
 import { pluginSlashCommandsFor } from '../lib/commands-model.js'
@@ -73,19 +73,13 @@ function ConversationDurationStatus({ conversation }: { conversation: Conversati
   const nowMs = useSharedNowMs(liveActive)
   const label = conversationDurationLabel(conversation, nowMs, t)
   if (label === null) return null
-  const statusEl = (
+  return (
     <span
       className={`composer-duration-status${label.tone === 'warn' ? ' composer-duration-status-warn' : ''}`}
       title={label.tooltip || undefined}
     >
       <span className="mono tabular-nums">{label.text}</span>
     </span>
-  )
-  if (label.tooltip === '') return statusEl
-  return (
-    <Tooltip content={label.tooltip} side="top" className="helmx-tooltip-multiline">
-      {statusEl}
-    </Tooltip>
   )
 }
 

@@ -596,6 +596,12 @@ test('Composer ConversationDurationStatus：与 ContextUsageStatus 同行、无 
     assert.ok(row !== null && durationEl !== null)
     assert.equal(getComputedStyle(row).display, 'flex', 'duration status keeps .composer-status-row visible')
     assert.equal(durationEl.textContent, '累计 1m5s')
+    assert.match(durationEl.getAttribute('title') ?? '', /累计运行：1m5s/)
+    assert.equal(
+      durationEl.getAttribute('data-state'),
+      null,
+      'duration status uses native title only without Radix Tooltip trigger',
+    )
     assert.equal(getComputedStyle(durationEl).color, 'rgb(11, 12, 13)')
 
     // 2. blocked 状态：warn 色调覆写默认灰，只读无按钮
