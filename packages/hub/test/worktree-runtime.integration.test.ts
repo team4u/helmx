@@ -39,9 +39,11 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { after, before, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { createHubHandler } from '../../kernel/src/http/index.js'
+import { openHelmxDatabase } from '../../kernel/src/runtime/sqlite.js'
 import { extractWorktreeExecutionMeta } from '@helmx/plugins/contracts'
 import {
   createGitTemplate,
@@ -109,12 +111,8 @@ interface RuntimeEnv {
     }>
     inspect(runId: string): Promise<{ run: { id: string; status: string; error?: string } }>
   }
-  /** plugin private durable document (lease/register leftover assertion and restart interrupt simulated). */
-  pluginDoc: {
-    get<T>(key: string, initial: T): T
-    set<T>(key: string, value: T): void
-    flush(): Promise<void>
-  }
+  /** Read persisted `builtin:worktree` durable KV leases directly from `state.sqlite` after flush. */
+  readWorktreeLeases(): Promise<Record<string, { phase: string; info?: AgentExecutionInfo; worktreeId: string }>>
   close(): Promise<void>
 }
 
@@ -138,13 +136,22 @@ async function openRuntime(dataDir: string, cwd?: string): Promise<RuntimeEnv> {
       inspect: (runId) =>
         kernel.plugins.invokeAction('builtin:workflow', 'inspect', { runId }) as never,
     },
-    pluginDoc: {
-      // plugin doc durable layer key:`${pluginId}:${name}`(helmx_plugin_docs global naming empty between).
-      get: <T>(key: string, initial: T): T =>
-        kernel.documentStore.get<T>(`builtin:worktree:worktree-state:${key}`, initial),
-      set: <T>(key: string, value: T): void =>
-        kernel.documentStore.set(`builtin:worktree:worktree-state:${key}`, value),
-      flush: () => kernel.documentStore.flush(),
+    async readWorktreeLeases() {
+      await kernel.documentStore.flush()
+      const db = new DatabaseSync(join(dataDir, 'state.sqlite'), { readOnly: true })
+      try {
+        const rows = db
+          .prepare("SELECT key, value_json FROM helmx_plugin_kv WHERE plugin_id = 'builtin:worktree' AND namespace = 'leases'")
+          .all() as Array<{ key: string; value_json: string }>
+        return Object.fromEntries(
+          rows.map((row) => [
+            row.key,
+            JSON.parse(row.value_json) as { phase: string; info?: AgentExecutionInfo; worktreeId: string },
+          ]),
+        )
+      } finally {
+        db.close()
+      }
     },
     async close() {
       // subject to control closure stop (close chain error do not mask test assertion; closure stop failed another has base seat fix trace).
@@ -873,55 +880,59 @@ describe('durable lease unknown occupy protect (fail-closed)', { timeout: 60_000
   it('lease leftover (restart interrupt semantics) when cleanup_worktree explicit worktree_execution_unknown; normal spawn after success lease release can clean up', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 't8')
     const repo = gitTemplate.cloneTo(join(dir, 'repo'))
-    const env = await openRuntime(join(dir, 'data'), repo)
+    const dataDir = join(dir, 'data')
+    // real worktree(external register form, simulated external runtime such as Herdr derive).
+    const wtPath = join(dir, '.helmx-worktrees', 'lease-check')
+    execFileSync('git', ['worktree', 'add', '-q', '-b', 'helmx/wf-lease-1', wtPath, 'HEAD'], { cwd: repo })
+
+    // Seed persisted `helmx_plugin_kv` rows BEFORE opening runtime (simulated process death & restart
+    // with an active worktree record and an external executionId lease still on disk).
+    const worktreeId = `local:${wtPath}`
+    const seedDb = await openHelmxDatabase(dataDir)
     try {
-      // real worktree(external register form, simulated external runtime such as Herdr derive).
-      const wtPath = join(dir, '.helmx-worktrees', 'lease-check')
-      execFileSync('git', ['worktree', 'add', '-q', '-b', 'helmx/wf-lease-1', wtPath, 'HEAD'], { cwd: repo })
-
-      // directly to plugin private durable doc write lease leftover + allocator register (simulated execute already
-      // start, process death, after restart without in-flight execute: process death after disk on real store in content).
-      // doc shape and produce same construct:worktree-state embed set map, inside layer key is allocator 
-      // 'runtime/worktrees'({version, records}) and lease table 'worktree-leases'.
-      const worktreeId = `local:${wtPath}`
-      const existing = env.kernel.documentStore.get<Record<string, unknown>>('builtin:worktree:worktree-state', {})
-      env.kernel.documentStore.set('builtin:worktree:worktree-state', {
-        ...existing,
-        'runtime/worktrees': {
-          version: 1,
-          records: [
-            {
-              id: worktreeId,
-              nodeId: 'local',
-              repoRoot: repo,
-              path: wtPath,
-              branch: 'helmx/wf-lease-1',
-              baseCommit: '0'.repeat(40),
-              dirtySource: false,
-              parentConversationId: 1,
-              executionId: 'ext-pane-7',
-              origin: 'external',
-              status: 'active',
-              createdAt: Date.now(),
-            },
-          ],
-        },
-        'worktree-leases': {
-          'stale-token-from-dead-process': {
-            phase: 'running',
-            info: {
-              nodeId: 'local',
-              executionId: 'ext-pane-7',
-              effectiveCwd: wtPath,
-              meta: { 'builtin:worktree': { worktree: { path: wtPath, branch: 'helmx/wf-lease-1' } } },
-            },
-            worktreeId,
-            createdAt: Date.now(),
+      const now = Date.now()
+      await seedDb.db.run(
+        `INSERT INTO helmx_plugin_kv (plugin_id, namespace, key, value_json, updated_at)
+         VALUES ('builtin:worktree', 'worktrees', ?, ?, ?)`,
+        worktreeId,
+        JSON.stringify({
+          id: worktreeId,
+          nodeId: 'local',
+          repoRoot: repo,
+          path: wtPath,
+          branch: 'helmx/wf-lease-1',
+          baseCommit: '0'.repeat(40),
+          dirtySource: false,
+          parentConversationId: 1,
+          executionId: 'ext-pane-7',
+          origin: 'external',
+          status: 'active',
+          createdAt: now,
+        }),
+        now,
+      )
+      await seedDb.db.run(
+        `INSERT INTO helmx_plugin_kv (plugin_id, namespace, key, value_json, updated_at)
+         VALUES ('builtin:worktree', 'leases', 'stale-token-from-dead-process', ?, ?)`,
+        JSON.stringify({
+          phase: 'running',
+          info: {
+            nodeId: 'local',
+            executionId: 'ext-pane-7',
+            effectiveCwd: wtPath,
+            meta: { 'builtin:worktree': { worktree: { path: wtPath, branch: 'helmx/wf-lease-1' } } },
           },
-        },
-      })
-      await env.kernel.documentStore.flush()
+          worktreeId,
+          createdAt: now,
+        }),
+        now,
+      )
+    } finally {
+      await seedDb.close()
+    }
 
+    const env = await openRuntime(dataDir, repo)
+    try {
       // unknown occupy: cannot verify underlying (such as remote Herdr) already stop,force also reject (guard against delete still in run directory).
       await assert.rejects(
         () => env.invoke.cleanupWorktree({ worktreeId, force: true }),
@@ -946,7 +957,7 @@ describe('durable lease unknown occupy protect (fail-closed)', { timeout: 60_000
         },
       } as AgentSpawnRequest)
       assert.ok(worktreeOf(resolved), 'succeeded spawn should back pass worktree')
-      const leases = env.pluginDoc.get<Record<string, { info?: AgentExecutionInfo }>>('worktree-leases', {})
+      const leases = await env.readWorktreeLeases()
       const leasePaths = Object.values(leases).map((l) => worktreeOf(l.info)?.path)
       assert.ok(
         !leasePaths.includes(worktreeOf(resolved)!.path),

@@ -18,6 +18,7 @@ import { spawn } from 'node:child_process'
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { setTimeout as delay } from 'node:timers/promises'
 import { test } from 'node:test'
 import { pathToFileURL } from 'node:url'
@@ -284,8 +285,16 @@ test('T1-A: 原生后台单子代理（isolation:worktree + schema + gate）经 
     assert.equal(worktrees.worktrees.length, 1, '绝不重复分配第二个 Worktree')
     assert.equal(worktrees.worktrees[0]!.path, worktreePath)
 
-    const postWtState = k2.documentStore.get<Record<string, unknown>>('builtin:worktree:worktree-state', {})
-    assert.deepEqual(postWtState['worktree-leases'] ?? {}, {}, '任务完成后 Worktree running 租约应正常释放')
+    await k2.documentStore.flush()
+    const leaseDb = new DatabaseSync(join(dataDir, 'state.sqlite'), { readOnly: true })
+    try {
+      const leaseRows = leaseDb
+        .prepare("SELECT key FROM helmx_plugin_kv WHERE plugin_id = 'builtin:worktree' AND namespace = 'leases'")
+        .all() as Array<{ key: string }>
+      assert.deepEqual(leaseRows, [], '任务完成后 Worktree running 租约应正常释放')
+    } finally {
+      leaseDb.close()
+    }
 
     await waitFor(() => parentReports.includes('subagent_report'), { timeoutMs: 10_000 })
   } finally {

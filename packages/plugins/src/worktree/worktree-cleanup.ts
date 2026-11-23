@@ -218,7 +218,7 @@ async function forceClearMissingRegistration(
   await withRepoLock(record.nodeId, authority.canonicalCommonDir, async () => {
     const fresh = store.findById(record.id)
     if (fresh === undefined) {
-      throw new HelmxError('not_found', `受管 worktree 记录 ${record.id} 不存在（文档状态不一致）`, 404, { id: record.id })
+      throw new HelmxError('not_found', `受管 worktree 记录 ${record.id} 不存在（存储状态不一致）`, 404, { id: record.id })
     }
     if (fresh.status === 'removed') {
       alreadyRemoved = true
@@ -346,7 +346,7 @@ export async function cleanupWorktree(
   await withRepoLock(record.nodeId, authority.canonicalCommonDir, async () => {
     const fresh = store.findById(record.id)
     if (fresh === undefined) {
-      throw new HelmxError('not_found', `受管 worktree 记录 ${record.id} 不存在（文档状态不一致）`, 404, { id: record.id })
+      throw new HelmxError('not_found', `受管 worktree 记录 ${record.id} 不存在（存储状态不一致）`, 404, { id: record.id })
     }
     if (fresh.status === 'removed') {
       outcome = { removed: false, branchDeleted: fresh.branchDeleted === true }

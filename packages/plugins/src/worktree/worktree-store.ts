@@ -1,22 +1,32 @@
 /**
  * 受管 Worktree 统一持久层（登记记录 + durable 租约 + agentId 绑定 + 占用判定）。
+ *
+ * 持久存储基于插件专属键值存储 `ctx.kv`（`state.sqlite` `helmx_plugin_kv`）：
+ * - `worktrees`：单条 `ManagedWorktreeRecord`，按 `worktreeKvKey(record.id)` 独立读写；
+ * - `leases`：单条 `WorktreeLeaseRecord`，按随机 UUID `token` 独立读写；
+ * - `agent-bindings`：单条 `WorktreeAgentBinding`，按 `worktreeKvKey(agentId)` 独立读写。
+ * 每条变更仅触及目标单键，避免整表克隆序列化与 2 MiB 文档上限。
  */
 
-import { HelmxError, type AgentExecutionInfo, type AgentSpawnRequest } from '@helmx/protocol'
-import { randomUUID } from 'node:crypto'
+import {
+  HelmxError,
+  type AgentExecutionInfo,
+  type AgentSpawnRequest,
+  type PluginKvEntry,
+  type PluginKvHandle,
+} from '@helmx/protocol'
+import { createHash, randomUUID } from 'node:crypto'
 import { extractWorktreeExecutionMeta, type ManagedWorktreeHold, type ManagedWorktreeRecord } from '../contracts.js'
 
 export type { ManagedWorktreeHold, ManagedWorktreeRecord }
 
-const WORKTREES_DOC_KEY = 'runtime/worktrees'
-const LEASES_DOC_KEY = 'worktree-leases'
-const AGENT_BINDINGS_DOC_KEY = 'worktree-agent-bindings'
-const ALLOWED_HOLD_KEYS = new Set(['pluginId', 'holdId', 'label', 'acquiredAt'])
+export const WORKTREES_KV_NAMESPACE = 'worktrees'
+export const LEASES_KV_NAMESPACE = 'leases'
+export const AGENT_BINDINGS_KV_NAMESPACE = 'agent-bindings'
 
-interface WorktreeDoc {
-  version: 1
-  records: ManagedWorktreeRecord[]
-}
+const ALLOWED_HOLD_KEYS = new Set(['pluginId', 'holdId', 'label', 'acquiredAt'])
+const KV_MAX_KEY_LENGTH = 256
+const HASH_KEY_PREFIX = 'sha256:'
 
 export interface WorktreeLeaseRecord {
   phase: 'pending' | 'running'
@@ -28,9 +38,15 @@ export interface WorktreeLeaseRecord {
   createdAt: number
 }
 
-interface WorktreeAgentBinding {
+export interface WorktreeAgentBinding {
   childId: number
   parentConversationId: number
+}
+
+export interface WorktreeKvHandles {
+  worktrees: PluginKvHandle<ManagedWorktreeRecord>
+  leases: PluginKvHandle<WorktreeLeaseRecord>
+  agentBindings: PluginKvHandle<WorktreeAgentBinding>
 }
 
 export interface WorktreeRecordSelector {
@@ -42,17 +58,51 @@ export interface WorktreeRecordSelector {
 
 type WorktreeResolveMode = 'inspect' | 'cleanup'
 
-interface WorktreeStoreDeps {
-  docStore: {
-    get<T>(key: string, initial: T): T
-    set<T>(key: string, value: T): void
-    flush?: () => Promise<void>
-  }
+export interface WorktreeStoreDeps {
+  kv: WorktreeKvHandles
   redact: (text: string) => string
   host?: {
     getConversation(id: number): { status: string }
     listActiveSpawnExecutions(): AgentExecutionInfo[]
   }
+}
+
+function hasControlChar(value: string): boolean {
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i)
+    if (code <= 0x1f || code === 0x7f) return true
+  }
+  return false
+}
+
+/**
+ * 将任意业务键（如 `${nodeId}:${path}` 或 `agentId`）映射为合法 `ctx.kv` 键：
+ * - 常规可打印短键（1..256 字符、无控制字符、不与哈希前缀碰撞）原样存储，便于诊断排查；
+ * - 超长路径、含控制字符或以 `sha256:` 开头的键单射编码为 `sha256:<64 hex>`，避免触发 `400 invalid_kv_key`。
+ */
+export function worktreeKvKey(rawKey: string): string {
+  if (
+    rawKey.length > 0 &&
+    rawKey.length <= KV_MAX_KEY_LENGTH &&
+    !hasControlChar(rawKey) &&
+    !rawKey.startsWith(HASH_KEY_PREFIX)
+  ) {
+    return rawKey
+  }
+  return `${HASH_KEY_PREFIX}${createHash('sha256').update(rawKey, 'utf8').digest('hex')}`
+}
+
+/** 分页遍历整个 KV 命名空间，突破单页 1000 条上限。 */
+function listAllKv<T>(kv: PluginKvHandle<T>): Array<PluginKvEntry<T>> {
+  const all: Array<PluginKvEntry<T>> = []
+  let cursor: string | undefined
+  for (;;) {
+    const page = kv.list(cursor !== undefined ? { cursor } : undefined)
+    all.push(...page.items)
+    if (page.nextCursor === undefined || page.nextCursor === cursor || page.items.length === 0) break
+    cursor = page.nextCursor
+  }
+  return all
 }
 
 function isNonBlank(value: unknown): value is string {
@@ -69,7 +119,11 @@ function assertNonBlankArg(value: unknown, field: string): asserts value is stri
 
 function assertPersistedHoldValid(raw: unknown, recordId: unknown): asserts raw is ManagedWorktreeHold {
   const corrupt = (reason: string): never => {
-    throw new HelmxError('worktree_doc_corrupted', `受管 worktree 文档 '${WORKTREES_DOC_KEY}' 损坏（记录 ${String(recordId)} ${reason}）`, 500)
+    throw new HelmxError(
+      'worktree_doc_corrupted',
+      `受管 worktree 存储 '${WORKTREES_KV_NAMESPACE}' 损坏（记录 ${String(recordId)} ${reason}）`,
+      500,
+    )
   }
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) corrupt('的 hold 非对象')
   const obj = raw as Record<string, unknown>
@@ -85,6 +139,20 @@ function assertPersistedHoldValid(raw: unknown, recordId: unknown): asserts raw 
     obj['acquiredAt'] < 0
   ) {
     corrupt('的 hold 字段非法')
+  }
+}
+
+function assertPersistedRecordValid(raw: unknown, key: string): asserts raw is ManagedWorktreeRecord {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new HelmxError(
+      'worktree_doc_corrupted',
+      `受管 worktree 存储 '${WORKTREES_KV_NAMESPACE}' 损坏（键 '${key}' 的 record 非对象）`,
+      500,
+    )
+  }
+  const obj = raw as Record<string, unknown>
+  if (obj['hold'] !== undefined) {
+    assertPersistedHoldValid(obj['hold'], obj['id'] ?? key)
   }
 }
 
@@ -104,62 +172,51 @@ export function validateWorktreeSelector(input: WorktreeRecordSelector, mode: Wo
 }
 
 export class WorktreeStore {
-  private readonly docStore: WorktreeStoreDeps['docStore']
+  private readonly kv: WorktreeKvHandles
   private readonly redact: (text: string) => string
   private readonly host: WorktreeStoreDeps['host']
 
   constructor(deps: WorktreeStoreDeps) {
-    this.docStore = deps.docStore
+    this.kv = deps.kv
     this.redact = deps.redact
     this.host = deps.host
   }
 
-  private async flush(): Promise<void> {
-    if (this.docStore.flush !== undefined) await this.docStore.flush()
-  }
-
-  private loadDoc(): WorktreeDoc {
-    const doc = this.docStore.get<WorktreeDoc>(WORKTREES_DOC_KEY, { version: 1, records: [] })
-    if (doc === null || typeof doc !== 'object' || !Array.isArray(doc.records)) {
-      throw new HelmxError('worktree_doc_corrupted', `受管 worktree 文档 '${WORKTREES_DOC_KEY}' 损坏（records 非数组）`, 500)
-    }
-    for (const record of doc.records) {
-      if (record === null || typeof record !== 'object' || Array.isArray(record)) {
-        throw new HelmxError('worktree_doc_corrupted', `受管 worktree 文档 '${WORKTREES_DOC_KEY}' 损坏（record 非对象）`, 500)
-      }
-      if ((record as { hold?: unknown }).hold !== undefined) {
-        assertPersistedHoldValid((record as { hold: unknown }).hold, (record as { id?: unknown }).id)
-      }
-    }
-    return doc
-  }
-
-  private saveDoc(doc: WorktreeDoc): void {
-    this.docStore.set(WORKTREES_DOC_KEY, doc)
+  async flush(): Promise<void> {
+    await Promise.all([
+      this.kv.worktrees.flush(),
+      this.kv.leases.flush(),
+      this.kv.agentBindings.flush(),
+    ])
   }
 
   records(): ManagedWorktreeRecord[] {
-    return this.loadDoc().records
+    return listAllKv(this.kv.worktrees).map((entry) => {
+      assertPersistedRecordValid(entry.value, entry.key)
+      return entry.value
+    })
   }
 
   append(record: ManagedWorktreeRecord): void {
-    const doc = this.loadDoc()
-    this.saveDoc({ ...doc, records: [...doc.records, record] })
+    this.kv.worktrees.set(worktreeKvKey(record.id), record)
   }
 
   findById(id: string): ManagedWorktreeRecord | undefined {
-    return this.loadDoc().records.find((r) => r.id === id)
+    const kvKey = worktreeKvKey(id)
+    const raw = this.kv.worktrees.get(kvKey)
+    if (raw === undefined) return undefined
+    assertPersistedRecordValid(raw, kvKey)
+    return raw
   }
 
   updateRecord(id: string, mutate: (record: ManagedWorktreeRecord) => ManagedWorktreeRecord): void {
-    const doc = this.loadDoc()
-    const index = doc.records.findIndex((r) => r.id === id)
-    if (index === -1) {
-      throw new HelmxError('not_found', `受管 worktree 记录 ${id} 不存在（文档状态不一致）`, 404, { id })
+    const kvKey = worktreeKvKey(id)
+    const existing = this.kv.worktrees.get(kvKey)
+    if (existing === undefined) {
+      throw new HelmxError('not_found', `受管 worktree 记录 ${id} 不存在（存储状态不一致）`, 404, { id })
     }
-    const next = [...doc.records]
-    next[index] = mutate(next[index]!)
-    this.saveDoc({ ...doc, records: next })
+    assertPersistedRecordValid(existing, kvKey)
+    this.kv.worktrees.set(kvKey, mutate(existing))
   }
 
   assertMetadataSecretFree(
@@ -232,10 +289,10 @@ export class WorktreeStore {
     assertNonBlankArg(id, 'worktreeId')
     assertNonBlankArg(pluginId, 'pluginId')
     assertNonBlankArg(holdId, 'holdId')
-    const doc = this.loadDoc()
-    const index = doc.records.findIndex((r) => r.id === id)
-    if (index === -1) return false
-    const record = doc.records[index]!
+    const kvKey = worktreeKvKey(id)
+    const record = this.kv.worktrees.get(kvKey)
+    if (record === undefined) return false
+    assertPersistedRecordValid(record, kvKey)
     if (record.hold === undefined) return false
     if (record.hold.pluginId !== pluginId || record.hold.holdId !== holdId) {
       throw new HelmxError(
@@ -254,26 +311,27 @@ export class WorktreeStore {
       )
     }
     const { hold: _cleared, ...clean } = record
-    const next = [...doc.records]
-    next[index] = clean
-    this.saveDoc({ ...doc, records: next })
+    this.kv.worktrees.set(kvKey, clean)
     return true
   }
 
   getForConversation(conversationId: number): ManagedWorktreeRecord | undefined {
-    const records = this.loadDoc().records.filter((r) => r.conversationId === conversationId)
+    const records = this.records().filter((r) => r.conversationId === conversationId)
     if (records.length === 0) return undefined
     const active = records.filter((r) => r.status === 'active')
     return latestBy(active.length > 0 ? active : records, (r) => r.createdAt)
   }
 
   list(): ManagedWorktreeRecord[] {
-    return [...this.loadDoc().records].sort((a, b) => b.createdAt - a.createdAt)
+    return this.records().sort((a, b) => b.createdAt - a.createdAt)
   }
 
   findActive(query: WorktreeRecordSelector): ManagedWorktreeRecord | undefined {
-    const active = this.loadDoc().records.filter((r) => r.status === 'active')
-    if (query.worktreeId !== undefined) return active.find((r) => r.id === query.worktreeId)
+    if (query.worktreeId !== undefined) {
+      const record = this.findById(query.worktreeId)
+      return record?.status === 'active' ? record : undefined
+    }
+    const active = this.records().filter((r) => r.status === 'active')
     if (query.conversationId !== undefined) {
       const byConv = active.filter((r) => r.conversationId === query.conversationId)
       return byConv.length === 0 ? undefined : latestBy(byConv, (r) => r.createdAt)
@@ -294,12 +352,11 @@ export class WorktreeStore {
 
   resolveRecord(input: WorktreeRecordSelector, mode: WorktreeResolveMode): ManagedWorktreeRecord {
     validateWorktreeSelector(input, mode)
-    const records = this.loadDoc().records
     const scopeHint =
       mode === 'inspect' ? 'inspect 仅检视 helmx 登记的隔离 worktree' : 'cleanup 仅清理 helmx 登记的隔离 worktree，绝不触碰未登记目录'
 
     if (input.worktreeId !== undefined) {
-      const record = records.find((r) => r.id === input.worktreeId)
+      const record = this.findById(input.worktreeId)
       if (record === undefined) throw new HelmxError('not_found', `未找到受管 worktree 记录 ${input.worktreeId}`, 404, { worktreeId: input.worktreeId })
       return record
     }
@@ -312,7 +369,7 @@ export class WorktreeStore {
       }
       return record
     }
-    const matches = records.filter((r) => r.path === input.path && (input.nodeId === undefined || r.nodeId === input.nodeId))
+    const matches = this.records().filter((r) => r.path === input.path && (input.nodeId === undefined || r.nodeId === input.nodeId))
     if (matches.length === 0) {
       const suffix = mode === 'inspect' ? `${scopeHint}，不支持任意目录` : scopeHint
       throw new HelmxError('not_found', `未找到路径 ${input.path}${input.nodeId !== undefined ? `（节点 ${input.nodeId}）` : ''} 的受管 worktree 记录；${suffix}`, 404, {
@@ -372,7 +429,7 @@ export class WorktreeStore {
       const leasePath = this.leasePathOf(lease, nodeId)
       if (leasePath !== undefined && this.containsPath(path, leasePath)) return true
     }
-    return this.loadDoc().records.some(
+    return this.records().some(
       (r) => r.status === 'active' && r.hold !== undefined && r.nodeId === nodeId && (this.containsPath(path, r.path) || this.containsPath(r.path, path)),
     )
   }
@@ -401,17 +458,12 @@ export class WorktreeStore {
   // ------------------------------------------------------------------
 
   listLeases(): Map<string, WorktreeLeaseRecord> {
-    return new Map(Object.entries(this.docStore.get<Record<string, WorktreeLeaseRecord>>(LEASES_DOC_KEY, {})))
-  }
-
-  saveLeases(map: Map<string, WorktreeLeaseRecord>): void {
-    this.docStore.set(LEASES_DOC_KEY, Object.fromEntries(map))
+    return new Map(listAllKv(this.kv.leases).map((entry) => [entry.key, entry.value]))
   }
 
   async openPendingLease(target: { nodeId: string; path: string; worktreeId?: string }): Promise<string> {
     const token = randomUUID()
-    const map = this.listLeases()
-    map.set(token, {
+    this.kv.leases.set(token, {
       phase: 'pending',
       nodeId: target.nodeId,
       path: target.path,
@@ -419,17 +471,14 @@ export class WorktreeStore {
       worktreeId: target.worktreeId ?? `${target.nodeId}:${target.path}`,
       createdAt: Date.now(),
     })
-    this.saveLeases(map)
-    await this.flush()
+    await this.kv.leases.flush()
     return token
   }
 
   updateLease(token: string, info: AgentExecutionInfo): void {
-    const map = this.listLeases()
-    const lease = map.get(token)
+    const lease = this.kv.leases.get(token)
     if (lease === undefined) return
-    map.set(token, { ...lease, phase: 'running', info })
-    this.saveLeases(map)
+    this.kv.leases.set(token, { ...lease, phase: 'running', info })
   }
 
   async acquireReattachLease(
@@ -437,28 +486,38 @@ export class WorktreeStore {
     match: { conversationId?: number },
     info: AgentExecutionInfo,
   ): Promise<string> {
-    const map = this.listLeases()
-    for (const [token, lease] of map) {
-      if (lease.worktreeId === target.worktreeId && match.conversationId !== undefined && lease.info.conversationId === match.conversationId) {
-        map.set(token, { ...lease, phase: 'running', nodeId: target.nodeId, path: target.path, info: { ...lease.info, ...info } })
-        this.saveLeases(map)
-        await this.flush()
-        return token
+    if (match.conversationId !== undefined) {
+      for (const [token, lease] of this.listLeases()) {
+        if (lease.worktreeId === target.worktreeId && lease.info.conversationId === match.conversationId) {
+          this.kv.leases.set(token, {
+            ...lease,
+            phase: 'running',
+            nodeId: target.nodeId,
+            path: target.path,
+            info: { ...lease.info, ...info },
+          })
+          await this.kv.leases.flush()
+          return token
+        }
       }
     }
     const token = randomUUID()
-    map.set(token, { phase: 'running', nodeId: target.nodeId, path: target.path, info, worktreeId: target.worktreeId, createdAt: Date.now() })
-    this.saveLeases(map)
-    await this.flush()
+    this.kv.leases.set(token, {
+      phase: 'running',
+      nodeId: target.nodeId,
+      path: target.path,
+      info,
+      worktreeId: target.worktreeId,
+      createdAt: Date.now(),
+    })
+    await this.kv.leases.flush()
     return token
   }
 
   async settleLease(token: string, succeeded: boolean, neverStarted: boolean): Promise<void> {
     if (!succeeded && !neverStarted) return
-    const map = this.listLeases()
-    if (!map.delete(token)) return
-    this.saveLeases(map)
-    await this.flush()
+    if (!this.kv.leases.delete(token)) return
+    await this.kv.leases.flush()
   }
 
   async settleLeaseAfterNextFailure(token: string, execution: AgentExecutionInfo | undefined): Promise<void> {
@@ -471,17 +530,14 @@ export class WorktreeStore {
   }
 
   async clearStaleLeases(worktreeId: string): Promise<void> {
-    const map = this.listLeases()
     let changed = false
-    for (const [token, lease] of map) {
-      if (lease.worktreeId === worktreeId) {
-        map.delete(token)
-        changed = true
+    for (const entry of listAllKv(this.kv.leases)) {
+      if (entry.value.worktreeId === worktreeId) {
+        if (this.kv.leases.delete(entry.key)) changed = true
       }
     }
     if (!changed) return
-    this.saveLeases(map)
-    await this.flush()
+    await this.kv.leases.flush()
   }
 
   private isLeaseActiveInHost(lease: WorktreeLeaseRecord, activeInfos: readonly AgentExecutionInfo[], activeKeys: ReadonlySet<string>): boolean {
@@ -500,16 +556,15 @@ export class WorktreeStore {
   }
 
   async reconcileStoppedNativeLeases(): Promise<number> {
-    const map = this.listLeases()
-    if (map.size === 0) return 0
+    const entries = listAllKv(this.kv.leases)
+    if (entries.length === 0) return 0
     const activeInfos = this.host?.listActiveSpawnExecutions() ?? []
     const activeKeys = new Set(activeInfos.map((info) => `${info.executionId ?? ''}\u0000${info.conversationId ?? ''}`))
     let removed = 0
-    for (const [token, lease] of map) {
+    for (const { key: token, value: lease } of entries) {
       if (this.isLeaseActiveInHost(lease, activeInfos, activeKeys) || lease.info.executionId !== undefined) continue
       if (lease.phase === 'pending') {
-        map.delete(token)
-        removed += 1
+        if (this.kv.leases.delete(token)) removed += 1
         continue
       }
       if (lease.phase === 'running' && lease.info.conversationId !== undefined) {
@@ -526,52 +581,51 @@ export class WorktreeStore {
             )
           }
         }
-        if (stopped) {
-          map.delete(token)
+        if (stopped && this.kv.leases.delete(token)) {
           removed += 1
         }
       }
     }
     if (removed === 0) return 0
-    this.saveLeases(map)
-    await this.flush()
+    await this.kv.leases.flush()
     return removed
   }
 
   resolveResumeChildId(request: AgentSpawnRequest): number | undefined {
     if (request.resume === undefined) return undefined
     if (/^\d+$/.test(request.resume)) return Number(request.resume)
-    return this.docStore.get<Record<string, WorktreeAgentBinding>>(AGENT_BINDINGS_DOC_KEY, {})[request.resume]?.childId
+    return this.kv.agentBindings.get(worktreeKvKey(request.resume))?.childId
   }
 
   recordAgentBinding(agentId: string | undefined, childId: number | undefined, parentConversationId: number): void {
     if (agentId === undefined || agentId === '' || childId === undefined) return
-    const bindings = this.docStore.get<Record<string, WorktreeAgentBinding>>(AGENT_BINDINGS_DOC_KEY, {})
-    const existing = bindings[agentId]
+    const kvKey = worktreeKvKey(agentId)
+    const existing = this.kv.agentBindings.get(kvKey)
     if (existing !== undefined && existing.childId === childId && existing.parentConversationId === parentConversationId) return
-    this.docStore.set(AGENT_BINDINGS_DOC_KEY, { ...bindings, [agentId]: { childId, parentConversationId } })
+    this.kv.agentBindings.set(kvKey, { childId, parentConversationId })
   }
 
   pruneConversation(conversationId: number): void {
-    const bindings = this.docStore.get<Record<string, WorktreeAgentBinding>>(AGENT_BINDINGS_DOC_KEY, {})
-    const nextBindings: Record<string, WorktreeAgentBinding> = {}
-    let bindingsChanged = false
-    for (const [agentId, entry] of Object.entries(bindings)) {
-      if (entry.childId === conversationId || entry.parentConversationId === conversationId) bindingsChanged = true
-      else nextBindings[agentId] = entry
+    for (const entry of listAllKv(this.kv.agentBindings)) {
+      if (entry.value.childId === conversationId || entry.value.parentConversationId === conversationId) {
+        this.kv.agentBindings.delete(entry.key)
+      }
     }
-    if (bindingsChanged) this.docStore.set(AGENT_BINDINGS_DOC_KEY, nextBindings)
 
-    const doc = this.loadDoc()
-    if (doc.records.length === 0) return
+    const entries = listAllKv(this.kv.worktrees)
+    if (entries.length === 0) return
     const leasedIds = new Set(Array.from(this.listLeases().values(), (l) => l.worktreeId))
-    const kept = doc.records.filter(
-      (r) =>
-        r.status !== 'removed' ||
-        r.hold !== undefined ||
-        leasedIds.has(r.id) ||
-        (r.conversationId !== conversationId && r.parentConversationId !== conversationId),
-    )
-    if (kept.length !== doc.records.length) this.saveDoc({ ...doc, records: kept })
+    for (const entry of entries) {
+      assertPersistedRecordValid(entry.value, entry.key)
+      const r = entry.value
+      if (
+        r.status === 'removed' &&
+        r.hold === undefined &&
+        !leasedIds.has(r.id) &&
+        (r.conversationId === conversationId || r.parentConversationId === conversationId)
+      ) {
+        this.kv.worktrees.delete(entry.key)
+      }
+    }
   }
 }

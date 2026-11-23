@@ -36,13 +36,13 @@
 
 ## 数据与恢复
 
-登记表、租约表与 agentId 绑定存于私有文档（完整键 `builtin:worktree:worktree-state`），停用期间不清除。会话删除时裁剪对应绑定与已移除记录，活跃记录与租约保留。Hub 重启后在统一 `service.reconcile()` 阶段（`reconcileAfter: ['builtin:workflow']`）回收可证明已停止的原生崩溃租约——确保遗留子会话先收敛空闲，再扫描租约，避免误判在途执行。
+登记表、租约表与 agentId 绑定按条目独立存于插件私有 KV（`ctx.kv('worktrees')`、`ctx.kv('leases')`、`ctx.kv('agent-bindings')`，落库 `state.sqlite` 的 `helmx_plugin_kv` 表），避免整表序列化与单文档上限，停用期间不清除。会话删除时裁剪对应绑定与已移除记录，活跃记录与租约保留。Hub 重启后在统一 `service.reconcile()` 阶段（`reconcileAfter: ['builtin:workflow']`）回收可证明已停止的原生崩溃租约——确保遗留子会话先收敛空闲，再扫描租约，避免误判在途执行。
 
 ## 源码与测试入口
 
 | 内容 | 位置 |
 | :--- | :--- |
-| 插件入口（组装与文档声明） | `packages/plugins/src/worktree.ts` |
+| 插件入口（组装与 KV 声明） | `packages/plugins/src/worktree.ts` |
 | 隔离 / 分配 / 清理 / 检视 / 动作 / 工具 / 前端插槽 | `packages/plugins/src/worktree/`（`isolation*.ts`、`worktree*.ts`、`actions.ts`、`tools.ts`、`client/`） |
 | 共享契约（meta 命名空间与执行描述） | `packages/plugins/src/contracts.ts` |
 | 主要测试 | `packages/plugins/test/native-worktree.test.ts`、`worktree-process-usage.test.ts`、`contracts.test.ts`、`packages/hub/test/worktree-inspect.integration.test.ts`、`worktree-runtime.integration.test.ts` |
