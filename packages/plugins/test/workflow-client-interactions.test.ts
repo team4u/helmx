@@ -308,3 +308,165 @@ test('WorkflowWorkbenchPanel 呈现 runsStatus loading 与 error 状态（不伪
     uiErr.unmount()
   }
 })
+
+test('时间线与工作台防撑爆契约：helmx/spawn-* 收为紧凑图标徽章、无重复展开按钮、次要元信息独立分行为 .wf-node-meta', { timeout: 60_000 }, () => {
+  const parent = makeConvSummary(1)
+  const childManaged = makeConvSummary(502, {
+    parentConversationId: 1,
+    parentToolCallId: 'call-managed',
+    profileId: 'code2',
+    status: 'working',
+    title: '大纲高亮精确到标题节',
+  })
+  const childCustom = makeConvSummary(503, {
+    parentConversationId: 1,
+    parentToolCallId: 'call-custom',
+    profileId: 'reviewer',
+    status: 'idle',
+    title: '语义分支任务',
+  })
+  const managedRun: WorkflowRunSummary = {
+    id: 'wf_managed',
+    name: '大纲高亮精确到标题节',
+    conversationId: 1,
+    kind: 'subagent',
+    status: 'running',
+    createdAt: 1,
+    updatedAt: 2,
+    parentToolCallId: 'call-managed',
+    nodes: [
+      {
+        id: 'n1',
+        kind: 'agent',
+        status: 'running',
+        conversationId: 502,
+        cached: true,
+        attempt: 2,
+        gateCommand: 'pnpm test',
+        gate: { ok: true, exitCode: 0, output: '' },
+        model: 'openai/glm-5',
+        tokens: 2400,
+        worktree: { path: '/repo/.helmx-worktrees/ef72f001', branch: 'helmx/spawn-ef72f001' },
+      },
+    ],
+  }
+  const customRun: WorkflowRunSummary = {
+    id: 'wf_custom',
+    name: '语义分支任务',
+    conversationId: 1,
+    kind: 'subagent',
+    status: 'completed',
+    createdAt: 3,
+    updatedAt: 4,
+    parentToolCallId: 'call-custom',
+    nodes: [
+      {
+        id: 'n2',
+        kind: 'agent',
+        status: 'done',
+        conversationId: 503,
+        worktree: { path: '/repo/.helmx-worktrees/oauth', branch: 'feat/oauth-flow' },
+      },
+    ],
+  }
+  const wfRun: WorkflowRunSummary = {
+    id: 'wf_multi',
+    name: '并行验收流',
+    conversationId: 1,
+    kind: 'workflow',
+    status: 'completed',
+    createdAt: 5,
+    updatedAt: 6,
+    parentToolCallId: 'call-wf',
+    nodes: [{ id: 's1', kind: 'action', status: 'done', label: 'build' }],
+  }
+
+  const h = createWorkflowHostHarness({
+    conversationId: 1,
+    conversations: [parent, childManaged, childCustom],
+    runsByConversation: { 1: [managedRun, customRun, wfRun] },
+    worktreeSlots,
+    locale: 'en',
+  })
+
+  // 1. SubagentToolView（托管 helmx/spawn-* 分支）：行内不裸露哈希分支名、tooltip 保留完整信息、右侧无重复展开按钮
+  const managedToolUi = h.mountNode(
+    e(SubagentToolView, {
+      callId: 'call-managed',
+      toolName: 'subagent',
+      input: { prompt: '大纲高亮精确到标题节' },
+      status: 'running',
+      conversationId: 1,
+    }),
+  )
+  try {
+    const wtBadge = managedToolUi.container.querySelector('.wf-wt-badge')
+    assert.ok(wtBadge !== null && wtBadge.classList.contains('wf-wt-badge-compact'), 'helmx/spawn-* 应渲染紧凑图标徽章')
+    assert.equal(wtBadge.textContent?.trim(), '', '托管生成分支名不得占据单行正文宽度')
+    assert.match(wtBadge.getAttribute('title') ?? '', /helmx\/spawn-ef72f001/, '悬停提示须保留完整分支名')
+    assert.match(wtBadge.getAttribute('title') ?? '', /\/repo\/\.helmx-worktrees\/ef72f001/, '悬停提示须保留路径')
+    assert.equal(
+      managedToolUi.container.querySelectorAll('.wf-trace-right button').length,
+      0,
+      'replaceRow=true 可导航行右侧不得重复挂载第二枚展开按钮',
+    )
+  } finally {
+    managedToolUi.unmount()
+  }
+
+  // 2. SubagentToolView（自定义语义分支）：展示截断受控的 .wf-wt-branch 文本
+  const customToolUi = h.mountNode(
+    e(SubagentToolView, {
+      callId: 'call-custom',
+      toolName: 'subagent',
+      input: { prompt: '语义分支任务' },
+      status: 'done',
+      conversationId: 1,
+    }),
+  )
+  try {
+    const wtBadge = customToolUi.container.querySelector('.wf-wt-badge')
+    assert.ok(wtBadge !== null && !wtBadge.classList.contains('wf-wt-badge-compact'))
+    assert.equal(wtBadge.querySelector('.wf-wt-branch')?.textContent, 'feat/oauth-flow')
+  } finally {
+    customToolUi.unmount()
+  }
+
+  // 3. WorkflowToolView 可导航行右侧同样无重复展开按钮
+  const wfToolUi = h.mountNode(
+    e(WorkflowToolView, {
+      callId: 'call-wf',
+      toolName: 'SubagentWorkflow',
+      input: { script: 'return 1' },
+      status: 'done',
+      conversationId: 1,
+    }),
+  )
+  try {
+    assert.equal(wfToolUi.container.querySelectorAll('.wf-trace-right button').length, 0)
+  } finally {
+    wfToolUi.unmount()
+  }
+
+  // 4. ExecutionNodeRow：紧凑 worktree 徽章 + 紧凑纯图标清理按钮 + 次要元数据落入 .wf-node-meta 不挤占顶行
+  const wbUi = h.mountNode(e(WorkflowWorkbenchPanel, { conversation: parent }))
+  try {
+    const managedCard = wbUi.container.querySelector('[data-run-id="wf_managed"]')
+    assert.ok(managedCard !== null)
+    const header = managedCard.querySelector('.wf-node-header')
+    const metaRow = managedCard.querySelector('.wf-node-meta')
+    assert.ok(header !== null && metaRow !== null, '有次要元数据时应独立渲染 .wf-node-meta 行')
+    assert.equal(header.textContent?.includes('helmx/spawn-ef72f001'), false, '工作台顶行不裸露 helmx/spawn-* 哈希分支')
+    assert.equal(header.textContent?.includes('Cached'), false, 'Cached 徽章应下沉至 .wf-node-meta')
+    assert.equal(header.textContent?.includes('Gate passed'), false, 'Gate 徽章应下沉至 .wf-node-meta')
+    assert.match(metaRow.textContent ?? '', /Cached/)
+    assert.match(metaRow.textContent ?? '', /Try #2/)
+    assert.match(metaRow.textContent ?? '', /Gate passed/)
+    assert.match(metaRow.textContent ?? '', /glm-5/)
+    const cleanupBtn = managedCard.querySelector('[aria-label="Clean up isolated worktree"]')
+    assert.ok(cleanupBtn !== null)
+    assert.equal(cleanupBtn.textContent?.trim(), '', 'compact worktree-cleanup 应渲染纯图标按钮')
+  } finally {
+    wbUi.unmount()
+  }
+})

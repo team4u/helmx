@@ -37,15 +37,15 @@ function AttachmentImage({ att, conversationId }: { att: ConversationAttachmentR
     return (
       <span className="attachment-chip" title={t('conv.attachment.imageFailed', { reason: failed ?? '' })}>
         <HelmxIcon name="alert-triangle" size={11} />
-        {att.name}
+        <span className="attachment-chip-name">{att.name}</span>
       </span>
     )
   }
   if (url === null) {
     return (
-      <span className="attachment-chip">
+      <span className="attachment-chip" title={att.name}>
         <HelmxIcon name="loader" size={11} />
-        {att.name}
+        <span className="attachment-chip-name">{att.name}</span>
       </span>
     )
   }
@@ -80,9 +80,9 @@ export function AttachmentChips({
             key={att.id}
             inline
             fallback={
-              <span className="attachment-chip">
+              <span className="attachment-chip" title={att.name}>
                 <HelmxIcon name="file-text" size={11} />
-                {att.name}
+                <span className="attachment-chip-name">{att.name}</span>
               </span>
             }
           >
@@ -99,8 +99,8 @@ export function AttachmentChips({
             }
           >
             <HelmxIcon name="file-text" size={11} />
-            <span>{att.name}</span>
-            <span className="mono tabular-nums">{formatBytes(att.size)}</span>
+            <span className="attachment-chip-name">{att.name}</span>
+            <span className="attachment-chip-size mono tabular-nums">{formatBytes(att.size)}</span>
           </button>
         ),
       )}

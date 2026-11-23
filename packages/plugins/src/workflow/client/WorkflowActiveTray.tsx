@@ -181,10 +181,12 @@ function ActiveTrayInner(props: {
               type="button"
               className="btn btn-xs btn-danger"
               disabled={abortCtl.pending}
+              title={t(COPY.abort)}
+              aria-label={t(COPY.abort)}
               onClick={() => void abortCtl.run('abort', { runId: item.runId! }, { key: `abort:${item.runId!}` })}
             >
               <HelmxIcon name="square" size={11} />
-              <span>{t(COPY.abort)}</span>
+              <span className="dock-tray-action-label">{t(COPY.abort)}</span>
             </button>
           ) : undefined
         }
@@ -215,11 +217,13 @@ function ActiveTrayInner(props: {
       barAction={
         <button
           type="button"
-          className="btn btn-ghost btn-xs dock-tray-workbench-btn"
+          className="btn btn-ghost btn-xs dock-tray-workbench dock-tray-workbench-btn"
+          title={t(COPY.trayWorkbench)}
+          aria-label={t(COPY.trayWorkbench)}
           onClick={() => ctx.openWorkbench('tasks')}
         >
           <HelmxIcon name="workflow" size={11} />
-          <span>{t(COPY.trayWorkbench)}</span>
+          <span className="dock-tray-action-label">{t(COPY.trayWorkbench)}</span>
         </button>
       }
     >

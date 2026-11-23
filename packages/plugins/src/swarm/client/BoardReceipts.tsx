@@ -58,7 +58,11 @@ export function SwarmBoardWakeupPill(props: TimelineRendererProps): ReactNode {
         <HelmxIcon name="bell" size={11} />
         <span>{resolveLocalizedText(SW_BOARD_WAKEUP_PILL, locale)}</span>
       </span>
-      {meta.workerName ? <span className="badge badge-neutral mono">@{meta.workerName}</span> : null}
+      {meta.workerName ? (
+        <span className="badge badge-neutral mono" title={`@${meta.workerName}`}>
+          <span>@{meta.workerName}</span>
+        </span>
+      ) : null}
       {seqLabel !== undefined ? <span className="sw-receipt-seq mono tabular-nums">{seqLabel}</span> : null}
       {meta.postCount !== undefined ? (
         <span className="sw-receipt-count tabular-nums">{swReceiptCountLabel(meta.postCount, locale)}</span>

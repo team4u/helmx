@@ -23,12 +23,12 @@ export function ContextDivider({ item }: { item: DividerItem }) {
           {item.pending === true ? (
             <>
               <HelmxIcon name="loader" size={11} className="spin-slow" />
-              {t('conv.divider.compacting')}
+              <span>{t('conv.divider.compacting')}</span>
             </>
           ) : (
             <>
               <HelmxIcon name={item.divider === 'reset' ? 'rotate-ccw' : 'archive'} size={11} />
-              {item.divider === 'reset' ? t('conv.divider.reset') : t('conv.divider.compacted')}
+              <span>{item.divider === 'reset' ? t('conv.divider.reset') : t('conv.divider.compacted')}</span>
             </>
           )}
         </span>

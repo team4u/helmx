@@ -63,11 +63,16 @@ button, a, input, select, textarea { touch-action: manipulation; }
   .composer-split-trigger { width: 22px; }
   .composer-widgets { max-height: min(260px, 35dvh); overflow-y: auto; }
   .composer-action-label { display: none; }
+  .dock-tray-action-label { display: none; }
 }
 @container (max-width: 450px) {
   .conversation-topbar .pane-title { min-width: 40px; }
   .conversation-topbar .pane-cwd-subtitle { max-width: 30vw; }
   .composer-widgets .card { padding: 8px 10px; }
+  .trace-row { gap: 6px; padding: 2px 6px; }
+  .trace-row-left { gap: 5px; }
+  .dock-tray-bar-toggle { padding-left: 6px; }
+  .dock-tray-elapsed { display: none; }
 }
 @media (hover: none) {
   .msg-hover-bar { opacity: 0.85; }

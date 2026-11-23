@@ -206,8 +206,13 @@ export function attemptBadge(attempt: number, locale: HelmxLocale = DEFAULT_HELM
   return zh(locale) ? `第 ${attempt} 次` : `Try #${attempt}`
 }
 
-export function worktreeBadgeTitle(path: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
-  return zh(locale) ? `隔离工作树：${path}` : `Isolated worktree: ${path}`
+export function worktreeBadgeTitle(
+  branch: string,
+  path: string | undefined,
+  locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
+): string {
+  const detail = path ? `${branch} (${path})` : branch
+  return zh(locale) ? `隔离工作树：${detail}` : `Isolated worktree: ${detail}`
 }
 
 export function workbenchResumeFailedButton(count: number, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {

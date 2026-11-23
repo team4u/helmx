@@ -126,10 +126,10 @@ export function ComposerInputShell({
           {attachments.length > 0 ? (
             <div className="composer-attachments">
               {attachments.map((att) => (
-                <span key={att.key} className="attachment-chip">
+                <span key={att.key} className="attachment-chip" title={att.name}>
                   <HelmxIcon name={att.icon} size={11} />
-                  <span>{att.name}</span>
-                  <span className="mono tabular-nums">{formatBytes(att.size)}</span>
+                  <span className="attachment-chip-name">{att.name}</span>
+                  <span className="attachment-chip-size mono tabular-nums">{formatBytes(att.size)}</span>
                   {att.badge !== undefined ? (
                     <span className={att.badge.className}>{att.badge.label}</span>
                   ) : null}

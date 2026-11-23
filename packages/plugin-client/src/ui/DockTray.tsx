@@ -97,7 +97,12 @@ export function DockTray({
           <StatusLight status={status} label={statusLabel} />
           {badge}
           {count !== undefined && count !== null && count !== false ? (
-            <span className={withPrefix('dock-tray-count', classPrefix, '-count')}>{count}</span>
+            <span
+              className={withPrefix('dock-tray-count', classPrefix, '-count')}
+              title={typeof count === 'string' ? count : undefined}
+            >
+              {count}
+            </span>
           ) : null}
           {expanded ? null : frontline}
           <span className={withPrefix('dock-tray-spacer', classPrefix, '-spacer')} />
@@ -172,7 +177,9 @@ export function DockTrayRow({
   const content = (
     <>
       <StatusLight status={status} label={statusLabel} />
-      <span className={withPrefix('dock-tray-row-title', classPrefix, '-row-title')}>{title}</span>
+      <span className={withPrefix('dock-tray-row-title', classPrefix, '-row-title')} title={title}>
+        {title}
+      </span>
       {idText !== undefined ? (
         <span className={`${withPrefix('dock-tray-row-id', classPrefix, '-row-id')} tabular-nums`}>
           {idText}

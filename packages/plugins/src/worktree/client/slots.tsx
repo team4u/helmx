@@ -282,7 +282,7 @@ export function WorktreeCleanupSlot(props: WorktreeCleanupSlotProps): ReactNode 
   return (
     <button
       type="button"
-      className="btn btn-xs"
+      className={`btn btn-xs${compact === true ? ' worktree-cleanup-compact' : ''}`}
       disabled={cleaning}
       title={compact === true ? resolveLocalizedText(WT_COPY.cleanupTitle, locale) : undefined}
       aria-label={compact === true ? resolveLocalizedText(WT_COPY.cleanupAria, locale) : undefined}
@@ -299,8 +299,8 @@ export function WorktreeCleanupSlot(props: WorktreeCleanupSlotProps): ReactNode 
           .finally(() => setCleaning(false))
       }}
     >
-      <HelmxIcon name="rotate-cw" size={11} className={cleaning ? WT_SPIN : undefined} />
-      {compact === true ? <span className="subagent-action-label">{label}</span> : label}
+      <HelmxIcon name={cleaning ? 'loader' : 'trash-2'} size={11} className={cleaning ? WT_SPIN : undefined} />
+      {compact === true ? null : label}
     </button>
   )
 }

@@ -1100,6 +1100,10 @@ function deepestActiveConvId(node: ExecutionNode): number | undefined {
   return undefined
 }
 
+export function isManagedSpawnBranch(branch: string): boolean {
+  return branch.startsWith('helmx/spawn-')
+}
+
 export function buildActiveTraySummary(
   input: BuildExecutionTreeInput,
   locale: HelmxLocale = DEFAULT_HELMX_LOCALE,

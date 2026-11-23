@@ -61,8 +61,16 @@ function SwarmTrayRow(props: { item: SwarmTrayItem; nowMs: number | undefined; b
       onOpen={() => ctx.openConversationDrawer(item.conversationId)}
       openAriaLabel={`@${item.name} — ${C.trayRowOpenLabel(item.name, locale)}`}
       actions={
-        <button type="button" className="btn btn-xs btn-danger" disabled={props.busy} onClick={() => props.onAbort(`abort:${item.name}`, item.name)}>
-          <HelmxIcon name="square" size={11} /><span>{resolveLocalizedText(C.ACTION_ABORT, locale)}</span>
+        <button
+          type="button"
+          className="btn btn-xs btn-danger"
+          disabled={props.busy}
+          title={resolveLocalizedText(C.ACTION_ABORT, locale)}
+          aria-label={resolveLocalizedText(C.ACTION_ABORT, locale)}
+          onClick={() => props.onAbort(`abort:${item.name}`, item.name)}
+        >
+          <HelmxIcon name="square" size={11} />
+          <span className="dock-tray-action-label">{resolveLocalizedText(C.ACTION_ABORT, locale)}</span>
         </button>
       }
     />
@@ -127,8 +135,15 @@ function SwarmCoordinatorTray(props: { conversationId: number; groupId: string }
       }
       elapsed={groupTiming?.label}
       barAction={
-        <button type="button" className="btn btn-xs dock-tray-workbench sw-tray-workbench" onClick={() => ctx.openWorkbench(SWARM_WORKBENCH_PANEL_ID, { groupId: board.group.id })}>
-          <HelmxIcon name="network" size={11} /><span>{resolveLocalizedText(C.TRAY_WORKBENCH, locale)}</span>
+        <button
+          type="button"
+          className="btn btn-xs dock-tray-workbench sw-tray-workbench"
+          title={resolveLocalizedText(C.TRAY_WORKBENCH, locale)}
+          aria-label={resolveLocalizedText(C.TRAY_WORKBENCH, locale)}
+          onClick={() => ctx.openWorkbench(SWARM_WORKBENCH_PANEL_ID, { groupId: board.group.id })}
+        >
+          <HelmxIcon name="network" size={11} />
+          <span className="dock-tray-action-label">{resolveLocalizedText(C.TRAY_WORKBENCH, locale)}</span>
         </button>
       }
     >

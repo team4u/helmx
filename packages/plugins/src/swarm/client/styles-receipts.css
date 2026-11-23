@@ -4,6 +4,9 @@
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   padding: 5px 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -17,7 +20,7 @@
 .sw-receipt-pill:hover { background: var(--bg-hover); }
 .sw-receipt-pill:focus-visible { outline: 1.5px solid var(--accent); outline-offset: -1.5px; }
 .sw-receipt-seq, .sw-receipt-count { font-size: 11.5px; color: var(--fg-subtle); }
-.sw-receipt-headline { color: var(--fg-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 480px; }
+.sw-receipt-headline { color: var(--fg-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto; min-width: 0; max-width: min(480px, 100%); }
 
 @media (max-width: 680px) {
   .sw-receipt-headline { max-width: 100%; }

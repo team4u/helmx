@@ -33,6 +33,7 @@ import {
   statusLabel,
   traceOpenChildLabel,
   traceOpenWorkbenchRunLabel,
+  worktreeBadgeTitle,
 } from './copy.js'
 import { ElapsedClock, WorkflowTimingClock } from './ElapsedClock.js'
 import {
@@ -44,6 +45,7 @@ import {
   extractToolMetaLabel,
   isBackgroundWorkflowResultHandle,
   isLatestSubagentCallForTarget,
+  isManagedSpawnBranch,
   resolveNodeTitle,
   resolveRunDisplayName,
   resolveSubagentConversationId,
@@ -220,14 +222,20 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
       ? (backgroundRun?.status === 'running' ? backgroundRun.createdAt : props.startedAt ?? childSummary?.runStartedAt)
       : undefined
 
+  const worktreeBranch = execMeta?.worktree?.branch
+  const worktreeIsManaged = worktreeBranch !== undefined && isManagedSpawnBranch(worktreeBranch)
+  const worktreeTooltip =
+    worktreeBranch !== undefined ? worktreeBadgeTitle(worktreeBranch, execMeta?.worktree?.path, locale) : undefined
+  const canNavigate = canOpenDrawer || canOpenWorkbench
+
   return (
     <div className="trace-entry">
       <div className={`trace-row${isError ? ' trace-row-error' : ''}`}>
         <button
           type="button"
           className="trace-row-left wf-trace-toggle"
-          aria-expanded={canOpenDrawer || canOpenWorkbench ? undefined : detailsOpen}
-          aria-controls={canOpenDrawer || canOpenWorkbench ? undefined : detailsId}
+          aria-expanded={canNavigate ? undefined : detailsOpen}
+          aria-controls={canNavigate ? undefined : detailsId}
           aria-label={`${resolvedTitle.text} — ${actionAria}`}
           onClick={handleActivate}
         >
@@ -235,17 +243,34 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
           <span className="trace-tool-name wf-trace-name" title={resolvedTitle.text}>
             {resolvedTitle.text}
           </span>
-          {idTag ? <span className="wf-trace-id tabular-nums">{idTag}</span> : null}
-          {childId !== undefined && childSummary?.profileId ? (
-            <span className="badge badge-neutral wf-trace-badge">{`@${childSummary.profileId}`}</span>
-          ) : null}
-          {execMeta?.worktree?.branch ? (
-            <span className="badge badge-neutral wf-trace-badge">
-              <HelmxIcon name="git-branch" size={10} />
-              <span>{execMeta.worktree.branch}</span>
+          {idTag ? (
+            <span className="wf-trace-id tabular-nums" title={idTag}>
+              {idTag}
             </span>
           ) : null}
-          {!isLatest ? <span className="badge badge-neutral wf-trace-badge">{t(COPY.resumedBelow)}</span> : null}
+          {childId !== undefined && childSummary?.profileId ? (
+            <span
+              className="badge badge-neutral wf-trace-badge wf-trace-profile"
+              title={`@${childSummary.profileId}`}
+            >
+              <span>{`@${childSummary.profileId}`}</span>
+            </span>
+          ) : null}
+          {worktreeBranch !== undefined ? (
+            <span
+              className={`badge badge-neutral wf-trace-badge wf-wt-badge${worktreeIsManaged ? ' wf-wt-badge-compact' : ''}`}
+              title={worktreeTooltip}
+              aria-label={worktreeTooltip}
+            >
+              <HelmxIcon name="git-branch" size={10} />
+              {!worktreeIsManaged ? <span className="wf-wt-branch">{worktreeBranch}</span> : null}
+            </span>
+          ) : null}
+          {!isLatest ? (
+            <span className="badge badge-neutral wf-trace-badge">
+              <span>{t(COPY.resumedBelow)}</span>
+            </span>
+          ) : null}
           {displaySummary ? (
             <span className={`trace-tool-summary${isError ? ' wf-trace-error' : ''}`} title={displaySummary}>
               {displaySummary}
@@ -261,29 +286,18 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
             settledMs={settledMs}
             className="trace-duration"
           />
-          {canOpenDrawer || canOpenWorkbench ? (
-            <button
-              type="button"
-              className="btn btn-ghost btn-xs"
-              aria-expanded={detailsOpen}
-              aria-controls={detailsId}
-              aria-label={t(detailsOpen ? COPY.collapseDetails : COPY.expandDetails)}
-              title={t(detailsOpen ? COPY.collapseDetails : COPY.expandDetails)}
-              onClick={() => setDetailsOpen((v) => !v)}
-            >
-              <HelmxIcon name={detailsOpen ? 'chevron-down' : 'chevron-right'} size={11} />
-            </button>
-          ) : null}
         </span>
       </div>
 
-      <div id={detailsId} hidden={!detailsOpen}>
-        {detailsOpen ? (
-          <div className="trace-expanded-body">
-            <ToolCallDetails input={props.input} result={props.result} artifactRef={props.artifactRef} />
-          </div>
-        ) : null}
-      </div>
+      {!canNavigate ? (
+        <div id={detailsId} hidden={!detailsOpen}>
+          {detailsOpen ? (
+            <div className="trace-expanded-body">
+              <ToolCallDetails input={props.input} result={props.result} artifactRef={props.artifactRef} />
+            </div>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -394,29 +408,18 @@ export function WorkflowToolView(props: ToolViewProps): ReactNode {
               className="trace-duration"
             />
           )}
-          {run !== undefined ? (
-            <button
-              type="button"
-              className="btn btn-ghost btn-xs"
-              aria-expanded={detailsOpen}
-              aria-controls={detailsId}
-              aria-label={t(detailsOpen ? COPY.collapseDetails : COPY.expandDetails)}
-              title={t(detailsOpen ? COPY.collapseDetails : COPY.expandDetails)}
-              onClick={() => setDetailsOpen((v) => !v)}
-            >
-              <HelmxIcon name={detailsOpen ? 'chevron-down' : 'chevron-right'} size={11} />
-            </button>
-          ) : null}
         </span>
       </div>
 
-      <div id={detailsId} hidden={!detailsOpen}>
-        {detailsOpen ? (
-          <div className="trace-expanded-body">
-            <ToolCallDetails input={props.input} result={props.result} artifactRef={props.artifactRef} />
-          </div>
-        ) : null}
-      </div>
+      {run === undefined ? (
+        <div id={detailsId} hidden={!detailsOpen}>
+          {detailsOpen ? (
+            <div className="trace-expanded-body">
+              <ToolCallDetails input={props.input} result={props.result} artifactRef={props.artifactRef} />
+            </div>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   )
 }

@@ -36,6 +36,7 @@ import {
   canResumeSubagentRun,
   executionLightStatus,
   formatNodeStats,
+  isManagedSpawnBranch,
   resolveLiveSnippet,
   resolveNodeElapsedMs,
   resolveNodeTitle,
@@ -229,6 +230,15 @@ export function ExecutionNodeRow(props: ExecutionNodeRowProps): ReactNode {
     .filter(Boolean)
     .join(' ')
 
+  const worktreeIsManaged = node.worktree !== undefined && isManagedSpawnBranch(node.worktree.branch)
+  const worktreeTooltip =
+    node.worktree !== undefined ? worktreeBadgeTitle(node.worktree.branch, node.worktree.path, locale) : undefined
+  const hasMetaRow =
+    Boolean(node.cached) ||
+    (node.attempt !== undefined && node.attempt > 1) ||
+    node.gate !== undefined ||
+    stats.length > 0
+
   const headerCore = (
     <>
       <StatusLight status={executionLightStatus(status)} label={statusLabel(status, locale)} />
@@ -239,25 +249,25 @@ export function ExecutionNodeRow(props: ExecutionNodeRowProps): ReactNode {
         <span className="wf-node-id tabular-nums">{`#${convId}`}</span>
       ) : null}
       {convId === undefined && node.executionId ? (
-        <span className="wf-node-id mono">{node.executionId}</span>
+        <span className="wf-node-id mono" title={node.executionId}>
+          {node.executionId}
+        </span>
       ) : null}
-      {isAction ? <span className="badge badge-neutral">{t(COPY.actionLabel)}</span> : null}
+      {isAction ? (
+        <span className="badge badge-neutral">
+          <span>{t(COPY.actionLabel)}</span>
+        </span>
+      ) : null}
       {node.worktree ? (
-        <span className="badge badge-neutral wf-wt-badge" title={worktreeBadgeTitle(node.worktree.path, locale)}>
+        <span
+          className={`badge badge-neutral wf-wt-badge${worktreeIsManaged ? ' wf-wt-badge-compact' : ''}`}
+          title={worktreeTooltip}
+          aria-label={worktreeTooltip}
+        >
           <HelmxIcon name="git-branch" size={11} />
-          <span>{node.worktree.branch}</span>
+          {!worktreeIsManaged ? <span className="wf-wt-branch">{node.worktree.branch}</span> : null}
         </span>
       ) : null}
-      {node.cached ? <span className="badge badge-warn">{t(COPY.runCachedBadge)}</span> : null}
-      {node.attempt !== undefined && node.attempt > 1 ? (
-        <span className="badge badge-neutral">{attemptBadge(node.attempt, locale)}</span>
-      ) : null}
-      {node.gate !== undefined ? (
-        <span className={`badge ${node.gate.ok ? 'badge-ok' : 'badge-err'}`}>
-          {t(node.gate.ok ? COPY.runGatePassed : COPY.runGateFailed)}
-        </span>
-      ) : null}
-      {stats.length > 0 ? <span className="wf-node-stats tabular-nums">{stats.join(' · ')}</span> : null}
       <ElapsedClock
         active={isRunning}
         startedAt={startedAt}
@@ -312,19 +322,23 @@ export function ExecutionNodeRow(props: ExecutionNodeRowProps): ReactNode {
           {showAbort && run !== undefined ? (
             <button
               type="button"
-              className="btn btn-xs btn-danger"
+              className="btn btn-xs btn-danger wf-node-icon-btn"
               disabled={actionCtl.pending}
+              title={t(COPY.abort)}
+              aria-label={t(COPY.abort)}
               onClick={() => void actionCtl.run('abort', { runId: run.id }, { key: `abort:${run.id}` })}
             >
               <HelmxIcon name="square" size={11} />
-              <span>{t(COPY.abort)}</span>
+              <span className="wf-sr-only">{t(COPY.abort)}</span>
             </button>
           ) : null}
           {showResume && run !== undefined ? (
             <button
               type="button"
-              className="btn btn-xs"
+              className="btn btn-xs wf-node-icon-btn"
               disabled={actionCtl.pending}
+              title={t(COPY.resume)}
+              aria-label={t(COPY.resume)}
               onClick={() =>
                 void actionCtl.run(
                   'run',
@@ -340,7 +354,7 @@ export function ExecutionNodeRow(props: ExecutionNodeRowProps): ReactNode {
               }
             >
               <HelmxIcon name="rotate-cw" size={11} className={actionCtl.pendingKey === `resume:${run.id}` ? SPIN_CLASS : undefined} />
-              <span>{t(COPY.resume)}</span>
+              <span className="wf-sr-only">{t(COPY.resume)}</span>
             </button>
           ) : null}
           {node.worktree !== undefined ? (
@@ -360,6 +374,21 @@ export function ExecutionNodeRow(props: ExecutionNodeRowProps): ReactNode {
           ) : null}
         </div>
       </div>
+
+      {hasMetaRow ? (
+        <div className="wf-node-meta">
+          {node.cached ? <span className="badge badge-warn">{t(COPY.runCachedBadge)}</span> : null}
+          {node.attempt !== undefined && node.attempt > 1 ? (
+            <span className="badge badge-neutral">{attemptBadge(node.attempt, locale)}</span>
+          ) : null}
+          {node.gate !== undefined ? (
+            <span className={`badge ${node.gate.ok ? 'badge-ok' : 'badge-err'}`}>
+              {t(node.gate.ok ? COPY.runGatePassed : COPY.runGateFailed)}
+            </span>
+          ) : null}
+          {stats.length > 0 ? <span className="wf-node-stats tabular-nums">{stats.join(' · ')}</span> : null}
+        </div>
+      ) : null}
 
       {snippet !== undefined ? (
         <div className={`wf-node-subline${snippet.isError ? ' wf-node-subline-error' : ''}`}>
