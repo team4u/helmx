@@ -127,6 +127,7 @@ export const conversationMessages = {
   'conv.pane.actionFailedTitle': { en: '{title} failed', 'zh-CN': '{title}失败' },
   'conv.pane.conversationRenamed': { en: 'Conversation renamed', 'zh-CN': '已重命名会话' },
   'conv.pane.titleFallback': { en: 'Conversation #{id}', 'zh-CN': '会话 #{id}' },
+  'conv.pane.openParent': { en: 'Open parent conversation: {title}', 'zh-CN': '打开父会话：{title}' },
   'conv.pane.metaConversationId': { en: 'Conversation ID', 'zh-CN': '会话 ID' },
   'conv.pane.metaAgents': { en: 'Agents', 'zh-CN': '智能体' },
   'conv.pane.metaNode': { en: 'Node', 'zh-CN': '节点' },

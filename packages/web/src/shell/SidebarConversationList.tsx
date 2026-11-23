@@ -266,7 +266,7 @@ function SidebarWorkingSetTreeItem({
         </span>,
       )
     }
-    if (card.summaryText !== '') {
+    if (card.summaryText !== '' && (card.directDescendants.length === 0 || card.root.status === 'working')) {
       metaParts.push(
         <span key="summary" className="sidebar-overview-meta-summary" title={card.summaryText}>
           {card.summaryText}
@@ -281,17 +281,20 @@ function SidebarWorkingSetTreeItem({
     )
   }
 
-  const showDescendantToggle = descendantSlice.hasCollapsibleQuiet
+  const showDescendantToggle = card.directDescendants.length > 0
+  const activeDescendantCount = card.activeDescendantCount
+  const descBadgeText = String(card.descendants.length)
   const descToggleLabel =
-    descendantSlice.hiddenCount > 0
-      ? t('shell.sidebar.overviewExpandSub', { count: descendantSlice.hiddenCount })
-      : t('shell.sidebar.overviewCollapseSub')
-  const descBadgeText =
-    descendantSlice.hiddenCount > 0
-      ? descendantSlice.visible.length > 0
-        ? `+${descendantSlice.hiddenCount}`
-        : String(card.descendants.length)
-      : String(card.descendants.length)
+    activeDescendantCount > 0
+      ? t('shell.sidebar.overviewSubBadgeWithActivity', {
+          active: activeDescendantCount,
+          total: card.descendants.length,
+        })
+      : t('shell.sidebar.overviewSubBadge', { count: card.descendants.length })
+  const subtreeSignals = [
+    card.hasError ? t('shell.overview.hasError') : '',
+    card.hasWaiting ? t('shell.overview.waitingForYou') : '',
+  ].filter(Boolean)
 
   return (
     <div className="sidebar-overview-tree">
@@ -359,10 +362,10 @@ function SidebarWorkingSetTreeItem({
               )}
             </div>
             {showDescendantToggle && (
-              <Tooltip content={descToggleLabel} side="top">
+              <Tooltip content={subtreeSignals.length > 0 ? `${descToggleLabel} · ${subtreeSignals.join(' · ')}` : descToggleLabel} side="top">
                 <button
                   type="button"
-                  className={`sidebar-overview-desc-toggle tabular-nums${expanded ? ' is-expanded' : ''}`}
+                  className={`sidebar-overview-desc-toggle tabular-nums${expanded ? ' is-expanded' : ''}${card.hasError ? ' is-error' : card.hasWaiting ? ' is-warn' : activeDescendantCount > 0 ? ' is-active' : ''}`}
                   aria-expanded={expanded}
                   aria-label={descToggleLabel}
                   onClick={(e) => {
@@ -415,6 +418,18 @@ function SidebarWorkingSetDescendantRow({
   const presence = getConversationPresence(store, descendant.conv.id)
   const timing = resolveOverviewDescendantChipTiming(descendant, nowMs)
   const titleText = descendant.conv.title || t('shell.conversationFallback', { id: descendant.conv.id })
+  const descendantBranchLabel = t('shell.sidebar.overviewDirectSubBadge', { count: descendant.subtreeDescendantCount ?? 0 })
+  const descendantSignals = [
+    (descendant.subtreeErrorCount ?? 0) > 0
+      ? t('shell.sidebar.overviewSubtreeError', { count: descendant.subtreeErrorCount ?? 0 })
+      : '',
+    (descendant.subtreeWaitingCount ?? 0) > 0
+      ? t('shell.sidebar.overviewSubtreeWaiting', { count: descendant.subtreeWaitingCount ?? 0 })
+      : '',
+  ].filter(Boolean)
+  const descendantMetaTitle = descendantSignals.length > 0
+    ? `${descendantBranchLabel} · ${descendantSignals.join(' · ')}`
+    : descendantBranchLabel
 
   const handleActivate = (_e: MouseEvent): void => {
     onOpenConversation(descendant.conv.id)
@@ -439,12 +454,25 @@ function SidebarWorkingSetDescendantRow({
           <ConversationStatusDot
             conv={descendant.conv}
             background={descendant.backgroundActive ? { active: true, summary: '' } : undefined}
+            aggregate={{
+              activeCount: descendant.subtreeActiveCount,
+              errorCount: descendant.subtreeErrorCount,
+              waitingCount: descendant.subtreeWaitingCount,
+            }}
             showDone={descendant.conv.unread && !viewedConversationIds.has(descendant.conv.id)}
           />
         </span>
         <span className="nav-item-label">{titleText}</span>
       </button>
       <span className="nav-item-meta">
+        {(descendant.subtreeDescendantCount ?? 0) > 0 && (
+          <span
+            className={`sidebar-overview-desc-children tabular-nums${(descendant.subtreeActiveCount ?? 0) > 0 ? ' is-active' : ''}`}
+            title={descendantMetaTitle}
+          >
+            <HelmxIcon name="git-branch" size={9} /> {descendant.subtreeDescendantCount}
+          </span>
+        )}
         {timing !== undefined && (
           <span
             className={`sidebar-overview-desc-time mono tabular-nums${timing.kind === 'waiting' ? ' is-warn' : ''}`}

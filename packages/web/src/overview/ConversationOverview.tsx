@@ -214,22 +214,24 @@ function OverviewCardView({
   // 普通模式不覆写 aria-label——可访问名称直接由内容组成（状态灯可读标签 +
   // 标题 + #id），异常/等待人类事实原样进入读屏。
   const buttonLabel = batchMode ? `${cardTitleText} · ${t('shell.overview.batchToggleCard')}` : openLabel
+  const descendantItems = card.directDescendants
   const collapseDescendantsByDefault = card.bucket === 'quiet' || card.bucket === 'archived'
   const shownDescendants = expanded
-    ? card.descendants
+    ? descendantItems
     : collapseDescendantsByDefault
       ? []
-      : card.descendants.slice(0, OVERVIEW_DESCENDANT_LIMIT)
+      : descendantItems.slice(0, OVERVIEW_DESCENDANT_LIMIT)
+  const hiddenDirectDescendantCount = Math.max(0, descendantItems.length - OVERVIEW_DESCENDANT_LIMIT)
   const showDescendantToggle = collapseDescendantsByDefault
-    ? card.descendants.length > 0
-    : card.hiddenDescendantCount > 0
+    ? descendantItems.length > 0
+    : hiddenDirectDescendantCount > 0
   const descendantToggleLabel = expanded
     ? t('shell.overview.collapseDescendants')
     : collapseDescendantsByDefault
-      ? card.descendants.length === 1
+      ? descendantItems.length === 1
         ? t('shell.overview.quietDescendantOne')
-        : t('shell.overview.quietDescendants', { count: card.descendants.length })
-      : t('shell.overview.moreDescendants', { count: card.hiddenDescendantCount })
+        : t('shell.overview.quietDescendants', { count: descendantItems.length })
+      : t('shell.overview.moreDescendants', { count: hiddenDirectDescendantCount })
   return (
     <article
       className={`overview-card overview-card-${card.bucket}${selected ? ' is-selected' : ''}`}
@@ -344,7 +346,7 @@ function OverviewCardView({
         slotProps={{ rootConversation: card.root, memberIds: card.memberIds }}
         className="overview-card-meta-slot"
       />
-      {card.descendants.length > 0 && (
+      {descendantItems.length > 0 && (
         <div className="overview-chips">
           {shownDescendants.map((descendant) => {
             const chipTiming = resolveOverviewDescendantChipTiming(descendant, nowMs)
@@ -366,11 +368,21 @@ function OverviewCardView({
                 <ConversationStatusDot
                   conv={descendant.conv}
                   background={descendant.backgroundActive ? { active: true, summary: '' } : undefined}
+                  aggregate={{
+                    activeCount: descendant.subtreeActiveCount,
+                    errorCount: descendant.subtreeErrorCount,
+                    waitingCount: descendant.subtreeWaitingCount,
+                  }}
                   showDone={descendant.conv.unread && !viewedConversationIds.has(descendant.conv.id)}
                 />
                 <span className="overview-chip-label">
                   {descendant.conv.title || t('shell.conversationFallback', { id: descendant.conv.id })}
                 </span>
+                {(descendant.subtreeDescendantCount ?? 0) > 0 ? (
+                  <span className="overview-chip-elapsed tabular-nums" title={t('shell.sidebar.overviewDirectSubBadge', { count: descendant.subtreeDescendantCount ?? 0 })}>
+                    {descendant.subtreeDescendantCount}
+                  </span>
+                ) : null}
                 {chipTiming !== undefined ? (
                   <span
                     className={`overview-chip-elapsed mono tabular-nums${chipTiming.kind === 'waiting' ? ' overview-chip-elapsed-warn' : ''}`}
