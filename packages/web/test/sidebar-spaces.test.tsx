@@ -12,7 +12,7 @@ import { test } from 'node:test'
 import * as React from 'react'
 import type { ConversationSummary, PluginUiContribution } from '@helmx/protocol'
 import type { LocalePreference } from '../src/lib/types.js'
-import { SIDEBAR_RECENT_QUIET_LIMIT } from '../src/overview/overview-model.js'
+import { SIDEBAR_GROUP_BY_STORAGE_KEY, SIDEBAR_RECENT_QUIET_LIMIT } from '../src/overview/overview-model.js'
 import { makeTestStore } from './helpers/store.js'
 import type { HelmxExternalStore, HelmxStoreActions } from '../src/lib/helmx-store.js'
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
@@ -561,4 +561,124 @@ test('CommandPaletteModal 与 ScreenHost 双语本地化及语言循环命令（
   )
   await act(async () => {})
   assert.ok(document.body.textContent?.includes('未找到视图 ext:missing/overview'))
+})
+
+test('Sidebar 工作集分组切换（按状态 / 按角色 / 按节点）：还原智能体空站位与独立近期上限、持久化及移动端防误关', { timeout: 60_000 }, async () => {
+  window.localStorage.removeItem(SIDEBAR_GROUP_BY_STORAGE_KEY)
+  try {
+    // coder 有 7 条安静会话（高于单组上限 5），assistant 有 1 条较老安静会话，researcher 为 0 会话可见角色
+    const coderQuiet = Array.from({ length: 7 }, (_, idx) =>
+      conv({
+        id: 200 + idx,
+        title: `编码历史 ${idx + 1}`,
+        profileId: 'coder',
+        nodeId: idx === 0 ? 'gpu-1' : undefined,
+        createdAt: 50_000 + idx * 1000,
+        updatedAt: 50_000 + idx * 1000,
+      }),
+    )
+    const store = makeTestStore({
+      locale: 'zh-CN',
+      conversations: [
+        conv({ id: 10, title: '助理早期话题', profileId: 'assistant', createdAt: 1000, updatedAt: 1000 }),
+        ...coderQuiet,
+      ],
+      profiles: [
+        { id: 'assistant', name: '个人助理' },
+        { id: 'coder', name: '编码专员' },
+        { id: 'researcher', name: '调研专员' },
+      ],
+      primaryTarget: { kind: 'conversation', conversationId: 206 },
+    })
+
+    let closeCount = 0
+    let navBubble = 0
+    render(
+      store,
+      e(
+        'div',
+        {
+          onClick: (event: React.MouseEvent<HTMLDivElement>) => {
+            if ((event.target as HTMLElement).closest('.nav-item')) navBubble += 1
+          },
+        },
+        e(LiveSidebar, { onClose: () => { closeCount += 1 } }),
+      ),
+    )
+    await act(async () => {})
+
+    // 默认按状态：分组按钮打开菜单不冒泡到 .nav-item（防误关移动端抽屉）
+    const groupTrigger = document.body.querySelector<HTMLButtonElement>('.sidebar-group-by-btn')!
+    assert.ok(groupTrigger !== null)
+    await act(async () => {
+      groupTrigger.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, cancelable: true }))
+      groupTrigger.click()
+    })
+    assert.equal(navBubble, 0, '打开分组菜单不触发 .nav-item 关闭抽屉')
+
+    const byProfileOption = document.querySelector<HTMLElement>('[data-group-by-option="profile"]')!
+    assert.ok(byProfileOption !== null)
+    await act(async () => {
+      byProfileOption.click()
+    })
+    assert.equal(window.localStorage.getItem(SIDEBAR_GROUP_BY_STORAGE_KEY), 'profile')
+
+    // 按角色分组：保留全部三个可见角色，包含 0 会话的「调研专员」；且高频 coder 不会挤掉 assistant
+    const profileSections = [...document.body.querySelectorAll<HTMLElement>('.sidebar-overview-section-profile')]
+    assert.equal(profileSections.length, 3)
+    assert.ok(document.body.textContent!.includes('助理早期话题'), '按角色独立截断，高频角色不会挤掉其他角色')
+    assert.ok(document.body.textContent!.includes('调研专员'), '0 会话可见角色仍保留站位')
+    // coder 组内隐藏重复角色元信息，且底部查看全部透传 group=profile
+    const coderSection = profileSections.find((s) => s.dataset.groupKey === 'profile:coder')!
+    assert.equal(coderSection.querySelectorAll('.sidebar-overview-meta-profile').length, 0, '按角色分组时行内省略重复角色名')
+    assert.equal(coderSection.querySelectorAll('.sidebar-overview-item').length, 5, '每角色组内独立保留 5 条近期会话')
+
+    // 点 0 会话角色行直进待命页并关闭抽屉
+    const emptyAgentBtn = document.body.querySelector<HTMLButtonElement>('.sidebar-overview-section-empty-agent')!
+    await act(async () => {
+      emptyAgentBtn.click()
+    })
+    assert.deepEqual(store.getPrimaryTarget(), { kind: 'agent', profileId: 'researcher' })
+    assert.equal(closeCount, 1)
+
+    // 点非空角色组头 + 按钮直接在该角色下开新话题（不折叠分组）
+    const coderNewTopicBtn = coderSection.querySelector<HTMLButtonElement>('.sidebar-section-new-topic-btn')!
+    await act(async () => {
+      coderNewTopicBtn.click()
+    })
+    assert.deepEqual(store.getPrimaryTarget(), { kind: 'agent', profileId: 'coder' })
+    assert.equal(closeCount, 2)
+
+    // 底部「查看全部」透传当前分组维度到 #/overview
+    const viewAllBtn = document.body.querySelector<HTMLButtonElement>('.sidebar-view-all-btn')!
+    await act(async () => {
+      viewAllBtn.click()
+    })
+    assert.deepEqual(store.getPrimaryTarget(), { kind: 'overview', params: { group: 'profile' } })
+
+    // 切换到按节点分组
+    await act(async () => {
+      groupTrigger.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, cancelable: true }))
+      groupTrigger.click()
+    })
+    const byNodeOption = document.querySelector<HTMLElement>('[data-group-by-option="node"]')!
+    await act(async () => {
+      byNodeOption.click()
+    })
+    assert.equal(window.localStorage.getItem(SIDEBAR_GROUP_BY_STORAGE_KEY), 'node')
+    const nodeKeys = [...document.body.querySelectorAll<HTMLElement>('.sidebar-overview-section-node')].map(
+      (s) => s.dataset.groupKey,
+    )
+    assert.ok(nodeKeys.includes('node:gpu-1') && nodeKeys.includes('node:local'))
+    const gpuSection = document.body.querySelector<HTMLElement>('[data-group-key="node:gpu-1"]')!
+    assert.equal(gpuSection.querySelectorAll('.sidebar-overview-meta-node').length, 0, '按节点分组时行内省略重复节点标签')
+  } finally {
+    if (root) {
+      await act(async () => {
+        root!.unmount()
+      })
+      root = null
+    }
+    window.localStorage.removeItem(SIDEBAR_GROUP_BY_STORAGE_KEY)
+  }
 })

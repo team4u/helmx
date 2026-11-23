@@ -126,6 +126,42 @@ export const OVERVIEW_DESCENDANT_LIMIT = 5
 /** 侧栏工作集「近期」安静根会话默认上限（活跃三桶永不截断，当前在场安静树保底显示）。 */
 export const SIDEBAR_RECENT_QUIET_LIMIT = 8
 
+/** 侧栏工作集按角色/节点分组时，每个分组独立保留的近期安静会话默认上限。 */
+export const SIDEBAR_PER_GROUP_QUIET_LIMIT = 5
+
+/** 侧栏工作集分组维度 localStorage 持久化键。 */
+export const SIDEBAR_GROUP_BY_STORAGE_KEY = 'helmx:sidebar-group-by'
+
+/** 读取持久化的侧栏分组维度（非法值或不可用存储静默回退 'status'）。 */
+export function loadSidebarGroupBy(storage?: Pick<Storage, 'getItem'> | null): OverviewGroupBy {
+  try {
+    const store = storage === undefined
+      ? (typeof window !== 'undefined' ? window.localStorage : null)
+      : storage
+    const raw = store?.getItem(SIDEBAR_GROUP_BY_STORAGE_KEY)
+    if (raw === 'profile' || raw === 'node' || raw === 'status') return raw
+    return 'status'
+  } catch {
+    return 'status'
+  }
+}
+
+/** 持久化侧栏分组维度（私有模式/配额异常静默忽略）。 */
+export function saveSidebarGroupBy(
+  groupBy: OverviewGroupBy,
+  storage?: Pick<Storage, 'setItem'> | null,
+): OverviewGroupBy {
+  try {
+    const store = storage === undefined
+      ? (typeof window !== 'undefined' ? window.localStorage : null)
+      : storage
+    store?.setItem(SIDEBAR_GROUP_BY_STORAGE_KEY, groupBy)
+  } catch {
+    // Ignore storage quota or private-mode access errors.
+  }
+  return groupBy
+}
+
 /** 判断单条后代会话是否带有活跃或需关注信号（working / blocked / error / 待答 Ask / 后台在途）。 */
 export function isOverviewDescendantActive(descendant: OverviewDescendant): boolean {
   const { conv, backgroundActive } = descendant
@@ -800,6 +836,22 @@ export function buildSidebarWorkingSet(input: {
     else activeCards.push(card)
   }
 
+  const sliced = sliceSidebarGroupQuietCards(activeCards, quietCards, activeConversationIds, recentLimit)
+
+  return {
+    cards: sliced.cards,
+    totalRootCount,
+    omittedQuietCount: sliced.omittedQuietCount,
+    searchActive: false,
+  }
+}
+
+function sliceSidebarGroupQuietCards(
+  activeCards: ReadonlyArray<OverviewCard>,
+  quietCards: ReadonlyArray<OverviewCard>,
+  activeConversationIds: ReadonlySet<number>,
+  quietLimit: number,
+): { cards: OverviewCard[]; omittedQuietCount: number } {
   const sortedQuiet = [...quietCards].sort(
     (a, b) =>
       b.root.updatedAt - a.root.updatedAt ||
@@ -807,7 +859,7 @@ export function buildSidebarWorkingSet(input: {
       b.root.id - a.root.id,
   )
 
-  const cap = Math.max(0, recentLimit)
+  const cap = Math.max(0, quietLimit)
   const keptQuiet: OverviewCard[] = []
   for (let i = 0; i < sortedQuiet.length; i += 1) {
     const card = sortedQuiet[i]!
@@ -818,10 +870,197 @@ export function buildSidebarWorkingSet(input: {
 
   return {
     cards: [...activeCards, ...keptQuiet],
-    totalRootCount,
     omittedQuietCount: sortedQuiet.length - keptQuiet.length,
-    searchActive: false,
   }
+}
+
+function sliceSingleBucketGroup(
+  groupCards: ReadonlyArray<OverviewCard>,
+  activeConversationIds: ReadonlySet<number>,
+  quietLimit: number,
+): { cards: OverviewCard[]; omittedQuietCount: number } {
+  const activeCards: OverviewCard[] = []
+  const quietCards: OverviewCard[] = []
+  for (const card of groupCards) {
+    if (card.bucket === 'quiet') quietCards.push(card)
+    else activeCards.push(card)
+  }
+  return sliceSidebarGroupQuietCards(activeCards, quietCards, activeConversationIds, quietLimit)
+}
+
+/** 侧栏工作集分组项（统一覆盖按状态 / 按角色 / 按节点三种维度）。 */
+export interface SidebarWorkingSetGroup extends OverviewCardGroup {
+  /** 角色分组时的 Profile ID。 */
+  profileId?: string
+  /** 角色分组时是否允许人类直接在该角色下开新话题（决定组头 + 按钮）。 */
+  canCreateConversation?: boolean
+  /** 该分组在截断前的完整根会话数。 */
+  totalGroupCount: number
+}
+
+/** 侧栏工作集按维度分组结果。 */
+export interface SidebarGroupedWorkingSet {
+  groups: SidebarWorkingSetGroup[]
+  /** 全量未归档人类根会话树总数（供底部「查看全部 N 个会话」展示）。 */
+  totalRootCount: number
+  /** 被近期上限省略的安静根会话树总数。 */
+  omittedQuietCount: number
+  /** 当前是否处于搜索态（搜索突破近期上限）。 */
+  searchActive: boolean
+}
+
+/**
+ * 构建侧栏工作集分组切片（按状态 / 按角色 / 按节点）：
+ * - 按状态：完全复用 buildSidebarWorkingSet（全局近期上限 + 在场保底）再按四桶分节；
+ * - 按角色：先按可见角色归组再在各组内独立截取近期安静会话（避免某个高频角色挤掉其他角色），
+ *   保留 0 会话的可创建可见角色以还原智能体站位体验；
+ * - 按节点：先按运行节点归组（活跃节点优先）再在各组内独立截取近期安静会话；
+ * - 搜索激活时三种模式均突破近期上限，仅返回命中会话的分组。
+ */
+export function buildSidebarGroupedWorkingSet(input: {
+  groupBy: OverviewGroupBy
+  cards: ReadonlyArray<OverviewCard>
+  activeConversationIds: ReadonlySet<number>
+  agentStandings?: ReadonlyArray<AgentStanding>
+  query?: string
+  recentLimit?: number
+  perGroupQuietLimit?: number
+  t?: WebMessageTranslator
+}): SidebarGroupedWorkingSet {
+  const {
+    groupBy,
+    cards,
+    activeConversationIds,
+    agentStandings,
+    query = '',
+    recentLimit = SIDEBAR_RECENT_QUIET_LIMIT,
+    perGroupQuietLimit = SIDEBAR_PER_GROUP_QUIET_LIMIT,
+    t = englishWebTranslator,
+  } = input
+
+  if (groupBy === 'status') {
+    const ws = buildSidebarWorkingSet({ cards, activeConversationIds, query, recentLimit })
+    const groups: SidebarWorkingSetGroup[] = groupOverviewCards(ws.cards, 'status', t).map((group) => ({
+      ...group,
+      totalGroupCount: group.cards.length,
+    }))
+    return {
+      groups,
+      totalRootCount: ws.totalRootCount,
+      omittedQuietCount: ws.omittedQuietCount,
+      searchActive: ws.searchActive,
+    }
+  }
+
+  const humanCards = cards.filter((card) => !card.automated)
+  const totalRootCount = humanCards.length
+  const trimmedQuery = query.trim()
+
+  if (groupBy === 'profile') {
+    const standingByProfile = new Map<string, AgentStanding>(
+      (agentStandings ?? []).map((standing) => [standing.profileId, standing] as const),
+    )
+
+    if (trimmedQuery !== '') {
+      const matched = filterOverviewCards(humanCards, {
+        bucket: 'all',
+        profileId: '',
+        nodeId: '',
+        source: 'all',
+        query: trimmedQuery,
+      })
+      const groups: SidebarWorkingSetGroup[] = groupOverviewCards(matched, 'profile', t).map((group) => {
+        const profileId = group.cards[0]!.root.profileId
+        const standing = standingByProfile.get(profileId)
+        return {
+          ...group,
+          profileId,
+          label: standing?.label || group.label,
+          canCreateConversation: standing?.canCreateConversation === true,
+          totalGroupCount: group.cards.length,
+        }
+      })
+      return { groups, totalRootCount, omittedQuietCount: 0, searchActive: true }
+    }
+
+    const byProfile = new Map<string, OverviewCard[]>()
+    for (const card of humanCards) {
+      const pid = card.root.profileId
+      let list = byProfile.get(pid)
+      if (list === undefined) {
+        list = []
+        byProfile.set(pid, list)
+      }
+      list.push(card)
+    }
+
+    const groups: SidebarWorkingSetGroup[] = []
+    const seen = new Set<string>()
+    let omittedQuietCount = 0
+
+    for (const standing of agentStandings ?? []) {
+      const rawCards = byProfile.get(standing.profileId) ?? []
+      if (rawCards.length === 0 && !standing.canCreateConversation) continue
+      const sliced = sliceSingleBucketGroup(rawCards, activeConversationIds, perGroupQuietLimit)
+      omittedQuietCount += sliced.omittedQuietCount
+      groups.push({
+        key: `profile:${standing.profileId}`,
+        kind: 'profile',
+        profileId: standing.profileId,
+        label: standing.label,
+        canCreateConversation: standing.canCreateConversation,
+        cards: sliced.cards,
+        totalGroupCount: rawCards.length,
+      })
+      seen.add(standing.profileId)
+    }
+
+    for (const [profileId, rawCards] of byProfile) {
+      if (seen.has(profileId)) continue
+      const sliced = sliceSingleBucketGroup(rawCards, activeConversationIds, perGroupQuietLimit)
+      omittedQuietCount += sliced.omittedQuietCount
+      groups.push({
+        key: `profile:${profileId}`,
+        kind: 'profile',
+        profileId,
+        label: rawCards[0]!.profileLabel || profileId,
+        canCreateConversation: false,
+        cards: sliced.cards,
+        totalGroupCount: rawCards.length,
+      })
+    }
+
+    return { groups, totalRootCount, omittedQuietCount, searchActive: false }
+  }
+
+  // groupBy === 'node'
+  if (trimmedQuery !== '') {
+    const matched = filterOverviewCards(humanCards, {
+      bucket: 'all',
+      profileId: '',
+      nodeId: '',
+      source: 'all',
+      query: trimmedQuery,
+    })
+    const groups: SidebarWorkingSetGroup[] = groupOverviewCards(matched, 'node', t).map((group) => ({
+      ...group,
+      totalGroupCount: group.cards.length,
+    }))
+    return { groups, totalRootCount, omittedQuietCount: 0, searchActive: true }
+  }
+
+  let omittedQuietCount = 0
+  const groups: SidebarWorkingSetGroup[] = groupOverviewCards(humanCards, 'node', t).map((group) => {
+    const sliced = sliceSingleBucketGroup(group.cards, activeConversationIds, perGroupQuietLimit)
+    omittedQuietCount += sliced.omittedQuietCount
+    return {
+      ...group,
+      cards: sliced.cards,
+      totalGroupCount: group.cards.length,
+    }
+  })
+
+  return { groups, totalRootCount, omittedQuietCount, searchActive: false }
 }
 
 /** 侧栏总览单棵树的后代展示切片。 */

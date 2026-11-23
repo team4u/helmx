@@ -4,10 +4,13 @@
  * - 顶部一级导航区：「会话总览」常驻置顶行（#/overview，带同源态势计数徽标、分屏微标与悬停右分屏钮）
  *   + 「新话题」常驻主入口（单角色直进待命页，多角色下拉选角且最近活跃角色置顶）；
  * - 下方工作集（与 #/overview 共享 overview-model 的唯一树聚合、分桶与排序纯函数）：
- *   - 活跃三桶（需处理 > 进行中 > 未读完成）全量展示，按 root.createdAt 倒序（流式不跳行）；
- *   - 近期安静区按 updatedAt 倒序取前 SIDEBAR_RECENT_QUIET_LIMIT 条，对当前主/分屏正在查看的
- *     安静会话树保底展示；超限时底部呈现「查看全部 N 个会话」直达 #/overview；
- *   - 侧栏搜索突破近期上限检索全量未归档根树，底部提供带 ?sp.q 透传的「在会话总览中查看匹配」；
+ *   - 支持分组维度切换（按状态 / 按角色 / 按节点，localStorage 持久化）：
+ *     - 按状态：活跃三桶（需处理 > 进行中 > 未读完成）全量展示（createdAt 倒序不跳行），
+ *       近期安静区按 updatedAt 倒序取前 SIDEBAR_RECENT_QUIET_LIMIT 条并对在场会话保底；
+ *     - 按角色：按可见智能体归组（含 0 会话可创建角色，组头带 + 开新话题），每组独立截取近期安静会话；
+ *     - 按节点：按运行节点归组（活跃节点优先），每组独立截取近期安静会话；
+ *   - 超限时底部呈现「查看全部 N 个会话」直达 #/overview（透传当前分组维度）；
+ *   - 侧栏搜索突破近期上限检索全量未归档人类根树，底部提供带 ?sp.q 透传的「在会话总览中查看匹配」；
  * - 职责边界：侧栏专注快速切换与新开话题，不包含批量管理栏、不渲染已归档分组（均归一到 #/overview）；
  * - 移动端防误关契约：多角色下拉触发按钮不挂 .nav-item，展开子会话与行尾动作菜单均显式 stopPropagation，
  *   避免冒泡触发 App 外层 .nav-item 关闭移动端抽屉。
@@ -31,15 +34,17 @@ import { ConversationRowActionsMenu } from '../ui/ConversationRowActionsMenu.js'
 import {
   buildNewTopicCandidates,
   buildOverviewCards,
-  buildSidebarWorkingSet,
-  groupOverviewCards,
+  buildSidebarGroupedWorkingSet,
+  loadSidebarGroupBy,
   resolveOverviewCardTiming,
   resolveOverviewDescendantChipTiming,
   resolveSidebarOverviewDescendants,
   resolveSidebarOverviewPrimaryTarget,
+  saveSidebarGroupBy,
   sidebarOverviewCardsNeedLiveClock,
   type OverviewCard,
   type OverviewDescendant,
+  type OverviewGroupBy,
   type SidebarOverviewDescendantsSlice,
 } from '../overview/overview-model.js'
 import {
@@ -50,6 +55,7 @@ import {
 import type { ConversationBackgroundIndex } from './background-activity-model.js'
 import {
   activeConversationIdsOf,
+  buildAgentStandings,
   getConversationPresence,
   openAgentStandby,
   presenceNavClassSuffix,
@@ -183,6 +189,8 @@ function SidebarWorkingSetTreeItem({
   nowMs,
   store,
   viewedConversationIds,
+  hideProfileMeta = false,
+  hideNodeMeta = false,
   onOpenConversation,
   onDrawerPeek,
   onOpenSplit,
@@ -194,6 +202,8 @@ function SidebarWorkingSetTreeItem({
   nowMs?: number
   store: SidebarStoreView
   viewedConversationIds: ReadonlySet<number>
+  hideProfileMeta?: boolean
+  hideNodeMeta?: boolean
   onOpenConversation: (conversationId: number) => void
   onDrawerPeek: (conversationId: number) => void
   onOpenSplit: (conversationId: number) => void
@@ -214,7 +224,7 @@ function SidebarWorkingSetTreeItem({
 
   // 第二行元信息（严格按状态与 199px 可用宽度裁剪，不渲染静态累计耗时）：
   const metaParts: ReactNode[] = []
-  if (card.profileLabel !== '') {
+  if (!hideProfileMeta && card.profileLabel !== '') {
     metaParts.push(
       <span key="profile" className="sidebar-overview-meta-profile" title={card.profileLabel}>
         {card.profileLabel}
@@ -242,7 +252,7 @@ function SidebarWorkingSetTreeItem({
       )
     }
   } else if (card.bucket === 'running') {
-    if (remoteNodeId !== null) {
+    if (!hideNodeMeta && remoteNodeId !== null) {
       metaParts.push(
         <span key="node" className="sidebar-overview-meta-node mono" title={t('shell.node.title', { id: remoteNodeId })}>
           @{remoteNodeId}
@@ -263,7 +273,7 @@ function SidebarWorkingSetTreeItem({
         </span>,
       )
     }
-  } else if (remoteNodeId !== null) {
+  } else if (!hideNodeMeta && remoteNodeId !== null) {
     metaParts.push(
       <span key="node" className="sidebar-overview-meta-node mono" title={t('shell.node.title', { id: remoteNodeId })}>
         @{remoteNodeId}
@@ -463,6 +473,8 @@ export function SidebarConversationList({
 
   const [search, setSearch] = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
+  const [groupBy, setGroupBy] = useState<OverviewGroupBy>(() => loadSidebarGroupBy())
+  const [groupMenuOpen, setGroupMenuOpen] = useState(false)
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
   const [searchCollapseState, setSearchCollapseState] = useState<{ query: string; keys: Set<string> }>({
     query: '',
@@ -470,6 +482,11 @@ export function SidebarConversationList({
   })
   const [expandedCardIds, setExpandedCardIds] = useState<Set<number>>(new Set())
   const searchInputRef = useRef<HTMLInputElement | null>(null)
+
+  const handleSelectGroupBy = useCallback((next: OverviewGroupBy): void => {
+    setGroupBy(saveSidebarGroupBy(next))
+    setGroupMenuOpen(false)
+  }, [])
 
   const filterOpen = searchOpen || search !== ''
   const normalizedQuery = search.trim()
@@ -499,20 +516,32 @@ export function SidebarConversationList({
     [store.conversations, background, store.profiles, store.plugins, viewedConversationIds, t],
   )
 
-  const workingSet = useMemo(
+  const agentStandings = useMemo(
     () =>
-      buildSidebarWorkingSet({
-        cards: allCards,
-        activeConversationIds,
-        query: search,
+      buildAgentStandings({
+        profiles: store.profiles,
+        conversations: store.conversations,
+        plugins: store.plugins,
+        sidebarItems: store.groupedUi.sidebarItems,
+        locale: store.locale,
       }),
-    [allCards, activeConversationIds, search],
+    [store.profiles, store.conversations, store.plugins, store.groupedUi.sidebarItems, store.locale],
   )
 
-  const cardGroups = useMemo(
-    () => groupOverviewCards(workingSet.cards, 'status', t),
-    [workingSet.cards, t],
+  const workingSet = useMemo(
+    () =>
+      buildSidebarGroupedWorkingSet({
+        groupBy,
+        cards: allCards,
+        activeConversationIds,
+        agentStandings,
+        query: search,
+        t,
+      }),
+    [groupBy, allCards, activeConversationIds, agentStandings, search, t],
   )
+
+  const cardGroups = workingSet.groups
 
   const activeCollapsedKeys = useMemo<ReadonlySet<string>>(() => {
     if (searchActive) {
@@ -625,6 +654,13 @@ export function SidebarConversationList({
   const attentionSummary = composeAttentionSummary(attentionIndicator, t)
   const overviewLabel =
     attentionSummary !== '' ? `${t('shell.overview.title')} · ${attentionSummary}` : t('shell.overview.title')
+  const groupByOptions: ReadonlyArray<{ value: OverviewGroupBy; label: string; icon: string }> = [
+    { value: 'status', label: t('shell.overview.groupByStatus'), icon: 'activity' },
+    { value: 'profile', label: t('shell.overview.groupByProfile'), icon: 'bot' },
+    { value: 'node', label: t('shell.overview.groupByNode'), icon: 'server' },
+  ]
+  const currentGroupLabel = groupByOptions.find((option) => option.value === groupBy)?.label ?? t('shell.overview.groupByStatus')
+  const hasVisibleMatchedCards = cardGroups.some((group) => group.cards.length > 0)
 
   return (
     <>
@@ -683,6 +719,45 @@ export function SidebarConversationList({
         <div className="sidebar-group-header">
           <span>{t('shell.sidebar.workingSetTitle')}</span>
           <div className="sidebar-group-header-actions">
+            <DropdownMenu open={groupMenuOpen} onOpenChange={setGroupMenuOpen}>
+              <Tooltip content={`${t('shell.overview.groupByLabel')}: ${currentGroupLabel}`} side="top">
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-icon-xs sidebar-group-by-btn"
+                    style={{ color: groupBy !== 'status' ? 'var(--accent)' : undefined }}
+                    aria-label={t('shell.overview.groupByLabel')}
+                    aria-haspopup="menu"
+                    aria-expanded={groupMenuOpen}
+                  >
+                    <HelmxIcon name="layers" size={12} />
+                  </button>
+                </DropdownMenuTrigger>
+              </Tooltip>
+              <DropdownMenuPortal>
+                <DropdownMenuContent className="pane-more-popover" align="end" sideOffset={4}>
+                  {groupByOptions.map((option) => {
+                    const selected = groupBy === option.value
+                    return (
+                      <DropdownMenuItem
+                        key={option.value}
+                        className="sidebar-group-by-item"
+                        data-group-by-option={option.value}
+                        data-active={selected ? 'true' : undefined}
+                        aria-checked={selected}
+                        onSelect={() => handleSelectGroupBy(option.value)}
+                      >
+                        <span className="pane-more-item-label">
+                          <HelmxIcon name={option.icon} size={13} />
+                          {option.label}
+                        </span>
+                        {selected && <HelmxIcon name="check" size={12} className="sidebar-group-by-item-check" />}
+                      </DropdownMenuItem>
+                    )
+                  })}
+                </DropdownMenuContent>
+              </DropdownMenuPortal>
+            </DropdownMenu>
             <Tooltip
               content={filterOpen ? t('shell.agents.collapseFilters') : t('shell.sidebar.overviewFilter')}
               side="top"
@@ -738,7 +813,7 @@ export function SidebarConversationList({
           <div className="sidebar-search-empty" role="status">
             {t('shell.overview.loading')}
           </div>
-        ) : workingSet.totalRootCount === 0 ? (
+        ) : !workingSet.searchActive && workingSet.totalRootCount === 0 && cardGroups.length === 0 ? (
           <div className="sidebar-overview-empty">
             <span>{t('shell.sidebar.overviewEmpty')}</span>
           </div>
@@ -747,39 +822,99 @@ export function SidebarConversationList({
         ) : (
           <div className="sidebar-overview-sections">
             {cardGroups.map((group) => {
+              if (
+                group.kind === 'profile' &&
+                group.cards.length === 0 &&
+                group.canCreateConversation === true &&
+                group.profileId !== undefined
+              ) {
+                const profileId = group.profileId
+                return (
+                  <section
+                    key={group.key}
+                    className="sidebar-overview-section sidebar-overview-section-profile sidebar-overview-section-empty-profile"
+                    data-group-key={group.key}
+                  >
+                    <button
+                      type="button"
+                      className="sidebar-overview-section-toggle sidebar-overview-section-empty-agent"
+                      title={t('shell.agents.newTopicUnder', { label: group.label })}
+                      aria-label={t('shell.agents.newTopicUnder', { label: group.label })}
+                      onClick={() => openStandby(profileId)}
+                    >
+                      <HelmxIcon name="bot" size={11} className="sidebar-overview-section-icon" />
+                      <span className="sidebar-overview-section-title">{group.label}</span>
+                      <HelmxIcon name="plus" size={11} className="sidebar-overview-section-plus" />
+                    </button>
+                  </section>
+                )
+              }
+
               const collapsed = activeCollapsedKeys.has(group.key)
               const headingId = `${sectionIdPrefix}-${group.key}`
               const sectionTitle =
-                group.bucket === 'quiet' && !workingSet.searchActive
+                group.kind === 'bucket' && group.bucket === 'quiet' && !workingSet.searchActive
                   ? t('shell.sidebar.sectionRecent')
                   : group.label
               return (
                 <section
                   key={group.key}
-                  className={`sidebar-overview-section${group.bucket ? ` sidebar-overview-section-${group.bucket}` : ''}`}
+                  className={`sidebar-overview-section sidebar-overview-section-${group.kind}${group.bucket ? ` sidebar-overview-section-${group.bucket}` : ''}`}
+                  data-group-key={group.key}
                   aria-labelledby={headingId}
                 >
-                  <button
-                    id={headingId}
-                    type="button"
-                    className="sidebar-overview-section-toggle"
-                    aria-expanded={!collapsed}
-                    onClick={() => toggleGroupCollapsed(group.key)}
-                  >
-                    <HelmxIcon
-                      name={collapsed ? 'chevron-right' : 'chevron-down'}
-                      size={11}
-                      className="sidebar-overview-section-chevron"
-                    />
-                    {group.bucket !== undefined && (
-                      <span
-                        className={`overview-section-dot overview-section-dot-${group.bucket}`}
-                        aria-hidden="true"
+                  <div className="sidebar-overview-section-head">
+                    <button
+                      id={headingId}
+                      type="button"
+                      className="sidebar-overview-section-toggle"
+                      aria-expanded={!collapsed}
+                      onClick={() => toggleGroupCollapsed(group.key)}
+                    >
+                      <HelmxIcon
+                        name={collapsed ? 'chevron-right' : 'chevron-down'}
+                        size={11}
+                        className="sidebar-overview-section-chevron"
                       />
+                      {group.kind === 'bucket' && group.bucket !== undefined && (
+                        <span
+                          className={`overview-section-dot overview-section-dot-${group.bucket}`}
+                          aria-hidden="true"
+                        />
+                      )}
+                      {group.kind === 'profile' && (
+                        <HelmxIcon name="bot" size={11} className="sidebar-overview-section-icon" />
+                      )}
+                      {group.kind === 'node' && (
+                        <HelmxIcon
+                          name={group.nodeId === 'local' ? 'laptop' : 'server'}
+                          size={11}
+                          className="sidebar-overview-section-icon"
+                        />
+                      )}
+                      <span
+                        className={`sidebar-overview-section-title${group.kind === 'node' && group.nodeId !== 'local' ? ' mono' : ''}`}
+                      >
+                        {sectionTitle}
+                      </span>
+                      <span className="sidebar-overview-section-count tabular-nums">{group.cards.length}</span>
+                    </button>
+                    {group.kind === 'profile' && group.canCreateConversation === true && group.profileId !== undefined && (
+                      <Tooltip content={t('shell.agents.newTopicUnder', { label: group.label })} side="top">
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-icon-xs sidebar-section-new-topic-btn"
+                          aria-label={t('shell.agents.newTopicUnder', { label: group.label })}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            openStandby(group.profileId!)
+                          }}
+                        >
+                          <HelmxIcon name="plus" size={11} />
+                        </button>
+                      </Tooltip>
                     )}
-                    <span className="sidebar-overview-section-title">{sectionTitle}</span>
-                    <span className="sidebar-overview-section-count tabular-nums">{group.cards.length}</span>
-                  </button>
+                  </div>
                   {!collapsed && (
                     <div className="sidebar-overview-list">
                       {group.cards.map((card) => (
@@ -797,6 +932,8 @@ export function SidebarConversationList({
                           nowMs={nowMs}
                           store={store}
                           viewedConversationIds={viewedConversationIds}
+                          hideProfileMeta={groupBy === 'profile'}
+                          hideNodeMeta={groupBy === 'node'}
                           onOpenConversation={openConversation}
                           onDrawerPeek={openConversationDrawer}
                           onOpenSplit={openSplit}
@@ -815,18 +952,20 @@ export function SidebarConversationList({
           <button
             type="button"
             className="sidebar-view-all-btn"
-            onClick={() => openOverview()}
+            onClick={() => openOverview(groupBy !== 'status' ? { group: groupBy } : undefined)}
           >
             <span>{t('shell.sidebar.viewAllConversations', { count: workingSet.totalRootCount })}</span>
             <HelmxIcon name="arrow-right" size={12} />
           </button>
         )}
 
-        {workingSet.searchActive && workingSet.cards.length > 0 && (
+        {workingSet.searchActive && hasVisibleMatchedCards && (
           <button
             type="button"
             className="sidebar-view-all-btn"
-            onClick={() => openOverview({ q: normalizedQuery })}
+            onClick={() =>
+              openOverview(groupBy !== 'status' ? { q: normalizedQuery, group: groupBy } : { q: normalizedQuery })
+            }
           >
             <span>{t('shell.sidebar.viewMatchesInOverview')}</span>
             <HelmxIcon name="arrow-right" size={12} />

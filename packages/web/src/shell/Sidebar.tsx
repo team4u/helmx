@@ -7,6 +7,7 @@ import {
   useLocationTargets,
   usePlugins,
   useProfilesSlice,
+  useSidebarCollapsed,
   useStoreActions,
   useThemePreferencesState,
 } from '../lib/store-context.js'
@@ -35,6 +36,7 @@ import {
   type SidebarViewItem,
 } from './sidebar-model.js'
 import { SidebarConversationList } from './SidebarConversationList.js'
+import { composeAttentionSummary, type GlobalAttentionIndicator } from './attention-model.js'
 import { useGlobalAttention } from './use-attention-indicator.js'
 import { useSidebarBadges } from './use-sidebar-badges.js'
 import {
@@ -184,6 +186,8 @@ function ActivityRail({
   themePreference,
   onToggleTheme,
   onToggleSidebarCollapsed,
+  sidebarCollapsed,
+  attentionIndicator,
   space,
   onOpenSpace,
   quickEntries,
@@ -195,6 +199,8 @@ function ActivityRail({
   themePreference: 'system' | 'light' | 'dark'
   onToggleTheme: () => void
   onToggleSidebarCollapsed?: () => void
+  sidebarCollapsed: boolean
+  attentionIndicator: GlobalAttentionIndicator
   space: SidebarSpace
   onOpenSpace: (space: SidebarSpace) => void
   quickEntries: SidebarViewItem[]
@@ -203,6 +209,8 @@ function ActivityRail({
 }) {
   const { t } = useWebLocale()
   const quickEntryBadges = useSidebarBadges(quickEntries)
+  const attentionSummary = composeAttentionSummary(attentionIndicator, t)
+  const hasAttentionSignal = attentionIndicator.totalCount > 0 && attentionIndicator.tone !== null
   const expandWithShortcut = t('shell.sidebar.expandNavWithShortcut', { shortcut: formatModShortcut('B') })
   const themeTooltip =
     themePreference === 'system'
@@ -237,8 +245,13 @@ function ActivityRail({
       </Tooltip>
       <div className="activity-rail-spaces">
         {(Object.keys(SPACE_LABEL_KEYS) as SidebarSpace[]).map((key) => {
-          const spaceLabel = t(SPACE_LABEL_KEYS[key])
+          const baseSpaceLabel = t(SPACE_LABEL_KEYS[key])
           const spaceActive = space === key
+          const showBadgeAlways = key === 'conversations' && hasAttentionSignal && !spaceActive
+          const showBadgeCollapsedOnly = key === 'conversations' && hasAttentionSignal && spaceActive && sidebarCollapsed
+          const showSpaceBadge = showBadgeAlways || showBadgeCollapsedOnly
+          const spaceLabel =
+            showSpaceBadge && attentionSummary !== '' ? `${baseSpaceLabel} · ${attentionSummary}` : baseSpaceLabel
           return (
             <Tooltip content={spaceLabel} side="right" key={key}>
               <button
@@ -249,6 +262,14 @@ function ActivityRail({
                 onClick={() => onOpenSpace(key)}
               >
                 <HelmxIcon name={SPACE_ICONS[key]} size={16} />
+                {showSpaceBadge && attentionIndicator.tone !== null && (
+                  <span
+                    className={`overview-count-badge rail-space-badge${showBadgeCollapsedOnly ? ' rail-space-badge-collapsed-only' : ''}`}
+                    data-tone={attentionIndicator.tone}
+                  >
+                    {sidebarBadgeCountLabel(attentionIndicator.totalCount)}
+                  </span>
+                )}
               </button>
             </Tooltip>
           )
@@ -357,6 +378,7 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
   const { sseConnected } = useAuthConnection()
   const { theme, themePreference, locale, quietNotifyEnabled } = useThemePreferencesState()
   const { primaryTarget, splitTarget, focusedPanel } = useLocationTargets()
+  const sidebarCollapsed = useSidebarCollapsed()
   const groupedUi = useGroupedUi()
   const plugins = usePlugins()
   const conversations = useConversations()
@@ -434,6 +456,8 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
         themePreference={themePreference}
         onToggleTheme={toggleTheme}
         onToggleSidebarCollapsed={toggleSidebarCollapsed}
+        sidebarCollapsed={sidebarCollapsed}
+        attentionIndicator={attentionIndicator}
         space={space}
         onOpenSpace={(nextSpace) => {
           openSpace(nextSpace)

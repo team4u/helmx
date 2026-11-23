@@ -165,10 +165,13 @@ button, a, input, select, textarea { touch-action: manipulation; }
   .mobile-nav-toggle:active {
     background: var(--bg-hover);
   }
-  /* 移动端全局快捷导航簇（根挂载，与汉堡同层）：首个 quickEntry 插件视图 +
-     会话总览一键直达；总览按钮挂同源 .overview-count-badge 计数徽标。
-     主屏已停在入口目标时对应按钮由组件就地隐藏；抽屉拉开时隐藏（抽屉内侧栏
-     已有同源入口）。 */
+  .mobile-nav-toggle .overview-count-badge {
+    top: 2px;
+    right: 2px;
+  }
+  /* 移动端插件快捷入口（根挂载，紧随汉堡按钮）：仅承载首个 quickEntry 插件视图；
+     会话态势计数徽标已合入 .mobile-nav-toggle 汉堡按钮。主屏已停在该视图或抽屉
+     拉开时隐藏（抽屉内侧栏已有同源入口）。 */
   .mobile-quick-nav {
     display: flex;
     align-items: center;
@@ -262,25 +265,17 @@ button, a, input, select, textarea { touch-action: manipulation; }
     border-top: 1px solid var(--border);
     padding-top: 8px;
   }
-  /* 默认只为左上角固定汉堡按钮让位；总览入口（mq-overview-on）与 quickEntry
-     （mq-quick-on）各自按真实可见状态叠加让位宽度，避免在总览页出现无用的左侧空洞。 */
+  /* 默认只为左上角固定汉堡按钮让位；仅当插件 quickEntry 真实可见（mq-quick-on）时
+     叠加让位宽度，无插件快捷入口时顶栏左让位收敛至 48px。 */
   .helmx-panes > .helmx-pane > .pane-topbar,
   .helmx-primary-pane .helmx-pane > .pane-topbar,
   .primary-center-topbar {
     padding-left: max(48px, calc(env(safe-area-inset-left) + 44px));
   }
-  .helmx-shell.mq-overview-on .helmx-panes > .helmx-pane > .pane-topbar,
-  .helmx-shell.mq-overview-on .helmx-primary-pane .helmx-pane > .pane-topbar,
-  .helmx-shell.mq-overview-on .primary-center-topbar,
   .helmx-shell.mq-quick-on .helmx-panes > .helmx-pane > .pane-topbar,
   .helmx-shell.mq-quick-on .helmx-primary-pane .helmx-pane > .pane-topbar,
   .helmx-shell.mq-quick-on .primary-center-topbar {
     padding-left: max(88px, calc(env(safe-area-inset-left) + 84px));
-  }
-  .helmx-shell.mq-overview-on.mq-quick-on .helmx-panes > .helmx-pane > .pane-topbar,
-  .helmx-shell.mq-overview-on.mq-quick-on .helmx-primary-pane .helmx-pane > .pane-topbar,
-  .helmx-shell.mq-overview-on.mq-quick-on .primary-center-topbar {
-    padding-left: max(122px, calc(env(safe-area-inset-left) + 118px));
   }
   /* 移动端重连浮动胶囊避开左上角固定 .mobile-nav-toggle 并尊重顶部安全区 */
   .connection-banner {

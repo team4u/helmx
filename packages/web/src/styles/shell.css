@@ -135,9 +135,21 @@
   box-sizing: border-box;
 }
 
-/* 快捷入口按钮锚定计数徽标 / 静默灯点（badge 绝对定位于右上角）。 */
-.rail-quick-btn {
+/* 快捷入口按钮与空间按钮锚定计数徽标 / 静默灯点（badge 绝对定位于右上角）。 */
+.rail-quick-btn,
+.rail-space-btn {
   position: relative;
+}
+
+.rail-space-badge {
+  top: 0;
+  right: 0;
+  min-width: 13px;
+  height: 13px;
+}
+
+.rail-space-badge-collapsed-only {
+  display: none;
 }
 
 /* 快捷入口静默灯点（sidebar.item badge dotField：计数为 0 时的安静后台活动提示，
@@ -323,6 +335,9 @@
     display: none;
   }
   .helmx-shell.sidebar-collapsed .desktop-sidebar-expand-btn {
+    display: inline-flex;
+  }
+  .helmx-shell.sidebar-collapsed .rail-space-badge-collapsed-only {
     display: inline-flex;
   }
 }
@@ -727,9 +742,9 @@
 }
 
 
-/* 总览入口计数徽标（tone 染色）：移动端 MobileQuickNav 总览按钮消费；
- * 计数 = 同源 indicator.totalCount（有信号的树数，99+ 折叠），
- * tone = 聚合灯色；有信号才渲染，全安静零徽标。 */
+/* 全局态势计数徽标（tone 染色）：移动端汉堡按钮 .mobile-nav-toggle 与
+ * Activity Rail 对话空间按钮消费；计数 = 同源 indicator.totalCount（有信号的树数，
+ * 99+ 折叠），tone = 聚合灯色；有信号才渲染，全安静零徽标。 */
 .overview-count-badge {
   position: absolute;
   top: -3px;

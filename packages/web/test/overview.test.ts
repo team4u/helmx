@@ -24,10 +24,12 @@ import {
   buildArchivedOverviewCards,
   buildNewTopicCandidates,
   buildOverviewCards,
+  buildSidebarGroupedWorkingSet,
   buildSidebarWorkingSet,
   filterOverviewCards,
   groupOverviewCards,
   isOverviewDescendantActive,
+  loadSidebarGroupBy,
   overviewBucketCounts,
   overviewCardsNeedLiveClock,
   overviewDescendantMatchesQuery,
@@ -41,10 +43,14 @@ import {
   resolveOverviewDescendantChipTiming,
   resolveSidebarOverviewDescendants,
   resolveSidebarOverviewPrimaryTarget,
+  saveSidebarGroupBy,
   sidebarOverviewCardsNeedLiveClock,
   OVERVIEW_DESCENDANT_LIMIT,
+  SIDEBAR_GROUP_BY_STORAGE_KEY,
+  SIDEBAR_PER_GROUP_QUIET_LIMIT,
   SIDEBAR_RECENT_QUIET_LIMIT,
 } from '../src/overview/overview-model.js'
+import { buildAgentStandings } from '../src/shell/sidebar-model.js'
 import { formatLocationHash, hashHasPrimaryTarget, parseLocationHash, shouldPushLocationHistory } from '../src/lib/url-hash-model.js'
 import { spaceForTarget } from '../src/lib/types.js'
 import { makeTestStore, HelmxExternalStoreContext, type TestStoreOverrides } from './helpers/store.js'
@@ -939,19 +945,37 @@ test('Sidebar overview entry: top primary nav row opens #/overview with the same
     const primary = store.getPrimaryTarget()
     assert.ok(primary.kind === 'overview', 'clicking navigates to the overview stage')
 
-    // 主屏停总览时，对话空间 Rail 图标保持激活高亮（与 views / settings 同构）
+    // 主屏停总览时，对话空间 Rail 图标保持激活高亮（与 views / settings 同构），展开态不重复挂角标
     const convSpaceBtn = container.querySelector<HTMLButtonElement>('button[aria-label="Conversations space"]')
     assert.ok(convSpaceBtn?.classList.contains('rail-btn-active'), 'conversations rail button stays active on #/overview')
+    assert.ok(convSpaceBtn?.querySelector('.rail-space-badge') === null, 'expanded conversations rail omits duplicate badge')
 
-    // 切去设置再点回对话空间：从空间记忆原样恢复 #/overview
+    // 切去设置空间时，对话空间 Rail 图标浮现同源态势计数角标（消除非对话空间盲区）
     await act(async () => {
       store.openSpace('settings')
     })
     assert.equal(store.getPrimaryTarget().kind, 'profiles')
+    const convRailInSettings = container.querySelector<HTMLButtonElement>('.rail-space-btn')
+    const railBadge = convRailInSettings?.querySelector<HTMLElement>('.rail-space-badge[data-tone="running"]') ?? null
+    assert.ok(railBadge !== null && railBadge.textContent === '1', 'conversations rail icon shows shared attention count when viewing another space')
+    assert.ok(
+      convRailInSettings?.getAttribute('aria-label')?.includes('1 running') === true,
+      'attention summary rides the conversations rail aria-label when badged',
+    )
+
+    // 再点回对话空间：从空间记忆原样恢复 #/overview，展开态下 Rail 角标随之收起
     await act(async () => {
       store.openSpace('conversations')
     })
     assert.equal(store.getPrimaryTarget().kind, 'overview', 'returning to conversations restores remembered #/overview')
+    assert.ok(container.querySelector('.rail-space-badge') === null)
+
+    // 桌面侧栏折叠态下停在对话空间：渲染仅折叠可见的 Rail 角标
+    await act(async () => {
+      store.actions.setSidebarCollapsed(true)
+    })
+    const collapsedBadge = container.querySelector<HTMLElement>('.rail-space-badge-collapsed-only[data-tone="running"]')
+    assert.ok(collapsedBadge !== null && collapsedBadge.textContent === '1', 'collapsed desktop sidebar surfaces the conversations rail badge')
   } finally {
     await act(async () => {
       root?.unmount()
@@ -995,7 +1019,7 @@ function stubMatchMedia(matches: boolean): () => void {
   }
 }
 
-test('MobileQuickNav: one-tap direct navigation with the shared count badge; entries hide when their view is already on stage', { timeout: 60_000 }, async () => {
+test('MobileQuickNav: plugin quickEntry only (overview badge moved to hamburger); hides when absent or already active', { timeout: 60_000 }, async () => {
   const restoreMobile = stubMatchMedia(true)
   const store = overviewStore({
     conversations: [
@@ -1021,105 +1045,49 @@ test('MobileQuickNav: one-tap direct navigation with the shared count badge; ent
         e(
           HelmxExternalStoreContext.Provider,
           { value: store },
-          e(MobileQuickNav, {
-            indicator: { needsAttentionCount: 0, runningCount: 1, unreadDoneCount: 0, totalCount: 1, tone: 'running' },
-            quickEntry,
-          }),
+          e(MobileQuickNav, { quickEntry }),
         ),
       )
     })
     const buttons = container.querySelectorAll('.mobile-quick-btn')
-    assert.equal(buttons.length, 2, 'quick entry + overview render side by side without opening the drawer')
+    assert.equal(buttons.length, 1, 'only the plugin quickEntry renders; overview entry is merged into hamburger')
     assert.ok(buttons[0]!.getAttribute('aria-label') === 'App Center', 'the quick entry keeps the plugin-provided label')
-    const overviewBtn = container.querySelector<HTMLButtonElement>('.mobile-quick-overview-btn')
-    assert.ok(overviewBtn !== null)
-    assert.ok(
-      overviewBtn.getAttribute('aria-label')?.includes('Conversation overview'),
-      'the overview button aria states the destination',
-    )
-    assert.ok(
-      overviewBtn.getAttribute('aria-label')?.includes('1 running'),
-      'the attention summary rides the overview button aria for screen readers',
-    )
-    const badge = overviewBtn.querySelector<HTMLElement>('.overview-count-badge[data-tone="running"]')
-    assert.ok(badge !== null, 'the count badge rides the overview button (same source as the sidebar header entry)')
-    assert.ok(badge.textContent === '1', 'the badge states the honest signal-tree count')
+    assert.ok(container.querySelector('.mobile-quick-overview-btn') === null, 'standalone mobile overview button is gone')
 
     const quickBtn = buttons[0] as HTMLElement
     await act(async () => {
       quickBtn.click()
     })
-    let primary = store.getPrimaryTarget()
+    const primary = store.getPrimaryTarget()
     assert.ok(primary.kind === 'screen' && primary.screenId === 'app-center', 'one tap enters the first quickEntry view')
 
-    await act(async () => {
-      overviewBtn.click()
-    })
-    primary = store.getPrimaryTarget()
-    assert.ok(primary.kind === 'overview', 'one tap on the badge button opens the conversation overview')
-
-    // 无 quickEntry 时只渲染总览按钮；无信号时灯点不渲染（诚实）。
-    const quiet = overviewStore({
-      conversations: [conv({ id: 50, title: '安静', profileId: 'coder' })],
-      primaryTarget: { kind: 'conversation', conversationId: 50 },
-    })
+    // 无 quickEntry 时整簇不渲染（零占位残留，顶栏左让位回落到 48px）
     await act(async () => {
       root!.render(
         e(
           HelmxExternalStoreContext.Provider,
-          { value: quiet },
-          e(MobileQuickNav, {
-            indicator: { needsAttentionCount: 0, runningCount: 0, unreadDoneCount: 0, totalCount: 0, tone: null },
-            quickEntry: null,
-          }),
+          { value: overviewStore({ primaryTarget: { kind: 'conversation', conversationId: 50 } }) },
+          e(MobileQuickNav, { quickEntry: null }),
         ),
       )
     })
-    assert.equal(container.querySelectorAll('.mobile-quick-btn').length, 1, 'overview-only cluster without any quickEntry')
-    assert.ok(container.querySelector('.overview-count-badge') === null, 'no count badge without any signal')
+    assert.ok(container.querySelector('.mobile-quick-nav') === null, 'without quickEntry the cluster unmounts completely')
 
-    // 主屏已停在入口目标时对应按钮就地隐藏：总览页只留 quickEntry，
-    // quickEntry 视图只留总览；两钮皆隐时整簇不渲染（零占位残留）。
-    const renderNav = (store: ReturnType<typeof overviewStore>, entry: typeof quickEntry | null): void => {
+    // 主屏已停在 quickEntry 目标时整簇就地隐藏
+    await act(async () => {
       root!.render(
         e(
           HelmxExternalStoreContext.Provider,
-          { value: store },
-          e(MobileQuickNav, {
-            indicator: { needsAttentionCount: 0, runningCount: 1, unreadDoneCount: 0, totalCount: 1, tone: 'running' },
-            quickEntry: entry,
-          }),
+          {
+            value: overviewStore({
+              primaryTarget: { kind: 'screen', pluginId: 'demo-desk', screenId: 'app-center' },
+            }),
+          },
+          e(MobileQuickNav, { quickEntry }),
         ),
       )
-    }
-    await act(async () => {
-      renderNav(
-        overviewStore({
-          conversations: [conv({ id: 2, title: '在跑的调研', profileId: 'coder', status: 'working', createdAt: 8000, updatedAt: 8000 })],
-          primaryTarget: { kind: 'overview' },
-        }),
-        quickEntry,
-      )
     })
-    assert.equal(container.querySelectorAll('.mobile-quick-btn').length, 1, 'on the overview screen only the quick entry remains')
-    assert.ok(container.querySelector('.mobile-quick-overview-btn') === null, 'the overview button hides when the overview is already on stage')
-
-    await act(async () => {
-      renderNav(
-        overviewStore({
-          conversations: [conv({ id: 2, title: '在跑的调研', profileId: 'coder', status: 'working', createdAt: 8000, updatedAt: 8000 })],
-          primaryTarget: { kind: 'screen', pluginId: 'demo-desk', screenId: 'app-center' },
-        }),
-        quickEntry,
-      )
-    })
-    assert.equal(container.querySelectorAll('.mobile-quick-btn').length, 1, 'on the quick-entry view only the overview button remains')
-    assert.ok(container.querySelector('.mobile-quick-btn')?.getAttribute('aria-label')?.includes('Conversation overview') === true, 'the remaining button is the overview entry')
-
-    await act(async () => {
-      renderNav(overviewStore({ primaryTarget: { kind: 'overview' } }), null)
-    })
-    assert.ok(container.querySelector('.mobile-quick-nav') === null, 'no quickEntry and already on the overview: the whole cluster unmounts')
+    assert.ok(container.querySelector('.mobile-quick-nav') === null, 'on the quick-entry view the cluster hides')
   } finally {
     await act(async () => {
       root?.unmount()
@@ -1137,8 +1105,14 @@ test('MobileQuickNav renders nothing on desktop viewports (the collapsed rail ca
         HelmxExternalStoreContext.Provider,
         { value: overviewStore() },
         e(MobileQuickNav, {
-          indicator: { needsAttentionCount: 1, runningCount: 0, unreadDoneCount: 0, totalCount: 1, tone: 'blocked' },
-          quickEntry: null,
+          quickEntry: {
+            key: 'demo-desk/app-center',
+            pluginId: 'demo-desk',
+            label: 'App Center',
+            icon: 'check-square',
+            order: 5,
+            target: { kind: 'screen', pluginId: 'demo-desk', screenId: 'app-center' },
+          },
         }),
       ),
     )
@@ -1209,14 +1183,6 @@ function quickNavItem(badge?: SidebarViewItem['badge']): SidebarViewItem {
   }
 }
 
-const QUIET_INDICATOR = {
-  needsAttentionCount: 0,
-  runningCount: 0,
-  unreadDoneCount: 0,
-  totalCount: 0,
-  tone: null,
-} as unknown as Parameters<typeof MobileQuickNav>[0]['indicator']
-
 interface QuickNavMount {
   container: HTMLDivElement
   unmount(): Promise<void>
@@ -1236,7 +1202,7 @@ async function mountQuickNav(
       e(
         HelmxExternalStoreContext.Provider,
         { value: store },
-        e(MobileQuickNav, { indicator: QUIET_INDICATOR, quickEntry: item, quickEntryBadge: badge }),
+        e(MobileQuickNav, { quickEntry: item, quickEntryBadge: badge }),
       ),
     )
   })
@@ -2590,4 +2556,95 @@ test('ConversationOverview archived tab & quick drawer-peek button: archived tab
     })
     container.remove()
   }
+})
+
+test('buildSidebarGroupedWorkingSet and sidebar group-by persistence: per-group quiet caps, empty creatable profiles, node grouping, and search bypass', { timeout: 60_000 }, () => {
+  const memory = new Map<string, string>()
+  const storage = {
+    getItem: (k: string) => memory.get(k) ?? null,
+    setItem: (k: string, v: string) => { memory.set(k, v) },
+  }
+  assert.equal(loadSidebarGroupBy(storage), 'status')
+  assert.equal(saveSidebarGroupBy('profile', storage), 'profile')
+  assert.equal(loadSidebarGroupBy(storage), 'profile')
+  memory.set(SIDEBAR_GROUP_BY_STORAGE_KEY, 'bogus')
+  assert.equal(loadSidebarGroupBy(storage), 'status')
+
+  const coderQuiet = Array.from({ length: SIDEBAR_PER_GROUP_QUIET_LIMIT + 3 }, (_, i) =>
+    conv({
+      id: 100 + i,
+      title: `Coder 历史 ${i}`,
+      profileId: 'coder',
+      nodeId: i === 0 ? 'remote-gpu' : undefined,
+      createdAt: 10_000 + i * 1000,
+      updatedAt: 10_000 + i * 1000,
+    }),
+  )
+  const conversations = [
+    conv({ id: 1, title: '助理早期会话', profileId: 'assistant', createdAt: 500, updatedAt: 500 }),
+    conv({ id: 2, title: '自动任务', profileId: 'coder', ownedBy: 'helmx', status: 'error', createdAt: 99_000, updatedAt: 99_000 }),
+    ...coderQuiet,
+  ]
+  const profiles = [
+    { id: 'assistant', name: '个人助理' },
+    { id: 'coder', name: '编码专员' },
+    { id: 'researcher', name: '调研专员' },
+    { id: 'hidden-bot', name: '已停用插件角色', managedByPlugin: 'builtin:off' },
+  ]
+  const plugins = [{ id: 'builtin:off', enabled: false }]
+  const cards = buildCards(conversations, new Map(), { profiles, plugins })
+  const agentStandings = [
+    ...buildAgentStandings({ profiles, conversations, plugins, locale: 'zh-CN' }),
+    {
+      profileId: 'non-creatable-empty',
+      label: '空不可创建角色',
+      order: 150,
+      canCreateConversation: false,
+      conversations: [],
+      primaryConversation: null,
+    },
+  ]
+
+  // 按角色分组：保留空的可创建角色 researcher、跳过已停用插件角色与空的不可创建角色、每组独立截断且保底当前在场会话 #100
+  const byProfile = buildSidebarGroupedWorkingSet({
+    groupBy: 'profile',
+    cards,
+    activeConversationIds: new Set([100]),
+    agentStandings,
+  })
+  assert.deepEqual(
+    byProfile.groups.map((g) => g.profileId),
+    ['assistant', 'coder', 'researcher'],
+    'keeps all visible creatable agents (including 0-conversation researcher) and omits disabled-plugin and empty non-creatable profiles',
+  )
+  assert.equal(byProfile.groups[0]!.cards.length, 1, 'high-volume coder never pushes assistant quiet conversation out')
+  assert.equal(byProfile.groups[1]!.cards.length, SIDEBAR_PER_GROUP_QUIET_LIMIT + 1, 'per-group cap + viewed quiet #100 preserved')
+  assert.equal(byProfile.groups[2]!.cards.length, 0)
+  assert.equal(byProfile.groups[2]!.canCreateConversation, true)
+  assert.equal(byProfile.omittedQuietCount, 2)
+
+  // 搜索态：突破单组上限，仅返回命中分组
+  const profileSearch = buildSidebarGroupedWorkingSet({
+    groupBy: 'profile',
+    cards,
+    activeConversationIds: new Set(),
+    agentStandings,
+    query: 'Coder 历史 1',
+  })
+  assert.equal(profileSearch.searchActive, true)
+  assert.equal(profileSearch.omittedQuietCount, 0)
+  assert.deepEqual(profileSearch.groups.map((g) => g.profileId), ['coder'])
+  assert.deepEqual(profileSearch.groups[0]!.cards.map((c) => c.root.id), [101])
+
+  // 按节点分组：local 与 remote-gpu 各自独立截取
+  const byNode = buildSidebarGroupedWorkingSet({
+    groupBy: 'node',
+    cards,
+    activeConversationIds: new Set(),
+    agentStandings,
+  })
+  assert.deepEqual(byNode.groups.map((g) => g.nodeId).sort(), ['local', 'remote-gpu'])
+  const localGroup = byNode.groups.find((g) => g.nodeId === 'local')!
+  assert.equal(localGroup.cards.length, SIDEBAR_PER_GROUP_QUIET_LIMIT)
+  assert.equal(byNode.omittedQuietCount, 3)
 })

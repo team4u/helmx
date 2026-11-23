@@ -47,9 +47,12 @@ import { useQuietNotifier } from './shell/use-quiet-notifier.js'
 import { useVersionWatcher } from './shell/use-version-watcher.js'
 import { versionDeferHint } from './shell/version-watch-model.js'
 import { useGlobalAttention } from './shell/use-attention-indicator.js'
-import { extractRailQuickEntries } from './shell/sidebar-model.js'
+import { composeAttentionSummary } from './shell/attention-model.js'
+import { extractRailQuickEntries, sidebarBadgeCountLabel } from './shell/sidebar-model.js'
 import { useSidebarBadges } from './shell/use-sidebar-badges.js'
 import { MobileQuickNav } from './shell/MobileQuickNav.js'
+import { useMobileDrawerSwipe } from './shell/use-mobile-drawer-swipe.js'
+import { useIsMobileViewport } from './lib/use-media-query.js'
 import { loadSplitRatio, saveSplitRatio } from './shell/split-ratio-model.js'
 import { SplitResizeHandle } from './ui/SplitResizeHandle.js'
 
@@ -257,7 +260,18 @@ function HelmxShellInner({
   const { locale, t } = useWebLocale()
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [showConnectionBanner, setShowConnectionBanner] = useState(false)
+  const shellRef = useRef<HTMLDivElement | null>(null)
   const panesRef = useRef<HTMLDivElement | null>(null)
+  const isMobileViewport = useIsMobileViewport()
+  const openMobileSidebar = useCallback(() => setSidebarOpen(true), [])
+  const closeMobileSidebar = useCallback(() => setSidebarOpen(false), [])
+  useMobileDrawerSwipe({
+    containerRef: shellRef,
+    enabled: authReady && !authError && authenticated && isMobileViewport && activeModal === null && drawerStack.length === 0,
+    sidebarOpen,
+    onOpen: openMobileSidebar,
+    onClose: closeMobileSidebar,
+  })
   const [splitRatio, setSplitRatio] = useState<number>(() => loadSplitRatio())
   const [resizingSplit, setResizingSplit] = useState(false)
   const handleCommitSplitRatio = useCallback((next: number) => {
@@ -367,17 +381,19 @@ function HelmxShellInner({
         ? fallbackTarget.conversationId
         : undefined
 
-  // 移动端快捷导航簇的 quickEntry 按钮仅在「不在该视图上」时渲染（主屏已停在
-  // 入口目标时就地隐藏）；顶栏左让位宽度（mq-quick-on）跟随真实可见性，而非
-  // 插件是否声明了 quickEntry。
-  const mobileOverviewVisible = primaryTarget.kind !== 'overview'
+  // 移动端插件快捷入口仅在「不在该视图上」时渲染（主屏已停在入口目标时就地隐藏）；
+  // 顶栏左让位宽度（mq-quick-on）跟随真实可见性，会话态势角标已直接挂在汉堡按钮上。
   const mobileQuickEntryVisible =
     firstQuickEntry !== null && !isSameResolvedTarget(primaryTarget, firstQuickEntry.target)
+  const attentionSummary = composeAttentionSummary(attention.indicator, t)
+  const mobileNavToggleLabel =
+    attentionSummary !== '' ? `${t('shell.nav.toggleNav')} · ${attentionSummary}` : t('shell.nav.toggleNav')
 
   return (
     <LazyRetryContext.Provider value={versionWatch.clearPreloadError}>
       <div
-        className={`helmx-shell${sidebarOpen ? ' sidebar-open' : ''}${sidebarCollapsed ? ' sidebar-collapsed' : ''}${mobileOverviewVisible ? ' mq-overview-on' : ''}${mobileQuickEntryVisible ? ' mq-quick-on' : ''}`}
+        ref={shellRef}
+        className={`helmx-shell${sidebarOpen ? ' sidebar-open' : ''}${sidebarCollapsed ? ' sidebar-collapsed' : ''}${mobileQuickEntryVisible ? ' mq-quick-on' : ''}`}
         onClick={(event) => {
           const target = event.target as HTMLElement
           if (target.closest('.nav-item')) {
@@ -388,16 +404,20 @@ function HelmxShellInner({
         <button
           type="button"
           className="btn btn-ghost mobile-nav-toggle"
-          aria-label={t('shell.nav.toggleNav')}
+          title={mobileNavToggleLabel}
+          aria-label={mobileNavToggleLabel}
           onClick={() => setSidebarOpen((open) => !open)}
         >
           <HelmxIcon name="menu" />
+          {attention.indicator.totalCount > 0 && attention.indicator.tone !== null && (
+            <span className="overview-count-badge mobile-nav-badge" data-tone={attention.indicator.tone}>
+              {sidebarBadgeCountLabel(attention.indicator.totalCount)}
+            </span>
+          )}
         </button>
-        {/* 移动端免开汉堡的一键直达：首个 quickEntry 插件视图 + 会话总览
-            （计数徽标同源 indicator，主屏已停在入口目标时就地隐藏）；
-            quickEntry 徽标由插件 sidebarItem 的通用 badge 声明驱动；
-            桌面由侧栏总览导航行承担同源入口，此处渲染 null。 */}
-        <MobileQuickNav indicator={attention.indicator} quickEntry={firstQuickEntry} quickEntryBadge={quickEntryBadge} />
+        {/* 移动端首个 quickEntry 插件视图一键直达（会话总览与态势计数已合并进
+            左上角汉堡按钮，省回顶栏宽度）；无插件 quickEntry 或已停在该视图时返回 null。 */}
+        <MobileQuickNav quickEntry={firstQuickEntry} quickEntryBadge={quickEntryBadge} />
         {sidebarOpen && (
           <button
             type="button"
