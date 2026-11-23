@@ -451,7 +451,7 @@ export async function createFakeRegistry(pkgName: string, latest: string): Promi
       const bytes = await fsp.readFile(served.file);
       return new Response(new Uint8Array(bytes), { status: 200 });
     }
-    if (/\/latest$/.test(url)) {
+    if (url.endsWith('/latest')) {
       return Response.json({ name: pkgName, version: latest });
     }
     const exactMatch = new RegExp(`/([^/]+)/([0-9][^/]*)$`).exec(url.replace(registryUrl, ''));

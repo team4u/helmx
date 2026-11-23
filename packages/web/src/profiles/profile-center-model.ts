@@ -1,7 +1,6 @@
 import type {
   ConversationSummary,
   PluginSummary,
-  Profile as ProtocolProfile,
   ProfileStarterPrompt,
 } from '@helmx/protocol/browser'
 import {

@@ -461,6 +461,7 @@ function MultiSelectInner<T extends string = string>({
               <div
                 key={opt.value}
                 role="option"
+                tabIndex={-1}
                 aria-selected={isSelected}
                 aria-disabled={opt.disabled}
                 data-highlighted={isHighlighted ? '' : undefined}

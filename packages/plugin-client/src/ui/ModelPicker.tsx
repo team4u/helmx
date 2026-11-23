@@ -168,7 +168,7 @@ export function ModelPickerControl({
       ...nextModels.map((model) => ({ id: model.id })),
     ]
     const nextUnavailable =
-      (models.length === 0 || models.every((model) => !model.available || model.disabled === true)) &&
+      models.every((model) => !model.available || model.disabled === true) &&
       rawTiers.every((tier) => !tier.available || tier.disabled === true)
     return {
       filteredTiers: nextTiers,

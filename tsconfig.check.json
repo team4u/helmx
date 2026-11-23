@@ -50,10 +50,6 @@
     "packages/web/test/**/*.tsx"
   ],
   "exclude": [
-    "packages/plugins/src/*/client",
-    "packages/protocol/test/agent-exec.test.ts",
-    "packages/protocol/test/events-contract.test.ts",
-    "packages/protocol/test/plugin-package.test.ts",
-    "packages/protocol/test/tool-presentation.test.ts"
+    "packages/plugins/src/*/client"
   ]
 }

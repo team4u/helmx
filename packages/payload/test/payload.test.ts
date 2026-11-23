@@ -91,7 +91,8 @@ interface PayloadManifest {
 }
 
 function runCommand(command: string, args: string[], cwd: string, timeoutMs: number, extraEnv: Record<string, string> = {}) {
-  const res = spawnSync(command, args, { cwd, timeout: timeoutMs, encoding: 'utf8', env: { ...process.env, ...extraEnv } });
+  const { HELMX_CLEAN_DIST: _ambientCleanDist, ...baseEnv } = process.env;
+  const res = spawnSync(command, args, { cwd, timeout: timeoutMs, encoding: 'utf8', env: { ...baseEnv, ...extraEnv } });
   assert.equal(
     res.status,
     0,

@@ -10,7 +10,6 @@ import {
   validateNodeIdInput,
 } from '../modals/nodes-modal-model.js'
 import {
-  formatNodePlatformArch,
   getNodeDisplayName,
   isNodeLocal,
   isNodeOnline,
@@ -79,7 +78,6 @@ export function NodeDetailDrawer({
       ? getNodeDisplayName(node, t)
       : t('nodes.drawer.titleFallback')
   const iconName = isLocal ? 'laptop' : 'server'
-  const platformArch = node ? formatNodePlatformArch(node) : '--'
 
   const hubOrigin =
     typeof window !== 'undefined' && window.location?.origin

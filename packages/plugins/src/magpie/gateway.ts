@@ -51,7 +51,7 @@ export function isLoopback(root: string): boolean {
   } catch {
     return false
   }
-  return host === 'localhost' || host === '::1' || host === '0.0.0.0' || /^127\./.test(host)
+  return host === 'localhost' || host === '::1' || host === '0.0.0.0' || host.startsWith('127.')
 }
 
 const LOOPBACK_CONNECTION_ERROR_CODES = new Set(['ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH'])

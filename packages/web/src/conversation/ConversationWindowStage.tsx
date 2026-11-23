@@ -6,7 +6,6 @@ import {
   clearComposerDirty,
   isComposerDirtySnapshot,
   setComposerDirty,
-  type ComposerDirtySnapshot,
 } from './composer-dirty.js'
 import {
   ConversationDirtySinkContext,

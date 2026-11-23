@@ -3,11 +3,5 @@ packages:
 
 allowBuilds:
   '@google/genai': false
-  electron: true
   esbuild: true
-  # Transitive dependency of electron-builder, only needed by the Squirrel (legacy Windows) target; this repo uses NSIS, so explicitly reject its install script
-  electron-winstaller: false
   protobufjs: false
-
-minimumReleaseAgeExclude:
-  - electron@45.3.2

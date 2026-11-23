@@ -799,7 +799,7 @@ export interface WorkflowPhaseSection {
 
 function sectionStatusOf(nodes: WorkflowNodeState[], runStatus: WorkflowRunSummary['status']): ExecutionStatus {
   if (nodes.some((n) => n.status === 'running')) return 'working'
-  if (nodes.length === 0 || nodes.every((n) => n.status === 'pending')) return 'pending'
+  if (nodes.every((n) => n.status === 'pending')) return 'pending'
   if (nodes.some((n) => n.status === 'failed')) return 'error'
   if (nodes.some((n) => n.status === 'aborted')) return 'aborted'
   if (nodes.every((n) => n.status === 'done')) return 'done'
