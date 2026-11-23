@@ -3978,3 +3978,66 @@ test('concurrent enable race with colliding tool or CLI command commits only one
     }
   }
 });
+
+test('concurrent register race with colliding tool or CLI command commits only one winner and rolls back loser', { timeout: 60_000 }, async () => {
+  const emptySchema = { type: 'object', properties: {} } as const;
+  for (const kind of ['tool', 'cli'] as const) {
+    let arrived = 0;
+    const gate = deferred();
+    const ready = deferred();
+    const stopped: string[] = [];
+    const host = makeHost();
+    await host.start();
+    const makeDef = (id: string): PluginDefinition => ({
+      id,
+      definePlugin(ctx) {
+        if (kind === 'tool') {
+          ctx.tool({ name: 'reg_race_shared_tool', description: id, inputSchema: emptySchema, execute: () => id });
+        } else {
+          ctx.action({
+            id: 'op',
+            description: id,
+            cli: { command: ['regrace', 'run'] },
+            inputSchema: emptySchema,
+            outputSchema: emptySchema,
+            handler: () => ({}),
+          });
+        }
+        ctx.service({
+          id: 'svc',
+          async start() {
+            arrived += 1;
+            if (arrived === 2) ready.resolve();
+            await gate.promise;
+          },
+          stop() {
+            stopped.push(id);
+          },
+        });
+      },
+    });
+    try {
+      const settled = Promise.allSettled([
+        host.register(makeDef(`p:reg-race-${kind}-a`), { enabled: true }),
+        host.register(makeDef(`p:reg-race-${kind}-b`), { enabled: true }),
+      ]);
+      await ready.promise;
+      gate.resolve();
+      const results = await settled;
+      assert.equal(results.filter((r) => r.status === 'fulfilled').length, 1);
+      const failed = results.find((r): r is PromiseRejectedResult => r.status === 'rejected')!;
+      assert.ok(failed.reason instanceof HelmxError);
+      assert.equal(failed.reason.status, 409);
+      assert.equal(failed.reason.code, kind === 'tool' ? 'duplicate_tool_name' : 'duplicate_cli_command');
+      const enabledPlugins = host.list().filter((p) => p.enabled);
+      assert.equal(enabledPlugins.length, 1);
+      assert.equal(stopped.length, 1, 'loser service must be stopped during rollback');
+      assert.notEqual(stopped[0], enabledPlugins[0]!.id);
+      assert.doesNotThrow(() => host.listTools());
+      assert.doesNotThrow(() => host.listActions());
+    } finally {
+      gate.resolve();
+      await host.dispose();
+    }
+  }
+});

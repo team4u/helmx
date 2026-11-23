@@ -836,7 +836,9 @@ test('createPluginClientContext.fetchRoute: strictly validates paths, delegates 
   // Encoded slash inside a single :param segment is valid (matches kernel route-match.ts)
   const encodedRes = await ctx.fetchRoute('/files/dir%2Fsub.bin?download=1')
   assert.equal(encodedRes.status, 201)
-  assert.equal(routeCalls.length, 2)
+  const orgRes = await ctx.fetchRoute('/orgs/acme%2Fcorp/items/it-42')
+  assert.equal(orgRes.status, 201)
+  assert.equal(routeCalls.length, 3)
 
   // Every invalid / traversal / non-namespaced path must reject BEFORE hitting the host port
   const invalidPaths = [
@@ -857,9 +859,16 @@ test('createPluginClientContext.fetchRoute: strictly validates paths, delegates 
     '/items/./sub',
     '/items/%2e%2e/secret',
     '/items/%2E/sub',
+    '/%2e%2e%2fconfig',
+    '/items/%2e%2e%2fsecret',
+    '/items/%2e%2fsub',
+    '/items/foo%2f..%2fbar',
     '/items/%5c/sub',
     '/items/%zz',
     '/items\nbad',
+    '/foo%00bar',
+    '/foo%0abar',
+    '/foo%7fbar',
   ]
   for (const bad of invalidPaths) {
     await assert.rejects(
@@ -868,7 +877,7 @@ test('createPluginClientContext.fetchRoute: strictly validates paths, delegates 
       `invalid path ${JSON.stringify(bad)} must be rejected explicitly`,
     )
   }
-  assert.equal(routeCalls.length, 2, 'invalid paths must never reach port.fetchPluginRoute')
+  assert.equal(routeCalls.length, 3, 'invalid paths must never reach port.fetchPluginRoute')
 
   // Unwired host port rejects explicitly (never falls back to global fetch)
   const unwiredCtx = SDK.createPluginClientContext(makePort(log), 'builtin:demo', 7)

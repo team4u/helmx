@@ -10,6 +10,7 @@ import { HelmxError, isPluginSummaryActive } from '@helmx/protocol'
 import type { JsonSchema, PluginConfigFieldSchema, PublicPluginSessionDoc } from '@helmx/protocol'
 import { gzipSync } from 'node:zlib'
 import { redactJsonValue } from '../redact.js'
+import { markStreamingJsonBody } from './gzip.js'
 import { errorResponse, jsonOk, readJsonBody, type JsonRedactor } from './http-utils.js'
 import { decodeSegment, findPluginRoute } from './route-match.js'
 import type { KernelRuntimeLike } from './contracts.js'
@@ -796,7 +797,7 @@ async function redactPluginRouteResponse(
       await reader.cancel(reason).catch(() => {})
     },
   })
-  return new Response(createRedactingTextStream(stitched, stash), {
+  return new Response(markStreamingJsonBody(createRedactingTextStream(stitched, stash)), {
     status: response.status,
     statusText: response.statusText,
     headers,

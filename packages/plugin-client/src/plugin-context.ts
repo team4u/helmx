@@ -134,11 +134,20 @@ export function assertValidPluginRoutePath(path: string): void {
         throw new Error(`fetchRoute path contains invalid percent-encoding in segment "${seg}": ${path}`)
       }
     }
-    if (seg === '.' || seg === '..' || decoded === '.' || decoded === '..') {
-      throw new Error(`fetchRoute path must not contain dot segments ("." or ".."): ${path}`)
+    if (/[\u0000-\u001f\u007f]/.test(decoded)) {
+      throw new Error(`fetchRoute path must not contain encoded control characters in segment "${seg}": ${path}`)
     }
     if (decoded.includes('\\')) {
       throw new Error(`fetchRoute path must not contain an encoded backslash in segment "${seg}": ${path}`)
+    }
+    if (
+      seg === '.'
+      || seg === '..'
+      || decoded === '.'
+      || decoded === '..'
+      || decoded.split('/').some((part) => part === '.' || part === '..')
+    ) {
+      throw new Error(`fetchRoute path must not contain dot segments ("." or ".."): ${path}`)
     }
   }
 }

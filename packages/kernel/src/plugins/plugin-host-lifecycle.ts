@@ -183,6 +183,9 @@ export async function runRegisterTransaction(
       await precompilePluginClientModules(state, ctx);
       await registerProviders(state, ctx.providers);
       await activatePluginServices(state, ctx.servicesStarted, ctx.servicesReconciled);
+      // Re-run commit checks synchronously right before commitEnabled so concurrent register/enable
+      // transactions cannot bypass cross-plugin tool / CLI / UI / dependency uniqueness gates.
+      assertEnableCommitChecks(state, ctx);
       commitEnabled(state, ctx);
     } catch (err) {
       await handleRegisterFailure(state, seq, err, { isolate, stage: 'enable', stopServices: true }, ctx);

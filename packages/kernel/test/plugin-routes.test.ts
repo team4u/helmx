@@ -9,6 +9,7 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { gunzipSync } from 'node:zlib'
 import { HelmxError, type PluginDefinition } from '@helmx/protocol'
 import { createHubHandler } from '../src/http/hub.js'
 import type { KernelRuntimeLike } from '../src/http/contracts.js'
@@ -18,14 +19,14 @@ import { SecretStash } from '../src/services/index.js'
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
 import { MemoryDocStore, cleanupDir, makeTempDir } from './helpers.js'
 
-async function makeRouteHarness(plugins: PluginDefinition[], stash = new SecretStash()) {
+async function makeRouteHarness(plugins: PluginDefinition[], stash: SecretStash | undefined = new SecretStash()) {
   const dataDir = await makeTempDir('helmx-routes-upgrade-')
   const host = new PluginHost({
     dataDir,
     host: {
       ...createPluginHostBackendFixture(),
       emitEvent: () => {},
-      redact: (text) => stash.redact(text),
+      redact: (text) => (stash ? stash.redact(text) : text),
     },
     docs: new MemoryDocStore(),
   })
@@ -38,7 +39,7 @@ async function makeRouteHarness(plugins: PluginDefinition[], stash = new SecretS
       verifyToken: async (token: string) => token === 'valid-token',
     },
     plugins: host,
-    stash,
+    ...(stash !== undefined ? { stash } : {}),
   } as unknown as KernelRuntimeLike
   const handle = createHubHandler(kernelStub)
   const req = (path: string, init: RequestInit = {}) => {
@@ -623,5 +624,102 @@ test('ctx.route: text/* and application/x-ndjson stream without full-body buffer
     releaseNdjsonGate()
     releaseHugeJsonTail()
     await env.close()
+  }
+})
+
+test('createHubHandler + gzipJsonResponse: oversized (>4 MiB) streaming JSON streams without blocking under Accept-Encoding: gzip (with and without SecretStash)', { timeout: 60_000 }, async () => {
+  const chunkPayloadSize = 64 * 1024
+  const prefixChunkCount = Math.ceil((PLUGIN_ROUTE_JSON_REDACT_MAX_BYTES + chunkPayloadSize) / chunkPayloadSize)
+  const fillerChunk = 'z'.repeat(chunkPayloadSize)
+
+  for (const withStash of [true, false]) {
+    const secret = 'sk-gzip-stream-secret-value-0000000000000000000000000000000000999'
+    const stash = withStash ? new SecretStash() : undefined
+    stash?.addRedaction(secret)
+
+    let releaseTail!: () => void
+    const tailGate = new Promise<void>((resolve) => {
+      releaseTail = resolve
+    })
+
+    const env = await makeRouteHarness(
+      [
+        {
+          id: 'ext:gzip-json',
+          definePlugin(ctx) {
+            ctx.route({
+              method: 'GET',
+              path: '/huge-stream',
+              handler: () => {
+                const enc = new TextEncoder()
+                const stream = new ReadableStream<Uint8Array>({
+                  async start(controller) {
+                    controller.enqueue(enc.encode(`{"head":"${secret}","pad":"`))
+                    for (let i = 0; i < prefixChunkCount; i += 1) {
+                      controller.enqueue(enc.encode(fillerChunk))
+                    }
+                    controller.enqueue(enc.encode(`","mid":"${secret.slice(0, 15)}`))
+                    await tailGate
+                    controller.enqueue(enc.encode(`${secret.slice(15)}","end":true}`))
+                    controller.close()
+                  },
+                })
+                return new Response(stream, {
+                  status: 200,
+                  headers: { 'content-type': 'application/json; charset=utf-8' },
+                })
+              },
+            })
+            ctx.route({
+              method: 'GET',
+              path: '/medium-json',
+              handler: () => Response.json({ pad: 'm'.repeat(4096), ok: true }),
+            })
+            ctx.route({
+              method: 'GET',
+              path: '/tiny-json',
+              handler: () => Response.json({ ok: true }),
+            })
+          },
+        },
+      ],
+      stash,
+    )
+
+    try {
+      const prefix = `/api/plugins/${encodeURIComponent('ext:gzip-json')}/routes`
+
+      // 1. Oversized (>4 MiB) JSON with Accept-Encoding: gzip must resolve headers BEFORE tailGate opens
+      const hugeRes = await env.req(`${prefix}/huge-stream`, { headers: { 'accept-encoding': 'gzip' } })
+      assert.equal(hugeRes.status, 200)
+      assert.equal(hugeRes.headers.get('content-encoding'), null, 'oversized streaming JSON must not buffer for gzip')
+      assert.match(hugeRes.headers.get('vary') ?? '', /Accept-Encoding/i)
+      assert.equal(env.host.activeTaskCount('ext:gzip-json'), 1, 'streaming route remains tracked until EOF')
+      releaseTail()
+      const hugeText = await hugeRes.text()
+      const parsed = JSON.parse(hugeText) as { head: string; pad: string; mid: string; end: boolean }
+      assert.equal(parsed.pad.length, prefixChunkCount * chunkPayloadSize)
+      assert.equal(parsed.head, withStash ? '[REDACTED]' : secret)
+      assert.equal(parsed.mid, withStash ? '[REDACTED]' : secret)
+      assert.equal(parsed.end, true)
+      assert.equal(env.host.activeTaskCount('ext:gzip-json'), 0)
+
+      // 2. Medium compressible JSON (<= 4 MiB, >= 1 KiB) still compresses cleanly under Accept-Encoding: gzip
+      const medRes = await env.req(`${prefix}/medium-json`, { headers: { 'accept-encoding': 'gzip' } })
+      assert.equal(medRes.status, 200)
+      assert.equal(medRes.headers.get('content-encoding'), 'gzip')
+      const medJson = JSON.parse(gunzipSync(Buffer.from(await medRes.arrayBuffer())).toString('utf8')) as { pad: string; ok: boolean }
+      assert.equal(medJson.pad.length, 4096)
+      assert.equal(medJson.ok, true)
+
+      // 3. Tiny JSON (< 1 KiB) returns intact identity body (consumed reader never returns a locked original body)
+      const tinyRes = await env.req(`${prefix}/tiny-json`, { headers: { 'accept-encoding': 'gzip' } })
+      assert.equal(tinyRes.status, 200)
+      assert.equal(tinyRes.headers.get('content-encoding'), null)
+      assert.deepEqual(await tinyRes.json(), { ok: true })
+    } finally {
+      releaseTail()
+      await env.close()
+    }
   }
 })
