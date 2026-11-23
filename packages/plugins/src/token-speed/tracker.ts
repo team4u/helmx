@@ -37,6 +37,7 @@ export class SlidingWindow {
   constructor(private windowMs: number, private readonly minSpanMs: number) {}
 
   setWindowMs(windowMs: number): void {
+    if (windowMs > this.windowMs) this.start = 0
     this.windowMs = windowMs
   }
 
