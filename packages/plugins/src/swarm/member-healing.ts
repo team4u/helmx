@@ -4,12 +4,16 @@
 import { readFile } from 'node:fs/promises'
 import { HelmxError, type HelmxPluginContext } from '@helmx/protocol'
 import {
+  MAX_UNANSWERED_RECOVERY_RETRIES,
   assertCollabGroupRecord,
   assertGroupId,
   groupNotFoundError,
+  hasPendingDeliverableWakeup,
   isEnoent,
+  isIdleCatchupExhausted,
   isLifecycleTeardownError,
   swarmError,
+  withRetryAttemptSuffix,
   type AppendPostDraft,
   type BoardPost,
   type CollabGroupRecord,
@@ -47,18 +51,33 @@ export interface MemberHealingPorts {
   readonly dispatcher: WakeDispatcher
 }
 
+function resolveIntentAttempt(intent: { requestId: string; attempt?: number }): number {
+  if (intent.attempt !== undefined) return intent.attempt
+  const match = /:r(\d+)$/.exec(intent.requestId)
+  return match ? Number(match[1]) : 0
+}
+
 function clearMemberTaskFields(target: GroupMemberState, includeWakeup = false): void {
   delete target.lastWakeTaskSeq
   delete target.silentExitNudgeSeq
   delete target.lastWakeCompletionSeq
   delete target.inflightNudge
-  if (includeWakeup) delete target.inflightWakeup
+  delete target.nudgeRecovery
+  if (includeWakeup) {
+    delete target.inflightWakeup
+    delete target.wakeupRecovery
+  }
 }
 
 export function createMemberHealing(ports: MemberHealingPorts) {
   const { dispatcher } = ports
 
-  const postSystemBlocker = (groupId: string, body: string, refSeq?: number): Promise<BoardPost> =>
+  const postSystemBlocker = (
+    groupId: string,
+    body: string,
+    refSeq?: number,
+    opts?: { deferDelivery?: boolean },
+  ): Promise<BoardPost> =>
     ports.appendPost(groupId, {
       from: 'system',
       to: ['coordinator'],
@@ -67,6 +86,7 @@ export function createMemberHealing(ports: MemberHealingPorts) {
       kind: 'blocker',
       refs: refSeq !== undefined ? [refSeq] : [],
       body,
+      ...(opts?.deferDelivery ? { deferDelivery: true } : {}),
     })
 
   const checkAndEmitQuiescenceStall = async (groupId: string, settlingConvId?: number): Promise<void> => {
@@ -179,7 +199,11 @@ export function createMemberHealing(ports: MemberHealingPorts) {
     })
   }
 
-  const reconcileDeletedWorker = async (groupId: string, conversationId: number): Promise<void> => {
+  const reconcileDeletedWorker = async (
+    groupId: string,
+    conversationId: number,
+    opts?: { deferDelivery?: boolean },
+  ): Promise<void> => {
     ports.releaseManagedWorker(conversationId)
     const current = ports.getGroup(groupId)
     const targetMember = current?.status === 'active' ? current.members.find((m) => m.conversationId === conversationId && m.lifecycle === 'active') : undefined
@@ -211,12 +235,14 @@ export function createMemberHealing(ports: MemberHealingPorts) {
         groupId,
         `Member @${archivedName} (#${conversationId}) conversation was deleted while active; worktree hold released and member archived.`,
         prevTaskSeq,
+        opts,
       )
     }
   }
 
   const reconcileMemberRecoveryState = async (groupId: string, m: GroupMemberState): Promise<void> => {
-    const summary = ports.getCoordinator().readConversationOrUndefined(m.conversationId)
+    const coord = ports.getCoordinator()
+    const summary = coord.readConversationOrUndefined(m.conversationId)
     const wakeStatus = m.inflightWakeup ? await classifyInflightIntent(ports.ctx.host, m.conversationId, summary, m.inflightWakeup) : undefined
     const nudgeStatus = m.inflightNudge ? await classifyInflightIntent(ports.ctx.host, m.conversationId, summary, m.inflightNudge) : undefined
     const clearStale =
@@ -231,23 +257,82 @@ export function createMemberHealing(ports: MemberHealingPorts) {
       (m.lastWakeTaskSeq === undefined || (m.lastPostSeq ?? 0) >= m.lastWakeTaskSeq)
     if (!wakeStatus && !nudgeStatus && !clearStale) return
 
+    let wakeupExhausted: { fromSeq: number; toSeq: number } | undefined
+    let nudgeExhausted: { taskSeq: number } | undefined
+
     await ports.updateMember(groupId, m.name, (t) => {
       if (wakeStatus && t.inflightWakeup) {
         const inf = t.inflightWakeup
-        if (wakeStatus === 'active' || wakeStatus === 'settled') t.readCursorSeq = Math.max(t.readCursorSeq, inf.toSeq)
-        if (wakeStatus === 'active') t.lastWakeCompletionSeq = Math.max(inf.baseCompletionSeq, summary?.completionSeq ?? inf.baseCompletionSeq)
-        else if ((wakeStatus === 'settled' || wakeStatus === 'uncommitted') && t.lastWakeCompletionSeq === inf.baseCompletionSeq) delete t.lastWakeCompletionSeq
+        if (wakeStatus === 'active' || wakeStatus === 'settled') {
+          t.readCursorSeq = Math.max(t.readCursorSeq, inf.toSeq)
+          delete t.wakeupRecovery
+        }
+        if (wakeStatus === 'active') {
+          t.lastWakeCompletionSeq = Math.max(inf.baseCompletionSeq, summary?.completionSeq ?? inf.baseCompletionSeq)
+        } else if (
+          (wakeStatus === 'settled' || wakeStatus === 'uncommitted' || wakeStatus === 'unanswered') &&
+          t.lastWakeCompletionSeq === inf.baseCompletionSeq
+        ) {
+          delete t.lastWakeCompletionSeq
+        }
+        if (wakeStatus === 'unanswered') {
+          const prevAttempt = resolveIntentAttempt(inf)
+          if (prevAttempt < MAX_UNANSWERED_RECOVERY_RETRIES) {
+            t.wakeupRecovery = { toSeq: inf.toSeq, nextAttempt: prevAttempt + 1 }
+            ports.logDiagnostic(
+              `协作组 '${groupId}' 成员 @${m.name} 唤醒投递 (#${inf.fromSeq}..#${inf.toSeq}) 为 unanswered，保留未读游标并排入恢复重试 #${prevAttempt + 1}`,
+            )
+          } else {
+            t.wakeupRecovery = { toSeq: inf.toSeq, nextAttempt: prevAttempt, exhausted: true }
+            wakeupExhausted = { fromSeq: inf.fromSeq, toSeq: inf.toSeq }
+          }
+        }
         delete t.inflightWakeup
       }
       if (nudgeStatus && t.inflightNudge) {
         const inf = t.inflightNudge
-        if (nudgeStatus === 'active') t.lastWakeCompletionSeq = Math.max(inf.baseCompletionSeq, summary?.completionSeq ?? inf.baseCompletionSeq)
-        else if ((nudgeStatus === 'settled' || nudgeStatus === 'uncommitted') && t.lastWakeCompletionSeq === inf.baseCompletionSeq) delete t.lastWakeCompletionSeq
-        if (nudgeStatus === 'uncommitted' && t.silentExitNudgeSeq === inf.taskSeq) delete t.silentExitNudgeSeq
+        if (nudgeStatus === 'active' || nudgeStatus === 'settled') {
+          delete t.nudgeRecovery
+        }
+        if (nudgeStatus === 'active') {
+          t.lastWakeCompletionSeq = Math.max(inf.baseCompletionSeq, summary?.completionSeq ?? inf.baseCompletionSeq)
+        } else if (
+          (nudgeStatus === 'settled' || nudgeStatus === 'uncommitted' || nudgeStatus === 'unanswered') &&
+          t.lastWakeCompletionSeq === inf.baseCompletionSeq
+        ) {
+          delete t.lastWakeCompletionSeq
+        }
+        if (nudgeStatus === 'uncommitted' && t.silentExitNudgeSeq === inf.taskSeq) {
+          delete t.silentExitNudgeSeq
+        }
+        if (nudgeStatus === 'unanswered') {
+          const prevAttempt = resolveIntentAttempt(inf)
+          if (prevAttempt < MAX_UNANSWERED_RECOVERY_RETRIES) {
+            if (t.silentExitNudgeSeq === inf.taskSeq) delete t.silentExitNudgeSeq
+            t.nudgeRecovery = { toSeq: inf.taskSeq, nextAttempt: prevAttempt + 1 }
+            ports.logDiagnostic(
+              `协作组 '${groupId}' 成员 @${m.name} 哑巴退场续催 (#${inf.taskSeq}) 为 unanswered，排入恢复重试 #${prevAttempt + 1}`,
+            )
+          } else {
+            clearMemberTaskFields(t)
+            nudgeExhausted = { taskSeq: inf.taskSeq }
+          }
+        }
         delete t.inflightNudge
       }
       if (clearStale) delete t.lastWakeCompletionSeq
     })
+
+    if (wakeupExhausted) {
+      const msg = `Member @${m.name} wakeup (#${wakeupExhausted.fromSeq}..#${wakeupExhausted.toSeq}) remained unanswered after recovery retry; automatic redelivery paused for coordinator intervention.`
+      await postSystemBlocker(groupId, msg, wakeupExhausted.toSeq, { deferDelivery: true })
+      coord.reportError(`协作组 ${groupId} 成员 @${m.name} 唤醒恢复重试耗尽`, msg)
+    }
+    if (nudgeExhausted) {
+      const msg = `Member @${m.name} silent-exit nudge for task #${nudgeExhausted.taskSeq} remained unanswered after recovery retry; coordinator intervention required.`
+      await postSystemBlocker(groupId, msg, nudgeExhausted.taskSeq, { deferDelivery: true })
+      coord.reportError(`协作组 ${groupId} 成员 @${m.name} 哑巴退场续催恢复重试耗尽`, msg)
+    }
   }
 
   const onMemberTurnSettled = async (input: MemberTurnSettledInput): Promise<void> => {
@@ -277,7 +362,7 @@ export function createMemberHealing(ports: MemberHealingPorts) {
         )
       }
       const refreshed = ports.getGroup(input.groupId)?.members.find((m) => m.name === input.memberName && m.lifecycle === 'active')
-      if (refreshed && refreshed.pendingWakeupSeq > refreshed.readCursorSeq) {
+      if (refreshed && hasPendingDeliverableWakeup(refreshed)) {
         await dispatcher.deliverWorkerWakeup(input.groupId, input.memberName, { fromTurnSettled: true })
         return
       }
@@ -285,7 +370,7 @@ export function createMemberHealing(ports: MemberHealingPorts) {
       return
     }
 
-    if (member.pendingWakeupSeq > member.readCursorSeq) {
+    if (hasPendingDeliverableWakeup(member)) {
       await dispatcher.deliverWorkerWakeup(input.groupId, input.memberName, { fromTurnSettled: true })
       return
     }
@@ -293,10 +378,16 @@ export function createMemberHealing(ports: MemberHealingPorts) {
     const silentAction = evaluateSilentExit(group, member, input.lastReplySummary)
     if (silentAction.kind === 'nudge') {
       const baseCompletionSeq = coord.readConversationOrUndefined(input.conversationId)?.completionSeq ?? input.completionSeq
-      const requestId = `swarm-nudge:${input.groupId}:${input.memberName}:${silentAction.taskSeq}`
+      const attempt =
+        member.nudgeRecovery !== undefined &&
+        !member.nudgeRecovery.exhausted &&
+        member.nudgeRecovery.toSeq === silentAction.taskSeq
+          ? member.nudgeRecovery.nextAttempt
+          : 0
+      const requestId = withRetryAttemptSuffix(`swarm-nudge:${input.groupId}:${input.memberName}:${silentAction.taskSeq}`, attempt)
       await ports.updateMember(input.groupId, input.memberName, (t) => {
         t.silentExitNudgeSeq = silentAction.taskSeq
-        t.inflightNudge = { requestId, taskSeq: silentAction.taskSeq, baseCompletionSeq }
+        t.inflightNudge = { requestId, taskSeq: silentAction.taskSeq, baseCompletionSeq, ...(attempt > 0 ? { attempt } : {}) }
       })
       try {
         await ports.ctx.host.submitInputGuarded(
@@ -307,15 +398,32 @@ export function createMemberHealing(ports: MemberHealingPorts) {
         )
         await ports.updateMember(input.groupId, input.memberName, (t) => {
           if (t.inflightNudge?.requestId === requestId) delete t.inflightNudge
+          delete t.nudgeRecovery
           t.lastWakeCompletionSeq = baseCompletionSeq
         })
       } catch (err) {
+        const teardown = isLifecycleTeardownError(err)
         await ports.updateMember(input.groupId, input.memberName, (t) => {
-          if (t.inflightNudge?.requestId === requestId) delete t.inflightNudge
-          if (t.silentExitNudgeSeq === silentAction.taskSeq) delete t.silentExitNudgeSeq
-          if (t.lastWakeCompletionSeq === baseCompletionSeq) delete t.lastWakeCompletionSeq
+          if (!teardown && attempt > 0) {
+            clearMemberTaskFields(t)
+          } else {
+            if (t.inflightNudge?.requestId === requestId) delete t.inflightNudge
+            if (t.silentExitNudgeSeq === silentAction.taskSeq) delete t.silentExitNudgeSeq
+            if (t.lastWakeCompletionSeq === baseCompletionSeq) delete t.lastWakeCompletionSeq
+          }
         }).catch(() => {})
-        if (!isLifecycleTeardownError(err)) coord.reportError(`协作组 ${input.groupId} 成员 @${input.memberName} 哑巴退场续催失败`, err)
+        if (!teardown) {
+          coord.reportError(`协作组 ${input.groupId} 成员 @${input.memberName} 哑巴退场续催失败`, err)
+          if (attempt > 0) {
+            const safeErr = ports.ctx.host.redact(err instanceof Error ? err.message : String(err))
+            await postSystemBlocker(
+              input.groupId,
+              `Member @${input.memberName} silent-exit nudge recovery retry failed for task #${silentAction.taskSeq}: ${safeErr}`,
+              silentAction.taskSeq,
+            )
+            await flushIfReady()
+          }
+        }
       }
       return
     }
@@ -331,7 +439,7 @@ export function createMemberHealing(ports: MemberHealingPorts) {
     await checkAndEmitQuiescenceStall(input.groupId, input.conversationId)
   }
 
-  const reconcileSingleRecoveredGroup = async (groupId: string): Promise<void> => {
+  const prepareGroupRecovery = async (groupId: string): Promise<void> => {
     if (!ports.isAlive()) return
     const coord = ports.getCoordinator()
     const initialGroup = ports.getGroup(groupId)
@@ -340,26 +448,68 @@ export function createMemberHealing(ports: MemberHealingPorts) {
     if (initialGroup.inflightReport) {
       const inf = initialGroup.inflightReport
       if (initialGroup.coordinatorDetached) {
-        await ports.updateGroupMeta(groupId, (d) => { delete d.inflightReport })
+        await ports.updateGroupMeta(groupId, (d) => {
+          delete d.inflightReport
+          delete d.reportRecovery
+        })
       } else {
         const coordSummary = coord.readConversationOrUndefined(initialGroup.coordinatorConversationId)
         const reportStatus = await classifyInflightIntent(ports.ctx.host, initialGroup.coordinatorConversationId, coordSummary, inf)
+        let reportExhausted = false
         await ports.updateGroupMeta(groupId, (d) => {
           if (d.inflightReport?.requestId !== inf.requestId) return
-          if (reportStatus === 'active' || reportStatus === 'settled') {
+          if (reportStatus === 'missing_conv') {
+            d.coordinatorDetached = true
+            d.updatedAt = Date.now()
+            delete d.reportRecovery
+          } else if (reportStatus === 'active' || reportStatus === 'settled') {
             if (!inf.requestId.startsWith('swarm-report-idle:')) {
               d.coordinatorNotifiedSeq = Math.max(d.coordinatorNotifiedSeq, inf.toSeq)
             }
             if (inf.hadActiveWorkers) d.lastReportHadActiveWorkers = true
             else delete d.lastReportHadActiveWorkers
+            delete d.reportRecovery
+          } else if (reportStatus === 'unanswered') {
+            const prevAttempt = resolveIntentAttempt(inf)
+            if (prevAttempt < MAX_UNANSWERED_RECOVERY_RETRIES) {
+              d.reportRecovery = { toSeq: inf.toSeq, nextAttempt: prevAttempt + 1 }
+              ports.logDiagnostic(
+                `协作组 '${groupId}' 主控汇总 (#${inf.fromSeq}..#${inf.toSeq}) 为 unanswered，保留未通知游标并排入恢复重试 #${prevAttempt + 1}`,
+              )
+            } else {
+              d.reportRecovery = { toSeq: inf.toSeq, nextAttempt: prevAttempt, exhausted: true }
+              reportExhausted = true
+            }
           }
           delete d.inflightReport
         })
         if (reportStatus === 'active') {
           dispatcher.noteCoordReportInflight(groupId, Math.max(inf.baseCompletionSeq, coordSummary?.completionSeq ?? inf.baseCompletionSeq))
+        } else if (reportExhausted) {
+          coord.reportError(
+            `协作组 ${groupId} 主控汇总恢复投递失败`,
+            `主控汇总 (#${inf.fromSeq}..#${inf.toSeq}) 在恢复重试后仍为 unanswered，已暂停自动重投（board seq 未标为已通知），请手动检查协作看板`,
+          )
         }
       }
     }
+
+    const latest = ports.getGroup(groupId)
+    if (!latest || latest.status !== 'active') return
+    for (const m of [...latest.members]) {
+      if (m.lifecycle !== 'active') continue
+      if (!ports.isAlive()) return
+      if (!coord.readConversationOrUndefined(m.conversationId)) {
+        await reconcileDeletedWorker(groupId, m.conversationId, { deferDelivery: true })
+      }
+    }
+  }
+
+  const reconcileSingleRecoveredGroup = async (groupId: string): Promise<void> => {
+    if (!ports.isAlive()) return
+    const coord = ports.getCoordinator()
+    const initialGroup = ports.getGroup(groupId)
+    if (!initialGroup || initialGroup.status !== 'active') return
 
     for (const m of initialGroup.members) {
       if (m.lifecycle !== 'active') continue
@@ -374,12 +524,29 @@ export function createMemberHealing(ports: MemberHealingPorts) {
       if (member.lifecycle !== 'active') continue
       if (!ports.isAlive()) return
       if (member.pendingWakeupSeq > member.readCursorSeq) {
-        void dispatcher.deliverWorkerWakeup(freshGroup.id, member.name)
+        if (hasPendingDeliverableWakeup(member)) void dispatcher.deliverWorkerWakeup(freshGroup.id, member.name)
         continue
       }
       if (member.lastWakeTaskSeq === undefined || (member.lastPostSeq ?? 0) >= member.lastWakeTaskSeq) continue
       const summary = coord.readConversationOrUndefined(member.conversationId)
       if (!summary || summary.status === 'working' || summary.status === 'blocked') continue
+
+      if (
+        member.nudgeRecovery !== undefined &&
+        !member.nudgeRecovery.exhausted &&
+        member.nudgeRecovery.toSeq === member.lastWakeTaskSeq
+      ) {
+        const lastReplySummary = await collectMemberLastReplySummary(ports.ctx.host, member.conversationId)
+        await onMemberTurnSettled({
+          groupId: freshGroup.id,
+          memberName: member.name,
+          conversationId: member.conversationId,
+          completionSeq: summary.completionSeq,
+          outcome: 'completed',
+          lastReplySummary,
+        })
+        continue
+      }
 
       let entries = [] as Awaited<ReturnType<typeof ports.ctx.host.getConversationDetail>>['entries']
       if (summary.status !== 'error') {
@@ -408,7 +575,11 @@ export function createMemberHealing(ports: MemberHealingPorts) {
     const latest = ports.getGroup(groupId)
     if (!latest || latest.status !== 'active' || latest.coordinatorDetached) return
     if (dispatcher.canFlushCoordinator(latest)) void dispatcher.scheduleCoordinatorReport(latest.id, 0)
-    else if (latest.coordinatorPendingSeq <= latest.coordinatorNotifiedSeq && !dispatcher.hasInflightDeliveriesForGroup(latest.id)) {
+    else if (
+      latest.coordinatorPendingSeq <= latest.coordinatorNotifiedSeq &&
+      !isIdleCatchupExhausted(latest) &&
+      !dispatcher.hasInflightDeliveriesForGroup(latest.id)
+    ) {
       await checkAndEmitQuiescenceStall(latest.id)
     }
   }
@@ -419,6 +590,7 @@ export function createMemberHealing(ports: MemberHealingPorts) {
     loadGroupFromDisk,
     ensurePostsLoaded,
     reconcileDeletedWorker,
+    prepareGroupRecovery,
     reconcileSingleRecoveredGroup,
     onMemberTurnSettled,
   }

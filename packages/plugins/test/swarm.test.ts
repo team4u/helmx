@@ -849,7 +849,28 @@ test('swarm-unit8: recovery metadata validation, authoritative classifyInflightI
       { ...workingSummary, status: 'idle' },
       { requestId: 'swarm-report:grp_test_1:1-3' },
     ),
-    'settled',
+    'unanswered',
+  )
+  // Valid unanswered recovery metadata accepted; invalid nextAttempt rejected
+  assert.equal(
+    assertCollabGroupRecord(
+      makeGroup({
+        headSeq: 2,
+        reportRecovery: { toSeq: 2, nextAttempt: 1, exhausted: true },
+        members: [
+          makeMember({
+            wakeupRecovery: { toSeq: 2, nextAttempt: 1 },
+            nudgeRecovery: { toSeq: 2, nextAttempt: 1 },
+            inflightWakeup: { requestId: 'swarm-wakeup:grp_test_1:author:1-2:r1', fromSeq: 1, toSeq: 2, baseCompletionSeq: 0, attempt: 1 },
+          }),
+        ],
+      }),
+    ).reportRecovery?.exhausted,
+    true,
+  )
+  assert.throws(
+    () => assertCollabGroupRecord({ ...makeGroup({ headSeq: 1 }), reportRecovery: { toSeq: 1, nextAttempt: 0 } }),
+    (err: unknown) => err instanceof HelmxError && err.code === 'swarm_doc_corrupt',
   )
   assert.equal(
     await classifyInflightIntent(
@@ -878,6 +899,31 @@ test('swarm-unit8: recovery metadata validation, authoritative classifyInflightI
       [
         { id: '10', kind: 'helmx.input', data: { id: 'swarm-wakeup:grp_test_1:author:1-2' } },
         { id: '11', kind: 'pi.assistant', model: [{ role: 'assistant', stopReason: 'stop', content: [{ type: 'text', text: 'forgot post' }] }] },
+      ],
+      { status: 'idle', completionSeq: 1 },
+      'grp_test_1',
+      member,
+    ),
+    { kind: 'completed' },
+  )
+  // Retry-suffixed wake/nudge input IDs (:r1) are recognized by classifyMemberDetailOutcome
+  assert.deepEqual(
+    classifyMemberDetailOutcome(
+      [
+        { id: '10', kind: 'helmx.input', data: { id: 'swarm-wakeup:grp_test_1:author:1-2:r1' } },
+        { id: '11', kind: 'pi.assistant', model: [{ role: 'assistant', stopReason: 'stop', content: [{ type: 'text', text: 'retry reply' }] }] },
+      ],
+      { status: 'idle', completionSeq: 1 },
+      'grp_test_1',
+      member,
+    ),
+    { kind: 'completed' },
+  )
+  assert.deepEqual(
+    classifyMemberDetailOutcome(
+      [
+        { id: '12', kind: 'helmx.input', data: { id: 'swarm-nudge:grp_test_1:author:2:r1' } },
+        { id: '13', kind: 'pi.assistant', model: [{ role: 'assistant', stopReason: 'stop', content: [{ type: 'text', text: 'nudge retry reply' }] }] },
       ],
       { status: 'idle', completionSeq: 1 },
       'grp_test_1',
@@ -1988,4 +2034,380 @@ test('swarm-unit15: createCollabGroupRuntime appendPost closed-group lock re-che
   } finally {
     rmSync(dataDir, { recursive: true, force: true })
   }
+})
+
+test('swarm-unit16: unanswered recovery preserves cursors, retries with distinct requestId, stops on exhaustion with visible failure, and enforces 3-phase boot reconciliation order', { timeout: 60_000 }, async (t) => {
+  const { mkdirSync, writeFileSync } = await import('node:fs')
+  const { dirname, join } = await import('node:path')
+  const { useTempDir, waitFor } = await import('./helpers/plugin-test-env.js')
+  const { createCollabGroupRuntime } = await import('../src/swarm/group-store.js')
+
+  const dataDir = useTempDir(t, 'helmx-swarm-unanswered-unit-')
+  const locks = new Map<string, Promise<unknown>>()
+  const events: string[] = []
+  const errors: Array<{ title: string; detail: unknown }> = []
+  const submittedCoords: Array<{ id: number; requestId?: string; text: string }> = []
+  const submittedWorkers: Array<{ id: number; requestId?: string; text: string }> = []
+  const submissions = new Map<string, { id: string; requestId: string; status: 'queued' | 'placed' | 'done' | 'unanswered' }>()
+  const existingConvs = new Map<number, { id: number; status: 'idle' | 'working' | 'error'; completionSeq: number }>()
+  const detailEntriesByConv = new Map<number, Array<{ id: string; kind: string; data?: unknown; model?: unknown }>>()
+
+  const subKey = (convId: number, requestId: string) => `${convId}:${requestId}`
+
+  const makeHarness = () => {
+    const docState = new Map<string, unknown>()
+    const sessionState = new Map<number, unknown>()
+    const fakeCtx = {
+      pluginId: 'builtin:swarm',
+      dataDir,
+      doc: <T>(name: string, initial: T) => ({
+        get: () => (docState.get(name) as T) ?? initial,
+        set: (val: T) => { docState.set(name, val) },
+        update: (fn: (cur: T) => T) => { docState.set(name, fn((docState.get(name) as T) ?? initial)) },
+        flush: async () => {},
+      }),
+      sessionDoc: <T>(_name: string, initial: T) => ({
+        get: (cid: number) => (sessionState.get(cid) as T) ?? initial,
+        set: (cid: number, val: T) => { sessionState.set(cid, val) },
+        update: () => {},
+        delete: (cid: number) => { sessionState.delete(cid) },
+        listConversationIds: () => [...sessionState.keys()],
+        flush: async () => {},
+      }),
+      host: {
+        isClosing: false,
+        redact: (txt: string) => txt,
+        manageConversation: () => () => {},
+        listConversations: () => [],
+        withFileLock: async <T>(lockPath: string, fn: () => Promise<T>): Promise<T> => {
+          const prev = locks.get(lockPath) ?? Promise.resolve()
+          const run = prev.then(fn, fn)
+          const tail = run.then(() => undefined, () => undefined)
+          locks.set(lockPath, tail)
+          return run
+        },
+        atomicWriteFile: async (filePath: string, content: string) => {
+          mkdirSync(dirname(filePath), { recursive: true })
+          writeFileSync(filePath, content, 'utf8')
+        },
+        submitInput: async (id: number, text: string, opts?: { requestId?: string }) => {
+          events.push(`submitInput:${id}:${opts?.requestId ?? ''}`)
+          if (opts?.requestId !== undefined && submissions.has(subKey(id, opts.requestId))) {
+            // Simulate kernel pi_submissions requestId dedup (returns without starting new turn!)
+            return
+          }
+          submittedCoords.push({ id, requestId: opts?.requestId, text })
+          if (opts?.requestId !== undefined) {
+            submissions.set(subKey(id, opts.requestId), { id: `sub-${submittedCoords.length}`, requestId: opts.requestId, status: 'done' })
+          }
+        },
+        submitInputGuarded: async (id: number, text: string, opts?: { requestId?: string }) => {
+          events.push(`submitInputGuarded:${id}:${opts?.requestId ?? ''}`)
+          if (opts?.requestId !== undefined && submissions.has(subKey(id, opts.requestId))) {
+            return
+          }
+          submittedWorkers.push({ id, requestId: opts?.requestId, text })
+          if (opts?.requestId !== undefined) {
+            submissions.set(subKey(id, opts.requestId), { id: `wsub-${submittedWorkers.length}`, requestId: opts.requestId, status: 'done' })
+          }
+        },
+        getConversationSubmission: async (id: number, requestId: string) => {
+          events.push(`getSub:${id}:${requestId}`)
+          return submissions.get(subKey(id, requestId))
+        },
+        getConversationDetail: async (id: number) => ({
+          entries: detailEntriesByConv.get(id) ?? [],
+        }),
+        invokeAction: async (_pluginId: string, actionId: string, input: Record<string, unknown>) => {
+          events.push(`action:${actionId}:${String(input['worktreeId'] ?? '')}`)
+          if (actionId === 'list_worktrees') {
+            return {
+              worktrees: [
+                { id: 'local:/wt/orphan', status: 'active', hold: { pluginId: 'builtin:swarm', holdId: 'grp_order:ghost' } },
+              ],
+            }
+          }
+          return {}
+        },
+      },
+    } as never
+
+    const fakeCoordinator = {
+      isActive: () => true,
+      isShutdown: () => false,
+      getConfig: () => resolveSwarmConfig({}),
+      writeIndex: () => {},
+      getDocs: () => ({
+        boardBadges: { get: () => ({ byConversation: {} }), set: () => {}, update: () => {}, flush: async () => {} },
+        boardView: {
+          get: (cid: number) => sessionState.get(cid) ?? null,
+          set: (cid: number, val: unknown) => { sessionState.set(cid, val) },
+          update: () => {},
+          delete: (cid: number) => { sessionState.delete(cid) },
+          listConversationIds: () => [...sessionState.keys()],
+          flush: async () => {},
+        },
+      }),
+      settlingWorkers: new Map<number, number>(),
+      reportError: (title: string, detail: unknown) => {
+        errors.push({ title, detail })
+      },
+      enqueueDispatch: async <T>(_key: string, fn: () => Promise<T>) => fn(),
+      track: async <T>(_label: string, fn: () => Promise<T>) => fn(),
+      readConversationOrUndefined: (id: number) => {
+        const entry = existingConvs.get(id)
+        if (!entry) return undefined
+        return {
+          id: entry.id,
+          title: `conv-${entry.id}`,
+          profileId: 'assistant',
+          nodeId: 'local',
+          cwd: dataDir,
+          model: 'faux/faux-1',
+          thinkingLevel: 'off' as const,
+          unread: false,
+          pinned: false,
+          pendingAskCount: 0,
+          status: entry.status,
+          tags: [],
+          createdAt: 1,
+          updatedAt: 1,
+          stateChangeSeq: 1,
+          completionSeq: entry.completionSeq,
+        }
+      },
+    } as never
+
+    return createCollabGroupRuntime(fakeCtx, () => fakeCoordinator)
+  }
+
+  const writeGroupFixture = (group: CollabGroupRecord, posts: BoardPost[]) => {
+    const dir = join(dataDir, 'groups', group.id)
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'meta.json'), `${JSON.stringify(group, null, 2)}\n`, 'utf8')
+    writeFileSync(join(dir, 'board.jsonl'), posts.length > 0 ? `${posts.map((p) => JSON.stringify(p)).join('\n')}\n` : '', 'utf8')
+  }
+
+  // Case A: Unanswered inflightReport (attempt 0 -> retries with :r1; attempt 1 -> exhausted, keeps cursor unnotified, visible error, no loop)
+  existingConvs.set(10, { id: 10, status: 'idle', completionSeq: 1 })
+  existingConvs.set(11, { id: 11, status: 'idle', completionSeq: 1 })
+  submissions.set(subKey(10, 'swarm-report:grp_rep_retry:1-1'), { id: 's1', requestId: 'swarm-report:grp_rep_retry:1-1', status: 'unanswered' })
+  writeGroupFixture(
+    makeGroup({
+      id: 'grp_rep_retry',
+      coordinatorConversationId: 10,
+      headSeq: 1,
+      coordinatorNotifiedSeq: 0,
+      coordinatorPendingSeq: 1,
+      inflightReport: {
+        requestId: 'swarm-report:grp_rep_retry:1-1',
+        fromSeq: 1,
+        toSeq: 1,
+        baseCompletionSeq: 1,
+        hadActiveWorkers: false,
+      },
+      members: [makeMember({ name: 'alpha', conversationId: 11, readCursorSeq: 1, pendingWakeupSeq: 1, lastPostSeq: 1 })],
+    }),
+    [makePost(1, { groupId: 'grp_rep_retry', from: 'alpha', to: ['coordinator'], resolvedTargets: ['coordinator'], kind: 'done', wake: true, body: 'Alpha delivered.' })],
+  )
+
+  const rtA = makeHarness()
+  await rtA.loadAllFromDisk()
+  await rtA.reconcileRecoveredGroups()
+  await waitFor(() =>
+    submittedCoords.some((c) => c.id === 10 && c.requestId === 'swarm-report:grp_rep_retry:1-1:r1') &&
+    rtA.liveTaskLabels().length === 0,
+  )
+  assert.equal(rtA.getGroup('grp_rep_retry')?.coordinatorNotifiedSeq, 1)
+  assert.equal(rtA.getGroup('grp_rep_retry')?.reportRecovery, undefined)
+  await rtA.stopAndClear()
+
+  // Exhausted inflightReport (attempt 1 is also unanswered): must NOT advance coordinatorNotifiedSeq, must report visible error, must NOT hot-loop
+  submittedCoords.length = 0
+  errors.length = 0
+  existingConvs.set(20, { id: 20, status: 'idle', completionSeq: 1 })
+  existingConvs.set(21, { id: 21, status: 'idle', completionSeq: 1 })
+  submissions.set(subKey(20, 'swarm-report:grp_rep_exhaust:1-1:r1'), { id: 's2', requestId: 'swarm-report:grp_rep_exhaust:1-1:r1', status: 'unanswered' })
+  writeGroupFixture(
+    makeGroup({
+      id: 'grp_rep_exhaust',
+      coordinatorConversationId: 20,
+      headSeq: 1,
+      coordinatorNotifiedSeq: 0,
+      coordinatorPendingSeq: 1,
+      inflightReport: {
+        requestId: 'swarm-report:grp_rep_exhaust:1-1:r1',
+        fromSeq: 1,
+        toSeq: 1,
+        baseCompletionSeq: 1,
+        hadActiveWorkers: false,
+        attempt: 1,
+      },
+      members: [makeMember({ name: 'beta', conversationId: 21, readCursorSeq: 1, pendingWakeupSeq: 1, lastPostSeq: 1 })],
+    }),
+    [makePost(1, { groupId: 'grp_rep_exhaust', from: 'beta', to: ['coordinator'], resolvedTargets: ['coordinator'], kind: 'done', wake: true, body: 'Beta delivered.' })],
+  )
+
+  const rtB = makeHarness()
+  await rtB.loadAllFromDisk()
+  await rtB.reconcileRecoveredGroups()
+  assert.equal(rtB.getGroup('grp_rep_exhaust')?.coordinatorNotifiedSeq, 0, 'exhausted unanswered report must NOT mark board seq notified')
+  assert.equal(rtB.getGroup('grp_rep_exhaust')?.reportRecovery?.exhausted, true)
+  assert.equal(submittedCoords.filter((c) => c.id === 20).length, 0, 'exhausted report must not re-submit in a loop')
+  assert.ok(errors.some((e) => e.title.includes('grp_rep_exhaust')), 'exhausted report must emit visible error notification')
+  // Repeated coordinator turn settle or restart must NOT hot-loop
+  await rtB.onCoordinatorTurnSettled(20)
+  await rtB.reconcileRecoveredGroups()
+  assert.equal(submittedCoords.filter((c) => c.id === 20).length, 0)
+  // Once a newer post arrives (seq 2 > exhausted toSeq 1), reporting resumes cleanly with fresh range 1-2
+  await rtB.appendPost('grp_rep_exhaust', {
+    from: 'beta', to: ['coordinator'], resolvedTargets: ['coordinator'], wake: true, kind: 'done', refs: [], body: 'New post unlocks delivery.',
+  })
+  await waitFor(() =>
+    submittedCoords.some((c) => c.id === 20 && c.requestId === 'swarm-report:grp_rep_exhaust:1-2') &&
+    rtB.liveTaskLabels().length === 0,
+  )
+  assert.equal(rtB.getGroup('grp_rep_exhaust')?.coordinatorNotifiedSeq, 2)
+  assert.equal(rtB.getGroup('grp_rep_exhaust')?.reportRecovery, undefined)
+  await rtB.stopAndClear()
+
+  // Case B: Unanswered inflightWakeup (attempt 0 retries with :r1; attempt 1 exhausted keeps readCursorSeq unread, posts blocker, no loop)
+  // and Unanswered inflightNudge (attempt 0 retries with :r1; attempt 1 exhausted posts blocker)
+  submittedWorkers.length = 0
+  submittedCoords.length = 0
+  errors.length = 0
+  existingConvs.set(30, { id: 30, status: 'idle', completionSeq: 1 })
+  existingConvs.set(31, { id: 31, status: 'idle', completionSeq: 0 })
+  existingConvs.set(32, { id: 32, status: 'idle', completionSeq: 0 })
+  existingConvs.set(33, { id: 33, status: 'idle', completionSeq: 1 })
+  existingConvs.set(34, { id: 34, status: 'idle', completionSeq: 1 })
+  submissions.set(subKey(31, 'swarm-wakeup:grp_wk:w1:1-1'), { id: 'w1', requestId: 'swarm-wakeup:grp_wk:w1:1-1', status: 'unanswered' })
+  submissions.set(subKey(32, 'swarm-wakeup:grp_wk:w2:2-2:r1'), { id: 'w2', requestId: 'swarm-wakeup:grp_wk:w2:2-2:r1', status: 'unanswered' })
+  submissions.set(subKey(33, 'swarm-nudge:grp_wk:w3:3'), { id: 'n1', requestId: 'swarm-nudge:grp_wk:w3:3', status: 'unanswered' })
+  submissions.set(subKey(34, 'swarm-nudge:grp_wk:w4:4:r1'), { id: 'n2', requestId: 'swarm-nudge:grp_wk:w4:4:r1', status: 'unanswered' })
+  detailEntriesByConv.set(33, [
+    { id: '1', kind: 'helmx.input', data: { id: 'swarm-nudge:grp_wk:w3:3' } },
+    { id: '2', kind: 'pi.assistant', model: [{ role: 'assistant', stopReason: 'aborted', content: [] }] },
+  ])
+  writeGroupFixture(
+    makeGroup({
+      id: 'grp_wk',
+      coordinatorConversationId: 30,
+      headSeq: 4,
+      coordinatorNotifiedSeq: 0,
+      coordinatorPendingSeq: 0,
+      members: [
+        makeMember({
+          name: 'w1', conversationId: 31, readCursorSeq: 0, pendingWakeupSeq: 1, lastWakeTaskSeq: 1,
+          inflightWakeup: { requestId: 'swarm-wakeup:grp_wk:w1:1-1', fromSeq: 1, toSeq: 1, baseCompletionSeq: 0 },
+        }),
+        makeMember({
+          name: 'w2', conversationId: 32, readCursorSeq: 0, pendingWakeupSeq: 2, lastWakeTaskSeq: 2,
+          inflightWakeup: { requestId: 'swarm-wakeup:grp_wk:w2:2-2:r1', fromSeq: 2, toSeq: 2, baseCompletionSeq: 0, attempt: 1 },
+        }),
+        makeMember({
+          name: 'w3', conversationId: 33, readCursorSeq: 3, pendingWakeupSeq: 3, lastWakeTaskSeq: 3, silentExitNudgeSeq: 3,
+          inflightNudge: { requestId: 'swarm-nudge:grp_wk:w3:3', taskSeq: 3, baseCompletionSeq: 1 },
+        }),
+        makeMember({
+          name: 'w4', conversationId: 34, readCursorSeq: 4, pendingWakeupSeq: 4, lastWakeTaskSeq: 4, silentExitNudgeSeq: 4,
+          inflightNudge: { requestId: 'swarm-nudge:grp_wk:w4:4:r1', taskSeq: 4, baseCompletionSeq: 1, attempt: 1 },
+        }),
+      ],
+    }),
+    [
+      makePost(1, { groupId: 'grp_wk', from: 'coordinator', to: ['w1'], resolvedTargets: ['w1'], kind: 'brief', wake: true }),
+      makePost(2, { groupId: 'grp_wk', from: 'coordinator', to: ['w2'], resolvedTargets: ['w2'], kind: 'brief', wake: true }),
+      makePost(3, { groupId: 'grp_wk', from: 'coordinator', to: ['w3'], resolvedTargets: ['w3'], kind: 'brief', wake: true }),
+      makePost(4, { groupId: 'grp_wk', from: 'coordinator', to: ['w4'], resolvedTargets: ['w4'], kind: 'brief', wake: true }),
+    ],
+  )
+
+  const rtC = makeHarness()
+  await rtC.loadAllFromDisk()
+  await rtC.reconcileRecoveredGroups()
+  await waitFor(() =>
+    submittedWorkers.some((w) => w.id === 31 && w.requestId === 'swarm-wakeup:grp_wk:w1:1-1:r1') &&
+    submittedWorkers.some((w) => w.id === 33 && w.requestId === 'swarm-nudge:grp_wk:w3:3:r1') &&
+    rtC.liveTaskLabels().length === 0,
+  )
+  const grpWk = rtC.getGroup('grp_wk')!
+  const w1 = grpWk.members.find((m) => m.name === 'w1')!
+  const w2 = grpWk.members.find((m) => m.name === 'w2')!
+  const w3 = grpWk.members.find((m) => m.name === 'w3')!
+  const w4 = grpWk.members.find((m) => m.name === 'w4')!
+  assert.equal(w1.readCursorSeq, 1, 'w1 retry :r1 succeeded and advanced readCursorSeq')
+  assert.equal(w2.readCursorSeq, 0, 'exhausted w2 must NOT falsely mark readCursorSeq as read')
+  assert.equal(w2.wakeupRecovery?.exhausted, true)
+  assert.equal(submittedWorkers.filter((w) => w.id === 32).length, 0, 'exhausted w2 must not re-submit in a loop')
+  assert.equal(w3.silentExitNudgeSeq, 3)
+  assert.equal(w3.nudgeRecovery, undefined)
+  assert.equal(w4.lastWakeTaskSeq, undefined, 'exhausted w4 nudge clears task fields after escalating blocker')
+  assert.equal(submittedWorkers.filter((w) => w.id === 34).length, 0)
+  const wkPosts = rtC.getPosts('grp_wk')
+  assert.ok(wkPosts.some((p) => p.kind === 'blocker' && p.body.includes('@w2') && p.body.includes('unanswered')))
+  assert.ok(wkPosts.some((p) => p.kind === 'blocker' && p.body.includes('@w4') && p.body.includes('unanswered')))
+  // Second reconcile produces zero duplicate wakeups and zero duplicate blockers
+  const blockerCountBefore = wkPosts.filter((p) => p.kind === 'blocker').length
+  await rtC.reconcileRecoveredGroups()
+  assert.equal(rtC.getPosts('grp_wk').filter((p) => p.kind === 'blocker').length, blockerCountBefore)
+  assert.equal(submittedWorkers.filter((w) => w.id === 32).length, 0)
+  await rtC.stopAndClear()
+
+  // Case C: Strict 3-phase boot ordering — loadAllFromDisk/reconcileOrphansOnBoot perform ZERO worktree actions or submitInput;
+  // reconcileRecoveredGroups reconciles inflightReport BEFORE reconcileDeletedWorker, releases deleted-worker hold BEFORE orphan cleanup,
+  // and finishes orphan cleanup BEFORE submitting live recovery reports.
+  events.length = 0
+  existingConvs.set(40, { id: 40, status: 'idle', completionSeq: 1 })
+  // Note: conv 41 (deleted active member) is intentionally absent from existingConvs
+  submissions.set(subKey(40, 'swarm-report:grp_order:1-1'), { id: 'o1', requestId: 'swarm-report:grp_order:1-1', status: 'done' })
+  writeGroupFixture(
+    makeGroup({
+      id: 'grp_order',
+      coordinatorConversationId: 40,
+      headSeq: 1,
+      coordinatorNotifiedSeq: 0,
+      coordinatorPendingSeq: 1,
+      inflightReport: {
+        requestId: 'swarm-report:grp_order:1-1',
+        fromSeq: 1,
+        toSeq: 1,
+        baseCompletionSeq: 0,
+        hadActiveWorkers: true,
+      },
+      members: [
+        makeMember({
+          name: 'deleted_wt',
+          conversationId: 41,
+          isolation: 'worktree',
+          worktreeId: 'local:/wt/deleted-active',
+          readCursorSeq: 1,
+          pendingWakeupSeq: 1,
+        }),
+      ],
+    }),
+    [makePost(1, { groupId: 'grp_order', from: 'deleted_wt', to: ['coordinator'], resolvedTargets: ['coordinator'], kind: 'handoff', wake: true })],
+  )
+
+  const rtD = makeHarness()
+  await rtD.loadAllFromDisk()
+  await rtD.reconcileOrphansOnBoot()
+  assert.equal(events.length, 0, `start phase (loadAllFromDisk + reconcileOrphansOnBoot) must not call worktree actions or submitInput, got ${JSON.stringify(events)}`)
+
+  await rtD.reconcileRecoveredGroups()
+  await waitFor(() => events.some((e) => e.startsWith('submitInput:40:')) && rtD.liveTaskLabels().length === 0)
+
+  const idxGetSub = events.indexOf('getSub:40:swarm-report:grp_order:1-1')
+  const idxReleaseDeleted = events.indexOf('action:release_worktree_hold:local:/wt/deleted-active')
+  const idxListOrphans = events.indexOf('action:list_worktrees:')
+  const idxCleanupOrphan = events.indexOf('action:cleanup_worktree:local:/wt/orphan')
+  const idxSubmitCoord = events.findIndex((e) => e.startsWith('submitInput:40:'))
+  assert.ok(idxGetSub >= 0, 'pre-crash inflightReport must be checked')
+  assert.ok(idxReleaseDeleted > idxGetSub, `inflightReport check (${idxGetSub}) must precede reconcileDeletedWorker hold release (${idxReleaseDeleted})`)
+  assert.ok(idxListOrphans > idxReleaseDeleted, `deleted-worker hold release (${idxReleaseDeleted}) must precede orphan worktree scan (${idxListOrphans})`)
+  assert.ok(idxCleanupOrphan > idxListOrphans, 'orphan worktree cleanup must run in Phase 2')
+  assert.ok(idxSubmitCoord > idxCleanupOrphan, `orphan cleanup (${idxCleanupOrphan}) must finish before live coordinator report dispatch (${idxSubmitCoord})`)
+  // Because pre-crash inflightReport 1-1 was already 'done', the new coordinator report must only cover seq 2-2 (the deleted-worker blocker), NOT re-send 1-2!
+  assert.equal(events[idxSubmitCoord], 'submitInput:40:swarm-report:grp_order:2-2')
+  await rtD.stopAndClear()
 })

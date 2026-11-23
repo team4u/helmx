@@ -435,6 +435,8 @@ export function createWorkerHandlers(
           delete target.lastWakeCompletionSeq
           delete target.inflightWakeup
           delete target.inflightNudge
+          delete target.wakeupRecovery
+          delete target.nudgeRecovery
         }
         if (retainedEntry) {
           draft.retainedWorktrees = [...(draft.retainedWorktrees ?? []).filter((i) => i.worktreeId !== retainedEntry.worktreeId), retainedEntry]

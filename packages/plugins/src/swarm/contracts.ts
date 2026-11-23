@@ -42,6 +42,8 @@ export const COORDINATOR_ESCALATION_KINDS: ReadonlySet<BoardPostKind> = new Set(
 export const COORDINATOR_BATCH_WINDOW_MS = 50
 export const MAX_INDEX_CLOSED_GROUPS = 50
 export const MAX_BOARD_POST_BODY_CHARS = 32_768
+/** Maximum automatic recovery redelivery attempts after an inflight submission settles as 'unanswered'. */
+export const MAX_UNANSWERED_RECOVERY_RETRIES = 1
 
 export const COORDINATOR_SCOPE: ConversationScope = { tags: [COORDINATOR_TAG] }
 export const PARTICIPANT_SCOPE: ConversationScope = { tags: [COORDINATOR_TAG, WORKER_TAG] }
@@ -64,9 +66,10 @@ export interface CollabGroupSummary {
   coordinatorDetached?: boolean; activeWorkerCount: number; headSeq: number; createdAt: number; updatedAt: number; closedAt?: number
 }
 export interface SwarmIndexDoc { workers: SwarmWorkerPointer[]; groups: CollabGroupSummary[] }
-export interface InflightWakeupIntent { requestId: string; fromSeq: number; toSeq: number; baseCompletionSeq: number }
-export interface InflightNudgeIntent { requestId: string; taskSeq: number; baseCompletionSeq: number }
-export interface InflightReportIntent { requestId: string; fromSeq: number; toSeq: number; baseCompletionSeq: number; hadActiveWorkers: boolean }
+export interface InflightWakeupIntent { requestId: string; fromSeq: number; toSeq: number; baseCompletionSeq: number; attempt?: number }
+export interface InflightNudgeIntent { requestId: string; taskSeq: number; baseCompletionSeq: number; attempt?: number }
+export interface InflightReportIntent { requestId: string; fromSeq: number; toSeq: number; baseCompletionSeq: number; hadActiveWorkers: boolean; attempt?: number }
+export interface UnansweredRecoveryState { toSeq: number; nextAttempt: number; exhausted?: boolean }
 export interface GroupMemberState {
   name: string; conversationId: number; profileId: string; access: WorkerAccess; isolation: WorkerIsolation
   nodeId: string; cwd: string; worktreeId?: string; lifecycle: 'active' | 'archived'
@@ -74,6 +77,7 @@ export interface GroupMemberState {
   silentExitNudgeSeq?: number; lastWakeCompletionSeq?: number
   lastOutboundEdge?: { seq: number; to: string[]; kind: BoardPostKind }
   dispatchKey?: string; briefPostSeq?: number; inflightWakeup?: InflightWakeupIntent; inflightNudge?: InflightNudgeIntent
+  wakeupRecovery?: UnansweredRecoveryState; nudgeRecovery?: UnansweredRecoveryState
   runDurationMs?: number; turnCount?: number; createdAt: number; archivedAt?: number
 }
 export interface RetainedWorktreeInfo { memberName: string; nodeId: string; worktreeId: string; branch: string; path: string; commitsAhead: number }
@@ -81,7 +85,8 @@ export interface CollabGroupRecord {
   id: string; title: string; objective?: string; coordinatorConversationId: number; createKey?: string
   status: CollabGroupStatus; members: GroupMemberState[]; headSeq: number
   coordinatorNotifiedSeq: number; coordinatorPendingSeq: number
-  inflightReport?: InflightReportIntent; lastReportHadActiveWorkers?: boolean; lastStallWatermark?: string
+  inflightReport?: InflightReportIntent; reportRecovery?: UnansweredRecoveryState
+  lastReportHadActiveWorkers?: boolean; lastStallWatermark?: string
   peerHopsSinceCoordinator?: number; coordinatorDetached?: boolean; retainedWorktrees?: RetainedWorktreeInfo[]
   createdAt: number; updatedAt: number; closedAt?: number; closeSummary?: string
 }
@@ -103,6 +108,7 @@ export interface SwarmDocs { index: PluginDocHandle<SwarmIndexDoc>; boardBadges:
 export interface AppendPostDraft {
   from: string; to: string[]; resolvedTargets: string[]; wake: boolean; kind: BoardPostKind; refs: number[]; body: string
   idempotencyKey?: string; worktreeSnapshot?: WorktreeHandoffSnapshot; lastStallWatermarkAfterPost?: string
+  deferDelivery?: boolean
 }
 export interface MemberTurnSettledInput {
   groupId: string; memberName: string; conversationId: number; completionSeq: number
@@ -209,16 +215,20 @@ export const boardPostSchema = S.obj(
 )
 
 const inflightWakeupSchema = S.obj(
-  { requestId: S.nonEmptyStr(), fromSeq: S.int(1), toSeq: S.int(1), baseCompletionSeq: S.int(0) },
+  { requestId: S.nonEmptyStr(), fromSeq: S.int(1), toSeq: S.int(1), baseCompletionSeq: S.int(0), attempt: S.int(0) },
   ['requestId', 'fromSeq', 'toSeq', 'baseCompletionSeq'],
 )
 const inflightNudgeSchema = S.obj(
-  { requestId: S.nonEmptyStr(), taskSeq: S.int(1), baseCompletionSeq: S.int(0) },
+  { requestId: S.nonEmptyStr(), taskSeq: S.int(1), baseCompletionSeq: S.int(0), attempt: S.int(0) },
   ['requestId', 'taskSeq', 'baseCompletionSeq'],
 )
 const inflightReportSchema = S.obj(
-  { requestId: S.nonEmptyStr(), fromSeq: S.int(1), toSeq: S.int(1), baseCompletionSeq: S.int(0), hadActiveWorkers: S.bool() },
+  { requestId: S.nonEmptyStr(), fromSeq: S.int(1), toSeq: S.int(1), baseCompletionSeq: S.int(0), hadActiveWorkers: S.bool(), attempt: S.int(0) },
   ['requestId', 'fromSeq', 'toSeq', 'baseCompletionSeq', 'hadActiveWorkers'],
+)
+const unansweredRecoverySchema = S.obj(
+  { toSeq: S.int(1), nextAttempt: S.int(1), exhausted: S.bool() },
+  ['toSeq', 'nextAttempt'],
 )
 
 export const memberStateBaseProps: Record<string, unknown> = {
@@ -229,6 +239,7 @@ export const memberStateBaseProps: Record<string, unknown> = {
   lastPostSeq: S.int(1), lastWakeTaskSeq: S.int(1), silentExitNudgeSeq: S.int(1), lastWakeCompletionSeq: S.int(0),
   lastOutboundEdge: S.obj({ seq: S.int(1), to: S.arr(S.str()), kind: S.enm(BOARD_POST_KINDS) }, ['seq', 'to', 'kind']),
   dispatchKey: S.nonEmptyStr(), briefPostSeq: S.int(1), inflightWakeup: inflightWakeupSchema, inflightNudge: inflightNudgeSchema,
+  wakeupRecovery: unansweredRecoverySchema, nudgeRecovery: unansweredRecoverySchema,
   runDurationMs: S.num(0), turnCount: S.int(0), createdAt: S.num(0), archivedAt: S.num(0),
 }
 export const memberStateRequired = [
@@ -242,7 +253,8 @@ const collabGroupRecordSchema = S.obj(
     coordinatorConversationId: S.int(1), createKey: S.nonEmptyStr(), status: S.enm(['active', 'closed']),
     members: S.arr(S.obj(memberStateBaseProps, memberStateRequired)),
     headSeq: S.int(0), coordinatorNotifiedSeq: S.int(0), coordinatorPendingSeq: S.int(0),
-    inflightReport: inflightReportSchema, lastReportHadActiveWorkers: S.bool(), lastStallWatermark: S.str(),
+    inflightReport: inflightReportSchema, reportRecovery: unansweredRecoverySchema,
+    lastReportHadActiveWorkers: S.bool(), lastStallWatermark: S.str(),
     peerHopsSinceCoordinator: S.int(0), coordinatorDetached: S.bool(), retainedWorktrees: S.arr(retainedWorktreeSchema),
     createdAt: S.num(0), updatedAt: S.num(0), closedAt: S.num(0), closeSummary: S.str(),
   },
@@ -281,6 +293,29 @@ export const isBoardPostKind = (v: unknown): v is BoardPostKind => typeof v === 
 export const isEnoent = (err: unknown): boolean => typeof err === 'object' && err !== null && (err as { code?: unknown }).code === 'ENOENT'
 export const isLifecycleTeardownError = (err: unknown): boolean =>
   err instanceof HelmxError && (err.code === 'plugin_disabled' || err.code === 'plugin_context_expired' || err.code === 'plugin_host_disposed')
+
+export function hasPendingDeliverableWakeup(
+  member: Pick<GroupMemberState, 'pendingWakeupSeq' | 'readCursorSeq' | 'wakeupRecovery'>,
+): boolean {
+  if (member.pendingWakeupSeq <= member.readCursorSeq) return false
+  return !(member.wakeupRecovery?.exhausted === true && member.pendingWakeupSeq <= member.wakeupRecovery.toSeq)
+}
+
+export function isPendingReportExhausted(
+  group: Pick<CollabGroupRecord, 'coordinatorPendingSeq' | 'reportRecovery'>,
+): boolean {
+  return group.reportRecovery?.exhausted === true && group.coordinatorPendingSeq <= group.reportRecovery.toSeq
+}
+
+export function isIdleCatchupExhausted(
+  group: Pick<CollabGroupRecord, 'headSeq' | 'reportRecovery'>,
+): boolean {
+  return group.reportRecovery?.exhausted === true && group.headSeq <= group.reportRecovery.toSeq
+}
+
+export function withRetryAttemptSuffix(baseRequestId: string, attempt: number): string {
+  return attempt > 0 ? `${baseRequestId}:r${attempt}` : baseRequestId
+}
 
 export const swarmError = (code: string, message: string, status: number, details?: Record<string, unknown>): HelmxError =>
   new HelmxError(code, message, status, { pluginId: SWARM_PLUGIN_ID, ...details })
