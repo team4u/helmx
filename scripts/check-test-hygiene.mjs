@@ -54,7 +54,7 @@ function collectAddedLines({ base, files }) {
   const selected = new Set(files.map(toPosixPath));
   const lineSets = new Map();
   const addDiff = (args) => {
-    const result = spawnSync('git', ['-c', 'core.quotepath=false', '-c', 'diff.mnemonicPrefix=false', 'diff', '--unified=0', ...args], {
+    const result = spawnSync('git', ['-c', 'core.quotepath=false', '-c', 'diff.mnemonicPrefix=false', '-c', 'diff.noprefix=false', 'diff', '--unified=0', ...args], {
       cwd: repoRoot,
       encoding: 'utf8',
       maxBuffer: 64 * 1024 * 1024,
