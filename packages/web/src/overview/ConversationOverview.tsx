@@ -180,21 +180,14 @@ function OverviewCardView({
       createdText !== '' ? t('shell.overview.createdAt', { time: createdText }) : '',
       updatedText !== '' ? t('shell.overview.updatedAt', { time: updatedText }) : '',
     ].filter((line) => line !== '').join('\n')
-    const settledSpan = (
-      <span className="overview-card-sub-time mono tabular-nums" title={timingTooltip || undefined}>
-        {t('shell.overview.totalRun', { duration: formatDurationMs(cardTiming.settledRunMs) })}
-      </span>
-    )
     metaParts.push(
-      timingTooltip !== '' ? (
-        <Tooltip key="timing" content={timingTooltip} side="top" className="helmx-tooltip-multiline">
-          {settledSpan}
-        </Tooltip>
-      ) : (
-        <span key="timing" className="overview-card-sub-time mono tabular-nums">
-          {t('shell.overview.totalRun', { duration: formatDurationMs(cardTiming.settledRunMs) })}
-        </span>
-      ),
+      <span
+        key="timing"
+        className="overview-card-sub-time mono tabular-nums"
+        title={timingTooltip || undefined}
+      >
+        {t('shell.overview.totalRun', { duration: formatDurationMs(cardTiming.settledRunMs) })}
+      </span>,
     )
   }
   if (!needsAttention && card.summaryText !== '') {
@@ -799,7 +792,6 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
           <button
             type="button"
             className={`btn btn-ghost btn-icon-xs overview-batch-toggle${batch.batchMode ? ' is-active' : ''}`}
-            title={batch.batchMode ? t('shell.agents.exitBulk') : t('shell.agents.manageBulk')}
             aria-label={batch.batchMode ? t('shell.agents.exitBulk') : t('shell.agents.manageBulk')}
             aria-pressed={batch.batchMode}
             onClick={batch.toggleBatchMode}

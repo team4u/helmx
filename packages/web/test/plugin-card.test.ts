@@ -159,23 +159,21 @@ test('PluginCard：点击卡片主体及按键触发 onSelect 回调', { timeout
 
   const cardEl = container.querySelector('.plugin-card') as HTMLElement
   assert.ok(cardEl, '必须渲染 .plugin-card 容器')
+  assert.equal(cardEl.tagName, 'ARTICLE', '含内部操作控件的卡片外层使用语义 article 而非嵌套 role=button')
+  const openBtn = cardEl.querySelector<HTMLButtonElement>('.primary-card-open')
+  assert.ok(openBtn !== null && openBtn.tagName === 'BUTTON', '卡片标题区应由原生 button 承载键盘无障碍入口')
 
-  // 点击主体
+  // 点击卡片主体触发一次 onSelect
   act(() => {
     cardEl.click()
   })
   assert.equal(selectCount, 1, '点击卡片应触发 onSelect')
 
-  // 键盘 Enter / Space 触发
+  // 点击标题主按钮也只触发一次 onSelect（stopPropagation 不重复冒泡）
   act(() => {
-    cardEl.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    openBtn.click()
   })
-  assert.equal(selectCount, 2, '按 Enter 应触发 onSelect')
-
-  act(() => {
-    cardEl.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }))
-  })
-  assert.equal(selectCount, 3, '按 Space 应触发 onSelect')
+  assert.equal(selectCount, 2, '点击标题按钮应单次触发 onSelect')
 
   act(() => {
     root.unmount()
@@ -310,7 +308,7 @@ test('PluginCard：selected 与 enabled 状态正交映射到样式类', { timeo
     }),
   )
   assert.match(selectedHtml, /class="[^"]*is-selected[^"]*"/)
-  assert.match(selectedHtml, /aria-selected="true"/)
+  assert.match(selectedHtml, /aria-pressed="true"/)
 
   // 2. enabled: false
   const disabledHtml = renderToString(
@@ -322,7 +320,7 @@ test('PluginCard：selected 与 enabled 状态正交映射到样式类', { timeo
     }),
   )
   assert.match(disabledHtml, /class="[^"]*is-disabled[^"]*"/)
-  assert.match(disabledHtml, /aria-selected="false"/)
+  assert.match(disabledHtml, /aria-pressed="false"/)
 })
 
 // ---------------------------------------------------------------------------

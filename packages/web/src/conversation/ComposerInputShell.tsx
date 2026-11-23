@@ -137,7 +137,6 @@ export function ComposerInputShell({
                     <button
                       type="button"
                       className="btn btn-ghost btn-icon-xs"
-                      title={t('composer.standby.removeAttachment')}
                       aria-label={t('composer.standby.removeAttachmentTitle', { name: att.name })}
                       disabled={att.removeDisabled}
                       onClick={att.onRemove}
@@ -190,7 +189,6 @@ export function ComposerInputShell({
                 <button
                   type="button"
                   className="btn btn-ghost btn-sm composer-icon-button"
-                  title={uploadButtonLabel}
                   aria-label={uploadButtonLabel}
                   disabled={uploadDisabled}
                   onClick={onOpenFilePicker}

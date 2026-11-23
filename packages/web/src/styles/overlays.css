@@ -20,11 +20,34 @@
   overflow: hidden;
 }
 
+@keyframes helmxPopoverEnter {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes helmxToastEnter {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
 .toast-item {
   background: var(--bg-elevated);
   box-shadow: var(--shadow-md);
   align-items: flex-start;
   justify-content: space-between;
+  animation: helmxToastEnter var(--dur-normal) var(--ease-out);
 }
 
 .toast-content {
@@ -84,6 +107,8 @@
   box-sizing: border-box;
   max-width: calc(100vw - 16px);
   z-index: 80;
+  transform-origin: var(--radix-popper-transform-origin, center);
+  animation: helmxPopoverEnter var(--dur-fast) var(--ease-out);
 }
 
 .helmx-popover-arrow {
@@ -104,6 +129,8 @@
   display: flex;
   flex-direction: column;
   z-index: 80;
+  transform-origin: var(--radix-popper-transform-origin, center);
+  animation: helmxPopoverEnter var(--dur-fast) var(--ease-out);
 }
 
 .locale-menu-popover {
@@ -195,6 +222,11 @@
   max-width: 320px;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.helmx-tooltip-content[data-state='delayed-open'] {
+  transform-origin: var(--radix-popper-transform-origin, center);
+  animation: helmxPopoverEnter var(--dur-fast) var(--ease-out);
 }
 
 .helmx-tooltip-content.helmx-tooltip-multiline {

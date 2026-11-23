@@ -518,6 +518,8 @@ export interface HelmxStoreValue {
   openSpace(space: SidebarSpace): void
   setActiveModal(modal: ActiveModal): void
   dismissNotice(id: string): void
+  pauseNoticeTimer(id: string): void
+  resumeNoticeTimer(id: string): void
   pushNotice(notice: Omit<ToastNotice, 'id' | 'createdAt'>): void
   invokePluginAction(pluginId: string, actionId: string, input: unknown, conversationId?: number): Promise<unknown>
 }

@@ -238,6 +238,7 @@ test('sidebar footer carries the changelog entry', { timeout: 60_000 }, async (t
   t.after(mounted.unmount)
   const railButton = mounted.host.querySelector('.sidebar-changelog-toggle') as HTMLElement | null
   assert.ok(railButton !== null, 'rail changelog entry exists below the theme toggle')
-  assert.match(railButton.getAttribute('title') ?? '', /版本与更新|Version & updates/)
+  assert.match(railButton.getAttribute('aria-label') ?? '', /版本与更新|Version & updates/)
+  assert.equal(railButton.getAttribute('title'), null, 'Radix Tooltip trigger omits duplicate native title')
   assert.ok(mounted.host.querySelector('.sidebar-footer') === null, 'the bottom-row footer is gone')
 })

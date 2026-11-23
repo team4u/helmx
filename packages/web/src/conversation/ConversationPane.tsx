@@ -634,7 +634,6 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
                 type="button"
                 className="btn btn-sm btn-ghost conversation-drawer-close-btn"
                 aria-label={t('conv.pane.closeDrawerAria')}
-                title={t('conv.pane.closeChildDrawer')}
                 onClick={onCloseDrawer}
               >
                 <HelmxIcon name="x" size={13} />

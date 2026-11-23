@@ -207,7 +207,6 @@ export function ArchivedConversationsGroup({
               type="button"
               className="btn btn-ghost btn-icon-xs"
               style={{ color: batch.batchMode ? 'var(--accent)' : undefined }}
-              title={batch.batchMode ? t('shell.archived.exitBulk') : t('shell.archived.manageBulk')}
               aria-label={batch.batchMode ? t('shell.archived.exitBulk') : t('shell.archived.manageBulk')}
               onClick={batch.toggleBatchMode}
             >

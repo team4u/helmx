@@ -268,7 +268,7 @@ export function ProfileMemorySection(props: ProfileDetailSlotProps): ReactNode {
     return (
       <section className="section-flat">
         <div className="section-flat-header"><span className="section-flat-title">{t(C.sectionTitle)}</span></div>
-        <div className="text-subtle text-xs">{t(C.newProfileHint)}</div>
+        <div className="text-subtle">{t(C.newProfileHint)}</div>
       </section>
     )
   }
@@ -312,7 +312,7 @@ export function ProfileMemorySection(props: ProfileDetailSlotProps): ReactNode {
           )}
         </div>
       ) : !view.memory.enabled ? (
-        <div className="text-subtle text-xs">{t(C.disabledHint)}</div>
+        <div className="text-subtle">{t(C.disabledHint)}</div>
       ) : (
         <>
           <div className="flex-row-between memory-section-meta">
@@ -340,7 +340,7 @@ export function ProfileMemorySection(props: ProfileDetailSlotProps): ReactNode {
               {view.busy === 'save' ? <HelmxIcon name="loader" size={13} className="spin-slow" /> : <HelmxIcon name="save" size={13} />}
               <span>{view.busy === 'save' ? t(C.saving) : t(C.save)}</span>
             </button>
-            {dirty && <span className="text-subtle text-xs">{t(C.dirtyHint)}</span>}
+            {dirty && <span className="text-subtle">{t(C.dirtyHint)}</span>}
           </div>
           <MemoryDreamBlock
             targetId={effectiveId}
@@ -386,7 +386,7 @@ function MemoryDreamBlock(props: MemoryDreamBlockProps): ReactNode {
   return (
     <div className="memory-dream-block">
       <div className="flex-row-between memory-section-header">
-        <span className="text-subtle text-xs memory-dream-title">
+        <span className="text-subtle memory-dream-title">
           <HelmxIcon name="moon-star" size={12} />
           <span>{t(C.dreamTitle)}</span>
         </span>
@@ -419,7 +419,7 @@ function MemoryDreamBlock(props: MemoryDreamBlockProps): ReactNode {
           <span className="text-subtle">{t(error !== null ? C.dreamLoadFailed : C.dreamStatusLoading)}</span>
         )}
       </div>
-      {lastError && <div className="text-subtle text-xs memory-dream-diag">{memoryDreamLastError(lastError, locale)}</div>}
+      {lastError && <div className="text-subtle memory-dream-diag">{memoryDreamLastError(lastError, locale)}</div>}
       {props.refreshFailed && (
         <div className="memory-dream-refresh-error" role="alert">
           <span>{t(C.dreamRefreshFailed)}</span>
@@ -428,9 +428,9 @@ function MemoryDreamBlock(props: MemoryDreamBlockProps): ReactNode {
           </button>
         </div>
       )}
-      {notice !== null && <div className="text-subtle text-xs memory-dream-notice">{notice}</div>}
+      {notice !== null && <div className="text-subtle memory-dream-notice">{notice}</div>}
       {error !== null && <div className="badge badge-warn memory-section-error" role="alert"><span>{error}</span></div>}
-      <div className="text-subtle text-xs">{t(C.dreamGlobalHint)}</div>
+      <div className="text-subtle">{t(C.dreamGlobalHint)}</div>
     </div>
   )
 }

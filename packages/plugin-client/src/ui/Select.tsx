@@ -245,6 +245,7 @@ function MultiSelectInner<T extends string = string>({
   const selectId = id ?? generatedId
   const [internalOpen, setInternalOpen] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
+  const [activeIndex, setActiveIndex] = useState(-1)
 
   const isControlled = openProp !== undefined
   const isOpen = isControlled ? openProp : internalOpen
@@ -255,6 +256,7 @@ function MultiSelectInner<T extends string = string>({
     }
     if (!nextOpen) {
       setSearchTerm('')
+      setActiveIndex(-1)
     }
     onOpenChange?.(nextOpen)
   }
@@ -332,15 +334,86 @@ function MultiSelectInner<T extends string = string>({
     )
   }, [renderTriggerLabel, selectedValues, options, resolvedPlaceholder, t])
 
+  const findNextEnabledIndex = (start: number, step: 1 | -1): number => {
+    const len = filteredOptions.length
+    if (len === 0) return -1
+    for (let offset = 1; offset <= len; offset++) {
+      const idx = (start + step * offset + len) % len
+      if (!filteredOptions[idx]?.disabled) return idx
+    }
+    return -1
+  }
+
+  const findEdgeEnabledIndex = (fromEnd: boolean): number => {
+    if (fromEnd) {
+      for (let i = filteredOptions.length - 1; i >= 0; i--) {
+        if (!filteredOptions[i]?.disabled) return i
+      }
+      return -1
+    }
+    return filteredOptions.findIndex((opt) => !opt.disabled)
+  }
+
+  const handlePopoverKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const target = e.target as HTMLElement | null
+    const inInput = target?.tagName === 'INPUT'
+    const inButton = target?.tagName === 'BUTTON'
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      setActiveIndex((prev) =>
+        prev < 0 || prev >= filteredOptions.length
+          ? findEdgeEnabledIndex(false)
+          : findNextEnabledIndex(prev, 1),
+      )
+      return
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setActiveIndex((prev) =>
+        prev < 0 || prev >= filteredOptions.length
+          ? findEdgeEnabledIndex(true)
+          : findNextEnabledIndex(prev, -1),
+      )
+      return
+    }
+    if (!inInput && e.key === 'Home') {
+      e.preventDefault()
+      setActiveIndex(findEdgeEnabledIndex(false))
+      return
+    }
+    if (!inInput && e.key === 'End') {
+      e.preventDefault()
+      setActiveIndex(findEdgeEnabledIndex(true))
+      return
+    }
+    if (
+      (e.key === 'Enter' && !inButton) ||
+      (e.key === ' ' && !inInput && !inButton)
+    ) {
+      const activeOpt = activeIndex >= 0 ? filteredOptions[activeIndex] : undefined
+      if (activeOpt && !activeOpt.disabled) {
+        e.preventDefault()
+        toggleValue(activeOpt.value)
+      }
+    }
+  }
+
   const contentNode = (
-    <div className="helmx-select-viewport" style={{ maxHeight: 280, overflowY: 'auto' }}>
+    <div
+      className="helmx-select-viewport"
+      style={{ maxHeight: 280, overflowY: 'auto' }}
+      onKeyDown={handlePopoverKeyDown}
+    >
       {/* Search box */}
       {searchable && options.length > 4 && (
         <div className="helmx-select-search" onClick={(e) => e.stopPropagation()}>
           <input
             type="text"
             value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
+            onChange={(e) => {
+              setSearchTerm(e.target.value)
+              setActiveIndex(-1)
+            }}
             placeholder={t(uiCopy.searchPlaceholder)}
             aria-label={t(uiCopy.searchOptions)}
           />
@@ -370,40 +443,59 @@ function MultiSelectInner<T extends string = string>({
       )}
 
       {/* Option list */}
-      {filteredOptions.length === 0 ? (
-        <div className="text-xs text-subtle" style={{ padding: '8px 10px', textAlign: 'center' }}>
-          No matching options
-        </div>
-      ) : (
-        filteredOptions.map((opt) => {
-          const isSelected = selectedSet.has(opt.value)
-          return (
-            <div
-              key={opt.value}
-              role="option"
-              aria-selected={isSelected}
-              aria-disabled={opt.disabled}
-              className={`helmx-select-option helmx-select-multi-option${isSelected ? ' selected' : ''}${opt.disabled ? ' is-disabled' : ''}`}
-              onClick={(e) => {
-                e.preventDefault()
-                if (!opt.disabled) toggleValue(opt.value)
-              }}
-            >
-              <Checkbox
-                checked={isSelected}
-                disabled={opt.disabled}
-                onChange={() => {
+      <div
+        role="listbox"
+        aria-multiselectable="true"
+        aria-label={ariaLabel}
+        tabIndex={-1}
+      >
+        {filteredOptions.length === 0 ? (
+          <div className="helmx-select-empty">
+            {t(uiCopy.noMatchingOptions)}
+          </div>
+        ) : (
+          filteredOptions.map((opt, idx) => {
+            const isSelected = selectedSet.has(opt.value)
+            const isHighlighted = idx === activeIndex && !opt.disabled
+            return (
+              <div
+                key={opt.value}
+                role="option"
+                aria-selected={isSelected}
+                aria-disabled={opt.disabled}
+                data-highlighted={isHighlighted ? '' : undefined}
+                className={`helmx-select-option helmx-select-multi-option${isSelected ? ' selected' : ''}${opt.disabled ? ' is-disabled' : ''}`}
+                onMouseEnter={() => {
+                  if (!opt.disabled) setActiveIndex(idx)
+                }}
+                onClick={(e) => {
+                  e.preventDefault()
                   if (!opt.disabled) toggleValue(opt.value)
                 }}
-                aria-label={typeof opt.label === 'string' ? opt.label : String(opt.value)}
-              />
-              {opt.icon ? <HelmxIcon name={opt.icon} size={12} className="helmx-select-option-icon" /> : null}
-              <span className="helmx-select-option-label" title={typeof opt.label === 'string' ? opt.label : undefined}>{opt.label}</span>
-              {opt.meta ? <span className="helmx-select-option-meta">{opt.meta}</span> : null}
-            </div>
-          )
-        })
-      )}
+              >
+                <span
+                  onClick={(e) => e.stopPropagation()}
+                  onKeyDown={(e) => {
+                    if (e.key === ' ' || e.key === 'Enter') e.stopPropagation()
+                  }}
+                >
+                  <Checkbox
+                    checked={isSelected}
+                    disabled={opt.disabled}
+                    onChange={() => {
+                      if (!opt.disabled) toggleValue(opt.value)
+                    }}
+                    aria-label={typeof opt.label === 'string' ? opt.label : String(opt.value)}
+                  />
+                </span>
+                {opt.icon ? <HelmxIcon name={opt.icon} size={12} className="helmx-select-option-icon" /> : null}
+                <span className="helmx-select-option-label" title={typeof opt.label === 'string' ? opt.label : undefined}>{opt.label}</span>
+                {opt.meta ? <span className="helmx-select-option-meta">{opt.meta}</span> : null}
+              </div>
+            )
+          })
+        )}
+      </div>
     </div>
   )
 

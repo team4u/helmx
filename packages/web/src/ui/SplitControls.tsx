@@ -25,7 +25,6 @@ export function CloseSplitButton({
         type="button"
         className="btn btn-sm btn-ghost split-close-btn"
         aria-label={effectiveLabel}
-        title={t('ui.split.closeThisView')}
         onClick={onCloseSplit}
       >
         <HelmxIcon name="x" size={13} />
@@ -53,13 +52,13 @@ export function SplitToggleButton({
 }: SplitToggleButtonProps): React.JSX.Element {
   const { t } = useWebLocale()
   const actionLabel = isSplitActive ? t('ui.split.closeView') : t('ui.split.sideBySide')
+  const tooltipLabel = isSplitActive ? t('ui.split.closeThisView') : t('ui.split.toggleTitle')
   return (
-    <Tooltip content={actionLabel} side="bottom">
+    <Tooltip content={tooltipLabel} side="bottom">
       <button
         type="button"
         className={`btn btn-sm split-toggle-btn${isSplitActive ? ' btn-primary split-active' : ''}`}
         aria-label={actionLabel}
-        title={t('ui.split.toggleTitle')}
         onClick={onToggleSplit}
       >
         <HelmxIcon name="columns" size={12} />

@@ -123,3 +123,10 @@ button,
   background: transparent;
 }
 
+@supports not selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--fg-subtle) transparent;
+  }
+}
+

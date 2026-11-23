@@ -519,7 +519,7 @@ test('ModelCard SSR: unconfigured and selected-state assertions', { timeout: 60_
 
   // Selected-state class names
   assert.match(html, /class="[^"]*is-selected[^"]*"/)
-  assert.match(html, /aria-selected="true"/)
+  assert.match(html, /aria-pressed="true"/)
 
   // Unconfigured status light (neutral pending ring + visible label)
   assert.match(html, /helmx-status-light-pending[\s\S]*?Not configured/)

@@ -451,7 +451,14 @@ test('Sidebar Rail 底部语言按钮紧邻主题按钮：三态菜单（auto/en
   assert.ok(themeBtn, 'Rail 底部应渲染主题切换按钮')
   assert.ok(document.body.querySelector('.sidebar-header .sidebar-locale-select') === null, '侧栏顶部不再渲染旧的语言 Select')
   assert.equal(trigger.getAttribute('aria-label'), 'Interface language')
-  assert.equal(trigger.getAttribute('title'), 'Interface language (Auto)')
+  assert.equal(trigger.getAttribute('title'), null, 'Radix Tooltip 触发器不重复挂载原生 title')
+  await act(async () => {
+    trigger.focus()
+  })
+  assert.equal(document.body.querySelector('.helmx-tooltip-content')?.textContent, 'Interface language (Auto)')
+  await act(async () => {
+    trigger.blur()
+  })
 
   // 键盘打开 Radix DropdownMenu，包含 Auto / English / 简体中文 三个选项
   await act(async () => {
@@ -469,17 +476,21 @@ test('Sidebar Rail 底部语言按钮紧邻主题按钮：三态菜单（auto/en
   })
   assert.deepEqual(prefCalls, ['zh-CN'], '切换语言走真实 store.setLocalePreference')
 
-  // 手动 zh-CN 生效后，触发器 title、aria-label 及侧栏文案随 locale 立即切换
+  // 手动 zh-CN 生效后，触发器 Tooltip、aria-label 及侧栏文案随 locale 立即切换
   await act(async () => {
     store.setLocalePreference('zh-CN')
   })
   const triggerAfter = document.body.querySelector('.activity-rail-footer button.sidebar-locale-toggle') as HTMLButtonElement | null
   assert.ok(triggerAfter)
   assert.equal(triggerAfter.getAttribute('aria-label'), '界面语言')
-  assert.equal(triggerAfter.getAttribute('title'), '界面语言 (简体中文)')
+  await act(async () => {
+    triggerAfter.blur()
+    triggerAfter.focus()
+  })
+  assert.equal(document.body.querySelector('.helmx-tooltip-content')?.textContent, '界面语言 (简体中文)')
   assert.ok(document.body.textContent?.includes('会话'), '侧栏空间标题随 locale 切换为中文')
 
-  // 切回 auto（浏览器 zh-CN 环境）：title 展示「界面语言 (自动)」——auto 经真实 resolveLocale 跟随浏览器
+  // 切回 auto（浏览器 zh-CN 环境）：Tooltip 展示「界面语言 (自动)」——auto 经真实 resolveLocale 跟随浏览器
   const navDesc = Object.getOwnPropertyDescriptor(Navigator.prototype, 'languages') ?? Object.getOwnPropertyDescriptor(navigator, 'languages')
   Object.defineProperty(navigator, 'languages', { value: ['zh-CN'], configurable: true })
   try {
@@ -491,7 +502,12 @@ test('Sidebar Rail 底部语言按钮紧邻主题按钮：三态菜单（auto/en
     else delete (navigator as unknown as Record<string, unknown>).languages
   }
   const triggerAutoZh = document.body.querySelector('.activity-rail-footer button.sidebar-locale-toggle') as HTMLButtonElement | null
-  assert.equal(triggerAutoZh?.getAttribute('title'), '界面语言 (自动)')
+  assert.ok(triggerAutoZh)
+  await act(async () => {
+    triggerAutoZh.blur()
+    triggerAutoZh.focus()
+  })
+  assert.equal(document.body.querySelector('.helmx-tooltip-content')?.textContent, '界面语言 (自动)')
   assert.equal(store.getPrefsSlice().localePreference, 'auto')
 })
 

@@ -122,9 +122,6 @@ const SDK_SEMANTIC_CLASS_ALLOWLIST: Readonly<Record<string, string>> = {
   // 档位 chip 的语义锚点，视觉由 btn / segmented-control-btn 家族承担。
   'composer-model-refresh-btn': 'ModelPicker refresh button semantic anchor; visuals carried by btn family',
   'composer-model-level-chip': 'ModelPicker level chip semantic anchor; visuals carried by segmented-control-btn',
-  // 门禁首跑发现的同类存量（Select 长期存在）：空态提示行字号标记，宿主无
-  // .text-* 工具类体系，色彩由 text-subtle 承担。
-  'text-xs': 'Select empty-hint size marker; no host .text-* utility system, color via text-subtle',
 }
 
 /** 递归收集目录下的 .ts/.tsx 源文件。 */
@@ -289,6 +286,8 @@ test('样式边界：统一批量操作栏 .batch-bar 族与 .btn-danger-sm 完�
 const RUNTIME_CSS_VAR_ALLOWLIST: Readonly<Record<string, string>> = {
   '--palette-vvh': 'CommandPaletteModal.tsx sets --palette-vvh dynamically from visualViewport.height',
   '--dialog-layer-z': '@helmx/plugin-client Dialog/AlertDialog sets --dialog-layer-z inline for nested overlays',
+  '--helmx-split-ratio': 'App.tsx sets --helmx-split-ratio inline for desktop resizable split panes',
+  '--radix-popper-transform-origin': 'Radix Popper runtime CSS custom property for popover/dropdown/tooltip/select enter origin',
   '--radix-select-trigger-width': 'Radix Select runtime CSS custom property',
   '--radix-select-content-available-width': 'Radix Select runtime CSS custom property',
   '--radix-select-content-available-height': 'Radix Select runtime CSS custom property',
@@ -332,14 +331,18 @@ function extractCssVarRefs(text: string): Array<{ name: string; line: number }> 
   return refs
 }
 
-test('样式边界：Web 宿主 CSS 与 TSX 内全部 var(--token) 必须已在宿主 CSS 定义或登记为运行时注入属性', { timeout: 60_000 }, () => {
+test('样式边界：Web 宿主、SDK 与内置插件客户端内全部 var(--token) 必须已定义或登记为运行时注入属性', { timeout: 60_000 }, () => {
+  const repoPackagesDir = join(__dirname, '../..')
   const webSrcDir = join(__dirname, '../src')
-  const cssFiles = listCssFiles(webSrcDir)
-  assert.ok(cssFiles.length > 0, '应能枚举宿主 CSS 文件')
+  const pluginsSrcDir = join(__dirname, '../../plugins/src')
+  const webCssFiles = listCssFiles(webSrcDir)
+  const pluginCssFiles = listCssFiles(pluginsSrcDir).filter((file) => file.includes('/client/'))
+  const allCssFiles = [...webCssFiles, ...pluginCssFiles]
+  assert.ok(webCssFiles.length > 0, '应能枚举宿主 CSS 文件')
 
   const definedTokens = new Set<string>()
   const strippedCssByFile = new Map<string, string>()
-  for (const file of cssFiles) {
+  for (const file of allCssFiles) {
     const stripped = stripCssComments(readFileSync(file, 'utf8'))
     strippedCssByFile.set(file, stripped)
     for (const match of stripped.matchAll(/(--[a-zA-Z0-9_-]+)\s*:/g)) {
@@ -351,7 +354,7 @@ test('样式边界：Web 宿主 CSS 与 TSX 内全部 var(--token) 必须已在�
   const referencedTokens = new Set<string>()
   const violations: string[] = []
   for (const [file, stripped] of strippedCssByFile.entries()) {
-    const rel = file.slice(webSrcDir.length + 1)
+    const rel = file.slice(repoPackagesDir.length + 1)
     for (const ref of extractCssVarRefs(stripped)) {
       referencedTokens.add(ref.name)
       if (definedTokens.has(ref.name)) continue
@@ -360,8 +363,13 @@ test('样式边界：Web 宿主 CSS 与 TSX 内全部 var(--token) 必须已在�
     }
   }
 
-  for (const file of listSourceFiles(webSrcDir)) {
-    const rel = file.slice(webSrcDir.length + 1)
+  const tsFiles = [
+    ...listSourceFiles(webSrcDir),
+    ...listSourceFiles(SDK_SRC_DIR),
+    ...listSourceFiles(pluginsSrcDir).filter((file) => file.includes('/client/')),
+  ]
+  for (const file of tsFiles) {
+    const rel = file.slice(repoPackagesDir.length + 1)
     const content = readFileSync(file, 'utf8')
     for (const ref of extractCssVarRefs(content)) {
       referencedTokens.add(ref.name)

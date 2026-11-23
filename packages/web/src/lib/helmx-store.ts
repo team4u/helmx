@@ -123,6 +123,15 @@ export type {
   WorkbenchSlice,
 }
 
+const INFO_NOTICE_DURATION_MS = 6000
+const NOTICE_RESUME_GRACE_MS = 800
+
+interface NoticeTimerEntry {
+  timer: ReturnType<typeof setTimeout> | null
+  remainingMs: number
+  startedAt: number | null
+}
+
 export class HelmxExternalStore {
   readonly requests = new StoreRequestManager()
   private readonly bus = new StoreSubscriptionBus()
@@ -183,6 +192,8 @@ export class HelmxExternalStore {
   private fullSnapshotCache: HelmxStoreValue | null = null
 
   private noticeSequence = 0
+  private readonly infoNoticeDurationMs: number
+  private readonly noticeTimers = new Map<string, NoticeTimerEntry>()
   private logoutImpl: (() => void) | null = null
   private readonly requestActions: StoreRequestActions
   private readonly navActions: StoreNavActions
@@ -226,7 +237,8 @@ export class HelmxExternalStore {
 
   readonly actions: HelmxStoreActions
 
-  constructor(bootLocation: WorkspaceLocationState, options?: { escAbortWindowMs?: number }) {
+  constructor(bootLocation: WorkspaceLocationState, options?: { escAbortWindowMs?: number; infoNoticeDurationMs?: number }) {
+    this.infoNoticeDurationMs = options?.infoNoticeDurationMs ?? INFO_NOTICE_DURATION_MS
     const themePreference = getStoredPreference()
     const localePreference = getStoredLocalePreference()
     const locale = resolveLocale(localePreference)
@@ -405,6 +417,8 @@ export class HelmxExternalStore {
       openSpace: this.openSpace,
       setActiveModal: this.setActiveModal,
       dismissNotice: this.dismissNotice,
+      pauseNoticeTimer: this.pauseNoticeTimer,
+      resumeNoticeTimer: this.resumeNoticeTimer,
       pushNotice: this.pushNotice,
       invokePluginAction: this.invokePluginAction,
     }
@@ -416,6 +430,7 @@ export class HelmxExternalStore {
 
   dispose(): void {
     this.navActions.clearEscTimer()
+    this.clearAllNoticeTimers()
     this.requests.dispose()
   }
 
@@ -1019,19 +1034,74 @@ export class HelmxExternalStore {
 
   // ---- Notices & Auth & Logout ----------------------------------------------
 
+  private clearNoticeTimer(id: string): void {
+    const entry = this.noticeTimers.get(id)
+    if (entry === undefined) return
+    if (entry.timer !== null) clearTimeout(entry.timer)
+    this.noticeTimers.delete(id)
+  }
+
+  private clearAllNoticeTimers(): void {
+    for (const entry of this.noticeTimers.values()) {
+      if (entry.timer !== null) clearTimeout(entry.timer)
+    }
+    this.noticeTimers.clear()
+  }
+
+  private scheduleNoticeTimer(id: string, delayMs: number): void {
+    this.clearNoticeTimer(id)
+    const entry: NoticeTimerEntry = {
+      timer: null,
+      remainingMs: delayMs,
+      startedAt: Date.now(),
+    }
+    entry.timer = setTimeout(() => {
+      this.noticeTimers.delete(id)
+      this.dismissNotice(id)
+    }, delayMs)
+    this.noticeTimers.set(id, entry)
+  }
+
   dismissNotice = (id: string): void => {
+    this.clearNoticeTimer(id)
     if (!this.noticesState.some((item) => item.id === id)) return
     this.setNotices((prev) => prev.filter((notice) => notice.id !== id))
   }
 
+  pauseNoticeTimer = (id: string): void => {
+    const entry = this.noticeTimers.get(id)
+    if (entry === undefined || entry.timer === null) return
+    clearTimeout(entry.timer)
+    entry.timer = null
+    const elapsed = entry.startedAt !== null ? Math.max(0, Date.now() - entry.startedAt) : 0
+    const minGrace = Math.min(this.infoNoticeDurationMs, NOTICE_RESUME_GRACE_MS)
+    entry.remainingMs = Math.max(minGrace, entry.remainingMs - elapsed)
+    entry.startedAt = null
+  }
+
+  resumeNoticeTimer = (id: string): void => {
+    const entry = this.noticeTimers.get(id)
+    if (entry === undefined || entry.timer !== null) return
+    if (!this.noticesState.some((item) => item.id === id)) {
+      this.noticeTimers.delete(id)
+      return
+    }
+    this.scheduleNoticeTimer(id, entry.remainingMs)
+  }
+
   pushNotice = (notice: Omit<ToastNotice, 'id' | 'createdAt'>): void => {
     const id = `notice-${++this.noticeSequence}`
+    for (const existing of this.noticesState) {
+      if (existing.title === notice.title && existing.body === notice.body) {
+        this.clearNoticeTimer(existing.id)
+      }
+    }
     this.setNotices((prev) => [
       ...prev.filter((item) => item.title !== notice.title || item.body !== notice.body),
       { ...notice, id, createdAt: Date.now() },
     ])
     if (notice.level === 'info') {
-      this.requests.delay(() => this.dismissNotice(id), 6000)
+      this.scheduleNoticeTimer(id, this.infoNoticeDurationMs)
     }
   }
 
@@ -1059,6 +1129,7 @@ export class HelmxExternalStore {
   /** Resets non-URL timers and caches before the provider resets window.history. */
   prepareLogoutHistoryReset(): void {
     this.navActions.clearEscTimer()
+    this.clearAllNoticeTimers()
     this.requests.resetOnLogout()
     this.sseCursor = null
     resetStandbyDrafts()

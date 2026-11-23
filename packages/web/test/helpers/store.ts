@@ -61,6 +61,8 @@ export type TestStoreOverrides = Omit<
   | 'openSpace'
   | 'setActiveModal'
   | 'dismissNotice'
+  | 'pauseNoticeTimer'
+  | 'resumeNoticeTimer'
   | 'pushNotice'
   | 'invokePluginAction'
 > & {

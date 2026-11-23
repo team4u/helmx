@@ -31,7 +31,7 @@ function resolveNoticeTarget(
 export function ToastOverlay() {
   const notices = useNotices()
   const conversations = useConversations()
-  const { openTarget, dismissNotice } = useStoreActions()
+  const { openTarget, dismissNotice, pauseNoticeTimer, resumeNoticeTimer } = useStoreActions()
   const { t } = useWebLocale()
   if (notices.length === 0) return null
 
@@ -51,6 +51,14 @@ export function ToastOverlay() {
             data-notice-id={n.id}
             role={n.level === 'error' ? 'alert' : 'status'}
             className={`callout toast-item ${toneClass}`.trim()}
+            onMouseEnter={() => pauseNoticeTimer(n.id)}
+            onMouseLeave={() => resumeNoticeTimer(n.id)}
+            onFocus={() => pauseNoticeTimer(n.id)}
+            onBlur={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                resumeNoticeTimer(n.id)
+              }
+            }}
           >
             <div className="toast-content">
               <div className="toast-title">

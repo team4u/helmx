@@ -64,7 +64,6 @@ export function LocaleMenuButton({
           <button
             type="button"
             className={className}
-            title={tooltipText}
             aria-label={triggerLabel}
             aria-expanded={open}
           >

@@ -7,10 +7,26 @@
  * 规范：毛玻璃遮罩、14px 圆角、投影环发丝边与大深影、1px solid var(--line-2) 分隔
  * ========================================================================== */
 
+@keyframes helmxOverlayFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes helmxModalEnter {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.28);
+  background: var(--bg-backdrop);
   backdrop-filter: blur(8px) saturate(1.1);
   -webkit-backdrop-filter: blur(8px) saturate(1.1);
   display: flex;
@@ -18,6 +34,7 @@
   justify-content: center;
   padding: 24px;
   z-index: 100;
+  animation: helmxOverlayFadeIn var(--dur-normal) var(--ease-out);
 }
 
 .modal {
@@ -31,6 +48,7 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  animation: helmxModalEnter var(--dur-normal) var(--ease-out);
 }
 
 .modal-header {
@@ -66,6 +84,7 @@
   padding: 0;
   background: var(--bg);
   z-index: var(--dialog-layer-z, 120);
+  animation: none;
 }
 
 .modal.modal-fullscreen {
@@ -76,6 +95,7 @@
   border-radius: 0;
   border: none;
   box-shadow: none;
+  animation: none;
 }
 
 .modal-body.modal-body-flush {

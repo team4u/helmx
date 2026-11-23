@@ -1,6 +1,6 @@
 import { useContext, useMemo, useState } from 'react'
 import type { ConversationEntry, ConversationSummary } from '@helmx/protocol/browser'
-import { CopyButton, HelmxIcon, ToolActivityContext, Tooltip, useSharedNowMs } from '@helmx/plugin-client'
+import { CopyButton, HelmxIcon, ToolActivityContext, useSharedNowMs } from '@helmx/plugin-client'
 import { MarkdownView } from './MarkdownView.js'
 import { StepGroup, TraceRow } from './TimelineRows.js'
 import { ToolActivityProvider } from './ToolActivityProvider.js'
@@ -240,21 +240,17 @@ function AssistantTurnContent({
       {hasTimeInfo || showHoverBar || showModelTag ? (
         <div className="msg-ai-footer">
           {showModelTag ? (
-            <Tooltip content={t('conv.model.effective', { model: modelFull })}>
-              <span className="msg-time-meta" title={t('conv.model.effective', { model: modelFull })}>
-                <HelmxIcon name="cpu" size={11} />
-                <span className="mono">{modelShort}</span>
-              </span>
-            </Tooltip>
+            <span className="msg-time-meta" title={t('conv.model.effective', { model: modelFull })}>
+              <HelmxIcon name="cpu" size={11} />
+              <span className="mono">{modelShort}</span>
+            </span>
           ) : null}
           {hasTimeInfo ? (
-            <Tooltip content={tooltipText} className={tooltipLines.length > 1 ? 'helmx-tooltip-multiline' : undefined}>
-              <span className="msg-time-meta" title={tooltipText}>
-                {displayTime !== '' ? <span>{displayTime}</span> : null}
-                {displayTime !== '' && durationText !== '' ? <span className="msg-time-sep">·</span> : null}
-                {durationText !== '' ? <span className="tabular-nums">{t('conv.turn.took', { duration: durationText })}</span> : null}
-              </span>
-            </Tooltip>
+            <span className="msg-time-meta" title={tooltipText}>
+              {displayTime !== '' ? <span>{displayTime}</span> : null}
+              {displayTime !== '' && durationText !== '' ? <span className="msg-time-sep">·</span> : null}
+              {durationText !== '' ? <span className="tabular-nums">{t('conv.turn.took', { duration: durationText })}</span> : null}
+            </span>
           ) : null}
           {showHoverBar ? (
             <span className="msg-hover-bar">

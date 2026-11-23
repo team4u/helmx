@@ -8,7 +8,7 @@
   align-items: center;
   justify-content: center;
   gap: 6px;
-  height: 27px;
+  height: 30px;
   padding: 0 10px;
   border-radius: 6px;
   border: 1px solid var(--border);
@@ -21,7 +21,7 @@
   white-space: nowrap;
   user-select: none;
   -webkit-user-select: none;
-  transition: background 120ms ease, border-color 120ms ease, color 120ms ease, opacity 100ms ease, filter 120ms ease;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease, opacity 100ms ease, filter 120ms ease, transform 100ms var(--ease-out);
 }
 .btn:hover:not(:disabled) {
   border-color: var(--fg-muted);
@@ -30,6 +30,7 @@
 }
 .btn:active:not(:disabled) {
   background: var(--bg-hover);
+  transform: scale(0.98);
 }
 .btn:disabled {
   opacity: 0.48;
@@ -38,7 +39,7 @@
 
 /* 次级/轮廓操作按钮 */
 .btn-secondary {
-  height: 27px;
+  height: 30px;
   padding: 0 10px;
   border-radius: 6px;
   border: 1px solid var(--border);
@@ -54,7 +55,7 @@
 
 /* 主要操作按钮（Solid Accent） */
 .btn-primary {
-  height: 27px;
+  height: 30px;
   border: none;
   background: var(--accent);
   color: var(--fg-on-solid);
@@ -86,7 +87,7 @@
 
 /* 幽灵/文本操作按钮 */
 .btn-ghost {
-  height: 27px;
+  height: 30px;
   border: none;
   background: transparent;
   color: var(--fg-secondary);
@@ -366,14 +367,7 @@
 
 .list > .row {
   padding: 9px 12px;
-  border-bottom: 1px solid var(--border);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
   gap: 10px;
-}
-.list > .row:last-child {
-  border-bottom: none;
 }
 
 /* 列表导航交互项原语 */
@@ -965,8 +959,8 @@
 
 .input,
 .select {
-  height: 27px;
-  line-height: 25px;
+  height: 30px;
+  line-height: 28px;
 }
 
 textarea.input,

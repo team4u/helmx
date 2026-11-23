@@ -54,7 +54,6 @@ function AgentNewConversationButton({
       <button
         type="button"
         className="btn btn-ghost btn-icon-xs agent-new-conv-btn"
-        title={newTopicLabel}
         aria-label={newTopicLabel}
         onClick={(e) => {
           e.stopPropagation()
@@ -539,7 +538,6 @@ export function AgentStandingsGroup({
               style={{
                 color: filterOpen ? 'var(--accent)' : undefined,
               }}
-              title={filterOpen ? t('shell.agents.collapseFilters') : t('shell.agents.filter')}
               aria-label={t('shell.agents.filter')}
               aria-pressed={filterOpen}
               onClick={() => {
@@ -561,7 +559,6 @@ export function AgentStandingsGroup({
               style={{
                 color: batch.batchMode ? 'var(--accent)' : undefined,
               }}
-              title={batch.batchMode ? t('shell.agents.exitBulk') : t('shell.agents.manageBulk')}
               aria-label={batch.batchMode ? t('shell.agents.exitBulk') : t('shell.agents.manageBulk')}
               onClick={batch.toggleBatchMode}
             >

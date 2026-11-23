@@ -18,6 +18,7 @@ export const uiCopy = {
   select: { en: 'Select…', 'zh-CN': '请选择…' },
   searchOptions: { en: 'Search options', 'zh-CN': '搜索选项' },
   searchPlaceholder: { en: 'Search options…', 'zh-CN': '搜索选项…' },
+  noMatchingOptions: { en: 'No matching options', 'zh-CN': '无匹配选项' },
   selectAll: { en: 'Select all', 'zh-CN': '全选' },
   clear: { en: 'Clear', 'zh-CN': '清空' },
   view: { en: 'View', 'zh-CN': '视图' },

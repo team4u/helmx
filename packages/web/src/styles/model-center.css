@@ -188,7 +188,7 @@
 
 .text.action,
 .model-chips-actions .btn {
-  height: 27px;
+  height: 28px;
   padding: 0 10px;
   border: 1px solid var(--border);
   background: var(--bg-elevated);

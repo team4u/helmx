@@ -71,7 +71,6 @@ export function ComposerSendControls({
             type="button"
             className="btn btn-sm btn-danger btn-pill btn-send composer-abort-button"
             onClick={() => void abortTurn()}
-            title={t('composer.sendControls.stopExecution')}
             aria-label={t('composer.sendControls.stopExecution')}
           >
             <HelmxIcon name="square" size={14} />

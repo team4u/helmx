@@ -69,13 +69,6 @@ export function PluginCard({
     onSelect()
   }
 
-  const handleCardKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault()
-      onSelect()
-    }
-  }
-
   const cardClasses = [
     'plugin-card',
     selected && 'is-selected',
@@ -88,44 +81,50 @@ export function PluginCard({
   const versionLabel = plugin.version ? `v${plugin.version.replace(/^v/, '')}` : null
 
   return (
-    <div
+    <article
       className={cardClasses}
-      role="button"
-      tabIndex={0}
-      aria-selected={selected}
       onClick={handleCardClick}
-      onKeyDown={handleCardKeyDown}
       data-plugin-id={plugin.id}
     >
       {/* Top header: title/version/locked badge + ID left-aligned */}
       <div className="plugin-card-header">
-        <div className="plugin-card-meta">
-          <div className="plugin-card-title-row">
-            <span className="plugin-card-name" title={name}>
-              {name}
-            </span>
-            {versionLabel && (
-              <span className="plugin-card-version" title={t('plugins.card.versionTitle', { version: versionLabel })}>
-                {versionLabel}
+        <button
+          type="button"
+          className="primary-card-open"
+          aria-pressed={selected}
+          onClick={(e) => {
+            e.stopPropagation()
+            onSelect()
+          }}
+        >
+          <div className="plugin-card-meta">
+            <div className="plugin-card-title-row">
+              <span className="plugin-card-name" title={name}>
+                {name}
               </span>
-            )}
-            {isLocked && (
-              <span className="plugin-card-locked-badge" title={t('plugins.card.lockedTitle')}>
-                <HelmxIcon name="lock" size={10} />
-                <span>{t('plugins.resident')}</span>
-              </span>
-            )}
-            {isPluginFailed(plugin) && (
-              <StatusLight
-                status="failed"
-                label={t('plugins.status.error')}
-              />
-            )}
+              {versionLabel && (
+                <span className="plugin-card-version" title={t('plugins.card.versionTitle', { version: versionLabel })}>
+                  {versionLabel}
+                </span>
+              )}
+              {isLocked && (
+                <span className="plugin-card-locked-badge" title={t('plugins.card.lockedTitle')}>
+                  <HelmxIcon name="lock" size={10} />
+                  <span>{t('plugins.resident')}</span>
+                </span>
+              )}
+              {isPluginFailed(plugin) && (
+                <StatusLight
+                  status="failed"
+                  label={t('plugins.status.error')}
+                />
+              )}
+            </div>
+            <div className="plugin-card-id mono" title={plugin.id}>
+              {plugin.id}
+            </div>
           </div>
-          <div className="plugin-card-id mono" title={plugin.id}>
-            {plugin.id}
-          </div>
-        </div>
+        </button>
       </div>
 
       {/* Middle: short description (with an error summary on failure for quick triage without opening the drawer) */}
@@ -238,6 +237,6 @@ export function PluginCard({
           </div>
         </div>
       </div>
-    </div>
+    </article>
   )
 }

@@ -92,7 +92,6 @@ function OverviewNewTopicControl({
           <button
             type="button"
             className="btn btn-ghost btn-icon-xs"
-            title={label}
             aria-label={label}
             onClick={() => onSelectProfile(singleCandidate.profileId)}
           >
@@ -382,7 +381,6 @@ function SidebarOverviewTreeItem({
                   className={`sidebar-overview-desc-toggle tabular-nums${expanded ? ' is-expanded' : ''}`}
                   aria-expanded={expanded}
                   aria-label={descToggleLabel}
-                  title={descToggleLabel}
                   onClick={(e) => {
                     e.stopPropagation()
                     onToggleExpanded(card.root.id)
@@ -709,7 +707,6 @@ export function SidebarOverviewList({
               type="button"
               className="btn btn-ghost btn-icon-xs"
               style={{ color: filterOpen ? 'var(--accent)' : undefined }}
-              title={filterOpen ? t('shell.agents.collapseFilters') : t('shell.sidebar.overviewFilter')}
               aria-label={t('shell.sidebar.overviewFilter')}
               aria-pressed={filterOpen}
               onClick={() => {
@@ -729,7 +726,6 @@ export function SidebarOverviewList({
               type="button"
               className="btn btn-ghost btn-icon-xs"
               style={{ color: batch.batchMode ? 'var(--accent)' : undefined }}
-              title={batch.batchMode ? t('shell.agents.exitBulk') : t('shell.agents.manageBulk')}
               aria-label={batch.batchMode ? t('shell.agents.exitBulk') : t('shell.agents.manageBulk')}
               onClick={batch.toggleBatchMode}
             >

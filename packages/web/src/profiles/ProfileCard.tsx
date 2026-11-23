@@ -74,13 +74,6 @@ export function ProfileCard({
       ? t('profiles.card.allSkills')
       : t('profiles.card.skillsCount', { count: profile.skills.length })
 
-  const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
-    if (event.key === 'Enter' || event.key === ' ') {
-      event.preventDefault()
-      onSelect()
-    }
-  }
-
   const handleChatClick = (event: React.MouseEvent<HTMLButtonElement>) => {
     event.stopPropagation()
     if (activity.managingPluginDisabled) return
@@ -107,35 +100,41 @@ export function ProfileCard({
     : t('profiles.card.defaultCwd', { nodeId: location.nodeId })
 
   return (
-    <div
-      role="button"
-      tabIndex={0}
+    <article
       data-profile-id={profile.id}
-      aria-selected={selected}
       className={`primary-card${selected ? ' is-selected' : ''}`}
       onClick={onSelect}
-      onKeyDown={handleKeyDown}
     >
       <div className="primary-card-header">
-        <div className="primary-card-meta">
-          <div className="primary-card-title-row">
-            <span className="primary-card-name" title={displayName}>
-              {displayName}
-            </span>
-            {isSystem && (
-              <span className="primary-card-pill mono" title={t('profiles.card.systemPillTitle')}>
-                <HelmxIcon name="lock" size={10} />
-                <span>{t('profiles.card.systemPill')}</span>
+        <button
+          type="button"
+          className="primary-card-open"
+          aria-pressed={selected}
+          onClick={(event) => {
+            event.stopPropagation()
+            onSelect()
+          }}
+        >
+          <div className="primary-card-meta">
+            <div className="primary-card-title-row">
+              <span className="primary-card-name" title={displayName}>
+                {displayName}
               </span>
-            )}
-            <StatusLight
-              status={ACTIVITY_LIGHT_STATUS[activity.stateKind]}
-              label={activity.stateLabel}
-              className="primary-card-activity tabular-nums"
-            />
+              {isSystem && (
+                <span className="primary-card-pill mono" title={t('profiles.card.systemPillTitle')}>
+                  <HelmxIcon name="lock" size={10} />
+                  <span>{t('profiles.card.systemPill')}</span>
+                </span>
+              )}
+              <StatusLight
+                status={ACTIVITY_LIGHT_STATUS[activity.stateKind]}
+                label={activity.stateLabel}
+                className="primary-card-activity tabular-nums"
+              />
+            </div>
+            <span className="mono text-subtle break-word">{profile.id}</span>
           </div>
-          <span className="mono text-subtle break-word">{profile.id}</span>
-        </div>
+        </button>
       </div>
 
       <div className="primary-card-desc" title={profile.description || undefined}>
@@ -203,6 +202,6 @@ export function ProfileCard({
           <span>{t('profiles.card.conversationAction')}</span>
         </button>
       </div>
-    </div>
+    </article>
   )
 }

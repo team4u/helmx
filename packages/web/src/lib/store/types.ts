@@ -161,6 +161,8 @@ export type HelmxStoreActions = Pick<
   | 'openSpace'
   | 'setActiveModal'
   | 'dismissNotice'
+  | 'pauseNoticeTimer'
+  | 'resumeNoticeTimer'
   | 'pushNotice'
   | 'invokePluginAction'
 >

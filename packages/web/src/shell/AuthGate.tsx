@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react'
+import { useId, useState, type FormEvent } from 'react'
 import { authApi } from '../lib/api.js'
 import { HelmxIcon } from '@helmx/plugin-client'
 import { useAuthConnection, useStoreActions, useThemePreferencesState } from '../lib/store-context.js'
@@ -10,12 +10,22 @@ export function AuthGate() {
   const { theme, themePreference } = useThemePreferencesState()
   const { onAuthenticated, toggleTheme } = useStoreActions()
   const { t } = useWebLocale()
+  const passwordId = useId()
+  const confirmId = useId()
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const isSetup = !authConfigured
+  const themeLabel =
+    themePreference === 'system'
+      ? t('shell.auth.themeSystem', {
+          current: t(theme === 'dark' ? 'shell.theme.currentDark' : 'shell.theme.currentLight'),
+        })
+      : themePreference === 'light'
+        ? t('shell.auth.themeLight')
+        : t('shell.auth.themeDark')
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
@@ -65,15 +75,8 @@ export function AuthGate() {
               type="button"
               className="btn btn-ghost btn-icon-sm"
               onClick={toggleTheme}
-              title={
-                themePreference === 'system'
-                  ? t('shell.auth.themeSystem', {
-                      current: t(theme === 'dark' ? 'shell.theme.currentDark' : 'shell.theme.currentLight'),
-                    })
-                  : themePreference === 'light'
-                    ? t('shell.auth.themeLight')
-                    : t('shell.auth.themeDark')
-              }
+              title={themeLabel}
+              aria-label={themeLabel}
             >
               <HelmxIcon
                 name={
@@ -101,15 +104,17 @@ export function AuthGate() {
         )}
 
         <div className="auth-gate-field">
-          <label className="auth-gate-label">
+          <label className="auth-gate-label" htmlFor={passwordId}>
             {isSetup ? t('shell.auth.setPasswordLabel') : t('shell.auth.passwordLabel')}
           </label>
           <input
+            id={passwordId}
             type="password"
             className="input"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             placeholder={isSetup ? t('shell.auth.setPasswordPlaceholder') : t('shell.auth.passwordPlaceholder')}
+            autoComplete={isSetup ? 'new-password' : 'current-password'}
             autoFocus
             required
           />
@@ -117,15 +122,17 @@ export function AuthGate() {
 
         {isSetup && (
           <div className="auth-gate-field">
-            <label className="auth-gate-label">
+            <label className="auth-gate-label" htmlFor={confirmId}>
               {t('shell.auth.confirmLabel')}
             </label>
             <input
+              id={confirmId}
               type="password"
               className="input"
               value={confirm}
               onChange={(e) => setConfirm(e.target.value)}
               placeholder={t('shell.auth.confirmPlaceholder')}
+              autoComplete="new-password"
               required
             />
           </div>

@@ -38,7 +38,6 @@ export function HoverIconButton({
       <button
         type="button"
         className={`btn btn-ghost btn-icon-xs${className ? ` ${className}` : ''}`}
-        title={title}
         aria-label={title}
         onClick={onClick}
       >
@@ -84,9 +83,7 @@ function StatusLightDot({
     t,
   })
   return (
-    <Tooltip content={tooltip} side="top">
-      <span className={light.dotClass} title={tooltip} aria-label={tooltip} role="status" />
-    </Tooltip>
+    <span className={light.dotClass} title={tooltip} aria-label={tooltip} role="status" />
   )
 }
 

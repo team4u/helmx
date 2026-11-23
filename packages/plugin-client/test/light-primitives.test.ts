@@ -498,6 +498,42 @@ test('Tooltip DOM: reuses ancestor TooltipProvider (inherits delayDuration and s
   }
 })
 
+test('Tooltip DOM: strips native title when active to prevent double tooltips and preserves title when disabled', { timeout: 60_000 }, async () => {
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = createRoot(container)
+  try {
+    await act(async () => {
+      root.render(
+        e(
+          React.Fragment,
+          null,
+          e(
+            Tooltip,
+            { content: 'Rich tooltip', inline: true },
+            e('button', { type: 'button', 'data-btn': 'active', title: 'Native duplicate' }, 'Active'),
+          ),
+          e(
+            Tooltip,
+            { content: 'Rich tooltip', disabled: true, inline: true },
+            e('button', { type: 'button', 'data-btn': 'disabled', title: 'Native fallback' }, 'Disabled'),
+          ),
+        ),
+      )
+    })
+    const activeBtn = container.querySelector<HTMLButtonElement>('button[data-btn="active"]')
+    const disabledBtn = container.querySelector<HTMLButtonElement>('button[data-btn="disabled"]')
+    assert.ok(activeBtn !== null && disabledBtn !== null)
+    assert.equal(activeBtn.getAttribute('title'), null, 'active Tooltip strips duplicate native title')
+    assert.equal(disabledBtn.getAttribute('title'), 'Native fallback', 'disabled Tooltip preserves native title fallback')
+  } finally {
+    await act(async () => {
+      root.unmount()
+    })
+    container.remove()
+  }
+})
+
 test('DropdownMenu SSR: renders host overlay classes and stamps data-plugin-id inside plugin context', { timeout: 60_000 }, () => {
   const pluginCtx = {
     pluginId: 'builtin:menu-demo',

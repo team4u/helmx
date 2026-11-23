@@ -20,6 +20,11 @@ export const shellMessages = {
   },
   'shell.nav.toggleNav': { en: 'Toggle navigation bar', 'zh-CN': '切换导航栏' },
   'shell.nav.closeNav': { en: 'Close navigation bar', 'zh-CN': '关闭导航栏' },
+  'shell.split.resizeAria': { en: 'Resize split panes', 'zh-CN': '调整分屏宽度' },
+  'shell.split.resizeHint': {
+    en: 'Drag to resize split panes (double-click to reset)',
+    'zh-CN': '拖拽调整分屏比例（双击重置为 50/50）',
+  },
   'shell.version.banner': { en: 'A new Helmx version is available', 'zh-CN': 'Helmx 已发布新版本' },
   'shell.version.bannerWithHint': {
     en: 'A new Helmx version is available — {hint}',

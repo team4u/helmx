@@ -30,11 +30,16 @@
 }
 
 .magpie-quota-trigger:hover,
-.magpie-quota-trigger:focus-visible,
 .magpie-quota-trigger[data-state='open'] {
   background: var(--bg-hover);
   color: var(--fg);
-  outline: none;
+}
+
+.magpie-quota-trigger:focus-visible {
+  background: var(--bg-hover);
+  color: var(--fg);
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .magpie-quota-trigger--warn {

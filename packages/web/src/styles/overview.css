@@ -3,9 +3,9 @@
  * 纵向分节可折叠，活跃卡饱满展示态势与后代芯片，安静卡降权收拢后代以消除
  * 网格参差；移动端筛选折行、网格单列化。 */
 
-/* 工具栏统一 10px 单一间距节奏（组间=组内）；筛选下拉用默认档（27px 高、
- * 12.5px 字、7px 圆角）与分段器（28px）同量级，宽度由内容决定（104px
- * 下限兜住占位文案 + chevron），不再用 132px 死宽度撑出空白带。 */
+/* 工具栏统一 10px 单一间距节奏（组间=组内）；筛选下拉与搜索框收敛至 28px 高，
+ * 与分段器（28px）同量级，宽度由内容决定（104px 下限兜住占位文案 + chevron），
+ * 不再用 132px 死宽度撑出空白带。 */
 .overview-toolbar {
   flex-wrap: wrap;
   gap: 10px;
@@ -25,6 +25,10 @@
 
 .overview-filter-select {
   min-width: 104px;
+}
+
+.overview-filter-select .helmx-select-trigger {
+  height: 28px;
 }
 
 .overview-scroll {
@@ -438,10 +442,10 @@
   background: var(--bg);
 }
 
-/* 工具栏搜索框：复用通用 .search-box 原语，仅收敛到筛选控件同量级
- * （27px 高、12.5px 字），宽度弹性限幅不挤占分段器。 */
+/* 工具栏搜索框：复用通用 .search-box 原语，仅收敛到筛选控件与分段器同量级
+ * （28px 高、12.5px 字），宽度弹性限幅不挤占分段器。 */
 .overview-search-box {
-  height: 27px;
+  height: 28px;
   padding: 0 8px;
   gap: 6px;
   flex: 0 1 180px;

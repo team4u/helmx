@@ -194,7 +194,7 @@ export function DrawerStackShell({ activeConversationId, inline = false }: Drawe
             popDrawer()
           }}
         >
-          <DialogTitle style={{ display: 'none' }}>{dialogAriaLabel}</DialogTitle>
+          <DialogTitle className="helmx-sr-only">{dialogAriaLabel}</DialogTitle>
           <div className="drawer-stack-header">
             <div className="drawer-stack-nav">
               {prevLabel !== undefined ? (

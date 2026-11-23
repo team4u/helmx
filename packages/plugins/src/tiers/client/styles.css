@@ -2,7 +2,7 @@
 .tiers-list { display: flex; flex-direction: column; gap: 10px; }
 .tiers-card {
   display: flex; flex-direction: column; gap: 10px; padding: 12px 14px;
-  border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-surface);
+  border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-elevated);
 }
 .tiers-card-top { display: grid; grid-template-columns: minmax(140px, 190px) minmax(220px, 1fr) auto; gap: 10px; align-items: end; }
 .tiers-card .composer-picker-root { width: 100%; max-width: 100%; }

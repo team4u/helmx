@@ -175,7 +175,6 @@ function RailChangelogButton(): ReactNode {
       <button
         type="button"
         className="btn btn-ghost btn-sm sidebar-changelog-toggle"
-        title={label}
         aria-label={label}
         onClick={() => setActiveModal({ kind: 'hub-changelog' })}
       >
@@ -248,7 +247,6 @@ function ActivityRail({
         <button
           type="button"
           className="rail-btn desktop-sidebar-expand-btn"
-          title={expandWithShortcut}
           aria-label={t('shell.sidebar.expandNav')}
           onClick={() => onToggleSidebarCollapsed?.()}
         >
@@ -266,7 +264,6 @@ function ActivityRail({
               <button
                 type="button"
                 className={`rail-btn rail-space-btn${spaceActive ? ' rail-btn-active' : ''}`}
-                title={spaceLabel}
                 aria-label={spaceLabel}
                 aria-current={spaceActive ? 'page' : undefined}
                 onClick={() => onOpenSpace(key)}
@@ -288,7 +285,6 @@ function ActivityRail({
                 <button
                   type="button"
                   className={`rail-btn rail-quick-btn${presence.active ? ' rail-btn-active' : ''}`}
-                  title={entryLabel}
                   aria-label={entryLabel}
                   aria-current={presence.active ? 'page' : undefined}
                   onClick={() => {
@@ -315,7 +311,6 @@ function ActivityRail({
           <button
             type="button"
             className="btn btn-ghost btn-sm sidebar-theme-toggle"
-            title={themeTooltip}
             aria-label={themeAriaLabel}
             onClick={onToggleTheme}
           >
@@ -521,11 +516,10 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
             <span>{spaceHeaderLabel}</span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            <Tooltip content={t('shell.quietNotify.toggleTooltip')} side="bottom">
+            <Tooltip content={quietNotifyTooltip} side="bottom">
               <button
                 type="button"
                 className="btn btn-sm btn-icon"
-                title={quietNotifyTooltip}
                 aria-label={quietNotifyTooltip}
                 aria-pressed={quietNotifyEnabled}
                 onClick={() => {
@@ -539,7 +533,6 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
               <button
                 type="button"
                 className="btn btn-sm btn-icon"
-                title={t('shell.sidebar.openCommandPalette')}
                 aria-label={t('shell.sidebar.openCommandPalette')}
                 onClick={() => setActiveModal({ kind: 'command-palette' })}
               >
@@ -551,7 +544,6 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
                 <button
                   type="button"
                   className={`btn btn-sm btn-icon sidebar-overview-open-btn${primaryTarget.kind === 'overview' ? ' is-active' : ''}`}
-                  title={t('shell.overview.railTooltip')}
                   aria-label={t('shell.overview.railTooltip')}
                   aria-current={primaryTarget.kind === 'overview' ? 'page' : undefined}
                   onClick={() => {
@@ -572,7 +564,6 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
               <button
                 type="button"
                 className="btn btn-sm btn-icon desktop-sidebar-collapse-btn"
-                title={collapseWithShortcut}
                 aria-label={t('shell.sidebar.collapseNav')}
                 onClick={() => toggleSidebarCollapsed?.()}
               >
@@ -585,7 +576,6 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
                   type="button"
                   className="btn btn-ghost btn-sm mobile-sidebar-close"
                   aria-label={t('shell.nav.closeNav')}
-                  title={t('shell.nav.closeNav')}
                   onClick={onClose}
                 >
                   <HelmxIcon name="x" size={14} />

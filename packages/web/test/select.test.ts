@@ -313,3 +313,102 @@ test('CSS stacking regression: Popover 内容节点必须声明 z-index: 80，Se
     style.remove()
   }
 })
+
+test('Select multiple: 点击复选框仅触发一次 onChange，支持键盘导航与多语言空态', { timeout: 60_000 }, async () => {
+  const { HostStoreProviders } = await import('./helpers/host-store.js')
+  const { makeTestStore } = await import('./helpers/store.js')
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = ReactDOMClient.createRoot(container)
+
+  const options: SelectOption<string>[] = [
+    { value: 'a', label: 'Alpha' },
+    { value: 'b', label: 'Beta', disabled: true },
+    { value: 'c', label: 'Charlie' },
+    { value: 'd', label: 'Delta' },
+    { value: 'e', label: 'Echo' },
+  ]
+  const changes: string[][] = []
+  let current: string[] = []
+  const store = makeTestStore({ locale: 'en' })
+
+  const renderSelect = () =>
+    e(
+      HostStoreProviders,
+      { value: store },
+      e(Select, {
+        multiple: true,
+        inline: true,
+        open: true,
+        value: current,
+        options,
+        onValuesChange: (next: string[]) => {
+          current = next
+          changes.push(next)
+        },
+        'aria-label': 'Test multi select',
+      }),
+    )
+
+  try {
+    await act(async () => {
+      root.render(renderSelect())
+    })
+
+    // 1. Clicking Checkbox fires onValuesChange exactly once (no parent-row double-trigger)
+    const checkboxes = container.querySelectorAll<HTMLButtonElement>('[role="checkbox"]')
+    assert.equal(checkboxes.length, 5)
+    await act(async () => {
+      checkboxes[0]!.click()
+    })
+    assert.deepEqual(changes, [['a']], 'clicking Checkbox must invoke onValuesChange once, not twice')
+
+    await act(async () => {
+      root.render(renderSelect())
+    })
+
+    // 2. Keyboard navigation skips disabled Beta and toggles Charlie on Enter
+    const viewport = container.querySelector<HTMLElement>('.helmx-select-viewport')
+    const listbox = container.querySelector<HTMLElement>('[role="listbox"]')
+    assert.ok(viewport !== null && listbox !== null)
+    assert.equal(listbox.getAttribute('aria-multiselectable'), 'true')
+
+    await act(async () => {
+      viewport.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }))
+    })
+    await act(async () => {
+      viewport.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }))
+    })
+    const highlighted = container.querySelector('[role="option"][data-highlighted]')
+    assert.ok(highlighted?.textContent?.includes('Charlie'), 'ArrowDown skips disabled option to highlight Charlie')
+
+    await act(async () => {
+      viewport.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    })
+    assert.deepEqual(changes[changes.length - 1], ['a', 'c'], 'Enter toggles highlighted option')
+
+    // 3. Empty search state renders localized .helmx-select-empty without orphan .text-xs
+    const searchInput = container.querySelector<HTMLInputElement>('.helmx-select-search input')
+    assert.ok(searchInput !== null)
+    const nativeValueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+    await act(async () => {
+      nativeValueSetter?.call(searchInput, 'zzz-no-hit')
+      searchInput.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    const emptyElEn = container.querySelector<HTMLElement>('.helmx-select-empty')
+    assert.ok(emptyElEn !== null)
+    assert.equal(emptyElEn.textContent, 'No matching options')
+    assert.equal(emptyElEn.classList.contains('text-xs'), false)
+
+    await act(async () => {
+      store.setLocale('zh-CN')
+    })
+    assert.equal(container.querySelector('.helmx-select-empty')?.textContent, '无匹配选项')
+  } finally {
+    localStorage.removeItem('helmx:locale')
+    await act(async () => {
+      root.unmount()
+    })
+    container.remove()
+  }
+})

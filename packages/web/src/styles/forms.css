@@ -16,7 +16,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  height: 27px;
+  height: 30px;
   padding: 0 8px 0 9px;
   border-radius: 7px;
   border: 1px solid var(--border);
@@ -115,6 +115,15 @@
   display: flex;
   flex-direction: column;
   gap: 1px;
+  transform-origin: var(--radix-popper-transform-origin, top left);
+  animation: helmxPopoverEnter var(--dur-fast) var(--ease-out);
+}
+
+.helmx-select-empty {
+  padding: 8px 10px;
+  text-align: center;
+  font-size: 11.5px;
+  color: var(--fg-subtle);
 }
 
 /* 多选下拉框专用快捷条与搜索框 */
@@ -290,7 +299,8 @@
 }
 
 .helmx-switch:focus-visible {
-  outline: none;
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .helmx-switch:disabled,
@@ -370,7 +380,8 @@
 }
 
 .helmx-checkbox:focus-visible {
-  outline: none;
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .helmx-checkbox:disabled,

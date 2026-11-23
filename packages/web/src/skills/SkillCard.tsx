@@ -41,13 +41,6 @@ export function SkillCard({
     }
   }, [])
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault()
-      onSelect()
-    }
-  }
-
   const handleCopyCommand = async (e: React.MouseEvent<HTMLButtonElement>) => {
     e.stopPropagation()
     const ok = await copyToClipboard(slashCommand)
@@ -78,30 +71,36 @@ export function SkillCard({
     .join(' ')
 
   return (
-    <div
+    <article
       className={cardClasses}
-      role="button"
-      tabIndex={0}
-      aria-selected={selected}
       onClick={onSelect}
-      onKeyDown={handleKeyDown}
       data-skill-id={skill.id}
     >
       {/* Top header: title/source badge/ID left-aligned */}
       <div className="primary-card-header">
-        <div className="primary-card-meta">
-          <div className="primary-card-title-row">
-            <span className="primary-card-name" title={skill.name || skill.id}>
-              {skill.name || skill.id}
-            </span>
-            <span className={badgeClass} title={t('skills.card.sourceTitle', { label: sourceBadge.label })}>
-              {sourceBadge.label}
-            </span>
+        <button
+          type="button"
+          className="primary-card-open"
+          aria-pressed={selected}
+          onClick={(e) => {
+            e.stopPropagation()
+            onSelect()
+          }}
+        >
+          <div className="primary-card-meta">
+            <div className="primary-card-title-row">
+              <span className="primary-card-name" title={skill.name || skill.id}>
+                {skill.name || skill.id}
+              </span>
+              <span className={badgeClass} title={t('skills.card.sourceTitle', { label: sourceBadge.label })}>
+                {sourceBadge.label}
+              </span>
+            </div>
+            <div className="primary-card-id mono text-subtle break-word" title={skill.id}>
+              {skill.id}
+            </div>
           </div>
-          <div className="primary-card-id mono text-subtle break-word" title={skill.id}>
-            {skill.id}
-          </div>
-        </div>
+        </button>
       </div>
 
       {/* Middle: description */}
@@ -134,6 +133,6 @@ export function SkillCard({
           )}
         </div>
       </div>
-    </div>
+    </article>
   )
 }

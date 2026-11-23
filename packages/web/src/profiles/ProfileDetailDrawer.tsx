@@ -635,7 +635,7 @@ export function ProfileDetailDrawer({
               </div>
               <div className="profile-starters-list">
                 {form.starters.length === 0 ? (
-                  <div className="text-subtle text-xs profile-starters-empty">
+                  <div className="text-subtle profile-starters-empty">
                     {t('profiles.drawer.starters.empty')}
                   </div>
                 ) : (

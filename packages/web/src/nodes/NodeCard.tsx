@@ -50,13 +50,6 @@ export function NodeCard({
       ? node.tools
       : ['bash', 'read', 'write', 'edit']
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault()
-      onSelect()
-    }
-  }
-
   const cardClasses = [
     'primary-card',
     'node-card',
@@ -67,13 +60,11 @@ export function NodeCard({
     .join(' ')
 
   return (
-    <div
+    <button
+      type="button"
       className={cardClasses}
-      role="button"
-      tabIndex={0}
-      aria-selected={selected}
+      aria-pressed={selected}
       onClick={onSelect}
-      onKeyDown={handleKeyDown}
       data-node-id={node.id}
     >
       {/* Header: status light, node icon, node name, ID */}
@@ -145,6 +136,6 @@ export function NodeCard({
           )}
         </div>
       </div>
-    </div>
+    </button>
   )
 }

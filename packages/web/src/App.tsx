@@ -7,13 +7,14 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ComponentType,
+  type CSSProperties,
   type ExoticComponent,
   type ReactNode,
 } from 'react'
 import { HelmxIcon, TooltipProvider } from '@helmx/plugin-client'
-import { ModalFocusScope } from './shell/ModalFocusScope.js'
 import { ConversationPane } from './conversation/ConversationPane.js'
 import { ConversationWindowStage } from './conversation/ConversationWindowStage.js'
 import { standbyDraftKey } from './conversation/standby-model.js'
@@ -49,6 +50,8 @@ import { useGlobalAttention } from './shell/use-attention-indicator.js'
 import { extractRailQuickEntries } from './shell/sidebar-model.js'
 import { useSidebarBadges } from './shell/use-sidebar-badges.js'
 import { MobileQuickNav } from './shell/MobileQuickNav.js'
+import { loadSplitRatio, saveSplitRatio } from './shell/split-ratio-model.js'
+import { SplitResizeHandle } from './ui/SplitResizeHandle.js'
 
 /** SSE 断线横幅展示防抖：短于 1500ms 的瞬断或页面初始握手不闪现重连提示。 */
 const CONNECTION_BANNER_DELAY_MS = 1500
@@ -254,6 +257,12 @@ function HelmxShellInner({
   const { locale, t } = useWebLocale()
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [showConnectionBanner, setShowConnectionBanner] = useState(false)
+  const panesRef = useRef<HTMLDivElement | null>(null)
+  const [splitRatio, setSplitRatio] = useState<number>(() => loadSplitRatio())
+  const [resizingSplit, setResizingSplit] = useState(false)
+  const handleCommitSplitRatio = useCallback((next: number) => {
+    setSplitRatio(saveSplitRatio(next))
+  }, [])
   const [bootLanding] = useState<{ needsHomeLanding: boolean; initialLocation: WorkspaceLocationState | null }>(() => {
     if (typeof window === 'undefined') {
       return { needsHomeLanding: false, initialLocation: null }
@@ -419,7 +428,15 @@ function HelmxShellInner({
               </button>
             </div>
           )}
-          <div className="helmx-panes">
+          <div
+            ref={panesRef}
+            className={`helmx-panes${splitTarget !== null ? ' has-split' : ''}${splitTarget !== null && resizingSplit ? ' is-resizing' : ''}`}
+            style={
+              splitTarget !== null
+                ? ({ '--helmx-split-ratio': String(splitRatio) } as CSSProperties)
+                : undefined
+            }
+          >
             <div
               className="helmx-primary-pane"
               data-helmx-panel="primary"
@@ -451,17 +468,26 @@ function HelmxShellInner({
             </div>
 
             {splitTarget && (
-              <div
-                className="helmx-split-pane"
-                data-helmx-panel="split"
-                data-helmx-panel-focused={focusedPanel === 'split' ? 'true' : undefined}
-                onPointerDownCapture={focusSplit}
-                onFocusCapture={focusSplit}
-              >
-                <Suspense fallback={<div className="screen-loading" role="status">{t('conv.shell.loadingView')}</div>}>
-                  {renderPaneTarget(splitTarget, { panel: 'split', onCloseSplit: closeSplit })}
-                </Suspense>
-              </div>
+              <>
+                <SplitResizeHandle
+                  ratio={splitRatio}
+                  containerRef={panesRef}
+                  onChange={setSplitRatio}
+                  onCommit={handleCommitSplitRatio}
+                  onDraggingChange={setResizingSplit}
+                />
+                <div
+                  className="helmx-split-pane"
+                  data-helmx-panel="split"
+                  data-helmx-panel-focused={focusedPanel === 'split' ? 'true' : undefined}
+                  onPointerDownCapture={focusSplit}
+                  onFocusCapture={focusSplit}
+                >
+                  <Suspense fallback={<div className="screen-loading" role="status">{t('conv.shell.loadingView')}</div>}>
+                    {renderPaneTarget(splitTarget, { panel: 'split', onCloseSplit: closeSplit })}
+                  </Suspense>
+                </div>
+              </>
             )}
           </div>
         </main>
@@ -501,7 +527,6 @@ function HelmxShellInner({
           </Suspense>
         )}
 
-        <ModalFocusScope active={activeModal !== null || drawerStack.length > 0} onClose={closeModal} />
         <ToastOverlay />
       </div>
     </LazyRetryContext.Provider>

@@ -29,17 +29,6 @@ export function ModelCard({
 }: ModelCardProps): React.JSX.Element {
   const { t } = useWebLocale()
 
-  const handleCardClick = () => {
-    onSelect()
-  }
-
-  const handleCardKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault()
-      onSelect()
-    }
-  }
-
   const cardClasses = [
     'primary-card',
     selected && 'is-selected',
@@ -53,13 +42,11 @@ export function ModelCard({
     : { previewNames: [], remainingCount: 0 }
 
   return (
-    <div
+    <button
+      type="button"
       className={cardClasses}
-      role="button"
-      tabIndex={0}
-      onClick={handleCardClick}
-      onKeyDown={handleCardKeyDown}
-      aria-selected={selected}
+      onClick={onSelect}
+      aria-pressed={selected}
       aria-label={t('models.cardAria', { name: provider.name })}
     >
       {/* Header: name, status badge, ID left-aligned */}
@@ -110,6 +97,6 @@ export function ModelCard({
           {t('models.modelsAvailable', { count: provider.modelsCount })}
         </span>
       </div>
-    </div>
+    </button>
   )
 }

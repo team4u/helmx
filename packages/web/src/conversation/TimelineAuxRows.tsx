@@ -82,14 +82,14 @@ export function ResolvedAskRow({ ask, status }: { ask: AskSpec; status: 'answere
   const [open, setOpen] = useState(false)
   return (
     <div className="trace-entry">
-      <div className="trace-row" role="button" tabIndex={0} onClick={() => setOpen((v) => !v)}>
+      <button type="button" className="trace-row" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
         <span className="trace-row-left">
           <HelmxIcon name="check-circle" size={12} />
           <span className="trace-tool-name">{t('conv.ask.rowTitle')}</span>
           <span className="trace-tool-summary">{ask.title}</span>
         </span>
         <span className="trace-row-right">{resolvedAskLabel(status, t)}</span>
-      </div>
+      </button>
       {open ? (
         <div className="trace-expanded-body selectable">
           {ask.description !== undefined ? <span>{ask.description}</span> : null}

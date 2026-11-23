@@ -355,7 +355,7 @@ describe("agent-standby", () => {
 
   test('sidebar new-entry: the agent-row plus enters standby; zero-conversation standby agents stay flat and active', { timeout: 60_000 }, async () => {
     await mount('#/c/1')
-    clickButton('button[title="Start a new topic under 个人助理"]')
+    clickButton('button[aria-label="Start a new topic under 个人助理"]')
     await settle()
     assert.equal(window.location.hash, '#/a/assistant', 'the plus enters the standby state')
     assert.ok(document.querySelector('.agent-standby-pane'), 'renders the standby pane')

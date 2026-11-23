@@ -537,7 +537,7 @@ test('SkillCard: selected state and the workspace source badge', { timeout: 60_0
   )
 
   assert.ok(html.includes('is-selected'), 'selected cards must carry the is-selected class')
-  assert.ok(html.includes('aria-selected="true"'), 'selected cards must carry aria-selected')
+  assert.ok(html.includes('aria-pressed="true"'), 'selected cards must expose aria-pressed on the primary open button')
   assert.ok(html.includes('Workspace'), 'workspace-private skills must show the workspace source badge')
   assert.ok(html.includes('1 reference files'), 'must show the 1-reference-file pill')
   assert.doesNotMatch(html, emojiRegex, 'SkillCard output must contain no emoji')
@@ -653,24 +653,21 @@ test('SkillCard: mouse click and keyboard accessibility activation', { timeout: 
 
   const card = host.querySelector('.skill-card') as HTMLElement
   assert.ok(card, 'the card DOM node must be found')
+  assert.equal(card.tagName, 'ARTICLE', 'card container uses article to avoid nested interactive controls')
+  const openBtn = card.querySelector<HTMLButtonElement>('.primary-card-open')
+  assert.ok(openBtn !== null && openBtn.tagName === 'BUTTON', 'card header exposes a native button for keyboard activation')
 
-  // Click activation
+  // Click card surface activation
   await act(async () => {
     card.dispatchEvent(new MouseEvent('click', { bubbles: true }))
   })
   assert.equal(selectedCount, 1, 'clicking must trigger onSelect')
 
-  // Enter activation
+  // Clicking the native header button activates once without double-firing
   await act(async () => {
-    card.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    openBtn.click()
   })
-  assert.equal(selectedCount, 2, 'Enter must trigger onSelect')
-
-  // Space activation
-  await act(async () => {
-    card.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }))
-  })
-  assert.equal(selectedCount, 3, 'Space must trigger onSelect')
+  assert.equal(selectedCount, 2, 'clicking the header button must trigger onSelect once')
 
   await act(async () => {
     root.unmount()

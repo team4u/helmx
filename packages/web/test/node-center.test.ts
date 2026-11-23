@@ -262,7 +262,7 @@ test('NodeCard: SSR renders node name, architecture badge, online indicator with
     ),
   )
   assert.match(selectedHtml, /is-selected/)
-  assert.match(selectedHtml, /aria-selected="true"/)
+  assert.match(selectedHtml, /aria-pressed="true"/)
   assert.match(selectedHtml, /GPU 推理集群节点 A/)
   assert.match(selectedHtml, /worker-gpu-1/)
   assert.match(selectedHtml, /linux \/ arm64/)
@@ -309,23 +309,16 @@ test('NodeCard: click and Enter/Space keyboard interaction activate onSelect', {
     )
   })
 
-  const card = container.querySelector('.primary-card') as HTMLElement
+  const card = container.querySelector('.primary-card') as HTMLButtonElement
   assert.ok(card, 'must render .primary-card')
+  assert.equal(card.tagName, 'BUTTON', 'NodeCard uses a native button element for keyboard and pointer accessibility')
+  assert.equal(card.getAttribute('type'), 'button')
+  assert.equal(card.getAttribute('aria-pressed'), 'false')
 
   act(() => {
     card.click()
   })
   assert.equal(selectCount, 1)
-
-  act(() => {
-    card.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
-  })
-  assert.equal(selectCount, 2)
-
-  act(() => {
-    card.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }))
-  })
-  assert.equal(selectCount, 3)
 
   act(() => {
     root.unmount()

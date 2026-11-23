@@ -113,7 +113,7 @@ export function TiersManagerScreen(_props: ScreenProps): ReactNode {
           </>
         }
       >
-        <span className="text-muted text-sm">{t(C.activeSection)} ({draft.length})</span>
+        <span className="text-muted">{t(C.activeSection)} ({draft.length})</span>
       </ScreenToolbar>
 
       {error && <Callout tone="err">{error}</Callout>}
@@ -178,7 +178,7 @@ export function TiersManagerScreen(_props: ScreenProps): ReactNode {
       </ScreenSection>
 
       <ScreenSection title={t(C.templatesSection)}>
-        <p className="text-muted text-sm">{t(C.templateSaveTitle)}</p>
+        <p className="text-muted">{t(C.templateSaveTitle)}</p>
         <div className="tiers-template-form">
           {([['id', C.templateIdLabel, C.templateIdPlaceholder, 'input mono'], ['name', C.templateNameLabel, C.templateNamePlaceholder, 'input'], ['desc', C.templateDescLabel, C.templateDescPlaceholder, 'input']] as const).map(([field, label, ph, cls]) => (
             <label key={field} className="tiers-field">
@@ -192,7 +192,7 @@ export function TiersManagerScreen(_props: ScreenProps): ReactNode {
         </div>
 
         {parsed.templates.length === 0 ? (
-          <p className="text-subtle text-sm">{t(C.templateEmpty)}</p>
+          <p className="text-subtle">{t(C.templateEmpty)}</p>
         ) : (
           <div className="helmx-table-wrap">
             <table className="helmx-table">
@@ -205,8 +205,8 @@ export function TiersManagerScreen(_props: ScreenProps): ReactNode {
                     <td>
                       <div className="flex-col-xs">
                         <span className="flex-row"><strong>{tpl.name}</strong>{parsed.activeTemplate === tpl.id && <span className="badge badge-ok">{t(C.templateActiveBadge)}</span>}</span>
-                        <span className="mono text-subtle text-xs">{tpl.id}</span>
-                        {tpl.description && <span className="text-subtle text-xs">{tpl.description}</span>}
+                        <span className="mono text-subtle">{tpl.id}</span>
+                        {tpl.description && <span className="text-subtle">{tpl.description}</span>}
                       </div>
                     </td>
                     <td>
@@ -218,7 +218,7 @@ export function TiersManagerScreen(_props: ScreenProps): ReactNode {
                         ))}
                       </div>
                     </td>
-                    <td className="mono text-xs">{tpl.updatedAt > 0 ? formatTime(tpl.updatedAt) : '—'}</td>
+                    <td className="mono text-muted">{tpl.updatedAt > 0 ? formatTime(tpl.updatedAt) : '—'}</td>
                     <td>
                       <div className="tiers-row-actions">
                         <button
@@ -274,7 +274,7 @@ export function TiersSettingsPanel(): ReactNode {
   const activeTemplate = parsed.templates.find((tpl) => tpl.id === parsed.activeTemplate)
   return (
     <div className="tiers-settings-body">
-      <p className="text-muted text-sm">{t(C.settingsHint)}</p>
+      <p className="text-muted">{t(C.settingsHint)}</p>
       <KvGrid
         items={[
           { key: t(C.settingsKvActive), value: String(Object.keys(parsed.tiers).length) },

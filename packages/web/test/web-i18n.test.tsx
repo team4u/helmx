@@ -112,7 +112,12 @@ test('useWebLocale consumers switch en -> zh-CN -> en immediately via setLocale'
     const toggle = host.querySelector<HTMLButtonElement>('.split-toggle-btn')
     assert.ok(toggle !== null, 'split toggle renders')
     assert.equal(toggle.getAttribute('aria-label'), 'Side-by-side split', 'renders the en catalog copy by default')
-    assert.equal(toggle.getAttribute('title'), 'Open / close the split view on the right')
+    assert.equal(toggle.getAttribute('title'), null, 'Radix Tooltip trigger omits duplicate native title')
+    await act(async () => { toggle.focus() })
+    assert.equal(
+      document.body.querySelector('.helmx-tooltip-content')?.textContent,
+      'Open / close the split view on the right',
+    )
 
     await act(async () => { store.setLocale('zh-CN') })
     assert.equal(store.getPrefsSlice().locale, 'zh-CN')
@@ -120,7 +125,10 @@ test('useWebLocale consumers switch en -> zh-CN -> en immediately via setLocale'
     assert.ok(toggleZh !== null)
     const toggleZhBtn: HTMLButtonElement = toggleZh
     assert.equal(toggleZhBtn.getAttribute('aria-label'), '并排分屏', 'locale switch re-renders consumers in place')
-    assert.equal(toggleZhBtn.getAttribute('title'), '在右屏并排打开 / 关闭分屏')
+    assert.equal(
+      document.body.querySelector('.helmx-tooltip-content')?.textContent,
+      '在右屏并排打开 / 关闭分屏',
+    )
 
     await act(async () => { store.setLocale('en') })
     assert.equal(store.getPrefsSlice().locale, 'en')

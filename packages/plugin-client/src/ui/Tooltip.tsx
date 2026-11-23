@@ -144,6 +144,11 @@ export function Tooltip({
   if (disabled || !content || !children) {
     return children ?? null
   }
+  // Suppress native browser title tooltip while Radix Tooltip is active to prevent double tooltips.
+  const triggerChild =
+    React.isValidElement<{ title?: string }>(children) && children.props.title !== undefined
+      ? React.cloneElement(children, { title: undefined })
+      : children
   const root = (
     <TooltipPrimitive.Root
       open={open}
@@ -152,7 +157,7 @@ export function Tooltip({
       delayDuration={delayDuration}
     >
       <TooltipPrimitive.Trigger asChild>
-        {children}
+        {triggerChild}
       </TooltipPrimitive.Trigger>
       <TooltipPortal inline={inline}>
         <TooltipContent side={side} align={align} sideOffset={sideOffset} className={className}>

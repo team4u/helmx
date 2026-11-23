@@ -1066,7 +1066,7 @@ test('SSR 渲染回归：Sidebar 包含批量管理按钮与极简无 Emoji 验�
   const html = renderToString(e(HostStoreProviders, { value: store }, e(Sidebar)))
 
   // 智能体分组头部包含 check-square 批量管理按钮
-  assert.ok(html.includes('title="Manage conversations in bulk"'), '应渲染批量管理切换按钮')
+  assert.ok(html.includes('aria-label="Manage conversations in bulk"'), '应渲染批量管理切换按钮')
   assert.ok(html.includes('check-square') || html.includes('lucide'), '应包含 check-square 图标')
 
   // 极简无 Emoji 铁律验证
@@ -1168,7 +1168,7 @@ test('Sidebar 双层导航：Activity Rail 空间切换与系统中心直达（S
   // 默认收起筛选栏：渲染筛选切换按钮与 Cmd-K 按钮，无多余常驻搜索输入
   assert.ok(html.includes('aria-label="Filter agents and topics"'), '渲染智能体筛选开关按钮')
   assert.ok(!html.includes('sidebar-search-input'), '默认收起筛选栏，不常驻渲染搜索输入框')
-  assert.ok(html.includes('title="Open Cmd K global search and command palette"'), 'Cmd-K 按钮保留')
+  assert.ok(html.includes('aria-label="Open Cmd K global search and command palette"'), 'Cmd-K 按钮保留')
 
   // 底栏已移除：系统中心入口收敛到设置空间；changelog 入口住在 Activity Rail 底部（主题钮下方）
   assert.ok(!html.includes('sidebar-footer'), '底栏容器已移除')
@@ -1204,7 +1204,7 @@ test('Sidebar 双层导航：单展开仅当前智能体显示话题子列表，
   assert.ok(convHtml.includes('agent-conversations-list'), '当前智能体渲染话题子列表')
   assert.ok(convHtml.includes('nav-item-sub'), '话题子行使用二级行样式')
   assert.ok(convHtml.includes('>3</span>'), '多会话智能体行展示计数徽标')
-  assert.ok(convHtml.includes('title="Start a new topic under 个人助理"'), '智能体行新建按钮保留（进入待命态）')
+  assert.ok(convHtml.includes('aria-label="Start a new topic under 个人助理"'), '智能体行新建按钮保留（进入待命态）')
   assert.ok(convHtml.includes('class="nav-item agent-standing-row agent-standing-row-branch"'), '进会话时站位行（父）呈分支弱态')
   assert.ok(!convHtml.includes('class="nav-item agent-standing-row nav-item-active"'), '进会话时站位行（父）不亮激活底')
   assert.ok(convHtml.includes('class="nav-item nav-item-sub nav-item-active"'), '当前会话子行（子）唯一点亮')
@@ -1244,6 +1244,168 @@ test('Sidebar 分屏混开 SSR 回归：主屏会话 + 分屏待命且聚焦分�
   assert.ok(html.includes('<span class="nav-pane-tag" title="Open in main view">Main</span>'), '主屏会话子行带「主」微标')
   assert.ok(html.includes('class="nav-item agent-standing-row nav-item-active nav-item-focused"'), '分屏聚焦的待命智能体父行点亮并带焦点刻度')
   assert.ok(html.includes('<span class="nav-pane-tag" title="Open in split view">Split</span>'), '分屏待命父行带「分」微标')
+})
+
+test('ToastOverlay：悬停或聚焦暂停自动关闭计时器，移开后恢复自动关闭', { timeout: 60_000 }, async () => {
+  const { act } = await import('react')
+  const ReactDOMClient = await import('react-dom/client')
+  const { HelmxExternalStore } = await import('../src/lib/helmx-store.js')
+  const { parseLocationHash } = await import('../src/lib/url-hash-model.js')
+  const { ToastOverlay } = await import('../src/shell/ToastOverlay.js')
+  const { waitFor } = await import('@helmx/test-kit')
+
+  const store = new HelmxExternalStore(parseLocationHash('#/c/1'), { infoNoticeDurationMs: 90 })
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = ReactDOMClient.createRoot(container)
+  try {
+    await act(async () => {
+      root.render(e(HostStoreProviders, { value: store }, e(ToastOverlay)))
+    })
+    await act(async () => {
+      store.pushNotice({ type: 'notification', level: 'info', title: 'Build finished', body: 'All green' })
+    })
+    const toastEl = container.querySelector<HTMLElement>('.toast-item')
+    assert.ok(toastEl !== null, 'toast renders immediately')
+
+    // Mouse enter pauses auto-dismiss past the original 90ms window
+    await act(async () => {
+      toastEl.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
+    })
+    await new Promise((resolve) => setTimeout(resolve, 140))
+    assert.equal(store.getNotices().length, 1, 'hovering keeps toast alive past its auto-dismiss duration')
+
+    // Mouse leave resumes the timer and dismisses the toast
+    await act(async () => {
+      toastEl.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }))
+    })
+    await waitFor(() => store.getNotices().length === 0, { timeoutMs: 2000, intervalMs: 15 })
+    assert.ok(container.querySelector('.toast-item') === null, 'toast disappears after hover ends')
+  } finally {
+    store.dispose()
+    await act(async () => {
+      root.unmount()
+    })
+    container.remove()
+  }
+})
+
+test('SplitResizeHandle & split-ratio-model：拖拽、双击重置、键盘步进与持久化夹逼', { timeout: 60_000 }, async () => {
+  const { act, useRef, useState } = await import('react')
+  const ReactDOMClient = await import('react-dom/client')
+  const {
+    clampSplitRatio,
+    DEFAULT_SPLIT_RATIO,
+    loadSplitRatio,
+    MAX_SPLIT_RATIO,
+    MIN_SPLIT_RATIO,
+    saveSplitRatio,
+    SPLIT_RATIO_STORAGE_KEY,
+    stepSplitRatio,
+  } = await import('../src/shell/split-ratio-model.js')
+  const { SplitResizeHandle } = await import('../src/ui/SplitResizeHandle.js')
+
+  // Pure model bounds and storage persistence
+  assert.equal(clampSplitRatio(Number.NaN), DEFAULT_SPLIT_RATIO)
+  assert.equal(clampSplitRatio(0.1), MIN_SPLIT_RATIO)
+  assert.equal(clampSplitRatio(0.95), MAX_SPLIT_RATIO)
+  assert.equal(stepSplitRatio(0.5, 0.05), 0.55)
+  assert.equal(stepSplitRatio(MIN_SPLIT_RATIO, -0.1), MIN_SPLIT_RATIO)
+
+  const mem = new Map<string, string>()
+  const fakeStorage = {
+    getItem: (k: string) => mem.get(k) ?? null,
+    setItem: (k: string, v: string) => { mem.set(k, v) },
+  }
+  assert.equal(loadSplitRatio(fakeStorage), DEFAULT_SPLIT_RATIO)
+  assert.equal(saveSplitRatio(0.62, fakeStorage), 0.62)
+  assert.equal(mem.get(SPLIT_RATIO_STORAGE_KEY), '0.62')
+  assert.equal(loadSplitRatio(fakeStorage), 0.62)
+
+  // Interactive DOM harness
+  const committed: number[] = []
+  let draggingState = false
+  function Harness() {
+    const ref = useRef<HTMLDivElement | null>(null)
+    const [ratio, setRatio] = useState(DEFAULT_SPLIT_RATIO)
+    return e(
+      'div',
+      { ref, className: 'helmx-panes has-split', style: { width: '1000px' } },
+      e(SplitResizeHandle, {
+        ratio,
+        containerRef: ref,
+        onChange: setRatio,
+        onCommit: (next: number) => {
+          setRatio(next)
+          committed.push(next)
+        },
+        onDraggingChange: (d: boolean) => {
+          draggingState = d
+        },
+      }),
+    )
+  }
+
+  const store = makeTestStore({ locale: 'en' })
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = ReactDOMClient.createRoot(container)
+  try {
+    await act(async () => {
+      root.render(e(HostStoreProviders, { value: store }, e(Harness)))
+    })
+    const panes = container.querySelector<HTMLDivElement>('.helmx-panes')
+    const handle = container.querySelector<HTMLDivElement>('.helmx-split-resizer')
+    assert.ok(panes !== null && handle !== null)
+    panes.getBoundingClientRect = () =>
+      ({ left: 0, top: 0, width: 1000, height: 600, right: 1000, bottom: 600, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect
+
+    assert.equal(handle.getAttribute('role'), 'separator')
+    assert.equal(handle.getAttribute('aria-orientation'), 'vertical')
+    assert.equal(handle.getAttribute('aria-valuenow'), '50')
+
+    // Pointer drag to 650px (0.65)
+    await act(async () => {
+      handle.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, pointerId: 1, clientX: 500 }))
+    })
+    assert.equal(draggingState, true)
+    assert.equal(handle.getAttribute('data-dragging'), 'true')
+    await act(async () => {
+      handle.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerId: 1, clientX: 650 }))
+    })
+    assert.equal(handle.getAttribute('aria-valuenow'), '65')
+    await act(async () => {
+      handle.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, clientX: 650 }))
+    })
+    assert.equal(draggingState, false)
+    assert.equal(committed[committed.length - 1], 0.65)
+
+    // Keyboard stepping & reset
+    await act(async () => {
+      handle.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true, cancelable: true }))
+    })
+    assert.equal(handle.getAttribute('aria-valuenow'), '60')
+    await act(async () => {
+      handle.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true, cancelable: true }))
+    })
+    assert.equal(handle.getAttribute('aria-valuenow'), '28')
+    await act(async () => {
+      handle.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true, cancelable: true }))
+    })
+    assert.equal(handle.getAttribute('aria-valuenow'), '72')
+
+    // Double-click resets to 50%
+    await act(async () => {
+      handle.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
+    })
+    assert.equal(handle.getAttribute('aria-valuenow'), '50')
+    assert.equal(committed[committed.length - 1], DEFAULT_SPLIT_RATIO)
+  } finally {
+    await act(async () => {
+      root.unmount()
+    })
+    container.remove()
+  }
 })
 
 

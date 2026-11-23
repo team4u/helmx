@@ -1,4 +1,4 @@
-import { useId, useMemo, useRef, useState } from 'react'
+import { useId, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ToolViewSpec } from '@helmx/protocol/browser'
 import { HelmxIcon, Tooltip, useSharedNowMs } from '@helmx/plugin-client'
@@ -235,26 +235,26 @@ function MultiStepGroup({
   shortcutToggle?: ProcessShortcutCommand
 }) {
   const [userOverride, setUserOverride] = useState<boolean | null>(null)
+  const [prevActive, setPrevActive] = useState(active)
+  const [prevShortcutSeq, setPrevShortcutSeq] = useState<number | undefined>(shortcutToggle?.seq)
+  const [shortcutExpandSeq, setShortcutExpandSeq] = useState<number | null>(null)
   const { t } = useWebLocale()
-  const prevActiveRef = useRef(active)
-  if (prevActiveRef.current !== active) {
-    prevActiveRef.current = active
+  if (prevActive !== active) {
+    setPrevActive(active)
     if (!active && userOverride !== null) {
       setUserOverride(null)
     }
   }
-  const shortcutExpandSeqRef = useRef<number | null>(null)
-  const prevShortcutSeqRef = useRef<number | undefined>(shortcutToggle?.seq)
-  if (shortcutToggle !== undefined && shortcutToggle.seq !== prevShortcutSeqRef.current) {
-    prevShortcutSeqRef.current = shortcutToggle.seq
+  if (shortcutToggle !== undefined && shortcutToggle.seq !== prevShortcutSeq) {
+    setPrevShortcutSeq(shortcutToggle.seq)
     setUserOverride(shortcutToggle.open)
-    shortcutExpandSeqRef.current = shortcutToggle.open ? shortcutToggle.seq : null
+    setShortcutExpandSeq(shortcutToggle.open ? shortcutToggle.seq : null)
   }
   const open = userOverride ?? active
   const openedByCurrentShortcut =
     shortcutToggle !== undefined &&
     shortcutToggle.open &&
-    shortcutExpandSeqRef.current === shortcutToggle.seq
+    shortcutExpandSeq === shortcutToggle.seq
 
   const summary = useMemo(() => summarizeStepGroup(steps), [steps])
   const hasOnlyThinking = steps.every((s) => s.kind === 'thinking')
@@ -288,7 +288,7 @@ function MultiStepGroup({
           aria-expanded={open}
           data-process-toggle="root"
           onClick={() => {
-            shortcutExpandSeqRef.current = null
+            setShortcutExpandSeq(null)
             setUserOverride(!open)
           }}
           title={showTime ? undefined : open ? t('conv.thinking.collapseExec') : t('conv.thinking.expandExec')}
@@ -349,17 +349,17 @@ export function ThinkingRow({
   isRootProcessToggle?: boolean
 }) {
   const [userOverride, setUserOverride] = useState<boolean | null>(null)
+  const [prevActive, setPrevActive] = useState(active)
+  const [prevShortcutSeq, setPrevShortcutSeq] = useState<number | undefined>(shortcutToggle?.seq)
   const { t } = useWebLocale()
-  const prevActiveRef = useRef(active)
-  if (prevActiveRef.current !== active) {
-    prevActiveRef.current = active
+  if (prevActive !== active) {
+    setPrevActive(active)
     if (!active && userOverride !== null) {
       setUserOverride(null)
     }
   }
-  const prevShortcutSeqRef = useRef<number | undefined>(shortcutToggle?.seq)
-  if (shortcutToggle !== undefined && shortcutToggle.seq !== prevShortcutSeqRef.current) {
-    prevShortcutSeqRef.current = shortcutToggle.seq
+  if (shortcutToggle !== undefined && shortcutToggle.seq !== prevShortcutSeq) {
+    setPrevShortcutSeq(shortcutToggle.seq)
     setUserOverride(shortcutToggle.open)
   }
   const open = userOverride ?? (active || defaultOpen)
