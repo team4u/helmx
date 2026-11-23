@@ -1,7 +1,7 @@
 /**
  * Plugin commands: plugins list/enable/disable/config/doc/client, doctor/reload/rescan
  * (DX loop), install/update/remove (managed package management), and actions list.
- * Local offline DX commands live in sibling modules (`plugins-init.ts`, `plugins-build.ts`).
+ * Local offline DX commands live in sibling modules (`plugins-init.ts`, `plugins-types.ts`, `plugins-build.ts`).
  */
 import type {
   ActionManifest,
@@ -20,6 +20,7 @@ import type { HubClient } from '../hub-client.js'
 import { watchJsonSse } from '../stream.js'
 import { pluginsInitCommand } from './plugins-init.js'
 import { pluginsBuildCommand } from './plugins-build.js'
+import { pluginsTypesCommand } from './plugins-types.js'
 import type { CommandContext, CommandSpec } from './shared.js'
 import {
   assertNoExtraPositionals,
@@ -414,7 +415,7 @@ export function pluginsCommands(): CommandSpec[] {
     },
   })
 
-  cmds.push(pluginsInitCommand, pluginsBuildCommand)
+  cmds.push(pluginsInitCommand, pluginsTypesCommand, pluginsBuildCommand)
 
   cmds.push({
     path: ['plugins', 'install'],

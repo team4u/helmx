@@ -67,7 +67,7 @@ Key points:
 
 ## Developing external plugins (~/.helmx/plugins/<dir>/)
 
-Prefer `helmx plugins init <name>` to generate the full skeleton (incl. `plugin.json`, `index.ts`, `client/index.tsx`); you can also hand-place a `plugin.json` declaring `{ "id": "my-plugin", "main": "index.ts", "clientRoot": "./client" }` or a conventional entry (`index.ts` / `index.mjs` / `index.js`).
+Prefer `helmx plugins init <name>` to generate the full skeleton (incl. `plugin.json`, `index.ts`, `client/index.tsx`, `tsconfig.json`, and offline `.helmx/types/` declarations; run `helmx plugins types [dir]` anytime to write or refresh `.helmx/types/` for offline `tsc --noEmit` without modifying existing `tsconfig.json`); you can also hand-place a `plugin.json` declaring `{ "id": "my-plugin", "main": "index.ts", "clientRoot": "./client" }` or a conventional entry (`index.ts` / `index.mjs` / `index.js`).
 
 The server entry directly exports an object satisfying PluginDefinition, where definePlugin(ctx) registers capabilities; TypeScript works directly (the host transpiles and loads along the dependency closure):
 

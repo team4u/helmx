@@ -544,6 +544,21 @@ test('cli bundle: help and honest error paths run for real from the single file'
     });
     assert.notEqual(status.status, 0, 'status against a dead endpoint must not exit 0');
     assert.match(status.stderr, /"error"/, 'the --json failure envelope must land on stderr');
+
+    // offline SDK type snapshot must work directly from the single-file zero-dep bundle without node_modules.
+    const pluginDir = path.join(dataDir, 'offline-plugin');
+    mkdirSync(pluginDir, { recursive: true });
+    const typesRes = spawnSync(process.execPath, [path.join(cliStagingDir, 'index.js'), 'plugins', 'types', pluginDir, '--json'], {
+      cwd: dataDir,
+      encoding: 'utf8',
+      timeout: 50_000,
+      env: { ...process.env, HELMX_DATA_DIR: dataDir, HELMX_HUB_URL: 'http://127.0.0.1:1' },
+    });
+    assert.equal(typesRes.status, 0, `bundled plugins types failed:\nstdout: ${typesRes.stdout}\nstderr: ${typesRes.stderr}`);
+    const typesBody = JSON.parse(typesRes.stdout) as { filesWritten: number; typesDir: string };
+    assert.ok(typesBody.filesWritten >= 10, 'bundled plugins types must materialize the embedded SDK declaration snapshot');
+    assert.ok(existsSync(path.join(pluginDir, '.helmx', 'types', 'protocol', 'index.d.ts')));
+    assert.ok(existsSync(path.join(pluginDir, '.helmx', 'types', 'plugin-client', 'index.d.ts')));
   } finally {
     rmSync(dataDir, { recursive: true, force: true });
   }
