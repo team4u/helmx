@@ -345,7 +345,7 @@ export function useQuietNotifier(): void {
             : () => openTarget({ kind: 'conversation', conversationId: primaryConversationId }),
       })
     }
-  })
+  }, [snapshot, conversations, authenticated, quietNotifyEnabled, sseConnected, locale, openTarget])
 
   useEffect(() => {
     const state = stateRef.current

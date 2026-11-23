@@ -1,7 +1,7 @@
 /**
  * Human / queued / external-origin input pill row for ConversationTimeline.
  */
-import { useId, useState } from 'react'
+import { memo, useId, useState } from 'react'
 import type { ConversationSummary } from '@helmx/protocol/browser'
 import { CopyButton, HelmxIcon } from '@helmx/plugin-client'
 import type { WebMessageTranslator } from '../i18n/catalog.js'
@@ -39,7 +39,7 @@ export interface TimelineHumanMessageProps {
   onWithdrawQueuedEdit: (subId: string, target: EditRequestTarget) => Promise<void>
 }
 
-export function TimelineHumanMessage({
+export const TimelineHumanMessage = memo(function TimelineHumanMessage({
   item,
   conversation,
   onRequestEdit,
@@ -112,7 +112,7 @@ export function TimelineHumanMessage({
     )
 
   return (
-    <div className={`msg-human-row${item.origin !== 'human' ? ' msg-human-row-external' : ''}`} tabIndex={0}>
+    <div className={`msg-human-row${item.origin !== 'human' ? ' msg-human-row-external' : ''}`}>
       {item.queuedMode !== undefined ? (
         <span className="msg-origin-tag" role="status">
           <HelmxIcon name={QUEUED_MODE_ICON[item.queuedMode]} size={11} />
@@ -162,6 +162,7 @@ export function TimelineHumanMessage({
               type="button"
               className="btn btn-ghost btn-sm"
               title={t('conv.human.forkFromMessage')}
+              aria-label={t('conv.human.forkFromMessage')}
               disabled={forking}
               onClick={() => void forkFromHere()}
             >
@@ -175,4 +176,4 @@ export function TimelineHumanMessage({
       </div>
     </div>
   )
-}
+})

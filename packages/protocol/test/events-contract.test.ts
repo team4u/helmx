@@ -413,8 +413,8 @@ test('live-delta: diffConversationLive / applyConversationLiveDelta round-trip m
     conversationId: 42,
     text: 'Hello',
     thinking: 'Plan step 1',
-    tools: [{ id: 't1', name: 'read', status: 'running' }],
-    queuedInputs: [{ id: 'q1', text: 'next', origin: 'human', createdAt: 100 }],
+    tools: [{ callId: 't1', toolName: 'read', status: 'running' }],
+    queuedInputs: [{ id: 'q1', submissionId: '1', text: 'next', mode: 'followUp', origin: 'human', createdAt: 100 }],
     generation: {
       taskId: 10,
       attempt: 1,
@@ -433,8 +433,8 @@ test('live-delta: diffConversationLive / applyConversationLiveDelta round-trip m
     conversationId: 42,
     text: 'Hello world',
     thinking: 'Plan step 1\nstep 2',
-    tools: [{ id: 't1', name: 'read', status: 'running' }],
-    queuedInputs: [{ id: 'q1', text: 'next', origin: 'human', createdAt: 100 }],
+    tools: [{ callId: 't1', toolName: 'read', status: 'running' }],
+    queuedInputs: [{ id: 'q1', submissionId: '1', text: 'next', mode: 'followUp', origin: 'human', createdAt: 100 }],
     generation: {
       taskId: 10,
       attempt: 1,

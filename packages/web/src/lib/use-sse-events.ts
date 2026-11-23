@@ -490,7 +490,10 @@ export function useSseEvents({ store, authenticated, logout, unreadSync }: UseSs
           if (read.chunk.done) break
           lastDataAt = Date.now()
           if (!active) return
-          parser.push(decoder.decode(read.chunk.value, { stream: true }))
+          const decoded = decoder.decode(read.chunk.value, { stream: true })
+          store.runInBatch(() => {
+            parser.push(decoded)
+          })
         }
         if (active) throw new Error('Live connection lost; re-syncing')
       } catch (error) {

@@ -97,7 +97,7 @@ export function NodeDetailDrawer({
 
   const handleIssueToken = async () => {
     if (isNew) {
-      const validation = validateNodeIdInput(newNodeId)
+      const validation = validateNodeIdInput(newNodeId, t)
       if (!validation.ok) {
         setTokenError(validation.error)
         return
@@ -162,8 +162,8 @@ export function NodeDetailDrawer({
   }
 
   const health = node?.health
-  const memUsage = health ? formatUsage(health.memFreeBytes, health.memTotalBytes) : null
-  const diskUsage = health ? formatUsage(health.diskFreeBytes, health.diskTotalBytes) : null
+  const memUsage = health ? formatUsage(health.memFreeBytes, health.memTotalBytes, t) : null
+  const diskUsage = health ? formatUsage(health.diskFreeBytes, health.diskTotalBytes, t) : null
   const uptime = formatUptime(health?.uptimeSec ?? node?.uptimeSec)
   const tools =
     Array.isArray(node?.tools) && node.tools.length > 0

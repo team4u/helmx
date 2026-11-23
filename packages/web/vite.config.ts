@@ -134,7 +134,6 @@ export default defineConfig({
           if (MARKDOWN_PKGS.has(pkg) || pkg.startsWith('mdast-') || pkg.startsWith('hast-') || pkg.startsWith('micromark') || pkg.startsWith('unist-')) {
             return 'vendor-markdown'
           }
-          if (pkg === 'ajv') return 'vendor-ajv'
           return undefined
         },
       },

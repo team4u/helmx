@@ -79,7 +79,7 @@ export interface TabsListProps extends React.ComponentPropsWithoutRef<typeof Tab
 }
 
 export const TabsList = forwardRef<React.ComponentRef<typeof TabsPrimitive.List>, TabsListProps>(
-  function TabsList({ variant: variantProp, size: sizeProp, className = '', ...props }, ref) {
+  function TabsList({ variant: variantProp, size: _size, className = '', ...props }, ref) {
     const context = useContext(TabsContext)
     const variant = variantProp ?? context.variant
     const isSegmented = variant === 'segmented' || className.includes('segmented-control')

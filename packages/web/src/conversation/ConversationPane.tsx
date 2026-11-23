@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { conversationsApi } from '../lib/api.js'
 import type { ConversationAttachmentRef, ConversationEntry, ConversationSummary } from '@helmx/protocol/browser'
 import {
@@ -38,15 +38,22 @@ import {
   useWorkbenchState,
 } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
+import { useStableCallback } from '../lib/use-stable-callback.js'
 import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
 import { Composer } from './Composer.js'
 import { formatEnvSubtitle, sendingPendingVisible } from './composer-model.js'
 import { ConversationOutlinePopover, type OutlineJumpTarget } from './ConversationOutlinePopover.js'
 import { ConversationTimeline, type OutlineScrollRequest } from './ConversationTimeline.js'
-import { buildConversationOutline, resolveOutlineNodeKey, type OutlineAnchor } from './outline-model.js'
+import {
+  buildConversationOutline,
+  countTimelineHumanTurns,
+  resolveOutlineNodeKey,
+  type OutlineAnchor,
+  type OutlineNode,
+} from './outline-model.js'
 import { resolveActiveWorkbenchTab, summarizeWorkbenchBadge } from './workbench-model.js'
 import { useWorkbenchTabs } from './workbench-hooks.js'
-import { buildTimelineItems, type EditRequestTarget } from './timeline-model.js'
+import { buildLiveTimelineTail, buildSettledTimelinePrefix, type EditRequestTarget } from './timeline-model.js'
 import { conversationDurationNeedsLiveClock } from './conversation-duration-model.js'
 import {
   formatDurationMs,
@@ -56,6 +63,7 @@ import {
 } from '../lib/format.js'
 
 const EMPTY_ENTRIES: ReadonlyArray<ConversationEntry> = []
+const EMPTY_OUTLINE_NODES: ReadonlyArray<OutlineNode> = []
 
 /** 顶栏标题浮层内的时间与耗时明细：仅在 Popover 打开并挂载时订阅共享时钟，关闭即零定时器。 */
 function ConversationTitleTimingMeta({ conversation }: { conversation: ConversationSummary }) {
@@ -151,6 +159,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
   const [prefill, setPrefill] = useState<{ text: string; entryId?: number; attachments?: ConversationAttachmentRef[]; tick: number; onlyIfEmpty?: boolean } | null>(null)
   const [sendingInFlight, setSendingInFlight] = useState(false)
   const [confirmAction, setConfirmAction] = useState<'reset' | 'delete' | null>(null)
+  const [outlineOpen, setOutlineOpen] = useState(false)
   const [outlineScrollReq, setOutlineScrollReq] = useState<OutlineScrollRequest | null>(null)
   const [activeOutlineAnchor, setActiveOutlineAnchor] = useState<OutlineAnchor | undefined>(undefined)
   const [loadingOlderOutline, setLoadingOlderOutline] = useState(false)
@@ -165,26 +174,51 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
   const isCompacting = conversation?.contextUsage?.compacting === true
   const compactPending = actionPending === 'compact' || isCompacting
   const detailEntries = detail?.entries ?? EMPTY_ENTRIES
-  const timelineItems = useMemo(
+  const settledTimelinePrefix = useMemo(
     () =>
-      buildTimelineItems(detailEntries, {
-        ...(live !== undefined ? { live } : {}),
-        working: isWorking,
-        compacting: isCompacting,
+      buildSettledTimelinePrefix(detailEntries, {
         timelineRenderers: groupedUi.timelineRenderers,
         toolViews: groupedUi.toolViews,
       }),
-    [detailEntries, live, isWorking, isCompacting, groupedUi.timelineRenderers, groupedUi.toolViews],
+    [detailEntries, groupedUi.timelineRenderers, groupedUi.toolViews],
   )
+  const timelineTail = useMemo(
+    () =>
+      buildLiveTimelineTail(settledTimelinePrefix, {
+        ...(live !== undefined ? { live } : {}),
+        working: isWorking,
+        compacting: isCompacting,
+        toolViews: groupedUi.toolViews,
+      }),
+    [settledTimelinePrefix, live, isWorking, isCompacting, groupedUi.toolViews],
+  )
+  const timelineItems = useMemo(
+    () =>
+      timelineTail.length === 0
+        ? settledTimelinePrefix.items
+        : [...settledTimelinePrefix.items, ...timelineTail],
+    [settledTimelinePrefix.items, timelineTail],
+  )
+  const outlineTurnCount = useMemo(() => countTimelineHumanTurns(timelineItems), [timelineItems])
   const outlineNodes = useMemo(
-    () => buildConversationOutline(timelineItems, { latestAssistantTurnFailed: conversation?.status === 'error' }),
-    [timelineItems, conversation?.status],
+    () =>
+      outlineOpen
+        ? buildConversationOutline(
+            timelineItems,
+            { latestAssistantTurnFailed: conversation?.status === 'error' },
+            t,
+          )
+        : EMPTY_OUTLINE_NODES,
+    [outlineOpen, timelineItems, conversation?.status, t],
   )
   // 大纲当前项唯一通路：阅读锚点（entryId + 回合内 headingIndex / cardId）映射为单个节点 key，
   // 同一助手回合的多个标题节点不会一起高亮。
   const activeOutlineNodeKey = useMemo(
-    () => (activeOutlineAnchor === undefined ? undefined : resolveOutlineNodeKey(outlineNodes, activeOutlineAnchor)),
-    [outlineNodes, activeOutlineAnchor],
+    () =>
+      !outlineOpen || activeOutlineAnchor === undefined
+        ? undefined
+        : resolveOutlineNodeKey(outlineNodes, activeOutlineAnchor),
+    [outlineOpen, outlineNodes, activeOutlineAnchor],
   )
 
   useEffect(() => {
@@ -198,6 +232,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
     if (prevConversationIdRef.current === conversationId) return
     prevConversationIdRef.current = conversationId
     setMoreOpen(false)
+    setOutlineOpen(false)
     setOutlineScrollReq(null)
     setActiveOutlineAnchor(undefined)
     setPrefill(null)
@@ -208,11 +243,12 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
   useEffect(() => {
     if (staged) return
     setMoreOpen(false)
+    setOutlineOpen(false)
     setConfirmAction(null)
     setRenaming(false)
   }, [staged])
 
-  const jumpToOutlineTarget = (target: OutlineJumpTarget): void => {
+  const jumpToOutlineTarget = useCallback((target: OutlineJumpTarget): void => {
     outlineTickRef.current += 1
     setOutlineScrollReq({
       entryId: target.entryId,
@@ -220,13 +256,45 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
       ...(target.cardId !== undefined ? { cardId: target.cardId } : {}),
       tick: outlineTickRef.current,
     })
-  }
+  }, [])
 
-  const loadEarlierForOutline = (): void => {
+  const loadEarlierForOutline = useStableCallback((): void => {
     if (loadingOlderOutline || !detail?.nextCursor) return
     setLoadingOlderOutline(true)
     void loadEarlierEntries(conversationId).finally(() => setLoadingOlderOutline(false))
-  }
+  })
+
+  const requestEdit = useCallback((target: EditRequestTarget): void => {
+    // prefill 绑定会话 id：即使未来 Pane 复用不重挂载，旧会话的编辑目标也不会注入新会话 Composer
+    if (target.text.trim() === '' && target.entryId === undefined) {
+      setPrefill(null)
+      return
+    }
+    prefillTickRef.current += 1
+    setPrefill({ ...target, tick: prefillTickRef.current })
+  }, [])
+
+  // 空白会话引导词：仅回填草稿（onlyIfEmpty 交 Composer 原子保护，非空草稿不覆盖）
+  const requestStarter = useCallback((text: string): void => {
+    prefillTickRef.current += 1
+    setPrefill({ text, tick: prefillTickRef.current, onlyIfEmpty: true })
+  }, [])
+
+  // 新话题：进入该智能体待命页并继承当前会话环境（远端节点/目录不回落本机）；
+  // 首次发送才创建会话，不再预建空会话。
+  const startNewThread = useStableCallback((): void => {
+    if (conversation === undefined) return
+    const targetNodeId = conversation.nodeId || 'local'
+    openTarget(
+      {
+        kind: 'agent',
+        profileId: conversation.profileId,
+        ...(targetNodeId !== 'local' ? { nodeId: targetNodeId } : {}),
+        ...(conversation.cwd !== '' ? { cwd: conversation.cwd } : {}),
+      },
+      isSplit ? { split: true } : undefined,
+    )
+  })
 
   // 工作台汇总角标：内置产物计数 + 各插件面板 badge（从 public doc 动态提取）。
   const workbenchTabs = useWorkbenchTabs(conversationId, conversation)
@@ -273,17 +341,23 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
   const workbenchCount = workbenchBadge.totalCount
   const workbenchBadgeClass = workbenchBadge.tone === 'warn' ? 'badge-warn' : workbenchBadge.tone === 'accent' ? 'badge-accent' : 'badge-neutral'
   const currentNodeId = conversation.nodeId || 'local'
-  const envSubtitle = formatEnvSubtitle({
-    profileId: conversation.profileId,
-    nodeId: currentNodeId,
-    cwd: conversation.cwd,
-  })
-  const envSubtitleCompact = formatEnvSubtitle({
-    profileId: conversation.profileId,
-    nodeId: currentNodeId,
-    cwd: conversation.cwd,
-    compact: true,
-  })
+  const envSubtitle = formatEnvSubtitle(
+    {
+      profileId: conversation.profileId,
+      nodeId: currentNodeId,
+      cwd: conversation.cwd,
+    },
+    t,
+  )
+  const envSubtitleCompact = formatEnvSubtitle(
+    {
+      profileId: conversation.profileId,
+      nodeId: currentNodeId,
+      cwd: conversation.cwd,
+      compact: true,
+    },
+    t,
+  )
   const remoteNodeTag = envSubtitleCompact.text !== '' ? envSubtitleCompact.text : null
 
   const runAction = async (name: string, fn: () => Promise<unknown>, successTitle: string): Promise<void> => {
@@ -335,22 +409,6 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
     await runAction('rename', () => conversationsApi.patch(conversationId, { title: next }), t('conv.pane.conversationRenamed'))
   }
 
-  const requestEdit = (target: EditRequestTarget): void => {
-    // prefill 绑定会话 id：即使未来 Pane 复用不重挂载，旧会话的编辑目标也不会注入新会话 Composer
-    if (target.text.trim() === '' && target.entryId === undefined) {
-      setPrefill(null)
-      return
-    }
-    prefillTickRef.current += 1
-    setPrefill({ ...target, tick: prefillTickRef.current })
-  }
-
-  // 空白会话引导词：仅回填草稿（onlyIfEmpty 交 Composer 原子保护，非空草稿不覆盖）
-  const requestStarter = (text: string): void => {
-    prefillTickRef.current += 1
-    setPrefill({ text, tick: prefillTickRef.current, onlyIfEmpty: true })
-  }
-
   const toggleSplit = (): void => {
     if (isSplit) {
       onCloseSplit?.()
@@ -361,20 +419,6 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
       return
     }
     openTarget({ kind: 'conversation', conversationId }, { split: true })
-  }
-
-  // 新话题：进入该智能体待命页并继承当前会话环境（远端节点/目录不回落本机）；
-  // 首次发送才创建会话，不再预建空会话。
-  const startNewThread = (): void => {
-    openTarget(
-      {
-        kind: 'agent',
-        profileId: conversation.profileId,
-        ...(currentNodeId !== 'local' ? { nodeId: currentNodeId } : {}),
-        ...(conversation.cwd !== '' ? { cwd: conversation.cwd } : {}),
-      },
-      isSplit ? { split: true } : undefined,
-    )
   }
 
   return (
@@ -467,6 +511,10 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
         </div>
         <div className="pane-actions">
           <ConversationOutlinePopover
+            open={outlineOpen}
+            onOpenChange={setOutlineOpen}
+            hasItems={timelineItems.length > 0}
+            badgeCount={outlineTurnCount}
             nodes={outlineNodes}
             activeNodeKey={activeOutlineNodeKey}
             totalRunMs={conversation.runDurationMs}
@@ -699,6 +747,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
         detailEntries={detailEntries}
         timelineItems={timelineItems}
         sendingPending={sendingPending}
+        outlineOpen={outlineOpen}
         outlineScrollRequest={outlineScrollReq}
         onActiveOutlineChange={setActiveOutlineAnchor}
         {...(live !== undefined ? { live } : {})}

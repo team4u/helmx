@@ -76,6 +76,7 @@ import {
   ESC_ABORT_NOTICE_ID,
   hasNotifyChanges,
   isSameAskArray,
+  mergeNotifyPlan,
   shallowEqualAuth,
 } from './store/helpers.js'
 import { createStoreNavActions, type StoreNavActions } from './store/nav-actions.js'
@@ -187,6 +188,8 @@ export class HelmxExternalStore {
   }
   private noticesState: ToastNotice[] = []
   private fullSnapshotCache: HelmxStoreValue | null = null
+  private batchDepth = 0
+  private batchPlan: NotifyPlan | null = null
 
   private noticeSequence = 0
   private readonly infoNoticeDurationMs: number
@@ -577,7 +580,31 @@ export class HelmxExternalStore {
     if (!hasNotifyChanges(plan)) return
     this.fullSnapshotCache = null
     this.navActions.reconcileEscAbort(plan)
+    if (this.batchDepth > 0 && this.batchPlan !== null) {
+      mergeNotifyPlan(this.batchPlan, plan)
+      return
+    }
     this.bus.dispatch(plan)
+  }
+
+  /** Coalesce all synchronous store mutations within `fn` into a single deduplicated listener flush. */
+  runInBatch = <T>(fn: () => T): T => {
+    this.batchDepth += 1
+    if (this.batchPlan === null) {
+      this.batchPlan = emptyPlan()
+    }
+    try {
+      return fn()
+    } finally {
+      this.batchDepth -= 1
+      if (this.batchDepth === 0 && this.batchPlan !== null) {
+        const accumulated = this.batchPlan
+        this.batchPlan = null
+        if (hasNotifyChanges(accumulated)) {
+          this.bus.dispatch(accumulated)
+        }
+      }
+    }
   }
 
   // ---- Internal Mutators (also form the hydration surface for test/helpers/store.ts) ----

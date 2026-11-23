@@ -190,7 +190,12 @@ function makeToolTrace(
   }
 }
 
-function flushTurn(acc: TurnAcc | null, items: TimelineItem[], live: boolean): void {
+function flushTurn(
+  acc: TurnAcc | null,
+  items: TimelineItem[],
+  live: boolean,
+  fallbackPrevKey = 'root',
+): void {
   if (acc === null) return
   if (live) {
     for (const seg of acc.segments) {
@@ -201,7 +206,7 @@ function flushTurn(acc: TurnAcc | null, items: TimelineItem[], live: boolean): v
   }
   const segments = foldTurnSegments(acc.segments, live)
   if (segments.length === 0) return
-  const prevKey = items.length > 0 ? items[items.length - 1]!.key : 'root'
+  const prevKey = items.length > 0 ? items[items.length - 1]!.key : fallbackPrevKey
   const spanDurationMs =
     acc.startedAt !== undefined && acc.settledAt !== undefined && acc.settledAt > acc.startedAt
       ? acc.settledAt - acc.startedAt
@@ -499,14 +504,25 @@ function mergeLiveIntoTurn(
   }
 }
 
+export interface SettledTimelinePrefix {
+  readonly items: TimelineItem[]
+  readonly tailTurnEntries: ReadonlyArray<ConversationEntry>
+  readonly seenInputIds: ReadonlySet<string>
+  readonly lastItemKey: string
+}
+
 /**
- * Main timeline normalization function.
- * Input contract: entries are in chronological order (old -> new, guaranteed by getConversationDetail).
+ * Memo-friendly settled prefix builder: normalizes every closed historical turn, human input,
+ * plugin card, and divider independently of `live` / `working` / `compacting`, isolating only
+ * the trailing open assistant turn entries (`tailTurnEntries`) for {@link buildLiveTimelineTail}.
+ *
+ * Historical `TimelineItem` and `ToolTrace` instances in `items` retain strict `===` identity
+ * across all streaming token deltas.
  */
-export function buildTimelineItems(
+export function buildSettledTimelinePrefix(
   entries: ReadonlyArray<ConversationEntry>,
-  options: BuildTimelineOptions = {},
-): TimelineItem[] {
+  options: Pick<BuildTimelineOptions, 'timelineRenderers' | 'toolViews'> = {},
+): SettledTimelinePrefix {
   const activeEntries = filterRewoundEntries(entries)
   const sortedRenderers =
     options.timelineRenderers !== undefined && options.timelineRenderers.length > 0
@@ -516,11 +532,17 @@ export function buildTimelineItems(
   const items: TimelineItem[] = []
   const seenInputIds = new Set<string>()
   let turn: TurnAcc | null = null
+  let tailTurnEntries: ConversationEntry[] = []
   let lastHumanInputText: string | undefined
 
-  const pushHuman = (entry: ConversationEntry, data: HelmxInputData, fallback: boolean): void => {
+  const closeSettledTurn = (): void => {
     flushTurn(turn, items, false)
     turn = null
+    tailTurnEntries = []
+  }
+
+  const pushHuman = (entry: ConversationEntry, data: HelmxInputData, fallback: boolean): void => {
+    closeSettledTurn()
     const createdAt =
       typeof data.createdAt === 'number' && Number.isFinite(data.createdAt) && data.createdAt > 0
         ? data.createdAt
@@ -551,8 +573,7 @@ export function buildTimelineItems(
           if (data.id !== undefined) seenInputIds.add(data.id)
         }
       }
-      flushTurn(turn, items, false)
-      turn = null
+      closeSettledTurn()
       items.push({ kind: 'plugin-card', key: `card:${entry.id}`, entryId: entry.id, entry, renderer })
       continue
     }
@@ -583,23 +604,23 @@ export function buildTimelineItems(
           modelIdentity !== undefined &&
           !sameAssistantModelIdentity(modelIdentity, turn.modelReference)
         ) {
-          flushTurn(turn, items, false)
-          turn = newTurn()
+          closeSettledTurn()
         }
         if (turn === null) turn = newTurn()
         appendAssistantEntry(turn, entry, toolViewByName, modelIdentity)
+        tailTurnEntries.push(entry)
         break
       }
       case 'pi.tool-result': {
         if (turn === null) turn = newTurn()
         appendToolResultEntry(turn, entry, toolViewByName)
+        tailTurnEntries.push(entry)
         break
       }
       case 'pi.reset': {
         const dataText = isStringRecord(entry.data) && typeof entry.data.handoff === 'string' ? entry.data.handoff : undefined
         const handoff = dataText !== undefined && dataText !== '' ? dataText : extractUserMessageText(entry)
-        flushTurn(turn, items, false)
-        turn = null
+        closeSettledTurn()
         lastHumanInputText = undefined
         items.push({
           kind: 'divider',
@@ -612,8 +633,7 @@ export function buildTimelineItems(
       }
       case 'pi.compaction': {
         const summary = extractUserMessageText(entry)
-        flushTurn(turn, items, false)
-        turn = null
+        closeSettledTurn()
         lastHumanInputText = undefined
         items.push({
           kind: 'divider',
@@ -630,15 +650,46 @@ export function buildTimelineItems(
     }
   }
 
+  return {
+    items,
+    tailTurnEntries,
+    seenInputIds,
+    lastItemKey: items.length > 0 ? items[items.length - 1]!.key : 'root',
+  }
+}
+
+/**
+ * Rebuilds only the trailing assistant turn + live stream (`thinking`, mid-turn `tools` stitching,
+ * `text`), pending compaction divider, and deduplicated `queuedInputs` (`queued-pill` /
+ * `queued-transition`) on top of {@link SettledTimelinePrefix}.
+ */
+export function buildLiveTimelineTail(
+  prefix: SettledTimelinePrefix,
+  options: BuildTimelineOptions = {},
+): TimelineItem[] {
+  const toolViewByName = buildToolViewIndex(options.toolViews)
+  const tailItems: TimelineItem[] = []
+  let turn: TurnAcc | null = null
+
+  for (const entry of prefix.tailTurnEntries) {
+    if (entry.kind === 'pi.assistant') {
+      if (turn === null) turn = newTurn()
+      appendAssistantEntry(turn, entry, toolViewByName, parseAssistantModelIdentity(entry))
+    } else if (entry.kind === 'pi.tool-result') {
+      if (turn === null) turn = newTurn()
+      appendToolResultEntry(turn, entry, toolViewByName)
+    }
+  }
+
   const isLive = options.working ?? (options.live !== undefined)
   if (options.live !== undefined) {
     if (turn === null) turn = newTurn()
     mergeLiveIntoTurn(turn, options.live, toolViewByName)
   }
-  flushTurn(turn, items, isLive)
+  flushTurn(turn, tailItems, isLive, prefix.lastItemKey)
 
   if (options.compacting === true) {
-    items.push({
+    tailItems.push({
       kind: 'divider',
       key: 'divider:compacting',
       entryId: 'compacting:live',
@@ -647,25 +698,42 @@ export function buildTimelineItems(
     })
   }
 
-  for (const q of options.live?.queuedInputs ?? []) {
-    if (typeof q?.id !== 'string' || q.id === '' || typeof q.text !== 'string') continue
-    if (q.mode !== 'steer' && q.mode !== 'followUp') continue
-    if (seenInputIds.has(q.id)) continue
-    seenInputIds.add(q.id)
-    items.push({
-      kind: 'human',
-      key: `human:id:${q.id}`,
-      entryId: `queued:${q.submissionId}`,
-      inputId: q.id,
-      text: q.text,
-      origin: q.origin === 'agent' || q.origin === 'trigger' ? q.origin : 'human',
-      ...(Array.isArray(q.attachments) && q.attachments.length > 0 ? { attachments: q.attachments } : {}),
-      ...(typeof q.createdAt === 'number' && Number.isFinite(q.createdAt) && q.createdAt > 0
-        ? { createdAt: q.createdAt }
-        : {}),
-      fallback: false,
-      queuedMode: q.mode,
-    })
+  const queuedInputs = options.live?.queuedInputs
+  if (queuedInputs !== undefined && queuedInputs.length > 0) {
+    const tailSeenIds = new Set<string>()
+    for (const q of queuedInputs) {
+      if (typeof q?.id !== 'string' || q.id === '' || typeof q.text !== 'string') continue
+      if (q.mode !== 'steer' && q.mode !== 'followUp') continue
+      if (prefix.seenInputIds.has(q.id) || tailSeenIds.has(q.id)) continue
+      tailSeenIds.add(q.id)
+      tailItems.push({
+        kind: 'human',
+        key: `human:id:${q.id}`,
+        entryId: `queued:${q.submissionId}`,
+        inputId: q.id,
+        text: q.text,
+        origin: q.origin === 'agent' || q.origin === 'trigger' ? q.origin : 'human',
+        ...(Array.isArray(q.attachments) && q.attachments.length > 0 ? { attachments: q.attachments } : {}),
+        ...(typeof q.createdAt === 'number' && Number.isFinite(q.createdAt) && q.createdAt > 0
+          ? { createdAt: q.createdAt }
+          : {}),
+        fallback: false,
+        queuedMode: q.mode,
+      })
+    }
   }
-  return items
+  return tailItems
+}
+
+/**
+ * Main timeline normalization function.
+ * Input contract: entries are in chronological order (old -> new, guaranteed by getConversationDetail).
+ */
+export function buildTimelineItems(
+  entries: ReadonlyArray<ConversationEntry>,
+  options: BuildTimelineOptions = {},
+): TimelineItem[] {
+  const prefix = buildSettledTimelinePrefix(entries, options)
+  const tail = buildLiveTimelineTail(prefix, options)
+  return tail.length === 0 ? prefix.items : [...prefix.items, ...tail]
 }

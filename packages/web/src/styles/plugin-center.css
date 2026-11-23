@@ -203,22 +203,6 @@
   cursor: default;
 }
 
-/* 插件卡片悬停操作条：与消息 hover 条同语义（纯图标、悬停/聚焦可见） */
-.plugin-card-hover-bar {
-  opacity: 0;
-  transition: opacity 120ms ease;
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  width: fit-content;
-  max-width: max-content;
-}
-
-.plugin-card:hover .plugin-card-hover-bar,
-.plugin-card:focus-within .plugin-card-hover-bar {
-  opacity: 1;
-}
-
 /* --------------------------------------------------------------------------
  * 全屏插件中心：插件详情抽屉内部区块（外层抽屉壳复用 SDK DetailDrawer / .primary-drawer-*）
  * -------------------------------------------------------------------------- */
@@ -526,13 +510,6 @@
 
 .plugin-remove-confirm {
   max-width: 460px;
-}
-
-.plugin-remove-confirm-desc {
-  font-size: 12.5px;
-  line-height: 1.55;
-  color: var(--fg-muted);
-  word-break: break-all;
 }
 
 .plugin-drawer-failed-note {

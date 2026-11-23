@@ -35,9 +35,80 @@ function hasWorkingIntersectionObserver(): boolean {
   return true
 }
 
+interface SharedObserverPoolEntry {
+  observer: IntersectionObserver
+  callbacks: Map<Element, () => void>
+}
+
+const observerPoolsByCtor = new WeakMap<
+  typeof IntersectionObserver,
+  Map<Element | null, Map<string, SharedObserverPoolEntry>>
+>()
+
+function observeInSharedPool(
+  root: Element | null,
+  rootMargin: string,
+  target: Element,
+  onVisible: () => void,
+): () => void {
+  const Ctor = IntersectionObserver
+  let byRoot = observerPoolsByCtor.get(Ctor)
+  if (byRoot === undefined) {
+    byRoot = new Map()
+    observerPoolsByCtor.set(Ctor, byRoot)
+  }
+  let byMargin = byRoot.get(root)
+  if (byMargin === undefined) {
+    byMargin = new Map()
+    byRoot.set(root, byMargin)
+  }
+
+  const cleanupTarget = (el: Element): void => {
+    const currentMarginMap = byRoot?.get(root)
+    const entry = currentMarginMap?.get(rootMargin)
+    if (entry === undefined) return
+    if (!entry.callbacks.delete(el)) return
+    if (typeof entry.observer.unobserve === 'function') {
+      entry.observer.unobserve(el)
+    }
+    if (entry.callbacks.size === 0) {
+      entry.observer.disconnect()
+      currentMarginMap?.delete(rootMargin)
+      if (currentMarginMap !== undefined && currentMarginMap.size === 0) {
+        byRoot?.delete(root)
+      }
+    }
+  }
+
+  let poolEntry = byMargin.get(rootMargin)
+  if (poolEntry === undefined) {
+    const callbacks = new Map<Element, () => void>()
+    const observer = new Ctor(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting || entry.intersectionRatio > 0) {
+            const cb = callbacks.get(entry.target)
+            if (cb !== undefined) {
+              cleanupTarget(entry.target)
+              cb()
+            }
+          }
+        }
+      },
+      { root, rootMargin },
+    )
+    poolEntry = { observer, callbacks }
+    byMargin.set(rootMargin, poolEntry)
+  }
+
+  poolEntry.callbacks.set(target, onVisible)
+  poolEntry.observer.observe(target)
+  return () => cleanupTarget(target)
+}
+
 /**
  * Near-viewport one-way lazy mount wrapper.
- * Observes via `IntersectionObserver` (with `rootMargin: '400px 0px'` by default)
+ * Pools a single `IntersectionObserver` per `(scrollRoot, rootMargin)` (with `rootMargin: '400px 0px'` by default)
  * and unwraps directly to `children` once near-visible, never unmounting afterward.
  * Falls back to immediate mounting in SSR / environments without working IO.
  */
@@ -64,20 +135,9 @@ export function LazyMount({
       return
     }
     const root = slotEl.closest('.timeline-scroll') ?? null
-    const observer = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          if (entry.isIntersecting || entry.intersectionRatio > 0) {
-            setMounted(true)
-            observer.disconnect()
-            return
-          }
-        }
-      },
-      { root, rootMargin },
-    )
-    observer.observe(slotEl)
-    return () => observer.disconnect()
+    return observeInSharedPool(root, rootMargin, slotEl, () => {
+      setMounted(true)
+    })
   }, [eager, mounted, slotEl, rootMargin])
 
   if (mounted) return children

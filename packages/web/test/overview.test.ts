@@ -53,6 +53,7 @@ import {
 import { buildAgentStandings } from '../src/shell/sidebar-model.js'
 import { formatLocationHash, hashHasPrimaryTarget, parseLocationHash, shouldPushLocationHistory } from '../src/lib/url-hash-model.js'
 import { spaceForTarget } from '../src/lib/types.js'
+import { waitForCondition } from './helpers/dom-harness.js'
 import { makeTestStore, HelmxExternalStoreContext, type TestStoreOverrides } from './helpers/store.js'
 import type { HelmxExternalStore } from '../src/lib/helmx-store.js'
 
@@ -1571,12 +1572,16 @@ test('ConversationOverview search box narrows by title/summary and rides the q r
     })
     assert.equal(mount.container.querySelectorAll('.overview-card').length, 1, 'the query narrows the grid')
     assert.ok(mount.container.querySelector('.overview-card')?.textContent?.includes('在跑的调研'))
+    assert.ok(mount.container.textContent?.includes('1 of 3 conversation groups'), 'the stats line states visible over total')
+    await waitForCondition(() => {
+      const target = store.getNavSlice().primaryTarget
+      return target.kind === 'overview' && target.params?.q === '调研'
+    })
     assert.deepEqual(
       store.getNavSlice().primaryTarget,
       { kind: 'overview', params: { q: '调研' } },
-      'the query persists into the q route param',
+      'the query persists into the q route param after debounce',
     )
-    assert.ok(mount.container.textContent?.includes('1 of 3 conversation groups'), 'the stats line states visible over total')
     const clear = mount.container.querySelector<HTMLButtonElement>('.overview-search-clear')
     assert.ok(clear !== null, 'a non-empty query renders the clear button')
     await act(async () => {

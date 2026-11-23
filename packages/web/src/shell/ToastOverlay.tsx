@@ -1,7 +1,7 @@
 import { HelmxIcon } from '@helmx/plugin-client'
 import type { ConversationSummary } from '@helmx/protocol/browser'
 import { useConversations, useNotices, useStoreActions } from '../lib/store-context.js'
-import { resolveTargetString, type ResolvedTarget } from '../lib/types.js'
+import { resolveTargetString, type ResolvedTarget, type ToastNotice } from '../lib/types.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 
 /**
@@ -28,12 +28,10 @@ function resolveNoticeTarget(
   return null
 }
 
-export function ToastOverlay() {
-  const notices = useNotices()
+function ToastOverlayList({ notices }: { notices: ReadonlyArray<ToastNotice> }) {
   const conversations = useConversations()
   const { openTarget, dismissNotice, pauseNoticeTimer, resumeNoticeTimer } = useStoreActions()
   const { t } = useWebLocale()
-  if (notices.length === 0) return null
 
   return (
     <div className="toast-overlay">
@@ -105,4 +103,10 @@ export function ToastOverlay() {
       })}
     </div>
   )
+}
+
+export function ToastOverlay() {
+  const notices = useNotices()
+  if (notices.length === 0) return null
+  return <ToastOverlayList notices={notices} />
 }

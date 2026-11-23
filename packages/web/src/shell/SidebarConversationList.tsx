@@ -15,7 +15,7 @@
  * - 移动端防误关契约：多角色下拉触发按钮不挂 .nav-item，展开子会话与行尾动作菜单均显式 stopPropagation，
  *   避免冒泡触发 App 外层 .nav-item 关闭移动端抽屉。
  */
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react'
+import { memo, useCallback, useEffect, useId, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -36,12 +36,12 @@ import {
   buildOverviewCards,
   buildSidebarGroupedWorkingSet,
   loadSidebarGroupBy,
-  resolveOverviewCardTiming,
-  resolveOverviewDescendantChipTiming,
+  resolveOverviewCardRunStartedAt,
+  resolveOverviewCardWaitingSince,
+  resolveOverviewDescendantChipAnchor,
   resolveSidebarOverviewDescendants,
   resolveSidebarOverviewPrimaryTarget,
   saveSidebarGroupBy,
-  sidebarOverviewCardsNeedLiveClock,
   type OverviewCard,
   type OverviewDescendant,
   type OverviewGroupBy,
@@ -181,25 +181,60 @@ function SidebarNewTopicRow({
   )
 }
 
-/** 侧栏工作集单棵树：紧凑双行主项 + 按需展开的缩进子会话行。 */
-function SidebarWorkingSetTreeItem({
-  card,
-  descendantSlice,
-  expanded,
-  nowMs,
-  store,
-  viewedConversationIds,
-  hideProfileMeta = false,
-  hideNodeMeta = false,
-  onOpenConversation,
-  onDrawerPeek,
-  onOpenSplit,
-  onToggleExpanded,
+/** 叶子秒表组件：将 1Hz `useSharedNowMs` 订阅收窄至单个计时文本节点，避免侧栏整树每秒重渲染。 */
+function ElapsedTimer({
+  since,
+  prefixLabel,
+  className,
+  leadingSeparator = false,
+  trailingSeparator = false,
 }: {
+  since?: number
+  prefixLabel?: string
+  className: string
+  leadingSeparator?: boolean
+  trailingSeparator?: boolean
+}): ReactNode {
+  const nowMs = useSharedNowMs(since !== undefined)
+  if (since === undefined || nowMs === undefined) {
+    if (prefixLabel !== undefined) {
+      return (
+        <span className={className} title={prefixLabel}>
+          {prefixLabel}
+        </span>
+      )
+    }
+    return leadingSeparator && trailingSeparator ? (
+      <span className="sidebar-overview-meta-sep" aria-hidden="true">
+        ·
+      </span>
+    ) : null
+  }
+  const formatted = formatStopwatchMs(Math.max(0, nowMs - since))
+  const text = prefixLabel !== undefined ? `${prefixLabel} ${formatted}` : formatted
+  return (
+    <>
+      {leadingSeparator && (
+        <span className="sidebar-overview-meta-sep" aria-hidden="true">
+          ·
+        </span>
+      )}
+      <span className={className} title={prefixLabel !== undefined ? text : undefined}>
+        {text}
+      </span>
+      {trailingSeparator && (
+        <span className="sidebar-overview-meta-sep" aria-hidden="true">
+          ·
+        </span>
+      )}
+    </>
+  )
+}
+
+interface SidebarWorkingSetTreeItemProps {
   card: OverviewCard
   descendantSlice: SidebarOverviewDescendantsSlice
   expanded: boolean
-  nowMs?: number
   store: SidebarStoreView
   viewedConversationIds: ReadonlySet<number>
   hideProfileMeta?: boolean
@@ -208,283 +243,348 @@ function SidebarWorkingSetTreeItem({
   onDrawerPeek: (conversationId: number) => void
   onOpenSplit: (conversationId: number) => void
   onToggleExpanded: (rootConversationId: number) => void
-}): ReactNode {
-  const { t } = useWebLocale()
-  const rootPresence = getConversationPresence(store, card.root.id)
-  const hasActiveDescendant = card.descendants.some((descendant) => {
-    const p = getConversationPresence(store, descendant.conv.id)
-    return p.inPrimary || p.inSplit
-  })
-  const isBranchActive = !rootPresence.active && !rootPresence.splitSecondary && hasActiveDescendant
-  const cardTiming = resolveOverviewCardTiming(card, nowMs)
-  const remoteNodeId = card.root.nodeId !== undefined && card.root.nodeId !== 'local' ? card.root.nodeId : null
-  const titleText = card.root.title || t('shell.conversationFallback', { id: card.root.id })
-  const errorText = card.representative.status === 'error' ? card.representative.lastError?.trim() : undefined
-  const primaryTargetId = resolveSidebarOverviewPrimaryTarget(card, descendantSlice.visible)
+}
 
-  // 第二行元信息（严格按状态与 199px 可用宽度裁剪，不渲染静态累计耗时）：
-  const metaParts: ReactNode[] = []
-  if (!hideProfileMeta && card.profileLabel !== '') {
-    metaParts.push(
-      <span key="profile" className="sidebar-overview-meta-profile" title={card.profileLabel}>
-        {card.profileLabel}
-      </span>,
-    )
-  }
+function sameSidebarPresence(a: SidebarStoreView, b: SidebarStoreView): boolean {
+  return (
+    a.primaryTarget === b.primaryTarget &&
+    a.splitTarget === b.splitTarget &&
+    a.focusedPanel === b.focusedPanel
+  )
+}
 
-  if (card.bucket === 'needs_attention') {
-    if (card.hasWaiting) {
-      const waitText =
-        cardTiming.waitingMs !== undefined
-          ? `${t('shell.overview.waitingForYou')} ${formatStopwatchMs(cardTiming.waitingMs)}`
-          : t('shell.overview.waitingForYou')
-      metaParts.push(
-        <span key="attention" className="sidebar-overview-meta-warn tabular-nums" title={waitText}>
-          {waitText}
-        </span>,
-      )
-    } else if (card.hasError) {
-      const errLabel = errorText ? `${t('shell.overview.hasError')} · ${errorText}` : t('shell.overview.hasError')
-      metaParts.push(
-        <span key="attention" className="sidebar-overview-meta-err" title={errLabel}>
-          {errLabel}
+/** 侧栏工作集单棵树：紧凑双行主项 + 按需展开的缩进子会话行。 */
+const SidebarWorkingSetTreeItem = memo(
+  function SidebarWorkingSetTreeItem({
+    card,
+    descendantSlice,
+    expanded,
+    store,
+    viewedConversationIds,
+    hideProfileMeta = false,
+    hideNodeMeta = false,
+    onOpenConversation,
+    onDrawerPeek,
+    onOpenSplit,
+    onToggleExpanded,
+  }: SidebarWorkingSetTreeItemProps): ReactNode {
+    const { t } = useWebLocale()
+    const rootPresence = getConversationPresence(store, card.root.id)
+    const hasActiveDescendant = card.descendants.some((descendant) => {
+      const p = getConversationPresence(store, descendant.conv.id)
+      return p.inPrimary || p.inSplit
+    })
+    const isBranchActive = !rootPresence.active && !rootPresence.splitSecondary && hasActiveDescendant
+    const waitingSince = resolveOverviewCardWaitingSince(card)
+    const runningSince = resolveOverviewCardRunStartedAt(card)
+    const remoteNodeId = card.root.nodeId !== undefined && card.root.nodeId !== 'local' ? card.root.nodeId : null
+    const titleText = card.root.title || t('shell.conversationFallback', { id: card.root.id })
+    const errorText = card.representative.status === 'error' ? card.representative.lastError?.trim() : undefined
+    const primaryTargetId = resolveSidebarOverviewPrimaryTarget(card, descendantSlice.visible)
+
+    // 第二行元信息（严格按状态与 199px 可用宽度裁剪，不渲染静态累计耗时）：
+    const leadingParts: ReactNode[] = []
+    if (!hideProfileMeta && card.profileLabel !== '') {
+      leadingParts.push(
+        <span key="profile" className="sidebar-overview-meta-profile" title={card.profileLabel}>
+          {card.profileLabel}
         </span>,
       )
     }
-  } else if (card.bucket === 'running') {
-    if (!hideNodeMeta && remoteNodeId !== null) {
-      metaParts.push(
+
+    let runningNode: ReactNode = null
+    const trailingParts: ReactNode[] = []
+
+    if (card.bucket === 'needs_attention') {
+      if (card.hasWaiting) {
+        leadingParts.push(
+          <ElapsedTimer
+            key="attention"
+            since={waitingSince}
+            prefixLabel={t('shell.overview.waitingForYou')}
+            className="sidebar-overview-meta-warn tabular-nums"
+          />,
+        )
+      } else if (card.hasError) {
+        const errLabel = errorText ? `${t('shell.overview.hasError')} · ${errorText}` : t('shell.overview.hasError')
+        leadingParts.push(
+          <span key="attention" className="sidebar-overview-meta-err" title={errLabel}>
+            {errLabel}
+          </span>,
+        )
+      }
+    } else if (card.bucket === 'running') {
+      if (!hideNodeMeta && remoteNodeId !== null) {
+        leadingParts.push(
+          <span key="node" className="sidebar-overview-meta-node mono" title={t('shell.node.title', { id: remoteNodeId })}>
+            @{remoteNodeId}
+          </span>,
+        )
+      }
+      if (card.summaryText !== '' && (card.directDescendants.length === 0 || card.root.status === 'working')) {
+        trailingParts.push(
+          <span key="summary" className="sidebar-overview-meta-summary" title={card.summaryText}>
+            {card.summaryText}
+          </span>,
+        )
+      }
+      if (runningSince !== undefined) {
+        runningNode = (
+          <ElapsedTimer
+            since={runningSince}
+            className="sidebar-overview-meta-time mono tabular-nums"
+            leadingSeparator={leadingParts.length > 0}
+            trailingSeparator={trailingParts.length > 0}
+          />
+        )
+      }
+    } else if (!hideNodeMeta && remoteNodeId !== null) {
+      leadingParts.push(
         <span key="node" className="sidebar-overview-meta-node mono" title={t('shell.node.title', { id: remoteNodeId })}>
           @{remoteNodeId}
         </span>,
       )
     }
-    if (cardTiming.runningMs !== undefined) {
-      metaParts.push(
-        <span key="running" className="sidebar-overview-meta-time mono tabular-nums">
-          {formatStopwatchMs(cardTiming.runningMs)}
-        </span>,
-      )
-    }
-    if (card.summaryText !== '' && (card.directDescendants.length === 0 || card.root.status === 'working')) {
-      metaParts.push(
-        <span key="summary" className="sidebar-overview-meta-summary" title={card.summaryText}>
-          {card.summaryText}
-        </span>,
-      )
-    }
-  } else if (!hideNodeMeta && remoteNodeId !== null) {
-    metaParts.push(
-      <span key="node" className="sidebar-overview-meta-node mono" title={t('shell.node.title', { id: remoteNodeId })}>
-        @{remoteNodeId}
-      </span>,
-    )
-  }
 
-  const showDescendantToggle = card.directDescendants.length > 0
-  const activeDescendantCount = card.activeDescendantCount
-  const descBadgeText = String(card.descendants.length)
-  const descToggleLabel =
-    activeDescendantCount > 0
-      ? t('shell.sidebar.overviewSubBadgeWithActivity', {
-          active: activeDescendantCount,
-          total: card.descendants.length,
-        })
-      : t('shell.sidebar.overviewSubBadge', { count: card.descendants.length })
-  const subtreeSignals = [
-    card.hasError ? t('shell.overview.hasError') : '',
-    card.hasWaiting ? t('shell.overview.waitingForYou') : '',
-  ].filter(Boolean)
+    const hasMetaContent = leadingParts.length > 0 || runningNode !== null || trailingParts.length > 0
+    const showDescendantToggle = card.directDescendants.length > 0
+    const activeDescendantCount = card.activeDescendantCount
+    const descBadgeText = String(card.descendants.length)
+    const descToggleLabel =
+      activeDescendantCount > 0
+        ? t('shell.sidebar.overviewSubBadgeWithActivity', {
+            active: activeDescendantCount,
+            total: card.descendants.length,
+          })
+        : t('shell.sidebar.overviewSubBadge', { count: card.descendants.length })
+    const subtreeSignals = [
+      card.hasError ? t('shell.overview.hasError') : '',
+      card.hasWaiting ? t('shell.overview.waitingForYou') : '',
+    ].filter(Boolean)
 
-  return (
-    <div className="sidebar-overview-tree">
-      <div
-        className={`nav-item sidebar-overview-item sidebar-overview-item-${card.bucket}${presenceNavClassSuffix(rootPresence)}${isBranchActive ? ' sidebar-overview-item-branch' : ''}`}
-        onClick={(e) => {
-          if (shouldSkipNavRowClick(e.target, e.currentTarget)) return
-          onOpenConversation(primaryTargetId)
-        }}
-      >
-        <div className="sidebar-overview-head">
-          <button
-            type="button"
-            className="nav-item-main nav-open sidebar-overview-open"
-            onClick={() => onOpenConversation(primaryTargetId)}
-            aria-current={rootPresence.active ? 'page' : undefined}
-            title={titleText}
-          >
-            <span className="nav-status-slot">
-              <ConversationStatusDot
-                conv={card.root}
-                background={{ active: card.backgroundActive, summary: card.backgroundSummary }}
-                showDone={card.root.unread && !viewedConversationIds.has(card.root.id)}
-              />
+    return (
+      <div className="sidebar-overview-tree">
+        <div
+          className={`nav-item sidebar-overview-item sidebar-overview-item-${card.bucket}${presenceNavClassSuffix(rootPresence)}${isBranchActive ? ' sidebar-overview-item-branch' : ''}`}
+          onClick={(e) => {
+            if (shouldSkipNavRowClick(e.target, e.currentTarget)) return
+            onOpenConversation(primaryTargetId)
+          }}
+        >
+          <div className="sidebar-overview-head">
+            <button
+              type="button"
+              className="nav-item-main nav-open sidebar-overview-open"
+              onClick={() => onOpenConversation(primaryTargetId)}
+              aria-current={rootPresence.active ? 'page' : undefined}
+              title={titleText}
+            >
+              <span className="nav-status-slot">
+                <ConversationStatusDot
+                  conv={card.root}
+                  background={{ active: card.backgroundActive, summary: card.backgroundSummary }}
+                  showDone={card.root.unread && !viewedConversationIds.has(card.root.id)}
+                />
+              </span>
+              <span className="nav-item-label">{titleText}</span>
+            </button>
+            <span className="nav-item-meta sidebar-overview-head-meta">
+              <SidebarPaneTag paneTag={rootPresence.paneTag} />
+              <span className="nav-item-row-actions" onClick={(e) => e.stopPropagation()}>
+                <ConversationRowActionsMenu
+                  conversation={card.root}
+                  enableDelete
+                  prependItems={[
+                    {
+                      key: 'drawer-peek',
+                      icon: 'panel-right',
+                      label: t('shell.overview.drawerPeek'),
+                      onSelect: () => onDrawerPeek(card.targetConversationId),
+                    },
+                    {
+                      key: 'open-split',
+                      icon: 'columns',
+                      label: t('shell.sidebar.openInRightSplit'),
+                      onSelect: () => onOpenSplit(card.targetConversationId),
+                    },
+                  ]}
+                />
+              </span>
             </span>
-            <span className="nav-item-label">{titleText}</span>
-          </button>
-          <span className="nav-item-meta sidebar-overview-head-meta">
-            <SidebarPaneTag paneTag={rootPresence.paneTag} />
-            <span className="nav-item-row-actions" onClick={(e) => e.stopPropagation()}>
-              <ConversationRowActionsMenu
-                conversation={card.root}
-                enableDelete
-                prependItems={[
-                  {
-                    key: 'drawer-peek',
-                    icon: 'panel-right',
-                    label: t('shell.overview.drawerPeek'),
-                    onSelect: () => onDrawerPeek(card.targetConversationId),
-                  },
-                  {
-                    key: 'open-split',
-                    icon: 'columns',
-                    label: t('shell.sidebar.openInRightSplit'),
-                    onSelect: () => onOpenSplit(card.targetConversationId),
-                  },
-                ]}
-              />
-            </span>
-          </span>
-        </div>
+          </div>
 
-        {(metaParts.length > 0 || showDescendantToggle) && (
-          <div className="sidebar-overview-meta">
-            <div className="sidebar-overview-meta-text">
-              {metaParts.flatMap((part, index) =>
-                index === 0
-                  ? [part]
-                  : [
-                      <span key={`sep-${index}`} className="sidebar-overview-meta-sep" aria-hidden="true">
-                        ·
-                      </span>,
-                      part,
-                    ],
+          {(hasMetaContent || showDescendantToggle) && (
+            <div className="sidebar-overview-meta">
+              <div className="sidebar-overview-meta-text">
+                {leadingParts.flatMap((part, index) =>
+                  index === 0
+                    ? [part]
+                    : [
+                        <span key={`sep-${index}`} className="sidebar-overview-meta-sep" aria-hidden="true">
+                          ·
+                        </span>,
+                        part,
+                      ],
+                )}
+                {runningNode}
+                {runningNode === null && leadingParts.length > 0 && trailingParts.length > 0 ? (
+                  <span className="sidebar-overview-meta-sep" aria-hidden="true">
+                    ·
+                  </span>
+                ) : null}
+                {trailingParts.flatMap((part, index) =>
+                  index === 0
+                    ? [part]
+                    : [
+                        <span key={`trail-sep-${index}`} className="sidebar-overview-meta-sep" aria-hidden="true">
+                          ·
+                        </span>,
+                        part,
+                      ],
+                )}
+              </div>
+              {showDescendantToggle && (
+                <Tooltip content={subtreeSignals.length > 0 ? `${descToggleLabel} · ${subtreeSignals.join(' · ')}` : descToggleLabel} side="top">
+                  <button
+                    type="button"
+                    className={`sidebar-overview-desc-toggle tabular-nums${expanded ? ' is-expanded' : ''}${card.hasError ? ' is-error' : card.hasWaiting ? ' is-warn' : activeDescendantCount > 0 ? ' is-active' : ''}`}
+                    aria-expanded={expanded}
+                    aria-label={descToggleLabel}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      onToggleExpanded(card.root.id)
+                    }}
+                  >
+                    <HelmxIcon name="git-branch" size={10} />
+                    <span>{descBadgeText}</span>
+                  </button>
+                </Tooltip>
               )}
             </div>
-            {showDescendantToggle && (
-              <Tooltip content={subtreeSignals.length > 0 ? `${descToggleLabel} · ${subtreeSignals.join(' · ')}` : descToggleLabel} side="top">
-                <button
-                  type="button"
-                  className={`sidebar-overview-desc-toggle tabular-nums${expanded ? ' is-expanded' : ''}${card.hasError ? ' is-error' : card.hasWaiting ? ' is-warn' : activeDescendantCount > 0 ? ' is-active' : ''}`}
-                  aria-expanded={expanded}
-                  aria-label={descToggleLabel}
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    onToggleExpanded(card.root.id)
-                  }}
-                >
-                  <HelmxIcon name="git-branch" size={10} />
-                  <span>{descBadgeText}</span>
-                </button>
-              </Tooltip>
-            )}
+          )}
+        </div>
+
+        {descendantSlice.visible.length > 0 && (
+          <div className="sidebar-overview-descendants">
+            {descendantSlice.visible.map((descendant) => (
+              <SidebarWorkingSetDescendantRow
+                key={descendant.conv.id}
+                descendant={descendant}
+                store={store}
+                viewedConversationIds={viewedConversationIds}
+                onOpenConversation={onOpenConversation}
+              />
+            ))}
           </div>
         )}
       </div>
+    )
+  },
+  (prev, next) =>
+    prev.card === next.card &&
+    prev.descendantSlice === next.descendantSlice &&
+    prev.expanded === next.expanded &&
+    sameSidebarPresence(prev.store, next.store) &&
+    prev.viewedConversationIds === next.viewedConversationIds &&
+    prev.hideProfileMeta === next.hideProfileMeta &&
+    prev.hideNodeMeta === next.hideNodeMeta &&
+    prev.onOpenConversation === next.onOpenConversation &&
+    prev.onDrawerPeek === next.onDrawerPeek &&
+    prev.onOpenSplit === next.onOpenSplit &&
+    prev.onToggleExpanded === next.onToggleExpanded,
+)
 
-      {descendantSlice.visible.length > 0 && (
-        <div className="sidebar-overview-descendants">
-          {descendantSlice.visible.map((descendant) => (
-            <SidebarWorkingSetDescendantRow
-              key={descendant.conv.id}
-              descendant={descendant}
-              nowMs={nowMs}
-              store={store}
-              viewedConversationIds={viewedConversationIds}
-              onOpenConversation={onOpenConversation}
-            />
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
-/** 缩进单行子会话。 */
-function SidebarWorkingSetDescendantRow({
-  descendant,
-  nowMs,
-  store,
-  viewedConversationIds,
-  onOpenConversation,
-}: {
+interface SidebarWorkingSetDescendantRowProps {
   descendant: OverviewDescendant
-  nowMs?: number
   store: SidebarStoreView
   viewedConversationIds: ReadonlySet<number>
   onOpenConversation: (conversationId: number) => void
-}): ReactNode {
-  const { t } = useWebLocale()
-  const presence = getConversationPresence(store, descendant.conv.id)
-  const timing = resolveOverviewDescendantChipTiming(descendant, nowMs)
-  const titleText = descendant.conv.title || t('shell.conversationFallback', { id: descendant.conv.id })
-  const descendantBranchLabel = t('shell.sidebar.overviewDirectSubBadge', { count: descendant.subtreeDescendantCount ?? 0 })
-  const descendantSignals = [
-    (descendant.subtreeErrorCount ?? 0) > 0
-      ? t('shell.sidebar.overviewSubtreeError', { count: descendant.subtreeErrorCount ?? 0 })
-      : '',
-    (descendant.subtreeWaitingCount ?? 0) > 0
-      ? t('shell.sidebar.overviewSubtreeWaiting', { count: descendant.subtreeWaitingCount ?? 0 })
-      : '',
-  ].filter(Boolean)
-  const descendantMetaTitle = descendantSignals.length > 0
-    ? `${descendantBranchLabel} · ${descendantSignals.join(' · ')}`
-    : descendantBranchLabel
-
-  const handleActivate = (_e: MouseEvent): void => {
-    onOpenConversation(descendant.conv.id)
-  }
-
-  return (
-    <div
-      className={`nav-item nav-item-sub sidebar-overview-descendant${presenceNavClassSuffix(presence)}`}
-      onClick={(e) => {
-        if (shouldSkipNavRowClick(e.target, e.currentTarget)) return
-        handleActivate(e)
-      }}
-    >
-      <button
-        type="button"
-        className="nav-item-main nav-open"
-        onClick={handleActivate}
-        aria-current={presence.active ? 'page' : undefined}
-        title={titleText}
-      >
-        <span className="nav-status-slot">
-          <ConversationStatusDot
-            conv={descendant.conv}
-            background={descendant.backgroundActive ? { active: true, summary: '' } : undefined}
-            aggregate={{
-              activeCount: descendant.subtreeActiveCount,
-              errorCount: descendant.subtreeErrorCount,
-              waitingCount: descendant.subtreeWaitingCount,
-            }}
-            showDone={descendant.conv.unread && !viewedConversationIds.has(descendant.conv.id)}
-          />
-        </span>
-        <span className="nav-item-label">{titleText}</span>
-      </button>
-      <span className="nav-item-meta">
-        {(descendant.subtreeDescendantCount ?? 0) > 0 && (
-          <span
-            className={`sidebar-overview-desc-children tabular-nums${(descendant.subtreeActiveCount ?? 0) > 0 ? ' is-active' : ''}`}
-            title={descendantMetaTitle}
-          >
-            <HelmxIcon name="git-branch" size={9} /> {descendant.subtreeDescendantCount}
-          </span>
-        )}
-        {timing !== undefined && (
-          <span
-            className={`sidebar-overview-desc-time mono tabular-nums${timing.kind === 'waiting' ? ' is-warn' : ''}`}
-          >
-            {formatStopwatchMs(timing.elapsedMs)}
-          </span>
-        )}
-        <SidebarPaneTag paneTag={presence.paneTag} />
-      </span>
-    </div>
-  )
 }
+
+/** 缩进单行子会话。 */
+const SidebarWorkingSetDescendantRow = memo(
+  function SidebarWorkingSetDescendantRow({
+    descendant,
+    store,
+    viewedConversationIds,
+    onOpenConversation,
+  }: SidebarWorkingSetDescendantRowProps): ReactNode {
+    const { t } = useWebLocale()
+    const presence = getConversationPresence(store, descendant.conv.id)
+    const chipAnchor = resolveOverviewDescendantChipAnchor(descendant)
+    const titleText = descendant.conv.title || t('shell.conversationFallback', { id: descendant.conv.id })
+    const descendantBranchLabel = t('shell.sidebar.overviewDirectSubBadge', { count: descendant.subtreeDescendantCount ?? 0 })
+    const descendantSignals = [
+      (descendant.subtreeErrorCount ?? 0) > 0
+        ? t('shell.sidebar.overviewSubtreeError', { count: descendant.subtreeErrorCount ?? 0 })
+        : '',
+      (descendant.subtreeWaitingCount ?? 0) > 0
+        ? t('shell.sidebar.overviewSubtreeWaiting', { count: descendant.subtreeWaitingCount ?? 0 })
+        : '',
+    ].filter(Boolean)
+    const descendantMetaTitle = descendantSignals.length > 0
+      ? `${descendantBranchLabel} · ${descendantSignals.join(' · ')}`
+      : descendantBranchLabel
+
+    const handleActivate = (_e: MouseEvent): void => {
+      onOpenConversation(descendant.conv.id)
+    }
+
+    return (
+      <div
+        className={`nav-item nav-item-sub sidebar-overview-descendant${presenceNavClassSuffix(presence)}`}
+        onClick={(e) => {
+          if (shouldSkipNavRowClick(e.target, e.currentTarget)) return
+          handleActivate(e)
+        }}
+      >
+        <button
+          type="button"
+          className="nav-item-main nav-open"
+          onClick={handleActivate}
+          aria-current={presence.active ? 'page' : undefined}
+          title={titleText}
+        >
+          <span className="nav-status-slot">
+            <ConversationStatusDot
+              conv={descendant.conv}
+              background={descendant.backgroundActive ? { active: true, summary: '' } : undefined}
+              aggregate={{
+                activeCount: descendant.subtreeActiveCount,
+                errorCount: descendant.subtreeErrorCount,
+                waitingCount: descendant.subtreeWaitingCount,
+              }}
+              showDone={descendant.conv.unread && !viewedConversationIds.has(descendant.conv.id)}
+            />
+          </span>
+          <span className="nav-item-label">{titleText}</span>
+        </button>
+        <span className="nav-item-meta">
+          {(descendant.subtreeDescendantCount ?? 0) > 0 && (
+            <span
+              className={`sidebar-overview-desc-children tabular-nums${(descendant.subtreeActiveCount ?? 0) > 0 ? ' is-active' : ''}`}
+              title={descendantMetaTitle}
+            >
+              <HelmxIcon name="git-branch" size={9} /> {descendant.subtreeDescendantCount}
+            </span>
+          )}
+          {chipAnchor !== undefined && (
+            <ElapsedTimer
+              since={chipAnchor.since}
+              className={`sidebar-overview-desc-time mono tabular-nums${chipAnchor.kind === 'waiting' ? ' is-warn' : ''}`}
+            />
+          )}
+          <SidebarPaneTag paneTag={presence.paneTag} />
+        </span>
+      </div>
+    )
+  },
+  (prev, next) =>
+    prev.descendant === next.descendant &&
+    sameSidebarPresence(prev.store, next.store) &&
+    prev.viewedConversationIds === next.viewedConversationIds &&
+    prev.onOpenConversation === next.onOpenConversation,
+)
 
 export function SidebarConversationList({
   store,
@@ -626,15 +726,6 @@ export function SidebarConversationList({
     return map
   }, [renderedCards, expandedCardIds, activeConversationIds, search])
 
-  const needsLiveClock = useMemo(() => {
-    const visibleByRoot = new Map<number, ReadonlyArray<OverviewDescendant>>()
-    for (const [rootId, slice] of descendantSlicesByRoot) {
-      visibleByRoot.set(rootId, slice.visible)
-    }
-    return sidebarOverviewCardsNeedLiveClock(renderedCards, visibleByRoot)
-  }, [renderedCards, descendantSlicesByRoot])
-
-  const nowMs = useSharedNowMs(needsLiveClock)
   const dataReady = store.conversations.length > 0 || (assetsLoaded && sseConnected)
 
   const newTopicCandidates = useMemo(
@@ -945,7 +1036,6 @@ export function SidebarConversationList({
                             }
                           }
                           expanded={expandedCardIds.has(card.root.id)}
-                          nowMs={nowMs}
                           store={store}
                           viewedConversationIds={viewedConversationIds}
                           hideProfileMeta={groupBy === 'profile'}

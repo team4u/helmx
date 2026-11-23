@@ -1,4 +1,4 @@
-import { useContext, useMemo, useState } from 'react'
+import { memo, useContext, useMemo, useState } from 'react'
 import type { ConversationEntry, ConversationSummary } from '@helmx/protocol/browser'
 import { CopyButton, HelmxIcon, ToolActivityContext, useSharedNowMs } from '@helmx/plugin-client'
 import { MarkdownView } from './MarkdownView.js'
@@ -57,9 +57,9 @@ export interface AssistantTurnViewProps {
   onRegenerate?: () => Promise<void>
 }
 
-export function AssistantTurnView(props: AssistantTurnViewProps) {
+export const AssistantTurnView = memo(function AssistantTurnView(props: AssistantTurnViewProps) {
   return <ToolActivityProvider><AssistantTurnContent {...props} /></ToolActivityProvider>
-}
+})
 
 function AssistantTurnContent({
   turn,
@@ -176,7 +176,7 @@ function AssistantTurnContent({
     !showBlockedStopwatch && turn.live && liveTiming?.currentRunMs !== undefined
 
   return (
-    <div className="msg-ai-block" tabIndex={0}>
+    <div className="msg-ai-block">
       {turn.segments.map((seg, segIndex) => {
         if (seg.kind === 'text') {
           return (
@@ -271,6 +271,7 @@ function AssistantTurnContent({
                 type="button"
                 className="btn btn-ghost btn-sm"
                 title={t('conv.turn.forkFromHere')}
+                aria-label={t('conv.turn.forkFromHere')}
                 disabled={forking || turn.entryIds.length === 0}
                 onClick={() => void forkFromHere()}
               >

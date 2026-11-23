@@ -1,5 +1,5 @@
-import { useCallback, useId, useMemo, useRef } from 'react'
-import type { ComposerScopeProps, ConversationSummary } from '@helmx/protocol/browser'
+import { memo, useCallback, useId, useMemo, useRef } from 'react'
+import type { ComposerScopeProps, ConversationSummary, WhenBusy } from '@helmx/protocol/browser'
 import { COMPOSER_DOCK_SLOT, COMPOSER_STATUS_SLOT } from '@helmx/protocol/browser'
 import { HelmxIcon, PluginSlot, useSharedNowMs } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
@@ -83,7 +83,7 @@ function ConversationDurationStatus({ conversation }: { conversation: Conversati
   )
 }
 
-export function Composer({ conversation, prefill, onSendingChange, onNewThread }: ComposerProps) {
+export const Composer = memo(function Composer({ conversation, prefill, onSendingChange, onNewThread }: ComposerProps) {
   const externalStore = useHelmxExternalStore()
   const detail = useConversationDetail(conversation.id)
   const groupedUi = useGroupedUi()
@@ -127,18 +127,21 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
     runPluginCommand,
     handleEnvBlocker,
     notifyError,
-  } = useComposerSend({
-    conversation,
-    prefill,
-    onSendingChange,
-    onNewThread,
-    textareaRef,
-    slashPluginCommands,
-    envConfigurable,
-    working,
-    dirtyKey: composerDirtyKey,
-    dirtySink,
-  })
+  } = useComposerSend(
+    {
+      conversation,
+      prefill,
+      onSendingChange,
+      onNewThread,
+      textareaRef,
+      slashPluginCommands,
+      envConfigurable,
+      working,
+      dirtyKey: composerDirtyKey,
+      dirtySink,
+    },
+    t,
+  )
 
   const conversationProfile = useMemo(
     () => profiles.find((p) => p.id === conversation.profileId),
@@ -170,6 +173,11 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
 
   const fileHandlers = useComposerAttachments({ onFiles: handleUploadFiles })
 
+  const submitDraft = useCallback(
+    (whenBusy?: WhenBusy) => send(whenBusy ?? 'steer', true),
+    [send],
+  )
+
   const composer = useComposerController({
     text,
     readDraft: readLiveDraft,
@@ -178,9 +186,14 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
     textareaRef,
     setDraftState,
     insertTextState,
-    submitDraft: (whenBusy) => send(whenBusy ?? 'steer', true),
+    submitDraft,
     submitExplicitText: sendExplicit,
   })
+
+  const composerSlotProps = useMemo<ComposerScopeProps & Record<string, unknown>>(
+    () => ({ conversation, composer }),
+    [conversation, composer],
+  )
 
   const returnFocusToTextarea = useCallback(() => {
     const el = textareaRef.current
@@ -258,7 +271,7 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
             conversationId={conversation.id}
             composer={composer}
             className="composer-dock-slot"
-            slotProps={{ conversation, composer } satisfies ComposerScopeProps}
+            slotProps={composerSlotProps}
           />
           <AskDock conversationId={conversation.id} />
           {envConfigurable ? (
@@ -347,10 +360,10 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
             conversationId={conversation.id}
             composer={composer}
             className="composer-status-slot"
-            slotProps={{ conversation, composer } satisfies ComposerScopeProps}
+            slotProps={composerSlotProps}
           />
         </>
       }
     />
   )
-}
+})

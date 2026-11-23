@@ -370,24 +370,16 @@ export function useVersionWatcher(options: VersionWatcherOptions = {}): VersionW
     if (!draftDirty && !modalOpen && !focusedInputDirty) settle()
   }, [draftDirty, modalOpen, focusedInputDirty, currentEntry, settle])
 
-  // 聚焦输入脏态期间挂载轻量 MutationObserver：监听 DOM 卸载或 display:none/hidden 隐藏，
-  // 弥补浏览器在移除/隐藏聚焦元素时不派发 focusout 的盲区；干净时自动断开零开销。
+  // 聚焦输入脏态期间挂载轻量自愈检查（不挂全局 document.body MutationObserver，避免流式输出期间高昂 DOM 回调）：
+  // 弥补浏览器在直接卸载或 display:none 隐藏聚焦输入框时不派发 focusout/blur 的盲区；干净时零定时器。
   useEffect(() => {
-    if (currentEntry === null || !focusedInputDirty || typeof MutationObserver === 'undefined' || typeof document === 'undefined') {
+    if (currentEntry === null || !focusedInputDirty || typeof document === 'undefined') {
       return
     }
-    const root = document.body ?? document.documentElement
-    if (root === null) return
-    const observer = new MutationObserver(() => {
+    const checkTimer = setInterval(() => {
       syncFocusedInputDirty()
-    })
-    observer.observe(root, {
-      childList: true,
-      subtree: true,
-      attributes: true,
-      attributeFilter: ['style', 'hidden', 'disabled', 'readonly'],
-    })
-    return () => observer.disconnect()
+    }, 150)
+    return () => clearInterval(checkTimer)
   }, [currentEntry, focusedInputDirty, syncFocusedInputDirty])
 
   // 事件与轮询装配：visibility/focus 节流探测、visible 期间 60s 轮询
@@ -427,6 +419,16 @@ export function useVersionWatcher(options: VersionWatcherOptions = {}): VersionW
       composingRef.current = false
       syncFocusedInputDirty()
     }
+    const onBlurCapture = (event: FocusEvent): void => {
+      if (event.target instanceof Element) {
+        focusBaselineRef.current.delete(event.target)
+      }
+      composingRef.current = false
+      syncFocusedInputDirty()
+    }
+    const onWindowBlur = (): void => {
+      syncFocusedInputDirty()
+    }
     const onInput = (): void => {
       syncFocusedInputDirty()
     }
@@ -444,9 +446,11 @@ export function useVersionWatcher(options: VersionWatcherOptions = {}): VersionW
     syncFocusedInputDirty()
     document.addEventListener('visibilitychange', onVisibilityChange)
     window.addEventListener('focus', onFocus)
+    window.addEventListener('blur', onWindowBlur)
     window.addEventListener('vite:preloadError', onPreloadError)
     document.addEventListener('focusin', onFocusIn)
     document.addEventListener('focusout', onFocusOut)
+    document.addEventListener('blur', onBlurCapture, true)
     document.addEventListener('input', onInput)
     document.addEventListener('compositionstart', onCompositionStart)
     document.addEventListener('compositionend', onCompositionEnd)
@@ -457,9 +461,11 @@ export function useVersionWatcher(options: VersionWatcherOptions = {}): VersionW
     return () => {
       document.removeEventListener('visibilitychange', onVisibilityChange)
       window.removeEventListener('focus', onFocus)
+      window.removeEventListener('blur', onWindowBlur)
       window.removeEventListener('vite:preloadError', onPreloadError)
       document.removeEventListener('focusin', onFocusIn)
       document.removeEventListener('focusout', onFocusOut)
+      document.removeEventListener('blur', onBlurCapture, true)
       document.removeEventListener('input', onInput)
       document.removeEventListener('compositionstart', onCompositionStart)
       document.removeEventListener('compositionend', onCompositionEnd)

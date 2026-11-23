@@ -8,7 +8,7 @@
  * 其 UI 贡献与 doc 均从 store 消失，徽标自然归零，无需特判插件 ID。
  */
 import { useEffect, useMemo } from 'react'
-import { useAuthConnection, usePluginDocsState, useStoreActions } from '../lib/store-context.js'
+import { useAuthConnection, usePluginDocsSubset, useStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import {
   collectSidebarBadgeDocs,
@@ -21,10 +21,14 @@ import {
 export function useSidebarBadges(items: ReadonlyArray<SidebarViewItem>): ReadonlyMap<string, ResolvedSidebarBadge> {
   const { authenticated } = useAuthConnection()
   const { locale } = useWebLocale()
-  const pluginDocs = usePluginDocsState()
   const { ensurePluginDoc } = useStoreActions()
 
   const badgeDocs = useMemo(() => collectSidebarBadgeDocs(items), [items])
+  const badgeDocKeys = useMemo(
+    () => badgeDocs.map((ref) => `${ref.pluginId}/${ref.doc}`),
+    [badgeDocs],
+  )
+  const pluginDocs = usePluginDocsSubset(badgeDocKeys)
   useEffect(() => {
     if (!authenticated) return
     for (const ref of badgeDocs) void ensurePluginDoc(ref.pluginId, ref.doc)

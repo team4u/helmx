@@ -19,16 +19,23 @@ function AttachmentImage({ att, conversationId }: { att: ConversationAttachmentR
   useEffect(() => {
     let active = true
     let objectUrl: string | null = null
+    const controller = new AbortController()
+    setUrl(null)
+    setFailed(null)
     void artifactsApi
-      .fetchBlob(att.id)
+      .fetchBlob(att.id, true, controller.signal)
       .then((blob) => {
         if (!active) return
         objectUrl = URL.createObjectURL(blob)
         setUrl(objectUrl)
       })
-      .catch((err: unknown) => setFailed(err instanceof Error ? err.message : String(err)))
+      .catch((err: unknown) => {
+        if (!active || controller.signal.aborted) return
+        setFailed(err instanceof Error ? err.message : String(err))
+      })
     return () => {
       active = false
+      controller.abort()
       if (objectUrl !== null) URL.revokeObjectURL(objectUrl)
     }
   }, [att.id])

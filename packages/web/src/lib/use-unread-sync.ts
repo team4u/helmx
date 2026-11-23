@@ -94,7 +94,7 @@ export function useUnreadSync({
    * stateChangeSeq watermark dedup).
    */
   const clearVisibleConversationUnread = useCallback(
-    (id: number, candidate?: ConversationSummary): void => {
+    function clearUnread(id: number, candidate?: ConversationSummary): void {
       const summary = candidate ?? store.getConversationSummary(id)
       if (summary === undefined) return
       if (!summary.unread) {
@@ -142,7 +142,7 @@ export function useUnreadSync({
             visibleConversationIds().includes(id)
           ) {
             unreadClearedSeq.current.set(id, ackSeq)
-            clearVisibleConversationUnread(id, latest)
+            clearUnread(id, latest)
           }
         })
         .catch((error: unknown) => {

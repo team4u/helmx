@@ -171,10 +171,11 @@ function ArtifactInlineMedia({ artifactId, conversationId, alt, title }: Artifac
   useEffect(() => {
     let cancelled = false
     let createdUrl: string | null = null
+    const controller = new AbortController()
     setLoading(true)
 
     void artifactsApi
-      .fetchBlob(artifactId)
+      .fetchBlob(artifactId, true, controller.signal)
       .then((blob) => {
         if (cancelled) return
         createdUrl = URL.createObjectURL(blob)
@@ -182,12 +183,13 @@ function ArtifactInlineMedia({ artifactId, conversationId, alt, title }: Artifac
         setLoading(false)
       })
       .catch(() => {
-        if (cancelled) return
+        if (cancelled || controller.signal.aborted) return
         setLoading(false)
       })
 
     return () => {
       cancelled = true
+      controller.abort()
       if (createdUrl !== null) {
         URL.revokeObjectURL(createdUrl)
       }
@@ -524,14 +526,17 @@ export const MarkdownView = memo(function MarkdownView({
   const liveSources = new Set<string>()
   const offsets: number[] = []
   let headingTotal = 0
-  for (const block of blocks) {
+  const lastBlockIndex = blocks.length - 1
+  for (let index = 0; index < blocks.length; index++) {
+    const block = blocks[index]!
+    offsets.push(headingTotal)
+    if (index === lastBlockIndex) continue
     liveSources.add(block)
     let count = headingCache.get(block)
     if (count === undefined) {
       count = countHeadingsUpToH3(block)
       headingCache.set(block, count)
     }
-    offsets.push(headingTotal)
     headingTotal += count
   }
   for (const source of headingCache.keys()) {

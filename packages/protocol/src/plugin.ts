@@ -52,6 +52,7 @@ import type {
   PluginDocOptions,
   PluginInUseItem,
   PluginPromptFields,
+  PluginRouteMethod,
   PluginSummary,
   PluginToolTextBlock,
 } from './plugin-dto.js'
@@ -468,8 +469,6 @@ export interface PluginKvHandle<T = unknown> {
   clear(): void
   flush(): Promise<void>
 }
-
-export type PluginRouteMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD'
 
 /** Matched route parameters passed as the optional 2nd argument to `PluginRouteSpec.handler`. */
 export interface PluginRouteContext {

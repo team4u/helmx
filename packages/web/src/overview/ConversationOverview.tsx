@@ -34,7 +34,7 @@
  */
 import { HubUpdateCard } from './HubUpdateCard.js'
 import { HubUpgradedNotice } from './HubUpgradedNotice.js'
-import { useEffect, useId, useMemo, useState } from 'react'
+import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ConversationSummary } from '@helmx/protocol/browser'
 import {
@@ -80,14 +80,15 @@ import {
   filterOverviewCards,
   groupOverviewCards,
   overviewBucketCounts,
-  overviewCardsNeedLiveClock,
   overviewFilterParamsRepair,
   overviewNodeOptions,
   overviewProfileOptions,
   overviewShouldShowSectionHeaders,
   parseOverviewFilterParams,
+  resolveOverviewCardRunStartedAt,
   resolveOverviewCardTiming,
-  resolveOverviewDescendantChipTiming,
+  resolveOverviewCardWaitingSince,
+  resolveOverviewDescendantChipAnchor,
   OVERVIEW_DESCENDANT_LIMIT,
   type OverviewBucketFilter,
   type OverviewCard,
@@ -95,6 +96,8 @@ import {
   type OverviewGroupBy,
   type OverviewSourceFilter,
 } from './overview-model.js'
+
+const SEARCH_PARAM_DEBOUNCE_MS = 180
 
 export interface ConversationOverviewProps {
   isSplit?: boolean
@@ -105,14 +108,53 @@ type BucketFilterValue = OverviewBucketFilter
 type SourceFilterValue = OverviewSourceFilter
 const EMPTY_COLLAPSED_KEYS: ReadonlySet<string> = new Set()
 
+/** 叶子秒表组件：将 1Hz `useSharedNowMs` 隔离到单枚计时节点，避免总览全屏卡片网格每秒重渲染。 */
+function ElapsedTimer({
+  since,
+  formatText,
+  className,
+  leadingSeparator = false,
+  trailingSeparator = false,
+}: {
+  since: number
+  formatText?: (formattedDuration: string) => string
+  className: string
+  leadingSeparator?: boolean
+  trailingSeparator?: boolean
+}): ReactNode {
+  const nowMs = useSharedNowMs(true)
+  if (nowMs === undefined) {
+    return leadingSeparator && trailingSeparator ? (
+      <span className="overview-card-sub-sep" aria-hidden="true">
+        ·
+      </span>
+    ) : null
+  }
+  const formatted = formatStopwatchMs(Math.max(0, nowMs - since))
+  return (
+    <>
+      {leadingSeparator && (
+        <span className="overview-card-sub-sep" aria-hidden="true">
+          ·
+        </span>
+      )}
+      <span className={className}>{formatText !== undefined ? formatText(formatted) : formatted}</span>
+      {trailingSeparator && (
+        <span className="overview-card-sub-sep" aria-hidden="true">
+          ·
+        </span>
+      )}
+    </>
+  )
+}
+
 /** 单卡：根会话树聚合卡（只读）；卡面/芯片直进主屏会话。
  * 可访问性结构：外层 div 仅承载鼠标整卡点击便利（不挂交互 ARIA 角色，
  * 避免交互嵌套），真正的语义入口是标题簇真按钮（含状态灯可读标签，
  * 键盘 Enter/Space 可达）；菜单/勾选框/芯片/展开开关均为独立兄弟控件，
  * 绝不嵌套进按钮。批量模式下按钮与整卡点击变为勾选切换（aria-pressed）。 */
-function OverviewCardView({
+const OverviewCardView = memo(function OverviewCardView({
   card,
-  nowMs,
   onOpenConversation,
   onDrawerPeek,
   onOpenSplit,
@@ -125,8 +167,6 @@ function OverviewCardView({
   onToggleExpanded,
 }: {
   card: OverviewCard
-  /** 由总览页单实例 useSharedNowMs 向下透传的校准时刻（安静态为 undefined，零定时器）。 */
-  nowMs?: number
   onOpenConversation: (conversationId: number) => void
   onDrawerPeek: (conversationId: number) => void
   onOpenSplit: (conversationId: number) => void
@@ -144,60 +184,69 @@ function OverviewCardView({
   const needsAttention = card.bucket === 'needs_attention'
   const errorText = card.representative.status === 'error' ? card.representative.lastError?.trim() : undefined
   const remoteNodeId = card.root.nodeId !== undefined && card.root.nodeId !== 'local' ? card.root.nodeId : null
-  const cardTiming = resolveOverviewCardTiming(card, nowMs)
+  const waitingSince = resolveOverviewCardWaitingSince(card)
+  const runningSince = resolveOverviewCardRunStartedAt(card)
+  const staticTiming =
+    waitingSince === undefined && runningSince === undefined ? resolveOverviewCardTiming(card) : undefined
+
   // 紧凑元信息行：角色 · @节点 · 耗时/秒表 · 摘要 同一行（远端节点与耗时折叠进来，
   // 不增加卡片高度）；摘要尾随弹性截断，角色/节点/耗时固定不丢事实。
-  const metaParts: ReactNode[] = []
+  const leadingParts: ReactNode[] = []
   if (card.profileLabel !== '') {
-    metaParts.push(
+    leadingParts.push(
       <span key="profile" className="overview-card-sub-profile">
         {card.profileLabel}
       </span>,
     )
   }
   if (remoteNodeId !== null) {
-    metaParts.push(
+    leadingParts.push(
       <span key="node" className="overview-card-sub-node mono" title={t('shell.node.title', { id: remoteNodeId })}>
         @{remoteNodeId}
       </span>,
     )
   }
-  if (cardTiming.waitingMs !== undefined) {
-    metaParts.push(
-      <span key="timing" className="overview-card-sub-time overview-card-sub-time-warn mono tabular-nums">
-        {t('shell.overview.waited', { duration: formatStopwatchMs(cardTiming.waitingMs) })}
-      </span>,
-    )
-  } else if (cardTiming.runningMs !== undefined) {
-    metaParts.push(
-      <span key="timing" className="overview-card-sub-time mono tabular-nums">
-        {formatStopwatchMs(cardTiming.runningMs)}
-      </span>,
-    )
-  } else if (cardTiming.settledRunMs !== undefined) {
+  if (staticTiming?.settledRunMs !== undefined) {
     const createdText = formatFullTimestamp(card.root.createdAt)
     const updatedText = formatFullTimestamp(card.root.updatedAt)
     const timingTooltip = [
       createdText !== '' ? t('shell.overview.createdAt', { time: createdText }) : '',
       updatedText !== '' ? t('shell.overview.updatedAt', { time: updatedText }) : '',
     ].filter((line) => line !== '').join('\n')
-    metaParts.push(
+    leadingParts.push(
       <span
         key="timing"
         className="overview-card-sub-time mono tabular-nums"
         title={timingTooltip || undefined}
       >
-        {t('shell.overview.totalRun', { duration: formatDurationMs(cardTiming.settledRunMs) })}
+        {t('shell.overview.totalRun', { duration: formatDurationMs(staticTiming.settledRunMs) })}
       </span>,
     )
   }
-  if (!needsAttention && card.summaryText !== '') {
-    metaParts.push(
+  const trailingSummary =
+    !needsAttention && card.summaryText !== '' ? (
       <span key="summary" className="overview-card-sub-summary" title={card.summaryText}>
         {card.summaryText}
-      </span>,
-    )
-  }
+      </span>
+    ) : null
+  const liveTimerNode =
+    waitingSince !== undefined ? (
+      <ElapsedTimer
+        since={waitingSince}
+        formatText={(duration) => t('shell.overview.waited', { duration })}
+        className="overview-card-sub-time overview-card-sub-time-warn mono tabular-nums"
+        leadingSeparator={leadingParts.length > 0}
+        trailingSeparator={trailingSummary !== null}
+      />
+    ) : runningSince !== undefined ? (
+      <ElapsedTimer
+        since={runningSince}
+        className="overview-card-sub-time mono tabular-nums"
+        leadingSeparator={leadingParts.length > 0}
+        trailingSeparator={trailingSummary !== null}
+      />
+    ) : null
+  const hasMetaSub = leadingParts.length > 0 || liveTimerNode !== null || trailingSummary !== null
   const toggleCardSelect = (): void => {
     if (selectable) onToggleSelect?.(card.root.id)
   }
@@ -324,9 +373,9 @@ function OverviewCardView({
           {errorText && ` · ${errorText}`}
         </p>
       )}
-      {metaParts.length > 0 && (
+      {hasMetaSub && (
         <div className="overview-card-sub">
-          {metaParts.flatMap((part, index) =>
+          {leadingParts.flatMap((part, index) =>
             index === 0
               ? [part]
               : [
@@ -336,6 +385,13 @@ function OverviewCardView({
                   part,
                 ],
           )}
+          {liveTimerNode}
+          {liveTimerNode === null && leadingParts.length > 0 && trailingSummary !== null ? (
+            <span className="overview-card-sub-sep" aria-hidden="true">
+              ·
+            </span>
+          ) : null}
+          {trailingSummary}
         </div>
       )}
       {/* 插槽位于标题按钮之外，插件可点元素沿用 stopPropagation 契约。 */}
@@ -349,7 +405,7 @@ function OverviewCardView({
       {descendantItems.length > 0 && (
         <div className="overview-chips">
           {shownDescendants.map((descendant) => {
-            const chipTiming = resolveOverviewDescendantChipTiming(descendant, nowMs)
+            const chipAnchor = resolveOverviewDescendantChipAnchor(descendant)
             return (
               <button
                 key={descendant.conv.id}
@@ -383,12 +439,11 @@ function OverviewCardView({
                     {descendant.subtreeDescendantCount}
                   </span>
                 ) : null}
-                {chipTiming !== undefined ? (
-                  <span
-                    className={`overview-chip-elapsed mono tabular-nums${chipTiming.kind === 'waiting' ? ' overview-chip-elapsed-warn' : ''}`}
-                  >
-                    {formatStopwatchMs(chipTiming.elapsedMs)}
-                  </span>
+                {chipAnchor !== undefined ? (
+                  <ElapsedTimer
+                    since={chipAnchor.since}
+                    className={`overview-chip-elapsed mono tabular-nums${chipAnchor.kind === 'waiting' ? ' overview-chip-elapsed-warn' : ''}`}
+                  />
                 ) : null}
               </button>
             )
@@ -413,7 +468,7 @@ function OverviewCardView({
       )}
     </article>
   )
-}
+})
 
 export function ConversationOverview({ isSplit = false, onCloseSplit }: ConversationOverviewProps): ReactNode {
   const hubUpdateCard = (
@@ -457,11 +512,74 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
   const profileFilter = filter.profileId
   const nodeFilter = filter.nodeId
   const sourceFilter = filter.source
-  const queryFilter = filter.query
+  const routeQueryFilter = filter.query
   const groupBy = filter.groupBy
-  const applyFilterParam = (patch: Partial<Record<OverviewFilterParamKey, string | undefined>>): void => {
-    setScreenParams(patch, { split: isSplit === true })
+  const [searchDraft, setSearchDraft] = useState(routeQueryFilter)
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const prevRouteQueryRef = useRef(routeQueryFilter)
+  if (prevRouteQueryRef.current !== routeQueryFilter) {
+    prevRouteQueryRef.current = routeQueryFilter
+    if (searchTimerRef.current !== null) {
+      clearTimeout(searchTimerRef.current)
+      searchTimerRef.current = null
+    }
+    if (searchDraft !== routeQueryFilter) {
+      setSearchDraft(routeQueryFilter)
+    }
   }
+  useEffect(() => {
+    return () => {
+      if (searchTimerRef.current !== null) {
+        clearTimeout(searchTimerRef.current)
+        searchTimerRef.current = null
+      }
+    }
+  }, [])
+  const queryFilter = searchDraft
+  const effectiveFilter = useMemo(
+    () => ({ ...filter, query: queryFilter }),
+    [filter, queryFilter],
+  )
+  const applyFilterParam = useCallback(
+    (patch: Partial<Record<OverviewFilterParamKey, string | undefined>>): void => {
+      setScreenParams(patch, { split: isSplit === true })
+    },
+    [setScreenParams, isSplit],
+  )
+  const handleSearchChange = useCallback(
+    (next: string): void => {
+      setSearchDraft(next)
+      if (searchTimerRef.current !== null) {
+        clearTimeout(searchTimerRef.current)
+        searchTimerRef.current = null
+      }
+      if (next === '') {
+        applyFilterParam({ q: undefined })
+        return
+      }
+      searchTimerRef.current = setTimeout(() => {
+        searchTimerRef.current = null
+        applyFilterParam({ q: next.trim() === '' ? undefined : next })
+      }, SEARCH_PARAM_DEBOUNCE_MS)
+    },
+    [applyFilterParam],
+  )
+  const clearSearchImmediately = useCallback((): void => {
+    if (searchTimerRef.current !== null) {
+      clearTimeout(searchTimerRef.current)
+      searchTimerRef.current = null
+    }
+    setSearchDraft('')
+    applyFilterParam({ q: undefined })
+  }, [applyFilterParam])
+  const clearAllFilters = useCallback((): void => {
+    if (searchTimerRef.current !== null) {
+      clearTimeout(searchTimerRef.current)
+      searchTimerRef.current = null
+    }
+    setSearchDraft('')
+    applyFilterParam({ bucket: undefined, profile: undefined, node: undefined, source: undefined, q: undefined })
+  }, [applyFilterParam])
   // 深链自愈：手工拼写的非法枚举值/未知键（Hash 模型只能拦键形与空值）
   // 在组件边界一次性修正为规范形态（replace，不产生额外历史项）。
   useEffect(() => {
@@ -491,7 +609,7 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
       }),
     [activePoolCards, isArchivedView, bucketFilter, profileFilter, nodeFilter, sourceFilter, queryFilter],
   )
-  const showSectionHeaders = overviewShouldShowSectionHeaders(filter)
+  const showSectionHeaders = overviewShouldShowSectionHeaders(effectiveFilter)
   const cardGroups = useMemo(
     () => (showSectionHeaders ? groupOverviewCards(visibleCards, groupBy, t) : []),
     [showSectionHeaders, visibleCards, groupBy, t],
@@ -527,13 +645,6 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
     if (!showSectionHeaders) return visibleCards
     return cardGroups.flatMap((group) => (activeCollapsedKeys.has(group.key) ? [] : group.cards))
   }, [showSectionHeaders, visibleCards, cardGroups, activeCollapsedKeys])
-  // 单实例共享秒表门控：仅当当前可见卡片或已展开可见后代芯片存在有效秒表起点时才激活；
-  // 全员安静/已完成或均缺起点时 0 定时器开销，绝不影响桶序 + createdAt 倒序排列。
-  const overviewNeedsLiveClock = useMemo(
-    () => overviewCardsNeedLiveClock(renderedCards, expandedCardIds),
-    [renderedCards, expandedCardIds],
-  )
-  const overviewNowMs = useSharedNowMs(overviewNeedsLiveClock)
   const dataReady = conversations.length > 0 || (assetsLoaded && sseConnected)
   const allKnownCards = useMemo(() => [...cards, ...archivedCards], [cards, archivedCards])
   const profileOptions = useMemo(() => overviewProfileOptions(allKnownCards), [allKnownCards])
@@ -604,7 +715,7 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
     [renderedCards, batch.selectedIds],
   )
 
-  const toggleCardExpanded = (rootConversationId: number): void => {
+  const toggleCardExpanded = useCallback((rootConversationId: number): void => {
     setExpandedCardIds((prev) => {
       const next = new Set(prev)
       if (next.has(rootConversationId)) {
@@ -614,7 +725,7 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
       }
       return next
     })
-  }
+  }, [])
 
   /** 批量归档或恢复：逐会话 PATCH 宿主归档 tag + allSettled 聚合（部分失败不掩盖成功）。 */
   const executeBatchArchive = async (): Promise<void> => {
@@ -633,18 +744,27 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
     }
   }
 
-  const openConversation = (conversationId: number): void => {
-    // 直进语义：与会话列表点击完全一致（总览开在右分屏时进同侧分屏）。
-    openTarget({ kind: 'conversation', conversationId }, isSplit ? { split: true } : undefined)
-  }
+  const openConversation = useCallback(
+    (conversationId: number): void => {
+      // 直进语义：与会话列表点击完全一致（总览开在右分屏时进同侧分屏）。
+      openTarget({ kind: 'conversation', conversationId }, isSplit ? { split: true } : undefined)
+    },
+    [openTarget, isSplit],
+  )
 
-  const drawerPeek = (conversationId: number): void => {
-    openConversationDrawer(conversationId)
-  }
+  const drawerPeek = useCallback(
+    (conversationId: number): void => {
+      openConversationDrawer(conversationId)
+    },
+    [openConversationDrawer],
+  )
 
-  const openSplit = (conversationId: number): void => {
-    openTarget({ kind: 'conversation', conversationId }, { split: true })
-  }
+  const openSplit = useCallback(
+    (conversationId: number): void => {
+      openTarget({ kind: 'conversation', conversationId }, { split: true })
+    },
+    [openTarget],
+  )
 
   // 顶栏「新话题」候选：与侧栏总览模式共用 buildNewTopicCandidates，仅人类可选
   // 且可见的角色可开新聊；最近活跃根会话所属角色置顶，其余按站位序。
@@ -778,11 +898,9 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
             clearButtonClassName="btn btn-ghost btn-icon-xs overview-search-clear"
             icon={<HelmxIcon name="search" size={13} />}
             clearIcon={<HelmxIcon name="x" size={12} />}
-            value={queryFilter}
-            onChange={(next) =>
-              applyFilterParam({ q: next.trim() === '' ? undefined : next })
-            }
-            onCleared={() => applyFilterParam({ q: undefined })}
+            value={searchDraft}
+            onChange={handleSearchChange}
+            onCleared={clearSearchImmediately}
             placeholder={t('shell.overview.searchPlaceholder')}
             ariaLabel={t('shell.overview.searchLabel')}
             clearLabel={t('shell.overview.clearSearch')}
@@ -922,9 +1040,7 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
                 <button
                   type="button"
                   className="btn btn-ghost btn-sm overview-clear-filters"
-                  onClick={() =>
-                    applyFilterParam({ bucket: undefined, profile: undefined, node: undefined, source: undefined, q: undefined })
-                  }
+                  onClick={clearAllFilters}
                 >
                   {t('shell.overview.clearFilters')}
                 </button>
@@ -937,9 +1053,7 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
                 <button
                   type="button"
                   className="btn btn-ghost btn-sm overview-clear-filters"
-                  onClick={() =>
-                    applyFilterParam({ bucket: undefined, profile: undefined, node: undefined, source: undefined, q: undefined })
-                  }
+                  onClick={clearAllFilters}
                 >
                   {t('shell.overview.clearFilters')}
                 </button>
@@ -1002,7 +1116,6 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
                         <OverviewCardView
                           key={card.root.id}
                           card={card}
-                          nowMs={overviewNowMs}
                           onOpenConversation={openConversation}
                           onDrawerPeek={drawerPeek}
                           onOpenSplit={openSplit}
@@ -1027,7 +1140,6 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
               <OverviewCardView
                 key={card.root.id}
                 card={card}
-                nowMs={overviewNowMs}
                 onOpenConversation={openConversation}
                 onDrawerPeek={drawerPeek}
                 onOpenSplit={openSplit}

@@ -242,3 +242,103 @@ test('sidebar footer carries the changelog entry', { timeout: 60_000 }, async (t
   assert.equal(railButton.getAttribute('title'), null, 'Radix Tooltip trigger omits duplicate native title')
   assert.ok(mounted.host.querySelector('.sidebar-footer') === null, 'the bottom-row footer is gone')
 })
+
+test('HubUpdateCard keeps polling across transient network errors during switch and renders switched state when readyVersion clears', { timeout: 60_000 }, async (t) => {
+  const { mountDomRoot } = await import('./helpers/dom-harness.js')
+  let stage: 'staged' | 'offline' | 'online' = 'staged'
+  let offlineCount = 0
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const path = String(input)
+    if (path === '/api/hub-update/apply') {
+      stage = 'offline'
+      return Response.json({ ok: true, switching: true, targetVersion: '1.2.0' }, { status: 202 })
+    }
+    if (path === '/api/hub-update/status') {
+      if (stage === 'staged') {
+        return Response.json({ active: true, currentVersion: '1.1.0', readyVersion: '1.2.0', lastError: null, blocked: null })
+      }
+      if (stage === 'offline') {
+        offlineCount += 1
+        if (offlineCount >= 2) stage = 'online'
+        throw new Error('ECONNREFUSED')
+      }
+      return Response.json({ active: true, currentVersion: '1.2.0', readyVersion: null, lastError: null, blocked: null })
+    }
+    return Response.json({})
+  }) as typeof fetch
+  t.after(() => {
+    globalThis.fetch = originalFetch
+  })
+
+  const mounted = await mountDomRoot(
+    React.createElement(HubUpdateCard, { pollMs: 5_000, switchPollMs: 15, switchTimeoutMs: 5_000 }),
+  )
+  t.after(mounted.unmount)
+  await waitForCondition(() => mounted.host.querySelector('.hub-update-card-action') !== null)
+
+  const applyBtn = mounted.host.querySelector('.hub-update-card-action') as HTMLButtonElement
+  await act(async () => {
+    applyBtn.click()
+  })
+  assert.ok(mounted.host.querySelector('.hub-update-card-switching') !== null)
+  assert.match(mounted.host.textContent ?? '', /1\.2\.0/)
+
+  await waitForCondition(() => mounted.host.querySelector('.hub-update-card-switched') !== null)
+  assert.ok(offlineCount >= 2, 'switch poller survived transient network failures')
+  assert.match(mounted.host.textContent ?? '', /1\.2\.0/)
+})
+
+test('HubUpgradedNotice dismiss hides immediately without waiting for parent rerender and shares status polling with HubUpdateCard', { timeout: 60_000 }, async (t) => {
+  const { HubUpgradedNotice } = await import('../src/overview/HubUpgradedNotice.js')
+  const { mountDomRoot } = await import('./helpers/dom-harness.js')
+  const { makeTestStore, HelmxExternalStoreContext } = await import('./helpers/store.js')
+
+  let statusFetches = 0
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    if (String(input) === '/api/hub-update/status') {
+      statusFetches += 1
+      return Response.json({
+        active: true,
+        currentVersion: '0.2.0',
+        readyVersion: null,
+        lastError: null,
+        blocked: null,
+        upgradedFrom: '0.1.9',
+        changelogAvailable: false,
+      })
+    }
+    return Response.json({})
+  }) as typeof fetch
+  const storage = globalThis.localStorage
+  t.after(() => {
+    globalThis.fetch = originalFetch
+    storage?.removeItem('helmx:hub-changelog-seen')
+  })
+
+  const store = makeTestStore()
+  const mounted = await mountDomRoot(
+    React.createElement(
+      HelmxExternalStoreContext.Provider,
+      { value: store },
+      React.createElement(
+        React.Fragment,
+        null,
+        React.createElement(HubUpgradedNotice, { pollMs: 5_000 }),
+        React.createElement(HubUpdateCard, { pollMs: 5_000 }),
+      ),
+    ) satisfies React.ReactElement as React.ReactElement,
+  )
+  t.after(mounted.unmount)
+
+  await waitForCondition(() => mounted.host.querySelector('.hub-upgraded-notice') !== null)
+  assert.equal(statusFetches, 1, 'initial status poll is shared across HubUpgradedNotice and HubUpdateCard')
+
+  const dismissBtn = mounted.host.querySelector('.hub-update-card-dismiss') as HTMLButtonElement | null
+  assert.ok(dismissBtn !== null)
+  await act(async () => {
+    dismissBtn.click()
+  })
+  assert.ok(mounted.host.querySelector('.hub-upgraded-notice') === null, 'dismiss hides notice immediately')
+})

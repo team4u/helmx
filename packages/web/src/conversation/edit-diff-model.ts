@@ -1,8 +1,7 @@
 import { diffLines, diffWordsWithSpace } from 'diff'
 import {
-  EDIT_TOOL_RESULT_SCHEMA,
   TOOL_DIFF_MAX_TEXT_CHARS,
-  validateOrThrow,
+  validateEditToolResult,
   type EditToolResult,
   type ToolDiffRow,
 } from '@helmx/protocol/browser'
@@ -17,21 +16,20 @@ export type EditToolResultCheck =
   | { ok: true; value: EditToolResult }
   | { ok: false; reason: string }
 
-/** 与内核复用同一校验器，避免展示层悄悄接受不同的 Schema 语义。 */
+/** 与内核复用同一契约约束，避免展示层悄悄接受不同的 Schema 语义且无需打包 TypeBox。 */
 export function checkEditToolResult(presentationMeta: unknown): EditToolResultCheck {
   if (presentationMeta === undefined || presentationMeta === null) {
     return { ok: false, reason: 'toolResult message missing details (tool declares no schema or legacy data never stored it)' }
   }
-  try {
-    validateOrThrow(EDIT_TOOL_RESULT_SCHEMA, presentationMeta, 'Invalid edit diff result')
-    const value = presentationMeta as EditToolResult
-    if (value.diff.rows.reduce((sum, row) => sum + row.text.length, 0) > TOOL_DIFF_MAX_TEXT_CHARS) {
-      return { ok: false, reason: 'Diff text exceeds the display budget' }
-    }
-    return { ok: true, value }
-  } catch (error) {
-    return { ok: false, reason: error instanceof Error ? error.message : String(error) }
+  const parsed = validateEditToolResult(presentationMeta)
+  if (!parsed.ok) {
+    return { ok: false, reason: `Invalid edit diff result: ${parsed.error}` }
   }
+  const value = parsed.value
+  if (value.diff.rows.reduce((sum, row) => sum + row.text.length, 0) > TOOL_DIFF_MAX_TEXT_CHARS) {
+    return { ok: false, reason: 'Diff text exceeds the display budget' }
+  }
+  return { ok: true, value }
 }
 
 export interface WordSegment {

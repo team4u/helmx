@@ -101,9 +101,21 @@ export function useMarkdownOutlineSync(opts: {
       setActiveMarkdownHeading(activeId !== undefined ? Number(activeId) : undefined)
     }
 
+    let frameId = 0
+    const onScroll = (): void => {
+      if (frameId !== 0) return
+      frameId = requestAnimationFrame(() => {
+        frameId = 0
+        syncActiveHeading()
+      })
+    }
+
     syncActiveHeading()
-    scrollContainer.addEventListener('scroll', syncActiveHeading, { passive: true })
-    return () => scrollContainer.removeEventListener('scroll', syncActiveHeading)
+    scrollContainer.addEventListener('scroll', onScroll, { passive: true })
+    return () => {
+      if (frameId !== 0) cancelAnimationFrame(frameId)
+      scrollContainer.removeEventListener('scroll', onScroll)
+    }
   }, [markdown, active, markdownOutline.length, text, modalBodyRef, markdownPreviewRef])
 
   const jumpToMarkdownHeading = (headingIndex: number): void => {

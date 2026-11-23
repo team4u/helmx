@@ -14,23 +14,31 @@ export function CopyButton({ text, label, className = 'btn btn-ghost btn-sm' }: 
   const [copied, setCopied] = useState(false)
   const [failed, setFailed] = useState(false)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const mountedRef = useRef(true)
 
   useEffect(() => {
+    mountedRef.current = true
     return () => {
+      mountedRef.current = false
       if (timerRef.current !== null) clearTimeout(timerRef.current)
     }
   }, [])
 
   const onCopy = async (): Promise<void> => {
     const ok = await copyToClipboard(text)
+    if (!mountedRef.current) return
     if (timerRef.current !== null) clearTimeout(timerRef.current)
     if (ok) {
       setCopied(true)
       setFailed(false)
-      timerRef.current = setTimeout(() => setCopied(false), 1500)
+      timerRef.current = setTimeout(() => {
+        if (mountedRef.current) setCopied(false)
+      }, 1500)
     } else {
       setFailed(true)
-      timerRef.current = setTimeout(() => setFailed(false), 2000)
+      timerRef.current = setTimeout(() => {
+        if (mountedRef.current) setFailed(false)
+      }, 2000)
     }
   }
 

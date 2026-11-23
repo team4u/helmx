@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { HelmxIcon, Popover, PopoverContent, PopoverTrigger, useSharedNowMs } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import {
@@ -55,6 +55,11 @@ export interface ConversationOutlinePopoverProps {
   hasEarlierHistory?: boolean
   loadingEarlierHistory?: boolean
   onLoadEarlierHistory?: () => void
+  /** Controlled open state (optional; lets ConversationPane defer full outline construction while closed). */
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
+  /** Explicit non-empty flag when `nodes` is lazily computed only while `open === true`. */
+  hasItems?: boolean
   onSelectTarget: (target: OutlineJumpTarget) => void
 }
 
@@ -83,18 +88,30 @@ export function ConversationOutlinePopover({
   hasEarlierHistory = false,
   loadingEarlierHistory = false,
   onLoadEarlierHistory,
+  open: openProp,
+  onOpenChange,
+  hasItems,
   onSelectTarget,
 }: ConversationOutlinePopoverProps) {
   const { t } = useWebLocale()
   const effectiveTriggerLabel = triggerLabel ?? t('conv.outline.trigger')
   const effectiveSearchPlaceholder = searchPlaceholder ?? t('conv.outline.searchPlaceholder')
   const effectiveAccessibilityLabel = accessibilityLabel ?? t('conv.outline.accessibility')
-  const [open, setOpen] = useState(false)
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false)
+  const open = openProp ?? uncontrolledOpen
+  const setOpen = useCallback(
+    (next: boolean): void => {
+      if (openProp === undefined) setUncontrolledOpen(next)
+      onOpenChange?.(next)
+    },
+    [openProp, onOpenChange],
+  )
   const [query, setQuery] = useState('')
   const [mode, setMode] = useState<OutlineFilterMode>('dialogue')
   const [selectedIdx, setSelectedIdx] = useState(0)
   const searchInputRef = useRef<HTMLInputElement | null>(null)
   const listRef = useRef<HTMLDivElement | null>(null)
+  const awaitingInitialAnchorRef = useRef(false)
 
   const liveClockActive =
     open &&
@@ -114,11 +131,11 @@ export function ConversationOutlinePopover({
         ? totalRunMs
         : undefined
   const effectiveMode: OutlineFilterMode = showModeToggle ? mode : 'all'
-  const turnCount = useMemo(() => countOutlineTurns(nodes), [nodes])
+  const turnCount = useMemo(() => (open || badgeCount === undefined ? countOutlineTurns(nodes) : badgeCount), [open, badgeCount, nodes])
   const displayCount = badgeCount ?? turnCount
-  const summaryTurns = summaryTurnCount ?? turnCount
+  const summaryTurns = summaryTurnCount ?? displayCount
   const outlineSummaryText =
-    effectiveTotalRunMs !== undefined && effectiveTotalRunMs > 0
+    open && effectiveTotalRunMs !== undefined && effectiveTotalRunMs > 0
       ? (() => {
           const duration =
             resolvedTiming?.currentRunMs !== undefined
@@ -131,32 +148,46 @@ export function ConversationOutlinePopover({
       : ''
   const hasFilterableNodes = useMemo(
     () =>
+      open &&
       nodes.some(
         (n) => (n.kind === 'human' && n.origin !== 'human') || (n.kind !== 'human' && n.kind !== 'divider'),
       ),
-    [nodes],
+    [open, nodes],
   )
 
   const filtered = useMemo(
-    () => filterOutlineNodes(nodes, { query, mode: effectiveMode }),
-    [nodes, query, effectiveMode],
+    () => (open || forceMount ? filterOutlineNodes(nodes, { query, mode: effectiveMode }) : []),
+    [open, forceMount, nodes, query, effectiveMode],
   )
 
   // 打开浮层时：默认将键盘焦点索引对齐到当前激活项（若存在），否则置为最后一项（最新提问）或首项。
   useEffect(() => {
     if (!open) {
+      awaitingInitialAnchorRef.current = false
       setQuery('')
       return
     }
     if (activeNodeKey !== undefined) {
+      awaitingInitialAnchorRef.current = false
       const idx = filtered.findIndex((n) => n.key === activeNodeKey)
       if (idx >= 0) {
         setSelectedIdx(idx)
         return
       }
+    } else {
+      awaitingInitialAnchorRef.current = true
     }
     setSelectedIdx(filtered.length > 0 ? filtered.length - 1 : 0)
   }, [open])
+
+  // 当阅读锚点在打开浮层的同一提交布局阶段同步就绪时，对齐初始键盘高亮项。
+  useEffect(() => {
+    if (!open || !awaitingInitialAnchorRef.current || activeNodeKey === undefined) return
+    awaitingInitialAnchorRef.current = false
+    if (query !== '') return
+    const idx = filtered.findIndex((n) => n.key === activeNodeKey)
+    if (idx >= 0) setSelectedIdx(idx)
+  }, [open, activeNodeKey, filtered, query])
 
   // 搜索词或过滤开关变化时重置选中索引
   useEffect(() => {
@@ -170,7 +201,7 @@ export function ConversationOutlinePopover({
     el?.scrollIntoView({ block: 'nearest' })
   }, [open, selectedIdx])
 
-  if (nodes.length === 0) return null
+  if (!(hasItems ?? nodes.length > 0)) return null
 
   const triggerSelect = (node: OutlineNode): void => {
     setOpen(false)
@@ -204,7 +235,7 @@ export function ConversationOutlinePopover({
           type="button"
           className={`btn btn-sm conversation-outline-trigger${open ? ' is-open' : ''}`}
           aria-label={t('conv.outline.nav', { label: effectiveAccessibilityLabel })}
-          title={triggerTitle ?? t('conv.outline.triggerTitle', { count: turnCount })}
+          title={triggerTitle ?? t('conv.outline.triggerTitle', { count: displayCount })}
         >
           <HelmxIcon name="list-tree" size={12} />
           <span className="pane-action-label">{effectiveTriggerLabel}</span>

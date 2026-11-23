@@ -17,6 +17,7 @@ import {
   WRITE_TOOL_META_SCHEMA,
   assertBoundedPresentationMeta,
   assertSchemaCompilable,
+  validateEditToolResult,
   validateOrThrow,
   type EditToolResult,
   type KernelToolName,
@@ -43,6 +44,7 @@ function result(): EditToolResult {
 
 function validate(value: unknown): void {
   validateOrThrow(EDIT_TOOL_RESULT_SCHEMA, value, 'invalid edit diff result')
+  assert.equal(validateEditToolResult(value).ok, true)
 }
 
 test('edit presentation contract accepts real line numbers, truncated diffs and no-op results', { timeout: 60_000 }, () => {
@@ -73,19 +75,23 @@ test('edit presentation boundary rejects missing fields, wrong row shapes and un
     ].map((row) => ({ ...result(), diff: { ...result().diff, rows: [row] } })),
     { ...result(), diff: { ...result().diff, addedLines: -1 } },
   ]
-  for (const value of invalid) assert.throws(() => validate(value), /invalid edit diff result/)
+  for (const value of invalid) {
+    assert.throws(() => validateOrThrow(EDIT_TOOL_RESULT_SCHEMA, value, 'invalid edit diff result'), /invalid edit diff result/)
+    assert.equal(validateEditToolResult(value).ok, false)
+  }
 })
 
 test('edit presentation boundary rejects excess rows and over-long row text', { timeout: 60_000 }, () => {
   const row = { kind: 'add', newLine: 1, text: 'line' }
-  assert.throws(
-    () => validate({ ...result(), diff: { ...result().diff, rows: Array.from({ length: TOOL_DIFF_MAX_ROWS + 1 }, () => row) } }),
-    /invalid edit diff result/,
-  )
-  assert.throws(
-    () => validate({ ...result(), diff: { ...result().diff, rows: [{ ...row, text: 'x'.repeat(TOOL_DIFF_MAX_ROW_CHARS + 1) }] } }),
-    /invalid edit diff result/,
-  )
+  const tooManyRows = { ...result(), diff: { ...result().diff, rows: Array.from({ length: TOOL_DIFF_MAX_ROWS + 1 }, () => row) } }
+  const tooLongRow = { ...result(), diff: { ...result().diff, rows: [{ ...row, text: 'x'.repeat(TOOL_DIFF_MAX_ROW_CHARS + 1) }] } }
+  for (const bad of [tooManyRows, tooLongRow]) {
+    assert.throws(
+      () => validateOrThrow(EDIT_TOOL_RESULT_SCHEMA, bad, 'invalid edit diff result'),
+      /invalid edit diff result/,
+    )
+    assert.equal(validateEditToolResult(bad).ok, false)
+  }
 })
 
 test('schema validator rejects $async and malformed JSON Schema declarations with invalid_plugin_schema', { timeout: 60_000 }, () => {
@@ -487,7 +493,8 @@ test('assertBoundedPresentationMeta: inspects Reflect.ownKeys and rejects symbol
   assert.equal(hiddenElemGetterCalled, false, 'non-enumerable array element getter must be rejected without invocation')
 
   class CustomArray extends Array {}
-  const subArr = new CustomArray(1, 2)
+  const subArr = new CustomArray()
+  subArr.push(1, 2)
   assert.throws(
     () => assertBoundedPresentationMeta({ list: subArr }),
     (err: unknown) => err instanceof HelmxError && err.code === 'invalid_tool_result' && err.message.includes('non-plain array'),

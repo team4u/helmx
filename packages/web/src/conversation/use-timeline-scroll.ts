@@ -58,6 +58,8 @@ export interface UseTimelineScrollOptions {
   anchorSignature: string
   highlightedEntry: { conversationId: number; entryId: string } | null
   outlineScrollRequest?: TimelineOutlineScrollRequest | null
+  /** Whether the outline popover is currently open; skips `getBoundingClientRect()` anchor scans while closed. */
+  outlineOpen?: boolean
   /**
    * Reading-position outline activation: the last anchor past the reading baseline, refined to the exact H1~H3
    * heading inside the active assistant turn (headingIndex) — or to the clicked card right after an outline jump.
@@ -80,6 +82,7 @@ export interface UseTimelineScrollResult {
   highlightScrollRef: (node: HTMLDivElement | null) => void
   scrollToBottomAndFollow: () => void
   loadEarlierEntries: () => void
+  captureBeforeEntriesCommit: (nextConversationId: number, nextEntries: ReadonlyArray<ConversationEntry>) => void
 }
 
 export function useTimelineScroll({
@@ -93,6 +96,7 @@ export function useTimelineScroll({
   anchorSignature,
   highlightedEntry,
   outlineScrollRequest,
+  outlineOpen = true,
   onActiveOutlineChange,
   onConversationSwitch,
   fetchEarlierEntries,
@@ -145,6 +149,9 @@ export function useTimelineScroll({
     onActiveOutlineChange?.(anchor)
   })
   const anchorTrackingEnabled = onActiveOutlineChange !== undefined
+  const outlineOpenRef = useRef(outlineOpen)
+  outlineOpenRef.current = outlineOpen
+  const anchorDirtyWhileClosedRef = useRef(false)
 
   /**
    * Resolve the reading anchor from the current scroll position (both IO and no-IO paths share it):
@@ -203,10 +210,16 @@ export function useTimelineScroll({
 
   /** rAF-throttled scroll-derived activation (scroll, resize and content changes all funnel through here). */
   const scheduleActivation = useCallback((): void => {
-    if (!anchorTrackingEnabled || activationFrameRef.current !== 0) return
+    if (!anchorTrackingEnabled) return
+    if (!outlineOpenRef.current) {
+      if (!initialBottomRef.current.active) anchorDirtyWhileClosedRef.current = true
+      return
+    }
+    if (activationFrameRef.current !== 0) return
     activationFrameRef.current = requestAnimationFrame(() => {
       activationFrameRef.current = 0
-      if (outlineJumpLockRef.current) return
+      if (!outlineOpenRef.current || outlineJumpLockRef.current) return
+      anchorDirtyWhileClosedRef.current = false
       publish(resolveReadingAnchor(typeof IntersectionObserver === 'undefined'))
     })
   }, [anchorTrackingEnabled, publish, resolveReadingAnchor])
@@ -289,6 +302,8 @@ export function useTimelineScroll({
       lastScrollTopRef.current = 0
       prevFingerprintRef.current = null
       lastOutlineTickRef.current = null
+      lastActiveAnchorRef.current = undefined
+      anchorDirtyWhileClosedRef.current = false
       outlineJumpLockRef.current = false
       initialBottomRef.current.active = false
       initialBottomRef.current.consumed = false
@@ -435,6 +450,7 @@ export function useTimelineScroll({
         else passed.delete(idx)
       }
       if (outlineJumpLockRef.current) return
+      anchorDirtyWhileClosedRef.current = false
       publish(resolveReadingAnchor(false))
     }
     let io: IntersectionObserver | null = null
@@ -461,6 +477,14 @@ export function useTimelineScroll({
       anchorWrappersRef.current = []
     }
   }, [anchorTrackingEnabled, anchorSignature, publish, resolveReadingAnchor, scheduleActivation])
+
+  // Compute reading anchor synchronously before paint when the outline popover opens after closed-state scroll/stream changes.
+  useLayoutEffect(() => {
+    if (!anchorTrackingEnabled || !outlineOpen || outlineJumpLockRef.current) return
+    if (!anchorDirtyWhileClosedRef.current && lastActiveAnchorRef.current !== undefined) return
+    anchorDirtyWhileClosedRef.current = false
+    publish(resolveReadingAnchor(typeof IntersectionObserver === 'undefined'))
+  }, [anchorTrackingEnabled, outlineOpen, anchorSignature, publish, resolveReadingAnchor])
 
   useEffect(() => {
     if (!outlineScrollRequest || outlineScrollRequest.tick === lastOutlineTickRef.current) return
@@ -542,22 +566,27 @@ export function useTimelineScroll({
     if (highlightedEntry?.conversationId === conversationId) stopFollowingBottom()
   }, [highlightedEntry, conversationId, stopFollowingBottom])
 
-  // SWR silent-replace protection: capture visible anchor before commit when scrolled up.
-  if (
-    prevConvIdRef.current === conversationId &&
-    prevDetailEntriesRef.current !== detailEntries &&
-    detailsReady &&
-    !loadingOlder &&
-    !stickToBottomRef.current &&
-    scrollRef.current !== null &&
-    typeof document !== 'undefined' &&
-    typeof document.elementFromPoint === 'function'
-  ) {
-    const anchor = captureTimelineScrollAnchor(scrollRef.current)
-    swrAnchorRef.current = anchor !== undefined ? { entries: detailEntries, anchor } : null
-  } else if (prevConvIdRef.current !== conversationId || stickToBottomRef.current) {
-    swrAnchorRef.current = null
-  }
+  // Pre-commit SWR silent-replace protection (invoked from `getSnapshotBeforeUpdate`, never during render):
+  // captures the visible anchor right before DOM mutations commit when scrolled up.
+  const captureBeforeEntriesCommit = useStableCallback(
+    (nextConversationId: number, nextEntries: ReadonlyArray<ConversationEntry>): void => {
+      if (
+        prevConvIdRef.current === nextConversationId &&
+        prevDetailEntriesRef.current !== nextEntries &&
+        detailsReady &&
+        !loadingOlder &&
+        !stickToBottomRef.current &&
+        scrollRef.current !== null &&
+        typeof document !== 'undefined' &&
+        typeof document.elementFromPoint === 'function'
+      ) {
+        const anchor = captureTimelineScrollAnchor(scrollRef.current)
+        swrAnchorRef.current = anchor !== undefined ? { entries: nextEntries, anchor } : null
+      } else if (prevConvIdRef.current !== nextConversationId || stickToBottomRef.current) {
+        swrAnchorRef.current = null
+      }
+    },
+  )
 
   useLayoutEffect(() => {
     prevConvIdRef.current = conversationId
@@ -642,5 +671,6 @@ export function useTimelineScroll({
     highlightScrollRef,
     scrollToBottomAndFollow,
     loadEarlierEntries,
+    captureBeforeEntriesCommit,
   }
 }
