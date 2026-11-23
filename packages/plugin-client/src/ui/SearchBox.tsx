@@ -21,10 +21,6 @@ import { HelmxIcon } from '../icons.js'
 import { usePluginTranslator } from '../i18n.js'
 import { uiCopy } from '../ui-copy.js'
 
-function joinClass(...parts: Array<string | undefined>): string {
-  return parts.filter(Boolean).join(' ')
-}
-
 export interface SearchBoxProps {
   /** Current query value (fully controlled). */
   value: string

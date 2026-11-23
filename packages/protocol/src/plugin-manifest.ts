@@ -14,13 +14,11 @@ import type {
   PluginConfigFieldValue,
   PluginDiagnosticError,
   PluginPromptFields,
+  PluginRouteMethod,
   PluginStatus,
 } from './plugin-dto.js'
 
-export interface PluginManifestAction extends ActionManifest {
-  /** Provider-safe tool alias when `exposeAsTool === true` (omitted otherwise). */
-  toolName?: string
-}
+export type PluginManifestAction = ActionManifest
 
 export interface PluginManifestTool extends PluginPromptFields {
   name: string
@@ -41,7 +39,7 @@ export interface PluginManifestUiItem {
   spec: Record<string, unknown>
 }
 
-export type PluginManifestRouteMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD'
+export type PluginManifestRouteMethod = PluginRouteMethod
 
 export interface PluginManifestRoute {
   method: PluginManifestRouteMethod

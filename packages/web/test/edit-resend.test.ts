@@ -157,8 +157,8 @@ test('跨会话隔离：ConversationPane 按会话 key 挂载 Composer，prefill
   // 切换会话时 Composer（含编辑草稿 / prefill / 异步回调闭包）也会整体重建，
   // 旧会话的 replaceFromEntryId 不可能提交到新会话。
   assert.match(paneSource, /<Composer key=\{`composer-\$\{conversation\.id\}`\}/)
-  // requestEdit 统一 EditRequestTarget，无字符串兼容路径。
-  assert.match(paneSource, /const requestEdit = \(target: EditRequestTarget\): void =>/)
+  // requestEdit 统一 EditRequestTarget（useCallback 稳定引用），无字符串兼容路径。
+  assert.match(paneSource, /const requestEdit = useCallback\(\(target: EditRequestTarget\): void =>/)
   assert.doesNotMatch(paneSource, /target === 'string'/)
 })
 

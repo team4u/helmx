@@ -51,8 +51,6 @@ test('@helmx/protocol/browser: export declarations aligned with the root entry\'
     'matchesConversationScope',
     'isPluginSummaryActive',
     'isSkillAvailable',
-    'assertSchemaCompilable',
-    'validateOrThrow',
     'NODE_ID_PATTERN',
     'NODE_ID_REGEX',
     'isValidNodeId',
@@ -78,7 +76,7 @@ test('@helmx/protocol/browser: export declarations aligned with the root entry\'
     'TOOL_PRESENTATION_META_MAX_BYTES',
     'TOOL_PRESENTATION_META_MAX_DEPTH',
     'TOOL_PRESENTATION_META_MAX_NODES',
-    'assertBoundedPresentationMeta',
+    'validateEditToolResult',
     'EDIT_TOOL_RESULT_SCHEMA',
     'READ_TOOL_META_SCHEMA',
     'WRITE_TOOL_META_SCHEMA',
@@ -93,7 +91,10 @@ test('@helmx/protocol/browser: export declarations aligned with the root entry\'
   const serverOnlyRuntimeExports = [
     'UI_SPEC_PATTERNS',
     'UI_SPEC_SCHEMAS',
+    'assertBoundedPresentationMeta',
+    'assertSchemaCompilable',
     'compareCodeUnit',
+    'validateOrThrow',
     'validatePluginConfigFieldSchema',
     'validatePluginConfigFieldValue',
   ] as const

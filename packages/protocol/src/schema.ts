@@ -1,9 +1,8 @@
 /**
- * JSON Schema boundary validator (TypeBox pure-JS wrapper, the single implementation shared across
- * protocol, kernel, plugins, and browser).
- *
- * `typebox/value` evaluates JSON Schema without `new Function`, keeping browser CSP compatibility.
+ * JSON Schema boundary validator (TypeBox JIT `Compile` with pure-JS `Value.Check` fallback,
+ * shared across protocol, kernel, and plugins).
  */
+import { Compile } from 'typebox/compile'
 import { Check, Errors } from 'typebox/value'
 import { HelmxError } from './error.js'
 import type { JsonSchema } from './plugin-dto.js'
@@ -144,15 +143,25 @@ function compile(schema: JsonSchema): CompiledValidator {
   if (cached) return cached
 
   assertValidSubschema(schema, schema, '#', new Set<object>(), false)
+  let validator: CompiledValidator
   try {
-    Check(schema as never, {})
-  } catch (error) {
-    throw invalidSchemaError(schema, error instanceof Error ? error.message : String(error))
-  }
-
-  const validator: CompiledValidator = {
-    check: (value) => Check(schema as never, value),
-    errors: (value) => [...(Errors(schema as never, value) as Iterable<ValidationIssue>)],
+    const compiled = Compile(schema as never)
+    compiled.Check({})
+    validator = {
+      check: (value) => compiled.Check(value),
+      errors: (value) => [...(compiled.Errors(value) as Iterable<ValidationIssue>)],
+    }
+  } catch {
+    // Fall back to interpreted `typebox/value` only if `Compile` declines a valid schema.
+    try {
+      Check(schema as never, {})
+    } catch (error) {
+      throw invalidSchemaError(schema, error instanceof Error ? error.message : String(error))
+    }
+    validator = {
+      check: (value) => Check(schema as never, value),
+      errors: (value) => [...(Errors(schema as never, value) as Iterable<ValidationIssue>)],
+    }
   }
   compiledCache.set(schema, validator)
   return validator

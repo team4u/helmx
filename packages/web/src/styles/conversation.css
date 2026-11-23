@@ -1389,10 +1389,6 @@ pre {
   color: var(--err);
 }
 
-.trace-row-warn .trace-row-left > svg {
-  color: var(--warn);
-}
-
 .trace-row-left {
   display: flex;
   align-items: center;

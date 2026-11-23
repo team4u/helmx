@@ -190,6 +190,9 @@ export interface PluginInUseItem {
   label: string
 }
 
+/** Closed set of HTTP methods supported by `ctx.route`. */
+export type PluginRouteMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD'
+
 /** Closed set of supported `PluginConfigFieldSchema.type` discriminants. */
 export const PLUGIN_CONFIG_FIELD_TYPES = ['string', 'number', 'boolean', 'string[]'] as const
 export type PluginConfigFieldType = (typeof PLUGIN_CONFIG_FIELD_TYPES)[number]

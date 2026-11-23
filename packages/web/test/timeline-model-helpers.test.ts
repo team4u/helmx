@@ -8,12 +8,16 @@
  */
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import type { ConversationEntry } from '@helmx/protocol'
+import type { ConversationEntry, ConversationLive } from '@helmx/protocol'
 import {
   buildActiveEntryIndex,
+  buildLiveTimelineTail,
+  buildSettledTimelinePrefix,
+  buildTimelineItems,
   buildToolViewProps,
   resolveAssistantAnchorEntry,
   toolStatusIcon,
+  type AssistantTurn,
   type ToolTrace,
 } from '../src/conversation/timeline-model.js'
 
@@ -136,4 +140,98 @@ test('resolveAssistantAnchorEntry：空正文文本块不构成正文载体；�
   const toolResult = entry('3', 'pi.tool-result')
   assert.equal(resolveAssistantAnchorEntry(['3'], new Map([['3', toolResult]])), undefined)
   assert.equal(resolveAssistantAnchorEntry(['404'], new Map()), undefined)
+})
+
+test('buildSettledTimelinePrefix + buildLiveTimelineTail：流式增量期间历史项与 ToolTrace 保持严格 === 引用稳定，且尾部工具缝合与排队转正与 buildTimelineItems 严格一致', { timeout: 60_000 }, () => {
+  const entries: ConversationEntry[] = [
+    entry('1', 'helmx.input', { data: { id: 'in-1', text: '第一轮问题', origin: 'human', createdAt: 10 } }),
+    entry('2', 'pi.assistant', {
+      model: [{
+        role: 'assistant',
+        content: [
+          { type: 'toolCall', id: 'call_hist', name: 'edit', arguments: { path: 'a.ts' } },
+        ],
+      }],
+    }),
+    entry('3', 'pi.tool-result', {
+      model: [{
+        role: 'toolResult',
+        toolCallId: 'call_hist',
+        toolName: 'edit',
+        isError: false,
+        content: [{ type: 'text', text: 'edited a.ts' }],
+      }],
+    }),
+    entry('4', 'pi.assistant', {
+      model: [{ role: 'assistant', content: [{ type: 'text', text: '第一轮完成' }] }],
+    }),
+    entry('5', 'helmx.input', { data: { id: 'in-2', text: '第二轮正在流式', origin: 'human', createdAt: 20 } }),
+    entry('6', 'pi.assistant', {
+      model: [{
+        role: 'assistant',
+        content: [
+          { type: 'toolCall', id: 'call_mid', name: 'bash', arguments: { command: 'ls' } },
+        ],
+      }],
+    }),
+    entry('7', 'pi.tool-result', {
+      model: [{
+        role: 'toolResult',
+        toolCallId: 'call_mid',
+        toolName: 'bash',
+        isError: false,
+        content: [{ type: 'text', text: 'src\npackage.json' }],
+      }],
+    }),
+  ]
+
+  const prefix = buildSettledTimelinePrefix(entries)
+  assert.equal(prefix.items.length, 3, '前置定稿项应包含第一轮 human + assistant 与第二轮 human')
+  assert.equal(prefix.tailTurnEntries.length, 2, '仅开放尾轮条目进入 tailTurnEntries')
+
+  const firstTurnTool = (turn: AssistantTurn): ToolTrace | undefined => {
+    for (const seg of turn.segments) {
+      if (seg.kind === 'tool') return seg.tool
+      if (seg.kind === 'step-group') {
+        for (const step of seg.steps) {
+          if (step.kind === 'tool') return step.tool
+        }
+      }
+    }
+    return undefined
+  }
+
+  const settledTurn = prefix.items[1] as AssistantTurn
+  const settledToolRef = firstTurnTool(settledTurn)
+  assert.ok(settledToolRef !== undefined, '历史回合应包含已归档 ToolTrace')
+
+  const live1: ConversationLive = {
+    conversationId: 1,
+    thinking: '思考步骤 A',
+    text: '部分回答 1',
+    tools: [{ callId: 'call_live', toolName: 'read', status: 'running', input: { path: 'README.md' } }],
+    updatedAt: 100,
+    queuedInputs: [
+      { id: 'in-2', submissionId: '50', text: '第二轮正在流式', mode: 'steer', origin: 'human', createdAt: 20 },
+      { id: 'q-next', submissionId: '51', text: '后续排队追问', mode: 'followUp', origin: 'human', createdAt: 30 },
+    ],
+  }
+  const live2: ConversationLive = {
+    ...live1,
+    text: '部分回答 1 + 增量 token 2',
+    updatedAt: 101,
+  }
+
+  const combined1 = [...prefix.items, ...buildLiveTimelineTail(prefix, { live: live1, working: true })]
+  const combined2 = [...prefix.items, ...buildLiveTimelineTail(prefix, { live: live2, working: true })]
+
+  assert.ok(combined1[0] === combined2[0], '第一轮 human 项跨流式增量保持 === 引用稳定')
+  assert.ok(combined1[1] === combined2[1], '第一轮定稿 assistant 项跨流式增量保持 === 引用稳定')
+  assert.ok(combined1[2] === combined2[2], '第二轮已落库 human 项跨流式增量保持 === 引用稳定')
+  const turn2After = combined2[1] as AssistantTurn
+  const turn2ToolRef = firstTurnTool(turn2After)
+  assert.ok(turn2ToolRef === settledToolRef, '历史 ToolTrace 实例跨流式增量保持 === 引用稳定')
+
+  assert.deepEqual(combined1, buildTimelineItems(entries, { live: live1, working: true }))
+  assert.deepEqual(combined2, buildTimelineItems(entries, { live: live2, working: true }))
 })

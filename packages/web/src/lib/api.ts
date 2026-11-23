@@ -122,12 +122,12 @@ export async function apiRequest<T>(
   body?: unknown,
   signal?: AbortSignal,
 ): Promise<T> {
-  const hasBody = body !== undefined
+  const hasBody = method !== 'GET' && body !== undefined
   const headers = buildAuthHeaders(hasBody ? { 'Content-Type': 'application/json' } : undefined)
   const res = await fetch(path, {
     method,
     headers,
-    body: hasBody ? JSON.stringify(body) : undefined,
+    ...(hasBody ? { body: JSON.stringify(body) } : {}),
     signal,
   })
   if (res.status === 401 && typeof window !== 'undefined' && !path.startsWith('/api/auth/')) window.dispatchEvent(new Event('helmx:unauthorized'))
@@ -139,8 +139,25 @@ export async function apiRequest<T>(
 // Auth
 // ---------------------------------------------------------------------------
 
+let preloadedAuthStatus: Promise<AuthStatus> | null = null
+
+/** Start `/api/auth/status` in parallel with initial locale chunk preloading; consumed once by `authApi.status()`. */
+export function preloadAuthStatus(): void {
+  if (preloadedAuthStatus !== null || typeof fetch !== 'function') return
+  const pending = apiRequest<AuthStatus>('GET', '/api/auth/status')
+  pending.catch(() => {})
+  preloadedAuthStatus = pending
+}
+
 export const authApi = {
-  status: () => apiRequest<AuthStatus>('GET', '/api/auth/status'),
+  status: () => {
+    if (preloadedAuthStatus !== null) {
+      const pending = preloadedAuthStatus
+      preloadedAuthStatus = null
+      return pending
+    }
+    return apiRequest<AuthStatus>('GET', '/api/auth/status')
+  },
   setup: (password: string) => apiRequest<AuthToken>('POST', '/api/auth/setup', { password }),
   login: (password: string) => apiRequest<AuthToken>('POST', '/api/auth/login', { password }),
 }
@@ -326,10 +343,10 @@ function triggerBlobDownload(blob: Blob, filename: string): void {
 // ---------------------------------------------------------------------------
 
 export const artifactsApi = {
-  async fetchBlob(artifactId: string, inline = true): Promise<Blob> {
+  async fetchBlob(artifactId: string, inline = true, signal?: AbortSignal): Promise<Blob> {
     const res = await fetch(
       `/api/artifacts/${encodeURIComponent(artifactId)}/content${inline ? '?inline=1' : ''}`,
-      { headers: buildAuthHeaders() },
+      { headers: buildAuthHeaders(), signal },
     )
     if (!res.ok) {
       throw await parseErrorResponse(res)

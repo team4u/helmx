@@ -5,7 +5,7 @@
  * - 无命中（含插件停用后贡献消失）→ 回退宿主普通代码块；
  * - 不 import 任何具体语言实现（JSON / Mermaid 均为插件）。
  */
-import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react'
 import type { ComponentType } from 'react'
 import type { MarkdownCodeBlockProps } from '@helmx/protocol/browser'
 import { CopyButton, createPluginClientContext, HelmxIcon, PluginClientContext, PluginScope, usePluginClientHost, ViewBoundary } from '@helmx/plugin-client'
@@ -87,6 +87,10 @@ function PluginCodeBlock(props: {
   const { pluginId, clientRef, expectedHash, language, code, conversationId } = props
   const port = usePluginClientHost()
   const { t } = useWebLocale()
+  const ctx = useMemo(
+    () => createPluginClientContext(port, pluginId, conversationId),
+    [port, pluginId, conversationId],
+  )
   const revision = useSyncExternalStore(
     subscribePluginClientCacheInvalidation,
     () => getPluginClientCacheRevision(pluginId),
@@ -157,7 +161,6 @@ function PluginCodeBlock(props: {
   }
 
   const { Component } = client
-  const ctx = createPluginClientContext(port, pluginId, conversationId)
   return (
     <ViewBoundary label={t('conv.codeblock.viewBoundary', { language })}>
       <PluginClientContext.Provider value={ctx}>

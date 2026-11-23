@@ -16,8 +16,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import type { ComposerCompleterSpec, ComposerCompletionItem, ConversationSummary } from '@helmx/protocol/browser'
 import {
   useCatalogActions,
-  useLoadErrorsMap,
-  usePluginDocsState,
+  useLoadErrorsSubset,
+  usePluginDocsSubset,
   useStoreActions,
 } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
@@ -96,9 +96,6 @@ export function useComposerCompletionSources(input: UseComposerCompletionSources
   const { token, completers, conversation, profileId } = input
   const conversationId = conversation?.id
   const contextKey = `${conversationId ?? ''}:${profileId ?? ''}`
-  const pluginDocs = usePluginDocsState()
-  const loadErrors = useLoadErrorsMap()
-  const actions = useCatalogActions()
   const {
     ensurePluginDoc,
     subscribeSessionDoc,
@@ -131,10 +128,21 @@ export function useComposerCompletionSources(input: UseComposerCompletionSources
     () => sources.filter((s) => s.spec.source.kind === 'action') as ActionSource[],
     [sources],
   )
+  const docKeys = useMemo(
+    () => docSources.map((s) => `${s.pluginId}/${(s.spec.source as { name: string }).name}`),
+    [docSources],
+  )
+  const docErrorKeys = useMemo(
+    () => docKeys.map((key) => `doc:${key}`),
+    [docKeys],
+  )
+  const pluginDocs = usePluginDocsSubset(docKeys)
+  const loadErrors = useLoadErrorsSubset(docErrorKeys)
+  const actions = useCatalogActions(active && actionSources.length > 0)
 
   // ---- doc sources: trigger ensurePluginDoc on demand (values are read at
   // render time from pluginDocs) ----
-  const docKey = useMemo(() => docSources.map((s) => `${s.pluginId}/${(s.spec.source as { name: string }).name}`).join('|'), [docSources])
+  const docKey = useMemo(() => docKeys.join('|'), [docKeys])
   useEffect(() => {
     if (docKey === '') return
     for (const src of docSources) {

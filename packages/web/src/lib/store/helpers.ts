@@ -52,6 +52,20 @@ export function hasNotifyChanges(plan: NotifyPlan): boolean {
   )
 }
 
+export function mergeNotifyPlan(target: NotifyPlan, source: NotifyPlan): void {
+  for (const v of source.domains) target.domains.add(v)
+  for (const v of source.liveIds) target.liveIds.add(v)
+  for (const v of source.detailIds) target.detailIds.add(v)
+  for (const v of source.summaryIds) target.summaryIds.add(v)
+  for (const v of source.artifactIds) target.artifactIds.add(v)
+  for (const v of source.pendingAskIds) target.pendingAskIds.add(v)
+  for (const v of source.resolvedAskIds) target.resolvedAskIds.add(v)
+  for (const v of source.highlightIds) target.highlightIds.add(v)
+  for (const v of source.loadErrorKeys) target.loadErrorKeys.add(v)
+  for (const v of source.pluginDocKeys) target.pluginDocKeys.add(v)
+  for (const v of source.pluginIds) target.pluginIds.add(v)
+}
+
 export function addChangedRecordKeys<V>(
   prev: Record<number, V>,
   next: Record<number, V>,

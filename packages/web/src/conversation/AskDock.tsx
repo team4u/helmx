@@ -311,14 +311,14 @@ function AskCard({ ask, source }: { ask: AskSpec; source?: AskSourceInfo }) {
   )
 }
 
-/** Bottom-docked approval stack: pending AskDoc cards of the current
- * conversation and all of its descendants. AskDoc is conversation-scoped:
- * answer/cancel still go through the original asksApi (with the
- * expectedStateSeq CAS); this dock only aggregates display and changes nothing
- * about the approval chain. */
-export function AskDock({ conversationId }: AskDockProps) {
+function AskDockActive({
+  conversationId,
+  pendingAsks,
+}: {
+  conversationId: number
+  pendingAsks: ReadonlyArray<AskSpec>
+}) {
   const conversations = useConversations()
-  const pendingAsks = usePendingAsks()
   // Ancestry derives purely from conversations; pending asks of
   // descendant conversations are surfaced as well.
   const subtreeIds = useMemo(
@@ -347,4 +347,15 @@ export function AskDock({ conversationId }: AskDockProps) {
       ))}
     </div>
   )
+}
+
+/** Bottom-docked approval stack: pending AskDoc cards of the current
+ * conversation and all of its descendants. AskDoc is conversation-scoped:
+ * answer/cancel still go through the original asksApi (with the
+ * expectedStateSeq CAS); this dock only aggregates display and changes nothing
+ * about the approval chain. */
+export function AskDock({ conversationId }: AskDockProps) {
+  const pendingAsks = usePendingAsks()
+  if (!pendingAsks.some((a) => a.status === 'pending')) return null
+  return <AskDockActive conversationId={conversationId} pendingAsks={pendingAsks} />
 }

@@ -23,19 +23,6 @@
   object-fit: cover;
 }
 
-.composer-widgets {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-bottom: 6px;
-}
-.composer-widget-item {
-  display: block;
-}
-.composer-pill-item {
-  display: inline-flex;
-}
-
 .composer-box[data-dragging='true'] {
   border-color: var(--accent);
 }
@@ -166,9 +153,6 @@
   color: var(--fg-subtle);
 }
 
-.composer-extras-popover .composer-pill-item { display: flex; padding: 4px; }
-.composer-extras-popover .composer-pill-item > * { max-width: 100%; }
-
 .composer-popover {
   position: absolute;
   bottom: calc(100% + 6px);
@@ -186,8 +170,6 @@
   transform-origin: bottom left;
   animation: helmxPopoverEnter var(--dur-fast) var(--ease-out);
 }
-
-.composer-popover.composer-extras-popover { width: min(280px, calc(100% - 12px)); }
 
 .composer-popover.composer-model-popover {
   width: min(520px, calc(100vw - 24px));

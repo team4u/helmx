@@ -9,6 +9,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type ComponentType,
   type CSSProperties,
   type ExoticComponent,
@@ -44,7 +45,7 @@ import { AuthGate } from './shell/AuthGate.js'
 import { Sidebar } from './shell/Sidebar.js'
 import { ToastOverlay } from './shell/ToastOverlay.js'
 import { useQuietNotifier } from './shell/use-quiet-notifier.js'
-import { useVersionWatcher } from './shell/use-version-watcher.js'
+import { useVersionWatcher, type VersionDeferReason } from './shell/use-version-watcher.js'
 import { versionDeferHint } from './shell/version-watch-model.js'
 import { useGlobalAttention } from './shell/use-attention-indicator.js'
 import { composeAttentionSummary } from './shell/attention-model.js'
@@ -245,6 +246,95 @@ function QuietNotifierMount() {
   return null
 }
 
+interface VersionBannerSnapshot {
+  updateAvailable: boolean
+  deferReason: VersionDeferReason
+  reloadNow: () => void
+}
+
+interface VersionBannerBus {
+  getSnapshot: () => VersionBannerSnapshot
+  subscribe: (listener: () => void) => () => void
+  publish: (next: VersionBannerSnapshot) => void
+  clearPreloadErrorRef: { current: (() => void) | null }
+}
+
+const DEFAULT_VERSION_BANNER_SNAPSHOT: VersionBannerSnapshot = {
+  updateAvailable: false,
+  deferReason: null,
+  reloadNow: () => {},
+}
+
+const VersionBannerContext = createContext<VersionBannerBus | null>(null)
+
+function createVersionBannerBus(): VersionBannerBus {
+  let snapshot = DEFAULT_VERSION_BANNER_SNAPSHOT
+  const listeners = new Set<() => void>()
+  return {
+    getSnapshot: () => snapshot,
+    subscribe: (listener) => {
+      listeners.add(listener)
+      return () => {
+        listeners.delete(listener)
+      }
+    },
+    publish: (next) => {
+      if (
+        snapshot.updateAvailable === next.updateAvailable &&
+        snapshot.deferReason === next.deferReason &&
+        snapshot.reloadNow === next.reloadNow
+      ) {
+        return
+      }
+      snapshot = next
+      for (const listener of listeners) listener()
+    },
+    clearPreloadErrorRef: { current: null },
+  }
+}
+
+/** Leaf watcher mount: isolates draft/focus/version state subscriptions from `HelmxShellInner`. */
+function VersionWatcherMount({ bus }: { bus: VersionBannerBus }) {
+  const versionWatch = useVersionWatcher()
+  bus.clearPreloadErrorRef.current = versionWatch.clearPreloadError
+  useEffect(() => {
+    bus.publish({
+      updateAvailable: versionWatch.updateAvailable,
+      deferReason: versionWatch.deferReason,
+      reloadNow: versionWatch.reloadNow,
+    })
+  }, [bus, versionWatch.updateAvailable, versionWatch.deferReason, versionWatch.reloadNow])
+  return null
+}
+
+function VersionBannerSlot() {
+  const bus = useContext(VersionBannerContext)
+  const { t } = useWebLocale()
+  const subscribe = useCallback(
+    (listener: () => void) => (bus !== null ? bus.subscribe(listener) : () => {}),
+    [bus],
+  )
+  const getSnapshot = useCallback(
+    () => (bus !== null ? bus.getSnapshot() : DEFAULT_VERSION_BANNER_SNAPSHOT),
+    [bus],
+  )
+  const snap = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
+  if (!snap.updateAvailable) return null
+  return (
+    <div className="version-banner" role="status">
+      <HelmxIcon name="refresh-cw" size={13} />
+      <span className="version-banner-text">
+        {snap.deferReason !== null
+          ? t('shell.version.bannerWithHint', { hint: versionDeferHint(snap.deferReason, t) })
+          : t('shell.version.banner')}
+      </span>
+      <button type="button" className="btn btn-sm" onClick={snap.reloadNow}>
+        {t('shell.version.refreshNow')}
+      </button>
+    </div>
+  )
+}
+
 function HelmxShellInner({
   connectionBannerDelayMs = CONNECTION_BANNER_DELAY_MS,
 }: {
@@ -290,8 +380,6 @@ function HelmxShellInner({
   })
   const [landingSettled, setLandingSettled] = useState(!bootLanding.needsHomeLanding)
 
-  // Version awareness and auto refresh: mounted once globally (sleeps when no production entry is detected).
-  const versionWatch = useVersionWatcher()
   // 全局并发态势（与侧栏总览入口及 #/overview 三活跃桶 1:1 同源的 indicator）。
   // 抽屉关闭时也保持计算——badge doc 的发现与按需加载内聚在 Hook；移动端
   // 快捷导航簇与侧栏总览入口共用同一 indicator。
@@ -390,7 +478,6 @@ function HelmxShellInner({
     attentionSummary !== '' ? `${t('shell.nav.toggleNav')} · ${attentionSummary}` : t('shell.nav.toggleNav')
 
   return (
-    <LazyRetryContext.Provider value={versionWatch.clearPreloadError}>
       <div
         ref={shellRef}
         className={`helmx-shell${sidebarOpen ? ' sidebar-open' : ''}${sidebarCollapsed ? ' sidebar-collapsed' : ''}${mobileQuickEntryVisible ? ' mq-quick-on' : ''}`}
@@ -435,19 +522,7 @@ function HelmxShellInner({
               <span className="connection-banner-hint">{t('shell.connection.autoRefresh')}</span>
             </div>
           )}
-          {versionWatch.updateAvailable && (
-            <div className="version-banner" role="status">
-              <HelmxIcon name="refresh-cw" size={13} />
-              <span className="version-banner-text">
-                {versionWatch.deferReason !== null
-                  ? t('shell.version.bannerWithHint', { hint: versionDeferHint(versionWatch.deferReason, t) })
-                  : t('shell.version.banner')}
-              </span>
-              <button type="button" className="btn btn-sm" onClick={versionWatch.reloadNow}>
-                {t('shell.version.refreshNow')}
-              </button>
-            </div>
-          )}
+          <VersionBannerSlot />
           <div
             ref={panesRef}
             className={`helmx-panes${splitTarget !== null ? ' has-split' : ''}${splitTarget !== null && resizingSplit ? ' is-resizing' : ''}`}
@@ -549,7 +624,6 @@ function HelmxShellInner({
 
         <ToastOverlay />
       </div>
-    </LazyRetryContext.Provider>
   )
 }
 
@@ -559,11 +633,25 @@ export interface AppProps {
 }
 
 export function App({ connectionBannerDelayMs, escAbortWindowMs }: AppProps) {
+  const versionBusRef = useRef<VersionBannerBus | null>(null)
+  if (versionBusRef.current === null) {
+    versionBusRef.current = createVersionBannerBus()
+  }
+  const versionBus = versionBusRef.current
+  const clearPreloadError = useCallback(() => {
+    versionBus.clearPreloadErrorRef.current?.()
+  }, [versionBus])
+
   return (
     <HelmxStoreProvider {...(escAbortWindowMs !== undefined ? { escAbortWindowMs } : {})}>
       <TooltipProvider delayDuration={300}>
-        <QuietNotifierMount />
-        <HelmxShellInner {...(connectionBannerDelayMs !== undefined ? { connectionBannerDelayMs } : {})} />
+        <VersionBannerContext.Provider value={versionBus}>
+          <LazyRetryContext.Provider value={clearPreloadError}>
+            <QuietNotifierMount />
+            <VersionWatcherMount bus={versionBus} />
+            <HelmxShellInner {...(connectionBannerDelayMs !== undefined ? { connectionBannerDelayMs } : {})} />
+          </LazyRetryContext.Provider>
+        </VersionBannerContext.Provider>
       </TooltipProvider>
     </HelmxStoreProvider>
   )

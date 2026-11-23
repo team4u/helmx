@@ -23,6 +23,7 @@ import { usePluginClientHost, type PluginSlotPortItem } from './host-port.js'
 import { PluginClientContext } from './plugin-context.js'
 
 const NOOP_UNSUBSCRIBE = (): void => {}
+const EMPTY_SLOT_ITEMS: ReadonlyArray<PluginSlotPortItem> = []
 
 export interface PluginSlotProps {
   /** Short internal slot name of this plugin (auto-prefixed with ctx.pluginId); containing '/' means an explicit fully qualified name. */
@@ -126,7 +127,7 @@ export function PluginSlot(props: PluginSlotProps): ReactNode {
   // conversation's summary (falling back to detail only while summary is absent)
   // so disabling a plugin or changing conversation scope updates the slot while
   // streaming `conversationLives` token frames never re-render it.
-  useSyncExternalStore(host.subscribePlugins, host.getPluginsSnapshot, host.getPluginsSnapshot)
+  const pluginsSnapshot = useSyncExternalStore(host.subscribePlugins, host.getPluginsSnapshot, host.getPluginsSnapshot)
   const subscribeSummary = useCallback(
     (listener: () => void): (() => void) =>
       conversationId !== undefined ? host.subscribeConversationSummary(conversationId, listener) : NOOP_UNSUBSCRIBE,
@@ -149,9 +150,20 @@ export function PluginSlot(props: PluginSlotProps): ReactNode {
       conversationId !== undefined && summary === undefined ? host.getConversationDetail(conversationId) : undefined,
     [host, conversationId, summary],
   )
-  useSyncExternalStore(subscribeDetailFallback, getDetailFallback, getDetailFallback)
+  const detailFallback = useSyncExternalStore(subscribeDetailFallback, getDetailFallback, getDetailFallback)
 
-  if (owner === undefined || owner.trim().length === 0) {
+  const hasValidOwner = owner !== undefined && owner.trim().length > 0
+  const qualified = hasValidOwner ? (name.includes('/') ? name : `${owner}/${name}`) : ''
+  const validQualified = hasValidOwner && isValidQualifiedSlotTarget(qualified) ? qualified : null
+
+  const items = useMemo(
+    () => (validQualified !== null ? host.slots.collectItems(validQualified, conversationId) : EMPTY_SLOT_ITEMS),
+    // pluginsSnapshot / summary / detailFallback represent the subscribed inputs read inside host.slots.collectItems
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [host, validQualified, conversationId, pluginsSnapshot, summary, detailFallback],
+  )
+
+  if (!hasValidOwner) {
     return (
       <div className="callout callout-warn" role="alert">
         <HelmxIcon name="alert-triangle" size={13} />
@@ -165,8 +177,7 @@ export function PluginSlot(props: PluginSlotProps): ReactNode {
     )
   }
 
-  const qualified = name.includes('/') ? name : `${owner}/${name}`
-  if (!isValidQualifiedSlotTarget(qualified)) {
+  if (validQualified === null) {
     return (
       <div className="callout callout-warn" role="alert">
         <HelmxIcon name="alert-triangle" size={13} />
@@ -180,7 +191,6 @@ export function PluginSlot(props: PluginSlotProps): ReactNode {
     )
   }
 
-  const items = host.slots.collectItems(qualified, conversationId)
   const visible = mode === 'single' ? items.slice(0, 1) : items
 
   if (visible.length === 0) return fallback !== undefined ? <>{fallback}</> : null

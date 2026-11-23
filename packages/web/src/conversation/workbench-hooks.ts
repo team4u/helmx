@@ -5,7 +5,7 @@ import {
   useAuthenticated,
   useConversationArtifacts,
   useGroupedUi,
-  usePluginDocsState,
+  usePluginDocsSubset,
   useStoreActions,
 } from '../lib/store-context.js'
 import { matchesUiScope } from '../lib/types.js'
@@ -15,13 +15,20 @@ import { buildWorkbenchTabs, countDeliverableArtifacts } from './workbench-model
 export function useWorkbenchTabs(conversationId: number | undefined, conversation: ConversationSummary | undefined) {
   const authenticated = useAuthenticated()
   const groupedUi = useGroupedUi()
-  const pluginDocs = usePluginDocsState()
   const artifacts = useConversationArtifacts(conversationId)
   const { ensurePluginDoc } = useStoreActions()
   const { locale, t } = useWebLocale()
   const panels = useMemo(() => conversation === undefined ? [] : groupedUi.workbenchPanels.filter(
     (panel) => matchesUiScope(conversation, panel.spec.scope),
   ), [conversation, groupedUi.workbenchPanels])
+  const badgeDocKeys = useMemo(
+    () =>
+      panels.flatMap((panel) =>
+        panel.spec.badge !== undefined ? [`${panel.pluginId}/${panel.spec.badge.doc}`] : [],
+      ),
+    [panels],
+  )
+  const pluginDocs = usePluginDocsSubset(badgeDocKeys)
   useEffect(() => {
     if (!authenticated) return
     for (const panel of panels) {

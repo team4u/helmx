@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
-import { MODEL_TIER_PREFIX } from '@helmx/protocol/browser'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { MODEL_TIER_PREFIX, type HostModelEntry, type ModelTierCatalogEntry } from '@helmx/protocol/browser'
 import { HelmxIcon } from '../icons.js'
 import { Popover, PopoverContent, PopoverPortal, PopoverTrigger } from './Popover.js'
 import { usePluginClientHost } from '../host-port.js'
@@ -31,6 +31,10 @@ import {
 // context: display copy arrives via the `copy` prop (English SDK defaults)
 // and refresh notices via the `onNotice` callback.
 // ---------------------------------------------------------------------------
+
+const EMPTY_TIERS: ReadonlyArray<ModelTierCatalogEntry> = []
+const EMPTY_MODELS: ReadonlyArray<HostModelEntry> = []
+const EMPTY_NAV_ITEMS: ReadonlyArray<{ id: string }> = []
 
 export interface ModelPickerControlProps {
   /** Currently effective model id (button label, capability lookup, initial highlight). */
@@ -134,26 +138,46 @@ export function ModelPickerControl({
     fallbackPanel,
   )
 
-  const queryLower = query.toLowerCase()
-  const rawTiers = allowTiers ? (catalog?.modelTiers ?? []) : []
-  const filteredTiers = rawTiers.filter((tier) => {
-    if (!tier.available || tier.disabled === true) return false
-    if (queryLower === '') return true
-    const tierRef = `${MODEL_TIER_PREFIX}/${tier.id}`
-    return (
-      tierRef.toLowerCase().includes(queryLower) ||
-      tier.model.toLowerCase().includes(queryLower) ||
-      (tier.description?.toLowerCase().includes(queryLower) ?? false)
+  const rawTiers = allowTiers ? (catalog?.modelTiers ?? EMPTY_TIERS) : EMPTY_TIERS
+  const { filteredTiers, filteredModels, navItems, filteredKeys, allUnavailable } = useMemo(() => {
+    if (!open) {
+      return {
+        filteredTiers: EMPTY_TIERS,
+        filteredModels: EMPTY_MODELS,
+        navItems: EMPTY_NAV_ITEMS,
+        filteredKeys: '',
+        allUnavailable: false,
+      }
+    }
+    const queryLower = query.toLowerCase()
+    const nextTiers = rawTiers.filter((tier) => {
+      if (!tier.available || tier.disabled === true) return false
+      if (queryLower === '') return true
+      const tierRef = `${MODEL_TIER_PREFIX}/${tier.id}`
+      return (
+        tierRef.toLowerCase().includes(queryLower) ||
+        tier.model.toLowerCase().includes(queryLower) ||
+        (tier.description?.toLowerCase().includes(queryLower) ?? false)
+      )
+    })
+    const nextModels = models.filter(
+      (model) => model.available && model.disabled !== true && model.id.toLowerCase().includes(queryLower),
     )
-  })
-  const filteredModels = models.filter(
-    (model) => model.available && model.disabled !== true && model.id.toLowerCase().includes(queryLower),
-  )
-  const navItems: Array<{ id: string }> = [
-    ...filteredTiers.map((tier) => ({ id: `${MODEL_TIER_PREFIX}/${tier.id}` })),
-    ...filteredModels.map((model) => ({ id: model.id })),
-  ]
-  const filteredKeys = navItems.map((item) => item.id).join('|')
+    const nextNavItems: Array<{ id: string }> = [
+      ...nextTiers.map((tier) => ({ id: `${MODEL_TIER_PREFIX}/${tier.id}` })),
+      ...nextModels.map((model) => ({ id: model.id })),
+    ]
+    const nextUnavailable =
+      (models.length === 0 || models.every((model) => !model.available || model.disabled === true)) &&
+      rawTiers.every((tier) => !tier.available || tier.disabled === true)
+    return {
+      filteredTiers: nextTiers,
+      filteredModels: nextModels,
+      navItems: nextNavItems,
+      filteredKeys: nextNavItems.map((item) => item.id).join('|'),
+      allUnavailable: nextUnavailable,
+    }
+  }, [open, query, rawTiers, models])
   const [activeIndex, setActiveIndex] = useState(-1)
 
   useEffect(() => {
@@ -224,9 +248,6 @@ export function ModelPickerControl({
   // not in the model's supported list, fall back to off or the first supported.
   const effectiveLevel = resolveEffectiveThinkingLevel(currentLevels, activeThinkingLevel)
   const showLevel = supportsThinking && effectiveLevel !== '' && effectiveLevel !== 'off'
-  const allUnavailable =
-    (models.length === 0 || models.every((model) => !model.available || model.disabled === true)) &&
-    rawTiers.every((tier) => !tier.available || tier.disabled === true)
   const canRefresh = host.refreshModels !== undefined
 
   return (

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Component, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type {
   ConversationEntry,
   ConversationLive,
@@ -40,7 +40,8 @@ import type { OutlineAnchor } from './outline-model.js'
 import {
   buildActiveEntryIndex,
   buildAssistantModelBoundaries,
-  buildTimelineItems,
+  buildLiveTimelineTail,
+  buildSettledTimelinePrefix,
   collectToolCallsByName,
   findLatestProcessTurnKey,
   lastEditableHumanInput,
@@ -54,6 +55,31 @@ import { useTimelineScroll, type TimelineOutlineScrollRequest } from './use-time
 const EMPTY_RESOLVED_ASKS: ResolvedAskEntry[] = []
 const useIsomorphicLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect
 
+interface TimelineBeforeCommitSnapshotProps {
+  conversationId: number
+  detailEntries: ReadonlyArray<ConversationEntry>
+  onBeforeEntriesCommit: (nextConversationId: number, nextEntries: ReadonlyArray<ConversationEntry>) => void
+}
+
+/** Pre-mutation lifecycle bridge: captures SWR scroll anchor in `getSnapshotBeforeUpdate` rather than during render. */
+class TimelineBeforeCommitSnapshot extends Component<TimelineBeforeCommitSnapshotProps> {
+  override getSnapshotBeforeUpdate(prevProps: TimelineBeforeCommitSnapshotProps): null {
+    if (
+      prevProps.conversationId !== this.props.conversationId ||
+      prevProps.detailEntries !== this.props.detailEntries
+    ) {
+      this.props.onBeforeEntriesCommit(this.props.conversationId, this.props.detailEntries)
+    }
+    return null
+  }
+
+  override componentDidUpdate(): void {}
+
+  override render(): ReactNode {
+    return null
+  }
+}
+
 export type OutlineScrollRequest = TimelineOutlineScrollRequest
 
 export interface ConversationTimelineProps {
@@ -62,6 +88,7 @@ export interface ConversationTimelineProps {
   live?: ConversationLive
   timelineItems?: ReadonlyArray<TimelineItem>
   sendingPending?: boolean
+  outlineOpen?: boolean
   outlineScrollRequest?: OutlineScrollRequest | null
   /** 当前阅读位置对应的大纲激活锚点（entryId + 回合内 headingIndex / 卡片 cardId）。 */
   onActiveOutlineChange?: (anchor: OutlineAnchor | undefined) => void
@@ -76,6 +103,7 @@ export function ConversationTimeline({
   live,
   timelineItems,
   sendingPending = false,
+  outlineOpen = true,
   outlineScrollRequest,
   onActiveOutlineChange,
   onRequestEdit,
@@ -97,18 +125,27 @@ export function ConversationTimeline({
 
   const isWorking = conversation.status === 'working'
   const isCompacting = conversation.contextUsage?.compacting === true
-  const items = useMemo(
+  const fallbackSettledPrefix = useMemo(
     () =>
-      timelineItems ??
-      buildTimelineItems(detailEntries, {
-        ...(live !== undefined ? { live } : {}),
-        working: isWorking,
-        compacting: isCompacting,
-        timelineRenderers: groupedUi.timelineRenderers,
-        toolViews: groupedUi.toolViews,
-      }),
-    [timelineItems, detailEntries, live, isWorking, isCompacting, groupedUi.timelineRenderers, groupedUi.toolViews],
+      timelineItems !== undefined
+        ? null
+        : buildSettledTimelinePrefix(detailEntries, {
+            timelineRenderers: groupedUi.timelineRenderers,
+            toolViews: groupedUi.toolViews,
+          }),
+    [timelineItems, detailEntries, groupedUi.timelineRenderers, groupedUi.toolViews],
   )
+  const items = useMemo(() => {
+    if (timelineItems !== undefined) return timelineItems
+    const prefix = fallbackSettledPrefix!
+    const tail = buildLiveTimelineTail(prefix, {
+      ...(live !== undefined ? { live } : {}),
+      working: isWorking,
+      compacting: isCompacting,
+      toolViews: groupedUi.toolViews,
+    })
+    return tail.length === 0 ? prefix.items : [...prefix.items, ...tail]
+  }, [timelineItems, fallbackSettledPrefix, live, isWorking, isCompacting, groupedUi.toolViews])
 
   const activeEntriesById = useMemo(() => buildActiveEntryIndex(detailEntries), [detailEntries])
   const hasLiveTurn = items.some((item) => item.kind === 'assistant' && item.live)
@@ -172,6 +209,7 @@ export function ConversationTimeline({
     highlightScrollRef,
     scrollToBottomAndFollow,
     loadEarlierEntries,
+    captureBeforeEntriesCommit,
   } = useTimelineScroll({
     conversationId: conversation.id,
     detailEntries,
@@ -183,6 +221,7 @@ export function ConversationTimeline({
     anchorSignature,
     highlightedEntry,
     outlineScrollRequest,
+    outlineOpen,
     onActiveOutlineChange,
     onConversationSwitch: clearProcessToggle,
     fetchEarlierEntries,
@@ -242,6 +281,10 @@ export function ConversationTimeline({
   )
 
   const latestRetryTarget = useMemo(() => lastEditableHumanInput(detailEntries), [detailEntries])
+  const regenerateLatestTurn = useCallback(
+    () => (latestRetryTarget !== undefined ? entryActions.retryTurn(latestRetryTarget) : Promise.resolve()),
+    [entryActions.retryTurn, latestRetryTarget],
+  )
   const loading = !detailsReady
   const hasOlderCursor = Boolean(conversationDetail?.nextCursor)
   const showEmptyState =
@@ -263,6 +306,11 @@ export function ConversationTimeline({
 
   return (
     <div ref={rootRef} className="timeline-container">
+      <TimelineBeforeCommitSnapshot
+        conversationId={conversation.id}
+        detailEntries={detailEntries}
+        onBeforeEntriesCommit={captureBeforeEntriesCommit}
+      />
       <div ref={scrollRef} className="timeline-scroll">
         {hasLeadingCenterSlot ? (
           <div className="timeline-center-slot">
@@ -369,7 +417,7 @@ export function ConversationTimeline({
                     onForkFromHere={entryActions.forkFromHere}
                     onRegenerate={
                       item.key === lastAssistantKey && !isWorking && !sendingPending && latestRetryTarget !== undefined
-                        ? () => entryActions.retryTurn(latestRetryTarget)
+                        ? regenerateLatestTurn
                         : undefined
                     }
                   />

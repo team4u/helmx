@@ -108,30 +108,6 @@
   height: auto;
 }
 
-/* 左右分栏模态弹窗原语 */
-.modal-body-split,
-.asset-modal-body {
-  display: flex;
-  flex-direction: row;
-  align-items: stretch;
-  gap: 14px;
-  padding: 16px;
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.asset-modal-list {
-  width: 240px;
-  min-width: 240px;
-  max-width: 240px;
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  overflow-y: auto;
-}
-
 /* 代码片段展示框原语 */
 .code-box {
   display: block;
@@ -341,13 +317,6 @@
 .nowrap { white-space: nowrap; }
 .break-word { white-space: normal; word-break: break-word; overflow-wrap: anywhere; min-width: 0; }
 .plugin-card-header > button { flex-shrink: 0; }
-.profile-desc-textarea {
-  min-height: 72px;
-  padding: 8px 10px;
-  line-height: 1.5;
-  font-size: 13px;
-  resize: vertical;
-}
 .profile-editor-textarea {
   min-height: 280px;
   max-height: 600px;

@@ -702,7 +702,7 @@ export function resolveOverviewCardRunStartedAt(card: OverviewCard): number | un
 }
 
 /** 活跃后代芯片的秒表起点锚：blocked 优先取 pendingAskSince，working 取 runStartedAt，安静芯片无锚。 */
-function resolveOverviewDescendantChipAnchor(
+export function resolveOverviewDescendantChipAnchor(
   descendant: OverviewDescendant,
 ): { kind: 'waiting' | 'running'; since: number } | undefined {
   const waitingSince = waitingAnchorOf(descendant.conv)

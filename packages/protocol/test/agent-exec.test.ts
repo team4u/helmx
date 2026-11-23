@@ -218,8 +218,9 @@ describe('sanitizeAgentGateResult (gate result contract)', () => {
 
 describe('sanitizeAgentNamespacedMeta (standalone entry, same contract)', () => {
   it('undefined returns an empty object; valid values share the boundary with sanitizeAgentExecutionInfo', timeout, () => {
-    assert.deepEqual(sanitizeAgentNamespacedMeta(undefined, ctx), {})
-    const out = sanitizeAgentNamespacedMeta({ p: { a: [1, { b: null }] } }, ctx)
+    const metaCtx = { ...ctx, field: 'meta' }
+    assert.deepEqual(sanitizeAgentNamespacedMeta(undefined, metaCtx), {})
+    const out = sanitizeAgentNamespacedMeta({ p: { a: [1, { b: null }] } }, metaCtx)
     assert.deepEqual(out, { p: { a: [1, { b: null }] } })
   })
 })

@@ -229,9 +229,21 @@ export function useSkills(): SkillSummary[] {
   return useDomainSlice('skills', (s) => s.getSkills())
 }
 
-export function useCatalogActions(): ActionManifest[] {
-  return useDomainSlice('actions', (s) => s.getActionsList())
+export function useCatalogActions(enabled = true): ActionManifest[] {
+  const external = useContext(HelmxExternalStoreContext)
+  const subscribe = useCallback(
+    (listener: () => void) =>
+      external !== null && enabled ? external.subscribeDomain('actions', listener) : NOOP_UNSUBSCRIBE,
+    [external, enabled],
+  )
+  const getSnapshot = (): ActionManifest[] | typeof UNSET =>
+    external !== null ? (enabled ? external.getActionsList() : EMPTY_ACTIONS_LIST) : UNSET
+  const value = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
+  if (value !== UNSET) return value
+  throw new Error('useHelmxStore must be called inside <HelmxStoreProvider>')
 }
+
+const EMPTY_ACTIONS_LIST: ActionManifest[] = []
 
 export function useConversations(): ConversationSummary[] {
   return useDomainSlice('conversations', (s) => s.getConversations())
@@ -280,6 +292,96 @@ export function useLoadErrorsMap(): Record<string, string> {
 
 export function usePluginDocsState(): Record<string, unknown> {
   return useDomainSlice('pluginDocsMap', (s) => s.getPluginDocsMap())
+}
+
+const EMPTY_PLUGIN_DOCS_SUBSET: Readonly<Record<string, unknown>> = Object.freeze({})
+const EMPTY_LOAD_ERRORS_SUBSET: Readonly<Record<string, string>> = Object.freeze({})
+
+/**
+ * Subscribe only to the specified `pluginId/docName` keys rather than the global `pluginDocsMap` domain.
+ * Registers zero store listeners when `docKeys` is empty.
+ */
+export function usePluginDocsSubset(docKeys: ReadonlyArray<string>): Readonly<Record<string, unknown>> {
+  const external = useContext(HelmxExternalStoreContext)
+  const serializedKeys = docKeys.length === 0 ? '' : JSON.stringify([...new Set(docKeys)].sort())
+  const cacheRef = useRef<{ keys: string; map: Record<string, unknown> }>({
+    keys: '',
+    map: EMPTY_PLUGIN_DOCS_SUBSET as Record<string, unknown>,
+  })
+  const subscribe = useCallback(
+    (listener: () => void) => {
+      if (external === null || serializedKeys === '') return NOOP_UNSUBSCRIBE
+      const keys = JSON.parse(serializedKeys) as string[]
+      const unsubs = keys.map((key) => external.subscribePluginDoc(key, listener))
+      return () => {
+        for (const off of unsubs) off()
+      }
+    },
+    [external, serializedKeys],
+  )
+  const getSnapshot = (): Readonly<Record<string, unknown>> | typeof UNSET => {
+    if (external === null) return UNSET
+    if (serializedKeys === '') return EMPTY_PLUGIN_DOCS_SUBSET
+    const keys = JSON.parse(serializedKeys) as string[]
+    const next: Record<string, unknown> = {}
+    for (const key of keys) {
+      if (external.hasPluginDoc(key)) {
+        next[key] = external.getPluginDoc(key)
+      }
+    }
+    const prev = cacheRef.current
+    if (prev.keys === serializedKeys && cacheSame(prev.map, next)) {
+      return prev.map
+    }
+    cacheRef.current = { keys: serializedKeys, map: next }
+    return next
+  }
+  const value = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
+  if (value !== UNSET) return value
+  throw new Error('useHelmxStore must be called inside <HelmxStoreProvider>')
+}
+
+/**
+ * Subscribe only to the specified `loadErrors` keys (e.g. `doc:pluginId/docName`) rather than all load errors.
+ * Registers zero store listeners when `errorKeys` is empty.
+ */
+export function useLoadErrorsSubset(errorKeys: ReadonlyArray<string>): Readonly<Record<string, string>> {
+  const external = useContext(HelmxExternalStoreContext)
+  const serializedKeys = errorKeys.length === 0 ? '' : JSON.stringify([...new Set(errorKeys)].sort())
+  const cacheRef = useRef<{ keys: string; map: Record<string, string> }>({
+    keys: '',
+    map: EMPTY_LOAD_ERRORS_SUBSET as Record<string, string>,
+  })
+  const subscribe = useCallback(
+    (listener: () => void) => {
+      if (external === null || serializedKeys === '') return NOOP_UNSUBSCRIBE
+      const keys = JSON.parse(serializedKeys) as string[]
+      const unsubs = keys.map((key) => external.subscribeLoadError(key, listener))
+      return () => {
+        for (const off of unsubs) off()
+      }
+    },
+    [external, serializedKeys],
+  )
+  const getSnapshot = (): Readonly<Record<string, string>> | typeof UNSET => {
+    if (external === null) return UNSET
+    if (serializedKeys === '') return EMPTY_LOAD_ERRORS_SUBSET
+    const keys = JSON.parse(serializedKeys) as string[]
+    const next: Record<string, string> = {}
+    for (const key of keys) {
+      const err = external.getLoadError(key)
+      if (err !== undefined) next[key] = err
+    }
+    const prev = cacheRef.current
+    if (prev.keys === serializedKeys && cacheSame(prev.map, next)) {
+      return prev.map
+    }
+    cacheRef.current = { keys: serializedKeys, map: next }
+    return next
+  }
+  const value = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
+  if (value !== UNSET) return value
+  throw new Error('useHelmxStore must be called inside <HelmxStoreProvider>')
 }
 
 export function useConversationDetailsMap(): Record<number, ConversationDetail> {

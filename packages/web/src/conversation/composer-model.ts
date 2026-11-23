@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
 import type { ConversationStatus } from '@helmx/protocol/browser'
 import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
+import { useMaxWidthMediaQuery } from '../lib/use-media-query.js'
 import type { EditRequestTarget } from '../conversation/timeline-model.js'
 
 // ---------------------------------------------------------------------------
@@ -283,25 +283,5 @@ export function envDraftUnchanged(draft: EnvDraft, nodeId: string | undefined, c
 
 /** Track whether the viewport width is within the mobile threshold (default <= 680px). */
 export function useIsMobile(maxWidth = 680): boolean {
-  const [isMobile, setIsMobile] = useState(() => {
-    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false
-    return window.matchMedia(`(max-width: ${maxWidth}px)`).matches
-  })
-
-  useEffect(() => {
-    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return
-    const mql = window.matchMedia(`(max-width: ${maxWidth}px)`)
-    const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches)
-    if (typeof mql.addEventListener === 'function') {
-      mql.addEventListener('change', handler)
-      return () => mql.removeEventListener('change', handler)
-    } else if (typeof (mql as unknown as { addListener?: (cb: (e: MediaQueryListEvent) => void) => void }).addListener === 'function') {
-      (mql as unknown as { addListener: (cb: (e: MediaQueryListEvent) => void) => void }).addListener(handler)
-      return () => {
-        (mql as unknown as { removeListener: (cb: (e: MediaQueryListEvent) => void) => void }).removeListener(handler)
-      }
-    }
-  }, [maxWidth])
-
-  return isMobile
+  return useMaxWidthMediaQuery(maxWidth)
 }

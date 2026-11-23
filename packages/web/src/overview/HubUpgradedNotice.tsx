@@ -5,61 +5,41 @@
  * - 「知道了」或打开过 changelog 即在本浏览器记为已读（localStorage 记当前版本），
  *   直到下次版本变化才重新出现——主动一键切换不经过这里（切换完成卡自带引导）。
  */
-import { useEffect, useState, type ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import { HelmxIcon } from '@helmx/plugin-client'
 import { useStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
-import { apiRequest } from '../lib/api.js'
-
-const POLL_MS = 60_000
-
-interface HubUpgradeStatus {
-  currentVersion: string | null
-  upgradedFrom: string | null
-  changelogAvailable: boolean
-}
-
 import { markSeenVersion, readSeenVersion } from './hub-changelog-seen.js'
+import { DEFAULT_HUB_STATUS_POLL_MS, useHubUpdateStatusPoll } from './hub-update-status.js'
 
 export function HubUpgradedNotice(props: { pollMs?: number }): ReactNode | null {
-  const pollMs = props.pollMs ?? POLL_MS
+  const pollMs = props.pollMs ?? DEFAULT_HUB_STATUS_POLL_MS
   const { t } = useWebLocale()
   const { setActiveModal } = useStoreActions()
-  const [status, setStatus] = useState<HubUpgradeStatus | null>(null)
+  const [status] = useHubUpdateStatusPoll(pollMs)
+  const [dismissedVersion, setDismissedVersion] = useState<string | null>(() => readSeenVersion())
 
-  useEffect(() => {
-    const controller = new AbortController()
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const poll = (): void => {
-      void apiRequest<HubUpgradeStatus>('GET', '/api/hub-update/status', undefined, controller.signal)
-        .then((next) => {
-          setStatus(next)
-          if (!controller.signal.aborted) timer = setTimeout(poll, pollMs)
-        })
-        .catch(() => {
-          if (!controller.signal.aborted) timer = setTimeout(poll, pollMs)
-        })
-    }
-    poll()
-    return () => {
-      controller.abort()
-      if (timer !== undefined) clearTimeout(timer)
-    }
-  }, [])
+  if (status === null || status.upgradedFrom == null || status.currentVersion === null) return null
+  if (dismissedVersion === status.currentVersion || readSeenVersion() === status.currentVersion) return null
 
-  if (status === null || status.upgradedFrom === null || status.currentVersion === null) return null
-  if (readSeenVersion() === status.currentVersion) return null
+  const currentVersion = status.currentVersion
+  const upgradedFrom = status.upgradedFrom
+
+  const dismiss = (): void => {
+    markSeenVersion(currentVersion)
+    setDismissedVersion(currentVersion)
+  }
 
   const openChangelog = (): void => {
-    setActiveModal({ kind: 'hub-changelog', from: status.upgradedFrom! })
-    markSeenVersion(status.currentVersion!)
+    setActiveModal({ kind: 'hub-changelog', from: upgradedFrom })
+    dismiss()
   }
 
   return (
     <div className="hub-update-card hub-upgraded-notice" role="status">
       <HelmxIcon name="check-circle" size={14} />
       <span className="hub-update-card-text">
-        {t('shell.hubChangelog.upgraded', { from: status.upgradedFrom, version: status.currentVersion })}
+        {t('shell.hubChangelog.upgraded', { from: upgradedFrom, version: currentVersion })}
       </span>
       {status.changelogAvailable === true ? (
         <button type="button" className="hub-update-card-action" onClick={openChangelog}>
@@ -69,7 +49,7 @@ export function HubUpgradedNotice(props: { pollMs?: number }): ReactNode | null 
       <button
         type="button"
         className="hub-update-card-action hub-update-card-dismiss"
-        onClick={() => markSeenVersion(status.currentVersion!)}
+        onClick={dismiss}
       >
         {t('shell.hubChangelog.dismiss')}
       </button>

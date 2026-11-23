@@ -30,6 +30,7 @@ export * from './semver.js'
 export * from './meta.js'
 export * from './utils.js'
 export * from './tool-presentation.js'
+export * from './presentation-meta.js'
 export {
   NODE_ID_PATTERN,
   NODE_ID_REGEX,

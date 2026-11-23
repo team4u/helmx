@@ -1,4 +1,4 @@
-import { useId, useMemo, useState } from 'react'
+import { memo, useId, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ToolViewSpec } from '@helmx/protocol/browser'
 import { HelmxIcon, Tooltip, useSharedNowMs } from '@helmx/plugin-client'
@@ -33,7 +33,7 @@ function RunningElapsed({ startedAt }: { startedAt: number }): ReactNode {
   return <span className="tabular-nums">{formatStopwatchMs(Math.max(0, nowMs - startedAt))}</span>
 }
 
-export function TraceRow({
+export const TraceRow = memo(function TraceRow({
   tool,
   conversationId,
   defaultOpen,
@@ -182,9 +182,9 @@ export function TraceRow({
       )}
     </div>
   )
-}
+})
 
-export function StepGroup({
+export const StepGroup = memo(function StepGroup({
   steps,
   active,
   conversationId,
@@ -221,7 +221,7 @@ export function StepGroup({
       shortcutToggle={shortcutToggle}
     />
   )
-}
+})
 
 function MultiStepGroup({
   steps,

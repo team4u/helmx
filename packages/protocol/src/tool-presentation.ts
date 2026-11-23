@@ -1,6 +1,4 @@
-import { HelmxError } from './error.js'
 import type { JsonSchema } from './plugin-dto.js'
-import { validateOrThrow } from './schema.js'
 import { isPlainObject } from './utils.js'
 
 /** Hard UTF-8 JSON byte cap for persisted tool `presentationMeta` (`pi.tool-result.model[0].details`). */
@@ -9,301 +7,6 @@ export const TOOL_PRESENTATION_META_MAX_BYTES = 64 * 1024
 export const TOOL_PRESENTATION_META_MAX_DEPTH = 12
 /** Hard total visited JSON node cap for persisted tool `presentationMeta` (root + every value/element). */
 export const TOOL_PRESENTATION_META_MAX_NODES = 2_000
-
-const FORBIDDEN_META_KEYS = ['__proto__', 'constructor', 'prototype'] as const
-const FORBIDDEN_META_KEY_SET = new Set<string>(FORBIDDEN_META_KEYS)
-const utf8Encoder = new TextEncoder()
-
-export interface PresentationMetaBoundsOptions {
-  /** Human-readable tool / callsite label included in error diagnostics. */
-  label?: string
-  /** Optional string redactor applied to keys and string values before byte-budget & schema validation. */
-  redact?: (text: string) => string
-  /** Optional JSON Schema validated against the redacted, bounded object. */
-  schema?: JsonSchema
-  /** Override max serialized UTF-8 byte length (defaults to {@link TOOL_PRESENTATION_META_MAX_BYTES}). */
-  maxBytes?: number
-  /** Override max container nesting depth (defaults to {@link TOOL_PRESENTATION_META_MAX_DEPTH}). */
-  maxDepth?: number
-  /** Override max total visited JSON nodes (defaults to {@link TOOL_PRESENTATION_META_MAX_NODES}). */
-  maxNodes?: number
-  /** Error code thrown on contract violation (defaults to `'invalid_tool_result'`). */
-  code?: string
-  /** HTTP status code attached to thrown {@link HelmxError} (defaults to `500`). */
-  status?: number
-}
-
-/**
- * Validate, optionally redact, and deep-clone tool `presentationMeta` at the persistence boundary.
- *
- * Enforces all structural & resource invariants without silent truncation or field dropping:
- * - top-level value must be a plain JSON object (rejects null, primitives, arrays, class instances);
- * - inspects `Reflect.ownKeys` on every object and array: rejects symbol own keys, non-enumerable own
- *   properties, extra own properties on arrays, non-plain array subclasses, and prototype keys
- *   (`__proto__`, `constructor`, `prototype`, both before and after redaction);
- * - rejects circular references, sparse arrays, `undefined`, non-finite numbers, and non-JSON values;
- * - enforces container depth <= `maxDepth` (root object = depth 1; primitive leaves do not consume depth),
- *   total visited nodes <= `maxNodes`, and serialized UTF-8 JSON byte length <= `maxBytes`;
- * - when `schema` is provided, validates the cloned (and redacted) object synchronously via `validateOrThrow`.
- */
-export function assertBoundedPresentationMeta(
-  value: unknown,
-  options?: PresentationMetaBoundsOptions,
-): Record<string, unknown> {
-  const label = options?.label ?? 'tool'
-  const maxBytes = options?.maxBytes ?? TOOL_PRESENTATION_META_MAX_BYTES
-  const maxDepth = options?.maxDepth ?? TOOL_PRESENTATION_META_MAX_DEPTH
-  const maxNodes = options?.maxNodes ?? TOOL_PRESENTATION_META_MAX_NODES
-  const code = options?.code ?? 'invalid_tool_result'
-  const status = options?.status ?? 500
-  const redact = options?.redact
-
-  if (!Number.isInteger(maxBytes) || maxBytes < 0) {
-    throw new HelmxError('validation_error', `invalid maxBytes bound: ${String(maxBytes)}`, 400)
-  }
-  if (!Number.isInteger(maxDepth) || maxDepth < 1) {
-    throw new HelmxError('validation_error', `invalid maxDepth bound: ${String(maxDepth)}`, 400)
-  }
-  if (!Number.isInteger(maxNodes) || maxNodes < 1) {
-    throw new HelmxError('validation_error', `invalid maxNodes bound: ${String(maxNodes)}`, 400)
-  }
-
-  if (!isPlainObject(value)) {
-    throw new HelmxError(code, `${label} presentationMeta must be a plain JSON object`, status)
-  }
-
-  const visiting = new WeakSet<object>()
-  let nodes = 0
-
-  function visit(current: unknown, path: string, depth: number): unknown {
-    nodes += 1
-    if (nodes > maxNodes) {
-      throw new HelmxError(
-        code,
-        `${label} presentationMeta exceeds max node count (${maxNodes}) at ${path}`,
-        status,
-        { maxNodes, path },
-      )
-    }
-    if (current === null || typeof current === 'boolean') return current
-    if (typeof current === 'string') return redact ? redact(current) : current
-    if (typeof current === 'number') {
-      if (!Number.isFinite(current)) {
-        throw new HelmxError(
-          code,
-          `${label} presentationMeta contains a non-finite number at ${path}`,
-          status,
-          { path },
-        )
-      }
-      return current
-    }
-    if (typeof current !== 'object') {
-      throw new HelmxError(
-        code,
-        `${label} presentationMeta contains a non-JSON value (${typeof current}) at ${path}`,
-        status,
-        { path },
-      )
-    }
-    if (visiting.has(current)) {
-      throw new HelmxError(
-        code,
-        `${label} presentationMeta contains a circular reference at ${path}`,
-        status,
-        { path },
-      )
-    }
-    if (depth > maxDepth) {
-      throw new HelmxError(
-        code,
-        `${label} presentationMeta exceeds max nesting depth (${maxDepth}) at ${path}`,
-        status,
-        { maxDepth, path },
-      )
-    }
-    visiting.add(current)
-    try {
-      if (Array.isArray(current)) {
-        if (Object.getPrototypeOf(current) !== Array.prototype) {
-          throw new HelmxError(
-            code,
-            `${label} presentationMeta contains a non-plain array at ${path}`,
-            status,
-            { path },
-          )
-        }
-        for (const forbidden of FORBIDDEN_META_KEYS) {
-          if (Object.hasOwn(current, forbidden)) {
-            throw new HelmxError(
-              code,
-              `${label} presentationMeta contains forbidden prototype key "${forbidden}" at ${path}`,
-              status,
-              { path, key: forbidden },
-            )
-          }
-        }
-        const out: unknown[] = []
-        for (let i = 0; i < current.length; i += 1) {
-          const desc = Object.getOwnPropertyDescriptor(current, i)
-          if (desc === undefined) {
-            throw new HelmxError(
-              code,
-              `${label} presentationMeta contains a sparse array hole at ${path}[${i}]`,
-              status,
-              { path: `${path}[${i}]` },
-            )
-          }
-          if (!desc.enumerable) {
-            throw new HelmxError(
-              code,
-              `${label} presentationMeta contains a non-enumerable array element at ${path}[${i}]`,
-              status,
-              { path: `${path}[${i}]` },
-            )
-          }
-          if (desc.get !== undefined || desc.set !== undefined) {
-            throw new HelmxError(
-              code,
-              `${label} presentationMeta contains an accessor array element at ${path}[${i}]`,
-              status,
-              { path: `${path}[${i}]` },
-            )
-          }
-          out.push(visit(desc.value, `${path}[${i}]`, depth + 1))
-        }
-        // Inspect all own keys (`Reflect.ownKeys`) to reject symbols, prototype keys, or extra named properties
-        // on arrays that index loops / JSON.stringify would silently drop.
-        for (const rawKey of Reflect.ownKeys(current)) {
-          if (rawKey === 'length') continue
-          if (typeof rawKey !== 'string') {
-            const safeSym = redact ? redact(String(rawKey)) : String(rawKey)
-            throw new HelmxError(
-              code,
-              `${label} presentationMeta contains a symbol key (${safeSym}) on array at ${path}`,
-              status,
-              { path },
-            )
-          }
-          if (FORBIDDEN_META_KEY_SET.has(rawKey)) {
-            throw new HelmxError(
-              code,
-              `${label} presentationMeta contains forbidden prototype key "${rawKey}" at ${path}`,
-              status,
-              { path, key: rawKey },
-            )
-          }
-          const idx = Number(rawKey)
-          if (!Number.isInteger(idx) || idx < 0 || idx >= current.length || String(idx) !== rawKey) {
-            const safeKey = redact ? redact(rawKey) : rawKey
-            throw new HelmxError(
-              code,
-              `${label} presentationMeta contains an extra own property "${safeKey}" on array at ${path}`,
-              status,
-              { path, key: safeKey },
-            )
-          }
-        }
-        return out
-      }
-      if (!isPlainObject(current)) {
-        throw new HelmxError(
-          code,
-          `${label} presentationMeta contains a non-plain object at ${path}`,
-          status,
-          { path },
-        )
-      }
-      for (const forbidden of FORBIDDEN_META_KEYS) {
-        if (Object.hasOwn(current, forbidden)) {
-          throw new HelmxError(
-            code,
-            `${label} presentationMeta contains forbidden prototype key "${forbidden}" at ${path}`,
-            status,
-            { path, key: forbidden },
-          )
-        }
-      }
-      const out: Record<string, unknown> = {}
-      const seenKeys = new Set<string>()
-      for (const rawKey of Reflect.ownKeys(current)) {
-        if (typeof rawKey !== 'string') {
-          const safeSym = redact ? redact(String(rawKey)) : String(rawKey)
-          throw new HelmxError(
-            code,
-            `${label} presentationMeta contains a symbol key (${safeSym}) at ${path}`,
-            status,
-            { path },
-          )
-        }
-        const desc = Object.getOwnPropertyDescriptor(current, rawKey)
-        if (desc === undefined || !desc.enumerable) {
-          const safeKey = redact ? redact(rawKey) : rawKey
-          throw new HelmxError(
-            code,
-            `${label} presentationMeta contains a non-enumerable property "${safeKey}" at ${path}`,
-            status,
-            { path, key: safeKey },
-          )
-        }
-        if (desc.get !== undefined || desc.set !== undefined) {
-          const safeKey = redact ? redact(rawKey) : rawKey
-          throw new HelmxError(
-            code,
-            `${label} presentationMeta contains an accessor property "${safeKey}" at ${path}`,
-            status,
-            { path, key: safeKey },
-          )
-        }
-        const key = redact ? redact(rawKey) : rawKey
-        if (FORBIDDEN_META_KEY_SET.has(key)) {
-          throw new HelmxError(
-            code,
-            `${label} presentationMeta contains forbidden prototype key "${key}" at ${path}`,
-            status,
-            { path, key },
-          )
-        }
-        if (seenKeys.has(key)) {
-          throw new HelmxError(
-            'redacted_key_conflict',
-            `${label} presentationMeta redacted fields collide at ${path}.${key}`,
-            500,
-            { path, key },
-          )
-        }
-        seenKeys.add(key)
-        out[key] = visit(desc.value, `${path}.${key}`, depth + 1)
-      }
-      return out
-    } finally {
-      visiting.delete(current)
-    }
-  }
-
-  const cloned = visit(value, 'presentationMeta', 1) as Record<string, unknown>
-  const bytes = utf8Encoder.encode(JSON.stringify(cloned)).byteLength
-  if (bytes > maxBytes) {
-    throw new HelmxError(
-      code,
-      `${label} presentationMeta exceeds max byte size (${bytes} > ${maxBytes} bytes)`,
-      status,
-      { maxBytes, actualBytes: bytes },
-    )
-  }
-
-  if (options?.schema !== undefined) {
-    validateOrThrow(
-      options.schema,
-      cloned,
-      `${label} presentationMeta does not conform to presentationMetaSchema`,
-      code,
-      status,
-    )
-  }
-
-  return cloned
-}
 
 /** Actual execution result of the built-in edit tool; presentation only consumes diffs corresponding to the written file. */
 export type ToolDiffRow =
@@ -381,6 +84,155 @@ export const EDIT_TOOL_RESULT_SCHEMA = {
   },
   required: ['path', 'nodeId', 'replaced', 'diff'],
   additionalProperties: false,
+}
+
+export type EditToolResultValidation =
+  | { ok: true; value: EditToolResult }
+  | { ok: false; error: string }
+
+const EDIT_RESULT_KEYS = ['path', 'nodeId', 'replaced', 'diff'] as const
+const EDIT_RESULT_KEY_SET = new Set<string>(EDIT_RESULT_KEYS)
+const EDIT_DIFF_KEYS = ['rows', 'addedLines', 'removedLines', 'firstChangedLine', 'truncated'] as const
+const EDIT_DIFF_KEY_SET = new Set<string>(EDIT_DIFF_KEYS)
+const CONTEXT_ROW_KEYS = ['kind', 'oldLine', 'newLine', 'text'] as const
+const CONTEXT_ROW_KEY_SET = new Set<string>(CONTEXT_ROW_KEYS)
+const REMOVE_ROW_KEYS = ['kind', 'oldLine', 'text'] as const
+const REMOVE_ROW_KEY_SET = new Set<string>(REMOVE_ROW_KEYS)
+const ADD_ROW_KEYS = ['kind', 'newLine', 'text'] as const
+const ADD_ROW_KEY_SET = new Set<string>(ADD_ROW_KEYS)
+
+function isSafeLineNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= Number.MAX_SAFE_INTEGER
+}
+
+function isSafeNonNegativeInt(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= Number.MAX_SAFE_INTEGER
+}
+
+function isBoundedRowText(value: unknown): value is string {
+  return typeof value === 'string' && value.length <= TOOL_DIFF_MAX_ROW_CHARS
+}
+
+function checkExactObjectKeys(
+  record: Record<string, unknown>,
+  required: readonly string[],
+  allowed: ReadonlySet<string>,
+  path: string,
+): string | null {
+  for (const key of required) {
+    if (!Object.hasOwn(record, key)) {
+      return `${path} must have required property '${key}'`
+    }
+  }
+  for (const key of Object.keys(record)) {
+    if (!allowed.has(key)) {
+      return `${path} must NOT have additional properties ('${key}')`
+    }
+  }
+  return null
+}
+
+/**
+ * Dependency-free structural validator enforcing the exact {@link EDIT_TOOL_RESULT_SCHEMA}
+ * contract for browser consumers (`@helmx/protocol/browser`) without pulling TypeBox into
+ * eager web bundles.
+ */
+export function validateEditToolResult(value: unknown): EditToolResultValidation {
+  if (!isPlainObject(value)) {
+    return { ok: false, error: '(root) must be a plain object' }
+  }
+  const rootKeyErr = checkExactObjectKeys(value, EDIT_RESULT_KEYS, EDIT_RESULT_KEY_SET, '(root)')
+  if (rootKeyErr !== null) return { ok: false, error: rootKeyErr }
+
+  if (typeof value.path !== 'string' || value.path.length < 1) {
+    return { ok: false, error: '/path must be a non-empty string' }
+  }
+  if (typeof value.nodeId !== 'string' || value.nodeId.length < 1) {
+    return { ok: false, error: '/nodeId must be a non-empty string' }
+  }
+  if (value.replaced !== true) {
+    return { ok: false, error: '/replaced must be true' }
+  }
+  if (!isPlainObject(value.diff)) {
+    return { ok: false, error: '/diff must be a plain object' }
+  }
+
+  const diff = value.diff
+  const diffKeyErr = checkExactObjectKeys(diff, EDIT_DIFF_KEYS, EDIT_DIFF_KEY_SET, '/diff')
+  if (diffKeyErr !== null) return { ok: false, error: diffKeyErr }
+
+  if (!Array.isArray(diff.rows)) {
+    return { ok: false, error: '/diff/rows must be an array' }
+  }
+  if (diff.rows.length > TOOL_DIFF_MAX_ROWS) {
+    return { ok: false, error: `/diff/rows must NOT have more than ${TOOL_DIFF_MAX_ROWS} items` }
+  }
+
+  for (let i = 0; i < diff.rows.length; i += 1) {
+    if (!Object.hasOwn(diff.rows, i)) {
+      return { ok: false, error: `/diff/rows/${i} must be a plain object` }
+    }
+    const row = diff.rows[i]
+    const rowPath = `/diff/rows/${i}`
+    if (!isPlainObject(row)) {
+      return { ok: false, error: `${rowPath} must be a plain object` }
+    }
+    switch (row.kind) {
+      case 'context': {
+        const keyErr = checkExactObjectKeys(row, CONTEXT_ROW_KEYS, CONTEXT_ROW_KEY_SET, rowPath)
+        if (keyErr !== null) return { ok: false, error: keyErr }
+        if (!isSafeLineNumber(row.oldLine)) {
+          return { ok: false, error: `${rowPath}/oldLine must be an integer >= 1` }
+        }
+        if (!isSafeLineNumber(row.newLine)) {
+          return { ok: false, error: `${rowPath}/newLine must be an integer >= 1` }
+        }
+        if (!isBoundedRowText(row.text)) {
+          return { ok: false, error: `${rowPath}/text must be a string of at most ${TOOL_DIFF_MAX_ROW_CHARS} chars` }
+        }
+        break
+      }
+      case 'remove': {
+        const keyErr = checkExactObjectKeys(row, REMOVE_ROW_KEYS, REMOVE_ROW_KEY_SET, rowPath)
+        if (keyErr !== null) return { ok: false, error: keyErr }
+        if (!isSafeLineNumber(row.oldLine)) {
+          return { ok: false, error: `${rowPath}/oldLine must be an integer >= 1` }
+        }
+        if (!isBoundedRowText(row.text)) {
+          return { ok: false, error: `${rowPath}/text must be a string of at most ${TOOL_DIFF_MAX_ROW_CHARS} chars` }
+        }
+        break
+      }
+      case 'add': {
+        const keyErr = checkExactObjectKeys(row, ADD_ROW_KEYS, ADD_ROW_KEY_SET, rowPath)
+        if (keyErr !== null) return { ok: false, error: keyErr }
+        if (!isSafeLineNumber(row.newLine)) {
+          return { ok: false, error: `${rowPath}/newLine must be an integer >= 1` }
+        }
+        if (!isBoundedRowText(row.text)) {
+          return { ok: false, error: `${rowPath}/text must be a string of at most ${TOOL_DIFF_MAX_ROW_CHARS} chars` }
+        }
+        break
+      }
+      default:
+        return { ok: false, error: `${rowPath}/kind must be 'context', 'remove', or 'add'` }
+    }
+  }
+
+  if (!isSafeNonNegativeInt(diff.addedLines)) {
+    return { ok: false, error: '/diff/addedLines must be a safe non-negative integer' }
+  }
+  if (!isSafeNonNegativeInt(diff.removedLines)) {
+    return { ok: false, error: '/diff/removedLines must be a safe non-negative integer' }
+  }
+  if (!isSafeLineNumber(diff.firstChangedLine)) {
+    return { ok: false, error: '/diff/firstChangedLine must be an integer >= 1' }
+  }
+  if (typeof diff.truncated !== 'boolean') {
+    return { ok: false, error: '/diff/truncated must be a boolean' }
+  }
+
+  return { ok: true, value: value as unknown as EditToolResult }
 }
 
 const nonNegativeInt = { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER }

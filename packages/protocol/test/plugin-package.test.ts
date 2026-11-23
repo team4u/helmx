@@ -103,12 +103,12 @@ test('PluginSummary.managed is an additive optional field (type guards and struc
 })
 
 test('CORE_CLI_COMMAND_PATHS includes plugins install/update/remove/build/manifest/types without duplicates', { timeout: 60_000 }, () => {
-  const paths = [...CORE_CLI_COMMAND_PATHS]
+  const paths: readonly string[] = CORE_CLI_COMMAND_PATHS
   for (const cmd of ['plugins manifest', 'plugins types', 'plugins build', 'plugins install', 'plugins update', 'plugins remove']) {
     assert.ok(paths.includes(cmd), `should include ${cmd}`)
   }
   assert.equal(new Set(paths).size, paths.length, 'command paths must not repeat')
-  const sharedExports = [...PLUGIN_CLIENT_SHARED_EXPORTS]
+  const sharedExports: readonly string[] = PLUGIN_CLIENT_SHARED_EXPORTS
   assert.ok(sharedExports.includes('useHostModels'))
   assert.ok(sharedExports.includes('useHostNodes'))
   assert.ok(sharedExports.includes('useHostProfiles'))

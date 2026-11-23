@@ -519,6 +519,18 @@ export function countOutlineTurns(nodes: ReadonlyArray<OutlineNode>): number {
   return count
 }
 
+/**
+ * Cheap O(N) human turn count directly over `TimelineItem[]` without building `OutlineNode[]`
+ * (used by closed `ConversationOutlinePopover` trigger badges during streaming).
+ */
+export function countTimelineHumanTurns(items: ReadonlyArray<TimelineItem>): number {
+  let count = 0
+  for (const item of items) {
+    if (item.kind === 'human') count += 1
+  }
+  return count
+}
+
 // ---------------------------------------------------------------------------
 // Outline filtering and scroll activation
 // ---------------------------------------------------------------------------
