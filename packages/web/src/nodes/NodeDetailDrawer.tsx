@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { copyToClipboard, CopyButton, DetailDrawer, HelmxIcon, PluginSlot } from '@helmx/plugin-client'
 import { nodesApi } from '../lib/api.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
@@ -59,7 +59,7 @@ export function NodeDetailDrawer({
   onRefresh,
 }: NodeDetailDrawerProps): React.JSX.Element {
   const { t } = useWebLocale()
-  const [issuedToken, setIssuedToken] = useState<string | null>(null)
+  const [issuedTokenState, setIssuedTokenState] = useState<{ nodeId: string; token: string } | null>(null)
   const [newNodeId, setNewNodeId] = useState('')
   const [tokenError, setTokenError] = useState<string | null>(null)
   const [issuing, setIssuing] = useState(false)
@@ -67,8 +67,14 @@ export function NodeDetailDrawer({
   const [copiedToken, setCopiedToken] = useState(false)
 
   const [checkingHealth, setCheckingHealth] = useState(false)
-  const [healthResult, setHealthResult] = useState<NodeUpgradeCheckResult | null>(null)
-  const [healthError, setHealthError] = useState<string | null>(null)
+  const [healthState, setHealthState] = useState<{ nodeId: string; result: NodeUpgradeCheckResult } | null>(null)
+  const [healthErrorState, setHealthErrorState] = useState<{ nodeId: string; message: string } | null>(null)
+
+  const mountedRef = useRef(true)
+  const tokenGenerationRef = useRef(0)
+  const healthGenerationRef = useRef(0)
+  const copiedCmdTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const copiedTokenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const isLocal = node ? isNodeLocal(node) : false
   const isOnline = node ? isNodeOnline(node) : false
@@ -85,6 +91,64 @@ export function NodeDetailDrawer({
       : 'http://localhost:3202'
 
   const targetNodeId = isNew ? newNodeId.trim() : node?.id ?? ''
+  const issuedToken =
+    open && targetNodeId !== '' && issuedTokenState !== null && issuedTokenState.nodeId === targetNodeId
+      ? issuedTokenState.token
+      : null
+  const healthResult =
+    open && !isNew && node?.id && healthState !== null && healthState.nodeId === node.id
+      ? healthState.result
+      : null
+  const healthError =
+    open && !isNew && node?.id && healthErrorState !== null && healthErrorState.nodeId === node.id
+      ? healthErrorState.message
+      : null
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      tokenGenerationRef.current += 1
+      healthGenerationRef.current += 1
+      if (copiedCmdTimerRef.current !== null) {
+        clearTimeout(copiedCmdTimerRef.current)
+        copiedCmdTimerRef.current = null
+      }
+      if (copiedTokenTimerRef.current !== null) {
+        clearTimeout(copiedTokenTimerRef.current)
+        copiedTokenTimerRef.current = null
+      }
+    }
+  }, [])
+
+  // Clear one-time token state and invalidate in-flight token requests whenever
+  // the target node, enrollment mode, or drawer visibility changes.
+  useEffect(() => {
+    tokenGenerationRef.current += 1
+    setIssuedTokenState(null)
+    setTokenError(null)
+    setIssuing(false)
+    setCopiedCmd(false)
+    setCopiedToken(false)
+    if (copiedCmdTimerRef.current !== null) {
+      clearTimeout(copiedCmdTimerRef.current)
+      copiedCmdTimerRef.current = null
+    }
+    if (copiedTokenTimerRef.current !== null) {
+      clearTimeout(copiedTokenTimerRef.current)
+      copiedTokenTimerRef.current = null
+    }
+  }, [open, isNew, targetNodeId])
+
+  useEffect(() => {
+    healthGenerationRef.current += 1
+    setHealthState(null)
+    setHealthErrorState(null)
+    setCheckingHealth(false)
+    if (!open || !isNew) {
+      setNewNodeId('')
+    }
+  }, [open, isNew, node?.id])
 
   const guide = targetNodeId
     ? buildNodeConnectGuide(hubOrigin, {
@@ -102,17 +166,20 @@ export function NodeDetailDrawer({
       }
     }
 
-    if (!targetNodeId) {
+    const requestedNodeId = targetNodeId
+    if (!requestedNodeId) {
       setTokenError(t('nodes.drawer.invalidNodeId'))
       return
     }
 
+    const generation = ++tokenGenerationRef.current
     setIssuing(true)
     setTokenError(null)
 
     try {
-      const res = await nodesApi.issueToken(targetNodeId)
-      setIssuedToken(res.token)
+      const res = await nodesApi.issueToken(requestedNodeId)
+      if (!mountedRef.current || tokenGenerationRef.current !== generation) return
+      setIssuedTokenState({ nodeId: requestedNodeId, token: res.token })
       if (onTokenIssued) {
         onTokenIssued(res.token)
       }
@@ -120,42 +187,70 @@ export function NodeDetailDrawer({
         await onRefresh()
       }
     } catch (err) {
+      if (!mountedRef.current || tokenGenerationRef.current !== generation) return
       setTokenError(err instanceof Error ? err.message : String(err))
     } finally {
-      setIssuing(false)
+      if (mountedRef.current && tokenGenerationRef.current === generation) {
+        setIssuing(false)
+      }
     }
   }
 
   const handleCopyCmd = async () => {
     if (!guide) return
+    const generation = tokenGenerationRef.current
     const ok = await copyToClipboard(guide.oneLineCommand)
+    if (!mountedRef.current || tokenGenerationRef.current !== generation) return
     if (ok) {
       setCopiedCmd(true)
-      setTimeout(() => setCopiedCmd(false), 2000)
+      if (copiedCmdTimerRef.current !== null) clearTimeout(copiedCmdTimerRef.current)
+      copiedCmdTimerRef.current = setTimeout(() => {
+        copiedCmdTimerRef.current = null
+        if (mountedRef.current && tokenGenerationRef.current === generation) {
+          setCopiedCmd(false)
+        }
+      }, 2000)
     }
   }
 
   const handleCopyToken = async () => {
     if (!issuedToken) return
+    const generation = tokenGenerationRef.current
     const ok = await copyToClipboard(issuedToken)
+    if (!mountedRef.current || tokenGenerationRef.current !== generation) return
     if (ok) {
       setCopiedToken(true)
-      setTimeout(() => setCopiedToken(false), 2000)
+      if (copiedTokenTimerRef.current !== null) clearTimeout(copiedTokenTimerRef.current)
+      copiedTokenTimerRef.current = setTimeout(() => {
+        copiedTokenTimerRef.current = null
+        if (mountedRef.current && tokenGenerationRef.current === generation) {
+          setCopiedToken(false)
+        }
+      }, 2000)
     }
   }
 
   const handleHealthCheck = async () => {
-    if (!node?.id) return
+    const requestedNodeId = node?.id
+    if (!requestedNodeId) return
+    const generation = ++healthGenerationRef.current
     setCheckingHealth(true)
-    setHealthError(null)
+    setHealthErrorState(null)
 
     try {
-      const res = await nodesApi.checkUpgrade(node.id)
-      setHealthResult(res)
+      const res = await nodesApi.checkUpgrade(requestedNodeId)
+      if (!mountedRef.current || healthGenerationRef.current !== generation) return
+      setHealthState({ nodeId: requestedNodeId, result: res })
     } catch (err) {
-      setHealthError(err instanceof Error ? err.message : String(err))
+      if (!mountedRef.current || healthGenerationRef.current !== generation) return
+      setHealthErrorState({
+        nodeId: requestedNodeId,
+        message: err instanceof Error ? err.message : String(err),
+      })
     } finally {
-      setCheckingHealth(false)
+      if (mountedRef.current && healthGenerationRef.current === generation) {
+        setCheckingHealth(false)
+      }
     }
   }
 

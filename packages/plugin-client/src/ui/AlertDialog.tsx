@@ -265,8 +265,12 @@ export function ConfirmDialog({
   const t = usePluginTranslator()
   const resolvedConfirmText = confirmText ?? t(uiCopy.confirm)
   const resolvedCancelText = cancelText ?? t(uiCopy.cancel)
+  const handleOpenChange = React.useCallback((nextOpen: boolean) => {
+    if (pending && !nextOpen) return
+    onOpenChange(nextOpen)
+  }, [pending, onOpenChange])
   return (
-    <AlertDialog open={open} onOpenChange={onOpenChange} inline={inline}>
+    <AlertDialog open={open} onOpenChange={handleOpenChange} inline={inline}>
       <AlertDialogPortal inline={inline}>
         <AlertDialogOverlay className="modal-backdrop">
           <AlertDialogContent
@@ -276,8 +280,12 @@ export function ConfirmDialog({
               background: 'var(--bg-elevated)',
               border: '1px solid var(--border)',
             }}
-            onEscapeKeyDown={() => {
-              if (!pending) onCancel?.()
+            onEscapeKeyDown={(event) => {
+              if (pending) {
+                event.preventDefault()
+                return
+              }
+              onCancel?.()
             }}
           >
             <div className="modal-header">
@@ -303,7 +311,7 @@ export function ConfirmDialog({
                   className="btn btn-ghost btn-sm"
                   disabled={pending}
                   onClick={() => {
-                    onCancel?.()
+                    if (!pending) onCancel?.()
                   }}
                 >
                   {resolvedCancelText}
@@ -315,7 +323,7 @@ export function ConfirmDialog({
                   className={`btn btn-sm ${danger ? 'btn-danger' : 'btn-primary'}`}
                   disabled={pending}
                   onClick={() => {
-                    onConfirm()
+                    if (!pending) onConfirm()
                   }}
                 >
                   {resolvedConfirmText}

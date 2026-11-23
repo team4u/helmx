@@ -248,3 +248,73 @@ test('Dialog with open=false renders no content initially', { timeout: 60_000 },
   })
   container.remove()
 })
+
+test('ConfirmDialog blocks Escape dismissal while pending and resumes Escape dismissal when idle', { timeout: 60_000 }, async () => {
+  const { ConfirmDialog } = await import('../src/ui/AlertDialog.js')
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = ReactDOMClient.createRoot(container)
+
+  let openState = true
+  let cancelCount = 0
+  let confirmCount = 0
+  const openChanges: boolean[] = []
+
+  const renderDialog = (pending: boolean) =>
+    e(ConfirmDialog, {
+      open: openState,
+      inline: true,
+      pending,
+      onOpenChange: (next: boolean) => {
+        openChanges.push(next)
+        openState = next
+      },
+      title: 'Delete resource?',
+      description: 'In-flight operation cannot be interrupted via Escape.',
+      confirmText: 'Delete',
+      cancelText: 'Cancel',
+      danger: true,
+      onConfirm: () => {
+        confirmCount += 1
+      },
+      onCancel: () => {
+        cancelCount += 1
+      },
+    })
+
+  try {
+    await act(async () => {
+      root.render(renderDialog(true))
+    })
+
+    const alertContent = container.querySelector('[role="alertdialog"]')
+    assert.ok(alertContent !== null)
+
+    const escEvent = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+    await act(async () => {
+      alertContent.dispatchEvent(escEvent)
+    })
+
+    assert.equal(escEvent.defaultPrevented, true, 'Escape keydown must be defaultPrevented while pending')
+    assert.equal(openState, true, 'pending ConfirmDialog must stay open on Escape')
+    assert.deepEqual(openChanges, [], 'pending ConfirmDialog must not invoke onOpenChange(false) on Escape')
+    assert.equal(cancelCount, 0, 'pending ConfirmDialog must not invoke onCancel on Escape')
+    assert.equal(confirmCount, 0)
+
+    await act(async () => {
+      root.render(renderDialog(false))
+    })
+
+    await act(async () => {
+      alertContent.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    })
+    assert.equal(openState, false, 'non-pending ConfirmDialog closes on Escape')
+    assert.deepEqual(openChanges, [false])
+    assert.equal(cancelCount, 1)
+  } finally {
+    await act(async () => {
+      root.unmount()
+    })
+    container.remove()
+  }
+})

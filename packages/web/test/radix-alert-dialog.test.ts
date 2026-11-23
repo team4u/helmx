@@ -279,3 +279,53 @@ test('AlertDialog 原语与复合属性在 SSR 下行为一致', { timeout: 60_0
   assert.ok(html.includes('取消'))
   assert.ok(html.includes('确认'))
 })
+
+test('ConfirmDialog 交互：pending=true 时按 Esc 阻止关闭与取消回调', { timeout: 60_000 }, async () => {
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = ReactDOMClient.createRoot(container)
+
+  let openState = true
+  let cancelled = false
+  const openChanges: boolean[] = []
+
+  try {
+    await act(async () => {
+      root.render(
+        e(ConfirmDialog, {
+          open: openState,
+          inline: true,
+          pending: true,
+          onOpenChange: (open) => {
+            openChanges.push(open)
+            openState = open
+          },
+          title: '正在卸载插件',
+          description: '操作执行期间不得被 Esc 关闭。',
+          onConfirm: () => {},
+          onCancel: () => {
+            cancelled = true
+          },
+        }),
+      )
+    })
+
+    const alertContent = document.querySelector('[role="alertdialog"]')
+    assert.ok(alertContent !== null)
+
+    const esc = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+    await act(async () => {
+      alertContent.dispatchEvent(esc)
+    })
+
+    assert.equal(esc.defaultPrevented, true, 'pending 态按 Esc 必须调用 preventDefault 阻止 Radix 关闭')
+    assert.equal(openState, true, 'pending 态按 Esc 不得关闭弹窗')
+    assert.deepEqual(openChanges, [], 'pending 态按 Esc 不得触发 onOpenChange(false)')
+    assert.equal(cancelled, false, 'pending 态按 Esc 不得触发 onCancel')
+  } finally {
+    await act(async () => {
+      root.unmount()
+    })
+    container.remove()
+  }
+})
