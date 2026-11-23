@@ -17,10 +17,15 @@ import {
   jsonRenderElementCycle,
   jsonRenderElementReused,
   jsonRenderFlatRootMissing,
+  jsonRenderMaxDepthExceeded,
+  jsonRenderMaxNodesExceeded,
   jsonRenderMissingComponentField,
   jsonRenderRootNormalizeFailed,
   jsonRenderSpecNotObject,
 } from './copy.ts'
+
+export const MAX_SPEC_DEPTH = 32
+export const MAX_SPEC_NODES = 1000
 
 export interface NormalizedSpecNode {
   component: string
@@ -56,17 +61,39 @@ function readComponentName(node: Record<string, unknown>): string {
   return typeof raw === 'string' && raw.trim() !== '' ? raw.trim() : ''
 }
 
+class SpecLimitExceededError extends Error {
+  constructor(readonly reason: string) {
+    super(reason)
+  }
+}
+
+interface SpecBudgetTracker {
+  count: number
+  locale: HelmxLocale
+}
+
+function claimSpecNode(budget: SpecBudgetTracker, depth: number): void {
+  if (depth > MAX_SPEC_DEPTH) {
+    throw new SpecLimitExceededError(jsonRenderMaxDepthExceeded(MAX_SPEC_DEPTH, budget.locale))
+  }
+  budget.count += 1
+  if (budget.count > MAX_SPEC_NODES) {
+    throw new SpecLimitExceededError(jsonRenderMaxNodesExceeded(MAX_SPEC_NODES, budget.locale))
+  }
+}
+
 /**
  * Normalize one Form-A node (recursive):
  * - component/type is the component name;
  * - children is either an array (each entry normalized recursively) or a string literal (becomes a Text body);
  * - every other property goes into props (except children).
  */
-function normalizeTreeNode(raw: unknown): NormalizedSpecNode | null {
+function normalizeTreeNode(raw: unknown, budget: SpecBudgetTracker, depth: number): NormalizedSpecNode | null {
   const node = asRecord(raw)
   if (node === null) return null
   const component = readComponentName(node)
   if (component === '') return null
+  claimSpecNode(budget, depth)
 
   const props: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(node)) {
@@ -79,10 +106,11 @@ function normalizeTreeNode(raw: unknown): NormalizedSpecNode | null {
   if (Array.isArray(rawChildren)) {
     for (const child of rawChildren) {
       if (typeof child === 'string') {
+        claimSpecNode(budget, depth + 1)
         children.push({ component: 'Text', props: { variant: 'body', text: child }, children: [] })
         continue
       }
-      const normalized = normalizeTreeNode(child)
+      const normalized = normalizeTreeNode(child, budget, depth + 1)
       if (normalized !== null) children.push(normalized)
     }
   }
@@ -105,62 +133,73 @@ export function normalizeSpec(spec: unknown, locale: HelmxLocale = DEFAULT_HELMX
   if (record === null) {
     return degradedNode(jsonRenderSpecNotObject(locale))
   }
+  const budget: SpecBudgetTracker = { count: 0, locale }
 
-  // Form B: flat elements table (with cycle detection so a hostile/corrupt spec cannot loop forever)
-  if (isFlatSpec(record)) {
-    const rootId = record['root'] as string
-    const elements = record['elements'] as Record<string, unknown>
-    const visiting = new Set<string>()
-    const visited = new Set<string>()
+  try {
+    // Form B: flat elements table (with cycle detection so a hostile/corrupt spec cannot loop forever)
+    if (isFlatSpec(record)) {
+      const rootId = record['root'] as string
+      const elements = record['elements'] as Record<string, unknown>
+      const visiting = new Set<string>()
+      const visited = new Set<string>()
 
-    const build = (id: string): NormalizedSpecNode | null => {
-      if (visited.has(id)) {
-        return { component: DEGRADED_COMPONENT, props: { reason: jsonRenderElementReused(id, locale) }, children: [] }
-      }
-      if (visiting.has(id)) {
-        return { component: DEGRADED_COMPONENT, props: { reason: jsonRenderElementCycle(id, locale) }, children: [] }
-      }
-      const elem = asRecord(elements[id])
-      if (elem === null) return null
-      const component = readComponentName(elem)
-      if (component === '') return null
-
-      visiting.add(id)
-      const props: Record<string, unknown> = { ...(asRecord(elem['props']) ?? {}) }
-      const children: NormalizedSpecNode[] = []
-      const rawChildren = elem['children']
-      const childIds = Array.isArray(rawChildren)
-        ? rawChildren
-        : rawChildren !== undefined
-          ? [rawChildren]
-          : []
-      for (const childId of childIds) {
-        if (typeof childId === 'string') {
-          const built = build(childId)
-          if (built !== null) children.push(built)
+      const build = (id: string, depth: number): NormalizedSpecNode | null => {
+        if (visited.has(id)) {
+          claimSpecNode(budget, depth)
+          return { component: DEGRADED_COMPONENT, props: { reason: jsonRenderElementReused(id, locale) }, children: [] }
         }
+        if (visiting.has(id)) {
+          claimSpecNode(budget, depth)
+          return { component: DEGRADED_COMPONENT, props: { reason: jsonRenderElementCycle(id, locale) }, children: [] }
+        }
+        const elem = asRecord(elements[id])
+        if (elem === null) return null
+        const component = readComponentName(elem)
+        if (component === '') return null
+        claimSpecNode(budget, depth)
+
+        visiting.add(id)
+        const props: Record<string, unknown> = { ...(asRecord(elem['props']) ?? {}) }
+        const children: NormalizedSpecNode[] = []
+        const rawChildren = elem['children']
+        const childIds = Array.isArray(rawChildren)
+          ? rawChildren
+          : rawChildren !== undefined
+            ? [rawChildren]
+            : []
+        for (const childId of childIds) {
+          if (typeof childId === 'string') {
+            const built = build(childId, depth + 1)
+            if (built !== null) children.push(built)
+          }
+        }
+        visiting.delete(id)
+        visited.add(id)
+        return { component, props, children }
       }
-      visiting.delete(id)
-      visited.add(id)
-      return { component, props, children }
+
+      const root = build(rootId, 1)
+      if (root === null) {
+        return degradedNode(jsonRenderFlatRootMissing(rootId, locale))
+      }
+      return { root, degraded: false }
     }
 
-    const root = build(rootId)
+    // Form A: tree shorthand
+    if (readComponentName(record) === '') {
+      return degradedNode(jsonRenderMissingComponentField(locale))
+    }
+    const root = normalizeTreeNode(record, budget, 1)
     if (root === null) {
-      return degradedNode(jsonRenderFlatRootMissing(rootId, locale))
+      return degradedNode(jsonRenderRootNormalizeFailed(locale))
     }
     return { root, degraded: false }
+  } catch (err) {
+    if (err instanceof SpecLimitExceededError) {
+      return degradedNode(err.reason)
+    }
+    throw err
   }
-
-  // Form A: tree shorthand
-  if (readComponentName(record) === '') {
-    return degradedNode(jsonRenderMissingComponentField(locale))
-  }
-  const root = normalizeTreeNode(record)
-  if (root === null) {
-    return degradedNode(jsonRenderRootNormalizeFailed(locale))
-  }
-  return { root, degraded: false }
 }
 
 /** A resolved KeyValueList entry (label is the key name, value already formatted for display). */

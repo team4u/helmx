@@ -1,5 +1,6 @@
 import { HelmxError, type HelmxPluginContext } from '@helmx/protocol'
 import {
+  MAX_BOARD_POST_BODY_CHARS,
   assertBoardPostKind,
   assertGroupId,
   groupClosedError,
@@ -28,6 +29,14 @@ export function createBoardHandlers(ctx: HelmxPluginContext, coordinator: SwarmC
   ): Promise<{ post: BoardPost }> => {
     if (typeof input.body !== 'string' || input.body.trim() === '') {
       throw new HelmxError('validation_error', 'board_post.body 必须是非空文本', 400, {})
+    }
+    if (input.body.length > MAX_BOARD_POST_BODY_CHARS) {
+      throw new HelmxError(
+        'validation_error',
+        `board_post.body 超过最大长度限制（最大 ${MAX_BOARD_POST_BODY_CHARS} 字符，实际 ${input.body.length}）`,
+        400,
+        { maxLength: MAX_BOARD_POST_BODY_CHARS, actualLength: input.body.length },
+      )
     }
     const kind = assertBoardPostKind(input.kind)
     if (kind === 'stall') {
@@ -174,8 +183,8 @@ export function createBoardHandlers(ctx: HelmxPluginContext, coordinator: SwarmC
 
   const boardStatus = async (input: { groupId?: string }, conversationId: number | undefined): Promise<BoardViewDoc> => {
     const group = resolveReadableGroup(input.groupId, conversationId)
-    await groups.ensurePostsLoaded(group.id)
-    return groups.buildBoardView(group.id)
+    const posts = await groups.ensurePostsLoaded(group.id)
+    return groups.buildBoardView(group.id, posts)
   }
 
   const completeBoardMembers = (

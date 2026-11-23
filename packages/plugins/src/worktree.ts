@@ -68,7 +68,7 @@ export function createWorktreePlugin(): PluginDefinition {
       }, { priority: 200 })
 
       ctx.hook.onBeforeTurn((turn) => {
-        if (isolation.allocator.list().some((record) => record.status === 'active')) return
+        if (isolation.allocator.hasActiveRecords()) return
         if (!turn.tools.some((tool) => tool.name === 'cleanup_worktree')) return
         return {
           action: 'transform',

@@ -255,6 +255,8 @@ export interface RunWorkflowOptions {
   onReattachHorizon?: () => void
   concurrency?: number
   agentCap?: number
+  actionCap?: number
+  timelineCap?: number
   itemCap?: number
   nestedCap?: number
   redact?: (text: string) => string

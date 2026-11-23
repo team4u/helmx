@@ -78,10 +78,12 @@ export function createDurableScheduler(options: DurableSchedulerOptions): Durabl
   let stopping = false
   let timer: TimerHandle | undefined
   let activeRun: Promise<void> | undefined
+  let pendingReschedule = false
 
   const clearTimer = (): void => { timer?.clear(); timer = undefined }
   const reschedule = (atOverride?: number): void => {
     clearTimer()
+    pendingReschedule = false
     if (stopping) return
     const { enabled, nextRunAt } = options.readState()
     if (enabled) timer = armChunkedTimer(clock, atOverride ?? nextRunAt ?? options.computeNext(clock.now()), launch)
@@ -104,20 +106,31 @@ export function createDurableScheduler(options: DurableSchedulerOptions): Durabl
 
   const launch = (): void => {
     timer = undefined
-    if (activeRun !== undefined || stopping) return
+    if (stopping) return
+    if (activeRun !== undefined) {
+      pendingReschedule = true
+      return
+    }
     const guarded = execute().catch((err) => {
       try { options.onError(options.runErrorTitle, err) } catch { /* never throw into timer */ }
     })
     activeRun = guarded
-    void guarded.then(() => { if (activeRun === guarded) activeRun = undefined })
+    void guarded.finally(() => {
+      if (activeRun === guarded) activeRun = undefined
+      if (pendingReschedule && !stopping) {
+        pendingReschedule = false
+        reschedule()
+      }
+    })
   }
 
-  const beginStop = (): void => { stopping = true; clearTimer() }
+  const beginStop = (): void => { stopping = true; pendingReschedule = false; clearTimer() }
 
   return {
     clock,
     async start() {
       stopping = false
+      pendingReschedule = false
       const { enabled, nextRunAt } = options.readState()
       if (enabled) {
         const now = clock.now()

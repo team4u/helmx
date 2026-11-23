@@ -1017,3 +1017,20 @@ test('停用门禁：body 读取阶段（凭据已查、body 未读完）disable
   await h.host.dispose()
   rmSync(h.dataDir, { recursive: true, force: true })
 })
+
+test('webhook_delete 立即释放对应 SecretStash 脱敏 disposer，同时保留其余 webhook 机密脱敏', { timeout: 60_000 }, async () => {
+  const h = await makeHarness()
+  const secretA = 'whsec-disposer-release-alpha-12345'
+  const secretB = 'whsec-disposer-keep-beta-67890'
+  await h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_create', { id: 'hook-a', secret: secretA })
+  await h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_create', { id: 'hook-b', secret: secretB })
+  assert.ok(h.stash.redact(`val=${secretA}`).includes('[REDACTED]'))
+  assert.ok(h.stash.redact(`val=${secretB}`).includes('[REDACTED]'))
+
+  await h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_delete', { id: 'hook-a' })
+  assert.equal(h.stash.redact(`val=${secretA}`), `val=${secretA}`, '删除 webhook 后必须立即释放其 SecretStash 脱敏项')
+  assert.ok(h.stash.redact(`val=${secretB}`).includes('[REDACTED]'), '其余存活 webhook 的脱敏项保持有效')
+
+  await h.host.dispose()
+  rmSync(h.dataDir, { recursive: true, force: true })
+})

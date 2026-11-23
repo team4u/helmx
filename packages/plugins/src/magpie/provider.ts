@@ -71,6 +71,8 @@ interface MagpieProviderHandle {
   synced(): boolean
   /** Latest unconfigured loopback idle connection error (cleared on sync or thrown error). */
   lastIdleError(): { root: string; error: string } | undefined
+  /** Hand off an already-fetched `/v1/models` payload for the next `refreshModels` on the same gateway snapshot (avoids double HTTP fetch). */
+  primePrefetchedCatalog(gateway: MagpieGatewayRef, entries: MagpieModelEntry[]): void
 }
 
 /**
@@ -125,6 +127,7 @@ export function createMagpieProvider(options: MagpieProviderOptions): MagpieProv
   let models: PiMagpieModel[] = []
   let syncedOnce = false
   let lastIdleProbeError: { root: string; error: string } | undefined
+  let prefetchedCatalog: { gateway: MagpieGatewayRef; entries: MagpieModelEntry[] } | undefined
 
   const install = (next: PiMagpieModel[]): void => {
     models = next
@@ -175,8 +178,13 @@ export function createMagpieProvider(options: MagpieProviderOptions): MagpieProv
       // 2) 网络刷新：未显式配置且默认 loopback 拒绝连接时按空闲未检测到处理（不污染全局
       //    models.refresh errors）；显式配置或非连接错误一律 throw 显式呈现失败。
       let entries: MagpieModelEntry[]
+      const primed = prefetchedCatalog
+      prefetchedCatalog = undefined
       try {
-        entries = await fetchCatalog(gw.root, gw.token, context.signal, fetchImpl)
+        entries =
+          primed !== undefined && sameGateway(primed.gateway, gw)
+            ? primed.entries
+            : await fetchCatalog(gw.root, gw.token, context.signal, fetchImpl)
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         const cachedCount = models.filter((model) => servedByRoot(model, gw.root)).length
@@ -233,5 +241,8 @@ export function createMagpieProvider(options: MagpieProviderOptions): MagpieProv
     models: () => models.filter((model) => servedByRoot(model, gateway().root)),
     synced: () => syncedOnce,
     lastIdleError: () => lastIdleProbeError,
+    primePrefetchedCatalog(gwSnapshot, entries) {
+      prefetchedCatalog = { gateway: gwSnapshot, entries }
+    },
   }
 }

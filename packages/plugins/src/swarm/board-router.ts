@@ -6,8 +6,11 @@ import { truncate } from '../entry-text.js'
 import {
   ACTIONABLE_WAKE_KINDS, COORDINATOR_ESCALATION_KINDS, swarmError, toGroupSummary,
   type BoardBadgeEntry, type BoardPost, type BoardPostKind, type BoardViewDoc, type BoardViewHeadline,
-  type BoardViewMember, type CollabGroupRecord, type GroupMemberState, type MemberLiveSnapshot,
+  type BoardViewMember, type CollabGroupRecord, type CollabGroupSummary, type GroupMemberState, type MemberLiveSnapshot,
 } from './contracts.js'
+
+export const MAX_BOARD_VIEW_POST_BODY_CHARS = 4_000
+export const MAX_BOARD_VIEW_DOC_BYTES = 1_536 * 1024
 
 export const ANTI_ECHO_RULE_FOOTER =
   'Anti-echo rule: If this batch is purely informational and requires no concrete action, end your turn immediately without posting pure acknowledgments or thank-yous; never treat partial member completion as full-group completion while activeWorkingMembers is non-empty.'
@@ -201,6 +204,60 @@ function buildHeadlinePair(
 export const synthesizeHeadline = (group: CollabGroupRecord, members: readonly BoardViewMember[], posts: readonly BoardPost[], activeWorkingMembers: readonly string[]): BoardViewHeadline =>
   buildHeadlinePair(group, members, posts, activeWorkingMembers).headline
 
+function slimPostForBoardView(post: BoardPost): BoardPost {
+  const body = post.body.length > MAX_BOARD_VIEW_POST_BODY_CHARS ? truncate(post.body, MAX_BOARD_VIEW_POST_BODY_CHARS) : post.body
+  const snapshot = post.worktreeSnapshot
+    ? {
+        ...post.worktreeSnapshot,
+        changedFilesPreview: post.worktreeSnapshot.changedFilesPreview.slice(0, 20).map((f) => truncate(f, 240)),
+      }
+    : undefined
+  if (body === post.body && snapshot === undefined) return post
+  return {
+    ...post,
+    body,
+    ...(snapshot !== undefined ? { worktreeSnapshot: snapshot } : {}),
+  }
+}
+
+export function buildBoardViewDoc(input: {
+  group: CollabGroupRecord
+  summary?: CollabGroupSummary
+  headline: BoardViewHeadline
+  members: BoardViewMember[]
+  posts: readonly BoardPost[]
+  previewLimit: number
+  activeWorkingMembers: string[]
+  maxBytes?: number
+}): BoardViewDoc {
+  const { group, headline, members, posts, previewLimit, activeWorkingMembers } = input
+  const summary = input.summary ?? toGroupSummary(group)
+  const maxBytes = input.maxBytes ?? MAX_BOARD_VIEW_DOC_BYTES
+  const previewPosts = posts.slice(-Math.max(0, previewLimit)).map(slimPostForBoardView)
+  const baseGroup: BoardViewDoc['group'] = {
+    ...summary,
+    ...(group.objective !== undefined ? { objective: truncate(group.objective, MAX_BOARD_VIEW_POST_BODY_CHARS) } : {}),
+    ...(group.retainedWorktrees ? { retainedWorktrees: group.retainedWorktrees.map((rw) => ({ ...rw })) } : {}),
+    ...(group.closeSummary !== undefined ? { closeSummary: truncate(group.closeSummary, MAX_BOARD_VIEW_POST_BODY_CHARS) } : {}),
+  }
+  let view: BoardViewDoc = {
+    group: baseGroup,
+    headline,
+    members,
+    posts: previewPosts,
+    activeWorkingMembers,
+  }
+  if (Buffer.byteLength(JSON.stringify(view), 'utf8') > maxBytes) {
+    const trimmed = [...previewPosts]
+    while (trimmed.length > 0 && Buffer.byteLength(JSON.stringify({ ...view, posts: trimmed }), 'utf8') > maxBytes) {
+      const dropCount = trimmed.length > 8 ? Math.max(1, Math.floor(trimmed.length / 4)) : 1
+      trimmed.splice(0, dropCount)
+    }
+    view = { ...view, posts: trimmed }
+  }
+  return view
+}
+
 export function synthesizeBoardView(input: {
   group: CollabGroupRecord; posts: readonly BoardPost[]; previewLimit: number; resolveMemberLive: (id: number) => MemberLiveSnapshot
 }): { view: BoardViewDoc; digest: string; badge: BoardBadgeEntry; localizedHeadline: LocalizedText } {
@@ -225,16 +282,7 @@ export function synthesizeBoardView(input: {
   const activeWorkingMembers = members.filter((m) => m.lifecycle === 'active' && (m.liveState === 'working' || m.liveState === 'blocked')).map((m) => m.name)
   const { headline, localized: localizedHeadline } = buildHeadlinePair(group, members, posts, activeWorkingMembers)
   const summary = toGroupSummary(group)
-
-  const view: BoardViewDoc = {
-    group: {
-      ...summary,
-      ...(group.objective !== undefined ? { objective: group.objective } : {}),
-      ...(group.retainedWorktrees ? { retainedWorktrees: group.retainedWorktrees.map((rw) => ({ ...rw })) } : {}),
-      ...(group.closeSummary !== undefined ? { closeSummary: group.closeSummary } : {}),
-    },
-    headline, members, posts: posts.slice(-previewLimit), activeWorkingMembers,
-  }
+  const view = buildBoardViewDoc({ group, summary, headline, members, posts, previewLimit, activeWorkingMembers })
 
   const digest = JSON.stringify({
     headSeq: group.headSeq, status: group.status, title: group.title, objective: group.objective ?? '',

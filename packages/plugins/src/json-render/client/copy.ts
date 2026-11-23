@@ -143,6 +143,26 @@ export function jsonRenderRootNormalizeFailed(locale: HelmxLocale): string {
   )
 }
 
+export function jsonRenderMaxDepthExceeded(maxDepth: number, locale: HelmxLocale): string {
+  return resolveLocalizedText(
+    {
+      en: `Spec exceeds the maximum nesting depth (${maxDepth})`,
+      'zh-CN': `Spec 超过最大嵌套深度上限（${maxDepth}）`,
+    },
+    locale,
+  )
+}
+
+export function jsonRenderMaxNodesExceeded(maxNodes: number, locale: HelmxLocale): string {
+  return resolveLocalizedText(
+    {
+      en: `Spec exceeds the maximum node count (${maxNodes})`,
+      'zh-CN': `Spec 超过最大节点数上限（${maxNodes}）`,
+    },
+    locale,
+  )
+}
+
 // ---------------------------------------------------------------------------
 // Declarative-action validation messages (spec-action.ts; surfaced via notify)
 // ---------------------------------------------------------------------------

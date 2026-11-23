@@ -1712,6 +1712,7 @@ test('swarm-unit14: RetainedWorktreeInfo.nodeId strict contract across validator
       },
       afterMemberArchived: async () => {},
       syncProjections: () => {},
+      syncCoordinatorProjection: () => {},
     },
   } as never
 
@@ -1728,4 +1729,263 @@ test('swarm-unit14: RetainedWorktreeInfo.nodeId strict contract across validator
     closed.retainedWorktrees.map((w) => [w.memberName, w.nodeId]).sort(),
     [['remote_a', 'remote-a'], ['remote_b', 'remote-b']],
   )
+})
+
+test('swarm-unit15: createCollabGroupRuntime appendPost closed-group lock re-check, board.jsonl truncate rollback on meta failure, BoardViewDoc <2MiB budget, projection decoupling, and postsByGroup eviction', { timeout: 60_000 }, async () => {
+  const { mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { dirname, join } = await import('node:path')
+  const { createCollabGroupRuntime } = await import('../src/swarm/group-store.js')
+  const {
+    MAX_BOARD_VIEW_DOC_BYTES,
+    MAX_BOARD_VIEW_POST_BODY_CHARS,
+  } = await import('../src/swarm/board-router.js')
+  const { MAX_BOARD_POST_BODY_CHARS } = await import('../src/swarm/contracts.js')
+
+  // 1) boardPostInputSchema enforces MAX_BOARD_POST_BODY_CHARS
+  const bodySchema = (boardPostInputSchema['properties'] as Record<string, Record<string, unknown>>)['body']!
+  assert.equal(bodySchema['maxLength'], MAX_BOARD_POST_BODY_CHARS)
+
+  // 2) synthesizeBoardView / buildBoardViewDoc truncates preview post bodies and enforces < 2 MiB byte budget
+  const hugePosts: BoardPost[] = Array.from({ length: 500 }, (_, i) =>
+    makePost(i + 1, {
+      body: `post-${i + 1}-${'X'.repeat(MAX_BOARD_VIEW_POST_BODY_CHARS + 2_000)}`,
+      worktreeSnapshot: {
+        worktreeId: 'local:/wt/author',
+        branch: 'helmx/author',
+        dirtyCount: 25,
+        commitsAhead: 2,
+        changedFilesPreview: Array.from({ length: 25 }, (__, f) => `src/very/long/path/segment/${i}/file-${f}-${'y'.repeat(120)}.ts`),
+      },
+    }),
+  )
+  const boundedDoc = synthesizeBoardView({
+    group: makeGroup({
+      headSeq: hugePosts.length,
+      objective: 'O'.repeat(10_000),
+      members: [makeMember({ name: 'author' })],
+    }),
+    posts: hugePosts,
+    previewLimit: 500,
+    resolveMemberLive: () => ({ liveState: 'idle' }),
+  }).view
+  assert.ok(
+    Buffer.byteLength(JSON.stringify(boundedDoc), 'utf8') <= MAX_BOARD_VIEW_DOC_BYTES,
+    'BoardViewDoc must stay within MAX_BOARD_VIEW_DOC_BYTES (< 2 MiB)',
+  )
+  assert.ok(boundedDoc.posts.length > 0 && boundedDoc.posts.length < 500, 'oldest preview posts trimmed to fit byte budget')
+  assert.ok(boundedDoc.posts.at(-1)!.body.length <= MAX_BOARD_VIEW_POST_BODY_CHARS + 16, 'preview post body truncated')
+
+  // 3) createCollabGroupRuntime persistence rollback, projection decoupling, closed-group lock race, and postsByGroup eviction
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-swarm-store-opt-'))
+  try {
+    let failMetaWrites = false
+    let throwInSessionDoc = false
+    const submittedInputs: Array<{ id: number; text: string }> = []
+    const sessionDocCalls: number[] = []
+    const locks = new Map<string, Promise<unknown>>()
+
+    const makeRuntime = () => {
+      const docState = new Map<string, unknown>()
+      const sessionState = new Map<number, unknown>()
+      const fakeCtx = {
+        pluginId: 'builtin:swarm',
+        dataDir,
+        doc: <T>(name: string, initial: T) => ({
+          get: () => (docState.get(name) as T) ?? initial,
+          set: (val: T) => { docState.set(name, val) },
+          update: (fn: (cur: T) => T) => { docState.set(name, fn((docState.get(name) as T) ?? initial)) },
+          flush: async () => {},
+        }),
+        sessionDoc: <T>(_name: string, initial: T) => ({
+          get: (cid: number) => (sessionState.get(cid) as T) ?? initial,
+          set: (cid: number, val: T) => {
+            sessionDocCalls.push(cid)
+            if (throwInSessionDoc) throw new Error('simulated sessionDoc 413')
+            sessionState.set(cid, val)
+          },
+          update: () => {},
+          delete: (cid: number) => { sessionState.delete(cid) },
+          listConversationIds: () => [...sessionState.keys()],
+          flush: async () => {},
+        }),
+        host: {
+          isClosing: false,
+          redact: (txt: string) => txt,
+          manageConversation: () => () => {},
+          withFileLock: async <T>(lockPath: string, fn: () => Promise<T>): Promise<T> => {
+            const prev = locks.get(lockPath) ?? Promise.resolve()
+            const run = prev.then(fn, fn)
+            const tail = run.then(() => undefined, () => undefined)
+            locks.set(lockPath, tail)
+            return run
+          },
+          atomicWriteFile: async (filePath: string, content: string) => {
+            if (failMetaWrites && filePath.endsWith('meta.json')) {
+              throw new Error('simulated meta.json ENOSPC')
+            }
+            mkdirSync(dirname(filePath), { recursive: true })
+            writeFileSync(filePath, content, 'utf8')
+          },
+          submitInput: async (id: number, text: string) => {
+            submittedInputs.push({ id, text })
+            return { submissionId: `sub-${submittedInputs.length}` }
+          },
+          submitInputGuarded: async (req: { conversationId: number; text: string }) => {
+            submittedInputs.push({ id: req.conversationId, text: req.text })
+            return { submissionId: `sub-${submittedInputs.length}` }
+          },
+          getConversationSubmission: async () => undefined,
+          invokeAction: async () => ({}),
+        },
+      } as never
+
+      const fakeCoordinator = {
+        isActive: () => true,
+        isShutdown: () => false,
+        getConfig: () => resolveSwarmConfig({}),
+        writeIndex: () => {},
+        getDocs: () => ({
+          boardBadges: {
+            get: () => ({ byConversation: {} }),
+            set: () => {},
+            update: () => {},
+            flush: async () => {},
+          },
+          boardView: {
+            get: (cid: number) => sessionState.get(cid) ?? null,
+            set: (cid: number, val: unknown) => {
+              sessionDocCalls.push(cid)
+              if (throwInSessionDoc) throw new Error('simulated sessionDoc 413')
+              sessionState.set(cid, val)
+            },
+            update: () => {},
+            delete: (cid: number) => { sessionState.delete(cid) },
+            listConversationIds: () => [...sessionState.keys()],
+            flush: async () => {},
+          },
+        }),
+        settlingWorkers: new Set<number>(),
+        reportError: () => {},
+        enqueueDispatch: async <T>(_key: string, fn: () => Promise<T>) => fn(),
+        track: async <T>(_label: string, fn: () => Promise<T>) => fn(),
+        readConversationOrUndefined: (id: number) => ({
+          id,
+          title: `conv-${id}`,
+          profileId: 'assistant',
+          nodeId: 'local',
+          cwd: dataDir,
+          model: 'faux/faux-1',
+          thinkingLevel: 'off' as const,
+          unread: false,
+          pinned: false,
+          pendingAskCount: 0,
+          status: 'idle' as const,
+          tags: [],
+          createdAt: 1,
+          updatedAt: 1,
+          stateChangeSeq: 1,
+          completionSeq: 0,
+        }),
+      } as never
+
+      return createCollabGroupRuntime(fakeCtx, () => fakeCoordinator)
+    }
+
+    const store = makeRuntime()
+    await store.loadAllFromDisk()
+    const created = await store.createGroup({
+      coordinatorConversationId: 101,
+      title: 'Opt Group',
+      objective: 'Test WAL rollback and race safety',
+    })
+    const { conversationId: _cid, name, profileId, nodeId, cwd, access, isolation } = makeMember({
+      name: 'author',
+      conversationId: 201,
+    })
+    await store.addMemberWithBrief(
+      created.id,
+      { name, conversationId: _cid, profileId, nodeId, cwd, lifecycle: 'active', access, isolation, createdAt: 1001 },
+      'initial brief',
+    )
+    const boardPath = join(dataDir, 'groups', created.id, 'board.jsonl')
+    const cleanBytes = Buffer.byteLength(readFileSync(boardPath, 'utf8'), 'utf8')
+
+    // 3a) Two consecutive failed persistMetaLocked calls truncate board.jsonl back to cleanBytes so loadAllFromDisk never sees >=2 uncommitted lines!
+    failMetaWrites = true
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await assert.rejects(
+        () =>
+          store.appendPost(created.id, {
+            from: 'author',
+            kind: 'comment',
+            to: ['coordinator'],
+            resolvedTargets: ['coordinator'],
+            wake: true,
+            refs: [],
+            body: `failed-post-${attempt}`,
+          }),
+        /simulated meta\.json ENOSPC/,
+      )
+    }
+    assert.equal(Buffer.byteLength(readFileSync(boardPath, 'utf8'), 'utf8'), cleanBytes, 'board.jsonl truncated back to committed byte length')
+    failMetaWrites = false
+
+    const restarted = makeRuntime()
+    await restarted.loadAllFromDisk()
+    assert.equal(restarted.getGroup(created.id)?.headSeq, 1, 'clean restart without swarm_doc_corrupt')
+
+    // 3b) Projection throw in appendPost never drops committed post or coordinator wakeup delivery
+    throwInSessionDoc = true
+    sessionDocCalls.length = 0
+    const inputsBefore = submittedInputs.length
+    const committed = await store.appendPost(created.id, {
+      from: 'author',
+      kind: 'done',
+      to: ['coordinator'],
+      resolvedTargets: ['coordinator'],
+      wake: true,
+      refs: [],
+      body: 'finished despite projection error',
+    })
+    await new Promise((r) => setTimeout(r, 80))
+    throwInSessionDoc = false
+    assert.equal(committed.seq, 2)
+    assert.ok(submittedInputs.length > inputsBefore, 'coordinator report wakeup delivered even when UI projection throws')
+    assert.ok(sessionDocCalls.length >= 1 && sessionDocCalls.every((id) => id === 101), 'single-group mutation targets coordinator projection only')
+
+    // 3c) Concurrent closeGroup + appendPost race: appendPost waiting on group lock re-checks active status inside lock
+    let releaseCloseLock!: () => void
+    const closeGate = new Promise<void>((r) => {
+      releaseCloseLock = r
+    })
+    const closingPromise = store.mutateGroup(created.id, async (draft: CollabGroupRecord) => {
+      await closeGate
+      return {
+        group: { ...draft, status: 'closed' as const, closedAt: 2000 },
+        result: true,
+      }
+    })
+    const racingPost = store.appendPost(created.id, {
+      from: 'author',
+      kind: 'comment',
+      to: ['coordinator'],
+      resolvedTargets: ['coordinator'],
+      wake: false,
+      refs: [],
+      body: 'late post across async boundary',
+    })
+    releaseCloseLock()
+    await closingPromise
+    await assert.rejects(
+      () => racingPost,
+      (err: unknown) => err instanceof HelmxError && err.code === 'swarm_group_closed' && err.status === 409,
+    )
+
+    // 3d) Closing group continues serving ensurePostsLoaded on demand from disk after evicting in-memory cache
+    const closedPosts = await store.ensurePostsLoaded(created.id)
+    assert.equal(closedPosts.length, 2, 'closed group posts remain readable on demand from disk')
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true })
+  }
 })

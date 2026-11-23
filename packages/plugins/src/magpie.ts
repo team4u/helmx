@@ -115,10 +115,11 @@ const emptyStatus = (gatewayUrl: string): MagpieStatusDoc => ({
   diagnostics: [],
 })
 
-/** Error-text redaction: strip Bearer-header shapes and known token bodies (gateway error pages may echo them). */
-function sanitizeErrorText(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error)
-  return message.replace(/Bearer\s+\S+/g, 'Bearer ***').slice(0, 300)
+/** Error-text redaction: strip Bearer-header shapes and pass through SecretStash redactor (gateway error pages may echo secrets). */
+function sanitizeErrorText(error: unknown, redact?: (text: string) => string): string {
+  const raw = error instanceof Error ? error.message : String(error)
+  const stripped = raw.replace(/Bearer\s+\S+/g, 'Bearer ***')
+  return (redact ? redact(stripped) : stripped).slice(0, 300)
 }
 
 /** Extract provider prefix from a `provider/model` ref, ignoring routing group namespaces (`group/*`, `auto/*`). */
@@ -161,9 +162,9 @@ function catalogFingerprint(models: readonly PiMagpieModel[]): string {
   return JSON.stringify(normalized)
 }
 
-/** Semantic comparison excluding volatile timestamps so identical 5s polls do not amplify global SSE traffic. */
+/** Semantic comparison excluding volatile timestamps and derived countdown `resetText` so identical 5s polls do not amplify global SSE traffic. */
 function statusContentEqual(a: MagpieStatusDoc, b: MagpieStatusDoc): boolean {
-  const stripTimestamps = (doc: MagpieStatusDoc) => ({
+  const stripVolatile = (doc: MagpieStatusDoc) => ({
     gatewayUrl: doc.gatewayUrl,
     configuredRoot: doc.configuredRoot,
     local: doc.local,
@@ -173,10 +174,10 @@ function statusContentEqual(a: MagpieStatusDoc, b: MagpieStatusDoc): boolean {
     quotasError: doc.quotasError,
     summaryText: doc.summaryText,
     modelOwners: doc.modelOwners,
-    quotas: doc.quotas,
+    quotas: doc.quotas.map(({ resetText: _r, ...rest }) => rest),
     diagnostics: doc.diagnostics,
   })
-  return JSON.stringify(stripTimestamps(a)) === JSON.stringify(stripTimestamps(b))
+  return JSON.stringify(stripVolatile(a)) === JSON.stringify(stripVolatile(b))
 }
 
 export function createMagpiePlugin(): PluginDefinition {
@@ -275,8 +276,12 @@ export function createMagpiePlugin(): PluginDefinition {
       })
       ctx.provider(handle.provider)
 
+      const redactText = (text: string): string => ctx.host.redact(text)
+      const sanitizeError = (error: unknown): string => sanitizeErrorText(error, redactText)
+
       const status = ctx.doc<MagpieStatusDoc>(MAGPIE_STATUS_DOC, emptyStatus(DEFAULT_MAGPIE_ROOT), {
         public: true,
+        durable: false,
       })
 
       /** Service stop signal and in-flight abort controllers: no doc writes after disable. */
@@ -365,10 +370,10 @@ export function createMagpiePlugin(): PluginDefinition {
           let quotaErr: string | undefined
           try {
             const entries = await fetchQuotas(snapshot.root, snapshot.token, controller.signal, fetchImpl, { kept })
-            quotas = quotaRows(entries).map((row) => ({ ...row }))
+            quotas = quotaRows(entries, Date.now(), redactText).map((row) => ({ ...row }))
             quotaOk = true
           } catch (error) {
-            quotaErr = sanitizeErrorText(error)
+            quotaErr = sanitizeError(error)
             quotas = options?.preserveQuotasOnError && sameRoot ? prev.quotas : []
             diagnostics.push(`quotas unavailable: ${quotaErr}`)
           }
@@ -427,7 +432,7 @@ export function createMagpiePlugin(): PluginDefinition {
               modelCount,
               modelOwners,
               summaryText: summaryTextOf(false, modelCount),
-              ...(error !== undefined ? { lastError: sanitizeErrorText(error) } : {}),
+              ...(error !== undefined ? { lastError: sanitizeError(error) } : {}),
             },
             { clearLastError: options?.clearLastError, skipIfUnchanged: options?.skipIfUnchanged },
           )
@@ -500,10 +505,10 @@ export function createMagpiePlugin(): PluginDefinition {
         if (!model.startsWith(`${MAGPIE_PROVIDER_ID}/`)) return
         const snapshot = gateway()
         // No await: never blocks turn_settled; failures only enter diagnostics, retried at the next settled
-        void refreshSidecar(snapshot, true).catch((error) => {
+        void refreshSidecar(snapshot, true, { skipIfUnchanged: true }).catch((error) => {
           if (stopping) return
           ctx.host.emitEvent('notification', {
-            level: 'warning', title: 'Magpie status read failed', body: sanitizeErrorText(error),
+            level: 'warning', title: 'Magpie status read failed', body: sanitizeError(error),
           })
         })
       })
@@ -569,7 +574,7 @@ export function createMagpiePlugin(): PluginDefinition {
             try {
               entries = await fetchCatalog(snapshot.root, snapshot.token, controller.signal, fetchImpl)
             } catch (error) {
-              const message = sanitizeErrorText(error)
+              const message = sanitizeError(error)
               publishCatalogStatus(snapshot, false, message, { skipIfUnchanged: true })
               throw new HelmxError(
                 'magpie_gateway_unreachable',
@@ -584,6 +589,7 @@ export function createMagpiePlugin(): PluginDefinition {
             const currentModels = modelsForSnapshot(snapshot)
             const changed = !handle.synced() || catalogFingerprint(candidate) !== catalogFingerprint(currentModels)
             if (changed) {
+              handle.primePrefetchedCatalog(snapshot, entries)
               const result = await ctx.host.refreshModels({ providers: [MAGPIE_PROVIDER_ID], allowNetwork: true, force: true })
               const idleError = handle.lastIdleError()
               const error = result.errors['magpie'] ?? (idleError?.root === snapshot.root ? idleError.error : undefined)
@@ -591,7 +597,7 @@ export function createMagpiePlugin(): PluginDefinition {
               if (error !== undefined) {
                 throw new HelmxError(
                   'magpie_gateway_unreachable',
-                  `Magpie gateway ${snapshot.root} refresh failed: ${sanitizeErrorText(error)}`,
+                  `Magpie gateway ${snapshot.root} refresh failed: ${sanitizeError(error)}`,
                   502,
                   { gatewayUrl: snapshot.root, configuredRoot: snapshot.configuredRoot },
                 )
@@ -611,7 +617,7 @@ export function createMagpiePlugin(): PluginDefinition {
           if (error !== undefined) {
             throw new HelmxError(
               'magpie_gateway_unreachable',
-              `Magpie gateway ${snapshot.root} refresh failed: ${sanitizeErrorText(error)}`,
+              `Magpie gateway ${snapshot.root} refresh failed: ${sanitizeError(error)}`,
               502,
               { gatewayUrl: snapshot.root, configuredRoot: snapshot.configuredRoot },
             )
@@ -638,7 +644,7 @@ export function createMagpiePlugin(): PluginDefinition {
           const { controller, done } = beginRequest()
           try {
             const entries = await fetchQuotas(snapshot.root, snapshot.token, controller.signal, fetchImpl)
-            const allRows = quotaRows(entries).map((row) => ({ ...row }))
+            const allRows = quotaRows(entries, Date.now(), redactText).map((row) => ({ ...row }))
             const now = Date.now()
             const prev = status.get()
             const nextDiagnostics =
@@ -671,7 +677,7 @@ export function createMagpiePlugin(): PluginDefinition {
               ...(snapshot.local ? {} : { note: 'non-local gateway: only quotas reported by that gateway itself are readable' }),
             }
           } catch (error) {
-            const message = sanitizeErrorText(error)
+            const message = sanitizeError(error)
             writeStatus(snapshot, { quotasError: message })
             throw new HelmxError(
               'magpie_gateway_unreachable',

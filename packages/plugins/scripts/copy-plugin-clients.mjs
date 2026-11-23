@@ -45,7 +45,6 @@ const SCHEMA_VERSION = 2;
 const IGNORED_FILE_NAMES = new Set(['.DS_Store']);
 
 const defaultPkgRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const defaultRepoRoot = resolve(defaultPkgRoot, '../..');
 
 function isRegularFile(filePath) {
   try {
@@ -397,7 +396,8 @@ export async function copyAndPrebuildPluginClients(options = {}) {
   }
 
   // Step 1: Mirror each src/<name>/client dir into dist/<name>/client without wiping valid
-  // dist-client/ bundles (wiping happens selectively on cache miss or force).
+  // dist-client/ bundles (wiping happens selectively on cache miss or force), and prune stale
+  // dist/<deleted>/client, dist/<deleted>/dist-client, or orphaned dist/<deleted> directories.
   const clientPluginDirs = [];
   let copied = 0;
   for (const entry of readdirSync(srcPlugins, { withFileTypes: true }).sort((a, b) => compareAscii(a.name, b.name))) {
@@ -407,6 +407,29 @@ export async function copyAndPrebuildPluginClients(options = {}) {
     syncClientDir(clientSrc, join(distPlugins, entry.name, 'client'));
     clientPluginDirs.push(entry.name);
     copied += 1;
+  }
+
+  const activeClientDirSet = new Set(clientPluginDirs);
+  for (const distEntry of readdirSync(distPlugins, { withFileTypes: true })) {
+    if (!distEntry.isDirectory() && !distEntry.isSymbolicLink()) continue;
+    const distSubDir = join(distPlugins, distEntry.name);
+    if (distEntry.isSymbolicLink()) {
+      rmSync(distSubDir, { recursive: true, force: true });
+      continue;
+    }
+    if (!activeClientDirSet.has(distEntry.name)) {
+      const staleClient = join(distSubDir, 'client');
+      const stalePrebuilt = join(distSubDir, PREBUILT_CLIENT_DIR_NAME);
+      if (existsSync(staleClient)) rmSync(staleClient, { recursive: true, force: true });
+      if (existsSync(stalePrebuilt)) rmSync(stalePrebuilt, { recursive: true, force: true });
+      if (!isRealDirectory(join(srcPlugins, distEntry.name)) || readdirSync(distSubDir).length === 0) {
+        if (!isRealDirectory(join(srcPlugins, distEntry.name))) {
+          rmSync(distSubDir, { recursive: true, force: true });
+        } else if (readdirSync(distSubDir).length === 0) {
+          rmSync(distSubDir, { recursive: true, force: true });
+        }
+      }
+    }
   }
 
   if (force) {

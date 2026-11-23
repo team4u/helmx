@@ -65,6 +65,15 @@ export const MAX_NODE_SKILLS = 256
 /** 单个节点技能 references 文件数上限：超过按病态技能跳过/报错，绝不静默截断。 */
 export const MAX_NODE_SKILL_REFERENCES = 512
 
+/** 单个节点技能 references 子目录递归最大深度（根为 0，最多下钻 8 层子目录）。 */
+export const MAX_NODE_SKILL_REFERENCE_DEPTH = 8
+
+/** 单根目录内并发扫描节点技能目录的并发度上限。 */
+export const NODE_SKILL_SCAN_CONCURRENCY = 5
+
+/** 健康节点技能目录扫描结果的短时 TTL 缓存窗口（毫秒）。 */
+export const NODE_SKILLS_CACHE_TTL_MS = 5_000
+
 /** 节点技能正文按 UTF-8 解码（非法序列替换为 U+FFFD，与 Hub readTextFile 同口径）。 */
 const NODE_SKILL_UTF8_DECODER = new TextDecoder('utf-8')
 
@@ -75,15 +84,75 @@ export interface NodeSkillsHostPort {
   nodeIpc: { isOnline(nodeId: string): boolean }
 }
 
-/** 节点技能扫描/读取选项（主要用于测试覆盖机器级根目录）。 */
+/** 节点技能扫描/读取选项（主要用于测试覆盖机器级根目录、同名遮蔽剪枝与 TTL 控制）。 */
 export interface NodeSkillScanOptions {
   machineRoots?: readonly string[]
+  /** 已被 Hub 同名技能遮蔽的技能 ID 集合（扫描时跳过读取 SKILL.md 与 references，仅记录遮蔽）。 */
+  shadowedIds?: ReadonlySet<string>
+  /** 健康扫描结果短时缓存毫秒数（默认 `NODE_SKILLS_CACHE_TTL_MS`；`<= 0` 禁用缓存）。 */
+  cacheTtlMs?: number
+  /** 时钟注入（供测试确定性推进 TTL）。 */
+  now?: () => number
 }
 
 /** 发现结果：ok=可用技能摘要（按 id 排序）；unavailable=显式诊断（已脱敏、未转义，健康根的技能仍保留）。 */
 export type NodeSkillScan =
-  | { kind: 'ok'; skills: SkillSummary[] }
-  | { kind: 'unavailable'; reason: string; skills?: SkillSummary[] }
+  | { kind: 'ok'; skills: SkillSummary[]; shadowedSkillIds?: string[] }
+  | { kind: 'unavailable'; reason: string; skills?: SkillSummary[]; shadowedSkillIds?: string[] }
+
+interface CachedNodeSkillScan {
+  expiresAt: number
+  skills: SkillSummary[]
+  shadowedSkillIds: string[]
+}
+
+let nodeSkillsCacheByHost = new WeakMap<NodeSkillsHostPort, Map<string, CachedNodeSkillScan>>()
+
+function buildNodeSkillsCacheKey(nodeId: string, cwd: string, options?: NodeSkillScanOptions): string {
+  const rootsKey = (options?.machineRoots ?? DEFAULT_NODE_MACHINE_SKILL_ROOTS).join('\u0001')
+  const shadowedKey =
+    options?.shadowedIds !== undefined && options.shadowedIds.size > 0
+      ? [...options.shadowedIds].sort((a, b) => a.localeCompare(b)).join('\u0001')
+      : ''
+  return `${nodeId}\u0000${cwd}\u0000${rootsKey}\u0000${shadowedKey}`
+}
+
+function cloneAndRedactSkills(skills: readonly SkillSummary[], redact: (text: string) => string): SkillSummary[] {
+  return skills.map((skill) => ({
+    ...skill,
+    name: skill.name !== '' ? redact(skill.name) : skill.id,
+    ...(skill.description !== undefined && skill.description !== '' ? { description: redact(skill.description) } : {}),
+    references: [...skill.references],
+  }))
+}
+
+/**
+ * 失效节点技能短时缓存：
+ * - 不传 `host`：清空全部宿主实例缓存；
+ * - 传 `host` 但不传 `coordinate`：清空该宿主全部坐标缓存（插件启停 / 重载）；
+ * - 同时传 `coordinate`：精确失效匹配的 `(nodeId, cwd)`（或整节点）缓存条目（如 `load_skill` 未命中时）。
+ */
+export function invalidateNodeSkillsCache(
+  host?: NodeSkillsHostPort,
+  coordinate?: { nodeId?: string; cwd?: string },
+): void {
+  if (host === undefined) {
+    nodeSkillsCacheByHost = new WeakMap()
+    return
+  }
+  const map = nodeSkillsCacheByHost.get(host)
+  if (map === undefined) return
+  if (coordinate === undefined) {
+    map.clear()
+    return
+  }
+  const targetNodeId = coordinate.nodeId ?? 'local'
+  const prefix =
+    coordinate.cwd !== undefined ? `${targetNodeId}\u0000${coordinate.cwd}\u0000` : `${targetNodeId}\u0000`
+  for (const key of map.keys()) {
+    if (key.startsWith(prefix)) map.delete(key)
+  }
+}
 
 /** 有界读取结果：absent=常态缺失；refused=显式不可读（已脱敏、未转义）；content=同句柄稳定读到的 UTF-8 正文。 */
 type NodeFileRead =
@@ -229,15 +298,22 @@ async function readNodeFileBounded(
   }
 }
 
+interface ReferenceScanState {
+  count: number
+}
+
 /** 递归收集技能目录内 references 相对路径（listDir 不跟随软链：symlink 条目跳过且不下钻；
- * 跳过隐藏项与 node_modules / __pycache__ / dist，与 Hub collectFiles 同语义；只收通过
- * 契约校验的相对路径）。返回排序后的安全相对路径列表。 */
+ * 跳过隐藏项与 node_modules / __pycache__ / dist，与 Hub collectFiles 同语义；限制最大目录深度
+ * `MAX_NODE_SKILL_REFERENCE_DEPTH` 并在收集达 `MAX_NODE_SKILL_REFERENCES + 1` 时提前终止）。 */
 async function collectNodeReferences(
   env: ExecutionEnv,
   redact: (text: string) => string,
   dir: string,
   rel = '',
+  depth = 0,
+  state: ReferenceScanState = { count: 0 },
 ): Promise<string[]> {
+  if (state.count > MAX_NODE_SKILL_REFERENCES) return []
   const listed = await env.listDir(rel === '' ? dir : joinUnderCwd(dir, ...rel.split('/')), BACKGROUND_CONTEXT)
   if (!listed.ok) {
     if (listed.error.code === 'not_found') return [] // 并发删除：该层按空处理
@@ -249,20 +325,24 @@ async function collectNodeReferences(
   }
   const out: string[] = []
   for (const entry of listed.value) {
+    if (state.count > MAX_NODE_SKILL_REFERENCES) break
     if (entry.name.startsWith('.')) continue
     const relPath = rel === '' ? entry.name : `${rel}/${entry.name}`
     if (entry.kind === 'directory') {
+      if (depth >= MAX_NODE_SKILL_REFERENCE_DEPTH) continue
       if (entry.name === 'node_modules' || entry.name === '__pycache__' || entry.name === 'dist') continue
-      out.push(...(await collectNodeReferences(env, redact, dir, relPath)))
+      const nested = await collectNodeReferences(env, redact, dir, relPath, depth + 1, state)
+      for (const item of nested) out.push(item)
     } else if (entry.kind === 'file' && entry.name !== 'SKILL.md') {
       try {
         out.push(assertSafeSkillRelativePath(relPath))
+        state.count += 1
       } catch {
         // Invalid relative paths cannot be read via load_skill; exclude from catalog (same as Hub collectFiles).
       }
     }
   }
-  return out.sort()
+  return depth === 0 ? out.sort() : out
 }
 
 /**
@@ -308,13 +388,33 @@ async function scanNodeSkillsInner(
   if (nodeId !== 'local') {
     try {
       if (!host.nodeIpc.isOnline(nodeId)) {
+        invalidateNodeSkillsCache(host, { nodeId })
         return { kind: 'unavailable', reason: `目标节点 ${nodeId} 当前离线，未能读取其节点技能库。` }
       }
     } catch (err) {
+      invalidateNodeSkillsCache(host, { nodeId })
       return {
         kind: 'unavailable',
         reason: `检查目标节点 ${nodeId} 在线状态失败（${errorCodeOf(err)}）：${redact(errorMessageOf(err))}`,
       }
+    }
+  }
+
+  const ttlMs = options?.cacheTtlMs ?? NODE_SKILLS_CACHE_TTL_MS
+  const nowMs = options?.now !== undefined ? options.now() : Date.now()
+  const cacheKey = ttlMs > 0 ? buildNodeSkillsCacheKey(nodeId, cwd, options) : undefined
+  if (cacheKey !== undefined) {
+    const hostCache = nodeSkillsCacheByHost.get(host)
+    const cached = hostCache?.get(cacheKey)
+    if (cached !== undefined) {
+      if (cached.expiresAt > nowMs) {
+        return {
+          kind: 'ok',
+          skills: cloneAndRedactSkills(cached.skills, redact),
+          ...(cached.shadowedSkillIds.length > 0 ? { shadowedSkillIds: [...cached.shadowedSkillIds] } : {}),
+        }
+      }
+      hostCache!.delete(cacheKey)
     }
   }
 
@@ -330,6 +430,7 @@ async function scanNodeSkillsInner(
 
   const seenRoots = new Set<string>()
   const byId = new Map<string, SkillSummary>()
+  const shadowedSkillIds = new Set<string>()
   const unavailableReasons: string[] = []
 
   for (const rawRoot of rawRoots) {
@@ -373,63 +474,128 @@ async function scanNodeSkillsInner(
       continue
     }
 
+    const toScan: string[] = []
     for (const entry of candidates.sort((a, b) => a.name.localeCompare(b.name))) {
       try {
         assertSkillId(entry.name)
       } catch {
         continue // 非法 id 的目录不进目录清单（第三方内容常态）
       }
+      if (options?.shadowedIds?.has(entry.name)) {
+        shadowedSkillIds.add(entry.name)
+        continue // 已被 Hub 同名技能遮蔽：直接跳过 SKILL.md 与 references 扫描
+      }
       if (byId.has(entry.name)) continue // 更高优先级节点根已提供同名技能
+      toScan.push(entry.name)
+    }
 
-      const skillDir = joinUnderCwd(realRoot, entry.name)
-      const skillMdR = await readNodeFileBounded(env, joinUnderCwd(skillDir, 'SKILL.md'), redact, skillDir)
-      if (skillMdR.kind === 'absent') continue // 无 SKILL.md：不是技能，常态跳过
-      if (skillMdR.kind === 'refused') {
-        unavailableReasons.push(`节点技能 ${entry.name} 读取失败：${skillMdR.reason}`)
-        break
-      }
-      let frontmatter: ReturnType<typeof parseSkillFrontmatter>
-      try {
-        frontmatter = parseSkillFrontmatter(skillMdR.text)
-      } catch {
-        continue // frontmatter 非法：跳过该条目（第三方内容，与共享根 skippable 语义一致）
-      }
-      let references: string[]
-      try {
-        references = await collectNodeReferences(env, redact, skillDir)
-      } catch (err) {
-        if (err instanceof HelmxError) {
-          unavailableReasons.push(err.message)
-          break
+    type CandidateOutcome =
+      | { kind: 'skip' }
+      | { kind: 'ok'; summary: SkillSummary }
+      | { kind: 'unavailable'; reason: string }
+
+    const outcomes = new Array<CandidateOutcome>(toScan.length)
+    let nextIdx = 0
+    let stopRoot = false
+    const workerCount = Math.min(NODE_SKILL_SCAN_CONCURRENCY, toScan.length)
+    await Promise.all(
+      Array.from({ length: workerCount }, async () => {
+        for (;;) {
+          if (stopRoot) return
+          const idx = nextIdx
+          nextIdx += 1
+          if (idx >= toScan.length) return
+          const skillName = toScan[idx]!
+          const skillDir = joinUnderCwd(realRoot, skillName)
+          const skillMdR = await readNodeFileBounded(env, joinUnderCwd(skillDir, 'SKILL.md'), redact, skillDir)
+          if (skillMdR.kind === 'absent') {
+            outcomes[idx] = { kind: 'skip' }
+            continue // 无 SKILL.md：不是技能，常态跳过
+          }
+          if (skillMdR.kind === 'refused') {
+            outcomes[idx] = { kind: 'unavailable', reason: `节点技能 ${skillName} 读取失败：${skillMdR.reason}` }
+            stopRoot = true
+            return
+          }
+          let frontmatter: ReturnType<typeof parseSkillFrontmatter>
+          try {
+            frontmatter = parseSkillFrontmatter(skillMdR.text)
+          } catch {
+            outcomes[idx] = { kind: 'skip' }
+            continue // frontmatter 非法：跳过该条目（第三方内容，与共享根 skippable 语义一致）
+          }
+          let references: string[]
+          try {
+            references = await collectNodeReferences(env, redact, skillDir)
+          } catch (err) {
+            if (err instanceof HelmxError) {
+              outcomes[idx] = { kind: 'unavailable', reason: err.message }
+              stopRoot = true
+              return
+            }
+            throw err
+          }
+          if (references.length > MAX_NODE_SKILL_REFERENCES) {
+            outcomes[idx] = {
+              kind: 'unavailable',
+              reason: `节点技能 ${skillName} 含 ${references.length} 个 references 文件，超过 ${MAX_NODE_SKILL_REFERENCES} 上限，未纳入该目录技能。`,
+            }
+            stopRoot = true
+            return
+          }
+          outcomes[idx] = {
+            kind: 'ok',
+            summary: {
+              id: skillName,
+              name: frontmatter.name !== '' ? redact(frontmatter.name) : skillName,
+              ...(frontmatter.description !== '' ? { description: redact(frontmatter.description) } : {}),
+              references,
+              // managedByPlugin deliberately stripped: a node may only host normal skills, never host-managed plugin skills.
+              source: 'node',
+            },
+          }
         }
-        throw err
-      }
-      if (references.length > MAX_NODE_SKILL_REFERENCES) {
-        unavailableReasons.push(
-          `节点技能 ${entry.name} 含 ${references.length} 个 references 文件，超过 ${MAX_NODE_SKILL_REFERENCES} 上限，未纳入该目录技能。`,
-        )
+      }),
+    )
+
+    for (const outcome of outcomes) {
+      if (outcome === undefined || outcome.kind === 'skip') continue
+      if (outcome.kind === 'unavailable') {
+        unavailableReasons.push(outcome.reason)
         break
       }
-      byId.set(entry.name, {
-        id: entry.name,
-        name: frontmatter.name || entry.name,
-        ...(frontmatter.description !== '' ? { description: redact(frontmatter.description) } : {}),
-        references,
-        // managedByPlugin deliberately stripped: a node may only host normal skills, never host-managed plugin skills.
-        source: 'node',
-      })
+      byId.set(outcome.summary.id, outcome.summary)
     }
   }
 
   const skills = [...byId.values()].sort((a, b) => a.id.localeCompare(b.id))
+  const sortedShadowedIds = [...shadowedSkillIds].sort((a, b) => a.localeCompare(b))
   if (unavailableReasons.length > 0) {
     return {
       kind: 'unavailable',
       reason: unavailableReasons.join('; '),
       ...(skills.length > 0 ? { skills } : {}),
+      ...(sortedShadowedIds.length > 0 ? { shadowedSkillIds: sortedShadowedIds } : {}),
     }
   }
-  return { kind: 'ok', skills }
+  if (cacheKey !== undefined) {
+    let hostCache = nodeSkillsCacheByHost.get(host)
+    if (hostCache === undefined) {
+      hostCache = new Map()
+      nodeSkillsCacheByHost.set(host, hostCache)
+    }
+    const endNow = options?.now !== undefined ? options.now() : Date.now()
+    hostCache.set(cacheKey, {
+      expiresAt: endNow + ttlMs,
+      skills: cloneAndRedactSkills(skills, redact),
+      shadowedSkillIds: sortedShadowedIds,
+    })
+  }
+  return {
+    kind: 'ok',
+    skills,
+    ...(sortedShadowedIds.length > 0 ? { shadowedSkillIds: sortedShadowedIds } : {}),
+  }
 }
 
 /**
@@ -451,6 +617,10 @@ export async function readNodeSkillFile(
   try {
     return await readNodeSkillFileInner(host, nodeIdInput, cwd, skillId, path, options)
   } catch (err) {
+    // load_skill / skill_read 未命中时立即失效对应 (nodeId, cwd) 的扫描短缓存，使新增或删除的技能下回合立即可见。
+    if (err instanceof HelmxError && err.code === 'not_found') {
+      invalidateNodeSkillsCache(host, { nodeId: nodeIdInput ?? 'local', cwd })
+    }
     // HelmxError（校验 / 离线 / not_found / 已显式化的读取失败）原样上抛；
     // 意外异常（宿主端口未接线 / 远端连接中途丢失等）统一显式 502，绝不伪装成功。
     if (err instanceof HelmxError) throw err

@@ -19,14 +19,14 @@ import {
   React,
   act,
   createWorkflowHostHarness,
-  importWorkflowClientModule,
+  importWorkflowSurfaces,
   makeConvSummary,
   mountSharedPluginNamespaces,
 } from './helpers/workflow-client-harness.js'
 
 const e = React.createElement
 mountSharedPluginNamespaces({ realHooks: true })
-const mod = await importWorkflowClientModule('index.tsx', undefined, { realHooks: true })
+const mod = await importWorkflowSurfaces(['index.tsx', 'workbench.tsx'], undefined, { realHooks: true })
 const WorkflowActiveTray = mod['WorkflowActiveTray'] as React.ComponentType<Record<string, unknown>>
 const SubagentToolView = mod['SubagentToolView'] as React.ComponentType<Record<string, unknown>>
 const WorkflowWorkbenchPanel = mod['WorkflowWorkbenchPanel'] as React.ComponentType<Record<string, unknown>>

@@ -12,16 +12,8 @@
  *   eliminating dual-write crash windows and 4-surface ghost probing.
  */
 import { randomUUID } from 'node:crypto'
-import {
-  closeSync,
-  fsyncSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  renameSync,
-  unlinkSync,
-  writeSync,
-} from 'node:fs'
+import { readFileSync } from 'node:fs'
+import * as fsPromises from 'node:fs/promises'
 import { join } from 'node:path'
 import {
   compareCodeUnit,
@@ -41,8 +33,8 @@ import type { RunDetail, RunHeader, RunPhase } from './types.js'
 
 const VALID_STATUSES: ReadonlySet<string> = new Set<WorkflowRunStatus>(['running', 'completed', 'failed', 'aborted'])
 const VALID_PHASES: ReadonlySet<string> = new Set<RunPhase>(['running', 'suspended', 'cleanup_pending', 'settled'])
-const MAX_HEADER_NODES = 128
-const MAX_HEADER_PROGRESS = 64
+export const MAX_HEADER_NODES = 128
+export const MAX_HEADER_PROGRESS = 64
 const MAX_HEADER_PROMPT_CHARS = 256
 const MAX_HEADER_TEXT_CHARS = 512
 const MAX_DETAIL_TEXT_CHARS = 1024
@@ -73,10 +65,19 @@ export function formatResultPreview(result: unknown): string {
   return truncateText(serialized, RESULT_PREVIEW_MAX_CHARS)
 }
 
-/** Slim node for compact RunHeader storage in KV (strips schema/output; bounds prompt/error/gate.output). */
-export function slimNodeForHeader(node: WorkflowNodeState, redact: (text: string) => string): WorkflowNodeState {
+/** Slim node for compact RunHeader / sessionDoc storage (strips schema/output; bounds prompt/error/gate.output). */
+export function slimNodeForHeader(
+  node: WorkflowNodeState,
+  redact?: (text: string) => string,
+): WorkflowNodeState {
   const { schema: _s, output: _o, ...rest } = node
-  const clean = redactJsonValue(rest, redact) as WorkflowNodeState
+  const clean: WorkflowNodeState = redact
+    ? (redactJsonValue(rest, redact) as WorkflowNodeState)
+    : {
+        ...rest,
+        ...(rest.gate !== undefined ? { gate: { ...rest.gate } } : {}),
+        ...(rest.worktree !== undefined ? { worktree: { ...rest.worktree } } : {}),
+      }
   if (clean.prompt !== undefined) clean.prompt = truncateText(clean.prompt, MAX_HEADER_PROMPT_CHARS)
   if (clean.error !== undefined) clean.error = truncateText(clean.error, MAX_HEADER_TEXT_CHARS)
   if (clean.gate !== undefined) {
@@ -85,15 +86,16 @@ export function slimNodeForHeader(node: WorkflowNodeState, redact: (text: string
   return clean
 }
 
-function slimProgressForHeader(
+export function slimProgressForHeader(
   progress: RunHeader['progress'],
-  redact: (text: string) => string,
+  redact?: (text: string) => string,
 ): RunHeader['progress'] {
   if (progress === undefined || progress.length === 0) return undefined
+  const applyRedact = redact ?? ((t: string) => t)
   return progress.slice(-MAX_HEADER_PROGRESS).map((entry) =>
     entry.kind === 'phase'
-      ? { at: entry.at, kind: 'phase' as const, index: entry.index, title: truncateText(redact(entry.title), MAX_HEADER_PROMPT_CHARS) }
-      : { at: entry.at, kind: 'log' as const, message: truncateText(redact(entry.message), MAX_HEADER_PROMPT_CHARS) },
+      ? { at: entry.at, kind: 'phase' as const, index: entry.index, title: truncateText(applyRedact(entry.title), MAX_HEADER_PROMPT_CHARS) }
+      : { at: entry.at, kind: 'log' as const, message: truncateText(applyRedact(entry.message), MAX_HEADER_PROMPT_CHARS) },
   )
 }
 
@@ -216,6 +218,8 @@ export class RunRepository {
   private readonly takenOverBy = new Map<string, string>()
   /** Bounded LRU cache for lazy-loaded RunDetail files. */
   private readonly detailLru = new Map<string, RunDetail>()
+  /** Per-run serialized async atomic detail write queue. */
+  private readonly detailWriteChains = new Map<string, Promise<void>>()
 
   constructor(options: RunRepositoryOptions) {
     this.dataDir = options.dataDir
@@ -348,12 +352,10 @@ export class RunRepository {
     }
   }
 
-  /** Atomically write heavy RunDetail to disk and cache in bounded LRU. */
-  saveDetail(conversationId: number, detail: RunDetail): void {
+  /** Atomically write heavy RunDetail to disk (serialized per run, non-blocking async fsync) and cache in bounded LRU. */
+  saveDetail(conversationId: number, detail: RunDetail): Promise<void> {
     const dir = this.artifactsDir(conversationId)
-    mkdirSync(dir, { recursive: true })
     const target = this.detailPathFor(conversationId, detail.id)
-    const tmp = join(dir, `.detail-${detail.id}-${randomUUID()}.tmp`)
     const sanitized: RunDetail = {
       id: detail.id,
       ...(detail.result !== undefined ? { result: redactJsonValue(detail.result, this.redact) } : {}),
@@ -364,21 +366,50 @@ export class RunRepository {
       ...(detail.subagentSpec !== undefined ? { subagentSpec: detail.subagentSpec } : {}),
       ...(detail.subagentMeta !== undefined ? { subagentMeta: detail.subagentMeta } : {}),
     }
+    const payload = JSON.stringify(sanitized)
+    this.cacheDetail(sanitized)
+
+    const prev = this.detailWriteChains.get(detail.id) ?? Promise.resolve()
+    const writeTask = prev.then(
+      () => this.writeDetailFileAtomic(dir, target, detail.id, payload, sanitized),
+      () => this.writeDetailFileAtomic(dir, target, detail.id, payload, sanitized),
+    )
+    const settled = writeTask.then(
+      () => undefined,
+      () => undefined,
+    )
+    this.detailWriteChains.set(detail.id, settled)
+    void settled.finally(() => {
+      if (this.detailWriteChains.get(detail.id) === settled) {
+        this.detailWriteChains.delete(detail.id)
+      }
+    })
+    return writeTask
+  }
+
+  private async writeDetailFileAtomic(
+    dir: string,
+    target: string,
+    runId: string,
+    payload: string,
+    cachedSnapshot: RunDetail,
+  ): Promise<void> {
+    const tmp = join(dir, `.detail-${runId}-${randomUUID()}.tmp`)
     try {
-      const fd = openSync(tmp, 'wx', 0o644)
+      await fsPromises.mkdir(dir, { recursive: true })
+      const handle = await fsPromises.open(tmp, 'wx', 0o644)
       try {
-        writeSync(fd, JSON.stringify(sanitized), null, 'utf8')
-        fsyncSync(fd)
+        await handle.writeFile(payload, 'utf8')
+        await handle.sync()
       } finally {
-        closeSync(fd)
+        await handle.close()
       }
-      renameSync(tmp, target)
+      await fsPromises.rename(tmp, target)
     } catch (error) {
-      try {
-        unlinkSync(tmp)
-      } catch {
-        // Already consumed or never created.
+      if (this.detailLru.get(runId) === cachedSnapshot) {
+        this.detailLru.delete(runId)
       }
+      await fsPromises.unlink(tmp).catch(() => {})
       if (error instanceof HelmxError) throw error
       const err = error as NodeJS.ErrnoException
       throw new HelmxError('io_error', `failed to write workflow detail ${target}: ${err.message}`, 500, {
@@ -386,7 +417,6 @@ export class RunRepository {
         code: err.code,
       })
     }
-    this.cacheDetail(sanitized)
   }
 
   /** Lazy-read RunDetail (LRU cache first, then disk; missing file returns minimal `{ id }`). */
@@ -448,7 +478,51 @@ export class RunRepository {
     }
   }
 
+  /** Cascade-remove settled terminal runs belonging to a deleted conversation (KV + memory indexes + detail/journal files). */
+  async purgeConversationTerminalRuns(conversationId: number, excludeRunIds: ReadonlySet<string>): Promise<string[]> {
+    this.ensureHydrated()
+    const victims: RunHeader[] = []
+    for (const header of this.headers.values()) {
+      if (header.conversationId !== conversationId) continue
+      if (excludeRunIds.has(header.id)) continue
+      if (header.status === 'running' || header.phase !== 'settled') continue
+      victims.push(header)
+    }
+    if (victims.length === 0) return []
+
+    const purgedIds: string[] = []
+    const unlinkTasks: Promise<void>[] = []
+    for (const header of victims) {
+      const runId = header.id
+      purgedIds.push(runId)
+      this.kv.delete(runId)
+      this.headers.delete(runId)
+      this.detailLru.delete(runId)
+      this.takenOverBy.delete(runId)
+      if (header.replayedFrom !== undefined && this.takenOverBy.get(header.replayedFrom) === runId) {
+        this.takenOverBy.delete(header.replayedFrom)
+      }
+
+      const pendingWrite = this.detailWriteChains.get(runId) ?? Promise.resolve()
+      const detailPath = this.detailPathFor(conversationId, runId)
+      const journalPath = header.kind === 'workflow' ? header.journalPath : this.journalPathFor(conversationId, runId)
+      unlinkTasks.push(
+        pendingWrite.then(async () => {
+          await fsPromises.unlink(detailPath).catch(() => {})
+          await fsPromises.unlink(journalPath).catch(() => {})
+        }),
+      )
+    }
+
+    await Promise.all([this.kv.flush(), ...unlinkTasks])
+    await fsPromises.rmdir(this.artifactsDir(conversationId)).catch(() => {})
+    return purgedIds
+  }
+
   async flush(): Promise<void> {
+    while (this.detailWriteChains.size > 0) {
+      await Promise.allSettled([...this.detailWriteChains.values()])
+    }
     await this.kv.flush()
   }
 

@@ -4,8 +4,7 @@ import {
   Callout, CopyButton, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle,
   HelmxIcon, usePluginContext, usePluginLocale, usePluginTranslator,
 } from '@helmx/plugin-client'
-import { loadMermaid } from './mermaid-loader.ts'
-import { getMermaidConfig } from './mermaid-theme.ts'
+import { renderMermaidSvg } from './mermaid-loader.ts'
 import { MERMAID_COPY as C, mermaidModalStatus } from './copy.ts'
 
 const MIN_SCALE = 0.2
@@ -44,10 +43,8 @@ export function MermaidPreviewModal({ code, svg, onClose }: { code: string; svg?
     const stale = (): boolean => cancelled || seqRef.current !== seq
     void (async () => {
       try {
-        const mermaid = await loadMermaid()
-        if (stale()) return
-        mermaid.initialize(getMermaidConfig(theme))
-        const { svg: out } = await mermaid.render(`helmx-mermaid-modal-${theme}-${seq}-${Math.random().toString(36).slice(2, 8)}`, code)
+        const id = `helmx-mermaid-modal-${theme}-${seq}-${Math.random().toString(36).slice(2, 8)}`
+        const out = await renderMermaidSvg({ theme, id, code, isStale: stale })
         if (!stale()) { setRenderedSvg(out); setError(null) }
       } catch (err) {
         if (!stale()) { setRenderedSvg(null); setError(err instanceof Error ? err.message : String(err)) }

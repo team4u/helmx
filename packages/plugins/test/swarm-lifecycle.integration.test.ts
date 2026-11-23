@@ -940,7 +940,8 @@ describe('builtin:swarm lifecycle, activation & index governance', () => {
     g[CLIENT_SHARED_GLOBALS['@helmx/plugin-client']!] = SDK
 
     const swarmClientDir = resolve(dirname(fileURLToPath(import.meta.url)), '../src/swarm/client')
-    const bundle = await compilePluginClientModule(SWARM_PLUGIN_ID, swarmClientDir, 'index.tsx', buildDir)
+    const bundle = await compilePluginClientModule(SWARM_PLUGIN_ID, swarmClientDir, 'conversation.tsx', buildDir)
+    assert.doesNotMatch(bundle.code, /SwarmWorkbenchPanel/, 'conversation entrypoint must not bundle SwarmWorkbenchPanel')
     const mod = (await import(`data:text/javascript;base64,${Buffer.from(bundle.code, 'utf8').toString('base64')}#swarm-lifecycle-int16`)) as {
       SwarmToolView: React.ComponentType<ToolViewProps>
     }

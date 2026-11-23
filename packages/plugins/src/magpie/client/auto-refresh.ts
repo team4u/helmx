@@ -28,6 +28,7 @@ interface AutoRefreshState {
   inFlight: Promise<void> | null
   lastAttemptAt: number
   visibilityBound: boolean
+  visibilityListener?: () => void
 }
 
 const AUTO_REFRESH_KEY = Symbol.for('helmx:builtin:magpie:auto-refresh')
@@ -110,14 +111,17 @@ function syncSchedule(triggerImmediatelyIfDue: boolean): void {
       state.activeIntervalMs = 0
     }
     if (state.visibilityBound && typeof document !== 'undefined') {
-      document.removeEventListener('visibilitychange', onVisibilityChange)
+      document.removeEventListener('visibilitychange', state.visibilityListener ?? onVisibilityChange)
+      state.visibilityListener = undefined
       state.visibilityBound = false
     }
     return
   }
 
   if (!state.visibilityBound && typeof document !== 'undefined') {
-    document.addEventListener('visibilitychange', onVisibilityChange)
+    const listener = state.visibilityListener ?? onVisibilityChange
+    state.visibilityListener = listener
+    document.addEventListener('visibilitychange', listener)
     state.visibilityBound = true
   }
 
@@ -176,7 +180,8 @@ export function resetMagpieAutoRefreshForTest(): void {
   state.inFlight = null
   state.lastAttemptAt = 0
   if (state.visibilityBound && typeof document !== 'undefined') {
-    document.removeEventListener('visibilitychange', onVisibilityChange)
+    document.removeEventListener('visibilitychange', state.visibilityListener ?? onVisibilityChange)
+    state.visibilityListener = undefined
     state.visibilityBound = false
   }
 }

@@ -38,6 +38,7 @@ import {
 } from './profile/catalog.js';
 import { computeAgentsMdSection } from './profile/agents-md.js';
 import {
+  invalidateNodeSkillsCache,
   nodeSkillsUnavailableSection,
   readNodeSkillFile,
 } from './profile/node-skills.js';
@@ -67,6 +68,10 @@ export {
   MAX_NODE_SKILL_FILE_BYTES,
   MAX_NODE_SKILLS,
   MAX_NODE_SKILL_REFERENCES,
+  MAX_NODE_SKILL_REFERENCE_DEPTH,
+  NODE_SKILL_SCAN_CONCURRENCY,
+  NODE_SKILLS_CACHE_TTL_MS,
+  invalidateNodeSkillsCache,
   nodeSkillsUnavailableSection,
   scanNodeSkills,
   readNodeSkillFile,
@@ -134,11 +139,14 @@ export function createProfilePlugin(): PluginDefinition {
       ctx.service({
         id: 'profile-skills',
         async start() {
+          invalidateNodeSkillsCache(ctx.host);
           await skills.ensureSkill(HELMX_CLI_SKILL_ASSET);
           await skills.ensureSkill(APP_BUILDER_SKILL_ASSET);
           await ensureDefaultProfileManaged(profiles);
         },
-        async stop() {},
+        async stop() {
+          invalidateNodeSkillsCache(ctx.host);
+        },
       });
 
       /**

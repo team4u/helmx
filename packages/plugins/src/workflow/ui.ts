@@ -39,7 +39,7 @@ export function registerWorkflowUi(ctx: HelmxPluginContext): void {
     icon: 'git-branch',
     order: 10,
     badge: { doc: WORKFLOW_RUN_BADGES_DOC, byConversationField: 'byConversation' },
-    client: { module: 'index.tsx', export: 'WorkflowWorkbenchPanel' },
+    client: { module: 'workbench.tsx', export: 'WorkflowWorkbenchPanel' },
   })
   // 工作流库：跨会话可复用资产的独立视图空间（定义管理不属会话 workbench）。
   ctx.ui.sidebarItem({
@@ -53,6 +53,6 @@ export function registerWorkflowUi(ctx: HelmxPluginContext): void {
     id: 'library',
     label: { en: 'Workflow Library', 'zh-CN': '工作流库' },
     icon: 'workflow',
-    client: { module: 'index.tsx', export: 'WorkflowLibraryScreen' },
+    client: { module: 'library.tsx', export: 'WorkflowLibraryScreen' },
   })
 }

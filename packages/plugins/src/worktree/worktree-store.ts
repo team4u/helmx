@@ -175,11 +175,52 @@ export class WorktreeStore {
   private readonly kv: WorktreeKvHandles
   private readonly redact: (text: string) => string
   private readonly host: WorktreeStoreDeps['host']
+  private hydrated = false
+  private readonly recordsById = new Map<string, ManagedWorktreeRecord>()
+  private activeCount = 0
 
   constructor(deps: WorktreeStoreDeps) {
     this.kv = deps.kv
     this.redact = deps.redact
     this.host = deps.host
+  }
+
+  invalidateCache(): void {
+    this.hydrated = false
+    this.recordsById.clear()
+    this.activeCount = 0
+  }
+
+  private ensureHydrated(): void {
+    if (this.hydrated) return
+    const nextMap = new Map<string, ManagedWorktreeRecord>()
+    let nextActive = 0
+    for (const entry of listAllKv(this.kv.worktrees)) {
+      assertPersistedRecordValid(entry.value, entry.key)
+      nextMap.set(entry.key, entry.value)
+      if (entry.value.status === 'active') nextActive += 1
+    }
+    this.recordsById.clear()
+    for (const [k, v] of nextMap) {
+      this.recordsById.set(k, v)
+    }
+    this.activeCount = nextActive
+    this.hydrated = true
+  }
+
+  private putCachedRecord(kvKey: string, next: ManagedWorktreeRecord): void {
+    const prev = this.recordsById.get(kvKey)
+    if (prev?.status === 'active') this.activeCount -= 1
+    if (next.status === 'active') this.activeCount += 1
+    this.recordsById.set(kvKey, next)
+  }
+
+  private deleteCachedRecord(kvKey: string): boolean {
+    const prev = this.recordsById.get(kvKey)
+    if (prev === undefined) return false
+    if (prev.status === 'active') this.activeCount -= 1
+    this.recordsById.delete(kvKey)
+    return true
   }
 
   async flush(): Promise<void> {
@@ -190,33 +231,39 @@ export class WorktreeStore {
     ])
   }
 
+  hasActiveRecords(): boolean {
+    this.ensureHydrated()
+    return this.activeCount > 0
+  }
+
   records(): ManagedWorktreeRecord[] {
-    return listAllKv(this.kv.worktrees).map((entry) => {
-      assertPersistedRecordValid(entry.value, entry.key)
-      return entry.value
-    })
+    this.ensureHydrated()
+    return [...this.recordsById.values()]
   }
 
   append(record: ManagedWorktreeRecord): void {
-    this.kv.worktrees.set(worktreeKvKey(record.id), record)
+    this.ensureHydrated()
+    const kvKey = worktreeKvKey(record.id)
+    this.kv.worktrees.set(kvKey, record)
+    this.putCachedRecord(kvKey, record)
   }
 
   findById(id: string): ManagedWorktreeRecord | undefined {
-    const kvKey = worktreeKvKey(id)
-    const raw = this.kv.worktrees.get(kvKey)
-    if (raw === undefined) return undefined
-    assertPersistedRecordValid(raw, kvKey)
-    return raw
+    this.ensureHydrated()
+    return this.recordsById.get(worktreeKvKey(id))
   }
 
   updateRecord(id: string, mutate: (record: ManagedWorktreeRecord) => ManagedWorktreeRecord): void {
+    this.ensureHydrated()
     const kvKey = worktreeKvKey(id)
-    const existing = this.kv.worktrees.get(kvKey)
+    const existing = this.recordsById.get(kvKey)
     if (existing === undefined) {
       throw new HelmxError('not_found', `受管 worktree 记录 ${id} 不存在（存储状态不一致）`, 404, { id })
     }
-    assertPersistedRecordValid(existing, kvKey)
-    this.kv.worktrees.set(kvKey, mutate(existing))
+    const next = mutate(existing)
+    assertPersistedRecordValid(next, kvKey)
+    this.kv.worktrees.set(kvKey, next)
+    this.putCachedRecord(kvKey, next)
   }
 
   assertMetadataSecretFree(
@@ -289,10 +336,10 @@ export class WorktreeStore {
     assertNonBlankArg(id, 'worktreeId')
     assertNonBlankArg(pluginId, 'pluginId')
     assertNonBlankArg(holdId, 'holdId')
+    this.ensureHydrated()
     const kvKey = worktreeKvKey(id)
-    const record = this.kv.worktrees.get(kvKey)
+    const record = this.recordsById.get(kvKey)
     if (record === undefined) return false
-    assertPersistedRecordValid(record, kvKey)
     if (record.hold === undefined) return false
     if (record.hold.pluginId !== pluginId || record.hold.holdId !== holdId) {
       throw new HelmxError(
@@ -312,6 +359,7 @@ export class WorktreeStore {
     }
     const { hold: _cleared, ...clean } = record
     this.kv.worktrees.set(kvKey, clean)
+    this.putCachedRecord(kvKey, clean)
     return true
   }
 
@@ -612,19 +660,18 @@ export class WorktreeStore {
       }
     }
 
-    const entries = listAllKv(this.kv.worktrees)
-    if (entries.length === 0) return
+    this.ensureHydrated()
+    if (this.recordsById.size === 0) return
     const leasedIds = new Set(Array.from(this.listLeases().values(), (l) => l.worktreeId))
-    for (const entry of entries) {
-      assertPersistedRecordValid(entry.value, entry.key)
-      const r = entry.value
+    for (const [kvKey, r] of [...this.recordsById.entries()]) {
       if (
         r.status === 'removed' &&
         r.hold === undefined &&
         !leasedIds.has(r.id) &&
         (r.conversationId === conversationId || r.parentConversationId === conversationId)
       ) {
-        this.kv.worktrees.delete(entry.key)
+        this.kv.worktrees.delete(kvKey)
+        this.deleteCachedRecord(kvKey)
       }
     }
   }

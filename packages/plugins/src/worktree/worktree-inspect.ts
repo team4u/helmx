@@ -10,6 +10,7 @@ import {
   countUnmergedCommits,
   dirExistsOnNode,
   gitExec,
+  parseInspectPorcelainV2Lines,
   resolveMergeReferenceHead,
   resolveRepoAuthority,
   type GitCapture,
@@ -99,54 +100,85 @@ export async function inspectWorktree(
     return result.output.trim()
   }
 
-  const branch = await probe(['rev-parse', '--abbrev-ref', 'HEAD'])
-  const head = await probe(['rev-parse', 'HEAD'])
-  const statusResult = await run(['status', '--porcelain', '--untracked-files=all'], {
-    kind: 'lines',
-    maxLines: INSPECT_DIRTY_FILES_LIMIT,
-  })
+  const repoProbeDir = record.repoRoot !== '' ? record.repoRoot : record.path
+  const diffRef = record.baseCommit !== '' ? record.baseCommit : 'HEAD'
 
-  let commitsAhead: number | undefined
-  if (record.baseCommit !== '') {
-    const aheadRaw = await probe(['rev-list', '--count', `${record.baseCommit}..${head}`])
-    const ahead = Number.parseInt(aheadRaw, 10)
-    if (!Number.isFinite(ahead)) {
-      throw new HelmxError(
-        'worktree_check_failed',
-        `检视无法解析领先提交数（git rev-list --count 输出 ${JSON.stringify(redact(aheadRaw))}，检视中止）`,
-        502,
-        { worktreeId: record.id, path: record.path, nodeId: record.nodeId },
+  const [statusResult, repoRef, statResult, diffResult] = await Promise.all([
+    run(['status', '--porcelain=v2', '--branch', '--untracked-files=all'], {
+      kind: 'lines',
+      maxLines: INSPECT_DIRTY_FILES_LIMIT + 16,
+    }),
+    (async () => {
+      const authority = await resolveRepoAuthority(ports, record.nodeId, repoProbeDir, signal)
+      const referenceHead = await resolveMergeReferenceHead(
+        ports,
+        record.nodeId,
+        authority.mainPath,
+        authority.entries[0]!.head,
+        undefined,
+        record.baseBranch,
+        signal,
       )
-    }
-    commitsAhead = ahead
+      return { authority, referenceHead }
+    })(),
+    run(['diff', '--no-ext-diff', '--no-textconv', '--stat', diffRef], {
+      kind: 'chars',
+      limit: INSPECT_DIFF_STAT_LIMIT,
+    }),
+    input.diff !== false
+      ? run(['diff', '--no-ext-diff', '--no-textconv', diffRef], {
+          kind: 'chars',
+          limit: INSPECT_DIFF_PREVIEW_LIMIT,
+        })
+      : Promise.resolve(undefined),
+  ])
+
+  const parsedStatus = parseInspectPorcelainV2Lines(
+    statusResult.lines,
+    statusResult.totalNonEmptyLines,
+    INSPECT_DIRTY_FILES_LIMIT,
+  )
+  const branch = parsedStatus.branch
+  const head = parsedStatus.oid
+  if (!/^[0-9a-f]{7,64}$/i.test(head)) {
+    throw new HelmxError(
+      'worktree_check_failed',
+      `检视无法解析当前 HEAD 提交（git status --porcelain=v2 --branch 输出 oid=${JSON.stringify(redact(head))}，检视中止）`,
+      502,
+      { worktreeId: record.id, path: record.path, nodeId: record.nodeId },
+    )
   }
 
-  const repoProbeDir = record.repoRoot !== '' ? record.repoRoot : record.path
-  const authority = await resolveRepoAuthority(ports, record.nodeId, repoProbeDir, signal)
-  const referenceHead = await resolveMergeReferenceHead(
-    ports,
-    record.nodeId,
-    authority.mainPath,
-    authority.entries[0]!.head,
-    undefined,
-    record.baseBranch,
-    signal,
-  )
   const targetRef = branch !== '' && branch !== 'HEAD' ? branch : head
-  const unmergedCommits = await countUnmergedCommits(
-    ports,
-    record.nodeId,
-    authority.mainPath,
-    referenceHead,
-    targetRef,
-    signal,
-  )
+  const [aheadOutcome, unmergedOutcome] = await Promise.allSettled([
+    record.baseCommit !== ''
+      ? probe(['rev-list', '--count', `${record.baseCommit}..${head}`]).then((aheadRaw) => {
+          const ahead = Number.parseInt(aheadRaw, 10)
+          if (!Number.isFinite(ahead)) {
+            throw new HelmxError(
+              'worktree_check_failed',
+              `检视无法解析领先提交数（git rev-list --count 输出 ${JSON.stringify(redact(aheadRaw))}，检视中止）`,
+              502,
+              { worktreeId: record.id, path: record.path, nodeId: record.nodeId },
+            )
+          }
+          return ahead
+        })
+      : Promise.resolve(undefined),
+    countUnmergedCommits(
+      ports,
+      record.nodeId,
+      repoRef.authority.mainPath,
+      repoRef.referenceHead,
+      targetRef,
+      signal,
+    ),
+  ])
+  if (aheadOutcome.status === 'rejected') throw aheadOutcome.reason
+  if (unmergedOutcome.status === 'rejected') throw unmergedOutcome.reason
+  const commitsAhead = aheadOutcome.value
+  const unmergedCommits = unmergedOutcome.value
 
-  const diffRef = record.baseCommit !== '' ? record.baseCommit : 'HEAD'
-  const statResult = await run(['diff', '--no-ext-diff', '--no-textconv', '--stat', diffRef], {
-    kind: 'chars',
-    limit: INSPECT_DIFF_STAT_LIMIT,
-  })
   let diffStat: string | undefined
   const statText = statResult.output.trim()
   if (statText !== '') {
@@ -155,16 +187,8 @@ export async function inspectWorktree(
       (statResult.truncated ? `\n…（diff 统计超出检视上限 ${INSPECT_DIFF_STAT_LIMIT} 字符已截断，非完整统计）` : '')
   }
 
-  let diffPreview: string | undefined
-  let diffTruncated = false
-  if (input.diff !== false) {
-    const diffResult = await run(['diff', '--no-ext-diff', '--no-textconv', diffRef], {
-      kind: 'chars',
-      limit: INSPECT_DIFF_PREVIEW_LIMIT,
-    })
-    diffTruncated = diffResult.truncated
-    diffPreview = diffResult.output === '' ? undefined : redact(diffResult.output)
-  }
+  const diffTruncated = diffResult?.truncated ?? false
+  const diffPreview = diffResult !== undefined && diffResult.output !== '' ? redact(diffResult.output) : undefined
 
   return {
     ...metadata,
@@ -172,9 +196,9 @@ export async function inspectWorktree(
     currentBranch: redact(branch),
     currentHead: redact(head),
     ...(branch !== record.branch ? { branchChanged: true } : {}),
-    dirtyFiles: statusResult.lines.map((line) => redact(line)),
-    dirtyFileCount: statusResult.totalNonEmptyLines,
-    dirtyFilesTruncated: statusResult.truncated,
+    dirtyFiles: parsedStatus.dirtyFiles.map((line) => redact(line)),
+    dirtyFileCount: parsedStatus.dirtyFileCount,
+    dirtyFilesTruncated: parsedStatus.dirtyFilesTruncated,
     ...(commitsAhead !== undefined ? { commitsAhead } : {}),
     unmergedCommits,
     ...(diffStat !== undefined ? { diffStat } : {}),

@@ -12,10 +12,11 @@ export { TOKEN_SPEED_PLUGIN_ID }
 
 interface ConvState {
   tracker: ConversationTokenSpeedTracker
+  windowMs: number
   lastWriteAt?: number
+  lastPublished?: TokenSpeedStatus | null
   timer?: ReturnType<typeof setTimeout>
   pending?: TokenSpeedStatus
-  settled: boolean
 }
 
 export function createTokenSpeedPlugin(options?: { now?: () => number }): PluginDefinition {
@@ -50,19 +51,32 @@ export function createTokenSpeedPlugin(options?: { now?: () => number }): Plugin
         return typeof raw === 'number' && Number.isFinite(raw) ? Math.min(MAX_SLIDING_WINDOW_MS, Math.max(MIN_SLIDING_WINDOW_MS, Math.round(raw))) : DEFAULT_SLIDING_WINDOW_MS
       }
       const stateOf = (id: number): ConvState => {
+        const w = windowMsOf()
         let s = states.get(id)
         if (!s) {
-          s = { tracker: new ConversationTokenSpeedTracker({ windowMs: windowMsOf(), minSpanMs: MIN_SLIDING_WINDOW_MS }), settled: false }
+          s = { tracker: new ConversationTokenSpeedTracker({ windowMs: w, minSpanMs: MIN_SLIDING_WINDOW_MS }), windowMs: w }
           states.set(id, s)
+        } else if (s.windowMs !== w) {
+          s.windowMs = w
+          s.tracker.setWindowMs(w)
         }
         return s
       }
+      ctx.host.onEvent('plugins.changed', () => {
+        const w = windowMsOf()
+        for (const s of states.values()) {
+          if (s.windowMs !== w) {
+            s.windowMs = w
+            s.tracker.setWindowMs(w)
+          }
+        }
+      })
       const cancelTimer = (s: ConvState): void => { if (s.timer !== undefined) clearTimeout(s.timer); s.timer = undefined; s.pending = undefined }
       const ignoreNotFound = (fn: () => void): void => { try { fn() } catch (err) { if (!(err instanceof HelmxError && err.status === 404)) throw err } }
 
       const publish = (id: number, status: TokenSpeedStatus | null, force: boolean, now: number): void => {
         const s = states.get(id)
-        const prev = speedDoc.get(id)
+        const prev = s?.lastPublished ?? null
         const throttle =
           !force && s && status && prev && prev.phase === status.phase &&
           !(prev.tps === undefined && status.tps !== undefined) &&
@@ -74,8 +88,9 @@ export function createTokenSpeedPlugin(options?: { now?: () => number }): Plugin
               s.timer = undefined
               const pending = s.pending
               s.pending = undefined
-              if (!active || pending === undefined) return
+              if (!active || pending === undefined || states.get(id) !== s) return
               s.lastWriteAt = nowOf(clock())
+              s.lastPublished = pending
               ignoreNotFound(() => speedDoc.set(id, pending))
             }, Math.max(1, DOC_WRITE_INTERVAL_MS - (now - s.lastWriteAt!)))
             timer.unref?.()
@@ -83,7 +98,11 @@ export function createTokenSpeedPlugin(options?: { now?: () => number }): Plugin
           }
           return
         }
-        if (s) { cancelTimer(s); s.lastWriteAt = now }
+        if (s) {
+          cancelTimer(s)
+          s.lastWriteAt = now
+          s.lastPublished = status
+        }
         ignoreNotFound(() => speedDoc.set(id, status))
       }
 
@@ -96,14 +115,10 @@ export function createTokenSpeedPlugin(options?: { now?: () => number }): Plugin
       ctx.host.onEvent('conversation.live', (raw) => {
         const frame = asConversationLiveFrame(raw)
         if (!frame) return
-        const now = nowOf(frame.updatedAt)
         const existing = states.get(frame.conversationId)
-        if (existing?.settled) {
-          if (!frame.generation) return
-          existing.settled = false
-          existing.tracker.resetChain()
-        }
-        const s = existing ?? stateOf(frame.conversationId)
+        if (!existing && !frame.generation) return
+        const now = nowOf(frame.updatedAt)
+        const s = stateOf(frame.conversationId)
         s.tracker.observeFrame(now, frame)
         const status = s.tracker.liveStatus(now)
         if (status) publish(frame.conversationId, status, false, now)
@@ -117,12 +132,12 @@ export function createTokenSpeedPlugin(options?: { now?: () => number }): Plugin
         const completion = asAssistantCompletion(raw)
         const s = completion ? states.get(env.conversationId) : undefined
         if (!completion || !s) return
+        const w = windowMsOf()
+        if (s.windowMs !== w) { s.windowMs = w; s.tracker.setWindowMs(w) }
         const now = nowOf(clock())
         s.tracker.noteCompletion(completion, now)
-        if (!s.settled) {
-          const status = s.tracker.liveStatus(now)
-          if (status) publish(env.conversationId, status, false, now)
-        }
+        const status = s.tracker.liveStatus(now)
+        if (status) publish(env.conversationId, status, false, now)
       })
 
       ctx.hook.onTurnSettled((payload) => {
@@ -131,9 +146,13 @@ export function createTokenSpeedPlugin(options?: { now?: () => number }): Plugin
         if (payload.conversation.status === 'working') return
         const s = states.get(id)
         if (!s) return
-        s.settled = true
+        const w = windowMsOf()
+        if (s.windowMs !== w) { s.windowMs = w; s.tracker.setWindowMs(w) }
+        cancelTimer(s)
         const now = nowOf(payload.settledAt)
-        publish(id, s.tracker.settle(now) ?? null, true, now)
+        const terminal = s.tracker.settle(now) ?? null
+        states.delete(id)
+        ignoreNotFound(() => speedDoc.set(id, terminal))
       })
 
       ctx.host.onEvent('conversation.deleted', (raw) => {

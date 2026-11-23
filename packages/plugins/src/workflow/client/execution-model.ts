@@ -28,7 +28,6 @@ import {
   isPlaceholderRunName,
   isPlaceholderSubagentTitle,
   parseSubagentExecutionInfo,
-  readToolPresentationMeta,
   summarizeJsonPreview,
 } from './parsers.js'
 

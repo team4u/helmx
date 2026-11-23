@@ -26,10 +26,13 @@ export {
   createMemoryKvStore,
   errorMessage,
   formatResultPreview,
+  MAX_HEADER_NODES,
+  MAX_HEADER_PROGRESS,
   newRunId,
   redactNodeForDetail,
   RunRepository,
   slimNodeForHeader,
+  slimProgressForHeader,
   type RunRepositoryOptions,
   type WorkflowKvStore,
 } from './run-repository.js'

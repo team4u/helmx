@@ -28,13 +28,13 @@ export function registerSwarmUi(ctx: HelmxPluginContext): void {
     id: 'swarm-tool-trace',
     toolNames: [...SWARM_TOOL_NAMES],
     replaceRow: true,
-    client: { module: 'index.tsx', export: 'SwarmToolView' },
+    client: { module: 'conversation.tsx', export: 'SwarmToolView' },
   })
   ctx.ui.slot({
     id: 'swarm-active-tray',
     target: COMPOSER_DOCK_SLOT,
     scope: COORDINATOR_SCOPE,
-    client: { module: 'index.tsx', export: 'SwarmActiveTray' },
+    client: { module: 'conversation.tsx', export: 'SwarmActiveTray' },
   })
   ctx.ui.workbenchPanel({
     id: SWARM_WORKBENCH_PANEL_ID,
@@ -43,19 +43,19 @@ export function registerSwarmUi(ctx: HelmxPluginContext): void {
     order: 12,
     scope: HISTORY_PARTICIPANT_SCOPE,
     badge: { doc: 'board-badges', byConversationField: 'byConversation' },
-    client: { module: 'index.tsx', export: 'SwarmWorkbenchPanel' },
+    client: { module: 'workbench.tsx', export: 'SwarmWorkbenchPanel' },
   })
   ctx.ui.timelineRenderer({
     id: 'swarm-board-report',
     title: { en: 'Swarm Board Report', 'zh-CN': '协同看板汇总' },
     matchMeta: { renderer: BOARD_REPORT_RENDERER },
-    client: { module: 'index.tsx', export: 'SwarmBoardReportPill' },
+    client: { module: 'conversation.tsx', export: 'SwarmBoardReportPill' },
   })
   ctx.ui.timelineRenderer({
     id: 'swarm-board-wakeup',
     title: { en: 'Swarm Board Wakeup', 'zh-CN': '协同看板唤醒' },
     matchMeta: { renderer: BOARD_WAKEUP_RENDERER },
-    client: { module: 'index.tsx', export: 'SwarmBoardWakeupPill' },
+    client: { module: 'conversation.tsx', export: 'SwarmBoardWakeupPill' },
   })
   ctx.ui.composerCompleter({
     id: 'swarm-board-members',

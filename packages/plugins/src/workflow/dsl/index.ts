@@ -27,9 +27,11 @@ export {
   validateActionCallOptions,
   validateAgentCallOptions,
   validateScript,
+  WORKFLOW_ACTION_CAP,
   WORKFLOW_AGENT_CAP,
   WORKFLOW_ITEM_CAP,
   WORKFLOW_NESTED_CAP,
+  WORKFLOW_TIMELINE_CAP,
   WorkflowRuntimeError,
 } from './boundary.js'
 export {

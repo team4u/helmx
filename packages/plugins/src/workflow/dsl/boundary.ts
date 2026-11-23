@@ -25,6 +25,8 @@ import type {
 
 export const MAX_SCRIPT_LENGTH = 524_288
 export const WORKFLOW_AGENT_CAP = 1000
+export const WORKFLOW_ACTION_CAP = 4096
+export const WORKFLOW_TIMELINE_CAP = 1000
 export const WORKFLOW_ITEM_CAP = 4096
 export const WORKFLOW_NESTED_CAP = 256
 export const MAX_AGENT_ATTEMPTS = 10

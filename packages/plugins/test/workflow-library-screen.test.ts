@@ -22,7 +22,7 @@ import {
 const e = React.createElement
 mountSharedPluginNamespaces({ realHooks: true })
 const p = await importWorkflowParsers()
-const mod = await importWorkflowClientModule('index.tsx', undefined, { realHooks: true })
+const mod = await importWorkflowClientModule('library.tsx', undefined, { realHooks: true })
 const WorkflowLibraryScreen = mod['WorkflowLibraryScreen'] as (
   props: ScreenProps & { inlineDrawer?: boolean },
 ) => React.ReactElement

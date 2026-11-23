@@ -95,10 +95,23 @@ export function registerWebhook(
     doc.set(assertWebhooksDoc(next))
   }
 
-  let secretRedactions: Array<() => void> = []
+  const secretRedactions = new Map<string, () => void>()
   let active = false
   const activeRequests = new Set<Promise<unknown>>()
   const idleWaiters: Array<() => void> = []
+
+  const setSecretRedaction = (id: string, secret: string): void => {
+    secretRedactions.get(id)?.()
+    secretRedactions.set(id, host.secrets.addRedaction(secret))
+  }
+
+  const releaseSecretRedaction = (id: string): void => {
+    const release = secretRedactions.get(id)
+    if (release !== undefined) {
+      secretRedactions.delete(id)
+      release()
+    }
+  }
 
   const trackRequest = <T>(run: () => Promise<T>): Promise<T> => {
     let tracked!: Promise<T>
@@ -132,7 +145,7 @@ export function registerWebhook(
     const metas = readDoc().webhooks
     for (const meta of metas) {
       const secret = await host.secrets.get(webhookSecretKey(meta.id))
-      if (secret !== undefined) secretRedactions.push(host.secrets.addRedaction(secret))
+      if (secret !== undefined) setSecretRedaction(meta.id, secret)
     }
     active = true
   }
@@ -156,8 +169,8 @@ export function registerWebhook(
         )
       }
     }
-    for (const release of secretRedactions) release()
-    secretRedactions = []
+    for (const release of secretRedactions.values()) release()
+    secretRedactions.clear()
   }
 
   function liveTasks(): string[] {
@@ -258,8 +271,7 @@ export function registerWebhook(
         }
         throw secretError
       }
-      const release = host.secrets.addRedaction(secret)
-      secretRedactions.push(release)
+      setSecretRedaction(id, secret)
       return { webhook: webhookPublicMeta(meta) }
     })
   }
@@ -288,6 +300,7 @@ export function registerWebhook(
           { id },
         )
       }
+      releaseSecretRedaction(id)
       return { deleted: true }
     })
   }

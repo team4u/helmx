@@ -3,7 +3,7 @@
  * Persistence order: append+datasync board.jsonl BEFORE atomicWriteFile meta.json.
  */
 import { randomUUID } from 'node:crypto'
-import { mkdir, open, readdir } from 'node:fs/promises'
+import { mkdir, open, readdir, stat, truncate } from 'node:fs/promises'
 import { join } from 'node:path'
 import { redactJsonValue, type HelmxPluginContext, type MaybePromise } from '@helmx/protocol'
 import {
@@ -58,14 +58,36 @@ export function createCollabGroupRuntime(
   const boardPathOf = (id: string): string => join(groupDirOf(id), 'board.jsonl')
   const redactObject = <T>(value: T): T => redactJsonValue(value, (text) => ctx.host.redact(text)) as T
 
-  const appendBoardLineDurableLocked = async (groupId: string, post: BoardPost): Promise<void> => {
+  const appendPostAndPersistMetaLocked = async (
+    groupId: string,
+    post: BoardPost,
+    next: CollabGroupRecord,
+  ): Promise<CollabGroupRecord> => {
     await mkdir(groupDirOf(groupId), { recursive: true })
-    const handle = await open(boardPathOf(groupId), 'a')
+    const boardPath = boardPathOf(groupId)
+    let priorByteLength = 0
+    try {
+      priorByteLength = (await stat(boardPath)).size
+    } catch (err) {
+      if (!isEnoent(err)) throw err
+    }
+    const handle = await open(boardPath, 'a')
     try {
       await handle.writeFile(`${JSON.stringify(post)}\n`, 'utf8')
       await handle.datasync()
+    } catch (writeErr) {
+      await handle.truncate(priorByteLength).catch(() => {})
+      throw writeErr
     } finally {
       await handle.close()
+    }
+    try {
+      return await persistMetaLocked(next)
+    } catch (metaErr) {
+      await truncate(boardPath, priorByteLength).catch((truncErr) => {
+        logDiagnostic(`回滚截断协作组 '${groupId}' board.jsonl 失败：${truncErr instanceof Error ? truncErr.message : String(truncErr)}`)
+      })
+      throw metaErr
     }
   }
 
@@ -137,20 +159,36 @@ export function createCollabGroupRuntime(
     return clean
   }
 
+  const syncCoordinatorProjectionSafely = (
+    coordinatorConversationId: number,
+    options?: { syncIndex?: boolean },
+  ): void => {
+    try {
+      if (options?.syncIndex) projections.syncIndex()
+      projections.syncCoordinatorProjection(coordinatorConversationId)
+    } catch (err) {
+      if (!isLifecycleTeardownError(err)) {
+        getCoordinator().reportError(`同步协作组投影失败（主控会话 #${coordinatorConversationId}）`, err)
+      }
+    }
+  }
+
   const mutateGroup = async <T>(
     groupId: string,
     fn: (group: CollabGroupRecord, posts: readonly BoardPost[]) => MaybePromise<{ group: CollabGroupRecord; result: T }>,
   ): Promise<T> => {
     const validId = assertGroupId(groupId)
+    let coordinatorConversationId = 0
     const out = await runGroupLocked(validId, async () => {
       const current = groupsById.get(validId)
       if (!current) throw groupNotFoundError(validId)
       const { group: next, result } = await fn(structuredClone(current), postsByGroup.get(validId) ?? [])
-      await persistMetaLocked(next)
+      const saved = await persistMetaLocked(next)
+      coordinatorConversationId = saved.coordinatorConversationId
+      if (saved.status !== 'active') postsByGroup.delete(validId)
       return result
     })
-    projections.syncIndex()
-    projections.syncProjections()
+    syncCoordinatorProjectionSafely(coordinatorConversationId, { syncIndex: true })
     return out
   }
 
@@ -168,30 +206,36 @@ export function createCollabGroupRuntime(
     let membersToWake: string[] = []
     let shouldNotifyCoordinator = false
     let breakerTrip: { seq: number; from: string; to: string[]; maxPeerHops: number } | undefined
+    let coordinatorConversationId = 0
 
     const createdPost = await runGroupLocked(validId, async () => {
       const current = groupsById.get(validId)
       if (!current) throw groupNotFoundError(validId)
+      coordinatorConversationId = current.coordinatorConversationId
 
       if (draft.idempotencyKey !== undefined) {
         const existing = (postsByGroup.get(validId) ?? []).find((p) => p.idempotencyKey === draft.idempotencyKey)
         if (existing) {
-          if (existing.wake) {
-            for (const target of existing.resolvedTargets) {
-              const m = target !== 'coordinator' ? current.members.find((i) => i.name === target && i.lifecycle === 'active') : undefined
-              if (m && m.pendingWakeupSeq > m.readCursorSeq) membersToWake.push(m.name)
+          if (current.status === 'active') {
+            if (existing.wake) {
+              for (const target of existing.resolvedTargets) {
+                const m = target !== 'coordinator' ? current.members.find((i) => i.name === target && i.lifecycle === 'active') : undefined
+                if (m && m.pendingWakeupSeq > m.readCursorSeq) membersToWake.push(m.name)
+              }
             }
-          }
-          if (
-            existing.from !== 'coordinator' &&
-            ((existing.resolvedTargets.includes('coordinator') && existing.wake) || COORDINATOR_ESCALATION_KINDS.has(existing.kind)) &&
-            current.coordinatorPendingSeq > current.coordinatorNotifiedSeq
-          ) {
-            shouldNotifyCoordinator = true
+            if (
+              existing.from !== 'coordinator' &&
+              ((existing.resolvedTargets.includes('coordinator') && existing.wake) || COORDINATOR_ESCALATION_KINDS.has(existing.kind)) &&
+              current.coordinatorPendingSeq > current.coordinatorNotifiedSeq
+            ) {
+              shouldNotifyCoordinator = true
+            }
           }
           return existing
         }
       }
+
+      if (current.status !== 'active') throw groupClosedError(validId, '已结单，无法追加黑板消息')
 
       const next = structuredClone(current)
       const now = Date.now()
@@ -257,16 +301,14 @@ export function createCollabGroupRuntime(
       next.headSeq = post.seq
       next.updatedAt = now
 
-      await appendBoardLineDurableLocked(validId, post)
-      await persistMetaLocked(next)
+      await appendPostAndPersistMetaLocked(validId, post, next)
       const list = postsByGroup.get(validId) ?? []
       list.push(post)
       postsByGroup.set(validId, list)
       return post
     })
 
-    projections.syncIndex()
-    projections.syncProjections()
+    syncCoordinatorProjectionSafely(coordinatorConversationId, { syncIndex: true })
 
     if (breakerTrip) {
       await appendPost(validId, {
@@ -416,14 +458,16 @@ export function createCollabGroupRuntime(
     getPosts: (id) => postsByGroup.get(id) ?? [],
     ensurePostsLoaded: healing.ensurePostsLoaded,
 
-    buildBoardView(groupId: string): BoardViewDoc {
+    buildBoardView(groupId: string, postsOverride?: readonly BoardPost[]): BoardViewDoc {
       const validId = assertGroupId(groupId)
       const group = groupsById.get(validId)
       if (!group) throw groupNotFoundError(validId)
-      return synthesizeBoardView({ group, posts: postsByGroup.get(validId) ?? [], previewLimit: getCoordinator().getConfig().boardPreviewLimit, resolveMemberLive }).view
+      const posts = postsOverride ?? postsByGroup.get(validId) ?? []
+      return synthesizeBoardView({ group, posts, previewLimit: getCoordinator().getConfig().boardPreviewLimit, resolveMemberLive }).view
     },
 
     syncProjections: projections.syncProjections,
+    syncCoordinatorProjection: (coordinatorConversationId: number) => syncCoordinatorProjectionSafely(coordinatorConversationId),
 
     onConversationUpsert(id: number) {
       if (stopping) return
@@ -431,7 +475,7 @@ export function createCollabGroupRuntime(
       for (const g of groupsById.values()) {
         if (g.coordinatorConversationId === id || g.members.some((m) => m.conversationId === id)) affected.add(g.coordinatorConversationId)
       }
-      for (const coordId of affected) projections.syncCoordinatorProjection(coordId)
+      for (const coordId of affected) syncCoordinatorProjectionSafely(coordId)
     },
 
     async onConversationDeleted(id: number) {
@@ -443,7 +487,7 @@ export function createCollabGroupRuntime(
         } else if (g.status === 'active' && g.members.some((m) => m.conversationId === id && m.lifecycle === 'active')) {
           await healing.reconcileDeletedWorker(g.id, id)
         } else if (g.members.some((m) => m.conversationId === id)) {
-          projections.syncProjections()
+          syncCoordinatorProjectionSafely(g.coordinatorConversationId)
         }
       }
       projections.forgetCoordinator(id)
@@ -473,8 +517,7 @@ export function createCollabGroupRuntime(
         postsByGroup.set(groupId, [])
         return persistMetaLocked(record)
       })
-      projections.syncIndex()
-      projections.syncProjections()
+      syncCoordinatorProjectionSafely(saved.coordinatorConversationId, { syncIndex: true })
       return saved
     },
 
@@ -524,16 +567,14 @@ export function createCollabGroupRuntime(
         delete next.peerHopsSinceCoordinator
         next.headSeq = seq
         next.updatedAt = now
-        await appendBoardLineDurableLocked(validId, post)
-        const savedGroup = await persistMetaLocked(next)
+        const savedGroup = await appendPostAndPersistMetaLocked(validId, post, next)
         const list = postsByGroup.get(validId) ?? []
         list.push(post)
         postsByGroup.set(validId, list)
         return { group: savedGroup, member: savedGroup.members.find((m) => m.name === memberState.name)!, post, replayed: false }
       })
 
-      projections.syncIndex()
-      projections.syncProjections()
+      syncCoordinatorProjectionSafely(added.group.coordinatorConversationId, { syncIndex: true })
       if (!added.replayed || (added.member.pendingWakeupSeq > added.member.readCursorSeq && !added.member.inflightWakeup)) {
         await dispatcher.deliverWorkerWakeup(validId, added.member.name)
       }
@@ -549,7 +590,7 @@ export function createCollabGroupRuntime(
       const group = findActiveGroupByCoordinator(id)
       if (!group) return
       dispatcher.forgetCoordReportCompletion(group.id)
-      projections.syncProjections()
+      syncCoordinatorProjectionSafely(group.coordinatorConversationId)
       await flushCoordinatorOrCheckStall(group)
     },
 

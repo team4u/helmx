@@ -5,6 +5,7 @@ import { NODE_ID_PATTERN } from '@helmx/protocol'
 import {
   BOARD_POST_KINDS,
   GROUP_ID_PATTERN,
+  MAX_BOARD_POST_BODY_CHARS,
   MEMBER_LIVE_STATES,
   MEMBER_NAME_PATTERN,
   PROFILE_ID_PATTERN,
@@ -73,7 +74,7 @@ export const boardPostInputSchema = S.obj(
       ['brief', 'handoff', 'review', 'comment', 'blocker', 'done'],
       "Message intent: 'brief' (task assignment), 'handoff' (peer delivery), 'review' (verification feedback), 'comment' (passive note, wake defaults false), 'blocker' (escalates to coordinator immediately), 'done' (final completion to coordinator)",
     ),
-    body: S.str({ minLength: 1 }),
+    body: S.str({ minLength: 1, maxLength: MAX_BOARD_POST_BODY_CHARS }),
     wake: S.bool(
       'Trigger a follow-up turn for target sessions (defaults to false for comment, true otherwise; busy peers receive coalesced wakeups on settle, and done posts to coordinator batch until all active workers are idle)',
     ),

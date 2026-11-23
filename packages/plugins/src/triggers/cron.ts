@@ -390,6 +390,7 @@ export function registerCron(ctx: HelmxPluginContext, deps: CronDeps): CronRunti
 export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clock: CronClock): CronRuntime {
   const doc = ctx.doc<CronDoc>(CRON_DOC_NAME, { version: 1, jobs: [] }, { public: true })
   let stopping = false
+  let activeTickWrite: Promise<void> | undefined
   const inflight = new Map<string, Promise<void>>()
   const timers = new Map<string, TimerHandle>()
 
@@ -405,19 +406,44 @@ export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clo
   }
 
   const readDoc = (): CronDoc => parseCronDoc(doc.get())
-  const writeDoc = async (next: CronDoc): Promise<void> => {
-    doc.set(next)
-    await doc.flush()
-  }
 
   const tryUpdateJob = async (id: string, rev: string, mutate: (job: CronJob) => CronJob): Promise<boolean> => {
-    const current = readDoc()
-    const index = current.jobs.findIndex((j) => j.id === id)
-    if (index < 0 || current.jobs[index]!.rev !== rev) return false
-    const jobs = [...current.jobs]
-    jobs[index] = mutate(jobs[index]!)
-    await writeDoc({ version: 1, jobs })
-    return true
+    while (activeTickWrite !== undefined) {
+      await activeTickWrite
+    }
+    let releaseWrite!: () => void
+    activeTickWrite = new Promise<void>((r) => {
+      releaseWrite = r
+    })
+    try {
+      const current = readDoc()
+      const index = current.jobs.findIndex((j) => j.id === id)
+      if (index < 0 || current.jobs[index]!.rev !== rev) return false
+      const prevJob = current.jobs[index]!
+      const jobs = [...current.jobs]
+      jobs[index] = mutate(prevJob)
+      doc.set({ version: 1, jobs })
+      try {
+        await doc.flush()
+      } catch (err) {
+        try {
+          const latest = readDoc()
+          const curIdx = latest.jobs.findIndex((j) => j.id === id && j.rev === rev)
+          if (curIdx >= 0) {
+            const rolledBack = [...latest.jobs]
+            rolledBack[curIdx] = prevJob
+            doc.set({ version: 1, jobs: rolledBack })
+          }
+        } catch {
+          doc.set(current)
+        }
+        throw err
+      }
+      return true
+    } finally {
+      activeTickWrite = undefined
+      releaseWrite()
+    }
   }
 
   const buildTargetForJob = (job: CronJob): TriggerDeliveryTarget => {
@@ -451,6 +477,11 @@ export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clo
   const runJobTick = async (id: string): Promise<void> => {
     if (stopping) return
     let rescheduledByBackoff = false
+    const backoffOnFailure = (title: string, err: unknown): void => {
+      emitError(title, err)
+      rescheduledByBackoff = true
+      scheduleJob(id, clock.now() + DECISION_RETRY_FLOOR_MS)
+    }
     try {
       let job: CronJob | undefined
       let decision: TickDecision
@@ -459,14 +490,16 @@ export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clo
         if (!job) return
         decision = decideTick(job, clock.now())
       } catch (err) {
-        emitError(`cron job ${id} scheduling decision failed`, err)
-        rescheduledByBackoff = true
-        scheduleJob(id, clock.now() + DECISION_RETRY_FLOOR_MS)
+        backoffOnFailure(`cron job ${id} scheduling decision failed`, err)
         return
       }
       if (decision.action === 'noop') return
       if (decision.action === 'skip-to-future') {
-        await tryUpdateJob(id, job.rev, (j) => ({ ...j, nextRunAt: decision.to }))
+        try {
+          await tryUpdateJob(id, job.rev, (j) => ({ ...j, nextRunAt: decision.to }))
+        } catch (err) {
+          backoffOnFailure(`cron job ${id} skip-to-future persistence failed`, err)
+        }
         return
       }
 
@@ -486,7 +519,7 @@ export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clo
               lastSkipReason: reason,
             }))
           } catch (err) {
-            emitError(`cron job ${id} overlap skip persistence failed`, err)
+            backoffOnFailure(`cron job ${id} overlap skip persistence failed`, err)
           }
           return
         }
@@ -502,7 +535,7 @@ export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clo
           }),
         )
       } catch (err) {
-        emitError(`cron job ${id} claim persistence failed; not delivering this time`, err)
+        backoffOnFailure(`cron job ${id} claim persistence failed; not delivering this time`, err)
         return
       }
       if (!claimed || stopping) return
@@ -661,12 +694,31 @@ export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clo
           { id: job.id, schedule: job.schedule, timezone: job.timezone },
         )
       }
-      const current = readDoc()
-      if (current.jobs.some((j) => j.id === job.id)) {
-        throw new HelmxError('cron_duplicate_id', `cron job already exists: ${job.id}`, 409, { id: job.id })
+      while (activeTickWrite !== undefined) {
+        await activeTickWrite
       }
-      const created: CronJob = { ...job, nextRunAt }
-      await writeDoc({ version: 1, jobs: [...current.jobs, created] })
+      let releaseCreate!: () => void
+      activeTickWrite = new Promise<void>((r) => {
+        releaseCreate = r
+      })
+      let created: CronJob
+      try {
+        const current = readDoc()
+        if (current.jobs.some((j) => j.id === job.id)) {
+          throw new HelmxError('cron_duplicate_id', `cron job already exists: ${job.id}`, 409, { id: job.id })
+        }
+        created = { ...job, nextRunAt }
+        doc.set({ version: 1, jobs: [...current.jobs, created] })
+        try {
+          await doc.flush()
+        } catch (err) {
+          doc.set(current)
+          throw err
+        }
+      } finally {
+        activeTickWrite = undefined
+        releaseCreate()
+      }
       if (created.enabled) scheduleJob(created.id)
       return { job: structuredClone(created) }
     },
@@ -686,12 +738,27 @@ export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clo
     cli: { command: ['cron', 'delete'] },
     handler: async (input: { id: string }) => {
       const current = readDoc()
-      if (!current.jobs.some((j) => j.id === input.id)) {
+      const deletedJob = current.jobs.find((j) => j.id === input.id)
+      if (!deletedJob) {
         throw new HelmxError('not_found', `cron job does not exist: ${input.id}`, 404, { id: input.id })
       }
       timers.get(input.id)?.clear()
       timers.delete(input.id)
-      await writeDoc({ version: 1, jobs: current.jobs.filter((j) => j.id !== input.id) })
+      doc.set({ version: 1, jobs: current.jobs.filter((j) => j.id !== input.id) })
+      try {
+        await doc.flush()
+      } catch (err) {
+        try {
+          const latest = readDoc()
+          if (!latest.jobs.some((j) => j.id === input.id)) {
+            doc.set({ version: 1, jobs: [...latest.jobs, deletedJob] })
+          }
+        } catch {
+          doc.set(current)
+        }
+        scheduleJob(input.id)
+        throw err
+      }
       return { deleted: true }
     },
   })
@@ -760,6 +827,7 @@ export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clo
       for (const handle of timers.values()) handle.clear()
       timers.clear()
       if (inflight.size > 0) await Promise.allSettled([...inflight.values()])
+      while (activeTickWrite !== undefined) await activeTickWrite
     },
   })
 
@@ -773,6 +841,7 @@ export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clo
         await Promise.allSettled([...inflight.values()])
         await new Promise((resolve) => setImmediate(resolve))
       }
+      while (activeTickWrite !== undefined) await activeTickWrite
     },
     getJob(id: string) {
       return readDoc().jobs.find((j) => j.id === id)
