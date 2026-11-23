@@ -638,6 +638,7 @@ export class PluginHost {
     this.releaseConversationDeletedListener = undefined;
     releaseConvDeleted?.();
     await this.gate.drain();
+    const statesSnapshot = [...this.plugins.values()];
     try {
       await disposePlugins(
         this.plugins,
@@ -646,7 +647,7 @@ export class PluginHost {
         (id) => removePluginRegistries(id, this.registries()),
       );
     } finally {
-      for (const state of this.plugins.values()) {
+      for (const state of statesSnapshot) {
         const release = state.releaseTsRoot;
         state.releaseTsRoot = undefined;
         release?.();

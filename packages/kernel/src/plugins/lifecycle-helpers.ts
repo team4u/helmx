@@ -549,6 +549,9 @@ export async function disposePlugins(
     } catch (err) {
       errors.push({ pluginId: state.definition.id, error: toJsonSafeError(err) });
     } finally {
+      const releaseTsRoot = state.releaseTsRoot;
+      state.releaseTsRoot = undefined;
+      releaseTsRoot?.();
       state.phase = 'idle';
       tracker.removePlugin(state.definition.id);
       removeRegistries(state.definition.id);

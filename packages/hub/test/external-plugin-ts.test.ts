@@ -246,6 +246,9 @@ export default {
 
 after(async () => {
   await sharedApp?.close().catch(() => {})
+  const finalState = debugBackendTsLoaderState()
+  assert.equal(finalState.activeRoots, 0, 'all PluginHost TS roots must be released after final app.close()')
+  assert.equal(finalState.hooksInstalled, false, 'module hooks must deregister when activeRoots reaches 0')
   await cleanupDir(sharedDataDir)
   await cleanupDir(outsideDir)
 }, { timeout: 60_000 })
@@ -406,6 +409,9 @@ console.log('CHILD_OK');
 })
 
 test('PluginHost 绑定 TS 根生命周期：运行期动态 import 持续可用，重载回滚与 dispose 后引用计数归零并注销 hooks', { timeout: 60_000 }, async (t) => {
+  const baselineRoots = debugBackendTsLoaderState().activeRoots
+  assert.ok(baselineRoots > 0, 'sharedApp should hold active TS roots before opening isolated app')
+
   const isoDir = useTempDir(t, 'helmx-ext-ts-host-lifetime-')
   const pluginDir = join(isoDir, 'installed-plugins', 'dyn-ts')
   mkdirSync(join(pluginDir, 'lib'), { recursive: true })
@@ -430,9 +436,17 @@ test('PluginHost 绑定 TS 根生命周期：运行期动态 import 持续可用
 }\n`,
   )
 
+  const disposePluginDir = join(isoDir, 'installed-plugins', 'dyn-dispose')
+  mkdirSync(disposePluginDir, { recursive: true })
+  writeFileSync(join(disposePluginDir, 'plugin.json'), JSON.stringify({ id: 'dyn-dispose', main: 'index.ts' }))
+  writeFileSync(disposePluginDir + '/index.ts', "export default { id: 'dyn-dispose', definePlugin() {} }\n")
+
   const { app } = await createHubTestApp({ dataDir: isoDir, cwd: isoDir })
   try {
+    assert.equal(debugBackendTsLoaderState().activeRoots, baselineRoots + 2)
     await app.kernel.plugins.enable('dyn-ts')
+    await app.kernel.plugins.enable('dyn-dispose')
+
     // Runtime dynamic .ts import executes AFTER loadExternalPlugins temporary ref was released.
     const res = (await app.kernel.plugins.invokeAction('dyn-ts', 'loadNow', {})) as { val: string }
     assert.equal(res.val, 'loaded-at-action-time')
@@ -440,15 +454,17 @@ test('PluginHost 绑定 TS 根生命周期：运行期动态 import 持续可用
     // Reload failure rolls back cleanly to the previous active TS root without leaking extra ref-counts.
     writeFileSync(join(pluginDir, 'index.ts'), 'export const broken = {{{\n')
     await assert.rejects(() => app.kernel.plugins.reloadExternalPlugin('dyn-ts'))
+    assert.equal(debugBackendTsLoaderState().activeRoots, baselineRoots + 2)
     const stillWorks = (await app.kernel.plugins.invokeAction('dyn-ts', 'loadNow', {})) as { val: string }
     assert.equal(stillWorks.val, 'loaded-at-action-time')
 
+    // Explicit unregister releases dyn-ts, while dyn-dispose stays registered & enabled for PluginHost.dispose().
     await app.kernel.plugins.unregister('dyn-ts')
+    assert.equal(debugBackendTsLoaderState().activeRoots, baselineRoots + 1)
   } finally {
     await app.close()
   }
 
-  // Closing sharedApp earlier in after() hasn't run yet; once only sharedApp remains, disposing isoDir left no dyn-ts refs.
-  const stateAfterIsoClose = debugBackendTsLoaderState()
-  assert.ok(stateAfterIsoClose.activeRoots >= 0)
+  // Disposing app via app.close() must release dyn-dispose's TS root back to baselineRoots.
+  assert.equal(debugBackendTsLoaderState().activeRoots, baselineRoots)
 })
