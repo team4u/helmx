@@ -15,8 +15,8 @@
  */
 import { createElement } from 'react'
 import { createLocaleTranslator, type HelmxLocale, type LocaleTranslator } from '@helmx/protocol/browser'
-import type { PluginClientHostPort, PluginSlotPortItem } from '@helmx/plugin-client'
-import { assetsApi, conversationsApi } from './api.js'
+import { assertValidPluginRoutePath, type PluginClientHostPort, type PluginSlotPortItem } from '@helmx/plugin-client'
+import { assetsApi, conversationsApi, getStoredToken } from './api.js'
 import type { HelmxExternalStore } from './helmx-store.js'
 import { serverNow } from './server-clock.js'
 import { MarkdownView, CodeBlockView } from '../conversation/MarkdownView.js'
@@ -80,6 +80,14 @@ export function createPluginClientHostPort(store: HelmxExternalStore): PluginCli
       return { errors: res.errors ?? {} }
     },
 
+    // ---- Compute nodes catalog (three-state nodesLoaded gate) ----
+    getNodes: store.getHostNodesSlice,
+    subscribeNodes: (listener) => store.subscribeDomain('hostNodes', listener),
+
+    // ---- Profile catalog (three-state profilesLoaded gate) ----
+    getProfiles: store.getHostProfilesSlice,
+    subscribeProfiles: (listener) => store.subscribeDomain('hostProfiles', listener),
+
     // ---- Plugin docs ----
     getPluginDocValue: store.getPluginDoc,
     hasPluginDoc: store.hasPluginDoc,
@@ -91,8 +99,20 @@ export function createPluginClientHostPort(store: HelmxExternalStore): PluginCli
     getSessionDocState: store.actions.getSessionDocState,
     retrySessionDoc: store.actions.retrySessionDoc,
 
-    // ---- Actions & input ----
+    // ---- Actions, routes & input ----
     invokePluginAction: store.actions.invokePluginAction,
+    fetchPluginRoute: async (pluginId, path, init) => {
+      assertValidPluginRoutePath(path)
+      const url = `/api/plugins/${encodeURIComponent(pluginId)}/routes${path}`
+      const headers = new Headers(init?.headers)
+      const token = getStoredToken()
+      if (token) {
+        headers.set('Authorization', `Bearer ${token}`)
+      } else {
+        headers.delete('Authorization')
+      }
+      return fetch(url, { ...init, headers })
+    },
     submitConversationInput: async (conversationId, input) => {
       await conversationsApi.submitInput(conversationId, {
         text: input.text,

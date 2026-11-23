@@ -154,7 +154,11 @@ export interface PluginPromptFields {
 export interface PluginDocOptions {
   /** When true, projects into public snapshots and SSE doc update events; defaults to false (private). */
   public?: boolean
-  /** When false, stores values only in process memory without SQLite persistence; defaults to true. */
+  /**
+   * When false, stores values only in process memory without SQLite persistence (still subject
+   * to the 2 MiB size cap and public SSE publishing; released on plugin disable, conversation
+   * deletion, or restart); defaults to true.
+   */
   durable?: boolean
 }
 
@@ -172,13 +176,6 @@ export interface PublicPluginDoc {
   pluginId: string
   name: string
   value: unknown
-}
-
-export interface PluginDocOptions {
-  /** true 时文档进入公共快照与 plugin.doc.updated 事件；默认私有。 */
-  public?: boolean
-  /** false 时文档仅驻留进程内存（零 SQLite 读写，随插件停用/会话删除/重启释放），仍受 2 MiB 校验并正常推送公共 SSE；默认 true。 */
-  durable?: boolean
 }
 
 /** Static persistent resource occupancy items declared by plugin services (used by the pre-disable inUse check). */
@@ -548,7 +545,7 @@ export interface PluginPackageRecord {
   pluginId: string
   /** Normalized install source. */
   source: PluginPackageSource
-  /** Absolute on-disk install path (<dataDir>/plugins/<pluginId>). */
+  /** Absolute on-disk install path (<dataDir>/installed-plugins/<pluginId>). */
   installPath: string
   /** Version declared by the package manifest; empty string when unreadable (never fabricated). */
   version: string

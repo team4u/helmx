@@ -115,6 +115,7 @@ describe("swarm-client-interactions", () => {
         actionCalls.push({ actionId, input, ...(options !== undefined ? { options } : {}) })
         return {}
       },
+      fetchRoute: async () => { throw new Error('fetchRoute not implemented in test stub') },
       submitInput: async () => {},
       openScreen: () => {},
       openSplitScreen: () => {},

@@ -83,6 +83,7 @@ function spyAction<K extends keyof HelmxStoreActions>(store: HelmxExternalStore,
 const stubCtx = {
   pluginId: 'test:plugin',
   callAction: async () => undefined,
+  fetchRoute: async () => { throw new Error('fetchRoute not implemented in test stub') },
   openScreen: () => {},
   openConversationDrawer: () => {},
   openSplitScreen: () => {},

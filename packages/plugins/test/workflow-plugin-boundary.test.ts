@@ -612,17 +612,12 @@ test('workflow run 动作：input.conversationId 与调用上下文冲突显式�
 // 6. cleanup_worktree 工具错误信封诚实性（真实插件路径：WorktreeAllocator 自有 Git 能力）
 // ---------------------------------------------------------------------------
 
-/** 预置一条 active 受管 worktree 登记（插件私有 doc 键为 `builtin:worktree:worktree-state`）。 */
-function seedManagedWorktree(docStore: MemoryDocStore): void {
-  docStore.set('builtin:worktree:worktree-state', {
-    'runtime/worktrees': {
-      version: 1,
-      records: [{
-        id: 'local:/wt/x', nodeId: 'local', repoRoot: '/repo', path: '/wt/x', branch: 'helmx/spawn-x',
-        baseCommit: 'a1b2c3', dirtySource: false, parentConversationId: 1, conversationId: 1,
-        origin: 'native', status: 'active', createdAt: 1,
-      }],
-    },
+/** 预置一条 active 受管 worktree 登记（插件私有 KV 命名空间为 `builtin:worktree` / `worktrees`）。 */
+function seedManagedWorktree(kvStore: MemoryKvStore): void {
+  kvStore.setParsed('builtin:worktree', 'worktrees', 'local:/wt/x', {
+    id: 'local:/wt/x', nodeId: 'local', repoRoot: '/repo', path: '/wt/x', branch: 'helmx/spawn-x',
+    baseCommit: 'a1b2c3', dirtySource: false, parentConversationId: 1, conversationId: 1,
+    origin: 'native', status: 'active', createdAt: 1,
   })
 }
 
@@ -630,7 +625,7 @@ test('cleanup_worktree 工具：execEnv 失败真实抛错，绝不吞错或伪�
   // 新契约：cleanup_worktree 通过 ctx.action + exposeAsTool 单点声明；
   // execEnv 失败 → 显式抛出真实 HelmxError（不伪造空 worktreeId/path/branch/nodeId）。
   const host = makeHost()
-  seedManagedWorktree(docs)
+  seedManagedWorktree(kv)
   const { createWorkflowPlugin } = await import('../src/workflow.js')
   const { createWorktreePlugin } = await import('../src/worktree.js')
   await host.register(createWorkflowPlugin())

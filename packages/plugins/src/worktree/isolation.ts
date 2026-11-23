@@ -10,7 +10,7 @@ import { HelmxError, isValidNodeId, NODE_ID_PATTERN, type AgentExecutionInfo, ty
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { FileError, type ExecutionEnv, type Result } from '@earendil-works/pi-durable/env'
 import { WorktreeAllocator, type ManagedWorktreeRecord } from './worktree.js'
-import { WorktreeStore, type WorktreeLeaseRecord } from './worktree-store.js'
+import { WorktreeStore, type WorktreeKvHandles, type WorktreeLeaseRecord } from './worktree-store.js'
 import type { WorktreeExecOptions, WorktreeExecResult } from './worktree-git.js'
 import {
   reattachWithWorktree,
@@ -63,7 +63,7 @@ export interface WorktreeIsolationDeps {
     getConversation(id: number): { cwd: string; nodeId?: string; status: string; profileId?: string }
     readonly isClosing?: boolean
   }
-  docStore: { get<T>(key: string, initial: T): T; set<T>(key: string, value: T): void; flush(): Promise<void> }
+  kv: WorktreeKvHandles
 }
 
 export class WorktreeIsolation {
@@ -73,19 +73,22 @@ export class WorktreeIsolation {
   constructor(private readonly deps: WorktreeIsolationDeps) {
     const redact = (text: string) => deps.host.redact(text)
     this.store = new WorktreeStore({
-      docStore: deps.docStore,
+      kv: deps.kv,
       redact,
       host: deps.host,
     })
     this.allocator = new WorktreeAllocator({
       store: this.store,
-      docStore: deps.docStore,
       exec: (nodeId, cwd, args, options) => this.execGit(nodeId, cwd, args, options),
       nodeExists: (nodeId, path) => this.probeFs(nodeId, path, 'exists') as Promise<Result<boolean, FileError>>,
       nodeCanonicalPath: (nodeId, path) => this.probeFs(nodeId, path, 'canonicalPath') as Promise<Result<string, FileError>>,
       inspectPathUsage: (nodeId, path, signal) => deps.host.inspectNodePathUsage({ nodeId, path, signal }),
       redact,
     })
+  }
+
+  flush(): Promise<void> {
+    return this.store.flush()
   }
 
   private spawnCtx(): IsolationSpawnContext {
@@ -291,9 +294,8 @@ export class WorktreeIsolation {
       holdPersisted = true
       if (leaseToken !== '') {
         await this.store.settleLease(leaseToken, false, true)
-      } else {
-        await this.deps.docStore.flush()
       }
+      await this.store.flush()
       return {
         worktreeId: record.id,
         path: record.path,
@@ -320,7 +322,7 @@ export class WorktreeIsolation {
   }): Promise<{ released: boolean }> {
     const released = this.allocator.releaseHold(input.worktreeId, input.pluginId, input.holdId)
     if (released) {
-      await this.deps.docStore.flush()
+      await this.store.flush()
     }
     return { released }
   }

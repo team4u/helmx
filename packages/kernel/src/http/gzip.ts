@@ -16,6 +16,28 @@ import { gzipSync } from 'node:zlib'
 /** JSON response compression threshold (bytes): below this, compression gains do not outweigh CPU and TLS framing overhead. */
 const GZIP_MIN_BYTES = 1024
 
+/** Maximum JSON response size buffered for synchronous gzip compression (4 MiB, aligned with plugin-route JSON redaction cap). */
+export const GZIP_JSON_MAX_BYTES = 4 * 1024 * 1024
+
+/** Streams already switched to streaming mode (e.g. oversized plugin JSON redaction) bypass gzip buffering immediately. */
+const streamingJsonBodies = new WeakSet<ReadableStream<Uint8Array>>()
+
+/** Marks a `ReadableStream` as an intentionally streaming JSON response so `gzipJsonResponse` passes it through untouched. */
+export function markStreamingJsonBody(body: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
+  streamingJsonBodies.add(body)
+  return body
+}
+
+function concatChunks(chunks: readonly Uint8Array[], totalBytes: number): Uint8Array<ArrayBuffer> {
+  const out = new Uint8Array(new ArrayBuffer(totalBytes))
+  let offset = 0
+  for (const chunk of chunks) {
+    out.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  return out
+}
+
 /** Parse Accept-Encoding to determine whether gzip is accepted (including x-gzip alias; q=0 means rejected). */
 export function acceptsGzip(request: Request): boolean {
   const header = request.headers.get('accept-encoding')
@@ -58,8 +80,10 @@ function mergeVaryAcceptEncoding(headers: Headers): void {
  * client not accepting gzip, below threshold, or no size savings) gets `Vary: Accept-Encoding` merged—the same
  * URL has two representations, and omitting Vary would allow proxies to reuse an identity response across encodings.
  *
- * Body safety: size probing and compression always read `response.clone()`, leaving the original body intact;
- * only when compression succeeds and shrinks the payload is the Response rebuilt with compressed bytes.
+ * Body safety: reads `response.body` via a bounded chunk reader capped at `GZIP_JSON_MAX_BYTES`
+ * (never `response.clone().arrayBuffer()`, avoiding tee double-buffering and event-loop stalls on
+ * oversized/streaming JSON). Payloads exceeding the cap (or already marked streaming) pass through as
+ * an identity `ReadableStream` with `Vary: Accept-Encoding` preserved.
  */
 export async function gzipJsonResponse(request: Request, response: Response): Promise<Response> {
   if (response.headers.has('content-encoding')) return response
@@ -70,17 +94,96 @@ export async function gzipJsonResponse(request: Request, response: Response): Pr
   if (request.method === 'HEAD') return response
   if (response.body === null) return response
   if (!acceptsGzip(request)) return response
-  const raw = new Uint8Array(await response.clone().arrayBuffer())
-  if (raw.byteLength < GZIP_MIN_BYTES) return response
+  if (streamingJsonBodies.has(response.body)) return response
+
+  const declaredLength = response.headers.get('content-length')
+  if (declaredLength !== null && /^\d+$/.test(declaredLength.trim())) {
+    const parsedLength = Number(declaredLength.trim())
+    if (Number.isSafeInteger(parsedLength) && parsedLength > GZIP_JSON_MAX_BYTES) {
+      return response
+    }
+  }
+
+  const reader = response.body.getReader()
+  const chunks: Uint8Array[] = []
+  let totalBytes = 0
+  let exceeded = false
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (value === undefined || value.byteLength === 0) continue
+      chunks.push(value)
+      totalBytes += value.byteLength
+      if (totalBytes > GZIP_JSON_MAX_BYTES) {
+        exceeded = true
+        break
+      }
+    }
+  } catch (err) {
+    await reader.cancel(err).catch(() => {})
+    throw err
+  }
+
+  if (exceeded) {
+    let index = 0
+    const stitched = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        if (index < chunks.length) {
+          const next = chunks[index]!
+          chunks[index] = new Uint8Array(0)
+          index += 1
+          controller.enqueue(next)
+          return
+        }
+        try {
+          while (true) {
+            const { done, value } = await reader.read()
+            if (done) {
+              reader.releaseLock()
+              controller.close()
+              return
+            }
+            if (value !== undefined && value.byteLength > 0) {
+              controller.enqueue(value)
+              return
+            }
+          }
+        } catch (err) {
+          reader.releaseLock()
+          controller.error(err)
+        }
+      },
+      async cancel(reason) {
+        chunks.length = 0
+        await reader.cancel(reason).catch(() => {})
+      },
+    })
+    return new Response(stitched, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: new Headers(response.headers),
+    })
+  }
+
+  reader.releaseLock()
+  const raw = concatChunks(chunks, totalBytes)
+  const identityResponse = () =>
+    new Response(raw, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: new Headers(response.headers),
+    })
+  if (raw.byteLength < GZIP_MIN_BYTES) return identityResponse()
   let compressed: Uint8Array
   try {
     compressed = gzipSync(raw)
   } catch {
     // zlib will not fail for valid buffers; if it ever does, identity encoding is always acceptable to clients
     // (identical bytes, not a content fallback).
-    return response
+    return identityResponse()
   }
-  if (compressed.byteLength >= raw.byteLength) return response
+  if (compressed.byteLength >= raw.byteLength) return identityResponse()
   const headers = new Headers(response.headers)
   headers.delete('content-length')
   headers.set('content-length', String(compressed.byteLength))

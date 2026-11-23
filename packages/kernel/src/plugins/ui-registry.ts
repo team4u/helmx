@@ -3,17 +3,16 @@
  * across plugins, integrating build-port (PluginBuildProvider) module validation and artifact resolution.
  *
  * Responsibilities:
- * - Collect UI declarations for sidebar, screen, timeline, markdown.codeBlock, tool, composer,
- *   workbench, commandPalette, settingsPanel, profile.runtime, UI actions (header/row/entry),
- *   and plugin.slot (unified client.tsx track);
+ * - Collect UI declarations for the 10 frontend extension points (`sidebar.item`, `screen`,
+ *   `timeline.renderer`, `markdown.codeBlock`, `tool.view`, `composer.completer`,
+ *   `workbench.panel`, `commandPalette`, `settings.panel`, and `plugin.slot`) on the unified `client.tsx` track;
  * - Run static declaration-boundary checks (id uniqueness, finite safe integer priority/order,
- *   command slash prefix & reserved names, mutually exclusive UI action target & required action/client track,
- *   markdown.codeBlock language table, slot target shape & required client, artifact.previewer MIME/extension matchers,
- *   composer.completer exclusion, ConversationScope plain-object validation, JSON-safe fidelity);
+ *   command slash prefix & reserved names, markdown.codeBlock language table, slot target shape
+ *   & required client, composer.completer exclusion, ConversationScope plain-object validation, JSON-safe fidelity);
  * - Validate client.tsx dynamic component module references (assertModuleRefShape) and clientRoot containment;
  * - Resolve compiled client module artifacts with strict lifecycle & epoch verification (preventing stale artifacts
  *   from deactivated or cycled plugins);
- * - Enforce cross-plugin uniqueness invariants at enable commit time (profile.runtime kind and commandPalette slash),
+ * - Enforce cross-plugin uniqueness invariants at enable commit time (`commandPalette` `slash`),
  *   called by PluginHost during enable commit so disabled pre-registrations never occupy global names.
  */
 import { lstatSync, readFileSync, realpathSync, statSync } from 'node:fs';
@@ -410,8 +409,8 @@ export class UiRegistry {
         : lifecycleAssets?.prebuiltClientDir;
 
     // Two-phase surface validation (see ui-spec-validators.ts): early checks
-    // (UI action / commandPalette / profile.runtime / plugin.slot) run before scope
-    // and client-ref validation, while late checks run right after in exact original order.
+    // (`commandPalette` / `plugin.slot`) run before scope and client-ref validation,
+    // while late checks run right after in exact original order.
     const ctx: UiSpecContext = {
       pluginId,
       fnName,

@@ -5,6 +5,7 @@
 import {
   HelmxError,
   parseNonEmptyLocalizedText,
+  type PluginConfigFieldSchema,
   type PluginDefinition,
   type PluginDiagnosticError,
   type PluginSummary,
@@ -427,6 +428,37 @@ export function wrapEnableError(
     500,
     { pluginId, ...(rollbackError ? { rollbackError } : {}) },
   );
+}
+
+/**
+ * Merges declared `configSchema` defaults with persisted `stored` overrides.
+ * Non-secret defaults and object/array overrides are JSON-cloned so caller mutations
+ * cannot corrupt schema defaults or backing stores; explicit `undefined` values in
+ * `stored` do not erase schema defaults.
+ */
+export function resolveEffectiveConfig(
+  schema: Record<string, PluginConfigFieldSchema> | null | undefined,
+  stored: Record<string, unknown>,
+): Record<string, unknown> {
+  const merged: Record<string, unknown> = {};
+  if (schema) {
+    for (const [key, field] of Object.entries(schema)) {
+      if (field.default !== undefined) {
+        merged[key] = field.secret === true ? String(field.default) : jsonClone(field.default);
+      }
+    }
+  }
+  for (const [key, value] of Object.entries(stored)) {
+    if (value !== undefined) {
+      merged[key] =
+        schema?.[key]?.secret === true
+          ? value
+          : typeof value === 'object' && value !== null
+            ? jsonClone(value)
+            : value;
+    }
+  }
+  return merged;
 }
 
 /** Projects non-secret effective config fields declared in `state.configSchema` (with redaction). */

@@ -68,7 +68,8 @@ managedByPlugin: {{MANAGED_BY}}
 - `helmx plugins doctor <id|dir>`: static self-check of external plugin source (real-generation imports + real registration assertions + real client compilation and dangling-export validation); pick one target: an absolute directory path or a registered plugin id; failed precheck items are listed one by one, never silently.
 - `helmx plugins reload <id>`: controlled hot-reload of an external plugin (doctor precheck first; on failure the old instance stays untouched; in-flight tasks reject with 409; enablement state is kept).
 - `helmx plugins rescan`: incrementally rescan the plugins directory (registers only new external plugins, disabled by default).
-- `helmx plugins init [name] [--dir <parent-dir>] [--template minimal|full|app] [--force]`: scaffold an external plugin skeleton locally (`full` by default: plugin.json + index.ts + tsconfig.json + client/index.tsx; `minimal` is backend-only; `app` adds a `ctx.ui.screen` main view for full-stack micro-apps); touches no Hub.
+- `helmx plugins init [name] [--dir <parent-dir>] [--template minimal|full|app] [--force]`: scaffold an external plugin skeleton locally (`full` by default: plugin.json + index.ts + tsconfig.json + client/index.tsx + `.helmx/types/`; `minimal` is backend-only; `app` adds a `ctx.ui.screen` main view for full-stack micro-apps); touches no Hub.
+- `helmx plugins types [dir] [--dir <dir>]`: write or refresh local `.helmx/types/` TypeScript declaration snapshots (`@helmx/protocol`, `@helmx/protocol/browser`, `@helmx/plugin-client`, plus standalone shims) for offline IDE/`tsc --noEmit` checking without modifying existing `tsconfig.json`; touches no Hub.
 - `helmx plugins build [dir] [--out <dir>]`: precompile a plugin directory's frontend modules into static `dist-client/` artifacts locally (zero runtime esbuild / npm dependency install required on target hosts); touches no Hub.
 - Plugin source/runtime modes are separate from enablement and reload. For the distinction between Hub source development, built-in package builds, external plugin backend loading, runtime client compilation, and prebuilt `dist-client` artifacts, read `references/skill-and-plugin-dev.md` before choosing a build or verification command.
 - `helmx plugins install <source> [--enable]`: install an external plugin package from `npm:<spec>`, `git:<repo>@<ref>`, an HTTPS Git URL, or a local path and register it (disabled by default; `--enable` enables right after install). Re-running `install` on the same canonical local directory performs an idempotent hot update (preserving existing `ctx.doc` data and ensuring enabled unless `enable: false`); installing a different source with an existing plugin ID rejects with `409 plugin_package_already_installed`. The source is resolved and fetched by the Hub server (a local path is a path on the Hub host, not a client upload); installing and enabling executes trusted plugin code inside the Hub process, with no sandbox.
@@ -93,7 +94,7 @@ managedByPlugin: {{MANAGED_BY}}
 ## Topic manuals on demand
 
 When a matching topic comes up, read the reference file before acting:
-- Before bootstrapping a new skill (~/.helmx/skills/<id>/SKILL.md) or developing an external plugin (~/.helmx/plugins/<id>/):
+- Before bootstrapping a new skill (~/.helmx/skills/<id>/SKILL.md) or developing an external plugin (~/.helmx/installed-plugins/<id>/):
   `load_skill({ skillId: "helmx-cli", path: "references/skill-and-plugin-dev.md" })`.
 - Before developing or optimizing a plugin's client.tsx, especially involving heavy dependencies, dynamic imports, first-load performance, or async chunks:
   `load_skill({ skillId: "helmx-cli", path: "references/plugin-client-code-splitting.md" })`.

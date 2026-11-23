@@ -44,22 +44,33 @@ import assert from 'node:assert/strict'
 import { createEnvFabric } from '../../kernel/src/env/fabric.js'
 import { runNativeSpawn, type NativeSpawnDeps } from '../../kernel/src/runtime/spawn.js'
 import { WorktreeAllocator, type ManagedWorktreeRecord } from '../src/worktree/worktree.js'
-import type { ManagedWorktreeHold } from '../src/worktree/worktree-store.js'
+import {
+  AGENT_BINDINGS_KV_NAMESPACE,
+  LEASES_KV_NAMESPACE,
+  WORKTREES_KV_NAMESPACE,
+  WorktreeStore,
+  worktreeKvKey,
+  type ManagedWorktreeHold,
+  type WorktreeAgentBinding,
+  type WorktreeLeaseRecord,
+} from '../src/worktree/worktree-store.js'
 import { extractWorktreeExecutionMeta } from '../src/contracts.js'
 import { WorktreeIsolation, type WorktreeIsolationDeps } from '../src/worktree/isolation.js'
 import { createWorkflowPlugin } from '../src/workflow.js'
 import { createWorktreePlugin } from '../src/worktree.js'
 import { cleanupPresentationMetaSchema } from '../src/worktree/actions.js'
 import { actionToolResult } from '../../kernel/src/runtime/runtime-helpers.js'
-import { PluginHost, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
+import { PluginHost, type PluginHostBackend, type PluginKvStore } from '../../kernel/src/plugins/index.js'
 import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin-host-backend.js'
 import { ArtifactService, SecretStash } from '../../kernel/src/services/index.js'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
 import {
   assertNoUnhandledRejection,
   createGitTemplate,
+  createMemoryWorktreeKv,
   makeConversationSummary,
   makeFauxModels,
+  MemoryDocStore,
   MemoryKvStore,
   type FauxProviderHandle,
   type GitTemplate,
@@ -138,8 +149,8 @@ async function openSpawnHarness(repoDir: string, dataDir: string): Promise<{
   /** 标记子会话运行中（隔离层 host.getConversation 的 working 语义）。 */
   markWorking: (childId: number) => void
   mirrors: Map<number, { profileId: string; cwd: string; model: string; modelOverride?: string; title: string; tags: string[]; createdAt: number }>
-  /** docStore 原始落库内容（记录状态/branchDeleted 等断言用）。 */
-  docs: Map<string, unknown>
+  /** 内存 KV 持久层（记录状态/租约/agent 绑定断言用）。 */
+  kvStore: MemoryKvStore
   close(): Promise<void>
 }> {
   const { models, faux } = makeFauxModels()
@@ -160,36 +171,15 @@ async function openSpawnHarness(repoDir: string, dataDir: string): Promise<{
     { profileId: string; cwd: string; model: string; modelOverride?: string; title: string; tags: string[]; createdAt: number }
   >()
 
-  // 真实 EnvFabric（local NodeExecutionEnv）+ 内存 docStore：allocator 真跑 git。
+  // 真实 EnvFabric（local NodeExecutionEnv）+ 内存 KV：allocator 真跑 git。
   const envFabric = createEnvFabric({})
-  const docs = new Map<string, unknown>()
-  const docStore = {
-    get<T>(key: string, initial: T): T {
-      return (docs.get(key) as T | undefined) ?? initial
-    },
-    set<T>(key: string, value: T): void {
-      docs.set(key, value)
-    },
-  }
+  const kvStore = new MemoryKvStore()
+  const worktreeKv = createMemoryWorktreeKv(kvStore)
   const working = new Set<number>()
-  // 与生产同构的嵌套 docStore（与 isolation 共享同一底层 Map：allocator
-  // 的 runtime/worktrees 键与租约表同层嵌套在 worktree-state 下）。
-  const nestedDocStore = {
-    get<T>(key: string, initial: T): T {
-      const all = (docs.get('builtin:worktree:worktree-state') as Record<string, unknown> | undefined) ?? {}
-      const raw = all[key]
-      return raw === undefined ? initial : (structuredClone(raw) as T)
-    },
-    set<T>(key: string, value: T): void {
-      const all = (docs.get('builtin:worktree:worktree-state') as Record<string, unknown> | undefined) ?? {}
-      all[key] = structuredClone(value)
-      docs.set('builtin:worktree:worktree-state', all)
-    },
-  }
   const allocator = new WorktreeAllocator({
     ...localNodePorts(),
     inspectPathUsage: (nodeId, path, signal) => envFabric.inspectPathUsage(nodeId, path, signal),
-    docStore: nestedDocStore,
+    kv: worktreeKv,
     redact: (t) => stash.redact(t),
     isConversationWorking: (id) => working.has(id),
   })
@@ -230,21 +220,7 @@ async function openSpawnHarness(repoDir: string, dataDir: string): Promise<{
         return { cwd: m.cwd, nodeId: 'local', status: working.has(id) ? 'working' : 'idle' }
       },
     },
-    docStore: {
-      // 与生产插件同构：worktree-state 文档嵌套全部 allocator/租约键
-      //（键名与 builtin:worktree 的 ctx.doc('worktree-state') 一致）。
-      get<T>(key: string, initial: T): T {
-        const all = (docs.get('builtin:worktree:worktree-state') as Record<string, unknown> | undefined) ?? {}
-        const raw = all[key]
-        return raw === undefined ? initial : (structuredClone(raw) as T)
-      },
-      set<T>(key: string, value: T): void {
-        const all = (docs.get('builtin:worktree:worktree-state') as Record<string, unknown> | undefined) ?? {}
-        all[key] = structuredClone(value)
-        docs.set('builtin:worktree:worktree-state', all)
-      },
-      flush: async () => {},
-    },
+    kv: worktreeKv,
   })
   /** 标记子会话回合结束（占用检查与生产 tracker 同语义：回合后不在运行）。 */
   const markIdle = (childId: number): void => {
@@ -352,7 +328,7 @@ async function openSpawnHarness(repoDir: string, dataDir: string): Promise<{
     mirrors,
     markIdle,
     markWorking,
-    docs,
+    kvStore,
     async close() {
       for (const detach of observers.values()) detach()
       await harness.close(BACKGROUND_CONTEXT)
@@ -743,11 +719,11 @@ describe('resume 续接绑定 worktree 的子会话', { timeout: 60_000 }, () =>
 
 /**
  * 经 builtin:worktree 插件工具执行 cleanup_worktree（真实插件内隔离能力：
- * 本地真实 git 端口 + 共享 worktree-state doc）。docs 与 spawn 夹具共享，
+ * 本地真实 git 端口 + 共享 KV 存储）。kvStore 与 spawn 夹具共享，
  * 使工具清理同一批受管记录。
  */
 async function executeCleanupTool(
-  docs: Map<string, unknown>,
+  kvStore: MemoryKvStore,
   input: Record<string, unknown>,
 ): Promise<{
   output: Array<{ type: string; text: string }>
@@ -810,21 +786,8 @@ async function executeCleanupTool(
   const host = new PluginHost({ buildProvider: createPluginBuildProvider(),
     dataDir,
     host: backend,
-    docs: {
-      // 插件 worktree-state doc 与 allocator/租约共享同一底层 Map（跨夹具
-      // 可见）；其余键（records 等）独立初始值即可。
-      get: <T>(key: string, initial: T): T => {
-        if (key !== 'builtin:worktree:worktree-state') return initial
-        const all = docs.get(key)
-        return all === undefined ? initial : (structuredClone(all) as T)
-      },
-      set: (key: string, value: unknown) => {
-        if (key !== 'builtin:worktree:worktree-state') return
-        docs.set(key, value)
-      },
-      deletePlugin: () => {},
-      flush: async () => {},
-    },
+    docs: new MemoryDocStore(),
+    kv: kvStore,
     sessionDocs: {
       get: () => undefined,
       put: () => {},
@@ -1041,14 +1004,14 @@ describe('cleanup_worktree', { timeout: 60_000 }, () => {
       th.markIdle(childId)
 
       await assert.rejects(
-        () => executeCleanupTool(th.docs, { conversationId: childId }),
+        () => executeCleanupTool(th.kvStore, { conversationId: childId }),
         (err: unknown) =>
           err instanceof HelmxError &&
           err.code === 'worktree_dirty' &&
           (err.message.includes('worktree_dirty') || err.message.includes('未提交修改')),
       )
 
-      const ok = await executeCleanupTool(th.docs, {
+      const ok = await executeCleanupTool(th.kvStore, {
         conversationId: childId,
         deleteBranch: true,
         force: true,
@@ -1089,7 +1052,7 @@ describe('cleanup_worktree', { timeout: 60_000 }, () => {
       th.markIdle(childId)
       rmSync(record!.path, { recursive: true, force: true })
 
-      const res = await executeCleanupTool(th.docs, {
+      const res = await executeCleanupTool(th.kvStore, {
         worktreeId: record!.id,
         deleteBranch: true,
         force: true,
@@ -1136,41 +1099,29 @@ function bareFabricOf(): ReturnType<typeof createEnvFabric> {
   return bareFabric
 }
 
-/** 直建 allocator（不经 spawn 链）的轻量夹具（与生产同构的嵌套 doc）。 */
-function bareAllocator(docs: Map<string, unknown>, extra?: { isPathInUse?: (nodeId: string, path: string) => boolean; redact?: (t: string) => string }) {
+/** 直建 allocator（不经 spawn 链）的轻量夹具（共享同一 MemoryKvStore）。 */
+function bareAllocator(kvStore: MemoryKvStore, extra?: { isPathInUse?: (nodeId: string, path: string) => boolean; redact?: (t: string) => string }) {
   return new WorktreeAllocator({
     ...localNodePorts(),
     // 真实进程占用探测（local 进程内 /proc 扫描；Linux 上完整，其他平台
     // 显式 not_supported → cleanup fail-closed，与生产同构）。
     inspectPathUsage: (nodeId, path, signal) => bareFabricOf().inspectPathUsage(nodeId, path, signal),
-    docStore: {
-      get<T>(key: string, initial: T): T {
-        const all = (docs.get('builtin:worktree:worktree-state') as Record<string, unknown> | undefined) ?? {}
-        const raw = all[key]
-        return raw === undefined ? initial : (structuredClone(raw) as T)
-      },
-      set<T>(key: string, value: T): void {
-        const all = (docs.get('builtin:worktree:worktree-state') as Record<string, unknown> | undefined) ?? {}
-        all[key] = structuredClone(value)
-        docs.set('builtin:worktree:worktree-state', all)
-      },
-    },
+    kv: createMemoryWorktreeKv(kvStore),
     ...(extra?.redact !== undefined ? { redact: extra.redact } : {}),
     ...(extra?.isPathInUse !== undefined ? { isPathInUse: extra.isPathInUse } : {}),
   })
 }
 
-/** 从 docStore 读全部受管记录（原始落库内容断言；无文档时空数组）。 */
-function rawRecords(docs: Map<string, unknown>): ManagedWorktreeRecord[] {
-  const all = (docs.get('builtin:worktree:worktree-state') as Record<string, unknown> | undefined) ?? {}
-  return ((all['runtime/worktrees'] as { records?: ManagedWorktreeRecord[] } | undefined)?.records ?? []) as ManagedWorktreeRecord[]
+/** 从 KV 读全部受管记录（原始落库内容断言；无条目时空数组）。 */
+function rawRecords(kvStore: MemoryKvStore): ManagedWorktreeRecord[] {
+  return kvStore.listParsed<ManagedWorktreeRecord>('builtin:worktree', WORKTREES_KV_NAMESPACE).map((e) => e.value)
 }
 
 describe('同路径跨节点歧义', { timeout: 60_000 }, () => {
   it('多节点同名路径：未指定 nodeId 显式 validation_error；指定 nodeId 或 worktreeId 精确清理', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 't8')
     const repo = makeGitRepo(join(dir, 'repo'))
-    const docs = new Map<string, unknown>()
+    const docs = new MemoryKvStore()
     const allocator = bareAllocator(docs)
     try {
       const sharedPath = join(dir, 'shared-wt')
@@ -1193,7 +1144,8 @@ describe('同路径跨节点歧义', { timeout: 60_000 }, () => {
         id: `node-b:${sharedPath}`,
         nodeId: 'node-b',
       }
-      docs.set('builtin:worktree:worktree-state', { 'runtime/worktrees': { version: 1, records: [a, b] } })
+      docs.setParsed('builtin:worktree', WORKTREES_KV_NAMESPACE, a.id, a)
+      docs.setParsed('builtin:worktree', WORKTREES_KV_NAMESPACE, b.id, b)
 
       await assert.rejects(
         () => allocator.cleanup({ path: sharedPath }),
@@ -1227,7 +1179,7 @@ describe('同路径跨节点歧义', { timeout: 60_000 }, () => {
   })
 
   it('选择器互斥：worktreeId 与 conversationId/path 互斥；nodeId 仅搭 path；缺选择器 validation_error', { timeout: 60_000 }, async () => {
-    const docs = new Map<string, unknown>()
+    const docs = new MemoryKvStore()
     const allocator = bareAllocator(docs)
     const cases: Array<Record<string, unknown>> = [
       { worktreeId: 'local:/x', conversationId: 1 },
@@ -1253,7 +1205,7 @@ describe('状态命令失败 fail closed', { timeout: 60_000 }, () => {
   it('git status 失败（索引损坏）不删除、不当作干净、不当作目录缺失', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 't9')
     const repo = makeGitRepo(join(dir, 'repo'))
-    const docs = new Map<string, unknown>()
+    const docs = new MemoryKvStore()
     const allocator = bareAllocator(docs)
     try {
       const record = await allocator.allocate({ nodeId: 'local', sourceCwd: repo, parentConversationId: 1 })
@@ -1282,7 +1234,7 @@ describe('登记路径被替换/挪用：归属校验拒绝', { timeout: 60_000 
   it('分支被改签（worktree 改 checkout 其他分支）拒绝 worktree_owner_mismatch，force 也不可越过', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 't10a')
     const repo = makeGitRepo(join(dir, 'repo'))
-    const docs = new Map<string, unknown>()
+    const docs = new MemoryKvStore()
     const allocator = bareAllocator(docs)
     try {
       const record = await allocator.allocate({ nodeId: 'local', sourceCwd: repo, parentConversationId: 1 })
@@ -1310,27 +1262,19 @@ describe('登记路径被替换/挪用：归属校验拒绝', { timeout: 60_000 
   it('登记路径指向主工作树（repoRoot 被改写为主仓自身）显式拒绝 main_worktree', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 't10b')
     const repo = makeGitRepo(join(dir, 'repo'))
-    const docs = new Map<string, unknown>()
+    const docs = new MemoryKvStore()
     const allocator = bareAllocator(docs)
     try {
       const record = await allocator.allocate({ nodeId: 'local', sourceCwd: repo, parentConversationId: 1 })
       // 恶意/误操作把记录的 path 改写为主工作树本身（清空后手工塞入记录，
       // 模拟记录被外部篡改）。
-      const wtRecords = rawRecords(docs)
-      wtRecords.length = 0
-      const wtAll = (docs.get('builtin:worktree:worktree-state') as Record<string, unknown> | undefined) ?? {}
-      wtAll['runtime/worktrees'] = {
-        version: 1,
-        records: [
-          {
-            ...record,
-            id: 'local:' + repo,
-            path: repo,
-            branch: 'helmx/spawn-fake1',
-          },
-        ],
-      }
-      docs.set('builtin:worktree:worktree-state', wtAll)
+      docs.clearNamespace('builtin:worktree', WORKTREES_KV_NAMESPACE)
+      docs.setParsed('builtin:worktree', WORKTREES_KV_NAMESPACE, 'local:' + repo, {
+        ...record,
+        id: 'local:' + repo,
+        path: repo,
+        branch: 'helmx/spawn-fake1',
+      })
       // 主仓手工建同名分支，使权威登记 branch 匹配后进入 main-worktree 检查。
       execFileSync('git', ['branch', 'helmx/spawn-fake1'], { cwd: repo })
       await assert.rejects(
@@ -1352,7 +1296,7 @@ describe('登记路径被替换/挪用：归属校验拒绝', { timeout: 60_000 
   it('git worktree lock 后拒绝清理（worktree_locked；force 不可越过）', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 't10c')
     const repo = makeGitRepo(join(dir, 'repo'))
-    const docs = new Map<string, unknown>()
+    const docs = new MemoryKvStore()
     const allocator = bareAllocator(docs)
     try {
       const record = await allocator.allocate({ nodeId: 'local', sourceCwd: repo, parentConversationId: 1 })
@@ -1381,7 +1325,7 @@ describe('登记路径被替换/挪用：归属校验拒绝', { timeout: 60_000 
   it('目录缺失：节点真实 fs 探测证实后显式 worktree_missing 且登记保留（不 prune 全仓）', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 't10d')
     const repo = makeGitRepo(join(dir, 'repo'))
-    const docs = new Map<string, unknown>()
+    const docs = new MemoryKvStore()
     const allocator = bareAllocator(docs)
     try {
       const record = await allocator.allocate({ nodeId: 'local', sourceCwd: repo, parentConversationId: 1 })
@@ -1408,7 +1352,7 @@ describe('登记路径被替换/挪用：归属校验拒绝', { timeout: 60_000 
   it('软链替换：登记路径经真实路径解析指向主工作树，拒绝 symlink_redirect/main_worktree', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 't10e')
     const repo = makeGitRepo(join(dir, 'repo'))
-    const docs = new Map<string, unknown>()
+    const docs = new MemoryKvStore()
     const allocator = bareAllocator(docs)
     try {
       const record = await allocator.allocate({ nodeId: 'local', sourceCwd: repo, parentConversationId: 1 })
@@ -1437,7 +1381,7 @@ describe('分支删除部分失败', { timeout: 60_000 }, () => {
   it('worktree 已移除但分支删除失败：记录先置 removed（branchDeleted:false + 诊断），可重试成功', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 't11')
     const repo = makeGitRepo(join(dir, 'repo'))
-    const docs = new Map<string, unknown>()
+    const docs = new MemoryKvStore()
     const allocator = bareAllocator(docs)
     try {
       const record = await allocator.allocate({ nodeId: 'local', sourceCwd: repo, parentConversationId: 1 })
@@ -1485,7 +1429,7 @@ describe('从已有 worktree 再派生（嵌套隔离）', { timeout: 60_000 }, 
   it('sourceCwd 为隔离 worktree 时定位真正主仓：同级分配不嵌套 .helmx-worktrees；baseCommit 取实际源 HEAD', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 't12')
     const repo = makeGitRepo(join(dir, 'repo'))
-    const docs = new Map<string, unknown>()
+    const docs = new MemoryKvStore()
     const allocator = bareAllocator(docs)
     try {
       const parent = await allocator.allocate({ nodeId: 'local', sourceCwd: repo, parentConversationId: 1 })
@@ -1527,7 +1471,7 @@ describe('持久化元数据机密检查', { timeout: 60_000 }, () => {
   it('allocate 目标路径含 secret（redact 差异）拒绝且不落库', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 't13b')
     const repo = makeGitRepo(join(dir, 'repo'))
-    const docs = new Map<string, unknown>()
+    const docs = new MemoryKvStore()
     const SECRET = 'sk-alloc-secret-9'
     const allocator = bareAllocator(docs, { redact: (t) => t.replaceAll(SECRET, '***') })
     try {
@@ -1554,7 +1498,7 @@ describe('cleanup_worktree 工具 schema 扩展', { timeout: 60_000 }, () => {
   it('工具支持 worktreeId/nodeId 参数透传且幂等返回 removed:false', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 't14')
     const repo = makeGitRepo(join(dir, 'repo'))
-    const docs = new Map<string, unknown>()
+    const docs = new MemoryKvStore()
     const allocator = bareAllocator(docs)
     try {
       const record = await allocator.allocate({ nodeId: 'local', sourceCwd: repo, parentConversationId: 1 })
@@ -1580,7 +1524,7 @@ describe('ignored 内容不阻断 cleanup（脏检查口径与 git worktree remo
     writeFileSync(join(repo, '.gitignore'), '.env\ndist/\n')
     execFileSync('git', ['add', '.gitignore'], { cwd: repo })
     execFileSync('git', ['commit', '-qm', 'ignore build artifacts'], { cwd: repo })
-    const docs = new Map<string, unknown>()
+    const docs = new MemoryKvStore()
     const allocator = bareAllocator(docs)
     try {
       const record = await allocator.allocate({ nodeId: 'local', sourceCwd: repo, parentConversationId: 1 })
@@ -1616,7 +1560,7 @@ describe('ignored 内容不阻断 cleanup（脏检查口径与 git worktree remo
     writeFileSync(join(repo, '.gitignore'), 'dist/\n')
     execFileSync('git', ['add', '.gitignore'], { cwd: repo })
     execFileSync('git', ['commit', '-qm', 'ignore dist'], { cwd: repo })
-    const docs = new Map<string, unknown>()
+    const docs = new MemoryKvStore()
     const allocator = bareAllocator(docs)
     try {
       const record = await allocator.allocate({ nodeId: 'local', sourceCwd: repo, parentConversationId: 1 })
@@ -1645,7 +1589,7 @@ describe('目录缺失态恢复（force 登记清除）', { timeout: 60_000 }, (
   it('外部删除目录：默认 worktree_missing 诚实拒绝并提示 force 出口；force 二次复核后清登记、prune git 残留、保留分支', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 't15c')
     const repo = makeGitRepo(join(dir, 'repo'))
-    const docs = new Map<string, unknown>()
+    const docs = new MemoryKvStore()
     const allocator = bareAllocator(docs)
     try {
       const record = await allocator.allocate({ nodeId: 'local', sourceCwd: repo, parentConversationId: 1 })
@@ -1687,7 +1631,7 @@ describe('目录缺失态恢复（force 登记清除）', { timeout: 60_000 }, (
   it('force + deleteBranch：未合入提交的分支按 force 语义删除；登记清除留 removedReason', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 't15d')
     const repo = makeGitRepo(join(dir, 'repo'))
-    const docs = new Map<string, unknown>()
+    const docs = new MemoryKvStore()
     const allocator = bareAllocator(docs)
     try {
       const record = await allocator.allocate({ nodeId: 'local', sourceCwd: repo, parentConversationId: 1 })
@@ -1720,7 +1664,7 @@ describe('inspect 只读检视：成功输出脱敏与 diff 驱动隔离（真�
   it('diff/status 成功输出经 redact 脱敏：已登记秘密替换为 [REDACTED]，绝不原样回显', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 't16')
     const repo = makeGitRepo(join(dir, 'repo'))
-    const docs = new Map<string, unknown>()
+    const docs = new MemoryKvStore()
     const stash = new SecretStash()
     const secret = 'sk-live-9f2e7c41d8ab54'
     const release = stash.addRedaction(secret)
@@ -1770,7 +1714,7 @@ describe('inspect 只读检视：成功输出脱敏与 diff 驱动隔离（真�
     gitRepo(['commit', '-qm', 'add bin + attributes'])
     gitRepo(['config', 'diff.helmxtest.command', join(dir, 'fake-driver.sh')])
     gitRepo(['config', 'diff.helmxtext.textconv', join(dir, 'fake-textconv.sh')])
-    const docs = new Map<string, unknown>()
+    const docs = new MemoryKvStore()
     const allocator = bareAllocator(docs)
     try {
       const record = await allocator.allocate({ nodeId: 'local', sourceCwd: repo, parentConversationId: 1 })
@@ -1796,13 +1740,16 @@ describe('inspect 只读检视：成功输出脱敏与 diff 驱动隔离（真�
   }, async () => {
     const dir = join(rootDir, 't18')
     const repo = makeGitRepo(join(dir, 'repo'))
-    const docs = new Map<string, unknown>()
+    const docs = new MemoryKvStore()
     const allocator = bareAllocator(docs)
     try {
       const record = await allocator.allocate({ nodeId: 'local', sourceCwd: repo, parentConversationId: 1 })
       // 篡改登记基线为不存在的提交（模拟 gc / 历史改写后失效）。
-      const all = docs.get('builtin:worktree:worktree-state') as { 'runtime/worktrees'?: { records: ManagedWorktreeRecord[] } }
-      all['runtime/worktrees']!.records[0]!.baseCommit = 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef'
+      const stored = docs.getParsed<ManagedWorktreeRecord>('builtin:worktree', WORKTREES_KV_NAMESPACE, record.id)!
+      docs.setParsed('builtin:worktree', WORKTREES_KV_NAMESPACE, record.id, {
+        ...stored,
+        baseCommit: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
+      })
       await assert.rejects(
         () => allocator.inspect({ worktreeId: record.id }),
         (err: unknown) => {
@@ -1866,26 +1813,19 @@ describe('inspect 受限采集上限（受控 exec 分块注入）', { timeout: 
     })
     // 块边界刻意切在行中间：验证 lines 模式流式按行结算不受分块影响。
     stub.setChunkSize(7)
-    const docs = new Map<string, unknown>()
-    docs.set('builtin:worktree:worktree-state', {
-      'runtime/worktrees': {
-        version: 1,
-        records: [
-          {
-            id: 'local:/wt',
-            nodeId: 'local',
-            repoRoot: '/repo',
-            path: '/wt',
-            branch: 'stub-branch',
-            baseCommit: base,
-            dirtySource: false,
-            parentConversationId: 1,
-            origin: 'native',
-            status: 'active',
-            createdAt: Date.now(),
-          },
-        ],
-      },
+    const docs = new MemoryKvStore()
+    docs.setParsed('builtin:worktree', WORKTREES_KV_NAMESPACE, 'local:/wt', {
+      id: 'local:/wt',
+      nodeId: 'local',
+      repoRoot: '/repo',
+      path: '/wt',
+      branch: 'stub-branch',
+      baseCommit: base,
+      dirtySource: false,
+      parentConversationId: 1,
+      origin: 'native',
+      status: 'active',
+      createdAt: Date.now(),
     })
     const allocator = new WorktreeAllocator({
       exec: stub.exec as never,
@@ -1895,14 +1835,7 @@ describe('inspect 受限采集上限（受控 exec 分块注入）', { timeout: 
       inspectPathUsage: async () => {
         throw new HelmxError('unsupported', 'inspect 用例不扫描进程占用', 501)
       },
-      docStore: {
-        get<T>(key: string, initial: T): T {
-          const all = (docs.get('builtin:worktree:worktree-state') as Record<string, unknown> | undefined) ?? {}
-          const raw = all[key]
-          return raw === undefined ? initial : (structuredClone(raw) as T)
-        },
-        set<T>(_key: string, _value: T): void {},
-      },
+      kv: createMemoryWorktreeKv(docs),
     })
 
     const result = await allocator.inspect({ worktreeId: 'local:/wt' })
@@ -1940,26 +1873,19 @@ describe('inspect 受限采集上限（受控 exec 分块注入）', { timeout: 
       if (key.startsWith('rev-list')) return { output: `fatal: bad object ${base}\n${'x'.repeat(3000)}`, exitCode: 128 }
       return { output: '' }
     })
-    const docs = new Map<string, unknown>()
-    docs.set('builtin:worktree:worktree-state', {
-      'runtime/worktrees': {
-        version: 1,
-        records: [
-          {
-            id: 'local:/wt',
-            nodeId: 'local',
-            repoRoot: '/repo',
-            path: '/wt',
-            branch: 'stub-branch',
-            baseCommit: base,
-            dirtySource: false,
-            parentConversationId: 1,
-            origin: 'native',
-            status: 'active',
-            createdAt: Date.now(),
-          },
-        ],
-      },
+    const docs = new MemoryKvStore()
+    docs.setParsed('builtin:worktree', WORKTREES_KV_NAMESPACE, 'local:/wt', {
+      id: 'local:/wt',
+      nodeId: 'local',
+      repoRoot: '/repo',
+      path: '/wt',
+      branch: 'stub-branch',
+      baseCommit: base,
+      dirtySource: false,
+      parentConversationId: 1,
+      origin: 'native',
+      status: 'active',
+      createdAt: Date.now(),
     })
     const allocator = new WorktreeAllocator({
       exec: stub.exec as never,
@@ -1969,14 +1895,7 @@ describe('inspect 受限采集上限（受控 exec 分块注入）', { timeout: 
       inspectPathUsage: async () => {
         throw new HelmxError('unsupported', 'inspect 用例不扫描进程占用', 501)
       },
-      docStore: {
-        get<T>(key: string, initial: T): T {
-          const all = (docs.get('builtin:worktree:worktree-state') as Record<string, unknown> | undefined) ?? {}
-          const raw = all[key]
-          return raw === undefined ? initial : (structuredClone(raw) as T)
-        },
-        set<T>(_key: string, _value: T): void {},
-      },
+      kv: createMemoryWorktreeKv(docs),
     })
     await assert.rejects(
       () => allocator.inspect({ worktreeId: 'local:/wt' }),
@@ -2002,7 +1921,7 @@ describe('多级派生 baseBranch 字段', { timeout: 60_000 }, () => {
   it('detached HEAD 源目录：baseBranch 不记录（undefined），worktree 正常创建', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 't19')
     const repo = makeGitRepo(join(dir, 'repo'))
-    const docs = new Map<string, unknown>()
+    const docs = new MemoryKvStore()
     const allocator = bareAllocator(docs)
     try {
       execFileSync('git', ['checkout', '-q', '--detach'], { cwd: repo })
@@ -2017,7 +1936,7 @@ describe('多级派生 baseBranch 字段', { timeout: 60_000 }, () => {
   it('baseBranch 含已登记 secret：显式 worktree_metadata_secret 拒绝且不落库', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 't19b')
     const repo = makeGitRepo(join(dir, 'repo'))
-    const docs = new Map<string, unknown>()
+    const docs = new MemoryKvStore()
     const SECRET = '{{SECRET_bbrnch77}}'
     const allocator = bareAllocator(docs, { redact: (t) => t.replaceAll(SECRET, '***') })
     try {
@@ -2046,7 +1965,7 @@ describe('cleanup mergedInto 与参考提交优先级', { timeout: 60_000 }, () 
   it('mergedInto 严格形状校验：空白/范围操作符/前置 - 均 validation_error 且不清理', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 't20')
     const repo = makeGitRepo(join(dir, 'repo'))
-    const docs = new Map<string, unknown>()
+    const docs = new MemoryKvStore()
     const allocator = bareAllocator(docs)
     try {
       const record = await allocator.allocate({ nodeId: 'local', sourceCwd: repo, parentConversationId: 1 })
@@ -2071,7 +1990,7 @@ describe('cleanup mergedInto 与参考提交优先级', { timeout: 60_000 }, () 
   it('mergedInto 指向不存在的分支/提交：显式拒绝且不回退（记录保留）', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 't20b')
     const repo = makeGitRepo(join(dir, 'repo'))
-    const docs = new Map<string, unknown>()
+    const docs = new MemoryKvStore()
     const allocator = bareAllocator(docs)
     try {
       const record = await allocator.allocate({ nodeId: 'local', sourceCwd: repo, parentConversationId: 1 })
@@ -2093,7 +2012,7 @@ describe('cleanup mergedInto 与参考提交优先级', { timeout: 60_000 }, () 
   it('显式 mergedInto 优先于 baseBranch；缺省走 baseBranch 已合入即允许删除（branch -D）', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 't20c')
     const repo = makeGitRepo(join(dir, 'repo'))
-    const docs = new Map<string, unknown>()
+    const docs = new MemoryKvStore()
     const allocator = bareAllocator(docs)
     try {
       // 主工作树留在 main；父隔离树改签 dev；子树从父树派生（baseBranch=dev）。
@@ -2149,7 +2068,7 @@ describe('cleanup mergedInto 与参考提交优先级', { timeout: 60_000 }, () 
   it('removed 记录重试删除分支同样按参考确认后用 -D（mergedInto 优先 baseBranch）', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 't20d')
     const repo = makeGitRepo(join(dir, 'repo'))
-    const docs = new Map<string, unknown>()
+    const docs = new MemoryKvStore()
     const allocator = bareAllocator(docs)
     try {
       const parent = await allocator.allocate({ nodeId: 'local', sourceCwd: repo, parentConversationId: 1 })
@@ -2192,9 +2111,10 @@ describe('cleanup mergedInto 与参考提交优先级', { timeout: 60_000 }, () 
 // ---------------------------------------------------------------------------
 
 /** 读取隔离层租约表原始落库内容。 */
-function leasesOf(docs: Map<string, unknown>): Record<string, { phase: string; worktreeId: string }> {
-  const all = (docs.get('builtin:worktree:worktree-state') as Record<string, unknown> | undefined) ?? {}
-  return ((all['worktree-leases'] as Record<string, unknown> | undefined) ?? {}) as never
+function leasesOf(kvStore: MemoryKvStore): Record<string, { phase: string; worktreeId: string }> {
+  return Object.fromEntries(
+    kvStore.listParsed<WorktreeLeaseRecord>('builtin:worktree', LEASES_KV_NAMESPACE).map((e) => [e.key, e.value]),
+  ) as never
 }
 
 describe('运行租约释放（原生子会话失败路径）', { timeout: 60_000 }, () => {
@@ -2217,14 +2137,12 @@ describe('运行租约释放（原生子会话失败路径）', { timeout: 60_00
           ),
         (err: unknown) => err instanceof HelmxError && err.code === 'gate_failed',
       )
-      assert.equal(Object.keys(leasesOf(th.docs)).length, 0, '确认停止的原生子会话租约应释放')
+      assert.equal(Object.keys(leasesOf(th.kvStore)).length, 0, '确认停止的原生子会话租约应释放')
       const record = th.allocator.getForConversation(5)
       assert.ok(record, 'Worktree 记录保留（供下一轮 resume / cleanup）')
       assert.equal(record!.conversationId, 5)
-      const state = th.docs.get('builtin:worktree:worktree-state') as Record<string, unknown>
-      const bindings = state['worktree-agent-bindings'] as Record<string, { childId: number; parentConversationId: number }>
       assert.deepEqual(
-        bindings['agent-rel-1'],
+        th.kvStore.getParsed<WorktreeAgentBinding>('builtin:worktree', AGENT_BINDINGS_KV_NAMESPACE, 'agent-rel-1'),
         { childId: 5, parentConversationId: 1 },
         'agentId -> { childId, parentConversationId } 绑定保留（供 resume ref 解析）',
       )
@@ -2263,7 +2181,7 @@ describe('运行租约释放（原生子会话失败路径）', { timeout: 60_00
           ),
         (err: unknown) => err instanceof HelmxError && err.code === 'gate_failed',
       )
-      let leases = leasesOf(th.docs)
+      let leases = leasesOf(th.kvStore)
       assert.equal(Object.keys(leases).length, 1, '不确定状态租约必须保留')
       const pendingId = Object.values(leases)[0]!.worktreeId
       await assert.rejects(
@@ -2288,7 +2206,7 @@ describe('运行租约释放（原生子会话失败路径）', { timeout: 60_00
           ),
         (err: unknown) => err instanceof HelmxError && err.code === 'gate_failed',
       )
-      leases = leasesOf(th.docs)
+      leases = leasesOf(th.kvStore)
       assert.equal(Object.keys(leases).length, 2, '会话仍运行时租约必须保留')
     } finally {
       await th.close()
@@ -2313,11 +2231,12 @@ describe('运行租约释放（原生子会话失败路径）', { timeout: 60_00
       const record = th.allocator.getForConversation(childId)
       assert.ok(record)
       // 注入残留旧租约（模拟此前失败/中断轮次未收敛）。
-      const state = th.docs.get('builtin:worktree:worktree-state') as Record<string, unknown>
-      const leases = (state['worktree-leases'] as Record<string, unknown>) ?? {}
-      leases['stale-token'] = { phase: 'running', info: { nodeId: 'local' }, worktreeId: record!.id, createdAt: 1 }
-      state['worktree-leases'] = leases
-      th.docs.set('builtin:worktree:worktree-state', state)
+      th.kvStore.setParsed('builtin:worktree', LEASES_KV_NAMESPACE, 'stale-token', {
+        phase: 'running',
+        info: { nodeId: 'local' },
+        worktreeId: record!.id,
+        createdAt: 1,
+      })
       await assert.rejects(
         () => th.isolation.cleanup({ conversationId: childId }),
         (err: unknown) => {
@@ -2333,7 +2252,7 @@ describe('运行租约释放（原生子会话失败路径）', { timeout: 60_00
         prompt: '续接',
         resume: String(childId),
       } as never)
-      assert.equal(Object.keys(leasesOf(th.docs)).length, 0, 'resume 成功后残留旧租约与本次租约均应清除')
+      assert.equal(Object.keys(leasesOf(th.kvStore)).length, 0, 'resume 成功后残留旧租约与本次租约均应清除')
     } finally {
       await th.close()
     }
@@ -2392,8 +2311,8 @@ describe('运行租约释放（原生子会话失败路径）', { timeout: 60_00
       th.mirrors.delete(notFoundId)
       th.markWorking(workingId)
 
-      const state = th.docs.get('builtin:worktree:worktree-state') as Record<string, unknown>
-      state['worktree-leases'] = {
+      th.kvStore.clearNamespace('builtin:worktree', LEASES_KV_NAMESPACE)
+      const seededLeases: Record<string, WorktreeLeaseRecord> = {
         'tok-pending-native': { phase: 'pending', info: { nodeId: 'local' }, worktreeId: idleRec.id, createdAt: 1 },
         'tok-idle-native': { phase: 'running', info: { nodeId: 'local', conversationId: idleId }, worktreeId: idleRec.id, createdAt: 2 },
         'tok-notfound-native': { phase: 'running', info: { nodeId: 'local', conversationId: notFoundId }, worktreeId: notFoundRec.id, createdAt: 3 },
@@ -2401,11 +2320,13 @@ describe('运行租约释放（原生子会话失败路径）', { timeout: 60_00
         'tok-ext-pending': { phase: 'pending', info: { nodeId: 'local', executionId: 'herdr-pane-9' }, worktreeId: extRec.id, createdAt: 5 },
         'tok-ext-running': { phase: 'running', info: { nodeId: 'local', conversationId: extId, executionId: 'herdr-pane-10' }, worktreeId: extRec.id, createdAt: 6 },
       }
-      th.docs.set('builtin:worktree:worktree-state', state)
+      for (const [token, lease] of Object.entries(seededLeases)) {
+        th.kvStore.setParsed('builtin:worktree', LEASES_KV_NAMESPACE, token, lease)
+      }
 
       await th.isolation.reconcileStoppedNativeLeases()
 
-      const remaining = leasesOf(th.docs)
+      const remaining = leasesOf(th.kvStore)
       assert.deepEqual(
         Object.keys(remaining).sort(),
         ['tok-ext-pending', 'tok-ext-running', 'tok-working-native'],
@@ -2443,7 +2364,7 @@ describe('运行租约释放（原生子会话失败路径）', { timeout: 60_00
 async function openWorkflowPluginHost(options: {
   repoDir: string
   dataDir: string
-  docs: Map<string, unknown>
+  docs: MemoryKvStore
   /** 缺省双插件；'worktree-only' 验证独立注册（与 builtin:workflow 零静态依赖）。 */
   plugins?: 'both' | 'worktree-only'
   stash?: SecretStash
@@ -2457,6 +2378,7 @@ async function openWorkflowPluginHost(options: {
   onFlush?: () => void
 }): Promise<{
   host: PluginHost
+  globalDocs: MemoryDocStore
   close(): Promise<void>
 }> {
   const stash = options.stash ?? new SecretStash()
@@ -2520,23 +2442,26 @@ async function openWorkflowPluginHost(options: {
     onEvent: () => () => {},
     emitEvent: () => {},
   }
+  const globalDocs = new MemoryDocStore()
+  const kvStore: PluginKvStore = {
+    get: (p, ns, k) => options.docs.get(p, ns, k),
+    put: (p, ns, k, v) => options.docs.put(p, ns, k, v),
+    delete: (p, ns, k) => options.docs.delete(p, ns, k),
+    list: (p, ns, o) => options.docs.list(p, ns, o),
+    clearNamespace: (p, ns) => options.docs.clearNamespace(p, ns),
+    deletePlugin: (p) => options.docs.deletePlugin(p),
+    flush: async () => {
+      await options.docs.flush()
+      options.onFlush?.()
+    },
+  }
   const host = new PluginHost({
     buildProvider: createPluginBuildProvider(),
     dataDir: options.dataDir,
     host: backend,
-    docs: {
-      get: <T>(key: string, initial: T): T => {
-        const val = options.docs.get(key)
-        return val === undefined ? initial : (structuredClone(val) as T)
-      },
-      set: (key: string, value: unknown) => {
-        options.docs.set(key, structuredClone(value))
-      },
-      deletePlugin: () => {},
-      flush: async () => {
-        options.onFlush?.()
-      },
-    },
+    redactText: (t) => stash.redact(t),
+    docs: globalDocs,
+    kv: kvStore,
     sessionDocs: {
       get: () => undefined,
       put: () => {},
@@ -2553,6 +2478,7 @@ async function openWorkflowPluginHost(options: {
   await host.register(createWorktreePlugin())
   return {
     host,
+    globalDocs,
     close: async () => {
       await host.dispose().catch(() => {})
     },
@@ -2565,7 +2491,7 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
   }, async () => {
     const dir = join(rootDir, 't22-meta')
     const repo = makeGitRepo(join(dir, 'repo'))
-    const docs = new Map<string, unknown>()
+    const docs = new MemoryKvStore()
     const { host, close } = await openWorkflowPluginHost({ repoDir: repo, dataDir: join(dir, 'data'), docs })
     try {
       const actions = host.listActions().filter((a) => a.pluginId === 'builtin:worktree')
@@ -2666,7 +2592,7 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
   }, async () => {
     const dir = join(rootDir, 't22-lifecycle')
     const repo = makeGitRepo(join(dir, 'repo'))
-    const docs = new Map<string, unknown>()
+    const docs = new MemoryKvStore()
     const resolvedTargets: Array<Record<string, unknown>> = []
     let flushes = 0
     const { host, close } = await openWorkflowPluginHost({
@@ -2876,7 +2802,7 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
   }, async () => {
     const dir = join(rootDir, 't22-standalone')
     const repo = makeGitRepo(join(dir, 'repo'))
-    const docs = new Map<string, unknown>()
+    const docs = new MemoryKvStore()
     const { host, close } = await openWorkflowPluginHost({
       repoDir: repo,
       dataDir: join(dir, 'data'),
@@ -2972,15 +2898,12 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
       assert.equal(th.isolation.isPathInUse('local', acquired.path), false, '释放锁后不再占用')
 
       // 若记录已为 removed 状态，即使残留 hold 也不再视为活跃占用。
-      const state = th.docs.get('builtin:worktree:worktree-state') as {
-        'runtime/worktrees': { version: 1; records: Array<ManagedWorktreeRecord> }
-      }
-      state['runtime/worktrees'].records[0] = {
-        ...state['runtime/worktrees'].records[0]!,
+      const stored = th.kvStore.getParsed<ManagedWorktreeRecord>('builtin:worktree', WORKTREES_KV_NAMESPACE, acquired.worktreeId)!
+      th.kvStore.setParsed('builtin:worktree', WORKTREES_KV_NAMESPACE, acquired.worktreeId, {
+        ...stored,
         status: 'removed',
         hold: { pluginId: 'builtin:superagent', holdId: 'grp-2:worker-1', label: 'stale', acquiredAt: 1 },
-      }
-      th.docs.set('builtin:worktree:worktree-state', state)
+      })
       assert.equal(th.isolation.isPathInUse('local', acquired.path), false, 'removed 记录不得计入占用')
     } finally {
       await th.close()
@@ -2993,7 +2916,7 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
   }, async () => {
     const dir = join(rootDir, 't22-secrets')
     const repo = makeGitRepo(join(dir, 'repo'))
-    const docs = new Map<string, unknown>()
+    const docs = new MemoryKvStore()
     const stash = new SecretStash()
     const secretVal = 'sk-super-secret-hold-token-999'
     const placeholder = '[REDACTED]'
@@ -3050,17 +2973,15 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
         {},
         { surface: 'plugin', callerPluginId: 'builtin:superagent' },
       )) as { worktreeId: string; path: string }
-      const rawJson = JSON.stringify(docs.get('builtin:worktree:worktree-state'))
-      assert.ok(!rawJson.includes(secretVal), 'worktree-state 原始落库 JSON 不得含明文机密')
+      const rawJson = JSON.stringify(docs.rawJsonEntries('builtin:worktree', WORKTREES_KV_NAMESPACE))
+      assert.ok(!rawJson.includes(secretVal), 'worktree KV 原始落库 JSON 不得含明文机密')
       const storedRecord = rawRecords(docs).find((r) => r.id === acquired.worktreeId)!
       assert.equal(storedRecord.hold?.label, `group ${placeholder} author`)
 
-      // 3) 持久化文档中 hold 结构损坏：读取/停用检查显式报错（worktree_doc_corrupted -> plugin_in_use_check_failed），绝不静默放行。
-      const corruptedState = structuredClone(docs.get('builtin:worktree:worktree-state')) as {
-        'runtime/worktrees': { version: 1; records: Array<Record<string, unknown>> }
-      }
-      corruptedState['runtime/worktrees'].records[0]!['hold'] = { pluginId: '', holdId: 'x', label: 'y', acquiredAt: -1 }
-      docs.set('builtin:worktree:worktree-state', corruptedState)
+      // 3) 持久化 KV 中 hold 结构损坏：读取/停用检查显式报错（worktree_doc_corrupted -> plugin_in_use_check_failed），绝不静默放行。
+      const corruptedRecord = structuredClone(storedRecord) as unknown as Record<string, unknown>
+      corruptedRecord['hold'] = { pluginId: '', holdId: 'x', label: 'y', acquiredAt: -1 }
+      docs.setParsed('builtin:worktree', WORKTREES_KV_NAMESPACE, acquired.worktreeId, corruptedRecord)
 
       await assert.rejects(
         () => host.invokeAction('builtin:worktree', 'list_worktrees', {}),
@@ -3124,13 +3045,13 @@ describe('pruneConversation：裁剪绑定与已 removed 记录，绝不删 acti
       const rec3 = th.isolation.getForConversation(c3)!
 
       // 把 rec1 与一条被 fail-closed 租约引用的记录标为 removed；rec2 与 rec3 保持 active。
-      const state = th.docs.get('builtin:worktree:worktree-state') as Record<string, unknown>
-      const wtDoc = state['runtime/worktrees'] as { version: 1; records: ManagedWorktreeRecord[] }
-      wtDoc.records = wtDoc.records.map((r) =>
-        r.id === rec1.id ? { ...r, status: 'removed', removedAt: Date.now() } : r,
-      )
+      th.kvStore.setParsed('builtin:worktree', WORKTREES_KV_NAMESPACE, rec1.id, {
+        ...rec1,
+        status: 'removed',
+        removedAt: Date.now(),
+      })
       const leasedRemovedId = 'local:/tmp/leased-removed-wt'
-      wtDoc.records.push({
+      th.kvStore.setParsed('builtin:worktree', WORKTREES_KV_NAMESPACE, leasedRemovedId, {
         ...rec1,
         id: leasedRemovedId,
         path: '/tmp/leased-removed-wt',
@@ -3139,51 +3060,44 @@ describe('pruneConversation：裁剪绑定与已 removed 记录，绝不删 acti
         status: 'removed',
         removedAt: Date.now(),
       })
-      state['worktree-leases'] = {
-        'fail-closed-lease': {
-          phase: 'running',
-          nodeId: 'local',
-          path: rec2.path,
-          info: { nodeId: 'local', executionId: 'ext-keep' },
-          worktreeId: rec2.id,
-          createdAt: 1,
-        },
-        'leased-removed-token': {
-          phase: 'pending',
-          nodeId: 'local',
-          path: '/tmp/leased-removed-wt',
-          info: { nodeId: 'local', executionId: 'ext-leased-removed' },
-          worktreeId: leasedRemovedId,
-          createdAt: 2,
-        },
-      }
-      th.docs.set('builtin:worktree:worktree-state', state)
+      th.kvStore.setParsed('builtin:worktree', LEASES_KV_NAMESPACE, 'fail-closed-lease', {
+        phase: 'running',
+        nodeId: 'local',
+        path: rec2.path,
+        info: { nodeId: 'local', executionId: 'ext-keep' },
+        worktreeId: rec2.id,
+        createdAt: 1,
+      })
+      th.kvStore.setParsed('builtin:worktree', LEASES_KV_NAMESPACE, 'leased-removed-token', {
+        phase: 'pending',
+        nodeId: 'local',
+        path: '/tmp/leased-removed-wt',
+        info: { nodeId: 'local', executionId: 'ext-leased-removed' },
+        worktreeId: leasedRemovedId,
+        createdAt: 2,
+      })
 
       // 1) 无关会话裁剪：完全无副作用
       th.isolation.pruneConversation(99999)
-      assert.equal(rawRecords(th.docs).length, 4)
+      assert.equal(rawRecords(th.kvStore).length, 4)
 
       // 2) 按子会话 c1 裁剪：ag-c1 绑定删除、rec1（removed）删除；leasedRemoved 因仍有租约保留；c2/c3 不变
       th.isolation.pruneConversation(c1)
-      let afterState = th.docs.get('builtin:worktree:worktree-state') as Record<string, unknown>
-      let bindings = afterState['worktree-agent-bindings'] as Record<string, unknown>
-      assert.equal(bindings['ag-c1'], undefined, '子会话匹配时应清理 agentId 绑定')
-      assert.ok(bindings['ag-c2'] !== undefined, '同父其他子会话绑定此时保留')
-      assert.ok(bindings['ag-c3'] !== undefined, '其他父会话绑定保留')
-      assert.equal(rawRecords(th.docs).some((r) => r.id === rec1.id), false, '已 removed 的关联记录应被裁剪')
-      assert.equal(rawRecords(th.docs).some((r) => r.id === leasedRemovedId), true, '仍被租约引用的记录绝不删除')
-      assert.equal(rawRecords(th.docs).some((r) => r.id === rec2.id), true, 'active 记录绝不删除')
-      assert.equal(Object.keys(leasesOf(th.docs)).length, 2, '任何活跃/fail-closed 租约绝不删除')
+      assert.equal(th.kvStore.getParsed('builtin:worktree', AGENT_BINDINGS_KV_NAMESPACE, 'ag-c1'), undefined, '子会话匹配时应清理 agentId 绑定')
+      assert.ok(th.kvStore.getParsed('builtin:worktree', AGENT_BINDINGS_KV_NAMESPACE, 'ag-c2') !== undefined, '同父其他子会话绑定此时保留')
+      assert.ok(th.kvStore.getParsed('builtin:worktree', AGENT_BINDINGS_KV_NAMESPACE, 'ag-c3') !== undefined, '其他父会话绑定保留')
+      assert.equal(rawRecords(th.kvStore).some((r) => r.id === rec1.id), false, '已 removed 的关联记录应被裁剪')
+      assert.equal(rawRecords(th.kvStore).some((r) => r.id === leasedRemovedId), true, '仍被租约引用的记录绝不删除')
+      assert.equal(rawRecords(th.kvStore).some((r) => r.id === rec2.id), true, 'active 记录绝不删除')
+      assert.equal(Object.keys(leasesOf(th.kvStore)).length, 2, '任何活跃/fail-closed 租约绝不删除')
 
       // 3) 按父会话 10 裁剪：ag-c2 绑定因父会话匹配被清理，但 active 的 rec2 与全部租约严格保留
       th.isolation.pruneConversation(10)
-      afterState = th.docs.get('builtin:worktree:worktree-state') as Record<string, unknown>
-      bindings = afterState['worktree-agent-bindings'] as Record<string, unknown>
-      assert.equal(bindings['ag-c2'], undefined, '父会话匹配时应清理其名下 agentId 绑定')
-      assert.ok(bindings['ag-c3'] !== undefined, '无关父会话 20 的绑定保留')
-      assert.equal(rawRecords(th.docs).find((r) => r.id === rec2.id)?.status, 'active', '父会话裁剪绝不删除 active worktree')
-      assert.equal(rawRecords(th.docs).find((r) => r.id === rec3.id)?.status, 'active')
-      assert.equal(Object.keys(leasesOf(th.docs)).length, 2, '父会话裁剪绝不删除租约')
+      assert.equal(th.kvStore.getParsed('builtin:worktree', AGENT_BINDINGS_KV_NAMESPACE, 'ag-c2'), undefined, '父会话匹配时应清理其名下 agentId 绑定')
+      assert.ok(th.kvStore.getParsed('builtin:worktree', AGENT_BINDINGS_KV_NAMESPACE, 'ag-c3') !== undefined, '无关父会话 20 的绑定保留')
+      assert.equal(rawRecords(th.kvStore).find((r) => r.id === rec2.id)?.status, 'active', '父会话裁剪绝不删除 active worktree')
+      assert.equal(rawRecords(th.kvStore).find((r) => r.id === rec3.id)?.status, 'active')
+      assert.equal(Object.keys(leasesOf(th.kvStore)).length, 2, '父会话裁剪绝不删除租约')
     } finally {
       await th.close()
     }
@@ -3198,7 +3112,7 @@ describe('allocate 批量 Git 预检与非常规布局诚实拒绝', { timeout: 
     const repo = makeGitRepo(join(dir, 'repo'))
     const subDir = join(repo, 'nested', 'module')
     mkdirSync(subDir, { recursive: true })
-    const docs = new Map<string, unknown>()
+    const docs = new MemoryKvStore()
     const basePorts = localNodePorts()
     const gitCalls: string[][] = []
     const allocator = new WorktreeAllocator({
@@ -3208,14 +3122,7 @@ describe('allocate 批量 Git 预检与非常规布局诚实拒绝', { timeout: 
         return basePorts.exec(nodeId, cwd, args, options)
       },
       inspectPathUsage: (nodeId, path, signal) => bareFabricOf().inspectPathUsage(nodeId, path, signal),
-      docStore: {
-        get<T>(key: string, initial: T): T {
-          return (docs.get(key) as T | undefined) ?? initial
-        },
-        set<T>(key: string, value: T): void {
-          docs.set(key, value)
-        },
-      },
+      kv: createMemoryWorktreeKv(docs),
     })
     try {
       const record = await allocator.allocate({ nodeId: 'local', sourceCwd: subDir, parentConversationId: 1 })
@@ -3237,7 +3144,7 @@ describe('allocate 批量 Git 预检与非常规布局诚实拒绝', { timeout: 
   }, async () => {
     const dir = join(rootDir, 't23-layouts')
     mkdirSync(dir, { recursive: true })
-    const docs = new Map<string, unknown>()
+    const docs = new MemoryKvStore()
     const allocator = bareAllocator(docs)
     try {
       // 1) bare 仓库 -> worktree_unsupported_layout
@@ -3282,29 +3189,22 @@ interface FakeIsolationOptions {
 
 interface FakeIsolationHandle {
   isolation: WorktreeIsolation
-  docStore: WorktreeIsolationDeps['docStore']
+  kvStore: MemoryKvStore
   probeEntered: Promise<void>
   releaseProbe(): void
   execCalls: Array<{ command: string | string[]; cwd?: string }>
 }
 
 function makeFakeIsolation(options: FakeIsolationOptions = {}): FakeIsolationHandle {
-  const docs = new Map<string, unknown>()
   let flushes = 0
-  const docStore: WorktreeIsolationDeps['docStore'] = {
-    get<T>(key: string, initial: T): T {
-      return (docs.get(key) as T | undefined) ?? initial
-    },
-    set<T>(key: string, value: T): void {
-      docs.set(key, value)
-    },
-    async flush() {
+  const kvStore = new MemoryKvStore({
+    onFlush: async () => {
       flushes++
       if (options.failFlushFirst !== undefined && flushes <= options.failFlushFirst) {
-        throw new Error('simulated doc flush failure')
+        throw new Error('simulated kv flush failure')
       }
     },
-  }
+  })
   let releaseProbe: () => void = () => {}
   let probeEnteredNotify: () => void = () => {}
   const probeEntered = new Promise<void>((resolve) => {
@@ -3314,7 +3214,7 @@ function makeFakeIsolation(options: FakeIsolationOptions = {}): FakeIsolationHan
   let gateConsumed = false
   const execCalls: FakeIsolationHandle['execCalls'] = []
   return {
-    docStore,
+    kvStore,
     probeEntered,
     releaseProbe: () => releaseProbe(),
     execCalls,
@@ -3356,13 +3256,13 @@ function makeFakeIsolation(options: FakeIsolationOptions = {}): FakeIsolationHan
         }),
         getConversation: () => ({ cwd: gatedPath ?? '/repo', nodeId: 'local', status: 'idle' }),
       },
-      docStore,
+      kv: createMemoryWorktreeKv(kvStore),
     }),
   }
 }
 
-function leaseCount(docStore: WorktreeIsolationDeps['docStore']): number {
-  return Object.keys(docStore.get<Record<string, unknown>>('worktree-leases', {})).length
+function leaseCount(kvStore: MemoryKvStore): number {
+  return kvStore.listParsed('builtin:worktree', LEASES_KV_NAMESPACE).length
 }
 
 describe('WorktreeIsolation：租约与并发窗口保护', { timeout: 60_000 }, () => {
@@ -3370,23 +3270,18 @@ describe('WorktreeIsolation：租约与并发窗口保护', { timeout: 60_000 },
     const wtPath = '/wt/resume-race'
     const worktreeId = `local:${wtPath}`
     const handle = makeFakeIsolation({ gatedExistsPath: wtPath })
-    handle.docStore.set('runtime/worktrees', {
-      version: 1,
-      records: [
-        {
-          id: worktreeId,
-          nodeId: 'local',
-          path: wtPath,
-          branch: 'helmx/spawn-resume1',
-          repoRoot: '/repo',
-          baseCommit: 'abc',
-          parentConversationId: 1,
-          conversationId: 42,
-          createdAt: 1,
-          status: 'active',
-          origin: 'native',
-        },
-      ],
+    handle.kvStore.setParsed('builtin:worktree', WORKTREES_KV_NAMESPACE, worktreeId, {
+      id: worktreeId,
+      nodeId: 'local',
+      path: wtPath,
+      branch: 'helmx/spawn-resume1',
+      repoRoot: '/repo',
+      baseCommit: 'abc',
+      parentConversationId: 1,
+      conversationId: 42,
+      createdAt: 1,
+      status: 'active',
+      origin: 'native',
     })
 
     const nextCwds: Array<string | undefined> = []
@@ -3414,29 +3309,24 @@ describe('WorktreeIsolation：租约与并发窗口保护', { timeout: 60_000 },
     handle.releaseProbe()
     assert.equal(await resumePromise, 'resumed')
     assert.deepEqual(nextCwds, [wtPath], 'resume 必须沿用原 worktree cwd')
-    assert.equal(leaseCount(handle.docStore), 0, '结算后租约释放，不留永久占位')
+    assert.equal(leaseCount(handle.kvStore), 0, '结算后租约释放，不留永久占位')
     assert.equal(handle.isolation.allocator.findActive({ worktreeId })?.path, wtPath)
   })
 
   it('resumeWithWorktree 租约前置：验证失败（目录已消失）释放占位租约，不留永久占位', { timeout: 60_000 }, async () => {
     const handle = makeFakeIsolation({ existsValue: false })
-    handle.docStore.set('runtime/worktrees', {
-      version: 1,
-      records: [
-        {
-          id: 'local:/wt/resume-race',
-          nodeId: 'local',
-          path: '/wt/resume-race',
-          branch: 'helmx/spawn-resume1',
-          repoRoot: '/repo',
-          baseCommit: 'abc',
-          parentConversationId: 1,
-          conversationId: 42,
-          createdAt: 1,
-          status: 'active',
-          origin: 'native',
-        },
-      ],
+    handle.kvStore.setParsed('builtin:worktree', WORKTREES_KV_NAMESPACE, 'local:/wt/resume-race', {
+      id: 'local:/wt/resume-race',
+      nodeId: 'local',
+      path: '/wt/resume-race',
+      branch: 'helmx/spawn-resume1',
+      repoRoot: '/repo',
+      baseCommit: 'abc',
+      parentConversationId: 1,
+      conversationId: 42,
+      createdAt: 1,
+      status: 'active',
+      origin: 'native',
     })
 
     await assert.rejects(
@@ -3451,7 +3341,7 @@ describe('WorktreeIsolation：租约与并发窗口保护', { timeout: 60_000 },
         return true
       },
     )
-    assert.equal(leaseCount(handle.docStore), 0, 'neverStarted 路径必须释放占位租约')
+    assert.equal(leaseCount(handle.kvStore), 0, 'neverStarted 路径必须释放占位租约')
   })
 
   it('动态 nodeId：spawnWithWorktree / acquire_worktree 透传 requestNodeId、非法 nodeId 与 resume+nodeId 显式 400 validation_error', {
@@ -3459,7 +3349,7 @@ describe('WorktreeIsolation：租约与并发窗口保护', { timeout: 60_000 },
   }, async () => {
     const dir = join(rootDir, 't24-dyn-node')
     const repo = makeGitRepo(join(dir, 'repo'))
-    const docs = new Map<string, unknown>()
+    const docs = new MemoryKvStore()
     const resolvedTargets: Array<Record<string, unknown>> = []
     const { host, close } = await openWorkflowPluginHost({
       repoDir: repo,
@@ -3499,7 +3389,7 @@ describe('WorktreeIsolation：租约与并发窗口保护', { timeout: 60_000 },
 
       // 2) 直接调用 isolation.acquireWorktree 校验非法 requestNodeId（在 resolveSpawnTarget 与 git 前 400）。
       const directResolved: Array<Record<string, unknown>> = []
-      const directDocs = new Map<string, unknown>()
+      const directKvStore = new MemoryKvStore()
       const directIsolation = new WorktreeIsolation({
         host: {
           resolveSpawnTarget: async (input) => {
@@ -3532,15 +3422,7 @@ describe('WorktreeIsolation：租约与并发窗口保护', { timeout: 60_000 },
           redact: (text) => text,
           getConversation: () => ({ cwd: repo, nodeId: 'local', status: 'idle', profileId: 'assistant' }),
         },
-        docStore: {
-          get<T>(key: string, initial: T): T {
-            return (directDocs.get(key) as T | undefined) ?? initial
-          },
-          set<T>(key: string, value: T): void {
-            directDocs.set(key, structuredClone(value))
-          },
-          flush: async () => {},
-        },
+        kv: createMemoryWorktreeKv(directKvStore),
       })
       for (const badNodeId of ['', 'bad node', '../escape']) {
         await assert.rejects(
@@ -3654,13 +3536,185 @@ describe('WorktreeIsolation：租约与并发窗口保护', { timeout: 60_000 },
       }
       assert.equal(nextCalled, false)
       assert.equal(
-        Object.keys((directDocs.get('worktree-leases') as Record<string, unknown> | undefined) ?? {}).length,
+        leaseCount(directKvStore),
         0,
         'resume+nodeId 拒绝不得残留租约',
       )
     } finally {
       await close()
       rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('WorktreeStore KV 持久化契约（单条隔离 / >1000 分页遍历 / 超长与特殊键 / service.stop flush）', { timeout: 60_000 }, () => {
+  it('按单条 KV 独立落库（零 worktree-state 文档写入）并在 service.stop 时经 stopWindow flush KV', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 't25-kv-stop')
+    const repo = makeGitRepo(join(dir, 'repo'))
+    const kvStore = new MemoryKvStore()
+    let flushes = 0
+    const { host, globalDocs, close } = await openWorkflowPluginHost({
+      repoDir: repo,
+      dataDir: join(dir, 'data'),
+      docs: kvStore,
+      plugins: 'worktree-only',
+      onFlush: () => {
+        flushes += 1
+      },
+    })
+    try {
+      const caller = { surface: 'plugin' as const, callerPluginId: 'builtin:swarm' }
+      const acquired = (await host.invokeAction(
+        'builtin:worktree',
+        'acquire_worktree',
+        {
+          conversationId: 77,
+          parentConversationId: 1,
+          requestCwd: repo,
+          hold: { holdId: 'kv:stop-test', label: 'kv stop flush test' },
+        },
+        {},
+        caller,
+      )) as { worktreeId: string; path: string }
+      assert.equal(globalDocs.has('builtin:worktree:worktree-state'), false, '不再写入旧 worktree-state 全局文档')
+      assert.equal(
+        kvStore.getParsed<ManagedWorktreeRecord>('builtin:worktree', WORKTREES_KV_NAMESPACE, acquired.worktreeId)?.id,
+        acquired.worktreeId,
+        '受管 worktree 应按单条 KV 独立存于 worktrees 命名空间',
+      )
+
+      // 释放 hold 后 disable('builtin:worktree') 触发 service.stop()，验证 stopWindow 内 flush KV 被调用。
+      await host.invokeAction(
+        'builtin:worktree',
+        'release_worktree_hold',
+        { worktreeId: acquired.worktreeId, holdId: 'kv:stop-test' },
+        {},
+        caller,
+      )
+      const flushesBeforeStop = flushes
+      await host.disable('builtin:worktree')
+      assert.ok(flushes > flushesBeforeStop, 'service.stop() 必须在 stopWindow 内 flush KV')
+    } finally {
+      await close()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('WorktreeStore 分页遍历突破单页 1000 条上限（records / listLeases / pruneConversation 全量可见）', { timeout: 60_000 }, async () => {
+    const kvStore = new MemoryKvStore()
+    const store = new WorktreeStore({
+      kv: createMemoryWorktreeKv(kvStore),
+      redact: (text) => text,
+    })
+    const total = 1005
+    for (let i = 0; i < total; i += 1) {
+      const id = `local:/wt/item-${String(i).padStart(4, '0')}`
+      store.append({
+        id,
+        nodeId: 'local',
+        repoRoot: '/repo',
+        path: `/wt/item-${String(i).padStart(4, '0')}`,
+        branch: `helmx/spawn-${String(i).padStart(4, '0')}`,
+        baseCommit: 'a'.repeat(40),
+        dirtySource: false,
+        parentConversationId: i === 1004 ? 999 : 1,
+        conversationId: 2000 + i,
+        origin: 'native',
+        status: i === 1004 ? 'removed' : 'active',
+        createdAt: i + 1,
+        ...(i === 1004 ? { removedAt: i + 2 } : {}),
+      })
+      store.recordAgentBinding(`ag-${String(i).padStart(4, '0')}`, 2000 + i, i === 1004 ? 999 : 1)
+    }
+
+    assert.equal(store.records().length, total, 'records() 必须跨 cursor 分页取回全部 1005 条记录')
+    assert.equal(store.list()[0]!.id, 'local:/wt/item-1004', 'list() 按 createdAt 倒序包含第 2 页条目')
+    assert.equal(
+      store.resolveResumeChildId({ parentConversationId: 1, prompt: 'p', resume: 'ag-1004' } as never),
+      3004,
+      '单键 O(1) 读取位于第 2 页的 agent 绑定',
+    )
+
+    // pruneConversation 跨页裁剪位于第 2 页的 removed 记录与 agent 绑定
+    store.pruneConversation(999)
+    assert.equal(store.records().length, total - 1, 'pruneConversation 必须跨页删除第 2 页的 removed 记录')
+    assert.equal(store.findById('local:/wt/item-1004'), undefined)
+    assert.equal(
+      store.resolveResumeChildId({ parentConversationId: 1, prompt: 'p', resume: 'ag-1004' } as never),
+      undefined,
+      'pruneConversation 必须跨页删除第 2 页的 agent 绑定',
+    )
+  })
+
+  it('超长 worktreeId（>256 字符）、sha256: 前缀与含控制字符的 agentId 经单射键编码安全落库且可精确读写/裁剪', { timeout: 60_000 }, async () => {
+    const kvStore = new MemoryKvStore()
+    const host = new PluginHost({
+      buildProvider: createPluginBuildProvider(),
+      dataDir: join(rootDir, 't25-long-key'),
+      host: { ...createPluginHostBackendFixture(), emitEvent: () => {} },
+      docs: new MemoryDocStore(),
+      kv: kvStore,
+    })
+    try {
+      let store!: WorktreeStore
+      await host.register({
+        id: 'test:wt-kv-keys',
+        definePlugin(ctx) {
+          store = new WorktreeStore({
+            kv: {
+              worktrees: ctx.kv<ManagedWorktreeRecord>(WORKTREES_KV_NAMESPACE),
+              leases: ctx.kv<WorktreeLeaseRecord>(LEASES_KV_NAMESPACE),
+              agentBindings: ctx.kv<WorktreeAgentBinding>(AGENT_BINDINGS_KV_NAMESPACE),
+            },
+            redact: (t) => t,
+          })
+        },
+      })
+
+      const longPath = `/repo/${'nested-dir-segment/'.repeat(18)}wt`
+      const longId = `local:${longPath}`
+      assert.ok(longId.length > 256, '测试前提：worktreeId 超过 ctx.kv 256 字符键长上限')
+      assert.ok(worktreeKvKey(longId).length <= 256 && worktreeKvKey(longId).startsWith('sha256:'))
+
+      const prefixId = 'sha256:/repo/wt'
+      assert.notEqual(worktreeKvKey(prefixId), prefixId, 'sha256: 前缀原键须哈希防碰撞')
+
+      for (const id of [longId, prefixId]) {
+        store.append({
+          id,
+          nodeId: id.split(':')[0]!,
+          repoRoot: '/repo',
+          path: id.slice(id.indexOf(':') + 1),
+          branch: 'helmx/spawn-long',
+          baseCommit: 'b'.repeat(40),
+          dirtySource: false,
+          parentConversationId: 1,
+          conversationId: 801,
+          origin: 'native',
+          status: 'active',
+          createdAt: 100,
+        })
+        assert.equal(store.findById(id)?.id, id, '经真实 PluginKvRegistry 写入后可按原 id 精确找回')
+        store.updateRecord(id, (r) => ({ ...r, status: 'removed', removedAt: 200 }))
+        assert.equal(store.findById(id)?.status, 'removed')
+      }
+
+      const trickyAgentId = `agent\twith\nctrl-${'x'.repeat(260)}`
+      store.recordAgentBinding(trickyAgentId, 801, 1)
+      assert.equal(
+        store.resolveResumeChildId({ parentConversationId: 1, prompt: 'p', resume: trickyAgentId } as never),
+        801,
+      )
+
+      store.pruneConversation(801)
+      assert.equal(store.findById(longId), undefined)
+      assert.equal(store.findById(prefixId), undefined)
+      assert.equal(
+        store.resolveResumeChildId({ parentConversationId: 1, prompt: 'p', resume: trickyAgentId } as never),
+        undefined,
+      )
+    } finally {
+      await host.dispose()
     }
   })
 })

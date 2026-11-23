@@ -6,17 +6,36 @@ import {
   parseSessionDocSubParam,
   type ConversationDetail,
   type ConversationLive,
+  type ConversationLiveEvent,
   type ConversationSummary,
   type HelmxEvent,
   type HelmxEventType,
+  type HelmxHostApi,
+  type HelmxHostNodeIpcPort,
+  type HelmxPluginContext,
   type HelmxResumedFrame,
   type HelmxTransientLiveFrame,
+  type HostEventEmitPayload,
+  type HostEventMap,
+  type HostNodesSlice,
+  type HostProfilesSlice,
+  type MaybePromise,
+  type NodeInfo,
+  type PluginClientContext,
+  type PluginDocOptions,
+  type PluginServiceSpec,
   type PluginSummary,
+  type Profile,
   type PublicPluginSessionDoc,
   type SessionDocMultiplexAction,
   type SessionDocMultiplexFrame,
   type SessionDocSubscription,
 } from '../src/index.js'
+import type {
+  HostEventMap as BrowserHostEventMap,
+  HostNodesSlice as BrowserHostNodesSlice,
+  HostProfilesSlice as BrowserHostProfilesSlice,
+} from '../src/browser.js'
 
 function assertValidationError(fn: () => unknown, leakedSecrets: readonly string[] = []): void {
   let caught: unknown
@@ -249,4 +268,110 @@ test('Stage 0 protocol contracts lock transient live, clientHashes, lastEntryId,
     ['snapshot', 'updated', 'deleted'],
   )
   assert.equal(frames[2]?.doc.deleted, true)
+})
+
+test('HostEventMap, typed onEvent/emitEvent overloads, and plugin/client contract additions typecheck cleanly', { timeout: 60_000 }, () => {
+  // Compile-time lock: HostEventMap covers every durable HelmxEventType plus transient conversation.live,
+  // and is exported identically from both root and @helmx/protocol/browser.
+  type AllCoreMapped = Exclude<HelmxEventType, keyof HostEventMap> extends never ? true : false
+  type LiveMapped = HostEventMap['conversation.live'] extends ConversationLiveEvent ? true : false
+  type BrowserMapMatches = BrowserHostEventMap extends HostEventMap ? (HostEventMap extends BrowserHostEventMap ? true : false) : false
+  type NodesSliceMatches = BrowserHostNodesSlice extends ReadonlyArray<NodeInfo> ? (HostNodesSlice extends BrowserHostNodesSlice ? true : false) : false
+  type ProfilesSliceMatches = BrowserHostProfilesSlice extends ReadonlyArray<Profile> ? (HostProfilesSlice extends BrowserHostProfilesSlice ? true : false) : false
+  const locks: [AllCoreMapped, LiveMapped, BrowserMapMatches, NodesSliceMatches, ProfilesSliceMatches] = [
+    true,
+    true,
+    true,
+    true,
+    true,
+  ]
+  assert.deepEqual(locks, [true, true, true, true, true])
+
+  // Verify both method-shorthand and explicitly annotated implementations satisfy Pick<HelmxHostApi, 'onEvent' | 'emitEvent'>.
+  const dispatched: Array<{ type: string; payload: unknown }> = []
+  const listeners = new Map<string, Set<(payload: unknown) => MaybePromise<void>>>()
+  const hostEvents: Pick<HelmxHostApi, 'onEvent' | 'emitEvent'> = {
+    onEvent(type: string, listener: (payload: unknown) => MaybePromise<void>): () => void {
+      let set = listeners.get(type)
+      if (!set) {
+        set = new Set()
+        listeners.set(type, set)
+      }
+      set.add(listener)
+      return () => {
+        set!.delete(listener)
+      }
+    },
+    emitEvent(type: string, payload: unknown, _options?: { broadcast?: boolean }): MaybePromise<void> {
+      dispatched.push({ type, payload })
+      const set = listeners.get(type)
+      if (!set) return
+      for (const fn of set) void fn(payload)
+    },
+  }
+
+  let deletedId: number | undefined
+  let liveConvId: number | undefined
+  let customPayload: unknown
+  const unsubDeleted = hostEvents.onEvent('conversation.deleted', (ev) => {
+    deletedId = ev.conversationId
+  })
+  const unsubLive = hostEvents.onEvent('conversation.live', (ev) => {
+    liveConvId = ev.live.conversationId
+  })
+  const unsubCustom = hostEvents.onEvent('acme:custom', (ev) => {
+    customPayload = ev
+  })
+
+  // Typed emitEvent accepts both full envelopes and raw bodies without `type`, plus arbitrary custom events.
+  const rawNotif: HostEventEmitPayload<'notification'> = { level: 'info', title: 'raw' }
+  const fullNotif: HostEventEmitPayload<'notification'> = { type: 'notification', level: 'warning', title: 'full' }
+  void hostEvents.emitEvent('notification', rawNotif)
+  void hostEvents.emitEvent('notification', fullNotif)
+  void hostEvents.emitEvent('conversation.deleted', { type: 'conversation.deleted', conversationId: 42 })
+  void hostEvents.emitEvent('conversation.live', {
+    type: 'conversation.live',
+    live: { conversationId: 9, text: 'hi', tools: [], updatedAt: 1000 },
+  })
+  void hostEvents.emitEvent('acme:custom', { ok: true }, { broadcast: false })
+
+  assert.equal(deletedId, 42)
+  assert.equal(liveConvId, 9)
+  assert.deepEqual(customPayload, { ok: true })
+  assert.equal(dispatched.length, 5)
+  unsubDeleted()
+  unsubLive()
+  unsubCustom()
+
+  // Lock folded PluginServiceSpec fields, PluginDocOptions, HelmxHostNodeIpcPort.listNodes,
+  // HelmxPluginContext.onCapabilityChanged, and PluginClientContext.fetchRoute signatures.
+  const serviceSpec: PluginServiceSpec = {
+    id: 'svc',
+    reconcileAfter: ['builtin:workflow'],
+    start() {},
+    reconcile() {},
+    stop() {},
+  }
+  const docOpts: PluginDocOptions = { public: true, durable: false }
+  const nodeIpc: HelmxHostNodeIpcPort = {
+    isOnline: () => true,
+    listNodes: () => [{ id: 'local', kind: 'local', online: true }],
+  }
+  type CapChangedSig = HelmxPluginContext['onCapabilityChanged'] extends (
+    capabilityId: string,
+    listener: () => void,
+  ) => () => void
+    ? true
+    : false
+  type FetchRouteSig = PluginClientContext['fetchRoute'] extends (
+    path: string,
+    init?: RequestInit,
+  ) => Promise<Response>
+    ? true
+    : false
+  const contractLocks: [CapChangedSig, FetchRouteSig] = [true, true]
+  assert.deepEqual(contractLocks, [true, true])
+  assert.equal(serviceSpec.reconcileAfter?.[0], 'builtin:workflow')
+  assert.equal(docOpts.durable, false)
+  assert.equal(nodeIpc.listNodes?.()[0]?.id, 'local')
 })

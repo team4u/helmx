@@ -6,8 +6,12 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
+import { existsSync, realpathSync } from 'node:fs'
 import fsp from 'node:fs/promises'
+import { createRequire } from 'node:module'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import {
   makeCliEnv,
   makePluginSummary,
@@ -519,4 +523,198 @@ test('plugins build: works when plugin directory traverses a symlinked/alias par
   const danglingEscape = await runCliCaptured(['plugins', 'build', aliasPluginDir, '--json'], env)
   assert.notEqual(danglingEscape.code, 0)
   assert.equal(parseCliError(danglingEscape).code, 'invalid_plugin_definition')
+})
+
+const cliRequire = createRequire(import.meta.url)
+const tscCliScript = cliRequire.resolve('typescript/bin/tsc')
+const cliTestRepoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
+
+function runTscNoEmit(tsconfigPath: string, cwd: string): { status: number | null; stdout: string; stderr: string } {
+  const res = spawnSync(process.execPath, [tscCliScript, '--noEmit', '-p', tsconfigPath], {
+    cwd,
+    encoding: 'utf8',
+    timeout: 50_000,
+  })
+  return { status: res.status, stdout: res.stdout ?? '', stderr: res.stderr ?? '' }
+}
+
+function assertNoAncestorNodeModules(dir: string): void {
+  let cur = path.resolve(dir)
+  for (;;) {
+    assert.equal(existsSync(path.join(cur, 'node_modules')), false, `expected isolated temp dir without ancestor node_modules at ${cur}`)
+    const parent = path.dirname(cur)
+    if (parent === cur) break
+    cur = parent
+  }
+}
+
+test('plugins types: syncs offline .helmx/types, cleans stale files, preserves user tsconfig.json, and validates guards', { timeout: 60_000 }, async (t) => {
+  const dataDir = useTempDir(t, 'helmx-cli-types-')
+  const env = makeCliEnv('http://127.0.0.1:1', dataDir)
+
+  // 1. Target directory with no tsconfig.json (positional <dir>)
+  const pluginDir = path.join(dataDir, 'manual-plugin')
+  await fsp.mkdir(path.join(pluginDir, '.helmx', 'types', 'stale-dir'), { recursive: true })
+  await fsp.writeFile(path.join(pluginDir, '.helmx', 'types', 'stale-dir', 'old.d.ts'), 'export {}\n', 'utf8')
+
+  const r1 = await runCliCaptured(['plugins', 'types', pluginDir, '--json'], env)
+  assert.equal(r1.code, 0, r1.err)
+  const body1 = JSON.parse(r1.out) as {
+    dir: string
+    typesDir: string
+    sdkVersion: string
+    filesWritten: number
+    files: string[]
+    tsconfigStatus: string
+    recommendedCompilerOptions: { baseUrl: string; paths: Record<string, string[]> }
+  }
+  assert.equal(body1.dir, pluginDir)
+  assert.equal(body1.typesDir, path.join(pluginDir, '.helmx', 'types'))
+  assert.ok(body1.filesWritten >= 10)
+  assert.equal(body1.tsconfigStatus, 'missing')
+  assert.ok(body1.recommendedCompilerOptions.paths['@helmx/protocol']?.includes('./.helmx/types/protocol/index.d.ts'))
+  assert.ok(body1.recommendedCompilerOptions.paths['@helmx/protocol/browser']?.includes('./.helmx/types/protocol/browser.d.ts'))
+  assert.ok(body1.recommendedCompilerOptions.paths['@helmx/plugin-client']?.includes('./.helmx/types/plugin-client/index.d.ts'))
+  assert.ok(existsSync(path.join(pluginDir, '.helmx', 'types', 'protocol', 'index.d.ts')))
+  assert.ok(existsSync(path.join(pluginDir, '.helmx', 'types', 'protocol', 'browser.d.ts')))
+  assert.ok(existsSync(path.join(pluginDir, '.helmx', 'types', 'plugin-client', 'index.d.ts')))
+  assert.ok(existsSync(path.join(pluginDir, '.helmx', 'types', 'shims', 'peers.d.ts')))
+  assert.ok(existsSync(path.join(pluginDir, '.helmx', 'types', 'shims', 'react.d.ts')))
+  assert.ok(existsSync(path.join(pluginDir, '.helmx', 'types', 'shims', 'react-jsx-runtime.d.ts')))
+  // Stale files inside .helmx/types are cleaned; missing tsconfig.json is NOT created unexpectedly.
+  assert.equal(existsSync(path.join(pluginDir, '.helmx', 'types', 'stale-dir', 'old.d.ts')), false)
+  assert.equal(existsSync(path.join(pluginDir, 'tsconfig.json')), false)
+
+  // 2. Existing user tsconfig.json without Helmx paths: never clobbered, reported as needs_paths
+  const bareTsconfig = '{\n  "compilerOptions": {\n    "strict": true\n  }\n}\n'
+  await fsp.writeFile(path.join(pluginDir, 'tsconfig.json'), bareTsconfig, 'utf8')
+  const r2 = await runCliCaptured(['plugins', 'types', '--dir', pluginDir], env)
+  assert.equal(r2.code, 0, r2.err)
+  assert.ok(r2.out.includes('Synced Helmx SDK types'))
+  assert.ok(r2.out.includes('tsconfig.json was not modified (status: needs_paths)'))
+  assert.ok(r2.out.includes('@helmx/protocol'))
+  assert.equal(await fsp.readFile(path.join(pluginDir, 'tsconfig.json'), 'utf8'), bareTsconfig)
+
+  // 3. Existing JSONC tsconfig.json with comments: reported as unreadable and untouched
+  const jsoncTsconfig = '// user comment\n{\n  "compilerOptions": { "strict": true, }\n}\n'
+  await fsp.writeFile(path.join(pluginDir, 'tsconfig.json'), jsoncTsconfig, 'utf8')
+  const r3 = await runCliCaptured(['plugins', 'types', '--json'], env, { cwd: pluginDir })
+  assert.equal(r3.code, 0, r3.err)
+  assert.equal((JSON.parse(r3.out) as { tsconfigStatus: string }).tsconfigStatus, 'unreadable')
+  assert.equal(await fsp.readFile(path.join(pluginDir, 'tsconfig.json'), 'utf8'), jsoncTsconfig)
+
+  // 4. Existing tsconfig.json already configured with Helmx paths -> status configured
+  const configuredTsconfig = JSON.stringify(
+    { compilerOptions: body1.recommendedCompilerOptions },
+    null,
+    2,
+  )
+  await fsp.writeFile(path.join(pluginDir, 'tsconfig.json'), configuredTsconfig, 'utf8')
+  const r4 = await runCliCaptured(['plugins', 'types', pluginDir], env)
+  assert.equal(r4.code, 0, r4.err)
+  assert.ok(r4.out.includes('tsconfig.json already configures Helmx SDK paths.'))
+  assert.equal(await fsp.readFile(path.join(pluginDir, 'tsconfig.json'), 'utf8'), configuredTsconfig)
+
+  // 5. Validation & symlink safety guards
+  const missingDir = await runCliCaptured(['plugins', 'types', path.join(dataDir, 'does-not-exist'), '--json'], env)
+  assert.notEqual(missingDir.code, 0)
+  assert.equal(parseCliError(missingDir).code, 'invalid_target_dir')
+
+  const conflict = await runCliCaptured(['plugins', 'types', pluginDir, '--dir', pluginDir, '--json'], env)
+  assert.notEqual(conflict.code, 0)
+  assert.equal(parseCliError(conflict).code, 'conflicting_flags')
+
+  const symlinkPlugin = path.join(dataDir, 'symlink-plugin')
+  const outsideTarget = path.join(dataDir, 'outside-types')
+  await fsp.mkdir(path.join(symlinkPlugin, '.helmx'), { recursive: true })
+  await fsp.mkdir(outsideTarget, { recursive: true })
+  await fsp.symlink(outsideTarget, path.join(symlinkPlugin, '.helmx', 'types'), 'junction')
+  const symRes = await runCliCaptured(['plugins', 'types', symlinkPlugin, '--json'], env)
+  assert.notEqual(symRes.code, 0)
+  assert.equal(parseCliError(symRes).code, 'invalid_target_dir')
+})
+
+test('plugins init: all three templates pass real standalone tsc --noEmit outside the monorepo (with and without @types)', { timeout: 60_000 }, async (t) => {
+  const workDir = useTempDir(t, 'helmx-cli-tsc-')
+  assertNoAncestorNodeModules(workDir)
+  const env = makeCliEnv('http://127.0.0.1:1', path.join(workDir, 'data'))
+  const pluginsParent = path.join(workDir, 'plugins')
+
+  const dirs = new Map<string, string>()
+  for (const template of ['minimal', 'full', 'app'] as const) {
+    const res = await runCliCaptured(
+      ['plugins', 'init', `tpl-${template}`, '--template', template, '--dir', pluginsParent, '--json'],
+      env,
+    )
+    assert.equal(res.code, 0, `${template}: ${res.err}`)
+    const body = JSON.parse(res.out) as { dir: string; files: string[] }
+    assert.ok(body.files.includes('.helmx/types/'), `${template}: init should report .helmx/types/`)
+    const tsconfig = JSON.parse(await fsp.readFile(path.join(body.dir, 'tsconfig.json'), 'utf8')) as {
+      compilerOptions: { baseUrl?: string; paths?: Record<string, string[]> }
+    }
+    assert.equal(tsconfig.compilerOptions.baseUrl, '.')
+    assert.deepEqual(tsconfig.compilerOptions.paths?.['@helmx/protocol'], ['./.helmx/types/protocol/index.d.ts'])
+    assert.deepEqual(tsconfig.compilerOptions.paths?.['@helmx/protocol/browser'], ['./.helmx/types/protocol/browser.d.ts'])
+    assert.deepEqual(tsconfig.compilerOptions.paths?.['@helmx/plugin-client'], ['./.helmx/types/plugin-client/index.d.ts'])
+
+    const tscRes = runTscNoEmit(path.join(body.dir, 'tsconfig.json'), body.dir)
+    assert.equal(
+      tscRes.status,
+      0,
+      `standalone tsc --noEmit failed for template ${template}:\n${tscRes.stdout}\n${tscRes.stderr}`,
+    )
+    dirs.set(template, body.dir)
+  }
+
+  // Negative checks: prove real strict typing is active on both backend (@helmx/protocol) and frontend (@helmx/plugin-client)
+  const appDir = dirs.get('app')!
+  const indexPath = path.join(appDir, 'index.ts')
+  const clientPath = path.join(appDir, 'client', 'index.tsx')
+  const origIndex = await fsp.readFile(indexPath, 'utf8')
+  const origClient = await fsp.readFile(clientPath, 'utf8')
+
+  await fsp.writeFile(indexPath, origIndex.replace("id: 'add_item',", 'id: 42,'), 'utf8')
+  const badBackend = runTscNoEmit(path.join(appDir, 'tsconfig.json'), appDir)
+  assert.notEqual(badBackend.status, 0, 'invalid backend PluginActionSpec.id must fail tsc --noEmit')
+  await fsp.writeFile(indexPath, origIndex, 'utf8')
+
+  await fsp.writeFile(clientPath, origClient.replace('columns={2}', 'columns="not-a-number"'), 'utf8')
+  const badFrontend = runTscNoEmit(path.join(appDir, 'tsconfig.json'), appDir)
+  assert.notEqual(badFrontend.status, 0, 'invalid DataTable columns prop must fail tsc --noEmit')
+  await fsp.writeFile(clientPath, origClient, 'utf8')
+
+  // Coexistence check: when real @types/react and @types/node exist in node_modules, they win cleanly without conflict
+  const reactTypesReal = realpathSync(path.join(cliTestRepoRoot, 'packages/plugin-client/node_modules/@types/react'))
+  const nodeTypesReal = realpathSync(path.join(cliTestRepoRoot, 'node_modules/@types/node'))
+  await fsp.mkdir(path.join(appDir, 'node_modules', '@types'), { recursive: true })
+  await fsp.symlink(reactTypesReal, path.join(appDir, 'node_modules', '@types', 'react'), 'junction')
+  await fsp.symlink(nodeTypesReal, path.join(appDir, 'node_modules', '@types', 'node'), 'junction')
+
+  await fsp.writeFile(
+    path.join(appDir, 'client', 'extra.tsx'),
+    [
+      "import { useEffect, useRef, type ChangeEvent, type ReactNode } from 'react'",
+      "import { usePluginContext, Dialog, Tabs, Select, Tooltip } from '@helmx/plugin-client'",
+      'export function ExtraView(): ReactNode {',
+      '  const ctx = usePluginContext()',
+      '  const inputRef = useRef<HTMLInputElement>(null)',
+      '  useEffect(() => { void ctx.fetchRoute("/ping"); inputRef.current?.focus() }, [ctx])',
+      '  const handleChange = (e: ChangeEvent<HTMLInputElement>) => { void e.target.value }',
+      '  return <Dialog open={false}><Tabs><Tooltip content="hi"><input ref={inputRef} onChange={handleChange} /></Tooltip></Tabs><Select value="a" options={[{ value: "a", label: "A" }]} onChange={() => {}} /></Dialog>',
+      '}',
+      '',
+    ].join('\n'),
+    'utf8',
+  )
+  await fsp.writeFile(
+    indexPath,
+    `import { createHash } from 'node:crypto'\n${origIndex}\nexport const digest = createHash('sha256').update('ok').digest('hex')\n`,
+    'utf8',
+  )
+  const withRealTypes = runTscNoEmit(path.join(appDir, 'tsconfig.json'), appDir)
+  assert.equal(
+    withRealTypes.status,
+    0,
+    `tsc --noEmit with real @types/react + @types/node failed:\n${withRealTypes.stdout}\n${withRealTypes.stderr}`,
+  )
 })

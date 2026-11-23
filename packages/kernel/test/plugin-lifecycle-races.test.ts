@@ -73,7 +73,7 @@ function makeHostApi(events: string[]): PluginHostBackend {
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
     execEnv: async () => { throw new HelmxError('unsupported', 'this fixture does not execute node commands', 501) },
-    emitEvent: (type) => {
+    emitEvent(type: string) {
       events.push(`event:${type}`);
     },
   };

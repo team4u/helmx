@@ -114,7 +114,7 @@ function makeControlledBackend(dataDir: string): ControlledBackend & PluginHostB
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
     execEnv: async () => { throw new HelmxError('unsupported', '本 fixture 不执行节点命令', 501) },
-    emitEvent(type, payload) {
+    emitEvent(type: string, payload: unknown) {
       if (type === 'notification') notifications.push(payload as { title: string; body: string; level: string })
     },
   }

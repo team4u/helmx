@@ -3,11 +3,10 @@
  *
  * Mechanical shape/type/pattern/unknown-key rules compile directly from `@helmx/protocol`'s
  * single-source `UI_SPEC_SCHEMAS` and `UI_SPEC_PATTERNS` (zero schema duplication with
- * `protocol/src/ui.ts`); cross-field semantics (actionId vs client exclusivity, commandPalette
- * slash reservations/duplicates, profile.runtime kind duplicates, slot two-segment split,
- * artifact array uniqueness, and unsafe prototype keys) remain explicit. Two-phase dispatch
- * (`validateUiSpecEarly` before scope/client checks, `validateUiSpecLate` after) preserves
- * original error precedence.
+ * `protocol/src/ui.ts`); cross-field semantics (commandPalette slash reservations/duplicates,
+ * slot two-segment split, completer exclusion, and unsafe prototype keys) remain explicit.
+ * Two-phase dispatch (`validateUiSpecEarly` before scope/client checks, `validateUiSpecLate`
+ * after) preserves original error precedence.
  */
 import type { TObject, TProperties } from 'typebox';
 import { Compile, type Validator } from 'typebox/compile';

@@ -119,6 +119,14 @@ export class CapabilityServiceRegistry {
   /** Subscribes to active-provider changes for `capabilityId`; returns an idempotent unsubscribe handle. */
   onCapabilityChanged(capabilityId: string, listener: () => void): () => void {
     assertValidCapabilityId(capabilityId);
+    if (typeof listener !== 'function') {
+      throw new HelmxError(
+        'invalid_capability_listener',
+        `Capability '${capabilityId}' change listener must be a function`,
+        400,
+        { capabilityId },
+      );
+    }
     let set = this.listenersByCapability.get(capabilityId);
     if (!set) {
       set = new Set();

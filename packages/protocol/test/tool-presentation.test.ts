@@ -6,6 +6,7 @@ import {
   BASH_TOOL_META_SCHEMA,
   EDIT_TOOL_RESULT_SCHEMA,
   HelmxError,
+  KERNEL_TOOL_NAMES,
   KERNEL_TOOL_PRESENTATION_META_SCHEMAS,
   READ_TOOL_META_SCHEMA,
   TOOL_DIFF_MAX_ROWS,
@@ -18,6 +19,7 @@ import {
   assertSchemaCompilable,
   validateOrThrow,
   type EditToolResult,
+  type KernelToolName,
 } from '../src/index.js'
 
 function result(): EditToolResult {
@@ -534,4 +536,21 @@ test('kernel builtin tool presentationMeta schemas compile and enforce strict sh
   assert.throws(() =>
     assertBoundedPresentationMeta({ id: 'a1', offset: 0, nextOffset: 4096, bytes: 4096, chunk: 'duplicated-body' }, { schema: ARTIFACT_READ_META_SCHEMA }),
   )
+})
+
+test('KERNEL_TOOL_NAMES is the single source of truth for the 7 foundational kernel tools', { timeout: 60_000 }, () => {
+  const expected: readonly KernelToolName[] = [
+    'bash',
+    'read',
+    'write',
+    'edit',
+    'read_artifact',
+    'register_artifact',
+    'run_action',
+  ]
+  assert.deepEqual([...KERNEL_TOOL_NAMES], [...expected])
+  assert.equal(new Set(KERNEL_TOOL_NAMES).size, KERNEL_TOOL_NAMES.length)
+  for (const name of Object.keys(KERNEL_TOOL_PRESENTATION_META_SCHEMAS)) {
+    assert.ok((KERNEL_TOOL_NAMES as readonly string[]).includes(name), `schema tool "${name}" must belong to KERNEL_TOOL_NAMES`)
+  }
 })

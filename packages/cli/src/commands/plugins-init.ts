@@ -20,6 +20,7 @@ import {
 } from './scaffold-templates.js'
 import type { CommandContext, CommandSpec } from './shared.js'
 import { assertNoExtraPositionals, printResult } from './shared.js'
+import { writeSdkTypesToDir } from './plugins-types.js'
 
 /** Plugin ID / directory name: starts with alphanumeric, allows - _ (aligned with protocol plugin ID rules; builtin: forbidden). */
 const PLUGIN_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/
@@ -115,6 +116,8 @@ async function runPluginsInit(ctx: CommandContext): Promise<void> {
   }
   await fsp.writeFile(path.join(target, 'README.md'), SCAFFOLD_README(template), 'utf8')
   files.push('README.md')
+  await writeSdkTypesToDir(target)
+  files.push('.helmx/types/')
 
   const summary = {
     pluginId: name,

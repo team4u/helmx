@@ -321,6 +321,7 @@ describe("helmx-store-rerender-isolation", () => {
     const pluginStubCtx: NonNullable<React.ContextType<typeof PluginClientContext>> = {
       pluginId: 'test:plugin',
       callAction: async () => undefined,
+      fetchRoute: async () => { throw new Error('fetchRoute not implemented in test stub') },
       openScreen: () => {},
       openConversationDrawer: () => {},
       openSplitScreen: () => {},

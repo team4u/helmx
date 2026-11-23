@@ -92,7 +92,7 @@ function makeHostApi(events: string[] = []): PluginHostBackend {
     execEnv: async () => {
       throw new HelmxError('unsupported', 'this fixture do not execute node command', 501);
     },
-    emitEvent: (type, payload) => {
+    emitEvent(type: string, payload: unknown) {
       events.push(`event:${type}`);
       eventPayloads.push({ type, payload });
     },
@@ -1626,7 +1626,7 @@ test('stop and event publish both fail: preserves stop diagnostics (adds eventEr
   const backend = makeHostApi(events);
   const originalEmit = backend.emitEvent;
   let emitBroken = false;
-  backend.emitEvent = (type, payload) => {
+  backend.emitEvent = (type: string, payload: unknown) => {
     if (emitBroken && type === 'plugin.changed') throw new Error('event pipeline crash');
     originalEmit.call(backend, type, payload);
   };
@@ -1715,7 +1715,7 @@ test('real HTTP bridge: double failed (stop + event publish) message seal same c
   // event pipeline crash:emitEvent in plugin.changed when throws, and stop failed stack add
   const originalEmit = backend.emitEvent;
   let emitBroken = false;
-  backend.emitEvent = (type, payload) => {
+  backend.emitEvent = (type: string, payload: unknown) => {
     if (emitBroken && type === 'plugin.changed') throw new Error('event pipeline crash');
     originalEmit.call(backend, type, payload);
   };
@@ -2862,7 +2862,7 @@ test('ctx.sessionDoc durable: false works without sessionDocs store, performs ze
   const baseHost = makeHostApi(events);
   const hostApi: PluginHostBackend = {
     ...baseHost,
-    onEvent: (type, listener) => {
+    onEvent(type: string, listener: (payload: unknown) => void | Promise<void>) {
       if (type === 'conversation.deleted') {
         deletedListeners.add(listener as (payload: unknown) => void);
         return () => {
@@ -3529,5 +3529,515 @@ test('doctorPluginDir rejects arbitrary top-level ctx.host.* and nested sub-port
     assert.equal(report.ok, false, `${slug} should fail doctor`);
     const reg = report.checks.find((c) => c.id === 'register');
     assert.equal(reg?.error?.code, 'unsupported', `${slug} should fail with 501 unsupported`);
+  }
+});
+
+test('ctx.getConfig(): merges configSchema defaults, clones non-secret values, allows defining/idle/stopWindow, and rejects with plugin_context_closed after disable/epoch advance', { timeout: 60_000 }, async () => {
+  const store = new MemoryConfigStore();
+  store.set('p:cfg-ctx', { custom: 'persisted', retries: 5, unsetKey: undefined });
+  const host = makeHost(store);
+  let defineCfg: Record<string, unknown> | undefined;
+  let stopCfg: Record<string, unknown> | undefined;
+  let capturedGetConfig!: () => Record<string, unknown>;
+
+  try {
+    await host.register({
+      id: 'p:cfg-ctx',
+      definePlugin(ctx) {
+        capturedGetConfig = () => ctx.getConfig();
+        ctx.configSchema({
+          mode: { type: 'string', default: 'fast' },
+          retries: { type: 'number', default: 2 },
+          tags: { type: 'string[]', default: ['alpha'] },
+          unsetKey: { type: 'string', default: 'fallback' },
+          apiKey: { type: 'string', secret: true, default: 'sec-default' },
+        });
+        defineCfg = ctx.getConfig();
+        ctx.action({
+          id: 'read_cfg',
+          description: 'Read effective config at runtime',
+          inputSchema: { type: 'object' },
+          outputSchema: { type: 'object' },
+          handler: () => ctx.getConfig(),
+        });
+        ctx.service({
+          id: 'svc',
+          start() {},
+          stop() {
+            stopCfg = ctx.getConfig();
+          },
+        });
+      },
+    });
+
+    // 1. definePlugin saw schema defaults merged with persisted overrides (explicit undefined did not erase default)
+    assert.deepEqual(defineCfg, {
+      mode: 'fast',
+      retries: 5,
+      tags: ['alpha'],
+      unsetKey: 'fallback',
+      apiKey: 'sec-default',
+      custom: 'persisted',
+    });
+
+    // 2. Runtime ctx.getConfig matches PluginHost.getConfig and safely clones non-secret array defaults
+    const runtimeCfg = capturedGetConfig();
+    assert.deepEqual(runtimeCfg, host.getConfig('p:cfg-ctx'));
+    (runtimeCfg['tags'] as string[]).push('mutated');
+    assert.deepEqual(capturedGetConfig()['tags'], ['alpha']);
+    assert.deepEqual(host.getConfig('p:cfg-ctx')['tags'], ['alpha']);
+
+    // Persisted updates are reflected live on ctx.getConfig()
+    await host.setConfig('p:cfg-ctx', { mode: 'deep', tags: ['beta'] });
+    const afterSet = (await host.invokeAction('p:cfg-ctx', 'read_cfg', {})) as Record<string, unknown>;
+    assert.equal(afterSet['mode'], 'deep');
+    assert.deepEqual(afterSet['tags'], ['beta']);
+
+    // 3. Works during service.stop() stopWindow, then rejects with 409 plugin_context_closed after disable
+    const staleGetConfig = capturedGetConfig;
+    await host.disable('p:cfg-ctx');
+    assert.equal(stopCfg?.['mode'], 'deep');
+    assert.throws(
+      () => staleGetConfig(),
+      (err: unknown) => err instanceof HelmxError && err.code === 'plugin_context_closed' && err.status === 409,
+    );
+
+    // 4. After re-enable (epoch advance), old ctx.getConfig still rejects while new cycle works
+    await host.enable('p:cfg-ctx');
+    assert.throws(
+      () => staleGetConfig(),
+      (err: unknown) => err instanceof HelmxError && err.code === 'plugin_context_closed' && err.status === 409,
+    );
+    assert.equal(capturedGetConfig()['mode'], 'deep');
+
+    // 5. Registering with enabled: false allows getConfig in definePlugin, then rejects with plugin_context_closed once idle+disabled
+    let disabledDefCfg: Record<string, unknown> | undefined;
+    let disabledStaleGet!: () => Record<string, unknown>;
+    await host.register(
+      {
+        id: 'p:cfg-disabled',
+        definePlugin(ctx) {
+          ctx.configSchema({ level: { type: 'string', default: 'info' } });
+          disabledDefCfg = ctx.getConfig();
+          disabledStaleGet = () => ctx.getConfig();
+        },
+      },
+      { enabled: false },
+    );
+    assert.deepEqual(disabledDefCfg, { level: 'info' });
+    assert.throws(
+      () => disabledStaleGet(),
+      (err: unknown) => err instanceof HelmxError && err.code === 'plugin_context_closed' && err.status === 409,
+    );
+  } finally {
+    await host.dispose();
+  }
+});
+
+test('doctorPluginDir supports durable/transient ctx.sessionDoc and top-level ctx.host.onEvent while still rejecting runtime conversation reads', { timeout: 60_000 }, async (t) => {
+  const baseDir = await makeTempDir('helmx-doctor-parity-');
+  t.after(() => cleanupDir(baseDir));
+  const buildProvider = createPluginBuildProvider();
+
+  // 1. External plugin declaring durable + transient sessionDocs and top-level host.onEvent passes doctor cleanly
+  const okDir = join(baseDir, 'parity-ok');
+  mkdirSync(okDir, { recursive: true });
+  writeFileSync(join(okDir, 'plugin.json'), JSON.stringify({ id: 'ext-parity-ok', main: 'index.ts' }));
+  writeFileSync(
+    join(okDir, 'index.ts'),
+    `export default {
+  id: 'ext-parity-ok',
+  definePlugin(ctx: any) {
+    ctx.sessionDoc('runs', { items: [] }, { public: true });
+    ctx.sessionDoc('live', { status: 'idle' }, { public: true, durable: false });
+    ctx.host.onEvent('conversation.deleted', () => {});
+  },
+};\n`,
+  );
+  const okReport = await doctorPluginDir(okDir, { buildProvider });
+  assert.equal(okReport.ok, true, `expected doctor ok, got checks: ${JSON.stringify(okReport.checks)}`);
+  assert.ok(okReport.manifest, 'doctor must produce manifest projection');
+  assert.deepEqual(okReport.manifest.docs, [
+    { name: 'live', kind: 'sessionDoc', public: true, durable: false },
+    { name: 'runs', kind: 'sessionDoc', public: true, durable: true },
+  ]);
+
+  // 2. Top-level sessionDoc tuple read still fails honestly with 501 unsupported (never fabricates conversations)
+  const badDir = join(baseDir, 'parity-runtime-read');
+  mkdirSync(badDir, { recursive: true });
+  writeFileSync(join(badDir, 'plugin.json'), JSON.stringify({ id: 'ext-parity-bad', main: 'index.ts' }));
+  writeFileSync(
+    join(badDir, 'index.ts'),
+    `export default {
+  id: 'ext-parity-bad',
+  definePlugin(ctx: any) {
+    const runs = ctx.sessionDoc('runs', { items: [] }, { public: true });
+    runs.get(1);
+  },
+};\n`,
+  );
+  const badReport = await doctorPluginDir(badDir, { buildProvider });
+  assert.equal(badReport.ok, false);
+  const regCheck = badReport.checks.find((c) => c.id === 'register');
+  assert.equal(regCheck?.error?.code, 'unsupported');
+});
+
+test('tool & CLI command uniqueness: rejects kernel/core/intra-plugin collisions at registration and cross-plugin collisions at enable commit', { timeout: 60_000 }, async () => {
+  const host = makeHost();
+  const emptySchema = { type: 'object', properties: {} } as const;
+  try {
+    // 1. Kernel tool name collision rejected at registration (ctx.tool and exposeAsTool)
+    await assertRejectsCode(
+      () =>
+        host.register({
+          id: 'p:kernel-tool',
+          definePlugin(ctx) {
+            ctx.tool({ name: 'bash', description: 'shadow bash', inputSchema: emptySchema, execute: () => 'x' });
+          },
+        }),
+      'duplicate_tool_name',
+      409,
+    );
+    await assertRejectsCode(
+      () =>
+        host.register({
+          id: 'p:kernel-action-tool',
+          definePlugin(ctx) {
+            ctx.action({
+              id: 'shadow',
+              description: 'shadow run_action',
+              inputSchema: emptySchema,
+              outputSchema: emptySchema,
+              exposeAsTool: { name: 'run_action' },
+              handler: () => ({}),
+            });
+          },
+        }),
+      'duplicate_tool_name',
+      409,
+    );
+
+    // 2. Intra-plugin tool collisions (tool+tool, tool+exposeAsTool, exposeAsTool+tool, exposeAsTool+exposeAsTool)
+    await assertRejectsCode(
+      () =>
+        host.register({
+          id: 'p:intra-t-t',
+          definePlugin(ctx) {
+            ctx.tool({ name: 'dup_local', description: 'a', inputSchema: emptySchema, execute: () => 'a' });
+            ctx.tool({ name: 'dup_local', description: 'b', inputSchema: emptySchema, execute: () => 'b' });
+          },
+        }),
+      'duplicate_tool_name',
+      409,
+    );
+    await assertRejectsCode(
+      () =>
+        host.register({
+          id: 'p:intra-t-a',
+          definePlugin(ctx) {
+            ctx.tool({ name: 'shared_fn', description: 'a', inputSchema: emptySchema, execute: () => 'a' });
+            ctx.action({
+              id: 'op',
+              description: 'b',
+              inputSchema: emptySchema,
+              outputSchema: emptySchema,
+              exposeAsTool: { name: 'shared_fn' },
+              handler: () => ({}),
+            });
+          },
+        }),
+      'duplicate_tool_name',
+      409,
+    );
+    await assertRejectsCode(
+      () =>
+        host.register({
+          id: 'p:intra-a-a',
+          definePlugin(ctx) {
+            ctx.action({
+              id: 'op1',
+              description: 'a',
+              inputSchema: emptySchema,
+              outputSchema: emptySchema,
+              exposeAsTool: { name: 'same_exposed' },
+              handler: () => ({}),
+            });
+            ctx.action({
+              id: 'op2',
+              description: 'b',
+              inputSchema: emptySchema,
+              outputSchema: emptySchema,
+              exposeAsTool: { name: 'same_exposed' },
+              handler: () => ({}),
+            });
+          },
+        }),
+      'duplicate_tool_name',
+      409,
+    );
+
+    // 3. Core CLI command collisions (exact, prefix-of-core, subcommand-under-core, default path)
+    for (const [slug, pluginId, actionId, command] of [
+      ['exact-two', 'p:cli-1', 'a', ['plugins', 'list']],
+      ['exact-one', 'p:cli-2', 'a', ['search']],
+      ['prefix-core', 'p:cli-3', 'a', ['plugins']],
+      ['under-core-two', 'p:cli-4', 'a', ['plugins', 'list', 'all']],
+      ['under-core-one', 'p:cli-5', 'a', ['status', 'detail']],
+      ['default-path', 'builtin:plugins', 'list', undefined],
+    ] as const) {
+      await assertRejectsCode(
+        () =>
+          host.register({
+            id: pluginId,
+            definePlugin(ctx) {
+              ctx.action({
+                id: actionId,
+                description: slug,
+                inputSchema: emptySchema,
+                outputSchema: emptySchema,
+                ...(command !== undefined ? { cli: { command: [...command] } } : {}),
+                handler: () => ({}),
+              });
+            },
+          }),
+        'duplicate_cli_command',
+        409,
+      );
+    }
+
+    // 4. Intra-plugin CLI collisions (exact and prefix in both orders)
+    await assertRejectsCode(
+      () =>
+        host.register({
+          id: 'p:cli-intra-exact',
+          definePlugin(ctx) {
+            ctx.action({ id: 'a1', description: 'a1', cli: { command: ['alpha', 'run'] }, inputSchema: emptySchema, outputSchema: emptySchema, handler: () => ({}) });
+            ctx.action({ id: 'a2', description: 'a2', cli: { command: ['alpha', 'run'] }, inputSchema: emptySchema, outputSchema: emptySchema, handler: () => ({}) });
+          },
+        }),
+      'duplicate_cli_command',
+      409,
+    );
+    await assertRejectsCode(
+      () =>
+        host.register({
+          id: 'p:cli-intra-prefix',
+          definePlugin(ctx) {
+            ctx.action({ id: 'a1', description: 'a1', cli: { command: ['alpha', 'run'] }, inputSchema: emptySchema, outputSchema: emptySchema, handler: () => ({}) });
+            ctx.action({ id: 'a2', description: 'a2', cli: { command: ['alpha'] }, inputSchema: emptySchema, outputSchema: emptySchema, handler: () => ({}) });
+          },
+        }),
+      'duplicate_cli_command',
+      409,
+    );
+
+    // 5. Hidden / ui / internal actions and non-colliding sibling subcommands are allowed
+    await host.register({
+      id: 'p:cli-non-colliding',
+      definePlugin(ctx) {
+        ctx.action({ id: 'ui_list', description: 'ui', visibility: 'ui', inputSchema: emptySchema, outputSchema: emptySchema, handler: () => ({}) });
+        ctx.action({ id: 'hidden_list', description: 'hidden', cli: { hidden: true, command: ['plugins', 'list'] }, inputSchema: emptySchema, outputSchema: emptySchema, handler: () => ({}) });
+        ctx.action({ id: 'sibling', description: 'sibling', cli: { command: ['plugins', 'custom-ext'] }, inputSchema: emptySchema, outputSchema: emptySchema, handler: () => ({}) });
+      },
+    });
+
+    // 6. Cross-plugin tool & CLI collisions rejected at enable commit (never poison listTools()),
+    //    while disabled plugins do not reserve global names.
+    await host.register(
+      {
+        id: 'p:tool-holder',
+        definePlugin(ctx) {
+          ctx.tool({ name: 'global_unique_tool', description: 'holder', inputSchema: emptySchema, execute: () => 'ok' });
+          ctx.action({
+            id: 'do_thing',
+            description: 'holder cli',
+            cli: { command: ['team', 'deploy'] },
+            inputSchema: emptySchema,
+            outputSchema: emptySchema,
+            handler: () => ({}),
+          });
+        },
+      },
+      { enabled: false },
+    );
+
+    // Active plugin succeeds while p:tool-holder is disabled
+    await host.register({
+      id: 'p:tool-active',
+      definePlugin(ctx) {
+        ctx.action({
+          id: 'deploy',
+          description: 'active cli + tool',
+          cli: { command: ['team', 'deploy', 'prod'] },
+          exposeAsTool: { name: 'global_unique_tool' },
+          inputSchema: emptySchema,
+          outputSchema: emptySchema,
+          handler: () => ({}),
+        });
+      },
+    });
+    assert.deepEqual(
+      host.listTools().map((t) => t.name),
+      ['global_unique_tool'],
+    );
+
+    // Enabling p:tool-holder now rejects with 409 duplicate_tool_name and leaves listTools() healthy
+    await assertRejectsCode(() => host.enable('p:tool-holder'), 'duplicate_tool_name', 409);
+    assert.equal(host.get('p:tool-holder')?.enabled, false);
+    assert.deepEqual(
+      host.listTools().map((t) => t.name),
+      ['global_unique_tool'],
+    );
+
+    // Cross-plugin CLI prefix collision (distinct tool name) rejects with 409 duplicate_cli_command
+    await host.register(
+      {
+        id: 'p:cli-prefix-rival',
+        definePlugin(ctx) {
+          ctx.action({
+            id: 'root',
+            description: 'rival cli prefix',
+            cli: { command: ['team', 'deploy'] },
+            inputSchema: emptySchema,
+            outputSchema: emptySchema,
+            handler: () => ({}),
+          });
+        },
+      },
+      { enabled: false },
+    );
+    await assertRejectsCode(() => host.enable('p:cli-prefix-rival'), 'duplicate_cli_command', 409);
+    assert.equal(host.get('p:cli-prefix-rival')?.enabled, false);
+
+    // Disabling active holder releases both tool name and CLI prefix so disabled plugins can enable
+    await host.disable('p:tool-active');
+    await host.enable('p:tool-holder');
+    assert.equal(host.get('p:tool-holder')?.enabled, true);
+    assert.deepEqual(
+      host.listTools().map((t) => t.name),
+      ['global_unique_tool'],
+    );
+  } finally {
+    await host.dispose();
+  }
+});
+
+test('concurrent enable race with colliding tool or CLI command commits only one winner and rolls back loser', { timeout: 60_000 }, async () => {
+  const emptySchema = { type: 'object', properties: {} } as const;
+  for (const kind of ['tool', 'cli'] as const) {
+    const enabled = new Map<string, boolean>();
+    let arrived = 0;
+    const gate = deferred();
+    const ready = deferred();
+    const host = makeHost({
+      get: () => ({}),
+      set: () => {},
+      getEnabled: (id) => enabled.get(id),
+      setEnabled: async (id, value) => {
+        enabled.set(id, value);
+        if (!value) return;
+        arrived += 1;
+        if (arrived === 2) ready.resolve();
+        await gate.promise;
+      },
+    });
+    const makeDef = (id: string): PluginDefinition => ({
+      id,
+      definePlugin(ctx) {
+        if (kind === 'tool') {
+          ctx.tool({ name: 'race_shared_tool', description: id, inputSchema: emptySchema, execute: () => id });
+        } else {
+          ctx.action({
+            id: 'op',
+            description: id,
+            cli: { command: ['racecmd', 'run'] },
+            inputSchema: emptySchema,
+            outputSchema: emptySchema,
+            handler: () => ({}),
+          });
+        }
+      },
+    });
+    try {
+      await host.register(makeDef(`p:race-${kind}-a`), { enabled: false });
+      await host.register(makeDef(`p:race-${kind}-b`), { enabled: false });
+      const settled = Promise.allSettled([host.enable(`p:race-${kind}-a`), host.enable(`p:race-${kind}-b`)]);
+      await ready.promise;
+      gate.resolve();
+      const results = await settled;
+      assert.equal(results.filter((r) => r.status === 'fulfilled').length, 1);
+      const failed = results.find((r): r is PromiseRejectedResult => r.status === 'rejected')!;
+      assert.ok(failed.reason instanceof HelmxError);
+      assert.equal(failed.reason.status, 409);
+      assert.equal(failed.reason.code, kind === 'tool' ? 'duplicate_tool_name' : 'duplicate_cli_command');
+      assert.equal(host.list().filter((p) => p.enabled).length, 1);
+      assert.doesNotThrow(() => host.listTools());
+    } finally {
+      gate.resolve();
+      await host.dispose();
+    }
+  }
+});
+
+test('concurrent register race with colliding tool or CLI command commits only one winner and rolls back loser', { timeout: 60_000 }, async () => {
+  const emptySchema = { type: 'object', properties: {} } as const;
+  for (const kind of ['tool', 'cli'] as const) {
+    let arrived = 0;
+    const gate = deferred();
+    const ready = deferred();
+    const stopped: string[] = [];
+    const host = makeHost();
+    await host.start();
+    const makeDef = (id: string): PluginDefinition => ({
+      id,
+      definePlugin(ctx) {
+        if (kind === 'tool') {
+          ctx.tool({ name: 'reg_race_shared_tool', description: id, inputSchema: emptySchema, execute: () => id });
+        } else {
+          ctx.action({
+            id: 'op',
+            description: id,
+            cli: { command: ['regrace', 'run'] },
+            inputSchema: emptySchema,
+            outputSchema: emptySchema,
+            handler: () => ({}),
+          });
+        }
+        ctx.service({
+          id: 'svc',
+          async start() {
+            arrived += 1;
+            if (arrived === 2) ready.resolve();
+            await gate.promise;
+          },
+          stop() {
+            stopped.push(id);
+          },
+        });
+      },
+    });
+    try {
+      const settled = Promise.allSettled([
+        host.register(makeDef(`p:reg-race-${kind}-a`), { enabled: true }),
+        host.register(makeDef(`p:reg-race-${kind}-b`), { enabled: true }),
+      ]);
+      await ready.promise;
+      gate.resolve();
+      const results = await settled;
+      assert.equal(results.filter((r) => r.status === 'fulfilled').length, 1);
+      const failed = results.find((r): r is PromiseRejectedResult => r.status === 'rejected')!;
+      assert.ok(failed.reason instanceof HelmxError);
+      assert.equal(failed.reason.status, 409);
+      assert.equal(failed.reason.code, kind === 'tool' ? 'duplicate_tool_name' : 'duplicate_cli_command');
+      const enabledPlugins = host.list().filter((p) => p.enabled);
+      assert.equal(enabledPlugins.length, 1);
+      assert.equal(stopped.length, 1, 'loser service must be stopped during rollback');
+      assert.notEqual(stopped[0], enabledPlugins[0]!.id);
+      assert.doesNotThrow(() => host.listTools());
+      assert.doesNotThrow(() => host.listActions());
+    } finally {
+      gate.resolve();
+      await host.dispose();
+    }
   }
 });

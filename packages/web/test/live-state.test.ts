@@ -198,11 +198,18 @@ const nodesSnapshot: HelmxSnapshot = {
 }
 
 test('快照 nodes 写入 live.nodes，local 恒在首项且其余按 id 稳定排列', { timeout: 60_000 }, () => {
+  assert.equal(emptyLiveState().nodesLoaded, false)
   const state = applySnapshot(emptyLiveState(), nodesSnapshot)
+  assert.equal(state.nodesLoaded, true)
   assert.deepEqual(state.nodes.map((n) => n.id), ['local', 'gpu-box'])
-  // 缺 nodes 字段时不报错，回退为空。
+  // 缺 nodes 字段时不报错，回退为空且保持 nodesLoaded=false。
   const bare = applySnapshot(emptyLiveState(), snapshot)
   assert.deepEqual(bare.nodes, [])
+  assert.equal(bare.nodesLoaded, false)
+  // 空数组快照显式标记为已加载空列表。
+  const loadedEmpty = applySnapshot(emptyLiveState(), { ...snapshot, nodes: [] })
+  assert.deepEqual(loadedEmpty.nodes, [])
+  assert.equal(loadedEmpty.nodesLoaded, true)
   // sortNodes：local 置顶、其余稳定。
   const bNode: NodeInfo = { id: 'b', kind: 'byom', online: false }
   const aNode: NodeInfo = { id: 'a', kind: 'byom', online: false }

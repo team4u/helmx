@@ -29,10 +29,12 @@ export interface LiveState {
   uiContributions: PluginUiContribution[]
   pluginDocs: Record<string, unknown>
   nodes: NodeInfo[]
+  /** Whether the host has received an authoritative node list (`snapshot.nodes`, `node.changed`, or `refreshNodes`). */
+  nodesLoaded: boolean
 }
 
 export function emptyLiveState(): LiveState {
-  return { seq: -1, conversations: [], conversationDetails: {}, pendingEntries: {}, conversationLives: {}, pendingAsks: [], resolvedAsksByConv: {}, plugins: [], uiContributions: [], pluginDocs: {}, nodes: [] }
+  return { seq: -1, conversations: [], conversationDetails: {}, pendingEntries: {}, conversationLives: {}, pendingAsks: [], resolvedAsksByConv: {}, plugins: [], uiContributions: [], pluginDocs: {}, nodes: [], nodesLoaded: false }
 }
 
 function sortConversations(list: ConversationSummary[]): ConversationSummary[] {
@@ -303,7 +305,8 @@ export function applySnapshot(previous: LiveState, snapshot: HelmxSnapshot): Liv
     }
   }
   const uiContributions = snapshot.ui.filter((item) => !inactivePluginIds.has(item.pluginId))
-  return { ...emptyLiveState(), seq: snapshot.seq, conversations: sortConversations(snapshot.conversations), conversationDetails, conversationLives, pendingAsks: snapshot.pendingAsks, plugins: snapshot.plugins, uiContributions, pluginDocs, nodes: Array.isArray(snapshot.nodes) ? sortNodes(snapshot.nodes) : [], resolvedAsksByConv: previous.resolvedAsksByConv }
+  const hasNodes = Array.isArray(snapshot.nodes)
+  return { ...emptyLiveState(), seq: snapshot.seq, conversations: sortConversations(snapshot.conversations), conversationDetails, conversationLives, pendingAsks: snapshot.pendingAsks, plugins: snapshot.plugins, uiContributions, pluginDocs, nodes: hasNodes ? sortNodes(snapshot.nodes!) : [], nodesLoaded: hasNodes, resolvedAsksByConv: previous.resolvedAsksByConv }
 }
 
 export function entryMatchesReference(entry: ConversationEntry, reference: string): boolean {
@@ -517,6 +520,7 @@ export function applyEventFrame(state: LiveState, frame: HelmxEventFrame): LiveS
           event.removed === true
             ? state.nodes.filter((item) => item.id !== event.node.id)
             : sortNodes(upsert(state.nodes, event.node))
+        next.nodesLoaded = true
       }
       break
   }

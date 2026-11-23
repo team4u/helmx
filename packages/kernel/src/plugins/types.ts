@@ -193,6 +193,7 @@ export const STOP_WINDOW_HOST_CALLS: ReadonlySet<string> = new Set([
   'host.nodeIpc.isOnline',
   'host.nodeIpc.getNodeHubUrl',
   'host.nodeIpc.nodePlatform',
+  'host.nodeIpc.listNodes',
   'host.openTunnel',
 ]);
 

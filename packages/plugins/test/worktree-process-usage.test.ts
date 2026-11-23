@@ -31,6 +31,7 @@ import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { createEnvFabric } from '../../kernel/src/env/fabric.js'
 import { WorktreeAllocator } from '../src/worktree/worktree.js'
 import { createGitTemplate, type GitTemplate } from '@helmx/test-kit/git'
+import { createMemoryWorktreeKv, MemoryKvStore } from './helpers/plugin-test-env.js'
 
 let rootDir: string
 let gitTemplate: GitTemplate
@@ -78,19 +79,11 @@ function localPorts() {
 }
 
 /** local 真实端口（与生产同契约）+ 指定 fabric 的进程占用探测。 */
-function makeAllocator(fabric: ReturnType<typeof createEnvFabric>, docs: Map<string, unknown>): WorktreeAllocator {
-  const docStore = {
-    get<T>(key: string, initial: T): T {
-      return (docs.get(key) as T | undefined) ?? initial
-    },
-    set<T>(key: string, value: T): void {
-      docs.set(key, value)
-    },
-  }
+function makeAllocator(fabric: ReturnType<typeof createEnvFabric>, kvStore: MemoryKvStore): WorktreeAllocator {
   return new WorktreeAllocator({
     ...localPorts(),
     inspectPathUsage: (nodeId, path, signal) => fabric.inspectPathUsage(nodeId, path, signal),
-    docStore,
+    kv: createMemoryWorktreeKv(kvStore),
   })
 }
 
@@ -135,13 +128,13 @@ async function expectCleanupOkOrFailClosed(fn: () => Promise<{ removed: boolean 
   }
 }
 
-async function allocateCleanWorktree(name: string): Promise<{ repo: string; record: ReturnType<WorktreeAllocator['list']>[number]; allocator: WorktreeAllocator; fabric: ReturnType<typeof createEnvFabric>; docs: Map<string, unknown> }> {
+async function allocateCleanWorktree(name: string): Promise<{ repo: string; record: ReturnType<WorktreeAllocator['list']>[number]; allocator: WorktreeAllocator; fabric: ReturnType<typeof createEnvFabric>; kvStore: MemoryKvStore }> {
   const repo = makeGitRepo(join(rootDir, name, 'repo'))
   const fabric = createEnvFabric({})
-  const docs = new Map<string, unknown>()
-  const allocator = makeAllocator(fabric, docs)
+  const kvStore = new MemoryKvStore()
+  const allocator = makeAllocator(fabric, kvStore)
   const record = await allocator.allocate({ nodeId: 'local', sourceCwd: repo, parentConversationId: 1 })
-  return { repo, record, allocator, fabric, docs }
+  return { repo, record, allocator, fabric, kvStore }
 }
 
 describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { timeout: 60_000 }, () => {
@@ -229,8 +222,8 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
     execFileSync('git', ['add', '.gitignore'], { cwd: repo })
     execFileSync('git', ['commit', '-qm', 'ignore env'], { cwd: repo })
     const fabric = createEnvFabric({})
-    const docs = new Map<string, unknown>()
-    const allocator = makeAllocator(fabric, docs)
+    const kvStore = new MemoryKvStore()
+    const allocator = makeAllocator(fabric, kvStore)
     const record = await allocator.allocate({ nodeId: 'local', sourceCwd: repo, parentConversationId: 1 })
     writeFileSync(join(record.path, 'draft.txt'), 'uncommitted draft\n')
     await assert.rejects(
@@ -252,22 +245,14 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
     // 直接对 allocator 注入离线探测（远程节点离线在 fabric 层即抛 node_offline，
     // allocator 将其映射为 worktree_process_check_failed；此处用假 fabric 同构验证）。
     const brokenFabric = createEnvFabric({})
-    const docs = new Map<string, unknown>([
-      ['runtime/worktrees', { version: 1, records: [record] }],
-    ])
+    const brokenKv = new MemoryKvStore()
+    brokenKv.setParsed('builtin:worktree', 'worktrees', record.id, record)
     const broken = new WorktreeAllocator({
       ...localPorts(),
       inspectPathUsage: async () => {
         throw new HelmxError('node_offline', '节点 remote-x 离线，无法建立 IPC 通道', 409)
       },
-      docStore: {
-        get<T>(key: string, initial: T): T {
-          return (docs.get(key) as T | undefined) ?? initial
-        },
-        set<T>(key: string, value: T): void {
-          docs.set(key, value)
-        },
-      },
+      kv: createMemoryWorktreeKv(brokenKv),
     })
     void brokenFabric
     await assert.rejects(
@@ -287,10 +272,10 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
 
   it('快照不完整（complete=false）：worktree_process_check_failed 并携带 diagnostics', { timeout: 60_000 }, async () => {
     const repo = makeGitRepo(join(rootDir, 't5', 'repo'))
-    const docs = new Map<string, unknown>()
+    const kvStore = new MemoryKvStore()
     const record = await (async () => {
       const fabric = createEnvFabric({})
-      const allocator = makeAllocator(fabric, docs)
+      const allocator = makeAllocator(fabric, kvStore)
       return allocator.allocate({ nodeId: 'local', sourceCwd: repo, parentConversationId: 1 })
     })()
     const incomplete = new WorktreeAllocator({
@@ -304,14 +289,7 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
         unobservable: 0,
         diagnostics: ['pid 999 (uid 0): 无权读取 cwd（EACCES），该进程占用情况未知'],
       }),
-      docStore: {
-        get<T>(key: string, initial: T): T {
-          return (docs.get(key) as T | undefined) ?? initial
-        },
-        set<T>(key: string, value: T): void {
-          docs.set(key, value)
-        },
-      },
+      kv: createMemoryWorktreeKv(kvStore),
     })
     await assert.rejects(
       () => incomplete.cleanup({ worktreeId: record.id, force: true }),
@@ -326,15 +304,15 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
     assert.ok(existsSync(record.path))
     // 用真实完整探测的 allocator 清理（全可见正常 / 可见性不完整 fail-closed）。
     const fabric = createEnvFabric({})
-    const healthy = makeAllocator(fabric, docs)
+    const healthy = makeAllocator(fabric, kvStore)
     await expectCleanupOkOrFailClosed(() => healthy.cleanup({ worktreeId: record.id }))
   })
 
   it('非 Linux Hub 平台（注入 hubPlatform=win32）：fabric 显式 not_supported → cleanup fail-closed', { timeout: 60_000 }, async () => {
     const repo = makeGitRepo(join(rootDir, 't6', 'repo'))
     const fabric = createEnvFabric({ hubPlatform: () => 'win32' })
-    const docs = new Map<string, unknown>()
-    const allocator = makeAllocator(fabric, docs)
+    const kvStore = new MemoryKvStore()
+    const allocator = makeAllocator(fabric, kvStore)
     const record = await allocator.allocate({ nodeId: 'local', sourceCwd: repo, parentConversationId: 1 })
     await assert.rejects(
       () => fabric.inspectPathUsage('local', record.path),

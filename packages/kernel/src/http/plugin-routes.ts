@@ -10,6 +10,7 @@ import { HelmxError, isPluginSummaryActive } from '@helmx/protocol'
 import type { JsonSchema, PluginConfigFieldSchema, PublicPluginSessionDoc } from '@helmx/protocol'
 import { gzipSync } from 'node:zlib'
 import { redactJsonValue } from '../redact.js'
+import { markStreamingJsonBody } from './gzip.js'
 import { errorResponse, jsonOk, readJsonBody, type JsonRedactor } from './http-utils.js'
 import { decodeSegment, findPluginRoute } from './route-match.js'
 import type { KernelRuntimeLike } from './contracts.js'
@@ -411,9 +412,173 @@ async function serveClientModule(
   })
 }
 
+/** Maximum byte budget for buffering `application/json` / `*+json` plugin route bodies before falling back to streaming redaction. */
+export const PLUGIN_ROUTE_JSON_REDACT_MAX_BYTES = 4 * 1024 * 1024
+
+interface RouteTaskHandle {
+  readonly tracked: boolean
+  end(): void
+  waitIfEnded(): Promise<void>
+}
+
+function acquireRouteTask(
+  plugins: KernelRuntimeLike['plugins'],
+  pluginId: string,
+  label: string,
+): RouteTaskHandle {
+  if (plugins.beginTask !== undefined && plugins.endTask !== undefined) {
+    plugins.beginTask(pluginId, label)
+    let ended = false
+    return {
+      tracked: true,
+      end() {
+        if (ended) return
+        ended = true
+        plugins.endTask!(pluginId, label)
+      },
+      waitIfEnded: async () => {},
+    }
+  }
+  if (plugins.withTask !== undefined) {
+    let release!: () => void
+    const done = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let ended = false
+    const taskPromise = plugins.withTask(pluginId, label, () => done).catch(() => {})
+    return {
+      tracked: true,
+      end() {
+        if (ended) return
+        ended = true
+        release()
+      },
+      async waitIfEnded() {
+        if (ended) await taskPromise
+      },
+    }
+  }
+  return {
+    tracked: false,
+    end() {},
+    waitIfEnded: async () => {},
+  }
+}
+
+/**
+ * Wraps a plugin route's outbound `ReadableStream` so `liveTasks` stays active until the stream
+ * completes, errors, is cancelled, or the request signal aborts. Runs a non-blocking microtask
+ * probe so already-buffered single-chunk responses (`Response.json`, `new Response('text')`, etc.)
+ * settle and release their task immediately without hanging `liveTasks` if unread.
+ */
+async function trackReadableStream(
+  body: ReadableStream<Uint8Array>,
+  signal: AbortSignal | undefined,
+  onEnd: () => void,
+): Promise<ReadableStream<Uint8Array>> {
+  const reader = body.getReader()
+  const buffered: Uint8Array[] = []
+  let inFlight: Promise<void> | null = null
+  let streamClosed = false
+  let streamErrored = false
+  let streamError: unknown
+  let finished = false
+
+  const finish = (): void => {
+    if (finished) return
+    finished = true
+    signal?.removeEventListener('abort', onAbort)
+    onEnd()
+  }
+
+  const onAbort = (): void => {
+    buffered.length = 0
+    streamClosed = true
+    finish()
+    void reader.cancel(signal?.reason).catch(() => {})
+  }
+
+  if (signal !== undefined) {
+    if (signal.aborted) {
+      onAbort()
+    } else {
+      signal.addEventListener('abort', onAbort, { once: true })
+    }
+  }
+
+  const startRead = (): Promise<void> => {
+    if (inFlight !== null) return inFlight
+    if (streamClosed || streamErrored) return Promise.resolve()
+    inFlight = reader.read().then(
+      (res) => {
+        inFlight = null
+        if (streamClosed) return
+        if (res.done) {
+          streamClosed = true
+          finish()
+        } else if (res.value !== undefined) {
+          buffered.push(res.value)
+        }
+      },
+      (err) => {
+        inFlight = null
+        if (streamClosed) return
+        streamErrored = true
+        streamError = err
+        finish()
+      },
+    )
+    return inFlight
+  }
+
+  if (!finished) {
+    void startRead()
+    await Promise.resolve()
+    await Promise.resolve()
+    if (inFlight === null && !streamClosed && !streamErrored && buffered.length === 1) {
+      void startRead()
+      await Promise.resolve()
+      await Promise.resolve()
+    }
+  }
+
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      while (true) {
+        if (buffered.length > 0) {
+          controller.enqueue(buffered.shift()!)
+          if (buffered.length === 0 && streamClosed) {
+            controller.close()
+            finish()
+          }
+          return
+        }
+        if (streamErrored) {
+          finish()
+          controller.error(streamError)
+          return
+        }
+        if (streamClosed) {
+          finish()
+          controller.close()
+          return
+        }
+        await startRead()
+      }
+    },
+    async cancel(reason) {
+      buffered.length = 0
+      streamClosed = true
+      finish()
+      await reader.cancel(reason).catch(() => {})
+    },
+  })
+}
+
 /**
  * Dispatches dynamic plugin routes (`/api/plugins/<id>/routes/...`) using `findPluginRoute`.
- * Re-checks plugin enabled state via summary (409 if disabled) and tracks handler execution in `liveTasks`.
+ * Re-checks plugin enabled state via summary (409 if disabled) and tracks both handler execution
+ * and open outbound response streams in `liveTasks` until completion, error, cancellation, or abort.
  */
 async function dispatchPluginRoute(
   kernel: KernelRuntimeLike,
@@ -434,34 +599,114 @@ async function dispatchPluginRoute(
       pluginId: found.pluginId,
     })
   }
-  const invokeHandler = (): Promise<Response> =>
-    Promise.resolve(found.route.handler(request, { params: found.params }))
-  const response = await (kernel.plugins.withTask !== undefined
-    ? kernel.plugins.withTask(found.pluginId, `route:${found.route.method} ${found.route.path}`, invokeHandler)
-    : invokeHandler())
-  if (!(response instanceof Response)) {
-    throw new HelmxError('invalid_route_handler_output', 'Plugin route handler must return a Response', 500)
+  const taskLabel = `route:${found.route.method} ${found.route.path}`
+  const task = acquireRouteTask(kernel.plugins, found.pluginId, taskLabel)
+  try {
+    const response = await Promise.resolve(found.route.handler(request, { params: found.params }))
+    if (!(response instanceof Response)) {
+      throw new HelmxError('invalid_route_handler_output', 'Plugin route handler must return a Response', 500)
+    }
+    let trackedResponse = response
+    if (response.body === null) {
+      task.end()
+    } else if (task.tracked) {
+      const trackedBody = await trackReadableStream(response.body, request.signal, () => task.end())
+      trackedResponse = new Response(trackedBody, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: new Headers(response.headers),
+      })
+    }
+    const finalResponse = await redactPluginRouteResponse(trackedResponse, kernel.stash)
+    await task.waitIfEnded()
+    return finalResponse
+  } catch (err) {
+    task.end()
+    await task.waitIfEnded()
+    throw err
   }
-  return redactPluginRouteResponse(response, kernel.stash)
 }
 
-function classifyPluginRouteMediaType(contentType: string | null): 'json' | 'text' | 'sse' | 'other' {
+function classifyPluginRouteMediaType(contentType: string | null): 'json' | 'stream-text' | 'other' {
   if (contentType === null) return 'other'
   const mediaType = contentType.split(';')[0]?.trim().toLowerCase() ?? ''
-  if (mediaType === 'text/event-stream') return 'sse'
   if (mediaType === 'application/json' || mediaType.endsWith('+json')) return 'json'
-  if (mediaType.startsWith('text/')) return 'text'
+  if (mediaType === 'application/x-ndjson' || mediaType === 'application/ndjson' || mediaType.startsWith('text/')) {
+    return 'stream-text'
+  }
   return 'other'
 }
 
+function createRedactingTextStream(
+  source: ReadableStream<Uint8Array>,
+  stash: NonNullable<KernelRuntimeLike['stash']>,
+): ReadableStream<Uint8Array> {
+  const reader = source.getReader()
+  const decoder = new TextDecoder()
+  const encoder = new TextEncoder()
+  const streamRedactor = stash.createStreamingRedactor?.()
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) {
+            reader.releaseLock()
+            const tail = decoder.decode()
+            const out = streamRedactor
+              ? (tail.length > 0 ? streamRedactor.push(tail) : '') + streamRedactor.flush()
+              : tail.length > 0
+                ? stash.redact(tail)
+                : ''
+            if (out.length > 0) controller.enqueue(encoder.encode(out))
+            controller.close()
+            return
+          }
+          if (value === undefined || value.byteLength === 0) continue
+          const text = decoder.decode(value, { stream: true })
+          const out = streamRedactor ? streamRedactor.push(text) : stash.redact(text)
+          if (out.length > 0) {
+            controller.enqueue(encoder.encode(out))
+            return
+          }
+        }
+      } catch (err) {
+        reader.releaseLock()
+        controller.error(err)
+      }
+    },
+    async cancel(reason) {
+      await reader.cancel(reason).catch(() => {})
+    },
+  })
+}
+
+function concatUint8Arrays(chunks: readonly Uint8Array[], totalBytes: number): Uint8Array {
+  if (chunks.length === 0) return new Uint8Array(0)
+  if (chunks.length === 1) return chunks[0]!
+  const out = new Uint8Array(totalBytes)
+  let offset = 0
+  for (const chunk of chunks) {
+    out.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  return out
+}
+
 /**
- * Automatically redacts text/JSON plugin route responses (`text/*`, `application/json`, `*+json`)
- * through `SecretStash.redact` while preserving status and headers. Binary and non-text streams
- * pass through untouched without buffering; `text/event-stream` is redacted chunk-by-chunk via TransformStream.
+ * Automatically redacts text/JSON plugin route responses through `SecretStash` while preserving status
+ * and headers:
+ * - `text/*` (including `text/event-stream`) and `application/x-ndjson` stream chunk-by-chunk via
+ *   `TransformStream` with zero full-body buffering;
+ * - `application/json` / `*+json` preserve exact JSON-aware redaction (`redactJsonValue`) up to
+ *   `maxJsonBytes` (default 4 MiB), seamlessly falling back to streaming `TransformStream` redaction
+ *   for oversized payloads without unbounded memory growth or truncation;
+ * - Binary/non-text and encoded responses pass through untouched without buffering.
  */
 async function redactPluginRouteResponse(
   response: Response,
   stash: KernelRuntimeLike['stash'],
+  maxJsonBytes = PLUGIN_ROUTE_JSON_REDACT_MAX_BYTES,
 ): Promise<Response> {
   if (stash === undefined || response.body === null) return response
   const encoding = response.headers.get('content-encoding')?.trim().toLowerCase()
@@ -473,48 +718,86 @@ async function redactPluginRouteResponse(
   const headers = new Headers(response.headers)
   headers.delete('content-length')
 
-  if (kind === 'sse') {
-    const decoder = new TextDecoder()
-    const encoder = new TextEncoder()
-    const streamRedactor = stash.createStreamingRedactor?.()
-    const redactedStream = response.body.pipeThrough(
-      new TransformStream<Uint8Array, Uint8Array>({
-        transform(chunk, controller) {
-          const text = decoder.decode(chunk, { stream: true })
-          const out = streamRedactor ? streamRedactor.push(text) : stash.redact(text)
-          if (out.length > 0) controller.enqueue(encoder.encode(out))
-        },
-        flush(controller) {
-          const tail = decoder.decode()
-          const out = streamRedactor
-            ? (tail.length > 0 ? streamRedactor.push(tail) : '') + streamRedactor.flush()
-            : tail.length > 0
-              ? stash.redact(tail)
-              : ''
-          if (out.length > 0) controller.enqueue(encoder.encode(out))
-        },
-      }),
-    )
-    return new Response(redactedStream, {
+  if (kind === 'stream-text') {
+    return new Response(createRedactingTextStream(response.body, stash), {
       status: response.status,
       statusText: response.statusText,
       headers,
     })
   }
 
-  const rawText = await response.text()
-  let redactedText: string
-  if (kind === 'json') {
+  const reader = response.body.getReader()
+  const chunks: Uint8Array[] = []
+  let totalBytes = 0
+  let exceeded = false
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (value === undefined || value.byteLength === 0) continue
+      chunks.push(value)
+      totalBytes += value.byteLength
+      if (totalBytes > maxJsonBytes) {
+        exceeded = true
+        break
+      }
+    }
+  } catch (err) {
+    await reader.cancel(err).catch(() => {})
+    throw err
+  }
+
+  if (!exceeded) {
+    reader.releaseLock()
+    const rawText = new TextDecoder().decode(concatUint8Arrays(chunks, totalBytes))
+    let redactedText: string
     try {
       const parsed: unknown = JSON.parse(rawText)
       redactedText = JSON.stringify(redactJsonValue(parsed, (text) => stash.redact(text)))
     } catch {
       redactedText = stash.redact(rawText)
     }
-  } else {
-    redactedText = stash.redact(rawText)
+    return new Response(redactedText, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    })
   }
-  return new Response(redactedText, {
+
+  let index = 0
+  const stitched = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      if (index < chunks.length) {
+        const next = chunks[index]!
+        chunks[index] = new Uint8Array(0)
+        index += 1
+        controller.enqueue(next)
+        return
+      }
+      try {
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) {
+            reader.releaseLock()
+            controller.close()
+            return
+          }
+          if (value !== undefined && value.byteLength > 0) {
+            controller.enqueue(value)
+            return
+          }
+        }
+      } catch (err) {
+        reader.releaseLock()
+        controller.error(err)
+      }
+    },
+    async cancel(reason) {
+      chunks.length = 0
+      await reader.cancel(reason).catch(() => {})
+    },
+  })
+  return new Response(markStreamingJsonBody(createRedactingTextStream(stitched, stash)), {
     status: response.status,
     statusText: response.statusText,
     headers,

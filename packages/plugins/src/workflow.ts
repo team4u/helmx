@@ -117,7 +117,9 @@ export function createWorkflowPlugin(): PluginDefinition {
             getConversation: (id) => ctx.host.getConversation(id),
             getConversationOwnership: (id) => ctx.host.getConversationOwnership(id),
             abortConversationGuarded: (id, guard) => ctx.host.abortConversationGuarded(id, guard),
-            emitEvent: (type, payload, options) => ctx.host.emitEvent(type, payload, options),
+            emitEvent(type: string, payload: unknown, options?: { broadcast?: boolean }) {
+              return ctx.host.emitEvent(type, payload, options)
+            },
             runGate: (command, options) => ctx.host.runGate(command, options),
             get isClosing() {
               return ctx.host.isClosing

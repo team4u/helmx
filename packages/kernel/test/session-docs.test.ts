@@ -80,7 +80,7 @@ function makeHostApi(options: { existing: Set<number> } = { existing: new Set([1
     execEnv: async () => {
       throw new HelmxError('unsupported', 'this fixture does not execute node commands', 501)
     },
-    emitEvent: (type, payload) => {
+    emitEvent(type: string, payload: unknown) {
       events.push({ type, payload })
     },
   }

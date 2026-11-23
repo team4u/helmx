@@ -1,7 +1,8 @@
 /**
  * PluginHost 唯一强类型插件契约：definePlugin(ctx)。
- * 后端 7 大可组合生命周期 Hook + ctx.action 单点 Schema 五端复用 + 宿主运行时 API。
- * 本文件只定义类型，不含任何运行时；动作合法性（如 tool_call 允许 block、
+ * 后端 4 个可组合生命周期 Hook（input / before_turn / agent_spawn / turn_settled）
+ * + ctx.action 单点 Schema 五端复用 + 前端 10 个全界面扩展点 + 宿主运行时 API。
+ * 本文件只定义类型，不含任何运行时；动作合法性（如仅 input 允许 block、
  * before_turn 只允许原地改写）由 host 在运行时校验。
  */
 
@@ -28,9 +29,11 @@ import type { Profile, SkillSummary, ModelCatalog, ModelProvidersRefreshResult, 
 import type {
   EnvExecRequest,
   EnvExecResponse,
+  NodeInfo,
   NodePathUsage,
   NodeTunnelTarget,
 } from './env-rpc.js'
+import type { HostEventEmitPayload, HostEventMap } from './events.js'
 import type { PluginUiContribution, PluginUiRegistry } from './ui.js'
 import type { AgentNamespacedMeta } from './meta.js'
 import type { ExecutionText, LocalizedText } from './locale.js'
@@ -389,6 +392,19 @@ export interface PluginServiceSpec {
   /** 返回仍需本服务保活的任务标签；宿主在停用/卸载前同步检查。 */
   liveTasks?(): string[]
   /**
+   * Post-startup recovery/reconciliation phase: runs after the global `prepare -> start`
+   * barrier and kernel scheduler resume (`harness.resume()`), executed strictly in
+   * topological order across active plugins (hard `dependencies` + active soft `reconcileAfter`).
+   * On hot-enable after host reconciliation has completed, runs immediately after `start()`.
+   */
+  reconcile?(): MaybePromise<void>
+  /**
+   * Optional plugin IDs whose `reconcile()` must finish before this service's `reconcile()`
+   * whenever those plugins are active. Soft ordering edge only: unregistered or disabled
+   * targets are ignored so optional peer ordering never creates hard enable/disable coupling.
+   */
+  reconcileAfter?: readonly string[]
+  /**
    * 声明本服务当前管辖的持久生效资源（非瞬态运行中任务）。
    * 非空时默认阻止停用（409 plugin_in_use），除非调用方显式指定 force: true。
    * 函数抛错时按「未知即占用」原则拒绝停用，绝不静默当空放行。
@@ -534,7 +550,7 @@ export interface HelmxHostSecretsPort {
   addRedaction(value: string): () => void
 }
 
-/** 节点只读状态与元信息端口（经内核 EnvFabric 查询在线状态、可达 Hub URL 与可信平台）。 */
+/** 节点只读状态与元信息端口（经内核 EnvFabric 查询在线状态、节点快照、可达 Hub URL 与可信平台）。 */
 export interface HelmxHostNodeIpcPort {
   /** 节点是否在线（'local' 恒 true）。 */
   isOnline(nodeId: string): boolean
@@ -542,6 +558,8 @@ export interface HelmxHostNodeIpcPort {
   getNodeHubUrl?(nodeId: string): string | undefined
   /** 节点注册时上报的可信平台（如 win32 / linux / darwin）；未上报或离线返回 undefined。 */
   nodePlatform?(nodeId: string): string | undefined
+  /** Read-only snapshot of registered compute nodes (including `local` and BYOM nodes; excludes credentials/tokens). */
+  listNodes?(): NodeInfo[]
 }
 
 /**
@@ -797,11 +815,32 @@ export interface HelmxHostApi {
    */
   createAsk(spec: AskCreateSpec): Promise<AskResult>
   cancelAsk(askId: string, reason?: 'cancelled' | 'superseded'): Promise<void>
-  /** 订阅宿主通用事件（真实 EventHub 广播事件与 broadcast:false 进程内事件；
-   * 含 'conversation.entry' 等 core 事件，payload 为 HelmxEvent 形状）；
-   * 插件停用时自动解除。监听器可异步，发布方会等待其完成。 */
+  /**
+   * Subscribe to a built-in host event with typed payload delivery (`EventHub` broadcast
+   * events, transient `conversation.live`, and `broadcast: false` in-process events).
+   * Automatically unsubscribed on plugin disable; listeners may be async and `emitEvent`
+   * callers await their completion.
+   */
+  onEvent<K extends keyof HostEventMap>(
+    type: K,
+    listener: (payload: HostEventMap[K]) => MaybePromise<void>,
+  ): () => void
+  /**
+   * Subscribe to a custom host/plugin event (`payload` is `unknown`).
+   * Automatically unsubscribed on plugin disable; listeners may be async.
+   */
   onEvent(type: string, listener: (payload: unknown) => MaybePromise<void>): () => void
-  /** 发布事件并等待内部监听器；broadcast:false 仅在进程内分发，不进入全局 SSE。 */
+  /**
+   * Publish a built-in host event and await internal listeners (accepts either a full
+   * event envelope or raw payload omitting `type`). Set `broadcast: false` for in-process
+   * dispatch only (never enters global SSE).
+   */
+  emitEvent<K extends keyof HostEventMap>(
+    type: K,
+    payload: HostEventEmitPayload<K>,
+    options?: { broadcast?: boolean },
+  ): MaybePromise<void>
+  /** Publish a custom plugin/workflow event and await internal listeners; `broadcast: false` dispatches in-process only. */
   emitEvent(type: string, payload: unknown, options?: { broadcast?: boolean }): MaybePromise<void>
 }
 
@@ -818,7 +857,7 @@ export interface HelmxPluginContext<TConfig = Record<string, unknown>> {
   /** 声明式配置 Schema（secret: true 自动分离至 credentials.json）。 */
   configSchema(schema: Record<string, PluginConfigFieldSchema>): void
 
-  /** 后端 7 大可组合生命周期 Hook。 */
+  /** 后端 4 个可组合生命周期 Hook（input / before_turn / agent_spawn / turn_settled）。 */
   hook: PluginHookRegistry
 
   /** 单点 Schema 动作总线（五端复用）。 */
@@ -850,6 +889,14 @@ export interface HelmxPluginContext<TConfig = Record<string, unknown>> {
    */
   consume<T>(capabilityId: string): ReadonlyArray<ProvidedCapability<T>>
 
+  /**
+   * Subscribe to changes in the active providers registered under `capabilityId`
+   * (invoked when providers are added, released, or change active status on plugin
+   * enable/disable/rollback). Automatically released when this plugin is disabled,
+   * stopped, or rolled back; returns an idempotent unsubscribe callback.
+   */
+  onCapabilityChanged(capabilityId: string, listener: () => void): () => void
+
   /** 后台服务（随插件启停生命周期管理）。 */
   service(spec: PluginServiceSpec): void
 
@@ -865,7 +912,7 @@ export interface HelmxPluginContext<TConfig = Record<string, unknown>> {
    */
   provider(provider: Provider): void
 
-  /** 前端 7 大全界面扩展点。 */
+  /** 前端 10 个全界面扩展点。 */
   ui: PluginUiRegistry
 
   /** 宿主运行时能力。 */

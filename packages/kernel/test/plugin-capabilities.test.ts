@@ -305,3 +305,117 @@ test('KernelRuntime ModelRegistry consumes helmx.model-tiers via capability regi
     await cleanupDir(dataDir)
   }
 })
+
+test('ctx.onCapabilityChanged: validates ID/listener, notifies active subscriber, supports idempotent unsubscribe, auto-releases on disable/rollback, and enforces epoch guard', { timeout: 60_000 }, async () => {
+  const dataDir = await makeTempDir('helmx-cap-onchanged-')
+  const host = makeHost(dataDir)
+  try {
+    const events: Array<{ at: string; providers: string[] }> = []
+    let manualUnsub!: () => void
+    let staleOnChanged!: (id: string, fn: () => void) => () => void
+
+    await host.register({
+      id: 'p:watcher',
+      definePlugin(ctx) {
+        staleOnChanged = ctx.onCapabilityChanged
+        // Auto-released listener (never unsubscribed manually)
+        ctx.onCapabilityChanged('demo.watch', () => {
+          events.push({
+            at: 'auto',
+            providers: ctx.consume<{ ok: true }>('demo.watch').map((e) => e.pluginId),
+          })
+        })
+        // Manually unsubscribed listener
+        manualUnsub = ctx.onCapabilityChanged('demo.watch', () => {
+          events.push({
+            at: 'manual',
+            providers: ctx.consume<{ ok: true }>('demo.watch').map((e) => e.pluginId),
+          })
+        })
+      },
+    })
+
+    // Provider registers -> both listeners observe ['p:src']
+    await host.register({
+      id: 'p:src',
+      definePlugin(ctx) {
+        ctx.provide('demo.watch', { ok: true })
+      },
+    })
+    assert.deepEqual(events, [
+      { at: 'auto', providers: ['p:src'] },
+      { at: 'manual', providers: ['p:src'] },
+    ])
+
+    // Manual unsubscribe is idempotent -> only auto listener fires on next change
+    manualUnsub()
+    manualUnsub()
+    await host.disable('p:src')
+    assert.deepEqual(events.slice(2), [{ at: 'auto', providers: [] }])
+
+    // Disabling watcher auto-releases remaining listener and expires stale ctx.onCapabilityChanged
+    await host.disable('p:watcher')
+    const countAfterWatcherDisable = events.length
+    await host.enable('p:src')
+    assert.equal(events.length, countAfterWatcherDisable, 'disabled plugin must not receive capability notifications')
+    assert.throws(
+      () => staleOnChanged('demo.watch', () => {}),
+      (err: unknown) => err instanceof HelmxError && err.code === 'plugin_context_expired' && err.status === 409,
+    )
+
+    // Rollback on definePlugin throw and enabled:false registration leak zero listeners
+    let leakedCalls = 0
+    await assert.rejects(
+      () =>
+        host.register({
+          id: 'p:rollback-watch',
+          definePlugin(ctx) {
+            ctx.onCapabilityChanged('demo.watch', () => {
+              leakedCalls += 1
+            })
+            throw new Error('define boom')
+          },
+        }),
+      (err: unknown) => err instanceof HelmxError && err.code === 'plugin_registration_failed',
+    )
+    await host.register(
+      {
+        id: 'p:disabled-watch',
+        definePlugin(ctx) {
+          ctx.onCapabilityChanged('demo.watch', () => {
+            leakedCalls += 1
+          })
+        },
+      },
+      { enabled: false },
+    )
+    await host.disable('p:src')
+    await host.enable('p:src')
+    assert.equal(leakedCalls, 0, 'rolled-back and disabled plugins must not leak capability listeners')
+
+    // Invalid capabilityId and non-function listener are rejected explicitly
+    await assert.rejects(
+      () =>
+        host.register({
+          id: 'p:bad-cap-id',
+          definePlugin(ctx) {
+            ctx.onCapabilityChanged('Bad:Id', () => {})
+          },
+        }),
+      (err: unknown) => err instanceof HelmxError && err.code === 'invalid_capability_id' && err.status === 400,
+    )
+    await assert.rejects(
+      () =>
+        host.register({
+          id: 'p:bad-cap-fn',
+          definePlugin(ctx) {
+            ctx.onCapabilityChanged('demo.watch', 'not-a-fn' as unknown as () => void)
+          },
+        }),
+      (err: unknown) => err instanceof HelmxError && err.code === 'invalid_capability_listener' && err.status === 400,
+    )
+  } finally {
+    await host.dispose().catch(() => {})
+    await cleanupDir(dataDir)
+  }
+})

@@ -37,7 +37,9 @@ import {
   type ConversationDetail,
   type ConversationLive,
   type ConversationSummary,
+  type NodeInfo,
   type PluginSummary,
+  type Profile,
   type ScreenSpec,
   type UsePluginsResult,
 } from '@helmx/protocol'
@@ -504,6 +506,154 @@ test('useHostModels: catalog revisions re-render exactly once; three-state seman
   act(() => { void root.unmount() })
 })
 
+test('useHostNodes & useHostProfiles: throw without host context, report undefined when absent/unloaded/SSR, and stay isolated from unrelated domain updates', { timeout: 60_000 }, () => {
+  const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
+  assert.throws(
+    () => renderToString(e(function OutsideNodes() { void SDK.useHostNodes(); return null })),
+    /usePluginClientHost must be called inside <PluginClientHostContext\.Provider>/,
+    'useHostNodes outside host context throws explicitly',
+  )
+  assert.throws(
+    () => renderToString(e(function OutsideProfiles() { void SDK.useHostProfiles(); return null })),
+    /usePluginClientHost must be called inside <PluginClientHostContext\.Provider>/,
+    'useHostProfiles outside host context throws explicitly',
+  )
+
+  // Absent capabilities on host port -> strictly undefined (never fabricated empty array)
+  let absentNodes: SDK.HostNodesSlice | undefined = []
+  let absentProfiles: SDK.HostProfilesSlice | undefined = []
+  function AbsentProbe(): React.ReactNode {
+    absentNodes = SDK.useHostNodes()
+    absentProfiles = SDK.useHostProfiles()
+    return null
+  }
+  const absentMount = mount(e(SDK.PluginClientHostContext.Provider, { value: makePort(log) }, e(AbsentProbe)))
+  assert.ok(absentNodes === undefined, 'unwired getNodes reports undefined, never []')
+  assert.ok(absentProfiles === undefined, 'unwired getProfiles reports undefined, never []')
+  act(() => { void absentMount.root.unmount() })
+
+  // Wired capabilities: three-state lifecycle + SSR honesty + strict render isolation
+  const localNode: NodeInfo = { id: 'local', kind: 'local', online: true }
+  const gpuNode: NodeInfo = { id: 'gpu-1', kind: 'byom', online: true }
+  const assistantProfile: Profile = { id: 'assistant', name: 'Assistant' } as Profile
+  const coderProfile: Profile = { id: 'coder', name: 'Coder' } as Profile
+
+  let currentNodes: SDK.HostNodesSlice | undefined
+  let currentProfiles: SDK.HostProfilesSlice | undefined
+  const nodeListeners = new Set<() => void>()
+  const profileListeners = new Set<() => void>()
+
+  const reactive = createReactivePort(log, {
+    overrides: {
+      getNodes: () => currentNodes,
+      subscribeNodes: (listener) => {
+        nodeListeners.add(listener)
+        return () => nodeListeners.delete(listener)
+      },
+      getProfiles: () => currentProfiles,
+      subscribeProfiles: (listener) => {
+        profileListeners.add(listener)
+        return () => profileListeners.delete(listener)
+      },
+    },
+  })
+
+  // SSR snapshot stays undefined even when populated (consistent with useHostModels)
+  currentNodes = [localNode]
+  currentProfiles = [assistantProfile]
+  let ssrNodes: SDK.HostNodesSlice | undefined = [localNode]
+  let ssrProfiles: SDK.HostProfilesSlice | undefined = [assistantProfile]
+  renderToString(
+    e(SDK.PluginClientHostContext.Provider, { value: reactive.port }, e(function SsrProbe() {
+      ssrNodes = SDK.useHostNodes()
+      ssrProfiles = SDK.useHostProfiles()
+      return null
+    })),
+  )
+  assert.ok(ssrNodes === undefined, 'useHostNodes SSR snapshot stays honestly undefined')
+  assert.ok(ssrProfiles === undefined, 'useHostProfiles SSR snapshot stays honestly undefined')
+
+  // Reset to pre-load undefined for client lifecycle assertions
+  currentNodes = undefined
+  currentProfiles = undefined
+  let nodeRenders = 0
+  let profileRenders = 0
+  const seen: { nodes?: SDK.HostNodesSlice; profiles?: SDK.HostProfilesSlice } = {}
+  const readNodes = (): SDK.HostNodesSlice | undefined => seen.nodes
+  const readProfiles = (): SDK.HostProfilesSlice | undefined => seen.profiles
+
+  const NodesProbe = React.memo(function NodesProbe(): React.ReactNode {
+    nodeRenders += 1
+    seen.nodes = SDK.useHostNodes()
+    return null
+  })
+  const ProfilesProbe = React.memo(function ProfilesProbe(): React.ReactNode {
+    profileRenders += 1
+    seen.profiles = SDK.useHostProfiles()
+    return null
+  })
+
+  const mounted = mount(
+    e(SDK.PluginClientHostContext.Provider, { value: reactive.port }, e(NodesProbe), e(ProfilesProbe)),
+  )
+  try {
+    assert.equal(nodeRenders, 1)
+    assert.equal(profileRenders, 1)
+    assert.ok(readNodes() === undefined, 'pre-load nodes slice is undefined')
+    assert.ok(readProfiles() === undefined, 'pre-load profiles slice is undefined')
+
+    // Unrelated updates must trigger zero re-renders
+    act(() => {
+      reactive.setConversationLive(7, { conversationId: 7, text: 'streaming', tools: [], updatedAt: 10 } as ConversationLive)
+      reactive.setPluginDoc('p1/state', { ok: 2 })
+      reactive.setTheme('light')
+      reactive.setLocale('en')
+    })
+    assert.equal(nodeRenders, 1, 'unrelated host domains must not re-render useHostNodes')
+    assert.equal(profileRenders, 1, 'unrelated host domains must not re-render useHostProfiles')
+
+    // Loaded-empty transitions: strictly distinct from undefined
+    const emptyNodes: SDK.HostNodesSlice = []
+    currentNodes = emptyNodes
+    act(() => { for (const fn of [...nodeListeners]) fn() })
+    assert.equal(nodeRenders, 2)
+    assert.equal(profileRenders, 1, 'nodes revision must not re-render useHostProfiles')
+    const nodesAfterEmpty = readNodes()
+    assert.ok(nodesAfterEmpty === emptyNodes && nodesAfterEmpty.length === 0)
+
+    const emptyProfiles: SDK.HostProfilesSlice = []
+    currentProfiles = emptyProfiles
+    act(() => { for (const fn of [...profileListeners]) fn() })
+    assert.equal(profileRenders, 2)
+    assert.equal(nodeRenders, 2, 'profiles revision must not re-render useHostNodes')
+    const profilesAfterEmpty = readProfiles()
+    assert.ok(profilesAfterEmpty === emptyProfiles && profilesAfterEmpty.length === 0)
+
+    // Same-reference notification triggers zero re-renders
+    act(() => {
+      for (const fn of [...nodeListeners]) fn()
+      for (const fn of [...profileListeners]) fn()
+    })
+    assert.equal(nodeRenders, 2)
+    assert.equal(profileRenders, 2)
+
+    // Populated updates forward the exact reference
+    const twoNodes: SDK.HostNodesSlice = [localNode, gpuNode]
+    currentNodes = twoNodes
+    act(() => { for (const fn of [...nodeListeners]) fn() })
+    assert.equal(nodeRenders, 3)
+    assert.ok(readNodes() === twoNodes)
+
+    const twoProfiles: SDK.HostProfilesSlice = [assistantProfile, coderProfile]
+    currentProfiles = twoProfiles
+    act(() => { for (const fn of [...profileListeners]) fn() })
+    assert.equal(profileRenders, 3)
+    assert.ok(readProfiles() === twoProfiles)
+  } finally {
+    act(() => { void mounted.root.unmount() })
+  }
+})
+
 test('usePluginDoc auto-triggers ensurePluginDoc for a missing key (port forwarding)', { timeout: 60_000 }, () => {
   const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
   const port = makePort(log)
@@ -654,6 +804,87 @@ test('createPluginClientContext: submitInput without conversation context reject
   await assert.rejects(() => ctx.submitInput('x'), /submitInput has no target conversation/, 'without a conversation, never drop silently')
   assert.throws(() => { void ctx.callAction('a', 1, { conversationId: 0 }) }, /must be a positive integer/, 'invalid conversation ID rejected synchronously')
   await assert.rejects(() => ctx.getPluginSessionDoc('runs'), /getPluginSessionDoc has no target conversation/)
+})
+
+test('createPluginClientContext.fetchRoute: strictly validates paths, delegates to port.fetchPluginRoute, returns raw Response, and rejects when unwired', { timeout: 60_000 }, async () => {
+  const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
+  const routeCalls: Array<{ pluginId: string; path: string; init?: RequestInit }> = []
+  const streamBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47])
+  const port = makePort(log, {
+    overrides: {
+      fetchPluginRoute: async (pluginId, path, init) => {
+        routeCalls.push({ pluginId, path, init })
+        return new Response(streamBytes, {
+          status: 201,
+          headers: { 'Content-Type': 'application/octet-stream', 'X-Route-Echo': path },
+        })
+      },
+    },
+  })
+  const ctx = SDK.createPluginClientContext(port, 'builtin:demo', 7)
+
+  const init: RequestInit = { method: 'POST', headers: { 'X-Test': '1' } }
+  const res = await ctx.fetchRoute('/items/123?limit=20&next=../ok', init)
+  assert.equal(res.status, 201)
+  assert.equal(res.headers.get('X-Route-Echo'), '/items/123?limit=20&next=../ok')
+  assert.deepEqual(new Uint8Array(await res.arrayBuffer()), streamBytes, 'raw binary Response passes through untouched')
+  assert.equal(routeCalls.length, 1)
+  assert.equal(routeCalls[0]!.pluginId, 'builtin:demo')
+  assert.equal(routeCalls[0]!.path, '/items/123?limit=20&next=../ok')
+  assert.ok(routeCalls[0]!.init === init)
+
+  // Encoded slash inside a single :param segment is valid (matches kernel route-match.ts)
+  const encodedRes = await ctx.fetchRoute('/files/dir%2Fsub.bin?download=1')
+  assert.equal(encodedRes.status, 201)
+  const orgRes = await ctx.fetchRoute('/orgs/acme%2Fcorp/items/it-42')
+  assert.equal(orgRes.status, 201)
+  assert.equal(routeCalls.length, 3)
+
+  // Every invalid / traversal / non-namespaced path must reject BEFORE hitting the host port
+  const invalidPaths = [
+    '',
+    'items',
+    'http://evil.example/items',
+    '/',
+    '/?a=1',
+    '//evil.example/items',
+    '/items//sub',
+    '/items/',
+    '/items\\sub',
+    '/items#frag',
+    '/items?a=1#frag',
+    '/.',
+    '/..',
+    '/items/../secret',
+    '/items/./sub',
+    '/items/%2e%2e/secret',
+    '/items/%2E/sub',
+    '/%2e%2e%2fconfig',
+    '/items/%2e%2e%2fsecret',
+    '/items/%2e%2fsub',
+    '/items/foo%2f..%2fbar',
+    '/items/%5c/sub',
+    '/items/%zz',
+    '/items\nbad',
+    '/foo%00bar',
+    '/foo%0abar',
+    '/foo%7fbar',
+  ]
+  for (const bad of invalidPaths) {
+    await assert.rejects(
+      () => ctx.fetchRoute(bad),
+      /fetchRoute path/,
+      `invalid path ${JSON.stringify(bad)} must be rejected explicitly`,
+    )
+  }
+  assert.equal(routeCalls.length, 3, 'invalid paths must never reach port.fetchPluginRoute')
+
+  // Unwired host port rejects explicitly (never falls back to global fetch)
+  const unwiredCtx = SDK.createPluginClientContext(makePort(log), 'builtin:demo', 7)
+  await assert.rejects(
+    () => unwiredCtx.fetchRoute('/items'),
+    /fetchRoute is unavailable: host port does not implement fetchPluginRoute/,
+  )
 })
 
 test('createPluginClientContext.openWorkbench: resolves short local panelId, preserves host/explicit tabs, and forwards params atomically to port.openWorkbench', { timeout: 60_000 }, () => {

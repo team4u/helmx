@@ -392,6 +392,7 @@ test('Tooltip SSR: renders trigger directly when disabled/empty and stamps data-
   const pluginCtx = {
     pluginId: 'builtin:demo',
     callAction: async () => ({}),
+    fetchRoute: async () => { throw new Error('fetchRoute not implemented in test stub') },
     submitInput: async () => {},
     openScreen: () => {},
     openSplitScreen: () => {},
@@ -501,6 +502,7 @@ test('DropdownMenu SSR: renders host overlay classes and stamps data-plugin-id i
   const pluginCtx = {
     pluginId: 'builtin:menu-demo',
     callAction: async () => ({}),
+    fetchRoute: async () => { throw new Error('fetchRoute not implemented in test stub') },
     submitInput: async () => {},
     openScreen: () => {},
     openSplitScreen: () => {},
@@ -560,6 +562,7 @@ test('usePluginAction DOM: synchronous mutex prevents double submit, exposes pen
         resolveFirst = resolve
       })
     },
+    fetchRoute: async () => { throw new Error('fetchRoute not implemented in test stub') },
     submitInput: async () => {},
     openScreen: () => {},
     openSplitScreen: () => {},

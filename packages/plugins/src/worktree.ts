@@ -2,7 +2,8 @@
  * builtin:worktree: the managed Git worktree plugin (default-enabled, zero static dep on workflow).
  *
  * Responsibilities:
- * - WorktreeAllocator / WorktreeStore / durable leases / ManagedWorktreeHold / agentId bindings;
+ * - WorktreeAllocator / WorktreeStore / durable leases / ManagedWorktreeHold / agentId bindings
+ *   persisted per-entry via `ctx.kv` (`worktrees`, `leases`, `agent-bindings`);
  * - agent_spawn around hook (priority 200) for allocation / resume / reattach;
  * - cleanup_worktree model tool + worktrees CLI family + internal acquire/release actions;
  * - UI slots (`builtin:workflow/worktree-inspect` & `builtin:workflow/worktree-cleanup`) so
@@ -14,6 +15,14 @@ import { resolvePluginClientAssets } from './asset-paths.js'
 import { WORKFLOW_PLUGIN_ID, WORKTREE_PLUGIN_ID } from './contracts.js'
 import { WorktreeIsolation } from './worktree/isolation.js'
 import { registerWorktreeActions } from './worktree/actions.js'
+import {
+  AGENT_BINDINGS_KV_NAMESPACE,
+  LEASES_KV_NAMESPACE,
+  WORKTREES_KV_NAMESPACE,
+  type ManagedWorktreeRecord,
+  type WorktreeAgentBinding,
+  type WorktreeLeaseRecord,
+} from './worktree/worktree-store.js'
 
 export { WORKTREE_PLUGIN_ID }
 
@@ -29,17 +38,10 @@ export function createWorktreePlugin(): PluginDefinition {
     version: '0.1.0',
     ...resolvePluginClientAssets(WORKTREE_PLUGIN_ID, 'worktree', 'worktree_plugin_client_missing'),
     definePlugin(ctx) {
-      // `ctx.doc` already deep-clones on get/set/update; no extra structuredClone wrapper needed.
-      const worktreeDocs = ctx.doc<Record<string, unknown>>('worktree-state', {})
-      const worktreeDocStore = {
-        get<T>(key: string, initial: T): T {
-          const raw = worktreeDocs.get()[key]
-          return raw === undefined ? initial : (raw as T)
-        },
-        set<T>(key: string, value: T): void {
-          worktreeDocs.update((current) => ({ ...current, [key]: value }))
-        },
-        flush: (): Promise<void> => worktreeDocs.flush(),
+      const worktreeKv = {
+        worktrees: ctx.kv<ManagedWorktreeRecord>(WORKTREES_KV_NAMESPACE),
+        leases: ctx.kv<WorktreeLeaseRecord>(LEASES_KV_NAMESPACE),
+        agentBindings: ctx.kv<WorktreeAgentBinding>(AGENT_BINDINGS_KV_NAMESPACE),
       }
 
       const isolation = new WorktreeIsolation({
@@ -58,7 +60,7 @@ export function createWorktreePlugin(): PluginDefinition {
             return ctx.host.isClosing
           },
         },
-        docStore: worktreeDocStore,
+        kv: worktreeKv,
       })
 
       ctx.hook.onAgentSpawn(async (request, next) => {
@@ -77,9 +79,8 @@ export function createWorktreePlugin(): PluginDefinition {
         }
       })
 
-      ctx.host.onEvent('conversation.deleted', (raw) => {
-        const record = raw === null || typeof raw !== 'object' ? undefined : (raw as Record<string, unknown>)
-        const candidate = record?.['conversationId'] ?? record?.['id']
+      ctx.host.onEvent('conversation.deleted', (event) => {
+        const candidate = event.conversationId
         if (typeof candidate === 'number' && Number.isSafeInteger(candidate) && candidate >= 1) {
           isolation.pruneConversation(candidate)
         }
@@ -93,7 +94,7 @@ export function createWorktreePlugin(): PluginDefinition {
           await isolation.reconcileStoppedNativeLeases()
         },
         async stop() {
-          await worktreeDocs.flush()
+          await isolation.flush()
         },
         inUse() {
           return isolation.allocator

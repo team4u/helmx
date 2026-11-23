@@ -11,7 +11,9 @@
  */
 import { createHash } from 'node:crypto';
 import {
+  CORE_CLI_COMMAND_PATHS,
   HelmxError,
+  KERNEL_TOOL_NAMES,
   matchesConversationScope,
   type ActionManifest,
   type ConversationScope,
@@ -132,6 +134,31 @@ export function parseQualifiedActionId(qualified: string): { pluginId: string; a
 
 const VALID_ACTION_VISIBILITIES = new Set<PluginActionVisibility>(['public', 'ui', 'internal']);
 const ALLOWED_EXPOSE_AS_TOOL_KEYS = new Set(['name', 'description', 'replay', 'formatOutput']);
+const KERNEL_TOOL_NAME_SET: ReadonlySet<string> = new Set<string>(KERNEL_TOOL_NAMES);
+const CORE_CLI_COMMAND_SEGMENT_LIST: ReadonlyArray<readonly string[]> = CORE_CLI_COMMAND_PATHS.map((p) => p.split(' '));
+
+/** Resolves the effective CLI command path for a CLI-exposed action, or `undefined` if hidden/non-public. */
+function resolveActionCliCommand(
+  pluginId: string,
+  actionId: string,
+  visibility: PluginActionVisibility,
+  cli?: PluginActionSpec<unknown, unknown>['cli'],
+): readonly string[] | undefined {
+  if (visibility !== 'public' || cli?.hidden === true) return undefined;
+  if (cli?.command !== undefined) return cli.command;
+  const prefix = pluginId.startsWith('builtin:') ? pluginId.slice('builtin:'.length) : pluginId;
+  return [prefix, actionId];
+}
+
+/** Matches CLI `assertNoConflict` semantics: exact equality or either path being a prefix of the other. */
+function cliPathsConflict(a: readonly string[], b: readonly string[]): boolean {
+  const minLen = Math.min(a.length, b.length);
+  if (minLen === 0) return false;
+  for (let i = 0; i < minLen; i += 1) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
 
 interface ActionEntry {
   pluginId: string;
@@ -598,6 +625,73 @@ export class CapabilityRegistry {
       throw new HelmxError('duplicate_action', `Plugin ${pluginId} declared duplicate action ${spec.id}`, 409);
     }
 
+    const resolvedToolName = explicitToolName ?? actionToolAlias(pluginId, spec.id);
+    if (exposeAsToolEnabled) {
+      if (KERNEL_TOOL_NAME_SET.has(resolvedToolName)) {
+        throw new HelmxError(
+          'duplicate_tool_name',
+          `Plugin ${pluginId} action ${spec.id} tool name "${resolvedToolName}" conflicts with built-in kernel tool "${resolvedToolName}"`,
+          409,
+          { pluginId, actionId: spec.id, toolName: resolvedToolName, owner: 'kernel' },
+        );
+      }
+      if (this.tools.get(pluginId)?.has(resolvedToolName)) {
+        throw new HelmxError(
+          'duplicate_tool_name',
+          `Plugin ${pluginId} action ${spec.id} tool name "${resolvedToolName}" conflicts with existing tool "${resolvedToolName}"`,
+          409,
+          { pluginId, actionId: spec.id, toolName: resolvedToolName },
+        );
+      }
+      for (const existing of pluginActions.values()) {
+        if (existing.exposeAsTool && existing.toolAlias === resolvedToolName) {
+          throw new HelmxError(
+            'duplicate_tool_name',
+            `Plugin ${pluginId} action ${spec.id} tool name "${resolvedToolName}" conflicts with exposeAsTool action ${pluginId}.${existing.id}`,
+            409,
+            { pluginId, actionId: spec.id, toolName: resolvedToolName, conflictingActionId: existing.id },
+          );
+        }
+      }
+    }
+
+    const cliCommand = resolveActionCliCommand(pluginId, spec.id, visibility, spec.cli);
+    if (cliCommand !== undefined) {
+      for (const corePath of CORE_CLI_COMMAND_SEGMENT_LIST) {
+        if (cliPathsConflict(corePath, cliCommand)) {
+          throw new HelmxError(
+            'duplicate_cli_command',
+            `Plugin ${pluginId} action ${spec.id} CLI command "helmx ${cliCommand.join(' ')}" conflicts with core CLI command "helmx ${corePath.join(' ')}"`,
+            409,
+            {
+              pluginId,
+              actionId: spec.id,
+              command: [...cliCommand],
+              conflictingCommand: [...corePath],
+              owner: 'core',
+            },
+          );
+        }
+      }
+      for (const existing of pluginActions.values()) {
+        const existingCmd = resolveActionCliCommand(pluginId, existing.id, existing.visibility, existing.cli);
+        if (existingCmd !== undefined && cliPathsConflict(existingCmd, cliCommand)) {
+          throw new HelmxError(
+            'duplicate_cli_command',
+            `Plugin ${pluginId} action ${spec.id} CLI command "helmx ${cliCommand.join(' ')}" conflicts with action ${pluginId}.${existing.id} ("helmx ${existingCmd.join(' ')}")`,
+            409,
+            {
+              pluginId,
+              actionId: spec.id,
+              command: [...cliCommand],
+              conflictingActionId: existing.id,
+              conflictingCommand: [...existingCmd],
+            },
+          );
+        }
+      }
+    }
+
     assertSchemaCompilable(spec.inputSchema);
     assertSchemaCompilable(spec.outputSchema);
     if (spec.presentationMetaSchema !== undefined) {
@@ -611,7 +705,7 @@ export class CapabilityRegistry {
       inputSchema: spec.inputSchema,
       outputSchema: spec.outputSchema,
       visibility,
-      cli: spec.cli,
+      cli: spec.cli !== undefined ? jsonClone(spec.cli) : undefined,
       exposeAsTool: exposeAsToolEnabled,
       ...(toolDescription !== undefined ? { toolDescription } : {}),
       ...(toolReplay !== undefined ? { toolReplay } : {}),
@@ -629,7 +723,7 @@ export class CapabilityRegistry {
       ...(spec.idempotent !== undefined ? { idempotent: spec.idempotent } : {}),
       ...(prompt.promptSnippet !== undefined ? { promptSnippet: prompt.promptSnippet } : {}),
       ...(prompt.promptGuidelines !== undefined ? { promptGuidelines: prompt.promptGuidelines } : {}),
-      toolAlias: explicitToolName ?? actionToolAlias(pluginId, spec.id),
+      toolAlias: resolvedToolName,
       ...(spec.scope !== undefined ? { scope: spec.scope } : {}),
       handler: spec.handler as (input: never, context: PluginActionContext) => unknown,
     });
@@ -688,8 +782,34 @@ export class CapabilityRegistry {
       pluginTools = new Map();
       this.tools.set(pluginId, pluginTools);
     }
+    if (KERNEL_TOOL_NAME_SET.has(spec.name)) {
+      throw new HelmxError(
+        'duplicate_tool_name',
+        `Plugin ${pluginId} tool "${spec.name}" conflicts with built-in kernel tool "${spec.name}"`,
+        409,
+        { pluginId, toolName: spec.name, owner: 'kernel' },
+      );
+    }
     if (pluginTools.has(spec.name)) {
-      throw new HelmxError('duplicate_tool', `Plugin ${pluginId} declared duplicate tool ${spec.name}`, 409);
+      throw new HelmxError(
+        'duplicate_tool_name',
+        `Plugin ${pluginId} declared duplicate tool "${spec.name}"`,
+        409,
+        { pluginId, toolName: spec.name },
+      );
+    }
+    const existingActions = this.actions.get(pluginId);
+    if (existingActions) {
+      for (const action of existingActions.values()) {
+        if (action.exposeAsTool && action.toolAlias === spec.name) {
+          throw new HelmxError(
+            'duplicate_tool_name',
+            `Plugin ${pluginId} tool "${spec.name}" conflicts with exposeAsTool action ${pluginId}.${action.id}`,
+            409,
+            { pluginId, toolName: spec.name, conflictingActionId: action.id },
+          );
+        }
+      }
     }
     assertSchemaCompilable(spec.inputSchema);
 
@@ -1089,6 +1209,116 @@ export class CapabilityRegistry {
       };
     }
     return undefined;
+  }
+
+  /**
+   * Final cross-plugin uniqueness check across all active enabled plugins (plus pending `pluginId`):
+   * - Tool names (`ctx.tool` and `exposeAsTool` resolved names/aliases) must be globally unique
+   *   and must not collide with `KERNEL_TOOL_NAMES` (`409 duplicate_tool_name`);
+   * - CLI-exposed action command paths must not exact- or prefix-collide with `CORE_CLI_COMMAND_PATHS`
+   *   or another active plugin's CLI command (`409 duplicate_cli_command`).
+   *
+   * Called by `PluginHost` during enable preflight and at the synchronous enable commit point so
+   * disabled pre-registrations never occupy global names and conflicting commits roll back cleanly.
+   */
+  assertCrossPluginUnique(pluginId: string, activePluginIds: Iterable<string>): void {
+    const toolOwners = new Map<string, string>();
+    const cliOwners: Array<{ pluginId: string; actionId: string; command: readonly string[] }> = [];
+
+    const sweep = (ownerPluginId: string): void => {
+      const pluginTools = this.tools.get(ownerPluginId);
+      if (pluginTools) {
+        for (const toolName of pluginTools.keys()) {
+          if (KERNEL_TOOL_NAME_SET.has(toolName)) {
+            throw new HelmxError(
+              'duplicate_tool_name',
+              `Plugin ${ownerPluginId} tool "${toolName}" conflicts with built-in kernel tool "${toolName}"`,
+              409,
+              { pluginId: ownerPluginId, toolName, owner: 'kernel' },
+            );
+          }
+          const prev = toolOwners.get(toolName);
+          if (prev !== undefined) {
+            throw new HelmxError(
+              'duplicate_tool_name',
+              `Plugin ${ownerPluginId} tool "${toolName}" conflicts with plugin ${prev}`,
+              409,
+              { pluginId: ownerPluginId, toolName, ownerPluginId: prev },
+            );
+          }
+          toolOwners.set(toolName, ownerPluginId);
+        }
+      }
+      const pluginActions = this.actions.get(ownerPluginId);
+      if (pluginActions) {
+        for (const action of pluginActions.values()) {
+          if (action.exposeAsTool) {
+            const toolName = action.toolAlias;
+            if (KERNEL_TOOL_NAME_SET.has(toolName)) {
+              throw new HelmxError(
+                'duplicate_tool_name',
+                `Plugin ${ownerPluginId} action ${action.id} tool name "${toolName}" conflicts with built-in kernel tool "${toolName}"`,
+                409,
+                { pluginId: ownerPluginId, actionId: action.id, toolName, owner: 'kernel' },
+              );
+            }
+            const prev = toolOwners.get(toolName);
+            if (prev !== undefined) {
+              throw new HelmxError(
+                'duplicate_tool_name',
+                `Plugin ${ownerPluginId} action ${action.id} tool name "${toolName}" conflicts with plugin ${prev}`,
+                409,
+                { pluginId: ownerPluginId, actionId: action.id, toolName, ownerPluginId: prev },
+              );
+            }
+            toolOwners.set(toolName, ownerPluginId);
+          }
+          const cliCommand = resolveActionCliCommand(ownerPluginId, action.id, action.visibility, action.cli);
+          if (cliCommand !== undefined) {
+            for (const corePath of CORE_CLI_COMMAND_SEGMENT_LIST) {
+              if (cliPathsConflict(corePath, cliCommand)) {
+                throw new HelmxError(
+                  'duplicate_cli_command',
+                  `Plugin ${ownerPluginId} action ${action.id} CLI command "helmx ${cliCommand.join(' ')}" conflicts with core CLI command "helmx ${corePath.join(' ')}"`,
+                  409,
+                  {
+                    pluginId: ownerPluginId,
+                    actionId: action.id,
+                    command: [...cliCommand],
+                    conflictingCommand: [...corePath],
+                    owner: 'core',
+                  },
+                );
+              }
+            }
+            for (const prev of cliOwners) {
+              if (cliPathsConflict(prev.command, cliCommand)) {
+                throw new HelmxError(
+                  'duplicate_cli_command',
+                  `Plugin ${ownerPluginId} action ${action.id} CLI command "helmx ${cliCommand.join(' ')}" conflicts with plugin ${prev.pluginId} action ${prev.actionId} ("helmx ${prev.command.join(' ')}")`,
+                  409,
+                  {
+                    pluginId: ownerPluginId,
+                    actionId: action.id,
+                    command: [...cliCommand],
+                    ownerPluginId: prev.pluginId,
+                    conflictingActionId: prev.actionId,
+                    conflictingCommand: [...prev.command],
+                  },
+                );
+              }
+            }
+            cliOwners.push({ pluginId: ownerPluginId, actionId: action.id, command: cliCommand });
+          }
+        }
+      }
+    };
+
+    for (const activeId of activePluginIds) {
+      if (activeId === pluginId) continue;
+      sweep(activeId);
+    }
+    sweep(pluginId);
   }
 
   clear(pluginId: string): void {
