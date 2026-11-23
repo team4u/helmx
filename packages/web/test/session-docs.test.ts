@@ -23,6 +23,7 @@ import {
   evictSessionDocsOfConversation,
   getSessionDocState,
   resetSessionDocSubscriptions,
+  restoreSessionDocSubscriptions,
   retrySessionDoc,
   sessionDocTimings,
   subscribeSessionDoc,
@@ -591,5 +592,234 @@ describe("session-docs", () => {
     assert.equal(getSessionDocState(key).value, 'outer', '内层恢复后回落外层实现')
     off2()
     outer()
+  })
+
+  test('多路复用 4xx 仅隔离无效订阅，健康订阅自动重连且不受永久毒化', { timeout: 60_000 }, async () => {
+    resetSessionDocSubscriptions()
+    const badKey: SessionDocKey = { pluginId: 'missing:plugin', docName: 'ghost', conversationId: 42 }
+    const badParam = encodeSessionDocSubParam({ pluginId: badKey.pluginId, name: badKey.docName, conversationId: 42 })
+    const validAParam = encodeSessionDocSubParam({ pluginId: key.pluginId, name: key.docName, conversationId: 42 })
+    const validCParam = encodeSessionDocSubParam({ pluginId: otherConvKey.pluginId, name: otherConvKey.docName, conversationId: 7 })
+    const requestedBatches: string[][] = []
+    let activeHealthyStream: ReturnType<typeof openStream> | undefined
+
+    const restore = bindSessionDocRuntime(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://localhost')
+      const subs = url.searchParams.getAll('sub')
+      requestedBatches.push(subs)
+      if (subs.includes(badParam)) {
+        return new Response(JSON.stringify({ error: { code: 'not_found', message: 'ghost doc missing' } }), { status: 404 })
+      }
+      const frames: string[] = []
+      if (subs.includes(validAParam)) {
+        frames.push(snapshotFrame(1, { pluginId: key.pluginId, name: key.docName, conversationId: 42, value: 'healthy-a' }))
+      }
+      if (subs.includes(validCParam)) {
+        frames.push(snapshotFrame(1, { pluginId: otherConvKey.pluginId, name: otherConvKey.docName, conversationId: 7, value: 'healthy-c' }))
+      }
+      const opened = openStream(frames.join(''))
+      if (subs.length === 2 && subs.includes(validAParam) && subs.includes(validCParam)) {
+        activeHealthyStream = opened
+      }
+      return opened.response
+    })
+
+    try {
+      const offA = subscribeSessionDoc(key, () => {})
+      const offBad = subscribeSessionDoc(badKey, () => {})
+      const offC = subscribeSessionDoc(otherConvKey, () => {})
+
+      await until(() =>
+        getSessionDocState(key).value === 'healthy-a' &&
+        getSessionDocState(otherConvKey).value === 'healthy-c' &&
+        getSessionDocState(badKey).error !== undefined,
+      200)
+
+      assert.equal(getSessionDocState(key).connected, true, '有效订阅 A 必须保持健康已连接')
+      assert.equal(getSessionDocState(key).error, undefined, '有效订阅 A 不得被污染错误')
+      assert.equal(getSessionDocState(otherConvKey).connected, true, '有效订阅 C 必须保持健康已连接')
+      assert.equal(getSessionDocState(otherConvKey).error, undefined, '有效订阅 C 不得被污染错误')
+      assert.equal(getSessionDocState(badKey).connected, false)
+      assert.ok(getSessionDocState(badKey).error!.includes('ghost doc missing'), '无效订阅 B 暴露自身准确 404 报错')
+      assert.ok(activeHealthyStream !== undefined, '隔离无效订阅后，剩余有效订阅合并回单条共享流')
+
+      // 实时增量帧继续送达健康订阅
+      activeHealthyStream!.push(updateFrame(2, { pluginId: key.pluginId, name: key.docName, conversationId: 42, value: 'healthy-a-v2' }))
+      await until(() => getSessionDocState(key).value === 'healthy-a-v2')
+
+      // 卸载无效订阅后，健康订阅继续正常且不触发多余 404 请求
+      const countBeforeOffBad = requestedBatches.length
+      offBad()
+      await new Promise((resolve) => setTimeout(resolve, 35))
+      assert.equal(requestedBatches.length, countBeforeOffBad, '卸载已隔离的无效订阅不得重建健康流')
+      assert.equal(getSessionDocState(key).value, 'healthy-a-v2')
+
+      offA()
+      offC()
+    } finally {
+      restore()
+      resetSessionDocSubscriptions()
+    }
+  })
+
+  test('多路复用批级 4xx（单探针均 200）重试一次后停机且不永久毒化成员，集合变化后自动恢复', { timeout: 60_000 }, async () => {
+    resetSessionDocSubscriptions()
+    const validAParam = encodeSessionDocSubParam({ pluginId: key.pluginId, name: key.docName, conversationId: 42 })
+    let batchCalls = 0
+    const restore = bindSessionDocRuntime(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://localhost')
+      const subs = url.searchParams.getAll('sub')
+      if (subs.length > 1) {
+        batchCalls++
+        return new Response(JSON.stringify({ error: { code: 'validation_error', message: 'too many subs' } }), { status: 400 })
+      }
+      if (subs[0] === validAParam) {
+        return openStream(snapshotFrame(1, { pluginId: key.pluginId, name: key.docName, conversationId: 42, value: 'recovered-single' })).response
+      }
+      return openStream(snapshotFrame(1, { pluginId: statsKey.pluginId, name: statsKey.docName, conversationId: 42, value: 'stats-ok' })).response
+    })
+
+    try {
+      const offA = subscribeSessionDoc(key, () => {})
+      const offB = subscribeSessionDoc(statsKey, () => {})
+      await until(() => getSessionDocState(key).error !== undefined && getSessionDocState(statsKey).error !== undefined, 200)
+      assert.ok(getSessionDocState(key).error!.includes('too many subs'))
+      assert.equal(batchCalls, 2, '单探针均健康时仅复试一次全批，绝不无限循环')
+
+      // 退订 B 后，A 不应被 permanentError 锁死，应自动建流恢复
+      offB()
+      await until(() => getSessionDocState(key).value === 'recovered-single', 200)
+      assert.equal(getSessionDocState(key).connected, true)
+      assert.equal(getSessionDocState(key).error, undefined)
+      offA()
+    } finally {
+      restore()
+      resetSessionDocSubscriptions()
+    }
+  })
+
+  test('多路复用 4xx 探针遇 401 发 helmx:unauthorized；遇 5xx 转瞬态退避重连恢复', { timeout: 60_000 }, async () => {
+    resetSessionDocSubscriptions()
+    const events: string[] = []
+    const originalWindowDesc = Object.getOwnPropertyDescriptor(globalThis, 'window')
+    const onUnauthorized = (ev: Event) => { events.push(ev.type) }
+    const hasExistingWindow = typeof globalThis.window !== 'undefined' && typeof globalThis.window.addEventListener === 'function'
+    if (hasExistingWindow) {
+      globalThis.window.addEventListener('helmx:unauthorized', onUnauthorized)
+    } else {
+      ;(globalThis as Record<string, unknown>).window = {
+        dispatchEvent: (ev: Event) => { events.push(ev.type); return true },
+      }
+    }
+
+    let step = 0
+    const restore401 = bindSessionDocRuntime(async () => {
+      step++
+      if (step === 1) return new Response(JSON.stringify({ error: { message: 'missing' } }), { status: 404 })
+      return new Response(null, { status: 401 })
+    })
+    try {
+      const offA = subscribeSessionDoc(key, () => {})
+      const offB = subscribeSessionDoc(statsKey, () => {})
+      await until(() => events.length > 0, 200)
+      assert.deepEqual(events, ['helmx:unauthorized'], '探针遇 401 必须派发 helmx:unauthorized')
+      assert.equal(getSessionDocState(key).error, undefined, '401 不污染单条错误')
+      offA()
+      offB()
+    } finally {
+      restore401()
+      if (hasExistingWindow) {
+        globalThis.window.removeEventListener('helmx:unauthorized', onUnauthorized)
+      } else if (originalWindowDesc !== undefined) {
+        Object.defineProperty(globalThis, 'window', originalWindowDesc)
+      } else {
+        delete (globalThis as Record<string, unknown>).window
+      }
+      resetSessionDocSubscriptions()
+    }
+
+    // 探针遇 503：不误标 permanentError，按瞬态退避重连恢复
+    let attempt = 0
+    const restore503 = bindSessionDocRuntime(async () => {
+      attempt++
+      if (attempt === 1) return new Response(JSON.stringify({ error: { message: 'race 404' } }), { status: 404 })
+      if (attempt === 2) return new Response(JSON.stringify({ error: { message: 'upstream 503' } }), { status: 503 })
+      return openStream(
+        snapshotFrame(1, { pluginId: key.pluginId, name: key.docName, conversationId: 42, value: 'a-ok' }) +
+        snapshotFrame(1, { pluginId: statsKey.pluginId, name: statsKey.docName, conversationId: 42, value: 'b-ok' }),
+      ).response
+    })
+    try {
+      const offA = subscribeSessionDoc(key, () => {})
+      const offB = subscribeSessionDoc(statsKey, () => {})
+      await until(() => getSessionDocState(key).value === 'a-ok' && getSessionDocState(statsKey).value === 'b-ok', 200)
+      assert.equal(getSessionDocState(key).connected, true)
+      assert.equal(getSessionDocState(statsKey).connected, true)
+      offA()
+      offB()
+    } finally {
+      restore503()
+      resetSessionDocSubscriptions()
+    }
+  })
+
+  test('插件重新启用 restoreSessionDocSubscriptions 恢复仍挂载订阅；绝不复活已删会话或非法键', { timeout: 60_000 }, async () => {
+    resetSessionDocSubscriptions()
+    let rev = 0
+    const restore = bindSessionDocRuntime(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://localhost')
+      const subs = url.searchParams.getAll('sub')
+      rev++
+      const frames: string[] = []
+      for (const s of subs) {
+        if (s.includes('runs')) {
+          frames.push(snapshotFrame(1, { pluginId: key.pluginId, name: key.docName, conversationId: 42, value: `runs-v${rev}` }))
+        }
+        if (s.includes('stats')) {
+          frames.push(snapshotFrame(1, { pluginId: statsKey.pluginId, name: statsKey.docName, conversationId: 42, value: `stats-v${rev}` }))
+        }
+      }
+      return openStream(frames.join('')).response
+    })
+
+    try {
+      const offRuns = subscribeSessionDoc(key, () => {})
+      await until(() => getSessionDocState(key).value === 'runs-v1')
+
+      // 停用插件：仍挂载订阅收到 disabled 错误，不自动重连
+      evictSessionDocSubscriptions('builtin:workflow')
+      assert.ok(getSessionDocState(key).error!.includes('disabled'))
+      assert.equal(getSessionDocState(key).hasValue, false)
+
+      // 重新启用插件：仍挂载的订阅自动清除终态错误并重连拿到新快照
+      restoreSessionDocSubscriptions('builtin:workflow')
+      await until(() => getSessionDocState(key).value === 'runs-v2', 200)
+      assert.equal(getSessionDocState(key).connected, true)
+      assert.equal(getSessionDocState(key).error, undefined)
+
+      // 若插件先停用、随后会话被删除：再启用插件绝不能复活已删除会话的订阅
+      evictSessionDocSubscriptions('builtin:workflow')
+      evictSessionDocsOfConversation(42)
+      assert.ok(getSessionDocState(key).error!.includes('Conversation 42 deleted'))
+      const revBeforeRestore = rev
+      restoreSessionDocSubscriptions('builtin:workflow')
+      await new Promise((resolve) => setTimeout(resolve, 35))
+      assert.equal(rev, revBeforeRestore, '已删除会话的订阅不得因插件重启用而复活重连')
+      assert.ok(getSessionDocState(key).error!.includes('Conversation 42 deleted'))
+
+      // 非法键终态同样不得被恢复
+      const badKey: SessionDocKey = { pluginId: 'builtin:workflow', docName: '', conversationId: 42 }
+      const offBad = subscribeSessionDoc(badKey, () => {})
+      assert.ok(getSessionDocState(badKey).error !== undefined)
+      restoreSessionDocSubscriptions('builtin:workflow')
+      await new Promise((resolve) => setTimeout(resolve, 25))
+      assert.equal(rev, revBeforeRestore, '非法订阅键不得被恢复')
+
+      offBad()
+      offRuns()
+    } finally {
+      restore()
+      resetSessionDocSubscriptions()
+    }
   })
 })

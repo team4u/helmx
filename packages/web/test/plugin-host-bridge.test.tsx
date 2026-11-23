@@ -677,4 +677,183 @@ describe('plugin-host-bridge', () => {
       resetServerClock()
     }
   })
+
+  test('refreshAssets: failed /api/models must not mark models empty-and-loaded; subsequent success recovers cleanly', { timeout: 60_000 }, async (t) => {
+    const store = makeTestStore({
+      authenticated: true,
+      assetsLoaded: false,
+      profilesLoaded: false,
+      models: [],
+    })
+    let observedHostModels: HostModelsSlice | undefined = { models: [] }
+    const readHostModels = (): HostModelsSlice | undefined => observedHostModels
+    function ModelsProbe(): React.ReactNode {
+      observedHostModels = useHostModels()
+      return null
+    }
+    mountTree(e(HostStoreProviders, { value: store }, e(ModelsProbe)))
+    assert.ok(readHostModels() === undefined, 'pre-load host models slice starts undefined')
+
+    const originalFetch = globalThis.fetch
+    t.after(() => { globalThis.fetch = originalFetch })
+    let modelResponseMode: 'fail' | 'empty' | 'populated' = 'fail'
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const path = String(input)
+      if (path === '/api/models') {
+        if (modelResponseMode === 'fail') {
+          return new Response(JSON.stringify({ error: { code: 'internal_error', message: 'models backend down' } }), {
+            status: 500,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        }
+        if (modelResponseMode === 'empty') {
+          return new Response(JSON.stringify({ models: [], thinkingLevels: {} }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        }
+        return new Response(
+          JSON.stringify({
+            models: [{ provider: 'openai', modelId: 'gpt-4o', available: true }],
+            thinkingLevels: { 'openai/gpt-4o': ['off', 'high'] },
+            defaultModel: 'openai/gpt-4o',
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        )
+      }
+      return new Response(JSON.stringify([]), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }) as typeof fetch
+
+    // 1. Initial refresh where /api/models fails: assetsLoaded finishes, but hostModels MUST stay undefined (NOT { models: [] })
+    await act(async () => {
+      await store.refreshAssets()
+    })
+    assert.equal(store.getCatalogSlice().assetsLoaded, true)
+    assert.ok(store.getHostModelsSlice() === undefined, 'failed initial /api/models must keep hostModelsSlice undefined')
+    assert.ok(readHostModels() === undefined, 'useHostModels() must stay undefined instead of falsely loaded-empty')
+    assert.equal(store.getLoadError('assets:models'), 'models backend down')
+
+    // 2. Subsequent refresh where /api/models succeeds with genuinely empty list -> transitions to { models: [] }
+    modelResponseMode = 'empty'
+    await act(async () => {
+      await store.refreshAssets()
+    })
+    const emptyModels = readHostModels()
+    assert.ok(emptyModels !== undefined && emptyModels.models.length === 0, 'genuinely empty 200 /api/models transitions to { models: [] }')
+    assert.equal(store.getLoadError('assets:models'), undefined, 'successful /api/models clears assets:models loadError')
+
+    // 3. Populate models, then fail a later refresh -> preserves last known good catalog
+    modelResponseMode = 'populated'
+    await act(async () => {
+      await store.refreshAssets()
+    })
+    assert.equal(readHostModels()?.models.length, 1)
+    assert.equal(readHostModels()?.defaultModel, 'openai/gpt-4o')
+
+    modelResponseMode = 'fail'
+    await act(async () => {
+      await store.refreshAssets()
+    })
+    assert.equal(readHostModels()?.models.length, 1, 'subsequent /api/models failure preserves previously loaded models')
+    assert.equal(store.getLoadError('assets:models'), 'models backend down')
+  })
+
+  test('checkAuth latest-request-wins: stale resolutions, stale rejections, onAuthenticated, logout, and dispose cannot regress auth state', { timeout: 60_000 }, async (t) => {
+    const originalFetch = globalThis.fetch
+    t.after(() => { globalThis.fetch = originalFetch })
+
+    interface PendingAuthCall {
+      signal: AbortSignal | undefined
+      resolve: (res: Response) => void
+      reject: (err: unknown) => void
+    }
+    const pending: PendingAuthCall[] = []
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      assert.equal(String(input), '/api/auth/status')
+      return new Promise<Response>((resolve, reject) => {
+        pending.push({ signal: init?.signal ?? undefined, resolve, reject })
+      })
+    }) as typeof fetch
+
+    const store = makeTestStore({ authReady: false, authenticated: false, authConfigured: false, authError: null })
+
+    // 1. Concurrent checkAuth: call #2 finishes first with authenticated=true; stale call #1 later resolves/rejects and is ignored
+    const call1 = store.checkAuth()
+    const call2 = store.checkAuth()
+    assert.equal(pending.length, 2)
+    assert.equal(pending[0]!.signal?.aborted, true, 'newer checkAuth aborts superseded request signal')
+    assert.equal(pending[1]!.signal?.aborted, false)
+
+    pending[1]!.resolve(
+      new Response(JSON.stringify({ configured: true, authenticated: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    await call2
+    assert.equal(store.getAuthSlice().authenticated, true)
+    assert.equal(store.getAuthSlice().authReady, true)
+    assert.equal(store.getAuthSlice().authError, null)
+
+    // Stale call #1 resolves with authenticated=false even after abort (simulating slow/unabortable transport): must be dropped
+    pending[0]!.resolve(
+      new Response(JSON.stringify({ configured: true, authenticated: false }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    await call1
+    assert.equal(store.getAuthSlice().authenticated, true, 'stale checkAuth resolution must not clobber newer authenticated state')
+    assert.equal(store.getAuthSlice().authError, null)
+
+    // 2. Stale checkAuth rejection after newer checkAuth success must not set authError
+    const call3 = store.checkAuth()
+    const call4 = store.checkAuth()
+    pending[3]!.resolve(
+      new Response(JSON.stringify({ configured: true, authenticated: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    await call4
+    pending[2]!.reject(new Error('late network error'))
+    await call3
+    assert.equal(store.getAuthSlice().authenticated, true)
+    assert.equal(store.getAuthSlice().authError, null, 'stale checkAuth rejection must not overwrite newer auth state')
+
+    // 3. onAuthenticated during in-flight checkAuth invalidates the in-flight checkAuth
+    const call5 = store.checkAuth()
+    await store.onAuthenticated('fresh-tok')
+    assert.equal(pending[4]!.signal?.aborted, true, 'onAuthenticated aborts in-flight checkAuth')
+    pending[4]!.resolve(
+      new Response(JSON.stringify({ configured: true, authenticated: false }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    await call5
+    assert.equal(store.getAuthSlice().authenticated, true, 'stale checkAuth must not clobber onAuthenticated')
+
+    // 4. Logout during in-flight checkAuth invalidates the in-flight checkAuth
+    const call6 = store.checkAuth()
+    store.prepareLogoutHistoryReset()
+    store.finishLogoutStateReset()
+    assert.equal(pending[5]!.signal?.aborted, true, 'logout aborts in-flight checkAuth')
+    pending[5]!.resolve(
+      new Response(JSON.stringify({ configured: true, authenticated: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    await call6
+    assert.equal(store.getAuthSlice().authenticated, false, 'stale checkAuth must not re-authenticate after logout')
+
+    // 5. dispose() during in-flight checkAuth invalidates the in-flight checkAuth
+    const call7 = store.checkAuth()
+    store.dispose()
+    assert.equal(pending[6]!.signal?.aborted, true, 'dispose aborts in-flight checkAuth')
+    pending[6]!.reject(new Error('after dispose'))
+    await call7
+    assert.equal(store.getAuthSlice().authError, null, 'disposed store ignores late checkAuth error')
+  })
 })

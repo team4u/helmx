@@ -388,4 +388,38 @@ describe("plugin-client-runtime", () => {
       await act(async () => root.unmount())
     }
   })
+
+  test('插件入口模块与共享 chunk fetch 收到 401 均统一派发 helmx:unauthorized 并抛 401 错误', { timeout: 60_000 }, async () => {
+    const events: string[] = []
+    const onUnauthorized = (ev: Event): void => {
+      events.push(ev.type)
+    }
+    window.addEventListener('helmx:unauthorized', onUnauthorized)
+    globalThis.fetch = async () =>
+      new Response(JSON.stringify({ error: { code: 'unauthorized', message: 'token expired' } }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    try {
+      await assert.rejects(
+        () => loadPluginClientModule('auth:p', 'index.tsx', 'h-auth'),
+        (err: unknown) => err instanceof PluginClientError && err.status === 401 && err.code === 'client_module_http_error',
+      )
+      assert.equal(events.length, 1, '主模块 client.mjs 401 必须派发 helmx:unauthorized')
+
+      const importChunk = (globalThis as Record<string, unknown>).__helmx_import_chunk as (
+        pluginId: string,
+        moduleRef: string,
+        contentHash: string,
+        chunkName: string,
+      ) => Promise<Record<string, unknown>>
+      await assert.rejects(
+        () => importChunk('auth:p', 'index.tsx', 'h-auth', 'shared-chunk.mjs'),
+        (err: unknown) => err instanceof PluginClientError && err.status === 401 && err.code === 'client_chunk_http_error',
+      )
+      assert.equal(events.length, 2, '共享 chunk 401 同样必须派发 helmx:unauthorized')
+    } finally {
+      window.removeEventListener('helmx:unauthorized', onUnauthorized)
+    }
+  })
 })

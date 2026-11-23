@@ -113,6 +113,18 @@ async function parseErrorResponse(res: Response): Promise<ApiClientError> {
   return new ApiClientError(`http_${res.status}`, `Request failed (${res.status} ${res.statusText})`, res.status)
 }
 
+/** Notify the host auth listener on 401 responses from non-auth endpoints so logout/cleanup runs uniformly. */
+export function notifyUnauthorizedResponse(res: Pick<Response, 'status'>, path?: string): void {
+  if (
+    res.status === 401 &&
+    typeof window !== 'undefined' &&
+    typeof window.dispatchEvent === 'function' &&
+    (path === undefined || !path.startsWith('/api/auth/'))
+  ) {
+    window.dispatchEvent(new Event('helmx:unauthorized'))
+  }
+}
+
 export async function apiRequest<T>(
   method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
   path: string,
@@ -127,7 +139,7 @@ export async function apiRequest<T>(
     ...(hasBody ? { body: JSON.stringify(body) } : {}),
     signal,
   })
-  if (res.status === 401 && typeof window !== 'undefined' && !path.startsWith('/api/auth/')) window.dispatchEvent(new Event('helmx:unauthorized'))
+  notifyUnauthorizedResponse(res, path)
   if (!res.ok) throw await parseErrorResponse(res)
   return (await res.json()) as T
 }
@@ -147,13 +159,13 @@ export function preloadAuthStatus(): void {
 }
 
 export const authApi = {
-  status: () => {
+  status: (opts?: { signal?: AbortSignal }) => {
     if (preloadedAuthStatus !== null) {
       const pending = preloadedAuthStatus
       preloadedAuthStatus = null
       return pending
     }
-    return apiRequest<AuthStatus>('GET', '/api/auth/status')
+    return apiRequest<AuthStatus>('GET', '/api/auth/status', undefined, opts?.signal)
   },
   setup: (password: string) => apiRequest<AuthToken>('POST', '/api/auth/setup', { password }),
   login: (password: string) => apiRequest<AuthToken>('POST', '/api/auth/login', { password }),
@@ -291,6 +303,7 @@ export const conversationsApi = {
       headers,
       body: bytes,
     })
+    notifyUnauthorizedResponse(res)
     if (!res.ok) {
       throw await parseErrorResponse(res)
     }
@@ -306,6 +319,7 @@ export const conversationsApi = {
       `/api/conversations/${conversationId}/files/content?path=${encodeURIComponent(path)}${inline ? '&inline=1' : ''}`,
       { headers: buildAuthHeaders(), signal },
     )
+    notifyUnauthorizedResponse(res)
     if (!res.ok) {
       throw await parseErrorResponse(res)
     }
@@ -345,6 +359,7 @@ export const artifactsApi = {
       `/api/artifacts/${encodeURIComponent(artifactId)}/content${inline ? '?inline=1' : ''}`,
       { headers: buildAuthHeaders(), signal },
     )
+    notifyUnauthorizedResponse(res)
     if (!res.ok) {
       throw await parseErrorResponse(res)
     }
