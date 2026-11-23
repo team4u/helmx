@@ -124,6 +124,8 @@ export interface ConversationPaneProps {
 export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDrawer, onCloseDrawer, staged = true }: ConversationPaneProps) {
   const detail = useConversationDetail(conversationId)
   const summary = useConversationSummary(conversationId)
+  const parentConversationId = summary?.parentConversationId ?? detail?.parentConversationId
+  const parentSummary = useConversationSummary(parentConversationId)
   const live = useConversationLive(conversationId, staged)
   const groupedUi = useGroupedUi()
   const convArtifacts = useConversationArtifacts(conversationId)
@@ -307,6 +309,15 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
     }
   }
 
+  const parentTitle = parentSummary?.title.trim() || t('conv.pane.titleFallback', { id: parentConversationId ?? 0 })
+  const openParentConversation = (): void => {
+    if (parentConversationId === undefined) return
+    openTarget(
+      { kind: 'conversation', conversationId: parentConversationId },
+      isSplit ? { split: true } : undefined,
+    )
+  }
+
   const profile = profiles.find((p) => p.id === conversation.profileId)
   const profileStarters = profile !== undefined && profile.starters !== undefined && profile.starters.length > 0 ? profile.starters : undefined
   const enabledPluginIds = collectEnabledPluginIds(plugins)
@@ -370,6 +381,18 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
     <div className="helmx-pane">
       <header className="pane-topbar conversation-topbar">
         <div className="pane-title-group">
+          {parentConversationId !== undefined ? (
+            <button
+              type="button"
+              className="pane-parent-link"
+              title={t('conv.pane.openParent', { title: parentTitle })}
+              aria-label={t('conv.pane.openParent', { title: parentTitle })}
+              onClick={openParentConversation}
+            >
+              <HelmxIcon name="arrow-left" size={11} />
+              <span>{parentTitle}</span>
+            </button>
+          ) : null}
           {renaming ? (
             <input
               className="input"

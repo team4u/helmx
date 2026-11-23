@@ -405,6 +405,24 @@ describe("timeline-workbench-ux", () => {
     )
   })
 
+  test('ConversationPane 子会话顶栏提供父会话回退入口并走统一导航', { timeout: 60_000 }, async () => {
+    const parent = makeConversation(41, { title: '父任务' })
+    const child = makeConversation(42, { title: '子任务', parentConversationId: 41 })
+    const store = makeTestStore({
+      conversations: [parent, child],
+      conversationDetails: { 42: { ...child, entries: [] } },
+    })
+    const ui = mountNode()
+    await ui.render(store, e(ConversationPane, { conversationId: 42 }))
+    const parentButton = ui.host.querySelector('.pane-parent-link') as HTMLButtonElement | null
+    assert.ok(parentButton)
+    assert.equal(parentButton.textContent?.includes('父任务'), true)
+    await act(async () => {
+      parentButton.click()
+    })
+    assert.deepEqual(store.getPrimaryTarget(), { kind: 'conversation', conversationId: 41 })
+  })
+
   test('workbench-model 与 ArtifactsTab 严格分离正式产物与 spill、去重计数并支持预览下载与插件工作台', { timeout: 60_000 }, async () => {
     const registered = makeArtifact('art-reg', 'registered', 'summary-report.md', 'text/markdown', 2048)
     const uploaded = makeArtifact('art-up', 'upload', 'diagram.png', 'image/png', 4096)

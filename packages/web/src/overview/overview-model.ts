@@ -107,9 +107,10 @@ export interface OverviewCard {
   automated: boolean
   /** 整棵子树成员 ID（含根；OVERVIEW_CARD_META_SLOT 插槽 props 输入）。 */
   memberIds: number[]
-  /** 卡内后代会话芯片全量列表（按关注优先 + createdAt 倒序的确定性排序；
-   * 视图层按 OVERVIEW_DESCENDANT_LIMIT 截断展示，展开时同序补齐剩余）。 */
+  /** 卡内后代会话全量事实（按关注优先 + createdAt 倒序）；展示层可改用直属投影。 */
   descendants: OverviewDescendant[]
+  /** 根会话的直属子会话，作为导航视图的稳定主干。 */
+  directDescendants: OverviewDescendant[]
   /** 按 OVERVIEW_DESCENDANT_LIMIT 截断后未展示的后代数。 */
   hiddenDescendantCount: number
 }
@@ -118,10 +119,19 @@ export interface OverviewCard {
 export interface OverviewDescendant {
   conv: ConversationSummary
   backgroundActive: boolean
+  direct?: boolean
+  subtreeActiveCount?: number
+  subtreeErrorCount?: number
+  subtreeWaitingCount?: number
+  subtreeDescendantCount?: number
+  subtreeConversationIds?: number[]
 }
 
 /** 卡内后代芯片默认上限（超出折叠为「还有 N 个」）。 */
 export const OVERVIEW_DESCENDANT_LIMIT = 5
+
+/** 侧栏最多自动透出的异常/当前后代行数。 */
+export const SIDEBAR_DESCENDANT_AUTO_LIMIT = 3
 
 /** 侧栏工作集「近期」安静根会话默认上限（活跃三桶永不截断，当前在场安静树保底显示）。 */
 export const SIDEBAR_RECENT_QUIET_LIMIT = 8
@@ -179,20 +189,62 @@ function sortOverviewDescendants(
   rootId: number,
   background: ConversationBackgroundIndex,
 ): OverviewDescendant[] {
-  return members
-    .filter((member) => member.id !== rootId)
-    .map((member) => {
-      const entry: OverviewDescendant = {
-        conv: member,
-        backgroundActive: background.get(member.id)?.active === true,
+  const byId = new Map(members.map((member) => [member.id, member] as const))
+  const byParent = new Map<number, ConversationSummary[]>()
+  for (const member of members) {
+    if (member.parentConversationId === undefined) continue
+    const siblings = byParent.get(member.parentConversationId)
+    if (siblings === undefined) byParent.set(member.parentConversationId, [member])
+    else siblings.push(member)
+  }
+
+  const makeEntry = (member: ConversationSummary): OverviewDescendant => ({
+    conv: member,
+    backgroundActive: background.get(member.id)?.active === true,
+  })
+  const directChildren = byParent.get(rootId) ?? []
+  const directIds = new Set(directChildren.map((child) => child.id))
+  const directEntries = directChildren.map((member) => {
+    const subtree = new Set<number>()
+    const queue = [member.id]
+    let subtreeActiveCount = 0
+    let subtreeErrorCount = 0
+    let subtreeWaitingCount = 0
+    for (let index = 0; index < queue.length; index++) {
+      const current = queue[index]!
+      if (subtree.has(current)) continue
+      subtree.add(current)
+      const candidate = byId.get(current)
+      if (candidate !== undefined) {
+        if (candidate.status === 'error') subtreeErrorCount += 1
+        if (candidate.status === 'blocked' || candidate.pendingAskCount > 0) subtreeWaitingCount += 1
+        if (candidate.status === 'working' || candidate.status === 'blocked' || background.get(candidate.id)?.active === true) {
+          subtreeActiveCount += 1
+        }
       }
-      return { entry, signal: isOverviewDescendantActive(entry) }
-    })
-    .sort((a, b) => {
-      if (a.signal !== b.signal) return a.signal ? -1 : 1
-      return b.entry.conv.createdAt - a.entry.conv.createdAt || b.entry.conv.id - a.entry.conv.id
-    })
-    .map((item) => item.entry)
+      for (const child of byParent.get(current) ?? []) queue.push(child.id)
+    }
+    return {
+      ...makeEntry(member),
+      direct: true,
+      subtreeActiveCount,
+      subtreeErrorCount,
+      subtreeWaitingCount,
+      subtreeDescendantCount: Math.max(0, subtree.size - 1),
+      subtreeConversationIds: [...subtree],
+    }
+  })
+  const deeperEntries = members
+    .filter((member) => member.id !== rootId && !directIds.has(member.id))
+    .map(makeEntry)
+  const allEntries = [...directEntries, ...deeperEntries]
+  allEntries.sort((a, b) => {
+    const aSignal = isOverviewDescendantActive(a)
+    const bSignal = isOverviewDescendantActive(b)
+    if (aSignal !== bSignal) return aSignal ? -1 : 1
+    return b.conv.createdAt - a.conv.createdAt || b.conv.id - a.conv.id
+  })
+  return allEntries
 }
 
 /**
@@ -217,6 +269,12 @@ export function buildOverviewCards(input: {
   const cards: OverviewCard[] = []
   for (const aggregate of aggregateAttentionTrees(input)) {
     const descendants = sortOverviewDescendants(aggregate.members, aggregate.root.id, input.background)
+    const directDescendants = [...descendants.filter((descendant) => descendant.direct === true)].sort((a, b) =>
+      ((b.subtreeErrorCount ?? 0) > 0 || (b.subtreeWaitingCount ?? 0) > 0 ? 1 : (b.subtreeActiveCount ?? 0) > 0 ? 0 : -1) -
+        ((a.subtreeErrorCount ?? 0) > 0 || (a.subtreeWaitingCount ?? 0) > 0 ? 1 : (a.subtreeActiveCount ?? 0) > 0 ? 0 : -1) ||
+      a.conv.createdAt - b.conv.createdAt ||
+      a.conv.id - b.conv.id,
+    )
     cards.push({
       root: aggregate.root,
       bucket: aggregate.bucket ?? 'quiet',
@@ -230,6 +288,7 @@ export function buildOverviewCards(input: {
       profileLabel: profileNames.get(aggregate.root.profileId) ?? aggregate.root.profileId,
       summaryText: composeHonestTreeSummary({
         representative: aggregate.representative,
+        root: aggregate.root,
         backgroundActive: aggregate.backgroundActive,
         backgroundSummary: aggregate.backgroundSummary,
         activeDescendantCount: aggregate.activeDescendantCount,
@@ -238,6 +297,7 @@ export function buildOverviewCards(input: {
       automated: aggregate.root.ownedBy === 'helmx',
       memberIds: aggregate.members.map((member) => member.id),
       descendants,
+      directDescendants,
       hiddenDescendantCount: Math.max(0, descendants.length - OVERVIEW_DESCENDANT_LIMIT),
     })
   }
@@ -286,6 +346,7 @@ export function buildArchivedOverviewCards(input: {
     if (rootProfile !== undefined && !isProfileVisible(rootProfile, enabledPluginIds)) continue
 
     const descendants = sortOverviewDescendants(members, root.id, input.background)
+    const directDescendants = descendants.filter((descendant) => descendant.direct === true)
     cards.push({
       root,
       bucket: 'archived',
@@ -301,6 +362,7 @@ export function buildArchivedOverviewCards(input: {
       automated: false,
       memberIds: members.map((member) => member.id),
       descendants,
+      directDescendants,
       hiddenDescendantCount: Math.max(0, descendants.length - OVERVIEW_DESCENDANT_LIMIT),
     })
   }
@@ -1086,11 +1148,10 @@ export interface SidebarOverviewDescendantsSlice {
 }
 
 /**
- * 解析侧栏工作集中单棵树的后代子行切片：
- * - 手动展开（expanded=true）时展示全量后代；
- * - 未手动展开时，自动浮现活跃/待处理后代、当前主/分屏正在查看的后代、
- *   以及搜索激活时直接命中的后代；安静历史后代收拢计入 hiddenCount，
- *   保持窄栏紧凑的同时不遮蔽正在处理或正在查看的现场。
+ * 解析侧栏工作集中单棵树的子行切片：
+ * - 侧栏只渲染直属子会话，孙级事实聚合到直属子行；
+ * - 默认只透出当前查看项与最高优先级异常，且有硬上限；
+ * - 手动展开后展示全部直属子会话，绝不在窄栏递归铺开深层树。
  */
 export function resolveSidebarOverviewDescendants(input: {
   card: OverviewCard
@@ -1099,30 +1160,55 @@ export function resolveSidebarOverviewDescendants(input: {
   query?: string
 }): SidebarOverviewDescendantsSlice {
   const { card, expanded, activeConversationIds, query = '' } = input
-  if (card.descendants.length === 0) {
+  const descendants = card.directDescendants
+  if (descendants.length === 0) {
     return { visible: [], hiddenCount: 0, hasCollapsibleQuiet: false }
   }
   const trimmedQuery = query.trim()
-  const isAutoVisible = (descendant: OverviewDescendant): boolean =>
-    isOverviewDescendantActive(descendant) ||
-    activeConversationIds.has(descendant.conv.id) ||
-    (trimmedQuery !== '' && overviewDescendantMatchesQuery(descendant, trimmedQuery))
-
-  const autoVisibleCount = card.descendants.filter(isAutoVisible).length
-  const hasCollapsibleQuiet = autoVisibleCount < card.descendants.length
-
-  if (expanded) {
-    return {
-      visible: card.descendants,
-      hiddenCount: 0,
-      hasCollapsibleQuiet,
+  const branchByConversationId = new Map<number, number>()
+  for (const descendant of descendants) {
+    for (const id of descendant.subtreeConversationIds ?? [descendant.conv.id]) {
+      branchByConversationId.set(id, descendant.conv.id)
     }
   }
-  const visible = card.descendants.filter(isAutoVisible)
+  const currentBranchIds = new Set<number>()
+  for (const id of activeConversationIds) {
+    const branchId = branchByConversationId.get(id)
+    if (branchId !== undefined) currentBranchIds.add(branchId)
+  }
+  const matchedBranchIds = new Set<number>()
+  if (trimmedQuery !== '') {
+    for (const candidate of card.descendants) {
+      if (!overviewDescendantMatchesQuery(candidate, trimmedQuery)) continue
+      const branchId = branchByConversationId.get(candidate.conv.id)
+      if (branchId !== undefined) matchedBranchIds.add(branchId)
+    }
+  }
+  const isAttention = (descendant: OverviewDescendant): boolean =>
+    (descendant.subtreeErrorCount ?? 0) > 0 || (descendant.subtreeWaitingCount ?? 0) > 0
+  const ranked = [...descendants].sort((a, b) => {
+    const aCurrent = currentBranchIds.has(a.conv.id)
+    const bCurrent = currentBranchIds.has(b.conv.id)
+    if (aCurrent !== bCurrent) return aCurrent ? -1 : 1
+    const aMatched = matchedBranchIds.has(a.conv.id)
+    const bMatched = matchedBranchIds.has(b.conv.id)
+    if (aMatched !== bMatched) return aMatched ? -1 : 1
+    const aAttention = isAttention(a)
+    const bAttention = isAttention(b)
+    if (aAttention !== bAttention) return aAttention ? -1 : 1
+    return a.conv.createdAt - b.conv.createdAt || a.conv.id - b.conv.id
+  })
+  const autoVisible = ranked.filter(
+    (descendant) =>
+      currentBranchIds.has(descendant.conv.id) ||
+      matchedBranchIds.has(descendant.conv.id) ||
+      isAttention(descendant),
+  )
+  const visible = expanded ? ranked : autoVisible.slice(0, SIDEBAR_DESCENDANT_AUTO_LIMIT)
   return {
     visible,
-    hiddenCount: card.descendants.length - visible.length,
-    hasCollapsibleQuiet,
+    hiddenCount: Math.max(0, ranked.length - visible.length),
+    hasCollapsibleQuiet: ranked.length > 0,
   }
 }
 

@@ -2382,13 +2382,13 @@ test('resolveSidebarOverviewDescendants & resolveSidebarOverviewPrimaryTarget: a
   // 若无可见子行兜底 → 仍直达 targetConversationId (#11)
   assert.equal(resolveSidebarOverviewPrimaryTarget(card, []), 11)
 
-  // 2) 正在主屏/分屏查看安静子会话 #12 → 自动浮现，不再隐藏当前所在位置
+  // 2) 正在主屏/分屏查看安静子会话 #12 → 当前项优先，审批项仍作为异常保底透出
   const viewedSlice = resolveSidebarOverviewDescendants({
     card,
     expanded: false,
     activeConversationIds: new Set([12]),
   })
-  assert.deepEqual(viewedSlice.visible.map((d) => d.conv.id), [11, 12])
+  assert.deepEqual(viewedSlice.visible.map((d) => d.conv.id), [12, 11])
   assert.equal(viewedSlice.hiddenCount, 1)
 
   // 3) 搜索命中安静子会话标题或 #id → 自动浮现命中项
@@ -2401,7 +2401,7 @@ test('resolveSidebarOverviewDescendants & resolveSidebarOverviewPrimaryTarget: a
     activeConversationIds: new Set(),
     query: '调研',
   })
-  assert.deepEqual(searchSlice.visible.map((d) => d.conv.id), [11, 12])
+  assert.deepEqual(searchSlice.visible.map((d) => d.conv.id), [12, 11])
 
   // 4) 手动展开：展示全部后代，hiddenCount 归零，仍保留 hasCollapsibleQuiet 供收起
   const expandedSlice = resolveSidebarOverviewDescendants({
@@ -2409,9 +2409,51 @@ test('resolveSidebarOverviewDescendants & resolveSidebarOverviewPrimaryTarget: a
     expanded: true,
     activeConversationIds: new Set(),
   })
-  assert.deepEqual(expandedSlice.visible.map((d) => d.conv.id), [11, 12, 13])
+  assert.deepEqual(expandedSlice.visible.map((d) => d.conv.id), [11, 13, 12])
   assert.equal(expandedSlice.hiddenCount, 0)
   assert.equal(expandedSlice.hasCollapsibleQuiet, true)
+})
+
+test('sidebar descendants stay bounded for wide and nested agent trees while preserving their direct-parent spine', { timeout: 60_000 }, () => {
+  const conversations = [conv({ id: 100, status: 'idle' })]
+  for (let index = 0; index < 18; index++) {
+    const childId = 200 + index
+    conversations.push(conv({ id: childId, parentConversationId: 100, title: `worker-${index}`, status: 'working' }))
+    conversations.push(conv({
+      id: 300 + index,
+      parentConversationId: childId,
+      title: `nested-${index}`,
+      status: index < 5 ? 'error' : 'working',
+    }))
+  }
+  const card = buildCards(conversations)[0]!
+  assert.equal(card.directDescendants.length, 18)
+  assert.equal(card.descendants.length, 36)
+  assert.equal(card.directDescendants[0]!.conv.id, 200, 'the direct projection retains the first child before signal ranking')
+  assert.equal(card.directDescendants[0]!.subtreeDescendantCount, 1)
+  assert.equal(card.directDescendants[0]!.subtreeErrorCount, 1)
+
+  const collapsed = resolveSidebarOverviewDescendants({
+    card,
+    expanded: false,
+    activeConversationIds: new Set(),
+  })
+  assert.deepEqual(collapsed.visible.map((item) => item.conv.id), [200, 201, 202])
+  assert.equal(collapsed.hiddenCount, 15, 'nested errors do not create an unbounded list of rows')
+
+  const viewingGrandchild = resolveSidebarOverviewDescendants({
+    card,
+    expanded: false,
+    activeConversationIds: new Set([317]),
+  })
+  assert.ok(viewingGrandchild.visible.some((item) => item.conv.id === 217), 'viewing a grandchild surfaces its direct parent')
+
+  const expanded = resolveSidebarOverviewDescendants({
+    card,
+    expanded: true,
+    activeConversationIds: new Set(),
+  })
+  assert.equal(expanded.visible.length, 18, 'manual expansion still renders direct children only')
 })
 
 test('sidebarOverviewCardsNeedLiveClock: returns false for quiet trees and true when visible card or descendant has stopwatch anchor', { timeout: 60_000 }, () => {

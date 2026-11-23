@@ -242,14 +242,16 @@ export function buildAttentionModel(input: {
 }
 
 /**
- * 诚实树摘要（态势行与总览卡片共用）：只呈现真实事实，优先级
- * error 诊断 > working 动作 > 后台摘要 > 后代运行计数；绝不编造进度。
+ * 诚实树摘要（态势行与总览卡片共用）：优先呈现根自身事实，再呈现后台摘要和子树计数；
+ * 不用单个子代理的局部 doing 冒充整棵树进度。
  */
 export function composeHonestTreeSummary(input: {
   representative: ConversationSummary
   backgroundActive: boolean
   backgroundSummary: string
   activeDescendantCount: number
+  /** Root status prevents a descendant's local doing text from masquerading as the tree summary. */
+  root?: ConversationSummary
   t?: WebMessageTranslator
 }): string {
   const t = input.t ?? englishWebTranslator
@@ -257,14 +259,18 @@ export function composeHonestTreeSummary(input: {
   if (representative.status === 'error' && representative.lastError?.trim()) {
     return representative.lastError.trim()
   }
-  if (representative.status === 'working' && representative.doing?.trim()) {
-    return representative.doing.trim()
+  if (input.root?.status === 'working' && input.root.doing?.trim()) {
+    return input.root.doing.trim()
+  }
+  if (input.activeDescendantCount > 0) {
+    return t('shell.attention.descendantsActive', { count: input.activeDescendantCount })
   }
   if (input.backgroundActive && input.backgroundSummary.trim()) {
     return input.backgroundSummary.trim()
   }
-  if (input.activeDescendantCount > 0) {
-    return t('shell.attention.descendantsActive', { count: input.activeDescendantCount })
+  // Callers without a root preserve the standalone representative contract.
+  if (input.root === undefined && input.activeDescendantCount === 0 && representative.status === 'working' && representative.doing?.trim()) {
+    return representative.doing.trim()
   }
   return ''
 }

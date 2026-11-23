@@ -89,17 +89,32 @@ export function ConversationStatusDot({
   conv,
   background,
   showDone = true,
+  aggregate,
 }: {
   conv: ConversationSummary
   background?: ConversationBackgroundActivity
   showDone?: boolean
+  /** Optional descendant facts. The light remains one slot, but reflects the visible subtree. */
+  aggregate?: {
+    activeCount?: number
+    errorCount?: number
+    waitingCount?: number
+  }
 }) {
+  const aggregateStatus =
+    conv.status === 'error' || (aggregate?.errorCount ?? 0) > 0
+      ? 'error'
+      : conv.status === 'blocked' || (aggregate?.waitingCount ?? 0) > 0
+        ? 'blocked'
+        : conv.status === 'working' || (aggregate?.activeCount ?? 0) > 0
+          ? 'working'
+          : conv.status
   return (
     <StatusLightDot
-      status={conv.status}
+      status={aggregateStatus}
       doing={conv.doing}
       lastError={conv.lastError}
-      backgroundActive={background?.active === true}
+      backgroundActive={background?.active === true && aggregateStatus !== 'working'}
       backgroundSummary={background?.summary}
       showDone={showDone}
     />

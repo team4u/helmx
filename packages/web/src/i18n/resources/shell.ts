@@ -322,17 +322,25 @@ export const shellMessages = {
     en: 'No conversations yet',
     'zh-CN': '暂无会话',
   },
-  'shell.sidebar.overviewExpandSub': {
-    en: 'Show {count} more sub-conversations',
-    'zh-CN': '展开其余 {count} 个子会话',
-  },
-  'shell.sidebar.overviewCollapseSub': {
-    en: 'Collapse sub-conversations',
-    'zh-CN': '收起子会话',
-  },
   'shell.sidebar.overviewSubBadge': {
     en: '{count} sub-conversations',
     'zh-CN': '{count} 个子会话',
+  },
+  'shell.sidebar.overviewSubBadgeWithActivity': {
+    en: '{active} active · {total} sub-conversations',
+    'zh-CN': '{active} 个运行中 · 共 {total} 个子会话',
+  },
+  'shell.sidebar.overviewDirectSubBadge': {
+    en: '{count} direct sub-conversations',
+    'zh-CN': '{count} 个直属子会话',
+  },
+  'shell.sidebar.overviewSubtreeError': {
+    en: '{count} descendant errors',
+    'zh-CN': '{count} 个后代失败',
+  },
+  'shell.sidebar.overviewSubtreeWaiting': {
+    en: '{count} descendants awaiting confirmation',
+    'zh-CN': '{count} 个后代等待确认',
   },
 
   // Batch archive/restore notices (verb interpolated: Archive/Restore, 归档/恢复)
