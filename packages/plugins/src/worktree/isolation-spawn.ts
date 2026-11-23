@@ -77,7 +77,7 @@ function makeOnResolved(params: {
     }
     params.ctx.store.updateLease(params.leaseToken, enriched)
     if (params.flushOnResolve) {
-      void params.ctx.deps.docStore.flush().catch((flushError: unknown) => {
+      void params.ctx.store.flush().catch((flushError: unknown) => {
         process.stderr.write(
           `builtin:worktree: worktree ${params.record.id} 绑定落盘失败: ${
             flushError instanceof Error ? flushError.message : String(flushError)

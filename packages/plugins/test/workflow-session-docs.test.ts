@@ -30,7 +30,7 @@ import { createWorktreePlugin } from '../src/worktree.js'
 import { createRunsProjection, MAX_PROJECTED_RUNS_PER_CONVERSATION } from '../src/workflow/projection.js'
 import { createHelmx } from '../../hub/src/app.js'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
-import { MemoryDocStore, makeConversationSummary } from './helpers/plugin-test-env.js'
+import { MemoryDocStore, MemoryKvStore, makeConversationSummary } from './helpers/plugin-test-env.js'
 
 const makeConversation = (id: number, parent?: number): ConversationSummary =>
   makeConversationSummary({
@@ -128,9 +128,10 @@ let dataDir: string
 let backend: FakeBackend
 let docs: MemoryDocStore
 let sessionDocs: MemorySessionDocStore
+let kv: MemoryKvStore
 
 function makeHost(): PluginHost {
-  return new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: backend, docs, sessionDocs })
+  return new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: backend, docs, sessionDocs, kv })
 }
 
 const META = (name: string) => `export const meta = { name: "${name}", description: "test" }\n`
@@ -140,6 +141,7 @@ beforeEach(() => {
   backend = new FakeBackend()
   docs = new MemoryDocStore()
   sessionDocs = new MemorySessionDocStore()
+  kv = new MemoryKvStore()
 })
 
 afterEach(() => {
@@ -320,7 +322,7 @@ test('sessionDoc 声明与 docs 命名空间隔离：runs 与 run-badges 为瞬�
   assert.equal(globalKeys.includes('builtin:workflow:runs'), false)
   assert.equal(globalKeys.includes('builtin:workflow:run-badges'), false, 'run-badges 为 durable:false 瞬态文档，不落持久层')
   assert.deepEqual(
-    globalKeys.filter((k) => !k.endsWith(':records') && !k.endsWith(':subagent-conversations') && !k.endsWith(':worktree-state')),
+    globalKeys.filter((k) => !k.endsWith(':records') && !k.endsWith(':subagent-conversations')),
     [],
     `持久层全局命名空间只存私有记录（实际 ${JSON.stringify(globalKeys)}）`,
   )
@@ -578,41 +580,32 @@ test('conversation.deleted 同时清理受管子代理登记表与已移除 work
   docs.set('builtin:workflow:subagent-conversations', {
     '21': { depth: 1, parentConversationId: 1, maxSubagentDepth: 2, createdAt: 1 },
   })
-  docs.set('builtin:worktree:worktree-state', {
-    'worktree-agent-bindings': {
-      'agent-21': { childId: 21, parentConversationId: 1 },
-      'agent-keep': { childId: 22, parentConversationId: 1 },
-    },
-    'runtime/worktrees': {
-      version: 1,
-      records: [
-        {
-          id: 'local:/wt/removed-21',
-          nodeId: 'local',
-          repoRoot: '/repo',
-          path: '/wt/removed-21',
-          branch: 'helmx/spawn-21',
-          baseBranch: 'main',
-          baseCommit: 'abc1234',
-          conversationId: 21,
-          status: 'removed',
-          createdAt: 1,
-          removedAt: 2,
-        },
-        {
-          id: 'local:/wt/active-21',
-          nodeId: 'local',
-          repoRoot: '/repo',
-          path: '/wt/active-21',
-          branch: 'helmx/spawn-active-21',
-          baseBranch: 'main',
-          baseCommit: 'abc1234',
-          conversationId: 21,
-          status: 'active',
-          createdAt: 1,
-        },
-      ],
-    },
+  kv.setParsed('builtin:worktree', 'agent-bindings', 'agent-21', { childId: 21, parentConversationId: 1 })
+  kv.setParsed('builtin:worktree', 'agent-bindings', 'agent-keep', { childId: 22, parentConversationId: 1 })
+  kv.setParsed('builtin:worktree', 'worktrees', 'local:/wt/removed-21', {
+    id: 'local:/wt/removed-21',
+    nodeId: 'local',
+    repoRoot: '/repo',
+    path: '/wt/removed-21',
+    branch: 'helmx/spawn-21',
+    baseBranch: 'main',
+    baseCommit: 'abc1234',
+    conversationId: 21,
+    status: 'removed',
+    createdAt: 1,
+    removedAt: 2,
+  })
+  kv.setParsed('builtin:worktree', 'worktrees', 'local:/wt/active-21', {
+    id: 'local:/wt/active-21',
+    nodeId: 'local',
+    repoRoot: '/repo',
+    path: '/wt/active-21',
+    branch: 'helmx/spawn-active-21',
+    baseBranch: 'main',
+    baseCommit: 'abc1234',
+    conversationId: 21,
+    status: 'active',
+    createdAt: 1,
   })
   const host = makeHost()
   await host.register(createWorkflowPlugin())
@@ -626,11 +619,9 @@ test('conversation.deleted 同时清理受管子代理登记表与已移除 work
 
   const afterGc = docs.get<Record<string, unknown>>('builtin:workflow:subagent-conversations', {})
   assert.equal('21' in afterGc, false, '会话删除后必须回收 subagent-conversations 中的孤儿条目')
-  const wtAfter = docs.get<Record<string, unknown>>('builtin:worktree:worktree-state', {})
-  const bindingsAfter = wtAfter['worktree-agent-bindings'] as Record<string, unknown>
-  assert.equal('agent-21' in bindingsAfter, false, '会话删除后必须回收 worktree-agent-bindings 中指向 21 的绑定')
-  assert.equal('agent-keep' in bindingsAfter, true, '无关会话绑定保持不变')
-  const recordsAfter = (wtAfter['runtime/worktrees'] as { records: Array<{ id: string }> }).records
+  assert.equal(kv.getParsed('builtin:worktree', 'agent-bindings', 'agent-21'), undefined, '会话删除后必须回收 agent-bindings 中指向 21 的绑定')
+  assert.notEqual(kv.getParsed('builtin:worktree', 'agent-bindings', 'agent-keep'), undefined, '无关会话绑定保持不变')
+  const recordsAfter = kv.listParsed<{ id: string }>('builtin:worktree', 'worktrees').map((e) => e.value)
   assert.deepEqual(
     recordsAfter.map((r) => r.id),
     ['local:/wt/active-21'],

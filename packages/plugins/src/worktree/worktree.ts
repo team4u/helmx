@@ -18,7 +18,7 @@ import {
   type WorktreeExecOptions,
   type WorktreeExecResult,
 } from './worktree-git.js'
-import { WorktreeStore, type ManagedWorktreeRecord, type WorktreeRecordSelector } from './worktree-store.js'
+import { WorktreeStore, type ManagedWorktreeRecord, type WorktreeKvHandles, type WorktreeRecordSelector } from './worktree-store.js'
 import {
   inspectWorktree,
   verifyWorktreeForResume,
@@ -40,11 +40,8 @@ export interface WorktreeAllocatorDeps {
   ) => Promise<WorktreeExecResult>
   nodeExists: (nodeId: string, path: string) => Promise<Result<boolean, FileError>>
   nodeCanonicalPath: (nodeId: string, path: string) => Promise<Result<string, FileError>>
-  docStore: {
-    get<T>(key: string, initial: T): T
-    set<T>(key: string, value: T): void
-    flush?: () => Promise<void>
-  }
+  /** 持久 KV 句柄（仅在未传 `store` 时用于构造默认 `WorktreeStore`）。 */
+  kv?: WorktreeKvHandles
   /** 可选注入统一存储实例（WorktreeIsolation 共享同一存储，免循环引用）。 */
   store?: WorktreeStore
   redact?: (text: string) => string
@@ -104,7 +101,13 @@ export class WorktreeAllocator {
 
   constructor(private readonly deps: WorktreeAllocatorDeps) {
     this.redact = deps.redact ?? ((t: string) => t)
-    this.store = deps.store ?? new WorktreeStore({ docStore: deps.docStore, redact: this.redact })
+    if (deps.store !== undefined) {
+      this.store = deps.store
+    } else if (deps.kv !== undefined) {
+      this.store = new WorktreeStore({ kv: deps.kv, redact: this.redact })
+    } else {
+      throw new HelmxError('validation_error', 'WorktreeAllocator requires either store or kv', 500)
+    }
   }
 
   private async withRepoLock<T>(nodeId: string, canonicalCommonDir: string, fn: () => Promise<T>): Promise<T> {

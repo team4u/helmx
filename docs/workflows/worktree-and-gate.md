@@ -26,7 +26,7 @@ flowchart TD
 - 源状态：如实记录源工作区是否脏（`dirtySource`）。源仓库脏时明确告知：隔离树基于 HEAD 创建，不包含源工作区未提交的改动。
 - 上下文注入：每次启动（新建与 `resume`）都向子代理提示词末尾注入 `<worktree_context>`，内容含 `worktreeId`、`path`、`branch`、`baseCommit`、`baseBranch`（若有）与 `dirtySource` 提示，并提醒子代理在结束回合前运行 `git add` 与 `git commit` 保持工作区干净。
 
-所有 Git 命令经 EnvFabric 节点通道以 argv 数组直跑（无 shell 拼接），路径含空格或特殊字符在 Linux、macOS 与 Windows 上同样安全。分配成功后元数据持久化在插件私有文档（完整键 `builtin:worktree:worktree-state`）：
+所有 Git 命令经 EnvFabric 节点通道以 argv 数组直跑（无 shell 拼接），路径含空格或特殊字符在 Linux、macOS 与 Windows 上同样安全。分配成功后元数据按条目独立持久化在插件私有 KV（`ctx.kv('worktrees')` / `ctx.kv('leases')` / `ctx.kv('agent-bindings')`，落库 `state.sqlite` 的 `helmx_plugin_kv` 表）：
 
 | 字段 | 说明 |
 | :--- | :--- |
@@ -43,7 +43,7 @@ flowchart TD
 
 工作树占用采用持久租约保护，安全红线是「不能证明停止就不能清理」：
 
-- **占位先于副作用**：`git worktree add` 执行之前，先在租约文档持久登记占位并落盘。进程在此之后崩溃，重启后该占位仍在——清理时无法证明没有执行启动，会以 `worktree_execution_unknown` 显式阻塞，交人工确认。
+- **占位先于副作用**：`git worktree add` 执行之前，先在租约 KV（`leases`）持久登记占位并落盘。进程在此之后崩溃，重启后该占位仍在——清理时无法证明没有执行启动，会以 `worktree_execution_unknown` 显式阻塞，交人工确认。
 - **释放仅限确认停止的状态**：执行确认成功；执行确认从未启动（`next` 调用前就抛错，此时占位自身可证明无执行）；或原生子会话的回合以失败收场（门禁未过、回合超时、Schema 校验失败、被中止/取消）且宿主确认该会话已停止。此时释放本次运行租约，同时保留 Worktree 记录与子会话映射，供下一轮 `resume` 续接或后续 `cleanup_worktree` 清理；`resume` 成功完成时顺带清掉该登记下残留的旧租约。
 - **未知状态保留租约**：进程崩溃后重启、`onResolved` 失败、外部进程可能已启动但未回填标识，均保留租约并以 `worktree_execution_unknown` 阻塞清理，交人工确认。
 - **元数据机密检查**：将要落库的路径/分支/仓路径字段若包含已登记机密，以 `worktree_metadata_secret` 拒绝持久化（诊断输出使用脱敏值）。

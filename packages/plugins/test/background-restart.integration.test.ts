@@ -26,6 +26,7 @@ import { test } from 'node:test'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { pathToFileURL } from 'node:url'
 import { execFileSync, spawn } from 'node:child_process'
 import { createRequire } from 'node:module'
@@ -38,7 +39,7 @@ import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import { Harness, createRegistry } from '@earendil-works/pi-durable'
 import { type HelmxEventFrame, type PluginDefinition } from '@helmx/protocol'
 
-import { KernelRuntime } from '../../kernel/src/runtime/index.js'
+import { KernelRuntime, openHelmxDatabase } from '../../kernel/src/runtime/index.js'
 import { createWorkflowPlugin } from '../src/workflow.js'
 import { createWorktreePlugin } from '../src/worktree.js'
 import { WorkflowService, type WorkflowServiceHost, type WorkflowStateStore } from '../src/workflow/engine/service.js'
@@ -690,7 +691,9 @@ test('原生 isolation:worktree SIGKILL 崩溃租约在重启 runtime.started �
   const seederPath = join(seedDir, 'wt-seed.mts')
   writeFileSync(
     seederPath,
-    `import { setTimeout as delay } from 'node:timers/promises'
+    `import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
+import { setTimeout as delay } from 'node:timers/promises'
 import { fauxAssistantMessage, fauxProvider } from ${JSON.stringify(pathToFileURL(join(PI_AI_DIR, 'dist/providers/faux.js')).href)}
 import { KernelRuntime } from ${JSON.stringify(KERNEL_SRC)}
 import { createPluginBuildProvider } from ${JSON.stringify(import.meta.resolve('@helmx/plugin-build'))}
@@ -713,10 +716,20 @@ let childId = 0
 for (let i = 0; i < 400; i++) {
   await delay(10)
   const working = kernel.listConversations().find((c) => c.parentConversationId === 1 && c.status === 'working')
-  const wtState = kernel.documentStore.get('builtin:worktree:worktree-state', {})
-  const wtLeases = (wtState['worktree-leases'] ?? {})
-  const hasLease = working && Object.values(wtLeases).some((l) => l && l.info && l.info.conversationId === working.id)
-  if (working && hasLease && faux.state.callCount >= 1) {
+  if (!working || faux.state.callCount < 1) continue
+  await kernel.documentStore.flush()
+  const db = new DatabaseSync(join(dataDir, 'state.sqlite'), { readOnly: true })
+  let hasLease = false
+  try {
+    const rows = db.prepare("SELECT value_json FROM helmx_plugin_kv WHERE plugin_id = 'builtin:worktree' AND namespace = 'leases'").all() as Array<{ value_json: string }>
+    hasLease = rows.some((row) => {
+      const lease = JSON.parse(row.value_json) as { info?: { conversationId?: number } }
+      return lease?.info?.conversationId === working.id
+    })
+  } finally {
+    db.close()
+  }
+  if (hasLease) {
     childId = working.id
     break
   }
@@ -774,6 +787,39 @@ process.kill(process.pid, 'SIGKILL')
     ])
     assert.ok(childId > 1)
 
+    // 在重启加载前校验真实崩溃现场已在 helmx_plugin_kv 落原生 running 租约，并同时种入 1 条外部 executionId 租约做对比。
+    let nativeLeaseKeys: string[] = []
+    const preDb = await openHelmxDatabase(dataDir)
+    try {
+      const preRows = await preDb.db.all<{ key: string; value_json: string }>(
+        "SELECT key, value_json FROM helmx_plugin_kv WHERE plugin_id = 'builtin:worktree' AND namespace = 'leases'",
+      )
+      const preLeases = Object.fromEntries(
+        preRows.map((row) => [
+          row.key,
+          JSON.parse(row.value_json) as { phase: string; info: { conversationId?: number; executionId?: string } },
+        ]),
+      )
+      nativeLeaseKeys = Object.entries(preLeases)
+        .filter(([, l]) => l.info.conversationId === childId && l.info.executionId === undefined)
+        .map(([k]) => k)
+      assert.equal(nativeLeaseKeys.length, 1, `SIGKILL 现场应有 1 条原生租约（实际：${JSON.stringify(preLeases)}）`)
+
+      await preDb.db.run(
+        `INSERT INTO helmx_plugin_kv (plugin_id, namespace, key, value_json, updated_at)
+         VALUES ('builtin:worktree', 'leases', 'ext-lease-seed', ?, ?)`,
+        JSON.stringify({
+          phase: 'running',
+          info: { conversationId: 9999, executionId: 'herdr:pane-keep' },
+          worktreeId: 'wt-ext-keep',
+          createdAt: 1,
+        }),
+        Date.now(),
+      )
+    } finally {
+      await preDb.close()
+    }
+
     const faux = makeFauxProvider()
     const kernel = await KernelRuntime.open({
       buildProvider: createPluginBuildProvider(),
@@ -785,24 +831,6 @@ process.kill(process.pid, 'SIGKILL')
     })
     recoveredKernel = kernel
 
-    // 在插件启动前校验真实崩溃现场已落原生 running 租约，并同时种入 1 条外部 executionId 租约做对比。
-    const preState = kernel.documentStore.get<Record<string, unknown>>('builtin:worktree:worktree-state', {})
-    const preLeases = (preState['worktree-leases'] as Record<string, { phase: string; info: { conversationId?: number; executionId?: string } }> | undefined) ?? {}
-    const nativeLeaseKeys = Object.entries(preLeases)
-      .filter(([, l]) => l.info.conversationId === childId && l.info.executionId === undefined)
-      .map(([k]) => k)
-    assert.equal(nativeLeaseKeys.length, 1, `SIGKILL 现场应有 1 条原生租约（实际：${JSON.stringify(preLeases)}）`)
-
-    preLeases['ext-lease-seed'] = {
-      phase: 'running',
-      info: { conversationId: 9999, executionId: 'herdr:pane-keep' },
-      worktreeId: 'wt-ext-keep',
-      createdAt: 1,
-    } as never
-    preState['worktree-leases'] = preLeases
-    kernel.documentStore.set('builtin:worktree:worktree-state', preState)
-    await kernel.documentStore.flush()
-
     // 刻意逆序注册（worktree 先于 workflow）：验证 reconcile 阶段按 reconcileAfter 拓扑序先收敛 workflow 遗留子会话，
     // 再回收原生工作树崩溃租约，不再依赖 Hub 注册顺序。
     await kernel.plugins.register(createWorktreePlugin())
@@ -813,8 +841,17 @@ process.kill(process.pid, 'SIGKILL')
     assert.equal(faux.state.callCount, 0, '工作树遗留子会话重启期零新增模型调用')
     assert.equal(kernel.getConversation(childId).status, 'idle', '子会话先于租约回收收敛 idle')
 
-    const postState = kernel.documentStore.get<Record<string, unknown>>('builtin:worktree:worktree-state', {})
-    const postLeases = (postState['worktree-leases'] as Record<string, unknown> | undefined) ?? {}
+    await kernel.documentStore.flush()
+    const postDb = new DatabaseSync(join(dataDir, 'state.sqlite'), { readOnly: true })
+    let postLeases: Record<string, unknown>
+    try {
+      const postRows = postDb
+        .prepare("SELECT key, value_json FROM helmx_plugin_kv WHERE plugin_id = 'builtin:worktree' AND namespace = 'leases'")
+        .all() as Array<{ key: string; value_json: string }>
+      postLeases = Object.fromEntries(postRows.map((row) => [row.key, JSON.parse(row.value_json)]))
+    } finally {
+      postDb.close()
+    }
     assert.equal(postLeases[nativeLeaseKeys[0]!], undefined, '已停止原生租约必须被 reconcile 自动回收')
     assert.ok(postLeases['ext-lease-seed'], '外部 executionId 租约必须继续保留 fail-closed')
 
