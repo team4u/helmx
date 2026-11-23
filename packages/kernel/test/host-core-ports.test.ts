@@ -14,6 +14,8 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { rm, symlink, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
 import net from 'node:net'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -27,6 +29,7 @@ import {
   PluginHost,
   type PluginHostBackend,
 } from '../src/plugins/index.js'
+import { MAX_ARTIFACT_BYTES } from '../src/services/index.js'
 import { projectToolPromptSections } from '../src/runtime/runtime-helpers.js'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
@@ -167,7 +170,13 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
       () => captured!.nodeIpc.isOnline('local'),
       () => captured!.completeText({ conversationId: 1, systemPrompt: '', text: '' }),
       () => captured!.forkConversation(1, { entryId: 1 }),
+      () => captured!.resetConversation(1),
+      () => captured!.resetConversationGuarded(1),
+      () => captured!.compactConversation(1),
+      () => captured!.compactConversationGuarded(1),
       () => captured!.listArtifacts(1),
+      () => captured!.createArtifact(1, { name: 'a.txt', bytes: new Uint8Array([1]) }),
+      () => captured!.readArtifact(1, 'art-1'),
       () => captured!.refreshModels(),
       () => captured!.redact('x'),
       () => captured!.executionEnv('local', '/tmp').canonicalPath('/tmp/x', BACKGROUND_CONTEXT),
@@ -186,6 +195,41 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
     await host.enable('p:epoch')
     await assert.doesNotReject(captured!.profiles.get('assistant'))
     await host.unregister('p:epoch').catch(() => {})
+  })
+
+  await t.test('unwired optional context/artifact host ports explicitly reject 501 not_supported without fallback', { timeout: 60_000 }, async () => {
+    const bareBackend: PluginHostBackend = {
+      ...makeBackend({}),
+      resetConversation: undefined,
+      resetConversationGuarded: undefined,
+      compactConversation: undefined,
+      compactConversationGuarded: undefined,
+      createArtifact: undefined,
+      readArtifact: undefined,
+    }
+    const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: bareBackend, docs: new MemoryDocStore() })
+    let api: HelmxHostApi | undefined
+    await host.register({
+      id: 'p:unwired-ports',
+      definePlugin(ctx) {
+        api = ctx.host
+      },
+    }, { enabled: true })
+    assert.ok(api)
+    const calls: Array<() => unknown> = [
+      () => api!.resetConversation(1),
+      () => api!.resetConversationGuarded(1),
+      () => api!.compactConversation(1),
+      () => api!.compactConversationGuarded(1),
+      () => api!.createArtifact(1, { name: 'a.txt', bytes: new Uint8Array([1]) }),
+      () => api!.readArtifact(1, 'art-1'),
+    ]
+    for (const call of calls) {
+      await assert.rejects(async () => call(), (err: unknown) =>
+        err instanceof HelmxError && err.status === 501 && err.code === 'not_supported',
+      )
+    }
+    await host.dispose()
   })
 
   await t.test('withFileLock: re-checks epoch after acquiring lock inside queue before invoking fn', { timeout: 60_000 }, async () => {
@@ -483,7 +527,7 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
     }
   })
 
-  await t.test('ctx.host.createArtifact + submitInput attachments: real runtime wiring end-to-end', { timeout: 60_000 }, async (sub) => {
+  await t.test('ctx.host.createArtifact / readArtifact / reset+compact (plain & guarded): real runtime wiring end-to-end', { timeout: 60_000 }, async (sub) => {
     const rtDir = useTempDir(sub, 'helmx-host-attach-rt-')
     const { models, faux } = makeFauxModels()
     // Response factory echoes whether the attachment manifest reached the model transcript.
@@ -528,16 +572,39 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
         title: 'sibling conversation',
       })
 
-      // Happy path: text artifact + image artifact, both visible via listArtifacts.
-      const textMeta = await runtime.artifacts.writeUploaded(conv.id, {
+      // createArtifact boundary validation: bad convId / bad input / bad filename / >15 MiB / missing conv.
+      await assert.rejects(
+        () => realHost!.createArtifact(0, { name: 'a.txt', bytes: new Uint8Array([1]) }),
+        (err: unknown) => err instanceof HelmxError && err.status === 400 && err.code === 'validation_error',
+      )
+      await assert.rejects(
+        () => realHost!.createArtifact(conv.id, { name: 'a.txt', bytes: 'not-bytes' as unknown as Uint8Array }),
+        (err: unknown) => err instanceof HelmxError && err.status === 400 && err.code === 'validation_error',
+      )
+      await assert.rejects(
+        () => realHost!.createArtifact(conv.id, { name: '../escape.txt', bytes: new Uint8Array([1]) }),
+        (err: unknown) => err instanceof HelmxError && err.status === 400 && err.code === 'validation_error',
+      )
+      await assert.rejects(
+        () => realHost!.createArtifact(conv.id, { name: 'huge.bin', bytes: new Uint8Array(MAX_ARTIFACT_BYTES + 1) }),
+        (err: unknown) => err instanceof HelmxError && err.status === 413 && err.code === 'artifact_too_large',
+      )
+      await assert.rejects(
+        () => realHost!.createArtifact(999_999, { name: 'missing.txt', bytes: new Uint8Array([1]) }),
+        (err: unknown) => err instanceof HelmxError && err.status === 404 && err.code === 'not_found',
+      )
+
+      // Happy path via ctx.host.createArtifact: text artifact (with SecretStash redaction) + binary PNG.
+      runtime.stash.addRedaction('sk-artifact-secret-42')
+      const textMeta = await realHost!.createArtifact(conv.id, {
         name: 'note.md',
         mimeType: 'text/markdown',
-        bytes: new TextEncoder().encode('# relay note'),
+        bytes: new TextEncoder().encode('# relay note sk-artifact-secret-42'),
       })
       assert.equal(textMeta.kind, 'upload')
       assert.equal(textMeta.conversationId, conv.id)
       const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3])
-      const imageMeta = await runtime.artifacts.writeUploaded(conv.id, {
+      const imageMeta = await realHost!.createArtifact(conv.id, {
         name: 'photo.png',
         mimeType: 'image/png',
         bytes: pngBytes,
@@ -548,11 +615,39 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
         [textMeta.id, imageMeta.id].sort(),
       )
 
-      // Attachment authorization: sibling-conversation artifact and unknown IDs are rejected.
-      const siblingMeta = await runtime.artifacts.writeUploaded(other.id, {
+      // readArtifact: byte fidelity, redaction, isolated ArrayBuffer, and authorization boundaries.
+      const readText = await realHost!.readArtifact(conv.id, textMeta.id)
+      assert.equal(readText.metadata.id, textMeta.id)
+      const decodedText = new TextDecoder().decode(readText.bytes)
+      assert.ok(decodedText.includes('# relay note') && !decodedText.includes('sk-artifact-secret-42'))
+      const readPng = await realHost!.readArtifact(conv.id, imageMeta.id)
+      assert.deepEqual([...readPng.bytes], [...pngBytes])
+      assert.equal(readPng.bytes.byteOffset, 0)
+      assert.equal(readPng.bytes.byteLength, readPng.bytes.buffer.byteLength, 'bytes must be an isolated Uint8Array copy')
+      readPng.bytes[0] = 0x00
+      assert.equal((await realHost!.readArtifact(conv.id, imageMeta.id)).bytes[0], 0x89)
+
+      // Attachment & readArtifact authorization: sibling-conversation artifact and unknown/invalid IDs rejected.
+      const siblingMeta = await realHost!.createArtifact(other.id, {
         name: 'private.txt',
         bytes: new TextEncoder().encode('sibling only'),
       })
+      await assert.rejects(
+        () => realHost!.readArtifact(conv.id, siblingMeta.id),
+        (err: unknown) => err instanceof HelmxError && err.status === 403 && err.code === 'artifact_forbidden',
+      )
+      await assert.rejects(
+        () => realHost!.readArtifact(conv.id, 'no-such-artifact'),
+        (err: unknown) => err instanceof HelmxError && err.status === 404 && err.code === 'not_found',
+      )
+      await assert.rejects(
+        () => realHost!.readArtifact(0, textMeta.id),
+        (err: unknown) => err instanceof HelmxError && err.status === 400 && err.code === 'validation_error',
+      )
+      await assert.rejects(
+        () => realHost!.readArtifact(conv.id, '   '),
+        (err: unknown) => err instanceof HelmxError && err.status === 400 && err.code === 'validation_error',
+      )
       await assert.rejects(
         () => realHost!.submitInput(conv.id, 'x', { attachments: [siblingMeta.id] }),
         (err: unknown) => err instanceof HelmxError && err.status === 403 && err.code === 'artifact_forbidden',
@@ -588,8 +683,77 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
         `model transcript carried the attachment manifest (timeline: ${timelineText.slice(0, 2000)})`,
       )
 
-      // Deletion mid-flight safety: querying a just-deleted conversation rejects 404.
+      // Ancestor-chain authorization: forked child conversation can read parent's artifact.
+      const childConv = await realHost!.forkConversation(conv.id, { title: 'child reader' })
+      const childRead = await realHost!.readArtifact(childConv.id, imageMeta.id)
+      assert.deepEqual([...childRead.bytes], [...pngBytes])
+
+      // Disk file missing -> truthful 404 artifact_file_missing; symlink escape -> 500 artifact_path_illegal.
+      const missingMeta = await realHost!.createArtifact(conv.id, {
+        name: 'vanish.txt',
+        bytes: new TextEncoder().encode('bye'),
+      })
+      const vanishDiskPath = join(rtDir, missingMeta.path)
+      await rm(vanishDiskPath)
+      await assert.rejects(
+        () => realHost!.readArtifact(conv.id, missingMeta.id),
+        (err: unknown) => err instanceof HelmxError && err.status === 404 && err.code === 'artifact_file_missing',
+      )
+      const outsideSecret = join(rtDir, 'outside-secret.txt')
+      await writeFile(outsideSecret, 'TOP-SECRET')
+      await symlink(outsideSecret, vanishDiskPath)
+      await assert.rejects(
+        () => realHost!.readArtifact(conv.id, missingMeta.id),
+        (err: unknown) => err instanceof HelmxError && err.status === 500 && err.code === 'artifact_path_illegal',
+      )
+
+      // Human-channel vs guarded context maintenance via ctx.host:
+      // 1) ownedBy: 'human' -> plain reset/compact succeed (keeping ownedBy='human'), guarded variants reject 409.
+      assert.equal(realHost!.getConversationOwnership(conv.id), 'human')
+      await assert.rejects(
+        () => realHost!.resetConversationGuarded(conv.id, { handoff: 'blocked' }),
+        (err: unknown) => err instanceof HelmxError && err.status === 409 && err.code === 'ownership_conflict',
+      )
+      await assert.rejects(
+        () => realHost!.compactConversationGuarded(conv.id, { instructions: 'blocked' }),
+        (err: unknown) => err instanceof HelmxError && err.status === 409 && err.code === 'ownership_conflict',
+      )
+      const seqBeforeHumanReset = realHost!.getConversation(conv.id).stateChangeSeq
+      const humanReset = await realHost!.resetConversation(conv.id, { handoff: 'human /clear' })
+      assert.equal(humanReset.ownedBy, 'human')
+      assert.equal(humanReset.stateChangeSeq, seqBeforeHumanReset + 1)
+      const humanCompact = await realHost!.compactConversation(conv.id, { instructions: 'human /compact' })
+      assert.ok(Number.isSafeInteger(humanCompact.taskId) && humanCompact.taskId > 0)
+      assert.equal(humanCompact.conversation.ownedBy, 'human')
+      assert.equal(humanCompact.conversation.stateChangeSeq, seqBeforeHumanReset + 2)
+
+      // 2) ownedBy: 'helmx' -> guarded reset/compact succeed with CAS and reject stale expectedStateSeq.
+      realHost!.markConversationOwnership(childConv.id, 'helmx')
+      const childSeq = realHost!.getConversation(childConv.id).stateChangeSeq
+      await assert.rejects(
+        () => realHost!.resetConversationGuarded(childConv.id, undefined, { expectedStateSeq: childSeq + 10 }),
+        (err: unknown) => err instanceof HelmxError && err.status === 409 && err.code === 'state_seq_conflict',
+      )
+      const guardedReset = await realHost!.resetConversationGuarded(
+        childConv.id,
+        { handoff: 'auto reset' },
+        { expectedOwnership: 'helmx', expectedStateSeq: childSeq },
+      )
+      assert.equal(guardedReset.stateChangeSeq, childSeq + 1)
+      const guardedCompact = await realHost!.compactConversationGuarded(
+        childConv.id,
+        { instructions: 'auto compact' },
+        { expectedOwnership: 'helmx', expectedStateSeq: childSeq + 1 },
+      )
+      assert.ok(Number.isSafeInteger(guardedCompact.taskId) && guardedCompact.taskId > 0)
+      assert.equal(guardedCompact.conversation.stateChangeSeq, childSeq + 2)
+
+      // Deletion mid-flight safety: creating into a just-deleted conversation rejects 404, never orphans.
       await runtime.deleteConversation(other.id)
+      await assert.rejects(
+        () => realHost!.createArtifact(other.id, { name: 'late.txt', bytes: new TextEncoder().encode('x') }),
+        (err: unknown) => err instanceof HelmxError && err.status === 404 && err.code === 'not_found',
+      )
 
       // Durable submission lookup by requestId: uncommitted -> undefined, committed -> done, bad requestId -> 400, missing conv -> 404.
       const reqId = 'host-core-ports:req-1'
@@ -611,10 +775,20 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
 
       await runtime.plugins.disable('p:attach-real')
       // Wrap async: the epoch guard throws synchronously before entering the async backend call.
-      await assert.rejects(
-        async () => realHost!.listArtifacts(conv.id),
-        (err: unknown) => err instanceof HelmxError && err.status === 409 && err.code === 'plugin_context_expired',
-      )
+      for (const staleCall of [
+        () => realHost!.listArtifacts(conv.id),
+        () => realHost!.createArtifact(conv.id, { name: 'late.txt', bytes: new TextEncoder().encode('x') }),
+        () => realHost!.readArtifact(conv.id, textMeta.id),
+        () => realHost!.resetConversation(conv.id),
+        () => realHost!.resetConversationGuarded(conv.id),
+        () => realHost!.compactConversation(conv.id),
+        () => realHost!.compactConversationGuarded(conv.id),
+      ]) {
+        await assert.rejects(
+          async () => staleCall(),
+          (err: unknown) => err instanceof HelmxError && err.status === 409 && err.code === 'plugin_context_expired',
+        )
+      }
     } finally {
       await runtime.close()
     }

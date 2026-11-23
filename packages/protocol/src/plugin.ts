@@ -670,10 +670,69 @@ export interface HelmxHostApi {
    * / 409 state_seq_conflict 且绝不发起中止。
    */
   abortConversationGuarded(id: number, guard: GuardedMutationExpectation): Promise<void>
+  /**
+   * 原地重置会话上下文（人类交互通道代理入口，与 POST /api/conversations/:id/reset 同源）：
+   * 用于外部聊天渠道转发人类显式发起的 `/clear` 等指令（保持会话 `ownedBy: 'human'`）。
+   * 后台自动化/巡检维护必须使用 `resetConversationGuarded`，不得调用本端口绕过归属红线。
+   */
+  resetConversation(id: number, opts?: { handoff?: string }): Promise<ConversationSummary>
+  /**
+   * 自动化 guarded 上下文重置（Watchdog 红线内核执行层）：在会话串行域内、
+   * 于第一个不可逆动作（SDK reset 调用）前同步复核会话存在性、归属（严禁
+   * human）与可选 CAS 水位；复核失败抛 404 not_found / 409 ownership_conflict
+   * / 409 state_seq_conflict 且绝不发起重置。handoff 经内核统一脱敏；成功后
+   * 推进 stateChangeSeq、触发上下文用量重算并广播 conversation.upsert。
+   * guard 缺省时仅强制 human 红线（与 submitInputGuarded 同口径）。
+   */
+  resetConversationGuarded(
+    id: number,
+    opts?: { handoff?: string },
+    guard?: GuardedMutationExpectation,
+  ): Promise<ConversationSummary>
+  /**
+   * 手动压缩会话上下文（人类交互通道代理入口，与 POST /api/conversations/:id/compact 同源）：
+   * 用于外部聊天渠道转发人类显式发起的 `/compact` 等指令（保持会话 `ownedBy: 'human'`）。
+   * 后台自动化/巡检维护必须使用 `compactConversationGuarded`，不得调用本端口绕过归属红线。
+   */
+  compactConversation(
+    id: number,
+    opts?: { instructions?: string },
+  ): Promise<{ taskId: number; conversation: ConversationSummary }>
+  /**
+   * 自动化 guarded 手动压缩（Watchdog 红线内核执行层）：入队后台压缩任务前
+   * 在会话串行域内同步复核会话存在性、归属（严禁 human）与可选 CAS 水位，
+   * 复核失败绝不入队；instructions 经内核统一脱敏。返回后台任务 ID 与更新
+   * 后的会话摘要。guard 缺省时仅强制 human 红线（与 submitInputGuarded 同口径）。
+   */
+  compactConversationGuarded(
+    id: number,
+    opts?: { instructions?: string },
+    guard?: GuardedMutationExpectation,
+  ): Promise<{ taskId: number; conversation: ConversationSummary }>
   /** 会话归属权现读（Watchdog 红线判定唯一可信来源；未标记一律 human）。 */
   getConversationOwnership(id: number): ConversationOwnership
   /** 列出会话产物元数据（本会话全部；明文内容不进返回值）。 */
   listArtifacts(conversationId: number): Promise<ArtifactMetadata[]>
+  /**
+   * 以内存字节写入会话产物（kind 'upload'）：与 HTTP 上传同一条服务链
+   * （参数与文件名边界校验、15 MiB 上限、文本 MIME 过 SecretStash 脱敏、
+   * 会话写删串行链防孤儿）；目标会话不存在抛 404。返回元数据供
+   * submitInput / submitInputGuarded 的 attachments 挂载。
+   */
+  createArtifact(
+    conversationId: number,
+    input: { name: string; bytes: Uint8Array; mimeType?: string },
+  ): Promise<ArtifactMetadata>
+  /**
+   * 授权读取单个产物元数据与原始字节（须属于目标会话或其祖先链，上限 32 跳）：
+   * 产物不存在抛 404 not_found、越权抛 403 artifact_forbidden、盘上文件缺失抛
+   * 404 artifact_file_missing；走元数据形状门禁与三层 realpath 防逃逸，返回
+   * 独立拷贝的 Uint8Array（不暴露宿主磁盘路径、不共享 Buffer 池）。
+   */
+  readArtifact(
+    conversationId: number,
+    artifactId: string,
+  ): Promise<{ metadata: ArtifactMetadata; bytes: Uint8Array }>
   /**
    * 全局文本脱敏（SecretStash 明文 -> marker）：诊断/日志出站前、以及插件
    * 持久化自身元数据（如含路径/分支的工作树记录）前统一过此脱敏，防已

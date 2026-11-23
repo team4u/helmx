@@ -9,8 +9,8 @@
  */
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { Harness } from '@earendil-works/pi-durable'
-import type { ConversationSummary } from '@helmx/protocol'
-import { HelmxError } from '@helmx/protocol'
+import type { ConversationSummary, GuardedMutationExpectation } from '@helmx/protocol'
+import { HelmxError, isPlainObject } from '@helmx/protocol'
 import type { SecretStash } from '../services/index.js'
 import type { ConversationTracker } from './conversations.js'
 import type { EventHub } from './events.js'
@@ -27,6 +27,37 @@ interface ConversationContextOpsHost {
   readonly isClosed: () => boolean
   readonly alignConversationModel: (id: number) => Promise<void>
   readonly withOwnership: (summary: ConversationSummary) => ConversationSummary
+  /**
+   * Guarded-mutation synchronous re-check (ownership human red line + optional CAS watermark),
+   * injected by ConversationService; invoked with zero await gap before the irreversible SDK call.
+   */
+  readonly assertMutationGuard: (id: number, guard: GuardedMutationExpectation) => void
+}
+
+function assertPositiveConversationId(id: number): void {
+  if (!Number.isSafeInteger(id) || id <= 0) {
+    throw new HelmxError(
+      'validation_error',
+      `conversationId must be a positive safe integer (received ${String(id)})`,
+      400,
+      { conversationId: id },
+    )
+  }
+}
+
+function assertOptionalStringOption(
+  opts: unknown,
+  field: 'handoff' | 'instructions',
+): string | undefined {
+  if (opts === undefined) return undefined
+  if (!isPlainObject(opts)) {
+    throw new HelmxError('validation_error', `options must be a plain object`, 400)
+  }
+  const value = opts[field]
+  if (value !== undefined && typeof value !== 'string') {
+    throw new HelmxError('validation_error', `${field} must be a string`, 400, { field })
+  }
+  return value
 }
 
 export class ConversationContextOps {
@@ -47,42 +78,65 @@ export class ConversationContextOps {
     return { meta, conversation }
   }
 
-  /** Reset conversation context: call SDK reset(handoff), increment stateChangeSeq, and broadcast summary. */
+  /**
+   * Reset conversation context: call SDK reset(handoff), re-read the latest metadata snapshot to advance
+   * `stateChangeSeq` without clobbering concurrent updates or resurrecting deleted rows, and broadcast summary.
+   * Guarded callers (plugin automation) pass `guard`: ownership + optional CAS watermark are re-checked
+   * synchronously right before the irreversible SDK reset call (zero await gap).
+   */
   async resetConversation(
     id: number,
     opts?: { handoff?: string },
+    guard?: GuardedMutationExpectation,
   ): Promise<ConversationSummary> {
     this.assertOpen()
-    const { meta, conversation } = await this.conversationForContextOp(id)
-    const safeHandoff =
-      opts?.handoff !== undefined && opts.handoff !== '' ? this.host.stash.redact(opts.handoff) : undefined
+    assertPositiveConversationId(id)
+    const handoff = assertOptionalStringOption(opts, 'handoff')
+    const { conversation } = await this.conversationForContextOp(id)
+    if (guard !== undefined) this.host.assertMutationGuard(id, guard)
+    const safeHandoff = handoff !== undefined && handoff !== '' ? this.host.stash.redact(handoff) : undefined
     await conversation.reset(safeHandoff, BACKGROUND_CONTEXT)
-    this.host.store.upsertConv({ ...meta, stateChangeSeq: meta.stateChangeSeq + 1, updatedAt: Date.now() })
+    const latestMeta = this.host.store.getConv(id)
+    if (latestMeta === undefined || this.host.store.isDeleted(id)) {
+      throw new HelmxError('not_found', `conversation not found: ${id}`, 404, { conversationId: id })
+    }
+    this.host.store.upsertConv({ ...latestMeta, stateChangeSeq: latestMeta.stateChangeSeq + 1, updatedAt: Date.now() })
     // Context resets to zero after reset: trigger usage recalculation immediately (deduplicated alongside pi.reset observe backstop).
     this.host.tracker.scheduleContextUsageRefresh(id)
-    const summary = this.host.tracker.summaryOf(id)
-    this.host.events.publish('conversation.upsert', this.host.withOwnership(summary))
+    const summary = this.host.withOwnership(this.host.tracker.summaryOf(id))
+    this.host.events.publish('conversation.upsert', summary)
     return summary
   }
 
-  /** Manual compaction: call SDK compact(instructions) returning background task ID and updated conversation summary. */
+  /**
+   * Manual compaction: call SDK compact(instructions) returning background task ID and updated summary.
+   * Guarded callers pass `guard`: re-check runs synchronously right before the irreversible SDK compact enqueue.
+   */
   async compactConversation(
     id: number,
     opts?: { instructions?: string },
+    guard?: GuardedMutationExpectation,
   ): Promise<{ taskId: number; conversation: ConversationSummary }> {
     this.assertOpen()
-    const { meta, conversation } = await this.conversationForContextOp(id)
+    assertPositiveConversationId(id)
+    const instructions = assertOptionalStringOption(opts, 'instructions')
+    const { conversation } = await this.conversationForContextOp(id)
+    if (guard !== undefined) this.host.assertMutationGuard(id, guard)
     const safeInstructions =
-      opts?.instructions !== undefined && opts.instructions !== ''
-        ? this.host.stash.redact(opts.instructions)
+      instructions !== undefined && instructions !== ''
+        ? this.host.stash.redact(instructions)
         : undefined
     const taskId = await conversation.compact(safeInstructions, BACKGROUND_CONTEXT)
-    this.host.store.upsertConv({ ...meta, stateChangeSeq: meta.stateChangeSeq + 1, updatedAt: Date.now() })
+    const latestMeta = this.host.store.getConv(id)
+    if (latestMeta === undefined || this.host.store.isDeleted(id)) {
+      throw new HelmxError('not_found', `conversation not found: ${id}`, 404, { conversationId: id })
+    }
+    this.host.store.upsertConv({ ...latestMeta, stateChangeSeq: latestMeta.stateChangeSeq + 1, updatedAt: Date.now() })
     // Manual compaction enqueued: trigger usage recalculation immediately (compacting flag and post-compaction tokens
     // continue updating via live/entry observe triggers; idle conversations don't short-circuit on live frames).
     this.host.tracker.scheduleContextUsageRefresh(id)
-    const summary = this.host.tracker.summaryOf(id)
-    this.host.events.publish('conversation.upsert', this.host.withOwnership(summary))
+    const summary = this.host.withOwnership(this.host.tracker.summaryOf(id))
+    this.host.events.publish('conversation.upsert', summary)
     return { taskId: Number(taskId), conversation: summary }
   }
 

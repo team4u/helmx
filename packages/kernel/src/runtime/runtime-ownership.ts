@@ -43,11 +43,27 @@ export class RuntimeOwnershipManager {
   /**
    * Record conversation ownership on `helmx_conversations.owned_by` (single authoritative source for Watchdog invariants):
    * - Independent of user-editable tags/parent derivation; unmarked defaults to 'human';
-   * - Persisted directly on the conversation row across restarts.
+   * - Persisted directly on the conversation row across restarts;
+   * - Strictly validates boundary inputs (never silently coerces legacy/invalid values like `'bot'` to `'human'`).
    */
   markOwnership(conversationId: number, owner: ConversationOwnership): void {
-    const normalized: ConversationOwnership = owner === 'helmx' ? 'helmx' : 'human'
-    if (!this.deps.store.setConvOwnership(conversationId, normalized)) return
+    if (!Number.isSafeInteger(conversationId) || conversationId <= 0) {
+      throw new HelmxError(
+        'validation_error',
+        `conversationId must be a positive safe integer (received ${String(conversationId)})`,
+        400,
+        { conversationId },
+      )
+    }
+    if (owner !== 'human' && owner !== 'helmx') {
+      throw new HelmxError(
+        'validation_error',
+        `invalid conversation ownership: expected 'human' | 'helmx', got ${String(owner)}`,
+        400,
+        { conversationId, owner },
+      )
+    }
+    if (!this.deps.store.setConvOwnership(conversationId, owner)) return
     this.deps.events.publish('conversation.upsert', this.deps.conversations.summaryWithOwnership(conversationId))
   }
 

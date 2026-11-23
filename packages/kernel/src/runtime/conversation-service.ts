@@ -197,6 +197,7 @@ export class ConversationService {
       isClosed: this.o.isClosed,
       alignConversationModel: (id) => this.alignConversationModel(id),
       withOwnership: (summary) => this.withOwnership(summary),
+      assertMutationGuard: (id, guard) => this.assertMutationGuard(id, guard),
     })
 
     this.detailOps = new ConversationDetailService({
@@ -882,11 +883,35 @@ export class ConversationService {
     return this.attachments.resolveAuthorizedAttachments(conversationId, attachmentIds)
   }
 
-  async resolveAuthorizedAttachment(
+  async createArtifact(
+    conversationId: number,
+    input: { name: string; bytes: Uint8Array; mimeType?: string },
+  ): Promise<ArtifactMetadata> {
+    this.assertWritable()
+    this.contextOps.assertOpen()
+    if (!Number.isSafeInteger(conversationId) || conversationId <= 0) {
+      throw new HelmxError(
+        'validation_error',
+        `invalid conversationId: ${String(conversationId)}`,
+        400,
+        { conversationId },
+      )
+    }
+    const exists = (id: number): boolean =>
+      this.store.getConv(id) !== undefined && !this.store.isDeleted(id)
+    if (!exists(conversationId)) {
+      throw new HelmxError('not_found', `conversation not found: ${conversationId}`, 404, {
+        conversationId,
+      })
+    }
+    return this.artifactsSvc.writeUploaded(conversationId, input, { conversationExists: exists })
+  }
+
+  async readAuthorizedArtifact(
     conversationId: number,
     artifactId: string,
-  ): Promise<{ id: string; name: string; mimeType: string; size: number; absPath: string }> {
-    return this.attachments.resolveAuthorizedAttachment(conversationId, artifactId)
+  ): Promise<{ metadata: ArtifactMetadata; bytes: Uint8Array }> {
+    return this.attachments.readAuthorizedArtifact(conversationId, artifactId)
   }
 
   buildAttachmentBlock(resolved: ReadonlyArray<ResolvedAttachmentItem>): string {
@@ -1172,12 +1197,41 @@ export class ConversationService {
     return this.contextOps.resetConversation(id, opts)
   }
 
+  /**
+   * Automated guarded reset: validates guard shape up front (fail-fast), then executes fetch +
+   * synchronous re-check + irreversible SDK reset inside the per-conversation mutation gate
+   * (serialized with guarded abort/submit/compact).
+   */
+  async resetConversationGuarded(
+    id: number,
+    opts?: { handoff?: string },
+    guard: GuardedMutationExpectation = {},
+  ): Promise<ConversationSummary> {
+    this.assertWritable()
+    this.assertGuardShape(guard)
+    return this.withMutationGate(id, () => this.contextOps.resetConversation(id, opts, guard))
+  }
+
   async compactConversation(
     id: number,
     opts?: { instructions?: string },
   ): Promise<{ taskId: number; conversation: ConversationSummary }> {
     this.assertWritable()
     return this.contextOps.compactConversation(id, opts)
+  }
+
+  /**
+   * Automated guarded compaction: same serial-domain + zero-await pre-enqueue re-check invariants
+   * as `resetConversationGuarded`; a failed re-check never enqueues the background compaction task.
+   */
+  async compactConversationGuarded(
+    id: number,
+    opts?: { instructions?: string },
+    guard: GuardedMutationExpectation = {},
+  ): Promise<{ taskId: number; conversation: ConversationSummary }> {
+    this.assertWritable()
+    this.assertGuardShape(guard)
+    return this.withMutationGate(id, () => this.contextOps.compactConversation(id, opts, guard))
   }
 
   async forkConversation(

@@ -130,6 +130,34 @@ export class PluginHostBackendFixtureBase implements PluginHostBackend {
     unsupported('host.abortConversationGuarded')
   }
 
+  resetConversation(
+    ...args: Parameters<NonNullable<Port<'resetConversation'>>>
+  ): ReturnType<NonNullable<Port<'resetConversation'>>> {
+    void args
+    unsupported('host.resetConversation')
+  }
+
+  resetConversationGuarded(
+    ...args: Parameters<NonNullable<Port<'resetConversationGuarded'>>>
+  ): ReturnType<NonNullable<Port<'resetConversationGuarded'>>> {
+    void args
+    unsupported('host.resetConversationGuarded')
+  }
+
+  compactConversation(
+    ...args: Parameters<NonNullable<Port<'compactConversation'>>>
+  ): ReturnType<NonNullable<Port<'compactConversation'>>> {
+    void args
+    unsupported('host.compactConversation')
+  }
+
+  compactConversationGuarded(
+    ...args: Parameters<NonNullable<Port<'compactConversationGuarded'>>>
+  ): ReturnType<NonNullable<Port<'compactConversationGuarded'>>> {
+    void args
+    unsupported('host.compactConversationGuarded')
+  }
+
   submitInputGuarded(
     ...args: Parameters<NonNullable<Port<'submitInputGuarded'>>>
   ): ReturnType<NonNullable<Port<'submitInputGuarded'>>> {
@@ -147,6 +175,20 @@ export class PluginHostBackendFixtureBase implements PluginHostBackend {
   listArtifacts(...args: Parameters<Port<'listArtifacts'>>): ReturnType<Port<'listArtifacts'>> {
     void args
     unsupported('host.listArtifacts')
+  }
+
+  createArtifact(
+    ...args: Parameters<NonNullable<Port<'createArtifact'>>>
+  ): ReturnType<NonNullable<Port<'createArtifact'>>> {
+    void args
+    unsupported('host.createArtifact')
+  }
+
+  readArtifact(
+    ...args: Parameters<NonNullable<Port<'readArtifact'>>>
+  ): ReturnType<NonNullable<Port<'readArtifact'>>> {
+    void args
+    unsupported('host.readArtifact')
   }
 
   completeText(...args: Parameters<Port<'completeText'>>): ReturnType<Port<'completeText'>> {
@@ -295,8 +337,14 @@ export function createPluginHostBackendFixture(): PluginHostBackend {
     updateConversation: f(d.updateConversation),
     abortConversation: f(d.abortConversation),
     abortConversationGuarded: f(d.abortConversationGuarded),
+    resetConversation: f(d.resetConversation),
+    resetConversationGuarded: f(d.resetConversationGuarded),
+    compactConversation: f(d.compactConversation),
+    compactConversationGuarded: f(d.compactConversationGuarded),
     getConversationOwnership: f(d.getConversationOwnership),
     listArtifacts: f(d.listArtifacts),
+    createArtifact: f(d.createArtifact),
+    readArtifact: f(d.readArtifact),
     completeText: f(d.completeText),
     executionEnv: f(d.executionEnv),
     withFileLock: <T,>(...args: Parameters<PluginHostBackend['withFileLock']>) =>

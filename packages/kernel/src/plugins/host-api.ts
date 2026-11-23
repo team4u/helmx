@@ -80,7 +80,7 @@ function createControlledExecutionEnv(
 
 /**
  * Constructs `ctx.host`: forwards every method to backend ports, wraps lifecycle resources
- * (`manageConversation` / `onEvent` / `registerAskSeqResolver`) with epoch guards and idempotent release,
+ * (`manageConversation` / `onEvent` / `secrets.addRedaction`) with epoch guards and idempotent release,
  * and tracks in-flight event callbacks in `PluginTaskTracker`.
  */
 export function wrapHostApi(
@@ -368,6 +368,66 @@ export function wrapHostApi(
         Promise.resolve(port(id, mutationGuard)),
       );
     },
+    resetConversation: (id, opts) => {
+      guard('host.resetConversation');
+      const port = backend.resetConversation;
+      if (port === undefined) {
+        throw new HelmxError(
+          'not_supported',
+          'Current host has not wired context reset (host.resetConversation)',
+          501,
+          { conversationId: id },
+        );
+      }
+      return deps.tracker.withTask(pluginId, 'host.resetConversation', () =>
+        Promise.resolve(port(id, opts)),
+      );
+    },
+    resetConversationGuarded: (id, opts, mutationGuard) => {
+      guard('host.resetConversationGuarded');
+      const port = backend.resetConversationGuarded;
+      if (port === undefined) {
+        throw new HelmxError(
+          'not_supported',
+          'Current host has not wired guarded context reset (host.resetConversationGuarded)',
+          501,
+          { conversationId: id },
+        );
+      }
+      return deps.tracker.withTask(pluginId, 'host.resetConversationGuarded', () =>
+        Promise.resolve(port(id, opts, mutationGuard)),
+      );
+    },
+    compactConversation: (id, opts) => {
+      guard('host.compactConversation');
+      const port = backend.compactConversation;
+      if (port === undefined) {
+        throw new HelmxError(
+          'not_supported',
+          'Current host has not wired manual compaction (host.compactConversation)',
+          501,
+          { conversationId: id },
+        );
+      }
+      return deps.tracker.withTask(pluginId, 'host.compactConversation', () =>
+        Promise.resolve(port(id, opts)),
+      );
+    },
+    compactConversationGuarded: (id, opts, mutationGuard) => {
+      guard('host.compactConversationGuarded');
+      const port = backend.compactConversationGuarded;
+      if (port === undefined) {
+        throw new HelmxError(
+          'not_supported',
+          'Current host has not wired guarded manual compaction (host.compactConversationGuarded)',
+          501,
+          { conversationId: id },
+        );
+      }
+      return deps.tracker.withTask(pluginId, 'host.compactConversationGuarded', () =>
+        Promise.resolve(port(id, opts, mutationGuard)),
+      );
+    },
     getConversationOwnership: (id) => {
       guard('host.getConversationOwnership');
       return backend.getConversationOwnership(id);
@@ -395,6 +455,36 @@ export function wrapHostApi(
 
     // 10. artifacts & text completion
     listArtifacts: (conversationId) => tracked('host.listArtifacts', () => backend.listArtifacts(conversationId)),
+    createArtifact: (conversationId, input) => {
+      guard('host.createArtifact');
+      const port = backend.createArtifact;
+      if (port === undefined) {
+        throw new HelmxError(
+          'not_supported',
+          'Current host has not wired artifact creation (host.createArtifact)',
+          501,
+          { conversationId },
+        );
+      }
+      return deps.tracker.withTask(pluginId, 'host.createArtifact', () =>
+        Promise.resolve(port(conversationId, input)),
+      );
+    },
+    readArtifact: (conversationId, artifactId) => {
+      guard('host.readArtifact');
+      const port = backend.readArtifact;
+      if (port === undefined) {
+        throw new HelmxError(
+          'not_supported',
+          'Current host has not wired artifact reading (host.readArtifact)',
+          501,
+          { conversationId, artifactId },
+        );
+      }
+      return deps.tracker.withTask(pluginId, 'host.readArtifact', () =>
+        Promise.resolve(port(conversationId, artifactId)),
+      );
+    },
     completeText: (input) => tracked('host.completeText', () => backend.completeText(input)),
 
     // 11. actions

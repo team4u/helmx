@@ -424,7 +424,7 @@ test('dispose stop window permits cleanup subset (including final doc writes and
   assert.equal(backend.openedTunnels[0]?.destroyed, true, 'teardown must destroy any stop-window tunnel left open')
 })
 
-test('stop window blocks new work (spawn/submitInput/createConversation/dispatchTrigger/createAsk/execEnv/completeText/withFileLock) with zero backend calls', { timeout: 60_000 }, async () => {
+test('stop window blocks new work (spawn/submitInput/createConversation/dispatchTrigger/createAsk/execEnv/reset+compact/artifacts/completeText/withFileLock) with zero backend calls', { timeout: 60_000 }, async () => {
   const expected: string[] = []
   const def: PluginDefinition = {
     id: 'test:stop-reject',
@@ -442,6 +442,12 @@ test('stop window blocks new work (spawn/submitInput/createConversation/dispatch
             { label: 'dispatchTrigger', run: () => ctx.host.dispatchTrigger({ kind: 'webhook' } as never) },
             { label: 'createAsk', run: () => ctx.host.createAsk({ conversationId: 1, ownerPluginId: 'x', title: 't' } as never) },
             { label: 'execEnv', run: () => ctx.host.execEnv({ command: ['ls'] }) },
+            { label: 'resetConversation', run: () => ctx.host.resetConversation(1) },
+            { label: 'resetConversationGuarded', run: () => ctx.host.resetConversationGuarded(1) },
+            { label: 'compactConversation', run: () => ctx.host.compactConversation(1) },
+            { label: 'compactConversationGuarded', run: () => ctx.host.compactConversationGuarded(1) },
+            { label: 'createArtifact', run: () => ctx.host.createArtifact(1, { name: 'late.txt', bytes: new Uint8Array([1]) }) },
+            { label: 'readArtifact', run: () => ctx.host.readArtifact(1, 'art-late') },
             { label: 'getConversationSubmission', run: () => ctx.host.getConversationSubmission(1, 'req-late') },
             { label: 'completeText', run: () => ctx.host.completeText({ conversationId: 1, systemPrompt: '', text: '' } as never) },
             { label: 'withFileLock', run: () => ctx.host.withFileLock('/tmp/late', async () => 1) },
@@ -472,6 +478,12 @@ test('stop window blocks new work (spawn/submitInput/createConversation/dispatch
     'dispatchTrigger',
     'createAsk',
     'execEnv',
+    'resetConversation',
+    'resetConversationGuarded',
+    'compactConversation',
+    'compactConversationGuarded',
+    'createArtifact',
+    'readArtifact',
     'getConversationSubmission',
     'completeText',
     'withFileLock',

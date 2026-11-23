@@ -137,7 +137,7 @@ export class PluginHost {
   private capabilityServiceRegistry = new CapabilityServiceRegistry();
   private uiRegistry: UiRegistry;
   private configStore?: PluginConfigStore;
-  /** Instance-level per-plugin config write serialization (shared by HTTP PUT and ctx.host.setConfig). */
+  /** Instance-level per-plugin config write serialization (HTTP/CLI management plane). */
   private configWriteChains = new Map<string, Promise<unknown>>();
   private disposed = false;
   private registerSeq = 0;

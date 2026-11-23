@@ -3,13 +3,10 @@
  * GET /api/skills, GET /api/skills/:id, and conversation artifact upload
  * POST /api/conversations/:id/artifacts (delegated from conversation-routes).
  *
- * Artifact content reads carry three defense lines: metadata shape gate (the store is not a trusted boundary) +
- * three-layer realpath symlink-escape guard + truthful 404 on ENOENT.
+ * Artifact content reads delegate to `ArtifactService.readBufferForMetadata` (metadata shape gate +
+ * three-layer realpath symlink-escape guard + truthful 404 on ENOENT + isolated Uint8Array copy).
  */
-import { HelmxError, isArtifactKind } from '@helmx/protocol'
-import type { ArtifactMetadata } from '@helmx/protocol'
-import { realpath as nodeFsRealpath, readFile as nodeFsReadFile } from 'node:fs/promises'
-import { join as joinPath, sep as PATH_SEP } from 'node:path'
+import { HelmxError } from '@helmx/protocol'
 import { MAX_ARTIFACT_BYTES } from '../services/artifacts.js'
 import { buildContentDisposition, errorResponse, jsonOk, readBinaryBodyWithLimit, readJsonBody, type JsonRedactor } from './http-utils.js'
 import { decodeSegment } from './route-match.js'
@@ -33,8 +30,7 @@ export async function handleArtifactsDomain(
   if (second !== undefined && third === 'content' && method === 'GET' && fourth === undefined) {
     const artifactId = requireIdParam(second, 'artifactId')
     const metadata = await kernel.artifacts.get(artifactId)
-    assertArtifactMetadataShape(metadata)
-    const buffer = await readArtifactBytes(kernel, metadata)
+    const buffer = await kernel.artifacts.readBufferForMetadata(metadata)
     const inline = ctx.url.searchParams.get('inline') === '1'
     const headers: Record<string, string> = {
       'content-type': metadata.mimeType,
@@ -46,65 +42,6 @@ export async function handleArtifactsDomain(
     return new Response(buffer as unknown as BodyInit, { headers })
   }
   return errorResponse(redactor, 404, 'not_found', 'route not found')
-}
-
-/**
- * Artifact metadata shape gate: path must have the form artifacts/<positiveConvId>/<file>,
- * conversationId must be a positive integer, and kind must be 'upload' | 'registered' | 'spill'.
- * The store (in-memory Map / sqlite) is not a trusted boundary; hand-edited DB entries must not
- * allow the HTTP layer to read arbitrary files.
- */
-function assertArtifactMetadataShape(metadata: ArtifactMetadata): void {
-  if (
-    !Number.isInteger(metadata.conversationId) ||
-    metadata.conversationId <= 0 ||
-    !isArtifactKind(metadata.kind) ||
-    typeof metadata.path !== 'string'
-  ) {
-    throw new HelmxError('artifact_metadata_illegal', `invalid artifact metadata: ${metadata.id}`, 500)
-  }
-  const parts = metadata.path.split('/')
-  if (
-    parts.length !== 3 ||
-    parts[0] !== 'artifacts' ||
-    !/^[1-9]\d*$/.test(parts[1] ?? '') ||
-    parts[2] === undefined || parts[2].length === 0 ||
-    parts[2] === '.' || parts[2] === '..'
-  ) {
-    throw new HelmxError('artifact_metadata_illegal', `invalid artifact registration path: ${metadata.path}`, 500)
-  }
-}
-
-/**
- * Read raw artifact bytes using registered metadata (realpath guards against symlink escapes).
- * - metadata.path is constrained to artifacts/<convId>/<file> by assertArtifactMetadataShape;
- * - Three-layer realpath (artifacts root / conversation dir / target file) must ensure:
- *   the conversation dir stays inside the real artifacts root (prevents symlink escape on artifacts/<convId>),
- *   and the target file stays inside the conversation dir (prevents symlink escape on the filename segment);
- * - Map ENOENT faithfully to 404; rethrow other read failures (EACCES, etc.) as-is to the top level
- *   instead of misreporting them as missing.
- */
-async function readArtifactBytes(kernel: KernelRuntimeLike, metadata: ArtifactMetadata): Promise<Uint8Array> {
-  const artifactsRootReal = await nodeFsRealpath(joinPath(kernel.dataDir, 'artifacts'))
-  const convRootReal = await nodeFsRealpath(joinPath(artifactsRootReal, String(metadata.conversationId)))
-  // The conversation directory itself must not be a symlink escaping the artifacts root.
-  if (!convRootReal.startsWith(artifactsRootReal + PATH_SEP)) {
-    throw new HelmxError('artifact_path_illegal', 'artifact conversation directory escapes artifacts root; read rejected', 500)
-  }
-  const target = joinPath(convRootReal, metadata.path.split('/')[2]!)
-  const targetReal = await nodeFsRealpath(target)
-  if (targetReal !== convRootReal && !targetReal.startsWith(convRootReal + PATH_SEP)) {
-    throw new HelmxError('artifact_path_illegal', 'artifact registration path escapes allowed root', 500)
-  }
-  try {
-    const buffer = await nodeFsReadFile(targetReal)
-    return new Uint8Array(buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength))
-  } catch (error) {
-    if (error instanceof Error && (error as NodeJS.ErrnoException).code === 'ENOENT') {
-      throw new HelmxError('artifact_file_missing', `artifact file missing: ${metadata.id}`, 404)
-    }
-    throw error
-  }
 }
 
 // ---------------------------------------------------------------------------

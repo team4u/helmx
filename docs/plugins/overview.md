@@ -70,15 +70,18 @@
 | 分组 | 端口 |
 | :--- | :--- |
 | 外部事件 | `dispatchTrigger(envelope)`（统一 defang 防逃逸投递） |
-| 输入与会话 | `submitInput` / `submitInputGuarded`（均支持 `attachments` 产物 ID 列表，按会话或祖先链授权挂载）、`createConversation / forkConversation / listConversations / getConversation / getConversationDetail / getConversationSubmission / updateConversation / abortConversation / abortConversationGuarded`、`manageConversation`（删除保护）、`markConversationOwnership` |
+| 输入与会话 | `submitInput` / `submitInputGuarded`（均支持 `attachments` 产物 ID 列表，按会话或祖先链授权挂载）、`createConversation / forkConversation / listConversations / getConversation / getConversationDetail / getConversationSubmission / updateConversation / abortConversation / abortConversationGuarded`、`resetConversation / resetConversationGuarded / compactConversation / compactConversationGuarded`（原地重置与手动压缩：无守卫版供人类交互通道代理保持 `ownedBy: 'human'`，Guarded 版供后台自动化在串行域内强制归属红线与可选 CAS 水位；`handoff`/`instructions` 经统一脱敏）、`manageConversation`（删除保护）、`markConversationOwnership`（仅允许 `'human' \| 'helmx'`，非法值显式 400） |
 | 人机审批 | `createAsk / cancelAsk` |
 | 子代理与执行 | `spawnAgent / runGate / execEnv / resolveSpawnTarget / listActiveSpawnExecutions` |
 | 动作互调与治理 | `prepareAction / invokeAction / listActions / listPlugins` |
-| 资产端口 | `profiles / skills / secrets`（Profile 与 SYSTEM.md、技能受管自举、插件私有机密）、`listArtifacts` |
+| 资产端口 | `profiles / skills / secrets`（Profile 与 SYSTEM.md、技能受管自举、插件私有机密）、`listArtifacts / createArtifact / readArtifact`（内存字节写入与授权元数据+隔离字节读取，不暴露宿主磁盘路径） |
 | 节点与文件 | `nodeIpc`（含 `listNodes()` 无凭据只读计算节点快照，支持 `stopWindow`） / `openTunnel / executionEnv / withFileLock / atomicWriteFile / inspectNodePathUsage` |
 | 通用机制 | `redact / completeText / refreshModels / listModels / listUi / isClosing / onEvent / emitEvent`（内建事件经 `HostEventMap` 提供强类型重载，自定义事件保持通用 `string` 回退） |
 
-使用纪律：受管 Git Worktree 清理不在 `ctx.host`——需要清理时调用 `builtin:worktree` 的 `cleanup_worktree` 动作；`execEnv` 目标节点或目录缺省继承请求会话坐标，节点离线显式报 `409 node_offline`，绝不静默回退本机；插件不得经 `execEnv`/`executionEnv` 反向调用宿主 `helmx` CLI 绕过类型契约与归属红线。
+使用纪律：
+- 受管 Git Worktree 清理不在 `ctx.host`——需要清理时调用 `builtin:worktree` 的 `cleanup_worktree` 动作；
+- `execEnv` 目标节点或目录缺省继承请求会话坐标，节点离线显式报 `409 node_offline`，绝不静默回退本机；插件不得经 `execEnv`/`executionEnv` 反向调用宿主 `helmx` CLI 绕过类型契约与归属红线；
+- 会话上下文重置与压缩必须走内核 `resetConversation*` / `compactConversation*` 端口，**不得**用 `createConversation` 另起会话冒充上下文清理：人类聊天通道转发用户显式 `/clear`、`/compact` 时走无守卫版（保持会话 `ownedBy: 'human'`，使长期记忆 Dream 与 Web 归档/删除正常生效），后台自动化/巡检维护**一律走** `resetConversationGuarded` / `compactConversationGuarded`。
 
 ## 配置与数据边界
 

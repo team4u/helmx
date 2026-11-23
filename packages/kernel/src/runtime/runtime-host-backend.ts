@@ -76,11 +76,17 @@ export function createPluginHostBackend(runtime: KernelRuntime): PluginHostBacke
     updateConversation: (id, patch) => runtime.updateConversation(id, patch),
     abortConversation: (id) => runtime.abortConversation(id),
     abortConversationGuarded: (id, guard) => runtime.abortConversationGuarded(id, guard),
+    resetConversation: (id, opts) => runtime.resetConversation(id, opts),
+    resetConversationGuarded: (id, opts, guard) => runtime.resetConversationGuarded(id, opts, guard),
+    compactConversation: (id, opts) => runtime.compactConversation(id, opts),
+    compactConversationGuarded: (id, opts, guard) => runtime.compactConversationGuarded(id, opts, guard),
     submitInputGuarded: async (id, text, opts, guard) => {
       await runtime.submitInputGuarded(id, text, opts, guard)
     },
     getConversationOwnership: (id) => runtime.getConversationOwnership(id),
     listArtifacts: (conversationId) => Promise.resolve(runtime.artifacts.list(conversationId)),
+    createArtifact: (conversationId, input) => runtime.createArtifact(conversationId, input),
+    readArtifact: (conversationId, artifactId) => runtime.readAuthorizedArtifact(conversationId, artifactId),
     redact: (text) => runtime.stash.redact(text),
     refreshModels: (options) => runtime.refreshModels(options),
     listModels: () => runtime.listModels(),

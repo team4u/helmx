@@ -56,7 +56,9 @@ export interface PluginProviderPort {
  *    (returned release callback is wrapped by `PluginHost` for idempotency);
  * 2. Normalized shape: `isClosing` is a zero-arg function (exposed as a getter on `ctx.host`);
  * 3. Optional connections (when unwired, `ctx.host` rejects explicitly with 501, never silently falling back):
- *    `nodeIpc` / `openTunnel` / `getConversationSubmission` / `abortConversationGuarded` / `submitInputGuarded`;
+ *    `nodeIpc` / `openTunnel` / `getConversationSubmission` / `abortConversationGuarded` / `submitInputGuarded` /
+ *    `resetConversation` / `resetConversationGuarded` / `compactConversation` / `compactConversationGuarded` /
+ *    `createArtifact` / `readArtifact` / `listModels`;
  * 4. Served directly by `PluginHost` (not forwarded to backend): `listPlugins` / `listUi` /
  *    `listActions` / `invokeAction` / `prepareAction`.
  */
@@ -124,6 +126,18 @@ export interface PluginHostBackend
   ): Promise<void>
   /** Guarded abort port (includes scheduler-paused durability path; 501 when unwired). */
   abortConversationGuarded?(id: number, guard: GuardedMutationExpectation): Promise<void>
+  /** Human-channel context reset port (501 when unwired). */
+  resetConversation?: HelmxHostApi['resetConversation']
+  /** Automated guarded context reset port (atomic ownership/seq check; 501 when unwired). */
+  resetConversationGuarded?: HelmxHostApi['resetConversationGuarded']
+  /** Human-channel manual compaction port (501 when unwired). */
+  compactConversation?: HelmxHostApi['compactConversation']
+  /** Automated guarded manual compaction port (atomic ownership/seq check; 501 when unwired). */
+  compactConversationGuarded?: HelmxHostApi['compactConversationGuarded']
+  /** In-memory artifact upload write port (same validation chain as HTTP upload; 501 when unwired). */
+  createArtifact?: HelmxHostApi['createArtifact']
+  /** Authorized artifact metadata + raw bytes read port (501 when unwired). */
+  readArtifact?: HelmxHostApi['readArtifact']
   /** Claims exclusive management over conversation `id` for `pluginId`; returns release function. */
   manageConversation(id: number, pluginId: string): () => void
   /** Optional: read current model catalog snapshot (501 when unwired). */

@@ -13,6 +13,7 @@
 import {
   HelmxError,
   type AgentSpawnRequest,
+  type ArtifactMetadata,
   type AskCreateSpec,
   type AskResult,
   type AskSpec,
@@ -27,6 +28,7 @@ import {
   type ConversationSummary,
   type ConversationWithdrawResponse,
   type ConversationInput,
+  type GuardedMutationExpectation,
   type TurnSettledPayload,
   type EnvExecRequest,
   type EnvExecResponse,
@@ -609,8 +611,19 @@ export class KernelRuntime {
     return this.conversations.resolveAuthorizedAttachments(conversationId, attachmentIds)
   }
 
-  async resolveAuthorizedAttachment(conversationId: number, artifactId: string) {
-    return this.conversations.resolveAuthorizedAttachment(conversationId, artifactId)
+  async createArtifact(
+    conversationId: number,
+    input: { name: string; bytes: Uint8Array; mimeType?: string },
+  ): Promise<ArtifactMetadata> {
+    this.assertWritable()
+    return this.conversations.createArtifact(conversationId, input)
+  }
+
+  async readAuthorizedArtifact(
+    conversationId: number,
+    artifactId: string,
+  ): Promise<{ metadata: ArtifactMetadata; bytes: Uint8Array }> {
+    return this.conversations.readAuthorizedArtifact(conversationId, artifactId)
   }
 
   refreshPluginTools(): void {
@@ -774,12 +787,30 @@ export class KernelRuntime {
     return this.conversations.resetConversation(id, opts)
   }
 
+  async resetConversationGuarded(
+    id: number,
+    opts?: { handoff?: string },
+    guard?: GuardedMutationExpectation,
+  ): Promise<ConversationSummary> {
+    this.assertWritable()
+    return this.conversations.resetConversationGuarded(id, opts, guard)
+  }
+
   async compactConversation(
     id: number,
     opts?: { instructions?: string },
   ): Promise<{ taskId: number; conversation: ConversationSummary }> {
     this.assertWritable()
     return this.conversations.compactConversation(id, opts)
+  }
+
+  async compactConversationGuarded(
+    id: number,
+    opts?: { instructions?: string },
+    guard?: GuardedMutationExpectation,
+  ): Promise<{ taskId: number; conversation: ConversationSummary }> {
+    this.assertWritable()
+    return this.conversations.compactConversationGuarded(id, opts, guard)
   }
 
   async forkConversation(

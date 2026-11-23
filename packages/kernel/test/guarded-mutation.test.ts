@@ -418,3 +418,203 @@ test('conversation ownership persists on helmx_conversations.owned_by column acr
     await reopened.close().catch(() => {})
   }
 })
+
+// ---------------------------------------------------------------------------
+// 6. Guarded context maintenance (resetConversationGuarded / compactConversationGuarded)
+//    + stale meta preservation + strict markConversationOwnership boundary validation
+// ---------------------------------------------------------------------------
+
+test('guarded reset: flipping ownership to human inside await window -> 409 ownership_conflict, SDK reset untouched', { timeout: 60_000 }, async () => {
+  const dir = join(root, 't-guarded-reset-race')
+  const kernel = await openRuntime(dir)
+  let barrier: { release: () => void } | undefined
+  try {
+    const conv = await kernel.createConversation({ title: 'reset race' })
+    kernel.markConversationOwnership(conv.id, 'helmx')
+    kernel.__faux.setResponses([fauxAssistantMessage('before reset')])
+    await kernel.submitInput(conv.id, 'seed turn', { origin: 'agent' })
+    await kernel.waitForIdle(conv.id)
+    const seqBefore = kernel.getConversation(conv.id).stateChangeSeq
+
+    barrier = barrierConversationHandle(kernel)
+    const attempt = kernel.resetConversationGuarded(
+      conv.id,
+      { handoff: 'must not land' },
+      { expectedOwnership: 'helmx', expectedStateSeq: seqBefore },
+    )
+    await flushToBarrier()
+    kernel.markConversationOwnership(conv.id, 'human')
+    barrier.release()
+
+    await assert.rejects(attempt, isHelmxError('ownership_conflict', 409))
+    assert.equal(kernel.getConversation(conv.id).stateChangeSeq, seqBefore, 'rejected reset must not advance stateChangeSeq')
+    const detail = await kernel.getConversationDetail(conv.id, { limit: 50 })
+    assert.ok(!JSON.stringify(detail.entries).includes('must not land'), 'handoff must never reach SDK reset')
+  } finally {
+    barrier?.release()
+    await kernel.close().catch(() => {})
+  }
+})
+
+test('guarded compact: flipping ownership to human inside await window -> 409 ownership_conflict, compaction never enqueued', { timeout: 60_000 }, async () => {
+  const dir = join(root, 't-guarded-compact-race')
+  const kernel = await openRuntime(dir)
+  let barrier: { release: () => void } | undefined
+  try {
+    const conv = await kernel.createConversation({ title: 'compact race' })
+    kernel.markConversationOwnership(conv.id, 'helmx')
+    const seqBefore = kernel.getConversation(conv.id).stateChangeSeq
+
+    barrier = barrierConversationHandle(kernel)
+    const attempt = kernel.compactConversationGuarded(
+      conv.id,
+      { instructions: 'keep concise' },
+      { expectedOwnership: 'helmx', expectedStateSeq: seqBefore },
+    )
+    await flushToBarrier()
+    kernel.markConversationOwnership(conv.id, 'human')
+    barrier.release()
+
+    await assert.rejects(attempt, isHelmxError('ownership_conflict', 409))
+    assert.equal(kernel.getConversation(conv.id).stateChangeSeq, seqBefore, 'rejected compact must not advance stateChangeSeq')
+  } finally {
+    barrier?.release()
+    await kernel.close().catch(() => {})
+  }
+})
+
+test('guarded reset/compact: rejection matrix, redaction, and success path (+1 seq)', { timeout: 60_000 }, async () => {
+  const dir = join(root, 't-guarded-context-matrix')
+  const kernel = await openRuntime(dir)
+  try {
+    const conv = await kernel.createConversation({ title: 'ctx matrix' })
+    const seq0 = kernel.getConversation(conv.id).stateChangeSeq
+
+    // Default human ownership: omitted guard and explicit guard both reject with 409 ownership_conflict.
+    await assert.rejects(
+      kernel.resetConversationGuarded(conv.id, { handoff: 'blocked' }),
+      isHelmxError('ownership_conflict', 409),
+    )
+    await assert.rejects(
+      kernel.compactConversationGuarded(conv.id, { instructions: 'blocked' }),
+      isHelmxError('ownership_conflict', 409),
+    )
+    assert.equal(kernel.getConversation(conv.id).stateChangeSeq, seq0)
+
+    // Switch to helmx: test stale seq, missing target, invalid guard, invalid opts.
+    kernel.markConversationOwnership(conv.id, 'helmx')
+    await assert.rejects(
+      kernel.resetConversationGuarded(conv.id, undefined, { expectedStateSeq: seq0 + 99 }),
+      isHelmxError('state_seq_conflict', 409),
+    )
+    await assert.rejects(
+      kernel.compactConversationGuarded(conv.id, undefined, { expectedStateSeq: seq0 + 99 }),
+      isHelmxError('state_seq_conflict', 409),
+    )
+    await assert.rejects(
+      kernel.resetConversationGuarded(999_999, undefined, {}),
+      isHelmxError('not_found', 404),
+    )
+    await assert.rejects(
+      kernel.compactConversationGuarded(999_999, undefined, {}),
+      isHelmxError('not_found', 404),
+    )
+    await assert.rejects(
+      kernel.resetConversationGuarded(conv.id, undefined, { expectedOwnership: 'bot' as never }),
+      isHelmxError('validation_error', 400),
+    )
+    await assert.rejects(
+      kernel.compactConversationGuarded(conv.id, undefined, { expectedStateSeq: -1 }),
+      isHelmxError('validation_error', 400),
+    )
+    await assert.rejects(
+      kernel.resetConversationGuarded(conv.id, { handoff: 123 as never }, {}),
+      isHelmxError('validation_error', 400),
+    )
+    await assert.rejects(
+      kernel.compactConversationGuarded(conv.id, { instructions: 456 as never }, {}),
+      isHelmxError('validation_error', 400),
+    )
+
+    // Secret redaction + success path: stateChangeSeq advances by exactly +1.
+    kernel.stash.addRedaction('sk-reset-secret-999')
+    const resetSummary = await kernel.resetConversationGuarded(
+      conv.id,
+      { handoff: 'resume with sk-reset-secret-999' },
+      { expectedOwnership: 'helmx', expectedStateSeq: seq0 },
+    )
+    assert.equal(resetSummary.stateChangeSeq, seq0 + 1)
+    assert.equal(resetSummary.ownedBy, 'helmx')
+    const afterResetDetail = await kernel.getConversationDetail(conv.id, { limit: 50 })
+    const serializedReset = JSON.stringify(afterResetDetail.entries)
+    assert.ok(!serializedReset.includes('sk-reset-secret-999'), 'reset handoff secret must be redacted')
+
+    const compactRes = await kernel.compactConversationGuarded(
+      conv.id,
+      { instructions: 'preserve key decisions' },
+      { expectedOwnership: 'helmx', expectedStateSeq: seq0 + 1 },
+    )
+    assert.ok(Number.isSafeInteger(compactRes.taskId) && compactRes.taskId > 0)
+    assert.equal(compactRes.conversation.stateChangeSeq, seq0 + 2)
+    assert.equal(compactRes.conversation.ownedBy, 'helmx')
+  } finally {
+    await kernel.close().catch(() => {})
+  }
+})
+
+test('context ops preserve concurrent metadata updates during async SDK reset (no stale snapshot clobber)', { timeout: 60_000 }, async () => {
+  const dir = join(root, 't-reset-stale-meta')
+  const kernel = await openRuntime(dir)
+  try {
+    const conv = await kernel.createConversation({ title: 'original title', tags: ['initial'] })
+    const harness = (kernel as unknown as { harness: { conversation: ConversationFn } }).harness
+    const realConvFn = harness.conversation.bind(harness) as ConversationFn
+    let intercepted = false
+    harness.conversation = (async (id: never, ctx: unknown) => {
+      const handle = (await realConvFn(id, ctx)) as { reset: (...a: unknown[]) => Promise<unknown> } | undefined
+      if (!handle || intercepted) return handle
+      intercepted = true
+      const realReset = handle.reset.bind(handle)
+      handle.reset = async (...args: unknown[]) => {
+        // Simulate a concurrent metadata edit arriving while SDK reset is awaiting completion.
+        await kernel.updateConversation(conv.id, { title: 'concurrent title', tags: ['updated'] })
+        return realReset(...args)
+      }
+      return handle
+    }) as ConversationFn
+
+    const summary = await kernel.resetConversation(conv.id, { handoff: 'fresh start' })
+    assert.equal(summary.title, 'concurrent title', 'concurrent title update must survive reset')
+    assert.deepEqual(summary.tags, ['updated'], 'concurrent tags update must survive reset')
+    assert.equal(kernel.getConversation(conv.id).title, 'concurrent title')
+  } finally {
+    await kernel.close().catch(() => {})
+  }
+})
+
+test('markConversationOwnership rejects legacy/invalid owner values with 400 validation_error (never silently coerces to human)', { timeout: 60_000 }, async () => {
+  const dir = join(root, 't-ownership-strict-boundary')
+  const kernel = await openRuntime(dir)
+  try {
+    const conv = await kernel.createConversation({ title: 'strict owner' })
+    kernel.markConversationOwnership(conv.id, 'helmx')
+    assert.equal(kernel.getConversationOwnership(conv.id), 'helmx')
+
+    assert.throws(
+      () => kernel.markConversationOwnership(conv.id, 'bot' as never),
+      isHelmxError('validation_error', 400),
+      'removed legacy owner "bot" must throw 400 instead of silently coercing to human',
+    )
+    assert.throws(
+      () => kernel.markConversationOwnership(conv.id, '' as never),
+      isHelmxError('validation_error', 400),
+    )
+    assert.throws(
+      () => kernel.markConversationOwnership(0, 'helmx'),
+      isHelmxError('validation_error', 400),
+    )
+    assert.equal(kernel.getConversationOwnership(conv.id), 'helmx', 'failed validation must preserve existing ownership')
+  } finally {
+    await kernel.close().catch(() => {})
+  }
+})

@@ -87,16 +87,47 @@ export class ConversationAttachments {
     return out
   }
 
-  /** Single-attachment resolution and authorization (for hub composition / herdr plugin injection; identical error semantics). */
-  async resolveAuthorizedAttachment(
+  /**
+   * Authorized artifact byte read (current conversation or ancestor chain, max depth 32):
+   * validates boundary inputs (400), artifact existence (404 not_found), conversation scope
+   * (403 artifact_forbidden), and reads raw bytes via `ArtifactService.readBufferForMetadata`
+   * (metadata shape gate + 3-layer realpath guard + ENOENT -> 404 artifact_file_missing +
+   * isolated Uint8Array copy; never exposes host disk paths).
+   */
+  async readAuthorizedArtifact(
     conversationId: number,
     artifactId: string,
-  ): Promise<{ id: string; name: string; mimeType: string; size: number; absPath: string }> {
-    const [resolved] = await this.resolveAuthorizedAttachments(conversationId, [artifactId])
-    if (resolved === undefined) {
-      throw new HelmxError('not_found', `attachment artifact not found: ${artifactId}`, 404, { artifactId })
+  ): Promise<{ metadata: ArtifactMetadata; bytes: Uint8Array }> {
+    if (!Number.isSafeInteger(conversationId) || conversationId <= 0) {
+      throw new HelmxError(
+        'validation_error',
+        `invalid conversationId: ${String(conversationId)}`,
+        400,
+        { conversationId },
+      )
     }
-    return { ...resolved.ref, absPath: resolved.absPath }
+    if (typeof artifactId !== 'string' || artifactId.trim() === '') {
+      throw new HelmxError('validation_error', 'artifactId must be a non-empty string', 400, {
+        conversationId,
+        artifactId,
+      })
+    }
+    const metadata = await this.host.artifactsSvc.get(artifactId).catch((error: unknown) => {
+      if (error instanceof FileNotFoundError) {
+        throw new HelmxError('not_found', `artifact not found: ${artifactId}`, 404, { artifactId })
+      }
+      throw error
+    })
+    if (!this.isArtifactAuthorized(conversationId, metadata.conversationId)) {
+      throw new HelmxError(
+        'artifact_forbidden',
+        `artifact ${artifactId} does not belong to conversation ${conversationId} or its ancestor chain; refusing unauthorized read`,
+        403,
+        { conversationId, artifactId, artifactConversationId: metadata.conversationId },
+      )
+    }
+    const bytes = await this.host.artifactsSvc.readBufferForMetadata(metadata)
+    return { metadata: { ...metadata }, bytes }
   }
 
   /** Plaintext `[Attached Files]` manifest block (without body text prefix). */

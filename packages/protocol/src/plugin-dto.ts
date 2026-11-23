@@ -245,9 +245,9 @@ export interface PluginConfigResponse {
  * Automation change guard expectations (guarded mutation): the caller carries
  * the facts at authorization time (probe ownedBy / stateChangeSeq); the kernel
  * re-checks synchronously inside the conversation's serial domain before the
- * first irreversible action (SDK abort/submit call); a failed re-check throws
- * 409/404 and never executes the mutation (kernel execution-layer enforcement
- * of the Watchdog human-owned red line).
+ * first irreversible action (SDK abort/submit/reset/compact call); a failed
+ * re-check throws 409/404 and never executes the mutation (kernel execution-layer
+ * enforcement of the Watchdog human-owned red line).
  */
 export interface GuardedMutationExpectation {
   /**

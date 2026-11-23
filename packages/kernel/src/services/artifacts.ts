@@ -9,7 +9,7 @@
 import { mkdir, readFile, readdir, realpath, rm, stat } from 'node:fs/promises'
 import { join, sep } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
-import { HelmxError, type ArtifactKind, type ArtifactMetadata } from '@helmx/protocol'
+import { HelmxError, isArtifactKind, type ArtifactKind, type ArtifactMetadata } from '@helmx/protocol'
 import {
   FileNotFoundError,
   atomicWriteFile,
@@ -184,10 +184,15 @@ export class ArtifactService {
     return join(this.dataDir, 'artifacts', String(conversationId))
   }
 
-  /** Boundary check on `conversationId`: positive integer only (prevents `-1` or floats from escaping dirs). */
+  /** Boundary check on `conversationId`: positive safe integer only (prevents `-1` or floats from escaping dirs). */
   private assertConversationId(conversationId: number): void {
-    if (!Number.isInteger(conversationId) || conversationId <= 0) {
-      throw new Error(`invalid conversationId: ${String(conversationId)}`)
+    if (!Number.isSafeInteger(conversationId) || conversationId <= 0) {
+      throw new HelmxError(
+        'validation_error',
+        `invalid conversationId: ${String(conversationId)}`,
+        400,
+        { conversationId },
+      )
     }
   }
 
@@ -254,6 +259,18 @@ export class ArtifactService {
     deps?: WriteUploadedDeps,
   ): Promise<ArtifactMetadata> {
     this.assertConversationId(conversationId)
+    if (typeof input !== 'object' || input === null || Array.isArray(input)) {
+      throw new HelmxError('validation_error', 'artifact upload input must be an object', 400)
+    }
+    if (typeof input.name !== 'string') {
+      throw new HelmxError('validation_error', 'artifact name must be a string', 400)
+    }
+    if (!(input.bytes instanceof Uint8Array)) {
+      throw new HelmxError('validation_error', 'artifact bytes must be a Uint8Array', 400)
+    }
+    if (input.mimeType !== undefined && typeof input.mimeType !== 'string') {
+      throw new HelmxError('validation_error', 'artifact mimeType must be a string', 400)
+    }
     const safeName = sanitizeUploadFilename(input.name)
     if (input.bytes.byteLength > MAX_ARTIFACT_BYTES) {
       throw new HelmxError(
@@ -315,24 +332,69 @@ export class ArtifactService {
   }
 
   /**
-   * Resolve `metadata.path` to an absolute path inside `dataDir/artifacts`.
-   * The repository (sqlite/in-memory Map) is not a trusted boundary: hand-edited DB `path` values must
-   * never let this service read arbitrary files—paths must still normalize inside `artifacts/<convId>/`.
+   * Artifact metadata shape gate: path must have the form `artifacts/<positiveConvId>/<file>`,
+   * conversationId must be a positive safe integer matching the path segment, and kind must be
+   * `'upload' | 'registered' | 'spill'`. The store (in-memory Map / sqlite) is not a trusted
+   * boundary; hand-edited DB entries must never allow reading arbitrary files.
+   */
+  private assertMetadataShape(metadata: ArtifactMetadata): void {
+    if (
+      !Number.isSafeInteger(metadata.conversationId) ||
+      metadata.conversationId <= 0 ||
+      !isArtifactKind(metadata.kind) ||
+      typeof metadata.path !== 'string'
+    ) {
+      throw new HelmxError('artifact_metadata_illegal', `invalid artifact metadata: ${metadata.id}`, 500)
+    }
+    const parts = metadata.path.split('/')
+    if (
+      parts.length !== 3 ||
+      parts[0] !== 'artifacts' ||
+      parts[1] !== String(metadata.conversationId) ||
+      parts[2] === undefined ||
+      parts[2].length === 0 ||
+      parts[2] === '.' ||
+      parts[2] === '..' ||
+      parts[2].includes('\\') ||
+      parts[2].includes('\0')
+    ) {
+      throw new HelmxError('artifact_metadata_illegal', `invalid artifact registration path; read rejected: ${metadata.path}`, 500)
+    }
+  }
+
+  /**
+   * Resolve `metadata.path` to an absolute realpath inside `dataDir/artifacts/<convId>/`.
+   * Three-layer realpath (dataDir -> artifacts root -> conversation dir -> target file) guards
+   * against symlink escapes at every directory level; maps ENOENT faithfully to 404
+   * `artifact_file_missing` while rethrowing non-ENOENT failures (e.g. EACCES) as-is.
    */
   private async resolveStoredPath(metadata: ArtifactMetadata): Promise<string> {
-    this.assertConversationId(metadata.conversationId)
-    const parts = metadata.path.split('/')
-    if (parts[0] !== 'artifacts' || parts[1] !== String(metadata.conversationId) || parts.length < 3 ||
-        parts.some((part) => part === '' || part === '.' || part === '..' || part.includes('\\') || part.includes('\0'))) {
-      throw new Error(`artifact path escapes artifacts conversation directory; read rejected: ${metadata.path}`)
+    this.assertMetadataShape(metadata)
+    const fileSegment = metadata.path.split('/')[2]!
+    const mapMissing = (error: unknown): never => {
+      if (error instanceof Error && (error as NodeJS.ErrnoException).code === 'ENOENT') {
+        throw new HelmxError('artifact_file_missing', `artifact file missing: ${metadata.id}`, 404, {
+          artifactId: metadata.id,
+        })
+      }
+      throw error
     }
-    const dataRoot = await realpath(this.dataDir)
-    const artifactsRoot = await realpath(join(dataRoot, 'artifacts'))
-    const conversationRoot = await realpath(join(artifactsRoot, String(metadata.conversationId)))
-    const filePath = await realpath(join(this.dataDir, metadata.path))
-    if (!artifactsRoot.startsWith(dataRoot + sep) || !conversationRoot.startsWith(artifactsRoot + sep) ||
-        !filePath.startsWith(conversationRoot + sep)) {
-      throw new Error(`artifact path escapes artifacts conversation directory; read rejected: ${metadata.path}`)
+    const dataRoot = await realpath(this.dataDir).catch(mapMissing)
+    const artifactsRoot = await realpath(join(dataRoot, 'artifacts')).catch(mapMissing)
+    if (!artifactsRoot.startsWith(dataRoot + sep)) {
+      throw new HelmxError('artifact_path_illegal', 'artifacts root escapes dataDir; read rejected', 500)
+    }
+    const conversationRoot = await realpath(join(artifactsRoot, String(metadata.conversationId))).catch(mapMissing)
+    if (!conversationRoot.startsWith(artifactsRoot + sep)) {
+      throw new HelmxError(
+        'artifact_path_illegal',
+        'artifact conversation directory escapes artifacts root; read rejected',
+        500,
+      )
+    }
+    const filePath = await realpath(join(conversationRoot, fileSegment)).catch(mapMissing)
+    if (!filePath.startsWith(conversationRoot + sep)) {
+      throw new HelmxError('artifact_path_illegal', 'artifact registration path escapes allowed root; read rejected', 500)
     }
     return filePath
   }
@@ -343,10 +405,30 @@ export class ArtifactService {
     return readTextFile(await this.resolveStoredPath(metadata))
   }
 
-  /** Read raw artifact bytes (used by HTTP client downloads; also works for text artifacts). */
+  /**
+   * Read raw artifact bytes from pre-fetched metadata (metadata shape gate + 3-layer realpath
+   * symlink-escape guard + ENOENT -> 404 artifact_file_missing + isolated Uint8Array copy so
+   * callers never share Node's pooled Buffer slab).
+   */
+  async readBufferForMetadata(metadata: ArtifactMetadata): Promise<Uint8Array> {
+    const targetReal = await this.resolveStoredPath(metadata)
+    try {
+      const buffer = await readFile(targetReal)
+      return new Uint8Array(buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength))
+    } catch (error) {
+      if (error instanceof Error && (error as NodeJS.ErrnoException).code === 'ENOENT') {
+        throw new HelmxError('artifact_file_missing', `artifact file missing: ${metadata.id}`, 404, {
+          artifactId: metadata.id,
+        })
+      }
+      throw error
+    }
+  }
+
+  /** Read raw artifact bytes (used by HTTP downloads, plugin readArtifact, and multimodal attachments). */
   async readBuffer(id: string): Promise<Uint8Array> {
     const metadata = await this.get(id)
-    return readFile(await this.resolveStoredPath(metadata))
+    return this.readBufferForMetadata(metadata)
   }
 
   /**
