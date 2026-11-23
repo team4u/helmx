@@ -404,6 +404,8 @@ export interface HelmxStoreValue {
   groupedUi: GroupedUiSpecs
   pluginDocs: Record<string, unknown> // key: `${pluginId}/${docName}`
   nodes: NodeInfo[]
+  /** Whether the host has received an authoritative node list this session (`snapshot.nodes`, `node.changed`, or `refreshNodes`). */
+  nodesLoaded: boolean
   /** Current kernel boot generation (bootId of the SSE snapshot; null = no
    * snapshot received yet). Changes after a kernel restart; read-only
    * consumers such as version watching use it as a "re-probe" signal — it does

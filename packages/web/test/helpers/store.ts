@@ -90,7 +90,7 @@ export function makeTestStore(overrides: TestStoreOverrides = {}): HelmxExternal
     authReady, authConfigured, authenticated, authError, connectionError, sseConnected, kernelBootId,
     theme, themePreference, locale, localePreference, quietNotifyEnabled,
     conversations, conversationDetails, conversationLives, pendingAsks, resolvedAsksByConv,
-    plugins, uiContributions, pluginDocs, nodes,
+    plugins, uiContributions, pluginDocs, nodes, nodesLoaded,
     conversationArtifacts, loadErrors,
     profiles, profilesLoaded, assetsLoaded, models, modelDefaults, providers, credentials, skills, actions,
     primaryTarget, splitTarget, focusedPanel, sidebarCollapsed, pendingEscAbortConversationId,
@@ -158,6 +158,7 @@ export function makeTestStore(overrides: TestStoreOverrides = {}): HelmxExternal
     uiContributions: uiContributions ?? [],
     pluginDocs: pluginDocs ?? {},
     nodes: nodes ?? [],
+    nodesLoaded: nodesLoaded ?? true,
   }))
   if (conversationArtifacts !== undefined) store.setConversationArtifacts(conversationArtifacts)
   if (loadErrors !== undefined) store.setLoadErrors(loadErrors)

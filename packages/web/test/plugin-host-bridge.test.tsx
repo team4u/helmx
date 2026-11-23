@@ -30,6 +30,8 @@ import {
   useConversation,
   useConversations,
   useHostModels,
+  useHostNodes,
+  useHostProfiles,
   usePluginConfig,
   usePluginContext,
   usePluginDoc,
@@ -43,11 +45,16 @@ import type {
   ConversationDetail,
   ConversationLive,
   ConversationSummary,
+  HelmxSnapshot,
   HostModelsSlice,
+  HostNodesSlice,
+  HostProfilesSlice,
+  NodeInfo,
   PluginSummary,
   PluginUiContribution,
+  Profile,
 } from '@helmx/protocol'
-import { applyTransientLiveFrame } from '../src/lib/live-state.js'
+import { applyEventFrame, applySnapshot, applyTransientLiveFrame } from '../src/lib/live-state.js'
 import { useConversationBackgroundSlice } from '../src/lib/store-context.js'
 import type { HelmxExternalStore, HelmxStoreActions } from '../src/lib/helmx-store.js'
 import { makeTestStore } from './helpers/store.js'
@@ -160,6 +167,8 @@ describe('plugin-host-bridge', () => {
       locale: 0,
       pluginCtx: 0,
       models: 0,
+      nodes: 0,
+      profiles: 0,
       slot: 0,
       controls: 0,
     }
@@ -213,6 +222,16 @@ describe('plugin-host-bridge', () => {
       void useHostModels()
       return null
     })
+    const NodesProbe = React.memo(function NodesProbe(): React.ReactNode {
+      counts.nodes += 1
+      void useHostNodes()
+      return null
+    })
+    const ProfilesProbe = React.memo(function ProfilesProbe(): React.ReactNode {
+      counts.profiles += 1
+      void useHostProfiles()
+      return null
+    })
     const SlotProbe = React.memo(function SlotProbe(): React.ReactNode {
       counts.slot += 1
       return e(PluginSlot, { name: 'owner/zone', ownerPluginId: 'owner', conversationId: 1 })
@@ -246,6 +265,8 @@ describe('plugin-host-bridge', () => {
         e(LocaleProbe),
         e(PluginCtxProbe),
         e(ModelsProbe),
+        e(NodesProbe),
+        e(ProfilesProbe),
         e(SlotProbe),
         e(ControlsProbe),
       )
@@ -278,6 +299,8 @@ describe('plugin-host-bridge', () => {
     assert.equal(counts.locale, baseline.locale, 'usePluginLocale / usePluginTranslator are isolated from live frames')
     assert.equal(counts.pluginCtx, baseline.pluginCtx, 'usePluginContext is isolated from live frames')
     assert.equal(counts.models, baseline.models, 'useHostModels is isolated from live frames')
+    assert.equal(counts.nodes, baseline.nodes, 'useHostNodes is isolated from live frames')
+    assert.equal(counts.profiles, baseline.profiles, 'useHostProfiles is isolated from live frames')
     assert.equal(counts.slot, baseline.slot, 'PluginSlot is isolated from live frames')
     assert.equal(counts.controls, baseline.controls, 'SDK UI controls (CopyButton/SearchBox/Select) do not re-render on live frames')
 
@@ -315,6 +338,148 @@ describe('plugin-host-bridge', () => {
     assert.equal(host.querySelector('button')?.getAttribute('title'), '复制', 'SDK CopyButton updates localized label in place')
     assert.equal(counts.controls, baseline.controls, 'outer ControlsProbe wrapper does not need to re-render when child SDK controls update locale')
     assert.equal(counts.docP1, baseline.docP1)
+    assert.equal(counts.nodes, baseline.nodes, 'unrelated doc/theme/locale updates do not wake useHostNodes')
+    assert.equal(counts.profiles, baseline.profiles, 'unrelated doc/theme/locale updates do not wake useHostProfiles')
+  })
+
+  test('three-state loaded honesty & domain isolation across real bridge: useHostNodes and useHostProfiles', { timeout: 60_000 }, async (t) => {
+    const localNode: NodeInfo = { id: 'local', kind: 'local', online: true }
+    const gpuNode: NodeInfo = { id: 'gpu-1', kind: 'byom', online: true }
+    const assistantProfile: Profile = { id: 'assistant', name: 'Assistant' } as Profile
+    const reviewerProfile: Profile = { id: 'reviewer', name: 'Reviewer' } as Profile
+
+    const store = makeTestStore({
+      authenticated: true,
+      assetsLoaded: false,
+      profilesLoaded: false,
+      nodesLoaded: false,
+      nodes: [],
+      profiles: [],
+      models: [],
+    })
+
+    const renders = { nodes: 0, profiles: 0, models: 0 }
+    const observed: {
+      nodes: HostNodesSlice | undefined
+      profiles: HostProfilesSlice | undefined
+      models: HostModelsSlice | undefined
+    } = {
+      nodes: [localNode],
+      profiles: [assistantProfile],
+      models: { models: [] },
+    }
+    const readNodes = (): HostNodesSlice | undefined => observed.nodes
+    const readProfiles = (): HostProfilesSlice | undefined => observed.profiles
+    const readModels = (): HostModelsSlice | undefined => observed.models
+
+    const NodesProbe = React.memo(function NodesProbe(): React.ReactNode {
+      renders.nodes += 1
+      observed.nodes = useHostNodes()
+      return null
+    })
+    const ProfilesProbe = React.memo(function ProfilesProbe(): React.ReactNode {
+      renders.profiles += 1
+      observed.profiles = useHostProfiles()
+      return null
+    })
+    const ModelsProbe = React.memo(function ModelsProbe(): React.ReactNode {
+      renders.models += 1
+      observed.models = useHostModels()
+      return null
+    })
+
+    mountTree(e(HostStoreProviders, { value: store }, e(NodesProbe), e(ProfilesProbe), e(ModelsProbe)))
+
+    // 1. Pre-load states are strictly undefined (never empty arrays)
+    assert.ok(readNodes() === undefined, 'nodesLoaded=false keeps useHostNodes() strictly undefined')
+    assert.ok(readProfiles() === undefined, 'profilesLoaded=false keeps useHostProfiles() strictly undefined')
+    assert.ok(readModels() === undefined, 'assetsLoaded=false keeps useHostModels() strictly undefined')
+    assert.deepEqual(renders, { nodes: 1, profiles: 1, models: 1 })
+
+    // 2. Snapshot omitting `nodes` keeps useHostNodes() strictly undefined
+    const snapWithoutNodes: HelmxSnapshot = {
+      bootId: 'boot-1',
+      seq: 1,
+      conversations: [],
+      pendingAsks: [],
+      plugins: [],
+      ui: [],
+    }
+    act(() => store.updateLive((prev) => applySnapshot(prev, snapWithoutNodes)))
+    assert.ok(readNodes() === undefined, 'snapshot omitting nodes keeps useHostNodes() undefined')
+    assert.equal(renders.nodes, 1)
+
+    // 3. Snapshot with `nodes: []` transitions to loaded-empty [] without waking profiles/models
+    act(() => store.updateLive((prev) => applySnapshot(prev, { ...snapWithoutNodes, seq: 2, nodes: [] })))
+    const loadedEmptyNodes = readNodes()
+    assert.ok(loadedEmptyNodes !== undefined && loadedEmptyNodes.length === 0, 'loaded-empty nodes is [], distinct from undefined')
+    assert.equal(renders.nodes, 2)
+    assert.equal(renders.profiles, 1, 'nodes snapshot must not re-render useHostProfiles')
+    assert.equal(renders.models, 1, 'nodes snapshot must not re-render useHostModels')
+
+    // 4. Incremental SSE node.changed updates useHostNodes() reactively
+    act(() =>
+      store.updateLive((prev) =>
+        applyEventFrame(prev, { seq: 3, event: { type: 'node.changed', node: localNode } }),
+      ),
+    )
+    assert.deepEqual(readNodes()?.map((n) => n.id), ['local'])
+    assert.equal(renders.nodes, 3)
+    assert.equal(renders.profiles, 1)
+
+    act(() =>
+      store.updateLive((prev) =>
+        applyEventFrame(prev, { seq: 4, event: { type: 'node.changed', node: gpuNode } }),
+      ),
+    )
+    assert.deepEqual(readNodes()?.map((n) => n.id), ['local', 'gpu-1'])
+    assert.equal(renders.nodes, 4)
+
+    // 5. Profiles loaded empty -> populated -> later assetsLoaded=true must NOT re-render useHostProfiles
+    const hydrate = store as unknown as {
+      patchCatalog: (p: {
+        profilesLoaded?: boolean
+        assetsLoaded?: boolean
+        profiles?: Profile[]
+        models?: unknown[]
+      }) => void
+    }
+    act(() => hydrate.patchCatalog({ profilesLoaded: true, profiles: [] }))
+    const loadedEmptyProfiles = readProfiles()
+    assert.ok(loadedEmptyProfiles !== undefined && loadedEmptyProfiles.length === 0, 'loaded-empty profiles is [], distinct from undefined')
+    assert.equal(renders.profiles, 2)
+    assert.equal(renders.nodes, 4, 'profiles load must not re-render useHostNodes')
+    assert.equal(renders.models, 1, 'profiles load must not re-render useHostModels')
+
+    const populatedProfiles = [assistantProfile, reviewerProfile]
+    act(() => hydrate.patchCatalog({ profiles: populatedProfiles }))
+    assert.ok(readProfiles() === populatedProfiles, 'useHostProfiles forwards the exact stable array reference')
+    assert.equal(renders.profiles, 3)
+    assert.equal(renders.nodes, 4)
+
+    act(() => hydrate.patchCatalog({ assetsLoaded: true, models: [] }))
+    assert.equal(renders.models, 2)
+    assert.equal(renders.profiles, 3, 'flipping assetsLoaded=true without changing profiles must NOT re-render useHostProfiles')
+    assert.equal(renders.nodes, 4, 'flipping assetsLoaded=true must NOT re-render useHostNodes')
+
+    // 6. Logout resets all three slices back to undefined
+    act(() => store.finishLogoutStateReset())
+    assert.ok(readNodes() === undefined, 'logout returns useHostNodes() to undefined')
+    assert.ok(readProfiles() === undefined, 'logout returns useHostProfiles() to undefined')
+    assert.ok(readModels() === undefined, 'logout returns useHostModels() to undefined')
+
+    // 7. HTTP refreshNodes() recovers nodesLoaded=true and populates useHostNodes()
+    const originalFetch = globalThis.fetch
+    t.after(() => { globalThis.fetch = originalFetch })
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify([gpuNode, localNode]), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })) as typeof fetch
+    await act(async () => {
+      await store.refreshNodes()
+    })
+    assert.deepEqual(readNodes()?.map((n) => n.id), ['local', 'gpu-1'], 'refreshNodes marks nodesLoaded=true and sorts local first')
   })
 
   test('three-state loaded/auth/error honesty across real bridge: useHostModels, usePluginDoc, and useConversation', { timeout: 60_000 }, () => {

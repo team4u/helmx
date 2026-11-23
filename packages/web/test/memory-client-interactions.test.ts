@@ -72,6 +72,7 @@ describe("memory-client-interactions", () => {
   function context(callAction: ClientContext['callAction']): ClientContext {
     return {
       pluginId: 'builtin:memory', callAction,
+      fetchRoute: async () => { throw new Error('fetchRoute not implemented in test stub') },
       submitInput: async () => {},
       openScreen: () => {}, openSplitScreen: () => {}, openConversationDrawer: () => {},
       openArtifact: () => {}, openWorkbench: () => {}, closeWorkbench: () => {}, notify: () => {},

@@ -27,6 +27,7 @@ function makePluginCtx(pluginId: string) {
   return {
     pluginId,
     callAction: async () => ({}),
+    fetchRoute: async () => { throw new Error('fetchRoute not implemented in test stub') },
     submitInput: async () => {},
     openScreen: () => {},
     openSplitScreen: () => {},

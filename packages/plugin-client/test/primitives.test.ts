@@ -280,6 +280,7 @@ test('Screen: layout defaults to contained, supports full-bleed, and stamps data
   const pluginCtx = {
     pluginId: 'builtin:herdr',
     callAction: async () => ({}),
+    fetchRoute: async () => { throw new Error('fetchRoute not implemented in test stub') },
     submitInput: async () => {},
     openScreen: () => {},
     openSplitScreen: () => {},

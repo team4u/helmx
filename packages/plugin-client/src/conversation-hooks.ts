@@ -5,7 +5,16 @@
  * No component exports in this file (Fast Refresh friendly).
  */
 import { useCallback, useContext, useEffect, useState, useSyncExternalStore } from 'react'
-import type { AskSpec, ConversationDetail, ConversationLive, ConversationSummary, HostModelsSlice, UsePluginsResult } from '@helmx/protocol/browser'
+import type {
+  AskSpec,
+  ConversationDetail,
+  ConversationLive,
+  ConversationSummary,
+  HostModelsSlice,
+  HostNodesSlice,
+  HostProfilesSlice,
+  UsePluginsResult,
+} from '@helmx/protocol/browser'
 import { PluginClientHostContext, usePluginClientHost, type PluginClientHostPort } from './host-port.js'
 import { useRequiredPluginContextBase } from './plugin-context.js'
 
@@ -39,6 +48,40 @@ export function useHostModels(): HostModelsSlice | undefined {
   return useSyncExternalStore(
     port.subscribeModels ?? NOOP_SUBSCRIBE,
     port.getModels ?? UNDEFINED_SNAPSHOT,
+    UNDEFINED_SNAPSHOT,
+  )
+}
+
+/**
+ * Reactive read-only host compute node list slice via the stable host port
+ * (`GET /api/nodes` / SSE `snapshot.nodes` + `node.changed`; never exposes
+ * node access tokens). `undefined` = capability not injected or initial load
+ * not yet completed (render unknown/loading and disable selection); `[]` =
+ * loaded and genuinely empty. The two states are strictly distinct and must
+ * never leak into each other. On the server the snapshot is always `undefined`.
+ */
+export function useHostNodes(): HostNodesSlice | undefined {
+  const port = usePluginClientHost()
+  return useSyncExternalStore(
+    port.subscribeNodes ?? NOOP_SUBSCRIBE,
+    port.getNodes ?? UNDEFINED_SNAPSHOT,
+    UNDEFINED_SNAPSHOT,
+  )
+}
+
+/**
+ * Reactive read-only host Profile catalog slice via the stable host port
+ * (`GET /api/profiles` / SSE `profile.changed`; excludes `SYSTEM.md` bodies).
+ * `undefined` = capability not injected or initial load not yet completed
+ * (render unknown/loading and disable selection); `[]` = loaded and genuinely
+ * empty. The two states are strictly distinct and must never leak into each
+ * other. On the server the snapshot is always `undefined`.
+ */
+export function useHostProfiles(): HostProfilesSlice | undefined {
+  const port = usePluginClientHost()
+  return useSyncExternalStore(
+    port.subscribeProfiles ?? NOOP_SUBSCRIBE,
+    port.getProfiles ?? UNDEFINED_SNAPSHOT,
     UNDEFINED_SNAPSHOT,
   )
 }

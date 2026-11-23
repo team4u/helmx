@@ -24,7 +24,7 @@ import {
   usePluginSessionDoc,
   type PluginDocState,
 } from '@helmx/plugin-client'
-import { pluginsApi } from '../src/lib/api.js'
+import { pluginsApi, setStoredToken } from '../src/lib/api.js'
 import { makeTestStore } from './helpers/store.js'
 import { HostStoreProviders } from './helpers/host-store.js'
 import type { HelmxExternalStore, HelmxStoreActions } from '../src/lib/helmx-store.js'
@@ -266,4 +266,112 @@ test('ctx.openWorkbench(panelId, params)：自动补全短面板 ID、写入 wor
   ctx.closeWorkbench()
   assert.equal(store.getWorkbenchSlice().workbenchOpen, false)
   assert.equal(store.getWorkbenchSlice().workbenchParams, null)
+})
+
+test('ctx.fetchRoute：宿主命名空间拼装、权威 Bearer 注入与覆写、二进制/流透传及路径越界拒绝', { timeout: 60_000 }, async (t) => {
+  const captured: Array<{ url: string; method?: string; headers: Headers; body: BodyInit | null | undefined }> = []
+  const originalFetch = globalThis.fetch
+  t.after(() => {
+    globalThis.fetch = originalFetch
+    setStoredToken(null)
+  })
+
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+    const headers = new Headers(init?.headers)
+    captured.push({ url, method: init?.method, headers, body: init?.body })
+    if (url.endsWith('/binary')) {
+      return new Response(new Uint8Array([1, 2, 3, 4]), {
+        status: 200,
+        headers: { 'Content-Type': 'application/octet-stream', 'X-Bin': 'yes' },
+      })
+    }
+    if (url.endsWith('/stream')) {
+      const encoder = new TextEncoder()
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode('data: chunk-1\n\n'))
+          controller.enqueue(encoder.encode('data: chunk-2\n\n'))
+          controller.close()
+        },
+      })
+      return new Response(stream, {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+      })
+    }
+    if (url.endsWith('/missing')) {
+      return new Response(JSON.stringify({ error: { code: 'not_found' } }), {
+        status: 404,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+    return new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }) as typeof fetch
+
+  const store = makeTestStore()
+  const ctx = createPluginClientContext(createPluginClientHostPort(store), '@scope/my:plugin', 1)
+
+  // 1. Authenticated GET with query string + authoritative Bearer injection overriding caller header without mutating caller Headers
+  setStoredToken('host-secret-token')
+  const callerHeaders = new Headers({
+    Authorization: 'Bearer spoofed-by-plugin',
+    'X-Custom': 'keep-me',
+  })
+  const okRes = await ctx.fetchRoute('/items/42?page=2&sort=desc', { headers: callerHeaders })
+  assert.equal(okRes.status, 200)
+  assert.deepEqual(await okRes.json(), { ok: true })
+  assert.equal(captured.length, 1)
+  assert.equal(captured[0]!.url, '/api/plugins/%40scope%2Fmy%3Aplugin/routes/items/42?page=2&sort=desc')
+  assert.equal(captured[0]!.headers.get('Authorization'), 'Bearer host-secret-token', 'host token overwrites caller Authorization')
+  assert.equal(captured[0]!.headers.get('X-Custom'), 'keep-me', 'caller non-auth headers are preserved')
+  assert.equal(callerHeaders.get('Authorization'), 'Bearer spoofed-by-plugin', 'caller Headers instance must not be mutated')
+
+  // 2. When no host token is stored, spoofed caller Authorization is stripped rather than forwarded
+  setStoredToken(null)
+  await ctx.fetchRoute('/public/ping', { headers: { authorization: 'Bearer spoofed' } })
+  assert.equal(captured.length, 2)
+  assert.equal(captured[1]!.headers.get('Authorization'), null, 'caller Authorization stripped when host has no token')
+
+  // 3. FormData upload preserves body and does not inject a bogus Content-Type
+  setStoredToken('host-secret-token')
+  const form = new FormData()
+  form.append('name', 'demo.bin')
+  await ctx.fetchRoute('/upload', { method: 'POST', body: form })
+  assert.equal(captured.length, 3)
+  assert.equal(captured[2]!.method, 'POST')
+  assert.ok(captured[2]!.body === form)
+  assert.equal(captured[2]!.headers.get('Content-Type'), null, 'FormData upload keeps Content-Type unset for multipart boundary')
+  assert.equal(captured[2]!.headers.get('Authorization'), 'Bearer host-secret-token')
+
+  // 4. Raw binary, SSE ReadableStream, and non-2xx responses pass through untouched
+  const binRes = await ctx.fetchRoute('/binary')
+  assert.equal(binRes.headers.get('X-Bin'), 'yes')
+  assert.deepEqual(new Uint8Array(await binRes.arrayBuffer()), new Uint8Array([1, 2, 3, 4]))
+
+  const sseRes = await ctx.fetchRoute('/stream')
+  assert.equal(sseRes.headers.get('Content-Type'), 'text/event-stream')
+  assert.ok(sseRes.body !== null, 'SSE response preserves ReadableStream body')
+  const reader = sseRes.body.getReader()
+  const decoder = new TextDecoder()
+  let collected = ''
+  for (;;) {
+    const chunk = await reader.read()
+    if (chunk.done) break
+    collected += decoder.decode(chunk.value, { stream: true })
+  }
+  assert.equal(collected, 'data: chunk-1\n\ndata: chunk-2\n\n')
+
+  const notFoundRes = await ctx.fetchRoute('/missing')
+  assert.equal(notFoundRes.status, 404, 'non-2xx Response is returned untouched (not auto-thrown)')
+
+  // 5. Invalid / traversal paths reject before calling fetch
+  const beforeInvalid = captured.length
+  for (const badPath of ['../auth/status', '/a/../b', '//evil.test/x', 'relative', '/', '/items#frag', '/items\\a', '/a/%2e%2e/b']) {
+    await assert.rejects(() => ctx.fetchRoute(badPath), /fetchRoute path/)
+  }
+  assert.equal(captured.length, beforeInvalid, 'rejected paths must never issue a fetch request')
 })

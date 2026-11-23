@@ -14,6 +14,8 @@ import type {
   CredentialSummary,
   HelmxLocale,
   HostModelsSlice,
+  HostNodesSlice,
+  HostProfilesSlice,
   LocalizedText,
   NodeInfo,
   PluginSummary,
@@ -157,6 +159,8 @@ export class HelmxExternalStore {
   private pluginsUiSlice: PluginsUiSlice
   private pluginsSnapshot: UsePluginsResult
   private hostModelsSlice: HostModelsSlice | undefined = undefined
+  private hostNodesSlice: HostNodesSlice | undefined = undefined
+  private hostProfilesSlice: HostProfilesSlice | undefined = undefined
   private summaryById = new Map<number, ConversationSummary>()
   private pluginById = new Map<string, PluginSummary>()
   private pendingAsksByConv = new Map<number, AskSpec[]>()
@@ -466,6 +470,8 @@ export class HelmxExternalStore {
   getModels = (): ModelDescriptor[] => this.catalogState.models
   getModelDefaults = (): ModelCatalogDefaults => this.catalogState.modelDefaults
   getHostModelsSlice = (): HostModelsSlice | undefined => this.hostModelsSlice
+  getHostNodesSlice = (): HostNodesSlice | undefined => this.hostNodesSlice
+  getHostProfilesSlice = (): HostProfilesSlice | undefined => this.hostProfilesSlice
   getProviders = (): ProviderConfig[] => this.catalogState.providers
   getCredentials = (): CredentialSummary[] => this.catalogState.credentials
   getSkills = (): SkillSummary[] => this.catalogState.skills
@@ -636,6 +642,14 @@ export class HelmxExternalStore {
       plan.domains.add('profiles')
       changed = true
     }
+    if (
+      next.profilesLoaded !== prev.profilesLoaded ||
+      (next.profilesLoaded && next.profiles !== prev.profiles)
+    ) {
+      this.hostProfilesSlice = next.profilesLoaded ? next.profiles : undefined
+      plan.domains.add('hostProfiles')
+      changed = true
+    }
     if (next.models !== prev.models || next.modelDefaults !== prev.modelDefaults) {
       plan.domains.add('models')
       changed = true
@@ -774,6 +788,14 @@ export class HelmxExternalStore {
     }
     if (next.nodes !== prev.nodes) {
       plan.domains.add('nodes')
+      plan.domains.add('all')
+    }
+    if (
+      next.nodesLoaded !== prev.nodesLoaded ||
+      (next.nodesLoaded && next.nodes !== prev.nodes)
+    ) {
+      this.hostNodesSlice = next.nodesLoaded ? next.nodes : undefined
+      plan.domains.add('hostNodes')
       plan.domains.add('all')
     }
     if (!deferEmit) this.emit(plan)
