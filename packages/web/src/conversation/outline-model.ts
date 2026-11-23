@@ -14,7 +14,10 @@
  *   5. Context divider nodes (`divider`): reset (`/reset`) or compaction (`/compact`) boundaries;
  * - Keyword filtering: matches human/assistant full text, headings, and card searchable text; a hit on a child
  *   automatically keeps its parent human turn so the hierarchy stays contextual;
- * - Scroll-position activation: derives the currently-read outline item from the viewport-top baseline and anchor offsets.
+ * - Scroll-position activation: derives the currently-read outline item from the viewport-top baseline and anchor offsets;
+ *   the scroll layer publishes an `OutlineAnchor` (entryId + optional headingIndex / cardId) and
+ *   `resolveOutlineNodeKey` maps it to exactly one outline node key, so only the heading section actually being
+ *   read is highlighted (never every heading of the same assistant turn).
  */
 
 import type { ConversationEntry, InputOrigin } from '@helmx/protocol/browser'
@@ -601,4 +604,51 @@ export function resolveActiveOutlineEntryId(
     }
   }
   return active
+}
+
+// ---------------------------------------------------------------------------
+// Outline activation anchor → node key
+// ---------------------------------------------------------------------------
+
+/**
+ * Reading-position anchor published by the timeline scroll layer (same shape as an outline jump target):
+ * `entryId` is the `data-entry-id` of the timeline wrapper; `headingIndex` pinpoints an H1~H3 inside an assistant
+ * turn (DOM order, the indexing `use-timeline-scroll`'s outline locate effect scrolls by); `cardId` pinpoints a
+ * tool.view business card (only set by an explicit outline jump, scroll derivation stays at turn granularity).
+ */
+export interface OutlineAnchor {
+  entryId: string
+  headingIndex?: number
+  cardId?: string
+}
+
+export function sameOutlineAnchor(a: OutlineAnchor | undefined, b: OutlineAnchor | undefined): boolean {
+  if (a === b) return true
+  if (a === undefined || b === undefined) return false
+  return a.entryId === b.entryId && a.headingIndex === b.headingIndex && a.cardId === b.cardId
+}
+
+/**
+ * Map an activation anchor to the single outline node key it stands for:
+ * - heading anchor → that exact heading node (the section being read), never its sibling headings;
+ * - card anchor → that exact business card node;
+ * - turn / question / divider / plugin-card anchor → the first node sharing the entryId in document order, i.e. the
+ *   turn's body summary, first business card, status node or first heading (one node per turn);
+ * - an anchor whose heading/card node does not exist (e.g. not yet streamed) falls back to the entry-level node.
+ */
+export function resolveOutlineNodeKey(nodes: ReadonlyArray<OutlineNode>, anchor: OutlineAnchor): string | undefined {
+  if (anchor.headingIndex !== undefined) {
+    const heading = nodes.find(
+      (node): node is OutlineHeadingNode =>
+        node.kind === 'heading' && node.entryId === anchor.entryId && node.headingIndex === anchor.headingIndex,
+    )
+    if (heading !== undefined) return heading.key
+  } else if (anchor.cardId !== undefined) {
+    const card = nodes.find(
+      (node): node is OutlineCardNode =>
+        node.kind === 'card' && node.entryId === anchor.entryId && node.cardId === anchor.cardId,
+    )
+    if (card !== undefined) return card.key
+  }
+  return nodes.find((node) => node.entryId === anchor.entryId)?.key
 }

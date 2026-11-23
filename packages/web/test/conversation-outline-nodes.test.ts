@@ -5,7 +5,8 @@
  *   与 timeline.renderer 接管的 plugin-card（helmx.input 文本首行摘要）；
  * - step-group 内普通工具与 thinking 不进大纲；无正文无卡片回合保留诚实状态摘要；
  * - 搜索（人类/助手全文、卡片摘要）与「仅提问」过滤、父提问保留、节点定位数据
- *   （entryId / headingIndex / cardId）。
+ *   （entryId / headingIndex / cardId）；
+ * - 阅读激活锚点 → 唯一大纲节点 key（同一回合内精确到当前读到的标题节，任何时刻至多一个节点）。
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
@@ -15,11 +16,12 @@ import { buildTimelineItems } from '../src/conversation/timeline-model.js'
 import {
   buildConversationOutline,
   filterOutlineNodes,
+  resolveOutlineNodeKey,
+  sameOutlineAnchor,
   summarizePluginCardEntry,
   type OutlineAssistantNode,
   type OutlineCardNode,
   type OutlineHeadingNode,
-  type OutlineHumanNode,
 } from '../src/conversation/outline-model.js'
 
 // ---------------------------------------------------------------------------
@@ -456,3 +458,102 @@ test('OutlineAssistantNode 携带已结算单轮 durationMs，运行中与无耗
   assert.ok(liveAssistant !== undefined)
   assert.equal(liveAssistant.durationMs, undefined, 'live assistant turn must not display a premature settled duration')
 })
+
+// ---------------------------------------------------------------------------
+// 阅读激活锚点 → 大纲节点 key（当前项高亮粒度）
+// ---------------------------------------------------------------------------
+
+test('resolveOutlineNodeKey：标题锚点精确映射到该标题节点，同一回合的其他标题节点不被激活', { timeout: 60_000 }, () => {
+  const items = buildTimelineItems([
+    humanEntry('1', '介绍一下架构'),
+    assistantTextEntry('2', '# 架构总览\n正文。\n## 内核模块\n正文。\n### 状态机\n正文。'),
+  ])
+  const nodes = buildConversationOutline(items)
+  const headings = nodes.filter((node): node is OutlineHeadingNode => node.kind === 'heading')
+  assert.deepEqual(
+    headings.map((h) => [h.entryId, h.headingIndex]),
+    [['2', 0], ['2', 1], ['2', 2]],
+    '同一回合的三个标题节点共享 entryId、仅 headingIndex 不同',
+  )
+  assert.equal(new Set(headings.map((h) => h.key)).size, 3, '三个标题节点的 key 互不相同')
+  const [h1, h2, h3] = headings.map((h) => h.key) as [string, string, string]
+
+  // 根因回归：旧通路按 entryId 匹配会让三者一起 is-current；按锚点映射只命中被读到的那一个
+  assert.equal(resolveOutlineNodeKey(nodes, { entryId: '2', headingIndex: 1 }), h2)
+  assert.equal(resolveOutlineNodeKey(nodes, { entryId: '2', headingIndex: 2 }), h3)
+  assert.equal(resolveOutlineNodeKey(nodes, { entryId: '2', headingIndex: 0 }), h1)
+  // 回合锚点（回合内尚无标题越过基线）回退为该回合的首个节点 = 首个标题
+  assert.equal(resolveOutlineNodeKey(nodes, { entryId: '2' }), h1)
+  // 尚不存在的标题序号（流式中尚未落库）回退到 entry 级节点而非 undefined
+  assert.equal(resolveOutlineNodeKey(nodes, { entryId: '2', headingIndex: 9 }), h1)
+  // 人类提问锚点命中提问节点自身
+  assert.equal(resolveOutlineNodeKey(nodes, { entryId: '1' }), 'outline:human:human:id:in-1')
+  // 未知 entryId 不伪造节点
+  assert.equal(resolveOutlineNodeKey(nodes, { entryId: 'nope' }), undefined)
+})
+
+test('resolveOutlineNodeKey：正文摘要 / 首个业务卡 / 状态回合锚点映射为该回合唯一的单个节点，卡片锚点按 cardId 精确', { timeout: 60_000 }, () => {
+  // 正文 + 两张业务卡：回合锚点 → 正文摘要（回合首个节点）；cardId 锚点 → 对应卡片
+  const mixed = buildTimelineItems([
+    humanEntry('1', '先说明再执行'),
+    {
+      id: '2',
+      kind: 'pi.assistant',
+      model: [
+        {
+          role: 'assistant',
+          content: [
+            { type: 'text', text: '我先说明计划。' },
+            { type: 'toolCall', id: 'call-1', name: 'subagent', arguments: { prompt: '调研甲' } },
+            { type: 'toolCall', id: 'call-2', name: 'subagent', arguments: { prompt: '调研乙' } },
+          ],
+        },
+      ],
+    },
+    toolResultEntry('3', 'call-1', 'subagent'),
+    toolResultEntry('4', 'call-2', 'subagent'),
+  ], { toolViews: TOOL_VIEWS })
+  const mixedNodes = buildConversationOutline(mixed)
+  assert.deepEqual(kindsOf(mixedNodes), ['human', 'assistant', 'card', 'card'])
+  const turnNodes = mixedNodes.filter((node) => node.entryId === '2')
+  assert.deepEqual(turnNodes.map((node) => node.kind), ['assistant', 'card', 'card'])
+  assert.equal(resolveOutlineNodeKey(mixedNodes, { entryId: '2' }), turnNodes[0]!.key, '回合锚点 → 回合首个节点（正文摘要）')
+  assert.equal(
+    resolveOutlineNodeKey(mixedNodes, { entryId: '2', cardId: 'tool:call-1' }),
+    turnNodes[1]!.key,
+    '卡片锚点按 cardId 精确命中对应卡片',
+  )
+  assert.equal(resolveOutlineNodeKey(mixedNodes, { entryId: '2', cardId: 'tool:call-2' }), turnNodes[2]!.key)
+
+  // 无正文仅卡片：回合锚点 → 首个业务卡（不虚构 assistant 节点）
+  const cardsOnly = buildConversationOutline(
+    buildTimelineItems([humanEntry('1', '派子代理'), toolCallEntry('2', 'call-1', 'subagent', { prompt: '执行' })], { toolViews: TOOL_VIEWS }),
+  )
+  assert.deepEqual(kindsOf(cardsOnly), ['human', 'card'])
+  assert.equal(resolveOutlineNodeKey(cardsOnly, { entryId: '2' }), cardsOnly[1]!.key)
+
+  // 无正文无卡片：回合锚点 → 诚实状态摘要节点
+  const statusOnly = buildConversationOutline(
+    buildTimelineItems([humanEntry('1', '查文件'), toolCallEntry('2', 'call-1', 'bash', { command: 'ls' }), toolResultEntry('3', 'call-1', 'bash')]),
+  )
+  assert.deepEqual(kindsOf(statusOnly), ['human', 'assistant'])
+  assert.equal(resolveOutlineNodeKey(statusOnly, { entryId: '2' }), statusOnly[1]!.key)
+
+  // 分割线与 plugin-card 以自身 entryId 为锚
+  const withDivider = buildConversationOutline(
+    buildTimelineItems([humanEntry('1', '旧问题'), { id: '2', kind: 'pi.reset', data: {} }, backgroundReportEntry], { timelineRenderers: RENDERERS }),
+  )
+  assert.equal(resolveOutlineNodeKey(withDivider, { entryId: '2' }), withDivider[1]!.key, '分割线锚点 → 分割线节点')
+  assert.equal(resolveOutlineNodeKey(withDivider, { entryId: '9' }), withDivider[2]!.key, 'plugin-card 锚点 → 卡片节点')
+})
+
+test('sameOutlineAnchor：entryId / headingIndex / cardId 三元组逐字段比较，undefined 与缺省字段等价', { timeout: 60_000 }, () => {
+  assert.equal(sameOutlineAnchor(undefined, undefined), true)
+  assert.equal(sameOutlineAnchor({ entryId: '2' }, undefined), false)
+  assert.equal(sameOutlineAnchor({ entryId: '2' }, { entryId: '2' }), true)
+  assert.equal(sameOutlineAnchor({ entryId: '2', headingIndex: 1 }, { entryId: '2', headingIndex: 1 }), true)
+  assert.equal(sameOutlineAnchor({ entryId: '2', headingIndex: 1 }, { entryId: '2' }), false, '标题锚点与回合锚点是不同的激活项')
+  assert.equal(sameOutlineAnchor({ entryId: '2', headingIndex: 1 }, { entryId: '2', headingIndex: 0 }), false)
+  assert.equal(sameOutlineAnchor({ entryId: '2', cardId: 'tool:c1' }, { entryId: '2', cardId: 'tool:c2' }), false)
+})
+

@@ -1,17 +1,20 @@
 /**
  * Scroll-follow, keep-alive Activity wake scroll restoration, IntersectionObserver
- * reading-anchor tracking, ResizeObserver width/bottom tracking, outline locate,
- * and SWR scroll-anchor preservation hook for ConversationTimeline.
+ * reading-anchor tracking (outline activation: turn wrapper + in-turn H1~H3 heading granularity),
+ * ResizeObserver width/bottom tracking, outline locate (with a jump lock so the clicked node stays the
+ * current one until the user scrolls), and SWR scroll-anchor preservation hook for ConversationTimeline.
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type * as React from 'react'
 import type { ConversationEntry } from '@helmx/protocol/browser'
 import { useStableCallback } from '../lib/use-stable-callback.js'
-import { resolveActiveOutlineEntryId } from './outline-model.js'
+import { sameOutlineAnchor, type OutlineAnchor } from './outline-model.js'
 import {
   OUTLINE_ACTIVE_LINE_PX,
+  OUTLINE_BOTTOM_ZONE_PX,
   resolveActiveAnchorIndex,
   resolveCharsPerLine,
+  resolveOutlineReadingBaseline,
 } from './timeline-containment-model.js'
 import { captureTimelineScrollAnchor, restoreTimelineScrollAnchor, type TimelineScrollAnchor } from './timeline-scroll-anchor.js'
 import {
@@ -20,7 +23,18 @@ import {
   type AnchorAlignment,
 } from './timeline-scroll-calibration.js'
 
-const SCROLL_TO_BOTTOM_THRESHOLD_PX = 240
+/** Same selector as the outline locate effect: H1~H3 inside an assistant turn body, in DOM order (= headingIndex). */
+const TURN_HEADING_SELECTOR = '.msg-ai-block .msg-ai-body h1, .msg-ai-block .msg-ai-body h2, .msg-ai-block .msg-ai-body h3'
+/** Keys that count as the user taking over the scroll position (releases the outline jump lock). */
+const JUMP_LOCK_RELEASE_KEYS: ReadonlySet<string> = new Set([
+  'ArrowUp',
+  'ArrowDown',
+  'PageUp',
+  'PageDown',
+  'Home',
+  'End',
+  ' ',
+])
 
 function escapeAttrSelectorValue(value: string): string {
   return value.replace(/["\\]/g, (ch) => `\\${ch}`)
@@ -44,7 +58,12 @@ export interface UseTimelineScrollOptions {
   anchorSignature: string
   highlightedEntry: { conversationId: number; entryId: string } | null
   outlineScrollRequest?: TimelineOutlineScrollRequest | null
-  onActiveEntryChange?: (entryId: string | undefined) => void
+  /**
+   * Reading-position outline activation: the last anchor past the reading baseline, refined to the exact H1~H3
+   * heading inside the active assistant turn (headingIndex) — or to the clicked card right after an outline jump.
+   * `undefined` while the timeline has no anchors.
+   */
+  onActiveOutlineChange?: (anchor: OutlineAnchor | undefined) => void
   onConversationSwitch: () => void
   fetchEarlierEntries: (conversationId: number) => Promise<void>
 }
@@ -74,7 +93,7 @@ export function useTimelineScroll({
   anchorSignature,
   highlightedEntry,
   outlineScrollRequest,
-  onActiveEntryChange,
+  onActiveOutlineChange,
   onConversationSwitch,
   fetchEarlierEntries,
 }: UseTimelineScrollOptions): UseTimelineScrollResult {
@@ -95,7 +114,19 @@ export function useTimelineScroll({
   const prevFingerprintRef = useRef<{ conversationId: number; value: string } | null>(null)
   const lastHumanRef = useRef<{ conversationId: number; key: string | undefined } | null>(null)
   const lastOutlineTickRef = useRef<number | null>(null)
-  const lastActiveEntryRef = useRef<string | undefined>(undefined)
+  const lastActiveAnchorRef = useRef<OutlineAnchor | undefined>(undefined)
+  /** Anchor wrappers (`[data-entry-id]`) in document order, refreshed whenever the anchor set changes. */
+  const anchorWrappersRef = useRef<HTMLElement[]>([])
+  /** IO path: indexes of wrappers currently intersecting the baseline zone (top passed container top + 96px). */
+  const passedAnchorsRef = useRef<Set<number>>(new Set())
+  /**
+   * Outline jump lock: after an explicit outline click the clicked node stays the current one (scroll-derived
+   * publications are withheld) until the user takes over the scroll position (wheel / touch / pointer / scroll keys)
+   * or another explicit navigation happens. Keeps the smooth-scroll animation and the settled position from
+   * flashing a different node (e.g. a near-bottom target whose followers are also on screen).
+   */
+  const outlineJumpLockRef = useRef(false)
+  const activationFrameRef = useRef(0)
   const outlineHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const activeCalibrationRef = useRef<{
     conversationId: number
@@ -110,14 +141,79 @@ export function useTimelineScroll({
   const wakeScrollTopRef = useRef<number | null>(null)
 
   const notifySwitch = useStableCallback(onConversationSwitch)
-  const notifyActiveEntryChange = useStableCallback((entryId: string | undefined): void => {
-    onActiveEntryChange?.(entryId)
+  const notifyActiveOutlineChange = useStableCallback((anchor: OutlineAnchor | undefined): void => {
+    onActiveOutlineChange?.(anchor)
   })
-  const anchorTrackingEnabled = onActiveEntryChange !== undefined
+  const anchorTrackingEnabled = onActiveOutlineChange !== undefined
+
+  /**
+   * Resolve the reading anchor from the current scroll position (both IO and no-IO paths share it):
+   * 1. active wrapper = the last wrapper whose top passed the reading baseline. Far from the bottom the IO path
+   *    answers from the intersecting set (zero rect reads); when the baseline is widened (near the bottom) or IO is
+   *    unavailable, walk up from the last wrapper while its top is below the baseline — those rows are the ones on
+   *    screen below the baseline, so the walk is bounded by the viewport, never a whole-list scan;
+   * 2. inside the active wrapper, the last H1~H3 whose top passed the baseline pinpoints the heading section
+   *    (bounded by the turn's own heading count); with none passed the anchor stays at the wrapper (turn node).
+   */
+  const resolveReadingAnchor = useCallback(
+    (forceMeasure: boolean): OutlineAnchor | undefined => {
+      const scroller = scrollRef.current
+      const wrappers = anchorWrappersRef.current
+      if (scroller === null || wrappers.length === 0) return undefined
+      const baseline = resolveOutlineReadingBaseline(
+        scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight,
+        scroller.clientHeight,
+      )
+      let activeIndex: number
+      let containerTop = 0
+      const measureRows = forceMeasure || baseline > OUTLINE_ACTIVE_LINE_PX
+      if (measureRows) {
+        containerTop = scroller.getBoundingClientRect().top
+        let index = wrappers.length - 1
+        while (index >= 0 && wrappers[index]!.getBoundingClientRect().top - containerTop > baseline) index -= 1
+        activeIndex = index >= 0 ? index : 0
+      } else {
+        activeIndex = resolveActiveAnchorIndex(passedAnchorsRef.current, wrappers.length)
+      }
+      if (activeIndex < 0) return undefined
+      const wrapper = wrappers[activeIndex]!
+      const entryId = wrapper.dataset.entryId
+      if (entryId === undefined || entryId === '') return undefined
+      const headings = wrapper.querySelectorAll<HTMLElement>(TURN_HEADING_SELECTOR)
+      if (headings.length === 0) return { entryId }
+      if (!measureRows) containerTop = scroller.getBoundingClientRect().top
+      let headingIndex = -1
+      for (let i = 0; i < headings.length; i++) {
+        if (headings[i]!.getBoundingClientRect().top - containerTop <= baseline) headingIndex = i
+      }
+      return headingIndex >= 0 ? { entryId, headingIndex } : { entryId }
+    },
+    [],
+  )
+
+  /** Publish a scroll-derived anchor; an active outline jump lock withholds it (the clicked node stays current). */
+  const publish = useCallback(
+    (next: OutlineAnchor | undefined): void => {
+      if (sameOutlineAnchor(next, lastActiveAnchorRef.current)) return
+      lastActiveAnchorRef.current = next
+      notifyActiveOutlineChange(next)
+    },
+    [notifyActiveOutlineChange],
+  )
+
+  /** rAF-throttled scroll-derived activation (scroll, resize and content changes all funnel through here). */
+  const scheduleActivation = useCallback((): void => {
+    if (!anchorTrackingEnabled || activationFrameRef.current !== 0) return
+    activationFrameRef.current = requestAnimationFrame(() => {
+      activationFrameRef.current = 0
+      if (outlineJumpLockRef.current) return
+      publish(resolveReadingAnchor(typeof IntersectionObserver === 'undefined'))
+    })
+  }, [anchorTrackingEnabled, publish, resolveReadingAnchor])
 
   const syncScrollBottomVisibility = useCallback((el: HTMLElement): void => {
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
-    if (distanceFromBottom <= SCROLL_TO_BOTTOM_THRESHOLD_PX) {
+    if (distanceFromBottom <= OUTLINE_BOTTOM_ZONE_PX) {
       programmaticBottomScrollRef.current = false
     }
     if (distanceFromBottom <= 32) {
@@ -126,7 +222,7 @@ export function useTimelineScroll({
     const visible =
       !initialBottomRef.current.active &&
       !programmaticBottomScrollRef.current &&
-      distanceFromBottom > SCROLL_TO_BOTTOM_THRESHOLD_PX
+      distanceFromBottom > OUTLINE_BOTTOM_ZONE_PX
     setShowScrollBottom((prev) => (prev === visible ? prev : visible))
   }, [])
 
@@ -144,6 +240,7 @@ export function useTimelineScroll({
     initialBottomRef.current.consumed = true
     stickToBottomRef.current = true
     programmaticBottomScrollRef.current = true
+    outlineJumpLockRef.current = false
     setShowScrollBottom(false)
     setHasUnreadScrollUpdates(false)
     const el = scrollRef.current
@@ -153,7 +250,7 @@ export function useTimelineScroll({
     } else {
       el.scrollTop = el.scrollHeight
     }
-    if (el.scrollHeight - el.scrollTop - el.clientHeight <= SCROLL_TO_BOTTOM_THRESHOLD_PX) {
+    if (el.scrollHeight - el.scrollTop - el.clientHeight <= OUTLINE_BOTTOM_ZONE_PX) {
       programmaticBottomScrollRef.current = false
     }
     lastScrollTopRef.current = el.scrollTop
@@ -192,6 +289,7 @@ export function useTimelineScroll({
       lastScrollTopRef.current = 0
       prevFingerprintRef.current = null
       lastOutlineTickRef.current = null
+      outlineJumpLockRef.current = false
       initialBottomRef.current.active = false
       initialBottomRef.current.consumed = false
       notifySwitch()
@@ -208,6 +306,10 @@ export function useTimelineScroll({
       if (outlineHighlightTimerRef.current !== null) {
         clearTimeout(outlineHighlightTimerRef.current)
         outlineHighlightTimerRef.current = null
+      }
+      if (activationFrameRef.current !== 0) {
+        cancelAnimationFrame(activationFrameRef.current)
+        activationFrameRef.current = 0
       }
     }
   }, [conversationId, notifySwitch])
@@ -252,6 +354,9 @@ export function useTimelineScroll({
     const onScroll = (): void => {
       const top = el.scrollTop
       wakeScrollTopRef.current = top
+      // Every scroll frame (rAF-throttled) re-derives the reading anchor; the initial bottom-stick
+      // window keeps its synchronous bottom-stick bookkeeping and simply skips the visibility sync.
+      scheduleActivation()
       if (initialBottomRef.current.active) {
         lastScrollTopRef.current = top
         setShowScrollBottom(false)
@@ -269,79 +374,73 @@ export function useTimelineScroll({
       lastScrollTopRef.current = top
       syncScrollBottomVisibility(el)
     }
+    // Wheel / pointer / touch / scroll keys are user takeovers of the scroll position: the outline jump lock
+    // is released so scroll-derived activation resumes (an upward wheel additionally drops bottom-follow).
     const onWheel = (event: WheelEvent): void => {
+      outlineJumpLockRef.current = false
       if (event.deltaY < 0) stopFollowingBottom()
+    }
+    const onUserPointer = (): void => {
+      outlineJumpLockRef.current = false
     }
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key === 'ArrowUp' || event.key === 'PageUp' || event.key === 'Home') {
         stopFollowingBottom()
       }
+      if (JUMP_LOCK_RELEASE_KEYS.has(event.key)) outlineJumpLockRef.current = false
     }
     el.addEventListener('scroll', onScroll, { passive: true })
     el.addEventListener('wheel', onWheel, { passive: true })
+    el.addEventListener('pointerdown', onUserPointer, { passive: true })
+    el.addEventListener('touchstart', onUserPointer, { passive: true })
     el.addEventListener('keydown', onKeyDown, { passive: true })
     return () => {
       el.removeEventListener('scroll', onScroll)
       el.removeEventListener('wheel', onWheel)
+      el.removeEventListener('pointerdown', onUserPointer)
+      el.removeEventListener('touchstart', onUserPointer)
       el.removeEventListener('keydown', onKeyDown)
     }
-  }, [stopFollowingBottom, syncScrollBottomVisibility])
+  }, [stopFollowingBottom, syncScrollBottomVisibility, scheduleActivation])
 
+  // Anchor tracking: refresh the wrapper list on every anchor-set change, keep the IO intersecting set
+  // (baseline zone) up to date, and re-derive the reading anchor on scroll / resize / content changes.
   useEffect(() => {
     if (!anchorTrackingEnabled) return
     const scroller = scrollRef.current
     const inner = innerRef.current
     if (scroller === null || inner === null) return
 
-    const anchors = Array.from(inner.querySelectorAll<HTMLElement>('[data-entry-id]')).filter(
+    anchorWrappersRef.current = Array.from(inner.querySelectorAll<HTMLElement>('[data-entry-id]')).filter(
       (el) => (el.dataset.entryId ?? '') !== '',
     )
-    const entryIds = anchors.map((el) => el.dataset.entryId!)
-    const publish = (nextActive: string | undefined): void => {
-      if (nextActive === lastActiveEntryRef.current) return
-      lastActiveEntryRef.current = nextActive
-      notifyActiveEntryChange(nextActive)
-    }
+    const anchors = anchorWrappersRef.current
 
     if (typeof IntersectionObserver === 'undefined') {
-      let frame = 0
-      const measure = (): void => {
-        frame = 0
-        const containerTop = scroller.getBoundingClientRect().top
-        const offsets: Array<{ entryId: string; top: number }> = []
-        for (const node of anchors) {
-          offsets.push({ entryId: node.dataset.entryId!, top: node.getBoundingClientRect().top - containerTop })
-        }
-        publish(resolveActiveOutlineEntryId(offsets, OUTLINE_ACTIVE_LINE_PX))
-      }
-      const schedule = (): void => {
-        if (frame === 0) frame = requestAnimationFrame(measure)
-      }
-      schedule()
-      scroller.addEventListener('scroll', schedule, { passive: true })
+      // No IO: the shared resolver measures the on-screen rows itself (walk-up from the last wrapper).
+      scheduleActivation()
       return () => {
-        scroller.removeEventListener('scroll', schedule)
-        if (frame !== 0) cancelAnimationFrame(frame)
+        anchorWrappersRef.current = []
       }
     }
 
-    const intersecting = new Set<number>()
+    const passed = passedAnchorsRef.current
     const indexByEl = new Map<HTMLElement, number>()
     anchors.forEach((el, index) => indexByEl.set(el, index))
     const onEntries = (entries: IntersectionObserverEntry[]): void => {
       for (const entry of entries) {
         const idx = indexByEl.get(entry.target as HTMLElement)
         if (idx === undefined) continue
-        if (entry.isIntersecting) intersecting.add(idx)
-        else intersecting.delete(idx)
+        if (entry.isIntersecting) passed.add(idx)
+        else passed.delete(idx)
       }
-      const next = resolveActiveAnchorIndex(intersecting, entryIds.length)
-      publish(next === -1 ? undefined : entryIds[next])
+      if (outlineJumpLockRef.current) return
+      publish(resolveReadingAnchor(false))
     }
     let io: IntersectionObserver | null = null
     const buildObserver = (): void => {
       io?.disconnect()
-      intersecting.clear()
+      passed.clear()
       const bottomInset = Math.max(0, scroller.clientHeight - OUTLINE_ACTIVE_LINE_PX)
       io = new IntersectionObserver(onEntries, { root: scroller, rootMargin: `0px 0px -${bottomInset}px 0px` })
       for (const el of anchors) io.observe(el)
@@ -349,14 +448,19 @@ export function useTimelineScroll({
     buildObserver()
     let ro: ResizeObserver | null = null
     if (typeof ResizeObserver !== 'undefined') {
-      ro = new ResizeObserver(() => buildObserver())
+      ro = new ResizeObserver(() => {
+        buildObserver()
+        scheduleActivation()
+      })
       ro.observe(scroller)
     }
     return () => {
       io?.disconnect()
       ro?.disconnect()
+      passed.clear()
+      anchorWrappersRef.current = []
     }
-  }, [anchorTrackingEnabled, anchorSignature, notifyActiveEntryChange])
+  }, [anchorTrackingEnabled, anchorSignature, publish, resolveReadingAnchor, scheduleActivation])
 
   useEffect(() => {
     if (!outlineScrollRequest || outlineScrollRequest.tick === lastOutlineTickRef.current) return
@@ -381,7 +485,8 @@ export function useTimelineScroll({
       )
       if (cardEl !== null) scrollEl = cardEl
     } else if (outlineScrollRequest.headingIndex !== undefined) {
-      const headings = targetWrapper.querySelectorAll<HTMLElement>('.msg-ai-body h1, .msg-ai-body h2, .msg-ai-body h3')
+      // Same selector as the reading-anchor resolver: headingIndex indexes this DOM-ordered list.
+      const headings = targetWrapper.querySelectorAll<HTMLElement>(TURN_HEADING_SELECTOR)
       const matchedHeading = headings[outlineScrollRequest.headingIndex]
       if (matchedHeading !== undefined) scrollEl = matchedHeading
     }
@@ -389,15 +494,21 @@ export function useTimelineScroll({
     armScrollCalibration(scrollEl, 'start')
     setLocalHighlightEntryId(outlineScrollRequest.entryId)
     if (anchorTrackingEnabled) {
-      lastActiveEntryRef.current = outlineScrollRequest.entryId
-      notifyActiveEntryChange(outlineScrollRequest.entryId)
+      // The clicked node is the current one from now on; the lock withholds scroll-derived publication
+      // during the smooth animation and at the settled position until the user takes over the scroll.
+      outlineJumpLockRef.current = true
+      publish({
+        entryId: outlineScrollRequest.entryId,
+        ...(outlineScrollRequest.headingIndex !== undefined ? { headingIndex: outlineScrollRequest.headingIndex } : {}),
+        ...(outlineScrollRequest.cardId !== undefined ? { cardId: outlineScrollRequest.cardId } : {}),
+      })
     }
     if (outlineHighlightTimerRef.current !== null) clearTimeout(outlineHighlightTimerRef.current)
     outlineHighlightTimerRef.current = setTimeout(() => {
       outlineHighlightTimerRef.current = null
       setLocalHighlightEntryId((current) => (current === outlineScrollRequest.entryId ? null : current))
     }, 2400)
-  }, [outlineScrollRequest, anchorTrackingEnabled, notifyActiveEntryChange, anchorSignature, armScrollCalibration])
+  }, [outlineScrollRequest, anchorTrackingEnabled, publish, anchorSignature, armScrollCalibration])
 
   useEffect(() => {
     const inner = innerRef.current
@@ -501,10 +612,14 @@ export function useTimelineScroll({
     }
     if (el !== null) syncScrollBottomVisibility(el)
     if (detailsReady) beginInitialBottomCalibration()
-  }, [contentFingerprint, detailEntries, lastHumanKey, detailsReady, conversationId, beginInitialBottomCalibration, syncScrollBottomVisibility])
+    // Content changes (streamed headings, settled turns, SWR replacement) move rows without a scroll event:
+    // re-derive the reading anchor once the new layout is committed.
+    scheduleActivation()
+  }, [contentFingerprint, detailEntries, lastHumanKey, detailsReady, conversationId, beginInitialBottomCalibration, syncScrollBottomVisibility, scheduleActivation])
 
   const loadEarlierEntries = useCallback((): void => {
     stopFollowingBottom()
+    outlineJumpLockRef.current = false
     const scroller = scrollRef.current
     if (scroller === null) return
     const anchor = captureTimelineScrollAnchor(scroller)
