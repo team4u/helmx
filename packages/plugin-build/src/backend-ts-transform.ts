@@ -3,7 +3,7 @@
  *
  * Semantics match esbuild `transformSync` directly:
  * `.ts`/`.mts`/`.cts` -> loader `'ts'`, `.tsx` -> loader `'tsx'`, automatic JSX runtime,
- * ESM output, target `node20`, and `sourcefile` pointing to the real source file for diagnostics.
+ * ESM output, target `node24`, and `sourcefile` pointing to the real source file for diagnostics.
  *
  * Syntax errors propagate verbatim (preserving esbuild's `errors[].location`), and the kernel
  * loader hook wraps them into `HelmxError('plugin_load_failed')` without discarding diagnostics.
@@ -17,6 +17,6 @@ export function transformBackendTs(input: PluginBackendTsTransform): string {
     jsx: 'automatic',
     format: 'esm',
     sourcefile: input.file,
-    target: 'node20',
+    target: 'node24',
   }).code;
 }

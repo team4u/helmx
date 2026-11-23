@@ -20,10 +20,9 @@ import type { ActionManifest, JsonSchema, PluginActionCliPositionalSpec } from '
 import path from 'node:path'
 import { CliError } from './errors.js'
 import type { HubClient } from './hub-client.js'
-import type { CommandContext, CommandSpec } from './commands/index.js'
+import type { CommandSpec } from './commands/index.js'
 import { resolveConversationTarget } from './commands/index.js'
 import { printValue } from './output.js'
-import type { Io } from './options.js'
 import type { FlagSpec } from './args.js'
 
 const RESERVED_FLAG_NAMES = new Set(['json', 'help', 'input', 'current', 'h'])

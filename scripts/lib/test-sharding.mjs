@@ -30,6 +30,41 @@ export const DEFAULT_PURITY_CACHE_REL = path.join('node_modules', '.cache', 'hel
 
 const ISOLATION_PROCESS_PRAGMA_RE = /@test-isolation\s*:\s*process\b/;
 
+/**
+ * Match `@test-isolation: process` only inside leading comments at the top of a test file
+ * (before the first non-comment statement), so fixture strings inside tests like
+ * `build-runner.test.ts` never self-classify as isolated.
+ */
+function hasLeadingIsolationProcessPragma(source) {
+  let idx = source.charCodeAt(0) === 0xfeff ? 1 : 0;
+  if (source.startsWith('#!', idx)) {
+    const nl = source.indexOf('\n', idx);
+    if (nl === -1) return false;
+    idx = nl + 1;
+  }
+  while (idx < source.length) {
+    while (idx < source.length && /\s/.test(source[idx])) idx += 1;
+    if (source.startsWith('//', idx)) {
+      const nl = source.indexOf('\n', idx + 2);
+      const comment = nl === -1 ? source.slice(idx + 2) : source.slice(idx + 2, nl);
+      if (ISOLATION_PROCESS_PRAGMA_RE.test(comment)) return true;
+      if (nl === -1) return false;
+      idx = nl + 1;
+      continue;
+    }
+    if (source.startsWith('/*', idx)) {
+      const end = source.indexOf('*/', idx + 2);
+      const comment = end === -1 ? source.slice(idx + 2) : source.slice(idx + 2, end);
+      if (ISOLATION_PROCESS_PRAGMA_RE.test(comment)) return true;
+      if (end === -1) return false;
+      idx = end + 2;
+      continue;
+    }
+    break;
+  }
+  return false;
+}
+
 const WORKER_MODULE_PREFIXES = [
   'node:worker_threads',
   'worker_threads',
@@ -424,7 +459,7 @@ export function analyzeTestSourcePurity(
   const nodeFs = new Set();
   const nodeGlobal = new Set();
 
-  if (ISOLATION_PROCESS_PRAGMA_RE.test(source)) {
+  if (hasLeadingIsolationProcessPragma(source)) {
     strictIsolated.add('pragma:test-isolation:process');
   }
 

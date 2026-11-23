@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { runCli } from '../src/index.js'
+import { HubClient } from '../src/hub-client.js'
+import { CliError } from '../src/errors.js'
 
 async function consume(frames: unknown[], options: { raw?: string; mime?: string } = {}) {
   let out = ''
@@ -89,4 +91,106 @@ test('NDJSON handles UTF-8 trailing frame without newline; JSON output preserves
   const failure = await consume([{ type: 'exit', ok: false, exitCode: 7, timedOut: false }])
   assert.equal(failure.code, 7)
   assert.equal(failure.error.code, 'env_exec_failed')
+})
+
+test('HubClient streamNdjson & streamSse: connect timeout, index-cursor multi-frame chunks, CRLF splits, and 4 MiB frame cap', { timeout: 60_000 }, async () => {
+  const makeIo = (fetchImpl: typeof fetch) => ({
+    env: {},
+    out: () => {},
+    err: () => {},
+    stdin: { isTTY: false, readAll: async () => '' },
+    fetchImpl,
+  })
+
+  // 1. streamNdjson enforces connect timeout when Hub hangs before responding
+  const hangingClient = new HubClient(
+    { baseUrl: 'http://127.0.0.1:3202', token: 'tok' },
+    makeIo(((_url: unknown, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          const abortErr = new Error('aborted')
+          abortErr.name = 'AbortError'
+          reject(abortErr)
+        })
+      })) as typeof fetch),
+    60,
+  )
+  await assert.rejects(
+    () => hangingClient.streamNdjson('POST', '/api/env/exec', { onLine: () => {} }),
+    (err: unknown) => err instanceof CliError && err.code === 'timeout' && /connection timed out/.test(err.message),
+  )
+
+  // 2. streamNdjson parses many frames in one chunk (including CRLF) and rejects > 4 MiB frames
+  const encoder = new TextEncoder()
+  const manyLines = Array.from({ length: 200 }, (_, i) => JSON.stringify({ idx: i })).join('\r\n') + '\r\n'
+  const seenNdjson: number[] = []
+  const okClient = new HubClient(
+    { baseUrl: 'http://127.0.0.1:3202', token: 'tok' },
+    makeIo((async () =>
+      new Response(encoder.encode(manyLines), {
+        headers: { 'content-type': 'application/x-ndjson' },
+      })) as typeof fetch),
+    5_000,
+  )
+  await okClient.streamNdjson('POST', '/api/env/exec', {
+    onLine: (val) => seenNdjson.push((val as { idx: number }).idx),
+  })
+  assert.equal(seenNdjson.length, 200)
+  assert.equal(seenNdjson[0], 0)
+  assert.equal(seenNdjson[199], 199)
+
+  const hugeLine = JSON.stringify({ blob: 'x'.repeat(4 * 1024 * 1024 + 64) }) + '\n'
+  const hugeNdjsonClient = new HubClient(
+    { baseUrl: 'http://127.0.0.1:3202', token: 'tok' },
+    makeIo((async () =>
+      new Response(encoder.encode(hugeLine), {
+        headers: { 'content-type': 'application/x-ndjson' },
+      })) as typeof fetch),
+    5_000,
+  )
+  await assert.rejects(
+    () => hugeNdjsonClient.streamNdjson('POST', '/api/env/exec', { onLine: () => {} }),
+    (err: unknown) => err instanceof CliError && err.code === 'invalid_response' && /maximum size limit/.test(err.message),
+  )
+
+  // 3. streamSse handles split \r\n\r\n across chunk boundaries, multi-frame chunks, and > 4 MiB frame rejection
+  const sseChunks = [
+    encoder.encode('event: tick\r\ndata: one\r\n\r'),
+    encoder.encode('\nevent: tick\ndata: two\n\nevent: tick\r'),
+    encoder.encode('\ndata: three\r\n\r\n'),
+  ]
+  const seenSse: Array<{ event: string; data: string }> = []
+  const sseClient = new HubClient(
+    { baseUrl: 'http://127.0.0.1:3202', token: 'tok' },
+    makeIo((async () =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            for (const c of sseChunks) controller.enqueue(c)
+            controller.close()
+          },
+        }),
+        { headers: { 'content-type': 'text/event-stream' } },
+      )) as typeof fetch),
+    5_000,
+  )
+  await sseClient.streamSse('/api/events', { onFrame: (f) => seenSse.push(f) })
+  assert.deepEqual(seenSse, [
+    { event: 'tick', data: 'one' },
+    { event: 'tick', data: 'two' },
+    { event: 'tick', data: 'three' },
+  ])
+
+  const hugeSseClient = new HubClient(
+    { baseUrl: 'http://127.0.0.1:3202', token: 'tok' },
+    makeIo((async () =>
+      new Response(encoder.encode(`data: ${'y'.repeat(4 * 1024 * 1024 + 64)}\n\n`), {
+        headers: { 'content-type': 'text/event-stream' },
+      })) as typeof fetch),
+    5_000,
+  )
+  await assert.rejects(
+    () => hugeSseClient.streamSse('/api/events', { onFrame: () => {} }),
+    (err: unknown) => err instanceof CliError && err.code === 'invalid_response' && /maximum size limit/.test(err.message),
+  )
 })

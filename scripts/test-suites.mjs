@@ -84,10 +84,14 @@ const ALL_PACKAGES = [...SUITES.unit, ...SUITES.integration];
 const TEST_SUFFIXES = ['.test.ts', '.test.tsx'];
 const SIGNAL_EXIT_CODES = { SIGHUP: 129, SIGINT: 130, SIGQUIT: 131, SIGTERM: 143 };
 
+const testFilesCache = new Map();
+
 // A package entry ('cli') reads that package's top-level test/ files; a path entry
 // ('cli/test/launcher', packages/-relative) reads the subdirectory it names. Both return
 // repo-root-relative file paths.
 function testFilesOf(entry) {
+  const cached = testFilesCache.get(entry);
+  if (cached !== undefined) return cached;
   const relDir = entry.includes('/') ? entry : path.join(entry, 'test');
   const dir = path.join(packagesDir, relDir);
   let entries;
@@ -97,80 +101,125 @@ function testFilesOf(entry) {
     console.error(`[test-suites] cannot read ${dir}: ${err.message} (package missing or not installed?)`);
     process.exit(2);
   }
-  return entries
+  const result = entries
     .filter((e) => e.isFile() && TEST_SUFFIXES.some((s) => e.name.endsWith(s)))
     .map((e) => path.join('packages', relDir, e.name))
     .sort();
+  testFilesCache.set(entry, result);
+  return result;
 }
 
-const suiteName = process.argv[2];
-if (!SUITES[suiteName] && suiteName !== 'all') {
-  console.error(`[test-suites] usage: node scripts/test-suites.mjs <unit|integration|all> [extra args...]`);
-  process.exit(2);
-}
-const rawExtraArgs = process.argv.slice(3);
-const extraArgs = rawExtraArgs[0] === '--' ? rawExtraArgs.slice(1) : rawExtraArgs;
-
+const rawArgv = process.argv[2] === '--' ? process.argv.slice(3) : process.argv.slice(2);
+const suiteName = rawArgv[0];
 let files;
-if (suiteName === 'all') {
-  files = ALL_PACKAGES.flatMap(testFilesOf);
+let extraArgs;
+let label;
+
+if (suiteName === '--files') {
+  const explicitFiles = [];
+  let i = 1;
+  for (; i < rawArgv.length; i += 1) {
+    const arg = rawArgv[i];
+    if (arg === '--') {
+      i += 1;
+      break;
+    }
+    if (arg.startsWith('-')) break;
+    explicitFiles.push(arg);
+  }
+  extraArgs = rawArgv.slice(i);
+  if (explicitFiles.length === 0) {
+    console.error('[test-suites] --files requires at least one test file path');
+    process.exit(2);
+  }
+  const seen = new Set();
+  files = [];
+  for (const rawFile of explicitFiles) {
+    const abs = path.resolve(repoRoot, rawFile);
+    const rel = path.relative(repoRoot, abs);
+    if (rel === '' || rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) {
+      console.error(`[test-suites] --files path must live inside repository: ${rawFile}`);
+      process.exit(2);
+    }
+    if (!existsSync(abs)) {
+      console.error(`[test-suites] --files target does not exist: ${rel}`);
+      process.exit(2);
+    }
+    if (!seen.has(rel)) {
+      seen.add(rel);
+      files.push(rel);
+    }
+  }
+  label = `files(${files.length})`;
+  console.error(`[test-suites] suite ${label}: ${files.length} file(s)`);
 } else {
-  files = SUITES[suiteName].flatMap(testFilesOf);
-}
-
-if (files.length === 0) {
-  console.error(`[test-suites] suite ${suiteName} enumerated 0 test files; refusing to run (directory layout change suspected)`);
-  process.exit(2);
-}
-
-// Invariant 1: all = unit + integration (no overlap, no gap).
-if (suiteName === 'all') {
-  const unitCount = SUITES.unit.reduce((n, p) => n + testFilesOf(p).length, 0);
-  const integrationCount = SUITES.integration.reduce((n, p) => n + testFilesOf(p).length, 0);
-  const uniqueCount = new Set(files).size;
-  if (files.length !== unitCount + integrationCount || uniqueCount !== files.length) {
-    console.error(
-      `[test-suites] all(${files.length}) != unit(${unitCount}) + integration(${integrationCount}) or duplicate files exist; the split invariant is broken`,
-    );
+  if (!SUITES[suiteName] && suiteName !== 'all') {
+    console.error(`[test-suites] usage: node scripts/test-suites.mjs <unit|integration|all|--files <path...>> [extra args...]`);
     process.exit(2);
   }
-}
+  const rawExtraArgs = rawArgv.slice(1);
+  extraArgs = rawExtraArgs[0] === '--' ? rawExtraArgs.slice(1) : rawExtraArgs;
 
-// Invariant 2: the unit ∪ integration relative-path set == the actual file set across all
-// repo test directories. Scan every package under packages/ with a test subdirectory (not
-// just the known ones), subdirectories included, to catch future additions.
-{
-  const managed = new Set(ALL_PACKAGES.flatMap(testFilesOf));
-  const actual = new Set();
-  const walkTestDir = (dir, prefix) => {
-    let entries;
-    try {
-      entries = readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return; // not a directory (e.g. packages/<pkg>/test missing)
+  if (suiteName === 'all') {
+    files = ALL_PACKAGES.flatMap(testFilesOf);
+  } else {
+    files = SUITES[suiteName].flatMap(testFilesOf);
+  }
+
+  if (files.length === 0) {
+    console.error(`[test-suites] suite ${suiteName} enumerated 0 test files; refusing to run (directory layout change suspected)`);
+    process.exit(2);
+  }
+
+  // Invariant 1: all = unit + integration (no overlap, no gap).
+  if (suiteName === 'all') {
+    const unitCount = SUITES.unit.reduce((n, p) => n + testFilesOf(p).length, 0);
+    const integrationCount = SUITES.integration.reduce((n, p) => n + testFilesOf(p).length, 0);
+    const uniqueCount = new Set(files).size;
+    if (files.length !== unitCount + integrationCount || uniqueCount !== files.length) {
+      console.error(
+        `[test-suites] all(${files.length}) != unit(${unitCount}) + integration(${integrationCount}) or duplicate files exist; the split invariant is broken`,
+      );
+      process.exit(2);
     }
-    for (const f of entries) {
-      if (f.isFile() && TEST_SUFFIXES.some((s) => f.name.endsWith(s))) {
-        actual.add(path.join(prefix, f.name));
-      } else if (f.isDirectory()) {
-        walkTestDir(path.join(dir, f.name), path.join(prefix, f.name));
+  }
+
+  // Invariant 2: the unit ∪ integration relative-path set == the actual file set across all
+  // repo test directories. Scan every package under packages/ with a test subdirectory (not
+  // just the known ones), subdirectories included, to catch future additions.
+  {
+    const managed = new Set(ALL_PACKAGES.flatMap(testFilesOf));
+    const actual = new Set();
+    const walkTestDir = (dir, prefix) => {
+      let entries;
+      try {
+        entries = readdirSync(dir, { withFileTypes: true });
+      } catch {
+        return; // not a directory (e.g. packages/<pkg>/test missing)
       }
+      for (const f of entries) {
+        if (f.isFile() && TEST_SUFFIXES.some((s) => f.name.endsWith(s))) {
+          actual.add(path.join(prefix, f.name));
+        } else if (f.isDirectory()) {
+          walkTestDir(path.join(dir, f.name), path.join(prefix, f.name));
+        }
+      }
+    };
+    for (const entry of readdirSync(packagesDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      walkTestDir(path.join(packagesDir, entry.name, 'test'), path.join('packages', entry.name, 'test'));
     }
-  };
-  for (const entry of readdirSync(packagesDir, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    walkTestDir(path.join(packagesDir, entry.name, 'test'), path.join('packages', entry.name, 'test'));
+    const missing = [...actual].filter((f) => !managed.has(f));
+    if (missing.length > 0) {
+      console.error(`[test-suites] found test files not covered by any suite (update the SUITES tiers; path entries like 'pkg/test/subdir' cover subdirectories): ${missing.join(', ')}`);
+      process.exit(2);
+    }
   }
-  const missing = [...actual].filter((f) => !managed.has(f));
-  if (missing.length > 0) {
-    console.error(`[test-suites] found test files not covered by any suite (update the SUITES tiers; path entries like 'pkg/test/subdir' cover subdirectories): ${missing.join(', ')}`);
-    process.exit(2);
-  }
-}
 
-const label = suiteName === 'all' ? 'all(unit+integration)' : suiteName;
-const breakdown = ALL_PACKAGES.map((p) => `${p}=${testFilesOf(p).length}`).join(' ');
-console.error(`[test-suites] suite ${label}: ${files.length} file(s) (${breakdown})`);
+  label = suiteName === 'all' ? 'all(unit+integration)' : suiteName;
+  const breakdown = ALL_PACKAGES.map((p) => `${p}=${testFilesOf(p).length}`).join(' ');
+  console.error(`[test-suites] suite ${label}: ${files.length} file(s) (${breakdown})`);
+}
 
 let workerBudget;
 try {

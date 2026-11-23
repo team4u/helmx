@@ -53,14 +53,30 @@ interface FollowState {
   child?: ChildProcess;
 }
 
-/** Stream log increments to the operator until the hub process is gone (byte-offset, UTF-8 safe). */
-async function followLog(state: FollowState, io: LauncherIo, isAlive: (pid: number) => boolean): Promise<void> {
+/** Stream log increments to the operator until the hub process is gone or `signal` aborts (byte-offset, UTF-8 safe). */
+async function followLog(
+  state: FollowState,
+  io: LauncherIo,
+  isAlive: (pid: number) => boolean,
+  signal: AbortSignal,
+): Promise<void> {
   for (;;) {
-    if (!isAlive(state.pid)) return;
+    if (signal.aborted || !isAlive(state.pid)) return;
     const chunk = await readLogFrom(state.logPath, state.logOffset);
     state.logOffset = chunk.offset;
     if (chunk.text !== '') io.out(chunk.text);
-    await new Promise((resolve) => setTimeout(resolve, DEFAULTS.healthPollMs));
+    if (signal.aborted) return;
+    await new Promise<void>((resolve) => {
+      const onAbort = (): void => {
+        clearTimeout(timer);
+        resolve();
+      };
+      const timer = setTimeout(() => {
+        signal.removeEventListener('abort', onAbort);
+        resolve();
+      }, DEFAULTS.healthPollMs);
+      signal.addEventListener('abort', onAbort, { once: true });
+    });
   }
 }
 
@@ -143,7 +159,7 @@ export async function runHubForeground(options: RunHubOptions): Promise<number> 
       version: started.version,
       url: started.url,
       logPath: started.logPath,
-      logOffset: 0,
+      logOffset: started.logStartOffset,
       child: captured,
     };
   }
@@ -171,6 +187,7 @@ export async function runHubForeground(options: RunHubOptions): Promise<number> 
           shutdownRequested?.();
         }
       : undefined;
+  const followAbort = new AbortController();
   if (onSignal !== undefined) {
     process.on('SIGINT', onSignal);
     process.on('SIGTERM', onSignal);
@@ -178,49 +195,54 @@ export async function runHubForeground(options: RunHubOptions): Promise<number> 
 
   let exitCode = 0;
   let exitMessage = '';
-  const hubGone = followLog(state, io, isAlive).then(() => true);
-  const signalOrDeath = await Promise.race([shutdownSignal.then(() => 'signal'), hubGone.then(() => 'gone')]);
+  const hubGone = followLog(state, io, isAlive, followAbort.signal).then(() => true);
+  try {
+    const signalOrDeath = await Promise.race([shutdownSignal.then(() => 'signal'), hubGone.then(() => 'gone')]);
+    followAbort.abort();
 
-  if (signalOrDeath === 'gone') {
-    exitCode = 1;
-    exitMessage = `the hub process exited (pid ${state.pid}); inspect ${state.logPath}`;
-    io.err(`${exitMessage}\n`);
-    const tail = await readLogTailBounded(state.logPath, 40);
-    if (tail !== '') io.err(`--- ${state.logPath} last 40 lines ---\n${tail}\n`);
-  } else {
-    // Stop order: a hub this process spawned is stopped through the held handle (the strongest
-    // ownership proof, platform-independent); the bootstrap-install path (no handle) falls back
-    // to the verified control channel and then the pid-record identity proof.
-    if (state.child !== undefined && state.child.pid === state.pid) {
-      try {
-        await stopHeldChild(state.child, state.pid, root, isAlive, options.stopTimeoutMs ?? DEFAULTS.stopTimeoutMs);
-        exitMessage = `hub pid ${state.pid} stopped`;
-      } catch (error) {
-        exitCode = 1;
-        exitMessage = `failed to stop hub pid ${state.pid}: ${error instanceof Error ? error.message : String(error)}`;
-      }
+    if (signalOrDeath === 'gone') {
+      exitCode = 1;
+      exitMessage = `the hub process exited (pid ${state.pid}); inspect ${state.logPath}`;
+      io.err(`${exitMessage}\n`);
+      const tail = await readLogTailBounded(state.logPath, 40);
+      if (tail !== '') io.err(`--- ${state.logPath} last 40 lines ---\n${tail}\n`);
     } else {
-      const stop = await stopHubGraceful(root, io, {
-        ...(options.stopTimeoutMs !== undefined ? { stopTimeoutMs: options.stopTimeoutMs } : {}),
-        ...(options.stopEscalationWaitMs !== undefined ? { stopEscalationWaitMs: options.stopEscalationWaitMs } : {}),
-      });
-      if (!stop.wasRunning) {
-        // The hub died between attach and stop — surface honestly instead of reporting success.
-        exitCode = 1;
-        exitMessage = `the hub process exited before the stop request completed (pid ${state.pid}); inspect ${state.logPath}`;
-      } else if (stop.escalated) {
-        exitCode = 0;
-        exitMessage = `hub pid ${stop.pid} stopped (escalated after graceful timeout)`;
+      // Stop order: a hub this process spawned is stopped through the held handle (the strongest
+      // ownership proof, platform-independent); the bootstrap-install path (no handle) falls back
+      // to the verified control channel and then the pid-record identity proof.
+      if (state.child !== undefined && state.child.pid === state.pid) {
+        try {
+          await stopHeldChild(state.child, state.pid, root, isAlive, options.stopTimeoutMs ?? DEFAULTS.stopTimeoutMs);
+          exitMessage = `hub pid ${state.pid} stopped`;
+        } catch (error) {
+          exitCode = 1;
+          exitMessage = `failed to stop hub pid ${state.pid}: ${error instanceof Error ? error.message : String(error)}`;
+        }
       } else {
-        exitMessage = `hub pid ${stop.pid} stopped${stop.via === 'control-channel' ? ' (control channel)' : ''}`;
+        const stop = await stopHubGraceful(root, io, {
+          ...(options.stopTimeoutMs !== undefined ? { stopTimeoutMs: options.stopTimeoutMs } : {}),
+          ...(options.stopEscalationWaitMs !== undefined ? { stopEscalationWaitMs: options.stopEscalationWaitMs } : {}),
+        });
+        if (!stop.wasRunning) {
+          // The hub died between attach and stop — surface honestly instead of reporting success.
+          exitCode = 1;
+          exitMessage = `the hub process exited before the stop request completed (pid ${state.pid}); inspect ${state.logPath}`;
+        } else if (stop.escalated) {
+          exitCode = 0;
+          exitMessage = `hub pid ${stop.pid} stopped (escalated after graceful timeout)`;
+        } else {
+          exitMessage = `hub pid ${stop.pid} stopped${stop.via === 'control-channel' ? ' (control channel)' : ''}`;
+        }
       }
+      io.err(`launcher stopping${signalName !== undefined ? ` (${signalName})` : ''}: ${exitMessage}\n`);
     }
-    io.err(`launcher stopping${signalName !== undefined ? ` (${signalName})` : ''}: ${exitMessage}\n`);
-  }
-
-  if (onSignal !== undefined) {
-    process.off('SIGINT', onSignal);
-    process.off('SIGTERM', onSignal);
+  } finally {
+    followAbort.abort();
+    if (onSignal !== undefined) {
+      process.off('SIGINT', onSignal);
+      process.off('SIGTERM', onSignal);
+    }
+    await hubGone.catch(() => undefined);
   }
   return exitCode;
 }

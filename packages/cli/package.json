@@ -15,7 +15,7 @@
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && node scripts/generate-sdk-types.mjs",
+    "build": "node ../../scripts/clean-dist.mjs && tsc -p tsconfig.json && node scripts/generate-sdk-types.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {

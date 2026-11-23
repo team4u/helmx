@@ -125,23 +125,59 @@ export interface DownloadTarballOptions {
   timeoutMs?: number;
 }
 
-/** Download a tarball to `destPath` (mode `0600`) with a hard timeout; integrity is verified by the caller. */
-export async function downloadTarball(url: string, destPath: string, options?: DownloadTarballOptions): Promise<void> {
+async function downloadTarballWithSri(
+  url: string,
+  destPath: string,
+  options?: DownloadTarballOptions,
+): Promise<string> {
   const fetchImpl = options?.fetchFn ?? fetch;
   const timeoutMs = options?.timeoutMs ?? TARBALL_TIMEOUT_MS;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const hash = createHash('sha512');
+  let handle: fs.FileHandle | undefined;
+  let succeeded = false;
   try {
     const res = await fetchImpl(url, { signal: controller.signal });
     if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
-    const body = Buffer.from(await res.arrayBuffer());
-    await fs.writeFile(destPath, body, { mode: 0o600 });
+    handle = await fs.open(destPath, 'w', 0o600);
+    if (process.platform !== 'win32') await handle.chmod(0o600);
+    if (res.body !== null) {
+      const reader = res.body.getReader();
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (value.byteLength > 0) {
+            hash.update(value);
+            let written = 0;
+            while (written < value.byteLength) {
+              const { bytesWritten } = await handle.write(value, written, value.byteLength - written);
+              written += bytesWritten;
+            }
+          }
+        }
+      } finally {
+        reader.releaseLock();
+      }
+    }
+    await handle.close();
+    handle = undefined;
+    succeeded = true;
+    return `sha512-${hash.digest('base64')}`;
   } catch (error) {
+    if (handle !== undefined) await handle.close().catch(() => undefined);
+    if (!succeeded) await fs.rm(destPath, { force: true }).catch(() => undefined);
     if (error instanceof Error && error.name === 'AbortError') throw new Error(`download timed out (${timeoutMs}ms)`);
     throw error instanceof Error ? error : new Error(String(error));
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** Download a tarball to `destPath` (mode `0600`) with a hard timeout; integrity is verified by the caller. */
+export async function downloadTarball(url: string, destPath: string, options?: DownloadTarballOptions): Promise<void> {
+  await downloadTarballWithSri(url, destPath, options);
 }
 
 /** Compute the SRI string (`sha512-<base64>`) of a file, streamed so large tarballs stay off the heap. */
@@ -156,9 +192,9 @@ export function computeSri(filePath: string): Promise<string> {
 }
 
 /**
- * Fetch the exact-version manifest, download its tarball to `destPath`, and verify the
- * SHA-512 SRI against the registry-declared integrity — the single verified-download
- * seam shared by release staging and consumer installers (Hub payload extraction).
+ * Fetch the exact-version manifest, stream its tarball to `destPath` while computing its SHA-512
+ * SRI in a single pass, and verify against the registry-declared integrity — the single
+ * verified-download seam shared by release staging and consumer installers (Hub payload extraction).
  * Diagnostics preserve the original helmx-node wording so consumers' error contracts
  * stay byte-stable.
  */
@@ -170,15 +206,16 @@ export async function downloadVerifiedTarball(
   fetchFn?: typeof fetch,
 ): Promise<void> {
   const manifest = await fetchExactManifest(registryUrl, pkgName, version, fetchFn ?? fetch);
+  let actual: string;
   try {
-    await downloadTarball(manifest.tarball, destPath, { fetchFn });
+    actual = await downloadTarballWithSri(manifest.tarball, destPath, { fetchFn });
   } catch (error) {
     throw new Error(
       `failed to download ${pkgName}@${version} tarball (${manifest.tarball}): ${error instanceof Error ? error.message : String(error)}`,
     );
   }
-  const actual = await computeSri(destPath);
   if (actual !== manifest.integrity) {
+    await fs.rm(destPath, { force: true }).catch(() => undefined);
     throw new Error(
       `${pkgName}@${version} tarball sha512 integrity check failed: expected ${manifest.integrity}, got ${actual}`,
     );

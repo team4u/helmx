@@ -131,10 +131,18 @@ test('attach streams log lines appended after readiness', { timeout: 60_000 }, a
   await cp(payloadDir, path.dirname(entryPath), { recursive: true });
   await writeCurrentRelease(root, { version: '2.0.0', updatedAt: new Date().toISOString(), entries: { entryPath } });
 
+  // Pre-seed historical hub.log lines from an earlier run; foreground attach must start at
+  // started.logStartOffset and never replay historical pre-spawn log lines.
+  const logPath = path.join(root, 'logs', 'hub.log');
+  await import('node:fs/promises').then((m) => m.mkdir(path.dirname(logPath), { recursive: true }));
+  await appendFile(logPath, 'HISTORICAL-RUN-STALE-LINE\n');
+
   const spec = { pkgName: PKG, latest: '2.0.0', payloads: new Map<string, string>() };
   const captured = captureIo(sanitizedHostEnv({ HELMX_PAYLOAD_PACKAGE: PKG }));
   const port = await freePort();
   const shutdown = newShutdown();
+  const sigintBefore = process.listenerCount('SIGINT');
+  const sigtermBefore = process.listenerCount('SIGTERM');
   const done = runHubForeground({
     io: captured.io,
     root,
@@ -149,7 +157,6 @@ test('attach streams log lines appended after readiness', { timeout: 60_000 }, a
   assert.deepEqual(await getJson(port, '/__version'), { version: '2.0.0' });
 
   // Appended hub log output reaches the operator's terminal through the attach loop.
-  const logPath = path.join(root, 'logs', 'hub.log');
   await appendFile(logPath, 'TRACEME-ATTACH-MARKER\n');
   const deadline = Date.now() + 10_000;
   for (;;) {
@@ -157,9 +164,15 @@ test('attach streams log lines appended after readiness', { timeout: 60_000 }, a
     if (Date.now() >= deadline) throw new Error('appended log line was never streamed');
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
+  assert.ok(
+    !captured.outText().includes('HISTORICAL-RUN-STALE-LINE'),
+    `foreground attach must not replay historical hub.log lines: ${captured.outText()}`,
+  );
 
   shutdown.request();
   assert.equal(await done, 0);
+  assert.equal(process.listenerCount('SIGINT'), sigintBefore);
+  assert.equal(process.listenerCount('SIGTERM'), sigtermBefore);
   await waitUntilDead(record.pid);
 });
 

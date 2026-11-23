@@ -11,6 +11,8 @@ import { spawn } from 'node:child_process';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import { atomicWriteFile } from './atomic-write.js';
+import { killProcessTree } from './node-shell-config-io.js';
 
 /**
  * Product-specific service identity and invocation. `cliArgs` typically runs the product's CLI in
@@ -68,14 +70,29 @@ export interface ServiceExec {
 }
 
 export const SERVICE_EXEC_TIMEOUT_MS = 30_000;
+const SERVICE_EXEC_MAX_OUTPUT_CHARS = 65_536;
 
-/** Default `ServiceExec` using async `spawn` with a hard timeout. */
+function appendBoundedOutput(current: string, chunk: string): string {
+  if (chunk.length >= SERVICE_EXEC_MAX_OUTPUT_CHARS) {
+    return chunk.slice(chunk.length - SERVICE_EXEC_MAX_OUTPUT_CHARS);
+  }
+  const combined = current + chunk;
+  return combined.length > SERVICE_EXEC_MAX_OUTPUT_CHARS
+    ? combined.slice(combined.length - SERVICE_EXEC_MAX_OUTPUT_CHARS)
+    : combined;
+}
+
+/** Default `ServiceExec` using async `spawn` with UTF-8-safe bounded output and a hard timeout. */
 export const defaultServiceExec: ServiceExec = {
   async run(command, args) {
     return await new Promise((resolve) => {
       let child: ReturnType<typeof spawn>;
       try {
-        child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+        child = spawn(command, args, {
+          stdio: ['ignore', 'pipe', 'pipe'],
+          detached: process.platform !== 'win32',
+          windowsHide: true,
+        });
       } catch (error) {
         resolve({ code: null, stdout: '', stderr: `spawn ${command} failed: ${error instanceof Error ? error.message : String(error)}`, timedOut: false });
         return;
@@ -84,17 +101,14 @@ export const defaultServiceExec: ServiceExec = {
       let stderr = '';
       let settled = false;
       let killed = false;
-      child.stdout?.on('data', (chunk: Buffer) => {
-        stdout += chunk.toString('utf8');
+      child.stdout?.setEncoding('utf8');
+      child.stderr?.setEncoding('utf8');
+      child.stdout?.on('data', (chunk: string) => {
+        stdout = appendBoundedOutput(stdout, chunk);
       });
-      child.stderr?.on('data', (chunk: Buffer) => {
-        stderr += chunk.toString('utf8');
+      child.stderr?.on('data', (chunk: string) => {
+        stderr = appendBoundedOutput(stderr, chunk);
       });
-      const timer = setTimeout(() => {
-        killed = true;
-        child.kill('SIGKILL');
-      }, SERVICE_EXEC_TIMEOUT_MS);
-      timer.unref?.();
       const finish = (code: number | null, errorText?: string): void => {
         if (settled) return;
         settled = true;
@@ -106,6 +120,17 @@ export const defaultServiceExec: ServiceExec = {
           ...(killed ? { timedOut: true } : {}),
         });
       };
+      const timer = setTimeout(() => {
+        if (settled) return;
+        killed = true;
+        if (child.pid !== undefined) killProcessTree(child.pid);
+        else child.kill('SIGKILL');
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+        child.unref();
+        finish(null, `command timed out (>${SERVICE_EXEC_TIMEOUT_MS}ms) and was killed: ${command}`);
+      }, SERVICE_EXEC_TIMEOUT_MS);
+      timer.unref?.();
       child.on('error', (error) => {
         finish(null, `cannot execute ${command}: ${error.message}`);
       });
@@ -313,14 +338,14 @@ export async function installOsService(
     throw new Error(`failed to create service config directory (${path.dirname(desc.configPath)}): ${error instanceof Error ? error.message : String(error)}`);
   }
   try {
-    await fsp.writeFile(desc.configPath, desc.content, 'utf8');
+    await atomicWriteFile(desc.configPath, desc.content, { mode: 0o644 });
   } catch (error) {
     throw new Error(`failed to write service config (${desc.configPath}): ${error instanceof Error ? error.message : String(error)}`);
   }
 
   try {
     await fsp.mkdir(path.dirname(desc.targetPath), { recursive: true });
-    await fsp.writeFile(desc.targetPath, desc.content, 'utf8');
+    await atomicWriteFile(desc.targetPath, desc.content, { mode: 0o644 });
   } catch (error) {
     throw new Error(
       `failed to write platform service file (${desc.targetPath}): ${error instanceof Error ? error.message : String(error)}; local copy saved at ${desc.configPath}`,

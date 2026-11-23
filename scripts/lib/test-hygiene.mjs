@@ -249,16 +249,28 @@ function findOptionProp(ts, options, name) {
   return undefined;
 }
 
-/** Resolve options from the call arguments: use object literals directly; resolve identifiers against top-level consts; anything else is recorded as unresolvable. */
+/** Parse a TypeScript/TSX test file once so callers can share a single AST across hygiene passes. */
+export function parseTestSourceFile(ts, filePath, source) {
+  const scriptKind = filePath.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
+  return ts.createSourceFile(filePath, source, ts.ScriptTarget.Latest, true, scriptKind);
+}
+
+/** Resolve options from the call arguments: use object literals directly; resolve identifiers against top-level consts; treat args[1] as an unresolved options identifier only when args.length >= 3 (otherwise args[1] is the test callback). */
 function resolveOptionsArg(ts, args, consts) {
-  for (const a of args.slice(0, 2)) {
-    if (ts.isObjectLiteralExpression(unwrapAssertion(ts, a))) {
-      return { object: unwrapAssertion(ts, a), unresolvedName: null };
+  const maxIndex = Math.min(args.length, 2);
+  for (let index = 0; index < maxIndex; index += 1) {
+    const a = args[index];
+    const unwrapped = unwrapAssertion(ts, a);
+    if (ts.isObjectLiteralExpression(unwrapped)) {
+      return { object: unwrapped, unresolvedName: null };
     }
-    if (ts.isIdentifier(a)) {
-      const bound = consts.get(a.text);
+    if (ts.isIdentifier(unwrapped)) {
+      const bound = consts.get(unwrapped.text);
       if (bound && ts.isObjectLiteralExpression(bound)) return { object: bound, unresolvedName: null };
-      return { object: undefined, unresolvedName: a.text };
+      if (index === 1 && args.length < 3) continue;
+      if (index === 0 && args.length < 2) continue;
+      if (bound && ts.isFunctionLike(bound)) continue;
+      return { object: undefined, unresolvedName: unwrapped.text };
     }
   }
   return { object: undefined, unresolvedName: null };
@@ -345,11 +357,11 @@ function isAssignmentToSuiteEnv(ts, node) {
  * @param {typeof import('typescript')} ts
  * @param {string} filePath display path
  * @param {string} source source text
+ * @param {import('typescript').SourceFile} [existingSourceFile]
  * @returns {HygieneReport}
  */
-export function analyzeTestSource(ts, filePath, source) {
-  const scriptKind = filePath.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
-  const sourceFile = ts.createSourceFile(filePath, source, ts.ScriptTarget.Latest, true, scriptKind);
+export function analyzeTestSource(ts, filePath, source, existingSourceFile = undefined) {
+  const sourceFile = existingSourceFile ?? parseTestSourceFile(ts, filePath, source);
   const bindings = collectTestBindings(ts, sourceFile);
   const assertBindings = collectAssertBindings(ts, sourceFile);
   const consts = collectTopLevelConsts(ts, sourceFile);

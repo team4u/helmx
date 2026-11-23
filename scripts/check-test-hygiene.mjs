@@ -31,6 +31,7 @@ import {
   collectAllTestFiles,
   isCrossPackageTestHelperImport,
   isTestFilePath,
+  parseTestSourceFile,
   resolveInRepoRelativePath,
   toPosixPath,
 } from './lib/test-hygiene.mjs';
@@ -169,10 +170,8 @@ function hasExplicitTimeout(ts, call) {
 }
 
 /** Find newly added t.test calls without an explicit options.timeout. */
-function analyzeAddedSubtests(ts, filePath, source, addedLines) {
+function analyzeAddedSubtests(ts, filePath, sourceFile, addedLines) {
   if (!addedLines || addedLines.size === 0) return [];
-  const scriptKind = filePath.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
-  const sourceFile = ts.createSourceFile(filePath, source, ts.ScriptTarget.Latest, true, scriptKind);
   const bindings = collectNodeTestBindings(ts, sourceFile);
   const violations = [];
   const lineOf = (node) => sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
@@ -222,10 +221,8 @@ function analyzeAddedSubtests(ts, filePath, source, addedLines) {
 }
 
 /** Find newly added relative imports that reach another package's test/helpers directory. */
-function analyzeAddedTestHelperImports(ts, filePath, source, addedLines) {
+function analyzeAddedTestHelperImports(ts, filePath, sourceFile, addedLines) {
   if (!addedLines || addedLines.size === 0) return [];
-  const scriptKind = filePath.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
-  const sourceFile = ts.createSourceFile(filePath, source, ts.ScriptTarget.Latest, true, scriptKind);
   const violations = [];
   const lineOf = (node) => sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
   const inspect = (specifierNode) => {
@@ -359,11 +356,12 @@ for (const rel of files) {
     console.error(`[check-hygiene] cannot read ${rel}: ${err.message}`);
     process.exit(2);
   }
-  const report = analyzeTestSource(ts, rel, source);
+  const sourceFile = parseTestSourceFile(ts, rel, source);
+  const report = analyzeTestSource(ts, rel, source, sourceFile);
   const changedLines = addedLines.get(rel);
   const extraViolations = [
-    ...analyzeAddedSubtests(ts, rel, source, changedLines),
-    ...analyzeAddedTestHelperImports(ts, rel, source, changedLines),
+    ...analyzeAddedSubtests(ts, rel, sourceFile, changedLines),
+    ...analyzeAddedTestHelperImports(ts, rel, sourceFile, changedLines),
   ];
   allViolations.push(...report.violations, ...extraViolations);
   totals.testCalls += report.stats.testCalls;

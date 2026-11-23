@@ -92,6 +92,115 @@ test('control stop runs the handler, replies, and closes the server', { timeout:
   assert.equal(after, null, 'server is closed after stop')
 })
 
+test('controlRequest settles immediately on server disconnect and preserves split multi-byte UTF-8 payloads', { timeout: 60_000 }, async (t) => {
+  const net = await import('node:net')
+  const dir = useTempDir(t, 'helmx-envio-control-utf8-')
+  const disconnectEndpoint = controlEndpoint(join(dir, 'drop'), 'd'.repeat(32), 'helmx-drop')
+  const dropServer = net.createServer((socket) => {
+    socket.destroy()
+  })
+  await new Promise<void>((resolve, reject) => {
+    dropServer.once('error', reject)
+    dropServer.listen(disconnectEndpoint, () => resolve())
+  })
+  t.after(async () => {
+    await new Promise<void>((resolve) => dropServer.close(() => resolve()))
+  })
+
+  const startMs = Date.now()
+  const dropped = await controlRequest(disconnectEndpoint, { type: 'status', instanceId: 'd'.repeat(32) }, 30_000)
+  const elapsedMs = Date.now() - startMs
+  assert.equal(dropped, null, 'abrupt server disconnect must settle as null')
+  assert.ok(elapsedMs < 3_000, `expected immediate disconnect settlement, took ${elapsedMs}ms`)
+
+  const utf8Instance = 'e'.repeat(32)
+  const utf8Endpoint = controlEndpoint(join(dir, 'utf8'), utf8Instance, 'helmx-utf8')
+  const richText = '状态正常-🚀-日本語-한국어'
+  let receivedInput: unknown
+  const server = createControlServer({
+    endpoint: utf8Endpoint,
+    instanceId: utf8Instance,
+    onStatus: () => ({ pid: process.pid, state: richText }),
+    onStop: async () => {},
+    onUpgrade: async (input) => {
+      receivedInput = input
+      return { echoed: richText }
+    },
+  })
+  await server.listening
+  t.after(() => server.close())
+
+  // Split multi-byte UTF-8 frame mid-codepoint on client -> server write and verify server StringDecoder
+  const rawPayload = Buffer.from(
+    `${JSON.stringify({ type: 'upgrade', instanceId: utf8Instance, input: { note: richText } })}\n`,
+    'utf8',
+  )
+  const serverReply = await new Promise<string>((resolve, reject) => {
+    const client = net.connect(utf8Endpoint)
+    client.setEncoding('utf8')
+    let acc = ''
+    client.on('connect', () => {
+      // Split across every 2 bytes so 3-byte and 4-byte UTF-8 codepoints straddle chunk boundaries
+      let pos = 0
+      const step = () => {
+        if (pos >= rawPayload.length) return
+        const end = Math.min(pos + 2, rawPayload.length)
+        client.write(rawPayload.subarray(pos, end))
+        pos = end
+        if (pos < rawPayload.length) setTimeout(step, 2)
+      }
+      step()
+    })
+    client.on('data', (chunk: string) => {
+      acc += chunk
+      if (acc.includes('\n')) {
+        client.destroy()
+        resolve(acc.trim())
+      }
+    })
+    client.on('error', reject)
+  })
+  assert.deepEqual(receivedInput, { note: richText })
+  const parsedServerReply = JSON.parse(serverReply) as { ok: boolean; state: string; result: { echoed: string } }
+  assert.equal(parsedServerReply.ok, true)
+  assert.equal(parsedServerReply.state, richText)
+  assert.equal(parsedServerReply.result.echoed, richText)
+
+  // Split multi-byte UTF-8 response mid-codepoint on server -> client write and verify controlRequest StringDecoder
+  const splitSrvEndpoint = controlEndpoint(join(dir, 'split-srv'), utf8Instance, 'helmx-split')
+  const splitReplyBytes = Buffer.from(
+    `${JSON.stringify({ ok: true, pid: process.pid, instanceId: utf8Instance, state: richText })}\n`,
+    'utf8',
+  )
+  const splitServer = net.createServer((socket) => {
+    socket.once('data', () => {
+      let pos = 0
+      const step = () => {
+        const end = Math.min(pos + 2, splitReplyBytes.length)
+        socket.write(splitReplyBytes.subarray(pos, end))
+        pos = end
+        if (pos < splitReplyBytes.length) setTimeout(step, 2)
+        else socket.end()
+      }
+      step()
+    })
+  })
+  await new Promise<void>((resolve, reject) => {
+    splitServer.once('error', reject)
+    splitServer.listen(splitSrvEndpoint, () => resolve())
+  })
+  t.after(async () => {
+    await new Promise<void>((resolve) => splitServer.close(() => resolve()))
+  })
+
+  const clientRes = await controlRequest(splitSrvEndpoint, { type: 'status', instanceId: utf8Instance }, 5_000, {
+    pid: process.pid,
+    instanceId: utf8Instance,
+  })
+  assert.ok(clientRes !== null && clientRes.ok === true)
+  assert.equal(clientRes.state, richText)
+})
+
 test('os-service renderer is profile-driven (hub and node units differ only through the profile)', { timeout: 60_000 }, () => {
   const hub = renderServiceSpec({
     platform: 'linux',

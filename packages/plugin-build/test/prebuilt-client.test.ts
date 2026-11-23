@@ -7,7 +7,7 @@
  */
 import assert from 'node:assert/strict'
 import { afterEach, beforeEach, test } from 'node:test'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { gunzipSync } from 'node:zlib'
@@ -72,6 +72,20 @@ test('buildPluginClientBundleDir: auto-scans non-declaration modules, writes man
   assert.equal(gunzipSync(gzBytes).toString('utf8'), jsText)
   assert.match(jsText, /__helmx_shared_react/)
   assert.match(jsText, /prebuilt-card/)
+  if (process.platform !== 'win32') {
+    assert.equal(statSync(join(outDir, indexEntry.entryFile)).mode & 0o777, 0o644)
+    assert.equal(statSync(join(outDir, `${indexEntry.entryFile}.gz`)).mode & 0o777, 0o644)
+    assert.equal(statSync(join(outDir, PREBUILT_CLIENT_MANIFEST_FILE)).mode & 0o777, 0o644)
+  }
+
+  // Re-running over an existing outDir swaps cleanly via sibling staging directory
+  const second = await buildPluginClientBundleDir({
+    pluginId: 'test:prebuilt-scan',
+    clientRoot,
+    outDir,
+    modules: ['index.tsx'],
+  })
+  assert.deepEqual(Object.keys(second.manifest.modules), ['index.tsx'])
 })
 
 test('buildPluginClientBundleDir: supports explicit modules, controlled npmRoots, async chunks + gzip, and Node bridge execution', { timeout: 60_000 }, async () => {

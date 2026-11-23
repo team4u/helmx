@@ -212,6 +212,23 @@ test('payload assembly: missing build artifacts are rebuilt on demand, then buil
 
   runCommand(process.execPath, [path.join(payloadPkgRoot, 'build.mjs')], repoRoot, 120_000);
   assert.ok(existsSync(path.join(stagingDir, 'manifest.json')), 'manifest.json was not generated');
+  const firstBuiltAt = (JSON.parse(readFileSync(path.join(stagingDir, 'manifest.json'), 'utf-8')) as PayloadManifest).builtAt;
+
+  // Second run with identical inputs hits SHA-256 fingerprint skip without mutating manifest.json
+  const cachedRun = runCommand(process.execPath, [path.join(payloadPkgRoot, 'build.mjs')], repoRoot, 120_000);
+  assert.match(cachedRun.stdout, /skipping re-assembly/);
+  const secondBuiltAt = (JSON.parse(readFileSync(path.join(stagingDir, 'manifest.json'), 'utf-8')) as PayloadManifest).builtAt;
+  assert.equal(secondBuiltAt, firstBuiltAt, 'fingerprint skip must preserve assembled manifest.json');
+
+  // HELMX_CLEAN_DIST=1 bypasses the fingerprint cache and forces a clean re-assembly
+  const forcedRun = runCommand(
+    process.execPath,
+    [path.join(payloadPkgRoot, 'build.mjs')],
+    repoRoot,
+    120_000,
+    { HELMX_CLEAN_DIST: '1' },
+  );
+  assert.match(forcedRun.stdout, /assembly complete/);
 });
 
 test('payload publish package contract: the dist root package.json is a standalone npm pack/publish package', { timeout: 60_000 }, () => {

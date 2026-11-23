@@ -301,6 +301,8 @@ export async function scanPathUsage(target: string, options: ScanPathUsageOption
     processes.push({ pid, ...(name !== undefined ? { name } : {}), source, path })
   }
 
+  const baseList = [...bases]
+
   for (const pid of pids) {
     if (scanned >= maxPids) break
     scanned += 1
@@ -311,7 +313,7 @@ export async function scanPathUsage(target: string, options: ScanPathUsageOption
     if (cwd.kind === 'denied') {
       cwd = await settleLink(pid, 'cwd', `${procRoot}/${pid}/cwd`)
     }
-    if (cwd.kind === 'value' && cwd.value.startsWith('/') && [...bases].some((base) => pathContains(base, cwd.value))) {
+    if (cwd.kind === 'value' && cwd.value.startsWith('/') && baseList.some((base) => pathContains(base, cwd.value))) {
       await pushMatch(pid, 'cwd', cwd.value)
     }
     let fdNames: string[] | undefined
@@ -342,7 +344,7 @@ export async function scanPathUsage(target: string, options: ScanPathUsageOption
       if (link.kind !== 'value') {
         continue
       }
-      if (link.value.startsWith('/') && [...bases].some((base) => pathContains(base, link.value))) {
+      if (link.value.startsWith('/') && baseList.some((base) => pathContains(base, link.value))) {
         await pushMatch(pid, 'fd', link.value)
       }
     }

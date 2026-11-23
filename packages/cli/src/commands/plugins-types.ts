@@ -9,7 +9,6 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { inflateRawSync } from 'node:zlib'
 import { CliError } from '../errors.js'
-import { EMBEDDED_SDK_TYPES_PAYLOAD } from '../sdk-types-snapshot.js'
 import { HELMX_SDK_TSCONFIG_PATHS } from './scaffold-templates.js'
 import type { CommandContext, CommandSpec } from './shared.js'
 import { assertNoExtraPositionals, printResult } from './shared.js'
@@ -89,6 +88,7 @@ function validateSdkTypesBundle(raw: unknown): SdkTypesBundle {
 export async function loadSdkTypesBundle(): Promise<SdkTypesBundle> {
   if (cachedBundle !== undefined) return cachedBundle
 
+  const { EMBEDDED_SDK_TYPES_PAYLOAD } = await import('../sdk-types-snapshot.js')
   if (typeof EMBEDDED_SDK_TYPES_PAYLOAD === 'string' && EMBEDDED_SDK_TYPES_PAYLOAD.length > 0) {
     try {
       const jsonText = inflateRawSync(Buffer.from(EMBEDDED_SDK_TYPES_PAYLOAD, 'base64')).toString('utf8')

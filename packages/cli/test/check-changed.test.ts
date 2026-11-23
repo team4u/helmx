@@ -36,6 +36,7 @@ import {
 import {
   analyzeTestSource,
   isCrossPackageTestHelperImport,
+  parseTestSourceFile,
   resolveInRepoRelativePath,
 } from '../../../scripts/lib/test-hygiene.mjs'
 import { resolvePackageManagerInvoke, runManagedCommand } from '../../../scripts/lib/spawn-checked.mjs'
@@ -224,6 +225,9 @@ test('classifyChange: file classification and boundaries (scripts source trigger
   assert.deepEqual(classifyChange('scripts/lib/git-changes.mjs'), { pkg: null, kind: 'root-trigger' })
   assert.deepEqual(classifyChange('scripts/README-herdr-smoke.md'), { pkg: null, kind: 'outside' })
   assert.deepEqual(classifyChange('tsconfig.check.json'), { pkg: null, kind: 'root-trigger' })
+  assert.deepEqual(classifyChange('tsconfig.dev.json'), { pkg: null, kind: 'root-trigger' })
+  assert.deepEqual(classifyChange('.oxlintrc.json'), { pkg: null, kind: 'root-trigger' })
+  assert.deepEqual(classifyChange('tsconfig.json'), { pkg: null, kind: 'outside' })
 })
 
 test('PACKAGE_TIERS mirrors test-suites.mjs SUITES; all workspace packages have a tier', { timeout: 60_000 }, () => {
@@ -243,7 +247,7 @@ test('PACKAGE_TIERS mirrors test-suites.mjs SUITES; all workspace packages have 
   assert.ok(testFilesOfPackage(repoRoot, 'cli').some((f) => f.endsWith('.test.ts')))
 })
 
-test('planCheckCommands: pre-runs check-hygiene when test files exist; preserves fixed order; empty when selection is empty', { timeout: 60_000 }, () => {
+test('planCheckCommands: pre-runs check-hygiene, routes tests through test-suites --files, and builds cli/web when needed', { timeout: 60_000 }, () => {
   const pm = { cmd: 'node', args: ['/pnpm/bin/pnpm.cjs'] }
   const withTests = planCheckCommands({
     affectedDirs: ['kernel'],
@@ -260,8 +264,35 @@ test('planCheckCommands: pre-runs check-hygiene when test files exist; preserves
     'packages/kernel/test/http.test.ts',
   ])
   assert.deepEqual(withTests[1]?.args, ['/pnpm/bin/pnpm.cjs', 'typecheck'])
-  assert.equal(withTests[2]?.args[0], path.join('/repo', 'scripts', 'run-tests.mjs'))
-  assert.equal(withTests[2]?.args.length, 2)
+  assert.deepEqual(withTests[2]?.args, [
+    path.join('/repo', 'scripts', 'test-suites.mjs'),
+    '--files',
+    'packages/kernel/test/http.test.ts',
+  ])
+
+  const withCliAndWeb = planCheckCommands({
+    affectedDirs: ['cli', 'payload'],
+    testFiles: ['packages/cli/test/cli.test.ts', 'packages/payload/test/payload.test.ts'],
+    pm,
+    execPath: '/node',
+    repoRoot: '/repo',
+  })
+  assert.equal(withCliAndWeb.length, 4)
+  assert.deepEqual(withCliAndWeb[2]?.args, [
+    '/pnpm/bin/pnpm.cjs',
+    '--filter',
+    '@helmx/cli',
+    '--filter',
+    '@helmx/web',
+    'run',
+    'build',
+  ])
+  assert.deepEqual(withCliAndWeb[3]?.args, [
+    path.join('/repo', 'scripts', 'test-suites.mjs'),
+    '--files',
+    'packages/cli/test/cli.test.ts',
+    'packages/payload/test/payload.test.ts',
+  ])
 
   const none = planCheckCommands({ affectedDirs: [], testFiles: [], pm, execPath: '/node', repoRoot: '/repo' })
   assert.equal(none.length, 0)
@@ -301,6 +332,17 @@ test('multi', {
   assert.deepEqual(rulesOf(`import test from 'node:test'
 const opts = { timeout: 60_000 } as const
 test('shared', opts, () => {})`), [])
+
+  // 2-arg call with callback identifier must NOT treat callback identifier at args[1] as options
+  const twoArgFnSrc = `import test from 'node:test'\nconst fn = () => {}\ntest('bad-ident-cb', fn)\n`
+  const sharedSf = parseTestSourceFile(ts, 'sample.test.ts', twoArgFnSrc)
+  assert.deepEqual(analyzeTestSource(ts, 'sample.test.ts', twoArgFnSrc, sharedSf).violations.map((v) => v.rule), ['timeout-missing'])
+
+  // 3-arg call with imported/unresolved options identifier at args[1] still counts as options
+  assert.deepEqual(rulesOf(`import test from 'node:test'
+import { externalOpts } from './opts.js'
+const fn = () => {}
+test('ok-3arg', externalOpts, fn)`), [])
 })
 
 test('hygiene: describe timeout propagates to child tests per node:test semantics', { timeout: 60_000 }, () => {

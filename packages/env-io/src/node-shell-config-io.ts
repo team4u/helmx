@@ -21,6 +21,7 @@ export function killProcessTree(pid: number): void {
       })
       // A failed spawn emits 'error' asynchronously; consume it to avoid crashing Node.
       child.once('error', () => {})
+      child.unref()
     } catch {
       // Ignore cleanup errors.
     }

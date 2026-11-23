@@ -10,7 +10,6 @@ import type { AuthStatus, ModelCatalog, NodeInfo } from '@helmx/protocol'
 import { credentialsPath, loadCliCredential } from '../credentials.js'
 import { CliError } from '../errors.js'
 import { HubClient, resolveEndpoint } from '../hub-client.js'
-import { readLocalHubSnapshot, resolveInstallRoot } from '../launcher/index.js'
 import type { CommandContext, CommandSpec } from './shared.js'
 import { printResult } from './shared.js'
 
@@ -117,6 +116,7 @@ async function checkDataDir(ctx: CommandContext): Promise<{
 }
 
 async function checkLocalHub(ctx: CommandContext): Promise<DoctorCheck> {
+  const { readLocalHubSnapshot, resolveInstallRoot } = await import('../launcher/index.js')
   const installRoot = resolveInstallRoot(ctx.env)
   if (!existsSync(installRoot)) {
     return {

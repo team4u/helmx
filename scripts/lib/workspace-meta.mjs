@@ -21,9 +21,10 @@ export const FULL_TIER_TRIGGERS = new Set([
   'package.json',
   'pnpm-lock.yaml',
   'pnpm-workspace.yaml',
-  'tsconfig.json',
   'tsconfig.base.json',
   'tsconfig.check.json',
+  'tsconfig.dev.json',
+  '.oxlintrc.json',
   'scripts/run-tests.mjs',
   'scripts/test-suites.mjs',
 ]);
@@ -200,10 +201,12 @@ export function testFilesOfPackage(repoRoot, pkgDir) {
  * Fast-gate command plan (a pure function shared by CLI execution and --list review):
  *   0. any test files -> node scripts/check-test-hygiene.mjs --files <files...> (static
  *      hygiene check, before typecheck);
- *   1. any affected package -> pnpm typecheck (builds protocol/node/kernel/plugins/hub
- *      first; a type/runtime prerequisite of the tests);
- *   2. any test files -> node scripts/run-tests.mjs <files...> (reusing the cross-platform
- *      timeouts and process-tree cleanup).
+ *   1. any affected package -> pnpm typecheck (builds protocol/env-io/node/plugin-build/
+ *      kernel/plugins/hub first; a type/runtime prerequisite of the tests);
+ *   2. when test files exist and cli/web/payload are affected -> build @helmx/cli and/or
+ *      @helmx/web (not built by pnpm typecheck, required by CLI/Web/payload tests);
+ *   3. any test files -> node scripts/test-suites.mjs --files <files...> (reusing the 4-pool
+ *      concurrent scheduler, worker budget, cross-platform timeouts, and process-tree cleanup).
  * @param {{ affectedDirs: string[], testFiles: string[], pm: { cmd: string, args: string[] }, execPath: string, repoRoot: string }} input
  * @returns {Array<{ cmd: string, args: string[], label: string }>}
  */
@@ -224,10 +227,24 @@ export function planCheckCommands({ affectedDirs, testFiles, pm, execPath, repoR
     });
   }
   if (testFiles.length > 0) {
+    const needsCli = affectedDirs.includes('cli') || affectedDirs.includes('payload');
+    const needsWeb = affectedDirs.includes('web') || affectedDirs.includes('payload');
+    if (needsCli || needsWeb) {
+      const filters = [
+        ...(needsCli ? ['--filter', '@helmx/cli'] : []),
+        ...(needsWeb ? ['--filter', '@helmx/web'] : []),
+      ];
+      const targets = [...(needsCli ? ['cli'] : []), ...(needsWeb ? ['web'] : [])].join('+');
+      commands.push({
+        cmd: pm.cmd,
+        args: [...pm.args, ...filters, 'run', 'build'],
+        label: `pnpm build (${targets})`,
+      });
+    }
     commands.push({
       cmd: execPath,
-      args: [path.join(repoRoot, 'scripts', 'run-tests.mjs'), ...testFiles],
-      label: `run-tests (${testFiles.length} test file(s))`,
+      args: [path.join(repoRoot, 'scripts', 'test-suites.mjs'), '--files', ...testFiles],
+      label: `test-suites (${testFiles.length} test file(s))`,
     });
   }
   return commands;

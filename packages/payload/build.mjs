@@ -50,16 +50,19 @@
  */
 import { createHash } from 'node:crypto';
 import { create as createTar } from 'tar';
-import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { scanPeerOverrides, resolveDepRealDir } from './src/dep-closure.mjs';
-import { assembleCliArtifact } from './src/assemble-cli.mjs';
-import { assembleNodeArtifact } from './src/assemble-node.mjs';
+import { assembleCliArtifact, cliPackageName } from './src/assemble-cli.mjs';
+import { assembleNodeArtifact, nodePackageName } from './src/assemble-node.mjs';
 
 const payloadPkgRoot = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(payloadPkgRoot, '../..');
 const stagingDir = path.join(payloadPkgRoot, 'dist');
+const cliStagingDir = path.join(payloadPkgRoot, 'dist-cli');
+const nodeStagingDir = path.join(payloadPkgRoot, 'dist-node');
+const fingerprintCachePath = path.join(repoRoot, 'node_modules', '.cache', 'helmx-payload-build-fingerprint.json');
 
 /** Publish payload package name (overridable via HELMX_PAYLOAD_PACKAGE). */
 const payloadPackageName = process.env.HELMX_PAYLOAD_PACKAGE ?? '@helmx/hub';
@@ -97,6 +100,9 @@ const inputs = [
   ['protocol package.json', path.join(repoRoot, 'packages/protocol/package.json')],
   ['web dist entry', path.join(repoRoot, 'packages/web/dist/index.html')],
   ['cli dist entry', path.join(repoRoot, 'packages/cli/dist/index.js')],
+  ['cli package.json', path.join(repoRoot, 'packages/cli/package.json')],
+  ['node dist entry', path.join(repoRoot, 'packages/node/dist/cli.js')],
+  ['node package.json', path.join(repoRoot, 'packages/node/package.json')],
   ['built-in plugin asset source', path.join(repoRoot, 'packages/plugins/src')],
 ];
 
@@ -120,12 +126,98 @@ function walkStats(dir) {
       if (ent.isDirectory()) visit(p);
       else {
         files += 1;
-        bytes += readFileSync(p).length;
+        bytes += statSync(p).size;
       }
     }
   };
   visit(dir);
   return { files, bytes };
+}
+
+function hashFileInto(hash, label, absPath) {
+  const bytes = readFileSync(absPath);
+  hash.update(`file:${label}:${bytes.byteLength}\0`);
+  hash.update(bytes);
+  hash.update('\0');
+}
+
+function hashDirectoryInto(hash, label, rootDir, filterFn = null) {
+  if (!existsSync(rootDir)) {
+    hash.update(`missing-dir:${label}\0`);
+    return;
+  }
+  const visit = (cur, prefix) => {
+    const entries = readdirSync(cur, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    for (const ent of entries) {
+      if (ent.isSymbolicLink()) continue;
+      const abs = path.join(cur, ent.name);
+      const rel = prefix === '' ? ent.name : `${prefix}/${ent.name}`;
+      if (filterFn && !filterFn(abs, rel, ent.isDirectory())) continue;
+      if (ent.isDirectory()) visit(abs, rel);
+      else if (ent.isFile()) hashFileInto(hash, `${label}/${rel}`, abs);
+    }
+  };
+  visit(rootDir, '');
+}
+
+function computeInputFingerprint() {
+  const hash = createHash('sha256');
+  hash.update('helmx-payload-fingerprint-v1\0');
+  hash.update(`env:${payloadPackageName}\0${cliPackageName}\0${nodePackageName}\0`);
+  for (const rel of ['package.json', 'pnpm-lock.yaml', 'CHANGELOG.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'packages/payload/package.json', 'packages/payload/build.mjs']) {
+    const abs = path.join(repoRoot, rel);
+    if (existsSync(abs)) hashFileInto(hash, rel, abs);
+  }
+  hashDirectoryInto(hash, 'packages/payload/src', path.join(payloadPkgRoot, 'src'));
+  for (const pkg of ['hub', 'kernel', 'plugins', 'plugin-build', 'env-io', 'protocol', 'cli', 'node']) {
+    hashFileInto(hash, `packages/${pkg}/package.json`, path.join(repoRoot, 'packages', pkg, 'package.json'));
+    hashDirectoryInto(hash, `packages/${pkg}/dist`, path.join(repoRoot, 'packages', pkg, 'dist'));
+  }
+  hashDirectoryInto(hash, 'packages/web/dist', path.join(repoRoot, 'packages/web/dist'));
+  const builtinSrcDir = path.join(repoRoot, 'packages/plugins/src');
+  for (const ent of readdirSync(builtinSrcDir, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
+    if (!ent.isDirectory()) continue;
+    for (const sub of RUNTIME_ASSET_SUBDIRS) {
+      const subDir = path.join(builtinSrcDir, ent.name, sub);
+      if (existsSync(subDir)) hashDirectoryInto(hash, `plugins-src/${ent.name}/${sub}`, subDir);
+    }
+    if (existsSync(path.join(builtinSrcDir, ent.name, 'client'))) {
+      hash.update(`plugin-client-present:${ent.name}\0`);
+    }
+  }
+  return hash.digest('hex');
+}
+
+function computeOutputsFingerprint() {
+  if (
+    !existsSync(path.join(stagingDir, 'manifest.json')) ||
+    !existsSync(path.join(cliStagingDir, 'package.json')) ||
+    !existsSync(path.join(nodeStagingDir, 'package.json'))
+  ) {
+    return null;
+  }
+  const hash = createHash('sha256');
+  hashDirectoryInto(hash, 'dist', stagingDir);
+  hashDirectoryInto(hash, 'dist-cli', cliStagingDir);
+  hashDirectoryInto(hash, 'dist-node', nodeStagingDir);
+  return hash.digest('hex');
+}
+
+const forceClean = process.env.HELMX_CLEAN_DIST === '1' || process.argv.includes('--force');
+const inputSha256 = computeInputFingerprint();
+if (!forceClean && existsSync(fingerprintCachePath)) {
+  try {
+    const cached = JSON.parse(readFileSync(fingerprintCachePath, 'utf8'));
+    if (cached && cached.inputSha256 === inputSha256 && typeof cached.outputSha256 === 'string') {
+      const currentOutputSha256 = computeOutputsFingerprint();
+      if (currentOutputSha256 === cached.outputSha256) {
+        console.log(`[payload] inputs & outputs unchanged (sha256=${inputSha256.slice(0, 12)}); skipping re-assembly`);
+        process.exit(0);
+      }
+    }
+  } catch {
+    // Re-assemble cleanly on unreadable cache
+  }
 }
 
 // --- Root dependency set: production dependencies of hub ∪ kernel ∪ plugins ∪ plugin-build ∪ env-io ∪ protocol; @helmx/* installs from archives ------
@@ -219,27 +311,22 @@ const distPackageJson = {
 rmSync(stagingDir, { recursive: true, force: true });
 mkdirSync(stagingDir, { recursive: true });
 
-// --- Stable CLI artifact (second publish entry) + the payload CLI entry: one esbuild bundle, two consumers.
-// assembleCliArtifact bundles packages/cli/dist/index.js (the full control CLI incl. the
-// bundled-in launcher typed-API update path) into dist-cli/index.js — a hard release input; a broken
-// bundle contract aborts the build inside assemble-cli.mjs. The same bytes are shipped inside the
-// Hub payload as cli/dist/index.js below, so both artifacts run one identical CLI.
-const cliArtifact = await assembleCliArtifact({
-  repoRoot,
-  version: payloadPkg.version,
-  enginesNode: distPackageJson.engines.node,
-});
-
-// --- Node daemon artifact (third publish entry): the remote-machine install target. assembleNodeArtifact
-// bundles packages/node/dist/cli.js with the workspace closure and pure-JS pi-durable/env/node +
-// chord/context subpaths inlined and the two external packages (birpc / ws) pinned at their exact
-// installed versions; a broken bundle contract aborts the build inside assemble-node.mjs. Publish order
-// stays payload → cli → node.
-await assembleNodeArtifact({
-  repoRoot,
-  version: payloadPkg.version,
-  enginesNode: distPackageJson.engines.node,
-});
+// --- Stable CLI artifact (second publish entry) + Node daemon artifact (third publish entry) -----
+// Run both independent esbuild bundles in parallel: assembleCliArtifact writes exclusively into
+// dist-cli/ while assembleNodeArtifact writes exclusively into dist-node/; a broken contract in
+// either aborts the build immediately. Publish order stays payload → cli → node.
+const [cliArtifact] = await Promise.all([
+  assembleCliArtifact({
+    repoRoot,
+    version: payloadPkg.version,
+    enginesNode: distPackageJson.engines.node,
+  }),
+  assembleNodeArtifact({
+    repoRoot,
+    version: payloadPkg.version,
+    enginesNode: distPackageJson.engines.node,
+  }),
+]);
 
 const builtinSrc = path.join(repoRoot, 'packages/plugins/src');
 const builtinDist = path.join(repoRoot, 'packages/plugins/dist');
@@ -296,10 +383,9 @@ for (const component of ['hub', 'kernel', 'plugins', 'plugin-build', 'env-io', '
   if (component === 'hub') delete staged.bin;
   writeFileSync(manifestPath, `${JSON.stringify(staged, null, 2)}\n`);
 }
-// Built-in plugin runtime assets: packages/plugins/src/<name>/{skill,assets} and prebuilt
-// packages/plugins/dist/<name>/dist-client → dist/plugins/dist/<name>/{...} (the first probe
-// location of every plugin resolver). Must happen before packing plugins.tgz: archive installs
-// (npm file:./plugins.tgz) only see the tgz contents on the consumer side.
+// Built-in plugin runtime assets: packages/plugins/src/<name>/{skill,assets} → dist/plugins/dist/<name>/{...}
+// (prebuilt dist-client/ was already copied from packages/plugins/dist above via copyPluginsDistFilter;
+// verify every client plugin's manifest.json landed before packing plugins.tgz).
 const copiedAssets = [];
 const missingPrebuilt = [];
 for (const ent of readdirSync(builtinSrc, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
@@ -311,15 +397,10 @@ for (const ent of readdirSync(builtinSrc, { withFileTypes: true }).sort((a, b) =
     copiedAssets.push(`${ent.name}/${sub}`);
   }
   if (existsSync(path.join(builtinSrc, ent.name, 'client'))) {
-    const distClientFrom = path.join(builtinDist, ent.name, 'dist-client');
-    const distClientManifest = path.join(distClientFrom, 'manifest.json');
-    if (!existsSync(distClientManifest)) {
+    const stagedManifest = path.join(stagingDir, 'plugins/dist', ent.name, 'dist-client', 'manifest.json');
+    if (!existsSync(stagedManifest)) {
       missingPrebuilt.push(`${ent.name}/dist-client/manifest.json`);
     } else {
-      cpSync(distClientFrom, path.join(stagingDir, 'plugins/dist', ent.name, 'dist-client'), {
-        recursive: true,
-        filter: copyRuntimeDistFilter,
-      });
       copiedAssets.push(`${ent.name}/dist-client`);
     }
   }
@@ -330,9 +411,14 @@ if (missingPrebuilt.length > 0) {
 }
 
 // Directory-shaped file: dependencies produce junctions pointing into staging on Windows; archive installs are safe to move.
-for (const dir of ['hub', 'protocol', 'kernel', 'plugins', 'plugin-build', 'env-io']) {
-  await createTar({ cwd: path.join(stagingDir, dir), file: path.join(stagingDir, `${dir}.tgz`), gzip: true, portable: true, prefix: 'package' }, ['package.json', 'dist']);
-}
+await Promise.all(
+  ['hub', 'protocol', 'kernel', 'plugins', 'plugin-build', 'env-io'].map((dir) =>
+    createTar(
+      { cwd: path.join(stagingDir, dir), file: path.join(stagingDir, `${dir}.tgz`), gzip: true, portable: true, prefix: 'package' },
+      ['package.json', 'dist'],
+    ),
+  ),
+);
 writeFileSync(path.join(stagingDir, 'package.json'), `${JSON.stringify(distPackageJson, null, 2)}\n`);
 
 // --- Stale-layout guard: after the package split, kernel dist must never again carry product/plugin remnants -------------
@@ -411,6 +497,20 @@ writeFileSync(path.join(stagingDir, 'manifest.json'), `${JSON.stringify(manifest
 // every package as ~6 MiB of compressed dead weight inside the publish artifact.
 for (const dir of ['hub', 'kernel', 'plugins', 'plugin-build', 'env-io', 'protocol']) {
   rmSync(path.join(stagingDir, dir), { recursive: true, force: true });
+}
+
+const outputSha256 = computeOutputsFingerprint();
+if (outputSha256 !== null) {
+  try {
+    mkdirSync(path.dirname(fingerprintCachePath), { recursive: true });
+    writeFileSync(
+      fingerprintCachePath,
+      `${JSON.stringify({ inputSha256, outputSha256 }, null, 2)}\n`,
+      'utf8',
+    );
+  } catch {
+    // Non-fatal if node_modules/.cache is read-only
+  }
 }
 
 const stats = walkStats(stagingDir);

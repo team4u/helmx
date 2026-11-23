@@ -24,6 +24,7 @@
   },
   "include": [
     "packages/protocol/src/**/*.ts",
+    "packages/protocol/test/**/*.ts",
     "packages/env-io/src/**/*.ts",
     "packages/env-io/test/**/*.ts",
     "packages/test-kit/src/**/*.ts",
@@ -49,6 +50,10 @@
     "packages/web/test/**/*.tsx"
   ],
   "exclude": [
-    "packages/plugins/src/*/client"
+    "packages/plugins/src/*/client",
+    "packages/protocol/test/agent-exec.test.ts",
+    "packages/protocol/test/events-contract.test.ts",
+    "packages/protocol/test/plugin-package.test.ts",
+    "packages/protocol/test/tool-presentation.test.ts"
   ]
 }

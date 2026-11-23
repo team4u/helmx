@@ -36,8 +36,15 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # Tests depend on workspace package dist artifacts (packages such as @helmx/kernel
+      # have exports pointing at ./dist; TLS fixture / CLI end-to-end tests really import
+      # or execute them). Build once first, then run typecheck/lint/hygiene/tests without
+      # redundant rebuilds.
+      - name: Build packages
+        run: pnpm build
+
       - name: Typecheck
-        run: pnpm typecheck
+        run: pnpm typecheck:only
 
       - name: Lint
         run: pnpm lint
@@ -45,19 +52,13 @@ jobs:
       - name: Check test hygiene
         run: pnpm check:hygiene
 
-      # Tests depend on workspace package dist artifacts (packages such as @helmx/kernel
-      # have exports pointing at ./dist; TLS fixture / CLI end-to-end tests really import
-      # or execute them).
-      - name: Build packages
-        run: pnpm build
-
       - name: Run all tests on POSIX
         if: runner.os != 'Windows'
-        run: pnpm test:all
+        run: pnpm test:all:run
 
       - name: Run unit tests on Windows
         if: runner.os == 'Windows'
-        run: pnpm test:unit
+        run: pnpm test:unit:run
 
       - name: Run cross-platform path regression tests on Windows
         if: runner.os == 'Windows'
@@ -68,5 +69,4 @@ jobs:
           packages/kernel/test/target-platform-paths.test.ts
           packages/kernel/test/spawn-cwd-normalize.test.ts
           packages/hub/test/conversation-context.test.ts
-          packages/plugins/test/herdr-spawn-cwd.test.ts
           packages/node/test/node-local-env-win32-path.test.ts

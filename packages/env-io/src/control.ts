@@ -126,6 +126,7 @@ export async function controlRequest(
     let settled = false;
     let buffer = '';
     const socket = net.connect(endpoint);
+    socket.setEncoding('utf8');
     const finish = (value: ControlResponse | null): void => {
       if (settled) return;
       settled = true;
@@ -138,8 +139,8 @@ export async function controlRequest(
     socket.on('connect', () => {
       socket.write(`${JSON.stringify(request)}\n`);
     });
-    socket.on('data', (chunk: Buffer) => {
-      buffer += chunk.toString('utf8');
+    socket.on('data', (chunk: string) => {
+      buffer += chunk;
       if (Buffer.byteLength(buffer, 'utf8') > CONTROL_MAX_LINE_BYTES) { finish(null); return }
       const nl = buffer.indexOf('\n');
       if (nl === -1) return;
@@ -161,6 +162,8 @@ export async function controlRequest(
         finish(null);
       }
     });
+    socket.on('end', () => finish(null));
+    socket.on('close', () => finish(null));
     socket.on('error', () => finish(null));
   });
 }
@@ -244,6 +247,7 @@ export function createControlServer(options: {
       return;
     }
     sockets.add(socket);
+    socket.setEncoding('utf8');
     socket.once('close', () => { clearTimeout(idle); sockets.delete(socket) });
     let buffer = '';
     let handled = false;
@@ -274,8 +278,8 @@ export function createControlServer(options: {
       clearTimeout(idle);
       socket.destroy();
     });
-    socket.on('data', (chunk: Buffer) => {
-      buffer += chunk.toString('utf8');
+    socket.on('data', (chunk: string) => {
+      buffer += chunk;
       if (Buffer.byteLength(buffer, 'utf8') > CONTROL_MAX_LINE_BYTES) { clearTimeout(idle); socket.destroy(); return }
       const nl = buffer.indexOf('\n');
       if (nl === -1) return;

@@ -56,6 +56,7 @@ export interface StartHubResult {
   entryPath: string;
   url: string;
   logPath: string;
+  logStartOffset: number;
   /** Auxiliary health confirmation; `null` means the probe did not answer (readiness already confirmed by the listen line). */
   health: HubHealthStatus | null;
 }
@@ -177,6 +178,7 @@ export async function startHubLocked(root: string, io: LauncherIo, options: Star
       entryPath: current.entryPath,
       url: spawned.listenUrl,
       logPath: spawned.logPath,
+      logStartOffset: spawned.logStartOffset,
       health,
     };
   } catch (error) {
