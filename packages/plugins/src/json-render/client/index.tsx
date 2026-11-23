@@ -17,7 +17,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import './styles.css'
-import { usePluginContext, usePluginLocale, usePluginTranslator, ViewBoundary, HelmxIcon, Callout } from '@helmx/plugin-client'
+import { usePluginContext, usePluginLocale, usePluginTranslator, ViewBoundary, Callout } from '@helmx/plugin-client'
 import type { MarkdownCodeBlockProps } from '@helmx/protocol'
 import { CopyButton } from '@helmx/plugin-client'
 import { isDegradedNode, normalizeSpec, type NormalizedSpecNode } from './spec-normalize.ts'

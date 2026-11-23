@@ -877,3 +877,37 @@ test('文档写入节流常量与窗口配置存在性', { timeout: 60_000 }, ()
   assert.equal(definition.id, TOKEN_SPEED_PLUGIN_ID)
   assert.equal(typeof definition.clientRoot, 'string')
 })
+
+test('配置热更新：修改 slidingWindowMs 动态更新现有与新建会话的滑动窗口宽度', { timeout: 60_000 }, async () => {
+  const { MemoryConfigStore } = await import('./helpers/plugin-test-env.js')
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-token-speed-cfg-'))
+  const backend = new EventBackend()
+  const docs = new MemoryDocStore()
+  const config = new MemoryConfigStore()
+  const sessionDocs = new MemorySessionDocStore()
+  const host = new PluginHost({
+    buildProvider: createPluginBuildProvider(),
+    dataDir,
+    host: backend.base,
+    docs,
+    config,
+    sessionDocs: sessionDocs as never,
+  })
+  const docOf = (cid: number) =>
+    (host.getPublicSessionDoc(TOKEN_SPEED_PLUGIN_ID, TOKEN_SPEED_DOC, cid)?.value as TokenSpeedStatus | null | undefined) ?? null
+  try {
+    await host.register(createTokenSpeedPlugin(), { enabled: true })
+    const CONV = 19
+    await backend.dispatch('conversation.live', liveEvent(CONV, 0, { taskId: 1, attempt: 1 }))
+    await backend.dispatch('conversation.live', liveEvent(CONV, 100, { taskId: 1, attempt: 1, message: message([text('a'.repeat(400))]) }))
+    assert.equal(docOf(CONV)?.windowMs, 1000)
+
+    await host.setConfig(TOKEN_SPEED_PLUGIN_ID, { slidingWindowMs: 2500 })
+    await backend.dispatch('conversation.live', liveEvent(CONV, 300, { taskId: 1, attempt: 1, message: message([text('a'.repeat(800))]) }))
+    await new Promise((r) => setTimeout(r, 150))
+    assert.equal(docOf(CONV)?.windowMs, 2500, '更新 slidingWindowMs 后实时测量立即采用新窗口宽度')
+  } finally {
+    await host.dispose()
+    rmSync(dataDir, { recursive: true, force: true })
+  }
+})

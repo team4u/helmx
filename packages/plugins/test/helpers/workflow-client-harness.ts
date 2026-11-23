@@ -153,7 +153,7 @@ export function mountSharedPluginNamespaces(options: { realHooks?: boolean } = {
   syncSharedPluginGlobals(options.realHooks === true)
 }
 
-export const WORKFLOW_SURFACE_MODULES = ['index.tsx'] as const
+export const WORKFLOW_SURFACE_MODULES = ['index.tsx', 'workbench.tsx', 'library.tsx'] as const
 
 export async function importWorkflowClientModule(
   moduleRef = 'index.tsx',

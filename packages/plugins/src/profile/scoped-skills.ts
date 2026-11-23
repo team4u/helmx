@@ -61,13 +61,20 @@ export async function listScopedSkills(
 ): Promise<ScopedSkillCatalog> {
   const hub = await skills.list()
   const byId = new Map(hub.map((skill) => [skill.id, skill]))
-  const shadowedNodeSkillIds: string[] = []
-  const scan = await scanNodeSkills(host, nodeIdInput, cwd, options)
+  const hubIds = new Set(byId.keys())
+  const effectiveShadowedIds =
+    options?.shadowedIds !== undefined ? new Set([...options.shadowedIds, ...hubIds]) : hubIds
+  const scan = await scanNodeSkills(host, nodeIdInput, cwd, {
+    ...options,
+    shadowedIds: effectiveShadowedIds,
+  })
+  const shadowedSet = new Set<string>(scan.shadowedSkillIds ?? [])
   const nodeSkills = scan.kind === 'ok' ? scan.skills : (scan.skills ?? [])
   for (const skill of nodeSkills) {
-    if (byId.has(skill.id)) shadowedNodeSkillIds.push(skill.id) // same-name: the Hub version always wins
+    if (byId.has(skill.id)) shadowedSet.add(skill.id) // same-name: the Hub version always wins
     else byId.set(skill.id, skill)
   }
+  const shadowedNodeSkillIds = [...shadowedSet].sort((a, b) => a.localeCompare(b))
   const merged = [...byId.values()].sort((a, b) => a.id.localeCompare(b.id))
   return {
     nodeId: nodeIdInput ?? 'local',

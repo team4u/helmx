@@ -126,10 +126,23 @@ export function registerWorkflowHooks(ctx: HelmxPluginContext, deps: WorkflowHoo
     projection.reprojectOnConversationTreeChange()
   })
   ctx.host.onEvent('conversation.deleted', (raw) => {
-    if (!projection.isStopping()) {
-      const deletedId = extractDeletedConversationId(raw)
-      if (deletedId !== undefined) registry.pruneConversation(deletedId)
+    const deletedId = extractDeletedConversationId(raw)
+    if (!projection.isStopping() && deletedId !== undefined) {
+      registry.pruneConversation(deletedId)
+      projection.reprojectOnConversationDeleted(deletedId)
+      void workflows
+        .purgeDeletedConversation(deletedId)
+        .then((purgedIds) => {
+          if (purgedIds.length > 0 && !projection.isStopping()) {
+            projection.reprojectOnConversationDeleted(deletedId, purgedIds)
+          }
+        })
+        .catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error)
+          process.stderr.write(`builtin:workflow: 会话 ${deletedId} 删除后的运行记录清理失败: ${message}\n`)
+        })
+      return
     }
-    projection.reprojectOnConversationDeleted()
+    projection.reprojectOnConversationDeleted(deletedId)
   })
 }

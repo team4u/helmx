@@ -502,6 +502,52 @@ export function createSoloPlugin() {
     assert.deepEqual(afterIndexEdit.rebuilt, ['solo'])
     assert.deepEqual(afterIndexEdit.cached, [])
   })
+
+  test('deleting a plugin client directory prunes stale dist/<deleted>/client, dist-client, and orphan plugin dirs in both clean-dist and copy-plugin-clients', { timeout: 60_000 }, async (t) => {
+    const { copyAndPrebuildPluginClients } = await copyClientsModPromise
+    const cleanDistMod = (await import(
+      pathToFileURL(path.join(pkgRoot, 'scripts', 'clean-dist.mjs')).href
+    )) as { pruneStalePluginDistDirs: (pkgRoot: string) => string[] }
+
+    const root = useTempDir(t, 'helmx-copy-clients-prune-deleted-')
+    const fixture = createPluginsFixture(root)
+
+    await copyAndPrebuildPluginClients({
+      pkgRoot: fixture.pluginsRoot,
+      repoRoot: fixture.root,
+      cacheFile: fixture.cacheFile,
+      pluginsModule: fixture.pluginsModule,
+      env: {},
+      quiet: true,
+    })
+    assert.ok(existsSync(path.join(fixture.distDir, 'beta/client/index.tsx')))
+    assert.ok(existsSync(path.join(fixture.distDir, 'beta', PREBUILT_CLIENT_DIR_NAME, PREBUILT_CLIENT_MANIFEST_FILE)))
+
+    // Simulate removing plugin `beta` completely from `src/` (and compiled server `dist/beta.js`)
+    rmSync(path.join(fixture.pluginsRoot, 'src/beta'), { recursive: true, force: true })
+    rmSync(path.join(fixture.pluginsRoot, 'dist/beta.js'), { force: true })
+    delete fixture.pluginsModule['createBetaPlugin']
+
+    // 1) copyAndPrebuildPluginClients prunes stale dist/beta/{client,dist-client} and empty dist/beta
+    const res = await copyAndPrebuildPluginClients({
+      pkgRoot: fixture.pluginsRoot,
+      repoRoot: fixture.root,
+      cacheFile: fixture.cacheFile,
+      pluginsModule: fixture.pluginsModule,
+      env: {},
+      quiet: true,
+    })
+    assert.deepEqual(res.cached, ['alpha'])
+    assert.equal(existsSync(path.join(fixture.distDir, 'beta')), false, 'deleted plugin dist directory must be pruned')
+
+    // 2) clean-dist pruneStalePluginDistDirs also cleans orphaned dist/<ghost> directories directly
+    writeFixtureFile(fixture.pluginsRoot, 'dist/ghost/client/old.tsx', 'stale')
+    writeFixtureFile(fixture.pluginsRoot, 'dist/ghost/dist-client/manifest.json', '{}')
+    const removed = cleanDistMod.pruneStalePluginDistDirs(fixture.pluginsRoot)
+    assert.ok(removed.includes('ghost'))
+    assert.equal(existsSync(path.join(fixture.distDir, 'ghost')), false)
+    assert.equal(existsSync(path.join(fixture.distDir, 'alpha', PREBUILT_CLIENT_DIR_NAME, PREBUILT_CLIENT_MANIFEST_FILE)), true)
+  })
 })
 
 describe('pruneDist dist-client preservation', () => {

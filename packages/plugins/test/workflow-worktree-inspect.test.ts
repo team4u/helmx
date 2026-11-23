@@ -29,7 +29,7 @@ const e = React.createElement
 mountSharedPluginNamespaces({ realHooks: true })
 const m = await importWorkflowModels()
 const wt = await importWorktreeModels()
-const mod = await importWorkflowClientModule('index.tsx', undefined, { realHooks: true })
+const mod = await importWorkflowClientModule('workbench.tsx', undefined, { realHooks: true })
 const WorkflowWorkbenchPanel = mod['WorkflowWorkbenchPanel'] as React.ComponentType<Record<string, unknown>>
 const worktreeSlots = (await importWorktreeClientModule('slots.tsx', undefined, { realHooks: true, scope: 'wt-inspect' })) as WorktreeSlotComponents
 

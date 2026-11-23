@@ -162,7 +162,7 @@ export async function ensureCoordinatorGroup(
     const syncAndReturn = async (groupId: string): Promise<{ groupId: string; group: BoardViewDoc['group'] }> => {
       const latest = readConversationOrUndefined(targetId)
       if (latest && !latest.tags.includes(COORDINATOR_TAG)) await setConversationTags(ctx, latest, COORDINATOR_TAG, [ARCHIVED_COORDINATOR_TAG])
-      groups.syncProjections()
+      groups.syncCoordinatorProjection(targetId)
       return { groupId, group: groups.buildBoardView(groupId).group }
     }
     if (input.reuseExisting || input.createKey !== undefined) {
@@ -320,7 +320,7 @@ export function createGroupHandlers(
         const coordConv = readConversationOrUndefined(freshGroup.coordinatorConversationId)
         if (coordConv?.tags.includes(COORDINATOR_TAG)) await setConversationTags(ctx, coordConv, ARCHIVED_COORDINATOR_TAG, [COORDINATOR_TAG])
 
-        groups.syncProjections()
+        groups.syncCoordinatorProjection(freshGroup.coordinatorConversationId)
         return { closed: true, groupId: freshGroup.id, retainedWorktrees }
       } finally {
         dispatchGuard.endClosing(group.id)

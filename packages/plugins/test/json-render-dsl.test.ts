@@ -407,6 +407,36 @@ test('copy: Tabs 缺省标题跟随宿主 locale', { timeout: 60_000 }, () => {
   assert.equal(jsonRenderTabFallbackTitle(2, 'zh-CN'), '标签页 2')
 })
 
+test('spec-normalize: MAX_SPEC_DEPTH=32 与 MAX_SPEC_NODES=1000 超限时安全降级（防病态深层/巨型 spec 卡死渲染）', { timeout: 60_000 }, async () => {
+  const { MAX_SPEC_DEPTH, MAX_SPEC_NODES } = await import('../src/json-render/client/spec-normalize.js')
+  assert.equal(MAX_SPEC_DEPTH, 32)
+  assert.equal(MAX_SPEC_NODES, 1000)
+
+  // 1) 深度 32 正常通过，深度 > 32 触发 degraded
+  let okTree: Record<string, unknown> = { component: 'Text', text: 'leaf' }
+  for (let d = 0; d < MAX_SPEC_DEPTH - 1; d += 1) {
+    okTree = { component: 'Stack', children: [okTree] }
+  }
+  assert.equal(normalizeSpec(okTree).degraded, false)
+
+  const tooDeepTree = {
+    component: 'Stack',
+    children: [{ component: 'Stack', children: [{ component: 'Stack', children: [okTree] }] }],
+  }
+  const deepRes = normalizeSpec(tooDeepTree)
+  assert.equal(deepRes.degraded, true)
+  assert.match(deepRes.reason ?? '', /depth/i)
+
+  // 2) 节点总数 > 1000（树状与扁平两种形态）均显式降级
+  const wideTree = {
+    component: 'Stack',
+    children: Array.from({ length: MAX_SPEC_NODES }, (_, i) => ({ component: 'Text', text: `n-${i}` })),
+  }
+  const wideRes = normalizeSpec(wideTree)
+  assert.equal(wideRes.degraded, true)
+  assert.match(wideRes.reason ?? '', /node/i)
+})
+
 // ---------------------------------------------------------------------------
 // ScreenHost 路由契约：零业务特判，所有 screen 统一 PluginUiView 渲染
 // ---------------------------------------------------------------------------

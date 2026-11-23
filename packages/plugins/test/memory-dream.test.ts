@@ -1340,3 +1340,90 @@ test('dream 配置：dreamModel 声明为 format="model" 且显式设置后透�
   await hostWithConfig.dispose().catch(() => {})
   await h.host.dispose().catch(() => {})
 })
+
+test('durable-scheduler 与 dream 并发收敛：在途运行期间 reschedule 不丢重排、同会话并发采集合并追踪、profileChains 完成后自动裁剪', { timeout: 60_000 }, async (t) => {
+  const { createDurableScheduler } = await import('../src/durable-scheduler.js')
+
+  // 1) durable-scheduler: launch 在 activeRun 执行期间收到 reschedule（如用户改了 hour/timezone），收敛后自动按新配置重排
+  const clock = new FakeClock(Date.parse('2026-01-15T00:00:00Z'))
+  let cfgHour = 3
+  let nextRunAt: number | undefined = Date.parse('2026-01-15T03:00:00Z')
+  const runGate = deferred()
+  const enteredRun = deferred()
+  const scheduler = createDurableScheduler({
+    clock: clock.api,
+    claimErrorTitle: 'claim err',
+    runErrorTitle: 'run err',
+    readState: () => ({ enabled: true, nextRunAt }),
+    computeNext: (afterMs) => afterMs + cfgHour * 3600 * 1_000,
+    persistNextRunAt: async (next: number) => { nextRunAt = next },
+    claimNext: async (next: number) => {
+      nextRunAt = next
+      return true
+    },
+    run: async () => {
+      enteredRun.resolve()
+      await runGate.promise
+    },
+    onError: () => {},
+  })
+  await scheduler.start()
+  await clock.advance(3 * 3600 * 1_000 + 10)
+  await enteredRun.promise
+  // 在途执行期间修改目标并调用 reschedule()：旧实现因 activeRun !== undefined 直接提前返回导致新配置未生效
+  cfgHour = 5
+  nextRunAt = Date.parse('2026-01-15T05:00:00Z')
+  scheduler.reschedule()
+  runGate.resolve()
+  await scheduler.settle()
+  assert.equal(clock.activeTimers(), 1, '在途期间的 reschedule 请求必须在 activeRun 收敛后补排新 timer')
+  await scheduler.stop()
+
+  // 2) dream: 同会话连续两次并发 turn_settled 采集不覆盖彼此 Promise，且 settle() 完整等待二者收敛
+  const slowWriteGate = deferred()
+  let atomicWrites = 0
+  const dir = scratchDir(t, 'dream-overlap-collect')
+  const profiles = new ProfileService(dir)
+  await profiles.ensureDefault()
+  const store = new MemoryStore(createProfileFileHost(dir, profiles))
+  const engine = createDreamEngine({
+    dataDir: join(dir, 'plugins', 'builtin%3Amemory'),
+    doc: {
+      get: () => ({ version: 1, config: { enabled: true, hour: 3, timezone: 'UTC' }, runs: {} }),
+      set: () => {},
+      update: () => {},
+      flush: async () => {},
+    } as never,
+    redact: (txt) => txt,
+    atomicWriteFile: async (p, content) => {
+      atomicWrites += 1
+      if (atomicWrites === 1) await slowWriteGate.promise
+      writeFileSync(p, content, 'utf8')
+    },
+    completeText: async () => '{"memory":"# Memory\\n- 合并完成"}',
+    listConversations: () => [makeConversationSummary({ id: 1, profileId: 'assistant' })],
+    store,
+    profiles: { list: async () => [{ id: 'assistant' }] },
+    isMemoryEnabled: () => true,
+    emitError: () => {},
+  }, { clock: clock.api })
+
+  const c1 = engine.collectFromSettledTurn({
+    conversation: makeConversationSummary({ id: 1, profileId: 'assistant', title: 'conv-1' }),
+    inputs: [{ text: '记住我喜欢使用 TypeScript 严格模式开发项目', origin: 'human' }],
+    outcome: 'completed',
+    settledAt: 1000,
+  } as never)
+  const c2 = engine.collectFromSettledTurn({
+    conversation: makeConversationSummary({ id: 1, profileId: 'assistant', title: 'conv-1' }),
+    inputs: [{ text: '另外记住测试超时统一显式设置为六十秒', origin: 'human' }],
+    outcome: 'completed',
+    settledAt: 1001,
+  } as never)
+  assert.ok(engine.liveTasks().includes('memory-dream-collect:1'), '在途采集出现在 liveTasks')
+  slowWriteGate.resolve()
+  await Promise.all([c1, c2])
+  await engine.settle()
+  assert.deepEqual(engine.liveTasks(), [], '两次并发采集全部收敛后 liveTasks 清零')
+  await engine.stop()
+})

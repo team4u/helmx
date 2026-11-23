@@ -143,7 +143,12 @@ export interface QuotaRow {
 }
 
 /** 全部配额卡片 → 展示行（每窗口一行；无 windows 的卡片输出一行 -1；绝不输出值为 undefined 的自有键）。 */
-export function quotaRows(entries: readonly QuotaEntry[], now = Date.now()): QuotaRow[] {
+export function quotaRows(
+  entries: readonly QuotaEntry[],
+  now = Date.now(),
+  redact?: (text: string) => string,
+): QuotaRow[] {
+  const applyRedact = redact ?? ((t: string) => t)
   const rows: QuotaRow[] = []
   for (const entry of entries) {
     if (!entry || typeof entry !== 'object') continue
@@ -160,7 +165,8 @@ export function quotaRows(entries: readonly QuotaEntry[], now = Date.now()): Quo
     }
     const windows = Array.isArray(entry.windows) ? entry.windows : []
     if (windows.length === 0) {
-      const errorText = nonEmptyString(entry.error)?.slice(0, 120)
+      const rawError = nonEmptyString(entry.error)
+      const errorText = rawError !== undefined ? applyRedact(rawError.replace(/Bearer\s+\S+/g, 'Bearer ***')).slice(0, 120) : undefined
       const balanceText =
         nonEmptyString(entry.balance)
         ?? (typeof entry.balance === 'number' && Number.isFinite(entry.balance)

@@ -36,9 +36,11 @@ import {
   validateActionCallOptions,
   validateAgentCallOptions,
   validateScript,
+  WORKFLOW_ACTION_CAP,
   WORKFLOW_AGENT_CAP,
   WORKFLOW_ITEM_CAP,
   WORKFLOW_NESTED_CAP,
+  WORKFLOW_TIMELINE_CAP,
 } from './boundary.js'
 import {
   actionJournalKey,
@@ -123,12 +125,16 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
 
   const { meta, body } = validateScript(script)
   const agentCap = options.agentCap ?? WORKFLOW_AGENT_CAP
+  const actionCap = options.actionCap ?? WORKFLOW_ACTION_CAP
+  const timelineCap = Math.max(1, options.timelineCap ?? WORKFLOW_TIMELINE_CAP)
   const itemCap = options.itemCap ?? WORKFLOW_ITEM_CAP
   const semaphore = new Semaphore(options.concurrency ?? defaultWorkflowConcurrency())
   const redactText = options.redact ?? ((text: string) => text)
 
   const nodesByIndex = new Map<number, WorkflowNodeState>()
-  const timeline: WorkflowProgressEntry[] = []
+  const timelineRing: Array<WorkflowProgressEntry | undefined> = []
+  let timelineHead = 0
+  let timelineSize = 0
   const inflightAgents = new Set<string>()
   const inflightActions = new Set<Promise<void>>()
   const inflightActionWrites = new Set<Promise<void>>()
@@ -138,6 +144,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
 
   let callIndex = 0
   let agentCount = 0
+  let actionCount = 0
   let replayedCount = 0
   let aborted = false
   let workerStopped = false
@@ -195,12 +202,28 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
   }
 
   const emitTimeline = (entry: WorkflowProgressEntry): void => {
-    timeline.push(entry)
+    if (timelineSize < timelineCap) {
+      timelineRing.push(entry)
+      timelineSize++
+    } else {
+      timelineRing[timelineHead] = entry
+      timelineHead = (timelineHead + 1) % timelineCap
+    }
     if (entry.kind === 'phase') {
       options.onEvent?.({ type: 'phase', index: entry.index, title: entry.title, at: entry.at })
     } else {
       options.onEvent?.({ type: 'log', message: entry.message, at: entry.at })
     }
+  }
+
+  const snapshotTimeline = (): WorkflowProgressEntry[] => {
+    if (timelineSize < timelineCap || timelineHead === 0) {
+      return timelineRing.slice(0, timelineSize) as WorkflowProgressEntry[]
+    }
+    return [
+      ...(timelineRing.slice(timelineHead) as WorkflowProgressEntry[]),
+      ...(timelineRing.slice(0, timelineHead) as WorkflowProgressEntry[]),
+    ]
   }
 
   const orderedNodes = (): WorkflowNodeState[] =>
@@ -255,7 +278,7 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
           ...result,
           meta,
           nodes: orderedNodes(),
-          timeline: [...timeline],
+          timeline: snapshotTimeline(),
           agentCount,
           replayedCount,
           ...(journalIoErrors.length > 0 ? { journalIoErrors: [...journalIoErrors] } : {}),
@@ -887,7 +910,12 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
       }
 
       const scope = readCallScope(payload)
+      if (actionCount >= actionCap) {
+        respond(callId, false, undefined, `Workflow exceeded its cap of ${actionCap} actions.`, true)
+        return
+      }
       const index = callIndex++
+      actionCount++
       openLaunches.set(callId, opts.actionId)
 
       const node: WorkflowNodeState = {

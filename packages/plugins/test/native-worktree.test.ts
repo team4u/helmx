@@ -1274,6 +1274,7 @@ describe('登记路径被替换/挪用：归属校验拒绝', { timeout: 60_000 
         path: repo,
         branch: 'helmx/spawn-fake1',
       })
+      allocator.invalidateCache()
       // 主仓手工建同名分支，使权威登记 branch 匹配后进入 main-worktree 检查。
       execFileSync('git', ['branch', 'helmx/spawn-fake1'], { cwd: repo })
       await assert.rejects(
@@ -1749,6 +1750,7 @@ describe('inspect 只读检视：成功输出脱敏与 diff 驱动隔离（真�
         ...stored,
         baseCommit: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
       })
+      allocator.invalidateCache()
       await assert.rejects(
         () => allocator.inspect({ worktreeId: record.id }),
         (err: unknown) => {
@@ -1794,14 +1796,16 @@ describe('inspect 受限采集上限（受控 exec 分块注入）', { timeout: 
   }, async () => {
     const base = 'a1b2c3d4'.repeat(5)
     const head = 'e5f6a7b8'.repeat(5)
-    const statusLines = Array.from({ length: 250 }, (_, i) => `?? file-${String(i).padStart(3, '0')}.txt`)
+    const statusLines = [
+      `# branch.oid ${head}`,
+      '# branch.head stub-branch',
+      ...Array.from({ length: 250 }, (_, i) => `? file-${String(i).padStart(3, '0')}.txt`),
+    ]
     const diffBody = Array.from({ length: 400 }, (_, i) => `+diff line ${String(i).padStart(3, '0')} ${'z'.repeat(48)}`).join('\n')
     const statBody = Array.from({ length: 200 }, (_, i) => ` path-${String(i).padStart(3, '0')}.txt | 2 +-\n`).join('')
     const stub = stubChunkedExec((args) => {
       const key = args.join(' ')
-      if (key === 'rev-parse --abbrev-ref HEAD') return { output: 'stub-branch\n' }
-      if (key === 'rev-parse HEAD') return { output: `${head}\n` }
-      if (key === 'status --porcelain --untracked-files=all') return { output: `${statusLines.join('\n')}\n` }
+      if (key === 'status --porcelain=v2 --branch --untracked-files=all') return { output: `${statusLines.join('\n')}\n` }
       if (key === `rev-list --count ${base}..${head}`) return { output: '3\n' }
       if (key === 'rev-parse --path-format=absolute --git-common-dir') return { output: '/repo/.git\n' }
       if (key === 'worktree list --porcelain -z') return { output: `worktree /repo\0HEAD ${base}\0branch refs/heads/main\0\0` }
@@ -1865,10 +1869,14 @@ describe('inspect 受限采集上限（受控 exec 分块注入）', { timeout: 
     timeout: 60_000,
   }, async () => {
     const base = 'a1b2c3d4'.repeat(5)
+    const head = 'e5f6a7b8'.repeat(5)
     const stub = stubChunkedExec((args) => {
       const key = args.join(' ')
-      if (key === 'rev-parse --abbrev-ref HEAD') return { output: 'stub-branch\n' }
-      if (key === 'rev-parse HEAD') return { output: `${'e5f6a7b8'.repeat(5)}\n` }
+      if (key === 'status --porcelain=v2 --branch --untracked-files=all') {
+        return { output: `# branch.oid ${head}\n# branch.head stub-branch\n` }
+      }
+      if (key === 'rev-parse --path-format=absolute --git-common-dir') return { output: '/repo/.git\n' }
+      if (key === 'worktree list --porcelain -z') return { output: `worktree /repo\0HEAD ${base}\0branch refs/heads/main\0\0` }
       if (key.startsWith('rev-list')) return { output: `fatal: bad object ${base}\n${'x'.repeat(3000)}`, exitCode: 128 }
       return { output: '' }
     })
@@ -2902,6 +2910,7 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
         status: 'removed',
         hold: { pluginId: 'builtin:superagent', holdId: 'grp-2:worker-1', label: 'stale', acquiredAt: 1 },
       })
+      th.isolation.invalidateCache()
       assert.equal(th.isolation.isPathInUse('local', acquired.path), false, 'removed 记录不得计入占用')
     } finally {
       await th.close()
@@ -2976,19 +2985,30 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
       const storedRecord = rawRecords(docs).find((r) => r.id === acquired.worktreeId)!
       assert.equal(storedRecord.hold?.label, `group ${placeholder} author`)
 
-      // 3) 持久化 KV 中 hold 结构损坏：读取/停用检查显式报错（worktree_doc_corrupted -> plugin_in_use_check_failed），绝不静默放行。
+      // 3) 持久化 KV 中 hold 结构损坏：重启水合后读取/停用检查显式报错（worktree_doc_corrupted -> plugin_in_use_check_failed），绝不静默放行。
       const corruptedRecord = structuredClone(storedRecord) as unknown as Record<string, unknown>
       corruptedRecord['hold'] = { pluginId: '', holdId: 'x', label: 'y', acquiredAt: -1 }
       docs.setParsed('builtin:worktree', WORKTREES_KV_NAMESPACE, acquired.worktreeId, corruptedRecord)
 
-      await assert.rejects(
-        () => host.invokeAction('builtin:worktree', 'list_worktrees', {}),
-        (err: unknown) => err instanceof HelmxError && err.code === 'worktree_doc_corrupted' && err.status === 500,
-      )
-      await assert.rejects(
-        () => host.disable('builtin:worktree'),
-        (err: unknown) => err instanceof HelmxError && err.code === 'plugin_in_use_check_failed' && err.status === 500,
-      )
+      await close()
+      const reopened = await openWorkflowPluginHost({
+        repoDir: repo,
+        dataDir: join(dir, 'data'),
+        docs,
+        stash,
+      })
+      try {
+        await assert.rejects(
+          () => reopened.host.invokeAction('builtin:worktree', 'list_worktrees', {}),
+          (err: unknown) => err instanceof HelmxError && err.code === 'worktree_doc_corrupted' && err.status === 500,
+        )
+        await assert.rejects(
+          () => reopened.host.disable('builtin:worktree'),
+          (err: unknown) => err instanceof HelmxError && err.code === 'plugin_in_use_check_failed' && err.status === 500,
+        )
+      } finally {
+        await reopened.close()
+      }
     } finally {
       await close()
       rmSync(dir, { recursive: true, force: true })
@@ -3058,6 +3078,7 @@ describe('pruneConversation：裁剪绑定与已 removed 记录，绝不删 acti
         status: 'removed',
         removedAt: Date.now(),
       })
+      th.isolation.invalidateCache()
       th.kvStore.setParsed('builtin:worktree', LEASES_KV_NAMESPACE, 'fail-closed-lease', {
         phase: 'running',
         nodeId: 'local',
@@ -3714,5 +3735,83 @@ describe('WorktreeStore KV 持久化契约（单条隔离 / >1000 分页遍历 /
     } finally {
       await host.dispose()
     }
+  })
+
+  it('reattachWithWorktree 预校验先行（验证失败零泄漏 running 租约）且 WorktreeStore 内存缓存使高频读取/hasActiveRecords 零重复 KV 扫描', { timeout: 60_000 }, async () => {
+    // 1) reattachWithWorktree（cwd 命中受管 worktree 且无 resume）：verifyForResume 失败时绝不残留 running 租约
+    const reattachHandle = makeFakeIsolation({ existsValue: false })
+    reattachHandle.kvStore.setParsed('builtin:worktree', WORKTREES_KV_NAMESPACE, 'local:/wt/reattach-missing', {
+      id: 'local:/wt/reattach-missing',
+      nodeId: 'local',
+      path: '/wt/reattach-missing',
+      branch: 'helmx/spawn-reattach1',
+      repoRoot: '/repo',
+      baseCommit: 'abc',
+      parentConversationId: 1,
+      conversationId: 77,
+      createdAt: 1,
+      status: 'active',
+      origin: 'native',
+    })
+    await assert.rejects(
+      () =>
+        reattachHandle.isolation.aroundSpawn(
+          { parentConversationId: 1, prompt: 'reattach', reattach: { conversationId: 77 }, onResolved: () => {} } as never,
+          async () => 'unreachable',
+        ),
+      (err: unknown) => err instanceof HelmxError && err.code === 'worktree_missing',
+    )
+    assert.equal(leaseCount(reattachHandle.kvStore), 0, 'reattach 验证失败不得残留任何 running 租约')
+
+    // 2) WorktreeStore O(1) 缓存：首次水合后连续调用 hasActiveRecords / findById / list 零底层 KV list/get 扫描
+    const kvStore = new MemoryKvStore()
+    const baseHandles = createMemoryWorktreeKv(kvStore)
+    let worktreeListCalls = 0
+    let worktreeGetCalls = 0
+    const trackedStore = new WorktreeStore({
+      kv: {
+        ...baseHandles,
+        worktrees: {
+          ...baseHandles.worktrees,
+          list: (opts) => {
+            worktreeListCalls += 1
+            return baseHandles.worktrees.list(opts)
+          },
+          get: (key) => {
+            worktreeGetCalls += 1
+            return baseHandles.worktrees.get(key)
+          },
+        },
+      },
+      redact: (t) => t,
+    })
+    assert.equal(trackedStore.hasActiveRecords(), false)
+    assert.equal(worktreeListCalls, 1, '首次水合仅扫描一次 KV')
+
+    trackedStore.append({
+      id: 'local:/wt/cached-1',
+      nodeId: 'local',
+      repoRoot: '/repo',
+      path: '/wt/cached-1',
+      branch: 'helmx/spawn-c1',
+      baseCommit: 'a'.repeat(40),
+      dirtySource: false,
+      parentConversationId: 1,
+      conversationId: 10,
+      origin: 'native',
+      status: 'active',
+      createdAt: 10,
+    })
+    for (let i = 0; i < 20; i += 1) {
+      assert.equal(trackedStore.hasActiveRecords(), true)
+      assert.equal(trackedStore.findById('local:/wt/cached-1')?.status, 'active')
+      assert.equal(trackedStore.list().length, 1)
+    }
+    assert.equal(worktreeListCalls, 1, '高频 before_turn / list 查询零额外 KV 扫描')
+    assert.equal(worktreeGetCalls, 0, 'findById 直接命中内存索引零 KV get')
+
+    trackedStore.updateRecord('local:/wt/cached-1', (r) => ({ ...r, status: 'removed', removedAt: 20 }))
+    assert.equal(trackedStore.hasActiveRecords(), false, '置为 removed 后 activeCount 即时归零')
+    assert.equal(trackedStore.findById('local:/wt/cached-1')?.status, 'removed', 'removed 记录保留审计历史不按 TTL 静默删除')
   })
 })

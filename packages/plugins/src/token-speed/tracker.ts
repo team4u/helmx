@@ -34,7 +34,11 @@ export const estimateTokensOf = (deltaChars: number): number =>
 export class SlidingWindow {
   private readonly events: Array<{ time: number; tokens: number; segment: number }> = []
   private start = 0
-  constructor(private readonly windowMs: number, private readonly minSpanMs: number) {}
+  constructor(private windowMs: number, private readonly minSpanMs: number) {}
+
+  setWindowMs(windowMs: number): void {
+    this.windowMs = windowMs
+  }
 
   record(time: number, tokens: number, segment: number): void {
     if (tokens <= 0) return
@@ -70,7 +74,7 @@ export class ConversationTokenSpeedTracker {
   private highestTaskId = 0
   private readonly totals = emptyTotals()
   private readonly window: SlidingWindow
-  private readonly windowMs: number
+  private windowMs: number
   private readonly minSpanMs: number
   private lastLiveTps?: number
   private firstContentAt?: number
@@ -82,6 +86,12 @@ export class ConversationTokenSpeedTracker {
     this.windowMs = options.windowMs
     this.minSpanMs = options.minSpanMs
     this.window = new SlidingWindow(options.windowMs, options.minSpanMs)
+  }
+
+  setWindowMs(windowMs: number): void {
+    if (this.windowMs === windowMs) return
+    this.windowMs = windowMs
+    this.window.setWindowMs(windowMs)
   }
 
   noteCompletion(fact: CompletionFact, now?: number): void {

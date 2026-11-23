@@ -189,13 +189,19 @@ function buildDreamUserText(memory: string, candidates: DreamCandidate[]): strin
 export function createDreamEngine(ports: DreamHostPorts, options: DreamEngineOptions = {}): DreamRuntime {
   const modelTimeoutMs = options.modelTimeoutMs ?? DREAM_MODEL_TIMEOUT_MS
   const inflight = new Map<string, Promise<DreamRunSummary>>()
-  const collecting = new Map<number, Promise<void>>()
+  const collecting = new Map<number, Set<Promise<void>>>()
   const runControllers = new Map<string, AbortController>()
   const profileChains = new Map<string, Promise<unknown>>()
 
+  const allCollectingPromises = (): Promise<void>[] => [...collecting.values()].flatMap((set) => [...set])
+
   const serialized = <T>(profileId: string, fn: () => Promise<T>): Promise<T> => {
     const task = (profileChains.get(profileId) ?? Promise.resolve()).then(fn, fn)
-    profileChains.set(profileId, task.catch(() => undefined))
+    const tail = task.then(() => undefined, () => undefined)
+    profileChains.set(profileId, tail)
+    void tail.finally(() => {
+      if (profileChains.get(profileId) === tail) profileChains.delete(profileId)
+    })
     return task
   }
   const bestEffort = async (label: string, fn: () => Promise<unknown>): Promise<void> => {
@@ -437,8 +443,20 @@ export function createDreamEngine(ports: DreamHostPorts, options: DreamEngineOpt
         })
       } catch (err) { ports.emitError(`memory dream candidate collection of conversation ${conv.id} failed`, err) }
     })()
-    collecting.set(conv.id, task)
-    try { await task } finally { if (collecting.get(conv.id) === task) collecting.delete(conv.id) }
+    let convTasks = collecting.get(conv.id)
+    if (!convTasks) {
+      convTasks = new Set()
+      collecting.set(conv.id, convTasks)
+    }
+    convTasks.add(task)
+    try {
+      await task
+    } finally {
+      convTasks.delete(task)
+      if (convTasks.size === 0 && collecting.get(conv.id) === convTasks) {
+        collecting.delete(conv.id)
+      }
+    }
   }
 
   return {
@@ -489,7 +507,7 @@ export function createDreamEngine(ports: DreamHostPorts, options: DreamEngineOpt
     async stop() {
       scheduler.beginStop()
       for (const c of runControllers.values()) c.abort()
-      const pending = [...inflight.values(), ...collecting.values()]
+      const pending = [...inflight.values(), ...allCollectingPromises()]
       if (pending.length > 0) await Promise.allSettled(pending)
       await Promise.allSettled([...profileChains.values()])
       await scheduler.stop()
@@ -500,8 +518,12 @@ export function createDreamEngine(ports: DreamHostPorts, options: DreamEngineOpt
       ...(scheduler.isRunning() ? ['memory-dream:sweep'] : []),
     ],
     async settle() {
-      for (let i = 0; i < 100 && (inflight.size > 0 || collecting.size > 0 || scheduler.isRunning()); i += 1) {
-        await Promise.allSettled([...inflight.values(), ...collecting.values()])
+      for (
+        let i = 0;
+        i < 100 && (inflight.size > 0 || collecting.size > 0 || profileChains.size > 0 || scheduler.isRunning());
+        i += 1
+      ) {
+        await Promise.allSettled([...inflight.values(), ...allCollectingPromises(), ...profileChains.values()])
         await scheduler.settle()
         await new Promise((r) => setImmediate(r))
       }

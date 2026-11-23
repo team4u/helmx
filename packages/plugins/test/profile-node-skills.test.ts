@@ -1093,3 +1093,114 @@ test('before_turn deduplicates profiles.get(profileId) to a single lookup per tu
   await runBeforeTurn(env, makeTurn(ws))
   assert.equal(getCount, 1, 'before_turn must call profiles.get(profileId) exactly once per turn')
 })
+
+test('node-skills optimizations: shadowed Hub IDs skip SKILL.md/references IO, collectNodeReferences enforces depth=8 & early-exit at 513, frontmatter.name redacts, and TTL cache invalidates on load_skill miss', { timeout: 60_000 }, async (t) => {
+  const { MAX_NODE_SKILL_REFERENCES, MAX_NODE_SKILL_REFERENCE_DEPTH, readNodeSkillFile } = await import('../src/profile.js')
+  const ws = mkdtempSync(join(tmpdir(), 'helmx-node-skills-opt-'))
+  t.after(() => rmSync(ws, { recursive: true, force: true }))
+
+  // 1) Shadowed skill has SKILL.md + refs, while visible skill has depth > 8 + secret in frontmatter.name
+  const shadowedDir = writeNodeSkill(ws, 'hub-shadowed', SKILL_MD('Shadowed Node', 'should never be opened'), {
+    'references/never-listed.md': 'nope',
+  })
+  const deepWithinCap = `${Array.from({ length: MAX_NODE_SKILL_REFERENCE_DEPTH }, (_, i) => `d${i + 1}`).join('/')}/at-cap.md`
+  const deepBeyondCap = `${Array.from({ length: MAX_NODE_SKILL_REFERENCE_DEPTH + 2 }, (_, i) => `d${i + 1}`).join('/')}/beyond-cap.md`
+  writeNodeSkill(
+    ws,
+    'visible-skill',
+    '---\nname: Visible sk-name-secret Skill\ndescription: safe desc\n---\nbody\n',
+    {
+      [deepWithinCap]: 'within depth 8',
+      [deepBeyondCap]: 'beyond depth 8',
+    },
+  )
+
+  let openedShadowedSkillMd = false
+  let listRootCalls = 0
+  let fakeNow = 10_000
+  const baseEnv = new NodeExecutionEnv({ cwd: ws })
+  const trackingHost = {
+    nodeIpc: { isOnline: () => true },
+    redact: (text: string) => text.replace(/sk-name-secret/g, '[REDACTED]'),
+    executionEnv: () => ({
+      ...baseEnv,
+      canonicalPath: (p: string, ctx: never) => baseEnv.canonicalPath(p, ctx),
+      fileInfo: (p: string, ctx: never) => baseEnv.fileInfo(p, ctx),
+      listDir: async (p: string, ctx: never) => {
+        if (p.replaceAll('\\', '/').endsWith('.helmx/skills')) listRootCalls += 1
+        return baseEnv.listDir(p, ctx)
+      },
+      openBinaryReader: async (p: string, opts: never, ctx: never) => {
+        if (p.startsWith(shadowedDir)) openedShadowedSkillMd = true
+        return baseEnv.openBinaryReader(p, opts, ctx)
+      },
+    }),
+  }
+
+  const first = await scanNodeSkills(trackingHost as never, 'local', ws, {
+    shadowedIds: new Set(['hub-shadowed']),
+    cacheTtlMs: 5_000,
+    now: () => fakeNow,
+  })
+  assert.equal(first.kind, 'ok')
+  assert.equal(openedShadowedSkillMd, false, 'shadowed Hub skill directory must skip opening SKILL.md')
+  assert.deepEqual(first.shadowedSkillIds, ['hub-shadowed'])
+  assert.equal(first.skills.length, 1)
+  assert.equal(first.skills[0]!.name, 'Visible [REDACTED] Skill', 'frontmatter.name must pass through host.redact')
+  assert.ok(first.skills[0]!.references.includes(deepWithinCap), 'depth 8 reference is collected')
+  assert.equal(first.skills[0]!.references.includes(deepBeyondCap), false, 'depth > 8 subdirectories are not descended')
+  assert.equal(listRootCalls, 1)
+
+  // 2) Short TTL cache hit within 5_000ms skips re-scanning disk
+  fakeNow += 1_000
+  const cachedHit = await scanNodeSkills(trackingHost as never, 'local', ws, {
+    shadowedIds: new Set(['hub-shadowed']),
+    cacheTtlMs: 5_000,
+    now: () => fakeNow,
+  })
+  assert.equal(cachedHit.kind, 'ok')
+  assert.equal(listRootCalls, 1, 'TTL cache hit must not re-list .helmx/skills')
+
+  // 3) Read miss (not_found) immediately invalidates cache for (nodeId, cwd) before TTL expires
+  await assert.rejects(
+    () => readNodeSkillFile(trackingHost as never, 'local', ws, 'newly-added-skill', 'SKILL.md'),
+    (err: unknown) => err instanceof HelmxError && err.code === 'not_found',
+  )
+  await scanNodeSkills(trackingHost as never, 'local', ws, {
+    shadowedIds: new Set(['hub-shadowed']),
+    cacheTtlMs: 5_000,
+    now: () => fakeNow,
+  })
+  assert.equal(listRootCalls, 2, 'not_found miss on readNodeSkillFile must invalidate TTL cache immediately')
+
+  // 4) Early exit at MAX_NODE_SKILL_REFERENCES + 1: stops listing extra subdirectories once 513 files are seen
+  const manyWs = mkdtempSync(join(tmpdir(), 'helmx-node-skills-cap-'))
+  t.after(() => rmSync(manyWs, { recursive: true, force: true }))
+  const refs: Record<string, string> = {}
+  for (let b = 0; b < 10; b += 1) {
+    for (let f = 0; f < 100; f += 1) {
+      refs[`b${String(b).padStart(2, '0')}/f${String(f).padStart(3, '0')}.md`] = 'x'
+    }
+  }
+  writeNodeSkill(manyWs, 'too-many-refs', SKILL_MD('Too Many', 'exceeds cap'), refs)
+  let bucketListCalls = 0
+  const capBaseEnv = new NodeExecutionEnv({ cwd: manyWs })
+  const capHost = {
+    nodeIpc: { isOnline: () => true },
+    redact: (t2: string) => t2,
+    executionEnv: () => ({
+      ...capBaseEnv,
+      canonicalPath: (p: string, ctx: never) => capBaseEnv.canonicalPath(p, ctx),
+      fileInfo: (p: string, ctx: never) => capBaseEnv.fileInfo(p, ctx),
+      openBinaryReader: (p: string, opts: never, ctx: never) => capBaseEnv.openBinaryReader(p, opts, ctx),
+      listDir: async (p: string, ctx: never) => {
+        if (/\/b\d{2}$/.test(p.replaceAll('\\', '/'))) bucketListCalls += 1
+        return capBaseEnv.listDir(p, ctx)
+      },
+    }),
+  }
+  const overCap = await scanNodeSkills(capHost as never, 'local', manyWs, { cacheTtlMs: 0 })
+  assert.equal(overCap.kind, 'unavailable')
+  assert.match(overCap.reason, new RegExp(String(MAX_NODE_SKILL_REFERENCES)))
+  assert.ok(bucketListCalls <= 6, `must early-exit at 513 files instead of scanning all 10 buckets (scanned ${bucketListCalls})`)
+})

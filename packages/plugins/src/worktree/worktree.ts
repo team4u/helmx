@@ -335,6 +335,14 @@ export class WorktreeAllocator {
     return this.store.getForConversation(conversationId)
   }
 
+  hasActiveRecords(): boolean {
+    return this.store.hasActiveRecords()
+  }
+
+  invalidateCache(): void {
+    this.store.invalidateCache()
+  }
+
   list(): ManagedWorktreeRecord[] {
     return this.store.list()
   }

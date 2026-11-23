@@ -7,17 +7,27 @@
  * - `upsertRun(run)` 增量 O(depth) 更新：仅重算 `run.conversationId` 及其祖先链的 runs 分片与单条角标，
  *   零全局排序与全站 JSON 重序列化，值相等跳过不发多余 SSE 事件。
  */
+import { createHash } from 'node:crypto'
 import type { PluginDocHandle, PluginSessionDocHandle } from '@helmx/protocol'
 import {
   type WorkflowRunBadgesDocState,
   type WorkflowRunSessionDocState,
   type WorkflowRunSummary,
 } from '../contracts.js'
+import {
+  MAX_HEADER_NODES,
+  slimNodeForHeader,
+  slimProgressForHeader,
+} from './runs/run-repository.js'
 
 /** 单会话 runs 分片滑窗上限：始终保留全部 running，剩余槽位填充最新终态。 */
 export const MAX_PROJECTED_RUNS_PER_CONVERSATION = 100
+/** 单会话 runs sessionDoc 字节预算上限（严守宿主 2 MiB 硬顶之下，留出充裕余量）。 */
+export const MAX_RUNS_SHARD_BYTES = 1_536 * 1024
 
 const RESULT_PREVIEW_MAX_CHARS = 200
+const ERROR_PREVIEW_MAX_CHARS = 1024
+const DESCRIPTION_PREVIEW_MAX_CHARS = 512
 
 export interface RunsProjection {
   sync(): void
@@ -25,7 +35,7 @@ export interface RunsProjection {
   beginStopping(): void
   isStopping(): boolean
   reprojectOnConversationTreeChange(): void
-  reprojectOnConversationDeleted(): void
+  reprojectOnConversationDeleted(deletedConversationId?: number, purgedRunIds?: readonly string[]): void
 }
 
 function truncateSingleLine(text: string, maxChars: number): string {
@@ -41,16 +51,73 @@ function formatResultPreview(result: unknown): string {
   return truncateSingleLine(serialized, RESULT_PREVIEW_MAX_CHARS)
 }
 
-function slimProjectedRun(run: WorkflowRunSummary): WorkflowRunSummary {
-  const { result, ...rest } = run
+export function slimProjectedRun(run: WorkflowRunSummary): WorkflowRunSummary {
+  const { result, nodes, progress, ...rest } = run
   const hasResult = result !== undefined || run.hasResult === true
   const preview =
     result !== undefined ? formatResultPreview(result) : run.resultPreview
+  const slimNodes =
+    nodes !== undefined ? nodes.slice(0, MAX_HEADER_NODES).map((n) => slimNodeForHeader(n)) : undefined
+  const slimProgress = slimProgressForHeader(progress)
   return {
     ...rest,
+    ...(rest.description !== undefined
+      ? { description: truncateSingleLine(rest.description, DESCRIPTION_PREVIEW_MAX_CHARS) }
+      : {}),
+    ...(rest.error !== undefined ? { error: truncateSingleLine(rest.error, ERROR_PREVIEW_MAX_CHARS) } : {}),
     hasResult,
     ...(hasResult && preview !== undefined ? { resultPreview: preview } : {}),
+    ...(slimNodes !== undefined ? { nodes: slimNodes } : {}),
+    ...(slimProgress !== undefined && slimProgress.length > 0 ? { progress: slimProgress } : {}),
   }
+}
+
+function enforceRunsShardByteBudget(
+  runs: WorkflowRunSummary[],
+  maxBytes = MAX_RUNS_SHARD_BYTES,
+): { runs: WorkflowRunSummary[]; json: string } {
+  let current = runs
+  let json = JSON.stringify({ runs: current })
+  if (Buffer.byteLength(json, 'utf8') <= maxBytes) {
+    return { runs: current, json }
+  }
+
+  // Phase 1: drop oldest terminal runs first while keeping running runs intact.
+  const trimmed = [...current]
+  for (let i = trimmed.length - 1; i >= 0 && Buffer.byteLength(json, 'utf8') > maxBytes; i--) {
+    if (trimmed[i]!.status !== 'running') {
+      trimmed.splice(i, 1)
+      json = JSON.stringify({ runs: trimmed })
+    }
+  }
+  current = trimmed
+  if (Buffer.byteLength(json, 'utf8') <= maxBytes) {
+    return { runs: current, json }
+  }
+
+  // Phase 2: strip progress and cap nodes on remaining runs from oldest to newest.
+  const compact = current.map((r) => ({ ...r }))
+  for (let i = compact.length - 1; i >= 0 && Buffer.byteLength(json, 'utf8') > maxBytes; i--) {
+    const r = compact[i]!
+    delete r.progress
+    if (r.nodes !== undefined && r.nodes.length > 16) {
+      r.nodes = r.nodes.slice(-16)
+    }
+    json = JSON.stringify({ runs: compact })
+  }
+  for (let i = compact.length - 1; i >= 0 && Buffer.byteLength(json, 'utf8') > maxBytes; i--) {
+    delete compact[i]!.nodes
+    json = JSON.stringify({ runs: compact })
+  }
+  while (compact.length > 0 && Buffer.byteLength(json, 'utf8') > maxBytes) {
+    compact.pop()
+    json = JSON.stringify({ runs: compact })
+  }
+  return { runs: compact, json }
+}
+
+function digestOfJson(json: string): string {
+  return createHash('sha256').update(json, 'utf8').digest('hex')
 }
 
 function selectProjectedRuns(convRuns: WorkflowRunSummary[]): WorkflowRunSummary[] {
@@ -99,11 +166,30 @@ export function createRunsProjection(deps: {
   const childrenByConv = new Map<number, Set<number>>()
   let conversationTreeFingerprint = ''
 
-  // 幂等写缓存：每会话 runs JSON、每会话 badge 与整份 badges 对象。
-  const writtenRunsByConv = new Map<number, string>()
+  // 幂等写缓存：每会话 runs SHA-256 摘要（避免常驻整份大 JSON 字符串）、每会话 badge 与整份 badges 对象。
+  const writtenRunsDigestByConv = new Map<number, string>()
   const badgesByConv: WorkflowRunBadgesDocState['byConversation'] = {}
   const writtenBadgeJsonByConv = new Map<number, string>()
   let badgesInitialized = false
+
+  function evictRunFromIndex(runId: string): void {
+    const existing = runsById.get(runId)
+    if (existing === undefined) return
+    runsById.delete(runId)
+    const set = directRunsByConv.get(existing.conversationId)
+    if (set !== undefined) {
+      set.delete(runId)
+      if (set.size === 0) directRunsByConv.delete(existing.conversationId)
+    }
+  }
+
+  function deleteRunsDocShardSafe(convId: number): void {
+    try {
+      runsDoc.delete?.(convId)
+    } catch {
+      // Ignore 404/not_found when session doc shard was already evicted by kernel.
+    }
+  }
 
   function indexRun(run: WorkflowRunSummary): number | undefined {
     const prev = runsById.get(run.id)
@@ -197,11 +283,12 @@ export function createRunsProjection(deps: {
   }
 
   function writeRunsShard(convId: number): void {
-    const projectedRuns = selectProjectedRuns(collectSubtreeRuns(convId)).map(slimProjectedRun)
-    const key = JSON.stringify(projectedRuns)
-    if (writtenRunsByConv.get(convId) === key) return
+    const slimmed = selectProjectedRuns(collectSubtreeRuns(convId)).map(slimProjectedRun)
+    const { runs: projectedRuns, json } = enforceRunsShardByteBudget(slimmed)
+    const digest = `${json.length}:${digestOfJson(json)}`
+    if (writtenRunsDigestByConv.get(convId) === digest) return
     runsDoc.set(convId, { runs: projectedRuns })
-    writtenRunsByConv.set(convId, key)
+    writtenRunsDigestByConv.set(convId, digest)
   }
 
   function updateBadgeForConversation(convId: number): boolean {
@@ -250,9 +337,10 @@ export function createRunsProjection(deps: {
       targetConvs.add(convId)
       for (const anc of ancestorsOf(convId)) targetConvs.add(anc)
     }
-    for (const convId of [...writtenRunsByConv.keys()]) {
+    for (const convId of [...writtenRunsDigestByConv.keys()]) {
       if (!parentByConv.has(convId)) {
-        writtenRunsByConv.delete(convId)
+        writtenRunsDigestByConv.delete(convId)
+        deleteRunsDocShardSafe(convId)
       } else {
         targetConvs.add(convId)
       }
@@ -322,10 +410,29 @@ export function createRunsProjection(deps: {
     }
   }
 
-  function reprojectOnConversationDeleted(): void {
+  function reprojectOnConversationDeleted(
+    deletedConversationId?: number,
+    purgedRunIds?: readonly string[],
+  ): void {
     if (stopping) return
     try {
       if (!hydrated) hydrateFromListRuns()
+      if (purgedRunIds !== undefined) {
+        for (const runId of purgedRunIds) evictRunFromIndex(runId)
+      }
+      if (deletedConversationId !== undefined) {
+        const direct = directRunsByConv.get(deletedConversationId)
+        if (direct !== undefined) {
+          for (const runId of [...direct]) {
+            const run = runsById.get(runId)
+            if (run === undefined || run.status !== 'running') {
+              evictRunFromIndex(runId)
+            }
+          }
+        }
+        writtenRunsDigestByConv.delete(deletedConversationId)
+        deleteRunsDocShardSafe(deletedConversationId)
+      }
       projectAll()
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)

@@ -22,7 +22,7 @@ import {
 const e = React.createElement
 mountSharedPluginNamespaces({ realHooks: true })
 const m = await importWorkflowModels()
-const clientMod = await importWorkflowClientModule('index.tsx', undefined, { realHooks: true })
+const clientMod = await importWorkflowClientModule('workbench.tsx', undefined, { realHooks: true })
 const WorkflowWorkbenchPanel = clientMod['WorkflowWorkbenchPanel'] as React.ComponentType<Record<string, unknown>>
 
 function summary(

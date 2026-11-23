@@ -91,6 +91,10 @@ export class WorktreeIsolation {
     return this.store.flush()
   }
 
+  invalidateCache(): void {
+    this.store.invalidateCache()
+  }
+
   private spawnCtx(): IsolationSpawnContext {
     return { deps: this.deps, allocator: this.allocator, store: this.store }
   }

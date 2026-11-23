@@ -2,8 +2,7 @@
 import { useEffect, useRef, useState, type ComponentType, type ReactNode } from 'react'
 import { Callout, CopyButton, HelmxIcon, LoadingState, usePluginContext, usePluginTranslator } from '@helmx/plugin-client'
 import type { MarkdownCodeBlockProps } from '@helmx/protocol'
-import { loadMermaid } from './mermaid-loader.ts'
-import { getMermaidConfig } from './mermaid-theme.ts'
+import { renderMermaidSvg } from './mermaid-loader.ts'
 import { MERMAID_COPY as C } from './copy.ts'
 import './styles.css'
 
@@ -94,16 +93,12 @@ export function MermaidCodeBlock({ code }: MarkdownCodeBlockProps): ReactNode {
     const timer = setTimeout(() => {
       void (async () => {
         try {
-          const mermaid = await loadMermaid()
-          if (isStale()) return
-          mermaid.initialize(getMermaidConfig(theme))
           const id = `helmx-mermaid-${theme}-${seq}-${Math.random().toString(36).slice(2, 8)}`
-          const { svg: rendered } = await mermaid.render(id, code)
+          const rendered = await renderMermaidSvg({ theme, id, code, isStale })
+          if (isStale()) return
           cacheSvg(key, rendered)
-          if (!isStale()) {
-            setSvg(rendered)
-            setError(null)
-          }
+          setSvg(rendered)
+          setError(null)
         } catch (err) {
           if (!isStale()) {
             setError(err instanceof Error ? err.message : String(err))

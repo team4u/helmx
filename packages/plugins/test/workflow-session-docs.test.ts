@@ -633,3 +633,153 @@ test('conversation.deleted 同时清理受管子代理登记表与已移除 work
   )
   await host.dispose()
 })
+
+test('runs 分片节点/进度瘦身与 1.5 MiB 字节预算保护、conversation.deleted 终态清理及 DSL timelineCap/actionCap 上限', { timeout: 60_000 }, async () => {
+  const { existsSync } = await import('node:fs')
+  const { join: joinPath } = await import('node:path')
+  const { slimProjectedRun, MAX_RUNS_SHARD_BYTES } = await import('../src/workflow/projection.js')
+  const { MAX_HEADER_NODES, MAX_HEADER_PROGRESS } = await import('../src/workflow/runs/index.js')
+  const { runWorkflow } = await import('../src/workflow/dsl/index.js')
+
+  // 1) slimProjectedRun 裁剪大体积 nodes / progress，防止单分片突破 2 MiB
+  const fatRun: WorkflowRunSummary = {
+    id: 'wf_fat_1',
+    name: 'fat-run',
+    conversationId: 1,
+    status: 'running',
+    createdAt: 100,
+    updatedAt: 200,
+    nodes: Array.from({ length: MAX_HEADER_NODES + 80 }, (_, i) => ({
+      id: `n-${i}`,
+      kind: 'agent' as const,
+      label: `node-${i}`,
+      status: i === 0 ? ('running' as const) : ('done' as const),
+      prompt: 'P'.repeat(5_000),
+      outputPreview: 'O'.repeat(5_000),
+      startedAt: i,
+    })),
+    progress: Array.from({ length: MAX_HEADER_PROGRESS + 60 }, (_, i) => ({
+      kind: 'log' as const,
+      message: `log-${i}-${'L'.repeat(2_000)}`,
+      at: i,
+    })),
+  }
+  const slimmed = slimProjectedRun(fatRun)
+  assert.ok((slimmed.nodes?.length ?? 0) <= MAX_HEADER_NODES, 'projected run nodes capped to MAX_HEADER_NODES')
+  assert.ok((slimmed.progress?.length ?? 0) <= MAX_HEADER_PROGRESS, 'projected run progress capped to MAX_HEADER_PROGRESS')
+  assert.ok((slimmed.nodes?.[0]?.prompt?.length ?? 0) <= 256, 'projected node prompt truncated to MAX_HEADER_PROMPT_CHARS')
+
+  let capturedShard: WorkflowRunSessionDocState | undefined
+  const budgetProjection = createRunsProjection({
+    runsDoc: {
+      set(_cid: number, val: WorkflowRunSessionDocState) {
+        capturedShard = val
+      },
+      get: () => capturedShard ?? { runs: [] },
+      update: () => {},
+      delete: () => {},
+      listConversationIds: () => [],
+      flush: async () => {},
+    } as unknown as PluginSessionDocHandle<WorkflowRunSessionDocState>,
+    badgesDoc: {
+      get: () => ({ byConversation: {} }),
+      set: () => {},
+      update: () => {},
+      flush: async () => {},
+    },
+    listRuns: () =>
+      Array.from({ length: 100 }, (_, i) => ({
+        ...fatRun,
+        id: `wf_huge_${i}`,
+        createdAt: 100 + i,
+        updatedAt: 200 + i,
+      })),
+    listConversations: () => [{ id: 1 }],
+  })
+  budgetProjection.sync()
+  assert.ok(capturedShard)
+  assert.ok(
+    Buffer.byteLength(JSON.stringify(capturedShard), 'utf8') <= MAX_RUNS_SHARD_BYTES,
+    'runs sessionDoc shard strictly bounded under MAX_RUNS_SHARD_BYTES (< 2 MiB)',
+  )
+
+  // 2) conversation.deleted 级联清理被删会话的终态 run（KV + detail + journal），同时保留存活会话的终态历史
+  backend.conversations.set(31, makeConversation(31))
+  const host = makeHost()
+  await host.register(createWorkflowPlugin())
+
+  const liveDone = (await host.invokeAction(
+    'builtin:workflow',
+    'run',
+    { conversationId: 1, script: `${META('keep-live')}return "keep"`, wait: true },
+    { conversationId: 1 },
+  )) as { run: WorkflowRunSummary }
+  const doomedDone = (await host.invokeAction(
+    'builtin:workflow',
+    'run',
+    { conversationId: 31, script: `${META('purge-deleted')}await agent('step-1'); return "gone"`, wait: true },
+    { conversationId: 31 },
+  )) as { run: WorkflowRunSummary }
+
+  const doomedHeader = kv.getParsed<{ journalPath?: string }>('builtin:workflow', 'runs', doomedDone.run.id)
+  assert.ok(doomedHeader?.journalPath && existsSync(doomedHeader.journalPath))
+  const doomedDetailPath = joinPath(
+    dataDir,
+    'plugins',
+    'builtin%3Aworkflow',
+    'artifacts',
+    '31',
+    `wf-${doomedDone.run.id}.detail.json`,
+  )
+  assert.ok(existsSync(doomedDetailPath), '异步 saveDetail 已落盘终态详情文件')
+
+  backend.conversations.delete(31)
+  backend.emit('conversation.deleted', { type: 'conversation.deleted', conversationId: 31 })
+  await new Promise((r) => setTimeout(r, 80))
+
+  assert.equal(kv.get('builtin:workflow', 'runs', doomedDone.run.id), undefined, '已删会话终态 run 从 KV 移除')
+  assert.equal(existsSync(doomedHeader!.journalPath!), false, '已删会话终态 run 账本文件同步清理')
+  assert.equal(existsSync(doomedDetailPath), false, '已删会话终态 run 详情文件同步清理')
+  assert.ok(kv.get('builtin:workflow', 'runs', liveDone.run.id) !== undefined, '存活会话终态 run 严格保留供审计与 resume')
+  await host.dispose()
+
+  // 3) DSL runtime 强制 timelineCap 环形上限与 actionCap 调用上限
+  let actionCount = 0
+  const timelineRes = await runWorkflow({
+    runId: 'wf_caps_ok',
+    script: `${META('caps-ok')}for (let i = 0; i < 30; i++) { log('line-' + i); await action('test:noop', { i }); } return 'done'`,
+    timelineCap: 10,
+    actionCap: 50,
+    redact: (txt: string) => txt,
+    host: {
+      spawnAgent: async () => ({ ok: true, text: '' }),
+      abortAgent: () => {},
+      invokeAction: async () => {
+        actionCount += 1
+        return { pluginId: 'test', actionId: 'noop', result: { ok: true } }
+      },
+    },
+  })
+  assert.equal(timelineRes.status, 'completed')
+  assert.equal(actionCount, 30)
+  assert.equal(timelineRes.timeline.length, 10, 'timeline strictly bounded to timelineCap tail')
+  assert.deepEqual(
+    timelineRes.timeline.map((e) => (e.kind === 'log' ? e.message : '')),
+    Array.from({ length: 10 }, (_, i) => `line-${20 + i}`),
+    'ring buffer retains newest tail entries in exact chronological order',
+  )
+
+  const exceedRes = await runWorkflow({
+    runId: 'wf_caps_exceed',
+    script: `${META('caps-exceed')}for (let i = 0; i < 6; i++) { await action('test:noop', { i }); }`,
+    actionCap: 3,
+    redact: (txt: string) => txt,
+    host: {
+      spawnAgent: async () => ({ ok: true, text: '' }),
+      abortAgent: () => {},
+      invokeAction: async () => ({ pluginId: 'test', actionId: 'noop', result: { ok: true } }),
+    },
+  })
+  assert.equal(exceedRes.status, 'failed')
+  assert.match(exceedRes.error ?? '', /actionCap|exceeded|3/i)
+})

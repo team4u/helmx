@@ -309,7 +309,7 @@ export function createWorkerHandlers(
     if (!summary) throw new HelmxError('not_found', `会话 #${workerConversationId} 不存在`, 404, { workerConversationId })
     if (summary.status !== 'working' && summary.status !== 'blocked') return { aborted: false, workerConversationId, name: member.name }
     await ctx.host.abortConversationGuarded(workerConversationId, { expectedOwnership: 'helmx' })
-    groups.syncProjections()
+    groups.syncCoordinatorProjection(group.coordinatorConversationId)
     return { aborted: true, workerConversationId, name: member.name }
   }
 
@@ -353,7 +353,7 @@ export function createWorkerHandlers(
       })
       return makeRes(updated, post.seq)
     }
-    groups.syncProjections()
+    groups.syncCoordinatorProjection(group.coordinatorConversationId)
     return makeRes(updated)
   }
 

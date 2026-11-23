@@ -41,6 +41,7 @@ export const ACTIONABLE_WAKE_KINDS: ReadonlySet<BoardPostKind> = new Set(['brief
 export const COORDINATOR_ESCALATION_KINDS: ReadonlySet<BoardPostKind> = new Set(['blocker', 'stall'])
 export const COORDINATOR_BATCH_WINDOW_MS = 50
 export const MAX_INDEX_CLOSED_GROUPS = 50
+export const MAX_BOARD_POST_BODY_CHARS = 32_768
 
 export const COORDINATOR_SCOPE: ConversationScope = { tags: [COORDINATOR_TAG] }
 export const PARTICIPANT_SCOPE: ConversationScope = { tags: [COORDINATOR_TAG, WORKER_TAG] }
@@ -125,8 +126,9 @@ export interface CollabGroupRuntime {
   findLatestGroupForConversation(conversationId: number): CollabGroupRecord | undefined
   getPosts(groupId: string): readonly BoardPost[]
   ensurePostsLoaded(groupId: string): Promise<readonly BoardPost[]>
-  buildBoardView(groupId: string): BoardViewDoc
+  buildBoardView(groupId: string, posts?: readonly BoardPost[]): BoardViewDoc
   syncProjections(): void
+  syncCoordinatorProjection(coordinatorConversationId: number): void
   onConversationUpsert(conversationId: number): void
   onConversationDeleted(conversationId: number): Promise<void>
   createGroup(input: { coordinatorConversationId: number; title: string; objective?: string; createKey?: string }): Promise<CollabGroupRecord>

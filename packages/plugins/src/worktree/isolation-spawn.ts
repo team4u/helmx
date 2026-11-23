@@ -247,16 +247,17 @@ export async function reattachWithWorktree(
   if (record.status === 'removed') {
     throw new HelmxError('worktree_missing', `子会话绑定的隔离 worktree '${record.path}' 已被清理（branch: ${record.branch}）`, 409)
   }
+  await ctx.allocator.verifyForResume(record, undefined, request.signal)
   const convId = request.reattach?.conversationId
-  const leaseToken = await ctx.store.acquireReattachLease(
-    { worktreeId: record.id, nodeId: record.nodeId, path: record.path },
-    { ...(convId !== undefined ? { conversationId: convId } : {}) },
-    { nodeId: record.nodeId, ...(convId !== undefined ? { conversationId: convId } : {}), effectiveCwd: record.path },
-  )
+  let leaseToken = ''
   let enteredNext = false
   let execution: AgentExecutionInfo | undefined
   try {
-    await ctx.allocator.verifyForResume(record, undefined, request.signal)
+    leaseToken = await ctx.store.acquireReattachLease(
+      { worktreeId: record.id, nodeId: record.nodeId, path: record.path },
+      { ...(convId !== undefined ? { conversationId: convId } : {}) },
+      { nodeId: record.nodeId, ...(convId !== undefined ? { conversationId: convId } : {}), effectiveCwd: record.path },
+    )
     enteredNext = true
     const result = await next({
       ...request,
@@ -277,8 +278,12 @@ export async function reattachWithWorktree(
     await clearStaleLeasesBestEffort(ctx, record.id)
     return result
   } catch (error) {
-    if (enteredNext && ctx.deps.host.isClosing !== true) {
-      await ctx.store.settleLeaseAfterNextFailure(leaseToken, execution).catch(() => {})
+    if (leaseToken !== '') {
+      if (!enteredNext) {
+        await ctx.store.settleLease(leaseToken, false, true).catch(() => {})
+      } else if (ctx.deps.host.isClosing !== true) {
+        await ctx.store.settleLeaseAfterNextFailure(leaseToken, execution).catch(() => {})
+      }
     }
     throw error
   }

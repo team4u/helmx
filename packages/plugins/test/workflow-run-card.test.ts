@@ -17,8 +17,8 @@ import {
   React,
   act,
   createWorkflowHostHarness,
-  importWorkflowClientModule,
   importWorkflowModels,
+  importWorkflowSurfaces,
   makeConvSummary,
   mountSharedPluginNamespaces,
 } from './helpers/workflow-client-harness.js'
@@ -26,7 +26,7 @@ import {
 const e = React.createElement
 mountSharedPluginNamespaces({ realHooks: true })
 const m = await importWorkflowModels()
-const mod = await importWorkflowClientModule('index.tsx', undefined, { realHooks: true })
+const mod = await importWorkflowSurfaces(['index.tsx', 'workbench.tsx'], undefined, { realHooks: true })
 const WorkflowToolView = mod['WorkflowToolView'] as React.ComponentType<Record<string, unknown>>
 const WorkflowWorkbenchPanel = mod['WorkflowWorkbenchPanel'] as React.ComponentType<Record<string, unknown>>
 

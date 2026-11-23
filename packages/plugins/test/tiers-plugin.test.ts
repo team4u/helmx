@@ -111,9 +111,12 @@ test('integration: default enabled, managed skill, reserved namespace, CRUD acti
       skills.some((s) => s.id === MODEL_TIERS_SKILL_ID && s.managedByPlugin === TIERS_PLUGIN_ID),
       'managed skill model-tiers must be bootstrapped at startup',
     )
-    const clientMod = await kernel.plugins.getClientModule(TIERS_PLUGIN_ID, 'index.tsx')
-    assert.match(clientMod.code, /TiersManagerScreen/)
-    assert.match(clientMod.code, /TiersSettingsPanel/)
+    const managerMod = await kernel.plugins.getClientModule(TIERS_PLUGIN_ID, 'manager.tsx')
+    assert.match(managerMod.code, /TiersManagerScreen/)
+    assert.doesNotMatch(managerMod.code, /TiersSettingsPanel/)
+    const settingsMod = await kernel.plugins.getClientModule(TIERS_PLUGIN_ID, 'settings.tsx')
+    assert.match(settingsMod.code, /TiersSettingsPanel/)
+    assert.doesNotMatch(settingsMod.code, /TiersManagerScreen/)
 
     // Public doc `state` must be readable immediately (for Web UI usePluginDoc & SSE initial snapshot)
     const initialDoc = kernel.plugins.getPublicDoc(TIERS_PLUGIN_ID, TIERS_STATE_DOC)
@@ -724,5 +727,75 @@ test('performance: tiers write actions reuse a single ModelCatalog fetch per set
     assert.equal(listModelsCalls, 1, 'tiers remove must reuse one ModelCatalog fetch')
   } finally {
     await env.close()
+  }
+})
+
+test('performance: tiers readState caches sanitized TiersStateDoc across getTiers/before_turn and invalidates on mutation', { timeout: 60_000 }, async () => {
+  const { PluginHost } = await import('../../kernel/src/plugins/index.js')
+  const { createPluginHostBackendFixture } = await import('../../kernel/test/helpers/plugin-host-backend.js')
+  const { MemoryDocStore, makeConversationSummary } = await import('./helpers/plugin-test-env.js')
+  const docs = new MemoryDocStore()
+  let docGetCalls = 0
+  const origGet = docs.get.bind(docs)
+  docs.get = <T>(key: string, initial: T): T => {
+    if (key === `${TIERS_PLUGIN_ID}:${TIERS_STATE_DOC}`) docGetCalls += 1
+    return origGet(key, initial)
+  }
+  const dataDir = await makeTempDir('helmx-tiers-cache-')
+  const baseFixture = createPluginHostBackendFixture()
+  const host = new PluginHost({
+    buildProvider: createPluginBuildProvider(),
+    dataDir,
+    docs,
+    host: {
+      ...baseFixture,
+      emitEvent: () => {},
+      onEvent: () => () => {},
+      skills: {
+        ...baseFixture.skills,
+        ensureSkill: async () => {},
+      },
+      listModels: async () => ({
+        models: [
+          {
+            modelId: 'faux/fast',
+            provider: 'faux',
+            id: 'fast',
+            name: 'Fast',
+            available: true,
+            reasoning: true,
+            input: ['text'],
+            contextWindow: 8000,
+            maxTokens: 1000,
+          },
+        ],
+        thinkingLevels: { 'faux/fast': ['low', 'medium'] },
+      }),
+    },
+  })
+  try {
+    await host.register(createTiersPlugin())
+    const writesAfterInit = docGetCalls
+    for (let i = 0; i < 15; i += 1) {
+      await host.runHook('before_turn', {
+        conversation: makeConversationSummary({ id: 1 }),
+        inputs: [],
+        messages: [],
+        sections: [],
+        tools: [{ name: 'subagent', description: 's', inputSchema: {} }],
+      } as never)
+    }
+    assert.equal(docGetCalls, writesAfterInit, 'repeated before_turn calls reuse cached sanitized TiersStateDoc without re-reading/cloning doc')
+
+    await host.invokeAction(TIERS_PLUGIN_ID, 'set', {
+      id: 'scout',
+      model: 'faux/fast',
+      thinkingLevel: 'low',
+    })
+    const state = (await host.invokeAction(TIERS_PLUGIN_ID, 'list', {})) as { tiers: Array<{ id: string }> }
+    assert.equal(state.tiers.some((t) => t.id === 'scout'), true, 'mutation updates cached state immediately')
+  } finally {
+    await host.dispose().catch(() => {})
+    await cleanupDir(dataDir)
   }
 })

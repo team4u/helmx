@@ -74,8 +74,9 @@ class FakeClock {
       this.current = due.at
       due.cleared = true
       due.fn()
-      await Promise.resolve()
-      await Promise.resolve()
+      for (let i = 0; i < 8; i += 1) {
+        await Promise.resolve()
+      }
     }
     this.current = target
   }
@@ -624,10 +625,10 @@ test('skip-to-future 落盘失败：异常后仍重排（不停摆），下个�
   assert.ok(h.events.some((e) => e.type === 'notification'), '落盘失败必须显式通知')
   assert.equal(h.dispatched.length, 0)
   assert.equal(h.clock.activeTimers(), 1, '落盘失败后必须重排（job 不得停摆）')
-  // doc.set 先于 flush 生效（内存镜像不因持久化失败回滚，与 claim 路径同语义）
-  assert.equal((await soleJob(h)).nextRunAt, T10, '镜像已跳至未来')
+  // flush 抛错时回滚内存 doc.set(previous)，防止未落盘变更被并发写入捎带持久化；退避到期后自动重跑跳过
+  assert.equal((await soleJob(h)).nextRunAt, T0 - 5 * MIN, '落盘失败时内存镜像回滚至 previous')
 
-  await h.clock.advance(5 * MIN) // 到 T10 时点正常投递（flush 已恢复）
+  await h.clock.advance(5 * MIN) // T0+6m 退避重试成功跳至 T10，随后 T10 正常投递
   await h.runtime.settle()
   assert.equal(h.dispatched.length, 1)
   assert.equal(h.dispatched[0]!.envelope.id, `cron:s2:${T10}`)
@@ -664,11 +665,8 @@ test('投递失败且 lastError 落盘失败：仍通知原始失败并重排，
   assert.ok(h.events.some((e) => e.type === 'notification'), '投递失败必须通知（不被落盘失败掩盖）')
   assert.equal(h.clock.activeTimers(), 1, '双重失败后仍重排')
   const job = await soleJob(h)
-  // doc.set 先于 flush：内存镜像已写 lastError（持久化失败已另行如实记录，不伪装成功）
-  assert.ok(
-    typeof job.lastError === 'string' && (job.lastError as string).includes('downstream broken'),
-    '内存镜像如实记录失败',
-  )
+  // 第 2 次 flush 失败回滚未持久化的 lastError 写入，但第 1 次已落盘的 claim（nextRunAt=T10）完整保留
+  assert.equal(job.lastError, undefined, '未落盘的 lastError 回滚以保持与持久层一致')
   assert.ok(
     stderr.some((line) => line.includes('lastError flush also failed')),
     '持久化失败必须显式记录',
@@ -927,4 +925,69 @@ test('慢任务防重入：前一次自动化运行仍在 working/blocked 时跳
   const recoveredJob = await soleJob(h)
   assert.equal(recoveredJob.lastSkippedAt, undefined)
   assert.equal(recoveredJob.lastSkipReason, undefined)
+})
+
+test('落盘失败防 0ms 热循环与并发写串行回滚：claim / overlap-skip 落盘失败按 60s 退避且绝不被并发任务 flush 捎带提交', { timeout: 60_000 }, async () => {
+  const h = track(makeHarness(T0))
+  await ready(h)
+  await h.host.invokeAction('builtin:triggers', 'cron_create', {
+    id: 'job-a',
+    schedule: '*/5 * * * *',
+    text: 'a',
+    catchUp: true,
+  })
+  await h.host.invokeAction('builtin:triggers', 'cron_create', {
+    id: 'job-b',
+    schedule: '*/5 * * * *',
+    text: 'b',
+    catchUp: true,
+  })
+
+  // 1) job-a 的 claim flush 失败，紧接着 job-b 的 claim flush 成功：
+  // 串行写队列 + previous 回滚保证 job-a 未投递的 claim 绝不被 job-b 的 flush 捎带落盘！
+  let tickFlushes = 0
+  h.flushImpl = async () => {
+    tickFlushes += 1
+    if (tickFlushes === 1) throw new HelmxError('store_flush_failed', 'job-a claim failed', 500)
+  }
+  await h.clock.advance(5 * MIN) // T0_5: job-a fails flush, job-b succeeds flush
+  await h.runtime.settle()
+
+  assert.equal(tickFlushes, 2, '若存在 0ms 热循环，advance(5 * MIN) 内会在 T0_5 无限重试；退避下仅触发 a、b 各一次')
+  assert.deepEqual(
+    h.dispatched.map((d) => d.envelope.id),
+    [`cron:job-b:${T0_5}`],
+    '仅 job-b 成功投递',
+  )
+  const jobsAfterRace = await listJobs(h)
+  const jobA = jobsAfterRace.find((j) => j.id === 'job-a')!
+  const jobB = jobsAfterRace.find((j) => j.id === 'job-b')!
+  assert.equal(jobA.lastRunAt, undefined, 'job-a 失败的 claim 已回滚，绝不被 job-b 捎带提交')
+  assert.equal(jobA.nextRunAt, T0_5, 'job-a 保持原计划时点供退避后补跑')
+  assert.equal(jobB.lastRunAt, T0_5)
+  assert.equal(jobB.nextRunAt, T10)
+
+  // 推进 30s（未达 60s 退避下限）：不触发重试
+  await h.clock.advance(30_000)
+  await h.runtime.settle()
+  assert.equal(h.dispatched.length, 1)
+
+  // 再推进 30s（到达 T0_5 + 60s 退避点）：job-a 自动补跑成功！
+  await h.clock.advance(30_000)
+  await h.runtime.settle()
+  assert.deepEqual(
+    h.dispatched.map((d) => d.envelope.id),
+    [`cron:job-b:${T0_5}`, `cron:job-a:${T0_5}`],
+  )
+
+  // 2) overlap-skip 落盘失败同样按 60s 退避，绝不在当前毫秒 0ms 死循环
+  h.findActiveRunImpl = (id) => (id === 'job-a' ? ({ id: 99, status: 'working' } as ConversationSummary) : undefined)
+  let overlapFlushes = 0
+  h.flushImpl = async () => {
+    overlapFlushes += 1
+    if (overlapFlushes === 1) throw new HelmxError('store_flush_failed', 'overlap skip flush failed', 500)
+  }
+  await h.clock.advance(4 * MIN) // 到 T10
+  await h.runtime.settle()
+  assert.equal(overlapFlushes, 2, 'overlap-skip flush 失败必须退避，不在 T10 产生 0ms 死循环')
 })

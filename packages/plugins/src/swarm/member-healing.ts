@@ -174,7 +174,7 @@ export function createMemberHealing(ports: MemberHealingPorts) {
       const current = ports.getGroup(validId)
       if (!current) throw groupNotFoundError(validId)
       const parsed = await readAndHealBoardPostsLocked(validId, current.headSeq)
-      ports.setPostsCache(validId, parsed)
+      if (current.status === 'active') ports.setPostsCache(validId, parsed)
       return parsed
     })
   }

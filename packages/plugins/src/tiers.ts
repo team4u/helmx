@@ -73,13 +73,19 @@ export function createTiersPlugin(): PluginDefinition {
       const stateDoc = ctx.doc<TiersStateDoc>(TIERS_STATE_DOC, createEmptyTiersState(), { public: true })
       const tierChangeListeners = new Set<() => Promise<void> | void>()
       let writeChain: Promise<unknown> = Promise.resolve()
+      let cachedState: TiersStateDoc | undefined
 
       const enqueueWrite = <T>(op: () => Promise<T>): Promise<T> => {
         const run = writeChain.then(op, op)
         writeChain = run.then(() => undefined, () => undefined)
         return run
       }
-      const readState = (): TiersStateDoc => sanitizeStateDoc(stateDoc.get())
+      const readState = (): TiersStateDoc => {
+        if (cachedState === undefined) {
+          cachedState = sanitizeStateDoc(stateDoc.get())
+        }
+        return cachedState
+      }
       const autoInjectEnabled = (): boolean => (ctx.getConfig() as TiersPluginConfig).autoInjectCatalog !== false
       const notifyTiersChanged = async (): Promise<void> => {
         for (const listener of [...tierChangeListeners]) {
@@ -87,8 +93,15 @@ export function createTiersPlugin(): PluginDefinition {
         }
       }
       const persist = async (next: TiersStateDoc, notifyTiers = true): Promise<void> => {
-        stateDoc.set(next)
-        await stateDoc.flush()
+        const sanitized = sanitizeStateDoc(next)
+        stateDoc.set(sanitized)
+        cachedState = sanitized
+        try {
+          await stateDoc.flush()
+        } catch (err) {
+          cachedState = undefined
+          throw err
+        }
         if (notifyTiers) await notifyTiersChanged()
       }
 
@@ -125,11 +138,13 @@ export function createTiersPlugin(): PluginDefinition {
       ctx.service({
         id: 'tiers-runtime',
         async start() {
+          cachedState = sanitizeStateDoc(stateDoc.get())
           await ctx.host.skills.ensureSkill(readTiersSkillAsset())
           if (Object.keys(readState().tiers).length > 0) await notifyTiersChanged()
         },
         async stop() {
           await writeChain
+          cachedState = undefined
         },
         async inUse() {
           if (Object.keys(readState().tiers).length === 0) return []
@@ -277,8 +292,8 @@ export function createTiersPlugin(): PluginDefinition {
 
       const label = { en: 'Model Tiers', 'zh-CN': '模型档位' }
       ctx.ui.sidebarItem({ id: 'tiers-manager', label, icon: 'layers', target: `screen:${TIERS_PLUGIN_ID}/${TIERS_SCREEN_ID}`, order: 16 })
-      ctx.ui.screen({ id: TIERS_SCREEN_ID, label, icon: 'layers', client: { module: 'index.tsx', export: 'TiersManagerScreen' } })
-      ctx.ui.settingsPanel({ id: 'tiers-settings', label, order: 26, client: { module: 'index.tsx', export: 'TiersSettingsPanel' } })
+      ctx.ui.screen({ id: TIERS_SCREEN_ID, label, icon: 'layers', client: { module: 'manager.tsx', export: 'TiersManagerScreen' } })
+      ctx.ui.settingsPanel({ id: 'tiers-settings', label, order: 26, client: { module: 'settings.tsx', export: 'TiersSettingsPanel' } })
     },
   }
 }

@@ -2123,3 +2123,46 @@ test('跨进程并发冷编译共享缓存：自动回收死 PID 残留锁、无
     await rm(scratch, { recursive: true, force: true })
   }
 })
+
+test('mermaid-loader: renderMermaidSvg 串行化并发 mermaid.render 调用且仅在主题变化时调用 initialize', { timeout: 60_000 }, async () => {
+  const { createMermaidLoader: makeLoader, renderMermaidSvg } = await import('../src/mermaid/client/mermaid-loader.js')
+  const initThemes: string[] = []
+  let activeRenders = 0
+  let maxConcurrentRenders = 0
+  const gates = [deferred(), deferred(), deferred()]
+  let callIndex = 0
+
+  const loader = makeLoader(async () => ({
+    default: {
+      initialize(cfg: Record<string, unknown>) {
+        initThemes.push(String(cfg['theme']))
+      },
+      async render(id: string, code: string) {
+        const idx = callIndex++
+        activeRenders += 1
+        maxConcurrentRenders = Math.max(maxConcurrentRenders, activeRenders)
+        await gates[idx]!.promise
+        activeRenders -= 1
+        return { svg: `<svg id="${id}">${code}</svg>` }
+      },
+    } as never,
+  }))
+  loader.reset()
+
+  const p1 = renderMermaidSvg({ id: 'r1', code: 'graph TD; A-->B', theme: 'dark', loader })
+  const p2 = renderMermaidSvg({ id: 'r2', code: 'graph TD; B-->C', theme: 'dark', loader })
+  const p3 = renderMermaidSvg({ id: 'r3', code: 'graph TD; C-->D', theme: 'light', loader })
+
+  await new Promise((r) => setImmediate(r))
+  gates[0]!.resolve()
+  assert.equal(await p1, '<svg id="r1">graph TD; A-->B</svg>')
+  await new Promise((r) => setImmediate(r))
+  gates[1]!.resolve()
+  assert.equal(await p2, '<svg id="r2">graph TD; B-->C</svg>')
+  await new Promise((r) => setImmediate(r))
+  gates[2]!.resolve()
+  assert.equal(await p3, '<svg id="r3">graph TD; C-->D</svg>')
+
+  assert.equal(maxConcurrentRenders, 1, 'mermaid.render 必须严格串行执行，避免全局 DOM/状态互踩')
+  assert.deepEqual(initThemes, ['dark', 'neutral'], '同主题连续渲染不重复 initialize，仅在 dark->light 切换时重初始化')
+})

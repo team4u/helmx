@@ -15,7 +15,7 @@
  * are invoked as plain functions (see SpecNodeView), so hooks are not an
  * option — the locale flows in through the render context.
  */
-import { useEffect, useId, useState, type ReactNode } from 'react'
+import { useEffect, useId, useMemo, useState, type ReactNode } from 'react'
 import { HelmxIcon, Select, Checkbox, Tabs, TabsList, TabsTrigger, PluginSlot, MarkdownText } from '@helmx/plugin-client'
 import type { HelmxLocale, LocalizedText } from '@helmx/plugin-client'
 import { resolveLocalizedText } from '@helmx/plugin-client'
@@ -806,11 +806,13 @@ function TabsImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCont
   )
 }
 
-/** Tab children are raw, unevaluated JSON (a tree-shorthand array); normalize them on the spot before rendering. */
+/** Tab children are raw, unevaluated JSON (a tree-shorthand array); memoize normalization per tab children + locale. */
 function TabChildren({ childrenRaw, ctx }: { childrenRaw: unknown; ctx: SpecRenderContext }) {
-  if (!Array.isArray(childrenRaw)) return null
-  const normalized = normalizeSpec({ component: 'Stack', children: childrenRaw })
-  if (normalized.root === null) return null
+  const normalized = useMemo(
+    () => (Array.isArray(childrenRaw) ? normalizeSpec({ component: 'Stack', children: childrenRaw }, ctx.locale) : null),
+    [childrenRaw, ctx.locale],
+  )
+  if (normalized === null || normalized.root === null) return null
   return <SpecNodeList nodes={normalized.root.children} ctx={ctx} />
 }
 

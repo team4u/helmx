@@ -13,6 +13,7 @@ import {
   act,
   createWorkflowHostHarness,
   importWorkflowClientModule,
+  importWorkflowSurfaces,
   importWorktreeClientModule,
   makeConvSummary,
   mountSharedPluginNamespaces,
@@ -23,7 +24,7 @@ import {
 const e = React.createElement
 
 mountSharedPluginNamespaces({ realHooks: true })
-const mod = await importWorkflowClientModule('index.tsx', undefined, { realHooks: true })
+const mod = await importWorkflowSurfaces(['index.tsx', 'workbench.tsx'], undefined, { realHooks: true })
 const SubagentToolView = mod['SubagentToolView'] as React.ComponentType<Record<string, unknown>>
 const WorkflowToolView = mod['WorkflowToolView'] as React.ComponentType<Record<string, unknown>>
 const WorkflowWorkbenchPanel = mod['WorkflowWorkbenchPanel'] as React.ComponentType<Record<string, unknown>>
@@ -285,7 +286,7 @@ test('工作台顶栏「Resume failed (N)」显隐、防连点、skipped 提示�
 })
 
 test('WorkflowWorkbenchPanel 呈现 runsStatus loading 与 error 状态（不伪装成无任务空态）', { timeout: 60_000 }, async () => {
-  const stubMod = await importWorkflowClientModule('index.tsx', undefined, { realHooks: false, scope: 'status-states' })
+  const stubMod = await importWorkflowClientModule('workbench.tsx', undefined, { realHooks: false, scope: 'status-states' })
   const StubPanel = stubMod['WorkflowWorkbenchPanel'] as React.ComponentType<Record<string, unknown>>
   const parent = makeConvSummary(1)
 

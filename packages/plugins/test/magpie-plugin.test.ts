@@ -1152,3 +1152,103 @@ test('magpie24: status 暴露 modelOwners；onlyIfChanged 轮询无变更跳过�
   }
 })
 
+test('magpie25: onlyIfChanged 目录变化仅请求一次 /v1/models、turn_settled 忽略 resetText 倒计时跳变、错误消息经 redact 脱敏、auto-refresh 跨实例正确移除 visibilitychange 监听', { timeout: 60_000 }, async () => {
+  const secretToken = 'sk-magpie-err-secret-777'
+  const backend: FakeBackend = {
+    models: {
+      data: [{ id: 'group/relay', native_endpoints: [], owned_by: 'opencode-go' }],
+    },
+    quotas: {
+      data: [
+        {
+          provider: 'opencode-go',
+          user: 'u1',
+          windows: [{ label: '5h', remaining_percent: 80, reset_at: Math.floor((Date.now() + 7200_000) / 1000) }],
+        },
+      ],
+    },
+  }
+  const env = await makeEnv({
+    backendAtDefault: backend,
+    hostApi: {
+      redact: (text: string) => text.replaceAll(secretToken, '[REDACTED]'),
+    },
+  })
+  try {
+    await env.host.enable(MAGPIE)
+    await waitFor(() => statusDoc(env).reachable === true && statusDoc(env).quotas.length === 1)
+
+    // 1) onlyIfChanged 检测到新模型时：预拉取目录直接复用，全程仅请求 1 次 /v1/models（绝不二次重复拉取）
+    env.fetchState.calls.length = 0
+    backend.models = {
+      data: [
+        { id: 'group/relay', native_endpoints: [], owned_by: 'opencode-go' },
+        { id: 'auto/new-model', native_endpoints: ['/v1/messages'], owned_by: 'opencode-go' },
+      ],
+    }
+    await env.host.invokeAction(MAGPIE, 'refresh', { onlyIfChanged: true })
+    const modelFetches = env.fetchState.calls.filter((u) => u.includes('/v1/models'))
+    assert.equal(modelFetches.length, 1, `目录变化时 /v1/models 应仅请求 1 次，实际 ${modelFetches.length}`)
+    assert.equal(statusDoc(env).modelCount, 2)
+
+    // 2) turn_settled skipIfUnchanged: 仅 reset_at 引起派生 resetText 变化但核心配额不变时不触发冗余 status 文档写放大
+    let statusWrites = 0
+    const origSet = env.docs.set.bind(env.docs)
+    env.docs.set = (key: string, val: unknown) => {
+      if (key === `${MAGPIE}:status`) statusWrites += 1
+      origSet(key, val)
+    }
+    backend.quotas = {
+      data: [
+        {
+          provider: 'opencode-go',
+          user: 'u1',
+          windows: [{ label: '5h', remaining_percent: 80, reset_at: Math.floor((Date.now() + 3600_000) / 1000) }],
+        },
+      ],
+    }
+    statusWrites = 0
+    env.fetchState.calls.length = 0
+    await env.host.runHook('turn_settled', {
+      conversation: makeConversation(1, 'magpie/group/relay'),
+      inputs: [],
+      outcome: 'completed',
+      settledAt: Date.now(),
+    })
+    await waitFor(() => env.fetchState.calls.some((u) => u.includes('/v1/magpie/quotas')))
+    await new Promise((r) => setTimeout(r, 30))
+    assert.equal(statusWrites, 0, '仅倒计时文本变化但配额实质未变时 skipIfUnchanged 应跳过写盘/广播')
+
+    // 3) 网关与配额错误消息经过 ctx.host.redact 脱敏，绝不泄漏已登记机密
+    backend.failQuotas = `upstream rejected key ${secretToken}`
+    await assert.rejects(() => env.host.invokeAction(MAGPIE, 'quota', {}))
+    assert.equal(JSON.stringify(statusDoc(env)).includes(secretToken), false, 'quotasError 必须脱敏')
+    assert.match(statusDoc(env).quotasError ?? '', /\[REDACTED\]/)
+
+    // 4) auto-refresh.ts 将 visibilitychange 监听器保存在全局共享状态上，卸载后精确移除监听器
+    const { subscribeMagpieAutoRefresh, resetMagpieAutoRefreshForTest } = await import('../src/magpie/client/auto-refresh.js')
+    const added: EventListener[] = []
+    const removed: EventListener[] = []
+    const origDoc = (globalThis as Record<string, unknown>)['document']
+    ;(globalThis as Record<string, unknown>)['document'] = {
+      visibilityState: 'visible',
+      addEventListener: (_ev: string, fn: EventListener) => added.push(fn),
+      removeEventListener: (_ev: string, fn: EventListener) => removed.push(fn),
+    }
+    try {
+      resetMagpieAutoRefreshForTest()
+      const release = subscribeMagpieAutoRefresh({ intervalMs: 60_000, run: async () => {} })
+      assert.equal(added.length, 1)
+      release()
+      assert.equal(removed.length, 1)
+      assert.ok(added[0] === removed[0], 'removeEventListener 必须移除实际注册的同一个监听器引用')
+    } finally {
+      resetMagpieAutoRefreshForTest()
+      if (origDoc === undefined) delete (globalThis as Record<string, unknown>)['document']
+      else (globalThis as Record<string, unknown>)['document'] = origDoc
+    }
+  } finally {
+    await env.close()
+  }
+})
+

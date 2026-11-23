@@ -41,9 +41,11 @@ import {
   normalizeWorkflowArgs,
   redactJournalEntry,
   runWorkflow,
+  WORKFLOW_ACTION_CAP,
   WORKFLOW_AGENT_CAP,
   WORKFLOW_ITEM_CAP,
   WORKFLOW_NESTED_CAP,
+  WORKFLOW_TIMELINE_CAP,
   type JournalReadResult,
   type WorkflowRunResult,
   type WorkflowRuntimeEvent,
@@ -89,6 +91,8 @@ export interface WorkflowServiceOptions {
   host: WorkflowServiceHost
   concurrency?: number
   agentCap?: number
+  actionCap?: number
+  timelineCap?: number
   itemCap?: number
   nestedCap?: number
   redact?: (text: string) => string
@@ -118,12 +122,20 @@ type RecoveryPlanItem =
 export class WorkflowService {
   private readonly host: WorkflowServiceHost
   private readonly redact: (text: string) => string
-  private readonly caps: { concurrency: number; agentCap: number; itemCap: number; nestedCap: number }
+  private readonly caps: {
+    concurrency: number
+    agentCap: number
+    actionCap: number
+    timelineCap: number
+    itemCap: number
+    nestedCap: number
+  }
   private readonly repo: RunRepository
   private readonly library: WorkflowLibrary
   private readonly cancellation: CancellationTracker
   private readonly active = new Map<string, ActiveRun>()
   private readonly settling = new Map<string, ActiveRun>()
+  private readonly pendingPurges = new Set<Promise<void>>()
   private readonly resumingLocks = new Set<string>()
   private readonly autoRecoverOption: boolean | (() => boolean) | undefined
   private readonly deferReconcile: boolean
@@ -153,6 +165,8 @@ export class WorkflowService {
     this.caps = {
       concurrency: validatePositiveInt('concurrency', options.concurrency ?? defaultWorkflowConcurrency()),
       agentCap: validatePositiveInt('agentCap', options.agentCap ?? WORKFLOW_AGENT_CAP),
+      actionCap: validatePositiveInt('actionCap', options.actionCap ?? WORKFLOW_ACTION_CAP),
+      timelineCap: validatePositiveInt('timelineCap', options.timelineCap ?? WORKFLOW_TIMELINE_CAP),
       itemCap: validatePositiveInt('itemCap', options.itemCap ?? WORKFLOW_ITEM_CAP),
       nestedCap: validatePositiveInt('nestedCap', options.nestedCap ?? WORKFLOW_NESTED_CAP),
     }
@@ -323,6 +337,29 @@ export class WorkflowService {
     )
   }
 
+  /** Cascade-purge terminal runs owned by a deleted conversation (preserving live conversations' runs). */
+  async purgeDeletedConversation(conversationId: number): Promise<string[]> {
+    if (this.closed) return []
+    let purgedIds: string[] = []
+    const task = (async () => {
+      await this.cancelRunsUnderConversation(conversationId)
+      const directSettling = [...this.settling.values()]
+        .filter((r) => r.conversationId === conversationId)
+        .map((r) => r.done)
+      if (directSettling.length > 0) await Promise.allSettled(directSettling)
+      if (this.closed) return
+      const excludeIds = new Set<string>([...this.active.keys(), ...this.settling.keys()])
+      purgedIds = await this.repo.purgeConversationTerminalRuns(conversationId, excludeIds)
+    })()
+    this.pendingPurges.add(task)
+    try {
+      await task
+      return purgedIds
+    } finally {
+      this.pendingPurges.delete(task)
+    }
+  }
+
   async suspend(): Promise<void> {
     this.closed = true
     this.releaseRuntimeReady()
@@ -336,6 +373,7 @@ export class WorkflowService {
       if (pending.length === 0) break
       await Promise.all(pending)
     }
+    if (this.pendingPurges.size > 0) await Promise.allSettled([...this.pendingPurges])
     await this.repo.flush()
   }
 
@@ -352,6 +390,7 @@ export class WorkflowService {
       if (pending.length === 0) break
       await Promise.all(pending)
     }
+    if (this.pendingPurges.size > 0) await Promise.allSettled([...this.pendingPurges])
     await this.repo.flush()
   }
 
@@ -497,7 +536,7 @@ export class WorkflowService {
               this.resumabilityContext(),
               { mode: 'failed' },
             ).resumable
-            this.repo.saveDetail(item.header.conversationId, item.detail)
+            await this.repo.saveDetail(item.header.conversationId, item.detail)
             this.repo.saveHeader(item.header)
             changed = true
             if (item.header.notifyParentOnSettle === true && item.header.notifiedAt === undefined) {
@@ -799,7 +838,7 @@ export class WorkflowService {
       const run = this.createActiveRun(header, detail, writer)
       this.active.set(runId, run)
       try {
-        this.repo.saveDetail(conversationId, detail)
+        await this.repo.saveDetail(conversationId, detail)
         this.repo.saveHeader(header)
         await this.repo.flush()
       } catch (error) {
@@ -970,7 +1009,7 @@ export class WorkflowService {
     run.nodesByIndex.set(0, node)
     this.active.set(runId, run)
     try {
-      this.repo.saveDetail(request.parentConversationId, detail)
+      await this.repo.saveDetail(request.parentConversationId, detail)
       this.repo.saveHeader(header)
       await this.repo.flush()
     } catch (error) {
@@ -1077,9 +1116,11 @@ export class WorkflowService {
         ...(spec.agentType !== undefined ? { agentType: spec.agentType } : {}),
         execution: redactedExec,
       }
-      this.repo.saveDetail(run.conversationId, run.detail)
       this.repo.saveHeader(header)
-      void this.repo.flush().catch((e) => process.stderr.write(`workflow ${run.runId}: flush onResolved failed: ${errorMessage(e)}\n`))
+      void this.repo
+        .saveDetail(run.conversationId, run.detail)
+        .then(() => this.repo.flush())
+        .catch((e) => process.stderr.write(`workflow ${run.runId}: flush onResolved failed: ${errorMessage(e)}\n`))
       this.emitEventSafe('workflow.updated', { run: this.liveSummaryOf(run) })
       onResolvedFired = true
       detachParentSignal()
@@ -1288,6 +1329,14 @@ export class WorkflowService {
       parent,
     )
 
+    const appendRunTimeline = (entry: import('../../contracts.js').WorkflowProgressEntry): void => {
+      const cap = this.caps.timelineCap
+      if (run.timeline.length >= cap * 2) {
+        run.timeline.splice(0, run.timeline.length - cap + 1)
+      }
+      run.timeline.push(entry)
+    }
+
     const onEvent = (event: WorkflowRuntimeEvent): void => {
       if (this.closed) return
       let immediate = false
@@ -1296,18 +1345,18 @@ export class WorkflowService {
         run.nodesByIndex.set(Number.isFinite(idx) ? idx : run.nodesByIndex.size, event.node)
         immediate = event.node.status === 'done' || event.node.status === 'failed' || event.node.status === 'aborted'
       } else if (event.type === 'phase') {
-        run.timeline.push({ at: event.at, kind: 'phase', index: event.index, title: event.title })
+        appendRunTimeline({ at: event.at, kind: 'phase', index: event.index, title: event.title })
         immediate = true
       } else {
-        run.timeline.push({ at: event.at, kind: 'log', message: event.message })
-        immediate = true
+        appendRunTimeline({ at: event.at, kind: 'log', message: event.message })
+        immediate = false
       }
 
       const now = Date.now()
       if (now - run.lastPersistAt >= PROGRESS_PERSIST_INTERVAL_MS || immediate) {
         run.lastPersistAt = now
         run.header.nodes = this.orderedNodesOf(run)
-        if (run.timeline.length > 0) run.header.progress = [...run.timeline]
+        if (run.timeline.length > 0) run.header.progress = run.timeline.slice(-this.caps.timelineCap)
         run.header.updatedAt = now
         try {
           this.repo.saveHeader(run.header)
@@ -1577,7 +1626,7 @@ export class WorkflowService {
       run.summary = this.repo.fullSummaryOf(run.header, run.detail)
 
       try {
-        this.repo.saveDetail(run.conversationId, run.detail)
+        await this.repo.saveDetail(run.conversationId, run.detail)
         this.repo.saveHeader(run.header)
         await this.repo.flush()
       } catch (persistError) {
@@ -1696,7 +1745,7 @@ export class WorkflowService {
       ...base,
       ...(run.detail.result !== undefined ? { result: run.detail.result } : {}),
       ...(nodes !== undefined ? { nodes } : {}),
-      ...(run.timeline.length > 0 ? { progress: [...run.timeline] } : {}),
+      ...(run.timeline.length > 0 ? { progress: run.timeline.slice(-this.caps.timelineCap) } : {}),
     }
   }
 
