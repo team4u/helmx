@@ -15,6 +15,7 @@ import { test } from 'node:test'
 import {
   CORE_CLI_COMMAND_PATHS,
   HelmxError,
+  PLUGIN_CLIENT_SHARED_EXPORTS,
   PREBUILT_CLIENT_MANIFEST_VERSION,
   assertPrebuiltChunkName,
   assertPrebuiltClientManifest,
@@ -101,12 +102,17 @@ test('PluginSummary.managed is an additive optional field (type guards and struc
   assert.equal(legacy.managed, undefined)
 })
 
-test('CORE_CLI_COMMAND_PATHS includes plugins install/update/remove/build/manifest without duplicates', { timeout: 60_000 }, () => {
+test('CORE_CLI_COMMAND_PATHS includes plugins install/update/remove/build/manifest/types without duplicates', { timeout: 60_000 }, () => {
   const paths = [...CORE_CLI_COMMAND_PATHS]
-  for (const cmd of ['plugins manifest', 'plugins build', 'plugins install', 'plugins update', 'plugins remove']) {
+  for (const cmd of ['plugins manifest', 'plugins types', 'plugins build', 'plugins install', 'plugins update', 'plugins remove']) {
     assert.ok(paths.includes(cmd), `should include ${cmd}`)
   }
   assert.equal(new Set(paths).size, paths.length, 'command paths must not repeat')
+  const sharedExports = [...PLUGIN_CLIENT_SHARED_EXPORTS]
+  assert.ok(sharedExports.includes('useHostModels'))
+  assert.ok(sharedExports.includes('useHostNodes'))
+  assert.ok(sharedExports.includes('useHostProfiles'))
+  assert.equal(new Set(sharedExports).size, sharedExports.length, 'PLUGIN_CLIENT_SHARED_EXPORTS must not repeat')
 })
 
 test('PrebuiltClientManifest validation and chunk path helpers enforce integrity and path containment', { timeout: 60_000 }, () => {

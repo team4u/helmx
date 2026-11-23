@@ -451,6 +451,24 @@ export const ARTIFACT_READ_META_SCHEMA: JsonSchema = {
   additionalProperties: false,
 }
 
+/**
+ * Single source of truth of foundational kernel tool names installed under `helmx-core`
+ * (`packages/kernel/src/runtime/tool-registry.ts`). Consumed by `PluginHost` /
+ * `CapabilityRegistry` to reject plugin tool registrations that collide with kernel tools
+ * without coupling the plugin host to runtime tool implementations.
+ */
+export const KERNEL_TOOL_NAMES = [
+  'bash',
+  'read',
+  'write',
+  'edit',
+  'read_artifact',
+  'register_artifact',
+  'run_action',
+] as const
+
+export type KernelToolName = (typeof KERNEL_TOOL_NAMES)[number]
+
 /** Shared lookup map from kernel built-in tool name to its declared `presentationMetaSchema`. */
 export const KERNEL_TOOL_PRESENTATION_META_SCHEMAS: Readonly<Record<string, JsonSchema>> = {
   read: READ_TOOL_META_SCHEMA,

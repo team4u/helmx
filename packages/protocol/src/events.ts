@@ -93,6 +93,14 @@ export interface HelmxTransientLiveFrame {
   live: ConversationLive
 }
 
+/**
+ * In-process transient `conversation.live` event envelope dispatched to `ctx.host.onEvent`
+ * listeners. Intentionally excluded from durable `HelmxEventType` / `HelmxEvent`.
+ */
+export interface ConversationLiveEvent extends HelmxTransientLiveFrame {
+  type: 'conversation.live'
+}
+
 export interface AskUpsertEvent {
   type: 'ask.upsert'
   ask: AskSpec
@@ -200,6 +208,41 @@ export type HelmxEvent =
   | ProfileChangedEvent
   | NotificationEvent
   | CustomHelmxEvent
+
+/**
+ * Typed map of built-in host event names to the envelope payloads delivered to
+ * `ctx.host.onEvent` listeners (every durable `HelmxEventType` variant plus transient
+ * `conversation.live`).
+ */
+export interface HostEventMap {
+  'conversation.upsert': ConversationUpsertEvent
+  'conversation.deleted': ConversationDeletedEvent
+  'conversation.entry': ConversationEntryEvent
+  'conversation.live': ConversationLiveEvent
+  'ask.upsert': AskUpsertEvent
+  'ask.resolved': AskResolvedEvent
+  'plugin.changed': PluginChangedEvent
+  'plugin.doc.updated': PluginDocUpdatedEvent
+  'plugin.session_doc.updated': PluginSessionDocUpdatedEvent
+  'models.changed': ModelsChangedEvent
+  'node.changed': NodeChangedEvent
+  'profile.changed': ProfileChangedEvent
+  notification: NotificationEvent
+}
+
+/**
+ * Payload accepted by `ctx.host.emitEvent` for a built-in host event key: accepts either
+ * the full event envelope (`{ type: K, ... }`) or the raw body omitting `type` (matching
+ * kernel boundary validation that unwraps envelopes without double-nesting).
+ */
+export type HostEventEmitPayload<K extends keyof HostEventMap> =
+  | HostEventMap[K]
+  | Omit<HostEventMap[K], 'type'>
+
+type _AssertAllCoreEventsInHostEventMap =
+  Exclude<HelmxEventType, keyof HostEventMap> extends never ? true : never
+const _assertAllCoreEventsInHostEventMap: _AssertAllCoreEventsInHostEventMap = true
+void _assertAllCoreEventsInHostEventMap
 
 /** SSE incremental event frame: `data: JSON.stringify({ seq, event })`. */
 export interface HelmxEventFrame {

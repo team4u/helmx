@@ -4,8 +4,9 @@
  * (the host shares the React runtime; this package does not import React types).
  */
 
-import type { ModelCatalog } from './assets.js'
+import type { ModelCatalog, Profile } from './assets.js'
 import type { ConversationAttachmentRef, ConversationEntry, ConversationScope, ConversationSummary, ToolResultTruncation, WhenBusy } from './conversation.js'
+import type { NodeInfo } from './env-rpc.js'
 import type { HelmxLocale, LocaleTranslator, LocalizedText } from './locale.js'
 import type { PluginSummary } from './plugin-dto.js'
 
@@ -597,6 +598,13 @@ export interface PluginClientContext {
   pluginId: string
   /** Defaults to addressing the current plugin and slot conversation; can explicitly cross plugins. */
   callAction(actionId: string, input?: unknown, options?: CallActionOptions): Promise<unknown>
+  /**
+   * Authenticated HTTP fetch scoped to `/api/plugins/<encodeURIComponent(pluginId)>/routes<path>`.
+   * The host injects the Bearer auth token without exposing it to plugin code.
+   * `path` must start with `/` and stay strictly inside this plugin's route namespace
+   * (traversal or attempts to escape the namespace are explicitly rejected).
+   */
+  fetchRoute(path: string, init?: RequestInit): Promise<Response>
   /** Submits input to the target or current conversation; explicitly rejects when there is none. */
   submitInput(text: string, options?: { conversationId?: number; whenBusy?: WhenBusy }): Promise<void>
   /** Opens a target on the main screen (conversation:<id> / screen:<pluginId>/<screenId> etc.). */
@@ -644,8 +652,9 @@ export interface PluginClientContext {
  *   usePluginDocState / usePluginSessionDoc / usePluginSessionDocState /
  *   useToolActivity / useTimelineToolCalls / useConversations / useConversation /
  *   usePlugins / useScreenParams (screen-local params scope provided by the host ScreenHost) /
- *   usePluginConfig / useHostModels (stable-handle read of the host model catalog slice; isolation
- *   contract pinned by @helmx/plugin-client tests — unrelated host port revisions must not re-render consumers);
+ *   usePluginConfig / useHostModels / useHostNodes / useHostProfiles (stable-handle reads of host
+ *   read-only catalog slices; isolation contract pinned by @helmx/plugin-client tests — unrelated
+ *   host port revisions must not re-render consumers);
  * - ModelPickerControl: shared model + thinking-level picker (reads the catalog via the useHostModels
  *   host port slice; apply/reset callbacks keep the PI follow-default semantics);
  * - model formatting pure functions: formatModelShortName / resolveEffectiveThinkingLevel;
@@ -743,6 +752,26 @@ export interface HostModelsSlice extends Omit<ModelCatalog, 'models' | 'thinking
   models: ReadonlyArray<HostModelEntry>
 }
 
+/**
+ * useHostNodes(): reactive read-only compute node list slice (`GET /api/nodes` /
+ * SSE `snapshot.nodes` + `node.changed`; never exposes node access tokens).
+ * Preserves the same honest three-state semantics as `HostModelsSlice`:
+ * `undefined` = capability is not injected or initial load has not completed
+ * (render unknown/loading and disable selection, never fabricate an empty list);
+ * `[]` = loaded and genuinely empty.
+ */
+export type HostNodesSlice = ReadonlyArray<NodeInfo>
+
+/**
+ * useHostProfiles(): reactive read-only Profile catalog slice (`GET /api/profiles` /
+ * SSE `profile.changed`; excludes `SYSTEM.md` bodies).
+ * Preserves the same honest three-state semantics as `HostModelsSlice`:
+ * `undefined` = capability is not injected or initial load has not completed
+ * (render unknown/loading and disable selection, never fabricate an empty list);
+ * `[]` = loaded and genuinely empty.
+ */
+export type HostProfilesSlice = ReadonlyArray<Profile>
+
 /** Execution status of a timeline tool call summary. */
 export type TimelineToolCallStatus = 'running' | 'done' | 'error'
 
@@ -812,6 +841,8 @@ export const PLUGIN_CLIENT_SHARED_EXPORTS = [
   'usePluginConfig',
   'useScreenParams',
   'useHostModels',
+  'useHostNodes',
+  'useHostProfiles',
   'useSharedNowMs',
   'usePluginAction',
   'ModelPickerControl',

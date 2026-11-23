@@ -13,7 +13,7 @@
 本地命令（不访问 Hub），三档模板：
 
 ```bash
-helmx plugins init my-plugin                          # 生成到 ~/.helmx/plugins/my-plugin/（默认 full）
+helmx plugins init my-plugin                          # 生成到 ~/.helmx/installed-plugins/my-plugin/（默认 full）
 helmx plugins init my-plugin --dir ~/code             # 生成到 ~/code/my-plugin/
 helmx plugins init my-plugin --template minimal       # 仅后端探针动作（无前端文件）
 helmx plugins init my-app --template app              # 全栈微应用骨架（带 ctx.ui.screen，可直接 doctor 与 install）
@@ -23,10 +23,10 @@ full 模板产出 `plugin.json`（含 `clientRoot: "./client"`）、`index.ts`�
 
 ### ② 插件目录与清单
 
-外部插件统一存放在 `~/.helmx/plugins/<pluginId>/`（`HELMX_DATA_DIR` 覆盖时随数据目录）。推荐结构：
+外部插件代码统一存放在 `~/.helmx/installed-plugins/<pluginId>/`（`HELMX_DATA_DIR` 覆盖时随数据目录；与运行期数据目录 `ctx.dataDir = <dataDir>/plugins/<id>/` 物理分离）。推荐结构：
 
 ```text
-~/.helmx/plugins/sample-plugin/
+~/.helmx/installed-plugins/sample-plugin/
 ├── plugin.json        # 插件清单
 ├── index.ts           # 后端入口（export default PluginDefinition）
 ├── tsconfig.json      # 本地类型检查（编辑器与 CI 用，运行时不依赖）
