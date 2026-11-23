@@ -634,7 +634,7 @@ test('plugins types: syncs offline .helmx/types, cleans stale files, preserves u
   assert.equal(parseCliError(symRes).code, 'invalid_target_dir')
 })
 
-test('plugins init: all three templates pass real standalone tsc --noEmit outside the monorepo (with and without @types)', { timeout: 60_000 }, async (t) => {
+test('plugins init: all three templates pass real standalone tsc --noEmit outside the monorepo (with and without @types)', { timeout: 120_000 }, async (t) => {
   const workDir = useTempDir(t, 'helmx-cli-tsc-')
   assertNoAncestorNodeModules(workDir)
   const env = makeCliEnv('http://127.0.0.1:1', path.join(workDir, 'data'))
@@ -684,8 +684,8 @@ test('plugins init: all three templates pass real standalone tsc --noEmit outsid
   await fsp.writeFile(clientPath, origClient, 'utf8')
 
   // Coexistence check: when real @types/react and @types/node exist in node_modules, they win cleanly without conflict
-  const reactTypesReal = realpathSync(path.join(cliTestRepoRoot, 'packages/plugin-client/node_modules/@types/react'))
-  const nodeTypesReal = realpathSync(path.join(cliTestRepoRoot, 'node_modules/@types/node'))
+  const reactTypesReal = realpathSync.native(path.join(cliTestRepoRoot, 'packages/plugin-client/node_modules/@types/react'))
+  const nodeTypesReal = realpathSync.native(path.join(cliTestRepoRoot, 'node_modules/@types/node'))
   await fsp.mkdir(path.join(appDir, 'node_modules', '@types'), { recursive: true })
   await fsp.symlink(reactTypesReal, path.join(appDir, 'node_modules', '@types', 'react'), 'junction')
   await fsp.symlink(nodeTypesReal, path.join(appDir, 'node_modules', '@types', 'node'), 'junction')

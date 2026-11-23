@@ -19,14 +19,22 @@ type ServiceAction = (typeof ACTIONS)[number]
 export function resolveCliServiceEntry(selfPath: string = fileURLToPath(import.meta.url)): string {
   const self = path.resolve(selfPath)
   // Single-file npm deliverable (`.../index.js`) or already `dist/index.js`.
-  if (path.basename(self) === 'index.js') return self
+  // Use `realpathSync.native` so Windows 8.3 short paths (e.g. RUNNER~1) and symlinks expand
+  // to the same OS-canonical path as `fs.promises.realpath` when the file exists on disk.
+  if (path.basename(self) === 'index.js') {
+    try {
+      return realpathSync.native(self)
+    } catch {
+      return self
+    }
+  }
   const candidates = [
     path.resolve(path.dirname(self), '..', 'index.js'),
     path.resolve(path.dirname(self), '..', '..', 'dist', 'index.js'),
   ]
   for (const candidate of candidates) {
     try {
-      return realpathSync(candidate)
+      return realpathSync.native(candidate)
     } catch {
       // Try next compiled artifact candidate.
     }

@@ -82,7 +82,15 @@ test('resolveCliServiceEntry resolves bundled/dist index.js and rejects unbuilt 
   const distIndex = path.join(distDir, 'index.js')
   await fsp.writeFile(distIndex, '// built\n', 'utf8')
   const distService = path.join(distDir, 'commands', 'service.js')
-  assert.equal(resolveCliServiceEntry(distService), await fsp.realpath(distIndex))
+  const canonicalDistIndex = await fsp.realpath(distIndex)
+  assert.equal(resolveCliServiceEntry(distService), canonicalDistIndex)
+
+  // Aliased/symlinked parent directory (reproduces Windows 8.3 short paths / junctions and macOS /var):
+  // both `dist/commands/service.js` and an existing `index.js` must resolve to the same native realpath.
+  const aliasPkg = path.join(dir, 'pkg-alias')
+  await fsp.symlink(path.join(dir, 'pkg'), aliasPkg, 'junction')
+  assert.equal(resolveCliServiceEntry(path.join(aliasPkg, 'dist', 'commands', 'service.js')), canonicalDistIndex)
+  assert.equal(resolveCliServiceEntry(path.join(aliasPkg, 'dist', 'index.js')), canonicalDistIndex)
 
   // Unbuilt source layout (`src/commands/service.ts` without `dist/index.js`) throws `missing_build`.
   const unbuiltService = path.join(dir, 'unbuilt', 'src', 'commands', 'service.ts')

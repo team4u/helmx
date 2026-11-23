@@ -558,6 +558,42 @@ export function collectAllTestFiles(repoRoot) {
   return files.sort();
 }
 
+/** Convert OS path separators to POSIX forward slashes for git/regex path matching. */
+export function toPosixPath(filePath) {
+  return filePath.replace(/\\/g, '/');
+}
+
+/**
+ * Resolve an explicit `--files` path against `cwd` and return its POSIX repo-relative path,
+ * or `null` if it resolves to the repo root itself or outside `repoRoot`.
+ */
+export function resolveInRepoRelativePath(repoRoot, filePath, cwd = repoRoot, pathImpl = path) {
+  const abs = pathImpl.resolve(cwd, filePath);
+  const rawRel = pathImpl.relative(repoRoot, abs);
+  const rel = toPosixPath(rawRel);
+  if (rel === '' || rel === '..' || rel.startsWith('../') || pathImpl.isAbsolute(rawRel)) {
+    return null;
+  }
+  return rel;
+}
+
+/** Extract the package directory name from a repo-relative test path (POSIX or Windows separators). */
+export function packageOfTestPath(rel) {
+  const match = /^packages\/([^/]+)\/test(?:\/|$)/.exec(toPosixPath(rel));
+  return match?.[1] ?? null;
+}
+
+/** Whether a relative import specifier from a test file reaches another package's `test/helpers`. */
+export function isCrossPackageTestHelperImport(rel, specifier) {
+  if (!specifier.startsWith('.')) return false;
+  const posixRel = toPosixPath(rel);
+  const fromPackage = packageOfTestPath(posixRel);
+  if (!fromPackage) return false;
+  const resolved = path.posix.normalize(path.posix.join(path.posix.dirname(posixRel), toPosixPath(specifier)));
+  const match = /^packages\/([^/]+)\/test\/helpers(?:\/|\.|$)/.exec(resolved);
+  return match !== null && match[1] !== fromPackage;
+}
+
 /** Whether a repo-root-relative path counts as a test file for this tool. */
 export function isTestFilePath(file) {
   return TEST_SUFFIXES.some((s) => file.endsWith(s));

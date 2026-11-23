@@ -61,7 +61,7 @@ test('src/index.ts stays purely isomorphic: zero node:* runtime or type imports'
 })
 
 test('check-test-hygiene rejects newly added subtests and cross-package test helpers', { timeout: 60_000 }, () => {
-  const fixtureDir = join(REPO_ROOT, 'packages', 'web', 'test', '.helmx-hygiene-gate-fixture')
+  const fixtureDir = join(REPO_ROOT, 'packages', 'web', 'test', `.helmx-hygiene-gate-fixture-${process.pid}`)
   mkdirSync(fixtureDir, { recursive: true })
   const fixture = join(fixtureDir, 'new.test.ts')
   try {
