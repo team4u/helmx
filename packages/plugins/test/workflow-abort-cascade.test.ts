@@ -22,7 +22,7 @@ import { join } from 'node:path'
 import { HelmxError, type AgentSpawnRequest, type ConversationSummary } from '@helmx/protocol'
 import { parseWorkflowSpawnMeta } from '../src/contracts.js'
 import type { AgentNamespacedMeta } from '@helmx/protocol'
-import { WorkflowService, type WorkflowServiceHost, type WorkflowStateStore } from '../src/workflow/engine/service.js'
+import { createMemoryKvStore, WorkflowService, type WorkflowServiceHost } from '../src/workflow/runs/index.js'
 
 const timeout = { timeout: 60_000 } as const
 
@@ -30,16 +30,8 @@ const timeout = { timeout: 60_000 } as const
 // 确定性 fixtures
 // ---------------------------------------------------------------------------
 
-function makeStateStore(): WorkflowStateStore {
-  const map = new Map<string, unknown>()
-  return {
-    get<T>(key: string, initial: T): T {
-      return (map.get(key) as T | undefined) ?? initial
-    },
-    set<T>(key: string, value: T): void {
-      map.set(key, JSON.parse(JSON.stringify(value)))
-    },
-  }
+function makeStateStore() {
+  return createMemoryKvStore()
 }
 
 function conv(id: number, parent?: number): ConversationSummary {
@@ -190,7 +182,7 @@ describe('WorkflowService 级联取消', () => {
     host.conversations.set(11, conv(11, 1))
     host.conversations.set(21, conv(21, 11))
     host.conversations.set(12, conv(12, 1))
-    const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
+    const service = new WorkflowService({ dataDir, host, kv: makeStateStore() })
 
     host.plan = { executionConversationId: 11 }
     const r1 = await service.startBackgroundAgent({ parentConversationId: 1, prompt: '一级' })
@@ -224,7 +216,7 @@ describe('WorkflowService 级联取消', () => {
     host.conversations.set(11, conv(11, 1))
     host.conversations.set(21, conv(21, 11))
     host.conversations.set(99, conv(99))
-    const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
+    const service = new WorkflowService({ dataDir, host, kv: makeStateStore() })
 
     host.plan = { executionConversationId: 11 }
     const r1 = await service.startBackgroundAgent({ parentConversationId: 1, prompt: 'a' })
@@ -249,7 +241,7 @@ describe('WorkflowService 级联取消', () => {
     const host = makeHost()
     host.conversations.set(1, conv(1))
     host.conversations.set(11, conv(11, 1))
-    const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
+    const service = new WorkflowService({ dataDir, host, kv: makeStateStore() })
 
     host.plan = { executionConversationId: 11 }
     const r1 = await service.startBackgroundAgent({ parentConversationId: 1, prompt: '挂起' })
@@ -287,7 +279,7 @@ describe('WorkflowService 级联取消', () => {
     host.conversations.set(1, conv(1))
     host.conversations.set(11, conv(11, 1))
     host.conversations.set(21, conv(21, 11))
-    const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
+    const service = new WorkflowService({ dataDir, host, kv: makeStateStore() })
 
     host.plan = { executionConversationId: 11 }
     const r1 = await service.startBackgroundAgent({ parentConversationId: 1, prompt: 'a' })
@@ -309,7 +301,7 @@ describe('WorkflowService 级联取消', () => {
     const host = makeHost()
     host.conversations.set(1, conv(1))
     host.conversations.set(11, conv(11, 1))
-    const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
+    const service = new WorkflowService({ dataDir, host, kv: makeStateStore() })
 
     // spawn 挂起且不回 onResolved；abort 信号触发时才回传执行元数据并 reject。
     //（启动地平线尚未到达：startBackgroundAgent 本身阻塞在等 onResolved——
@@ -337,7 +329,7 @@ describe('WorkflowService 级联取消', () => {
     const host = makeHost()
     host.conversations.set(1, conv(1))
     host.conversations.set(31, conv(31, 1))
-    const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
+    const service = new WorkflowService({ dataDir, host, kv: makeStateStore() })
 
     // agent 子会话挂起（不回结果）：引擎在 abort 时终止 worker 并守卫中止子会话。
     host.plan = { executionConversationId: 31 }
@@ -361,7 +353,7 @@ describe('WorkflowService 级联取消', () => {
     const host = makeHost()
     host.conversations.set(1, conv(1))
     host.conversations.set(51, conv(51, 1))
-    const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
+    const service = new WorkflowService({ dataDir, host, kv: makeStateStore() })
 
     // 首个 agent 立即完成；resume 续接携带显式 maxSubagentDepth。
     let call = 0

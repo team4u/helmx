@@ -33,24 +33,15 @@ import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/provid
 import type { AgentSpawnRequest } from '@helmx/protocol'
 import { parseWorkflowSpawnMeta } from '../src/contracts.js'
 import { KernelRuntime } from '../../kernel/src/runtime/index.js'
-import { WorkflowService, type WorkflowServiceHost, type WorkflowStateStore } from '../src/workflow/engine/service.js'
+import { createMemoryKvStore, WorkflowService, type WorkflowServiceHost } from '../src/workflow/runs/index.js'
 import { makeFauxProvider, type FauxProviderHandle } from './helpers/plugin-test-env.js'
 
 const timeout = { timeout: 60_000 } as const
 
 const META = (name: string) => `export const meta = { name: "${name}", description: "adapter regression" }\n`
 
-/** 状态 store fake（与 workflow.test.ts 同构的进程内 Map）。 */
-function makeStateStore(): WorkflowStateStore {
-  const map = new Map<string, unknown>()
-  return {
-    get<T>(key: string, initial: T): T {
-      return (map.get(key) as T | undefined) ?? initial
-    },
-    set<T>(key: string, value: T): void {
-      map.set(key, value)
-    },
-  }
+function makeStateStore() {
+  return createMemoryKvStore()
 }
 
 // ---------------------------------------------------------------------------
@@ -136,7 +127,7 @@ describe('WorkflowService 生产适配：spawn/resume 端口参数面', () => {
 
   it('首调不带 cwd 注入，resume 原样携带 schema+gate 且不传 agentType/cwd/isolation', timeout, async () => {
     const host = makeExternalHost({ resumeReportsGate: true })
-    const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
+    const service = new WorkflowService({ dataDir, host, kv: makeStateStore() })
     try {
       const script =
         META('adapter-params') +
@@ -188,7 +179,7 @@ describe('WorkflowService 生产适配：spawn/resume 端口参数面', () => {
 
   it('外部 resume 不回报 gate：显式 gate_result_missing 失败，绝不本机补跑', timeout, async () => {
     const host = makeExternalHost({ resumeReportsGate: false })
-    const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
+    const service = new WorkflowService({ dataDir, host, kv: makeStateStore() })
     try {
       const script =
         META('adapter-gate-missing') +
@@ -219,7 +210,7 @@ describe('WorkflowService 生产适配：spawn/resume 端口参数面', () => {
     // invokeSpawn 出参面不携带 cwd（herdr resolveCwd 的 request.cwd 优先级
     // 最高，注入即破坏 Profile 路由）。真链由 builtin:herdr 侧覆盖。
     const host = makeExternalHost({ resumeReportsGate: false })
-    const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
+    const service = new WorkflowService({ dataDir, host, kv: makeStateStore() })
     try {
       const script = META('adapter-herdr-route') + 'return await agent("herdr 路由", { agentType: "herdr:agy", label: "h" })'
       const started = await service.run({ script, conversationId: 1 })
@@ -299,7 +290,7 @@ describe('真 KernelRuntime：cwd 继承与 resume 目录保真', () => {
       const parent = await env.kernel.createConversation({ title: '工作会话', cwd: parentDir })
       const service = new WorkflowService({
         dataDir: dir,
-        state: env.kernel.documentStore,
+        kv: makeStateStore(),
         host: {
           spawnAgent: (request) => env.kernel.spawnAgent(request),
           invokeAction: async (_p, actionId) => {
@@ -379,7 +370,7 @@ describe('真 KernelRuntime：cwd 继承与 resume 目录保真', () => {
 
       const service = new WorkflowService({
         dataDir: dir,
-        state: env.kernel.documentStore,
+        kv: makeStateStore(),
         host: {
           // 包装端口：捕获 onResolved 回报的 conversationId 供 action 迁移。
           spawnAgent: (request) =>

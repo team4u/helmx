@@ -22,20 +22,12 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { HelmxError } from '@helmx/protocol'
-import { WorkflowService, type WorkflowServiceHost, type WorkflowStateStore } from '../src/workflow/engine/service.js'
+import { createMemoryKvStore, WorkflowService, type WorkflowServiceHost } from '../src/workflow/runs/index.js'
 
 const timeout = { timeout: 60_000 } as const
 
-function makeStateStore(seed: Record<string, unknown> = {}): WorkflowStateStore {
-  const map = new Map<string, unknown>(Object.entries(seed))
-  return {
-    get<T>(key: string, initial: T): T {
-      return (map.get(key) as T | undefined) ?? initial
-    },
-    set<T>(key: string, value: T): void {
-      map.set(key, value)
-    },
-  }
+function makeStateStore() {
+  return createMemoryKvStore()
 }
 
 const host: WorkflowServiceHost = {
@@ -89,7 +81,7 @@ function assertHelmxError(fn: () => unknown, code: string, messageRe?: RegExp): 
 describe('WorkflowService.save：script 源', { timeout: 60_000 }, () => {
   it('新建：写入文件、返回真实摘要（created: true + 真实文件事实）', timeout, async () => {
     const dataDir = join(root, 'save-new')
-    const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
+    const service = new WorkflowService({ dataDir, host, kv: makeStateStore() })
     try {
       const result = service.save({ script: GOOD_SCRIPT })
       assert.equal(result.created, true)
@@ -109,7 +101,7 @@ describe('WorkflowService.save：script 源', { timeout: 60_000 }, () => {
 
   it('重复保存默认拒绝（409 workflow_already_exists）；overwrite: true 覆盖', timeout, async () => {
     const dataDir = join(root, 'save-overwrite')
-    const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
+    const service = new WorkflowService({ dataDir, host, kv: makeStateStore() })
     try {
       service.save({ script: GOOD_SCRIPT })
       assertHelmxError(
@@ -129,7 +121,7 @@ describe('WorkflowService.save：script 源', { timeout: 60_000 }, () => {
 
   it('重复创建被 409 拒绝且无临时文件泄漏（link 原子占位 + tmp 清理）', timeout, async () => {
     const dataDir = join(root, 'save-race')
-    const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
+    const service = new WorkflowService({ dataDir, host, kv: makeStateStore() })
     try {
       const first = service.save({ script: GOOD_SCRIPT })
       assert.equal(first.created, true)
@@ -148,7 +140,7 @@ describe('WorkflowService.save：script 源', { timeout: 60_000 }, () => {
 
   it('非法 meta / 语法错误脚本显式拒绝，不写文件', timeout, async () => {
     const dataDir = join(root, 'save-invalid')
-    const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
+    const service = new WorkflowService({ dataDir, host, kv: makeStateStore() })
     try {
       // 缺 meta 声明。
       assertHelmxError(() => service.save({ script: 'return 1' }), 'workflow_script_invalid', /meta/)
@@ -171,7 +163,7 @@ describe('WorkflowService.save：script 源', { timeout: 60_000 }, () => {
 
   it('显式 name 与 meta.name 不一致拒绝；缺省 name 用 meta.name', timeout, async () => {
     const dataDir = join(root, 'save-name')
-    const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
+    const service = new WorkflowService({ dataDir, host, kv: makeStateStore() })
     try {
       assertHelmxError(
         () => service.save({ script: GOOD_SCRIPT, name: 'other' }),
@@ -187,7 +179,7 @@ describe('WorkflowService.save：script 源', { timeout: 60_000 }, () => {
 
   it('名称安全：路径穿越 / 非法字符拒绝；空 script 拒绝', timeout, async () => {
     const dataDir = join(root, 'save-safe')
-    const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
+    const service = new WorkflowService({ dataDir, host, kv: makeStateStore() })
     try {
       assertHelmxError(() => service.save({ script: GOOD_SCRIPT, name: '../escape' }), 'validation_error', /invalid/)
       assertHelmxError(() => service.save({ script: GOOD_SCRIPT, name: 'a/b' }), 'validation_error')
@@ -205,7 +197,7 @@ describe('WorkflowService.save：script 源', { timeout: 60_000 }, () => {
     const outside = join(root, 'outside.js')
     writeFileSync(outside, GOOD_SCRIPT, 'utf-8')
     symlinkSync(outside, join(workflows, 'hijack.js'))
-    const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
+    const service = new WorkflowService({ dataDir, host, kv: makeStateStore() })
     try {
       // 既有越界 symlink：名称与 meta 一致时仍被 realpath 校验拒绝（不读不写）。
       const hijackScript = 'export const meta = { name: "hijack", description: "d" }\nreturn 1'
@@ -224,7 +216,7 @@ describe('WorkflowService.get / delete / list', { timeout: 60_000 }, () => {
     const dataDir = join(root, 'get')
     mkdirSync(join(dataDir, 'workflows'), { recursive: true })
     writeFileSync(join(dataDir, 'workflows', 'release.js'), GOOD_SCRIPT, 'utf-8')
-    const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
+    const service = new WorkflowService({ dataDir, host, kv: makeStateStore() })
     try {
       const detail = service.get('release')
       assert.equal(detail.script, GOOD_SCRIPT)
@@ -248,7 +240,7 @@ describe('WorkflowService.get / delete / list', { timeout: 60_000 }, () => {
     const outside = join(root, 'delete-outside.js')
     writeFileSync(outside, GOOD_SCRIPT, 'utf-8')
     symlinkSync(outside, join(workflows, 'linked.js'))
-    const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
+    const service = new WorkflowService({ dataDir, host, kv: makeStateStore() })
     try {
       const result = service.delete('release')
       assert.equal(result.deleted, true)
@@ -271,7 +263,7 @@ describe('WorkflowService.get / delete / list', { timeout: 60_000 }, () => {
     const workflows = join(dataDir, 'workflows')
     mkdirSync(workflows, { recursive: true })
     writeFileSync(join(workflows, 'a.js'), 'export const meta = { name: "a", description: "da" }\nreturn 1', 'utf-8')
-    const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
+    const service = new WorkflowService({ dataDir, host, kv: makeStateStore() })
     try {
       const items = service.list()
       assert.equal(items.length, 1)

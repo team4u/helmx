@@ -11,20 +11,12 @@ import { after, before, describe, it } from 'node:test'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { WorkflowService, type WorkflowServiceHost, type WorkflowStateStore } from '../src/workflow/engine/service.js'
+import { createMemoryKvStore, WorkflowService, type WorkflowServiceHost } from '../src/workflow/runs/index.js'
 
 const timeout = { timeout: 60_000 } as const
 
-function makeStateStore(): WorkflowStateStore {
-  const map = new Map<string, unknown>()
-  return {
-    get<T>(key: string, initial: T): T {
-      return (map.get(key) as T | undefined) ?? initial
-    },
-    set<T>(key: string, value: T): void {
-      map.set(key, value)
-    },
-  }
+function makeStateStore() {
+  return createMemoryKvStore()
 }
 
 const host: WorkflowServiceHost = {
@@ -78,7 +70,7 @@ describe('WorkflowService.list() 填充 meta 摘要', { timeout: 60_000 }, () =>
       ].join('\n'),
       'utf-8',
     )
-    const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
+    const service = new WorkflowService({ dataDir, host, kv: makeStateStore() })
     try {
       const items = service.list()
       assert.equal(items.length, 1)
@@ -109,7 +101,7 @@ describe('WorkflowService.list() 填充 meta 摘要', { timeout: 60_000 }, () =>
       'export const meta = { name: "minimal", description: "最小声明" }\nreturn 1',
       'utf-8',
     )
-    const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
+    const service = new WorkflowService({ dataDir, host, kv: makeStateStore() })
     try {
       const items = service.list()
       assert.equal(items.length, 1)
@@ -140,7 +132,7 @@ describe('WorkflowService.list() 填充 meta 摘要', { timeout: 60_000 }, () =>
       'export const meta = { name: "healthy", description: "ok" }\nreturn 1',
       'utf-8',
     )
-    const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
+    const service = new WorkflowService({ dataDir, host, kv: makeStateStore() })
     try {
       const items = service.list()
       assert.equal(items.length, 2)
@@ -169,7 +161,7 @@ describe('WorkflowService.list() 填充 meta 摘要', { timeout: 60_000 }, () =>
       'export const meta = { name: "real", description: "d" }\nreturn 1',
       'utf-8',
     )
-    const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
+    const service = new WorkflowService({ dataDir, host, kv: makeStateStore() })
     try {
       const items = service.list()
       assert.equal(items.length, 1)

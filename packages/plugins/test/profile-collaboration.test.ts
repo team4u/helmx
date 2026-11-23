@@ -45,7 +45,7 @@ import {
 } from '../src/profile/catalog.js'
 import { createWorkflowPlugin } from '../src/workflow.js'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
-import { MemoryDocStore, makeConversationSummary } from './helpers/plugin-test-env.js'
+import { MemoryDocStore, MemoryKvStore, makeConversationSummary } from './helpers/plugin-test-env.js'
 
 // ---------------------------------------------------------------------------
 // 测试基建
@@ -186,6 +186,7 @@ async function makeEnv(extraPlugins: PluginDefinition[] = [], withSessionDocs = 
     dataDir,
     host: backend,
     docs: new MemoryDocStore(),
+    kv: new MemoryKvStore(),
     ...(withSessionDocs ? { sessionDocs: new MemorySessionDocStore() } : {}),
   })
   await host.register(createProfilePlugin(), { enabled: true })

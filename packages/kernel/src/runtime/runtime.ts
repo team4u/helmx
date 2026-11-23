@@ -140,6 +140,7 @@ export class KernelRuntime {
     deletePlugin(pluginId: string): void
     flush(): Promise<void>
   }
+  readonly kvStore: ReturnType<typeof createPluginKvStore>
 
   static async open(options: KernelRuntimeOptions = {}): Promise<KernelRuntime> {
     if (options.models !== undefined && options.providers !== undefined) {
@@ -182,6 +183,7 @@ export class KernelRuntime {
     this.store = init.store
     this.hubUrlValue = init.hubUrl ?? `http://127.0.0.1:${process.env['HELMX_PORT'] ?? '3202'}`
     this.documentStore = createGlobalDocumentStore(this.store)
+    this.kvStore = createPluginKvStore(this.store)
 
     // Assemble and wire all internal kernel services
     this.svc = assembleRuntimeServices(this, init, {
@@ -286,7 +288,7 @@ export class KernelRuntime {
       host: createPluginHostBackend(this),
       docs: this.documentStore,
       sessionDocs: createPluginSessionDocStore(this.store),
-      kv: createPluginKvStore(this.store),
+      kv: this.kvStore,
       config: this.svc.pluginConfig,
       buildProvider: this.init.buildProvider,
     })

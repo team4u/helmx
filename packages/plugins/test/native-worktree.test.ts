@@ -60,6 +60,7 @@ import {
   createGitTemplate,
   makeConversationSummary,
   makeFauxModels,
+  MemoryKvStore,
   type FauxProviderHandle,
   type GitTemplate,
 } from './helpers/plugin-test-env.js'
@@ -832,6 +833,7 @@ async function executeCleanupTool(
       listConversationIds: () => [],
       flush: async () => {},
     },
+    kv: new MemoryKvStore(),
   })
   try {
     await host.register(createWorkflowPlugin())
@@ -2543,6 +2545,7 @@ async function openWorkflowPluginHost(options: {
       listConversationIds: () => [],
       flush: async () => {},
     },
+    kv: new MemoryKvStore(),
   })
   // 注册顺序与 @helmx/hub 组合根一致：workflow 先于 worktree（runtime.started
   // 监听器按注册顺序逐个 await）；'worktree-only' 模式验证独立注册。

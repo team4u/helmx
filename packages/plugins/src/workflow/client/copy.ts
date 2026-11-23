@@ -1,493 +1,358 @@
 /**
- * Display copy and visual badge/icon maps for the builtin:workflow client
- * (pure copy table + compact template builders, zero component exports — Fast Refresh friendly).
+ * Localized copy dictionary for builtin:workflow UI surfaces (en / zh-CN).
+ * Zero Emoji; concise engineering language.
  */
-import { DEFAULT_HELMX_LOCALE, resolveLocalizedText, type HelmxLocale, type LocalizedText } from '@helmx/plugin-client'
-import type { WorkflowPhaseSection } from './model-run.ts'
+import {
+  DEFAULT_HELMX_LOCALE,
+  resolveLocalizedText,
+  type HelmxLocale,
+  type LocalizedText,
+} from '@helmx/plugin-client'
 
-const L = (en: string, zh: string): LocalizedText => ({ en, 'zh-CN': zh })
-const t0 = (en: string, zh: string) => (locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string =>
-  resolveLocalizedText(L(en, zh), locale)
-const t1 = <A>(fn: (a: A) => LocalizedText) => (a: A, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string =>
-  resolveLocalizedText(fn(a), locale)
-const t2 = <A, B>(fn: (a: A, b: B) => LocalizedText) => (a: A, b: B, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string =>
-  resolveLocalizedText(fn(a, b), locale)
-const t3 = <A, B, C>(fn: (a: A, b: B, c: C) => LocalizedText) => (a: A, b: B, c: C, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string =>
-  resolveLocalizedText(fn(a, b, c), locale)
+const zh = (locale: HelmxLocale): boolean => locale === 'zh-CN'
 
-// Visual presentation maps
-export const SPIN = 'spin-slow'
-export const PHASE_ICON: Record<WorkflowPhaseSection['status'], string> = {
-  pending: 'circle', running: 'loader', done: 'check', failed: 'x',
+export const SPIN_CLASS = 'spin-slow'
+
+// ---------------------------------------------------------------------------
+// Status & badge labels
+// ---------------------------------------------------------------------------
+
+export type ExecutionStatusKey = 'blocked' | 'working' | 'aborted' | 'error' | 'done' | 'pending'
+
+export const STATUS_COPY: Record<ExecutionStatusKey, LocalizedText> = {
+  blocked: { en: 'Awaiting approval', 'zh-CN': '等待审批' },
+  working: { en: 'Running', 'zh-CN': '运行中' },
+  aborted: { en: 'Aborted', 'zh-CN': '已中止' },
+  error: { en: 'Failed', 'zh-CN': '失败' },
+  done: { en: 'Completed', 'zh-CN': '已完成' },
+  pending: { en: 'Queued', 'zh-CN': '排队中' },
 }
 
-// Shared status labels
-const RUN_STATUS_LABELS: Record<string, LocalizedText> = {
-  running: L('Running', '执行中'),
-  completed: L('Completed', '已完成'),
-  failed: L('Failed', '失败'),
-  aborted: L('Aborted', '已中止'),
-}
-const NODE_STATUS_LABELS: Record<string, LocalizedText> = {
-  pending: L('Pending', '待执行'),
-  running: L('Running', '运行中'),
-  done: L('Done', '完成'),
-  failed: L('Failed', '失败'),
-  skipped: L('Skipped', '跳过'),
-}
-const EXECUTION_STATUS_LABELS: Record<string, LocalizedText> = {
-  blocked: L('Awaiting approval', '等待审批'),
-  error: L('Error', '异常'),
-  working: L('Running', '执行中'),
-  done: L('Done', '已完成'),
-  pending: L('In progress', '进行中'),
-  aborted: L('Aborted', '已中止'),
+export function statusLabel(status: ExecutionStatusKey, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  return resolveLocalizedText(STATUS_COPY[status], locale)
 }
 
-export type SubagentBadgeLabelKey =
-  | 'blocked' | 'working' | 'workingBackground' | 'error' | 'aborted' | 'done' | 'pending'
-
-const SUBAGENT_BADGE_LABELS: Record<SubagentBadgeLabelKey, LocalizedText> = {
-  blocked: L('Awaiting approval', '等待审批'),
-  working: L('Running', '执行中'),
-  workingBackground: L('Running in background', '后台运行中'),
-  error: L('Error', '异常'),
-  aborted: L('Aborted', '已中止'),
-  done: L('Done', '已完成'),
-  pending: L('In progress', '进行中'),
+export function runStatusLabel(
+  status: 'running' | 'completed' | 'failed' | 'aborted',
+  locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
+): string {
+  if (status === 'running') return statusLabel('working', locale)
+  if (status === 'completed') return statusLabel('done', locale)
+  if (status === 'aborted') return statusLabel('aborted', locale)
+  return statusLabel('error', locale)
 }
 
-export const runStatusLabel = (status: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string =>
-  resolveLocalizedText(RUN_STATUS_LABELS[status] ?? status, locale)
-export const nodeStatusLabel = (status: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string =>
-  resolveLocalizedText(NODE_STATUS_LABELS[status] ?? status, locale)
-export const executionStatusLabel = (status: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string =>
-  resolveLocalizedText(EXECUTION_STATUS_LABELS[status] ?? status, locale)
-export const subagentBadgeLabel = (key: SubagentBadgeLabelKey, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string =>
-  resolveLocalizedText(SUBAGENT_BADGE_LABELS[key], locale)
-export const runFailureFallbackLabel = t0('Background run failed', '后台执行失败')
+export const COPY = {
+  // Common actions
+  abort: { en: 'Abort', 'zh-CN': '中止' },
+  resume: { en: 'Resume', 'zh-CN': '续跑' },
+  replay: { en: 'Replay', 'zh-CN': '重放' },
+  refresh: { en: 'Refresh', 'zh-CN': '刷新' },
+  retry: { en: 'Retry', 'zh-CN': '重试' },
+  close: { en: 'Close', 'zh-CN': '关闭' },
+  cancel: { en: 'Cancel', 'zh-CN': '取消' },
+  delete: { en: 'Delete', 'zh-CN': '删除' },
+  deleting: { en: 'Deleting…', 'zh-CN': '删除中…' },
+  run: { en: 'Run', 'zh-CN': '运行' },
+  loading: { en: 'Loading…', 'zh-CN': '加载中…' },
 
-// Timeline trace rows
-export const TRACE_SUBAGENT_TOOL_NAME = L('Subagent', '子代理')
-export const TRACE_EXTERNAL_TOOL_NAME = L('External agent', '外部代理')
-export const traceSubagentWithId = t1((id: number) => L(`Subagent #${id}`, `子代理 #${id}`))
-export const TRACE_RESUMED_BELOW = L('Resumed below', '已在下文续接')
-export const traceOpenChildLabel = t1((id: number) => L(`Open subagent #${id}`, `打开子会话 #${id}`))
-export const traceOpenWorkbenchRunLabel = t1((runId: string) =>
-  L(`View run ${runId} in the workbench`, `在工作台查看运行 ${runId}`),
-)
-export const TRACE_COLLAPSE_DETAILS = L('Collapse subagent call details', '收起子代理调用详情')
-export const TRACE_EXPAND_DETAILS = L('Expand subagent call details', '展开子代理调用详情')
-export const TRACE_RUN_FAILED = L('Failed', '失败')
-export const TRACE_RUN_BACKGROUND = L('Running in background', '后台运行中')
-export const TRACE_RUN_RUNNING = L('Running', '运行中')
-export const TRACE_RUN_COMPLETED = L('Completed', '已完成')
-export const TRACE_BG_DISPATCHED = L('Dispatched to background', '已派发后台运行')
-export const traceToggleDetailsLabel = t2((title: string, open: boolean) =>
-  L(`${title} — ${open ? 'collapse' : 'expand'} details`, `${title} — ${open ? '收起' : '展开'}详情`),
-)
-export const traceWorkflowRowLabel = t2((name: string, summary: string | undefined) => {
-  const mid = summary !== undefined && summary !== '' ? ` · ${summary}` : ''
-  return L(`Workflow ${name}${mid} — view details in the workbench`, `工作流 ${name}${mid} — 在工作台查看详情`)
-})
-export const traceNodeProgress = t2((done: number, total: number) => L(`${done}/${total} nodes`, `${done}/${total} 节点`))
-export const traceActiveNode = t1((label: string) => L(`In progress: ${label}`, `进行中: ${label}`))
-export const traceResumeFallbackLabel = t1((runId: string) => L(`Resume ${runId}`, `恢复 ${runId}`))
+  // Trace rows
+  subagentLabel: { en: 'Subagent', 'zh-CN': '子代理' },
+  workflowLabel: { en: 'Workflow', 'zh-CN': '工作流' },
+  actionLabel: { en: 'Action', 'zh-CN': '动作' },
+  backgroundRunning: { en: 'Running in background', 'zh-CN': '后台运行中' },
+  backgroundDispatched: { en: 'Dispatched in background', 'zh-CN': '已转后台执行' },
+  resumedBelow: { en: 'Resumed below', 'zh-CN': '已在下方续接' },
+  expandDetails: { en: 'Expand call details', 'zh-CN': '展开调用详情' },
+  collapseDetails: { en: 'Collapse call details', 'zh-CN': '收起调用详情' },
 
-// Background report card
-export const REPORT_INVALID_TITLE = L('Background report', '后台汇报')
-export const REPORT_SUBAGENT_TITLE = L('Subagent report', '子代理汇报')
-export const REPORT_WORKFLOW_TITLE = L('Workflow report', '工作流汇报')
-export const REPORT_INVALID_PREVIEW = L('Malformed report payload; expand to view the raw message', '汇报数据格式异常，展开查看原始报文')
-export const REPORT_INVALID_BADGE = L('Malformed report', '汇报数据格式异常')
-export const reportToggleLabel = t2((title: string, open: boolean) =>
-  L(`${open ? 'Collapse' : 'Expand'} ${title} details`, `${open ? '收起' : '展开'}${title}详情`),
-)
-export const reportOpenChildTitle = t1((id: number) => L(`Open subagent #${id}`, `打开子会话 #${id}`))
-export const REPORT_INVALID_CALLOUT = L('Malformed report payload (raw message snapshot below)', '汇报数据格式异常（以下为原始报文快照）')
-export const REPORT_KV_RUN_ID = L('Run ID', '运行 ID')
-export const REPORT_KV_TASK_NAME = L('Task name', '任务名称')
-export const REPORT_KV_DELIVERED_AT = L('Delivered at', '投递时间')
-export const REPORT_KV_TASK_TYPE = L('Task type', '任务类型')
-export const REPORT_KIND_SUBAGENT = L('Background subagent', '后台子代理')
-export const REPORT_KIND_WORKFLOW = L('Workflow', '工作流')
-export const REPORT_KV_SUBAGENT = L('Subagent', '子会话')
-export const REPORT_RESULT_SECTION = L('Result body', '结果正文')
-export const REPORT_NO_RESULT = L('This run reported no result data.', '本次运行未携带结果数据。')
-export const REPORT_OTHER_TASKS_SECTION = L('Other in-flight tasks at delivery (snapshot)', '投递时其余在途任务（快照）')
+  // Live snippet tags
+  tagTool: { en: 'Tool', 'zh-CN': '工具' },
+  tagThinking: { en: 'Thinking', 'zh-CN': '思考' },
+  tagOutput: { en: 'Output', 'zh-CN': '输出' },
+  tagError: { en: 'Error', 'zh-CN': '错误' },
+  tagApproval: { en: 'Approval', 'zh-CN': '审批' },
+  snippetThinking: { en: 'Thinking…', 'zh-CN': '思考中…' },
+  snippetStarting: { en: 'Starting…', 'zh-CN': '启动中…' },
+  snippetGateFailed: { en: 'Gate failed', 'zh-CN': '门禁未通过' },
+  snippetExecFailed: { en: 'Execution failed', 'zh-CN': '执行失败' },
+  snippetAborted: { en: 'Aborted', 'zh-CN': '已中止' },
+  snippetLoadFailed: { en: 'Failed to load details', 'zh-CN': '详情加载失败' },
 
-// Subagent live card & stream
-export const cardOpenChildLabel = t1((id: number) => L(`Open subagent #${id} drawer`, `打开子会话 #${id} 抽屉`))
-export const cardOpenChildTooltip = t0('Click to open the subagent drawer', '点击打开子会话抽屉')
-export const cardSubagentHeading = t1((id: number) => L(`Subagent #${id}`, `子会话 #${id}`))
-export const worktreeBadgeTitle = t1((path: string) => L(`Isolated worktree: ${path}`, `隔离工作树：${path}`))
-export const selfAggregateTitle = t2((selfLabel: string, aggregateLabel: string) =>
-  L(`Self: ${selfLabel}; subtree aggregate: ${aggregateLabel}`, `自身${selfLabel}，子树聚合：${aggregateLabel}`),
-)
-export const subtreeProgressTitle = t3((done: number, total: number, running: number) =>
-  L(`Subtree progress: ${done}/${total} done, ${running} running`, `子树执行进度：${done}/${total} 完成、${running} 执行中`),
-)
-export const subtreeBadge = t2((done: number, total: number) => L(`Subtree ${done}/${total}`, `子树 ${done}/${total}`))
-export const approvalsTitle = t1((items: string[]) =>
-  L(`Descendants awaiting approval: ${items.join('; ')}`, `后代等待审批：${items.join('；')}`),
-)
-export const approvalsBadge = t1((count: number) => L(`Approvals ${count}`, `审批 ${count}`))
-export const ACTION_ABORT = L('Abort', '中止')
-export const ACTION_ABORT_BG_TITLE = L('Abort this background subagent task', '中止该后台子代理任务')
-export const actionAbortFailed = t1((err: string) => L(`Failed to abort background subagent: ${err}`, `中止后台子代理失败：${err}`))
-export const BADGE_CACHED = L('Cached', '已缓存')
-export const ACTION_RESUME_SUBAGENT = L('Resume', '恢复')
-export const ACTION_RESUME_SUBAGENT_TITLE = L('Resume this failed or aborted background subagent task', '恢复该失败或中止的后台子代理任务')
-export const ACTION_RESUME_SUBAGENT_ARIA = L('Resume this background subagent task', '恢复该后台子代理任务')
-export const actionResumeSubagentStarted = t1((runId: string) => L(`Resume initiated (source run ${runId})`, `已发起恢复（源运行 ${runId}）`))
-export const actionResumeSubagentFailed = t1((err: string) => L(`Failed to resume background subagent: ${err}`, `恢复后台子代理失败：${err}`))
-export const ACTION_RETRY = L('Retry', '重试')
-export const ACTION_RETRY_TITLE = L('Reload subagent details', '重新加载子会话详情')
-export const SUBLINE_FRONTLINE_TAG = L('Frontline', '前线')
+  // Background report
+  reportSubagentTitle: { en: 'Subagent Report', 'zh-CN': '子代理汇报' },
+  reportWorkflowTitle: { en: 'Workflow Report', 'zh-CN': '工作流汇报' },
+  reportInvalidTitle: { en: 'Invalid Background Report', 'zh-CN': '无效后台汇报' },
+  reportInvalidBadge: { en: 'Corrupted', 'zh-CN': '数据损坏' },
+  reportInvalidPreview: { en: 'Unrecognized report payload', 'zh-CN': '无法解析汇报载荷' },
+  reportInvalidCallout: {
+    en: 'The background report metadata is incomplete or corrupted. Raw message content is shown below.',
+    'zh-CN': '后台汇报元数据缺失或损坏，以下保留原始消息内容。',
+  },
+  reportKvName: { en: 'Task', 'zh-CN': '任务' },
+  reportKvRunId: { en: 'Run ID', 'zh-CN': '运行 ID' },
+  reportKvDeliveredAt: { en: 'Delivered', 'zh-CN': '送达时间' },
+  reportKvKind: { en: 'Type', 'zh-CN': '类型' },
+  reportKvSubagent: { en: 'Subagent', 'zh-CN': '子代理' },
+  reportResultSection: { en: 'Result', 'zh-CN': '返回结果' },
+  reportNoResult: { en: 'No result payload.', 'zh-CN': '无返回内容。' },
+  reportOtherTasks: { en: 'Other running tasks', 'zh-CN': '其余运行中任务' },
 
-export const SNIPPET_LOAD_FAILED = L('Load failed', '加载失败')
-export const SNIPPET_AWAITING_APPROVAL = L('Awaiting approval', '等待审批')
-export const SNIPPET_AWAITING_HUMAN = L('Awaiting human confirmation', '等待人工确认')
-export const SNIPPET_FAILED = L('Failed', '失败')
-export const SNIPPET_ERROR = L('Error', '异常')
-export const SNIPPET_SUBAGENT_ERROR = L('Subagent execution error', '子代理执行异常')
-export const SNIPPET_OUTPUT = L('Output', '输出')
-export const SNIPPET_THINKING = L('Thinking', '思考')
-export const SNIPPET_GATE_CHECK = L('Gate check', 'Gate 验收')
-export const SNIPPET_STARTING = L('Starting subagent…', '正在启动子代理…')
-export const snippetParallelTools = t1((count: number) => L(`Parallel ×${count}`, `并行 ${count} 项`))
-export const SNIPPET_PARALLEL_MORE = L(' …', ' 等')
+  // Workbench & Run card
+  workbenchTitle: { en: 'Workflows & Subagents', 'zh-CN': '工作流与子代理' },
+  workbenchLibrary: { en: 'Library', 'zh-CN': '工作流库' },
+  workbenchNoConversation: { en: 'Select a conversation to view tasks.', 'zh-CN': '请选择一个会话以查看任务。' },
+  workbenchNoRuns: { en: 'No workflows or subagents in this conversation yet.', 'zh-CN': '当前会话暂无工作流或子代理任务。' },
+  workbenchLoadError: { en: 'Failed to sync task state.', 'zh-CN': '任务状态同步失败。' },
+  workbenchResumeTitle: { en: 'Resume all resumable failed runs in this conversation', 'zh-CN': '恢复当前会话下所有可续跑的失败任务' },
+  workbenchResumeNone: { en: 'No failed runs to resume.', 'zh-CN': '没有需要恢复的失败任务。' },
+  defaultPhaseTitle: { en: 'Other Steps', 'zh-CN': '其他步骤' },
+  runNoNodes: { en: 'No steps recorded yet.', 'zh-CN': '暂无执行步骤。' },
+  runResultSection: { en: 'Result', 'zh-CN': '执行结果' },
+  runExpandResult: { en: 'Expand', 'zh-CN': '展开' },
+  runCollapseResult: { en: 'Collapse', 'zh-CN': '收起' },
+  runLogsSection: { en: 'Logs', 'zh-CN': '日志' },
+  runCachedBadge: { en: 'Cached', 'zh-CN': '缓存命中' },
+  runSavedBadge: { en: 'Saved', 'zh-CN': '已保存' },
+  runGatePassed: { en: 'Gate passed', 'zh-CN': '门禁通过' },
+  runGateFailed: { en: 'Gate failed', 'zh-CN': '门禁失败' },
+  runKvRunId: { en: 'Run ID', 'zh-CN': '运行 ID' },
+  runKvStatus: { en: 'Status', 'zh-CN': '状态' },
+  runKvCreatedAt: { en: 'Created', 'zh-CN': '创建时间' },
+  runKvSettledAt: { en: 'Settled', 'zh-CN': '结束时间' },
+  runKvSavedDef: { en: 'Definition', 'zh-CN': '定义名' },
+  runKvSourceRun: { en: 'Replayed from', 'zh-CN': '重放来源' },
+  runKvResumedBy: { en: 'Resumed by', 'zh-CN': '已被续跑' },
+  nodeKvBackend: { en: 'Agent', 'zh-CN': '代理类型' },
+  nodeKvNode: { en: 'Node', 'zh-CN': '节点' },
+  nodeKvExecution: { en: 'Execution', 'zh-CN': '执行句柄' },
+  nodeKvCwd: { en: 'CWD', 'zh-CN': '工作目录' },
+  nodeKvWorktree: { en: 'Worktree', 'zh-CN': '工作树' },
+  nodeKvModel: { en: 'Model', 'zh-CN': '模型' },
+  nodeKvDuration: { en: 'Duration', 'zh-CN': '耗时' },
+  nodeKvTokens: { en: 'Tokens', 'zh-CN': 'Token' },
+  nodeSectionPrompt: { en: 'Prompt', 'zh-CN': '指令' },
+  nodeSectionOutput: { en: 'Output', 'zh-CN': '输出' },
+  nodeSectionError: { en: 'Error', 'zh-CN': '错误' },
+  nodeSectionGate: { en: 'Gate', 'zh-CN': '门禁' },
+  replayHint: { en: 'Leave blank to reuse original arguments, or enter JSON to override.', 'zh-CN': '留空沿用原参数，或输入 JSON 覆盖参数。' },
+  replayArgsPlaceholder: { en: 'Optional JSON args, e.g. {"target":"api"}', 'zh-CN': '可选 JSON 参数，例如 {"target":"api"}' },
+  replaySubmit: { en: 'Start replay', 'zh-CN': '开始重放' },
 
-export const STREAM_PROMPT_TAG = L('Prompt', '指令')
-export const STREAM_THINKING_TAG = L('Thinking', '思考')
-export const STREAM_REPLY_TAG = L('Reply', '回复')
-export const STREAM_TRUNCATED = L('(truncated)', '（已截断）')
-export const streamPreviewSeparator = t0(': ', '：')
+  // Active tray
+  trayRegionAria: { en: 'Active workflows and subagents', 'zh-CN': '运行中的工作流与子代理' },
+  trayWorkbench: { en: 'Tasks', 'zh-CN': '任务面板' },
+  trayExpand: { en: 'Expand active tasks', 'zh-CN': '展开运行中任务' },
+  trayCollapse: { en: 'Collapse active tasks', 'zh-CN': '收起运行中任务' },
 
-export const TOOL_TAG_READ = L('Read', '读取')
-export const TOOL_TAG_EDIT = L('Edit', '编辑')
-export const TOOL_TAG_WRITE = L('Write', '写入')
-export const TOOL_TAG_SEARCH = L('Search', '搜索')
-export const TOOL_TAG_FIND = L('Find', '查找')
-export const statToolSteps = t1((steps: number) => L(`${steps} tools loaded`, `已载 ${steps} 次工具`))
-export const summarizeJsonMoreSuffix = t1((count: number) => L(` (+${count} more)`, ` 等 ${count} 项`))
+  // Library screen
+  libTitle: { en: 'Workflow Library', 'zh-CN': '工作流库' },
+  libSearchPlaceholder: { en: 'Search workflows by name or description…', 'zh-CN': '按名称或描述检索工作流…' },
+  libSearchAria: { en: 'Search workflow library', 'zh-CN': '检索工作流库' },
+  libEmptyTitle: { en: 'No saved workflows', 'zh-CN': '暂无已保存工作流' },
+  libEmptyHint: {
+    en: 'Ask the assistant to save reusable workflows via the workflow save action.',
+    'zh-CN': '可让助手保存可复用的工作流脚本，保存后将在此展示。',
+  },
+  libNoDescription: { en: 'No description', 'zh-CN': '暂无描述' },
+  libMetadataBadge: { en: 'Metadata issue', 'zh-CN': '元数据异常' },
+  libKvDescription: { en: 'Description', 'zh-CN': '描述' },
+  libKvWhenToUse: { en: 'When to use', 'zh-CN': '适用场景' },
+  libKvPhases: { en: 'Phases', 'zh-CN': '阶段' },
+  libPhasesUndeclared: { en: 'Not declared', 'zh-CN': '未声明' },
+  libSourceSection: { en: 'Script Source (Read-only)', 'zh-CN': '脚本源码（只读）' },
+  libCopySource: { en: 'Copy source', 'zh-CN': '复制源码' },
+  libRunSection: { en: 'Run in Conversation', 'zh-CN': '在指定会话中运行' },
+  libRunSelectPlaceholder: { en: 'Select a target conversation…', 'zh-CN': '选择目标会话…' },
+  libRunSelectAria: { en: 'Target conversation', 'zh-CN': '目标会话' },
+  libArgsPlaceholder: { en: 'Optional JSON args', 'zh-CN': '可选 JSON 参数' },
+  libNoConversations: { en: 'No top-level conversations available.', 'zh-CN': '当前没有可用的顶层会话。' },
+  libEditSection: { en: 'Edit via Assistant', 'zh-CN': '交由助手修改' },
+  libEditHint: {
+    en: 'Copy this request into a conversation to let the assistant update the workflow definition.',
+    'zh-CN': '复制以下提示发给助手，即可修改并重新校验工作流定义。',
+  },
+  libCopyEdit: { en: 'Copy request', 'zh-CN': '复制修改提示' },
+  libDeleteTitle: { en: 'Delete workflow', 'zh-CN': '删除工作流' },
+  libDeleteConfirmBtn: { en: 'Delete', 'zh-CN': '确认删除' },
+} as const
 
-// External run summary
-export const EXTERNAL_TITLE = L('External agent', '外部代理')
-const EXTERNAL_IDLE_STATE: Record<'active' | 'error' | 'settled', LocalizedText> = {
-  active: L('in progress', '进行中'),
-  error: L('error', '异常'),
-  settled: L('settled', '已结束'),
+// ---------------------------------------------------------------------------
+// Parameterized copy helpers
+// ---------------------------------------------------------------------------
+
+export function fallbackConversationTitle(id: number, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  return zh(locale) ? `子代理 #${id}` : `Subagent #${id}`
 }
-export const externalIdleLine = (state: 'active' | 'error' | 'settled', locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string => {
-  const s = resolveLocalizedText(EXTERNAL_IDLE_STATE[state], locale)
-  return resolveLocalizedText(L(`External run ${s} (no subagent)`, `外部执行${s}（无子会话）`), locale)
+
+export function traceOpenChildLabel(id: number, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  return zh(locale) ? `打开子会话 #${id}` : `Open subagent conversation #${id}`
 }
-export const externalBackgroundTaskLabel = t1((runId: string) => L(`Background task ${runId}`, `后台任务 ${runId}`))
-export const externalNodeFailedLabel = t1((error: string) => L(`Node failed: ${error}`, `节点失败：${error}`))
-export const externalRunningNodes = t1((count: number) => L(`${count} node${count > 1 ? 's' : ''} running`, `${count} 个节点执行中`))
-export const externalErrorJoiner = t0(': ', '：')
 
-// Workbench run card / node cards / replay form
-export const RUN_CARD_ABORT_FAILED = L('Failed to abort workflow', '中止工作流失败')
-export const RUN_CARD_RESUME_FAILED = L('Failed to resume from checkpoint', '断点恢复失败')
-export const RUN_CARD_REPLAY_FAILED = L('Failed to replay', '重放失败')
-export const runCardAriaLabel = t1((name: string) => L(`Workflow: ${name}`, `工作流：${name}`))
-export const RUN_CARD_COLLAPSE_TITLE = L('Collapse workflow card', '收起工作流卡')
-export const RUN_CARD_EXPAND_TITLE = L('Expand workflow card', '展开工作流卡')
-export const RUN_CARD_CACHED_REPLAY = L('Cached replay', 'cached 重放')
-export const runCardReplayBadgeTitle = t1((sourceRunId: string) =>
-  L(`Replayed from a journal prefix (source run ${sourceRunId})`, `从 journal 前缀重放恢复（源 run ${sourceRunId}）`),
-)
-export const runCardSavedBadgeTitle = t1((name: string) => L(`Saved as workflow: ${name}`, `已保存工作流：${name}`))
-export const RUN_CARD_SAVED_BADGE = L('Saved definition', '已保存定义')
-export const runCardNodesStat = t2((done: number, total: number) => L(`Nodes ${done}/${total}`, `节点 ${done}/${total}`))
-export const runCardSubtreeStat = t2((done: number, total: number) => L(`Subtree ${done}/${total}`, `子树 ${done}/${total}`))
-export const runCardTokensStat = t1((tokens: number) => L(`${tokens.toLocaleString()} Tokens`, `${tokens.toLocaleString()} Token`))
-export const RUN_CARD_MORE_ARIA = L('More actions', '更多操作')
-export const RUN_CARD_MORE_TITLE = L('More workflow actions', '更多工作流操作')
-export const RUN_CARD_REPLAY = L('Replay', '重放')
-export const RUN_CARD_WORKBENCH_DETAILS = L('Workbench details', '工作台详情')
-export const RUN_CARD_RESUME = L('Resume from checkpoint', '断点恢复')
-export const RUN_CARD_RESUME_TITLE = L(
-  "Resume from this run's journal checkpoint: replays the completed prefix and only re-runs failed/incomplete nodes (keeps the original script and args; no parameter or target changes)",
-  '从同 run 的 journal 断点恢复：重放已完成前缀，仅重跑失败/未完成节点（沿用原脚本与 args；不支持改参换目标）',
-)
-export const runCardReplayAccepted = t1((runId: string) =>
-  L(
-    `Replay accepted (source run ${runId}; the new run keeps the original conversation and script source)`,
-    `重放已受理（源 run ${runId}；新 run 保留原会话与原脚本源）`,
-  ),
-)
-export const RUN_KV_RUN_ID = L('Run ID', '运行 ID')
-export const RUN_KV_CREATED_AT = L('Started at', '发起时间')
-export const RUN_KV_SETTLED_AT = L('Finished at', '完成时间')
-export const RUN_KV_SELF_STATUS = L('Run self status', 'run 自身状态')
-export const RUN_KV_UPDATED_AT = L('Updated at', '更新时间')
-export const RUN_KV_SOURCE_RUN = L('Source run', '源 run')
-export const RUN_KV_SAVED_DEF = L('Saved definition', '保存定义')
-export const runTimingWallLine = t1((duration: string) => L(`End-to-end: ${duration}`, `端到端总耗时：${duration}`))
-export const runTimingNodeTotalLine = t1((duration: string) =>
-  L(`Node total ${duration} (incl. parallel)`, `节点累计 ${duration}（含并行）`),
-)
-export const runTimingStartedLine = t1((time: string) => L(`Started: ${time}`, `开始：${time}`))
-export const runTimingSettledLine = t1((time: string) => L(`Finished: ${time}`, `结束：${time}`))
-export const RUN_NO_NODES = L('No node status yet', '暂无节点状态')
-export const RUN_RESULT_SECTION = L('Final output', '最终产出')
-export const RUN_COLLAPSE_RESULT = L('Collapse full result', '收起完整结果')
-export const RUN_EXPAND_RESULT = L('Expand full result', '展开完整结果')
-export const RUN_RESULT_LOADING = L('Loading full result…', '正在加载完整结果…')
-export const runResultInspectFailed = t1((err: string) => L(`Failed to load full result: ${err}`, `加载完整结果失败：${err}`))
-
-export const NODE_BADGE_ACTION = L('Action', '动作')
-export const NODE_BADGE_EXTERNAL = L('External run', '外部执行')
-export const NODE_BADGE_SUBAGENT = L('Subagent node', '子代理节点')
-export const NODE_GATE_PASSED = L('Gate passed', 'Gate 通过')
-export const NODE_GATE_FAILED = L('Gate failed', 'Gate 失败')
-export const nodeAttemptBadge = t1((attempt: number) => L(`Attempt ${attempt}`, `第 ${attempt} 次`))
-export const NODE_TAG_ERROR = L('Error', '错误')
-export const NODE_TAG_OUTPUT = L('Output', '产出')
-export const NODE_SECTION_PROMPT = L('Prompt', '指令')
-export const NODE_KV_STARTED_AT = L('Started at', '开始时间')
-export const NODE_KV_BACKEND = L('Backend', '执行后端')
-export const NODE_KV_EXTERNAL = L('External run', '外部执行')
-export const NODE_KV_NODE = L('Node', '执行节点')
-export const NODE_KV_CWD = L('Working directory', '工作目录')
-export const NODE_KV_WORKTREE = L('Worktree', '工作树')
-export const NODE_KV_MODEL = L('Model', '模型')
-export const NODE_KV_DURATION = L('Duration', '耗时')
-export const NODE_KV_TOKENS = L('Tokens', 'Token')
-
-export function replayMeta(runId: string, conversationId: number, savedName: string | undefined, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
-  const sourceNote = resolveLocalizedText(
-    savedName !== undefined
-      ? L(`saved definition ${savedName} executes the latest file content`, `已保存定义 ${savedName} 按最新文件内容执行`)
-      : L('inline script keeps its original source', '内联脚本沿用原源码'),
-    locale,
-  )
-  return resolveLocalizedText(
-    L(`Source run ${runId} (conversation #${conversationId}; ${sourceNote})`, `源 run ${runId}（会话 #${conversationId}；${sourceNote}）`),
-    locale,
-  )
+export function traceOpenWorkbenchRunLabel(runId: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  return zh(locale) ? `在任务面板查看 ${runId}` : `Inspect ${runId} in Tasks`
 }
-export const REPLAY_HINT = L(
-  'The cache only reuses prefix nodes whose call payloads match exactly; re-execution starts at the first mismatch, so changed args are not guaranteed to hit the cache and nodes with external side effects really re-run.',
-  '缓存仅复用调用载荷完全相同的前缀节点；首次载荷失配起真实重执行，改参不保证命中缓存，含外部副作用的节点会照实重跑。',
-)
-export const REPLAY_ARGS_PLACEHOLDER = L(
-  'args JSON (optional; blank keeps original args, non-empty strictly parsed)',
-  'args JSON（可选；空白沿用原 args，非空严格解析）',
-)
-export const replayArgsAria = t1((runId: string) => L(`args JSON override for replaying run ${runId}`, `重放 run ${runId} 的 args JSON 覆盖`))
-export const REPLAY_SUBMIT_ARIA = L('Start replay', '发起重放')
-export const REPLAY_SUBMIT_TITLE = L(
-  'Start a replay via resumeFromRunId (the new run keeps the original conversation; blank args keep the original args)',
-  '按 resumeFromRunId 发起重放（新 run 保留原会话；空白 args 沿用原 args）',
-)
-export const REPLAY_SUBMIT = L('Replay', '发起重放')
 
-export function nodeAwaitingApproval(pendingAskTitle: string | undefined, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
-  const fallback = resolveLocalizedText(SNIPPET_AWAITING_HUMAN, locale)
-  return `${resolveLocalizedText(L('Awaiting approval: ', '等待审批：'), locale)}${pendingAskTitle || fallback}`
+export function reportToggleLabel(title: string, open: boolean, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  if (zh(locale)) return open ? `收起 ${title}` : `展开 ${title}`
+  return open ? `Collapse ${title}` : `Expand ${title}`
 }
-export const NODE_RUNNING_FALLBACK = L('Running…', '执行中…')
-export const NODE_GATE_FAILED_FALLBACK = L('Gate check failed', 'Gate 验收未通过')
-export const NODE_EXECUTION_FAILED = L('Execution failed', '执行失败')
-export const NODE_SKIPPED = L('Skipped', '已跳过')
-export const NODE_QUEUED = L('Queued…', '排队等待执行…')
-export const DEFAULT_PHASE_TITLE = L('Default phase', '默认阶段')
 
-// Workflow library
-export const LIB_SCREEN_TITLE = L('Workflow library', '工作流库')
-export const LIB_SCREEN_SUBTITLE = t2((count: number, isSplit: boolean) =>
-  L(`${count} reusable orchestration assets${isSplit ? ' · split view' : ''}`, `跨会话可复用编排资产 ${count} 个${isSplit ? ' · 分屏' : ''}`),
-)
-export const LIB_REFRESH_TITLE = L('Reload the workflow library', '重新读取工作流目录')
-export const LIB_REFRESH = L('Refresh', '刷新')
-export const LIB_SEARCH_PLACEHOLDER = L('Search name, description or when-to-use…', '搜索名称、描述或适用场景…')
-export const LIB_SEARCH_ARIA = L('Search workflows', '搜索工作流')
-export const LIB_SEARCH_CLEAR_TITLE = L('Clear search', '清空搜索')
-export const LIB_SEARCH_CLEAR_ARIA = L('Clear search', '清空搜索')
-export const LIB_LOADING = L('Loading workflow library…', '工作流目录读取中…')
-export const LIB_LOAD_FAILED = t1((error: string) => L(`Failed to load the workflow library: ${error}`, `读取工作流目录失败：${error}`))
-export const LIB_RETRY = L('Retry', '重试')
-export const LIB_EMPTY = L(
-  'No saved workflows yet. Ask the AI or use the CLI workflow save action to persist a reusable definition.',
-  '暂无已保存工作流。可让 AI 或 CLI 调用 workflow save 保存可复用定义。',
-)
-export const LIB_NO_MATCH = t1((query: string) => L(`No workflows match "${query}"`, `未找到匹配「${query}」的工作流`))
-export const libListInvalid = t0(
-  'Workflow library returned an invalid shape (unexpected action payload)',
-  '工作流目录返回结构不合法（动作返回非预期形状）',
-)
-export const libCardAria = t1((name: string) => L(`View workflow ${name} details`, `查看工作流 ${name} 详情`))
-export const libMetadataError = t1((error: string) => L(`Metadata validation failed: ${error}`, `元数据校验失败：${error}`))
-export const LIB_CARD_NO_DESCRIPTION = L('No description', '无描述')
-export const libPhases = t2((count: number, titles: string) => L(`${count} phases: ${titles}`, `${count} 阶段：${titles}`))
-export const libDefinitionFileTitle = t1((path: string) => L(`Definition file: ${path}`, `定义文件：${path}`))
-export const LIB_METADATA_BADGE = L('Metadata error', '元数据异常')
-export const LIB_KV_DESCRIPTION = L('Description', '描述')
-export const LIB_KV_WHEN_TO_USE = L('When to use', '适用场景')
-export const LIB_KV_PHASES = L('Phases', '阶段')
-export const LIB_PHASES_UNDECLARED = L('Not declared', '未声明')
-export const LIB_SOURCE_SECTION = L('Source (read-only)', '源码（只读）')
-export const LIB_SOURCE_RELOAD_TITLE = L('Reload source', '重新读取源码')
-export const LIB_SOURCE_LOADING = L('Loading source…', '源码读取中…')
-export const libDetailInvalid = t0(
-  'Definition detail returned an invalid shape (unexpected action payload; refusing to fabricate a view)',
-  '定义详情返回结构不合法（动作返回非预期形状，拒绝伪造展示）',
-)
-export const libSourceLoadFailed = t1((error: string) => L(`Failed to load source: ${error}`, `读取源码失败：${error}`))
-export const LIB_COPY_SOURCE = L('Copy full source', '复制完整源码')
-export const LIB_EDIT_HINT = L(
-  'Creating and modifying workflows is done by the AI / CLI via the save action; the Web UI does not provide a source editor.',
-  '工作流的创建与修改由 AI / CLI 调用 save 动作完成，Web 端不提供源码编辑器。',
-)
-export const LIB_RUN_SECTION = L('Run (pick a target conversation)', '运行（选择目标会话）')
-export const LIB_RUN_SELECT_PLACEHOLDER = L('Pick a target conversation', '选择目标会话')
-export const LIB_RUN_SELECT_ARIA = L('Pick the target conversation to run in', '选择运行目标会话')
-export const LIB_ARGS_PLACEHOLDER = L('args JSON (optional, strictly parsed)', 'args JSON（可选，严格解析）')
-export const libArgsAria = t1((name: string) => L(`args JSON for workflow ${name}`, `工作流 ${name} 的 args JSON`))
-export const libPickConversationFirst = t0('Pick a target conversation first', '请先选择目标会话')
-export const LIB_NO_TOP_LEVEL_CONVERSATIONS = L('No top-level conversations available', '无可用顶层会话')
-export const libRunButtonTitle = t1((name: string) => L(`Run workflow ${name} in the selected conversation`, `在选定会话运行工作流 ${name}`))
-export const LIB_RUN = L('Run', '运行')
-export const libRunStarted = t2((name: string, conversationId: string) =>
-  L(`Workflow ${name} started in conversation #${conversationId}`, `工作流 ${name} 已在会话 #${conversationId} 启动`),
-)
-export const libRunFailed = t1((err: string) => L(`Failed to start workflow: ${err}`, `启动工作流失败：${err}`))
-export const libDeleted = t1((name: string) =>
-  L(`Deleted workflow definition ${name} (historical runs are unaffected)`, `已删除工作流定义 ${name}（历史运行记录不受影响）`),
-)
-export const LIB_EDIT_SECTION = L('Let the AI edit', '让 AI 修改')
-export const LIB_EDIT_HINT_2 = L(
-  'Copy the request below and send it to an AI in any conversation: it reads the source, applies the changes and writes them back via the save action; this page never edits files directly.',
-  '复制以下请求发给任意会话中的 AI，由它读取源码、修改并经 save 动作写回；本页不直接改动文件。',
-)
-export const LIB_COPY_EDIT_REQUEST = L('Copy edit request', '复制修改请求')
-export const libDeleteConfirm = t1((name: string) =>
-  L(`Delete workflow definition ${name}? Historical runs are kept.`, `确认删除工作流定义 ${name}？历史运行记录保留。`),
-)
-export const LIB_CANCEL = L('Cancel', '取消')
-export const LIB_DELETE_CONFIRM = L('Confirm delete', '确认删除')
-export const LIB_DELETING = L('Deleting…', '正在删除…')
-export const LIB_CLOSE = L('Close', '关闭')
-export const LIB_DELETE = L('Delete', '删除')
-export const LIB_DELETE_TITLE = L('Delete the definition file (historical runs are unaffected)', '删除定义文件（历史运行记录不受影响）')
-export const libDrawerAria = t1((name: string) => L(`Workflow ${name} details`, `工作流 ${name} 详情`))
-export const libArgsInvalidJson = t1((err: string) => L(`args must be valid JSON: ${err}`, `args 需为合法 JSON：${err}`))
+export function traceResumeFallbackLabel(runId: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  return zh(locale) ? `续跑 ${runId}` : `Resume ${runId}`
+}
 
-export function workflowEditRequestLines(name: string, descriptionLine: string | undefined, locale: HelmxLocale): string[] {
-  if (locale === 'zh-CN') {
+export function attemptBadge(attempt: number, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  return zh(locale) ? `第 ${attempt} 次` : `Try #${attempt}`
+}
+
+export function worktreeBadgeTitle(path: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  return zh(locale) ? `隔离工作树：${path}` : `Isolated worktree: ${path}`
+}
+
+export function workbenchResumeFailedButton(count: number, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  return zh(locale) ? `恢复失败 (${count})` : `Resume failed (${count})`
+}
+
+export function workbenchResumeStarted(resumed: number, skipped: number, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  if (zh(locale)) return skipped > 0 ? `已拉起 ${resumed} 个失败任务，跳过 ${skipped} 个` : `已拉起 ${resumed} 个失败任务`
+  return skipped > 0 ? `Resumed ${resumed} failed run(s), skipped ${skipped}` : `Resumed ${resumed} failed run(s)`
+}
+
+export function workbenchResumeAllSkipped(skipped: number, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  return zh(locale) ? `无可恢复任务（已跳过 ${skipped} 个）` : `No resumable runs (skipped ${skipped})`
+}
+
+export function workbenchResumeInvalidResult(locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  return zh(locale) ? '批量恢复返回结果格式无效' : 'Invalid resume_failed response payload'
+}
+
+export function trayCountLabel(blocked: number, running: number, total: number, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  if (zh(locale)) {
+    if (blocked > 0 && running > 0) return `${blocked} 待审批 · ${running} 运行中`
+    if (blocked > 0) return `${blocked} 个任务待审批`
+    return `${total} 个任务运行中`
+  }
+  if (blocked > 0 && running > 0) return `${blocked} awaiting approval · ${running} running`
+  if (blocked > 0) return `${blocked} awaiting approval`
+  return `${total} running`
+}
+
+export function trayAwaitingElapsed(elapsed: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  return zh(locale) ? `等待 ${elapsed}` : `waiting ${elapsed}`
+}
+
+export function replayMetaText(runId: string, conversationId: number, savedName: string | undefined, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  const base = savedName !== undefined ? `${savedName} (${runId})` : runId
+  return zh(locale) ? `从 ${base} 重放到会话 #${conversationId}` : `Replay ${base} in conversation #${conversationId}`
+}
+
+export function replayAcceptedNotice(newRunId: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  return zh(locale) ? `已启动重放任务 ${newRunId}` : `Replay started (${newRunId})`
+}
+
+export function resumeInitiatedNotice(newRunId: string | undefined, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  if (newRunId) return zh(locale) ? `已发起续跑任务 ${newRunId}` : `Resume initiated (${newRunId})`
+  return zh(locale) ? '已发起续跑任务' : 'Resume initiated'
+}
+
+export function selfVsSubtreeAriaLabel(
+  selfStatus: ExecutionStatusKey,
+  effectiveStatus: ExecutionStatusKey,
+  locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
+): string {
+  const selfText = statusLabel(selfStatus, locale)
+  const subText = statusLabel(effectiveStatus, locale)
+  return zh(locale)
+    ? `自身：${selfText}；子树聚合：${subText}`
+    : `Self: ${selfText}; subtree aggregate: ${subText}`
+}
+
+export function timingWallLine(text: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  return zh(locale) ? `总墙钟耗时：${text}` : `Wall time: ${text}`
+}
+
+export function timingNodeTotalLine(text: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  return zh(locale) ? `节点累计耗时：${text}` : `Cumulative node time: ${text}`
+}
+
+export function timingStartedLine(text: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  return zh(locale) ? `开始时间：${text}` : `Started: ${text}`
+}
+
+export function timingSettledLine(text: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  return zh(locale) ? `结束时间：${text}` : `Settled: ${text}`
+}
+
+export function libSubtitle(count: number, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  return zh(locale) ? `共 ${count} 个已保存工作流` : `${count} saved workflow${count === 1 ? '' : 's'}`
+}
+
+export function libNoMatch(query: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  return zh(locale) ? `未找到匹配 “${query}” 的工作流` : `No workflows matching "${query}"`
+}
+
+export function libPhasesSummary(count: number, titles: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  return zh(locale) ? `${count} 阶段：${titles}` : `${count} phases: ${titles}`
+}
+
+export function libMetadataErrorText(err: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  return zh(locale) ? `元数据错误：${err}` : `Metadata error: ${err}`
+}
+
+export function libArgsInvalidJson(err: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  return zh(locale) ? `参数 JSON 格式无效：${err}` : `Invalid JSON arguments: ${err}`
+}
+
+export function libPickConversationFirst(locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  return zh(locale) ? '请先选择一个目标会话' : 'Select a target conversation first'
+}
+
+export function libRunStarted(name: string, convId: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  return zh(locale) ? `已在会话 #${convId} 启动工作流 ${name}` : `Started workflow ${name} in conversation #${convId}`
+}
+
+export function libDeletedNotice(name: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  return zh(locale) ? `已删除工作流 ${name}` : `Deleted workflow ${name}`
+}
+
+export function libDeleteConfirmDesc(name: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  return zh(locale)
+    ? `确定删除已保存的工作流 “${name}” 吗？该操作不可撤销。`
+    : `Delete saved workflow "${name}"? This action cannot be undone.`
+}
+
+export function libDetailInvalid(locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  return zh(locale) ? '工作流详情返回格式无效' : 'Invalid workflow detail payload'
+}
+
+export function libListInvalid(locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  return zh(locale) ? '工作流列表返回格式无效' : 'Invalid workflow list payload'
+}
+
+export function actionFailedNotice(label: string, message: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  return zh(locale) ? `${label}失败：${message}` : `${label} failed: ${message}`
+}
+
+export function buildWorkflowEditRequestLines(
+  name: string,
+  description: string | undefined,
+  locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
+): string[] {
+  if (zh(locale)) {
     return [
-      `请修改已保存工作流 ${name}（跨会话可复用资产）：`,
-      `- 先用 workflow get 动作（或 helmx workflows get ${name} --json）读取当前源码与元数据；`,
-      `- 按需求修改后用 workflow save 动作（helmx workflows save <文件或源码> --name ${name} --overwrite）写回；保存前校验会自动做语法预检，默认拒绝覆盖、需显式 overwrite；`,
-      ...(descriptionLine !== undefined ? [descriptionLine] : []),
-      '- 修改完成后告诉我保存结果与变化点，不要静默改动。',
+      `请查看并更新已保存的工作流 "${name}"：`,
+      ...(description !== undefined ? [`当前描述：${description}`] : []),
+      '1. 先调用 builtin:workflow 的 get 动作读取当前源码；',
+      '2. 根据我的需求修改并确保 export const meta 为纯字面量；',
+      '3. 调用 builtin:workflow 的 save 动作写回。',
     ]
   }
   return [
-    `Please modify the saved workflow ${name} (a cross-conversation reusable asset):`,
-    `- First read the current source and metadata via the workflow get action (or helmx workflows get ${name} --json);`,
-    `- After applying the changes, write them back with the workflow save action (helmx workflows save <file-or-source> --name ${name} --overwrite); the pre-save check runs a syntax preflight, overwriting is refused by default and requires an explicit overwrite;`,
-    ...(descriptionLine !== undefined ? [descriptionLine] : []),
-    '- After saving, tell me the save result and what changed; do not modify anything silently.',
+    `Inspect and update the saved workflow "${name}":`,
+    ...(description !== undefined ? [`Current description: ${description}`] : []),
+    '1. Read the current source using builtin:workflow action `get`;',
+    '2. Apply my requested edits while keeping `export const meta` a pure literal;',
+    '3. Save the updated script with builtin:workflow action `save`.',
   ]
 }
-export const workflowEditDescriptionLine = t1((description: string) => L(`- Current description: ${description}`, `- 当前描述：${description}`))
-
-// Active tray / execution tree rows / workbench panel
-export function trayCount(blocked: number, running: number, active: number, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
-  if (blocked > 0) {
-    return running > 0
-      ? resolveLocalizedText(L(`${blocked} awaiting approval · ${running} running`, `${blocked} 项待审批 · ${running} 项运行中`), locale)
-      : resolveLocalizedText(L(`${blocked} awaiting approval`, `${blocked} 项待审批`), locale)
-  }
-  return resolveLocalizedText(L(`${active} running`, `${active} 项运行中`), locale)
-}
-export const TRAY_REGION_ARIA = L('In-flight orchestration tasks', '在途编排任务')
-export const TRAY_COLLAPSE = L('Collapse', '收起')
-export const TRAY_EXPAND = L('Expand', '展开')
-export function trayToggleLabel(expanded: boolean, countText: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
-  return resolveLocalizedText(
-    L(`${expanded ? 'Collapse' : 'Expand'} in-flight tasks — ${countText}`, `${expanded ? '收起' : '展开'}在途任务 — ${countText}`),
-    locale,
-  )
-}
-export const TRAY_WORKBENCH = L('Workbench', '工作台')
-export const trayRowOpenConversationLabel = t1((id: number) => L(`Open conversation #${id} drawer`, `打开会话 #${id} 抽屉`))
-export const trayRowOpenRunLabel = t1((runId: string) => L(`Open run ${runId} in workbench`, `在工作台打开运行 ${runId}`))
-export function trayActionFailed(err: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
-  const label = resolveLocalizedText(ACTION_ABORT, locale)
-  return resolveLocalizedText(L(`${label} failed: ${err}`, `${label}失败：${err}`), locale)
-}
-export const trayAwaitingApprovalElapsed = t1((duration: string) => L(`Awaiting approval ${duration}`, `等待审批 ${duration}`))
-
-export const execOpenConversationLabel = t1((id: number) => L(`Open conversation #${id} drawer`, `打开会话 #${id} 抽屉`))
-export const execCollapseChildrenLabel = t1((title: string) => L(`Collapse direct children of ${title}`, `收起 ${title} 直系子项`))
-export const execExpandChildrenLabel = t1((title: string) => L(`Expand direct children of ${title}`, `展开 ${title} 直系子项`))
-export const execOpenConversationTitle = t1((id: number) => L(`Click to open conversation #${id} drawer`, `点击打开会话 #${id} 抽屉`))
-export const EXEC_COLLAPSE_CHILDREN_TITLE = L('Click to collapse direct children', '点击收起直系子项')
-export const EXEC_EXPAND_CHILDREN_TITLE = L(
-  'Click to expand direct children (deep workflow / external run, no standalone conversation)',
-  '点击展开直系子项（深层工作流 / 外部执行，无独立会话）',
-)
-export const execApprovalBadge = t1((count: number) => L(`Approvals ${count}`, `审批 ${count}`))
-export const execConversationTitle = t1((id: number) => L(`Subagent #${id}`, `子会话 #${id}`))
-export const EXEC_EXTERNAL_FALLBACK = L('External run', '外部执行')
-export const execFrontlineConversation = t1((id: number) => L(`#${id} running`, `#${id} 执行中`))
-export const execFrontlineContainer = t1((label: string) => L(`${label} running`, `${label} 执行中`))
-export const execApprovalItem = t1((id: number) => L(`#${id} awaiting approval`, `#${id} 等待审批`))
-export function execFrontlineNamed(
-  name: string,
-  id: number,
-  doing: string | undefined,
-  locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
-): string {
-  if (doing !== undefined && doing !== '') return `${name} (#${id}) · ${doing}`
-  return resolveLocalizedText(L(`${name} (#${id}) running`, `${name} (#${id}) 执行中`), locale)
-}
-export const execApprovalItemNamed = t2((name: string, id: number) =>
-  L(`${name} (#${id}) awaiting approval`, `${name} (#${id}) 等待审批`),
-)
-
-export const WORKBENCH_HEAD_TITLE = L('Current conversation tasks', '当前会话任务')
-export const WORKBENCH_LIBRARY = L('Workflow library', '工作流库')
-export const WORKBENCH_EMPTY_NO_CONVERSATION = L(
-  'Open a conversation first; the workbench will show its workflows and subagent tasks.',
-  '请先打开一个会话，工作台将展示当前会话的工作流与子代理任务。',
-)
-export const WORKBENCH_EMPTY_NO_RUNS = L(
-  'No workflow or subagent runs in this conversation yet.',
-  '当前会话暂无工作流或子代理运行记录。',
-)
-export const WORKBENCH_RESULT_SECTION = L('Run output', '运行产出')
-export const WORKBENCH_RESUME_FAILED_TITLE = L(
-  'Batch-resume auto-resumable failed tasks in the current conversation',
-  '批量恢复当前会话下可自动续跑的失败任务',
-)
-export const workbenchResumeFailedButton = t1((count: number) => L(`Resume failed (${count})`, `恢复失败 (${count})`))
-export const workbenchResumeInvalidResult = t0(
-  'Batch resume returned an invalid shape (unexpected action payload)',
-  '批量恢复返回结构不合法（动作返回非预期形状）',
-)
-export const workbenchResumeAllSkipped = t1((skippedCount: number) =>
-  L(
-    `No new resume tasks started (skipped ${skippedCount} non-auto-resumable task${skippedCount === 1 ? '' : 's'})`,
-    `未拉起新恢复任务（跳过 ${skippedCount} 个不可自动恢复任务）`,
-  ),
-)
-export const WORKBENCH_RESUME_NONE_NEEDED = L('No failed tasks need resuming', '当前没有需要恢复的失败任务')
-export const workbenchResumeStarted = t2((resumedCount: number, skippedCount: number) =>
-  skippedCount > 0
-    ? L(
-        `Initiated resume for ${resumedCount} failed task${resumedCount === 1 ? '' : 's'} (skipped ${skippedCount} non-auto-resumable)`,
-        `已发起恢复 ${resumedCount} 个失败任务，跳过 ${skippedCount} 个不可自动恢复任务`,
-      )
-    : L(
-        `Initiated resume for ${resumedCount} failed task${resumedCount === 1 ? '' : 's'}`,
-        `已发起恢复 ${resumedCount} 个失败任务`,
-      ),
-)
-export const workbenchResumeFailed = t1((err: string) => L(`Batch resume failed: ${err}`, `批量恢复失败：${err}`))

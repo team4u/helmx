@@ -15,7 +15,7 @@ import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { waitFor } from '@helmx/test-kit'
 import { KernelRuntime } from '../../kernel/src/runtime/index.js'
 import { createHelmx } from '../../hub/src/app.js'
-import { WorkflowService } from '../src/workflow/engine/service.js'
+import { createMemoryKvStore, WorkflowService } from '../src/workflow/runs/index.js'
 import { makeFauxProvider } from './helpers/plugin-test-env.js'
 
 const timeout = { timeout: 60_000 } as const
@@ -46,7 +46,7 @@ describe('workflow real-SDK integration (faux provider)', () => {
     try {
       const service = new WorkflowService({
         dataDir,
-        state: runtime.documentStore,
+        kv: createMemoryKvStore(),
         host: {
           spawnAgent: (request) => runtime.spawnAgent(request),
           invokeAction: async (pluginId, actionId) => {
@@ -167,7 +167,7 @@ describe('workflow real-SDK integration (faux provider)', () => {
     try {
       const service = new WorkflowService({
         dataDir,
-        state: runtime.documentStore,
+        kv: createMemoryKvStore(),
         host: {
           spawnAgent: (request) => runtime.spawnAgent(request),
           invokeAction: async (pluginId, actionId, input, context) => {

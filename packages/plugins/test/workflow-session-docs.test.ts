@@ -30,7 +30,7 @@ import { createWorktreePlugin } from '../src/worktree.js'
 import { createRunsProjection, MAX_PROJECTED_RUNS_PER_CONVERSATION } from '../src/workflow/projection.js'
 import { createHelmx } from '../../hub/src/app.js'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
-import { MemoryDocStore, makeConversationSummary } from './helpers/plugin-test-env.js'
+import { MemoryDocStore, MemoryKvStore, makeConversationSummary } from './helpers/plugin-test-env.js'
 
 const makeConversation = (id: number, parent?: number): ConversationSummary =>
   makeConversationSummary({
@@ -128,9 +128,10 @@ let dataDir: string
 let backend: FakeBackend
 let docs: MemoryDocStore
 let sessionDocs: MemorySessionDocStore
+let kv: MemoryKvStore
 
 function makeHost(): PluginHost {
-  return new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: backend, docs, sessionDocs })
+  return new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: backend, docs, sessionDocs, kv })
 }
 
 const META = (name: string) => `export const meta = { name: "${name}", description: "test" }\n`
@@ -140,6 +141,7 @@ beforeEach(() => {
   backend = new FakeBackend()
   docs = new MemoryDocStore()
   sessionDocs = new MemorySessionDocStore()
+  kv = new MemoryKvStore()
 })
 
 afterEach(() => {
@@ -288,7 +290,7 @@ test('删除的父会话不重建孤儿 doc；存活会话无 runs 时清到空'
 
   await host.dispose()
   const host2 = makeHost()
-  docs.store.delete('builtin:workflow:records')
+  kv.clearNamespace('builtin:workflow', 'runs')
   await host2.register(createWorkflowPlugin())
   const shard1 = readShard(host2, 1)
   assert.deepEqual(shard1.runs, [], '会话存在但无 runs：分片为空（不保留旧投影）')
@@ -472,9 +474,12 @@ test('分片瘦身：runs 会话分片剥离大体积 result 并保留 hasResult
   assert.equal(projected.resultPreview?.includes('second-line-hidden'), false)
 
   const inspected = (await host.invokeAction('builtin:workflow', 'inspect', { runId: started.run.id })) as { run: WorkflowRunSummary }
-  assert.equal(inspected.run.result, bigLine, 'inspect 仍返回完整原始 result')
+  assert.equal(inspected.run.result, bigLine, 'inspect 按需懒加载返回完整原始 result')
   const listed = (await host.invokeAction('builtin:workflow', 'runs', { conversationId: 1 })) as { runs: WorkflowRunSummary[] }
-  assert.equal(listed.runs.find((r) => r.id === started.run.id)?.result, bigLine, 'runs 动作仍返回完整原始 result')
+  const listedRun = listed.runs.find((r) => r.id === started.run.id)
+  assert.ok(listedRun, 'runs 列表包含该 run')
+  assert.equal(listedRun.hasResult, true, 'runs 列表零盘读返回紧凑摘要（hasResult=true）')
+  assert.equal(listedRun.resultPreview?.length, 200, 'runs 列表返回截断 resultPreview')
   await host.dispose()
 })
 
@@ -575,9 +580,12 @@ test('增量投影与 100 条滑窗：upsertRun 零 listRuns 磁盘读，超出 
 
 test('conversation.deleted 同时清理受管子代理登记表与已移除 worktree 绑定元数据（保留 active worktree；worktree 绑定归 builtin:worktree 裁剪）', { timeout: 60_000 }, async () => {
   backend.conversations.set(21, makeConversation(21, 1))
-  docs.set('builtin:workflow:subagent-conversations', {
-    '21': { depth: 1, parentConversationId: 1, maxSubagentDepth: 2, createdAt: 1 },
-  })
+  kv.put(
+    'builtin:workflow',
+    'depth',
+    '21',
+    JSON.stringify({ depth: 1, parentConversationId: 1, maxSubagentDepth: 2, createdAt: 1 }),
+  )
   docs.set('builtin:worktree:worktree-state', {
     'worktree-agent-bindings': {
       'agent-21': { childId: 21, parentConversationId: 1 },
@@ -617,15 +625,13 @@ test('conversation.deleted 同时清理受管子代理登记表与已移除 work
   const host = makeHost()
   await host.register(createWorkflowPlugin())
   await host.register(createWorktreePlugin())
-  const beforeGc = docs.get<Record<string, unknown>>('builtin:workflow:subagent-conversations', {})
-  assert.ok('21' in beforeGc, '派生子会话 21 已存在于 subagent-conversations')
+  assert.ok(kv.get('builtin:workflow', 'depth', '21') !== undefined, '派生子会话 21 已存在于 depth KV')
 
   backend.conversations.delete(21)
   backend.emit('conversation.deleted', { type: 'conversation.deleted', conversationId: 21 })
   await tick()
 
-  const afterGc = docs.get<Record<string, unknown>>('builtin:workflow:subagent-conversations', {})
-  assert.equal('21' in afterGc, false, '会话删除后必须回收 subagent-conversations 中的孤儿条目')
+  assert.equal(kv.get('builtin:workflow', 'depth', '21'), undefined, '会话删除后必须回收 depth KV 中的孤儿条目')
   const wtAfter = docs.get<Record<string, unknown>>('builtin:worktree:worktree-state', {})
   const bindingsAfter = wtAfter['worktree-agent-bindings'] as Record<string, unknown>
   assert.equal('agent-21' in bindingsAfter, false, '会话删除后必须回收 worktree-agent-bindings 中指向 21 的绑定')

@@ -95,6 +95,11 @@ export interface ConversationHookOptions {
    * Pass `false` when only `summary` / `live` / `pendingAsks` are needed to avoid eager detail fetches.
    */
   includeDetail?: boolean
+  /**
+   * Subscribe to streaming live frames (`conversationLives`, default true).
+   * Pass `false` when only `summary` / `pendingAsks` / cached `detail` are needed to avoid token-rate re-renders.
+   */
+  includeLive?: boolean
 }
 
 /**
@@ -106,6 +111,8 @@ export interface ConversationHookOptions {
  * then updated live via SSE. When `options?.includeDetail === false`, auto-loading
  * is skipped while still returning any already-cached `detail` plus `summary`,
  * `live`, `pendingAsks`, `loadError`, and manual `reload`.
+ * When `options?.includeLive === false`, live streaming updates are not subscribed
+ * and `live` stays `undefined`.
  * When conversationId is undefined (no conversation context), an empty view is
  * returned and no request is made.
  */
@@ -115,6 +122,7 @@ export function useConversation(
 ): ConversationHookResult {
   const port = usePluginClientHost()
   const includeDetail = options?.includeDetail !== false
+  const includeLive = options?.includeLive !== false
   const errorKey = conversationId !== undefined ? `conversation:${conversationId}` : undefined
 
   const subscribeSummary = useCallback(
@@ -143,13 +151,13 @@ export function useConversation(
 
   const subscribeLive = useCallback(
     (listener: () => void): (() => void) =>
-      conversationId !== undefined ? port.subscribeConversationLive(conversationId, listener) : NOOP_UNSUBSCRIBE,
-    [port, conversationId],
+      includeLive && conversationId !== undefined ? port.subscribeConversationLive(conversationId, listener) : NOOP_UNSUBSCRIBE,
+    [port, includeLive, conversationId],
   )
   const getLive = useCallback(
     (): ConversationLive | undefined =>
-      conversationId !== undefined ? port.getConversationLive(conversationId) : undefined,
-    [port, conversationId],
+      includeLive && conversationId !== undefined ? port.getConversationLive(conversationId) : undefined,
+    [port, includeLive, conversationId],
   )
   const live = useSyncExternalStore(subscribeLive, getLive, getLive)
 

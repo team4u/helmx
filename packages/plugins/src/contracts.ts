@@ -82,7 +82,7 @@ export interface WorkflowRunRequest {
 
 export type WorkflowRunStatus = 'running' | 'completed' | 'failed' | 'aborted'
 
-type WorkflowNodeStatus = 'pending' | 'running' | 'done' | 'failed' | 'skipped'
+export type WorkflowNodeStatus = 'pending' | 'running' | 'done' | 'failed' | 'aborted'
 
 /** DAG 单节点状态（agent / action / gate / script 等统一形状）。 */
 export interface WorkflowNodeState {
@@ -163,7 +163,7 @@ export interface WorkflowRunSummary {
   settledAt?: number
   result?: unknown
   error?: string
-  /** 结构化错误码（如 validation_error / workflow_action_uncertain / crash_recovery_limit / secret_grant_expired_on_restart 等；取代错误文本子串猜测）。 */
+  /** 结构化错误码（如 validation_error / workflow_action_uncertain / crash_recovery_limit 等；取代错误文本子串猜测）。 */
   errorCode?: string
   /** 引擎权威判定的可续跑标记（仅 status='failed' 且账本/规格完整可恢复且未被活跃接管时为 true）。 */
   resumable?: boolean

@@ -10,12 +10,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { HelmxError, type ConversationSummary, type MaybePromise, type PluginDefinition, type PluginToolContext } from '@helmx/protocol'
 import { WORKFLOW_PLUGIN_ID } from '../src/contracts.js'
-import { resolveActionId } from '../src/workflow/engine/host-adapter.js'
+import { resolveActionId } from '../src/workflow/runs/index.js'
 import { PluginHost } from '../../kernel/src/plugins/index.js'
 import { PluginHostBackendFixtureBase } from '../../kernel/test/helpers/plugin-host-backend.js'
 import { pluginToolResult } from '../../kernel/src/runtime/runtime-helpers.js'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
-import { MemoryDocStore, makeConversationSummary } from './helpers/plugin-test-env.js'
+import { MemoryDocStore, MemoryKvStore, makeConversationSummary } from './helpers/plugin-test-env.js'
 
 // ---------------------------------------------------------------------------
 // 测试基建
@@ -176,6 +176,7 @@ let dataDir: string
 let backend: FakeBackend
 let docs: MemoryDocStore
 let sessionDocs: MemorySessionDocStore
+let kv: MemoryKvStore
 
 function makeHost(options: { deferServices?: boolean } = {}): PluginHost {
   return new PluginHost({ buildProvider: createPluginBuildProvider(),
@@ -183,6 +184,7 @@ function makeHost(options: { deferServices?: boolean } = {}): PluginHost {
     host: backend,
     docs,
     sessionDocs,
+    kv,
     ...(options.deferServices !== undefined ? { deferServices: options.deferServices } : {}),
   })
 }
@@ -219,6 +221,7 @@ beforeEach(() => {
   backend = new FakeBackend()
   docs = new MemoryDocStore()
   sessionDocs = new MemorySessionDocStore()
+  kv = new MemoryKvStore()
 })
 
 afterEach(() => {
@@ -660,39 +663,41 @@ test('cleanup_worktree 工具：无登记选择器未命中显式抛 404 not_fou
 // 7. emitEvent 适配器收口：runs 投影/广播失败不得逃逸为 unhandledRejection
 // ---------------------------------------------------------------------------
 
-/**
- * 预置插件 records 文档：wf_a 为跨重启遗留 running（init 会标 failed 并发
- * workflow.updated）；wf_c 索引项 status 非法。测试恢复事件适配器时须先
- * 修复索引，否则恢复入口会以 workflow_index_corrupt 拒绝启动。
- */
-function seedCorruptRunsIndex(docStore: MemoryDocStore): void {
-  docStore.set('builtin:workflow:records', {
-    'workflow/runs': [
-      { id: 'wf_a', conversationId: 1, status: 'running', createdAt: 1, updatedAt: 1 },
-      { id: 'wf_c', conversationId: 1, status: 42, createdAt: 2, updatedAt: 2 },
-    ],
-  })
-  const artifactsDir = join(dataDir, 'plugins', 'builtin%3Aworkflow', 'artifacts', '1')
-  mkdirSync(artifactsDir, { recursive: true })
-  writeFileSync(join(artifactsDir, 'workflow-wf_a.record.json'), JSON.stringify({
-    id: 'wf_a', name: 'a', conversationId: 1, status: 'running', createdAt: 1, updatedAt: 1,
-    kind: 'workflow', journalPath: '/tmp/nonexistent-a.jsonl',
-  }))
-  writeFileSync(join(artifactsDir, 'workflow-wf_c.record.json'), JSON.stringify({
-    id: 'wf_c', name: 'c', conversationId: 1, status: 'completed', createdAt: 2, updatedAt: 2,
-    kind: 'workflow', journalPath: '/tmp/nonexistent-c.jsonl',
-  }))
-}
-
 test('emitEvent 适配器：广播失败时引擎语义完整、显式诊断、无 unhandledRejection', { timeout: 60_000 }, async () => {
-  // 恢复索引须先合法；广播观察面故障不能破坏已持久的恢复终态。
-  seedCorruptRunsIndex(docs)
-  docs.set('builtin:workflow:records', {
-    'workflow/runs': [
-      { id: 'wf_a', conversationId: 1, status: 'running', createdAt: 1, updatedAt: 1 },
-      { id: 'wf_c', conversationId: 1, status: 'completed', createdAt: 2, updatedAt: 2 },
-    ],
-  })
+  // 预置跨重启遗留 running RunHeader（缺失账本，init 会标 failed 并发 workflow.updated）；
+  // 广播观察面故障不能破坏已持久的恢复终态。
+  kv.put(
+    'builtin:workflow',
+    'runs',
+    'wf_a',
+    JSON.stringify({
+      id: 'wf_a',
+      kind: 'workflow',
+      name: 'a',
+      conversationId: 1,
+      status: 'running',
+      phase: 'running',
+      createdAt: 1,
+      updatedAt: 1,
+      journalPath: '/tmp/nonexistent-a.jsonl',
+    }),
+  )
+  kv.put(
+    'builtin:workflow',
+    'runs',
+    'wf_c',
+    JSON.stringify({
+      id: 'wf_c',
+      kind: 'workflow',
+      name: 'c',
+      conversationId: 1,
+      status: 'completed',
+      phase: 'settled',
+      createdAt: 2,
+      updatedAt: 2,
+      journalPath: '/tmp/nonexistent-c.jsonl',
+    }),
+  )
   const unsubscribe = backend.onEvent('workflow.updated', async () => {
     throw new Error('simulated broadcast failure')
   })
@@ -709,9 +714,11 @@ test('emitEvent 适配器：广播失败时引擎语义完整、显式诊断、�
     await new Promise((resolve) => setTimeout(resolve, 30))
     assert.deepEqual(unhandled, [], '事件适配器故障不得逃逸为 unhandledRejection')
     // wf_a 仍被 init 如实标 failed（引擎终态语义不被观察面故障破坏）。
-    const record = JSON.parse(readFileSync(join(dataDir, 'plugins', 'builtin%3Aworkflow', 'artifacts', '1', 'workflow-wf_a.record.json'), 'utf8')) as { status?: string }
-    assert.equal(record.status, 'failed')
-    // 适配器收口后的显式诊断事件（区别于 stop 路径的「Workflow final projection unsynced」）。
+    const entry = kv.get('builtin:workflow', 'runs', 'wf_a')
+    assert.ok(entry !== undefined, 'wf_a RunHeader 应存在')
+    const header = JSON.parse(entry.valueJson) as { status?: string }
+    assert.equal(header.status, 'failed')
+    // 适配器收口后的显式诊断事件。
     const notifications = backend.emitted.filter(
       (e) =>
         e.type === 'notification' &&

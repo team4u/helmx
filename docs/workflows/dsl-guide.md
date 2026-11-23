@@ -40,7 +40,7 @@ pnpm helmx workflows run ./review.js --args '{"pr": 1024, "strict": true}' --con
 
 ### `agent(prompt, options)`
 
-派生子智能体执行推理与工具调用任务，返回其最终文本（失败或被跳过时返回 `null`）。
+派生子智能体执行推理与工具调用任务，返回其最终文本（配置 `schema` 时返回校验后的原生 JSON 对象，失败时返回 `null`）。
 
 | 选项 | 类型 | 说明 |
 | :--- | :--- | :--- |
@@ -51,7 +51,7 @@ pnpm helmx workflows run ./review.js --args '{"pr": 1024, "strict": true}' --con
 | `isolation` | `'worktree'` | 启用独立 Git Worktree 隔离（唯一合法值） |
 | `gate` | `string` | 验收 shell 命令，退出码非 0 或超时判定失败；完整结果（`exitCode`、`timedOut`）经 `agent.withMeta` 回传 |
 | `resume` | `string` | 续接本 run 内既有智能体的 label |
-| `effort` | `string` | 思考力度：`minimal` / `low` / `medium` / `high` / `xhigh` / `max` |
+| `effort` | `string` | 思考力度：`off` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max` |
 | `schema` | `object` | 结构化输出的 JSON Schema |
 | `attachments` | `string[]` | 本次调用携带的产物 ID 列表 |
 | `maxSubagentDepth` | `number` | 相对任务树根的绝对子代理层级上限（1..5 整数；默认继承上限 2，根会话为第 0 层）。根会话可为大任务提高上限；受管子代理不得提高继承上限。续接未传时保留授权，显式设置重新校验；字段参与恢复缓存指纹 |
@@ -90,7 +90,7 @@ if (result === null) throw new Error("结构化输出校验失败")
 
 ### `agent.withMeta(prompt, options)` 与 `goal(spec)`
 
-`agent(prompt, opts)` 的返回值保持不变：成功返回文本或 `schema` 对象，失败返回 `null`。需要执行信息与门禁结果时改用 `agent.withMeta(prompt, opts)`，选项与 `agent()` 完全相同，返回值携带完整执行元数据：
+`agent(prompt, opts)` 的返回值保持不变：成功返回文本或 `schema` 解析后的原生对象，失败返回 `null`。需要执行信息与门禁结果时改用 `agent.withMeta(prompt, opts)`，选项与 `agent()` 完全相同（传入 `schema` 时 `result.output` 同样为校验解析后的原生对象），返回值携带完整执行元数据：
 
 ```ts
 interface AgentWithMetaResult<T = unknown> {
@@ -190,17 +190,13 @@ if (diff.ok) log(diff.output)
 
 嵌套调用其他工作流。`ref` 是已保存工作流名字符串，或 `{ scriptPath }` / `{ name }` 对象（均未提供则抛错）；`args` 原样传给子工作流。子工作流的名字用于进度前缀与错误定位。
 
-嵌套深度上限为 4 层（根工作流为第 0 层），总调用数仍受 `WORKFLOW_NESTED_CAP = 256` 约束。整棵工作流树在同一 Worker 进程内执行，所有 `agent` 与 `action` 节点共用一个 `workflow-<runId>.jsonl` 账本。全局 `index` 记录本次 run 的审计顺序；恢复按稳定 scope 路径、局部调用序号和尝试序号匹配。中途中断后对根 `runId` 调一次 `resumeFromRunId`，可复用各 scope 的成功前缀；并发模块中一个失败，不会让另一个模块的成功节点和动作重跑。同一 scope 内的调用发起顺序须保持确定。
+嵌套深度上限为 2 层（`MAX_WORKFLOW_NESTING_DEPTH = 2`，根工作流为第 0 层），总调用数受 `WORKFLOW_NESTED_CAP = 256` 约束。整棵工作流树在同一 Worker 进程内执行，所有 `agent` 与 `action` 节点共用一个 `workflow-<runId>.jsonl` 账本。全局 `index` 记录本次 run 的审计顺序；恢复按稳定 scope 路径、局部调用序号和尝试序号匹配。中途中断后对根 `runId` 调一次 `resumeFromRunId`，可复用各 scope 的成功前缀；并发模块中一个失败，不会让另一个模块的成功节点和动作重跑。同一 scope 内的调用发起顺序须保持确定。
 
 每次 `workflow()` 调用分配递增的 `scopeId`（根工作流为 `0`）。`label` 与 `resume` 以 `${scopeId}:${label}` 为键登记：并发运行的多个子工作流可以各自使用同名 `label`（如 `"plan"`），互不覆盖对方的续接目标。
 
 ### `phase(title)` 与 `log(message)`
 
 `phase(title)` 声明进入指定业务阶段（非空字符串），之后的 `agent` / `action` 自动归入该阶段，直至下一次调用；`agent` / `action` 各自的 `options.phase` 可覆盖当前 ambient 阶段。阶段在首次出现时分配序号并发出进度事件，同名阶段复用同一序号。`log(message)` 输出一条时间线日志（自动附加嵌套作用域前缀）。`console.log` / `info` / `warn` / `error` / `debug` 是 `log` 的同义别名。
-
-### `budget`
-
-`budget.spent()` 返回当前 run 已消耗的模型输出 Token 数；`budget.remaining()` 返回剩余配额（当前实现恒为 `Infinity`）。`budget.total` 为 `null`。
 
 ## 确定性约束与配额
 

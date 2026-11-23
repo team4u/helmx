@@ -29,23 +29,24 @@ async function verifyShutdownPersistence(options: { autoRecover: boolean }): Pro
     await app.close()
     app = undefined
 
-    // 不注册 workflow，直接校验持久层 records 与 .record.json。
+    // 不注册 workflow，直接校验持久层 KV RunHeader 与 detail 文件。
     reopened = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, autoResume: false })
     assert.equal(reopened.plugins.list().some((plugin) => plugin.id === 'builtin:workflow'), false)
-    const records = reopened.documentStore.get<Record<string, unknown>>('builtin:workflow:records', {})
-    const index = (records['workflow/runs'] as Array<Partial<WorkflowRunSummary>> | undefined) ?? []
-    const entry = index.find((item) => item?.id === run.id)
-    assert.ok(entry, `私有 records 索引必须从 SQLite 读回该 run（实际 ${JSON.stringify(index)}）`)
-    assert.equal(entry.status, expectedStatus, JSON.stringify(entry))
-    const persisted = JSON.parse(
-      await readFile(join(dataDir, 'plugins', 'builtin%3Aworkflow', 'artifacts', '1', `workflow-${run.id}.record.json`), 'utf-8'),
-    ) as WorkflowRunSummary & { suspendedCleanly?: boolean }
-    assert.equal(persisted.status, expectedStatus, JSON.stringify(persisted))
+    const kvRow = reopened.kvStore.get('builtin:workflow', 'runs', run.id)
+    assert.ok(kvRow !== undefined, `runs KV 必须从 SQLite 读回该 run（runId=${run.id}）`)
+    const header = JSON.parse(kvRow.valueJson) as { id: string; status: string; phase: string }
+    assert.equal(header.id, run.id)
+    assert.equal(header.status, expectedStatus, JSON.stringify(header))
     if (options.autoRecover) {
-      assert.equal(persisted.suspendedCleanly, true, '默认优雅关停必须落盘 suspendedCleanly=true')
+      assert.equal(header.phase, 'suspended', '默认优雅关停必须落盘 phase=suspended')
     } else {
-      assert.equal(persisted.suspendedCleanly, undefined)
+      assert.equal(header.phase, 'settled')
     }
+    const detail = JSON.parse(
+      await readFile(join(dataDir, 'plugins', 'builtin%3Aworkflow', 'artifacts', '1', `wf-${run.id}.detail.json`), 'utf-8'),
+    ) as { id: string; script?: string }
+    assert.equal(detail.id, run.id)
+    assert.ok(typeof detail.script === 'string' && detail.script.includes('shutdown-persistence'))
     await reopened.close()
     reopened = undefined
 
@@ -109,7 +110,7 @@ async function verifyShutdownPersistence(options: { autoRecover: boolean }): Pro
   }
 }
 
-test('真实 SQLite（默认 autoRecoverOnRestart=true）：关闭在途工作流后走 suspend 挂起落盘 running + suspendedCleanly 与最终投影', { timeout: 60_000 }, async () => {
+test('真实 SQLite（默认 autoRecoverOnRestart=true）：关闭在途工作流后走 suspend 挂起落盘 running + phase=suspended 与最终投影', { timeout: 60_000 }, async () => {
   await verifyShutdownPersistence({ autoRecover: true })
 })
 

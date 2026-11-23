@@ -1,80 +1,50 @@
 /**
- * worker-source.ts 独立测试（多级工作流 DSL 扩展，设计 §2.2-2.3/§4.1）。
+ * worker-source.test.ts — Thin RPC worker protocol + single-source host validation tests.
  *
- * 直接以 WORKER_SOURCE 启动真实 worker_threads + node:vm（与 runtime.ts 同一
- * 构造方式），用最小宿主协议（call/response/progress/complete/error）锁定：
- * - agent() 原有语义不变（文本透传 / schema 解析 / 失败 null）；
- * - AGENT_OPTIONS 新增 cwd / timeoutMs / gateTimeoutMs / maxAttempts 的校验与
- *   下发（resume×cwd 互斥；gateTimeoutMs 仅在设置 gate 时可用；范围先行拒绝）；
- * - agent.withMeta(prompt, opts) 与 goal(spec)（默认 maxAttempts=3；宿主必须回传
- *   { ok: boolean, ... } 元数据对象，回退文本/ null 显式报错不静默降级）；
- * - workflow() 嵌套上限 MAX_WORKFLOW_NESTING_DEPTH=4（保留 256 nested cap）；
- * - 每个 scope 递增 scopeId（根 0），agent payload 携带 scopeId。
- *
- * runtime/service 侧尚未合入：本文件只锁 worker ↔ host 消息面。待 runtime 侧
- * 配合项见各用例注释（withMeta 响应包装、scopeId 隔离 completedByLabel、
- * maxAttempts 重试循环、cwd/timeoutMs/gateTimeoutMs 下发 spawn）。
+ * Covers:
+ * - Thin worker wire payloads (`workflowRootPath`, `scopePath`, `scopeCallIndex`, `withMeta`, `goalMode`);
+ * - Single-source option validation via `runWorkflow` (cwd, nodeId, effort incl. 'off', timeoutMs, gateTimeoutMs, maxAttempts, mutual exclusions);
+ * - `agent.withMeta({ schema })` and `goal({ schema })` structured JSON parsing parity with `agent({ schema })`;
+ * - `workflow()` nesting depth cap (`MAX_WORKFLOW_NESTING_DEPTH = 2`), `nestedCap`, `undefined` return support, and sibling `workflowRootPath` isolation.
  */
-
 import { strict as assert } from 'node:assert'
 import { describe, it } from 'node:test'
 import { Worker } from 'node:worker_threads'
 import {
   MAX_WORKFLOW_NESTING_DEPTH,
+  runWorkflow,
   WORKER_SOURCE,
   type AgentWithMetaResult,
-} from '../src/workflow/engine/worker-source.js'
+  type WorkerAgentCallPayload,
+  type WorkflowHost,
+  type WorkflowSpawnRequest,
+} from '../src/workflow/dsl/index.js'
 
 const timeout = { timeout: 60_000 } as const
-
-/* ---------------------------------------------------------------------------
- * 最小宿主协议 harness
- * ------------------------------------------------------------------------- */
-
-interface AgentCallPayload {
-  prompt: string
-  label?: string
-  model?: string
-  agentType?: string
-  isolation?: string
-  gate?: string
-  resume?: string
-  effort?: string
-  schema?: unknown
-  attachments?: string[]
-  maxSubagentDepth?: number
-  nodeId?: string
-  cwd?: string
-  timeoutMs?: number
-  gateTimeoutMs?: number
-  maxAttempts?: number
-  scopeId?: number
-  withMeta?: boolean
-}
+const META = 'export const meta = { name: "worker-test", description: "test" }\n'
 
 interface WorkerOutcome {
   status: 'complete' | 'error'
   value?: unknown
   error?: string
-  agentCalls: AgentCallPayload[]
+  agentCalls: WorkerAgentCallPayload[]
   workflowRefs: Array<{ name?: string; scriptPath?: string }>
 }
 
-interface HarnessOptions {
-  args?: unknown
-  nestedCap?: number
-  onAgent?: (payload: AgentCallPayload) => unknown
-  /** 按 name 提供嵌套 workflow() 的脚本源码。 */
-  workflows?: Record<string, string>
-}
-
-function runWorkerSource(body: string, options: HarnessOptions = {}): Promise<WorkerOutcome> {
+function runWorkerRaw(
+  body: string,
+  options: {
+    args?: unknown
+    nestedCap?: number
+    onAgent?: (payload: WorkerAgentCallPayload) => unknown
+    workflows?: Record<string, string>
+  } = {},
+): Promise<WorkerOutcome> {
   return new Promise((resolve, reject) => {
     const worker = new Worker(WORKER_SOURCE, {
       eval: true,
       workerData: {
         body,
-        metaJson: JSON.stringify({ name: 'harness', description: 'worker-source harness' }),
         argsJson: options.args === undefined ? undefined : JSON.stringify(options.args),
         itemCap: 4096,
         nestedCap: options.nestedCap ?? 256,
@@ -86,10 +56,7 @@ function runWorkerSource(body: string, options: HarnessOptions = {}): Promise<Wo
       if (settled) return
       settled = true
       Object.assign(outcome, final)
-      void worker.terminate().then(
-        () => resolve(outcome),
-        () => resolve(outcome),
-      )
+      void worker.terminate().then(() => resolve(outcome), () => resolve(outcome))
     }
     worker.on('message', (message: any) => {
       if (message.type === 'progress') return
@@ -107,7 +74,7 @@ function runWorkerSource(body: string, options: HarnessOptions = {}): Promise<Wo
       if (message.type !== 'call') return
       if (message.method === 'agent') {
         outcome.agentCalls.push(message.payload)
-        const value = options.onAgent ? options.onAgent(message.payload) : `ok:${message.payload.prompt}`
+        const value = options.onAgent ? options.onAgent(message.payload) : `ok:${String(message.payload.prompt)}`
         worker.postMessage({ type: 'response', callId: message.callId, ok: true, value })
         return
       }
@@ -115,389 +82,160 @@ function runWorkerSource(body: string, options: HarnessOptions = {}): Promise<Wo
         outcome.workflowRefs.push(message.payload)
         const source = message.payload?.name !== undefined ? options.workflows?.[message.payload.name] : undefined
         if (source === undefined) {
-          worker.postMessage({
-            type: 'response',
-            callId: message.callId,
-            ok: false,
-            error: `harness has no source for workflow '${message.payload?.name}'`,
-          })
+          worker.postMessage({ type: 'response', callId: message.callId, ok: false, error: `missing '${message.payload?.name}'` })
           return
         }
-        worker.postMessage({
-          type: 'response',
-          callId: message.callId,
-          ok: true,
-          value: { name: message.payload.name, body: source },
-        })
+        worker.postMessage({ type: 'response', callId: message.callId, ok: true, value: { name: message.payload.name, body: source } })
         return
       }
-      worker.postMessage({
-        type: 'response',
-        callId: message.callId,
-        ok: false,
-        error: `harness cannot run method '${message.method}'`,
-      })
+      worker.postMessage({ type: 'response', callId: message.callId, ok: false, error: `unsupported '${message.method}'` })
     })
     worker.on('error', (error) => {
-      if (!settled) {
-        settled = true
-        reject(error)
-      }
+      if (!settled) { settled = true; reject(error) }
     })
     worker.on('exit', (code) => {
-      if (!settled) {
-        settled = true
-        reject(new Error(`worker exited unexpectedly (code ${code})`))
-      }
+      if (!settled) { settled = true; reject(new Error(`worker exited unexpectedly (${code})`)) }
     })
   })
 }
 
-const META_OK: AgentWithMetaResult<{ done: boolean }> = {
-  ok: true,
-  output: { done: true },
-  attempts: 3,
-  execution: {
-    nodeId: 'local',
-    conversationId: 42,
-    effectiveCwd: '/repo/wt/helmx/spawn-deadbeef',
-    worktree: { id: 'wt-1', path: '/repo/wt/helmx/spawn-deadbeef', branch: 'helmx/spawn-deadbeef' },
-  },
-  gate: { ok: true, output: '', exitCode: 0, timedOut: false },
+function makeHost(
+  onSpawn?: (req: WorkflowSpawnRequest) => Promise<{ ok: boolean; text?: string; error?: string }> | { ok: boolean; text?: string; error?: string },
+): { host: WorkflowHost; spawns: WorkflowSpawnRequest[] } {
+  const spawns: WorkflowSpawnRequest[] = []
+  const host: WorkflowHost = {
+    async spawnAgent(req) {
+      spawns.push(req)
+      if (onSpawn) return onSpawn(req)
+      return { ok: true, text: `ok:${req.prompt}` }
+    },
+    async resumeAgent(_id, prompt) {
+      return { ok: true, text: `resumed:${prompt}` }
+    },
+    abortAgent() {},
+    async runGate() {
+      return { ok: true, output: '' }
+    },
+    async invokeAction(actionId) {
+      return { pluginId: 'test', actionId, result: null }
+    },
+  }
+  return { host, spawns }
 }
 
-const META_FAILED: AgentWithMetaResult = {
-  ok: false,
-  output: null,
-  attempts: 2,
-  error: 'gate_failed',
-  timedOut: true,
-  gate: { ok: false, output: 'tests failed', exitCode: 1, timedOut: false },
-}
-
-/* ---------------------------------------------------------------------------
- * agent() 原有语义不变
- * ------------------------------------------------------------------------- */
-
-describe('worker-source agent() semantics unchanged', () => {
-  it('plain agent() returns host text as-is', timeout, async () => {
-    const outcome = await runWorkerSource('const r = await agent("hi"); return r')
-    assert.equal(outcome.status, 'complete')
-    assert.equal(outcome.value, 'ok:hi')
-    assert.equal(outcome.agentCalls.length, 1)
-    assert.equal(outcome.agentCalls[0]?.prompt, 'hi')
-    assert.equal(outcome.agentCalls[0]?.scopeId, 0)
-    // 非 meta 调用不得携带 withMeta 标记（runtime 侧按该字段切换响应包装）。
-    assert.ok(outcome.agentCalls[0]?.withMeta === undefined)
-  })
-
-  it('agent() with schema parses host JSON; host null resolves to null', timeout, async () => {
-    const outcome = await runWorkerSource(
-      'const a = await agent("q", { schema: { type: "object" } });\n' +
-        'const b = await agent("f");\n' +
-        'return { a: a, b: b }',
-      { onAgent: (payload) => (payload.schema !== undefined ? '{"done":true}' : null) },
-    )
-    assert.equal(outcome.status, 'complete')
-    assert.deepStrictEqual(outcome.value, { a: { done: true }, b: null })
-  })
-
-  it('unknown option key is still rejected', timeout, async () => {
-    const outcome = await runWorkerSource('await agent("hi", { nope: 1 })')
-    assert.equal(outcome.status, 'error')
-    assert.match(outcome.error ?? '', /opts\.nope is not a recognised option/)
-  })
-})
-
-/* ---------------------------------------------------------------------------
- * AGENT_OPTIONS 扩展：cwd / timeoutMs / gateTimeoutMs / maxAttempts
- * ------------------------------------------------------------------------- */
-
-describe('worker-source new agent options', () => {
-  it('forwards cwd and range-valid timeoutMs / gateTimeoutMs / maxAttempts in the payload', timeout, async () => {
-    const outcome = await runWorkerSource(
-      'await agent("work", { cwd: "/repo/modules/a", timeoutMs: 300000, gate: "pnpm test", gateTimeoutMs: 60000, maxAttempts: 3 })'
-    )
-    assert.equal(outcome.status, 'complete')
-    const payload = outcome.agentCalls[0]
-    assert.equal(payload?.cwd, '/repo/modules/a')
-    assert.equal(payload?.timeoutMs, 300000)
-    assert.equal(payload?.gateTimeoutMs, 60000)
-    assert.equal(payload?.maxAttempts, 3)
-    assert.equal(payload?.gate, 'pnpm test')
-    assert.equal(payload?.scopeId, 0)
-  })
-
-  it('cwd composes with isolation worktree and accepts boundary values', timeout, async () => {
-    const outcome = await runWorkerSource(
-      'await agent("w", { cwd: "/repo", isolation: "worktree", timeoutMs: 1000, gate: "true", gateTimeoutMs: 600000, maxAttempts: 1 })'
-    )
-    assert.equal(outcome.status, 'complete')
-    assert.equal(outcome.agentCalls[0]?.isolation, 'worktree')
-    assert.equal(outcome.agentCalls[0]?.timeoutMs, 1000)
-    assert.equal(outcome.agentCalls[0]?.gateTimeoutMs, 600000)
-    assert.equal(outcome.agentCalls[0]?.maxAttempts, 1)
-  })
-
-  it('resume and cwd are mutually exclusive', timeout, async () => {
-    const outcome = await runWorkerSource('await agent("fix", { resume: "impl", cwd: "/repo" })')
-    assert.equal(outcome.status, 'error')
-    assert.match(outcome.error ?? '', /opts\.resume and opts\.cwd are mutually exclusive/)
-  })
-
-  it('forwards valid nodeId (including explicit local) and rejects invalid nodeId or resume + nodeId', timeout, async () => {
-    const remote = await runWorkerSource('await agent("work", { nodeId: "gpu-1.us_west", cwd: "/srv/repo" })')
-    assert.equal(remote.status, 'complete')
-    assert.equal(remote.agentCalls[0]?.nodeId, 'gpu-1.us_west')
-    assert.equal(remote.agentCalls[0]?.cwd, '/srv/repo')
-
-    const explicitLocal = await runWorkerSource('await agent("work", { nodeId: "local" })')
-    assert.equal(explicitLocal.status, 'complete')
-    assert.equal(explicitLocal.agentCalls[0]?.nodeId, 'local')
-
-    for (const bad of ['', '  ', '_bad', '-leading', 'bad/node', 'bad node', 'a'.repeat(129), 42]) {
-      const invalid = await runWorkerSource(`await agent("x", { nodeId: ${JSON.stringify(bad)} })`)
-      assert.equal(invalid.status, 'error', `nodeId ${String(bad)} should fail`)
-      assert.match(invalid.error ?? '', /opts\.nodeId/)
-    }
-
-    const conflict = await runWorkerSource('await agent("fix", { resume: "impl", nodeId: "gpu-1" })')
-    assert.equal(conflict.status, 'error')
-    assert.match(conflict.error ?? '', /opts\.resume and opts\.nodeId are mutually exclusive/)
-  })
-
-  it('rejects cwd that is empty or blank', timeout, async () => {
-    const blank = await runWorkerSource('await agent("x", { cwd: "  " })')
-    assert.equal(blank.status, 'error')
-    assert.match(blank.error ?? '', /opts\.cwd requires a non-empty string/)
-  })
-
-  it('rejects timeoutMs outside 1000..3600000 or non-integer', timeout, async () => {
-    for (const bad of [999, 3600001, 1500.5, '1000']) {
-      const outcome = await runWorkerSource(`await agent("x", { timeoutMs: ${JSON.stringify(bad)} })`)
-      assert.equal(outcome.status, 'error', `timeoutMs ${String(bad)} should fail`)
-      assert.match(outcome.error ?? '', /opts\.timeoutMs must be an integer between 1000 and 3600000/)
-    }
-  })
-
-  it('gateTimeoutMs requires gate and rejects out-of-range values', timeout, async () => {
-    const noGate = await runWorkerSource('await agent("x", { gateTimeoutMs: 60000 })')
-    assert.equal(noGate.status, 'error')
-    assert.match(noGate.error ?? '', /opts\.gateTimeoutMs requires opts\.gate/)
-
-    for (const bad of [999, 600001, 2000.5]) {
-      const outcome = await runWorkerSource(`await agent("x", { gate: "pnpm test", gateTimeoutMs: ${JSON.stringify(bad)} })`)
-      assert.equal(outcome.status, 'error', `gateTimeoutMs ${String(bad)} should fail`)
-      assert.match(outcome.error ?? '', /opts\.gateTimeoutMs must be an integer between 1000 and 600000/)
-    }
-  })
-
-  it('rejects maxAttempts outside 1..10 or non-integer', timeout, async () => {
-    for (const bad of [0, 11, 2.5]) {
-      const outcome = await runWorkerSource(`await agent("x", { maxAttempts: ${JSON.stringify(bad)} })`)
-      assert.equal(outcome.status, 'error', `maxAttempts ${String(bad)} should fail`)
-      assert.match(outcome.error ?? '', /opts\.maxAttempts must be an integer between 1 and 10/)
-    }
-    const ten = await runWorkerSource('await agent("x", { maxAttempts: 10 })')
-    assert.equal(ten.status, 'complete')
-    assert.equal(ten.agentCalls[0]?.maxAttempts, 10)
-  })
-})
-
-/* ---------------------------------------------------------------------------
- * agent.withMeta() / goal()
- * ------------------------------------------------------------------------- */
-
-describe('worker-source agent.withMeta()', () => {
-  it('sends withMeta: true and returns the host meta object verbatim', timeout, async () => {
-    const outcome = await runWorkerSource(
-      'const r = await agent.withMeta("plan", { label: "plan", cwd: "/repo", gate: "pnpm test", maxAttempts: 3 });\n' +
-        'return r',
-      { onAgent: () => META_OK },
-    )
-    assert.equal(outcome.status, 'complete')
-    assert.deepStrictEqual(outcome.value, META_OK)
-    const payload = outcome.agentCalls[0]
-    assert.equal(payload?.withMeta, true)
-    assert.equal(payload?.label, 'plan')
-    assert.equal(payload?.cwd, '/repo')
-    assert.equal(payload?.maxAttempts, 3)
-  })
-
-  it('returns failure meta (ok: false, output null) without null-coalescing', timeout, async () => {
-    const outcome = await runWorkerSource('return await agent.withMeta("fix")', { onAgent: () => META_FAILED })
-    assert.equal(outcome.status, 'complete')
-    assert.deepStrictEqual(outcome.value, META_FAILED)
-  })
-
-  it('fails loudly when the host answers with plain text instead of a meta object', timeout, async () => {
-    // 现 runtime 对 agent 调用回传纯文本；withMeta 契约未接线时必须显式报错，
-    // 绝不把裸文本伪装成元数据对象（待 runtime 侧按 withMeta 标记切换响应包装）。
-    const outcome = await runWorkerSource('return await agent.withMeta("x")', { onAgent: () => 'ok:x' })
-    assert.equal(outcome.status, 'error')
-    assert.match(outcome.error ?? '', /agent\.withMeta\(\): the host returned a result that is not an execution meta object/)
-
-    const nulled = await runWorkerSource('return await agent.withMeta("x")', { onAgent: () => null })
-    assert.equal(nulled.status, 'error')
-    assert.match(nulled.error ?? '', /is not an execution meta object/)
-  })
-
-  it('shares the full option validation surface with agent()', timeout, async () => {
-    const outcome = await runWorkerSource(
-      'await agent.withMeta("x", { timeoutMs: 10 })'
-    )
-    assert.equal(outcome.status, 'error')
-    assert.match(outcome.error ?? '', /opts\.timeoutMs must be an integer between 1000 and 3600000/)
-  })
-})
-
-describe('worker-source goal()', () => {
-  it('defaults maxAttempts to 3 and maps objective to the prompt', timeout, async () => {
-    const outcome = await runWorkerSource(
-      'const r = await goal({ objective: "ship it", label: "impl", gate: "pnpm test" });\n' + 'return r',
-      { onAgent: () => META_OK },
-    )
-    assert.equal(outcome.status, 'complete')
-    assert.deepStrictEqual(outcome.value, META_OK)
-    const payload = outcome.agentCalls[0]
-    assert.equal(payload?.prompt, 'ship it')
-    assert.equal(payload?.label, 'impl')
-    assert.equal(payload?.gate, 'pnpm test')
-    assert.equal(payload?.maxAttempts, 3)
-    assert.equal(payload?.withMeta, true)
-  })
-
-  it('honours explicit maxAttempts and forwards nodeId/cwd/timeoutMs/gateTimeoutMs', timeout, async () => {
-    const outcome = await runWorkerSource(
-      'return await goal({ objective: "o", nodeId: "gpu-1", cwd: "/repo", maxAttempts: 5, timeoutMs: 300000, gate: "pnpm test", gateTimeoutMs: 30000 })',
-      { onAgent: () => META_OK },
-    )
-    assert.equal(outcome.status, 'complete')
-    const payload = outcome.agentCalls[0]
-    assert.equal(payload?.maxAttempts, 5)
-    assert.equal(payload?.nodeId, 'gpu-1')
-    assert.equal(payload?.cwd, '/repo')
-    assert.equal(payload?.timeoutMs, 300000)
-    assert.equal(payload?.gateTimeoutMs, 30000)
-
-    const withMetaOutcome = await runWorkerSource(
-      'return await agent.withMeta("o", { nodeId: "win-1", cwd: "C:\\\\repo" })',
-      { onAgent: () => META_OK },
-    )
-    assert.equal(withMetaOutcome.status, 'complete')
-    assert.equal(withMetaOutcome.agentCalls[0]?.nodeId, 'win-1')
-    assert.equal(withMetaOutcome.agentCalls[0]?.cwd, 'C:\\repo')
-
-    const badGoal = await runWorkerSource('await goal({ objective: "o", nodeId: "_bad" })')
-    assert.equal(badGoal.status, 'error')
-    assert.match(badGoal.error ?? '', /opts\.nodeId/)
-
-    const conflictGoal = await runWorkerSource('await goal({ objective: "o", resume: "prev", nodeId: "gpu-1" })')
-    assert.equal(conflictGoal.status, 'error')
-    assert.match(conflictGoal.error ?? '', /opts\.resume and opts\.nodeId are mutually exclusive/)
-  })
-
-  it('rejects missing objective, non-object spec and unknown keys', timeout, async () => {
-    const missing = await runWorkerSource('await goal({ label: "x" })')
-    assert.equal(missing.status, 'error')
-    assert.match(missing.error ?? '', /goal\(\) spec\.objective requires a non-empty string/)
-
-    const nonObject = await runWorkerSource('await goal("ship it")')
-    assert.equal(nonObject.status, 'error')
-    assert.match(nonObject.error ?? '', /goal\(spec\) expects an options object/)
-
-    const unknown = await runWorkerSource('await goal({ objective: "o", wish: 1 })')
-    assert.equal(unknown.status, 'error')
-    assert.match(unknown.error ?? '', /goal\(\) spec\.wish is not a recognised option/)
-  })
-})
-
-/* ---------------------------------------------------------------------------
- * workflow() 嵌套与 scopeId
- * ------------------------------------------------------------------------- */
-
-describe('worker-source workflow() nesting and scopeId', () => {
+describe('thin worker RPC protocol & nesting', () => {
   it('exports MAX_WORKFLOW_NESTING_DEPTH = 2', timeout, () => {
     assert.equal(MAX_WORKFLOW_NESTING_DEPTH, 2)
   })
 
-  it('allows 2 nested workflow levels and assigns incrementing scopeIds', timeout, async () => {
-    const outcome = await runWorkerSource('return await workflow("a")', {
+  it('forwards raw prompt/opts and deterministic scope coordinates', timeout, async () => {
+    const outcome = await runWorkerRaw('const a = await agent("first"); const b = await agent("second"); return [a, b]')
+    assert.equal(outcome.status, 'complete')
+    assert.deepEqual(outcome.value, ['ok:first', 'ok:second'])
+    assert.equal(outcome.agentCalls.length, 2)
+    assert.equal(outcome.agentCalls[0]?.workflowRootPath, 'root')
+    assert.equal(outcome.agentCalls[0]?.scopePath, 'root')
+    assert.equal(outcome.agentCalls[0]?.scopeCallIndex, 0)
+    assert.equal(outcome.agentCalls[1]?.scopeCallIndex, 1)
+    assert.equal(outcome.agentCalls[0]?.withMeta, undefined)
+  })
+
+  it('allows 2 nested workflow levels, isolates sibling workflowRootPath, and allows returning undefined', timeout, async () => {
+    const outcome = await runWorkerRaw('const u = await workflow("noop"); const d = await workflow("a"); return [u === undefined, d]', {
       workflows: {
+        noop: 'const x = 1',
         a: 'return await workflow("b")',
         b: 'return await agent("deep")',
       },
     })
     assert.equal(outcome.status, 'complete')
-    assert.equal(outcome.value, 'ok:deep')
+    assert.deepEqual(outcome.value, [true, 'ok:deep'])
     assert.equal(outcome.agentCalls.length, 1)
-    // 根 scope 0 → a=1 → b=2：第 2 层内的 agent 调用携带 scopeId 2。
-    assert.equal(outcome.agentCalls[0]?.scopeId, 2)
+    assert.equal(outcome.agentCalls[0]?.workflowRootPath, 'root/1/0')
+    assert.equal(outcome.agentCalls[0]?.scopePath, 'root/1/0')
+    assert.equal(outcome.agentCalls[0]?.scopeCallIndex, 0)
   })
 
-  it('rejects a 3rd nesting level', timeout, async () => {
-    const outcome = await runWorkerSource('return await workflow("a")', {
-      workflows: {
-        a: 'return await workflow("b")',
-        b: 'return await workflow("c")',
-        c: 'return 1',
-      },
+  it('rejects a 3rd nesting level and enforces nestedCap', timeout, async () => {
+    const tooDeep = await runWorkerRaw('return await workflow("a")', {
+      workflows: { a: 'return await workflow("b")', b: 'return await workflow("c")', c: 'return 1' },
     })
-    assert.equal(outcome.status, 'error')
-    assert.match(outcome.error ?? '', /workflow\(\) cannot be nested more than 2 levels deep/)
-  })
+    assert.equal(tooDeep.status, 'error')
+    assert.match(tooDeep.error ?? '', /cannot be nested more than 2 levels deep/)
 
-  it('keeps the 256 nested-call cap (total, orthogonal to depth)', timeout, async () => {
-    const outcome = await runWorkerSource('await workflow("a"); await workflow("b"); return await workflow("c")', {
+    const capped = await runWorkerRaw('await workflow("a"); await workflow("b"); return await workflow("c")', {
       nestedCap: 2,
-      workflows: {
-        a: 'return 1',
-        b: 'return 2',
-        c: 'return 3',
-      },
+      workflows: { a: 'return 1', b: 'return 2', c: 'return 3' },
     })
-    assert.equal(outcome.status, 'error')
-    assert.match(outcome.error ?? '', /exceeded its cap of 2 nested workflow\(\) calls/)
+    assert.equal(capped.status, 'error')
+    assert.match(capped.error ?? '', /exceeded its cap of 2 nested workflow\(\) calls/)
   })
 
-  it('sibling sub-workflows get distinct incrementing scopeIds (same label allowed)', timeout, async () => {
-    const outcome = await runWorkerSource(
-      'const r0 = await agent("root");\n' +
-        'const w1 = await workflow("a");\n' +
-        'const w2 = await workflow("b");\n' +
-        'return [r0, w1, w2]',
-      {
-        workflows: {
-          a: 'return await agent("in-a", { label: "plan" })',
-          b: 'return await agent("in-b", { label: "plan" })',
-        },
-      },
-    )
-    assert.equal(outcome.status, 'complete')
-    assert.deepStrictEqual(outcome.value, ['ok:root', 'ok:in-a', 'ok:in-b'])
-    assert.deepStrictEqual(
-      outcome.agentCalls.map((call) => call.scopeId),
-      [0, 1, 2],
-    )
-    // 并发子工作流可共用简短 label：隔离由 scopeId 承担（runtime 侧待按
-    // ${scopeId}:${label} 登记 completedByLabel）。
-    assert.equal(outcome.agentCalls[1]?.label, 'plan')
-    assert.equal(outcome.agentCalls[2]?.label, 'plan')
-  })
-
-  it('exposes goal to nested workflow scopes', timeout, async () => {
-    const outcome = await runWorkerSource('return await workflow("a")', {
-      workflows: {
-        a: 'const r = await goal({ objective: "child goal" });\nreturn r.output',
-      },
-      onAgent: (payload) => {
-        if (payload.withMeta === true) return { ok: true, output: 'child-done', attempts: 1 }
-        return `ok:${payload.prompt}`
-      },
+  it('single DETERMINISM_PRELUDE wrap does not fail on nested workflows', timeout, async () => {
+    const outcome = await runWorkerRaw('return await workflow("a")', {
+      workflows: { a: 'return typeof Math.random === "function" && typeof Date.now === "function"' },
     })
     assert.equal(outcome.status, 'complete')
-    assert.equal(outcome.value, 'child-done')
-    assert.equal(outcome.agentCalls[0]?.scopeId, 1)
-    assert.equal(outcome.agentCalls[0]?.maxAttempts, 3)
+    assert.equal(outcome.value, true)
+  })
+})
+
+describe('single-source host option validation & withMeta/goal schema parsing', () => {
+  it('forwards cwd, nodeId, effort (including off), timeoutMs, gateTimeoutMs, maxAttempts', timeout, async () => {
+    const { host, spawns } = makeHost()
+    const res = await runWorkflow({
+      script:
+        META +
+        'await agent("work", { cwd: "/repo/a", nodeId: "gpu-1.us_west", effort: "off", isolation: "worktree", timeoutMs: 300000, gate: "pnpm test", gateTimeoutMs: 60000, maxAttempts: 3 })',
+      host,
+    })
+    assert.equal(res.status, 'completed', res.error)
+    assert.equal(spawns[0]?.cwd, '/repo/a')
+    assert.equal(spawns[0]?.nodeId, 'gpu-1.us_west')
+    assert.equal(spawns[0]?.effort, 'off')
+    assert.equal(spawns[0]?.isolation, 'worktree')
+    assert.equal(spawns[0]?.timeoutMs, 300000)
+    assert.equal(spawns[0]?.gateTimeoutMs, 60000)
+  })
+
+  it('rejects unknown keys, blank cwd, bad nodeId, bad ranges, and resume mutual exclusions', timeout, async () => {
+    const { host } = makeHost()
+    const cases: Array<[string, RegExp]> = [
+      ['await agent("hi", { nope: 1 })', /opts\.nope is not a recognised option/],
+      ['await agent("fix", { resume: "impl", cwd: "/repo" })', /opts\.resume and opts\.cwd are mutually exclusive/],
+      ['await agent("fix", { resume: "impl", nodeId: "gpu-1" })', /opts\.resume and opts\.nodeId are mutually exclusive/],
+      ['await agent("x", { cwd: "  " })', /opts\.cwd requires a non-empty string/],
+      ['await agent("x", { nodeId: "_bad" })', /opts\.nodeId/],
+      ['await agent("x", { timeoutMs: 999 })', /opts\.timeoutMs must be an integer between 1000 and 3600000/],
+      ['await agent("x", { gateTimeoutMs: 60000 })', /opts\.gateTimeoutMs requires opts\.gate/],
+      ['await agent("x", { gate: "true", gateTimeoutMs: 999 })', /opts\.gateTimeoutMs must be an integer between 1000 and 600000/],
+      ['await agent("x", { maxAttempts: 11 })', /opts\.maxAttempts must be an integer between 1 and 10/],
+      ['await goal("ship it")', /goal\(spec\) expects an options object/],
+      ['await goal({ label: "x" })', /goal\(\) spec\.objective requires a non-empty string/],
+      ['await goal({ objective: "o", wish: 1 })', /goal\(\) spec\.wish is not a recognised option/],
+    ]
+    for (const [body, pattern] of cases) {
+      const res = await runWorkflow({ script: META + body, host })
+      assert.equal(res.status, 'failed', `expected failure for: ${body}`)
+      assert.match(res.error ?? '', pattern, `unexpected error for ${body}: ${res.error}`)
+    }
+  })
+
+  it('agent.withMeta({ schema }) and goal({ schema }) parse validated JSON into objects', timeout, async () => {
+    const { host } = makeHost(async () => ({ ok: true, text: '{"done":true,"count":3}' }))
+    const res = await runWorkflow({
+      script:
+        META +
+        'const a = await agent.withMeta("q", { schema: { type: "object", required: ["done"] } })\n' +
+        'const b = await goal({ objective: "q", schema: { type: "object", required: ["count"] }, maxAttempts: 1 })\n' +
+        'return { a, b }',
+      host,
+    })
+    assert.equal(res.status, 'completed', res.error)
+    const val = res.value as { a: AgentWithMetaResult; b: AgentWithMetaResult }
+    assert.equal(val.a.ok, true)
+    assert.deepEqual(val.a.output, { done: true, count: 3 })
+    assert.equal(val.b.ok, true)
+    assert.deepEqual(val.b.output, { done: true, count: 3 })
   })
 })

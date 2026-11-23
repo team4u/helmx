@@ -27,20 +27,29 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Worker } from 'node:worker_threads'
 import type { EnvExecResponse } from '@helmx/protocol'
-import type { WorkflowJournalEntry } from '../src/workflow/engine/journal.js'
 import { HelmxError } from '@helmx/protocol'
 import { deferred } from '@helmx/test-kit'
 import {
   JournalWriter,
   actionJournalKey,
   agentJournalKey,
+  extractMeta,
+  normalizeWorkflowArgs,
   readJournal,
+  runWorkflow,
+  WorkflowMetaError,
   type JournalWriteInput,
-} from '../src/workflow/engine/journal.js'
-import { extractMeta, WorkflowMetaError } from '../src/workflow/engine/meta.js'
-import { type WorkflowEntry, type WorkflowActionEntry } from '../src/workflow/engine/progress.js'
-import { normalizeWorkflowArgs, runWorkflow, type WorkflowHost, type WorkflowSpawnResult } from '../src/workflow/engine/runtime.js'
-import { WorkflowService, type WorkflowServiceHost, type WorkflowStateStore } from '../src/workflow/engine/service.js'
+  type WorkflowHost,
+  type WorkflowJournalEntry,
+} from '../src/workflow/dsl/index.js'
+import {
+  createMemoryKvStore,
+  WorkflowService,
+  type RunDetail,
+  type RunHeader,
+  type WorkflowKvStore,
+  type WorkflowServiceHost,
+} from '../src/workflow/runs/index.js'
 
 const timeout = { timeout: 60_000 } as const
 
@@ -358,7 +367,7 @@ describe('workflow orchestration', () => {
         new WorkflowService({
           dataDir: mkdtempSync(join(tmpdir(), 'wf-caps-')),
           host: makeServiceHost(),
-          state: makeStateStore(),
+          kv: makeStateStore(),
           ...opts,
         })
     // 构造即拒绝（零许可信号量会让 run 在首个调度点死锁）。
@@ -451,8 +460,8 @@ describe('workflow agent schema and gate', () => {
     assert.equal(fail.status, 'completed')
     assert.equal(fail.value, null)
     assert.equal(gateRuns, 2)
-    const errorEntry = fail.progress.find(
-      (e) => e.type === 'workflow_agent' && e.state === 'error',
+    const errorEntry = fail.nodes.find(
+      (n) => n.kind === 'agent' && n.status === 'failed',
     )
     assert.ok(errorEntry, 'gate failure recorded as agent error')
   })
@@ -615,8 +624,8 @@ describe('workflow action primitive', () => {
   it('action key mismatch (changed input) runs live for idempotent action', timeout, async () => {
     const { host, getCount } = makeCountingActionHost()
     const lines: WorkflowJournalEntry[] = [
-      { v: 1, seq: 0, type: 'action_started', index: 0, key: actionJournalKey('p.echo', '{"x":1}'), scopePath: 'root', scopeCallIndex: 0, idempotent: true },
-      { v: 1, seq: 1, type: 'action', index: 0, key: actionJournalKey('p.echo', '{"x":1}'), scopePath: 'root', scopeCallIndex: 0, ok: true, result: { n: 1 }, idempotent: true },
+      { v: 1, seq: 0, type: 'action_started', index: 0, key: actionJournalKey('p.echo', { x: 1 }), scopePath: 'root', scopeCallIndex: 0, idempotent: true },
+      { v: 1, seq: 1, type: 'action', index: 0, key: actionJournalKey('p.echo', { x: 1 }), scopePath: 'root', scopeCallIndex: 0, ok: true, result: { n: 1 }, idempotent: true },
     ]
     const result = await runWorkflow({
       script: META('a2') + 'const v = await action("p.echo", { x: 999 }, { idempotent: true })\nreturn v',
@@ -631,8 +640,8 @@ describe('workflow action primitive', () => {
   it('action key mismatch for non-idempotent action rejects replay to prevent repeating side effects', timeout, async () => {
     const { host, getCount } = makeCountingActionHost()
     const lines: WorkflowJournalEntry[] = [
-      { v: 1, seq: 0, type: 'action_started', index: 0, key: actionJournalKey('p.echo', '{"x":1}'), scopePath: 'root', scopeCallIndex: 0 },
-      { v: 1, seq: 1, type: 'action', index: 0, key: actionJournalKey('p.echo', '{"x":1}'), scopePath: 'root', scopeCallIndex: 0, ok: true, result: { n: 1 } },
+      { v: 1, seq: 0, type: 'action_started', index: 0, key: actionJournalKey('p.echo', { x: 1 }), scopePath: 'root', scopeCallIndex: 0 },
+      { v: 1, seq: 1, type: 'action', index: 0, key: actionJournalKey('p.echo', { x: 1 }), scopePath: 'root', scopeCallIndex: 0, ok: true, result: { n: 1 } },
     ]
     const result = await runWorkflow({
       script: META('a2-non-idem') + 'const v = await action("p.echo", { x: 999 })\nreturn v',
@@ -657,8 +666,8 @@ describe('workflow action primitive', () => {
         return { read: true }
       },
     })
-    const key0 = actionJournalKey('p.idem', '{}')
-    const key1 = actionJournalKey('p.non_idem', '{}')
+    const key0 = actionJournalKey('p.idem', {})
+    const key1 = actionJournalKey('p.non_idem', {})
     const lines: WorkflowJournalEntry[] = [
       { v: 1, seq: 0, type: 'action_started', index: 0, key: key0, scopePath: 'root', scopeCallIndex: 0, idempotent: true },
       { v: 1, seq: 1, type: 'action', index: 0, key: key0, scopePath: 'root', scopeCallIndex: 0, ok: false, error: 'temp fail', idempotent: true },
@@ -693,8 +702,8 @@ describe('workflow action primitive', () => {
         host,
         journal: {
           entries: [
-            { v: 1, seq: 0, type: 'action', index: 0, key: actionJournalKey('p.read', '{}'), scopePath: 'root', scopeCallIndex: 0, ok: false, idempotent: true },
-            { v: 1, seq: 1, type: 'action', index: 1, key: actionJournalKey('p.write', '{}'), scopePath: 'root', scopeCallIndex: 1, ok: true, result: {} },
+            { v: 1, seq: 0, type: 'action', index: 0, key: actionJournalKey('p.read', {}), scopePath: 'root', scopeCallIndex: 0, ok: false, idempotent: true },
+            { v: 1, seq: 1, type: 'action', index: 1, key: actionJournalKey('p.write', {}), scopePath: 'root', scopeCallIndex: 1, ok: true, result: {} },
           ],
           append: () => {},
         },
@@ -718,8 +727,8 @@ describe('workflow action primitive', () => {
         return { v: 1 }
       },
     })
-    const key0 = actionJournalKey('p.idem0', '{}')
-    const key1 = actionJournalKey('p.idem1', '{}')
+    const key0 = actionJournalKey('p.idem0', {})
+    const key1 = actionJournalKey('p.idem1', {})
     const lines: WorkflowJournalEntry[] = [
       { v: 1, seq: 0, type: 'action_started', index: 0, key: key0, scopePath: 'root', scopeCallIndex: 0, idempotent: true },
       { v: 1, seq: 1, type: 'action', index: 0, key: key0, scopePath: 'root', scopeCallIndex: 0, ok: false, error: 'retryable', idempotent: true },
@@ -784,12 +793,10 @@ describe('workflow action primitive', () => {
   })
 
   it('replay bookkeeping failure is fatal, not silently tolerated', timeout, async () => {
-    // 重放命中后向新账本补记终态行失败：必须 fatal（否则新 run 账本缺终态，
-    // 下次 resume 可能重执行该 action 的副作用）。
     const { host, getCount } = makeCountingActionHost()
     const lines: WorkflowJournalEntry[] = [
-      { v: 1, seq: 0, type: 'action_started', index: 0, key: actionJournalKey('p.echo', '{"x":1}'), scopePath: 'root', scopeCallIndex: 0 },
-      { v: 1, seq: 1, type: 'action', index: 0, key: actionJournalKey('p.echo', '{"x":1}'), scopePath: 'root', scopeCallIndex: 0, ok: true, result: { n: 1 } },
+      { v: 1, seq: 0, type: 'action_started', index: 0, key: actionJournalKey('p.echo', { x: 1 }), scopePath: 'root', scopeCallIndex: 0 },
+      { v: 1, seq: 1, type: 'action', index: 0, key: actionJournalKey('p.echo', { x: 1 }), scopePath: 'root', scopeCallIndex: 0, ok: true, result: { n: 1 } },
     ]
     const result = await runWorkflow({
       script: META('a-replay-fatal') + 'const v = await action("p.echo", { x: 1 })\nreturn v',
@@ -879,13 +886,11 @@ describe('workflow action primitive', () => {
     assert.ok(maxInFlight >= 2, `expected concurrency of 2 reached, was ${maxInFlight}`)
 
     // 验证 index 分配严格单调
-    const indices = result.progress
-      .filter((p) => p.type === 'workflow_agent' || p.type === 'workflow_action')
-      .map((p) => `${p.type}@${p.index}`)
-    assert.ok(indices.includes('workflow_agent@0'))
-    assert.ok(indices.includes('workflow_action@1'))
-    assert.ok(indices.includes('workflow_agent@2'))
-    assert.ok(indices.includes('workflow_action@3'))
+    const ids = result.nodes.map((n) => n.id)
+    assert.ok(ids.includes('agent-0'))
+    assert.ok(ids.includes('action-1'))
+    assert.ok(ids.includes('agent-2'))
+    assert.ok(ids.includes('action-3'))
   })
 
   it('aborted workflow does not execute queued actions behind semaphore', timeout, async () => {
@@ -989,10 +994,7 @@ describe('workflow action primitive', () => {
       journal: { append: () => {} },
     })
     assert.equal(result.status, 'completed')
-    const actNode = result.progress.find((p) => p.type === 'workflow_action') as Extract<
-      WorkflowEntry,
-      { type: 'workflow_action' }
-    >
+    const actNode = result.nodes.find((n) => n.kind === 'action')
     assert.ok(actNode)
     assert.equal(actNode.label, 'custom-label')
     assert.equal(actNode.phaseTitle, 'override-phase')
@@ -1016,7 +1018,7 @@ describe('workflow action primitive', () => {
 
   it('idempotent action replay semantics: ok:true replays without re-execution, ok:false allowed to resume', timeout, async () => {
     const { host, getCount } = makeCountingActionHost({
-      prepareAction: (actionId) => ({ pluginId: 'p', actionId, idempotent: true }),
+      prepareAction: async (actionId) => ({ pluginId: 'p', actionId, idempotent: true }),
     })
     const appends: JournalWriteInput[] = []
     const append = (e: JournalWriteInput) => {
@@ -1044,7 +1046,7 @@ describe('workflow action primitive', () => {
     assert.equal(r2.replayedCount, 1)
 
     // 若原账本中幂等动作失败（ok: false, idempotent: true）：
-    const failKey = actionJournalKey('p.echo', '{"a":1}')
+    const failKey = actionJournalKey('p.echo', { a: 1 })
     const failLines: WorkflowJournalEntry[] = [
       { v: 1, seq: 0, type: 'action_started', index: 0, key: failKey, scopePath: 'root', scopeCallIndex: 0, idempotent: true },
       { v: 1, seq: 1, type: 'action', index: 0, key: failKey, scopePath: 'root', scopeCallIndex: 0, ok: false, error: 'transient error', idempotent: true },
@@ -1240,62 +1242,51 @@ describe('journal writer and reader', () => {
 // WorkflowService（状态 store + host fake）
 // ---------------------------------------------------------------------------
 
-function makeStateStore(): WorkflowStateStore {
-  const map = new Map<string, unknown>()
-  return {
-    get<T>(key: string, initial: T): T {
-      return (map.get(key) as T | undefined) ?? initial
-    },
-    set<T>(key: string, value: T): void {
-      map.set(key, value)
-    },
-  }
+function makeStateStore(): WorkflowKvStore<RunHeader> {
+  return createMemoryKvStore<RunHeader>()
 }
 
-/** 可注入故障的 state store：flush 按计数抛错。 */
-function makeFailingFlushStore(failAfter: number): WorkflowStateStore & { flushes: number } {
+/** 可注入故障的 KV store：flush 按计数抛错。 */
+function makeFailingFlushStore(failAfter: number): WorkflowKvStore<RunHeader> & { flushes: number } {
   const inner = makeStateStore()
   let flushes = 0
-  const store: WorkflowStateStore & { flushes: number } = {
+  return {
     get: inner.get,
     set: inner.set,
+    delete: inner.delete,
+    list: inner.list,
+    clear: inner.clear,
     get flushes() {
       return flushes
     },
     async flush() {
       flushes++
       if (flushes > failAfter) throw new Error('simulated store flush failure')
+      await inner.flush()
     },
   }
-  return store
 }
 
-// ---------------------------------------------------------------------------
-// Run record file契约：records doc 仅存 workflow/runs 轻量索引，完整 RunRecord
-// 落 dataDir/artifacts/<conversationId>/workflow-<runId>.record.json
-// ---------------------------------------------------------------------------
-
-function runRecordPath(dataDir: string, conversationId: number, runId: string): string {
-  return join(dataDir, 'artifacts', String(conversationId), `workflow-${runId}.record.json`)
+function runDetailPath(dataDir: string, conversationId: number, runId: string): string {
+  return join(dataDir, 'artifacts', String(conversationId), `wf-${runId}.detail.json`)
 }
 
-function readRunRecord<T = Record<string, unknown>>(dataDir: string, conversationId: number, runId: string): T {
-  return JSON.parse(readFileSync(runRecordPath(dataDir, conversationId, runId), 'utf-8')) as T
+function readRunDetail(dataDir: string, conversationId: number, runId: string): RunDetail {
+  return JSON.parse(readFileSync(runDetailPath(dataDir, conversationId, runId), 'utf-8')) as RunDetail
 }
 
-/** 恢复夹具：按现行 RunRecord 契约落一条最小完整 running record file（必填字段与 writeRecord 对齐）。 */
-function seedRunRecordFile(dataDir: string, runId: string, conversationId: number): void {
-  const record = {
+function seedRunningWorkflowHeader(kv: WorkflowKvStore<RunHeader>, dataDir: string, runId: string, conversationId: number): void {
+  kv.set(runId, {
     id: runId,
+    kind: 'workflow',
     name: 'old',
     conversationId,
     status: 'running',
+    phase: 'running',
     createdAt: 1,
     updatedAt: 1,
     journalPath: join(dataDir, 'artifacts', String(conversationId), `workflow-${runId}.jsonl`),
-  }
-  mkdirSync(join(dataDir, 'artifacts', String(conversationId)), { recursive: true })
-  writeFileSync(runRecordPath(dataDir, conversationId, runId), JSON.stringify(record), 'utf-8')
+  })
 }
 
 interface ServiceHostExtras {
@@ -1372,7 +1363,7 @@ describe('WorkflowService', () => {
 
   it('新 run 缺少目标会话时显式 400；resume 复用原 run 会话并拒绝改投', timeout, async () => {
     const host = makeServiceHost()
-    const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
+    const service = new WorkflowService({ dataDir, host, kv: makeStateStore() })
     await assert.rejects(
       () => service.run({ script: META('missing-target') + 'return 1' }),
       (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400 && /目标会话/.test(err.message),
@@ -1392,7 +1383,7 @@ describe('WorkflowService', () => {
 
   it('run returns immediately with running summary; wait resolves result', timeout, async () => {
     const host = makeServiceHost()
-    const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
+    const service = new WorkflowService({ dataDir, host, kv: makeStateStore() })
     const summary = await service.run({ conversationId: 1, script: META('svc1') + 'return 1 + 1' })
     assert.equal(summary.status, 'running')
     const result = await service.wait(summary.id)
@@ -1404,8 +1395,7 @@ describe('WorkflowService', () => {
   it('bad meta fails terminally in the record (not left running)', timeout, async () => {
     const host = makeServiceHost()
     const state = makeStateStore()
-    const service = new WorkflowService({ dataDir, host, state })
-    // 坏 meta：meta 块插值——引擎 validate 前 extractMeta 即抛。
+    const service = new WorkflowService({ dataDir, host, kv: state })
     const summary = await service.run({
       conversationId: 1,
       script: 'export const meta = { name: `bad${1}`, description: "d" }\nreturn 1',
@@ -1414,54 +1404,43 @@ describe('WorkflowService', () => {
     const final = service.getRun(summary.id)
     assert.equal(final.status, 'failed', 'bad meta must reach a failed terminal state')
     assert.ok(final.error !== undefined && final.error.length > 0)
-    // record file里的 record 也必须是终态（跨重启不再依赖内存 summary）。
-    const record = readRunRecord<{ status: string }>(dataDir, 1, summary.id)
-    assert.equal(record.status, 'failed')
+    assert.equal(state.get(summary.id)!.status, 'failed')
     await service.close()
   })
 
   it('store flush failure after run leaves no dangling active and wait reports the failure', timeout, async () => {
     const host = makeServiceHost()
-    // 首次 flush（running 快照）成功，此后全部失败——终态写入失败。
     const state = makeFailingFlushStore(1)
-    const service = new WorkflowService({ dataDir, host, state })
+    const service = new WorkflowService({ dataDir, host, kv: state })
     const summary = await service.run({ conversationId: 1, script: META('svc-flush') + 'return 42' })
-    // wait 必须如实抛出终态落盘失败，不假成功。
     await assert.rejects(
       () => service.wait(summary.id),
       /simulated store flush failure/,
     )
-    // active 必须已摘除（不留假 running），getRun 回落record file仍可 inspect。
-    // （内存 summary 的 error 已附 persist failed 说明。）
-    // 先文件后索引：终态record file已落盘，随后的索引 flush 失败不回滚文件事实。
-    assert.ok(existsSync(runRecordPath(dataDir, 1, summary.id)), 'terminal record file must exist despite flush failure')
-    // 写入 store 的终态可能成功（set 同步镜像先于 flush），关键是明确失败已上报。
-    // close 对已损坏的 store 同样如实抛 flush 错误（诚实传播，非静默）。
+    assert.ok(existsSync(runDetailPath(dataDir, 1, summary.id)), 'terminal detail file must exist despite flush failure')
     await assert.rejects(() => service.close(), /simulated store flush failure/)
   })
 
   it('first state flush failure rejects run without leaving active or writer', timeout, async () => {
     const host = makeServiceHost()
-    const state = makeFailingFlushStore(0) // 首次 flush 即失败
-    const service = new WorkflowService({ dataDir, host, state })
+    const state = makeFailingFlushStore(0)
+    const service = new WorkflowService({ dataDir, host, kv: state })
     await assert.rejects(
       () => service.run({ conversationId: 1, script: META('svc-flush0') + 'return 1' }),
       /simulated store flush failure/,
     )
-    // 不留 active：abort 对不存在的 run 报 not_found（而非假 running）。
     await assert.rejects(() => service.abort('wf_nonexistent0000'), /does not exist/)
     await assert.rejects(() => service.close(), /simulated store flush failure/)
   })
 
   it('ambiguous short action id is rejected; fully qualified works', timeout, async () => {
     const host = makeServiceHost()
-    const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
+    const service = new WorkflowService({ dataDir, host, kv: makeStateStore() })
     const bad = await service.run({
       conversationId: 1,
       script: META('svc2') + 'const v = await action("update.memory", {})\nreturn v',
     })
     const badResult = await service.wait(bad.id)
-    // 歧义短 id 在 resolveActionId 抛 HelmxError；引擎把 action 失败折叠为 null。
     assert.equal(badResult, null)
     const badSummary = service.getRun(bad.id)
     const nodes = badSummary.nodes ?? []
@@ -1496,18 +1475,16 @@ describe('WorkflowService', () => {
       })
       return realSpawn(request)
     }
-    const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
+    const service = new WorkflowService({ dataDir, host, kv: makeStateStore() })
     const summary = await service.run({
       conversationId: 1,
       script: META('svc4') + 'const v = await agent("hang")\nreturn v',
     })
-    // 等 spawn 真正进入在途。
     await spawnEntered.promise
     await service.abort(summary.id)
     assert.equal(spawned, 1)
     const final = service.getRun(summary.id)
     assert.equal(final.status, 'aborted')
-    // abort 返回时子会话中止已确被执行（不再是 fire-and-forget）。
     assert.deepEqual(host.aborted, [childConvId])
     resolveSpawn?.()
     await service.close()
@@ -1516,14 +1493,13 @@ describe('WorkflowService', () => {
   it('resumeFromRunId replays completed agents; uncertain journal rejects explicitly', timeout, async () => {
     const host = makeServiceHost()
     const state = makeStateStore()
-    const service = new WorkflowService({ dataDir, host, state })
+    const service = new WorkflowService({ dataDir, host, kv: state })
     const first = await service.run({
       conversationId: 1,
       script: META('svc5') + 'const a = await agent("one")\nreturn a',
     })
     await service.wait(first.id)
 
-    // resume：同脚本。
     let spawns = 0
     const real = host.spawnAgent.bind(host)
     host.spawnAgent = async (req) => {
@@ -1535,16 +1511,19 @@ describe('WorkflowService', () => {
     assert.equal(spawns, 0, 'resume replays settled agents without spawning')
     assert.equal(service.getRun(resumed.id).result, 'text:one')
 
-    // uncertain journal：手工悬挂 action_started。
-    const record = readRunRecord<{ journalPath: string }>(dataDir, 1, first.id)
-    const firstJournal = readJournal(record.journalPath)
+    const header = state.get(first.id)!
+    assert.equal(header.kind, 'workflow')
+    const firstJournal = readJournal(header.journalPath)
     assert.equal(firstJournal.actionUncertain, false)
 
-    // 构造 uncertain：直接写一个悬挂 started 到该 journal 再 resume。
     const { appendFileSync } = await import('node:fs')
-    appendFileSync(record.journalPath, `${JSON.stringify({ v: 1, seq: 999, type: 'action_started', index: 5, key: 'zz', scopePath: 'root', scopeCallIndex: 5 })}\n`)
+    appendFileSync(header.journalPath, `${JSON.stringify({ v: 1, seq: 999, type: 'action_started', index: 5, key: 'zz', scopePath: 'root', scopeCallIndex: 5 })}\n`)
+    // second resume should reject (either conflict from resumed or uncertain — test uncertain on resumed.id instead)
+    const resumedHeader = state.get(resumed.id)!
+    assert.equal(resumedHeader.kind, 'workflow')
+    appendFileSync(resumedHeader.journalPath, `${JSON.stringify({ v: 1, seq: 999, type: 'action_started', index: 5, key: 'zz', scopePath: 'root', scopeCallIndex: 5 })}\n`)
     await assert.rejects(
-      () => service.run({ resumeFromRunId: first.id }),
+      () => service.run({ resumeFromRunId: resumed.id }),
       (error: unknown) => {
         assert.ok(error instanceof HelmxError)
         assert.equal(error.code, 'workflow_action_uncertain')
@@ -1557,16 +1536,15 @@ describe('WorkflowService', () => {
   it('resume with failed-action journal is rejected (side effect may have happened)', timeout, async () => {
     const host = makeServiceHost({ actionFail: true })
     const state = makeStateStore()
-    const service = new WorkflowService({ dataDir, host, state })
+    const service = new WorkflowService({ dataDir, host, kv: state })
     const first = await service.run({
       conversationId: 1,
       script: META('svc-failed-action') + 'const v = await action("builtin:profile.update.memory", {})\nreturn v',
     })
     await service.wait(first.id)
     assert.equal(host.actionCount(), 1)
-    assert.ok(existsSync(runRecordPath(dataDir, 1, first.id)), 'run record file must be persisted')
+    assert.ok(existsSync(runDetailPath(dataDir, 1, first.id)), 'run detail file must be persisted')
 
-    // handler 抛错的 action 终态行 ok:false：resume 必须拒绝自动重试。
     await assert.rejects(
       () => service.run({ resumeFromRunId: first.id }),
       (error: unknown) => {
@@ -1583,17 +1561,17 @@ describe('WorkflowService', () => {
   it('resume with unreadable journal rejects with journal_read_failed (never empty-ledger rerun)', timeout, async () => {
     const host = makeServiceHost()
     const state = makeStateStore()
-    const service = new WorkflowService({ dataDir, host, state })
+    const service = new WorkflowService({ dataDir, host, kv: state })
     const first = await service.run({
       conversationId: 1,
       script: META('svc-unreadable') + 'const a = await agent("one")\nconst b = await agent("two")\nreturn [a, b]',
     })
     await service.wait(first.id)
-    const record = readRunRecord<{ journalPath: string }>(dataDir, 1, first.id)
+    const header = state.get(first.id)!
+    assert.equal(header.kind, 'workflow')
     const spawnsBefore = host.spawns.length
-    // 用目录顶替 journal 文件：真实 EISDIR 读错误（root 下 chmod 无效）。
-    rmSync(record.journalPath)
-    mkdirSync(record.journalPath)
+    rmSync(header.journalPath)
+    mkdirSync(header.journalPath)
     try {
       await assert.rejects(
         () => service.run({ resumeFromRunId: first.id }),
@@ -1603,10 +1581,9 @@ describe('WorkflowService', () => {
           return true
         },
       )
-      // 未执行任何 handler：假空账本重跑是本次修复的红线。
       assert.equal(host.spawns.length, spawnsBefore)
     } finally {
-      rmSync(record.journalPath, { recursive: true, force: true })
+      rmSync(header.journalPath, { recursive: true, force: true })
     }
     await service.close()
   })
@@ -1614,17 +1591,17 @@ describe('WorkflowService', () => {
   it('resume with corrupted-but-safe journal lines surfaces ioErrors in run diagnostics (not silently fewer replays)', timeout, async () => {
     const host = makeServiceHost()
     const state = makeStateStore()
-    const service = new WorkflowService({ dataDir, host, state })
+    const service = new WorkflowService({ dataDir, host, kv: state })
     const first = await service.run({
       conversationId: 1,
       script: META('svc-corrupt-resume') + 'const a = await agent("one")\nreturn a',
     })
     await service.wait(first.id)
-    const record = readRunRecord<{ journalPath: string }>(dataDir, 1, first.id)
+    const header = state.get(first.id)!
+    assert.equal(header.kind, 'workflow')
 
-    // 追加一行可判定为 agent 的截断行：ioErrors 计数但不阻断安全重放。
     const { appendFileSync } = await import('node:fs')
-    appendFileSync(record.journalPath, '{"type":"agent","index":9,"key":"k9","ok":tr')
+    appendFileSync(header.journalPath, '{"type":"agent","index":9,"key":"k9","ok":tr')
     const resumed = await service.run({ resumeFromRunId: first.id })
     await service.wait(resumed.id)
     assert.equal(resumed.status, 'running', 'run() returns running summary before settle')
@@ -1635,11 +1612,10 @@ describe('WorkflowService', () => {
       (final.journalIoErrors ?? []).some((message) => message.includes('corrupt/unreadable line')),
       `summary must carry journal ioErrors diagnostics, got: ${JSON.stringify(final.journalIoErrors)}`,
     )
-    // 诊断也必须持久化（跨重启 inspect 可见）。
-    const persisted = readRunRecord<{ journalIoErrors?: string[] }>(dataDir, 1, resumed.id)
+    const persisted = state.get(resumed.id)!
     assert.ok(
       (persisted.journalIoErrors ?? []).some((message) => message.includes('corrupt/unreadable line')),
-      'persisted record file must carry journalIoErrors',
+      'persisted header must carry journalIoErrors',
     )
     await service.close()
   })
@@ -1647,7 +1623,7 @@ describe('WorkflowService', () => {
   it('args are persisted and reused on resume (deterministic branches preserved)', timeout, async () => {
     const host = makeServiceHost()
     const state = makeStateStore()
-    const service = new WorkflowService({ dataDir, host, state })
+    const service = new WorkflowService({ dataDir, host, kv: state })
     const first = await service.run({
       conversationId: 1,
       script: META('svc-args') + 'const a = await agent(args.topic)\nreturn a',
@@ -1656,14 +1632,11 @@ describe('WorkflowService', () => {
     await service.wait(first.id)
     assert.equal(service.getRun(first.id).result, 'text:hello')
 
-    // resume 不带 args：沿用原 args（确定性分支不变），且全部重放（0 spawn）。
     const resumed = await service.run({ resumeFromRunId: first.id })
     await service.wait(resumed.id)
     assert.equal(host.spawns.length, 1, 'only the first run spawned')
     assert.equal(service.getRun(resumed.id).result, 'text:hello')
 
-    // 显式提供不同 args 允许失配转 live。first 已被 resumed 接管（resumedByRunId
-    // 已设置，重复 resume 原 run 会被 409 拒绝）——从返回的新 run 继续。
     const changed = await service.run({ resumeFromRunId: resumed.id, args: { topic: 'changed' } })
     await service.wait(changed.id)
     assert.equal(host.spawns.length, 2)
@@ -1672,11 +1645,8 @@ describe('WorkflowService', () => {
   })
 
   it('concurrent runs namespace agentIds (no cross-run clobber in global agentSessions)', timeout, async () => {
-    // 引擎内 agentId 是 wf-agent-N，跨 run 重复。service 必须给投给宿主的
-    // proto.agentId 加 runId 前缀，否则 KernelRuntime 的全局 agentSessions
-    // 会互相覆盖，两个同 parent 的并行 run 会续接错 child。
     const host = makeServiceHost()
-    const service = new WorkflowService({ dataDir, host, state: makeStateStore(), concurrency: 4 })
+    const service = new WorkflowService({ dataDir, host, kv: makeStateStore(), concurrency: 4 })
     const [s1, s2] = await Promise.all([
       service.run({ conversationId: 1, script: META('conc-id-1') + 'const a = await agent("one")\nreturn a' }),
       service.run({ conversationId: 1, script: META('conc-id-2') + 'const a = await agent("two")\nreturn a' }),
@@ -1692,8 +1662,6 @@ describe('WorkflowService', () => {
   })
 
   it('resume uses this-run convId first (two parallel runs with resume do not cross wires)', timeout, async () => {
-    // 每个 run 各 spawn 一个 agent（不同 child conv），再 resume 该 agent：
-    // resume ref 必须解析到本 run 的 child，不能经全局映射串到另一 run。
     let nextConv = 500
     const resumeRefs: string[][] = []
     const host = makeServiceHost()
@@ -1707,7 +1675,7 @@ describe('WorkflowService', () => {
       request.onResolved?.({ conversationId: convId })
       return realSpawn(request)
     }
-    const service = new WorkflowService({ dataDir, host, state: makeStateStore(), concurrency: 4 })
+    const service = new WorkflowService({ dataDir, host, kv: makeStateStore(), concurrency: 4 })
     const script = (name: string, tag: string) =>
       META(name) +
       `const a = await agent("${tag}")\nconst b = await agent("${tag}", { resume: "${tag}" })\nreturn [a, b]`
@@ -1717,11 +1685,9 @@ describe('WorkflowService', () => {
     ])
     await Promise.all([service.wait(s1.id), service.wait(s2.id)])
     assert.equal(resumeRefs.length, 2, 'each run resumed its own agent')
-    // resume ref 必须是本 run 记录的 convId（纯数字），不是 agentId 字符串。
     for (const [agentId, ref] of resumeRefs) {
       assert.ok(ref !== undefined && /^\d+$/.test(ref), `resume must use this-run convId, got "${String(ref)}" for ${String(agentId)}`)
     }
-    // agentId 已带 runId 命名空间：按 run 过滤（完成顺序可能跨 run 交错）。
     const refOf = (runId: string): number => {
       const hit = resumeRefs.find(([agentId]) => String(agentId).startsWith(`${runId}:`))
       assert.ok(hit !== undefined, `run ${runId} must have its own resume ref`)
@@ -1730,7 +1696,6 @@ describe('WorkflowService', () => {
     const conv1 = refOf(s1.id)
     const conv2 = refOf(s2.id)
     assert.notEqual(conv1, conv2, 'two runs must resume distinct children')
-    // 各 run 结果自洽：resume 返回以自己 convId 为后缀。
     const r1 = (service.getRun(s1.id).result ?? []) as string[]
     const r2 = (service.getRun(s2.id).result ?? []) as string[]
     assert.ok(r1[1] !== undefined && r1[1].endsWith(String(conv1)), `r1=${JSON.stringify(r1)} conv1=${conv1}`)
@@ -1741,13 +1706,8 @@ describe('WorkflowService', () => {
   it('leftover running record from a previous process is marked failed on next run', timeout, async () => {
     const state = makeStateStore()
     const host = makeServiceHost()
-    // 预置一条 running 记录（模拟进程死亡）：workflow/runs 只存轻量索引字段，
-    // 完整 RunRecord 落 dataDir/artifacts/<convId>/workflow-<runId>.record.json。
-    state.set('workflow/runs', [
-      { id: 'wf_deadbeef0000', conversationId: 1, status: 'running', createdAt: 1, updatedAt: 1 },
-    ])
-    seedRunRecordFile(dataDir, 'wf_deadbeef0000', 1)
-    const service = new WorkflowService({ dataDir, host, state, autoRecoverOnRestart: false })
+    seedRunningWorkflowHeader(state, dataDir, 'wf_deadbeef0000', 1)
+    const service = new WorkflowService({ dataDir, host, kv: state, autoRecoverOnRestart: false })
     await service.init()
     const summary = service.getRun('wf_deadbeef0000')
     assert.equal(summary.status, 'failed')
@@ -1756,19 +1716,33 @@ describe('WorkflowService', () => {
   })
 
   it('init failure is retryable (a crashed first init does not permanently mark recovered)', timeout, async () => {
-    // 提交型 store：set 序列化入缓冲、get 解析返回副本（对齐真实 documentStore
-    // / 8d10ef7 语义：flush 失败 = 写未持久，读回仍见 running；对象引用不互串）。
     const committed = new Map<string, string>()
     const pending = new Map<string, string>()
     let flushOk = false
-    const state: WorkflowStateStore = {
-      get<T>(key: string, initial: T): T {
+    const state: WorkflowKvStore<RunHeader> = {
+      get(key) {
         const raw = committed.get(key)
-        if (raw === undefined) return initial
-        return JSON.parse(raw) as T
+        return raw === undefined ? undefined : (JSON.parse(raw) as RunHeader)
       },
-      set<T>(key: string, value: T): void {
+      set(key, value) {
         pending.set(key, JSON.stringify(value))
+      },
+      delete(key) {
+        pending.delete(key)
+        return committed.delete(key)
+      },
+      list() {
+        return {
+          items: [...committed.entries()].map(([key, raw]) => ({
+            key,
+            value: JSON.parse(raw) as RunHeader,
+            updatedAt: 1,
+          })),
+        }
+      },
+      clear() {
+        committed.clear()
+        pending.clear()
       },
       async flush() {
         if (!flushOk) throw new Error('simulated store flush failure')
@@ -1776,26 +1750,24 @@ describe('WorkflowService', () => {
         pending.clear()
       },
     }
-    // 预置 running 记录（索引已提交；完整记录按新契约是独立文件，直接落盘）。
     committed.set(
-      'workflow/runs',
-      JSON.stringify([{ id: 'wf_deadbeef0001', conversationId: 1, status: 'running', createdAt: 1, updatedAt: 1 }]),
+      'wf_deadbeef0001',
+      JSON.stringify({
+        id: 'wf_deadbeef0001',
+        kind: 'workflow',
+        name: 'old',
+        conversationId: 1,
+        status: 'running',
+        phase: 'running',
+        createdAt: 1,
+        updatedAt: 1,
+        journalPath: join(dataDir, 'artifacts', '1', 'workflow-wf_deadbeef0001.jsonl'),
+      }),
     )
-    seedRunRecordFile(dataDir, 'wf_deadbeef0001', 1)
     const host = makeServiceHost()
-    const service = new WorkflowService({ dataDir, host, state, autoRecoverOnRestart: false })
-    // 首次 init：终态先原子落record file，随后索引 flush 失败——如实抛错，未标 recovered。
+    const service = new WorkflowService({ dataDir, host, kv: state, autoRecoverOnRestart: false })
     await assert.rejects(() => service.init(), /simulated store flush failure/)
-    // 索引标记未提交：store 提交面仍见 running（先文件后索引，索引滞后于文件）。
-    assert.equal(
-      state.get<Array<{ id: string; status: string }>>('workflow/runs', []).find((e) => e.id === 'wf_deadbeef0001')?.status,
-      'running',
-      'uncommitted index mark must not be visible in the committed store',
-    )
-    // record file已持 failed 终态：持久权威面先于索引落盘，索引 flush 失败不回滚文件。
-    assert.equal(readRunRecord<{ status: string }>(dataDir, 1, 'wf_deadbeef0001').status, 'failed')
-    // 首次失败未永久标记 recovered（initPromise 已清，重试真实重执行而非复用
-    // 被拒 promise）；文件已终态则恢复幂等，完整成功。
+    assert.equal(state.get('wf_deadbeef0001')?.status, 'running', 'uncommitted header must stay running in committed store')
     flushOk = true
     await service.init()
     assert.equal(service.getRun('wf_deadbeef0001').status, 'failed')
@@ -1809,7 +1781,7 @@ describe('WorkflowService', () => {
     const service = new WorkflowService({
       dataDir,
       host,
-      state,
+      kv: state,
       redact: (text) => text.replaceAll(SECRET, '{{REDACTED}}'),
     })
     const summary = await service.run({
@@ -1818,16 +1790,15 @@ describe('WorkflowService', () => {
       args: { token: SECRET },
     })
     const result = (await service.wait(summary.id)) as { nested: { token: string }; list: string[] }
-    // 内存结果保持原值（运行时用原始值）……不：service 持久面统一脱敏，summary/result 也是持久面。
     assert.equal(result.nested.token, '{{REDACTED}}')
     assert.equal(result.list[0], '{{REDACTED}}')
-    const record = readRunRecord<{ args?: unknown; result?: unknown }>(dataDir, 1, summary.id)
-    assert.ok(!JSON.stringify(record).includes(SECRET), 'persisted record file must not contain the secret')
+    const detail = readRunDetail(dataDir, 1, summary.id)
+    assert.ok(!JSON.stringify(detail).includes(SECRET), 'persisted detail file must not contain the secret')
     await service.close()
   })
 
   it('validates request: exactly one source, safe name, size limit', timeout, async () => {
-    const service = new WorkflowService({ dataDir, host: makeServiceHost(), state: makeStateStore() })
+    const service = new WorkflowService({ dataDir, host: makeServiceHost(), kv: makeStateStore() })
     await assert.rejects(() => service.run({ conversationId: 1, name: 'a', script: 'x' }), /exactly one of/)
     await assert.rejects(() => service.run({ conversationId: 1 }), /必须提供/)
     await assert.rejects(() => service.run({ conversationId: 1, name: '../evil' }), /invalid/)
@@ -1836,7 +1807,7 @@ describe('WorkflowService', () => {
   })
 
   it('saved-name symlink escaping the workflows dir is rejected', timeout, async () => {
-    const service = new WorkflowService({ dataDir, host: makeServiceHost(), state: makeStateStore() })
+    const service = new WorkflowService({ dataDir, host: makeServiceHost(), kv: makeStateStore() })
     const dir = join(dataDir, 'workflows')
     mkdirSync(dir, { recursive: true })
     const outside = join(dataDir, 'outside.js')
@@ -1856,7 +1827,7 @@ describe('WorkflowService', () => {
 
   it('list() only exposes saved workflows with meta declarations', timeout, async () => {
     const host = makeServiceHost()
-    const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
+    const service = new WorkflowService({ dataDir, host, kv: makeStateStore() })
     const dir = join(dataDir, 'workflows')
     mkdirSync(dir, { recursive: true })
     writeFileSync(join(dir, 'good.js'), META('good') + 'return 1', 'utf-8')
@@ -1870,26 +1841,25 @@ describe('WorkflowService', () => {
 
   it('savedName only appears in runs launched by saved name（inline script runs do not carry it）', timeout, async () => {
     const host = makeServiceHost()
-    const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
+    const service = new WorkflowService({ dataDir, host, kv: makeStateStore() })
     const dir = join(dataDir, 'workflows')
     mkdirSync(dir, { recursive: true })
     writeFileSync(join(dir, 'rerun-me.js'), META('rerun-me') + 'return 7', 'utf-8')
 
     const byName = await service.run({ conversationId: 1, name: 'rerun-me' })
     await service.wait(byName.id)
-    assert.equal(service.getRun(byName.id).savedName, 'rerun-me', '按保存名启动的 run 摘要应携带 savedName（重跑入口）')
+    assert.equal(service.getRun(byName.id).savedName, 'rerun-me')
 
     const inline = await service.run({ conversationId: 1, script: META('inline') + 'return 8' })
     await service.wait(inline.id)
-    assert.equal(service.getRun(inline.id).savedName, undefined, '内联脚本 run 不携带 savedName（脚本源不在保存目录，不伪造重跑入口）')
+    assert.equal(service.getRun(inline.id).savedName, undefined)
     await service.close()
   })
 
   it('progress timeline is persisted periodically, not only at terminal state', timeout, async () => {
     const host = makeServiceHost()
     const state = makeStateStore()
-    const service = new WorkflowService({ dataDir, host, state })
-    // phase() 声明 + 长脚本：onProgress 节流窗口内落 progress。
+    const service = new WorkflowService({ dataDir, host, kv: state })
     const summary = await service.run({
       conversationId: 1,
       script:
@@ -1902,8 +1872,8 @@ describe('WorkflowService', () => {
       `,
     })
     await service.wait(summary.id)
-    const record = readRunRecord<{ progress?: Array<{ kind: string }> }>(dataDir, 1, summary.id)
-    const kinds = (record.progress ?? []).map((p) => p.kind)
+    const detail = readRunDetail(dataDir, 1, summary.id)
+    const kinds = (detail.progress ?? []).map((p) => p.kind)
     assert.ok(kinds.includes('phase'), `phase persisted: ${JSON.stringify(kinds)}`)
     assert.ok(kinds.includes('log'), `log persisted: ${JSON.stringify(kinds)}`)
     await service.close()
@@ -1923,9 +1893,8 @@ describe('WorkflowService', () => {
       },
     }
     const state = makeStateStore()
-    const service = new WorkflowService({ dataDir, host, state })
+    const service = new WorkflowService({ dataDir, host, kv: state })
 
-    // 1) 正常执行 env.exec（带 label 与 idempotent: true）
     const summary1 = await service.run({
       conversationId: 1,
       script:
@@ -1942,7 +1911,6 @@ describe('WorkflowService', () => {
     const node1 = run1.nodes?.find((n) => n.id === 'action-0')
     assert.equal(node1?.label, 'run-echo')
 
-    // 2) 无冲突短名 exec 解析为 env.exec
     const summary2 = await service.run({
       conversationId: 1,
       script: META('env-exec-2') + 'const res = await action("exec", { command: "uptime" })\nreturn res',
@@ -1950,7 +1918,6 @@ describe('WorkflowService', () => {
     const res2 = await service.wait(summary2.id)
     assert.deepEqual(res2, { ok: true, exitCode: 0, output: 'hello-env-exec', timedOut: false })
 
-    // 3) 非零退出码且 allowFailure 未设：抛 env_exec_failed，节点失败折叠为 null
     const summary3 = await service.run({
       conversationId: 1,
       script: META('env-exec-3') + 'const res = await action("env.exec", { command: ["fail-cmd"] })\nreturn res',
@@ -1962,7 +1929,6 @@ describe('WorkflowService', () => {
     assert.equal(node3?.status, 'failed')
     assert.match(node3?.error ?? '', /命令执行失败.*exitCode=1/)
 
-    // 4) 非零退出码但 allowFailure: true：正常返回结果对象
     const summary4 = await service.run({
       conversationId: 1,
       script:
@@ -1972,7 +1938,6 @@ describe('WorkflowService', () => {
     const res4 = await service.wait(summary4.id)
     assert.deepEqual(res4, { ok: false, exitCode: 1, output: 'command failed output', timedOut: false })
 
-    // 5) 非法参数（如空 command 或未知选项）在 Pre-flight 阶段拒绝，节点折叠为 null 且不记 action_started
     const summary5 = await service.run({
       conversationId: 1,
       script: META('env-exec-5') + 'const res = await action("env.exec", { command: "", badField: 123 })\nreturn res',
@@ -1989,13 +1954,12 @@ describe('WorkflowService', () => {
 
   it('env.exec fails with 501 when host does not configure execEnv', timeout, async () => {
     const baseHost = makeServiceHost()
-    // host 没有 execEnv
     const host: WorkflowServiceHost = {
       ...baseHost,
       execEnv: undefined,
     }
     const state = makeStateStore()
-    const service = new WorkflowService({ dataDir, host, state })
+    const service = new WorkflowService({ dataDir, host, kv: state })
     const summary = await service.run({
       conversationId: 1,
       script: META('env-exec-unsupported') + 'const res = await action("env.exec", { command: "date" })\nreturn res',
@@ -2048,9 +2012,8 @@ describe('WorkflowService', () => {
       },
     }
     const state = makeStateStore()
-    const service = new WorkflowService({ dataDir, host, state })
+    const service = new WorkflowService({ dataDir, host, kv: state })
 
-    // 第一轮：Step 1 agent 成功，Step 2 action preflight 失败（未知动作）
     const sum1 = await service.run({
       conversationId: 1,
       script:
@@ -2067,13 +2030,12 @@ describe('WorkflowService', () => {
     const run1 = service.getRun(sum1.id)
     assert.equal(run1.status, 'failed')
 
-    // 检查账本没有 action_started，actionUncertain 为 false
-    const rec1 = readRunRecord<{ journalPath: string }>(dataDir, 1, sum1.id)
-    const journal1 = readJournal(rec1.journalPath)
+    const header1 = state.get(sum1.id)!
+    assert.equal(header1.kind, 'workflow')
+    const journal1 = readJournal(header1.journalPath)
     assert.equal(journal1.actionUncertain, false)
     assert.equal(journal1.entries.some((e) => e.type === 'action_started'), false)
 
-    // 第二轮：改正脚本，resumeFromRunId。Step 1 必须 100% 缓存命中，不重新跑 agent；Step 2 执行成功！
     const sum2 = await service.run({
       conversationId: 1,
       script:
@@ -2090,7 +2052,6 @@ describe('WorkflowService', () => {
     assert.equal(agent1Runs, 1, 'step1 agent was cached and not re-executed')
     assert.equal(fixedActionRuns, 1, 'good_act executed')
 
-    // 验证 opts.phase 与 opts.label 在 summary.nodes 中生效
     const run2 = service.getRun(sum2.id)
     assert.equal(run2.status, 'completed')
     const actionNode = run2.nodes?.find((n) => n.id === 'action-1')
@@ -2108,9 +2069,8 @@ describe('WorkflowService', () => {
       execEnv: async () => ({ ok: true, exitCode: 0, output: 'ok', timedOut: false }),
     }
     const state = makeStateStore()
-    const service = new WorkflowService({ dataDir, host, state })
+    const service = new WorkflowService({ dataDir, host, kv: state })
 
-    // 1) 相对路径 cwd 必须在 preflight 拦截
     const sumRel = await service.run({
       conversationId: 1,
       script: META('preflight-rel-cwd') + 'const res = await action("env.exec", { command: "ls", cwd: "relative/path" })\nreturn res',
@@ -2121,12 +2081,12 @@ describe('WorkflowService', () => {
     const nodeRel = runRel.nodes?.find((n) => n.id === 'action-0')
     assert.equal(nodeRel?.status, 'failed')
     assert.match(nodeRel?.error ?? '', /cwd 必须为跨平台绝对路径/)
-    const recRel = readRunRecord<{ journalPath: string }>(dataDir, 1, sumRel.id)
-    const jRel = readJournal(recRel.journalPath)
+    const hRel = state.get(sumRel.id)!
+    assert.equal(hRel.kind, 'workflow')
+    const jRel = readJournal(hRel.journalPath)
     assert.equal(jRel.actionUncertain, false)
     assert.equal(jRel.entries.some((e) => e.type === 'action_started'), false)
 
-    // 2) 非法 nodeId 必须在 preflight 拦截
     const sumNode = await service.run({
       conversationId: 1,
       script: META('preflight-bad-node') + 'const res = await action("env.exec", { command: "ls", nodeId: "_bad:node!*" })\nreturn res',
@@ -2137,12 +2097,12 @@ describe('WorkflowService', () => {
     const nodeNode = runNode.nodes?.find((n) => n.id === 'action-0')
     assert.equal(nodeNode?.status, 'failed')
     assert.match(nodeNode?.error ?? '', /nodeId 需匹配/)
-    const recNode = readRunRecord<{ journalPath: string }>(dataDir, 1, sumNode.id)
-    const jNode = readJournal(recNode.journalPath)
+    const hNode = state.get(sumNode.id)!
+    assert.equal(hNode.kind, 'workflow')
+    const jNode = readJournal(hNode.journalPath)
     assert.equal(jNode.actionUncertain, false)
     assert.equal(jNode.entries.some((e) => e.type === 'action_started'), false)
 
-    // 3) 越界 timeoutMs 必须在 preflight 拦截
     const sumTimeout = await service.run({
       conversationId: 1,
       script: META('preflight-bad-timeout') + 'const res = await action("env.exec", { command: "ls", timeoutMs: 999_999_999 })\nreturn res',
@@ -2153,8 +2113,9 @@ describe('WorkflowService', () => {
     const nodeTimeout = runTimeout.nodes?.find((n) => n.id === 'action-0')
     assert.equal(nodeTimeout?.status, 'failed')
     assert.match(nodeTimeout?.error ?? '', /timeoutMs 必须是 1 到 600000 之间的整数/)
-    const recTimeout = readRunRecord<{ journalPath: string }>(dataDir, 1, sumTimeout.id)
-    const jTimeout = readJournal(recTimeout.journalPath)
+    const hTimeout = state.get(sumTimeout.id)!
+    assert.equal(hTimeout.kind, 'workflow')
+    const jTimeout = readJournal(hTimeout.journalPath)
     assert.equal(jTimeout.actionUncertain, false)
     assert.equal(jTimeout.entries.some((e) => e.type === 'action_started'), false)
 
@@ -2189,16 +2150,15 @@ describe('WorkflowService', () => {
       },
     }
     const state = makeStateStore()
-    const service = new WorkflowService({ dataDir, host, state })
+    const service = new WorkflowService({ dataDir, host, kv: state })
 
-    // 未 await 慢命令就立即 throw 模拟早期失败
     const sum = await service.run({
       conversationId: 1,
       script:
         META('unawaited-exec-leak') +
         `
-        action("env.exec", { command: "delay-write" }) // 未 await！
-        await action("env.exec", { command: "fast-check" }) // 确保前一条已经进入通道
+        action("env.exec", { command: "delay-write" })
+        await action("env.exec", { command: "fast-check" })
         throw new Error("early crash")
       `,
     })
@@ -2206,11 +2166,9 @@ describe('WorkflowService', () => {
     const run = service.getRun(sum.id)
     assert.equal(run.status, 'failed')
 
-    // 确认在途命令已收到 abort 信号，并等待超过原计划延迟（240ms > 180ms）确认未写入哨兵文件
     await abortObserved.promise
     await new Promise((r) => setTimeout(r, 240))
 
-    // 哨兵文件绝不能被写入（在途命令必须已被 abort 取消并完成通道清理）
     assert.equal(existsSync(sentinelFile), false, 'sentinel file must not be written by unawaited leaked command')
 
     await service.close()
@@ -2224,19 +2182,12 @@ describe('WorkflowService', () => {
     assert.equal(normalizeWorkflowArgs('hello world'), 'hello world')
     assert.deepEqual(normalizeWorkflowArgs({ a: 1 }), { a: 1 })
     assert.deepEqual(normalizeWorkflowArgs([1, 2, 3]), [1, 2, 3])
-
-    // JSON 对象字符串解包为真对象
     assert.deepEqual(normalizeWorkflowArgs('{"n": 42, "sentinel": "XYZZY"}'), { n: 42, sentinel: 'XYZZY' })
-    // JSON 数组字符串解包为真数组
     assert.deepEqual(normalizeWorkflowArgs('["星辰", "大海"]'), ['星辰', '大海'])
-    // 空对象与空数组
     assert.deepEqual(normalizeWorkflowArgs('{}'), {})
     assert.deepEqual(normalizeWorkflowArgs('[]'), [])
-    // 带换行与空白的 JSON 字符串
     assert.deepEqual(normalizeWorkflowArgs(' \n {"items": [1, 2]} \n '), { items: [1, 2] })
-    // 双重序列化的 JSON
     assert.deepEqual(normalizeWorkflowArgs(JSON.stringify('{"items": [10, 20]}')), { items: [10, 20] })
-    // 损坏的 JSON 语法安全兜底原样返回，不抛异常
     assert.equal(normalizeWorkflowArgs('{ broken json'), '{ broken json')
     assert.equal(normalizeWorkflowArgs('[ broken json'), '[ broken json')
   })
@@ -2245,7 +2196,7 @@ describe('WorkflowService', () => {
     const strDataDir = mkdtempSync(join(tmpdir(), 'wf-str-args-'))
     const host = makeServiceHost()
     const state = makeStateStore()
-    const service = new WorkflowService({ dataDir: strDataDir, host, state })
+    const service = new WorkflowService({ dataDir: strDataDir, host, kv: state })
     try {
       const summary = await service.run({
         conversationId: 1,
@@ -2254,11 +2205,10 @@ describe('WorkflowService', () => {
       })
       const result = await service.wait(summary.id)
       assert.equal(service.getRun(summary.id).status, 'completed', service.getRun(summary.id).error)
-      assert.deepEqual(result, ['STAR', 'OCEAN'], '脚本内 args 为真实对象，map 正常计算')
+      assert.deepEqual(result, ['STAR', 'OCEAN'])
 
-      // 持久化记录必须是真实对象，不得为字符串
-      const stored = readRunRecord<{ args?: unknown }>(strDataDir, 1, summary.id)
-      assert.equal(typeof stored.args, 'object', '持久化 args 必须为对象而非字符串')
+      const stored = readRunDetail(strDataDir, 1, summary.id)
+      assert.equal(typeof stored.args, 'object')
       assert.deepEqual(stored.args, { topics: ['star', 'ocean'] })
     } finally {
       await service.close()
@@ -2278,7 +2228,7 @@ describe('WorkflowService', () => {
         return req.resume !== undefined ? 'resumed-ok' : 'first-ok'
       },
     }
-    const service = new WorkflowService({ dataDir: nodeDataDir, host, state: makeStateStore() })
+    const service = new WorkflowService({ dataDir: nodeDataDir, host, kv: makeStateStore() })
     try {
       const summary = await service.run({
         conversationId: 1,
@@ -2295,8 +2245,8 @@ describe('WorkflowService', () => {
       assert.equal(spawns[0]!['nodeId'], 'gpu-1')
       assert.equal(spawns[0]!['cwd'], '/srv/repo')
       assert.equal(spawns[1]!['resume'], '501')
-      assert.equal(spawns[1]!['nodeId'], undefined, 'resume 不得携带 nodeId')
-      assert.equal(spawns[1]!['cwd'], undefined, 'resume 不得携带 cwd')
+      assert.equal(spawns[1]!['nodeId'], undefined)
+      assert.equal(spawns[1]!['cwd'], undefined)
     } finally {
       await service.close()
       rmSync(nodeDataDir, { recursive: true, force: true })
@@ -2305,7 +2255,6 @@ describe('WorkflowService', () => {
 
   it('host-adapter：DSL 原位重挂对原生 conversationId 省略 nodeId 和 cwd', timeout, async () => {
     const reattachDir = mkdtempSync(join(tmpdir(), 'wf-dsl-reattach-nodeid-'))
-    const { agentJournalKey } = await import('../src/workflow/engine/journal.js')
     const spawns: Array<Record<string, unknown>> = []
     const baseHost = makeServiceHost()
     const host: WorkflowServiceHost = {
@@ -2340,7 +2289,6 @@ describe('WorkflowService', () => {
           index: 0,
           key: natKey,
           attempt: 1,
-          invocationIndex: 0,
           scopePath: 'root',
           scopeCallIndex: 0,
           requestId: `helmx:spawn:${runId}:root:0:1`,
@@ -2350,24 +2298,24 @@ describe('WorkflowService', () => {
       'utf8',
     )
     const now = Date.now()
+    state.set(runId, {
+      id: runId,
+      name: 'host-reattach-nodeid',
+      conversationId: 1,
+      status: 'running',
+      phase: 'running',
+      kind: 'workflow',
+      journalPath,
+      createdAt: now,
+      updatedAt: now,
+    })
     writeFileSync(
-      join(artifactsDir, `workflow-${runId}.record.json`),
-      JSON.stringify({
-        id: runId,
-        name: 'host-reattach-nodeid',
-        conversationId: 1,
-        status: 'running',
-        kind: 'workflow',
-        script,
-        journalPath,
-        createdAt: now,
-        updatedAt: now,
-      }),
+      join(artifactsDir, `wf-${runId}.detail.json`),
+      JSON.stringify({ id: runId, script }),
       'utf8',
     )
-    state.set('workflow/runs', [{ id: runId, conversationId: 1, status: 'running', createdAt: now, updatedAt: now }])
 
-    const service = new WorkflowService({ dataDir: reattachDir, host, state, autoRecoverOnRestart: true })
+    const service = new WorkflowService({ dataDir: reattachDir, host, kv: state, autoRecoverOnRestart: true })
     try {
       await service.init()
       const res = await service.wait(runId)
@@ -2375,7 +2323,7 @@ describe('WorkflowService', () => {
       assert.deepEqual(res, ['ok:nat-job'])
       assert.equal(spawns.length, 1)
       assert.deepEqual(spawns[0]!['reattach'], { conversationId: 502, effectiveCwd: '/srv/work' })
-      assert.equal(spawns[0]!['nodeId'], undefined, '原生 conversationId 重挂不得透传 nodeId')
+      assert.equal(spawns[0]!['nodeId'], undefined)
       assert.equal(spawns[0]!['cwd'], undefined)
     } finally {
       await service.close()

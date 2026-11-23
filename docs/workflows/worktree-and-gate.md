@@ -59,14 +59,14 @@ sequenceDiagram
     participant E as 编排引擎
     participant X as 执行环境
     participant H as 宿主 runGate
-    E->>X: spawn（携带 gate 命令，不重复传给 agent_spawn 管道）
-    X->>X: 子智能体完成后在自身工作目录执行 gate
+    E->>X: spawn（经 agent_spawn 管道透传 gate，执行环境可原生验收）
+    X->>X: 子智能体完成后在自身工作目录执行 gate（若支持）
     X-->>E: onGateResult 回报结果
-    alt 未回报（如外部环境不支持）
+    alt 执行环境未回报
         E->>H: 宿主在确认过的工作目录补跑一次
         H-->>E: 兜底结果
     end
-    Note over E,H: 任一来源命中即定论，绝不二次执行；宿主缺 runGate 能力则显式失败该调用
+    Note over E,H: 任一来源命中即定论，绝不二次执行；两路均未产生结果或宿主缺 runGate 则显式以 gate_result_missing 失败
 ```
 
 判定标准：退出码为 0 且未超时即通过；非零退出码或超时把该次 `agent` 调用判定为失败（节点状态记录 gate 输出，便于定位缺陷），确定性账本不会将门禁失败的调用记为成功结果。结果以 `AgentGateResult` 完整回传，字段固定为：

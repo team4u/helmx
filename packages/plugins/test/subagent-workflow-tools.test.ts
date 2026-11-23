@@ -87,15 +87,9 @@ function toolNameOf(model: unknown[] | undefined): string | undefined {
   return message?.toolName
 }
 
-/** 进程内 state store（隔离 KernelRuntime 上的编排插件用；不跨重启）。 */
-function memoryState(): import('../src/workflow/engine/index.js').WorkflowStateStore {
-  const map = new Map<string, unknown>()
-  return {
-    get: <T>(key: string, initial: T): T => (map.has(key) ? (map.get(key) as T) : initial),
-    set: <T>(key: string, value: T): void => {
-      map.set(key, value)
-    },
-  }
+/** 进程内 KV（隔离 KernelRuntime 上的编排插件用；不跨重启）。 */
+function memoryState() {
+  return undefined
 }
 
 /** agent_spawn 观察插件：记录每次载荷，返回 void（continue）。 */
@@ -660,17 +654,17 @@ describe('SubagentWorkflow 工具入参贯通（真实引擎）', { timeout: 60_
       assert.equal(parsedSummary.result?.n, 42, 'args.n 真实保留')
       assert.deepEqual(parsedSummary.result?.topics, ['星辰', '大海'])
 
-      // 验证持久化层（新契约）：records doc 只存 workflow/runs 轻量索引；完整
-      // run record（含 args）在插件私有record file，args 必须为真实 dict 而非 string。
-      await app.kernel.documentStore.flush?.()
-      const recordsDoc = app.kernel.documentStore.get<Record<string, unknown>>('builtin:workflow:records', {})
-      const index = (recordsDoc['workflow/runs'] as Array<{ id: string }> | undefined) ?? []
-      assert.ok(index.some((item) => item.id === runId), `records 索引应含该 run（实际 ${JSON.stringify(index)}）`)
-      const persistedRecord = JSON.parse(
-        readFileSync(join(dir, 'plugins', 'builtin%3Aworkflow', 'artifacts', '1', `workflow-${runId}.record.json`), 'utf-8'),
+      // 验证持久化层（新契约）：runs KV 存紧凑 RunHeader；完整 RunDetail（含 args）
+      // 落插件私有 artifacts/1/wf-<runId>.detail.json，args 必须为真实 dict 而非 string。
+      const listed = (await app.kernel.plugins.invokeAction('builtin:workflow', 'runs', { conversationId: 1 })) as {
+        runs: Array<{ id: string }>
+      }
+      assert.ok(listed.runs.some((item) => item.id === runId), `runs 列表应含该 run（实际 ${JSON.stringify(listed.runs)}）`)
+      const persistedDetail = JSON.parse(
+        readFileSync(join(dir, 'plugins', 'builtin%3Aworkflow', 'artifacts', '1', `wf-${runId}.detail.json`), 'utf-8'),
       ) as { args?: unknown }
-      assert.equal(typeof persistedRecord.args, 'object', '持久化 args 必须为真对象而非字符串')
-      assert.deepEqual(persistedRecord.args, { topics: ['星辰', '大海'], n: 42 })
+      assert.equal(typeof persistedDetail.args, 'object', '持久化 args 必须为真对象而非字符串')
+      assert.deepEqual(persistedDetail.args, { topics: ['星辰', '大海'], n: 42 })
 
       // 2. 双重序列化 args：JSON.stringify('{"items": [10, 20]}')
       const doubleScript =
@@ -700,7 +694,7 @@ describe('SubagentWorkflow 工具入参贯通（真实引擎）', { timeout: 60_
       assert.equal(parsedSummary2.status, 'completed')
       assert.deepEqual(parsedSummary2.result, [20, 40], '双重序列化自动解包，map 正常计算')
       const persistedRecord2 = JSON.parse(
-        readFileSync(join(dir, 'plugins', 'builtin%3Aworkflow', 'artifacts', '1', `workflow-${runId2}.record.json`), 'utf-8'),
+        readFileSync(join(dir, 'plugins', 'builtin%3Aworkflow', 'artifacts', '1', `wf-${runId2}.detail.json`), 'utf-8'),
       ) as { args?: unknown }
       assert.equal(typeof persistedRecord2.args, 'object', '持久化 args 必须为真对象')
       assert.deepEqual(persistedRecord2.args, { items: [10, 20] })
@@ -971,7 +965,7 @@ describe('subagent / SubagentWorkflow 工具 presentationMeta 轻量投影与 Sc
         findRunByParentToolCall: () => undefined,
         startBackgroundAgent: async () => ({ run: runRecord, execution }),
         getRun: () => runRecord,
-        loadRunRecord: () => ({ id: runRecord.id, subagentMeta: { execution } }),
+        loadRunHeaderAndDetail: () => ({ header: { ...runRecord, phase: 'running', execution }, detail: { id: runRecord.id } }),
         isHostClosing: () => false,
         isAutoRecoverOnRestart: () => false,
       },

@@ -41,7 +41,7 @@ import { type HelmxEventFrame, type PluginDefinition } from '@helmx/protocol'
 import { KernelRuntime } from '../../kernel/src/runtime/index.js'
 import { createWorkflowPlugin } from '../src/workflow.js'
 import { createWorktreePlugin } from '../src/worktree.js'
-import { WorkflowService, type WorkflowServiceHost, type WorkflowStateStore } from '../src/workflow/engine/service.js'
+import { createMemoryKvStore, WorkflowService, type RunHeader, type WorkflowServiceHost } from '../src/workflow/runs/index.js'
 import { makeFauxProvider } from './helpers/plugin-test-env.js'
 
 const require = createRequire(import.meta.url)
@@ -60,40 +60,27 @@ const ROOT = ROOT_CONVERSATION_ID
 
 test('恢复顺序: prepareRecovery 先收集子会话落标记，init 才 abortConversation 并标 failed/interrupted，通知恰一次', { timeout: 60_000 }, async (t) => {
   const calls: string[] = []
-  const stateMap = new Map<string, unknown>()
-  const state: WorkflowStateStore = {
-    get: <T>(key: string, initial: T): T => (stateMap.get(key) as T | undefined) ?? initial,
-    set: <T>(key: string, value: T): void => {
-      stateMap.set(key, JSON.parse(JSON.stringify(value)))
-    },
-    flush: async () => {},
-  }
+  const kv = createMemoryKvStore<RunHeader>()
   const dataDir = mkdtempSync(join(tmpdir(), 'helmx-bg-order-'))
   t.after(() => {
     rmSync(dataDir, { recursive: true, force: true })
   })
   const CHILD = 42
   const now = Date.now()
-  // 新契约：records doc 只存 workflow/runs 轻量索引；完整 RunRecord 落记录
-  // 文件 dataDir/artifacts/<convId>/workflow-<runId>.record.json（纯
-  // WorkflowService fake 的 dataDir 即传入 dataDir，无插件目录前缀）。
-  state.set('workflow/runs', [{ id: 'wf_seed_order', conversationId: ROOT, status: 'running', createdAt: now, updatedAt: now }])
-  const recordDir = join(dataDir, 'artifacts', String(ROOT))
-  const recordPath = join(recordDir, 'workflow-wf_seed_order.record.json')
-  mkdirSync(recordDir, { recursive: true })
-  writeFileSync(recordPath, JSON.stringify({
+  kv.set('wf_seed_order', {
     id: 'wf_seed_order',
+    kind: 'subagent',
     name: 'subagent:worker',
     conversationId: ROOT,
     status: 'running',
+    phase: 'running',
     createdAt: now,
     updatedAt: now,
-    kind: 'subagent',
     notifyParentOnSettle: true,
-    journalPath: '/tmp/nonexistent.jsonl',
+    agentType: 'worker',
+    execution: { nodeId: 'local', conversationId: CHILD, effectiveCwd: '/tmp' },
     nodes: [{ id: 'subagent-0', kind: 'agent', label: 'subagent:worker', status: 'running', startedAt: now, conversationId: CHILD }],
-    subagentMeta: { agentType: 'worker', execution: { nodeId: 'local', conversationId: CHILD, effectiveCwd: '/tmp' } },
-  }), 'utf8')
+  })
   const settled: string[] = []
   const host: WorkflowServiceHost = {
     spawnAgent: async () => {
@@ -114,7 +101,7 @@ test('恢复顺序: prepareRecovery 先收集子会话落标记，init 才 abort
       settled.push(`${summary.id}:${summary.status}`)
     },
   }
-  const svc = new WorkflowService({ dataDir, state, host, autoRecoverOnRestart: false })
+  const svc = new WorkflowService({ dataDir, kv, host, autoRecoverOnRestart: false })
 
   await svc.prepareRecovery()
   assert.deepEqual(calls, [`abort:${CHILD}`], 'prepareRecovery 必须先逐个守卫中止（paused 相位落持久 abort 标记）遗留子会话')
@@ -124,14 +111,11 @@ test('恢复顺序: prepareRecovery 先收集子会话落标记，init 才 abort
   const firstAbort = calls.findIndex((c) => c.startsWith('abort:'))
   assert.ok(firstAbort === 0, `init 首个宿主调用必须是 abortConversation（实际：${calls.join(' | ')}）`)
 
-  const record = JSON.parse(readFileSync(recordPath, 'utf-8')) as { status: string; error?: string; notifiedAt?: number }
-  assert.equal(record.status, 'failed', '遗留 running run 必须显式标 failed（不伪装 completed）')
-  assert.match(record.error ?? '', /interrupted/, 'failed 原因必须是进程重启中断')
-  assert.ok(record.notifiedAt !== undefined, '父会话通知必须落 notifiedAt（防重复投递）')
-  // records doc 只维护轻量索引：唯一键 workflow/runs，状态同步终态。
-  assert.deepEqual([...stateMap.keys()], ['workflow/runs'], 'records doc 只存轻量索引（无 per-run 完整键）')
-  const indexEntry = (stateMap.get('workflow/runs') as Array<{ id: string; status: string }>).find((e) => e.id === 'wf_seed_order')
-  assert.equal(indexEntry?.status, 'failed', '索引状态必须同步 failed 终态')
+  const header = kv.get('wf_seed_order')
+  assert.ok(header !== undefined)
+  assert.equal(header.status, 'failed', '遗留 running run 必须显式标 failed（不伪装 completed）')
+  assert.match(header.error ?? '', /interrupted/, 'failed 原因必须是进程重启中断')
+  assert.ok(header.notifiedAt !== undefined, '父会话通知必须落 notifiedAt（防重复投递）')
   assert.deepEqual(settled, ['wf_seed_order:failed'], 'onBackgroundAgentSettled 恰好补发一次 failed')
 })
 
@@ -166,24 +150,28 @@ for (let i = 0; i < 400; i++) {
   if (childId && faux.state.callCount >= 1 && kernel.listConversations().some((c) => c.id === childId && c.status === 'working')) break
 }
 if (!childId || faux.state.callCount < 1) { process.stderr.write('seed: no child\\n'); process.exit(3) }
-// 植入 startBackgroundAgent 的持久 run 记录（新契约：插件私有 records 文档
-// 只存 workflow/runs 轻量索引；完整 RunRecord 落插件数据目录record file
-// <dataDir>/plugins/builtin%3Aworkflow/artifacts/<convId>/workflow-<runId>.record.json）
+// 植入 startBackgroundAgent 的持久 RunHeader（新契约：写入 pluginKv 命名空间 runs）
 const now = Date.now()
-const recordDir = join(dataDir, 'plugins', 'builtin%3Aworkflow', 'artifacts', '1')
-mkdirSync(recordDir, { recursive: true })
-writeFileSync(join(recordDir, 'workflow-wf_seed_real.record.json'), JSON.stringify({
-  id: 'wf_seed_real', name: 'subagent', conversationId: 1, status: 'running',
-  createdAt: now, updatedAt: now, kind: 'subagent', notifyParentOnSettle: true,
-  journalPath: join(dataDir, 'wf-seed-real.jsonl'),
-  nodes: [{ id: 'subagent-0', kind: 'agent', label: 'subagent', status: 'running', startedAt: now, conversationId: childId }],
-  subagentMeta: { execution: { nodeId: 'local', conversationId: childId } },
-}))
-const doc = kernel.documentStore
-doc.set('builtin:workflow:records', {
-  'workflow/runs': [{ id: 'wf_seed_real', conversationId: 1, status: 'running', createdAt: now, updatedAt: now }],
-})
-await doc.flush()
+kernel.kvStore.put(
+  'builtin:workflow',
+  'runs',
+  'wf_seed_real',
+  JSON.stringify({
+    id: 'wf_seed_real',
+    kind: 'subagent',
+    name: 'subagent',
+    conversationId: 1,
+    status: 'running',
+    phase: 'running',
+    createdAt: now,
+    updatedAt: now,
+    notifyParentOnSettle: true,
+    execution: { nodeId: 'local', conversationId: childId },
+    nodes: [{ id: 'subagent-0', kind: 'agent', label: 'subagent', status: 'running', startedAt: now, conversationId: childId }],
+  }),
+  now,
+)
+await kernel.kvStore.flush()
 await new Promise((resolve) => process.stdout.write('CHILD=' + childId + '\\n', resolve))
 process.kill(process.pid, 'SIGKILL')
 `
@@ -507,6 +495,7 @@ for (let i = 0; i < 400; i++) {
 }
 if (!childId) process.exit(4)
 await kernel.documentStore.flush()
+await kernel.kvStore.flush()
 await new Promise((resolve) => process.stdout.write('CHILD=' + childId + ',RUN=' + run.id + '\\n', resolve))
 process.kill(process.pid, 'SIGKILL')
 `,
@@ -634,10 +623,11 @@ process.kill(process.pid, 'SIGKILL')
   assert.ok(closeChildId > 1, '同步子会话必须进入 working')
   await k1.close()
 
-  const recordPath = join(closeDir, 'plugins', 'builtin%3Aworkflow', 'artifacts', '1', `workflow-${closeRun.id}.record.json`)
-  const recordAfterClose = JSON.parse(readFileSync(recordPath, 'utf8')) as Record<string, unknown>
-  assert.equal(recordAfterClose['status'], 'aborted')
-  assert.equal(recordAfterClose['pendingChildCleanup'], true, 'host closing 时存在子会话必须写入 pendingChildCleanup')
+  const kvEntryAfterClose = k1.kvStore.get('builtin:workflow', 'runs', closeRun.id)
+  assert.ok(kvEntryAfterClose !== undefined, 'close 后 runs KV 应含该 RunHeader')
+  const headerAfterClose = JSON.parse(kvEntryAfterClose.valueJson) as { status?: string; phase?: string }
+  assert.equal(headerAfterClose.status, 'aborted')
+  assert.equal(headerAfterClose.phase, 'cleanup_pending', 'host closing 时存在子会话必须落 phase=cleanup_pending')
 
   const fauxC2 = makeFauxProvider()
   k2 = await KernelRuntime.open({
@@ -661,8 +651,10 @@ process.kill(process.pid, 'SIGKILL')
   assert.equal(fauxC2.state.callCount, 0, '关停残留子会话重启不得继续执行或发父通知')
   assert.equal(k2.getConversation(closeChildId).status, 'idle')
   assert.equal(rootInputs2.length, 0)
-  const recordAfterRestart = JSON.parse(readFileSync(recordPath, 'utf8')) as Record<string, unknown>
-  assert.equal(recordAfterRestart['pendingChildCleanup'], undefined, 'init() 恢复后必须清除 pendingChildCleanup')
+  const kvEntryAfterRestart = k2.kvStore.get('builtin:workflow', 'runs', closeRun.id)
+  assert.ok(kvEntryAfterRestart !== undefined)
+  const headerAfterRestart = JSON.parse(kvEntryAfterRestart.valueJson) as { phase?: string }
+  assert.equal(headerAfterRestart.phase, 'settled', 'init() 恢复后必须收敛 phase=settled')
 })
 
 // ---------------------------------------------------------------------------
@@ -723,6 +715,7 @@ for (let i = 0; i < 400; i++) {
 }
 if (!childId) process.exit(5)
 await kernel.documentStore.flush()
+await kernel.kvStore.flush()
 await new Promise((resolve) => process.stdout.write('CHILD=' + childId + ',RUN=' + run.id + '\\n', resolve))
 process.kill(process.pid, 'SIGKILL')
 `,
@@ -802,6 +795,7 @@ process.kill(process.pid, 'SIGKILL')
     preState['worktree-leases'] = preLeases
     kernel.documentStore.set('builtin:worktree:worktree-state', preState)
     await kernel.documentStore.flush()
+await kernel.kvStore.flush()
 
     // 刻意逆序注册（worktree 先于 workflow）：验证 reconcile 阶段按 reconcileAfter 拓扑序先收敛 workflow 遗留子会话，
     // 再回收原生工作树崩溃租约，不再依赖 Hub 注册顺序。

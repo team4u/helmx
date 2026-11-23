@@ -13,7 +13,8 @@ import {
   type FauxProviderHandle,
   type RegisterFauxProviderOptions,
 } from '@earendil-works/pi-ai/providers/faux'
-import type { PluginConfigStore, PluginDocStore } from '../../../kernel/src/plugins/index.js'
+import { compareCodeUnit } from '@helmx/protocol'
+import type { PluginConfigStore, PluginDocStore, PluginKvRawEntry, PluginKvStore } from '../../../kernel/src/plugins/index.js'
 
 export {
   deferred,
@@ -96,6 +97,93 @@ export class MemoryDocStore implements PluginDocStore {
   /** 返回当前所有存储键列表。 */
   keys(): string[] {
     return [...this.store.keys()]
+  }
+}
+
+/**
+ * 内存版 `PluginKvStore`：按 `(pluginId, namespace, key)` 隔离键值存储，
+ * 匹配内核 `HelmxStore` KV 契约（按码点序分页、`prefix`/`cursor`/`limit`、`flushCount`）。
+ */
+export class MemoryKvStore implements PluginKvStore {
+  private readonly store = new Map<string, Map<string, Map<string, { valueJson: string; updatedAt: number }>>>()
+  flushCount = 0
+
+  get(pluginId: string, namespace: string, key: string): { valueJson: string; updatedAt: number } | undefined {
+    const entry = this.store.get(pluginId)?.get(namespace)?.get(key)
+    return entry ? { ...entry } : undefined
+  }
+
+  put(pluginId: string, namespace: string, key: string, valueJson: string): number {
+    let byNs = this.store.get(pluginId)
+    if (!byNs) {
+      byNs = new Map()
+      this.store.set(pluginId, byNs)
+    }
+    let byKey = byNs.get(namespace)
+    if (!byKey) {
+      byKey = new Map()
+      byNs.set(namespace, byKey)
+    }
+    const updatedAt = Date.now()
+    byKey.set(key, { valueJson, updatedAt })
+    return updatedAt
+  }
+
+  delete(pluginId: string, namespace: string, key: string): boolean {
+    const byNs = this.store.get(pluginId)
+    const byKey = byNs?.get(namespace)
+    if (!byKey || !byKey.delete(key)) return false
+    if (byKey.size === 0) byNs!.delete(namespace)
+    if (byNs!.size === 0) this.store.delete(pluginId)
+    return true
+  }
+
+  list(
+    pluginId: string,
+    namespace: string,
+    opts?: { prefix?: string; limit?: number; cursor?: string },
+  ): { items: PluginKvRawEntry[]; nextCursor?: string } {
+    const byKey = this.store.get(pluginId)?.get(namespace)
+    if (!byKey || byKey.size === 0) return { items: [] }
+    const keys: string[] = []
+    for (const key of byKey.keys()) {
+      if (opts?.prefix !== undefined && !key.startsWith(opts.prefix)) continue
+      if (opts?.cursor !== undefined && compareCodeUnit(key, opts.cursor) <= 0) continue
+      keys.push(key)
+    }
+    keys.sort(compareCodeUnit)
+    const limit = opts?.limit
+    const hasMore = limit !== undefined && keys.length > limit
+    const pageKeys = hasMore ? keys.slice(0, limit) : keys
+    const items = pageKeys.map((key) => {
+      const entry = byKey.get(key)!
+      return { key, valueJson: entry.valueJson, updatedAt: entry.updatedAt }
+    })
+    return {
+      items,
+      ...(hasMore && items.length > 0 ? { nextCursor: items[items.length - 1]!.key } : {}),
+    }
+  }
+
+  clearNamespace(pluginId: string, namespace: string): void {
+    const byNs = this.store.get(pluginId)
+    if (byNs) {
+      byNs.delete(namespace)
+      if (byNs.size === 0) this.store.delete(pluginId)
+    }
+  }
+
+  deletePlugin(pluginId: string): void {
+    this.store.delete(pluginId)
+  }
+
+  async flush(): Promise<void> {
+    this.flushCount += 1
+  }
+
+  clear(): void {
+    this.store.clear()
+    this.flushCount = 0
   }
 }
 

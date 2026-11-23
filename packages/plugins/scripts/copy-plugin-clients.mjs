@@ -167,7 +167,8 @@ function makeNoopProxy() {
 function captureClientRefs(def, pkgRoot) {
   const refs = [];
   let configState = {};
-  const docStub = { get: () => ({}), set: () => {}, update: () => {}, onChange: () => () => {} };
+  const docStub = { get: () => ({}), set: () => {}, update: () => {}, flush: async () => {}, onChange: () => () => {} };
+  const kvStub = { get: () => undefined, set: () => {}, delete: () => false, list: () => ({ items: [] }), clear: () => {}, flush: async () => {} };
   const uiProxy = new Proxy(
     {},
     {
@@ -190,6 +191,7 @@ function captureClientRefs(def, pkgRoot) {
     ui: uiProxy,
     doc: () => docStub,
     sessionDoc: () => docStub,
+    kv: () => kvStub,
     configSchema: (schema) => {
       const next = {};
       if (schema && typeof schema === 'object') {

@@ -27,11 +27,11 @@ import { steerBackgroundSubagent } from '../src/workflow/steer.js'
 import { isAncestorOrSelf } from '../src/lineage.js'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import { createHelmx } from '../../hub/src/app.js'
-import { WORKFLOW_STEER_TOOL_NAME } from '../src/workflow/actions-run.js'
+import { WORKFLOW_STEER_TOOL_NAME } from '../src/workflow/actions.js'
 import { PluginHost } from '../../kernel/src/plugins/index.js'
 import { PluginHostBackendFixtureBase } from '../../kernel/test/helpers/plugin-host-backend.js'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
-import { MemoryDocStore, makeFauxProvider, useTempDir, waitFor } from './helpers/plugin-test-env.js'
+import { MemoryDocStore, MemoryKvStore, makeFauxProvider, useTempDir, waitFor } from './helpers/plugin-test-env.js'
 
 const timeout = { timeout: 60_000 } as const
 
@@ -569,6 +569,7 @@ describe('workflow 插件 steer 动作（端到端）', () => {
       host: backend,
       docs: new MemoryDocStore(),
       sessionDocs: new MemorySessionDocStore(),
+      kv: new MemoryKvStore(),
     })
     const { createWorkflowPlugin } = await import('../src/workflow.js')
     await host.register(createWorkflowPlugin())
@@ -589,6 +590,7 @@ describe('workflow 插件 steer 动作（端到端）', () => {
       host: backend,
       docs: new MemoryDocStore(),
       sessionDocs: new MemorySessionDocStore(),
+      kv: new MemoryKvStore(),
     })
     const { createWorkflowPlugin } = await import('../src/workflow.js')
     await host.register(createWorkflowPlugin())
@@ -718,6 +720,7 @@ describe('workflow 插件 steer 动作（端到端）', () => {
       host: backend,
       docs: new MemoryDocStore(),
       sessionDocs: new MemorySessionDocStore(),
+      kv: new MemoryKvStore(),
     })
     const { createWorkflowPlugin } = await import('../src/workflow.js')
     await host.register(createWorkflowPlugin())

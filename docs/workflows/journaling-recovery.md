@@ -1,6 +1,6 @@
 # 状态流水与故障恢复
 
-本文面向需要理解工作流可靠性的读者：编写可恢复工作流的编排开发者（决定哪些步骤建模为幂等 `action`）、排查中断与续跑问题的维护者，以及评审副作用语义的设计者。内容覆盖 `builtin:workflow` 的确定性执行流水（journaling）：账本如何记账、恢复时为何坚持前缀重放而非无序查表、Agent 与 Action 的不同失败语义，以及 Hub 重启后的恢复边界。所有机制位于插件引擎内（`packages/plugins/src/workflow/engine/` 的 `journal*.ts` / `replay.ts` / `runtime.ts` / `service-recovery.ts`）。
+本文面向需要理解工作流可靠性的读者：编写可恢复工作流的编排开发者（决定哪些步骤建模为幂等 `action`）、排查中断与续跑问题的维护者，以及评审副作用语义的设计者。内容覆盖 `builtin:workflow` 的确定性执行流水（journaling）：账本如何记账、恢复时为何坚持前缀重放而非无序查表、Agent 与 Action 的不同失败语义，以及 Hub 重启后的恢复边界。所有机制位于插件内（`packages/plugins/src/workflow/dsl/` 的 `journal.ts` / `runtime.ts` / `worker-source.ts` 与 `packages/plugins/src/workflow/runs/` 的 `run-repository.ts` / `run-coordinator.ts` / `resumability.ts`）。
 
 ## 账本布局与事件契约
 
@@ -10,23 +10,24 @@
 <Hub 数据目录>/plugins/builtin%3Aworkflow/artifacts/<conversationId>/workflow-<runId>.jsonl
 ```
 
-默认数据目录下示例：`~/.helmx/plugins/builtin%3Aworkflow/artifacts/42/workflow-wf_1a2b3c4d5e6f.jsonl`（`runId` 形如 `wf_<12 位十六进制>`）。运行索引（轻量字段：`id`、`conversationId`、`status`、`createdAt`、`updatedAt`、`notifyParentOnSettle`、`resumedByRunId`）持久化在插件私有 `records` 文档（Hub 的 `state.sqlite` 插件文档表）；每个 run 的完整记录经原子写（`.tmp` + `fsync` + `rename`）存为 `<插件数据目录>/artifacts/<conversationId>/workflow-<runId>.record.json`。Web 界面摘要经按会话分片的 `runs` 投影订阅；进度树中节点的 `prompt`、`gate.output` 与 `error` 只保留最多 1024 字符的截断预览，完整内容以子会话与账本为准。经 `workflow()` 嵌套的整棵工作流树共用同一份账本与本次运行的全局审计序号；恢复身份按各工作流的稳定 scope 路径与局部调用序号区分。
+默认数据目录下示例：`~/.helmx/plugins/builtin%3Aworkflow/artifacts/42/workflow-wf_1a2b3c4d5e6f.jsonl`（`runId` 形如 `wf_<12 位十六进制>`）。紧凑的 `RunHeader`（`id`、`name`、`conversationId`、`status`、`phase`、`kind`、`createdAt`、`updatedAt`、`settledAt`、`errorCode`、`journalPath`、`replayedFrom`、`notifyParentOnSettle`、`notifiedAt`、`crashRecoveries`）按 `runId` 独立持久化在插件私有 KV 命名空间 `ctx.kv('runs')` 中（单键原子写入，零整表序列化）；接管关系（`resumedByRunId`）由单键 `replayedFrom` 在内存中自动派生，杜绝跨记录双写撕裂。每个 run 的完整详情（节点列表、参数、源码、结果）经原子写（`.tmp` + `fsync` + `rename`）按需落盘为 `<插件数据目录>/artifacts/<conversationId>/wf-<runId>.detail.json`（配 128 项 LRU 缓存）。Web 界面摘要经按会话分片的 `runs` 投影增量订阅；进度树中节点的 `prompt`、`gate.output` 与 `error` 只保留最多 1024 字符的截断预览，完整内容以子会话与账本为准。经 `workflow()` 嵌套的整棵工作流树共用同一份账本与本次运行的全局审计序号；恢复身份按各工作流的稳定 scope 路径与局部调用序号区分。
 
-每行一个 JSON 对象，三类事件行：
+每行一个 JSON 对象，四类事件行（序列化时始终保证 `"type"` 为首个字段，供截断恢复精准识别）：
 
 | `type` | 语义 | 关键字段 |
 | :--- | :--- | :--- |
-| `agent` | 智能体调用终态（每次尝试各占一行） | `index`（本次尝试的独立位次）, `key`, `ok`, `text`（成功时的回复文本）, `attempt?`（尝试序号）, `invocationIndex?`（所属调用的首位次，并发下重试槽位按它对齐）, `prompt?`（本次尝试的实际提示词，已脱敏）, `error?`（失败原因，已脱敏）, `timedOut?`, `resumed?`, `skipped?`, `retryKind?: 'manual'`（人工控制台重试）, `execution?`（执行信息，含 worktree 描述）, `gate?`（`AgentGateResult`） |
+| `agent_started` | 智能体调用意图（用于 Hub 重启原位重挂） | `index`, `key`, `requestId`, `attempt?`, `invocationIndex?`, `conversationId?` |
+| `agent` | 智能体调用终态（每次尝试各占一行） | `index`（本次尝试的独立位次）, `key`, `ok`, `text`（成功时的回复文本）, `attempt?`（尝试序号）, `invocationIndex?`（所属调用的首位次，并发下重试槽位按它对齐）, `prompt?`（本次尝试的实际提示词，已脱敏）, `error?`（失败原因，已脱敏）, `timedOut?`, `resumed?`, `execution?`（执行信息，含 worktree 描述）, `gate?`（`AgentGateResult`） |
 | `action_started` | 动作执行意图（先于 handler 落盘） | `index`, `key`, `idempotent?` |
 | `action` | 动作调用终态 | `index`, `key`, `ok`, `result` / `error`, `idempotent?` |
 
 每行必须携带 `scopePath` 与 `scopeCallIndex`：前者由父工作流路径和嵌套调用的位置组成，后者是该 scope 内 agent/action 调用的发起序号。自动重试共用同一局部调用序号，以 `attempt` 区分。`parallel` 的每个分支和 `pipeline` 的每个 item 也有独立路径；同一 item 的各 stage 共用该路径。异步上下文负责把这些身份传到 agent/action，嵌套加载或模型完成的先后顺序不改变恢复身份。
 
-`index` 是本次 run 内的全局尝试/动作位次，`invocationIndex` 用于把多次尝试折叠到同一进度节点；恢复时重新分配这些审计序号。`seq` 是落盘物理单调序号；`key` 是调用载荷的哈希摘要。缺少必需 scope 字段的账本不属于当前格式，不提供旧格式读取或迁移。
+`index` 是本次 run 内的全局尝试/动作位次，`invocationIndex` 用于把多次尝试折叠到同一进度节点；恢复时重新分配这些审计序号。`seq` 是落盘物理单调序号（经 `JournalWriter` 严格串行链分配，遇不可恢复 I/O 错误时置 `poisoned` 阻断后续写入）；`key` 是调用载荷的哈希摘要。缺少必需 scope 字段的账本不属于当前格式，不提供旧格式读取或迁移。
 
-**Key 计算**（SHA-256，取 32 位十六进制）：agent 的 Key 覆盖 `prompt`、`label`、`model`、`agentType`、`effort`、`isolation`、`gate`、`resume`、`attachments`（原样序列化，不去重不排序——ID 或次序变化都是不同调用；未提供与空数组语义不同，不归一化）、`schema` 的序列化形式、`maxSubagentDepth`、`cwd` 与 `nodeId`，采用带版本标记的固定槽 canonical 形态（新增字段只追加在版本号之后，杜绝槽位碰撞）。`timeoutMs` 与 `gateTimeoutMs` 只限制执行时限，不改变调用身份，不记入 Key；`maxAttempts` 的每次尝试各占一条独立 `index` 记录，不做归并。action 的 Key 覆盖全限定 `actionId` 与序列化后的输入。任何参数微调都会改变 Key，防止误用过期缓存。自动重试的失败原因先经宿主脱敏，再生成本次尝试的重试提示词（原文追加 `[attempt N failed]` 失败块）与 Key——重试提示词不同，每次尝试的 Key 也不同。
+**Key 计算**（SHA-256，取 32 位十六进制）：agent 的 Key 覆盖 `prompt`、`label`、`model`、`agentType`、`effort`、`isolation`、`gate`、`resume`、`attachments`（原样序列化，不去重不排序——ID 或次序变化都是不同调用；未提供与空数组语义不同，不归一化）、`schema` 的规范序列化形式、`maxSubagentDepth`、`cwd` 与 `nodeId`，采用带版本标记的固定槽 canonical 形态（新增字段只追加在版本号之后，杜绝槽位碰撞）。`timeoutMs` 与 `gateTimeoutMs` 只限制执行时限，不改变调用身份，不记入 Key；`maxAttempts` 的每次尝试各占一条独立 `index` 记录，不做归并。action 的 Key 覆盖全限定 `actionId` 与按键排序规范序列化（`canonicalJson`）后的输入对象。任何参数微调都会改变 Key，防止误用过期缓存。自动重试的失败原因先经宿主脱敏，再生成本次尝试的重试提示词（原文追加 `[attempt N failed]` 失败块）与 Key——重试提示词不同，每次尝试的 Key 也不同。
 
-当前 Key 版本为 **v4**（固定槽 15 个，含 `cwd` 与 `nodeId`）。无条件占位使每次版本变更后全部调用 Key 与旧账本失配——开发阶段无迁移，旧账本安全降级为断链重跑，不存在「未携带新字段则 key 不变」的兼容承诺。不符合当前契约的开发账本应清理后新建运行。
+当前 Key 版本为 **v5**（固定槽 canonical 序列化 + `actionJournalKey` 稳定键排序）。开发阶段无迁移，旧账本安全降级为断链重跑，不存在跨版本兼容承诺。不符合当前契约的开发账本应清理后新建运行。
 
 ## 前缀重放，不是查表缓存
 
@@ -66,7 +67,7 @@ flowchart TD
 
 **后缀非幂等断链保护**：当前 scope 断链时，若其后续调用或子 scope 中仍有未复用的非幂等动作，恢复以 `workflow_action_uncertain` 显式拒绝。已经补记并复用的动作不重复执行；兄弟 scope 的动作不受另一个模块失败影响。父 scope 变化仍会检查后代动作；分支断链也会检查祖先中未复用的后续动作。未知 scope 可能由脚本移动调用位置产生，存在未复用非幂等动作时显式拒绝，避免把位置变化当成全新安全调用。
 
-**agent 的弹性语义**：账本写入异常仅计数 `ioErrors` 供宿主诊断。默认 `maxAttempts: 1` 的失败调用在恢复时断链转 live；自动重试的失败尝试按尝试链重放，人工 retry 与 skip 也保留原决定。节点重试安全由任务作者自行保证——引擎不为智能体调用执行命令、写文件等副作用提供恰好一次承诺。
+**agent 的弹性语义**：账本写入异常仅计数 `ioErrors` 供宿主诊断。默认 `maxAttempts: 1` 的失败调用在恢复时断链转 live；自动重试的失败尝试按尝试链重放。节点重试安全由任务作者自行保证——引擎不为智能体调用执行命令、写文件等副作用提供恰好一次承诺。
 
 ## 恢复时的不确定性判定
 
@@ -84,18 +85,18 @@ flowchart TD
 
 ## Hub 重启恢复
 
-默认开启重启无感原位恢复（配置 `autoRecoverOnRestart`，默认 `true`；`false` 或环境变量 `HELMX_AUTO_RECOVER=0` 时回退中止收敛模式）：
+每个 `RunHeader` 用显式四态状态机 `RunPhase = 'running' | 'suspended' | 'cleanup_pending' | 'settled'` 取代散落布尔标记。默认开启重启无感原位恢复（配置 `autoRecoverOnRestart`，默认 `true`；`false` 或环境变量 `HELMX_AUTO_RECOVER=0` 时回退中止收敛模式）：
 
-**优雅关停（`ctx.host.isClosing === true && effectiveAutoRecover`）**：引擎调用 `workflows.suspend()`——终止进程内 Worker 与本地等待句柄，**不**调用 `abortConversationGuarded`、**不**改写终态、**不**触发 `onRunSettled` / 父会话通知，对在途 `RunRecord` 落盘 `suspendedCleanly: true`（保持 `status: 'running'`）并维持 Worktree `running` 租约 fail-closed 保留。单插件停用（`ctx.host.isClosing === false`）或关闭自动恢复时完整保留既有 `close()` 中止落盘 `aborted` 语义。
+**优雅关停（`ctx.host.isClosing === true && effectiveAutoRecover`）**：引擎调用 `workflows.suspend()`——终止进程内 Worker 与本地等待句柄、排空已在途的 `action` 终态写盘后再关闭账本（防止留下悬挂 `action_started`），**不**调用 `abortConversationGuarded`、**不**改写终态、**不**触发 `onRunSettled` / 父会话通知，对在途 `RunHeader` 落盘 `phase: 'suspended'`（保持 `status: 'running'`）并维持 Worktree `running` 租约 fail-closed 保留。单插件停用（`ctx.host.isClosing === false`）或关闭自动恢复时完整保留既有 `close()` 中止落盘 `aborted`（`phase: 'settled'`）语义。
 
-**阶段一 `prepareRecovery`（全局 prepare 屏障内）**：扫描全部 `pendingChildCleanup === true` 的已终态记录，以及（当自动恢复关闭、或运行触发 `crashRecoveries > 3` 熔断 / `actionUncertain` 不可原位恢复时）对应 `running` 记录的遗留子会话，经 `abortConversationGuarded` 落持久 abort 标记；可原位恢复的健康 `running` 记录不中止子会话，保留给 `harness.resume()` 与原位重挂。
+**阶段一 `prepareRecovery`（全局 prepare 屏障内）**：扫描全部 `phase === 'cleanup_pending'` 的记录，以及（当自动恢复关闭、或运行触发 `crashRecoveries > 3` 熔断 / `actionUncertain` 不可原位恢复时）对应 `running` / `suspended` 记录的遗留子会话，经 `abortConversationGuarded` 落持久 abort 标记；可原位恢复的健康记录不中止子会话，保留给 `harness.resume()` 与原位重挂。
 
 **阶段二 `init`（服务 start）**：
-- 若 `suspendedCleanly === true`：清除标记且不递增 `crashRecoveries`；若为异常崩溃（无 `suspendedCleanly`）：先递增 `crashRecoveries` 并落盘，`crashRecoveries > 3` 时触发 `[crash_recovery_limit]` 熔断（守卫中止子会话并标 `failed`）；
+- 若 `phase === 'suspended'`：恢复为 `phase: 'running'` 且不递增 `crashRecoveries`；若为异常崩溃（`phase === 'running'`）：先递增 `crashRecoveries` 并落盘，`crashRecoveries > 3` 时触发 `[crash_recovery_limit]` 熔断（守卫中止子会话并标 `failed`）；
 - 健康后台单子代理（`kind === 'subagent'`）：凭原 `runId`、`requestId` 与 `reattach` 原位重挂（原生 `conversationId` 于 `harness.resume()` 前同步等待 `onResolved` 就位结构化输出与 Worktree 租约）；
-- 健康 DSL 工作流：沿用原 `runId` 启动 Worker，以 `initialSeq = maxExistingSeq + 1`、`inPlaceResume: true` 追加打开原账本（已落盘终态 0 Token 重放且不重复追加），遇到未配对终态的 `agent_started` 行时以原 `requestId` + `reattach` 原位重挂完成后继续执行；
+- 健康 DSL 工作流：沿用原 `runId` 启动 Worker，以 `initialSeq = maxExistingSeq + 1`、`inPlaceResume: true` 追加打开原账本（已落盘终态 0 Token 重放且不重复追加），遇到未配对终态的 `agent_started` 行时以原 `requestId` + `reattach`（越过就绪屏障与并发信号量）原位重挂完成后继续执行；
 - `subagent` 与 `SubagentWorkflow` 模型工具均声明 `replay: 'safe'` 并按受信 `(conversationId, callId)` 幂等重放，重启恢复 `ToolTask` 时继续等待原 run 或直接返回终态结果，不重复派生。
-- 已达成终态且未发送父会话汇报的后台运行仍由 outbox 补发（`notifiedAt` 防重复）。
+- 已达成终态（或由 `cleanup_pending` 收敛为终态）且未发送父会话汇报的后台运行仍由 outbox 补发（`notifiedAt` 防重复）。
 
 **阶段三 `service.reconcile()`（`harness.resume()` 后统一启动对账）**：按拓扑与 `reconcileAfter` 软序执行：先由 `builtin:workflow` 放行 pre-resolve 重挂并等待待收敛的遗留子会话结算至 `idle`（`awaitPreparedChildrenSettled`），随后 `builtin:worktree` 回收可证明已停止的原生 Worktree 崩溃租约（活跃重挂租约保持 fail-closed 保留），`builtin:swarm` 完成协作组对账。
 

@@ -17,7 +17,7 @@ The business result and execution metadata are separate. Preserve `conversationI
 
 ## Background control
 
-Use the workflow steer action or `helmx workflows steer <runId> --text <guidance>` only for a running background subagent that belongs to the current task tree. The operation is guarded by ownership and the current execution watermark. A successful delivery means the guidance was sent, not that it has already been executed.
+Use the dynamic `workflow_steer` model tool (exposed automatically while the current task tree has running background subagents), `run_action({ actionId: "builtin:workflow.steer", input: { runId, text } })`, or `helmx workflows steer <runId> --text <guidance>` only for a running background subagent that belongs to the current task tree. The operation is guarded by ownership and the current execution watermark. A successful delivery means the guidance was sent, not that it has already been executed.
 
 ## Worktree inspection & cleanup
 

@@ -1,57 +1,129 @@
 /**
- * Data hooks for the builtin:workflow plugin (sharing the host store, zero
- * private dependencies). models.ts keeps pure functions only; hook
- * dependencies live in this file for index.tsx components to consume.
+ * Shared client hooks for builtin:workflow:
+ * - useWorkflowRunsDoc: wraps usePluginSessionDocState with frozen EMPTY_RUNS & status;
+ * - useInspectedRun: lazy full-run `inspect` fetch with generation guard (gives expanded
+ *   Workbench cards full `result` AND full `nodes` with `output`/`prompt`/`schema`);
+ * - useWorkflowLibrary: fetches saved workflows once on mount + manual reload (locale-independent).
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { WorkflowRunSummary } from '../../contracts.js'
 import {
-  useConversation,
-  useConversations,
   usePluginContext,
-  usePluginDoc,
   usePluginLocale,
-  usePluginSessionDoc,
-  useSharedNowMs,
+  usePluginSessionDocState,
+  type PluginDocLoadStatus,
 } from '@helmx/plugin-client'
-import { isScrolledToBottom } from './model-format.ts'
-import { parseSavedWorkflowList } from './model-library.ts'
-import type { SavedWorkflowView } from './model-library.ts'
-import { libListInvalid, runResultInspectFailed } from './copy.ts'
+import type { WorkflowRunSummary } from '../../contracts.js'
+import { libListInvalid } from './copy.js'
+import { asPlainRecord, parseSavedWorkflowList, type SavedWorkflowView } from './parsers.js'
 
-/** Follow streaming output only while the user stays pinned to the bottom; never steal scroll position after scrolling up into history. */
-export function useStreamFollow(content: unknown) {
-  const ref = useRef<HTMLDivElement>(null)
-  const follow = useRef(true)
-  const onScroll = useCallback(() => {
-    if (ref.current !== null) follow.current = isScrolledToBottom(ref.current)
-  }, [])
-  useEffect(() => {
-    if (follow.current && ref.current !== null) ref.current.scrollTop = ref.current.scrollHeight
-  }, [content])
-  return { ref, onScroll }
+const EMPTY_RUNS: ReadonlyArray<WorkflowRunSummary> = Object.freeze([])
+
+export interface WorkflowRunsDocResult {
+  runs: ReadonlyArray<WorkflowRunSummary>
+  status: PluginDocLoadStatus
+  retry: () => void
 }
 
-/** Shared 1Hz stopwatch (SSR first frame returns undefined; client shares a single module-level ticker across all active cards). */
-export function useElapsedNowMs(active: boolean): number | undefined {
-  return useSharedNowMs(active)
+export function useWorkflowRunsDoc(conversationId: number | undefined): WorkflowRunsDocResult {
+  const state = usePluginSessionDocState<{ runs?: WorkflowRunSummary[] }>(
+    'runs',
+    conversationId !== undefined ? { conversationId } : undefined,
+  )
+  const runs = Array.isArray(state.data?.runs) ? state.data.runs : EMPTY_RUNS
+  return {
+    runs,
+    status: state.status,
+    retry: state.retry,
+  }
 }
 
-/** Workflow library loading state: list action + generation guard (reloads never splice stale responses). */
-interface WorkflowLibraryState {
-  items: SavedWorkflowView[] | undefined
-  error: string | undefined
+export interface InspectedRunState {
   loading: boolean
+  error: string | undefined
+  hasResult: boolean
+  hasResolvedResult: boolean
+  result: unknown
+  retry: () => void
+}
+
+export function useInspectedRun(run: WorkflowRunSummary, enabled: boolean): InspectedRunState {
+  const ctx = usePluginContext()
+  const ctxRef = useRef(ctx)
+  ctxRef.current = ctx
+
+  const [fetched, setFetched] = useState<{ key: string; result: unknown } | undefined>(undefined)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | undefined>(undefined)
+  const [nonce, setNonce] = useState(0)
+  const generation = useRef(0)
+
+  const hasInlineResult = run.result !== undefined
+  const needsInspect = enabled && !hasInlineResult && run.hasResult === true
+  const fetchKey = `${run.id}:${run.status}:${run.updatedAt}`
+  const cached = fetched !== undefined && fetched.key === fetchKey ? fetched : undefined
+
+  const retry = useCallback(() => {
+    setError(undefined)
+    setNonce((n) => n + 1)
+  }, [])
+
+  useEffect(() => {
+    if (!needsInspect) return
+    if (cached !== undefined) return
+    const current = ++generation.current
+    setLoading(true)
+    setError(undefined)
+    void ctxRef.current
+      .callAction('inspect', { runId: run.id })
+      .then((raw) => {
+        if (generation.current !== current) return
+        const rec = asPlainRecord(raw)
+        const inspected = asPlainRecord(rec?.['run'])
+        if (inspected === undefined || inspected['id'] !== run.id || !Object.hasOwn(inspected, 'result')) {
+          throw new Error(`Invalid inspect payload for ${run.id}`)
+        }
+        setFetched({ key: fetchKey, result: inspected['result'] })
+      })
+      .catch((err: unknown) => {
+        if (generation.current !== current) return
+        setError(err instanceof Error ? err.message : String(err))
+      })
+      .finally(() => {
+        if (generation.current === current) setLoading(false)
+      })
+  }, [needsInspect, run.id, fetchKey, cached, nonce])
+
+  const hasResult = hasInlineResult || run.hasResult === true
+  const hasResolvedResult = hasInlineResult || cached !== undefined
+  const result = hasInlineResult ? run.result : cached?.result
+  return {
+    loading,
+    error,
+    hasResult,
+    hasResolvedResult,
+    result,
+    retry,
+  }
+}
+
+export interface WorkflowLibraryState {
+  items: SavedWorkflowView[] | undefined
+  loading: boolean
+  error: string | undefined
   reload: () => Promise<void>
 }
 
-/** Load the saved workflow catalog (list action; strict parsing — structurally invalid fails explicitly, never fabricated). */
 export function useWorkflowLibrary(): WorkflowLibraryState {
   const ctx = usePluginContext()
   const locale = usePluginLocale()
+  const ctxRef = useRef(ctx)
+  ctxRef.current = ctx
+  const localeRef = useRef(locale)
+  localeRef.current = locale
+
   const [items, setItems] = useState<SavedWorkflowView[] | undefined>(undefined)
-  const [error, setError] = useState<string | undefined>(undefined)
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | undefined>(undefined)
   const generation = useRef(0)
 
   const reload = useCallback(async (): Promise<void> => {
@@ -59,11 +131,11 @@ export function useWorkflowLibrary(): WorkflowLibraryState {
     setLoading(true)
     setError(undefined)
     try {
-      const raw = await ctx.callAction('list')
+      const raw = await ctxRef.current.callAction('list', {})
       if (generation.current !== current) return
       const parsed = parseSavedWorkflowList(raw)
       if (parsed === undefined) {
-        setError(libListInvalid(locale))
+        setError(libListInvalid(localeRef.current))
       } else {
         setItems(parsed)
       }
@@ -73,86 +145,11 @@ export function useWorkflowLibrary(): WorkflowLibraryState {
     } finally {
       if (generation.current === current) setLoading(false)
     }
-  }, [ctx, locale])
+  }, [])
 
   useEffect(() => {
     void reload()
   }, [reload])
 
-  return { items, error, loading, reload }
+  return { items, loading, error, reload }
 }
-
-interface InspectedRunResultState {
-  hasResult: boolean
-  hasResolvedValue: boolean
-  result: unknown
-  loading: boolean
-  error: string | undefined
-}
-
-/**
- * On-demand full result loader for slimmed projected runs (`hasResult: true`
- * with `result: undefined`): calls `inspect` once when expanded and caches per
- * `(run.id, run.updatedAt)` with generation race protection.
- */
-export function useInspectedRunResult(
-  run: Pick<WorkflowRunSummary, 'id' | 'updatedAt' | 'result' | 'hasResult'>,
-  open: boolean,
-): InspectedRunResultState {
-  const ctx = usePluginContext()
-  const locale = usePluginLocale()
-  const cacheKey = `${run.id}:${run.updatedAt}`
-  const [cached, setCached] = useState<{ key: string; value: unknown } | undefined>(undefined)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | undefined>(undefined)
-  const generation = useRef(0)
-
-  const hasInline = run.result !== undefined
-  const hasAnyResult = hasInline || run.hasResult === true
-  const isCached = cached?.key === cacheKey
-
-  useEffect(() => {
-    if (!open || hasInline || run.hasResult !== true || isCached) {
-      setLoading(false)
-      return
-    }
-    const current = ++generation.current
-    setLoading(true)
-    setError(undefined)
-    void ctx
-      .callAction('inspect', { runId: run.id })
-      .then((raw) => {
-        if (generation.current !== current) return
-        if (
-          raw === null ||
-          typeof raw !== 'object' ||
-          Array.isArray(raw) ||
-          (raw as Record<string, unknown>)['run'] === null ||
-          typeof (raw as Record<string, unknown>)['run'] !== 'object' ||
-          Array.isArray((raw as Record<string, unknown>)['run'])
-        ) {
-          setError(runResultInspectFailed('invalid inspect payload', locale))
-          return
-        }
-        const inspectedRun = (raw as { run: Record<string, unknown> }).run
-        setCached({ key: cacheKey, value: inspectedRun['result'] })
-      })
-      .catch((err: unknown) => {
-        if (generation.current !== current) return
-        setError(runResultInspectFailed(err instanceof Error ? err.message : String(err), locale))
-      })
-      .finally(() => {
-        if (generation.current === current) setLoading(false)
-      })
-  }, [open, hasInline, run.hasResult, run.id, cacheKey, isCached, ctx, locale])
-
-  return {
-    hasResult: hasAnyResult,
-    hasResolvedValue: hasInline || isCached,
-    result: hasInline ? run.result : isCached ? cached.value : undefined,
-    loading,
-    error,
-  }
-}
-
-export { useConversation, useConversations, usePluginContext, usePluginDoc, usePluginSessionDoc }

@@ -26,7 +26,7 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createHelmx } from '../../hub/src/app.js'
-import { WorkflowService, type WorkflowServiceHost, type WorkflowStateStore } from '../src/workflow/engine/service.js'
+import { createMemoryKvStore, WorkflowService, type WorkflowServiceHost } from '../src/workflow/runs/index.js'
 import { KernelRuntime } from '../../kernel/src/runtime/index.js'
 import { openHelmxDatabase } from '../../kernel/src/runtime/sqlite.js'
 import { HelmxStore } from '../../kernel/src/runtime/store.js'
@@ -140,17 +140,7 @@ test('run() 无受信 context（HTTP/CLI 路径事实）：run 无 parentToolCal
   const database = await openHelmxDatabase(dataDir)
   const store = new HelmxStore(database)
   await store.load()
-  const state: WorkflowStateStore = (() => {
-    const docs = new Map<string, unknown>()
-    return {
-      get<T>(key: string, initial: T): T {
-        return docs.has(key) ? (docs.get(key) as T) : initial
-      },
-      set<T>(key: string, value: T) {
-        docs.set(key, value)
-      },
-    }
-  })()
+  const kv = createMemoryKvStore()
   const events = new EventHub({
     initialSeq: 0,
     snapshot: () => ({ seq: 0, conversations: [], pendingAsks: [], plugins: [], ui: [], pluginDocs: [] }),
@@ -168,7 +158,7 @@ test('run() 无受信 context（HTTP/CLI 路径事实）：run 无 parentToolCal
     async abortConversationGuarded() {},
     emitEvent: (type, payload) => events.publish(type, payload),
   }
-  const service = new WorkflowService({ dataDir, state, host })
+  const service = new WorkflowService({ dataDir, kv, host })
   try {
     // 直接调用（HTTP/CLI 相同路径）：不传 context -> 无 parentToolCallId。
     const summary = await service.run({ conversationId: 1, script: FAST_SCRIPT })

@@ -24,37 +24,37 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { HelmxError, type AgentExecutionInfo } from '@helmx/protocol'
 import { withWorkflowSpawnMeta, type WorkflowRunSummary } from '../src/contracts.js'
-import { WorkflowService, type WorkflowServiceHost, type WorkflowStateStore } from '../src/workflow/engine/service.js'
+import {
+  createMemoryKvStore,
+  WorkflowService,
+  type RunDetail,
+  type RunHeader,
+  type WorkflowKvStore,
+  type WorkflowServiceHost,
+} from '../src/workflow/runs/index.js'
 
 const timeout = { timeout: 60_000 } as const
 
-/** 新契约：完整体在 dataDir/artifacts/<convId>/workflow-<runId>.record.json（本文件均属会话 1）。 */
-function readRecord(dataDir: string, runId: string): Record<string, unknown> {
+function readDetail(dataDir: string, runId: string): RunDetail {
   return JSON.parse(
-    readFileSync(join(dataDir, 'artifacts', '1', `workflow-${runId}.record.json`), 'utf-8'),
-  )
+    readFileSync(join(dataDir, 'artifacts', '1', `wf-${runId}.detail.json`), 'utf-8'),
+  ) as RunDetail
 }
 
-function seedRecord(dataDir: string, record: Record<string, unknown>): void {
-  const dir = join(dataDir, 'artifacts', String(record['conversationId']))
+function writeDetail(dataDir: string, detail: RunDetail, conversationId = 1): void {
+  const dir = join(dataDir, 'artifacts', String(conversationId))
   mkdirSync(dir, { recursive: true })
-  writeFileSync(join(dir, `workflow-${String(record['id'])}.record.json`), JSON.stringify(record), 'utf8')
+  writeFileSync(join(dir, `wf-${detail.id}.detail.json`), JSON.stringify(detail), 'utf8')
 }
 
-// ---------------------------------------------------------------------------
-// 确定性 fixtures
-// ---------------------------------------------------------------------------
+function makeStateStore(): WorkflowKvStore<RunHeader> {
+  return createMemoryKvStore<RunHeader>()
+}
 
-function makeStateStore(): WorkflowStateStore {
-  const map = new Map<string, unknown>()
-  return {
-    get<T>(key: string, initial: T): T {
-      return (map.get(key) as T | undefined) ?? initial
-    },
-    set<T>(key: string, value: T): void {
-      map.set(key, JSON.parse(JSON.stringify(value)))
-    },
-  }
+function readHeader(kv: WorkflowKvStore<RunHeader>, runId: string): RunHeader {
+  const hit = kv.get(runId)
+  assert.ok(hit !== undefined, `missing RunHeader for ${runId}`)
+  return hit
 }
 
 interface SettledCall {
@@ -196,7 +196,7 @@ describe('startBackgroundAgent', () => {
       result: 'slow-task-result',
     }
     const state = makeStateStore()
-    const service = new WorkflowService({ dataDir, host, state })
+    const service = new WorkflowService({ dataDir, host, kv: state })
     const started = Date.now()
 
     const { run, execution } = await service.startBackgroundAgent({
@@ -237,12 +237,12 @@ describe('startBackgroundAgent', () => {
     assert.equal(host.settledCalls[0]!.execution?.conversationId, 42)
 
     // notifiedAt 已持久化（重开服务 init 不再补发），且单子代理绝不创建空 .jsonl 幻影账本文件。
-    const record = readRecord(dataDir, run.id)
-    assert.equal(record['kind'], 'subagent')
-    assert.ok(typeof record['notifiedAt'] === 'number')
-    assert.equal(existsSync(String(record['journalPath'])), false, '单子代理不得打开/创建空 .jsonl 账本文件')
+    const header = readHeader(state, run.id)
+    assert.equal(header.kind, 'subagent')
+    assert.ok(typeof header.notifiedAt === 'number')
+    assert.equal(existsSync(join(dataDir, 'artifacts', '1', `workflow-${run.id}.jsonl`)), false, '单子代理不得打开/创建空 .jsonl 账本文件')
     await service.close()
-    const reopened = new WorkflowService({ dataDir, host, state })
+    const reopened = new WorkflowService({ dataDir, host, kv: state })
     await reopened.init()
     assert.equal(host.settledCalls.length, 1, '已通知的记录不得重复补发')
     await reopened.close()
@@ -252,13 +252,11 @@ describe('startBackgroundAgent', () => {
     const host = makeHost()
     host.behavior = { kind: 'hanging', execution: { conversationId: 42 } }
     const state = makeStateStore()
-    const service = new WorkflowService({ dataDir, host, state })
+    const service = new WorkflowService({ dataDir, host, kv: state })
     const { run } = await service.startBackgroundAgent({ parentConversationId: 1, prompt: '挂起' })
-    // 仍挂起中：durable 记录已是 running 且在索引里。
-    const record = readRecord(dataDir, run.id)
-    assert.equal(record['status'], 'running')
-    const index = state.get<Array<{ id: string } | null>>('workflow/runs', [])
-    assert.ok(index.some((e) => e?.id === run.id))
+    // 仍挂起中：durable RunHeader 已是 running。
+    const header = readHeader(state, run.id)
+    assert.equal(header.status, 'running')
     // active 已登记：abort/close 可达。
     assert.ok(service.listRuns().some((r) => r.id === run.id && r.status === 'running'))
     host.release()
@@ -270,7 +268,7 @@ describe('startBackgroundAgent', () => {
     const host = makeHost()
     host.behavior = { kind: 'preResolveFail', error: new HelmxError('not_a_git_repo', '目标目录不是 Git 仓库', 400) }
     const state = makeStateStore()
-    const service = new WorkflowService({ dataDir, host, state })
+    const service = new WorkflowService({ dataDir, host, kv: state })
 
     await assert.rejects(
       () =>
@@ -285,11 +283,10 @@ describe('startBackgroundAgent', () => {
       },
     )
 
-    // 等待后台兜底链结算（异步）：记录必须达到 failed 终态（诚实，不删不悬）。
-    const index = state.get<Array<{ id: string } | null>>('workflow/runs', [])
-    assert.equal(index.length, 1)
-    const runId = index[0]!.id
-    await service.wait(runId)
+    // 前置失败同步等待后台结算完成：记录已达 failed 终态，不留僵尸 running。
+    const items = state.list().items
+    assert.equal(items.length, 1)
+    const runId = items[0]!.key
     const final = service.getRun(runId)
     assert.equal(final.status, 'failed')
     assert.ok(final.error?.includes('not_a_git_repo'), final.error)
@@ -303,7 +300,7 @@ describe('startBackgroundAgent', () => {
     const host = makeHost()
     host.behavior = { kind: 'hanging', execution: { conversationId: 42 } }
     const state = makeStateStore()
-    const service = new WorkflowService({ dataDir, host, state })
+    const service = new WorkflowService({ dataDir, host, kv: state })
     const parentSignal = new AbortController()
     const { run } = await service.startBackgroundAgent({
       parentConversationId: 1,
@@ -366,7 +363,7 @@ describe('startBackgroundAgent', () => {
       return 'unreachable'
     }
     const state = makeStateStore()
-    const service = new WorkflowService({ dataDir, host, state })
+    const service = new WorkflowService({ dataDir, host, kv: state })
     const parentSignal = new AbortController()
     const promise = service.startBackgroundAgent({
       parentConversationId: 1,
@@ -387,10 +384,9 @@ describe('startBackgroundAgent', () => {
       },
     )
     // 后台兜底链把 durable 记录结算为 aborted 终态（不悬挂、不留僵尸 running）。
-    const index = state.get<Array<{ id: string } | null>>('workflow/runs', [])
-    assert.equal(index.length, 1)
-    await service.wait(index[0]!.id)
-    const final = service.getRun(index[0]!.id)
+    const items = state.list().items
+    assert.equal(items.length, 1)
+    const final = service.getRun(items[0]!.key)
     assert.equal(final.status, 'aborted')
     assert.equal(host.settledCalls.length, 1)
     assert.equal(host.settledCalls[0]!.summary.status, 'aborted')
@@ -401,7 +397,7 @@ describe('startBackgroundAgent', () => {
     const host = makeHost()
     host.behavior = { kind: 'gateFail', execution: { executionId: 'herdr:pane-7', nodeId: 'local' } }
     const state = makeStateStore()
-    const service = new WorkflowService({ dataDir, host, state })
+    const service = new WorkflowService({ dataDir, host, kv: state })
     const { run, execution } = await service.startBackgroundAgent({
       parentConversationId: 1,
       prompt: '带 gate 任务',
@@ -428,7 +424,7 @@ describe('startBackgroundAgent', () => {
     const host = makeHost()
     host.behavior = { kind: 'noOnResolved', result: 'external-settled' }
     const state = makeStateStore()
-    const service = new WorkflowService({ dataDir, host, state })
+    const service = new WorkflowService({ dataDir, host, kv: state })
     const { run, execution } = await service.startBackgroundAgent({
       parentConversationId: 1,
       prompt: '外部运行时',
@@ -449,7 +445,7 @@ describe('startBackgroundAgent', () => {
 
   it('父会话不存在：not_found 透传', timeout, async () => {
     const host = makeHost()
-    const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
+    const service = new WorkflowService({ dataDir, host, kv: makeStateStore() })
     await assert.rejects(
       () =>
         service.startBackgroundAgent({
@@ -467,7 +463,7 @@ describe('startBackgroundAgent', () => {
 
   it('service 关闭后拒绝启动（service_closed）', timeout, async () => {
     const host = makeHost()
-    const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
+    const service = new WorkflowService({ dataDir, host, kv: makeStateStore() })
     await service.close()
     await assert.rejects(
       () => service.startBackgroundAgent({ parentConversationId: 1, prompt: 'x' }),
@@ -481,7 +477,7 @@ describe('startBackgroundAgent', () => {
 
   it('创建前已取消的 signal：当场拒绝', timeout, async () => {
     const host = makeHost()
-    const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
+    const service = new WorkflowService({ dataDir, host, kv: makeStateStore() })
     const signal = new AbortController()
     signal.abort()
     await assert.rejects(
@@ -499,27 +495,27 @@ describe('startBackgroundAgent', () => {
     const host = makeHost({ notifyFailTimes: 1 })
     host.behavior = { kind: 'hanging', execution: { conversationId: 42 }, result: 'ok' }
     const state = makeStateStore()
-    const service = new WorkflowService({ dataDir, host, state })
+    const service = new WorkflowService({ dataDir, host, kv: state })
     const { run } = await service.startBackgroundAgent({ parentConversationId: 1, prompt: 'x' })
     host.release()
     await service.wait(run.id)
     // 首次通知失败：终态已落库但 notifiedAt 缺失。
     assert.equal(host.settledCalls.length, 0)
-    const record = readRecord(dataDir, run.id)
-    assert.equal(record['status'], 'completed')
-    assert.equal(record['notifiedAt'], undefined)
+    const header = readHeader(state, run.id)
+    assert.equal(header.status, 'completed')
+    assert.equal(header.notifiedAt, undefined)
     await service.close()
 
     // 重启 init：补发一次并落 notifiedAt。
-    const reopened = new WorkflowService({ dataDir, host, state })
+    const reopened = new WorkflowService({ dataDir, host, kv: state })
     await reopened.init()
     assert.equal(host.settledCalls.length, 1)
     assert.equal(host.settledCalls[0]!.summary.status, 'completed')
-    const after = readRecord(dataDir, run.id)
-    assert.ok(typeof after['notifiedAt'] === 'number')
+    const after = readHeader(state, run.id)
+    assert.ok(typeof after.notifiedAt === 'number')
     // 再次 init 不重复。
     await reopened.close()
-    const again = new WorkflowService({ dataDir, host, state })
+    const again = new WorkflowService({ dataDir, host, kv: state })
     await again.init()
     assert.equal(host.settledCalls.length, 1)
     await again.close()
@@ -528,34 +524,32 @@ describe('startBackgroundAgent', () => {
   it('进程重启恢复：遗留 subagent running 记录标 failed(interrupted) 并补发通知', timeout, async () => {
     const host = makeHost()
     const state = makeStateStore()
-    const journalPath = join(dataDir, 'artifacts', '1', 'workflow-wf_restartdead0001.jsonl')
-    state.set('workflow/runs', [{ id: 'wf_restartdead0001', conversationId: 1, status: 'running', createdAt: 1, updatedAt: 1 }])
-    seedRecord(dataDir, {
+    state.set('wf_restartdead0001', {
       id: 'wf_restartdead0001',
+      kind: 'subagent',
       name: 'subagent:researcher',
       conversationId: 1,
       status: 'running',
+      phase: 'running',
       createdAt: 1,
       updatedAt: 1,
-      kind: 'subagent',
       notifyParentOnSettle: true,
-      journalPath,
-      subagentMeta: { agentType: 'researcher', execution: { conversationId: 42 } },
+      agentType: 'researcher',
+      execution: { conversationId: 42 },
     })
-    const service = new WorkflowService({ dataDir, host, state, autoRecoverOnRestart: false })
+    const service = new WorkflowService({ dataDir, host, kv: state, autoRecoverOnRestart: false })
     await service.init()
     const summary = service.getRun('wf_restartdead0001')
     assert.equal(summary.status, 'failed')
     assert.ok(summary.error?.includes('subagent run interrupted by process restart'), summary.error)
     assert.ok(summary.error?.includes('resume'), '错误信息须提示可 resume 续接')
-    // 补发恰一次，携带 subagentMeta。
+    // 补发恰一次，携带 agentType + execution。
     assert.equal(host.settledCalls.length, 1)
     assert.equal(host.settledCalls[0]!.summary.status, 'failed')
     assert.equal(host.settledCalls[0]!.agentType, 'researcher')
     assert.equal(host.settledCalls[0]!.execution?.conversationId, 42)
-    const record = readRecord(dataDir, 'wf_restartdead0001')
-    assert.ok(typeof record['notifiedAt'] === 'number')
-    // 已终态且未通知的常规 workflow 记录不受影响（不通知）。
+    const header = readHeader(state, 'wf_restartdead0001')
+    assert.ok(typeof header.notifiedAt === 'number')
     await service.close()
   })
 
@@ -563,17 +557,18 @@ describe('startBackgroundAgent', () => {
     const host = makeHost()
     const state = makeStateStore()
     const journalPath = join(dataDir, 'artifacts', '1', 'workflow-wf_wfdsldead00001.jsonl')
-    state.set('workflow/runs', [{ id: 'wf_wfdsldead00001', conversationId: 1, status: 'running', createdAt: 1, updatedAt: 1 }])
-    seedRecord(dataDir, {
+    state.set('wf_wfdsldead00001', {
       id: 'wf_wfdsldead00001',
+      kind: 'workflow',
       name: 'old',
       conversationId: 1,
       status: 'running',
+      phase: 'running',
       createdAt: 1,
       updatedAt: 1,
       journalPath,
     })
-    const service = new WorkflowService({ dataDir, host, state, autoRecoverOnRestart: false })
+    const service = new WorkflowService({ dataDir, host, kv: state, autoRecoverOnRestart: false })
     await service.init()
     const summary = service.getRun('wf_wfdsldead00001')
     assert.equal(summary.status, 'failed')
@@ -585,7 +580,7 @@ describe('startBackgroundAgent', () => {
   it('notifyParentOnSettle=false：不通知，但 run 生命周期完整', timeout, async () => {
     const host = makeHost()
     host.behavior = { kind: 'hanging', execution: { conversationId: 42 }, result: 'quiet' }
-    const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
+    const service = new WorkflowService({ dataDir, host, kv: makeStateStore() })
     const { run } = await service.startBackgroundAgent(
       { parentConversationId: 1, prompt: 'x' },
       { notifyParentOnSettle: false },
@@ -603,7 +598,7 @@ describe('startBackgroundAgent', () => {
     // hanging + onResolved 带 executionId，但从不 onGateResult。
     host.behavior = { kind: 'hanging', execution: { executionId: 'herdr:pane-9' }, result: 'maybe-done' }
     const state = makeStateStore()
-    const service = new WorkflowService({ dataDir, host, state })
+    const service = new WorkflowService({ dataDir, host, kv: state })
     const { run } = await service.startBackgroundAgent({
       parentConversationId: 1,
       prompt: 'gate 任务',
@@ -622,7 +617,7 @@ describe('startBackgroundAgent', () => {
     const host = makeHost()
     host.behavior = { kind: 'hanging', execution: { conversationId: 42 } }
     const state = makeStateStore()
-    const service = new WorkflowService({ dataDir, host, state })
+    const service = new WorkflowService({ dataDir, host, kv: state })
     const { run } = await service.startBackgroundAgent({ parentConversationId: 1, prompt: 'x' })
     assert.equal(service.getRun(run.id).status, 'running')
     const closing = service.close()
@@ -643,7 +638,7 @@ describe('startBackgroundAgent', () => {
     assert.ok(!service.listRuns().some((r) => r.id === run.id && r.status === 'running'))
     // 关停期间不唤醒父模型；待投递回报持久保留，下一次启动补发。
     assert.equal(host.settledCalls.length, 0)
-    const reopened = new WorkflowService({ dataDir, host, state })
+    const reopened = new WorkflowService({ dataDir, host, kv: state })
     await reopened.init()
     assert.equal(host.settledCalls.length, 1)
     assert.equal(host.settledCalls[0]!.summary.status, 'aborted')
@@ -653,7 +648,7 @@ describe('startBackgroundAgent', () => {
   it('startBackgroundAgent：保留 request.meta（如 maxSubagentDepth 与自定义字段）并合并 runId', timeout, async () => {
     const host = makeHost()
     host.behavior = { kind: 'hanging', execution: { conversationId: 42 }, result: 'ok' }
-    const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
+    const service = new WorkflowService({ dataDir, host, kv: makeStateStore() })
     const meta = withWorkflowSpawnMeta({ customNs: { tag: 'keep-me' } }, { maxSubagentDepth: 4 })
     const { run } = await service.startBackgroundAgent({
       parentConversationId: 1,
@@ -670,7 +665,7 @@ describe('startBackgroundAgent', () => {
     await service.close()
   })
 
-  it('isHostClosing=true 关停期间：因 Session 关闭中断则标 aborted + pendingChildCleanup=true；若已完成则保留 completed 且延迟到下次重启 outbox 通知', timeout, async () => {
+  it('isHostClosing=true 关停期间：因 Session 关闭中断则标 aborted + phase=cleanup_pending；若已完成则保留 completed 且延迟到下次重启 outbox 通知', timeout, async () => {
     let hostClosing = false
     const host = makeHost()
     host.isHostClosing = () => hostClosing
@@ -686,7 +681,7 @@ describe('startBackgroundAgent', () => {
       return origSpawn(req)
     }
     const state = makeStateStore()
-    const service = new WorkflowService({ dataDir, host, state, autoRecoverOnRestart: false })
+    const service = new WorkflowService({ dataDir, host, kv: state, autoRecoverOnRestart: false })
     const { run } = await service.startBackgroundAgent({
       parentConversationId: 1,
       prompt: 'close-while-closing',
@@ -697,46 +692,42 @@ describe('startBackgroundAgent', () => {
       prompt: 'finish-right-before-harness-close',
     })
 
-    // 模拟 Harness.close() 先于 pluginHost.dispose() 到来：host.isHostClosing 已为 true，
-    // 在途 run 因 Session is closed 拒绝（绝不调用 abortConversationGuarded）；而在关停
-    // 窗口内实际已完成的 completedRun 仍保留 completed 与结果，仅延迟通知到重启 outbox。
     hostClosing = true
     rejectShutdownSpawn(new Error('Session is closed'))
     host.release()
     await service.wait(run.id)
     await service.wait(completedRun.id)
 
-    const saved = readRecord(dataDir, run.id)
-    assert.equal(saved['status'], 'aborted')
-    assert.equal(saved['pendingChildCleanup'], true)
-    const savedCompleted = readRecord(dataDir, completedRun.id)
-    assert.equal(savedCompleted['status'], 'completed')
-    assert.equal(savedCompleted['result'], 'real-finished-result')
-    assert.equal(savedCompleted['pendingChildCleanup'], undefined)
+    const saved = readHeader(state, run.id)
+    assert.equal(saved.status, 'aborted')
+    assert.equal(saved.phase, 'cleanup_pending')
+    const savedCompleted = readHeader(state, completedRun.id)
+    assert.equal(savedCompleted.status, 'completed')
+    assert.equal(savedCompleted.phase, 'settled')
+    assert.equal(readDetail(dataDir, completedRun.id).result, 'real-finished-result')
     assert.equal(host.abortedConversations.length, 0, 'host closing 期不再调用已关闭的 abortConversationGuarded')
     assert.equal(host.settledCalls.length, 0, 'host closing 期不向父会话发通知')
 
-    // 重启后恢复（autoRecoverOnRestart=false）：prepareRecovery 收集 55 并守卫中止，init 清除 pendingChildCleanup 并补发两条 outbox
     hostClosing = false
-    const reopened = new WorkflowService({ dataDir, host, state, autoRecoverOnRestart: false })
+    const reopened = new WorkflowService({ dataDir, host, kv: state, autoRecoverOnRestart: false })
     await reopened.prepareRecovery()
     assert.deepEqual(host.abortedConversations, [55])
     await reopened.init()
     await reopened.awaitPreparedChildrenSettled()
     assert.deepEqual(host.abortedConversations, [55, 55])
-    assert.equal(readRecord(dataDir, run.id)['pendingChildCleanup'], undefined, 'init 必须清除 pendingChildCleanup')
+    assert.equal(readHeader(state, run.id).phase, 'settled', 'init 必须将 cleanup_pending 收敛为 settled')
     assert.equal(host.settledCalls.length, 2, '重启 outbox 应补发两条待汇报记录')
     assert.equal(host.settledCalls.find((c) => c.summary.id === run.id)?.summary.status, 'aborted')
     assert.equal(host.settledCalls.find((c) => c.summary.id === completedRun.id)?.summary.status, 'completed')
     await reopened.close()
   })
 
-  it('isHostClosing=true 同步工作流 + pendingChildCleanup 严格布尔校验：关停标 aborted 且打标，重启收割子会话且不通知父会话，非布尔损坏拒绝', timeout, async () => {
+  it('isHostClosing=true 同步工作流 + phase 严格枚举校验：关停标 aborted + cleanup_pending，重启收割子会话且不通知父会话，非法 phase 损坏拒绝', timeout, async () => {
     let hostClosing = false
     const host = makeHost()
     host.isHostClosing = () => hostClosing
     const state = makeStateStore()
-    const service = new WorkflowService({ dataDir, host, state, autoRecoverOnRestart: false })
+    const service = new WorkflowService({ dataDir, host, kv: state, autoRecoverOnRestart: false })
     host.behavior = { kind: 'hanging', execution: { conversationId: 77 } }
     let rejectWorkflowSpawn!: (error: Error) => void
     host.spawnAgent = async (req) => {
@@ -750,7 +741,6 @@ describe('startBackgroundAgent', () => {
       conversationId: 1,
       script: 'export const meta = { name: "sync-close", description: "test" }\nreturn await agent("child")',
     })
-    // 等待 spawnAgent 进入
     await new Promise<void>((resolve) => {
       const check = () => {
         if (rejectWorkflowSpawn !== undefined) resolve()
@@ -762,44 +752,42 @@ describe('startBackgroundAgent', () => {
     rejectWorkflowSpawn(new Error('Session is closed'))
     await service.wait(run.id)
 
-    const saved = readRecord(dataDir, run.id)
-    assert.equal(saved['status'], 'aborted')
-    assert.equal(saved['pendingChildCleanup'], true)
+    const saved = readHeader(state, run.id)
+    assert.equal(saved.status, 'aborted')
+    assert.equal(saved.phase, 'cleanup_pending')
     assert.equal(host.abortedConversations.length, 0)
     assert.equal(host.settledCalls.length, 0)
 
     hostClosing = false
-    const reopened = new WorkflowService({ dataDir, host, state, autoRecoverOnRestart: false })
+    const reopened = new WorkflowService({ dataDir, host, kv: state, autoRecoverOnRestart: false })
     await reopened.prepareRecovery()
     assert.deepEqual(host.abortedConversations, [77])
     await reopened.init()
     await reopened.awaitPreparedChildrenSettled()
     assert.deepEqual(host.abortedConversations, [77, 77])
-    assert.equal(readRecord(dataDir, run.id)['pendingChildCleanup'], undefined)
+    assert.equal(readHeader(state, run.id).phase, 'settled')
     assert.equal(host.settledCalls.length, 0, '同步工作流绝不能在恢复期向父会话发通知')
     await reopened.close()
 
-    // 非布尔 pendingChildCleanup 必须触发显式 workflow_record_corrupt
-    const badId = 'wf_bad_pending_cleanup01'
-    seedRecord(dataDir, {
+    const badId = 'wf_bad_phase_check01'
+    const badKv = makeStateStore()
+    badKv.set(badId, {
       id: badId,
+      kind: 'workflow',
       name: 'bad',
       conversationId: 1,
       status: 'aborted',
-      pendingChildCleanup: 'yes',
+      phase: 'bogus_phase' as unknown as RunHeader['phase'],
       createdAt: 1,
       updatedAt: 1,
       journalPath: join(dataDir, `${badId}.jsonl`),
-    })
-    const currentIndex = state.get<Array<Record<string, unknown>>>('workflow/runs', [])
-    state.set('workflow/runs', [
-      ...currentIndex,
-      { id: badId, conversationId: 1, status: 'aborted', createdAt: 1, updatedAt: 1 },
-    ])
+    } as RunHeader)
+    const badService = new WorkflowService({ dataDir, host, kv: badKv, autoRecoverOnRestart: false })
     assert.throws(
-      () => reopened.getRun(badId),
+      () => badService.getRun(badId),
       (err: unknown) => err instanceof HelmxError && err.code === 'workflow_record_corrupt',
     )
+    await badService.close()
   })
 
   it('isHostClosing=true 关停窗口账本完整性：已执行完的 action/agent 正常落账，下一步 prepareAction 在写 action_started 前中止不留悬空行', timeout, async () => {
@@ -813,7 +801,6 @@ describe('startBackgroundAgent', () => {
     let step2Invoked = false
     host.invokeAction = async (_pluginId, actionId) => {
       if (actionId === 'step1') {
-        // 模拟 step1 实际已完成，恰在返回瞬间宿主进入关停态
         hostClosing = true
         return { done: 1 }
       }
@@ -821,7 +808,7 @@ describe('startBackgroundAgent', () => {
       return { done: 2 }
     }
     const state = makeStateStore()
-    const service = new WorkflowService({ dataDir, host, state, autoRecoverOnRestart: false })
+    const service = new WorkflowService({ dataDir, host, kv: state, autoRecoverOnRestart: false })
     const run = await service.run({
       conversationId: 1,
       script:
@@ -832,14 +819,14 @@ describe('startBackgroundAgent', () => {
     })
     await service.wait(run.id)
     assert.equal(step2Invoked, false, '关停态不得启动后续 step2 动作')
-    const saved = readRecord(dataDir, run.id)
-    assert.equal(saved['status'], 'aborted')
-    const journalLines = readFileSync(String(saved['journalPath']), 'utf8')
+    const saved = readHeader(state, run.id)
+    assert.equal(saved.status, 'aborted')
+    assert.equal(saved.kind, 'workflow')
+    const journalLines = readFileSync(saved.journalPath, 'utf8')
       .trim()
       .split('\n')
       .filter(Boolean)
       .map((line) => JSON.parse(line) as { type: string; index: number; ok?: boolean })
-    // step1 必须同时落盘 action_started 与配对终态 action(ok: true)，且不存在 step2 的悬空 action_started
     assert.deepEqual(
       journalLines.map((l) => ({ type: l.type, index: l.index, ...(l.ok !== undefined ? { ok: l.ok } : {}) })),
       [
@@ -856,7 +843,7 @@ describe('startBackgroundAgent', () => {
     const service = new WorkflowService({
       dataDir,
       host,
-      state: makeStateStore(),
+      kv: makeStateStore(),
       redact: (text) => text.replace(/SECRET_TOKEN/g, '[REDACTED]'),
     })
 
@@ -910,7 +897,7 @@ describe('startBackgroundAgent', () => {
       const state = makeStateStore()
       const host = makeHost()
       host.behavior = { kind: 'noOnResolved', result: 'remote-ok' }
-      const service = new WorkflowService({ dataDir: localDir, host, state })
+      const service = new WorkflowService({ dataDir: localDir, host, kv: state })
 
       // 1) startBackgroundAgent 透传 nodeId 并在 subagentSpec 落盘
       const started = await service.startBackgroundAgent({
@@ -922,25 +909,28 @@ describe('startBackgroundAgent', () => {
       await service.wait(started.run.id)
       assert.equal(host.spawns[0]!['nodeId'], 'gpu-1')
       assert.equal(host.spawns[0]!['cwd'], '/srv/work')
-      const persisted = readRecord(localDir, started.run.id)
-      const persistedSpec = persisted['subagentSpec'] as Record<string, unknown>
-      assert.equal(persistedSpec['nodeId'], 'gpu-1')
-      assert.equal(persistedSpec['cwd'], '/srv/work')
+      const persistedDetail = readDetail(localDir, started.run.id)
+      assert.equal(persistedDetail.subagentSpec?.nodeId, 'gpu-1')
+      assert.equal(persistedDetail.subagentSpec?.cwd, '/srv/work')
       await service.close()
 
       // 2) pre-resolve 崩溃恢复（无 execution handle）：reattachBackgroundAgent 必须还原 nodeId + cwd
       const preResolveId = 'wf_pre_node0001'
       const now = Date.now()
-      seedRecord(localDir, {
+      state.set(preResolveId, {
         id: preResolveId,
         name: 'remote-pre',
         conversationId: 1,
         status: 'running',
+        phase: 'running',
         kind: 'subagent',
         notifyParentOnSettle: true,
         createdAt: now,
         updatedAt: now,
-        journalPath: join(localDir, 'artifacts', '1', `workflow-${preResolveId}.jsonl`),
+        nodes: [{ id: 'subagent-0', kind: 'agent', label: 'remote-pre', status: 'running', startedAt: now }],
+      })
+      writeDetail(localDir, {
+        id: preResolveId,
         subagentSpec: {
           agentId: `${preResolveId}:subagent-0`,
           requestId: `helmx:spawn:${preResolveId}`,
@@ -953,16 +943,21 @@ describe('startBackgroundAgent', () => {
 
       // 3) post-resolve 崩溃重挂（已有 conversationId 句柄）：发送 reattach，不传 nodeId / cwd
       const postResolveId = 'wf_post_node001'
-      seedRecord(localDir, {
+      state.set(postResolveId, {
         id: postResolveId,
         name: 'remote-post',
         conversationId: 1,
         status: 'running',
+        phase: 'running',
         kind: 'subagent',
         notifyParentOnSettle: true,
         createdAt: now,
         updatedAt: now,
-        journalPath: join(localDir, 'artifacts', '1', `workflow-${postResolveId}.jsonl`),
+        execution: { nodeId: 'gpu-2', conversationId: 88, effectiveCwd: '/srv/retry' },
+        nodes: [{ id: 'subagent-0', kind: 'agent', label: 'remote-post', status: 'running', startedAt: now, conversationId: 88 }],
+      })
+      writeDetail(localDir, {
+        id: postResolveId,
         subagentMeta: { execution: { nodeId: 'gpu-2', conversationId: 88, effectiveCwd: '/srv/retry' } },
         subagentSpec: {
           agentId: `${postResolveId}:subagent-0`,
@@ -976,17 +971,23 @@ describe('startBackgroundAgent', () => {
 
       // 4) failed 有句柄子代理经 resumeFromRunId 续接：带 resume，绝不带 nodeId（防与 resume 互斥）
       const failedId = 'wf_fail_node001'
-      seedRecord(localDir, {
+      state.set(failedId, {
         id: failedId,
         name: 'remote-failed',
         conversationId: 1,
         status: 'failed',
+        phase: 'settled',
         error: 'interrupted',
+        resumable: true,
         kind: 'subagent',
         notifyParentOnSettle: true,
         createdAt: now,
         updatedAt: now,
-        journalPath: join(localDir, 'artifacts', '1', `workflow-${failedId}.jsonl`),
+        execution: { nodeId: 'gpu-2', conversationId: 91, effectiveCwd: '/srv/retry' },
+        nodes: [{ id: 'subagent-0', kind: 'agent', label: 'remote-failed', status: 'failed', startedAt: now, conversationId: 91 }],
+      })
+      writeDetail(localDir, {
+        id: failedId,
         subagentMeta: { execution: { nodeId: 'gpu-2', conversationId: 91, effectiveCwd: '/srv/retry' } },
         subagentSpec: {
           agentId: `${failedId}:subagent-0`,
@@ -998,17 +999,9 @@ describe('startBackgroundAgent', () => {
         nodes: [{ id: 'subagent-0', kind: 'agent', label: 'remote-failed', status: 'failed', startedAt: now, conversationId: 91 }],
       })
 
-      const idx = state.get<Array<Record<string, unknown>>>('workflow/runs', [])
-      state.set('workflow/runs', [
-        ...idx,
-        { id: preResolveId, conversationId: 1, status: 'running', createdAt: now, updatedAt: now, notifyParentOnSettle: true },
-        { id: postResolveId, conversationId: 1, status: 'running', createdAt: now, updatedAt: now, notifyParentOnSettle: true },
-        { id: failedId, conversationId: 1, status: 'failed', createdAt: now, updatedAt: now, notifyParentOnSettle: true },
-      ])
-
       const recoverHost = makeHost()
       recoverHost.behavior = { kind: 'noOnResolved', result: 'recovered-ok' }
-      const recovered = new WorkflowService({ dataDir: localDir, host: recoverHost, state, autoRecoverOnRestart: true })
+      const recovered = new WorkflowService({ dataDir: localDir, host: recoverHost, kv: state, autoRecoverOnRestart: true })
       await recovered.init()
       await recovered.wait(preResolveId)
       await recovered.wait(postResolveId)
@@ -1031,18 +1024,23 @@ describe('startBackgroundAgent', () => {
       const resumeSpawn = recoverHost.spawns.find((s) => s['resume'] === '91')
       assert.ok(resumeSpawn, 'resumeFromRunId 应以 conversationId 续接')
       assert.equal(resumeSpawn['nodeId'], undefined, 'resumeFromRunId 续接不得携带 nodeId（与 resume 互斥）')
+      await recovered.close()
 
       // 5) 损坏的 subagentSpec.nodeId 必须触发显式 workflow_record_corrupt
       const badNodeSpecId = 'wf_bad_nodespec1'
-      seedRecord(localDir, {
+      const corruptKv = makeStateStore()
+      corruptKv.set(badNodeSpecId, {
         id: badNodeSpecId,
         name: 'bad-node-spec',
         conversationId: 1,
         status: 'failed',
+        phase: 'settled',
         kind: 'subagent',
         createdAt: now,
         updatedAt: now,
-        journalPath: join(localDir, 'artifacts', '1', `workflow-${badNodeSpecId}.jsonl`),
+      })
+      writeDetail(localDir, {
+        id: badNodeSpecId,
         subagentSpec: {
           agentId: `${badNodeSpecId}:subagent-0`,
           requestId: `helmx:spawn:${badNodeSpecId}`,
@@ -1050,16 +1048,12 @@ describe('startBackgroundAgent', () => {
           nodeId: '_bad/node!',
         },
       })
-      state.set('workflow/runs', [
-        ...state.get<Array<Record<string, unknown>>>('workflow/runs', []),
-        { id: badNodeSpecId, conversationId: 1, status: 'failed', createdAt: now, updatedAt: now },
-      ])
+      const corruptSvc = new WorkflowService({ dataDir: localDir, host: recoverHost, kv: corruptKv })
       assert.throws(
-        () => recovered.getRun(badNodeSpecId),
+        () => corruptSvc.getRun(badNodeSpecId),
         (err: unknown) => err instanceof HelmxError && err.code === 'workflow_record_corrupt',
       )
-
-      await recovered.close()
+      await corruptSvc.close()
     } finally {
       rmSync(localDir, { recursive: true, force: true })
     }

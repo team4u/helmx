@@ -19,13 +19,15 @@
 
 import { strict as assert } from 'node:assert'
 import { describe, it } from 'node:test'
-import type { WorkflowJournalEntry } from '../src/workflow/engine/journal.js'
 import {
   actionJournalKey,
   agentJournalKey,
+  runWorkflow,
   type JournalWriteInput,
-} from '../src/workflow/engine/journal.js'
-import { runWorkflow, type WorkflowHost, type WorkflowSpawnResult } from '../src/workflow/engine/runtime.js'
+  type WorkflowHost,
+  type WorkflowJournalEntry,
+  type WorkflowSpawnResult,
+} from '../src/workflow/dsl/index.js'
 
 const timeout = { timeout: 60_000 } as const
 

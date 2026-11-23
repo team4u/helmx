@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import type { JournalWriteInput, WorkflowJournalEntry } from '../src/workflow/engine/journal.js'
-import { runWorkflow, type WorkflowHost } from '../src/workflow/engine/runtime.js'
+import { runWorkflow, type JournalWriteInput, type WorkflowHost, type WorkflowJournalEntry } from '../src/workflow/dsl/index.js'
 
 const timeout = { timeout: 60_000 } as const
 const source = (name: string, body: string) => `export const meta = { name: ${JSON.stringify(name)}, description: 'test' }\n${body}`

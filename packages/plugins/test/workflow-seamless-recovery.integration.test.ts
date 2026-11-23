@@ -9,8 +9,8 @@
  *   close() 重启后的 (conversationId, callId) 幂等重放，零重复派生；
  * - T5：单子代理 resumeFromRunId、resume_failed 动作与真实 CLI `helmx workflows resume-failed`
  *   （5 个失败任务拉起 4 跳过 1、二次调用幂等 0 新拉起、参数互斥校验）；
- * - 安全红线：crashRecoveries > 3 熔断（[crash_recovery_limit]）、secretNames 未就绪重启失效
- *   （[secret_grant_expired_on_restart]，落盘绝不含 secretNames）、配置类型校验与 HELMX_AUTO_RECOVER=0 逃生阀。
+ * - 安全红线：crashRecoveries > 3 熔断（[crash_recovery_limit]）、subagentSpec 绝不落盘 secretNames、
+ *   配置类型校验与 HELMX_AUTO_RECOVER=0 逃生阀。
  */
 
 import assert from 'node:assert/strict'
@@ -30,8 +30,15 @@ import { KernelRuntime } from '../../kernel/src/runtime/index.js'
 import type { WorkflowRunSummary } from '../src/contracts.js'
 import { createWorkflowPlugin } from '../src/workflow.js'
 import { createWorktreePlugin } from '../src/worktree.js'
-import { readJournal } from '../src/workflow/engine/journal.js'
-import { WorkflowService, type WorkflowServiceHost, type WorkflowStateStore } from '../src/workflow/engine/service.js'
+import { readJournal } from '../src/workflow/dsl/index.js'
+import {
+  createMemoryKvStore,
+  WorkflowService,
+  type RunDetail,
+  type RunHeader,
+  type WorkflowKvStore,
+  type WorkflowServiceHost,
+} from '../src/workflow/runs/index.js'
 import {
   createGitTemplate,
   deferred,
@@ -54,19 +61,25 @@ const TSX_CLI = require.resolve('tsx/cli')
 
 const gitTemplate = createGitTemplate()
 
-function recordPathOf(dataDir: string, convId: number, runId: string): string {
+function detailPathOf(dataDir: string, convId: number, runId: string): string {
   return join(
     dataDir,
     'plugins',
     'builtin%3Aworkflow',
     'artifacts',
     String(convId),
-    `workflow-${runId}.record.json`,
+    `wf-${runId}.detail.json`,
   )
 }
 
-function readPersistedRecord(dataDir: string, convId: number, runId: string): Record<string, unknown> {
-  return JSON.parse(readFileSync(recordPathOf(dataDir, convId, runId), 'utf8')) as Record<string, unknown>
+function readPersistedDetail(dataDir: string, convId: number, runId: string): RunDetail {
+  return JSON.parse(readFileSync(detailPathOf(dataDir, convId, runId), 'utf8')) as RunDetail
+}
+
+function readPersistedHeader(kernel: KernelRuntime, runId: string): RunHeader {
+  const row = kernel.kvStore.get('builtin:workflow', 'runs', runId)
+  assert.ok(row !== undefined, `missing KV RunHeader for ${runId}`)
+  return JSON.parse(row.valueJson) as RunHeader
 }
 
 async function runCli(args: string[], env: NodeJS.ProcessEnv): Promise<{ code: number | null; out: string; err: string }> {
@@ -208,14 +221,15 @@ test('T1-A: 原生后台单子代理（isolation:worktree + schema + gate）经 
 
     await enteredHold1.promise
     await k1.close()
+    const suspendedHeader = readPersistedHeader(k1, runId)
     k1 = undefined
 
     // 验证优雅挂起后的磁盘快照与 Worktree 租约保留
-    const suspendedRecord = readPersistedRecord(dataDir, 1, runId)
-    assert.equal(suspendedRecord['status'], 'running', '优雅 close 必须保持 running')
-    assert.equal(suspendedRecord['suspendedCleanly'], true, '优雅 close 必须置位 suspendedCleanly=true')
-    assert.equal(suspendedRecord['crashRecoveries'], undefined, '优雅挂起不得累加 crashRecoveries')
-    const specOnDisk = suspendedRecord['subagentSpec'] as Record<string, unknown>
+    assert.equal(suspendedHeader.status, 'running', '优雅 close 必须保持 running')
+    assert.equal(suspendedHeader.phase, 'suspended', '优雅 close 必须置位 phase=suspended')
+    assert.equal(suspendedHeader.crashRecoveries, undefined, '优雅挂起不得累加 crashRecoveries')
+    const suspendedDetail = readPersistedDetail(dataDir, 1, runId)
+    const specOnDisk = suspendedDetail.subagentSpec as unknown as Record<string, unknown>
     assert.ok(specOnDisk && specOnDisk['requestId'] === `helmx:spawn:${runId}`)
     assert.equal('secretNames' in specOnDisk, false, 'subagentSpec 绝不得落盘 secretNames')
 
@@ -272,9 +286,9 @@ test('T1-A: 原生后台单子代理（isolation:worktree + schema + gate）经 
     assert.equal(finalRun.id, runId, '必须原 runId 收敛')
     assert.deepEqual(finalRun.result, { ok: true, tag: 't1-recovered' })
 
-    const finalRecord = readPersistedRecord(dataDir, 1, runId)
-    assert.equal(finalRecord['suspendedCleanly'], undefined, '恢复后必须清除 suspendedCleanly')
-    assert.equal(finalRecord['crashRecoveries'], undefined, '优雅恢复不计异常崩溃')
+    const finalHeader = readPersistedHeader(k2, runId)
+    assert.equal(finalHeader.phase, 'settled', '恢复完成后 phase 必须收敛为 settled')
+    assert.equal(finalHeader.crashRecoveries, undefined, '优雅恢复不计异常崩溃')
 
     const childDetail = await k2.getConversationDetail(childId, { limit: 100 })
     const childInputs = childDetail.entries.filter((e) => e.kind === 'helmx.input')
@@ -327,6 +341,7 @@ for (let i = 0; i < 400; i++) {
   if (faux.state.callCount >= 1 && kernel.getConversation(childId).status === 'working') break
 }
 await kernel.documentStore.flush()
+await kernel.kvStore.flush()
 await new Promise((r) => process.stdout.write('RUN=' + runId + ',CHILD=' + childId + '\\n', r))
 process.kill(process.pid, 'SIGKILL')
 `,
@@ -365,8 +380,8 @@ process.kill(process.pid, 'SIGKILL')
 
     const finalRun = ((await k2.plugins.invokeAction('builtin:workflow', 'inspect', { runId })) as { run: WorkflowRunSummary }).run
     assert.equal(finalRun.result, 'SIGKILL恢复后完成的最终子代理输出')
-    const record = readPersistedRecord(dataDir, 1, runId!)
-    assert.equal(record['crashRecoveries'], 1, 'SIGKILL 非优雅恢复必须记录 crashRecoveries=1')
+    const header = readPersistedHeader(k2, runId!)
+    assert.equal(header.crashRecoveries, 1, 'SIGKILL 非优雅恢复必须记录 crashRecoveries=1')
     const childDetail = await k2.getConversationDetail(childId, { limit: 100 })
     assert.equal(childDetail.entries.filter((e) => e.kind === 'helmx.input').length, 1, 'SIGKILL 重挂不重复追加用户消息')
     // 等待主会话处理完后台汇报（回合完成后 unread=true 置为 done），避免 close 时报 PluginHost 已 dispose
@@ -473,7 +488,9 @@ return { s1, count: act.count, pa, pb, s3 }
 
     await enteredHoldB.promise
     // 确保 parallel-a 的终态行也已在 close 前落入账本
-    const journalPath = String(readPersistedRecord(dataDir, 1, run.id)['journalPath'])
+    const headerBeforeClose = readPersistedHeader(k1, run.id)
+    assert.equal(headerBeforeClose.kind, 'workflow')
+    const journalPath = headerBeforeClose.journalPath
     await waitFor(() => {
       const j = readJournal(journalPath)
       const doneAgents = j.entries.filter((e) => e.type === 'agent' && e.ok)
@@ -569,16 +586,18 @@ await kernel.plugins.register(createWorkflowPlugin())
 await kernel.start()
 const script = 'export const meta = { name: "t2-kill", description: "sigkill" }\\nconst a = await agent("s1")\\nconst b = await agent("s2:" + a)\\nreturn a + "|" + b'
 const { run } = await kernel.plugins.invokeAction('builtin:workflow', 'run', { conversationId: 1, script })
-const recPath = join(dataDir, 'plugins', 'builtin%3Aworkflow', 'artifacts', '1', 'workflow-' + run.id + '.record.json')
+const jPath = join(dataDir, 'plugins', 'builtin%3Aworkflow', 'artifacts', '1', 'workflow-' + run.id + '.jsonl')
 for (let i = 0; i < 400; i++) {
   await delay(15)
   if (callIdx >= 1) {
-    const rec = JSON.parse(readFileSync(recPath, 'utf8'))
-    const jContent = readFileSync(rec.journalPath, 'utf8')
-    if (jContent.split('\\n').filter(Boolean).length >= 3) break
+    try {
+      const jContent = readFileSync(jPath, 'utf8')
+      if (jContent.split('\\n').filter(Boolean).length >= 3) break
+    } catch {}
   }
 }
 await kernel.documentStore.flush()
+await kernel.kvStore.flush()
 await new Promise((r) => process.stdout.write('RUN=' + run.id + '\\n', r))
 process.kill(process.pid, 'SIGKILL')
 `,
@@ -589,8 +608,7 @@ process.kill(process.pid, 'SIGKILL')
   assert.ok(runId, `未拿到 runId: ${out}`)
 
   // 模拟进程强杀导致尾行额外残留半截 agent_started 行：应计 ioError 而不触发 actionUncertain
-  const recBefore = readPersistedRecord(dataDir, 1, runId)
-  const journalPath = String(recBefore['journalPath'])
+  const journalPath = join(dataDir, 'plugins', 'builtin%3Aworkflow', 'artifacts', '1', `workflow-${runId}.jsonl`)
   appendFileSync(journalPath, '{"type":"agent_started","scopePath":"root","trunc', 'utf8')
   const checkTruncated = readJournal(journalPath)
   assert.equal(checkTruncated.actionUncertain, false, '截断的 agent_started 尾行不得误判为 actionUncertain')
@@ -626,11 +644,7 @@ process.kill(process.pid, 'SIGKILL')
   // 悬挂非幂等 action_started 阻断验证：启动恢复必须守卫中止关联子会话并标 failed([workflow_action_uncertain])
   const uncertainDir = useTempDir(t, 'helmx-t2-uncertain-')
   const abortedChildren: number[] = []
-  const stateMap = new Map<string, unknown>()
-  const memState: WorkflowStateStore = {
-    get: <T>(k: string, init: T) => (stateMap.has(k) ? structuredClone(stateMap.get(k) as T) : init),
-    set: (k, v) => { stateMap.set(k, structuredClone(v)) },
-  }
+  const memKv: WorkflowKvStore<RunHeader> = createMemoryKvStore<RunHeader>()
   const uJournalPath = join(uncertainDir, 'artifacts', '1', 'workflow-wf_uncertain01.jsonl')
   mkdirSync(join(uncertainDir, 'artifacts', '1'), { recursive: true })
   writeFileSync(
@@ -639,21 +653,25 @@ process.kill(process.pid, 'SIGKILL')
     'utf8',
   )
   writeFileSync(
-    join(uncertainDir, 'artifacts', '1', 'workflow-wf_uncertain01.record.json'),
+    join(uncertainDir, 'artifacts', '1', 'wf-wf_uncertain01.detail.json'),
     JSON.stringify({
       id: 'wf_uncertain01',
-      name: 'uncertain-wf',
-      conversationId: 1,
-      status: 'running',
-      createdAt: 1,
-      updatedAt: 1,
       script: 'export const meta = { name: "u", description: "u" }\nreturn 1',
-      journalPath: uJournalPath,
-      childConversationIds: [91],
     }),
     'utf8',
   )
-  memState.set('workflow/runs', [{ id: 'wf_uncertain01', conversationId: 1, status: 'running', createdAt: 1, updatedAt: 1 }])
+  memKv.set('wf_uncertain01', {
+    id: 'wf_uncertain01',
+    kind: 'workflow',
+    name: 'uncertain-wf',
+    conversationId: 1,
+    status: 'running',
+    phase: 'running',
+    createdAt: 1,
+    updatedAt: 1,
+    journalPath: uJournalPath,
+    childConversationIds: [91],
+  })
   const mockHost: WorkflowServiceHost = {
     spawnAgent: async () => 'unused',
     invokeAction: async () => ({}),
@@ -662,7 +680,7 @@ process.kill(process.pid, 'SIGKILL')
     abortConversationGuarded: async (id) => { abortedChildren.push(id) },
     emitEvent: () => {},
   }
-  const uSvc = new WorkflowService({ dataDir: uncertainDir, state: memState, host: mockHost })
+  const uSvc = new WorkflowService({ dataDir: uncertainDir, kv: memKv, host: mockHost })
   await uSvc.init()
   const uSummary = uSvc.getRun('wf_uncertain01')
   assert.equal(uSummary.status, 'failed')
@@ -834,17 +852,8 @@ test('T5: resume_failed 批量恢复（5 失败任务拉起 4 跳过 1、二次�
   const faux = makeFauxProvider()
   faux.setResponses(Array.from({ length: 20 }, (_, idx) => fauxAssistantMessage(`RESUMED_OK_${idx + 1}`)))
 
-  const app = await createHelmx({
-    buildProvider: createPluginBuildProvider(),
-    dataDir,
-    cwd: dataDir,
-    model: 'faux/faux-1',
-    providers: [faux.provider],
-  })
-  let hub: Awaited<ReturnType<typeof startHub>> | undefined
-  try {
-    // 注册一个模拟外部运行时插件（承接 agentType='ext:cli' 或 resume='pane-ext-4'）
-    await app.kernel.plugins.register({
+  const registerExtRuntime = async (kernel: KernelRuntime) => {
+    await kernel.plugins.register({
       id: 'test:ext-runtime',
       name: 'External Runtime Stub',
       definePlugin(ctx) {
@@ -861,6 +870,18 @@ test('T5: resume_failed 批量恢复（5 失败任务拉起 4 跳过 1、二次�
         }, { priority: 100 })
       },
     })
+  }
+
+  let app = await createHelmx({
+    buildProvider: createPluginBuildProvider(),
+    dataDir,
+    cwd: dataDir,
+    model: 'faux/faux-1',
+    providers: [faux.provider],
+  })
+  let hub: Awaited<ReturnType<typeof startHub>> | undefined
+  try {
+    await registerExtRuntime(app.kernel)
 
   const conv1 = 1
   const conv2 = (await app.kernel.createConversation({ title: 'second-conv' })).id
@@ -879,21 +900,11 @@ test('T5: resume_failed 批量恢复（5 失败任务拉起 4 跳过 1、二次�
   })
   app.kernel.markConversationOwnership(realChild.id, 'helmx')
 
-  const seedFailedRecord = (convId: number, rec: Record<string, unknown>) => {
+  const seedFailedRecord = (convId: number, header: RunHeader, detail: RunDetail) => {
     const dir = join(dataDir, 'plugins', 'builtin%3Aworkflow', 'artifacts', String(convId))
     mkdirSync(dir, { recursive: true })
-    writeFileSync(join(dir, `workflow-${String(rec['id'])}.record.json`), JSON.stringify(rec), 'utf8')
-    const store = app.kernel.documentStore
-    const current = store.get<{ 'workflow/runs'?: Array<Record<string, unknown>> }>('builtin:workflow:records', {})
-    const list = [...(current['workflow/runs'] ?? [])]
-    list.push({
-      id: rec['id'],
-      conversationId: convId,
-      status: rec['status'],
-      createdAt: rec['createdAt'],
-      updatedAt: rec['updatedAt'],
-    })
-    store.set('builtin:workflow:records', { ...current, 'workflow/runs': list })
+    writeFileSync(join(dir, `wf-${header.id}.detail.json`), JSON.stringify(detail), 'utf8')
+    app.kernel.kvStore.put('builtin:workflow', 'runs', header.id, JSON.stringify(header))
   }
 
   for (const [idx, id, createdAt] of [
@@ -902,60 +913,86 @@ test('T5: resume_failed 批量恢复（5 失败任务拉起 4 跳过 1、二次�
   ] as const) {
     const jPath = join(wfDir, `workflow-${id}.jsonl`)
     writeFileSync(jPath, '', 'utf8')
-    seedFailedRecord(conv1, {
-      id,
-      name: `dsl-${idx}`,
-      conversationId: conv1,
-      status: 'failed',
-      error: 'upstream rate limit',
-      createdAt,
-      updatedAt: createdAt,
-      kind: 'workflow',
-      notifyParentOnSettle: true,
-      script: `export const meta = { name: "dsl-${idx}", description: "d" }\nreturn await agent("step-${idx}")`,
-      journalPath: jPath,
-    })
+    seedFailedRecord(
+      conv1,
+      {
+        id,
+        name: `dsl-${idx}`,
+        conversationId: conv1,
+        status: 'failed',
+        phase: 'settled',
+        resumable: true,
+        error: 'upstream rate limit',
+        createdAt,
+        updatedAt: createdAt,
+        kind: 'workflow',
+        notifyParentOnSettle: true,
+        journalPath: jPath,
+      },
+      {
+        id,
+        script: `export const meta = { name: "dsl-${idx}", description: "d" }\nreturn await agent("step-${idx}")`,
+      },
+    )
   }
 
-  seedFailedRecord(conv1, {
-    id: 'wf_fail_sub_native_03',
-    name: 'subagent:assistant',
-    conversationId: conv1,
-    status: 'failed',
-    error: '[gate_failed] test failed',
-    createdAt: 300,
-    updatedAt: 300,
-    kind: 'subagent',
-    notifyParentOnSettle: true,
-    journalPath: join(wfDir, 'workflow-wf_fail_sub_native_03.jsonl'),
-    subagentMeta: { agentType: 'assistant', execution: { nodeId: 'local', conversationId: realChild.id } },
-    subagentSpec: {
-      agentId: 'wf_fail_sub_native_03:subagent-0',
-      requestId: 'helmx:spawn:wf_fail_sub_native_03',
-      prompt: '原任务指令',
+  seedFailedRecord(
+    conv1,
+    {
+      id: 'wf_fail_sub_native_03',
+      name: 'subagent:assistant',
+      conversationId: conv1,
+      status: 'failed',
+      phase: 'settled',
+      resumable: true,
+      error: '[gate_failed] test failed',
+      createdAt: 300,
+      updatedAt: 300,
+      kind: 'subagent',
+      notifyParentOnSettle: true,
       agentType: 'assistant',
+      execution: { nodeId: 'local', conversationId: realChild.id },
     },
-  })
+    {
+      id: 'wf_fail_sub_native_03',
+      subagentMeta: { agentType: 'assistant', execution: { nodeId: 'local', conversationId: realChild.id } },
+      subagentSpec: {
+        agentId: 'wf_fail_sub_native_03:subagent-0',
+        requestId: 'helmx:spawn:wf_fail_sub_native_03',
+        prompt: '原任务指令',
+        agentType: 'assistant',
+      },
+    },
+  )
 
-  seedFailedRecord(conv1, {
-    id: 'wf_fail_sub_ext_04',
-    name: 'subagent:ext:cli',
-    conversationId: conv1,
-    status: 'failed',
-    error: '[subagent_failed] 首次外部执行模拟失败',
-    createdAt: 400,
-    updatedAt: 400,
-    kind: 'subagent',
-    notifyParentOnSettle: true,
-    journalPath: join(wfDir, 'workflow-wf_fail_sub_ext_04.jsonl'),
-    subagentMeta: { agentType: 'ext:cli', execution: { nodeId: 'local', executionId: 'pane-ext-4', effectiveCwd: dataDir } },
-    subagentSpec: {
-      agentId: 'wf_fail_sub_ext_04:subagent-0',
-      requestId: 'helmx:spawn:wf_fail_sub_ext_04',
-      prompt: '外部终端任务',
+  seedFailedRecord(
+    conv1,
+    {
+      id: 'wf_fail_sub_ext_04',
+      name: 'subagent:ext:cli',
+      conversationId: conv1,
+      status: 'failed',
+      phase: 'settled',
+      resumable: true,
+      error: '[subagent_failed] 首次外部执行模拟失败',
+      createdAt: 400,
+      updatedAt: 400,
+      kind: 'subagent',
+      notifyParentOnSettle: true,
       agentType: 'ext:cli',
+      execution: { nodeId: 'local', executionId: 'pane-ext-4', effectiveCwd: dataDir },
     },
-  })
+    {
+      id: 'wf_fail_sub_ext_04',
+      subagentMeta: { agentType: 'ext:cli', execution: { nodeId: 'local', executionId: 'pane-ext-4', effectiveCwd: dataDir } },
+      subagentSpec: {
+        agentId: 'wf_fail_sub_ext_04:subagent-0',
+        requestId: 'helmx:spawn:wf_fail_sub_ext_04',
+        prompt: '外部终端任务',
+        agentType: 'ext:cli',
+      },
+    },
+  )
 
   const uncertainJPath = join(wfDir, 'workflow-wf_fail_uncertain_05.jsonl')
   writeFileSync(
@@ -963,38 +1000,64 @@ test('T5: resume_failed 批量恢复（5 失败任务拉起 4 跳过 1、二次�
     `${JSON.stringify({ type: 'action_started', scopePath: 'root', scopeCallIndex: 0, index: 0, key: 'act', v: 1, seq: 0 })}\n`,
     'utf8',
   )
-  seedFailedRecord(conv1, {
-    id: 'wf_fail_uncertain_05',
-    name: 'dsl-uncertain',
-    conversationId: conv1,
-    status: 'failed',
-    error: 'workflow_action_uncertain: dangling action',
-    createdAt: 500,
-    updatedAt: 500,
-    kind: 'workflow',
-    notifyParentOnSettle: true,
-    script: 'export const meta = { name: "u", description: "u" }\nreturn 1',
-    journalPath: uncertainJPath,
-  })
+  seedFailedRecord(
+    conv1,
+    {
+      id: 'wf_fail_uncertain_05',
+      name: 'dsl-uncertain',
+      conversationId: conv1,
+      status: 'failed',
+      phase: 'settled',
+      resumable: false,
+      error: 'workflow_action_uncertain: dangling action',
+      createdAt: 500,
+      updatedAt: 500,
+      kind: 'workflow',
+      notifyParentOnSettle: true,
+      journalPath: uncertainJPath,
+    },
+    {
+      id: 'wf_fail_uncertain_05',
+      script: 'export const meta = { name: "u", description: "u" }\nreturn 1',
+    },
+  )
 
   // 在 conv2 再放 1 条可恢复失败 workflow 验证 --current 与 --all 边界
   const conv2JPath = join(dataDir, 'plugins', 'builtin%3Aworkflow', 'artifacts', String(conv2), 'workflow-wf_fail_conv2_06.jsonl')
   mkdirSync(join(dataDir, 'plugins', 'builtin%3Aworkflow', 'artifacts', String(conv2)), { recursive: true })
   writeFileSync(conv2JPath, '', 'utf8')
-  seedFailedRecord(conv2, {
-    id: 'wf_fail_conv2_06',
-    name: 'dsl-conv2',
-    conversationId: conv2,
-    status: 'failed',
-    error: 'network reset',
-    createdAt: 600,
-    updatedAt: 600,
-    kind: 'workflow',
-    notifyParentOnSettle: true,
-    script: 'export const meta = { name: "dsl-conv2", description: "d" }\nreturn await agent("conv2-step")',
-    journalPath: conv2JPath,
+  seedFailedRecord(
+    conv2,
+    {
+      id: 'wf_fail_conv2_06',
+      name: 'dsl-conv2',
+      conversationId: conv2,
+      status: 'failed',
+      phase: 'settled',
+      resumable: true,
+      error: 'network reset',
+      createdAt: 600,
+      updatedAt: 600,
+      kind: 'workflow',
+      notifyParentOnSettle: true,
+      journalPath: conv2JPath,
+    },
+    {
+      id: 'wf_fail_conv2_06',
+      script: 'export const meta = { name: "dsl-conv2", description: "d" }\nreturn await agent("conv2-step")',
+    },
+  )
+  await app.kernel.kvStore.flush()
+  // 重启 Hub 以便 builtin:workflow 从刚种下的 SQLite KV 行 hydrate
+  await app.close()
+  app = await createHelmx({
+    buildProvider: createPluginBuildProvider(),
+    dataDir,
+    cwd: dataDir,
+    model: 'faux/faux-1',
+    providers: [faux.provider],
   })
-  await app.kernel.documentStore.flush()
+  await registerExtRuntime(app.kernel)
 
   hub = await startHub({ kernel: app.kernel as never, port: 0 })
   const setupRes = await fetch(`${hub.url}/api/auth/setup`, {
@@ -1072,15 +1135,11 @@ test('T5: resume_failed 批量恢复（5 失败任务拉起 4 跳过 1、二次�
   }
 })
 
-test('安全红线：crashRecoveries > 3 熔断、secret_grant_expired_on_restart 拒绝降级、配置校验与 HELMX_AUTO_RECOVER=0 逃生阀', { timeout: 60_000 }, async (t) => {
+test('安全红线：crashRecoveries > 3 熔断、配置校验与 HELMX_AUTO_RECOVER=0 逃生阀', { timeout: 60_000 }, async (t) => {
   const dataDir = useTempDir(t, 'helmx-safety-redlines-')
   const abortedIds: number[] = []
   const settledReports: WorkflowRunSummary[] = []
-  const docs = new Map<string, unknown>()
-  const state: WorkflowStateStore = {
-    get: <T>(k: string, init: T) => (docs.has(k) ? structuredClone(docs.get(k) as T) : init),
-    set: (k, v) => { docs.set(k, structuredClone(v)) },
-  }
+  const kv = createMemoryKvStore<RunHeader>()
   const makeMockHost = (): WorkflowServiceHost => ({
     spawnAgent: async (req) => {
       req.onResolved?.({ nodeId: 'local', conversationId: 66 })
@@ -1095,42 +1154,39 @@ test('安全红线：crashRecoveries > 3 熔断、secret_grant_expired_on_restar
   })
 
   // 1) 连续非优雅崩溃 3 次均可恢复（crashRecoveries = 1, 2, 3），第 4 次触发 [crash_recovery_limit] 熔断
-  const svc0 = new WorkflowService({ dataDir, state, host: makeMockHost() })
+  const svc0 = new WorkflowService({ dataDir, kv, host: makeMockHost() })
   const { run: breakerRun } = await svc0.startBackgroundAgent({
     parentConversationId: 1,
     prompt: 'crash-loop-task',
   })
-  // 模拟进程强杀（不调 suspend，不落 suspendedCleanly；手工关闭仅清理测试句柄前先保存崩溃态）
-  const rawCrashed = JSON.parse(readFileSync(join(dataDir, 'artifacts', '1', `workflow-${breakerRun.id}.record.json`), 'utf8')) as Record<string, unknown>
+  const rawCrashed = kv.get(breakerRun.id)!
   await svc0.close()
-  // 还原强杀时的 running 记录（无 suspendedCleanly）
   const restoreRunning = (crashRecoveries?: number) => {
-    const rec: Record<string, unknown> = {
+    const header: RunHeader = {
       ...rawCrashed,
       status: 'running',
+      phase: 'running',
       ...(crashRecoveries !== undefined ? { crashRecoveries } : {}),
     }
-    delete rec['suspendedCleanly']
-    delete rec['error']
-    delete rec['notifiedAt']
-    writeFileSync(join(dataDir, 'artifacts', '1', `workflow-${breakerRun.id}.record.json`), JSON.stringify(rec), 'utf8')
-    state.set('workflow/runs', [{ id: breakerRun.id, conversationId: 1, status: 'running', createdAt: 1, updatedAt: 1 }])
+    delete header.error
+    delete header.notifiedAt
+    delete header.settledAt
+    kv.set(breakerRun.id, header)
   }
 
   for (const expectedCount of [1, 2, 3]) {
     restoreRunning(expectedCount - 1)
-    const s = new WorkflowService({ dataDir, state, host: makeMockHost() })
+    const s = new WorkflowService({ dataDir, kv, host: makeMockHost() })
     await s.init()
     assert.equal(s.getRun(breakerRun.id).status, 'running', `第 ${expectedCount} 次崩溃恢复应继续运行`)
-    const disk = JSON.parse(readFileSync(join(dataDir, 'artifacts', '1', `workflow-${breakerRun.id}.record.json`), 'utf8')) as Record<string, unknown>
-    assert.equal(disk['crashRecoveries'], expectedCount)
+    assert.equal(kv.get(breakerRun.id)!.crashRecoveries, expectedCount)
     await s.close()
   }
 
   abortedIds.length = 0
   settledReports.length = 0
   restoreRunning(3)
-  const sTrip = new WorkflowService({ dataDir, state, host: makeMockHost() })
+  const sTrip = new WorkflowService({ dataDir, kv, host: makeMockHost() })
   await sTrip.init()
   const tripped = sTrip.getRun(breakerRun.id)
   assert.equal(tripped.status, 'failed', '第 4 次异常崩溃（crashRecoveries=4 > 3）必须触发熔断')
@@ -1141,16 +1197,11 @@ test('安全红线：crashRecoveries > 3 熔断、secret_grant_expired_on_restar
   await sTrip.close()
 
   // 2) HELMX_AUTO_RECOVER=0 逃生阀与非法配置校验
-  const sDocs = new Map<string, unknown>()
-  const sState: WorkflowStateStore = {
-    get: <T>(k: string, init: T) => (sDocs.has(k) ? structuredClone(sDocs.get(k) as T) : init),
-    set: (k, v) => { sDocs.set(k, structuredClone(v)) },
-  }
   const envDir = useTempDir(t, 'helmx-env-valve-')
   const prevEnv = process.env.HELMX_AUTO_RECOVER
   process.env.HELMX_AUTO_RECOVER = '0'
   try {
-    const eSvc = new WorkflowService({ dataDir: envDir, state: sState, host: makeMockHost() })
+    const eSvc = new WorkflowService({ dataDir: envDir, kv: createMemoryKvStore<RunHeader>(), host: makeMockHost() })
     assert.equal(eSvc.isAutoRecoverOnRestart(), false, 'HELMX_AUTO_RECOVER=0 必须立即关闭自动恢复')
     await eSvc.close()
   } finally {

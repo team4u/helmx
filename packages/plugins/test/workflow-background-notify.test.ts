@@ -27,40 +27,24 @@ import { after, before, describe, it } from 'node:test'
 import { HelmxError, type AgentExecutionInfo } from '@helmx/protocol'
 import type { WorkflowRunSummary } from '../src/contracts.js'
 import {
+  createMemoryKvStore,
   WorkflowService,
+  type RunHeader,
+  type WorkflowKvStore,
   type WorkflowServiceHost,
-  type WorkflowStateStore,
-} from '../src/workflow/engine/service.js'
+} from '../src/workflow/runs/index.js'
 import { createBackgroundReporter, type BackgroundReporterDeps } from '../src/workflow/background.js'
 
 const timeout = { timeout: 60_000 } as const
 
-/**
- * 新契约读回 helper：完整体在 dataDir/artifacts/<convId>/workflow-<runId>.record.json
- * （本文件全部 run 均属会话 1）；records doc 只存轻量索引。
- */
-function readRecord(dataDir: string, runId: string, conversationId = 1): Record<string, unknown> {
-  return JSON.parse(
-    readFileSync(join(dataDir, 'artifacts', String(conversationId), `workflow-${runId}.record.json`), 'utf-8'),
-  )
+function makeStateStore(): WorkflowKvStore<RunHeader> {
+  return createMemoryKvStore<RunHeader>()
 }
 
-function seedRecord(dataDir: string, record: Record<string, unknown>): void {
-  const dir = join(dataDir, 'artifacts', String(record['conversationId']))
-  mkdirSync(dir, { recursive: true })
-  writeFileSync(join(dir, `workflow-${String(record['id'])}.record.json`), JSON.stringify(record), 'utf8')
-}
-
-function makeStateStore(): WorkflowStateStore {
-  const map = new Map<string, unknown>()
-  return {
-    get<T>(key: string, initial: T): T {
-      return (map.get(key) as T | undefined) ?? initial
-    },
-    set<T>(key: string, value: T): void {
-      map.set(key, JSON.parse(JSON.stringify(value)))
-    },
-  }
+function readHeader(kv: WorkflowKvStore<RunHeader>, runId: string): RunHeader {
+  const hit = kv.get(runId)
+  assert.ok(hit !== undefined, `missing RunHeader for ${runId}`)
+  return hit
 }
 
 interface SettledCall {
@@ -134,8 +118,8 @@ describe('后台 workflow run 通知与恢复', () => {
 
   it('notifyParentOnSettle：结算后恰一次通知（kind=workflow、无 agentType/execution），notifiedAt 持久，重开不补发', timeout, async () => {
     const host = makeHost()
-    const state = makeStateStore()
-    const service = new WorkflowService({ dataDir, host, state })
+    const kv = makeStateStore()
+    const service = new WorkflowService({ dataDir, host, kv })
     const started = await service.run({ conversationId: 1, script: AGENT_SCRIPT }, { notifyParentOnSettle: true })
     assert.equal(started.status, 'running')
     assert.equal(await service.wait(started.id), '后台节点结果')
@@ -149,13 +133,13 @@ describe('后台 workflow run 通知与恢复', () => {
     assert.equal(call.agentType, undefined, 'workflow kind 通知不携带 agentType')
     assert.equal(call.execution, undefined, 'workflow kind 通知不携带 execution')
 
-    const record = readRecord(dataDir, started.id)
-    assert.equal(record['kind'], 'workflow')
-    assert.equal(record['notifyParentOnSettle'], true)
-    assert.ok(typeof record['notifiedAt'] === 'number', 'notifiedAt 必须持久化')
+    const header = readHeader(kv, started.id)
+    assert.equal(header.kind, 'workflow')
+    assert.equal(header.notifyParentOnSettle, true)
+    assert.ok(typeof header.notifiedAt === 'number', 'notifiedAt 必须持久化')
 
     await service.close()
-    const reopened = new WorkflowService({ dataDir, host, state })
+    const reopened = new WorkflowService({ dataDir, host, kv })
     await reopened.init()
     assert.equal(host.settledCalls.length, 1, '已通知的后台 workflow 不得重复补发')
     await reopened.close()
@@ -163,42 +147,42 @@ describe('后台 workflow run 通知与恢复', () => {
 
   it('同步 run（无 notify）：不创建通知义务，onBackgroundAgentSettled 绝不触发', timeout, async () => {
     const host = makeHost()
-    const state = makeStateStore()
-    const service = new WorkflowService({ dataDir, host, state })
+    const kv = makeStateStore()
+    const service = new WorkflowService({ dataDir, host, kv })
     const started = await service.run({ conversationId: 1, script: AGENT_SCRIPT })
     await service.wait(started.id)
     assert.equal(service.getRun(started.id).status, 'completed')
     assert.equal(host.settledCalls.length, 0, '同步 run 不得触发父会话通知')
-    const record = readRecord(dataDir, started.id)
-    assert.equal(record['notifyParentOnSettle'], undefined)
+    const header = readHeader(kv, started.id)
+    assert.equal(header.notifyParentOnSettle, undefined)
     await service.close()
-    await new WorkflowService({ dataDir, host, state }).init()
+    await new WorkflowService({ dataDir, host, kv }).init()
     assert.equal(host.settledCalls.length, 0)
   })
 
   it('通知失败不推翻终态：notifiedAt 不置位，重启 init 按 outbox 补发恰一次', timeout, async () => {
     const host = makeHost()
     host.notifyFailTimes = 1
-    const state = makeStateStore()
-    const service = new WorkflowService({ dataDir, host, state })
+    const kv = makeStateStore()
+    const service = new WorkflowService({ dataDir, host, kv })
     const started = await service.run({ conversationId: 1, script: AGENT_SCRIPT }, { notifyParentOnSettle: true })
     await service.wait(started.id)
     assert.equal(service.getRun(started.id).status, 'completed', '通知失败不得推翻终态')
     assert.equal(host.settledCalls.length, 0, '首次通知失败：未成功投递')
-    const record = readRecord(dataDir, started.id)
-    assert.equal(record['status'], 'completed')
-    assert.equal(record['notifiedAt'], undefined)
+    const header = readHeader(kv, started.id)
+    assert.equal(header.status, 'completed')
+    assert.equal(header.notifiedAt, undefined)
     await service.close()
 
-    const reopened = new WorkflowService({ dataDir, host, state })
+    const reopened = new WorkflowService({ dataDir, host, kv })
     await reopened.init()
     assert.equal(host.settledCalls.length, 1, 'init 应按 outbox 补发恰一次')
     assert.equal(host.settledCalls[0]!.summary.status, 'completed')
-    const after = readRecord(dataDir, started.id)
-    assert.ok(typeof after['notifiedAt'] === 'number')
+    const after = readHeader(kv, started.id)
+    assert.ok(typeof after.notifiedAt === 'number')
     await reopened.close()
 
-    const again = new WorkflowService({ dataDir, host, state })
+    const again = new WorkflowService({ dataDir, host, kv })
     await again.init()
     assert.equal(host.settledCalls.length, 1, '已补发后不得再次投递')
     await again.close()
@@ -206,14 +190,14 @@ describe('后台 workflow run 通知与恢复', () => {
 
   it('重启恢复（后台 workflow running）：prepareRecovery 标记子会话、init 守卫中止、failed(interrupted) 保留 resume 提示并补发通知', timeout, async () => {
     const host = makeHost()
-    const state = makeStateStore()
+    const kv = makeStateStore()
     const journalPath = join(dataDir, 'artifacts', '1', 'workflow-wf_bgdead000001.jsonl')
-    state.set('workflow/runs', [{ id: 'wf_bgdead000001', conversationId: 1, status: 'running', createdAt: 1, updatedAt: 1 }])
-    seedRecord(dataDir, {
+    kv.set('wf_bgdead000001', {
       id: 'wf_bgdead000001',
       name: 'bg-notify',
       conversationId: 1,
       status: 'running',
+      phase: 'running',
       createdAt: 1,
       updatedAt: 1,
       kind: 'workflow',
@@ -223,7 +207,7 @@ describe('后台 workflow run 通知与恢复', () => {
         { id: 'agent-0', kind: 'agent', label: '后台任务', status: 'running', startedAt: 1, conversationId: 77 },
       ],
     })
-    const service = new WorkflowService({ dataDir, host, state, autoRecoverOnRestart: false })
+    const service = new WorkflowService({ dataDir, host, kv, autoRecoverOnRestart: false })
     await service.prepareRecovery()
     assert.deepEqual(
       host.guardedAborts,
@@ -240,16 +224,14 @@ describe('后台 workflow run 通知与恢复', () => {
     assert.equal(host.settledCalls.length, 1, '中断的后台 workflow 须补发通知恰一次')
     assert.equal(host.settledCalls[0]!.summary.status, 'failed')
     assert.equal(host.settledCalls[0]!.parentConversationId, 1)
-    const record = readRecord(dataDir, 'wf_bgdead000001')
-    assert.ok(typeof record['notifiedAt'] === 'number')
+    const header = readHeader(kv, 'wf_bgdead000001')
+    assert.ok(typeof header.notifiedAt === 'number')
     await service.close()
   })
 
   it('真实启动崩溃恢复：onResolved 子会话即时持久，第二服务按权威 IDs 标记/守卫中止/补发通知', timeout, async () => {
     const host = makeHost()
-    const state = makeStateStore()
-    // 挂起宿主：真实宿主在子会话建立时经 onResolved 回报 conversationId=42，
-    // 随后进程在 spawn 返回前崩溃（promise 永不 settle，不手工 seed 任何记录）。
+    const kv = makeStateStore()
     let resolveSpawned: () => void = () => {}
     const spawned = new Promise<void>((resolve) => {
       resolveSpawned = resolve
@@ -259,7 +241,7 @@ describe('后台 workflow run 通知与恢复', () => {
       resolveSpawned()
       await new Promise<never>(() => {})
     }
-    const service = new WorkflowService({ dataDir, host, state })
+    const service = new WorkflowService({ dataDir, host, kv })
     const started = await service.run({ conversationId: 1, script: AGENT_SCRIPT }, { notifyParentOnSettle: true })
     assert.equal(started.status, 'running')
 
@@ -275,19 +257,12 @@ describe('后台 workflow run 通知与恢复', () => {
       clearTimeout(timer)
     }
 
-    // 崩溃前事实：running 记录已持久权威子会话 IDs；nodes 尚未落盘（旧实现
-    // 此处没有任何子会话坐标，重启恢复无从标记/中止——本用例守护的缺陷）。
-    const crashed = readRecord(dataDir, started.id) as {
-      status: string
-      childConversationIds?: number[]
-      nodes?: unknown
-    }
+    const crashed = readHeader(kv, started.id)
     assert.equal(crashed.status, 'running')
     assert.deepEqual(crashed.childConversationIds, [42], 'onResolved 子会话必须在 running 记录中即时持久')
-    assert.equal(crashed.nodes, undefined, '真实运行中 nodes 尚未落盘，恢复不得依赖它')
 
-    // 模拟重启（autoRecoverOnRestart=false 回退路径）：第二个 WorkflowService 读同一 state 做恢复。
-    const revived = new WorkflowService({ dataDir, host, state, autoRecoverOnRestart: false })
+    // 模拟重启（autoRecoverOnRestart=false 回退路径）：第二个 WorkflowService 读同一 kv 做恢复。
+    const revived = new WorkflowService({ dataDir, host, kv, autoRecoverOnRestart: false })
     await revived.prepareRecovery()
     assert.deepEqual(host.guardedAborts, [42], 'prepareRecovery 必须按持久 IDs 逐个守卫中止（落持久 abort 标记）')
     await revived.init()
@@ -300,24 +275,24 @@ describe('后台 workflow run 通知与恢复', () => {
     assert.equal(host.settledCalls[0]!.summary.id, started.id)
     assert.equal(host.settledCalls[0]!.summary.status, 'failed')
     assert.equal(host.settledCalls[0]!.parentConversationId, 1)
-    const record = readRecord(dataDir, started.id)
-    assert.ok(typeof record['notifiedAt'] === 'number')
+    const header = readHeader(kv, started.id)
+    assert.ok(typeof header.notifiedAt === 'number')
 
-    // 清理：终止仍挂起的首服务（其结算不再影响以上事实断言）。
     await revived.close()
     await service.close()
   })
 
   it('重启恢复（同步 workflow running）：同样守卫中止遗留子会话以防孤儿，但绝不通知父会话', timeout, async () => {
     const host = makeHost()
-    const state = makeStateStore()
+    const kv = makeStateStore()
     const journalPath = join(dataDir, 'artifacts', '1', 'workflow-wf_syncdead0001.jsonl')
-    state.set('workflow/runs', [{ id: 'wf_syncdead0001', conversationId: 1, status: 'running', createdAt: 1, updatedAt: 1 }])
-    seedRecord(dataDir, {
+    kv.set('wf_syncdead0001', {
       id: 'wf_syncdead0001',
+      kind: 'workflow',
       name: 'sync',
       conversationId: 1,
       status: 'running',
+      phase: 'running',
       createdAt: 1,
       updatedAt: 1,
       journalPath,
@@ -325,7 +300,7 @@ describe('后台 workflow run 通知与恢复', () => {
         { id: 'agent-0', kind: 'agent', label: '同步任务', status: 'running', startedAt: 1, conversationId: 88 },
       ],
     })
-    const service = new WorkflowService({ dataDir, host, state, autoRecoverOnRestart: false })
+    const service = new WorkflowService({ dataDir, host, kv, autoRecoverOnRestart: false })
     await service.prepareRecovery()
     assert.deepEqual(host.guardedAborts, [88], '同步 workflow 必须在 prepareRecovery 收集并标记子会话，防孤儿原生子会话继续运行')
     await service.init()
@@ -339,38 +314,32 @@ describe('后台 workflow run 通知与恢复', () => {
   })
 })
 
-// ---------------------------------------------------------------------------
-// prepareRecovery 屏障失败注入：意外错误必须阻断（可重试）；确定性红线
-// 拒绝（ownership_conflict = human 接管）与 not_found 可诊断跳过
-// ---------------------------------------------------------------------------
-
-/** 种子一条含两个子会话的后台 running run（索引入 state，完整体入文件）。 */
-function seedTwoChildren(dataDir: string, state: WorkflowStateStore, runId: string): void {
+function seedTwoChildren(kv: WorkflowKvStore<RunHeader>, runId: string): void {
   const now = Date.now()
-  state.set('workflow/runs', [{ id: runId, conversationId: 1, status: 'running', createdAt: now, updatedAt: now }])
-  seedRecord(dataDir, {
+  kv.set(runId, {
     id: runId,
+    kind: 'subagent',
     name: 'subagent:worker',
     conversationId: 1,
     status: 'running',
+    phase: 'running',
     createdAt: now,
     updatedAt: now,
-    kind: 'subagent',
     notifyParentOnSettle: true,
-    journalPath: '/tmp/nonexistent.jsonl',
+    agentType: 'worker',
+    execution: { nodeId: 'local', conversationId: 31 },
     nodes: [
       { id: 'subagent-0', kind: 'agent', label: 'subagent:worker', status: 'running', startedAt: now, conversationId: 31 },
       { id: 'subagent-1', kind: 'agent', label: 'subagent:worker', status: 'running', startedAt: now, conversationId: 32 },
     ],
-    subagentMeta: { agentType: 'worker', execution: { nodeId: 'local', conversationId: 31 } },
   })
 }
 
 it('prepareRecovery 屏障：意外错误上抛且 recoveryPrepared 不置位（重试可恢复），绝不带未落标记启动', timeout, async () => {
   const barrierDir = mkdtempSync(join(tmpdir(), 'wf-barrier-io-'))
   after(() => rmSync(barrierDir, { recursive: true, force: true }))
-  const state = makeStateStore()
-  seedTwoChildren(barrierDir, state, 'wf_barrier_io')
+  const kv = makeStateStore()
+  seedTwoChildren(kv, 'wf_barrier_io')
   const host = makeHost()
   const realAbort = host.abortConversationGuarded.bind(host)
   let failFirst = true
@@ -378,12 +347,10 @@ it('prepareRecovery 屏障：意外错误上抛且 recoveryPrepared 不置位（
     if (failFirst && id === 31) throw new Error('simulated persistence IO failure')
     return realAbort(id)
   }
-  const service = new WorkflowService({ dataDir: barrierDir, state, host })
+  const service = new WorkflowService({ dataDir: barrierDir, kv, host })
 
-  // 意外错误必须上抛：服务 prepare 失败 -> 宿主屏障阻断 start（调度器不 resume）。
   await assert.rejects(() => service.prepareRecovery(), /simulated persistence IO failure/)
 
-  // 重试语义：失败注入解除后同一 service 再 prepare 成功（recoveryPrepared 未被置位）。
   failFirst = false
   host.guardedAborts.length = 0
   await service.prepareRecovery()
@@ -393,18 +360,17 @@ it('prepareRecovery 屏障：意外错误上抛且 recoveryPrepared 不置位（
 it('prepareRecovery 容忍边界：ownership_conflict（human 接管）与 not_found 诊断跳过，其余子会话仍落标记', timeout, async () => {
   const barrierDir = mkdtempSync(join(tmpdir(), 'wf-barrier-human-'))
   after(() => rmSync(barrierDir, { recursive: true, force: true }))
-  const state = makeStateStore()
-  seedTwoChildren(barrierDir, state, 'wf_barrier_human')
+  const kv = makeStateStore()
+  seedTwoChildren(kv, 'wf_barrier_human')
   const host = makeHost()
   const realAbort = host.abortConversationGuarded.bind(host)
   host.abortConversationGuarded = async (id: number) => {
     host.guardedAborts.push(id)
-    // 31 号模拟内核 human 红线拒绝（human 绝不 abort）；32 号模拟会话已删除。
     if (id === 31) throw new HelmxError('ownership_conflict', '会话 31 当前归属 human，拒绝自动化变更（human 红线）', 409, { conversationId: 31 })
     if (id === 32) throw new HelmxError('not_found', '会话不存在：32', 404, { conversationId: 32 })
     return realAbort(id)
   }
-  const service = new WorkflowService({ dataDir: barrierDir, state, host })
+  const service = new WorkflowService({ dataDir: barrierDir, kv, host })
   await service.prepareRecovery()
   assert.deepEqual(host.guardedAborts, [31, 32], '两个子会话都尝试过守卫中止（human 由内核拒绝、已删会话 404），屏障不放行前先尝试')
 })

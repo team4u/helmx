@@ -86,17 +86,11 @@ const modPlan = await goal({
   schema: PLAN_SCHEMA,
   gate: "test -z \"$(git status --porcelain)\"",
 })
-// goal 的 output 恒为字符串：schema 只负责校验，不代为解析。
-if (!modPlan.ok || typeof modPlan.output !== "string") {
-  throw new Error(`模块 ${args.moduleName} 规划失败：${modPlan.error ?? "没有返回文本"}`)
+if (!modPlan.ok || modPlan.output === null || typeof modPlan.output !== "object") {
+  throw new Error(`模块 ${args.moduleName} 规划失败：${modPlan.error ?? "没有返回有效结构化结果"}`)
 }
 const modWt = requireWorktree(modPlan.execution?.worktree, `模块 ${args.moduleName} 规划失败`)
-let planOutput
-try {
-  planOutput = JSON.parse(modPlan.output)
-} catch {
-  throw new Error(`模块 ${args.moduleName} 规划失败：输出不是合法 JSON`)
-}
+const planOutput = modPlan.output
 if (planOutput === null || typeof planOutput !== "object" || typeof planOutput.strategy !== "string") {
   throw new Error(`模块 ${args.moduleName} 规划失败：缺少 strategy`)
 }

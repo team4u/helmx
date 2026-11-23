@@ -17,17 +17,16 @@
 
 import { strict as assert } from 'node:assert'
 import { describe, it } from 'node:test'
-import type { WorkflowAgentEntry } from '../src/workflow/engine/progress.js'
-import { JournalReplay } from '../src/workflow/engine/replay.js'
-import { resolveAgentReplayCall } from '../src/workflow/engine/runtime-agent-replay.js'
-import { Semaphore } from '../src/workflow/engine/runtime-control.js'
+import type { WorkflowNodeState } from '../src/contracts.js'
 import {
+  agentJournalKey,
   agentRetryPrompt,
   MAX_AGENT_ATTEMPTS,
   runWorkflow,
   scopedResumeKey,
+  validateAgentCallOptions,
   type WorkflowHost,
-} from '../src/workflow/engine/runtime.js'
+} from '../src/workflow/dsl/index.js'
 
 const timeout = { timeout: 60_000 } as const
 
@@ -49,8 +48,8 @@ function baseHost(overrides: Partial<WorkflowHost> = {}): WorkflowHost {
   }
 }
 
-function agentEntriesOf(progress: readonly { type: string }[]): WorkflowAgentEntry[] {
-  return progress.filter((e) => e.type === 'workflow_agent') as WorkflowAgentEntry[]
+function agentEntriesOf(nodes: readonly WorkflowNodeState[]): WorkflowNodeState[] {
+  return nodes.filter((e) => e.kind === 'agent')
 }
 
 // ---------------------------------------------------------------------------
@@ -83,8 +82,8 @@ describe('workflow runtime failure handle registration', () => {
     assert.deepEqual(result.value, [null, 'fixed:fix the failure'])
     // 续接的是同一 agentId（同一子会话），不是重新 spawn。
     assert.deepEqual(calls, ['spawn:wf-agent-0:build it', 'resume:wf-agent-0:fix the failure'])
-    const errorEntry = agentEntriesOf(result.progress).find((e) => e.state === 'error')
-    assert.ok(errorEntry, 'failed attempt still records an error progress entry')
+    const errorEntry = agentEntriesOf(result.nodes).find((e) => e.status === 'failed')
+    assert.ok(errorEntry, 'failed attempt still records a failed node')
     assert.equal(errorEntry.conversationId, 42)
     assert.equal(errorEntry.executionId, 'exec-9')
   })
@@ -193,7 +192,7 @@ describe('workflow runtime attempt journal replay', () => {
       },
     })
     assert.equal(resumed.status, 'completed')
-    assert.deepEqual(resumed.value, { ok: true, output: 'fixed', attempts: 2, execution: { conversationId: 77 } }, JSON.stringify({ writes, replayCalls, replayWrites, progress: resumed.progress, error: resumed.error }))
+    assert.deepEqual(resumed.value, { ok: true, output: 'fixed', attempts: 2, execution: { conversationId: 77 } }, JSON.stringify({ writes, replayCalls, replayWrites, nodes: resumed.nodes, error: resumed.error }))
     assert.deepEqual(replayCalls, [])
     assert.deepEqual(replayWrites.map((entry) => [entry.index, entry.attempt, entry.ok]), [[0, 1, false], [1, 2, true]])
   })
@@ -222,13 +221,12 @@ describe('workflow gate result exitCode/timedOut', () => {
     assert.equal(result.status, 'completed')
     assert.equal(result.value, null)
     assert.equal(gateRuns, 0, 'host-reported gate must not be re-run by the fallback')
-    const errorEntry = agentEntriesOf(result.progress).find((e) => e.state === 'error')
+    const errorEntry = agentEntriesOf(result.nodes).find((e) => e.status === 'failed')
     assert.ok(errorEntry)
     assert.ok(
       errorEntry.error!.includes('exit code 2'),
       `error mentions exit code: ${errorEntry.error}`,
     )
-    // progress 面的 gate 形状收敛在 progress.ts（另属主）；此处按结构断言透传。
     const gate = errorEntry.gate as { ok: boolean; output: string; exitCode?: number | null; timedOut?: boolean } | undefined
     assert.ok(gate)
     assert.equal(gate.exitCode, 2)
@@ -244,7 +242,7 @@ describe('workflow gate result exitCode/timedOut', () => {
     })
     assert.equal(result.status, 'completed')
     assert.equal(result.value, null)
-    const errorEntry = agentEntriesOf(result.progress).find((e) => e.state === 'error')
+    const errorEntry = agentEntriesOf(result.nodes).find((e) => e.status === 'failed')
     assert.ok(errorEntry)
     assert.ok(
       errorEntry.error!.includes('timed out'),
@@ -253,16 +251,11 @@ describe('workflow gate result exitCode/timedOut', () => {
   })
 })
 
-// ---------------------------------------------------------------------------
-// 纯函数：scope 命名空间键与重试 prompt
-// ---------------------------------------------------------------------------
-
 describe('scoped resume keys and retry prompt helpers', () => {
-  it('namespaces labels by scope with root defaulting to 0 (old semantics)', timeout, () => {
-    assert.equal(scopedResumeKey(undefined, 'a'), '0:a')
-    assert.equal(scopedResumeKey(0, 'a'), '0:a')
-    assert.equal(scopedResumeKey(2, 'a'), '2:a')
-    assert.notEqual(scopedResumeKey(1, 'a'), scopedResumeKey(2, 'a'))
+  it('namespaces labels by workflowRootPath', timeout, () => {
+    assert.equal(scopedResumeKey('root', 'a'), 'root:a')
+    assert.equal(scopedResumeKey('root/w0', 'a'), 'root/w0:a')
+    assert.notEqual(scopedResumeKey('root/w0', 'a'), scopedResumeKey('root/w1', 'a'))
   })
 
   it('appends an incremental failure block to the original prompt', timeout, () => {
@@ -346,66 +339,16 @@ describe('workflow runtime dynamic nodeId pass-through, replay key & host-bounda
     assert.equal(replayDiffSeen[0]?.nodeId, 'gpu-2')
   })
 
-  it('host boundary rejects invalid payload.nodeId and payload.resume + payload.nodeId as fatal', timeout, async () => {
-    const responses: Array<{ callId: number; ok: boolean; error?: string; fatal?: boolean }> = []
-    const makeCtx = () => ({
-      host: baseHost({
-        resumeAgent: async () => ({ ok: true, text: 'never' }),
-      }),
-      agentCap: 10,
-      retryFailedCalls: false,
-      runState: { isAborted: () => false, isSettled: () => false },
-      emit: () => {},
-      respond: (callId: number, ok: boolean, _value?: unknown, error?: string, fatal?: boolean) => {
-        responses.push({ callId, ok, error, fatal })
-      },
-      allocateIndex: () => 0,
-      recordAgent: async () => {},
-      inflight: new Set<string>(),
-      semaphore: new Semaphore(1),
-      completedByLabel: new Map(),
-      openLaunches: new Map(),
-      replay: new JournalReplay([]),
-      counters: { agentCount: 0, replayedCount: 0, spentOutputTokens: 0 },
-      redactText: (t: string) => t,
-    })
-
-    const badFormat = await resolveAgentReplayCall(makeCtx(), 1, {
-      prompt: 'hi',
-      nodeId: '_bad/node',
-      scopePath: 'root',
-      scopeCallIndex: 0,
-    })
-    assert.equal(badFormat.kind, 'responded')
-    assert.equal(responses[0]?.ok, false)
-    assert.equal(responses[0]?.fatal, true)
-    assert.match(responses[0]?.error ?? '', /opts\.nodeId/)
-
-    const badType = await resolveAgentReplayCall(makeCtx(), 2, {
-      prompt: 'hi',
-      nodeId: 123 as unknown as string,
-      scopePath: 'root',
-      scopeCallIndex: 0,
-    })
-    assert.equal(badType.kind, 'responded')
-    assert.equal(responses[1]?.ok, false)
-    assert.equal(responses[1]?.fatal, true)
-
-    const conflict = await resolveAgentReplayCall(makeCtx(), 3, {
-      prompt: 'hi',
-      resume: 'prev',
-      nodeId: 'gpu-1',
-      scopePath: 'root',
-      scopeCallIndex: 0,
-    })
-    assert.equal(conflict.kind, 'responded')
-    assert.equal(responses[2]?.ok, false)
-    assert.equal(responses[2]?.fatal, true)
-    assert.match(responses[2]?.error ?? '', /opts\.resume and opts\.nodeId are mutually exclusive/)
+  it('host boundary rejects invalid nodeId and resume + nodeId', timeout, () => {
+    assert.throws(() => validateAgentCallOptions('hi', { nodeId: '_bad/node' }), /opts\.nodeId/)
+    assert.throws(() => validateAgentCallOptions('hi', { nodeId: 123 }), /opts\.nodeId/)
+    assert.throws(
+      () => validateAgentCallOptions('hi', { resume: 'prev', nodeId: 'gpu-1' }),
+      /opts\.resume and opts\.nodeId are mutually exclusive/,
+    )
   })
 
   it('in-place reattach omits nodeId for native conversationId', timeout, async () => {
-    const { agentJournalKey } = await import('../src/workflow/engine/journal.js')
     const seen: Array<{ prompt: string; nodeId?: string; reattach?: unknown }> = []
     const host = baseHost({
       async spawnAgent(request) {
@@ -438,7 +381,6 @@ describe('workflow runtime dynamic nodeId pass-through, replay key & host-bounda
             index: 0,
             key: nativeKey,
             attempt: 1,
-            invocationIndex: 0,
             scopePath: 'root',
             scopeCallIndex: 0,
             requestId: 'helmx:spawn:wf_reattach_node:root:0:1',

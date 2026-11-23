@@ -25,7 +25,7 @@ const reports = await pipeline(
 return { reports: reports.filter(report => report !== null) }
 ```
 
-`meta` must be a pure object literal. Variables, function calls, spreads, and template interpolation are rejected. Required fields are `name` and `description`; `phases` is optional and may contain `title`, `detail`, and display-only `model`.
+`meta` must be a pure object literal. Variables, function calls, spreads, and template interpolation are rejected. Required fields are `name` and `description`; optional fields are `whenToUse` and `phases` (`title`, `detail`, and display-only `model`).
 
 The runtime input is available as `args`. It may be an object, array, scalar, or `undefined`. Tool-side JSON strings representing objects or arrays are normalized before entering the VM.
 
@@ -33,14 +33,14 @@ The runtime input is available as `args`. It may be an object, array, scalar, or
 
 ### `agent(prompt, options?)`
 
-Runs one subagent and waits for its real result. It returns the final output string or `null` for a failed or skipped node. Use `parallel` or `pipeline` for concurrency.
+Runs one subagent and waits for its real result. It returns the final output string (or parsed JSON object when `schema` is provided) or `null` when the node fails. Use `parallel` or `pipeline` for concurrency.
 
 Supported options:
 
 - `label`: display name and the local continuation handle;
 - `phase`: phase assignment;
 - `agentType`: Profile ID;
-- `model`, `effort`: execution overrides;
+- `model`, `effort`: execution overrides (`effort`: `off | minimal | low | medium | high | xhigh | max`);
 - `isolation: "worktree"`: independent managed Git worktree;
 - `nodeId`: target compute node ID (overrides Profile/parent node; explicit `"local"` switches back to the Hub host; remote nodes require `cwd` or a compatible Profile `cwd`);
 - `cwd`: absolute target workspace;
@@ -67,7 +67,7 @@ if (!result.ok) throw new Error(result.error ?? "agent failed")
 return { output: result.output, execution: result.execution, gate: result.gate }
 ```
 
-`goal({ objective, ...options })` uses the objective as the prompt and supports bounded in-place retries. A failed goal is not a successful partial result.
+`goal({ objective, ...options })` uses the objective as the prompt and supports bounded in-place retries (`maxAttempts` defaults to 3). When `schema` is set on `agent.withMeta` or `goal`, `result.output` is the parsed, validated JSON value (not a raw string). A failed goal is not a successful partial result.
 
 ### `parallel(thunks)`
 
@@ -103,13 +103,12 @@ Use the host action catalog or `run_action({ actionId, describe: true })` to ins
 
 ### `workflow(ref, args?)`
 
-Runs a saved nested workflow by name, or a local reference such as `{ scriptPath: "/absolute/path/workflow.js" }`. Nested workflows share the root ledger and are checkpoint-replayable. The engine enforces a maximum nesting depth and total nested-call cap.
+Runs a saved nested workflow by name, or a local reference such as `{ scriptPath: "/absolute/path/workflow.js" }`. Nested workflows share the root ledger and are checkpoint-replayable. The engine enforces a maximum nesting depth of 2 (`MAX_WORKFLOW_NESTING_DEPTH = 2`, root is depth 0) and a total nested-call cap of 256 (`WORKFLOW_NESTED_CAP = 256`).
 
-### `phase(title)`, `log(message)`, and `budget`
+### `phase(title)` and `log(message)`
 
 - `phase(title)` changes the current progress phase.
 - `log(message)` emits progress text; it is not a business result.
-- `budget.spent()` reports output bytes consumed. `budget.total` is `null` and `budget.remaining()` is `Infinity`; do not promise a token or cost budget from these values.
 
 ## Determinism and boundaries
 
@@ -122,4 +121,4 @@ Runs a saved nested workflow by name, or a local reference such as `{ scriptPath
 
 - In a conversation, call `SubagentWorkflow` with exactly one of `script`, `scriptPath`, or `name`; pass `args` for runtime input.
 - In a terminal, use `helmx workflows run <nameOrFile> --args <json> --current`; add `--wait` only when the CLI caller needs the terminal result.
-- Use `resumeFromRunId` or `--resume-from-run-id` to replay the ledger. Matching completed nodes are reused; changed inputs, options, or non-idempotent side effects may invalidate reuse.
+- Use `resumeFromRunId` or `--resume-from-run-id` to replay the ledger. Replay matches completed nodes by canonical v5 key hash within each scope prefix; changed inputs, options, or non-idempotent side effects may invalidate reuse.

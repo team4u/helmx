@@ -1,72 +1,25 @@
 /**
- * builtin:workflow: the subagent / SubagentWorkflow orchestration plugin (managed Git worktrees
- * live in the sibling builtin:worktree plugin; both communicate only via shared contracts and
- * the execution-meta namespaces, zero static dependency).
+ * builtin:workflow — Deterministic multi-agent orchestration & subagent plugin.
  *
- * Responsibilities:
- * - Wrap the orchestration engine (engine/: DSL runtime + journal replay + WorkflowService);
- *   the engine is plugin-owned (the kernel never imports this directory); the generic cross-spawn
- *   boundary lives in runtime/spawn (kernel side);
- * - private state goes through the ctx.doc private document `records` (the plugin docs namespace,
- *   persisted in state.sqlite); the public `runs` projection is sharded per conversation (ctx.sessionDoc,
- *   each shard holding runs started by itself and its descendants -- following the real conversation
- *   parent chain against loops/missing parents; run.conversationId keeps the original ownership;
- *   never enters the global first frame / global SSE; conversation additions/deletions re-project via
- *   host events); globally only a compact `run-badges` badge document is kept (per-conversation
- *   aggregated count/tone/footerText, deduped by run.id, no full run summaries);
- *   no in-process Map fallback, no kernel.documentStore injection;
- * - background run settlement (kind=subagent is always background; kind=workflow started via the tool's
- *   background flag likewise sets notifyParentOnSettle) delivers the report to the parent conversation via
- *   submitInput(requestId) (idempotent across restarts; a notification when the parent conversation is
- *   deleted); descendant parent conversations inside a cascade-cancel boundary get no delivery (preventing
- *   revival after cancellation); a single settle report goes only to owners outside the boundary;
- *   the background default uses the kernel's authoritative ownership=human judgment (no profileId/
- *   runtime role hardcoding): human interactive sessions default to background; automated sessions
- *   (bot/helmx) default to synchronous with an explicit background=true explicitly rejected (preventing
- *   early settlement of subagents/resident workers);
- * - cascade cancellation: on turn_settled (outcome=aborted), cancel all in-flight runs of that
- *   conversation subtree belonging to it (completed/failed do not cancel legitimate background tasks);
- *   managed sub-conversation aborts always go through ctx.host.abortConversationGuarded for the kernel's
- *   atomic recheck (the human red line), never falling back to plain abortConversation;
- * - lifecycle: service.prepare runs prepareRecovery (only laying abort markers, waking no scheduler;
- *   must run before any service start -- guaranteed by the host's global prepare barrier);
- *   service.start runs init (terminate leftover tasks, mark failed, re-deliver notifications) and close;
- *   liveTasks declares in-flight tasks (disable is hard-blocked);
- * - nesting depth contract: managed subagents (native/external sub-conversations derived via this plugin)
- *   may nest DEFAULT_MAX_SUBAGENT_DEPTH (2) levels by default -- the main conversation derives one
- *   level directly, a level-1 subagent may derive level-2 by default, and a conversation at the subtree
- *   cap is an orchestration leaf. The private registry persists depth / parentConversationId / subtree-cap
- *   facts; three lines of defense -- before_turn tool stripping, tool/action entry pre-rejection, and the
- *   highest-priority agent_spawn backstop -- explicitly report subagent_depth_exceeded; explicit extension
- *   to deeper levels goes through the plugin config and the spawn meta's maxSubagentDepth field of this
- *   plugin's namespace (both validated within HARD_MAX_SUBAGENT_DEPTH; managed subagents cannot raise an
- *   inherited cap) (fork / Swarm workers are not in the table and are unaffected).
- *
- * Modular split architecture (the entry only assembles; registration order and dependency injection in definePlugin):
- * - ./workflow/config.ts: plugin config schema and read-time validation (validated at startup, never run sick)
- * - ./workflow/depth.ts: managed-subagent registry and nesting-depth guard (shared facts of the three defense lines)
- * - ./workflow/projection.ts: runs conversation-shard projection and the global compact badges (idempotent writes)
- * - ./workflow/background.ts: background default policy and background settle report delivery
- * - ./workflow/engine-host.ts: HelmxHostApi ports -> WorkflowServiceHost adaptation
- *   (two safety disciplines: guarded aborts / emitEvent convergence)
- * - ./workflow/hooks.ts: the agent_spawn depth guard (300), before_turn tool stripping,
- *   turn_settled cascade cancellation and host event subscriptions (worktree isolation's
- *   agent_spawn around hook 200 moved to the builtin:worktree plugin)
- * - ./workflow/tools.ts: the subagent / SubagentWorkflow tools (cleanup_worktree moved to builtin:worktree)
- * - ./workflow/actions.ts: the 11 actions (reused across five ends; the worktrees family moved to builtin:worktree)
- * - ./workflow/ui.ts: frontend UI extension point declarations
+ * Layered internal architecture (zero static dependency on sibling builtin:worktree):
+ * - ./workflow/dsl/    — Pure JS DSL runtime, metadata extractor, canonical JSONL journal & worker
+ * - ./workflow/runs/   — KV RunHeader + lazy RunDetail repository, RunCoordinator, StartupRecovery, library
+ * - ./workflow/{config,depth,projection,background,steer,hooks,tools,actions,ui,assets}.ts — Plugin adapters
+ * - ./workflow/client/ — React UI surfaces (timelineRenderer / toolView / slot / workbenchPanel / screen)
  */
 import type { DispatchToolsCapability, PluginDefinition } from '@helmx/protocol'
 import { resolvePluginClientAssets } from './asset-paths.js'
 import {
   WORKFLOW_PLUGIN_ID,
-  WORKFLOW_SKILL_ID,
   WORKFLOW_RUNS_DOC,
   WORKFLOW_RUN_BADGES_DOC,
+  WORKFLOW_SKILL_ID,
   type WorkflowRunBadgesDocState,
   type WorkflowRunSessionDocState,
 } from './contracts.js'
-import { createWorkflowEngineHost, WorkflowService } from './workflow/engine/index.js'
+import { registerWorkflowActions } from './workflow/actions.js'
+import { readWorkflowSkillAsset } from './workflow/assets.js'
+import { createBackgroundPolicy, createBackgroundReporter } from './workflow/background.js'
 import {
   isEffectiveAutoRecover,
   readAutoRecoverOnRestart,
@@ -75,13 +28,15 @@ import {
   registerWorkflowConfigSchema,
 } from './workflow/config.js'
 import { createManagedSubagentRegistry, type ManagedSubagentEntry } from './workflow/depth.js'
-import { createRunsProjection } from './workflow/projection.js'
-import { createBackgroundPolicy, createBackgroundReporter } from './workflow/background.js'
 import { registerWorkflowHooks } from './workflow/hooks.js'
+import { createRunsProjection } from './workflow/projection.js'
+import {
+  createWorkflowEngineHost,
+  WorkflowService,
+  type RunHeader,
+} from './workflow/runs/index.js'
 import { registerWorkflowTools } from './workflow/tools.js'
-import { registerWorkflowActions } from './workflow/actions.js'
 import { registerWorkflowUi } from './workflow/ui.js'
-import { readWorkflowSkillAsset } from './workflow/assets.js'
 
 export { WORKFLOW_PLUGIN_ID, WORKFLOW_SKILL_ID }
 
@@ -97,42 +52,33 @@ export function createWorkflowPlugin(): PluginDefinition {
     version: '0.1.0',
     ...resolvePluginClientAssets(WORKFLOW_PLUGIN_ID, 'workflow', 'workflow_plugin_client_missing'),
     definePlugin(ctx) {
-      // ---- Conversation-sharded public doc: runs (transient in-memory projection; zero SQLite I/O) ----
-      // Not in the global first frame / global SSE; the frontend pulls and incrementally updates per conversation via the dedicated subscription stream.
+      // Transient in-memory UI projections (zero SQLite write amplification).
       const runsDoc = ctx.sessionDoc<WorkflowRunSessionDocState>(
         WORKFLOW_RUNS_DOC,
         { runs: [] },
         { public: true, durable: false },
       )
-
-      // ---- Global compact badge doc: run-badges (transient in-memory projection; only count/tone/footerText, intentionally global) ----
-      // Workbench navigation badges need cross-conversation visibility; full run summaries never enter this doc / the global stream.
       const badgesDoc = ctx.doc<WorkflowRunBadgesDocState>(
         WORKFLOW_RUN_BADGES_DOC,
         { byConversation: {} },
         { public: true, durable: false },
       )
 
-      // ---- Engine-private records doc (key-value store: run index + per-run records) ----
-      // Private doc: not in public snapshots/events; the engine persists through it, and restart recovery reads the same namespace.
-      const records = ctx.doc<Record<string, unknown>>('records', {})
+      // Durable per-key KV namespaces (O(1) SQLite row UPSERT, auto-redacted).
+      const runsKv = ctx.kv<RunHeader>('runs')
+      const depthKv = ctx.kv<ManagedSubagentEntry>('depth')
 
-      // ---- Managed-subagent registry (private doc; the persistent source of facts across restarts) ----
-      const subagentConvDoc = ctx.doc<Record<string, ManagedSubagentEntry>>('subagent-conversations', {})
-
-      // ---- Plugin config: schema registration + validate at startup (invalid values fail explicitly at definition time) ----
+      // Validate config at definition time (fail fast, never run sick).
       registerWorkflowConfigSchema(ctx)
       readMaxConcurrentAgents(ctx)
       readMaxSubagentDepth(ctx)
       readAutoRecoverOnRestart(ctx)
 
-      // ---- Depth guard and managed-subagent registry (validating all persisted entries at construction) ----
       const registry = createManagedSubagentRegistry({
-        doc: subagentConvDoc,
+        kv: depthKv,
         configuredMaxSubagentDepth: () => readMaxSubagentDepth(ctx),
       })
 
-      // ---- Background default policy and background settle reports (workflows injected lazily, acyclic) ----
       const backgroundPolicy = createBackgroundPolicy({
         getConversationOwnership: (id) => ctx.host.getConversationOwnership(id),
       })
@@ -144,7 +90,6 @@ export function createWorkflowPlugin(): PluginDefinition {
         listActiveRuns: () => workflows.listActiveRuns(),
       })
 
-      // ---- runs conversation-shard projection and global badges (the stopping gate lives inside the projection) ----
       const projection = createRunsProjection({
         runsDoc,
         badgesDoc,
@@ -152,33 +97,14 @@ export function createWorkflowPlugin(): PluginDefinition {
         listConversations: () => ctx.host.listConversations(),
       })
 
-      // Controlled stop ordering: teardown first sets deactivating, which deposes doc handles, but service.stop
-      // belongs to the host's controlled call chain -- this plugin synchronously re-projects runs last inside stop.
-      // For the final flush during stop to be writable, the engine holds a direct reference to this cycle's doc
-      // handle (this closure guarantees no further external writes before stop returns); handles of old cycles
-      // (epoch already advanced) are rejected at the ctx.doc boundary, preventing post-disable leftover writes.
-      // `ctx.doc` already deep-clones on get/set/update; no extra structuredClone needed.
-      const stateStore = {
-        get<T>(key: string, initial: T): T {
-          const raw = records.get()[key]
-          return raw === undefined ? initial : (raw as T)
-        },
-        set<T>(key: string, value: T): void {
-          records.update((current) => ({ ...current, [key]: value }))
-        },
-        flush: (): Promise<void> => records.flush(),
-      }
-
-      // ---- WorkflowService instance (all host capabilities go through the ctx.host trusted channel) ----
       const workflows = new WorkflowService({
         dataDir: ctx.dataDir,
-        state: stateStore,
+        kv: runsKv,
         concurrency: readMaxConcurrentAgents(ctx),
         autoRecoverOnRestart: () => isEffectiveAutoRecover(ctx),
-        deferExternalReattach: true,
-        // Persistent value-level redaction hook (declared by contract, injected by the main app; the
-        // actual sole source is the host's unified redact port): run records/ledger passes stash redaction before writes, preventing secrets from landing in storage.
+        deferReconcile: true,
         redact: (text) => ctx.host.redact(text),
+        onTakeoverUpdated: (prior) => projection.upsertRun(prior),
         host: createWorkflowEngineHost({
           host: {
             spawnAgent: (request) => ctx.host.spawnAgent(request),
@@ -202,47 +128,30 @@ export function createWorkflowPlugin(): PluginDefinition {
         }),
       })
 
-      // ---- Lifecycle hooks and host event subscriptions (agent_spawn 300/200, before_turn,
-      //      turn_settled cascade cancellation, conversation re-projection, diagnostics probes) ----
       registerWorkflowHooks(ctx, { registry, workflows, projection })
 
-      // ---- service: the workflow-engine lifecycle ----
       ctx.service({
         id: 'workflow-engine',
         async prepare() {
-          // Recovery phase one (the global prepare barrier, before any service start and before the SDK
-          // scheduler resume): only read leftover records and, via abortConversationGuarded (paused phase),
-          // lay persistent abort markers; wake no SDK scheduler, submit no input -- other plugins
-          // (assistant/herdr/external) and tools are not fully registered yet, and any input submission now
-          // would produce orphan turns.
           await workflows.prepareRecovery()
         },
         async start() {
-          // Recovery phase two (after all plugins finished prepare): init terminates leftover child tasks,
-          // explicitly marks running as failed(interrupted), and re-delivers parent-conversation notifications
-          // (tools are registered by now, so re-delivered input consumption is safe), then projects runs & badges in memory.
           await ctx.host.skills.ensureSkill(readWorkflowSkillAsset())
           await workflows.init()
           projection.sync()
         },
         async reconcile() {
-          // Recovery phase three (after harness.resume(), ordered topologically before peer reconcilers
-          // such as builtin:worktree via `reconcileAfter`): release deferred external reattaches and wait
-          // for prepared leftover native child conversations to settle to idle.
-          workflows.startDeferredReattaches()
-          await workflows.awaitPreparedChildrenSettled()
+          await workflows.reconcile()
         },
         async stop() {
-          // Controlled stop: first set stopping to intercept runtime background callbacks, then await engine
-          // suspend/close and flush durable private records. Public runs and run-badges are transient in-memory
-          // projections (durable: false), so teardown performs zero SQLite projection writes.
           projection.beginStopping()
           if (ctx.host.isClosing && isEffectiveAutoRecover(ctx)) {
             await workflows.suspend()
           } else {
             await workflows.close()
           }
-          await records.flush()
+          await runsKv.flush()
+          await depthKv.flush()
         },
         liveTasks() {
           return workflows
@@ -252,25 +161,20 @@ export function createWorkflowPlugin(): PluginDefinition {
         },
       })
 
-      // ---- Model tools: subagent / SubagentWorkflow (cleanup_worktree moved to builtin:worktree) ----
       registerWorkflowTools(ctx, {
         workflows,
         assertCanSpawn: (conversationId) => registry.assertCanSpawn(conversationId),
         resolveBackground: (conversationId, explicit) => backgroundPolicy.resolveBackground(conversationId, explicit),
-        syncRunsDoc: () => projection.sync(),
       })
       ctx.provide<DispatchToolsCapability>('helmx.dispatch-tools', {
         toolNames: ['subagent', 'SubagentWorkflow'],
       })
 
-      // ---- Actions (reused across five ends: HTTP / CLI / run_action / Workflow / Web UI) ----
       registerWorkflowActions(ctx, {
         workflows,
         assertCanSpawn: (conversationId) => registry.assertCanSpawn(conversationId),
-        syncRunsDoc: () => projection.sync(),
       })
 
-      // ---- UI extension points (client.tsx track; components subscribe to the runs shard themselves via usePluginSessionDoc) ----
       registerWorkflowUi(ctx)
     },
   }

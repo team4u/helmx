@@ -68,8 +68,12 @@ export interface WorktreeSlotComponents {
 
 export interface WorkflowClientStubOptions {
   docValue?: unknown
+  docStatus?: SDKTypes.PluginDocLoadStatus
   conversations?: unknown[]
-  conversation?: (id: number | undefined, options?: { includeDetail?: boolean }) => Record<string, unknown>
+  conversation?: (
+    id: number | undefined,
+    options?: { includeDetail?: boolean; includeLive?: boolean },
+  ) => Record<string, unknown>
   worktreeSlots?: WorktreeSlotComponents | false
 }
 
@@ -101,11 +105,11 @@ const NOOP_RETRY = (): void => {}
 const stubPluginClientNamespace = {
   ...SDK,
   usePluginDoc: () => stub.docValue,
-  usePluginDocState: () => ({ data: stub.docValue, status: 'ready' as const, retry: NOOP_RETRY }),
+  usePluginDocState: () => ({ data: stub.docValue, status: stub.docStatus ?? ('ready' as const), retry: NOOP_RETRY }),
   usePluginSessionDoc: () => stub.docValue,
-  usePluginSessionDocState: () => ({ data: stub.docValue, status: 'ready' as const, retry: NOOP_RETRY }),
+  usePluginSessionDocState: () => ({ data: stub.docValue, status: stub.docStatus ?? ('ready' as const), retry: NOOP_RETRY }),
   useConversations: () => stub.conversations ?? [],
-  useConversation: (id: number | undefined, options?: { includeDetail?: boolean }) =>
+  useConversation: (id: number | undefined, options?: { includeDetail?: boolean; includeLive?: boolean }) =>
     stub.conversation?.(id, options) ?? {
       summary: undefined,
       detail: undefined,
@@ -181,10 +185,29 @@ export async function importWorkflowSurfaces(
   return Object.assign({}, ...loaded) as Record<string, unknown>
 }
 
+export async function importWorkflowParsers(
+  cacheDir = WORKFLOW_CLIENT_CACHE_DIR,
+): Promise<typeof import('../../src/workflow/client/parsers.ts')> {
+  return (await importWorkflowClientModule('parsers.ts', cacheDir)) as unknown as typeof import('../../src/workflow/client/parsers.ts')
+}
+
+export async function importWorkflowExecutionModel(
+  cacheDir = WORKFLOW_CLIENT_CACHE_DIR,
+): Promise<typeof import('../../src/workflow/client/execution-model.ts')> {
+  return (await importWorkflowClientModule('execution-model.ts', cacheDir)) as unknown as typeof import('../../src/workflow/client/execution-model.ts')
+}
+
 export async function importWorkflowModels(
   cacheDir = WORKFLOW_CLIENT_CACHE_DIR,
-): Promise<typeof import('../../src/workflow/client/models.ts')> {
-  return (await importWorkflowClientModule('models.ts', cacheDir)) as unknown as typeof import('../../src/workflow/client/models.ts')
+): Promise<
+  typeof import('../../src/workflow/client/parsers.ts') &
+    typeof import('../../src/workflow/client/execution-model.ts')
+> {
+  const [parsers, executionModel] = await Promise.all([
+    importWorkflowParsers(cacheDir),
+    importWorkflowExecutionModel(cacheDir),
+  ])
+  return { ...parsers, ...executionModel }
 }
 
 export async function importWorktreeClientModule(
@@ -242,6 +265,7 @@ export interface WorkflowHostLog {
   screens: string[]
   notices: Array<{ message: string; tone: string }>
   loadDetailCalls: number[]
+  liveSubscriptions: number[]
   activeToolCallIds: Set<string>
 }
 
@@ -270,6 +294,7 @@ export function createWorkflowHostHarness(init: {
     screens: [],
     notices: [],
     loadDetailCalls: [],
+    liveSubscriptions: [],
     activeToolCallIds,
   }
   let currentConversations = init.conversations ?? [makeConvSummary(init.conversationId, { ownedBy: 'human' })]
@@ -333,7 +358,10 @@ export function createWorkflowHostHarness(init: {
     getConversationDetail: (id) => details[id],
     subscribeConversationDetail: () => noopUnsub,
     getConversationLive: (id) => lives[id],
-    subscribeConversationLive: () => noopUnsub,
+    subscribeConversationLive: (id) => {
+      log.liveSubscriptions.push(id)
+      return noopUnsub
+    },
     getConversationPendingAsks: (id) => pendingAsksByConv.get(id) ?? emptyAsks,
     subscribeConversationPendingAsks: () => noopUnsub,
     getLoadError: (key) => loadErrors[key],

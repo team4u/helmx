@@ -22,13 +22,14 @@ import { join } from 'node:path'
 import { describe, it } from 'node:test'
 
 import { HelmxError } from '@helmx/protocol'
-import { agentJournalKey, type JournalWriteInput } from '../src/workflow/engine/journal.js'
 import {
+  agentJournalKey,
   runWorkflow,
+  type JournalWriteInput,
   type WorkflowHost,
   type WorkflowSpawnRequest,
-} from '../src/workflow/engine/runtime.js'
-import { WorkflowService, type WorkflowServiceHost } from '../src/workflow/engine/service.js'
+} from '../src/workflow/dsl/index.js'
+import { createMemoryKvStore, WorkflowService, type WorkflowServiceHost } from '../src/workflow/runs/index.js'
 
 const timeout = { timeout: 60_000 } as const
 
@@ -438,23 +439,14 @@ function makeRecordingServiceHost(): WorkflowServiceHost & { spawns: ServiceSpaw
 }
 
 function makeStateStore() {
-  const map = new Map<string, unknown>()
-  return {
-    get<T>(key: string, initial: T): T {
-      return (map.get(key) as T | undefined) ?? initial
-    },
-    set<T>(key: string, value: T): void {
-      map.set(key, structuredClone(value))
-    },
-    async flush(): Promise<void> {},
-  }
+  return createMemoryKvStore()
 }
 
 describe('workflow agent attachments: service adapter to AgentSpawnRequest', () => {
   it('initial spawn carries attachments through the real WorkflowService into the protocol request', timeout, async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'wf-att-svc-'))
     const host = makeRecordingServiceHost()
-    const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
+    const service = new WorkflowService({ dataDir, host, kv: makeStateStore() })
     try {
       const summary = await service.run({
         conversationId: 1,
@@ -473,7 +465,7 @@ describe('workflow agent attachments: service adapter to AgentSpawnRequest', () 
   it('label resume carries this turn\'s attachments (not the original list) through the adapter', timeout, async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'wf-att-svc-res-'))
     const host = makeRecordingServiceHost()
-    const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
+    const service = new WorkflowService({ dataDir, host, kv: makeStateStore() })
     try {
       const summary = await service.run({
         conversationId: 1,
@@ -504,7 +496,7 @@ describe('workflow agent attachments: service adapter to AgentSpawnRequest', () 
       }
       return realSpawn(request)
     }
-    const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
+    const service = new WorkflowService({ dataDir, host, kv: makeStateStore() })
     try {
       const summary = await service.run({
         conversationId: 1,

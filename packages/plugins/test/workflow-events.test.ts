@@ -6,10 +6,12 @@ import { test, type TestContext } from 'node:test'
 import type { WorkflowRunSummary } from '../src/contracts.js'
 import { EventHub } from '../../kernel/src/runtime/events.js'
 import {
+  createMemoryKvStore,
   WorkflowService,
+  type RunHeader,
+  type WorkflowKvStore,
   type WorkflowServiceHost,
-  type WorkflowStateStore,
-} from '../src/workflow/engine/service.js'
+} from '../src/workflow/runs/index.js'
 
 function makeEnv(
   t: TestContext,
@@ -17,13 +19,7 @@ function makeEnv(
   overrides?: Partial<WorkflowServiceHost> & { concurrency?: number },
 ) {
   const dataDir = mkdtempSync(join(tmpdir(), 'helmx-workflow-events-'))
-  const docs = new Map<string, unknown>()
-  const state: WorkflowStateStore = {
-    get<T>(key: string, initial: T): T {
-      return docs.has(key) ? docs.get(key) as T : initial
-    },
-    set(key, value) { docs.set(key, value) },
-  }
+  const kv: WorkflowKvStore<RunHeader> = createMemoryKvStore<RunHeader>()
   const events = new EventHub({
     initialSeq: 0,
     snapshot: () => ({ seq: 0, conversations: [], pendingAsks: [], plugins: [], ui: [], pluginDocs: [] }),
@@ -49,7 +45,7 @@ function makeEnv(
   }
   const service = new WorkflowService({
     dataDir,
-    state,
+    kv,
     host,
     ...(overrides?.concurrency !== undefined ? { concurrency: overrides.concurrency } : {}),
   })
@@ -61,7 +57,7 @@ function makeEnv(
       rmSync(dataDir, { recursive: true, force: true })
     }
   })
-  return { dataDir, state, service, updates }
+  return { dataDir, kv, service, updates }
 }
 
 test('重放缓存标记透传到 getRun、listRuns、事件与重启后的公开摘要', { timeout: 60_000 }, async (t) => {
@@ -79,7 +75,7 @@ test('重放缓存标记透传到 getRun、listRuns、事件与重启后的公�
     assert.equal(summary.nodes?.length, 2)
     assert.ok(summary.nodes!.every((node) => node.status === 'done' && node.cached === true))
   }
-  const revived = new WorkflowService({ dataDir: env.dataDir, state: env.state, host: {
+  const revived = new WorkflowService({ dataDir: env.dataDir, kv: env.kv, host: {
     spawnAgent: async () => { throw new Error('重启后只读摘要') }, invokeAction: async () => { throw new Error('unused') }, listActions: () => [],
     getConversation: () => { throw new Error('unused') }, abortConversationGuarded: async () => {}, emitEvent: () => {},
   } })
@@ -110,18 +106,17 @@ test('节点更新跨过 250ms 窗口时仍发布合法 run 信封，不把成�
 test('启动恢复中断的 run 时发布合法 workflow.updated 信封', { timeout: 60_000 }, async (t) => {
   const env = makeEnv(t, async () => '未调用')
   const id = 'wf_interrupted'
-  // 新契约：records doc 只存轻量索引，完整体在 dataDir/artifacts/<convId>/workflow-<runId>.record.json。
-  env.state.set('workflow/runs', [{ id, conversationId: 1, status: 'running', createdAt: 1, updatedAt: 1 }])
-  const artifactsDir = join(env.dataDir, 'artifacts', '1')
-  mkdirSync(artifactsDir, { recursive: true })
-  writeFileSync(
-    join(artifactsDir, `workflow-${id}.record.json`),
-    JSON.stringify({
-      id, name: 'interrupted', conversationId: 1, status: 'running', createdAt: 1,
-      updatedAt: 1, journalPath: join(env.dataDir, 'unused.workflow.jsonl'),
-    }),
-    'utf8',
-  )
+  env.kv.set(id, {
+    id,
+    kind: 'workflow',
+    name: 'interrupted',
+    conversationId: 1,
+    status: 'running',
+    phase: 'running',
+    createdAt: 1,
+    updatedAt: 1,
+    journalPath: join(env.dataDir, 'unused.workflow.jsonl'),
+  })
   await env.service.init()
   assert.equal(env.service.getRun(id).status, 'failed')
   assert.equal(env.updates.length, 1)

@@ -1131,6 +1131,46 @@ test('useConversation: includeDetail defaults to true, skips auto-load when fals
   }
 })
 
+test('useConversation: includeLive: false skips live subscription and keeps live undefined', { timeout: 60_000 }, () => {
+  const liveSubscriptions: number[] = []
+  const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
+  const port = makePort(log, {
+    conversations: [{ id: 7, title: 'c7', tags: [], profileId: 'p' } as unknown as ConversationSummary],
+    conversationLives: { 7: { conversationId: 7, text: 'streaming...' } as unknown as ConversationLive },
+    overrides: {
+      subscribeConversationLive: (id) => {
+        liveSubscriptions.push(id)
+        return () => {}
+      },
+    },
+  })
+
+  let latestView: SDK.ConversationHookResult | undefined
+  const readView = (): SDK.ConversationHookResult => {
+    assert.ok(latestView !== undefined)
+    return latestView
+  }
+  function Probe({ includeLive }: { includeLive?: boolean }): React.ReactNode {
+    latestView = SDK.useConversation(7, { includeDetail: false, includeLive })
+    return e('div', null, 'probe')
+  }
+
+  const { root } = mount(
+    e(SDK.PluginClientHostContext.Provider, { value: port }, e(Probe, { includeLive: false })),
+  )
+  try {
+    assert.deepEqual(liveSubscriptions, [], 'includeLive: false must not subscribe to conversationLives')
+    assert.equal(readView().summary?.id, 7)
+    assert.equal(readView().live, undefined)
+
+    act(() => root.render(e(SDK.PluginClientHostContext.Provider, { value: port }, e(Probe, { includeLive: true }))))
+    assert.deepEqual(liveSubscriptions, [7])
+    assert.equal(readView().live?.text, 'streaming...')
+  } finally {
+    act(() => root.unmount())
+  }
+})
+
 test('useSharedNowMs: SSR returns undefined, 20 concurrent active consumers share one setInterval, and deactivation/unmount clears timer immediately', { timeout: 60_000 }, async () => {
   // 1. SSR deterministic first frame returns undefined even when active=true.
   let ssrValue: number | undefined = 123

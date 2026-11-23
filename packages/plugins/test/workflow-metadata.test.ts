@@ -24,31 +24,19 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AgentExecutionInfo, AgentSpawnRequest } from '@helmx/protocol'
 import { parseWorkflowSpawnMeta, type WorkflowRunSummary } from '../src/contracts.js'
-import { runWorkflow, type WorkflowHost } from '../src/workflow/engine/runtime.js'
+import { runWorkflow, type WorkflowHost } from '../src/workflow/dsl/index.js'
 import {
+  createMemoryKvStore,
   WorkflowService,
   type WorkflowServiceHost,
-  type WorkflowStateStore,
-} from '../src/workflow/engine/service.js'
+} from '../src/workflow/runs/index.js'
 
 const timeout = { timeout: 60_000 } as const
 
 const META = (name: string) => `export const meta = { name: "${name}", description: "test" }\n`
 
-// ---------------------------------------------------------------------------
-// 辅助：state store / service host
-// ---------------------------------------------------------------------------
-
-function makeStateStore(): WorkflowStateStore {
-  const map = new Map<string, unknown>()
-  return {
-    get<T>(key: string, initial: T): T {
-      return (map.get(key) as T | undefined) ?? initial
-    },
-    set<T>(key: string, value: T): void {
-      map.set(key, value)
-    },
-  }
+function makeStateStore() {
+  return createMemoryKvStore()
 }
 
 function conversationSummary(id: number, cwd = '/tmp') {
@@ -171,14 +159,11 @@ describe('engine external spawn metadata', () => {
     assert.equal(result.status, 'completed')
     assert.equal(result.value, 'done')
     assert.equal(engineGateRuns, 0, 'engine must not re-run the gate')
-    // 折叠后取最新一条（append-only：同 index 后发替换先发）。
-    const agentEntries = result.progress.filter((e) => e.type === 'workflow_agent')
+    const agentEntries = result.nodes.filter((e) => e.kind === 'agent')
     const agent = agentEntries[agentEntries.length - 1]
     assert.ok(agent !== undefined)
-    if (agent.type === 'workflow_agent') {
-      assert.equal(agent.gate?.ok, true)
-      assert.equal(agent.gate?.output, 'verified')
-    }
+    assert.equal(agent.gate?.ok, true)
+    assert.equal(agent.gate?.output, 'verified')
   })
 
   it('failed external gate fails the agent with gate output as error', timeout, async () => {
@@ -202,18 +187,18 @@ describe('engine external spawn metadata', () => {
     })
     assert.equal(result.status, 'completed')
     assert.equal(result.value, null, 'agent failure collapses to null')
-    const errorEntries = result.progress.filter(
-      (e) => e.type === 'workflow_agent' && e.state === 'error',
+    const errorEntries = result.nodes.filter(
+      (e) => e.kind === 'agent' && e.status === 'failed',
     )
     const errorEntry = errorEntries[errorEntries.length - 1]
     assert.ok(errorEntry !== undefined)
     assert.ok(
-      errorEntry.type === 'workflow_agent' && (errorEntry.error ?? '').includes('tests failed'),
+      (errorEntry.error ?? '').includes('tests failed'),
       'gate output surfaces as agent error',
     )
   })
 
-  it('metadata (executionId/worktree/prompt/schema) lands in progress entries, not the return value', timeout, async () => {
+  it('metadata (executionId/worktree/prompt/schema) lands in node entries, not the return value', timeout, async () => {
     const host: WorkflowHost = {
       async spawnAgent(request) {
         request.onResolved?.({
@@ -237,9 +222,9 @@ describe('engine external spawn metadata', () => {
     assert.equal(result.status, 'completed')
     // 返回值是业务输出本身，绝不混入执行元数据。
     assert.deepEqual(result.value, { answer: 1 })
-    const agentEntries = result.progress.filter((e) => e.type === 'workflow_agent')
+    const agentEntries = result.nodes.filter((e) => e.kind === 'agent')
     const agent = agentEntries[agentEntries.length - 1]
-    assert.ok(agent !== undefined && agent.type === 'workflow_agent')
+    assert.ok(agent !== undefined)
     assert.equal(agent.executionId, 'herdr-tab-9')
     assert.equal(agent.effectiveCwd, '/srv/worktree-a')
     assert.deepEqual(agent.worktree, { path: '/srv/worktree-a', branch: 'wf/topic' })
@@ -260,7 +245,7 @@ describe('WorkflowService external spawn integration', () => {
       executionInfo: { executionId: 'herdr-tab-3', effectiveCwd: '/srv/remote' },
       suppressGateReport: true,
     })
-    const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
+    const service = new WorkflowService({ dataDir, host, kv: makeStateStore() })
     const summary = await service.run({
       conversationId: 1,
       script: META('ext-missing-gate') + 'const v = await agent("work", { gate: "make check" })\nreturn v',
@@ -282,7 +267,7 @@ describe('WorkflowService external spawn integration', () => {
       request.onResolved?.({ conversationId: 5, effectiveCwd: 'relative/path' })
       return 'text'
     })
-    const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
+    const service = new WorkflowService({ dataDir, host, kv: makeStateStore() })
     const summary = await service.run({ conversationId: 1, script: META('bad-resolved') + 'return await agent("x")' })
     await service.wait(summary.id)
     const node = (service.getRun(summary.id).nodes ?? []).find((n) => n.kind === 'agent')
@@ -298,7 +283,7 @@ describe('WorkflowService external spawn integration', () => {
       request.onGateResult?.({ ok: true } as { ok: boolean; output: string })
       return 'text'
     })
-    const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
+    const service = new WorkflowService({ dataDir, host, kv: makeStateStore() })
     const summary = await service.run({
       conversationId: 1,
       script: META('bad-gate') + 'return await agent("x", { gate: "true" })',
@@ -316,7 +301,7 @@ describe('WorkflowService external spawn integration', () => {
       resolvedCalls: 3,
       executionInfo: { conversationId: 101, effectiveCwd: '/tmp/child' },
     })
-    const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
+    const service = new WorkflowService({ dataDir, host, kv: makeStateStore() })
     const summary = await service.run({ conversationId: 1, script: META('idem') + 'return await agent("x")' })
     await service.wait(summary.id)
     const node = (service.getRun(summary.id).nodes ?? []).find((n) => n.kind === 'agent')
@@ -330,7 +315,7 @@ describe('WorkflowService external spawn integration', () => {
 
   it('workflow runId rides every spawn request meta', timeout, async () => {
     const host = makeExternalSpawnHost()
-    const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
+    const service = new WorkflowService({ dataDir, host, kv: makeStateStore() })
     const summary = await service.run({ conversationId: 1, script: META('wfid') + 'return await agent("x")' })
     await service.wait(summary.id)
     assert.equal(parseWorkflowSpawnMeta(host.spawns[0]?.meta).runId, summary.id)
@@ -371,7 +356,7 @@ describe('WorkflowService listRuns and settlement', () => {
   it('listRuns returns every persisted run (active with live nodes, settled incl. unsaved scripts)', timeout, async () => {
     const state = makeStateStore()
     const host = makeExternalSpawnHost()
-    const service = new WorkflowService({ dataDir, host, state })
+    const service = new WorkflowService({ dataDir, host, kv: state })
     let release: (() => void) | undefined
     let onSpawnStarted: (() => void) | undefined
     const spawnStarted = new Promise<void>((r) => {
@@ -405,7 +390,7 @@ describe('WorkflowService listRuns and settlement', () => {
       const revived = new WorkflowService({
         dataDir,
         host: makeExternalSpawnHost(),
-        state,
+        kv: state,
       })
       try {
         runs = revived.listRuns()
@@ -423,7 +408,7 @@ describe('WorkflowService listRuns and settlement', () => {
   it('getRun/toSummary carry replayedFrom; resume replays without second gate execution', timeout, async () => {
     const state = makeStateStore()
     const host = makeExternalSpawnHost({ externalGate: { ok: true, output: 'checked' } })
-    const service = new WorkflowService({ dataDir, host, state })
+    const service = new WorkflowService({ dataDir, host, kv: state })
     const first = await service.run({
       conversationId: 1,
       script: META('r1') + 'const v = await agent("work", { gate: "true" })\nreturn v',
@@ -450,7 +435,7 @@ describe('WorkflowService listRuns and settlement', () => {
       if (failNext) throw new Error('cleanup blew up')
       settled.push(summary.id)
     }
-    const service = new WorkflowService({ dataDir, host, state })
+    const service = new WorkflowService({ dataDir, host, kv: state })
 
     const ok = await service.run({ conversationId: 1, script: META('s1') + 'return 1' })
     await service.wait(ok.id)
@@ -480,7 +465,7 @@ describe('WorkflowService listRuns and settlement', () => {
     const service = new WorkflowService({
       dataDir,
       host,
-      state,
+      kv: state,
       redact: (text) => text.replaceAll(SECRET, '{{REDACTED}}'),
     })
     const summary = await service.run({

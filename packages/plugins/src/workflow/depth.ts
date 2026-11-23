@@ -1,25 +1,14 @@
 /**
- * builtin:workflow 深度守卫与受管子代理登记（自 workflow.ts 入口拆出）。
+ * builtin:workflow 深度守卫与受管子代理登记（KV 持久化 + O(1) 内存缓存）。
  *
- * 职责：
- * - 受管子代理登记表（插件私有 doc `subagent-conversations`，跨重启持久的
- *   事实来源）：「workflow 子代理」= 经 agent_spawn 管道成功派生、onResolved
- *   回传 conversationId 的子会话（本插件 subagent 工具与编排引擎是当前全部
- *   调用方）。fork 会话与 Swarm worker（经 createConversation 创建，
- *   不经 spawn 管道）天然不进表——嵌套限制绝不以 parentConversationId 或
- *   tags 一刀切，也不依赖 ownership 猜测；
- * - 嵌套深度契约：受管子代理默认可嵌套 DEFAULT_MAX_SUBAGENT_DEPTH（2）层
- *   ——主会话直接派生一层，一层子代理默认可继续派生二层，达到子树上限的
- *   会话即编排叶子。before_turn 剥离派工工具、工具/动作入口前置拒绝、
- *   agent_spawn 最高优先级兜底，三道防线显式报 subagent_depth_exceeded；
- *   显式扩展到更深层经插件配置与 spawn meta 的本插件命名空间
- *   maxSubagentDepth 字段（均校验在 HARD_MAX_SUBAGENT_DEPTH 内，受管子代理
- *   不能提高继承的上限）。
+ * - 使用 `ctx.kv<ManagedSubagentEntry>('depth')` 按会话单键读写，彻底消除整表 doc 写放大；
+ * - 启动时分页遍历全量校验持久条目（坏记录在插件定义阶段显式失败，不带病运行）；
+ * - `depthFactsOf` 纯 O(1) 内存查询（零 structuredClone 开销），与 before_turn / tool / agent_spawn 三道防线共用。
  */
-import { HelmxError, type PluginDocHandle } from '@helmx/protocol'
+import { HelmxError, type PluginKvHandle } from '@helmx/protocol'
 import { HARD_MAX_SUBAGENT_DEPTH } from '../contracts.js'
 
-/** 受管子代理登记条目（插件私有 doc `subagent-conversations` 持久事实）。 */
+/** 受管子代理登记条目（持久事实）。 */
 export interface ManagedSubagentEntry {
   agentType?: string
   runId?: string
@@ -44,9 +33,7 @@ export function depthExceededError(depth: number, maxSubagentDepth: number, conv
 
 /** 受管子代理登记与深度守卫（深度事实的单一读写入口）。 */
 export interface ManagedSubagentRegistry {
-  /** 非受管会话从 depth=0 开始（上限取当前配置）；受管会话严格采用派生时的持久事实。 */
   depthFactsOf(conversationId: number): { managed: boolean; depth: number; maxSubagentDepth: number }
-  /** 幂等登记（resume 续接不覆盖既有树位置事实；落盘失败显式诊断不静默）。 */
   registerManagedSubagent(
     conversationId: number,
     meta: {
@@ -55,46 +42,60 @@ export interface ManagedSubagentRegistry {
       depth: number
       parentConversationId: number
       maxSubagentDepth: number
-      /** maxSubagentDepth 是否来自本次显式请求（resume 续接时才改写既有上限）。 */
       ceilingExplicit: boolean
     },
   ): void
-  /** 派生前置拒绝（防线二共用入口）：受管会话达到子树上限后不能再派生。 */
   assertCanSpawn(conversationId: number): void
-  /** 会话删除后回收受管子代理深度登记（孤儿条目清理）。 */
   pruneConversation(conversationId: number): void
 }
 
-/**
- * 创建登记表：构造即全量校验持久条目（坏记录在插件定义阶段显式失败，
- * 不带病运行）。configuredMaxSubagentDepth 按调用现读配置（仅非受管会话
- * 生效；受管会话严格用派生时快照，配置变更不追溯）。
- */
+function validateEntry(conversationId: number, entry: ManagedSubagentEntry): ManagedSubagentEntry {
+  if (
+    !Number.isSafeInteger(conversationId) ||
+    conversationId < 1 ||
+    entry === null ||
+    typeof entry !== 'object' ||
+    Array.isArray(entry) ||
+    !Number.isInteger(entry.depth) ||
+    entry.depth < 1 ||
+    !Number.isInteger(entry.maxSubagentDepth) ||
+    entry.maxSubagentDepth < entry.depth ||
+    entry.maxSubagentDepth > HARD_MAX_SUBAGENT_DEPTH ||
+    !Number.isSafeInteger(entry.parentConversationId) ||
+    entry.parentConversationId < 1 ||
+    entry.parentConversationId === conversationId
+  ) {
+    throw new HelmxError('subagent_record_invalid', `受管子代理 ${conversationId} 的深度登记无效`, 500, { conversationId })
+  }
+  return entry
+}
+
 export function createManagedSubagentRegistry(deps: {
-  doc: PluginDocHandle<Record<string, ManagedSubagentEntry>>
+  kv: PluginKvHandle<ManagedSubagentEntry>
   configuredMaxSubagentDepth: () => number
 }): ManagedSubagentRegistry {
-  const { doc } = deps
+  const { kv } = deps
+  const entries = new Map<number, ManagedSubagentEntry>()
+
+  // 启动即分页全量加载并校验持久登记（坏记录在插件定义阶段显式失败，不带病运行）。
+  let cursor: string | undefined
+  for (;;) {
+    const page = kv.list({ limit: 1000, ...(cursor !== undefined ? { cursor } : {}) })
+    for (const item of page.items) {
+      const id = Number(item.key)
+      entries.set(id, validateEntry(id, item.value))
+    }
+    if (page.nextCursor === undefined) break
+    cursor = page.nextCursor
+  }
 
   function depthFactsOf(conversationId: number): { managed: boolean; depth: number; maxSubagentDepth: number } {
-    const entry = doc.get()[String(conversationId)]
+    const entry = entries.get(conversationId)
     if (entry === undefined) {
       return { managed: false, depth: 0, maxSubagentDepth: deps.configuredMaxSubagentDepth() }
     }
-    if (
-      !Number.isInteger(entry.depth) || entry.depth < 1 ||
-      !Number.isInteger(entry.maxSubagentDepth) || entry.maxSubagentDepth < entry.depth ||
-      entry.maxSubagentDepth > HARD_MAX_SUBAGENT_DEPTH ||
-      !Number.isSafeInteger(entry.parentConversationId) || entry.parentConversationId < 1 ||
-      entry.parentConversationId === conversationId
-    ) {
-      throw new HelmxError('subagent_record_invalid', `受管子代理 ${conversationId} 的深度登记无效`, 500, { conversationId })
-    }
     return { managed: true, depth: entry.depth, maxSubagentDepth: entry.maxSubagentDepth }
   }
-
-  // 启动即全量校验持久登记（坏记录在插件定义阶段显式失败，不带病运行）。
-  for (const id of Object.keys(doc.get())) depthFactsOf(Number(id))
 
   function registerManagedSubagent(
     conversationId: number,
@@ -104,31 +105,25 @@ export function createManagedSubagentRegistry(deps: {
       depth: number
       parentConversationId: number
       maxSubagentDepth: number
-      /** maxSubagentDepth 是否来自本次显式请求（resume 续接时才改写既有上限）。 */
       ceilingExplicit: boolean
     },
   ): void {
-    doc.update((current) => {
-      const existing = current[String(conversationId)]
-      return {
-        ...current,
-        [String(conversationId)]: {
-          ...(existing ?? {}),
-          ...(meta.agentType !== undefined ? { agentType: meta.agentType } : {}),
-          ...(meta.runId !== undefined ? { runId: meta.runId } : {}),
-          // 树位置事实幂等保真：resume 续接重复登记不覆盖既有 depth/父链；
-          // 子树上限仅在显式请求时更新，否则保留原快照（配置后续变更不追溯）。
-          depth: existing?.depth ?? meta.depth,
-          parentConversationId: existing?.parentConversationId ?? meta.parentConversationId,
-          maxSubagentDepth: meta.ceilingExplicit
-            ? meta.maxSubagentDepth
-            : (existing?.maxSubagentDepth ?? meta.maxSubagentDepth),
-          createdAt: existing?.createdAt ?? Date.now(),
-        },
-      }
-    })
-    // 登记落盘失败显式诊断（不静默）：崩溃窗口内重启可能短暂放行。
-    void doc.flush().catch((error: unknown) => {
+    const existing = entries.get(conversationId)
+    const next: ManagedSubagentEntry = {
+      ...(existing ?? {}),
+      ...(meta.agentType !== undefined ? { agentType: meta.agentType } : {}),
+      ...(meta.runId !== undefined ? { runId: meta.runId } : {}),
+      depth: existing?.depth ?? meta.depth,
+      parentConversationId: existing?.parentConversationId ?? meta.parentConversationId,
+      maxSubagentDepth: meta.ceilingExplicit
+        ? meta.maxSubagentDepth
+        : (existing?.maxSubagentDepth ?? meta.maxSubagentDepth),
+      createdAt: existing?.createdAt ?? Date.now(),
+    }
+    validateEntry(conversationId, next)
+    entries.set(conversationId, next)
+    kv.set(String(conversationId), next)
+    void kv.flush().catch((error: unknown) => {
       process.stderr.write(
         `builtin:workflow: 受管子代理会话 ${conversationId} 登记落盘失败：${
           error instanceof Error ? error.message : String(error)
@@ -137,10 +132,6 @@ export function createManagedSubagentRegistry(deps: {
     })
   }
 
-  /**
-   * 派生前置拒绝（防线二共用入口）：受管会话达到子树上限后不能再派生；
-   * 一层子代理（depth=1，上限 2）默认放行——可继续派二层。
-   */
   function assertCanSpawn(conversationId: number): void {
     const facts = depthFactsOf(conversationId)
     if (!facts.managed || facts.depth + 1 <= facts.maxSubagentDepth) return
@@ -148,15 +139,9 @@ export function createManagedSubagentRegistry(deps: {
   }
 
   function pruneConversation(conversationId: number): void {
-    const key = String(conversationId)
-    if (!(key in doc.get())) return
-    doc.update((current) => {
-      if (!(key in current)) return current
-      const next = { ...current }
-      delete next[key]
-      return next
-    })
-    void doc.flush().catch((error: unknown) => {
+    if (!entries.delete(conversationId)) return
+    kv.delete(String(conversationId))
+    void kv.flush().catch((error: unknown) => {
       process.stderr.write(
         `builtin:workflow: 受管子代理会话 ${conversationId} 登记清理落盘失败：${
           error instanceof Error ? error.message : String(error)

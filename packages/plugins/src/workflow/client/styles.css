@@ -1,564 +1,537 @@
 /**
- * builtin:workflow plugin-local styles (local CSS inside the clientRoot): subagent live-card
- * family (two-layer capsule card / header badge stats / sub-rail / external run summary).
- *
- * The file name is locked by host contract tests (packages/web/test/subagent-live-card.test.ts reads
- * this file directly to assert whole-card interaction and execution-tree hover style contracts): whole-card hover and execution-tree row
- * hover interaction rules stay here; execution-tree structural styles live in styles-execution-tree.css,
- * expanded live stream in styles-subagent-stream.css; run card / worktree inspect / workflow library
- * styles in styles-workflow-run / styles-worktree-inspect / styles-workflow-library.
- * All are imported together by index.tsx and merged by the compiler into the plugin style-text export.
+ * Workflow-specific layout and visual styling for builtin:workflow.
+ * Reuses host design-system primitives (.trace-row, .dock-tray*, .callout*,
+ * .kv-grid, .screen-*, .empty-state, .loading-state) without duplication.
  */
-.subagent-live-card {
-  container: subagent-card / inline-size;
-  margin: 2px 0 6px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-subtle);
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  overflow: hidden;
-  transition: background-color 0.15s ease, border-color 0.15s ease;
-}
 
-/* Actions and body remain siblings of the navigation button to avoid nested
-   controls; the native button handles Enter/Space activation. */
-.subagent-card-clickable {
-  cursor: pointer;
-  user-select: none;
-  transition: background-color 0.15s ease, border-color 0.15s ease;
-  border-radius: var(--radius-xs);
-}
-
-.subagent-card-clickable:hover {
-  background: var(--bg-hover);
-}
-
-.subagent-card-clickable:active {
-  background: var(--bg-active, var(--bg-elevated));
-}
-
-.subagent-card-clickable:focus-visible {
-  outline: 1.5px solid var(--accent);
-  outline-offset: -1.5px;
-}
-
-.subagent-live-header {
+/* ---- Timeline trace row adjustments ---- */
+.wf-trace-toggle {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 5px 8px;
   min-width: 0;
-  flex-wrap: nowrap;
-}
-
-/* Expanded header only gets the divider bottom line (collapsed state ends at the second-layer sub-rail) */
-.subagent-live-card-expanded .subagent-live-header {
-  border-bottom: 1px solid var(--border);
-}
-
-/* Awaiting-approval left-border emphasis */
-.subagent-live-card-warn {
-  border-left: 3px solid var(--warn);
-}
-
-.subagent-live-card-error {
-  /* Abnormal states already have clear visual cues via the status badge (badge-err) and sub-rail; the card container itself gets no red border */
-  border-left: none;
-}
-
-/* Layer-1 trigger zone: left icon + title + badges + stats tail */
-.subagent-live-trigger {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  background: none;
-  border: none;
+  flex: 1 1 auto;
+  background: transparent;
+  border: 0;
   padding: 0;
-  cursor: inherit;
-  text-align: left;
   color: inherit;
   font: inherit;
-}
-
-/* Background report card: the header trigger zone doubles as the collapse toggle (no whole-card click navigation; body text stays selectable and clickable) */
-.subagent-live-toggleable {
+  text-align: left;
   cursor: pointer;
 }
 
-/* Background report sub-rail failure state: error preview visible in red */
-.execution-report-subline-error .subagent-live-subline-text {
-  color: var(--err);
+.wf-trace-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-/* Background report expanded area: in-flight task snapshot badge row at delivery time */
-.execution-report-tasks {
+.wf-trace-id {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.wf-trace-badge {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.wf-trace-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.wf-trace-error {
+  color: var(--danger);
+}
+
+.wf-report-expanded {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.wf-report-tasks {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
-}
-
-/* Stats tail (model / tokens, etc.): yieldable info that narrow screens may hide; the right-push duty is not here
-   (avoiding a double auto margin with the duration slot creating a hole). */
-.subagent-live-stats {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 36%;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--fg-muted);
-  white-space: nowrap;
-  flex-shrink: 0;
-  padding-right: 4px;
-}
-
-/* Total-duration fixed slot: the single duration outlet that ticks while running and freezes on settle; the right-push
-   duty is concentrated in this single auto margin; narrow screens (<=680px) never hide it with the stats tail, and no
-   max-width truncation, keeping it visible in every state. */
-.subagent-live-elapsed {
-  margin-left: auto;
-  flex-shrink: 0;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--fg-muted);
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-}
-
-/* Layer-2 dynamic sub-rail: collapsed state shows the current action / thinking / conclusion / error in one row */
-.subagent-live-subline {
-  width: 100%;
-  background: none;
-  border: none;
-  text-align: left;
-  font-family: inherit;
-  display: flex;
-  align-items: center;
   gap: 6px;
-  padding: 0 8px 6px 26px;
-  font-size: 11.5px;
-  color: var(--fg-muted);
-  cursor: inherit;
-  min-width: 0;
+  margin-top: 4px;
 }
 
-.subagent-live-subline > svg {
-  flex-shrink: 0;
-}
-
-.subagent-live-subline-tag {
-  flex-shrink: 0;
-  font-family: var(--font-mono);
-  font-size: 10px;
-  color: var(--fg-subtle);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-pill);
-  padding: 0 6px;
-  line-height: 16px;
-  white-space: nowrap;
-}
-
-.subagent-live-subline-text {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.subagent-live-subline-blocked .subagent-live-subline-tag,
-.subagent-live-subline-blocked .subagent-live-subline-text {
-  color: var(--warn);
-}
-
-.subagent-live-subline-error .subagent-live-subline-tag {
-  color: var(--fg-subtle);
-}
-
-.subagent-live-subline-error .subagent-live-subline-text {
-  color: var(--fg-muted);
-}
-
-.subagent-live-title {
-  flex: 1;
-  overflow: hidden;
-  white-space: nowrap;
+.wf-report-task-item {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--fg);
-  min-width: 0;
+  gap: 5px;
 }
 
-.subagent-live-id {
-  flex-shrink: 0;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  font-weight: 400;
-  color: var(--fg-subtle);
-}
-
-.subagent-live-title > .badge,
-.subagent-live-trigger > svg,
-.subagent-live-trigger > .badge {
-  flex-shrink: 0;
-}
-
-/* Primary task title: prominent weight and foreground color, ellipsizes cleanly when space is tight */
-.subagent-live-title-text {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--fg);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-}
-
-.subagent-live-doing {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--fg-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-  max-width: 40%;
-}
-
-/* Isolated worktree branch badge: plain text + line icon, full path on hover */
-.subagent-worktree-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-family: var(--font-mono);
-  max-width: min(220px, 100%);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  flex-shrink: 1;
-}
-
-.subagent-worktree-badge > svg {
-  flex-shrink: 0;
-}
-
-.subagent-live-actions {
-  margin-left: auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
-}
-
-@container subagent-card (max-width: 680px) {
-  .subagent-action-label,
-  .subagent-live-trigger > .subagent-worktree-badge,
-  .subagent-live-stats {
-    display: none;
-  }
-  .subagent-live-actions .btn-xs {
-    min-width: 28px;
-    min-height: 28px;
-    padding: 0 5px;
-  }
-}
-
-@container subagent-card (max-width: 420px) {
-  .subagent-live-title > .badge { display: none; }
-  .subagent-live-title { gap: 4px; }
-  .subagent-live-header { gap: 4px; padding-inline: 6px; }
-  .subagent-live-trigger { gap: 4px; }
-  .subagent-live-actions { gap: 2px; }
-}
-
-/* External runtime (no child conversation) background task summary card */
-.subagent-external-body {
-  gap: 6px;
-}
-
-.subagent-external-exec {
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  color: var(--fg-subtle);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-}
-
-/* Background run failure: compact error row at the card bottom */
-.subagent-bg-error {
-  align-items: center;
-  gap: 6px;
-}
-
-.subagent-bg-error > svg {
-  flex-shrink: 0;
-  align-self: center;
-}
-
-/* ==========================================================================
- * Execution-tree row interaction states (structural styles in styles-execution-tree.css): kept in this file because
- * host contract tests require it — they read styles.css directly to assert the hover accent background
- * (background: var(--accent-bg)) and its distinction from the outer parent-card hover contract.
- * ========================================================================== */
-
-.execution-child-clickable {
-  cursor: pointer;
-}
-
-.execution-child-clickable:hover {
-  background: var(--accent-bg);
-  border-color: var(--accent-border);
-  color: var(--fg);
-}
-
-.execution-child-clickable:active {
-  background: var(--bg-active, var(--bg-hover));
-}
-
-/* Slot wrapper for builtin:worktree inspect contribution inside standalone subagent cards */
-.subagent-inspect-slot {
+/* ---- Workbench panel & run card ---- */
+.wf-workbench {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 10px;
+  padding: 10px 12px;
 }
 
-/* Timeline single-row trace & background report card styles */
-.workflow-trace-row-btn .trace-tool-name,
-.workflow-trace-toggle .trace-tool-name {
-  flex-shrink: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.workflow-trace-id {
-  flex-shrink: 0;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--fg-subtle);
-}
-
-.workflow-trace-badge {
-  height: 18px;
-  line-height: 16px;
-  padding: 0 5px;
-  font-size: 10.5px;
-  flex-shrink: 0;
-}
-
-.workflow-trace-right {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  white-space: nowrap;
-}
-
-.workflow-trace-error {
-  color: var(--err);
-  font-size: 11.5px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-}
-
-.workflow-trace-toggle {
-  background: none;
-  border: none;
-  padding: 0;
-  font: inherit;
-  color: inherit;
-  cursor: pointer;
-  text-align: left;
-  min-width: 0;
-  flex: 1;
-}
-
-.workflow-trace-row-btn {
-  width: 100%;
-  background: transparent;
-  border: none;
-  font: inherit;
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.workflow-trace-row-btn:hover {
-  background: var(--bg-hover);
-}
-
-.workflow-trace-row-btn .trace-row-left {
-  min-width: 0;
-  flex: 1;
-}
-
-.workflow-report-expanded {
-  gap: 8px;
-}
-
-.workflow-report-meta-head {
+.wf-workbench-head {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 8px;
-  flex-wrap: wrap;
 }
 
-.workflow-report-task-item {
+.wf-workbench-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.wf-workbench-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.wf-workbench-focused {
+  outline: 1.5px solid var(--accent);
+  border-radius: 8px;
+}
+
+.wf-run-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elevated, var(--bg));
+  overflow: hidden;
+}
+
+.wf-run-card-error {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+}
+
+.wf-run-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  background: var(--bg-subtle);
+}
+
+.wf-run-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+
+.wf-run-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wf-run-elapsed {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.wf-run-actions {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  flex: 0 0 auto;
 }
 
-/* Execution tree child rows */
-.execution-children {
+.wf-run-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.wf-phases {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.wf-phase-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.wf-phase-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.wf-phase-nodes {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* ---- Unified execution node row ---- */
+.wf-node-card {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+}
+
+.wf-node-card-error {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+}
+
+.wf-node-card-warn {
+  border-color: color-mix(in srgb, var(--warning) 45%, var(--border));
+}
+
+.wf-node-card-nested {
+  border-left: 2px solid var(--border-strong, var(--border));
+}
+
+.wf-node-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+}
+
+.wf-node-main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+}
+
+.wf-node-clickable {
+  cursor: pointer;
+}
+
+.wf-node-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.wf-node-id,
+.wf-node-stats,
+.wf-node-elapsed {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.wf-node-elapsed {
+  margin-left: auto;
+}
+
+.wf-wt-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.wf-node-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
+.wf-node-subline {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px 6px 24px;
+  font-size: 12px;
+  color: var(--text-muted);
+  min-width: 0;
+}
+
+.wf-node-subline-error {
+  color: var(--danger);
+}
+
+.wf-node-subline-tag {
+  flex: 0 0 auto;
+  font-weight: 500;
+}
+
+.wf-node-subline-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wf-node-details {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-subtle);
+}
+
+.wf-node-children {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 8px 8px 18px;
+}
+
+/* ---- Detail blocks, logs, result, replay popover ---- */
+.wf-detail-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.wf-pre {
+  margin: 0;
+  max-height: 240px;
+  overflow: auto;
+}
+
+.wf-pre-err {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+}
+
+.wf-muted-note {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.wf-log-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12px;
+}
+
+.wf-log-row {
+  display: flex;
+  gap: 8px;
+}
+
+.wf-log-offset {
+  color: var(--text-muted);
+  flex: 0 0 auto;
+}
+
+.wf-result-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+
+.wf-result-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.wf-result-preview {
+  font-size: 12px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wf-timing-tooltip {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  margin: 0 8px 6px 26px;
-  padding-left: 8px;
-  border-left: 2px solid var(--border);
-}
-
-.execution-child-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  padding: 2px 6px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-xs);
-  font-size: 11.5px;
-  color: var(--fg-secondary);
-  background: var(--bg-elevated);
-  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
-}
-
-.execution-child-row > svg { flex-shrink: 0; }
-
-.execution-child-id {
-  flex-shrink: 0;
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  color: var(--fg-subtle);
-}
-
-.execution-child-title {
-  flex-shrink: 1;
-  font-weight: 500;
-  color: var(--fg);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-}
-
-.execution-child-doing {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--fg-muted);
-}
-
-.execution-child-right {
-  margin-left: auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  flex-shrink: 0;
-}
-
-.execution-child-right .badge {
-  font-size: 10px;
-  line-height: 16px;
-  padding: 0 5px;
-}
-
-.execution-child-count,
-.execution-child-elapsed {
-  font-size: 10.5px;
-  color: var(--fg-subtle);
-  font-variant-numeric: tabular-nums;
-}
-
-.execution-child-elapsed { font-family: var(--font-mono); }
-
-.execution-child-blocked .execution-child-title,
-.execution-child-blocked .execution-child-doing {
-  color: var(--warn);
-}
-
-.execution-child-expand { color: var(--fg-subtle); }
-.execution-children .execution-children { margin: 0 0 2px 14px; }
-.execution-frontline .subagent-live-subline-tag { color: var(--accent); }
-
-/* Subagent expanded live stream */
-.subagent-live-stream {
-  max-height: 220px;
-  overflow-y: auto;
-  padding: 8px 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
   font-size: 12px;
 }
 
-.subagent-stream-line {
+.wf-replay-popover {
+  width: 320px;
+  max-width: 90vw;
+}
+
+.wf-replay-form {
   display: flex;
-  align-items: baseline;
-  gap: 6px;
-  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
 }
 
-.subagent-stream-tag {
-  flex-shrink: 0;
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--fg-subtle);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-pill);
-  padding: 0 6px;
-  line-height: 16px;
-  user-select: none;
-}
-
-.subagent-stream-body {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-.subagent-stream-prompt .subagent-stream-body {
-  color: var(--fg);
+.wf-replay-meta {
+  font-size: 12px;
   font-weight: 500;
-  overflow: hidden;
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  white-space: pre-wrap;
 }
 
-.subagent-stream-thinking { color: var(--fg-muted); }
-.subagent-stream-thinking .subagent-stream-body { font-style: italic; white-space: pre-wrap; }
+.wf-replay-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+}
 
-.subagent-stream-tool {
+.wf-replay-row {
+  display: flex;
+  gap: 6px;
+}
+
+.wf-replay-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* ---- Workflow Library screen & drawer ---- */
+.wf-lib-title {
+  display: inline-flex;
   align-items: center;
-  font-family: var(--font-mono);
-  font-size: 11.5px;
+  gap: 6px;
 }
 
-.subagent-stream-tool > svg { flex-shrink: 0; align-self: center; }
-.subagent-stream-error { color: var(--fg-muted); }
-.subagent-stream-empty { align-items: center; color: var(--fg-muted); gap: 7px; }
-.subagent-stream-empty > svg { align-self: center; }
+.wf-lib-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.wf-lib-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elevated, var(--bg));
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.wf-lib-card:hover {
+  border-color: var(--border-strong, var(--accent));
+}
+
+.wf-lib-card-warn {
+  border-color: color-mix(in srgb, var(--warning) 50%, var(--border));
+}
+
+.wf-lib-card-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.wf-lib-card-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+}
+
+.wf-lib-card-desc {
+  font-size: 13px;
+  color: var(--text-secondary, var(--text-muted));
+  line-height: 1.45;
+}
+
+.wf-lib-card-desc-empty {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.wf-lib-card-warn-text {
+  font-size: 12px;
+  color: var(--warning);
+}
+
+.wf-lib-card-phases {
+  font-size: 12px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wf-lib-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: auto;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.wf-drawer-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.wf-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.wf-lib-source {
+  max-height: 300px;
+  overflow: auto;
+  margin: 0;
+}
+
+.wf-lib-run-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.wf-lib-run-select {
+  flex: 1 1 180px;
+  min-width: 140px;
+}
+
+.wf-lib-args {
+  flex: 1 1 160px;
+  min-width: 120px;
+}

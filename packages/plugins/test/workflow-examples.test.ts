@@ -23,14 +23,14 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { describe, it } from 'node:test'
 import type { AgentExecutionInfo } from '@helmx/protocol'
-import type { WorkflowActionEntry, WorkflowAgentEntry, WorkflowEntry } from '../src/workflow/engine/progress.js'
+import type { WorkflowNodeState } from '../src/contracts.js'
 import {
   precheckScriptSyntax,
   runWorkflow,
   type WorkflowHost,
   type WorkflowSpawnRequest,
   type WorkflowSpawnResult,
-} from '../src/workflow/engine/runtime.js'
+} from '../src/workflow/dsl/index.js'
 
 const timeout = { timeout: 60_000 } as const
 
@@ -184,12 +184,12 @@ function goalJson(
 
 const agentFailed = (error: string): WorkflowSpawnResult => ({ ok: false, error })
 
-function agentsOf(progress: readonly WorkflowEntry[]): WorkflowAgentEntry[] {
-  return progress.filter((e): e is WorkflowAgentEntry => e.type === 'workflow_agent')
+function agentsOf(nodes: readonly WorkflowNodeState[]): WorkflowNodeState[] {
+  return nodes.filter((e) => e.kind === 'agent')
 }
 
-function actionsOf(progress: readonly WorkflowEntry[]): WorkflowActionEntry[] {
-  return progress.filter((e): e is WorkflowActionEntry => e.type === 'workflow_action')
+function actionsOf(nodes: readonly WorkflowNodeState[]): WorkflowNodeState[] {
+  return nodes.filter((e) => e.kind === 'action')
 }
 
 const envExecResult = (ok: boolean, output: string) => ({ ok, exitCode: ok ? 0 : 1, output, timedOut: false })
@@ -427,9 +427,9 @@ describe('module-dev example', () => {
     )
 
     // 阶段归属无竞态：任务节点稳定留在「执行开发」，合入节点全部「合入与清理」。
-    const agents = agentsOf(result.progress)
-    assert.ok(agents.filter((e) => e.label.startsWith('task-')).every((e) => e.phaseTitle === '执行开发'))
-    const actions = actionsOf(result.progress)
+    const agents = agentsOf(result.nodes)
+    assert.ok(agents.filter((e) => (e.label ?? '').startsWith('task-')).every((e) => e.phaseTitle === '执行开发'))
+    const actions = actionsOf(result.nodes)
     for (const label of ['merge-t1', 'merge-t2', 'cleanup-t1', 'cleanup-t2', 'module-gate']) {
       assert.equal(actions.find((e) => e.label === label)?.phaseTitle, '合入与清理', `action ${label} 阶段归属`)
     }

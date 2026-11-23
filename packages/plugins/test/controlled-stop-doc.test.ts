@@ -24,6 +24,7 @@ import { PluginHost, type PluginDocStore } from '../../kernel/src/plugins/index.
 import { PluginHostBackendFixtureBase } from '../../kernel/test/helpers/plugin-host-backend.js'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { makeConversationSummary } from '@helmx/test-kit'
+import { MemoryKvStore } from './helpers/plugin-test-env.js'
 
 /** 初始会话 id（SDK 保留 #1 承载；普通会话语义，无产品级特权）。 */
 const ROOT_CONVERSATION_ID = 1 as const
@@ -196,10 +197,28 @@ class JsonSessionDocStore {
   }
 }
 
+class ControlledKvStore extends MemoryKvStore {
+  writes: string[] = []
+  flushCalls = 0
+  flushGate?: Promise<void>
+  flushFail?: Error
+  override put(pluginId: string, namespace: string, key: string, valueJson: string): number {
+    const rev = super.put(pluginId, namespace, key, valueJson)
+    this.writes.push(`${pluginId}:${namespace}:${key}`)
+    return rev
+  }
+  override async flush(): Promise<void> {
+    this.flushCalls += 1
+    if (this.flushGate !== undefined) await this.flushGate
+    if (this.flushFail !== undefined) throw this.flushFail
+  }
+}
+
 let dataDir: string
 let backend: FakeBackend
 let docs: JsonDocStore
 let sessionDocs: JsonSessionDocStore
+let kv: ControlledKvStore
 
 function makeHost(options: { deferServices?: boolean } = {}): PluginHost {
   return new PluginHost({ buildProvider: createPluginBuildProvider(),
@@ -207,6 +226,7 @@ function makeHost(options: { deferServices?: boolean } = {}): PluginHost {
     host: backend,
     docs,
     sessionDocs,
+    kv,
     ...(options.deferServices !== undefined ? { deferServices: options.deferServices } : {}),
   })
 }
@@ -216,6 +236,7 @@ beforeEach(() => {
   backend = new FakeBackend()
   docs = new JsonDocStore()
   sessionDocs = new JsonSessionDocStore()
+  kv = new ControlledKvStore()
 })
 
 afterEach(() => {
@@ -432,18 +453,18 @@ test('真实 workflow 插件：运行中 run 受控 dispose，终态落私有 re
   releaseSpawn()
   await host.dispose()
 
-  // 私有 records doc（新契约）：只存 workflow/runs 轻量索引，无 per-run 完整键。
-  const records = docs.get<Record<string, unknown>>('builtin:workflow:records', {})
-  assert.deepEqual(Object.keys(records), ['workflow/runs'], `records doc 只应有索引键（实际 ${JSON.stringify(Object.keys(records))}）`)
-  const runIds = (records['workflow/runs'] as Array<{ id: string; status: string }> | undefined) ?? []
-  assert.equal(runIds.length, 1, `应有恰好一条 run 索引（实际 ${JSON.stringify(runIds)}）`)
-  assert.equal(runIds[0]!.id, started.run.id, '索引指向该 run')
-  assert.equal(runIds[0]!.status, 'aborted', '索引状态同步终态')
-  // 完整 RunRecord（新契约）：插件私有 artifacts record file，终态已持久（不是 running 残留）。
-  const record = JSON.parse(
-    readFileSync(join(dataDir, 'plugins', 'builtin%3Aworkflow', 'artifacts', '1', `workflow-${started.run.id}.record.json`), 'utf-8'),
-  ) as { status?: string }
-  assert.equal(record.status, 'aborted', `close 应把运行中 run 显式结算为 aborted（实际 ${JSON.stringify(record)}）`)
+  // 私有 runs KV（新契约）：按 runId 单键存储紧凑 RunHeader，无整表 doc 写放大。
+  const kvEntry = kv.get('builtin:workflow', 'runs', started.run.id)
+  assert.ok(kvEntry !== undefined, 'runs KV 应持久保存该 run 的 RunHeader')
+  const header = JSON.parse(kvEntry.valueJson) as { id?: string; status?: string; phase?: string }
+  assert.equal(header.id, started.run.id, 'RunHeader id 匹配')
+  assert.equal(header.status, 'aborted', `close 应把运行中 run 显式结算为 aborted（实际 ${JSON.stringify(header)}）`)
+  assert.equal(header.phase, 'settled', '受控 close 后 phase 应落 settled')
+  // 完整 RunDetail：插件私有 artifacts detail file 已落盘。
+  const detail = JSON.parse(
+    readFileSync(join(dataDir, 'plugins', 'builtin%3Aworkflow', 'artifacts', '1', `wf-${started.run.id}.detail.json`), 'utf-8'),
+  ) as { id?: string }
+  assert.equal(detail.id, started.run.id, 'RunDetail id 匹配')
 
   // 公共 runs 与 run-badges 为瞬态投影（durable: false），持久层零落盘。
   assert.equal(sessionDocs.get('builtin:workflow', 'runs', 1), undefined, '瞬态 runs 分片不写持久层')
@@ -537,7 +558,7 @@ test('flush 契约：records.flush 是真实排队写冲刷（flush 未完成/�
   await host.register(createWorkflowPlugin())
 
   let releaseFlush: () => void = () => {}
-  docs.flushGate = new Promise<void>((resolve) => {
+  kv.flushGate = new Promise<void>((resolve) => {
     releaseFlush = resolve
   })
   const startPromise = host.invokeAction('builtin:workflow', 'run', {
@@ -555,7 +576,7 @@ test('flush 契约：records.flush 是真实排队写冲刷（flush 未完成/�
     () => undefined,
   )
   assert.equal(spawnCalls, 0, '纯脚本 run 无 spawn 消费；flush 完成后 run 正常执行（无副作用违反）')
-  assert.ok(docs.flushCalls >= 1, `records.flush 至少被调用一次（实际 ${docs.flushCalls}）`)
+  assert.ok(kv.flushCalls >= 1, `runsKv.flush 至少被调用一次（实际 ${kv.flushCalls}）`)
   await host.dispose()
 })
 
@@ -570,7 +591,7 @@ test('flush 失败：durable 快照 flush 失败时 run 拒绝且零 spawn（不
   await host.register(createWorkflowPlugin())
   // flush 失败（真实持久层故障形态）：durable running 快照已写但落盘失败——
   // 副作用 spawn 必须被拒绝，错误显式上抛给调用方（绝不静默降级继续 spawn）。
-  docs.flushFail = new HelmxError('store_flush_failed', '持久层冲刷失败（测试注入）', 500)
+  kv.flushFail = new HelmxError('store_flush_failed', '持久层冲刷失败（测试注入）', 500)
   await assert.rejects(
     () =>
       host.invokeAction('builtin:workflow', 'run', {
@@ -580,22 +601,22 @@ test('flush 失败：durable 快照 flush 失败时 run 拒绝且零 spawn（不
     'flush 失败必须使 run 显式失败',
   )
   assert.equal(spawnCalls, 0, `flush 失败后不得启动 spawn（实际 ${spawnCalls}）`)
-  delete docs.flushFail
+  delete kv.flushFail
   await host.dispose()
 })
 
-test('受控 stop：末尾 await records.flush 且瞬态投影零持久写入', { timeout: 60_000 }, async () => {
+test('受控 stop：末尾 await kv.flush 且瞬态投影零持久写入', { timeout: 60_000 }, async () => {
   const host = makeHost()
   const { createWorkflowPlugin } = await import('../src/workflow.js')
   await host.register(createWorkflowPlugin())
   await host.invokeAction('builtin:workflow', 'run', {
     script: 'export const meta = { name: "final-flush", description: "d" }\nreturn 1',
   }, { conversationId: 1 })
-  const flushCallsBefore = docs.flushCalls
+  const flushCallsBefore = kv.flushCalls
   await host.dispose()
-  // stop 链：close（内部 state.flush）→ records.flush（stop 尾部）；瞬态投影不写持久层。
-  assert.ok(docs.flushCalls > flushCallsBefore, `stop 末尾必须 await 真实 flush（前 ${flushCallsBefore} 后 ${docs.flushCalls}）`)
-  assert.ok(docs.writes.includes('builtin:workflow:records'), 'records 已写入持久层')
+  // stop 链：close（内部 repo.flush）→ runsKv.flush（stop 尾部）；瞬态投影不写持久层。
+  assert.ok(kv.flushCalls > flushCallsBefore, `stop 末尾必须 await 真实 flush（前 ${flushCallsBefore} 后 ${kv.flushCalls}）`)
+  assert.ok(kv.writes.some((w) => w.startsWith('builtin:workflow:runs:')), 'runs KV 已写入持久层')
   assert.equal(sessionDocs.writes.includes('builtin:workflow:runs:1'), false, 'runs 瞬态分片不得写入持久层')
   assert.equal(docs.writes.includes('builtin:workflow:run-badges'), false, 'run-badges 瞬态角标不得写入持久层')
 })

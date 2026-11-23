@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { runWorkflow, type WorkflowHost } from '../src/workflow/engine/runtime.js'
-import type { WorkflowJournalEntry, JournalWriteInput } from '../src/workflow/engine/journal.js'
+import { runWorkflow, type JournalWriteInput, type WorkflowHost, type WorkflowJournalEntry } from '../src/workflow/dsl/index.js'
 
 const timeout = { timeout: 60_000 } as const
 const script = (body: string) => `export const meta = { name: 'attempt-replay', description: 'test' }\n${body}`
@@ -45,7 +44,7 @@ test('two failed attempts replay before resuming the third with the persisted ha
   assert.equal(initial.status, 'completed', initial.error)
   assert.equal(JSON.stringify(original.entries).includes('private-token'), false)
   assert.deepEqual(original.entries.map((entry) => entry.index), [0, 1, 2])
-  assert.deepEqual(original.entries.map((entry) => entry.type === 'agent' ? entry.invocationIndex : null), [0, 0, 0])
+  assert.deepEqual(original.entries.map((entry) => entry.scopeCallIndex), [0, 0, 0])
   const partial = journal()
   const calls: string[] = []
   const restored = await runWorkflow({
@@ -85,7 +84,7 @@ test('exhausted goal replays its failed result and later action without spawning
   const replay = await runWorkflow({ script: source, journal: { entries: log.entries, retryFailedCalls: true }, host: host({ async resumeAgent() { throw new Error('unexpected resume') } }) })
   assert.equal(replay.status, 'completed', replay.error)
   assert.deepEqual(replay.value, initial.value)
-  assert.equal(replay.progress.some((entry) => entry.type === 'workflow_agent' && entry.state === 'error' && entry.error === 'last'), true)
+  assert.equal(replay.nodes.some((node) => node.kind === 'agent' && node.status === 'failed' && node.error === 'last'), true)
 })
 
 test('a failed source run grants its terminal goal a fresh bounded budget using the persisted conversation', timeout, async () => {
