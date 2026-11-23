@@ -4,7 +4,7 @@
  * An empty or omitted model means unconfigured—runtime reports an explicit error rather than fabricating a default model in the service layer.
  * Long-term MEMORY.md is autonomously managed by the builtin:memory plugin and does not belong here.
  */
-import { lstat, mkdir, readdir, readFile, realpath, rmdir, rm } from 'node:fs/promises'
+import { lstat, mkdir, readdir, readFile, realpath, rmdir, rm, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join, relative, sep } from 'node:path'
 import {
@@ -66,10 +66,6 @@ export const SYSTEM_DEFAULT = [
   'Use Markdown for normal replies. When generating files for users to view on Web, register artifacts via `write(..., artifact: true)` or `register_artifact({ path })`, and link them in your reply using `[filename](artifact:<id>)` or `![image](artifact:<id>)`.',
   '',
 ].join('\n')
-
-function nowIso(): string {
-  return new Date().toISOString()
-}
 
 function profileDir(dataDir: string, id: string): string {
   return join(dataDir, 'profiles', id)
@@ -262,10 +258,24 @@ export interface ProfileServiceEvents {
 }
 
 export class ProfileService {
+  private readonly cache = new Map<string, { mtimeMs: number; size: number; profile: Profile }>()
+  private mutationEpochValue = 0
+
   constructor(
     private readonly dataDir: string,
     private readonly events?: ProfileServiceEvents,
   ) {}
+
+  get mutationEpoch(): number {
+    return this.mutationEpochValue
+  }
+
+  /** Invalidate cached `profile.json` entries (invoked by `AssetReloader` on `profiles/` changes or after mutations). */
+  invalidateCache(id?: string): void {
+    this.mutationEpochValue += 1
+    if (id !== undefined) this.cache.delete(id)
+    else this.cache.clear()
+  }
 
   /** Bootstrap the default assistant profile on first startup (returns existing profile unchanged without overwriting user edits). */
   async ensureDefault(): Promise<Profile> {
@@ -277,8 +287,10 @@ export class ProfileService {
       tags: [DEFAULT_PROFILE_ID],
     }
     const dir = profileDir(this.dataDir, profile.id)
-    await atomicWriteJson(join(dir, 'profile.json'), profile)
+    const filePath = join(dir, 'profile.json')
+    await atomicWriteJson(filePath, profile)
     await atomicWriteFile(join(dir, 'SYSTEM.md'), SYSTEM_DEFAULT)
+    this.cache.delete(profile.id)
     return profile
   }
 
@@ -302,9 +314,29 @@ export class ProfileService {
 
   async get(id: string): Promise<Profile | undefined> {
     assertProfileId(id)
-    const value = await readJsonFileOptional(join(profileDir(this.dataDir, id), 'profile.json'))
-    if (value === undefined) return undefined
-    return normalizeProfile(value, id)
+    const filePath = join(profileDir(this.dataDir, id), 'profile.json')
+    let info: { mtimeMs: number; size: number }
+    try {
+      info = await stat(filePath)
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        this.cache.delete(id)
+        return undefined
+      }
+      throw err
+    }
+    const cached = this.cache.get(id)
+    if (cached !== undefined && cached.mtimeMs === info.mtimeMs && cached.size === info.size) {
+      return structuredClone(cached.profile)
+    }
+    const value = await readJsonFileOptional(filePath)
+    if (value === undefined) {
+      this.cache.delete(id)
+      return undefined
+    }
+    const profile = normalizeProfile(value, id)
+    this.cache.set(id, { mtimeMs: info.mtimeMs, size: info.size, profile })
+    return structuredClone(profile)
   }
 
   /** Create or replace a profile (if system is provided, atomically syncs to SYSTEM.md without writing it into profile.json). */
@@ -318,6 +350,7 @@ export class ProfileService {
     const dir = profileDir(this.dataDir, profile.id)
     const existing = await this.get(profile.id)
     await atomicWriteJson(join(dir, 'profile.json'), profile)
+    this.invalidateCache(profile.id)
     if (rawSystem !== undefined) {
       await this.updateSystem(profile.id, rawSystem)
     } else if (existing === undefined) {
@@ -346,6 +379,7 @@ export class ProfileService {
     }
     const existing = await this.get(id)
     await rm(profileDir(this.dataDir, id), { recursive: true, force: true })
+    this.invalidateCache(id)
     // Notify only for a profile that actually existed (delete on a missing id is an idempotent no-op and must not fabricate a removal event).
     if (existing !== undefined) {
       this.events?.publish('profile.changed', {

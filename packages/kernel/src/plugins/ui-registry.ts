@@ -321,6 +321,7 @@ interface PluginClientAssetsLookup {
 interface ClientModuleOptions {
   chunk?: string;
   hash?: string;
+  metadataOnly?: boolean;
   getPluginLifecycle: (pluginId: string) => {
     identity: unknown;
     enabled: boolean;
@@ -336,9 +337,19 @@ interface ClientModuleOptions {
 
 export type ClientLifecycleLookup = Pick<ClientModuleOptions, 'getPluginLifecycle' | 'dataDir' | 'isDisposed'>;
 
+interface CachedPrebuiltPlugin {
+  epoch: number;
+  prebuiltClientDir: string;
+  rootReal: string;
+  manifest: PrebuiltClientManifest;
+  verifiedEntries: Map<string, VerifiedPrebuiltEntry>;
+  bundles: Map<string, PluginClientBundle>;
+}
+
 export class UiRegistry {
   private ui = new Map<string, PluginUiContribution[]>();
   private clientHashes = new Map<string, Map<string, string>>();
+  private prebuiltCache = new Map<string, CachedPrebuiltPlugin>();
 
   constructor(
     private readonly buildProvider?: PluginBuildProvider,
@@ -625,6 +636,53 @@ export class UiRegistry {
     return info;
   }
 
+  private getOrLoadPrebuiltState(
+    pluginId: string,
+    epoch: number,
+    prebuiltClientDir: string,
+  ): CachedPrebuiltPlugin {
+    const existing = this.prebuiltCache.get(pluginId);
+    if (
+      existing !== undefined &&
+      existing.epoch === epoch &&
+      existing.prebuiltClientDir === prebuiltClientDir
+    ) {
+      return existing;
+    }
+    const { rootReal, manifest } = readPrebuiltClientManifest(prebuiltClientDir, pluginId);
+    const created: CachedPrebuiltPlugin = {
+      epoch,
+      prebuiltClientDir,
+      rootReal,
+      manifest,
+      verifiedEntries: new Map(),
+      bundles: new Map(),
+    };
+    this.prebuiltCache.set(pluginId, created);
+    return created;
+  }
+
+  private getOrVerifyPrebuiltEntry(
+    pluginId: string,
+    epoch: number,
+    prebuiltClientDir: string,
+    moduleRef: string,
+  ): { state: CachedPrebuiltPlugin; verified: VerifiedPrebuiltEntry } {
+    const state = this.getOrLoadPrebuiltState(pluginId, epoch, prebuiltClientDir);
+    let verified = state.verifiedEntries.get(moduleRef);
+    if (verified === undefined) {
+      verified = assertPrebuiltEntryIntegrity(
+        state.rootReal,
+        prebuiltClientDir,
+        moduleRef,
+        state.manifest,
+        pluginId,
+      );
+      state.verifiedEntries.set(moduleRef, verified);
+    }
+    return { state, verified };
+  }
+
   private async compileModuleChecked(
     pluginId: string,
     moduleRef: string,
@@ -634,7 +692,19 @@ export class UiRegistry {
     assertModuleRefShape(pluginId, moduleRef);
     const info = this.assertClientLifecyclePhase(pluginId, moduleRef, options, allowedPhases);
     if (info.prebuiltClientDir !== undefined) {
-      return readPrebuiltClientBundle(info.prebuiltClientDir, moduleRef, undefined, pluginId);
+      const { state, verified } = this.getOrVerifyPrebuiltEntry(
+        pluginId,
+        info.epoch,
+        info.prebuiltClientDir,
+        moduleRef,
+      );
+      const cacheKey = `${moduleRef}\0`;
+      let bundle = state.bundles.get(cacheKey);
+      if (bundle === undefined) {
+        bundle = materializePrebuiltBundle(info.prebuiltClientDir, moduleRef, verified, undefined, pluginId);
+        state.bundles.set(cacheKey, bundle);
+      }
+      return bundle;
     }
     const clientRoot = info.clientRoot;
     if (clientRoot === undefined) {
@@ -741,13 +811,11 @@ export class UiRegistry {
     }
     const info = this.assertClientLifecyclePhase(pluginId, moduleRef, options, 'idle-only');
     if (info.prebuiltClientDir !== undefined) {
-      const { rootReal, manifest } = readPrebuiltClientManifest(info.prebuiltClientDir, pluginId);
-      const verified = assertPrebuiltEntryIntegrity(
-        rootReal,
+      const { state, verified } = this.getOrVerifyPrebuiltEntry(
+        pluginId,
+        info.epoch,
         info.prebuiltClientDir,
         moduleRef,
-        manifest,
-        pluginId,
       );
       const trackedHashes = this.clientHashes.get(pluginId);
       if (trackedHashes?.has(moduleRef)) {
@@ -760,7 +828,28 @@ export class UiRegistry {
         options.hash,
         options.chunk,
       );
-      return materializePrebuiltBundle(info.prebuiltClientDir, moduleRef, verified, options.chunk, pluginId);
+      if (options.chunk !== undefined && !verified.chunkPaths.has(options.chunk)) {
+        throw new HelmxError(
+          'client_chunk_not_found',
+          `plugin ${pluginId} module ${moduleRef} did not generate chunk: ${options.chunk}`,
+          404,
+          { pluginId, prebuiltDir: info.prebuiltClientDir, module: moduleRef, chunk: options.chunk },
+        );
+      }
+      if (options.metadataOnly === true) {
+        return {
+          code: '',
+          contentHash: verified.entry.contentHash,
+          exports: options.chunk !== undefined ? [] : [...verified.entry.exports],
+        };
+      }
+      const cacheKey = `${moduleRef}\0${options.chunk ?? ''}`;
+      let bundle = state.bundles.get(cacheKey);
+      if (bundle === undefined) {
+        bundle = materializePrebuiltBundle(info.prebuiltClientDir, moduleRef, verified, options.chunk, pluginId);
+        state.bundles.set(cacheKey, bundle);
+      }
+      return bundle;
     }
     const result = await this.compileModuleChecked(pluginId, moduleRef, options, 'idle-only');
     // Keep precompiled hash map aligned when a declared module is recompiled after source edit.
@@ -796,10 +885,12 @@ export class UiRegistry {
     const list = this.ui.get(pluginId);
     if (list) list.length = 0;
     this.clientHashes.delete(pluginId);
+    this.prebuiltCache.delete(pluginId);
   }
 
   removePlugin(pluginId: string): void {
     this.ui.delete(pluginId);
     this.clientHashes.delete(pluginId);
+    this.prebuiltCache.delete(pluginId);
   }
 }

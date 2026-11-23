@@ -326,8 +326,10 @@ export async function runForegroundLauncher(
   }
   let stopError: string | undefined;
   let shutdownPromise: Promise<void> | undefined;
+  let wakePoll: (() => void) | undefined;
   const shutdown = (reason: string): void => {
     if (shutdownPromise !== undefined) return;
+    wakePoll?.();
     shutdownPromise = (async () => {
       try {
         const record = await readPidRecord(dataDir);
@@ -373,7 +375,18 @@ export async function runForegroundLauncher(
         break;
       }
     }
-    await new Promise((resolve) => setTimeout(resolve, pollMs));
+    if (shutdownPromise !== undefined) break;
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(() => {
+        wakePoll = undefined;
+        resolve();
+      }, pollMs);
+      wakePoll = () => {
+        wakePoll = undefined;
+        clearTimeout(timer);
+        resolve();
+      };
+    });
   }
   process.removeListener('SIGINT', onSigint);
   process.removeListener('SIGTERM', onSigterm);

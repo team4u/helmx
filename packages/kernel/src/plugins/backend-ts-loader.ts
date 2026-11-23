@@ -43,14 +43,12 @@ interface TsRootEntry {
 const rootRefCounts = new Map<string, TsRootEntry>();
 
 /**
- * Module generation counter (for controlled hot reload): root `realpath` -> next generation number.
- * On reload, appending `?helmxgen=<n>` to the entry URL makes Node's ESM cache re-initialize the
- * plugin module graph under a fresh URL; the `resolve` hook propagates this tag across relative
- * imports within the plugin root, while bare specifiers (`@helmx/*`, npm packages, `node:` builtins)
- * resolve normally without the tag and stay shared with the host—isolating generation reloads
- * strictly inside the plugin root.
+ * Process-wide monotonic module generation counter (for controlled hot reload).
+ * Appending `?helmxgen=<n>` to an entry URL makes Node's ESM cache initialize a fresh module
+ * graph without ever colliding with previously cached `?helmxgen` URLs after root release,
+ * while avoiding an unbounded per-path Map across ephemeral plugin directories.
  */
-const rootGenerations = new Map<string, number>();
+let generationCounter = 0;
 
 /** Reserved generation query parameter prefix (excluding `=` and value). */
 const GENERATION_QUERY_PREFIX = 'helmxgen=';
@@ -84,10 +82,9 @@ function withGenerationQuery(url: string, generation: number): string {
  * and bare-specifier dependencies stay shared with the host.
  */
 export function nextPluginGeneration(rootDir: string): number {
-  const root = realpathSync(rootDir);
-  const next = (rootGenerations.get(root) ?? 0) + 1;
-  rootGenerations.set(root, next);
-  return next;
+  realpathSync(rootDir);
+  generationCounter += 1;
+  return generationCounter;
 }
 
 /** Lazily registered Node module hooks instance; deregistered once all roots are released. */
@@ -337,23 +334,11 @@ function ensureHooks(): void {
         return nextLoad(url, context);
       }
       const file = fileURLToPath(url);
-      let real: string;
-      try {
-        real = realpathSync(file);
-      } catch (err) {
-        // Propagate source stat/read failures (permissions / deleted race) directly.
-        throw err;
-      }
+      const real = realpathSync(file);
       if (!isInsideRoot(owningRoot, real)) {
         throw rootEscapeError(file, url, real);
       }
-      let source: string;
-      try {
-        source = readFileSync(real, 'utf8');
-      } catch (err) {
-        // Propagate source read failures (permissions / deleted race) directly.
-        throw err;
-      }
+      const source = readFileSync(real, 'utf8');
       // Transpiler must be injected by the build port; never silently fall back.
       const transform = rootRefCounts.get(owningRoot)?.transform;
       if (transform === undefined) {
@@ -426,5 +411,18 @@ export function registerPluginTsRoot(
     } else {
       current.count -= 1;
     }
+  };
+}
+
+/** Test/diagnostic helper returning active ref-counted root count and hook installation state. */
+export function debugBackendTsLoaderState(): {
+  activeRoots: number;
+  generationCounter: number;
+  hooksInstalled: boolean;
+} {
+  return {
+    activeRoots: rootRefCounts.size,
+    generationCounter,
+    hooksInstalled: hooks !== undefined,
   };
 }

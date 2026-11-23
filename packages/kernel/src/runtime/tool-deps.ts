@@ -19,7 +19,7 @@ export interface HelmxToolDeps {
   processToken?: () => string | undefined
   /** Artifact service (matches `services.ArtifactService`: async `get`/`readContent`/`readBuffer`). */
   artifacts: Pick<ArtifactService, 'spill' | 'get' | 'readContent' | 'readBuffer'> &
-    Partial<Pick<ArtifactService, 'writeUploaded'>>
+    Partial<Pick<ArtifactService, 'writeUploaded' | 'readSlice'>>
   /** Cross-platform node execution substrate (targets remote `(nodeId, cwd)`; defaults to local only). */
   envFabric?: EnvFabric
   /** `conversationId ->` bound compute node ID (defaults to `'local'`; backed by authoritative store snapshot). */

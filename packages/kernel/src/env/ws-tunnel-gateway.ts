@@ -58,7 +58,13 @@ export function attachNodeTunnelGateway(server: HttpServer, options: NodeTunnelG
   let closing: Promise<void> | undefined
 
   const onUpgrade = (request: IncomingMessage, socket: Duplex, head: Buffer): void => {
-    const url = new URL(request.url ?? '/', 'http://localhost')
+    let url: URL
+    try {
+      url = new URL(request.url ?? '/', 'http://localhost')
+    } catch {
+      socket.destroy()
+      return
+    }
     if (url.pathname !== path) return
     if (closing) { socket.destroy(); return }
     wss.handleUpgrade(request, socket, head, (ws) => handleConnection(ws))
@@ -79,6 +85,7 @@ export function attachNodeTunnelGateway(server: HttpServer, options: NodeTunnelG
   function handleConnection(ws: WebSocket): void {
     // First-frame timeout: close connections that never send hello (no silent hang, no unbounded accumulation).
     const helloTimer = setTimeout(() => ws.close(4001, 'tunnel hello timeout'), helloTimeoutMs)
+    helloTimer.unref()
     const onFirstFrame = (raw: unknown): void => {
       clearTimeout(helloTimer)
       const bytes = typeof raw === 'string' ? Buffer.byteLength(raw) : (raw as Buffer).length

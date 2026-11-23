@@ -23,9 +23,10 @@
  * sets `content-length` to compressed byte length, and caches by `realpath + mtimeMs + size` (bounded LRU/FIFO
  * to avoid unbounded growth). Pre-compressed and binary formats (png/woff2, etc.) are never recompressed.
  */
-import { readFile, realpath, stat } from 'node:fs/promises';
-import { gzipSync } from 'node:zlib';
+import { constants as fsConstants } from 'node:fs';
+import { access, readFile, realpath, stat } from 'node:fs/promises';
 import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { compressGzip } from './gzip.js';
 
 /** Extension -> Content-Type (with UTF-8 charset for text types). */
 const CONTENT_TYPES: Record<string, string> = {
@@ -184,21 +185,29 @@ export class StaticServe {
     return { kind: 'file', real, stat: { mtimeMs: info.mtimeMs, size: info.size } };
   }
 
-  /** Gzip-compress text files (with fingerprint cache): returns undefined if incompressible or below threshold. */
-  private gzipMaybe(fileReal: string, fingerprint: FileStatFingerprint, body: Buffer): Uint8Array | undefined {
-    if (!COMPRESSIBLE_EXTENSIONS.has(extname(fileReal).toLowerCase())) return undefined;
-    if (body.byteLength < STATIC_GZIP_MIN_BYTES) return undefined;
+  private getCachedGzip(fileReal: string, fingerprint: FileStatFingerprint): Uint8Array | undefined {
     const cached = this.gzipCache.get(fileReal);
     if (
       cached !== undefined &&
       cached.mtimeMs === fingerprint.mtimeMs &&
       cached.size === fingerprint.size
     ) {
+      this.gzipCache.delete(fileReal);
+      this.gzipCache.set(fileReal, cached);
       return cached.gz;
     }
-    const gz = gzipSync(body);
+    return undefined;
+  }
+
+  /** Gzip-compress text files (with fingerprint cache): returns undefined if incompressible or below threshold. */
+  private async gzipMaybe(fileReal: string, fingerprint: FileStatFingerprint, body: Buffer): Promise<Uint8Array | undefined> {
+    if (!COMPRESSIBLE_EXTENSIONS.has(extname(fileReal).toLowerCase())) return undefined;
+    if (body.byteLength < STATIC_GZIP_MIN_BYTES) return undefined;
+    const hit = this.getCachedGzip(fileReal, { mtimeMs: fingerprint.mtimeMs, size: body.byteLength });
+    if (hit !== undefined) return hit;
+    const gz = await compressGzip(body);
     this.gzipCache.delete(fileReal);
-    this.gzipCache.set(fileReal, { mtimeMs: fingerprint.mtimeMs, size: fingerprint.size, gz });
+    this.gzipCache.set(fileReal, { mtimeMs: fingerprint.mtimeMs, size: body.byteLength, gz });
     if (this.gzipCache.size > STATIC_GZIP_CACHE_MAX) {
       const oldest = this.gzipCache.keys().next().value;
       if (oldest !== undefined) this.gzipCache.delete(oldest);
@@ -212,6 +221,48 @@ export class StaticServe {
     fingerprint: FileStatFingerprint,
     opts: { acceptGzip?: boolean; spaFallback?: boolean } = {},
   ): Promise<Response> {
+    const ext = extname(fileReal).toLowerCase();
+    const compressible = COMPRESSIBLE_EXTENSIONS.has(ext);
+    const rel = relative(this.root, fileReal);
+    const type = CONTENT_TYPES[ext] ?? 'application/octet-stream';
+    const cacheControl = rel.split(sep)[0] === 'assets'
+      ? 'public, max-age=31536000, immutable'
+      : 'no-cache';
+    const wantGzip = opts.acceptGzip === true && compressible && fingerprint.size >= STATIC_GZIP_MIN_BYTES;
+
+    if (wantGzip) {
+      const cachedGz = this.getCachedGzip(fileReal, fingerprint);
+      if (cachedGz !== undefined) {
+        const headers: Record<string, string> = {
+          'content-type': type,
+          'cache-control': cacheControl,
+          'content-length': String(cachedGz.byteLength),
+          vary: 'Accept-Encoding',
+          'content-encoding': 'gzip',
+          ...(opts.spaFallback ? { 'x-helmx-spa-fallback': '1' } : {}),
+        };
+        if (method === 'HEAD') {
+          return new Response(null, { status: 200, headers });
+        }
+        return new Response(new Uint8Array(cachedGz), { status: 200, headers });
+      }
+    } else if (method === 'HEAD') {
+      try {
+        await access(fileReal, fsConstants.R_OK);
+      } catch (err) {
+        if (isMissingError(err)) return new Response('Not Found', { status: 404 });
+        throw err;
+      }
+      const headers: Record<string, string> = {
+        'content-type': type,
+        'cache-control': cacheControl,
+        'content-length': String(fingerprint.size),
+        ...(compressible ? { vary: 'Accept-Encoding' } : {}),
+        ...(opts.spaFallback ? { 'x-helmx-spa-fallback': '1' } : {}),
+      };
+      return new Response(null, { status: 200, headers });
+    }
+
     let body: Buffer;
     try {
       body = await readFile(fileReal);
@@ -219,16 +270,10 @@ export class StaticServe {
       if (isMissingError(err)) return new Response('Not Found', { status: 404 });
       throw err;
     }
-    const rel = relative(this.root, fileReal);
-    const type = CONTENT_TYPES[extname(fileReal).toLowerCase()] ?? 'application/octet-stream';
-    const cacheControl = rel.split(sep)[0] === 'assets'
-      ? 'public, max-age=31536000, immutable'
-      : 'no-cache';
-    const gz = opts.acceptGzip === true ? this.gzipMaybe(fileReal, fingerprint, body) : undefined;
+    const gz = opts.acceptGzip === true ? await this.gzipMaybe(fileReal, fingerprint, body) : undefined;
     // Compressible text files always carry `Vary: Accept-Encoding` even when served as identity (e.g. client
     // didn't accept gzip or payload was below threshold)—the URL has two representations, and omitting Vary
     // could let proxies reuse an identity response across encodings. Incompressible formats omit Vary.
-    const compressible = COMPRESSIBLE_EXTENSIONS.has(extname(fileReal).toLowerCase());
     const headers: Record<string, string> = {
       'content-type': type,
       'cache-control': cacheControl,

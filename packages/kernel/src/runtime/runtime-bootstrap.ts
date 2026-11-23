@@ -139,11 +139,7 @@ export async function bootstrapKernelRuntime(
   const credentials = new CredentialService(dataDir)
 
   const providerConfigs = await providersSvc.list()
-  const apiKeyCache: Record<string, string> = {}
-  for (const id of await credentials.list()) {
-    const key = await credentials.get(id)
-    if (key) apiKeyCache[id] = key
-  }
+  const apiKeyCache: Record<string, string> = await credentials.listAll()
 
   const modelsExternal = options.models
   const modelsStore = createFileModelsStore(dataDir)
@@ -267,7 +263,8 @@ export async function ensureInitialConversation(deps: {
     resolveEffectiveModelDetails(modelOverride?: string, profileId?: string): Promise<ResolvedModelRef | undefined>
   }
   cwd: string
-}): Promise<void> {
+}): Promise<boolean> {
+  let deferredTierAlignment = false
   let resolved: ResolvedModelRef | undefined
   try {
     resolved = await deps.conversations.resolveEffectiveModelDetails(undefined, 'assistant')
@@ -276,6 +273,7 @@ export async function ensureInitialConversation(deps: {
     // and force-disabled tiers may leave dangling defaults. Defer unresolved tiers to `KernelRuntime.start()`
     // post-plugin alignment so boot never crash-loops; active submissions still reject with 404.
     if (!(err instanceof HelmxError && err.code === 'model_tier_not_found')) throw err
+    deferredTierAlignment = true
   }
   const effective = resolved?.canonicalRef
   const modelRef = resolved ? { provider: resolved.provider, modelId: resolved.modelId } : undefined
@@ -292,7 +290,7 @@ export async function ensureInitialConversation(deps: {
     },
   })
   const id = root.id as number
-  if (deps.store.isDeleted(id)) return
+  if (deps.store.isDeleted(id)) return false
   if (!deps.store.getConv(id)) {
     deps.store.upsertConv({
       id,
@@ -313,6 +311,7 @@ export async function ensureInitialConversation(deps: {
     })
   }
   await deps.tracker.observe(id)
+  return deferredTierAlignment
 }
 
 /**
@@ -320,14 +319,16 @@ export async function ensureInitialConversation(deps: {
  */
 export async function recoverExistingConversations(deps: {
   conversations: {
-    recover(syncConv: (id: number, parentConversationId?: number) => Promise<void>): Promise<void>
+    recover(
+      syncConv: (id: number, parentConversationId?: number) => Promise<void>,
+    ): Promise<{ deferredTierAlignment: boolean } | void>
   }
   harness: Harness
   store: HelmxStore
   defaultCwd: string
-}): Promise<number> {
+}): Promise<{ recoveredCount: number; deferredTierAlignment: boolean }> {
   let recoveredCount = 0
-  await deps.conversations.recover(async (id, parentConversationId) => {
+  const result = await deps.conversations.recover(async (id, parentConversationId) => {
     recoveredCount += 1
     const now = Date.now()
     const conversation = await deps.harness.conversation(id as never, BACKGROUND_CONTEXT)
@@ -354,7 +355,10 @@ export async function recoverExistingConversations(deps: {
       updatedAt: now,
     })
   })
-  return recoveredCount
+  return {
+    recoveredCount,
+    deferredTierAlignment: result?.deferredTierAlignment === true,
+  }
 }
 
 /**

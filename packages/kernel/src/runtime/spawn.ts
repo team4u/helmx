@@ -807,7 +807,8 @@ async function runChildTurn(
         // Child aborted cleanly: `driveTurn` settles and falls back to `abortError`.
       },
       (guardError: unknown) => {
-        const message = guardError instanceof Error ? guardError.message : String(guardError)
+        const rawMessage = guardError instanceof Error ? guardError.message : String(guardError)
+        const message = deps.redact(rawMessage)
         abortError = new HelmxError(
           'aborted',
           `Subagent execution was cancelled; child conversation ${String(childId)} is guard-protected and was not aborted (${message})`,
@@ -826,10 +827,9 @@ async function runChildTurn(
   try {
     if (request.signal?.aborted) {
       await abortChildTurn().catch((error: unknown) => {
+        const rawMessage = error instanceof Error ? error.message : String(error)
         process.stderr.write(
-          `[helmx] child conversation ${String(childId)} startup abort refused/failed: ${
-            error instanceof Error ? error.message : String(error)
-          }\n`,
+          `[helmx] child conversation ${String(childId)} startup abort refused/failed: ${deps.redact(rawMessage)}\n`,
         )
       })
       throw new HelmxError('aborted', 'Subagent execution cancelled during startup', 499, { conversationId: childId })

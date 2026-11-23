@@ -15,10 +15,10 @@ import { sha256hex, type EnvFabric } from '../env/index.js'
 import type { ConfigService } from '../services/index.js'
 import type { SecretStash } from '../services/index.js'
 import { isAbsoluteTargetPath, runShell } from './tools.js'
-import { invalidPathText, normalizePathForTarget, targetPlatformForNode } from './target-platform.js'
+import { normalizePathForTarget, targetPlatformForNode } from './target-platform.js'
 import { buildPosixHostShim, buildWindowsCmdWrapper, buildWindowsPosixShim, type CliShimPlan } from './cli-shim.js'
 import type { HelmxToolDeps } from './tool-deps.js'
-import { compareStrictSemVer, hubVersion, isStrictSemVer, normalizeExplicitVersion, rpcFailureToHelmxError, safeJson, unwrapUpgradeCheckRpc, unwrapUpgradeRpc, validateUpgradeCheckResult, validateUpgradeResult } from './semver.js'
+import { compareStrictSemVer, hubVersion, isStrictSemVer, normalizeExplicitVersion, rpcFailureToHelmxError, safeJson, unwrapUpgradeCheckRpc, validateUpgradeResult } from './semver.js'
 
 /** Background refresh interval for local disk stats (unref timer, never blocks process exit). */
 const LOCAL_DISK_REFRESH_MS = 30_000
@@ -39,7 +39,6 @@ interface NodeManagerOptions {
  * Validated uniformly via unwrap* helpers in semver.ts (invalid shapes yield 502, never passing through dirty data).
  */
 type UpgradeRpcCheck = RpcResult<NodeUpgradeCheckResult>
-type UpgradeRpcResult = RpcResult<NodeUpgradeResult>
 
 export class NodeManager {
   private readonly dataDir: string
@@ -51,6 +50,8 @@ export class NodeManager {
   readonly NODE_UPGRADE_TIMEOUT_MS: number
   /** Node token index registered in config.json (nodeId -> sha256(token)). */
   private readonly nodeTokenIndex = new Map<string, string>()
+  /** Disposers for plaintext token redaction entries registered per nodeId. */
+  private readonly tokenRedactionDisposers = new Map<string, Array<() => void>>()
   /** helmx CLI wrapper script directory (populated after ensureCliBinDir completes). */
   private cliBinDirValue: string | undefined = undefined
   /** Cached local node disk stats (collected asynchronously via fs.statfs; reused by synchronous snapshots). */
@@ -122,6 +123,13 @@ export class NodeManager {
     return this.nodeTokenIndex.get(nodeId)
   }
 
+  private releaseTokenRedactions(nodeId: string): void {
+    const disposers = this.tokenRedactionDisposers.get(nodeId)
+    if (disposers === undefined) return
+    this.tokenRedactionDisposers.delete(nodeId)
+    for (const dispose of disposers) dispose()
+  }
+
   /** Issue a node access token: plaintext token is returned only this once; the server retains only sha256. */
   async issueNodeToken(nodeId: string): Promise<NodeIssuedToken> {
     if (nodeId === 'local') {
@@ -140,9 +148,12 @@ export class NodeManager {
     const token = `${nodeId}:${secret}`
     this.nodeTokenIndex.set(nodeId, sha256hex(token))
     await this.persistNodeTokens()
+    this.releaseTokenRedactions(nodeId)
     // Outbound secret redaction for plaintext token (never written to DB, injected into model context, or logged).
-    this.stash.addRedaction(token)
-    this.stash.addRedaction(secret)
+    this.tokenRedactionDisposers.set(nodeId, [
+      this.stash.addRedaction(token),
+      this.stash.addRedaction(secret),
+    ])
     this.events.publish('node.changed', {
       type: 'node.changed',
       node: { id: nodeId, kind: 'byom', online: this.envFabric.isOnline(nodeId) },
@@ -160,6 +171,7 @@ export class NodeManager {
     }
     this.nodeTokenIndex.delete(nodeId)
     await this.persistNodeTokens()
+    this.releaseTokenRedactions(nodeId)
     // Sever any in-flight connection first (may fire onNodeChanged offline callback, which skips because
     // nodeTokenIndex no longer has the entry), then emit the unified removal event with removed: true.
     this.envFabric.registry.disconnect(nodeId)
@@ -540,7 +552,7 @@ export class NodeManager {
     commitPromise: Promise<{ kind: 'commit'; value: NodeUpgradeResult } | { kind: 'waiterError'; error: unknown }>,
     rpcResult: unknown,
   ): Promise<NodeUpgradeResult> {
-    const { targetVersion, attemptId, input } = plan
+    const { targetVersion, attemptId } = plan
     // Validate RpcResult envelope first (object / boolean ok / valid value or error.code+message); invalid shapes fail with 502.
     if (!isRpcResultEnvelope(rpcResult)) {
       throw new HelmxError(
@@ -751,11 +763,14 @@ export class NodeManager {
     await this.ensureLocalDiskStats()
   }
 
-  /** Dispose: clear disk stats timer and await any in-flight refresh. */
+  /** Dispose: clear disk stats timer, release token redactions, and await any in-flight refresh. */
   async dispose(): Promise<void> {
     if (this.localDiskRefreshTimer !== undefined) {
       clearInterval(this.localDiskRefreshTimer)
       this.localDiskRefreshTimer = undefined
+    }
+    for (const nodeId of [...this.tokenRedactionDisposers.keys()]) {
+      this.releaseTokenRedactions(nodeId)
     }
     await this.localDiskRefreshing
   }

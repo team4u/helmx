@@ -26,33 +26,6 @@ export type { NodeForwardEvent, NodeForwardInput, NodeForwardSession } from '@he
 /** Default foreground lease deadline: stops automatically if no event stream attaches after creation (CLI makes a single stream request). */
 const NODE_FORWARD_LEASE_TIMEOUT_MS = 15_000
 
-/** Validate host: non-empty, no control chars/whitespace, <= 255 characters (hostname or IP literal). */
-function validateHost(raw: unknown, what: string): string {
-  if (
-    typeof raw !== 'string' ||
-    raw.length === 0 ||
-    raw.length > 255 ||
-    raw.trim() !== raw ||
-    /\s/.test(raw)
-  ) {
-    throw new HelmxError('validation_error', `${what} must be a non-empty string without whitespace (<= 255 characters)`, 400, { value: raw })
-  }
-  for (const ch of raw) {
-    const code = ch.charCodeAt(0)
-    if (code < 0x20 || code === 0x7f) {
-      throw new HelmxError('validation_error', `${what} must not contain control characters`, 400, { value: raw })
-    }
-  }
-  return raw
-}
-
-function validatePort(raw: unknown, what: string): number {
-  if (typeof raw !== 'number' || !Number.isSafeInteger(raw) || raw < 1 || raw > 65535) {
-    throw new HelmxError('validation_error', `${what} must be a valid integer port in 1..65535`, 400, { value: raw })
-  }
-  return raw
-}
-
 interface ActiveForward {
   session: NodeForwardSession
   server: net.Server

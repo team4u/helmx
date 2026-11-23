@@ -3,14 +3,15 @@
  * Compatible with temp (random name) + fsync + rename atomic writes (renames appear as add/change).
  * Errors from the watcher itself (such as directory deletion) are thrown explicitly to onError and never silently swallowed.
  */
-import { EventEmitter } from 'node:events'
 import { watch } from 'node:fs'
 import type { WatchListener } from 'node:fs'
 import { join, relative, sep } from 'node:path'
 
-interface AssetWatcherOptions {
+export interface AssetWatcherOptions {
   /** Debounce window in milliseconds, defaulting to 150ms. */
   debounceMs?: number
+  /** Whether to watch subdirectories recursively (defaults to `true`). */
+  recursive?: boolean
   /** Callback for watcher/polling errors; if omitted, errors are thrown to the process (never silently swallowed). */
   onError?: (err: Error) => void
 }
@@ -22,6 +23,7 @@ export class AssetWatcher {
   private timer: NodeJS.Timeout | undefined
   private readonly pending = new Set<string>()
   private readonly debounceMs: number
+  private readonly recursive: boolean
   private readonly onError?: (err: Error) => void
   private closed = false
 
@@ -31,15 +33,16 @@ export class AssetWatcher {
     opts: AssetWatcherOptions = {},
   ) {
     this.debounceMs = opts.debounceMs ?? ASSET_WATCHER_DEBOUNCE_MS
+    this.recursive = opts.recursive ?? true
     this.onError = opts.onError
   }
 
-  /** Start watching (enables recursive mode where supported; exposes an explicit error on unsupported platforms). */
+  /** Start watching (defaults to recursive mode; exposes an explicit error on unsupported platforms). */
   start(): void {
     if (this.handle !== undefined) return
     const listener: WatchListener<string> = (event, filename) => {
       if (this.closed || filename === null) return
-      // Ignore our own atomic-write temp files (random UUID names in the intermediate state before rename).
+      // Ignore our own atomic-write temp files (random UUID names or `.tmp-<pid>` before rename).
       if (isTmpName(filename)) return
       const rel = relative(this.rootDir, join(this.rootDir, filename))
       if (rel.startsWith('..')) return
@@ -47,7 +50,7 @@ export class AssetWatcher {
       this.scheduleFlush()
     }
     try {
-      this.handle = watch(this.rootDir, { recursive: true }, listener)
+      this.handle = watch(this.rootDir, { recursive: this.recursive }, listener)
     } catch (err) {
       this.fail(err instanceof Error ? err : new Error(String(err)))
       return
@@ -89,8 +92,8 @@ export class AssetWatcher {
   }
 }
 
-/** Atomic-write temporary filenames have the form `.<uuid>.tmp`. */
+/** Atomic-write temporary filenames have the form `.<uuid>.tmp` or `<file>.tmp-<pid>[-suffix]`. */
 function isTmpName(filename: string): boolean {
   const base = filename.split(/[\\/]/).pop() ?? ''
-  return base.startsWith('.') && base.endsWith('.tmp')
+  return (base.startsWith('.') && base.endsWith('.tmp')) || /\.tmp-\d+(?:-[A-Za-z0-9_]+)?$/.test(base)
 }

@@ -54,6 +54,12 @@ export interface NodeEnvRpcServerOptions {
   abortDrainGraceMs?: number;
   /** Daemon-injected duplex stream opener for `/ws/node-tunnel` (keeps credentials out of this layer). */
   openTunnelStream?: (tunnelId: string, signal?: AbortSignal) => Promise<Duplex>;
+  /** Maximum cached `LocalExecutionEnv` instances per connection (LRU, defaults to 64). */
+  maxCachedEnvs?: number;
+  /** Maximum concurrently open reader handles per connection (defaults to 256). */
+  maxOpenReaders?: number;
+  /** Idle TTL (ms) before an unused reader handle is closed automatically (defaults to 5 minutes). */
+  readerIdleTtlMs?: number;
 }
 
 const readerNotFound = <T>(readerId: string): RpcResult<T> => ({
@@ -63,6 +69,9 @@ const readerNotFound = <T>(readerId: string): RpcResult<T> => ({
 
 /** Binary transfer payload limit (64 MiB). */
 const MAX_BINARY_TRANSFER_BYTES = 64 * 1024 * 1024;
+const DEFAULT_MAX_CACHED_ENVS = 64;
+const DEFAULT_MAX_OPEN_READERS = 256;
+const DEFAULT_READER_IDLE_TTL_MS = 5 * 60 * 1000;
 
 /** Strict base64 decoder (standard alphabet + padding, rejecting invalid chars and oversized payloads). */
 const decodeBase64 = (content: string, what: string): Uint8Array => {
@@ -133,6 +142,18 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
     Number.isFinite(options.abortDrainGraceMs) && options.abortDrainGraceMs >= 0
     ? options.abortDrainGraceMs
     : 500;
+  const maxCachedEnvs = typeof options.maxCachedEnvs === 'number' &&
+    Number.isFinite(options.maxCachedEnvs) && options.maxCachedEnvs >= 1
+    ? Math.floor(options.maxCachedEnvs)
+    : DEFAULT_MAX_CACHED_ENVS;
+  const maxOpenReaders = typeof options.maxOpenReaders === 'number' &&
+    Number.isFinite(options.maxOpenReaders) && options.maxOpenReaders >= 1
+    ? Math.floor(options.maxOpenReaders)
+    : DEFAULT_MAX_OPEN_READERS;
+  const readerIdleTtlMs = typeof options.readerIdleTtlMs === 'number' &&
+    Number.isFinite(options.readerIdleTtlMs) && options.readerIdleTtlMs > 0
+    ? options.readerIdleTtlMs
+    : DEFAULT_READER_IDLE_TTL_MS;
 
   const envs = new Map<string, LocalExecutionEnv>();
   let disposed = false;
@@ -143,10 +164,18 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
     }
     const base = cwd ?? defaultCwd;
     let env = envs.get(base);
-    if (env === undefined) {
-      env = new LocalExecutionEnv({ cwd: base, ...(shellEnv ? { shellEnv: shellEnv as NodeJS.ProcessEnv } : {}) });
+    if (env !== undefined) {
+      // Refresh LRU position on hit.
+      envs.delete(base);
       envs.set(base, env);
+      return env;
     }
+    if (envs.size >= maxCachedEnvs) {
+      const oldest = envs.keys().next().value;
+      if (oldest !== undefined) envs.delete(oldest);
+    }
+    env = new LocalExecutionEnv({ cwd: base, ...(shellEnv ? { shellEnv: shellEnv as NodeJS.ProcessEnv } : {}) });
+    envs.set(base, env);
     return env;
   };
 
@@ -155,29 +184,76 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
     | { kind: 'binary'; reader: BinaryReader }
     | { kind: 'dir'; reader: DirReader };
 
-  const readers = new Map<string, ReaderHandle>();
+  interface ReaderEntry {
+    handle: ReaderHandle;
+    lastUsedAt: number;
+  }
+
+  const readers = new Map<string, ReaderEntry>();
   let readerSeq = 0;
+  let readerSweeper: NodeJS.Timeout | undefined;
+  const stopReaderSweeperIfEmpty = (): void => {
+    if (readers.size === 0 && readerSweeper !== undefined) {
+      clearInterval(readerSweeper);
+      readerSweeper = undefined;
+    }
+  };
+  const sweepExpiredReaders = (now = Date.now()): void => {
+    for (const [id, entry] of [...readers.entries()]) {
+      if (now - entry.lastUsedAt < readerIdleTtlMs) continue;
+      readers.delete(id);
+      void entry.handle.reader.close().catch(() => undefined);
+    }
+    stopReaderSweeperIfEmpty();
+  };
+  const ensureReaderSweeper = (): void => {
+    if (readerSweeper !== undefined || disposed || readers.size === 0) return;
+    const intervalMs = Math.min(30_000, Math.max(25, Math.floor(readerIdleTtlMs / 2)));
+    readerSweeper = setInterval(() => sweepExpiredReaders(), intervalMs);
+    readerSweeper.unref();
+  };
   const putReader = async (handle: ReaderHandle): Promise<string> => {
     if (disposed) {
       await handle.reader.close();
       throw Object.assign(new Error('server disposed'), { code: 'aborted' });
     }
+    const now = Date.now();
+    sweepExpiredReaders(now);
+    if (readers.size >= maxOpenReaders) {
+      await handle.reader.close().catch(() => undefined);
+      throw Object.assign(
+        new Error(`Too many open readers on node (limit: ${maxOpenReaders})`),
+        { code: 'invalid' },
+      );
+    }
     const id = `r${++readerSeq}`;
-    readers.set(id, handle);
+    readers.set(id, { handle, lastUsedAt: now });
+    ensureReaderSweeper();
     return id;
   };
   const getReader = <R extends TextLineReader | BinaryReader | DirReader>(
     readerId: string,
     kind: ReaderHandle['kind'],
   ): R | undefined => {
-    const handle = readers.get(readerId);
-    return handle !== undefined && handle.kind === kind ? (handle.reader as R) : undefined;
+    const entry = readers.get(readerId);
+    if (entry === undefined) return undefined;
+    const now = Date.now();
+    if (now - entry.lastUsedAt >= readerIdleTtlMs) {
+      readers.delete(readerId);
+      stopReaderSweeperIfEmpty();
+      void entry.handle.reader.close().catch(() => undefined);
+      return undefined;
+    }
+    if (entry.handle.kind !== kind) return undefined;
+    entry.lastUsedAt = now;
+    return entry.handle.reader as R;
   };
   const closeReader = async (readerId: string): Promise<void> => {
-    const handle = readers.get(readerId);
-    if (handle === undefined) return;
+    const entry = readers.get(readerId);
+    if (entry === undefined) return;
     readers.delete(readerId);
-    await handle.reader.close().catch(() => undefined);
+    stopReaderSweeperIfEmpty();
+    await entry.handle.reader.close().catch(() => undefined);
   };
 
   type RunningExec = { controller: AbortController };
@@ -300,7 +376,17 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
     },
 
     async envReadTextFile({ path: target, cwd }) {
-      return unwrap(envFor(cwd).readTextFile(target));
+      const env = envFor(cwd);
+      const info = await env.fileInfo(target);
+      if (info.ok && info.value.size > MAX_BINARY_TRANSFER_BYTES) {
+        return invalidInput(`readTextFile result exceeds the ${MAX_BINARY_TRANSFER_BYTES} byte transfer limit`);
+      }
+      const result = await env.readTextFile(target);
+      if (!result.ok) return rpcFail(result.error);
+      if (Buffer.byteLength(result.value, 'utf8') > MAX_BINARY_TRANSFER_BYTES) {
+        return invalidInput(`readTextFile result exceeds the ${MAX_BINARY_TRANSFER_BYTES} byte transfer limit`);
+      }
+      return { ok: true, value: result.value };
     },
     async envReadTextLines({ path: target, maxLines, cwd }) {
       return unwrap(envFor(cwd).readTextLines(target, { maxLines }));
@@ -581,12 +667,16 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
     if (disposal) return disposal;
     disposed = true;
     disposal = (async () => {
+      if (readerSweeper !== undefined) {
+        clearInterval(readerSweeper);
+        readerSweeper = undefined;
+      }
       for (const exec of running.values()) exec.controller.abort(new Error('connection closed'));
       tunnels.destroyAllTunnels();
       await Promise.allSettled([...pendingOperations, ...execWaiters, ...tunnels.getTunnelWaiters()]);
-      const handles = [...readers.values()];
+      const entries = [...readers.values()];
       readers.clear();
-      await Promise.all(handles.map((handle) => handle.reader.close()));
+      await Promise.all(entries.map((entry) => entry.handle.reader.close()));
       running.clear();
       await Promise.all([...envs.values()].map((env) => env.cleanup()));
       envs.clear();
@@ -600,7 +690,10 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
       draining = value === true;
     },
     getActiveExecCount: () => execWaiters.size,
-    getOpenReaderCount: () => readers.size,
+    getOpenReaderCount: () => {
+      sweepExpiredReaders();
+      return readers.size;
+    },
     getActiveTunnelCount: () => tunnels.getActiveTunnelCount(),
   }) as NodeEnvRpcServer;
 }

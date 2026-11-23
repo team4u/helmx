@@ -142,4 +142,32 @@ describe('RemoteExecutionEnv bounded RPC wait for file operations', { timeout: 6
     )
     assert.equal(fileMutationQueueSize(), 0)
   })
+
+  test('openTextLineReader/openBinaryReader/openDirReader abort waitForNodeOnline signal on rpcWaitTimeoutMs without leaking waiters', { timeout: 60_000 }, async () => {
+    let activeWaiters = 0
+    const resolver: NodeRpcResolver = {
+      getNodeEnvRpc: () => undefined,
+      waitForNodeOnline: (_nodeId, ctx) =>
+        new Promise((resolve) => {
+          activeWaiters += 1
+          ctx.abortSignal?.addEventListener(
+            'abort',
+            () => {
+              activeWaiters -= 1
+              resolve(undefined)
+            },
+            { once: true },
+          )
+        }),
+    }
+    const env = new RemoteExecutionEnv(resolver, { nodeId: 'stalled-node', cwd: '/w', rpcWaitTimeoutMs: 60 })
+    for (const op of [
+      () => env.openTextLineReader('/w/a.txt', BACKGROUND_CONTEXT),
+      () => env.openBinaryReader('/w/a.bin', undefined, BACKGROUND_CONTEXT),
+      () => env.openDirReader('/w', BACKGROUND_CONTEXT),
+    ]) {
+      await assert.rejects(op, (err: unknown) => err instanceof HelmxError && err.code === 'node_offline')
+    }
+    assert.equal(activeWaiters, 0, 'child abort signal must clean up pending waitForNodeOnline listeners on timeout')
+  })
 })

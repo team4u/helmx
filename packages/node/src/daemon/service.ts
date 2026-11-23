@@ -11,7 +11,6 @@ import {
   renderServiceSpec as renderOsServiceSpec,
   type OsServiceProfile,
   type OsServiceStatus,
-  type ServiceExec,
   type ServiceOperationOptions,
   type ServiceOperationResult,
   type ServiceSpec,

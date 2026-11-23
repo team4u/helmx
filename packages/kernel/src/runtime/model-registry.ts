@@ -132,6 +132,8 @@ export class ModelRegistry {
   private modelsRefreshAbort: AbortController | undefined
   /** Monotonic generation counter (incremented per published set; prevents in-flight refreshes from publishing stale snapshots). */
   private modelsGeneration = 0
+  /** Monotonic epoch bumped whenever defaults, providers, catalog, or model tiers change (gates startup re-alignment). */
+  private alignmentEpochValue = 0
   /** In-flight usage counter for runtime providers (`providerId` -> active stream/refresh count; teardown preflight). */
   private readonly runtimeProviderUsage = new Map<string, number>()
   /** Retiring markers (held briefly inside the `modelsChain` critical section): ensures newly started streams/refreshes
@@ -186,6 +188,10 @@ export class ModelRegistry {
 
   get models(): Models {
     return this.modelsCurrent
+  }
+
+  get alignmentEpoch(): number {
+    return this.alignmentEpochValue
   }
 
   get refreshAbortController(): AbortController | undefined {
@@ -319,6 +325,10 @@ export class ModelRegistry {
       this.tierSubscriptions.set(impl, typeof unsub === 'function' ? unsub : () => {})
     }
 
+    if (changed) {
+      this.alignmentEpochValue += 1
+    }
+
     if (emitOnDelta && changed) {
       this.events.publish('models.changed', { providers: [] })
       void this.alignAllConversations().catch(() => {})
@@ -327,6 +337,7 @@ export class ModelRegistry {
 
   private async handleTierSourceChanged(): Promise<void> {
     this.assertNoTierIdConflicts(this.readTierProviders())
+    this.alignmentEpochValue += 1
     this.events.publish('models.changed', { providers: [] })
     await this.alignAllConversations()
   }
@@ -471,6 +482,7 @@ export class ModelRegistry {
     }
     this.disabledModels = parseDisabledModelsConfig(raw['disabledModels'])
     this.modelPlaceholder = this.defaultModel ?? 'unconfigured'
+    this.alignmentEpochValue += 1
   }
 
   /** Reasoning effort enum validation callback (host-injected so this module avoids depending on spawn's THINKING_LEVELS). */
@@ -563,6 +575,7 @@ export class ModelRegistry {
     }
     if (nextResolvedModelThinkingLevels !== undefined) this.modelThinkingLevels = nextResolvedModelThinkingLevels
     this.modelPlaceholder = this.defaultModel ?? 'unconfigured'
+    this.alignmentEpochValue += 1
     // Independent override fields: conversations with a model override still inherit the global reasoning effort.
     if (trimmed !== undefined || thinkingLevel !== undefined || updatedModelThinkingLevels) {
       await this.alignAllConversations()
@@ -661,6 +674,7 @@ export class ModelRegistry {
       return merged
     })
     this.modelThinkingLevels = parseModelThinkingLevelsConfig(next['modelThinkingLevels'])
+    this.alignmentEpochValue += 1
     await this.alignAllConversations()
   }
 
@@ -751,11 +765,7 @@ export class ModelRegistry {
   private async rebuildModelsLocked(): Promise<void> {
     if (this.externalModels) return
     const providerConfigs = await this.providersSvc.list()
-    const nextKeys: Record<string, string> = {}
-    for (const id of await this.credentialsSvc.list()) {
-      const key = await this.credentialsSvc.get(id)
-      if (key) nextKeys[id] = key
-    }
+    const nextKeys = await this.credentialsSvc.listAll()
     const collision = providerConfigs.find((config) => this.runtimeProviders.has(config.id))
     if (collision) {
       throw new HelmxError('runtime_provider_conflict', `Gateway '${collision.id}' conflicts with a plugin-registered provider`, 409)
@@ -774,6 +784,7 @@ export class ModelRegistry {
     for (const id of Object.keys(this.apiKeyCache)) delete this.apiKeyCache[id]
     Object.assign(this.apiKeyCache, nextKeys)
     this.modelsGeneration += 1
+    this.alignmentEpochValue += 1
     this.modelsCurrent = models
     this.setModels(this.modelsCurrent)
     this.events.publish('models.changed', { providers: [] })
@@ -938,6 +949,7 @@ export class ModelRegistry {
     const snapshotStale =
       instanceAtStart !== this.modelsCurrent || generationAtStart !== this.modelsGeneration
     if (!snapshotStale) {
+      this.alignmentEpochValue += 1
       this.events.publish('models.changed', { providers: options?.providers ? [...options.providers] : [] })
     }
     return {

@@ -169,9 +169,8 @@ export function createPackageManagerHost(deps: DxCoordinatorDeps): PackageManage
           details: { pluginId: definition.id, dir },
         });
         return { summary, pluginId: definition.id };
-      } catch (err) {
+      } finally {
         releaseTsRoot();
-        throw err;
       }
     },
     enableManagedPlugin: async (pluginId) => {

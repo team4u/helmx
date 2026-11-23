@@ -2233,3 +2233,21 @@ test('productRoutes run authenticated ahead of core dispatch and fall through on
   assert.ok(core.status === 200 || core.status === 404, `core dispatch answered (${core.status})`)
   assert.deepEqual(seen, ['/api/product/hello', '/api/conversations'], 'the product handler was consulted for the core path and declined')
 })
+
+test('jsonOk redaction allows shared-reference acyclic DAGs with undefined properties without throwing 500', { timeout: 60_000 }, async () => {
+  const kernel = makeKernel()
+  const sharedLeaf = { label: 'shared-ok', omitted: undefined }
+  const handler = createHubHandler({
+    kernel,
+    productRoutes: async (request) => {
+      if (new URL(request.url).pathname === '/api/product/shared-dag') {
+        const { jsonOk, makeJsonRedactor } = await import('../src/http/http-utils.js')
+        return jsonOk(makeJsonRedactor((s) => stash.redact(s)), { left: sharedLeaf, right: sharedLeaf })
+      }
+      return undefined
+    },
+  })
+  const res = await call(handler, 'GET', '/api/product/shared-dag')
+  assert.equal(res.status, 200)
+  assert.deepEqual(res.body, { left: { label: 'shared-ok' }, right: { label: 'shared-ok' } })
+})

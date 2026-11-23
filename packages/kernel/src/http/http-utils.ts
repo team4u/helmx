@@ -27,18 +27,27 @@ const identityRedact = (text: string): string => text
 function omitUndefinedProperties(value: unknown, seen: WeakSet<object>): unknown {
   if (value === null || typeof value !== 'object') return value
   if (seen.has(value)) return value // cycle detection is handled by redactJsonValue
-  seen.add(value)
   if (Array.isArray(value)) {
-    return value.map((item) => omitUndefinedProperties(item, seen))
+    seen.add(value)
+    try {
+      return value.map((item) => omitUndefinedProperties(item, seen))
+    } finally {
+      seen.delete(value)
+    }
   }
   const prototype = Object.getPrototypeOf(value)
   if (prototype !== Object.prototype && prototype !== null) return value
-  const out: Record<string, unknown> = {}
-  for (const [key, item] of Object.entries(value)) {
-    if (item === undefined) continue
-    out[key] = omitUndefinedProperties(item, seen)
+  seen.add(value)
+  try {
+    const out: Record<string, unknown> = {}
+    for (const [key, item] of Object.entries(value)) {
+      if (item === undefined) continue
+      out[key] = omitUndefinedProperties(item, seen)
+    }
+    return out
+  } finally {
+    seen.delete(value)
   }
-  return out
 }
 
 export function makeJsonRedactor(redact?: (text: string) => string): JsonRedactor {

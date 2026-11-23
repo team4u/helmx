@@ -179,4 +179,68 @@ test('hub-update apply: busy gate defers, force bypasses, accepted switch answer
   await clearUpdateReady(root);
 });
 
+test('hub-update apply: enforces single-flight 409 lock, rejects >64KiB body with 413, and handles spawn error cleanly', { timeout: 60_000 }, async (t) => {
+  const root = useTempDir(t, 'helmx-hub-routes-guards-');
+  await writeCurrentRelease(root, { version: '1.0.0', updatedAt: new Date().toISOString(), entries: { entryPath: 'start.mjs' } });
+  await writeUpdateReady(root, { version: '1.1.0', entryPath: 'start.mjs', releaseDir: '/fake/releases/1.1.0/uuid', tag: 'latest', stagedAt: new Date().toISOString() });
+  const kernel = { activitySnapshot: () => emptyCounts(), dataDir: join(root, 'data') };
+  const updater = startHubUpdater({ root, pkgName: '@fake/hub', env: {}, dataDir: kernel.dataDir, core: fakeCore({ latest: '1.1.0' }), intervalMs: 3_600_000 });
+  assert.ok(updater !== null);
+  t.after(() => updater.stop());
+
+  let releaseHandoff!: () => void;
+  let handoffEntered!: () => void;
+  const entered = new Promise<void>((r) => { handoffEntered = r; });
+  const gate = new Promise<void>((r) => { releaseHandoff = r; });
+
+  const routes = createHubUpdateRoutes({
+    updater,
+    kernel,
+    root,
+    changelog: { available: false, sourcePath: null, sections: [], version: '1.0.0' },
+    upgrade: { upgradedFrom: null },
+    spawnHandoff: async () => {
+      handoffEntered();
+      await gate;
+      return { pid: 5150 };
+    },
+  });
+
+  const first = routes(makeApply());
+  await entered;
+  const concurrent = await routes(makeApply());
+  assert.ok(concurrent !== undefined && concurrent.status === 409);
+  assert.equal((await concurrent.json()).error.code, 'hub_update_in_progress');
+  releaseHandoff();
+  const firstRes = await first;
+  assert.ok(firstRes !== undefined && firstRes.status === 202);
+
+  // Oversized JSON body is rejected with 413 and releases the single-flight lock in finally.
+  const huge = await routes(
+    new Request('http://x/api/hub-update/apply', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ force: false, pad: 'x'.repeat(70_000) }),
+    }),
+  );
+  assert.ok(huge !== undefined && huge.status === 413);
+  assert.equal((await huge.json()).error.code, 'body_too_large');
+
+  const afterHuge = await routes(makeApply());
+  assert.ok(afterHuge !== undefined && afterHuge.status === 202);
+
+  // Default spawnHandoff without a control record fails cleanly with 500 handoff_spawn_failed instead of crashing.
+  const defaultRoutes = createHubUpdateRoutes({
+    updater,
+    kernel,
+    root,
+    changelog: { available: false, sourcePath: null, sections: [], version: '1.0.0' },
+    upgrade: { upgradedFrom: null },
+  });
+  const noControl = await defaultRoutes(makeApply());
+  assert.ok(noControl !== undefined && noControl.status === 500);
+  assert.equal((await noControl.json()).error.code, 'handoff_spawn_failed');
+  await clearUpdateReady(root);
+});
+
 import { emptyCounts, makeApply } from './updater-helpers.js';

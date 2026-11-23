@@ -16,7 +16,7 @@
  *   an `unknown` error (no auto-retry) and never silently replays unsafe shell commands (external side effects cannot be replayed).
  */
 
-import type { Context } from '@earendil-works/chord/context'
+import { withAbortSignal, type Context } from '@earendil-works/chord/context'
 import {
   ExecutionError,
   FileError,
@@ -169,12 +169,23 @@ export class RemoteExecutionEnv implements ExecutionEnv {
   }
 
   /**
-   * Bounded RPC resolution for file ops (used only by `#call`): caps reconnect wait to `rpcWaitTimeoutMs`.
+   * Bounded RPC resolution for file ops (used by `#call` and reader open paths): caps reconnect wait to `rpcWaitTimeoutMs`.
    * Unbounded waits inside a mutation lock would freeze the file queue until the holder's turn is aborted;
-   * timing out throws `node_offline` (releasing the lock) so callers can retry explicitly once the node returns.
+   * timing out aborts the child context so `NodeRegistry.#waiters` and caller abort listeners never leak,
+   * and throws `node_offline` (releasing the lock) so callers can retry explicitly once the node returns.
    */
   async #rpcBounded(context: Context): Promise<NodeEnvRpcFunctions> {
-    const rpcPromise = this.#rpc(context)
+    const childController = new AbortController()
+    const parentSignal = context.abortSignal
+    const onParentAbort = (): void => {
+      childController.abort(parentSignal?.reason)
+    }
+    if (parentSignal?.aborted) {
+      childController.abort(parentSignal.reason)
+    } else {
+      parentSignal?.addEventListener('abort', onParentAbort, { once: true })
+    }
+    const rpcPromise = this.#rpc(withAbortSignal(childController.signal, context))
     // Observe `rpcPromise` rejection in case the timeout fires first.
     rpcPromise.catch(() => undefined)
     let timer: NodeJS.Timeout | undefined
@@ -183,6 +194,7 @@ export class RemoteExecutionEnv implements ExecutionEnv {
         rpcPromise,
         new Promise<never>((_, reject) => {
           timer = setTimeout(() => {
+            childController.abort()
             reject(new HelmxError(
               'node_offline',
               `node ${this.#nodeIdValue} is offline; reconnect wait exceeded ${this.#rpcWaitTimeoutMs}ms (file operations do not wait unboundedly)`,
@@ -195,6 +207,7 @@ export class RemoteExecutionEnv implements ExecutionEnv {
       ])
     } finally {
       clearTimeout(timer)
+      parentSignal?.removeEventListener('abort', onParentAbort)
     }
   }
 
@@ -236,7 +249,7 @@ export class RemoteExecutionEnv implements ExecutionEnv {
   }
 
   async openTextLineReader(path: string, context: Context): Promise<Result<TextLineReader, FileError>> {
-    const rpc = await this.#rpc(context)
+    const rpc = await this.#rpcBounded(context)
     let readerId: string
     try {
       const result = await rpc.envOpenTextLineReader({ path, cwd: this.cwd })
@@ -284,7 +297,7 @@ export class RemoteExecutionEnv implements ExecutionEnv {
     options: { noFollow?: boolean } | undefined,
     context: Context,
   ): Promise<Result<BinaryReader, FileError>> {
-    const rpc = await this.#rpc(context)
+    const rpc = await this.#rpcBounded(context)
     let readerId: string
     try {
       const result = await rpc.envOpenBinaryReader({ path, noFollow: options?.noFollow, cwd: this.cwd })
@@ -390,7 +403,7 @@ export class RemoteExecutionEnv implements ExecutionEnv {
   }
 
   async openDirReader(path: string, context: Context): Promise<Result<DirReader, FileError>> {
-    const rpc = await this.#rpc(context)
+    const rpc = await this.#rpcBounded(context)
     let readerId: string
     try {
       const result = await rpc.envOpenDirReader({ path, cwd: this.cwd })

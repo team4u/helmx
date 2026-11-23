@@ -72,6 +72,8 @@ interface ConversationServiceOptions {
   readonly toolDeps: { defaultCwd: string }
   /** Release stale backend cache when conversation target changes (host injects envFabric.evictConversation). */
   readonly evictConversationBase: (conversationId: number) => void
+  /** Permanent conversation deletion hook (host cleans up subagent session aliases, etc.). */
+  readonly onConversationDeleted?: (conversationId: number) => void
   /** Plugin conversation management guard (deletion protection; host-injected). */
   readonly managedConversations: Map<number, Set<string>>
   /** Cascade-cancel pending asks (on conversation deletion; host injects asks.cancelByConversation). */
@@ -523,8 +525,12 @@ export class ConversationService {
     return this.profileAlignment.resolveEffectiveThinkingLevel(override, profileId, modelRef, tierThinkingLevel)
   }
 
-  async alignConversationModel(id: number, emitEvent = false): Promise<void> {
-    return this.profileAlignment.alignConversationModel(id, emitEvent)
+  async alignConversationModel(
+    id: number,
+    emitEvent = false,
+    profileCache?: Map<string, Promise<Profile | undefined>>,
+  ): Promise<void> {
+    return this.profileAlignment.alignConversationModel(id, emitEvent, profileCache)
   }
 
   async alignAllConversations(): Promise<void> {
@@ -947,9 +953,10 @@ export class ConversationService {
     // rather than being swallowed into fake success.
     await this.o.cancelAsksByConversation(id)
     await this.artifactsSvc.deleteConversation(id)
-    this.tracker.stopObserving(id)
+    this.tracker.deleteConversation(id)
     this.store.deleteConv(id)
     this.o.evictConversationBase(id)
+    this.o.onConversationDeleted?.(id)
     this.events.publish('conversation.deleted', { conversationId: id })
   }
 
@@ -1346,7 +1353,11 @@ export class ConversationService {
     return this.store.search(query)
   }
 
-  async recover(onMissingMirror: (id: number, parentConversationId: number | undefined) => Promise<void>): Promise<void> {
+  async recover(
+    onMissingMirror: (id: number, parentConversationId: number | undefined) => Promise<void>,
+  ): Promise<{ deferredTierAlignment: boolean }> {
+    const batchProfiles = new Map<string, Promise<Profile | undefined>>()
+    let deferredTierAlignment = false
     let cursor: unknown = undefined
     for (;;) {
       const page = await this.storage.scanConversations(
@@ -1363,18 +1374,20 @@ export class ConversationService {
           await onMissingMirror(id, parent)
         }
         try {
-          await this.alignConversationModel(id)
+          await this.alignConversationModel(id, false, batchProfiles)
         } catch (err) {
           // Cold boot runs recovery before plugins register/prepare (e.g. `builtin:tiers` mounts
           // `tier/*` in `prepare()`), and force-disabled tiers may leave dangling defaults.
           // Defer unresolved tiers to `KernelRuntime.start()` post-plugin alignment; active
           // submissions still fail loudly with 404 model_tier_not_found.
           if (!(err instanceof HelmxError && err.code === 'model_tier_not_found')) throw err
+          deferredTierAlignment = true
         }
         await this.tracker.observe(id)
       }
       if (!page.next) break
       cursor = page.next
     }
+    return { deferredTierAlignment }
   }
 }

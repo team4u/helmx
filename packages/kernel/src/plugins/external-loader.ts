@@ -22,7 +22,7 @@
  * - `.ts` / `.tsx` / `.mts` / `.cts` entrypoints are transpiled in-process by `backend-ts-loader`.
  * - IO errors: only ENOENT / ENOTDIR count as missing files; EACCES and other IO errors throw explicitly.
  */
-import { lstatSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { lstatSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
@@ -455,6 +455,13 @@ export function verifyDeclaredPrebuiltDir(dirPath: string): string | undefined {
   return verifyPrebuiltClientDir(prebuiltRoot, dirPath).rootReal;
 }
 
+/** Package-internal mapping from normalized external `PluginDefinition` to its canonical source root directory (`realpath`), allowing `PluginHost` to bind `registerPluginTsRoot` to the registered plugin instance lifetime. */
+const definitionTsRoots = new WeakMap<PluginDefinition, string>();
+
+export function getDefinitionTsRoot(definition: PluginDefinition): string | undefined {
+  return definitionTsRoots.get(definition);
+}
+
 export function normalizeDefinition(definition: PluginDefinition, dirPath: string): PluginDefinition {
   const normalized = { ...definition };
   delete normalized.locked;
@@ -504,6 +511,7 @@ export function normalizeDefinition(definition: PluginDefinition, dirPath: strin
       const resolvedRoot = resolve(dirPath, helmxClientRoot);
       assertContainedInPluginDir(dirPath, dirReal, helmxClientRoot, resolvedRoot, 'clientRoot');
       normalized.clientRoot = resolvedRoot;
+      definitionTsRoots.set(normalized, dirReal);
       return normalized;
     }
     if (normalized.prebuiltClientDir === undefined) {
@@ -511,6 +519,7 @@ export function normalizeDefinition(definition: PluginDefinition, dirPath: strin
     } else {
       delete normalized.clientRoot;
     }
+    definitionTsRoots.set(normalized, dirReal);
     return normalized;
   }
   if (typeof clientRoot !== 'string' || clientRoot.length === 0) {
@@ -526,6 +535,7 @@ export function normalizeDefinition(definition: PluginDefinition, dirPath: strin
     assertContainedInPluginDir(dirPath, dirReal, clientRoot, resolvedRoot, 'clientRoot');
     normalized.clientRoot = resolvedRoot;
   }
+  definitionTsRoots.set(normalized, dirReal);
   return normalized;
 }
 
@@ -658,7 +668,6 @@ export async function reloadExternalPlugin(
     );
   }
   const releaseTsRoot = registerPluginTsRoot(sourceDir, { transform: tsTransformOf(plugins) });
-  let committed = false;
   try {
     const generation = nextPluginGeneration(sourceDir);
     const definition = normalizeDefinition(
@@ -676,7 +685,6 @@ export async function reloadExternalPlugin(
     await plugins.unregister(pluginId);
     try {
       await plugins.register(definition, { enabled: wasEnabled });
-      committed = true;
     } catch (err) {
       // Swap failed: attempt best-effort rollback to the pre-reload definition without masking the root error.
       let rollbackError: unknown;
@@ -714,6 +722,6 @@ export async function reloadExternalPlugin(
     }
     return { pluginId, wasEnabled, generation };
   } finally {
-    if (!committed) releaseTsRoot();
+    releaseTsRoot();
   }
 }

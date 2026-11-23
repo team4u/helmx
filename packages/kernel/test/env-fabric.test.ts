@@ -19,6 +19,8 @@
 import { describe, it, before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import http from 'node:http'
+import net from 'node:net'
+import { PassThrough } from 'node:stream'
 import { mkdtemp, writeFile, readFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
@@ -403,6 +405,35 @@ describe('EnvFabric node connectivity and remote execution', { timeout: 60_000 }
       assert.ok(received.some((e) => e.text.includes('new-gen')), 'new generation output continues routing to sink')
       void countAfterDisconnect
       await daemon2.close()
+    } finally {
+      await hub.close()
+    }
+  })
+
+  it('malformed WS upgrade URL destroys socket cleanly without crashing server, and TunnelTable.grant destroys orphan duplex', { timeout: 60_000 }, async () => {
+    const hub = await startFabricHub(() => false)
+    try {
+      const port = Number(new URL(hub.baseUrl).port)
+      await new Promise<void>((resolve) => {
+        const sock = net.connect(port, '127.0.0.1', () => {
+          sock.write(
+            'GET http://[invalid/ws/node HTTP/1.1\r\n' +
+              'Host: 127.0.0.1\r\n' +
+              'Upgrade: websocket\r\n' +
+              'Connection: Upgrade\r\n' +
+              'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n' +
+              'Sec-WebSocket-Version: 13\r\n\r\n',
+          )
+        })
+        sock.on('error', () => resolve())
+        sock.on('close', () => resolve())
+      })
+
+      const { TunnelTable } = await import('../src/env/tunnel-table.js')
+      const table = new TunnelTable()
+      const orphan = new PassThrough()
+      table.grant('missing-tunnel-id', orphan)
+      assert.equal(orphan.destroyed, true, 'orphan tunnel duplex must be destroyed immediately')
     } finally {
       await hub.close()
     }

@@ -42,7 +42,7 @@
  * - Trusted plugins can still bypass this queue via `node:fs` or `bash` directly (no sandbox promise).
  */
 
-import { BACKGROUND_CONTEXT, withAbortSignal, type Context } from '@earendil-works/chord/context'
+import type { Context } from '@earendil-works/chord/context'
 import type { ExecutionEnv, FileError } from '@earendil-works/pi-durable/env'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { realpath } from 'node:fs/promises'

@@ -102,3 +102,44 @@ test('valid 64MiB base64 write succeeds without padding deducting from byte quot
   assert.equal(result.ok, true, result.ok ? undefined : result.error.message);
   assert.equal((await fs.stat(path.join(dir, 'edge.bin'))).size, LIMIT);
 });
+
+test('envReadTextFile enforces 64MiB cap, and readers enforce maxOpenReaders and readerIdleTtlMs', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helmx-text-and-readers-bounds-');
+  const server = createNodeEnvRpcServer({
+    defaultCwd: dir,
+    maxCachedEnvs: 2,
+    maxOpenReaders: 2,
+    readerIdleTtlMs: 30,
+  });
+  t.after(() => server.dispose());
+
+  // Sparse 64MiB + 1 text file is rejected before reading into memory.
+  await fs.writeFile(path.join(dir, 'huge.txt'), 'x');
+  await fs.truncate(path.join(dir, 'huge.txt'), LIMIT + 1);
+  const textTooBig = await server.envReadTextFile({ path: 'huge.txt' });
+  assert.equal(textTooBig.ok, false);
+  assert.equal(!textTooBig.ok && textTooBig.error.code, 'invalid');
+  assert.match(!textTooBig.ok && textTooBig.error.message, /transfer limit/);
+
+  // Bounded LRU envs across > maxCachedEnvs cwds keep working seamlessly.
+  for (const sub of ['c1', 'c2', 'c3', 'c4']) {
+    const subDir = path.join(dir, sub);
+    await fs.mkdir(subDir, { recursive: true });
+    await fs.writeFile(path.join(subDir, 'f.txt'), sub);
+    const read = await server.envReadTextFile({ path: 'f.txt', cwd: subDir });
+    assert.equal(read.ok && read.value, sub);
+  }
+
+  // maxOpenReaders rejects once full, then allows opening again after idle TTL sweeps expired readers.
+  await fs.writeFile(path.join(dir, 'lines.txt'), 'l1\nl2\n');
+  const r1 = await server.envOpenTextLineReader({ path: 'lines.txt' });
+  const r2 = await server.envOpenTextLineReader({ path: 'lines.txt' });
+  assert.equal(r1.ok && r2.ok, true);
+  const r3 = await server.envOpenTextLineReader({ path: 'lines.txt' });
+  assert.equal(r3.ok, false, 'exceeding maxOpenReaders must fail');
+
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  const r4 = await server.envOpenTextLineReader({ path: 'lines.txt' });
+  assert.equal(r4.ok, true, 'idle TTL sweep should reclaim expired readers');
+  if (r4.ok) await server.envTextReaderClose({ readerId: r4.value.readerId });
+});

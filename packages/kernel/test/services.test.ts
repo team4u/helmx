@@ -1398,6 +1398,53 @@ test('cross-process lock regression: waits during write grace window for fresh e
   assert.ok(!existsSync(lockFile))
 })
 
+test('watcher ignores .tmp-<pid> atomic tempfiles and non-recursive mode; SecretStash 1-char streaming redactor and ArtifactService.readSlice work accurately', { timeout: 60_000 }, async () => {
+  const dataDir = await freshDataDir()
+  await mkdir(join(dataDir, 'nested'), { recursive: true })
+  const seen: string[] = []
+  const watcher = new AssetWatcher(
+    dataDir,
+    (paths) => seen.push(...paths),
+    {
+      recursive: false,
+      debounceMs: 30,
+      onError: (err) => assert.fail(`non-recursive watcher error: ${String(err)}`),
+    },
+  )
+  watcher.start()
+  try {
+    await writeFile(join(dataDir, 'hub-activity.json.tmp-4242'), '{}')
+    await writeFile(join(dataDir, 'nested', 'ignored.json'), '{}')
+    await writeFile(join(dataDir, 'config.json'), '{"ok":true}')
+    await waitFor(() => seen.includes('config.json'))
+    for (const p of seen) {
+      assert.ok(!p.includes('.tmp-'), `must ignore .tmp-<pid> tempfile, got ${p}`)
+      assert.ok(!p.startsWith('nested/'), `non-recursive watcher must ignore nested path, got ${p}`)
+    }
+  } finally {
+    watcher.close()
+  }
+
+  // SecretStash 1-char streaming redactor must not drop buffered text via slice(-0).
+  const stash = new SecretStash()
+  stash.addRedaction('Z')
+  const redactor = stash.createStreamingRedactor()
+  const out = redactor.push('alpha') + redactor.push('Zomega') + redactor.flush()
+  assert.equal(out, 'alpha[REDACTED]omega')
+
+  // ArtifactService.readSlice reads positioned byte window without reading entire file.
+  const repo = new InMemoryArtifactRepository()
+  const artifacts = new ArtifactService(dataDir, repo, stash)
+  const uploaded = await artifacts.writeUploaded(1, {
+    name: 'slice.bin',
+    bytes: Buffer.from('0123456789abcdef', 'utf8'),
+    mimeType: 'text/plain',
+  })
+  const res = await artifacts.readSlice(uploaded.id, 4, 6)
+  assert.equal(res.totalSize, 16)
+  assert.equal(Buffer.from(res.slice).toString('utf8'), '456789')
+})
+
 test('cleanup temp directory', { timeout: 60_000 }, async () => {
   await rm(scratchRoot, { recursive: true, force: true })
   const res = spawnSync('tsx', ['--version'], { encoding: 'utf8' })

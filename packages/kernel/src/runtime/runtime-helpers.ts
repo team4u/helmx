@@ -8,18 +8,16 @@ import { join } from 'node:path'
 import { BACKGROUND_CONTEXT, type Context } from '@earendil-works/chord/context'
 import type { JsonValue } from '@earendil-works/chord/json'
 import type { Conversation, EntryId, EntryRecord, ToolExecutionResult } from '@earendil-works/pi-durable'
-import type { ConversationSummary, JsonSchema, PluginToolTextBlock } from '@helmx/protocol'
+import type { JsonSchema, PluginToolTextBlock } from '@helmx/protocol'
 import type { Models } from '@earendil-works/pi-ai'
 import {
   HelmxError,
   assertBoundedPresentationMeta,
   assertProfileId,
-  escapeXml,
   isPlainObject,
   safeResultText,
   validateOrThrow,
 } from '@helmx/protocol'
-import type { ConvMeta } from './store.js'
 import { getCurrentTools } from '@earendil-works/pi-ai/utils/transcript'
 import type { HelmxStore } from './store.js'
 import { requireModelRef } from './models.js'
@@ -794,7 +792,6 @@ export function projectToolPromptSections(
     const lines = guidelines.flatMap((tool) => tool.promptGuidelines!.map((item) => `- ${tool.name}: ${item}`))
     desired.set('prompt.tools.guidelines', `Available tool guidelines:\n${lines.join('\n')}`)
   }
-  const projectedIds = new Set([...desired.keys()])
   const isManaged = (id: string) =>
     id === 'prompt.tools.guidelines' || id.startsWith('prompt.tools.')
   let changed = false
@@ -964,40 +961,8 @@ function currentToolNames(messages: ReadonlyArray<Record<string, unknown>>): str
 }
 
 // ---------------------------------------------------------------------------
-// Conversation summary fallback / error normalization
+// Error normalization
 // ---------------------------------------------------------------------------
-
-export function summaryOfFallback(
-  meta: ConvMeta,
-  status: ConversationSummary['status'],
-  pendingAskCount: number,
-  pendingAskSince?: number,
-): ConversationSummary {
-  return {
-    id: meta.id,
-    title: meta.title,
-    profileId: meta.profileId,
-    tags: meta.tags,
-    ...(meta as { parentConversationId?: number }).parentConversationId !== undefined
-      ? { parentConversationId: (meta as { parentConversationId?: number }).parentConversationId }
-      : {},
-    cwd: meta.cwd,
-    model: meta.model,
-    thinkingLevel: meta.thinkingLevel,
-    ...(meta.thinkingLevelOverride !== undefined ? { thinkingLevelOverride: meta.thinkingLevelOverride } : {}),
-    status,
-    stateChangeSeq: meta.stateChangeSeq,
-    completionSeq: meta.completionSeq,
-    unread: meta.unread,
-    pinned: meta.pinned,
-    pendingAskCount,
-    runDurationMs: meta.runDurationMs,
-    ...(meta.runStartedAt !== undefined ? { runStartedAt: meta.runStartedAt } : {}),
-    ...(pendingAskCount > 0 && pendingAskSince !== undefined ? { pendingAskSince } : {}),
-    createdAt: meta.createdAt,
-    updatedAt: meta.updatedAt,
-  }
-}
 
 export function normalizeBusyError(error: unknown): unknown {
   const name = (error as { name?: string })?.name

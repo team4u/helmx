@@ -31,7 +31,6 @@ import {
   type NodeHealthSnapshot,
   type NodeHeartbeatInput,
   type NodeRegisterInput,
-  type NodeTunnelHello,
   type NodeTunnelOpenInput,
   type NodeTunnelTarget,
 } from '@helmx/protocol'
@@ -275,7 +274,10 @@ export class NodeRegistry {
   }
 
   removeOutputSink(nodeId: string, sink: (event: EnvExecOutputEvent) => void): void {
-    this.#outputSinks.get(nodeId)?.delete(sink)
+    const set = this.#outputSinks.get(nodeId)
+    if (set === undefined) return
+    set.delete(sink)
+    if (set.size === 0) this.#outputSinks.delete(nodeId)
   }
 
   /**

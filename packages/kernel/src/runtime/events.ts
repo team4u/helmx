@@ -238,16 +238,18 @@ export class EventHub {
     const nextRev = (this.liveRevs.get(validated.conversationId) ?? 0) + 1
     this.liveRevs.set(validated.conversationId, nextRev)
     const stamped: ConversationLive = { ...validated, rev: nextRev }
-    const prevBase = this.latestLiveDeltaBase.get(stamped.conversationId)
-    let chunk: Uint8Array
-    if (prevBase !== undefined && prevBase.rev !== undefined) {
-      const deltaFrame: HelmxTransientLiveDeltaFrame = {
-        delta: diffConversationLive(prevBase, stamped, prevBase.rev, nextRev),
+    let chunk: Uint8Array | undefined
+    if (this.transientStreamSenders.size > 0) {
+      const prevBase = this.latestLiveDeltaBase.get(stamped.conversationId)
+      if (prevBase !== undefined && prevBase.rev !== undefined) {
+        const deltaFrame: HelmxTransientLiveDeltaFrame = {
+          delta: diffConversationLive(prevBase, stamped, prevBase.rev, nextRev),
+        }
+        chunk = encodeSseChunk('conversation.live.delta', deltaFrame)
+      } else {
+        const fullFrame: HelmxTransientLiveFrame = { live: stamped }
+        chunk = encodeSseChunk('conversation.live', fullFrame)
       }
-      chunk = encodeSseChunk('conversation.live.delta', deltaFrame)
-    } else {
-      const fullFrame: HelmxTransientLiveFrame = { live: stamped }
-      chunk = encodeSseChunk('conversation.live', fullFrame)
     }
     if (isActiveLiveView(stamped)) {
       this.latestLives.set(stamped.conversationId, stamped)
@@ -256,19 +258,23 @@ export class EventHub {
       this.latestLives.delete(stamped.conversationId)
       this.latestLiveDeltaBase.delete(stamped.conversationId)
     }
-    for (const send of [...this.transientStreamSenders]) {
-      try {
-        send(chunk)
-      } catch {
-        // isolate broken stream sender (stream cleanup already ran on shutdown)
+    if (chunk !== undefined) {
+      for (const send of [...this.transientStreamSenders]) {
+        try {
+          send(chunk)
+        } catch {
+          // isolate broken stream sender (stream cleanup already ran on shutdown)
+        }
       }
     }
-    const listenerFrame: HelmxTransientLiveFrame = { live: validated }
-    for (const listen of [...this.transientListeners]) {
-      try {
-        listen(listenerFrame)
-      } catch {
-        // isolate broken programmatic listener
+    if (this.transientListeners.size > 0) {
+      const listenerFrame: HelmxTransientLiveFrame = { live: validated }
+      for (const listen of [...this.transientListeners]) {
+        try {
+          listen(listenerFrame)
+        } catch {
+          // isolate broken programmatic listener
+        }
       }
     }
     return this.hostDispatcher?.({ type: 'conversation.live', live: validated })
@@ -643,7 +649,7 @@ function isActiveLiveView(live: ConversationLive): boolean {
  */
 export class SessionDocEventHub {
   private seqValue = 0
-  private readonly subscribers = new Map<string, Set<(frame: HelmxEventFrame) => void>>()
+  private readonly subscribers = new Map<string, Set<(frame: HelmxEventFrame, getSingleChunk: () => Uint8Array) => void>>()
   /** Close handles for each dedicated stream (used by close()/set-close; multiple connections to the same tuple register independently). */
   private readonly streams = new Set<SessionDocStreamEntry>()
   /** Max pending frames buffered between subscription setup and snapshot flush (overflow closes stream to reconnect). */
@@ -708,27 +714,30 @@ export class SessionDocEventHub {
   dispatch(payload: unknown): void {
     const clean = redactJsonValue(assertSessionDocUpdateShape(payload), (t) => this.redactFn(t)) as PublicPluginSessionDoc
     this.seqValue += 1
+    const key = SessionDocEventHub.keyOf(clean)
+    const subs = this.subscribers.get(key)
+    if (subs === undefined || subs.size === 0) return
     const frame: HelmxEventFrame = {
       seq: this.seqValue,
       event: { type: 'plugin.session_doc.updated', doc: clean },
     }
-    const key = SessionDocEventHub.keyOf(clean)
-    for (const deliver of [...(this.subscribers.get(key) ?? [])]) {
+    let cachedChunk: Uint8Array | undefined
+    const getSingleChunk = (): Uint8Array => {
+      cachedChunk ??= encodeSseChunk('plugin.session_doc.updated', frame)
+      return cachedChunk
+    }
+    for (const deliver of [...subs]) {
       try {
-        deliver(frame)
+        deliver(frame, getSingleChunk)
       } catch {
         // Isolate subscriber callback throws without affecting other subscribers.
       }
     }
   }
 
-  /**
-   * Subscribe to incremental frames for a specific tuple; returns an unsubscribe function.
-   * Matches EventHub.subscribe semantics: HTTP layer subscribes+buffers first, then captures a synchronous snapshot.
-   */
-  subscribe(
+  private subscribeWithChunk(
     doc: { pluginId: string; name: string; conversationId: number },
-    listener: (frame: HelmxEventFrame) => void,
+    listener: (frame: HelmxEventFrame, getSingleChunk: () => Uint8Array) => void,
   ): () => void {
     const key = SessionDocEventHub.keyOf(doc)
     let set = this.subscribers.get(key)
@@ -743,6 +752,17 @@ export class SessionDocEventHub {
       cur.delete(listener)
       if (cur.size === 0) this.subscribers.delete(key)
     }
+  }
+
+  /**
+   * Subscribe to incremental frames for a specific tuple; returns an unsubscribe function.
+   * Matches EventHub.subscribe semantics: HTTP layer subscribes+buffers first, then captures a synchronous snapshot.
+   */
+  subscribe(
+    doc: { pluginId: string; name: string; conversationId: number },
+    listener: (frame: HelmxEventFrame) => void,
+  ): () => void {
+    return this.subscribeWithChunk(doc, (frame) => listener(frame))
   }
 
   /**
@@ -786,9 +806,9 @@ export class SessionDocEventHub {
     })
 
     // Subscribe+buffer first (same sync window as snapshot read so no frames are lost; buffered frames keep seq for deduplication).
-    unsubscribe = this.subscribe(options.target, (frame) => {
+    unsubscribe = this.subscribeWithChunk(options.target, (frame, getSingleChunk) => {
       if (stream.closed) return
-      const chunk = encodeSseChunk('plugin.session_doc.updated', frame)
+      const chunk = getSingleChunk()
       if (streaming) {
         if (!stream.write(chunk)) stream.close()
         return

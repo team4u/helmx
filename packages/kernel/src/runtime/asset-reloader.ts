@@ -10,6 +10,8 @@
  * 5. Shutdown ordering guarantee: `stop()` halts new events and clears debounce timers first, then `waitForInflight()` awaits in-flight reloads.
  */
 
+import { statSync } from 'node:fs'
+import { join } from 'node:path'
 import { AssetWatcher } from '../services/index.js'
 
 interface AssetReloaderOptions {
@@ -20,18 +22,32 @@ interface AssetReloaderOptions {
   readonly reloadModels: () => Promise<void>
   /** Trigger plugin config mirror refresh (e.g., `pluginConfig.load()`). */
   readonly reloadPluginConfig: () => Promise<void>
+  /** Optional callback to invalidate `ProfileService` in-memory cache when `profiles/**` changes on disk. */
+  readonly invalidateProfiles?: () => void
   /** Error notification publisher (e.g., emitted as an event `'notification'`). */
   readonly notifyError: (title: string, error: unknown) => void
   /** Custom watcher factory (primarily for injecting mock watchers in tests). */
   readonly createWatcher?: (
     dir: string,
     onChange: (paths: string[]) => void,
-    options: { onError: (err: Error) => void },
+    options: { recursive?: boolean; onError: (err: Error) => void },
   ) => { start(): void; close(): void }
+}
+
+const WATCHED_SUBDIRS = ['profiles', 'skills'] as const
+type WatchedSubdir = (typeof WATCHED_SUBDIRS)[number]
+
+function isExistingDirectory(dir: string): boolean {
+  try {
+    return statSync(dir).isDirectory()
+  } catch {
+    return false
+  }
 }
 
 export class AssetReloader {
   private watcher: { start(): void; close(): void } | undefined
+  private readonly subdirWatchers = new Map<WatchedSubdir, { start(): void; close(): void }>()
   /** Serialized `reloadModels` chain + debounce coalescing (shared by providers/credentials hot reloads). */
   private reloadChain: Promise<void> = Promise.resolve()
   /** In-flight `reloadPluginConfig` chain. */
@@ -41,29 +57,67 @@ export class AssetReloader {
 
   constructor(private readonly options: AssetReloaderOptions) {}
 
+  private createWatcherInstance(
+    dir: string,
+    onChange: (paths: string[]) => void,
+    recursive: boolean,
+    onError: (err: Error) => void,
+  ): { start(): void; close(): void } {
+    const create =
+      this.options.createWatcher ??
+      ((targetDir, cb, opts) => new AssetWatcher(targetDir, cb, opts))
+    return create(dir, onChange, { recursive, onError })
+  }
+
+  private ensureSubdirWatcher(subdir: WatchedSubdir): void {
+    if (this.closed || this.subdirWatchers.has(subdir)) return
+    const dir = join(this.options.dataDir, subdir)
+    if (!isExistingDirectory(dir)) return
+    const subWatcher = this.createWatcherInstance(
+      dir,
+      (changed) => {
+        this.onAssetsChanged(changed.map((rel) => `${subdir}/${rel}`))
+      },
+      true,
+      (err) => {
+        const code = (err as NodeJS.ErrnoException).code
+        if (code === 'ENOENT') {
+          subWatcher.close()
+          if (this.subdirWatchers.get(subdir) === subWatcher) {
+            this.subdirWatchers.delete(subdir)
+          }
+          return
+        }
+        this.options.notifyError('Asset hot-reload watcher failed', err)
+      },
+    )
+    this.subdirWatchers.set(subdir, subWatcher)
+    subWatcher.start()
+  }
+
   /**
-   * Start asset watching.
-   * Watches only static asset paths (`providers.json` / `credentials.json` / `config.json` /
-   * `profiles/**` / `skills/**`), excluding `state.sqlite`, artifacts, workflows, plugin data directories,
-   * and temp files — those are not config inputs and watching them only adds noise.
-   * When `models` are injected (external/test `Models`), ownership belongs to the caller and models are never rebuilt.
+   * Start asset watching:
+   * - Top-level `dataDir` is watched non-recursively (`{ recursive: false }`) for `providers.json`,
+   *   `credentials.json`, and `config.json`, avoiding recursive inotify watches on `artifacts/`,
+   *   SQLite WAL files, `plugins/`, and `installed-plugins/<pkg>/node_modules/`;
+   * - Targeted recursive watchers (`{ recursive: true }`) attach ONLY to `profiles/` and `skills/`
+   *   subdirectories (attached lazily if created after `start()`).
    */
   start(): void {
     if (this.closed || this.watcher) return
-    const create =
-      this.options.createWatcher ??
-      ((dir, onChange, opts) => new AssetWatcher(dir, onChange, opts))
-    this.watcher = create(
+    this.watcher = this.createWatcherInstance(
       this.options.dataDir,
       (changed) => this.onAssetsChanged(changed),
-      {
-        onError: (err) => {
-          // Watcher failures are explicitly notified rather than silently swallowed (hot reload degrades without affecting main flow).
-          this.options.notifyError('Asset hot-reload watcher failed', err)
-        },
+      false,
+      (err) => {
+        // Watcher failures are explicitly notified rather than silently swallowed (hot reload degrades without affecting main flow).
+        this.options.notifyError('Asset hot-reload watcher failed', err)
       },
     )
     this.watcher.start()
+    for (const subdir of WATCHED_SUBDIRS) {
+      this.ensureSubdirWatcher(subdir)
+    }
   }
 
   /** Dispatch changed asset paths. */
@@ -72,18 +126,23 @@ export class AssetReloader {
     let providersTouched = false
     let credentialsTouched = false
     let configTouched = false
-    let profilesOrSkills = false
+    let profilesTouched = false
+    let skillsTouched = false
     for (const rel of changedPaths) {
-      const [head, second] = rel.split('/')
+      const [head] = rel.split('/')
       if (head === 'providers.json') providersTouched = true
       else if (head === 'credentials.json') credentialsTouched = true
       else if (head === 'config.json') configTouched = true
-      else if (head === 'profiles' || head === 'skills') profilesOrSkills = true
-      else continue
-      void second
+      else if (head === 'profiles') profilesTouched = true
+      else if (head === 'skills') skillsTouched = true
     }
-    // `profiles` and `skills` are read fresh on every `before_turn`, so no cache invalidation is needed.
-    void profilesOrSkills
+    if (profilesTouched) {
+      this.options.invalidateProfiles?.()
+      if (this.watcher !== undefined) this.ensureSubdirWatcher('profiles')
+    }
+    if (skillsTouched && this.watcher !== undefined) {
+      this.ensureSubdirWatcher('skills')
+    }
     if (configTouched) {
       // Refresh plugin config mirror (explicitly notify on read failure rather than swallowing).
       this.reloadConfigChain = this.reloadConfigChain
@@ -123,6 +182,10 @@ export class AssetReloader {
     }
     this.watcher?.close()
     this.watcher = undefined
+    for (const sub of this.subdirWatchers.values()) {
+      sub.close()
+    }
+    this.subdirWatchers.clear()
   }
 
   /**

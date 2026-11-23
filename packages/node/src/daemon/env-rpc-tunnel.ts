@@ -159,15 +159,17 @@ export function createTunnelHandler(options: TunnelHandlerOptions): TunnelHandle
       teardownTunnel(tunnel);
     };
     tcp.on('error', onTcpError);
+    let onConnectAbort: (() => void) | undefined;
     try {
       await new Promise<void>((resolve, reject) => {
+        onConnectAbort = () => reject(Object.assign(new Error('tunnel aborted'), { code: 'aborted' }));
+        if (tunnel.controller.signal.aborted) {
+          onConnectAbort();
+          return;
+        }
         tcp.once('connect', () => resolve());
         tcp.once('error', (error) => reject(connectFailed(error.message)));
-        tunnel.controller.signal.addEventListener(
-          'abort',
-          () => reject(Object.assign(new Error('tunnel aborted'), { code: 'aborted' })),
-          { once: true },
-        );
+        tunnel.controller.signal.addEventListener('abort', onConnectAbort, { once: true });
       });
     } catch {
       if (!settled) {
@@ -179,6 +181,10 @@ export function createTunnelHandler(options: TunnelHandlerOptions): TunnelHandle
       }
       teardownTunnel(tunnel);
       return await rpcResult;
+    } finally {
+      if (onConnectAbort !== undefined) {
+        tunnel.controller.signal.removeEventListener('abort', onConnectAbort);
+      }
     }
     // Pause TCP while the WS tunnel handshake runs so early server banners are buffered, not dropped.
     tcp.pause();
@@ -208,13 +214,15 @@ export function createTunnelHandler(options: TunnelHandlerOptions): TunnelHandle
       () => undefined,
     );
     let duplex: Duplex;
+    let onHandshakeAbort: (() => void) | undefined;
     try {
       duplex = await new Promise<Duplex>((resolve, reject) => {
-        tunnel.controller.signal.addEventListener(
-          'abort',
-          () => reject(Object.assign(new Error('tunnel aborted'), { code: 'aborted' })),
-          { once: true },
-        );
+        onHandshakeAbort = () => reject(Object.assign(new Error('tunnel aborted'), { code: 'aborted' }));
+        if (tunnel.controller.signal.aborted) {
+          onHandshakeAbort();
+          return;
+        }
+        tunnel.controller.signal.addEventListener('abort', onHandshakeAbort, { once: true });
         streamPromise.then(
           (stream) => resolve(stream),
           (error) => reject(error),
@@ -226,6 +234,10 @@ export function createTunnelHandler(options: TunnelHandlerOptions): TunnelHandle
       settleOnce(rpcFail(error));
       teardownTunnel(tunnel);
       return await rpcResult;
+    } finally {
+      if (onHandshakeAbort !== undefined) {
+        tunnel.controller.signal.removeEventListener('abort', onHandshakeAbort);
+      }
     }
     if (settled || activeTunnels.get(tunnelId) !== tunnel) {
       handshakeDone = true;
@@ -239,6 +251,7 @@ export function createTunnelHandler(options: TunnelHandlerOptions): TunnelHandle
     settleOnce({ ok: true, value: null });
     // Let normal FIN/EOF propagate through `pipe()` before tearing down; force-destroy on error/close/abort.
     const teardown = (): void => teardownTunnel(tunnel);
+    tcp.once('close', teardown);
     duplex.once('error', teardown);
     duplex.once('close', teardown);
     duplex.once('aborted', teardown);

@@ -94,16 +94,22 @@ try {
     const heldControl = control;
     try {
       try {
-        await activeHeartbeat.stop();
-      } finally {
         try {
-          await listeningHub.close();
+          try {
+            await activeHeartbeat.stop();
+          } finally {
+            await listeningHub.close();
+          }
         } finally {
           await app.close();
         }
+      } finally {
+        try {
+          await updater?.stop();
+        } finally {
+          await heldControl?.close();
+        }
       }
-      await updater?.stop();
-      await heldControl?.close();
     } catch (error) {
       process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
       process.exitCode = 1;
@@ -127,7 +133,10 @@ try {
   // failed: close them cleanly before the kernel so no half-started listener or stale record outlives the process.
   if (heartbeat !== undefined) await heartbeat.stop().catch(() => undefined);
   if (hub !== undefined) await hub.close().catch(() => undefined);
-  await app.close();
-  await updater?.stop().catch(() => undefined);
+  try {
+    await app.close();
+  } finally {
+    await updater?.stop().catch(() => undefined);
+  }
   throw error;
 }

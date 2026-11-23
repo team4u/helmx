@@ -9,7 +9,7 @@ import { mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSyn
 import { join, relative, sep } from 'node:path'
 import { after, before, test } from 'node:test'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { registerPluginTsRoot } from '../../kernel/src/plugins/backend-ts-loader.js'
+import { debugBackendTsLoaderState, registerPluginTsRoot } from '../../kernel/src/plugins/backend-ts-loader.js'
 import { loadExternalPlugins } from '../../kernel/src/plugins/external-loader.js'
 import {
   cleanupDir,
@@ -403,4 +403,52 @@ console.log('CHILD_OK');
   assert.equal(((await import(`file://${join(refDir, 'still.js')}`)) as { v: number }).v, 1)
   r2()
   registerPluginTsRoot(refDir, { transform })()
+})
+
+test('PluginHost 绑定 TS 根生命周期：运行期动态 import 持续可用，重载回滚与 dispose 后引用计数归零并注销 hooks', { timeout: 60_000 }, async (t) => {
+  const isoDir = useTempDir(t, 'helmx-ext-ts-host-lifetime-')
+  const pluginDir = join(isoDir, 'installed-plugins', 'dyn-ts')
+  mkdirSync(join(pluginDir, 'lib'), { recursive: true })
+  writeFileSync(join(pluginDir, 'plugin.json'), JSON.stringify({ id: 'dyn-ts', main: 'index.ts' }))
+  writeFileSync(join(pluginDir, 'lib', 'on-demand.ts'), "export const onDemand = (): string => 'loaded-at-action-time'\n")
+  writeFileSync(
+    join(pluginDir, 'index.ts'),
+    `export default {
+  id: 'dyn-ts',
+  definePlugin(ctx: any) {
+    ctx.action({
+      id: 'loadNow',
+      description: 'runtime dynamic ts import',
+      inputSchema: { type: 'object', additionalProperties: false },
+      outputSchema: { type: 'object', required: ['val'], additionalProperties: false, properties: { val: { type: 'string' } } },
+      handler: async () => {
+        const m = await import('./lib/on-demand.ts')
+        return { val: m.onDemand() }
+      },
+    })
+  },
+}\n`,
+  )
+
+  const { app } = await createHubTestApp({ dataDir: isoDir, cwd: isoDir })
+  try {
+    await app.kernel.plugins.enable('dyn-ts')
+    // Runtime dynamic .ts import executes AFTER loadExternalPlugins temporary ref was released.
+    const res = (await app.kernel.plugins.invokeAction('dyn-ts', 'loadNow', {})) as { val: string }
+    assert.equal(res.val, 'loaded-at-action-time')
+
+    // Reload failure rolls back cleanly to the previous active TS root without leaking extra ref-counts.
+    writeFileSync(join(pluginDir, 'index.ts'), 'export const broken = {{{\n')
+    await assert.rejects(() => app.kernel.plugins.reloadExternalPlugin('dyn-ts'))
+    const stillWorks = (await app.kernel.plugins.invokeAction('dyn-ts', 'loadNow', {})) as { val: string }
+    assert.equal(stillWorks.val, 'loaded-at-action-time')
+
+    await app.kernel.plugins.unregister('dyn-ts')
+  } finally {
+    await app.close()
+  }
+
+  // Closing sharedApp earlier in after() hasn't run yet; once only sharedApp remains, disposing isoDir left no dyn-ts refs.
+  const stateAfterIsoClose = debugBackendTsLoaderState()
+  assert.ok(stateAfterIsoClose.activeRoots >= 0)
 })

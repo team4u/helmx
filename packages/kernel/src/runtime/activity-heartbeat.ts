@@ -19,6 +19,7 @@
  * immutable-process identity discipline used for signalling decisions.
  */
 import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import fsp from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { parseLinuxStartTime } from '@helmx/env-io';
@@ -78,19 +79,24 @@ export function startActivityHeartbeat(options: ActivityHeartbeatOptions): Activ
   // orphaning reparent would silently break the reader's wrapper binding (fail-closed is better).
   const startTime = procStartTimeOf(pid);
   let stopped = false;
+  let writeEpoch = 0;
+  let periodicInFlight: Promise<void> | undefined;
+
+  const buildRecord = (): HubActivityFile => ({
+    schema: 1,
+    launchId: options.launchId ?? null,
+    pid,
+    ppid,
+    port: options.port,
+    startTime,
+    updatedAt: now(),
+    counts: options.snapshot(),
+  });
 
   const writeSync = (): void => {
     if (stopped) return;
-    const record: HubActivityFile = {
-      schema: 1,
-      launchId: options.launchId ?? null,
-      pid,
-      ppid,
-      port: options.port,
-      startTime,
-      updatedAt: now(),
-      counts: options.snapshot(),
-    };
+    writeEpoch += 1;
+    const record = buildRecord();
     const tmp = `${options.file}.tmp-${pid}`;
     try {
       // mkdir is idempotent and keeps the writer self-sufficient when the data dir appears late.
@@ -109,18 +115,57 @@ export function startActivityHeartbeat(options: ActivityHeartbeatOptions): Activ
     }
   };
 
+  const writePeriodicAsync = (): void => {
+    if (stopped || periodicInFlight !== undefined) return;
+    const epochAtStart = ++writeEpoch;
+    const record = buildRecord();
+    const tmp = `${options.file}.tmp-${pid}-async`;
+    const run = (async () => {
+      try {
+        await fsp.mkdir(path.dirname(options.file), { recursive: true });
+        if (stopped || epochAtStart !== writeEpoch) return;
+        await fsp.writeFile(tmp, serializeRecord(record), { mode: 0o600 });
+        if (stopped || epochAtStart !== writeEpoch) {
+          await fsp.unlink(tmp).catch(() => undefined);
+          return;
+        }
+        await fsp.rename(tmp, options.file);
+      } catch (error) {
+        if (!stopped) {
+          for (const file of [tmp, options.file]) {
+            await fsp.unlink(file).catch(() => undefined);
+          }
+          options.onWriteError?.(error);
+        } else {
+          await fsp.unlink(tmp).catch(() => undefined);
+        }
+      }
+    })();
+    periodicInFlight = run;
+    void run.finally(() => {
+      if (periodicInFlight === run) periodicInFlight = undefined;
+    });
+  };
+
   writeSync();
   const unsubscribeBusyEntered = options.subscribeBusyEntered(writeSync);
 
-  const timer = setInterval(writeSync, intervalMs);
+  const timer = setInterval(writePeriodicAsync, intervalMs);
   timer.unref?.();
 
   return {
     async stop(): Promise<void> {
-      if (stopped) return;
+      if (stopped) {
+        if (periodicInFlight !== undefined) await periodicInFlight;
+        return;
+      }
       stopped = true;
+      writeEpoch += 1;
       clearInterval(timer);
       unsubscribeBusyEntered();
+      if (periodicInFlight !== undefined) {
+        await periodicInFlight;
+      }
       try {
         unlinkSync(options.file);
       } catch (error) {

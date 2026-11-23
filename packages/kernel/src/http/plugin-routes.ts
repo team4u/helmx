@@ -8,9 +8,8 @@
  */
 import { HelmxError, isPluginSummaryActive } from '@helmx/protocol'
 import type { JsonSchema, PluginConfigFieldSchema, PublicPluginSessionDoc } from '@helmx/protocol'
-import { gzipSync } from 'node:zlib'
 import { redactJsonValue } from '../redact.js'
-import { markStreamingJsonBody } from './gzip.js'
+import { compressGzip, markStreamingJsonBody } from './gzip.js'
 import { errorResponse, jsonOk, readJsonBody, type JsonRedactor } from './http-utils.js'
 import { decodeSegment, findPluginRoute } from './route-match.js'
 import type { KernelRuntimeLike } from './contracts.js'
@@ -344,9 +343,12 @@ async function serveClientModule(
       throw new HelmxError('invalid_client_module', 'Invalid chunk name (must match /^[A-Za-z0-9._-]+\\.js$/ without ..)', 400)
     }
   }
-  const compiled = await kernel.plugins.getClientModule(pluginId, moduleRef, {
+  const ifNoneMatch = request.headers.get('if-none-match')
+  const probeMetaOnly = method === 'HEAD' || ifNoneMatch !== null
+  let compiled = await kernel.plugins.getClientModule(pluginId, moduleRef, {
     ...(chunk !== undefined ? { chunk } : {}),
     ...(hash !== undefined ? { hash } : {}),
+    ...(probeMetaOnly ? { metadataOnly: true } : {}),
   })
   if (hash !== undefined && (hash.length === 0 || hash !== compiled.contentHash)) {
     throw new HelmxError(
@@ -366,7 +368,6 @@ async function serveClientModule(
   const isImmutable = hash !== undefined && hash.length > 0 && hash === compiled.contentHash
   const cacheControl = isImmutable ? 'private, max-age=31536000, immutable' : 'private, no-cache'
 
-  const ifNoneMatch = request.headers.get('if-none-match')
   // chunk request only accept complete chunk ETag(hash:chunk) match - - bare contentHash will same hash under
   // other chunk cache mistakenly judge is hit; main module request keep strong ETag / bare hash / W/ three form compatibility.
   const etagMatched = chunk !== undefined
@@ -396,10 +397,21 @@ async function serveClientModule(
     return new Response(null, { status: 200, headers })
   }
 
+  if (probeMetaOnly && compiled.code === '') {
+    compiled = await kernel.plugins.getClientModule(pluginId, moduleRef, {
+      ...(chunk !== undefined ? { chunk } : {}),
+      ...(hash !== undefined ? { hash } : {}),
+    })
+  }
+
   const acceptEncoding = request.headers.get('accept-encoding') ?? ''
   if (/\bgzip\b/i.test(acceptEncoding)) {
     headers['content-encoding'] = 'gzip'
-    const gzBuffer = compiled.gzipped ?? gzipSync(Buffer.from(compiled.code, 'utf8'))
+    let gzBuffer = compiled.gzipped
+    if (gzBuffer === undefined) {
+      gzBuffer = await compressGzip(Buffer.from(compiled.code, 'utf8'))
+      compiled.gzipped = gzBuffer
+    }
     return new Response(gzBuffer as unknown as BodyInit, {
       status: 200,
       headers,
