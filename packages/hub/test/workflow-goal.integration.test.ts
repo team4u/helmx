@@ -447,7 +447,7 @@ describe('T3 3-level nested identical plan labels and resumeFromRunId checkpoint
       JSON.stringify(planSchema) +
       ' })\n' +
       'if (!result.ok) throw new Error("mod-b plan goal failed (schema)")\n' +
-      'const plan = JSON.parse(result.output)\n' +
+      'const plan = result.output\n' +
       'const fix = await agent("MODB-FIX-OBJECTIVE: confirm already resume this module plan conversation", { resume: "plan" })\n' +
       'return { plan, fix, attempts: result.attempts }\n'
 

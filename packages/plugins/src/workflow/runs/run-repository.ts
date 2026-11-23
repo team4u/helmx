@@ -269,7 +269,14 @@ export class RunRepository {
           this.takenOverBy.set(header.replayedFrom, header.id)
         }
       }
-      if (page.nextCursor === undefined) break
+      if (
+        typeof page.nextCursor !== 'string' ||
+        page.nextCursor === '' ||
+        page.nextCursor === cursor ||
+        page.items.length === 0
+      ) {
+        break
+      }
       cursor = page.nextCursor
     }
     this.hydrated = true

@@ -81,11 +81,19 @@ export function createManagedSubagentRegistry(deps: {
   let cursor: string | undefined
   for (;;) {
     const page = kv.list({ limit: 1000, ...(cursor !== undefined ? { cursor } : {}) })
+    if (!Array.isArray(page?.items)) break
     for (const item of page.items) {
       const id = Number(item.key)
       entries.set(id, validateEntry(id, item.value))
     }
-    if (page.nextCursor === undefined) break
+    if (
+      typeof page.nextCursor !== 'string' ||
+      page.nextCursor === '' ||
+      page.nextCursor === cursor ||
+      page.items.length === 0
+    ) {
+      break
+    }
     cursor = page.nextCursor
   }
 

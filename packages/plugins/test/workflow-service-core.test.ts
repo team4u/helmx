@@ -1128,3 +1128,34 @@ test('settledAt 覆盖恢复标终态与优雅挂起：suspend 保持 phase=susp
   assert.ok(typeof recoveredSummary.settledAt === 'number' && recoveredSummary.settledAt >= running.createdAt)
   assert.equal(suspendEnv.kv.get(running.id)!.settledAt, recoveredSummary.settledAt)
 })
+
+test('停机结算排空：active 已移除但 onRunSettled 仍在途时，suspend/close/wait 必须等结算彻底完成才返回', timeout, async (t) => {
+  const settledEntered = deferred()
+  const settledRelease = deferred()
+  let settledDone = false
+  const env = makeEnv(t, async () => 'ok', {
+    onRunSettled: async () => {
+      // 确认 onRunSettled 触发时该 run 已离开 active（不影响 otherRunningTasks 口径）
+      assert.equal(env.service.listActiveRuns().length, 0)
+      settledEntered.resolve()
+      await settledRelease.promise
+      settledDone = true
+    },
+  })
+
+  const started = await env.service.run({
+    conversationId: 32,
+    script: 'export const meta = { name: "drain-settling", description: "d" }\nreturn 99',
+  })
+  await settledEntered.promise
+
+  const waitPromise = env.service.wait(started.id)
+  const suspendPromise = env.service.suspend()
+  await assertPending(waitPromise, 60)
+  await assertPending(suspendPromise, 60)
+
+  settledRelease.resolve()
+  await Promise.all([waitPromise, suspendPromise])
+  assert.equal(settledDone, true)
+  assert.equal(await waitPromise, 99)
+})

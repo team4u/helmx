@@ -123,6 +123,7 @@ export class WorkflowService {
   private readonly library: WorkflowLibrary
   private readonly cancellation: CancellationTracker
   private readonly active = new Map<string, ActiveRun>()
+  private readonly settling = new Map<string, ActiveRun>()
   private readonly resumingLocks = new Set<string>()
   private readonly autoRecoverOption: boolean | (() => boolean) | undefined
   private readonly deferReconcile: boolean
@@ -282,10 +283,10 @@ export class WorkflowService {
   }
 
   async wait(runId: string): Promise<unknown> {
-    const active = this.active.get(runId)
-    if (active !== undefined) {
-      await active.done
-      if (active.settleError !== undefined) throw active.settleError
+    const run = this.active.get(runId) ?? this.settling.get(runId)
+    if (run !== undefined) {
+      await run.done
+      if (run.settleError !== undefined) throw run.settleError
     }
     return this.getRun(runId).result
   }
@@ -325,24 +326,32 @@ export class WorkflowService {
   async suspend(): Promise<void> {
     this.closed = true
     this.releaseRuntimeReady()
-    const inFlight = [...this.active.values()]
-    for (const run of inFlight) {
-      run.suspended = true
-      run.abort.abort()
+    while (this.active.size > 0 || this.settling.size > 0) {
+      const inFlight = [...this.active.values()]
+      for (const run of inFlight) {
+        run.suspended = true
+        run.abort.abort()
+      }
+      const pending = [...inFlight, ...this.settling.values()].map((r) => r.done)
+      if (pending.length === 0) break
+      await Promise.all(pending)
     }
-    await Promise.all(inFlight.map((r) => r.done))
     await this.repo.flush()
   }
 
   async close(): Promise<void> {
     this.closed = true
     this.releaseRuntimeReady()
-    const inFlight = [...this.active.values()]
-    for (const run of inFlight) {
-      run.userAborted = true
-      run.abort.abort()
+    while (this.active.size > 0 || this.settling.size > 0) {
+      const inFlight = [...this.active.values()]
+      for (const run of inFlight) {
+        run.userAborted = true
+        run.abort.abort()
+      }
+      const pending = [...inFlight, ...this.settling.values()].map((r) => r.done)
+      if (pending.length === 0) break
+      await Promise.all(pending)
     }
-    await Promise.all(inFlight.map((r) => r.done))
     await this.repo.flush()
   }
 
@@ -651,7 +660,7 @@ export class WorkflowService {
           { runId: replayHeader.id, recordedConversationId: replayHeader.conversationId, requestedConversationId: request.conversationId },
         )
       }
-      if (this.active.has(replayHeader.id)) {
+      if (this.active.has(replayHeader.id) || this.settling.has(replayHeader.id)) {
         throw new HelmxError('conflict', `工作流 ${replayHeader.id} 仍在运行中`, 409, { runId: replayHeader.id })
       }
       const existingTakeover = this.repo.getTakenOverBy(replayHeader.id)
@@ -1583,46 +1592,58 @@ export class WorkflowService {
       }
       run.abort.abort()
       if (run.pendingExecs.size > 0) await Promise.allSettled([...run.pendingExecs])
+      // Transition active -> settling BEFORE removing from active so `listActiveRuns()` excludes this run
+      // during settlement callbacks while `suspend()`/`close()`/`wait()` still drain until `run.done` resolves.
+      this.settling.set(run.runId, run)
       this.active.delete(run.runId)
-      if (run.pendingAborts.size > 0) await Promise.allSettled([...run.pendingAborts])
+      try {
+        if (run.pendingAborts.size > 0) await Promise.allSettled([...run.pendingAborts])
 
-      if (!suspending && this.host.onRunSettled !== undefined) {
-        try {
-          await this.host.onRunSettled({ ...run.summary })
-        } catch (settledError) {
-          const msg = `onRunSettled failed: ${errorMessage(settledError)}`
-          process.stderr.write(`workflow ${run.runId}: ${msg}\n`)
-          const diag = this.redact(msg)
-          run.header.error = run.header.error ? `${run.header.error}\n${diag}` : diag
-          run.summary = this.repo.fullSummaryOf(run.header, run.detail)
+        if (!suspending && this.host.onRunSettled !== undefined) {
           try {
+            await this.host.onRunSettled({ ...run.summary })
+          } catch (settledError) {
+            const msg = `onRunSettled failed: ${errorMessage(settledError)}`
+            process.stderr.write(`workflow ${run.runId}: ${msg}\n`)
+            let diag: string
+            try {
+              diag = this.redact(msg)
+            } catch {
+              const code = settledError instanceof HelmxError ? settledError.code : 'unknown'
+              diag = `onRunSettled failed (${code})`
+            }
+            run.header.error = run.header.error ? `${run.header.error}\n${diag}` : diag
+            run.summary = this.repo.fullSummaryOf(run.header, run.detail)
+            try {
+              this.repo.saveHeader(run.header)
+              await this.repo.flush()
+            } catch {
+              // Best-effort diagnostic persistence; original settledError takes precedence.
+            }
+            recordError(settledError)
+          }
+        }
+        if (
+          !suspending &&
+          !this.closed &&
+          !this.isHostClosing() &&
+          run.header.notifyParentOnSettle === true &&
+          run.header.notifiedAt === undefined &&
+          this.host.onBackgroundAgentSettled !== undefined
+        ) {
+          try {
+            await this.host.onBackgroundAgentSettled({ ...run.summary }, spec.getNotifyInfo())
+            run.header.notifiedAt = Date.now()
             this.repo.saveHeader(run.header)
             await this.repo.flush()
-          } catch {
-            // Best-effort diagnostic persistence; original settledError takes precedence.
+          } catch (notifyError) {
+            process.stderr.write(`workflow ${run.runId}: onBackgroundAgentSettled failed: ${errorMessage(notifyError)}\n`)
           }
-          recordError(settledError)
         }
+        this.emitEventSafe('workflow.updated', { run: { ...run.summary } })
+      } finally {
+        this.resolveActiveDone(run)
       }
-      if (
-        !suspending &&
-        !this.closed &&
-        !this.isHostClosing() &&
-        run.header.notifyParentOnSettle === true &&
-        run.header.notifiedAt === undefined &&
-        this.host.onBackgroundAgentSettled !== undefined
-      ) {
-        try {
-          await this.host.onBackgroundAgentSettled({ ...run.summary }, spec.getNotifyInfo())
-          run.header.notifiedAt = Date.now()
-          this.repo.saveHeader(run.header)
-          await this.repo.flush()
-        } catch (notifyError) {
-          process.stderr.write(`workflow ${run.runId}: onBackgroundAgentSettled failed: ${errorMessage(notifyError)}\n`)
-        }
-      }
-      this.emitEventSafe('workflow.updated', { run: { ...run.summary } })
-      this.resolveActiveDone(run)
     }
   }
 
@@ -1660,6 +1681,7 @@ export class WorkflowService {
   }
 
   private resolveActiveDone(run: ActiveRun): void {
+    this.settling.delete(run.runId)
     this.doneResolvers.get(run)?.()
   }
 

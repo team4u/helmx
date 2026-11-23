@@ -48,28 +48,31 @@ after(() => {
   rmSync(rootDir, { recursive: true, force: true })
 })
 
-/** Reads the persisted private registry directly from `state.sqlite` after flushing (verifies restart source of truth). */
+/** Reads the persisted private depth KV namespace directly from `state.sqlite` after flushing (verifies restart source of truth). */
 function readRegistryRaw(dataDir: string): Record<string, unknown> {
   const db = new DatabaseSync(join(dataDir, 'state.sqlite'), { readOnly: true })
   try {
-    const row = db
-      .prepare("SELECT value FROM helmx_plugin_docs WHERE plugin_id = '__global' AND name = ?")
-      .get('builtin:workflow:subagent-conversations') as { value: string } | undefined
-    if (row === undefined) return {}
-    return JSON.parse(row.value) as Record<string, unknown>
+    const rows = db
+      .prepare("SELECT key, value_json FROM helmx_plugin_kv WHERE plugin_id = 'builtin:workflow' AND namespace = 'depth'")
+      .all() as Array<{ key: string; value_json: string }>
+    const out: Record<string, unknown> = {}
+    for (const row of rows) {
+      out[row.key] = JSON.parse(row.value_json)
+    }
+    return out
   } finally {
     db.close()
   }
 }
 
-/** Writes plugin private doc directly (for testing corrupt records after closing app). */
-function writePluginDocRaw(dataDir: string, name: string, value: unknown): void {
+/** Writes plugin private depth KV entry directly (for testing corrupt records after closing app). */
+function writeDepthKvRaw(dataDir: string, key: string, value: unknown): void {
   const db = new DatabaseSync(join(dataDir, 'state.sqlite'))
   try {
     db.prepare(
-      `INSERT INTO helmx_plugin_docs (plugin_id, name, value, updated_at) VALUES ('__global', ?, ?, ?)
-       ON CONFLICT(plugin_id, name) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`,
-    ).run(name, JSON.stringify(value), Date.now())
+      `INSERT INTO helmx_plugin_kv (plugin_id, namespace, key, value_json, updated_at) VALUES ('builtin:workflow', 'depth', ?, ?, ?)
+       ON CONFLICT(plugin_id, namespace, key) DO UPDATE SET value_json=excluded.value_json, updated_at=excluded.updated_at`,
+    ).run(key, JSON.stringify(value), Date.now())
   } finally {
     db.close()
   }
@@ -78,7 +81,7 @@ function writePluginDocRaw(dataDir: string, name: string, value: unknown): void 
 /** Helper to read and assert a registry entry (`depth` / `parentConversationId` / `maxSubagentDepth`). */
 function registryEntry(dataDir: string, conversationId: number): Record<string, unknown> {
   const raw = readRegistryRaw(dataDir)[String(conversationId)]
-  assert.ok(raw !== undefined && typeof raw === 'object', `conversation ${conversationId} should be registered in subagent-conversations`)
+  assert.ok(raw !== undefined && typeof raw === 'object', `conversation ${conversationId} should be registered in depth KV`)
   return raw as Record<string, unknown>
 }
 
@@ -133,7 +136,7 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
       assert.ok(child, 'top-level spawn should create a real child conversation')
 
       // Registry: private doc persists depth fact (survives restart).
-      await app.kernel.documentStore.flush()
+      await app.kernel.kvStore.flush()
       const entry = registryEntry(dir, child.id)
       assert.equal(entry['depth'], 1, 'direct child of top-level conversation has depth=1')
       assert.equal(entry['parentConversationId'], 1)
@@ -194,7 +197,7 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
       const child2 = app.kernel.listConversations().find((c) => c.parentConversationId === child1.id)
       assert.ok(child2, 'depth-1 subagent should spawn depth-2 child conversation via tool')
 
-      await app.kernel.documentStore.flush()
+      await app.kernel.kvStore.flush()
       const e1 = registryEntry(dir, child1.id)
       assert.equal(e1['depth'], 1)
       assert.equal(e1['parentConversationId'], 1)
@@ -281,7 +284,7 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
       // Depth-1 control: direct `spawnAgent` succeeds (depth-1 can spawn depth-2).
       const anotherChild2 = (await spawnChain(app, faux, [child1]))[0]!
       assert.ok(anotherChild2 > 0)
-      await app.kernel.documentStore.flush()
+      await app.kernel.kvStore.flush()
       assert.equal(registryEntry(dir, anotherChild2)['depth'], 2)
     } finally {
       await app.close()
@@ -308,7 +311,7 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
       assert.equal(run.run.status, 'completed', JSON.stringify(run.run))
       const nodeConv = run.run.nodes?.find((n) => n.conversationId !== undefined)?.conversationId
       assert.ok(nodeConv, 'engine node should spawn a real child conversation')
-      await app.kernel.documentStore.flush()
+      await app.kernel.kvStore.flush()
       const entry = registryEntry(dir, nodeConv)
       assert.equal(entry['depth'], 2, 'engine node spawned from depth-1 registers with depth=2')
       assert.equal(entry['parentConversationId'], child1)
@@ -376,7 +379,7 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
       await app.kernel.waitForIdle(child1)
       const child2 = app.kernel.listConversations().find((c) => c.parentConversationId === child1)
       assert.ok(child2, 'default sync invocation should spawn depth-2 child conversation')
-      await app.kernel.documentStore.flush()
+      await app.kernel.kvStore.flush()
       const entry = registryEntry(dir, child2.id)
       assert.equal(entry['depth'], 2, 'sync depth-2 subagent also registers with depth=2')
 
@@ -497,7 +500,7 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
         // Depth-1 control still allowed (can spawn a new depth-2 child after restart).
         const newChild2 = (await spawnChain(app, faux, [child1.id]))[0]!
         assert.ok(newChild2 > 0)
-        await app.kernel.documentStore.flush()
+        await app.kernel.kvStore.flush()
         assert.equal(registryEntry(dir, newChild2)['depth'], 2)
       } finally {
         await app.close()
@@ -518,7 +521,7 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
       try {
         const child1 = (await spawnChain(app, faux, [1]))[0]!
         legacyChildId = child1
-        await app.kernel.documentStore.flush()
+        await app.kernel.kvStore.flush()
       } finally {
         await app.close()
       }
@@ -528,11 +531,9 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
       const registry = readRegistryRaw(dir)
       const legacy = registry[String(legacyChildId)] as Record<string, unknown>
       assert.ok(legacy, 'child conversation should have a registry entry')
-      writePluginDocRaw(dir, 'builtin:workflow:subagent-conversations', {
-        [String(legacyChildId)]: {
-          ...(typeof legacy['agentType'] === 'string' ? { agentType: legacy['agentType'] } : {}),
-          createdAt: legacy['createdAt'] ?? Date.now(),
-        },
+      writeDepthKvRaw(dir, String(legacyChildId), {
+        ...(typeof legacy['agentType'] === 'string' ? { agentType: legacy['agentType'] } : {}),
+        createdAt: legacy['createdAt'] ?? Date.now(),
       })
     }
     const faux = makeFauxProvider()
@@ -563,14 +564,14 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
       })
       assert.ok(grantedChild > 0, 'should spawn child conversation and return conversationId')
       const child1 = grantedChild
-      await app.kernel.documentStore.flush()
+      await app.kernel.kvStore.flush()
       assert.equal(registryEntry(dir, child1)['maxSubagentDepth'], 3, 'registry should snapshot granted ceiling')
       assert.equal(registryEntry(dir, child1)['depth'], 1)
 
       // Full 3-level chain succeeds (1 -> 2 -> 3), with depth 3 as the leaf.
       const child2 = (await spawnChain(app, faux, [child1]))[0]!
       const child3 = (await spawnChain(app, faux, [child2]))[0]!
-      await app.kernel.documentStore.flush()
+      await app.kernel.kvStore.flush()
       assert.equal(registryEntry(dir, child2)['maxSubagentDepth'], 3, 'descendant inherits subtree ceiling')
       assert.equal(registryEntry(dir, child3)['depth'], 3)
       await assert.rejects(
@@ -614,7 +615,7 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
         )
       }
       // Rejected paths record no new registry entries.
-      await app.kernel.documentStore.flush()
+      await app.kernel.kvStore.flush()
       const registry = readRegistryRaw(dir)
       assert.equal(Object.keys(registry).length, 3, 'only the 3 valid chain entries should be registered')
     } finally {
