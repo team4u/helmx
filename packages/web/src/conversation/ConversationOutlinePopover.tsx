@@ -233,6 +233,12 @@ export function ConversationOutlinePopover({
           e.preventDefault()
           searchInputRef.current?.focus()
         }}
+        onCloseAutoFocus={(e) => {
+          const active = document.activeElement
+          if (active !== null && active !== document.body && active !== document.documentElement) {
+            e.preventDefault()
+          }
+        }}
         onKeyDown={handleKeyDown}
       >
           <div className="conversation-outline-header">

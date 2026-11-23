@@ -20,15 +20,30 @@
  * Exit codes: 0 clean; 1 violations found; 2 usage/baseline error. No HELMX_* env vars are
  * injected.
  */
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { collectChangedFiles, GitChangeError, resolveBaseline } from './lib/git-changes.mjs';
-import { analyzeTestSource, collectAllTestFiles, isTestFilePath } from './lib/test-hygiene.mjs';
+import {
+  analyzeTestSource,
+  collectAllTestFiles,
+  isCrossPackageTestHelperImport,
+  isTestFilePath,
+  resolveInRepoRelativePath,
+  toPosixPath,
+} from './lib/test-hygiene.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+
+function tryRealpathNative(filePath) {
+  try {
+    return realpathSync.native(filePath);
+  } catch {
+    return filePath;
+  }
+}
 
 /**
  * Return added source line numbers from a zero-context git diff. The hygiene gate keeps
@@ -36,10 +51,10 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'
  * introduced code so a focused test-infrastructure change does not require rewriting history.
  */
 function collectAddedLines({ base, files }) {
-  const selected = new Set(files);
+  const selected = new Set(files.map(toPosixPath));
   const lineSets = new Map();
   const addDiff = (args) => {
-    const result = spawnSync('git', ['diff', '--unified=0', ...args], {
+    const result = spawnSync('git', ['-c', 'core.quotepath=false', '-c', 'diff.mnemonicPrefix=false', '-c', 'diff.noprefix=false', 'diff', '--unified=0', ...args], {
       cwd: repoRoot,
       encoding: 'utf8',
       maxBuffer: 64 * 1024 * 1024,
@@ -49,7 +64,7 @@ function collectAddedLines({ base, files }) {
     let nextLine = 0;
     for (const line of (result.stdout ?? '').split(/\r?\n/)) {
       if (line.startsWith('+++ b/')) {
-        current = line.slice('+++ b/'.length);
+        current = toPosixPath(line.slice('+++ b/'.length));
         nextLine = 0;
         continue;
       }
@@ -84,12 +99,13 @@ function collectAddedLines({ base, files }) {
   }
   addDiff(['HEAD']);
 
-  const untracked = spawnSync('git', ['ls-files', '--others', '--exclude-standard', '-z'], {
+  const untracked = spawnSync('git', ['-c', 'core.quotepath=false', 'ls-files', '--others', '--exclude-standard', '-z'], {
     cwd: repoRoot,
     encoding: 'utf8',
   });
   if (untracked.status === 0) {
-    for (const rel of (untracked.stdout ?? '').split('\0').filter(Boolean)) {
+    for (const rawRel of (untracked.stdout ?? '').split('\0').filter(Boolean)) {
+      const rel = toPosixPath(rawRel);
       if (!selected.has(rel)) continue;
       const abs = path.join(repoRoot, rel);
       try {
@@ -101,20 +117,6 @@ function collectAddedLines({ base, files }) {
     }
   }
   return lineSets;
-}
-
-function packageOfTestPath(rel) {
-  const match = /^packages\/([^/]+)\/test(?:\/|$)/.exec(rel);
-  return match?.[1] ?? null;
-}
-
-function isCrossPackageTestHelperImport(rel, specifier) {
-  if (!specifier.startsWith('.')) return false;
-  const fromPackage = packageOfTestPath(rel);
-  if (!fromPackage) return false;
-  const resolved = path.posix.normalize(path.posix.join(path.posix.dirname(rel), specifier));
-  const match = /^packages\/([^/]+)\/test\/helpers(?:\/|\.|$)/.exec(resolved);
-  return match !== null && match[1] !== fromPackage;
 }
 
 function collectNodeTestBindings(ts, sourceFile) {
@@ -303,10 +305,13 @@ if (opts.base && !opts.changed) {
 let scopeLabel;
 let files;
 if (opts.files.length > 0) {
+  const repoRootReal = tryRealpathNative(repoRoot);
   files = opts.files.map((f) => {
     const abs = path.resolve(process.cwd(), f);
-    const rel = path.relative(repoRoot, abs);
-    if (rel.startsWith('..') || path.isAbsolute(rel)) {
+    const rel =
+      resolveInRepoRelativePath(repoRoot, abs, repoRoot) ??
+      resolveInRepoRelativePath(repoRootReal, tryRealpathNative(abs), repoRootReal);
+    if (rel === null) {
       console.error(
         `[check-hygiene] Rejected path outside repository: ${f} (only tests in this repository are inspected; resolved to ${abs})`,
       );
@@ -326,7 +331,9 @@ if (opts.files.length > 0) {
     }
     throw err;
   }
-  files = changes.files.map((f) => f.path).filter((p) => isTestFilePath(p) && existsSync(path.join(repoRoot, p)));
+  files = changes.files
+    .map((f) => toPosixPath(f.path))
+    .filter((p) => isTestFilePath(p) && existsSync(path.join(repoRoot, p)));
   scopeLabel = `change set, ${files.length} test file(s) (baseline ${changes.baseline.ref})`;
 } else {
   files = collectAllTestFiles(repoRoot);

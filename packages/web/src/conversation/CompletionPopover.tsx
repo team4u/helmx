@@ -28,9 +28,11 @@ export interface CompletionPopoverProps {
   onClose: () => void
   /** Host anchor (.composer-box; Anchor stays mounted, open toggles visibility). */
   anchorRef: { current: HTMLElement | null }
+  /** Owner composer input (<textarea>): interactions/focus returning to it never dismiss the popover. */
+  inputRef?: { current: HTMLElement | null }
 }
 
-export function CompletionPopover({ open, trigger, snapshot, onPick, onClose, anchorRef }: CompletionPopoverProps) {
+export function CompletionPopover({ open, trigger, snapshot, onPick, onClose, anchorRef, inputRef }: CompletionPopoverProps) {
   const { t } = useWebLocale()
   const [activeIndex, setActiveIndex] = useState(0)
   const listRef = useRef<HTMLDivElement | null>(null)
@@ -106,6 +108,14 @@ export function CompletionPopover({ open, trigger, snapshot, onPick, onClose, an
         sideOffset={8}
         className="composer-popover composer-completion-popover"
         onOpenAutoFocus={(event) => event.preventDefault()}
+        onCloseAutoFocus={(event) => event.preventDefault()}
+        onInteractOutside={(event) => {
+          const inputEl = inputRef?.current
+          const target = event.target
+          if (inputEl !== null && inputEl !== undefined && target instanceof Node && inputEl.contains(target)) {
+            event.preventDefault()
+          }
+        }}
         onEscapeKeyDown={(event) => event.stopPropagation()}
         aria-label={t('composer.completion.candidatesAria', { title: triggerTitle })}
       >

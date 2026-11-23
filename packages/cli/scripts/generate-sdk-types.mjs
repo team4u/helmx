@@ -20,6 +20,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   writeFileSync,
@@ -809,12 +810,14 @@ function emitPluginClientDeclarations(repoRoot) {
     noEmitOnError: false,
     outDir: virtualOutDir,
   });
+  const effectiveOutDir = parsed.options.outDir ?? virtualOutDir;
   const host = ts.createCompilerHost(parsed.options);
   const emitted = new Map();
   host.writeFile = (fileName, text) => {
     if (!fileName.endsWith('.d.ts')) return;
-    const rel = path.relative(virtualOutDir, fileName).replace(/\\/g, '/');
-    if (rel.startsWith('..') || path.isAbsolute(rel)) return;
+    const rawRel = path.relative(effectiveOutDir, fileName);
+    const rel = rawRel.replace(/\\/g, '/');
+    if (rel === '' || rel === '..' || rel.startsWith('../') || path.isAbsolute(rawRel)) return;
     emitted.set(rel, normalizeLineEndings(text));
   };
   const program = ts.createProgram(parsed.fileNames, parsed.options, host);
@@ -965,10 +968,23 @@ export function writeEmbeddedSdkTypesSnapshot(options = {}) {
   };
 }
 
+function canonicalizeForCompare(filePath) {
+  const resolved = path.resolve(filePath);
+  try {
+    return realpathSync.native(resolved);
+  } catch {
+    return resolved;
+  }
+}
+
 function isMainModule() {
   const entry = process.argv[1];
   if (!entry) return false;
-  return path.resolve(entry) === path.resolve(fileURLToPath(import.meta.url));
+  const actual = canonicalizeForCompare(entry);
+  const self = canonicalizeForCompare(fileURLToPath(import.meta.url));
+  return process.platform === 'win32'
+    ? actual.toLowerCase() === self.toLowerCase()
+    : actual === self;
 }
 
 if (isMainModule()) {

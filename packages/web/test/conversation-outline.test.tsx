@@ -16,6 +16,8 @@ import {
   summarizeOutlineText,
 } from '../src/conversation/outline-model.js'
 import { buildTimelineItems } from '../src/conversation/timeline-model.js'
+import { resetServerClock } from '../src/lib/server-clock.js'
+import { flushMacrotask } from './helpers/dom-harness.js'
 import { makeTestStore } from './helpers/store.js'
 import { seedPluginClientModule } from '../src/lib/plugin-client.js'
 
@@ -37,6 +39,7 @@ describe("conversation-outline", () => {
     host?.remove()
     host = undefined
     document.body.innerHTML = ''
+    resetServerClock()
   })
 
   // ---------------------------------------------------------------------------
@@ -542,13 +545,14 @@ describe("conversation-outline", () => {
   })
 
   test('ConversationPane 顶栏浮层展示创建时间/累计运行/已结算轮次/实时计时，大纲顶栏与助手行展示单轮与累计耗时', { timeout: 60_000 }, async () => {
+    resetServerClock()
     const createdAt = new Date(2026, 10, 10, 14, 0, 0).getTime()
     const now = Date.now()
     const conv: ConversationSummary = {
       ...makeConv(20),
       status: 'working',
       runDurationMs: 65_000,
-      runStartedAt: now - 10_400,
+      runStartedAt: now - 10_100,
       completionSeq: 2,
       createdAt,
       updatedAt: now,
@@ -590,16 +594,21 @@ describe("conversation-outline", () => {
     })
     const metaGrid = document.querySelector<HTMLElement>('.pane-title-popover-meta')
     assert.ok(metaGrid !== null, 'title metadata popover opens')
-    assert.match(metaGrid.textContent ?? '', /创建时间/)
-    assert.match(metaGrid.textContent ?? '', /2026-11-10 14:00:00/)
-    assert.match(metaGrid.textContent ?? '', /累计运行/)
-    assert.match(metaGrid.textContent ?? '', /1m15s/)
-    assert.match(metaGrid.textContent ?? '', /当前运行/)
-    assert.match(metaGrid.textContent ?? '', /10s/)
-    assert.match(metaGrid.textContent ?? '', /已结算轮次/)
-    assert.match(metaGrid.textContent ?? '', /2/)
+    const metaText = metaGrid.textContent ?? ''
+    assert.match(metaText, /创建时间/)
+    assert.match(metaText, /2026-11-10 14:00:00/)
+    const totalMatch = /累计运行\s*1m(\d{2})s/.exec(metaText)
+    assert.ok(totalMatch !== null, `expected live cumulative duration in title metadata, got: ${metaText}`)
+    const currentMatch = /当前运行\s*(\d{2})s/.exec(metaText)
+    assert.ok(currentMatch !== null, `expected live current-turn duration in title metadata, got: ${metaText}`)
+    const currentSec = Number(currentMatch[1])
+    const totalSec = 60 + Number(totalMatch[1])
+    assert.ok(currentSec >= 10 && currentSec < 30, `current run seconds out of expected live range: ${currentSec}`)
+    assert.equal(totalSec, 65 + currentSec, 'cumulative duration equals settled 65s plus live current run')
+    assert.match(metaText, /已结算轮次/)
+    assert.match(metaText, /2/)
 
-    // 关闭标题浮层并打开大纲浮层
+    // 关闭标题浮层并立即打开大纲浮层，冲刷宏任务确认标题浮层延迟 FocusScope 复位不会抢回焦点并误关大纲
     await act(async () => {
       titleBtn.click()
     })
@@ -608,9 +617,17 @@ describe("conversation-outline", () => {
     await act(async () => {
       outlineBtn.click()
     })
+    await flushMacrotask()
     const summaryEl = document.querySelector<HTMLElement>('.conversation-outline-summary')
     assert.ok(summaryEl !== null, 'outline header renders cumulative summary when totalRunMs > 0')
-    assert.match(summaryEl.textContent ?? '', /共 2 轮 · 累计 1m15s/)
+    const outlineSummaryText = summaryEl.textContent ?? ''
+    const outlineTotalMatch = /共 2 轮 · 累计 1m(\d{2})s/.exec(outlineSummaryText)
+    assert.ok(outlineTotalMatch !== null, `expected cumulative summary in outline header, got: ${outlineSummaryText}`)
+    const outlineTotalSec = 60 + Number(outlineTotalMatch[1])
+    assert.ok(
+      outlineTotalSec >= totalSec && outlineTotalSec < 95,
+      `outline cumulative seconds (${outlineTotalSec}) should track live total (>= ${totalSec}, < 95)`,
+    )
 
     const assistantDuration = document.querySelector<HTMLElement>('.conversation-outline-assistant .conversation-outline-duration')
     assert.ok(assistantDuration !== null, 'settled assistant outline row renders turn duration')

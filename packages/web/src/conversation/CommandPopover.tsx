@@ -27,6 +27,8 @@ export interface CommandPopoverProps {
   onClose: () => void
   /** Host anchor (.composer-box); when supplied renders through Radix Popover. */
   anchorRef?: { current: HTMLElement | null }
+  /** Owner composer input (<textarea>): interactions/focus returning to it never dismiss the popover. */
+  inputRef?: { current: HTMLElement | null }
 }
 
 export function CommandPopover({
@@ -35,6 +37,7 @@ export function CommandPopover({
   onPick,
   onClose,
   anchorRef,
+  inputRef,
 }: CommandPopoverProps) {
   const { t } = useWebLocale()
   const [active, setActive] = useState(0)
@@ -160,6 +163,14 @@ export function CommandPopover({
           sideOffset={8}
           className="composer-popover composer-completion-popover"
           onOpenAutoFocus={(event) => event.preventDefault()}
+          onCloseAutoFocus={(event) => event.preventDefault()}
+          onInteractOutside={(event) => {
+            const inputEl = inputRef?.current
+            const target = event.target
+            if (inputEl !== null && inputEl !== undefined && target instanceof Node && inputEl.contains(target)) {
+              event.preventDefault()
+            }
+          }}
           onEscapeKeyDown={(event) => event.stopPropagation()}
           aria-label={t('composer.command.header')}
         >

@@ -27,9 +27,11 @@ export interface CompletedRun {
 function isDirectRun(): boolean {
   if (process.argv[1] === undefined) return false
   try {
-    const self = fileURLToPath(import.meta.url)
-    const entry = path.resolve(process.argv[1]!)
-    return realpathSync(self) === realpathSync(entry)
+    const self = realpathSync.native(fileURLToPath(import.meta.url))
+    const entry = realpathSync.native(path.resolve(process.argv[1]!))
+    return process.platform === 'win32'
+      ? self.toLowerCase() === entry.toLowerCase()
+      : self === entry
   } catch {
     return false
   }

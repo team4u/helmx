@@ -33,7 +33,11 @@ import {
   planCheckCommands,
   testFilesOfPackage,
 } from '../../../scripts/lib/workspace-meta.mjs'
-import { analyzeTestSource } from '../../../scripts/lib/test-hygiene.mjs'
+import {
+  analyzeTestSource,
+  isCrossPackageTestHelperImport,
+  resolveInRepoRelativePath,
+} from '../../../scripts/lib/test-hygiene.mjs'
 import { resolvePackageManagerInvoke, runManagedCommand } from '../../../scripts/lib/spawn-checked.mjs'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
@@ -350,6 +354,46 @@ process.env.HELMX_TEST_SUITE_TIMEOUT_MS = '999'`,
   assert.equal(report.stats.todoCalls, 1)
   assert.equal(report.stats.subtestCalls, 1)
   assert.equal(report.stats.testCalls, 1)
+})
+
+test('hygiene: Windows backslash paths normalize to POSIX repo-relative paths and still detect cross-package helpers', { timeout: 60_000 }, () => {
+  const winRepo = 'D:\\a\\helmx\\helmx'
+  assert.equal(
+    resolveInRepoRelativePath(winRepo, 'D:\\a\\helmx\\helmx\\packages\\web\\test\\.helmx-hygiene-gate-fixture\\new.test.ts', winRepo, path.win32),
+    'packages/web/test/.helmx-hygiene-gate-fixture/new.test.ts',
+  )
+  assert.equal(
+    resolveInRepoRelativePath(winRepo, 'd:\\a\\helmx\\helmx\\packages\\cli\\test\\foo.test.ts', winRepo, path.win32),
+    'packages/cli/test/foo.test.ts',
+  )
+  assert.equal(
+    resolveInRepoRelativePath(winRepo, 'packages\\web\\test\\new.test.ts', winRepo, path.win32),
+    'packages/web/test/new.test.ts',
+  )
+  assert.equal(
+    resolveInRepoRelativePath(winRepo, 'C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\outside.test.ts', winRepo, path.win32),
+    null,
+  )
+  assert.equal(
+    resolveInRepoRelativePath(winRepo, '..\\other-repo\\x.test.ts', winRepo, path.win32),
+    null,
+  )
+  assert.equal(resolveInRepoRelativePath(winRepo, '.', winRepo, path.win32), null)
+
+  assert.equal(
+    isCrossPackageTestHelperImport(
+      'packages\\web\\test\\.helmx-hygiene-gate-fixture\\new.test.ts',
+      '../../../kernel/test/helpers/fixture.js',
+    ),
+    true,
+  )
+  assert.equal(
+    isCrossPackageTestHelperImport(
+      'packages\\web\\test\\foo.test.ts',
+      './helpers/store.js',
+    ),
+    false,
+  )
 })
 
 // ---------------------------------------------------------------- CLI exit code

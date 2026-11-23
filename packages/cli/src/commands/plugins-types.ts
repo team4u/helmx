@@ -195,6 +195,21 @@ async function inspectTsconfigStatus(pluginDir: string): Promise<TsconfigTypesSt
   return 'configured'
 }
 
+async function renameWithWindowsRetry(src: string, dest: string): Promise<void> {
+  const maxAttempts = process.platform === 'win32' ? 5 : 1
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await fsp.rename(src, dest)
+      return
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code
+      const retryable = code === 'EPERM' || code === 'EBUSY' || code === 'EACCES'
+      if (!retryable || attempt >= maxAttempts) throw err
+      await new Promise((resolve) => setTimeout(resolve, 50 * attempt))
+    }
+  }
+}
+
 /**
  * Write or refresh `.helmx/types/` inside `pluginDir` from the embedded SDK declaration bundle.
  * Never modifies existing `tsconfig.json`; inspects it read-only and reports status + snippet.
@@ -237,10 +252,10 @@ export async function writeSdkTypesToDir(pluginDir: string): Promise<SyncPluginT
       }
       await fsp.writeFile(dest, bundle.files[rel]!, 'utf8')
     }
-    await fsp.rm(typesDir, { recursive: true, force: true })
-    await fsp.rename(stagingDir, typesDir)
+    await fsp.rm(typesDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+    await renameWithWindowsRetry(stagingDir, typesDir)
   } catch (err) {
-    await fsp.rm(stagingDir, { recursive: true, force: true }).catch(() => {})
+    await fsp.rm(stagingDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 }).catch(() => {})
     if (err instanceof CliError) throw err
     throw new CliError(
       `failed to write SDK types into ${typesDir}: ${err instanceof Error ? err.message : String(err)}`,
