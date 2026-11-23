@@ -75,6 +75,7 @@ function makeSpyCtx(): SpyCtx {
       actionCalls.push({ actionId, input })
       return undefined
     },
+    fetchRoute: async () => { throw new Error('fetchRoute not implemented in test stub') },
     submitInput: async () => {},
     getPluginSessionDoc: async () => undefined,
     openScreen: (t) => {

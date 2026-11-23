@@ -151,7 +151,7 @@ function makeHarness(startMs: number, docSeed?: CronDoc): Harness {
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
     execEnv: async () => { throw new HelmxError('unsupported', '本 fixture 不执行节点命令', 501) },
-      emitEvent: (type, payload) => {
+      emitEvent(type: string, payload: unknown) {
         events.push({ type, payload })
       },
     },

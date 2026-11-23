@@ -94,7 +94,7 @@ managedByPlugin: {{MANAGED_BY}}
 ## Topic manuals on demand
 
 When a matching topic comes up, read the reference file before acting:
-- Before bootstrapping a new skill (~/.helmx/skills/<id>/SKILL.md) or developing an external plugin (~/.helmx/plugins/<id>/):
+- Before bootstrapping a new skill (~/.helmx/skills/<id>/SKILL.md) or developing an external plugin (~/.helmx/installed-plugins/<id>/):
   `load_skill({ skillId: "helmx-cli", path: "references/skill-and-plugin-dev.md" })`.
 - Before developing or optimizing a plugin's client.tsx, especially involving heavy dependencies, dynamic imports, first-load performance, or async chunks:
   `load_skill({ skillId: "helmx-cli", path: "references/plugin-client-code-splitting.md" })`.

@@ -17,9 +17,10 @@ helmx plugins init my-plugin                          # 生成到 ~/.helmx/insta
 helmx plugins init my-plugin --dir ~/code             # 生成到 ~/code/my-plugin/
 helmx plugins init my-plugin --template minimal       # 仅后端探针动作（无前端文件）
 helmx plugins init my-app --template app              # 全栈微应用骨架（带 ctx.ui.screen，可直接 doctor 与 install）
+helmx plugins types ~/code/my-plugin                  # 离线写入/刷新 .helmx/types/ 声明快照（不修改既有 tsconfig.json）
 ```
 
-full 模板产出 `plugin.json`（含 `clientRoot: "./client"`）、`index.ts`（doc 与 `increment` 动作）、`tsconfig.json`、`client/index.tsx`（`@helmx/plugin-client` 示例面板）与 `README.md`；minimal 仅后端 ping 探针；app 模板产出 public doc + 双 Schema 动作 + `ctx.ui.screen` 主视图 + 可选侧栏直达入口，生成目录可直接通过 `helmx plugins doctor`（回报 `screens: ["main"]`），再经 `helmx plugins install <dir> --enable` 安装并在插件中心「应用视图」筛选与一键打开。目标目录非空默认拒绝，`--force` 继续（同名文件被覆盖，不删除现有文件）。
+full 模板产出 `plugin.json`（含 `clientRoot: "./client"`）、`index.ts`（doc 与 `increment` 动作）、`tsconfig.json`（含指向 `.helmx/types/` 的 `paths`）、`.helmx/types/`（离线 `@helmx/protocol` / `@helmx/protocol/browser` / `@helmx/plugin-client` 类型声明快照，仓外无需 `node_modules` 即可 `tsc --noEmit`）、`client/index.tsx`（`@helmx/plugin-client` 示例面板）与 `README.md`；minimal 仅后端 ping 探针；app 模板产出 public doc + 双 Schema 动作 + `ctx.ui.screen` 主视图 + 可选侧栏直达入口，生成目录可直接通过 `helmx plugins doctor`（回报 `screens: ["main"]`），再经 `helmx plugins install <dir> --enable` 安装并在插件中心「应用视图」筛选与一键打开。已有插件目录可随时执行 `helmx plugins types [dir]` 刷新 `.helmx/types/`（只读检测 `tsconfig.json` 并在未配置 `paths` 时打印建议配置片段，绝不改写用户文件）。目标目录非空默认拒绝，`--force` 继续（同名文件被覆盖，不删除现有文件）。
 
 ### ② 插件目录与清单
 
@@ -139,7 +140,7 @@ export default {
 
 | 分类 | 符号 |
 | :--- | :--- |
-| Hooks | `usePluginContext`（`callAction / submitInput / openScreen / openSplitScreen / openConversationDrawer / openArtifact / notify / theme / composer` 等）、`usePluginDoc`、`usePluginSessionDoc`、`useConversations`、`useConversation`、`useConversationBackground`（宿主标准按会话后台在途快照 `{ unknown, byConversation }`；`unknown` 为 true 时如实渲染未知，不得当作「无后台任务」）、`useHostModels`（宿主模型目录只读切片 `HostModelsSlice \| undefined`，稳定句柄订阅，仅目录真实变化才重渲染；`undefined`=能力未注入或首载未完成，如实渲染未知并禁选，不得伪造空目录；`models: []` 才是已加载且为空）、`usePlugins`、`usePluginConfig`、`usePluginAction`（含并发互斥与错误态）、`usePluginLocale` / `usePluginTranslator`、`useScreenParams` / `useScreenLocation`、`useToolActivity`、`useTimelineToolCalls`、`useSharedNowMs`、`usePluginScopeId` |
+| Hooks | `usePluginContext`（`callAction / fetchRoute / submitInput / openScreen / openSplitScreen / openConversationDrawer / openArtifact / notify / theme / composer` 等；其中 `fetchRoute(path, init?)` 鉴权请求本插件 `/api/plugins/<id>/routes<path>` 并原样返回 `Response`，宿主代注 Bearer Token 且防路径逃逸）、`usePluginDoc`、`usePluginSessionDoc`、`useConversations`、`useConversation`、`useConversationBackground`（宿主标准按会话后台在途快照 `{ unknown, byConversation }`；`unknown` 为 true 时如实渲染未知，不得当作「无后台任务」）、`useHostModels`（宿主模型目录只读切片 `HostModelsSlice \| undefined`，稳定句柄订阅，仅目录真实变化才重渲染；`undefined`=能力未注入或首载未完成，如实渲染未知并禁选，不得伪造空目录；`models: []` 才是已加载且为空）、`useHostNodes`（只读计算节点切片 `HostNodesSlice \| undefined`，不含节点接入令牌）与 `useHostProfiles`（只读 Profile 目录切片 `HostProfilesSlice \| undefined`，不含 `SYSTEM.md` 正文），均与 `useHostModels` 同构（独立订阅隔离流式抖动，严格区分 `undefined` 与 `[]`）、`usePlugins`、`usePluginConfig`、`usePluginAction`（含并发互斥与错误态）、`usePluginLocale` / `usePluginTranslator`、`useScreenParams` / `useScreenLocation`、`useToolActivity`、`useTimelineToolCalls`、`useSharedNowMs`、`usePluginScopeId` |
 | 无障碍控件 | `Switch`、`Select` / `MultiSelect`、`Checkbox`、`Tabs` / `SegmentedControl`、`Dialog` 系列、`Popover` 系列、`Tooltip` / `TooltipProvider` 系列、`DropdownMenu` 系列、`AlertDialog` 系列 / `ConfirmDialog`、`SearchBox`、`EmptyState`、`LoadingState`、`StatusLight`（及 `normalizeStatusLightTone`）、`ThinkingLevelControl`、`ViewBoundary`、`Callout`、`PluginScope` |
 | 领域选择器 | `ModelPickerControl`（宿主与插件共享的模型+思考档位选择器：目录经 `useHostModels` 稳定句柄切片读取；行体点击仅应用模型、档位跟随服务端权威默认链；档位 chips 单次提交模型+档位；`showThinkingLevels={false}` 用于纯 model-id 配置字段；控件零 churning context 读取，文案经 `copy` prop 注入、SDK 默认英文，刷新通知经 `onNotice` 回调）、`formatModelShortName` / `formatModelRowDisplay`（模型短名与来源行拆分）、`resolveEffectiveThinkingLevel`（档位按模型支持列表收敛） |
 | 布局原语 | `Screen`、`ScreenSection`、`ScreenToolbar`、`DataTable`（统一 loading/empty）、`KvGrid`、`DetailDrawer` |
@@ -185,7 +186,7 @@ helmx plugins enable my-plugin
 helmx plugins reload my-plugin
 ```
 
-- **doctor 四层检查**逐项真实执行：manifest 合法性与入口越根 → backend TS 转译与代际导入 → register 临时 PluginHost 真实执行 `definePlugin`（与生产同一校验链：action/tool/ui/doc/service/provider 形状、重复、scope）→ client 编译并校验具名导出真实存在（悬空 `export` 在此暴露，不留到运行期渲染空白）。检查使用独立代际号（`?helmxgen=N`）与临时内存 doc store，不影响已注册实例；doctor 专用后端对 `ctx.host.*` 一律 501 显式拒绝——`definePlugin` 顶层依赖宿主调用的插件在此如实失败，这是设计而非缺陷。
+- **doctor 四层检查**逐项真实执行：manifest 合法性与入口越根 → backend TS 转译与代际导入 → register 临时 PluginHost 真实执行 `definePlugin`（与生产同一校验链：action/tool/ui/doc/sessionDoc/kv/service/provider 形状、重复、scope，内置临时内存 `doc` / `sessionDoc` 存储并放行顶层 `ctx.host.onEvent` 注册）→ client 编译并校验具名导出真实存在（悬空 `export` 在此暴露，不留到运行期渲染空白）。检查使用独立代际号（`?helmxgen=N`），不影响已注册实例；doctor 专用后端对运行期 `ctx.host.*` 读写调用一律 501 显式拒绝——`definePlugin` 顶层依赖运行期宿主查询/变更的插件在此如实失败，这是设计而非缺陷。
 - **reload 安全链**：在途任务预检（`409 plugin_has_live_tasks`）→ dry-run 完整 doctor 预检（失败则旧实例保持不动，`422 plugin_reload_preflight_failed` 附完整报告）→ 新代际切换（失败用旧代回滚）→ 启用状态保持。内置插件禁止热重载（403）。
 - **受管包安装**（区别于手放置入目录）：`helmx plugins install npm:<spec>|git:<repo>[@<ref>]|<https-git-url>|<本地路径> [--enable]`、`helmx plugins update <id>`、`helmx plugins remove <id> [--yes]`。同一规范本地目录重复执行 `helmx plugins install` 会原地幂等热更新（保留既有 `ctx.doc` 数据，未显式传 `enable: false` 时确保启用）；不同来源覆盖既有插件 ID 仍诚实拒绝 `409 plugin_package_already_installed`。安装启用即在 Hub 内执行可信插件代码，无沙箱；来源由 Hub 解析，本地路径相对 Hub 主机。
 
@@ -241,7 +242,7 @@ ctx.service({
 ## 配置、数据与错误边界
 
 - **配置**：`ctx.configSchema` 声明字段（`type: string/number/boolean` + `label` / `description` / `default`，`string` 字段支持 `format: 'model' | 'node' | 'profile'` 由宿主渲染标准选择控件——模型目录 / 计算节点 / Profile，渲染权永远在宿主，插件不自带表单组件；存储值仍是普通字符串 id）；`secret: true` 自动分离至 `credentials.json` `pluginSecrets.<pluginId>` 并入 SecretStash 脱敏。插件中心与 `helmx plugins config <id>` 同权读写。
-- **数据**：专属数据目录 `<dataDir>/plugins/<id>/`；`ctx.doc` / `ctx.sessionDoc` 按 <id> 划分命名空间；单文档超 2 MiB 显式 `413 plugin_doc_too_large`，大体量内容落盘文件资产。
+- **数据**：专属数据目录 `<dataDir>/plugins/<id>/`；`ctx.doc` / `ctx.sessionDoc` 与 `ctx.kv<T>(namespace)` 在 `state.sqlite` 按 `<id>` 严格隔离；单文档超 2 MiB 显式 `413 plugin_doc_too_large`，`ctx.kv` 按条目独立存储并自动 SecretStash 脱敏（单条上限 256 KiB，超限 `413 plugin_kv_too_large`），大体量内容落盘文件资产。
 - **错误边界**：所有外部输入（HTTP body、动作入参、事件载荷）在入口边界 Schema 校验，非法显式拒绝；能力不支持、节点离线（`409 node_offline`）、交接失败必须显式报错附诊断，绝不静默降级、绝不编造 fallback 数据；错误信封统一 `{ error: { code, message, details? } }`。加载/启用失败置 `status: failed` 附结构化 `error`（`stage: scan | load | define | enable`），不拖垮内核。
 
 ## 源码与测试入口

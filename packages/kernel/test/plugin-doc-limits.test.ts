@@ -65,7 +65,7 @@ function makeBackend(): PluginHostBackend {
     getConversation: () => {
       throw new HelmxError('not_found', 'unused', 404)
     },
-    emitEvent: (type, payload) => {
+    emitEvent(type: string, payload: unknown) {
       events.push({ type, payload })
     },
   }

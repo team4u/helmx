@@ -61,7 +61,7 @@ const backend: PluginHostBackend = {
   execEnv: async () => {
     throw new HelmxError('unsupported', 'this fixture does not execute node commands', 501)
   },
-  emitEvent: (type, payload) => {
+  emitEvent(type: string, payload: unknown) {
     if (type === 'plugin.session_doc.updated') {
       sessionDocHub.dispatch(payload)
       return

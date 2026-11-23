@@ -134,7 +134,7 @@ function makeControlledBackend(): ControlledBackend {
     async execEnv() {
       throw new HelmxError('unsupported', 'fixture', 501)
     },
-    emitEvent(type, payload) {
+    emitEvent(type: string, payload: unknown) {
       if (type === 'notification') notifications.push(payload as { title: string; body: string; level: string })
     },
   }

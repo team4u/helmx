@@ -20,7 +20,7 @@
 | `builtin:token-speed` | Token 速率 | 输入区状态行实时解码速率（只读展示，内核零速率计算） | 启用 | 否 |
 | `builtin:tiers` | 模型档位 | 语义模型档位（`tier/<id>`）、自定义多套模板与 `model-tiers` 受管技能 | 启用 | 否 |
 
-内核包自身不注册任何插件；同一注册点还会调用 `loadExternalPlugins` 从 `<dataDir>/plugins/` 目录加载用户放入的外部插件（默认停用）。各插件的深度文档见文末「相关文档」。
+内核包自身不注册任何插件；同一注册点还会调用 `loadExternalPlugins` 从 `<dataDir>/installed-plugins/` 目录加载外部插件（默认停用；与运行期数据目录 `<dataDir>/plugins/<id>/` 物理分离）。各插件的深度文档见文末「相关文档」。
 
 插件是**可信代码**，宿主不提供权限沙箱：隔离是状态与配置层面的（专属数据目录、文档命名空间、凭据命名空间），任意插件天然可读环境变量与进程内数据。文档涉及机密边界处均以此前提如实陈述。
 
@@ -33,15 +33,15 @@
 | 接口 | 职责 | 关键约束 |
 | :--- | :--- | :--- |
 | `ctx.pluginId` / `ctx.dataDir` | 只读身份与专属数据目录 | `<dataDir>/plugins/<id>/` |
-| `ctx.getConfig()` / `ctx.configSchema(schema)` | 读取与声明配置 | `type: string/number/boolean`（`string` 支持 `format: 'model' / 'node' / 'profile'`，由宿主渲染模型目录 / 计算节点 / Profile 标准选择控件）；`secret: true` 分离至 `credentials.json` |
+| `ctx.getConfig()` / `ctx.configSchema(schema)` | 读取与声明配置 | `ctx.getConfig()` 合并 Schema 默认值与持久化覆写（在 `defining` / active / `stopWindow` 可用，停用后抛 `409 plugin_context_closed`）；`type: string/number/boolean`（`string` 支持 `format: 'model' / 'node' / 'profile'`，由宿主渲染标准选择控件）；`secret: true` 分离至 `credentials.json` |
 | `ctx.hook` | 注册 4 个生命周期 Hook | `input / before_turn / agent_spawn / turn_settled`，支持 `priority` |
-| `ctx.action(spec)` | 注册五端复用动作 | 强类型 `inputSchema` / `outputSchema`；可选 `cli.command` / `exposeAsTool` / `promptSnippet` / `promptGuidelines` / `scope` / `idempotent` |
-| `ctx.tool(spec)` | 注册仅对模型可见的工具 | 同样支持 `scope` 与提示词投射字段 |
-| `ctx.route(spec)` | 挂载 Web Standard 原始 HTTP 路由 | 支持 `GET / POST / PUT / PATCH / DELETE / HEAD`；提取 `:param` 经第二参数 `{ params }` 透传；注册期拒绝重复/结构冲突路由（`400 validation_error`）；自动对 `text/*`、`application/json`、`*+json`（及流式 `text/event-stream`）响应执行 SecretStash 脱敏并零缓冲跳过二进制流；`public: true` 跳过 Token 鉴权 |
+| `ctx.action(spec)` | 注册五端复用动作 | 强类型 `inputSchema` / `outputSchema`；可选 `cli.command` / `exposeAsTool` / `promptSnippet` / `promptGuidelines` / `scope` / `idempotent`；工具名与公开 CLI 路径在注册与启用提交期强唯一校验（冲突报 `409 duplicate_tool_name` / `409 duplicate_cli_command`） |
+| `ctx.tool(spec)` | 注册仅对模型可见的工具 | 同样支持 `scope` 与提示词投射字段；禁止与 `KERNEL_TOOL_NAMES` 或其他活跃插件重名（`409 duplicate_tool_name`） |
+| `ctx.route(spec)` | 挂载 Web Standard 原始 HTTP 路由 | 支持 `GET / POST / PUT / PATCH / DELETE / HEAD`；提取 `:param` 经第二参数 `{ params }` 透传；注册期拒绝重复/结构冲突路由（`400 validation_error`）；流式响应体在 EOF/cancel/abort 前计入 `liveTasks`；对 `text/*`（含 `text/event-stream`）与 `application/x-ndjson` 直接流式 SecretStash 脱敏，`application/json` / `*+json` JSON 感知脱敏上限 4 MiB（超限无缝降级流式脱敏），二进制流零缓冲透传；前端经 `PluginClientContext.fetchRoute(path, init?)` 鉴权调用；`public: true` 跳过 Token 鉴权 |
 | `ctx.doc(name, initial, opts)` | 声明全局持久文档 | state.sqlite；`public: true` 进全局首帧与 SSE 广播 |
 | `ctx.sessionDoc(name, initial, opts)` | 按会话分片的持久文档 | 不进全局首帧/全局 SSE，专用 SSE 按需订阅 |
 | `ctx.kv<T>(namespace)` | 轻量插件专属键值存储 | state.sqlite `helmx_plugin_kv`；按条目独立 `get / set / delete / list(prefix/limit/cursor) / clear / flush`（无整命名空间序列化），写入自动过 SecretStash 脱敏、单条上限 256 KiB（超限 `413 plugin_kv_too_large`），受 epoch 守卫，卸载清理 |
-| `ctx.provide<T>(id, impl)` / `ctx.consume<T>(id)` | 类型化插件间能力注册与发现 | `id` 边界强校验（`^[a-z0-9][a-z0-9._-]{0,63}$`）；停用/停止/回滚自动释放；`consume` 仅返回活跃插件实现；内核子系统亦通过 `PluginHost.consumeCapability` 消费（如 `helmx.dispatch-tools` 与 `helmx.model-tiers`） |
+| `ctx.provide<T>(id, impl)` / `ctx.consume<T>(id)` / `ctx.onCapabilityChanged(id, listener)` | 类型化插件间能力注册、发现与变更观察 | `id` 边界强校验（`^[a-z0-9][a-z0-9._-]{0,63}$`）；停用/停止/回滚自动释放提供与订阅；`consume` 仅返回活跃插件实现；`onCapabilityChanged` 返回幂等退订函数；内核子系统亦通过 `PluginHost.consumeCapability` 消费（如 `helmx.dispatch-tools` 与 `helmx.model-tiers`） |
 | `ctx.service(spec)` | 注册后台长驻服务 | `prepare / start / reconcile / stop / liveTasks / inUse` |
 | `ctx.provider(provider)` | 注册模型供应商网关 | 启用时挂载、停用后注销，宿主统一协调 |
 | `ctx.ui` | 前端扩展点注册表（10 个 surface） | 见[扩展点详解](../architecture/extension-points.md) |
@@ -75,8 +75,8 @@
 | 子代理与执行 | `spawnAgent / runGate / execEnv / resolveSpawnTarget / listActiveSpawnExecutions` |
 | 动作互调与治理 | `prepareAction / invokeAction / listActions / listPlugins` |
 | 资产端口 | `profiles / skills / secrets`（Profile 与 SYSTEM.md、技能受管自举、插件私有机密）、`listArtifacts` |
-| 节点与文件 | `nodeIpc / openTunnel / executionEnv / withFileLock / atomicWriteFile / inspectNodePathUsage` |
-| 通用机制 | `redact / completeText / refreshModels / listUi / isClosing / onEvent / emitEvent` |
+| 节点与文件 | `nodeIpc`（含 `listNodes()` 无凭据只读计算节点快照，支持 `stopWindow`） / `openTunnel / executionEnv / withFileLock / atomicWriteFile / inspectNodePathUsage` |
+| 通用机制 | `redact / completeText / refreshModels / listModels / listUi / isClosing / onEvent / emitEvent`（内建事件经 `HostEventMap` 提供强类型重载，自定义事件保持通用 `string` 回退） |
 
 使用纪律：受管 Git Worktree 清理不在 `ctx.host`——需要清理时调用 `builtin:worktree` 的 `cleanup_worktree` 动作；`execEnv` 目标节点或目录缺省继承请求会话坐标，节点离线显式报 `409 node_offline`，绝不静默回退本机；插件不得经 `execEnv`/`executionEnv` 反向调用宿主 `helmx` CLI 绕过类型契约与归属红线。
 

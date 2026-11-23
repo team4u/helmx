@@ -19,7 +19,7 @@
 | `HookBridge` | 每次模型请求按 scope 裁剪插件工具；钩子链收敛后投射动作目录，清理不可达能力的旧指引 |
 | `AssetReloader` | 纯文件资产（Profile/技能）的热重载协调 |
 
-插件可通过 `ctx.host.onEvent` 观察内核产生的会话摘要、条目、实时视图和删除事件。监听器收到经过边界校验与脱敏的事件信封；订阅随插件生命周期解除。
+插件可通过 `ctx.host.onEvent` / `ctx.host.emitEvent` 观察与发布事件（内建宿主事件经 `@helmx/protocol` 的 `HostEventMap` 提供强类型载荷重载，自定义插件事件保持通用 `string` 回退）。监听器收到经过边界校验与脱敏的事件信封；订阅随插件生命周期解除。
 
 动作与工具的认知入口均由声明驱动：`ctx.action` 默认进入 `<available_actions>` 目录，`exposeAsTool: true` 则使用独立工具声明，`ctx.tool` 提供模型专用工具。`promptSnippet` / `promptGuidelines` 仅在对应能力对当前会话可达时注入。完整参数 Schema 可用 `run_action({ actionId, describe: true })` 按需只读获取，不执行 handler。
 
@@ -168,18 +168,18 @@ pnpm helmx plugins doc builtin:workflow runs --current --watch --json
 
 ## 插件间能力注册、KV 存储与原始 HTTP 路由
 
-### 类型化能力注册表（`ctx.provide` / `ctx.consume`）
+### 类型化能力注册表（`ctx.provide` / `ctx.consume` / `ctx.onCapabilityChanged`）
 
-插件通过 `ctx.provide<T>(capabilityId, impl)` 向宿主注册强类型能力实现，返回幂等释放函数；其他插件通过 `ctx.consume<T>(capabilityId)` 读取当前活跃插件提供的实现列表（`ReadonlyArray<{ pluginId: string; impl: T }>`），内核子系统亦可通过只读 `PluginHost.consumeCapability<T>(capabilityId)` 与 `onCapabilityChanged` 消费能力，避免为单个插件在 `ctx.host` 开设专用端口：
+插件通过 `ctx.provide<T>(capabilityId, impl)` 向宿主注册强类型能力实现，返回幂等释放函数；其他插件通过 `ctx.consume<T>(capabilityId)` 读取当前活跃插件提供的实现列表（`ReadonlyArray<{ pluginId: string; impl: T }>`），并可通过 `ctx.onCapabilityChanged(capabilityId, listener)` 订阅活跃提供方变更（返回幂等退订函数，随停用/停止/回滚自动释放）；内核子系统亦可通过只读 `PluginHost.consumeCapability<T>(capabilityId)` 与 `onCapabilityChanged` 消费能力，避免为单个插件在 `ctx.host` 开设专用端口：
 
-- **标识与生命周期边界**：`capabilityId` 在注册与消费边界均按 `^[a-z0-9][a-z0-9._-]{0,63}$` 强校验；受插件 epoch 守卫约束；插件停用、停止、回滚或卸载时宿主自动释放其提供的全部能力，非活跃（disabled / deactivating / failed）插件的实现即时从 `consume` 视图消失。
+- **标识与生命周期边界**：`capabilityId` 在注册、消费与订阅边界均按 `^[a-z0-9][a-z0-9._-]{0,63}$` 强校验；受插件 epoch 守卫约束；插件停用、停止、回滚或卸载时宿主自动释放其提供的全部能力与监听订阅，非活跃（disabled / deactivating / failed）插件的实现即时从 `consume` 视图消失。
 - **典型内置契约**：
   - `helmx.dispatch-tools`：`builtin:workflow`（`['subagent', 'SubagentWorkflow']`）与 `builtin:swarm`（`['swarm_dispatch_worker']`）声明各自派工工具，`builtin:profile` 动态消费以决定协作目录注入与 `@` 补全（零硬编码工具名，任意第三方派工插件自动生效）；
   - `helmx.model-tiers`：`builtin:tiers` 提供 `{ getTiers, onChanged }`，内核 `ModelRegistry` 直接从 `PluginHost` 消费并在启停与变更时自动广播 `models.changed` 并对齐继承会话。
 
 ### 轻量按键持久存储（`ctx.kv`）
 
-`ctx.kv<T>(namespace)` 返回绑定 `(pluginId, namespace)` 的 `PluginKvHandle<T>`，底层落盘 `state.sqlite` 的 `helmx_plugin_kv(plugin_id, namespace, key, value_json, updated_at)`：
+`ctx.kv<T>(namespace)` 返回绑定 `(pluginId, namespace)` 的 `PluginKvHandle<T>`，底层落盘 `state.sqlite` 的 `helmx_plugin_kv(plugin_id, namespace, key, value_json, updated_at)`（内置参考消费者：`builtin:worktree` 的 `worktrees` / `leases` / `agent-bindings` 三命名空间）：
 
 - **接口**：`get(key)`、`set(key, value)`、`delete(key)`、`list({ prefix?, limit?, cursor? })`（按 UTF-16 code-unit 确定性排序与游标分页）、`clear()`、`flush()`；
 - **边界与安全**：`namespace`（`^[A-Za-z0-9._-]{1,64}$`）、`key`（1..256 可打印字符）与分页参数在边界强校验；`set` 经 `redactJsonValue` 校验 JSON 合法性并过全局 `SecretStash.redact` 后按单条序列化落盘，单条上限 **256 KiB**（超限显式 `413 plugin_kv_too_large` 且不破坏旧值）；受 epoch 守卫（停用后旧句柄拒绝，受控 `stopWindow` 内允许收尾写回与 `flush()`）；卸载插件时随 `purgePluginPersistentData` 彻底清理。
@@ -190,4 +190,5 @@ pnpm helmx plugins doc builtin:workflow runs --current --watch --json
 
 - **方法与参数提取**：支持 `GET | POST | PUT | PATCH | DELETE | HEAD`；`:param` 路径段经严格 percent-decoding 后作为只读 `{ params }` 经第二参数传入 `handler(req, ctx)`（既有单参 `handler(req)` 无缝兼容；静态路径优先于同长度参数化路径）；
 - **注册期冲突检测**：同一插件内相同 HTTP 方法与碰撞路径结构（如 `/items/:a` 与 `/items/:b`，或重复参数名）在注册期即显式拒绝（`400 validation_error`），杜绝静默遮蔽；
-- **响应自动脱敏**：`text/*`、`application/json` 与 `*+json` 响应在出站前自动过 `SecretStash.redact`（保留状态码与自定义响应头、清除过时 `content-length`；`text/event-stream` 经 `TransformStream` 流式脱敏），二进制与非文本流（如 `application/octet-stream`）零缓冲直接透传。
+- **流式在途跟踪与自动脱敏**：非空出站流（如 SSE / chunked）在 EOF、错误、消费方取消或 `request.signal` 中止前计入插件 `liveTasks`（缓冲单块响应即时释放）；`text/*`（含 `text/event-stream`）与 `application/x-ndjson` 直接经流式脱敏输出（零全量缓冲）；`application/json` 与 `*+json` JSON 感知脱敏上限 **4 MiB**，超限时无缝切入流式脱敏而不截断或损坏内容（保留状态码与自定义响应头、清除过时 `content-length`）；二进制流（如 `application/octet-stream`）零缓冲直接透传；
+- **前端鉴权调用**：插件视图通过 `usePluginContext().fetchRoute(path, init?)` 调用自身路由——宿主自动注入 Bearer Token（不向插件代码暴露明文令牌）、校验 `path` 以 `/` 开头且不逃逸当前插件路由命名空间，并原样返回浏览器 `Response`。

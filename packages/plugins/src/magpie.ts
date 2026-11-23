@@ -204,7 +204,8 @@ export function createMagpiePlugin(): PluginDefinition {
             en: 'Defaults to the local http://127.0.0.1:3425 (you may set http://host:3425)',
             'zh-CN': '缺省为本地 http://127.0.0.1:3425（可设 http://host:3425）',
           },
-          default: 'http://127.0.0.1:3425',
+          // Omit schema `default` so ctx.getConfig() distinguishes an unset override (falling
+          // through to MAGPIE_GW_URL/MAGPIE_ADDR or silent default loopback) from an explicit URL.
         },
         apiKey: {
           type: 'string',

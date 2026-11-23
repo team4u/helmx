@@ -79,9 +79,8 @@ export function createWorktreePlugin(): PluginDefinition {
         }
       })
 
-      ctx.host.onEvent('conversation.deleted', (raw: unknown) => {
-        const record = raw === null || typeof raw !== 'object' ? undefined : (raw as Record<string, unknown>)
-        const candidate = record?.['conversationId'] ?? record?.['id']
+      ctx.host.onEvent('conversation.deleted', (event) => {
+        const candidate = event.conversationId
         if (typeof candidate === 'number' && Number.isSafeInteger(candidate) && candidate >= 1) {
           isolation.pruneConversation(candidate)
         }

@@ -805,6 +805,7 @@ function makeSpyCtx(): SpyCtx {
   return {
     pluginId: 'builtin:workflow',
     callAction: async () => undefined,
+    fetchRoute: async () => { throw new Error('fetchRoute not implemented in test stub') },
     submitInput: async () => {},
     getPluginSessionDoc: async () => undefined,
     openScreen: () => {},

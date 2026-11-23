@@ -716,10 +716,10 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
 
       // Defensive clone: mutating returned node/health does not corrupt subsequent reads
       nodes[0]!.hostname = 'mutated-host'
-      if (nodes[0]!.health) nodes[0]!.health.cpuCount = -999
+      if (nodes[0]!.health) nodes[0]!.health.uptimeSec = -999
       const fresh = realHost!.nodeIpc.listNodes!()
       assert.notEqual(fresh[0]!.hostname, 'mutated-host')
-      assert.notEqual(fresh[0]!.health?.cpuCount, -999)
+      assert.notEqual(fresh[0]!.health?.uptimeSec, -999)
 
       // Typed emitEvent delivers notification and conversation.deleted triggers typed listener
       await realHost!.emitEvent('notification', { level: 'info', title: 'hello', body: 'world' })

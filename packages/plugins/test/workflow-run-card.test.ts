@@ -530,6 +530,7 @@ test('resolveNodeSummaryText：done 节点不随后来 child blocked 改写为�
 const stubCtx: PluginClientContextType = {
   pluginId: 'builtin:workflow',
   callAction: async () => undefined,
+  fetchRoute: async () => { throw new Error('fetchRoute not implemented in test stub') },
   openScreen: () => {},
   openConversationDrawer: () => {},
   openSplitScreen: () => {},

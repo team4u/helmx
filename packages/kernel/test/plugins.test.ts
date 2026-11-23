@@ -92,7 +92,7 @@ function makeHostApi(events: string[] = []): PluginHostBackend {
     execEnv: async () => {
       throw new HelmxError('unsupported', 'this fixture do not execute node command', 501);
     },
-    emitEvent: (type, payload) => {
+    emitEvent(type: string, payload: unknown) {
       events.push(`event:${type}`);
       eventPayloads.push({ type, payload });
     },
@@ -1626,7 +1626,7 @@ test('stop and event publish both fail: preserves stop diagnostics (adds eventEr
   const backend = makeHostApi(events);
   const originalEmit = backend.emitEvent;
   let emitBroken = false;
-  backend.emitEvent = (type, payload) => {
+  backend.emitEvent = (type: string, payload: unknown) => {
     if (emitBroken && type === 'plugin.changed') throw new Error('event pipeline crash');
     originalEmit.call(backend, type, payload);
   };
@@ -1715,7 +1715,7 @@ test('real HTTP bridge: double failed (stop + event publish) message seal same c
   // event pipeline crash:emitEvent in plugin.changed when throws, and stop failed stack add
   const originalEmit = backend.emitEvent;
   let emitBroken = false;
-  backend.emitEvent = (type, payload) => {
+  backend.emitEvent = (type: string, payload: unknown) => {
     if (emitBroken && type === 'plugin.changed') throw new Error('event pipeline crash');
     originalEmit.call(backend, type, payload);
   };
@@ -2862,7 +2862,7 @@ test('ctx.sessionDoc durable: false works without sessionDocs store, performs ze
   const baseHost = makeHostApi(events);
   const hostApi: PluginHostBackend = {
     ...baseHost,
-    onEvent: (type, listener) => {
+    onEvent(type: string, listener: (payload: unknown) => void | Promise<void>) {
       if (type === 'conversation.deleted') {
         deletedListeners.add(listener as (payload: unknown) => void);
         return () => {
@@ -3534,7 +3534,7 @@ test('doctorPluginDir rejects arbitrary top-level ctx.host.* and nested sub-port
 
 test('ctx.getConfig(): merges configSchema defaults, clones non-secret values, allows defining/idle/stopWindow, and rejects with plugin_context_closed after disable/epoch advance', { timeout: 60_000 }, async () => {
   const store = new MemoryConfigStore();
-  store.set('p:cfg-ctx', { custom: 'persisted', retries: 5, unsetKey: undefined }, {});
+  store.set('p:cfg-ctx', { custom: 'persisted', retries: 5, unsetKey: undefined });
   const host = makeHost(store);
   let defineCfg: Record<string, unknown> | undefined;
   let stopCfg: Record<string, unknown> | undefined;

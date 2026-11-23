@@ -116,6 +116,7 @@ function makeRecordingCtx(actionResults: Record<string, unknown>): RecordingCtx 
       if (action in actionResults) return actionResults[action]!
       return undefined
     },
+    fetchRoute: async () => { throw new Error('fetchRoute not implemented in test stub') },
     submitInput: async () => {},
     openScreen: (target: string) => {
       screenTargets.push(target)

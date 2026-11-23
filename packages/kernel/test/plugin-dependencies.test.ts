@@ -37,7 +37,7 @@ let events: Array<{ type: string; payload: unknown }>
 function makeBackend(): PluginHostBackend {
   return {
     ...createPluginHostBackendFixture(),
-    emitEvent: (type, payload) => {
+    emitEvent(type: string, payload: unknown) {
       events.push({ type, payload })
     },
   }

@@ -289,6 +289,7 @@ function makeRecordingCtx(actionResults: Record<string, unknown>): RecordingCtx 
       if (action in actionResults) return actionResults[action]
       return undefined
     },
+    fetchRoute: async () => { throw new Error('fetchRoute not implemented in test stub') },
     submitInput: async (text: string, options?: { conversationId?: number; whenBusy?: string }) => {
       submissions.push({ text, options })
     },

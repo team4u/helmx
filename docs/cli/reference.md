@@ -186,7 +186,9 @@ PUT 为整体替换契约：update 走语义化标志时 CLI 先 GET 完整 Prof
 
 **`helmx plugins rescan`** — 增量重扫描插件目录：只注册新外部插件（默认停用），已注册插件不重载。
 
-**`helmx plugins init [name] [--dir <dir>] [--name <str>] [--template minimal|full|app] [--force]`** — 本地脚手架（不访问 Hub）。名称需匹配 `^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$` 且禁止 `builtin:` 前缀；目标目录非空默认拒绝，`--force` 继续（同名文件被覆盖，不删除现有文件）。
+**`helmx plugins init [name] [--dir <dir>] [--name <str>] [--template minimal|full|app] [--force]`** — 本地脚手架（不访问 Hub），同时写入 `.helmx/types/` 离线类型声明快照并生成配置好 `paths` 的 `tsconfig.json`。名称需匹配 `^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$` 且禁止 `builtin:` 前缀；目标目录非空默认拒绝，`--force` 继续（同名文件被覆盖，不删除现有文件）。
+
+**`helmx plugins types [dir] [--dir <dir>]`** — 离线本地命令（不访问 Hub），向目标插件目录安全写入/刷新 `.helmx/types/`（内嵌 `@helmx/protocol`、`@helmx/protocol/browser`、`@helmx/plugin-client` 与独立回退 shim），支持在仓外无 `node_modules` 环境下直接 `tsc --noEmit`；只读检测既有 `tsconfig.json`（绝不修改用户配置），未配置 `paths` 时打印建议片段。位置参数 `[dir]` 与 `--dir` 互斥，均省略时默认当前目录。
 
 **`helmx plugins build [dir] [--dir <dir>] [--out <dir>] [--module <m>]`** — 本地预编译插件前端为静态 `dist-client/`（不访问 Hub）。编译器（`@helmx/plugin-build`，含平台原生 esbuild）按运行位置解析：源码模式/Hub payload 布局内由同级 `node_modules` 提供；npm 制品全局 CLI 需要本机已安装 Helmx 管理的 payload release（其 release 目录依赖闭包含该编译器），不可解析时显式报 `plugin_build_unavailable`（诚实边界：编译器无法零依赖交付）。
 
