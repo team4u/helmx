@@ -40,8 +40,8 @@ export type OverviewCardBucket = AttentionBucket | 'quiet' | 'archived'
 /** 总览桶筛选值。 */
 export type OverviewBucketFilter = 'all' | AttentionBucket | 'archived'
 
-/** 总览来源筛选值：全部 / 常规对话 / 托管会话（托管 = 插件 sidebarSection 接管）。 */
-export type OverviewSourceFilter = 'all' | 'regular' | 'managed'
+/** 总览来源筛选值：人类对话（默认）/ 自动化会话（顶层 ownedBy === 'helmx'）/ 全部。 */
+export type OverviewSourceFilter = 'human' | 'automated' | 'all'
 
 /** 总览分组维度：按状态（默认）/ 按角色 / 按节点。 */
 export type OverviewGroupBy = 'status' | 'profile' | 'node'
@@ -103,8 +103,8 @@ export interface OverviewCard {
   profileLabel: string
   /** 诚实摘要（真实 lastError / doing / 后台摘要 / 后代运行计数）。 */
   summaryText: string
-  /** 根会话已被插件 sidebarSection filterTag 接管（托管 / 后台 Worker 等）。 */
-  managed: boolean
+  /** 根会话是否为系统自动化会话（顶层 ownedBy === 'helmx'，如定时任务/Webhook 后台运行）。 */
+  automated: boolean
   /** 整棵子树成员 ID（含根；OVERVIEW_CARD_META_SLOT 插槽 props 输入）。 */
   memberIds: number[]
   /** 卡内后代会话芯片全量列表（按关注优先 + createdAt 倒序的确定性排序；
@@ -197,7 +197,7 @@ export function buildOverviewCards(input: {
         activeDescendantCount: aggregate.activeDescendantCount,
         t,
       }),
-      managed: false,
+      automated: aggregate.root.ownedBy === 'helmx',
       memberIds: aggregate.members.map((member) => member.id),
       descendants,
       hiddenDescendantCount: Math.max(0, descendants.length - OVERVIEW_DESCENDANT_LIMIT),
@@ -260,7 +260,7 @@ export function buildArchivedOverviewCards(input: {
       targetConversationId: root.id,
       profileLabel: profileNames.get(root.profileId) ?? root.profileId,
       summaryText: '',
-      managed: false,
+      automated: false,
       memberIds: members.map((member) => member.id),
       descendants,
       hiddenDescendantCount: Math.max(0, descendants.length - OVERVIEW_DESCENDANT_LIMIT),
@@ -279,7 +279,12 @@ export function buildNewTopicCandidates(input: AgentStandingsInput): AgentStandi
   const creatable = standings.filter((standing) => standing.canCreateConversation)
   const latestRootProfileId =
     input.conversations
-      .filter((c) => c.parentConversationId === undefined && !isConversationArchived(c))
+      .filter(
+        (c) =>
+          c.parentConversationId === undefined &&
+          !isConversationArchived(c) &&
+          (c.ownedBy ?? 'human') === 'human',
+      )
       .reduce<ConversationSummary | null>(
         (best, c) =>
           best === null || c.updatedAt > best.updatedAt || (c.updatedAt === best.updatedAt && c.id > best.id)
@@ -353,8 +358,8 @@ export function filterOverviewCards(
     if (filter.bucket !== 'all' && card.bucket !== filter.bucket) return false
     if (filter.profileId !== '' && card.root.profileId !== filter.profileId) return false
     if (filter.nodeId !== '' && overviewNodeKey(card.root) !== filter.nodeId) return false
-    if (filter.source === 'regular' && card.managed) return false
-    if (filter.source === 'managed' && !card.managed) return false
+    if (filter.source === 'human' && card.automated) return false
+    if (filter.source === 'automated' && !card.automated) return false
     if (!overviewCardMatchesQuery(card, filter.query ?? '')) return false
     return true
   })
@@ -534,13 +539,13 @@ const OVERVIEW_DEFAULT_FILTER: OverviewFilterState = {
   bucket: 'all',
   profileId: '',
   nodeId: '',
-  source: 'all',
+  source: 'human',
   query: '',
   groupBy: 'status',
 }
 
 const VALID_BUCKET_FILTERS = new Set<string>(['needs_attention', 'running', 'unread_done', 'archived'])
-const VALID_SOURCE_FILTERS = new Set<string>(['regular', 'managed'])
+const VALID_SOURCE_FILTERS = new Set<string>(['automated', 'all'])
 const VALID_GROUP_BY = new Set<string>(['profile', 'node'])
 
 /**
@@ -555,7 +560,7 @@ export function parseOverviewFilterParams(params: Record<string, string> | undef
     bucket: VALID_BUCKET_FILTERS.has(params.bucket ?? '') ? (params.bucket as OverviewBucketFilter) : 'all',
     profileId: params.profile ?? '',
     nodeId: params.node ?? '',
-    source: VALID_SOURCE_FILTERS.has(params.source ?? '') ? (params.source as OverviewSourceFilter) : 'all',
+    source: VALID_SOURCE_FILTERS.has(params.source ?? '') ? (params.source as OverviewSourceFilter) : 'human',
     query: params.q ?? '',
     groupBy: VALID_GROUP_BY.has(params.group ?? '') ? (params.group as OverviewGroupBy) : 'status',
   }
@@ -764,13 +769,18 @@ export function buildSidebarWorkingSet(input: {
   recentLimit?: number
 }): SidebarWorkingSet {
   const { cards, activeConversationIds, query = '', recentLimit = SIDEBAR_RECENT_QUIET_LIMIT } = input
-  const totalRootCount = cards.length
+  // Keep the left sidebar conversation working set strictly dedicated to human root trees;
+  // automated top-level sessions (cron/webhook/background jobs) live in Overview's Automated view
+  // and their owning plugin manager screens.
+  const humanCards = cards.filter((card) => !card.automated)
+  const totalRootCount = humanCards.length
   const trimmedQuery = query.trim()
   if (trimmedQuery !== '') {
-    const matched = filterOverviewCards(cards, {
+    const matched = filterOverviewCards(humanCards, {
       bucket: 'all',
       profileId: '',
       nodeId: '',
+      source: 'all',
       query: trimmedQuery,
     })
     return {
@@ -783,7 +793,7 @@ export function buildSidebarWorkingSet(input: {
 
   const activeCards: OverviewCard[] = []
   const quietCards: OverviewCard[] = []
-  for (const card of cards) {
+  for (const card of humanCards) {
     if (card.bucket === 'quiet') quietCards.push(card)
     else activeCards.push(card)
   }

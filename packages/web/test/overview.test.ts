@@ -216,7 +216,7 @@ test('buildOverviewCards: memberIds carry the whole tree (root + descendants)', 
   assert.deepEqual(byId.get(1)!.memberIds, [1, 11], 'memberIds carry the whole tree (root included) for the meta slot props')
   assert.deepEqual(byId.get(4)!.memberIds, [4], 'a single-member tree lists just the root')
   assert.equal(byId.has(3), false, 'archived roots never enter the overview')
-  assert.equal(byId.get(1)!.managed, false)
+  assert.equal(byId.get(1)!.automated, false)
 })
 
 test('filterOverviewCards: query matches root title, profile label, honest summary and descendant titles; ANDs with the other dimensions', { timeout: 60_000 }, () => {
@@ -286,23 +286,24 @@ test('parseOverviewFilterParams / overviewFilterParamsRepair: deep-link params p
     bucket: 'all',
     profileId: '',
     nodeId: '',
-    source: 'all',
+    source: 'human',
     query: '',
     groupBy: 'status',
-  }, 'no params: pure defaults')
-  assert.deepEqual(parseOverviewFilterParams({ bucket: 'running', profile: 'coder', node: 'local', source: 'managed', q: '调研', group: 'profile' }), {
+  }, 'no params: pure defaults (human conversations by default)')
+  assert.deepEqual(parseOverviewFilterParams({ bucket: 'running', profile: 'coder', node: 'local', source: 'automated', q: '调研', group: 'profile' }), {
     bucket: 'running',
     profileId: 'coder',
     nodeId: 'local',
-    source: 'managed',
+    source: 'automated',
     query: '调研',
     groupBy: 'profile',
   }, 'every known key parses verbatim')
+  assert.equal(parseOverviewFilterParams({ source: 'all' }).source, 'all', 'source=all parses verbatim')
   assert.equal(parseOverviewFilterParams({ bucket: 'archived' }).bucket, 'archived', 'archived is a canonical bucket filter')
   assert.equal(overviewFilterParamsRepair({ bucket: 'archived' }), null, 'archived bucket requires no repair')
   assert.equal(parseOverviewFilterParams({ bucket: 'bogus' }).bucket, 'all', 'an invalid bucket value falls back to all (hash-model invalid-segment philosophy)')
   assert.equal(parseOverviewFilterParams({ bucket: 'all' }).bucket, 'all', 'the redundant all value parses as the default')
-  assert.equal(parseOverviewFilterParams({ source: 'weird' }).source, 'all', 'an invalid source value falls back to all')
+  assert.equal(parseOverviewFilterParams({ source: 'weird' }).source, 'human', 'an invalid source value falls back to human')
   assert.equal(parseOverviewFilterParams({ group: 'status' }).groupBy, 'status', 'the redundant status value parses as the default')
   assert.equal(parseOverviewFilterParams({ group: 'weird' }).groupBy, 'status', 'an invalid group value falls back to status')
   assert.equal(parseOverviewFilterParams({ group: 'node' }).groupBy, 'node')
@@ -310,12 +311,13 @@ test('parseOverviewFilterParams / overviewFilterParamsRepair: deep-link params p
 
   assert.equal(overviewFilterParamsRepair(undefined), null, 'no params: nothing to repair')
   assert.equal(
-    overviewFilterParamsRepair({ bucket: 'running', profile: 'coder', q: 'x', group: 'node' }),
+    overviewFilterParamsRepair({ bucket: 'running', profile: 'coder', source: 'automated', q: 'x', group: 'node' }),
     null,
     'already-canonical params produce no patch (no write amplification)',
   )
   assert.deepEqual(overviewFilterParamsRepair({ bucket: 'bogus', q: 'x' }), { bucket: undefined }, 'an invalid bucket value is deleted')
-  assert.deepEqual(overviewFilterParamsRepair({ bucket: 'all', source: 'all', group: 'status' }), { bucket: undefined, source: undefined, group: undefined }, 'redundant default enums are deleted')
+  assert.deepEqual(overviewFilterParamsRepair({ bucket: 'all', source: 'human', group: 'status' }), { bucket: undefined, source: undefined, group: undefined }, 'redundant default enums are deleted')
+  assert.deepEqual(overviewFilterParamsRepair({ source: 'weird' }), { source: undefined }, 'invalid source value is deleted')
   assert.deepEqual(overviewFilterParamsRepair({ group: 'invalid' }), { group: undefined }, 'invalid group value is deleted')
   assert.deepEqual(overviewFilterParamsRepair({ tab: 'runs' }), { tab: undefined }, 'unknown keys are deleted (the overview owns its sp. namespace)')
 })
@@ -398,21 +400,21 @@ test('#/overview parses and serializes round-trip; belongs to the conversations 
 
 test('#/overview filter state rides the sp./ssp. route-param namespaces round-trip; history policy keeps param-only changes replace', { timeout: 60_000 }, () => {
   // 深链解析：主屏 sp.* 归主屏 overview，分屏 ssp.* 归分屏 overview。
-  const parsed = parseLocationHash('#/overview?sp.bucket=running&sp.profile=coder&sp.q=%E8%B0%83%E7%A0%94&split=overview&ssp.source=managed')
+  const parsed = parseLocationHash('#/overview?sp.bucket=running&sp.profile=coder&sp.q=%E8%B0%83%E7%A0%94&split=overview&ssp.source=automated')
   assert.deepEqual(parsed.primaryTarget, {
     kind: 'overview',
     params: { bucket: 'running', profile: 'coder', q: '调研' },
   })
-  assert.deepEqual(parsed.splitTarget, { kind: 'overview', params: { source: 'managed' } }, 'the split overview carries its own ssp.* filter params')
+  assert.deepEqual(parsed.splitTarget, { kind: 'overview', params: { source: 'automated' } }, 'the split overview carries its own ssp.* filter params')
   // 序列化往返无损（键按字典序稳定输出）。
   const state = { ...parsed, drawerStack: [], activeModal: null }
   const hash = formatLocationHash(state)
-  assert.equal(hash, '#/overview?split=overview&sp.bucket=running&sp.profile=coder&sp.q=%E8%B0%83%E7%A0%94&ssp.source=managed')
+  assert.equal(hash, '#/overview?split=overview&sp.bucket=running&sp.profile=coder&sp.q=%E8%B0%83%E7%A0%94&ssp.source=automated')
   assert.deepEqual(parseLocationHash(hash), state, 'round-trip is lossless')
   // 主屏从 overview 切回会话：sp.* 无处可挂自然丢弃（重新进入即未筛选态）。
-  const leftOverview = parseLocationHash('#/c/1?sp.bucket=running&split=overview&ssp.source=managed')
+  const leftOverview = parseLocationHash('#/c/1?sp.bucket=running&split=overview&ssp.source=automated')
   assert.deepEqual(leftOverview.primaryTarget, { kind: 'conversation', conversationId: 1 })
-  assert.deepEqual(leftOverview.splitTarget, { kind: 'overview', params: { source: 'managed' } }, 'the split overview keeps its params')
+  assert.deepEqual(leftOverview.splitTarget, { kind: 'overview', params: { source: 'automated' } }, 'the split overview keeps its params')
   // 非法 sp.* 键与空值沿用 Hash 模型的丢弃纪律（不产生半损参数）。
   assert.deepEqual(
     parseLocationHash('#/overview?sp.bucket=running&sp.bad%20key=v&sp.profile=').primaryTarget,
@@ -749,7 +751,7 @@ test('ConversationOverview restores filter state from a deep-linked #/overview?s
   }
 })
 
-test('ConversationOverview source filter: hidden when no managed trees exist', { timeout: 60_000 }, async () => {
+test('ConversationOverview source filter: hidden when no automated trees exist; default view separates automated runs and banners automated failures', { timeout: 60_000 }, async () => {
   const regularOnly = overviewStore({
     conversations: [
       conv({ id: 2, title: '在跑的调研', profileId: 'coder', status: 'working', createdAt: 8000, updatedAt: 8000 }),
@@ -765,12 +767,48 @@ test('ConversationOverview source filter: hidden when no managed trees exist', {
       root = createRoot(container)
       root.render(e(HostStoreProviders, { value: regularOnly }, e(ConversationOverview)))
     })
-    assert.ok(container.querySelector('[aria-label="Filter by source"]') === null, 'no managed trees: the source select stays hidden')
+    assert.ok(container.querySelector('[aria-label="Filter by source"]') === null, 'no automated trees: the source select stays hidden')
+    assert.ok(container.querySelector('.overview-automated-banner') === null, 'no automated needs-attention: banner stays hidden')
   } finally {
     await act(async () => {
       root?.unmount()
     })
     container.remove()
+  }
+
+  // With mixed human + automated trees (including a failed automated run):
+  const mixed = overviewStore({
+    conversations: [
+      conv({ id: 10, title: '人类主线对话', profileId: 'assistant', status: 'idle', createdAt: 9000, updatedAt: 9000 }),
+      conv({ id: 11, title: 'Cron · morning', profileId: 'assistant', ownedBy: 'helmx', tags: ['trigger', 'cron:morning'], status: 'done', unread: true, createdAt: 9500, updatedAt: 9500 }),
+      conv({ id: 12, title: 'Cron · broken', profileId: 'assistant', ownedBy: 'helmx', tags: ['trigger', 'cron:broken'], status: 'error', lastError: 'network timeout', createdAt: 9600, updatedAt: 9600 }),
+    ],
+    primaryTarget: { kind: 'overview' },
+  })
+  const mount = await mountOverview(mixed)
+  try {
+    assert.ok(mount.container.querySelector('[aria-label="Filter by source"]') !== null, 'automated trees present: source switcher surfaces')
+    assert.equal(mount.container.querySelectorAll('.overview-card').length, 1, 'default human view hides automated cards')
+    assert.ok(mount.container.querySelector('.overview-card')?.textContent?.includes('人类主线对话'))
+
+    // Automated failure surfaces via a compact callout banner with one-click jump
+    const banner = mount.container.querySelector('.overview-automated-banner')
+    assert.ok(banner !== null, 'failed automated run renders warning banner in human view')
+    const viewBtn = banner.querySelector<HTMLButtonElement>('.overview-automated-banner-btn')
+    assert.ok(viewBtn !== null)
+    await act(async () => {
+      viewBtn.click()
+    })
+    assert.deepEqual(
+      mixed.getNavSlice().primaryTarget,
+      { kind: 'overview', params: { source: 'automated', bucket: 'needs_attention' } },
+      'clicking View switches to automated needs_attention view',
+    )
+    assert.equal(mount.container.querySelectorAll('.overview-card').length, 1)
+    assert.ok(mount.container.querySelector('.overview-card')?.textContent?.includes('Cron · broken'))
+    assert.ok(mount.container.querySelector('.overview-automated-banner') === null, 'banner hides outside human source view')
+  } finally {
+    await mount.unmount()
   }
 })
 
@@ -1320,7 +1358,7 @@ async function overviewSettle(): Promise<void> {
   })
 }
 
-/** 批量场景：常规根 x2 + helmx 托管根。 */
+/** 批量场景：常规根 x2 + helmx 托管根（在 source=all 混合视图下验证人机批量边界）。 */
 function batchScenarioStore(): HelmxExternalStore {
   return overviewStore({
     conversations: [
@@ -1328,7 +1366,7 @@ function batchScenarioStore(): HelmxExternalStore {
       conv({ id: 2, title: '常规根 B', profileId: 'coder', createdAt: 8000, updatedAt: 8000 }),
       conv({ id: 4, title: 'helmx 会话根', ownedBy: 'helmx', createdAt: 6000, updatedAt: 6000 }),
     ],
-    primaryTarget: { kind: 'overview' },
+    primaryTarget: { kind: 'overview', params: { source: 'all' } },
   })
 }
 
@@ -1854,14 +1892,15 @@ test('ConversationOverview new topic: no creatable agent renders no button', { t
 // 并发主入口：受保护卡的 `...` 菜单仍提供只读视图动作；分屏实例直进同侧
 // ---------------------------------------------------------------------------
 
-test('ConversationOverview protected card keeps the view-only menu actions (peek + right split)', { timeout: 60_000 }, async () => {
-  // helmx 归属的托管根：宿主归档/删除均不参与——菜单只剩两个只读视图动作
+test('ConversationOverview protected card keeps the view-only menu actions (peek + right split); settled automated card allows deletion', { timeout: 60_000 }, async () => {
+  // 运行中的 helmx 归属根：宿主归档/删除均不参与——菜单只剩两个只读视图动作
   // （prepend-only 分支：无分隔线、无后续宿主动作）。
   const store = overviewStore({
     conversations: [
       conv({ id: 7, title: '应用会话', profileId: 'assistant', ownedBy: 'helmx', tags: ['app'], status: 'working', createdAt: 9000, updatedAt: 9000 }),
+      conv({ id: 8, title: '已完成定时运行', profileId: 'assistant', ownedBy: 'helmx', tags: ['trigger', 'cron:daily'], status: 'done', createdAt: 8000, updatedAt: 8000 }),
     ],
-    primaryTarget: { kind: 'overview' },
+    primaryTarget: { kind: 'overview', params: { source: 'automated' } },
   })
   const container = document.createElement('div')
   document.body.appendChild(container)
@@ -1871,17 +1910,19 @@ test('ConversationOverview protected card keeps the view-only menu actions (peek
       root = createRoot(container)
       root.render(e(HostStoreProviders, { value: store }, e(ConversationOverview)))
     })
-    const menuTrigger = container.querySelector<HTMLButtonElement>('.overview-card-actions button[aria-haspopup="menu"]')
-    assert.ok(menuTrigger !== null, 'the managed card still renders its actions menu (prepend view actions)')
+    const cards = [...container.querySelectorAll<HTMLElement>('.overview-card')]
+    assert.equal(cards.length, 2)
+    const menuTrigger = cards[0]!.querySelector<HTMLButtonElement>('.overview-card-actions button[aria-haspopup="menu"]')
+    assert.ok(menuTrigger !== null, 'the active automated card still renders its actions menu (prepend view actions)')
     await act(async () => {
       menuTrigger.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, cancelable: true }))
     })
     const items = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].filter((el) =>
       el.closest('.helmx-dropdown-content') !== null,
     )
-    assert.ok(items.length === 2, 'the managed card menu carries exactly the two read-only view actions')
-    assert.ok(items[0]!.textContent?.includes('Peek in drawer'), 'drawer peek survives on managed cards')
-    assert.ok(items[1]!.textContent?.includes('Open in right split'), 'right split survives on managed cards')
+    assert.ok(items.length === 2, 'the active automated card menu carries exactly the two read-only view actions')
+    assert.ok(items[0]!.textContent?.includes('Peek in drawer'), 'drawer peek survives on automated cards')
+    assert.ok(items[1]!.textContent?.includes('Open in right split'), 'right split survives on automated cards')
     assert.ok(document.querySelectorAll('[role="separator"]').length === 0, 'nothing follows the prepend actions: no separator, no host archive')
     await act(async () => {
       items[0]!.click()
@@ -1889,8 +1930,19 @@ test('ConversationOverview protected card keeps the view-only menu actions (peek
     assert.deepEqual(
       store.getDrawerStack(),
       [{ kind: 'conversation', conversationId: 7 }],
-      'drawer peek works on managed cards',
+      'drawer peek works on automated cards',
     )
+
+    // Settled automated card (#8) exposes Delete in its menu
+    const settledTrigger = cards[1]!.querySelector<HTMLButtonElement>('.overview-card-actions button[aria-haspopup="menu"]')
+    assert.ok(settledTrigger !== null)
+    await act(async () => {
+      settledTrigger.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, cancelable: true }))
+    })
+    const settledItems = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].filter((el) =>
+      el.closest('.helmx-dropdown-content') !== null,
+    )
+    assert.ok(settledItems.some((el) => el.textContent?.includes('Delete')), 'settled automated card exposes Delete')
   } finally {
     await act(async () => {
       root?.unmount()
@@ -2446,6 +2498,36 @@ test('buildSidebarWorkingSet: keeps all active trees, caps quiet by updatedAt de
   assert.equal(searchWs.searchActive, true)
   assert.equal(searchWs.omittedQuietCount, 0)
   assert.deepEqual(searchWs.cards.map((c) => c.root.id), [102])
+})
+
+test('buildSidebarWorkingSet and buildNewTopicCandidates exclude automated helmx roots', { timeout: 60_000 }, () => {
+  const conversations = [
+    conv({ id: 1, title: '人类对话', profileId: 'assistant', status: 'idle', createdAt: 1000, updatedAt: 1000 }),
+    conv({ id: 2, title: 'Cron · deploy', profileId: 'coder', ownedBy: 'helmx', tags: ['trigger', 'cron:deploy'], status: 'working', createdAt: 5000, updatedAt: 5000 }),
+    conv({ id: 3, title: 'Cron · alert', profileId: 'coder', ownedBy: 'helmx', tags: ['trigger', 'cron:alert'], status: 'error', createdAt: 6000, updatedAt: 6000 }),
+  ]
+  const cards = buildCards(conversations)
+  const ws = buildSidebarWorkingSet({ cards, activeConversationIds: new Set([2]) })
+  assert.equal(ws.totalRootCount, 1)
+  assert.deepEqual(ws.cards.map((c) => c.root.id), [1], 'automated roots never enter sidebar working set even when active or errored')
+
+  const searchWs = buildSidebarWorkingSet({ cards, activeConversationIds: new Set(), query: 'Cron' })
+  assert.deepEqual(searchWs.cards, [], 'sidebar search stays scoped to human conversations')
+
+  const candidates = buildNewTopicCandidates({
+    profiles: [
+      { id: 'assistant', name: '个人助理' },
+      { id: 'coder', name: '编码专员' },
+    ],
+    plugins: [],
+    conversations,
+    locale: 'en',
+  })
+  assert.deepEqual(
+    candidates.map((c) => c.profileId),
+    ['assistant', 'coder'],
+    'newer automated runs under coder must not pull coder ahead of recently human-used assistant',
+  )
 })
 
 test('ConversationOverview archived tab & quick drawer-peek button: archived tab appears conditionally and direct peek opens drawer', { timeout: 60_000 }, async () => {

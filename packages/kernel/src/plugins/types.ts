@@ -126,6 +126,8 @@ export interface PluginHostBackend
   ): Promise<void>
   /** Guarded abort port (includes scheduler-paused durability path; 501 when unwired). */
   abortConversationGuarded?(id: number, guard: GuardedMutationExpectation): Promise<void>
+  /** Guarded automated deletion port (atomic ownership/active/managed checks; 501 when unwired). */
+  deleteConversationGuarded?: HelmxHostApi['deleteConversationGuarded']
   /** Human-channel context reset port (501 when unwired). */
   resetConversation?: HelmxHostApi['resetConversation']
   /** Automated guarded context reset port (atomic ownership/seq check; 501 when unwired). */

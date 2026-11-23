@@ -368,6 +368,21 @@ export function wrapHostApi(
         Promise.resolve(port(id, mutationGuard)),
       );
     },
+    deleteConversationGuarded: (id, mutationGuard, opts) => {
+      guard('host.deleteConversationGuarded');
+      const port = backend.deleteConversationGuarded;
+      if (port === undefined) {
+        throw new HelmxError(
+          'not_supported',
+          'Current host has not wired guarded conversation deletion (host.deleteConversationGuarded)',
+          501,
+          { conversationId: id },
+        );
+      }
+      return deps.tracker.withTask(pluginId, 'host.deleteConversationGuarded', () =>
+        Promise.resolve(port.call(backend, id, mutationGuard, opts)),
+      );
+    },
     resetConversation: (id, opts) => {
       guard('host.resetConversation');
       const port = backend.resetConversation;

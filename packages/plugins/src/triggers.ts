@@ -1,28 +1,28 @@
 /**
- * builtin:triggers: the cron and webhook inbound connector (design doc §4.4).
+ * builtin:triggers: the cron and webhook inbound connector.
  *
  * Responsibilities:
- * - Assemble the shared dispatchTrigger helper (delivery.ts: target resolution + isClosing gate,
- *   delivered via host.dispatchTrigger with unified defang anti-escape);
- * - The webhook connector (webhook.ts: HMAC-verified public route + lifecycle actions + the
- *   secret persisted in credentials.json pluginSecrets, bound to this plugin's namespace via
- *   ctx.host.secrets, globally redacted via addRedaction);
- * - The cron connector (cron.ts: persistent scheduling and lifecycle actions);
- * - The declarative management UI is now client.tsx React components (screen 'manager' subscribing to
- *   the crons/webhooks public docs; actions via ctx.callAction; no Emoji, lucide line icons).
- *
- * Honesty boundaries:
- * - The webhook secret is configurable only via manual HTTP/CLI; conversation contexts (run_action)
- *   are rejected from creating it -- the raw secret is already in the model tool history, and this
- *   plugin cannot clean a secret already in context;
- * - create/delete has no cross-store transaction: sequential writes + explicit rollback/errors;
- *   doc.flush() really flushes before success; atomic exactly-once is not promised (the restart catch-up policy
- *   is declared in the cron module docs).
+ * - Assemble the shared delivery helper (`delivery.ts`: isolated/dedicated automated `helmx`-owned
+ *   conversations or explicit conversation injection with `followUp`, plus guarded retention pruning);
+ * - Register the webhook connector (`webhook.ts`) and cron scheduler (`cron.ts`, with active-run overlap skip);
+ * - Listen to `turn_settled` to prune excess settled isolated runs beyond `keepLast` cleanly via
+ *   `ctx.host.deleteConversationGuarded` (never touching active, blocked, errored, or human conversations);
+ * - Provide the client.tsx management UI (`TriggersManagerScreen` + `TriggersSettingsPanel`).
  */
 import type { PluginDefinition } from '@helmx/protocol'
 import { loadManagedSkillAsset, resolvePluginClientAssets } from './asset-paths.js'
-import { TRIGGERS_PLUGIN_ID, TRIGGERS_SKILL_ID } from './triggers/contracts.js'
-import { createDeliveryDispatch } from './triggers/delivery.js'
+import {
+  DEFAULT_TRIGGER_KEEP_LAST,
+  TRIGGERS_PLUGIN_ID,
+  TRIGGERS_SKILL_ID,
+  TRIGGER_TAG,
+  parseTriggerSourceTag,
+} from './triggers/contracts.js'
+import {
+  createDeliveryDispatch,
+  findActiveTriggerRun,
+  pruneIsolatedRuns,
+} from './triggers/delivery.js'
 import { registerWebhook } from './triggers/webhook.js'
 import { registerCron } from './triggers/cron.js'
 
@@ -43,25 +43,56 @@ export function createTriggersPlugin(): PluginDefinition {
     id: TRIGGERS_PLUGIN_ID,
     name: { en: 'Triggers (cron + webhook)', 'zh-CN': '触发器（cron + webhook）' },
     description: {
-      en: 'Inbound connector: cron timers and webhook inbound triggers, delivered to target conversations via escape-proof envelopes.',
-      'zh-CN': '入站连接器：cron 定时与 webhook 入站触发，经防逃逸信封投递到目标会话。',
+      en: 'Inbound connector: cron timers and webhook inbound triggers, running in isolated or dedicated automated sessions (or explicit conversations) via escape-proof envelopes.',
+      'zh-CN': '入站连接器：cron 定时与 webhook 入站触发，默认在隔离或专用自动化会话中运行（或显式投递到指定会话），经防逃逸信封投递。',
     },
     icon: 'webhook',
     version: '0.1.0',
     ...resolvePluginClientAssets(TRIGGERS_PLUGIN_ID, 'triggers', 'triggers_plugin_client_missing'),
     definePlugin(ctx) {
-      // Shared delivery helper: cron (targetProfileId as the second argument) and webhook (the envelope
-      // carries an already-resolved target) share one implementation; isClosing is checked inside the
-      // helper (a reader-function wrapper over the ctx.host getter).
       const dispatch = createDeliveryDispatch({
         host: ctx.host,
         profiles: ctx.host.profiles,
         isClosing: () => ctx.host.isClosing,
       })
 
-      registerWebhook(ctx, { dispatch })
+      const webhooks = registerWebhook(ctx, { dispatch })
 
-      registerCron(ctx, { dispatchTrigger: dispatch })
+      const crons = registerCron(ctx, {
+        dispatchTrigger: dispatch,
+        findActiveRun: (jobId) => findActiveTriggerRun(ctx.host, 'cron', jobId),
+        profiles: ctx.host.profiles,
+      })
+
+      // Post-turn retention hook: when a settled automated isolated run finishes cleanly,
+      // prune older settled runs beyond the trigger's keepLast cap via guarded deletion.
+      ctx.hook.onTurnSettled(async (payload) => {
+        if (payload.outcome !== 'completed' || ctx.host.isClosing) return
+        const conv = payload.conversation
+        if (
+          conv.parentConversationId !== undefined ||
+          (conv.ownedBy ?? 'human') !== 'helmx' ||
+          !conv.tags.includes(TRIGGER_TAG)
+        ) {
+          return
+        }
+        const parsed = parseTriggerSourceTag(conv.tags)
+        if (parsed === undefined) return
+        let keepLast: number | undefined
+        try {
+          if (parsed.kind === 'cron') {
+            const job = crons.getJob(parsed.id)
+            if (job?.mode === 'isolated') keepLast = job.keepLast ?? DEFAULT_TRIGGER_KEEP_LAST
+          } else {
+            const hook = webhooks.getWebhook(parsed.id)
+            if (hook?.mode === 'isolated') keepLast = hook.keepLast ?? DEFAULT_TRIGGER_KEEP_LAST
+          }
+        } catch {
+          return
+        }
+        if (keepLast === undefined) return
+        await pruneIsolatedRuns(ctx.host, parsed.kind, parsed.id, keepLast)
+      })
 
       // ---- Managed skill: triggers (cron/webhook usage & security boundaries) ----
       ctx.service({

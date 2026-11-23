@@ -730,6 +730,16 @@ export class KernelRuntime {
     return this.conversations.deleteConversation(id)
   }
 
+  /** Guarded automated deletion (Watchdog kernel enforcement): enforces helmx ownership across the whole subtree. */
+  async deleteConversationGuarded(
+    id: number,
+    guard: Parameters<ConversationService['deleteConversationGuarded']>[1] = {},
+    opts?: Parameters<ConversationService['deleteConversationGuarded']>[2],
+  ): Promise<void> {
+    this.assertWritable()
+    return this.conversations.deleteConversationGuarded(id, guard, opts)
+  }
+
   async deleteConversations(ids: readonly number[]): Promise<ConversationBulkDeleteResponse> {
     this.assertWritable()
     return this.conversations.deleteConversations(ids)

@@ -1,60 +1,48 @@
 /**
  * triggers/webhook.ts: the inbound webhook connector.
  *
- * Contract (§4.4):
+ * Contract:
  * - Public route POST /webhook/:id (host full path /api/plugins/builtin%3Atriggers/
  *   routes/webhook/:id; public:true skips token auth -- the plugin verifies signatures itself);
- * - HMAC-SHA256: header x-helmx-signature: sha256=<hex>, the signature covering the raw body
- *   bytes; timingSafeEqual constant-time comparison; missing/wrong signature 401, unknown id 404, success 202
- *   {accepted:true}；
- * - The secret lands only in credentials.json pluginSecrets['builtin:triggers']
- *   ['webhook:<id>'] (0600, bound to this plugin's ID via ctx.host.secrets) plus
- *   secrets.addRedaction global redaction; the doc stores metadata only;
- * - webhook_create rejects calling contexts carrying a conversationId: the raw secret has
- *   already entered the model tool history via the run_action parameter (a handler rejection
- *   cannot clean a secret already in context) -- the secret is configurable only via manual
- *   HTTP/CLI, as the docs honestly state;
- * - create/delete are serialized (mutationChain); the secret file and the doc have no
- *   cross-store transaction: create writes the doc first (incl. hasSecret:true), really flushes
- *   via doc.flush(), then writes the secret; a secret write failure rolls back the doc entry;
- *   delete removes the doc first (idempotent-tolerant) then the secret, a secret deletion
- *   failure erroring explicitly; both paths await flush before success -- never returning fake persistence;
- * - Successful delivery goes through the shared dispatchTrigger helper (the isClosing check is
- *   inside the helper), with text as the raw utf8 body and source as webhook:<id>; the body cap is 256 KiB
- *   (reusing the http readBody streaming limit, cancel + 413 when exceeded; the signature is over the raw bytes,
+ * - HMAC-SHA256: header x-helmx-signature: sha256=<hex>, covering raw body bytes; timingSafeEqual;
+ *   missing/wrong signature 401, unknown id 404, success 202 {accepted:true};
+ * - The secret lands only in credentials.json pluginSecrets['builtin:triggers']['webhook:<id>']
+ *   (0600, via ctx.host.secrets) plus global secrets.addRedaction; the doc stores metadata only;
+ * - webhook_create rejects conversation contexts (403 webhook_secret_context_forbidden);
+ * - Delivery defaults to isolated automated (`ownedBy: 'helmx'`) runs with retention cap `keepLast`,
+ *   or supports `mode: 'dedicated'` (one persistent `helmx` conversation) or explicit `targetConversationId`.
  */
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
 import { HelmxError } from '@helmx/protocol'
 import type { HelmxPluginContext, PluginActionContext } from '@helmx/protocol'
 import { BodyError, readBody } from '@helmx/protocol'
 import {
+  DEFAULT_TRIGGER_KEEP_LAST,
   MAX_DESCRIPTION,
+  MAX_TRIGGER_KEEP_LAST,
   TRIGGERS_PLUGIN_ID,
   assertDescription,
   assertTriggerId,
   assertWebhookSecret,
   assertWebhooksDoc,
+  normalizeTriggerTargetInput,
   webhookPublicMeta,
   webhookSecretKey,
+  type TriggerSessionMode,
   type WebhookMeta,
   type WebhooksDoc,
 } from './contracts.js'
-import type { DispatchTriggerHelper } from './delivery.js'
+import type { DispatchTriggerHelper, TriggerDeliveryTarget } from './delivery.js'
 
 /** Public webhook request body cap (raw bytes; exceeding gives an explicit 413). */
 const MAX_WEBHOOK_BODY_BYTES = 256 * 1024
 
-/**
- * The bound for stop waiting on in-flight public-route requests: slow clients reading the body have no read timeout
- * (protocol/src/http-body.ts is not this plugin's to change); unbounded waiting would hang dispose;
- * after the timeout, honestly record the unconverged request count and continue disabling (the same bounded approach as the watchdog stop).
- */
+/** Bounded wait on in-flight public-route requests during disable. */
 export const STOP_REQUEST_WAIT_MS = 10_000
 
 const SIGNATURE_HEADER = 'x-helmx-signature'
 const SIGNATURE_PREFIX = 'sha256='
 
-/** Uniform 404/401/413 JSON error body (public routes carry no internal detail). */
 function webhookError(status: number, code: string, message: string): Response {
   return new Response(JSON.stringify({ error: { code, message } }), {
     status,
@@ -68,8 +56,6 @@ const acceptedResponse = (): Response =>
     headers: { 'content-type': 'application/json; charset=utf-8' },
   })
 
-/** Hex decode + constant-time comparison: both sides are 64-char hex ASCII bytes (length always 64);
- * the regex format check guarantees equal length before timingSafeEqual, leaking no timing through length branches. */
 function verifySignature(secret: string, body: Uint8Array, header: string): boolean {
   if (!header.startsWith(SIGNATURE_PREFIX)) return false
   const hex = header.slice(SIGNATURE_PREFIX.length)
@@ -80,11 +66,11 @@ function verifySignature(secret: string, body: Uint8Array, header: string): bool
   return timingSafeEqual(provided, expected)
 }
 
-interface RegisterWebhookResult {
-  /** Action-handler reuse (the same implementation as ctx.action; consistent across five ends). */
+export interface RegisterWebhookResult {
   createWebhook(input: CreateWebhookInput, context: PluginActionContext): Promise<{ webhook: WebhookMeta }>
   listWebhooks(): { webhooks: WebhookMeta[] }
   deleteWebhook(input: { id: string }): Promise<{ deleted: true }>
+  getWebhook(id: string): WebhookMeta | undefined
 }
 
 interface CreateWebhookInput {
@@ -92,14 +78,11 @@ interface CreateWebhookInput {
   description?: string
   secret: string
   targetConversationId?: number
-  targetProfileId?: string
+  mode?: TriggerSessionMode
+  profileId?: string
+  keepLast?: number
 }
 
-/**
- * Register the webhook connector: the public doc 'webhooks', the public route, and lifecycle actions.
- * secrets / profiles / isClosing consume the ctx.host public ports directly (zero-arg factory,
- * no injected dependencies); the returned handler face is reused (tests/management UI share one implementation).
- */
 export function registerWebhook(
   ctx: HelmxPluginContext,
   shared: { dispatch: DispatchTriggerHelper },
@@ -112,12 +95,7 @@ export function registerWebhook(
     doc.set(assertWebhooksDoc(next))
   }
 
-  /** Handle releasing this enable cycle's secret redaction registrations (stop releases them together). */
   let secretRedactions: Array<() => void> = []
-
-  // ---- Service liveness gate: public routes have no host tracker wrapper; maintain the in-flight request set ourselves ----
-  // After active=false: requests already inside the handler keep converging (stop waits), but requests
-  // re-checking active before dispatch no longer deliver; stale handlers (leftover calls after disable) are rejected outright.
   let active = false
   const activeRequests = new Set<Promise<unknown>>()
   const idleWaiters: Array<() => void> = []
@@ -138,7 +116,6 @@ export function registerWebhook(
     return tracked
   }
 
-  /** Reject leftover calls after disable (old handler handles may still be held externally). */
   const assertActive = (): void => {
     if (!active) {
       throw new HelmxError(
@@ -150,16 +127,6 @@ export function registerWebhook(
     }
   }
 
-  /** Read one doc entry live (not_found when absent). */
-  const requireWebhook = (id: string): WebhookMeta => {
-    const found = readDoc().webhooks.find((w) => w.id === id)
-    if (found === undefined) {
-      throw new HelmxError('not_found', `webhook '${id}' does not exist`, 404, { id })
-    }
-    return found
-  }
-
-  /** Start: read the doc (corruption errors explicitly), register existing secret redactions, and open the liveness gate. */
   async function start(): Promise<void> {
     readDoc()
     const metas = readDoc().webhooks
@@ -170,9 +137,6 @@ export function registerWebhook(
     active = true
   }
 
-  /** Stop: close the gate first (new requests rejected / re-rejected before dispatch), then boundedly wait for admitted
-   * requests to converge naturally; on timeout do not forcibly tear down requests (we cannot: the response may already be
-   * committed to the connection); record honestly and continue releasing plugin resources. */
   async function stop(): Promise<void> {
     active = false
     if (activeRequests.size > 0) {
@@ -187,8 +151,6 @@ export function registerWebhook(
       await Promise.race([idle, deadline])
       if (giveUpTimer !== undefined) clearTimeout(giveUpTimer)
       if (activeRequests.size > 0) {
-        // Record honestly (never pretend convergence): when leftover requests converge by themselves, trackRequest's finally
-        // idempotently resolves finished waiters, affecting no later cycle.
         console.error(
           `[triggers] webhook stop exceeded ${STOP_REQUEST_WAIT_MS}ms waiting for in-flight requests; ${activeRequests.size} unconverged (slow clients may still be reading the body); continuing disable`,
         )
@@ -198,15 +160,12 @@ export function registerWebhook(
     secretRedactions = []
   }
 
-  /** Disable-gate label: normal disable/unregister gets 409 plugin_has_live_tasks from this;
-   * on a forced dispose-time stop, active is already false and this returns empty to allow teardown. */
   function liveTasks(): string[] {
     if (!active) return []
     const count = activeRequests.size
     return count > 0 ? [`webhook:inflight:${count}`] : []
   }
 
-  /** create/delete serialization chain: preventing concurrent read-modify-write races between the secret file and the doc. */
   let mutationChain: Promise<unknown> = Promise.resolve()
   const enqueueMutation = <T>(run: () => Promise<T>): Promise<T> => {
     const task = mutationChain.then(run, run)
@@ -217,13 +176,26 @@ export function registerWebhook(
     return task
   }
 
+  const persistDedicatedConversationId = async (
+    id: string,
+    createdAt: number,
+    conversationId: number,
+  ): Promise<void> => {
+    await enqueueMutation(async () => {
+      const current = readDoc()
+      const idx = current.webhooks.findIndex((w) => w.id === id && w.createdAt === createdAt && w.mode === 'dedicated')
+      if (idx < 0 || current.webhooks[idx]!.dedicatedConversationId === conversationId) return
+      const webhooks = [...current.webhooks]
+      webhooks[idx] = { ...webhooks[idx]!, dedicatedConversationId: conversationId }
+      writeDoc({ webhooks })
+      await doc.flush()
+    })
+  }
+
   async function createWebhook(
     input: CreateWebhookInput,
     context: PluginActionContext,
   ): Promise<{ webhook: WebhookMeta }> {
-    // Secret boundary: a call carrying a conversationId (run_action / workflow) means the raw
-    // secret has entered that conversation's model context -- this handler cannot clean it; reject outright;
-    // the secret is configurable only via manual HTTP/CLI (as the docs honestly state).
     if (context.conversationId !== undefined) {
       throw new HelmxError(
         'webhook_secret_context_forbidden',
@@ -235,25 +207,19 @@ export function registerWebhook(
     const id = assertTriggerId('webhook', input.id)
     const secret = assertWebhookSecret(input.secret)
     const description = input.description === undefined ? undefined : assertDescription(input.description)
-    if (input.targetConversationId !== undefined && input.targetProfileId !== undefined) {
-      throw new HelmxError('validation_error', 'targetConversationId and targetProfileId must not both be provided', 400, {})
-    }
-    if (input.targetConversationId !== undefined && (!Number.isInteger(input.targetConversationId) || input.targetConversationId <= 0)) {
-      throw new HelmxError('validation_error', `targetConversationId is not a positive integer (${String(input.targetConversationId)})`, 400, {})
-    }
-    if (input.targetProfileId !== undefined && (typeof input.targetProfileId !== 'string' || input.targetProfileId.length === 0)) {
-      throw new HelmxError('validation_error', 'targetProfileId must be a non-empty string', 400, {})
-    }
-    // targetProfileId is existence-checked at creation (fail-fast: no dead endpoint pointing at a
-    // nonexistent role; delivery still live-checks, guarding against post-creation Profile deletion).
-    if (input.targetProfileId !== undefined) {
-      const profileId = input.targetProfileId
-      if (await host.profiles.get(profileId) === undefined) {
+    const target = normalizeTriggerTargetInput({
+      targetConversationId: input.targetConversationId,
+      mode: input.mode,
+      profileId: input.profileId,
+      keepLast: input.keepLast,
+    })
+    if (target.profileId !== undefined) {
+      if ((await host.profiles.get(target.profileId)) === undefined) {
         throw new HelmxError(
           'validation_error',
-          `targetProfileId does not exist: ${profileId} (refusing to point at the wrong role)`,
+          `profileId does not exist: ${target.profileId} (refusing to point at the wrong role)`,
           400,
-          { targetProfileId: profileId },
+          { profileId: target.profileId },
         )
       }
     }
@@ -261,16 +227,16 @@ export function registerWebhook(
       id,
       hasSecret: true,
       ...(description !== undefined ? { description } : {}),
-      ...(input.targetConversationId !== undefined ? { targetConversationId: input.targetConversationId } : {}),
-      ...(input.targetProfileId !== undefined ? { targetProfileId: input.targetProfileId } : {}),
+      ...(target.targetConversationId !== undefined ? { targetConversationId: target.targetConversationId } : {}),
+      ...(target.mode !== undefined ? { mode: target.mode } : {}),
+      ...(target.profileId !== undefined ? { profileId: target.profileId } : {}),
+      ...(target.keepLast !== undefined ? { keepLast: target.keepLast } : {}),
       createdAt: Date.now(),
     }
     return enqueueMutation(async () => {
       if (readDoc().webhooks.some((w) => w.id === id)) {
         throw new HelmxError('webhook_exists', `webhook '${id}' already exists`, 409, { id })
       }
-      // Order: write the doc (the entry metadata) and flush first, then write the secret; on secret
-      // write failure, roll back by removing the doc entry and flushing (the entry never went live); a rollback failure aggregates and propagates.
       try {
         writeDoc({ webhooks: [...readDoc().webhooks, meta] })
         await doc.flush()
@@ -310,8 +276,6 @@ export function registerWebhook(
       if (existing === undefined) {
         throw new HelmxError('not_found', `webhook '${id}' does not exist`, 404, { id })
       }
-      // Order: doc first (taking the entry offline), then secret; a secret deletion failure errors
-      // explicitly (a leftover secret has no entry and is unusable; humans can clean credentials.json).
       writeDoc({ webhooks: current.webhooks.filter((w) => w.id !== id) })
       try {
         await doc.flush()
@@ -328,6 +292,32 @@ export function registerWebhook(
     })
   }
 
+  const buildTargetForWebhook = (meta: WebhookMeta): TriggerDeliveryTarget => {
+    if (meta.targetConversationId !== undefined) {
+      return { kind: 'conversation', conversationId: meta.targetConversationId }
+    }
+    if (meta.mode === 'dedicated') {
+      return {
+        kind: 'dedicated',
+        triggerKind: 'webhook',
+        triggerId: meta.id,
+        label: meta.description,
+        profileId: meta.profileId,
+        dedicatedConversationId: meta.dedicatedConversationId,
+        onDedicatedConversationId: (conversationId) =>
+          persistDedicatedConversationId(meta.id, meta.createdAt, conversationId),
+      }
+    }
+    return {
+      kind: 'isolated',
+      triggerKind: 'webhook',
+      triggerId: meta.id,
+      label: meta.description,
+      profileId: meta.profileId,
+      keepLast: meta.keepLast ?? DEFAULT_TRIGGER_KEEP_LAST,
+    }
+  }
+
   // ---- Public route: HMAC verification + delivery ----
   ctx.route({
     method: 'POST',
@@ -336,7 +326,6 @@ export function registerWebhook(
     handler(request) {
       return trackRequest(async () => handleWebhookRequest(request)).catch((err: unknown) => {
         if (err instanceof HelmxError) {
-          // Doc corruption and post-disable leftover calls both pass through their original codes (not lumped into a generic 500).
           if (err.code === 'triggers_doc_corrupt') {
             return webhookError(500, err.code, err.message)
           }
@@ -344,103 +333,93 @@ export function registerWebhook(
             return webhookError(409, err.code, err.message)
           }
         }
-        // Other exceptions honestly 500 (never swallowed, never disguised as success).
         return webhookError(500, 'webhook_internal_error', `webhook handling failed: ${err instanceof Error ? err.message : String(err)}`)
       })
     },
   })
 
   async function handleWebhookRequest(request: Request): Promise<Response> {
-      assertActive()
-      // Accept POST only (the host route layer matches by method; the same check applies when called directly).
-      if (request.method !== 'POST') {
-        return webhookError(404, 'not_found', `the webhook route supports POST only (got ${request.method})`)
+    assertActive()
+    if (request.method !== 'POST') {
+      return webhookError(404, 'not_found', `the webhook route supports POST only (got ${request.method})`)
+    }
+    const rawId = request.url.split('?')[0]!.split('/').filter(Boolean).pop()
+    let id: string
+    try {
+      id = rawId === undefined ? '' : decodeURIComponent(rawId)
+    } catch {
+      return webhookError(400, 'invalid_path_encoding', 'the webhook id path segment has invalid encoding')
+    }
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) {
+      return webhookError(404, 'not_found', `webhook does not exist: ${id || '(empty)'}`)
+    }
+    const meta = readDoc().webhooks.find((w) => w.id === id)
+    if (meta === undefined) {
+      return webhookError(404, 'not_found', `webhook does not exist: ${id}`)
+    }
+    const secret = await host.secrets.get(webhookSecretKey(id))
+    if (secret === undefined || secret === '') {
+      return webhookError(500, 'webhook_secret_missing', `webhook '${id}' is missing its secret (credentials.json and the doc are inconsistent -- please verify manually)`)
+    }
+    const signature = request.headers.get(SIGNATURE_HEADER)
+    if (signature === null) {
+      return webhookError(401, 'unauthorized', `missing the ${SIGNATURE_HEADER} header`)
+    }
+    let body: Uint8Array
+    try {
+      body = await readBody(request, MAX_WEBHOOK_BODY_BYTES)
+    } catch (err) {
+      if (err instanceof BodyError && err.code === 'body_too_large') {
+        return webhookError(413, 'payload_too_large', `webhook body over the cap (${MAX_WEBHOOK_BODY_BYTES} bytes)`)
       }
-      // Full path /api/plugins/builtin%3Atriggers/routes/webhook/:id;
-      // the route layer already matches decoded segments; here take the raw trailing segment from the URL and decode it strictly.
-      const rawId = request.url.split('?')[0]!.split('/').filter(Boolean).pop()
-      let id: string
-      try {
-        id = rawId === undefined ? '' : decodeURIComponent(rawId)
-      } catch {
-        return webhookError(400, 'invalid_path_encoding', 'the webhook id path segment has invalid encoding')
+      return webhookError(400, 'invalid_body', `webhook body read failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    if (!verifySignature(secret, body, signature)) {
+      return webhookError(401, 'unauthorized', 'signature verification failed (expected x-helmx-signature: sha256=<hex>, the signature covering the raw body bytes)')
+    }
+    let text: string
+    try {
+      text = new TextDecoder('utf-8', { fatal: true }).decode(body)
+    } catch {
+      return webhookError(400, 'invalid_body', 'the webhook body is not valid UTF-8')
+    }
+    const secretAtDispatch = await host.secrets.get(webhookSecretKey(id))
+    if (!active) {
+      return webhookError(409, 'plugin_disabled', 'the builtin:triggers webhook service is disabled; refusing delivery')
+    }
+    const metaAtDispatch = readDoc().webhooks.find((w) => w.id === id)
+    if (metaAtDispatch === undefined) {
+      return webhookError(404, 'not_found', `webhook does not exist: ${id}`)
+    }
+    if (secretAtDispatch !== secret || metaAtDispatch.createdAt !== meta.createdAt) {
+      return webhookError(409, 'webhook_changed', 'the webhook configuration changed; please resend with the current secret')
+    }
+    try {
+      await shared.dispatch(
+        {
+          id: `webhook:${id}:${randomUUID()}`,
+          source: `webhook:${id}`,
+          text,
+          whenBusy: 'followUp',
+          ...(metaAtDispatch.targetConversationId !== undefined ? { targetConversationId: metaAtDispatch.targetConversationId } : {}),
+          createdAt: Date.now(),
+        },
+        buildTargetForWebhook(metaAtDispatch),
+      )
+    } catch (err) {
+      if (err instanceof HelmxError && (err.code === 'runtime_closing' || err.code === 'not_found')) {
+        return webhookError(err.status, err.code, err.message)
       }
-      if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) {
-        return webhookError(404, 'not_found', `webhook does not exist: ${id || '(empty)'}`)
-      }
-      const meta = readDoc().webhooks.find((w) => w.id === id)
-      if (meta === undefined) {
-        return webhookError(404, 'not_found', `webhook does not exist: ${id}`)
-      }
-      const secret = await host.secrets.get(webhookSecretKey(id))
-      if (secret === undefined || secret === '') {
-        // A doc entry with a missing secret is a persistence-layer inconsistency: an explicit 500
-        // diagnostic (honesty discipline); never silently admit unsigned requests.
-        return webhookError(500, 'webhook_secret_missing', `webhook '${id}' is missing its secret (credentials.json and the doc are inconsistent -- please verify manually)`)
-      }
-      const signature = request.headers.get(SIGNATURE_HEADER)
-      if (signature === null) {
-        return webhookError(401, 'unauthorized', `missing the ${SIGNATURE_HEADER} header`)
-      }
-      let body: Uint8Array
-      try {
-        // Reuse the http-boundary readBody: content-length precheck + streaming accumulation; over the
-        // limit, cancel the reader immediately (never buffering the whole body into memory) and throw body_too_large 413.
-        body = await readBody(request, MAX_WEBHOOK_BODY_BYTES)
-      } catch (err) {
-        if (err instanceof BodyError && err.code === 'body_too_large') {
-          return webhookError(413, 'payload_too_large', `webhook body over the cap (${MAX_WEBHOOK_BODY_BYTES} bytes)`)
-        }
-        return webhookError(400, 'invalid_body', `webhook body read failed: ${err instanceof Error ? err.message : String(err)}`)
-      }
-      if (!verifySignature(secret, body, signature)) {
-        return webhookError(401, 'unauthorized', 'signature verification failed (expected x-helmx-signature: sha256=<hex>, the signature covering the raw body bytes)')
-      }
-      // Verify the signature (over raw bytes) before decoding: fatal:true makes bad UTF-8 throw an explicit 400,
-      // never silently replacing characters (the replacement's semantics differ from the raw bytes).
-      let text: string
-      try {
-        text = new TextDecoder('utf-8', { fatal: true }).decode(body)
-      } catch {
-        return webhookError(400, 'invalid_body', 'the webhook body is not valid UTF-8')
-      }
-      // The endpoint may be deleted or rebuilt while the body is being read; refuse delivering to a new configuration with the old key.
-      const secretAtDispatch = await host.secrets.get(webhookSecretKey(id))
-      if (!active) {
-        return webhookError(409, 'plugin_disabled', 'the builtin:triggers webhook service is disabled; refusing delivery')
-      }
-      const metaAtDispatch = readDoc().webhooks.find((w) => w.id === id)
-      if (metaAtDispatch === undefined) {
-        return webhookError(404, 'not_found', `webhook does not exist: ${id}`)
-      }
-      if (secretAtDispatch !== secret || metaAtDispatch.createdAt !== meta.createdAt) {
-        return webhookError(409, 'webhook_changed', 'the webhook configuration changed; please resend with the current secret')
-      }
-      try {
-        await shared.dispatch(
-          {
-            id: `webhook:${id}:${randomUUID()}`,
-            source: `webhook:${id}`,
-            text,
-            ...(metaAtDispatch.targetConversationId !== undefined ? { targetConversationId: metaAtDispatch.targetConversationId } : {}),
-            createdAt: Date.now(),
-          },
-          metaAtDispatch.targetProfileId,
-        )
-      } catch (err) {
-        if (err instanceof HelmxError && (err.code === 'runtime_closing' || err.code === 'not_found')) {
-          return webhookError(err.status, err.code, err.message)
-        }
-        // Delivery failure is an explicit 500 (never swallowed; never silently truncating text as fake success).
-        return webhookError(500, 'webhook_dispatch_failed', `trigger delivery failed: ${err instanceof Error ? err.message : String(err)}`)
-      }
-      return acceptedResponse()
+      return webhookError(500, 'webhook_dispatch_failed', `trigger delivery failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    return acceptedResponse()
   }
 
-  // ---- Lifecycle actions (HTTP/CLI/tool reuse the same schema across five ends) ----
+  // ---- Lifecycle actions ----
   ctx.action({
     id: 'webhook_create',
-    description: 'Create a webhook inbound endpoint (HMAC-SHA256 verified); the secret is configurable only via manual HTTP/CLI, rejecting conversation-context calls',
+    description:
+      'Create a webhook inbound endpoint (HMAC-SHA256 verified); defaults to isolated automated sessions with keepLast=10, or dedicated / explicit targetConversationId; secret is CLI/HTTP-only',
     exposeToPrompt: false,
     scope: { conversationIds: [] },
     cli: { command: ['webhook', 'create'] },
@@ -450,8 +429,10 @@ export function registerWebhook(
         id: { type: 'string', pattern: '^[A-Za-z0-9_-]{1,64}$' },
         description: { type: 'string', maxLength: MAX_DESCRIPTION },
         secret: { type: 'string', minLength: 1, maxLength: 512 },
+        mode: { type: 'string', enum: ['isolated', 'dedicated'] },
+        profileId: { type: 'string', minLength: 1, maxLength: 64 },
+        keepLast: { type: 'integer', minimum: 1, maximum: MAX_TRIGGER_KEEP_LAST },
         targetConversationId: { type: 'integer', minimum: 1 },
-        targetProfileId: { type: 'string', minLength: 1, maxLength: 64 },
       },
       required: ['id', 'secret'],
       additionalProperties: false,
@@ -511,13 +492,11 @@ export function registerWebhook(
     handler: (input) => deleteWebhook(input as { id: string }),
   })
 
-  // ---- Service lifecycle: doc read-in validation + secret redaction registration tied to enablement + in-flight request gate ----
   ctx.service({
     id: 'triggers-webhooks',
     start,
     stop,
     liveTasks,
-    /** Persistent occupancy declaration: configured webhook endpoints are occupancy items of the disable precheck (plugin_in_use). */
     inUse() {
       return readDoc().webhooks.map((w) => ({
         kind: 'webhook_endpoint',
@@ -527,5 +506,12 @@ export function registerWebhook(
     },
   })
 
-  return { createWebhook, listWebhooks, deleteWebhook }
+  return {
+    createWebhook,
+    listWebhooks,
+    deleteWebhook,
+    getWebhook(id: string) {
+      return readDoc().webhooks.find((w) => w.id === id)
+    },
+  }
 }

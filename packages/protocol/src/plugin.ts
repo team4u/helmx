@@ -671,6 +671,17 @@ export interface HelmxHostApi {
    */
   abortConversationGuarded(id: number, guard: GuardedMutationExpectation): Promise<void>
   /**
+   * 自动化 guarded 删除（Watchdog 红线内核执行层）：在会话串行域内同步复核
+   * 存在性、整棵派生子树归属（严禁 human）、可选根 CAS 水位、子树插件托管保护，
+   * 且默认拒绝在途（working/blocked/待答 Ask）会话（`409 conversation_active`，
+   * 仅 `opts.allowActive: true` 放行）。`guard` 缺省时仍强制 human 红线。
+   */
+  deleteConversationGuarded(
+    id: number,
+    guard?: GuardedMutationExpectation,
+    opts?: { allowActive?: boolean },
+  ): Promise<void>
+  /**
    * 原地重置会话上下文（人类交互通道代理入口，与 POST /api/conversations/:id/reset 同源）：
    * 用于外部聊天渠道转发人类显式发起的 `/clear` 等指令（保持会话 `ownedBy: 'human'`）。
    * 后台自动化/巡检维护必须使用 `resetConversationGuarded`，不得调用本端口绕过归属红线。

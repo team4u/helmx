@@ -325,6 +325,33 @@ test('mid-chain deleted parents and parent cycles: finite merging along survivin
   assert.equal(deletedDraft.primaryConversationId, null)
 })
 
+test('automated helmx top-level trees stay silent on normal completion but still notify on failure or blocked approval', { timeout: 60_000 }, () => {
+  const autoSuccess = composeTreeCompletionNotification({
+    rootId: 30,
+    accumulatedConversationIds: new Set([30]),
+    conversations: [conv({ id: 30, title: 'Cron · nightly', ownedBy: 'helmx', status: 'done' })],
+  })
+  assert.equal(autoSuccess, null, 'automated success stays silent')
+
+  const autoError = composeTreeCompletionNotification({
+    rootId: 31,
+    accumulatedConversationIds: new Set([31]),
+    conversations: [conv({ id: 31, title: 'Cron · nightly', ownedBy: 'helmx', status: 'error' })],
+  })
+  assert.ok(autoError, 'automated failure still notifies')
+  assert.equal(autoError.title, ENDED_NOTIFICATION_TITLE)
+  assert.equal(autoError.primaryConversationId, 31)
+
+  const autoBlocked = composeTreeBlockedNotification({
+    rootId: 32,
+    blockedConversationIds: new Set([32]),
+    conversations: [conv({ id: 32, title: 'Cron · deploy', ownedBy: 'helmx', status: 'blocked', pendingAskCount: 1 })],
+  })
+  assert.ok(autoBlocked, 'automated AskDoc approval still notifies')
+  assert.equal(autoBlocked.title, WAITING_NOTIFICATION_TITLE)
+  assert.equal(autoBlocked.primaryConversationId, 32)
+})
+
 // ---------------------------------------------------------------------------
 // getBlockedWatermark and composeTreeBlockedNotification
 // ---------------------------------------------------------------------------

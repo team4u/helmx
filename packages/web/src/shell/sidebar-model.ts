@@ -548,15 +548,24 @@ export function conversationStatusTooltip(
   return base
 }
 
+/** Whether a top-level conversation is an automated session (`ownedBy === 'helmx'` without parent). */
+export function isAutomatedRootConversation(
+  conv: Pick<ConversationSummary, 'parentConversationId' | 'ownedBy'>,
+): boolean {
+  return conv.parentConversationId === undefined && conv.ownedBy === 'helmx'
+}
+
 /**
  * 判断会话是否允许被人类删除：
- * - 插件托管或非人类拥有的会话（ownedBy !== 'human'，如 'helmx' | 'bot'）不可删除；
- * - 普通人类会话（ownedBy 为 undefined 或 'human'）允许删除（无 id 级豁免；
- *   插件管理权保护在服务端 conversation_managed_by_plugin 统一判定）。
+ * - 普通人类会话（ownedBy 为 undefined 或 'human'）允许删除（无 id 级豁免）；
+ * - 自动化会话（ownedBy === 'helmx'）在非在途状态（非 working / blocked）允许人类手动单条清理
+ *   （与批量删除同口径；插件 manageConversation 托管保护由服务端 409 conversation_managed_by_plugin 权威判定）。
  */
-export function isConversationDeletable(conv: Pick<ConversationSummary, 'id' | 'ownedBy'>): boolean {
-  if ((conv.ownedBy ?? 'human') !== 'human') return false
-  return true
+export function isConversationDeletable(
+  conv: Pick<ConversationSummary, 'id' | 'ownedBy'> & { status?: ConversationSummary['status'] },
+): boolean {
+  if ((conv.ownedBy ?? 'human') === 'human') return true
+  return conv.status !== undefined && conv.status !== 'working' && conv.status !== 'blocked'
 }
 
 /** 过滤出允许人类删除的会话列表。 */

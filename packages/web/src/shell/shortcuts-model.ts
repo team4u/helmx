@@ -154,7 +154,13 @@ export function selectRecentConversationsForPalette(
     return 3
   }
   return conversations
-    .filter((c) => !isConversationArchived(c) && c.id !== activeConversationId)
+    .filter((c) => {
+      if (isConversationArchived(c) || c.id === activeConversationId) return false
+      if (c.parentConversationId === undefined && c.ownedBy === 'helmx') {
+        return c.status === 'error' || c.status === 'blocked' || c.pendingAskCount > 0
+      }
+      return true
+    })
     .slice()
     .sort((a, b) => attentionTier(a) - attentionTier(b) || b.updatedAt - a.updatedAt || b.id - a.id)
     .slice(0, limit)

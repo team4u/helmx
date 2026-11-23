@@ -232,6 +232,28 @@ test('buildPaletteRows deduplicates FTS title-only hits against local conversati
   )
 })
 
+test('buildPaletteRows ranks human conversations ahead of automated helmx conversations at equal match tier', { timeout: 60_000 }, () => {
+  const conversations = [
+    conv({ id: 20, title: 'Daily report run', ownedBy: 'helmx', tags: ['trigger', 'cron:daily'], updatedAt: 9999 }),
+    conv({ id: 21, title: 'Daily report discussion', ownedBy: 'human', updatedAt: 1000 }),
+  ]
+  const res = buildPaletteRows({
+    query: 'Daily report',
+    contextCommands: [],
+    recentConversations: [],
+    navigationCommands: [],
+    utilityCommands: [],
+    conversations,
+    ftsHits: [],
+    makeConversationRow: makeConvRow,
+  })
+  assert.deepEqual(
+    res.rows.map((r) => r.id),
+    ['conv:21', 'conv:20'],
+    'human conversation ranks ahead of newer automated run on equal match tier',
+  )
+})
+
 test('resolveRowNavigation applies activePanel and Mod+Enter split cleanly without splitting non-navigable commands', { timeout: 60_000 }, () => {
   const navCmd: PaletteCommandRow = {
     kind: 'command',

@@ -319,6 +319,7 @@ export function buildPaletteRows(input: BuildPaletteRowsInput): BuildPaletteRows
     | {
         kind: 'conv'
         tier: number
+        automatedRank: number
         archivedRank: number
         updatedAt: number
         convId: number
@@ -353,6 +354,7 @@ export function buildPaletteRows(input: BuildPaletteRowsInput): BuildPaletteRows
       scoredConvs.push({
         kind: 'conv',
         tier,
+        automatedRank: conv.ownedBy === 'helmx' ? 1 : 0,
         archivedRank: isConversationArchived(conv) ? 1 : 0,
         updatedAt: conv.updatedAt,
         convId: conv.id,
@@ -363,6 +365,7 @@ export function buildPaletteRows(input: BuildPaletteRowsInput): BuildPaletteRows
   scoredConvs.sort(
     (a, b) =>
       a.tier - b.tier ||
+      a.automatedRank - b.automatedRank ||
       a.archivedRank - b.archivedRank ||
       b.updatedAt - a.updatedAt ||
       b.convId - a.convId,
@@ -381,6 +384,7 @@ export function buildPaletteRows(input: BuildPaletteRowsInput): BuildPaletteRows
     }
     if (a.kind === 'conv' && b.kind === 'conv') {
       return (
+        a.automatedRank - b.automatedRank ||
         a.archivedRank - b.archivedRank ||
         b.updatedAt - a.updatedAt ||
         b.convId - a.convId

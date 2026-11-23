@@ -93,6 +93,8 @@ test('conversations list noise-free query contract: omits default params, --all 
       'GET /api/conversations?all=1': () => ({ body: listBody }),
       'GET /api/conversations?parent=3': () => ({ body: listBody }),
       'GET /api/conversations?parent=3&profileId=worker': () => ({ body: listBody }),
+      'GET /api/conversations?ownedBy=helmx': () => ({ body: listBody }),
+      'GET /api/conversations?all=1&ownedBy=human': () => ({ body: listBody }),
     },
     { autoRegisterCleanup: t },
   )
@@ -124,6 +126,16 @@ test('conversations list noise-free query contract: omits default params, --all 
   const conflict = await runCliCaptured(['conversations', 'list', '--all', '--parent', '3', '--json'], env)
   assert.equal(conflict.code, 1)
   assert.ok(conflict.err.includes('mutually exclusive'), `error should note mutual exclusivity: ${conflict.err}`)
+  // --owned-by passes through and validates enum client-side
+  const autoOnly = await runCliCaptured(['conversations', 'list', '--owned-by', 'helmx', '--json'], env)
+  assert.equal(autoOnly.code, 0, autoOnly.err)
+  assert.equal(hub.hits.at(-1)?.path, '/api/conversations?ownedBy=helmx')
+  const allHuman = await runCliCaptured(['conversations', 'list', '--all', '--owned-by', 'human', '--json'], env)
+  assert.equal(allHuman.code, 0, allHuman.err)
+  assert.equal(hub.hits.at(-1)?.path, '/api/conversations?all=1&ownedBy=human')
+  const badOwner = await runCliCaptured(['conversations', 'list', '--owned-by', 'bot', '--json'], env)
+  assert.equal(badOwner.code, 1)
+  assert.ok(badOwner.err.includes('owned-by'), `error should mention owned-by: ${badOwner.err}`)
 })
 
 test('thinkingLevel CLI passthrough: global default, current conversation override, and Profile merge', { timeout: 60_000 }, async (t) => {

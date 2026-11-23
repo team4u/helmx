@@ -30,7 +30,7 @@ export const TRIGGERS_COL_ACTIONS: LocalizedText = { en: 'Actions', 'zh-CN': '�
 export const TRIGGERS_COL_DESCRIPTION: LocalizedText = { en: 'Description', 'zh-CN': '描述' }
 export const TRIGGERS_COL_CREATED: LocalizedText = { en: 'Created', 'zh-CN': '创建时间' }
 
-/** Loading and empty states (raw helmx-table cells, not the SDK DataTable). */
+/** Loading and empty states. */
 export const TRIGGERS_CRON_LOADING: LocalizedText = { en: 'Loading cron jobs…', 'zh-CN': 'Cron 任务读取中...' }
 export const TRIGGERS_WEBHOOK_LOADING: LocalizedText = { en: 'Loading webhooks…', 'zh-CN': 'Webhook 端点读取中...' }
 export const TRIGGERS_SETTINGS_LOADING: LocalizedText = { en: 'Loading trigger state…', 'zh-CN': '触发器状态读取中...' }
@@ -77,12 +77,25 @@ export const TRIGGERS_KV_DESCRIPTION: LocalizedText = { en: 'Description', 'zh-C
 export const TRIGGERS_KV_CRON_EXPRESSION: LocalizedText = { en: 'Cron expression', 'zh-CN': 'Cron 表达式' }
 export const TRIGGERS_KV_TIMEZONE: LocalizedText = { en: 'Timezone', 'zh-CN': '时区' }
 export const TRIGGERS_KV_CATCH_UP: LocalizedText = { en: 'Catch-up', 'zh-CN': '错过补跑' }
-export const TRIGGERS_KV_DELIVERY_TARGET: LocalizedText = { en: 'Delivery target', 'zh-CN': '投递目标' }
+export const TRIGGERS_KV_DELIVERY_TARGET: LocalizedText = { en: 'Session mode & target', 'zh-CN': '会话模式与目标' }
 export const TRIGGERS_KV_LAST_RUN: LocalizedText = { en: 'Last run', 'zh-CN': '上次运行' }
 export const TRIGGERS_KV_NEXT_RUN: LocalizedText = { en: 'Next run', 'zh-CN': '下次运行' }
+export const TRIGGERS_KV_LAST_SKIPPED: LocalizedText = { en: 'Last skipped', 'zh-CN': '最近跳过' }
 export const TRIGGERS_KV_SECRET_STATE: LocalizedText = { en: 'Secret state', 'zh-CN': 'Secret 状态' }
 export const TRIGGERS_KV_CREATED: LocalizedText = { en: 'Created', 'zh-CN': '创建时间' }
 export const TRIGGERS_COMMAND_SECTION: LocalizedText = { en: 'Trigger command', 'zh-CN': '触发指令' }
+export const TRIGGERS_RUNS_SECTION: LocalizedText = { en: 'Recent runs', 'zh-CN': '最近运行' }
+export const TRIGGERS_RUNS_EMPTY: LocalizedText = { en: 'No runs recorded yet', 'zh-CN': '暂无运行记录' }
+export const TRIGGERS_OPEN_CONVERSATION: LocalizedText = { en: 'Open conversation', 'zh-CN': '主屏打开' }
+export const TRIGGERS_PEEK_CONVERSATION: LocalizedText = { en: 'Peek in drawer', 'zh-CN': '抽屉速览' }
+export const TRIGGERS_TARGET_CONVERSATION_SECTION: LocalizedText = { en: 'Target conversation', 'zh-CN': '目标会话' }
+
+/** Run status labels (accessible labels for StatusLight). */
+export const TRIGGERS_STATUS_WORKING: LocalizedText = { en: 'Running', 'zh-CN': '运行中' }
+export const TRIGGERS_STATUS_BLOCKED: LocalizedText = { en: 'Waiting for approval', 'zh-CN': '等待处理' }
+export const TRIGGERS_STATUS_ERROR: LocalizedText = { en: 'Error', 'zh-CN': '失败' }
+export const TRIGGERS_STATUS_DONE: LocalizedText = { en: 'Completed', 'zh-CN': '已完成' }
+export const TRIGGERS_STATUS_IDLE: LocalizedText = { en: 'Idle', 'zh-CN': '空闲' }
 
 /** Secret presence values (hasSecret boolean from the doc, secret itself never shown). */
 export const TRIGGERS_SECRET_CONFIGURED: LocalizedText = {
@@ -124,4 +137,14 @@ export function triggerTargetConversation(conversationId: number, locale: HelmxL
 export function triggerTargetProfile(profileId: string, locale: HelmxLocale): string {
   return resolveLocalizedText({ en: `Profile ${profileId}`, 'zh-CN': `角色 ${profileId}` }, locale)
 }
-export const TRIGGER_TARGET_DEFAULT: LocalizedText = { en: 'Default routing', 'zh-CN': '默认路由' }
+export function triggerModeIsolated(keepLast: number | undefined, locale: HelmxLocale): string {
+  if (keepLast !== undefined) {
+    return resolveLocalizedText(
+      { en: `Isolated (keep ${keepLast})`, 'zh-CN': `隔离运行（保留 ${keepLast} 条）` },
+      locale,
+    )
+  }
+  return resolveLocalizedText({ en: 'Isolated', 'zh-CN': '隔离运行' }, locale)
+}
+export const TRIGGER_MODE_DEDICATED: LocalizedText = { en: 'Dedicated session', 'zh-CN': '专用会话' }
+export const TRIGGER_TARGET_DEFAULT: LocalizedText = { en: 'Isolated · Profile assistant', 'zh-CN': '隔离运行 · 角色 assistant' }

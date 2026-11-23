@@ -35,10 +35,11 @@ const TRIGGER_ACTION_IDS = [
 
 /** Contract manifest matching the plugin's exact field names and types. */
 function triggersManifests(): ActionManifest[] {
-  const cronTarget = {
-    targetConversationId: { type: 'number' },
-    targetProfileId: { type: 'string' },
-    threadKey: { type: 'string' },
+  const targetProps = {
+    mode: { type: 'string', enum: ['isolated', 'dedicated'] },
+    profileId: { type: 'string' },
+    keepLast: { type: 'integer' },
+    targetConversationId: { type: 'integer' },
   }
   return [
     {
@@ -63,7 +64,7 @@ function triggersManifests(): ActionManifest[] {
           timezone: { type: 'string' },
           enabled: { type: 'boolean' },
           catchUp: { type: 'boolean' },
-          ...cronTarget,
+          ...targetProps,
         },
         required: ['id', 'schedule', 'text'],
       },
@@ -104,9 +105,7 @@ function triggersManifests(): ActionManifest[] {
           id: { type: 'string' },
           secret: { type: 'string' },
           description: { type: 'string' },
-          targetConversationId: { type: 'number' },
-          targetProfileId: { type: 'string' },
-          threadKey: { type: 'string' },
+          ...targetProps,
         },
         required: ['id', 'secret'],
       },
@@ -164,8 +163,9 @@ test('cron subcommand family: top-level path, required flag validation, type coe
       '--description', '5-minute check',
       '--timezone', 'Asia/Shanghai',
       '--catch-up',
-      '--target-conversation-id', '7',
-      '--thread-key', 'ci-main',
+      '--mode', 'isolated',
+      '--profile-id', 'ops',
+      '--keep-last', '5',
     ],
     env,
   )
@@ -179,8 +179,9 @@ test('cron subcommand family: top-level path, required flag validation, type coe
       description: '5-minute check',
       timezone: 'Asia/Shanghai',
       catchUp: true,
-      targetConversationId: 7,
-      threadKey: 'ci-main',
+      mode: 'isolated',
+      profileId: 'ops',
+      keepLast: 5,
     },
   })
 

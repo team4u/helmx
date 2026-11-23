@@ -273,6 +273,35 @@ test('member-level exclusion: viewing one descendant never erases a sibling ask 
   assert.equal(errorTree.tone, 'error', 'an error tree outranks blocked trees in the aggregate tone')
 })
 
+test('automated helmx top-level trees stay quiet on working/done and only alert on error/blocked', { timeout: 60_000 }, () => {
+  const conversations = [
+    conv({ id: 1, ownedBy: 'helmx', status: 'done', unread: true, createdAt: 9000, updatedAt: 9000 }),
+    conv({ id: 2, ownedBy: 'helmx', status: 'working', createdAt: 8000, updatedAt: 8000 }),
+    conv({ id: 3, ownedBy: 'helmx', status: 'error', lastError: 'cron failed', createdAt: 7000, updatedAt: 7000 }),
+    conv({ id: 4, ownedBy: 'helmx', status: 'blocked', pendingAskCount: 1, createdAt: 6000, updatedAt: 6000 }),
+  ]
+  const trees = aggregate(conversations)
+  const byId = new Map(trees.map((t) => [t.root.id, t]))
+  assert.equal(byId.get(1)!.bucket, null, 'automated done+unread never enters unread_done')
+  assert.equal(byId.get(2)!.bucket, 'running', 'automated working retains running bucket for the Automated overview tab')
+  assert.equal(byId.get(3)!.bucket, 'needs_attention')
+  assert.equal(byId.get(4)!.bucket, 'needs_attention')
+
+  // Global attention badge counts only error/blocked automated trees (silent on working & done)
+  const quietAuto = buildIndicator([conversations[0]!, conversations[1]!], new Set())
+  assert.equal(quietAuto.totalCount, 0)
+  assert.equal(quietAuto.runningCount, 0)
+  assert.equal(quietAuto.unreadDoneCount, 0)
+  assert.equal(quietAuto.tone, null)
+
+  const alertingAuto = buildIndicator(conversations, new Set())
+  assert.equal(alertingAuto.needsAttentionCount, 2)
+  assert.equal(alertingAuto.runningCount, 0)
+  assert.equal(alertingAuto.unreadDoneCount, 0)
+  assert.equal(alertingAuto.totalCount, 2)
+  assert.equal(alertingAuto.tone, 'error')
+})
+
 test('composeAttentionSummary lists only non-zero buckets', { timeout: 60_000 }, () => {
   assert.equal(composeAttentionSummary({ needsAttentionCount: 2, runningCount: 0, unreadDoneCount: 3, totalCount: 5, tone: 'error' }), '2 need attention · 3 unread completed')
   assert.equal(composeAttentionSummary({ needsAttentionCount: 0, runningCount: 0, unreadDoneCount: 0, totalCount: 0, tone: null }), '')
@@ -310,6 +339,20 @@ test('selectRecentConversationsForPalette: attention tiers first (error/blocked 
     excluded.map((c) => c.id),
     [5, 1, 3],
     'the active conversation is excluded and the limit applies after ordering',
+  )
+
+  // Automated top-level roots are omitted when quiet/working/done+unread, but kept when error/blocked
+  const withAutomated = selectRecentConversationsForPalette([
+    conv({ id: 10, status: 'idle', updatedAt: 1000 }),
+    conv({ id: 11, ownedBy: 'helmx', status: 'done', unread: true, updatedAt: 9999 }),
+    conv({ id: 12, ownedBy: 'helmx', status: 'working', updatedAt: 9998 }),
+    conv({ id: 13, ownedBy: 'helmx', status: 'error', updatedAt: 9500 }),
+    conv({ id: 14, ownedBy: 'helmx', status: 'blocked', pendingAskCount: 1, updatedAt: 9600 }),
+  ], undefined, 10)
+  assert.deepEqual(
+    withAutomated.map((c) => c.id),
+    [14, 13, 10],
+    'only error/blocked automated roots surface in palette recent list',
   )
 })
 

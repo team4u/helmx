@@ -2,19 +2,16 @@
  * builtin:triggers fullscreen manager surface (component exports only, Fast
  * Refresh contract):
  * - TriggersManagerScreen: cron / webhook management tables (`DataTable`) +
- *   right-side `DetailDrawer` opened by row clicks; row actions
- *   (`cron_trigger` / `cron_delete` / `webhook_delete`) share one
+ *   right-side `DetailDrawer` opened by row clicks, showing live run history
+ *   projected directly from `useConversations()` (zero double-writing in docs)
+ *   with one-click drawer peek (`openConversationDrawer`) and main-stage jump;
+ * - Row actions (`cron_trigger` / `cron_delete` / `webhook_delete`) share one
  *   `usePluginAction` mutex across both tables.
- *
- * Secret boundary: webhook secrets are never rendered from the doc (the
- * hasSecret boolean is the collaboration contract). Display copy resolves from
- * copy.ts against the active host locale; backend error messages pass through
- * unchanged apart from the localized failure prefix.
  */
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import './styles.css'
 import type { ReactNode } from 'react'
-import type { ScreenProps } from '@helmx/protocol'
+import type { ConversationSummary, ScreenProps } from '@helmx/protocol'
 import {
   ConfirmDialog,
   DataTable,
@@ -23,17 +20,28 @@ import {
   KvGrid,
   Screen,
   ScreenSection,
+  StatusLight,
+  Tooltip,
+  formatDurationMs,
+  formatStopwatchMs,
   formatTime,
+  resolveConversationTiming,
+  useConversations,
   usePluginAction,
+  usePluginContext,
   usePluginDoc,
   usePluginLocale,
   usePluginTranslator,
+  useSharedNowMs,
   type UsePluginActionResult,
 } from '@helmx/plugin-client'
 import {
   formatTriggerTargetSummary,
   parseCronJobs,
   parseWebhooks,
+  selectTriggerRuns,
+  summarizeTriggerRunHealth,
+  triggerRunStatusLabel,
   type CronJobRow,
   type TriggerDetailSelection,
   type WebhookRow,
@@ -66,17 +74,23 @@ import {
   TRIGGERS_KV_DELIVERY_TARGET,
   TRIGGERS_KV_DESCRIPTION,
   TRIGGERS_KV_LAST_RUN,
+  TRIGGERS_KV_LAST_SKIPPED,
   TRIGGERS_KV_NEXT_RUN,
   TRIGGERS_KV_SECRET_STATE,
   TRIGGERS_KV_TIMEZONE,
   TRIGGERS_MANAGER_NOTE,
   TRIGGERS_OFF,
   TRIGGERS_ON,
+  TRIGGERS_OPEN_CONVERSATION,
+  TRIGGERS_PEEK_CONVERSATION,
+  TRIGGERS_RUNS_EMPTY,
+  TRIGGERS_RUNS_SECTION,
   TRIGGERS_SCREEN_TITLE,
   TRIGGERS_SECRET_CONFIGURED,
   TRIGGERS_SECRET_MISSING,
   TRIGGERS_SPLIT_SUFFIX,
   TRIGGERS_TABLE_EMPTY,
+  TRIGGERS_TARGET_CONVERSATION_SECTION,
   TRIGGERS_TRIGGER_NOW,
   TRIGGERS_WEBHOOK_DETAIL_SUBTITLE,
   TRIGGERS_WEBHOOK_LOADING,
@@ -127,6 +141,7 @@ function RowAction({
 /** Cron jobs table (action mutex shared from above; row clicks open the detail drawer). */
 function CronTable({
   jobs,
+  conversations,
   loading,
   actions,
   selectedId,
@@ -134,12 +149,14 @@ function CronTable({
   onRequestDelete,
 }: {
   jobs: CronJobRow[]
+  conversations: ReadonlyArray<ConversationSummary>
   loading: boolean
   actions: UsePluginActionResult
   selectedId?: string
   onSelect: (id: string) => void
   onRequestDelete: (id: string) => void
 }): ReactNode {
+  const locale = usePluginLocale()
   const t = usePluginTranslator()
   return (
     <div className="tg-table-wrap">
@@ -163,55 +180,70 @@ function CronTable({
           </tr>
         </thead>
         <tbody>
-          {jobs.map((job) => (
-            <tr
-              key={job.id}
-              className={selectedId === job.id ? 'tg-row is-selected' : 'tg-row'}
-              tabIndex={0}
-              onClick={() => onSelect(job.id)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault()
-                  onSelect(job.id)
-                }
-              }}
-            >
-              <td data-label="ID" className="mono">{job.id}</td>
-              <td data-label={t(TRIGGERS_COL_SCHEDULE)} className="mono">{job.schedule}</td>
-              <td data-label={t(TRIGGERS_COL_COMMAND)} className="cell-ellipsis" title={job.text}>{job.text}</td>
-              <td data-label={t(TRIGGERS_COL_ENABLED)}>
-                <span className={`badge badge-${job.enabled ? 'ok' : 'neutral'}`}>
-                  <span>{job.enabled ? t(TRIGGERS_ENABLED) : t(TRIGGERS_DISABLED)}</span>
-                </span>
-              </td>
-              <td data-label={t(TRIGGERS_COL_LAST_RUN)}>{formatTime(job.lastRunAt) || '—'}</td>
-              <td data-label={t(TRIGGERS_COL_NEXT_RUN)}>{formatTime(job.nextRunAt) || '—'}</td>
-              <td data-label={t(TRIGGERS_COL_LAST_ERROR)} className="cell-error" title={job.lastError ?? ''}>
-                {job.lastError ?? '—'}
-              </td>
-              <td data-label={t(TRIGGERS_COL_ACTIONS)} className="cell-actions">
-                <div
-                  className="row-actions-group"
-                  onClick={(e) => e.stopPropagation()}
-                  onKeyDown={(e) => e.stopPropagation()}
-                >
-                  <RowAction
-                    label={t(TRIGGERS_TRIGGER_NOW)}
-                    iconName="zap"
-                    disabled={actions.pending}
-                    onClick={() => void actions.run('cron_trigger', { id: job.id }, { key: `trigger:${job.id}` })}
-                  />
-                  <RowAction
-                    label={t(TRIGGERS_DELETE)}
-                    iconName="trash-2"
-                    disabled={actions.pending}
-                    danger
-                    onClick={() => onRequestDelete(job.id)}
-                  />
-                </div>
-              </td>
-            </tr>
-          ))}
+          {jobs.map((job) => {
+            const runs = selectTriggerRuns(conversations, 'cron', job.id)
+            const health = summarizeTriggerRunHealth(runs)
+            const showLight = health.status === 'error' || health.status === 'blocked' || health.status === 'working'
+            return (
+              <tr
+                key={job.id}
+                className={selectedId === job.id ? 'tg-row is-selected' : 'tg-row'}
+                tabIndex={0}
+                onClick={() => onSelect(job.id)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    onSelect(job.id)
+                  }
+                }}
+              >
+                <td data-label="ID" className="mono">
+                  <span className="tg-id-cell">
+                    {showLight && health.status !== null ? (
+                      <StatusLight
+                        status={health.status}
+                        label={triggerRunStatusLabel(health.status, locale)}
+                      />
+                    ) : null}
+                    <span>{job.id}</span>
+                  </span>
+                </td>
+                <td data-label={t(TRIGGERS_COL_SCHEDULE)} className="mono">{job.schedule}</td>
+                <td data-label={t(TRIGGERS_COL_COMMAND)} className="cell-ellipsis" title={job.text}>{job.text}</td>
+                <td data-label={t(TRIGGERS_COL_ENABLED)}>
+                  <span className={`badge badge-${job.enabled ? 'ok' : 'neutral'}`}>
+                    <span>{job.enabled ? t(TRIGGERS_ENABLED) : t(TRIGGERS_DISABLED)}</span>
+                  </span>
+                </td>
+                <td data-label={t(TRIGGERS_COL_LAST_RUN)}>{formatTime(job.lastRunAt) || '—'}</td>
+                <td data-label={t(TRIGGERS_COL_NEXT_RUN)}>{formatTime(job.nextRunAt) || '—'}</td>
+                <td data-label={t(TRIGGERS_COL_LAST_ERROR)} className="cell-error" title={job.lastError ?? ''}>
+                  {job.lastError ?? '—'}
+                </td>
+                <td data-label={t(TRIGGERS_COL_ACTIONS)} className="cell-actions">
+                  <div
+                    className="row-actions-group"
+                    onClick={(e) => e.stopPropagation()}
+                    onKeyDown={(e) => e.stopPropagation()}
+                  >
+                    <RowAction
+                      label={t(TRIGGERS_TRIGGER_NOW)}
+                      iconName="zap"
+                      disabled={actions.pending}
+                      onClick={() => void actions.run('cron_trigger', { id: job.id }, { key: `trigger:${job.id}` })}
+                    />
+                    <RowAction
+                      label={t(TRIGGERS_DELETE)}
+                      iconName="trash-2"
+                      disabled={actions.pending}
+                      danger
+                      onClick={() => onRequestDelete(job.id)}
+                    />
+                  </div>
+                </td>
+              </tr>
+            )
+          })}
         </tbody>
       </DataTable>
     </div>
@@ -221,6 +253,7 @@ function CronTable({
 /** Webhook endpoints table (action mutex shared from above; row clicks open the detail drawer). */
 function WebhookTable({
   webhooks,
+  conversations,
   loading,
   actions,
   selectedId,
@@ -228,17 +261,19 @@ function WebhookTable({
   onRequestDelete,
 }: {
   webhooks: WebhookRow[]
+  conversations: ReadonlyArray<ConversationSummary>
   loading: boolean
   actions: UsePluginActionResult
   selectedId?: string
   onSelect: (id: string) => void
   onRequestDelete: (id: string) => void
 }): ReactNode {
+  const locale = usePluginLocale()
   const t = usePluginTranslator()
   return (
     <div className="tg-table-wrap">
       <DataTable
-        columns={5}
+        columns={4}
         loading={loading}
         loadingLabel={t(TRIGGERS_WEBHOOK_LOADING)}
         empty={webhooks.length === 0}
@@ -253,43 +288,129 @@ function WebhookTable({
           </tr>
         </thead>
         <tbody>
-          {webhooks.map((hook) => (
-            <tr
-              key={hook.id}
-              className={selectedId === hook.id ? 'tg-row is-selected' : 'tg-row'}
-              tabIndex={0}
-              onClick={() => onSelect(hook.id)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault()
-                  onSelect(hook.id)
-                }
-              }}
-            >
-              <td data-label="ID" className="mono">{hook.id}</td>
-              <td data-label={t(TRIGGERS_COL_DESCRIPTION)} className="cell-ellipsis" title={hook.description ?? ''}>
-                {hook.description ?? '—'}
-              </td>
-              <td data-label={t(TRIGGERS_COL_CREATED)}>{formatTime(hook.createdAt) || '—'}</td>
-              <td data-label={t(TRIGGERS_COL_ACTIONS)} className="cell-actions">
-                <div
-                  className="row-actions-group"
-                  onClick={(e) => e.stopPropagation()}
-                  onKeyDown={(e) => e.stopPropagation()}
-                >
-                  <RowAction
-                    label={t(TRIGGERS_DELETE)}
-                    iconName="trash-2"
-                    disabled={actions.pending}
-                    danger
-                    onClick={() => onRequestDelete(hook.id)}
-                  />
-                </div>
-              </td>
-            </tr>
-          ))}
+          {webhooks.map((hook) => {
+            const runs = selectTriggerRuns(conversations, 'webhook', hook.id)
+            const health = summarizeTriggerRunHealth(runs)
+            const showLight = health.status === 'error' || health.status === 'blocked' || health.status === 'working'
+            return (
+              <tr
+                key={hook.id}
+                className={selectedId === hook.id ? 'tg-row is-selected' : 'tg-row'}
+                tabIndex={0}
+                onClick={() => onSelect(hook.id)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    onSelect(hook.id)
+                  }
+                }}
+              >
+                <td data-label="ID" className="mono">
+                  <span className="tg-id-cell">
+                    {showLight && health.status !== null ? (
+                      <StatusLight
+                        status={health.status}
+                        label={triggerRunStatusLabel(health.status, locale)}
+                      />
+                    ) : null}
+                    <span>{hook.id}</span>
+                  </span>
+                </td>
+                <td data-label={t(TRIGGERS_COL_DESCRIPTION)} className="cell-ellipsis" title={hook.description ?? ''}>
+                  {hook.description ?? '—'}
+                </td>
+                <td data-label={t(TRIGGERS_COL_CREATED)}>{formatTime(hook.createdAt) || '—'}</td>
+                <td data-label={t(TRIGGERS_COL_ACTIONS)} className="cell-actions">
+                  <div
+                    className="row-actions-group"
+                    onClick={(e) => e.stopPropagation()}
+                    onKeyDown={(e) => e.stopPropagation()}
+                  >
+                    <RowAction
+                      label={t(TRIGGERS_DELETE)}
+                      iconName="trash-2"
+                      disabled={actions.pending}
+                      danger
+                      onClick={() => onRequestDelete(hook.id)}
+                    />
+                  </div>
+                </td>
+              </tr>
+            )
+          })}
         </tbody>
       </DataTable>
+    </div>
+  )
+}
+
+/** Single run row inside the detail drawer: click peeks in drawer, trailing button opens full conversation. */
+function TriggerRunRow({
+  run,
+  nowMs,
+  onPeek,
+  onOpen,
+}: {
+  run: ConversationSummary
+  nowMs?: number
+  onPeek: (conversationId: number) => void
+  onOpen: (conversationId: number) => void
+}): ReactNode {
+  const locale = usePluginLocale()
+  const t = usePluginTranslator()
+  const timing = resolveConversationTiming(run, nowMs)
+  const durationText =
+    timing.waitingMs !== undefined
+      ? formatStopwatchMs(timing.waitingMs)
+      : timing.currentRunMs !== undefined
+        ? formatStopwatchMs(timing.currentRunMs)
+        : timing.settledRunMs > 0
+          ? formatDurationMs(timing.settledRunMs)
+          : undefined
+  const titleText = run.title || `#${run.id}`
+  const statusLabel = triggerRunStatusLabel(run.status, locale)
+
+  return (
+    <div className="tg-run-row">
+      <button
+        type="button"
+        className="tg-run-main"
+        title={t(TRIGGERS_PEEK_CONVERSATION)}
+        onClick={() => onPeek(run.id)}
+      >
+        <StatusLight status={run.status} label={statusLabel} />
+        <span className="tg-run-body">
+          <span className="tg-run-head">
+            <span className="tg-run-title">{titleText}</span>
+            <span className="tg-run-id mono">#{run.id}</span>
+          </span>
+          <span className="tg-run-meta">
+            <span>{formatTime(run.createdAt) || '—'}</span>
+            {durationText !== undefined ? (
+              <>
+                <span aria-hidden="true">·</span>
+                <span className="mono tabular-nums">{durationText}</span>
+              </>
+            ) : null}
+            {run.status === 'error' && run.lastError ? (
+              <>
+                <span aria-hidden="true">·</span>
+                <span className="tg-run-err" title={run.lastError}>{run.lastError}</span>
+              </>
+            ) : null}
+          </span>
+        </span>
+      </button>
+      <Tooltip content={t(TRIGGERS_OPEN_CONVERSATION)} side="top">
+        <button
+          type="button"
+          className="btn btn-ghost btn-icon-xs tg-run-open-btn"
+          aria-label={`${t(TRIGGERS_OPEN_CONVERSATION)} #${run.id}`}
+          onClick={() => onOpen(run.id)}
+        >
+          <HelmxIcon name="external-link" size={12} />
+        </button>
+      </Tooltip>
     </div>
   )
 }
@@ -297,6 +418,7 @@ function WebhookTable({
 function TriggerDetailDrawer({
   cronJob,
   webhook,
+  conversations,
   actions,
   inline,
   onClose,
@@ -304,14 +426,37 @@ function TriggerDetailDrawer({
 }: {
   cronJob?: CronJobRow
   webhook?: WebhookRow
+  conversations: ReadonlyArray<ConversationSummary>
   actions: UsePluginActionResult
   inline?: boolean
   onClose: () => void
   onRequestDelete: (target: TriggerDetailSelection) => void
 }): ReactNode {
+  const ctx = usePluginContext()
   const locale = usePluginLocale()
   const t = usePluginTranslator()
   const title = cronJob !== undefined ? cronJob.id : webhook !== undefined ? webhook.id : t(TRIGGERS_DETAIL_TITLE)
+  const targetConversationId = cronJob?.targetConversationId ?? webhook?.targetConversationId
+
+  const runs = useMemo(() => {
+    if (cronJob !== undefined) return selectTriggerRuns(conversations, 'cron', cronJob.id)
+    if (webhook !== undefined) return selectTriggerRuns(conversations, 'webhook', webhook.id)
+    return []
+  }, [conversations, cronJob, webhook])
+
+  const targetConversation = useMemo(
+    () =>
+      targetConversationId !== undefined
+        ? conversations.find((c) => c.id === targetConversationId)
+        : undefined,
+    [conversations, targetConversationId],
+  )
+
+  const needsLiveClock = runs.some((r) => r.status === 'working' || r.status === 'blocked' || r.pendingAskCount > 0)
+  const nowMs = useSharedNowMs(needsLiveClock)
+
+  const peekConversation = (id: number): void => ctx.openConversationDrawer(id)
+  const openConversation = (id: number): void => ctx.openScreen(`conversation:${id}`)
 
   return (
     <DetailDrawer
@@ -385,6 +530,16 @@ function TriggerDetailDrawer({
               { key: t(TRIGGERS_KV_DELIVERY_TARGET), value: formatTriggerTargetSummary(cronJob, locale) },
               { key: t(TRIGGERS_KV_LAST_RUN), value: formatTime(cronJob.lastRunAt) || '—' },
               { key: t(TRIGGERS_KV_NEXT_RUN), value: formatTime(cronJob.nextRunAt) || '—' },
+              ...(cronJob.lastSkippedAt !== undefined
+                ? [
+                    {
+                      key: t(TRIGGERS_KV_LAST_SKIPPED),
+                      value: cronJob.lastSkipReason
+                        ? `${formatTime(cronJob.lastSkippedAt)} (${cronJob.lastSkipReason})`
+                        : formatTime(cronJob.lastSkippedAt) || '—',
+                    },
+                  ]
+                : []),
             ]}
           />
 
@@ -409,6 +564,56 @@ function TriggerDetailDrawer({
           ]}
         />
       ) : null}
+
+      {targetConversationId !== undefined ? (
+        <ScreenSection title={t(TRIGGERS_TARGET_CONVERSATION_SECTION)}>
+          {targetConversation !== undefined ? (
+            <TriggerRunRow
+              run={targetConversation}
+              nowMs={nowMs}
+              onPeek={peekConversation}
+              onOpen={openConversation}
+            />
+          ) : (
+            <div className="tg-run-actions">
+              <button
+                type="button"
+                className="btn btn-xs"
+                onClick={() => peekConversation(targetConversationId)}
+              >
+                <HelmxIcon name="panel-right" size={11} />
+                <span>{t(TRIGGERS_PEEK_CONVERSATION)} #{targetConversationId}</span>
+              </button>
+              <button
+                type="button"
+                className="btn btn-xs"
+                onClick={() => openConversation(targetConversationId)}
+              >
+                <HelmxIcon name="external-link" size={11} />
+                <span>{t(TRIGGERS_OPEN_CONVERSATION)}</span>
+              </button>
+            </div>
+          )}
+        </ScreenSection>
+      ) : (
+        <ScreenSection title={`${t(TRIGGERS_RUNS_SECTION)} (${runs.length})`}>
+          {runs.length === 0 ? (
+            <div className="tg-note">{t(TRIGGERS_RUNS_EMPTY)}</div>
+          ) : (
+            <div className="tg-runs-list">
+              {runs.map((run) => (
+                <TriggerRunRow
+                  key={run.id}
+                  run={run}
+                  nowMs={nowMs}
+                  onPeek={peekConversation}
+                  onOpen={openConversation}
+                />
+              ))}
+            </div>
+          )}
+        </ScreenSection>
+      )}
     </DetailDrawer>
   )
 }
@@ -425,6 +630,7 @@ export function TriggersManagerScreen(
   })
   const crons = usePluginDoc<{ jobs?: unknown }>('crons')
   const webhooks = usePluginDoc<{ webhooks?: unknown }>('webhooks')
+  const conversations = useConversations()
   const jobs = parseCronJobs(crons)
   const hooks = parseWebhooks(webhooks)
   const [selection, setSelection] = useState<TriggerDetailSelection | null>(null)
@@ -473,6 +679,7 @@ export function TriggersManagerScreen(
       >
         <CronTable
           jobs={jobs}
+          conversations={conversations}
           loading={crons === undefined}
           actions={actions}
           selectedId={selectedCron?.id}
@@ -491,6 +698,7 @@ export function TriggersManagerScreen(
       >
         <WebhookTable
           webhooks={hooks}
+          conversations={conversations}
           loading={webhooks === undefined}
           actions={actions}
           selectedId={selectedWebhook?.id}
@@ -505,6 +713,7 @@ export function TriggersManagerScreen(
         <TriggerDetailDrawer
           cronJob={selectedCron}
           webhook={selectedWebhook}
+          conversations={conversations}
           actions={actions}
           inline={props.inlineDrawer}
           onClose={() => setSelection(null)}

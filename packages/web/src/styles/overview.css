@@ -510,7 +510,26 @@
   color: var(--accent);
 }
 
+.overview-automated-banner-wrap {
+  padding: 12px 20px 0;
+}
+
+.overview-automated-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.overview-automated-banner-btn {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
 @media (max-width: 680px) {
+  .overview-automated-banner-wrap {
+    padding: 10px 12px 0;
+  }
+
   .overview-sections {
     padding: 12px;
     gap: 14px;

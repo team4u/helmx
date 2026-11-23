@@ -65,12 +65,14 @@ export function conversationsCommands(): CommandSpec[] {
   // ---- conversations list ----
   cmds.push({
     path: ['conversations', 'list'],
-    description: 'List conversations (GET /api/conversations; top-level only by default, --all includes child conversations, --parent filters direct children)',
+    description:
+      'List conversations (GET /api/conversations; top-level human conversations by default, --owned-by helmx lists automated sessions, --all includes everything, --parent filters direct children)',
     flags: [
       { name: 'profile', type: 'string', help: 'filter by profileId' },
       { name: 'status', type: 'string', help: 'filter by status (working|blocked|done|idle|error)' },
       { name: 'tag', type: 'string', help: 'filter by tag' },
-      { name: 'all', type: 'boolean', help: 'list all conversations (including subagent/derived child conversations; top-level only by default)' },
+      { name: 'owned-by', type: 'string', help: 'filter by ownership (human|helmx; defaults to human unless --all, --parent, or --tag is given)' },
+      { name: 'all', type: 'boolean', help: 'list all conversations (including subagent/derived children and automated sessions)' },
       { name: 'parent', type: 'number', help: 'list only direct child conversations of this conversation' },
     ],
     async run(ctx: CommandContext) {
@@ -79,6 +81,7 @@ export function conversationsCommands(): CommandSpec[] {
       const profile = flagValue<string>(ctx.flags, 'profile')
       const status = flagValue<string>(ctx.flags, 'status')
       const tag = flagValue<string>(ctx.flags, 'tag')
+      const ownedBy = flagValue<string>(ctx.flags, 'owned-by')
       const all = ctx.flags.get('all') === true
       const parent = flagValue<number>(ctx.flags, 'parent')
       if (all && ctx.flags.has('parent')) {
@@ -100,6 +103,12 @@ export function conversationsCommands(): CommandSpec[] {
         query.set('status', status)
       }
       if (tag !== undefined) query.set('tag', tag)
+      if (ownedBy !== undefined) {
+        if (ownedBy !== 'human' && ownedBy !== 'helmx') {
+          throw new CliError(`--owned-by must be human|helmx, got "${ownedBy}"`, 'invalid_flag_value')
+        }
+        query.set('ownedBy', ownedBy)
+      }
       const qs = query.size > 0 ? `?${query.toString()}` : ''
       const hub = await ctx.hub()
       const list = await hub.get<ConversationSummary[]>(`/api/conversations${qs}`)

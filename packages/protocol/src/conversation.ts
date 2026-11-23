@@ -112,6 +112,8 @@ export interface ConversationInit {
   profileId?: string
   tags?: string[]
   parentConversationId?: number
+  /** Initial ownership (in-process kernel/plugin creation may set 'helmx' atomically before first broadcast; defaults to 'human'; HTTP ignores/forbids this field). */
+  ownedBy?: ConversationOwnership
   /** Bound compute node ID (defaults to inheriting Profile.nodeId or 'local'). */
   nodeId?: string
   cwd?: string
@@ -135,12 +137,15 @@ export interface ConversationPatch {
 /** Conversation list filter (shared by the `GET /api/conversations` query and `host.listConversations`).
  * Provided fields combine with AND; absent fields are unrestricted.
  * The HTTP entry defaults to `topLevelOnly: true` when `parent`/`all` is not
- * explicitly specified (noise reduction); in-process callers (the plugin host port)
- * are unaffected by that default and still list everything. */
+ * explicitly specified and `ownedBy: 'human'` when `parent`/`all`/`tag`/`ownedBy`
+ * are all omitted (noise reduction); in-process callers (the plugin host port)
+ * are unaffected by those defaults and still list everything. */
 export interface ConversationListFilter {
   profileId?: string
   tag?: string
   status?: ConversationStatus
+  /** Filter by conversation ownership ('human' | 'helmx'); unrestricted when omitted in-process. */
+  ownedBy?: ConversationOwnership
   /** Exact match of direct child conversations (parentConversationId === this value). */
   parentConversationId?: number
   /** Top-level conversations only (no parentConversationId); defaults to false in-process. */

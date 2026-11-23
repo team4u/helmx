@@ -6,7 +6,7 @@
 import { useContext, useSyncExternalStore } from 'react'
 import { fileURLToPath } from 'node:url'
 import * as HelmxPluginClient from '@helmx/plugin-client'
-import type { HostModelsSlice } from '@helmx/protocol/browser'
+import type { ConversationSummary, HostModelsSlice } from '@helmx/protocol/browser'
 import { importCompiledPluginClient, mountPluginNamespaceGlobals } from './plugin-namespace.js'
 
 export interface BuiltinClientStubOptions {
@@ -16,6 +16,8 @@ export interface BuiltinClientStubOptions {
   config?: Record<string, unknown>
   /** 宿主模型目录切片（显式提供时覆盖；缺省优先读真实 PluginClientHostContext）。 */
   hostModels?: HostModelsSlice
+  /** 会话摘要列表（useConversations 返回值，显式提供时覆盖宿主上下文）。 */
+  conversations?: ReadonlyArray<ConversationSummary>
 }
 
 let stub: BuiltinClientStubOptions = {}
@@ -23,6 +25,8 @@ let realHooks = false
 
 const NOOP_SUBSCRIBE = (): (() => void) => () => {}
 const UNDEFINED_SNAPSHOT = (): undefined => undefined
+const EMPTY_CONVERSATIONS: ConversationSummary[] = []
+const EMPTY_CONVERSATIONS_SNAPSHOT = (): ConversationSummary[] => EMPTY_CONVERSATIONS
 const EMPTY_CONFIG: Record<string, unknown> = Object.freeze({})
 
 export function setBuiltinClientStub(options: BuiltinClientStubOptions = {}): void {
@@ -69,6 +73,16 @@ const sharedPluginClientNamespace = {
     )
     if (realHooks) return live
     return stub.hostModels !== undefined ? stub.hostModels : live
+  },
+  useConversations: () => {
+    const host = useContext(HelmxPluginClient.PluginClientHostContext)
+    const live = useSyncExternalStore(
+      host?.subscribeConversations ?? NOOP_SUBSCRIBE,
+      host?.getConversations ?? EMPTY_CONVERSATIONS_SNAPSHOT,
+      EMPTY_CONVERSATIONS_SNAPSHOT,
+    )
+    if (realHooks) return live
+    return stub.conversations !== undefined ? stub.conversations : live
   },
 }
 

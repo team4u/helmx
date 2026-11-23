@@ -8,7 +8,7 @@
  * runtime dependency.
  */
 
-import type { ConversationScope } from './conversation.js'
+import type { ConversationScope, WhenBusy } from './conversation.js'
 import type { AgentNamespacedMeta } from './meta.js'
 import type { ExecutionText, LocalizedText } from './locale.js'
 import type { PluginManifestProjection } from './plugin-manifest.js'
@@ -53,6 +53,8 @@ export interface ExternalTriggerEnvelope {
   text: string
   /** Optional targeted conversation; the default target is resolved by the kernel from the current assistant entry. */
   targetConversationId?: number
+  /** Optional busy policy when submitting into the target conversation (defaults to 'steer' when omitted). */
+  whenBusy?: WhenBusy
   metadata?: Record<string, unknown>
   createdAt: number
 }

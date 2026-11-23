@@ -72,10 +72,26 @@ class FakeBackend implements PluginHostBackend {
   submitInput(): Promise<void> {
     return Promise.resolve()
   }
-  createConversation(init: { title?: string; profileId?: string }): Promise<ConversationSummary> {
-    const created = makeConversation(this.nextId++, { profileId: init.profileId ?? 'assistant', title: init.title })
+  createConversation(init: { title?: string; profileId?: string; tags?: string[]; ownedBy?: 'human' | 'helmx' }): Promise<ConversationSummary> {
+    const id = this.nextId++
+    const created = makeConversation(id, {
+      profileId: init.profileId ?? 'assistant',
+      title: init.title,
+      tags: init.tags ?? [],
+      ownedBy: init.ownedBy ?? 'human',
+      createdAt: id * 1000,
+      updatedAt: id * 1000,
+    })
     this.conversations.set(created.id, created)
     return Promise.resolve(created)
+  }
+  async deleteConversationGuarded(id: number): Promise<void> {
+    const conv = this.conversations.get(id)
+    if (conv === undefined) throw new HelmxError('not_found', `会话不存在: ${id}`, 404)
+    if ((conv.ownedBy ?? 'human') === 'human') {
+      throw new HelmxError('ownership_conflict', `human owned: ${id}`, 409)
+    }
+    this.conversations.delete(id)
   }
   forkConversation(id: number, opts?: { entryId?: number; title?: string }): Promise<ConversationSummary> {
     const source = this.conversations.get(id)
@@ -88,9 +104,18 @@ class FakeBackend implements PluginHostBackend {
     this.conversations.set(created.id, created)
     return Promise.resolve(created)
   }
-  listConversations(filter?: { profileId?: string }): ConversationSummary[] {
-    const all = [...this.conversations.values()]
-    return filter?.profileId === undefined ? all : all.filter((c) => c.profileId === filter.profileId)
+  listConversations(filter?: {
+    profileId?: string
+    tag?: string
+    ownedBy?: 'human' | 'helmx'
+    topLevelOnly?: boolean
+  }): ConversationSummary[] {
+    let all = [...this.conversations.values()]
+    if (filter?.profileId !== undefined) all = all.filter((c) => c.profileId === filter.profileId)
+    if (filter?.tag !== undefined) all = all.filter((c) => c.tags.includes(filter.tag!))
+    if (filter?.ownedBy !== undefined) all = all.filter((c) => (c.ownedBy ?? 'human') === filter.ownedBy)
+    if (filter?.topLevelOnly) all = all.filter((c) => c.parentConversationId === undefined)
+    return all
   }
   getConversation(id: number): ConversationSummary {
     const found = this.conversations.get(id)
@@ -374,7 +399,17 @@ test('webhook_create 校验：id/secret 形状、两目标互斥、重复 409、
       id: 'ok',
       secret: 'x'.repeat(32),
       targetConversationId: 1,
-      targetProfileId: 'worker',
+      profileId: 'worker',
+    }),
+    'validation_error',
+    400,
+  )
+  await rejectsCode(
+    h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_create', {
+      id: 'ok',
+      secret: 'x'.repeat(32),
+      mode: 'dedicated',
+      keepLast: 5,
     }),
     'validation_error',
     400,
@@ -469,9 +504,13 @@ test('公开路由：无签名 401 / 错签名 401 / 不存在 404 / 正确签�
   assert.equal(h.backend.dispatched.length, 1)
   const envelope = h.backend.dispatched[0]!
   assert.equal(envelope.source, 'webhook:hook')
-  // 原始 utf8 body 直投（runtime defang 在 dispatchTrigger 内统一包裹）
+  // 原始 utf8 body 直投（runtime defang 在 dispatchTrigger 内统一包裹），默认走独立 isolated 自动化会话
   assert.equal(envelope.text, 'hello raw body')
-  assert.equal(envelope.targetConversationId, undefined)
+  assert.equal(envelope.whenBusy, 'followUp')
+  assert.ok(envelope.targetConversationId !== undefined && envelope.targetConversationId >= 100)
+  const createdConv = h.backend.conversations.get(envelope.targetConversationId!)
+  assert.equal(createdConv?.ownedBy, 'helmx')
+  assert.deepEqual(createdConv?.tags, ['trigger', 'webhook:hook'])
   await h.host.dispose()
   rmSync(h.dataDir, { recursive: true, force: true })
 })
@@ -549,39 +588,66 @@ test('公开路由：runtime 关闭中拒绝投递（runtime_closing 409）；�
 })
 
 // ---------------------------------------------------------------------------
-// 目标解析（targetProfileId 路径）
+// 自动化会话模式（isolated / dedicated + keepLast 淘汰 + 不存在 Profile 拒绝）
 // ---------------------------------------------------------------------------
 
-test('targetProfileId：现有会话取最低 ID；无会话校验 Profile 后创建；不存在 Profile 拒绝', { timeout: 60_000 }, async () => {
+test('mode=isolated 与 dedicated：不碰人类会话；isolated 每次新建并按 keepLast 清理；dedicated 复用同一 helmx 会话；不存在 Profile 拒绝', { timeout: 60_000 }, async () => {
   const h = await makeHarness()
-  // worker Profile 现有 #4 与 #7 → 最低 ID 4
+  // dedicated 模式：创建并持久化一个专属 helmx 会话，不复用人类 #4 / #7
   await h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_create', {
     id: 'to-worker',
     secret: 'topsecret',
-    targetProfileId: 'worker',
+    mode: 'dedicated',
+    profileId: 'worker',
   })
-  const res1 = await callWebhookRoute(h.host, 'to-worker', 'p', 'topsecret')
+  const res1 = await callWebhookRoute(h.host, 'to-worker', 'p1', 'topsecret')
   assert.equal(res1.status, 202)
-  assert.equal(h.backend.dispatched[0]!.targetConversationId, 4)
+  const dedicatedId = h.backend.dispatched[0]!.targetConversationId!
+  assert.ok(dedicatedId >= 100, 'dedicated 应新建独立 helmx 会话而非复写人类会话 #4')
+  assert.equal(h.backend.conversations.get(dedicatedId)!.ownedBy, 'helmx')
+  assert.equal(h.backend.conversations.get(dedicatedId)!.profileId, 'worker')
+  const res1b = await callWebhookRoute(h.host, 'to-worker', 'p2', 'topsecret')
+  assert.equal(res1b.status, 202)
+  assert.equal(h.backend.dispatched[1]!.targetConversationId, dedicatedId, 'dedicated 第二次应复用同一专属会话')
 
-  // watchdog Profile 无会话 → 创建并投递新 ID
+  // isolated 模式 + keepLast=2：每次新建独立 helmx 会话，超限旧已结算会话自动淘汰，error 会话保留
   await h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_create', {
     id: 'to-watchdog',
     secret: 'topsecret',
-    targetProfileId: 'watchdog',
+    mode: 'isolated',
+    profileId: 'watchdog',
+    keepLast: 2,
   })
-  const res2 = await callWebhookRoute(h.host, 'to-watchdog', 'p', 'topsecret')
-  assert.equal(res2.status, 202)
-  const created = h.backend.dispatched[1]!.targetConversationId
-  assert.ok(created !== undefined && created >= 100, `应创建新会话，实际 ${String(created)}`)
-  assert.equal(h.backend.conversations.get(created!)!.profileId, 'watchdog')
+  const r1 = await callWebhookRoute(h.host, 'to-watchdog', 'a', 'topsecret')
+  assert.equal(r1.status, 202)
+  const id1 = h.backend.dispatched[2]!.targetConversationId!
+  h.backend.conversations.get(id1)!.status = 'done'
+
+  const r2 = await callWebhookRoute(h.host, 'to-watchdog', 'b', 'topsecret')
+  assert.equal(r2.status, 202)
+  const id2 = h.backend.dispatched[3]!.targetConversationId!
+  h.backend.conversations.get(id2)!.status = 'error'
+
+  const r3 = await callWebhookRoute(h.host, 'to-watchdog', 'c', 'topsecret')
+  assert.equal(r3.status, 202)
+  const id3 = h.backend.dispatched[4]!.targetConversationId!
+  h.backend.conversations.get(id3)!.status = 'done'
+
+  const r4 = await callWebhookRoute(h.host, 'to-watchdog', 'd', 'topsecret')
+  assert.equal(r4.status, 202)
+  const id4 = h.backend.dispatched[5]!.targetConversationId!
+  assert.notEqual(id1, id4)
+  assert.equal(h.backend.conversations.has(id1), false, '超出 keepLast 的旧已结算运行被自动清理')
+  assert.equal(h.backend.conversations.has(id2), true, 'error 运行绝不被自动淘汰')
+  assert.equal(h.backend.conversations.has(id3), true, '最近已结算运行保留')
+  assert.equal(h.backend.conversations.has(id4), true, '当前新运行保留')
 
   // 不存在的 Profile：创建时校验拒绝
   await rejectsCode(
     h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_create', {
       id: 'to-ghost',
       secret: 'topsecret',
-      targetProfileId: 'ghost',
+      profileId: 'ghost',
     }),
     'validation_error',
     400,
@@ -618,17 +684,22 @@ test('doc 边界：旧开发 doc 缺 hasSecret / 双目标 / 越界字段 → �
   // hasSecret 非严格 true 同样拒绝（布尔字段不可为 false/其他值）
   seed([{ id: 'x', hasSecret: false, createdAt: 1 }])
   await rejectsCode(h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_list', {}), 'triggers_doc_corrupt', 500)
-  // 双目标互斥
+  // 旧字段 targetProfileId（不兼容、不迁移）与双目标互斥
   seed([{ id: 'x', hasSecret: true, targetConversationId: 1, targetProfileId: 'worker', createdAt: 1 }])
   await rejectsCode(h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_list', {}), 'triggers_doc_corrupt', 500)
-  // description 超长（> 500）
-  seed([{ id: 'x', hasSecret: true, description: 'd'.repeat(501), createdAt: 1 }])
+  seed([{ id: 'x', hasSecret: true, targetConversationId: 1, mode: 'isolated', createdAt: 1 }])
   await rejectsCode(h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_list', {}), 'triggers_doc_corrupt', 500)
-  // targetProfileId 空串
-  seed([{ id: 'x', hasSecret: true, targetProfileId: '', createdAt: 1 }])
+  // 缺 mode（无 targetConversationId）
+  seed([{ id: 'x', hasSecret: true, createdAt: 1 }])
+  await rejectsCode(h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_list', {}), 'triggers_doc_corrupt', 500)
+  // description 超长（> 500）
+  seed([{ id: 'x', hasSecret: true, mode: 'isolated', description: 'd'.repeat(501), createdAt: 1 }])
+  await rejectsCode(h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_list', {}), 'triggers_doc_corrupt', 500)
+  // profileId 空串
+  seed([{ id: 'x', hasSecret: true, mode: 'isolated', profileId: '', createdAt: 1 }])
   await rejectsCode(h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_list', {}), 'triggers_doc_corrupt', 500)
   // 修复后正常通过（合法形状）
-  seed([{ id: 'ok', hasSecret: true, createdAt: 1 }])
+  seed([{ id: 'ok', hasSecret: true, mode: 'isolated', createdAt: 1 }])
   const list = (await h.host.invokeAction(TRIGGERS_PLUGIN_ID, 'webhook_list', {})) as { webhooks: Array<{ id: string; hasSecret: boolean }> }
   assert.equal(list.webhooks[0]!.id, 'ok')
   assert.equal(list.webhooks[0]!.hasSecret, true)

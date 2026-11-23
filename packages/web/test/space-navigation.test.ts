@@ -211,6 +211,21 @@ test('defaultSpaceTarget: conversations prefers the profile of the latest unarch
 
   // no usable profile at all returns null
   assert.equal(defaultSpaceTarget('conversations', makeInput()), null)
+
+  // automated top-level helmx conversations never count as visible human roots or influence defaultSpaceTarget
+  const automatedOnly = [
+    makeConversation({ id: 20, profileId: 'reviewer', ownedBy: 'helmx', updatedAt: 9999 }),
+  ]
+  assert.equal(
+    hasVisibleConversationRoots({ conversations: automatedOnly, profiles, plugins }),
+    false,
+    'only automated roots present: fresh-system landing still treats human root set as empty',
+  )
+  assert.deepEqual(
+    defaultSpaceTarget('conversations', makeInput({ conversations: automatedOnly, profiles, plugins })),
+    { kind: 'agent', profileId: 'assistant' },
+    'automated run under reviewer does not steal default profile away from first usable profile',
+  )
 })
 
 test('space-navigation: enabled=true 且 status=failed 的插件托管 Profile、根会话与 Screen 均不计入活跃可见/导航目标', { timeout: 60_000 }, () => {

@@ -236,8 +236,13 @@ export const shellMessages = {
   'shell.overview.nodeFilterLabel': { en: 'Filter by node', 'zh-CN': '按节点筛选' },
   'shell.overview.sourceFilter': { en: 'All sources', 'zh-CN': '全部来源' },
   'shell.overview.sourceFilterLabel': { en: 'Filter by source', 'zh-CN': '按来源筛选' },
-  'shell.overview.sourceRegular': { en: 'Regular conversations', 'zh-CN': '常规对话' },
-  'shell.overview.sourceManaged': { en: 'Managed conversations', 'zh-CN': '托管会话' },
+  'shell.overview.sourceHuman': { en: 'Conversations', 'zh-CN': '人类对话' },
+  'shell.overview.sourceAutomated': { en: 'Automated', 'zh-CN': '自动化任务' },
+  'shell.overview.automatedNeedsAttention': {
+    en: '{count} automated task(s) need attention',
+    'zh-CN': '有 {count} 个自动化任务需要处理',
+  },
+  'shell.overview.viewAutomatedAttention': { en: 'View', 'zh-CN': '查看' },
   'shell.overview.localNode': { en: 'Local', 'zh-CN': '本机' },
   'shell.overview.statsFiltered': {
     en: '{count} of {total} conversation groups',

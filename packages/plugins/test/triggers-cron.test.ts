@@ -9,7 +9,12 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { HelmxError, type ExternalTriggerEnvelope, type PluginDefinition } from '@helmx/protocol'
+import {
+  HelmxError,
+  type ConversationSummary,
+  type ExternalTriggerEnvelope,
+  type PluginDefinition,
+} from '@helmx/protocol'
 import { PluginHost } from '../../kernel/src/plugins/index.js'
 import {
   advanceAfterFire,
@@ -24,6 +29,7 @@ import {
   type CronDoc,
   type CronJob,
 } from '../src/triggers/cron.js'
+import type { TriggerDeliveryTarget, TriggerDispatchResult } from '../src/triggers/delivery.js'
 import { hostBackendStub } from '../../kernel/test/helpers/host-backend-stub.js'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { MemoryDocStore, waitFor as baseWaitFor } from './helpers/plugin-test-env.js'
@@ -83,14 +89,15 @@ interface Harness {
   host: PluginHost
   docs: MemoryDocStore
   clock: FakeClock
-  /** 已投递信封（含 targetProfileId）。 */
-  dispatched: Array<{ envelope: ExternalTriggerEnvelope; targetProfileId?: string }>
+  /** 已投递信封与解析后的目标描述。 */
+  dispatched: Array<{ envelope: ExternalTriggerEnvelope; target: TriggerDeliveryTarget }>
   /** dispatch 行为注入：抛错模拟投递失败。 */
-  dispatchImpl: (envelope: ExternalTriggerEnvelope, targetProfileId?: string) => Promise<void>
+  dispatchImpl: (envelope: ExternalTriggerEnvelope, target: TriggerDeliveryTarget) => Promise<TriggerDispatchResult>
+  /** 可选在途运行查询注入（验证慢任务重叠跳过）。 */
+  findActiveRunImpl: (jobId: string) => ConversationSummary | undefined
   /** doc.flush 调用计数（假持久断言用）。 */
   flushCalls: number
-  /** flush 行为注入：抛错模拟持久化失败（doc.flush 走 MemoryDocStore，此处
-   * 直接覆盖 store.flush 实现）。 */
+  /** flush 行为注入：抛错模拟持久化失败。 */
   flushImpl: () => Promise<void>
   events: Array<{ type: string; payload: unknown }>
   runtime: ReturnType<typeof createCronScheduler>
@@ -102,7 +109,7 @@ function makeHarness(startMs: number, docSeed?: CronDoc): Harness {
   const docs = new MemoryDocStore()
   if (docSeed !== undefined) docs.set('builtin:triggers:crons', docSeed)
   const clock = new FakeClock(startMs)
-  const dispatched: Array<{ envelope: ExternalTriggerEnvelope; targetProfileId?: string }> = []
+  const dispatched: Array<{ envelope: ExternalTriggerEnvelope; target: TriggerDeliveryTarget }> = []
   const events: Array<{ type: string; payload: unknown }> = []
   const dataDir = mkdtempSync(join(tmpdir(), 'helmx-cron-test-'))
   const h: Harness = {
@@ -110,9 +117,11 @@ function makeHarness(startMs: number, docSeed?: CronDoc): Harness {
     docs,
     clock,
     dispatched,
-    dispatchImpl: async (envelope, targetProfileId) => {
-      dispatched.push({ envelope, targetProfileId })
+    dispatchImpl: async (envelope, target) => {
+      dispatched.push({ envelope, target })
+      return { conversationId: target.kind === 'conversation' ? target.conversationId : 42 }
     },
+    findActiveRunImpl: () => undefined,
     flushCalls: 0,
     flushImpl: async () => {},
     events,
@@ -163,7 +172,8 @@ function makeHarness(startMs: number, docSeed?: CronDoc): Harness {
         h.runtime = createCronScheduler(
           ctx,
           {
-            dispatchTrigger: async (envelope, targetProfileId) => h.dispatchImpl(envelope, targetProfileId),
+            dispatchTrigger: async (envelope, target) => h.dispatchImpl(envelope, target),
+            findActiveRun: (jobId) => h.findActiveRunImpl(jobId),
           },
           clock.api,
         )
@@ -184,7 +194,7 @@ const T10 = T0 + 10 * MIN
 const T15 = T0 + 15 * MIN
 
 function seedJob(over: Partial<CronJob> = {}): CronJob {
-  return {
+  const base: CronJob = {
     id: 'j1',
     rev: 'rev-a',
     schedule: '*/5 * * * *',
@@ -192,8 +202,10 @@ function seedJob(over: Partial<CronJob> = {}): CronJob {
     text: 'hello',
     enabled: true,
     catchUp: false,
+    ...(over.targetConversationId === undefined ? { mode: over.mode ?? 'isolated' } : {}),
     ...over,
   }
+  return base
 }
 
 let harnesses: Harness[] = []
@@ -283,6 +295,8 @@ test('normalizeCronInput：默认值/互斥/非法输入', { timeout: 60_000 }, 
   assert.equal(job.timezone, 'UTC')
   assert.equal(job.enabled, true)
   assert.equal(job.catchUp, false)
+  assert.equal(job.mode, 'isolated')
+  assert.equal(job.keepLast, 10)
   assert.ok(job.rev.length > 0)
 
   assert.throws(
@@ -292,9 +306,20 @@ test('normalizeCronInput：默认值/互斥/非法输入', { timeout: 60_000 }, 
         schedule: '* * * * *',
         text: 'x',
         targetConversationId: 1,
-        targetProfileId: 'p',
+        profileId: 'p',
       }),
     /mutually exclusive/,
+  )
+  assert.throws(
+    () =>
+      normalizeCronInput({
+        id: 'a',
+        schedule: '* * * * *',
+        text: 'x',
+        mode: 'dedicated',
+        keepLast: 5,
+      }),
+    /keepLast/,
   )
   assert.throws(() => normalizeCronInput({ id: 'bad.id', schedule: '* * * * *', text: 'x' }), /invalid cron id/)
   assert.throws(() => normalizeCronInput({ id: 'a', schedule: '* * * * *', text: '' }), /text/)
@@ -395,9 +420,9 @@ test('cron_create：非法输入在动作边界拒绝；无未来时点拒绝创
       schedule: '* * * * *',
       text: 't',
       targetConversationId: 1,
-      targetProfileId: 'p',
+      profileId: 'p',
     }),
-    (err: unknown) => err instanceof HelmxError && /互斥|validation/.test(`${err.code}${err.message}`),
+    (err: unknown) => err instanceof HelmxError && /互斥|mutually exclusive|validation/.test(`${err.code}${err.message}`),
   )
   await assert.rejects(
     h.host.invokeAction('builtin:triggers', 'cron_create', { id: 'x', schedule: '0 0 30 2 *', text: 't' }),
@@ -405,22 +430,31 @@ test('cron_create：非法输入在动作边界拒绝；无未来时点拒绝创
   )
 })
 
-test('cron_trigger：真实投递（targetProfileId 透传）；失败抛错不假成功', { timeout: 60_000 }, async () => {
+test('cron_trigger：真实投递（automated mode/profileId 透传并返回 conversationId）；失败抛错不假成功', { timeout: 60_000 }, async () => {
   const h = track(makeHarness(T0))
   await ready(h)
   await h.host.invokeAction('builtin:triggers', 'cron_create', {
     id: 'rep',
     schedule: '0 * * * *',
     text: 'report',
-    targetProfileId: 'analyst',
+    mode: 'isolated',
+    profileId: 'analyst',
+    keepLast: 5,
   })
   const out = (await h.host.invokeAction('builtin:triggers', 'cron_trigger', { id: 'rep' })) as {
     triggered: boolean
+    conversationId: number
   }
   assert.equal(out.triggered, true)
+  assert.equal(out.conversationId, 42)
   assert.equal(h.dispatched.length, 1)
   assert.equal(h.dispatched[0]!.envelope.source, 'cron:rep')
-  assert.equal(h.dispatched[0]!.targetProfileId, 'analyst')
+  assert.equal(h.dispatched[0]!.envelope.whenBusy, 'followUp')
+  assert.equal(h.dispatched[0]!.target.kind, 'isolated')
+  if (h.dispatched[0]!.target.kind === 'isolated') {
+    assert.equal(h.dispatched[0]!.target.profileId, 'analyst')
+    assert.equal(h.dispatched[0]!.target.keepLast, 5)
+  }
 
   await assert.rejects(
     h.host.invokeAction('builtin:triggers', 'cron_trigger', { id: 'nope' }),
@@ -530,10 +564,11 @@ test('dispatch 失败：写 lastError + notification，本计划点不重试，�
   await ready(h)
   let attempts = 0
   let fail = true
-  h.dispatchImpl = async (envelope, targetProfileId) => {
+  h.dispatchImpl = async (envelope, target) => {
     attempts += 1
     if (fail) throw new Error('downstream broken')
-    h.dispatched.push({ envelope, targetProfileId })
+    h.dispatched.push({ envelope, target })
+    return { conversationId: 42 }
   }
   await h.host.invokeAction('builtin:triggers', 'cron_create', {
     id: 'e1',
@@ -697,10 +732,10 @@ test('single-flight：并发 tick 同 job 只投递一次', { timeout: 60_000 },
   const h = track(makeHarness(T0))
   await ready(h)
   let release: (() => void) | undefined
-  h.dispatchImpl = (envelope, targetProfileId) =>
-    new Promise<void>((resolve) => {
-      h.dispatched.push({ envelope, targetProfileId })
-      release = resolve
+  h.dispatchImpl = (envelope, target) =>
+    new Promise<TriggerDispatchResult>((resolve) => {
+      h.dispatched.push({ envelope, target })
+      release = () => resolve({ conversationId: 42 })
     })
   await h.host.invokeAction('builtin:triggers', 'cron_create', { id: 'sf', schedule: '*/5 * * * *', text: 'x' })
   await h.clock.advance(5 * MIN) // timer 触发进入 dispatch 挂起
@@ -716,10 +751,10 @@ test('delete 并发执行不复活 doc：在途 tick 遇删除静默终止', { t
   const h = track(makeHarness(T0))
   await ready(h)
   let release: (() => void) | undefined
-  h.dispatchImpl = (envelope, targetProfileId) =>
-    new Promise<void>((resolve) => {
-      h.dispatched.push({ envelope, targetProfileId })
-      release = resolve
+  h.dispatchImpl = (envelope, target) =>
+    new Promise<TriggerDispatchResult>((resolve) => {
+      h.dispatched.push({ envelope, target })
+      release = () => resolve({ conversationId: 42 })
     })
   await h.host.invokeAction('builtin:triggers', 'cron_create', { id: 'd1', schedule: '*/5 * * * *', text: 'x' })
   await h.clock.advance(5 * MIN)
@@ -736,11 +771,11 @@ test('delete 后 create 同 id：旧 tick 的 lastError 不污染新 job（rev �
   await ready(h)
   let fail = true
   let release: (() => void) | undefined
-  h.dispatchImpl = (envelope, targetProfileId) =>
-    new Promise<void>((resolve, reject) => {
-      h.dispatched.push({ envelope, targetProfileId })
+  h.dispatchImpl = (envelope, target) =>
+    new Promise<TriggerDispatchResult>((resolve, reject) => {
+      h.dispatched.push({ envelope, target })
       if (fail) release = () => reject(new Error('old job dispatch failed'))
-      else resolve()
+      else resolve({ conversationId: 42 })
     })
   await h.host.invokeAction('builtin:triggers', 'cron_create', { id: 'same', schedule: '*/5 * * * *', text: 'old' })
   await h.clock.advance(5 * MIN)
@@ -785,10 +820,10 @@ test('停用时有在途 tick：liveTasks 报在途，禁用被宿主 409 拒绝
   const h = track(makeHarness(T0))
   await ready(h)
   let release: (() => void) | undefined
-  h.dispatchImpl = (envelope, targetProfileId) =>
-    new Promise<void>((resolve) => {
-      h.dispatched.push({ envelope, targetProfileId })
-      release = resolve
+  h.dispatchImpl = (envelope, target) =>
+    new Promise<TriggerDispatchResult>((resolve) => {
+      h.dispatched.push({ envelope, target })
+      release = () => resolve({ conversationId: 42 })
     })
   await h.host.invokeAction('builtin:triggers', 'cron_create', { id: 'lt', schedule: '*/5 * * * *', text: 'x' })
   await h.clock.advance(5 * MIN)
@@ -861,4 +896,35 @@ test('大间隔不溢出：超 2^31-1ms 的延迟先以安全窗口排程（adva
   await h.runtime.settle()
   assert.equal(h.dispatched.length, 1)
   assert.equal(h.dispatched[0]!.envelope.createdAt, next)
+})
+
+test('慢任务防重入：前一次自动化运行仍在 working/blocked 时跳过本次计划并推进 nextRunAt，结束后恢复', { timeout: 60_000 }, async () => {
+  const h = track(makeHarness(T0))
+  await ready(h)
+  await h.host.invokeAction('builtin:triggers', 'cron_create', {
+    id: 'slow',
+    schedule: '*/5 * * * *',
+    text: 'inspect',
+  })
+  let activeRun: ConversationSummary | undefined = { id: 88, status: 'working' } as ConversationSummary
+  h.findActiveRunImpl = () => activeRun
+
+  await h.clock.advance(5 * MIN) // T0_5: active run exists -> skip
+  await h.runtime.settle()
+  assert.equal(h.dispatched.length, 0, '前一次运行仍在途时不重复投递')
+  assert.equal(h.events.some((e) => e.type === 'notification'), false, '正常重叠跳过不发错误通知')
+  const skippedJob = await soleJob(h)
+  assert.equal(skippedJob.nextRunAt, T10, '跳过后仍推进 nextRunAt 不死循环')
+  assert.equal(skippedJob.lastSkippedAt, T0_5)
+  assert.match(String(skippedJob.lastSkipReason), /#88.*working/)
+
+  // 上一轮完成后：下一计划点正常投递并清除跳过记录
+  activeRun = undefined
+  await h.clock.advance(5 * MIN) // T10
+  await h.runtime.settle()
+  assert.equal(h.dispatched.length, 1)
+  assert.equal(h.dispatched[0]!.envelope.id, `cron:slow:${T10}`)
+  const recoveredJob = await soleJob(h)
+  assert.equal(recoveredJob.lastSkippedAt, undefined)
+  assert.equal(recoveredJob.lastSkipReason, undefined)
 })

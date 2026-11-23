@@ -72,20 +72,29 @@ export class RuntimeTriggerDispatcher {
 
   /** External trigger delivery: validate any explicit target, defang once, and deliver. */
   async dispatchTrigger(envelope: ExternalTriggerEnvelope): Promise<void> {
+    const whenBusy = envelope.whenBusy ?? 'steer'
+    if (whenBusy !== 'steer' && whenBusy !== 'followUp' && whenBusy !== 'reject') {
+      throw new HelmxError(
+        'validation_error',
+        `invalid trigger whenBusy policy: expected steer|followUp|reject, got ${String(whenBusy)}`,
+        400,
+        { whenBusy },
+      )
+    }
     const text = this.defang(envelope)
     if (envelope.targetConversationId !== undefined) {
       // Explicit target: deleted/invalid targets fail loudly with not_found (never masked by default re-routing).
       this.deps.getConversation(envelope.targetConversationId)
-      await this.deps.submitInput(envelope.targetConversationId, text, { origin: 'trigger', whenBusy: 'steer' })
+      await this.deps.submitInput(envelope.targetConversationId, text, { origin: 'trigger', whenBusy })
       return
     }
     const target = await this.resolveDefaultTriggerTarget()
     try {
-      await this.deps.submitInput(target, text, { origin: 'trigger', whenBusy: 'steer' })
+      await this.deps.submitInput(target, text, { origin: 'trigger', whenBusy })
     } catch (err) {
       if (!(err instanceof HelmxError && err.code === 'not_found')) throw err
       const resolved = await this.resolveDefaultTriggerTarget()
-      await this.deps.submitInput(resolved, text, { origin: 'trigger', whenBusy: 'steer' })
+      await this.deps.submitInput(resolved, text, { origin: 'trigger', whenBusy })
     }
   }
 }

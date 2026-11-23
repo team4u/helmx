@@ -41,11 +41,13 @@ describe("triggers-client-interactions", () => {
 
   interface SpyCtx extends PluginClientContextType {
     screenCalls: string[]
+    drawerCalls: number[]
     actionCalls: Array<{ actionId: string; input: unknown }>
   }
 
   function makeSpyCtx(locale: HelmxLocale = 'en'): SpyCtx {
     const screenCalls: string[] = []
+    const drawerCalls: number[] = []
     const actionCalls: Array<{ actionId: string; input: unknown }> = []
     const base: PluginClientContextType = {
       pluginId: 'builtin:triggers',
@@ -59,7 +61,9 @@ describe("triggers-client-interactions", () => {
         screenCalls.push(t)
       },
       openSplitScreen: () => {},
-      openConversationDrawer: () => {},
+      openConversationDrawer: (id) => {
+        drawerCalls.push(id)
+      },
       openArtifact: () => {},
       openWorkbench: () => {},
       closeWorkbench: () => {},
@@ -70,7 +74,7 @@ describe("triggers-client-interactions", () => {
       locale,
       translate: (text) => resolveLocalizedText(text, locale),
     }
-    return Object.assign(base, { screenCalls, actionCalls })
+    return Object.assign(base, { screenCalls, drawerCalls, actionCalls })
   }
 
   async function mount(
@@ -96,19 +100,59 @@ describe("triggers-client-interactions", () => {
   const CRONS_DOC = {
     version: 1,
     jobs: [
-      { id: 'daily-report', schedule: '0 9 * * *', text: '生成日报', enabled: true, timezone: 'UTC', catchUp: false, lastRunAt: 1_800_000_000_000, nextRunAt: 1_800_086_400_000 },
-      { id: 'broken', schedule: '0 * * * *', text: '失败任务', enabled: false, timezone: 'UTC', catchUp: false, lastError: '投递失败：目标会话不存在' },
+      { id: 'daily-report', schedule: '0 9 * * *', text: '生成日报', mode: 'isolated', profileId: 'assistant', keepLast: 10, enabled: true, timezone: 'UTC', catchUp: false, lastRunAt: 1_800_000_000_000, nextRunAt: 1_800_086_400_000 },
+      { id: 'broken', schedule: '0 * * * *', text: '失败任务', mode: 'isolated', profileId: 'assistant', keepLast: 5, enabled: false, timezone: 'UTC', catchUp: false, lastError: '投递失败：目标会话不存在' },
     ],
   }
 
   const WEBHOOKS_DOC = {
     webhooks: [
-      { id: 'ci', hasSecret: true, description: 'CI 构建', threadKey: 'ci/main', createdAt: 1_800_000_000_000 },
+      { id: 'ci', hasSecret: true, description: 'CI 构建', mode: 'isolated', profileId: 'assistant', keepLast: 10, createdAt: 1_800_000_000_000 },
     ],
   }
 
+  const SAMPLE_RUNS = [
+    {
+      id: 901,
+      title: 'Cron · daily-report · 09:00',
+      profileId: 'assistant',
+      ownedBy: 'helmx' as const,
+      tags: ['trigger', 'cron:daily-report'],
+      cwd: '/tmp',
+      model: 'faux/faux-1',
+      thinkingLevel: '',
+      status: 'error' as const,
+      lastError: 'upstream 502',
+      stateChangeSeq: 3,
+      completionSeq: 1,
+      unread: true,
+      pinned: false,
+      pendingAskCount: 0,
+      createdAt: 1_800_000_000_000,
+      updatedAt: 1_800_000_010_000,
+    },
+    {
+      id: 902,
+      title: 'Webhook · ci · 09:05',
+      profileId: 'assistant',
+      ownedBy: 'helmx' as const,
+      tags: ['trigger', 'webhook:ci'],
+      cwd: '/tmp',
+      model: 'faux/faux-1',
+      thinkingLevel: '',
+      status: 'done' as const,
+      stateChangeSeq: 2,
+      completionSeq: 1,
+      unread: false,
+      pinned: false,
+      pendingAskCount: 0,
+      createdAt: 1_800_000_300_000,
+      updatedAt: 1_800_000_305_000,
+    },
+  ]
+
   before(() => {
-    setBuiltinClientStub({ docs: { crons: CRONS_DOC, webhooks: WEBHOOKS_DOC } })
+    setBuiltinClientStub({ docs: { crons: CRONS_DOC, webhooks: WEBHOOKS_DOC }, conversations: SAMPLE_RUNS })
   })
 
   test('manager screen：cron 表渲染行、状态徽章与错误列', { timeout: 60_000 }, async () => {
@@ -267,7 +311,7 @@ describe("triggers-client-interactions", () => {
         unmount2()
       }
     } finally {
-      setBuiltinClientStub({ docs: { crons: CRONS_DOC, webhooks: WEBHOOKS_DOC } })
+      setBuiltinClientStub({ docs: { crons: CRONS_DOC, webhooks: WEBHOOKS_DOC }, conversations: SAMPLE_RUNS })
     }
   })
 
@@ -340,6 +384,51 @@ describe("triggers-client-interactions", () => {
       assert.ok(whDialog, '点击 Webhook 行应展开详情抽屉')
       assert.match(whDialog.textContent ?? '', /CI 构建/)
       assert.doesNotMatch(whDialog.textContent ?? '', /hasSecret/, '抽屉同样不得暴露 hasSecret 内部键名')
+    } finally {
+      unmount()
+    }
+  })
+
+  test('manager screen：实时运行记录从 conversations 投影，支持抽屉速览与整页打开', { timeout: 60_000 }, async () => {
+    const spy = makeSpyCtx()
+    const { host, unmount } = await mount(
+      spy,
+      e(components.TriggersManagerScreen, { pluginId: 'builtin:triggers', screenId: 'manager', isSplit: false, params: {}, setParams: () => {}, inlineDrawer: true }),
+    )
+    try {
+      const dailyRow = Array.from(host.querySelectorAll('tbody tr')).find((tr) =>
+        tr.textContent?.includes('daily-report'),
+      )
+      assert.ok(dailyRow, 'daily-report row renders')
+      assert.ok(
+        dailyRow.querySelector('.helmx-status-light[data-tone="failed"]') !== null,
+        'failed run surfaces error status light on cron row',
+      )
+
+      await act(async () => {
+        dailyRow.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+      })
+      await act(async () => {})
+
+      const dialog = host.querySelector('[role="dialog"].primary-drawer-content')
+      assert.ok(dialog, 'detail drawer opens for daily-report')
+      assert.match(dialog.textContent ?? '', /Recent runs/, 'runs section renders')
+      assert.match(dialog.textContent ?? '', /#901/, 'live run conversation id renders')
+      assert.match(dialog.textContent ?? '', /upstream 502/, 'run error surfaces')
+
+      const runMain = dialog.querySelector<HTMLButtonElement>('.tg-run-main')
+      assert.ok(runMain)
+      await act(async () => {
+        runMain.click()
+      })
+      assert.deepEqual(spy.drawerCalls, [901], 'clicking run row peeks conversation in drawer')
+
+      const openBtn = dialog.querySelector<HTMLButtonElement>('.tg-run-open-btn')
+      assert.ok(openBtn)
+      await act(async () => {
+        openBtn.click()
+      })
+      assert.deepEqual(spy.screenCalls, ['conversation:901'], 'clicking open button navigates to conversation')
     } finally {
       unmount()
     }

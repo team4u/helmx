@@ -216,6 +216,12 @@ export function composeTreeCompletionNotification(input: {
         : undefined
   const rootConv = survivingRootId !== undefined ? byId.get(survivingRootId) : undefined
 
+  // Automated top-level sessions (cron/webhook/background runs) are silent on normal completion;
+  // failures (`hasFailure`) and waiting-for-human approvals (`composeTreeBlockedNotification`) still notify.
+  if (rootConv !== undefined && rootConv.ownedBy === 'helmx' && !hasFailure) {
+    return null
+  }
+
   if (rootConv === undefined) {
     return {
       title,

@@ -432,6 +432,7 @@ export class ConversationService {
       .filter((s) => (filter?.profileId ? s.profileId === filter.profileId : true))
       .filter((s) => (filter?.tag ? s.tags.includes(filter.tag) : true))
       .filter((s) => (filter?.status ? s.status === filter.status : true))
+      .filter((s) => (filter?.ownedBy ? (s.ownedBy ?? 'human') === filter.ownedBy : true))
       .filter((s) =>
         filter?.parentConversationId !== undefined
           ? s.parentConversationId === filter.parentConversationId
@@ -622,6 +623,14 @@ export class ConversationService {
       },
       BACKGROUND_CONTEXT,
     )
+    if (init.ownedBy !== undefined && init.ownedBy !== 'human' && init.ownedBy !== 'helmx') {
+      throw new HelmxError(
+        'validation_error',
+        `invalid conversation ownership: expected 'human' | 'helmx', got ${String(init.ownedBy)}`,
+        400,
+        { ownedBy: init.ownedBy },
+      )
+    }
     const id = conv.id as number
     const now = Date.now()
     this.store.upsertConv({
@@ -630,6 +639,7 @@ export class ConversationService {
       profileId,
       tags: init.tags ?? [],
       parentConversationId: init.parentConversationId,
+      ownedBy: init.ownedBy ?? 'human',
       nodeId,
       cwd: effectiveCwd,
       model: effectiveModel ?? '',
@@ -771,6 +781,77 @@ export class ConversationService {
     const subtree = this.collectDeletionSubtree(id)
     this.assertSubtreeUnmanaged(subtree, id)
     for (const target of subtree) await this.deleteOneConversation(target)
+  }
+
+  /**
+   * Automated guarded deletion (Watchdog red-line kernel enforcement):
+   * Runs inside the root conversation serial gate, validates root ownership/CAS watermark plus every
+   * derived descendant's ownership (strictly forbids 'human'), plugin management locks, and (unless
+   * `opts.allowActive === true`) rejects active (`working` | `blocked` | pending asks) nodes with
+   * `409 conversation_active`. Re-checks ownership synchronously before each node deletion.
+   */
+  async deleteConversationGuarded(
+    id: number,
+    guard: GuardedMutationExpectation = {},
+    opts: { allowActive?: boolean } = {},
+  ): Promise<void> {
+    this.assertWritable()
+    this.assertGuardShape(guard)
+    return this.withMutationGate(id, async () => {
+      this.assertMutationGuard(id, guard)
+      const subtree = this.collectDeletionSubtree(id)
+      this.assertSubtreeUnmanaged(subtree, id)
+      const allowActive = opts.allowActive === true
+      for (const nodeId of subtree) {
+        const ownedBy = this.o.ownershipOf(nodeId)
+        if (ownedBy === 'human' || (guard.expectedOwnership !== undefined && ownedBy !== guard.expectedOwnership)) {
+          throw new HelmxError(
+            'ownership_conflict',
+            `conversation ${id} cannot be deleted automatically: ${
+              nodeId === id ? 'it' : `derived conversation ${nodeId}`
+            } is currently owned by ${ownedBy}; refusing automated mutation (human-ownership invariant)`,
+            409,
+            {
+              conversationId: nodeId,
+              currentOwnership: ownedBy,
+              ...(nodeId !== id ? { requestedConversationId: id } : {}),
+              ...(guard.expectedOwnership !== undefined ? { expectedOwnership: guard.expectedOwnership } : {}),
+            },
+          )
+        }
+        if (!allowActive) {
+          const summary = this.tracker.summaryOf(nodeId)
+          if (summary.status === 'working' || summary.status === 'blocked' || summary.pendingAskCount > 0) {
+            throw new HelmxError(
+              'conversation_active',
+              `conversation ${id} cannot be deleted automatically while ${
+                nodeId === id ? 'it' : `derived conversation ${nodeId}`
+              } is ${summary.status}${summary.pendingAskCount > 0 ? ` (${summary.pendingAskCount} pending asks)` : ''}`,
+              409,
+              {
+                conversationId: nodeId,
+                status: summary.status,
+                pendingAskCount: summary.pendingAskCount,
+                ...(nodeId !== id ? { requestedConversationId: id } : {}),
+              },
+            )
+          }
+        }
+      }
+      for (const target of subtree) {
+        // Re-check ownership synchronously right before each node deletion in case a descendant changed while awaiting child teardown.
+        const ownedBy = this.o.ownershipOf(target)
+        if (ownedBy === 'human' || (guard.expectedOwnership !== undefined && ownedBy !== guard.expectedOwnership)) {
+          throw new HelmxError(
+            'ownership_conflict',
+            `conversation ${target} is currently owned by ${ownedBy}; refusing automated deletion (human-ownership invariant)`,
+            409,
+            { conversationId: target, currentOwnership: ownedBy },
+          )
+        }
+        await this.deleteOneConversation(target)
+      }
+    })
   }
 
   /**

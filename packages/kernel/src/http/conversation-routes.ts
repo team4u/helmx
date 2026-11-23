@@ -3,7 +3,7 @@
  * withdraw/abort/reset/compact/fork/entries/:entryId/artifacts/bulk-delete), /api/asks
  * (approval queue), and /api/search (full-text index search).
  */
-import type { ConversationListFilter, ConversationStatus } from '@helmx/protocol'
+import type { ConversationListFilter, ConversationOwnership, ConversationStatus } from '@helmx/protocol'
 import { HelmxError } from '@helmx/protocol'
 import { buildContentDisposition, errorResponse, jsonOk, readJsonBody, type JsonRedactor } from './http-utils.js'
 import type { KernelRuntimeLike } from './contracts.js'
@@ -204,9 +204,14 @@ function parseConversationFilter(url: URL): ConversationListFilter {
   if (status !== undefined && !['working', 'blocked', 'done', 'idle', 'error'].includes(status)) {
     throw new ValidationError('status must be working|blocked|done|idle|error')
   }
-  // Low-noise default: only top-level conversations when neither parent nor all is specified;
-  // child conversations are queried explicitly via ?parent=<id> or listed together via ?all=1.
-  // The two are mutually exclusive—return 400 rather than guessing precedence.
+  const ownedByRaw = url.searchParams.get('ownedBy') ?? undefined
+  if (ownedByRaw !== undefined && ownedByRaw !== 'human' && ownedByRaw !== 'helmx') {
+    throw new ValidationError('ownedBy must be human|helmx')
+  }
+  // Low-noise default: only top-level human conversations when parent/all/tag/ownedBy are omitted;
+  // child conversations are queried explicitly via ?parent=<id> or listed together via ?all=1,
+  // and automated top-level conversations via ?ownedBy=helmx (or by explicit ?tag=<t> / ?all=1).
+  // all and parent are mutually exclusive—return 400 rather than guessing precedence.
   const parentRaw = url.searchParams.get('parent')
   const all = parseOptionalBooleanFlag(url, 'all')
   if (parentRaw !== null && all === true) {
@@ -219,10 +224,17 @@ function parseConversationFilter(url: URL): ConversationListFilter {
     }
     parentConversationId = Number(parentRaw)
   }
+  const effectiveOwnedBy: ConversationOwnership | undefined =
+    ownedByRaw !== undefined
+      ? (ownedByRaw as ConversationOwnership)
+      : parentConversationId === undefined && all !== true && tag === undefined
+        ? 'human'
+        : undefined
   return {
     ...(profileId !== undefined ? { profileId } : {}),
     ...(tag !== undefined ? { tag } : {}),
     ...(status !== undefined ? { status: status as ConversationStatus } : {}),
+    ...(effectiveOwnedBy !== undefined ? { ownedBy: effectiveOwnedBy } : {}),
     ...(parentConversationId !== undefined ? { parentConversationId } : {}),
     ...(parentConversationId === undefined && all !== true ? { topLevelOnly: true } : {}),
   }

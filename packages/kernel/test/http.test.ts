@@ -166,6 +166,7 @@ function makeKernel(): KernelRuntimeLike {
       if (filter?.profileId) out = out.filter((c) => c.profileId === filter.profileId)
       if (filter?.tag) out = out.filter((c) => c.tags.includes(filter.tag!))
       if (filter?.status) out = out.filter((c) => c.status === filter.status)
+      if (filter?.ownedBy) out = out.filter((c) => (c.ownedBy ?? 'human') === filter.ownedBy)
       if (filter?.parentConversationId !== undefined) {
         out = out.filter((c) => c.parentConversationId === filter.parentConversationId)
       }
@@ -734,6 +735,34 @@ test('conversation list noise-reduction contract: top-level by default, all=1 re
   const allOff = await call(handler, 'GET', `/api/conversations?all=0&parent=${ROOT_CONVERSATION_ID}`)
   assert.equal(allOff.status, 200)
   assert.deepEqual(allOff.body.map((c: ConversationSummary) => c.id), [3])
+
+  // ownedBy noise-reduction contract: default omits top-level helmx sessions, ?ownedBy=helmx lists them,
+  // ?tag=... and ?all=1 include them without requiring explicit ownedBy, invalid ownedBy returns 400.
+  const automated = {
+    ...summary(50, '[cron] daily · 11-23 09:00'),
+    ownedBy: 'helmx' as const,
+    tags: ['trigger', 'cron:daily'],
+  }
+  conversations.set(50, automated)
+  try {
+    const defList = await call(handler, 'GET', '/api/conversations')
+    assert.equal(defList.status, 200)
+    assert.equal(defList.body.some((c: ConversationSummary) => c.id === 50), false, 'default list hides automated helmx roots')
+    const helmxList = await call(handler, 'GET', '/api/conversations?ownedBy=helmx')
+    assert.equal(helmxList.status, 200)
+    assert.deepEqual(helmxList.body.map((c: ConversationSummary) => c.id), [50])
+    const byTag = await call(handler, 'GET', '/api/conversations?tag=cron:daily')
+    assert.equal(byTag.status, 200)
+    assert.deepEqual(byTag.body.map((c: ConversationSummary) => c.id), [50])
+    const allWithAuto = await call(handler, 'GET', '/api/conversations?all=1')
+    assert.equal(allWithAuto.status, 200)
+    assert.equal(allWithAuto.body.some((c: ConversationSummary) => c.id === 50), true)
+    const badOwner = await call(handler, 'GET', '/api/conversations?ownedBy=bot')
+    assert.equal(badOwner.status, 400)
+    assert.equal(badOwner.body.error.code, 'validation_error')
+  } finally {
+    conversations.delete(50)
+  }
 })
 
 test('invalid conversationId and invalid fields return 400 validation_error', { timeout: 60_000 }, async () => {

@@ -4,13 +4,18 @@
  * Uses `durable-scheduler.ts` primitives (`SchedulerClock`, `TimerHandle`, `defaultSchedulerClock`,
  * `parseNextCronTime`, `advanceCronAfterFire`, `armChunkedTimer`) for cron parsing, 24.8-day
  * chunked timer arming, and injectable clocks while managing multi-job state in the public `crons`
- * doc with `(id, rev)` generation guards, claim-flush-before-dispatch, single catch-up, and
- * decision-failure retry backoff.
+ * doc with `(id, rev)` generation guards, claim-flush-before-dispatch, single catch-up, overlap
+ * skipping for in-flight automated runs, and decision-failure retry backoff.
  */
 
 import { CronExpressionParser } from 'cron-parser'
 import { randomUUID } from 'node:crypto'
-import { HelmxError, type ExternalTriggerEnvelope, type HelmxPluginContext } from '@helmx/protocol'
+import {
+  HelmxError,
+  type ConversationSummary,
+  type ExternalTriggerEnvelope,
+  type HelmxPluginContext,
+} from '@helmx/protocol'
 import {
   advanceCronAfterFire,
   armChunkedTimer,
@@ -19,6 +24,14 @@ import {
   type SchedulerClock,
   type TimerHandle,
 } from '../durable-scheduler.js'
+import {
+  DEFAULT_TRIGGER_KEEP_LAST,
+  MAX_TRIGGER_KEEP_LAST,
+  normalizeTriggerTargetInput,
+  type ProfileLookup,
+  type TriggerSessionMode,
+} from './contracts.js'
+import type { TriggerDeliveryTarget, TriggerDispatchResult } from './delivery.js'
 
 const CRON_DOC_NAME = 'crons'
 const ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/
@@ -40,11 +53,22 @@ export interface CronJob {
   enabled: boolean
   /** true: catch up missed intervals once after restart; false: jump to a future point. */
   catchUp: boolean
+  /** Explicit existing conversation target (mutually exclusive with mode/profileId/keepLast/dedicatedConversationId). */
   targetConversationId?: number
-  targetProfileId?: string
+  /** Automated session mode when targetConversationId is unset ('isolated' | 'dedicated'). */
+  mode?: TriggerSessionMode
+  /** Target Profile ID for automated sessions (defaults to 'assistant'). */
+  profileId?: string
+  /** Retention cap of settled isolated runs (only when mode === 'isolated'). */
+  keepLast?: number
+  /** Persisted dedicated conversation ID (only when mode === 'dedicated'). */
+  dedicatedConversationId?: number
   lastRunAt?: number
   nextRunAt?: number
   lastError?: string
+  /** Epoch ms of the latest scheduled tick skipped due to an overlapping in-flight run. */
+  lastSkippedAt?: number
+  lastSkipReason?: string
 }
 
 export interface CronDoc {
@@ -52,13 +76,19 @@ export interface CronDoc {
   jobs: CronJob[]
 }
 
-interface CronDeps {
-  dispatchTrigger(event: ExternalTriggerEnvelope, targetProfileId?: string): Promise<void>
+export interface CronDeps {
+  dispatchTrigger(
+    event: ExternalTriggerEnvelope,
+    target: TriggerDeliveryTarget,
+  ): Promise<TriggerDispatchResult>
+  findActiveRun?(jobId: string): ConversationSummary | undefined
+  profiles?: ProfileLookup
 }
 
-interface CronRuntime {
+export interface CronRuntime {
   tickNow(): Promise<void>
   settle(): Promise<void>
+  getJob(id: string): CronJob | undefined
 }
 
 // ---------------------------------------------------------------------------
@@ -138,7 +168,9 @@ export function normalizeCronInput(input: {
   enabled?: boolean
   catchUp?: boolean
   targetConversationId?: number
-  targetProfileId?: string
+  mode?: TriggerSessionMode
+  profileId?: string
+  keepLast?: number
 }): CronJob {
   if (typeof input.id !== 'string' || !ID_PATTERN.test(input.id)) {
     failValidation(`invalid cron id (1..64 chars, alphanumeric _ - allowed, dots forbidden): ${String(input.id)}`, 'id')
@@ -152,20 +184,12 @@ export function normalizeCronInput(input: {
   const timezone = input.timezone ?? 'UTC'
   assertValidSchedule(input.schedule, timezone)
 
-  const hasConv = input.targetConversationId !== undefined
-  const hasProfile = input.targetProfileId !== undefined
-  if (hasConv && hasProfile) {
-    failValidation(
-      'targetConversationId and targetProfileId are mutually exclusive: direct conversation delivery and per-Profile resolution cannot both be set',
-      'targetConversationId/targetProfileId',
-    )
-  }
-  if (hasConv && (!Number.isInteger(input.targetConversationId) || (input.targetConversationId as number) <= 0)) {
-    failValidation('targetConversationId must be a positive integer conversation ID', 'targetConversationId')
-  }
-  if (hasProfile && (typeof input.targetProfileId !== 'string' || input.targetProfileId.length === 0)) {
-    failValidation('targetProfileId must be a non-empty string', 'targetProfileId')
-  }
+  const target = normalizeTriggerTargetInput({
+    targetConversationId: input.targetConversationId,
+    mode: input.mode,
+    profileId: input.profileId,
+    keepLast: input.keepLast,
+  })
   if (input.enabled !== undefined && typeof input.enabled !== 'boolean') {
     failValidation('enabled must be a boolean', 'enabled')
   }
@@ -182,8 +206,10 @@ export function normalizeCronInput(input: {
     text: input.text,
     enabled: input.enabled ?? true,
     catchUp: input.catchUp ?? false,
-    ...(hasConv ? { targetConversationId: input.targetConversationId } : {}),
-    ...(hasProfile ? { targetProfileId: input.targetProfileId } : {}),
+    ...(target.targetConversationId !== undefined ? { targetConversationId: target.targetConversationId } : {}),
+    ...(target.mode !== undefined ? { mode: target.mode } : {}),
+    ...(target.profileId !== undefined ? { profileId: target.profileId } : {}),
+    ...(target.keepLast !== undefined ? { keepLast: target.keepLast } : {}),
   }
 }
 
@@ -223,10 +249,19 @@ function parseCronJob(rawJob: unknown, index: number, seen: Set<string>): CronJo
   if (typeof job.enabled !== 'boolean' || typeof job.catchUp !== 'boolean') {
     failCorrupt(`${where} (${id}) enabled/catchUp must be booleans`, { index, id })
   }
-  for (const field of ['description', 'targetProfileId', 'lastError'] as const) {
+  if ('targetProfileId' in job) {
+    failCorrupt(`${where} (${id}) uses removed targetProfileId field (use mode + profileId)`, { index, id })
+  }
+  for (const field of ['description', 'profileId', 'lastError', 'lastSkipReason'] as const) {
     if (job[field] !== undefined && typeof job[field] !== 'string') {
       failCorrupt(`${where} (${id}) has an invalid ${field} type`, { index, id, field })
     }
+  }
+  if (typeof job.profileId === 'string' && (job.profileId.length === 0 || job.profileId.length > 64 || /\s|[/\\]/.test(job.profileId))) {
+    failCorrupt(`${where} (${id}) has an invalid profileId`, { index, id })
+  }
+  if (job.mode !== undefined && job.mode !== 'isolated' && job.mode !== 'dedicated') {
+    failCorrupt(`${where} (${id}) mode must be 'isolated' or 'dedicated'`, { index, id })
   }
   if (
     job.targetConversationId !== undefined &&
@@ -234,10 +269,45 @@ function parseCronJob(rawJob: unknown, index: number, seen: Set<string>): CronJo
   ) {
     failCorrupt(`${where} (${id}) has an invalid targetConversationId`, { index, id })
   }
-  if (job.targetConversationId !== undefined && job.targetProfileId !== undefined) {
-    failCorrupt(`${where} (${id}) targetConversationId and targetProfileId are mutually exclusive`, { index, id })
+  if (
+    job.keepLast !== undefined &&
+    (!Number.isInteger(job.keepLast) || (job.keepLast as number) < 1 || (job.keepLast as number) > MAX_TRIGGER_KEEP_LAST)
+  ) {
+    failCorrupt(`${where} (${id}) keepLast must be an integer 1..${MAX_TRIGGER_KEEP_LAST}`, { index, id })
   }
-  for (const field of ['lastRunAt', 'nextRunAt'] as const) {
+  if (
+    job.dedicatedConversationId !== undefined &&
+    (!Number.isInteger(job.dedicatedConversationId) || (job.dedicatedConversationId as number) <= 0)
+  ) {
+    failCorrupt(`${where} (${id}) has an invalid dedicatedConversationId`, { index, id })
+  }
+  if (job.targetConversationId !== undefined) {
+    if (
+      job.mode !== undefined ||
+      job.profileId !== undefined ||
+      job.keepLast !== undefined ||
+      job.dedicatedConversationId !== undefined
+    ) {
+      failCorrupt(`${where} (${id}) targetConversationId is mutually exclusive with mode/profileId/keepLast/dedicatedConversationId`, {
+        index,
+        id,
+      })
+    }
+  } else {
+    if (job.mode !== 'isolated' && job.mode !== 'dedicated') {
+      failCorrupt(`${where} (${id}) must declare mode ('isolated' | 'dedicated') when targetConversationId is unset`, {
+        index,
+        id,
+      })
+    }
+    if (job.mode === 'isolated' && job.dedicatedConversationId !== undefined) {
+      failCorrupt(`${where} (${id}) dedicatedConversationId is forbidden in isolated mode`, { index, id })
+    }
+    if (job.mode === 'dedicated' && job.keepLast !== undefined) {
+      failCorrupt(`${where} (${id}) keepLast is forbidden in dedicated mode`, { index, id })
+    }
+  }
+  for (const field of ['lastRunAt', 'nextRunAt', 'lastSkippedAt'] as const) {
     if (job[field] !== undefined && (typeof job[field] !== 'number' || !Number.isFinite(job[field]))) {
       failCorrupt(`${where} (${id}) ${field} must be finite numbers`, { index, id, field })
     }
@@ -252,10 +322,15 @@ function parseCronJob(rawJob: unknown, index: number, seen: Set<string>): CronJo
     enabled: job.enabled,
     catchUp: job.catchUp,
     ...(job.targetConversationId !== undefined ? { targetConversationId: job.targetConversationId as number } : {}),
-    ...(job.targetProfileId !== undefined ? { targetProfileId: job.targetProfileId as string } : {}),
+    ...(job.mode !== undefined ? { mode: job.mode as TriggerSessionMode } : {}),
+    ...(job.profileId !== undefined ? { profileId: job.profileId as string } : {}),
+    ...(job.keepLast !== undefined ? { keepLast: job.keepLast as number } : {}),
+    ...(job.dedicatedConversationId !== undefined ? { dedicatedConversationId: job.dedicatedConversationId as number } : {}),
     ...(job.lastRunAt !== undefined ? { lastRunAt: job.lastRunAt as number } : {}),
     ...(job.nextRunAt !== undefined ? { nextRunAt: job.nextRunAt as number } : {}),
     ...(job.lastError !== undefined ? { lastError: job.lastError as string } : {}),
+    ...(job.lastSkippedAt !== undefined ? { lastSkippedAt: job.lastSkippedAt as number } : {}),
+    ...(job.lastSkipReason !== undefined ? { lastSkipReason: job.lastSkipReason as string } : {}),
   }
 }
 
@@ -290,14 +365,17 @@ export function buildCronEnvelope(job: CronJob, fireAt: number): ExternalTrigger
     id: `cron:${job.id}:${fireAt}`,
     source: `cron:${job.id}`,
     text: job.text,
+    whenBusy: 'followUp',
     createdAt: fireAt,
     ...(job.targetConversationId !== undefined ? { targetConversationId: job.targetConversationId } : {}),
   }
 }
 
-function clearLastError(job: CronJob): CronJob {
-  const { lastError: _ignored, ...rest } = job
-  void _ignored
+function clearRunDiagnostics(job: CronJob): CronJob {
+  const { lastError: _e, lastSkippedAt: _sa, lastSkipReason: _sr, ...rest } = job
+  void _e
+  void _sa
+  void _sr
   return rest as CronJob
 }
 
@@ -342,6 +420,34 @@ export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clo
     return true
   }
 
+  const buildTargetForJob = (job: CronJob): TriggerDeliveryTarget => {
+    if (job.targetConversationId !== undefined) {
+      return { kind: 'conversation', conversationId: job.targetConversationId }
+    }
+    if (job.mode === 'dedicated') {
+      return {
+        kind: 'dedicated',
+        triggerKind: 'cron',
+        triggerId: job.id,
+        label: job.description,
+        profileId: job.profileId,
+        dedicatedConversationId: job.dedicatedConversationId,
+        onDedicatedConversationId: async (conversationId) => {
+          await tryUpdateJob(job.id, job.rev, (j) => ({ ...j, dedicatedConversationId: conversationId }))
+        },
+      }
+    }
+    return {
+      kind: 'isolated',
+      triggerKind: 'cron',
+      triggerId: job.id,
+      label: job.description,
+      timezone: job.timezone,
+      profileId: job.profileId,
+      keepLast: job.keepLast ?? DEFAULT_TRIGGER_KEEP_LAST,
+    }
+  }
+
   const runJobTick = async (id: string): Promise<void> => {
     if (stopping) return
     let rescheduledByBackoff = false
@@ -365,10 +471,31 @@ export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clo
       }
 
       const fireAt = decision.at
+
+      // Overlap protection for automated jobs: if a previous run is still working/blocked,
+      // advance nextRunAt and record the skip rather than piling up concurrent runs.
+      if (job.targetConversationId === undefined && deps.findActiveRun !== undefined) {
+        const activeRun = deps.findActiveRun(job.id)
+        if (activeRun !== undefined) {
+          const reason = `previous run #${activeRun.id} is still ${activeRun.status}`
+          try {
+            await tryUpdateJob(id, job.rev, (j) => ({
+              ...j,
+              nextRunAt: advanceAfterFire(j.schedule, j.timezone, fireAt, clock.now()),
+              lastSkippedAt: fireAt,
+              lastSkipReason: reason,
+            }))
+          } catch (err) {
+            emitError(`cron job ${id} overlap skip persistence failed`, err)
+          }
+          return
+        }
+      }
+
       let claimed: boolean
       try {
         claimed = await tryUpdateJob(id, job.rev, (j) =>
-          clearLastError({
+          clearRunDiagnostics({
             ...j,
             lastRunAt: fireAt,
             nextRunAt: advanceAfterFire(j.schedule, j.timezone, fireAt, clock.now()),
@@ -379,10 +506,11 @@ export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clo
         return
       }
       if (!claimed || stopping) return
-      if (!readDoc().jobs.some((current) => current.id === id && current.rev === job.rev && current.enabled)) return
+      const currentJob = readDoc().jobs.find((current) => current.id === id && current.rev === job.rev && current.enabled)
+      if (!currentJob) return
 
       try {
-        await deps.dispatchTrigger(buildCronEnvelope(job, fireAt), job.targetProfileId)
+        await deps.dispatchTrigger(buildCronEnvelope(currentJob, fireAt), buildTargetForJob(currentJob))
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
         try {
@@ -450,7 +578,7 @@ export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clo
 
   ctx.action({
     id: 'cron_list',
-    description: 'List all cron jobs (incl. lastRunAt/nextRunAt/lastError scheduling state)',
+    description: 'List all cron jobs (incl. mode/lastRunAt/nextRunAt/lastError/lastSkippedAt scheduling state)',
     exposeToPrompt: false,
     idempotent: true,
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
@@ -466,20 +594,41 @@ export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clo
 
   ctx.action({
     id: 'cron_create',
-    description: 'Create a periodic cron job (5-field schedule, IANA timezone defaulting to UTC; delivers text to target conversation)',
+    description:
+      'Create a periodic cron job (5-field schedule, IANA timezone defaulting to UTC; defaults to isolated automated sessions with keepLast=10, or dedicated / explicit targetConversationId)',
     exposeToPrompt: false,
     inputSchema: {
       type: 'object',
       properties: {
         id: { type: 'string', pattern: '^[A-Za-z0-9_-]{1,64}$' },
         schedule: { type: 'string', description: 'Standard 5-field cron expression (min hour day month weekday, e.g. "*/30 * * * *")' },
-        text: { type: 'string', minLength: 1, description: 'Self-contained task text delivered to the target conversation when triggered' },
+        text: { type: 'string', minLength: 1, description: 'Self-contained task text delivered when triggered' },
         description: { type: 'string', maxLength: 500 },
         timezone: { type: 'string', description: 'IANA timezone name (e.g. Asia/Shanghai; defaults to UTC)' },
         enabled: { type: 'boolean' },
         catchUp: { type: 'boolean' },
-        targetConversationId: { type: 'integer', minimum: 1, description: 'Explicit target conversation ID (mutually exclusive with targetProfileId)' },
-        targetProfileId: { type: 'string', minLength: 1, description: 'Target Profile ID for trigger routing (mutually exclusive with targetConversationId)' },
+        mode: {
+          type: 'string',
+          enum: ['isolated', 'dedicated'],
+          description: 'Automated session mode when targetConversationId is omitted (isolated = fresh helmx conversation per run, default; dedicated = one persistent helmx conversation per job)',
+        },
+        profileId: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 64,
+          description: 'Target Profile ID for automated sessions (defaults to assistant; mutually exclusive with targetConversationId)',
+        },
+        keepLast: {
+          type: 'integer',
+          minimum: 1,
+          maximum: MAX_TRIGGER_KEEP_LAST,
+          description: `Number of settled isolated runs to retain automatically (1..${MAX_TRIGGER_KEEP_LAST}, default ${DEFAULT_TRIGGER_KEEP_LAST}; only valid in isolated mode)`,
+        },
+        targetConversationId: {
+          type: 'integer',
+          minimum: 1,
+          description: 'Explicit existing conversation ID to deliver into with followUp (mutually exclusive with mode/profileId/keepLast)',
+        },
       },
       required: ['id', 'schedule', 'text'],
       additionalProperties: false,
@@ -493,6 +642,16 @@ export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clo
     cli: { command: ['cron', 'create'] },
     handler: async (input: Record<string, unknown>) => {
       const job = normalizeCronInput(input as Parameters<typeof normalizeCronInput>[0])
+      if (job.profileId !== undefined && deps.profiles !== undefined) {
+        if ((await deps.profiles.get(job.profileId)) === undefined) {
+          throw new HelmxError(
+            'validation_error',
+            `profileId does not exist: ${job.profileId} (refusing to schedule against the wrong role)`,
+            400,
+            { profileId: job.profileId },
+          )
+        }
+      }
       const nextRunAt = nextFireTime(job.schedule, job.timezone, clock.now())
       if (nextRunAt === undefined) {
         throw new HelmxError(
@@ -544,19 +703,22 @@ export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clo
     inputSchema: idInputSchema,
     outputSchema: {
       type: 'object',
-      properties: { triggered: { type: 'boolean' } },
-      required: ['triggered'],
+      properties: {
+        triggered: { type: 'boolean' },
+        conversationId: { type: 'integer' },
+      },
+      required: ['triggered', 'conversationId'],
       additionalProperties: false,
     },
     cli: { command: ['cron', 'trigger'] },
     handler: async (input: { id: string }) => {
       const job = readDoc().jobs.find((j) => j.id === input.id)
       if (!job) throw new HelmxError('not_found', `cron job does not exist: ${input.id}`, 404, { id: input.id })
-      await deps.dispatchTrigger(
+      const res = await deps.dispatchTrigger(
         { ...buildCronEnvelope(job, clock.now()), id: `cron:${job.id}:manual:${randomUUID()}` },
-        job.targetProfileId,
+        buildTargetForJob(job),
       )
-      return { triggered: true }
+      return { triggered: true, conversationId: res.conversationId }
     },
   })
 
@@ -611,6 +773,9 @@ export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clo
         await Promise.allSettled([...inflight.values()])
         await new Promise((resolve) => setImmediate(resolve))
       }
+    },
+    getJob(id: string) {
+      return readDoc().jobs.find((j) => j.id === id)
     },
   }
 }

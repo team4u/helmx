@@ -602,8 +602,13 @@ test('isConversationDeletable 正确判定会话是否允许人类删除', { tim
   assert.equal(isConversationDeletable({ id: 1 }), true)
   assert.equal(isConversationDeletable({ id: 1, ownedBy: 'human' }), true)
 
-  // 机器/插件托管会话禁止删除
+  // 机器/自动化会话：运行中/阻塞中/未知状态禁删，终态（idle/done/error）允许删除
   assert.equal(isConversationDeletable({ id: 3, ownedBy: 'helmx' }), false)
+  assert.equal(isConversationDeletable({ id: 4, ownedBy: 'helmx', status: 'working' }), false)
+  assert.equal(isConversationDeletable({ id: 5, ownedBy: 'helmx', status: 'blocked' }), false)
+  assert.equal(isConversationDeletable({ id: 6, ownedBy: 'helmx', status: 'idle' }), true)
+  assert.equal(isConversationDeletable({ id: 7, ownedBy: 'helmx', status: 'done' }), true)
+  assert.equal(isConversationDeletable({ id: 8, ownedBy: 'helmx', status: 'error' }), true)
 
   // 普通人类会话（无 ownedBy 或 ownedBy === 'human'）允许删除
   assert.equal(isConversationDeletable({ id: 10 }), true)
@@ -613,7 +618,9 @@ test('isConversationDeletable 正确判定会话是否允许人类删除', { tim
 test('filterDeletableConversations 过滤出可删除会话', { timeout: 60_000 }, () => {
   const sample = [
     conv({ id: 1, title: '初始会话' }), // 无 id 级豁免 -> true
-    conv({ id: 2, title: '中枢', ownedBy: 'helmx' }), // ownedBy: 'helmx' -> false
+    conv({ id: 2, title: '运行中自动化', ownedBy: 'helmx', status: 'working' }), // working helmx -> false
+    conv({ id: 3, title: '待审批自动化', ownedBy: 'helmx', status: 'blocked' }), // blocked helmx -> false
+    conv({ id: 4, title: '已结束自动化', ownedBy: 'helmx', status: 'done' }), // settled helmx -> true
     conv({ id: 10, title: '人类会话1' }), // true
     conv({ id: 11, title: '人类会话2', ownedBy: 'human' }), // true
   ]
@@ -621,7 +628,7 @@ test('filterDeletableConversations 过滤出可删除会话', { timeout: 60_000 
   const deletable = filterDeletableConversations(sample)
   assert.deepEqual(
     deletable.map((c) => c.id),
-    [1, 10, 11],
+    [1, 4, 10, 11],
   )
 })
 
@@ -819,7 +826,7 @@ test('批量选择状态计算：全选、反选与单选切换', { timeout: 60_
       conv({ id: 1, title: '根会话', profileId: 'assistant' }),
       conv({ id: 10, title: '会话 10', profileId: 'assistant' }),
       conv({ id: 11, title: '会话 11', profileId: 'assistant' }),
-      conv({ id: 21, title: '系统中枢', profileId: 'coder', ownedBy: 'helmx' }),
+      conv({ id: 21, title: '系统中枢', profileId: 'coder', ownedBy: 'helmx', status: 'working' }),
       conv({ id: 22, title: '会话 22', profileId: 'coder' }),
     ],
     plugins: [{ id: 'builtin:profile', enabled: true }],

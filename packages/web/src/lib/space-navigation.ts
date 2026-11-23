@@ -43,6 +43,7 @@ export function hasVisibleConversationRoots(input: {
   return input.conversations.some(
     (conv) =>
       conv.parentConversationId === undefined &&
+      (conv.ownedBy ?? 'human') === 'human' &&
       !isConversationArchived(conv) &&
       (() => {
         const profile = input.profiles.find((p) => p.id === conv.profileId)
@@ -103,7 +104,12 @@ export function defaultSpaceTarget(space: SidebarSpace, input: SpaceTargetInput)
     return profile !== undefined && isProfileVisible(profile, enabledPluginIds)
   }
   const latestRoot = input.conversations
-    .filter((conv) => conv.parentConversationId === undefined && !isConversationArchived(conv))
+    .filter(
+      (conv) =>
+        conv.parentConversationId === undefined &&
+        (conv.ownedBy ?? 'human') === 'human' &&
+        !isConversationArchived(conv),
+    )
     .reduce<ConversationSummary | null>(
       (best, conv) =>
         best === null || conv.updatedAt > best.updatedAt || (conv.updatedAt === best.updatedAt && conv.id > best.id)

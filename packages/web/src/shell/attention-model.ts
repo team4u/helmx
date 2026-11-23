@@ -140,11 +140,12 @@ export function aggregateAttentionTrees(input: {
         activeDescendantCount += 1
       }
     }
+    const isAutomatedRoot = root.ownedBy === 'helmx'
     const bucket: AttentionBucket | null = hasError || hasWaiting
       ? 'needs_attention'
       : hasMachineActive
         ? 'running'
-        : root.status === 'done' && root.unread === true
+        : !isAutomatedRoot && root.status === 'done' && root.unread === true
           ? 'unread_done'
           : null
 
@@ -224,11 +225,12 @@ export function buildAttentionModel(input: {
       if (isWaitingForHuman(member)) viewedHasWaiting = true
       if (isMachineActive(member, input.background)) viewedHasMachineActive = true
     }
+    const isAutomatedRoot = root.ownedBy === 'helmx'
     const indicatorBucket: AttentionBucket | null = viewedHasError || viewedHasWaiting
       ? 'needs_attention'
-      : viewedHasMachineActive
+      : !isAutomatedRoot && viewedHasMachineActive
         ? 'running'
-        : !viewed.has(root.id) && root.status === 'done' && root.unread === true
+        : !isAutomatedRoot && !viewed.has(root.id) && root.status === 'done' && root.unread === true
           ? 'unread_done'
           : null
 

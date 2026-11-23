@@ -3,11 +3,24 @@
  * Fast Refresh friendly).
  *
  * Doc shapes mirror the server-side triggers/cron.ts and triggers/webhook.ts
- * contracts; parsing is lenient: when a doc has not arrived or fields are
- * missing we return safe defaults instead of fabricating data.
+ * contracts; run history is projected directly from live store conversations
+ * tagged `cron:<id>` / `webhook:<id>` (zero double-writing in plugin docs).
  */
+import type { ConversationSummary } from '@helmx/protocol/browser'
 import { DEFAULT_HELMX_LOCALE, resolveLocalizedText, type HelmxLocale } from '@helmx/plugin-client'
-import { TRIGGER_TARGET_DEFAULT, triggerTargetConversation, triggerTargetProfile } from './copy.ts'
+import {
+  TRIGGER_MODE_DEDICATED,
+  TRIGGERS_STATUS_BLOCKED,
+  TRIGGERS_STATUS_DONE,
+  TRIGGERS_STATUS_ERROR,
+  TRIGGERS_STATUS_IDLE,
+  TRIGGERS_STATUS_WORKING,
+  triggerModeIsolated,
+  triggerTargetConversation,
+  triggerTargetProfile,
+} from './copy.ts'
+
+export type TriggerSessionMode = 'isolated' | 'dedicated'
 
 /** Row shape of the CronDoc (public doc 'crons'), display field subset. */
 export interface CronJobRow {
@@ -19,10 +32,15 @@ export interface CronJobRow {
   enabled: boolean
   catchUp: boolean
   targetConversationId?: number
-  targetProfileId?: string
+  mode?: TriggerSessionMode
+  profileId?: string
+  keepLast?: number
+  dedicatedConversationId?: number
   lastRunAt?: number
   nextRunAt?: number
   lastError?: string
+  lastSkippedAt?: number
+  lastSkipReason?: string
 }
 
 /** Row shape of the WebhooksDoc (public doc 'webhooks'), display field subset. */
@@ -31,7 +49,10 @@ export interface WebhookRow {
   hasSecret: boolean
   description?: string
   targetConversationId?: number
-  targetProfileId?: string
+  mode?: TriggerSessionMode
+  profileId?: string
+  keepLast?: number
+  dedicatedConversationId?: number
   createdAt: number
 }
 
@@ -40,26 +61,86 @@ export type TriggerDetailSelection =
   | { kind: 'webhook'; id: string }
 
 /**
- * Human-readable summary of a trigger's delivery target (conversation /
- * profile, falling back to default routing when no explicit
- * target is set). Copy resolves against the given locale (defaults to en so
- * existing English assertions stay valid).
+ * Human-readable summary of a trigger's delivery mode & target.
+ * Copy resolves against the given locale (defaults to en).
  */
 export function formatTriggerTargetSummary(
   row: {
     targetConversationId?: number
-    targetProfileId?: string
+    mode?: TriggerSessionMode
+    profileId?: string
+    keepLast?: number
   },
   locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
 ): string {
-  const parts: string[] = []
   if (row.targetConversationId !== undefined) {
-    parts.push(triggerTargetConversation(row.targetConversationId, locale))
+    return triggerTargetConversation(row.targetConversationId, locale)
   }
-  if (row.targetProfileId) {
-    parts.push(triggerTargetProfile(row.targetProfileId, locale))
+  const modeLabel =
+    row.mode === 'dedicated'
+      ? resolveLocalizedText(TRIGGER_MODE_DEDICATED, locale)
+      : triggerModeIsolated(row.keepLast, locale)
+  const profileLabel = triggerTargetProfile(row.profileId || 'assistant', locale)
+  return `${modeLabel} · ${profileLabel}`
+}
+
+/**
+ * Select root conversations belonging to a cron job or webhook endpoint directly
+ * from the live conversation list (SSOT: tagged `cron:<id>` / `webhook:<id>`, newest first).
+ */
+export function selectTriggerRuns(
+  conversations: ReadonlyArray<ConversationSummary>,
+  kind: 'cron' | 'webhook',
+  id: string,
+): ConversationSummary[] {
+  const sourceTag = `${kind}:${id}`
+  return conversations
+    .filter((c) => c.parentConversationId === undefined && c.tags.includes(sourceTag))
+    .slice()
+    .sort((a, b) => b.createdAt - a.createdAt || b.id - a.id)
+}
+
+/** Aggregate live status of a trigger's runs for compact table health indicators. */
+export interface TriggerRunHealth {
+  count: number
+  status: 'error' | 'blocked' | 'working' | 'done' | null
+}
+
+export function summarizeTriggerRunHealth(runs: ReadonlyArray<ConversationSummary>): TriggerRunHealth {
+  let hasError = false
+  let hasBlocked = false
+  let hasWorking = false
+  for (const run of runs) {
+    if (run.status === 'error') hasError = true
+    else if (run.status === 'blocked' || run.pendingAskCount > 0) hasBlocked = true
+    else if (run.status === 'working') hasWorking = true
   }
-  return parts.length > 0 ? parts.join(' · ') : resolveLocalizedText(TRIGGER_TARGET_DEFAULT, locale)
+  const status = hasError
+    ? 'error'
+    : hasBlocked
+      ? 'blocked'
+      : hasWorking
+        ? 'working'
+        : runs.length > 0
+          ? 'done'
+          : null
+  return { count: runs.length, status }
+}
+
+/** Localized accessible label for a conversation status light. */
+export function triggerRunStatusLabel(status: ConversationSummary['status'], locale: HelmxLocale): string {
+  switch (status) {
+    case 'working':
+      return resolveLocalizedText(TRIGGERS_STATUS_WORKING, locale)
+    case 'blocked':
+      return resolveLocalizedText(TRIGGERS_STATUS_BLOCKED, locale)
+    case 'error':
+      return resolveLocalizedText(TRIGGERS_STATUS_ERROR, locale)
+    case 'done':
+      return resolveLocalizedText(TRIGGERS_STATUS_DONE, locale)
+    default:
+      return resolveLocalizedText(TRIGGERS_STATUS_IDLE, locale)
+  }
 }
 
 export function parseCronJobs(doc: { jobs?: unknown } | undefined): CronJobRow[] {

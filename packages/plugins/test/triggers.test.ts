@@ -186,7 +186,7 @@ test('triggers2: 七个动作注册、schema 边界与 cli.command 声明', { ti
         `缺 ${missing} 应显式 400`,
       )
     }
-    // Profile/显式会话目标互斥
+    // 自动化模式与显式会话目标互斥
     await assert.rejects(
       () =>
         host.invokeAction(TRIGGERS, 'cron_create', {
@@ -194,7 +194,7 @@ test('triggers2: 七个动作注册、schema 边界与 cli.command 声明', { ti
           schedule: '* * * * *',
           text: 'x',
           targetConversationId: 1,
-          targetProfileId: 'assistant',
+          profileId: 'assistant',
         }),
       (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
     )
@@ -230,9 +230,10 @@ test('triggers3: cron CRUD 契约——默认值、重复创建拒绝、list/del
     assert.equal(job.timezone, 'UTC', 'timezone 缺省必须 UTC')
     assert.equal(job.enabled, true, 'enabled 缺省必须 true')
     assert.equal(job.catchUp, false, 'catchUp 缺省必须 false')
+    assert.equal(job.mode, 'isolated', '默认 isolated 自动化会话模式')
+    assert.equal(job.keepLast, 10, 'isolated 模式默认保留最近 10 条已结算运行')
     assert.equal(job.targetConversationId, undefined)
-    assert.equal(job.targetProfileId, undefined)
-    assert.equal(job.threadKey, undefined)
+    assert.equal(job.profileId, undefined)
     assert.equal(job.lastRunAt, undefined, '未运行过不得伪造 lastRunAt')
     assert.ok(typeof job.nextRunAt === 'number' || job.nextRunAt === null, 'nextRunAt 为计算字段')
 
@@ -274,7 +275,7 @@ test('triggers3: cron CRUD 契约——默认值、重复创建拒绝、list/del
 // 2. cron_trigger 手动触发进入真实 trigger 管道（origin trigger + defang）
 // ---------------------------------------------------------------------------
 
-test('triggers4: cron_trigger 手动触发——信封进入 #1、origin=trigger、defang 防逃逸', { timeout: 60_000 }, async () => {
+test('triggers4: cron_trigger 默认 isolated 自动化会话——不污染 #1、ownedBy=helmx、origin=trigger、defang 防逃逸', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     requireTriggersRegistered(env)
@@ -289,12 +290,17 @@ test('triggers4: cron_trigger 手动触发——信封进入 #1、origin=trigger
     env.faux.setResponses([fauxAssistantMessage('助理收到')])
     const result = (await kernel.plugins.invokeAction(TRIGGERS, 'cron_trigger', { id: 'inject-probe' })) as {
       triggered: boolean
+      conversationId: number
     }
-    assert.deepEqual(result, { triggered: true })
+    assert.equal(result.triggered, true)
+    assert.notEqual(result.conversationId, ROOT_CONVERSATION_ID, '默认不干扰人类主会话 #1')
 
-    // 默认目标 #1；等待回合结算后核对输入 entry
-    await kernel.waitForIdle(ROOT_CONVERSATION_ID)
-    const json = await lastInputJson(env, ROOT_CONVERSATION_ID)
+    await kernel.waitForIdle(result.conversationId)
+    const runConv = kernel.getConversation(result.conversationId)
+    assert.equal(runConv.ownedBy, 'helmx', '定时任务独立会话归属 helmx')
+    assert.ok(runConv.tags.includes('trigger') && runConv.tags.includes('cron:inject-probe'))
+
+    const json = await lastInputJson(env, result.conversationId)
     assert.match(json, /cron:inject-probe/, 'source 必须是 cron:<id>')
     assert.match(json, /external_event/, '必须经 defang 信封包裹')
     // 注入原文被 XML 转义：不得出现未转义的 </external_event> 逃逸段
@@ -303,10 +309,18 @@ test('triggers4: cron_trigger 手动触发——信封进入 #1、origin=trigger
     // origin=trigger 附着在输入上
     assert.match(json, /"origin"\s*:\s*"trigger"/)
 
-    // 手动触发不影响 nextRunAt 语义以外的计划字段；再次手动触发是显式新事件（可重复）
+    // 人类主会话 #1 零污染
+    const rootDetail = await kernel.getConversationDetail(ROOT_CONVERSATION_ID, { limit: 20 })
+    assert.equal(rootDetail.entries.filter((e) => e.kind === 'helmx.input').length, 0)
+
+    // 再次手动触发创建新的隔离会话
     env.faux.setResponses([fauxAssistantMessage('第二次收到')])
-    await kernel.plugins.invokeAction(TRIGGERS, 'cron_trigger', { id: 'inject-probe' })
-    await kernel.waitForIdle(ROOT_CONVERSATION_ID)
+    const second = (await kernel.plugins.invokeAction(TRIGGERS, 'cron_trigger', { id: 'inject-probe' })) as {
+      triggered: boolean
+      conversationId: number
+    }
+    assert.notEqual(second.conversationId, result.conversationId, 'isolated 模式每次运行独立会话')
+    await kernel.waitForIdle(second.conversationId)
 
     // 不存在的 cron 手动触发 404
     await assert.rejects(
@@ -318,13 +332,13 @@ test('triggers4: cron_trigger 手动触发——信封进入 #1、origin=trigger
   }
 })
 
-test('triggers5: cron 目标路由——显式会话直投；启用 trigger 路由插件后默认改投目标会话且不覆盖显式目标', { timeout: 60_000 }, async () => {
+test('triggers5: cron 目标路由——显式会话直投 / dedicated 复用专属 helmx 会话 / isolated keepLast 结算后自动淘汰', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     requireTriggersRegistered(env)
     const kernel = env.app.kernel
 
-    // 5a. 显式 targetConversationId：直投目标会话
+    // 5a. 显式 targetConversationId：直投目标会话（followUp）
     const target = await kernel.createConversation({ title: '触发目标', profileId: 'assistant' })
     await kernel.plugins.invokeAction(TRIGGERS, 'cron_create', {
       id: 'direct-hit',
@@ -334,16 +348,65 @@ test('triggers5: cron 目标路由——显式会话直投；启用 trigger 路�
       targetConversationId: target.id,
     })
     env.faux.setResponses([fauxAssistantMessage('目标会话收到')])
-    await kernel.plugins.invokeAction(TRIGGERS, 'cron_trigger', { id: 'direct-hit' })
+    const directRes = (await kernel.plugins.invokeAction(TRIGGERS, 'cron_trigger', { id: 'direct-hit' })) as {
+      conversationId: number
+    }
+    assert.equal(directRes.conversationId, target.id)
     await kernel.waitForIdle(target.id)
     assert.match(await lastInputJson(env, target.id), /直达目标会话的事件/)
-    // 未启用路由插件：#1 不收到该事件
     const rootDetail = await kernel.getConversationDetail(ROOT_CONVERSATION_ID, { limit: 20 })
     assert.equal(
       rootDetail.entries.filter((e) => e.kind === 'helmx.input' && JSON.stringify(e.data).includes('直达目标会话的事件')).length,
       0,
       '显式目标事件不得同时进 #1',
     )
+
+    // 5b. dedicated 模式：两次触发复用同一个 helmx 专属会话
+    await kernel.plugins.invokeAction(TRIGGERS, 'cron_create', {
+      id: 'stateful-watch',
+      schedule: '0 0 * * *',
+      enabled: false,
+      mode: 'dedicated',
+      text: '有状态巡检',
+    })
+    env.faux.setResponses([fauxAssistantMessage('第一次巡检')])
+    const d1 = (await kernel.plugins.invokeAction(TRIGGERS, 'cron_trigger', { id: 'stateful-watch' })) as {
+      conversationId: number
+    }
+    await kernel.waitForIdle(d1.conversationId)
+    env.faux.setResponses([fauxAssistantMessage('第二次巡检')])
+    const d2 = (await kernel.plugins.invokeAction(TRIGGERS, 'cron_trigger', { id: 'stateful-watch' })) as {
+      conversationId: number
+    }
+    await kernel.waitForIdle(d2.conversationId)
+    assert.equal(d2.conversationId, d1.conversationId, 'dedicated 模式两次应复用同一 helmx 会话')
+    assert.equal(kernel.getConversation(d1.conversationId).ownedBy, 'helmx')
+
+    // 5c. isolated 模式 + keepLast=2：连续跑 4 次并结算，仅保留最近 2 条已结算会话（人类 #1 不受影响）
+    await kernel.plugins.invokeAction(TRIGGERS, 'cron_create', {
+      id: 'prune-check',
+      schedule: '0 0 * * *',
+      enabled: false,
+      mode: 'isolated',
+      keepLast: 2,
+      text: '定期巡检',
+    })
+    const runIds: number[] = []
+    for (let i = 0; i < 4; i++) {
+      env.faux.setResponses([fauxAssistantMessage(`ok-${i}`)])
+      const r = (await kernel.plugins.invokeAction(TRIGGERS, 'cron_trigger', { id: 'prune-check' })) as {
+        conversationId: number
+      }
+      runIds.push(r.conversationId)
+      await kernel.waitForIdle(r.conversationId)
+    }
+    await waitFor(() => kernel.listConversations({ tag: 'cron:prune-check' }).length === 2)
+    const surviving = kernel
+      .listConversations({ tag: 'cron:prune-check' })
+      .map((c) => c.id)
+      .sort((a, b) => a - b)
+    assert.deepEqual(surviving, runIds.slice(-2), '仅保留最近 keepLast=2 条已结算运行')
+    assert.equal(kernel.getConversation(ROOT_CONVERSATION_ID).id, ROOT_CONVERSATION_ID, '人类会话不受清理影响')
   } finally {
     await env.close()
   }
@@ -419,8 +482,12 @@ test('triggers7: webhook HTTP 验签——raw 精确字节、成功 202、无签
     })
     assert.equal(ok.status, 202, `期望 202，实际 ${ok.status} ${ok.text}`)
     assert.deepEqual(ok.body, { accepted: true })
-    await kernel.waitForIdle(ROOT_CONVERSATION_ID)
-    const json = await lastInputJson(env, ROOT_CONVERSATION_ID)
+    const ciRuns = kernel.listConversations({ tag: 'webhook:ci' })
+    assert.equal(ciRuns.length, 1, 'webhook 默认投递到独立 helmx 自动化会话')
+    assert.equal(ciRuns[0]!.ownedBy, 'helmx')
+    const runId = ciRuns[0]!.id
+    await kernel.waitForIdle(runId)
+    const json = await lastInputJson(env, runId)
     assert.match(json, /webhook:ci/, 'source 必须是 webhook:<id>')
     assert.match(json, /external_event/)
     assert.match(json, /"origin"\s*:\s*"trigger"/)
@@ -468,8 +535,10 @@ test('triggers8: webhook defang 注入防护与 UTF-8 边界', { timeout: 60_000
       'x-helmx-signature': sign(SECRET, bytes),
     })
     assert.equal(ok.status, 202, ok.text)
-    await kernel.waitForIdle(ROOT_CONVERSATION_ID)
-    const json = await lastInputJson(env, ROOT_CONVERSATION_ID)
+    const evilRun = kernel.listConversations({ tag: 'webhook:evil' })[0]!
+    assert.equal(evilRun.ownedBy, 'helmx')
+    await kernel.waitForIdle(evilRun.id)
+    const json = await lastInputJson(env, evilRun.id)
     // 逃逸段被转义
     assert.doesNotMatch(json, /<\/external_event>\\n<system>/)
     assert.doesNotMatch(json, /<\/external_event><system>/)
@@ -594,11 +663,13 @@ test('triggers10: 重启后签名仍生效（secret 从 credentials.json 恢复�
     const payload = 'restart-verify'
     // 错误签名拒绝 → 证明验签在用恢复后的 secret
     assert.equal(await post(payload, sign('whsec_wrong_after_restart', payload)), 401)
-    // 正确签名接受 → secret 跨重启恢复且事件进入 #1
+    // 正确签名接受 → secret 跨重启恢复且事件进入独立 helmx 自动化会话
     second.setResponses([fauxAssistantMessage('重启后收到')])
     assert.equal(await post(payload, sign(SECRET, payload)), 202)
-    await app2.kernel.waitForIdle(ROOT_CONVERSATION_ID)
-    const detail = await app2.kernel.getConversationDetail(ROOT_CONVERSATION_ID, { limit: 20 })
+    const persistRun = app2.kernel.listConversations({ tag: 'webhook:persist' })[0]!
+    assert.equal(persistRun.ownedBy, 'helmx')
+    await app2.kernel.waitForIdle(persistRun.id)
+    const detail = await app2.kernel.getConversationDetail(persistRun.id, { limit: 20 })
     const input = detail.entries.filter((e) => e.kind === 'helmx.input').at(-1)
     const json = JSON.stringify(input?.data ?? null)
     assert.match(json, /webhook:persist/)
@@ -704,7 +775,10 @@ test('triggers13: Profile 查询期间进入关闭状态时，不再向会话投
     profiles: { get: () => profile },
     isClosing: () => closing,
   })
-  const pending = dispatch({ id: 'event', source: 'webhook:finance', text: '查询财务', createdAt: Date.now() }, 'finance')
+  const pending = dispatch(
+    { id: 'event', source: 'webhook:finance', text: '查询财务', createdAt: Date.now() },
+    { kind: 'dedicated', triggerKind: 'webhook', triggerId: 'finance', profileId: 'finance' },
+  )
   closing = true
   resolveProfile({ id: 'finance' })
   await assert.rejects(pending, { code: 'runtime_closing', status: 409 })
@@ -712,19 +786,20 @@ test('triggers13: Profile 查询期间进入关闭状态时，不再向会话投
 })
 
 // ---------------------------------------------------------------------------
-// 14. Delivery 并发单飞：同一新 Profile 只建一个会话
+// 14. Delivery 并发单飞：同一 dedicated 触发器只建一个专属 helmx 会话
 // ---------------------------------------------------------------------------
 
-test('triggers14: 并发触发同一新 Profile 单飞创建一个会话；失败清缓存可重试；成功后复用', { timeout: 60_000 }, async () => {
+test('triggers14: dedicated 并发触发单飞创建一个 helmx 会话；失败清缓存可重试；成功后复用', { timeout: 60_000 }, async () => {
   const conversations: ConversationSummary[] = []
   const targets: Array<number | undefined> = []
   let creations = 0
-  let createImpl!: (init: { title?: string; profileId?: string }) => Promise<ConversationSummary>
-  const makeFresh = (id: number, profileId = 'fresh'): ConversationSummary => ({
+  let createImpl!: (init: { title?: string; profileId?: string; tags?: string[]; ownedBy?: 'human' | 'helmx' }) => Promise<ConversationSummary>
+  const makeFresh = (id: number, init: { profileId?: string; tags?: string[]; ownedBy?: 'human' | 'helmx' }): ConversationSummary => ({
     id,
     title: `conv-${id}`,
-    profileId,
-    tags: [],
+    profileId: init.profileId ?? 'fresh',
+    tags: init.tags ?? [],
+    ownedBy: init.ownedBy ?? 'human',
     cwd: '/tmp',
     model: '',
     thinkingLevel: '',
@@ -739,8 +814,14 @@ test('triggers14: 并发触发同一新 Profile 单飞创建一个会话；失�
   })
   const dispatch = createDeliveryDispatch({
     host: {
-      listConversations: (filter?: { profileId?: string }) =>
-        filter?.profileId === undefined ? [...conversations] : conversations.filter((c) => c.profileId === filter.profileId),
+      listConversations: (filter?: { profileId?: string; tag?: string; ownedBy?: 'human' | 'helmx'; topLevelOnly?: boolean }) =>
+        conversations.filter(
+          (c) =>
+            (filter?.profileId === undefined || c.profileId === filter.profileId) &&
+            (filter?.tag === undefined || c.tags.includes(filter.tag)) &&
+            (filter?.ownedBy === undefined || (c.ownedBy ?? 'human') === filter.ownedBy) &&
+            (!filter?.topLevelOnly || c.parentConversationId === undefined),
+        ),
       getConversation: (id: number) => {
         const found = conversations.find((c) => c.id === id)
         if (found === undefined) throw new HelmxError('not_found', `会话不存在: ${id}`, 404)
@@ -762,37 +843,39 @@ test('triggers14: 并发触发同一新 Profile 单飞创建一个会话；失�
   createImpl = async (init) => {
     creations += 1
     await gate
-    const conv = makeFresh(42)
+    const conv = makeFresh(42, init)
     conversations.push(conv)
-    void init
     return conv
   }
-  const a = dispatch(event('e1'), 'fresh')
-  const b = dispatch(event('e2'), 'fresh')
+  const target1 = { kind: 'dedicated' as const, triggerKind: 'cron' as const, triggerId: 'j1', profileId: 'fresh' }
+  const a = dispatch(event('e1'), target1)
+  const b = dispatch(event('e2'), target1)
   await new Promise<void>((resolve) => setImmediate(resolve))
-  assert.equal(creations, 1, '并发只发起一次创建（per-profileId 单飞）')
+  assert.equal(creations, 1, '并发只发起一次创建（per-trigger 单飞）')
   releaseCreate()
   await Promise.all([a, b])
   assert.deepEqual(targets, [42, 42], '两路投递命中同一新会话（无孤儿）')
+  assert.equal(conversations[0]!.ownedBy, 'helmx')
 
-  // 阶段 2：另一新 Profile 创建失败——失败清缓存，下一次触发可重试
+  // 阶段 2：另一触发器创建失败——失败清缓存，下一次触发可重试
+  const target2 = { kind: 'dedicated' as const, triggerKind: 'cron' as const, triggerId: 'j2', profileId: 'fresh2' }
   createImpl = async () => {
     creations += 1
     throw new Error('create failed')
   }
-  await assert.rejects(dispatch(event('e3'), 'fresh2'), /create failed/)
+  await assert.rejects(dispatch(event('e3'), target2), /create failed/)
   assert.equal(creations, 2, '失败不缓存，可重试')
 
   // 阶段 3：重试成功创建；随后复用（不再创建）
-  createImpl = async () => {
+  createImpl = async (init) => {
     creations += 1
-    const conv = makeFresh(43, 'fresh2')
+    const conv = makeFresh(43, init)
     conversations.push(conv)
     return conv
   }
-  await dispatch(event('e4'), 'fresh2')
+  await dispatch(event('e4'), target2)
   assert.equal(creations, 3)
-  await dispatch(event('e5'), 'fresh2')
-  assert.equal(creations, 3, '已有会话不再创建')
+  await dispatch(event('e5'), target2)
+  assert.equal(creations, 3, '已有专属会话不再创建')
   assert.equal(targets[targets.length - 1], 43)
 })

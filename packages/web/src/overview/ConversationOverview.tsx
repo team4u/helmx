@@ -526,12 +526,23 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
   const allKnownCards = useMemo(() => [...cards, ...archivedCards], [cards, archivedCards])
   const profileOptions = useMemo(() => overviewProfileOptions(allKnownCards), [allKnownCards])
   const nodeOptions = useMemo(() => overviewNodeOptions(allKnownCards), [allKnownCards])
-  // 来源筛选仅在非已归档视图且存在托管卡片（或已选非 all，防困住）时展示。
-  const showSourceFilter = !isArchivedView && (sourceFilter !== 'all' || cards.some((card) => card.managed))
+  // 来源筛选仅在非已归档视图且存在自动化会话（或已选非默认 human，防深链困住）时展示。
+  const hasAutomatedCards = useMemo(() => cards.some((card) => card.automated), [cards])
+  const automatedNeedsAttentionCount = useMemo(
+    () => cards.filter((card) => card.automated && card.bucket === 'needs_attention').length,
+    [cards],
+  )
+  const sourcePoolTotal = useMemo(() => {
+    if (isArchivedView) return archivedCards.length
+    if (sourceFilter === 'human') return cards.filter((card) => !card.automated).length
+    if (sourceFilter === 'automated') return cards.filter((card) => card.automated).length
+    return cards.length
+  }, [isArchivedView, archivedCards.length, cards, sourceFilter])
+  const showSourceFilter = !isArchivedView && (sourceFilter !== 'human' || hasAutomatedCards)
   const anySubFilterActive =
     profileFilter !== '' ||
     nodeFilter !== '' ||
-    (!isArchivedView && sourceFilter !== 'all') ||
+    (!isArchivedView && sourceFilter !== 'human') ||
     queryFilter.trim() !== ''
   const anyFilterActive = bucketFilter !== 'all' || anySubFilterActive
 
@@ -663,7 +674,7 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
                 ? t('shell.overview.statsArchivedFiltered', { count: visibleCards.length, total: archivedCards.length })
                 : t('shell.overview.statsArchived', { count: visibleCards.length })
               : anyFilterActive
-                ? t('shell.overview.statsFiltered', { count: visibleCards.length, total: cards.length })
+                ? t('shell.overview.statsFiltered', { count: visibleCards.length, total: sourcePoolTotal })
                 : t('shell.overview.stats', { count: visibleCards.length })}
           </span>
         </div>
@@ -792,14 +803,14 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
               className="overview-filter-select"
               aria-label={t('shell.overview.sourceFilterLabel')}
               options={[
+                { value: 'human', label: t('shell.overview.sourceHuman') },
+                { value: 'automated', label: t('shell.overview.sourceAutomated') },
                 { value: 'all', label: t('shell.overview.sourceFilter') },
-                { value: 'regular', label: t('shell.overview.sourceRegular') },
-                { value: 'managed', label: t('shell.overview.sourceManaged') },
               ]}
               value={sourceFilter}
               onChange={(event) =>
                 applyFilterParam({
-                  source: event.target.value === 'all' ? undefined : (event.target.value as SourceFilterValue),
+                  source: event.target.value === 'human' ? undefined : (event.target.value as SourceFilterValue),
                 })
               }
             />
@@ -835,6 +846,23 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
       </div>
 
       <div className="overview-scroll">
+        {!isArchivedView && sourceFilter === 'human' && automatedNeedsAttentionCount > 0 && (
+          <div className="overview-automated-banner-wrap">
+            <div className="callout callout-warn overview-automated-banner" role="status">
+              <HelmxIcon name="alert-triangle" size={13} />
+              <span className="callout-text">
+                {t('shell.overview.automatedNeedsAttention', { count: automatedNeedsAttentionCount })}
+              </span>
+              <button
+                type="button"
+                className="btn btn-xs overview-automated-banner-btn"
+                onClick={() => applyFilterParam({ source: 'automated', bucket: 'needs_attention' })}
+              >
+                {t('shell.overview.viewAutomatedAttention')}
+              </button>
+            </div>
+          </div>
+        )}
         {batch.batchMode && (
           <div className="overview-batch-bar-wrap">
             <BatchActionBar
@@ -889,7 +917,7 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
                   {t('shell.overview.clearFilters')}
                 </button>
               </div>
-            ) : !isArchivedView && cards.length === 0 ? (
+            ) : !isArchivedView && !anyFilterActive && sourcePoolTotal === 0 ? (
               <div className="overview-empty">{t('shell.overview.emptySystem')}</div>
             ) : (
               <div className="overview-empty">

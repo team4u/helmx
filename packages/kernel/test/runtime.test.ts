@@ -843,6 +843,74 @@ describe('triggers and cascading deletion', { timeout: 60_000 }, () => {
     }
   })
 
+  it('dispatchTrigger honors envelope.whenBusy=followUp while busy and rejects invalid whenBusy with 400', { timeout: 60_000 }, async () => {
+    const kernel = await openRuntime(join(root, 'trigger-when-busy'))
+    try {
+      const gate = deferred<void>()
+      const entered = deferred<void>()
+      await kernel.plugins.register({
+        id: 'test:gate-tool',
+        definePlugin(ctx) {
+          ctx.tool({
+            name: 'hold_turn',
+            description: 'holds until released',
+            inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+            async execute() {
+              entered.resolve()
+              await gate.promise
+              return { content: [{ type: 'text', text: 'released' }] }
+            },
+          })
+        },
+      })
+
+      kernel.__faux.setResponses([
+        fauxAssistantMessage([fauxToolCall('hold_turn', {})], { stopReason: 'toolUse' }),
+        fauxAssistantMessage('first turn finished'),
+        fauxAssistantMessage('follow-up trigger handled'),
+      ])
+
+      const firstPromise = kernel.submitInput(1, 'long running human turn', { origin: 'human' })
+      await entered.promise
+      assert.equal(kernel.getConversation(1).status, 'working')
+
+      // Invalid whenBusy is rejected at boundary
+      await assert.rejects(
+        () =>
+          kernel.dispatchTrigger({
+            id: 'evt-bad-busy',
+            source: 'cron',
+            text: 'bad',
+            targetConversationId: 1,
+            whenBusy: 'bogus' as unknown as 'followUp',
+            createdAt: Date.now(),
+          }),
+        (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
+      )
+
+      // Valid whenBusy='followUp' queues without rejecting or aborting the in-flight tool turn
+      await kernel.dispatchTrigger({
+        id: 'evt-followup',
+        source: 'cron',
+        text: 'queued reminder payload',
+        targetConversationId: 1,
+        whenBusy: 'followUp',
+        createdAt: Date.now(),
+      })
+
+      gate.resolve()
+      await firstPromise
+      await kernel.waitForIdle(1)
+
+      const entries = (await kernel.getConversationDetail(1, { limit: 100 })).entries
+      const inputs = entries.filter((entry) => entry.kind === 'helmx.input')
+      assert.ok(inputs.some((entry) => JSON.stringify(entry.data).includes('queued reminder payload')))
+      assert.equal(await kernel.getLastAssistantText(1), 'follow-up trigger handled')
+    } finally {
+      await kernel.close()
+    }
+  })
+
   it('deleteConversation cascades to asks/artifacts/FTS + tombstone stays deleted across restart', { timeout: 60_000 }, async () => {
     const dir = join(root, 't18')
     const kernel = await openRuntime(dir)
@@ -1777,6 +1845,149 @@ describe('conversation management protection and ownership', { timeout: 60_000 }
       })
       const child = kernel.getConversation(childId!)
       assert.deepEqual(child.tags, [])
+    } finally {
+      await kernel.close()
+    }
+  })
+
+  it('createConversation({ ownedBy: "helmx" }) emits ownedBy atomically on first upsert, supports listConversations({ ownedBy }), and validates invalid ownedBy', { timeout: 60_000 }, async () => {
+    const dir = join(root, 'o-atomic-owner')
+    const kernel = await openRuntime(dir, { model: 'faux/faux-1' })
+    try {
+      const upserts: ConversationSummary[] = []
+      const unsub = kernel.events.sseStream((frame) => {
+        if ('event' in frame && frame.event.type === 'conversation.upsert' && 'conversation' in frame.event) {
+          upserts.push(frame.event.conversation)
+        }
+        return true
+      })
+      try {
+        const auto = await kernel.createConversation({
+          title: 'Cron · morning',
+          ownedBy: 'helmx',
+          tags: ['trigger', 'cron:morning'],
+        })
+        assert.equal(auto.ownedBy, 'helmx')
+        assert.equal(kernel.getConversationOwnership(auto.id), 'helmx')
+        const matchingUpserts = upserts.filter((c) => c.id === auto.id)
+        assert.ok(matchingUpserts.length >= 1, 'initial upsert emitted')
+        assert.equal(matchingUpserts[0]!.ownedBy, 'helmx', 'first upsert must already carry ownedBy=helmx (zero human flicker)')
+
+        const humanList = kernel.listConversations({ ownedBy: 'human' })
+        const helmxList = kernel.listConversations({ ownedBy: 'helmx' })
+        assert.equal(humanList.some((c) => c.id === auto.id), false)
+        assert.equal(humanList.some((c) => c.id === 1), true)
+        assert.deepEqual(helmxList.map((c) => c.id), [auto.id])
+
+        await assert.rejects(
+          () => kernel.createConversation({ ownedBy: 'bot' as unknown as 'helmx' }),
+          (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
+        )
+      } finally {
+        unsub.unsubscribe()
+      }
+    } finally {
+      await kernel.close()
+    }
+  })
+
+  it('deleteConversationGuarded enforces ownership, active status, management lock, and CAS watermark atomically', { timeout: 60_000 }, async () => {
+    const dir = join(root, 'o-guarded-del')
+    const kernel = await openRuntime(dir, { model: 'faux/faux-1' })
+    try {
+      const gate = deferred<void>()
+      const entered = deferred<void>()
+      await kernel.plugins.register({
+        id: 'test:guarded-del-tool',
+        definePlugin(ctx) {
+          ctx.tool({
+            name: 'pause_auto',
+            description: 'pauses automated run',
+            inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+            async execute(_input, ctx) {
+              entered.resolve()
+              await new Promise<void>((resolve) => {
+                if (ctx.signal?.aborted) {
+                  resolve()
+                  return
+                }
+                const onAbort = () => resolve()
+                ctx.signal?.addEventListener('abort', onAbort, { once: true })
+                void gate.promise.then(() => {
+                  ctx.signal?.removeEventListener('abort', onAbort)
+                  resolve()
+                })
+              })
+              return { content: [{ type: 'text', text: 'done' }] }
+            },
+          })
+        },
+      })
+
+      // 1. Human-owned conversation is rejected (watchdog red-line)
+      await assert.rejects(
+        () => kernel.deleteConversationGuarded(1),
+        (err: unknown) => err instanceof HelmxError && err.code === 'ownership_conflict' && err.status === 409,
+      )
+      assert.equal(kernel.listConversations().some((c) => c.id === 1), true)
+
+      // 2. helmx root with a human descendant is rejected up-front with zero partial deletion
+      const autoParent = await kernel.createConversation({ title: 'auto-parent', ownedBy: 'helmx' })
+      const humanChild = await kernel.createConversation({
+        parentConversationId: autoParent.id,
+        title: 'human-child',
+        ownedBy: 'human',
+      })
+      await assert.rejects(
+        () => kernel.deleteConversationGuarded(autoParent.id),
+        (err: unknown) => err instanceof HelmxError && err.code === 'ownership_conflict' && err.status === 409,
+      )
+      assert.equal(kernel.listConversations().some((c) => c.id === autoParent.id), true)
+      assert.equal(kernel.listConversations().some((c) => c.id === humanChild.id), true)
+
+      // 3. Settled helmx subtree deletes leaves-first cleanly
+      const settledParent = await kernel.createConversation({ title: 'settled-auto', ownedBy: 'helmx' })
+      const settledChild = await kernel.createConversation({
+        parentConversationId: settledParent.id,
+        title: 'settled-child',
+        ownedBy: 'helmx',
+      })
+      // Stale CAS watermark fails with 409 state_seq_conflict
+      await assert.rejects(
+        () => kernel.deleteConversationGuarded(settledParent.id, { expectedStateSeq: settledParent.stateChangeSeq + 99 }),
+        (err: unknown) => err instanceof HelmxError && err.code === 'state_seq_conflict' && err.status === 409,
+      )
+      // Managed lock fails with 409 conversation_managed_by_plugin
+      const release = kernel.manageConversation(settledParent.id, 'test:lock')
+      await assert.rejects(
+        () => kernel.deleteConversationGuarded(settledParent.id),
+        (err: unknown) => err instanceof HelmxError && err.code === 'conversation_managed_by_plugin' && err.status === 409,
+      )
+      release()
+      // Exact CAS watermark succeeds and removes whole subtree
+      await kernel.deleteConversationGuarded(settledParent.id, { expectedStateSeq: settledParent.stateChangeSeq })
+      assert.equal(kernel.listConversations().some((c) => c.id === settledParent.id || c.id === settledChild.id), false)
+
+      // 4. Active (working) helmx conversation rejects with 409 conversation_active unless allowActive=true
+      const activeAuto = await kernel.createConversation({ title: 'active-auto', ownedBy: 'helmx' })
+      kernel.__faux.setResponses([
+        fauxAssistantMessage([fauxToolCall('pause_auto', {})], { stopReason: 'toolUse' }),
+        fauxAssistantMessage('completed'),
+      ])
+      const runPromise = kernel.submitInput(activeAuto.id, 'start pause', { origin: 'trigger' })
+      await entered.promise
+      assert.equal(kernel.getConversation(activeAuto.id).status, 'working')
+
+      await assert.rejects(
+        () => kernel.deleteConversationGuarded(activeAuto.id),
+        (err: unknown) => err instanceof HelmxError && err.code === 'conversation_active' && err.status === 409,
+      )
+      assert.equal(kernel.listConversations().some((c) => c.id === activeAuto.id), true)
+
+      await kernel.deleteConversationGuarded(activeAuto.id, undefined, { allowActive: true })
+      gate.resolve()
+      await runPromise.catch(() => {})
+      assert.equal(kernel.listConversations().some((c) => c.id === activeAuto.id), false)
     } finally {
       await kernel.close()
     }
